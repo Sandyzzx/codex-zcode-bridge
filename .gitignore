@@ -2,6 +2,7 @@ node_modules/
 dist/
 coverage/
 .tasks/
+plugins/codex-zcode-bridge/.mcp.json
 .env
 .env.*
 !.env.example

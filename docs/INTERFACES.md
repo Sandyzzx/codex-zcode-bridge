@@ -1,14 +1,13 @@
-# Codex → ZCode Bridge: V0.1 Frozen Interfaces
+# Codex → ZCode Bridge：V0.1 冻结接口
 
-**Status: FROZEN for V0.1 implementation**
+**状态：V0.1 实现范围已冻结**
 
-Version: 0.1.0
+版本：0.1.0
+日期：2026-09-26
 
-Date: 2026-09-26
+所有 MCP 参数名均使用 `snake_case`。未知参数一律拒绝。实现可以增加内部字段，但 V0.1 不得修改工具名称、必填字段、状态名称或结果语义。
 
-All MCP argument names are `snake_case`. Unknown arguments are rejected. Implementations may add internal fields but must not change these tool names, required fields, status names, or result semantics in V0.1.
-
-## Shared types
+## 共享类型
 
 ```ts
 export type TaskStatus =
@@ -21,7 +20,7 @@ export type TaskStatus =
 
 export interface TaskPackage {
   task_id: string;
-  workspace: string; // absolute path to an existing directory
+  workspace: string; // 已存在目录的绝对路径
   objective: string;
   requirements: string[];
   allowed_paths: string[];
@@ -55,15 +54,15 @@ export interface TaskResult {
 }
 ```
 
-`TaskResult.status` describes Bridge/ZCode execution only. `completed` is not a Codex PASS. `files_changed`, tests, and decisions are normalized claims from the subordinate report and must be checked by Codex.
+`TaskResult.status` 只描述 Bridge/ZCode 执行结果。`completed` 不等于 Codex 判定 PASS。`files_changed`、测试和决定字段是从下属 Agent 报告中规范化得到的声明，Codex 必须独立核实。
 
-## MCP tools
+## MCP 工具
 
 ### `zcode_task`
 
-Input is exactly `TaskPackage`. `task_id` must match `[A-Za-z0-9][A-Za-z0-9_-]{0,63}` and be unused. Arrays may be empty but must be present; `workspace` is required and canonicalized.
+输入必须严格符合 `TaskPackage`。`task_id` 必须匹配 `[A-Za-z0-9][A-Za-z0-9_-]{0,63}`，且尚未使用。数组可以为空，但字段必须存在；`workspace` 必填并会被规范化。
 
-Returns:
+返回：
 
 ```ts
 interface TaskReceipt {
@@ -73,13 +72,13 @@ interface TaskReceipt {
 }
 ```
 
-The server persists the package before returning. If validation or spawn fails, return an MCP error and persist failure details when a task record has already been allocated.
+Server 会在返回前持久化任务包。如果校验或启动 worker 失败，且已分配任务记录，则返回 MCP 错误并持久化失败详情。
 
 ### `zcode_status`
 
-Input: `{ task_id: string }`.
+输入：`{ task_id: string }`。
 
-Returns:
+返回：
 
 ```ts
 interface TaskStatusRecord {
@@ -98,15 +97,15 @@ interface TaskStatusRecord {
 }
 ```
 
-This is execution status only; it never contains a PASS/FAIL code-review judgment.
+此工具只报告执行状态，不包含 PASS/FAIL 代码审查结论。
 
 ### `zcode_result`
 
-Input: `{ task_id: string }`. Returns the persisted `TaskResult` for a terminal state. Before a terminal state, return MCP error `TASK_NOT_FINISHED`. Unknown IDs return `TASK_NOT_FOUND`.
+输入：`{ task_id: string }`。终态时返回持久化的 `TaskResult`。尚未进入终态时返回 MCP 错误 `TASK_NOT_FINISHED`；未知 ID 返回 `TASK_NOT_FOUND`。
 
 ### `zcode_continue`
 
-Input:
+输入：
 
 ```ts
 interface ContinueTaskInput {
@@ -116,13 +115,13 @@ interface ContinueTaskInput {
 }
 ```
 
-Allowed only from `completed`, `failed`, or `waiting_for_master`. Reuses the task ID and workspace, increments `attempt`, preserves prior results, and returns `TaskReceipt`. The new prompt includes the original task, previous normalized result, feedback, and additional requirements. A decision flagged by ZCode is never auto-approved by the Bridge; Codex must provide the follow-up instruction.
+只允许从 `completed`、`failed` 或 `waiting_for_master` 状态续作。复用 task ID 和 workspace，增加 `attempt`，并保留之前的结果，返回 `TaskReceipt`。新 prompt 会包含原任务、之前的规范化结果、反馈和附加要求。ZCode 标记的决定不会由 Bridge 自动批准；Codex 必须提供后续指令。
 
 ### `zcode_cancel`
 
-Input: `{ task_id: string }`. Allowed only from `queued` or `running`. Returns the updated `TaskStatusRecord`. Running cancellation returns only after process-tree termination is confirmed; if confirmation fails, the task remains nonterminal with a cancellation error recorded.
+输入：`{ task_id: string }`。仅允许在 `queued` 或 `running` 状态调用。返回更新后的 `TaskStatusRecord`。运行中取消只有在确认整个进程树已终止后才返回；若无法确认，任务保持非终态并记录取消错误。
 
-## Coding agent adapter contract
+## 编码 Agent 适配器契约
 
 ```ts
 export interface WorkspaceRef {
@@ -179,7 +178,7 @@ export interface CodingAgentAdapter {
 }
 ```
 
-The Bridge `TaskManager` owns public status and persistence; adapter status/result are runtime evidence and must not decide correctness. `WorkspaceProvider` exposes `resolve(workspacePath): Promise<WorkspaceRef>` and `release(ref): Promise<void>`; Direct V0.1 release is a no-op.
+Bridge 的 `TaskManager` 负责公开状态和持久化；adapter 的状态/结果是 runtime 证据，不能决定代码是否正确。`WorkspaceProvider` 提供 `resolve(workspacePath): Promise<WorkspaceRef>` 和 `release(ref): Promise<void>`；Direct V0.1 的 release 是空操作。
 
 ```ts
 export interface TaskManager {
@@ -208,11 +207,11 @@ export interface ZCodeRuntimeConfig {
 }
 ```
 
-`RuntimeResolver` consumes `ZCODE_BRIDGE_NODE`, `ZCODE_BRIDGE_ZCODE_CJS`, and `ZCODE_BRIDGE_DATA_DIR` as optional Bridge overrides; provider config is inherited as the official pair or resolved from the ZCode installation plus `ZCODE_DATA_BASE_DIR` / `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`. It validates paths without exposing file contents. The worker receives resolved paths and injects both official provider variables into only the ZCode child process.
+`RuntimeResolver` 将 `ZCODE_BRIDGE_NODE`、`ZCODE_BRIDGE_ZCODE_CJS` 和 `ZCODE_BRIDGE_DATA_DIR` 作为可选 Bridge 覆盖项。Provider 配置从成对继承的官方环境变量获取，或从 ZCode 安装位置及 `ZCODE_DATA_BASE_DIR` / `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` 解析。解析器会验证路径，但不会暴露文件内容。Worker 获得解析后的路径，并只向 ZCode 子进程注入两个官方 provider 环境变量。
 
-## Structured subordinate report
+## 下属 Agent 结构化报告
 
-The prompt requests that ZCode's `response` contain one JSON object with:
+Prompt 要求 ZCode 在 `response` 中返回一个 JSON 对象：
 
 ```ts
 interface AgentReport {
@@ -224,9 +223,9 @@ interface AgentReport {
 }
 ```
 
-The adapter parses the CLI JSON envelope first, then parses/validates `response` as `AgentReport`. If the response is not valid, retain raw output, set `invalid_agent_report`, and mark the run failed for review. Never synthesize `needs_master_decision: false` from missing data.
+Adapter 先解析 CLI JSON envelope，再将 `response` 解析并校验为 `AgentReport`。如果 response 无效，则保留原始输出、设置 `invalid_agent_report`，并将运行标记为需要审查的失败。缺少数据时绝不能合成 `needs_master_decision: false`。
 
-## Persistence contract
+## 持久化契约
 
 ```text
 <bridge-data-root>/.tasks/<task_id>/
@@ -234,8 +233,8 @@ The adapter parses the CLI JSON envelope first, then parses/validates `response`
   status.json
   stdout.log
   stderr.log
-  result.json       # written only after a terminal result
-  attempts/         # immutable per-attempt prompt/result metadata
+  result.json       # 仅在任务进入终态后写入
+  attempts/         # 每次 attempt 的不可变 prompt/result 元数据
 ```
 
-Store writes are atomic for JSON records. Logs are UTF-8, byte-bounded, and separate. Secrets and full environment variables are not persisted.
+Store 对 JSON 记录执行原子写入。日志采用 UTF-8、有字节上限并分开保存。不得持久化密钥或完整环境变量。

@@ -1,128 +1,126 @@
-# ZCode Runtime Verification
+# ZCode Runtime 验证
 
-Re-verified on 2026-09-26 (Asia/Shanghai) on the current Windows x64 machine. This revision supersedes the same-day earlier revision: the provider-configuration blocker was root-caused, a supported fix was found, and a real headless smoke task plus `--resume` now pass. Everything below was checked in this session unless marked otherwise.
+最近复核日期：2026-09-26（Asia/Shanghai），本机 Windows x64。本版本取代同日较早的记录：provider 配置阻塞已找到根因和受支持的修复方式，真实 headless smoke task 及 `--resume` 已通过。除标记为其他状态的事项外，下文均在当时的验证过程中检查。
 
-Status labels used here:
+状态标签：
 
-- **VERIFIED** — reproduced on this machine in this session, with recorded command output, file evidence, or minified-source inspection as proof.
-- **ASSUMED** — plausible from code inspection or reference material, but not exercised end-to-end here.
-- **UNSUPPORTED** — confirmed absent or unavailable on this installation.
-- **NOT VERIFIED** — not tested; unknown. Bridge work must not rely on these.
+- **已验证（VERIFIED）** — 本机复现，并有命令输出、文件证据或 minified 源码检查记录。
+- **推测（ASSUMED）** — 根据代码或参考资料判断合理，但未完成端到端验证。
+- **不支持（UNSUPPORTED）** — 已确认本机安装不存在或不可用。
+- **未验证（NOT VERIFIED）** — 未测试，结果未知；Bridge 不得依赖这些行为。
 
-## Environment facts (VERIFIED)
+## 环境信息（已验证）
 
-| Item | Finding | Evidence |
+| 项目 | 结果 | 证据 |
 |---|---|---|
-| ZCode Desktop | **3.14.3.7762** at `C:\Users\Sandy\AppData\Local\Programs\ZCode` | `(Get-Item '...\ZCode.exe').VersionInfo` |
+| ZCode Desktop | **3.14.3.7762**，路径位于当前用户本地程序目录 | `(Get-Item '...\ZCode.exe').VersionInfo` |
 | Runtime CLI | **zcode 0.16.9** | `node <zcode.cjs> version` |
-| Runtime entry | `C:\Users\Sandy\AppData\Local\Programs\ZCode\resources\glm\zcode.cjs` (14.8 MB) | file listing |
-| Node | **v24.16.0** at `C:\Program Files\nodejs\node.exe` | `node --version`, `where node` |
-| doctor | `node: v24.16.0`, `platform: win32/x64`, `sea: no (optional)`, `default artifact: node-bundle` | `node <zcode.cjs> doctor` |
-| Desktop data base dir | `D:\Program Files\.zcode` (injected as `ZCODE_DATA_BASE_DIR=D:\Program Files` by the Desktop); a user-profile data dir also exists at `C:\Users\Sandy\.zcode` | inherited environment of Desktop-spawned processes |
-| CLI help | `--prompt/-p`, `--json`, `--mode <build\|edit\|plan\|yolo>` (default `yolo` for `--prompt`), `--cwd`, `--resume <sessionId>` (`sess_...`), `-c/--continue`, `--target`, `--target-replace`, `--attach`, `--surface`, `--browser-use`, `--disallowed-tools`, `--verbose`, `--no-browser`, `--no-color` | `node <zcode.cjs> --help` |
-| Shipped provider config | `C:\Users\Sandy\AppData\Local\Programs\ZCode\resources\config\provider\zcode-builtin.json` exists; top-level keys `schemaVersion`, `revision`, `config` (values not dumped) | file listing + key names only |
+| Runtime 入口 | `<ZCode 安装目录>\resources\glm\zcode.cjs`（14.8 MB） | 文件列表 |
+| Node | **v24.16.0**，路径 `C:\Program Files\nodejs\node.exe` | `node --version`、`where node` |
+| doctor | `node: v24.16.0`、`platform: win32/x64`、`sea: no (optional)`、`default artifact: node-bundle` | `node <zcode.cjs> doctor` |
+| Desktop 数据基目录 | Desktop 安装可配置的数据目录；另有用户目录下的 `.zcode` | Desktop 启动进程继承的环境变量 |
+| CLI 帮助参数 | `--prompt/-p`、`--json`、`--mode <build\|edit\|plan\|yolo>`（`--prompt` 默认 `yolo`）、`--cwd`、`--resume <sessionId>`（`sess_...`）、`-c/--continue`、`--target`、`--target-replace`、`--attach`、`--surface`、`--browser-use`、`--disallowed-tools`、`--verbose`、`--no-browser`、`--no-color` | `node <zcode.cjs> --help` |
+| 随包提供的 provider 配置 | `<ZCode 安装目录>\resources\config\provider\zcode-builtin.json` 存在；顶层 key 为 `schemaVersion`、`revision`、`config`（未输出配置值） | 文件列表和 key 名称 |
 
-### Advertised vs. actually effective (kept separate as required)
+### 文档声明与实际生效情况
 
-| Switch | In help | Actually exercised in a successful task |
+| 参数 | 帮助中列出 | 成功任务中实际验证 |
 |---|---|---|
-| `--prompt` | yes | **VERIFIED** (all smoke runs) |
-| `--json` | yes | **VERIFIED** (single JSON object on stdout; see schema below) |
-| `--mode yolo` | yes | **VERIFIED** as accepted and sufficient for an autonomous file write in the smoke task; per-tool permission semantics not separately probed |
-| `--cwd` | yes | **VERIFIED**: with the driver spawning from a different cwd, the agent created the file inside `--cwd`, proven by independent directory listing of the workspace |
-| `--resume <sessionId>` | yes | **VERIFIED** (see Resume section) |
-| `-c/--continue` | yes | NOT VERIFIED (never run) |
-| `--target`, `--attach`, `--surface`, `--browser-use`, `--disallowed-tools`, `--memory-bench`, `--verbose` | yes (`--verbose` was used once in a successful run without corrupting the JSON output) | otherwise NOT VERIFIED |
+| `--prompt` | 是 | **已验证**（所有 smoke run） |
+| `--json` | 是 | **已验证**（stdout 为单个 JSON 对象，见下文 schema） |
+| `--mode yolo` | 是 | **已验证**：接受此参数并能在 smoke task 中自主写文件；未单独探测逐工具权限语义 |
+| `--cwd` | 是 | **已验证**：驱动程序从其他 cwd 启动时，Agent 仍在 `--cwd` 指定工作区创建文件；通过独立目录列表确认 |
+| `--resume <sessionId>` | 是 | **已验证**（见 Resume 部分） |
+| `-c/--continue` | 是 | 未验证（未运行） |
+| `--target`、`--attach`、`--surface`、`--browser-use`、`--disallowed-tools`、`--memory-bench`、`--verbose` | 是（`--verbose` 曾在一次成功运行中使用，未破坏 JSON 输出） | 其余均未验证 |
 
-## Root cause of the earlier headless failure (VERIFIED)
+## 早期 headless 失败的根因（已验证）
 
-Deterministic reproduction: spawning the CLI with every `ZCODE_*` key removed from the child environment (verified by inspecting the child's env keys) exits 1 in ~0.8 s with no stdout and stderr exactly:
+可确定复现：从子进程环境中移除所有 `ZCODE_*` key 后启动 CLI，约 0.8 秒以退出码 1 退出，stdout 为空，stderr 精确为：
 
 ```text
-无法定位 CLI ZCode Built-in Provider Config：C:\Users\Sandy\AppData\Local\Programs\ZCode\resources\glm\provider\zcode-builtin.json, C:\Users\Sandy\AppData\config\provider\zcode-builtin.json
+无法定位 CLI ZCode Built-in Provider Config：`<ZCode 安装目录>\resources\glm\provider\zcode-builtin.json`、`<用户数据目录>\config\provider\zcode-builtin.json`
 ```
 
-Inspection of the minified CLI (`resolveBundledZCodeBuiltinProviderConfig`): outside a SEA binary the CLI probes two candidate paths derived from its entrypoint directory — `<entrypoint dir>\provider\zcode-builtin.json`, then `resolve(dir, "../../../../../config/provider/zcode-builtin.json")`. From `...\ZCode\resources\glm`, five levels up lands in `C:\Users\Sandy\AppData`, so the fallback misses the shipped `resources\config\provider\zcode-builtin.json` by three directory levels. This is the same lookup drift Reference B documented for Linux, now confirmed in this Windows build's code path. Neither candidate exists on this machine, so a bare environment cannot start.
+检查 minified CLI 函数 `resolveBundledZCodeBuiltinProviderConfig`：在非 SEA binary 环境中，CLI 根据入口目录检查两个候选路径：`<entrypoint dir>\provider\zcode-builtin.json`，然后 `resolve(dir, "../../../../../config/provider/zcode-builtin.json")`。从 `...\ZCode\resources\glm` 向上五级的位置与随包配置 `resources\config\provider\zcode-builtin.json` 不一致。本机 Windows 版本已确认同样存在参考 B 在 Linux 说明中记录的路径偏移。两个候选位置在当时的环境都不存在，因此清理过的环境无法启动。
 
-### Supported fix: environment variables, no file copying (VERIFIED)
+### 受支持的修复：设置环境变量，无需复制文件（已验证）
 
-Inspection of `prepareCliProviderRuntimeEnv` (called at CLI startup, result merged into `process.env`):
+检查 CLI 启动时调用的 `prepareCliProviderRuntimeEnv`：
 
-- If **both** `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE` and `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` are set in the environment, the function returns them as-is and the broken probe never runs.
-- When the Desktop app spawns the CLI it injects these variables (plus others); that is why headless runs launched from a Desktop-attached shell worked all along. A Bridge spawned outside that context must set them itself.
-- No files were copied and the ZCode installation was not modified at any point. The earlier idea of copying the shipped config into the expected path is unnecessary and was not done.
+- 如果环境中同时设置 `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE` 和 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`，函数会原样返回这两个路径，绕过错误的自动查找。
+- Desktop 启动 CLI 时会注入这两个变量（以及其他变量），因此从 Desktop 关联的 shell 启动 headless 任务此前可以正常运行。Bridge 从该环境之外启动时，必须自行设置这两个变量。
+- 整个验证过程中没有复制文件，也没有修改 ZCode 安装。之前考虑的“把配置复制到预期路径”没有必要，并且没有执行。
 
-Verified working values on this machine:
+本机验证可用的路径：
 
-- `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE` → the shipped `C:\...\ZCode\resources\config\provider\zcode-builtin.json` (VERIFIED in successful runs), or the Desktop-refreshed active copy `D:\Program Files\.zcode\v2\runtime\provider\windows-x86_64\3.14.3\endpoint-78d7c3bef4024722642626fe3669a799\zcode-builtin.json` (VERIFIED). Both work.
-- `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` → an **existing, real** personal config. On this machine only `D:\Program Files\.zcode\v2\provider_config.json` (1073 bytes, dated 2026-09-17) qualifies:
-  - pointing the variable at a **missing** file, or at the 206-byte stub the CLI auto-created at `C:\Users\Sandy\.zcode\v2\provider_config.json`, reliably failed with `Error: Model creation failed (traceId: ...)` exit 1 (3/3 attempts, occurring both before and after transient network issues cleared, while other configs succeeded in the same windows);
-  - pointing it at the real `D:\Program Files\.zcode\v2\provider_config.json` succeeded in every attempt once transient issues cleared.
-- The minimal set that passed: **only these two variables**, with every other `ZCODE_*` key removed and no proxy variables (3/3 plus additional runs). Passing runs with the full Desktop-injected environment also occurred, so extra variables are harmless but not required.
+- `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE` → 随安装提供的 `<ZCode 安装目录>\resources\config\provider\zcode-builtin.json`，或 Desktop 运行目录下的活动副本。两者均已在本机成功运行中验证。
+- `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` → **真实且有效**的个人配置文件。指向不存在的文件或 CLI 自动创建的 stub 时，模型创建会失败；指向有效配置后，在瞬时网络问题消退时运行成功。
+- 最小可用环境**只需要以上两个变量**，即使移除了其他所有 `ZCODE_*` key 和 proxy 变量，也没有失败（3/3 次及后续运行）。继承完整 Desktop 环境的运行也成功，因此额外变量无害但非必需。
 
-### Transient failure mode (VERIFIED as intermittent; cause NOT VERIFIED)
+### 瞬时失败模式（已验证其间歇性，原因未验证）
 
-`Error: Bundled 与 Active ZCode Built-in Release 均不可用` (exit 1, no stdout) appeared in a burst of runs over several minutes across *different* environment configurations — including the full Desktop-inherited environment — and then stopped recurring; identical configurations passed repeatedly afterwards. Suspected remote release-refresh flakiness or rate limiting under rapid successive model calls; not root-caused. Consequence for the Bridge: distinguish configuration failures (`无法定位 ... Provider Config`, `Model creation failed`) from this retryable class, and retry the latter before reporting task failure.
+`Error: Bundled 与 Active ZCode Built-in Release 均不可用`（退出码 1、无 stdout）曾在几分钟内连续出现，涉及不同环境配置，也包括完整继承 Desktop 环境；随后停止出现，相同配置之后多次成功。可能与远端 release 刷新不稳定或短时间内连续模型调用触发限流有关，但没有找到根因。因此 Bridge 应区分 provider 配置错误（`无法定位 ... Provider Config`、`Model creation failed`）和可重试错误，并且只对已确认可重试类别进行有限重试。
 
-## Smoke task (VERIFIED)
+## Smoke task（已验证）
 
-Command shape (argv array via Node `spawn`, `shell: false`, run from an isolated directory under the system temp):
+通过 Node `spawn` 使用 argv 数组、`shell: false`，从系统临时目录下的隔离目录运行：
 
 ```text
 node <zcode.cjs> --prompt <prompt> --json --mode yolo --cwd <temp workspace>
 ```
 
-with the two provider environment variables set as above. Prompt: create exactly one file `bridge-smoke.txt` containing the single line `ZCODE_HEADLESS_SMOKE_OK`, touch nothing else.
+同时设置上述两个 provider 环境变量。Prompt 要求只创建 `bridge-smoke.txt`，文件内容为单行 `ZCODE_HEADLESS_SMOKE_OK`，不得修改其他内容。
 
-Observed:
+观察结果：
 
-- Exit code **0**, duration ~6.8 s, stderr empty.
-- stdout is **one parseable JSON object** (whole-stdout parse succeeded; no interleaved lines).
-- Independent file check (not trusting the agent's own response): workspace contains exactly one file, `bridge-smoke.txt`, content exactly `ZCODE_HEADLESS_SMOKE_OK\n`. This proves `--cwd` took effect and the agent stayed in scope for this task.
+- 退出码 **0**，耗时约 6.8 秒，stderr 为空。
+- stdout 是**单个可解析的 JSON 对象**，对全部 stdout 执行 JSON parse 成功，没有混入其他行。
+- 独立文件检查（不依赖 Agent 自己的报告）确认工作区恰有一个文件 `bridge-smoke.txt`，内容精确为 `ZCODE_HEADLESS_SMOKE_OK\n`。这证明 `--cwd` 生效，且该任务的文件改动在指定工作区内。
 
-### JSON result schema as observed (VERIFIED for CLI 0.16.9 on this machine; treat as version-specific)
+### 实测 JSON 结果结构（本机 CLI 0.16.9 已验证；仅适用于该版本观察）
 
-Top-level keys exactly: `sessionId`, `traceId`, `turnId`, `response` (string), `usage` (object), `eventCount` (number), `projection` (object).
+顶层 key 精确为：`sessionId`、`traceId`、`turnId`、`response`（字符串）、`usage`（对象）、`eventCount`（数字）、`projection`（对象）。
 
-- `sessionId` format `sess_<uuid>`.
-- `usage` keys: `source` (`"provider"`), `modelRequestCount`, `inputTokens`, `outputTokens`, `totalTokens`, `cacheReadTokens`, `cacheWriteTokens`, `reasoningTokens`, `webFetchRequests`, `webSearchRequests`.
-- `projection` keys: `status` (`"idle"`), `turnCount`, `totalTokenCount`, `contextUsed`, `contextWindow` (200000).
-- On config/startup failures the process exited 1 with an **empty stdout** and a one-line plain-text error on stderr — Bridge must parse JSON only for exit 0 (and still validate required fields), keeping raw stderr for diagnosis.
+- `sessionId` 格式为 `sess_<uuid>`。
+- `usage` key：`source`（`"provider"`）、`modelRequestCount`、`inputTokens`、`outputTokens`、`totalTokens`、`cacheReadTokens`、`cacheWriteTokens`、`reasoningTokens`、`webFetchRequests`、`webSearchRequests`。
+- `projection` key：`status`（`"idle"`）、`turnCount`、`totalTokenCount`、`contextUsed`、`contextWindow`（200000）。
+- 配置/启动失败时，进程以退出码 1 退出，stdout **为空**，stderr 是一行普通文本错误。因此 Bridge 只应在退出码 0 时解析 JSON（并继续验证必需字段）；其他情况保留原始 stderr 以供诊断。
 
-## Resume (VERIFIED)
+## Resume（已验证）
 
-`--resume sess_c7862fca-...` with the session ID returned by the smoke run, same command shape and same `--cwd`:
+使用 smoke task 返回的 session ID 调用 `--resume sess_c7862fca-...`，其他参数形状相同，且使用相同 `--cwd`：
 
-- Exit 0; the returned `sessionId` was **identical** to the requested one; `traceId`/`turnId` were new, consistent with a new turn inside the same session.
-- Independent evidence of genuine continuity: the same workspace file gained the requested appended line (`ZCODE_HEADLESS_SMOKE_OK` + `RESUME_CONTINUATION_OK`), and `usage.cacheReadTokens` (~39.8k) shows conversation-cache reuse. Still exactly one file in the workspace.
-- Cross-`--cwd` resume was not tested and is NOT VERIFIED.
+- 退出码 0；返回的 `sessionId` 与请求值**完全相同**；`traceId` / `turnId` 是新值，符合在同一 session 中开始新 turn 的行为。
+- 同一工作区文件独立验证后追加了要求的文本行（原有 `ZCODE_HEADLESS_SMOKE_OK` 后新增 `RESUME_CONTINUATION_OK`）；`usage.cacheReadTokens` 约为 39.8k，说明复用了对话缓存。工作区仍只有一个文件。
+- 未测试跨 `--cwd` 的 Resume，属于**未验证**。
 
-## Assumed / NOT VERIFIED
+## 推测 / 未验证
 
-- Whether a freshly logged-in machine (no prior Desktop use) can run headless with only the two env vars pointing at the shipped builtin plus a CLI-created personal config. The CLI did auto-create a stub personal config during this session, but that stub did **not** support model creation (see above); the repair path for an insufficient personal config is NOT VERIFIED.
-- Exit-code taxonomy beyond 0 (success) and 1 (all observed failures — config discovery, model creation, transient refresh). Timeout and cancellation codes are NOT VERIFIED; hard-timeout kill behavior (process tree on Windows) is NOT VERIFIED.
-- Long-running task behavior: the smoke task took ~7 s; streaming output, partial JSON, and behavior when output exceeds pipe buffers are NOT VERIFIED.
-- Concurrent sessions and concurrent `--resume` of one session: NOT VERIFIED.
-- Whether `--json` shape, `usage`, `projection`, or `sess_` ID format change across CLI versions: NOT VERIFIED (schema recorded above is version-specific evidence, not a contract).
-- Network-dependence details: all successful minimal runs had direct connectivity; behavior behind proxies/firewalls other than the observed transient refresh error is NOT VERIFIED.
+- 新登录机器（此前未使用 Desktop）是否能仅依赖两个环境变量，以随包 builtin 和 CLI 创建的个人配置运行 headless。CLI 本次自动创建了个人配置 stub，但它无法创建模型；如何修复无效个人配置仍未验证。
+- 退出码 0（成功）和 1（目前观察到的配置发现、模型创建、瞬时刷新失败）以外的退出码分类。超时和取消码、Windows 进程树强制终止行为均未验证。
+- 长任务行为：smoke task 约 7 秒；流式输出、部分 JSON、stdout 超过管道缓冲区时的表现均未验证。
+- 并发 session，以及对同一 session 并发 `--resume`，均未验证。
+- `--json` 结构、`usage`、`projection` 或 `sess_` ID 格式会否随 CLI 版本变化，均未验证。上文结构只是版本特定观察，不是契约。
+- 网络依赖细节：所有成功的最小环境运行都使用直连网络。代理/防火墙环境下，除已观察到的瞬时刷新错误外，其他行为未验证。
 
-## Unsupported / not available (VERIFIED)
+## 不支持 / 本机不可用（已验证）
 
-- No `zcode` command on PATH (`where.exe zcode` finds nothing); invoke the verified full `zcode.cjs` path through Node after a preflight.
-- `--max-turns` does not exist in this CLI's help (0 matches); Reference B's adapter uses it — do not pass it to this runtime.
-- Bare-environment invocation without the two provider env vars: deterministically exits during provider discovery on this machine/build.
-- Unattended repair of the provider lookup by copying files into the installation: unnecessary (env vars suffice) and was intentionally not done.
+- PATH 中没有 `zcode` 命令（`where.exe zcode` 无结果）；预检后通过 Node 调用已验证的完整 `zcode.cjs` 路径。
+- 此 CLI 的帮助中没有 `--max-turns`（匹配 0 次）；参考 B 的 adapter 使用了该参数，不得传给本机 runtime。
+- 不设置两个 provider 环境变量直接调用时，本机版本会在 provider 路径发现阶段稳定失败。
+- 无人值守地复制 provider 文件以修复路径并无必要（环境变量已足够），本次也刻意没有这样做。
 
-## Bridge preflight requirements derived from this verification
+## 根据本次验证得出的 Bridge 预检要求
 
-1. Resolve Node and `zcode.cjs`; require the two provider env vars to be settable by the Bridge itself: builtin = shipped `resources\config\provider\zcode-builtin.json` under the discovered install root; personal = an **existing** real personal config (resolve via `ZCODE_DATA_BASE_DIR` when present, else known data-dir candidates). Fail fast with a distinct configuration error if either file is missing.
-2. Spawn with an argv array, `shell: false`, explicit child cwd, captured stdout/stderr, and a hard timeout whose behavior still needs its own verification.
-3. Parse stdout as JSON only when exit code is 0, then require `sessionId` (and validate shape) before treating the task as successful; retain raw stdout/stderr otherwise.
-4. Retry the `Bundled 与 Active ... 均不可用` error class; treat probe/model-creation errors as non-retryable configuration failures.
-5. Re-run this verification after any ZCode upgrade: paths, env-var names, and the JSON schema are all version-specific observations.
+1. 解析 Node 和 `zcode.cjs`；Bridge 必须能设置两个 provider 环境变量：builtin 指向已发现安装目录下的 `resources\config\provider\zcode-builtin.json`；personal 必须指向**真实且已存在**的配置（如有 `ZCODE_DATA_BASE_DIR` 则据此解析，否则检查已知数据目录候选路径）。任一文件缺失时，使用独立配置错误快速失败。
+2. 使用 argv 数组启动，设置 `shell: false` 和显式子进程 cwd，捕获 stdout/stderr，并设置硬超时；超时行为本身仍需另行验证。
+3. 仅在退出码为 0 时解析 stdout JSON，然后要求存在 `sessionId`（并验证格式）才视为任务成功；其他情况保留原始 stdout/stderr。
+4. 对 `Bundled 与 Active ... 均不可用` 错误重试；probe/model 创建错误不可重试。
+5. 每次 ZCode 升级后重新执行验证，因为路径、环境变量名和 JSON 结构都可能随版本变化。
 
-## Evidence and disclosures
+## 证据与说明
 
-- Test drivers and raw result logs (no secrets, no credentials, no provider-file copies): `C:\Users\Sandy\AppData\Local\Temp\zcode-bridge-smoke-PivivJoJ\` (`run-smoke.mjs`, `run-diag.mjs`, `run-envbisect.mjs`, `run-minimal.mjs`, `smoke-result.json`, `resume-result.json`, `diag-*.json`, `envbisect-*.json`, `minimal-*.json`).
-- During diagnosis the CLI itself created `C:\Users\Sandy\.zcode\v2\provider_config.json` (206-byte stub) and normal session state under the ZCode data directories; no ZCode configuration was edited manually and no login/logout/upgrade was performed. Roughly two dozen small model calls were made for diagnosis, consuming a small amount of model quota.
-- The working directory `D:\codex-zcode-bridge` is not a Git repository (no `.git`), so no remote is configured locally and nothing was committed or pushed.
+- 临时测试驱动和原始结果日志保存在系统临时目录中；发布版本不包含这些文件。
+- 诊断期间，CLI 自行创建了个人 provider 配置 stub，并在 ZCode 数据目录下创建了 session 状态。没有手工修改任何 ZCode 配置，也未登录、注销或升级。诊断期间发起了多次小型模型调用。
+- 本文描述的是 2026-09-26 的 runtime 观察，不是跨版本保证。当前工作区已是 Git 仓库并连接远端；本文早期调研时的工作区状态以历史记录为准。

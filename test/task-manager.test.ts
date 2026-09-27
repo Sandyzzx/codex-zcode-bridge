@@ -1,0 +1,445 @@
+// TaskManager lifecycle tests: strict validation, the single global worker
+// slot, FIFO queueing, state transitions, continuation evidence, cancellation
+// confirmation, and crash recovery with worker_lost — all against a real
+// TaskStore in a temp directory with fake workers. No model calls.
+import assert from "node:assert/strict";
+import path from "node:path";
+import test from "node:test";
+import {
+  makeManagerFixture,
+  FakeAdapter,
+  type ManagerFixture,
+} from "./manager-helpers.js";
+import { TaskStore } from "../src/store/task-store.js";
+import { TaskManagerError } from "../src/manager/errors.js";
+import { runWorkerTask } from "../src/worker/run-task.js";
+import { makeTask } from "./helpers.js";
+
+const CREATED_AT = "2026-09-27T00:00:00.000Z";
+
+async function freshFixture(): Promise<ManagerFixture> {
+  return makeManagerFixture();
+}
+
+function errorCodeOf(error: unknown): string {
+  assert.ok(error instanceof TaskManagerError, `expected TaskManagerError, got ${String(error)}`);
+  return error.code;
+}
+
+test("invalid task packages are rejected with TASK_INVALID and leave no records", async () => {
+  const fx = await freshFixture();
+  try {
+    const cases: Array<Record<string, unknown>> = [
+      { task_id: "bad id!", objective: "x" },
+      { task_id: "task_v", objective: "  " },
+      { task_id: "task_v", objective: "obj", requirements: "not-an-array" },
+      { task_id: "task_v", objective: "obj", allowed_paths: undefined },
+      { task_id: "task_v", objective: "obj", test_commands: [1] },
+      { task_id: "task_v", objective: "obj", workspace: "relative/path" },
+      { ...fx.makeTask(), model: { provider_id: "", model_id: "model" } },
+      { ...fx.makeTask(), model: { provider_id: "provider", model_id: "" } },
+      { ...fx.makeTask(), model: { provider_id: "provider", model_id: "model", reasoning_level: " " } },
+    ];
+    for (const overrides of cases) {
+      const task = { ...fx.makeTask(), ...overrides } as ReturnType<ManagerFixture["makeTask"]>;
+      await assert.rejects(fx.manager.createTask(task), (error: unknown) => {
+        assert.equal(errorCodeOf(error), "TASK_INVALID");
+        return true;
+      });
+    }
+    assert.deepEqual(fx.store.listTaskIds(), []);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test("duplicate task_id is rejected with TASK_ALREADY_EXISTS", async () => {
+  const fx = await freshFixture();
+  try {
+    await fx.manager.createTask(fx.makeTask());
+    await assert.rejects(
+      fx.manager.createTask(fx.makeTask()),
+      (error: unknown) => errorCodeOf(error) === "TASK_ALREADY_EXISTS",
+    );
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test("with a free slot the task starts immediately as running with a persisted pid", async () => {
+  const fx = await freshFixture();
+  try {
+    const receipt = await fx.manager.createTask(fx.makeTask());
+    assert.equal(receipt.status, "running");
+    assert.equal(fx.spawned.length, 1);
+    assert.equal(fx.spawned[0]!.taskId, "task_1");
+    const status = await fx.manager.getStatus("task_1");
+    assert.equal(status.status, "running");
+    assert.equal(status.worker_pid, fx.spawned[0]!.pid);
+    assert.equal(status.attempt, 1);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test("a second task queues FIFO and starts only after the slot frees", async () => {
+  const fx = await freshFixture();
+  try {
+    const first = await fx.manager.createTask(fx.makeTask({ task_id: "task_a" }));
+    assert.equal(first.status, "running");
+    const second = await fx.manager.createTask(fx.makeTask({ task_id: "task_b" }));
+    assert.equal(second.status, "queued");
+    assert.equal(fx.spawned.length, 1, "no second worker while the slot is busy");
+
+    // The first worker completes; the reconcile tick pumps the queue.
+    await fx.runWorker("task_a", new FakeAdapter());
+    await fx.manager.recoverTasks();
+    assert.equal(fx.spawned.length, 2);
+    assert.equal(fx.spawned[1]!.taskId, "task_b");
+    const status = await fx.manager.getStatus("task_b");
+    assert.equal(status.status, "running");
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test("FIFO order is honored for multiple queued tasks (created_at ordering)", async () => {
+  const fx = await freshFixture();
+  try {
+    const store = fx.store;
+    store.createTask(fx.makeTask({ task_id: "task_late" }), "2026-09-27T00:00:30.000Z");
+    store.createTask(fx.makeTask({ task_id: "task_early" }), "2026-09-27T00:00:10.000Z");
+    await fx.manager.recoverTasks();
+    assert.equal(fx.spawned.length, 1);
+    assert.equal(fx.spawned[0]!.taskId, "task_early", "the earliest queued task starts first");
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test("getResult enforces TASK_NOT_FOUND and TASK_NOT_FINISHED and returns the normalized result", async () => {
+  const fx = await freshFixture();
+  try {
+    await assert.rejects(
+      fx.manager.getResult("nope"),
+      (error: unknown) => errorCodeOf(error) === "TASK_NOT_FOUND",
+    );
+    await fx.manager.createTask(fx.makeTask());
+    await assert.rejects(
+      fx.manager.getResult("task_1"),
+      (error: unknown) => errorCodeOf(error) === "TASK_NOT_FINISHED",
+    );
+    await fx.runWorker("task_1", new FakeAdapter());
+    await fx.manager.recoverTasks();
+    const result = await fx.manager.getResult("task_1");
+    assert.equal(result.status, "completed");
+    assert.equal(result.attempt, 1);
+    assert.deepEqual(result.files_changed, ["bridge-smoke.txt"]);
+    assert.equal(result.needs_master_decision, false);
+    assert.ok(result.session_id?.startsWith("sess_"));
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test("getResult returns a waiting_for_master result for the finished attempt", async () => {
+  const fx = await freshFixture();
+  try {
+    await fx.manager.createTask(fx.makeTask());
+    const adapter = new FakeAdapter();
+    adapter.behavior = "master";
+    await fx.runWorker("task_1", adapter);
+    await fx.manager.recoverTasks();
+
+    const status = await fx.manager.getStatus("task_1");
+    assert.equal(status.status, "waiting_for_master");
+    const result = await fx.manager.getResult("task_1");
+    assert.equal(result.status, "waiting_for_master");
+    assert.equal(result.needs_master_decision, true);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test("an adapter failure produces failed with error_code and a master-review flag", async () => {
+  const fx = await freshFixture();
+  try {
+    await fx.manager.createTask(fx.makeTask());
+    const adapter = new FakeAdapter();
+    adapter.behavior = "adapterFailed";
+    await fx.runWorker("task_1", adapter);
+    await fx.manager.recoverTasks();
+    const status = await fx.manager.getStatus("task_1");
+    assert.equal(status.status, "failed");
+    assert.equal(status.error_code, "zcode_nonzero_exit");
+    const result = await fx.manager.getResult("task_1");
+    assert.equal(result.needs_master_decision, true, "a failed run without a report must reach the master");
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test("a dead worker without a terminal result reconciles to failed/worker_lost and frees the slot", async () => {
+  const fx = await freshFixture();
+  try {
+    const receipt = await fx.manager.createTask(fx.makeTask());
+    const pid = fx.spawned[0]!.pid;
+    fx.pidsAlive.delete(pid); // the worker process died
+    const status = await fx.manager.getStatus("task_1");
+    assert.equal(status.status, "failed");
+    assert.equal(status.error_code, "worker_lost");
+    assert.match(status.error!, /worker pid/);
+    const result = await fx.manager.getResult("task_1");
+    assert.equal(result.error_code, "worker_lost");
+    assert.equal(result.needs_master_decision, true);
+    assert.ok(result.finished_at);
+    void receipt;
+
+    // The slot is free again: a new task starts immediately.
+    const next = await fx.manager.createTask(fx.makeTask({ task_id: "task_2" }));
+    assert.equal(next.status, "running");
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test("recovery of persisted queued tasks starts them FIFO; a live worker keeps its slot", async () => {
+  const fx = await freshFixture();
+  try {
+    const store = fx.store;
+    store.createTask(fx.makeTask({ task_id: "task_q1" }), "2026-09-27T00:00:01.000Z");
+    store.createTask(fx.makeTask({ task_id: "task_q2" }), "2026-09-27T00:00:02.000Z");
+    await fx.manager.recoverTasks();
+    assert.equal(fx.spawned.length, 1);
+    assert.equal(fx.spawned[0]!.taskId, "task_q1");
+    const second = await fx.manager.getStatus("task_q2");
+    assert.equal(second.status, "queued");
+
+    // A running task whose worker is still alive is left alone.
+    store.writeStatus("task_q1", { status: "running", worker_pid: 999_999 });
+    fx.pidsAlive.add(999_999);
+    await fx.manager.recoverTasks();
+    assert.equal(fx.spawned.length, 1, "no new worker while a live worker holds the slot");
+    assert.equal((await fx.manager.getStatus("task_q1")).status, "running");
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test("continueTask archives prior evidence, passes feedback through, and increments attempt", async () => {
+  const fx = await freshFixture();
+  try {
+    await fx.manager.createTask(fx.makeTask());
+    await fx.runWorker("task_1", new FakeAdapter());
+    await fx.manager.recoverTasks();
+
+    const receipt = await fx.manager.continueTask({
+      task_id: "task_1",
+      feedback: "Fix the failing test",
+      additional_requirements: ["Keep the API stable"],
+    });
+    assert.equal(receipt.status, "running", "the slot is free so the continuation starts immediately");
+    assert.equal(fx.spawned.length, 2);
+
+    const adapter = new FakeAdapter();
+    await fx.runWorker("task_1", adapter);
+    await fx.manager.recoverTasks();
+
+    const call = adapter.calls[0]!;
+    assert.equal(call.kind, "continue");
+    assert.equal(call.attempt, 2);
+    assert.equal(call.feedback, "Fix the failing test");
+    assert.deepEqual(call.additionalRequirements, ["Keep the API stable"]);
+    assert.ok(call.previousSessionId?.startsWith("sess_"));
+    assert.ok(call.previousResult, "previous result must be handed to the adapter");
+
+    const result = await fx.manager.getResult("task_1");
+    assert.equal(result.attempt, 2);
+    assert.ok(
+      fx.store.readArchivedResult("task_1", 1),
+      "attempt 1 result must remain as evidence",
+    );
+    const continueSpec = fx.store.readAttemptMeta<Record<string, unknown>>("task_1", 2, "continue.json");
+    assert.equal(continueSpec?.["feedback"], "Fix the failing test");
+    const status = await fx.manager.getStatus("task_1");
+    assert.equal(status.zcode_session_id, result.session_id);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test("continueTask is rejected from non-terminal states and for empty feedback", async () => {
+  const fx = await freshFixture();
+  try {
+    await fx.manager.createTask(fx.makeTask()); // running
+    await assert.rejects(
+      fx.manager.continueTask({ task_id: "task_1", feedback: "go on" }),
+      (error: unknown) => errorCodeOf(error) === "TASK_STATE",
+    );
+    await fx.runWorker("task_1", new FakeAdapter());
+    await fx.manager.recoverTasks();
+    await assert.rejects(
+      fx.manager.continueTask({ task_id: "task_1", feedback: "   " }),
+      (error: unknown) => errorCodeOf(error) === "TASK_INVALID",
+    );
+    await assert.rejects(
+      fx.manager.continueTask({ task_id: "nope", feedback: "x" }),
+      (error: unknown) => errorCodeOf(error) === "TASK_NOT_FOUND",
+    );
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test("cancelling a queued task cancels it immediately without any worker", async () => {
+  const fx = await freshFixture();
+  try {
+    await fx.manager.createTask(fx.makeTask({ task_id: "task_a" })); // running, occupies the slot
+    const store = fx.store;
+    store.createTask(fx.makeTask({ task_id: "task_b" }), "2026-09-27T00:00:09.000Z"); // queued
+    const status = await fx.manager.cancelTask("task_b");
+    assert.equal(status.status, "cancelled");
+    assert.equal(fx.terminateCalls.length, 0, "no process tree to terminate for a queued task");
+    const result = await fx.manager.getResult("task_b");
+    assert.equal(result.status, "cancelled");
+    assert.equal(result.needs_master_decision, false);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test("cancelling a running task terminates and verifies the process tree before recording cancelled", async () => {
+  const fx = await freshFixture();
+  try {
+    await fx.manager.createTask(fx.makeTask());
+    const pid = fx.spawned[0]!.pid;
+    const status = await fx.manager.cancelTask("task_1");
+    assert.deepEqual(fx.terminateCalls, [pid], "termination must target the worker pid");
+    assert.equal(status.status, "cancelled");
+    assert.equal(status.worker_pid, null);
+    const result = await fx.manager.getResult("task_1");
+    assert.equal(result.status, "cancelled");
+    assert.match(result.summary, /terminated and verified/);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test("when tree termination cannot be verified the task stays nonterminal and CANCEL_FAILED is raised", async () => {
+  const fx = await freshFixture();
+  try {
+    await fx.manager.createTask(fx.makeTask());
+    fx.setTerminateError(new Error("taskkill exited with code 128"));
+    await assert.rejects(
+      fx.manager.cancelTask("task_1"),
+      (error: unknown) => errorCodeOf(error) === "CANCEL_FAILED",
+    );
+    const status = await fx.manager.getStatus("task_1");
+    assert.equal(status.status, "running", "the task must remain nonterminal");
+    assert.match(status.error!, /cancellation could not be verified/);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test("a worker that completes during cancellation wins: the persisted terminal result is kept", async () => {
+  const fx = await freshFixture();
+  try {
+    await fx.manager.createTask(fx.makeTask());
+    // Simulate the worker finishing between the cancel intent and the tree
+    // termination: a terminal result.json appears while status is running.
+    await fx.runWorker("task_1", new FakeAdapter());
+    const statusBefore = await fx.manager.getStatus("task_1");
+    void statusBefore;
+    // Re-open the task as "running" while keeping the result file.
+    const result = fx.store.readResult("task_1")!;
+    fx.store.writeStatus("task_1", { status: "running", finished_at: null });
+    fx.pidsAlive.add(fx.spawned[0]!.pid);
+    const status = await fx.manager.cancelTask("task_1");
+    assert.equal(status.status, "completed", "the natural completion must not be overwritten");
+    const after = await fx.manager.getResult("task_1");
+    assert.equal(after.session_id, result.session_id);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test("cancelling a terminal task is rejected", async () => {
+  const fx = await freshFixture();
+  try {
+    await fx.manager.createTask(fx.makeTask({ task_id: "task_a" }));
+    await fx.manager.cancelTask("task_a"); // hmm: running
+    await assert.rejects(
+      fx.manager.cancelTask("task_a"),
+      (error: unknown) => errorCodeOf(error) === "TASK_STATE",
+    );
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test("workspace canonicalization: the persisted task stores the canonical path", async () => {
+  const fx = await freshFixture();
+  try {
+    const weirdPath = fx.workspaceDir + path.sep + "." + path.sep;
+    await fx.manager.createTask(fx.makeTask({ workspace: weirdPath }));
+    const task = fx.store.readTask("task_1");
+    assert.equal(task.workspace, fx.workspaceDir, "the canonical path must be stored");
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test("spawn failure of the worker process records failed/spawn_failed and frees the slot", async () => {
+  const fx = await freshFixture();
+  try {
+    // Replace the manager with one whose spawnWorker always throws.
+    const store = fx.store;
+    const { BridgeTaskManager } = await import("../src/manager/task-manager.js");
+    let clock = 0;
+    const failing = new BridgeTaskManager({
+      store,
+      workspaceProvider: {
+        resolve: async (p) => ({ requestedPath: p, canonicalPath: p, mode: "direct" }),
+        release: async () => {},
+      },
+      spawnWorker: () => {
+        throw new Error("no such worker entry");
+      },
+      pollIntervalMs: 0,
+      now: () => new Date(Date.UTC(2026, 8, 27, 0, 0, 0) + ++clock * 1_000),
+    });
+    try {
+      const receipt = await failing.createTask(makeTask({ workspace: fx.workspaceDir }));
+      assert.equal(receipt.status, "queued", "spawn failure must fall back to a terminal failed state, not running");
+      void receipt;
+      const status = await failing.getStatus("task_1");
+      assert.equal(status.status, "failed");
+      assert.equal(status.error_code, "spawn_failed");
+      const result = await failing.getResult("task_1");
+      assert.equal(result.error_code, "spawn_failed");
+    } finally {
+      failing.dispose();
+    }
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test("runWorkerTask through the harness end-to-end reaches a terminal TaskStatusRecord", async () => {
+  const fx = await freshFixture();
+  try {
+    await fx.manager.createTask(fx.makeTask());
+    const adapter = new FakeAdapter();
+    await fx.runWorker("task_1", adapter);
+    const status = await fx.manager.getStatus("task_1");
+    assert.equal(status.status, "completed");
+    assert.ok(status.started_at);
+    assert.ok(status.finished_at);
+    assert.equal(status.attempt, 1);
+    assert.ok(status.created_at);
+    assert.ok(status.updated_at);
+  } finally {
+    await fx.cleanup();
+  }
+});

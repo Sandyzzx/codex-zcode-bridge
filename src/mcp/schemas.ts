@@ -1,0 +1,125 @@
+// Frozen tool schemas per docs/INTERFACES.md (strict, snake_case, unknown
+// fields rejected). Rendered with Zod 4 schemas, which the official
+// MCP TypeScript SDK v2 accepts directly as tool input schemas; unknown or
+// missing fields fail input validation before the TaskManager is invoked.
+import * as z from "zod/v4";
+
+export const TASK_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+
+export const taskIdSchema = z
+  .string()
+  .regex(TASK_ID_PATTERN, `task_id must match ${TASK_ID_PATTERN.source}`);
+
+const stringArray = z.array(z.string());
+
+export const zcodeTaskInputSchema = z
+  .strictObject({
+    task_id: taskIdSchema,
+    workspace: z.string().min(1),
+    model: z.strictObject({
+      provider_id: z.string().trim().min(1),
+      model_id: z.string().trim().min(1),
+      reasoning_level: z.string().trim().min(1).optional(),
+    }).optional(),
+    objective: z.string().min(1),
+    requirements: stringArray,
+    allowed_paths: stringArray,
+    forbidden_paths: stringArray,
+    acceptance_criteria: stringArray,
+    test_commands: stringArray,
+    context: z.string().optional(),
+  })
+  .describe("Full TaskPackage; the five array fields must be present (empty allowed), context is optional.");
+
+export const taskIdOnlyInputSchema = z.strictObject({
+  task_id: z.string().min(1),
+});
+
+export const zcodeContinueInputSchema = z.strictObject({
+  task_id: z.string().min(1),
+  feedback: z.string().min(1),
+  additional_requirements: z.array(z.string()).optional(),
+});
+
+export const zcodeEventsInputSchema = z.strictObject({
+  task_id: taskIdSchema,
+  after_seq: z.number().int().nonnegative().optional(),
+  limit: z.number().int().min(1).max(200).optional(),
+  wait_ms: z.number().int().min(0).max(25_000).optional(),
+});
+
+// ---- output schemas (structured content validation) ----
+
+const testReportSchema = z.object({
+  command: z.string(),
+  status: z.enum(["passed", "failed", "not_run"]),
+  details: z.string().optional(),
+});
+
+export const taskReceiptSchema = z.object({
+  task_id: z.string(),
+  status: z.enum(["queued", "running"]),
+  created_at: z.string(),
+});
+
+export const taskStatusRecordSchema = z.object({
+  task_id: z.string(),
+  status: z.enum([
+    "queued",
+    "running",
+    "completed",
+    "failed",
+    "cancelled",
+    "waiting_for_master",
+  ]),
+  attempt: z.number().int(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  started_at: z.string().nullable(),
+  finished_at: z.string().nullable(),
+  worker_pid: z.number().int().nullable(),
+  zcode_session_id: z.string().nullable(),
+  exit_code: z.number().int().nullable(),
+  error_code: z.string().optional(),
+  error: z.string().optional(),
+});
+
+export const taskResultSchema = z.object({
+  task_id: z.string(),
+  status: z.enum(["completed", "failed", "cancelled", "waiting_for_master"]),
+  summary: z.string(),
+  files_changed: z.array(z.string()),
+  tests: z.array(testReportSchema),
+  issues: z.array(z.string()),
+  needs_master_decision: z.boolean(),
+  zcode_output: z.string(),
+  exit_code: z.number().int().nullable(),
+  session_id: z.string().nullable(),
+  attempt: z.number().int(),
+  started_at: z.string().nullable(),
+  finished_at: z.string().nullable(),
+  error_code: z.string().optional(),
+});
+
+const taskProgressEventSchema = z.object({
+  seq: z.number().int().positive(),
+  at: z.string(),
+  type: z.string(),
+  summary: z.string(),
+  details: z.record(z.string(), z.unknown()).optional(),
+});
+
+export const taskProgressPageSchema = z.object({
+  task_id: z.string(),
+  status: z.enum(["queued", "running", "completed", "failed", "cancelled", "waiting_for_master"]),
+  events: z.array(taskProgressEventSchema),
+  next_seq: z.number().int().nonnegative(),
+  has_more: z.boolean(),
+});
+
+export const toolErrorSchema = z.object({
+  error: z.object({
+    code: z.string(),
+    message: z.string(),
+  }),
+});
