@@ -7,7 +7,8 @@
 ## 功能
 
 - 通过本地 stdio MCP 提交、查询、续作和取消任务。
-- 按任务指定 ZCode provider/model ID；可传入 runtime 支持的思考等级。省略模型时保留 ZCode 当前默认值。
+- 按任务指定 ZCode provider/model ID；可传入 runtime 支持的思考等级。未指定任务模型时，依次使用 Bridge 用户默认模型、ZCode 当前默认模型。
+- 将由 app-server 创建的 session best-effort 登记到 ZCode Desktop 任务索引；状态映射为运行中、已完成或错误，取消时清除活动状态。Desktop 需要刷新任务列表才会看到外部写入，索引不可用不会中断任务。
 - 使用本机 ZCode app-server，向 Codex 暴露可见文本、模型选择、工具生命周期、usage 和任务状态事件（以本机 runtime 实际提供为准）。
 - 在独立 Git worktree 中执行，并把运行状态、日志、事件和结果保存在用户目录 `~/.codex/codex-zcode-bridge/`（Windows 为 `%USERPROFILE%\.codex\codex-zcode-bridge\`）。
 - `completed` 仅表示 ZCode 报告执行结束，不代表 Codex 已接受改动。Codex 应检查实际 diff 并独立执行验收。
@@ -31,18 +32,21 @@ codex plugin add codex-zcode-bridge@codex-zcode-bridge
 
 3. 首次新对话时审查并信任 **Codex ZCode Bridge** 的 `SessionStart` hook。之后 hook 会读取并验证 Node.js、Git、ZCode runtime 和 provider 配置，报告发现的路径及配置问题；默认路径不会写入用户环境变量。Codex CLI 可用 `/hooks` 查看 hook 状态。插件和 MCP 只需安装一次。
 
-如果 ZCode 在非默认路径，或者 provider 配置不在标准位置，可在仓库副本中运行 Windows 配置脚本并传入自定义路径：
+如果 ZCode 在非默认路径，使用自定义数据目录，或需要设置用户默认模型/模式，可在仓库副本中运行 Windows 配置脚本：
 
 ```powershell
 .\install.ps1 `
   -ZCodeRuntimePath "C:\path\to\zcode\runtime.cjs" `
   -BuiltinProviderConfigPath "C:\path\to\builtin-provider.json" `
-  -PersonalProviderConfigPath "C:\path\to\personal-provider.json"
+  -ZCodeHome "D:\ZCodeData\.zcode" `
+  -DefaultProviderId "account:bigmodel-individual-coding-plan" `
+  -DefaultModelId "GLM-5.3-Flash" `
+  -Mode "yolo"
 ```
 
-参数可单独使用。脚本会读取并验证 runtime 和 provider JSON（个人配置必须包含非空 provider rules），确认全部有效后才写入对应的 Windows 用户环境变量；没有提供的参数不会写入默认值。设置自定义路径后需重新启动 Codex，让 MCP 进程加载新的环境变量。脚本不会添加 marketplace、安装插件、修改 ZCode 配置内容或 ACL。
+参数可单独使用。`ZCODE_HOME` 必须是实际 `.zcode` 数据目录，且包含 `v2\provider_config.json`；脚本会发现并校验该文件及 runtime/provider JSON（个人配置必须包含非空 provider rules）。默认模型由 provider/model 成对指定；任务级模型覆盖用户默认值。模式可设为 `plan`、`build`、`edit` 或 `yolo`，默认 `yolo`。确认有效后脚本只写入显式传入参数对应的 Windows 用户环境变量；未传参数只读取当前配置，不写入默认值。设置自定义路径或默认值后需重新启动 Codex。脚本不会添加 marketplace、安装插件、修改 ZCode 配置内容或 ACL。
 
-安装后任务默认直接以 `yolo` 模式运行。派发前确认任务已获授权；开始执行时，Codex 会先显示 ZCode 项目、worktree、session、模型和执行模式信息。当前 app-server 接入尚未验证逐项审批回传。
+开始执行时，Codex 会先显示 ZCode 项目、worktree、session、模型和执行模式信息。如果 runtime 未报告当前模型，Bridge 会在发送任务 prompt 前失败。app-server 的逐项权限审批回传尚未验证；`build`/`edit`/`plan` 模式下的权限交互行为也需结合本机 ZCode 版本确认。
 
 默认情况下 Bridge 会发现常见 ZCode 安装路径和 provider 配置（包括 Windows 的 `Program Files`、`LOCALAPPDATA` 和 ZCode 数据目录）。变量仅保存路径；不要把配置内容或 API 凭据写入 marketplace 文件。
 

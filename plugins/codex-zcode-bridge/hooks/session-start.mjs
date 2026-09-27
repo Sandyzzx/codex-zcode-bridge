@@ -44,6 +44,7 @@ try {
   // Keep the hook advisory if the host adds or changes optional session fields.
 }
 
-parts.push("ZCode tasks run in yolo mode with the current account's permissions. Git worktrees and allowed/forbidden path instructions are not an OS sandbox.");
+const mode = process.env.ZCODE_BRIDGE_MODE || "yolo";
+parts.push(`ZCode tasks use ${mode} mode with the current account's permissions. Git worktrees and allowed/forbidden path instructions are not an OS sandbox.`);
 
 stdout.write(`Codex ZCode Bridge setup check: ${parts.join("; ")}\n`);

@@ -19,7 +19,9 @@ import { BridgeError } from "../runtime/errors.js";
 import { NodeRuntimeResolver } from "../runtime/resolver.js";
 import { terminateProcessTree } from "./process-spawn.js";
 import { createMinimalOsEnv } from "../runtime/child-env.js";
-import { accountProviderId, buildAccountProviderPayload, runtimeAuthReply, zcodeDataBaseDir } from "../runtime/account-provider.js";
+import { accountProviderId, buildAccountProviderPayload, runtimeAuthReply, zcodeDataBaseDir, zcodeTasksIndexPath } from "../runtime/account-provider.js";
+import { resolveSessionPreferences } from "../runtime/session-preferences.js";
+import { registerDesktopTask, updateDesktopTaskStatus, type DesktopTaskIndexEntry, type DesktopTaskStatus } from "./task-index-sync.js";
 
 type ProgressEvent = { type: string; summary: string; details?: Record<string, unknown> };
 type ProgressSink = (event: ProgressEvent) => void;
@@ -208,8 +210,10 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
   ): Promise<ZCodeRunOutcome> {
     const startedAt = this.#now();
     let timer: NodeJS.Timeout | undefined;
+    let desktopTask: DesktopTaskIndexEntry | null = null;
     try {
       const config = await this.#resolver.resolve();
+      const preferences = resolveSessionPreferences(task.model, this.#childEnvBase);
       const childEnv = this.#buildChildEnv(config);
       entry.onEvent({ type: "zcode_starting", summary: "Starting ZCode streaming runtime" });
       const client = this.#startAppServer(config, workspace.canonicalPath, childEnv, entry);
@@ -257,22 +261,23 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         if (returnedId && returnedId !== resumeSessionId) {
           throw new Error(`resume session mismatch: requested ${resumeSessionId}, runtime returned ${returnedId}`);
         }
+        await client.request("session/setMode", { sessionId: resumeSessionId, mode: preferences.mode });
       } else {
         snapshot = asRecord(await client.request("session/create", {
           workspace: { workspacePath: workspace.canonicalPath, workspaceKey: workspace.canonicalPath },
-          mode: "yolo",
+          mode: preferences.mode,
           persistence: "immediate",
         }));
       }
       const sessionId = nestedString(snapshot, ["session", "sessionId"]);
       if (!sessionId) throw new Error("ZCode app-server session snapshot did not contain session.sessionId");
       entry.sessionId = sessionId;
-      if (task.model) {
-        const requestedProviderId = accountProviderId(task.model.provider_id, config);
-        const requested = `${requestedProviderId}/${task.model.model_id}`;
+      if (preferences.model) {
+        const requestedProviderId = accountProviderId(preferences.model.provider_id, config);
+        const requested = `${requestedProviderId}/${preferences.model.model_id}`;
         const availableModels = readAvailableModels(snapshot);
         const isAvailable = availableModels.some(
-          (model) => model.providerId === requestedProviderId && model.modelId === task.model!.model_id,
+          (model) => model.providerId === requestedProviderId && model.modelId === preferences.model!.model_id,
         );
         entry.onEvent({
           type: "model_catalog",
@@ -280,7 +285,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
           details: {
             session_id: sessionId,
             workspace_path: workspace.canonicalPath,
-            requested_model: { provider_id: requestedProviderId, model_id: task.model.model_id },
+            requested_model: { provider_id: requestedProviderId, model_id: preferences.model.model_id },
             available_models: availableModels.slice(0, 100),
             truncated: availableModels.length > 100,
           },
@@ -298,18 +303,18 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         // session/create already selected this exact model. Keeping its
         // effective options is important for models requiring reasoningLevel.
         const current = readSelectedModelSelection(snapshot);
-        const reasoningLevel = task.model.reasoning_level ?? readModelReasoningDefault(
+        const reasoningLevel = preferences.model.reasoning_level ?? readModelReasoningDefault(
           snapshot,
           requestedProviderId,
-          task.model.model_id,
+          preferences.model.model_id,
         );
-        const modelState = current?.providerId === requestedProviderId && current.modelId === task.model.model_id
+        const modelState = current?.providerId === requestedProviderId && current.modelId === preferences.model.model_id && !preferences.model.reasoning_level
           ? snapshot
           : asRecord(await client.request("session/setModel", {
               sessionId,
               model: {
                 providerId: requestedProviderId,
-                modelId: task.model.model_id,
+                modelId: preferences.model.model_id,
                 ...(reasoningLevel
                   ? { options: { reasoningLevel } }
                   : {}),
@@ -324,12 +329,13 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         }
         if (
           selected.providerId !== requestedProviderId ||
-          selected.modelId !== task.model.model_id
+          selected.modelId !== preferences.model.model_id
         ) {
           throw new Error(
             `ZCode model override mismatch: requested ${requested}, runtime selected ${selected.providerId}/${selected.modelId}`,
           );
         }
+        snapshot = modelState;
         entry.selectedModel = readSelectedModel(modelState) ?? requested;
         entry.onEvent({
           type: "model_selected",
@@ -339,23 +345,62 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
             selected_model: entry.selectedModel,
             provider_id: selected.providerId,
             model_id: selected.modelId,
+            model_source: preferences.modelSource,
             ...(reasoningLevel ? { reasoning_level: reasoningLevel } : {}),
           },
         });
       }
       const model = readSelectedModel(snapshot);
       entry.selectedModel = entry.selectedModel ?? model;
+      if (!entry.selectedModel) {
+        const availableModels = readAvailableModels(snapshot);
+        entry.onEvent({
+          type: "model_unresolved",
+          summary: "ZCode runtime did not report a selected model; task was stopped before sending the prompt",
+          details: { session_id: sessionId, available_model_count: availableModels.length },
+        });
+        throw new BridgeError(
+          "provider_config_invalid",
+          "ZCode runtime did not report its selected model; refusing to start a task whose model cannot be identified.",
+        );
+      }
       entry.onEvent({
         type: "session_ready",
-        summary: `ZCode session ready${entry.selectedModel ? `; selected model ${entry.selectedModel}` : "; selected model not reported"}`,
+        summary: `ZCode session ready; selected model ${entry.selectedModel}`,
         details: {
           session_id: sessionId,
           source_path: task.workspace,
           workspace_path: workspace.canonicalPath,
-          execution_mode: "yolo",
+          execution_mode: preferences.mode,
+          model_source: preferences.modelSource,
           ...(entry.selectedModel ? { selected_model: entry.selectedModel } : {}),
         },
       });
+      const indexPath = zcodeTasksIndexPath(config.providerPersonalConfigFile);
+      if (indexPath) {
+        const selected = readSelectedModelSelection(snapshot);
+        desktopTask = {
+          databasePath: indexPath,
+          workspacePath: workspace.canonicalPath,
+          sessionId,
+          bridgeTaskId: task.task_id,
+          title: task.task_id,
+          model: selected ? `${selected.providerId}/${selected.modelId}` : null,
+          provider: "glm",
+          mode: preferences.mode,
+        };
+        try {
+          await registerDesktopTask(desktopTask);
+          entry.onEvent({
+            type: "desktop_task_registered",
+            summary: "ZCode session registered in Desktop task index; refresh the task list to see it",
+            details: { session_id: sessionId, workspace_path: workspace.canonicalPath },
+          });
+        } catch (error) {
+          reportDesktopIndexIssue(entry.onEvent, error);
+          desktopTask = null;
+        }
+      }
       const runtimeSeq = nestedNumber(snapshot, ["runtime", "eventSeq"]) ?? 0;
       entry.lastEventSeq = runtimeSeq;
       await client.request("session/subscribe", {
@@ -367,6 +412,10 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       await client.request("session/send", { sessionId, content: prompt });
       entry.onEvent({ type: "turn_started", summary: "ZCode accepted the task and started a turn" });
       const turnResult = await turn;
+      const desktopStatus: DesktopTaskStatus = turnResult.resultType === "cancelled"
+        ? null
+        : turnResult.resultType && turnResult.resultType !== "success" ? "error" : "completed";
+      await syncDesktopStatus(desktopTask, desktopStatus, entry.onEvent);
       await client.close().catch(() => undefined);
       entry.child = null;
 
@@ -421,6 +470,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       });
       return { ...base, agentReport: parsed.report, reportError: null, errorCode: null };
     } catch (error) {
+      await syncDesktopStatus(desktopTask, entry.cancelRequested ? null : "error", entry.onEvent);
       if (entry.client) await entry.client.close().catch(() => undefined);
       else if (entry.child?.pid) await terminateProcessTree(entry.child.pid).catch(() => undefined);
       entry.child = null;
@@ -666,6 +716,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     const env = createMinimalOsEnv(this.#childEnvBase);
     env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE = config.providerBuiltinConfigFile;
     env.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE = config.providerPersonalConfigFile;
+    if (this.#childEnvBase.ZCODE_HOME) env.ZCODE_HOME = this.#childEnvBase.ZCODE_HOME;
     const dataBaseDir = zcodeDataBaseDir(config.providerPersonalConfigFile);
     if (dataBaseDir) env.ZCODE_DATA_BASE_DIR = dataBaseDir;
     return env;
@@ -751,6 +802,27 @@ function nestedNumber(record: JsonRecord, path: string[]): number | null {
 
 function asRecord(value: unknown): JsonRecord {
   return isRecord(value) ? value : {};
+}
+
+async function syncDesktopStatus(
+  entry: DesktopTaskIndexEntry | null,
+  status: DesktopTaskStatus,
+  onEvent: ProgressSink,
+): Promise<void> {
+  if (!entry) return;
+  try {
+    await updateDesktopTaskStatus(entry, status);
+  } catch (error) {
+    reportDesktopIndexIssue(onEvent, error);
+  }
+}
+
+function reportDesktopIndexIssue(onEvent: ProgressSink, error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  onEvent({
+    type: "desktop_task_index_warning",
+    summary: `ZCode Desktop task index could not be updated: ${message.slice(0, 500)}`,
+  });
 }
 
 function isRecord(value: unknown): value is JsonRecord {

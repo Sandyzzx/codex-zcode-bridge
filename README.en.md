@@ -7,7 +7,8 @@ A local Codex plugin and MCP server for delegating bounded development tasks to 
 ## Features
 
 - Submit, inspect, continue, and cancel tasks through a local stdio MCP server.
-- Select a ZCode provider/model per task and optionally pass a runtime-supported reasoning level. Omitting the model keeps the ZCode session default.
+- Select a ZCode provider/model per task and optionally pass a runtime-supported reasoning level. Without a task override, the Bridge uses the user default model and then the ZCode session default.
+- Best-effort register app-server-created sessions in the ZCode Desktop task index and mirror coarse status; cancellation clears the active status. Desktop must refresh its task list to show external writes; index failures never stop task execution.
 - Uses the native ZCode app-server and exposes visible text, model selection, tool lifecycle, usage, and task events when provided by the installed runtime.
 - Runs in an isolated Git worktree and stores task state, logs, events, and results under `~/.codex/codex-zcode-bridge/` (on Windows, `%USERPROFILE%\.codex\codex-zcode-bridge\`).
 - `completed` means ZCode reported the run as finished; it does not mean Codex accepted the changes. Codex should inspect the diff and run acceptance checks independently.
@@ -31,18 +32,21 @@ codex plugin add codex-zcode-bridge@codex-zcode-bridge
 
 3. On the first new conversation, review and trust the **Codex ZCode Bridge** `SessionStart` hook. It then reads and validates Node.js, Git, the ZCode runtime, and provider configs, and reports discovered paths or configuration problems. Default paths are not written to user environment variables. In Codex CLI, use `/hooks` to inspect hook status. The plugin and MCP are installed once.
 
-If ZCode is installed in a nonstandard location or its provider configs are outside standard paths, run the Windows configuration script from a repository copy and pass the custom paths:
+If ZCode is installed in a nonstandard location, uses a custom data directory, or needs default model/mode settings, run the Windows configuration script from a repository copy:
 
 ```powershell
 .\install.ps1 `
   -ZCodeRuntimePath "C:\path\to\zcode\runtime.cjs" `
   -BuiltinProviderConfigPath "C:\path\to\builtin-provider.json" `
-  -PersonalProviderConfigPath "C:\path\to\personal-provider.json"
+  -ZCodeHome "D:\ZCodeData\.zcode" `
+  -DefaultProviderId "account:bigmodel-individual-coding-plan" `
+  -DefaultModelId "GLM-5.3-Flash" `
+  -Mode "yolo"
 ```
 
-Each parameter is optional. The script reads and validates the runtime and provider JSON (the personal config must contain non-empty provider rules), then writes only the matching user environment variables for paths you supplied. It does not write defaults for omitted parameters. Restart Codex after configuring custom paths so its MCP process receives the new environment. The script does not add a marketplace, install the plugin, edit ZCode config contents, or change ACLs.
+Each parameter is optional. `ZCODE_HOME` must point to the actual `.zcode` data directory and contain `v2\provider_config.json`; the script discovers and validates it along with the runtime/provider JSON (the personal config must contain non-empty provider rules). Default provider and model must be supplied as a pair; task-level model selection overrides them. Modes are `plan`, `build`, `edit`, or `yolo` (default: `yolo`). After validation, the script writes only the Windows user environment variables for parameters explicitly supplied. Omitted parameters are discovered/read without persisting defaults. Restart Codex after configuring paths or defaults. The script does not add a marketplace, install the plugin, edit ZCode config contents, or change ACLs.
 
-After installation, tasks run directly in `yolo` mode. Only delegate authorized tasks. At startup, Codex reports the ZCode project, worktree, session, model, and execution mode. The app-server integration has not yet verified a per-action approval flow.
+At startup, Codex reports the ZCode project, worktree, session, model, and execution mode. If the runtime does not report its selected model, the Bridge fails before sending the task prompt. Per-action permission forwarding through app-server remains unverified; behavior of permission interactions in `build`/`edit`/`plan` modes must be confirmed against the local ZCode version.
 
 The Bridge discovers common ZCode install and provider locations by default, including Windows `Program Files`, `LOCALAPPDATA`, and the ZCode data directory. Environment variables store paths only; never put provider contents or API credentials in marketplace files.
 

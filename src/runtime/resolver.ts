@@ -36,6 +36,7 @@ export class NodeRuntimeResolver implements RuntimeResolver {
 
   async resolve(): Promise<ZCodeRuntimeConfig> {
     const env = this.#env;
+    const zcodeHome = resolveZcodeHome(env);
 
     // Node executable: explicit override or `node` on PATH (frozen contract).
     let nodeExecutable = "node";
@@ -108,14 +109,16 @@ export class NodeRuntimeResolver implements RuntimeResolver {
         this.#validatePersonalConfig(personalEnv);
         personalConfigFile = personalEnv;
       } else {
-        const candidates = [
-          env["ZCODE_DATA_BASE_DIR"]?.trim(),
-          ...configuredDataBaseDirs(this.#homeDir),
-          this.#homeDir,
-        ]
-          .filter((base): base is string => Boolean(base))
-          .filter((base, index, values) => values.indexOf(base) === index)
-          .map((base) => path.join(base, ".zcode", "v2", "provider_config.json"));
+        const candidates = zcodeHome
+          ? [path.join(zcodeHome, "v2", "provider_config.json")]
+          : [
+              env["ZCODE_DATA_BASE_DIR"]?.trim(),
+              ...configuredDataBaseDirs(this.#homeDir),
+              this.#homeDir,
+            ]
+              .filter((base): base is string => Boolean(base))
+              .filter((base, index, values) => values.indexOf(base) === index)
+              .map((base) => path.join(base, ".zcode", "v2", "provider_config.json"));
         const existing = candidates.filter((candidate) => existsSync(candidate));
         if (existing.length === 0) {
           throw new BridgeError(
@@ -143,6 +146,13 @@ export class NodeRuntimeResolver implements RuntimeResolver {
         }
         personalConfigFile = accepted;
       }
+    }
+
+    if (zcodeHome && !samePath(personalConfigFile, path.join(zcodeHome, "v2", "provider_config.json"))) {
+      throw new BridgeError(
+        "provider_config_invalid",
+        `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE must be ZCODE_HOME/v2/provider_config.json (${zcodeHome})`,
+      );
     }
 
     // Bridge data root: explicit override or the Bridge installation directory.
@@ -268,6 +278,41 @@ function configuredDataBaseDirs(homeDir: string): string[] {
     }
   }
   return [];
+}
+
+function resolveZcodeHome(env: NodeJS.ProcessEnv): string | null {
+  const configured = env["ZCODE_HOME"]?.trim();
+  if (!configured) return null;
+  if (!path.isAbsolute(configured)) {
+    throw new BridgeError("provider_config_invalid", "ZCODE_HOME must be an absolute path");
+  }
+  const resolved = path.normalize(configured);
+  // app-server's supported data-root contract appends ".zcode" to
+  // ZCODE_DATA_BASE_DIR. Requiring the canonical leaf prevents silently
+  // reading one tree in the Bridge and another in the child process.
+  if (path.basename(resolved).toLowerCase() !== ".zcode") {
+    throw new BridgeError(
+      "provider_config_invalid",
+      "ZCODE_HOME must name a .zcode directory so app-server can use the same data root",
+    );
+  }
+  try {
+    if (!statSync(resolved).isDirectory()) {
+      throw new BridgeError("provider_config_invalid", `ZCODE_HOME is not a directory: ${resolved}`);
+    }
+  } catch (error) {
+    if (error instanceof BridgeError) throw error;
+    throw new BridgeError("provider_config_missing", `ZCODE_HOME directory does not exist: ${resolved}`);
+  }
+  return resolved;
+}
+
+function samePath(left: string, right: string): boolean {
+  const resolvedLeft = path.resolve(left);
+  const resolvedRight = path.resolve(right);
+  return process.platform === "win32"
+    ? resolvedLeft.toLowerCase() === resolvedRight.toLowerCase()
+    : resolvedLeft === resolvedRight;
 }
 
 function isReadableFile(filePath: string): boolean {

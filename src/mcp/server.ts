@@ -30,7 +30,7 @@ import {
 } from "./schemas.js";
 
 export const SERVER_NAME = "codex-zcode-bridge";
-export const SERVER_VERSION = "0.3.3";
+export const SERVER_VERSION = "0.3.4";
 
 export interface BridgeServerOptions {
   taskManager: TaskManager & Partial<Pick<ProgressTaskManager, "getEvents">>;

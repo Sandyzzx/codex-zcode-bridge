@@ -253,6 +253,7 @@ var NodeRuntimeResolver = class {
   }
   async resolve() {
     const env = this.#env;
+    const zcodeHome = resolveZcodeHome(env);
     let nodeExecutable = "node";
     const nodeOverride = env["ZCODE_BRIDGE_NODE"]?.trim();
     if (nodeOverride) {
@@ -315,7 +316,7 @@ var NodeRuntimeResolver = class {
         this.#validatePersonalConfig(personalEnv);
         personalConfigFile = personalEnv;
       } else {
-        const candidates = [
+        const candidates = zcodeHome ? [path.join(zcodeHome, "v2", "provider_config.json")] : [
           env["ZCODE_DATA_BASE_DIR"]?.trim(),
           ...configuredDataBaseDirs(this.#homeDir),
           this.#homeDir
@@ -346,6 +347,12 @@ var NodeRuntimeResolver = class {
         }
         personalConfigFile = accepted;
       }
+    }
+    if (zcodeHome && !samePath(personalConfigFile, path.join(zcodeHome, "v2", "provider_config.json"))) {
+      throw new BridgeError(
+        "provider_config_invalid",
+        `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE must be ZCODE_HOME/v2/provider_config.json (${zcodeHome})`
+      );
     }
     const dataOverride = env["ZCODE_BRIDGE_DATA_DIR"]?.trim();
     let dataRoot2;
@@ -454,6 +461,34 @@ function configuredDataBaseDirs(homeDir) {
     }
   }
   return [];
+}
+function resolveZcodeHome(env) {
+  const configured = env["ZCODE_HOME"]?.trim();
+  if (!configured) return null;
+  if (!path.isAbsolute(configured)) {
+    throw new BridgeError("provider_config_invalid", "ZCODE_HOME must be an absolute path");
+  }
+  const resolved = path.normalize(configured);
+  if (path.basename(resolved).toLowerCase() !== ".zcode") {
+    throw new BridgeError(
+      "provider_config_invalid",
+      "ZCODE_HOME must name a .zcode directory so app-server can use the same data root"
+    );
+  }
+  try {
+    if (!statSync(resolved).isDirectory()) {
+      throw new BridgeError("provider_config_invalid", `ZCODE_HOME is not a directory: ${resolved}`);
+    }
+  } catch (error) {
+    if (error instanceof BridgeError) throw error;
+    throw new BridgeError("provider_config_missing", `ZCODE_HOME directory does not exist: ${resolved}`);
+  }
+  return resolved;
+}
+function samePath(left, right) {
+  const resolvedLeft = path.resolve(left);
+  const resolvedRight = path.resolve(right);
+  return process.platform === "win32" ? resolvedLeft.toLowerCase() === resolvedRight.toLowerCase() : resolvedLeft === resolvedRight;
 }
 function isReadableFile(filePath) {
   try {
@@ -752,6 +787,10 @@ function zcodeDataBaseDir(personalProviderConfigFile) {
   const dataDir = zcodeV2DataDir(personalProviderConfigFile);
   return dataDir ? path2.dirname(path2.dirname(dataDir)) : null;
 }
+function zcodeTasksIndexPath(personalProviderConfigFile) {
+  const dataDir = zcodeV2DataDir(personalProviderConfigFile);
+  return dataDir ? path2.join(dataDir, "tasks-index.sqlite") : null;
+}
 function zcodeV2DataDir(personalProviderConfigFile) {
   const absolute = path2.resolve(personalProviderConfigFile);
   if (path2.basename(absolute).toLowerCase() !== "provider_config.json") return null;
@@ -785,6 +824,190 @@ function asRecord(value) {
 }
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// src/runtime/session-preferences.ts
+var ZCODE_SESSION_MODES = ["plan", "build", "edit", "yolo"];
+function resolveSessionPreferences(taskModel, env) {
+  const providerId = env["ZCODE_BRIDGE_DEFAULT_PROVIDER_ID"]?.trim() ?? "";
+  const modelId = env["ZCODE_BRIDGE_DEFAULT_MODEL_ID"]?.trim() ?? "";
+  const reasoningLevel = env["ZCODE_BRIDGE_DEFAULT_REASONING_LEVEL"]?.trim() ?? "";
+  const configuredMode = env["ZCODE_BRIDGE_MODE"]?.trim() || "yolo";
+  if (Boolean(providerId) !== Boolean(modelId)) {
+    throw new BridgeError(
+      "provider_config_invalid",
+      "ZCODE_BRIDGE_DEFAULT_PROVIDER_ID and ZCODE_BRIDGE_DEFAULT_MODEL_ID must be set together"
+    );
+  }
+  if (!isSessionMode(configuredMode)) {
+    throw new BridgeError(
+      "provider_config_invalid",
+      `ZCODE_BRIDGE_MODE must be one of: ${ZCODE_SESSION_MODES.join(", ")}`
+    );
+  }
+  if (reasoningLevel && !taskModel && !providerId) {
+    throw new BridgeError(
+      "provider_config_invalid",
+      "ZCODE_BRIDGE_DEFAULT_REASONING_LEVEL requires a default model pair or a per-task model"
+    );
+  }
+  const model = taskModel ? {
+    provider_id: taskModel.provider_id.trim(),
+    model_id: taskModel.model_id.trim(),
+    ...taskModel.reasoning_level?.trim() || reasoningLevel ? { reasoning_level: taskModel.reasoning_level?.trim() || reasoningLevel } : {}
+  } : providerId && modelId ? {
+    provider_id: providerId,
+    model_id: modelId,
+    ...reasoningLevel ? { reasoning_level: reasoningLevel } : {}
+  } : null;
+  if (model && (!model.provider_id || !model.model_id)) {
+    throw new BridgeError("provider_config_invalid", "Configured provider and model IDs must not be blank");
+  }
+  return {
+    mode: configuredMode,
+    model,
+    modelSource: taskModel ? "task" : model ? "user_default" : "zcode_default"
+  };
+}
+function isSessionMode(value) {
+  return ZCODE_SESSION_MODES.includes(value);
+}
+
+// src/adapters/task-index-sync.ts
+import { existsSync as existsSync3 } from "node:fs";
+var databaseSyncPromise = null;
+async function loadDatabaseSync() {
+  databaseSyncPromise ??= import("node:sqlite").then((module) => module.DatabaseSync).catch(() => null);
+  return databaseSyncPromise;
+}
+async function registerDesktopTask(entry) {
+  await withDatabase(entry.databasePath, (database) => {
+    requireTaskTable(database);
+    const now = Date.now();
+    const title = entry.title.trim().slice(0, 80) || entry.bridgeTaskId;
+    const metaJson = JSON.stringify({
+      taskId: entry.sessionId,
+      traceId: entry.bridgeTaskId,
+      title,
+      titleOverridden: false,
+      workspacePath: entry.workspacePath,
+      createdAt: now,
+      updatedAt: now,
+      mode: entry.mode,
+      model: entry.model,
+      provider: entry.provider,
+      status: "running",
+      target: null
+    });
+    database.prepare(
+      "INSERT OR IGNORE INTO tasks (workspace_key, workspace_path, workspace_identity, task_id, title, task_status, provider, mode, model, created_at, updated_at, unread_at, pinned, archived, deleted, title_overridden, meta_json, searchable_text) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, 0, 0, 0, ?, ?)"
+    ).run(
+      entry.workspacePath,
+      entry.workspacePath,
+      entry.sessionId,
+      title,
+      "running",
+      entry.provider,
+      entry.mode,
+      entry.model,
+      now,
+      now,
+      metaJson,
+      entry.bridgeTaskId
+    );
+    if (!updateOwnedStatus(database, entry, "running")) {
+      throw new Error("Desktop task row already exists and is not owned by this Bridge task");
+    }
+  });
+}
+async function updateDesktopTaskStatus(entry, status) {
+  await withDatabase(entry.databasePath, (database) => {
+    requireTaskTable(database);
+    if (!updateOwnedStatus(database, entry, status)) {
+      throw new Error("Desktop task row is missing or is not owned by this Bridge task");
+    }
+  });
+}
+function updateOwnedStatus(database, entry, status) {
+  const row = database.prepare(
+    "SELECT meta_json FROM tasks WHERE workspace_key = ? AND task_id = ?"
+  ).get(entry.workspacePath, entry.sessionId);
+  if (!row || typeof row.meta_json !== "string") return false;
+  let meta;
+  try {
+    const parsed = JSON.parse(row.meta_json);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return false;
+    meta = parsed;
+  } catch {
+    return false;
+  }
+  if (meta["traceId"] !== entry.bridgeTaskId || meta["taskId"] !== entry.sessionId) return false;
+  const now = Date.now();
+  meta["updatedAt"] = now;
+  if (status === null) delete meta["status"];
+  else meta["status"] = status;
+  database.prepare(
+    "UPDATE tasks SET task_status = ?, updated_at = ?, meta_json = ? WHERE workspace_key = ? AND task_id = ?"
+  ).run(status, now, JSON.stringify(meta), entry.workspacePath, entry.sessionId);
+  return true;
+}
+function requireTaskTable(database) {
+  const columns = new Set(
+    database.prepare("PRAGMA table_info(tasks)").all().map((column) => column.name).filter((name) => typeof name === "string")
+  );
+  const required = [
+    "workspace_key",
+    "workspace_path",
+    "workspace_identity",
+    "task_id",
+    "title",
+    "task_status",
+    "provider",
+    "mode",
+    "model",
+    "created_at",
+    "updated_at",
+    "unread_at",
+    "pinned",
+    "archived",
+    "deleted",
+    "title_overridden",
+    "meta_json",
+    "searchable_text"
+  ];
+  const missing = required.filter((name) => !columns.has(name));
+  if (missing.length > 0) {
+    throw new Error(`ZCode tasks-index schema is missing columns: ${missing.join(", ")}`);
+  }
+}
+async function withDatabase(databasePath, operation) {
+  if (!existsSync3(databasePath)) {
+    throw new Error("ZCode Desktop tasks-index database does not exist");
+  }
+  const DatabaseSync = await loadDatabaseSync();
+  if (!DatabaseSync) throw new Error("node:sqlite is unavailable in the Bridge runtime");
+  let lastError;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    let database = null;
+    try {
+      database = new DatabaseSync(databasePath, { timeout: 1e3 });
+      return operation(database);
+    } catch (error) {
+      lastError = error;
+      if (attempt < 2 && isDatabaseBusy(error)) {
+        await new Promise((resolve) => setTimeout(resolve, 200 * (attempt + 1)));
+        continue;
+      }
+      throw error;
+    } finally {
+      database?.close();
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("ZCode tasks-index write failed");
+}
+function isDatabaseBusy(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /database is (busy|locked)/i.test(message);
 }
 
 // src/adapters/zcode-app-server-adapter.ts
@@ -902,8 +1125,10 @@ var ZCodeAppServerAdapter = class {
   async #execute(entry, task, workspace, prompt, resumeSessionId, turn) {
     const startedAt = this.#now();
     let timer;
+    let desktopTask = null;
     try {
       const config = await this.#resolver.resolve();
+      const preferences = resolveSessionPreferences(task.model, this.#childEnvBase);
       const childEnv = this.#buildChildEnv(config);
       entry.onEvent({ type: "zcode_starting", summary: "Starting ZCode streaming runtime" });
       const client = this.#startAppServer(config, workspace.canonicalPath, childEnv, entry);
@@ -949,22 +1174,23 @@ var ZCodeAppServerAdapter = class {
         if (returnedId && returnedId !== resumeSessionId) {
           throw new Error(`resume session mismatch: requested ${resumeSessionId}, runtime returned ${returnedId}`);
         }
+        await client.request("session/setMode", { sessionId: resumeSessionId, mode: preferences.mode });
       } else {
         snapshot = asRecord2(await client.request("session/create", {
           workspace: { workspacePath: workspace.canonicalPath, workspaceKey: workspace.canonicalPath },
-          mode: "yolo",
+          mode: preferences.mode,
           persistence: "immediate"
         }));
       }
       const sessionId = nestedString(snapshot, ["session", "sessionId"]);
       if (!sessionId) throw new Error("ZCode app-server session snapshot did not contain session.sessionId");
       entry.sessionId = sessionId;
-      if (task.model) {
-        const requestedProviderId = accountProviderId(task.model.provider_id, config);
-        const requested = `${requestedProviderId}/${task.model.model_id}`;
+      if (preferences.model) {
+        const requestedProviderId = accountProviderId(preferences.model.provider_id, config);
+        const requested = `${requestedProviderId}/${preferences.model.model_id}`;
         const availableModels = readAvailableModels(snapshot);
         const isAvailable = availableModels.some(
-          (model2) => model2.providerId === requestedProviderId && model2.modelId === task.model.model_id
+          (model2) => model2.providerId === requestedProviderId && model2.modelId === preferences.model.model_id
         );
         entry.onEvent({
           type: "model_catalog",
@@ -972,7 +1198,7 @@ var ZCodeAppServerAdapter = class {
           details: {
             session_id: sessionId,
             workspace_path: workspace.canonicalPath,
-            requested_model: { provider_id: requestedProviderId, model_id: task.model.model_id },
+            requested_model: { provider_id: requestedProviderId, model_id: preferences.model.model_id },
             available_models: availableModels.slice(0, 100),
             truncated: availableModels.length > 100
           }
@@ -984,16 +1210,16 @@ var ZCodeAppServerAdapter = class {
           );
         }
         const current = readSelectedModelSelection(snapshot);
-        const reasoningLevel = task.model.reasoning_level ?? readModelReasoningDefault(
+        const reasoningLevel = preferences.model.reasoning_level ?? readModelReasoningDefault(
           snapshot,
           requestedProviderId,
-          task.model.model_id
+          preferences.model.model_id
         );
-        const modelState = current?.providerId === requestedProviderId && current.modelId === task.model.model_id ? snapshot : asRecord2(await client.request("session/setModel", {
+        const modelState = current?.providerId === requestedProviderId && current.modelId === preferences.model.model_id && !preferences.model.reasoning_level ? snapshot : asRecord2(await client.request("session/setModel", {
           sessionId,
           model: {
             providerId: requestedProviderId,
-            modelId: task.model.model_id,
+            modelId: preferences.model.model_id,
             ...reasoningLevel ? { options: { reasoningLevel } } : {}
           },
           // Keep the override scoped to this session; do not change the
@@ -1004,11 +1230,12 @@ var ZCodeAppServerAdapter = class {
         if (!selected) {
           throw new Error(`ZCode accepted model override ${requested} but did not report the selected model`);
         }
-        if (selected.providerId !== requestedProviderId || selected.modelId !== task.model.model_id) {
+        if (selected.providerId !== requestedProviderId || selected.modelId !== preferences.model.model_id) {
           throw new Error(
             `ZCode model override mismatch: requested ${requested}, runtime selected ${selected.providerId}/${selected.modelId}`
           );
         }
+        snapshot = modelState;
         entry.selectedModel = readSelectedModel(modelState) ?? requested;
         entry.onEvent({
           type: "model_selected",
@@ -1018,23 +1245,62 @@ var ZCodeAppServerAdapter = class {
             selected_model: entry.selectedModel,
             provider_id: selected.providerId,
             model_id: selected.modelId,
+            model_source: preferences.modelSource,
             ...reasoningLevel ? { reasoning_level: reasoningLevel } : {}
           }
         });
       }
       const model = readSelectedModel(snapshot);
       entry.selectedModel = entry.selectedModel ?? model;
+      if (!entry.selectedModel) {
+        const availableModels = readAvailableModels(snapshot);
+        entry.onEvent({
+          type: "model_unresolved",
+          summary: "ZCode runtime did not report a selected model; task was stopped before sending the prompt",
+          details: { session_id: sessionId, available_model_count: availableModels.length }
+        });
+        throw new BridgeError(
+          "provider_config_invalid",
+          "ZCode runtime did not report its selected model; refusing to start a task whose model cannot be identified."
+        );
+      }
       entry.onEvent({
         type: "session_ready",
-        summary: `ZCode session ready${entry.selectedModel ? `; selected model ${entry.selectedModel}` : "; selected model not reported"}`,
+        summary: `ZCode session ready; selected model ${entry.selectedModel}`,
         details: {
           session_id: sessionId,
           source_path: task.workspace,
           workspace_path: workspace.canonicalPath,
-          execution_mode: "yolo",
+          execution_mode: preferences.mode,
+          model_source: preferences.modelSource,
           ...entry.selectedModel ? { selected_model: entry.selectedModel } : {}
         }
       });
+      const indexPath = zcodeTasksIndexPath(config.providerPersonalConfigFile);
+      if (indexPath) {
+        const selected = readSelectedModelSelection(snapshot);
+        desktopTask = {
+          databasePath: indexPath,
+          workspacePath: workspace.canonicalPath,
+          sessionId,
+          bridgeTaskId: task.task_id,
+          title: task.task_id,
+          model: selected ? `${selected.providerId}/${selected.modelId}` : null,
+          provider: "glm",
+          mode: preferences.mode
+        };
+        try {
+          await registerDesktopTask(desktopTask);
+          entry.onEvent({
+            type: "desktop_task_registered",
+            summary: "ZCode session registered in Desktop task index; refresh the task list to see it",
+            details: { session_id: sessionId, workspace_path: workspace.canonicalPath }
+          });
+        } catch (error) {
+          reportDesktopIndexIssue(entry.onEvent, error);
+          desktopTask = null;
+        }
+      }
       const runtimeSeq = nestedNumber(snapshot, ["runtime", "eventSeq"]) ?? 0;
       entry.lastEventSeq = runtimeSeq;
       await client.request("session/subscribe", {
@@ -1046,6 +1312,8 @@ var ZCodeAppServerAdapter = class {
       await client.request("session/send", { sessionId, content: prompt });
       entry.onEvent({ type: "turn_started", summary: "ZCode accepted the task and started a turn" });
       const turnResult = await turn;
+      const desktopStatus = turnResult.resultType === "cancelled" ? null : turnResult.resultType && turnResult.resultType !== "success" ? "error" : "completed";
+      await syncDesktopStatus(desktopTask, desktopStatus, entry.onEvent);
       await client.close().catch(() => void 0);
       entry.child = null;
       if (turnResult.resultType && turnResult.resultType !== "success") {
@@ -1098,6 +1366,7 @@ var ZCodeAppServerAdapter = class {
       });
       return { ...base, agentReport: parsed.report, reportError: null, errorCode: null };
     } catch (error) {
+      await syncDesktopStatus(desktopTask, entry.cancelRequested ? null : "error", entry.onEvent);
       if (entry.client) await entry.client.close().catch(() => void 0);
       else if (entry.child?.pid) await terminateProcessTree(entry.child.pid).catch(() => void 0);
       entry.child = null;
@@ -1329,6 +1598,7 @@ var ZCodeAppServerAdapter = class {
     const env = createMinimalOsEnv(this.#childEnvBase);
     env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE = config.providerBuiltinConfigFile;
     env.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE = config.providerPersonalConfigFile;
+    if (this.#childEnvBase.ZCODE_HOME) env.ZCODE_HOME = this.#childEnvBase.ZCODE_HOME;
     const dataBaseDir = zcodeDataBaseDir(config.providerPersonalConfigFile);
     if (dataBaseDir) env.ZCODE_DATA_BASE_DIR = dataBaseDir;
     return env;
@@ -1406,6 +1676,21 @@ function nestedNumber(record, path4) {
 }
 function asRecord2(value) {
   return isRecord2(value) ? value : {};
+}
+async function syncDesktopStatus(entry, status, onEvent) {
+  if (!entry) return;
+  try {
+    await updateDesktopTaskStatus(entry, status);
+  } catch (error) {
+    reportDesktopIndexIssue(onEvent, error);
+  }
+}
+function reportDesktopIndexIssue(onEvent, error) {
+  const message = error instanceof Error ? error.message : String(error);
+  onEvent({
+    type: "desktop_task_index_warning",
+    summary: `ZCode Desktop task index could not be updated: ${message.slice(0, 500)}`
+  });
 }
 function isRecord2(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -1490,7 +1775,7 @@ function truncate(text, maxChars) {
 }
 
 // src/store/task-store.ts
-import { appendFileSync, chmodSync, existsSync as existsSync3, mkdirSync, readFileSync as readFileSync3, readdirSync, renameSync, rmSync, rmdirSync, statSync as statSync2, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync as existsSync4, mkdirSync, readFileSync as readFileSync3, readdirSync, renameSync, rmSync, rmdirSync, statSync as statSync2, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import path3 from "node:path";
 var TASK_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
@@ -1524,21 +1809,21 @@ var TaskStore = class {
   }
   hasTask(taskId2) {
     try {
-      return existsSync3(path3.join(this.taskDir(taskId2), "status.json"));
+      return existsSync4(path3.join(this.taskDir(taskId2), "status.json"));
     } catch {
       return false;
     }
   }
   listTaskIds() {
-    if (!existsSync3(this.#tasksRoot)) return [];
+    if (!existsSync4(this.#tasksRoot)) return [];
     return readdirSync(this.#tasksRoot).filter(
-      (entry) => existsSync3(path3.join(this.#tasksRoot, entry, "status.json"))
+      (entry) => existsSync4(path3.join(this.#tasksRoot, entry, "status.json"))
     );
   }
   createTask(task, createdAt) {
     this.assertValidTaskId(task.task_id);
     const dir = this.taskDir(task.task_id);
-    if (existsSync3(path3.join(dir, "task.json"))) {
+    if (existsSync4(path3.join(dir, "task.json"))) {
       throw new Error(`task already exists: ${task.task_id}`);
     }
     privateMkdir(path3.join(dir, "attempts"));
@@ -1567,7 +1852,7 @@ var TaskStore = class {
   }
   readWorkspaceRef(taskId2) {
     const file = path3.join(this.taskDir(taskId2), "workspace.json");
-    if (!existsSync3(file)) return null;
+    if (!existsSync4(file)) return null;
     return this.#readJson(file);
   }
   readStatus(taskId2) {
@@ -1592,7 +1877,7 @@ var TaskStore = class {
   }
   readResult(taskId2) {
     const file = path3.join(this.taskDir(taskId2), "result.json");
-    if (!existsSync3(file)) return null;
+    if (!existsSync4(file)) return null;
     return this.#readJson(file);
   }
   writeResult(taskId2, result) {
@@ -1602,14 +1887,14 @@ var TaskStore = class {
   archiveResultToAttempt(taskId2, attempt) {
     const dir = this.taskDir(taskId2);
     const source = path3.join(dir, "result.json");
-    if (!existsSync3(source)) return;
+    if (!existsSync4(source)) return;
     const targetDir = this.attemptDir(taskId2, attempt);
     privateMkdir(targetDir);
     renameSync(source, path3.join(targetDir, "result.json"));
   }
   readArchivedResult(taskId2, attempt) {
     const file = path3.join(this.attemptDir(taskId2, attempt), "result.json");
-    if (!existsSync3(file)) return null;
+    if (!existsSync4(file)) return null;
     return this.#readJson(file);
   }
   attemptDir(taskId2, attempt) {
@@ -1627,12 +1912,12 @@ var TaskStore = class {
   }
   readAttemptMeta(taskId2, attempt, fileName) {
     const file = path3.join(this.attemptDir(taskId2, attempt), fileName);
-    if (!existsSync3(file)) return null;
+    if (!existsSync4(file)) return null;
     return this.#readJson(file);
   }
   readAttemptText(taskId2, attempt, fileName) {
     const file = path3.join(this.attemptDir(taskId2, attempt), fileName);
-    if (!existsSync3(file)) return null;
+    if (!existsSync4(file)) return null;
     return readFileSync3(file, "utf8");
   }
   /** Append-only, byte-bounded. Returns whether the chunk was truncated. */
@@ -1656,7 +1941,7 @@ var TaskStore = class {
   }
   readLog(taskId2, kind) {
     const file = path3.join(this.taskDir(taskId2), `${kind}.log`);
-    return existsSync3(file) ? readFileSync3(file, "utf8") : "";
+    return existsSync4(file) ? readFileSync3(file, "utf8") : "";
   }
   appendEvent(taskId2, type, summary, details, at = (/* @__PURE__ */ new Date()).toISOString()) {
     const dir = this.taskDir(taskId2);
@@ -1700,7 +1985,7 @@ var TaskStore = class {
   }
   readEvents(taskId2, afterSeq = 0, limit = 100) {
     const file = path3.join(this.taskDir(taskId2), "events.jsonl");
-    if (!existsSync3(file)) return { events: [], nextSeq: afterSeq, hasMore: false };
+    if (!existsSync4(file)) return { events: [], nextSeq: afterSeq, hasMore: false };
     const all = [];
     for (const line of readFileSync3(file, "utf8").split(/\r?\n/u)) {
       if (!line) continue;
@@ -1778,7 +2063,7 @@ function privateFile(file) {
   if (process.platform !== "win32") chmodSync(file, 384);
 }
 function readLastEventSeq(file) {
-  if (!existsSync3(file)) return 0;
+  if (!existsSync4(file)) return 0;
   for (const line of readFileSync3(file, "utf8").trimEnd().split("\n").reverse()) {
     try {
       const event = JSON.parse(line);

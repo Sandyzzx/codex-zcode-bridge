@@ -22176,6 +22176,11 @@ function createWorkerEnv(source) {
     "ZCODE_BRIDGE_NODE",
     "ZCODE_BRIDGE_ZCODE_CJS",
     "ZCODE_BRIDGE_DATA_DIR",
+    "ZCODE_BRIDGE_DEFAULT_PROVIDER_ID",
+    "ZCODE_BRIDGE_DEFAULT_MODEL_ID",
+    "ZCODE_BRIDGE_DEFAULT_REASONING_LEVEL",
+    "ZCODE_BRIDGE_MODE",
+    "ZCODE_HOME",
     "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE",
     "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE",
     "ZCODE_DATA_BASE_DIR",
@@ -22921,7 +22926,7 @@ var toolErrorSchema = object({
 
 // src/mcp/server.ts
 var SERVER_NAME = "codex-zcode-bridge";
-var SERVER_VERSION = "0.3.3";
+var SERVER_VERSION = "0.3.4";
 var EXECUTION_NOT_VERDICT = "Results describe Bridge/ZCode execution only: status 'completed' means the invocation and report normalization finished, NOT that Codex accepted the work. Codex must independently review the workspace diff and checks before deciding PASS.";
 function okResult(data) {
   return {

@@ -116,6 +116,12 @@ export function zcodeDataBaseDir(personalProviderConfigFile: string): string | n
   return dataDir ? path.dirname(path.dirname(dataDir)) : null;
 }
 
+/** Desktop task index lives alongside provider_config.json in the active v2 data root. */
+export function zcodeTasksIndexPath(personalProviderConfigFile: string): string | null {
+  const dataDir = zcodeV2DataDir(personalProviderConfigFile);
+  return dataDir ? path.join(dataDir, "tasks-index.sqlite") : null;
+}
+
 function zcodeV2DataDir(personalProviderConfigFile: string): string | null {
   const absolute = path.resolve(personalProviderConfigFile);
   if (path.basename(absolute).toLowerCase() !== "provider_config.json") return null;
