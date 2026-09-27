@@ -5,7 +5,6 @@ param(
     [string]$ZCodeRuntimePath,
     [string]$BuiltinProviderConfigPath,
     [string]$PersonalProviderConfigPath,
-    [switch]$EnableUnrestrictedExecution,
     [string]$MarketplaceUrl = "https://github.com/Sandyzzx/codex-zcode-bridge.git",
     [string]$MarketplaceRef = "phase7-live-progress",
     [string]$MarketplaceName = "codex-zcode-bridge",
@@ -116,17 +115,6 @@ if ($ZCodeRuntimePath) { Set-UserEnvironmentPath -Name "ZCODE_BRIDGE_ZCODE_CJS" 
 if ($BuiltinProviderConfigPath) { Set-UserEnvironmentPath -Name "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE" -Value $BuiltinProviderConfigPath }
 if ($PersonalProviderConfigPath) { Set-UserEnvironmentPath -Name "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE" -Value $PersonalProviderConfigPath }
 
-if ($EnableUnrestrictedExecution) {
-    Confirm-ExactPhrase `
-        -Prompt "This lets ZCode run in yolo mode with the current Windows account's permissions. Git worktrees and path instructions are not a sandbox. The setting is stored for your Windows user and requires restarting Codex." `
-        -Phrase "I ACCEPT UNRESTRICTED EXECUTION"
-    [Environment]::SetEnvironmentVariable("ZCODE_BRIDGE_ALLOW_UNRESTRICTED_EXECUTION", "1", "User")
-    Write-Warning "Unrestricted execution was enabled for your Windows user. Restart Codex for it to take effect."
-}
-else {
-    Write-Host "Execution guard was left unchanged. Without the explicit opt-in, Bridge tasks remain blocked before model startup."
-}
-
 $marketplaceState = Invoke-CodexJson -Arguments @("plugin", "marketplace", "list", "--json")
 $marketplace = @($marketplaceState.marketplaces | Where-Object { $_.name -eq $MarketplaceName }) | Select-Object -First 1
 if ($marketplace) {
@@ -160,4 +148,4 @@ else {
 }
 
 Write-Host "Restart Codex, then review and trust the plugin's SessionStart hook when Codex asks. New conversations will run its read-only setup check."
-Write-Host "No workspace ACL is changed unless -GrantWorkspaceModify is used; unrestricted execution is not enabled unless -EnableUnrestrictedExecution is used and confirmed."
+Write-Warning "ZCode tasks run in yolo mode with the current Windows account's permissions. Git worktrees and path instructions are not an OS sandbox. No workspace ACL is changed unless -GrantWorkspaceModify is used."

@@ -22176,7 +22176,6 @@ function createWorkerEnv(source) {
     "ZCODE_BRIDGE_NODE",
     "ZCODE_BRIDGE_ZCODE_CJS",
     "ZCODE_BRIDGE_DATA_DIR",
-    "ZCODE_BRIDGE_ALLOW_UNRESTRICTED_EXECUTION",
     "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE",
     "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE",
     "ZCODE_DATA_BASE_DIR",
@@ -22922,7 +22921,7 @@ var toolErrorSchema = object({
 
 // src/mcp/server.ts
 var SERVER_NAME = "codex-zcode-bridge";
-var SERVER_VERSION = "0.3.1";
+var SERVER_VERSION = "0.3.3";
 var EXECUTION_NOT_VERDICT = "Results describe Bridge/ZCode execution only: status 'completed' means the invocation and report normalization finished, NOT that Codex accepted the work. Codex must independently review the workspace diff and checks before deciding PASS.";
 function okResult(data) {
   return {
@@ -22976,7 +22975,7 @@ function createBridgeServer(options) {
     "zcode_events",
     {
       title: "Read live ZCode execution events",
-      description: "Read persisted progress events for a task. Set after_seq to the last next_seq returned and wait_ms up to 25000 to wait for new events. Events include visible assistant text, selected model metadata when available, and tool lifecycle summaries; hidden reasoning and raw tool arguments are excluded.",
+      description: "Read persisted progress events for a task. Immediately after submission, report the source project, isolated worktree, branch, and queued/running state from the first events. Keep polling until turn_started or startup failure; before longer monitoring, report the ZCode session, runtime-reported selected model, and execution mode. Set after_seq to the last next_seq returned and wait_ms up to 25000. Hidden reasoning and raw tool arguments are excluded.",
       inputSchema: zcodeEventsInputSchema,
       outputSchema: taskProgressPageSchema
     },

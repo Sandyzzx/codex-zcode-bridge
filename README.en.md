@@ -2,7 +2,7 @@
 
 A local Codex plugin and MCP server for delegating bounded development tasks to the ZCode Agent installed on your machine. Codex can follow task status, inspect progress events and reports, and review the actual changes in an isolated Git worktree.
 
-> **Execution permissions:** The Bridge currently creates ZCode app-server sessions in `yolo` mode. This is not an operating-system sandbox: ZCode runs with the current user's permissions. By default, the Bridge rejects tasks before starting the model. It runs only if you choose to set `ZCODE_BRIDGE_ALLOW_UNRESTRICTED_EXECUTION=1`. This opt-in allows the Agent to use your current user permissions; installing the plugin does not require or set it. If you do not accept this permission scope, leave the default unchanged and the Bridge will not execute tasks. `allowed_paths` and `forbidden_paths` are agent instructions, not enforced access controls. The Bridge does not yet provide a verified per-action approval flow back to Codex.
+> **Execution permissions:** The Bridge creates ZCode app-server sessions in `yolo` mode by default, and ZCode runs with the current user's permissions. This is not an operating-system sandbox: Git worktrees and `allowed_paths` / `forbidden_paths` do not enforce process access boundaries. A per-action approval flow back to Codex has not been verified. At task startup, the Bridge reports the source project, isolated worktree, ZCode session, runtime-reported model, and execution mode.
 
 ## Features
 
@@ -32,7 +32,7 @@ A local Codex plugin and MCP server for delegating bounded development tasks to 
 
    The script adds the GitHub marketplace and installs the plugin. You can also do both steps in Codex's Plugins Directory.
 
-3. Restart Codex and review and trust the **Codex ZCode Bridge** `SessionStart` hook when prompted. Once trusted, it runs a read-only setup check at the start of each new conversation; it does not install the plugin, change environment variables, or modify ACLs. In Codex CLI, use `/hooks` to inspect hook status. MCP tools load with the plugin; installation is not repeated per conversation.
+3. Restart Codex and review and trust the **Codex ZCode Bridge** `SessionStart` hook when prompted. Once trusted, it runs a read-only setup check and displays an execution-mode reminder at the start of each new conversation; it does not install the plugin, change environment variables, or modify ACLs. In Codex CLI, use `/hooks` to inspect hook status. MCP tools load with the plugin; installation is not repeated per conversation.
 
 The PowerShell bootstrap script is Windows-only. On macOS/Linux, use the Codex CLI to add and install the plugin once:
 
@@ -62,11 +62,11 @@ If ZCode is installed in a nonstandard location, pass custom runtime and provide
 
 Each parameter is optional. They map to `ZCODE_BRIDGE_ZCODE_CJS`, `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE`, and `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`; the script verifies that each supplied path is an existing file.
 
-Tasks remain blocked by the execution guard after installation. If you understand and accept that ZCode runs with your user permissions, run `.\install.ps1 -EnableUnrestrictedExecution` and enter the requested confirmation phrase; the script stores the switch in your Windows user environment. Then fully exit and restart Codex. Do not enable it just to complete installation. The app-server integration has not yet verified a per-action approval flow, so the project does not claim to offer a narrower working permission mode.
+After installation, tasks run directly in `yolo` mode. Only delegate authorized tasks. At startup, Codex reports the ZCode project, worktree, session, model, and execution mode. The app-server integration has not yet verified a per-action approval flow.
 
 The Bridge discovers common ZCode install and provider locations by default. If your ZCode uses custom paths, set `ZCODE_BRIDGE_ZCODE_CJS`, `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE`, and `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` in your operating system user environment, then restart Codex. These variables contain paths only; never put provider contents or API credentials in the marketplace files.
 
-The plugin includes bundled Bridge MCP server and worker files; users do not need to clone the repository, run `npm install`, or generate `.mcp.json` manually. A marketplace distributes and installs the plugin, but does not install Node.js or ZCode, or grant execution permission. See the [official Codex plugin documentation](https://developers.openai.com/plugins/build/plugins) for Git marketplace commands and local plugin details.
+The plugin includes bundled Bridge MCP server and worker files; users do not need to clone the repository, run `npm install`, or generate `.mcp.json` manually. A marketplace distributes and installs the plugin, but does not install Node.js or ZCode. See the [official Codex plugin documentation](https://developers.openai.com/plugins/build/plugins) for Git marketplace commands and local plugin details.
 
 ## Task workflow
 

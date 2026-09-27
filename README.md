@@ -2,7 +2,7 @@
 
 本地运行的 Codex 插件与 MCP 服务。它让 Codex 将开发任务交给本机 ZCode Agent 执行，并在 Codex 中跟踪状态、查看进度事件和最终报告，再由 Codex 独立审查隔离 worktree 中的实际改动。
 
-> **执行权限说明：**当前 Bridge 通过 ZCode 原生 app-server 创建 `yolo` session。它不是操作系统沙箱，ZCode 进程仍以当前用户身份运行。默认情况下 Bridge 会在启动模型前拒绝任务；只有用户自行设置 `ZCODE_BRIDGE_ALLOW_UNRESTRICTED_EXECUTION=1` 才会放行。这个开关扩大了 Agent 可使用的当前用户权限，安装插件不需要、也不会替你设置它。若你不接受这一权限范围，请保持默认状态，当前 Bridge 不会执行任务。`allowed_paths` / `forbidden_paths` 是 Agent 指令，不是强制访问控制；Bridge 尚未实现向 Codex 转发逐项权限审批的安全执行模式。
+> **执行权限说明：**Bridge 默认通过 ZCode 原生 app-server 创建 `yolo` session，ZCode 以当前用户权限运行。它不是操作系统沙箱；Git worktree 和 `allowed_paths` / `forbidden_paths` 都不能强制限制进程访问。当前 app-server 接入尚未验证向 Codex 转发逐项权限审批的安全执行模式。每个任务开始时，Bridge 会报告源项目、隔离 worktree、ZCode session、runtime 报告的模型和执行模式。
 
 ## 功能
 
@@ -32,7 +32,7 @@
 
    脚本会添加 GitHub marketplace 并安装插件。也可以直接在 Codex Plugins Directory 中完成这两步。
 
-3. 重启 Codex，并按提示审查、信任 **Codex ZCode Bridge** 的 `SessionStart` hook。信任后，每个新对话会自动运行只读配置检查；hook 不会安装插件、修改环境变量或改 ACL。Codex CLI 可用 `/hooks` 查看 hook 状态。MCP 工具随插件加载，不需要在每个新对话重新安装。
+3. 重启 Codex，并按提示审查、信任 **Codex ZCode Bridge** 的 `SessionStart` hook。信任后，每个新对话会自动运行只读配置检查并显示执行模式提示；hook 不会安装插件、修改环境变量或改 ACL。Codex CLI 可用 `/hooks` 查看 hook 状态。MCP 工具随插件加载，不需要在每个新对话重新安装。
 
 PowerShell 引导脚本只支持 Windows。macOS/Linux 可使用 Codex CLI 手动完成首次添加和安装：
 
@@ -62,11 +62,11 @@ codex plugin add codex-zcode-bridge@codex-zcode-bridge
 
 三个参数均可单独使用；对应变量为 `ZCODE_BRIDGE_ZCODE_CJS`、`ZCODE_BUILTIN_PROVIDER_CONFIG_FILE` 和 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`。脚本会先确认路径为已存在的文件。
 
-安装后任务默认仍会被执行权限保护拦截。若你理解并接受 ZCode 以当前用户权限运行，可显式运行 `.\install.ps1 -EnableUnrestrictedExecution`，并在脚本要求时输入确认短语；脚本会把开关写入当前 Windows 用户环境变量。之后必须完全退出并重启 Codex。不要因为安装步骤而打开它。当前 app-server 接入尚未验证逐项审批回传，因此这里没有声称存在更窄的可用权限模式。
+安装后任务默认直接以 `yolo` 模式运行。派发前确认任务已获授权；开始执行时，Codex 会先显示 ZCode 项目、worktree、session、模型和执行模式信息。当前 app-server 接入尚未验证逐项审批回传。
 
 默认情况下 Bridge 会发现常见 ZCode 安装路径和 provider 配置。若你的 ZCode 使用非标准目录，在操作系统用户环境变量中设置 `ZCODE_BRIDGE_ZCODE_CJS`、`ZCODE_BUILTIN_PROVIDER_CONFIG_FILE` 和 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`，然后重启 Codex。变量仅包含路径；不要把配置内容或 API 凭据写入 marketplace 文件。
 
-插件已包含 Bridge MCP 服务和 worker 的打包产物；安装者不需要克隆仓库、运行 `npm install` 或手工生成 `.mcp.json`。marketplace 负责分发和安装插件，但不会替用户安装 Node.js、ZCode 或替用户授权执行权限。Codex 的 Git marketplace 命令和本地插件流程见[官方文档](https://developers.openai.com/plugins/build/plugins)。
+插件已包含 Bridge MCP 服务和 worker 的打包产物；安装者不需要克隆仓库、运行 `npm install` 或手工生成 `.mcp.json`。marketplace 负责分发和安装插件，但不会替用户安装 Node.js 或 ZCode。Codex 的 Git marketplace 命令和本地插件流程见[官方文档](https://developers.openai.com/plugins/build/plugins)。
 
 ## 任务流程
 

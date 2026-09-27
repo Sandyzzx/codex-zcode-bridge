@@ -650,14 +650,6 @@ function createMinimalOsEnv(source) {
   }
   return env;
 }
-function assertUnrestrictedExecutionEnabled(env) {
-  if (env["ZCODE_BRIDGE_ALLOW_UNRESTRICTED_EXECUTION"] !== "1") {
-    throw new BridgeError(
-      "execution_mode_disabled",
-      "Unrestricted ZCode execution is disabled. Set ZCODE_BRIDGE_ALLOW_UNRESTRICTED_EXECUTION=1 only after reviewing the workspace and task permissions."
-    );
-  }
-}
 
 // src/adapters/zcode-app-server-adapter.ts
 var DEFAULT_TIMEOUT_MS = 30 * 60 * 1e3;
@@ -775,7 +767,6 @@ var ZCodeAppServerAdapter = class {
     const startedAt = this.#now();
     let timer;
     try {
-      assertUnrestrictedExecutionEnabled(this.#childEnvBase);
       const config = await this.#resolver.resolve();
       const childEnv = this.#buildChildEnv(config);
       entry.onEvent({ type: "zcode_starting", summary: "Starting ZCode streaming runtime" });
@@ -851,7 +842,9 @@ var ZCodeAppServerAdapter = class {
         summary: `ZCode session ready${entry.selectedModel ? `; selected model ${entry.selectedModel}` : "; selected model not reported"}`,
         details: {
           session_id: sessionId,
+          source_path: task.workspace,
           workspace_path: workspace.canonicalPath,
+          execution_mode: "yolo",
           ...entry.selectedModel ? { selected_model: entry.selectedModel } : {}
         }
       });

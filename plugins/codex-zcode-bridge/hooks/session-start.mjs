@@ -19,10 +19,6 @@ try {
   // Keep the hook advisory if the host adds or changes optional session fields.
 }
 
-if (process.env.ZCODE_BRIDGE_ALLOW_UNRESTRICTED_EXECUTION !== "1") {
-  parts.push("Bridge execution guard is OFF: zcode_task will be rejected before model startup. Do not change this setting automatically; the user must explicitly accept ZCode running with the current account's permissions.");
-} else {
-  parts.push("Bridge execution opt-in is ON. ZCode runs with the current account's permissions; Git worktrees do not sandbox it.");
-}
+parts.push("ZCode tasks run in yolo mode with the current account's permissions. Git worktrees and allowed/forbidden path instructions are not an OS sandbox.");
 
 stdout.write(`Codex ZCode Bridge setup check: ${parts.join("; ")}\n`);
