@@ -51,6 +51,17 @@ If the repository write check fails, pass its path explicitly:
 
 The script enables Git long paths for that repository and checks whether your account can write there. Only add `-GrantWorkspaceModify` if an ACL change is actually needed; the script asks for a separate typed confirmation and grants Modify to your Windows account on that repository only. This does not create a ZCode sandbox.
 
+If ZCode is installed in a nonstandard location, pass custom runtime and provider config paths. The script writes user environment variables only for paths you provide:
+
+```powershell
+.\install.ps1 `
+  -ZCodeRuntimePath "C:\path\to\zcode\runtime.cjs" `
+  -BuiltinProviderConfigPath "C:\path\to\builtin-provider.json" `
+  -PersonalProviderConfigPath "C:\path\to\personal-provider.json"
+```
+
+Each parameter is optional. They map to `ZCODE_BRIDGE_ZCODE_CJS`, `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE`, and `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`; the script verifies that each supplied path is an existing file.
+
 Tasks remain blocked by the execution guard after installation. If you understand and accept that ZCode runs with your user permissions, run `.\install.ps1 -EnableUnrestrictedExecution` and enter the requested confirmation phrase; the script stores the switch in your Windows user environment. Then fully exit and restart Codex. Do not enable it just to complete installation. The app-server integration has not yet verified a per-action approval flow, so the project does not claim to offer a narrower working permission mode.
 
 The Bridge discovers common ZCode install and provider locations by default. If your ZCode uses custom paths, set `ZCODE_BRIDGE_ZCODE_CJS`, `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE`, and `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` in your operating system user environment, then restart Codex. These variables contain paths only; never put provider contents or API credentials in the marketplace files.

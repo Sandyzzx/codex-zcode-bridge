@@ -51,6 +51,17 @@ codex plugin add codex-zcode-bridge@codex-zcode-bridge
 
 脚本会启用该仓库的 Git 长路径支持并检查当前账号能否写入。只有在确实需要修改 ACL 时，才加 `-GrantWorkspaceModify`；脚本会要求再次输入确认短语，并只对所选仓库授权当前 Windows 账号。它不会创建 ZCode 沙箱。
 
+如果 ZCode 安装在非默认路径，可把自定义 runtime 和 provider 配置路径交给脚本；只会写入你提供的路径对应的用户环境变量：
+
+```powershell
+.\install.ps1 `
+  -ZCodeRuntimePath "C:\path\to\zcode\runtime.cjs" `
+  -BuiltinProviderConfigPath "C:\path\to\builtin-provider.json" `
+  -PersonalProviderConfigPath "C:\path\to\personal-provider.json"
+```
+
+三个参数均可单独使用；对应变量为 `ZCODE_BRIDGE_ZCODE_CJS`、`ZCODE_BUILTIN_PROVIDER_CONFIG_FILE` 和 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`。脚本会先确认路径为已存在的文件。
+
 安装后任务默认仍会被执行权限保护拦截。若你理解并接受 ZCode 以当前用户权限运行，可显式运行 `.\install.ps1 -EnableUnrestrictedExecution`，并在脚本要求时输入确认短语；脚本会把开关写入当前 Windows 用户环境变量。之后必须完全退出并重启 Codex。不要因为安装步骤而打开它。当前 app-server 接入尚未验证逐项审批回传，因此这里没有声称存在更窄的可用权限模式。
 
 默认情况下 Bridge 会发现常见 ZCode 安装路径和 provider 配置。若你的 ZCode 使用非标准目录，在操作系统用户环境变量中设置 `ZCODE_BRIDGE_ZCODE_CJS`、`ZCODE_BUILTIN_PROVIDER_CONFIG_FILE` 和 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`，然后重启 Codex。变量仅包含路径；不要把配置内容或 API 凭据写入 marketplace 文件。
