@@ -1,0 +1,400 @@
+// TaskStore per docs/ARCHITECTURE.md (frozen): file-backed records under
+// <dataRoot>/.tasks/<task_id>/ — task.json, status.json, append-only bounded
+// stdout.log / stderr.log, terminal result.json, and immutable per-attempt
+// records under attempts/. JSON writes are atomic (temp file + rename). Full
+// child environments and credentials are never persisted; only paths, statuses,
+// and bounded task evidence live here.
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, rmdirSync, statSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import path from "node:path";
+import type { TaskPackage, TaskProgressEvent, TaskResult, TaskStatus, TaskStatusRecord, WorkspaceRef } from "../interfaces.js";
+
+/** status.json shape: the frozen TaskStatusRecord plus internal fields. */
+export interface InternalTaskStatus extends Omit<TaskStatusRecord, "error_code" | "error"> {
+  /** Null in JSON clears the optional frozen fields on merge. */
+  error_code?: string | null;
+  error?: string | null;
+  cancel_requested?: boolean | null;
+}
+
+const TASK_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+const DEFAULT_MAX_LOG_BYTES = 10 * 1024 * 1024;
+
+export interface TaskStoreOptions {
+  maxLogBytes?: number;
+  maxEventBytes?: number;
+}
+
+export interface AttemptMeta {
+  [key: string]: unknown;
+}
+
+export class TaskStore {
+  readonly #dataRoot: string;
+  readonly #tasksRoot: string;
+  readonly #maxLogBytes: number;
+  readonly #maxEventBytes: number;
+
+  constructor(dataRoot: string, options: TaskStoreOptions = {}) {
+    this.#dataRoot = dataRoot;
+    this.#tasksRoot = path.join(dataRoot, ".tasks");
+    this.#maxLogBytes = options.maxLogBytes ?? DEFAULT_MAX_LOG_BYTES;
+    this.#maxEventBytes = options.maxEventBytes ?? DEFAULT_MAX_LOG_BYTES;
+    privateMkdir(this.#tasksRoot);
+  }
+
+  get dataRoot(): string {
+    return this.#dataRoot;
+  }
+
+  get tasksRoot(): string {
+    return this.#tasksRoot;
+  }
+
+  assertValidTaskId(taskId: string): void {
+    if (typeof taskId !== "string" || !TASK_ID_PATTERN.test(taskId)) {
+      throw new Error(`invalid task_id (must match ${TASK_ID_PATTERN.source}): ${String(taskId)}`);
+    }
+  }
+
+  taskDir(taskId: string): string {
+    this.assertValidTaskId(taskId);
+    return path.join(this.#tasksRoot, taskId);
+  }
+
+  hasTask(taskId: string): boolean {
+    try {
+      return existsSync(path.join(this.taskDir(taskId), "status.json"));
+    } catch {
+      return false;
+    }
+  }
+
+  listTaskIds(): string[] {
+    if (!existsSync(this.#tasksRoot)) return [];
+    return readdirSync(this.#tasksRoot).filter((entry) =>
+      existsSync(path.join(this.#tasksRoot, entry, "status.json")),
+    );
+  }
+
+  createTask(task: TaskPackage, createdAt: string): void {
+    this.assertValidTaskId(task.task_id);
+    const dir = this.taskDir(task.task_id);
+    if (existsSync(path.join(dir, "task.json"))) {
+      throw new Error(`task already exists: ${task.task_id}`);
+    }
+    privateMkdir(path.join(dir, "attempts"));
+    this.#writeJsonAtomic(path.join(dir, "task.json"), task);
+    const status: InternalTaskStatus = {
+      task_id: task.task_id,
+      status: "queued",
+      attempt: 1,
+      created_at: createdAt,
+      updated_at: createdAt,
+      started_at: null,
+      finished_at: null,
+      worker_pid: null,
+      zcode_session_id: null,
+      exit_code: null,
+    };
+    this.#writeJsonAtomic(path.join(dir, "status.json"), status);
+  }
+
+  readTask(taskId: string): TaskPackage {
+    const file = path.join(this.taskDir(taskId), "task.json");
+    const parsed = this.#readJson(file);
+    return parsed as TaskPackage;
+  }
+
+  writeWorkspaceRef(taskId: string, workspace: WorkspaceRef): void {
+    this.#writeJsonAtomic(path.join(this.taskDir(taskId), "workspace.json"), workspace);
+  }
+
+  readWorkspaceRef(taskId: string): WorkspaceRef | null {
+    const file = path.join(this.taskDir(taskId), "workspace.json");
+    if (!existsSync(file)) return null;
+    return this.#readJson(file) as WorkspaceRef;
+  }
+
+  readStatus(taskId: string): InternalTaskStatus {
+    const file = path.join(this.taskDir(taskId), "status.json");
+    const parsed = this.#readJson(file) as InternalTaskStatus;
+    if (typeof parsed?.status !== "string") {
+      throw new Error(`corrupt status record: ${file}`);
+    }
+    return parsed;
+  }
+
+  /** Read-merge-write with an updated timestamp; atomic via temp file + rename. */
+  writeStatus(taskId: string, patch: Partial<InternalTaskStatus>): InternalTaskStatus {
+    const current = this.readStatus(taskId);
+    const next: InternalTaskStatus = {
+      ...current,
+      ...patch,
+      task_id: current.task_id,
+      updated_at: new Date().toISOString(),
+    };
+    this.#writeJsonAtomic(path.join(this.taskDir(taskId), "status.json"), next);
+    return next;
+  }
+
+  readResult(taskId: string): TaskResult | null {
+    const file = path.join(this.taskDir(taskId), "result.json");
+    if (!existsSync(file)) return null;
+    return this.#readJson(file) as TaskResult;
+  }
+
+  writeResult(taskId: string, result: TaskResult): void {
+    this.#writeJsonAtomic(path.join(this.taskDir(taskId), "result.json"), result);
+  }
+
+  /** Moves the current terminal result.json to attempts/<attempt>/result.json. */
+  archiveResultToAttempt(taskId: string, attempt: number): void {
+    const dir = this.taskDir(taskId);
+    const source = path.join(dir, "result.json");
+    if (!existsSync(source)) return;
+    const targetDir = this.attemptDir(taskId, attempt);
+    privateMkdir(targetDir);
+    renameSync(source, path.join(targetDir, "result.json"));
+  }
+
+  readArchivedResult(taskId: string, attempt: number): TaskResult | null {
+    const file = path.join(this.attemptDir(taskId, attempt), "result.json");
+    if (!existsSync(file)) return null;
+    return this.#readJson(file) as TaskResult;
+  }
+
+  attemptDir(taskId: string, attempt: number): string {
+    return path.join(this.taskDir(taskId), "attempts", String(attempt));
+  }
+
+  writeAttemptFile(taskId: string, attempt: number, fileName: string, content: string): void {
+    const dir = this.attemptDir(taskId, attempt);
+    privateMkdir(dir);
+    this.#writeTextAtomic(path.join(dir, fileName), content);
+  }
+
+  writeAttemptMeta(taskId: string, attempt: number, fileName: string, meta: AttemptMeta): void {
+    const dir = this.attemptDir(taskId, attempt);
+    privateMkdir(dir);
+    this.#writeJsonAtomic(path.join(dir, fileName), meta);
+  }
+
+  readAttemptMeta<T = AttemptMeta>(taskId: string, attempt: number, fileName: string): T | null {
+    const file = path.join(this.attemptDir(taskId, attempt), fileName);
+    if (!existsSync(file)) return null;
+    return this.#readJson(file) as T;
+  }
+
+  readAttemptText(taskId: string, attempt: number, fileName: string): string | null {
+    const file = path.join(this.attemptDir(taskId, attempt), fileName);
+    if (!existsSync(file)) return null;
+    return readFileSync(file, "utf8");
+  }
+
+  /** Append-only, byte-bounded. Returns whether the chunk was truncated. */
+  appendLog(taskId: string, kind: "stdout" | "stderr", text: string): { truncated: boolean } {
+    if (!text) return { truncated: false };
+    const dir = this.taskDir(taskId);
+    privateMkdir(dir);
+    const file = path.join(dir, `${kind}.log`);
+    let currentBytes = 0;
+    try {
+      currentBytes = statSync(file).size;
+    } catch {
+      currentBytes = 0;
+    }
+    const bytes = Buffer.from(text, "utf8");
+    const room = this.#maxLogBytes - currentBytes;
+    if (room <= 0) return { truncated: true };
+    appendFileSync(file, bytes.length <= room ? bytes : bytes.subarray(0, room), { mode: 0o600 });
+    privateFile(file);
+    return { truncated: bytes.length > room };
+  }
+
+  readLog(taskId: string, kind: "stdout" | "stderr"): string {
+    const file = path.join(this.taskDir(taskId), `${kind}.log`);
+    return existsSync(file) ? readFileSync(file, "utf8") : "";
+  }
+
+  appendEvent(
+    taskId: string,
+    type: string,
+    summary: string,
+    details?: Record<string, unknown>,
+    at = new Date().toISOString(),
+  ): TaskProgressEvent | null {
+    const dir = this.taskDir(taskId);
+    mkdirSync(dir, { recursive: true });
+    const lockDir = path.join(dir, "events.lock");
+    return withEventLock(lockDir, () => {
+      const file = path.join(dir, "events.jsonl");
+      const seqFile = path.join(dir, "events.seq");
+      let bytes = 0;
+      let previousSeq = 0;
+      let needsSeparator = false;
+      try {
+        const info = statSync(file);
+        bytes = info.size;
+        const lastByte = bytes > 0 ? readFileSync(file).at(-1) : undefined;
+        needsSeparator = bytes > 0 && lastByte !== 0x0a;
+      } catch {
+        bytes = 0;
+      }
+      try {
+        previousSeq = Number.parseInt(readFileSync(seqFile, "utf8"), 10) || 0;
+      } catch {
+        previousSeq = readLastEventSeq(file);
+      }
+      const event: TaskProgressEvent = {
+        seq: previousSeq + 1,
+        at,
+        type: type.slice(0, 80),
+        summary: summary.slice(0, 2_000),
+        ...(details && Object.keys(details).length ? { details } : {}),
+      };
+      const line = `${JSON.stringify(event)}\n`;
+      const lineBytes = Buffer.byteLength(line, "utf8") + (needsSeparator ? 1 : 0);
+      if (lineBytes > 64_000 || bytes + lineBytes > this.#maxEventBytes) return null;
+      // Advance the durable cursor before append. A crash can leave a harmless
+      // sequence gap, but can never cause two writers to reuse one sequence.
+      this.#writeTextAtomic(seqFile, String(event.seq));
+      appendFileSync(file, `${needsSeparator ? "\n" : ""}${line}`, { encoding: "utf8", mode: 0o600 });
+      privateFile(file);
+      return event;
+    });
+  }
+
+  readEvents(taskId: string, afterSeq = 0, limit = 100): { events: TaskProgressEvent[]; nextSeq: number; hasMore: boolean } {
+    const file = path.join(this.taskDir(taskId), "events.jsonl");
+    if (!existsSync(file)) return { events: [], nextSeq: afterSeq, hasMore: false };
+    const all: TaskProgressEvent[] = [];
+    for (const line of readFileSync(file, "utf8").split(/\r?\n/u)) {
+      if (!line) continue;
+      try {
+        const event = JSON.parse(line) as TaskProgressEvent;
+        if (Number.isInteger(event.seq) && event.seq > afterSeq) all.push(event);
+      } catch {
+        // Ignore a partial last line left by an interrupted process.
+      }
+    }
+    const events = all.slice(0, limit);
+    return {
+      events,
+      nextSeq: events.at(-1)?.seq ?? afterSeq,
+      hasMore: all.length > events.length,
+    };
+  }
+
+  #readJson(file: string): unknown {
+    return JSON.parse(readFileSync(file, "utf8"));
+  }
+
+  #writeJsonAtomic(file: string, value: unknown): void {
+    this.#writeTextAtomic(file, JSON.stringify(value, null, 2));
+  }
+
+  #writeTextAtomic(file: string, text: string): void {
+    const tmp = `${file}.${randomUUID()}.tmp`;
+    try {
+      writeFileSync(tmp, text, { encoding: "utf8", mode: 0o600 });
+      privateFile(tmp);
+      renameSync(tmp, file);
+    } catch (error) {
+      try {
+        rmSync(tmp, { force: true });
+      } catch {
+        // best-effort cleanup
+      }
+      throw error;
+    }
+  }
+}
+
+function withEventLock<T>(lockDir: string, operation: () => T): T {
+  const deadline = Date.now() + 10_000;
+  while (true) {
+    try {
+      mkdirSync(lockDir, { mode: 0o700 });
+      privateDirectory(lockDir);
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      try {
+        if (Date.now() - statSync(lockDir).mtimeMs > 30_000) {
+          rmdirSync(lockDir);
+          continue;
+        }
+      } catch {
+        // Another process released or replaced the lock; retry acquisition.
+      }
+      if (Date.now() >= deadline) throw new Error(`timed out waiting for task event lock: ${lockDir}`);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    }
+  }
+  try {
+    return operation();
+  } finally {
+    try {
+      rmdirSync(lockDir);
+    } catch {
+      // Best effort. A stale empty lock is reclaimed by the next writer.
+    }
+  }
+}
+
+function privateMkdir(directory: string): void {
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  privateDirectory(directory);
+}
+
+function privateDirectory(directory: string): void {
+  if (process.platform !== "win32") chmodSync(directory, 0o700);
+}
+
+function privateFile(file: string): void {
+  if (process.platform !== "win32") chmodSync(file, 0o600);
+}
+
+function readLastEventSeq(file: string): number {
+  if (!existsSync(file)) return 0;
+  for (const line of readFileSync(file, "utf8").trimEnd().split("\n").reverse()) {
+    try {
+      const event = JSON.parse(line) as TaskProgressEvent;
+      if (Number.isInteger(event.seq)) return event.seq;
+    } catch {
+      // Skip malformed or partial records.
+    }
+  }
+  return 0;
+}
+
+export function isTerminalStatus(status: TaskStatus): boolean {
+  // waiting_for_master ends the current attempt and has a persisted result;
+  // a later master decision starts a new attempt through zcode_continue.
+  return (
+    status === "completed" ||
+    status === "failed" ||
+    status === "cancelled" ||
+    status === "waiting_for_master"
+  );
+}
+
+/** Strips internal fields for the frozen TaskStatusRecord view. */
+export function toPublicStatus(status: InternalTaskStatus): TaskStatusRecord {
+  const record: TaskStatusRecord = {
+    task_id: status.task_id,
+    status: status.status,
+    attempt: status.attempt,
+    created_at: status.created_at,
+    updated_at: status.updated_at,
+    started_at: status.started_at,
+    finished_at: status.finished_at,
+    worker_pid: status.worker_pid,
+    zcode_session_id: status.zcode_session_id,
+    exit_code: status.exit_code,
+  };
+  if (status.error_code) record.error_code = status.error_code;
+  if (status.error) record.error = status.error;
+  return record;
+}

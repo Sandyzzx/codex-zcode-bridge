@@ -22,36 +22,16 @@
 ## 安装
 
 1. 确认本机已安装 Node.js 22.18+、Git 和 ZCode，并已登录 ZCode。
-2. 克隆发布仓库并运行 PowerShell 安装脚本：
-
-   ```powershell
-   git clone --depth 1 --branch phase7-live-progress https://github.com/Sandyzzx/codex-zcode-bridge.git
-   cd codex-zcode-bridge
-   .\install.ps1
-   ```
-
-   脚本会添加 GitHub marketplace 并安装插件。也可以直接在 Codex Plugins Directory 中完成这两步。
-
-3. 重启 Codex，并按提示审查、信任 **Codex ZCode Bridge** 的 `SessionStart` hook。信任后，每个新对话会自动运行只读配置检查并显示执行模式提示；hook 不会安装插件、修改环境变量或改 ACL。Codex CLI 可用 `/hooks` 查看 hook 状态。MCP 工具随插件加载，不需要在每个新对话重新安装。
-
-PowerShell 引导脚本只支持 Windows。macOS/Linux 可使用 Codex CLI 手动完成首次添加和安装：
+2. 在 Codex 中手动添加 GitHub marketplace 并安装 **Codex ZCode Bridge**。也可用 Codex CLI：
 
 ```sh
 codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref phase7-live-progress
 codex plugin add codex-zcode-bridge@codex-zcode-bridge
 ```
 
-首次安装必须先通过 PowerShell 脚本或 CLI 安装插件；未安装的插件无法先运行自己的新对话 hook。安装完成并信任 hook 后，后续新对话才会自动运行检查。
+3. 首次新对话时审查并信任 **Codex ZCode Bridge** 的 `SessionStart` hook。之后 hook 会读取并验证 Node.js、Git、ZCode runtime 和 provider 配置，报告发现的路径及配置问题；默认路径不会写入用户环境变量。Codex CLI 可用 `/hooks` 查看 hook 状态。插件和 MCP 只需安装一次。
 
-如果项目目录写入检查失败，可显式传入仓库路径：
-
-```powershell
-.\install.ps1 -WorkspacePath "D:\path\to\your\repo"
-```
-
-脚本会启用该仓库的 Git 长路径支持并检查当前账号能否写入。只有在确实需要修改 ACL 时，才加 `-GrantWorkspaceModify`；脚本会要求再次输入确认短语，并只对所选仓库授权当前 Windows 账号。它不会创建 ZCode 沙箱。
-
-如果 ZCode 安装在非默认路径，可把自定义 runtime 和 provider 配置路径交给脚本；只会写入你提供的路径对应的用户环境变量：
+如果 ZCode 在非默认路径，或者 provider 配置不在标准位置，可在仓库副本中运行 Windows 配置脚本并传入自定义路径：
 
 ```powershell
 .\install.ps1 `
@@ -60,13 +40,15 @@ codex plugin add codex-zcode-bridge@codex-zcode-bridge
   -PersonalProviderConfigPath "C:\path\to\personal-provider.json"
 ```
 
-三个参数均可单独使用；对应变量为 `ZCODE_BRIDGE_ZCODE_CJS`、`ZCODE_BUILTIN_PROVIDER_CONFIG_FILE` 和 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`。脚本会先确认路径为已存在的文件。
+参数可单独使用。脚本会读取并验证 runtime 和 provider JSON（个人配置必须包含非空 provider rules），确认全部有效后才写入对应的 Windows 用户环境变量；没有提供的参数不会写入默认值。设置自定义路径后需重新启动 Codex，让 MCP 进程加载新的环境变量。脚本不会添加 marketplace、安装插件、修改 ZCode 配置内容或 ACL。
 
 安装后任务默认直接以 `yolo` 模式运行。派发前确认任务已获授权；开始执行时，Codex 会先显示 ZCode 项目、worktree、session、模型和执行模式信息。当前 app-server 接入尚未验证逐项审批回传。
 
-默认情况下 Bridge 会发现常见 ZCode 安装路径和 provider 配置。若你的 ZCode 使用非标准目录，在操作系统用户环境变量中设置 `ZCODE_BRIDGE_ZCODE_CJS`、`ZCODE_BUILTIN_PROVIDER_CONFIG_FILE` 和 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`，然后重启 Codex。变量仅包含路径；不要把配置内容或 API 凭据写入 marketplace 文件。
+默认情况下 Bridge 会发现常见 ZCode 安装路径和 provider 配置（包括 Windows 的 `Program Files`、`LOCALAPPDATA` 和 ZCode 数据目录）。变量仅保存路径；不要把配置内容或 API 凭据写入 marketplace 文件。
 
 插件已包含 Bridge MCP 服务和 worker 的打包产物；安装者不需要克隆仓库、运行 `npm install` 或手工生成 `.mcp.json`。marketplace 负责分发和安装插件，但不会替用户安装 Node.js 或 ZCode。Codex 的 Git marketplace 命令和本地插件流程见[官方文档](https://developers.openai.com/plugins/build/plugins)。
+
+仓库同时提供 TypeScript 源码和构建配置，便于审计与自行构建；内部测试和开发文档不作为发布内容。自行构建可运行 `npm ci`，然后运行 `npm run build`。
 
 ## 任务流程
 

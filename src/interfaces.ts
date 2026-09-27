@@ -1,0 +1,194 @@
+// Frozen contract projection of docs/INTERFACES.md (V0.1, FROZEN).
+// The documents are authoritative; keep this file mechanically in sync.
+// Do not change tool names, required fields, status names, or result semantics.
+
+export type TaskStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "waiting_for_master";
+
+export interface TaskPackage {
+  task_id: string;
+  workspace: string; // absolute path to an existing directory
+  /** Optional per-task ZCode model override. Omitted means use ZCode defaults. */
+  model?: ZCodeModelSelection;
+  objective: string;
+  requirements: string[];
+  allowed_paths: string[];
+  forbidden_paths: string[];
+  acceptance_criteria: string[];
+  test_commands: string[];
+  context?: string;
+}
+
+export interface ZCodeModelSelection {
+  provider_id: string;
+  model_id: string;
+  /** Required only by ZCode models that need an explicit reasoning option. */
+  reasoning_level?: string;
+}
+
+export interface TestReport {
+  command: string;
+  status: "passed" | "failed" | "not_run";
+  details?: string;
+}
+
+export interface TaskResult {
+  task_id: string;
+  status: "completed" | "failed" | "cancelled" | "waiting_for_master";
+  summary: string;
+  files_changed: string[];
+  tests: TestReport[];
+  issues: string[];
+  needs_master_decision: boolean;
+  zcode_output: string;
+  exit_code: number | null;
+  session_id: string | null;
+  attempt: number;
+  started_at: string | null; // RFC 3339 UTC
+  finished_at: string | null; // RFC 3339 UTC
+  error_code?: string;
+}
+
+export interface WorkspaceRef {
+  readonly requestedPath: string;
+  readonly canonicalPath: string;
+  readonly mode: "direct" | "worktree";
+  /** Canonical source repository path when canonicalPath is an isolated worktree. */
+  readonly sourcePath?: string;
+  /** Per-task branch created by the worktree provider. */
+  readonly branchName?: string;
+}
+
+export interface AgentHandle {
+  readonly taskId: string;
+  readonly attempt: number;
+  readonly workerPid: number;
+  readonly zcodePid: number | null;
+  readonly startedAt: string;
+}
+
+export interface AgentRunOutcome {
+  readonly exitCode: number | null;
+  readonly signal: string | null;
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly sessionId: string | null;
+  readonly response: string | null;
+  readonly usage: Record<string, unknown> | null;
+  readonly timedOut: boolean;
+}
+
+export interface AgentProcessStatus {
+  readonly state: "starting" | "running" | "exited" | "unknown";
+  readonly workerPid: number;
+  readonly zcodePid: number | null;
+  readonly exitCode: number | null;
+  readonly signal: string | null;
+}
+
+export interface CodingAgentAdapter {
+  startTask(input: {
+    task: TaskPackage;
+    workspace: WorkspaceRef;
+    attempt: number;
+  }): Promise<AgentHandle>;
+  continueTask(input: {
+    task: TaskPackage;
+    workspace: WorkspaceRef;
+    attempt: number;
+    feedback: string;
+    additionalRequirements: string[];
+    previousSessionId: string | null;
+    previousResult: TaskResult | null;
+  }): Promise<AgentHandle>;
+  getStatus(handle: AgentHandle): Promise<AgentProcessStatus>;
+  getResult(handle: AgentHandle): Promise<AgentRunOutcome>;
+  cancelTask(handle: AgentHandle): Promise<void>;
+}
+
+export interface RuntimeResolver {
+  resolve(): Promise<ZCodeRuntimeConfig>;
+}
+
+export interface ZCodeRuntimeConfig {
+  readonly nodeExecutable: string;
+  readonly zcodeEntrypoint: string;
+  readonly providerBuiltinConfigFile: string;
+  readonly providerPersonalConfigFile: string;
+  readonly dataRoot: string;
+}
+
+export interface AgentReport {
+  summary: string;
+  files_changed: string[];
+  tests: TestReport[];
+  issues: string[];
+  needs_master_decision: boolean;
+}
+
+export interface TaskReceipt {
+  task_id: string;
+  status: "queued" | "running";
+  created_at: string;
+}
+
+export interface TaskStatusRecord {
+  task_id: string;
+  status: TaskStatus;
+  attempt: number;
+  created_at: string;
+  updated_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  worker_pid: number | null;
+  zcode_session_id: string | null;
+  exit_code: number | null;
+  error_code?: string;
+  error?: string;
+}
+
+/** Append-only, user-visible execution evidence. Never includes hidden reasoning or raw tool arguments. */
+export interface TaskProgressEvent {
+  seq: number;
+  at: string;
+  type: string;
+  summary: string;
+  details?: Record<string, unknown>;
+}
+
+export interface TaskProgressPage {
+  task_id: string;
+  status: TaskStatus;
+  events: TaskProgressEvent[];
+  next_seq: number;
+  has_more: boolean;
+}
+
+export interface ContinueTaskInput {
+  task_id: string;
+  feedback: string;
+  additional_requirements?: string[];
+}
+
+export interface TaskManager {
+  createTask(task: TaskPackage): Promise<TaskReceipt>;
+  getStatus(taskId: string): Promise<TaskStatusRecord>;
+  getResult(taskId: string): Promise<TaskResult>;
+  continueTask(input: ContinueTaskInput): Promise<TaskReceipt>;
+  cancelTask(taskId: string): Promise<TaskStatusRecord>;
+}
+
+/** Additive Phase 7 capability; the frozen V0.1 TaskManager contract stays intact. */
+export interface ProgressTaskManager extends TaskManager {
+  getEvents(input: { task_id: string; after_seq?: number; limit?: number; wait_ms?: number }): Promise<TaskProgressPage>;
+}
+
+export interface WorkspaceProvider {
+  resolve(workspacePath: string, taskId?: string): Promise<WorkspaceRef>;
+  release(workspace: WorkspaceRef): Promise<void>;
+}

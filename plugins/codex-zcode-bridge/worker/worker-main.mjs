@@ -315,7 +315,11 @@ var NodeRuntimeResolver = class {
         this.#validatePersonalConfig(personalEnv);
         personalConfigFile = personalEnv;
       } else {
-        const candidates = [env["ZCODE_DATA_BASE_DIR"]?.trim(), this.#homeDir].filter((base) => Boolean(base)).map((base) => path.join(base, ".zcode", "v2", "provider_config.json"));
+        const candidates = [
+          env["ZCODE_DATA_BASE_DIR"]?.trim(),
+          ...configuredDataBaseDirs(this.#homeDir),
+          this.#homeDir
+        ].filter((base) => Boolean(base)).filter((base, index, values) => values.indexOf(base) === index).map((base) => path.join(base, ".zcode", "v2", "provider_config.json"));
         const existing = candidates.filter((candidate) => existsSync(candidate));
         if (existing.length === 0) {
           throw new BridgeError(
@@ -431,9 +435,25 @@ var NodeRuntimeResolver = class {
 function installCandidates(env, relative) {
   const roots = [
     env["ZCODE_WINDOWS_APP_INSTALL_DIR"]?.trim(),
-    env["LOCALAPPDATA"]?.trim() ? path.join(env["LOCALAPPDATA"].trim(), "Programs", "ZCode") : null
+    env["LOCALAPPDATA"]?.trim() ? path.join(env["LOCALAPPDATA"].trim(), "Programs", "ZCode") : null,
+    env["ProgramFiles"]?.trim() ? path.join(env["ProgramFiles"].trim(), "ZCode") : null
   ].filter((root) => Boolean(root));
   return roots.map((root) => path.join(root, ...relative));
+}
+function configuredDataBaseDirs(homeDir) {
+  const candidates = [path.join(homeDir, ".zcode", "v2", "setting.json")];
+  for (const settingPath of candidates) {
+    try {
+      const parsed = JSON.parse(readFileSync(settingPath, "utf8"));
+      if (!isPlainObject2(parsed)) continue;
+      const dataBaseDir = parsed["dataBaseDir"];
+      if (typeof dataBaseDir === "string" && path.isAbsolute(dataBaseDir.trim())) {
+        return [path.normalize(dataBaseDir.trim())];
+      }
+    } catch {
+    }
+  }
+  return [];
 }
 function isReadableFile(filePath) {
   try {

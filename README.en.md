@@ -22,36 +22,16 @@ A local Codex plugin and MCP server for delegating bounded development tasks to 
 ## Install
 
 1. Install Node.js 22.18+, Git, and ZCode locally, and sign in to ZCode.
-2. Clone the published repository and run the PowerShell installer:
-
-   ```powershell
-   git clone --depth 1 --branch phase7-live-progress https://github.com/Sandyzzx/codex-zcode-bridge.git
-   cd codex-zcode-bridge
-   .\install.ps1
-   ```
-
-   The script adds the GitHub marketplace and installs the plugin. You can also do both steps in Codex's Plugins Directory.
-
-3. Restart Codex and review and trust the **Codex ZCode Bridge** `SessionStart` hook when prompted. Once trusted, it runs a read-only setup check and displays an execution-mode reminder at the start of each new conversation; it does not install the plugin, change environment variables, or modify ACLs. In Codex CLI, use `/hooks` to inspect hook status. MCP tools load with the plugin; installation is not repeated per conversation.
-
-The PowerShell bootstrap script is Windows-only. On macOS/Linux, use the Codex CLI to add and install the plugin once:
+2. Manually add the GitHub marketplace in Codex and install **Codex ZCode Bridge**. You can also use the Codex CLI:
 
 ```sh
 codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref phase7-live-progress
 codex plugin add codex-zcode-bridge@codex-zcode-bridge
 ```
 
-Initial installation must happen through PowerShell or the CLI because an uninstalled plugin cannot run its own new-conversation hook. After installation and hook trust, the hook runs the check automatically in subsequent conversations.
+3. On the first new conversation, review and trust the **Codex ZCode Bridge** `SessionStart` hook. It then reads and validates Node.js, Git, the ZCode runtime, and provider configs, and reports discovered paths or configuration problems. Default paths are not written to user environment variables. In Codex CLI, use `/hooks` to inspect hook status. The plugin and MCP are installed once.
 
-If the repository write check fails, pass its path explicitly:
-
-```powershell
-.\install.ps1 -WorkspacePath "D:\path\to\your\repo"
-```
-
-The script enables Git long paths for that repository and checks whether your account can write there. Only add `-GrantWorkspaceModify` if an ACL change is actually needed; the script asks for a separate typed confirmation and grants Modify to your Windows account on that repository only. This does not create a ZCode sandbox.
-
-If ZCode is installed in a nonstandard location, pass custom runtime and provider config paths. The script writes user environment variables only for paths you provide:
+If ZCode is installed in a nonstandard location or its provider configs are outside standard paths, run the Windows configuration script from a repository copy and pass the custom paths:
 
 ```powershell
 .\install.ps1 `
@@ -60,13 +40,15 @@ If ZCode is installed in a nonstandard location, pass custom runtime and provide
   -PersonalProviderConfigPath "C:\path\to\personal-provider.json"
 ```
 
-Each parameter is optional. They map to `ZCODE_BRIDGE_ZCODE_CJS`, `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE`, and `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`; the script verifies that each supplied path is an existing file.
+Each parameter is optional. The script reads and validates the runtime and provider JSON (the personal config must contain non-empty provider rules), then writes only the matching user environment variables for paths you supplied. It does not write defaults for omitted parameters. Restart Codex after configuring custom paths so its MCP process receives the new environment. The script does not add a marketplace, install the plugin, edit ZCode config contents, or change ACLs.
 
 After installation, tasks run directly in `yolo` mode. Only delegate authorized tasks. At startup, Codex reports the ZCode project, worktree, session, model, and execution mode. The app-server integration has not yet verified a per-action approval flow.
 
-The Bridge discovers common ZCode install and provider locations by default. If your ZCode uses custom paths, set `ZCODE_BRIDGE_ZCODE_CJS`, `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE`, and `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` in your operating system user environment, then restart Codex. These variables contain paths only; never put provider contents or API credentials in the marketplace files.
+The Bridge discovers common ZCode install and provider locations by default, including Windows `Program Files`, `LOCALAPPDATA`, and the ZCode data directory. Environment variables store paths only; never put provider contents or API credentials in marketplace files.
 
 The plugin includes bundled Bridge MCP server and worker files; users do not need to clone the repository, run `npm install`, or generate `.mcp.json` manually. A marketplace distributes and installs the plugin, but does not install Node.js or ZCode. See the [official Codex plugin documentation](https://developers.openai.com/plugins/build/plugins) for Git marketplace commands and local plugin details.
+
+The repository also includes TypeScript source and build configuration for review and self-builds; internal tests and development docs are not part of the release. To build it yourself, run `npm ci` followed by `npm run build`.
 
 ## Task workflow
 
