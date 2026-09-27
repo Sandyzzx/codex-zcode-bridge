@@ -70,6 +70,11 @@ Bridge 为每个任务创建独立 Git worktree，并把 ZCode session 关联到
 
 `desktop_task_registered` 事件表示 Bridge 已把 session 写入 ZCode Desktop 的任务索引；它不保证当前界面已经显示该记录。若仍看不到，先核对任务对应的隔离 worktree workspace，而不是只看源项目 workspace。
 
+### 当前已知问题
+
+- **Desktop 可能不显示尚未在当前窗口打开/登记的 worktree。** 本机对比记录显示，用户能看到的会话关联到其已打开的项目 workspace；Bridge 测试会话虽然已写入索引且完成，却关联到单独创建的临时 worktree。两条索引都未归档或删除。**推测** Desktop 当前窗口没有载入这个临时 worktree，因此列表没有呈现；要验证可在 ZCode 中直接打开任务对应的 worktree 目录，再看 Workspace 或 Timeline。官方 Remote Control 文档说明只能访问当前 Desktop 窗口已打开或登记的工作区；Desktop 侧栏本身的手动刷新操作未见于官方文档。手机 Remote Control 的 Refresh 会从 Desktop 拉取最新状态，但也受当前窗口工作区范围限制。
+- **Start Plan 的 GLM-5.3-Flash 可用性尚未稳定确认。** 本地曾出现 Bridge 启动链路未能发现或报告所选模型的情况；另一次测试则成功完成，并在 ZCode 索引中记录为 `account:bigmodel-individual-coding-plan/GLM-5.3-Flash`。因此，套餐可用或模型出现在 ZCode 界面，不足以证明当前 Bridge/runtime/provider 组合已可用。派发前应确认启动事件报告的 provider 和 model；若 runtime 未报告模型，Bridge 会在发送任务 prompt 前失败。具体原因仍待进一步定位。
+
 ## 安全与隐私
 
 - Bridge 不会把 provider 配置内容复制到仓库；ZCode 子进程只接收运行所需的 OS 环境变量、provider 配置路径和显式 Bridge 配置，不继承任意父进程环境变量。

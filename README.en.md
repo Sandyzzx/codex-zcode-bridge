@@ -70,6 +70,11 @@ In ZCode's left task sidebar, switch the view to **Workspace** and look under th
 
 The `desktop_task_registered` event means the Bridge wrote the session to ZCode Desktop's task index; it does not guarantee that the current UI has rendered the row. If the task is still missing, first check the isolated worktree workspace rather than only the source project workspace.
 
+### Known issues
+
+- **Desktop may not show a worktree that is not open or registered in the current window.** Comparing local index records, the session the user could see belonged to a project workspace already open in Desktop. The Bridge test session was also written to the index and completed, but belonged to a separately created temporary worktree. Neither row was archived or deleted. The likely explanation is that the temporary worktree was not loaded in the current Desktop window; to verify, open the task's worktree directory in ZCode and check Workspace or Timeline. The official Remote Control documentation says it can access only workspaces already open or registered in the current Desktop window. No manual refresh action for the Desktop sidebar is documented. Mobile Remote Control's Refresh pulls the latest state from Desktop, but remains scoped to workspaces in the current window.
+- **Start Plan availability for GLM-5.3-Flash is not yet consistently verified.** The local Bridge startup path has failed to discover or report the selected model in some attempts; another test completed successfully and the ZCode index recorded `account:bigmodel-individual-coding-plan/GLM-5.3-Flash`. A plan entitlement or a model visible in the ZCode UI therefore does not by itself confirm that the current Bridge/runtime/provider combination can use it. Check the provider and model reported by the startup event before relying on a run. If the runtime does not report a model, the Bridge fails before sending the task prompt. The specific cause remains under investigation.
+
 ## Security and privacy
 
 - Provider configuration contents are not copied into the repository. ZCode child processes receive only required OS variables, provider config paths, and explicit Bridge settings; arbitrary parent environment variables are not inherited.
