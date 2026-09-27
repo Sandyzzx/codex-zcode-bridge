@@ -1,0 +1,30 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "codex-zcode-bridge",
+  "version": "0.3.2",
+  "description": "Let Codex delegate development tasks to your local ZCode runtime and review their progress and results.",
+  "author": {
+    "name": "Sandy"
+  },
+  "repository": "https://github.com/Sandyzzx/codex-zcode-bridge",
+  "license": "Apache-2.0",
+  "keywords": ["codex", "zcode", "mcp", "developer-tools"],
+  "extensions": {
+    "com.openai": {
+      "hooks": "./hooks/hooks.json",
+      "interface": {
+        "displayName": "Codex Zcode Bridge",
+        "shortDescription": "Delegate development tasks to your local ZCode runtime.",
+        "longDescription": "Dispatch ZCode tasks through a local MCP bridge, follow progress and results in Codex, and review isolated worktrees before applying changes.",
+        "developerName": "Sandy",
+        "category": "Developer tools",
+        "capabilities": ["MCP tools", "Task delegation"],
+        "defaultPrompt": [
+          "Delegate this development task to ZCode and follow it through completion.",
+          "Ask ZCode to fix this issue using the specified model.",
+          "Review the progress and final changes from a ZCode task."
+        ]
+      }
+    }
+  }
+}

@@ -19,18 +19,39 @@
 - 本机已安装并登录 ZCode；Bridge 必须能访问其 runtime 和有效的 provider 配置。
 - Codex 桌面应用或支持本地插件 marketplace 的 Codex CLI。
 
-## 从 GitHub Marketplace 安装
+## 安装
 
 1. 确认本机已安装 Node.js 22.18+、Git 和 ZCode，并已登录 ZCode。
-2. 将 GitHub marketplace 添加到 Codex。当前发布分支为 `phase7-live-progress`：
+2. 克隆发布仓库并运行 PowerShell 安装脚本：
 
-   ```sh
-   codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref phase7-live-progress
+   ```powershell
+   git clone --depth 1 --branch phase7-live-progress https://github.com/Sandyzzx/codex-zcode-bridge.git
+   cd codex-zcode-bridge
+   .\install.ps1
    ```
 
-3. 重启 Codex，打开插件目录，找到 **Codex ZCode Bridge** 并点“安装”。开始新对话后即可使用 MCP 工具。
+   脚本会添加 GitHub marketplace 并安装插件。也可以直接在 Codex Plugins Directory 中完成这两步。
 
-安装后任务默认仍会被执行权限保护拦截。只有在你理解并接受 ZCode 以当前用户权限运行后，才可自行设置上述环境变量并重启 Codex；不要因为安装步骤而设置它。当前 app-server 接入尚未验证逐项审批回传，因此这里没有声称存在更窄的可用权限模式。
+3. 重启 Codex，并按提示审查、信任 **Codex ZCode Bridge** 的 `SessionStart` hook。信任后，每个新对话会自动运行只读配置检查；hook 不会安装插件、修改环境变量或改 ACL。Codex CLI 可用 `/hooks` 查看 hook 状态。MCP 工具随插件加载，不需要在每个新对话重新安装。
+
+PowerShell 引导脚本只支持 Windows。macOS/Linux 可使用 Codex CLI 手动完成首次添加和安装：
+
+```sh
+codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref phase7-live-progress
+codex plugin add codex-zcode-bridge@codex-zcode-bridge
+```
+
+首次安装必须先通过 PowerShell 脚本或 CLI 安装插件；未安装的插件无法先运行自己的新对话 hook。安装完成并信任 hook 后，后续新对话才会自动运行检查。
+
+如果项目目录写入检查失败，可显式传入仓库路径：
+
+```powershell
+.\install.ps1 -WorkspacePath "D:\path\to\your\repo"
+```
+
+脚本会启用该仓库的 Git 长路径支持并检查当前账号能否写入。只有在确实需要修改 ACL 时，才加 `-GrantWorkspaceModify`；脚本会要求再次输入确认短语，并只对所选仓库授权当前 Windows 账号。它不会创建 ZCode 沙箱。
+
+安装后任务默认仍会被执行权限保护拦截。若你理解并接受 ZCode 以当前用户权限运行，可显式运行 `.\install.ps1 -EnableUnrestrictedExecution`，并在脚本要求时输入确认短语；脚本会把开关写入当前 Windows 用户环境变量。之后必须完全退出并重启 Codex。不要因为安装步骤而打开它。当前 app-server 接入尚未验证逐项审批回传，因此这里没有声称存在更窄的可用权限模式。
 
 默认情况下 Bridge 会发现常见 ZCode 安装路径和 provider 配置。若你的 ZCode 使用非标准目录，在操作系统用户环境变量中设置 `ZCODE_BRIDGE_ZCODE_CJS`、`ZCODE_BUILTIN_PROVIDER_CONFIG_FILE` 和 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`，然后重启 Codex。变量仅包含路径；不要把配置内容或 API 凭据写入 marketplace 文件。
 

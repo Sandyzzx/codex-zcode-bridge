@@ -19,18 +19,39 @@ A local Codex plugin and MCP server for delegating bounded development tasks to 
 - ZCode installed and signed in locally, with an accessible runtime and valid provider configuration.
 - Codex desktop app or a Codex CLI version that supports local plugin marketplaces.
 
-## Install from the GitHub marketplace
+## Install
 
 1. Install Node.js 22.18+, Git, and ZCode locally, and sign in to ZCode.
-2. Add the GitHub marketplace to Codex. The current published branch is `phase7-live-progress`:
+2. Clone the published repository and run the PowerShell installer:
 
-   ```sh
-   codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref phase7-live-progress
+   ```powershell
+   git clone --depth 1 --branch phase7-live-progress https://github.com/Sandyzzx/codex-zcode-bridge.git
+   cd codex-zcode-bridge
+   .\install.ps1
    ```
 
-3. Restart Codex, open the plugin directory, find **Codex ZCode Bridge**, and select Install. Start a new conversation to use its MCP tools.
+   The script adds the GitHub marketplace and installs the plugin. You can also do both steps in Codex's Plugins Directory.
 
-Tasks remain blocked by the execution guard after installation. Only set the environment variable above and restart Codex if you understand and accept that ZCode runs with your user permissions. Do not set it just to complete installation. The app-server integration has not yet verified a per-action approval flow, so the project does not claim to offer a narrower working permission mode.
+3. Restart Codex and review and trust the **Codex ZCode Bridge** `SessionStart` hook when prompted. Once trusted, it runs a read-only setup check at the start of each new conversation; it does not install the plugin, change environment variables, or modify ACLs. In Codex CLI, use `/hooks` to inspect hook status. MCP tools load with the plugin; installation is not repeated per conversation.
+
+The PowerShell bootstrap script is Windows-only. On macOS/Linux, use the Codex CLI to add and install the plugin once:
+
+```sh
+codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref phase7-live-progress
+codex plugin add codex-zcode-bridge@codex-zcode-bridge
+```
+
+Initial installation must happen through PowerShell or the CLI because an uninstalled plugin cannot run its own new-conversation hook. After installation and hook trust, the hook runs the check automatically in subsequent conversations.
+
+If the repository write check fails, pass its path explicitly:
+
+```powershell
+.\install.ps1 -WorkspacePath "D:\path\to\your\repo"
+```
+
+The script enables Git long paths for that repository and checks whether your account can write there. Only add `-GrantWorkspaceModify` if an ACL change is actually needed; the script asks for a separate typed confirmation and grants Modify to your Windows account on that repository only. This does not create a ZCode sandbox.
+
+Tasks remain blocked by the execution guard after installation. If you understand and accept that ZCode runs with your user permissions, run `.\install.ps1 -EnableUnrestrictedExecution` and enter the requested confirmation phrase; the script stores the switch in your Windows user environment. Then fully exit and restart Codex. Do not enable it just to complete installation. The app-server integration has not yet verified a per-action approval flow, so the project does not claim to offer a narrower working permission mode.
 
 The Bridge discovers common ZCode install and provider locations by default. If your ZCode uses custom paths, set `ZCODE_BRIDGE_ZCODE_CJS`, `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE`, and `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` in your operating system user environment, then restart Codex. These variables contain paths only; never put provider contents or API credentials in the marketplace files.
 
