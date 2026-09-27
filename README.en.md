@@ -8,7 +8,7 @@ A local Codex plugin and MCP server for delegating bounded development tasks to 
 
 - Submit, inspect, continue, and cancel tasks through a local stdio MCP server.
 - Select a ZCode provider/model per task and optionally pass a runtime-supported reasoning level. Without a task override, the Bridge uses the user default model and then the ZCode session default.
-- Best-effort register app-server-created sessions in the ZCode Desktop task index and mirror coarse status; cancellation clears the active status. Desktop must refresh its task list to show external writes; index failures never stop task execution.
+- Best-effort register app-server-created sessions in the ZCode Desktop task index and mirror coarse status; cancellation clears the active status. Tasks are associated with their isolated worktree workspace. A successful index write does not guarantee the current Desktop sidebar has refreshed; index failures never stop task execution.
 - Uses the native ZCode app-server and exposes visible text, model selection, tool lifecycle, usage, and task events when provided by the installed runtime.
 - Runs in an isolated Git worktree and stores task state, logs, events, and results under `~/.codex/codex-zcode-bridge/` (on Windows, `%USERPROFILE%\.codex\codex-zcode-bridge\`).
 - `completed` means ZCode reported the run as finished; it does not mean Codex accepted the changes. Codex should inspect the diff and run acceptance checks independently.
@@ -62,6 +62,14 @@ The repository also includes TypeScript source and build configuration for revie
 4. Codex runs acceptance checks independently and can continue the task in the same session/worktree if revisions are needed.
 5. Only changes accepted after Codex review should be applied to the user's workspace.
 
+## Find tasks in ZCode Desktop
+
+The Bridge creates a separate Git worktree for each task and associates the ZCode session with that worktree path, not the source project directory. By default, the path is `<Bridge data directory>/.tasks/workspaces/<task_id>`. If you only inspect the source project's workspace, you may not find the delegated task.
+
+In ZCode's left task sidebar, switch the view to **Workspace** and look under the corresponding isolated worktree; you can also use **Timeline** and sort by update time. ZCode's documentation describes these Desktop task views and sort options, but does not document a dedicated refresh button for the Desktop sidebar. The documented **Refresh** action is in the mobile Remote Control Task home, not a Desktop button. See the [ZCode task management documentation](https://zcode.z.ai/en/docs/task-management) and [Remote Control documentation](https://zcode.z.ai/en/docs/remote-control).
+
+The `desktop_task_registered` event means the Bridge wrote the session to ZCode Desktop's task index; it does not guarantee that the current UI has rendered the row. If the task is still missing, first check the isolated worktree workspace rather than only the source project workspace.
+
 ## Security and privacy
 
 - Provider configuration contents are not copied into the repository. ZCode child processes receive only required OS variables, provider config paths, and explicit Bridge settings; arbitrary parent environment variables are not inherited.
@@ -70,7 +78,7 @@ The repository also includes TypeScript source and build configuration for revie
 - Git worktrees provide version isolation, not a security sandbox. ZCode retains access to files and programs available to the current user. Do not delegate untrusted instructions or keep credentials in the workspace.
 ## Acknowledgements
 
-Part of the process-tree handling code is adapted from [cc-plugin-codex](https://github.com/hex1n/cc-plugin-codex); see [NOTICE](NOTICE) for attribution and modification details. Thanks to the [Model Context Protocol TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk), [Zod](https://github.com/colinhacks/zod), and the ZCode project for their open-source tools and runtime. Codex, ZCode, and related marks belong to their respective owners. This project is not affiliated with or endorsed by OpenAI, Z.ai, or their affiliates.
+Part of the process-tree handling code is adapted from [cc-plugin-codex](https://github.com/hex1n/cc-plugin-codex). The ZCode Desktop task-index integration is adapted from [zcode-acp's `src/tasks-index.ts`](https://github.com/william0wang/zcode-acp/blob/main/src/tasks-index.ts), modified for Bridge task correlation, `ZCODE_HOME` path resolution, schema checks, and status synchronization. Both projects use Apache-2.0; see [NOTICE](NOTICE) for source, modifications, and copyright notices. Thanks to the [Model Context Protocol TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk), [Zod](https://github.com/colinhacks/zod), and the ZCode project for their open-source tools and runtime. Codex, ZCode, and related marks belong to their respective owners. This project is not affiliated with or endorsed by OpenAI, Z.ai, or their affiliates.
 
 ## License
 

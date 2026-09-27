@@ -22926,7 +22926,7 @@ var toolErrorSchema = object({
 
 // src/mcp/server.ts
 var SERVER_NAME = "codex-zcode-bridge";
-var SERVER_VERSION = "0.3.4";
+var SERVER_VERSION = "0.3.5";
 var EXECUTION_NOT_VERDICT = "Results describe Bridge/ZCode execution only: status 'completed' means the invocation and report normalization finished, NOT that Codex accepted the work. Codex must independently review the workspace diff and checks before deciding PASS.";
 function okResult(data) {
   return {

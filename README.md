@@ -8,7 +8,7 @@
 
 - 通过本地 stdio MCP 提交、查询、续作和取消任务。
 - 按任务指定 ZCode provider/model ID；可传入 runtime 支持的思考等级。未指定任务模型时，依次使用 Bridge 用户默认模型、ZCode 当前默认模型。
-- 将由 app-server 创建的 session best-effort 登记到 ZCode Desktop 任务索引；状态映射为运行中、已完成或错误，取消时清除活动状态。Desktop 需要刷新任务列表才会看到外部写入，索引不可用不会中断任务。
+- 将由 app-server 创建的 session best-effort 登记到 ZCode Desktop 任务索引；状态映射为运行中、已完成或错误，取消时清除活动状态。任务按隔离 worktree workspace 归类；索引写入成功不代表当前 Desktop 侧栏已经刷新，索引不可用也不会中断任务。
 - 使用本机 ZCode app-server，向 Codex 暴露可见文本、模型选择、工具生命周期、usage 和任务状态事件（以本机 runtime 实际提供为准）。
 - 在独立 Git worktree 中执行，并把运行状态、日志、事件和结果保存在用户目录 `~/.codex/codex-zcode-bridge/`（Windows 为 `%USERPROFILE%\.codex\codex-zcode-bridge\`）。
 - `completed` 仅表示 ZCode 报告执行结束，不代表 Codex 已接受改动。Codex 应检查实际 diff 并独立执行验收。
@@ -62,6 +62,14 @@ codex plugin add codex-zcode-bridge@codex-zcode-bridge
 4. Codex 独立运行验收；需要修改时可在原 session/worktree 上续作。
 5. 只有经 Codex 审查通过的改动才应应用到用户工作区。
 
+## 在 ZCode Desktop 查找任务
+
+Bridge 为每个任务创建独立 Git worktree，并把 ZCode session 关联到该 worktree 路径，而不是源项目目录。默认路径位于 `<Bridge 数据目录>/.tasks/workspaces/<task_id>`；若只查看原项目 workspace，可能找不到委派任务。
+
+在 ZCode 左侧任务侧栏，将视图切换到 **Workspace**，查看对应隔离 worktree 的任务；也可切换到 **Timeline** 并按更新时间排序。ZCode 官方文档说明了这些任务视图和排序方式，但没有记载 Desktop 侧栏的专用刷新按钮。官方文档中明确提到的 **Refresh** 是手机 Remote Control 的 Task home 操作，不是 Desktop 按钮。参阅 [ZCode 任务管理文档](https://zcode.z.ai/en/docs/task-management) 和 [Remote Control 文档](https://zcode.z.ai/en/docs/remote-control)。
+
+`desktop_task_registered` 事件表示 Bridge 已把 session 写入 ZCode Desktop 的任务索引；它不保证当前界面已经显示该记录。若仍看不到，先核对任务对应的隔离 worktree workspace，而不是只看源项目 workspace。
+
 ## 安全与隐私
 
 - Bridge 不会把 provider 配置内容复制到仓库；ZCode 子进程只接收运行所需的 OS 环境变量、provider 配置路径和显式 Bridge 配置，不继承任意父进程环境变量。
@@ -70,7 +78,7 @@ codex plugin add codex-zcode-bridge@codex-zcode-bridge
 - Git worktree 提供版本隔离，不是安全沙箱。ZCode 运行时仍拥有当前用户可访问的文件和程序权限；不要派发不可信指令或把凭据放入工作区。
 ## 致谢
 
-本项目的进程树处理代码部分改编自 [cc-plugin-codex](https://github.com/hex1n/cc-plugin-codex)，改动和版权信息见 [NOTICE](NOTICE)。感谢 [Model Context Protocol TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk)、[Zod](https://github.com/colinhacks/zod) 及 ZCode 项目提供的开源工具和运行时。Codex、ZCode 和相关商标归其各自所有者所有；本项目与 OpenAI、Z.ai 或其关联方无隶属或背书关系。
+本项目的进程树处理代码部分改编自 [cc-plugin-codex](https://github.com/hex1n/cc-plugin-codex)；ZCode Desktop 任务索引读写代码部分改编自 [zcode-acp 的 `src/tasks-index.ts`](https://github.com/william0wang/zcode-acp/blob/main/src/tasks-index.ts)，并按 Bridge 的任务关联、`ZCODE_HOME` 路径解析、schema 校验和状态同步需求作了修改。两个项目均采用 Apache-2.0；具体来源、改动和版权信息见 [NOTICE](NOTICE)。感谢 [Model Context Protocol TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk)、[Zod](https://github.com/colinhacks/zod) 及 ZCode 项目提供的开源工具和运行时。Codex、ZCode 和相关商标归其各自所有者所有；本项目与 OpenAI、Z.ai 或其关联方无隶属或背书关系。
 
 ## 许可证
 
