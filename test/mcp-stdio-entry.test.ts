@@ -4,7 +4,7 @@
 // a ZCode worker (only initialize/initialized/tools/list/status-on-unknown-id).
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,6 +13,7 @@ import test from "node:test";
 import { resolveDataRoot } from "../src/mcp/main.js";
 
 const MAIN_JS = fileURLToPath(new URL("../../dist/src/mcp/main.js", import.meta.url));
+const PLUGIN_ROOT = fileURLToPath(new URL("../../plugins/codex-zcode-bridge/", import.meta.url));
 
 const PROTOCOL_MESSAGES = [
   JSON.stringify({
@@ -85,6 +86,36 @@ test("compiled stdio entry speaks pure JSON-RPC on stdout and diagnostics on std
     assert.match(run.stderr, /\[bridge\]/, "diagnostics must go to stderr");
     assert.match(run.stderr, /data root/);
     assert.doesNotMatch(run.stdout, /\[bridge\]/, "stdout must contain protocol messages only");
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test("marketplace bundle starts from its plugin root without repo-local dependencies", { timeout: 30_000 }, () => {
+  const dataRoot = mkdtempSync(path.join(tmpdir(), "zcode-bridge-plugin-stdio-"));
+  try {
+    const run = spawnSync(process.execPath, ["./server/bridge.mjs"], {
+      cwd: PLUGIN_ROOT,
+      input: PROTOCOL_MESSAGES,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        ZCODE_BRIDGE_PLUGIN_MODE: "1",
+        ZCODE_BRIDGE_DATA_DIR: dataRoot,
+      },
+      timeout: 20_000,
+    });
+    assert.equal(run.status, 0, `stderr: ${run.stderr}`);
+    const lines = run.stdout.split(/\r?\n/u).filter((line) => line.trim().length > 0);
+    const messages = lines.map((line) => JSON.parse(line) as { id?: number; result?: Record<string, unknown> });
+    assert.ok(messages.some((message) => message.id === 1 && message.result), "bundle must initialize over stdio");
+    const toolsList = messages.find((message) => message.id === 2)?.result;
+    const toolNames = ((toolsList?.["tools"] as Array<{ name: string }> | undefined) ?? []).map((tool) => tool.name).sort();
+    assert.deepEqual(toolNames, [
+      "zcode_cancel", "zcode_continue", "zcode_events", "zcode_result", "zcode_status", "zcode_task",
+    ]);
+    assert.ok(existsSync(path.join(PLUGIN_ROOT, "worker", "worker-main.mjs")), "detached worker bundle must ship beside the MCP server");
+    assert.match(run.stderr, /data root/);
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }

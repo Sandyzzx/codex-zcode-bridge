@@ -8,6 +8,7 @@
 // manager's reconcile timer without touching detached workers, which must
 // survive server restarts.
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
+import { homedir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { findPackageRoot } from "../runtime/resolver.js";
@@ -37,6 +38,11 @@ export function resolveDataRoot(env: NodeJS.ProcessEnv): DataRootResolution {
 }
 
 async function main(): Promise<void> {
+  // Keep task records and worktrees outside the versioned marketplace cache.
+  // The explicit plugin marker opts into this stable per-user data location.
+  if (process.env["ZCODE_BRIDGE_PLUGIN_MODE"] === "1" && !process.env["ZCODE_BRIDGE_DATA_DIR"]) {
+    process.env["ZCODE_BRIDGE_DATA_DIR"] = path.join(homedir(), ".codex", "codex-zcode-bridge");
+  }
   const { dataRoot, warning } = resolveDataRoot(process.env);
   if (warning) {
     console.error(`[bridge] ${warning}`);

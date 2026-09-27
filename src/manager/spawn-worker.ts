@@ -12,6 +12,9 @@ export interface SpawnedWorker {
 export type SpawnWorker = (dataRoot: string, taskId: string) => SpawnedWorker;
 
 export function workerEntryPath(): string {
+  if (process.env["ZCODE_BRIDGE_PLUGIN_MODE"] === "1") {
+    return fileURLToPath(new URL("../worker/worker-main.mjs", import.meta.url));
+  }
   return fileURLToPath(new URL("../worker/worker-main.js", import.meta.url));
 }
 

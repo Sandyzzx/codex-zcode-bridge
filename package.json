@@ -1,6 +1,6 @@
 {
   "name": "codex-zcode-bridge",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "description": "本地 Codex 插件与 MCP 服务，用于委派和审查 ZCode 开发任务。",
   "type": "module",
@@ -9,13 +9,13 @@
     "node": ">=22.18"
   },
   "scripts": {
-    "build": "tsc --project tsconfig.json",
+    "build": "tsc --project tsconfig.json && npm run build:plugin",
+    "build:plugin": "node scripts/build-plugin.mjs",
     "typecheck": "tsc --noEmit",
     "test": "npm run build && node --test \"dist/test/*.test.js\"",
     "smoke": "node test/live-smoke.mjs",
     "bridge:mcp": "node dist/src/mcp/main.js",
-    "integration:live": "npm run build && node test/live-integration.mjs",
-    "plugin:configure": "node scripts/configure-plugin.mjs"
+    "integration:live": "npm run build && node test/live-integration.mjs"
   },
   "bin": {
     "zcode-bridge-mcp": "dist/src/mcp/main.js"
@@ -23,6 +23,7 @@
   "devDependencies": {
     "@modelcontextprotocol/client": "^2.1.0",
     "@types/node": "^24.0.0",
+    "esbuild": "^0.28.2",
     "typescript": "^5.9.0"
   },
   "dependencies": {

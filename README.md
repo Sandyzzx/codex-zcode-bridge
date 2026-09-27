@@ -19,37 +19,28 @@
 - 本机已安装并登录 ZCode；Bridge 必须能访问其 runtime 和有效的 provider 配置。
 - Codex 桌面应用或支持本地插件 marketplace 的 Codex CLI。
 
-## 从源码安装
+## 从 GitHub Marketplace 安装
 
-先克隆仓库并构建：
+1. 确认本机已安装 Node.js 22.18+、Git 和 ZCode，并已登录 ZCode。
+2. 在 PowerShell 中显式启用任务执行权限，然后重启 Codex：
 
-```powershell
-git clone https://github.com/Sandyzzx/codex-zcode-bridge.git
-cd codex-zcode-bridge
-npm ci
-npm run build
-```
+   ```powershell
+   [Environment]::SetEnvironmentVariable("ZCODE_BRIDGE_ALLOW_UNRESTRICTED_EXECUTION", "1", "User")
+   ```
 
-在 PowerShell 中配置本机 ZCode provider 配置文件路径。配置脚本仅保存路径，不读取或复制配置内容：
+   这允许 ZCode 以当前用户权限运行 `yolo` session。插件安装本身不会设置该授权。
 
-```powershell
-$env:ZCODE_BUILTIN_PROVIDER_CONFIG_FILE = "<本机 builtin provider JSON 的绝对路径>"
-$env:ZCODE_PERSONAL_PROVIDER_CONFIG_FILE = "<本机 personal provider JSON 的绝对路径>"
-$env:ZCODE_BRIDGE_ALLOW_UNRESTRICTED_EXECUTION = "1"
-npm run plugin:configure
-```
+3. 将 GitHub marketplace 添加到 Codex。当前发布分支为 `phase7-live-progress`：
 
-macOS/Linux 用户使用当前 shell 的 `export` 设置相同的三个变量后运行 `npm run plugin:configure`。
+   ```sh
+   codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref phase7-live-progress
+   ```
 
-启用变量代表你同意以当前用户权限运行 ZCode `yolo` session。若 provider 路径未设置，Bridge 会尝试运行时默认发现；ZCode 安装布局因版本和系统而异。
+4. 重启 Codex，打开插件目录，找到 **Codex ZCode Bridge** 并点“安装”。开始新对话后即可使用 MCP 工具。
 
-### 在 Codex 中安装插件
+默认情况下 Bridge 会发现常见 ZCode 安装路径和 provider 配置。若你的 ZCode 使用非标准目录，在操作系统用户环境变量中设置 `ZCODE_BRIDGE_ZCODE_CJS`、`ZCODE_BUILTIN_PROVIDER_CONFIG_FILE` 和 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`，然后重启 Codex。变量仅包含路径；不要把配置内容或 API 凭据写入 marketplace 文件。
 
-1. 在 Codex 打开仓库，信任该项目，并按上文配置环境、运行 `npm ci`、`npm run build` 和 `npm run plugin:configure`。
-2. 重新启动 Codex，打开插件目录，选择仓库 marketplace 中的 **Codex Zcode Bridge** 并安装。
-3. 开始新对话，确认 MCP 工具 `zcode_task`、`zcode_status`、`zcode_events`、`zcode_result`、`zcode_continue` 和 `zcode_cancel` 可用。
-
-Codex CLI 支持添加 Git 或本地 marketplace；此项目的 MCP 配置是本机生成的，因此推荐先克隆并配置，再从仓库 marketplace 安装。Codex 当前 CLI 命令和 marketplace 目录规则请参阅 [官方插件文档](https://developers.openai.com/plugins/build/plugins)。Bridge MCP 配置由本地脚本生成，不应提交到仓库。
+插件已包含 Bridge MCP 服务和 worker 的打包产物；安装者不需要克隆仓库、运行 `npm install` 或手工生成 `.mcp.json`。marketplace 负责分发和安装插件，但不会替用户安装 Node.js、ZCode 或替用户授权执行权限。Codex 的 Git marketplace 命令和本地插件流程见[官方文档](https://developers.openai.com/plugins/build/plugins)。
 
 ## 任务流程
 
@@ -67,6 +58,8 @@ npm run build
 npm test
 npm run smoke
 ```
+
+`npm run build` 同时更新 marketplace 插件目录下的独立 MCP server 与 worker bundle；发布 marketplace 更新时应一并提交生成文件。
 
 `npm run integration:live` 会启动本机 ZCode 并调用模型，可能消耗额度。运行前设置 `ZCODE_BRIDGE_E2E_MODEL_PROVIDER_ID` 和 `ZCODE_BRIDGE_E2E_MODEL_ID`，使用临时工作区并检查生成的结果。
 
