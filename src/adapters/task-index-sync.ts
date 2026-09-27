@@ -16,6 +16,9 @@ export type DesktopTaskStatus = "running" | "completed" | "error" | null;
 
 export interface DesktopTaskIndexEntry {
   readonly databasePath: string;
+  /** Project identity used by ZCode Desktop to group this task. */
+  readonly workspaceKey: string;
+  /** Effective directory used by the ZCode session (project root or Codex-created worktree). */
   readonly workspacePath: string;
   readonly sessionId: string;
   readonly bridgeTaskId: string;
@@ -45,6 +48,7 @@ export async function registerDesktopTask(entry: DesktopTaskIndexEntry): Promise
       traceId: entry.bridgeTaskId,
       title,
       titleOverridden: false,
+      workspaceKey: entry.workspaceKey,
       workspacePath: entry.workspacePath,
       createdAt: now,
       updatedAt: now,
@@ -63,7 +67,7 @@ export async function registerDesktopTask(entry: DesktopTaskIndexEntry): Promise
         "title_overridden, meta_json, searchable_text) " +
         "VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, 0, 0, 0, ?, ?)",
     ).run(
-      entry.workspacePath,
+      entry.workspaceKey,
       entry.workspacePath,
       entry.sessionId,
       title,
@@ -105,7 +109,7 @@ function updateOwnedStatus(
 ): boolean {
   const row = database.prepare(
     "SELECT meta_json FROM tasks WHERE workspace_key = ? AND task_id = ?",
-  ).get(entry.workspacePath, entry.sessionId) as { meta_json?: unknown } | undefined;
+  ).get(entry.workspaceKey, entry.sessionId) as { meta_json?: unknown } | undefined;
   if (!row || typeof row.meta_json !== "string") return false;
 
   let meta: Record<string, unknown>;
@@ -125,7 +129,7 @@ function updateOwnedStatus(
   database.prepare(
     "UPDATE tasks SET task_status = ?, updated_at = ?, meta_json = ? " +
       "WHERE workspace_key = ? AND task_id = ?",
-  ).run(status, now, JSON.stringify(meta), entry.workspacePath, entry.sessionId);
+  ).run(status, now, JSON.stringify(meta), entry.workspaceKey, entry.sessionId);
   return true;
 }
 

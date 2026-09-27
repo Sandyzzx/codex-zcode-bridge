@@ -6,33 +6,40 @@ import path from "node:path";
 import type { WorkspaceProvider, WorkspaceRef } from "../interfaces.js";
 
 export class DirectWorkspaceProvider implements WorkspaceProvider {
-  async resolve(workspacePath: string, _taskId?: string): Promise<WorkspaceRef> {
-    if (typeof workspacePath !== "string" || workspacePath.trim().length === 0) {
-      throw new Error("workspace must be a non-empty string");
-    }
-    if (!path.isAbsolute(workspacePath)) {
-      throw new Error(`workspace must be an absolute path: ${workspacePath}`);
-    }
-    let stat;
-    try {
-      stat = statSync(workspacePath);
-    } catch {
-      throw new Error(`workspace does not exist: ${workspacePath}`);
-    }
-    if (!stat.isDirectory()) {
-      throw new Error(`workspace is not a directory: ${workspacePath}`);
-    }
-    let canonicalPath: string;
-    try {
-      canonicalPath = realpathSync(workspacePath);
-    } catch {
-      throw new Error(`workspace could not be canonicalized: ${workspacePath}`);
-    }
-    return { requestedPath: workspacePath, canonicalPath, mode: "direct" };
+  async resolve(workspacePath: string, _taskId?: string, executionPath?: string): Promise<WorkspaceRef> {
+    const projectPath = resolveExistingDirectory(workspacePath, "workspace");
+    const execution = executionPath === undefined
+      ? projectPath
+      : resolveExistingDirectory(executionPath, "worktree_path");
+    return {
+      requestedPath: projectPath.canonicalPath,
+      canonicalPath: execution.canonicalPath,
+      mode: executionPath === undefined ? "direct" : "worktree",
+      ...(executionPath === undefined ? {} : { sourcePath: projectPath.canonicalPath }),
+    };
   }
 
   async release(_workspace: WorkspaceRef): Promise<void> {
     // Direct V0.1 release is a no-op (frozen contract): the provider never
     // creates or deletes the task workspace.
+  }
+}
+
+function resolveExistingDirectory(input: string, field: string): { requestedPath: string; canonicalPath: string } {
+  if (typeof input !== "string" || input.trim().length === 0) {
+    throw new Error(`${field} must be a non-empty string`);
+  }
+  if (!path.isAbsolute(input)) throw new Error(`${field} must be an absolute path: ${input}`);
+  let stat;
+  try {
+    stat = statSync(input);
+  } catch {
+    throw new Error(`${field} does not exist: ${input}`);
+  }
+  if (!stat.isDirectory()) throw new Error(`${field} is not a directory: ${input}`);
+  try {
+    return { requestedPath: input, canonicalPath: realpathSync(input) };
+  } catch {
+    throw new Error(`${field} could not be canonicalized: ${input}`);
   }
 }

@@ -96,7 +96,7 @@ export class BridgeTaskManager implements ProgressTaskManager {
       }
       let workspaceRef;
       try {
-        workspaceRef = await this.#workspaceProvider.resolve(task.workspace, task.task_id);
+        workspaceRef = await this.#workspaceProvider.resolve(task.workspace, task.task_id, task.worktree_path);
       } catch (error) {
         throw new TaskManagerError(
           "TASK_INVALID",
@@ -105,8 +105,12 @@ export class BridgeTaskManager implements ProgressTaskManager {
       }
       const createdAt = this.#now().toISOString();
       try {
-        const sourcePath = workspaceRef.sourcePath ?? workspaceRef.canonicalPath;
-        this.#store.createTask({ ...task, workspace: sourcePath }, createdAt);
+        const projectPath = workspaceRef.sourcePath ?? workspaceRef.canonicalPath;
+        this.#store.createTask({
+          ...task,
+          workspace: projectPath,
+          ...(workspaceRef.mode === "worktree" ? { worktree_path: workspaceRef.canonicalPath } : { worktree_path: undefined }),
+        }, createdAt);
         this.#store.writeWorkspaceRef(task.task_id, workspaceRef);
       } catch (error) {
         await this.#workspaceProvider.release(workspaceRef).catch(() => undefined);
@@ -114,10 +118,11 @@ export class BridgeTaskManager implements ProgressTaskManager {
       }
       this.#store.appendEvent(task.task_id, "queued", "Task accepted and queued", undefined, createdAt);
       this.#store.appendEvent(task.task_id, "workspace_ready", workspaceRef.mode === "worktree"
-        ? "Isolated Git worktree created for this task"
-        : "Task will run in the requested workspace", {
-          source_path: workspaceRef.sourcePath ?? workspaceRef.canonicalPath,
-          workspace_path: workspaceRef.canonicalPath,
+        ? "Using the Codex-selected worktree for execution under the requested project"
+        : "Using the requested project directory for execution", {
+          project_path: workspaceRef.sourcePath ?? workspaceRef.canonicalPath,
+          execution_path: workspaceRef.canonicalPath,
+          ...(workspaceRef.mode === "worktree" ? { worktree_path: workspaceRef.canonicalPath } : {}),
           mode: workspaceRef.mode,
           ...(workspaceRef.branchName ? { branch_name: workspaceRef.branchName } : {}),
         }, createdAt);
@@ -226,10 +231,10 @@ export class BridgeTaskManager implements ProgressTaskManager {
       // The continuation reuses the original workspace; it must still resolve
       // to the same canonical directory.
       try {
-        const ref = await this.#workspaceProvider.resolve(task.workspace, taskId);
+        const ref = await this.#workspaceProvider.resolve(task.workspace, taskId, task.worktree_path);
         const recorded = this.#store.readWorkspaceRef(taskId);
-        if (recorded && ref.canonicalPath !== recorded.canonicalPath) {
-          throw new Error(`workspace no longer resolves to ${task.workspace}`);
+        if (recorded && (ref.canonicalPath !== recorded.canonicalPath || ref.requestedPath !== recorded.requestedPath)) {
+          throw new Error(`project or execution workspace no longer resolves to its recorded path`);
         }
       } catch (error) {
         throw new TaskManagerError(
@@ -533,6 +538,9 @@ export class BridgeTaskManager implements ProgressTaskManager {
     }
     if (typeof task.workspace !== "string" || task.workspace.trim().length === 0) {
       throw new TaskManagerError("TASK_INVALID", "workspace is required");
+    }
+    if (task.worktree_path !== undefined && (typeof task.worktree_path !== "string" || task.worktree_path.trim().length === 0)) {
+      throw new TaskManagerError("TASK_INVALID", "worktree_path must be a non-empty absolute path when present");
     }
     if (task.model !== undefined && (
       typeof task.model !== "object" || task.model === null ||

@@ -209,6 +209,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     turn: Promise<{ response: string; usage: Record<string, unknown> | null; resultType: string | null }>,
   ): Promise<ZCodeRunOutcome> {
     const startedAt = this.#now();
+    const projectPath = workspace.sourcePath ?? workspace.canonicalPath;
     let timer: NodeJS.Timeout | undefined;
     let desktopTask: DesktopTaskIndexEntry | null = null;
     try {
@@ -255,7 +256,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       if (resumeSessionId) {
         snapshot = asRecord(await client.request("session/resume", {
           sessionId: resumeSessionId,
-          workspace: { workspacePath: workspace.canonicalPath, workspaceKey: workspace.canonicalPath },
+          workspace: { workspacePath: workspace.canonicalPath, workspaceKey: projectPath },
         }));
         const returnedId = nestedString(snapshot, ["session", "sessionId"]);
         if (returnedId && returnedId !== resumeSessionId) {
@@ -264,7 +265,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         await client.request("session/setMode", { sessionId: resumeSessionId, mode: preferences.mode });
       } else {
         snapshot = asRecord(await client.request("session/create", {
-          workspace: { workspacePath: workspace.canonicalPath, workspaceKey: workspace.canonicalPath },
+          workspace: { workspacePath: workspace.canonicalPath, workspaceKey: projectPath },
           mode: preferences.mode,
           persistence: "immediate",
         }));
@@ -284,7 +285,8 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
           summary: `ZCode runtime advertised ${availableModels.length} selectable model${availableModels.length === 1 ? "" : "s"}`,
           details: {
             session_id: sessionId,
-            workspace_path: workspace.canonicalPath,
+            project_path: projectPath,
+            execution_path: workspace.canonicalPath,
             requested_model: { provider_id: requestedProviderId, model_id: preferences.model.model_id },
             available_models: availableModels.slice(0, 100),
             truncated: availableModels.length > 100,
@@ -369,8 +371,9 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         summary: `ZCode session ready; selected model ${entry.selectedModel}`,
         details: {
           session_id: sessionId,
-          source_path: task.workspace,
-          workspace_path: workspace.canonicalPath,
+          project_path: projectPath,
+          execution_path: workspace.canonicalPath,
+          ...(workspace.mode === "worktree" ? { worktree_path: workspace.canonicalPath } : {}),
           execution_mode: preferences.mode,
           model_source: preferences.modelSource,
           ...(entry.selectedModel ? { selected_model: entry.selectedModel } : {}),
@@ -381,6 +384,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         const selected = readSelectedModelSelection(snapshot);
         desktopTask = {
           databasePath: indexPath,
+          workspaceKey: projectPath,
           workspacePath: workspace.canonicalPath,
           sessionId,
           bridgeTaskId: task.task_id,
@@ -394,7 +398,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
           entry.onEvent({
             type: "desktop_task_registered",
             summary: "ZCode session registered in Desktop task index; refresh the task list to see it",
-            details: { session_id: sessionId, workspace_path: workspace.canonicalPath },
+            details: { session_id: sessionId, project_path: projectPath, execution_path: workspace.canonicalPath },
           });
         } catch (error) {
           reportDesktopIndexIssue(entry.onEvent, error);

@@ -1,16 +1,17 @@
 # Codex → ZCode Bridge
 
-本地运行的 Codex 插件与 MCP 服务。它让 Codex 将开发任务交给本机 ZCode Agent 执行，并在 Codex 中跟踪状态、查看进度事件和最终报告，再由 Codex 独立审查隔离 worktree 中的实际改动。
+本地运行的 Codex 插件与 MCP 服务。它让 Codex 将开发任务交给本机 ZCode Agent 执行，并在 Codex 中跟踪状态、查看进度事件和最终报告，再由 Codex 独立审查项目工作区中的实际改动。
 
-> **执行权限说明：**Bridge 默认通过 ZCode 原生 app-server 创建 `yolo` session，ZCode 以当前用户权限运行。它不是操作系统沙箱；Git worktree 和 `allowed_paths` / `forbidden_paths` 都不能强制限制进程访问。当前 app-server 接入尚未验证向 Codex 转发逐项权限审批的安全执行模式。每个任务开始时，Bridge 会报告源项目、隔离 worktree、ZCode session、runtime 报告的模型和执行模式。
+> **执行权限说明：**Bridge 默认通过 ZCode 原生 app-server 创建 `yolo` session，ZCode 以当前用户权限运行。`workspace` 始终是 Codex 项目目录和 ZCode Desktop 的项目归属；是否创建 worktree 由 Codex agent 根据任务指示决定，并通过可选 `worktree_path` 传给 Bridge。未提供时在项目目录执行，提供时在该 worktree 执行。Bridge 不创建、选择或删除 worktree。worktree 不是操作系统沙箱，`allowed_paths` / `forbidden_paths` 也不能强制限制进程访问。当前 app-server 接入尚未验证向 Codex 转发逐项权限审批的安全执行模式。每个任务开始时，Bridge 会报告项目路径、执行路径、ZCode session、runtime 报告的模型和执行模式。
 
 ## 功能
 
 - 通过本地 stdio MCP 提交、查询、续作和取消任务。
 - 按任务指定 ZCode provider/model ID；可传入 runtime 支持的思考等级。未指定任务模型时，依次使用 Bridge 用户默认模型、ZCode 当前默认模型。
-- 将由 app-server 创建的 session best-effort 登记到 ZCode Desktop 任务索引；状态映射为运行中、已完成或错误，取消时清除活动状态。任务按隔离 worktree workspace 归类；索引写入成功不代表当前 Desktop 侧栏已经刷新，索引不可用也不会中断任务。
+- 将由 app-server 创建的 session best-effort 登记到 ZCode Desktop 任务索引；状态映射为运行中、已完成或错误，取消时清除活动状态。任务按请求的项目目录归类；索引写入成功不代表当前 Desktop 侧栏已经刷新，索引不可用也不会中断任务。
 - 使用本机 ZCode app-server，向 Codex 暴露可见文本、模型选择、工具生命周期、usage 和任务状态事件（以本机 runtime 实际提供为准）。
-- 在独立 Git worktree 中执行，并把运行状态、日志、事件和结果保存在用户目录 `~/.codex/codex-zcode-bridge/`（Windows 为 `%USERPROFILE%\.codex\codex-zcode-bridge\`）。
+- 任务 prompt 以 `TASK ID` 开头；Codex 可在 `context` 中提供精简的项目决定、约束、相关文件和显式未决决定。ZCode 对重大冲突或会改变外部行为的缺失决定应请求 Master 决定。
+- 在 Codex 指定的项目目录或 worktree 中执行，并把运行状态、日志、事件和结果保存在用户目录 `~/.codex/codex-zcode-bridge/`（Windows 为 `%USERPROFILE%\.codex\codex-zcode-bridge\`）。
 - `completed` 仅表示 ZCode 报告执行结束，不代表 Codex 已接受改动。Codex 应检查实际 diff 并独立执行验收。
 
 ## 系统要求
@@ -26,7 +27,7 @@
 2. 在 Codex 中手动添加 GitHub marketplace 并安装 **Codex ZCode Bridge**。也可用 Codex CLI：
 
 ```sh
-codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref phase7-live-progress
+codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref master
 codex plugin add codex-zcode-bridge@codex-zcode-bridge
 ```
 
@@ -46,7 +47,7 @@ codex plugin add codex-zcode-bridge@codex-zcode-bridge
 
 参数可单独使用。`ZCODE_HOME` 必须是实际 `.zcode` 数据目录，且包含 `v2\provider_config.json`；脚本会发现并校验该文件及 runtime/provider JSON（个人配置必须包含非空 provider rules）。默认模型由 provider/model 成对指定；任务级模型覆盖用户默认值。模式可设为 `plan`、`build`、`edit` 或 `yolo`，默认 `yolo`。确认有效后脚本只写入显式传入参数对应的 Windows 用户环境变量；未传参数只读取当前配置，不写入默认值。设置自定义路径或默认值后需重新启动 Codex。脚本不会添加 marketplace、安装插件、修改 ZCode 配置内容或 ACL。
 
-开始执行时，Codex 会先显示 ZCode 项目、worktree、session、模型和执行模式信息。如果 runtime 未报告当前模型，Bridge 会在发送任务 prompt 前失败。app-server 的逐项权限审批回传尚未验证；`build`/`edit`/`plan` 模式下的权限交互行为也需结合本机 ZCode 版本确认。
+开始执行时，Codex 会先显示项目目录、session、模型和执行模式信息。如果 runtime 未报告当前模型，Bridge 会在发送任务 prompt 前失败。app-server 的逐项权限审批回传尚未验证；`build`/`edit`/`plan` 模式下的权限交互行为也需结合本机 ZCode 版本确认。
 
 默认情况下 Bridge 会发现常见 ZCode 安装路径和 provider 配置（包括 Windows 的 `Program Files`、`LOCALAPPDATA` 和 ZCode 数据目录）。变量仅保存路径；不要把配置内容或 API 凭据写入 marketplace 文件。
 
@@ -57,30 +58,38 @@ codex plugin add codex-zcode-bridge@codex-zcode-bridge
 ## 任务流程
 
 1. Codex 调用 `zcode_task`，提交目标、要求、工作区和验收标准；需要时指定模型。
-2. Bridge 校验并保存任务，在 Git worktree 中启动 ZCode Agent。
-3. Codex 通过状态和事件工具查看进展；任务完成后读取结果并检查 worktree diff。
-4. Codex 独立运行验收；需要修改时可在原 session/worktree 上续作。
-5. 只有经 Codex 审查通过的改动才应应用到用户工作区。
+2. Bridge 将 `workspace` 作为项目归属；Codex agent 可按任务要求选择并创建 worktree，再通过 `worktree_path` 指定实际执行目录。Bridge 只校验路径并启动 ZCode。
+3. Codex 通过状态和事件工具查看项目路径、执行路径和进展；任务完成后读取结果并检查实际执行目录中的 Git diff。
+4. Codex 独立运行验收；需要修改时可在原 ZCode session 和原执行目录上续作。
+5. Codex 审查并验收后，再决定如何接收改动。Bridge 不自动合并、应用、删除 worktree 或提交。
+
+## 委派 Prompt 约定
+
+- 首行是 `TASK ID: <task_id>`，作为 ZCode 根据首条 prompt 自动生成 session 标题的提示；Bridge 不调用单独的重命名命令，标题不保证与 ID 完全一致。
+- 固定 prompt 定义单任务执行角色、目标、路径范围、验收条件和 JSON 报告格式。Codex 的对话不会自动共享给 ZCode。
+- 仅在确有需要时提供精简 `context`，可按 `PROJECT DECISIONS`、`CONSTRAINTS`、`RELEVANT FILES`、`OPEN DECISIONS — DO NOT CHOOSE` 组织；不要粘贴整段对话。
+- ZCode 不得替 Master 决定尚未解决的 `OPEN DECISIONS`；续作时 Master Feedback 明确给出决定后，按该决定继续。对未列出的需求冲突或会实质改变外部行为的缺失决定，也应提出具体问题并设置 `needs_master_decision=true`；独立工作可以继续。低影响实现选择采用最简单一致的做法，并在报告中说明假设。
 
 ## 在 ZCode Desktop 查找任务
 
-Bridge 为每个任务创建独立 Git worktree，并把 ZCode session 关联到该 worktree 路径，而不是源项目目录。默认路径位于 `<Bridge 数据目录>/.tasks/workspaces/<task_id>`；若只查看原项目 workspace，可能找不到委派任务。
+Bridge 把 ZCode session 的 `workspaceKey` 设为 `workspace` 对应的 Codex 项目根目录；`workspacePath` 则是实际执行路径：未提供 `worktree_path` 时等于项目根目录，提供时等于 Codex 选择的 worktree。Bridge 进度事件统一使用 `project_path` 表示项目根目录、`execution_path` 表示实际执行目录。Desktop 索引行同样以项目根目录归类，并保留 worktree 执行路径。任务索引写入失败或 Desktop 尚未刷新时，列表仍可能暂时看不到任务。
 
-在 ZCode 左侧任务侧栏，将视图切换到 **Workspace**，查看对应隔离 worktree 的任务；也可切换到 **Timeline** 并按更新时间排序。ZCode 官方文档说明了这些任务视图和排序方式，但没有记载 Desktop 侧栏的专用刷新按钮。官方文档中明确提到的 **Refresh** 是手机 Remote Control 的 Task home 操作，不是 Desktop 按钮。参阅 [ZCode 任务管理文档](https://zcode.z.ai/en/docs/task-management) 和 [Remote Control 文档](https://zcode.z.ai/en/docs/remote-control)。
+在 ZCode 左侧任务侧栏，将视图切换到 **Workspace**，查看对应项目的任务；也可切换到 **Timeline** 并按更新时间排序。ZCode 官方文档说明了这些任务视图和排序方式，但没有记载 Desktop 侧栏的专用刷新按钮。官方文档中明确提到的 **Refresh** 是手机 Remote Control 的 Task home 操作，不是 Desktop 按钮。参阅 [ZCode 任务管理文档](https://zcode.z.ai/en/docs/task-management) 和 [Remote Control 文档](https://zcode.z.ai/en/docs/remote-control)。
 
-`desktop_task_registered` 事件表示 Bridge 已把 session 写入 ZCode Desktop 的任务索引；它不保证当前界面已经显示该记录。若仍看不到，先核对任务对应的隔离 worktree workspace，而不是只看源项目 workspace。
+`desktop_task_registered` 事件表示 Bridge 已把 session 写入 ZCode Desktop 的任务索引；它不保证当前界面已经显示该记录。若仍看不到，请确认当前 ZCode 窗口打开了请求的项目目录，并切换到 Workspace 或 Timeline 视图。
 
 ### 当前已知问题
 
-- **Desktop 可能不显示尚未在当前窗口打开/登记的 worktree。** 本机对比记录显示，用户能看到的会话关联到其已打开的项目 workspace；Bridge 测试会话虽然已写入索引且完成，却关联到单独创建的临时 worktree。两条索引都未归档或删除。**推测** Desktop 当前窗口没有载入这个临时 worktree，因此列表没有呈现；要验证可在 ZCode 中直接打开任务对应的 worktree 目录，再看 Workspace 或 Timeline。官方 Remote Control 文档说明只能访问当前 Desktop 窗口已打开或登记的工作区；Desktop 侧栏本身的手动刷新操作未见于官方文档。手机 Remote Control 的 Refresh 会从 Desktop 拉取最新状态，但也受当前窗口工作区范围限制。
-- **Start Plan 的 GLM-5.3-Flash 可用性尚未稳定确认。** 本地曾出现 Bridge 启动链路未能发现或报告所选模型的情况；另一次测试则成功完成，并在 ZCode 索引中记录为 `account:bigmodel-individual-coding-plan/GLM-5.3-Flash`。因此，套餐可用或模型出现在 ZCode 界面，不足以证明当前 Bridge/runtime/provider 组合已可用。派发前应确认启动事件报告的 provider 和 model；若 runtime 未报告模型，Bridge 会在发送任务 prompt 前失败。具体原因仍待进一步定位。
+- **ZCode session 标题由首条 prompt 自动生成。** Bridge 将 `TASK ID` 放在首行，标题不通过专用 API 设置。2026-09-28 的真实 E2E 中，app-server 报告 `titleSource: first_input`；生成标题以 `TASK ID` 开头，但后面还拼接了截断的 prompt 内容，因此不能保证标题恰好等于 task_id。
+- **GLM-5.3-Flash 已在本机配置完成真实 E2E。** 2026-09-28，runtime 的可用模型列表包含 `account:bigmodel-individual-coding-plan/GLM-5.3-Flash`，Bridge 成功选择该模型并完成两轮真实执行。此前的模型发现失败原因仍不确定；其他机器或 provider 配置仍应以启动事件报告的模型为准。
+- **Desktop 的项目归属与 worktree 执行路径已实测。** 真实 E2E 中，session/索引以 Codex 项目根目录作为 `workspaceKey`，以 Codex 准备的 worktree 作为 `workspacePath`；该 session 在索引中归于项目根目录。Desktop 当前窗口是否立即显示新索引行仍受刷新机制影响。
 
 ## 安全与隐私
 
 - Bridge 不会把 provider 配置内容复制到仓库；ZCode 子进程只接收运行所需的 OS 环境变量、provider 配置路径和显式 Bridge 配置，不继承任意父进程环境变量。
-- 常见 `.env`、密钥/证书、`.npmrc`、云凭据目录会从 Git task snapshot 中排除。该规则是启发式过滤，不能检测所有秘密；请在派发前检查仓库。Git 自定义 clean filter 仍可能在 `git add` 时运行。
+- Bridge 不创建 Git snapshot，也不复制或筛除项目文件。Codex 选择的 worktree 按 Codex 自身流程准备；请在派发前检查项目和执行目录中任务可见的文件。
 - `~/.codex/codex-zcode-bridge/` 保存任务 prompt、状态、日志、可见模型输出、事件及结果，均为本地持久化数据。POSIX 系统限制目录权限为 `0700`、文件权限为 `0600`；Windows 依赖父目录 ACL。请为该目录配置适当的本机访问控制和保留策略。
-- Git worktree 提供版本隔离，不是安全沙箱。ZCode 运行时仍拥有当前用户可访问的文件和程序权限；不要派发不可信指令或把凭据放入工作区。
+- 是否使用 Git worktree 由 Codex agent 根据任务指示决定。worktree 仅隔离文件工作目录，不是 OS 沙箱；ZCode 运行时仍拥有当前用户可访问的文件和程序权限。直接在项目目录执行时，任务改动会直接落在该项目中。派发前确认项目状态并保留重要改动，任务期间不要并发编辑同一执行目录；不要派发不可信指令或把凭据放入工作区。
 ## 致谢
 
 本项目的进程树处理代码部分改编自 [cc-plugin-codex](https://github.com/hex1n/cc-plugin-codex)；ZCode Desktop 任务索引读写代码部分改编自 [zcode-acp 的 `src/tasks-index.ts`](https://github.com/william0wang/zcode-acp/blob/main/src/tasks-index.ts)，并按 Bridge 的任务关联、`ZCODE_HOME` 路径解析、schema 校验和状态同步需求作了修改。两个项目均采用 Apache-2.0；具体来源、改动和版权信息见 [NOTICE](NOTICE)。感谢 [Model Context Protocol TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk)、[Zod](https://github.com/colinhacks/zod) 及 ZCode 项目提供的开源工具和运行时。Codex、ZCode 和相关商标归其各自所有者所有；本项目与 OpenAI、Z.ai 或其关联方无隶属或背书关系。

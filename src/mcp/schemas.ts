@@ -16,6 +16,7 @@ export const zcodeTaskInputSchema = z
   .strictObject({
     task_id: taskIdSchema,
     workspace: z.string().min(1),
+    worktree_path: z.string().min(1).optional(),
     model: z.strictObject({
       provider_id: z.string().trim().min(1),
       model_id: z.string().trim().min(1),
@@ -29,7 +30,7 @@ export const zcodeTaskInputSchema = z
     test_commands: stringArray,
     context: z.string().optional(),
   })
-  .describe("Full TaskPackage; the five array fields must be present (empty allowed), context is optional.");
+  .describe("Full TaskPackage; workspace is the Codex project root. Optional worktree_path is an existing execution directory selected and prepared by Codex; the Bridge never creates or selects worktrees. The five array fields must be present (empty allowed), context is optional.");
 
 export const taskIdOnlyInputSchema = z.strictObject({
   task_id: z.string().min(1),

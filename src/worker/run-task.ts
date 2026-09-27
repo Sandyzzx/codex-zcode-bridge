@@ -114,8 +114,9 @@ export async function runWorkerTask(options: RunWorkerTaskOptions): Promise<RunW
     });
     const workspaceRef: WorkspaceRef = store.readWorkspaceRef(taskId) ?? {
       requestedPath: task.workspace,
-      canonicalPath: task.workspace,
-      mode: "direct",
+      canonicalPath: task.worktree_path ?? task.workspace,
+      mode: task.worktree_path ? "worktree" : "direct",
+      ...(task.worktree_path ? { sourcePath: task.workspace } : {}),
     };
     const handle = continueSpec
       ? await adapter.continueTask({

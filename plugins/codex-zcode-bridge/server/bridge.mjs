@@ -21874,168 +21874,41 @@ function toPublicStatus(status) {
   return record2;
 }
 
-// src/workspace/git-worktree-provider.ts
-import { execFileSync } from "node:child_process";
-import { chmodSync as chmodSync2, existsSync as existsSync3, mkdirSync as mkdirSync2, realpathSync, rmSync as rmSync2 } from "node:fs";
-import { randomUUID as randomUUID2 } from "node:crypto";
-import os from "node:os";
+// src/workspace/direct-provider.ts
+import { realpathSync, statSync as statSync3 } from "node:fs";
 import path3 from "node:path";
-var GitWorktreeWorkspaceProvider = class {
-  #dataRoot;
-  #worktreesRoot;
-  constructor(dataRoot) {
-    this.#dataRoot = path3.resolve(dataRoot);
-    this.#worktreesRoot = path3.join(this.#dataRoot, ".tasks", "workspaces");
-  }
-  async resolve(workspacePath, taskId) {
-    if (typeof workspacePath !== "string" || workspacePath.trim().length === 0) {
-      throw new Error("workspace must be a non-empty string");
-    }
-    if (!path3.isAbsolute(workspacePath)) {
-      throw new Error(`workspace must be an absolute Git repository path: ${workspacePath}`);
-    }
-    if (!taskId || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(taskId)) {
-      throw new Error("a valid task_id is required to create an isolated Git worktree");
-    }
-    let sourcePath;
-    try {
-      sourcePath = realpathSync(workspacePath);
-    } catch {
-      throw new Error(`workspace does not exist: ${workspacePath}`);
-    }
-    const root = this.#git(sourcePath, ["rev-parse", "--show-toplevel"]).trim();
-    const canonicalSource = realpathSync(root);
-    const branchName = `codex-zcode/${taskId}`;
-    const worktreePath = path3.join(this.#worktreesRoot, taskId);
-    if (existsSync3(worktreePath)) {
-      return this.#reuseExisting(canonicalSource, worktreePath, branchName);
-    }
-    mkdirSync2(this.#worktreesRoot, { recursive: true, mode: 448 });
-    if (process.platform !== "win32") chmodSync2(this.#worktreesRoot, 448);
-    try {
-      const baseCommit = this.#snapshotWorkingTree(canonicalSource);
-      this.#git(canonicalSource, ["worktree", "add", "-b", branchName, worktreePath, baseCommit]);
-    } catch (error2) {
-      if (existsSync3(worktreePath) && !this.#isRegisteredWorktree(canonicalSource, worktreePath)) {
-        rmSync2(worktreePath, { recursive: true, force: true });
-      }
-      throw error2;
-    }
-    const canonicalWorktree = realpathSync(worktreePath);
+var DirectWorkspaceProvider = class {
+  async resolve(workspacePath, _taskId, executionPath) {
+    const projectPath = resolveExistingDirectory(workspacePath, "workspace");
+    const execution = executionPath === void 0 ? projectPath : resolveExistingDirectory(executionPath, "worktree_path");
     return {
-      requestedPath: workspacePath,
-      sourcePath: canonicalSource,
-      canonicalPath: canonicalWorktree,
-      branchName,
-      mode: "worktree"
+      requestedPath: projectPath.canonicalPath,
+      canonicalPath: execution.canonicalPath,
+      mode: executionPath === void 0 ? "direct" : "worktree",
+      ...executionPath === void 0 ? {} : { sourcePath: projectPath.canonicalPath }
     };
   }
-  async release(workspace) {
-    if (workspace.mode !== "worktree" || !workspace.branchName || !workspace.sourcePath) return;
-    const resolved = path3.resolve(workspace.canonicalPath);
-    const rel = path3.relative(this.#worktreesRoot, resolved);
-    if (!rel || rel === ".." || rel.startsWith(`..${path3.sep}`) || path3.isAbsolute(rel)) {
-      throw new Error(`refusing to remove worktree outside Bridge worktree root: ${resolved}`);
-    }
-    this.#git(workspace.sourcePath, ["worktree", "remove", "--force", resolved]);
-    this.#git(workspace.sourcePath, ["branch", "-D", workspace.branchName]);
-  }
-  #reuseExisting(sourcePath, worktreePath, branchName) {
-    let canonicalWorktree;
-    try {
-      canonicalWorktree = realpathSync(worktreePath);
-    } catch {
-      throw new Error(`task worktree path could not be canonicalized: ${worktreePath}`);
-    }
-    const actualRoot = realpathSync(this.#git(canonicalWorktree, ["rev-parse", "--show-toplevel"]).trim());
-    if (actualRoot !== canonicalWorktree) {
-      throw new Error(`existing task worktree path is not its own Git root: ${canonicalWorktree}`);
-    }
-    const actualBranch = this.#git(canonicalWorktree, ["branch", "--show-current"]).trim();
-    if (actualBranch !== branchName) {
-      throw new Error(`existing task worktree is on unexpected branch ${actualBranch || "(detached)"}`);
-    }
-    const sourceCommon = realpathSync(path3.resolve(sourcePath, this.#git(sourcePath, ["rev-parse", "--git-common-dir"]).trim()));
-    const worktreeCommon = realpathSync(path3.resolve(canonicalWorktree, this.#git(canonicalWorktree, ["rev-parse", "--git-common-dir"]).trim()));
-    if (sourceCommon !== worktreeCommon) {
-      throw new Error("existing task worktree does not belong to the requested source repository");
-    }
-    return {
-      requestedPath: sourcePath,
-      sourcePath,
-      canonicalPath: canonicalWorktree,
-      branchName,
-      mode: "worktree"
-    };
-  }
-  #isRegisteredWorktree(sourcePath, worktreePath) {
-    try {
-      const root = realpathSync(this.#git(worktreePath, ["rev-parse", "--show-toplevel"]).trim());
-      const common = this.#git(sourcePath, ["rev-parse", "--git-common-dir"]).trim();
-      const worktreeCommon = this.#git(worktreePath, ["rev-parse", "--git-common-dir"]).trim();
-      return root === realpathSync(worktreePath) && realpathSync(path3.resolve(sourcePath, common)) === realpathSync(path3.resolve(worktreePath, worktreeCommon));
-    } catch {
-      return false;
-    }
-  }
-  #snapshotWorkingTree(sourcePath) {
-    const indexFile = path3.join(os.tmpdir(), `codex-zcode-bridge-index-${randomUUID2()}`);
-    const env = {
-      ...process.env,
-      GIT_INDEX_FILE: indexFile,
-      GIT_AUTHOR_NAME: "Codex ZCode Bridge",
-      GIT_AUTHOR_EMAIL: "codex-zcode-bridge@localhost",
-      GIT_COMMITTER_NAME: "Codex ZCode Bridge",
-      GIT_COMMITTER_EMAIL: "codex-zcode-bridge@localhost"
-    };
-    try {
-      const head = this.#git(sourcePath, ["rev-parse", "HEAD"]);
-      this.#git(sourcePath, ["read-tree", head.trim()], env);
-      this.#git(sourcePath, ["add", "-A"], env);
-      this.#git(sourcePath, [
-        "rm",
-        "-r",
-        "--cached",
-        "--ignore-unmatch",
-        "--",
-        ":(glob)**/.env",
-        ":(glob)**/.env.*",
-        ":(glob)**/.npmrc",
-        ":(glob)**/.pypirc",
-        ":(glob)**/credentials.json",
-        ":(glob)**/secrets.json",
-        ":(glob)**/*.pem",
-        ":(glob)**/*.key",
-        ":(glob)**/*.p12",
-        ":(glob)**/*.pfx",
-        ":(glob)**/.aws/**",
-        ":(glob)**/.ssh/**"
-      ], env);
-      const tree = this.#git(sourcePath, ["write-tree"], env).trim();
-      const headTree = this.#git(sourcePath, ["rev-parse", `${head.trim()}^{tree}`]).trim();
-      if (tree === headTree) return head.trim();
-      return this.#git(sourcePath, [
-        "commit-tree",
-        tree,
-        "-p",
-        head.trim(),
-        "-m",
-        "Codex ZCode Bridge task workspace snapshot"
-      ], env).trim();
-    } finally {
-      rmSync2(indexFile, { force: true });
-      rmSync2(`${indexFile}.lock`, { force: true });
-    }
-  }
-  #git(cwd, args, env) {
-    return execFileSync("git", ["-C", cwd, ...args], {
-      encoding: "utf8",
-      env,
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true
-    });
+  async release(_workspace) {
   }
 };
+function resolveExistingDirectory(input, field) {
+  if (typeof input !== "string" || input.trim().length === 0) {
+    throw new Error(`${field} must be a non-empty string`);
+  }
+  if (!path3.isAbsolute(input)) throw new Error(`${field} must be an absolute path: ${input}`);
+  let stat;
+  try {
+    stat = statSync3(input);
+  } catch {
+    throw new Error(`${field} does not exist: ${input}`);
+  }
+  if (!stat.isDirectory()) throw new Error(`${field} is not a directory: ${input}`);
+  try {
+    return { requestedPath: input, canonicalPath: realpathSync(input) };
+  } catch {
+    throw new Error(`${field} could not be canonicalized: ${input}`);
+  }
+}
 
 // src/manager/normalize.ts
 function buildTaskResult(input) {
@@ -22410,7 +22283,7 @@ var BridgeTaskManager = class {
       }
       let workspaceRef;
       try {
-        workspaceRef = await this.#workspaceProvider.resolve(task.workspace, task.task_id);
+        workspaceRef = await this.#workspaceProvider.resolve(task.workspace, task.task_id, task.worktree_path);
       } catch (error2) {
         throw new TaskManagerError(
           "TASK_INVALID",
@@ -22419,17 +22292,22 @@ var BridgeTaskManager = class {
       }
       const createdAt = this.#now().toISOString();
       try {
-        const sourcePath = workspaceRef.sourcePath ?? workspaceRef.canonicalPath;
-        this.#store.createTask({ ...task, workspace: sourcePath }, createdAt);
+        const projectPath = workspaceRef.sourcePath ?? workspaceRef.canonicalPath;
+        this.#store.createTask({
+          ...task,
+          workspace: projectPath,
+          ...workspaceRef.mode === "worktree" ? { worktree_path: workspaceRef.canonicalPath } : { worktree_path: void 0 }
+        }, createdAt);
         this.#store.writeWorkspaceRef(task.task_id, workspaceRef);
       } catch (error2) {
         await this.#workspaceProvider.release(workspaceRef).catch(() => void 0);
         throw error2;
       }
       this.#store.appendEvent(task.task_id, "queued", "Task accepted and queued", void 0, createdAt);
-      this.#store.appendEvent(task.task_id, "workspace_ready", workspaceRef.mode === "worktree" ? "Isolated Git worktree created for this task" : "Task will run in the requested workspace", {
-        source_path: workspaceRef.sourcePath ?? workspaceRef.canonicalPath,
-        workspace_path: workspaceRef.canonicalPath,
+      this.#store.appendEvent(task.task_id, "workspace_ready", workspaceRef.mode === "worktree" ? "Using the Codex-selected worktree for execution under the requested project" : "Using the requested project directory for execution", {
+        project_path: workspaceRef.sourcePath ?? workspaceRef.canonicalPath,
+        execution_path: workspaceRef.canonicalPath,
+        ...workspaceRef.mode === "worktree" ? { worktree_path: workspaceRef.canonicalPath } : {},
         mode: workspaceRef.mode,
         ...workspaceRef.branchName ? { branch_name: workspaceRef.branchName } : {}
       }, createdAt);
@@ -22523,10 +22401,10 @@ var BridgeTaskManager = class {
       }
       const task = this.#store.readTask(taskId);
       try {
-        const ref = await this.#workspaceProvider.resolve(task.workspace, taskId);
+        const ref = await this.#workspaceProvider.resolve(task.workspace, taskId, task.worktree_path);
         const recorded = this.#store.readWorkspaceRef(taskId);
-        if (recorded && ref.canonicalPath !== recorded.canonicalPath) {
-          throw new Error(`workspace no longer resolves to ${task.workspace}`);
+        if (recorded && (ref.canonicalPath !== recorded.canonicalPath || ref.requestedPath !== recorded.requestedPath)) {
+          throw new Error(`project or execution workspace no longer resolves to its recorded path`);
         }
       } catch (error2) {
         throw new TaskManagerError(
@@ -22805,6 +22683,9 @@ var BridgeTaskManager = class {
     if (typeof task.workspace !== "string" || task.workspace.trim().length === 0) {
       throw new TaskManagerError("TASK_INVALID", "workspace is required");
     }
+    if (task.worktree_path !== void 0 && (typeof task.worktree_path !== "string" || task.worktree_path.trim().length === 0)) {
+      throw new TaskManagerError("TASK_INVALID", "worktree_path must be a non-empty absolute path when present");
+    }
     if (task.model !== void 0 && (typeof task.model !== "object" || task.model === null || typeof task.model.provider_id !== "string" || task.model.provider_id.trim().length === 0 || typeof task.model.model_id !== "string" || task.model.model_id.trim().length === 0 || task.model.reasoning_level !== void 0 && (typeof task.model.reasoning_level !== "string" || task.model.reasoning_level.trim().length === 0))) {
       throw new TaskManagerError("TASK_INVALID", "model must include non-empty provider_id and model_id strings");
     }
@@ -22829,6 +22710,7 @@ var stringArray = array(string2());
 var zcodeTaskInputSchema = strictObject({
   task_id: taskIdSchema,
   workspace: string2().min(1),
+  worktree_path: string2().min(1).optional(),
   model: strictObject({
     provider_id: string2().trim().min(1),
     model_id: string2().trim().min(1),
@@ -22841,7 +22723,7 @@ var zcodeTaskInputSchema = strictObject({
   acceptance_criteria: stringArray,
   test_commands: stringArray,
   context: string2().optional()
-}).describe("Full TaskPackage; the five array fields must be present (empty allowed), context is optional.");
+}).describe("Full TaskPackage; workspace is the Codex project root. Optional worktree_path is an existing execution directory selected and prepared by Codex; the Bridge never creates or selects worktrees. The five array fields must be present (empty allowed), context is optional.");
 var taskIdOnlyInputSchema = strictObject({
   task_id: string2().min(1)
 });
@@ -22960,7 +22842,7 @@ function createBridgeServer(options) {
     "zcode_task",
     {
       title: "Submit one ZCode coding task",
-      description: `Create a bounded coding task for the local ZCode subordinate agent. workspace must be a Git repository; the Bridge snapshots its current tracked and untracked changes into a task-specific worktree. Optional model selects a ZCode provider_id/model_id for this session without changing the project default. Returns a TaskReceipt; the task runs asynchronously in a detached worker. ${EXECUTION_NOT_VERDICT}`,
+      description: `Create a bounded coding task for the local ZCode subordinate agent. workspace is the Codex project root and determines the ZCode Desktop project identity. Codex decides whether to create a worktree; if it does, pass its existing absolute directory as optional worktree_path. The Bridge never creates, selects, or removes a worktree. Without worktree_path, ZCode runs directly in workspace. Optional model selects a ZCode provider_id/model_id for this session without changing the project default. Returns a TaskReceipt; the task runs asynchronously in a detached worker. ${EXECUTION_NOT_VERDICT}`,
       inputSchema: zcodeTaskInputSchema,
       outputSchema: taskReceiptSchema
     },
@@ -22980,7 +22862,7 @@ function createBridgeServer(options) {
     "zcode_events",
     {
       title: "Read live ZCode execution events",
-      description: "Read persisted progress events for a task. Immediately after submission, report the source project, isolated worktree, branch, and queued/running state from the first events. Keep polling until turn_started or startup failure; before longer monitoring, report the ZCode session, runtime-reported selected model, and execution mode. Set after_seq to the last next_seq returned and wait_ms up to 25000. Hidden reasoning and raw tool arguments are excluded.",
+      description: "Read persisted progress events for a task. Immediately after submission, report the project path, effective execution path (and worktree path when supplied), and queued/running state from the first events. Keep polling until turn_started or startup failure; before longer monitoring, report the ZCode session, runtime-reported selected model, and execution mode. Set after_seq to the last next_seq returned and wait_ms up to 25000. Hidden reasoning and raw tool arguments are excluded.",
       inputSchema: zcodeEventsInputSchema,
       outputSchema: taskProgressPageSchema
     },
@@ -23046,7 +22928,7 @@ async function main() {
   }
   console.error(`[bridge] data root: ${dataRoot}`);
   const store = new TaskStore(dataRoot);
-  const manager = new BridgeTaskManager({ store, workspaceProvider: new GitWorktreeWorkspaceProvider(dataRoot) });
+  const manager = new BridgeTaskManager({ store, workspaceProvider: new DirectWorkspaceProvider() });
   const server = createBridgeServer({ taskManager: manager });
   const handle = serveStdio(() => server);
   let closing = false;

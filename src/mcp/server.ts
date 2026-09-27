@@ -1,5 +1,5 @@
 // stdio MCP server factory. V0.1 task lifecycle tools remain compatible;
-// MVP 0.3 adds the optional model selector, Git-worktree default and progress
+// MVP 0.3 adds the optional model selector, Codex-selected execution worktree and progress
 // events. All tools use strict snake_case
 // schemas, return readable text plus structured content, and map stable
 // TaskManagerError codes onto MCP tool-error results. The TaskManager is
@@ -76,7 +76,7 @@ export function createBridgeServer(options: BridgeServerOptions): McpServer {
     "zcode_task",
     {
       title: "Submit one ZCode coding task",
-      description: `Create a bounded coding task for the local ZCode subordinate agent. workspace must be a Git repository; the Bridge snapshots its current tracked and untracked changes into a task-specific worktree. Optional model selects a ZCode provider_id/model_id for this session without changing the project default. Returns a TaskReceipt; the task runs asynchronously in a detached worker. ${EXECUTION_NOT_VERDICT}`,
+      description: `Create a bounded coding task for the local ZCode subordinate agent. workspace is the Codex project root and determines the ZCode Desktop project identity. Codex decides whether to create a worktree; if it does, pass its existing absolute directory as optional worktree_path. The Bridge never creates, selects, or removes a worktree. Without worktree_path, ZCode runs directly in workspace. Optional model selects a ZCode provider_id/model_id for this session without changing the project default. Returns a TaskReceipt; the task runs asynchronously in a detached worker. ${EXECUTION_NOT_VERDICT}`,
       inputSchema: zcodeTaskInputSchema,
       outputSchema: taskReceiptSchema,
     },
@@ -98,7 +98,7 @@ export function createBridgeServer(options: BridgeServerOptions): McpServer {
     "zcode_events",
     {
       title: "Read live ZCode execution events",
-      description: "Read persisted progress events for a task. Immediately after submission, report the source project, isolated worktree, branch, and queued/running state from the first events. Keep polling until turn_started or startup failure; before longer monitoring, report the ZCode session, runtime-reported selected model, and execution mode. Set after_seq to the last next_seq returned and wait_ms up to 25000. Hidden reasoning and raw tool arguments are excluded.",
+      description: "Read persisted progress events for a task. Immediately after submission, report the project path, effective execution path (and worktree path when supplied), and queued/running state from the first events. Keep polling until turn_started or startup failure; before longer monitoring, report the ZCode session, runtime-reported selected model, and execution mode. Set after_seq to the last next_seq returned and wait_ms up to 25000. Hidden reasoning and raw tool arguments are excluded.",
       inputSchema: zcodeEventsInputSchema,
       outputSchema: taskProgressPageSchema,
     },

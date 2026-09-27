@@ -13,7 +13,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { findPackageRoot } from "../runtime/resolver.js";
 import { TaskStore } from "../store/task-store.js";
-import { GitWorktreeWorkspaceProvider } from "../workspace/git-worktree-provider.js";
+import { DirectWorkspaceProvider } from "../workspace/direct-provider.js";
 import { BridgeTaskManager } from "../manager/task-manager.js";
 import { createBridgeServer } from "./server.js";
 
@@ -50,7 +50,7 @@ async function main(): Promise<void> {
   console.error(`[bridge] data root: ${dataRoot}`);
 
   const store = new TaskStore(dataRoot);
-  const manager = new BridgeTaskManager({ store, workspaceProvider: new GitWorktreeWorkspaceProvider(dataRoot) });
+  const manager = new BridgeTaskManager({ store, workspaceProvider: new DirectWorkspaceProvider() });
   const server = createBridgeServer({ taskManager: manager });
   const handle = serveStdio(() => server);
 
