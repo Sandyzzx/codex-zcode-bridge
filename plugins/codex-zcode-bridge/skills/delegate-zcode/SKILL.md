@@ -17,7 +17,7 @@ description: 通过 Codex ZCode Bridge 把已授权的开发任务交给本机 Z
 ## 跟进
 
 1. `zcode_task` 返回后立即调用 `zcode_events`（`after_seq: 0`），不要先做别的工作或只复述 queued receipt。先报告 `workspace_ready` 中的 `project_path`、`execution_path`（如有则说明 Codex 准备的 worktree）和 queued/running 状态。按 `next_seq` 和 `wait_ms` 继续读取，直到出现 `turn_started`、明确启动失败或终态；不要忙轮询。
-2. 在 `turn_started` 后、等待模型输出前，先向用户报告：Codex 项目根目录、实际执行目录、ZCode session ID、runtime 实际报告的 provider/model、执行模式（Bridge 当前使用 `yolo`）。若使用 worktree，说明它不是 OS 沙箱。模型字段缺失时明确说 runtime 没有报告；不要把用户请求的模型或项目默认值猜成实际已选模型。
+2. 在 `turn_started` 后、等待模型输出前，先向用户报告：Codex 项目根目录、实际执行目录、ZCode session ID、runtime 实际报告的 provider/model 和执行模式。模式来自 Bridge 配置，默认 `yolo`。若使用 worktree，说明它不是 OS 沙箱。模型字段缺失时明确说 runtime 没有报告；不要把用户请求的模型或项目默认值猜成实际已选模型。
 3. 如果在 `turn_started` 前失败，立即报告 Bridge 的启动错误；只有在 `session_ready` 已出现时才能声称 ZCode session 已创建。不存在 `session_ready` 时说明没有 ZCode session/model 元数据。
 4. 运行期间用 `zcode_events` 的 `after_seq` 读取增量事件，`wait_ms` 可设为 10000–25000；如需快速刷新状态，可调用 `zcode_status`。向用户简短汇报模型可见输出和工具活动摘要。事件不包含隐藏推理或原始工具参数。
 5. 任务终态后调用 `zcode_result`。completed 仅表示 Bridge/ZCode 执行和报告规范化完成，不代表代码审查通过。
@@ -33,7 +33,7 @@ description: 通过 Codex ZCode Bridge 把已授权的开发任务交给本机 Z
 ## 边界
 
 - Bridge 目前一个时刻只运行一个 worker。
-- 每个任务默认通过本机 ZCode app-server 以 `yolo` 模式运行；告知用户这一执行模式和当前账户权限边界，不要把 worktree 描述成沙箱。
+- 每个任务通过本机 ZCode app-server 运行；默认模式为 `yolo`，也可通过 `ZCODE_BRIDGE_MODE` 配置。告知用户实际执行模式和当前账户权限边界，不要把 worktree 描述成沙箱。
 - `workspace` 是项目身份路径；`worktree_path`（如提供）是实际执行路径。Codex 决定是否准备 worktree，Bridge 只校验并使用所给路径。Git worktree 是工作区隔离，不是 OS 沙箱。allowed_paths / forbidden_paths 是 worker 指令；不得声称它们能强制阻止所有越界命令。
 - ZCode 不得选择仍未解决的 `OPEN DECISIONS`；后续 Master Feedback 明确给出决定后，按新决定继续。即使未列出，遇到需求冲突或会实质改变外部行为的缺失决定，也要提出具体问题、设置 `needs_master_decision=true`，并继续不依赖该决定的工作。低影响实现选择可采用最简单一致的方案，同时报告假设。
 - 不要把 ZCode Hooks、Desktop 历史索引、自动化或并行 worker 当作已启用能力。

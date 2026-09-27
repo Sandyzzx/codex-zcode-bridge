@@ -34,3 +34,15 @@ Copyright 2026 cc-plugin-codex contributors
 This product is independently developed and is not affiliated with or endorsed
 by Anthropic PBC or OpenAI, L.L.C. Claude, Claude Code, Codex, and OpenAI are
 trademarks of their respective owners.
+
+The plugin bundles the following runtime dependencies. Their license texts
+are included under licenses/:
+
+  @modelcontextprotocol/server 2.1.0 and @modelcontextprotocol/core 2.1.0
+    Hybrid Apache-2.0/MIT license; the package license also references
+    CC-BY-4.0 for documentation. See MCP-TYPESCRIPT-SDK-LICENSE.txt.
+  Zod 4.6.5
+    MIT License. See ZOD-LICENSE.txt.
+  content-type
+    MIT License; bundled license comment credits Douglas Christopher Wilson.
+    See CONTENT-TYPE-LICENSE.txt.
