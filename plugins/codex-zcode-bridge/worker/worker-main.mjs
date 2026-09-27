@@ -822,6 +822,27 @@ var ZCodeAppServerAdapter = class {
       entry.sessionId = sessionId;
       if (task.model) {
         const requested = `${task.model.provider_id}/${task.model.model_id}`;
+        const availableModels = readAvailableModels(snapshot);
+        const isAvailable = availableModels.some(
+          (model2) => model2.providerId === task.model.provider_id && model2.modelId === task.model.model_id
+        );
+        entry.onEvent({
+          type: "model_catalog",
+          summary: `ZCode runtime advertised ${availableModels.length} selectable model${availableModels.length === 1 ? "" : "s"}`,
+          details: {
+            session_id: sessionId,
+            workspace_path: workspace.canonicalPath,
+            requested_model: { provider_id: task.model.provider_id, model_id: task.model.model_id },
+            available_models: availableModels.slice(0, 100),
+            truncated: availableModels.length > 100
+          }
+        });
+        if (!isAvailable) {
+          const available = availableModels.length ? availableModels.slice(0, 30).map((model2) => `${model2.providerId}/${model2.modelId}`).join(", ") : "none";
+          throw new Error(
+            `Requested ZCode model ${requested} is not present in the app-server model registry. The runtime advertised ${availableModels.length} selectable model(s): ${available}. Account-backed models must be synchronized into the app-server before they can be selected.`
+          );
+        }
         const current = readSelectedModelSelection(snapshot);
         const modelState = current?.providerId === task.model.provider_id && current.modelId === task.model.model_id ? snapshot : asRecord(await client.request("session/setModel", {
           sessionId,
@@ -931,7 +952,8 @@ var ZCodeAppServerAdapter = class {
       });
       return { ...base, agentReport: parsed.report, reportError: null, errorCode: null };
     } catch (error) {
-      if (entry.child?.pid) await terminateProcessTree(entry.child.pid).catch(() => void 0);
+      if (entry.client) await entry.client.close().catch(() => void 0);
+      else if (entry.child?.pid) await terminateProcessTree(entry.child.pid).catch(() => void 0);
       entry.child = null;
       const baseMessage = error instanceof Error ? error.message : String(error);
       const runtimeStderr = entry.client?.stderr.trim();
@@ -1180,6 +1202,19 @@ function readSelectedModelSelection(snapshot) {
   const current = asRecord(modelSettings.current);
   if (typeof current.providerId !== "string" || typeof current.modelId !== "string") return null;
   return { providerId: current.providerId, modelId: current.modelId };
+}
+function readAvailableModels(snapshot) {
+  const settings = asRecord(snapshot.settings);
+  const modelSettings = asRecord(settings.model);
+  const available = Array.isArray(modelSettings.available) ? modelSettings.available : [];
+  const refs = /* @__PURE__ */ new Map();
+  for (const entry of available) {
+    const ref = asRecord(asRecord(entry).ref);
+    if (typeof ref.providerId !== "string" || typeof ref.modelId !== "string") continue;
+    const key = `${ref.providerId}\0${ref.modelId}`;
+    refs.set(key, { providerId: ref.providerId, modelId: ref.modelId });
+  }
+  return [...refs.values()];
 }
 function nestedString(record, path3) {
   let value = record;
