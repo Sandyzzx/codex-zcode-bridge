@@ -19,6 +19,7 @@ import { BridgeError } from "../runtime/errors.js";
 import { NodeRuntimeResolver } from "../runtime/resolver.js";
 import { terminateProcessTree } from "./process-spawn.js";
 import { createMinimalOsEnv } from "../runtime/child-env.js";
+import { accountProviderId, buildAccountProviderPayload, runtimeAuthReply, zcodeDataBaseDir } from "../runtime/account-provider.js";
 
 type ProgressEvent = { type: string; summary: string; details?: Record<string, unknown> };
 type ProgressSink = (event: ProgressEvent) => void;
@@ -222,6 +223,30 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       }, this.#timeoutMs);
       timer.unref();
 
+      const accountProviderPayload = buildAccountProviderPayload(config);
+      if (accountProviderPayload) {
+        try {
+          const syncResult = asRecord(await client.request(
+            "provider/updateAccountConfig",
+            accountProviderPayload as unknown as JsonRecord,
+          ));
+          entry.onEvent({
+            type: "account_provider_sync",
+            summary: `Synchronized ${Object.keys(accountProviderPayload.providers).length} ZCode account provider(s)`,
+            details: {
+              provider_count: Object.keys(accountProviderPayload.providers).length,
+              entitled_provider_count: Object.values(accountProviderPayload.states).filter((state) => state.entitled).length,
+              runtime_status: typeof syncResult.status === "string" ? syncResult.status : "accepted",
+            },
+          });
+        } catch (error) {
+          entry.onEvent({
+            type: "account_provider_sync_failed",
+            summary: error instanceof Error ? error.message : "ZCode account provider synchronization failed",
+          });
+        }
+      }
+
       let snapshot: JsonRecord;
       if (resumeSessionId) {
         snapshot = asRecord(await client.request("session/resume", {
@@ -243,10 +268,11 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       if (!sessionId) throw new Error("ZCode app-server session snapshot did not contain session.sessionId");
       entry.sessionId = sessionId;
       if (task.model) {
-        const requested = `${task.model.provider_id}/${task.model.model_id}`;
+        const requestedProviderId = accountProviderId(task.model.provider_id, config);
+        const requested = `${requestedProviderId}/${task.model.model_id}`;
         const availableModels = readAvailableModels(snapshot);
         const isAvailable = availableModels.some(
-          (model) => model.providerId === task.model!.provider_id && model.modelId === task.model!.model_id,
+          (model) => model.providerId === requestedProviderId && model.modelId === task.model!.model_id,
         );
         entry.onEvent({
           type: "model_catalog",
@@ -254,7 +280,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
           details: {
             session_id: sessionId,
             workspace_path: workspace.canonicalPath,
-            requested_model: { provider_id: task.model.provider_id, model_id: task.model.model_id },
+            requested_model: { provider_id: requestedProviderId, model_id: task.model.model_id },
             available_models: availableModels.slice(0, 100),
             truncated: availableModels.length > 100,
           },
@@ -272,15 +298,20 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         // session/create already selected this exact model. Keeping its
         // effective options is important for models requiring reasoningLevel.
         const current = readSelectedModelSelection(snapshot);
-        const modelState = current?.providerId === task.model.provider_id && current.modelId === task.model.model_id
+        const reasoningLevel = task.model.reasoning_level ?? readModelReasoningDefault(
+          snapshot,
+          requestedProviderId,
+          task.model.model_id,
+        );
+        const modelState = current?.providerId === requestedProviderId && current.modelId === task.model.model_id
           ? snapshot
           : asRecord(await client.request("session/setModel", {
               sessionId,
               model: {
-                providerId: task.model.provider_id,
+                providerId: requestedProviderId,
                 modelId: task.model.model_id,
-                ...(task.model.reasoning_level
-                  ? { options: { reasoningLevel: task.model.reasoning_level } }
+                ...(reasoningLevel
+                  ? { options: { reasoningLevel } }
                   : {}),
               },
               // Keep the override scoped to this session; do not change the
@@ -292,7 +323,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
           throw new Error(`ZCode accepted model override ${requested} but did not report the selected model`);
         }
         if (
-          selected.providerId !== task.model.provider_id ||
+          selected.providerId !== requestedProviderId ||
           selected.modelId !== task.model.model_id
         ) {
           throw new Error(
@@ -308,6 +339,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
             selected_model: entry.selectedModel,
             provider_id: selected.providerId,
             model_id: selected.modelId,
+            ...(reasoningLevel ? { reasoning_level: reasoningLevel } : {}),
           },
         });
       }
@@ -440,7 +472,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         if (!line) continue;
         try {
           const message = JSON.parse(line) as JsonRecord;
-          this.#handleMessage(message, entry, pending, (reply) => {
+          this.#handleMessage(message, entry, pending, config, (reply) => {
             child.stdin.write(`${JSON.stringify(reply)}\n`);
           });
         } catch (error) {
@@ -501,6 +533,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     message: JsonRecord,
     entry: RunEntry,
     pending: Map<string | number, PendingRpc>,
+    config: ZCodeRuntimeConfig,
     write: (message: JsonRecord) => void,
   ): void {
     if (message.method === "session/requestRuntimePreferences") {
@@ -514,6 +547,18 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
             askUserQuestionAutoResolutionEnabled: false,
           },
         });
+      }
+      return;
+    }
+    if (message.method === "interaction/requestProviderRuntimeHeaders") {
+      const id = message.id;
+      if (typeof id === "string" || typeof id === "number") {
+        const params = asRecord(message.params);
+        const selection = asRecord(params.modelSelection);
+        const providerId = typeof selection.providerId === "string"
+          ? selection.providerId
+          : typeof params.providerId === "string" ? params.providerId : undefined;
+        write({ id, result: runtimeAuthReply(providerId, config) });
       }
       return;
     }
@@ -621,6 +666,8 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     const env = createMinimalOsEnv(this.#childEnvBase);
     env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE = config.providerBuiltinConfigFile;
     env.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE = config.providerPersonalConfigFile;
+    const dataBaseDir = zcodeDataBaseDir(config.providerPersonalConfigFile);
+    if (dataBaseDir) env.ZCODE_DATA_BASE_DIR = dataBaseDir;
     return env;
   }
 
@@ -667,6 +714,27 @@ function readAvailableModels(snapshot: JsonRecord): Array<{ providerId: string; 
     refs.set(key, { providerId: ref.providerId, modelId: ref.modelId });
   }
   return [...refs.values()];
+}
+
+function readModelReasoningDefault(snapshot: JsonRecord, providerId: string, modelId: string): string | null {
+  const settings = asRecord(snapshot.settings);
+  const modelSettings = asRecord(settings.model);
+  const available = Array.isArray(modelSettings.available) ? modelSettings.available : [];
+  for (const item of available) {
+    const entry = asRecord(item);
+    const ref = asRecord(entry.ref);
+    if (ref.providerId !== providerId || ref.modelId !== modelId) continue;
+    const reasoning = asRecord(entry.reasoning);
+    if (typeof reasoning.defaultLevel === "string" && reasoning.defaultLevel.trim()) {
+      return reasoning.defaultLevel;
+    }
+    const levels = Array.isArray(reasoning.levels) ? reasoning.levels : [];
+    if (levels.length === 1) {
+      const value = asRecord(levels[0]).value;
+      if (typeof value === "string" && value.trim()) return value;
+    }
+  }
+  return null;
 }
 
 function nestedString(record: JsonRecord, path: string[]): string | null {

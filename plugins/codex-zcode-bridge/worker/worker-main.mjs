@@ -671,6 +671,122 @@ function createMinimalOsEnv(source) {
   return env;
 }
 
+// src/runtime/account-provider.ts
+import { createHash } from "node:crypto";
+import { existsSync as existsSync2, readFileSync as readFileSync2 } from "node:fs";
+import path2 from "node:path";
+function buildAccountProviderPayload(config) {
+  const table = readJson(config.providerBuiltinConfigFile);
+  const providerRules = readProviderRules(table).filter(isRecord).map((rule) => rule).filter((rule) => rule.config?.access?.type === "zhipu-account" && typeof rule.providerId === "string");
+  if (!providerRules.length) return null;
+  const dataDir = zcodeV2DataDir(config.providerPersonalConfigFile);
+  if (!dataDir) return null;
+  const credentials = readJson(path2.join(dataDir, "config.json"));
+  const credentialProviders = asRecord(credentials?.provider);
+  const cache = readJson(path2.join(dataDir, "coding-plan-cache.json"));
+  const cacheItems = asRecord(asRecord(cache?.entryStatus).items);
+  const providers = {};
+  const states = {};
+  for (const rule of providerRules) {
+    const providerId = rule.providerId;
+    const legacyId = configProviderId(providerId, rule);
+    const cacheStatus = asRecord(cacheItems[legacyId]).status;
+    const legacyConfig = asRecord(credentialProviders[legacyId]);
+    const options = asRecord(legacyConfig.options);
+    const entitled = cacheStatus === "available" || legacyConfig.enabled === true && typeof options.apiKey === "string" && options.apiKey.trim().length > 0;
+    providers[providerId] = {
+      ...Array.isArray(rule.config?.builtinModelIds) ? { builtinModelIds: rule.config.builtinModelIds } : {},
+      access: { type: "zhipu-account", entitled }
+    };
+    states[providerId] = {
+      availability: entitled ? "available" : "unavailable",
+      entitled,
+      current: entitled
+    };
+  }
+  const revision = typeof table?.revision === "number" ? table.revision : 0;
+  const resolvedBuiltinPath = path2.resolve(config.providerBuiltinConfigFile);
+  return {
+    revision: `account:codex-zcode-bridge:${Date.now()}`,
+    basedOnZCodeBuiltinRevision: `zcode-builtin:${revision}:${createHash("sha256").update(resolvedBuiltinPath).digest("hex")}`,
+    providers,
+    states
+  };
+}
+function accountProviderId(providerId, config) {
+  if (!providerId.startsWith("builtin:")) return providerId;
+  const table = readJson(config.providerBuiltinConfigFile);
+  for (const rawRule of readProviderRules(table)) {
+    if (!isRecord(rawRule)) continue;
+    const rule = rawRule;
+    if (typeof rule.providerId === "string" && configProviderId(rule.providerId, rule) === providerId) {
+      return rule.providerId;
+    }
+  }
+  return providerId;
+}
+function runtimeAuthReply(providerId, config) {
+  const unavailable = {
+    headersApplied: false,
+    errorMessage: "Start Plan requires a ZCode desktop captcha session; this headless app-server bridge cannot provide it."
+  };
+  if (!providerId?.startsWith("account:")) return unavailable;
+  const table = readJson(config.providerBuiltinConfigFile);
+  const rule = readProviderRules(table).find(
+    (candidate) => isRecord(candidate) && candidate.providerId === providerId
+  );
+  if (rule?.config?.access?.mode !== "individual-coding-plan") return unavailable;
+  const legacyId = configProviderId(providerId, rule);
+  const dataDir = zcodeV2DataDir(config.providerPersonalConfigFile);
+  if (!dataDir) return unavailable;
+  const credentials = readJson(path2.join(dataDir, "config.json"));
+  const cache = readJson(path2.join(dataDir, "coding-plan-cache.json"));
+  const status = asRecord(asRecord(asRecord(cache?.entryStatus).items)[legacyId]).status;
+  const provider = asRecord(asRecord(credentials?.provider)[legacyId]);
+  const options = asRecord(provider.options);
+  const apiKey = typeof options.apiKey === "string" ? options.apiKey.trim() : "";
+  if (!apiKey || status !== "available" && provider.enabled !== true) return unavailable;
+  return { headersApplied: true, requestAuth: { apiKey } };
+}
+function zcodeDataBaseDir(personalProviderConfigFile) {
+  const dataDir = zcodeV2DataDir(personalProviderConfigFile);
+  return dataDir ? path2.dirname(path2.dirname(dataDir)) : null;
+}
+function zcodeV2DataDir(personalProviderConfigFile) {
+  const absolute = path2.resolve(personalProviderConfigFile);
+  if (path2.basename(absolute).toLowerCase() !== "provider_config.json") return null;
+  const v2Dir = path2.dirname(absolute);
+  if (path2.basename(v2Dir).toLowerCase() !== "v2") return null;
+  const zcodeDir = path2.dirname(v2Dir);
+  if (path2.basename(zcodeDir).toLowerCase() !== ".zcode") return null;
+  return v2Dir;
+}
+function configProviderId(providerId, rule) {
+  const access = rule.config?.access;
+  if (!providerId.startsWith("account:") || !access?.accountType || !access.mode) return providerId;
+  const plan = access.mode === "individual-coding-plan" ? "coding-plan" : access.mode;
+  return `builtin:${access.accountType}-${plan}`;
+}
+function readProviderRules(table) {
+  const providerConfigRules = asRecord(asRecord(table?.config).providerConfigRules);
+  return Array.isArray(providerConfigRules.providerRules) ? providerConfigRules.providerRules : [];
+}
+function readJson(filePath) {
+  try {
+    if (!existsSync2(filePath)) return null;
+    const value = JSON.parse(readFileSync2(filePath, "utf8"));
+    return isRecord(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+function asRecord(value) {
+  return isRecord(value) ? value : {};
+}
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 // src/adapters/zcode-app-server-adapter.ts
 var DEFAULT_TIMEOUT_MS = 30 * 60 * 1e3;
 var RPC_TIMEOUT_MS = 3e4;
@@ -800,9 +916,32 @@ var ZCodeAppServerAdapter = class {
         entry.rejectTurn(new Error(`ZCode run exceeded ${this.#timeoutMs}ms wall-clock budget`));
       }, this.#timeoutMs);
       timer.unref();
+      const accountProviderPayload = buildAccountProviderPayload(config);
+      if (accountProviderPayload) {
+        try {
+          const syncResult = asRecord2(await client.request(
+            "provider/updateAccountConfig",
+            accountProviderPayload
+          ));
+          entry.onEvent({
+            type: "account_provider_sync",
+            summary: `Synchronized ${Object.keys(accountProviderPayload.providers).length} ZCode account provider(s)`,
+            details: {
+              provider_count: Object.keys(accountProviderPayload.providers).length,
+              entitled_provider_count: Object.values(accountProviderPayload.states).filter((state) => state.entitled).length,
+              runtime_status: typeof syncResult.status === "string" ? syncResult.status : "accepted"
+            }
+          });
+        } catch (error) {
+          entry.onEvent({
+            type: "account_provider_sync_failed",
+            summary: error instanceof Error ? error.message : "ZCode account provider synchronization failed"
+          });
+        }
+      }
       let snapshot;
       if (resumeSessionId) {
-        snapshot = asRecord(await client.request("session/resume", {
+        snapshot = asRecord2(await client.request("session/resume", {
           sessionId: resumeSessionId,
           workspace: { workspacePath: workspace.canonicalPath, workspaceKey: workspace.canonicalPath }
         }));
@@ -811,7 +950,7 @@ var ZCodeAppServerAdapter = class {
           throw new Error(`resume session mismatch: requested ${resumeSessionId}, runtime returned ${returnedId}`);
         }
       } else {
-        snapshot = asRecord(await client.request("session/create", {
+        snapshot = asRecord2(await client.request("session/create", {
           workspace: { workspacePath: workspace.canonicalPath, workspaceKey: workspace.canonicalPath },
           mode: "yolo",
           persistence: "immediate"
@@ -821,10 +960,11 @@ var ZCodeAppServerAdapter = class {
       if (!sessionId) throw new Error("ZCode app-server session snapshot did not contain session.sessionId");
       entry.sessionId = sessionId;
       if (task.model) {
-        const requested = `${task.model.provider_id}/${task.model.model_id}`;
+        const requestedProviderId = accountProviderId(task.model.provider_id, config);
+        const requested = `${requestedProviderId}/${task.model.model_id}`;
         const availableModels = readAvailableModels(snapshot);
         const isAvailable = availableModels.some(
-          (model2) => model2.providerId === task.model.provider_id && model2.modelId === task.model.model_id
+          (model2) => model2.providerId === requestedProviderId && model2.modelId === task.model.model_id
         );
         entry.onEvent({
           type: "model_catalog",
@@ -832,7 +972,7 @@ var ZCodeAppServerAdapter = class {
           details: {
             session_id: sessionId,
             workspace_path: workspace.canonicalPath,
-            requested_model: { provider_id: task.model.provider_id, model_id: task.model.model_id },
+            requested_model: { provider_id: requestedProviderId, model_id: task.model.model_id },
             available_models: availableModels.slice(0, 100),
             truncated: availableModels.length > 100
           }
@@ -844,12 +984,17 @@ var ZCodeAppServerAdapter = class {
           );
         }
         const current = readSelectedModelSelection(snapshot);
-        const modelState = current?.providerId === task.model.provider_id && current.modelId === task.model.model_id ? snapshot : asRecord(await client.request("session/setModel", {
+        const reasoningLevel = task.model.reasoning_level ?? readModelReasoningDefault(
+          snapshot,
+          requestedProviderId,
+          task.model.model_id
+        );
+        const modelState = current?.providerId === requestedProviderId && current.modelId === task.model.model_id ? snapshot : asRecord2(await client.request("session/setModel", {
           sessionId,
           model: {
-            providerId: task.model.provider_id,
+            providerId: requestedProviderId,
             modelId: task.model.model_id,
-            ...task.model.reasoning_level ? { options: { reasoningLevel: task.model.reasoning_level } } : {}
+            ...reasoningLevel ? { options: { reasoningLevel } } : {}
           },
           // Keep the override scoped to this session; do not change the
           // user's project-wide last-used model.
@@ -859,7 +1004,7 @@ var ZCodeAppServerAdapter = class {
         if (!selected) {
           throw new Error(`ZCode accepted model override ${requested} but did not report the selected model`);
         }
-        if (selected.providerId !== task.model.provider_id || selected.modelId !== task.model.model_id) {
+        if (selected.providerId !== requestedProviderId || selected.modelId !== task.model.model_id) {
           throw new Error(
             `ZCode model override mismatch: requested ${requested}, runtime selected ${selected.providerId}/${selected.modelId}`
           );
@@ -872,7 +1017,8 @@ var ZCodeAppServerAdapter = class {
             requested_model: requested,
             selected_model: entry.selectedModel,
             provider_id: selected.providerId,
-            model_id: selected.modelId
+            model_id: selected.modelId,
+            ...reasoningLevel ? { reasoning_level: reasoningLevel } : {}
           }
         });
       }
@@ -994,7 +1140,7 @@ var ZCodeAppServerAdapter = class {
         if (!line) continue;
         try {
           const message = JSON.parse(line);
-          this.#handleMessage(message, entry, pending, (reply) => {
+          this.#handleMessage(message, entry, pending, config, (reply) => {
             child.stdin.write(`${JSON.stringify(reply)}
 `);
           });
@@ -1056,7 +1202,7 @@ var ZCodeAppServerAdapter = class {
       return stderr;
     } };
   }
-  #handleMessage(message, entry, pending, write) {
+  #handleMessage(message, entry, pending, config, write) {
     if (message.method === "session/requestRuntimePreferences") {
       const id = message.id;
       if (typeof id === "string" || typeof id === "number") {
@@ -1068,6 +1214,16 @@ var ZCodeAppServerAdapter = class {
             askUserQuestionAutoResolutionEnabled: false
           }
         });
+      }
+      return;
+    }
+    if (message.method === "interaction/requestProviderRuntimeHeaders") {
+      const id = message.id;
+      if (typeof id === "string" || typeof id === "number") {
+        const params = asRecord2(message.params);
+        const selection = asRecord2(params.modelSelection);
+        const providerId = typeof selection.providerId === "string" ? selection.providerId : typeof params.providerId === "string" ? params.providerId : void 0;
+        write({ id, result: runtimeAuthReply(providerId, config) });
       }
       return;
     }
@@ -1086,26 +1242,26 @@ var ZCodeAppServerAdapter = class {
       return;
     }
     if (message.method === "session/event") {
-      const params = asRecord(message.params);
+      const params = asRecord2(message.params);
       if (typeof params.seq === "number") entry.lastEventSeq = params.seq;
       const type = typeof params.type === "string" ? params.type : "";
-      const payload = asRecord(params.payload);
+      const payload = asRecord2(params.payload);
       this.#publishSessionEvent(type, payload, entry);
       if (type === "turn.completed") {
         entry.resolveTurn({
           response: typeof payload.response === "string" ? payload.response : "",
-          usage: isRecord(payload.usage) ? payload.usage : null,
+          usage: isRecord2(payload.usage) ? payload.usage : null,
           resultType: typeof payload.resultType === "string" ? payload.resultType : null
         });
       } else if (type === "turn.failed") {
-        const problem = asRecord(payload.error);
+        const problem = asRecord2(payload.error);
         entry.rejectTurn(new Error(typeof problem.message === "string" ? problem.message : "ZCode turn failed"));
       }
       return;
     }
     if (message.method === "state.updated") {
-      const params = asRecord(message.params);
-      const patch = asRecord(params.patch);
+      const params = asRecord2(message.params);
+      const patch = asRecord2(params.patch);
       const state = typeof patch.status === "string" ? patch.status : void 0;
       if (state) entry.onEvent({ type: "runtime_state", summary: `ZCode runtime state: ${state}` });
       return;
@@ -1158,11 +1314,11 @@ var ZCodeAppServerAdapter = class {
         details: {
           ...typeof payload.tokenCount === "number" ? { token_count: payload.tokenCount } : {},
           ...typeof payload.toolCallCount === "number" ? { tool_call_count: payload.toolCallCount } : {},
-          ...isRecord(payload.usage) ? { usage: payload.usage } : {}
+          ...isRecord2(payload.usage) ? { usage: payload.usage } : {}
         }
       });
     } else if (type === "turn.failed") {
-      const problem = asRecord(payload.error);
+      const problem = asRecord2(payload.error);
       entry.onEvent({
         type: "turn_failed",
         summary: typeof problem.message === "string" ? problem.message : "ZCode turn failed"
@@ -1173,6 +1329,8 @@ var ZCodeAppServerAdapter = class {
     const env = createMinimalOsEnv(this.#childEnvBase);
     env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE = config.providerBuiltinConfigFile;
     env.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE = config.providerPersonalConfigFile;
+    const dataBaseDir = zcodeDataBaseDir(config.providerPersonalConfigFile);
+    if (dataBaseDir) env.ZCODE_DATA_BASE_DIR = dataBaseDir;
     return env;
   }
   #require(handle, method) {
@@ -1182,54 +1340,74 @@ var ZCodeAppServerAdapter = class {
   }
 };
 function readSelectedModel(snapshot) {
-  const settings = asRecord(snapshot.settings);
-  const modelSettings = asRecord(settings.model);
-  const current = asRecord(modelSettings.current);
+  const settings = asRecord2(snapshot.settings);
+  const modelSettings = asRecord2(settings.model);
+  const current = asRecord2(modelSettings.current);
   const modelId = typeof current.modelId === "string" ? current.modelId : null;
   const providerId = typeof current.providerId === "string" ? current.providerId : null;
   if (!modelId) return null;
   const available = Array.isArray(modelSettings.available) ? modelSettings.available : [];
   const match = available.find((entry) => {
-    const ref = asRecord(asRecord(entry).ref);
+    const ref = asRecord2(asRecord2(entry).ref);
     return ref.modelId === modelId && (providerId === null || ref.providerId === providerId);
   });
-  const label = match && typeof asRecord(match).label === "string" ? asRecord(match).label : modelId;
+  const label = match && typeof asRecord2(match).label === "string" ? asRecord2(match).label : modelId;
   return providerId ? `${label} (${providerId}/${modelId})` : label;
 }
 function readSelectedModelSelection(snapshot) {
-  const settings = asRecord(snapshot.settings);
-  const modelSettings = asRecord(settings.model);
-  const current = asRecord(modelSettings.current);
+  const settings = asRecord2(snapshot.settings);
+  const modelSettings = asRecord2(settings.model);
+  const current = asRecord2(modelSettings.current);
   if (typeof current.providerId !== "string" || typeof current.modelId !== "string") return null;
   return { providerId: current.providerId, modelId: current.modelId };
 }
 function readAvailableModels(snapshot) {
-  const settings = asRecord(snapshot.settings);
-  const modelSettings = asRecord(settings.model);
+  const settings = asRecord2(snapshot.settings);
+  const modelSettings = asRecord2(settings.model);
   const available = Array.isArray(modelSettings.available) ? modelSettings.available : [];
   const refs = /* @__PURE__ */ new Map();
   for (const entry of available) {
-    const ref = asRecord(asRecord(entry).ref);
+    const ref = asRecord2(asRecord2(entry).ref);
     if (typeof ref.providerId !== "string" || typeof ref.modelId !== "string") continue;
     const key = `${ref.providerId}\0${ref.modelId}`;
     refs.set(key, { providerId: ref.providerId, modelId: ref.modelId });
   }
   return [...refs.values()];
 }
-function nestedString(record, path3) {
+function readModelReasoningDefault(snapshot, providerId, modelId) {
+  const settings = asRecord2(snapshot.settings);
+  const modelSettings = asRecord2(settings.model);
+  const available = Array.isArray(modelSettings.available) ? modelSettings.available : [];
+  for (const item of available) {
+    const entry = asRecord2(item);
+    const ref = asRecord2(entry.ref);
+    if (ref.providerId !== providerId || ref.modelId !== modelId) continue;
+    const reasoning = asRecord2(entry.reasoning);
+    if (typeof reasoning.defaultLevel === "string" && reasoning.defaultLevel.trim()) {
+      return reasoning.defaultLevel;
+    }
+    const levels = Array.isArray(reasoning.levels) ? reasoning.levels : [];
+    if (levels.length === 1) {
+      const value = asRecord2(levels[0]).value;
+      if (typeof value === "string" && value.trim()) return value;
+    }
+  }
+  return null;
+}
+function nestedString(record, path4) {
   let value = record;
-  for (const part of path3) value = asRecord(value)[part];
+  for (const part of path4) value = asRecord2(value)[part];
   return typeof value === "string" ? value : null;
 }
-function nestedNumber(record, path3) {
+function nestedNumber(record, path4) {
   let value = record;
-  for (const part of path3) value = asRecord(value)[part];
+  for (const part of path4) value = asRecord2(value)[part];
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
-function asRecord(value) {
-  return isRecord(value) ? value : {};
+function asRecord2(value) {
+  return isRecord2(value) ? value : {};
 }
-function isRecord(value) {
+function isRecord2(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -1312,9 +1490,9 @@ function truncate(text, maxChars) {
 }
 
 // src/store/task-store.ts
-import { appendFileSync, chmodSync, existsSync as existsSync2, mkdirSync, readFileSync as readFileSync2, readdirSync, renameSync, rmSync, rmdirSync, statSync as statSync2, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync as existsSync3, mkdirSync, readFileSync as readFileSync3, readdirSync, renameSync, rmSync, rmdirSync, statSync as statSync2, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import path2 from "node:path";
+import path3 from "node:path";
 var TASK_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 var DEFAULT_MAX_LOG_BYTES = 10 * 1024 * 1024;
 var TaskStore = class {
@@ -1324,7 +1502,7 @@ var TaskStore = class {
   #maxEventBytes;
   constructor(dataRoot2, options = {}) {
     this.#dataRoot = dataRoot2;
-    this.#tasksRoot = path2.join(dataRoot2, ".tasks");
+    this.#tasksRoot = path3.join(dataRoot2, ".tasks");
     this.#maxLogBytes = options.maxLogBytes ?? DEFAULT_MAX_LOG_BYTES;
     this.#maxEventBytes = options.maxEventBytes ?? DEFAULT_MAX_LOG_BYTES;
     privateMkdir(this.#tasksRoot);
@@ -1342,29 +1520,29 @@ var TaskStore = class {
   }
   taskDir(taskId2) {
     this.assertValidTaskId(taskId2);
-    return path2.join(this.#tasksRoot, taskId2);
+    return path3.join(this.#tasksRoot, taskId2);
   }
   hasTask(taskId2) {
     try {
-      return existsSync2(path2.join(this.taskDir(taskId2), "status.json"));
+      return existsSync3(path3.join(this.taskDir(taskId2), "status.json"));
     } catch {
       return false;
     }
   }
   listTaskIds() {
-    if (!existsSync2(this.#tasksRoot)) return [];
+    if (!existsSync3(this.#tasksRoot)) return [];
     return readdirSync(this.#tasksRoot).filter(
-      (entry) => existsSync2(path2.join(this.#tasksRoot, entry, "status.json"))
+      (entry) => existsSync3(path3.join(this.#tasksRoot, entry, "status.json"))
     );
   }
   createTask(task, createdAt) {
     this.assertValidTaskId(task.task_id);
     const dir = this.taskDir(task.task_id);
-    if (existsSync2(path2.join(dir, "task.json"))) {
+    if (existsSync3(path3.join(dir, "task.json"))) {
       throw new Error(`task already exists: ${task.task_id}`);
     }
-    privateMkdir(path2.join(dir, "attempts"));
-    this.#writeJsonAtomic(path2.join(dir, "task.json"), task);
+    privateMkdir(path3.join(dir, "attempts"));
+    this.#writeJsonAtomic(path3.join(dir, "task.json"), task);
     const status = {
       task_id: task.task_id,
       status: "queued",
@@ -1377,23 +1555,23 @@ var TaskStore = class {
       zcode_session_id: null,
       exit_code: null
     };
-    this.#writeJsonAtomic(path2.join(dir, "status.json"), status);
+    this.#writeJsonAtomic(path3.join(dir, "status.json"), status);
   }
   readTask(taskId2) {
-    const file = path2.join(this.taskDir(taskId2), "task.json");
+    const file = path3.join(this.taskDir(taskId2), "task.json");
     const parsed = this.#readJson(file);
     return parsed;
   }
   writeWorkspaceRef(taskId2, workspace) {
-    this.#writeJsonAtomic(path2.join(this.taskDir(taskId2), "workspace.json"), workspace);
+    this.#writeJsonAtomic(path3.join(this.taskDir(taskId2), "workspace.json"), workspace);
   }
   readWorkspaceRef(taskId2) {
-    const file = path2.join(this.taskDir(taskId2), "workspace.json");
-    if (!existsSync2(file)) return null;
+    const file = path3.join(this.taskDir(taskId2), "workspace.json");
+    if (!existsSync3(file)) return null;
     return this.#readJson(file);
   }
   readStatus(taskId2) {
-    const file = path2.join(this.taskDir(taskId2), "status.json");
+    const file = path3.join(this.taskDir(taskId2), "status.json");
     const parsed = this.#readJson(file);
     if (typeof parsed?.status !== "string") {
       throw new Error(`corrupt status record: ${file}`);
@@ -1409,60 +1587,60 @@ var TaskStore = class {
       task_id: current.task_id,
       updated_at: (/* @__PURE__ */ new Date()).toISOString()
     };
-    this.#writeJsonAtomic(path2.join(this.taskDir(taskId2), "status.json"), next);
+    this.#writeJsonAtomic(path3.join(this.taskDir(taskId2), "status.json"), next);
     return next;
   }
   readResult(taskId2) {
-    const file = path2.join(this.taskDir(taskId2), "result.json");
-    if (!existsSync2(file)) return null;
+    const file = path3.join(this.taskDir(taskId2), "result.json");
+    if (!existsSync3(file)) return null;
     return this.#readJson(file);
   }
   writeResult(taskId2, result) {
-    this.#writeJsonAtomic(path2.join(this.taskDir(taskId2), "result.json"), result);
+    this.#writeJsonAtomic(path3.join(this.taskDir(taskId2), "result.json"), result);
   }
   /** Moves the current terminal result.json to attempts/<attempt>/result.json. */
   archiveResultToAttempt(taskId2, attempt) {
     const dir = this.taskDir(taskId2);
-    const source = path2.join(dir, "result.json");
-    if (!existsSync2(source)) return;
+    const source = path3.join(dir, "result.json");
+    if (!existsSync3(source)) return;
     const targetDir = this.attemptDir(taskId2, attempt);
     privateMkdir(targetDir);
-    renameSync(source, path2.join(targetDir, "result.json"));
+    renameSync(source, path3.join(targetDir, "result.json"));
   }
   readArchivedResult(taskId2, attempt) {
-    const file = path2.join(this.attemptDir(taskId2, attempt), "result.json");
-    if (!existsSync2(file)) return null;
+    const file = path3.join(this.attemptDir(taskId2, attempt), "result.json");
+    if (!existsSync3(file)) return null;
     return this.#readJson(file);
   }
   attemptDir(taskId2, attempt) {
-    return path2.join(this.taskDir(taskId2), "attempts", String(attempt));
+    return path3.join(this.taskDir(taskId2), "attempts", String(attempt));
   }
   writeAttemptFile(taskId2, attempt, fileName, content) {
     const dir = this.attemptDir(taskId2, attempt);
     privateMkdir(dir);
-    this.#writeTextAtomic(path2.join(dir, fileName), content);
+    this.#writeTextAtomic(path3.join(dir, fileName), content);
   }
   writeAttemptMeta(taskId2, attempt, fileName, meta) {
     const dir = this.attemptDir(taskId2, attempt);
     privateMkdir(dir);
-    this.#writeJsonAtomic(path2.join(dir, fileName), meta);
+    this.#writeJsonAtomic(path3.join(dir, fileName), meta);
   }
   readAttemptMeta(taskId2, attempt, fileName) {
-    const file = path2.join(this.attemptDir(taskId2, attempt), fileName);
-    if (!existsSync2(file)) return null;
+    const file = path3.join(this.attemptDir(taskId2, attempt), fileName);
+    if (!existsSync3(file)) return null;
     return this.#readJson(file);
   }
   readAttemptText(taskId2, attempt, fileName) {
-    const file = path2.join(this.attemptDir(taskId2, attempt), fileName);
-    if (!existsSync2(file)) return null;
-    return readFileSync2(file, "utf8");
+    const file = path3.join(this.attemptDir(taskId2, attempt), fileName);
+    if (!existsSync3(file)) return null;
+    return readFileSync3(file, "utf8");
   }
   /** Append-only, byte-bounded. Returns whether the chunk was truncated. */
   appendLog(taskId2, kind, text) {
     if (!text) return { truncated: false };
     const dir = this.taskDir(taskId2);
     privateMkdir(dir);
-    const file = path2.join(dir, `${kind}.log`);
+    const file = path3.join(dir, `${kind}.log`);
     let currentBytes = 0;
     try {
       currentBytes = statSync2(file).size;
@@ -1477,29 +1655,29 @@ var TaskStore = class {
     return { truncated: bytes.length > room };
   }
   readLog(taskId2, kind) {
-    const file = path2.join(this.taskDir(taskId2), `${kind}.log`);
-    return existsSync2(file) ? readFileSync2(file, "utf8") : "";
+    const file = path3.join(this.taskDir(taskId2), `${kind}.log`);
+    return existsSync3(file) ? readFileSync3(file, "utf8") : "";
   }
   appendEvent(taskId2, type, summary, details, at = (/* @__PURE__ */ new Date()).toISOString()) {
     const dir = this.taskDir(taskId2);
     mkdirSync(dir, { recursive: true });
-    const lockDir = path2.join(dir, "events.lock");
+    const lockDir = path3.join(dir, "events.lock");
     return withEventLock(lockDir, () => {
-      const file = path2.join(dir, "events.jsonl");
-      const seqFile = path2.join(dir, "events.seq");
+      const file = path3.join(dir, "events.jsonl");
+      const seqFile = path3.join(dir, "events.seq");
       let bytes = 0;
       let previousSeq = 0;
       let needsSeparator = false;
       try {
         const info = statSync2(file);
         bytes = info.size;
-        const lastByte = bytes > 0 ? readFileSync2(file).at(-1) : void 0;
+        const lastByte = bytes > 0 ? readFileSync3(file).at(-1) : void 0;
         needsSeparator = bytes > 0 && lastByte !== 10;
       } catch {
         bytes = 0;
       }
       try {
-        previousSeq = Number.parseInt(readFileSync2(seqFile, "utf8"), 10) || 0;
+        previousSeq = Number.parseInt(readFileSync3(seqFile, "utf8"), 10) || 0;
       } catch {
         previousSeq = readLastEventSeq(file);
       }
@@ -1521,10 +1699,10 @@ var TaskStore = class {
     });
   }
   readEvents(taskId2, afterSeq = 0, limit = 100) {
-    const file = path2.join(this.taskDir(taskId2), "events.jsonl");
-    if (!existsSync2(file)) return { events: [], nextSeq: afterSeq, hasMore: false };
+    const file = path3.join(this.taskDir(taskId2), "events.jsonl");
+    if (!existsSync3(file)) return { events: [], nextSeq: afterSeq, hasMore: false };
     const all = [];
-    for (const line of readFileSync2(file, "utf8").split(/\r?\n/u)) {
+    for (const line of readFileSync3(file, "utf8").split(/\r?\n/u)) {
       if (!line) continue;
       try {
         const event = JSON.parse(line);
@@ -1540,7 +1718,7 @@ var TaskStore = class {
     };
   }
   #readJson(file) {
-    return JSON.parse(readFileSync2(file, "utf8"));
+    return JSON.parse(readFileSync3(file, "utf8"));
   }
   #writeJsonAtomic(file, value) {
     this.#writeTextAtomic(file, JSON.stringify(value, null, 2));
@@ -1600,8 +1778,8 @@ function privateFile(file) {
   if (process.platform !== "win32") chmodSync(file, 384);
 }
 function readLastEventSeq(file) {
-  if (!existsSync2(file)) return 0;
-  for (const line of readFileSync2(file, "utf8").trimEnd().split("\n").reverse()) {
+  if (!existsSync3(file)) return 0;
+  for (const line of readFileSync3(file, "utf8").trimEnd().split("\n").reverse()) {
     try {
       const event = JSON.parse(line);
       if (Number.isInteger(event.seq)) return event.seq;
