@@ -1077,6 +1077,7 @@ var ZCodeAppServerAdapter = class {
   #timeoutMs;
   #childEnvBase;
   #now;
+  #resolveInteraction;
   #runs = /* @__PURE__ */ new Map();
   #workspaceByTask = /* @__PURE__ */ new Map();
   constructor(options = {}) {
@@ -1085,6 +1086,7 @@ var ZCodeAppServerAdapter = class {
     this.#timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.#childEnvBase = options.childEnvBase ?? process.env;
     this.#now = options.now ?? (() => /* @__PURE__ */ new Date());
+    this.#resolveInteraction = options.resolveInteraction;
   }
   async startTask(input) {
     return this.#launch(input.task, input.workspace, input.attempt, buildTaskPrompt(input.task), null);
@@ -1162,7 +1164,8 @@ var ZCodeAppServerAdapter = class {
       onEvent: this.#onEvent,
       textOutputStarted: false,
       selectedModel: null,
-      lastEventSeq: 0
+      lastEventSeq: 0,
+      interactions: /* @__PURE__ */ new Map()
     };
     this.#runs.set(handle, entry);
     this.#workspaceByTask.set(task.task_id, workspace.canonicalPath);
@@ -1558,6 +1561,12 @@ var ZCodeAppServerAdapter = class {
       }
       return;
     }
+    if (message.method === "interaction/requestPermission" || message.method === "interaction/requestUserInput") {
+      if (typeof message.id === "string" || typeof message.id === "number") {
+        this.#handleInteractionRequest(message, entry, write);
+      }
+      return;
+    }
     if (message.id !== void 0 && message.method === void 0) {
       const id = message.id;
       const call = pending.get(id);
@@ -1600,6 +1609,59 @@ var ZCodeAppServerAdapter = class {
     if (message.id !== void 0 && typeof message.method === "string") {
       write({ id: message.id, error: { code: -32601, message: `Unsupported ZCode app-server request: ${message.method}` } });
     }
+  }
+  #handleInteractionRequest(message, entry, write) {
+    const rpcId = message.id;
+    const method = message.method;
+    const params = asRecord2(message.params);
+    const suppliedId = typeof params.requestId === "string" ? params.requestId : "";
+    const requestId = suppliedId || `rpc-${String(rpcId)}`;
+    const paramsSignature = stableSerialize(params);
+    let pending = entry.interactions.get(requestId);
+    if (pending) {
+      if (pending.method !== method || pending.paramsSignature !== paramsSignature) {
+        write({ id: rpcId, result: interactionDecline(method, "Conflicting ZCode interaction request id") });
+        entry.onEvent({
+          type: "interaction_request_conflict",
+          summary: "ZCode reused an interaction request id with different request data; the conflicting request was declined",
+          details: { request_id: requestId, method }
+        });
+        return;
+      }
+      if (!pending.requestIds.includes(rpcId)) pending.requestIds.push(rpcId);
+      if (pending.response) write({ id: rpcId, result: pending.response });
+      return;
+    }
+    pending = { requestIds: [rpcId], method, paramsSignature, resolving: true };
+    entry.interactions.set(requestId, pending);
+    const request = { request_id: requestId, method, params };
+    const fallback = interactionDecline(method, "Bridge interaction reply is unavailable");
+    void (async () => {
+      let response = fallback;
+      try {
+        if (this.#resolveInteraction) response = await this.#resolveInteraction(request);
+      } catch (error) {
+        const messageText = error instanceof Error ? error.message : String(error);
+        entry.onEvent({
+          type: "interaction_reply_failed",
+          summary: `Could not deliver Codex's response to ZCode: ${messageText}`.slice(0, 1500),
+          details: { request_id: requestId, method }
+        });
+      }
+      pending.response = response;
+      pending.resolving = false;
+      for (const id of pending.requestIds) write({ id, result: response });
+      entry.onEvent({
+        type: "interaction_replied",
+        summary: `Codex replied to ZCode ${method === "interaction/requestPermission" ? "permission request" : "user input request"}`,
+        details: { request_id: requestId, method }
+      });
+      while (entry.interactions.size > 128) {
+        const oldest = entry.interactions.keys().next().value;
+        if (!oldest || entry.interactions.get(oldest)?.resolving) break;
+        entry.interactions.delete(oldest);
+      }
+    })();
   }
   #publishSessionEvent(type, payload, entry) {
     if (type === "turn.started") {
@@ -1671,6 +1733,9 @@ var ZCodeAppServerAdapter = class {
     return entry;
   }
 };
+function interactionDecline(method, reason) {
+  return method === "interaction/requestPermission" ? { decision: "deny", reason } : { action: "decline", reason };
+}
 function readSelectedModel(snapshot) {
   const settings = asRecord2(snapshot.settings);
   const modelSettings = asRecord2(settings.model);
@@ -1757,6 +1822,13 @@ function reportDesktopIndexIssue(onEvent, error) {
 function isRecord2(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+function stableSerialize(value) {
+  if (Array.isArray(value)) return `[${value.map(stableSerialize).join(",")}]`;
+  if (isRecord2(value)) {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableSerialize(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "undefined";
+}
 
 // src/manager/normalize.ts
 function buildTaskResult(input) {
@@ -1838,7 +1910,7 @@ function truncate(text, maxChars) {
 
 // src/store/task-store.ts
 import { appendFileSync, chmodSync, existsSync as existsSync4, mkdirSync, readFileSync as readFileSync3, readdirSync, renameSync, rmSync, rmdirSync, statSync as statSync2, writeFileSync } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { createHash as createHash2, randomUUID } from "node:crypto";
 import path3 from "node:path";
 var TASK_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 var DEFAULT_MAX_LOG_BYTES = 10 * 1024 * 1024;
@@ -2064,6 +2136,58 @@ var TaskStore = class {
       hasMore: all.length > events.length
     };
   }
+  writeInteractionRequest(taskId2, request, createdAt = (/* @__PURE__ */ new Date()).toISOString()) {
+    const directory = path3.join(this.taskDir(taskId2), "interactions");
+    privateMkdir(directory);
+    const file = this.interactionFile(taskId2, request.request_id);
+    return withEventLock(path3.join(this.taskDir(taskId2), "interactions.lock"), () => {
+      if (existsSync4(file)) {
+        const record2 = this.#readJson(file);
+        if (record2.request_id !== request.request_id || record2.method !== request.method) {
+          throw new Error("interaction request id collision");
+        }
+        return { record: record2, created: false };
+      }
+      if (Buffer.byteLength(JSON.stringify(request.params), "utf8") > 32e3) {
+        throw new Error("ZCode interaction request exceeded the 32 KB persistence limit");
+      }
+      const record = {
+        ...request,
+        state: "pending",
+        created_at: createdAt
+      };
+      this.#writeJsonAtomic(file, record);
+      return { record, created: true };
+    });
+  }
+  readInteractionRequest(taskId2, requestId) {
+    const file = this.interactionFile(taskId2, requestId);
+    if (!existsSync4(file)) return null;
+    const record = this.#readJson(file);
+    if (record.request_id !== requestId) throw new Error("interaction request id hash mismatch");
+    return record;
+  }
+  answerInteractionRequest(taskId2, requestId, answer, answeredAt = (/* @__PURE__ */ new Date()).toISOString()) {
+    const file = this.interactionFile(taskId2, requestId);
+    return withEventLock(path3.join(this.taskDir(taskId2), "interactions.lock"), () => {
+      if (!existsSync4(file)) throw new Error(`unknown ZCode interaction request: ${requestId}`);
+      const current = this.#readJson(file);
+      if (current.request_id !== requestId) throw new Error("interaction request id hash mismatch");
+      if (current.state === "answered") return "already_answered";
+      this.#writeJsonAtomic(file, {
+        ...current,
+        state: "answered",
+        answer,
+        answered_at: answeredAt
+      });
+      return "answered";
+    });
+  }
+  interactionFile(taskId2, requestId) {
+    if (!requestId || requestId.length > 512) throw new Error("invalid ZCode interaction request_id");
+    const key = createHash2("sha256").update(requestId).digest("hex");
+    return path3.join(this.taskDir(taskId2), "interactions", `${key}.json`);
+  }
   #readJson(file) {
     return JSON.parse(readFileSync3(file, "utf8"));
   }
@@ -2187,6 +2311,29 @@ async function runWorkerTask(options) {
         store.appendEvent(taskId2, event.type, event.summary, event.details);
         const sessionId = event.type === "session_ready" ? event.details?.["session_id"] : void 0;
         if (typeof sessionId === "string") store.writeStatus(taskId2, { zcode_session_id: sessionId });
+      },
+      resolveInteraction: async (request) => {
+        const safeRequest = sanitizeInteractionRequest(request);
+        const { record, created } = store.writeInteractionRequest(taskId2, safeRequest, now().toISOString());
+        if (created) {
+          const interactionEvent = store.appendEvent(
+            taskId2,
+            "interaction_requested",
+            interactionSummary(safeRequest),
+            { ...publicInteractionDetails(safeRequest) },
+            record.created_at
+          );
+          if (!interactionEvent) {
+            const fallback = interactionDecline2(request.method, "Bridge could not publish this request to Codex");
+            store.answerInteractionRequest(taskId2, request.request_id, fallback, now().toISOString());
+            return fallback;
+          }
+        }
+        while (true) {
+          const current = store.readInteractionRequest(taskId2, request.request_id);
+          if (current?.state === "answered" && current.answer) return current.answer;
+          await sleep2(250);
+        }
       }
     });
     const workspaceRef = store.readWorkspaceRef(taskId2) ?? {
@@ -2265,6 +2412,53 @@ async function runWorkerTask(options) {
     error: result.status === "failed" ? result.summary : null
   });
   return { status: result.status, result };
+}
+function interactionSummary(request) {
+  const params = request.params;
+  if (request.method === "interaction/requestPermission") {
+    const toolName = typeof params.toolName === "string" ? params.toolName : "tool";
+    const reason = typeof params.reason === "string" ? `: ${params.reason}` : "";
+    return `ZCode is waiting for Codex to decide whether ${toolName} may proceed${reason}`;
+  }
+  if (asRecord3(params.schema).interaction === "plan_approval") {
+    return "ZCode is waiting for Codex to approve or reject its plan";
+  }
+  return "ZCode is waiting for Codex to answer a question";
+}
+function publicInteractionDetails(request) {
+  const params = request.params;
+  const details = {
+    request_id: request.request_id,
+    method: request.method,
+    ...typeof params.sessionId === "string" ? { session_id: params.sessionId } : {},
+    ...typeof params.toolCallId === "string" ? { tool_call_id: params.toolCallId } : {}
+  };
+  for (const key of ["toolName", "reason", "input", "options", "schema", "questions"]) {
+    if (params[key] !== void 0) details[key] = params[key];
+  }
+  if (details["questions"] === void 0 && Array.isArray(asRecord3(params.input).questions)) {
+    details["questions"] = asRecord3(params.input).questions;
+  }
+  return details;
+}
+function sanitizeInteractionRequest(request) {
+  const params = {};
+  for (const key of ["sessionId", "toolCallId", "toolName", "reason", "input", "options", "schema", "questions"]) {
+    if (request.params[key] !== void 0) params[key] = request.params[key];
+  }
+  if (params["questions"] === void 0 && Array.isArray(asRecord3(params["input"]).questions)) {
+    params["questions"] = asRecord3(params["input"]).questions;
+  }
+  return { request_id: request.request_id, method: request.method, params };
+}
+function interactionDecline2(method, reason) {
+  return method === "interaction/requestPermission" ? { decision: "deny", reason } : { action: "decline" };
+}
+function asRecord3(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
+}
+function sleep2(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // src/worker/worker-main.ts

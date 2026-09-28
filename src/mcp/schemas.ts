@@ -49,6 +49,14 @@ export const zcodeEventsInputSchema = z.strictObject({
   wait_ms: z.number().int().min(0).max(25_000).optional(),
 });
 
+export const zcodeInteractionReplyInputSchema = z.strictObject({
+  task_id: taskIdSchema,
+  request_id: z.string().trim().min(1).max(512),
+  decision: z.enum(["allow", "deny", "accept", "decline"]),
+  answers: z.record(z.string(), z.string()).optional(),
+  reason: z.string().max(2_000).optional(),
+});
+
 // ---- output schemas (structured content validation) ----
 
 const testReportSchema = z.object({

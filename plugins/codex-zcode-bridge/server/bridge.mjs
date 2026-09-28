@@ -21608,7 +21608,7 @@ function isPlainObject3(value) {
 
 // src/store/task-store.ts
 import { appendFileSync, chmodSync, existsSync as existsSync2, mkdirSync, readFileSync as readFileSync2, readdirSync, renameSync, rmSync, rmdirSync, statSync as statSync2, writeFileSync } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import path2 from "node:path";
 var TASK_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 var DEFAULT_MAX_LOG_BYTES = 10 * 1024 * 1024;
@@ -21833,6 +21833,58 @@ var TaskStore = class {
       nextSeq: events.at(-1)?.seq ?? afterSeq,
       hasMore: all.length > events.length
     };
+  }
+  writeInteractionRequest(taskId, request, createdAt = (/* @__PURE__ */ new Date()).toISOString()) {
+    const directory = path2.join(this.taskDir(taskId), "interactions");
+    privateMkdir(directory);
+    const file = this.interactionFile(taskId, request.request_id);
+    return withEventLock(path2.join(this.taskDir(taskId), "interactions.lock"), () => {
+      if (existsSync2(file)) {
+        const record3 = this.#readJson(file);
+        if (record3.request_id !== request.request_id || record3.method !== request.method) {
+          throw new Error("interaction request id collision");
+        }
+        return { record: record3, created: false };
+      }
+      if (Buffer.byteLength(JSON.stringify(request.params), "utf8") > 32e3) {
+        throw new Error("ZCode interaction request exceeded the 32 KB persistence limit");
+      }
+      const record2 = {
+        ...request,
+        state: "pending",
+        created_at: createdAt
+      };
+      this.#writeJsonAtomic(file, record2);
+      return { record: record2, created: true };
+    });
+  }
+  readInteractionRequest(taskId, requestId) {
+    const file = this.interactionFile(taskId, requestId);
+    if (!existsSync2(file)) return null;
+    const record2 = this.#readJson(file);
+    if (record2.request_id !== requestId) throw new Error("interaction request id hash mismatch");
+    return record2;
+  }
+  answerInteractionRequest(taskId, requestId, answer, answeredAt = (/* @__PURE__ */ new Date()).toISOString()) {
+    const file = this.interactionFile(taskId, requestId);
+    return withEventLock(path2.join(this.taskDir(taskId), "interactions.lock"), () => {
+      if (!existsSync2(file)) throw new Error(`unknown ZCode interaction request: ${requestId}`);
+      const current = this.#readJson(file);
+      if (current.request_id !== requestId) throw new Error("interaction request id hash mismatch");
+      if (current.state === "answered") return "already_answered";
+      this.#writeJsonAtomic(file, {
+        ...current,
+        state: "answered",
+        answer,
+        answered_at: answeredAt
+      });
+      return "answered";
+    });
+  }
+  interactionFile(taskId, requestId) {
+    if (!requestId || requestId.length > 512) throw new Error("invalid ZCode interaction request_id");
+    const key = createHash("sha256").update(requestId).digest("hex");
+    return path2.join(this.taskDir(taskId), "interactions", `${key}.json`);
   }
   #readJson(file) {
     return JSON.parse(readFileSync2(file, "utf8"));
@@ -22439,6 +22491,34 @@ var BridgeTaskManager = class {
       return result;
     });
   }
+  async replyToInteraction(input) {
+    return this.#exclusive(async () => {
+      this.#requireTask(input.task_id);
+      if (typeof input.request_id !== "string" || !input.request_id.trim() || input.request_id.length > 512) {
+        throw new TaskManagerError("TASK_INVALID", "request_id must be a non-empty string up to 512 characters");
+      }
+      const status = this.#store.readStatus(input.task_id);
+      if (status.status !== "running") {
+        throw new TaskManagerError("TASK_STATE", `ZCode interaction can only be answered while the task is running (status: ${status.status})`);
+      }
+      const record2 = this.#store.readInteractionRequest(input.task_id, input.request_id);
+      if (!record2) throw new TaskManagerError("TASK_NOT_FOUND", `unknown ZCode interaction request: ${input.request_id}`);
+      if (record2.state === "answered") {
+        throw new TaskManagerError("TASK_STATE", `ZCode interaction request ${input.request_id} was already answered`);
+      }
+      const answer = buildInteractionAnswer(record2, input);
+      const state = this.#store.answerInteractionRequest(input.task_id, input.request_id, answer, this.#now().toISOString());
+      if (state !== "answered") {
+        throw new TaskManagerError("TASK_STATE", `ZCode interaction request ${input.request_id} was already answered`);
+      }
+      this.#store.appendEvent(input.task_id, "interaction_reply_submitted", "Codex submitted a response to the ZCode interaction", {
+        request_id: input.request_id,
+        method: record2.method,
+        decision: input.decision
+      });
+      return { task_id: input.task_id, request_id: input.request_id, state: "answered" };
+    });
+  }
   async continueTask(input) {
     return this.#exclusive(async () => {
       const taskId = input.task_id;
@@ -22772,6 +22852,57 @@ function pathsOverlap(left, right) {
   const inside = (value) => value === "" || !path4.isAbsolute(value) && value !== ".." && !value.startsWith(`..${path4.sep}`);
   return inside(relative) || inside(reverse);
 }
+function buildInteractionAnswer(record2, input) {
+  const params = record2.params;
+  if (record2.method === "interaction/requestPermission") {
+    if (input.decision !== "allow" && input.decision !== "deny") {
+      throw new TaskManagerError("TASK_INVALID", "permission requests require decision allow or deny");
+    }
+    if (input.decision === "allow") {
+      const options = Array.isArray(params.options) ? params.options : [];
+      const canAllow = options.some((option) => {
+        const item = asRecord(option);
+        return typeof item.kind === "string" && item.kind.startsWith("allow");
+      });
+      if (!canAllow) throw new TaskManagerError("TASK_INVALID", "ZCode did not offer an allow option for this request");
+    }
+    return {
+      decision: input.decision,
+      ...input.decision === "deny" ? { reason: boundedReason(input.reason) } : {}
+    };
+  }
+  if (input.decision !== "accept" && input.decision !== "decline") {
+    throw new TaskManagerError("TASK_INVALID", "user input requests require decision accept or decline");
+  }
+  if (input.decision === "decline") return { action: "decline" };
+  if (asRecord(params.schema).interaction === "plan_approval") {
+    return { action: "accept", content: { answer_0: "approve" } };
+  }
+  const rawQuestions = Array.isArray(params.questions) ? params.questions : Array.isArray(asRecord(params.input).questions) ? asRecord(params.input).questions : [];
+  const validQuestions = rawQuestions.map(asRecord).filter((question) => typeof question.question === "string").map((question) => question.question);
+  if (!validQuestions.length) throw new TaskManagerError("TASK_INVALID", "ZCode request has no supported questions");
+  const answers = input.answers ?? {};
+  const answerKeys = Object.keys(answers);
+  if (!answerKeys.length) throw new TaskManagerError("TASK_INVALID", "accepting an AskUserQuestion requires answers");
+  if (answerKeys.some((question) => !validQuestions.includes(question))) {
+    throw new TaskManagerError("TASK_INVALID", "answers must be keyed by the exact ZCode question text");
+  }
+  for (const [question, value] of Object.entries(answers)) {
+    if (!value.trim() || value.length > 4e3) {
+      throw new TaskManagerError("TASK_INVALID", `answer for '${question.slice(0, 80)}' must be non-empty and at most 4000 characters`);
+    }
+  }
+  if (Buffer.byteLength(JSON.stringify(answers), "utf8") > 16e3) {
+    throw new TaskManagerError("TASK_INVALID", "combined ZCode answers exceed the 16 KB limit");
+  }
+  return { action: "accept", content: { answers } };
+}
+function boundedReason(reason) {
+  return (reason?.trim() || "Codex declined this request").slice(0, 2e3);
+}
+function asRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
+}
 function sleep3(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -22813,6 +22944,13 @@ var zcodeEventsInputSchema = strictObject({
   after_seq: number2().int().nonnegative().optional(),
   limit: number2().int().min(1).max(200).optional(),
   wait_ms: number2().int().min(0).max(25e3).optional()
+});
+var zcodeInteractionReplyInputSchema = strictObject({
+  task_id: taskIdSchema,
+  request_id: string2().trim().min(1).max(512),
+  decision: _enum(["allow", "deny", "accept", "decline"]),
+  answers: record(string2(), string2()).optional(),
+  reason: string2().max(2e3).optional()
 });
 var testReportSchema = object({
   command: string2(),
@@ -22938,13 +23076,25 @@ function createBridgeServer(options) {
     "zcode_events",
     {
       title: "Read live ZCode execution events",
-      description: "Read persisted progress events for a task. Immediately after submission, report the project path, effective execution path (and worktree path when supplied), and queued/running state from the first events. Keep polling until turn_started or startup failure; before longer monitoring, report the ZCode session, runtime-reported selected model, and execution mode. Set after_seq to the last next_seq returned and wait_ms up to 25000. Hidden reasoning and raw tool arguments are excluded.",
+      description: "Read persisted progress events for a task. Immediately after submission, report the project path, effective execution path (and worktree path when supplied), and queued/running state from the first events. Keep polling until turn_started or startup failure; before longer monitoring, report the ZCode session, runtime-reported selected model, and execution mode. Set after_seq to the last next_seq returned and wait_ms up to 25000. Hidden reasoning is excluded. interaction_requested events include bounded tool/request details needed for a deliberate permission or input decision.",
       inputSchema: zcodeEventsInputSchema,
       outputSchema: taskProgressPageSchema
     },
     async (args) => {
       if (!manager.getEvents) return errorResult("EVENTS_UNAVAILABLE", "task manager does not provide progress events");
       return runTool(() => manager.getEvents(args));
+    }
+  );
+  server.registerTool(
+    "zcode_interaction_reply",
+    {
+      title: "Reply to a ZCode permission or input request",
+      description: "Reply to a pending ZCode permission or user-input request surfaced by zcode_events. For permission requests, use allow only when the user explicitly authorized the requested action; otherwise deny or ask the user. Do not infer permission from task instructions, worktree use, or ZCode mode. For user-input requests, answer only from known facts or the user's explicit direction. This tool does not approve the task result.",
+      inputSchema: zcodeInteractionReplyInputSchema
+    },
+    async (args) => {
+      if (!manager.replyToInteraction) return errorResult("INTERACTIONS_UNAVAILABLE", "task manager does not provide ZCode interaction replies");
+      return runTool(() => manager.replyToInteraction(args));
     }
   );
   server.registerTool(

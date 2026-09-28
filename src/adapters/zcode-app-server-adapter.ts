@@ -10,6 +10,7 @@ import type {
   TaskPackage,
   TaskResult,
   WorkspaceRef,
+  ZCodeInteractionRequest,
   ZCodeRuntimeConfig,
 } from "../interfaces.js";
 import { parseAgentReport } from "./agent-report.js";
@@ -31,6 +32,14 @@ interface PendingRpc {
   resolve(value: unknown): void;
   reject(error: Error): void;
   timer: NodeJS.Timeout;
+}
+
+interface PendingInteraction {
+  readonly requestIds: Array<string | number>;
+  readonly method: ZCodeInteractionRequest["method"];
+  readonly paramsSignature: string;
+  response?: Record<string, unknown>;
+  resolving: boolean;
 }
 
 interface AppServerClient {
@@ -57,6 +66,7 @@ interface RunEntry {
   textOutputStarted: boolean;
   selectedModel: string | null;
   lastEventSeq: number;
+  readonly interactions: Map<string, PendingInteraction>;
 }
 
 export interface ZCodeAppServerAdapterOptions {
@@ -65,6 +75,7 @@ export interface ZCodeAppServerAdapterOptions {
   timeoutMs?: number;
   childEnvBase?: NodeJS.ProcessEnv;
   now?: () => Date;
+  resolveInteraction?: (request: ZCodeInteractionRequest) => Promise<Record<string, unknown>>;
 }
 
 const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
@@ -73,8 +84,8 @@ const MAX_CAPTURE_CHARS = 2_000_000;
 
 /**
  * Runs one task in a ZCode app-server session and persists safe progress
- * events through onEvent. Only visible text deltas are emitted; reasoning and
- * raw tool input/output are deliberately excluded.
+ * events through onEvent. Only visible text deltas and bounded interaction
+ * requests are emitted; hidden reasoning and tool outputs are excluded.
  */
 export class ZCodeAppServerAdapter implements CodingAgentAdapter {
   readonly #resolver: RuntimeResolver;
@@ -82,6 +93,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
   readonly #timeoutMs: number;
   readonly #childEnvBase: NodeJS.ProcessEnv;
   readonly #now: () => Date;
+  readonly #resolveInteraction: ((request: ZCodeInteractionRequest) => Promise<Record<string, unknown>>) | undefined;
   readonly #runs = new Map<AgentHandle, RunEntry>();
   readonly #workspaceByTask = new Map<string, string>();
 
@@ -91,6 +103,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     this.#timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.#childEnvBase = options.childEnvBase ?? process.env;
     this.#now = options.now ?? (() => new Date());
+    this.#resolveInteraction = options.resolveInteraction;
   }
 
   async startTask(input: { task: TaskPackage; workspace: WorkspaceRef; attempt: number }): Promise<AgentHandle> {
@@ -189,6 +202,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       textOutputStarted: false,
       selectedModel: null,
       lastEventSeq: 0,
+      interactions: new Map(),
     };
     this.#runs.set(handle, entry);
     this.#workspaceByTask.set(task.task_id, workspace.canonicalPath);
@@ -617,6 +631,12 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       }
       return;
     }
+    if (message.method === "interaction/requestPermission" || message.method === "interaction/requestUserInput") {
+      if (typeof message.id === "string" || typeof message.id === "number") {
+        this.#handleInteractionRequest(message, entry, write);
+      }
+      return;
+    }
     if (message.id !== undefined && message.method === undefined) {
       const id = message.id as string | number;
       const call = pending.get(id);
@@ -659,6 +679,64 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     if (message.id !== undefined && typeof message.method === "string") {
       write({ id: message.id, error: { code: -32601, message: `Unsupported ZCode app-server request: ${message.method}` } });
     }
+  }
+
+  #handleInteractionRequest(
+    message: JsonRecord,
+    entry: RunEntry,
+    write: (message: JsonRecord) => void,
+  ): void {
+    const rpcId = message.id as string | number;
+    const method = message.method as ZCodeInteractionRequest["method"];
+    const params = asRecord(message.params);
+    const suppliedId = typeof params.requestId === "string" ? params.requestId : "";
+    const requestId = suppliedId || `rpc-${String(rpcId)}`;
+    const paramsSignature = stableSerialize(params);
+    let pending = entry.interactions.get(requestId);
+    if (pending) {
+      if (pending.method !== method || pending.paramsSignature !== paramsSignature) {
+        write({ id: rpcId, result: interactionDecline(method, "Conflicting ZCode interaction request id") });
+        entry.onEvent({
+          type: "interaction_request_conflict",
+          summary: "ZCode reused an interaction request id with different request data; the conflicting request was declined",
+          details: { request_id: requestId, method },
+        });
+        return;
+      }
+      if (!pending.requestIds.includes(rpcId)) pending.requestIds.push(rpcId);
+      if (pending.response) write({ id: rpcId, result: pending.response });
+      return;
+    }
+    pending = { requestIds: [rpcId], method, paramsSignature, resolving: true };
+    entry.interactions.set(requestId, pending);
+    const request: ZCodeInteractionRequest = { request_id: requestId, method, params };
+    const fallback = interactionDecline(method, "Bridge interaction reply is unavailable");
+    void (async () => {
+      let response = fallback;
+      try {
+        if (this.#resolveInteraction) response = await this.#resolveInteraction(request);
+      } catch (error) {
+        const messageText = error instanceof Error ? error.message : String(error);
+        entry.onEvent({
+          type: "interaction_reply_failed",
+          summary: `Could not deliver Codex's response to ZCode: ${messageText}`.slice(0, 1_500),
+          details: { request_id: requestId, method },
+        });
+      }
+      pending!.response = response;
+      pending!.resolving = false;
+      for (const id of pending!.requestIds) write({ id, result: response });
+      entry.onEvent({
+        type: "interaction_replied",
+        summary: `Codex replied to ZCode ${method === "interaction/requestPermission" ? "permission request" : "user input request"}`,
+        details: { request_id: requestId, method },
+      });
+      while (entry.interactions.size > 128) {
+        const oldest = entry.interactions.keys().next().value as string | undefined;
+        if (!oldest || entry.interactions.get(oldest)?.resolving) break;
+        entry.interactions.delete(oldest);
+      }
+    })();
   }
 
   #publishSessionEvent(type: string, payload: JsonRecord, entry: RunEntry): void {
@@ -732,6 +810,15 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     if (!entry) throw new Error(`${method}: unknown agent handle (task ${handle.taskId})`);
     return entry;
   }
+}
+
+function interactionDecline(
+  method: ZCodeInteractionRequest["method"],
+  reason: string,
+): Record<string, unknown> {
+  return method === "interaction/requestPermission"
+    ? { decision: "deny", reason }
+    : { action: "decline", reason };
 }
 
 function readSelectedModel(snapshot: JsonRecord): string | null {
@@ -832,4 +919,12 @@ function reportDesktopIndexIssue(onEvent: ProgressSink, error: unknown): void {
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stableSerialize(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableSerialize).join(",")}]`;
+  if (isRecord(value)) {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableSerialize(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "undefined";
 }

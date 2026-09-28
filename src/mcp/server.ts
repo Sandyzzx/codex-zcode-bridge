@@ -16,6 +16,7 @@ import type {
   TaskReceipt,
   TaskResult,
   TaskStatusRecord,
+  ZCodeInteractionReplyInput,
 } from "../interfaces.js";
 import { TaskManagerError } from "../manager/errors.js";
 import {
@@ -26,6 +27,7 @@ import {
   zcodeContinueInputSchema,
   zcodeEventsInputSchema,
   zcodeTaskInputSchema,
+  zcodeInteractionReplyInputSchema,
   taskProgressPageSchema,
 } from "./schemas.js";
 
@@ -33,7 +35,7 @@ export const SERVER_NAME = "codex-zcode-bridge";
 export const SERVER_VERSION = "0.5.0"; // x-release-please-version
 
 export interface BridgeServerOptions {
-  taskManager: TaskManager & Partial<Pick<ProgressTaskManager, "getEvents">>;
+  taskManager: TaskManager & Partial<Pick<ProgressTaskManager, "getEvents" | "replyToInteraction">>;
   serverInfo?: { name: string; version: string };
 }
 
@@ -98,7 +100,7 @@ export function createBridgeServer(options: BridgeServerOptions): McpServer {
     "zcode_events",
     {
       title: "Read live ZCode execution events",
-      description: "Read persisted progress events for a task. Immediately after submission, report the project path, effective execution path (and worktree path when supplied), and queued/running state from the first events. Keep polling until turn_started or startup failure; before longer monitoring, report the ZCode session, runtime-reported selected model, and execution mode. Set after_seq to the last next_seq returned and wait_ms up to 25000. Hidden reasoning and raw tool arguments are excluded.",
+      description: "Read persisted progress events for a task. Immediately after submission, report the project path, effective execution path (and worktree path when supplied), and queued/running state from the first events. Keep polling until turn_started or startup failure; before longer monitoring, report the ZCode session, runtime-reported selected model, and execution mode. Set after_seq to the last next_seq returned and wait_ms up to 25000. Hidden reasoning is excluded. interaction_requested events include bounded tool/request details needed for a deliberate permission or input decision.",
       inputSchema: zcodeEventsInputSchema,
       outputSchema: taskProgressPageSchema,
     },
@@ -106,6 +108,19 @@ export function createBridgeServer(options: BridgeServerOptions): McpServer {
         if (!manager.getEvents) return errorResult("EVENTS_UNAVAILABLE", "task manager does not provide progress events");
         return runTool(() => manager.getEvents!(args));
       },
+  );
+
+  server.registerTool(
+    "zcode_interaction_reply",
+    {
+      title: "Reply to a ZCode permission or input request",
+      description: "Reply to a pending ZCode permission or user-input request surfaced by zcode_events. For permission requests, use allow only when the user explicitly authorized the requested action; otherwise deny or ask the user. Do not infer permission from task instructions, worktree use, or ZCode mode. For user-input requests, answer only from known facts or the user's explicit direction. This tool does not approve the task result.",
+      inputSchema: zcodeInteractionReplyInputSchema,
+    },
+    async (args: ZCodeInteractionReplyInput) => {
+      if (!manager.replyToInteraction) return errorResult("INTERACTIONS_UNAVAILABLE", "task manager does not provide ZCode interaction replies");
+      return runTool(() => manager.replyToInteraction!(args));
+    },
   );
 
   server.registerTool(

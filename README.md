@@ -67,8 +67,8 @@ ZCode Desktop 的 Workspace 视图按 Codex 项目目录查找任务。
 - Git worktree 只隔离工作目录，不是操作系统沙箱；`allowed_paths` 和 `forbidden_paths` 是任务约束说明，不能阻止进程访问其他文件或执行命令。
 - 是否创建 worktree 由 Codex 根据任务决定；Bridge 使用传入的项目目录和可选 worktree 路径，不替用户创建或删除 worktree。
 - 并行任务会增加本机资源占用和 provider 并发使用。
-- Bridge 将 prompt、状态、日志、可见模型输出、事件和结果保存在本机 `~/.codex/codex-zcode-bridge/`（Windows 为 `%USERPROFILE%\.codex\codex-zcode-bridge\`）。请勿在任务或工作区中放入不应发送给所选模型服务的凭据或数据。
-- Bridge 使用本机 ZCode app-server；权限交互及可用事件受已安装的 ZCode 版本影响。当前尚未验证将逐项权限审批转发回 Codex。
+- Bridge 将 prompt、状态、日志、可见模型输出、事件和结果保存在本机 `~/.codex/codex-zcode-bridge/`（Windows 为 `%USERPROFILE%\.codex\codex-zcode-bridge\`）；等待审批时还会保存必要的工具输入。请勿在任务或工作区中放入不应发送给所选模型服务或持久化到本机的数据。
+- Bridge 使用本机 ZCode app-server；交互请求是否出现及协议字段受已安装的 ZCode 版本影响。Bridge 会通过 `interaction_requested` 事件将权限或用户输入请求交给 Codex，再用 `zcode_interaction_reply` 回答。AskUserQuestion 的 `answers` 以每个问题的完整 `question` 文本为键、答案为值，不能用表头或选项标签作键；真实 ZCode 用户输入往返已验证，真实权限审批往返尚未验证。权限请求只应在用户明确授权后放行。
 
 ## 源码构建
 

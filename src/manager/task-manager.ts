@@ -16,6 +16,7 @@ import type {
   TaskResult,
   TaskStatusRecord,
   WorkspaceProvider,
+  ZCodeInteractionReplyInput,
 } from "../interfaces.js";
 import path from "node:path";
 import { isTerminalStatus, TaskStore, toPublicStatus } from "../store/task-store.js";
@@ -208,6 +209,35 @@ export class BridgeTaskManager implements ProgressTaskManager {
         );
       }
       return result;
+    });
+  }
+
+  async replyToInteraction(input: ZCodeInteractionReplyInput): Promise<{ task_id: string; request_id: string; state: "answered" }> {
+    return this.#exclusive(async () => {
+      this.#requireTask(input.task_id);
+      if (typeof input.request_id !== "string" || !input.request_id.trim() || input.request_id.length > 512) {
+        throw new TaskManagerError("TASK_INVALID", "request_id must be a non-empty string up to 512 characters");
+      }
+      const status = this.#store.readStatus(input.task_id);
+      if (status.status !== "running") {
+        throw new TaskManagerError("TASK_STATE", `ZCode interaction can only be answered while the task is running (status: ${status.status})`);
+      }
+      const record = this.#store.readInteractionRequest(input.task_id, input.request_id);
+      if (!record) throw new TaskManagerError("TASK_NOT_FOUND", `unknown ZCode interaction request: ${input.request_id}`);
+      if (record.state === "answered") {
+        throw new TaskManagerError("TASK_STATE", `ZCode interaction request ${input.request_id} was already answered`);
+      }
+      const answer = buildInteractionAnswer(record, input);
+      const state = this.#store.answerInteractionRequest(input.task_id, input.request_id, answer, this.#now().toISOString());
+      if (state !== "answered") {
+        throw new TaskManagerError("TASK_STATE", `ZCode interaction request ${input.request_id} was already answered`);
+      }
+      this.#store.appendEvent(input.task_id, "interaction_reply_submitted", "Codex submitted a response to the ZCode interaction", {
+        request_id: input.request_id,
+        method: record.method,
+        decision: input.decision,
+      });
+      return { task_id: input.task_id, request_id: input.request_id, state: "answered" };
     });
   }
 
@@ -588,6 +618,72 @@ function pathsOverlap(left: string, right: string): boolean {
   const reverse = path.relative(right, left);
   const inside = (value: string): boolean => value === "" || (!path.isAbsolute(value) && value !== ".." && !value.startsWith(`..${path.sep}`));
   return inside(relative) || inside(reverse);
+}
+
+function buildInteractionAnswer(
+  record: import("../interfaces.js").ZCodeInteractionRecord,
+  input: ZCodeInteractionReplyInput,
+): Record<string, unknown> {
+  const params = record.params;
+  if (record.method === "interaction/requestPermission") {
+    if (input.decision !== "allow" && input.decision !== "deny") {
+      throw new TaskManagerError("TASK_INVALID", "permission requests require decision allow or deny");
+    }
+    if (input.decision === "allow") {
+      const options = Array.isArray(params.options) ? params.options : [];
+      const canAllow = options.some((option) => {
+        const item = asRecord(option);
+        return typeof item.kind === "string" && item.kind.startsWith("allow");
+      });
+      if (!canAllow) throw new TaskManagerError("TASK_INVALID", "ZCode did not offer an allow option for this request");
+    }
+    return {
+      decision: input.decision,
+      ...(input.decision === "deny" ? { reason: boundedReason(input.reason) } : {}),
+    };
+  }
+
+  if (input.decision !== "accept" && input.decision !== "decline") {
+    throw new TaskManagerError("TASK_INVALID", "user input requests require decision accept or decline");
+  }
+  if (input.decision === "decline") return { action: "decline" };
+  if (asRecord(params.schema).interaction === "plan_approval") {
+    return { action: "accept", content: { answer_0: "approve" } };
+  }
+
+  const rawQuestions = Array.isArray(params.questions)
+    ? params.questions
+    : Array.isArray(asRecord(params.input).questions) ? asRecord(params.input).questions as unknown[] : [];
+  const validQuestions = rawQuestions
+    .map(asRecord)
+    .filter((question) => typeof question.question === "string")
+    .map((question) => question.question as string);
+  if (!validQuestions.length) throw new TaskManagerError("TASK_INVALID", "ZCode request has no supported questions");
+  const answers = input.answers ?? {};
+  const answerKeys = Object.keys(answers);
+  if (!answerKeys.length) throw new TaskManagerError("TASK_INVALID", "accepting an AskUserQuestion requires answers");
+  if (answerKeys.some((question) => !validQuestions.includes(question))) {
+    throw new TaskManagerError("TASK_INVALID", "answers must be keyed by the exact ZCode question text");
+  }
+  for (const [question, value] of Object.entries(answers)) {
+    if (!value.trim() || value.length > 4_000) {
+      throw new TaskManagerError("TASK_INVALID", `answer for '${question.slice(0, 80)}' must be non-empty and at most 4000 characters`);
+    }
+  }
+  if (Buffer.byteLength(JSON.stringify(answers), "utf8") > 16_000) {
+    throw new TaskManagerError("TASK_INVALID", "combined ZCode answers exceed the 16 KB limit");
+  }
+  return { action: "accept", content: { answers } };
+}
+
+function boundedReason(reason: string | undefined): string {
+  return (reason?.trim() || "Codex declined this request").slice(0, 2_000);
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
 }
 
 function sleep(ms: number): Promise<void> {

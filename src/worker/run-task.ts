@@ -9,6 +9,7 @@ import type {
   RuntimeResolver,
   TaskResult,
   WorkspaceRef,
+  ZCodeInteractionRequest,
 } from "../interfaces.js";
 import { ZCodeAppServerAdapter } from "../adapters/zcode-app-server-adapter.js";
 import type { ZCodeRunOutcome } from "../adapters/zcode-adapter.js";
@@ -111,6 +112,29 @@ export async function runWorkerTask(options: RunWorkerTaskOptions): Promise<RunW
         const sessionId = event.type === "session_ready" ? event.details?.["session_id"] : undefined;
         if (typeof sessionId === "string") store.writeStatus(taskId, { zcode_session_id: sessionId });
       },
+      resolveInteraction: async (request) => {
+        const safeRequest = sanitizeInteractionRequest(request);
+        const { record, created } = store.writeInteractionRequest(taskId, safeRequest, now().toISOString());
+        if (created) {
+          const interactionEvent = store.appendEvent(
+            taskId,
+            "interaction_requested",
+            interactionSummary(safeRequest),
+            { ...publicInteractionDetails(safeRequest) },
+            record.created_at,
+          );
+          if (!interactionEvent) {
+            const fallback = interactionDecline(request.method, "Bridge could not publish this request to Codex");
+            store.answerInteractionRequest(taskId, request.request_id, fallback, now().toISOString());
+            return fallback;
+          }
+        }
+        while (true) {
+          const current = store.readInteractionRequest(taskId, request.request_id);
+          if (current?.state === "answered" && current.answer) return current.answer;
+          await sleep(250);
+        }
+      },
     });
     const workspaceRef: WorkspaceRef = store.readWorkspaceRef(taskId) ?? {
       requestedPath: task.workspace,
@@ -196,4 +220,61 @@ export async function runWorkerTask(options: RunWorkerTaskOptions): Promise<RunW
     error: result.status === "failed" ? result.summary : null,
   });
   return { status: result.status, result };
+}
+
+function interactionSummary(request: ZCodeInteractionRequest): string {
+  const params = request.params;
+  if (request.method === "interaction/requestPermission") {
+    const toolName = typeof params.toolName === "string" ? params.toolName : "tool";
+    const reason = typeof params.reason === "string" ? `: ${params.reason}` : "";
+    return `ZCode is waiting for Codex to decide whether ${toolName} may proceed${reason}`;
+  }
+  if (asRecord(params.schema).interaction === "plan_approval") {
+    return "ZCode is waiting for Codex to approve or reject its plan";
+  }
+  return "ZCode is waiting for Codex to answer a question";
+}
+
+function publicInteractionDetails(request: ZCodeInteractionRequest): Record<string, unknown> {
+  const params = request.params;
+  const details: Record<string, unknown> = {
+    request_id: request.request_id,
+    method: request.method,
+    ...(typeof params.sessionId === "string" ? { session_id: params.sessionId } : {}),
+    ...(typeof params.toolCallId === "string" ? { tool_call_id: params.toolCallId } : {}),
+  };
+  for (const key of ["toolName", "reason", "input", "options", "schema", "questions"] as const) {
+    if (params[key] !== undefined) details[key] = params[key];
+  }
+  if (details["questions"] === undefined && Array.isArray(asRecord(params.input).questions)) {
+    details["questions"] = asRecord(params.input).questions;
+  }
+  return details;
+}
+
+function sanitizeInteractionRequest(request: ZCodeInteractionRequest): ZCodeInteractionRequest {
+  const params: Record<string, unknown> = {};
+  for (const key of ["sessionId", "toolCallId", "toolName", "reason", "input", "options", "schema", "questions"] as const) {
+    if (request.params[key] !== undefined) params[key] = request.params[key];
+  }
+  if (params["questions"] === undefined && Array.isArray(asRecord(params["input"]).questions)) {
+    params["questions"] = asRecord(params["input"]).questions;
+  }
+  return { request_id: request.request_id, method: request.method, params };
+}
+
+function interactionDecline(method: ZCodeInteractionRequest["method"], reason: string): Record<string, unknown> {
+  return method === "interaction/requestPermission"
+    ? { decision: "deny", reason }
+    : { action: "decline" };
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

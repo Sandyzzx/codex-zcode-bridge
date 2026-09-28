@@ -2,12 +2,14 @@
 // <dataRoot>/.tasks/<task_id>/ — task.json, status.json, append-only bounded
 // stdout.log / stderr.log, terminal result.json, and immutable per-attempt
 // records under attempts/. JSON writes are atomic (temp file + rename). Full
-// child environments and credentials are never persisted; only paths, statuses,
-// and bounded task evidence live here.
+// child environments and provider config files are never persisted; bounded
+// task evidence and pending interaction decisions live here. Permission
+// request details may contain tool inputs and are persisted so the Master can
+// inspect them and answer after a worker restart.
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, rmdirSync, statSync, writeFileSync } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
-import type { TaskPackage, TaskProgressEvent, TaskResult, TaskStatus, TaskStatusRecord, WorkspaceRef } from "../interfaces.js";
+import type { TaskPackage, TaskProgressEvent, TaskResult, TaskStatus, TaskStatusRecord, WorkspaceRef, ZCodeInteractionRecord, ZCodeInteractionRequest } from "../interfaces.js";
 
 /** status.json shape: the frozen TaskStatusRecord plus internal fields. */
 export interface InternalTaskStatus extends Omit<TaskStatusRecord, "error_code" | "error"> {
@@ -284,6 +286,71 @@ export class TaskStore {
       nextSeq: events.at(-1)?.seq ?? afterSeq,
       hasMore: all.length > events.length,
     };
+  }
+
+  writeInteractionRequest(
+    taskId: string,
+    request: ZCodeInteractionRequest,
+    createdAt = new Date().toISOString(),
+  ): { record: ZCodeInteractionRecord; created: boolean } {
+    const directory = path.join(this.taskDir(taskId), "interactions");
+    privateMkdir(directory);
+    const file = this.interactionFile(taskId, request.request_id);
+    return withEventLock(path.join(this.taskDir(taskId), "interactions.lock"), () => {
+      if (existsSync(file)) {
+        const record = this.#readJson(file) as ZCodeInteractionRecord;
+        if (record.request_id !== request.request_id || record.method !== request.method) {
+          throw new Error("interaction request id collision");
+        }
+        return { record, created: false };
+      }
+      if (Buffer.byteLength(JSON.stringify(request.params), "utf8") > 32_000) {
+        throw new Error("ZCode interaction request exceeded the 32 KB persistence limit");
+      }
+      const record: ZCodeInteractionRecord = {
+        ...request,
+        state: "pending",
+        created_at: createdAt,
+      };
+      this.#writeJsonAtomic(file, record);
+      return { record, created: true };
+    });
+  }
+
+  readInteractionRequest(taskId: string, requestId: string): ZCodeInteractionRecord | null {
+    const file = this.interactionFile(taskId, requestId);
+    if (!existsSync(file)) return null;
+    const record = this.#readJson(file) as ZCodeInteractionRecord;
+    if (record.request_id !== requestId) throw new Error("interaction request id hash mismatch");
+    return record;
+  }
+
+  answerInteractionRequest(
+    taskId: string,
+    requestId: string,
+    answer: Record<string, unknown>,
+    answeredAt = new Date().toISOString(),
+  ): "answered" | "already_answered" {
+    const file = this.interactionFile(taskId, requestId);
+    return withEventLock(path.join(this.taskDir(taskId), "interactions.lock"), () => {
+      if (!existsSync(file)) throw new Error(`unknown ZCode interaction request: ${requestId}`);
+      const current = this.#readJson(file) as ZCodeInteractionRecord;
+      if (current.request_id !== requestId) throw new Error("interaction request id hash mismatch");
+      if (current.state === "answered") return "already_answered";
+      this.#writeJsonAtomic(file, {
+        ...current,
+        state: "answered",
+        answer,
+        answered_at: answeredAt,
+      } satisfies ZCodeInteractionRecord);
+      return "answered";
+    });
+  }
+
+  private interactionFile(taskId: string, requestId: string): string {
+    if (!requestId || requestId.length > 512) throw new Error("invalid ZCode interaction request_id");
+    const key = createHash("sha256").update(requestId).digest("hex");
+    return path.join(this.taskDir(taskId), "interactions", `${key}.json`);
   }
 
   #readJson(file: string): unknown {

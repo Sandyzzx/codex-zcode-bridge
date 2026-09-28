@@ -68,7 +68,7 @@ In ZCode Desktop, find tasks in the Workspace view under the Codex project direc
 - Codex decides whether to create a worktree. The Bridge uses the supplied project directory and optional worktree path; it does not create or remove worktrees.
 - Parallel tasks use more local resources and provider capacity.
 - The Bridge stores prompts, status, logs, visible model output, events, and results locally in `~/.codex/codex-zcode-bridge/` (on Windows: `%USERPROFILE%\.codex\codex-zcode-bridge\`). Do not include credentials or data in tasks or workspaces if they should not be sent to the selected model service.
-- The Bridge uses the local ZCode app-server. Permission interactions and available events depend on the installed ZCode version. Forwarding per-action approval requests back to Codex has not been verified.
+- The Bridge uses the local ZCode app-server. Interactions and available events depend on the installed ZCode version. For AskUserQuestion replies, key `answers` by each full `questions[].question` text and use the selected or explicit answer as its value; do not use the header or option label as the key. A real ZCode user-input roundtrip has been verified; a real permission-approval roundtrip has not. Only allow permission requests when the user explicitly authorizes the action.
 
 ## Build from source
 

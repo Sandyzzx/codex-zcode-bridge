@@ -154,13 +154,39 @@ export interface TaskStatusRecord {
   error?: string;
 }
 
-/** Append-only, user-visible execution evidence. Never includes hidden reasoning or raw tool arguments. */
+/** Append-only, user-visible execution evidence. Never includes hidden reasoning; interaction requests may expose bounded tool input for a decision. */
 export interface TaskProgressEvent {
   seq: number;
   at: string;
   type: string;
   summary: string;
   details?: Record<string, unknown>;
+}
+
+export type ZCodeInteractionMethod =
+  | "interaction/requestPermission"
+  | "interaction/requestUserInput";
+
+export interface ZCodeInteractionRequest {
+  readonly request_id: string;
+  readonly method: ZCodeInteractionMethod;
+  readonly params: Record<string, unknown>;
+}
+
+export interface ZCodeInteractionReplyInput {
+  readonly task_id: string;
+  readonly request_id: string;
+  readonly decision: "allow" | "deny" | "accept" | "decline";
+  /** AskUserQuestion answers keyed by the exact question text. */
+  readonly answers?: Record<string, string>;
+  readonly reason?: string;
+}
+
+export interface ZCodeInteractionRecord extends ZCodeInteractionRequest {
+  readonly state: "pending" | "answered";
+  readonly created_at: string;
+  readonly answer?: Record<string, unknown>;
+  readonly answered_at?: string;
 }
 
 export interface TaskProgressPage {
@@ -188,6 +214,7 @@ export interface TaskManager {
 /** Additive Phase 7 capability; the frozen V0.1 TaskManager contract stays intact. */
 export interface ProgressTaskManager extends TaskManager {
   getEvents(input: { task_id: string; after_seq?: number; limit?: number; wait_ms?: number }): Promise<TaskProgressPage>;
+  replyToInteraction(input: ZCodeInteractionReplyInput): Promise<{ task_id: string; request_id: string; state: "answered" }>;
 }
 
 export interface WorkspaceProvider {
