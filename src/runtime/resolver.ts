@@ -14,6 +14,46 @@ import { fileURLToPath } from "node:url";
 import { BridgeError } from "./errors.js";
 import type { RuntimeResolver, ZCodeRuntimeConfig } from "../interfaces.js";
 
+const PERSISTED_RUNTIME_KEYS = [
+  "ZCODE_BRIDGE_NODE",
+  "ZCODE_BRIDGE_ZCODE_CJS",
+  "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE",
+  "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE",
+  "ZCODE_HOME",
+  "ZCODE_DATA_BASE_DIR",
+  "ZCODE_BRIDGE_DEFAULT_PROVIDER_ID",
+  "ZCODE_BRIDGE_DEFAULT_MODEL_ID",
+  "ZCODE_BRIDGE_DEFAULT_REASONING_LEVEL",
+  "ZCODE_BRIDGE_MODE",
+  "ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS",
+] as const;
+
+/**
+ * Loads safe, non-secret runtime settings written by the SessionStart hook.
+ * Process variables remain authoritative; this fallback lets a Bridge process
+ * that started just before the hook still use newly discovered custom paths.
+ */
+export function loadPersistedRuntimeEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const dataRoot = source["ZCODE_BRIDGE_DATA_DIR"]?.trim();
+  if (!dataRoot || !path.isAbsolute(dataRoot)) return { ...source };
+  const settingsPath = path.join(dataRoot, "runtime-config.json");
+  let parsed: unknown;
+  try {
+    if (statSync(settingsPath).size > 64 * 1024) return { ...source };
+    parsed = JSON.parse(readFileSync(settingsPath, "utf8"));
+  } catch {
+    return { ...source };
+  }
+  if (!isPlainObject(parsed)) return { ...source };
+  const env: NodeJS.ProcessEnv = { ...source };
+  for (const key of PERSISTED_RUNTIME_KEYS) {
+    if (env[key]?.trim()) continue;
+    const value = parsed[key];
+    if (typeof value === "string" && value.trim()) env[key] = value.trim();
+  }
+  return env;
+}
+
 export interface RuntimeResolverOptions {
   /** Environment used for all lookups; defaults to process.env. */
   env?: NodeJS.ProcessEnv;
@@ -35,7 +75,7 @@ export class NodeRuntimeResolver implements RuntimeResolver {
   }
 
   async resolve(): Promise<ZCodeRuntimeConfig> {
-    const env = this.#env;
+    const env = loadPersistedRuntimeEnvironment(this.#env);
     const zcodeHome = resolveZcodeHome(env);
 
     // Node executable: explicit override or `node` on PATH (frozen contract).

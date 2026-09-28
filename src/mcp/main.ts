@@ -11,7 +11,7 @@ import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { homedir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { findPackageRoot } from "../runtime/resolver.js";
+import { findPackageRoot, loadPersistedRuntimeEnvironment } from "../runtime/resolver.js";
 import { TaskStore } from "../store/task-store.js";
 import { DirectWorkspaceProvider } from "../workspace/direct-provider.js";
 import { BridgeTaskManager } from "../manager/task-manager.js";
@@ -37,6 +37,24 @@ export function resolveDataRoot(env: NodeJS.ProcessEnv): DataRootResolution {
   return { dataRoot: findPackageRoot() };
 }
 
+export interface WorkerLimitResolution {
+  readonly maxConcurrentWorkers: number;
+  readonly warning?: string;
+}
+
+/** Defaults to serial execution; invalid values fail safely back to one worker. */
+export function resolveMaxConcurrentWorkers(env: NodeJS.ProcessEnv): WorkerLimitResolution {
+  const raw = env["ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS"]?.trim();
+  if (!raw) return { maxConcurrentWorkers: 1 };
+  if (!/^[1-8]$/u.test(raw)) {
+    return {
+      maxConcurrentWorkers: 1,
+      warning: "ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS must be an integer from 1 to 8; using 1",
+    };
+  }
+  return { maxConcurrentWorkers: Number(raw) };
+}
+
 async function main(): Promise<void> {
   // Keep task records and worktrees outside the versioned marketplace cache.
   // The explicit plugin marker opts into this stable per-user data location.
@@ -49,8 +67,16 @@ async function main(): Promise<void> {
   }
   console.error(`[bridge] data root: ${dataRoot}`);
 
+  const workerLimit = resolveMaxConcurrentWorkers(loadPersistedRuntimeEnvironment(process.env));
+  if (workerLimit.warning) console.error(`[bridge] ${workerLimit.warning}`);
+  console.error(`[bridge] max concurrent workers: ${workerLimit.maxConcurrentWorkers}`);
+
   const store = new TaskStore(dataRoot);
-  const manager = new BridgeTaskManager({ store, workspaceProvider: new DirectWorkspaceProvider() });
+  const manager = new BridgeTaskManager({
+    store,
+    workspaceProvider: new DirectWorkspaceProvider(),
+    maxConcurrentWorkers: workerLimit.maxConcurrentWorkers,
+  });
   const server = createBridgeServer({ taskManager: manager });
   const handle = serveStdio(() => server);
 

@@ -5,6 +5,7 @@ Codex 插件与本地 MCP 服务，用于把明确授权的开发任务交给本
 ## 功能
 
 - 在 Codex 中派发、跟踪、续作和取消 ZCode 任务。
+- 可选启用多个 ZCode worker：不同项目可并行；同一执行目录仍串行，Codex 提供不同 worktree 时可启动多个 session。
 - 按任务指定 ZCode provider/model；也可配置用户默认模型。
 - 运行开始时报告项目目录、实际执行目录、ZCode session、runtime 报告的模型和执行模式。
 - ZCode Desktop 任务按 Codex 项目目录归类；索引同步失败不会中断任务。
@@ -28,9 +29,9 @@ codex plugin add codex-zcode-bridge@codex-zcode-bridge
 
 ### 首次启动
 
-开启新对话，并检查、信任插件的 `SessionStart` hook。Windows 上 hook 会发现并验证 Node.js、Git、ZCode runtime 和 provider 配置，并报告检查结果。标准安装不需要克隆仓库或运行 `npm install`；首次检查只读取配置，不会写入默认环境变量。Marketplace 不会代为安装 Node.js 或 ZCode。
+开启新对话，并检查、信任插件的 `SessionStart` hook。Windows 上 hook 会自动发现并验证 Node.js、ZCode 安装目录和 runtime、builtin/personal provider 配置、ZCode 数据根目录及 Bridge 数据目录，并把解析结果与当前运行选项写入用户环境变量和本地 `runtime-config.json`，不复制 provider 凭据。标准安装不需要克隆仓库或运行 `npm install`。Marketplace 不会代为安装 Node.js 或 ZCode。
 
-插件会自动发现常见的 ZCode runtime 和 provider 配置位置。Windows 自定义安装路径、`ZCODE_HOME` 或默认模型设置可运行仓库中的 `install.ps1`。这一步需要下载仓库副本；正常安装插件不需要克隆仓库：
+插件首次启动会自动发现并保存常见的 ZCode runtime 和 provider 配置位置。需要调整自定义路径、默认模型或并行 worker 数时，也可运行仓库中的 `install.ps1`；不带参数运行会扫描、验证并保存当前已发现的设置。这一步需要下载仓库副本；正常安装插件不需要克隆仓库：
 
 将示例路径以及 `your-provider-id` / `your-model-id` 替换为本机实际值；默认 provider 和 model 必须成对指定。
 
@@ -47,9 +48,15 @@ Set-Location codex-zcode-bridge
   -Mode "yolo"
 ```
 
-按需省略不需要修改的参数。`ZCodeHome` 必须指向实际 `.zcode` 目录，个人 provider 文件必须位于该目录的 `v2\provider_config.json`。脚本先读取并验证 runtime、provider JSON 和已有设置；只将命令行显式传入的值写入 Windows 用户环境变量。仅检查现有配置时，直接运行 `.\install.ps1`。修改环境变量后重启 Codex。完整参数和源码构建说明见[英文 README](README.en.md#install)。
+按需省略不需要覆盖的参数。`ZCodeHome` 必须指向实际 `.zcode` 目录，个人 provider 文件必须位于该目录的 `v2\provider_config.json`。脚本先扫描并验证这些目录和已有设置，再自动记录运行时、安装根目录、provider 文件、ZCode 数据根目录、Bridge 数据目录，以及模式、并发数和已配置的默认模型；写入 Windows 用户环境变量和 `runtime-config.json`。默认模型只有在用户已配置或显式传入时才保存，脚本不会猜选模型。可加 `-WhatIf` 预览将写入的项目而不修改环境。完整参数和源码构建说明见[英文 README](README.en.md#install)。
 
 Codex 的 marketplace 安装说明见[OpenAI 官方插件文档](https://developers.openai.com/plugins/build/plugins)。
+
+### 可选：并行 worker
+
+Bridge 默认一次运行一个 ZCode 任务。确认本机资源和 ZCode provider 配置适合并行后，可将最大 worker 数设置为 2–8；例如在仓库副本的 PowerShell 中运行 `./install.ps1 -MaxConcurrentWorkers 2`，再重启 Codex。也可通过用户环境变量 `ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS` 配置。不同项目目录可并行；同一或互相嵌套的执行目录会自动排队。要让同一项目的任务并行，Codex 必须为它们分别准备真正独立的 Git worktree 并传入不同路径。Bridge 只按路径互斥，不会验证传入目录是否为独立 Git worktree，也不创建或判断 worktree。
+
+并行数是单个 Bridge MCP 进程的上限，默认值 1。多个 Bridge 进程共用同一数据目录的跨进程调度尚未实现；不要通过启动多个 Bridge 进程来扩展并发。
 
 ## 使用
 
@@ -66,6 +73,7 @@ ZCode Desktop 的 Workspace 视图按 Codex 项目目录查找任务。任务索
 - 默认执行模式为 `yolo`，可通过 `ZCODE_BRIDGE_MODE` 设为 `plan`、`build` 或 `edit`。ZCode 以当前操作系统用户权限运行。
 - Git worktree 只隔离工作目录，不是操作系统沙箱；`allowed_paths` 和 `forbidden_paths` 是任务约束说明，不能阻止进程访问其他文件或执行命令。
 - 是否创建 worktree 由 Codex 根据任务决定；Bridge 使用传入的项目目录和可选 worktree 路径，不替用户创建或删除 worktree。
+- 并行执行会启动多个 ZCode app-server worker，增加本机资源与 provider 并发使用。真实 E2E 已验证同一 Coding Plan 模型下的并行 session 和 Desktop 任务索引登记；并发切换不同 provider/model 与 Desktop 界面刷新尚未验证。需要稳定运行时请先使用默认单 worker。
 - Bridge 将 prompt、状态、日志、可见模型输出、事件和结果保存在本机 `~/.codex/codex-zcode-bridge/`（Windows 为 `%USERPROFILE%\.codex\codex-zcode-bridge\`）。请勿在任务或工作区中放入不应发送给所选模型服务的凭据或数据。
 - Bridge 使用本机 ZCode app-server；权限交互及可用事件受已安装的 ZCode 版本影响。当前尚未验证将逐项权限审批转发回 Codex。
 

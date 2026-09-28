@@ -1,4 +1,4 @@
-// TaskManager: validates requests, owns the one global worker slot, persists
+// TaskManager: validates requests, owns the configured global worker slots, persists
 // state via the TaskStore, launches and
 // reconciles detached workers, and enforces state transitions.
 //
@@ -17,6 +17,7 @@ import type {
   TaskStatusRecord,
   WorkspaceProvider,
 } from "../interfaces.js";
+import path from "node:path";
 import { isTerminalStatus, TaskStore, toPublicStatus } from "../store/task-store.js";
 import { buildTaskResult, type TaskFailure } from "./normalize.js";
 import { TaskManagerError } from "./errors.js";
@@ -35,6 +36,8 @@ export interface TaskManagerOptions {
   /** Reconcile/pump interval; 0 disables the timer (tests drive manually). */
   pollIntervalMs?: number;
   now?: () => Date;
+  /** Maximum simultaneous detached workers in this Bridge process. Defaults to 1. */
+  maxConcurrentWorkers?: number;
 }
 
 export class BridgeTaskManager implements ProgressTaskManager {
@@ -45,6 +48,7 @@ export class BridgeTaskManager implements ProgressTaskManager {
   readonly #terminateProcessTree: TerminateProcessTree;
   readonly #now: () => Date;
   readonly #dataRoot: string;
+  readonly #maxConcurrentWorkers: number;
   #timer: NodeJS.Timeout | null = null;
   #mutex: Promise<unknown> = Promise.resolve();
 
@@ -56,6 +60,10 @@ export class BridgeTaskManager implements ProgressTaskManager {
     this.#terminateProcessTree = options.terminateProcessTree ?? terminateProcessTree;
     this.#now = options.now ?? (() => new Date());
     this.#dataRoot = options.store.dataRoot;
+    this.#maxConcurrentWorkers = options.maxConcurrentWorkers ?? 1;
+    if (!Number.isInteger(this.#maxConcurrentWorkers) || this.#maxConcurrentWorkers < 1 || this.#maxConcurrentWorkers > 8) {
+      throw new RangeError("maxConcurrentWorkers must be an integer from 1 to 8");
+    }
     const pollIntervalMs = options.pollIntervalMs ?? 1_000;
     if (pollIntervalMs > 0) {
       this.#timer = setInterval(() => {
@@ -90,7 +98,6 @@ export class BridgeTaskManager implements ProgressTaskManager {
   async createTask(task: TaskPackage): Promise<TaskReceipt> {
     return this.#exclusive(async () => {
       this.#validateTaskPackage(task);
-      const existingRunning = this.#runningTaskIdLocked();
       if (this.#store.hasTask(task.task_id)) {
         throw new TaskManagerError("TASK_ALREADY_EXISTS", `task_id already used: ${task.task_id}`);
       }
@@ -126,9 +133,7 @@ export class BridgeTaskManager implements ProgressTaskManager {
           mode: workspaceRef.mode,
           ...(workspaceRef.branchName ? { branch_name: workspaceRef.branchName } : {}),
         }, createdAt);
-      if (!existingRunning) {
-        this.#startWorkerLocked(task.task_id);
-      }
+      this.#pumpLocked();
       const status = this.#store.readStatus(task.task_id);
       return {
         task_id: task.task_id,
@@ -304,6 +309,7 @@ export class BridgeTaskManager implements ProgressTaskManager {
         this.#store.writeResult(taskId, result);
         this.#store.writeStatus(taskId, { status: "cancelled", finished_at: finishedAt });
         this.#store.appendEvent(taskId, "cancelled", "Queued task cancelled before worker start", undefined, finishedAt);
+        this.#pumpLocked();
         return toPublicStatus(this.#store.readStatus(taskId));
       }
 
@@ -440,13 +446,8 @@ export class BridgeTaskManager implements ProgressTaskManager {
     this.#store.appendEvent(taskId, "error", result.summary, { error_code: "worker_lost" }, finishedAt);
   }
 
-  #runningTaskIdLocked(): string | null {
-    for (const taskId of this.#store.listTaskIds()) {
-      if (this.#store.readStatus(taskId).status === "running") {
-        return taskId;
-      }
-    }
-    return null;
+  #runningTaskIdsLocked(): string[] {
+    return this.#store.listTaskIds().filter((taskId) => this.#store.readStatus(taskId).status === "running");
   }
 
   #queuedTaskIdsLocked(): string[] {
@@ -459,9 +460,31 @@ export class BridgeTaskManager implements ProgressTaskManager {
   }
 
   #pumpLocked(): void {
-    if (this.#runningTaskIdLocked()) return;
-    const [next] = this.#queuedTaskIdsLocked();
-    if (next) this.#startWorkerLocked(next);
+    const running = this.#runningTaskIdsLocked();
+    if (running.length >= this.#maxConcurrentWorkers) return;
+
+    const occupiedPaths = running.map((taskId) => this.#executionPathKeyLocked(taskId));
+    let slots = this.#maxConcurrentWorkers - running.length;
+    for (const taskId of this.#queuedTaskIdsLocked()) {
+      if (slots <= 0) break;
+      const executionPath = this.#executionPathKeyLocked(taskId);
+      // Never run two ZCode sessions against the same mutable directory.
+      // Separate Codex-prepared worktrees and separate project roots can run
+      // concurrently, subject to the global worker limit.
+      if (occupiedPaths.some((occupied) => pathsOverlap(occupied, executionPath))) continue;
+      this.#startWorkerLocked(taskId);
+      if (this.#store.readStatus(taskId).status === "running") {
+        occupiedPaths.push(executionPath);
+        slots -= 1;
+      }
+    }
+  }
+
+  #executionPathKeyLocked(taskId: string): string {
+    const recorded = this.#store.readWorkspaceRef(taskId)?.canonicalPath;
+    const task = this.#store.readTask(taskId);
+    const resolved = path.resolve(recorded ?? task.worktree_path ?? task.workspace);
+    return process.platform === "win32" ? resolved.toLocaleLowerCase("en-US") : resolved;
   }
 
   #startWorkerLocked(taskId: string): void {
@@ -558,6 +581,13 @@ export class BridgeTaskManager implements ProgressTaskManager {
     this.#mutex = run.catch(() => undefined);
     return run;
   }
+}
+
+function pathsOverlap(left: string, right: string): boolean {
+  const relative = path.relative(left, right);
+  const reverse = path.relative(right, left);
+  const inside = (value: string): boolean => value === "" || (!path.isAbsolute(value) && value !== ".." && !value.startsWith(`..${path.sep}`));
+  return inside(relative) || inside(reverse);
 }
 
 function sleep(ms: number): Promise<void> {

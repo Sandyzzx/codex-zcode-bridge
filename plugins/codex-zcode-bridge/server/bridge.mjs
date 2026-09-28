@@ -297,10 +297,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path5) {
-  if (!path5)
+function getElementAtPath(obj, path6) {
+  if (!path6)
     return obj;
-  return path5.reduce((acc, key) => acc?.[key], obj);
+  return path6.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -640,11 +640,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path5, issues) {
+function prefixIssues(path6, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path5);
+    iss.path.unshift(path6);
     return iss;
   });
 }
@@ -1093,16 +1093,16 @@ function flattenError(error2, mapper = (issue2) => issue2.message) {
 }
 function formatError(error2, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error3, path5 = []) => {
+  const processError = (error3, path6 = []) => {
     for (const issue2 of error3.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path5, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path6, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path5, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path6, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path5, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path6, ...issue2.path]);
       } else {
-        const fullpath = [...path5, ...issue2.path];
+        const fullpath = [...path6, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -10445,9 +10445,9 @@ var rev2026Codec = {
     });
     const parsed = buildSchemas2026().RequestMetaEnvelopeSchema.safeParse(meta2);
     if (!parsed.success) for (const issue2 of parsed.error.issues) {
-      const path5 = issue2.path.map(String);
-      const key = path5.length > 0 ? path5.join(".") : "_meta";
-      if (path5.length === 1 && issues.some((existing) => existing.key === key && existing.problem === "missing")) continue;
+      const path6 = issue2.path.map(String);
+      const key = path6.length > 0 ? path6.join(".") : "_meta";
+      if (path6.length === 1 && issues.some((existing) => existing.key === key && existing.problem === "missing")) continue;
       issues.push({
         key,
         problem: issue2.message
@@ -10768,29 +10768,29 @@ var PERMITTED_X_MCP_HEADER_TYPES = /* @__PURE__ */ new Set([
 function scanXMcpHeaderDeclarations(inputSchema) {
   const declarations = [];
   const seenLower = /* @__PURE__ */ new Map();
-  const visit = (node2, path5, reachable) => {
+  const visit = (node2, path6, reachable) => {
     if (node2 === null || typeof node2 !== "object") return void 0;
     const schema = node2;
     if (X_MCP_HEADER_KEY in schema) {
-      if (!reachable || path5.length === 0) return `${pathName(path5)}: x-mcp-header is only permitted on properties statically reachable via a chain of 'properties' keys (not under items, additionalProperties, oneOf/anyOf/allOf/not, if/then/else, or $ref)`;
+      if (!reachable || path6.length === 0) return `${pathName(path6)}: x-mcp-header is only permitted on properties statically reachable via a chain of 'properties' keys (not under items, additionalProperties, oneOf/anyOf/allOf/not, if/then/else, or $ref)`;
       const raw = schema[X_MCP_HEADER_KEY];
-      if (typeof raw !== "string" || raw.length === 0) return `${pathName(path5)}: x-mcp-header MUST be a non-empty string`;
-      if (!RFC9110_TOKEN.test(raw)) return `${pathName(path5)}: x-mcp-header '${raw}' is not a valid RFC 9110 token (no spaces, control characters or HTTP delimiters)`;
+      if (typeof raw !== "string" || raw.length === 0) return `${pathName(path6)}: x-mcp-header MUST be a non-empty string`;
+      if (!RFC9110_TOKEN.test(raw)) return `${pathName(path6)}: x-mcp-header '${raw}' is not a valid RFC 9110 token (no spaces, control characters or HTTP delimiters)`;
       const type = typeof schema.type === "string" ? schema.type : void 0;
-      if (type === void 0 || !PERMITTED_X_MCP_HEADER_TYPES.has(type)) return `${pathName(path5)}: x-mcp-header is only permitted on primitive-typed properties (string, integer, boolean); got ${type ?? "<none>"}`;
+      if (type === void 0 || !PERMITTED_X_MCP_HEADER_TYPES.has(type)) return `${pathName(path6)}: x-mcp-header is only permitted on primitive-typed properties (string, integer, boolean); got ${type ?? "<none>"}`;
       const lower = raw.toLowerCase();
       const prior = seenLower.get(lower);
       if (prior !== void 0) return `x-mcp-header '${raw}' is not case-insensitively unique (also declared as '${prior}')`;
       seenLower.set(lower, raw);
       declarations.push({
-        path: path5,
+        path: path6,
         headerName: raw,
         type
       });
     }
     const properties = schema.properties;
     if (properties !== null && typeof properties === "object") for (const [key, child] of Object.entries(properties)) {
-      const fault$1 = visit(child, [...path5, key], reachable);
+      const fault$1 = visit(child, [...path6, key], reachable);
       if (fault$1 !== void 0) return fault$1;
     }
     for (const k of NON_REACHABLE_SUBSCHEMA_KEYWORDS) {
@@ -10798,7 +10798,7 @@ function scanXMcpHeaderDeclarations(inputSchema) {
       if (sub === void 0) continue;
       const branches = Array.isArray(sub) ? sub : sub !== null && typeof sub === "object" && OBJECT_VALUED_SUBSCHEMA_KEYWORDS.has(k) ? Object.values(sub) : [sub];
       for (const branch of branches) {
-        const fault$1 = visit(branch, [...path5, `<${k}>`], false);
+        const fault$1 = visit(branch, [...path6, `<${k}>`], false);
         if (fault$1 !== void 0) return fault$1;
       }
     }
@@ -10838,8 +10838,8 @@ var OBJECT_VALUED_SUBSCHEMA_KEYWORDS = /* @__PURE__ */ new Set([
   "$defs",
   "definitions"
 ]);
-function pathName(path5) {
-  return path5.length === 0 ? "<root>" : path5.join(".");
+function pathName(path6) {
+  return path6.length === 0 ? "<root>" : path6.join(".");
 }
 var HEADER_MISMATCH_ERROR_CODE = -32020;
 var INBOUND_VALIDATION_LADDER = [
@@ -11128,7 +11128,7 @@ var PROPERTY_KEYS_BY_TYPE = {
   array: shapeKeys([UntitledMultiSelectEnumSchemaSchema, TitledMultiSelectEnumSchemaSchema])
 };
 var SUPPORTED_STRING_FORMATS = new Set(StringSchemaSchema.shape.format.unwrap().options);
-function walkProperty(node2, path5, vendor, unsupported) {
+function walkProperty(node2, path6, vendor, unsupported) {
   if (!isJsonObject(node2)) return node2;
   const allowedKeys = typeof node2.type === "string" && Object.hasOwn(PROPERTY_KEYS_BY_TYPE, node2.type) ? PROPERTY_KEYS_BY_TYPE[node2.type] : void 0;
   if (allowedKeys === void 0) return node2;
@@ -11136,8 +11136,8 @@ function walkProperty(node2, path5, vendor, unsupported) {
   for (const [key, value] of Object.entries(node2)) if (allowedKeys.has(key) || isAnnotationOnlyJsonSchemaKeyword(key)) pruned[key] = value;
   else if (key === "pattern" && node2.type === "string" && typeof node2.format === "string") {
     if (!SUPPORTED_STRING_FORMATS.has(node2.format)) pruned[key] = value;
-    else if (typeof value !== "string" || !isLibraryFormatPattern(node2.format, value, vendor)) unsupported.push(`${path5}.${key}`);
-  } else unsupported.push(`${path5}.${key}`);
+    else if (typeof value !== "string" || !isLibraryFormatPattern(node2.format, value, vendor)) unsupported.push(`${path6}.${key}`);
+  } else unsupported.push(`${path6}.${key}`);
   return pruned;
 }
 function walkRequestedSchema(converted, vendor) {
@@ -11154,11 +11154,11 @@ function describeUnsupportedProperties(pruned, fallback) {
   const offenders = Object.entries(pruned.properties).filter(([, node2]) => !parseSchema(PrimitiveSchemaDefinitionSchema, node2).success).map(([name]) => `properties.${name}`);
   return offenders.length > 0 ? offenders.join(", ") : fallback;
 }
-function findDroppedConstraintPaths(original, parsed, path5 = "") {
-  if (Array.isArray(original) && Array.isArray(parsed)) return original.flatMap((item, index) => findDroppedConstraintPaths(item, parsed[index], `${path5}[${index}]`));
+function findDroppedConstraintPaths(original, parsed, path6 = "") {
+  if (Array.isArray(original) && Array.isArray(parsed)) return original.flatMap((item, index) => findDroppedConstraintPaths(item, parsed[index], `${path6}[${index}]`));
   if (!isJsonObject(original) || !isJsonObject(parsed)) return [];
   return Object.entries(original).flatMap(([key, value]) => {
-    const childPath = path5 ? `${path5}.${key}` : key;
+    const childPath = path6 ? `${path6}.${key}` : key;
     if (!Object.prototype.hasOwnProperty.call(parsed, key)) return isAnnotationOnlyJsonSchemaKeyword(key) ? [] : [childPath];
     return findDroppedConstraintPaths(value, parsed[key], childPath);
   });
@@ -15237,8 +15237,8 @@ var require_utils = /* @__PURE__ */ __commonJSMin(((exports, module) => {
     for (let i = 0; i < str.length; i++) if (str[i] === token) ind++;
     return ind;
   }
-  function removeDotSegments(path5) {
-    let input = path5;
+  function removeDotSegments(path6) {
+    let input = path6;
     const output = [];
     let nextSlash = -1;
     let len = 0;
@@ -15391,8 +15391,8 @@ var require_schemes = /* @__PURE__ */ __commonJSMin(((exports, module) => {
       wsComponent.secure = void 0;
     }
     if (wsComponent.resourceName) {
-      const [path5, query] = wsComponent.resourceName.split("?");
-      wsComponent.path = path5 && path5 !== "/" ? path5 : void 0;
+      const [path6, query] = wsComponent.resourceName.split("?");
+      wsComponent.path = path6 && path6 !== "/" ? path6 : void 0;
       wsComponent.query = query;
       wsComponent.resourceName = void 0;
     }
@@ -21532,13 +21532,46 @@ function toError(value) {
 
 // src/mcp/main.ts
 import { homedir } from "node:os";
-import path4 from "node:path";
+import path5 from "node:path";
 import { pathToFileURL } from "node:url";
 
 // src/runtime/resolver.ts
 import { accessSync, existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+var PERSISTED_RUNTIME_KEYS = [
+  "ZCODE_BRIDGE_NODE",
+  "ZCODE_BRIDGE_ZCODE_CJS",
+  "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE",
+  "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE",
+  "ZCODE_HOME",
+  "ZCODE_DATA_BASE_DIR",
+  "ZCODE_BRIDGE_DEFAULT_PROVIDER_ID",
+  "ZCODE_BRIDGE_DEFAULT_MODEL_ID",
+  "ZCODE_BRIDGE_DEFAULT_REASONING_LEVEL",
+  "ZCODE_BRIDGE_MODE",
+  "ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS"
+];
+function loadPersistedRuntimeEnvironment(source) {
+  const dataRoot = source["ZCODE_BRIDGE_DATA_DIR"]?.trim();
+  if (!dataRoot || !path.isAbsolute(dataRoot)) return { ...source };
+  const settingsPath = path.join(dataRoot, "runtime-config.json");
+  let parsed;
+  try {
+    if (statSync(settingsPath).size > 64 * 1024) return { ...source };
+    parsed = JSON.parse(readFileSync(settingsPath, "utf8"));
+  } catch {
+    return { ...source };
+  }
+  if (!isPlainObject3(parsed)) return { ...source };
+  const env = { ...source };
+  for (const key of PERSISTED_RUNTIME_KEYS) {
+    if (env[key]?.trim()) continue;
+    const value = parsed[key];
+    if (typeof value === "string" && value.trim()) env[key] = value.trim();
+  }
+  return env;
+}
 function findPackageRoot(startDir) {
   let current = startDir ?? path.dirname(fileURLToPath(import.meta.url));
   for (let depth = 0; depth < 10; depth++) {
@@ -21552,6 +21585,9 @@ function findPackageRoot(startDir) {
   throw new Error(
     `Cannot locate the Bridge package root (no package.json above ${startDir ?? "module directory"})`
   );
+}
+function isPlainObject3(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 // src/store/task-store.ts
@@ -21910,6 +21946,9 @@ function resolveExistingDirectory(input, field) {
   }
 }
 
+// src/manager/task-manager.ts
+import path4 from "node:path";
+
 // src/manager/normalize.ts
 function buildTaskResult(input) {
   const { task, attempt, startedAt, finishedAt, outcome } = input;
@@ -22236,6 +22275,7 @@ var BridgeTaskManager = class {
   #terminateProcessTree;
   #now;
   #dataRoot;
+  #maxConcurrentWorkers;
   #timer = null;
   #mutex = Promise.resolve();
   constructor(options) {
@@ -22246,6 +22286,10 @@ var BridgeTaskManager = class {
     this.#terminateProcessTree = options.terminateProcessTree ?? terminateProcessTree;
     this.#now = options.now ?? (() => /* @__PURE__ */ new Date());
     this.#dataRoot = options.store.dataRoot;
+    this.#maxConcurrentWorkers = options.maxConcurrentWorkers ?? 1;
+    if (!Number.isInteger(this.#maxConcurrentWorkers) || this.#maxConcurrentWorkers < 1 || this.#maxConcurrentWorkers > 8) {
+      throw new RangeError("maxConcurrentWorkers must be an integer from 1 to 8");
+    }
     const pollIntervalMs = options.pollIntervalMs ?? 1e3;
     if (pollIntervalMs > 0) {
       this.#timer = setInterval(() => {
@@ -22277,7 +22321,6 @@ var BridgeTaskManager = class {
   async createTask(task) {
     return this.#exclusive(async () => {
       this.#validateTaskPackage(task);
-      const existingRunning = this.#runningTaskIdLocked();
       if (this.#store.hasTask(task.task_id)) {
         throw new TaskManagerError("TASK_ALREADY_EXISTS", `task_id already used: ${task.task_id}`);
       }
@@ -22311,9 +22354,7 @@ var BridgeTaskManager = class {
         mode: workspaceRef.mode,
         ...workspaceRef.branchName ? { branch_name: workspaceRef.branchName } : {}
       }, createdAt);
-      if (!existingRunning) {
-        this.#startWorkerLocked(task.task_id);
-      }
+      this.#pumpLocked();
       const status = this.#store.readStatus(task.task_id);
       return {
         task_id: task.task_id,
@@ -22469,6 +22510,7 @@ var BridgeTaskManager = class {
         this.#store.writeResult(taskId, result2);
         this.#store.writeStatus(taskId, { status: "cancelled", finished_at: finishedAt2 });
         this.#store.appendEvent(taskId, "cancelled", "Queued task cancelled before worker start", void 0, finishedAt2);
+        this.#pumpLocked();
         return toPublicStatus(this.#store.readStatus(taskId));
       }
       this.#store.writeStatus(taskId, { cancel_requested: true });
@@ -22594,21 +22636,33 @@ var BridgeTaskManager = class {
     });
     this.#store.appendEvent(taskId, "error", result.summary, { error_code: "worker_lost" }, finishedAt);
   }
-  #runningTaskIdLocked() {
-    for (const taskId of this.#store.listTaskIds()) {
-      if (this.#store.readStatus(taskId).status === "running") {
-        return taskId;
-      }
-    }
-    return null;
+  #runningTaskIdsLocked() {
+    return this.#store.listTaskIds().filter((taskId) => this.#store.readStatus(taskId).status === "running");
   }
   #queuedTaskIdsLocked() {
     return this.#store.listTaskIds().map((taskId) => ({ taskId, status: this.#store.readStatus(taskId) })).filter((entry) => entry.status.status === "queued").sort((a, b) => a.status.created_at.localeCompare(b.status.created_at)).map((entry) => entry.taskId);
   }
   #pumpLocked() {
-    if (this.#runningTaskIdLocked()) return;
-    const [next] = this.#queuedTaskIdsLocked();
-    if (next) this.#startWorkerLocked(next);
+    const running = this.#runningTaskIdsLocked();
+    if (running.length >= this.#maxConcurrentWorkers) return;
+    const occupiedPaths = running.map((taskId) => this.#executionPathKeyLocked(taskId));
+    let slots = this.#maxConcurrentWorkers - running.length;
+    for (const taskId of this.#queuedTaskIdsLocked()) {
+      if (slots <= 0) break;
+      const executionPath = this.#executionPathKeyLocked(taskId);
+      if (occupiedPaths.some((occupied) => pathsOverlap(occupied, executionPath))) continue;
+      this.#startWorkerLocked(taskId);
+      if (this.#store.readStatus(taskId).status === "running") {
+        occupiedPaths.push(executionPath);
+        slots -= 1;
+      }
+    }
+  }
+  #executionPathKeyLocked(taskId) {
+    const recorded = this.#store.readWorkspaceRef(taskId)?.canonicalPath;
+    const task = this.#store.readTask(taskId);
+    const resolved = path4.resolve(recorded ?? task.worktree_path ?? task.workspace);
+    return process.platform === "win32" ? resolved.toLocaleLowerCase("en-US") : resolved;
   }
   #startWorkerLocked(taskId) {
     const status = this.#store.readStatus(taskId);
@@ -22696,6 +22750,12 @@ var BridgeTaskManager = class {
     return run;
   }
 };
+function pathsOverlap(left, right) {
+  const relative = path4.relative(left, right);
+  const reverse = path4.relative(right, left);
+  const inside = (value) => value === "" || !path4.isAbsolute(value) && value !== ".." && !value.startsWith(`..${path4.sep}`);
+  return inside(relative) || inside(reverse);
+}
 function sleep3(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -22908,27 +22968,45 @@ function createBridgeServer(options) {
 function resolveDataRoot(env) {
   const override = env["ZCODE_BRIDGE_DATA_DIR"]?.trim();
   if (override) {
-    if (!path4.isAbsolute(override)) {
+    if (!path5.isAbsolute(override)) {
       return {
         dataRoot: findPackageRoot(),
         warning: `ZCODE_BRIDGE_DATA_DIR must be an absolute path; ignoring ${override} and using the Bridge installation directory`
       };
     }
-    return { dataRoot: path4.normalize(override) };
+    return { dataRoot: path5.normalize(override) };
   }
   return { dataRoot: findPackageRoot() };
 }
+function resolveMaxConcurrentWorkers(env) {
+  const raw = env["ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS"]?.trim();
+  if (!raw) return { maxConcurrentWorkers: 1 };
+  if (!/^[1-8]$/u.test(raw)) {
+    return {
+      maxConcurrentWorkers: 1,
+      warning: "ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS must be an integer from 1 to 8; using 1"
+    };
+  }
+  return { maxConcurrentWorkers: Number(raw) };
+}
 async function main() {
   if (process.env["ZCODE_BRIDGE_PLUGIN_MODE"] === "1" && !process.env["ZCODE_BRIDGE_DATA_DIR"]) {
-    process.env["ZCODE_BRIDGE_DATA_DIR"] = path4.join(homedir(), ".codex", "codex-zcode-bridge");
+    process.env["ZCODE_BRIDGE_DATA_DIR"] = path5.join(homedir(), ".codex", "codex-zcode-bridge");
   }
   const { dataRoot, warning } = resolveDataRoot(process.env);
   if (warning) {
     console.error(`[bridge] ${warning}`);
   }
   console.error(`[bridge] data root: ${dataRoot}`);
+  const workerLimit = resolveMaxConcurrentWorkers(loadPersistedRuntimeEnvironment(process.env));
+  if (workerLimit.warning) console.error(`[bridge] ${workerLimit.warning}`);
+  console.error(`[bridge] max concurrent workers: ${workerLimit.maxConcurrentWorkers}`);
   const store = new TaskStore(dataRoot);
-  const manager = new BridgeTaskManager({ store, workspaceProvider: new DirectWorkspaceProvider() });
+  const manager = new BridgeTaskManager({
+    store,
+    workspaceProvider: new DirectWorkspaceProvider(),
+    maxConcurrentWorkers: workerLimit.maxConcurrentWorkers
+  });
   const server = createBridgeServer({ taskManager: manager });
   const handle = serveStdio(() => server);
   let closing = false;
@@ -22947,7 +23025,7 @@ async function main() {
   process.once("SIGTERM", () => shutdown("SIGTERM"));
   console.error("[bridge] codex-zcode-bridge stdio MCP server ready");
 }
-var isEntry = process.argv[1] !== void 0 && import.meta.url === pathToFileURL(path4.resolve(process.argv[1])).href;
+var isEntry = process.argv[1] !== void 0 && import.meta.url === pathToFileURL(path5.resolve(process.argv[1])).href;
 if (isEntry) {
   void main().catch((error2) => {
     console.error(`[bridge] fatal: ${error2 instanceof Error ? error2.stack ?? error2.message : String(error2)}`);
@@ -22955,7 +23033,8 @@ if (isEntry) {
   });
 }
 export {
-  resolveDataRoot
+  resolveDataRoot,
+  resolveMaxConcurrentWorkers
 };
 /*! Bundled license information:
 

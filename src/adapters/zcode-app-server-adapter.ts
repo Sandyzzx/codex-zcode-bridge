@@ -16,7 +16,7 @@ import { parseAgentReport } from "./agent-report.js";
 import type { ZCodeRunOutcome } from "./zcode-adapter.js";
 import { buildContinuePrompt, buildTaskPrompt } from "../prompts/task-prompt.js";
 import { BridgeError } from "../runtime/errors.js";
-import { NodeRuntimeResolver } from "../runtime/resolver.js";
+import { loadPersistedRuntimeEnvironment, NodeRuntimeResolver } from "../runtime/resolver.js";
 import { terminateProcessTree } from "./process-spawn.js";
 import { createMinimalOsEnv } from "../runtime/child-env.js";
 import { accountProviderId, buildAccountProviderPayload, runtimeAuthReply, zcodeDataBaseDir, zcodeTasksIndexPath } from "../runtime/account-provider.js";
@@ -213,9 +213,10 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     let timer: NodeJS.Timeout | undefined;
     let desktopTask: DesktopTaskIndexEntry | null = null;
     try {
+      const runtimeEnv = loadPersistedRuntimeEnvironment(this.#childEnvBase);
       const config = await this.#resolver.resolve();
-      const preferences = resolveSessionPreferences(task.model, this.#childEnvBase);
-      const childEnv = this.#buildChildEnv(config);
+      const preferences = resolveSessionPreferences(task.model, runtimeEnv);
+      const childEnv = this.#buildChildEnv(config, runtimeEnv);
       entry.onEvent({ type: "zcode_starting", summary: "Starting ZCode streaming runtime" });
       const client = this.#startAppServer(config, workspace.canonicalPath, childEnv, entry);
       entry.client = client;
@@ -716,11 +717,11 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     }
   }
 
-  #buildChildEnv(config: ZCodeRuntimeConfig): NodeJS.ProcessEnv {
-    const env = createMinimalOsEnv(this.#childEnvBase);
+  #buildChildEnv(config: ZCodeRuntimeConfig, source = this.#childEnvBase): NodeJS.ProcessEnv {
+    const env = createMinimalOsEnv(source);
     env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE = config.providerBuiltinConfigFile;
     env.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE = config.providerPersonalConfigFile;
-    if (this.#childEnvBase.ZCODE_HOME) env.ZCODE_HOME = this.#childEnvBase.ZCODE_HOME;
+    if (source.ZCODE_HOME) env.ZCODE_HOME = source.ZCODE_HOME;
     const dataBaseDir = zcodeDataBaseDir(config.providerPersonalConfigFile);
     if (dataBaseDir) env.ZCODE_DATA_BASE_DIR = dataBaseDir;
     return env;

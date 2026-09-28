@@ -250,6 +250,39 @@ import { accessSync, existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+var PERSISTED_RUNTIME_KEYS = [
+  "ZCODE_BRIDGE_NODE",
+  "ZCODE_BRIDGE_ZCODE_CJS",
+  "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE",
+  "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE",
+  "ZCODE_HOME",
+  "ZCODE_DATA_BASE_DIR",
+  "ZCODE_BRIDGE_DEFAULT_PROVIDER_ID",
+  "ZCODE_BRIDGE_DEFAULT_MODEL_ID",
+  "ZCODE_BRIDGE_DEFAULT_REASONING_LEVEL",
+  "ZCODE_BRIDGE_MODE",
+  "ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS"
+];
+function loadPersistedRuntimeEnvironment(source) {
+  const dataRoot2 = source["ZCODE_BRIDGE_DATA_DIR"]?.trim();
+  if (!dataRoot2 || !path.isAbsolute(dataRoot2)) return { ...source };
+  const settingsPath = path.join(dataRoot2, "runtime-config.json");
+  let parsed;
+  try {
+    if (statSync(settingsPath).size > 64 * 1024) return { ...source };
+    parsed = JSON.parse(readFileSync(settingsPath, "utf8"));
+  } catch {
+    return { ...source };
+  }
+  if (!isPlainObject2(parsed)) return { ...source };
+  const env = { ...source };
+  for (const key of PERSISTED_RUNTIME_KEYS) {
+    if (env[key]?.trim()) continue;
+    const value = parsed[key];
+    if (typeof value === "string" && value.trim()) env[key] = value.trim();
+  }
+  return env;
+}
 var NodeRuntimeResolver = class {
   #env;
   #homeDir;
@@ -260,7 +293,7 @@ var NodeRuntimeResolver = class {
     this.#packageRoot = options.packageRoot ?? null;
   }
   async resolve() {
-    const env = this.#env;
+    const env = loadPersistedRuntimeEnvironment(this.#env);
     const zcodeHome = resolveZcodeHome(env);
     let nodeExecutable = "node";
     const nodeOverride = env["ZCODE_BRIDGE_NODE"]?.trim();
@@ -1137,9 +1170,10 @@ var ZCodeAppServerAdapter = class {
     let timer;
     let desktopTask = null;
     try {
+      const runtimeEnv = loadPersistedRuntimeEnvironment(this.#childEnvBase);
       const config = await this.#resolver.resolve();
-      const preferences = resolveSessionPreferences(task.model, this.#childEnvBase);
-      const childEnv = this.#buildChildEnv(config);
+      const preferences = resolveSessionPreferences(task.model, runtimeEnv);
+      const childEnv = this.#buildChildEnv(config, runtimeEnv);
       entry.onEvent({ type: "zcode_starting", summary: "Starting ZCode streaming runtime" });
       const client = this.#startAppServer(config, workspace.canonicalPath, childEnv, entry);
       entry.client = client;
@@ -1607,11 +1641,11 @@ var ZCodeAppServerAdapter = class {
       });
     }
   }
-  #buildChildEnv(config) {
-    const env = createMinimalOsEnv(this.#childEnvBase);
+  #buildChildEnv(config, source = this.#childEnvBase) {
+    const env = createMinimalOsEnv(source);
     env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE = config.providerBuiltinConfigFile;
     env.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE = config.providerPersonalConfigFile;
-    if (this.#childEnvBase.ZCODE_HOME) env.ZCODE_HOME = this.#childEnvBase.ZCODE_HOME;
+    if (source.ZCODE_HOME) env.ZCODE_HOME = source.ZCODE_HOME;
     const dataBaseDir = zcodeDataBaseDir(config.providerPersonalConfigFile);
     if (dataBaseDir) env.ZCODE_DATA_BASE_DIR = dataBaseDir;
     return env;
