@@ -5,7 +5,7 @@ A Codex plugin and local MCP server for delegating authorized development tasks 
 ## Features
 
 - Submit, follow, continue, and cancel ZCode tasks from Codex.
-- Optionally run multiple ZCode workers: separate projects can run concurrently; tasks sharing an execution directory are serialized, while separate Codex-provided worktrees can host multiple sessions.
+- Run tasks across multiple projects concurrently; tasks sharing an execution directory are queued.
 - Select a ZCode provider/model per task or configure a user default.
 - At startup, report the project directory, execution directory, ZCode session, runtime-reported model, and execution mode.
 - Group ZCode Desktop tasks under the Codex project directory; index sync failures do not stop task execution.
@@ -29,34 +29,22 @@ First run the marketplace-add command above to register the GitHub marketplace. 
 
 ### First run
 
-Start a new conversation, then review and trust the plugin's `SessionStart` hook. On Windows, it discovers and validates Node.js, the ZCode installation directory and runtime, builtin/personal provider configuration, the ZCode data root, and the Bridge data directory. It writes the resolved paths and current settings to user environment variables and a local `runtime-config.json`. Provider credentials are not copied. Standard installs do not require cloning the repository or running `npm install`. The marketplace does not install Node.js or ZCode for you.
+After installing, start a new conversation and review and trust the plugin's `SessionStart` hook. On Windows, it discovers and validates Node.js, the ZCode runtime, provider configuration, and data directories, then saves settings to `%USERPROFILE%\.codex\codex-zcode-bridge\runtime-config.json`. It does not write Windows user environment variables or copy provider credentials. Standard installs do not require cloning the repository or running `npm install`. The marketplace does not install Node.js or ZCode for you.
 
-The plugin's first-run hook discovers and saves common ZCode runtime and provider locations. To override custom paths, set a default model, or configure parallel workers, run `install.ps1` from a repository checkout. Running it without options scans, validates, and saves the discovered setup; this optional configuration step requires a repository copy, while plugin installation itself does not:
+To customize settings, edit `%USERPROFILE%\.codex\codex-zcode-bridge\runtime-config.json` directly. On macOS/Linux, use `~/.codex/codex-zcode-bridge/runtime-config.json`. The Windows first-run hook creates this file; on other platforms, create it if needed. Keep the discovered path fields and change only the values you need:
 
-Replace the sample paths and `your-provider-id` / `your-model-id` with values from your local setup. The default provider and model must be supplied together.
+- `ZCODE_BRIDGE_NODE`: absolute path to Node.js (only needed when `node` is not on PATH).
+- `ZCODE_BRIDGE_ZCODE_CJS`: absolute path to the ZCode runtime.
+- `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE` and `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`: absolute paths to the builtin and personal provider config files.
+- `ZCODE_HOME`: absolute path to the actual `.zcode` data directory.
+- `ZCODE_BRIDGE_DATA_DIR`: absolute path to the Bridge task data directory.
+- `ZCODE_BRIDGE_DEFAULT_PROVIDER_ID` and `ZCODE_BRIDGE_DEFAULT_MODEL_ID`: default provider and model IDs; set both.
+- `ZCODE_BRIDGE_MODE`: initial execution mode: `plan`, `build`, `edit`, or `yolo`.
+- `ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS`: parallel task limit.
 
-```powershell
-git clone --branch master --single-branch https://github.com/Sandyzzx/codex-zcode-bridge.git
-Set-Location codex-zcode-bridge
-.\install.ps1 `
-  -ZCodeRuntimePath "C:\path\to\zcode.cjs" `
-  -BuiltinProviderConfigPath "C:\path\to\zcode-builtin.json" `
-  -PersonalProviderConfigPath "D:\ZCodeData\.zcode\v2\provider_config.json" `
-  -ZCodeHome "D:\ZCodeData\.zcode" `
-  -DefaultProviderId "your-provider-id" `
-  -DefaultModelId "your-model-id" `
-  -Mode "yolo"
-```
-
-Omit options you do not need to override. `ZCodeHome` must be the actual `.zcode` directory, and the personal provider file must be at `v2\provider_config.json` inside it. The script discovers and validates the required directories and current settings, then records the runtime, installation root, provider files, ZCode data root, Bridge data directory, mode, worker limit, and any configured default model in the Windows user environment and `runtime-config.json`. It saves a default model only when you already configured or explicitly supplied one; it will not guess which model to use. Add `-WhatIf` to preview changes without writing them.
+Save valid JSON; a newly started Bridge reads the config file, which takes precedence over legacy environment variables. `ZCODE_HOME` must point to the `.zcode` directory, and the personal provider config must be at `v2/provider_config.json` inside it. Copy provider/model IDs from your ZCode configuration, and do not edit ZCode's provider files.
 
 See the [official OpenAI plugin documentation](https://developers.openai.com/plugins/build/plugins) for marketplace and plugin details.
-
-### Optional: parallel workers
-
-The Bridge runs one ZCode task at a time by default. After confirming that local resources and ZCode provider configuration can handle concurrency, set the worker limit to 2–8; for example, run `./install.ps1 -MaxConcurrentWorkers 2` from a repository checkout in PowerShell, then restart Codex. You can also set the user environment variable `ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS`. Different project directories can run concurrently; identical or nested execution directories are queued. To run multiple tasks in one project at once, Codex must prepare a truly independent Git worktree for each task and pass each path. The Bridge serializes by path only; it does not verify that supplied directories are independent Git worktrees, create them, or choose them.
-
-The limit applies to one Bridge MCP process and defaults to 1. Cross-process scheduling between multiple Bridge processes sharing a data directory is not implemented; do not increase concurrency by launching multiple Bridge processes.
 
 ## Use
 
@@ -66,14 +54,19 @@ ZCode generates the session title from the first task prompt. The Bridge puts `T
 
 After execution, Codex should inspect the actual diff and run acceptance checks independently. `completed` means ZCode reported the task finished; it does not mean Codex approved the changes. If an unresolved decision could materially affect behavior, ZCode asks Codex for direction before proceeding on that point.
 
-In ZCode Desktop, find tasks in the Workspace view under the Codex project directory. Task-index synchronization is best-effort, so the sidebar may not refresh immediately.
+In ZCode Desktop, find tasks in the Workspace view under the Codex project directory.
+
+## Known issues
+
+- The ZCode Desktop sidebar may not immediately show a new session. The Bridge best-effort syncs the local task index; Desktop controls when the list refreshes.
+- ZCode Start Plan is currently unavailable through the Bridge.
 
 ## Security and limitations
 
-- The default execution mode is `yolo`. Set `ZCODE_BRIDGE_MODE` to `plan`, `build`, or `edit` to change it. ZCode runs with the current operating-system user's permissions.
+- The default execution mode is `yolo`; change `ZCODE_BRIDGE_MODE` in the config file if needed. ZCode runs with the current operating-system user's permissions.
 - A Git worktree isolates the working directory; it is not an operating-system sandbox. `allowed_paths` and `forbidden_paths` describe task constraints but cannot prevent the process from accessing other files or running commands.
 - Codex decides whether to create a worktree. The Bridge uses the supplied project directory and optional worktree path; it does not create or remove worktrees.
-- Parallel execution starts multiple ZCode app-server workers and increases local resource use and provider concurrency. A live E2E verified parallel sessions using the same Coding Plan model and Desktop task-index registration; concurrent switching between providers/models and Desktop UI refresh remain unverified. Use the default single worker for predictable operation.
+- Parallel tasks use more local resources and provider capacity.
 - The Bridge stores prompts, status, logs, visible model output, events, and results locally in `~/.codex/codex-zcode-bridge/` (on Windows: `%USERPROFILE%\.codex\codex-zcode-bridge\`). Do not include credentials or data in tasks or workspaces if they should not be sent to the selected model service.
 - The Bridge uses the local ZCode app-server. Permission interactions and available events depend on the installed ZCode version. Forwarding per-action approval requests back to Codex has not been verified.
 

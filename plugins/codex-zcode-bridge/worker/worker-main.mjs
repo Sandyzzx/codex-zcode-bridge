@@ -253,10 +253,12 @@ import { fileURLToPath } from "node:url";
 var PERSISTED_RUNTIME_KEYS = [
   "ZCODE_BRIDGE_NODE",
   "ZCODE_BRIDGE_ZCODE_CJS",
+  "ZCODE_BRIDGE_DATA_DIR",
   "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE",
   "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE",
   "ZCODE_HOME",
   "ZCODE_DATA_BASE_DIR",
+  "ZCODE_WINDOWS_APP_INSTALL_DIR",
   "ZCODE_BRIDGE_DEFAULT_PROVIDER_ID",
   "ZCODE_BRIDGE_DEFAULT_MODEL_ID",
   "ZCODE_BRIDGE_DEFAULT_REASONING_LEVEL",
@@ -264,22 +266,35 @@ var PERSISTED_RUNTIME_KEYS = [
   "ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS"
 ];
 function loadPersistedRuntimeEnvironment(source) {
-  const dataRoot2 = source["ZCODE_BRIDGE_DATA_DIR"]?.trim();
-  if (!dataRoot2 || !path.isAbsolute(dataRoot2)) return { ...source };
-  const settingsPath = path.join(dataRoot2, "runtime-config.json");
-  let parsed;
-  try {
-    if (statSync(settingsPath).size > 64 * 1024) return { ...source };
-    parsed = JSON.parse(readFileSync(settingsPath, "utf8"));
-  } catch {
-    return { ...source };
+  const settingsPaths = [path.join(homedir(), ".codex", "codex-zcode-bridge", "runtime-config.json")];
+  const legacyDataRoot = source["ZCODE_BRIDGE_DATA_DIR"]?.trim();
+  if (legacyDataRoot && path.isAbsolute(legacyDataRoot)) {
+    settingsPaths.push(path.join(legacyDataRoot, "runtime-config.json"));
   }
-  if (!isPlainObject2(parsed)) return { ...source };
+  let parsed = null;
+  const seenPaths = /* @__PURE__ */ new Set();
+  for (const settingsPath of settingsPaths) {
+    const normalized = path.resolve(settingsPath);
+    const identity = process.platform === "win32" ? normalized.toLocaleLowerCase("en-US") : normalized;
+    if (seenPaths.has(identity)) continue;
+    seenPaths.add(identity);
+    try {
+      if (statSync(normalized).size > 64 * 1024) continue;
+      const candidate = JSON.parse(readFileSync(normalized, "utf8"));
+      if (isPlainObject2(candidate)) {
+        parsed = candidate;
+        break;
+      }
+    } catch {
+    }
+  }
+  if (!parsed) return { ...source };
   const env = { ...source };
   for (const key of PERSISTED_RUNTIME_KEYS) {
-    if (env[key]?.trim()) continue;
+    if (!Object.prototype.hasOwnProperty.call(parsed, key)) continue;
     const value = parsed[key];
-    if (typeof value === "string" && value.trim()) env[key] = value.trim();
+    if (typeof value === "string") env[key] = value.trim();
+    else if (value === null) env[key] = "";
   }
   return env;
 }

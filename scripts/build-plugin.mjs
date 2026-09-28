@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
@@ -23,4 +23,18 @@ await Promise.all([
   build({ ...shared, entryPoints: [path.join(repoRoot, "src", "mcp", "main.ts")], outfile: path.join(serverDir, "bridge.mjs") }),
   build({ ...shared, entryPoints: [path.join(repoRoot, "src", "worker", "worker-main.ts")], outfile: path.join(workerDir, "worker-main.mjs") }),
 ]);
+
+const packageJson = JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf8"));
+const bridgeBundlePath = path.join(serverDir, "bridge.mjs");
+const bridgeBundle = await readFile(bridgeBundlePath, "utf8");
+const versionPattern = /var SERVER_VERSION = "[^"]+";/;
+if (!versionPattern.test(bridgeBundle)) {
+  throw new Error("Could not find the bundled SERVER_VERSION declaration.");
+}
+await writeFile(
+  bridgeBundlePath,
+  bridgeBundle.replace(versionPattern, `var SERVER_VERSION = "${packageJson.version}"; // x-release-please-version`),
+  "utf8",
+);
+
 console.log("Built the self-contained Codex marketplace plugin server and worker.");

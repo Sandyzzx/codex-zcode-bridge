@@ -42,10 +42,10 @@ export interface WorkerLimitResolution {
   readonly warning?: string;
 }
 
-/** Defaults to serial execution; invalid values fail safely back to one worker. */
+/** Defaults to eight concurrent workers; invalid values fail safely back to one worker. */
 export function resolveMaxConcurrentWorkers(env: NodeJS.ProcessEnv): WorkerLimitResolution {
   const raw = env["ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS"]?.trim();
-  if (!raw) return { maxConcurrentWorkers: 1 };
+  if (!raw) return { maxConcurrentWorkers: 8 };
   if (!/^[1-8]$/u.test(raw)) {
     return {
       maxConcurrentWorkers: 1,
@@ -56,18 +56,20 @@ export function resolveMaxConcurrentWorkers(env: NodeJS.ProcessEnv): WorkerLimit
 }
 
 async function main(): Promise<void> {
+  const runtimeEnv = loadPersistedRuntimeEnvironment(process.env);
   // Keep task records and worktrees outside the versioned marketplace cache.
-  // The explicit plugin marker opts into this stable per-user data location.
-  if (process.env["ZCODE_BRIDGE_PLUGIN_MODE"] === "1" && !process.env["ZCODE_BRIDGE_DATA_DIR"]) {
-    process.env["ZCODE_BRIDGE_DATA_DIR"] = path.join(homedir(), ".codex", "codex-zcode-bridge");
+  // Plugin mode uses this stable per-user data location unless the config file
+  // selects a separate task data directory.
+  if (process.env["ZCODE_BRIDGE_PLUGIN_MODE"] === "1" && !runtimeEnv["ZCODE_BRIDGE_DATA_DIR"]?.trim()) {
+    runtimeEnv["ZCODE_BRIDGE_DATA_DIR"] = path.join(homedir(), ".codex", "codex-zcode-bridge");
   }
-  const { dataRoot, warning } = resolveDataRoot(process.env);
+  const { dataRoot, warning } = resolveDataRoot(runtimeEnv);
   if (warning) {
     console.error(`[bridge] ${warning}`);
   }
   console.error(`[bridge] data root: ${dataRoot}`);
 
-  const workerLimit = resolveMaxConcurrentWorkers(loadPersistedRuntimeEnvironment(process.env));
+  const workerLimit = resolveMaxConcurrentWorkers(runtimeEnv);
   if (workerLimit.warning) console.error(`[bridge] ${workerLimit.warning}`);
   console.error(`[bridge] max concurrent workers: ${workerLimit.maxConcurrentWorkers}`);
 

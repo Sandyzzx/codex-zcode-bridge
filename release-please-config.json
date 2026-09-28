@@ -1,0 +1,19 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "bootstrap-sha": "1e821d5ae101a908c0f1288075f6716a1e6a17d0",
+  "release-type": "node",
+  "packages": {
+    ".": {
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "plugins/codex-zcode-bridge/plugin.json",
+          "jsonpath": "$.version"
+        },
+        "src/mcp/server.ts",
+        "plugins/codex-zcode-bridge/server/bridge.mjs"
+      ]
+    }
+  }
+}

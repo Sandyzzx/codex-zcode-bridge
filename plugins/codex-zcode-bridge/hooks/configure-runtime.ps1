@@ -14,6 +14,29 @@ param(
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+$script:RuntimeSettingsDirectory = Join-Path $HOME ".codex\codex-zcode-bridge"
+$script:RuntimeSettings = $null
+$script:ResolvedNodeExecutable = $null
+
+$legacyDataRoot = [Environment]::GetEnvironmentVariable("ZCODE_BRIDGE_DATA_DIR", "Process")
+if (-not $legacyDataRoot) { $legacyDataRoot = [Environment]::GetEnvironmentVariable("ZCODE_BRIDGE_DATA_DIR", "User") }
+$settingsCandidates = @((Join-Path $script:RuntimeSettingsDirectory "runtime-config.json"))
+if ($legacyDataRoot -and [IO.Path]::IsPathRooted($legacyDataRoot)) {
+    $settingsCandidates += (Join-Path ([IO.Path]::GetFullPath($legacyDataRoot)) "runtime-config.json")
+}
+foreach ($settingsCandidate in ($settingsCandidates | Select-Object -Unique)) {
+    if (-not (Test-Path -LiteralPath $settingsCandidate -PathType Leaf)) { continue }
+    try {
+        if ((Get-Item -LiteralPath $settingsCandidate).Length -gt 65536) { continue }
+        $candidateSettings = Get-Content -LiteralPath $settingsCandidate -Raw | ConvertFrom-Json
+        if ($null -ne $candidateSettings -and $candidateSettings -isnot [Array] -and $candidateSettings -is [PSCustomObject]) {
+            $script:RuntimeSettings = $candidateSettings
+            break
+        }
+    } catch {
+        Write-Warning "Could not read Bridge runtime settings from $settingsCandidate; checking fallback sources."
+    }
+}
 
 function Resolve-ExistingFile {
     param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Label)
@@ -25,6 +48,15 @@ function Resolve-ExistingFile {
 
 function Get-ConfiguredEnvironmentValue {
     param([Parameter(Mandatory)][string]$Name)
+    if ($null -ne $script:RuntimeSettings) {
+        $setting = $script:RuntimeSettings.PSObject.Properties[$Name]
+        if ($null -ne $setting) {
+            if ($null -eq $setting.Value) { return $null }
+            $settingValue = ([string]$setting.Value).Trim()
+            if ($settingValue) { return $settingValue }
+            return $null
+        }
+    }
     $processValue = [Environment]::GetEnvironmentVariable($Name, "Process")
     if ($processValue -and $processValue.Trim()) { return $processValue.Trim() }
     $userValue = [Environment]::GetEnvironmentVariable($Name, "User")
@@ -34,7 +66,8 @@ function Get-ConfiguredEnvironmentValue {
 
 function Read-JsonObject {
     param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Label)
-    $configuredNode = Get-ConfiguredEnvironmentValue "ZCODE_BRIDGE_NODE"
+    $configuredNode = $script:ResolvedNodeExecutable
+    if (-not $configuredNode) { $configuredNode = Get-ConfiguredEnvironmentValue "ZCODE_BRIDGE_NODE" }
     $nodeExecutable = if ($configuredNode) {
         Resolve-ExistingFile $configuredNode "ZCODE_BRIDGE_NODE"
     } else {
@@ -70,7 +103,8 @@ function Test-ProviderConfig {
 
 function Read-DesktopDataBaseDir {
     param([Parameter(Mandatory)][string]$Path)
-    $configuredNode = Get-ConfiguredEnvironmentValue "ZCODE_BRIDGE_NODE"
+    $configuredNode = $script:ResolvedNodeExecutable
+    if (-not $configuredNode) { $configuredNode = Get-ConfiguredEnvironmentValue "ZCODE_BRIDGE_NODE" }
     $nodeExecutable = if ($configuredNode) { $configuredNode }
         else { (Get-Command node -ErrorAction Stop).Source }
     $reader = @'
@@ -92,22 +126,6 @@ function Find-DefaultRuntime {
         if (Test-Path -LiteralPath $candidate -PathType Leaf) { return [IO.Path]::GetFullPath($candidate) }
     }
     return $null
-}
-
-function Set-UserEnvironmentPath {
-    [CmdletBinding(SupportsShouldProcess = $true)]
-    param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][string]$Value)
-    $currentUserValue = [Environment]::GetEnvironmentVariable($Name, "User")
-    $currentProcessValue = [Environment]::GetEnvironmentVariable($Name, "Process")
-    if ($currentUserValue -ieq $Value -and $currentProcessValue -ieq $Value) {
-        Write-Host "Already configured: $Name"
-        return
-    }
-    if ($PSCmdlet.ShouldProcess("Current user environment", "Set $Name")) {
-        [Environment]::SetEnvironmentVariable($Name, $Value, "User")
-        [Environment]::SetEnvironmentVariable($Name, $Value, "Process")
-        Write-Host "Configured user environment variable: $Name"
-    }
 }
 
 function Write-BridgeRuntimeSettings {
@@ -158,7 +176,7 @@ $effectiveNode = if ($configuredNode) { Resolve-ExistingFile $configuredNode "No
         if ($nodeCommand) { Resolve-ExistingFile $nodeCommand.Source "Node.js executable" } else { $null }
     }
 if (-not $effectiveNode) { throw "Node.js was not found. Install Node.js 22.18+ or pass -NodeExecutablePath." }
-$env:ZCODE_BRIDGE_NODE = $effectiveNode
+$script:ResolvedNodeExecutable = $effectiveNode
 $nodeVersionText = (& $effectiveNode --version 2>$null | Out-String).Trim()
 if ($LASTEXITCODE -ne 0 -or $nodeVersionText -notmatch '^v?(\d+)\.(\d+)\.(\d+)') { throw "Could not determine the Node.js version from $effectiveNode." }
 $nodeMajor = [int]$Matches[1]; $nodeMinor = [int]$Matches[2]
@@ -241,7 +259,7 @@ $effectiveMode = if ($Mode) { $Mode } elseif ((Get-ConfiguredEnvironmentValue "Z
 if ($effectiveMode -notin @("plan", "build", "edit", "yolo")) {
     throw "ZCODE_BRIDGE_MODE must be one of: plan, build, edit, yolo."
 }
-$effectiveMaxWorkers = 1
+$effectiveMaxWorkers = 8
 if ($PSBoundParameters.ContainsKey("MaxConcurrentWorkers")) {
     $effectiveMaxWorkers = $MaxConcurrentWorkers
 } elseif ((Get-ConfiguredEnvironmentValue "ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS")) {
@@ -281,28 +299,14 @@ $bridgeRuntimeSettings = [ordered]@{
     ZCODE_BRIDGE_DATA_DIR = $effectiveDataDir
     ZCODE_BRIDGE_MODE = $effectiveMode
     ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS = [string]$effectiveMaxWorkers
+    ZCODE_BRIDGE_DEFAULT_PROVIDER_ID = if ($effectiveDefaultProvider) { $effectiveDefaultProvider } else { "" }
+    ZCODE_BRIDGE_DEFAULT_MODEL_ID = if ($effectiveDefaultModel) { $effectiveDefaultModel } else { "" }
+    ZCODE_BRIDGE_DEFAULT_REASONING_LEVEL = if ($effectiveReasoning) { $effectiveReasoning } else { "" }
 }
-if ($effectiveDefaultProvider) { $bridgeRuntimeSettings["ZCODE_BRIDGE_DEFAULT_PROVIDER_ID"] = $effectiveDefaultProvider }
-if ($effectiveDefaultModel) { $bridgeRuntimeSettings["ZCODE_BRIDGE_DEFAULT_MODEL_ID"] = $effectiveDefaultModel }
-if ($effectiveReasoning) { $bridgeRuntimeSettings["ZCODE_BRIDGE_DEFAULT_REASONING_LEVEL"] = $effectiveReasoning }
-
-Set-UserEnvironmentPath "ZCODE_BRIDGE_NODE" $effectiveNode
-Set-UserEnvironmentPath "ZCODE_BRIDGE_ZCODE_CJS" $effectiveRuntime
-Set-UserEnvironmentPath "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE" $effectiveBuiltin
-Set-UserEnvironmentPath "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE" $effectivePersonal
-Set-UserEnvironmentPath "ZCODE_WINDOWS_APP_INSTALL_DIR" $effectiveInstallDir
-if ($effectiveDataBaseDir) { Set-UserEnvironmentPath "ZCODE_DATA_BASE_DIR" $effectiveDataBaseDir }
-Set-UserEnvironmentPath "ZCODE_HOME" $configuredZCodeHome
-Set-UserEnvironmentPath "ZCODE_BRIDGE_DATA_DIR" $effectiveDataDir
-Set-UserEnvironmentPath "ZCODE_BRIDGE_MODE" $effectiveMode
-Set-UserEnvironmentPath "ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS" ([string]$effectiveMaxWorkers)
-if ($effectiveDefaultProvider) { Set-UserEnvironmentPath "ZCODE_BRIDGE_DEFAULT_PROVIDER_ID" $effectiveDefaultProvider }
-if ($effectiveDefaultModel) { Set-UserEnvironmentPath "ZCODE_BRIDGE_DEFAULT_MODEL_ID" $effectiveDefaultModel }
-if ($effectiveReasoning) { Set-UserEnvironmentPath "ZCODE_BRIDGE_DEFAULT_REASONING_LEVEL" $effectiveReasoning }
-Write-BridgeRuntimeSettings -Directory $effectiveDataDir -Settings $bridgeRuntimeSettings
+Write-BridgeRuntimeSettings -Directory $script:RuntimeSettingsDirectory -Settings $bridgeRuntimeSettings
 
 if ($WhatIfPreference) {
     Write-Host "Preview complete; no environment variables or settings files were changed."
 } else {
-    Write-Host "All discovered Bridge runtime paths and effective settings are configured. Restart Codex so its MCP process receives the environment changes."
+    Write-Host "All discovered Bridge runtime paths and effective settings are saved to $script:RuntimeSettingsDirectory\runtime-config.json. No user environment variables were changed."
 }

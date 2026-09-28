@@ -21531,21 +21531,24 @@ function toError(value) {
 }
 
 // src/mcp/main.ts
-import { homedir } from "node:os";
+import { homedir as homedir2 } from "node:os";
 import path5 from "node:path";
 import { pathToFileURL } from "node:url";
 
 // src/runtime/resolver.ts
 import { accessSync, existsSync, readFileSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 var PERSISTED_RUNTIME_KEYS = [
   "ZCODE_BRIDGE_NODE",
   "ZCODE_BRIDGE_ZCODE_CJS",
+  "ZCODE_BRIDGE_DATA_DIR",
   "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE",
   "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE",
   "ZCODE_HOME",
   "ZCODE_DATA_BASE_DIR",
+  "ZCODE_WINDOWS_APP_INSTALL_DIR",
   "ZCODE_BRIDGE_DEFAULT_PROVIDER_ID",
   "ZCODE_BRIDGE_DEFAULT_MODEL_ID",
   "ZCODE_BRIDGE_DEFAULT_REASONING_LEVEL",
@@ -21553,22 +21556,35 @@ var PERSISTED_RUNTIME_KEYS = [
   "ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS"
 ];
 function loadPersistedRuntimeEnvironment(source) {
-  const dataRoot = source["ZCODE_BRIDGE_DATA_DIR"]?.trim();
-  if (!dataRoot || !path.isAbsolute(dataRoot)) return { ...source };
-  const settingsPath = path.join(dataRoot, "runtime-config.json");
-  let parsed;
-  try {
-    if (statSync(settingsPath).size > 64 * 1024) return { ...source };
-    parsed = JSON.parse(readFileSync(settingsPath, "utf8"));
-  } catch {
-    return { ...source };
+  const settingsPaths = [path.join(homedir(), ".codex", "codex-zcode-bridge", "runtime-config.json")];
+  const legacyDataRoot = source["ZCODE_BRIDGE_DATA_DIR"]?.trim();
+  if (legacyDataRoot && path.isAbsolute(legacyDataRoot)) {
+    settingsPaths.push(path.join(legacyDataRoot, "runtime-config.json"));
   }
-  if (!isPlainObject3(parsed)) return { ...source };
+  let parsed = null;
+  const seenPaths = /* @__PURE__ */ new Set();
+  for (const settingsPath of settingsPaths) {
+    const normalized = path.resolve(settingsPath);
+    const identity = process.platform === "win32" ? normalized.toLocaleLowerCase("en-US") : normalized;
+    if (seenPaths.has(identity)) continue;
+    seenPaths.add(identity);
+    try {
+      if (statSync(normalized).size > 64 * 1024) continue;
+      const candidate = JSON.parse(readFileSync(normalized, "utf8"));
+      if (isPlainObject3(candidate)) {
+        parsed = candidate;
+        break;
+      }
+    } catch {
+    }
+  }
+  if (!parsed) return { ...source };
   const env = { ...source };
   for (const key of PERSISTED_RUNTIME_KEYS) {
-    if (env[key]?.trim()) continue;
+    if (!Object.prototype.hasOwnProperty.call(parsed, key)) continue;
     const value = parsed[key];
-    if (typeof value === "string" && value.trim()) env[key] = value.trim();
+    if (typeof value === "string") env[key] = value.trim();
+    else if (value === null) env[key] = "";
   }
   return env;
 }
@@ -22286,7 +22302,7 @@ var BridgeTaskManager = class {
     this.#terminateProcessTree = options.terminateProcessTree ?? terminateProcessTree;
     this.#now = options.now ?? (() => /* @__PURE__ */ new Date());
     this.#dataRoot = options.store.dataRoot;
-    this.#maxConcurrentWorkers = options.maxConcurrentWorkers ?? 1;
+    this.#maxConcurrentWorkers = options.maxConcurrentWorkers ?? 8;
     if (!Number.isInteger(this.#maxConcurrentWorkers) || this.#maxConcurrentWorkers < 1 || this.#maxConcurrentWorkers > 8) {
       throw new RangeError("maxConcurrentWorkers must be an integer from 1 to 8");
     }
@@ -22868,7 +22884,7 @@ var toolErrorSchema = object({
 
 // src/mcp/server.ts
 var SERVER_NAME = "codex-zcode-bridge";
-var SERVER_VERSION = "0.4.0";
+var SERVER_VERSION = "0.4.0"; // x-release-please-version
 var EXECUTION_NOT_VERDICT = "Results describe Bridge/ZCode execution only: status 'completed' means the invocation and report normalization finished, NOT that Codex accepted the work. Codex must independently review the workspace diff and checks before deciding PASS.";
 function okResult(data) {
   return {
@@ -22980,7 +22996,7 @@ function resolveDataRoot(env) {
 }
 function resolveMaxConcurrentWorkers(env) {
   const raw = env["ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS"]?.trim();
-  if (!raw) return { maxConcurrentWorkers: 1 };
+  if (!raw) return { maxConcurrentWorkers: 8 };
   if (!/^[1-8]$/u.test(raw)) {
     return {
       maxConcurrentWorkers: 1,
@@ -22990,15 +23006,16 @@ function resolveMaxConcurrentWorkers(env) {
   return { maxConcurrentWorkers: Number(raw) };
 }
 async function main() {
-  if (process.env["ZCODE_BRIDGE_PLUGIN_MODE"] === "1" && !process.env["ZCODE_BRIDGE_DATA_DIR"]) {
-    process.env["ZCODE_BRIDGE_DATA_DIR"] = path5.join(homedir(), ".codex", "codex-zcode-bridge");
+  const runtimeEnv = loadPersistedRuntimeEnvironment(process.env);
+  if (process.env["ZCODE_BRIDGE_PLUGIN_MODE"] === "1" && !runtimeEnv["ZCODE_BRIDGE_DATA_DIR"]?.trim()) {
+    runtimeEnv["ZCODE_BRIDGE_DATA_DIR"] = path5.join(homedir2(), ".codex", "codex-zcode-bridge");
   }
-  const { dataRoot, warning } = resolveDataRoot(process.env);
+  const { dataRoot, warning } = resolveDataRoot(runtimeEnv);
   if (warning) {
     console.error(`[bridge] ${warning}`);
   }
   console.error(`[bridge] data root: ${dataRoot}`);
-  const workerLimit = resolveMaxConcurrentWorkers(loadPersistedRuntimeEnvironment(process.env));
+  const workerLimit = resolveMaxConcurrentWorkers(runtimeEnv);
   if (workerLimit.warning) console.error(`[bridge] ${workerLimit.warning}`);
   console.error(`[bridge] max concurrent workers: ${workerLimit.maxConcurrentWorkers}`);
   const store = new TaskStore(dataRoot);

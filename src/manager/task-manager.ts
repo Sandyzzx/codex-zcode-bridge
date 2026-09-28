@@ -36,7 +36,7 @@ export interface TaskManagerOptions {
   /** Reconcile/pump interval; 0 disables the timer (tests drive manually). */
   pollIntervalMs?: number;
   now?: () => Date;
-  /** Maximum simultaneous detached workers in this Bridge process. Defaults to 1. */
+  /** Maximum simultaneous detached workers in this Bridge process. Defaults to 8. */
   maxConcurrentWorkers?: number;
 }
 
@@ -60,7 +60,7 @@ export class BridgeTaskManager implements ProgressTaskManager {
     this.#terminateProcessTree = options.terminateProcessTree ?? terminateProcessTree;
     this.#now = options.now ?? (() => new Date());
     this.#dataRoot = options.store.dataRoot;
-    this.#maxConcurrentWorkers = options.maxConcurrentWorkers ?? 1;
+    this.#maxConcurrentWorkers = options.maxConcurrentWorkers ?? 8;
     if (!Number.isInteger(this.#maxConcurrentWorkers) || this.#maxConcurrentWorkers < 1 || this.#maxConcurrentWorkers > 8) {
       throw new RangeError("maxConcurrentWorkers must be an integer from 1 to 8");
     }
