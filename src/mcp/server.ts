@@ -34,7 +34,7 @@ import {
 import type { DoctorReport } from "../runtime/doctor.js";
 
 export const SERVER_NAME = "codex-zcode-bridge";
-export const SERVER_VERSION = "0.6.0"; // x-release-please-version
+export const SERVER_VERSION = "0.7.0"; // x-release-please-version
 
 export interface BridgeServerOptions {
   taskManager: TaskManager & Partial<Pick<ProgressTaskManager, "getEvents" | "replyToInteraction">>;
