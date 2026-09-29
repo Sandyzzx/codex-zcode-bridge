@@ -1,7 +1,7 @@
 {
   "name": "codex-zcode-bridge",
-  "version": "0.7.0",
-  "description": "\u8ba9 Codex \u901a\u8fc7\u672c\u5730 Bridge \u59d4\u6d3e\u3001\u8ddf\u8fdb\u5e76\u5ba1\u67e5 ZCode \u5f00\u53d1\u4efb\u52a1\u3002",
+  "version": "0.7.2",
+  "description": "让 Codex 通过本地 Bridge 委派、跟进并审查 ZCode 开发任务。",
   "license": "Apache-2.0",
   "repository": "https://github.com/Sandyzzx/codex-zcode-bridge",
   "author": {
@@ -10,8 +10,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Codex ZCode Bridge",
-    "shortDescription": "\u628a\u5f00\u53d1\u4efb\u52a1\u4ea4\u7ed9\u672c\u673a ZCode \u6267\u884c\u3002",
-    "longDescription": "\u901a\u8fc7\u672c\u5730 MCP \u5c06\u5f00\u53d1\u4efb\u52a1\u4ea4\u7ed9 ZCode\uff0c\u5728 Codex \u67e5\u770b\u8fdb\u5ea6\u3001\u5ba1\u67e5\u6539\u52a8\u5e76\u51b3\u5b9a\u662f\u5426\u63a5\u6536\u3002",
+    "shortDescription": "把开发任务交给本机 ZCode 执行。",
+    "longDescription": "通过本地 MCP 将开发任务交给 ZCode，在 Codex 查看进度、审查改动并决定是否接收。",
     "developerName": "Sandy",
     "category": "Developer tools",
     "capabilities": [
@@ -19,9 +19,9 @@
       "Task delegation"
     ],
     "defaultPrompt": [
-      "\u628a\u8fd9\u4e2a\u5f00\u53d1\u4efb\u52a1\u4ea4\u7ed9 ZCode\uff0c\u5e76\u8ddf\u8fdb\u5230\u5b8c\u6210\u3002",
-      "\u7528\u6307\u5b9a\u6a21\u578b\u8ba9 ZCode \u4fee\u590d\u8fd9\u4e2a\u95ee\u9898\u3002",
-      "\u68c0\u67e5 ZCode \u7684\u4efb\u52a1\u8fdb\u5ea6\u548c\u6700\u7ec8\u6539\u52a8\u3002"
+      "把这个开发任务交给 ZCode，并跟进到完成。",
+      "用指定模型让 ZCode 修复这个问题。",
+      "检查 ZCode 的任务进度和最终改动。"
     ]
   },
   "mcpServers": "./.mcp.json"
