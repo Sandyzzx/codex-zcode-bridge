@@ -293,6 +293,9 @@ test("persistent transient failure exhausts retries and reports zcode_nonzero_ex
 
 test("timeout terminates the process tree, reports timeout, and cleans the prompt file", async () => {
   const fx = await makeFixture({ timeoutMs: 30 });
+  // The production timeout is unref'ed; keep the test process alive while the
+  // fake child has no real OS handle so Node 22 can observe that timeout.
+  const keepAlive = setTimeout(() => {}, 1_000);
   let promptPathDuringRun: string | null = null;
   try {
     fx.fake.script.push((child, record) => {
@@ -314,6 +317,7 @@ test("timeout terminates the process tree, reports timeout, and cleans the promp
     assert.ok(promptPathDuringRun);
     assert.ok(!existsSync(promptPathDuringRun));
   } finally {
+    clearTimeout(keepAlive);
     await fx.cleanup();
   }
 });
