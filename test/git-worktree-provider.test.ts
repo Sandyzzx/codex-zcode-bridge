@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { GitWorktreeWorkspaceProvider } from "../src/workspace/git-worktree-provider.js";
@@ -35,7 +35,7 @@ test("snapshots dirty source files into an isolated task worktree and reuses it"
     const provider = new GitWorktreeWorkspaceProvider(dataRoot);
     const workspace = await provider.resolve(source, taskId);
     assert.equal(workspace.mode, "worktree");
-    assert.equal(workspace.sourcePath, realpathSync(source));
+    assert.equal(workspace.sourcePath, path.normalize(git(source, "rev-parse", "--show-toplevel").trim()));
     assert.equal(workspace.branchName, `codex-zcode/${taskId}`);
     assert.notEqual(workspace.canonicalPath, source);
     assert.equal(readFileSync(path.join(workspace.canonicalPath, "base.txt"), "utf8").replace(/\r\n/g, "\n"), "local edit\n");
