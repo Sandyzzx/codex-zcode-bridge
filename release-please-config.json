@@ -11,6 +11,11 @@
           "path": "plugins/codex-zcode-bridge/plugin.json",
           "jsonpath": "$.version"
         },
+        {
+          "type": "json",
+          "path": "plugins/codex-zcode-bridge/.codex-plugin/plugin.json",
+          "jsonpath": "$.version"
+        },
         "src/mcp/server.ts",
         "plugins/codex-zcode-bridge/server/bridge.mjs"
       ]
