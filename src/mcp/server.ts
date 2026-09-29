@@ -29,13 +29,16 @@ import {
   zcodeTaskInputSchema,
   zcodeInteractionReplyInputSchema,
   taskProgressPageSchema,
+  doctorReportSchema,
 } from "./schemas.js";
+import type { DoctorReport } from "../runtime/doctor.js";
 
 export const SERVER_NAME = "codex-zcode-bridge";
 export const SERVER_VERSION = "0.6.0"; // x-release-please-version
 
 export interface BridgeServerOptions {
   taskManager: TaskManager & Partial<Pick<ProgressTaskManager, "getEvents" | "replyToInteraction">>;
+  doctor?: () => Promise<DoctorReport>;
   serverInfo?: { name: string; version: string };
 }
 
@@ -75,6 +78,20 @@ export function createBridgeServer(options: BridgeServerOptions): McpServer {
   const server = new McpServer(serverInfo);
 
   server.registerTool(
+    "zcode_doctor",
+    {
+      title: "Check ZCode Bridge setup",
+      description: "Run read-only checks for Bridge prerequisites, ZCode runtime/provider configuration, execution mode, task storage, and Desktop task-index availability. It does not start a ZCode session. App-server model availability and real permission approval are reported as unverified until a task runs.",
+      inputSchema: {},
+      outputSchema: doctorReportSchema,
+    },
+    async () => {
+      if (!options.doctor) return errorResult("DOCTOR_UNAVAILABLE", "Bridge doctor is unavailable in this server instance");
+      return runTool(() => options.doctor!());
+    },
+  );
+
+  server.registerTool(
     "zcode_task",
     {
       title: "Submit one ZCode coding task",
@@ -100,11 +117,11 @@ export function createBridgeServer(options: BridgeServerOptions): McpServer {
     "zcode_events",
     {
       title: "Read live ZCode execution events",
-      description: "Read persisted progress events for a task. Immediately after submission, report the project path, effective execution path (and worktree path when supplied), and queued/running state from the first events. Keep polling until turn_started or startup failure; before longer monitoring, report the ZCode session, runtime-reported selected model, and execution mode. Set after_seq to the last next_seq returned and wait_ms up to 25000. Hidden reasoning is excluded. interaction_requested events include bounded tool/request details needed for a deliberate permission or input decision.",
+      description: "Read persisted progress events for a task. Set view to summary to merge adjacent model text chunks; raw is the default. next_seq advances across all scanned events, including merged chunks. Immediately after submission, report the project path, effective execution path (and worktree path when supplied), and queued/running state from the first events. Keep polling until turn_started or startup failure; before longer monitoring, report the ZCode session, runtime-reported selected model, and execution mode. Set after_seq to the last next_seq returned and wait_ms up to 25000. Hidden reasoning is excluded. interaction_requested events include bounded tool/request details needed for a deliberate permission or input decision.",
       inputSchema: zcodeEventsInputSchema,
       outputSchema: taskProgressPageSchema,
     },
-      async (args: { task_id: string; after_seq?: number; limit?: number; wait_ms?: number }) => {
+      async (args: { task_id: string; after_seq?: number; limit?: number; wait_ms?: number; view?: "raw" | "summary" }) => {
         if (!manager.getEvents) return errorResult("EVENTS_UNAVAILABLE", "task manager does not provide progress events");
         return runTool(() => manager.getEvents!(args));
       },
@@ -154,6 +171,47 @@ export function createBridgeServer(options: BridgeServerOptions): McpServer {
       outputSchema: taskStatusRecordSchema,
     },
     async (args: { task_id: string }) => runTool(() => manager.cancelTask(args.task_id)),
+  );
+
+  // Temporary experiment tool: verify whether Codex surfaces MCP progress notifications.
+  server.registerTool(
+    "zcode_progress_probe",
+    {
+      title: "[Experiment] Check MCP progress display",
+      description: "Temporary read-only experiment. Sends three MCP progress notifications over three seconds to test whether Codex displays server progress while this tool runs. Does not start or modify a ZCode task.",
+    },
+    async (ctx) => {
+      const progressToken = ctx.mcpReq._meta?.progressToken;
+      let notificationsSent = 0;
+
+      if (progressToken !== undefined) {
+        for (let progress = 1; progress <= 3; progress += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 1_000));
+          await ctx.mcpReq.notify({
+            method: "notifications/progress",
+            params: {
+              progressToken,
+              progress,
+              total: 3,
+              message: `Experiment progress ${progress}/3`,
+            },
+          });
+          notificationsSent += 1;
+        }
+      }
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            experiment: "mcp-progress-display",
+            progress_token_received: progressToken !== undefined,
+            notifications_sent: notificationsSent,
+            note: "The tool result confirms server delivery only; check whether Codex displayed progress while it was running.",
+          }, null, 2),
+        }],
+      };
+    },
   );
 
   return server;

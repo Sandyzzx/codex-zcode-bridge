@@ -69,11 +69,17 @@ export function buildAccountProviderPayload(config: ZCodeRuntimeConfig): Account
 
 /** Resolve a legacy config provider id to the provider id used in app-server. */
 export function accountProviderId(providerId: string, config: ZCodeRuntimeConfig): string {
-  if (!providerId.startsWith("builtin:")) return providerId;
   const table = readJson(config.providerBuiltinConfigFile);
   for (const rawRule of readProviderRules(table)) {
     if (!isRecord(rawRule)) continue;
     const rule = rawRule as ProviderRule;
+    if (
+      !providerId.startsWith("builtin:") &&
+      rule.providerId === providerId &&
+      rule.config?.access?.type === "zhipu-account"
+    ) {
+      return `account:${providerId}`;
+    }
     if (typeof rule.providerId === "string" && configProviderId(rule.providerId, rule) === providerId) {
       return rule.providerId;
     }

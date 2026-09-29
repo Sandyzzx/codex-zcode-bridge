@@ -22,6 +22,7 @@ export function buildTaskPrompt(task: TaskPackage): string {
     `PROJECT WORKSPACE: ${task.workspace}`,
     ...(task.worktree_path ? [`CODEX-SELECTED EXECUTION WORKTREE: ${task.worktree_path}. Make task changes in the current working directory, which is this worktree; the project workspace above identifies its parent project.`] : []),
     ...(task.model ? [`REQUESTED ZCODE MODEL: ${task.model.provider_id}/${task.model.model_id}${task.model.reasoning_level ? ` (reasoning level: ${task.model.reasoning_level})` : ""}. The Bridge configures this model for the session.`] : []),
+    ...(task.timeout_ms ? [`EXECUTION TIME LIMIT: ${task.timeout_ms} ms for this attempt.`] : []),
     `OBJECTIVE\n${bounded(task.objective, MAX_SECTION_CHARS)}`,
     renderList("REQUIREMENTS", task.requirements),
     renderPaths("ALLOWED PATHS (write only inside these when provided)", task.allowed_paths),
@@ -39,8 +40,7 @@ export function buildTaskPrompt(task: TaskPackage): string {
   if (task.context && task.context.trim().length > 0) {
     sections.push(`CONTEXT\n${bounded(task.context, MAX_CONTEXT_CHARS)}`);
   }
-  sections.push(OUTPUT_CONTRACT);
-  return joinBounded(sections);
+  return joinBoundedPreservingTail([...sections, OUTPUT_CONTRACT], OUTPUT_CONTRACT);
 }
 
 export function buildContinuePrompt(input: ContinuePromptInput): string {
@@ -62,13 +62,18 @@ export function buildContinuePrompt(input: ContinuePromptInput): string {
         MAX_SECTION_CHARS,
       )}`,
     );
+    if (previousResult.error_code === "invalid_agent_report") {
+      sections.push(
+        "REPORT REPAIR MODE: The previous attempt's execution has already ended; only its final report failed validation. Do not edit files, rerun tests, or repeat task work. Reconstruct the final JSON report from the previous response and report_candidate. Do not guess missing facts. If a required boolean or other fact cannot be established, set needs_master_decision=true and describe the uncertainty in issues.",
+      );
+    }
   }
   sections.push(`MASTER FEEDBACK (address every point)\n${bounded(feedback, MAX_SECTION_CHARS)}`);
   if (additionalRequirements.length > 0) {
     sections.push(renderList("ADDITIONAL REQUIREMENTS", [...additionalRequirements]));
   }
   sections.push(`ORIGINAL TASK\n${buildTaskPrompt(task)}`);
-  return joinBounded(sections);
+  return joinBoundedPreservingTail(sections, OUTPUT_CONTRACT);
 }
 
 const OUTPUT_CONTRACT = [
@@ -103,8 +108,10 @@ function bounded(text: string, maxChars: number): string {
   return `${text.slice(0, maxChars)}…[truncated]`;
 }
 
-function joinBounded(sections: readonly string[]): string {
+function joinBoundedPreservingTail(sections: readonly string[], requiredTail: string): string {
   const joined = sections.join("\n\n");
   if (joined.length <= MAX_PROMPT_CHARS) return joined;
-  return `${joined.slice(0, MAX_PROMPT_CHARS)}…[truncated]`;
+  const headBudget = MAX_PROMPT_CHARS - requiredTail.length - 24;
+  const head = joined.slice(0, Math.max(0, headBudget));
+  return `${head}…[middle truncated to preserve required output contract]\n\n${requiredTail}`;
 }

@@ -1,0 +1,141 @@
+import { accessSync, constants, existsSync, statSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { zcodeTasksIndexPath } from "./account-provider.js";
+import { BridgeError } from "./errors.js";
+import { resolveSessionPreferences } from "./session-preferences.js";
+import { loadPersistedRuntimeEnvironment, NodeRuntimeResolver, type RuntimeResolverOptions } from "./resolver.js";
+import type { ZCodeRuntimeConfig } from "../interfaces.js";
+
+export type DoctorStatus = "ok" | "warning" | "error" | "unknown";
+
+export interface DoctorCheck {
+  name: string;
+  status: DoctorStatus;
+  summary: string;
+}
+
+export interface DoctorReport {
+  checked_at: string;
+  execution_mode: string;
+  checks: DoctorCheck[];
+}
+
+export interface BridgeDoctorOptions {
+  env?: NodeJS.ProcessEnv;
+  resolver?: RuntimeResolverOptions;
+  dataRoot?: string;
+}
+
+/** Read-only diagnostics. This does not create a ZCode session or modify either app's data. */
+export async function runBridgeDoctor(options: BridgeDoctorOptions = {}): Promise<DoctorReport> {
+  const sourceEnv = options.env ?? process.env;
+  const env = loadPersistedRuntimeEnvironment(sourceEnv, options.resolver?.homeDir);
+  const checks: DoctorCheck[] = [];
+
+  const [major, minor] = process.versions.node.split(".").map(Number);
+  const nodeOk = major! > 22 || (major === 22 && minor! >= 18);
+  checks.push({
+    name: "node",
+    status: nodeOk ? "ok" : "error",
+    summary: nodeOk ? `Bridge is running on Node.js ${process.versions.node}` : `Node.js ${process.versions.node}; 22.18 or newer is required`,
+  });
+
+  try {
+    const gitVersion = execFileSync("git", ["--version"], { encoding: "utf8", timeout: 5_000, windowsHide: true }).trim();
+    checks.push({ name: "git", status: "ok", summary: gitVersion });
+  } catch {
+    checks.push({ name: "git", status: "error", summary: "Git was not found or could not be started" });
+  }
+
+  let mode = "unknown";
+  try {
+    mode = resolveSessionPreferences(undefined, env).mode;
+    checks.push({
+      name: "execution_mode",
+      status: mode === "yolo" ? "warning" : "ok",
+      summary: mode === "yolo"
+        ? "yolo: ordinary tool operations may run without approval and use the current OS account's permissions"
+        : mode,
+    });
+  } catch (error) {
+    checks.push({ name: "execution_mode", status: "error", summary: safeError(error) });
+  }
+
+  let config: ZCodeRuntimeConfig | null = null;
+  try {
+    config = await new NodeRuntimeResolver({ ...options.resolver, env }).resolve();
+    checks.push({ name: "zcode_runtime", status: "ok", summary: "ZCode runtime was found and its configured path is readable" });
+    checks.push({ name: "provider_config", status: "ok", summary: "Builtin and personal provider configs passed validation" });
+  } catch (error) {
+    const code = error instanceof BridgeError ? error.code : null;
+    if (code === "runtime_not_found") {
+      checks.push({ name: "zcode_runtime", status: "error", summary: safeError(error) });
+      checks.push({ name: "provider_config", status: "unknown", summary: "Not checked because the ZCode runtime could not be resolved" });
+    } else if (code === "provider_config_missing" || code === "provider_config_invalid") {
+      checks.push({ name: "zcode_runtime", status: "ok", summary: "ZCode runtime was found" });
+      checks.push({ name: "provider_config", status: "error", summary: safeError(error) });
+    } else {
+      checks.push({ name: "zcode_runtime", status: "unknown", summary: safeError(error) });
+      checks.push({ name: "provider_config", status: "unknown", summary: "Could not determine provider config status" });
+    }
+  }
+
+  if (config) {
+    try {
+      const runtimeNodeVersion = execFileSync(config.nodeExecutable, ["--version"], { encoding: "utf8", timeout: 5_000, windowsHide: true }).trim();
+      const match = /^v?(\d+)\.(\d+)\./u.exec(runtimeNodeVersion);
+      const supported = Boolean(match && (Number(match[1]) > 22 || (Number(match[1]) === 22 && Number(match[2]) >= 18)));
+      checks.push({
+        name: "runtime_node",
+        status: supported ? "ok" : "error",
+        summary: supported ? `Configured worker Node.js is ${runtimeNodeVersion}` : `Configured worker Node.js is ${runtimeNodeVersion}; 22.18 or newer is required`,
+      });
+    } catch {
+      checks.push({ name: "runtime_node", status: "error", summary: "Configured worker Node.js could not be started" });
+    }
+    const modelConfigured = Boolean(env["ZCODE_BRIDGE_DEFAULT_PROVIDER_ID"]?.trim() && env["ZCODE_BRIDGE_DEFAULT_MODEL_ID"]?.trim());
+    checks.push({
+      name: "model",
+      status: "unknown",
+      summary: modelConfigured
+        ? "A Bridge default model is configured; actual app-server availability is checked when a task starts"
+        : "No Bridge model override; the ZCode account default will be used and cannot be confirmed without starting a session",
+    });
+    const dataRoot = options.dataRoot ?? env["ZCODE_BRIDGE_DATA_DIR"]?.trim() ?? null;
+    if (dataRoot && existsSync(dataRoot)) {
+      try {
+        const info = statSync(dataRoot);
+        accessSync(dataRoot, constants.W_OK);
+        checks.push({ name: "task_data", status: info.isDirectory() ? "ok" : "error", summary: info.isDirectory() ? "Bridge task data directory exists and is writable" : "Bridge task data path is not a directory" });
+      } catch {
+        checks.push({ name: "task_data", status: "error", summary: "Bridge task data directory exists but is not writable" });
+      }
+    } else {
+      checks.push({ name: "task_data", status: "unknown", summary: "Task data directory is not configured or has not been created yet" });
+    }
+    const indexPath = zcodeTasksIndexPath(config.providerPersonalConfigFile);
+    checks.push({
+      name: "desktop_index",
+      status: indexPath && existsSync(indexPath) ? "ok" : "warning",
+      summary: indexPath && existsSync(indexPath)
+        ? "ZCode Desktop task index file exists; Desktop refresh timing is not tested"
+        : "ZCode Desktop task index file was not found at the configured data location",
+    });
+  } else {
+    checks.push({ name: "runtime_node", status: "unknown", summary: "Not checked because runtime validation did not complete" });
+    checks.push({ name: "model", status: "unknown", summary: "Not checked because runtime/provider validation did not complete" });
+    checks.push({ name: "task_data", status: "unknown", summary: "Not checked because runtime validation did not complete" });
+    checks.push({ name: "desktop_index", status: "unknown", summary: "Not checked because the active ZCode data location is unknown" });
+  }
+
+  checks.push({ name: "app_server", status: "unknown", summary: "Not probed; doctor does not start an app-server session" });
+  checks.push({ name: "start_plan", status: "warning", summary: "Unsupported through the headless Bridge; ZCode Start Plan requires a Desktop captcha session" });
+  checks.push({ name: "permission_roundtrip", status: "unknown", summary: "Bridge protocol tests exist; a real ZCode permission-approval roundtrip has not been verified" });
+
+  return { checked_at: new Date().toISOString(), execution_mode: mode, checks };
+}
+
+function safeError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.replace(/[\r\n\0]/gu, " ").slice(0, 500);
+}

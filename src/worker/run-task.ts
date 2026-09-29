@@ -100,6 +100,14 @@ export async function runWorkerTask(options: RunWorkerTaskOptions): Promise<RunW
 
   let outcome: ZCodeRunOutcome | null = null;
   let failure: TaskFailure | null = null;
+  let pendingModelOutput = "";
+  let lastModelOutputAt = 0;
+  const flushModelOutput = (): void => {
+    if (!pendingModelOutput) return;
+    store.appendEvent(taskId, "model_output", pendingModelOutput);
+    pendingModelOutput = "";
+    lastModelOutputAt = Date.now();
+  };
   try {
     if (options.resolver) {
       // Surface configuration problems before spending an adapter run; the
@@ -108,6 +116,12 @@ export async function runWorkerTask(options: RunWorkerTaskOptions): Promise<RunW
     }
     const adapter = options.adapter ?? new ZCodeAppServerAdapter({
       onEvent: (event) => {
+        if (event.type === "model_output") {
+          pendingModelOutput += event.summary;
+          if (pendingModelOutput.length >= 4_000 || Date.now() - lastModelOutputAt >= 500) flushModelOutput();
+          return;
+        }
+        flushModelOutput();
         store.appendEvent(taskId, event.type, event.summary, event.details);
         const sessionId = event.type === "session_ready" ? event.details?.["session_id"] : undefined;
         if (typeof sessionId === "string") store.writeStatus(taskId, { zcode_session_id: sessionId });
@@ -154,7 +168,9 @@ export async function runWorkerTask(options: RunWorkerTaskOptions): Promise<RunW
         })
       : await adapter.startTask({ task, workspace: workspaceRef, attempt });
     outcome = await adapter.getResult(handle);
+    flushModelOutput();
   } catch (error) {
+    flushModelOutput();
     failure = {
       code: error instanceof BridgeError ? error.code : "worker_error",
       message: error instanceof Error ? error.message : String(error),
@@ -192,6 +208,7 @@ export async function runWorkerTask(options: RunWorkerTaskOptions): Promise<RunW
           stdoutTruncated: outcome.stdoutTruncated,
           stderrTruncated: outcome.stderrTruncated,
           agentReport: outcome.agentReport,
+          reportCandidate: outcome.reportCandidate,
         }
       : null,
     logs: { stdout_truncated: stdoutLog.truncated, stderr_truncated: stderrLog.truncated },

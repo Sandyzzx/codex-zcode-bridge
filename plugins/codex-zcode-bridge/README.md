@@ -19,7 +19,9 @@ codex plugin add codex-zcode-bridge@codex-zcode-bridge
 
 向 Codex 描述开发任务和验收条件。Codex 根据任务决定是否准备 worktree，并把任务交给 ZCode。未提供 worktree 时在项目目录执行；提供时在该 worktree 执行。完成后由 Codex 检查 diff 和验收结果。`completed` 不等于 Codex 已接受改动。
 
-可按任务选择 provider/model，也可配置用户默认模型。执行模式默认是 `yolo`，可通过 `ZCODE_BRIDGE_MODE` 设为 `plan`、`build` 或 `edit`。
+遇到安装或启动问题时，可调用 MCP 工具 `zcode_doctor` 查看只读诊断；它不会启动 ZCode session。
+
+可按任务选择 provider/model，也可配置用户默认模型。执行模式默认是 `yolo`，它会放行普通工具操作并使用当前操作系统账户权限。需要审批时，将 `ZCODE_BRIDGE_MODE` 设为 `build`。worktree 不是沙箱。
 
 ## 安全边界
 

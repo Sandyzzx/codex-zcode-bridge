@@ -6,17 +6,38 @@ var TEST_STATUSES = /* @__PURE__ */ new Set(["passed", "failed", "not_run"]);
 var MAX_SCAN_CHARS = 4e5;
 function parseAgentReport(responseText) {
   let lastError = null;
+  let lastCandidate = null;
   for (const candidate of extractJsonObjects(responseText)) {
     const validated = validateAgentReport(candidate);
     if (validated.ok) {
-      return { report: validated.report, error: null };
+      return { report: validated.report, candidate: validated.report, error: null };
     }
     lastError = validated.error;
+    lastCandidate = extractReportCandidate(candidate);
   }
   return {
     report: null,
+    candidate: lastCandidate,
     error: lastError ?? "no JSON object found in the response text"
   };
+}
+function extractReportCandidate(value) {
+  if (!isPlainObject(value)) return null;
+  const candidate = {};
+  if (typeof value["summary"] === "string") candidate.summary = value["summary"];
+  if (isStringArray(value["files_changed"])) candidate.files_changed = value["files_changed"];
+  if (isStringArray(value["issues"])) candidate.issues = value["issues"];
+  if (typeof value["needs_master_decision"] === "boolean") candidate.needs_master_decision = value["needs_master_decision"];
+  if (Array.isArray(value["tests"])) {
+    const tests = [];
+    for (const entry of value["tests"]) {
+      const test = validateTestReport(entry);
+      if (!test.ok) return candidate;
+      tests.push(test.test);
+    }
+    candidate.tests = tests;
+  }
+  return Object.keys(candidate).length ? candidate : null;
 }
 function validateAgentReport(value) {
   if (!isPlainObject(value)) {
@@ -146,6 +167,7 @@ function buildTaskPrompt(task) {
     `PROJECT WORKSPACE: ${task.workspace}`,
     ...task.worktree_path ? [`CODEX-SELECTED EXECUTION WORKTREE: ${task.worktree_path}. Make task changes in the current working directory, which is this worktree; the project workspace above identifies its parent project.`] : [],
     ...task.model ? [`REQUESTED ZCODE MODEL: ${task.model.provider_id}/${task.model.model_id}${task.model.reasoning_level ? ` (reasoning level: ${task.model.reasoning_level})` : ""}. The Bridge configures this model for the session.`] : [],
+    ...task.timeout_ms ? [`EXECUTION TIME LIMIT: ${task.timeout_ms} ms for this attempt.`] : [],
     `OBJECTIVE
 ${bounded(task.objective, MAX_SECTION_CHARS)}`,
     renderList("REQUIREMENTS", task.requirements),
@@ -165,8 +187,7 @@ ${bounded(task.objective, MAX_SECTION_CHARS)}`,
     sections.push(`CONTEXT
 ${bounded(task.context, MAX_CONTEXT_CHARS)}`);
   }
-  sections.push(OUTPUT_CONTRACT);
-  return joinBounded(sections);
+  return joinBoundedPreservingTail([...sections, OUTPUT_CONTRACT], OUTPUT_CONTRACT);
 }
 function buildContinuePrompt(input) {
   const { task, feedback, additionalRequirements, previousSessionId, previousResult } = input;
@@ -188,6 +209,11 @@ ${bounded(
         MAX_SECTION_CHARS
       )}`
     );
+    if (previousResult.error_code === "invalid_agent_report") {
+      sections.push(
+        "REPORT REPAIR MODE: The previous attempt's execution has already ended; only its final report failed validation. Do not edit files, rerun tests, or repeat task work. Reconstruct the final JSON report from the previous response and report_candidate. Do not guess missing facts. If a required boolean or other fact cannot be established, set needs_master_decision=true and describe the uncertainty in issues."
+      );
+    }
   }
   sections.push(`MASTER FEEDBACK (address every point)
 ${bounded(feedback, MAX_SECTION_CHARS)}`);
@@ -196,7 +222,7 @@ ${bounded(feedback, MAX_SECTION_CHARS)}`);
   }
   sections.push(`ORIGINAL TASK
 ${buildTaskPrompt(task)}`);
-  return joinBounded(sections);
+  return joinBoundedPreservingTail(sections, OUTPUT_CONTRACT);
 }
 var OUTPUT_CONTRACT = [
   "OUTPUT CONTRACT (mandatory)",
@@ -229,10 +255,14 @@ function bounded(text, maxChars) {
   if (text.length <= maxChars) return text;
   return `${text.slice(0, maxChars)}\u2026[truncated]`;
 }
-function joinBounded(sections) {
+function joinBoundedPreservingTail(sections, requiredTail) {
   const joined = sections.join("\n\n");
   if (joined.length <= MAX_PROMPT_CHARS) return joined;
-  return `${joined.slice(0, MAX_PROMPT_CHARS)}\u2026[truncated]`;
+  const headBudget = MAX_PROMPT_CHARS - requiredTail.length - 24;
+  const head = joined.slice(0, Math.max(0, headBudget));
+  return `${head}\u2026[middle truncated to preserve required output contract]
+
+${requiredTail}`;
 }
 
 // src/runtime/errors.ts
@@ -263,10 +293,11 @@ var PERSISTED_RUNTIME_KEYS = [
   "ZCODE_BRIDGE_DEFAULT_MODEL_ID",
   "ZCODE_BRIDGE_DEFAULT_REASONING_LEVEL",
   "ZCODE_BRIDGE_MODE",
-  "ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS"
+  "ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS",
+  "ZCODE_BRIDGE_TIMEOUT_MS"
 ];
-function loadPersistedRuntimeEnvironment(source) {
-  const settingsPaths = [path.join(homedir(), ".codex", "codex-zcode-bridge", "runtime-config.json")];
+function loadPersistedRuntimeEnvironment(source, homeDir = homedir()) {
+  const settingsPaths = [path.join(homeDir, ".codex", "codex-zcode-bridge", "runtime-config.json")];
   const legacyDataRoot = source["ZCODE_BRIDGE_DATA_DIR"]?.trim();
   if (legacyDataRoot && path.isAbsolute(legacyDataRoot)) {
     settingsPaths.push(path.join(legacyDataRoot, "runtime-config.json"));
@@ -308,7 +339,7 @@ var NodeRuntimeResolver = class {
     this.#packageRoot = options.packageRoot ?? null;
   }
   async resolve() {
-    const env = loadPersistedRuntimeEnvironment(this.#env);
+    const env = loadPersistedRuntimeEnvironment(this.#env, this.#homeDir);
     const zcodeHome = resolveZcodeHome(env);
     let nodeExecutable = "node";
     const nodeOverride = env["ZCODE_BRIDGE_NODE"]?.trim();
@@ -805,11 +836,13 @@ function buildAccountProviderPayload(config) {
   };
 }
 function accountProviderId(providerId, config) {
-  if (!providerId.startsWith("builtin:")) return providerId;
   const table = readJson(config.providerBuiltinConfigFile);
   for (const rawRule of readProviderRules(table)) {
     if (!isRecord(rawRule)) continue;
     const rule = rawRule;
+    if (!providerId.startsWith("builtin:") && rule.providerId === providerId && rule.config?.access?.type === "zhipu-account") {
+      return `account:${providerId}`;
+    }
     if (typeof rule.providerId === "string" && configProviderId(rule.providerId, rule) === providerId) {
       return rule.providerId;
     }
@@ -927,6 +960,27 @@ function resolveSessionPreferences(taskModel, env) {
 }
 function isSessionMode(value) {
   return ZCODE_SESSION_MODES.includes(value);
+}
+
+// src/runtime/task-timeout.ts
+var DEFAULT_TASK_TIMEOUT_MS = 60 * 60 * 1e3;
+var MAX_TASK_TIMEOUT_MS = 4 * 60 * 60 * 1e3;
+var MIN_TASK_TIMEOUT_MS = 60 * 1e3;
+function resolveTaskTimeout(task, env) {
+  if (task.timeout_ms !== void 0) return validateTaskTimeout(task.timeout_ms);
+  const raw = env["ZCODE_BRIDGE_TIMEOUT_MS"]?.trim();
+  if (!raw) return DEFAULT_TASK_TIMEOUT_MS;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < MIN_TASK_TIMEOUT_MS || value > MAX_TASK_TIMEOUT_MS) {
+    return DEFAULT_TASK_TIMEOUT_MS;
+  }
+  return value;
+}
+function validateTaskTimeout(value) {
+  if (!Number.isSafeInteger(value) || value < MIN_TASK_TIMEOUT_MS || value > MAX_TASK_TIMEOUT_MS) {
+    throw new Error(`timeout_ms must be an integer from ${MIN_TASK_TIMEOUT_MS} to ${MAX_TASK_TIMEOUT_MS}`);
+  }
+  return value;
 }
 
 // src/adapters/task-index-sync.ts
@@ -1068,7 +1122,6 @@ function isDatabaseBusy(error) {
 }
 
 // src/adapters/zcode-app-server-adapter.ts
-var DEFAULT_TIMEOUT_MS = 30 * 60 * 1e3;
 var RPC_TIMEOUT_MS = 3e4;
 var MAX_CAPTURE_CHARS = 2e6;
 var ZCodeAppServerAdapter = class {
@@ -1083,7 +1136,7 @@ var ZCodeAppServerAdapter = class {
   constructor(options = {}) {
     this.#resolver = options.resolver ?? new NodeRuntimeResolver();
     this.#onEvent = options.onEvent ?? (() => void 0);
-    this.#timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.#timeoutMs = options.timeoutMs ?? null;
     this.#childEnvBase = options.childEnvBase ?? process.env;
     this.#now = options.now ?? (() => /* @__PURE__ */ new Date());
     this.#resolveInteraction = options.resolveInteraction;
@@ -1186,9 +1239,11 @@ var ZCodeAppServerAdapter = class {
     const startedAt = this.#now();
     const projectPath = workspace.sourcePath ?? workspace.canonicalPath;
     let timer;
+    let warningTimer;
     let desktopTask = null;
     try {
       const runtimeEnv = loadPersistedRuntimeEnvironment(this.#childEnvBase);
+      const timeoutMs = this.#timeoutMs ?? resolveTaskTimeout(task, runtimeEnv);
       const config = await this.#resolver.resolve();
       const preferences = resolveSessionPreferences(task.model, runtimeEnv);
       const childEnv = this.#buildChildEnv(config, runtimeEnv);
@@ -1200,9 +1255,17 @@ var ZCodeAppServerAdapter = class {
         entry.timedOut = true;
         const pid = entry.child?.pid;
         if (pid) void terminateProcessTree(pid).catch(() => void 0);
-        entry.rejectTurn(new Error(`ZCode run exceeded ${this.#timeoutMs}ms wall-clock budget`));
-      }, this.#timeoutMs);
+        entry.rejectTurn(new Error(`ZCode run exceeded ${timeoutMs}ms wall-clock budget`));
+      }, timeoutMs);
       timer.unref();
+      warningTimer = setTimeout(() => {
+        entry.onEvent({
+          type: "timeout_warning",
+          summary: `Task is approaching its ${timeoutMs}ms execution limit`,
+          details: { timeout_ms: timeoutMs, remaining_ms: Math.min(3e5, Math.floor(timeoutMs / 2)) }
+        });
+      }, Math.max(15e3, timeoutMs - Math.min(3e5, Math.floor(timeoutMs / 2))));
+      warningTimer.unref();
       const accountProviderPayload = buildAccountProviderPayload(config);
       if (accountProviderPayload) {
         try {
@@ -1268,7 +1331,8 @@ var ZCodeAppServerAdapter = class {
         });
         if (!isAvailable) {
           const available = availableModels.length ? availableModels.slice(0, 30).map((model2) => `${model2.providerId}/${model2.modelId}`).join(", ") : "none";
-          throw new Error(
+          throw new BridgeError(
+            "provider_config_invalid",
             `Requested ZCode model ${requested} is not present in the app-server model registry. The runtime advertised ${availableModels.length} selectable model(s): ${available}. Account-backed models must be synchronized into the app-server before they can be selected.`
           );
         }
@@ -1396,6 +1460,7 @@ var ZCodeAppServerAdapter = class {
           stdoutTruncated: false,
           stderrTruncated: false,
           agentReport: null,
+          reportCandidate: null,
           reportError: `ZCode turn ended with resultType ${turnResult.resultType}`,
           errorCode: turnResult.resultType === "cancelled" ? "cancelled" : "zcode_nonzero_exit"
         };
@@ -1414,12 +1479,14 @@ var ZCodeAppServerAdapter = class {
         sessionId,
         response: turnResult.response,
         usage: turnResult.usage,
-        timedOut: false
+        timedOut: false,
+        reportCandidate: parsed.candidate
       };
       if (!parsed.report) {
         return {
           ...base,
           agentReport: null,
+          reportCandidate: parsed.candidate,
           reportError: parsed.error,
           errorCode: "invalid_agent_report"
         };
@@ -1429,7 +1496,7 @@ var ZCodeAppServerAdapter = class {
         summary: "ZCode produced its structured execution report",
         details: { needs_master_decision: parsed.report.needs_master_decision }
       });
-      return { ...base, agentReport: parsed.report, reportError: null, errorCode: null };
+      return { ...base, agentReport: parsed.report, reportCandidate: parsed.report, reportError: null, errorCode: null };
     } catch (error) {
       await syncDesktopStatus(desktopTask, entry.cancelRequested ? null : "error", entry.onEvent);
       if (entry.client) await entry.client.close().catch(() => void 0);
@@ -1444,6 +1511,7 @@ var ZCodeAppServerAdapter = class {
       throw new BridgeError(code, message);
     } finally {
       if (timer) clearTimeout(timer);
+      if (warningTimer) clearTimeout(warningTimer);
       entry.finished = true;
       void startedAt;
     }
@@ -1878,7 +1946,8 @@ function buildTaskResult(input) {
       tests: [],
       issues: [truncate(message, 2e3)],
       needs_master_decision: true,
-      error_code: code
+      error_code: code,
+      ...outcome.reportCandidate ? { report_candidate: outcome.reportCandidate } : {}
     };
   }
   const report = outcome.agentReport;
@@ -1909,11 +1978,30 @@ function truncate(text, maxChars) {
 }
 
 // src/store/task-store.ts
-import { appendFileSync, chmodSync, existsSync as existsSync4, mkdirSync, readFileSync as readFileSync3, readdirSync, renameSync, rmSync, rmdirSync, statSync as statSync2, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, closeSync, existsSync as existsSync4, mkdirSync, openSync, readFileSync as readFileSync3, readSync, readdirSync, renameSync, rmSync, rmdirSync, statSync as statSync2, writeFileSync } from "node:fs";
 import { createHash as createHash2, randomUUID } from "node:crypto";
 import path3 from "node:path";
+import { StringDecoder } from "node:string_decoder";
 var TASK_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 var DEFAULT_MAX_LOG_BYTES = 10 * 1024 * 1024;
+var MAX_CRITICAL_EVENT_RESERVE_BYTES = 256 * 1024;
+var CRITICAL_EVENT_TYPES = /* @__PURE__ */ new Set([
+  "error",
+  "task_finished",
+  "turn_completed",
+  "report_ready",
+  "session_ready",
+  "turn_started",
+  "worker_started",
+  "workspace_ready",
+  "timeout_warning",
+  "model_catalog",
+  "account_provider_sync_failed",
+  "interaction_requested",
+  "interaction_reply_submitted",
+  "cancelled",
+  "cancel_failed"
+]);
 var TaskStore = class {
   #dataRoot;
   #tasksRoot;
@@ -2110,30 +2198,97 @@ var TaskStore = class {
       const line = `${JSON.stringify(event)}
 `;
       const lineBytes = Buffer.byteLength(line, "utf8") + (needsSeparator ? 1 : 0);
-      if (lineBytes > 64e3 || bytes + lineBytes > this.#maxEventBytes) return null;
+      const critical = CRITICAL_EVENT_TYPES.has(type);
+      const capacity = this.#maxEventBytes + (critical ? MAX_CRITICAL_EVENT_RESERVE_BYTES : 0);
+      if (lineBytes > 64e3 || bytes + lineBytes > capacity) return null;
       this.#writeTextAtomic(seqFile, String(event.seq));
+      const eventOffset = bytes + (needsSeparator ? 1 : 0);
       appendFileSync(file, `${needsSeparator ? "\n" : ""}${line}`, { encoding: "utf8", mode: 384 });
       privateFile(file);
+      if (event.seq % 100 === 0) {
+        const index = path3.join(dir, "events.index");
+        appendFileSync(index, `${event.seq}	${eventOffset}
+`, { encoding: "utf8", mode: 384 });
+        privateFile(index);
+      }
       return event;
     });
   }
-  readEvents(taskId2, afterSeq = 0, limit = 100) {
+  readEvents(taskId2, afterSeq = 0, limit = 100, view = "raw") {
     const file = path3.join(this.taskDir(taskId2), "events.jsonl");
-    if (!existsSync4(file)) return { events: [], nextSeq: afterSeq, hasMore: false };
-    const all = [];
-    for (const line of readFileSync3(file, "utf8").split(/\r?\n/u)) {
-      if (!line) continue;
-      try {
-        const event = JSON.parse(line);
-        if (Number.isInteger(event.seq) && event.seq > afterSeq) all.push(event);
-      } catch {
+    if (!existsSync4(file)) return { events: [], nextSeq: afterSeq, hasMore: false, omittedEvents: 0 };
+    let offset = 0;
+    const indexFile = path3.join(this.taskDir(taskId2), "events.index");
+    if (existsSync4(indexFile)) {
+      for (const row of readFileSync3(indexFile, "utf8").split(/\r?\n/u)) {
+        const [seqText, offsetText] = row.split("	");
+        const seq = Number(seqText);
+        const candidateOffset = Number(offsetText);
+        if (Number.isInteger(seq) && Number.isSafeInteger(candidateOffset) && seq <= afterSeq) offset = candidateOffset;
+        if (seq > afterSeq) break;
       }
     }
-    const events = all.slice(0, limit);
+    const fd = openSync(file, "r");
+    const page = [];
+    let hasMore = false;
+    let position = offset;
+    let pending = "";
+    const decoder = new StringDecoder("utf8");
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    try {
+      while (true) {
+        const count = readSync(fd, buffer, 0, buffer.length, position);
+        if (count <= 0) break;
+        position += count;
+        const lines = `${pending}${decoder.write(buffer.subarray(0, count))}`.split(/\r?\n/u);
+        pending = lines.pop() ?? "";
+        for (const line of lines) {
+          const event = parseProgressEvent(line);
+          if (!event || event.seq <= afterSeq) continue;
+          if (page.length === limit) {
+            hasMore = true;
+            break;
+          }
+          page.push(event);
+        }
+        if (hasMore) break;
+      }
+      pending += decoder.end();
+      if (!hasMore && pending) {
+        const event = parseProgressEvent(pending);
+        if (event && event.seq > afterSeq) {
+          if (page.length === limit) hasMore = true;
+          else page.push(event);
+        }
+      }
+    } finally {
+      closeSync(fd);
+    }
+    let events = page;
+    let omittedEvents = 0;
+    if (view === "summary") {
+      events = [];
+      for (const event of page) {
+        const previous = events.at(-1);
+        if (event.type === "model_output" && previous?.type === "model_output") {
+          const combined = previous.summary + event.summary;
+          events[events.length - 1] = {
+            ...previous,
+            seq: event.seq,
+            at: event.at,
+            summary: combined.length <= 5e3 ? combined : `${combined.slice(0, 4950)}\u2026[output compacted]`
+          };
+          omittedEvents += 1;
+        } else {
+          events.push(event);
+        }
+      }
+    }
     return {
       events,
-      nextSeq: events.at(-1)?.seq ?? afterSeq,
-      hasMore: all.length > events.length
+      nextSeq: page.at(-1)?.seq ?? afterSeq,
+      hasMore,
+      omittedEvents
     };
   }
   writeInteractionRequest(taskId2, request, createdAt = (/* @__PURE__ */ new Date()).toISOString()) {
@@ -2259,6 +2414,15 @@ function readLastEventSeq(file) {
   }
   return 0;
 }
+function parseProgressEvent(line) {
+  if (!line) return null;
+  try {
+    const event = JSON.parse(line);
+    return Number.isInteger(event.seq) ? event : null;
+  } catch {
+    return null;
+  }
+}
 
 // src/worker/run-task.ts
 async function runWorkerTask(options) {
@@ -2302,12 +2466,26 @@ async function runWorkerTask(options) {
   store.writeAttemptFile(taskId2, attempt, "prompt.txt", promptText);
   let outcome = null;
   let failure = null;
+  let pendingModelOutput = "";
+  let lastModelOutputAt = 0;
+  const flushModelOutput = () => {
+    if (!pendingModelOutput) return;
+    store.appendEvent(taskId2, "model_output", pendingModelOutput);
+    pendingModelOutput = "";
+    lastModelOutputAt = Date.now();
+  };
   try {
     if (options.resolver) {
       await options.resolver.resolve();
     }
     const adapter = options.adapter ?? new ZCodeAppServerAdapter({
       onEvent: (event) => {
+        if (event.type === "model_output") {
+          pendingModelOutput += event.summary;
+          if (pendingModelOutput.length >= 4e3 || Date.now() - lastModelOutputAt >= 500) flushModelOutput();
+          return;
+        }
+        flushModelOutput();
         store.appendEvent(taskId2, event.type, event.summary, event.details);
         const sessionId = event.type === "session_ready" ? event.details?.["session_id"] : void 0;
         if (typeof sessionId === "string") store.writeStatus(taskId2, { zcode_session_id: sessionId });
@@ -2352,7 +2530,9 @@ async function runWorkerTask(options) {
       previousResult
     }) : await adapter.startTask({ task, workspace: workspaceRef, attempt });
     outcome = await adapter.getResult(handle);
+    flushModelOutput();
   } catch (error) {
+    flushModelOutput();
     failure = {
       code: error instanceof BridgeError ? error.code : "worker_error",
       message: error instanceof Error ? error.message : String(error)
@@ -2385,7 +2565,8 @@ async function runWorkerTask(options) {
       reportError: outcome.reportError,
       stdoutTruncated: outcome.stdoutTruncated,
       stderrTruncated: outcome.stderrTruncated,
-      agentReport: outcome.agentReport
+      agentReport: outcome.agentReport,
+      reportCandidate: outcome.reportCandidate
     } : null,
     logs: { stdout_truncated: stdoutLog.truncated, stderr_truncated: stderrLog.truncated }
   });

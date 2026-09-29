@@ -22,6 +22,7 @@ export const zcodeTaskInputSchema = z
       model_id: z.string().trim().min(1),
       reasoning_level: z.string().trim().min(1).optional(),
     }).optional(),
+    timeout_ms: z.number().int().min(60_000).max(14_400_000).optional(),
     objective: z.string().min(1),
     requirements: stringArray,
     allowed_paths: stringArray,
@@ -47,6 +48,7 @@ export const zcodeEventsInputSchema = z.strictObject({
   after_seq: z.number().int().nonnegative().optional(),
   limit: z.number().int().min(1).max(200).optional(),
   wait_ms: z.number().int().min(0).max(25_000).optional(),
+  view: z.enum(["raw", "summary"]).optional(),
 });
 
 export const zcodeInteractionReplyInputSchema = z.strictObject({
@@ -108,6 +110,13 @@ export const taskResultSchema = z.object({
   started_at: z.string().nullable(),
   finished_at: z.string().nullable(),
   error_code: z.string().optional(),
+  report_candidate: z.object({
+    summary: z.string().optional(),
+    files_changed: z.array(z.string()).optional(),
+    tests: z.array(testReportSchema).optional(),
+    issues: z.array(z.string()).optional(),
+    needs_master_decision: z.boolean().optional(),
+  }).optional(),
 });
 
 const taskProgressEventSchema = z.object({
@@ -124,6 +133,7 @@ export const taskProgressPageSchema = z.object({
   events: z.array(taskProgressEventSchema),
   next_seq: z.number().int().nonnegative(),
   has_more: z.boolean(),
+  omitted_events: z.number().int().nonnegative().optional(),
 });
 
 export const toolErrorSchema = z.object({
@@ -131,4 +141,14 @@ export const toolErrorSchema = z.object({
     code: z.string(),
     message: z.string(),
   }),
+});
+
+export const doctorReportSchema = z.object({
+  checked_at: z.string(),
+  execution_mode: z.string(),
+  checks: z.array(z.object({
+    name: z.string(),
+    status: z.enum(["ok", "warning", "error", "unknown"]),
+    summary: z.string(),
+  })),
 });

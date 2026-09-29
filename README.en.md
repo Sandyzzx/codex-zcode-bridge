@@ -39,7 +39,8 @@ To customize settings, edit `%USERPROFILE%\.codex\codex-zcode-bridge\runtime-con
 - `ZCODE_HOME`: absolute path to the actual `.zcode` data directory.
 - `ZCODE_BRIDGE_DATA_DIR`: absolute path to the Bridge task data directory.
 - `ZCODE_BRIDGE_DEFAULT_PROVIDER_ID` and `ZCODE_BRIDGE_DEFAULT_MODEL_ID`: default provider and model IDs; set both.
-- `ZCODE_BRIDGE_MODE`: initial execution mode: `plan`, `build`, `edit`, or `yolo`.
+- `ZCODE_BRIDGE_MODE`: initial execution mode: `plan`, `build`, `edit`, or `yolo`; defaults to `yolo`. `yolo` allows ordinary tool operations with the current operating-system account's permissions. Set it to `build` to use ZCode's approval rules.
+- `ZCODE_BRIDGE_TIMEOUT_MS`: default wall-clock limit for one task attempt when `timeout_ms` is omitted; 60,000–14,400,000 milliseconds, default 3,600,000 (60 minutes).
 - `ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS`: parallel task limit.
 
 Save valid JSON; a newly started Bridge reads the config file, which takes precedence over legacy environment variables. `ZCODE_HOME` must point to the `.zcode` directory, and the personal provider config must be at `v2/provider_config.json` inside it. Copy provider/model IDs from your ZCode configuration, and do not edit ZCode's provider files.
@@ -56,6 +57,8 @@ After execution, Codex should inspect the actual diff and run acceptance checks 
 
 In ZCode Desktop, find tasks in the Workspace view under the Codex project directory.
 
+For installation or startup problems, call the `zcode_doctor` MCP tool for read-only diagnostics. It does not start a ZCode session; app-server model availability and a real permission-approval roundtrip still require verification through an actual task.
+
 ## Known issues
 
 - The ZCode Desktop sidebar may not immediately show a new session. The Bridge best-effort syncs the local task index; Desktop controls when the list refreshes.
@@ -63,7 +66,7 @@ In ZCode Desktop, find tasks in the Workspace view under the Codex project direc
 
 ## Security and limitations
 
-- The default execution mode is `yolo`; change `ZCODE_BRIDGE_MODE` in the config file if needed. ZCode runs with the current operating-system user's permissions.
+- The default execution mode is `yolo`. It allows ordinary tool operations with the current operating-system account's permissions; a worktree is not a sandbox. Set `ZCODE_BRIDGE_MODE` to `build` to use ZCode's approval rules. The Bridge has protocol tests for permission forwarding, but a real ZCode permission-approval roundtrip has not been verified.
 - A Git worktree isolates the working directory; it is not an operating-system sandbox. `allowed_paths` and `forbidden_paths` describe task constraints but cannot prevent the process from accessing other files or running commands.
 - Codex decides whether to create a worktree. The Bridge uses the supplied project directory and optional worktree path; it does not create or remove worktrees.
 - Parallel tasks use more local resources and provider capacity.

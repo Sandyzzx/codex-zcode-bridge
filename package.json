@@ -10,8 +10,11 @@
   },
   "scripts": {
     "build": "tsc --project tsconfig.json && npm run build:plugin",
+    "build:test": "tsc --project tsconfig.test.json",
     "build:plugin": "node scripts/build-plugin.mjs",
     "typecheck": "tsc --noEmit",
+    "test": "npm run build:test && node --test \"dist-test/test/*.test.js\"",
+    "validate:plugin": "node scripts/validate-plugin.mjs",
     "bridge:mcp": "node dist/src/mcp/main.js"
   },
   "bin": {
