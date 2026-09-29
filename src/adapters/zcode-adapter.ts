@@ -29,6 +29,7 @@ import type {
 import type { AgentReport } from "../interfaces.js";
 import { BridgeError } from "../runtime/errors.js";
 import { createMinimalOsEnv } from "../runtime/child-env.js";
+import { resolveTaskTimeout } from "../runtime/task-timeout.js";
 import { NodeRuntimeResolver } from "../runtime/resolver.js";
 import { buildContinuePrompt, buildTaskPrompt } from "../prompts/task-prompt.js";
 import { parseZcodeEnvelope } from "./envelope.js";
@@ -59,6 +60,7 @@ export type AdapterErrorCode =
  */
 export interface ZCodeRunOutcome extends AgentRunOutcome {
   readonly agentReport: AgentReport | null;
+  readonly reportCandidate: Partial<AgentReport> | null;
   readonly reportError: string | null;
   readonly errorCode: AdapterErrorCode | null;
   readonly cancelled: boolean;
@@ -71,7 +73,7 @@ export interface ZCodeAdapterOptions {
   resolver?: RuntimeResolver;
   spawnImpl?: SpawnFunction;
   terminateProcessTreeImpl?: TerminateProcessTree;
-  /** Wall-clock budget per attempt; default 30 minutes. */
+  /** Wall-clock budget per attempt; default 60 minutes. */
   timeoutMs?: number;
   /** Capture cap per stream in bytes; default 10 MiB. */
   maxOutputBytes?: number;
@@ -88,7 +90,6 @@ export interface ZCodeAdapterOptions {
 
 /** Exact transient failure observed and recorded in docs/ZCODE_RUNTIME.md. */
 const TRANSIENT_RELEASE_ERROR = "Bundled 与 Active ZCode Built-in Release 均不可用";
-const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
 const DEFAULT_RETRY_BACKOFF_MS = 1_000;
 const DEFAULT_MAX_TRANSIENT_RETRIES = 2;
@@ -111,6 +112,7 @@ interface RunEntry {
   readonly promptFile: string;
   readonly cliArgs: string[];
   readonly resumeSessionId: string | null;
+  readonly timeoutMs: number;
   child: SpawnedProcess | null;
   zcodePid: number | null;
   cancelRequested: boolean;
@@ -128,7 +130,7 @@ export class ZCodeAdapter implements CodingAgentAdapter {
   readonly #resolver: RuntimeResolver;
   readonly #spawnImpl: SpawnFunction;
   readonly #terminateImpl: TerminateProcessTree;
-  readonly #timeoutMs: number;
+  readonly #timeoutMs: number | null;
   readonly #maxOutputBytes: number;
   readonly #retryBackoffMs: number;
   readonly #maxTransientRetries: number;
@@ -144,7 +146,7 @@ export class ZCodeAdapter implements CodingAgentAdapter {
     this.#resolver = options.resolver ?? new NodeRuntimeResolver();
     this.#spawnImpl = options.spawnImpl ?? defaultSpawnFunction;
     this.#terminateImpl = options.terminateProcessTreeImpl ?? terminateProcessTree;
-    this.#timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.#timeoutMs = options.timeoutMs ?? null;
     this.#maxOutputBytes = options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
     this.#retryBackoffMs = options.retryBackoffMs ?? DEFAULT_RETRY_BACKOFF_MS;
     this.#maxTransientRetries = options.maxTransientRetries ?? DEFAULT_MAX_TRANSIENT_RETRIES;
@@ -269,6 +271,7 @@ export class ZCodeAdapter implements CodingAgentAdapter {
       promptFile,
       cliArgs,
       resumeSessionId: input.resumeSessionId,
+      timeoutMs: this.#timeoutMs ?? resolveTaskTimeout(input.task, this.#childEnvBase ?? process.env),
       child: null,
       zcodePid: null,
       cancelRequested: false,
@@ -380,7 +383,7 @@ export class ZCodeAdapter implements CodingAgentAdapter {
       const timer = setTimeout(() => {
         entry.timedOut = true;
         void this.#triggerTerminate(entry);
-      }, this.#timeoutMs);
+      }, entry.timeoutMs);
       if (typeof timer.unref === "function") timer.unref();
       child.on("error", (error: Error) => {
         finish({ kind: "spawn_error", error, stdout, stderr });
@@ -416,6 +419,7 @@ export class ZCodeAdapter implements CodingAgentAdapter {
       stdoutTruncated: false,
       stderrTruncated: false,
       agentReport: null,
+      reportCandidate: null,
       reportError: null,
       errorCode: null,
       sessionId: null,
@@ -429,6 +433,7 @@ export class ZCodeAdapter implements CodingAgentAdapter {
       | "stdout"
       | "stderr"
       | "agentReport"
+      | "reportCandidate"
       | "reportError"
       | "errorCode"
       | "sessionId"
@@ -436,6 +441,7 @@ export class ZCodeAdapter implements CodingAgentAdapter {
       | "usage"
     > & {
       agentReport: null;
+      reportCandidate: null;
       reportError: null;
       errorCode: null;
       sessionId: null;
@@ -472,7 +478,7 @@ export class ZCodeAdapter implements CodingAgentAdapter {
         stdoutTruncated: snapshot.stdout.truncated,
         stderrTruncated: snapshot.stderr.truncated,
         errorCode: "timeout",
-        reportError: `ZCode run exceeded ${this.#timeoutMs}ms wall-clock budget; the process tree was terminated${
+        reportError: `ZCode run exceeded ${entry.timeoutMs}ms wall-clock budget; the process tree was terminated${
           entry.terminationError ? ` (termination verification failed: ${entry.terminationError.message})` : " and verified"
         }`,
       };
@@ -561,6 +567,7 @@ export class ZCodeAdapter implements CodingAgentAdapter {
         usage: envelope.usage,
         errorCode: "invalid_agent_report",
         reportError: parsedReport.error,
+        reportCandidate: parsedReport.candidate,
       };
     }
     return {
@@ -575,6 +582,7 @@ export class ZCodeAdapter implements CodingAgentAdapter {
       response: envelope.response,
       usage: envelope.usage,
       agentReport: parsedReport.report,
+      reportCandidate: parsedReport.candidate,
       reportError: null,
       errorCode: null,
     };

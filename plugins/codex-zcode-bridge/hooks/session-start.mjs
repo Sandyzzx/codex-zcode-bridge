@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import path from "node:path";
 import { stdin, stdout } from "node:process";
 
@@ -44,7 +45,19 @@ try {
   // Keep the hook advisory if the host adds or changes optional session fields.
 }
 
-const mode = process.env.ZCODE_BRIDGE_MODE || "yolo";
+let mode = process.env.ZCODE_BRIDGE_MODE || "yolo";
+try {
+  const runtimeConfigPath = path.join(homedir(), ".codex", "codex-zcode-bridge", "runtime-config.json");
+  const runtimeConfig = JSON.parse(readFileSync(runtimeConfigPath, "utf8"));
+  if (typeof runtimeConfig.ZCODE_BRIDGE_MODE === "string" && runtimeConfig.ZCODE_BRIDGE_MODE.trim()) {
+    mode = runtimeConfig.ZCODE_BRIDGE_MODE.trim();
+  }
+} catch {
+  // The hook remains advisory when runtime settings have not been created.
+}
 parts.push(`ZCode tasks use ${mode} mode with the current account's permissions. Git worktrees and allowed/forbidden path instructions are not an OS sandbox.`);
+if (mode === "yolo") {
+  parts.push("WARNING: yolo allows ordinary tool operations without approval and uses the current OS account's permissions. Set ZCODE_BRIDGE_MODE to build in runtime-config.json to use ZCode's approval rules.");
+}
 
 stdout.write(`Codex ZCode Bridge setup check: ${parts.join("; ")}\n`);

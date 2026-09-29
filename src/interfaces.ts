@@ -17,6 +17,8 @@ export interface TaskPackage {
   worktree_path?: string;
   /** Optional per-task ZCode model override. Omitted means use ZCode defaults. */
   model?: ZCodeModelSelection;
+  /** Optional execution wall-clock limit in milliseconds (60 seconds to 4 hours). */
+  timeout_ms?: number;
   objective: string;
   requirements: string[];
   allowed_paths: string[];
@@ -54,6 +56,8 @@ export interface TaskResult {
   started_at: string | null; // RFC 3339 UTC
   finished_at: string | null; // RFC 3339 UTC
   error_code?: string;
+  /** Parsed but incomplete report, retained for Master review after schema failure. */
+  report_candidate?: Partial<AgentReport>;
 }
 
 export interface WorkspaceRef {
@@ -195,6 +199,8 @@ export interface TaskProgressPage {
   events: TaskProgressEvent[];
   next_seq: number;
   has_more: boolean;
+  /** Events omitted by summary view; cursor still advances across all scanned events. */
+  omitted_events?: number;
 }
 
 export interface ContinueTaskInput {
@@ -213,7 +219,7 @@ export interface TaskManager {
 
 /** Additive Phase 7 capability; the frozen V0.1 TaskManager contract stays intact. */
 export interface ProgressTaskManager extends TaskManager {
-  getEvents(input: { task_id: string; after_seq?: number; limit?: number; wait_ms?: number }): Promise<TaskProgressPage>;
+  getEvents(input: { task_id: string; after_seq?: number; limit?: number; wait_ms?: number; view?: "raw" | "summary" }): Promise<TaskProgressPage>;
   replyToInteraction(input: ZCodeInteractionReplyInput): Promise<{ task_id: string; request_id: string; state: "answered" }>;
 }
 

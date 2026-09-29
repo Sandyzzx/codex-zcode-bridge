@@ -22,6 +22,7 @@ import { terminateProcessTree } from "./process-spawn.js";
 import { createMinimalOsEnv } from "../runtime/child-env.js";
 import { accountProviderId, buildAccountProviderPayload, runtimeAuthReply, zcodeDataBaseDir, zcodeTasksIndexPath } from "../runtime/account-provider.js";
 import { resolveSessionPreferences } from "../runtime/session-preferences.js";
+import { resolveTaskTimeout } from "../runtime/task-timeout.js";
 import { registerDesktopTask, updateDesktopTaskStatus, type DesktopTaskIndexEntry, type DesktopTaskStatus } from "./task-index-sync.js";
 
 type ProgressEvent = { type: string; summary: string; details?: Record<string, unknown> };
@@ -78,7 +79,6 @@ export interface ZCodeAppServerAdapterOptions {
   resolveInteraction?: (request: ZCodeInteractionRequest) => Promise<Record<string, unknown>>;
 }
 
-const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 const RPC_TIMEOUT_MS = 30_000;
 const MAX_CAPTURE_CHARS = 2_000_000;
 
@@ -90,7 +90,7 @@ const MAX_CAPTURE_CHARS = 2_000_000;
 export class ZCodeAppServerAdapter implements CodingAgentAdapter {
   readonly #resolver: RuntimeResolver;
   readonly #onEvent: ProgressSink;
-  readonly #timeoutMs: number;
+  readonly #timeoutMs: number | null;
   readonly #childEnvBase: NodeJS.ProcessEnv;
   readonly #now: () => Date;
   readonly #resolveInteraction: ((request: ZCodeInteractionRequest) => Promise<Record<string, unknown>>) | undefined;
@@ -100,7 +100,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
   constructor(options: ZCodeAppServerAdapterOptions = {}) {
     this.#resolver = options.resolver ?? new NodeRuntimeResolver();
     this.#onEvent = options.onEvent ?? (() => undefined);
-    this.#timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.#timeoutMs = options.timeoutMs ?? null;
     this.#childEnvBase = options.childEnvBase ?? process.env;
     this.#now = options.now ?? (() => new Date());
     this.#resolveInteraction = options.resolveInteraction;
@@ -225,9 +225,11 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     const startedAt = this.#now();
     const projectPath = workspace.sourcePath ?? workspace.canonicalPath;
     let timer: NodeJS.Timeout | undefined;
+    let warningTimer: NodeJS.Timeout | undefined;
     let desktopTask: DesktopTaskIndexEntry | null = null;
     try {
       const runtimeEnv = loadPersistedRuntimeEnvironment(this.#childEnvBase);
+      const timeoutMs = this.#timeoutMs ?? resolveTaskTimeout(task, runtimeEnv);
       const config = await this.#resolver.resolve();
       const preferences = resolveSessionPreferences(task.model, runtimeEnv);
       const childEnv = this.#buildChildEnv(config, runtimeEnv);
@@ -239,9 +241,17 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         entry.timedOut = true;
         const pid = entry.child?.pid;
         if (pid) void terminateProcessTree(pid).catch(() => undefined);
-        entry.rejectTurn(new Error(`ZCode run exceeded ${this.#timeoutMs}ms wall-clock budget`));
-      }, this.#timeoutMs);
+        entry.rejectTurn(new Error(`ZCode run exceeded ${timeoutMs}ms wall-clock budget`));
+      }, timeoutMs);
       timer.unref();
+      warningTimer = setTimeout(() => {
+        entry.onEvent({
+          type: "timeout_warning",
+          summary: `Task is approaching its ${timeoutMs}ms execution limit`,
+          details: { timeout_ms: timeoutMs, remaining_ms: Math.min(300_000, Math.floor(timeoutMs / 2)) },
+        });
+      }, Math.max(15_000, timeoutMs - Math.min(300_000, Math.floor(timeoutMs / 2))));
+      warningTimer.unref();
 
       const accountProviderPayload = buildAccountProviderPayload(config);
       if (accountProviderPayload) {
@@ -311,7 +321,8 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
           const available = availableModels.length
             ? availableModels.slice(0, 30).map((model) => `${model.providerId}/${model.modelId}`).join(", ")
             : "none";
-          throw new Error(
+          throw new BridgeError(
+            "provider_config_invalid",
             `Requested ZCode model ${requested} is not present in the app-server model registry. ` +
               `The runtime advertised ${availableModels.length} selectable model(s): ${available}. ` +
               "Account-backed models must be synchronized into the app-server before they can be selected.",
@@ -453,6 +464,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
           stdoutTruncated: false,
           stderrTruncated: false,
           agentReport: null,
+          reportCandidate: null,
           reportError: `ZCode turn ended with resultType ${turnResult.resultType}`,
           errorCode: turnResult.resultType === "cancelled" ? "cancelled" : "zcode_nonzero_exit",
         };
@@ -473,11 +485,13 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         response: turnResult.response,
         usage: turnResult.usage,
         timedOut: false,
+        reportCandidate: parsed.candidate,
       };
       if (!parsed.report) {
         return {
           ...base,
           agentReport: null,
+          reportCandidate: parsed.candidate,
           reportError: parsed.error,
           errorCode: "invalid_agent_report",
         };
@@ -487,7 +501,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         summary: "ZCode produced its structured execution report",
         details: { needs_master_decision: parsed.report.needs_master_decision },
       });
-      return { ...base, agentReport: parsed.report, reportError: null, errorCode: null };
+      return { ...base, agentReport: parsed.report, reportCandidate: parsed.report, reportError: null, errorCode: null };
     } catch (error) {
       await syncDesktopStatus(desktopTask, entry.cancelRequested ? null : "error", entry.onEvent);
       if (entry.client) await entry.client.close().catch(() => undefined);
@@ -504,6 +518,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       throw new BridgeError(code, message);
     } finally {
       if (timer) clearTimeout(timer);
+      if (warningTimer) clearTimeout(warningTimer);
       entry.finished = true;
       void startedAt;
     }

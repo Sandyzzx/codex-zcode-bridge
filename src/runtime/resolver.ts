@@ -28,6 +28,7 @@ const PERSISTED_RUNTIME_KEYS = [
   "ZCODE_BRIDGE_DEFAULT_REASONING_LEVEL",
   "ZCODE_BRIDGE_MODE",
   "ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS",
+  "ZCODE_BRIDGE_TIMEOUT_MS",
 ] as const;
 
 /**
@@ -35,8 +36,8 @@ const PERSISTED_RUNTIME_KEYS = [
  * The config file takes precedence over process variables; environment values
  * remain a fallback for standalone use and migration from older installs.
  */
-export function loadPersistedRuntimeEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const settingsPaths = [path.join(homedir(), ".codex", "codex-zcode-bridge", "runtime-config.json")];
+export function loadPersistedRuntimeEnvironment(source: NodeJS.ProcessEnv, homeDir = homedir()): NodeJS.ProcessEnv {
+  const settingsPaths = [path.join(homeDir, ".codex", "codex-zcode-bridge", "runtime-config.json")];
   const legacyDataRoot = source["ZCODE_BRIDGE_DATA_DIR"]?.trim();
   if (legacyDataRoot && path.isAbsolute(legacyDataRoot)) {
     settingsPaths.push(path.join(legacyDataRoot, "runtime-config.json"));
@@ -95,7 +96,7 @@ export class NodeRuntimeResolver implements RuntimeResolver {
   }
 
   async resolve(): Promise<ZCodeRuntimeConfig> {
-    const env = loadPersistedRuntimeEnvironment(this.#env);
+    const env = loadPersistedRuntimeEnvironment(this.#env, this.#homeDir);
     const zcodeHome = resolveZcodeHome(env);
 
     // Node executable: explicit override or `node` on PATH (frozen contract).

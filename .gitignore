@@ -1,6 +1,8 @@
 node_modules/
 dist/
 dist-test/
+!test/
+!test/**
 coverage/
 .tasks/
 plugins/codex-zcode-bridge/.mcp.local.json

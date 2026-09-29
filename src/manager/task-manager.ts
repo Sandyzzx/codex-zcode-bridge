@@ -24,6 +24,7 @@ import { buildTaskResult, type TaskFailure } from "./normalize.js";
 import { TaskManagerError } from "./errors.js";
 import { defaultSpawnWorker, type SpawnWorker } from "./spawn-worker.js";
 import { isProcessRunning, terminateProcessTree, type TerminateProcessTree } from "../adapters/process-spawn.js";
+import { validateTaskTimeout } from "../runtime/task-timeout.js";
 
 export interface TaskManagerOptions {
   store: TaskStore;
@@ -157,6 +158,7 @@ export class BridgeTaskManager implements ProgressTaskManager {
     after_seq?: number;
     limit?: number;
     wait_ms?: number;
+    view?: "raw" | "summary";
   }): Promise<TaskProgressPage> {
     const afterSeq = input.after_seq ?? 0;
     const limit = input.limit ?? 100;
@@ -170,19 +172,23 @@ export class BridgeTaskManager implements ProgressTaskManager {
     if (!Number.isInteger(waitMs) || waitMs < 0 || waitMs > 25_000) {
       throw new TaskManagerError("TASK_INVALID", "wait_ms must be an integer from 0 to 25000");
     }
+    if (input.view !== undefined && input.view !== "raw" && input.view !== "summary") {
+      throw new TaskManagerError("TASK_INVALID", "view must be raw or summary");
+    }
     const deadline = Date.now() + waitMs;
     while (true) {
       const page = await this.#exclusive(async () => {
         this.#requireTask(input.task_id);
         this.#reconcileOneLocked(input.task_id);
         const status = this.#store.readStatus(input.task_id);
-        const read = this.#store.readEvents(input.task_id, afterSeq, limit);
+        const read = this.#store.readEvents(input.task_id, afterSeq, limit, input.view ?? "raw");
         return {
           task_id: input.task_id,
           status: status.status,
           events: read.events,
           next_seq: read.nextSeq,
           has_more: read.hasMore,
+          ...(read.omittedEvents ? { omitted_events: read.omittedEvents } : {}),
         } satisfies TaskProgressPage;
       });
       if (page.events.length || isTerminalStatus(page.status) || Date.now() >= deadline) return page;
@@ -453,9 +459,11 @@ export class BridgeTaskManager implements ProgressTaskManager {
     if (alive) return; // still running (possibly from before a manager restart)
     const task = this.#store.readTask(taskId);
     const finishedAt = this.#now().toISOString();
+    const workerStderr = this.#store.readAttemptText(taskId, status.attempt, "worker-stderr.log") ?? "";
+    const diagnostic = workerStderr.trim().slice(-1_200);
     const failure: TaskFailure = {
       code: "worker_lost",
-      message: `worker pid ${String(pid)} is gone without a terminal result`,
+      message: `worker pid ${String(pid)} is gone without a terminal result${diagnostic ? `; worker stderr: ${diagnostic}` : "; worker stderr was empty"}`,
     };
     const result = buildTaskResult({
       task,
@@ -527,7 +535,7 @@ export class BridgeTaskManager implements ProgressTaskManager {
     });
     let pid: number;
     try {
-      const spawned = this.#spawnWorker(this.#dataRoot, taskId);
+      const spawned = this.#spawnWorker(this.#dataRoot, taskId, status.attempt);
       pid = spawned.pid;
     } catch (error) {
       const finishedAt = this.#now().toISOString();
@@ -588,6 +596,13 @@ export class BridgeTaskManager implements ProgressTaskManager {
     }
     if (task.context !== undefined && typeof task.context !== "string") {
       throw new TaskManagerError("TASK_INVALID", "context must be a string when present");
+    }
+    if (task.timeout_ms !== undefined) {
+      try {
+        validateTaskTimeout(task.timeout_ms);
+      } catch (error) {
+        throw new TaskManagerError("TASK_INVALID", error instanceof Error ? error.message : String(error));
+      }
     }
     if (typeof task.workspace !== "string" || task.workspace.trim().length === 0) {
       throw new TaskManagerError("TASK_INVALID", "workspace is required");

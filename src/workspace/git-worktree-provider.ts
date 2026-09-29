@@ -83,8 +83,8 @@ export class GitWorktreeWorkspaceProvider implements WorkspaceProvider {
     } catch {
       throw new Error(`task worktree path could not be canonicalized: ${worktreePath}`);
     }
-    const actualRoot = realpathSync(this.#git(canonicalWorktree, ["rev-parse", "--show-toplevel"]).trim());
-    if (actualRoot !== canonicalWorktree) {
+    const actualPrefix = this.#git(canonicalWorktree, ["rev-parse", "--show-prefix"]).trim();
+    if (actualPrefix !== "") {
       throw new Error(`existing task worktree path is not its own Git root: ${canonicalWorktree}`);
     }
     const actualBranch = this.#git(canonicalWorktree, ["branch", "--show-current"]).trim();

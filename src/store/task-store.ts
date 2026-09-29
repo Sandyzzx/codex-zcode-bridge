@@ -6,9 +6,10 @@
 // task evidence and pending interaction decisions live here. Permission
 // request details may contain tool inputs and are persisted so the Master can
 // inspect them and answer after a worker restart.
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, rmdirSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, rmdirSync, statSync, writeFileSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import type { TaskPackage, TaskProgressEvent, TaskResult, TaskStatus, TaskStatusRecord, WorkspaceRef, ZCodeInteractionRecord, ZCodeInteractionRequest } from "../interfaces.js";
 
 /** status.json shape: the frozen TaskStatusRecord plus internal fields. */
@@ -21,6 +22,12 @@ export interface InternalTaskStatus extends Omit<TaskStatusRecord, "error_code" 
 
 const TASK_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const DEFAULT_MAX_LOG_BYTES = 10 * 1024 * 1024;
+const MAX_CRITICAL_EVENT_RESERVE_BYTES = 256 * 1024;
+const CRITICAL_EVENT_TYPES = new Set([
+  "error", "task_finished", "turn_completed", "report_ready", "session_ready",
+  "turn_started", "worker_started", "workspace_ready", "timeout_warning", "model_catalog",
+  "account_provider_sync_failed", "interaction_requested", "interaction_reply_submitted", "cancelled", "cancel_failed",
+]);
 
 export interface TaskStoreOptions {
   maxLogBytes?: number;
@@ -257,34 +264,96 @@ export class TaskStore {
       };
       const line = `${JSON.stringify(event)}\n`;
       const lineBytes = Buffer.byteLength(line, "utf8") + (needsSeparator ? 1 : 0);
-      if (lineBytes > 64_000 || bytes + lineBytes > this.#maxEventBytes) return null;
+      const critical = CRITICAL_EVENT_TYPES.has(type);
+      const capacity = this.#maxEventBytes + (critical ? MAX_CRITICAL_EVENT_RESERVE_BYTES : 0);
+      if (lineBytes > 64_000 || bytes + lineBytes > capacity) return null;
       // Advance the durable cursor before append. A crash can leave a harmless
       // sequence gap, but can never cause two writers to reuse one sequence.
       this.#writeTextAtomic(seqFile, String(event.seq));
+      const eventOffset = bytes + (needsSeparator ? 1 : 0);
       appendFileSync(file, `${needsSeparator ? "\n" : ""}${line}`, { encoding: "utf8", mode: 0o600 });
       privateFile(file);
+      if (event.seq % 100 === 0) {
+        const index = path.join(dir, "events.index");
+        appendFileSync(index, `${event.seq}\t${eventOffset}\n`, { encoding: "utf8", mode: 0o600 });
+        privateFile(index);
+      }
       return event;
     });
   }
 
-  readEvents(taskId: string, afterSeq = 0, limit = 100): { events: TaskProgressEvent[]; nextSeq: number; hasMore: boolean } {
+  readEvents(taskId: string, afterSeq = 0, limit = 100, view: "raw" | "summary" = "raw"): { events: TaskProgressEvent[]; nextSeq: number; hasMore: boolean; omittedEvents: number } {
     const file = path.join(this.taskDir(taskId), "events.jsonl");
-    if (!existsSync(file)) return { events: [], nextSeq: afterSeq, hasMore: false };
-    const all: TaskProgressEvent[] = [];
-    for (const line of readFileSync(file, "utf8").split(/\r?\n/u)) {
-      if (!line) continue;
-      try {
-        const event = JSON.parse(line) as TaskProgressEvent;
-        if (Number.isInteger(event.seq) && event.seq > afterSeq) all.push(event);
-      } catch {
-        // Ignore a partial last line left by an interrupted process.
+    if (!existsSync(file)) return { events: [], nextSeq: afterSeq, hasMore: false, omittedEvents: 0 };
+    let offset = 0;
+    const indexFile = path.join(this.taskDir(taskId), "events.index");
+    if (existsSync(indexFile)) {
+      for (const row of readFileSync(indexFile, "utf8").split(/\r?\n/u)) {
+        const [seqText, offsetText] = row.split("\t");
+        const seq = Number(seqText);
+        const candidateOffset = Number(offsetText);
+        if (Number.isInteger(seq) && Number.isSafeInteger(candidateOffset) && seq <= afterSeq) offset = candidateOffset;
+        if (seq > afterSeq) break;
       }
     }
-    const events = all.slice(0, limit);
+    const fd = openSync(file, "r");
+    const page: TaskProgressEvent[] = [];
+    let hasMore = false;
+    let position = offset;
+    let pending = "";
+    const decoder = new StringDecoder("utf8");
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    try {
+      while (true) {
+        const count = readSync(fd, buffer, 0, buffer.length, position);
+        if (count <= 0) break;
+        position += count;
+        const lines = `${pending}${decoder.write(buffer.subarray(0, count))}`.split(/\r?\n/u);
+        pending = lines.pop() ?? "";
+        for (const line of lines) {
+          const event = parseProgressEvent(line);
+          if (!event || event.seq <= afterSeq) continue;
+          if (page.length === limit) { hasMore = true; break; }
+          page.push(event);
+        }
+        if (hasMore) break;
+      }
+      pending += decoder.end();
+      if (!hasMore && pending) {
+        const event = parseProgressEvent(pending);
+        if (event && event.seq > afterSeq) {
+          if (page.length === limit) hasMore = true;
+          else page.push(event);
+        }
+      }
+    } finally {
+      closeSync(fd);
+    }
+    let events = page;
+    let omittedEvents = 0;
+    if (view === "summary") {
+      events = [];
+      for (const event of page) {
+        const previous = events.at(-1);
+        if (event.type === "model_output" && previous?.type === "model_output") {
+          const combined = previous.summary + event.summary;
+          events[events.length - 1] = {
+            ...previous,
+            seq: event.seq,
+            at: event.at,
+            summary: combined.length <= 5_000 ? combined : `${combined.slice(0, 4_950)}…[output compacted]`,
+          };
+          omittedEvents += 1;
+        } else {
+          events.push(event);
+        }
+      }
+    }
     return {
       events,
-      nextSeq: events.at(-1)?.seq ?? afterSeq,
-      hasMore: all.length > events.length,
+      nextSeq: page.at(-1)?.seq ?? afterSeq,
+      hasMore,
+      omittedEvents,
     };
   }
 
@@ -434,6 +503,17 @@ function readLastEventSeq(file: string): number {
     }
   }
   return 0;
+}
+
+function parseProgressEvent(line: string): TaskProgressEvent | null {
+  if (!line) return null;
+  try {
+    const event = JSON.parse(line) as TaskProgressEvent;
+    return Number.isInteger(event.seq) ? event : null;
+  } catch {
+    // Ignore a partial final line left by an interrupted process.
+    return null;
+  }
 }
 
 export function isTerminalStatus(status: TaskStatus): boolean {

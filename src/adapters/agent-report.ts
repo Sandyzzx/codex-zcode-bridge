@@ -6,25 +6,47 @@
 import type { AgentReport, TestReport } from "../interfaces.js";
 
 export type ReportParseResult =
-  | { report: AgentReport; error: null }
-  | { report: null; error: string };
+  | { report: AgentReport; candidate: AgentReport; error: null }
+  | { report: null; candidate: Partial<AgentReport> | null; error: string };
 
 const TEST_STATUSES = new Set(["passed", "failed", "not_run"]);
 const MAX_SCAN_CHARS = 400_000;
 
 export function parseAgentReport(responseText: string): ReportParseResult {
   let lastError: string | null = null;
+  let lastCandidate: Partial<AgentReport> | null = null;
   for (const candidate of extractJsonObjects(responseText)) {
     const validated = validateAgentReport(candidate);
     if (validated.ok) {
-      return { report: validated.report, error: null };
+      return { report: validated.report, candidate: validated.report, error: null };
     }
     lastError = validated.error;
+    lastCandidate = extractReportCandidate(candidate);
   }
   return {
     report: null,
+    candidate: lastCandidate,
     error: lastError ?? "no JSON object found in the response text",
   };
+}
+
+function extractReportCandidate(value: unknown): Partial<AgentReport> | null {
+  if (!isPlainObject(value)) return null;
+  const candidate: Partial<AgentReport> = {};
+  if (typeof value["summary"] === "string") candidate.summary = value["summary"];
+  if (isStringArray(value["files_changed"])) candidate.files_changed = value["files_changed"];
+  if (isStringArray(value["issues"])) candidate.issues = value["issues"];
+  if (typeof value["needs_master_decision"] === "boolean") candidate.needs_master_decision = value["needs_master_decision"];
+  if (Array.isArray(value["tests"])) {
+    const tests: TestReport[] = [];
+    for (const entry of value["tests"]) {
+      const test = validateTestReport(entry);
+      if (!test.ok) return candidate;
+      tests.push(test.test);
+    }
+    candidate.tests = tests;
+  }
+  return Object.keys(candidate).length ? candidate : null;
 }
 
 export function validateAgentReport(

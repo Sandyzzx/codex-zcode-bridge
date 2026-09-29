@@ -16,6 +16,8 @@ import { TaskStore } from "../store/task-store.js";
 import { DirectWorkspaceProvider } from "../workspace/direct-provider.js";
 import { BridgeTaskManager } from "../manager/task-manager.js";
 import { createBridgeServer } from "./server.js";
+import { DEFAULT_TASK_TIMEOUT_MS, validateTaskTimeout } from "../runtime/task-timeout.js";
+import { runBridgeDoctor } from "../runtime/doctor.js";
 
 export interface DataRootResolution {
   readonly dataRoot: string;
@@ -72,6 +74,14 @@ async function main(): Promise<void> {
   const workerLimit = resolveMaxConcurrentWorkers(runtimeEnv);
   if (workerLimit.warning) console.error(`[bridge] ${workerLimit.warning}`);
   console.error(`[bridge] max concurrent workers: ${workerLimit.maxConcurrentWorkers}`);
+  const timeoutSetting = runtimeEnv["ZCODE_BRIDGE_TIMEOUT_MS"]?.trim();
+  if (timeoutSetting) {
+    try {
+      validateTaskTimeout(Number(timeoutSetting));
+    } catch (error) {
+      console.error(`[bridge] ${error instanceof Error ? error.message : String(error)}; using the ${DEFAULT_TASK_TIMEOUT_MS / 60_000} minute default`);
+    }
+  }
 
   const store = new TaskStore(dataRoot);
   const manager = new BridgeTaskManager({
@@ -79,7 +89,10 @@ async function main(): Promise<void> {
     workspaceProvider: new DirectWorkspaceProvider(),
     maxConcurrentWorkers: workerLimit.maxConcurrentWorkers,
   });
-  const server = createBridgeServer({ taskManager: manager });
+  const server = createBridgeServer({
+    taskManager: manager,
+    doctor: () => runBridgeDoctor({ env: runtimeEnv, dataRoot }),
+  });
   const handle = serveStdio(() => server);
 
   let closing = false;

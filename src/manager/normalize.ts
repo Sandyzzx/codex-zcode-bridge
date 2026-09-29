@@ -75,6 +75,7 @@ export function buildTaskResult(input: BuildTaskResultInput): TaskResult {
       issues: [truncate(message, 2_000)],
       needs_master_decision: true,
       error_code: code,
+      ...(outcome.reportCandidate ? { report_candidate: outcome.reportCandidate } : {}),
     };
   }
 
