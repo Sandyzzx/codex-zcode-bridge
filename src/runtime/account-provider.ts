@@ -69,6 +69,9 @@ export function buildAccountProviderPayload(config: ZCodeRuntimeConfig): Account
 
 /** Resolve a legacy config provider id to the provider id used in app-server. */
 export function accountProviderId(providerId: string, config: ZCodeRuntimeConfig): string {
+  // The runtime model catalog already uses this namespace for account-backed
+  // providers. Keep it idempotent when callers supply the exact catalog ID.
+  if (providerId.startsWith("account:")) return providerId;
   const table = readJson(config.providerBuiltinConfigFile);
   for (const rawRule of readProviderRules(table)) {
     if (!isRecord(rawRule)) continue;

@@ -836,6 +836,7 @@ function buildAccountProviderPayload(config) {
   };
 }
 function accountProviderId(providerId, config) {
+  if (providerId.startsWith("account:")) return providerId;
   const table = readJson(config.providerBuiltinConfigFile);
   for (const rawRule of readProviderRules(table)) {
     if (!isRecord(rawRule)) continue;
