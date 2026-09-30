@@ -1312,6 +1312,7 @@ var ZCodeAppServerAdapter = class {
       const sessionId = nestedString(snapshot, ["session", "sessionId"]);
       if (!sessionId) throw new Error("ZCode app-server session snapshot did not contain session.sessionId");
       entry.sessionId = sessionId;
+      let selectedReasoningLevel = null;
       if (preferences.model) {
         const requestedProviderId = accountProviderId(preferences.model.provider_id, config);
         const requested = `${requestedProviderId}/${preferences.model.model_id}`;
@@ -1356,16 +1357,18 @@ var ZCodeAppServerAdapter = class {
         }
         snapshot = modelState;
         entry.selectedModel = readSelectedModel(modelState) ?? requested;
+        selectedReasoningLevel = readEffectiveReasoningLevel(modelState);
         entry.onEvent({
           type: "model_selected",
-          summary: `ZCode selected requested model ${entry.selectedModel}`,
+          summary: `ZCode selected requested model ${entry.selectedModel}${selectedReasoningLevel ? ` with reasoning level ${selectedReasoningLevel}` : "; runtime did not report its reasoning level"}`,
           details: {
             requested_model: requested,
             selected_model: entry.selectedModel,
             provider_id: selected.providerId,
             model_id: selected.modelId,
             model_source: preferences.modelSource,
-            ...reasoningLevel ? { reasoning_level: reasoningLevel } : {}
+            ...selectedReasoningLevel ? { reasoning_level: selectedReasoningLevel, reasoning_level_source: "runtime" } : {},
+            ...reasoningLevel ? { requested_reasoning_level: reasoningLevel } : {}
           }
         });
       }
@@ -1383,9 +1386,23 @@ var ZCodeAppServerAdapter = class {
           "ZCode runtime did not report its selected model; refusing to start a task whose model cannot be identified."
         );
       }
+      if (!preferences.model) {
+        const selected = readSelectedModelSelection(snapshot);
+        selectedReasoningLevel = readEffectiveReasoningLevel(snapshot);
+        entry.onEvent({
+          type: "model_selected",
+          summary: `ZCode runtime selected its session model ${entry.selectedModel}${selectedReasoningLevel ? ` with reasoning level ${selectedReasoningLevel}` : ""}`,
+          details: {
+            selected_model: entry.selectedModel,
+            model_source: preferences.modelSource,
+            ...selected ? { provider_id: selected.providerId, model_id: selected.modelId } : {},
+            ...selectedReasoningLevel ? { reasoning_level: selectedReasoningLevel, reasoning_level_source: "runtime" } : {}
+          }
+        });
+      }
       entry.onEvent({
         type: "session_ready",
-        summary: `ZCode session ready; selected model ${entry.selectedModel}`,
+        summary: `ZCode session ready; selected model ${entry.selectedModel}${selectedReasoningLevel ? `; reasoning level ${selectedReasoningLevel}` : "; reasoning level not reported"}`,
         details: {
           session_id: sessionId,
           project_path: projectPath,
@@ -1393,7 +1410,8 @@ var ZCodeAppServerAdapter = class {
           ...workspace.mode === "worktree" ? { worktree_path: workspace.canonicalPath } : {},
           execution_mode: preferences.mode,
           model_source: preferences.modelSource,
-          ...entry.selectedModel ? { selected_model: entry.selectedModel } : {}
+          ...entry.selectedModel ? { selected_model: entry.selectedModel } : {},
+          ...selectedReasoningLevel ? { reasoning_level: selectedReasoningLevel, reasoning_level_source: "runtime" } : {}
         }
       });
       const indexPath = zcodeTasksIndexPath(config.providerPersonalConfigFile);
@@ -1850,6 +1868,17 @@ function readModelReasoningDefault(snapshot, providerId, modelId) {
     }
   }
   return null;
+}
+function readEffectiveReasoningLevel(snapshot) {
+  const settings = asRecord2(snapshot.settings);
+  const modelSettings = asRecord2(settings.model);
+  const current = asRecord2(modelSettings.current);
+  const options = asRecord2(current.options);
+  const currentOption = options.reasoningLevel;
+  if (typeof currentOption === "string" && currentOption.trim()) return currentOption.trim();
+  const thoughtLevel = asRecord2(settings.thoughtLevel);
+  const level = thoughtLevel.current;
+  return typeof level === "string" && level.trim() ? level.trim() : null;
 }
 function nestedString(record, path4) {
   let value = record;

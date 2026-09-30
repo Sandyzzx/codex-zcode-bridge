@@ -52,7 +52,7 @@ Codex can delegate the task, monitor execution, inspect the resulting changes, v
 - Submit, follow, continue, and cancel ZCode tasks from Codex.
 - Run tasks across multiple projects concurrently; tasks sharing an execution directory are queued.
 - Read the live ZCode model catalog and reasoning levels, select a provider/model per task, and get/set/clear a Bridge default model.
-- At startup, report the project directory, execution directory, ZCode session, runtime-reported model, and execution mode.
+- At startup, report the project directory, execution directory, ZCode session, runtime-reported model and reasoning level, and execution mode.
 - Group ZCode Desktop tasks under the Codex project directory; index sync failures do not stop task execution.
 
 ## Install
