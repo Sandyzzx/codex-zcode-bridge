@@ -40,7 +40,7 @@ import { BridgeError } from "../runtime/errors.js";
 import type { ZCodeModelSettings } from "../runtime/model-settings.js";
 
 export const SERVER_NAME = "codex-zcode-bridge";
-export const SERVER_VERSION = "0.10.0"; // x-release-please-version
+export const SERVER_VERSION = "0.10.1"; // x-release-please-version
 
 export interface BridgeServerOptions {
   taskManager: TaskManager & Partial<Pick<ProgressTaskManager, "getEvents" | "replyToInteraction">>;
