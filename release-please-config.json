@@ -17,7 +17,7 @@
           "jsonpath": "$.version"
         },
         "src/mcp/server.ts",
-        "plugins/codex-zcode-bridge/server/bridge.mjs"
+        "plugins/codex-zcode-bridge/dist/bridge.mjs"
       ]
     }
   }

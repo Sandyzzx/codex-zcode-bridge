@@ -111,7 +111,7 @@ test("worker concurrency defaults to eight and rejects out-of-range configuratio
 test("marketplace bundle starts from its plugin root without repo-local dependencies", { timeout: 30_000 }, () => {
   const dataRoot = mkdtempSync(path.join(tmpdir(), "zcode-bridge-plugin-stdio-"));
   try {
-    const run = spawnSync(process.execPath, ["./server/bridge.mjs"], {
+    const run = spawnSync(process.execPath, ["./dist/bridge.mjs"], {
       cwd: PLUGIN_ROOT,
       input: PROTOCOL_MESSAGES,
       encoding: "utf8",

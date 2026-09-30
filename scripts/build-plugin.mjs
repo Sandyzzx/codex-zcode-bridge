@@ -5,9 +5,9 @@ import { build } from "esbuild";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const pluginRoot = path.join(repoRoot, "plugins", "codex-zcode-bridge");
-const serverDir = path.join(pluginRoot, "server");
+const distDir = path.join(pluginRoot, "dist");
 const workerDir = path.join(pluginRoot, "worker");
-await Promise.all([mkdir(serverDir, { recursive: true }), mkdir(workerDir, { recursive: true })]);
+await Promise.all([mkdir(distDir, { recursive: true }), mkdir(workerDir, { recursive: true })]);
 
 const shared = {
   bundle: true,
@@ -20,12 +20,12 @@ const shared = {
 };
 
 await Promise.all([
-  build({ ...shared, entryPoints: [path.join(repoRoot, "src", "mcp", "main.ts")], outfile: path.join(serverDir, "bridge.mjs") }),
+  build({ ...shared, entryPoints: [path.join(repoRoot, "src", "mcp", "main.ts")], outfile: path.join(distDir, "bridge.mjs") }),
   build({ ...shared, entryPoints: [path.join(repoRoot, "src", "worker", "worker-main.ts")], outfile: path.join(workerDir, "worker-main.mjs") }),
 ]);
 
 const packageJson = JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf8"));
-const bridgeBundlePath = path.join(serverDir, "bridge.mjs");
+const bridgeBundlePath = path.join(distDir, "bridge.mjs");
 const bridgeBundle = await readFile(bridgeBundlePath, "utf8");
 const versionPattern = /var SERVER_VERSION = "[^"]+";/;
 if (!versionPattern.test(bridgeBundle)) {

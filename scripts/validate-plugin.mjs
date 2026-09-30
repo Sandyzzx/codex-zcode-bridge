@@ -29,15 +29,15 @@ for (const [label, manifest] of [["plugin.json", plugin], [".codex-plugin/plugin
   }
 }
 const server = mcp.mcpServers?.zcode_bridge;
-if (server?.command !== "node" || !Array.isArray(server.args) || server.args[0] !== "./server/bridge.mjs") {
-  throw new Error(".mcp.json must launch ./server/bridge.mjs with node");
+if (server?.command !== "node" || !Array.isArray(server.args) || server.args[0] !== "./dist/bridge.mjs") {
+  throw new Error(".mcp.json must launch ./dist/bridge.mjs with node");
 }
 if (server.env?.ZCODE_BRIDGE_PLUGIN_MODE !== "1") {
   throw new Error(".mcp.json must set ZCODE_BRIDGE_PLUGIN_MODE=1");
 }
 
 for (const relativePath of [
-  "server/bridge.mjs",
+  "dist/bridge.mjs",
   "worker/worker-main.mjs",
   "hooks/hooks.json",
   "hooks/session-start.mjs",
