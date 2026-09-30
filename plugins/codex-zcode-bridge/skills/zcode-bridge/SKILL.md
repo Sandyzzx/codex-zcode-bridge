@@ -1,9 +1,9 @@
 ---
-name: delegate-zcode
+name: zcode-bridge
 description: 通过 Codex ZCode Bridge 把已授权的开发任务交给本机 ZCode，跟进实时进度、选择模型、按需要由 Codex 准备 worktree、审查改动并决定如何接收。
 ---
 
-# Codex → ZCode 委派工作流
+# Zcode Bridge
 
 你是 Master，ZCode 是执行一个有明确边界任务的 worker。仅委派用户已授权的实现工作。不同执行目录可并发；不得让 Codex 与 ZCode 同时修改同一个实际执行目录。Bridge 会串行化共享执行目录的任务。
 
@@ -50,3 +50,4 @@ description: 通过 Codex ZCode Bridge 把已授权的开发任务交给本机 Z
 - ZCode 不得选择仍未解决的 `OPEN DECISIONS`；后续 Master Feedback 明确给出决定后，按新决定继续。即使未列出，遇到需求冲突或会实质改变外部行为的缺失决定，也要提出具体问题、设置 `needs_master_decision=true`，并继续不依赖该决定的工作。低影响实现选择可采用最简单一致的方案，同时报告假设。
 - 不要把 ZCode Hooks、Desktop 历史索引、自动化或并行 worker 当作已启用能力。
 - 不要为了方便而修改 ZCode provider 配置或将凭据写入任务 prompt、日志或仓库。
+

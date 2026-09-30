@@ -59,6 +59,16 @@ export const zcodeInteractionReplyInputSchema = z.strictObject({
   reason: z.string().max(2_000).optional(),
 });
 
+export const zcodeModelCatalogInputSchema = z.strictObject({
+  workspace: z.string().trim().min(1),
+});
+
+export const zcodeDefaultModelInputSchema = z.strictObject({
+  provider_id: z.string().trim().min(1),
+  model_id: z.string().trim().min(1),
+  reasoning_level: z.string().trim().min(1).optional(),
+});
+
 // ---- output schemas (structured content validation) ----
 
 const testReportSchema = z.object({
@@ -151,4 +161,35 @@ export const doctorReportSchema = z.object({
     status: z.enum(["ok", "warning", "error", "unknown"]),
     summary: z.string(),
   })),
+});
+
+export const modelCatalogSchema = z.object({
+  workspace: z.string(),
+  current_model: z.object({ provider_id: z.string(), model_id: z.string() }).nullable(),
+  models: z.array(z.object({
+    provider_id: z.string(),
+    model_id: z.string(),
+    label: z.string(),
+    provider_label: z.string().optional(),
+    context_window: z.number().optional(),
+    max_output_tokens: z.number().optional(),
+    reasoning_levels: z.array(z.object({ value: z.string(), label: z.string() })).optional(),
+    reasoning_default_level: z.string().optional(),
+    disabled_reason: z.string().optional(),
+  })),
+  account_provider_sync: z.enum(["not_needed", "applied", "failed"]),
+  cache_status: z.enum(["fresh", "refreshed"]).optional(),
+  cached_at: z.string().optional(),
+  warning: z.string().optional(),
+});
+
+const modelSelectionSchema = z.object({
+  provider_id: z.string(),
+  model_id: z.string(),
+  reasoning_level: z.string().optional(),
+});
+
+export const defaultModelSchema = z.object({
+  configured: z.boolean(),
+  model: modelSelectionSchema.nullable(),
 });

@@ -130,7 +130,7 @@ test("applies a per-task model override, verifies the selection, and does not pe
   }
 });
 
-test("fails clearly before setModel when the requested model is absent from the app-server registry", async () => {
+test("lets the app-server resolve a requested model omitted from the initial catalog", async () => {
   const runtime = await makeFakeRuntime({ providerId: "provider-default", modelId: "model-default" }, false);
   try {
     const adapter = new ZCodeAppServerAdapter({
@@ -143,11 +143,11 @@ test("fails clearly before setModel when the requested model is absent from the 
       workspace: makeWorkspace(runtime.root),
       attempt: 1,
     });
-    await assert.rejects(adapter.getResult(handle), /not present in the app-server model registry.*Account-backed models must be synchronized/s);
+    assert.equal((await adapter.getResult(handle)).exitCode, 0);
     const requests = (await readFile(runtime.requestLog, "utf8"))
       .trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
-    assert.equal(requests.some((request) => request.method === "session/setModel"), false);
-    assert.equal(requests.some((request) => request.method === "session/send"), false);
+    assert.equal(requests.some((request) => request.method === "session/setModel"), true);
+    assert.equal(requests.some((request) => request.method === "session/send"), true);
   } finally {
     await rm(runtime.root, { recursive: true, force: true });
   }

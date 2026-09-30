@@ -18,7 +18,7 @@
     "com.openai": {
       "hooks": "./hooks/hooks.json",
       "interface": {
-        "displayName": "Codex ZCode Bridge",
+        "displayName": "Zcode Bridge",
         "shortDescription": "Delegate development tasks to your local ZCode runtime.",
         "longDescription": "Delegate development tasks to ZCode through a local MCP bridge, follow progress in Codex, and review changes before accepting them.",
         "developerName": "Sandy",

@@ -18,6 +18,7 @@ import { BridgeTaskManager } from "../manager/task-manager.js";
 import { createBridgeServer } from "./server.js";
 import { DEFAULT_TASK_TIMEOUT_MS, validateTaskTimeout } from "../runtime/task-timeout.js";
 import { runBridgeDoctor } from "../runtime/doctor.js";
+import { ZCodeModelSettings } from "../runtime/model-settings.js";
 
 export interface DataRootResolution {
   readonly dataRoot: string;
@@ -89,9 +90,11 @@ async function main(): Promise<void> {
     workspaceProvider: new DirectWorkspaceProvider(),
     maxConcurrentWorkers: workerLimit.maxConcurrentWorkers,
   });
+  const modelSettings = new ZCodeModelSettings(process.env);
   const server = createBridgeServer({
     taskManager: manager,
     doctor: () => runBridgeDoctor({ env: runtimeEnv, dataRoot }),
+    modelSettings,
   });
   const handle = serveStdio(() => server);
 

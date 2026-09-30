@@ -42,9 +42,10 @@ for (const relativePath of [
   "hooks/hooks.json",
   "hooks/session-start.mjs",
   "hooks/configure-runtime.ps1",
-  "skills/delegate-zcode/SKILL.md",
+  "skills/zcode-bridge/SKILL.md",
 ]) {
   await access(path.join(pluginRoot, relativePath));
 }
 
 console.log(`Plugin package is structurally valid (${plugin.name}@${plugin.version}).`);
+

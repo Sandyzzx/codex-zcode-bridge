@@ -941,10 +941,11 @@ function resolveSessionPreferences(taskModel, env) {
       "ZCODE_BRIDGE_DEFAULT_REASONING_LEVEL requires a default model pair or a per-task model"
     );
   }
+  const inheritedReasoningLevel = taskModel && providerId && modelId && (providerId !== taskModel.provider_id.trim() || modelId !== taskModel.model_id.trim()) ? "" : reasoningLevel;
   const model = taskModel ? {
     provider_id: taskModel.provider_id.trim(),
     model_id: taskModel.model_id.trim(),
-    ...taskModel.reasoning_level?.trim() || reasoningLevel ? { reasoning_level: taskModel.reasoning_level?.trim() || reasoningLevel } : {}
+    ...taskModel.reasoning_level?.trim() || inheritedReasoningLevel ? { reasoning_level: taskModel.reasoning_level?.trim() || inheritedReasoningLevel } : {}
   } : providerId && modelId ? {
     provider_id: providerId,
     model_id: modelId,
@@ -1315,9 +1316,6 @@ var ZCodeAppServerAdapter = class {
         const requestedProviderId = accountProviderId(preferences.model.provider_id, config);
         const requested = `${requestedProviderId}/${preferences.model.model_id}`;
         const availableModels = readAvailableModels(snapshot);
-        const isAvailable = availableModels.some(
-          (model2) => model2.providerId === requestedProviderId && model2.modelId === preferences.model.model_id
-        );
         entry.onEvent({
           type: "model_catalog",
           summary: `ZCode runtime advertised ${availableModels.length} selectable model${availableModels.length === 1 ? "" : "s"}`,
@@ -1330,13 +1328,6 @@ var ZCodeAppServerAdapter = class {
             truncated: availableModels.length > 100
           }
         });
-        if (!isAvailable) {
-          const available = availableModels.length ? availableModels.slice(0, 30).map((model2) => `${model2.providerId}/${model2.modelId}`).join(", ") : "none";
-          throw new BridgeError(
-            "provider_config_invalid",
-            `Requested ZCode model ${requested} is not present in the app-server model registry. The runtime advertised ${availableModels.length} selectable model(s): ${available}. Account-backed models must be synchronized into the app-server before they can be selected.`
-          );
-        }
         const current = readSelectedModelSelection(snapshot);
         const reasoningLevel = preferences.model.reasoning_level ?? readModelReasoningDefault(
           snapshot,

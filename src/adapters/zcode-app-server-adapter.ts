@@ -302,9 +302,6 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         const requestedProviderId = accountProviderId(preferences.model.provider_id, config);
         const requested = `${requestedProviderId}/${preferences.model.model_id}`;
         const availableModels = readAvailableModels(snapshot);
-        const isAvailable = availableModels.some(
-          (model) => model.providerId === requestedProviderId && model.modelId === preferences.model!.model_id,
-        );
         entry.onEvent({
           type: "model_catalog",
           summary: `ZCode runtime advertised ${availableModels.length} selectable model${availableModels.length === 1 ? "" : "s"}`,
@@ -317,17 +314,10 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
             truncated: availableModels.length > 100,
           },
         });
-        if (!isAvailable) {
-          const available = availableModels.length
-            ? availableModels.slice(0, 30).map((model) => `${model.providerId}/${model.modelId}`).join(", ")
-            : "none";
-          throw new BridgeError(
-            "provider_config_invalid",
-            `Requested ZCode model ${requested} is not present in the app-server model registry. ` +
-              `The runtime advertised ${availableModels.length} selectable model(s): ${available}. ` +
-              "Account-backed models must be synchronized into the app-server before they can be selected.",
-          );
-        }
+        // The initial list is advisory: ZCode may accept a configured model
+        // through session/setModel even when it is absent from this snapshot.
+        // Let the runtime validate the actual selection and report its exact
+        // error rather than rejecting a model that the registry can resolve.
         // session/create already selected this exact model. Keeping its
         // effective options is important for models requiring reasoningLevel.
         const current = readSelectedModelSelection(snapshot);

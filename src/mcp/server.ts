@@ -30,8 +30,14 @@ import {
   zcodeInteractionReplyInputSchema,
   taskProgressPageSchema,
   doctorReportSchema,
+  zcodeModelCatalogInputSchema,
+  zcodeDefaultModelInputSchema,
+  modelCatalogSchema,
+  defaultModelSchema,
 } from "./schemas.js";
 import type { DoctorReport } from "../runtime/doctor.js";
+import { BridgeError } from "../runtime/errors.js";
+import type { ZCodeModelSettings } from "../runtime/model-settings.js";
 
 export const SERVER_NAME = "codex-zcode-bridge";
 export const SERVER_VERSION = "0.7.2"; // x-release-please-version
@@ -39,6 +45,7 @@ export const SERVER_VERSION = "0.7.2"; // x-release-please-version
 export interface BridgeServerOptions {
   taskManager: TaskManager & Partial<Pick<ProgressTaskManager, "getEvents" | "replyToInteraction">>;
   doctor?: () => Promise<DoctorReport>;
+  modelSettings?: Pick<ZCodeModelSettings, "listModels" | "getDefaultModel" | "setDefaultModel" | "clearDefaultModel">;
   serverInfo?: { name: string; version: string };
 }
 
@@ -68,6 +75,7 @@ async function runTool<T>(operation: () => Promise<T>): Promise<CallToolResult> 
     if (error instanceof TaskManagerError) {
       return errorResult(error.code, error.message);
     }
+    if (error instanceof BridgeError) return errorResult(error.code.toUpperCase(), error.message);
     throw error;
   }
 }
@@ -88,6 +96,62 @@ export function createBridgeServer(options: BridgeServerOptions): McpServer {
     async () => {
       if (!options.doctor) return errorResult("DOCTOR_UNAVAILABLE", "Bridge doctor is unavailable in this server instance");
       return runTool(() => options.doctor!());
+    },
+  );
+
+  server.registerTool(
+    "zcode_model_catalog",
+    {
+      title: "Read available ZCode models",
+      description: "Read models and reasoning levels for this workspace. The Bridge caches the catalog for 24 hours, refreshes when provider settings change or the cache expires, and re-reads provider config before retrying a failed refresh. A cache response has current_model=null; use provider_id/model_id from models in zcode_task.model.",
+      inputSchema: zcodeModelCatalogInputSchema,
+      outputSchema: modelCatalogSchema,
+    },
+    async (args: { workspace: string }) => {
+      if (!options.modelSettings) return errorResult("MODEL_SETTINGS_UNAVAILABLE", "model settings are unavailable in this server instance");
+      return runTool(() => options.modelSettings!.listModels(args.workspace));
+    },
+  );
+
+  server.registerTool(
+    "zcode_default_model",
+    {
+      title: "Read the Bridge default model",
+      description: "Read the provider, model, and optional reasoning level used when zcode_task has no model override.",
+      inputSchema: {},
+      outputSchema: defaultModelSchema,
+    },
+    async () => {
+      if (!options.modelSettings) return errorResult("MODEL_SETTINGS_UNAVAILABLE", "model settings are unavailable in this server instance");
+      return runTool(() => options.modelSettings!.getDefaultModel());
+    },
+  );
+
+  server.registerTool(
+    "zcode_set_default_model",
+    {
+      title: "Set the Bridge default model",
+      description: "Persist a default provider/model selection for future tasks that omit zcode_task.model. Use IDs from zcode_model_catalog or the configured ZCode provider/model rules; the app-server validates the selection when a task starts. An optional reasoning_level applies to the configured default model; a per-task model selection can still override it.",
+      inputSchema: zcodeDefaultModelInputSchema,
+      outputSchema: defaultModelSchema,
+    },
+    async (args: { provider_id: string; model_id: string; reasoning_level?: string }) => {
+      if (!options.modelSettings) return errorResult("MODEL_SETTINGS_UNAVAILABLE", "model settings are unavailable in this server instance");
+      return runTool(() => options.modelSettings!.setDefaultModel(args));
+    },
+  );
+
+  server.registerTool(
+    "zcode_clear_default_model",
+    {
+      title: "Clear the Bridge default model",
+      description: "Remove the Bridge default model so future tasks without zcode_task.model use the ZCode session default.",
+      inputSchema: {},
+      outputSchema: defaultModelSchema,
+    },
+    async () => {
+      if (!options.modelSettings) return errorResult("MODEL_SETTINGS_UNAVAILABLE", "model settings are unavailable in this server instance");
+      return runTool(() => options.modelSettings!.clearDefaultModel());
     },
   );
 

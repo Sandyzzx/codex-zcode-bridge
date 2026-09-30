@@ -39,12 +39,17 @@ export function resolveSessionPreferences(
     );
   }
 
+  const inheritedReasoningLevel = taskModel && providerId && modelId &&
+    (providerId !== taskModel.provider_id.trim() || modelId !== taskModel.model_id.trim())
+    ? ""
+    : reasoningLevel;
+
   const model = taskModel
     ? {
         provider_id: taskModel.provider_id.trim(),
         model_id: taskModel.model_id.trim(),
-        ...(taskModel.reasoning_level?.trim() || reasoningLevel
-          ? { reasoning_level: taskModel.reasoning_level?.trim() || reasoningLevel }
+        ...(taskModel.reasoning_level?.trim() || inheritedReasoningLevel
+          ? { reasoning_level: taskModel.reasoning_level?.trim() || inheritedReasoningLevel }
           : {}),
       }
     : providerId && modelId

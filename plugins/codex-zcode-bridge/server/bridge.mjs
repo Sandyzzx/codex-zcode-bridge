@@ -297,10 +297,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path8) {
-  if (!path8)
+function getElementAtPath(obj, path9) {
+  if (!path9)
     return obj;
-  return path8.reduce((acc, key) => acc?.[key], obj);
+  return path9.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -640,11 +640,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path8, issues) {
+function prefixIssues(path9, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path8);
+    iss.path.unshift(path9);
     return iss;
   });
 }
@@ -1093,16 +1093,16 @@ function flattenError(error2, mapper = (issue2) => issue2.message) {
 }
 function formatError(error2, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error3, path8 = []) => {
+  const processError = (error3, path9 = []) => {
     for (const issue2 of error3.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path8, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path9, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path8, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path9, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path8, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path9, ...issue2.path]);
       } else {
-        const fullpath = [...path8, ...issue2.path];
+        const fullpath = [...path9, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -10445,9 +10445,9 @@ var rev2026Codec = {
     });
     const parsed = buildSchemas2026().RequestMetaEnvelopeSchema.safeParse(meta2);
     if (!parsed.success) for (const issue2 of parsed.error.issues) {
-      const path8 = issue2.path.map(String);
-      const key = path8.length > 0 ? path8.join(".") : "_meta";
-      if (path8.length === 1 && issues.some((existing) => existing.key === key && existing.problem === "missing")) continue;
+      const path9 = issue2.path.map(String);
+      const key = path9.length > 0 ? path9.join(".") : "_meta";
+      if (path9.length === 1 && issues.some((existing) => existing.key === key && existing.problem === "missing")) continue;
       issues.push({
         key,
         problem: issue2.message
@@ -10768,29 +10768,29 @@ var PERMITTED_X_MCP_HEADER_TYPES = /* @__PURE__ */ new Set([
 function scanXMcpHeaderDeclarations(inputSchema) {
   const declarations = [];
   const seenLower = /* @__PURE__ */ new Map();
-  const visit = (node2, path8, reachable) => {
+  const visit = (node2, path9, reachable) => {
     if (node2 === null || typeof node2 !== "object") return void 0;
     const schema = node2;
     if (X_MCP_HEADER_KEY in schema) {
-      if (!reachable || path8.length === 0) return `${pathName(path8)}: x-mcp-header is only permitted on properties statically reachable via a chain of 'properties' keys (not under items, additionalProperties, oneOf/anyOf/allOf/not, if/then/else, or $ref)`;
+      if (!reachable || path9.length === 0) return `${pathName(path9)}: x-mcp-header is only permitted on properties statically reachable via a chain of 'properties' keys (not under items, additionalProperties, oneOf/anyOf/allOf/not, if/then/else, or $ref)`;
       const raw = schema[X_MCP_HEADER_KEY];
-      if (typeof raw !== "string" || raw.length === 0) return `${pathName(path8)}: x-mcp-header MUST be a non-empty string`;
-      if (!RFC9110_TOKEN.test(raw)) return `${pathName(path8)}: x-mcp-header '${raw}' is not a valid RFC 9110 token (no spaces, control characters or HTTP delimiters)`;
+      if (typeof raw !== "string" || raw.length === 0) return `${pathName(path9)}: x-mcp-header MUST be a non-empty string`;
+      if (!RFC9110_TOKEN.test(raw)) return `${pathName(path9)}: x-mcp-header '${raw}' is not a valid RFC 9110 token (no spaces, control characters or HTTP delimiters)`;
       const type = typeof schema.type === "string" ? schema.type : void 0;
-      if (type === void 0 || !PERMITTED_X_MCP_HEADER_TYPES.has(type)) return `${pathName(path8)}: x-mcp-header is only permitted on primitive-typed properties (string, integer, boolean); got ${type ?? "<none>"}`;
+      if (type === void 0 || !PERMITTED_X_MCP_HEADER_TYPES.has(type)) return `${pathName(path9)}: x-mcp-header is only permitted on primitive-typed properties (string, integer, boolean); got ${type ?? "<none>"}`;
       const lower = raw.toLowerCase();
       const prior = seenLower.get(lower);
       if (prior !== void 0) return `x-mcp-header '${raw}' is not case-insensitively unique (also declared as '${prior}')`;
       seenLower.set(lower, raw);
       declarations.push({
-        path: path8,
+        path: path9,
         headerName: raw,
         type
       });
     }
     const properties = schema.properties;
     if (properties !== null && typeof properties === "object") for (const [key, child] of Object.entries(properties)) {
-      const fault$1 = visit(child, [...path8, key], reachable);
+      const fault$1 = visit(child, [...path9, key], reachable);
       if (fault$1 !== void 0) return fault$1;
     }
     for (const k of NON_REACHABLE_SUBSCHEMA_KEYWORDS) {
@@ -10798,7 +10798,7 @@ function scanXMcpHeaderDeclarations(inputSchema) {
       if (sub === void 0) continue;
       const branches = Array.isArray(sub) ? sub : sub !== null && typeof sub === "object" && OBJECT_VALUED_SUBSCHEMA_KEYWORDS.has(k) ? Object.values(sub) : [sub];
       for (const branch of branches) {
-        const fault$1 = visit(branch, [...path8, `<${k}>`], false);
+        const fault$1 = visit(branch, [...path9, `<${k}>`], false);
         if (fault$1 !== void 0) return fault$1;
       }
     }
@@ -10838,8 +10838,8 @@ var OBJECT_VALUED_SUBSCHEMA_KEYWORDS = /* @__PURE__ */ new Set([
   "$defs",
   "definitions"
 ]);
-function pathName(path8) {
-  return path8.length === 0 ? "<root>" : path8.join(".");
+function pathName(path9) {
+  return path9.length === 0 ? "<root>" : path9.join(".");
 }
 var HEADER_MISMATCH_ERROR_CODE = -32020;
 var INBOUND_VALIDATION_LADDER = [
@@ -11128,7 +11128,7 @@ var PROPERTY_KEYS_BY_TYPE = {
   array: shapeKeys([UntitledMultiSelectEnumSchemaSchema, TitledMultiSelectEnumSchemaSchema])
 };
 var SUPPORTED_STRING_FORMATS = new Set(StringSchemaSchema.shape.format.unwrap().options);
-function walkProperty(node2, path8, vendor, unsupported) {
+function walkProperty(node2, path9, vendor, unsupported) {
   if (!isJsonObject(node2)) return node2;
   const allowedKeys = typeof node2.type === "string" && Object.hasOwn(PROPERTY_KEYS_BY_TYPE, node2.type) ? PROPERTY_KEYS_BY_TYPE[node2.type] : void 0;
   if (allowedKeys === void 0) return node2;
@@ -11136,8 +11136,8 @@ function walkProperty(node2, path8, vendor, unsupported) {
   for (const [key, value] of Object.entries(node2)) if (allowedKeys.has(key) || isAnnotationOnlyJsonSchemaKeyword(key)) pruned[key] = value;
   else if (key === "pattern" && node2.type === "string" && typeof node2.format === "string") {
     if (!SUPPORTED_STRING_FORMATS.has(node2.format)) pruned[key] = value;
-    else if (typeof value !== "string" || !isLibraryFormatPattern(node2.format, value, vendor)) unsupported.push(`${path8}.${key}`);
-  } else unsupported.push(`${path8}.${key}`);
+    else if (typeof value !== "string" || !isLibraryFormatPattern(node2.format, value, vendor)) unsupported.push(`${path9}.${key}`);
+  } else unsupported.push(`${path9}.${key}`);
   return pruned;
 }
 function walkRequestedSchema(converted, vendor) {
@@ -11154,11 +11154,11 @@ function describeUnsupportedProperties(pruned, fallback) {
   const offenders = Object.entries(pruned.properties).filter(([, node2]) => !parseSchema(PrimitiveSchemaDefinitionSchema, node2).success).map(([name]) => `properties.${name}`);
   return offenders.length > 0 ? offenders.join(", ") : fallback;
 }
-function findDroppedConstraintPaths(original, parsed, path8 = "") {
-  if (Array.isArray(original) && Array.isArray(parsed)) return original.flatMap((item, index) => findDroppedConstraintPaths(item, parsed[index], `${path8}[${index}]`));
+function findDroppedConstraintPaths(original, parsed, path9 = "") {
+  if (Array.isArray(original) && Array.isArray(parsed)) return original.flatMap((item, index) => findDroppedConstraintPaths(item, parsed[index], `${path9}[${index}]`));
   if (!isJsonObject(original) || !isJsonObject(parsed)) return [];
   return Object.entries(original).flatMap(([key, value]) => {
-    const childPath = path8 ? `${path8}.${key}` : key;
+    const childPath = path9 ? `${path9}.${key}` : key;
     if (!Object.prototype.hasOwnProperty.call(parsed, key)) return isAnnotationOnlyJsonSchemaKeyword(key) ? [] : [childPath];
     return findDroppedConstraintPaths(value, parsed[key], childPath);
   });
@@ -15237,8 +15237,8 @@ var require_utils = /* @__PURE__ */ __commonJSMin(((exports, module) => {
     for (let i = 0; i < str.length; i++) if (str[i] === token) ind++;
     return ind;
   }
-  function removeDotSegments(path8) {
-    let input = path8;
+  function removeDotSegments(path9) {
+    let input = path9;
     const output = [];
     let nextSlash = -1;
     let len = 0;
@@ -15391,8 +15391,8 @@ var require_schemes = /* @__PURE__ */ __commonJSMin(((exports, module) => {
       wsComponent.secure = void 0;
     }
     if (wsComponent.resourceName) {
-      const [path8, query] = wsComponent.resourceName.split("?");
-      wsComponent.path = path8 && path8 !== "/" ? path8 : void 0;
+      const [path9, query] = wsComponent.resourceName.split("?");
+      wsComponent.path = path9 && path9 !== "/" ? path9 : void 0;
       wsComponent.query = query;
       wsComponent.resourceName = void 0;
     }
@@ -21531,8 +21531,8 @@ function toError(value) {
 }
 
 // src/mcp/main.ts
-import { homedir as homedir2 } from "node:os";
-import path7 from "node:path";
+import { homedir as homedir3 } from "node:os";
+import path8 from "node:path";
 import { pathToFileURL } from "node:url";
 
 // src/runtime/resolver.ts
@@ -22374,13 +22374,13 @@ function resolveExistingDirectory(input, field) {
     throw new Error(`${field} must be a non-empty string`);
   }
   if (!path3.isAbsolute(input)) throw new Error(`${field} must be an absolute path: ${input}`);
-  let stat;
+  let stat2;
   try {
-    stat = statSync3(input);
+    stat2 = statSync3(input);
   } catch {
     throw new Error(`${field} does not exist: ${input}`);
   }
-  if (!stat.isDirectory()) throw new Error(`${field} is not a directory: ${input}`);
+  if (!stat2.isDirectory()) throw new Error(`${field} is not a directory: ${input}`);
   try {
     return { requestedPath: input, canonicalPath: realpathSync(input) };
   } catch {
@@ -23363,6 +23363,14 @@ var zcodeInteractionReplyInputSchema = strictObject({
   answers: record(string2(), string2()).optional(),
   reason: string2().max(2e3).optional()
 });
+var zcodeModelCatalogInputSchema = strictObject({
+  workspace: string2().trim().min(1)
+});
+var zcodeDefaultModelInputSchema = strictObject({
+  provider_id: string2().trim().min(1),
+  model_id: string2().trim().min(1),
+  reasoning_level: string2().trim().min(1).optional()
+});
 var testReportSchema = object({
   command: string2(),
   status: _enum(["passed", "failed", "not_run"]),
@@ -23447,6 +23455,34 @@ var doctorReportSchema = object({
     summary: string2()
   }))
 });
+var modelCatalogSchema = object({
+  workspace: string2(),
+  current_model: object({ provider_id: string2(), model_id: string2() }).nullable(),
+  models: array(object({
+    provider_id: string2(),
+    model_id: string2(),
+    label: string2(),
+    provider_label: string2().optional(),
+    context_window: number2().optional(),
+    max_output_tokens: number2().optional(),
+    reasoning_levels: array(object({ value: string2(), label: string2() })).optional(),
+    reasoning_default_level: string2().optional(),
+    disabled_reason: string2().optional()
+  })),
+  account_provider_sync: _enum(["not_needed", "applied", "failed"]),
+  cache_status: _enum(["fresh", "refreshed"]).optional(),
+  cached_at: string2().optional(),
+  warning: string2().optional()
+});
+var modelSelectionSchema = object({
+  provider_id: string2(),
+  model_id: string2(),
+  reasoning_level: string2().optional()
+});
+var defaultModelSchema = object({
+  configured: boolean2(),
+  model: modelSelectionSchema.nullable()
+});
 
 // src/mcp/server.ts
 var SERVER_NAME = "codex-zcode-bridge";
@@ -23473,6 +23509,7 @@ async function runTool(operation) {
     if (error2 instanceof TaskManagerError) {
       return errorResult(error2.code, error2.message);
     }
+    if (error2 instanceof BridgeError) return errorResult(error2.code.toUpperCase(), error2.message);
     throw error2;
   }
 }
@@ -23491,6 +23528,58 @@ function createBridgeServer(options) {
     async () => {
       if (!options.doctor) return errorResult("DOCTOR_UNAVAILABLE", "Bridge doctor is unavailable in this server instance");
       return runTool(() => options.doctor());
+    }
+  );
+  server.registerTool(
+    "zcode_model_catalog",
+    {
+      title: "Read available ZCode models",
+      description: "Read models and reasoning levels for this workspace. The Bridge caches the catalog for 24 hours, refreshes when provider settings change or the cache expires, and re-reads provider config before retrying a failed refresh. A cache response has current_model=null; use provider_id/model_id from models in zcode_task.model.",
+      inputSchema: zcodeModelCatalogInputSchema,
+      outputSchema: modelCatalogSchema
+    },
+    async (args) => {
+      if (!options.modelSettings) return errorResult("MODEL_SETTINGS_UNAVAILABLE", "model settings are unavailable in this server instance");
+      return runTool(() => options.modelSettings.listModels(args.workspace));
+    }
+  );
+  server.registerTool(
+    "zcode_default_model",
+    {
+      title: "Read the Bridge default model",
+      description: "Read the provider, model, and optional reasoning level used when zcode_task has no model override.",
+      inputSchema: {},
+      outputSchema: defaultModelSchema
+    },
+    async () => {
+      if (!options.modelSettings) return errorResult("MODEL_SETTINGS_UNAVAILABLE", "model settings are unavailable in this server instance");
+      return runTool(() => options.modelSettings.getDefaultModel());
+    }
+  );
+  server.registerTool(
+    "zcode_set_default_model",
+    {
+      title: "Set the Bridge default model",
+      description: "Persist a default provider/model selection for future tasks that omit zcode_task.model. Use IDs from zcode_model_catalog or the configured ZCode provider/model rules; the app-server validates the selection when a task starts. An optional reasoning_level applies to the configured default model; a per-task model selection can still override it.",
+      inputSchema: zcodeDefaultModelInputSchema,
+      outputSchema: defaultModelSchema
+    },
+    async (args) => {
+      if (!options.modelSettings) return errorResult("MODEL_SETTINGS_UNAVAILABLE", "model settings are unavailable in this server instance");
+      return runTool(() => options.modelSettings.setDefaultModel(args));
+    }
+  );
+  server.registerTool(
+    "zcode_clear_default_model",
+    {
+      title: "Clear the Bridge default model",
+      description: "Remove the Bridge default model so future tasks without zcode_task.model use the ZCode session default.",
+      inputSchema: {},
+      outputSchema: defaultModelSchema
+    },
+    async () => {
+      if (!options.modelSettings) return errorResult("MODEL_SETTINGS_UNAVAILABLE", "model settings are unavailable in this server instance");
+      return runTool(() => options.modelSettings.clearDefaultModel());
     }
   );
   server.registerTool(
@@ -23609,11 +23698,78 @@ function createBridgeServer(options) {
 }
 
 // src/runtime/doctor.ts
-import { accessSync as accessSync2, constants, existsSync as existsSync4, statSync as statSync4 } from "node:fs";
+import { accessSync as accessSync2, constants, existsSync as existsSync5, statSync as statSync4 } from "node:fs";
 import { execFileSync } from "node:child_process";
 
 // src/runtime/account-provider.ts
+import { createHash as createHash2 } from "node:crypto";
+import { existsSync as existsSync4, readFileSync as readFileSync3 } from "node:fs";
 import path6 from "node:path";
+function buildAccountProviderPayload(config2) {
+  const table = readJson(config2.providerBuiltinConfigFile);
+  const providerRules = readProviderRules(table).filter(isRecord).map((rule) => rule).filter((rule) => rule.config?.access?.type === "zhipu-account" && typeof rule.providerId === "string");
+  if (!providerRules.length) return null;
+  const dataDir = zcodeV2DataDir(config2.providerPersonalConfigFile);
+  if (!dataDir) return null;
+  const credentials = readJson(path6.join(dataDir, "config.json"));
+  const credentialProviders = asRecord2(credentials?.provider);
+  const cache = readJson(path6.join(dataDir, "coding-plan-cache.json"));
+  const cacheItems = asRecord2(asRecord2(cache?.entryStatus).items);
+  const providers = {};
+  const states = {};
+  for (const rule of providerRules) {
+    const providerId = rule.providerId;
+    const legacyId = configProviderId(providerId, rule);
+    const cacheStatus = asRecord2(cacheItems[legacyId]).status;
+    const legacyConfig = asRecord2(credentialProviders[legacyId]);
+    const options = asRecord2(legacyConfig.options);
+    const entitled = cacheStatus === "available" || legacyConfig.enabled === true && typeof options.apiKey === "string" && options.apiKey.trim().length > 0;
+    providers[providerId] = {
+      ...Array.isArray(rule.config?.builtinModelIds) ? { builtinModelIds: rule.config.builtinModelIds } : {},
+      access: { type: "zhipu-account", entitled }
+    };
+    states[providerId] = {
+      availability: entitled ? "available" : "unavailable",
+      entitled,
+      current: entitled
+    };
+  }
+  const revision = typeof table?.revision === "number" ? table.revision : 0;
+  const resolvedBuiltinPath = path6.resolve(config2.providerBuiltinConfigFile);
+  return {
+    revision: `account:codex-zcode-bridge:${Date.now()}`,
+    basedOnZCodeBuiltinRevision: `zcode-builtin:${revision}:${createHash2("sha256").update(resolvedBuiltinPath).digest("hex")}`,
+    providers,
+    states
+  };
+}
+function runtimeAuthReply(providerId, config2) {
+  const unavailable = {
+    headersApplied: false,
+    errorMessage: "Start Plan requires a ZCode desktop captcha session; this headless app-server bridge cannot provide it."
+  };
+  if (!providerId?.startsWith("account:")) return unavailable;
+  const table = readJson(config2.providerBuiltinConfigFile);
+  const rule = readProviderRules(table).find(
+    (candidate) => isRecord(candidate) && candidate.providerId === providerId
+  );
+  if (rule?.config?.access?.mode !== "individual-coding-plan") return unavailable;
+  const legacyId = configProviderId(providerId, rule);
+  const dataDir = zcodeV2DataDir(config2.providerPersonalConfigFile);
+  if (!dataDir) return unavailable;
+  const credentials = readJson(path6.join(dataDir, "config.json"));
+  const cache = readJson(path6.join(dataDir, "coding-plan-cache.json"));
+  const status = asRecord2(asRecord2(asRecord2(cache?.entryStatus).items)[legacyId]).status;
+  const provider = asRecord2(asRecord2(credentials?.provider)[legacyId]);
+  const options = asRecord2(provider.options);
+  const apiKey = typeof options.apiKey === "string" ? options.apiKey.trim() : "";
+  if (!apiKey || status !== "available" && provider.enabled !== true) return unavailable;
+  return { headersApplied: true, requestAuth: { apiKey } };
+}
+function zcodeDataBaseDir(personalProviderConfigFile) {
+  const dataDir = zcodeV2DataDir(personalProviderConfigFile);
+  return dataDir ? path6.dirname(path6.dirname(dataDir)) : null;
+}
 function zcodeTasksIndexPath(personalProviderConfigFile) {
   const dataDir = zcodeV2DataDir(personalProviderConfigFile);
   return dataDir ? path6.join(dataDir, "tasks-index.sqlite") : null;
@@ -23626,6 +23782,31 @@ function zcodeV2DataDir(personalProviderConfigFile) {
   const zcodeDir = path6.dirname(v2Dir);
   if (path6.basename(zcodeDir).toLowerCase() !== ".zcode") return null;
   return v2Dir;
+}
+function configProviderId(providerId, rule) {
+  const access = rule.config?.access;
+  if (!providerId.startsWith("account:") || !access?.accountType || !access.mode) return providerId;
+  const plan = access.mode === "individual-coding-plan" ? "coding-plan" : access.mode;
+  return `builtin:${access.accountType}-${plan}`;
+}
+function readProviderRules(table) {
+  const providerConfigRules = asRecord2(asRecord2(table?.config).providerConfigRules);
+  return Array.isArray(providerConfigRules.providerRules) ? providerConfigRules.providerRules : [];
+}
+function readJson(filePath) {
+  try {
+    if (!existsSync4(filePath)) return null;
+    const value = JSON.parse(readFileSync3(filePath, "utf8"));
+    return isRecord(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+function asRecord2(value) {
+  return isRecord(value) ? value : {};
+}
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 // src/runtime/session-preferences.ts
@@ -23653,10 +23834,11 @@ function resolveSessionPreferences(taskModel, env) {
       "ZCODE_BRIDGE_DEFAULT_REASONING_LEVEL requires a default model pair or a per-task model"
     );
   }
+  const inheritedReasoningLevel = taskModel && providerId && modelId && (providerId !== taskModel.provider_id.trim() || modelId !== taskModel.model_id.trim()) ? "" : reasoningLevel;
   const model = taskModel ? {
     provider_id: taskModel.provider_id.trim(),
     model_id: taskModel.model_id.trim(),
-    ...taskModel.reasoning_level?.trim() || reasoningLevel ? { reasoning_level: taskModel.reasoning_level?.trim() || reasoningLevel } : {}
+    ...taskModel.reasoning_level?.trim() || inheritedReasoningLevel ? { reasoning_level: taskModel.reasoning_level?.trim() || inheritedReasoningLevel } : {}
   } : providerId && modelId ? {
     provider_id: providerId,
     model_id: modelId,
@@ -23742,7 +23924,7 @@ async function runBridgeDoctor(options = {}) {
       summary: modelConfigured ? "A Bridge default model is configured; actual app-server availability is checked when a task starts" : "No Bridge model override; the ZCode account default will be used and cannot be confirmed without starting a session"
     });
     const dataRoot = options.dataRoot ?? env["ZCODE_BRIDGE_DATA_DIR"]?.trim() ?? null;
-    if (dataRoot && existsSync4(dataRoot)) {
+    if (dataRoot && existsSync5(dataRoot)) {
       try {
         const info = statSync4(dataRoot);
         accessSync2(dataRoot, constants.W_OK);
@@ -23756,8 +23938,8 @@ async function runBridgeDoctor(options = {}) {
     const indexPath = zcodeTasksIndexPath(config2.providerPersonalConfigFile);
     checks.push({
       name: "desktop_index",
-      status: indexPath && existsSync4(indexPath) ? "ok" : "warning",
-      summary: indexPath && existsSync4(indexPath) ? "ZCode Desktop task index file exists; Desktop refresh timing is not tested" : "ZCode Desktop task index file was not found at the configured data location"
+      status: indexPath && existsSync5(indexPath) ? "ok" : "warning",
+      summary: indexPath && existsSync5(indexPath) ? "ZCode Desktop task index file exists; Desktop refresh timing is not tested" : "ZCode Desktop task index file was not found at the configured data location"
     });
   } else {
     checks.push({ name: "runtime_node", status: "unknown", summary: "Not checked because runtime validation did not complete" });
@@ -23775,17 +23957,434 @@ function safeError(error2) {
   return message.replace(/[\r\n\0]/gu, " ").slice(0, 500);
 }
 
+// src/runtime/model-settings.ts
+import { spawn as spawn3 } from "node:child_process";
+import { createHash as createHash3, randomUUID as randomUUID2 } from "node:crypto";
+import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { homedir as homedir2 } from "node:os";
+import path7 from "node:path";
+var RPC_TIMEOUT_MS = 3e4;
+var PROCESS_CLOSE_TIMEOUT_MS = 1500;
+var MODEL_CATALOG_TTL_MS = 24 * 60 * 60 * 1e3;
+var ZCodeModelSettings = class {
+  #sourceEnv;
+  #writeQueue = Promise.resolve();
+  constructor(sourceEnv = process.env) {
+    this.#sourceEnv = sourceEnv;
+  }
+  async listModels(workspace) {
+    const requestedWorkspace = workspace.trim();
+    if (!path7.isAbsolute(requestedWorkspace)) {
+      throw new BridgeError("provider_config_invalid", "workspace must be an absolute existing directory");
+    }
+    let workspacePath;
+    try {
+      workspacePath = await realpath(requestedWorkspace);
+      if (!(await stat(workspacePath)).isDirectory()) throw new Error("not a directory");
+    } catch {
+      throw new BridgeError("provider_config_invalid", `workspace is not an accessible directory: ${requestedWorkspace}`);
+    }
+    let source;
+    try {
+      source = await this.#resolveCatalogSource(workspacePath);
+    } catch {
+      try {
+        source = await this.#resolveCatalogSource(workspacePath);
+      } catch (error2) {
+        const reason2 = error2 instanceof Error ? error2.message : String(error2);
+        const code2 = error2 instanceof BridgeError ? error2.code : "provider_config_invalid";
+        throw new BridgeError(code2, `Could not load the ZCode runtime/provider configuration after retrying: ${reason2}. Run zcode_doctor for the failing path, correct it, then call zcode_model_catalog again.`, { cause: error2 });
+      }
+    }
+    const cached2 = await readModelCatalogCache(source.cachePath);
+    const cacheAge = cached2 ? Date.now() - cached2.cached_at_ms : null;
+    if (cached2 && cached2.source_fingerprint === source.fingerprint && cacheAge !== null && cacheAge >= 0 && cacheAge < MODEL_CATALOG_TTL_MS) {
+      return {
+        workspace: workspacePath,
+        current_model: null,
+        models: cached2.models,
+        account_provider_sync: "not_needed",
+        cache_status: "fresh",
+        cached_at: new Date(cached2.cached_at_ms).toISOString()
+      };
+    }
+    let lastError;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const currentSource = attempt === 0 ? source : await this.#resolveCatalogSource(workspacePath);
+        return await this.#readLiveCatalog(workspacePath, currentSource);
+      } catch (error2) {
+        lastError = error2;
+      }
+    }
+    const reason = lastError instanceof Error ? lastError.message : String(lastError);
+    const code = lastError instanceof BridgeError ? lastError.code : "zcode_nonzero_exit";
+    throw new BridgeError(code, `Model catalog refresh failed after re-reading provider config and retrying: ${reason}. Run zcode_doctor to identify a missing or invalid runtime/provider file; after correcting it, call zcode_model_catalog again.`, { cause: lastError });
+  }
+  async #resolveCatalogSource(workspacePath) {
+    const runtimeEnv = loadPersistedRuntimeEnvironment(this.#sourceEnv);
+    const config2 = await new NodeRuntimeResolver({ env: runtimeEnv }).resolve();
+    const cachePath = modelCatalogCachePath(workspacePath, config2, runtimeEnv);
+    const fingerprint = await modelCatalogSourceFingerprint(config2, runtimeEnv);
+    return { config: config2, runtimeEnv, cachePath, fingerprint };
+  }
+  async #readLiveCatalog(workspacePath, source) {
+    const { config: config2, runtimeEnv, cachePath, fingerprint } = source;
+    const childEnv = buildRuntimeChildEnv(config2, runtimeEnv);
+    const client = startAppServer(config2, workspacePath, childEnv);
+    let sessionId = null;
+    let accountSync = "not_needed";
+    let warning;
+    try {
+      const accountPayload = buildAccountProviderPayload(config2);
+      if (accountPayload) {
+        try {
+          await client.request("provider/updateAccountConfig", accountPayload);
+          accountSync = "applied";
+        } catch (error2) {
+          throw new BridgeError("zcode_nonzero_exit", `Account provider synchronization failed: ${error2 instanceof Error ? error2.message : String(error2)}`, { cause: error2 });
+        }
+      }
+      const configuredMode = runtimeEnv["ZCODE_BRIDGE_MODE"]?.trim() ?? "build";
+      const mode = ZCODE_SESSION_MODES.includes(configuredMode) ? configuredMode : "build";
+      const snapshot = asRecord3(await client.request("session/create", {
+        workspace: { workspacePath, workspaceKey: workspacePath },
+        mode,
+        persistence: "deferred"
+      }));
+      sessionId = nestedString(snapshot, ["session", "sessionId"]);
+      if (!sessionId) throw new BridgeError("zcode_nonzero_exit", "ZCode app-server did not return a session ID");
+      const settings = asRecord3(snapshot.settings);
+      const modelSettings = asRecord3(settings.model);
+      const rawAvailable = Array.isArray(modelSettings.available) ? modelSettings.available : [];
+      const models = rawAvailable.map(toCatalogEntry).filter((entry) => entry !== null);
+      const current = toModelRef(modelSettings.current);
+      if (models.length === 0) throw new BridgeError("zcode_nonzero_exit", "ZCode app-server returned an empty model catalog for this workspace");
+      const cachedAt = Date.now();
+      await writeModelCatalogCache(cachePath, { cached_at_ms: cachedAt, source_fingerprint: fingerprint, models }).catch(() => void 0);
+      return {
+        workspace: workspacePath,
+        current_model: current,
+        models,
+        account_provider_sync: accountSync,
+        cache_status: "refreshed",
+        cached_at: new Date(cachedAt).toISOString(),
+        ...warning ? { warning } : {}
+      };
+    } catch (error2) {
+      if (error2 instanceof BridgeError) throw error2;
+      const message = error2 instanceof Error ? error2.message : String(error2);
+      const stderr = client.stderr.trim();
+      throw new BridgeError(
+        "zcode_nonzero_exit",
+        stderr ? `${message}; app-server stderr: ${stderr.slice(0, 1e3)}` : message,
+        { cause: error2 }
+      );
+    } finally {
+      if (sessionId) await client.request("session/close", { sessionId }).catch(() => void 0);
+      await client.close();
+    }
+  }
+  async getDefaultModel() {
+    const env = loadPersistedRuntimeEnvironment(this.#sourceEnv);
+    const providerId = env["ZCODE_BRIDGE_DEFAULT_PROVIDER_ID"]?.trim() ?? "";
+    const modelId = env["ZCODE_BRIDGE_DEFAULT_MODEL_ID"]?.trim() ?? "";
+    const reasoningLevel = env["ZCODE_BRIDGE_DEFAULT_REASONING_LEVEL"]?.trim() ?? "";
+    if (Boolean(providerId) !== Boolean(modelId)) {
+      throw new BridgeError("provider_config_invalid", "Stored default model is incomplete; provider_id and model_id must be set together");
+    }
+    if (!providerId) return { configured: false, model: null };
+    return {
+      configured: true,
+      model: { provider_id: providerId, model_id: modelId, ...reasoningLevel ? { reasoning_level: reasoningLevel } : {} }
+    };
+  }
+  async setDefaultModel(selection) {
+    const providerId = selection.provider_id.trim();
+    const modelId = selection.model_id.trim();
+    const reasoningLevel = selection.reasoning_level?.trim();
+    if (!providerId || !modelId || selection.reasoning_level !== void 0 && !reasoningLevel) {
+      throw new BridgeError("provider_config_invalid", "provider_id, model_id, and any supplied reasoning_level must be non-empty");
+    }
+    await this.#updateConfig((config2) => {
+      config2.ZCODE_BRIDGE_DEFAULT_PROVIDER_ID = providerId;
+      config2.ZCODE_BRIDGE_DEFAULT_MODEL_ID = modelId;
+      if (reasoningLevel) config2.ZCODE_BRIDGE_DEFAULT_REASONING_LEVEL = reasoningLevel;
+      else config2.ZCODE_BRIDGE_DEFAULT_REASONING_LEVEL = null;
+    });
+    return { configured: true, model: { provider_id: providerId, model_id: modelId, ...reasoningLevel ? { reasoning_level: reasoningLevel } : {} } };
+  }
+  async clearDefaultModel() {
+    await this.#updateConfig((config2) => {
+      config2.ZCODE_BRIDGE_DEFAULT_PROVIDER_ID = null;
+      config2.ZCODE_BRIDGE_DEFAULT_MODEL_ID = null;
+      config2.ZCODE_BRIDGE_DEFAULT_REASONING_LEVEL = null;
+    });
+    return { configured: false, model: null };
+  }
+  #updateConfig(update) {
+    const operation = this.#writeQueue.then(async () => {
+      const configPath = path7.join(homedir2(), ".codex", "codex-zcode-bridge", "runtime-config.json");
+      await mkdir(path7.dirname(configPath), { recursive: true });
+      let config2 = {};
+      try {
+        const info = await stat(configPath);
+        if (!info.isFile() || info.size > 64 * 1024) {
+          throw new BridgeError("provider_config_invalid", "Bridge runtime config is not a small regular JSON file");
+        }
+        const parsed = JSON.parse(await readFile(configPath, "utf8"));
+        if (!isRecord2(parsed)) throw new BridgeError("provider_config_invalid", "Bridge runtime config must contain a JSON object");
+        config2 = parsed;
+      } catch (error2) {
+        if (isMissingFile(error2)) config2 = {};
+        else if (error2 instanceof BridgeError) throw error2;
+        else throw new BridgeError("provider_config_invalid", `Could not read Bridge runtime config: ${error2 instanceof Error ? error2.message : String(error2)}`);
+      }
+      update(config2);
+      const serialized = `${JSON.stringify(config2, null, 2)}
+`;
+      if (Buffer.byteLength(serialized, "utf8") > 64 * 1024) {
+        throw new BridgeError("provider_config_invalid", "Updated Bridge runtime config would exceed 64 KiB");
+      }
+      const tempPath = `${configPath}.${process.pid}.${randomUUID2()}.tmp`;
+      try {
+        await writeFile(tempPath, serialized, { encoding: "utf8", flag: "wx", mode: 384 });
+        await rename(tempPath, configPath);
+      } catch (error2) {
+        await rm(tempPath, { force: true }).catch(() => void 0);
+        throw new BridgeError("provider_config_invalid", `Could not save Bridge runtime config: ${error2 instanceof Error ? error2.message : String(error2)}`);
+      }
+    });
+    this.#writeQueue = operation.catch(() => void 0);
+    return operation;
+  }
+};
+function buildRuntimeChildEnv(config2, source) {
+  const env = createMinimalOsEnv(source);
+  env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE = config2.providerBuiltinConfigFile;
+  env.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE = config2.providerPersonalConfigFile;
+  if (source.ZCODE_HOME) env.ZCODE_HOME = source.ZCODE_HOME;
+  const dataBaseDir = zcodeDataBaseDir(config2.providerPersonalConfigFile);
+  if (dataBaseDir) env.ZCODE_DATA_BASE_DIR = dataBaseDir;
+  return env;
+}
+function startAppServer(config2, cwd, env) {
+  const child = spawn3(config2.nodeExecutable, [config2.zcodeEntrypoint, "app-server", "--stdio"], {
+    cwd,
+    env,
+    shell: false,
+    windowsHide: true,
+    detached: process.platform !== "win32",
+    stdio: ["pipe", "pipe", "pipe"]
+  });
+  const pending = /* @__PURE__ */ new Map();
+  let stdoutBuffer = "";
+  let stderr = "";
+  let nextId = 0;
+  let closed = false;
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  const write = (message) => {
+    child.stdin.write(`${JSON.stringify(message)}
+`);
+  };
+  child.stdout.on("data", (chunk) => {
+    stdoutBuffer += chunk;
+    if (stdoutBuffer.length > 2e6) stdoutBuffer = stdoutBuffer.slice(-2e6);
+    let newline;
+    while ((newline = stdoutBuffer.indexOf("\n")) >= 0) {
+      const line = stdoutBuffer.slice(0, newline).trim();
+      stdoutBuffer = stdoutBuffer.slice(newline + 1);
+      if (!line) continue;
+      let message;
+      try {
+        message = asRecord3(JSON.parse(line));
+      } catch {
+        continue;
+      }
+      if (message.method === "session/requestRuntimePreferences" && (typeof message.id === "string" || typeof message.id === "number")) {
+        write({ id: message.id, result: { nativeSearchEnhancementsEnabled: false, memoryEnabled: false, askUserQuestionAutoResolutionEnabled: false } });
+      } else if (message.method === "interaction/requestProviderRuntimeHeaders" && (typeof message.id === "string" || typeof message.id === "number")) {
+        const params = asRecord3(message.params);
+        const selection = asRecord3(params.modelSelection);
+        const providerId = typeof selection.providerId === "string" ? selection.providerId : typeof params.providerId === "string" ? params.providerId : void 0;
+        write({ id: message.id, result: runtimeAuthReply(providerId, config2) });
+      } else if (message.id !== void 0 && message.method === void 0) {
+        const call = pending.get(message.id);
+        if (!call) continue;
+        clearTimeout(call.timer);
+        pending.delete(message.id);
+        if (message.error !== void 0) {
+          const error2 = asRecord3(message.error);
+          call.reject(new Error(typeof error2.message === "string" ? error2.message : "ZCode app-server request failed"));
+        } else call.resolve(message.result);
+      } else if ((typeof message.id === "string" || typeof message.id === "number") && typeof message.method === "string") {
+        write({ id: message.id, error: { code: -32601, message: `Unsupported ZCode app-server request: ${message.method}` } });
+      }
+    }
+  });
+  child.stderr.on("data", (chunk) => {
+    if (stderr.length < 64e3) stderr += chunk.slice(0, 64e3 - stderr.length);
+  });
+  child.on("error", (error2) => {
+    closed = true;
+    for (const call of pending.values()) {
+      clearTimeout(call.timer);
+      call.reject(error2);
+    }
+    pending.clear();
+  });
+  child.on("close", (code, signal) => {
+    closed = true;
+    for (const call of pending.values()) {
+      clearTimeout(call.timer);
+      call.reject(new Error(`ZCode app-server exited (${String(code)}${signal ? `, ${signal}` : ""})`));
+    }
+    pending.clear();
+  });
+  const request = (method, params) => {
+    if (closed) return Promise.reject(new Error(`ZCode app-server is closed before ${method}`));
+    const id = ++nextId;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        reject(new Error(`ZCode app-server request timed out: ${method}`));
+      }, RPC_TIMEOUT_MS);
+      timer.unref();
+      pending.set(id, { resolve, reject, timer });
+      child.stdin.write(`${JSON.stringify({ id, method, params })}
+`, (error2) => {
+        if (!error2) return;
+        clearTimeout(timer);
+        pending.delete(id);
+        reject(error2);
+      });
+    });
+  };
+  const close = async () => {
+    if (!closed) {
+      child.stdin.end();
+      await new Promise((resolve) => {
+        const timer = setTimeout(resolve, PROCESS_CLOSE_TIMEOUT_MS);
+        child.once("close", () => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
+    }
+    if (!closed && child.pid) await terminateProcessTree(child.pid).catch(() => void 0);
+  };
+  return { child, request, close, get stderr() {
+    return stderr;
+  } };
+}
+function toCatalogEntry(value) {
+  const entry = asRecord3(value);
+  const ref = toModelRef(entry.ref);
+  if (!ref) return null;
+  const reasoning = asRecord3(entry.reasoning);
+  const rawLevels = Array.isArray(reasoning.levels) ? reasoning.levels : [];
+  const reasoningLevels = rawLevels.flatMap((raw) => {
+    const level = asRecord3(raw);
+    if (typeof level.value !== "string" || !level.value.trim()) return [];
+    return [{ value: level.value, label: typeof level.label === "string" && level.label.trim() ? level.label : level.value }];
+  });
+  const defaultLevel = typeof reasoning.defaultLevel === "string" && reasoningLevels.some((level) => level.value === reasoning.defaultLevel) ? reasoning.defaultLevel : void 0;
+  return {
+    ...ref,
+    label: typeof entry.label === "string" ? entry.label : ref.model_id,
+    ...typeof entry.providerLabel === "string" ? { provider_label: entry.providerLabel } : {},
+    ...typeof entry.contextWindow === "number" ? { context_window: entry.contextWindow } : {},
+    ...typeof entry.maxOutputTokens === "number" ? { max_output_tokens: entry.maxOutputTokens } : {},
+    ...reasoningLevels.length ? { reasoning_levels: reasoningLevels } : {},
+    ...defaultLevel ? { reasoning_default_level: defaultLevel } : {},
+    ...typeof entry.disabledReason === "string" ? { disabled_reason: entry.disabledReason } : {}
+  };
+}
+function toModelRef(value) {
+  const ref = asRecord3(value);
+  return typeof ref.providerId === "string" && typeof ref.modelId === "string" ? { provider_id: ref.providerId, model_id: ref.modelId } : null;
+}
+function nestedString(record2, keys) {
+  let value = record2;
+  for (const key of keys) value = asRecord3(value)[key];
+  return typeof value === "string" ? value : null;
+}
+function asRecord3(value) {
+  return isRecord2(value) ? value : {};
+}
+function isRecord2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function isMissingFile(error2) {
+  return typeof error2 === "object" && error2 !== null && "code" in error2 && error2.code === "ENOENT";
+}
+function modelCatalogCachePath(workspace, config2, env) {
+  const identity = JSON.stringify({
+    workspace,
+    node: config2.nodeExecutable,
+    entrypoint: config2.zcodeEntrypoint,
+    builtin: config2.providerBuiltinConfigFile,
+    personal: config2.providerPersonalConfigFile,
+    zcodeHome: env.ZCODE_HOME ?? ""
+  });
+  const key = createHash3("sha256").update(identity).digest("hex");
+  return path7.join(homedir2(), ".codex", "codex-zcode-bridge", "model-catalog", `${key}.json`);
+}
+async function modelCatalogSourceFingerprint(config2, env) {
+  const digest = createHash3("sha256");
+  for (const file of [config2.providerBuiltinConfigFile, config2.providerPersonalConfigFile]) {
+    digest.update(file);
+    digest.update(await readFile(file));
+  }
+  const entry = await stat(config2.zcodeEntrypoint);
+  digest.update(JSON.stringify({ entrypoint: config2.zcodeEntrypoint, size: entry.size, mtimeMs: entry.mtimeMs, mode: env.ZCODE_BRIDGE_MODE ?? "build" }));
+  const account = buildAccountProviderPayload(config2);
+  if (account) digest.update(JSON.stringify({ providers: account.providers, states: account.states, builtinRevision: account.basedOnZCodeBuiltinRevision }));
+  return digest.digest("hex");
+}
+async function readModelCatalogCache(cachePath) {
+  try {
+    const info = await stat(cachePath);
+    if (!info.isFile() || info.size > 2 * 1024 * 1024) return null;
+    const value = JSON.parse(await readFile(cachePath, "utf8"));
+    if (!isRecord2(value) || !Number.isFinite(value.cached_at_ms) || typeof value.source_fingerprint !== "string" || !Array.isArray(value.models)) return null;
+    const models = value.models.map(toCachedCatalogEntry).filter((entry) => entry !== null);
+    if (models.length !== value.models.length || models.length === 0) return null;
+    return { cached_at_ms: value.cached_at_ms, source_fingerprint: value.source_fingerprint, models };
+  } catch {
+    return null;
+  }
+}
+function toCachedCatalogEntry(value) {
+  if (!isRecord2(value) || typeof value.provider_id !== "string" || !value.provider_id || typeof value.model_id !== "string" || !value.model_id || typeof value.label !== "string") return null;
+  if (value.reasoning_levels !== void 0 && (!Array.isArray(value.reasoning_levels) || !value.reasoning_levels.every((level) => isRecord2(level) && typeof level.value === "string" && typeof level.label === "string"))) return null;
+  return value;
+}
+async function writeModelCatalogCache(cachePath, cache) {
+  await mkdir(path7.dirname(cachePath), { recursive: true });
+  const tempPath = `${cachePath}.${process.pid}.${randomUUID2()}.tmp`;
+  try {
+    await writeFile(tempPath, `${JSON.stringify(cache)}
+`, { encoding: "utf8", flag: "wx", mode: 384 });
+    await rename(tempPath, cachePath);
+  } catch (error2) {
+    await rm(tempPath, { force: true }).catch(() => void 0);
+    throw error2;
+  }
+}
+
 // src/mcp/main.ts
 function resolveDataRoot(env) {
   const override = env["ZCODE_BRIDGE_DATA_DIR"]?.trim();
   if (override) {
-    if (!path7.isAbsolute(override)) {
+    if (!path8.isAbsolute(override)) {
       return {
         dataRoot: findPackageRoot(),
         warning: `ZCODE_BRIDGE_DATA_DIR must be an absolute path; ignoring ${override} and using the Bridge installation directory`
       };
     }
-    return { dataRoot: path7.normalize(override) };
+    return { dataRoot: path8.normalize(override) };
   }
   return { dataRoot: findPackageRoot() };
 }
@@ -23803,7 +24402,7 @@ function resolveMaxConcurrentWorkers(env) {
 async function main() {
   const runtimeEnv = loadPersistedRuntimeEnvironment(process.env);
   if (process.env["ZCODE_BRIDGE_PLUGIN_MODE"] === "1" && !runtimeEnv["ZCODE_BRIDGE_DATA_DIR"]?.trim()) {
-    runtimeEnv["ZCODE_BRIDGE_DATA_DIR"] = path7.join(homedir2(), ".codex", "codex-zcode-bridge");
+    runtimeEnv["ZCODE_BRIDGE_DATA_DIR"] = path8.join(homedir3(), ".codex", "codex-zcode-bridge");
   }
   const { dataRoot, warning } = resolveDataRoot(runtimeEnv);
   if (warning) {
@@ -23827,9 +24426,11 @@ async function main() {
     workspaceProvider: new DirectWorkspaceProvider(),
     maxConcurrentWorkers: workerLimit.maxConcurrentWorkers
   });
+  const modelSettings = new ZCodeModelSettings(process.env);
   const server = createBridgeServer({
     taskManager: manager,
-    doctor: () => runBridgeDoctor({ env: runtimeEnv, dataRoot })
+    doctor: () => runBridgeDoctor({ env: runtimeEnv, dataRoot }),
+    modelSettings
   });
   const handle = serveStdio(() => server);
   let closing = false;
@@ -23848,7 +24449,7 @@ async function main() {
   process.once("SIGTERM", () => shutdown("SIGTERM"));
   console.error("[bridge] codex-zcode-bridge stdio MCP server ready");
 }
-var isEntry = process.argv[1] !== void 0 && import.meta.url === pathToFileURL(path7.resolve(process.argv[1])).href;
+var isEntry = process.argv[1] !== void 0 && import.meta.url === pathToFileURL(path8.resolve(process.argv[1])).href;
 if (isEntry) {
   void main().catch((error2) => {
     console.error(`[bridge] fatal: ${error2 instanceof Error ? error2.stack ?? error2.message : String(error2)}`);
