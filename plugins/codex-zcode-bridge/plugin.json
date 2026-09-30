@@ -31,7 +31,9 @@
           "Delegate this development task to ZCode and follow it through completion.",
           "Ask ZCode to fix this issue using the specified model.",
           "Review the progress and final changes from a ZCode task."
-        ]
+        ],
+        "logo": "./assets/logo.png",
+        "composerIcon": "./assets/icon.png"
       }
     }
   }
