@@ -9,8 +9,8 @@ for await (const chunk of stdin) input += chunk;
 
 const nodeVersion = process.versions.node.split(".").map(Number);
 const nodeSupported = nodeVersion[0] > 22 || (nodeVersion[0] === 22 && (nodeVersion[1] > 18 || (nodeVersion[1] === 18 && nodeVersion[2] >= 0)));
-const parts = [`Node.js ${process.versions.node}${nodeSupported ? " (supported)" : " (requires 22.18+)"}`];
 const git = spawnSync("git", ["--version"], { encoding: "utf8", windowsHide: true });
+const parts = [`Node.js ${process.versions.node}${nodeSupported ? " (supported)" : " (requires 22.18+)"}`];
 if (git.status === 0) parts.push("Git detected");
 else parts.push("Git is missing");
 
