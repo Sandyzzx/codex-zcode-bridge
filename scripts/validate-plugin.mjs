@@ -16,7 +16,8 @@ async function readJson(filePath, label) {
 const pkg = await readJson(path.join(root, "package.json"), "package.json");
 const plugin = await readJson(path.join(pluginRoot, "plugin.json"), "plugin.json");
 const codexPlugin = await readJson(path.join(pluginRoot, ".codex-plugin", "plugin.json"), ".codex-plugin/plugin.json");
-const mcp = await readJson(path.join(pluginRoot, ".mcp.json"), ".mcp.json");
+const portableMcp = await readJson(path.join(pluginRoot, "mcp.json"), "mcp.json");
+const codexMcp = await readJson(path.join(pluginRoot, ".mcp.json"), ".mcp.json");
 
 for (const [label, manifest] of [["plugin.json", plugin], [".codex-plugin/plugin.json", codexPlugin]]) {
   const hasLocalCachebuster =
@@ -28,12 +29,14 @@ for (const [label, manifest] of [["plugin.json", plugin], [".codex-plugin/plugin
     throw new Error(`${label} identity/version must match package.json (${pkg.name}@${pkg.version})`);
   }
 }
-const server = mcp.mcpServers?.zcode_bridge;
-if (server?.command !== "node" || !Array.isArray(server.args) || server.args[0] !== "./dist/bridge.mjs") {
-  throw new Error(".mcp.json must launch ./dist/bridge.mjs with node");
-}
-if (server.env?.ZCODE_BRIDGE_PLUGIN_MODE !== "1") {
-  throw new Error(".mcp.json must set ZCODE_BRIDGE_PLUGIN_MODE=1");
+for (const [label, mcp] of [["mcp.json", portableMcp], [".mcp.json", codexMcp]]) {
+  const server = mcp.mcpServers?.zcode_bridge;
+  if (server?.command !== "node" || !Array.isArray(server.args) || server.args[0] !== "./dist/bridge.mjs") {
+    throw new Error(`${label} must launch ./dist/bridge.mjs with node`);
+  }
+  if (server.env?.ZCODE_BRIDGE_PLUGIN_MODE !== "1") {
+    throw new Error(`${label} must set ZCODE_BRIDGE_PLUGIN_MODE=1`);
+  }
 }
 
 for (const relativePath of [
