@@ -4,7 +4,7 @@
     "zcode_bridge": {
       "type": "stdio",
       "command": "node",
-      "args": ["./server/bridge.mjs"],
+      "args": ["./dist/bridge.mjs"],
       "cwd": "./",
       "env": {
         "ZCODE_BRIDGE_PLUGIN_MODE": "1"
