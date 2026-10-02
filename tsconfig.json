@@ -12,7 +12,7 @@
     "forceConsistentCasingInFileNames": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "declaration": false,
+    "declaration": true,
     "sourceMap": false,
     "allowJs": true,
     "noEmitOnError": true,

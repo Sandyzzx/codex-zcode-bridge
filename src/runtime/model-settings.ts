@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
@@ -11,6 +11,9 @@ import { loadPersistedRuntimeEnvironment, NodeRuntimeResolver } from "./resolver
 import { ZCODE_SESSION_MODES, type ZCodeSessionMode } from "./session-preferences.js";
 import type { ZCodeRuntimeConfig } from "../interfaces.js";
 import { terminateProcessTree } from "../adapters/process-spawn.js";
+import { codexHostProfile, validateHostProfile, type BridgeHostProfile } from "../host/profile.js";
+import { withProcessLock } from "../store/process-lock.js";
+import { atomicRename } from "../store/atomic-rename.js";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -69,10 +72,14 @@ const MODEL_CATALOG_TTL_MS = 24 * 60 * 60 * 1_000;
 /** Read the live app-server catalog and manage Bridge's persistent model default. */
 export class ZCodeModelSettings {
   readonly #sourceEnv: NodeJS.ProcessEnv;
+  readonly #homeDir: string;
+  readonly #host: BridgeHostProfile;
   #writeQueue: Promise<void> = Promise.resolve();
 
-  constructor(sourceEnv: NodeJS.ProcessEnv = process.env) {
+  constructor(sourceEnv: NodeJS.ProcessEnv = process.env, options: { homeDir?: string; host?: BridgeHostProfile } = {}) {
     this.#sourceEnv = sourceEnv;
+    this.#homeDir = options.homeDir ?? homedir();
+    this.#host = validateHostProfile(options.host ?? codexHostProfile(this.#homeDir));
   }
 
   async listModels(workspace: string): Promise<ZCodeModelCatalog> {
@@ -132,9 +139,9 @@ export class ZCodeModelSettings {
   }
 
   async #resolveCatalogSource(workspacePath: string): Promise<CatalogSource> {
-    const runtimeEnv = loadPersistedRuntimeEnvironment(this.#sourceEnv);
-    const config = await new NodeRuntimeResolver({ env: runtimeEnv }).resolve();
-    const cachePath = modelCatalogCachePath(workspacePath, config, runtimeEnv);
+    const runtimeEnv = loadPersistedRuntimeEnvironment(this.#sourceEnv, this.#homeDir, this.#host);
+    const config = await new NodeRuntimeResolver({ env: runtimeEnv, homeDir: this.#homeDir, host: this.#host }).resolve();
+    const cachePath = modelCatalogCachePath(workspacePath, config, runtimeEnv, this.#host.settingsDirectory);
     const fingerprint = await modelCatalogSourceFingerprint(config, runtimeEnv);
     return { config, runtimeEnv, cachePath, fingerprint };
   }
@@ -189,10 +196,9 @@ export class ZCodeModelSettings {
     } catch (error) {
       if (error instanceof BridgeError) throw error;
       const message = error instanceof Error ? error.message : String(error);
-      const stderr = client.stderr.trim();
       throw new BridgeError(
         "zcode_nonzero_exit",
-        stderr ? `${message}; app-server stderr: ${stderr.slice(0, 1_000)}` : message,
+        message,
         { cause: error },
       );
     } finally {
@@ -202,7 +208,7 @@ export class ZCodeModelSettings {
   }
 
   async getDefaultModel(): Promise<{ configured: boolean; model: DefaultModelSelection | null }> {
-    const env = loadPersistedRuntimeEnvironment(this.#sourceEnv);
+    const env = loadPersistedRuntimeEnvironment(this.#sourceEnv, this.#homeDir, this.#host);
     const providerId = env["ZCODE_BRIDGE_DEFAULT_PROVIDER_ID"]?.trim() ?? "";
     const modelId = env["ZCODE_BRIDGE_DEFAULT_MODEL_ID"]?.trim() ?? "";
     const reasoningLevel = env["ZCODE_BRIDGE_DEFAULT_REASONING_LEVEL"]?.trim() ?? "";
@@ -245,35 +251,52 @@ export class ZCodeModelSettings {
 
   #updateConfig(update: (config: JsonRecord) => void): Promise<void> {
     const operation = this.#writeQueue.then(async () => {
-      const configPath = path.join(homedir(), ".codex", "codex-zcode-bridge", "runtime-config.json");
-      await mkdir(path.dirname(configPath), { recursive: true });
-      let config: JsonRecord = {};
-      try {
-        const info = await stat(configPath);
-        if (!info.isFile() || info.size > 64 * 1024) {
-          throw new BridgeError("provider_config_invalid", "Bridge runtime config is not a small regular JSON file");
+      await mkdir(this.#host.settingsDirectory, { recursive: true });
+      return withProcessLock(path.join(this.#host.settingsDirectory, ".settings.lock"), async () => {
+        const configPath = path.join(this.#host.settingsDirectory, "runtime-config.json");
+        let config: JsonRecord = {};
+        try {
+          const info = await stat(configPath);
+          if (!info.isFile() || info.size > 64 * 1024) {
+            throw new BridgeError("provider_config_invalid", "Bridge runtime config is not a small regular JSON file");
+          }
+          const parsed: unknown = JSON.parse(await readFile(configPath, "utf8"));
+          if (!isRecord(parsed)) throw new BridgeError("provider_config_invalid", "Bridge runtime config must contain a JSON object");
+          config = parsed;
+        } catch (error) {
+          if (isMissingFile(error)) {
+            config = {};
+            for (const directory of this.#host.legacySettingsDirectories ?? []) {
+              const legacyPath = path.join(directory, "runtime-config.json");
+              try {
+                if ((await stat(legacyPath)).size > 64 * 1024) throw new Error("legacy settings exceed size limit");
+                const legacy: unknown = JSON.parse(await readFile(legacyPath, "utf8"));
+                if (!isRecord(legacy)) throw new Error("invalid legacy settings");
+                loadPersistedRuntimeEnvironment(this.#sourceEnv, this.#homeDir, this.#host);
+                config = legacy;
+                break;
+              } catch (legacyError) {
+                if (!isMissingFile(legacyError)) throw new BridgeError("provider_config_invalid", "Could not migrate host runtime settings", { cause: legacyError });
+              }
+            }
+          }
+          else if (error instanceof BridgeError) throw error;
+          else throw new BridgeError("provider_config_invalid", "Could not read Bridge runtime config", { cause: error });
         }
-        const parsed: unknown = JSON.parse(await readFile(configPath, "utf8"));
-        if (!isRecord(parsed)) throw new BridgeError("provider_config_invalid", "Bridge runtime config must contain a JSON object");
-        config = parsed;
-      } catch (error) {
-        if (isMissingFile(error)) config = {};
-        else if (error instanceof BridgeError) throw error;
-        else throw new BridgeError("provider_config_invalid", `Could not read Bridge runtime config: ${error instanceof Error ? error.message : String(error)}`);
-      }
-      update(config);
-      const serialized = `${JSON.stringify(config, null, 2)}\n`;
-      if (Buffer.byteLength(serialized, "utf8") > 64 * 1024) {
-        throw new BridgeError("provider_config_invalid", "Updated Bridge runtime config would exceed 64 KiB");
-      }
-      const tempPath = `${configPath}.${process.pid}.${randomUUID()}.tmp`;
-      try {
-        await writeFile(tempPath, serialized, { encoding: "utf8", flag: "wx", mode: 0o600 });
-        await rename(tempPath, configPath);
-      } catch (error) {
-        await rm(tempPath, { force: true }).catch(() => undefined);
-        throw new BridgeError("provider_config_invalid", `Could not save Bridge runtime config: ${error instanceof Error ? error.message : String(error)}`);
-      }
+        update(config);
+        const serialized = `${JSON.stringify(config, null, 2)}\n`;
+        if (Buffer.byteLength(serialized, "utf8") > 64 * 1024) {
+          throw new BridgeError("provider_config_invalid", "Updated Bridge runtime config would exceed 64 KiB");
+        }
+        const tempPath = `${configPath}.${process.pid}.${randomUUID()}.tmp`;
+        try {
+          await writeFile(tempPath, serialized, { encoding: "utf8", flag: "wx", mode: 0o600 });
+          await atomicRename(tempPath, configPath);
+        } catch (error) {
+          await rm(tempPath, { force: true }).catch(() => undefined);
+          throw new BridgeError("provider_config_invalid", `Could not save Bridge runtime config: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      });
     });
     this.#writeQueue = operation.catch(() => undefined);
     return operation;
@@ -326,7 +349,7 @@ function startAppServer(config: ZCodeRuntimeConfig, cwd: string, env: NodeJS.Pro
         pending.delete(message.id as string | number);
         if (message.error !== undefined) {
           const error = asRecord(message.error);
-          call.reject(new Error(typeof error.message === "string" ? error.message : "ZCode app-server request failed"));
+          call.reject(new Error(`ZCode app-server request failed${typeof error.code === "number" ? ` (code ${error.code})` : ""}`));
         } else call.resolve(message.result);
       } else if ((typeof message.id === "string" || typeof message.id === "number") && typeof message.method === "string") {
         write({ id: message.id, error: { code: -32601, message: `Unsupported ZCode app-server request: ${message.method}` } });
@@ -371,7 +394,7 @@ function startAppServer(config: ZCodeRuntimeConfig, cwd: string, env: NodeJS.Pro
         child.once("close", () => { clearTimeout(timer); resolve(); });
       });
     }
-    if (!closed && child.pid) await terminateProcessTree(child.pid).catch(() => undefined);
+    if (child.pid && (!closed || process.platform !== "win32")) await terminateProcessTree(child.pid);
   };
   return { child, request, close, get stderr() { return stderr; } };
 }
@@ -433,7 +456,7 @@ interface CachedModelCatalog {
   models: ZCodeModelCatalogEntry[];
 }
 
-function modelCatalogCachePath(workspace: string, config: ZCodeRuntimeConfig, env: NodeJS.ProcessEnv): string {
+function modelCatalogCachePath(workspace: string, config: ZCodeRuntimeConfig, env: NodeJS.ProcessEnv, settingsDirectory: string): string {
   const identity = JSON.stringify({
     workspace,
     node: config.nodeExecutable,
@@ -443,7 +466,7 @@ function modelCatalogCachePath(workspace: string, config: ZCodeRuntimeConfig, en
     zcodeHome: env.ZCODE_HOME ?? "",
   });
   const key = createHash("sha256").update(identity).digest("hex");
-  return path.join(homedir(), ".codex", "codex-zcode-bridge", "model-catalog", `${key}.json`);
+  return path.join(settingsDirectory, "model-catalog", `${key}.json`);
 }
 
 async function modelCatalogSourceFingerprint(config: ZCodeRuntimeConfig, env: NodeJS.ProcessEnv): Promise<string> {
@@ -479,7 +502,12 @@ function toCachedCatalogEntry(value: unknown): ZCodeModelCatalogEntry | null {
       typeof value.model_id !== "string" || !value.model_id || typeof value.label !== "string") return null;
   if (value.reasoning_levels !== undefined && (!Array.isArray(value.reasoning_levels) ||
       !value.reasoning_levels.every((level: unknown) => isRecord(level) && typeof level.value === "string" && typeof level.label === "string"))) return null;
-  return value as unknown as ZCodeModelCatalogEntry;
+  for (const key of ["provider_label", "reasoning_default_level", "disabled_reason"]) if (value[key] !== undefined && typeof value[key] !== "string") return null;
+  for (const key of ["context_window", "max_output_tokens"]) if (value[key] !== undefined && (typeof value[key] !== "number" || !Number.isFinite(value[key]) || (value[key] as number) < 0)) return null;
+  const result: Record<string, unknown> = {};
+  for (const key of ["provider_id", "model_id", "label", "provider_label", "context_window", "max_output_tokens", "reasoning_default_level", "disabled_reason"]) if (value[key] !== undefined) result[key] = value[key];
+  if (Array.isArray(value.reasoning_levels)) result.reasoning_levels = value.reasoning_levels.map((level) => ({ value: level.value, label: level.label }));
+  return result as unknown as ZCodeModelCatalogEntry;
 }
 
 async function writeModelCatalogCache(cachePath: string, cache: CachedModelCatalog): Promise<void> {
@@ -487,7 +515,7 @@ async function writeModelCatalogCache(cachePath: string, cache: CachedModelCatal
   const tempPath = `${cachePath}.${process.pid}.${randomUUID()}.tmp`;
   try {
     await writeFile(tempPath, `${JSON.stringify(cache)}\n`, { encoding: "utf8", flag: "wx", mode: 0o600 });
-    await rename(tempPath, cachePath);
+    await atomicRename(tempPath, cachePath);
   } catch (error) {
     await rm(tempPath, { force: true }).catch(() => undefined);
     throw error;

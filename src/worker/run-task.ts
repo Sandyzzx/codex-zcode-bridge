@@ -17,6 +17,7 @@ import { BridgeError } from "../runtime/errors.js";
 import { buildContinuePrompt, buildTaskPrompt } from "../prompts/task-prompt.js";
 import { buildTaskResult, type TaskFailure } from "../manager/normalize.js";
 import { TaskStore } from "../store/task-store.js";
+import type { BridgeHostProfile } from "../host/profile.js";
 
 /**
  * The worker needs the frozen adapter contract except that getResult must
@@ -36,6 +37,8 @@ export interface ContinueSpec {
 export interface RunWorkerTaskOptions {
   readonly dataRoot: string;
   readonly taskId: string;
+  readonly attempt: number;
+  readonly host?: BridgeHostProfile;
   adapter?: WorkerAdapter;
   resolver?: RuntimeResolver;
   now?: () => Date;
@@ -52,7 +55,8 @@ export async function runWorkerTask(options: RunWorkerTaskOptions): Promise<RunW
   const taskId = options.taskId;
   const task = store.readTask(taskId);
   const initialStatus = store.readStatus(taskId);
-  const attempt = initialStatus.attempt;
+  const attempt = options.attempt;
+  if (!store.claimWorkerExecution(taskId, attempt)) throw new Error("worker attempt already claimed, stale, or terminal");
 
   // Defensive: the manager normally cancels before the worker starts; if the
   // intent was recorded first, finish as cancelled without touching the agent.
@@ -67,13 +71,12 @@ export async function runWorkerTask(options: RunWorkerTaskOptions): Promise<RunW
       failure: { code: "cancelled", message: "cancelled by request before the worker started the agent" },
       cancelled: true,
     });
-    store.writeResult(taskId, result);
-    store.writeStatus(taskId, { status: "cancelled", finished_at: finishedAt, worker_pid: null });
+    store.commitWorkerResult(taskId, attempt, result, { status: "cancelled", finished_at: finishedAt, worker_pid: null });
     return { status: result.status, result };
   }
 
   const startedAt = initialStatus.started_at ?? now().toISOString();
-  store.writeStatus(taskId, { status: "running", started_at: startedAt, worker_pid: process.pid });
+  store.writeStatus(taskId, { status: "running", started_at: startedAt, worker_pid: process.pid }, attempt);
   store.appendEvent(taskId, "worker_running", "Task worker is preparing the ZCode runtime");
   store.writeAttemptMeta(taskId, attempt, "started.json", {
     worker_pid: process.pid,
@@ -104,7 +107,8 @@ export async function runWorkerTask(options: RunWorkerTaskOptions): Promise<RunW
   let lastModelOutputAt = 0;
   const flushModelOutput = (): void => {
     if (!pendingModelOutput) return;
-    store.appendEvent(taskId, "model_output", pendingModelOutput);
+    store.assertWorkerAttempt(taskId, attempt);
+    for (let offset = 0; offset < pendingModelOutput.length; offset += 2_000) store.appendEvent(taskId, "model_output", pendingModelOutput.slice(offset, offset + 2_000));
     pendingModelOutput = "";
     lastModelOutputAt = Date.now();
   };
@@ -115,7 +119,9 @@ export async function runWorkerTask(options: RunWorkerTaskOptions): Promise<RunW
       await options.resolver.resolve();
     }
     const adapter = options.adapter ?? new ZCodeAppServerAdapter({
+      host: options.host,
       onEvent: (event) => {
+        store.assertWorkerAttempt(taskId, attempt);
         if (event.type === "model_output") {
           pendingModelOutput += event.summary;
           if (pendingModelOutput.length >= 4_000 || Date.now() - lastModelOutputAt >= 500) flushModelOutput();
@@ -124,10 +130,12 @@ export async function runWorkerTask(options: RunWorkerTaskOptions): Promise<RunW
         flushModelOutput();
         store.appendEvent(taskId, event.type, event.summary, event.details);
         const sessionId = event.type === "session_ready" ? event.details?.["session_id"] : undefined;
-        if (typeof sessionId === "string") store.writeStatus(taskId, { zcode_session_id: sessionId });
+        if (typeof sessionId === "string") store.writeStatus(taskId, { zcode_session_id: sessionId }, attempt);
+        if (event.type === "app_server_started" && typeof event.details?.["pid"] === "number") store.writeStatus(taskId, { zcode_pid: event.details["pid"] }, attempt);
       },
-      resolveInteraction: async (request) => {
-        const safeRequest = sanitizeInteractionRequest(request);
+      resolveInteraction: async (request, signal) => {
+        store.assertWorkerAttempt(taskId, attempt);
+        const safeRequest = sanitizeInteractionRequest({ ...request, request_id: `${attempt}:${request.request_id}` });
         const { record, created } = store.writeInteractionRequest(taskId, safeRequest, now().toISOString());
         if (created) {
           const interactionEvent = store.appendEvent(
@@ -138,16 +146,18 @@ export async function runWorkerTask(options: RunWorkerTaskOptions): Promise<RunW
             record.created_at,
           );
           if (!interactionEvent) {
-            const fallback = interactionDecline(request.method, "Bridge could not publish this request to Codex");
-            store.answerInteractionRequest(taskId, request.request_id, fallback, now().toISOString());
+            const fallback = interactionDecline(request.method, "Bridge could not publish this request to the calling host");
+            store.answerInteractionRequest(taskId, safeRequest.request_id, fallback, now().toISOString());
             return fallback;
           }
         }
-        while (true) {
-          const current = store.readInteractionRequest(taskId, request.request_id);
+        while (!signal.aborted) {
+          store.assertWorkerAttempt(taskId, attempt);
+          const current = store.readInteractionRequest(taskId, safeRequest.request_id);
           if (current?.state === "answered" && current.answer) return current.answer;
           await sleep(250);
         }
+        return interactionDecline(request.method, "The task attempt ended");
       },
     });
     const workspaceRef: WorkspaceRef = store.readWorkspaceRef(taskId) ?? {
@@ -178,6 +188,7 @@ export async function runWorkerTask(options: RunWorkerTaskOptions): Promise<RunW
   }
 
   const finishedAt = now().toISOString();
+  store.assertWorkerAttempt(taskId, attempt);
   const stdoutLog = store.appendLog(taskId, "stdout", outcome?.stdout ? `${outcome.stdout}\n` : "");
   const stderrLog = store.appendLog(
     taskId,
@@ -221,20 +232,23 @@ export async function runWorkerTask(options: RunWorkerTaskOptions): Promise<RunW
     finishedAt,
     outcome,
     failure,
-    cancelled: false,
+    cancelled: outcome?.cancelled === true || failure?.code === "cancelled",
+    sessionId: store.readStatus(taskId).zcode_session_id ?? continueSpec?.previous_session_id,
   });
   store.appendEvent(taskId, "task_finished", `Task reached terminal status: ${result.status}`, {
     status: result.status,
     needs_master_decision: result.needs_master_decision,
   }, finishedAt);
-  store.writeResult(taskId, result);
-  store.writeStatus(taskId, {
+  store.commitWorkerResult(taskId, attempt, result, {
     status: result.status,
     finished_at: finishedAt,
     exit_code: result.exit_code,
     zcode_session_id: result.session_id,
     error_code: result.error_code ?? null,
     error: result.status === "failed" ? result.summary : null,
+    worker_pid: null,
+    cleanup_unverified: failure?.code === "cleanup_failed",
+    zcode_pid: failure?.code === "cleanup_failed" ? store.readStatus(taskId).zcode_pid : null,
   });
   return { status: result.status, result };
 }
@@ -244,12 +258,12 @@ function interactionSummary(request: ZCodeInteractionRequest): string {
   if (request.method === "interaction/requestPermission") {
     const toolName = typeof params.toolName === "string" ? params.toolName : "tool";
     const reason = typeof params.reason === "string" ? `: ${params.reason}` : "";
-    return `ZCode is waiting for Codex to decide whether ${toolName} may proceed${reason}`;
+    return `ZCode is waiting for the calling host to decide whether ${toolName} may proceed${reason}`;
   }
   if (asRecord(params.schema).interaction === "plan_approval") {
-    return "ZCode is waiting for Codex to approve or reject its plan";
+    return "ZCode is waiting for the calling host to approve or reject its plan";
   }
-  return "ZCode is waiting for Codex to answer a question";
+  return "ZCode is waiting for the calling host to answer a question";
 }
 
 function publicInteractionDetails(request: ZCodeInteractionRequest): Record<string, unknown> {

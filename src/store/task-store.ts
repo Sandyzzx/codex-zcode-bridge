@@ -6,11 +6,13 @@
 // task evidence and pending interaction decisions live here. Permission
 // request details may contain tool inputs and are persisted so the Master can
 // inspect them and answer after a worker restart.
-import { appendFileSync, chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, rmdirSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import type { TaskPackage, TaskProgressEvent, TaskResult, TaskStatus, TaskStatusRecord, WorkspaceRef, ZCodeInteractionRecord, ZCodeInteractionRequest } from "../interfaces.js";
+import { tryAcquireProcessLock } from "./process-lock.js";
+import { atomicRenameSync } from "./atomic-rename.js";
 
 /** status.json shape: the frozen TaskStatusRecord plus internal fields. */
 export interface InternalTaskStatus extends Omit<TaskStatusRecord, "error_code" | "error"> {
@@ -18,6 +20,8 @@ export interface InternalTaskStatus extends Omit<TaskStatusRecord, "error_code" 
   error_code?: string | null;
   error?: string | null;
   cancel_requested?: boolean | null;
+  cleanup_unverified?: boolean | null;
+  zcode_pid?: number | null;
 }
 
 const TASK_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
@@ -112,7 +116,9 @@ export class TaskStore {
   readTask(taskId: string): TaskPackage {
     const file = path.join(this.taskDir(taskId), "task.json");
     const parsed = this.#readJson(file);
-    return parsed as TaskPackage;
+    const task = parsed as TaskPackage;
+    if (!task || task.task_id !== taskId || typeof task.workspace !== "string" || !task.workspace || typeof task.objective !== "string" || [task.requirements, task.allowed_paths, task.forbidden_paths, task.acceptance_criteria, task.test_commands].some((items) => !Array.isArray(items) || items.some((item) => typeof item !== "string"))) throw new Error(`corrupt task record: ${file}`);
+    return task;
   }
 
   writeWorkspaceRef(taskId: string, workspace: WorkspaceRef): void {
@@ -122,49 +128,98 @@ export class TaskStore {
   readWorkspaceRef(taskId: string): WorkspaceRef | null {
     const file = path.join(this.taskDir(taskId), "workspace.json");
     if (!existsSync(file)) return null;
-    return this.#readJson(file) as WorkspaceRef;
+    const workspace = this.#readJson(file) as WorkspaceRef;
+    if (!workspace || typeof workspace.canonicalPath !== "string" || typeof workspace.requestedPath !== "string" || !["direct", "worktree"].includes(workspace.mode)) throw new Error(`corrupt workspace record: ${file}`);
+    return workspace;
   }
 
   readStatus(taskId: string): InternalTaskStatus {
     const file = path.join(this.taskDir(taskId), "status.json");
     const parsed = this.#readJson(file) as InternalTaskStatus;
-    if (typeof parsed?.status !== "string") {
+    if (!parsed || parsed.task_id !== taskId || !["queued", "running", "completed", "failed", "cancelled", "waiting_for_master"].includes(parsed.status) || !Number.isSafeInteger(parsed.attempt) || parsed.attempt < 1 || typeof parsed.created_at !== "string") {
       throw new Error(`corrupt status record: ${file}`);
     }
     return parsed;
   }
 
   /** Read-merge-write with an updated timestamp; atomic via temp file + rename. */
-  writeStatus(taskId: string, patch: Partial<InternalTaskStatus>): InternalTaskStatus {
-    const current = this.readStatus(taskId);
-    const next: InternalTaskStatus = {
-      ...current,
-      ...patch,
-      task_id: current.task_id,
-      updated_at: new Date().toISOString(),
-    };
-    this.#writeJsonAtomic(path.join(this.taskDir(taskId), "status.json"), next);
-    return next;
+  writeStatus(taskId: string, patch: Partial<InternalTaskStatus>, expectedAttempt?: number): InternalTaskStatus {
+    return withEventLock(path.join(this.taskDir(taskId), "state.lock"), () => {
+      const current = this.readStatus(taskId);
+      if (expectedAttempt !== undefined && (current.attempt !== expectedAttempt || isTerminalStatus(current.status))) throw new Error("stale or terminal worker status rejected");
+      const next: InternalTaskStatus = {
+        ...current,
+        ...patch,
+        task_id: current.task_id,
+        updated_at: new Date().toISOString(),
+      };
+      this.#writeJsonAtomic(path.join(this.taskDir(taskId), "status.json"), next);
+      return next;
+    });
   }
 
   readResult(taskId: string): TaskResult | null {
     const file = path.join(this.taskDir(taskId), "result.json");
     if (!existsSync(file)) return null;
-    return this.#readJson(file) as TaskResult;
+    const result = this.#readJson(file) as TaskResult;
+    if (!result || result.task_id !== taskId || !Number.isSafeInteger(result.attempt) || !isTerminalStatus(result.status)) throw new Error(`corrupt result record: ${file}`);
+    return result.attempt === this.readStatus(taskId).attempt ? result : null;
   }
 
   writeResult(taskId: string, result: TaskResult): void {
-    this.#writeJsonAtomic(path.join(this.taskDir(taskId), "result.json"), result);
+    withEventLock(path.join(this.taskDir(taskId), "state.lock"), () => {
+      if (this.readStatus(taskId).attempt !== result.attempt) throw new Error("stale worker attempt result rejected");
+      this.#writeJsonAtomic(path.join(this.taskDir(taskId), "result.json"), result);
+    });
   }
 
-  /** Moves the current terminal result.json to attempts/<attempt>/result.json. */
+  commitWorkerResult(taskId: string, attempt: number, result: TaskResult, patch: Partial<InternalTaskStatus>): void {
+    withEventLock(path.join(this.taskDir(taskId), "state.lock"), () => {
+      this.assertWorkerAttempt(taskId, attempt);
+      this.#writeJsonAtomic(path.join(this.taskDir(taskId), "result.json"), result);
+      const current = this.readStatus(taskId);
+      this.#writeJsonAtomic(path.join(this.taskDir(taskId), "status.json"), { ...current, ...patch, task_id: taskId, attempt, updated_at: new Date().toISOString() });
+    });
+  }
+
+  patchRunningAttempt(taskId: string, attempt: number, patch: Partial<InternalTaskStatus>): void {
+    withEventLock(path.join(this.taskDir(taskId), "state.lock"), () => {
+      const current = this.readStatus(taskId);
+      if (current.attempt !== attempt || current.status !== "running") return;
+      this.#writeJsonAtomic(path.join(this.taskDir(taskId), "status.json"), { ...current, ...patch, updated_at: new Date().toISOString() });
+    });
+  }
+
+  /** Copies evidence before the continuation status commit; the old result remains recoverable. */
   archiveResultToAttempt(taskId: string, attempt: number): void {
     const dir = this.taskDir(taskId);
     const source = path.join(dir, "result.json");
     if (!existsSync(source)) return;
     const targetDir = this.attemptDir(taskId, attempt);
     privateMkdir(targetDir);
-    renameSync(source, path.join(targetDir, "result.json"));
+    copyFileSync(source, path.join(targetDir, "result.json"));
+    privateFile(path.join(targetDir, "result.json"));
+  }
+
+  /** A claim is permanent: a started attempt must never execute again. */
+  claimWorkerExecution(taskId: string, attempt: number): boolean {
+    return withEventLock(path.join(this.taskDir(taskId), "state.lock"), () => {
+      const status = this.readStatus(taskId);
+      if (status.attempt !== attempt || isTerminalStatus(status.status)) return false;
+      privateMkdir(this.attemptDir(taskId, attempt));
+      try {
+        writeFileSync(path.join(this.attemptDir(taskId, attempt), "execution.claim"), JSON.stringify({ pid: process.pid }), { flag: "wx", mode: 0o600 });
+        return true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+        throw error;
+      }
+    });
+  }
+
+  assertWorkerAttempt(taskId: string, attempt: number): void {
+    const status = this.readStatus(taskId);
+    if (status.attempt !== attempt || isTerminalStatus(status.status)) throw new Error("stale or terminal worker attempt rejected");
   }
 
   readArchivedResult(taskId: string, attempt: number): TaskResult | null {
@@ -272,13 +327,20 @@ export class TaskStore {
       try {
         const info = statSync(file);
         bytes = info.size;
-        const lastByte = bytes > 0 ? readFileSync(file).at(-1) : undefined;
+        let lastByte: number | undefined;
+        if (bytes > 0) {
+          const fd = openSync(file, "r");
+          try { const tail = Buffer.alloc(1); readSync(fd, tail, 0, 1, bytes - 1); lastByte = tail[0]; }
+          finally { closeSync(fd); }
+        }
         needsSeparator = bytes > 0 && lastByte !== 0x0a;
-      } catch {
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
         bytes = 0;
       }
       try {
-        previousSeq = Number.parseInt(readFileSync(seqFile, "utf8"), 10) || 0;
+        previousSeq = Number(readFileSync(seqFile, "utf8"));
+        if (!Number.isSafeInteger(previousSeq) || previousSeq < 0) previousSeq = readLastEventSeq(file);
       } catch {
         previousSeq = readLastEventSeq(file);
       }
@@ -286,7 +348,7 @@ export class TaskStore {
         seq: previousSeq + 1,
         at,
         type: type.slice(0, 80),
-        summary: summary.slice(0, 2_000),
+        summary: summary.length <= 2_000 ? summary : `${summary.slice(0, 1_970)}…[output truncated]`,
         ...(details && Object.keys(details).length ? { details } : {}),
       };
       const line = `${JSON.stringify(event)}\n`;
@@ -395,7 +457,7 @@ export class TaskStore {
     return withEventLock(path.join(this.taskDir(taskId), "interactions.lock"), () => {
       if (existsSync(file)) {
         const record = this.#readJson(file) as ZCodeInteractionRecord;
-        if (record.request_id !== request.request_id || record.method !== request.method) {
+        if (record.request_id !== request.request_id || record.method !== request.method || stableJson(record.params) !== stableJson(request.params)) {
           throw new Error("interaction request id collision");
         }
         return { record, created: false };
@@ -446,11 +508,12 @@ export class TaskStore {
   private interactionFile(taskId: string, requestId: string): string {
     if (!requestId || requestId.length > 512) throw new Error("invalid ZCode interaction request_id");
     const key = createHash("sha256").update(requestId).digest("hex");
-    return path.join(this.taskDir(taskId), "interactions", `${key}.json`);
+    return path.join(this.taskDir(taskId), "interactions", `${this.readStatus(taskId).attempt}-${key}.json`);
   }
 
   #readJson(file: string): unknown {
-    return JSON.parse(readFileSync(file, "utf8"));
+    try { return JSON.parse(readFileSync(file, "utf8")); }
+    catch (error) { throw new Error(`unreadable or corrupt JSON record: ${file}`, { cause: error }); }
   }
 
   #writeJsonAtomic(file: string, value: unknown): void {
@@ -462,7 +525,7 @@ export class TaskStore {
     try {
       writeFileSync(tmp, text, { encoding: "utf8", mode: 0o600 });
       privateFile(tmp);
-      renameSync(tmp, file);
+      atomicRenameSync(tmp, file);
     } catch (error) {
       try {
         rmSync(tmp, { force: true });
@@ -474,35 +537,23 @@ export class TaskStore {
   }
 }
 
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") return `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`).join(",")}}`;
+  return JSON.stringify(value) ?? "null";
+}
+
 function withEventLock<T>(lockDir: string, operation: () => T): T {
   const deadline = Date.now() + 10_000;
-  while (true) {
-    try {
-      mkdirSync(lockDir, { mode: 0o700 });
-      privateDirectory(lockDir);
-      break;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      try {
-        if (Date.now() - statSync(lockDir).mtimeMs > 30_000) {
-          rmdirSync(lockDir);
-          continue;
-        }
-      } catch {
-        // Another process released or replaced the lock; retry acquisition.
-      }
-      if (Date.now() >= deadline) throw new Error(`timed out waiting for task event lock: ${lockDir}`);
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-    }
+  let release: (() => void) | null;
+  while (!(release = tryAcquireProcessLock(lockDir))) {
+    if (Date.now() >= deadline) throw new Error(`timed out waiting for task state/event lock: ${lockDir}`);
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
   }
   try {
     return operation();
   } finally {
-    try {
-      rmdirSync(lockDir);
-    } catch {
-      // Best effort. A stale empty lock is reclaimed by the next writer.
-    }
+    release();
   }
 }
 

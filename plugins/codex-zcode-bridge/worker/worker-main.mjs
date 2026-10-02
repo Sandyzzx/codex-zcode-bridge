@@ -1,6 +1,6 @@
 // src/adapters/zcode-app-server-adapter.ts
 import { spawn as spawn2 } from "node:child_process";
-import { homedir as homedir2 } from "node:os";
+import { homedir as homedir3 } from "node:os";
 
 // src/adapters/agent-report.ts
 var TEST_STATUSES = /* @__PURE__ */ new Set(["passed", "failed", "not_run"]);
@@ -166,11 +166,11 @@ function buildTaskPrompt(task) {
     `TASK ID: ${task.task_id}`,
     "You are a subordinate coding agent executing one bounded task inside the current working directory. Stay inside the workspace; do not touch files outside it.",
     `PROJECT WORKSPACE: ${task.workspace}`,
-    ...task.worktree_path ? [`CODEX-SELECTED EXECUTION WORKTREE: ${task.worktree_path}. Make task changes in the current working directory, which is this worktree; the project workspace above identifies its parent project.`] : [],
+    ...task.worktree_path ? [`HOST-SELECTED EXECUTION WORKTREE: ${task.worktree_path}. Make task changes in the current working directory, which is this worktree; the project workspace above identifies its parent project.`] : [],
     ...task.model ? [`REQUESTED ZCODE MODEL: ${task.model.provider_id}/${task.model.model_id}${task.model.reasoning_level ? ` (reasoning level: ${task.model.reasoning_level})` : ""}. The Bridge configures this model for the session.`] : [],
     ...task.timeout_ms ? [`EXECUTION TIME LIMIT: ${task.timeout_ms} ms for this attempt.`] : [],
     `OBJECTIVE
-${bounded(task.objective, MAX_SECTION_CHARS)}`,
+${task.objective}`,
     renderList("REQUIREMENTS", task.requirements),
     renderPaths("ALLOWED PATHS (write only inside these when provided)", task.allowed_paths),
     renderPaths("FORBIDDEN PATHS (never create, modify, or delete)", task.forbidden_paths),
@@ -217,7 +217,7 @@ ${bounded(
     }
   }
   sections.push(`MASTER FEEDBACK (address every point)
-${bounded(feedback, MAX_SECTION_CHARS)}`);
+${feedback}`);
   if (additionalRequirements.length > 0) {
     sections.push(renderList("ADDITIONAL REQUIREMENTS", [...additionalRequirements]));
   }
@@ -233,8 +233,8 @@ var OUTPUT_CONTRACT = [
 ].join("\n");
 var DECISION_RULE = [
   "DECISION RULE",
-  "Use only this task package, this prompt, repository files you inspect, and available tools; do not assume access to Codex's conversation.",
-  "Do not choose unresolved items explicitly listed under OPEN DECISIONS; a later explicit Master Feedback decision resolves that item. Also escalate conflicting requirements or missing decisions that would materially change externally visible behavior, even when Codex did not list them. Record the exact question in issues and set needs_master_decision=true. Continue independent work that does not depend on the decision. For low-impact implementation choices, use the simplest consistent option and state the assumption in issues."
+  "Use only this task package, this prompt, repository files you inspect, and available tools; do not assume access to the calling host's conversation.",
+  "Do not choose unresolved items explicitly listed under OPEN DECISIONS; a later explicit Master Feedback decision resolves that item. Also escalate conflicting requirements or missing decisions that would materially change externally visible behavior, even when the calling host did not list them. Record the exact question in issues and set needs_master_decision=true. Continue independent work that does not depend on the decision. For low-impact implementation choices, use the simplest consistent option and state the assumption in issues."
 ].join("\n");
 function renderList(title, items) {
   if (items.length === 0) {
@@ -259,11 +259,8 @@ function bounded(text, maxChars) {
 function joinBoundedPreservingTail(sections, requiredTail) {
   const joined = sections.join("\n\n");
   if (joined.length <= MAX_PROMPT_CHARS) return joined;
-  const headBudget = MAX_PROMPT_CHARS - requiredTail.length - 24;
-  const head = joined.slice(0, Math.max(0, headBudget));
-  return `${head}\u2026[middle truncated to preserve required output contract]
-
-${requiredTail}`;
+  void requiredTail;
+  throw new Error(`task prompt exceeds ${MAX_PROMPT_CHARS} characters; shorten the task package without dropping constraints`);
 }
 
 // src/runtime/errors.ts
@@ -278,9 +275,26 @@ var BridgeError = class extends Error {
 
 // src/runtime/resolver.ts
 import { accessSync, existsSync, readFileSync, statSync } from "node:fs";
+import { homedir as homedir2 } from "node:os";
+import path2 from "node:path";
+import { fileURLToPath } from "node:url";
+
+// src/host/profile.ts
 import { homedir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+function codexHostProfile(homeDirectory = homedir()) {
+  return { name: "codex-zcode-bridge", settingsDirectory: path.join(homeDirectory, ".codex", "codex-zcode-bridge") };
+}
+function validateHostProfile(host) {
+  if (!host || typeof host.name !== "string" || !host.name.trim() || typeof host.settingsDirectory !== "string" || !path.isAbsolute(host.settingsDirectory)) throw new Error("invalid Bridge host profile");
+  if (host.legacySettingsDirectories !== void 0 && (!Array.isArray(host.legacySettingsDirectories) || host.legacySettingsDirectories.some((directory) => typeof directory !== "string" || !path.isAbsolute(directory)))) throw new Error("host migration directories must be absolute");
+  if (host.workerEntryPath !== void 0 && (typeof host.workerEntryPath !== "string" || !path.isAbsolute(host.workerEntryPath))) throw new Error("host worker entry must be absolute");
+  if (host.instructions !== void 0 && typeof host.instructions !== "string") throw new Error("host instructions must be text");
+  if (host.defaultDataRoot !== void 0 && (typeof host.defaultDataRoot !== "string" || !path.isAbsolute(host.defaultDataRoot))) throw new Error("host default data root must be absolute");
+  return host;
+}
+
+// src/runtime/resolver.ts
 var PERSISTED_RUNTIME_KEYS = [
   "ZCODE_BRIDGE_NODE",
   "ZCODE_BRIDGE_ZCODE_CJS",
@@ -297,27 +311,31 @@ var PERSISTED_RUNTIME_KEYS = [
   "ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS",
   "ZCODE_BRIDGE_TIMEOUT_MS"
 ];
-function loadPersistedRuntimeEnvironment(source, homeDir = homedir()) {
-  const settingsPaths = [path.join(homeDir, ".codex", "codex-zcode-bridge", "runtime-config.json")];
+function loadPersistedRuntimeEnvironment(source, homeDir = homedir2(), host = codexHostProfile(homeDir)) {
+  validateHostProfile(host);
+  const settingsPaths = [host.settingsDirectory, ...host.legacySettingsDirectories ?? []].map((directory) => path2.join(directory, "runtime-config.json"));
   const legacyDataRoot = source["ZCODE_BRIDGE_DATA_DIR"]?.trim();
-  if (legacyDataRoot && path.isAbsolute(legacyDataRoot)) {
-    settingsPaths.push(path.join(legacyDataRoot, "runtime-config.json"));
+  if (legacyDataRoot && path2.isAbsolute(legacyDataRoot)) {
+    settingsPaths.push(path2.join(legacyDataRoot, "runtime-config.json"));
   }
   let parsed = null;
   const seenPaths = /* @__PURE__ */ new Set();
   for (const settingsPath of settingsPaths) {
-    const normalized = path.resolve(settingsPath);
+    const normalized = path2.resolve(settingsPath);
     const identity = process.platform === "win32" ? normalized.toLocaleLowerCase("en-US") : normalized;
     if (seenPaths.has(identity)) continue;
     seenPaths.add(identity);
     try {
-      if (statSync(normalized).size > 64 * 1024) continue;
+      if (statSync(normalized).size > 64 * 1024) throw new Error("runtime settings exceed 64 KB");
       const candidate = JSON.parse(readFileSync(normalized, "utf8"));
       if (isPlainObject2(candidate)) {
         parsed = candidate;
         break;
       }
-    } catch {
+      throw new Error("runtime settings must be an object");
+    } catch (error) {
+      if (error.code === "ENOENT") continue;
+      throw new BridgeError("provider_config_invalid", `invalid Bridge runtime settings: ${normalized}`, { cause: error });
     }
   }
   if (!parsed) return { ...source };
@@ -327,6 +345,7 @@ function loadPersistedRuntimeEnvironment(source, homeDir = homedir()) {
     const value = parsed[key];
     if (typeof value === "string") env[key] = value.trim();
     else if (value === null) env[key] = "";
+    else throw new BridgeError("provider_config_invalid", `Bridge runtime setting ${key} must be a string or null`);
   }
   return env;
 }
@@ -334,13 +353,15 @@ var NodeRuntimeResolver = class {
   #env;
   #homeDir;
   #packageRoot;
+  #host;
   constructor(options = {}) {
     this.#env = options.env ?? process.env;
-    this.#homeDir = options.homeDir ?? homedir();
+    this.#homeDir = options.homeDir ?? homedir2();
     this.#packageRoot = options.packageRoot ?? null;
+    this.#host = validateHostProfile(options.host ?? codexHostProfile(this.#homeDir));
   }
   async resolve() {
-    const env = loadPersistedRuntimeEnvironment(this.#env, this.#homeDir);
+    const env = loadPersistedRuntimeEnvironment(this.#env, this.#homeDir, this.#host);
     const zcodeHome = resolveZcodeHome(env);
     let nodeExecutable = "node";
     const nodeOverride = env["ZCODE_BRIDGE_NODE"]?.trim();
@@ -404,11 +425,11 @@ var NodeRuntimeResolver = class {
         this.#validatePersonalConfig(personalEnv);
         personalConfigFile = personalEnv;
       } else {
-        const candidates = zcodeHome ? [path.join(zcodeHome, "v2", "provider_config.json")] : [
+        const candidates = zcodeHome ? [path2.join(zcodeHome, "v2", "provider_config.json")] : [
           env["ZCODE_DATA_BASE_DIR"]?.trim(),
           ...configuredDataBaseDirs(this.#homeDir),
           this.#homeDir
-        ].filter((base) => Boolean(base)).filter((base, index, values) => values.indexOf(base) === index).map((base) => path.join(base, ".zcode", "v2", "provider_config.json"));
+        ].filter((base) => Boolean(base)).filter((base, index, values) => values.indexOf(base) === index).map((base) => path2.join(base, ".zcode", "v2", "provider_config.json"));
         const existing = candidates.filter((candidate) => existsSync(candidate));
         if (existing.length === 0) {
           throw new BridgeError(
@@ -436,7 +457,7 @@ var NodeRuntimeResolver = class {
         personalConfigFile = accepted;
       }
     }
-    if (zcodeHome && !samePath(personalConfigFile, path.join(zcodeHome, "v2", "provider_config.json"))) {
+    if (zcodeHome && !samePath(personalConfigFile, path2.join(zcodeHome, "v2", "provider_config.json"))) {
       throw new BridgeError(
         "provider_config_invalid",
         `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE must be ZCODE_HOME/v2/provider_config.json (${zcodeHome})`
@@ -445,12 +466,12 @@ var NodeRuntimeResolver = class {
     const dataOverride = env["ZCODE_BRIDGE_DATA_DIR"]?.trim();
     let dataRoot2;
     if (dataOverride) {
-      if (!path.isAbsolute(dataOverride)) {
+      if (!path2.isAbsolute(dataOverride)) {
         throw new Error(
           `ZCODE_BRIDGE_DATA_DIR must be an absolute path when set, got: ${dataOverride}`
         );
       }
-      dataRoot2 = path.normalize(dataOverride);
+      dataRoot2 = path2.normalize(dataOverride);
     } else {
       dataRoot2 = this.#packageRoot ?? findPackageRoot();
     }
@@ -518,7 +539,7 @@ var NodeRuntimeResolver = class {
     } catch (error) {
       throw new BridgeError(
         "provider_config_invalid",
-        `${label} is not valid JSON: ${filePath} (${errorText(error)})`
+        `${label} is not valid JSON: ${filePath}`
       );
     }
     if (!isPlainObject2(parsed)) {
@@ -530,20 +551,20 @@ var NodeRuntimeResolver = class {
 function installCandidates(env, relative) {
   const roots = [
     env["ZCODE_WINDOWS_APP_INSTALL_DIR"]?.trim(),
-    env["LOCALAPPDATA"]?.trim() ? path.join(env["LOCALAPPDATA"].trim(), "Programs", "ZCode") : null,
-    env["ProgramFiles"]?.trim() ? path.join(env["ProgramFiles"].trim(), "ZCode") : null
+    env["LOCALAPPDATA"]?.trim() ? path2.join(env["LOCALAPPDATA"].trim(), "Programs", "ZCode") : null,
+    env["ProgramFiles"]?.trim() ? path2.join(env["ProgramFiles"].trim(), "ZCode") : null
   ].filter((root) => Boolean(root));
-  return roots.map((root) => path.join(root, ...relative));
+  return roots.map((root) => path2.join(root, ...relative));
 }
 function configuredDataBaseDirs(homeDir) {
-  const candidates = [path.join(homeDir, ".zcode", "v2", "setting.json")];
+  const candidates = [path2.join(homeDir, ".zcode", "v2", "setting.json")];
   for (const settingPath of candidates) {
     try {
       const parsed = JSON.parse(readFileSync(settingPath, "utf8"));
       if (!isPlainObject2(parsed)) continue;
       const dataBaseDir = parsed["dataBaseDir"];
-      if (typeof dataBaseDir === "string" && path.isAbsolute(dataBaseDir.trim())) {
-        return [path.normalize(dataBaseDir.trim())];
+      if (typeof dataBaseDir === "string" && path2.isAbsolute(dataBaseDir.trim())) {
+        return [path2.normalize(dataBaseDir.trim())];
       }
     } catch {
     }
@@ -553,11 +574,11 @@ function configuredDataBaseDirs(homeDir) {
 function resolveZcodeHome(env) {
   const configured = env["ZCODE_HOME"]?.trim();
   if (!configured) return null;
-  if (!path.isAbsolute(configured)) {
+  if (!path2.isAbsolute(configured)) {
     throw new BridgeError("provider_config_invalid", "ZCODE_HOME must be an absolute path");
   }
-  const resolved = path.normalize(configured);
-  if (path.basename(resolved).toLowerCase() !== ".zcode") {
+  const resolved = path2.normalize(configured);
+  if (path2.basename(resolved).toLowerCase() !== ".zcode") {
     throw new BridgeError(
       "provider_config_invalid",
       "ZCODE_HOME must name a .zcode directory so app-server can use the same data root"
@@ -574,8 +595,8 @@ function resolveZcodeHome(env) {
   return resolved;
 }
 function samePath(left, right) {
-  const resolvedLeft = path.resolve(left);
-  const resolvedRight = path.resolve(right);
+  const resolvedLeft = path2.resolve(left);
+  const resolvedRight = path2.resolve(right);
   return process.platform === "win32" ? resolvedLeft.toLowerCase() === resolvedRight.toLowerCase() : resolvedLeft === resolvedRight;
 }
 function isReadableFile(filePath) {
@@ -588,12 +609,12 @@ function isReadableFile(filePath) {
   }
 }
 function findPackageRoot(startDir) {
-  let current = startDir ?? path.dirname(fileURLToPath(import.meta.url));
+  let current = startDir ?? path2.dirname(fileURLToPath(import.meta.url));
   for (let depth = 0; depth < 10; depth++) {
-    if (existsSync(path.join(current, "package.json"))) {
+    if (existsSync(path2.join(current, "package.json"))) {
       return current;
     }
-    const parent = path.dirname(current);
+    const parent = path2.dirname(current);
     if (parent === current) break;
     current = parent;
   }
@@ -797,16 +818,16 @@ function createMinimalOsEnv(source) {
 // src/runtime/account-provider.ts
 import { createHash } from "node:crypto";
 import { existsSync as existsSync2, readFileSync as readFileSync2 } from "node:fs";
-import path2 from "node:path";
+import path3 from "node:path";
 function buildAccountProviderPayload(config) {
   const table = readJson(config.providerBuiltinConfigFile);
   const providerRules = readProviderRules(table).filter(isRecord).map((rule) => rule).filter((rule) => rule.config?.access?.type === "zhipu-account" && typeof rule.providerId === "string");
   if (!providerRules.length) return null;
   const dataDir = zcodeV2DataDir(config.providerPersonalConfigFile);
   if (!dataDir) return null;
-  const credentials = readJson(path2.join(dataDir, "config.json"));
+  const credentials = readJson(path3.join(dataDir, "config.json"));
   const credentialProviders = asRecord(credentials?.provider);
-  const cache = readJson(path2.join(dataDir, "coding-plan-cache.json"));
+  const cache = readJson(path3.join(dataDir, "coding-plan-cache.json"));
   const cacheItems = asRecord(asRecord(cache?.entryStatus).items);
   const providers = {};
   const states = {};
@@ -828,7 +849,7 @@ function buildAccountProviderPayload(config) {
     };
   }
   const revision = typeof table?.revision === "number" ? table.revision : 0;
-  const resolvedBuiltinPath = path2.resolve(config.providerBuiltinConfigFile);
+  const resolvedBuiltinPath = path3.resolve(config.providerBuiltinConfigFile);
   return {
     revision: `account:codex-zcode-bridge:${Date.now()}`,
     basedOnZCodeBuiltinRevision: `zcode-builtin:${revision}:${createHash("sha256").update(resolvedBuiltinPath).digest("hex")}`,
@@ -865,8 +886,8 @@ function runtimeAuthReply(providerId, config) {
   const legacyId = configProviderId(providerId, rule);
   const dataDir = zcodeV2DataDir(config.providerPersonalConfigFile);
   if (!dataDir) return unavailable;
-  const credentials = readJson(path2.join(dataDir, "config.json"));
-  const cache = readJson(path2.join(dataDir, "coding-plan-cache.json"));
+  const credentials = readJson(path3.join(dataDir, "config.json"));
+  const cache = readJson(path3.join(dataDir, "coding-plan-cache.json"));
   const status = asRecord(asRecord(asRecord(cache?.entryStatus).items)[legacyId]).status;
   const provider = asRecord(asRecord(credentials?.provider)[legacyId]);
   const options = asRecord(provider.options);
@@ -876,19 +897,19 @@ function runtimeAuthReply(providerId, config) {
 }
 function zcodeDataBaseDir(personalProviderConfigFile) {
   const dataDir = zcodeV2DataDir(personalProviderConfigFile);
-  return dataDir ? path2.dirname(path2.dirname(dataDir)) : null;
+  return dataDir ? path3.dirname(path3.dirname(dataDir)) : null;
 }
 function zcodeTasksIndexPath(personalProviderConfigFile) {
   const dataDir = zcodeV2DataDir(personalProviderConfigFile);
-  return dataDir ? path2.join(dataDir, "tasks-index.sqlite") : null;
+  return dataDir ? path3.join(dataDir, "tasks-index.sqlite") : null;
 }
 function zcodeV2DataDir(personalProviderConfigFile) {
-  const absolute = path2.resolve(personalProviderConfigFile);
-  if (path2.basename(absolute).toLowerCase() !== "provider_config.json") return null;
-  const v2Dir = path2.dirname(absolute);
-  if (path2.basename(v2Dir).toLowerCase() !== "v2") return null;
-  const zcodeDir = path2.dirname(v2Dir);
-  if (path2.basename(zcodeDir).toLowerCase() !== ".zcode") return null;
+  const absolute = path3.resolve(personalProviderConfigFile);
+  if (path3.basename(absolute).toLowerCase() !== "provider_config.json") return null;
+  const v2Dir = path3.dirname(absolute);
+  if (path3.basename(v2Dir).toLowerCase() !== "v2") return null;
+  const zcodeDir = path3.dirname(v2Dir);
+  if (path3.basename(zcodeDir).toLowerCase() !== ".zcode") return null;
   return v2Dir;
 }
 function configProviderId(providerId, rule) {
@@ -1105,7 +1126,15 @@ async function withDatabase(databasePath, operation) {
     let database = null;
     try {
       database = new DatabaseSync(databasePath, { timeout: 1e3 });
-      return operation(database);
+      database.exec("BEGIN IMMEDIATE");
+      try {
+        const result = operation(database);
+        database.exec("COMMIT");
+        return result;
+      } catch (error) {
+        database.exec("ROLLBACK");
+        throw error;
+      }
     } catch (error) {
       lastError = error;
       if (attempt < 2 && isDatabaseBusy(error)) {
@@ -1125,6 +1154,15 @@ function isDatabaseBusy(error) {
 }
 
 // src/adapters/zcode-app-server-adapter.ts
+function publicUsage(value) {
+  if (!isRecord2(value)) return null;
+  const result = {};
+  for (const key of ["inputTokens", "outputTokens", "totalTokens", "cachedInputTokens", "reasoningTokens", "input_tokens", "output_tokens", "total_tokens", "cost"]) {
+    const item = value[key];
+    if (typeof item === "number" && Number.isFinite(item) && item >= 0) result[key] = item;
+  }
+  return Object.keys(result).length ? result : null;
+}
 var RPC_TIMEOUT_MS = 3e4;
 var MAX_CAPTURE_CHARS = 2e6;
 var ZCodeAppServerAdapter = class {
@@ -1133,16 +1171,18 @@ var ZCodeAppServerAdapter = class {
   #timeoutMs;
   #childEnvBase;
   #homeDir;
+  #host;
   #now;
   #resolveInteraction;
   #runs = /* @__PURE__ */ new Map();
   #workspaceByTask = /* @__PURE__ */ new Map();
   constructor(options = {}) {
-    this.#resolver = options.resolver ?? new NodeRuntimeResolver();
+    this.#resolver = options.resolver ?? new NodeRuntimeResolver({ env: options.childEnvBase, homeDir: options.homeDir, host: options.host });
     this.#onEvent = options.onEvent ?? (() => void 0);
     this.#timeoutMs = options.timeoutMs ?? null;
     this.#childEnvBase = options.childEnvBase ?? process.env;
-    this.#homeDir = options.homeDir ?? homedir2();
+    this.#homeDir = options.homeDir ?? homedir3();
+    this.#host = validateHostProfile(options.host ?? codexHostProfile(this.#homeDir));
     this.#now = options.now ?? (() => /* @__PURE__ */ new Date());
     this.#resolveInteraction = options.resolveInteraction;
   }
@@ -1188,6 +1228,8 @@ var ZCodeAppServerAdapter = class {
     const entry = this.#require(handle, "cancelTask");
     if (entry.finished) return;
     entry.cancelRequested = true;
+    entry.abort.abort();
+    entry.rejectTurn(new Error("ZCode task cancelled"));
     const pid = entry.child?.pid;
     if (pid) await terminateProcessTree(pid);
   }
@@ -1223,7 +1265,11 @@ var ZCodeAppServerAdapter = class {
       textOutputStarted: false,
       selectedModel: null,
       lastEventSeq: 0,
-      interactions: /* @__PURE__ */ new Map()
+      interactions: /* @__PURE__ */ new Map(),
+      abort: new AbortController(),
+      acceptingTurn: false,
+      turnId: null,
+      awaitingTurnStart: false
     };
     this.#runs.set(handle, entry);
     this.#workspaceByTask.set(task.task_id, workspace.canonicalPath);
@@ -1247,7 +1293,7 @@ var ZCodeAppServerAdapter = class {
     let warningTimer;
     let desktopTask = null;
     try {
-      const runtimeEnv = loadPersistedRuntimeEnvironment(this.#childEnvBase, this.#homeDir);
+      const runtimeEnv = loadPersistedRuntimeEnvironment(this.#childEnvBase, this.#homeDir, this.#host);
       const timeoutMs = this.#timeoutMs ?? resolveTaskTimeout(task, runtimeEnv);
       const config = await this.#resolver.resolve();
       const preferences = resolveSessionPreferences(task.model, runtimeEnv);
@@ -1256,10 +1302,10 @@ var ZCodeAppServerAdapter = class {
       const client = this.#startAppServer(config, workspace.canonicalPath, childEnv, entry);
       entry.client = client;
       entry.child = client.child;
+      entry.onEvent({ type: "app_server_started", summary: "ZCode app-server process started", details: { pid: client.child.pid } });
       timer = setTimeout(() => {
         entry.timedOut = true;
-        const pid = entry.child?.pid;
-        if (pid) void terminateProcessTree(pid).catch(() => void 0);
+        entry.abort.abort();
         entry.rejectTurn(new Error(`ZCode run exceeded ${timeoutMs}ms wall-clock budget`));
       }, timeoutMs);
       timer.unref();
@@ -1445,25 +1491,27 @@ var ZCodeAppServerAdapter = class {
       }
       const runtimeSeq = nestedNumber(snapshot, ["runtime", "eventSeq"]) ?? 0;
       entry.lastEventSeq = runtimeSeq;
+      entry.awaitingTurnStart = runtimeSeq > 0;
       await client.request("session/subscribe", {
         sessionId,
         deliveryKind: "desktop-continuous",
         includeSnapshot: false,
         afterSeq: runtimeSeq
       });
+      entry.acceptingTurn = true;
       await client.request("session/send", { sessionId, content: prompt });
       entry.onEvent({ type: "turn_started", summary: "ZCode accepted the task and started a turn" });
       const turnResult = await turn;
       const desktopStatus = turnResult.resultType === "cancelled" ? null : turnResult.resultType && turnResult.resultType !== "success" ? "error" : "completed";
       await syncDesktopStatus(desktopTask, desktopStatus, entry.onEvent);
-      await client.close().catch(() => void 0);
+      await client.close();
       entry.child = null;
       if (turnResult.resultType && turnResult.resultType !== "success") {
         return {
           attempts: 1,
           cancelled: turnResult.resultType === "cancelled",
           stdout: turnResult.response,
-          stderr: client.stderr,
+          stderr: "",
           exitCode: 1,
           signal: null,
           sessionId,
@@ -1486,7 +1534,7 @@ var ZCodeAppServerAdapter = class {
         stdoutTruncated: false,
         stderrTruncated: false,
         stdout,
-        stderr: client.stderr,
+        stderr: "",
         exitCode: 0,
         signal: null,
         sessionId,
@@ -1512,12 +1560,16 @@ var ZCodeAppServerAdapter = class {
       return { ...base, agentReport: parsed.report, reportCandidate: parsed.report, reportError: null, errorCode: null };
     } catch (error) {
       await syncDesktopStatus(desktopTask, entry.cancelRequested ? null : "error", entry.onEvent);
-      if (entry.client) await entry.client.close().catch(() => void 0);
-      else if (entry.child?.pid) await terminateProcessTree(entry.child.pid).catch(() => void 0);
+      entry.abort.abort();
+      try {
+        if (entry.client) await entry.client.close();
+        else if (entry.child?.pid) await terminateProcessTree(entry.child.pid);
+      } catch (cleanupError) {
+        throw new BridgeError("cleanup_failed", "ZCode process termination could not be verified; workspace remains occupied", { cause: cleanupError });
+      }
       entry.child = null;
       const baseMessage = error instanceof Error ? error.message : String(error);
-      const runtimeStderr = entry.client?.stderr.trim();
-      const message = runtimeStderr ? baseMessage + "; app-server stderr: " + runtimeStderr.slice(0, 1500) : baseMessage;
+      const message = entry.timedOut ? "ZCode run exceeded its wall-clock budget" : entry.cancelRequested ? "ZCode task cancelled" : baseMessage;
       const code = entry.timedOut ? "timeout" : entry.cancelRequested ? "cancelled" : "zcode_nonzero_exit";
       entry.onEvent({ type: "error", summary: message.slice(0, 1500), details: { error_code: code } });
       if (error instanceof BridgeError) throw error;
@@ -1525,6 +1577,7 @@ var ZCodeAppServerAdapter = class {
     } finally {
       if (timer) clearTimeout(timer);
       if (warningTimer) clearTimeout(warningTimer);
+      entry.abort.abort();
       entry.finished = true;
       void startedAt;
     }
@@ -1543,11 +1596,21 @@ var ZCodeAppServerAdapter = class {
     let rpcId = 0;
     let closed = false;
     const pending = /* @__PURE__ */ new Map();
+    entry.abort.signal.addEventListener("abort", () => {
+      for (const call of pending.values()) {
+        clearTimeout(call.timer);
+        call.reject(new Error("ZCode task attempt ended"));
+      }
+      pending.clear();
+    }, { once: true });
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
       stdoutBuffer += chunk;
-      if (stdoutBuffer.length > MAX_CAPTURE_CHARS) stdoutBuffer = stdoutBuffer.slice(-MAX_CAPTURE_CHARS);
+      if (stdoutBuffer.length > MAX_CAPTURE_CHARS) {
+        entry.rejectTurn(new Error("ZCode protocol frame exceeded size limit"));
+        return;
+      }
       let newline;
       while ((newline = stdoutBuffer.indexOf("\n")) >= 0) {
         const line = stdoutBuffer.slice(0, newline).trim();
@@ -1560,16 +1623,22 @@ var ZCodeAppServerAdapter = class {
 `);
           });
         } catch (error) {
-          if (error instanceof SyntaxError) {
-            entry.rejectTurn(new Error(`invalid ZCode app-server protocol line: ${line.slice(0, 500)}`));
-          }
+          entry.rejectTurn(new Error("invalid ZCode app-server protocol message", { cause: error }));
         }
       }
     });
     child.stderr.on("data", (chunk) => {
       if (stderr.length < 64e3) stderr += chunk.slice(0, 64e3 - stderr.length);
     });
-    child.on("error", (error) => entry.rejectTurn(error));
+    child.on("error", (error) => {
+      closed = true;
+      for (const call of pending.values()) {
+        clearTimeout(call.timer);
+        call.reject(error);
+      }
+      pending.clear();
+      entry.rejectTurn(error);
+    });
     child.on("close", (code, signal) => {
       closed = true;
       for (const call of pending.values()) {
@@ -1582,6 +1651,7 @@ var ZCodeAppServerAdapter = class {
       }
     });
     const request = (method, params) => {
+      if (entry.abort.signal.aborted) return Promise.reject(new Error("ZCode task attempt ended"));
       if (closed) return Promise.reject(new Error(`ZCode app-server is closed before ${method}`));
       const id = ++rpcId;
       return new Promise((resolve, reject) => {
@@ -1601,7 +1671,10 @@ var ZCodeAppServerAdapter = class {
       });
     };
     const close = async () => {
-      if (closed) return;
+      if (closed) {
+        if (process.platform !== "win32" && child.pid) await terminateProcessTree(child.pid);
+        return;
+      }
       child.stdin.end();
       await new Promise((resolve) => {
         const timer = setTimeout(() => resolve(), 1e3);
@@ -1611,7 +1684,7 @@ var ZCodeAppServerAdapter = class {
           resolve();
         });
       });
-      if (!closed && child.pid) await terminateProcessTree(child.pid).catch(() => void 0);
+      if (child.pid && (!closed || process.platform !== "win32")) await terminateProcessTree(child.pid);
     };
     return { child, request, close, get stderr() {
       return stderr;
@@ -1656,7 +1729,7 @@ var ZCodeAppServerAdapter = class {
       pending.delete(id);
       if (message.error && typeof message.error === "object") {
         const error = message.error;
-        call.reject(new Error(typeof error.message === "string" ? error.message : "ZCode app-server request failed"));
+        call.reject(new Error(`ZCode app-server request failed${typeof error.code === "number" ? ` (code ${error.code})` : ""}`));
       } else {
         call.resolve(message.result);
       }
@@ -1664,19 +1737,32 @@ var ZCodeAppServerAdapter = class {
     }
     if (message.method === "session/event") {
       const params = asRecord2(message.params);
-      if (typeof params.seq === "number") entry.lastEventSeq = params.seq;
+      if (params.sessionId !== void 0 && params.sessionId !== entry.sessionId) return;
+      if (!entry.acceptingTurn) return;
       const type = typeof params.type === "string" ? params.type : "";
       const payload = asRecord2(params.payload);
+      const turnId = typeof params.turnId === "string" ? params.turnId : typeof payload.turnId === "string" ? payload.turnId : null;
+      if (entry.awaitingTurnStart && type !== "turn.started") return;
+      if (entry.turnId && turnId && entry.turnId !== turnId) return;
+      if (typeof params.seq === "number") {
+        if (!Number.isSafeInteger(params.seq) || params.seq <= entry.lastEventSeq) return;
+        entry.lastEventSeq = params.seq;
+      }
+      if (type === "turn.started" && turnId) entry.turnId = turnId;
+      if (type === "turn.started") entry.awaitingTurnStart = false;
       this.#publishSessionEvent(type, payload, entry);
       if (type === "turn.completed") {
+        entry.acceptingTurn = false;
         entry.resolveTurn({
           response: typeof payload.response === "string" ? payload.response : "",
-          usage: isRecord2(payload.usage) ? payload.usage : null,
+          usage: publicUsage(payload.usage),
           resultType: typeof payload.resultType === "string" ? payload.resultType : null
         });
       } else if (type === "turn.failed") {
+        entry.acceptingTurn = false;
         const problem = asRecord2(payload.error);
-        entry.rejectTurn(new Error(typeof problem.message === "string" ? problem.message : "ZCode turn failed"));
+        void problem;
+        entry.rejectTurn(new Error("ZCode turn failed"));
       }
       return;
     }
@@ -1695,6 +1781,10 @@ var ZCodeAppServerAdapter = class {
     const rpcId = message.id;
     const method = message.method;
     const params = asRecord2(message.params);
+    if (entry.abort.signal.aborted || params.sessionId !== void 0 && params.sessionId !== entry.sessionId) {
+      write({ id: rpcId, result: interactionDecline(method, "Interaction does not belong to the active task session") });
+      return;
+    }
     const suppliedId = typeof params.requestId === "string" ? params.requestId : "";
     const requestId = suppliedId || `rpc-${String(rpcId)}`;
     const paramsSignature = stableSerialize(params);
@@ -1720,21 +1810,22 @@ var ZCodeAppServerAdapter = class {
     void (async () => {
       let response = fallback;
       try {
-        if (this.#resolveInteraction) response = await this.#resolveInteraction(request);
+        if (this.#resolveInteraction) response = await this.#resolveInteraction(request, entry.abort.signal);
       } catch (error) {
         const messageText = error instanceof Error ? error.message : String(error);
         entry.onEvent({
           type: "interaction_reply_failed",
-          summary: `Could not deliver Codex's response to ZCode: ${messageText}`.slice(0, 1500),
+          summary: `Could not deliver the calling host's response to ZCode: ${messageText}`.slice(0, 1500),
           details: { request_id: requestId, method }
         });
       }
       pending.response = response;
       pending.resolving = false;
+      if (entry.abort.signal.aborted) return;
       for (const id of pending.requestIds) write({ id, result: response });
       entry.onEvent({
         type: "interaction_replied",
-        summary: `Codex replied to ZCode ${method === "interaction/requestPermission" ? "permission request" : "user input request"}`,
+        summary: `the calling host replied to ZCode ${method === "interaction/requestPermission" ? "permission request" : "user input request"}`,
         details: { request_id: requestId, method }
       });
       while (entry.interactions.size > 128) {
@@ -1742,7 +1833,7 @@ var ZCodeAppServerAdapter = class {
         if (!oldest || entry.interactions.get(oldest)?.resolving) break;
         entry.interactions.delete(oldest);
       }
-    })();
+    })().catch(() => entry.rejectTurn(new Error("ZCode interaction delivery failed")));
   }
   #publishSessionEvent(type, payload, entry) {
     if (type === "turn.started") {
@@ -1788,14 +1879,13 @@ var ZCodeAppServerAdapter = class {
         details: {
           ...typeof payload.tokenCount === "number" ? { token_count: payload.tokenCount } : {},
           ...typeof payload.toolCallCount === "number" ? { tool_call_count: payload.toolCallCount } : {},
-          ...isRecord2(payload.usage) ? { usage: payload.usage } : {}
+          ...publicUsage(payload.usage) ? { usage: publicUsage(payload.usage) } : {}
         }
       });
     } else if (type === "turn.failed") {
-      const problem = asRecord2(payload.error);
       entry.onEvent({
         type: "turn_failed",
-        summary: typeof problem.message === "string" ? problem.message : "ZCode turn failed"
+        summary: "ZCode turn failed"
       });
     }
   }
@@ -1883,14 +1973,14 @@ function readEffectiveReasoningLevel(snapshot) {
   const level = thoughtLevel.current;
   return typeof level === "string" && level.trim() ? level.trim() : null;
 }
-function nestedString(record, path4) {
+function nestedString(record, path6) {
   let value = record;
-  for (const part of path4) value = asRecord2(value)[part];
+  for (const part of path6) value = asRecord2(value)[part];
   return typeof value === "string" ? value : null;
 }
-function nestedNumber(record, path4) {
+function nestedNumber(record, path6) {
   let value = record;
-  for (const part of path4) value = asRecord2(value)[part];
+  for (const part of path6) value = asRecord2(value)[part];
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 function asRecord2(value) {
@@ -1932,9 +2022,9 @@ function buildTaskResult(input) {
     finished_at: finishedAt,
     zcode_output: outcome?.response ?? "",
     exit_code: outcome?.exitCode ?? null,
-    session_id: outcome?.sessionId ?? null
+    session_id: outcome?.sessionId ?? input.sessionId ?? null
   };
-  if (input.cancelled) {
+  if (input.cancelled || outcome?.cancelled) {
     return {
       ...base,
       status: "cancelled",
@@ -2002,10 +2092,97 @@ function truncate(text, maxChars) {
 }
 
 // src/store/task-store.ts
-import { appendFileSync, chmodSync, closeSync, existsSync as existsSync4, mkdirSync, openSync, readFileSync as readFileSync3, readSync, readdirSync, renameSync, rmSync, rmdirSync, statSync as statSync2, writeFileSync } from "node:fs";
-import { createHash as createHash2, randomUUID } from "node:crypto";
-import path3 from "node:path";
+import { appendFileSync, chmodSync, closeSync, copyFileSync, existsSync as existsSync4, mkdirSync as mkdirSync2, openSync, readFileSync as readFileSync4, readSync, readdirSync, rmSync, statSync as statSync3, writeFileSync as writeFileSync2 } from "node:fs";
+import { createHash as createHash2, randomUUID as randomUUID2 } from "node:crypto";
+import path5 from "node:path";
 import { StringDecoder } from "node:string_decoder";
+
+// src/store/process-lock.ts
+import { mkdirSync, readFileSync as readFileSync3, renameSync, rmdirSync, statSync as statSync2, unlinkSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import path4 from "node:path";
+function tryAcquireProcessLock(directory) {
+  const token = randomUUID();
+  try {
+    mkdirSync(directory, { mode: 448 });
+    writeFileSync(path4.join(directory, "owner.json"), JSON.stringify({ pid: process.pid, token }), { mode: 384 });
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
+    try {
+      const owner = JSON.parse(readFileSync3(path4.join(directory, "owner.json"), "utf8"));
+      if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0) throw new Error("invalid lock owner");
+      try {
+        process.kill(owner.pid, 0);
+      } catch (failure) {
+        if (failure.code === "ESRCH") {
+          if (reclaimDeadOwner(directory)) return tryAcquireProcessLock(directory);
+        }
+      }
+    } catch {
+      try {
+        if (Date.now() - statSync2(directory).mtimeMs > 3e4) throw new Error(`unreadable lock owner: ${directory}`);
+      } catch (failure) {
+        if (failure.code !== "ENOENT") throw failure;
+      }
+    }
+    return null;
+  }
+  return () => {
+    const owner = JSON.parse(readFileSync3(path4.join(directory, "owner.json"), "utf8"));
+    if (owner.token !== token) throw new Error("process lock ownership changed");
+    unlinkSync(path4.join(directory, "owner.json"));
+    rmdirSync(directory);
+  };
+}
+function reclaimDeadOwner(directory) {
+  const guard = `${directory}.reclaim`;
+  try {
+    mkdirSync(guard);
+  } catch (error) {
+    if (error.code === "EEXIST") return false;
+    throw error;
+  }
+  try {
+    const owner = JSON.parse(readFileSync3(path4.join(directory, "owner.json"), "utf8"));
+    if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0) return false;
+    try {
+      process.kill(owner.pid, 0);
+      return false;
+    } catch (error) {
+      if (error.code !== "ESRCH") return false;
+    }
+    const retired = `${directory}.${randomUUID()}.retired`;
+    renameSync(directory, retired);
+    unlinkSync(path4.join(retired, "owner.json"));
+    rmdirSync(retired);
+    return true;
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+    return false;
+  } finally {
+    rmdirSync(guard);
+  }
+}
+
+// src/store/atomic-rename.ts
+import { renameSync as renameSync2 } from "node:fs";
+function retryable(error, deadline) {
+  return process.platform === "win32" && Date.now() < deadline && ["EPERM", "EBUSY", "EACCES"].includes(error.code ?? "");
+}
+function atomicRenameSync(source, target) {
+  const deadline = Date.now() + 2e3;
+  while (true) {
+    try {
+      renameSync2(source, target);
+      return;
+    } catch (error) {
+      if (!retryable(error, deadline)) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    }
+  }
+}
+
+// src/store/task-store.ts
 var TASK_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 var DEFAULT_MAX_LOG_BYTES = 10 * 1024 * 1024;
 var MAX_CRITICAL_EVENT_RESERVE_BYTES = 256 * 1024;
@@ -2033,7 +2210,7 @@ var TaskStore = class {
   #maxEventBytes;
   constructor(dataRoot2, options = {}) {
     this.#dataRoot = dataRoot2;
-    this.#tasksRoot = path3.join(dataRoot2, ".tasks");
+    this.#tasksRoot = path5.join(dataRoot2, ".tasks");
     this.#maxLogBytes = options.maxLogBytes ?? DEFAULT_MAX_LOG_BYTES;
     this.#maxEventBytes = options.maxEventBytes ?? DEFAULT_MAX_LOG_BYTES;
     privateMkdir(this.#tasksRoot);
@@ -2051,11 +2228,11 @@ var TaskStore = class {
   }
   taskDir(taskId2) {
     this.assertValidTaskId(taskId2);
-    return path3.join(this.#tasksRoot, taskId2);
+    return path5.join(this.#tasksRoot, taskId2);
   }
   hasTask(taskId2) {
     try {
-      return existsSync4(path3.join(this.taskDir(taskId2), "status.json"));
+      return existsSync4(path5.join(this.taskDir(taskId2), "status.json"));
     } catch {
       return false;
     }
@@ -2063,17 +2240,17 @@ var TaskStore = class {
   listTaskIds() {
     if (!existsSync4(this.#tasksRoot)) return [];
     return readdirSync(this.#tasksRoot).filter(
-      (entry) => existsSync4(path3.join(this.#tasksRoot, entry, "status.json"))
+      (entry) => existsSync4(path5.join(this.#tasksRoot, entry, "status.json"))
     );
   }
   createTask(task, createdAt) {
     this.assertValidTaskId(task.task_id);
     const dir = this.taskDir(task.task_id);
-    if (existsSync4(path3.join(dir, "task.json"))) {
+    if (existsSync4(path5.join(dir, "task.json"))) {
       throw new Error(`task already exists: ${task.task_id}`);
     }
-    privateMkdir(path3.join(dir, "attempts"));
-    this.#writeJsonAtomic(path3.join(dir, "task.json"), task);
+    privateMkdir(path5.join(dir, "attempts"));
+    this.#writeJsonAtomic(path5.join(dir, "task.json"), task);
     const status = {
       task_id: task.task_id,
       status: "queued",
@@ -2086,85 +2263,132 @@ var TaskStore = class {
       zcode_session_id: null,
       exit_code: null
     };
-    this.#writeJsonAtomic(path3.join(dir, "status.json"), status);
+    this.#writeJsonAtomic(path5.join(dir, "status.json"), status);
   }
   readTask(taskId2) {
-    const file = path3.join(this.taskDir(taskId2), "task.json");
+    const file = path5.join(this.taskDir(taskId2), "task.json");
     const parsed = this.#readJson(file);
-    return parsed;
+    const task = parsed;
+    if (!task || task.task_id !== taskId2 || typeof task.workspace !== "string" || !task.workspace || typeof task.objective !== "string" || [task.requirements, task.allowed_paths, task.forbidden_paths, task.acceptance_criteria, task.test_commands].some((items) => !Array.isArray(items) || items.some((item) => typeof item !== "string"))) throw new Error(`corrupt task record: ${file}`);
+    return task;
   }
   writeWorkspaceRef(taskId2, workspace) {
-    this.#writeJsonAtomic(path3.join(this.taskDir(taskId2), "workspace.json"), workspace);
+    this.#writeJsonAtomic(path5.join(this.taskDir(taskId2), "workspace.json"), workspace);
   }
   readWorkspaceRef(taskId2) {
-    const file = path3.join(this.taskDir(taskId2), "workspace.json");
+    const file = path5.join(this.taskDir(taskId2), "workspace.json");
     if (!existsSync4(file)) return null;
-    return this.#readJson(file);
+    const workspace = this.#readJson(file);
+    if (!workspace || typeof workspace.canonicalPath !== "string" || typeof workspace.requestedPath !== "string" || !["direct", "worktree"].includes(workspace.mode)) throw new Error(`corrupt workspace record: ${file}`);
+    return workspace;
   }
   readStatus(taskId2) {
-    const file = path3.join(this.taskDir(taskId2), "status.json");
+    const file = path5.join(this.taskDir(taskId2), "status.json");
     const parsed = this.#readJson(file);
-    if (typeof parsed?.status !== "string") {
+    if (!parsed || parsed.task_id !== taskId2 || !["queued", "running", "completed", "failed", "cancelled", "waiting_for_master"].includes(parsed.status) || !Number.isSafeInteger(parsed.attempt) || parsed.attempt < 1 || typeof parsed.created_at !== "string") {
       throw new Error(`corrupt status record: ${file}`);
     }
     return parsed;
   }
   /** Read-merge-write with an updated timestamp; atomic via temp file + rename. */
-  writeStatus(taskId2, patch) {
-    const current = this.readStatus(taskId2);
-    const next = {
-      ...current,
-      ...patch,
-      task_id: current.task_id,
-      updated_at: (/* @__PURE__ */ new Date()).toISOString()
-    };
-    this.#writeJsonAtomic(path3.join(this.taskDir(taskId2), "status.json"), next);
-    return next;
+  writeStatus(taskId2, patch, expectedAttempt) {
+    return withEventLock(path5.join(this.taskDir(taskId2), "state.lock"), () => {
+      const current = this.readStatus(taskId2);
+      if (expectedAttempt !== void 0 && (current.attempt !== expectedAttempt || isTerminalStatus(current.status))) throw new Error("stale or terminal worker status rejected");
+      const next = {
+        ...current,
+        ...patch,
+        task_id: current.task_id,
+        updated_at: (/* @__PURE__ */ new Date()).toISOString()
+      };
+      this.#writeJsonAtomic(path5.join(this.taskDir(taskId2), "status.json"), next);
+      return next;
+    });
   }
   readResult(taskId2) {
-    const file = path3.join(this.taskDir(taskId2), "result.json");
+    const file = path5.join(this.taskDir(taskId2), "result.json");
     if (!existsSync4(file)) return null;
-    return this.#readJson(file);
+    const result = this.#readJson(file);
+    if (!result || result.task_id !== taskId2 || !Number.isSafeInteger(result.attempt) || !isTerminalStatus(result.status)) throw new Error(`corrupt result record: ${file}`);
+    return result.attempt === this.readStatus(taskId2).attempt ? result : null;
   }
   writeResult(taskId2, result) {
-    this.#writeJsonAtomic(path3.join(this.taskDir(taskId2), "result.json"), result);
+    withEventLock(path5.join(this.taskDir(taskId2), "state.lock"), () => {
+      if (this.readStatus(taskId2).attempt !== result.attempt) throw new Error("stale worker attempt result rejected");
+      this.#writeJsonAtomic(path5.join(this.taskDir(taskId2), "result.json"), result);
+    });
   }
-  /** Moves the current terminal result.json to attempts/<attempt>/result.json. */
+  commitWorkerResult(taskId2, attempt, result, patch) {
+    withEventLock(path5.join(this.taskDir(taskId2), "state.lock"), () => {
+      this.assertWorkerAttempt(taskId2, attempt);
+      this.#writeJsonAtomic(path5.join(this.taskDir(taskId2), "result.json"), result);
+      const current = this.readStatus(taskId2);
+      this.#writeJsonAtomic(path5.join(this.taskDir(taskId2), "status.json"), { ...current, ...patch, task_id: taskId2, attempt, updated_at: (/* @__PURE__ */ new Date()).toISOString() });
+    });
+  }
+  patchRunningAttempt(taskId2, attempt, patch) {
+    withEventLock(path5.join(this.taskDir(taskId2), "state.lock"), () => {
+      const current = this.readStatus(taskId2);
+      if (current.attempt !== attempt || current.status !== "running") return;
+      this.#writeJsonAtomic(path5.join(this.taskDir(taskId2), "status.json"), { ...current, ...patch, updated_at: (/* @__PURE__ */ new Date()).toISOString() });
+    });
+  }
+  /** Copies evidence before the continuation status commit; the old result remains recoverable. */
   archiveResultToAttempt(taskId2, attempt) {
     const dir = this.taskDir(taskId2);
-    const source = path3.join(dir, "result.json");
+    const source = path5.join(dir, "result.json");
     if (!existsSync4(source)) return;
     const targetDir = this.attemptDir(taskId2, attempt);
     privateMkdir(targetDir);
-    renameSync(source, path3.join(targetDir, "result.json"));
+    copyFileSync(source, path5.join(targetDir, "result.json"));
+    privateFile(path5.join(targetDir, "result.json"));
+  }
+  /** A claim is permanent: a started attempt must never execute again. */
+  claimWorkerExecution(taskId2, attempt) {
+    return withEventLock(path5.join(this.taskDir(taskId2), "state.lock"), () => {
+      const status = this.readStatus(taskId2);
+      if (status.attempt !== attempt || isTerminalStatus(status.status)) return false;
+      privateMkdir(this.attemptDir(taskId2, attempt));
+      try {
+        writeFileSync2(path5.join(this.attemptDir(taskId2, attempt), "execution.claim"), JSON.stringify({ pid: process.pid }), { flag: "wx", mode: 384 });
+        return true;
+      } catch (error) {
+        if (error.code === "EEXIST") return false;
+        throw error;
+      }
+    });
+  }
+  assertWorkerAttempt(taskId2, attempt) {
+    const status = this.readStatus(taskId2);
+    if (status.attempt !== attempt || isTerminalStatus(status.status)) throw new Error("stale or terminal worker attempt rejected");
   }
   readArchivedResult(taskId2, attempt) {
-    const file = path3.join(this.attemptDir(taskId2, attempt), "result.json");
+    const file = path5.join(this.attemptDir(taskId2, attempt), "result.json");
     if (!existsSync4(file)) return null;
     return this.#readJson(file);
   }
   attemptDir(taskId2, attempt) {
-    return path3.join(this.taskDir(taskId2), "attempts", String(attempt));
+    return path5.join(this.taskDir(taskId2), "attempts", String(attempt));
   }
   writeAttemptFile(taskId2, attempt, fileName, content) {
     const dir = this.attemptDir(taskId2, attempt);
     privateMkdir(dir);
-    this.#writeTextAtomic(path3.join(dir, fileName), content);
+    this.#writeTextAtomic(path5.join(dir, fileName), content);
   }
   writeAttemptMeta(taskId2, attempt, fileName, meta) {
     const dir = this.attemptDir(taskId2, attempt);
     privateMkdir(dir);
-    this.#writeJsonAtomic(path3.join(dir, fileName), meta);
+    this.#writeJsonAtomic(path5.join(dir, fileName), meta);
   }
   readAttemptMeta(taskId2, attempt, fileName) {
-    const file = path3.join(this.attemptDir(taskId2, attempt), fileName);
+    const file = path5.join(this.attemptDir(taskId2, attempt), fileName);
     if (!existsSync4(file)) return null;
     return this.#readJson(file);
   }
   readAttemptText(taskId2, attempt, fileName) {
-    const file = path3.join(this.attemptDir(taskId2, attempt), fileName);
+    const file = path5.join(this.attemptDir(taskId2, attempt), fileName);
     if (!existsSync4(file)) return null;
-    return readFileSync3(file, "utf8");
+    return readFileSync4(file, "utf8");
   }
   /**
    * Atomically claims the single worker-respawn slot for an attempt by
@@ -2176,7 +2400,7 @@ var TaskStore = class {
     const dir = this.attemptDir(taskId2, attempt);
     privateMkdir(dir);
     try {
-      closeSync(openSync(path3.join(dir, "respawn.claim"), "wx"));
+      closeSync(openSync(path5.join(dir, "respawn.claim"), "wx"));
       return true;
     } catch (error) {
       if (error.code === "EEXIST") return false;
@@ -2186,7 +2410,7 @@ var TaskStore = class {
   /** File time of the respawn claim, or null when the attempt is unclaimed. */
   respawnClaimedAt(taskId2, attempt) {
     try {
-      return statSync2(path3.join(this.attemptDir(taskId2, attempt), "respawn.claim")).mtime;
+      return statSync3(path5.join(this.attemptDir(taskId2, attempt), "respawn.claim")).mtime;
     } catch {
       return null;
     }
@@ -2196,10 +2420,10 @@ var TaskStore = class {
     if (!text) return { truncated: false };
     const dir = this.taskDir(taskId2);
     privateMkdir(dir);
-    const file = path3.join(dir, `${kind}.log`);
+    const file = path5.join(dir, `${kind}.log`);
     let currentBytes = 0;
     try {
-      currentBytes = statSync2(file).size;
+      currentBytes = statSync3(file).size;
     } catch {
       currentBytes = 0;
     }
@@ -2211,29 +2435,41 @@ var TaskStore = class {
     return { truncated: bytes.length > room };
   }
   readLog(taskId2, kind) {
-    const file = path3.join(this.taskDir(taskId2), `${kind}.log`);
-    return existsSync4(file) ? readFileSync3(file, "utf8") : "";
+    const file = path5.join(this.taskDir(taskId2), `${kind}.log`);
+    return existsSync4(file) ? readFileSync4(file, "utf8") : "";
   }
   appendEvent(taskId2, type, summary, details, at = (/* @__PURE__ */ new Date()).toISOString()) {
     const dir = this.taskDir(taskId2);
-    mkdirSync(dir, { recursive: true });
-    const lockDir = path3.join(dir, "events.lock");
+    mkdirSync2(dir, { recursive: true });
+    const lockDir = path5.join(dir, "events.lock");
     return withEventLock(lockDir, () => {
-      const file = path3.join(dir, "events.jsonl");
-      const seqFile = path3.join(dir, "events.seq");
+      const file = path5.join(dir, "events.jsonl");
+      const seqFile = path5.join(dir, "events.seq");
       let bytes = 0;
       let previousSeq = 0;
       let needsSeparator = false;
       try {
-        const info = statSync2(file);
+        const info = statSync3(file);
         bytes = info.size;
-        const lastByte = bytes > 0 ? readFileSync3(file).at(-1) : void 0;
+        let lastByte;
+        if (bytes > 0) {
+          const fd = openSync(file, "r");
+          try {
+            const tail = Buffer.alloc(1);
+            readSync(fd, tail, 0, 1, bytes - 1);
+            lastByte = tail[0];
+          } finally {
+            closeSync(fd);
+          }
+        }
         needsSeparator = bytes > 0 && lastByte !== 10;
-      } catch {
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
         bytes = 0;
       }
       try {
-        previousSeq = Number.parseInt(readFileSync3(seqFile, "utf8"), 10) || 0;
+        previousSeq = Number(readFileSync4(seqFile, "utf8"));
+        if (!Number.isSafeInteger(previousSeq) || previousSeq < 0) previousSeq = readLastEventSeq(file);
       } catch {
         previousSeq = readLastEventSeq(file);
       }
@@ -2241,7 +2477,7 @@ var TaskStore = class {
         seq: previousSeq + 1,
         at,
         type: type.slice(0, 80),
-        summary: summary.slice(0, 2e3),
+        summary: summary.length <= 2e3 ? summary : `${summary.slice(0, 1970)}\u2026[output truncated]`,
         ...details && Object.keys(details).length ? { details } : {}
       };
       const line = `${JSON.stringify(event)}
@@ -2255,7 +2491,7 @@ var TaskStore = class {
       appendFileSync(file, `${needsSeparator ? "\n" : ""}${line}`, { encoding: "utf8", mode: 384 });
       privateFile(file);
       if (event.seq % 100 === 0) {
-        const index = path3.join(dir, "events.index");
+        const index = path5.join(dir, "events.index");
         appendFileSync(index, `${event.seq}	${eventOffset}
 `, { encoding: "utf8", mode: 384 });
         privateFile(index);
@@ -2264,12 +2500,12 @@ var TaskStore = class {
     });
   }
   readEvents(taskId2, afterSeq = 0, limit = 100, view = "raw") {
-    const file = path3.join(this.taskDir(taskId2), "events.jsonl");
+    const file = path5.join(this.taskDir(taskId2), "events.jsonl");
     if (!existsSync4(file)) return { events: [], nextSeq: afterSeq, hasMore: false, omittedEvents: 0 };
     let offset = 0;
-    const indexFile = path3.join(this.taskDir(taskId2), "events.index");
+    const indexFile = path5.join(this.taskDir(taskId2), "events.index");
     if (existsSync4(indexFile)) {
-      for (const row of readFileSync3(indexFile, "utf8").split(/\r?\n/u)) {
+      for (const row of readFileSync4(indexFile, "utf8").split(/\r?\n/u)) {
         const [seqText, offsetText] = row.split("	");
         const seq = Number(seqText);
         const candidateOffset = Number(offsetText);
@@ -2341,13 +2577,13 @@ var TaskStore = class {
     };
   }
   writeInteractionRequest(taskId2, request, createdAt = (/* @__PURE__ */ new Date()).toISOString()) {
-    const directory = path3.join(this.taskDir(taskId2), "interactions");
+    const directory = path5.join(this.taskDir(taskId2), "interactions");
     privateMkdir(directory);
     const file = this.interactionFile(taskId2, request.request_id);
-    return withEventLock(path3.join(this.taskDir(taskId2), "interactions.lock"), () => {
+    return withEventLock(path5.join(this.taskDir(taskId2), "interactions.lock"), () => {
       if (existsSync4(file)) {
         const record2 = this.#readJson(file);
-        if (record2.request_id !== request.request_id || record2.method !== request.method) {
+        if (record2.request_id !== request.request_id || record2.method !== request.method || stableJson(record2.params) !== stableJson(request.params)) {
           throw new Error("interaction request id collision");
         }
         return { record: record2, created: false };
@@ -2373,7 +2609,7 @@ var TaskStore = class {
   }
   answerInteractionRequest(taskId2, requestId, answer, answeredAt = (/* @__PURE__ */ new Date()).toISOString()) {
     const file = this.interactionFile(taskId2, requestId);
-    return withEventLock(path3.join(this.taskDir(taskId2), "interactions.lock"), () => {
+    return withEventLock(path5.join(this.taskDir(taskId2), "interactions.lock"), () => {
       if (!existsSync4(file)) throw new Error(`unknown ZCode interaction request: ${requestId}`);
       const current = this.#readJson(file);
       if (current.request_id !== requestId) throw new Error("interaction request id hash mismatch");
@@ -2390,20 +2626,24 @@ var TaskStore = class {
   interactionFile(taskId2, requestId) {
     if (!requestId || requestId.length > 512) throw new Error("invalid ZCode interaction request_id");
     const key = createHash2("sha256").update(requestId).digest("hex");
-    return path3.join(this.taskDir(taskId2), "interactions", `${key}.json`);
+    return path5.join(this.taskDir(taskId2), "interactions", `${this.readStatus(taskId2).attempt}-${key}.json`);
   }
   #readJson(file) {
-    return JSON.parse(readFileSync3(file, "utf8"));
+    try {
+      return JSON.parse(readFileSync4(file, "utf8"));
+    } catch (error) {
+      throw new Error(`unreadable or corrupt JSON record: ${file}`, { cause: error });
+    }
   }
   #writeJsonAtomic(file, value) {
     this.#writeTextAtomic(file, JSON.stringify(value, null, 2));
   }
   #writeTextAtomic(file, text) {
-    const tmp = `${file}.${randomUUID()}.tmp`;
+    const tmp = `${file}.${randomUUID2()}.tmp`;
     try {
-      writeFileSync(tmp, text, { encoding: "utf8", mode: 384 });
+      writeFileSync2(tmp, text, { encoding: "utf8", mode: 384 });
       privateFile(tmp);
-      renameSync(tmp, file);
+      atomicRenameSync(tmp, file);
     } catch (error) {
       try {
         rmSync(tmp, { force: true });
@@ -2413,37 +2653,26 @@ var TaskStore = class {
     }
   }
 };
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") return `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`).join(",")}}`;
+  return JSON.stringify(value) ?? "null";
+}
 function withEventLock(lockDir, operation) {
   const deadline = Date.now() + 1e4;
-  while (true) {
-    try {
-      mkdirSync(lockDir, { mode: 448 });
-      privateDirectory(lockDir);
-      break;
-    } catch (error) {
-      if (error.code !== "EEXIST") throw error;
-      try {
-        if (Date.now() - statSync2(lockDir).mtimeMs > 3e4) {
-          rmdirSync(lockDir);
-          continue;
-        }
-      } catch {
-      }
-      if (Date.now() >= deadline) throw new Error(`timed out waiting for task event lock: ${lockDir}`);
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-    }
+  let release;
+  while (!(release = tryAcquireProcessLock(lockDir))) {
+    if (Date.now() >= deadline) throw new Error(`timed out waiting for task state/event lock: ${lockDir}`);
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
   }
   try {
     return operation();
   } finally {
-    try {
-      rmdirSync(lockDir);
-    } catch {
-    }
+    release();
   }
 }
 function privateMkdir(directory) {
-  mkdirSync(directory, { recursive: true, mode: 448 });
+  mkdirSync2(directory, { recursive: true, mode: 448 });
   privateDirectory(directory);
 }
 function privateDirectory(directory) {
@@ -2454,7 +2683,7 @@ function privateFile(file) {
 }
 function readLastEventSeq(file) {
   if (!existsSync4(file)) return 0;
-  for (const line of readFileSync3(file, "utf8").trimEnd().split("\n").reverse()) {
+  for (const line of readFileSync4(file, "utf8").trimEnd().split("\n").reverse()) {
     try {
       const event = JSON.parse(line);
       if (Number.isInteger(event.seq)) return event.seq;
@@ -2472,6 +2701,9 @@ function parseProgressEvent(line) {
     return null;
   }
 }
+function isTerminalStatus(status) {
+  return status === "completed" || status === "failed" || status === "cancelled" || status === "waiting_for_master";
+}
 
 // src/worker/run-task.ts
 async function runWorkerTask(options) {
@@ -2480,7 +2712,8 @@ async function runWorkerTask(options) {
   const taskId2 = options.taskId;
   const task = store.readTask(taskId2);
   const initialStatus = store.readStatus(taskId2);
-  const attempt = initialStatus.attempt;
+  const attempt = options.attempt;
+  if (!store.claimWorkerExecution(taskId2, attempt)) throw new Error("worker attempt already claimed, stale, or terminal");
   if (initialStatus.cancel_requested === true) {
     const finishedAt2 = now().toISOString();
     const result2 = buildTaskResult({
@@ -2492,12 +2725,11 @@ async function runWorkerTask(options) {
       failure: { code: "cancelled", message: "cancelled by request before the worker started the agent" },
       cancelled: true
     });
-    store.writeResult(taskId2, result2);
-    store.writeStatus(taskId2, { status: "cancelled", finished_at: finishedAt2, worker_pid: null });
+    store.commitWorkerResult(taskId2, attempt, result2, { status: "cancelled", finished_at: finishedAt2, worker_pid: null });
     return { status: result2.status, result: result2 };
   }
   const startedAt = initialStatus.started_at ?? now().toISOString();
-  store.writeStatus(taskId2, { status: "running", started_at: startedAt, worker_pid: process.pid });
+  store.writeStatus(taskId2, { status: "running", started_at: startedAt, worker_pid: process.pid }, attempt);
   store.appendEvent(taskId2, "worker_running", "Task worker is preparing the ZCode runtime");
   store.writeAttemptMeta(taskId2, attempt, "started.json", {
     worker_pid: process.pid,
@@ -2519,7 +2751,8 @@ async function runWorkerTask(options) {
   let lastModelOutputAt = 0;
   const flushModelOutput = () => {
     if (!pendingModelOutput) return;
-    store.appendEvent(taskId2, "model_output", pendingModelOutput);
+    store.assertWorkerAttempt(taskId2, attempt);
+    for (let offset = 0; offset < pendingModelOutput.length; offset += 2e3) store.appendEvent(taskId2, "model_output", pendingModelOutput.slice(offset, offset + 2e3));
     pendingModelOutput = "";
     lastModelOutputAt = Date.now();
   };
@@ -2528,7 +2761,9 @@ async function runWorkerTask(options) {
       await options.resolver.resolve();
     }
     const adapter = options.adapter ?? new ZCodeAppServerAdapter({
+      host: options.host,
       onEvent: (event) => {
+        store.assertWorkerAttempt(taskId2, attempt);
         if (event.type === "model_output") {
           pendingModelOutput += event.summary;
           if (pendingModelOutput.length >= 4e3 || Date.now() - lastModelOutputAt >= 500) flushModelOutput();
@@ -2537,10 +2772,12 @@ async function runWorkerTask(options) {
         flushModelOutput();
         store.appendEvent(taskId2, event.type, event.summary, event.details);
         const sessionId = event.type === "session_ready" ? event.details?.["session_id"] : void 0;
-        if (typeof sessionId === "string") store.writeStatus(taskId2, { zcode_session_id: sessionId });
+        if (typeof sessionId === "string") store.writeStatus(taskId2, { zcode_session_id: sessionId }, attempt);
+        if (event.type === "app_server_started" && typeof event.details?.["pid"] === "number") store.writeStatus(taskId2, { zcode_pid: event.details["pid"] }, attempt);
       },
-      resolveInteraction: async (request) => {
-        const safeRequest = sanitizeInteractionRequest(request);
+      resolveInteraction: async (request, signal) => {
+        store.assertWorkerAttempt(taskId2, attempt);
+        const safeRequest = sanitizeInteractionRequest({ ...request, request_id: `${attempt}:${request.request_id}` });
         const { record, created } = store.writeInteractionRequest(taskId2, safeRequest, now().toISOString());
         if (created) {
           const interactionEvent = store.appendEvent(
@@ -2551,16 +2788,18 @@ async function runWorkerTask(options) {
             record.created_at
           );
           if (!interactionEvent) {
-            const fallback = interactionDecline2(request.method, "Bridge could not publish this request to Codex");
-            store.answerInteractionRequest(taskId2, request.request_id, fallback, now().toISOString());
+            const fallback = interactionDecline2(request.method, "Bridge could not publish this request to the calling host");
+            store.answerInteractionRequest(taskId2, safeRequest.request_id, fallback, now().toISOString());
             return fallback;
           }
         }
-        while (true) {
-          const current = store.readInteractionRequest(taskId2, request.request_id);
+        while (!signal.aborted) {
+          store.assertWorkerAttempt(taskId2, attempt);
+          const current = store.readInteractionRequest(taskId2, safeRequest.request_id);
           if (current?.state === "answered" && current.answer) return current.answer;
           await sleep2(250);
         }
+        return interactionDecline2(request.method, "The task attempt ended");
       }
     });
     const workspaceRef = store.readWorkspaceRef(taskId2) ?? {
@@ -2588,6 +2827,7 @@ async function runWorkerTask(options) {
     };
   }
   const finishedAt = now().toISOString();
+  store.assertWorkerAttempt(taskId2, attempt);
   const stdoutLog = store.appendLog(taskId2, "stdout", outcome?.stdout ? `${outcome.stdout}
 ` : "");
   const stderrLog = store.appendLog(
@@ -2626,20 +2866,23 @@ async function runWorkerTask(options) {
     finishedAt,
     outcome,
     failure,
-    cancelled: false
+    cancelled: outcome?.cancelled === true || failure?.code === "cancelled",
+    sessionId: store.readStatus(taskId2).zcode_session_id ?? continueSpec?.previous_session_id
   });
   store.appendEvent(taskId2, "task_finished", `Task reached terminal status: ${result.status}`, {
     status: result.status,
     needs_master_decision: result.needs_master_decision
   }, finishedAt);
-  store.writeResult(taskId2, result);
-  store.writeStatus(taskId2, {
+  store.commitWorkerResult(taskId2, attempt, result, {
     status: result.status,
     finished_at: finishedAt,
     exit_code: result.exit_code,
     zcode_session_id: result.session_id,
     error_code: result.error_code ?? null,
-    error: result.status === "failed" ? result.summary : null
+    error: result.status === "failed" ? result.summary : null,
+    worker_pid: null,
+    cleanup_unverified: failure?.code === "cleanup_failed",
+    zcode_pid: failure?.code === "cleanup_failed" ? store.readStatus(taskId2).zcode_pid : null
   });
   return { status: result.status, result };
 }
@@ -2648,12 +2891,12 @@ function interactionSummary(request) {
   if (request.method === "interaction/requestPermission") {
     const toolName = typeof params.toolName === "string" ? params.toolName : "tool";
     const reason = typeof params.reason === "string" ? `: ${params.reason}` : "";
-    return `ZCode is waiting for Codex to decide whether ${toolName} may proceed${reason}`;
+    return `ZCode is waiting for the calling host to decide whether ${toolName} may proceed${reason}`;
   }
   if (asRecord3(params.schema).interaction === "plan_approval") {
-    return "ZCode is waiting for Codex to approve or reject its plan";
+    return "ZCode is waiting for the calling host to approve or reject its plan";
   }
-  return "ZCode is waiting for Codex to answer a question";
+  return "ZCode is waiting for the calling host to answer a question";
 }
 function publicInteractionDetails(request) {
   const params = request.params;
@@ -2692,13 +2935,15 @@ function sleep2(ms) {
 }
 
 // src/worker/worker-main.ts
-var [dataRoot, taskId] = process.argv.slice(2);
-if (!dataRoot || !taskId) {
-  console.error("usage: node worker-main.js <dataRoot> <taskId>");
+var [dataRoot, taskId, attemptText] = process.argv.slice(2);
+if (!dataRoot || !taskId || !attemptText || !/^[1-9]\d*$/u.test(attemptText) || !Number.isSafeInteger(Number(attemptText))) {
+  console.error("usage: node worker-main.js <dataRoot> <taskId> <attempt>");
   process.exit(2);
 }
 try {
-  const { status } = await runWorkerTask({ dataRoot, taskId });
+  const hostText = process.env["ZCODE_BRIDGE_HOST_PROFILE"];
+  const host = hostText ? validateHostProfile(JSON.parse(hostText)) : void 0;
+  const { status } = await runWorkerTask({ dataRoot, taskId, host, attempt: Number(attemptText) });
   process.exitCode = 0;
   void status;
 } catch (error) {

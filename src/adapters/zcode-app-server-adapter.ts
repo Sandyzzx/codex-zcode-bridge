@@ -25,10 +25,21 @@ import { accountProviderId, buildAccountProviderPayload, runtimeAuthReply, zcode
 import { resolveSessionPreferences } from "../runtime/session-preferences.js";
 import { resolveTaskTimeout } from "../runtime/task-timeout.js";
 import { registerDesktopTask, updateDesktopTaskStatus, type DesktopTaskIndexEntry, type DesktopTaskStatus } from "./task-index-sync.js";
+import { codexHostProfile, validateHostProfile, type BridgeHostProfile } from "../host/profile.js";
 
 type ProgressEvent = { type: string; summary: string; details?: Record<string, unknown> };
 type ProgressSink = (event: ProgressEvent) => void;
 type JsonRecord = Record<string, unknown>;
+
+function publicUsage(value: unknown): Record<string, unknown> | null {
+  if (!isRecord(value)) return null;
+  const result: Record<string, unknown> = {};
+  for (const key of ["inputTokens", "outputTokens", "totalTokens", "cachedInputTokens", "reasoningTokens", "input_tokens", "output_tokens", "total_tokens", "cost"]) {
+    const item = value[key];
+    if (typeof item === "number" && Number.isFinite(item) && item >= 0) result[key] = item;
+  }
+  return Object.keys(result).length ? result : null;
+}
 
 interface PendingRpc {
   resolve(value: unknown): void;
@@ -69,6 +80,10 @@ interface RunEntry {
   selectedModel: string | null;
   lastEventSeq: number;
   readonly interactions: Map<string, PendingInteraction>;
+  readonly abort: AbortController;
+  acceptingTurn: boolean;
+  turnId: string | null;
+  awaitingTurnStart: boolean;
 }
 
 export interface ZCodeAppServerAdapterOptions {
@@ -82,8 +97,9 @@ export interface ZCodeAppServerAdapterOptions {
    * machine-level runtime-config.json state.
    */
   homeDir?: string;
+  host?: BridgeHostProfile;
   now?: () => Date;
-  resolveInteraction?: (request: ZCodeInteractionRequest) => Promise<Record<string, unknown>>;
+  resolveInteraction?: (request: ZCodeInteractionRequest, signal: AbortSignal) => Promise<Record<string, unknown>>;
 }
 
 const RPC_TIMEOUT_MS = 30_000;
@@ -100,17 +116,19 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
   readonly #timeoutMs: number | null;
   readonly #childEnvBase: NodeJS.ProcessEnv;
   readonly #homeDir: string;
+  readonly #host: BridgeHostProfile;
   readonly #now: () => Date;
-  readonly #resolveInteraction: ((request: ZCodeInteractionRequest) => Promise<Record<string, unknown>>) | undefined;
+  readonly #resolveInteraction: ZCodeAppServerAdapterOptions["resolveInteraction"];
   readonly #runs = new Map<AgentHandle, RunEntry>();
   readonly #workspaceByTask = new Map<string, string>();
 
   constructor(options: ZCodeAppServerAdapterOptions = {}) {
-    this.#resolver = options.resolver ?? new NodeRuntimeResolver();
+    this.#resolver = options.resolver ?? new NodeRuntimeResolver({ env: options.childEnvBase, homeDir: options.homeDir, host: options.host });
     this.#onEvent = options.onEvent ?? (() => undefined);
     this.#timeoutMs = options.timeoutMs ?? null;
     this.#childEnvBase = options.childEnvBase ?? process.env;
     this.#homeDir = options.homeDir ?? homedir();
+    this.#host = validateHostProfile(options.host ?? codexHostProfile(this.#homeDir));
     this.#now = options.now ?? (() => new Date());
     this.#resolveInteraction = options.resolveInteraction;
   }
@@ -169,6 +187,8 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     const entry = this.#require(handle, "cancelTask");
     if (entry.finished) return;
     entry.cancelRequested = true;
+    entry.abort.abort();
+    entry.rejectTurn(new Error("ZCode task cancelled"));
     const pid = entry.child?.pid;
     if (pid) await terminateProcessTree(pid);
   }
@@ -212,6 +232,10 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       selectedModel: null,
       lastEventSeq: 0,
       interactions: new Map(),
+      abort: new AbortController(),
+      acceptingTurn: false,
+      turnId: null,
+      awaitingTurnStart: false,
     };
     this.#runs.set(handle, entry);
     this.#workspaceByTask.set(task.task_id, workspace.canonicalPath);
@@ -237,7 +261,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     let warningTimer: NodeJS.Timeout | undefined;
     let desktopTask: DesktopTaskIndexEntry | null = null;
     try {
-      const runtimeEnv = loadPersistedRuntimeEnvironment(this.#childEnvBase, this.#homeDir);
+      const runtimeEnv = loadPersistedRuntimeEnvironment(this.#childEnvBase, this.#homeDir, this.#host);
       const timeoutMs = this.#timeoutMs ?? resolveTaskTimeout(task, runtimeEnv);
       const config = await this.#resolver.resolve();
       const preferences = resolveSessionPreferences(task.model, runtimeEnv);
@@ -246,10 +270,10 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       const client = this.#startAppServer(config, workspace.canonicalPath, childEnv, entry);
       entry.client = client;
       entry.child = client.child;
+      entry.onEvent({ type: "app_server_started", summary: "ZCode app-server process started", details: { pid: client.child.pid } });
       timer = setTimeout(() => {
         entry.timedOut = true;
-        const pid = entry.child?.pid;
-        if (pid) void terminateProcessTree(pid).catch(() => undefined);
+        entry.abort.abort();
         entry.rejectTurn(new Error(`ZCode run exceeded ${timeoutMs}ms wall-clock budget`));
       }, timeoutMs);
       timer.unref();
@@ -450,12 +474,14 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       }
       const runtimeSeq = nestedNumber(snapshot, ["runtime", "eventSeq"]) ?? 0;
       entry.lastEventSeq = runtimeSeq;
+      entry.awaitingTurnStart = runtimeSeq > 0;
       await client.request("session/subscribe", {
         sessionId,
         deliveryKind: "desktop-continuous",
         includeSnapshot: false,
         afterSeq: runtimeSeq,
       });
+      entry.acceptingTurn = true;
       await client.request("session/send", { sessionId, content: prompt });
       entry.onEvent({ type: "turn_started", summary: "ZCode accepted the task and started a turn" });
       const turnResult = await turn;
@@ -463,7 +489,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         ? null
         : turnResult.resultType && turnResult.resultType !== "success" ? "error" : "completed";
       await syncDesktopStatus(desktopTask, desktopStatus, entry.onEvent);
-      await client.close().catch(() => undefined);
+      await client.close();
       entry.child = null;
 
       if (turnResult.resultType && turnResult.resultType !== "success") {
@@ -471,7 +497,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
           attempts: 1,
           cancelled: turnResult.resultType === "cancelled",
           stdout: turnResult.response,
-          stderr: client.stderr,
+          stderr: "",
           exitCode: 1,
           signal: null,
           sessionId,
@@ -495,7 +521,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         stdoutTruncated: false,
         stderrTruncated: false,
         stdout,
-        stderr: client.stderr,
+        stderr: "",
         exitCode: 0,
         signal: null,
         sessionId,
@@ -521,14 +547,16 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       return { ...base, agentReport: parsed.report, reportCandidate: parsed.report, reportError: null, errorCode: null };
     } catch (error) {
       await syncDesktopStatus(desktopTask, entry.cancelRequested ? null : "error", entry.onEvent);
-      if (entry.client) await entry.client.close().catch(() => undefined);
-      else if (entry.child?.pid) await terminateProcessTree(entry.child.pid).catch(() => undefined);
+      entry.abort.abort();
+      try {
+        if (entry.client) await entry.client.close();
+        else if (entry.child?.pid) await terminateProcessTree(entry.child.pid);
+      } catch (cleanupError) {
+        throw new BridgeError("cleanup_failed", "ZCode process termination could not be verified; workspace remains occupied", { cause: cleanupError });
+      }
       entry.child = null;
       const baseMessage = error instanceof Error ? error.message : String(error);
-      const runtimeStderr = entry.client?.stderr.trim();
-      const message = runtimeStderr
-        ? baseMessage + "; app-server stderr: " + runtimeStderr.slice(0, 1_500)
-        : baseMessage;
+      const message = entry.timedOut ? "ZCode run exceeded its wall-clock budget" : entry.cancelRequested ? "ZCode task cancelled" : baseMessage;
       const code = entry.timedOut ? "timeout" : entry.cancelRequested ? "cancelled" : "zcode_nonzero_exit";
       entry.onEvent({ type: "error", summary: message.slice(0, 1_500), details: { error_code: code } });
       if (error instanceof BridgeError) throw error;
@@ -536,6 +564,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     } finally {
       if (timer) clearTimeout(timer);
       if (warningTimer) clearTimeout(warningTimer);
+      entry.abort.abort();
       entry.finished = true;
       void startedAt;
     }
@@ -560,12 +589,16 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     let rpcId = 0;
     let closed = false;
     const pending = new Map<string | number, PendingRpc>();
+    entry.abort.signal.addEventListener("abort", () => {
+      for (const call of pending.values()) { clearTimeout(call.timer); call.reject(new Error("ZCode task attempt ended")); }
+      pending.clear();
+    }, { once: true });
 
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
       stdoutBuffer += chunk;
-      if (stdoutBuffer.length > MAX_CAPTURE_CHARS) stdoutBuffer = stdoutBuffer.slice(-MAX_CAPTURE_CHARS);
+      if (stdoutBuffer.length > MAX_CAPTURE_CHARS) { entry.rejectTurn(new Error("ZCode protocol frame exceeded size limit")); return; }
       let newline: number;
       while ((newline = stdoutBuffer.indexOf("\n")) >= 0) {
         const line = stdoutBuffer.slice(0, newline).trim();
@@ -577,16 +610,19 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
             child.stdin.write(`${JSON.stringify(reply)}\n`);
           });
         } catch (error) {
-          if (error instanceof SyntaxError) {
-            entry.rejectTurn(new Error(`invalid ZCode app-server protocol line: ${line.slice(0, 500)}`));
-          }
+          entry.rejectTurn(new Error("invalid ZCode app-server protocol message", { cause: error }));
         }
       }
     });
     child.stderr.on("data", (chunk: string) => {
       if (stderr.length < 64_000) stderr += chunk.slice(0, 64_000 - stderr.length);
     });
-    child.on("error", (error) => entry.rejectTurn(error));
+    child.on("error", (error) => {
+      closed = true;
+      for (const call of pending.values()) { clearTimeout(call.timer); call.reject(error); }
+      pending.clear();
+      entry.rejectTurn(error);
+    });
     child.on("close", (code, signal) => {
       closed = true;
       for (const call of pending.values()) {
@@ -600,6 +636,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     });
 
     const request = (method: string, params: JsonRecord): Promise<unknown> => {
+      if (entry.abort.signal.aborted) return Promise.reject(new Error("ZCode task attempt ended"));
       if (closed) return Promise.reject(new Error(`ZCode app-server is closed before ${method}`));
       const id = ++rpcId;
       return new Promise((resolve, reject) => {
@@ -618,14 +655,17 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       });
     };
     const close = async (): Promise<void> => {
-      if (closed) return;
+      if (closed) {
+        if (process.platform !== "win32" && child.pid) await terminateProcessTree(child.pid);
+        return;
+      }
       child.stdin.end();
       await new Promise<void>((resolve) => {
         const timer = setTimeout(() => resolve(), 1_000);
         timer.unref();
         child.once("close", () => { clearTimeout(timer); resolve(); });
       });
-      if (!closed && child.pid) await terminateProcessTree(child.pid).catch(() => undefined);
+      if (child.pid && (!closed || process.platform !== "win32")) await terminateProcessTree(child.pid);
     };
     return { child, request, close, get stderr() { return stderr; } };
   }
@@ -677,7 +717,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       pending.delete(id);
       if (message.error && typeof message.error === "object") {
         const error = message.error as JsonRecord;
-        call.reject(new Error(typeof error.message === "string" ? error.message : "ZCode app-server request failed"));
+        call.reject(new Error(`ZCode app-server request failed${typeof error.code === "number" ? ` (code ${error.code})` : ""}`));
       } else {
         call.resolve(message.result);
       }
@@ -685,19 +725,32 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     }
     if (message.method === "session/event") {
       const params = asRecord(message.params);
-      if (typeof params.seq === "number") entry.lastEventSeq = params.seq;
+      if (params.sessionId !== undefined && params.sessionId !== entry.sessionId) return;
+      if (!entry.acceptingTurn) return;
       const type = typeof params.type === "string" ? params.type : "";
       const payload = asRecord(params.payload);
+      const turnId = typeof params.turnId === "string" ? params.turnId : typeof payload.turnId === "string" ? payload.turnId : null;
+      if (entry.awaitingTurnStart && type !== "turn.started") return;
+      if (entry.turnId && turnId && entry.turnId !== turnId) return;
+      if (typeof params.seq === "number") {
+        if (!Number.isSafeInteger(params.seq) || params.seq <= entry.lastEventSeq) return;
+        entry.lastEventSeq = params.seq;
+      }
+      if (type === "turn.started" && turnId) entry.turnId = turnId;
+      if (type === "turn.started") entry.awaitingTurnStart = false;
       this.#publishSessionEvent(type, payload, entry);
       if (type === "turn.completed") {
+        entry.acceptingTurn = false;
         entry.resolveTurn({
           response: typeof payload.response === "string" ? payload.response : "",
-          usage: isRecord(payload.usage) ? payload.usage : null,
+          usage: publicUsage(payload.usage),
           resultType: typeof payload.resultType === "string" ? payload.resultType : null,
         });
       } else if (type === "turn.failed") {
+        entry.acceptingTurn = false;
         const problem = asRecord(payload.error);
-        entry.rejectTurn(new Error(typeof problem.message === "string" ? problem.message : "ZCode turn failed"));
+        void problem;
+        entry.rejectTurn(new Error("ZCode turn failed"));
       }
       return;
     }
@@ -721,6 +774,10 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     const rpcId = message.id as string | number;
     const method = message.method as ZCodeInteractionRequest["method"];
     const params = asRecord(message.params);
+    if (entry.abort.signal.aborted || (params.sessionId !== undefined && params.sessionId !== entry.sessionId)) {
+      write({ id: rpcId, result: interactionDecline(method, "Interaction does not belong to the active task session") });
+      return;
+    }
     const suppliedId = typeof params.requestId === "string" ? params.requestId : "";
     const requestId = suppliedId || `rpc-${String(rpcId)}`;
     const paramsSignature = stableSerialize(params);
@@ -746,21 +803,22 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     void (async () => {
       let response = fallback;
       try {
-        if (this.#resolveInteraction) response = await this.#resolveInteraction(request);
+        if (this.#resolveInteraction) response = await this.#resolveInteraction(request, entry.abort.signal);
       } catch (error) {
         const messageText = error instanceof Error ? error.message : String(error);
         entry.onEvent({
           type: "interaction_reply_failed",
-          summary: `Could not deliver Codex's response to ZCode: ${messageText}`.slice(0, 1_500),
+          summary: `Could not deliver the calling host's response to ZCode: ${messageText}`.slice(0, 1_500),
           details: { request_id: requestId, method },
         });
       }
       pending!.response = response;
       pending!.resolving = false;
+      if (entry.abort.signal.aborted) return;
       for (const id of pending!.requestIds) write({ id, result: response });
       entry.onEvent({
         type: "interaction_replied",
-        summary: `Codex replied to ZCode ${method === "interaction/requestPermission" ? "permission request" : "user input request"}`,
+        summary: `the calling host replied to ZCode ${method === "interaction/requestPermission" ? "permission request" : "user input request"}`,
         details: { request_id: requestId, method },
       });
       while (entry.interactions.size > 128) {
@@ -768,7 +826,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         if (!oldest || entry.interactions.get(oldest)?.resolving) break;
         entry.interactions.delete(oldest);
       }
-    })();
+    })().catch(() => entry.rejectTurn(new Error("ZCode interaction delivery failed")));
   }
 
   #publishSessionEvent(type: string, payload: JsonRecord, entry: RunEntry): void {
@@ -815,14 +873,13 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         details: {
           ...(typeof payload.tokenCount === "number" ? { token_count: payload.tokenCount } : {}),
           ...(typeof payload.toolCallCount === "number" ? { tool_call_count: payload.toolCallCount } : {}),
-          ...(isRecord(payload.usage) ? { usage: payload.usage } : {}),
+          ...(publicUsage(payload.usage) ? { usage: publicUsage(payload.usage) } : {}),
         },
       });
     } else if (type === "turn.failed") {
-      const problem = asRecord(payload.error);
       entry.onEvent({
         type: "turn_failed",
-        summary: typeof problem.message === "string" ? problem.message : "ZCode turn failed",
+        summary: "ZCode turn failed",
       });
     }
   }

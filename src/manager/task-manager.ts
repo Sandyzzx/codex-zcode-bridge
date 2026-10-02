@@ -25,6 +25,8 @@ import { TaskManagerError } from "./errors.js";
 import { defaultSpawnWorker, type SpawnWorker } from "./spawn-worker.js";
 import { isProcessRunning, terminateProcessTree, type TerminateProcessTree } from "../adapters/process-spawn.js";
 import { validateTaskTimeout } from "../runtime/task-timeout.js";
+import { withProcessLock } from "../store/process-lock.js";
+import { buildTaskPrompt, buildContinuePrompt } from "../prompts/task-prompt.js";
 
 export interface TaskManagerOptions {
   store: TaskStore;
@@ -82,7 +84,7 @@ export class BridgeTaskManager implements ProgressTaskManager {
     const pollIntervalMs = options.pollIntervalMs ?? 1_000;
     if (pollIntervalMs > 0) {
       this.#timer = setInterval(() => {
-        void this.recoverTasks().catch(() => undefined);
+        void this.recoverTasks().catch((error) => console.error("Bridge recovery failed:", error instanceof Error ? error.message : String(error)));
       }, pollIntervalMs);
       this.#timer.unref();
     }
@@ -100,11 +102,14 @@ export class BridgeTaskManager implements ProgressTaskManager {
   async recoverTasks(): Promise<void> {
     return this.#exclusive(async () => {
       for (const taskId of this.#store.listTaskIds()) {
-        const status = this.#store.readStatus(taskId);
-        if (isTerminalStatus(status.status)) continue;
-        if (status.status === "running") {
-          this.#reconcileRunningLocked(taskId, status);
-        }
+        try {
+          const status = this.#safeStatus(taskId);
+          if (!status) continue;
+          if (isTerminalStatus(status.status)) continue;
+          if (status.status === "running") {
+            this.#reconcileRunningLocked(taskId, status);
+          }
+        } catch (error) { console.error(`Bridge could not reconcile task ${taskId}: ${error instanceof Error ? error.message : String(error)}`); }
       }
       this.#pumpLocked();
     });
@@ -126,6 +131,7 @@ export class BridgeTaskManager implements ProgressTaskManager {
         );
       }
       const createdAt = this.#now().toISOString();
+      try { buildTaskPrompt(task); } catch (error) { throw new TaskManagerError("TASK_INVALID", String(error)); }
       try {
         const projectPath = workspaceRef.sourcePath ?? workspaceRef.canonicalPath;
         this.#store.createTask({
@@ -140,7 +146,7 @@ export class BridgeTaskManager implements ProgressTaskManager {
       }
       this.#store.appendEvent(task.task_id, "queued", "Task accepted and queued", undefined, createdAt);
       this.#store.appendEvent(task.task_id, "workspace_ready", workspaceRef.mode === "worktree"
-        ? "Using the Codex-selected worktree for execution under the requested project"
+        ? "Using the the calling host-selected worktree for execution under the requested project"
         : "Using the requested project directory for execution", {
           project_path: workspaceRef.sourcePath ?? workspaceRef.canonicalPath,
           execution_path: workspaceRef.canonicalPath,
@@ -251,7 +257,7 @@ export class BridgeTaskManager implements ProgressTaskManager {
       if (state !== "answered") {
         throw new TaskManagerError("TASK_STATE", `ZCode interaction request ${input.request_id} was already answered`);
       }
-      this.#store.appendEvent(input.task_id, "interaction_reply_submitted", "Codex submitted a response to the ZCode interaction", {
+      this.#store.appendEvent(input.task_id, "interaction_reply_submitted", "the calling host submitted a response to the ZCode interaction", {
         request_id: input.request_id,
         method: record.method,
         decision: input.decision,
@@ -281,6 +287,7 @@ export class BridgeTaskManager implements ProgressTaskManager {
           `zcode_continue is not allowed from status ${status.status}`,
         );
       }
+      if (status.cleanup_unverified) throw new TaskManagerError("TASK_STATE", "Cannot continue until unverified ZCode process cleanup is resolved");
       const task = this.#store.readTask(taskId);
       // The continuation reuses the original workspace; it must still resolve
       // to the same canonical directory.
@@ -298,6 +305,8 @@ export class BridgeTaskManager implements ProgressTaskManager {
       }
       const previousAttempt = status.attempt;
       const previousResult = this.#store.readResult(taskId);
+      try { buildContinuePrompt({ task, feedback: input.feedback, additionalRequirements: input.additional_requirements ?? [], previousSessionId: previousResult?.session_id ?? status.zcode_session_id, previousResult }); }
+      catch (error) { throw new TaskManagerError("TASK_INVALID", String(error)); }
       const nextAttempt = previousAttempt + 1;
       const createdAt = this.#now().toISOString();
 
@@ -307,7 +316,7 @@ export class BridgeTaskManager implements ProgressTaskManager {
       this.#store.writeAttemptMeta(taskId, nextAttempt, "continue.json", {
         feedback: input.feedback,
         additional_requirements: [...(input.additional_requirements ?? [])],
-        previous_session_id: previousResult?.session_id ?? null,
+        previous_session_id: previousResult?.session_id ?? status.zcode_session_id,
         previous_attempt: previousAttempt,
       });
       this.#store.writeStatus(taskId, {
@@ -321,6 +330,8 @@ export class BridgeTaskManager implements ProgressTaskManager {
         error_code: null,
         error: null,
         cancel_requested: null,
+        zcode_pid: null,
+        cleanup_unverified: null,
       });
       this.#pumpLocked();
       const after = this.#store.readStatus(taskId);
@@ -336,6 +347,22 @@ export class BridgeTaskManager implements ProgressTaskManager {
     return this.#exclusive(async () => {
       this.#requireTask(taskId);
       const status = this.#store.readStatus(taskId);
+      if (status.cleanup_unverified) {
+        if (!status.zcode_pid) throw new TaskManagerError("CANCEL_FAILED", "No ZCode process identity is available to verify cleanup");
+        try {
+          await this.#terminateProcessTree(status.zcode_pid, { graceMs: 500, killWaitMs: 5_000 });
+          if (status.status === "running" && status.worker_pid && this.#isProcessRunning(status.worker_pid)) await this.#terminateProcessTree(status.worker_pid, { graceMs: 500, killWaitMs: 5_000 });
+        }
+        catch (error) { throw new TaskManagerError("CANCEL_FAILED", `ZCode cleanup could not be verified: ${String(error)}`); }
+        if (status.status === "running") {
+          const finishedAt = this.#now().toISOString();
+          const result = buildTaskResult({ task: this.#store.readTask(taskId), attempt: status.attempt, startedAt: status.started_at, finishedAt, outcome: null, cancelled: true, sessionId: status.zcode_session_id });
+          this.#store.writeResult(taskId, result);
+          this.#store.writeStatus(taskId, { status: "cancelled", finished_at: finishedAt, worker_pid: null, cleanup_unverified: null, zcode_pid: null, error: null, error_code: null, cancel_requested: null });
+        } else this.#store.writeStatus(taskId, { cleanup_unverified: null, zcode_pid: null });
+        this.#pumpLocked();
+        return toPublicStatus(this.#store.readStatus(taskId));
+      }
       if (isTerminalStatus(status.status)) {
         throw new TaskManagerError(
           "TASK_STATE",
@@ -343,6 +370,11 @@ export class BridgeTaskManager implements ProgressTaskManager {
         );
       }
       const task = this.#store.readTask(taskId);
+
+      if (status.status === "running" && this.#store.readResult(taskId)) {
+        this.#reconcileOneLocked(taskId);
+        return toPublicStatus(this.#store.readStatus(taskId));
+      }
 
       if (status.status === "queued") {
         const finishedAt = this.#now().toISOString();
@@ -388,6 +420,9 @@ export class BridgeTaskManager implements ProgressTaskManager {
         return toPublicStatus(this.#store.readStatus(taskId));
       }
       try {
+        if (status.zcode_pid && this.#isProcessRunning(status.zcode_pid)) {
+          await this.#terminateProcessTree(status.zcode_pid, { graceMs: 500, killWaitMs: 5_000 });
+        }
         await this.#terminateProcessTree(pid, { graceMs: 500, killWaitMs: 5_000 });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -413,6 +448,8 @@ export class BridgeTaskManager implements ProgressTaskManager {
           error: raced.status === "failed" ? raced.summary : null,
           worker_pid: null,
           cancel_requested: null,
+          cleanup_unverified: null,
+          zcode_pid: null,
         });
         this.#pumpLocked();
         return toPublicStatus(this.#store.readStatus(taskId));
@@ -429,6 +466,7 @@ export class BridgeTaskManager implements ProgressTaskManager {
           message: `cancelled by request; worker process tree (pid ${pid}) was terminated and verified`,
         },
         cancelled: true,
+        sessionId: status.zcode_session_id,
       });
       this.#store.writeResult(taskId, result);
       this.#store.appendEvent(taskId, "cancelled", "Worker process tree terminated and cancellation confirmed", undefined, finishedAt);
@@ -436,6 +474,8 @@ export class BridgeTaskManager implements ProgressTaskManager {
         status: "cancelled",
         finished_at: finishedAt,
         worker_pid: null,
+        cleanup_unverified: null,
+        zcode_pid: null,
         cancel_requested: null,
       });
       this.#pumpLocked();
@@ -452,9 +492,9 @@ export class BridgeTaskManager implements ProgressTaskManager {
     }
   }
 
-  #reconcileRunningLocked(taskId: string, status: { worker_pid: number | null; attempt: number; started_at: string | null }): void {
+  #reconcileRunningLocked(taskId: string, status: { worker_pid: number | null; attempt: number; started_at: string | null; zcode_session_id?: string | null }): void {
     const persistedResult = this.#store.readResult(taskId);
-    if (persistedResult) {
+    if (persistedResult && persistedResult.attempt === status.attempt) {
       // The worker wrote the result but died before updating the status file.
       this.#store.writeStatus(taskId, {
         status: persistedResult.status,
@@ -464,12 +504,18 @@ export class BridgeTaskManager implements ProgressTaskManager {
         error_code: persistedResult.error_code ?? null,
         error: persistedResult.status === "failed" ? persistedResult.summary : null,
         worker_pid: null,
+        cleanup_unverified: persistedResult.error_code === "cleanup_failed",
       });
       return;
     }
     const pid = status.worker_pid;
     const alive = pid !== null && this.#isProcessRunning(pid);
     if (alive) return; // still running (possibly from before a manager restart)
+    const runtimePid = this.#store.readStatus(taskId).zcode_pid;
+    if (runtimePid && this.#isProcessRunning(runtimePid)) {
+      this.#store.writeStatus(taskId, { cleanup_unverified: true, error_code: "cleanup_failed", error: "Worker exited while ZCode remains alive; cancel to verify runtime cleanup" });
+      return;
+    }
     // Cold-start grace. Several Bridge processes may share one data root, and
     // any of them can reconcile a task between the "running" status write and
     // the pid write in #startWorkerLocked (worker_pid null), while a freshly
@@ -506,10 +552,9 @@ export class BridgeTaskManager implements ProgressTaskManager {
     const task = this.#store.readTask(taskId);
     const finishedAt = this.#now().toISOString();
     const workerStderr = this.#store.readAttemptText(taskId, status.attempt, "worker-stderr.log") ?? "";
-    const diagnostic = workerStderr.trim().slice(-1_200);
     const failure: TaskFailure = {
       code: "worker_lost",
-      message: `worker pid ${String(pid)} is gone without a terminal result${diagnostic ? `; worker stderr: ${diagnostic}` : "; worker stderr was empty"}`,
+      message: `worker pid ${String(pid)} is gone without a terminal result${workerStderr.trim() ? "; diagnostic stderr is available in private attempt evidence" : "; worker stderr was empty"}`,
     };
     const result = buildTaskResult({
       task,
@@ -518,6 +563,7 @@ export class BridgeTaskManager implements ProgressTaskManager {
       finishedAt,
       outcome: null,
       failure,
+      sessionId: status.zcode_session_id,
     });
     this.#store.writeResult(taskId, result);
     this.#store.writeStatus(taskId, {
@@ -531,15 +577,15 @@ export class BridgeTaskManager implements ProgressTaskManager {
   }
 
   #runningTaskIdsLocked(): string[] {
-    return this.#store.listTaskIds().filter((taskId) => this.#store.readStatus(taskId).status === "running");
+    return this.#store.listTaskIds().filter((taskId) => { const status = this.#safeStatus(taskId); return status?.status === "running" || status?.cleanup_unverified === true; });
   }
 
   #queuedTaskIdsLocked(): string[] {
     return this.#store
       .listTaskIds()
-      .map((taskId) => ({ taskId, status: this.#store.readStatus(taskId) }))
-      .filter((entry) => entry.status.status === "queued")
-      .sort((a, b) => a.status.created_at.localeCompare(b.status.created_at))
+      .map((taskId) => ({ taskId, status: this.#safeStatus(taskId) }))
+      .filter((entry) => entry.status?.status === "queued")
+      .sort((a, b) => a.status!.created_at.localeCompare(b.status!.created_at))
       .map((entry) => entry.taskId);
   }
 
@@ -548,12 +594,17 @@ export class BridgeTaskManager implements ProgressTaskManager {
     if (running.length >= this.#maxConcurrentWorkers) return;
 
     const occupiedPaths = running.map((taskId) => this.#executionPathKeyLocked(taskId));
+    for (const taskId of this.#store.listTaskIds()) {
+      if (this.#safeStatus(taskId)) continue;
+      try { occupiedPaths.push(this.#executionPathKeyLocked(taskId)); }
+      catch { return; } // Unknown execution scope cannot be safely released.
+    }
     let slots = this.#maxConcurrentWorkers - running.length;
     for (const taskId of this.#queuedTaskIdsLocked()) {
       if (slots <= 0) break;
       const executionPath = this.#executionPathKeyLocked(taskId);
       // Never run two ZCode sessions against the same mutable directory.
-      // Separate Codex-prepared worktrees and separate project roots can run
+      // Separate the calling host-prepared worktrees and separate project roots can run
       // concurrently, subject to the global worker limit.
       if (occupiedPaths.some((occupied) => pathsOverlap(occupied, executionPath))) continue;
       this.#startWorkerLocked(taskId);
@@ -566,8 +617,8 @@ export class BridgeTaskManager implements ProgressTaskManager {
 
   #executionPathKeyLocked(taskId: string): string {
     const recorded = this.#store.readWorkspaceRef(taskId)?.canonicalPath;
-    const task = this.#store.readTask(taskId);
-    const resolved = path.resolve(recorded ?? task.worktree_path ?? task.workspace);
+    const task = recorded ? null : this.#store.readTask(taskId);
+    const resolved = path.resolve(recorded ?? task!.worktree_path ?? task!.workspace);
     return process.platform === "win32" ? resolved.toLocaleLowerCase("en-US") : resolved;
   }
 
@@ -605,7 +656,7 @@ export class BridgeTaskManager implements ProgressTaskManager {
       this.#store.appendEvent(taskId, "error", result.summary, { error_code: "spawn_failed" }, finishedAt);
       return;
     }
-    this.#store.writeStatus(taskId, { worker_pid: pid });
+    this.#store.patchRunningAttempt(taskId, status.attempt, { worker_pid: pid });
     this.#store.appendEvent(taskId, "worker_started", "Bridge worker started", { worker_pid: pid });
   }
 
@@ -668,9 +719,25 @@ export class BridgeTaskManager implements ProgressTaskManager {
   }
 
   #exclusive<T>(operation: () => Promise<T>): Promise<T> {
-    const run = this.#mutex.then(operation, operation);
+    const locked = () => withProcessLock(path.join(this.#store.tasksRoot, ".manager.lock"), operation);
+    const run = this.#mutex.then(locked, locked);
     this.#mutex = run.catch(() => undefined);
     return run;
+  }
+
+  #safeStatus(taskId: string): ReturnType<TaskStore["readStatus"]> | null {
+    try {
+      const status = this.#store.readStatus(taskId);
+      this.#store.readTask(taskId);
+      this.#store.readWorkspaceRef(taskId);
+      this.#store.readResult(taskId);
+      this.#store.readAttemptMeta(taskId, status.attempt, "started.json");
+      this.#store.readAttemptMeta(taskId, status.attempt, "continue.json");
+      return status;
+    } catch (error) {
+      console.error(`Bridge skipped corrupt task ${taskId}: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    }
   }
 }
 
@@ -738,7 +805,7 @@ function buildInteractionAnswer(
 }
 
 function boundedReason(reason: string | undefined): string {
-  return (reason?.trim() || "Codex declined this request").slice(0, 2_000);
+  return (reason?.trim() || "the calling host declined this request").slice(0, 2_000);
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

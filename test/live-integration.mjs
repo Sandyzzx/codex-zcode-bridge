@@ -4,7 +4,7 @@
 //
 // Prerequisites: `npm run build`, a working ZCode runtime/provider setup, and
 // Python (`python` or the Windows `py -3` launcher) on PATH.
-// Usage: `npm run integration:live`
+// Usage: `node test/live-integration.mjs` (invokes a real model)
 // This is intentionally excluded from `npm test` to avoid model calls.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";

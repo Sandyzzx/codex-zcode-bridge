@@ -22,6 +22,7 @@ export interface BuildTaskResultInput {
   readonly outcome: ZCodeRunOutcome | null;
   readonly failure?: TaskFailure | null;
   readonly cancelled?: boolean;
+  readonly sessionId?: string | null;
 }
 
 export function buildTaskResult(input: BuildTaskResultInput): TaskResult {
@@ -33,10 +34,10 @@ export function buildTaskResult(input: BuildTaskResultInput): TaskResult {
     finished_at: finishedAt,
     zcode_output: outcome?.response ?? "",
     exit_code: outcome?.exitCode ?? null,
-    session_id: outcome?.sessionId ?? null,
+    session_id: outcome?.sessionId ?? input.sessionId ?? null,
   };
 
-  if (input.cancelled) {
+  if (input.cancelled || outcome?.cancelled) {
     return {
       ...base,
       status: "cancelled",

@@ -156,7 +156,7 @@ test("logs are append-only, separate, and byte-bounded", async () => {
   }
 });
 
-test("result.json exists only after a terminal write; archive moves it into attempts/", async () => {
+test("archive preserves the current result until the continuation status is committed", async () => {
   const root = await makeTempDir("store");
   try {
     const store = new TaskStore(root);
@@ -182,7 +182,9 @@ test("result.json exists only after a terminal write; archive moves it into atte
     store.writeAttemptMeta("task_1", 1, "outcome.json", { ok: true });
     store.writeAttemptFile("task_1", 1, "prompt.txt", "PROMPT TEXT");
     store.archiveResultToAttempt("task_1", 1);
-    assert.equal(store.readResult("task_1"), null, "result.json must move out of the task dir");
+    assert.equal(store.readResult("task_1")?.summary, "done", "the previous result remains recoverable before status commit");
+    store.writeStatus("task_1", { status: "queued", attempt: 2 });
+    assert.equal(store.readResult("task_1"), null, "a previous attempt result cannot complete the new attempt");
     assert.equal(store.readArchivedResult("task_1", 1)?.summary, "done");
     assert.deepEqual(store.readAttemptMeta("task_1", 1, "outcome.json"), { ok: true });
     assert.equal(store.readAttemptText("task_1", 1, "prompt.txt"), "PROMPT TEXT");

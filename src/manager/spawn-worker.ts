@@ -6,6 +6,7 @@ import { closeSync, mkdirSync, openSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createWorkerEnv } from "../runtime/child-env.js";
+import { validateHostProfile, type BridgeHostProfile } from "../host/profile.js";
 
 export interface SpawnedWorker {
   readonly pid: number;
@@ -20,19 +21,22 @@ export function workerEntryPath(): string {
   return fileURLToPath(new URL("../worker/worker-main.js", import.meta.url));
 }
 
-export const defaultSpawnWorker: SpawnWorker = (dataRoot, taskId, attempt) => {
+export function createWorkerSpawner(host?: BridgeHostProfile): SpawnWorker {
+  if (host) validateHostProfile(host);
+  return (dataRoot, taskId, attempt) => {
   const attemptDir = path.join(dataRoot, ".tasks", taskId, "attempts", String(attempt));
   mkdirSync(attemptDir, { recursive: true });
   const stderrFd = openSync(path.join(attemptDir, "worker-stderr.log"), "a", 0o600);
   try {
-    const child = spawn(process.execPath, [workerEntryPath(), dataRoot, taskId], {
+    const child = spawn(process.execPath, [host?.workerEntryPath ?? workerEntryPath(), dataRoot, taskId, String(attempt)], {
       detached: true,
       shell: false,
       stdio: ["ignore", "ignore", stderrFd],
       windowsHide: true,
       cwd: dataRoot,
-      env: createWorkerEnv(process.env),
+      env: { ...createWorkerEnv(process.env), ...(host ? { ZCODE_BRIDGE_HOST_PROFILE: JSON.stringify(host) } : {}) },
     });
+    child.on("error", (error) => console.error(`Bridge worker spawn failed: ${error.message}`));
     child.unref();
     if (typeof child.pid !== "number") {
       throw new Error("worker process did not provide a pid");
@@ -41,4 +45,7 @@ export const defaultSpawnWorker: SpawnWorker = (dataRoot, taskId, attempt) => {
   } finally {
     closeSync(stderrFd);
   }
-};
+  };
+}
+
+export const defaultSpawnWorker: SpawnWorker = createWorkerSpawner();

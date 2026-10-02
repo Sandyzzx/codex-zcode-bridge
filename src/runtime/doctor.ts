@@ -29,8 +29,12 @@ export interface BridgeDoctorOptions {
 /** Read-only diagnostics. This does not create a ZCode session or modify either app's data. */
 export async function runBridgeDoctor(options: BridgeDoctorOptions = {}): Promise<DoctorReport> {
   const sourceEnv = options.env ?? process.env;
-  const env = loadPersistedRuntimeEnvironment(sourceEnv, options.resolver?.homeDir);
+  let env = sourceEnv;
   const checks: DoctorCheck[] = [];
+  try { env = loadPersistedRuntimeEnvironment(sourceEnv, options.resolver?.homeDir, options.resolver?.host); }
+  catch (error) {
+    return { checked_at: new Date().toISOString(), execution_mode: "unknown", checks: [{ name: "runtime_settings", status: "error", summary: safeError(error) }] };
+  }
 
   const [major, minor] = process.versions.node.split(".").map(Number);
   const nodeOk = major! > 22 || (major === 22 && minor! >= 18);

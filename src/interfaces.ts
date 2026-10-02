@@ -12,8 +12,8 @@ export type TaskStatus =
 
 export interface TaskPackage {
   task_id: string;
-  workspace: string; // absolute Codex project path; also the ZCode Desktop project identity
-  /** Optional actual execution directory chosen and prepared by Codex. Bridge never creates or selects it. */
+  workspace: string; // absolute the calling host project path; also the ZCode Desktop project identity
+  /** Optional actual execution directory chosen and prepared by the calling host. Bridge never creates or selects it. */
   worktree_path?: string;
   /** Optional per-task ZCode model override. Omitted means use ZCode defaults. */
   model?: ZCodeModelSelection;

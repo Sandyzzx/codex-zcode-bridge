@@ -234,5 +234,5 @@ export async function makeManagerFixture(options: {
 
 import { runWorkerTask } from "../src/worker/run-task.js";
 async function runWorkerCompat(dataRoot: string, taskId: string, adapter: FakeAdapter): Promise<unknown> {
-  return runWorkerTask({ dataRoot, taskId, adapter });
+  return runWorkerTask({ dataRoot, taskId, attempt: new TaskStore(dataRoot).readStatus(taskId).attempt, adapter });
 }

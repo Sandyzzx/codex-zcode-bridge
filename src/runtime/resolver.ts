@@ -13,6 +13,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { BridgeError } from "./errors.js";
 import type { RuntimeResolver, ZCodeRuntimeConfig } from "../interfaces.js";
+import { codexHostProfile, validateHostProfile, type BridgeHostProfile } from "../host/profile.js";
 
 const PERSISTED_RUNTIME_KEYS = [
   "ZCODE_BRIDGE_NODE",
@@ -36,8 +37,9 @@ const PERSISTED_RUNTIME_KEYS = [
  * The config file takes precedence over process variables; environment values
  * remain a fallback for standalone use and migration from older installs.
  */
-export function loadPersistedRuntimeEnvironment(source: NodeJS.ProcessEnv, homeDir = homedir()): NodeJS.ProcessEnv {
-  const settingsPaths = [path.join(homeDir, ".codex", "codex-zcode-bridge", "runtime-config.json")];
+export function loadPersistedRuntimeEnvironment(source: NodeJS.ProcessEnv, homeDir = homedir(), host: BridgeHostProfile = codexHostProfile(homeDir)): NodeJS.ProcessEnv {
+  validateHostProfile(host);
+  const settingsPaths = [host.settingsDirectory, ...(host.legacySettingsDirectories ?? [])].map((directory) => path.join(directory, "runtime-config.json"));
   const legacyDataRoot = source["ZCODE_BRIDGE_DATA_DIR"]?.trim();
   if (legacyDataRoot && path.isAbsolute(legacyDataRoot)) {
     settingsPaths.push(path.join(legacyDataRoot, "runtime-config.json"));
@@ -51,14 +53,16 @@ export function loadPersistedRuntimeEnvironment(source: NodeJS.ProcessEnv, homeD
     if (seenPaths.has(identity)) continue;
     seenPaths.add(identity);
     try {
-      if (statSync(normalized).size > 64 * 1024) continue;
+      if (statSync(normalized).size > 64 * 1024) throw new Error("runtime settings exceed 64 KB");
       const candidate: unknown = JSON.parse(readFileSync(normalized, "utf8"));
       if (isPlainObject(candidate)) {
         parsed = candidate;
         break;
       }
-    } catch {
-      // Try the legacy location when the canonical file is missing or invalid.
+      throw new Error("runtime settings must be an object");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw new BridgeError("provider_config_invalid", `invalid Bridge runtime settings: ${normalized}`, { cause: error });
     }
   }
   if (!parsed) return { ...source };
@@ -71,6 +75,7 @@ export function loadPersistedRuntimeEnvironment(source: NodeJS.ProcessEnv, homeD
     // left by older installers and allow ordinary runtime discovery.
     if (typeof value === "string") env[key] = value.trim();
     else if (value === null) env[key] = "";
+    else throw new BridgeError("provider_config_invalid", `Bridge runtime setting ${key} must be a string or null`);
   }
   return env;
 }
@@ -82,21 +87,24 @@ export interface RuntimeResolverOptions {
   homeDir?: string;
   /** Bridge installation directory used as the default data root; auto-detected otherwise. */
   packageRoot?: string;
+  host?: BridgeHostProfile;
 }
 
 export class NodeRuntimeResolver implements RuntimeResolver {
   readonly #env: NodeJS.ProcessEnv;
   readonly #homeDir: string;
   readonly #packageRoot: string | null;
+  readonly #host: BridgeHostProfile;
 
   constructor(options: RuntimeResolverOptions = {}) {
     this.#env = options.env ?? process.env;
     this.#homeDir = options.homeDir ?? homedir();
     this.#packageRoot = options.packageRoot ?? null;
+    this.#host = validateHostProfile(options.host ?? codexHostProfile(this.#homeDir));
   }
 
   async resolve(): Promise<ZCodeRuntimeConfig> {
-    const env = loadPersistedRuntimeEnvironment(this.#env, this.#homeDir);
+    const env = loadPersistedRuntimeEnvironment(this.#env, this.#homeDir, this.#host);
     const zcodeHome = resolveZcodeHome(env);
 
     // Node executable: explicit override or `node` on PATH (frozen contract).
@@ -300,7 +308,7 @@ export class NodeRuntimeResolver implements RuntimeResolver {
     } catch (error) {
       throw new BridgeError(
         "provider_config_invalid",
-        `${label} is not valid JSON: ${filePath} (${errorText(error)})`,
+        `${label} is not valid JSON: ${filePath}`,
       );
     }
     if (!isPlainObject(parsed)) {

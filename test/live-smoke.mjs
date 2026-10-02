@@ -9,7 +9,7 @@
 //      or ZCODE_WINDOWS_APP_INSTALL_DIR / LOCALAPPDATA + ZCODE_DATA_BASE_DIR so
 //      the RuntimeResolver can discover them (see docs/ZCODE_RUNTIME.md).
 //
-// Usage: npm run smoke
+// Usage: node test/live-smoke.mjs (legacy CLI path; invokes a real model)
 // On configuration or transient release errors this script reports and stops;
 // it never retries or bisects environment combinations.
 import { mkdtemp, readFile, rm } from "node:fs/promises";

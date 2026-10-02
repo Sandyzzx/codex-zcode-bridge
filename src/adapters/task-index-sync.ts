@@ -18,7 +18,7 @@ export interface DesktopTaskIndexEntry {
   readonly databasePath: string;
   /** Project identity used by ZCode Desktop to group this task. */
   readonly workspaceKey: string;
-  /** Effective directory used by the ZCode session (project root or Codex-created worktree). */
+  /** Effective directory used by the ZCode session (project root or the calling host-created worktree). */
   readonly workspacePath: string;
   readonly sessionId: string;
   readonly bridgeTaskId: string;
@@ -162,7 +162,15 @@ async function withDatabase<T>(databasePath: string, operation: (database: Datab
     let database: Database | null = null;
     try {
       database = new DatabaseSync(databasePath, { timeout: 1000 });
-      return operation(database);
+      database.exec("BEGIN IMMEDIATE");
+      try {
+        const result = operation(database);
+        database.exec("COMMIT");
+        return result;
+      } catch (error) {
+        database.exec("ROLLBACK");
+        throw error;
+      }
     } catch (error) {
       lastError = error;
       if (attempt < 2 && isDatabaseBusy(error)) {

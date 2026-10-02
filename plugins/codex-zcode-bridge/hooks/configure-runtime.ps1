@@ -27,14 +27,15 @@ if ($legacyDataRoot -and [IO.Path]::IsPathRooted($legacyDataRoot)) {
 foreach ($settingsCandidate in ($settingsCandidates | Select-Object -Unique)) {
     if (-not (Test-Path -LiteralPath $settingsCandidate -PathType Leaf)) { continue }
     try {
-        if ((Get-Item -LiteralPath $settingsCandidate).Length -gt 65536) { continue }
+        if ((Get-Item -LiteralPath $settingsCandidate).Length -gt 65536) { throw "Runtime settings exceed 64 KB." }
         $candidateSettings = Get-Content -LiteralPath $settingsCandidate -Raw | ConvertFrom-Json
         if ($null -ne $candidateSettings -and $candidateSettings -isnot [Array] -and $candidateSettings -is [PSCustomObject]) {
             $script:RuntimeSettings = $candidateSettings
             break
         }
+        throw "Runtime settings must be a JSON object."
     } catch {
-        Write-Warning "Could not read Bridge runtime settings from $settingsCandidate; checking fallback sources."
+        throw "Invalid Bridge runtime settings at $settingsCandidate. Repair the file before configuring the runtime."
     }
 }
 
@@ -52,6 +53,7 @@ function Get-ConfiguredEnvironmentValue {
         $setting = $script:RuntimeSettings.PSObject.Properties[$Name]
         if ($null -ne $setting) {
             if ($null -eq $setting.Value) { return $null }
+            if ($setting.Value -isnot [string]) { throw "Bridge runtime setting $Name must be a string or null." }
             $settingValue = ([string]$setting.Value).Trim()
             if ($settingValue) { return $settingValue }
             return $null
@@ -135,7 +137,17 @@ function Write-BridgeRuntimeSettings {
     $temporaryPath = "$settingsPath.$([guid]::NewGuid().ToString('N')).tmp"
     if (-not $PSCmdlet.ShouldProcess($settingsPath, "Write discovered Bridge runtime settings")) { return }
     try {
-        $json = $Settings | ConvertTo-Json -Depth 5
+        $mergedSettings = [ordered]@{}
+        if (Test-Path -LiteralPath $settingsPath -PathType Leaf) {
+            $currentSettings = [IO.File]::ReadAllText($settingsPath) | ConvertFrom-Json
+            if ($currentSettings -isnot [PSCustomObject]) { throw "Existing runtime settings must be an object." }
+            foreach ($property in $currentSettings.PSObject.Properties) { $mergedSettings[$property.Name] = $property.Value }
+        } elseif ($null -ne $script:RuntimeSettings) {
+            foreach ($property in $script:RuntimeSettings.PSObject.Properties) { $mergedSettings[$property.Name] = $property.Value }
+        }
+        foreach ($key in $Settings.Keys) { $mergedSettings[$key] = $Settings[$key] }
+        $json = $mergedSettings | ConvertTo-Json -Depth 100 -WarningAction Stop
+        if ([Text.Encoding]::UTF8.GetByteCount($json) -gt 65536) { throw "Updated runtime settings exceed 64 KB." }
         if (Test-Path -LiteralPath $settingsPath -PathType Leaf) {
             $existing = [IO.File]::ReadAllText($settingsPath)
             if ($existing.Trim() -ceq $json.Trim()) {

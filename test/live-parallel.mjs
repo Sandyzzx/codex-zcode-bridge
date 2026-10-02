@@ -1,6 +1,6 @@
 // Manual live E2E for simultaneous sessions across two project roots.
 // Requires a configured ZCode runtime and an entitled coding-plan model.
-// Usage: npm run integration:parallel
+// Usage: node test/live-parallel.mjs (invokes real models)
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";

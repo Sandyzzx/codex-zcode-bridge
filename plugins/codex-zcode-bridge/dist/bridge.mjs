@@ -1,8 +1,14 @@
+#!/usr/bin/env node
 var __defProp = Object.defineProperty;
 var __export = (target, all) => {
   for (var name in all)
     __defProp(target, name, { get: all[name], enumerable: true });
 };
+
+// src/mcp/main.ts
+import { realpathSync as realpathSync2 } from "node:fs";
+import path11 from "node:path";
+import { fileURLToPath as fileURLToPath3 } from "node:url";
 
 // node_modules/@modelcontextprotocol/server/dist/chunk-Br0eD_fh.mjs
 var __create = Object.create;
@@ -297,10 +303,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path9) {
-  if (!path9)
+function getElementAtPath(obj, path12) {
+  if (!path12)
     return obj;
-  return path9.reduce((acc, key) => acc?.[key], obj);
+  return path12.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -640,11 +646,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path9, issues) {
+function prefixIssues(path12, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path9);
+    iss.path.unshift(path12);
     return iss;
   });
 }
@@ -1093,16 +1099,16 @@ function flattenError(error2, mapper = (issue2) => issue2.message) {
 }
 function formatError(error2, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error3, path9 = []) => {
+  const processError = (error3, path12 = []) => {
     for (const issue2 of error3.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path9, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path12, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path9, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path12, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path9, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path12, ...issue2.path]);
       } else {
-        const fullpath = [...path9, ...issue2.path];
+        const fullpath = [...path12, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -10445,9 +10451,9 @@ var rev2026Codec = {
     });
     const parsed = buildSchemas2026().RequestMetaEnvelopeSchema.safeParse(meta2);
     if (!parsed.success) for (const issue2 of parsed.error.issues) {
-      const path9 = issue2.path.map(String);
-      const key = path9.length > 0 ? path9.join(".") : "_meta";
-      if (path9.length === 1 && issues.some((existing) => existing.key === key && existing.problem === "missing")) continue;
+      const path12 = issue2.path.map(String);
+      const key = path12.length > 0 ? path12.join(".") : "_meta";
+      if (path12.length === 1 && issues.some((existing) => existing.key === key && existing.problem === "missing")) continue;
       issues.push({
         key,
         problem: issue2.message
@@ -10768,29 +10774,29 @@ var PERMITTED_X_MCP_HEADER_TYPES = /* @__PURE__ */ new Set([
 function scanXMcpHeaderDeclarations(inputSchema) {
   const declarations = [];
   const seenLower = /* @__PURE__ */ new Map();
-  const visit = (node2, path9, reachable) => {
+  const visit = (node2, path12, reachable) => {
     if (node2 === null || typeof node2 !== "object") return void 0;
     const schema = node2;
     if (X_MCP_HEADER_KEY in schema) {
-      if (!reachable || path9.length === 0) return `${pathName(path9)}: x-mcp-header is only permitted on properties statically reachable via a chain of 'properties' keys (not under items, additionalProperties, oneOf/anyOf/allOf/not, if/then/else, or $ref)`;
+      if (!reachable || path12.length === 0) return `${pathName(path12)}: x-mcp-header is only permitted on properties statically reachable via a chain of 'properties' keys (not under items, additionalProperties, oneOf/anyOf/allOf/not, if/then/else, or $ref)`;
       const raw = schema[X_MCP_HEADER_KEY];
-      if (typeof raw !== "string" || raw.length === 0) return `${pathName(path9)}: x-mcp-header MUST be a non-empty string`;
-      if (!RFC9110_TOKEN.test(raw)) return `${pathName(path9)}: x-mcp-header '${raw}' is not a valid RFC 9110 token (no spaces, control characters or HTTP delimiters)`;
+      if (typeof raw !== "string" || raw.length === 0) return `${pathName(path12)}: x-mcp-header MUST be a non-empty string`;
+      if (!RFC9110_TOKEN.test(raw)) return `${pathName(path12)}: x-mcp-header '${raw}' is not a valid RFC 9110 token (no spaces, control characters or HTTP delimiters)`;
       const type = typeof schema.type === "string" ? schema.type : void 0;
-      if (type === void 0 || !PERMITTED_X_MCP_HEADER_TYPES.has(type)) return `${pathName(path9)}: x-mcp-header is only permitted on primitive-typed properties (string, integer, boolean); got ${type ?? "<none>"}`;
+      if (type === void 0 || !PERMITTED_X_MCP_HEADER_TYPES.has(type)) return `${pathName(path12)}: x-mcp-header is only permitted on primitive-typed properties (string, integer, boolean); got ${type ?? "<none>"}`;
       const lower = raw.toLowerCase();
       const prior = seenLower.get(lower);
       if (prior !== void 0) return `x-mcp-header '${raw}' is not case-insensitively unique (also declared as '${prior}')`;
       seenLower.set(lower, raw);
       declarations.push({
-        path: path9,
+        path: path12,
         headerName: raw,
         type
       });
     }
     const properties = schema.properties;
     if (properties !== null && typeof properties === "object") for (const [key, child] of Object.entries(properties)) {
-      const fault$1 = visit(child, [...path9, key], reachable);
+      const fault$1 = visit(child, [...path12, key], reachable);
       if (fault$1 !== void 0) return fault$1;
     }
     for (const k of NON_REACHABLE_SUBSCHEMA_KEYWORDS) {
@@ -10798,7 +10804,7 @@ function scanXMcpHeaderDeclarations(inputSchema) {
       if (sub === void 0) continue;
       const branches = Array.isArray(sub) ? sub : sub !== null && typeof sub === "object" && OBJECT_VALUED_SUBSCHEMA_KEYWORDS.has(k) ? Object.values(sub) : [sub];
       for (const branch of branches) {
-        const fault$1 = visit(branch, [...path9, `<${k}>`], false);
+        const fault$1 = visit(branch, [...path12, `<${k}>`], false);
         if (fault$1 !== void 0) return fault$1;
       }
     }
@@ -10838,8 +10844,8 @@ var OBJECT_VALUED_SUBSCHEMA_KEYWORDS = /* @__PURE__ */ new Set([
   "$defs",
   "definitions"
 ]);
-function pathName(path9) {
-  return path9.length === 0 ? "<root>" : path9.join(".");
+function pathName(path12) {
+  return path12.length === 0 ? "<root>" : path12.join(".");
 }
 var HEADER_MISMATCH_ERROR_CODE = -32020;
 var INBOUND_VALIDATION_LADDER = [
@@ -11128,7 +11134,7 @@ var PROPERTY_KEYS_BY_TYPE = {
   array: shapeKeys([UntitledMultiSelectEnumSchemaSchema, TitledMultiSelectEnumSchemaSchema])
 };
 var SUPPORTED_STRING_FORMATS = new Set(StringSchemaSchema.shape.format.unwrap().options);
-function walkProperty(node2, path9, vendor, unsupported) {
+function walkProperty(node2, path12, vendor, unsupported) {
   if (!isJsonObject(node2)) return node2;
   const allowedKeys = typeof node2.type === "string" && Object.hasOwn(PROPERTY_KEYS_BY_TYPE, node2.type) ? PROPERTY_KEYS_BY_TYPE[node2.type] : void 0;
   if (allowedKeys === void 0) return node2;
@@ -11136,8 +11142,8 @@ function walkProperty(node2, path9, vendor, unsupported) {
   for (const [key, value] of Object.entries(node2)) if (allowedKeys.has(key) || isAnnotationOnlyJsonSchemaKeyword(key)) pruned[key] = value;
   else if (key === "pattern" && node2.type === "string" && typeof node2.format === "string") {
     if (!SUPPORTED_STRING_FORMATS.has(node2.format)) pruned[key] = value;
-    else if (typeof value !== "string" || !isLibraryFormatPattern(node2.format, value, vendor)) unsupported.push(`${path9}.${key}`);
-  } else unsupported.push(`${path9}.${key}`);
+    else if (typeof value !== "string" || !isLibraryFormatPattern(node2.format, value, vendor)) unsupported.push(`${path12}.${key}`);
+  } else unsupported.push(`${path12}.${key}`);
   return pruned;
 }
 function walkRequestedSchema(converted, vendor) {
@@ -11154,11 +11160,11 @@ function describeUnsupportedProperties(pruned, fallback) {
   const offenders = Object.entries(pruned.properties).filter(([, node2]) => !parseSchema(PrimitiveSchemaDefinitionSchema, node2).success).map(([name]) => `properties.${name}`);
   return offenders.length > 0 ? offenders.join(", ") : fallback;
 }
-function findDroppedConstraintPaths(original, parsed, path9 = "") {
-  if (Array.isArray(original) && Array.isArray(parsed)) return original.flatMap((item, index) => findDroppedConstraintPaths(item, parsed[index], `${path9}[${index}]`));
+function findDroppedConstraintPaths(original, parsed, path12 = "") {
+  if (Array.isArray(original) && Array.isArray(parsed)) return original.flatMap((item, index) => findDroppedConstraintPaths(item, parsed[index], `${path12}[${index}]`));
   if (!isJsonObject(original) || !isJsonObject(parsed)) return [];
   return Object.entries(original).flatMap(([key, value]) => {
-    const childPath = path9 ? `${path9}.${key}` : key;
+    const childPath = path12 ? `${path12}.${key}` : key;
     if (!Object.prototype.hasOwnProperty.call(parsed, key)) return isAnnotationOnlyJsonSchemaKeyword(key) ? [] : [childPath];
     return findDroppedConstraintPaths(value, parsed[key], childPath);
   });
@@ -15237,8 +15243,8 @@ var require_utils = /* @__PURE__ */ __commonJSMin(((exports, module) => {
     for (let i = 0; i < str.length; i++) if (str[i] === token) ind++;
     return ind;
   }
-  function removeDotSegments(path9) {
-    let input = path9;
+  function removeDotSegments(path12) {
+    let input = path12;
     const output = [];
     let nextSlash = -1;
     let len = 0;
@@ -15391,8 +15397,8 @@ var require_schemes = /* @__PURE__ */ __commonJSMin(((exports, module) => {
       wsComponent.secure = void 0;
     }
     if (wsComponent.resourceName) {
-      const [path9, query] = wsComponent.resourceName.split("?");
-      wsComponent.path = path9 && path9 !== "/" ? path9 : void 0;
+      const [path12, query] = wsComponent.resourceName.split("?");
+      wsComponent.path = path12 && path12 !== "/" ? path12 : void 0;
       wsComponent.query = query;
       wsComponent.resourceName = void 0;
     }
@@ -21530,16 +21536,14 @@ function toError(value) {
   return value instanceof Error ? value : new Error(String(value));
 }
 
-// src/mcp/main.ts
-import { realpathSync as realpathSync2 } from "node:fs";
-import { homedir as homedir3 } from "node:os";
-import path8 from "node:path";
-import { fileURLToPath as fileURLToPath3 } from "node:url";
+// src/host/stdio.ts
+import { homedir as homedir4 } from "node:os";
+import path10 from "node:path";
 
 // src/runtime/resolver.ts
 import { accessSync, existsSync, readFileSync, statSync } from "node:fs";
-import { homedir } from "node:os";
-import path from "node:path";
+import { homedir as homedir2 } from "node:os";
+import path2 from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/runtime/errors.ts
@@ -21551,6 +21555,21 @@ var BridgeError = class extends Error {
     this.code = code;
   }
 };
+
+// src/host/profile.ts
+import { homedir } from "node:os";
+import path from "node:path";
+function codexHostProfile(homeDirectory = homedir()) {
+  return { name: "codex-zcode-bridge", settingsDirectory: path.join(homeDirectory, ".codex", "codex-zcode-bridge") };
+}
+function validateHostProfile(host) {
+  if (!host || typeof host.name !== "string" || !host.name.trim() || typeof host.settingsDirectory !== "string" || !path.isAbsolute(host.settingsDirectory)) throw new Error("invalid Bridge host profile");
+  if (host.legacySettingsDirectories !== void 0 && (!Array.isArray(host.legacySettingsDirectories) || host.legacySettingsDirectories.some((directory) => typeof directory !== "string" || !path.isAbsolute(directory)))) throw new Error("host migration directories must be absolute");
+  if (host.workerEntryPath !== void 0 && (typeof host.workerEntryPath !== "string" || !path.isAbsolute(host.workerEntryPath))) throw new Error("host worker entry must be absolute");
+  if (host.instructions !== void 0 && typeof host.instructions !== "string") throw new Error("host instructions must be text");
+  if (host.defaultDataRoot !== void 0 && (typeof host.defaultDataRoot !== "string" || !path.isAbsolute(host.defaultDataRoot))) throw new Error("host default data root must be absolute");
+  return host;
+}
 
 // src/runtime/resolver.ts
 var PERSISTED_RUNTIME_KEYS = [
@@ -21569,27 +21588,31 @@ var PERSISTED_RUNTIME_KEYS = [
   "ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS",
   "ZCODE_BRIDGE_TIMEOUT_MS"
 ];
-function loadPersistedRuntimeEnvironment(source, homeDir = homedir()) {
-  const settingsPaths = [path.join(homeDir, ".codex", "codex-zcode-bridge", "runtime-config.json")];
+function loadPersistedRuntimeEnvironment(source, homeDir = homedir2(), host = codexHostProfile(homeDir)) {
+  validateHostProfile(host);
+  const settingsPaths = [host.settingsDirectory, ...host.legacySettingsDirectories ?? []].map((directory) => path2.join(directory, "runtime-config.json"));
   const legacyDataRoot = source["ZCODE_BRIDGE_DATA_DIR"]?.trim();
-  if (legacyDataRoot && path.isAbsolute(legacyDataRoot)) {
-    settingsPaths.push(path.join(legacyDataRoot, "runtime-config.json"));
+  if (legacyDataRoot && path2.isAbsolute(legacyDataRoot)) {
+    settingsPaths.push(path2.join(legacyDataRoot, "runtime-config.json"));
   }
   let parsed = null;
   const seenPaths = /* @__PURE__ */ new Set();
   for (const settingsPath of settingsPaths) {
-    const normalized = path.resolve(settingsPath);
+    const normalized = path2.resolve(settingsPath);
     const identity = process.platform === "win32" ? normalized.toLocaleLowerCase("en-US") : normalized;
     if (seenPaths.has(identity)) continue;
     seenPaths.add(identity);
     try {
-      if (statSync(normalized).size > 64 * 1024) continue;
+      if (statSync(normalized).size > 64 * 1024) throw new Error("runtime settings exceed 64 KB");
       const candidate = JSON.parse(readFileSync(normalized, "utf8"));
       if (isPlainObject3(candidate)) {
         parsed = candidate;
         break;
       }
-    } catch {
+      throw new Error("runtime settings must be an object");
+    } catch (error2) {
+      if (error2.code === "ENOENT") continue;
+      throw new BridgeError("provider_config_invalid", `invalid Bridge runtime settings: ${normalized}`, { cause: error2 });
     }
   }
   if (!parsed) return { ...source };
@@ -21599,6 +21622,7 @@ function loadPersistedRuntimeEnvironment(source, homeDir = homedir()) {
     const value = parsed[key];
     if (typeof value === "string") env[key] = value.trim();
     else if (value === null) env[key] = "";
+    else throw new BridgeError("provider_config_invalid", `Bridge runtime setting ${key} must be a string or null`);
   }
   return env;
 }
@@ -21606,13 +21630,15 @@ var NodeRuntimeResolver = class {
   #env;
   #homeDir;
   #packageRoot;
+  #host;
   constructor(options = {}) {
     this.#env = options.env ?? process.env;
-    this.#homeDir = options.homeDir ?? homedir();
+    this.#homeDir = options.homeDir ?? homedir2();
     this.#packageRoot = options.packageRoot ?? null;
+    this.#host = validateHostProfile(options.host ?? codexHostProfile(this.#homeDir));
   }
   async resolve() {
-    const env = loadPersistedRuntimeEnvironment(this.#env, this.#homeDir);
+    const env = loadPersistedRuntimeEnvironment(this.#env, this.#homeDir, this.#host);
     const zcodeHome = resolveZcodeHome(env);
     let nodeExecutable = "node";
     const nodeOverride = env["ZCODE_BRIDGE_NODE"]?.trim();
@@ -21676,11 +21702,11 @@ var NodeRuntimeResolver = class {
         this.#validatePersonalConfig(personalEnv);
         personalConfigFile = personalEnv;
       } else {
-        const candidates = zcodeHome ? [path.join(zcodeHome, "v2", "provider_config.json")] : [
+        const candidates = zcodeHome ? [path2.join(zcodeHome, "v2", "provider_config.json")] : [
           env["ZCODE_DATA_BASE_DIR"]?.trim(),
           ...configuredDataBaseDirs(this.#homeDir),
           this.#homeDir
-        ].filter((base) => Boolean(base)).filter((base, index, values) => values.indexOf(base) === index).map((base) => path.join(base, ".zcode", "v2", "provider_config.json"));
+        ].filter((base) => Boolean(base)).filter((base, index, values) => values.indexOf(base) === index).map((base) => path2.join(base, ".zcode", "v2", "provider_config.json"));
         const existing = candidates.filter((candidate) => existsSync(candidate));
         if (existing.length === 0) {
           throw new BridgeError(
@@ -21708,7 +21734,7 @@ var NodeRuntimeResolver = class {
         personalConfigFile = accepted;
       }
     }
-    if (zcodeHome && !samePath(personalConfigFile, path.join(zcodeHome, "v2", "provider_config.json"))) {
+    if (zcodeHome && !samePath(personalConfigFile, path2.join(zcodeHome, "v2", "provider_config.json"))) {
       throw new BridgeError(
         "provider_config_invalid",
         `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE must be ZCODE_HOME/v2/provider_config.json (${zcodeHome})`
@@ -21717,12 +21743,12 @@ var NodeRuntimeResolver = class {
     const dataOverride = env["ZCODE_BRIDGE_DATA_DIR"]?.trim();
     let dataRoot;
     if (dataOverride) {
-      if (!path.isAbsolute(dataOverride)) {
+      if (!path2.isAbsolute(dataOverride)) {
         throw new Error(
           `ZCODE_BRIDGE_DATA_DIR must be an absolute path when set, got: ${dataOverride}`
         );
       }
-      dataRoot = path.normalize(dataOverride);
+      dataRoot = path2.normalize(dataOverride);
     } else {
       dataRoot = this.#packageRoot ?? findPackageRoot();
     }
@@ -21790,7 +21816,7 @@ var NodeRuntimeResolver = class {
     } catch (error2) {
       throw new BridgeError(
         "provider_config_invalid",
-        `${label} is not valid JSON: ${filePath} (${errorText(error2)})`
+        `${label} is not valid JSON: ${filePath}`
       );
     }
     if (!isPlainObject3(parsed)) {
@@ -21802,20 +21828,20 @@ var NodeRuntimeResolver = class {
 function installCandidates(env, relative) {
   const roots = [
     env["ZCODE_WINDOWS_APP_INSTALL_DIR"]?.trim(),
-    env["LOCALAPPDATA"]?.trim() ? path.join(env["LOCALAPPDATA"].trim(), "Programs", "ZCode") : null,
-    env["ProgramFiles"]?.trim() ? path.join(env["ProgramFiles"].trim(), "ZCode") : null
+    env["LOCALAPPDATA"]?.trim() ? path2.join(env["LOCALAPPDATA"].trim(), "Programs", "ZCode") : null,
+    env["ProgramFiles"]?.trim() ? path2.join(env["ProgramFiles"].trim(), "ZCode") : null
   ].filter((root) => Boolean(root));
-  return roots.map((root) => path.join(root, ...relative));
+  return roots.map((root) => path2.join(root, ...relative));
 }
 function configuredDataBaseDirs(homeDir) {
-  const candidates = [path.join(homeDir, ".zcode", "v2", "setting.json")];
+  const candidates = [path2.join(homeDir, ".zcode", "v2", "setting.json")];
   for (const settingPath of candidates) {
     try {
       const parsed = JSON.parse(readFileSync(settingPath, "utf8"));
       if (!isPlainObject3(parsed)) continue;
       const dataBaseDir = parsed["dataBaseDir"];
-      if (typeof dataBaseDir === "string" && path.isAbsolute(dataBaseDir.trim())) {
-        return [path.normalize(dataBaseDir.trim())];
+      if (typeof dataBaseDir === "string" && path2.isAbsolute(dataBaseDir.trim())) {
+        return [path2.normalize(dataBaseDir.trim())];
       }
     } catch {
     }
@@ -21825,11 +21851,11 @@ function configuredDataBaseDirs(homeDir) {
 function resolveZcodeHome(env) {
   const configured = env["ZCODE_HOME"]?.trim();
   if (!configured) return null;
-  if (!path.isAbsolute(configured)) {
+  if (!path2.isAbsolute(configured)) {
     throw new BridgeError("provider_config_invalid", "ZCODE_HOME must be an absolute path");
   }
-  const resolved = path.normalize(configured);
-  if (path.basename(resolved).toLowerCase() !== ".zcode") {
+  const resolved = path2.normalize(configured);
+  if (path2.basename(resolved).toLowerCase() !== ".zcode") {
     throw new BridgeError(
       "provider_config_invalid",
       "ZCODE_HOME must name a .zcode directory so app-server can use the same data root"
@@ -21846,8 +21872,8 @@ function resolveZcodeHome(env) {
   return resolved;
 }
 function samePath(left, right) {
-  const resolvedLeft = path.resolve(left);
-  const resolvedRight = path.resolve(right);
+  const resolvedLeft = path2.resolve(left);
+  const resolvedRight = path2.resolve(right);
   return process.platform === "win32" ? resolvedLeft.toLowerCase() === resolvedRight.toLowerCase() : resolvedLeft === resolvedRight;
 }
 function isReadableFile(filePath) {
@@ -21860,12 +21886,12 @@ function isReadableFile(filePath) {
   }
 }
 function findPackageRoot(startDir) {
-  let current = startDir ?? path.dirname(fileURLToPath(import.meta.url));
+  let current = startDir ?? path2.dirname(fileURLToPath(import.meta.url));
   for (let depth = 0; depth < 10; depth++) {
-    if (existsSync(path.join(current, "package.json"))) {
+    if (existsSync(path2.join(current, "package.json"))) {
       return current;
     }
-    const parent = path.dirname(current);
+    const parent = path2.dirname(current);
     if (parent === current) break;
     current = parent;
   }
@@ -21887,10 +21913,123 @@ function errorText(error2) {
 }
 
 // src/store/task-store.ts
-import { appendFileSync, chmodSync, closeSync, existsSync as existsSync2, mkdirSync, openSync, readFileSync as readFileSync2, readSync, readdirSync, renameSync, rmSync, rmdirSync, statSync as statSync2, writeFileSync } from "node:fs";
-import { createHash, randomUUID } from "node:crypto";
-import path2 from "node:path";
+import { appendFileSync, chmodSync, closeSync, copyFileSync, existsSync as existsSync2, mkdirSync as mkdirSync2, openSync, readFileSync as readFileSync3, readSync, readdirSync, rmSync, statSync as statSync3, writeFileSync as writeFileSync2 } from "node:fs";
+import { createHash, randomUUID as randomUUID2 } from "node:crypto";
+import path4 from "node:path";
 import { StringDecoder } from "node:string_decoder";
+
+// src/store/process-lock.ts
+import { mkdirSync, readFileSync as readFileSync2, renameSync, rmdirSync, statSync as statSync2, unlinkSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import path3 from "node:path";
+async function withProcessLock(directory, operation) {
+  const deadline = Date.now() + 3e4;
+  let release;
+  while (!(release = tryAcquireProcessLock(directory))) {
+    if (Date.now() >= deadline) throw new Error(`timed out waiting for process lock: ${directory}`);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  try {
+    return await operation();
+  } finally {
+    release();
+  }
+}
+function tryAcquireProcessLock(directory) {
+  const token = randomUUID();
+  try {
+    mkdirSync(directory, { mode: 448 });
+    writeFileSync(path3.join(directory, "owner.json"), JSON.stringify({ pid: process.pid, token }), { mode: 384 });
+  } catch (error2) {
+    if (error2.code !== "EEXIST") throw error2;
+    try {
+      const owner = JSON.parse(readFileSync2(path3.join(directory, "owner.json"), "utf8"));
+      if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0) throw new Error("invalid lock owner");
+      try {
+        process.kill(owner.pid, 0);
+      } catch (failure2) {
+        if (failure2.code === "ESRCH") {
+          if (reclaimDeadOwner(directory)) return tryAcquireProcessLock(directory);
+        }
+      }
+    } catch {
+      try {
+        if (Date.now() - statSync2(directory).mtimeMs > 3e4) throw new Error(`unreadable lock owner: ${directory}`);
+      } catch (failure2) {
+        if (failure2.code !== "ENOENT") throw failure2;
+      }
+    }
+    return null;
+  }
+  return () => {
+    const owner = JSON.parse(readFileSync2(path3.join(directory, "owner.json"), "utf8"));
+    if (owner.token !== token) throw new Error("process lock ownership changed");
+    unlinkSync(path3.join(directory, "owner.json"));
+    rmdirSync(directory);
+  };
+}
+function reclaimDeadOwner(directory) {
+  const guard = `${directory}.reclaim`;
+  try {
+    mkdirSync(guard);
+  } catch (error2) {
+    if (error2.code === "EEXIST") return false;
+    throw error2;
+  }
+  try {
+    const owner = JSON.parse(readFileSync2(path3.join(directory, "owner.json"), "utf8"));
+    if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0) return false;
+    try {
+      process.kill(owner.pid, 0);
+      return false;
+    } catch (error2) {
+      if (error2.code !== "ESRCH") return false;
+    }
+    const retired = `${directory}.${randomUUID()}.retired`;
+    renameSync(directory, retired);
+    unlinkSync(path3.join(retired, "owner.json"));
+    rmdirSync(retired);
+    return true;
+  } catch (error2) {
+    if (error2.code !== "ENOENT") throw error2;
+    return false;
+  } finally {
+    rmdirSync(guard);
+  }
+}
+
+// src/store/atomic-rename.ts
+import { renameSync as renameSync2 } from "node:fs";
+import { rename } from "node:fs/promises";
+function retryable(error2, deadline) {
+  return process.platform === "win32" && Date.now() < deadline && ["EPERM", "EBUSY", "EACCES"].includes(error2.code ?? "");
+}
+function atomicRenameSync(source, target) {
+  const deadline = Date.now() + 2e3;
+  while (true) {
+    try {
+      renameSync2(source, target);
+      return;
+    } catch (error2) {
+      if (!retryable(error2, deadline)) throw error2;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    }
+  }
+}
+async function atomicRename(source, target) {
+  const deadline = Date.now() + 2e3;
+  while (true) {
+    try {
+      await rename(source, target);
+      return;
+    } catch (error2) {
+      if (!retryable(error2, deadline)) throw error2;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+}
+
+// src/store/task-store.ts
 var TASK_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 var DEFAULT_MAX_LOG_BYTES = 10 * 1024 * 1024;
 var MAX_CRITICAL_EVENT_RESERVE_BYTES = 256 * 1024;
@@ -21918,7 +22057,7 @@ var TaskStore = class {
   #maxEventBytes;
   constructor(dataRoot, options = {}) {
     this.#dataRoot = dataRoot;
-    this.#tasksRoot = path2.join(dataRoot, ".tasks");
+    this.#tasksRoot = path4.join(dataRoot, ".tasks");
     this.#maxLogBytes = options.maxLogBytes ?? DEFAULT_MAX_LOG_BYTES;
     this.#maxEventBytes = options.maxEventBytes ?? DEFAULT_MAX_LOG_BYTES;
     privateMkdir(this.#tasksRoot);
@@ -21936,11 +22075,11 @@ var TaskStore = class {
   }
   taskDir(taskId) {
     this.assertValidTaskId(taskId);
-    return path2.join(this.#tasksRoot, taskId);
+    return path4.join(this.#tasksRoot, taskId);
   }
   hasTask(taskId) {
     try {
-      return existsSync2(path2.join(this.taskDir(taskId), "status.json"));
+      return existsSync2(path4.join(this.taskDir(taskId), "status.json"));
     } catch {
       return false;
     }
@@ -21948,17 +22087,17 @@ var TaskStore = class {
   listTaskIds() {
     if (!existsSync2(this.#tasksRoot)) return [];
     return readdirSync(this.#tasksRoot).filter(
-      (entry) => existsSync2(path2.join(this.#tasksRoot, entry, "status.json"))
+      (entry) => existsSync2(path4.join(this.#tasksRoot, entry, "status.json"))
     );
   }
   createTask(task, createdAt) {
     this.assertValidTaskId(task.task_id);
     const dir = this.taskDir(task.task_id);
-    if (existsSync2(path2.join(dir, "task.json"))) {
+    if (existsSync2(path4.join(dir, "task.json"))) {
       throw new Error(`task already exists: ${task.task_id}`);
     }
-    privateMkdir(path2.join(dir, "attempts"));
-    this.#writeJsonAtomic(path2.join(dir, "task.json"), task);
+    privateMkdir(path4.join(dir, "attempts"));
+    this.#writeJsonAtomic(path4.join(dir, "task.json"), task);
     const status = {
       task_id: task.task_id,
       status: "queued",
@@ -21971,85 +22110,132 @@ var TaskStore = class {
       zcode_session_id: null,
       exit_code: null
     };
-    this.#writeJsonAtomic(path2.join(dir, "status.json"), status);
+    this.#writeJsonAtomic(path4.join(dir, "status.json"), status);
   }
   readTask(taskId) {
-    const file = path2.join(this.taskDir(taskId), "task.json");
+    const file = path4.join(this.taskDir(taskId), "task.json");
     const parsed = this.#readJson(file);
-    return parsed;
+    const task = parsed;
+    if (!task || task.task_id !== taskId || typeof task.workspace !== "string" || !task.workspace || typeof task.objective !== "string" || [task.requirements, task.allowed_paths, task.forbidden_paths, task.acceptance_criteria, task.test_commands].some((items) => !Array.isArray(items) || items.some((item) => typeof item !== "string"))) throw new Error(`corrupt task record: ${file}`);
+    return task;
   }
   writeWorkspaceRef(taskId, workspace) {
-    this.#writeJsonAtomic(path2.join(this.taskDir(taskId), "workspace.json"), workspace);
+    this.#writeJsonAtomic(path4.join(this.taskDir(taskId), "workspace.json"), workspace);
   }
   readWorkspaceRef(taskId) {
-    const file = path2.join(this.taskDir(taskId), "workspace.json");
+    const file = path4.join(this.taskDir(taskId), "workspace.json");
     if (!existsSync2(file)) return null;
-    return this.#readJson(file);
+    const workspace = this.#readJson(file);
+    if (!workspace || typeof workspace.canonicalPath !== "string" || typeof workspace.requestedPath !== "string" || !["direct", "worktree"].includes(workspace.mode)) throw new Error(`corrupt workspace record: ${file}`);
+    return workspace;
   }
   readStatus(taskId) {
-    const file = path2.join(this.taskDir(taskId), "status.json");
+    const file = path4.join(this.taskDir(taskId), "status.json");
     const parsed = this.#readJson(file);
-    if (typeof parsed?.status !== "string") {
+    if (!parsed || parsed.task_id !== taskId || !["queued", "running", "completed", "failed", "cancelled", "waiting_for_master"].includes(parsed.status) || !Number.isSafeInteger(parsed.attempt) || parsed.attempt < 1 || typeof parsed.created_at !== "string") {
       throw new Error(`corrupt status record: ${file}`);
     }
     return parsed;
   }
   /** Read-merge-write with an updated timestamp; atomic via temp file + rename. */
-  writeStatus(taskId, patch) {
-    const current = this.readStatus(taskId);
-    const next = {
-      ...current,
-      ...patch,
-      task_id: current.task_id,
-      updated_at: (/* @__PURE__ */ new Date()).toISOString()
-    };
-    this.#writeJsonAtomic(path2.join(this.taskDir(taskId), "status.json"), next);
-    return next;
+  writeStatus(taskId, patch, expectedAttempt) {
+    return withEventLock(path4.join(this.taskDir(taskId), "state.lock"), () => {
+      const current = this.readStatus(taskId);
+      if (expectedAttempt !== void 0 && (current.attempt !== expectedAttempt || isTerminalStatus(current.status))) throw new Error("stale or terminal worker status rejected");
+      const next = {
+        ...current,
+        ...patch,
+        task_id: current.task_id,
+        updated_at: (/* @__PURE__ */ new Date()).toISOString()
+      };
+      this.#writeJsonAtomic(path4.join(this.taskDir(taskId), "status.json"), next);
+      return next;
+    });
   }
   readResult(taskId) {
-    const file = path2.join(this.taskDir(taskId), "result.json");
+    const file = path4.join(this.taskDir(taskId), "result.json");
     if (!existsSync2(file)) return null;
-    return this.#readJson(file);
+    const result = this.#readJson(file);
+    if (!result || result.task_id !== taskId || !Number.isSafeInteger(result.attempt) || !isTerminalStatus(result.status)) throw new Error(`corrupt result record: ${file}`);
+    return result.attempt === this.readStatus(taskId).attempt ? result : null;
   }
   writeResult(taskId, result) {
-    this.#writeJsonAtomic(path2.join(this.taskDir(taskId), "result.json"), result);
+    withEventLock(path4.join(this.taskDir(taskId), "state.lock"), () => {
+      if (this.readStatus(taskId).attempt !== result.attempt) throw new Error("stale worker attempt result rejected");
+      this.#writeJsonAtomic(path4.join(this.taskDir(taskId), "result.json"), result);
+    });
   }
-  /** Moves the current terminal result.json to attempts/<attempt>/result.json. */
+  commitWorkerResult(taskId, attempt, result, patch) {
+    withEventLock(path4.join(this.taskDir(taskId), "state.lock"), () => {
+      this.assertWorkerAttempt(taskId, attempt);
+      this.#writeJsonAtomic(path4.join(this.taskDir(taskId), "result.json"), result);
+      const current = this.readStatus(taskId);
+      this.#writeJsonAtomic(path4.join(this.taskDir(taskId), "status.json"), { ...current, ...patch, task_id: taskId, attempt, updated_at: (/* @__PURE__ */ new Date()).toISOString() });
+    });
+  }
+  patchRunningAttempt(taskId, attempt, patch) {
+    withEventLock(path4.join(this.taskDir(taskId), "state.lock"), () => {
+      const current = this.readStatus(taskId);
+      if (current.attempt !== attempt || current.status !== "running") return;
+      this.#writeJsonAtomic(path4.join(this.taskDir(taskId), "status.json"), { ...current, ...patch, updated_at: (/* @__PURE__ */ new Date()).toISOString() });
+    });
+  }
+  /** Copies evidence before the continuation status commit; the old result remains recoverable. */
   archiveResultToAttempt(taskId, attempt) {
     const dir = this.taskDir(taskId);
-    const source = path2.join(dir, "result.json");
+    const source = path4.join(dir, "result.json");
     if (!existsSync2(source)) return;
     const targetDir = this.attemptDir(taskId, attempt);
     privateMkdir(targetDir);
-    renameSync(source, path2.join(targetDir, "result.json"));
+    copyFileSync(source, path4.join(targetDir, "result.json"));
+    privateFile(path4.join(targetDir, "result.json"));
+  }
+  /** A claim is permanent: a started attempt must never execute again. */
+  claimWorkerExecution(taskId, attempt) {
+    return withEventLock(path4.join(this.taskDir(taskId), "state.lock"), () => {
+      const status = this.readStatus(taskId);
+      if (status.attempt !== attempt || isTerminalStatus(status.status)) return false;
+      privateMkdir(this.attemptDir(taskId, attempt));
+      try {
+        writeFileSync2(path4.join(this.attemptDir(taskId, attempt), "execution.claim"), JSON.stringify({ pid: process.pid }), { flag: "wx", mode: 384 });
+        return true;
+      } catch (error2) {
+        if (error2.code === "EEXIST") return false;
+        throw error2;
+      }
+    });
+  }
+  assertWorkerAttempt(taskId, attempt) {
+    const status = this.readStatus(taskId);
+    if (status.attempt !== attempt || isTerminalStatus(status.status)) throw new Error("stale or terminal worker attempt rejected");
   }
   readArchivedResult(taskId, attempt) {
-    const file = path2.join(this.attemptDir(taskId, attempt), "result.json");
+    const file = path4.join(this.attemptDir(taskId, attempt), "result.json");
     if (!existsSync2(file)) return null;
     return this.#readJson(file);
   }
   attemptDir(taskId, attempt) {
-    return path2.join(this.taskDir(taskId), "attempts", String(attempt));
+    return path4.join(this.taskDir(taskId), "attempts", String(attempt));
   }
   writeAttemptFile(taskId, attempt, fileName, content) {
     const dir = this.attemptDir(taskId, attempt);
     privateMkdir(dir);
-    this.#writeTextAtomic(path2.join(dir, fileName), content);
+    this.#writeTextAtomic(path4.join(dir, fileName), content);
   }
   writeAttemptMeta(taskId, attempt, fileName, meta2) {
     const dir = this.attemptDir(taskId, attempt);
     privateMkdir(dir);
-    this.#writeJsonAtomic(path2.join(dir, fileName), meta2);
+    this.#writeJsonAtomic(path4.join(dir, fileName), meta2);
   }
   readAttemptMeta(taskId, attempt, fileName) {
-    const file = path2.join(this.attemptDir(taskId, attempt), fileName);
+    const file = path4.join(this.attemptDir(taskId, attempt), fileName);
     if (!existsSync2(file)) return null;
     return this.#readJson(file);
   }
   readAttemptText(taskId, attempt, fileName) {
-    const file = path2.join(this.attemptDir(taskId, attempt), fileName);
+    const file = path4.join(this.attemptDir(taskId, attempt), fileName);
     if (!existsSync2(file)) return null;
-    return readFileSync2(file, "utf8");
+    return readFileSync3(file, "utf8");
   }
   /**
    * Atomically claims the single worker-respawn slot for an attempt by
@@ -22061,7 +22247,7 @@ var TaskStore = class {
     const dir = this.attemptDir(taskId, attempt);
     privateMkdir(dir);
     try {
-      closeSync(openSync(path2.join(dir, "respawn.claim"), "wx"));
+      closeSync(openSync(path4.join(dir, "respawn.claim"), "wx"));
       return true;
     } catch (error2) {
       if (error2.code === "EEXIST") return false;
@@ -22071,7 +22257,7 @@ var TaskStore = class {
   /** File time of the respawn claim, or null when the attempt is unclaimed. */
   respawnClaimedAt(taskId, attempt) {
     try {
-      return statSync2(path2.join(this.attemptDir(taskId, attempt), "respawn.claim")).mtime;
+      return statSync3(path4.join(this.attemptDir(taskId, attempt), "respawn.claim")).mtime;
     } catch {
       return null;
     }
@@ -22081,10 +22267,10 @@ var TaskStore = class {
     if (!text) return { truncated: false };
     const dir = this.taskDir(taskId);
     privateMkdir(dir);
-    const file = path2.join(dir, `${kind}.log`);
+    const file = path4.join(dir, `${kind}.log`);
     let currentBytes = 0;
     try {
-      currentBytes = statSync2(file).size;
+      currentBytes = statSync3(file).size;
     } catch {
       currentBytes = 0;
     }
@@ -22096,29 +22282,41 @@ var TaskStore = class {
     return { truncated: bytes.length > room };
   }
   readLog(taskId, kind) {
-    const file = path2.join(this.taskDir(taskId), `${kind}.log`);
-    return existsSync2(file) ? readFileSync2(file, "utf8") : "";
+    const file = path4.join(this.taskDir(taskId), `${kind}.log`);
+    return existsSync2(file) ? readFileSync3(file, "utf8") : "";
   }
   appendEvent(taskId, type, summary, details, at = (/* @__PURE__ */ new Date()).toISOString()) {
     const dir = this.taskDir(taskId);
-    mkdirSync(dir, { recursive: true });
-    const lockDir = path2.join(dir, "events.lock");
+    mkdirSync2(dir, { recursive: true });
+    const lockDir = path4.join(dir, "events.lock");
     return withEventLock(lockDir, () => {
-      const file = path2.join(dir, "events.jsonl");
-      const seqFile = path2.join(dir, "events.seq");
+      const file = path4.join(dir, "events.jsonl");
+      const seqFile = path4.join(dir, "events.seq");
       let bytes = 0;
       let previousSeq = 0;
       let needsSeparator = false;
       try {
-        const info = statSync2(file);
+        const info = statSync3(file);
         bytes = info.size;
-        const lastByte = bytes > 0 ? readFileSync2(file).at(-1) : void 0;
+        let lastByte;
+        if (bytes > 0) {
+          const fd = openSync(file, "r");
+          try {
+            const tail = Buffer.alloc(1);
+            readSync(fd, tail, 0, 1, bytes - 1);
+            lastByte = tail[0];
+          } finally {
+            closeSync(fd);
+          }
+        }
         needsSeparator = bytes > 0 && lastByte !== 10;
-      } catch {
+      } catch (error2) {
+        if (error2.code !== "ENOENT") throw error2;
         bytes = 0;
       }
       try {
-        previousSeq = Number.parseInt(readFileSync2(seqFile, "utf8"), 10) || 0;
+        previousSeq = Number(readFileSync3(seqFile, "utf8"));
+        if (!Number.isSafeInteger(previousSeq) || previousSeq < 0) previousSeq = readLastEventSeq(file);
       } catch {
         previousSeq = readLastEventSeq(file);
       }
@@ -22126,7 +22324,7 @@ var TaskStore = class {
         seq: previousSeq + 1,
         at,
         type: type.slice(0, 80),
-        summary: summary.slice(0, 2e3),
+        summary: summary.length <= 2e3 ? summary : `${summary.slice(0, 1970)}\u2026[output truncated]`,
         ...details && Object.keys(details).length ? { details } : {}
       };
       const line = `${JSON.stringify(event)}
@@ -22140,7 +22338,7 @@ var TaskStore = class {
       appendFileSync(file, `${needsSeparator ? "\n" : ""}${line}`, { encoding: "utf8", mode: 384 });
       privateFile(file);
       if (event.seq % 100 === 0) {
-        const index = path2.join(dir, "events.index");
+        const index = path4.join(dir, "events.index");
         appendFileSync(index, `${event.seq}	${eventOffset}
 `, { encoding: "utf8", mode: 384 });
         privateFile(index);
@@ -22149,12 +22347,12 @@ var TaskStore = class {
     });
   }
   readEvents(taskId, afterSeq = 0, limit = 100, view = "raw") {
-    const file = path2.join(this.taskDir(taskId), "events.jsonl");
+    const file = path4.join(this.taskDir(taskId), "events.jsonl");
     if (!existsSync2(file)) return { events: [], nextSeq: afterSeq, hasMore: false, omittedEvents: 0 };
     let offset = 0;
-    const indexFile = path2.join(this.taskDir(taskId), "events.index");
+    const indexFile = path4.join(this.taskDir(taskId), "events.index");
     if (existsSync2(indexFile)) {
-      for (const row of readFileSync2(indexFile, "utf8").split(/\r?\n/u)) {
+      for (const row of readFileSync3(indexFile, "utf8").split(/\r?\n/u)) {
         const [seqText, offsetText] = row.split("	");
         const seq = Number(seqText);
         const candidateOffset = Number(offsetText);
@@ -22226,13 +22424,13 @@ var TaskStore = class {
     };
   }
   writeInteractionRequest(taskId, request, createdAt = (/* @__PURE__ */ new Date()).toISOString()) {
-    const directory = path2.join(this.taskDir(taskId), "interactions");
+    const directory = path4.join(this.taskDir(taskId), "interactions");
     privateMkdir(directory);
     const file = this.interactionFile(taskId, request.request_id);
-    return withEventLock(path2.join(this.taskDir(taskId), "interactions.lock"), () => {
+    return withEventLock(path4.join(this.taskDir(taskId), "interactions.lock"), () => {
       if (existsSync2(file)) {
         const record3 = this.#readJson(file);
-        if (record3.request_id !== request.request_id || record3.method !== request.method) {
+        if (record3.request_id !== request.request_id || record3.method !== request.method || stableJson(record3.params) !== stableJson(request.params)) {
           throw new Error("interaction request id collision");
         }
         return { record: record3, created: false };
@@ -22258,7 +22456,7 @@ var TaskStore = class {
   }
   answerInteractionRequest(taskId, requestId, answer, answeredAt = (/* @__PURE__ */ new Date()).toISOString()) {
     const file = this.interactionFile(taskId, requestId);
-    return withEventLock(path2.join(this.taskDir(taskId), "interactions.lock"), () => {
+    return withEventLock(path4.join(this.taskDir(taskId), "interactions.lock"), () => {
       if (!existsSync2(file)) throw new Error(`unknown ZCode interaction request: ${requestId}`);
       const current = this.#readJson(file);
       if (current.request_id !== requestId) throw new Error("interaction request id hash mismatch");
@@ -22275,20 +22473,24 @@ var TaskStore = class {
   interactionFile(taskId, requestId) {
     if (!requestId || requestId.length > 512) throw new Error("invalid ZCode interaction request_id");
     const key = createHash("sha256").update(requestId).digest("hex");
-    return path2.join(this.taskDir(taskId), "interactions", `${key}.json`);
+    return path4.join(this.taskDir(taskId), "interactions", `${this.readStatus(taskId).attempt}-${key}.json`);
   }
   #readJson(file) {
-    return JSON.parse(readFileSync2(file, "utf8"));
+    try {
+      return JSON.parse(readFileSync3(file, "utf8"));
+    } catch (error2) {
+      throw new Error(`unreadable or corrupt JSON record: ${file}`, { cause: error2 });
+    }
   }
   #writeJsonAtomic(file, value) {
     this.#writeTextAtomic(file, JSON.stringify(value, null, 2));
   }
   #writeTextAtomic(file, text) {
-    const tmp = `${file}.${randomUUID()}.tmp`;
+    const tmp = `${file}.${randomUUID2()}.tmp`;
     try {
-      writeFileSync(tmp, text, { encoding: "utf8", mode: 384 });
+      writeFileSync2(tmp, text, { encoding: "utf8", mode: 384 });
       privateFile(tmp);
-      renameSync(tmp, file);
+      atomicRenameSync(tmp, file);
     } catch (error2) {
       try {
         rmSync(tmp, { force: true });
@@ -22298,37 +22500,26 @@ var TaskStore = class {
     }
   }
 };
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") return `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`).join(",")}}`;
+  return JSON.stringify(value) ?? "null";
+}
 function withEventLock(lockDir, operation) {
   const deadline = Date.now() + 1e4;
-  while (true) {
-    try {
-      mkdirSync(lockDir, { mode: 448 });
-      privateDirectory(lockDir);
-      break;
-    } catch (error2) {
-      if (error2.code !== "EEXIST") throw error2;
-      try {
-        if (Date.now() - statSync2(lockDir).mtimeMs > 3e4) {
-          rmdirSync(lockDir);
-          continue;
-        }
-      } catch {
-      }
-      if (Date.now() >= deadline) throw new Error(`timed out waiting for task event lock: ${lockDir}`);
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-    }
+  let release;
+  while (!(release = tryAcquireProcessLock(lockDir))) {
+    if (Date.now() >= deadline) throw new Error(`timed out waiting for task state/event lock: ${lockDir}`);
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
   }
   try {
     return operation();
   } finally {
-    try {
-      rmdirSync(lockDir);
-    } catch {
-    }
+    release();
   }
 }
 function privateMkdir(directory) {
-  mkdirSync(directory, { recursive: true, mode: 448 });
+  mkdirSync2(directory, { recursive: true, mode: 448 });
   privateDirectory(directory);
 }
 function privateDirectory(directory) {
@@ -22339,7 +22530,7 @@ function privateFile(file) {
 }
 function readLastEventSeq(file) {
   if (!existsSync2(file)) return 0;
-  for (const line of readFileSync2(file, "utf8").trimEnd().split("\n").reverse()) {
+  for (const line of readFileSync3(file, "utf8").trimEnd().split("\n").reverse()) {
     try {
       const event = JSON.parse(line);
       if (Number.isInteger(event.seq)) return event.seq;
@@ -22379,8 +22570,8 @@ function toPublicStatus(status) {
 }
 
 // src/workspace/direct-provider.ts
-import { realpathSync, statSync as statSync3 } from "node:fs";
-import path3 from "node:path";
+import { realpathSync, statSync as statSync4 } from "node:fs";
+import path5 from "node:path";
 var DirectWorkspaceProvider = class {
   async resolve(workspacePath, _taskId, executionPath) {
     const projectPath = resolveExistingDirectory(workspacePath, "workspace");
@@ -22399,10 +22590,10 @@ function resolveExistingDirectory(input, field) {
   if (typeof input !== "string" || input.trim().length === 0) {
     throw new Error(`${field} must be a non-empty string`);
   }
-  if (!path3.isAbsolute(input)) throw new Error(`${field} must be an absolute path: ${input}`);
+  if (!path5.isAbsolute(input)) throw new Error(`${field} must be an absolute path: ${input}`);
   let stat2;
   try {
-    stat2 = statSync3(input);
+    stat2 = statSync4(input);
   } catch {
     throw new Error(`${field} does not exist: ${input}`);
   }
@@ -22415,7 +22606,7 @@ function resolveExistingDirectory(input, field) {
 }
 
 // src/manager/task-manager.ts
-import path5 from "node:path";
+import path7 from "node:path";
 
 // src/manager/normalize.ts
 function buildTaskResult(input) {
@@ -22427,9 +22618,9 @@ function buildTaskResult(input) {
     finished_at: finishedAt,
     zcode_output: outcome?.response ?? "",
     exit_code: outcome?.exitCode ?? null,
-    session_id: outcome?.sessionId ?? null
+    session_id: outcome?.sessionId ?? input.sessionId ?? null
   };
-  if (input.cancelled) {
+  if (input.cancelled || outcome?.cancelled) {
     return {
       ...base,
       status: "cancelled",
@@ -22508,8 +22699,8 @@ var TaskManagerError = class extends Error {
 
 // src/manager/spawn-worker.ts
 import { spawn } from "node:child_process";
-import { closeSync as closeSync2, mkdirSync as mkdirSync2, openSync as openSync2 } from "node:fs";
-import path4 from "node:path";
+import { closeSync as closeSync2, mkdirSync as mkdirSync3, openSync as openSync2 } from "node:fs";
+import path6 from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
 // src/runtime/child-env.ts
@@ -22584,28 +22775,33 @@ function workerEntryPath() {
   }
   return fileURLToPath2(new URL("../worker/worker-main.js", import.meta.url));
 }
-var defaultSpawnWorker = (dataRoot, taskId, attempt) => {
-  const attemptDir = path4.join(dataRoot, ".tasks", taskId, "attempts", String(attempt));
-  mkdirSync2(attemptDir, { recursive: true });
-  const stderrFd = openSync2(path4.join(attemptDir, "worker-stderr.log"), "a", 384);
-  try {
-    const child = spawn(process.execPath, [workerEntryPath(), dataRoot, taskId], {
-      detached: true,
-      shell: false,
-      stdio: ["ignore", "ignore", stderrFd],
-      windowsHide: true,
-      cwd: dataRoot,
-      env: createWorkerEnv(process.env)
-    });
-    child.unref();
-    if (typeof child.pid !== "number") {
-      throw new Error("worker process did not provide a pid");
+function createWorkerSpawner(host) {
+  if (host) validateHostProfile(host);
+  return (dataRoot, taskId, attempt) => {
+    const attemptDir = path6.join(dataRoot, ".tasks", taskId, "attempts", String(attempt));
+    mkdirSync3(attemptDir, { recursive: true });
+    const stderrFd = openSync2(path6.join(attemptDir, "worker-stderr.log"), "a", 384);
+    try {
+      const child = spawn(process.execPath, [host?.workerEntryPath ?? workerEntryPath(), dataRoot, taskId, String(attempt)], {
+        detached: true,
+        shell: false,
+        stdio: ["ignore", "ignore", stderrFd],
+        windowsHide: true,
+        cwd: dataRoot,
+        env: { ...createWorkerEnv(process.env), ...host ? { ZCODE_BRIDGE_HOST_PROFILE: JSON.stringify(host) } : {} }
+      });
+      child.on("error", (error2) => console.error(`Bridge worker spawn failed: ${error2.message}`));
+      child.unref();
+      if (typeof child.pid !== "number") {
+        throw new Error("worker process did not provide a pid");
+      }
+      return { pid: child.pid };
+    } finally {
+      closeSync2(stderrFd);
     }
-    return { pid: child.pid };
-  } finally {
-    closeSync2(stderrFd);
-  }
-};
+  };
+}
+var defaultSpawnWorker = createWorkerSpawner();
 
 // src/adapters/process-spawn.ts
 import { spawn as spawn2 } from "node:child_process";
@@ -22756,6 +22952,112 @@ function validateTaskTimeout(value) {
   return value;
 }
 
+// src/prompts/task-prompt.ts
+var MAX_PROMPT_CHARS = 6e4;
+var MAX_SECTION_CHARS = 4e3;
+var MAX_CONTEXT_CHARS = 2e3;
+function buildTaskPrompt(task) {
+  const sections = [
+    `TASK ID: ${task.task_id}`,
+    "You are a subordinate coding agent executing one bounded task inside the current working directory. Stay inside the workspace; do not touch files outside it.",
+    `PROJECT WORKSPACE: ${task.workspace}`,
+    ...task.worktree_path ? [`HOST-SELECTED EXECUTION WORKTREE: ${task.worktree_path}. Make task changes in the current working directory, which is this worktree; the project workspace above identifies its parent project.`] : [],
+    ...task.model ? [`REQUESTED ZCODE MODEL: ${task.model.provider_id}/${task.model.model_id}${task.model.reasoning_level ? ` (reasoning level: ${task.model.reasoning_level})` : ""}. The Bridge configures this model for the session.`] : [],
+    ...task.timeout_ms ? [`EXECUTION TIME LIMIT: ${task.timeout_ms} ms for this attempt.`] : [],
+    `OBJECTIVE
+${task.objective}`,
+    renderList("REQUIREMENTS", task.requirements),
+    renderPaths("ALLOWED PATHS (write only inside these when provided)", task.allowed_paths),
+    renderPaths("FORBIDDEN PATHS (never create, modify, or delete)", task.forbidden_paths),
+    renderList(
+      "ACCEPTANCE CRITERIA (the master verifies these independently; do not self-certify)",
+      task.acceptance_criteria
+    ),
+    renderList(
+      "TEST COMMANDS (run the applicable ones and report a status for each)",
+      task.test_commands
+    ),
+    DECISION_RULE
+  ];
+  if (task.context && task.context.trim().length > 0) {
+    sections.push(`CONTEXT
+${bounded(task.context, MAX_CONTEXT_CHARS)}`);
+  }
+  return joinBoundedPreservingTail([...sections, OUTPUT_CONTRACT], OUTPUT_CONTRACT);
+}
+function buildContinuePrompt(input) {
+  const { task, feedback, additionalRequirements, previousSessionId, previousResult } = input;
+  const sections = [
+    `TASK ID: ${task.task_id}`,
+    "You are a subordinate coding agent continuing a previous task in the same workspace. Stay inside the workspace.",
+    ...task.model ? [`REQUESTED ZCODE MODEL: ${task.model.provider_id}/${task.model.model_id}${task.model.reasoning_level ? ` (reasoning level: ${task.model.reasoning_level})` : ""}. The Bridge configures this model for the session.`] : []
+  ];
+  if (previousSessionId) {
+    sections.push(
+      `This run resumes persisted session ${previousSessionId}; earlier conversation context may be available.`
+    );
+  }
+  if (previousResult) {
+    sections.push(
+      `PREVIOUS RESULT (normalized claims from the previous attempt)
+${bounded(
+        JSON.stringify(previousResult, null, 2),
+        MAX_SECTION_CHARS
+      )}`
+    );
+    if (previousResult.error_code === "invalid_agent_report") {
+      sections.push(
+        "REPORT REPAIR MODE: The previous attempt's execution has already ended; only its final report failed validation. Do not edit files, rerun tests, or repeat task work. Reconstruct the final JSON report from the previous response and report_candidate. Do not guess missing facts. If a required boolean or other fact cannot be established, set needs_master_decision=true and describe the uncertainty in issues."
+      );
+    }
+  }
+  sections.push(`MASTER FEEDBACK (address every point)
+${feedback}`);
+  if (additionalRequirements.length > 0) {
+    sections.push(renderList("ADDITIONAL REQUIREMENTS", [...additionalRequirements]));
+  }
+  sections.push(`ORIGINAL TASK
+${buildTaskPrompt(task)}`);
+  return joinBoundedPreservingTail(sections, OUTPUT_CONTRACT);
+}
+var OUTPUT_CONTRACT = [
+  "OUTPUT CONTRACT (mandatory)",
+  "Your final response must be exactly one JSON object with no markdown fences and no text before or after it, matching this shape:",
+  '{"summary": string, "files_changed": string[], "tests": [{"command": string, "status": "passed" | "failed" | "not_run", "details"?: string}], "issues": string[], "needs_master_decision": boolean}',
+  "List every file you created or modified in files_changed (workspace-relative paths). Give one tests entry per applicable test command; use status not_run when a command was not applicable or could not run. Record problems in issues. Set needs_master_decision=true only when a required decision is outside your authority; never guess."
+].join("\n");
+var DECISION_RULE = [
+  "DECISION RULE",
+  "Use only this task package, this prompt, repository files you inspect, and available tools; do not assume access to the calling host's conversation.",
+  "Do not choose unresolved items explicitly listed under OPEN DECISIONS; a later explicit Master Feedback decision resolves that item. Also escalate conflicting requirements or missing decisions that would materially change externally visible behavior, even when the calling host did not list them. Record the exact question in issues and set needs_master_decision=true. Continue independent work that does not depend on the decision. For low-impact implementation choices, use the simplest consistent option and state the assumption in issues."
+].join("\n");
+function renderList(title, items) {
+  if (items.length === 0) {
+    return `${title}
+- (none)`;
+  }
+  return `${title}
+${items.map((item) => `- ${item}`).join("\n")}`;
+}
+function renderPaths(title, paths) {
+  if (paths.length === 0) {
+    return `${title}
+- (unspecified; still write only within the workspace)`;
+  }
+  return `${title}
+${paths.map((item) => `- ${item}`).join("\n")}`;
+}
+function bounded(text, maxChars) {
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars)}\u2026[truncated]`;
+}
+function joinBoundedPreservingTail(sections, requiredTail) {
+  const joined = sections.join("\n\n");
+  if (joined.length <= MAX_PROMPT_CHARS) return joined;
+  void requiredTail;
+  throw new Error(`task prompt exceeds ${MAX_PROMPT_CHARS} characters; shorten the task package without dropping constraints`);
+}
+
 // src/manager/task-manager.ts
 var BridgeTaskManager = class _BridgeTaskManager {
   /** How long a respawn claim counts as in-flight across Bridge processes. */
@@ -22790,7 +23092,7 @@ var BridgeTaskManager = class _BridgeTaskManager {
     const pollIntervalMs = options.pollIntervalMs ?? 1e3;
     if (pollIntervalMs > 0) {
       this.#timer = setInterval(() => {
-        void this.recoverTasks().catch(() => void 0);
+        void this.recoverTasks().catch((error2) => console.error("Bridge recovery failed:", error2 instanceof Error ? error2.message : String(error2)));
       }, pollIntervalMs);
       this.#timer.unref();
     }
@@ -22806,10 +23108,15 @@ var BridgeTaskManager = class _BridgeTaskManager {
   async recoverTasks() {
     return this.#exclusive(async () => {
       for (const taskId of this.#store.listTaskIds()) {
-        const status = this.#store.readStatus(taskId);
-        if (isTerminalStatus(status.status)) continue;
-        if (status.status === "running") {
-          this.#reconcileRunningLocked(taskId, status);
+        try {
+          const status = this.#safeStatus(taskId);
+          if (!status) continue;
+          if (isTerminalStatus(status.status)) continue;
+          if (status.status === "running") {
+            this.#reconcileRunningLocked(taskId, status);
+          }
+        } catch (error2) {
+          console.error(`Bridge could not reconcile task ${taskId}: ${error2 instanceof Error ? error2.message : String(error2)}`);
         }
       }
       this.#pumpLocked();
@@ -22832,6 +23139,11 @@ var BridgeTaskManager = class _BridgeTaskManager {
       }
       const createdAt = this.#now().toISOString();
       try {
+        buildTaskPrompt(task);
+      } catch (error2) {
+        throw new TaskManagerError("TASK_INVALID", String(error2));
+      }
+      try {
         const projectPath = workspaceRef.sourcePath ?? workspaceRef.canonicalPath;
         this.#store.createTask({
           ...task,
@@ -22844,7 +23156,7 @@ var BridgeTaskManager = class _BridgeTaskManager {
         throw error2;
       }
       this.#store.appendEvent(task.task_id, "queued", "Task accepted and queued", void 0, createdAt);
-      this.#store.appendEvent(task.task_id, "workspace_ready", workspaceRef.mode === "worktree" ? "Using the Codex-selected worktree for execution under the requested project" : "Using the requested project directory for execution", {
+      this.#store.appendEvent(task.task_id, "workspace_ready", workspaceRef.mode === "worktree" ? "Using the the calling host-selected worktree for execution under the requested project" : "Using the requested project directory for execution", {
         project_path: workspaceRef.sourcePath ?? workspaceRef.canonicalPath,
         execution_path: workspaceRef.canonicalPath,
         ...workspaceRef.mode === "worktree" ? { worktree_path: workspaceRef.canonicalPath } : {},
@@ -22944,7 +23256,7 @@ var BridgeTaskManager = class _BridgeTaskManager {
       if (state !== "answered") {
         throw new TaskManagerError("TASK_STATE", `ZCode interaction request ${input.request_id} was already answered`);
       }
-      this.#store.appendEvent(input.task_id, "interaction_reply_submitted", "Codex submitted a response to the ZCode interaction", {
+      this.#store.appendEvent(input.task_id, "interaction_reply_submitted", "the calling host submitted a response to the ZCode interaction", {
         request_id: input.request_id,
         method: record2.method,
         decision: input.decision
@@ -22969,6 +23281,7 @@ var BridgeTaskManager = class _BridgeTaskManager {
           `zcode_continue is not allowed from status ${status.status}`
         );
       }
+      if (status.cleanup_unverified) throw new TaskManagerError("TASK_STATE", "Cannot continue until unverified ZCode process cleanup is resolved");
       const task = this.#store.readTask(taskId);
       try {
         const ref = await this.#workspaceProvider.resolve(task.workspace, taskId, task.worktree_path);
@@ -22984,13 +23297,18 @@ var BridgeTaskManager = class _BridgeTaskManager {
       }
       const previousAttempt = status.attempt;
       const previousResult = this.#store.readResult(taskId);
+      try {
+        buildContinuePrompt({ task, feedback: input.feedback, additionalRequirements: input.additional_requirements ?? [], previousSessionId: previousResult?.session_id ?? status.zcode_session_id, previousResult });
+      } catch (error2) {
+        throw new TaskManagerError("TASK_INVALID", String(error2));
+      }
       const nextAttempt = previousAttempt + 1;
       const createdAt = this.#now().toISOString();
       this.#store.archiveResultToAttempt(taskId, previousAttempt);
       this.#store.writeAttemptMeta(taskId, nextAttempt, "continue.json", {
         feedback: input.feedback,
         additional_requirements: [...input.additional_requirements ?? []],
-        previous_session_id: previousResult?.session_id ?? null,
+        previous_session_id: previousResult?.session_id ?? status.zcode_session_id,
         previous_attempt: previousAttempt
       });
       this.#store.writeStatus(taskId, {
@@ -23003,7 +23321,9 @@ var BridgeTaskManager = class _BridgeTaskManager {
         exit_code: null,
         error_code: null,
         error: null,
-        cancel_requested: null
+        cancel_requested: null,
+        zcode_pid: null,
+        cleanup_unverified: null
       });
       this.#pumpLocked();
       const after = this.#store.readStatus(taskId);
@@ -23018,6 +23338,23 @@ var BridgeTaskManager = class _BridgeTaskManager {
     return this.#exclusive(async () => {
       this.#requireTask(taskId);
       const status = this.#store.readStatus(taskId);
+      if (status.cleanup_unverified) {
+        if (!status.zcode_pid) throw new TaskManagerError("CANCEL_FAILED", "No ZCode process identity is available to verify cleanup");
+        try {
+          await this.#terminateProcessTree(status.zcode_pid, { graceMs: 500, killWaitMs: 5e3 });
+          if (status.status === "running" && status.worker_pid && this.#isProcessRunning(status.worker_pid)) await this.#terminateProcessTree(status.worker_pid, { graceMs: 500, killWaitMs: 5e3 });
+        } catch (error2) {
+          throw new TaskManagerError("CANCEL_FAILED", `ZCode cleanup could not be verified: ${String(error2)}`);
+        }
+        if (status.status === "running") {
+          const finishedAt2 = this.#now().toISOString();
+          const result2 = buildTaskResult({ task: this.#store.readTask(taskId), attempt: status.attempt, startedAt: status.started_at, finishedAt: finishedAt2, outcome: null, cancelled: true, sessionId: status.zcode_session_id });
+          this.#store.writeResult(taskId, result2);
+          this.#store.writeStatus(taskId, { status: "cancelled", finished_at: finishedAt2, worker_pid: null, cleanup_unverified: null, zcode_pid: null, error: null, error_code: null, cancel_requested: null });
+        } else this.#store.writeStatus(taskId, { cleanup_unverified: null, zcode_pid: null });
+        this.#pumpLocked();
+        return toPublicStatus(this.#store.readStatus(taskId));
+      }
       if (isTerminalStatus(status.status)) {
         throw new TaskManagerError(
           "TASK_STATE",
@@ -23025,6 +23362,10 @@ var BridgeTaskManager = class _BridgeTaskManager {
         );
       }
       const task = this.#store.readTask(taskId);
+      if (status.status === "running" && this.#store.readResult(taskId)) {
+        this.#reconcileOneLocked(taskId);
+        return toPublicStatus(this.#store.readStatus(taskId));
+      }
       if (status.status === "queued") {
         const finishedAt2 = this.#now().toISOString();
         const result2 = buildTaskResult({
@@ -23065,6 +23406,9 @@ var BridgeTaskManager = class _BridgeTaskManager {
         return toPublicStatus(this.#store.readStatus(taskId));
       }
       try {
+        if (status.zcode_pid && this.#isProcessRunning(status.zcode_pid)) {
+          await this.#terminateProcessTree(status.zcode_pid, { graceMs: 500, killWaitMs: 5e3 });
+        }
         await this.#terminateProcessTree(pid, { graceMs: 500, killWaitMs: 5e3 });
       } catch (error2) {
         const message = error2 instanceof Error ? error2.message : String(error2);
@@ -23087,7 +23431,9 @@ var BridgeTaskManager = class _BridgeTaskManager {
           error_code: raced.error_code ?? null,
           error: raced.status === "failed" ? raced.summary : null,
           worker_pid: null,
-          cancel_requested: null
+          cancel_requested: null,
+          cleanup_unverified: null,
+          zcode_pid: null
         });
         this.#pumpLocked();
         return toPublicStatus(this.#store.readStatus(taskId));
@@ -23103,7 +23449,8 @@ var BridgeTaskManager = class _BridgeTaskManager {
           code: "cancelled",
           message: `cancelled by request; worker process tree (pid ${pid}) was terminated and verified`
         },
-        cancelled: true
+        cancelled: true,
+        sessionId: status.zcode_session_id
       });
       this.#store.writeResult(taskId, result);
       this.#store.appendEvent(taskId, "cancelled", "Worker process tree terminated and cancellation confirmed", void 0, finishedAt);
@@ -23111,6 +23458,8 @@ var BridgeTaskManager = class _BridgeTaskManager {
         status: "cancelled",
         finished_at: finishedAt,
         worker_pid: null,
+        cleanup_unverified: null,
+        zcode_pid: null,
         cancel_requested: null
       });
       this.#pumpLocked();
@@ -23126,7 +23475,7 @@ var BridgeTaskManager = class _BridgeTaskManager {
   }
   #reconcileRunningLocked(taskId, status) {
     const persistedResult = this.#store.readResult(taskId);
-    if (persistedResult) {
+    if (persistedResult && persistedResult.attempt === status.attempt) {
       this.#store.writeStatus(taskId, {
         status: persistedResult.status,
         finished_at: persistedResult.finished_at,
@@ -23134,13 +23483,19 @@ var BridgeTaskManager = class _BridgeTaskManager {
         zcode_session_id: persistedResult.session_id,
         error_code: persistedResult.error_code ?? null,
         error: persistedResult.status === "failed" ? persistedResult.summary : null,
-        worker_pid: null
+        worker_pid: null,
+        cleanup_unverified: persistedResult.error_code === "cleanup_failed"
       });
       return;
     }
     const pid = status.worker_pid;
     const alive = pid !== null && this.#isProcessRunning(pid);
     if (alive) return;
+    const runtimePid = this.#store.readStatus(taskId).zcode_pid;
+    if (runtimePid && this.#isProcessRunning(runtimePid)) {
+      this.#store.writeStatus(taskId, { cleanup_unverified: true, error_code: "cleanup_failed", error: "Worker exited while ZCode remains alive; cancel to verify runtime cleanup" });
+      return;
+    }
     const startedAtMs = status.started_at === null ? Number.NaN : Date.parse(status.started_at);
     const withinGrace = Number.isFinite(startedAtMs) && this.#now().getTime() - startedAtMs < this.#workerStartGraceMs;
     const workerBegan = this.#store.readAttemptMeta(taskId, status.attempt, "started.json") !== null;
@@ -23164,10 +23519,9 @@ var BridgeTaskManager = class _BridgeTaskManager {
     const task = this.#store.readTask(taskId);
     const finishedAt = this.#now().toISOString();
     const workerStderr = this.#store.readAttemptText(taskId, status.attempt, "worker-stderr.log") ?? "";
-    const diagnostic = workerStderr.trim().slice(-1200);
     const failure2 = {
       code: "worker_lost",
-      message: `worker pid ${String(pid)} is gone without a terminal result${diagnostic ? `; worker stderr: ${diagnostic}` : "; worker stderr was empty"}`
+      message: `worker pid ${String(pid)} is gone without a terminal result${workerStderr.trim() ? "; diagnostic stderr is available in private attempt evidence" : "; worker stderr was empty"}`
     };
     const result = buildTaskResult({
       task,
@@ -23175,7 +23529,8 @@ var BridgeTaskManager = class _BridgeTaskManager {
       startedAt: status.started_at,
       finishedAt,
       outcome: null,
-      failure: failure2
+      failure: failure2,
+      sessionId: status.zcode_session_id
     });
     this.#store.writeResult(taskId, result);
     this.#store.writeStatus(taskId, {
@@ -23188,15 +23543,26 @@ var BridgeTaskManager = class _BridgeTaskManager {
     this.#store.appendEvent(taskId, "error", result.summary, { error_code: "worker_lost" }, finishedAt);
   }
   #runningTaskIdsLocked() {
-    return this.#store.listTaskIds().filter((taskId) => this.#store.readStatus(taskId).status === "running");
+    return this.#store.listTaskIds().filter((taskId) => {
+      const status = this.#safeStatus(taskId);
+      return status?.status === "running" || status?.cleanup_unverified === true;
+    });
   }
   #queuedTaskIdsLocked() {
-    return this.#store.listTaskIds().map((taskId) => ({ taskId, status: this.#store.readStatus(taskId) })).filter((entry) => entry.status.status === "queued").sort((a, b) => a.status.created_at.localeCompare(b.status.created_at)).map((entry) => entry.taskId);
+    return this.#store.listTaskIds().map((taskId) => ({ taskId, status: this.#safeStatus(taskId) })).filter((entry) => entry.status?.status === "queued").sort((a, b) => a.status.created_at.localeCompare(b.status.created_at)).map((entry) => entry.taskId);
   }
   #pumpLocked() {
     const running = this.#runningTaskIdsLocked();
     if (running.length >= this.#maxConcurrentWorkers) return;
     const occupiedPaths = running.map((taskId) => this.#executionPathKeyLocked(taskId));
+    for (const taskId of this.#store.listTaskIds()) {
+      if (this.#safeStatus(taskId)) continue;
+      try {
+        occupiedPaths.push(this.#executionPathKeyLocked(taskId));
+      } catch {
+        return;
+      }
+    }
     let slots = this.#maxConcurrentWorkers - running.length;
     for (const taskId of this.#queuedTaskIdsLocked()) {
       if (slots <= 0) break;
@@ -23211,8 +23577,8 @@ var BridgeTaskManager = class _BridgeTaskManager {
   }
   #executionPathKeyLocked(taskId) {
     const recorded = this.#store.readWorkspaceRef(taskId)?.canonicalPath;
-    const task = this.#store.readTask(taskId);
-    const resolved = path5.resolve(recorded ?? task.worktree_path ?? task.workspace);
+    const task = recorded ? null : this.#store.readTask(taskId);
+    const resolved = path7.resolve(recorded ?? task.worktree_path ?? task.workspace);
     return process.platform === "win32" ? resolved.toLocaleLowerCase("en-US") : resolved;
   }
   #startWorkerLocked(taskId) {
@@ -23249,7 +23615,7 @@ var BridgeTaskManager = class _BridgeTaskManager {
       this.#store.appendEvent(taskId, "error", result.summary, { error_code: "spawn_failed" }, finishedAt);
       return;
     }
-    this.#store.writeStatus(taskId, { worker_pid: pid });
+    this.#store.patchRunningAttempt(taskId, status.attempt, { worker_pid: pid });
     this.#store.appendEvent(taskId, "worker_started", "Bridge worker started", { worker_pid: pid });
   }
   #requireTask(taskId) {
@@ -23303,15 +23669,30 @@ var BridgeTaskManager = class _BridgeTaskManager {
     }
   }
   #exclusive(operation) {
-    const run = this.#mutex.then(operation, operation);
+    const locked = () => withProcessLock(path7.join(this.#store.tasksRoot, ".manager.lock"), operation);
+    const run = this.#mutex.then(locked, locked);
     this.#mutex = run.catch(() => void 0);
     return run;
   }
+  #safeStatus(taskId) {
+    try {
+      const status = this.#store.readStatus(taskId);
+      this.#store.readTask(taskId);
+      this.#store.readWorkspaceRef(taskId);
+      this.#store.readResult(taskId);
+      this.#store.readAttemptMeta(taskId, status.attempt, "started.json");
+      this.#store.readAttemptMeta(taskId, status.attempt, "continue.json");
+      return status;
+    } catch (error2) {
+      console.error(`Bridge skipped corrupt task ${taskId}: ${error2 instanceof Error ? error2.message : String(error2)}`);
+      return null;
+    }
+  }
 };
 function pathsOverlap(left, right) {
-  const relative = path5.relative(left, right);
-  const reverse = path5.relative(right, left);
-  const inside = (value) => value === "" || !path5.isAbsolute(value) && value !== ".." && !value.startsWith(`..${path5.sep}`);
+  const relative = path7.relative(left, right);
+  const reverse = path7.relative(right, left);
+  const inside = (value) => value === "" || !path7.isAbsolute(value) && value !== ".." && !value.startsWith(`..${path7.sep}`);
   return inside(relative) || inside(reverse);
 }
 function buildInteractionAnswer(record2, input) {
@@ -23360,7 +23741,7 @@ function buildInteractionAnswer(record2, input) {
   return { action: "accept", content: { answers } };
 }
 function boundedReason(reason) {
-  return (reason?.trim() || "Codex declined this request").slice(0, 2e3);
+  return (reason?.trim() || "the calling host declined this request").slice(0, 2e3);
 }
 function asRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
@@ -23393,7 +23774,7 @@ var zcodeTaskInputSchema = strictObject({
   acceptance_criteria: stringArray,
   test_commands: stringArray,
   context: string2().optional()
-}).describe("Full TaskPackage; workspace is the Codex project root. Optional worktree_path is an existing execution directory selected and prepared by Codex; the Bridge never creates or selects worktrees. The five array fields must be present (empty allowed), context is optional.");
+}).describe("Full TaskPackage; workspace is the the calling host project root. Optional worktree_path is an existing execution directory selected and prepared by the calling host; the Bridge never creates or selects worktrees. The five array fields must be present (empty allowed), context is optional.");
 var taskIdOnlyInputSchema = strictObject({
   task_id: string2().min(1)
 });
@@ -23540,7 +23921,7 @@ var defaultModelSchema = object({
 // src/mcp/server.ts
 var SERVER_NAME = "codex-zcode-bridge";
 var SERVER_VERSION = "1.0.2"; // x-release-please-version
-var EXECUTION_NOT_VERDICT = "Results describe Bridge/ZCode execution only: status 'completed' means the invocation and report normalization finished, NOT that Codex accepted the work. Codex must independently review the workspace diff and checks before deciding PASS.";
+var EXECUTION_NOT_VERDICT = "Results describe Bridge/ZCode execution only: status 'completed' means the invocation and report normalization finished, NOT that the calling host accepted the work. the calling host must independently review the workspace diff and checks before deciding PASS.";
 function okResult(data) {
   return {
     content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
@@ -23569,7 +23950,7 @@ async function runTool(operation) {
 function createBridgeServer(options) {
   const manager = options.taskManager;
   const serverInfo = options.serverInfo ?? { name: SERVER_NAME, version: SERVER_VERSION };
-  const server = new McpServer(serverInfo);
+  const server = new McpServer(serverInfo, options.instructions ? { instructions: options.instructions } : void 0);
   server.registerTool(
     "zcode_doctor",
     {
@@ -23639,7 +24020,7 @@ function createBridgeServer(options) {
     "zcode_task",
     {
       title: "Submit one ZCode coding task",
-      description: `Create a bounded coding task for the local ZCode subordinate agent. workspace is the Codex project root and determines the ZCode Desktop project identity. Codex decides whether to create a worktree; if it does, pass its existing absolute directory as optional worktree_path. The Bridge never creates, selects, or removes a worktree. Without worktree_path, ZCode runs directly in workspace. Optional model selects a ZCode provider_id/model_id for this session without changing the project default. Returns a TaskReceipt; the task runs asynchronously in a detached worker. ${EXECUTION_NOT_VERDICT}`,
+      description: `Create a bounded coding task for the local ZCode subordinate agent. workspace is the the calling host project root and determines the ZCode Desktop project identity. the calling host decides whether to create a worktree; if it does, pass its existing absolute directory as optional worktree_path. The Bridge never creates, selects, or removes a worktree. Without worktree_path, ZCode runs directly in workspace. Optional model selects a ZCode provider_id/model_id for this session without changing the project default. Returns a TaskReceipt; the task runs asynchronously in a detached worker. ${EXECUTION_NOT_VERDICT}`,
       inputSchema: zcodeTaskInputSchema,
       outputSchema: taskReceiptSchema
     },
@@ -23684,7 +24065,7 @@ function createBridgeServer(options) {
     "zcode_result",
     {
       title: "Read the terminal ZCode task result",
-      description: `Read the persisted TaskResult for a finished task. Returns TASK_NOT_FINISHED before a terminal state. 'completed' is not a Codex PASS: files_changed, tests, and decisions are normalized claims from the subordinate report and must be verified independently. ${EXECUTION_NOT_VERDICT}`,
+      description: `Read the persisted TaskResult for a finished task. Returns TASK_NOT_FINISHED before a terminal state. 'completed' is not a the calling host PASS: files_changed, tests, and decisions are normalized claims from the subordinate report and must be verified independently. ${EXECUTION_NOT_VERDICT}`,
       inputSchema: taskIdOnlyInputSchema,
       outputSchema: taskResultSchema
     },
@@ -23694,7 +24075,7 @@ function createBridgeServer(options) {
     "zcode_continue",
     {
       title: "Continue a ZCode task with master feedback",
-      description: `Continue a finished task with master feedback: reuses the task ID and workspace, increments the attempt, and preserves prior evidence. Allowed from completed, failed, or waiting_for_master. A decision flagged by ZCode is never auto-approved; Codex must provide the follow-up instruction. ${EXECUTION_NOT_VERDICT}`,
+      description: `Continue a finished task with master feedback: reuses the task ID and workspace, increments the attempt, and preserves prior evidence. Allowed from completed, failed, or waiting_for_master. A decision flagged by ZCode is never auto-approved; the calling host must provide the follow-up instruction. ${EXECUTION_NOT_VERDICT}`,
       inputSchema: zcodeContinueInputSchema,
       outputSchema: taskReceiptSchema
     },
@@ -23710,11 +24091,11 @@ function createBridgeServer(options) {
     },
     async (args) => runTool(() => manager.cancelTask(args.task_id))
   );
-  server.registerTool(
+  if (options.enableExperiments) server.registerTool(
     "zcode_progress_probe",
     {
       title: "[Experiment] Check MCP progress display",
-      description: "Temporary read-only experiment. Sends three MCP progress notifications over three seconds to test whether Codex displays server progress while this tool runs. Does not start or modify a ZCode task."
+      description: "Temporary read-only experiment. Sends three MCP progress notifications over three seconds to test whether the calling host displays server progress while this tool runs. Does not start or modify a ZCode task."
     },
     async (ctx) => {
       const progressToken = ctx.mcpReq._meta?.progressToken;
@@ -23741,7 +24122,7 @@ function createBridgeServer(options) {
             experiment: "mcp-progress-display",
             progress_token_received: progressToken !== void 0,
             notifications_sent: notificationsSent,
-            note: "The tool result confirms server delivery only; check whether Codex displayed progress while it was running."
+            note: "The tool result confirms server delivery only; check whether the calling host displayed progress while it was running."
           }, null, 2)
         }]
       };
@@ -23751,22 +24132,22 @@ function createBridgeServer(options) {
 }
 
 // src/runtime/doctor.ts
-import { accessSync as accessSync2, constants, existsSync as existsSync5, statSync as statSync4 } from "node:fs";
+import { accessSync as accessSync2, constants, existsSync as existsSync5, statSync as statSync5 } from "node:fs";
 import { execFileSync } from "node:child_process";
 
 // src/runtime/account-provider.ts
 import { createHash as createHash2 } from "node:crypto";
-import { existsSync as existsSync4, readFileSync as readFileSync3 } from "node:fs";
-import path6 from "node:path";
+import { existsSync as existsSync4, readFileSync as readFileSync4 } from "node:fs";
+import path8 from "node:path";
 function buildAccountProviderPayload(config2) {
   const table = readJson(config2.providerBuiltinConfigFile);
   const providerRules = readProviderRules(table).filter(isRecord).map((rule) => rule).filter((rule) => rule.config?.access?.type === "zhipu-account" && typeof rule.providerId === "string");
   if (!providerRules.length) return null;
   const dataDir = zcodeV2DataDir(config2.providerPersonalConfigFile);
   if (!dataDir) return null;
-  const credentials = readJson(path6.join(dataDir, "config.json"));
+  const credentials = readJson(path8.join(dataDir, "config.json"));
   const credentialProviders = asRecord2(credentials?.provider);
-  const cache = readJson(path6.join(dataDir, "coding-plan-cache.json"));
+  const cache = readJson(path8.join(dataDir, "coding-plan-cache.json"));
   const cacheItems = asRecord2(asRecord2(cache?.entryStatus).items);
   const providers = {};
   const states = {};
@@ -23788,7 +24169,7 @@ function buildAccountProviderPayload(config2) {
     };
   }
   const revision = typeof table?.revision === "number" ? table.revision : 0;
-  const resolvedBuiltinPath = path6.resolve(config2.providerBuiltinConfigFile);
+  const resolvedBuiltinPath = path8.resolve(config2.providerBuiltinConfigFile);
   return {
     revision: `account:codex-zcode-bridge:${Date.now()}`,
     basedOnZCodeBuiltinRevision: `zcode-builtin:${revision}:${createHash2("sha256").update(resolvedBuiltinPath).digest("hex")}`,
@@ -23810,8 +24191,8 @@ function runtimeAuthReply(providerId, config2) {
   const legacyId = configProviderId(providerId, rule);
   const dataDir = zcodeV2DataDir(config2.providerPersonalConfigFile);
   if (!dataDir) return unavailable;
-  const credentials = readJson(path6.join(dataDir, "config.json"));
-  const cache = readJson(path6.join(dataDir, "coding-plan-cache.json"));
+  const credentials = readJson(path8.join(dataDir, "config.json"));
+  const cache = readJson(path8.join(dataDir, "coding-plan-cache.json"));
   const status = asRecord2(asRecord2(asRecord2(cache?.entryStatus).items)[legacyId]).status;
   const provider = asRecord2(asRecord2(credentials?.provider)[legacyId]);
   const options = asRecord2(provider.options);
@@ -23821,19 +24202,19 @@ function runtimeAuthReply(providerId, config2) {
 }
 function zcodeDataBaseDir(personalProviderConfigFile) {
   const dataDir = zcodeV2DataDir(personalProviderConfigFile);
-  return dataDir ? path6.dirname(path6.dirname(dataDir)) : null;
+  return dataDir ? path8.dirname(path8.dirname(dataDir)) : null;
 }
 function zcodeTasksIndexPath(personalProviderConfigFile) {
   const dataDir = zcodeV2DataDir(personalProviderConfigFile);
-  return dataDir ? path6.join(dataDir, "tasks-index.sqlite") : null;
+  return dataDir ? path8.join(dataDir, "tasks-index.sqlite") : null;
 }
 function zcodeV2DataDir(personalProviderConfigFile) {
-  const absolute = path6.resolve(personalProviderConfigFile);
-  if (path6.basename(absolute).toLowerCase() !== "provider_config.json") return null;
-  const v2Dir = path6.dirname(absolute);
-  if (path6.basename(v2Dir).toLowerCase() !== "v2") return null;
-  const zcodeDir = path6.dirname(v2Dir);
-  if (path6.basename(zcodeDir).toLowerCase() !== ".zcode") return null;
+  const absolute = path8.resolve(personalProviderConfigFile);
+  if (path8.basename(absolute).toLowerCase() !== "provider_config.json") return null;
+  const v2Dir = path8.dirname(absolute);
+  if (path8.basename(v2Dir).toLowerCase() !== "v2") return null;
+  const zcodeDir = path8.dirname(v2Dir);
+  if (path8.basename(zcodeDir).toLowerCase() !== ".zcode") return null;
   return v2Dir;
 }
 function configProviderId(providerId, rule) {
@@ -23849,7 +24230,7 @@ function readProviderRules(table) {
 function readJson(filePath) {
   try {
     if (!existsSync4(filePath)) return null;
-    const value = JSON.parse(readFileSync3(filePath, "utf8"));
+    const value = JSON.parse(readFileSync4(filePath, "utf8"));
     return isRecord(value) ? value : null;
   } catch {
     return null;
@@ -23913,8 +24294,13 @@ function isSessionMode(value) {
 // src/runtime/doctor.ts
 async function runBridgeDoctor(options = {}) {
   const sourceEnv = options.env ?? process.env;
-  const env = loadPersistedRuntimeEnvironment(sourceEnv, options.resolver?.homeDir);
+  let env = sourceEnv;
   const checks = [];
+  try {
+    env = loadPersistedRuntimeEnvironment(sourceEnv, options.resolver?.homeDir, options.resolver?.host);
+  } catch (error2) {
+    return { checked_at: (/* @__PURE__ */ new Date()).toISOString(), execution_mode: "unknown", checks: [{ name: "runtime_settings", status: "error", summary: safeError(error2) }] };
+  }
   const [major, minor] = process.versions.node.split(".").map(Number);
   const nodeOk = major > 22 || major === 22 && minor >= 18;
   checks.push({
@@ -23979,7 +24365,7 @@ async function runBridgeDoctor(options = {}) {
     const dataRoot = options.dataRoot ?? env["ZCODE_BRIDGE_DATA_DIR"]?.trim() ?? null;
     if (dataRoot && existsSync5(dataRoot)) {
       try {
-        const info = statSync4(dataRoot);
+        const info = statSync5(dataRoot);
         accessSync2(dataRoot, constants.W_OK);
         checks.push({ name: "task_data", status: info.isDirectory() ? "ok" : "error", summary: info.isDirectory() ? "Bridge task data directory exists and is writable" : "Bridge task data path is not a directory" });
       } catch {
@@ -24012,22 +24398,26 @@ function safeError(error2) {
 
 // src/runtime/model-settings.ts
 import { spawn as spawn3 } from "node:child_process";
-import { createHash as createHash3, randomUUID as randomUUID2 } from "node:crypto";
-import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
-import { homedir as homedir2 } from "node:os";
-import path7 from "node:path";
+import { createHash as createHash3, randomUUID as randomUUID3 } from "node:crypto";
+import { mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { homedir as homedir3 } from "node:os";
+import path9 from "node:path";
 var RPC_TIMEOUT_MS = 3e4;
 var PROCESS_CLOSE_TIMEOUT_MS = 1500;
 var MODEL_CATALOG_TTL_MS = 24 * 60 * 60 * 1e3;
 var ZCodeModelSettings = class {
   #sourceEnv;
+  #homeDir;
+  #host;
   #writeQueue = Promise.resolve();
-  constructor(sourceEnv = process.env) {
+  constructor(sourceEnv = process.env, options = {}) {
     this.#sourceEnv = sourceEnv;
+    this.#homeDir = options.homeDir ?? homedir3();
+    this.#host = validateHostProfile(options.host ?? codexHostProfile(this.#homeDir));
   }
   async listModels(workspace) {
     const requestedWorkspace = workspace.trim();
-    if (!path7.isAbsolute(requestedWorkspace)) {
+    if (!path9.isAbsolute(requestedWorkspace)) {
       throw new BridgeError("provider_config_invalid", "workspace must be an absolute existing directory");
     }
     let workspacePath;
@@ -24075,9 +24465,9 @@ var ZCodeModelSettings = class {
     throw new BridgeError(code, `Model catalog refresh failed after re-reading provider config and retrying: ${reason}. Run zcode_doctor to identify a missing or invalid runtime/provider file; after correcting it, call zcode_model_catalog again.`, { cause: lastError });
   }
   async #resolveCatalogSource(workspacePath) {
-    const runtimeEnv = loadPersistedRuntimeEnvironment(this.#sourceEnv);
-    const config2 = await new NodeRuntimeResolver({ env: runtimeEnv }).resolve();
-    const cachePath = modelCatalogCachePath(workspacePath, config2, runtimeEnv);
+    const runtimeEnv = loadPersistedRuntimeEnvironment(this.#sourceEnv, this.#homeDir, this.#host);
+    const config2 = await new NodeRuntimeResolver({ env: runtimeEnv, homeDir: this.#homeDir, host: this.#host }).resolve();
+    const cachePath = modelCatalogCachePath(workspacePath, config2, runtimeEnv, this.#host.settingsDirectory);
     const fingerprint = await modelCatalogSourceFingerprint(config2, runtimeEnv);
     return { config: config2, runtimeEnv, cachePath, fingerprint };
   }
@@ -24127,10 +24517,9 @@ var ZCodeModelSettings = class {
     } catch (error2) {
       if (error2 instanceof BridgeError) throw error2;
       const message = error2 instanceof Error ? error2.message : String(error2);
-      const stderr = client.stderr.trim();
       throw new BridgeError(
         "zcode_nonzero_exit",
-        stderr ? `${message}; app-server stderr: ${stderr.slice(0, 1e3)}` : message,
+        message,
         { cause: error2 }
       );
     } finally {
@@ -24139,7 +24528,7 @@ var ZCodeModelSettings = class {
     }
   }
   async getDefaultModel() {
-    const env = loadPersistedRuntimeEnvironment(this.#sourceEnv);
+    const env = loadPersistedRuntimeEnvironment(this.#sourceEnv, this.#homeDir, this.#host);
     const providerId = env["ZCODE_BRIDGE_DEFAULT_PROVIDER_ID"]?.trim() ?? "";
     const modelId = env["ZCODE_BRIDGE_DEFAULT_MODEL_ID"]?.trim() ?? "";
     const reasoningLevel = env["ZCODE_BRIDGE_DEFAULT_REASONING_LEVEL"]?.trim() ?? "";
@@ -24177,36 +24566,52 @@ var ZCodeModelSettings = class {
   }
   #updateConfig(update) {
     const operation = this.#writeQueue.then(async () => {
-      const configPath = path7.join(homedir2(), ".codex", "codex-zcode-bridge", "runtime-config.json");
-      await mkdir(path7.dirname(configPath), { recursive: true });
-      let config2 = {};
-      try {
-        const info = await stat(configPath);
-        if (!info.isFile() || info.size > 64 * 1024) {
-          throw new BridgeError("provider_config_invalid", "Bridge runtime config is not a small regular JSON file");
+      await mkdir(this.#host.settingsDirectory, { recursive: true });
+      return withProcessLock(path9.join(this.#host.settingsDirectory, ".settings.lock"), async () => {
+        const configPath = path9.join(this.#host.settingsDirectory, "runtime-config.json");
+        let config2 = {};
+        try {
+          const info = await stat(configPath);
+          if (!info.isFile() || info.size > 64 * 1024) {
+            throw new BridgeError("provider_config_invalid", "Bridge runtime config is not a small regular JSON file");
+          }
+          const parsed = JSON.parse(await readFile(configPath, "utf8"));
+          if (!isRecord2(parsed)) throw new BridgeError("provider_config_invalid", "Bridge runtime config must contain a JSON object");
+          config2 = parsed;
+        } catch (error2) {
+          if (isMissingFile(error2)) {
+            config2 = {};
+            for (const directory of this.#host.legacySettingsDirectories ?? []) {
+              const legacyPath = path9.join(directory, "runtime-config.json");
+              try {
+                if ((await stat(legacyPath)).size > 64 * 1024) throw new Error("legacy settings exceed size limit");
+                const legacy = JSON.parse(await readFile(legacyPath, "utf8"));
+                if (!isRecord2(legacy)) throw new Error("invalid legacy settings");
+                loadPersistedRuntimeEnvironment(this.#sourceEnv, this.#homeDir, this.#host);
+                config2 = legacy;
+                break;
+              } catch (legacyError) {
+                if (!isMissingFile(legacyError)) throw new BridgeError("provider_config_invalid", "Could not migrate host runtime settings", { cause: legacyError });
+              }
+            }
+          } else if (error2 instanceof BridgeError) throw error2;
+          else throw new BridgeError("provider_config_invalid", "Could not read Bridge runtime config", { cause: error2 });
         }
-        const parsed = JSON.parse(await readFile(configPath, "utf8"));
-        if (!isRecord2(parsed)) throw new BridgeError("provider_config_invalid", "Bridge runtime config must contain a JSON object");
-        config2 = parsed;
-      } catch (error2) {
-        if (isMissingFile(error2)) config2 = {};
-        else if (error2 instanceof BridgeError) throw error2;
-        else throw new BridgeError("provider_config_invalid", `Could not read Bridge runtime config: ${error2 instanceof Error ? error2.message : String(error2)}`);
-      }
-      update(config2);
-      const serialized = `${JSON.stringify(config2, null, 2)}
+        update(config2);
+        const serialized = `${JSON.stringify(config2, null, 2)}
 `;
-      if (Buffer.byteLength(serialized, "utf8") > 64 * 1024) {
-        throw new BridgeError("provider_config_invalid", "Updated Bridge runtime config would exceed 64 KiB");
-      }
-      const tempPath = `${configPath}.${process.pid}.${randomUUID2()}.tmp`;
-      try {
-        await writeFile(tempPath, serialized, { encoding: "utf8", flag: "wx", mode: 384 });
-        await rename(tempPath, configPath);
-      } catch (error2) {
-        await rm(tempPath, { force: true }).catch(() => void 0);
-        throw new BridgeError("provider_config_invalid", `Could not save Bridge runtime config: ${error2 instanceof Error ? error2.message : String(error2)}`);
-      }
+        if (Buffer.byteLength(serialized, "utf8") > 64 * 1024) {
+          throw new BridgeError("provider_config_invalid", "Updated Bridge runtime config would exceed 64 KiB");
+        }
+        const tempPath = `${configPath}.${process.pid}.${randomUUID3()}.tmp`;
+        try {
+          await writeFile(tempPath, serialized, { encoding: "utf8", flag: "wx", mode: 384 });
+          await atomicRename(tempPath, configPath);
+        } catch (error2) {
+          await rm(tempPath, { force: true }).catch(() => void 0);
+          throw new BridgeError("provider_config_invalid", `Could not save Bridge runtime config: ${error2 instanceof Error ? error2.message : String(error2)}`);
+        }
+      });
     });
     this.#writeQueue = operation.catch(() => void 0);
     return operation;
@@ -24269,7 +24674,7 @@ function startAppServer(config2, cwd, env) {
         pending.delete(message.id);
         if (message.error !== void 0) {
           const error2 = asRecord3(message.error);
-          call.reject(new Error(typeof error2.message === "string" ? error2.message : "ZCode app-server request failed"));
+          call.reject(new Error(`ZCode app-server request failed${typeof error2.code === "number" ? ` (code ${error2.code})` : ""}`));
         } else call.resolve(message.result);
       } else if ((typeof message.id === "string" || typeof message.id === "number") && typeof message.method === "string") {
         write({ id: message.id, error: { code: -32601, message: `Unsupported ZCode app-server request: ${message.method}` } });
@@ -24325,7 +24730,7 @@ function startAppServer(config2, cwd, env) {
         });
       });
     }
-    if (!closed && child.pid) await terminateProcessTree(child.pid).catch(() => void 0);
+    if (child.pid && (!closed || process.platform !== "win32")) await terminateProcessTree(child.pid);
   };
   return { child, request, close, get stderr() {
     return stderr;
@@ -24372,7 +24777,7 @@ function isRecord2(value) {
 function isMissingFile(error2) {
   return typeof error2 === "object" && error2 !== null && "code" in error2 && error2.code === "ENOENT";
 }
-function modelCatalogCachePath(workspace, config2, env) {
+function modelCatalogCachePath(workspace, config2, env, settingsDirectory) {
   const identity = JSON.stringify({
     workspace,
     node: config2.nodeExecutable,
@@ -24382,7 +24787,7 @@ function modelCatalogCachePath(workspace, config2, env) {
     zcodeHome: env.ZCODE_HOME ?? ""
   });
   const key = createHash3("sha256").update(identity).digest("hex");
-  return path7.join(homedir2(), ".codex", "codex-zcode-bridge", "model-catalog", `${key}.json`);
+  return path9.join(settingsDirectory, "model-catalog", `${key}.json`);
 }
 async function modelCatalogSourceFingerprint(config2, env) {
   const digest = createHash3("sha256");
@@ -24412,32 +24817,37 @@ async function readModelCatalogCache(cachePath) {
 function toCachedCatalogEntry(value) {
   if (!isRecord2(value) || typeof value.provider_id !== "string" || !value.provider_id || typeof value.model_id !== "string" || !value.model_id || typeof value.label !== "string") return null;
   if (value.reasoning_levels !== void 0 && (!Array.isArray(value.reasoning_levels) || !value.reasoning_levels.every((level) => isRecord2(level) && typeof level.value === "string" && typeof level.label === "string"))) return null;
-  return value;
+  for (const key of ["provider_label", "reasoning_default_level", "disabled_reason"]) if (value[key] !== void 0 && typeof value[key] !== "string") return null;
+  for (const key of ["context_window", "max_output_tokens"]) if (value[key] !== void 0 && (typeof value[key] !== "number" || !Number.isFinite(value[key]) || value[key] < 0)) return null;
+  const result = {};
+  for (const key of ["provider_id", "model_id", "label", "provider_label", "context_window", "max_output_tokens", "reasoning_default_level", "disabled_reason"]) if (value[key] !== void 0) result[key] = value[key];
+  if (Array.isArray(value.reasoning_levels)) result.reasoning_levels = value.reasoning_levels.map((level) => ({ value: level.value, label: level.label }));
+  return result;
 }
 async function writeModelCatalogCache(cachePath, cache) {
-  await mkdir(path7.dirname(cachePath), { recursive: true });
-  const tempPath = `${cachePath}.${process.pid}.${randomUUID2()}.tmp`;
+  await mkdir(path9.dirname(cachePath), { recursive: true });
+  const tempPath = `${cachePath}.${process.pid}.${randomUUID3()}.tmp`;
   try {
     await writeFile(tempPath, `${JSON.stringify(cache)}
 `, { encoding: "utf8", flag: "wx", mode: 384 });
-    await rename(tempPath, cachePath);
+    await atomicRename(tempPath, cachePath);
   } catch (error2) {
     await rm(tempPath, { force: true }).catch(() => void 0);
     throw error2;
   }
 }
 
-// src/mcp/main.ts
+// src/host/stdio.ts
 function resolveDataRoot(env) {
   const override = env["ZCODE_BRIDGE_DATA_DIR"]?.trim();
   if (override) {
-    if (!path8.isAbsolute(override)) {
+    if (!path10.isAbsolute(override)) {
       return {
         dataRoot: findPackageRoot(),
         warning: `ZCODE_BRIDGE_DATA_DIR must be an absolute path; ignoring ${override} and using the Bridge installation directory`
       };
     }
-    return { dataRoot: path8.normalize(override) };
+    return { dataRoot: path10.normalize(override) };
   }
   return { dataRoot: findPackageRoot() };
 }
@@ -24452,10 +24862,12 @@ function resolveMaxConcurrentWorkers(env) {
   }
   return { maxConcurrentWorkers: Number(raw) };
 }
-async function main() {
-  const runtimeEnv = loadPersistedRuntimeEnvironment(process.env);
+async function startBridge(host = codexHostProfile(), version2 = SERVER_VERSION) {
+  validateHostProfile(host);
+  const runtimeEnv = loadPersistedRuntimeEnvironment(process.env, homedir4(), host);
+  if (!runtimeEnv["ZCODE_BRIDGE_DATA_DIR"]?.trim() && host.defaultDataRoot) runtimeEnv["ZCODE_BRIDGE_DATA_DIR"] = host.defaultDataRoot;
   if (process.env["ZCODE_BRIDGE_PLUGIN_MODE"] === "1" && !runtimeEnv["ZCODE_BRIDGE_DATA_DIR"]?.trim()) {
-    runtimeEnv["ZCODE_BRIDGE_DATA_DIR"] = path8.join(homedir3(), ".codex", "codex-zcode-bridge");
+    runtimeEnv["ZCODE_BRIDGE_DATA_DIR"] = host.settingsDirectory;
   }
   const { dataRoot, warning } = resolveDataRoot(runtimeEnv);
   if (warning) {
@@ -24477,13 +24889,16 @@ async function main() {
   const manager = new BridgeTaskManager({
     store,
     workspaceProvider: new DirectWorkspaceProvider(),
-    maxConcurrentWorkers: workerLimit.maxConcurrentWorkers
+    maxConcurrentWorkers: workerLimit.maxConcurrentWorkers,
+    spawnWorker: createWorkerSpawner(host)
   });
-  const modelSettings = new ZCodeModelSettings(process.env);
+  const modelSettings = new ZCodeModelSettings(process.env, { host });
   const server = createBridgeServer({
     taskManager: manager,
-    doctor: () => runBridgeDoctor({ env: runtimeEnv, dataRoot }),
-    modelSettings
+    doctor: () => runBridgeDoctor({ env: runtimeEnv, dataRoot, resolver: { host } }),
+    modelSettings,
+    serverInfo: { name: host.name, version: version2 },
+    instructions: host.instructions
   });
   const handle = serveStdio(() => server);
   let closing = false;
@@ -24500,20 +24915,22 @@ async function main() {
   };
   process.once("SIGINT", () => shutdown("SIGINT"));
   process.once("SIGTERM", () => shutdown("SIGTERM"));
-  console.error("[bridge] codex-zcode-bridge stdio MCP server ready");
+  console.error(`[bridge] ${host.name} stdio MCP server ready`);
 }
+
+// src/mcp/main.ts
 var isEntry = process.argv[1] !== void 0 && sameRealPath(import.meta.url, process.argv[1]);
 function sameRealPath(moduleUrl, argvPath) {
   try {
     const modulePath = realpathSync2(fileURLToPath3(moduleUrl));
-    const entryPath = realpathSync2(path8.resolve(argvPath));
+    const entryPath = realpathSync2(path11.resolve(argvPath));
     return process.platform === "win32" ? modulePath.toLocaleLowerCase("en-US") === entryPath.toLocaleLowerCase("en-US") : modulePath === entryPath;
   } catch {
     return false;
   }
 }
 if (isEntry) {
-  void main().catch((error2) => {
+  void startBridge().catch((error2) => {
     console.error(`[bridge] fatal: ${error2 instanceof Error ? error2.stack ?? error2.message : String(error2)}`);
     process.exit(1);
   });

@@ -12,7 +12,7 @@ import process from "node:process";
 import test from "node:test";
 import { resolveDataRoot, resolveMaxConcurrentWorkers } from "../src/mcp/main.js";
 
-const MAIN_JS = fileURLToPath(new URL("../../dist/src/mcp/main.js", import.meta.url));
+const MAIN_JS = fileURLToPath(new URL("../src/mcp/main.js", import.meta.url));
 const PLUGIN_ROOT = fileURLToPath(new URL("../../plugins/codex-zcode-bridge/", import.meta.url));
 
 const PROTOCOL_MESSAGES = [
@@ -76,7 +76,6 @@ test("compiled stdio entry speaks pure JSON-RPC on stdout and diagnostics on std
       "zcode_events",
       "zcode_interaction_reply",
       "zcode_model_catalog",
-      "zcode_progress_probe",
       "zcode_result",
       "zcode_set_default_model",
       "zcode_status",
@@ -129,7 +128,7 @@ test("marketplace bundle starts from its plugin root without repo-local dependen
     const toolsList = messages.find((message) => message.id === 2)?.result;
     const toolNames = ((toolsList?.["tools"] as Array<{ name: string }> | undefined) ?? []).map((tool) => tool.name).sort();
     assert.deepEqual(toolNames, [
-      "zcode_cancel", "zcode_clear_default_model", "zcode_continue", "zcode_default_model", "zcode_doctor", "zcode_events", "zcode_interaction_reply", "zcode_model_catalog", "zcode_progress_probe", "zcode_result", "zcode_set_default_model", "zcode_status", "zcode_task",
+      "zcode_cancel", "zcode_clear_default_model", "zcode_continue", "zcode_default_model", "zcode_doctor", "zcode_events", "zcode_interaction_reply", "zcode_model_catalog", "zcode_result", "zcode_set_default_model", "zcode_status", "zcode_task",
     ]);
     assert.ok(existsSync(path.join(PLUGIN_ROOT, "worker", "worker-main.mjs")), "detached worker bundle must ship beside the MCP server");
     assert.match(run.stderr, /data root/);

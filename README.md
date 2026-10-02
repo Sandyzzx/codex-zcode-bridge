@@ -110,7 +110,8 @@ Use `zcode_model_catalog` with the current project path to read app-server model
 
 - The ZCode Desktop sidebar may not immediately show a new session. The Bridge best-effort syncs the local task index; Desktop controls when the list refreshes.
 - ZCode Start Plan is currently unavailable through the Bridge.
-- A worker gets a 10-second cold-start grace window (`workerStartGraceMs`): within it, a missing or just-exited pid does not immediately finalize `worker_lost`; later reconcile ticks re-check. If a worker exits before writing `started.json` (it never ran the task), the Bridge respawns it once on the same attempt (a claim marker in the attempt directory prevents the Bridge processes sharing a data root from double-spawning); a worker that did start is never auto-respawned — the master decides whether to continue. There is still no global lock between processes, so do not submit conflicting tasks in parallel.
+- Workers have a 10-second cold-start grace window. A worker that never began may be respawned once; an attempt that claimed execution never executes twice. Managers sharing a data root serialize scheduling across processes. Separate data roots do not share a lock; avoid submitting tasks against overlapping execution directories through them.
+- Unverified runtime cleanup reserves the task's execution directory and prevents continuation. Call `zcode_cancel` again to verify cleanup before releasing it. Corrupt records are diagnosed and their known directories remain reserved; an unknown execution scope pauses new scheduling.
 
 ## Security and limitations
 
@@ -122,6 +123,8 @@ Use `zcode_model_catalog` with the current project path to read app-server model
 - The Bridge uses the local ZCode app-server. Interactions and available events depend on the installed ZCode version. For AskUserQuestion replies, key `answers` by each full `questions[].question` text and use the selected or explicit answer as its value; do not use the header or option label as the key. A real ZCode user-input roundtrip has been verified; a real permission-approval roundtrip has not. Only allow permission requests when the user explicitly authorizes the action.
 
 ## Build from source
+
+See [SHARED_CORE.md](docs/SHARED_CORE.md) for host integration, [ARCHITECTURE.md](docs/ARCHITECTURE.md) for current architecture, and [INTERFACES.md](docs/INTERFACES.md) for contracts. `npm test` uses disposable homes and fake runtimes, including a real worker's 60-second timeout; it does not call a real model or write a real Desktop database. Oversized task prompts and corrupt existing runtime settings fail explicitly. The experimental `zcode_progress_probe` is disabled by default.
 
 The repository includes TypeScript source for review and self-builds. With Node.js 22.18+:
 

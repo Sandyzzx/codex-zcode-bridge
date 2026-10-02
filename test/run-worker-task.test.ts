@@ -28,13 +28,13 @@ test("successful run persists running state, attempt evidence, logs, and a compl
     const adapter = new FakeAdapter();
     const { result } = await runWorkerTask({
       dataRoot: fixture.dataRoot,
-      taskId: "task_1",
+      taskId: "task_1", attempt: store.readStatus("task_1").attempt,
       adapter,
     });
     assert.equal(result.status, "completed");
     const status = store.readStatus("task_1");
     assert.equal(status.status, "completed");
-    assert.equal(status.worker_pid, process.pid);
+    assert.equal(status.worker_pid, null, "terminal workers release their recorded PID");
     assert.equal(status.zcode_session_id, SESSION_ID);
     assert.equal(status.exit_code, 0);
     const persisted = store.readResult("task_1");
@@ -60,7 +60,7 @@ test("needs_master_decision=true maps to waiting_for_master, not completed", asy
     adapter.behavior = "master";
     const run = await runWorkerTask({
       dataRoot: fixture.dataRoot,
-      taskId: "task_1",
+      taskId: "task_1", attempt: store.readStatus("task_1").attempt,
       adapter,
     });
     assert.equal(run.status, "waiting_for_master");
@@ -78,7 +78,7 @@ test("adapter failure maps to failed with the adapter error code preserved", asy
     adapter.behavior = "adapterFailed";
     const run = await runWorkerTask({
       dataRoot: fixture.dataRoot,
-      taskId: "task_1",
+      taskId: "task_1", attempt: store.readStatus("task_1").attempt,
       adapter,
     });
     assert.equal(run.status, "failed");
@@ -101,7 +101,7 @@ test("injected resolver failure surfaces as a distinct config error before any a
     const adapter = new FakeAdapter();
     const run = await runWorkerTask({
       dataRoot: fixture.dataRoot,
-      taskId: "task_1",
+      taskId: "task_1", attempt: store.readStatus("task_1").attempt,
       adapter,
       resolver: {
         resolve: async () => {
@@ -124,7 +124,7 @@ test("a pre-recorded cancel intent finishes cancelled without touching the adapt
     const adapter = new FakeAdapter();
     const run = await runWorkerTask({
       dataRoot: fixture.dataRoot,
-      taskId: "task_1",
+      taskId: "task_1", attempt: store.readStatus("task_1").attempt,
       adapter,
     });
     assert.equal(run.status, "cancelled");
@@ -141,7 +141,7 @@ test("continuation spec drives continueTask with feedback and prior evidence", a
   const { fixture, store } = await workerFixture();
   try {
     // Attempt 1 completes normally.
-    await runWorkerTask({ dataRoot: fixture.dataRoot, taskId: "task_1", adapter: new FakeAdapter() });
+    await runWorkerTask({ dataRoot: fixture.dataRoot, taskId: "task_1", attempt: store.readStatus("task_1").attempt, adapter: new FakeAdapter() });
     // The manager archives attempt 1's result and records attempt 2's spec.
     store.archiveResultToAttempt("task_1", 1);
     store.writeStatus("task_1", {
@@ -164,7 +164,7 @@ test("continuation spec drives continueTask with feedback and prior evidence", a
     const adapter = new FakeAdapter();
     const run = await runWorkerTask({
       dataRoot: fixture.dataRoot,
-      taskId: "task_1",
+      taskId: "task_1", attempt: store.readStatus("task_1").attempt,
       adapter,
     });
     assert.equal(run.status, "completed");

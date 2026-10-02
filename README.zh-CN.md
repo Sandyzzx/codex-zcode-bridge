@@ -40,7 +40,7 @@ codex plugin add codex-zcode-bridge@codex-zcode-bridge
 - `ZCODE_BRIDGE_DATA_DIR`：Bridge 任务数据目录的绝对路径。
 - `ZCODE_BRIDGE_DEFAULT_PROVIDER_ID` 与 `ZCODE_BRIDGE_DEFAULT_MODEL_ID`：默认 provider 和 model ID，必须成对填写。
 - `ZCODE_BRIDGE_MODE`：初始执行模式，可设为 `plan`、`build`、`edit` 或 `yolo`，默认 `yolo`。`yolo` 会放行普通工具操作并使用当前操作系统账户权限；如需 ZCode 的审批规则，可设为 `build`。
-- `ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS`：单进程并行任务上限，范围 1–8，默认 8；重叠执行路径仍会串行。
+- `ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS`：同一数据目录内的调度并行上限，范围 1–8，默认 8；多个 Bridge 进程应使用一致设置，重叠执行路径串行。
 - `ZCODE_BRIDGE_TIMEOUT_MS`：未在任务中指定 `timeout_ms` 时使用的单次执行时限，单位毫秒，范围 60,000–14,400,000；默认 3,600,000（60 分钟）。
 
 保存为有效 JSON 后，新启动的 Bridge 会读取配置文件；它优先于旧环境变量设置。`ZCODE_HOME` 应指向 `.zcode` 目录，个人 provider 配置文件需位于该目录下的 `v2/provider_config.json`。Provider/model ID 请从 ZCode 配置中复制，不要改写 ZCode 的 provider 文件。
@@ -63,7 +63,8 @@ ZCode Desktop 的 Workspace 视图按 Codex 项目目录查找任务。
 
 - ZCode Desktop 侧栏可能不会立即刷新并显示新会话。Bridge 会尽力同步本机任务索引，列表刷新时机由 Desktop 决定。
 - 目前无法通过 Bridge 使用 ZCode Start Plan。
-- worker 启动后有 10 秒冷启动宽限期（`workerStartGraceMs` 可配置）：宽限期内即使存活检查发现 pid 缺失或刚退出，也不会立即固化 `worker_lost`，由后续 tick 复查。若 worker 在写入 `started.json` 前就退出（从未执行任务），Bridge 会在同一 attempt 内自动重拉一次（以 attempt 目录内的抢占标记防止多个 Bridge 进程重复拉起）；已起步的 worker 死亡不会自动重拉，由 master 决定是否 continue。进程间仍无全局调度锁，请勿并行提交冲突任务。
+- worker 有 10 秒冷启动宽限期；未起步的 worker 最多重拉一次，已抢占执行权的 attempt 不重复执行。同一数据目录内跨进程调度互斥；不同数据目录之间不共享锁，应避免提交重叠目录的任务。
+- 运行时清理未验证的任务保留目录占用并拒绝续跑，可再次调用 `zcode_cancel` 验证清理后释放。损坏任务记录会报告诊断并保留可确定的目录占用；执行范围无法确定时暂停新调度。
 
 ## 安全与限制
 
@@ -75,6 +76,8 @@ ZCode Desktop 的 Workspace 视图按 Codex 项目目录查找任务。
 - Bridge 使用本机 ZCode app-server；交互请求是否出现及协议字段受已安装的 ZCode 版本影响。Bridge 会通过 `interaction_requested` 事件将权限或用户输入请求交给 Codex，再用 `zcode_interaction_reply` 回答。AskUserQuestion 的 `answers` 以每个问题的完整 `question` 文本为键、答案为值，不能用表头或选项标签作键；真实 ZCode 用户输入往返已验证，真实权限审批往返尚未验证。权限请求只应在用户明确授权后放行。
 
 ## 源码构建
+
+共享核心与其他宿主的接入方式见 [SHARED_CORE.md](docs/SHARED_CORE.md)，当前架构及契约见 [ARCHITECTURE.md](docs/ARCHITECTURE.md) 和 [INTERFACES.md](docs/INTERFACES.md)。`npm test` 使用临时用户目录和假运行时，包含 60 秒真实 worker 超时回归；不会调用真实模型或写入真实 Desktop 数据库。任务 prompt 超限会明确拒绝，不截掉安全约束；存在但损坏的运行配置也会明确报错。实验 `zcode_progress_probe` 默认不注册。
 
 仓库保留 TypeScript 源码供审查和自行构建。需要 Node.js 22.18+，运行：
 

@@ -27,4 +27,4 @@ codex plugin add codex-zcode-bridge@codex-zcode-bridge
 
 ZCode 以当前操作系统用户权限运行。Git worktree 不是 OS 沙箱；`allowed_paths` 和 `forbidden_paths` 是任务指令，不能强制限制文件或命令访问。任务 prompt、日志、可见模型输出和结果会保存在本机 `.codex/codex-zcode-bridge/` 目录。派发前请检查任务可见的工作区内容。
 
-Marketplace 用户配置自定义 ZCode 路径或默认模型的说明见[仓库安装指南](https://github.com/Sandyzzx/codex-zcode-bridge/blob/master/README.md#安装)。
+Marketplace 用户配置自定义 ZCode 路径或默认模型的说明见[中文安装指南](https://github.com/Sandyzzx/codex-zcode-bridge/blob/master/README.zh-CN.md#安装)。

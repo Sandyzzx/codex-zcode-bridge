@@ -20,10 +20,10 @@ export function buildTaskPrompt(task: TaskPackage): string {
     `TASK ID: ${task.task_id}`,
     "You are a subordinate coding agent executing one bounded task inside the current working directory. Stay inside the workspace; do not touch files outside it.",
     `PROJECT WORKSPACE: ${task.workspace}`,
-    ...(task.worktree_path ? [`CODEX-SELECTED EXECUTION WORKTREE: ${task.worktree_path}. Make task changes in the current working directory, which is this worktree; the project workspace above identifies its parent project.`] : []),
+    ...(task.worktree_path ? [`HOST-SELECTED EXECUTION WORKTREE: ${task.worktree_path}. Make task changes in the current working directory, which is this worktree; the project workspace above identifies its parent project.`] : []),
     ...(task.model ? [`REQUESTED ZCODE MODEL: ${task.model.provider_id}/${task.model.model_id}${task.model.reasoning_level ? ` (reasoning level: ${task.model.reasoning_level})` : ""}. The Bridge configures this model for the session.`] : []),
     ...(task.timeout_ms ? [`EXECUTION TIME LIMIT: ${task.timeout_ms} ms for this attempt.`] : []),
-    `OBJECTIVE\n${bounded(task.objective, MAX_SECTION_CHARS)}`,
+    `OBJECTIVE\n${task.objective}`,
     renderList("REQUIREMENTS", task.requirements),
     renderPaths("ALLOWED PATHS (write only inside these when provided)", task.allowed_paths),
     renderPaths("FORBIDDEN PATHS (never create, modify, or delete)", task.forbidden_paths),
@@ -68,7 +68,7 @@ export function buildContinuePrompt(input: ContinuePromptInput): string {
       );
     }
   }
-  sections.push(`MASTER FEEDBACK (address every point)\n${bounded(feedback, MAX_SECTION_CHARS)}`);
+  sections.push(`MASTER FEEDBACK (address every point)\n${feedback}`);
   if (additionalRequirements.length > 0) {
     sections.push(renderList("ADDITIONAL REQUIREMENTS", [...additionalRequirements]));
   }
@@ -85,8 +85,8 @@ const OUTPUT_CONTRACT = [
 
 const DECISION_RULE = [
   "DECISION RULE",
-  "Use only this task package, this prompt, repository files you inspect, and available tools; do not assume access to Codex's conversation.",
-  "Do not choose unresolved items explicitly listed under OPEN DECISIONS; a later explicit Master Feedback decision resolves that item. Also escalate conflicting requirements or missing decisions that would materially change externally visible behavior, even when Codex did not list them. Record the exact question in issues and set needs_master_decision=true. Continue independent work that does not depend on the decision. For low-impact implementation choices, use the simplest consistent option and state the assumption in issues.",
+  "Use only this task package, this prompt, repository files you inspect, and available tools; do not assume access to the calling host's conversation.",
+  "Do not choose unresolved items explicitly listed under OPEN DECISIONS; a later explicit Master Feedback decision resolves that item. Also escalate conflicting requirements or missing decisions that would materially change externally visible behavior, even when the calling host did not list them. Record the exact question in issues and set needs_master_decision=true. Continue independent work that does not depend on the decision. For low-impact implementation choices, use the simplest consistent option and state the assumption in issues.",
 ].join("\n");
 
 function renderList(title: string, items: readonly string[]): string {
@@ -111,7 +111,6 @@ function bounded(text: string, maxChars: number): string {
 function joinBoundedPreservingTail(sections: readonly string[], requiredTail: string): string {
   const joined = sections.join("\n\n");
   if (joined.length <= MAX_PROMPT_CHARS) return joined;
-  const headBudget = MAX_PROMPT_CHARS - requiredTail.length - 24;
-  const head = joined.slice(0, Math.max(0, headBudget));
-  return `${head}…[middle truncated to preserve required output contract]\n\n${requiredTail}`;
+  void requiredTail;
+  throw new Error(`task prompt exceeds ${MAX_PROMPT_CHARS} characters; shorten the task package without dropping constraints`);
 }

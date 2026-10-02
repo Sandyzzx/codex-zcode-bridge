@@ -1,6 +1,7 @@
 node_modules/
 dist/
 dist-test/
+.build-core-*/
 !test/
 !test/**
 coverage/
@@ -9,3 +10,11 @@ plugins/codex-zcode-bridge/.mcp.local.json
 .env
 .env.*
 !.env.example
+# Current shared-core contracts are versioned; other local research stays local.
+!docs/
+docs/*
+!docs/SHARED_CORE.md
+!docs/ARCHITECTURE.md
+!docs/INTERFACES.md
+!docs/ZCODE_RUNTIME.md
+!docs/PHASE7_LIVE_PROGRESS.md

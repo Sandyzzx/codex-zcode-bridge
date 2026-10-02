@@ -129,10 +129,10 @@ test("the frozen tools and additive progress, interaction, and doctor tools are 
     const { tools } = await client.listTools();
     assert.deepEqual(
       tools.map((tool) => tool.name).sort(),
-      ["zcode_cancel", "zcode_clear_default_model", "zcode_continue", "zcode_default_model", "zcode_doctor", "zcode_events", "zcode_interaction_reply", "zcode_model_catalog", "zcode_progress_probe", "zcode_result", "zcode_set_default_model", "zcode_status", "zcode_task"],
+      ["zcode_cancel", "zcode_clear_default_model", "zcode_continue", "zcode_default_model", "zcode_doctor", "zcode_events", "zcode_interaction_reply", "zcode_model_catalog", "zcode_result", "zcode_set_default_model", "zcode_status", "zcode_task"],
     );
     const task = tools.find((tool) => tool.name === "zcode_task")!;
-    assert.match(task.description!, /Codex/);
+    assert.match(task.description!, /calling host/);
     assert.match(task.description!, /NOT/);
     for (const tool of tools) {
       assert.ok(tool.description && tool.description.length > 20, `${tool.name} needs a description`);

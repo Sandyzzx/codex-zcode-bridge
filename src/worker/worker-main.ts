@@ -4,17 +4,20 @@
 //
 // Usage: node worker-main.js <dataRoot> <taskId>
 import { runWorkerTask } from "./run-task.js";
+import { validateHostProfile, type BridgeHostProfile } from "../host/profile.js";
 
-const [dataRoot, taskId] = process.argv.slice(2);
-if (!dataRoot || !taskId) {
-  console.error("usage: node worker-main.js <dataRoot> <taskId>");
+const [dataRoot, taskId, attemptText] = process.argv.slice(2);
+if (!dataRoot || !taskId || !attemptText || !/^[1-9]\d*$/u.test(attemptText) || !Number.isSafeInteger(Number(attemptText))) {
+  console.error("usage: node worker-main.js <dataRoot> <taskId> <attempt>");
   process.exit(2);
 }
 
 try {
   // Let runWorkerTask construct the app-server adapter with its progress
   // persistence callback. Passing an adapter here would bypass that callback.
-  const { status } = await runWorkerTask({ dataRoot, taskId });
+  const hostText = process.env["ZCODE_BRIDGE_HOST_PROFILE"];
+  const host = hostText ? validateHostProfile(JSON.parse(hostText) as BridgeHostProfile) : undefined;
+  const { status } = await runWorkerTask({ dataRoot, taskId, host, attempt: Number(attemptText) });
   process.exitCode = 0;
   void status;
 } catch (error) {
