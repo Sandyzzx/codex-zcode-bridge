@@ -21531,9 +21531,10 @@ function toError(value) {
 }
 
 // src/mcp/main.ts
+import { realpathSync as realpathSync2 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
 import path8 from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath as fileURLToPath3 } from "node:url";
 
 // src/runtime/resolver.ts
 import { accessSync, existsSync, readFileSync, statSync } from "node:fs";
@@ -22049,6 +22050,31 @@ var TaskStore = class {
     const file = path2.join(this.attemptDir(taskId, attempt), fileName);
     if (!existsSync2(file)) return null;
     return readFileSync2(file, "utf8");
+  }
+  /**
+   * Atomically claims the single worker-respawn slot for an attempt by
+   * creating the marker file with an exclusive flag, so several Bridge
+   * processes sharing this data root can never spawn two replacement
+   * workers. Returns false when the slot is already claimed.
+   */
+  claimAttemptRespawn(taskId, attempt) {
+    const dir = this.attemptDir(taskId, attempt);
+    privateMkdir(dir);
+    try {
+      closeSync(openSync(path2.join(dir, "respawn.claim"), "wx"));
+      return true;
+    } catch (error2) {
+      if (error2.code === "EEXIST") return false;
+      throw error2;
+    }
+  }
+  /** File time of the respawn claim, or null when the attempt is unclaimed. */
+  respawnClaimedAt(taskId, attempt) {
+    try {
+      return statSync2(path2.join(this.attemptDir(taskId, attempt), "respawn.claim")).mtime;
+    } catch {
+      return null;
+    }
   }
   /** Append-only, byte-bounded. Returns whether the chunk was truncated. */
   appendLog(taskId, kind, text) {
@@ -22731,7 +22757,9 @@ function validateTaskTimeout(value) {
 }
 
 // src/manager/task-manager.ts
-var BridgeTaskManager = class {
+var BridgeTaskManager = class _BridgeTaskManager {
+  /** How long a respawn claim counts as in-flight across Bridge processes. */
+  static RESPAWN_IN_FLIGHT_MS = 1e4;
   #store;
   #workspaceProvider;
   #spawnWorker;
@@ -22740,6 +22768,7 @@ var BridgeTaskManager = class {
   #now;
   #dataRoot;
   #maxConcurrentWorkers;
+  #workerStartGraceMs;
   #timer = null;
   #mutex = Promise.resolve();
   constructor(options) {
@@ -22753,6 +22782,10 @@ var BridgeTaskManager = class {
     this.#maxConcurrentWorkers = options.maxConcurrentWorkers ?? 8;
     if (!Number.isInteger(this.#maxConcurrentWorkers) || this.#maxConcurrentWorkers < 1 || this.#maxConcurrentWorkers > 8) {
       throw new RangeError("maxConcurrentWorkers must be an integer from 1 to 8");
+    }
+    this.#workerStartGraceMs = options.workerStartGraceMs ?? 1e4;
+    if (!Number.isInteger(this.#workerStartGraceMs) || this.#workerStartGraceMs < 0) {
+      throw new RangeError("workerStartGraceMs must be a non-negative integer");
     }
     const pollIntervalMs = options.pollIntervalMs ?? 1e3;
     if (pollIntervalMs > 0) {
@@ -23108,6 +23141,26 @@ var BridgeTaskManager = class {
     const pid = status.worker_pid;
     const alive = pid !== null && this.#isProcessRunning(pid);
     if (alive) return;
+    const startedAtMs = status.started_at === null ? Number.NaN : Date.parse(status.started_at);
+    const withinGrace = Number.isFinite(startedAtMs) && this.#now().getTime() - startedAtMs < this.#workerStartGraceMs;
+    const workerBegan = this.#store.readAttemptMeta(taskId, status.attempt, "started.json") !== null;
+    if (pid === null && withinGrace) return;
+    if (pid !== null && workerBegan && withinGrace) return;
+    if (!workerBegan) {
+      if (this.#store.claimAttemptRespawn(taskId, status.attempt)) {
+        const respawned = this.#spawnWorker(this.#dataRoot, taskId, status.attempt);
+        this.#store.writeStatus(taskId, { worker_pid: respawned.pid });
+        this.#store.appendEvent(
+          taskId,
+          "worker_respawned",
+          `Bridge respawned the worker: previous pid ${String(pid)} exited before writing any task state`,
+          { worker_pid: respawned.pid, previous_pid: pid, attempt: status.attempt }
+        );
+        return;
+      }
+      const claimedAt = this.#store.respawnClaimedAt(taskId, status.attempt);
+      if (claimedAt && Date.now() - claimedAt.getTime() < _BridgeTaskManager.RESPAWN_IN_FLIGHT_MS) return;
+    }
     const task = this.#store.readTask(taskId);
     const finishedAt = this.#now().toISOString();
     const workerStderr = this.#store.readAttemptText(taskId, status.attempt, "worker-stderr.log") ?? "";
@@ -24449,7 +24502,16 @@ async function main() {
   process.once("SIGTERM", () => shutdown("SIGTERM"));
   console.error("[bridge] codex-zcode-bridge stdio MCP server ready");
 }
-var isEntry = process.argv[1] !== void 0 && import.meta.url === pathToFileURL(path8.resolve(process.argv[1])).href;
+var isEntry = process.argv[1] !== void 0 && sameRealPath(import.meta.url, process.argv[1]);
+function sameRealPath(moduleUrl, argvPath) {
+  try {
+    const modulePath = realpathSync2(fileURLToPath3(moduleUrl));
+    const entryPath = realpathSync2(path8.resolve(argvPath));
+    return process.platform === "win32" ? modulePath.toLocaleLowerCase("en-US") === entryPath.toLocaleLowerCase("en-US") : modulePath === entryPath;
+  } catch {
+    return false;
+  }
+}
 if (isEntry) {
   void main().catch((error2) => {
     console.error(`[bridge] fatal: ${error2 instanceof Error ? error2.stack ?? error2.message : String(error2)}`);

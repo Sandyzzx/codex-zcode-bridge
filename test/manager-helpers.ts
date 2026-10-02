@@ -149,12 +149,18 @@ export interface ManagerFixture {
   pidsAlive: Set<number>;
   terminateCalls: number[];
   setTerminateError: (error: Error | null) => void;
+  /** Moves the fake clock forward; the manager's injected now() reads it. */
+  advanceMs: (ms: number) => void;
   makeTask: (overrides?: Partial<TaskPackage>) => TaskPackage;
   runWorker: (taskId: string, adapter: FakeAdapter, behavior?: FakeBehavior) => Promise<unknown>;
   cleanup: () => Promise<void>;
 }
 
-export async function makeManagerFixture(options: { maxConcurrentWorkers?: number } = {}): Promise<ManagerFixture> {
+export async function makeManagerFixture(options: {
+  maxConcurrentWorkers?: number;
+  /** Defaults to 0 (immediate worker_lost finalization) for legacy tests. */
+  workerStartGraceMs?: number;
+} = {}): Promise<ManagerFixture> {
   const dataRoot = await mkdtemp(path.join(tmpdir(), "zcode-bridge-mgr-"));
   const workspaceDir = await mkdtemp(path.join(tmpdir(), "zcode-bridge-ws-"));
   const store = new TaskStore(dataRoot);
@@ -162,7 +168,8 @@ export async function makeManagerFixture(options: { maxConcurrentWorkers?: numbe
   const pidsAlive = new Set<number>();
   const terminateCalls: number[] = [];
   let terminateError: Error | null = null;
-  let clock = 0;
+  const clockBaseMs = Date.UTC(2026, 8, 27, 0, 0, 0);
+  let clockMs = 1_000;
 
   const terminate: TerminateProcessTree = async (pid) => {
     terminateCalls.push(pid);
@@ -184,7 +191,8 @@ export async function makeManagerFixture(options: { maxConcurrentWorkers?: numbe
     terminateProcessTree: terminate,
     pollIntervalMs: 0,
     maxConcurrentWorkers: options.maxConcurrentWorkers,
-    now: () => new Date(Date.UTC(2026, 8, 27, 0, 0, 0) + ++clock * 1_000),
+    workerStartGraceMs: options.workerStartGraceMs ?? 0,
+    now: () => new Date(clockBaseMs + clockMs),
   });
 
   return {
@@ -197,6 +205,9 @@ export async function makeManagerFixture(options: { maxConcurrentWorkers?: numbe
     terminateCalls,
     setTerminateError: (error) => {
       terminateError = error;
+    },
+    advanceMs: (ms) => {
+      clockMs += ms;
     },
     makeTask: (overrides = {}) => ({
       task_id: "task_1",

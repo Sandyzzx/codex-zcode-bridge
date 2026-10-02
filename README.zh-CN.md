@@ -63,6 +63,7 @@ ZCode Desktop 的 Workspace 视图按 Codex 项目目录查找任务。
 
 - ZCode Desktop 侧栏可能不会立即刷新并显示新会话。Bridge 会尽力同步本机任务索引，列表刷新时机由 Desktop 决定。
 - 目前无法通过 Bridge 使用 ZCode Start Plan。
+- worker 启动后有 10 秒冷启动宽限期（`workerStartGraceMs` 可配置）：宽限期内即使存活检查发现 pid 缺失或刚退出，也不会立即固化 `worker_lost`，由后续 tick 复查。若 worker 在写入 `started.json` 前就退出（从未执行任务），Bridge 会在同一 attempt 内自动重拉一次（以 attempt 目录内的抢占标记防止多个 Bridge 进程重复拉起）；已起步的 worker 死亡不会自动重拉，由 master 决定是否 continue。进程间仍无全局调度锁，请勿并行提交冲突任务。
 
 ## 安全与限制
 

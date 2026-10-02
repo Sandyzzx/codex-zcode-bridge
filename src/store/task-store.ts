@@ -201,6 +201,33 @@ export class TaskStore {
     return readFileSync(file, "utf8");
   }
 
+  /**
+   * Atomically claims the single worker-respawn slot for an attempt by
+   * creating the marker file with an exclusive flag, so several Bridge
+   * processes sharing this data root can never spawn two replacement
+   * workers. Returns false when the slot is already claimed.
+   */
+  claimAttemptRespawn(taskId: string, attempt: number): boolean {
+    const dir = this.attemptDir(taskId, attempt);
+    privateMkdir(dir);
+    try {
+      closeSync(openSync(path.join(dir, "respawn.claim"), "wx"));
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+      throw error;
+    }
+  }
+
+  /** File time of the respawn claim, or null when the attempt is unclaimed. */
+  respawnClaimedAt(taskId: string, attempt: number): Date | null {
+    try {
+      return statSync(path.join(this.attemptDir(taskId, attempt), "respawn.claim")).mtime;
+    } catch {
+      return null;
+    }
+  }
+
   /** Append-only, byte-bounded. Returns whether the chunk was truncated. */
   appendLog(taskId: string, kind: "stdout" | "stderr", text: string): { truncated: boolean } {
     if (!text) return { truncated: false };

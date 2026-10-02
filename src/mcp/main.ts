@@ -8,9 +8,10 @@
 // manager's reconcile timer without touching detached workers, which must
 // survive server restarts.
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
+import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { findPackageRoot, loadPersistedRuntimeEnvironment } from "../runtime/resolver.js";
 import { TaskStore } from "../store/task-store.js";
 import { DirectWorkspaceProvider } from "../workspace/direct-provider.js";
@@ -121,9 +122,22 @@ async function main(): Promise<void> {
 
 // Run the server only when this file is the process entry point (importing
 // the module — e.g. from tests — must not start listening on stdin).
-const isEntry =
-  process.argv[1] !== undefined &&
-  import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+// Compared through realpath: symlink or junction installs report the
+// physical path in import.meta.url while argv[1] keeps the link path, and
+// a textual comparison would make a real launch silently do nothing.
+const isEntry = process.argv[1] !== undefined && sameRealPath(import.meta.url, process.argv[1]);
+
+function sameRealPath(moduleUrl: string, argvPath: string): boolean {
+  try {
+    const modulePath = realpathSync(fileURLToPath(moduleUrl));
+    const entryPath = realpathSync(path.resolve(argvPath));
+    return process.platform === "win32"
+      ? modulePath.toLocaleLowerCase("en-US") === entryPath.toLocaleLowerCase("en-US")
+      : modulePath === entryPath;
+  } catch {
+    return false;
+  }
+}
 if (isEntry) {
   void main().catch((error: unknown) => {
     console.error(`[bridge] fatal: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);

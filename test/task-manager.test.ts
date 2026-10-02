@@ -3,6 +3,7 @@
 // confirmation, and crash recovery with worker_lost — all against a real
 // TaskStore in a temp directory with fake workers. No model calls.
 import assert from "node:assert/strict";
+import { utimesSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -159,6 +160,11 @@ test("parallel recovery keeps live workers in their slots and starts queued work
 
     await fx.manager.recoverTasks();
     assert.equal(fx.spawned.length, 2, "recovery must not duplicate live worker processes");
+    // recover_a's worker had already started; its loss is final and frees the slot.
+    fx.store.writeAttemptMeta("recover_a", 1, "started.json", {
+      worker_pid: fx.spawned[0]!.pid,
+      started_at: "2026-09-27T00:00:05.000Z",
+    });
     fx.pidsAlive.delete(fx.spawned[0]!.pid);
     await fx.manager.recoverTasks();
 
@@ -312,6 +318,12 @@ test("a dead worker without a terminal result reconciles to failed/worker_lost a
   try {
     const receipt = await fx.manager.createTask(fx.makeTask());
     const pid = fx.spawned[0]!.pid;
+    // The worker had started (started.json written), so its death is final:
+    // a never-started worker would be respawned instead.
+    fx.store.writeAttemptMeta("task_1", 1, "started.json", {
+      worker_pid: pid,
+      started_at: "2026-09-27T00:00:05.000Z",
+    });
     fx.pidsAlive.delete(pid); // the worker process died
     const status = await fx.manager.getStatus("task_1");
     assert.equal(status.status, "failed");
@@ -326,6 +338,108 @@ test("a dead worker without a terminal result reconciles to failed/worker_lost a
     // The slot is free again: a new task starts immediately.
     const next = await fx.manager.createTask(fx.makeTask({ task_id: "task_2" }));
     assert.equal(next.status, "running");
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test("a mid-spawn running status with no pid is left alone during the grace and respawned after it", async () => {
+  // Reproduces the shared-dataRoot race: another Bridge process observed the
+  // status between the "running" write and the pid write. The grace window
+  // must keep it running, and because the worker never wrote started.json the
+  // post-grace outcome is a respawn, not a finalized loss.
+  const fx = await makeManagerFixture({ workerStartGraceMs: 30_000 });
+  try {
+    await fx.manager.createTask(fx.makeTask());
+    const pid = fx.spawned[0]!.pid;
+    fx.store.writeStatus("task_1", { worker_pid: null });
+    fx.pidsAlive.delete(pid);
+    await fx.manager.recoverTasks();
+    assert.equal((await fx.manager.getStatus("task_1")).status, "running");
+    assert.equal(fx.spawned.length, 1, "the spawn window must not trigger a respawn");
+
+    fx.advanceMs(31_000);
+    await fx.manager.recoverTasks();
+    const status = await fx.manager.getStatus("task_1");
+    assert.equal(status.status, "running", "a never-started worker is replaced, not failed");
+    assert.equal(fx.spawned.length, 2);
+    assert.equal(fx.spawned[1]!.taskId, "task_1");
+    assert.equal(fx.spawned[1]!.pid, status.worker_pid);
+    const events = fx.store.readEvents("task_1", 0, 50).events;
+    assert.ok(events.some((event) => event.type === "worker_respawned"), "respawn must be observable");
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test("a worker that dies before starting is respawned immediately on the same attempt", async () => {
+  const fx = await makeManagerFixture({ workerStartGraceMs: 30_000 });
+  try {
+    await fx.manager.createTask(fx.makeTask());
+    fx.pidsAlive.delete(fx.spawned[0]!.pid); // worker died right after spawn, nothing written
+    await fx.manager.recoverTasks();
+    const status = await fx.manager.getStatus("task_1");
+    assert.equal(status.status, "running");
+    assert.equal(fx.spawned.length, 2);
+    assert.equal(fx.spawned[1]!.pid, status.worker_pid);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test("a replacement that also dies before starting is finalized once its claim goes stale", async () => {
+  const fx = await freshFixture();
+  try {
+    await fx.manager.createTask(fx.makeTask());
+    fx.pidsAlive.delete(fx.spawned[0]!.pid);
+    await fx.manager.recoverTasks(); // first respawn
+    assert.equal(fx.spawned.length, 2);
+    const replacement = fx.spawned[1]!.pid;
+    const claimFile = path.join(fx.store.attemptDir("task_1", 1), "respawn.claim");
+    fx.pidsAlive.delete(replacement);
+    await fx.manager.recoverTasks();
+    assert.equal((await fx.manager.getStatus("task_1")).status, "running", "a fresh claim means a respawn may be in flight");
+    assert.equal(fx.spawned.length, 2, "the claimed slot must not be double-spawned");
+
+    utimesSync(claimFile, new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
+    await fx.manager.recoverTasks();
+    const status = await fx.manager.getStatus("task_1");
+    assert.equal(status.status, "failed");
+    assert.equal(status.error_code, "worker_lost");
+    assert.equal(fx.spawned.length, 2, "at most one replacement per attempt");
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test("a worker that started but died is never respawned; a persisted result still wins during the grace", async () => {
+  const fx = await makeManagerFixture({ workerStartGraceMs: 30_000 });
+  try {
+    await fx.manager.createTask(fx.makeTask());
+    const pid = fx.spawned[0]!.pid;
+    fx.store.writeAttemptMeta("task_1", 1, "started.json", { worker_pid: pid, started_at: "2026-09-27T00:00:05.000Z" });
+
+    fx.pidsAlive.delete(pid);
+    await fx.manager.recoverTasks();
+    assert.equal((await fx.manager.getStatus("task_1")).status, "running", "a started worker's fresh death waits out the grace");
+    assert.equal(fx.spawned.length, 1, "a started worker is never auto-respawned");
+
+    fx.advanceMs(31_000);
+    await fx.manager.recoverTasks();
+    assert.equal((await fx.manager.getStatus("task_1")).status, "failed");
+
+    // The second scenario: the worker finishes normally within the grace.
+    const fx2 = await makeManagerFixture({ workerStartGraceMs: 30_000 });
+    try {
+      await fx2.manager.createTask(fx2.makeTask());
+      await fx2.runWorker("task_1", new FakeAdapter()); // writes the terminal result
+      await fx2.manager.recoverTasks();
+      const status = await fx2.manager.getStatus("task_1");
+      assert.equal(status.status, "completed");
+      assert.ok(!status.error_code, "a completed run must not carry an error code");
+    } finally {
+      await fx2.cleanup();
+    }
   } finally {
     await fx.cleanup();
   }

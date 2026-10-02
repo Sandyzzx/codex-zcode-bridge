@@ -1,5 +1,6 @@
 // src/adapters/zcode-app-server-adapter.ts
 import { spawn as spawn2 } from "node:child_process";
+import { homedir as homedir2 } from "node:os";
 
 // src/adapters/agent-report.ts
 var TEST_STATUSES = /* @__PURE__ */ new Set(["passed", "failed", "not_run"]);
@@ -1131,6 +1132,7 @@ var ZCodeAppServerAdapter = class {
   #onEvent;
   #timeoutMs;
   #childEnvBase;
+  #homeDir;
   #now;
   #resolveInteraction;
   #runs = /* @__PURE__ */ new Map();
@@ -1140,6 +1142,7 @@ var ZCodeAppServerAdapter = class {
     this.#onEvent = options.onEvent ?? (() => void 0);
     this.#timeoutMs = options.timeoutMs ?? null;
     this.#childEnvBase = options.childEnvBase ?? process.env;
+    this.#homeDir = options.homeDir ?? homedir2();
     this.#now = options.now ?? (() => /* @__PURE__ */ new Date());
     this.#resolveInteraction = options.resolveInteraction;
   }
@@ -1244,7 +1247,7 @@ var ZCodeAppServerAdapter = class {
     let warningTimer;
     let desktopTask = null;
     try {
-      const runtimeEnv = loadPersistedRuntimeEnvironment(this.#childEnvBase);
+      const runtimeEnv = loadPersistedRuntimeEnvironment(this.#childEnvBase, this.#homeDir);
       const timeoutMs = this.#timeoutMs ?? resolveTaskTimeout(task, runtimeEnv);
       const config = await this.#resolver.resolve();
       const preferences = resolveSessionPreferences(task.model, runtimeEnv);
@@ -2162,6 +2165,31 @@ var TaskStore = class {
     const file = path3.join(this.attemptDir(taskId2, attempt), fileName);
     if (!existsSync4(file)) return null;
     return readFileSync3(file, "utf8");
+  }
+  /**
+   * Atomically claims the single worker-respawn slot for an attempt by
+   * creating the marker file with an exclusive flag, so several Bridge
+   * processes sharing this data root can never spawn two replacement
+   * workers. Returns false when the slot is already claimed.
+   */
+  claimAttemptRespawn(taskId2, attempt) {
+    const dir = this.attemptDir(taskId2, attempt);
+    privateMkdir(dir);
+    try {
+      closeSync(openSync(path3.join(dir, "respawn.claim"), "wx"));
+      return true;
+    } catch (error) {
+      if (error.code === "EEXIST") return false;
+      throw error;
+    }
+  }
+  /** File time of the respawn claim, or null when the attempt is unclaimed. */
+  respawnClaimedAt(taskId2, attempt) {
+    try {
+      return statSync2(path3.join(this.attemptDir(taskId2, attempt), "respawn.claim")).mtime;
+    } catch {
+      return null;
+    }
   }
   /** Append-only, byte-bounded. Returns whether the chunk was truncated. */
   appendLog(taskId2, kind, text) {

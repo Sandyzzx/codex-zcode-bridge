@@ -110,6 +110,7 @@ Use `zcode_model_catalog` with the current project path to read app-server model
 
 - The ZCode Desktop sidebar may not immediately show a new session. The Bridge best-effort syncs the local task index; Desktop controls when the list refreshes.
 - ZCode Start Plan is currently unavailable through the Bridge.
+- A worker gets a 10-second cold-start grace window (`workerStartGraceMs`): within it, a missing or just-exited pid does not immediately finalize `worker_lost`; later reconcile ticks re-check. If a worker exits before writing `started.json` (it never ran the task), the Bridge respawns it once on the same attempt (a claim marker in the attempt directory prevents the Bridge processes sharing a data root from double-spawning); a worker that did start is never auto-respawned — the master decides whether to continue. There is still no global lock between processes, so do not submit conflicting tasks in parallel.
 
 ## Security and limitations
 

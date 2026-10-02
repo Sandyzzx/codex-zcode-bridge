@@ -2,6 +2,7 @@
 // with the installed ZCode runtime; docs/PHASE7_LIVE_PROGRESS.md records the
 // local 0.16.9 observations and compatibility boundary.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { homedir } from "node:os";
 import type {
   AgentHandle,
   AgentProcessStatus,
@@ -75,6 +76,12 @@ export interface ZCodeAppServerAdapterOptions {
   onEvent?: ProgressSink;
   timeoutMs?: number;
   childEnvBase?: NodeJS.ProcessEnv;
+  /**
+   * Home directory for persisted Bridge settings discovery. Defaults to the
+   * real home; tests point it at an empty directory to stay hermetic against
+   * machine-level runtime-config.json state.
+   */
+  homeDir?: string;
   now?: () => Date;
   resolveInteraction?: (request: ZCodeInteractionRequest) => Promise<Record<string, unknown>>;
 }
@@ -92,6 +99,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
   readonly #onEvent: ProgressSink;
   readonly #timeoutMs: number | null;
   readonly #childEnvBase: NodeJS.ProcessEnv;
+  readonly #homeDir: string;
   readonly #now: () => Date;
   readonly #resolveInteraction: ((request: ZCodeInteractionRequest) => Promise<Record<string, unknown>>) | undefined;
   readonly #runs = new Map<AgentHandle, RunEntry>();
@@ -102,6 +110,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     this.#onEvent = options.onEvent ?? (() => undefined);
     this.#timeoutMs = options.timeoutMs ?? null;
     this.#childEnvBase = options.childEnvBase ?? process.env;
+    this.#homeDir = options.homeDir ?? homedir();
     this.#now = options.now ?? (() => new Date());
     this.#resolveInteraction = options.resolveInteraction;
   }
@@ -228,7 +237,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     let warningTimer: NodeJS.Timeout | undefined;
     let desktopTask: DesktopTaskIndexEntry | null = null;
     try {
-      const runtimeEnv = loadPersistedRuntimeEnvironment(this.#childEnvBase);
+      const runtimeEnv = loadPersistedRuntimeEnvironment(this.#childEnvBase, this.#homeDir);
       const timeoutMs = this.#timeoutMs ?? resolveTaskTimeout(task, runtimeEnv);
       const config = await this.#resolver.resolve();
       const preferences = resolveSessionPreferences(task.model, runtimeEnv);

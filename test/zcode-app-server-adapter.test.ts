@@ -156,7 +156,14 @@ test("lets the app-server resolve a requested model omitted from the initial cat
 test("omitting model leaves the ZCode session default untouched", async () => {
   const runtime = await makeFakeRuntime();
   try {
-    const adapter = new ZCodeAppServerAdapter({ resolver: { resolve: async () => runtime.config }, timeoutMs: 10_000, childEnvBase: { PATH: process.env.PATH } });
+    // homeDir points at an empty directory so the machine's runtime-config.json
+    // (which may carry a real user default model) cannot leak into the run.
+    const adapter = new ZCodeAppServerAdapter({
+      resolver: { resolve: async () => runtime.config },
+      timeoutMs: 10_000,
+      childEnvBase: { PATH: process.env.PATH },
+      homeDir: runtime.root,
+    });
     const handle = await adapter.startTask({ task, workspace: makeWorkspace(runtime.root), attempt: 1 });
     const result = await adapter.getResult(handle);
     assert.equal(result.exitCode, 0);
