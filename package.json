@@ -1,14 +1,26 @@
 {
   "name": "codex-zcode-bridge",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "private": true,
   "description": "本地 Codex 插件与 MCP 服务，用于委派和审查 ZCode 开发任务。",
   "type": "module",
   "license": "Apache-2.0",
   "exports": {
-    "./core": { "types": "./dist/src/core.d.ts", "import": "./dist/src/core.js" }
+    "./core": {
+      "types": "./dist/src/core.d.ts",
+      "import": "./dist/src/core.js"
+    }
   },
-  "files": ["dist/src", "docs/SHARED_CORE.md", "docs/ARCHITECTURE.md", "docs/INTERFACES.md", "docs/ZCODE_RUNTIME.md", "docs/PHASE7_LIVE_PROGRESS.md", "LICENSE", "NOTICE"],
+  "files": [
+    "dist/src",
+    "docs/SHARED_CORE.md",
+    "docs/ARCHITECTURE.md",
+    "docs/INTERFACES.md",
+    "docs/ZCODE_RUNTIME.md",
+    "docs/PHASE7_LIVE_PROGRESS.md",
+    "LICENSE",
+    "NOTICE"
+  ],
   "engines": {
     "node": ">=22.18"
   },
