@@ -23405,21 +23405,37 @@ var BridgeTaskManager = class _BridgeTaskManager {
         });
         return toPublicStatus(this.#store.readStatus(taskId));
       }
+      const finishedSafely = () => {
+        const result2 = this.#store.readResult(taskId);
+        return result2 !== null && result2.error_code !== "cleanup_failed" && !this.#store.readStatus(taskId).cleanup_unverified && !this.#isProcessRunning(pid) && (!status.zcode_pid || !this.#isProcessRunning(status.zcode_pid));
+      };
+      const waitForSafeExit = async () => {
+        const deadline = Date.now() + 500;
+        do {
+          if (finishedSafely()) return true;
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        } while (Date.now() < deadline);
+        return finishedSafely();
+      };
       try {
-        if (status.zcode_pid && this.#isProcessRunning(status.zcode_pid)) {
-          await this.#terminateProcessTree(status.zcode_pid, { graceMs: 500, killWaitMs: 5e3 });
+        if (!await waitForSafeExit()) {
+          if (process.platform !== "win32" && status.zcode_pid && this.#isProcessRunning(status.zcode_pid)) {
+            await this.#terminateProcessTree(status.zcode_pid, { graceMs: 500, killWaitMs: 5e3 });
+          }
+          await this.#terminateProcessTree(pid, { graceMs: 500, killWaitMs: 5e3 });
         }
-        await this.#terminateProcessTree(pid, { graceMs: 500, killWaitMs: 5e3 });
       } catch (error2) {
-        const message = error2 instanceof Error ? error2.message : String(error2);
-        this.#store.writeStatus(taskId, {
-          error: `cancellation could not be verified: ${message}`
-        });
-        this.#store.appendEvent(taskId, "cancel_failed", message);
-        throw new TaskManagerError(
-          "CANCEL_FAILED",
-          `process-tree termination for task ${taskId} (pid ${pid}) could not be verified: ${message}`
-        );
+        if (!await waitForSafeExit()) {
+          const message = error2 instanceof Error ? error2.message : String(error2);
+          this.#store.writeStatus(taskId, {
+            error: `cancellation could not be verified: ${message}`
+          });
+          this.#store.appendEvent(taskId, "cancel_failed", message);
+          throw new TaskManagerError(
+            "CANCEL_FAILED",
+            `process-tree termination for task ${taskId} (pid ${pid}) could not be verified: ${message}`
+          );
+        }
       }
       const raced = this.#store.readResult(taskId);
       if (raced) {

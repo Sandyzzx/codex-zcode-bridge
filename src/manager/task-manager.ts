@@ -419,21 +419,42 @@ export class BridgeTaskManager implements ProgressTaskManager {
         });
         return toPublicStatus(this.#store.readStatus(taskId));
       }
+      const finishedSafely = (): boolean => {
+        const result = this.#store.readResult(taskId);
+        return result !== null && result.error_code !== "cleanup_failed"
+          && !this.#store.readStatus(taskId).cleanup_unverified
+          && !this.#isProcessRunning(pid)
+          && (!status.zcode_pid || !this.#isProcessRunning(status.zcode_pid));
+      };
+      const waitForSafeExit = async (): Promise<boolean> => {
+        const deadline = Date.now() + 500;
+        do {
+          if (finishedSafely()) return true;
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        } while (Date.now() < deadline);
+        return finishedSafely();
+      };
+      // Let the worker abort its interaction/RPC and verify its own runtime
+      // cleanup first. Concurrent taskkill calls can race an ordinary exit.
       try {
-        if (status.zcode_pid && this.#isProcessRunning(status.zcode_pid)) {
-          await this.#terminateProcessTree(status.zcode_pid, { graceMs: 500, killWaitMs: 5_000 });
+        if (!(await waitForSafeExit())) {
+          if (process.platform !== "win32" && status.zcode_pid && this.#isProcessRunning(status.zcode_pid)) {
+            await this.#terminateProcessTree(status.zcode_pid, { graceMs: 500, killWaitMs: 5_000 });
+          }
+          await this.#terminateProcessTree(pid, { graceMs: 500, killWaitMs: 5_000 });
         }
-        await this.#terminateProcessTree(pid, { graceMs: 500, killWaitMs: 5_000 });
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        this.#store.writeStatus(taskId, {
-          error: `cancellation could not be verified: ${message}`,
-        });
-        this.#store.appendEvent(taskId, "cancel_failed", message);
-        throw new TaskManagerError(
-          "CANCEL_FAILED",
-          `process-tree termination for task ${taskId} (pid ${pid}) could not be verified: ${message}`,
-        );
+        if (!(await waitForSafeExit())) {
+          const message = error instanceof Error ? error.message : String(error);
+          this.#store.writeStatus(taskId, {
+            error: `cancellation could not be verified: ${message}`,
+          });
+          this.#store.appendEvent(taskId, "cancel_failed", message);
+          throw new TaskManagerError(
+            "CANCEL_FAILED",
+            `process-tree termination for task ${taskId} (pid ${pid}) could not be verified: ${message}`,
+          );
+        }
       }
       // The worker may have completed while termination was in flight; a
       // persisted terminal result always wins over our cancellation.

@@ -9,12 +9,62 @@ import { buildContinuePrompt, buildTaskPrompt } from "../src/prompts/task-prompt
 import { buildTaskResult } from "../src/manager/normalize.js";
 import { FakeAdapter, fakeOutcome, makeManagerFixture } from "./manager-helpers.js";
 import { withProcessLock } from "../src/store/process-lock.js";
+import { BridgeTaskManager } from "../src/manager/task-manager.js";
+import { DirectWorkspaceProvider } from "../src/workspace/direct-provider.js";
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const storeUrl = new URL("../src/store/task-store.js", import.meta.url).href;
 const workerUrl = new URL("../src/worker/run-task.js", import.meta.url).href;
 const managerUrl = new URL("../src/manager/task-manager.js", import.meta.url).href;
 const providerUrl = new URL("../src/workspace/direct-provider.js", import.meta.url).href;
+
+test("cooperative cancellation waits for the verified worker result without a second termination", async () => {
+  const fx = await makeManagerFixture();
+  try {
+    await fx.manager.createTask(fx.makeTask());
+    const pid = fx.spawned[0]!.pid;
+    const finish = async () => {
+      await delay(40);
+      const result = buildTaskResult({ task: fx.makeTask(), attempt: 1, startedAt: null, finishedAt: new Date().toISOString(), outcome: null, cancelled: true, sessionId: "cooperative-session" });
+      fx.store.commitWorkerResult("task_1", 1, result, { status: "cancelled", worker_pid: null, zcode_pid: null });
+      fx.pidsAlive.delete(pid);
+    };
+    const finishing = finish();
+    assert.equal((await fx.manager.cancelTask("task_1")).status, "cancelled");
+    await finishing;
+    assert.deepEqual(fx.terminateCalls, []);
+    assert.equal((await fx.manager.getResult("task_1")).session_id, "cooperative-session");
+  } finally { await fx.cleanup(); }
+});
+
+test("a taskkill exit race requires a verified terminal result and dead recorded processes", async () => {
+  for (const cleanupFailed of [false, true]) {
+    const fx = await makeManagerFixture();
+    let manager: BridgeTaskManager | undefined;
+    try {
+      await fx.manager.createTask(fx.makeTask());
+      const pid = fx.spawned[0]!.pid;
+      let finishing: Promise<void> | undefined;
+      manager = new BridgeTaskManager({ store: fx.store, workspaceProvider: new DirectWorkspaceProvider(), pollIntervalMs: 0, isProcessRunning: (p) => fx.pidsAlive.has(p),
+        terminateProcessTree: async () => {
+          finishing = (async () => {
+            await delay(30);
+            const result = buildTaskResult({ task: fx.makeTask(), attempt: 1, startedAt: null, finishedAt: new Date().toISOString(), outcome: null, cancelled: !cleanupFailed,
+              ...(cleanupFailed ? { failure: { code: "cleanup_failed", message: "runtime still live" } } : {}) });
+            fx.store.commitWorkerResult("task_1", 1, result, { status: result.status, worker_pid: null, cleanup_unverified: cleanupFailed, zcode_pid: cleanupFailed ? 4444 : null });
+            fx.pidsAlive.delete(pid);
+            if (cleanupFailed) fx.pidsAlive.add(4444);
+          })();
+          throw new Error("taskkill raced process exit");
+        } });
+      if (cleanupFailed) {
+        await assert.rejects(manager.cancelTask("task_1"), /termination.*could not be verified/);
+        assert.equal(fx.store.readStatus("task_1").cleanup_unverified, true);
+      } else assert.equal((await manager.cancelTask("task_1")).status, "cancelled");
+      await finishing;
+    } finally { manager?.dispose(); await fx.cleanup(); }
+  }
+});
 
 function childScript(source: string): Promise<{ code: number | null; output: string }> {
   return new Promise((resolve, reject) => {
