@@ -4,6 +4,14 @@
 
 当前版本以 `package.json` 和 Release Please manifest 为准。提交推送到 `master` 后，Release Please 会在有待发布变更时创建发布 PR，并同步更新版本文件与本日志；合并发布 PR 后会生成对应 Git tag 和 GitHub Release。
 
+## [1.0.5](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.0.4...codex-zcode-bridge-v1.0.5) (2026-10-03)
+
+
+### Bug Fixes
+
+* preserve completed results through cleanup ([3c5b916](https://github.com/Sandyzzx/codex-zcode-bridge/commit/3c5b9168867986fe15894e5723015b3e1e775efe))
+* replay missed ZCode session events ([f36b885](https://github.com/Sandyzzx/codex-zcode-bridge/commit/f36b8857e765df06900d289aed44e1f6539a6355))
+
 ## [1.0.4](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.0.3...codex-zcode-bridge-v1.0.4) (2026-10-03)
 
 
