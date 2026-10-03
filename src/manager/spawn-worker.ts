@@ -28,13 +28,20 @@ export function createWorkerSpawner(host?: BridgeHostProfile): SpawnWorker {
   mkdirSync(attemptDir, { recursive: true });
   const stderrFd = openSync(path.join(attemptDir, "worker-stderr.log"), "a", 0o600);
   try {
+    const workerEnv = {
+      ...createWorkerEnv(process.env),
+      ...(host ? { ZCODE_BRIDGE_HOST_PROFILE: JSON.stringify(host) } : {}),
+      // DeepSeek Harness may host its MCP entrypoint inside Electron. Its
+      // executable is reusable for detached Node workers only in this mode.
+      ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
+    };
     const child = spawn(process.execPath, [host?.workerEntryPath ?? workerEntryPath(), dataRoot, taskId, String(attempt)], {
       detached: true,
       shell: false,
       stdio: ["ignore", "ignore", stderrFd],
       windowsHide: true,
       cwd: dataRoot,
-      env: { ...createWorkerEnv(process.env), ...(host ? { ZCODE_BRIDGE_HOST_PROFILE: JSON.stringify(host) } : {}) },
+      env: workerEnv,
     });
     child.on("error", (error) => console.error(`Bridge worker spawn failed: ${error.message}`));
     child.unref();

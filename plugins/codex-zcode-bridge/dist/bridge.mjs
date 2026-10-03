@@ -22048,7 +22048,10 @@ var CRITICAL_EVENT_TYPES = /* @__PURE__ */ new Set([
   "interaction_requested",
   "interaction_reply_submitted",
   "cancelled",
-  "cancel_failed"
+  "cancel_failed",
+  "cleanup_unverified",
+  "outcome_checkpoint_failed",
+  "outcome_recovered"
 ]);
 var TaskStore = class {
   #dataRoot;
@@ -22239,6 +22242,21 @@ var TaskStore = class {
     const file = path4.join(this.attemptDir(taskId, attempt), fileName);
     if (!existsSync2(file)) return null;
     return this.#readJson(file);
+  }
+  writeWorkerHeartbeat(taskId, attempt, heartbeat) {
+    withEventLock(path4.join(this.taskDir(taskId), "state.lock"), () => {
+      const status = this.readStatus(taskId);
+      const claim2 = this.readAttemptMeta(taskId, attempt, "execution.claim");
+      if (status.attempt !== attempt || status.status !== "running" || status.worker_pid !== heartbeat.worker_pid || claim2?.pid !== heartbeat.worker_pid) {
+        throw new Error("stale or unowned worker heartbeat rejected");
+      }
+      this.#writeJsonAtomic(path4.join(this.attemptDir(taskId, attempt), "heartbeat.json"), heartbeat);
+    });
+  }
+  readWorkerHeartbeat(taskId, attempt) {
+    const value = this.readAttemptMeta(taskId, attempt, "heartbeat.json");
+    if (!value || value.attempt !== attempt || !Number.isSafeInteger(value.worker_pid) || typeof value.heartbeat_at !== "string") return null;
+    return value;
   }
   readAttemptText(taskId, attempt, fileName) {
     const file = path4.join(this.attemptDir(taskId, attempt), fileName);
@@ -22652,7 +22670,8 @@ function buildTaskResult(input) {
       tests: [],
       issues: [truncate(resolved.message, 2e3)],
       needs_master_decision: true,
-      error_code: resolved.code
+      error_code: resolved.code,
+      ...resolved.code === "cleanup_failed" && outcome?.reportCandidate ? { report_candidate: outcome.reportCandidate } : {}
     };
   }
   if (outcome.errorCode || outcome.reportError) {
@@ -22792,13 +22811,20 @@ function createWorkerSpawner(host) {
     mkdirSync3(attemptDir, { recursive: true });
     const stderrFd = openSync2(path6.join(attemptDir, "worker-stderr.log"), "a", 384);
     try {
+      const workerEnv = {
+        ...createWorkerEnv(process.env),
+        ...host ? { ZCODE_BRIDGE_HOST_PROFILE: JSON.stringify(host) } : {},
+        // DeepSeek Harness may host its MCP entrypoint inside Electron. Its
+        // executable is reusable for detached Node workers only in this mode.
+        ...process.versions.electron ? { ELECTRON_RUN_AS_NODE: "1" } : {}
+      };
       const child = spawn(process.execPath, [host?.workerEntryPath ?? workerEntryPath(), dataRoot, taskId, String(attempt)], {
         detached: true,
         shell: false,
         stdio: ["ignore", "ignore", stderrFd],
         windowsHide: true,
         cwd: dataRoot,
-        env: { ...createWorkerEnv(process.env), ...host ? { ZCODE_BRIDGE_HOST_PROFILE: JSON.stringify(host) } : {} }
+        env: workerEnv
       });
       child.on("error", (error2) => console.error(`Bridge worker spawn failed: ${error2.message}`));
       child.unref();
@@ -23582,13 +23608,19 @@ var BridgeTaskManager = class _BridgeTaskManager {
       return;
     }
     const pid = status.worker_pid;
+    const heartbeat = this.#store.readWorkerHeartbeat(taskId, status.attempt);
+    const heartbeatAt = heartbeat ? Date.parse(heartbeat.heartbeat_at) : Number.NaN;
+    const heartbeatAgeMs = this.#now().getTime() - heartbeatAt;
+    if (pid !== null && heartbeat?.worker_pid === pid && heartbeatAgeMs >= 0 && heartbeatAgeMs <= 15e3) return;
     const alive = pid !== null && this.#isProcessRunning(pid);
     if (alive) return;
-    const runtimePid = this.#store.readStatus(taskId).zcode_pid;
+    const runtimePid = status.zcode_pid ?? null;
     if (runtimePid && this.#isProcessRunning(runtimePid)) {
+      if (this.#recoverOutcomeCheckpoint(taskId, status, runtimePid, false)) return;
       this.#store.writeStatus(taskId, { cleanup_unverified: true, error_code: "cleanup_failed", error: "Worker exited while ZCode remains alive; cancel to verify runtime cleanup" });
       return;
     }
+    if (this.#recoverOutcomeCheckpoint(taskId, status, runtimePid, true)) return;
     const startedAtMs = status.started_at === null ? Number.NaN : Date.parse(status.started_at);
     const withinGrace = Number.isFinite(startedAtMs) && this.#now().getTime() - startedAtMs < this.#workerStartGraceMs;
     const workerBegan = this.#store.readAttemptMeta(taskId, status.attempt, "started.json") !== null;
@@ -23634,6 +23666,64 @@ var BridgeTaskManager = class _BridgeTaskManager {
       worker_pid: null
     });
     this.#store.appendEvent(taskId, "error", result.summary, { error_code: "worker_lost" }, finishedAt);
+  }
+  #recoverOutcomeCheckpoint(taskId, status, runtimePid, runtimeExited) {
+    const checkpoint = this.#store.readAttemptMeta(taskId, status.attempt, "outcome-checkpoint.json");
+    if (!checkpoint || typeof checkpoint.response !== "string") return false;
+    const outcome = {
+      attempts: 1,
+      cancelled: false,
+      stdoutTruncated: false,
+      stderrTruncated: false,
+      stdout: checkpoint.response,
+      stderr: "",
+      exitCode: typeof checkpoint.exit_code === "number" ? checkpoint.exit_code : null,
+      signal: typeof checkpoint.signal === "string" ? checkpoint.signal : null,
+      sessionId: typeof checkpoint.session_id === "string" ? checkpoint.session_id : null,
+      response: checkpoint.response,
+      usage: checkpoint.usage && typeof checkpoint.usage === "object" ? checkpoint.usage : null,
+      timedOut: false,
+      agentReport: checkpoint.agent_report ?? null,
+      reportCandidate: checkpoint.report_candidate && typeof checkpoint.report_candidate === "object" ? checkpoint.report_candidate : null,
+      reportError: typeof checkpoint.report_error === "string" ? checkpoint.report_error : null,
+      errorCode: typeof checkpoint.error_code === "string" ? checkpoint.error_code : null,
+      cleanupError: typeof checkpoint.cleanup_error === "string" ? checkpoint.cleanup_error : null,
+      cleanupVerified: checkpoint.cleanup_verified === true
+    };
+    const cleanupVerified = outcome.cleanupVerified && runtimeExited;
+    const failure2 = cleanupVerified ? null : {
+      code: "cleanup_failed",
+      message: outcome.cleanupError ?? "Worker exited before process cleanup could be verified; the ZCode result was recovered from its private checkpoint"
+    };
+    const finishedAt = this.#now().toISOString();
+    const result = buildTaskResult({
+      task: this.#store.readTask(taskId),
+      attempt: status.attempt,
+      startedAt: status.started_at,
+      finishedAt,
+      outcome,
+      failure: failure2,
+      sessionId: status.zcode_session_id ?? outcome.sessionId
+    });
+    this.#store.commitWorkerResult(taskId, status.attempt, result, {
+      status: result.status,
+      finished_at: finishedAt,
+      exit_code: result.exit_code,
+      zcode_session_id: result.session_id,
+      error_code: result.error_code ?? null,
+      error: result.status === "failed" ? result.summary : null,
+      worker_pid: null,
+      cleanup_unverified: !cleanupVerified,
+      zcode_pid: cleanupVerified ? null : runtimePid
+    });
+    this.#store.appendEvent(
+      taskId,
+      "outcome_recovered",
+      cleanupVerified ? "Recovered the completed ZCode report after the worker exited before committing its result" : "Recovered the ZCode report, but process cleanup could not be verified",
+      { status: result.status, cleanup_verified: cleanupVerified },
+      finishedAt
+    );
+    return true;
   }
   #runningTaskIdsLocked() {
     return this.#store.listTaskIds().filter((taskId) => {

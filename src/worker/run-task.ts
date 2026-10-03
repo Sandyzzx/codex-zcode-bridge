@@ -16,7 +16,7 @@ import type { ZCodeRunOutcome } from "../adapters/zcode-adapter.js";
 import { BridgeError } from "../runtime/errors.js";
 import { buildContinuePrompt, buildTaskPrompt } from "../prompts/task-prompt.js";
 import { buildTaskResult, type TaskFailure } from "../manager/normalize.js";
-import { TaskStore } from "../store/task-store.js";
+import { TaskStore, type WorkerHeartbeat } from "../store/task-store.js";
 import type { BridgeHostProfile } from "../host/profile.js";
 
 /**
@@ -82,6 +82,29 @@ export async function runWorkerTask(options: RunWorkerTaskOptions): Promise<RunW
     worker_pid: process.pid,
     started_at: startedAt,
   });
+  const heartbeat: WorkerHeartbeat = {
+    attempt,
+    worker_pid: process.pid,
+    started_at: startedAt,
+    heartbeat_at: now().toISOString(),
+    heartbeat_seq: 0,
+    session_id: initialStatus.zcode_session_id ?? null,
+    turn_id: null,
+    last_event_seq: 0,
+    last_event_type: "worker_running",
+    zcode_event_seq: 0,
+  };
+  const persistHeartbeat = (): void => {
+    heartbeat.heartbeat_at = now().toISOString();
+    heartbeat.heartbeat_seq += 1;
+    store.writeWorkerHeartbeat(taskId, attempt, heartbeat);
+  };
+  persistHeartbeat();
+  const heartbeatTimer = setInterval(() => {
+    try { persistHeartbeat(); }
+    catch { /* the attempt is already stale/terminal; its owner must stop */ }
+  }, 3_000);
+  heartbeatTimer.unref();
 
   const continueSpec = store.readAttemptMeta<ContinueSpec>(taskId, attempt, "continue.json");
   const previousResult = continueSpec
@@ -128,10 +151,35 @@ export async function runWorkerTask(options: RunWorkerTaskOptions): Promise<RunW
           return;
         }
         flushModelOutput();
-        store.appendEvent(taskId, event.type, event.summary, event.details);
+        const persistedEvent = store.appendEvent(taskId, event.type, event.summary, event.details);
+        if (persistedEvent) {
+          heartbeat.last_event_seq = persistedEvent.seq;
+          heartbeat.last_event_type = event.type;
+        }
         const sessionId = event.type === "session_ready" ? event.details?.["session_id"] : undefined;
-        if (typeof sessionId === "string") store.writeStatus(taskId, { zcode_session_id: sessionId }, attempt);
+        if (typeof sessionId === "string") {
+          heartbeat.session_id = sessionId;
+          store.writeStatus(taskId, { zcode_session_id: sessionId }, attempt);
+        }
+        if (event.type === "turn_started" && typeof event.details?.["turn_id"] === "string") heartbeat.turn_id = event.details["turn_id"];
+        if (typeof event.details?.["event_seq"] === "number") heartbeat.zcode_event_seq = event.details["event_seq"];
         if (event.type === "app_server_started" && typeof event.details?.["pid"] === "number") store.writeStatus(taskId, { zcode_pid: event.details["pid"] }, attempt);
+      },
+      onOutcomeCheckpoint: (checkpoint) => {
+        store.writeAttemptMeta(taskId, attempt, "outcome-checkpoint.json", {
+          recorded_at: now().toISOString(),
+          exit_code: checkpoint.exitCode,
+          signal: checkpoint.signal,
+          session_id: checkpoint.sessionId,
+          response: checkpoint.response,
+          usage: checkpoint.usage,
+          error_code: checkpoint.errorCode,
+          report_error: checkpoint.reportError,
+          agent_report: checkpoint.agentReport,
+          report_candidate: checkpoint.reportCandidate,
+          cleanup_error: checkpoint.cleanupError ?? null,
+          cleanup_verified: checkpoint.cleanupVerified === true,
+        });
       },
       resolveInteraction: async (request, signal) => {
         store.assertWorkerAttempt(taskId, attempt);
@@ -196,6 +244,7 @@ export async function runWorkerTask(options: RunWorkerTaskOptions): Promise<RunW
     });
     try { outcome = await Promise.race([adapter.getResult(handle), cancellation]); }
     finally { clearInterval(cancelTimer); }
+    if (outcome.cleanupError) failure = { code: "cleanup_failed", message: `ZCode returned a turn result, but process cleanup could not be verified: ${outcome.cleanupError}` };
     flushModelOutput();
   } catch (error) {
     flushModelOutput();
@@ -204,6 +253,7 @@ export async function runWorkerTask(options: RunWorkerTaskOptions): Promise<RunW
       message: error instanceof Error ? error.message : String(error),
     };
   }
+  clearInterval(heartbeatTimer);
 
   const finishedAt = now().toISOString();
   store.assertWorkerAttempt(taskId, attempt);
@@ -238,6 +288,8 @@ export async function runWorkerTask(options: RunWorkerTaskOptions): Promise<RunW
           stderrTruncated: outcome.stderrTruncated,
           agentReport: outcome.agentReport,
           reportCandidate: outcome.reportCandidate,
+          cleanupError: outcome.cleanupError ?? null,
+          cleanupVerified: outcome.cleanupVerified === true,
         }
       : null,
     logs: { stdout_truncated: stdoutLog.truncated, stderr_truncated: stderrLog.truncated },

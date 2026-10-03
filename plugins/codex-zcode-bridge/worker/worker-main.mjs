@@ -1174,6 +1174,7 @@ var ZCodeAppServerAdapter = class {
   #host;
   #now;
   #resolveInteraction;
+  #onOutcomeCheckpoint;
   #runs = /* @__PURE__ */ new Map();
   #workspaceByTask = /* @__PURE__ */ new Map();
   constructor(options = {}) {
@@ -1185,6 +1186,7 @@ var ZCodeAppServerAdapter = class {
     this.#host = validateHostProfile(options.host ?? codexHostProfile(this.#homeDir));
     this.#now = options.now ?? (() => /* @__PURE__ */ new Date());
     this.#resolveInteraction = options.resolveInteraction;
+    this.#onOutcomeCheckpoint = options.onOutcomeCheckpoint;
   }
   async startTask(input) {
     return this.#launch(input.task, input.workspace, input.attempt, buildTaskPrompt(input.task), null);
@@ -1268,6 +1270,7 @@ var ZCodeAppServerAdapter = class {
       textOutputStarted: false,
       selectedModel: null,
       lastEventSeq: 0,
+      lastEventAt: Date.now(),
       interactions: /* @__PURE__ */ new Map(),
       abort: new AbortController(),
       acceptingTurn: false,
@@ -1504,13 +1507,35 @@ var ZCodeAppServerAdapter = class {
       entry.acceptingTurn = true;
       await client.request("session/send", { sessionId, content: prompt });
       entry.onEvent({ type: "turn_started", summary: "ZCode accepted the task and started a turn" });
-      const turnResult = await turn;
+      let replayInFlight = false;
+      let replayDisabled = false;
+      const replayTimer = setInterval(() => {
+        if (!entry.acceptingTurn || replayInFlight || replayDisabled || Date.now() - entry.lastEventAt < 1e4) return;
+        replayInFlight = true;
+        void client.request("session/events", { sessionId, afterSeq: entry.lastEventSeq, limit: 500 }).then((value) => {
+          const events = asRecord2(value).events;
+          if (Array.isArray(events)) client.replayEvents(events);
+        }).catch((error) => {
+          const message = error instanceof Error ? error.message : String(error);
+          if (message.includes("Unsupported ZCode app-server request") || message.includes("ZCode app-server request failed for session/events")) {
+            replayDisabled = true;
+            entry.onEvent({ type: "session_event_replay_unavailable", summary: "ZCode session event replay is unavailable; continuing with live event subscription" });
+          }
+        }).finally(() => {
+          replayInFlight = false;
+        });
+      }, 5e3);
+      replayTimer.unref();
+      let turnResult;
+      try {
+        turnResult = await turn;
+      } finally {
+        clearInterval(replayTimer);
+      }
       const desktopStatus = turnResult.resultType === "cancelled" ? null : turnResult.resultType && turnResult.resultType !== "success" ? "error" : "completed";
-      await syncDesktopStatus(desktopTask, desktopStatus, entry.onEvent);
-      await client.close();
-      entry.child = null;
+      let outcome;
       if (turnResult.resultType && turnResult.resultType !== "success") {
-        return {
+        outcome = {
           attempts: 1,
           cancelled: turnResult.resultType === "cancelled",
           stdout: turnResult.response,
@@ -1528,39 +1553,72 @@ var ZCodeAppServerAdapter = class {
           reportError: `ZCode turn ended with resultType ${turnResult.resultType}`,
           errorCode: turnResult.resultType === "cancelled" ? "cancelled" : "zcode_nonzero_exit"
         };
-      }
-      const parsed = parseAgentReport(turnResult.response);
-      const stdout = turnResult.response;
-      const base = {
-        attempts: 1,
-        cancelled: false,
-        stdoutTruncated: false,
-        stderrTruncated: false,
-        stdout,
-        stderr: "",
-        exitCode: 0,
-        signal: null,
-        sessionId,
-        response: turnResult.response,
-        usage: turnResult.usage,
-        timedOut: false,
-        reportCandidate: parsed.candidate
-      };
-      if (!parsed.report) {
-        return {
-          ...base,
-          agentReport: null,
-          reportCandidate: parsed.candidate,
-          reportError: parsed.error,
-          errorCode: "invalid_agent_report"
+      } else {
+        const parsed = parseAgentReport(turnResult.response);
+        const stdout = turnResult.response;
+        const base = {
+          attempts: 1,
+          cancelled: false,
+          stdoutTruncated: false,
+          stderrTruncated: false,
+          stdout,
+          stderr: "",
+          exitCode: 0,
+          signal: null,
+          sessionId,
+          response: turnResult.response,
+          usage: turnResult.usage,
+          timedOut: false,
+          reportCandidate: parsed.candidate
         };
+        if (!parsed.report) {
+          outcome = {
+            ...base,
+            agentReport: null,
+            reportCandidate: parsed.candidate,
+            reportError: parsed.error,
+            errorCode: "invalid_agent_report"
+          };
+        } else {
+          entry.onEvent({
+            type: "report_ready",
+            summary: "ZCode produced its structured execution report",
+            details: { needs_master_decision: parsed.report.needs_master_decision }
+          });
+          outcome = { ...base, agentReport: parsed.report, reportCandidate: parsed.report, reportError: null, errorCode: null };
+        }
       }
-      entry.onEvent({
-        type: "report_ready",
-        summary: "ZCode produced its structured execution report",
-        details: { needs_master_decision: parsed.report.needs_master_decision }
-      });
-      return { ...base, agentReport: parsed.report, reportCandidate: parsed.report, reportError: null, errorCode: null };
+      outcome = { ...outcome, cleanupVerified: false };
+      try {
+        this.#onOutcomeCheckpoint?.(outcome);
+      } catch (error) {
+        entry.onEvent({ type: "outcome_checkpoint_failed", summary: error instanceof Error ? error.message : String(error) });
+      }
+      try {
+        await syncDesktopStatus(desktopTask, desktopStatus, entry.onEvent);
+      } catch (error) {
+        entry.onEvent({ type: "desktop_status_sync_failed", summary: error instanceof Error ? error.message : String(error) });
+      }
+      try {
+        await client.close();
+        entry.child = null;
+        outcome = { ...outcome, cleanupVerified: true };
+        try {
+          this.#onOutcomeCheckpoint?.(outcome);
+        } catch (error) {
+          entry.onEvent({ type: "outcome_checkpoint_failed", summary: error instanceof Error ? error.message : String(error) });
+        }
+      } catch (error) {
+        const cleanupError = error instanceof Error ? error.message : String(error);
+        entry.onEvent({ type: "cleanup_unverified", summary: cleanupError.slice(0, 1500), details: { pid: client.child.pid } });
+        outcome = { ...outcome, cleanupError, cleanupVerified: false };
+        try {
+          this.#onOutcomeCheckpoint?.(outcome);
+        } catch (checkpointError) {
+          entry.onEvent({ type: "outcome_checkpoint_failed", summary: checkpointError instanceof Error ? checkpointError.message : String(checkpointError) });
+        }
+      }
+      return outcome;
     } catch (error) {
       await syncDesktopStatus(desktopTask, entry.cancelRequested ? null : "error", entry.onEvent);
       entry.abort.abort();
@@ -1663,7 +1721,7 @@ var ZCodeAppServerAdapter = class {
           reject(new Error(`ZCode app-server request timed out: ${method}`));
         }, RPC_TIMEOUT_MS);
         timer.unref();
-        pending.set(id, { resolve, reject, timer });
+        pending.set(id, { method, resolve, reject, timer });
         child.stdin.write(`${JSON.stringify({ id, method, params })}
 `, (error) => {
           if (!error) return;
@@ -1672,6 +1730,16 @@ var ZCodeAppServerAdapter = class {
           reject(error);
         });
       });
+    };
+    const replayEvents = (events) => {
+      for (const event of events) {
+        const params = asRecord2(event);
+        if (typeof params.type !== "string") continue;
+        this.#handleMessage({ method: "session/event", params }, entry, pending, config, (reply) => {
+          child.stdin.write(`${JSON.stringify(reply)}
+`);
+        });
+      }
     };
     const close = async () => {
       if (closed) {
@@ -1687,9 +1755,13 @@ var ZCodeAppServerAdapter = class {
           resolve();
         });
       });
-      if (child.pid && (!closed || process.platform !== "win32")) await terminateProcessTree(child.pid);
+      if (closed) {
+        if (process.platform !== "win32" && child.pid) await terminateProcessTree(child.pid);
+        return;
+      }
+      if (child.pid && isProcessRunning(child.pid)) await terminateProcessTree(child.pid);
     };
-    return { child, request, close, get stderr() {
+    return { child, request, replayEvents, close, get stderr() {
       return stderr;
     } };
   }
@@ -1732,7 +1804,7 @@ var ZCodeAppServerAdapter = class {
       pending.delete(id);
       if (message.error && typeof message.error === "object") {
         const error = message.error;
-        call.reject(new Error(`ZCode app-server request failed${typeof error.code === "number" ? ` (code ${error.code})` : ""}`));
+        call.reject(new Error(`ZCode app-server request failed for ${call.method}${typeof error.code === "number" ? ` (code ${error.code})` : ""}`));
       } else {
         call.resolve(message.result);
       }
@@ -1751,9 +1823,10 @@ var ZCodeAppServerAdapter = class {
         if (!Number.isSafeInteger(params.seq) || params.seq <= entry.lastEventSeq) return;
         entry.lastEventSeq = params.seq;
       }
+      entry.lastEventAt = Date.now();
       if (type === "turn.started" && turnId) entry.turnId = turnId;
       if (type === "turn.started") entry.awaitingTurnStart = false;
-      this.#publishSessionEvent(type, payload, entry);
+      this.#publishSessionEvent(type, payload, entry, params);
       if (type === "turn.completed") {
         entry.acceptingTurn = false;
         entry.resolveTurn({
@@ -1838,11 +1911,15 @@ var ZCodeAppServerAdapter = class {
       }
     })().catch(() => entry.rejectTurn(new Error("ZCode interaction delivery failed")));
   }
-  #publishSessionEvent(type, payload, entry) {
+  #publishSessionEvent(type, payload, entry, event) {
     if (type === "turn.started") {
       entry.onEvent({
         type: "turn_started",
-        summary: `ZCode turn started${entry.selectedModel ? ` with selected model ${entry.selectedModel}` : ""}`
+        summary: `ZCode turn started${entry.selectedModel ? ` with selected model ${entry.selectedModel}` : ""}`,
+        details: {
+          ...typeof event.turnId === "string" ? { turn_id: event.turnId } : typeof payload.turnId === "string" ? { turn_id: payload.turnId } : {},
+          ...typeof event.seq === "number" ? { event_seq: event.seq } : {}
+        }
       });
     } else if (type === "model.streaming") {
       const kind = payload.kind;
@@ -1882,6 +1959,8 @@ var ZCodeAppServerAdapter = class {
         details: {
           ...typeof payload.tokenCount === "number" ? { token_count: payload.tokenCount } : {},
           ...typeof payload.toolCallCount === "number" ? { tool_call_count: payload.toolCallCount } : {},
+          ...typeof event.seq === "number" ? { event_seq: event.seq } : {},
+          ...typeof event.turnId === "string" ? { turn_id: event.turnId } : {},
           ...publicUsage(payload.usage) ? { usage: publicUsage(payload.usage) } : {}
         }
       });
@@ -2049,7 +2128,8 @@ function buildTaskResult(input) {
       tests: [],
       issues: [truncate(resolved.message, 2e3)],
       needs_master_decision: true,
-      error_code: resolved.code
+      error_code: resolved.code,
+      ...resolved.code === "cleanup_failed" && outcome?.reportCandidate ? { report_candidate: outcome.reportCandidate } : {}
     };
   }
   if (outcome.errorCode || outcome.reportError) {
@@ -2204,7 +2284,10 @@ var CRITICAL_EVENT_TYPES = /* @__PURE__ */ new Set([
   "interaction_requested",
   "interaction_reply_submitted",
   "cancelled",
-  "cancel_failed"
+  "cancel_failed",
+  "cleanup_unverified",
+  "outcome_checkpoint_failed",
+  "outcome_recovered"
 ]);
 var TaskStore = class {
   #dataRoot;
@@ -2395,6 +2478,21 @@ var TaskStore = class {
     const file = path5.join(this.attemptDir(taskId2, attempt), fileName);
     if (!existsSync4(file)) return null;
     return this.#readJson(file);
+  }
+  writeWorkerHeartbeat(taskId2, attempt, heartbeat) {
+    withEventLock(path5.join(this.taskDir(taskId2), "state.lock"), () => {
+      const status = this.readStatus(taskId2);
+      const claim = this.readAttemptMeta(taskId2, attempt, "execution.claim");
+      if (status.attempt !== attempt || status.status !== "running" || status.worker_pid !== heartbeat.worker_pid || claim?.pid !== heartbeat.worker_pid) {
+        throw new Error("stale or unowned worker heartbeat rejected");
+      }
+      this.#writeJsonAtomic(path5.join(this.attemptDir(taskId2, attempt), "heartbeat.json"), heartbeat);
+    });
+  }
+  readWorkerHeartbeat(taskId2, attempt) {
+    const value = this.readAttemptMeta(taskId2, attempt, "heartbeat.json");
+    if (!value || value.attempt !== attempt || !Number.isSafeInteger(value.worker_pid) || typeof value.heartbeat_at !== "string") return null;
+    return value;
   }
   readAttemptText(taskId2, attempt, fileName) {
     const file = path5.join(this.attemptDir(taskId2, attempt), fileName);
@@ -2746,6 +2844,31 @@ async function runWorkerTask(options) {
     worker_pid: process.pid,
     started_at: startedAt
   });
+  const heartbeat = {
+    attempt,
+    worker_pid: process.pid,
+    started_at: startedAt,
+    heartbeat_at: now().toISOString(),
+    heartbeat_seq: 0,
+    session_id: initialStatus.zcode_session_id ?? null,
+    turn_id: null,
+    last_event_seq: 0,
+    last_event_type: "worker_running",
+    zcode_event_seq: 0
+  };
+  const persistHeartbeat = () => {
+    heartbeat.heartbeat_at = now().toISOString();
+    heartbeat.heartbeat_seq += 1;
+    store.writeWorkerHeartbeat(taskId2, attempt, heartbeat);
+  };
+  persistHeartbeat();
+  const heartbeatTimer = setInterval(() => {
+    try {
+      persistHeartbeat();
+    } catch {
+    }
+  }, 3e3);
+  heartbeatTimer.unref();
   const continueSpec = store.readAttemptMeta(taskId2, attempt, "continue.json");
   const previousResult = continueSpec ? store.readArchivedResult(taskId2, continueSpec.previous_attempt ?? attempt - 1) : null;
   const promptText = continueSpec ? buildContinuePrompt({
@@ -2781,10 +2904,35 @@ async function runWorkerTask(options) {
           return;
         }
         flushModelOutput();
-        store.appendEvent(taskId2, event.type, event.summary, event.details);
+        const persistedEvent = store.appendEvent(taskId2, event.type, event.summary, event.details);
+        if (persistedEvent) {
+          heartbeat.last_event_seq = persistedEvent.seq;
+          heartbeat.last_event_type = event.type;
+        }
         const sessionId = event.type === "session_ready" ? event.details?.["session_id"] : void 0;
-        if (typeof sessionId === "string") store.writeStatus(taskId2, { zcode_session_id: sessionId }, attempt);
+        if (typeof sessionId === "string") {
+          heartbeat.session_id = sessionId;
+          store.writeStatus(taskId2, { zcode_session_id: sessionId }, attempt);
+        }
+        if (event.type === "turn_started" && typeof event.details?.["turn_id"] === "string") heartbeat.turn_id = event.details["turn_id"];
+        if (typeof event.details?.["event_seq"] === "number") heartbeat.zcode_event_seq = event.details["event_seq"];
         if (event.type === "app_server_started" && typeof event.details?.["pid"] === "number") store.writeStatus(taskId2, { zcode_pid: event.details["pid"] }, attempt);
+      },
+      onOutcomeCheckpoint: (checkpoint) => {
+        store.writeAttemptMeta(taskId2, attempt, "outcome-checkpoint.json", {
+          recorded_at: now().toISOString(),
+          exit_code: checkpoint.exitCode,
+          signal: checkpoint.signal,
+          session_id: checkpoint.sessionId,
+          response: checkpoint.response,
+          usage: checkpoint.usage,
+          error_code: checkpoint.errorCode,
+          report_error: checkpoint.reportError,
+          agent_report: checkpoint.agentReport,
+          report_candidate: checkpoint.reportCandidate,
+          cleanup_error: checkpoint.cleanupError ?? null,
+          cleanup_verified: checkpoint.cleanupVerified === true
+        });
       },
       resolveInteraction: async (request, signal) => {
         store.assertWorkerAttempt(taskId2, attempt);
@@ -2847,6 +2995,7 @@ async function runWorkerTask(options) {
     } finally {
       clearInterval(cancelTimer);
     }
+    if (outcome.cleanupError) failure = { code: "cleanup_failed", message: `ZCode returned a turn result, but process cleanup could not be verified: ${outcome.cleanupError}` };
     flushModelOutput();
   } catch (error) {
     flushModelOutput();
@@ -2855,6 +3004,7 @@ async function runWorkerTask(options) {
       message: error instanceof Error ? error.message : String(error)
     };
   }
+  clearInterval(heartbeatTimer);
   const finishedAt = now().toISOString();
   store.assertWorkerAttempt(taskId2, attempt);
   const stdoutLog = store.appendLog(taskId2, "stdout", outcome?.stdout ? `${outcome.stdout}
@@ -2884,7 +3034,9 @@ async function runWorkerTask(options) {
       stdoutTruncated: outcome.stdoutTruncated,
       stderrTruncated: outcome.stderrTruncated,
       agentReport: outcome.agentReport,
-      reportCandidate: outcome.reportCandidate
+      reportCandidate: outcome.reportCandidate,
+      cleanupError: outcome.cleanupError ?? null,
+      cleanupVerified: outcome.cleanupVerified === true
     } : null,
     logs: { stdout_truncated: stdoutLog.truncated, stderr_truncated: stderrLog.truncated }
   });
