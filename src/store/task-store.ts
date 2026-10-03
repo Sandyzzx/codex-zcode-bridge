@@ -31,6 +31,7 @@ const CRITICAL_EVENT_TYPES = new Set([
   "error", "task_finished", "turn_completed", "report_ready", "session_ready",
   "turn_started", "worker_started", "workspace_ready", "timeout_warning", "model_catalog",
   "account_provider_sync_failed", "interaction_requested", "interaction_reply_submitted", "cancelled", "cancel_failed",
+  "cleanup_unverified", "outcome_checkpoint_failed", "outcome_recovered",
 ]);
 
 export interface TaskStoreOptions {
@@ -40,6 +41,19 @@ export interface TaskStoreOptions {
 
 export interface AttemptMeta {
   [key: string]: unknown;
+}
+
+export interface WorkerHeartbeat {
+  attempt: number;
+  worker_pid: number;
+  started_at: string;
+  heartbeat_at: string;
+  heartbeat_seq: number;
+  session_id: string | null;
+  turn_id: string | null;
+  last_event_seq: number;
+  last_event_type: string | null;
+  zcode_event_seq: number;
 }
 
 export class TaskStore {
@@ -258,6 +272,23 @@ export class TaskStore {
     const file = path.join(this.attemptDir(taskId, attempt), fileName);
     if (!existsSync(file)) return null;
     return this.#readJson(file) as T;
+  }
+
+  writeWorkerHeartbeat(taskId: string, attempt: number, heartbeat: WorkerHeartbeat): void {
+    withEventLock(path.join(this.taskDir(taskId), "state.lock"), () => {
+      const status = this.readStatus(taskId);
+      const claim = this.readAttemptMeta<{ pid?: number }>(taskId, attempt, "execution.claim");
+      if (status.attempt !== attempt || status.status !== "running" || status.worker_pid !== heartbeat.worker_pid || claim?.pid !== heartbeat.worker_pid) {
+        throw new Error("stale or unowned worker heartbeat rejected");
+      }
+      this.#writeJsonAtomic(path.join(this.attemptDir(taskId, attempt), "heartbeat.json"), heartbeat);
+    });
+  }
+
+  readWorkerHeartbeat(taskId: string, attempt: number): WorkerHeartbeat | null {
+    const value = this.readAttemptMeta<WorkerHeartbeat>(taskId, attempt, "heartbeat.json");
+    if (!value || value.attempt !== attempt || !Number.isSafeInteger(value.worker_pid) || typeof value.heartbeat_at !== "string") return null;
+    return value;
   }
 
   readAttemptText(taskId: string, attempt: number, fileName: string): string | null {

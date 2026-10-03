@@ -23,6 +23,7 @@ import { createHash } from "node:crypto";
 import { existsSync, statSync, writeFileSync } from "node:fs";
 import { isTerminalStatus, TaskStore, toPublicStatus } from "../store/task-store.js";
 import { buildTaskResult, type TaskFailure } from "./normalize.js";
+import type { ZCodeRunOutcome } from "../adapters/zcode-adapter.js";
 import { TaskManagerError } from "./errors.js";
 import { defaultSpawnWorker, type SpawnWorker } from "./spawn-worker.js";
 import { isProcessRunning, terminateProcessTree, type TerminateProcessTree } from "../adapters/process-spawn.js";
@@ -587,7 +588,7 @@ export class BridgeTaskManager implements ProgressTaskManager {
     }
   }
 
-  #reconcileRunningLocked(taskId: string, status: { worker_pid: number | null; attempt: number; started_at: string | null; zcode_session_id?: string | null }): void {
+  #reconcileRunningLocked(taskId: string, status: { worker_pid: number | null; attempt: number; started_at: string | null; zcode_pid?: number | null; zcode_session_id?: string | null }): void {
     const persistedResult = this.#store.readResult(taskId);
     if (persistedResult && persistedResult.attempt === status.attempt) {
       // The worker wrote the result but died before updating the status file.
@@ -604,13 +605,22 @@ export class BridgeTaskManager implements ProgressTaskManager {
       return;
     }
     const pid = status.worker_pid;
+    const heartbeat = this.#store.readWorkerHeartbeat(taskId, status.attempt);
+    const heartbeatAt = heartbeat ? Date.parse(heartbeat.heartbeat_at) : Number.NaN;
+    const heartbeatAgeMs = this.#now().getTime() - heartbeatAt;
+    // A fresh heartbeat is attempt- and PID-bound. Prefer this live worker
+    // evidence over a single negative OS liveness probe; a dead worker merely
+    // delays recovery by at most the heartbeat freshness window.
+    if (pid !== null && heartbeat?.worker_pid === pid && heartbeatAgeMs >= 0 && heartbeatAgeMs <= 15_000) return;
     const alive = pid !== null && this.#isProcessRunning(pid);
     if (alive) return; // still running (possibly from before a manager restart)
-    const runtimePid = this.#store.readStatus(taskId).zcode_pid;
+    const runtimePid = status.zcode_pid ?? null;
     if (runtimePid && this.#isProcessRunning(runtimePid)) {
+      if (this.#recoverOutcomeCheckpoint(taskId, status, runtimePid, false)) return;
       this.#store.writeStatus(taskId, { cleanup_unverified: true, error_code: "cleanup_failed", error: "Worker exited while ZCode remains alive; cancel to verify runtime cleanup" });
       return;
     }
+    if (this.#recoverOutcomeCheckpoint(taskId, status, runtimePid, true)) return;
     // Cold-start grace. Several Bridge processes may share one data root, and
     // any of them can reconcile a task between the "running" status write and
     // the pid write in #startWorkerLocked (worker_pid null), while a freshly
@@ -669,6 +679,67 @@ export class BridgeTaskManager implements ProgressTaskManager {
       worker_pid: null,
     });
     this.#store.appendEvent(taskId, "error", result.summary, { error_code: "worker_lost" }, finishedAt);
+  }
+
+  #recoverOutcomeCheckpoint(
+    taskId: string,
+    status: { attempt: number; started_at: string | null; zcode_session_id?: string | null },
+    runtimePid: number | null,
+    runtimeExited: boolean,
+  ): boolean {
+    const checkpoint = this.#store.readAttemptMeta<Record<string, unknown>>(taskId, status.attempt, "outcome-checkpoint.json");
+    if (!checkpoint || typeof checkpoint.response !== "string") return false;
+    const outcome = {
+      attempts: 1,
+      cancelled: false,
+      stdoutTruncated: false,
+      stderrTruncated: false,
+      stdout: checkpoint.response,
+      stderr: "",
+      exitCode: typeof checkpoint.exit_code === "number" ? checkpoint.exit_code : null,
+      signal: typeof checkpoint.signal === "string" ? checkpoint.signal : null,
+      sessionId: typeof checkpoint.session_id === "string" ? checkpoint.session_id : null,
+      response: checkpoint.response,
+      usage: checkpoint.usage && typeof checkpoint.usage === "object" ? checkpoint.usage : null,
+      timedOut: false,
+      agentReport: checkpoint.agent_report ?? null,
+      reportCandidate: checkpoint.report_candidate && typeof checkpoint.report_candidate === "object" ? checkpoint.report_candidate : null,
+      reportError: typeof checkpoint.report_error === "string" ? checkpoint.report_error : null,
+      errorCode: typeof checkpoint.error_code === "string" ? checkpoint.error_code : null,
+      cleanupError: typeof checkpoint.cleanup_error === "string" ? checkpoint.cleanup_error : null,
+      cleanupVerified: checkpoint.cleanup_verified === true,
+    } as ZCodeRunOutcome;
+    const cleanupVerified = outcome.cleanupVerified && runtimeExited;
+    const failure: TaskFailure | null = cleanupVerified ? null : {
+      code: "cleanup_failed",
+      message: outcome.cleanupError ?? "Worker exited before process cleanup could be verified; the ZCode result was recovered from its private checkpoint",
+    };
+    const finishedAt = this.#now().toISOString();
+    const result = buildTaskResult({
+      task: this.#store.readTask(taskId),
+      attempt: status.attempt,
+      startedAt: status.started_at,
+      finishedAt,
+      outcome,
+      failure,
+      sessionId: status.zcode_session_id ?? outcome.sessionId,
+    });
+    this.#store.commitWorkerResult(taskId, status.attempt, result, {
+      status: result.status,
+      finished_at: finishedAt,
+      exit_code: result.exit_code,
+      zcode_session_id: result.session_id,
+      error_code: result.error_code ?? null,
+      error: result.status === "failed" ? result.summary : null,
+      worker_pid: null,
+      cleanup_unverified: !cleanupVerified,
+      zcode_pid: cleanupVerified ? null : runtimePid,
+    });
+    this.#store.appendEvent(taskId, "outcome_recovered", cleanupVerified
+      ? "Recovered the completed ZCode report after the worker exited before committing its result"
+      : "Recovered the ZCode report, but process cleanup could not be verified",
+    { status: result.status, cleanup_verified: cleanupVerified }, finishedAt);
+    return true;
   }
 
   #runningTaskIdsLocked(): string[] {

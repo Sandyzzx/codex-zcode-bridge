@@ -61,6 +61,9 @@ export function buildTaskResult(input: BuildTaskResultInput): TaskResult {
       issues: [truncate(resolved.message, 2_000)],
       needs_master_decision: true,
       error_code: resolved.code,
+      ...(resolved.code === "cleanup_failed" && outcome?.reportCandidate
+        ? { report_candidate: outcome.reportCandidate }
+        : {}),
     };
   }
 

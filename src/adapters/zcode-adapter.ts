@@ -67,6 +67,9 @@ export interface ZCodeRunOutcome extends AgentRunOutcome {
   readonly stdoutTruncated: boolean;
   readonly stderrTruncated: boolean;
   readonly attempts: number;
+  /** Process cleanup failed after the turn result was captured. */
+  readonly cleanupError?: string | null;
+  readonly cleanupVerified?: boolean;
 }
 
 export interface ZCodeAdapterOptions {
