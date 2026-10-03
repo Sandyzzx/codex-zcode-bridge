@@ -4,6 +4,15 @@
 
 当前版本以 `package.json` 和 Release Please manifest 为准。提交推送到 `master` 后，Release Please 会在有待发布变更时创建发布 PR，并同步更新版本文件与本日志；合并发布 PR 后会生成对应 Git tag 和 GitHub Release。
 
+## [1.0.4](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.0.3...codex-zcode-bridge-v1.0.4) (2026-10-03)
+
+
+### Bug Fixes
+
+* handle cancellation in active detached workers ([bf23b8b](https://github.com/Sandyzzx/codex-zcode-bridge/commit/bf23b8b97bc8beb3016413da2a322d3d155690aa))
+* make task retries idempotent and status reads responsive ([34134b6](https://github.com/Sandyzzx/codex-zcode-bridge/commit/34134b6a20481bbab9786e70ceeb3d50e468819f))
+* reconcile verified worker exits during cancellation ([b09a391](https://github.com/Sandyzzx/codex-zcode-bridge/commit/b09a3914d6baa5c56721b6aea77aa8ae0a8cc2a7))
+
 ## [1.0.3](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.0.2...codex-zcode-bridge-v1.0.3) (2026-10-02)
 
 
