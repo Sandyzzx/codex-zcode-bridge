@@ -8,6 +8,6 @@
 
 worker 每 3 秒原子写入一次 attempt/PID 绑定的私有 heartbeat，包含 session、turn、Bridge event 序号和已观测到的 ZCode event 序号。管理器遇到一次负向 PID 探测时，若 heartbeat 不超过 15 秒则暂缓失联判定。ZCode turn 完成后，worker 会在进程清理前保存私有 outcome checkpoint，并在清理成功后更新验证标志；worker 在最终 result 提交前退出时，管理器可恢复报告，清理未验证时保留 `cleanup_failed` 与 workspace 占用。
 
-当前没有在本机验证 `session/read` 或 `session/events` 的运行时版本与字段语义，因此不发送这些请求，也不以推测的原生状态覆盖 app-server 事件和 heartbeat。D 阶段的原生 session 状态查询仍为 NOT RUN。
+当前安装的 `zcode.cjs` 源码明确包含 `session/events` 的严格参数 schema（`sessionId`、可选 `afterSeq`、`limit`）及事件列表处理器。本适配器仅在 10 秒没有收到 live session event 时，每 5 秒尝试用已观测序号补拉；重放仍经过现有 session、turn、seq 过滤，旧 runtime 拒绝该方法时退回 live subscription。此轮没有对真实 app-server 执行 RPC 探针，因此运行时兼容性仍未实跑验证。`session/read` 未接入，D 阶段的原生当前状态查询仍为 NOT RUN。
 
 本轮模型无关回归使用假运行时，覆盖 replay、foreign session/turn、参数相同的重复审批、续跑请求身份、未知 usage 私密字段、可见输出完整性和真实 worker 超时退出。真实 ZCode 权限审批和 Desktop UI 刷新未运行。

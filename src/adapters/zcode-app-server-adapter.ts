@@ -42,6 +42,7 @@ function publicUsage(value: unknown): Record<string, unknown> | null {
 }
 
 interface PendingRpc {
+  method: string;
   resolve(value: unknown): void;
   reject(error: Error): void;
   timer: NodeJS.Timeout;
@@ -58,6 +59,7 @@ interface PendingInteraction {
 interface AppServerClient {
   child: ChildProcessWithoutNullStreams;
   request(method: string, params: JsonRecord): Promise<unknown>;
+  replayEvents(events: unknown[]): void;
   close(): Promise<void>;
   readonly stderr: string;
 }
@@ -79,6 +81,7 @@ interface RunEntry {
   textOutputStarted: boolean;
   selectedModel: string | null;
   lastEventSeq: number;
+  lastEventAt: number;
   readonly interactions: Map<string, PendingInteraction>;
   readonly abort: AbortController;
   acceptingTurn: boolean;
@@ -238,6 +241,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       textOutputStarted: false,
       selectedModel: null,
       lastEventSeq: 0,
+      lastEventAt: Date.now(),
       interactions: new Map(),
       abort: new AbortController(),
       acceptingTurn: false,
@@ -491,7 +495,29 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       entry.acceptingTurn = true;
       await client.request("session/send", { sessionId, content: prompt });
       entry.onEvent({ type: "turn_started", summary: "ZCode accepted the task and started a turn" });
-      const turnResult = await turn;
+      let replayInFlight = false;
+      let replayDisabled = false;
+      const replayTimer = setInterval(() => {
+        if (!entry.acceptingTurn || replayInFlight || replayDisabled || Date.now() - entry.lastEventAt < 10_000) return;
+        replayInFlight = true;
+        void client.request("session/events", { sessionId, afterSeq: entry.lastEventSeq, limit: 500 })
+          .then((value) => {
+            const events = asRecord(value).events;
+            if (Array.isArray(events)) client.replayEvents(events);
+          })
+          .catch((error) => {
+            const message = error instanceof Error ? error.message : String(error);
+            if (message.includes("Unsupported ZCode app-server request") || message.includes("ZCode app-server request failed for session/events")) {
+              replayDisabled = true;
+              entry.onEvent({ type: "session_event_replay_unavailable", summary: "ZCode session event replay is unavailable; continuing with live event subscription" });
+            }
+          })
+          .finally(() => { replayInFlight = false; });
+      }, 5_000);
+      replayTimer.unref();
+      let turnResult: Awaited<typeof turn>;
+      try { turnResult = await turn; }
+      finally { clearInterval(replayTimer); }
       const desktopStatus: DesktopTaskStatus = turnResult.resultType === "cancelled"
         ? null
         : turnResult.resultType && turnResult.resultType !== "success" ? "error" : "completed";
@@ -680,7 +706,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
           reject(new Error(`ZCode app-server request timed out: ${method}`));
         }, RPC_TIMEOUT_MS);
         timer.unref();
-        pending.set(id, { resolve, reject, timer });
+        pending.set(id, { method, resolve, reject, timer });
         child.stdin.write(`${JSON.stringify({ id, method, params })}\n`, (error) => {
           if (!error) return;
           clearTimeout(timer);
@@ -688,6 +714,15 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
           reject(error);
         });
       });
+    };
+    const replayEvents = (events: unknown[]): void => {
+      for (const event of events) {
+        const params = asRecord(event);
+        if (typeof params.type !== "string") continue;
+        this.#handleMessage({ method: "session/event", params }, entry, pending, config, (reply) => {
+          child.stdin.write(`${JSON.stringify(reply)}\n`);
+        });
+      }
     };
     const close = async (): Promise<void> => {
       if (closed) {
@@ -709,7 +744,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       }
       if (child.pid && isProcessRunning(child.pid)) await terminateProcessTree(child.pid);
     };
-    return { child, request, close, get stderr() { return stderr; } };
+    return { child, request, replayEvents, close, get stderr() { return stderr; } };
   }
 
   #handleMessage(
@@ -759,7 +794,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       pending.delete(id);
       if (message.error && typeof message.error === "object") {
         const error = message.error as JsonRecord;
-        call.reject(new Error(`ZCode app-server request failed${typeof error.code === "number" ? ` (code ${error.code})` : ""}`));
+        call.reject(new Error(`ZCode app-server request failed for ${call.method}${typeof error.code === "number" ? ` (code ${error.code})` : ""}`));
       } else {
         call.resolve(message.result);
       }
@@ -778,6 +813,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         if (!Number.isSafeInteger(params.seq) || params.seq <= entry.lastEventSeq) return;
         entry.lastEventSeq = params.seq;
       }
+      entry.lastEventAt = Date.now();
       if (type === "turn.started" && turnId) entry.turnId = turnId;
       if (type === "turn.started") entry.awaitingTurnStart = false;
       this.#publishSessionEvent(type, payload, entry, params);
