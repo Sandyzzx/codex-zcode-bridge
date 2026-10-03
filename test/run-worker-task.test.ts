@@ -53,6 +53,27 @@ test("successful run persists running state, attempt evidence, logs, and a compl
   }
 });
 
+test("cancel intent recorded during a running attempt reaches the adapter", { timeout: 2_000 }, async () => {
+  const { fixture, store } = await workerFixture();
+  try {
+    let rejectRun: (error: Error) => void;
+    const adapter = new FakeAdapter();
+    adapter.getResult = async () => {
+      store.writeStatus("task_1", { cancel_requested: true });
+      return new Promise((_, reject) => { rejectRun = reject; });
+    };
+    adapter.cancelTask = async () => {
+      adapter.cancelCallCount += 1;
+      rejectRun(new BridgeError("cancelled", "runtime cancellation verified"));
+    };
+    const run = await runWorkerTask({ dataRoot: fixture.dataRoot, taskId: "task_1", attempt: 1, adapter });
+    assert.equal(adapter.cancelCallCount, 1);
+    assert.equal(run.status, "cancelled");
+    assert.equal(store.readResult("task_1")?.summary, "runtime cancellation verified");
+    assert.equal(store.readStatus("task_1").worker_pid, null);
+  } finally { await fixture.cleanup(); }
+});
+
 test("needs_master_decision=true maps to waiting_for_master, not completed", async () => {
   const { fixture, store } = await workerFixture();
   try {

@@ -1230,8 +1230,11 @@ var ZCodeAppServerAdapter = class {
     entry.cancelRequested = true;
     entry.abort.abort();
     entry.rejectTurn(new Error("ZCode task cancelled"));
-    const pid = entry.child?.pid;
-    if (pid) await terminateProcessTree(pid);
+    try {
+      await entry.runPromise;
+    } catch (error) {
+      if (!(error instanceof BridgeError) || error.code !== "cancelled") throw error;
+    }
   }
   async #launch(task, workspace, attempt, prompt, resumeSessionId) {
     const handle = {
@@ -2817,7 +2820,25 @@ async function runWorkerTask(options) {
       previousSessionId: continueSpec.previous_session_id,
       previousResult
     }) : await adapter.startTask({ task, workspace: workspaceRef, attempt });
-    outcome = await adapter.getResult(handle);
+    let cancelTimer;
+    const cancellation = new Promise((_resolve, reject) => {
+      cancelTimer = setInterval(() => {
+        try {
+          const current = store.readStatus(taskId2);
+          if (current.attempt !== attempt || !current.cancel_requested) return;
+          clearInterval(cancelTimer);
+          void adapter.cancelTask(handle).catch(reject);
+        } catch (error) {
+          clearInterval(cancelTimer);
+          reject(error);
+        }
+      }, 50);
+    });
+    try {
+      outcome = await Promise.race([adapter.getResult(handle), cancellation]);
+    } finally {
+      clearInterval(cancelTimer);
+    }
     flushModelOutput();
   } catch (error) {
     flushModelOutput();

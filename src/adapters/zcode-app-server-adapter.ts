@@ -189,8 +189,12 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     entry.cancelRequested = true;
     entry.abort.abort();
     entry.rejectTurn(new Error("ZCode task cancelled"));
-    const pid = entry.child?.pid;
-    if (pid) await terminateProcessTree(pid);
+    // #execute owns process cleanup. Killing here as well races its close()
+    // path and can turn a verified cancellation into cleanup_failed.
+    try { await entry.runPromise; }
+    catch (error) {
+      if (!(error instanceof BridgeError) || error.code !== "cancelled") throw error;
+    }
   }
 
   async #launch(

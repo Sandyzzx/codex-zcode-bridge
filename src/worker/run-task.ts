@@ -177,7 +177,25 @@ export async function runWorkerTask(options: RunWorkerTaskOptions): Promise<RunW
           previousResult,
         })
       : await adapter.startTask({ task, workspace: workspaceRef, attempt });
-    outcome = await adapter.getResult(handle);
+    // The manager persists cancellation intent before its bounded fallback
+    // kill. Observe it while the runtime is active so the adapter can abort
+    // pending interactions and classify the exit as cancellation first.
+    let cancelTimer: ReturnType<typeof setInterval> | undefined;
+    const cancellation = new Promise<never>((_resolve, reject) => {
+      cancelTimer = setInterval(() => {
+        try {
+          const current = store.readStatus(taskId);
+          if (current.attempt !== attempt || !current.cancel_requested) return;
+          clearInterval(cancelTimer);
+          void adapter.cancelTask(handle).catch(reject);
+        } catch (error) {
+          clearInterval(cancelTimer);
+          reject(error);
+        }
+      }, 50);
+    });
+    try { outcome = await Promise.race([adapter.getResult(handle), cancellation]); }
+    finally { clearInterval(cancelTimer); }
     flushModelOutput();
   } catch (error) {
     flushModelOutput();

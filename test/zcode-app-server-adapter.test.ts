@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { ZCodeAppServerAdapter } from "../src/adapters/zcode-app-server-adapter.js";
+import { isProcessRunning } from "../src/adapters/process-spawn.js";
+import { BridgeError } from "../src/runtime/errors.js";
 import type { TaskPackage, ZCodeRuntimeConfig } from "../src/interfaces.js";
 import { makeWorkspace, SESSION_ID, validReport } from "./helpers.js";
 
@@ -237,6 +239,35 @@ test("keeps the runtime-selected reasoning options when the requested model is a
   } finally {
     await rm(runtime.root, { recursive: true, force: true });
   }
+});
+
+test("cancels a pending permission with one verified runtime cleanup", { timeout: 5_000 }, async () => {
+  const runtime = await makeFakeRuntime(undefined, true, true);
+  let ready!: () => void;
+  const interactionReady = new Promise<void>((resolve) => { ready = resolve; });
+  let runtimePid: number | undefined;
+  try {
+    const adapter = new ZCodeAppServerAdapter({
+      resolver: { resolve: async () => runtime.config },
+      onEvent: (event) => {
+        if (event.type === "app_server_started") runtimePid = event.details?.["pid"] as number;
+      },
+      resolveInteraction: async (_request, signal) => {
+        ready();
+        await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+        return { decision: "deny" };
+      },
+      timeoutMs: 3_000,
+      childEnvBase: { PATH: process.env.PATH },
+    });
+    const handle = await adapter.startTask({ task, workspace: makeWorkspace(runtime.root), attempt: 1 });
+    const result = assert.rejects(adapter.getResult(handle), (error: unknown) => error instanceof BridgeError && error.code === "cancelled");
+    await interactionReady;
+    await Promise.all([adapter.cancelTask(handle), adapter.cancelTask(handle)]);
+    await result;
+    assert.ok(runtimePid);
+    assert.equal(isProcessRunning(runtimePid), false);
+  } finally { await rm(runtime.root, { recursive: true, force: true }); }
 });
 
 test("forwards a permission decision to ZCode and resolves duplicate request IDs once", async () => {
