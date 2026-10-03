@@ -41,6 +41,7 @@ export const zcodeContinueInputSchema = z.strictObject({
   task_id: z.string().min(1),
   feedback: z.string().min(1),
   additional_requirements: z.array(z.string()).optional(),
+  operation_id: z.string().trim().min(1).max(128).optional(),
 });
 
 export const zcodeEventsInputSchema = z.strictObject({

@@ -19,13 +19,15 @@ import type {
   ZCodeInteractionReplyInput,
 } from "../interfaces.js";
 import path from "node:path";
+import { createHash } from "node:crypto";
+import { existsSync, statSync, writeFileSync } from "node:fs";
 import { isTerminalStatus, TaskStore, toPublicStatus } from "../store/task-store.js";
 import { buildTaskResult, type TaskFailure } from "./normalize.js";
 import { TaskManagerError } from "./errors.js";
 import { defaultSpawnWorker, type SpawnWorker } from "./spawn-worker.js";
 import { isProcessRunning, terminateProcessTree, type TerminateProcessTree } from "../adapters/process-spawn.js";
 import { validateTaskTimeout } from "../runtime/task-timeout.js";
-import { withProcessLock } from "../store/process-lock.js";
+import { tryAcquireProcessLock, withProcessLock } from "../store/process-lock.js";
 import { buildTaskPrompt, buildContinuePrompt } from "../prompts/task-prompt.js";
 
 export interface TaskManagerOptions {
@@ -62,8 +64,11 @@ export class BridgeTaskManager implements ProgressTaskManager {
   readonly #dataRoot: string;
   readonly #maxConcurrentWorkers: number;
   readonly #workerStartGraceMs: number;
+  readonly #recoveryCooldownMs: number;
   #timer: NodeJS.Timeout | null = null;
   #mutex: Promise<unknown> = Promise.resolve();
+  #queuedOperations = 0;
+  #recoveryPromise: Promise<void> | null = null;
 
   constructor(options: TaskManagerOptions) {
     this.#store = options.store;
@@ -82,6 +87,7 @@ export class BridgeTaskManager implements ProgressTaskManager {
       throw new RangeError("workerStartGraceMs must be a non-negative integer");
     }
     const pollIntervalMs = options.pollIntervalMs ?? 1_000;
+    this.#recoveryCooldownMs = pollIntervalMs;
     if (pollIntervalMs > 0) {
       this.#timer = setInterval(() => {
         void this.recoverTasks().catch((error) => console.error("Bridge recovery failed:", error instanceof Error ? error.message : String(error)));
@@ -100,7 +106,15 @@ export class BridgeTaskManager implements ProgressTaskManager {
 
   /** Scans all non-terminal tasks and reconciles them, then pumps the queue. */
   async recoverTasks(): Promise<void> {
-    return this.#exclusive(async () => {
+    if (this.#recoveryPromise) return this.#recoveryPromise;
+    const releaseRecovery = tryAcquireProcessLock(path.join(this.#store.tasksRoot, ".recovery.lock"));
+    if (!releaseRecovery) return;
+    const lastRunFile = path.join(this.#store.tasksRoot, ".recovery-last-run");
+    if (this.#recoveryCooldownMs > 0 && existsSync(lastRunFile) && Date.now() - statSync(lastRunFile).mtimeMs < this.#recoveryCooldownMs) {
+      releaseRecovery();
+      return;
+    }
+    const run = this.#exclusive(async () => {
       for (const taskId of this.#store.listTaskIds()) {
         try {
           const status = this.#safeStatus(taskId);
@@ -113,13 +127,49 @@ export class BridgeTaskManager implements ProgressTaskManager {
       }
       this.#pumpLocked();
     });
+    this.#recoveryPromise = run;
+    try { await run; }
+    finally {
+      try {
+        if (this.#recoveryCooldownMs > 0) {
+          writeFileSync(lastRunFile, String(Date.now()), { mode: 0o600 });
+        }
+      } finally {
+        releaseRecovery();
+        this.#recoveryPromise = null;
+      }
+    }
   }
 
   async createTask(task: TaskPackage): Promise<TaskReceipt> {
     return this.#exclusive(async () => {
       this.#validateTaskPackage(task);
       if (this.#store.hasTask(task.task_id)) {
-        throw new TaskManagerError("TASK_ALREADY_EXISTS", `task_id already used: ${task.task_id}`);
+        const existing = this.#store.readTask(task.task_id);
+        const ref = this.#store.readWorkspaceRef(task.task_id);
+        const sameWorkspace = path.resolve(task.workspace) === path.resolve(ref?.requestedPath ?? existing.workspace);
+        const sameExecutionPath = task.worktree_path === undefined
+          ? existing.worktree_path === undefined
+          : existing.worktree_path !== undefined && path.resolve(task.worktree_path) === path.resolve(ref?.canonicalPath ?? existing.worktree_path);
+        const normalizedRetry: TaskPackage = {
+          ...task,
+          workspace: existing.workspace,
+          ...(existing.worktree_path === undefined ? { worktree_path: undefined } : { worktree_path: existing.worktree_path }),
+        };
+        const fingerprint = createHash("sha256").update(stableJson(normalizedRetry)).digest("hex");
+        const previous = this.#store.readSubmission<{ fingerprint: string; receipt: TaskReceipt }>(task.task_id);
+        const existingFingerprint = previous?.fingerprint ?? createHash("sha256").update(stableJson(existing)).digest("hex");
+        if (!sameWorkspace || !sameExecutionPath || existingFingerprint !== fingerprint) {
+          throw new TaskManagerError("TASK_ID_CONFLICT", `task_id already belongs to a different request: ${task.task_id}`);
+        }
+        const status = this.#store.readStatus(task.task_id);
+        const receipt = previous?.receipt ?? {
+          task_id: task.task_id,
+          status: status.status === "running" ? "running" as const : "queued" as const,
+          created_at: status.created_at,
+        };
+        this.#store.writeSubmission(task.task_id, { fingerprint, receipt });
+        return receipt;
       }
       let workspaceRef;
       try {
@@ -132,13 +182,14 @@ export class BridgeTaskManager implements ProgressTaskManager {
       }
       const createdAt = this.#now().toISOString();
       try { buildTaskPrompt(task); } catch (error) { throw new TaskManagerError("TASK_INVALID", String(error)); }
+      const normalizedTask: TaskPackage = {
+        ...task,
+        workspace: workspaceRef.sourcePath ?? workspaceRef.canonicalPath,
+        ...(workspaceRef.mode === "worktree" ? { worktree_path: workspaceRef.canonicalPath } : { worktree_path: undefined }),
+      };
+      const fingerprint = createHash("sha256").update(stableJson(normalizedTask)).digest("hex");
       try {
-        const projectPath = workspaceRef.sourcePath ?? workspaceRef.canonicalPath;
-        this.#store.createTask({
-          ...task,
-          workspace: projectPath,
-          ...(workspaceRef.mode === "worktree" ? { worktree_path: workspaceRef.canonicalPath } : { worktree_path: undefined }),
-        }, createdAt);
+        this.#store.createTask(normalizedTask, createdAt);
         this.#store.writeWorkspaceRef(task.task_id, workspaceRef);
       } catch (error) {
         await this.#workspaceProvider.release(workspaceRef).catch(() => undefined);
@@ -154,22 +205,27 @@ export class BridgeTaskManager implements ProgressTaskManager {
           mode: workspaceRef.mode,
           ...(workspaceRef.branchName ? { branch_name: workspaceRef.branchName } : {}),
         }, createdAt);
+      // Commit an accepted receipt before dispatch so a crash or lost MCP
+      // response cannot turn a retry into a second execution.
+      const acceptedReceipt: TaskReceipt = { task_id: task.task_id, status: "queued", created_at: createdAt };
+      this.#store.writeSubmission(task.task_id, { fingerprint, receipt: acceptedReceipt });
       this.#pumpLocked();
       const status = this.#store.readStatus(task.task_id);
-      return {
+      const receipt: TaskReceipt = status.status === "running" ? {
         task_id: task.task_id,
-        status: status.status === "running" ? "running" : "queued",
+        status: "running",
         created_at: createdAt,
-      };
+      } : acceptedReceipt;
+      if (receipt !== acceptedReceipt) this.#store.writeSubmission(task.task_id, { fingerprint, receipt });
+      return receipt;
     });
   }
 
   async getStatus(taskId: string): Promise<TaskStatusRecord> {
-    return this.#exclusive(async () => {
-      this.#requireTask(taskId);
-      this.#reconcileOneLocked(taskId);
-      return toPublicStatus(this.#store.readStatus(taskId));
-    });
+    // Status is an atomic persisted snapshot. Do not make callers wait behind
+    // a recovery scan or a slow worker cleanup operation.
+    this.#requireTask(taskId);
+    return toPublicStatus(this.#store.readStatus(taskId));
   }
 
   async getEvents(input: {
@@ -196,9 +252,8 @@ export class BridgeTaskManager implements ProgressTaskManager {
     }
     const deadline = Date.now() + waitMs;
     while (true) {
-      const page = await this.#exclusive(async () => {
+      const page = await (async () => {
         this.#requireTask(input.task_id);
-        this.#reconcileOneLocked(input.task_id);
         const status = this.#store.readStatus(input.task_id);
         const read = this.#store.readEvents(input.task_id, afterSeq, limit, input.view ?? "raw");
         return {
@@ -209,16 +264,15 @@ export class BridgeTaskManager implements ProgressTaskManager {
           has_more: read.hasMore,
           ...(read.omittedEvents ? { omitted_events: read.omittedEvents } : {}),
         } satisfies TaskProgressPage;
-      });
+      })();
       if (page.events.length || isTerminalStatus(page.status) || Date.now() >= deadline) return page;
       await sleep(Math.min(250, Math.max(1, deadline - Date.now())));
     }
   }
 
   async getResult(taskId: string): Promise<TaskResult> {
-    return this.#exclusive(async () => {
+    return (async () => {
       this.#requireTask(taskId);
-      this.#reconcileOneLocked(taskId);
       const status = this.#store.readStatus(taskId);
       if (!isTerminalStatus(status.status)) {
         throw new TaskManagerError(
@@ -234,7 +288,7 @@ export class BridgeTaskManager implements ProgressTaskManager {
         );
       }
       return result;
-    });
+    })();
   }
 
   async replyToInteraction(input: ZCodeInteractionReplyInput): Promise<{ task_id: string; request_id: string; state: "answered" }> {
@@ -281,6 +335,19 @@ export class BridgeTaskManager implements ProgressTaskManager {
         throw new TaskManagerError("TASK_INVALID", "additional_requirements must be an array of strings");
       }
       const status = this.#store.readStatus(taskId);
+      const continueFingerprint = createHash("sha256").update(stableJson({ feedback: input.feedback, additional_requirements: input.additional_requirements ?? [] })).digest("hex");
+      if (input.operation_id !== undefined && (typeof input.operation_id !== "string" || !input.operation_id.trim() || input.operation_id.length > 128)) {
+        throw new TaskManagerError("TASK_INVALID", "operation_id must be a non-empty string up to 128 characters");
+      }
+      if (input.operation_id) {
+        for (let attempt = 2; attempt <= status.attempt; attempt += 1) {
+          const prior = this.#store.readAttemptMeta<{ operation_id?: string; fingerprint?: string; receipt?: TaskReceipt }>(taskId, attempt, "continue.json");
+          if (prior?.operation_id !== input.operation_id) continue;
+          if (prior.fingerprint !== continueFingerprint) throw new TaskManagerError("CONTINUE_OPERATION_CONFLICT", "operation_id already belongs to different continuation input");
+          if (prior.receipt) return prior.receipt;
+          return { task_id: taskId, status: status.status === "running" ? "running" : "queued", created_at: status.created_at };
+        }
+      }
       if (!["completed", "failed", "waiting_for_master"].includes(status.status)) {
         throw new TaskManagerError(
           "TASK_STATE",
@@ -309,11 +376,13 @@ export class BridgeTaskManager implements ProgressTaskManager {
       catch (error) { throw new TaskManagerError("TASK_INVALID", String(error)); }
       const nextAttempt = previousAttempt + 1;
       const createdAt = this.#now().toISOString();
+      const continuationReceipt: TaskReceipt = { task_id: taskId, status: "queued", created_at: createdAt };
 
       // Preserve prior evidence: the previous terminal result is archived into
       // its attempt directory before the new attempt starts.
       this.#store.archiveResultToAttempt(taskId, previousAttempt);
       this.#store.writeAttemptMeta(taskId, nextAttempt, "continue.json", {
+        ...(input.operation_id ? { operation_id: input.operation_id, fingerprint: continueFingerprint, receipt: continuationReceipt } : {}),
         feedback: input.feedback,
         additional_requirements: [...(input.additional_requirements ?? [])],
         previous_session_id: previousResult?.session_id ?? status.zcode_session_id,
@@ -335,11 +404,16 @@ export class BridgeTaskManager implements ProgressTaskManager {
       });
       this.#pumpLocked();
       const after = this.#store.readStatus(taskId);
-      return {
+      const receipt: TaskReceipt = {
         task_id: taskId,
         status: after.status === "running" ? "running" : "queued",
         created_at: after.updated_at,
       };
+      if (input.operation_id) this.#store.writeAttemptMeta(taskId, nextAttempt, "continue.json", {
+        ...this.#store.readAttemptMeta(taskId, nextAttempt, "continue.json"),
+        receipt,
+      });
+      return receipt;
     });
   }
 
@@ -740,10 +814,38 @@ export class BridgeTaskManager implements ProgressTaskManager {
   }
 
   #exclusive<T>(operation: () => Promise<T>): Promise<T> {
-    const locked = () => withProcessLock(path.join(this.#store.tasksRoot, ".manager.lock"), operation);
+    if (this.#queuedOperations >= 32) return Promise.reject(new TaskManagerError("BRIDGE_BUSY", "Bridge operation queue is full; retry with the same task_id"));
+    this.#queuedOperations += 1;
+    let started = false;
+    let expired = false;
+    let rejectTimeout: ((error: Error) => void) | undefined;
+    const timeout = setTimeout(() => {
+      if (started) return;
+      expired = true;
+      this.#queuedOperations = Math.max(0, this.#queuedOperations - 1);
+      rejectTimeout?.(new TaskManagerError("REQUEST_QUEUE_TIMEOUT", "Bridge operation did not start within 5 seconds; retry with the same task_id"));
+    }, 5_000);
+    const locked = async () => {
+      if (expired) throw new TaskManagerError("REQUEST_QUEUE_TIMEOUT", "Bridge operation expired before it started");
+      started = true;
+      clearTimeout(timeout);
+      this.#queuedOperations = Math.max(0, this.#queuedOperations - 1);
+      try {
+        return await withProcessLock(path.join(this.#store.tasksRoot, ".manager.lock"), operation, 5_000);
+      } catch (error) {
+        if (error instanceof Error && error.message.startsWith("timed out waiting for process lock:")) {
+          throw new TaskManagerError("REQUEST_QUEUE_TIMEOUT", "Bridge operation did not acquire the shared scheduling lock within 5 seconds; retry with the same task_id");
+        }
+        throw error;
+      }
+    };
     const run = this.#mutex.then(locked, locked);
+    const bounded = new Promise<T>((resolve, reject) => {
+      rejectTimeout = reject;
+      run.then(resolve, reject);
+    });
     this.#mutex = run.catch(() => undefined);
-    return run;
+    return bounded;
   }
 
   #safeStatus(taskId: string): ReturnType<TaskStore["readStatus"]> | null {
@@ -767,6 +869,12 @@ function pathsOverlap(left: string, right: string): boolean {
   const reverse = path.relative(right, left);
   const inside = (value: string): boolean => value === "" || (!path.isAbsolute(value) && value !== ".." && !value.startsWith(`..${path.sep}`));
   return inside(relative) || inside(reverse);
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") return `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`).join(",")}}`;
+  return JSON.stringify(value);
 }
 
 function buildInteractionAnswer(

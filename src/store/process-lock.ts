@@ -3,8 +3,8 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 
 /** Cross-process exclusion. A live owner is never evicted by elapsed time. */
-export async function withProcessLock<T>(directory: string, operation: () => Promise<T>): Promise<T> {
-  const deadline = Date.now() + 30_000;
+export async function withProcessLock<T>(directory: string, operation: () => Promise<T>, timeoutMs = 30_000): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
   let release: (() => void) | null;
   while (!(release = tryAcquireProcessLock(directory))) {
     if (Date.now() >= deadline) throw new Error(`timed out waiting for process lock: ${directory}`);

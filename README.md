@@ -106,6 +106,8 @@ For installation or startup problems, call the `zcode_doctor` MCP tool for setup
 
 Use `zcode_model_catalog` with the current project path to read app-server model IDs and reasoning levels. Pass a selected `provider_id`/`model_id` in `zcode_task.model` for one task. Use `zcode_set_default_model` to configure the default for future tasks, `zcode_default_model` to read it, and `zcode_clear_default_model` to return to the ZCode session default. The catalog is cached for one day; provider config changes invalidate it. On a cache miss, the Bridge creates and closes a deferred session without sending a prompt. If a refresh fails, it re-reads provider config and retries once. A persistent failure reports an error with a `zcode_doctor` diagnostic step and never returns an expired catalog.
 
+If a `zcode_task` call times out or loses its response, query or retry with the same `task_id`; identical submissions replay the original receipt and changed content is rejected. For retryable `zcode_continue` calls, supply a stable `operation_id` so a lost response cannot increment the attempt twice.
+
 ## Known issues
 
 - The ZCode Desktop sidebar may not immediately show a new session. The Bridge best-effort syncs the local task index; Desktop controls when the list refreshes.

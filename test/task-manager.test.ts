@@ -15,6 +15,7 @@ import {
 } from "./manager-helpers.js";
 import { TaskStore } from "../src/store/task-store.js";
 import { TaskManagerError } from "../src/manager/errors.js";
+import { withProcessLock } from "../src/store/process-lock.js";
 import { runWorkerTask } from "../src/worker/run-task.js";
 import { makeTask } from "./helpers.js";
 
@@ -56,13 +57,17 @@ test("invalid task packages are rejected with TASK_INVALID and leave no records"
   }
 });
 
-test("duplicate task_id is rejected with TASK_ALREADY_EXISTS", async () => {
+test("same task_id and payload replays the original receipt; changed payload conflicts", async () => {
   const fx = await freshFixture();
   try {
-    await fx.manager.createTask(fx.makeTask());
+    const task = fx.makeTask();
+    const first = await fx.manager.createTask(task);
+    const spawned = fx.spawned.length;
+    assert.deepEqual(await fx.manager.createTask(task), first);
+    assert.equal(fx.spawned.length, spawned);
     await assert.rejects(
-      fx.manager.createTask(fx.makeTask()),
-      (error: unknown) => errorCodeOf(error) === "TASK_ALREADY_EXISTS",
+      fx.manager.createTask({ ...task, objective: "different request" }),
+      (error: unknown) => errorCodeOf(error) === "TASK_ID_CONFLICT",
     );
   } finally {
     await fx.cleanup();
@@ -81,6 +86,24 @@ test("with a free slot the task starts immediately as running with a persisted p
     assert.equal(status.worker_pid, fx.spawned[0]!.pid);
     assert.equal(status.attempt, 1);
   } finally {
+    await fx.cleanup();
+  }
+});
+
+test("status snapshot reads bypass the manager scheduling lock", async () => {
+  const fx = await freshFixture();
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => { release = resolve; });
+  try {
+    await fx.manager.createTask(fx.makeTask());
+    const lock = withProcessLock(path.join(fx.store.tasksRoot, ".manager.lock"), () => blocked);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const status = await fx.manager.getStatus("task_1");
+    assert.equal(status.status, "running");
+    release();
+    await lock;
+  } finally {
+    release();
     await fx.cleanup();
   }
 });
@@ -325,6 +348,7 @@ test("a dead worker without a terminal result reconciles to failed/worker_lost a
       started_at: "2026-09-27T00:00:05.000Z",
     });
     fx.pidsAlive.delete(pid); // the worker process died
+    await fx.manager.recoverTasks();
     const status = await fx.manager.getStatus("task_1");
     assert.equal(status.status, "failed");
     assert.equal(status.error_code, "worker_lost");
@@ -479,9 +503,22 @@ test("continueTask archives prior evidence, passes feedback through, and increme
       task_id: "task_1",
       feedback: "Fix the failing test",
       additional_requirements: ["Keep the API stable"],
+      operation_id: "continue-1",
     });
     assert.equal(receipt.status, "running", "the slot is free so the continuation starts immediately");
     assert.equal(fx.spawned.length, 2);
+    assert.deepEqual(await fx.manager.continueTask({
+      task_id: "task_1",
+      feedback: "Fix the failing test",
+      additional_requirements: ["Keep the API stable"],
+      operation_id: "continue-1",
+    }), receipt);
+    assert.equal(fx.spawned.length, 2, "retrying one continuation must not start another attempt");
+    await assert.rejects(fx.manager.continueTask({
+      task_id: "task_1",
+      feedback: "different feedback",
+      operation_id: "continue-1",
+    }), (error: unknown) => errorCodeOf(error) === "CONTINUE_OPERATION_CONFLICT");
 
     const adapter = new FakeAdapter();
     await fx.runWorker("task_1", adapter);

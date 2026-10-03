@@ -121,6 +121,16 @@ export class TaskStore {
     return task;
   }
 
+  readSubmission<T = { fingerprint: string; receipt: { task_id: string; status: "queued" | "running"; created_at: string } }>(taskId: string): T | null {
+    const file = path.join(this.taskDir(taskId), "submission.json");
+    if (!existsSync(file)) return null;
+    return this.#readJson(file) as T;
+  }
+
+  writeSubmission(taskId: string, submission: unknown): void {
+    this.#writeJsonAtomic(path.join(this.taskDir(taskId), "submission.json"), submission);
+  }
+
   writeWorkspaceRef(taskId: string, workspace: WorkspaceRef): void {
     this.#writeJsonAtomic(path.join(this.taskDir(taskId), "workspace.json"), workspace);
   }

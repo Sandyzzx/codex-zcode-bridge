@@ -232,6 +232,7 @@ test("cancelling an orphaned live runtime reaches a terminal state before releas
     fx.store.writeStatus("task_1", { zcode_pid: 4444, zcode_session_id: "orphan-session" });
     fx.pidsAlive.delete(fx.spawned[0]!.pid);
     fx.pidsAlive.add(4444);
+    await fx.manager.recoverTasks();
     assert.equal((await fx.manager.getStatus("task_1")).status, "running");
     assert.equal(fx.store.readStatus("task_1").cleanup_unverified, true);
     await fx.manager.createTask(fx.makeTask({ task_id: "later" }));

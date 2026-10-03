@@ -2275,6 +2275,14 @@ var TaskStore = class {
     if (!task || task.task_id !== taskId2 || typeof task.workspace !== "string" || !task.workspace || typeof task.objective !== "string" || [task.requirements, task.allowed_paths, task.forbidden_paths, task.acceptance_criteria, task.test_commands].some((items) => !Array.isArray(items) || items.some((item) => typeof item !== "string"))) throw new Error(`corrupt task record: ${file}`);
     return task;
   }
+  readSubmission(taskId2) {
+    const file = path5.join(this.taskDir(taskId2), "submission.json");
+    if (!existsSync4(file)) return null;
+    return this.#readJson(file);
+  }
+  writeSubmission(taskId2, submission) {
+    this.#writeJsonAtomic(path5.join(this.taskDir(taskId2), "submission.json"), submission);
+  }
   writeWorkspaceRef(taskId2, workspace) {
     this.#writeJsonAtomic(path5.join(this.taskDir(taskId2), "workspace.json"), workspace);
   }

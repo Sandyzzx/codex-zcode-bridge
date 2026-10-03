@@ -43,6 +43,8 @@ codex plugin add codex-zcode-bridge@codex-zcode-bridge
 - `ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS`：同一数据目录内的调度并行上限，范围 1–8，默认 8；多个 Bridge 进程应使用一致设置，重叠执行路径串行。
 - `ZCODE_BRIDGE_TIMEOUT_MS`：未在任务中指定 `timeout_ms` 时使用的单次执行时限，单位毫秒，范围 60,000–14,400,000；默认 3,600,000（60 分钟）。
 
+`zcode_task` 调用超时或回执丢失时，使用原 `task_id` 查询或重试；相同内容会重放原回执，不同内容会被拒绝。可重试的 `zcode_continue` 调用应传入稳定的 `operation_id`，避免回执丢失后重复增加 attempt。
+
 保存为有效 JSON 后，新启动的 Bridge 会读取配置文件；它优先于旧环境变量设置。`ZCODE_HOME` 应指向 `.zcode` 目录，个人 provider 配置文件需位于该目录下的 `v2/provider_config.json`。Provider/model ID 请从 ZCode 配置中复制，不要改写 ZCode 的 provider 文件。
 
 Codex 的 marketplace 安装说明见[OpenAI 官方插件文档](https://developers.openai.com/plugins/build/plugins)。

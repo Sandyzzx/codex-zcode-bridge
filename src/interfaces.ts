@@ -207,6 +207,8 @@ export interface ContinueTaskInput {
   task_id: string;
   feedback: string;
   additional_requirements?: string[];
+  /** Stable id for retrying one continuation after a lost response. */
+  operation_id?: string;
 }
 
 export interface TaskManager {
