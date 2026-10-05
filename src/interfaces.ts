@@ -291,6 +291,42 @@ export interface TaskProgressPage {
   scan_metrics?: Record<string, number | null>;
 }
 
+/** Compact, provenance-aware view of one Bridge task attempt. */
+export interface TaskFeedbackSnapshotV01 {
+  schema_version: "0.1";
+  task_id: string;
+  attempt: number;
+  status: TaskStatus;
+  model: {
+    provider_id: string | null;
+    model_id: string | null;
+    reasoning_level: string | null;
+    source: "runtime";
+  } | null;
+  phase: null;
+  progress: null;
+  activity: {
+    kind: "tool_call" | "tool_update";
+    summary: string;
+    observed_at: string;
+    currentness: "last_observed";
+  } | null;
+  interaction: {
+    state: "not_observed" | "pending" | "answered";
+    kind: "permission" | "user_input" | null;
+  } | null;
+  result: {
+    source: "agent_report";
+    summary: string;
+    issues: string[];
+    files_changed: string[];
+    tests: TestReport[];
+    started_at: string | null;
+    finished_at: string | null;
+    duration_ms: number | null;
+  } | null;
+}
+
 export interface ContinueTaskInput {
   task_id: string;
   feedback: string;
@@ -322,6 +358,7 @@ export interface TaskManager {
 /** Additive Phase 7 capability; the frozen V0.1 TaskManager contract stays intact. */
 export interface ProgressTaskManager extends TaskManager {
   getEvents(input: GetEventsInput): Promise<TaskProgressPage>;
+  getFeedback?(taskId: string): Promise<TaskFeedbackSnapshotV01>;
   replyToInteraction(input: ZCodeInteractionReplyInput): Promise<{ task_id: string; request_id: string; state: "answered" }>;
 }
 
