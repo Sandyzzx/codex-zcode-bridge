@@ -14,6 +14,8 @@ import type {
   TaskObservation,
   TaskPackage,
   TaskProgressPage,
+  TaskProgressEvent,
+  TaskFeedbackSnapshotV01,
   TaskReceipt,
   TaskResult,
   TaskStatusRecord,
@@ -38,6 +40,7 @@ import type { ProcessIdentityLike } from "../store/task-store.js";
 import { buildTaskObservation } from "../observation/build.js";
 import { DiagnosticCounters, sanitizeDiagnostics, boundedErrorMessage } from "../observation/diagnostics.js";
 import type { ExecutorState } from "../observation/types.js";
+import { buildTaskFeedbackSnapshotV01 } from "../feedback/task-feedback.js";
 
 export interface TaskManagerOptions {
   store: TaskStore;
@@ -597,6 +600,37 @@ export class BridgeTaskManager implements ProgressTaskManager {
       if (page.events.length || isTerminalStatus(page.status) || Date.now() >= deadline) return page;
       await sleep(Math.min(250, Math.max(1, deadline - Date.now())));
     }
+  }
+
+  async getFeedback(taskId: string): Promise<TaskFeedbackSnapshotV01> {
+    this.#requireTask(taskId);
+    const status = this.#store.readStatus(taskId);
+    const startTime = status.started_at ? Date.parse(status.started_at) : Number.NaN;
+    const relevantTypes = new Set(["model_selected", "model_tool_call", "tool_status", "report_ready", "worker_started"]);
+    const attemptEvents = [];
+    let afterSeq = 0;
+    while (true) {
+      const previousSeq = afterSeq;
+      const page = this.#store.readEvents(taskId, afterSeq, 200, "raw");
+      for (const event of page.events) {
+        const eventTime = Date.parse(event.at);
+        if (!Number.isFinite(startTime) || !Number.isFinite(eventTime) || eventTime < startTime) continue;
+        if (relevantTypes.has(event.type)) attemptEvents.push(event);
+      }
+      afterSeq = page.nextSeq;
+      if (!page.hasMore || page.nextSeq <= previousSeq) break;
+    }
+    let currentWorkerStarted: TaskProgressEvent | null = null;
+    for (const event of attemptEvents) {
+      if (event.type === "worker_started" && event.details?.["attempt"] === status.attempt) currentWorkerStarted = event;
+    }
+    const events = attemptEvents.filter((event) => {
+      if (event.type === "worker_started") return false;
+      if (!currentWorkerStarted) return true; // Legacy events lack attempt on worker_started; timestamp scoped above.
+      return event.seq > currentWorkerStarted.seq;
+    });
+    const result = isTerminalStatus(status.status) ? this.#store.readResult(taskId) : null;
+    return buildTaskFeedbackSnapshotV01({ status: toPublicStatus(status), events, result });
   }
 
   async getResult(taskId: string): Promise<TaskResult> {
@@ -1159,7 +1193,7 @@ export class BridgeTaskManager implements ProgressTaskManager {
       return;
     }
     this.#store.patchRunningAttempt(taskId, status.attempt, { worker_pid: pid });
-    this.#store.appendEvent(taskId, "worker_started", "Bridge worker started", { worker_pid: pid }, this.#now().toISOString());
+    this.#store.appendEvent(taskId, "worker_started", "Bridge worker started", { worker_pid: pid, attempt: status.attempt }, this.#now().toISOString());
   }
 
   #requireTask(taskId: string): void {
