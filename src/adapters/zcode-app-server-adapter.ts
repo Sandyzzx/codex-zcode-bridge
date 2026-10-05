@@ -75,11 +75,17 @@ interface RunEntry {
   outcome: ZCodeRunOutcome | null;
   error: unknown;
   runPromise: Promise<ZCodeRunOutcome>;
-  resolveTurn: (value: { response: string; usage: Record<string, unknown> | null; resultType: string | null }) => void;
+  resolveTurn: (value: TurnResult) => void;
   rejectTurn: (error: Error) => void;
   onEvent: ProgressSink;
   textOutputStarted: boolean;
   selectedModel: string | null;
+  selectedModelSelection: { providerId: string; modelId: string } | null;
+  selectedReasoningLevel: string | null;
+  reasoningLevelSource: "runtime" | "not_reported";
+  modelSource: string | null;
+  requestedModel: string | null;
+  requestedReasoningLevel: string | null;
   lastEventSeq: number;
   lastEventAt: number;
   readonly interactions: Map<string, PendingInteraction>;
@@ -87,6 +93,26 @@ interface RunEntry {
   acceptingTurn: boolean;
   turnId: string | null;
   awaitingTurnStart: boolean;
+  // B2 correlation state: one pending completion at most, settled only after
+  // the turn binding exists or the bounded compat window expires.
+  rpcAcceptedAt: string | null;
+  turnStartedAt: string | null;
+  turnCompletedAt: string | null;
+  turnBinding: "strict" | "compat" | "pending";
+  pendingCompletion: { payload: JsonRecord; event: JsonRecord; heldAt: number } | null;
+  bindingTimer: NodeJS.Timeout | null;
+  pendingTimer: NodeJS.Timeout | null;
+  replayConsecutiveFailures: number;
+}
+
+interface TurnResult {
+  response: string;
+  usage: Record<string, unknown> | null;
+  resultType: string | null;
+  binding: "strict" | "compat";
+  startedAt: string | null;
+  completedAt: string;
+  rpcAcceptedAt: string | null;
 }
 
 export interface ZCodeAppServerAdapterOptions {
@@ -104,6 +130,12 @@ export interface ZCodeAppServerAdapterOptions {
   now?: () => Date;
   resolveInteraction?: (request: ZCodeInteractionRequest, signal: AbortSignal) => Promise<Record<string, unknown>>;
   onOutcomeCheckpoint?: (outcome: ZCodeRunOutcome) => void;
+  /** Worker-facing interaction activity hint (waiting → resumed). */
+  onInteractionState?: (state: "waiting" | "resumed") => void;
+  /** Bounded pending-completion window when completion races turn binding. */
+  turnBindingCompatMs?: number;
+  /** Idle time before a replay poll (default 10_000); tests lower it. */
+  replayIdleMs?: number;
 }
 
 const RPC_TIMEOUT_MS = 30_000;
@@ -124,6 +156,9 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
   readonly #now: () => Date;
   readonly #resolveInteraction: ZCodeAppServerAdapterOptions["resolveInteraction"];
   readonly #onOutcomeCheckpoint: ZCodeAppServerAdapterOptions["onOutcomeCheckpoint"];
+  readonly #onInteractionState: ZCodeAppServerAdapterOptions["onInteractionState"];
+  readonly #turnBindingCompatMs: number;
+  readonly #replayIdleMs: number;
   readonly #runs = new Map<AgentHandle, RunEntry>();
   readonly #workspaceByTask = new Map<string, string>();
 
@@ -137,6 +172,9 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     this.#now = options.now ?? (() => new Date());
     this.#resolveInteraction = options.resolveInteraction;
     this.#onOutcomeCheckpoint = options.onOutcomeCheckpoint;
+    this.#onInteractionState = options.onInteractionState;
+    this.#turnBindingCompatMs = options.turnBindingCompatMs ?? 5_000;
+    this.#replayIdleMs = options.replayIdleMs ?? 10_000;
   }
 
   async startTask(input: { task: TaskPackage; workspace: WorkspaceRef; attempt: number }): Promise<AgentHandle> {
@@ -219,7 +257,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     };
     let resolveTurn!: RunEntry["resolveTurn"];
     let rejectTurn!: RunEntry["rejectTurn"];
-    const turn = new Promise<{ response: string; usage: Record<string, unknown> | null; resultType: string | null }>((resolve, reject) => {
+    const turn = new Promise<TurnResult>((resolve, reject) => {
       resolveTurn = resolve;
       rejectTurn = reject;
     });
@@ -240,6 +278,12 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       onEvent: this.#onEvent,
       textOutputStarted: false,
       selectedModel: null,
+      selectedModelSelection: null,
+      selectedReasoningLevel: null,
+      reasoningLevelSource: "not_reported",
+      modelSource: null,
+      requestedModel: null,
+      requestedReasoningLevel: null,
       lastEventSeq: 0,
       lastEventAt: Date.now(),
       interactions: new Map(),
@@ -247,6 +291,14 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       acceptingTurn: false,
       turnId: null,
       awaitingTurnStart: false,
+      rpcAcceptedAt: null,
+      turnStartedAt: null,
+      turnCompletedAt: null,
+      turnBinding: "pending",
+      pendingCompletion: null,
+      bindingTimer: null,
+      pendingTimer: null,
+      replayConsecutiveFailures: 0,
     };
     this.#runs.set(handle, entry);
     this.#workspaceByTask.set(task.task_id, workspace.canonicalPath);
@@ -264,7 +316,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     workspace: WorkspaceRef,
     prompt: string,
     resumeSessionId: string | null,
-    turn: Promise<{ response: string; usage: Record<string, unknown> | null; resultType: string | null }>,
+    turn: Promise<TurnResult>,
   ): Promise<ZCodeRunOutcome> {
     const startedAt = this.#now();
     const projectPath = workspace.sourcePath ?? workspace.canonicalPath;
@@ -400,7 +452,13 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         }
         snapshot = modelState;
         entry.selectedModel = readSelectedModel(modelState) ?? requested;
+        entry.selectedModelSelection = selected;
+        entry.modelSource = preferences.modelSource;
+        entry.requestedModel = requested;
+        entry.requestedReasoningLevel = reasoningLevel;
         selectedReasoningLevel = readEffectiveReasoningLevel(modelState);
+        entry.selectedReasoningLevel = selectedReasoningLevel;
+        entry.reasoningLevelSource = selectedReasoningLevel ? "runtime" : "not_reported";
         entry.onEvent({
           type: "model_selected",
           summary: `ZCode selected requested model ${entry.selectedModel}${selectedReasoningLevel ? ` with reasoning level ${selectedReasoningLevel}` : "; runtime did not report its reasoning level"}`,
@@ -417,6 +475,8 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       }
       const model = readSelectedModel(snapshot);
       entry.selectedModel = entry.selectedModel ?? model;
+      const defaultSelection = readSelectedModelSelection(snapshot);
+      entry.selectedModelSelection = entry.selectedModelSelection ?? defaultSelection;
       if (!entry.selectedModel) {
         const availableModels = readAvailableModels(snapshot);
         entry.onEvent({
@@ -432,6 +492,9 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       if (!preferences.model) {
         const selected = readSelectedModelSelection(snapshot);
         selectedReasoningLevel = readEffectiveReasoningLevel(snapshot);
+        entry.selectedReasoningLevel = selectedReasoningLevel;
+        entry.reasoningLevelSource = selectedReasoningLevel ? "runtime" : "not_reported";
+        entry.modelSource = preferences.modelSource;
         entry.onEvent({
           type: "model_selected",
           summary: `ZCode runtime selected its session model ${entry.selectedModel}${selectedReasoningLevel ? ` with reasoning level ${selectedReasoningLevel}` : ""}`,
@@ -494,30 +557,61 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       });
       entry.acceptingTurn = true;
       await client.request("session/send", { sessionId, content: prompt });
-      entry.onEvent({ type: "turn_started", summary: "ZCode accepted the task and started a turn" });
+      entry.rpcAcceptedAt = this.#now().toISOString();
+      entry.onEvent({ type: "turn_started", summary: "ZCode accepted the task and started a turn", details: { rpc_accepted: true, ...(entry.turnId ? { turn_id: entry.turnId } : {}) } });
+      // B2: if the runtime does not deliver turn.started for the accepted
+      // send within a bounded window, degrade to the documented compat path
+      // (session exclusivity + replay boundary), visibly — never silently.
+      entry.bindingTimer = setTimeout(() => {
+        if (!entry.awaitingTurnStart) return;
+        entry.awaitingTurnStart = false;
+        entry.turnBinding = "compat";
+        entry.onEvent({
+          type: "turn_binding_compat",
+          summary: "turn.started did not arrive after the accepted send; binding degraded to session-exclusivity compatibility mode",
+        });
+        this.#settlePendingCompletion(entry);
+      }, Math.max(this.#turnBindingCompatMs, 5_000));
+      entry.bindingTimer.unref();
       let replayInFlight = false;
       let replayDisabled = false;
       const replayTimer = setInterval(() => {
-        if (!entry.acceptingTurn || replayInFlight || replayDisabled || Date.now() - entry.lastEventAt < 10_000) return;
+        if (!entry.acceptingTurn || replayInFlight || replayDisabled || Date.now() - entry.lastEventAt < this.#replayIdleMs) return;
+        void 0;
         replayInFlight = true;
         void client.request("session/events", { sessionId, afterSeq: entry.lastEventSeq, limit: 500 })
           .then((value) => {
+            entry.replayConsecutiveFailures = 0;
             const events = asRecord(value).events;
             if (Array.isArray(events)) client.replayEvents(events);
           })
           .catch((error) => {
             const message = error instanceof Error ? error.message : String(error);
-            if (message.includes("Unsupported ZCode app-server request") || message.includes("ZCode app-server request failed for session/events")) {
+            if (message.includes("Unsupported ZCode app-server request")) {
               replayDisabled = true;
-              entry.onEvent({ type: "session_event_replay_unavailable", summary: "ZCode session event replay is unavailable; continuing with live event subscription" });
+              entry.onEvent({ type: "session_event_replay_unavailable", summary: "ZCode session event replay is unsupported by this runtime; continuing with live event subscription" });
+              return;
+            }
+            // Transient replay failures must not permanently condemn the
+            // capability (B2-05): retry, and only give up after several
+            // consecutive failures, with the degradation visible.
+            entry.replayConsecutiveFailures += 1;
+            if (entry.replayConsecutiveFailures >= 3) {
+              replayDisabled = true;
+              entry.onEvent({ type: "session_event_replay_unavailable", summary: `ZCode session event replay failed ${String(entry.replayConsecutiveFailures)} times consecutively; continuing with live subscription` });
             }
           })
           .finally(() => { replayInFlight = false; });
-      }, 5_000);
+      }, Math.max(50, Math.min(5_000, this.#replayIdleMs)));
       replayTimer.unref();
-      let turnResult: Awaited<typeof turn>;
+      let turnResult: TurnResult;
       try { turnResult = await turn; }
-      finally { clearInterval(replayTimer); }
+      finally {
+        clearInterval(replayTimer);
+        if (entry.bindingTimer) { clearTimeout(entry.bindingTimer); entry.bindingTimer = null; }
+        if (entry.pendingTimer) { clearTimeout(entry.pendingTimer); entry.pendingTimer = null; }
+      }
+      entry.turnCompletedAt = turnResult.completedAt;
       const desktopStatus: DesktopTaskStatus = turnResult.resultType === "cancelled"
         ? null
         : turnResult.resultType && turnResult.resultType !== "success" ? "error" : "completed";
@@ -540,6 +634,39 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
           reportCandidate: null,
           reportError: `ZCode turn ended with resultType ${turnResult.resultType}`,
           errorCode: turnResult.resultType === "cancelled" ? "cancelled" : "zcode_nonzero_exit",
+          phaseTimestamps: {
+            rpc_accepted_at: turnResult.rpcAcceptedAt,
+            turn_started_at: turnResult.startedAt,
+            turn_completed_at: turnResult.completedAt,
+          },
+          modelProfile: this.#modelProfile(entry),
+        };
+      } else if (turnResult.resultType === null) {
+        // Unknown terminal: event name alone never proves success (B2).
+        const parsedUnknown = parseAgentReport(turnResult.response);
+        outcome = {
+          attempts: 1,
+          cancelled: false,
+          stdout: turnResult.response,
+          stderr: "",
+          exitCode: 1,
+          signal: null,
+          sessionId,
+          response: turnResult.response,
+          usage: turnResult.usage,
+          timedOut: false,
+          stdoutTruncated: false,
+          stderrTruncated: false,
+          agentReport: null,
+          reportCandidate: parsedUnknown.candidate,
+          reportError: `ZCode turn completed without a resultType (binding: ${turnResult.binding}); treated as an unknown terminal state, not a success`,
+          errorCode: "unknown_turn_terminal",
+          phaseTimestamps: {
+            rpc_accepted_at: turnResult.rpcAcceptedAt,
+            turn_started_at: turnResult.startedAt,
+            turn_completed_at: turnResult.completedAt,
+          },
+          modelProfile: this.#modelProfile(entry),
         };
       } else {
         const parsed = parseAgentReport(turnResult.response);
@@ -566,6 +693,12 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
             reportCandidate: parsed.candidate,
             reportError: parsed.error,
             errorCode: "invalid_agent_report",
+            phaseTimestamps: {
+              rpc_accepted_at: turnResult.rpcAcceptedAt,
+              turn_started_at: turnResult.startedAt,
+              turn_completed_at: turnResult.completedAt,
+            },
+            modelProfile: this.#modelProfile(entry),
           };
         } else {
           entry.onEvent({
@@ -573,7 +706,19 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
             summary: "ZCode produced its structured execution report",
             details: { needs_master_decision: parsed.report.needs_master_decision },
           });
-          outcome = { ...base, agentReport: parsed.report, reportCandidate: parsed.report, reportError: null, errorCode: null };
+          outcome = {
+            ...base,
+            agentReport: parsed.report,
+            reportCandidate: parsed.report,
+            reportError: null,
+            errorCode: null,
+            phaseTimestamps: {
+              rpc_accepted_at: turnResult.rpcAcceptedAt,
+              turn_started_at: turnResult.startedAt,
+              turn_completed_at: turnResult.completedAt,
+            },
+            modelProfile: this.#modelProfile(entry),
+          };
         }
       }
       // Persist the complete, bounded response and normalized report before
@@ -814,23 +959,50 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         entry.lastEventSeq = params.seq;
       }
       entry.lastEventAt = Date.now();
-      if (type === "turn.started" && turnId) entry.turnId = turnId;
-      if (type === "turn.started") entry.awaitingTurnStart = false;
-      this.#publishSessionEvent(type, payload, entry, params);
+      if (type === "turn.started") {
+        // Strict binding wins: the send-accepted turn is now identified. A
+        // completion held in the pending boundary settles only after this
+        // binding is in place (B2-01).
+        if (turnId) entry.turnId = turnId;
+        entry.awaitingTurnStart = false;
+        entry.turnStartedAt = this.#now().toISOString();
+        if (entry.bindingTimer) { clearTimeout(entry.bindingTimer); entry.bindingTimer = null; }
+      }
       if (type === "turn.completed") {
+        if (entry.awaitingTurnStart) {
+          // Completion before binding: hold a bounded pending boundary.
+          entry.pendingCompletion = { payload, event: params, heldAt: Date.now() };
+          entry.acceptingTurn = false;
+          if (!entry.pendingTimer) {
+            entry.pendingTimer = setTimeout(() => this.#settlePendingCompletion(entry), this.#turnBindingCompatMs);
+            entry.pendingTimer.unref();
+          }
+          return;
+        }
         entry.acceptingTurn = false;
-        entry.resolveTurn({
-          response: typeof payload.response === "string" ? payload.response : "",
-          usage: publicUsage(payload.usage),
-          resultType: typeof payload.resultType === "string" ? payload.resultType : null,
-        });
-      } else if (type === "turn.failed") {
+        entry.turnCompletedAt = this.#now().toISOString();
+        entry.turnBinding = entry.turnId ? "strict" : "compat";
+        // Publish first so the worker persists the turn correlation, then
+        // settle the turn exactly once.
+        this.#publishSessionEvent(type, payload, entry, params);
+        this.#resolveTurnCompleted(entry, payload, params);
+        return;
+      }
+      if (type === "turn.failed") {
         entry.acceptingTurn = false;
+        entry.turnCompletedAt = this.#now().toISOString();
         const problem = asRecord(payload.error);
         void problem;
+        this.#publishSessionEvent(type, payload, entry, params);
         entry.rejectTurn(new Error("ZCode turn failed"));
+        return;
       }
-      return;
+      this.#publishSessionEvent(type, payload, entry, params);
+      if (type === "turn.started" && entry.pendingCompletion) {
+        // Binding landed after a held completion; correlation is now
+        // persisted by the worker, so settle the held completion (B2-01).
+        this.#settlePendingCompletion(entry);
+      }
     }
     if (message.method === "state.updated") {
       const params = asRecord(message.params);
@@ -876,6 +1048,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     }
     pending = { requestIds: [rpcId], method, paramsSignature, resolving: true };
     entry.interactions.set(requestId, pending);
+    this.#onInteractionState?.("waiting");
     const request: ZCodeInteractionRequest = { request_id: requestId, method, params };
     const fallback = interactionDecline(method, "Bridge interaction reply is unavailable");
     void (async () => {
@@ -893,6 +1066,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       pending!.response = response;
       pending!.resolving = false;
       if (entry.abort.signal.aborted) return;
+      this.#onInteractionState?.("resumed");
       for (const id of pending!.requestIds) write({ id, result: response });
       entry.onEvent({
         type: "interaction_replied",
@@ -905,6 +1079,57 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         entry.interactions.delete(oldest);
       }
     })().catch(() => entry.rejectTurn(new Error("ZCode interaction delivery failed")));
+  }
+
+  /** Settles a completion that was held in the pending boundary. */
+  #settlePendingCompletion(entry: RunEntry): void {
+    if (entry.pendingTimer) { clearTimeout(entry.pendingTimer); entry.pendingTimer = null; }
+    const held = entry.pendingCompletion;
+    if (!held) return;
+    entry.pendingCompletion = null;
+    if (entry.awaitingTurnStart) {
+      entry.awaitingTurnStart = false;
+      entry.turnBinding = "compat";
+      entry.onEvent({
+        type: "turn_binding_compat",
+        summary: "turn.started never arrived for the accepted send; completion settled through the bounded compatibility window",
+      });
+    }
+    entry.turnCompletedAt = this.#now().toISOString();
+    this.#resolveTurnCompleted(entry, held.payload, held.event);
+  }
+
+  /** Single settle path for turn completions; resultType is validated here so
+   * an unknown terminal is never mistaken for success (B2). */
+  #resolveTurnCompleted(entry: RunEntry, payload: JsonRecord, event: JsonRecord): void {
+    if (entry.turnBinding === "pending") entry.turnBinding = entry.turnId ? "strict" : "compat";
+    entry.resolveTurn({
+      response: typeof payload.response === "string" ? payload.response : "",
+      usage: publicUsage(payload.usage),
+      resultType: typeof payload.resultType === "string" ? payload.resultType : null,
+      binding: entry.turnBinding,
+      startedAt: entry.turnStartedAt,
+      completedAt: entry.turnCompletedAt ?? this.#now().toISOString(),
+      rpcAcceptedAt: entry.rpcAcceptedAt,
+    });
+    void event;
+  }
+
+  #modelProfile(entry: RunEntry): import("../interfaces.js").ExecutionProfile | null {
+    if (!entry.selectedModel && !entry.selectedModelSelection) return null;
+    return {
+      executor: "zcode",
+      provider_id: entry.selectedModelSelection?.providerId ?? null,
+      model_id: entry.selectedModelSelection?.modelId ?? entry.selectedModel,
+      requested_model: entry.requestedModel,
+      requested_reasoning_level: entry.requestedReasoningLevel,
+      effective_reasoning_level: entry.selectedReasoningLevel,
+      effective_reasoning_level_source: entry.reasoningLevelSource,
+      selection_source: entry.modelSource ?? "runtime",
+      effective_at: entry.turnStartedAt ?? entry.rpcAcceptedAt ?? null,
+      session_id: entry.sessionId,
+      turn_id: entry.turnId,
+    };
   }
 
   #publishSessionEvent(type: string, payload: JsonRecord, entry: RunEntry, event: JsonRecord): void {

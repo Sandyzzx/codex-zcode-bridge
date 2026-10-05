@@ -6,7 +6,7 @@
 // verbatim; when a run fails without a valid report the flag is true (the
 // master must review), and a master-requested cancellation is false. The flag
 // is never silently defaulted to false from missing evidence.
-import type { TaskPackage, TaskResult, TestReport } from "../interfaces.js";
+import type { AttemptTiming, ExecutionProfile, NormalizedUsage, TaskPackage, TaskResult, TestReport } from "../interfaces.js";
 import type { ZCodeRunOutcome } from "../adapters/zcode-adapter.js";
 
 export interface TaskFailure {
@@ -23,6 +23,12 @@ export interface BuildTaskResultInput {
   readonly failure?: TaskFailure | null;
   readonly cancelled?: boolean;
   readonly sessionId?: string | null;
+  /** B4 additive: runtime usage normalized by the worker; absent on infra failures. */
+  readonly usage?: NormalizedUsage | null;
+  /** B4 additive: runtime-confirmed model / reasoning evidence. */
+  readonly model?: ExecutionProfile | null;
+  /** B4 additive: bounded phase timings. */
+  readonly timing?: AttemptTiming | null;
 }
 
 export function buildTaskResult(input: BuildTaskResultInput): TaskResult {
@@ -35,6 +41,9 @@ export function buildTaskResult(input: BuildTaskResultInput): TaskResult {
     zcode_output: outcome?.response ?? "",
     exit_code: outcome?.exitCode ?? null,
     session_id: outcome?.sessionId ?? input.sessionId ?? null,
+    ...(input.usage !== undefined ? { usage: input.usage } : {}),
+    ...(input.model !== undefined ? { model: input.model } : {}),
+    ...(input.timing !== undefined ? { timing: input.timing } : {}),
   };
 
   if (input.cancelled || outcome?.cancelled) {

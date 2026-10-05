@@ -20,6 +20,7 @@ import { runBridgeDoctor } from "../runtime/doctor.js";
 import { ZCodeModelSettings } from "../runtime/model-settings.js";
 import { codexHostProfile, validateHostProfile, type BridgeHostProfile } from "./profile.js";
 import { createWorkerSpawner } from "../manager/spawn-worker.js";
+import { createPlatformProbe } from "../runtime/process-probe.js";
 import { SERVER_VERSION } from "../mcp/server.js";
 
 export interface DataRootResolution {
@@ -94,6 +95,7 @@ export async function startBridge(host: BridgeHostProfile = codexHostProfile(), 
     workspaceProvider: new DirectWorkspaceProvider(),
     maxConcurrentWorkers: workerLimit.maxConcurrentWorkers,
     spawnWorker: createWorkerSpawner(host),
+    probe: createPlatformProbe(),
   });
   const modelSettings = new ZCodeModelSettings(process.env, { host });
   const server = createBridgeServer({
