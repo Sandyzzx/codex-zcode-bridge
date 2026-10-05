@@ -1,20 +1,1372 @@
 #!/usr/bin/env node
 var __defProp = Object.defineProperty;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __esm = (fn, res, err) => function __init() {
+  if (err) throw err[0];
+  try {
+    return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+  } catch (e) {
+    throw err = [e], e;
+  }
+};
 var __export = (target, all) => {
   for (var name in all)
     __defProp(target, name, { get: all[name], enumerable: true });
 };
 
+// src/store/process-lock.ts
+import { mkdirSync, readFileSync as readFileSync2, renameSync, rmdirSync, statSync as statSync2, unlinkSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import path3 from "node:path";
+function publishSelfIdentity(identity) {
+  selfIdentity = identity;
+}
+async function withProcessLock(directory, operation, timeoutMs = 3e4) {
+  const deadline = Date.now() + timeoutMs;
+  let release;
+  while (!(release = tryAcquireProcessLock(directory))) {
+    if (Date.now() >= deadline) {
+      const owner = describeLockOwner(directory);
+      throw new Error(`timed out waiting for process lock: ${directory}${owner ? ` (live owner: ${owner})` : ""}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  try {
+    return await operation();
+  } finally {
+    release();
+  }
+}
+function describeLockOwner(directory) {
+  try {
+    const owner = JSON.parse(readFileSync2(path3.join(directory, "owner.json"), "utf8"));
+    if (!Number.isSafeInteger(owner.pid)) return null;
+    return `pid ${String(owner.pid)}${owner.started_at ? `, started ${owner.started_at}` : ""}`;
+  } catch {
+    return null;
+  }
+}
+function tryAcquireProcessLock(directory) {
+  const token = randomUUID();
+  const ownerRecord = {
+    pid: process.pid,
+    token,
+    started_at: (/* @__PURE__ */ new Date()).toISOString(),
+    // Fingerprint may be null before the async self-identity probe finishes;
+    // null never authorizes binding a recycled PID to a prior owner.
+    identity: selfIdentity ? { fingerprint: selfIdentity.fingerprint, identity_version: selfIdentity.identity_version, platform: selfIdentity.platform } : null
+  };
+  try {
+    mkdirSync(directory, { mode: 448 });
+    writeFileSync(path3.join(directory, "owner.json"), JSON.stringify(ownerRecord), { mode: 384 });
+  } catch (error2) {
+    if (error2.code !== "EEXIST") throw error2;
+    try {
+      const owner = JSON.parse(readFileSync2(path3.join(directory, "owner.json"), "utf8"));
+      if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0) throw new Error("invalid lock owner");
+      try {
+        process.kill(owner.pid, 0);
+      } catch (failure2) {
+        if (failure2.code === "ESRCH") {
+          if (reclaimDeadOwner(directory)) return tryAcquireProcessLock(directory);
+        }
+      }
+    } catch {
+      try {
+        if (Date.now() - statSync2(directory).mtimeMs > 3e4) throw new Error(`unreadable lock owner: ${directory}`);
+      } catch (failure2) {
+        if (failure2.code !== "ENOENT") throw failure2;
+      }
+    }
+    return null;
+  }
+  return () => {
+    const owner = JSON.parse(readFileSync2(path3.join(directory, "owner.json"), "utf8"));
+    if (owner.token !== token) throw new Error("process lock ownership changed");
+    unlinkSync(path3.join(directory, "owner.json"));
+    rmdirSync(directory);
+  };
+}
+function reclaimDeadOwner(directory) {
+  const guard = `${directory}.reclaim`;
+  try {
+    mkdirSync(guard);
+  } catch (error2) {
+    if (error2.code === "EEXIST") return false;
+    throw error2;
+  }
+  try {
+    const owner = JSON.parse(readFileSync2(path3.join(directory, "owner.json"), "utf8"));
+    if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0) return false;
+    try {
+      process.kill(owner.pid, 0);
+      return false;
+    } catch (error2) {
+      if (error2.code !== "ESRCH") return false;
+    }
+    const retired = `${directory}.${randomUUID()}.retired`;
+    renameSync(directory, retired);
+    unlinkSync(path3.join(retired, "owner.json"));
+    rmdirSync(retired);
+    return true;
+  } catch (error2) {
+    if (error2.code !== "ENOENT") throw error2;
+    return false;
+  } finally {
+    rmdirSync(guard);
+  }
+}
+var selfIdentity;
+var init_process_lock = __esm({
+  "src/store/process-lock.ts"() {
+    "use strict";
+    selfIdentity = null;
+  }
+});
+
+// src/store/atomic-rename.ts
+import { renameSync as renameSync2 } from "node:fs";
+import { rename } from "node:fs/promises";
+function retryable(error2, deadline) {
+  return process.platform === "win32" && Date.now() < deadline && ["EPERM", "EBUSY", "EACCES"].includes(error2.code ?? "");
+}
+function atomicRenameSync(source, target) {
+  const deadline = Date.now() + 2e3;
+  while (true) {
+    try {
+      renameSync2(source, target);
+      return;
+    } catch (error2) {
+      if (!retryable(error2, deadline)) throw error2;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    }
+  }
+}
+async function atomicRename(source, target) {
+  const deadline = Date.now() + 2e3;
+  while (true) {
+    try {
+      await rename(source, target);
+      return;
+    } catch (error2) {
+      if (!retryable(error2, deadline)) throw error2;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+}
+var init_atomic_rename = __esm({
+  "src/store/atomic-rename.ts"() {
+    "use strict";
+  }
+});
+
+// src/store/task-store.ts
+var task_store_exports = {};
+__export(task_store_exports, {
+  TaskStore: () => TaskStore,
+  isTerminalStatus: () => isTerminalStatus,
+  toPublicStatus: () => toPublicStatus
+});
+import { appendFileSync, chmodSync, closeSync, copyFileSync, existsSync as existsSync2, mkdirSync as mkdirSync2, openSync, readFileSync as readFileSync3, readSync, readdirSync, rmSync, statSync as statSync3, writeFileSync as writeFileSync2 } from "node:fs";
+import { createHash, randomUUID as randomUUID2 } from "node:crypto";
+import path4 from "node:path";
+import { StringDecoder } from "node:string_decoder";
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") return `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`).join(",")}}`;
+  return JSON.stringify(value) ?? "null";
+}
+function withEventLock(lockDir, operation) {
+  const deadline = Date.now() + 1e4;
+  let release;
+  while (!(release = tryAcquireProcessLock(lockDir))) {
+    if (Date.now() >= deadline) throw new Error(`timed out waiting for task state/event lock: ${lockDir}`);
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+  }
+  try {
+    return operation();
+  } finally {
+    release();
+  }
+}
+function privateMkdir(directory) {
+  mkdirSync2(directory, { recursive: true, mode: 448 });
+  privateDirectory(directory);
+}
+function privateDirectory(directory) {
+  if (process.platform !== "win32") chmodSync(directory, 448);
+}
+function privateFile(file) {
+  if (process.platform !== "win32") chmodSync(file, 384);
+}
+function readLastEventSeq(file) {
+  if (!existsSync2(file)) return 0;
+  for (const line of readFileSync3(file, "utf8").trimEnd().split("\n").reverse()) {
+    try {
+      const event = JSON.parse(line);
+      if (Number.isInteger(event.seq)) return event.seq;
+    } catch {
+    }
+  }
+  return 0;
+}
+function parseProgressEvent(line) {
+  if (!line) return null;
+  try {
+    const event = JSON.parse(line);
+    return Number.isInteger(event.seq) ? event : null;
+  } catch {
+    return null;
+  }
+}
+function isTerminalStatus(status) {
+  return status === "completed" || status === "failed" || status === "cancelled" || status === "waiting_for_master";
+}
+function toPublicStatus(status) {
+  const record2 = {
+    task_id: status.task_id,
+    status: status.status,
+    attempt: status.attempt,
+    created_at: status.created_at,
+    updated_at: status.updated_at,
+    started_at: status.started_at,
+    finished_at: status.finished_at,
+    worker_pid: status.worker_pid,
+    zcode_session_id: status.zcode_session_id,
+    exit_code: status.exit_code
+  };
+  if (status.error_code) record2.error_code = status.error_code;
+  if (status.error) record2.error = status.error;
+  return record2;
+}
+var TASK_ID_PATTERN, DEFAULT_MAX_LOG_BYTES, MAX_CRITICAL_EVENT_RESERVE_BYTES, CRITICAL_EVENT_TYPES, TaskStore;
+var init_task_store = __esm({
+  "src/store/task-store.ts"() {
+    "use strict";
+    init_process_lock();
+    init_atomic_rename();
+    TASK_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+    DEFAULT_MAX_LOG_BYTES = 10 * 1024 * 1024;
+    MAX_CRITICAL_EVENT_RESERVE_BYTES = 256 * 1024;
+    CRITICAL_EVENT_TYPES = /* @__PURE__ */ new Set([
+      "error",
+      "task_finished",
+      "turn_completed",
+      "report_ready",
+      "session_ready",
+      "turn_started",
+      "worker_started",
+      "workspace_ready",
+      "timeout_warning",
+      "model_catalog",
+      "account_provider_sync_failed",
+      "interaction_requested",
+      "interaction_reply_submitted",
+      "cancelled",
+      "cancel_failed",
+      "cleanup_unverified",
+      "outcome_checkpoint_failed",
+      "outcome_recovered"
+    ]);
+    TaskStore = class {
+      #dataRoot;
+      #tasksRoot;
+      #maxLogBytes;
+      #maxEventBytes;
+      constructor(dataRoot, options = {}) {
+        this.#dataRoot = dataRoot;
+        this.#tasksRoot = path4.join(dataRoot, ".tasks");
+        this.#maxLogBytes = options.maxLogBytes ?? DEFAULT_MAX_LOG_BYTES;
+        this.#maxEventBytes = options.maxEventBytes ?? DEFAULT_MAX_LOG_BYTES;
+        privateMkdir(this.#tasksRoot);
+      }
+      get dataRoot() {
+        return this.#dataRoot;
+      }
+      get tasksRoot() {
+        return this.#tasksRoot;
+      }
+      assertValidTaskId(taskId) {
+        if (typeof taskId !== "string" || !TASK_ID_PATTERN.test(taskId)) {
+          throw new Error(`invalid task_id (must match ${TASK_ID_PATTERN.source}): ${String(taskId)}`);
+        }
+      }
+      taskDir(taskId) {
+        this.assertValidTaskId(taskId);
+        return path4.join(this.#tasksRoot, taskId);
+      }
+      hasTask(taskId) {
+        try {
+          return existsSync2(path4.join(this.taskDir(taskId), "status.json"));
+        } catch {
+          return false;
+        }
+      }
+      listTaskIds() {
+        if (!existsSync2(this.#tasksRoot)) return [];
+        return readdirSync(this.#tasksRoot).filter(
+          (entry) => existsSync2(path4.join(this.#tasksRoot, entry, "status.json"))
+        );
+      }
+      createTask(task, createdAt) {
+        this.assertValidTaskId(task.task_id);
+        const dir = this.taskDir(task.task_id);
+        if (existsSync2(path4.join(dir, "task.json"))) {
+          throw new Error(`task already exists: ${task.task_id}`);
+        }
+        privateMkdir(path4.join(dir, "attempts"));
+        this.#writeJsonAtomic(path4.join(dir, "task.json"), task);
+        const status = {
+          task_id: task.task_id,
+          status: "queued",
+          attempt: 1,
+          created_at: createdAt,
+          updated_at: createdAt,
+          started_at: null,
+          finished_at: null,
+          worker_pid: null,
+          zcode_session_id: null,
+          exit_code: null
+        };
+        this.#writeJsonAtomic(path4.join(dir, "status.json"), status);
+      }
+      readTask(taskId) {
+        const file = path4.join(this.taskDir(taskId), "task.json");
+        const parsed = this.#readJson(file);
+        const task = parsed;
+        if (!task || task.task_id !== taskId || typeof task.workspace !== "string" || !task.workspace || typeof task.objective !== "string" || [task.requirements, task.allowed_paths, task.forbidden_paths, task.acceptance_criteria, task.test_commands].some((items) => !Array.isArray(items) || items.some((item) => typeof item !== "string"))) throw new Error(`corrupt task record: ${file}`);
+        return task;
+      }
+      readSubmission(taskId) {
+        const file = path4.join(this.taskDir(taskId), "submission.json");
+        if (!existsSync2(file)) return null;
+        return this.#readJson(file);
+      }
+      writeSubmission(taskId, submission) {
+        this.#writeJsonAtomic(path4.join(this.taskDir(taskId), "submission.json"), submission);
+      }
+      writeWorkspaceRef(taskId, workspace) {
+        this.#writeJsonAtomic(path4.join(this.taskDir(taskId), "workspace.json"), workspace);
+      }
+      readWorkspaceRef(taskId) {
+        const file = path4.join(this.taskDir(taskId), "workspace.json");
+        if (!existsSync2(file)) return null;
+        const workspace = this.#readJson(file);
+        if (!workspace || typeof workspace.canonicalPath !== "string" || typeof workspace.requestedPath !== "string" || !["direct", "worktree"].includes(workspace.mode)) throw new Error(`corrupt workspace record: ${file}`);
+        return workspace;
+      }
+      readStatus(taskId) {
+        const file = path4.join(this.taskDir(taskId), "status.json");
+        const parsed = this.#readJson(file);
+        if (!parsed || parsed.task_id !== taskId || !["queued", "running", "completed", "failed", "cancelled", "waiting_for_master"].includes(parsed.status) || !Number.isSafeInteger(parsed.attempt) || parsed.attempt < 1 || typeof parsed.created_at !== "string") {
+          throw new Error(`corrupt status record: ${file}`);
+        }
+        return parsed;
+      }
+      /** Read-merge-write with an updated timestamp; atomic via temp file + rename. */
+      writeStatus(taskId, patch, expectedAttempt) {
+        return withEventLock(path4.join(this.taskDir(taskId), "state.lock"), () => {
+          const current = this.readStatus(taskId);
+          if (expectedAttempt !== void 0 && (current.attempt !== expectedAttempt || isTerminalStatus(current.status))) throw new Error("stale or terminal worker status rejected");
+          const next = {
+            ...current,
+            ...patch,
+            task_id: current.task_id,
+            updated_at: (/* @__PURE__ */ new Date()).toISOString()
+          };
+          this.#writeJsonAtomic(path4.join(this.taskDir(taskId), "status.json"), next);
+          return next;
+        });
+      }
+      readResult(taskId) {
+        const file = path4.join(this.taskDir(taskId), "result.json");
+        if (!existsSync2(file)) return null;
+        const result = this.#readJson(file);
+        if (!result || result.task_id !== taskId || !Number.isSafeInteger(result.attempt) || !isTerminalStatus(result.status)) throw new Error(`corrupt result record: ${file}`);
+        return result.attempt === this.readStatus(taskId).attempt ? result : null;
+      }
+      writeResult(taskId, result) {
+        withEventLock(path4.join(this.taskDir(taskId), "state.lock"), () => {
+          if (this.readStatus(taskId).attempt !== result.attempt) throw new Error("stale worker attempt result rejected");
+          this.#writeJsonAtomic(path4.join(this.taskDir(taskId), "result.json"), result);
+        });
+      }
+      commitWorkerResult(taskId, attempt, result, patch) {
+        withEventLock(path4.join(this.taskDir(taskId), "state.lock"), () => {
+          this.assertWorkerAttempt(taskId, attempt);
+          this.#writeJsonAtomic(path4.join(this.taskDir(taskId), "result.json"), result);
+          const current = this.readStatus(taskId);
+          this.#writeJsonAtomic(path4.join(this.taskDir(taskId), "status.json"), { ...current, ...patch, task_id: taskId, attempt, updated_at: (/* @__PURE__ */ new Date()).toISOString() });
+        });
+      }
+      patchRunningAttempt(taskId, attempt, patch) {
+        withEventLock(path4.join(this.taskDir(taskId), "state.lock"), () => {
+          const current = this.readStatus(taskId);
+          if (current.attempt !== attempt || current.status !== "running") return;
+          this.#writeJsonAtomic(path4.join(this.taskDir(taskId), "status.json"), { ...current, ...patch, updated_at: (/* @__PURE__ */ new Date()).toISOString() });
+        });
+      }
+      /** Copies evidence before the continuation status commit; the old result remains recoverable. */
+      archiveResultToAttempt(taskId, attempt) {
+        const dir = this.taskDir(taskId);
+        const source = path4.join(dir, "result.json");
+        if (!existsSync2(source)) return;
+        const targetDir = this.attemptDir(taskId, attempt);
+        privateMkdir(targetDir);
+        copyFileSync(source, path4.join(targetDir, "result.json"));
+        privateFile(path4.join(targetDir, "result.json"));
+      }
+      /** A claim is permanent: a started attempt must never execute again. */
+      claimWorkerExecution(taskId, attempt) {
+        return withEventLock(path4.join(this.taskDir(taskId), "state.lock"), () => {
+          const status = this.readStatus(taskId);
+          if (status.attempt !== attempt || isTerminalStatus(status.status)) return false;
+          privateMkdir(this.attemptDir(taskId, attempt));
+          try {
+            writeFileSync2(path4.join(this.attemptDir(taskId, attempt), "execution.claim"), JSON.stringify({ pid: process.pid }), { flag: "wx", mode: 384 });
+            return true;
+          } catch (error2) {
+            if (error2.code === "EEXIST") return false;
+            throw error2;
+          }
+        });
+      }
+      assertWorkerAttempt(taskId, attempt) {
+        const status = this.readStatus(taskId);
+        if (status.attempt !== attempt || isTerminalStatus(status.status)) throw new Error("stale or terminal worker attempt rejected");
+      }
+      readArchivedResult(taskId, attempt) {
+        const file = path4.join(this.attemptDir(taskId, attempt), "result.json");
+        if (!existsSync2(file)) return null;
+        return this.#readJson(file);
+      }
+      attemptDir(taskId, attempt) {
+        return path4.join(this.taskDir(taskId), "attempts", String(attempt));
+      }
+      writeAttemptFile(taskId, attempt, fileName, content) {
+        const dir = this.attemptDir(taskId, attempt);
+        privateMkdir(dir);
+        this.#writeTextAtomic(path4.join(dir, fileName), content);
+      }
+      writeAttemptMeta(taskId, attempt, fileName, meta2) {
+        const dir = this.attemptDir(taskId, attempt);
+        privateMkdir(dir);
+        this.#writeJsonAtomic(path4.join(dir, fileName), meta2);
+      }
+      readAttemptMeta(taskId, attempt, fileName) {
+        const file = path4.join(this.attemptDir(taskId, attempt), fileName);
+        if (!existsSync2(file)) return null;
+        return this.#readJson(file);
+      }
+      writeWorkerHeartbeat(taskId, attempt, heartbeat) {
+        withEventLock(path4.join(this.taskDir(taskId), "state.lock"), () => {
+          const status = this.readStatus(taskId);
+          const claim2 = this.readAttemptMeta(taskId, attempt, "execution.claim");
+          if (status.attempt !== attempt || status.status !== "running" || status.worker_pid !== heartbeat.worker_pid || claim2?.pid !== heartbeat.worker_pid) {
+            throw new Error("stale or unowned worker heartbeat rejected");
+          }
+          this.#writeJsonAtomic(path4.join(this.attemptDir(taskId, attempt), "heartbeat.json"), heartbeat);
+        });
+      }
+      readWorkerHeartbeat(taskId, attempt) {
+        const value = this.readAttemptMeta(taskId, attempt, "heartbeat.json");
+        if (!value || value.attempt !== attempt || !Number.isSafeInteger(value.worker_pid) || typeof value.heartbeat_at !== "string") return null;
+        return value;
+      }
+      readAttemptText(taskId, attempt, fileName) {
+        const file = path4.join(this.attemptDir(taskId, attempt), fileName);
+        if (!existsSync2(file)) return null;
+        return readFileSync3(file, "utf8");
+      }
+      // ---- A1 observation evidence (bounded reads, no task bodies) ----
+      /** Bounded persisted evidence for the observation judger. */
+      readObservationEvidence(taskId, attempt) {
+        const checkpointRaw = this.readAttemptMeta(taskId, attempt, "outcome-checkpoint.json");
+        const checkpoint = checkpointRaw && typeof checkpointRaw.recorded_at === "string" ? { recorded_at: checkpointRaw.recorded_at } : null;
+        const heartbeat = this.readWorkerHeartbeat(taskId, attempt);
+        return {
+          checkpoint,
+          heartbeat,
+          last_business_event: this.readLastBusinessEvent(taskId),
+          pending_interaction: this.readPendingInteraction(taskId)
+        };
+      }
+      /** Last complete event line, read from a bounded tail window. */
+      readLastBusinessEvent(taskId) {
+        const file = path4.join(this.taskDir(taskId), "events.jsonl");
+        if (!existsSync2(file)) return null;
+        let size = 0;
+        try {
+          size = statSync3(file).size;
+        } catch {
+          return null;
+        }
+        if (size === 0) return null;
+        const window = Math.min(8192, size);
+        const buffer = Buffer.allocUnsafe(window);
+        let read = 0;
+        try {
+          const fd = openSync(file, "r");
+          try {
+            read = readSync(fd, buffer, 0, window, size - window);
+          } finally {
+            closeSync(fd);
+          }
+        } catch {
+          return null;
+        }
+        const text = buffer.subarray(0, read).toString("utf8");
+        const newline = text.indexOf("\n");
+        const body = newline >= 0 && window < size ? text.slice(newline + 1) : text;
+        const lines = body.split("\n").filter((line) => line.trim());
+        for (let index = lines.length - 1; index >= 0; index -= 1) {
+          const event = parseProgressEvent(lines[index]);
+          if (event) return { at: event.at, type: event.type, seq: event.seq };
+        }
+        return null;
+      }
+      /** Distinct event types from a bounded tail window (A3 stage inference). */
+      listRecentEventTypes(taskId, maxLines) {
+        const file = path4.join(this.taskDir(taskId), "events.jsonl");
+        if (!existsSync2(file)) return [];
+        let size = 0;
+        try {
+          size = statSync3(file).size;
+        } catch {
+          return [];
+        }
+        const window = Math.min(256 * 1024, size);
+        if (window === 0) return [];
+        const buffer = Buffer.allocUnsafe(window);
+        let read = 0;
+        try {
+          const fd = openSync(file, "r");
+          try {
+            read = readSync(fd, buffer, 0, window, size - window);
+          } finally {
+            closeSync(fd);
+          }
+        } catch {
+          return [];
+        }
+        const text = buffer.subarray(0, read).toString("utf8");
+        const newline = text.indexOf("\n");
+        const body = newline >= 0 && window < size ? text.slice(newline + 1) : text;
+        const types = /* @__PURE__ */ new Set();
+        for (const line of body.split("\n").slice(-maxLines)) {
+          const event = parseProgressEvent(line);
+          if (event) types.add(event.type);
+        }
+        return [...types];
+      }
+      /** Newest unanswered interaction request (bounded directory scan). */
+      readPendingInteraction(taskId) {
+        const directory = path4.join(this.taskDir(taskId), "interactions");
+        let entries;
+        try {
+          entries = readdirSync(directory);
+        } catch {
+          return null;
+        }
+        const files = entries.filter((entry) => entry.endsWith(".json")).slice(0, 64);
+        let newest = null;
+        for (const file of files) {
+          try {
+            const record2 = JSON.parse(readFileSync3(path4.join(directory, file), "utf8"));
+            if (record2.state === "pending" && typeof record2.method === "string" && typeof record2.created_at === "string") {
+              if (!newest || record2.created_at > newest.created_at) newest = { method: record2.method, created_at: record2.created_at };
+            }
+          } catch {
+          }
+        }
+        return newest;
+      }
+      // ---- B3 attempt-scoped observation snapshot (fenced writer) ----
+      /**
+       * Writes worker-owned snapshot fields. Fenced twice: the attempt must still
+       * be the current one, and the writer must own the attempt's execution claim,
+       * so a replaced or stale worker can never overwrite current facts. Revision
+       * is per writer and must strictly increase within one writer identity.
+       */
+      writeWorkerObservation(taskId, attempt, writerPid, patch, revision, updatedAt = (/* @__PURE__ */ new Date()).toISOString()) {
+        withEventLock(path4.join(this.taskDir(taskId), "state.lock"), () => {
+          const status = this.readStatus(taskId);
+          if (status.attempt !== attempt) throw new Error("stale attempt observation rejected");
+          const claim2 = this.readAttemptMeta(taskId, attempt, "execution.claim");
+          if (claim2?.pid !== writerPid) throw new Error("observation writer does not own the execution claim");
+          this.#mergeObservationSnapshot(taskId, attempt, "worker", revision, patch, updatedAt);
+        });
+      }
+      /** Writes manager-owned snapshot fields (probe verdicts); worker business
+       * phases are never overwritten from the manager side. */
+      writeManagerObservation(taskId, attempt, patch, revision, updatedAt = (/* @__PURE__ */ new Date()).toISOString()) {
+        withEventLock(path4.join(this.taskDir(taskId), "state.lock"), () => {
+          const status = this.readStatus(taskId);
+          if (status.attempt !== attempt) throw new Error("stale attempt observation rejected");
+          this.#mergeObservationSnapshot(taskId, attempt, "manager", revision, patch, updatedAt);
+        });
+      }
+      readObservationSnapshot(taskId, attempt) {
+        const file = path4.join(this.attemptDir(taskId, attempt), "observation.json");
+        if (!existsSync2(file)) return { snapshot: null, corrupt: false };
+        try {
+          const parsed = JSON.parse(readFileSync3(file, "utf8"));
+          if (parsed.schema_version !== 1 || parsed.task_id !== taskId || parsed.attempt !== attempt) {
+            return { snapshot: null, corrupt: true };
+          }
+          return { snapshot: parsed, corrupt: false };
+        } catch {
+          return { snapshot: null, corrupt: true };
+        }
+      }
+      #mergeObservationSnapshot(taskId, attempt, writer, revision, patch, updatedAt) {
+        if (!Number.isSafeInteger(revision) || revision < 0) throw new Error("observation revision must be a non-negative integer");
+        const current = this.readObservationSnapshot(taskId, attempt).snapshot;
+        const previousRevision = current?.writers?.[writer] ?? -1;
+        if (revision <= previousRevision) throw new Error("stale observation revision rejected");
+        const carried = current ?? {};
+        const next = {
+          schema_version: 1,
+          task_id: taskId,
+          attempt,
+          writers: { ...carried.writers, [writer]: revision },
+          updated_at: updatedAt
+        };
+        const workerOwned = ["session_id", "turn_id", "last_runtime_seq", "activity_phase", "worker_identity", "runtime_identity"];
+        const managerOwned = ["worker_probe", "runtime_probe"];
+        for (const key of workerOwned) {
+          if (key in patch) next[key] = patch[key];
+          else if (key in carried) next[key] = carried[key];
+        }
+        for (const key of managerOwned) {
+          if (key in patch) next[key] = patch[key];
+          else if (key in carried) next[key] = carried[key];
+        }
+        this.writeAttemptMeta(taskId, attempt, "observation.json", next);
+      }
+      // ---- A2 executor identity evidence ----
+      writeExecutorIdentity(taskId, attempt, identity) {
+        const current = this.readAttemptMeta(taskId, attempt, "executor-identity.json") ?? {};
+        this.writeAttemptMeta(taskId, attempt, "executor-identity.json", {
+          ...current,
+          ...identity
+        });
+      }
+      readExecutorIdentity(taskId, attempt) {
+        return this.readAttemptMeta(taskId, attempt, "executor-identity.json");
+      }
+      /**
+       * Atomically claims the single worker-respawn slot for an attempt by
+       * creating the marker file with an exclusive flag, so several Bridge
+       * processes sharing this data root can never spawn two replacement
+       * workers. Returns false when the slot is already claimed.
+       */
+      claimAttemptRespawn(taskId, attempt) {
+        const dir = this.attemptDir(taskId, attempt);
+        privateMkdir(dir);
+        try {
+          closeSync(openSync(path4.join(dir, "respawn.claim"), "wx"));
+          return true;
+        } catch (error2) {
+          if (error2.code === "EEXIST") return false;
+          throw error2;
+        }
+      }
+      /** File time of the respawn claim, or null when the attempt is unclaimed. */
+      respawnClaimedAt(taskId, attempt) {
+        try {
+          return statSync3(path4.join(this.attemptDir(taskId, attempt), "respawn.claim")).mtime;
+        } catch {
+          return null;
+        }
+      }
+      /** Append-only, byte-bounded. Returns whether the chunk was truncated. */
+      appendLog(taskId, kind, text) {
+        if (!text) return { truncated: false };
+        const dir = this.taskDir(taskId);
+        privateMkdir(dir);
+        const file = path4.join(dir, `${kind}.log`);
+        let currentBytes = 0;
+        try {
+          currentBytes = statSync3(file).size;
+        } catch {
+          currentBytes = 0;
+        }
+        const bytes = Buffer.from(text, "utf8");
+        const room = this.#maxLogBytes - currentBytes;
+        if (room <= 0) return { truncated: true };
+        appendFileSync(file, bytes.length <= room ? bytes : bytes.subarray(0, room), { mode: 384 });
+        privateFile(file);
+        return { truncated: bytes.length > room };
+      }
+      readLog(taskId, kind) {
+        const file = path4.join(this.taskDir(taskId), `${kind}.log`);
+        return existsSync2(file) ? readFileSync3(file, "utf8") : "";
+      }
+      appendEvent(taskId, type, summary, details, at = (/* @__PURE__ */ new Date()).toISOString()) {
+        const dir = this.taskDir(taskId);
+        mkdirSync2(dir, { recursive: true });
+        const lockDir = path4.join(dir, "events.lock");
+        return withEventLock(lockDir, () => {
+          const file = path4.join(dir, "events.jsonl");
+          const seqFile = path4.join(dir, "events.seq");
+          let bytes = 0;
+          let previousSeq = 0;
+          let needsSeparator = false;
+          try {
+            const info = statSync3(file);
+            bytes = info.size;
+            let lastByte;
+            if (bytes > 0) {
+              const fd = openSync(file, "r");
+              try {
+                const tail = Buffer.alloc(1);
+                readSync(fd, tail, 0, 1, bytes - 1);
+                lastByte = tail[0];
+              } finally {
+                closeSync(fd);
+              }
+            }
+            needsSeparator = bytes > 0 && lastByte !== 10;
+          } catch (error2) {
+            if (error2.code !== "ENOENT") throw error2;
+            bytes = 0;
+          }
+          try {
+            previousSeq = Number(readFileSync3(seqFile, "utf8"));
+            if (!Number.isSafeInteger(previousSeq) || previousSeq < 0) previousSeq = readLastEventSeq(file);
+          } catch {
+            previousSeq = readLastEventSeq(file);
+          }
+          const event = {
+            seq: previousSeq + 1,
+            at,
+            type: type.slice(0, 80),
+            summary: summary.length <= 2e3 ? summary : `${summary.slice(0, 1970)}\u2026[output truncated]`,
+            ...details && Object.keys(details).length ? { details } : {}
+          };
+          const line = `${JSON.stringify(event)}
+`;
+          const lineBytes = Buffer.byteLength(line, "utf8") + (needsSeparator ? 1 : 0);
+          const critical = CRITICAL_EVENT_TYPES.has(type);
+          const capacity = this.#maxEventBytes + (critical ? MAX_CRITICAL_EVENT_RESERVE_BYTES : 0);
+          if (lineBytes > 64e3 || bytes + lineBytes > capacity) return null;
+          this.#writeTextAtomic(seqFile, String(event.seq));
+          const eventOffset = bytes + (needsSeparator ? 1 : 0);
+          appendFileSync(file, `${needsSeparator ? "\n" : ""}${line}`, { encoding: "utf8", mode: 384 });
+          privateFile(file);
+          const genFile = path4.join(dir, "events.gen");
+          if (!existsSync2(genFile)) {
+            this.#writeTextAtomic(genFile, randomUUID2());
+          }
+          if (event.seq % 100 === 0) {
+            const index = path4.join(dir, "events.index");
+            appendFileSync(index, `${event.seq}	${eventOffset}
+`, { encoding: "utf8", mode: 384 });
+            privateFile(index);
+          }
+          return event;
+        });
+      }
+      readEvents(taskId, afterSeq = 0, limit = 100, view = "raw") {
+        const file = path4.join(this.taskDir(taskId), "events.jsonl");
+        if (!existsSync2(file)) return { events: [], nextSeq: afterSeq, hasMore: false, omittedEvents: 0 };
+        let offset = 0;
+        const indexFile = path4.join(this.taskDir(taskId), "events.index");
+        if (existsSync2(indexFile)) {
+          for (const row of readFileSync3(indexFile, "utf8").split(/\r?\n/u)) {
+            const [seqText, offsetText] = row.split("	");
+            const seq = Number(seqText);
+            const candidateOffset = Number(offsetText);
+            if (Number.isInteger(seq) && Number.isSafeInteger(candidateOffset) && seq <= afterSeq) offset = candidateOffset;
+            if (seq > afterSeq) break;
+          }
+        }
+        const fd = openSync(file, "r");
+        const page = [];
+        let hasMore = false;
+        let position = offset;
+        let pending = "";
+        const decoder = new StringDecoder("utf8");
+        const buffer = Buffer.allocUnsafe(64 * 1024);
+        try {
+          while (true) {
+            const count = readSync(fd, buffer, 0, buffer.length, position);
+            if (count <= 0) break;
+            position += count;
+            const lines = `${pending}${decoder.write(buffer.subarray(0, count))}`.split(/\r?\n/u);
+            pending = lines.pop() ?? "";
+            for (const line of lines) {
+              const event = parseProgressEvent(line);
+              if (!event || event.seq <= afterSeq) continue;
+              if (page.length === limit) {
+                hasMore = true;
+                break;
+              }
+              page.push(event);
+            }
+            if (hasMore) break;
+          }
+          pending += decoder.end();
+          if (!hasMore && pending) {
+            const event = parseProgressEvent(pending);
+            if (event && event.seq > afterSeq) {
+              if (page.length === limit) hasMore = true;
+              else page.push(event);
+            }
+          }
+        } finally {
+          closeSync(fd);
+        }
+        let events = page;
+        let omittedEvents = 0;
+        if (view === "summary") {
+          events = [];
+          for (const event of page) {
+            const previous = events.at(-1);
+            if (event.type === "model_output" && previous?.type === "model_output") {
+              const combined = previous.summary + event.summary;
+              events[events.length - 1] = {
+                ...previous,
+                seq: event.seq,
+                at: event.at,
+                summary: combined.length <= 5e3 ? combined : `${combined.slice(0, 4950)}\u2026[output compacted]`
+              };
+              omittedEvents += 1;
+            } else {
+              events.push(event);
+            }
+          }
+        }
+        return {
+          events,
+          nextSeq: page.at(-1)?.seq ?? afterSeq,
+          hasMore,
+          omittedEvents
+        };
+      }
+      /**
+       * B1 bounded scan: parses complete byte lines only; an unfinished trailing
+       * line is not consumed and the cursor never passes it. Complete corrupt
+       * lines are skipped but counted. The byte budget covers at most the
+       * configured budget plus one read block; exhaustion reports scan_incomplete
+       * and never a has_more=true page with an unchanged after_seq.
+       */
+      readEventsBounded(taskId, input = {}) {
+        const afterSeq = input.afterSeq ?? 0;
+        const limit = input.limit ?? 100;
+        const view = input.view ?? "raw";
+        const budget = input.maxBytes ?? this.#maxEventBytes;
+        const file = path4.join(this.taskDir(taskId), "events.jsonl");
+        const empty = {
+          events: [],
+          nextSeq: afterSeq,
+          hasMore: false,
+          omittedEvents: 0,
+          scan_incomplete: false,
+          scan_cursor: null,
+          cursor_invalid: false,
+          metrics: { bytes_read: 0, records_scanned: 0, invalid_lines: 0, corrupt_count: 0, first_corrupt_offset: null, index_fallback: false }
+        };
+        let size = 0;
+        try {
+          size = statSync3(file).size;
+        } catch {
+          return empty;
+        }
+        if (size === 0) return empty;
+        let startOffset = 0;
+        let cursorInvalid = false;
+        if (input.cursor) {
+          const generation = this.readEventGeneration(taskId);
+          const valid = input.cursor.v === 1 && input.cursor.task_id === taskId && generation !== null && input.cursor.generation === generation && Number.isSafeInteger(input.cursor.offset) && input.cursor.offset >= 0 && input.cursor.offset <= size;
+          if (!valid) {
+            return { ...empty, cursor_invalid: true };
+          }
+          startOffset = input.cursor.offset;
+          if (input.cursor.first_seq !== null) {
+            const firstSeq = this.readFirstEventSeq(file, size);
+            if (firstSeq === null || firstSeq !== input.cursor.first_seq) {
+              return { ...empty, cursor_invalid: true };
+            }
+          }
+        }
+        let indexFallback = false;
+        if (startOffset === 0) {
+          const indexFile = path4.join(this.taskDir(taskId), "events.index");
+          if (existsSync2(indexFile)) {
+            try {
+              let lastSeq = 0;
+              let lastOffset = 0;
+              for (const row of readFileSync3(indexFile, "utf8").split(/\r?\n/u)) {
+                if (!row.trim()) continue;
+                const [seqText, offsetText] = row.split("	");
+                const seq = Number(seqText);
+                const offset = Number(offsetText);
+                if (!Number.isSafeInteger(seq) || !Number.isSafeInteger(offset) || seq <= lastSeq || offset < lastOffset || offset > size) {
+                  throw new Error("invalid index row");
+                }
+                lastSeq = seq;
+                lastOffset = offset;
+              }
+              for (const row of readFileSync3(indexFile, "utf8").split(/\r?\n/u)) {
+                const [seqText, offsetText] = row.split("	");
+                const seq = Number(seqText);
+                const offset = Number(offsetText);
+                if (Number.isSafeInteger(seq) && Number.isSafeInteger(offset) && seq <= afterSeq && offset <= size) startOffset = offset;
+                if (Number.isSafeInteger(seq) && seq > afterSeq) break;
+              }
+            } catch {
+              indexFallback = true;
+              startOffset = 0;
+            }
+          }
+        }
+        const events = [];
+        let scanned = 0;
+        let bytesRead = 0;
+        let invalidLines = 0;
+        let corruptCount = 0;
+        let firstCorruptOffset = null;
+        let hasMore = false;
+        let position = startOffset;
+        let lastCompleteOffset = startOffset;
+        let pending = "";
+        let pendingStartOffset = startOffset;
+        let reachedEnd = false;
+        const maxRead = budget + 64 * 1024;
+        const decoder = new StringDecoder("utf8");
+        const buffer = Buffer.allocUnsafe(64 * 1024);
+        const fd = openSync(file, "r");
+        const processLine = (line, lineOffset, lineEndOffset) => {
+          lastCompleteOffset = lineEndOffset;
+          if (!line.trim()) return true;
+          const event = parseProgressEvent(line);
+          if (!event) {
+            invalidLines += 1;
+            corruptCount += 1;
+            if (firstCorruptOffset === null) firstCorruptOffset = lineOffset;
+            return true;
+          }
+          scanned += 1;
+          if (event.seq <= afterSeq) return true;
+          if (events.length === limit) {
+            hasMore = true;
+            lastCompleteOffset = lineOffset;
+            return false;
+          }
+          events.push(event);
+          return true;
+        };
+        try {
+          while (bytesRead < maxRead) {
+            const count = readSync(fd, buffer, 0, buffer.length, position);
+            if (count <= 0) {
+              reachedEnd = true;
+              break;
+            }
+            position += count;
+            bytesRead += count;
+            const text = pending + decoder.write(buffer.subarray(0, count));
+            let searchFrom = 0;
+            let consumedBytes = 0;
+            let stopped = false;
+            while (true) {
+              const newline = text.indexOf("\n", searchFrom);
+              if (newline < 0) break;
+              const line = text.slice(searchFrom, newline).replace(/\r$/u, "");
+              const lineBytes = Buffer.byteLength(text.slice(searchFrom, newline + 1), "utf8");
+              const lineOffset = pendingStartOffset + consumedBytes;
+              consumedBytes += lineBytes;
+              searchFrom = newline + 1;
+              if (!processLine(line, lineOffset, pendingStartOffset + consumedBytes)) {
+                stopped = true;
+                break;
+              }
+            }
+            if (stopped) {
+              pending = "";
+              break;
+            }
+            pending = text.slice(searchFrom);
+            pendingStartOffset += consumedBytes;
+          }
+          if (!hasMore) {
+            const tail = pending + decoder.end();
+            let searchFrom = 0;
+            let consumedBytes = 0;
+            while (true) {
+              const newline = tail.indexOf("\n", searchFrom);
+              if (newline < 0) break;
+              const line = tail.slice(searchFrom, newline).replace(/\r$/u, "");
+              const lineBytes = Buffer.byteLength(tail.slice(searchFrom, newline + 1), "utf8");
+              const lineOffset = pendingStartOffset + consumedBytes;
+              consumedBytes += lineBytes;
+              searchFrom = newline + 1;
+              if (!processLine(line, lineOffset, pendingStartOffset + consumedBytes)) break;
+            }
+            if (!hasMore && !reachedEnd && bytesRead >= maxRead) {
+              lastCompleteOffset = pendingStartOffset + consumedBytes;
+            }
+          }
+        } finally {
+          closeSync(fd);
+        }
+        let page = events;
+        let omittedEvents = 0;
+        if (view === "summary") {
+          page = [];
+          for (const event of events) {
+            const previous = page.at(-1);
+            if (event.type === "model_output" && previous?.type === "model_output") {
+              const combined = previous.summary + event.summary;
+              page[page.length - 1] = {
+                ...previous,
+                seq: event.seq,
+                at: event.at,
+                summary: combined.length <= 5e3 ? combined : `${combined.slice(0, 4950)}\u2026[output compacted]`
+              };
+              omittedEvents += 1;
+            } else {
+              page.push(event);
+            }
+          }
+        }
+        const scanIncomplete = !reachedEnd && !hasMore;
+        const nextSeq = page.at(-1)?.seq ?? afterSeq;
+        if (hasMore && nextSeq === afterSeq && !input.cursor) hasMore = false;
+        const cursor = this.readEventGeneration(taskId) ? { v: 1, task_id: taskId, generation: this.readEventGeneration(taskId), offset: lastCompleteOffset, first_seq: input.cursor?.first_seq ?? this.readFirstEventSeq(file, size) } : null;
+        return {
+          events: page,
+          nextSeq,
+          hasMore,
+          omittedEvents,
+          scan_incomplete: scanIncomplete,
+          scan_cursor: cursor,
+          cursor_invalid: false,
+          metrics: { bytes_read: bytesRead, records_scanned: scanned, invalid_lines: invalidLines, corrupt_count: corruptCount, first_corrupt_offset: firstCorruptOffset, index_fallback: indexFallback }
+        };
+      }
+      /** Generation marker detecting log replacement/truncation across reads. */
+      readEventGeneration(taskId) {
+        try {
+          const value = readFileSync3(path4.join(this.taskDir(taskId), "events.gen"), "utf8").trim();
+          return value || null;
+        } catch {
+          return null;
+        }
+      }
+      readFirstEventSeq(file, size) {
+        const window = Math.min(64 * 1024, size);
+        const buffer = Buffer.allocUnsafe(window);
+        let read = 0;
+        try {
+          const fd = openSync(file, "r");
+          try {
+            read = readSync(fd, buffer, 0, window, 0);
+          } finally {
+            closeSync(fd);
+          }
+        } catch {
+          return null;
+        }
+        const text = buffer.subarray(0, read).toString("utf8");
+        const newline = text.indexOf("\n");
+        if (newline < 0) return null;
+        const event = parseProgressEvent(text.slice(0, newline).replace(/\r$/u, ""));
+        return event ? event.seq : null;
+      }
+      writeInteractionRequest(taskId, request, createdAt = (/* @__PURE__ */ new Date()).toISOString()) {
+        const directory = path4.join(this.taskDir(taskId), "interactions");
+        privateMkdir(directory);
+        const file = this.interactionFile(taskId, request.request_id);
+        return withEventLock(path4.join(this.taskDir(taskId), "interactions.lock"), () => {
+          if (existsSync2(file)) {
+            const record3 = this.#readJson(file);
+            if (record3.request_id !== request.request_id || record3.method !== request.method || stableJson(record3.params) !== stableJson(request.params)) {
+              throw new Error("interaction request id collision");
+            }
+            return { record: record3, created: false };
+          }
+          if (Buffer.byteLength(JSON.stringify(request.params), "utf8") > 32e3) {
+            throw new Error("ZCode interaction request exceeded the 32 KB persistence limit");
+          }
+          const record2 = {
+            ...request,
+            state: "pending",
+            created_at: createdAt
+          };
+          this.#writeJsonAtomic(file, record2);
+          return { record: record2, created: true };
+        });
+      }
+      readInteractionRequest(taskId, requestId) {
+        const file = this.interactionFile(taskId, requestId);
+        if (!existsSync2(file)) return null;
+        const record2 = this.#readJson(file);
+        if (record2.request_id !== requestId) throw new Error("interaction request id hash mismatch");
+        return record2;
+      }
+      answerInteractionRequest(taskId, requestId, answer, answeredAt = (/* @__PURE__ */ new Date()).toISOString()) {
+        const file = this.interactionFile(taskId, requestId);
+        return withEventLock(path4.join(this.taskDir(taskId), "interactions.lock"), () => {
+          if (!existsSync2(file)) throw new Error(`unknown ZCode interaction request: ${requestId}`);
+          const current = this.#readJson(file);
+          if (current.request_id !== requestId) throw new Error("interaction request id hash mismatch");
+          if (current.state === "answered") return "already_answered";
+          this.#writeJsonAtomic(file, {
+            ...current,
+            state: "answered",
+            answer,
+            answered_at: answeredAt
+          });
+          return "answered";
+        });
+      }
+      interactionFile(taskId, requestId) {
+        if (!requestId || requestId.length > 512) throw new Error("invalid ZCode interaction request_id");
+        const key = createHash("sha256").update(requestId).digest("hex");
+        return path4.join(this.taskDir(taskId), "interactions", `${this.readStatus(taskId).attempt}-${key}.json`);
+      }
+      #readJson(file) {
+        try {
+          return JSON.parse(readFileSync3(file, "utf8"));
+        } catch (error2) {
+          throw new Error(`unreadable or corrupt JSON record: ${file}`, { cause: error2 });
+        }
+      }
+      #writeJsonAtomic(file, value) {
+        this.#writeTextAtomic(file, JSON.stringify(value, null, 2));
+      }
+      #writeTextAtomic(file, text) {
+        const tmp = `${file}.${randomUUID2()}.tmp`;
+        try {
+          writeFileSync2(tmp, text, { encoding: "utf8", mode: 384 });
+          privateFile(tmp);
+          atomicRenameSync(tmp, file);
+        } catch (error2) {
+          try {
+            rmSync(tmp, { force: true });
+          } catch {
+          }
+          throw error2;
+        }
+      }
+    };
+  }
+});
+
+// src/observation/types.ts
+function judgeOptionsWith(overrides) {
+  const merged = { ...DEFAULT_JUDGE_OPTIONS };
+  if (overrides) {
+    for (const [key, value] of Object.entries(overrides)) {
+      if (value !== void 0) merged[key] = value;
+    }
+  }
+  return merged;
+}
+var OBSERVATION_SCHEMA_VERSION, DEFAULT_JUDGE_OPTIONS;
+var init_types = __esm({
+  "src/observation/types.ts"() {
+    "use strict";
+    OBSERVATION_SCHEMA_VERSION = 1;
+    DEFAULT_JUDGE_OPTIONS = {
+      start_grace_ms: 1e4,
+      heartbeat_fresh_ms: 15e3,
+      stall_hint_ms: 12e4,
+      clock_jump_guard_ms: 12e4
+    };
+  }
+});
+
+// src/observation/judge.ts
+function ageMs(now, iso, guardMs) {
+  if (!iso) return { value: null, skewed: false };
+  const parsed = Date.parse(iso);
+  if (!Number.isFinite(parsed)) return { value: null, skewed: false };
+  const age = now - parsed;
+  if (age < -guardMs) return { value: null, skewed: true };
+  return { value: Math.max(0, age), skewed: false };
+}
+function clampReason(reason) {
+  return reason.slice(0, 80);
+}
+function judgeTaskObservation(input) {
+  const options = judgeOptionsWith(input.options);
+  const now = input.now_ms;
+  const observedAt = new Date(now).toISOString();
+  const status = input.status;
+  const terminal = status.status === "completed" || status.status === "failed" || status.status === "cancelled" || status.status === "waiting_for_master";
+  const heartbeat = input.heartbeat && input.heartbeat.attempt === status.attempt && (status.worker_pid === null || input.heartbeat.worker_pid === status.worker_pid) ? input.heartbeat : null;
+  const heartbeatAge = ageMs(now, heartbeat?.heartbeat_at, options.clock_jump_guard_ms);
+  const heartbeatFresh = heartbeat !== null && heartbeatAge.value !== null && heartbeatAge.value <= options.heartbeat_fresh_ms;
+  const committed = input.result !== null && input.result.attempt === status.attempt && terminal;
+  const result = committed ? "committed" : input.checkpoint ? "checkpointed" : "absent";
+  const cleanup = status.cleanup_unverified === true ? "unverified" : committed ? "verified" : terminal || status.status === "running" ? "pending" : "not_started";
+  let worker;
+  if (input.probe_worker) {
+    worker = { state: input.probe_worker.state, reason_code: clampReason(input.probe_worker.reason_code), observed_at: input.probe_worker.observed_at };
+  } else if (heartbeatFresh && !heartbeatAge.skewed) {
+    worker = { state: "alive", reason_code: "heartbeat_fresh", observed_at: observedAt };
+  } else if (heartbeatAge.skewed) {
+    worker = { state: "unknown", reason_code: "clock_skew", observed_at: observedAt };
+  } else {
+    worker = { state: "unknown", reason_code: heartbeat ? "heartbeat_stale" : "no_heartbeat_evidence", observed_at: observedAt };
+  }
+  let runtime;
+  const runtimePid = status.zcode_pid ?? null;
+  if (input.probe_runtime) {
+    runtime = { state: input.probe_runtime.state, reason_code: clampReason(input.probe_runtime.reason_code), observed_at: input.probe_runtime.observed_at };
+  } else if (runtimePid === null) {
+    runtime = { state: "unknown", reason_code: "runtime_pid_not_reported", observed_at: observedAt };
+  } else {
+    runtime = { state: "unknown", reason_code: "persisted_pid_no_probe", observed_at: observedAt };
+  }
+  let activity = "unknown";
+  let activityReason = "no_activity_evidence";
+  if (terminal || committed) {
+    activity = "finalizing";
+    activityReason = "task_terminal";
+  } else if (status.status === "queued") {
+    activity = "starting";
+    activityReason = "queued_not_dispatched";
+  } else if (input.pending_interaction) {
+    activity = input.pending_interaction.method === "interaction/requestPermission" ? "waiting_for_permission" : "waiting_for_user";
+    activityReason = "pending_interaction_request";
+  } else {
+    const startAge = ageMs(now, status.started_at, options.clock_jump_guard_ms).value;
+    const eventAge = ageMs(now, input.last_business_event?.at, options.clock_jump_guard_ms).value;
+    const withinStartGrace = startAge !== null && startAge < options.start_grace_ms;
+    if (heartbeatFresh) {
+      if (eventAge !== null && eventAge > options.stall_hint_ms) {
+        activity = "stalled";
+        activityReason = "heartbeat_alive_business_events_stale";
+      } else {
+        activity = "executing";
+        activityReason = "heartbeat_and_events_fresh";
+      }
+    } else if (withinStartGrace) {
+      activity = "starting";
+      activityReason = "within_worker_start_grace";
+    } else if (worker.state === "unknown") {
+      activity = "unknown";
+      activityReason = worker.reason_code;
+    } else {
+      activity = "executing";
+      activityReason = "executor_alive_no_fresh_heartbeat";
+    }
+  }
+  return {
+    schema_version: OBSERVATION_SCHEMA_VERSION,
+    worker,
+    runtime,
+    activity: { code: activity, reason_code: clampReason(activityReason), observed_at: observedAt },
+    result,
+    cleanup,
+    stalled: activity === "stalled",
+    evidence: {
+      heartbeat_age_ms: heartbeatAge.skewed ? null : heartbeatAge.value,
+      last_event_age_ms: input.last_business_event ? ageMs(now, input.last_business_event.at, options.clock_jump_guard_ms).value : null,
+      last_event_seq: heartbeat?.last_event_seq ?? input.last_business_event?.seq ?? null,
+      last_event_type: heartbeat?.last_event_type ?? input.last_business_event?.type ?? null,
+      session_id: heartbeat?.session_id ?? status.zcode_session_id ?? null,
+      turn_id: heartbeat?.turn_id ?? null,
+      attempt: status.attempt,
+      status_updated_at: status.updated_at ?? null
+    }
+  };
+}
+var init_judge = __esm({
+  "src/observation/judge.ts"() {
+    "use strict";
+    init_types();
+  }
+});
+
+// src/observation/build.ts
+var build_exports = {};
+__export(build_exports, {
+  buildTaskObservation: () => buildTaskObservation,
+  inferExecutionStage: () => inferExecutionStage
+});
+function buildTaskObservation(store, taskId, status, options = {}) {
+  const now = (options.now ?? (() => /* @__PURE__ */ new Date()))().getTime();
+  const evidence = store.readObservationEvidence(taskId, status.attempt);
+  let probeWorker = null;
+  let probeRuntime = null;
+  const probes = options.probes;
+  if (probes && probes.task_id === taskId && probes.attempt === status.attempt) {
+    const probedAt = Date.parse(probes.probed_at);
+    if (Number.isFinite(probedAt) && now - probedAt >= 0 && now - probedAt <= PROBE_RECORD_MAX_AGE_MS) {
+      const pidMatch = (recorded, current) => recorded === null || current === null || recorded === current;
+      if (pidMatch(probes.worker_pid, status.worker_pid)) probeWorker = { ...probes.worker, observed_at: probes.probed_at };
+      if (pidMatch(probes.runtime_pid, status.zcode_pid ?? null)) probeRuntime = { ...probes.runtime, observed_at: probes.probed_at };
+    }
+  }
+  return judgeTaskObservation({
+    status: {
+      status: status.status,
+      attempt: status.attempt,
+      started_at: status.started_at,
+      finished_at: status.finished_at,
+      worker_pid: status.worker_pid,
+      zcode_pid: status.zcode_pid ?? null,
+      zcode_session_id: status.zcode_session_id ?? null,
+      cleanup_unverified: status.cleanup_unverified === true,
+      updated_at: status.updated_at
+    },
+    result: store.readResult(taskId),
+    checkpoint: evidence.checkpoint,
+    heartbeat: evidence.heartbeat,
+    last_business_event: evidence.last_business_event,
+    pending_interaction: evidence.pending_interaction,
+    probe_worker: probeWorker,
+    probe_runtime: probeRuntime,
+    now_ms: now,
+    options: judgeOptionsWith({
+      start_grace_ms: options.startGraceMs,
+      heartbeat_fresh_ms: options.heartbeatFreshMs,
+      stall_hint_ms: options.stallHintMs
+    })
+  });
+}
+function inferExecutionStage(store, taskId, status) {
+  const eventTypes = new Set(store.listRecentEventTypes(taskId, 64));
+  if (status.cleanup_unverified === true) return "cleanup";
+  if (status.status === "queued") return "queue";
+  if (!eventTypes.has("worker_started") && !eventTypes.has("worker_running")) return "worker_spawn";
+  if (!eventTypes.has("app_server_started")) return "worker";
+  if (status.zcode_pid === null && !eventTypes.has("app_server_started")) return "worker";
+  if (!eventTypes.has("session_ready")) return "runtime";
+  if (!eventTypes.has("turn_started")) return "event_channel";
+  if (store.readResult(taskId) === null && status.status === "running") return "execution";
+  if (status.status !== "running" && !isTerminalDone(status)) return "cleanup";
+  return "execution";
+}
+function isTerminalDone(status) {
+  return status.status === "completed" || status.status === "failed" || status.status === "cancelled" || status.status === "waiting_for_master";
+}
+var PROBE_RECORD_MAX_AGE_MS;
+var init_build = __esm({
+  "src/observation/build.ts"() {
+    "use strict";
+    init_types();
+    init_judge();
+    PROBE_RECORD_MAX_AGE_MS = 6e4;
+  }
+});
+
 // src/mcp/main.ts
 import { realpathSync as realpathSync2 } from "node:fs";
-import path11 from "node:path";
+import path12 from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 
 // node_modules/@modelcontextprotocol/server/dist/chunk-Br0eD_fh.mjs
 var __create = Object.create;
 var __defProp2 = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
-var __getOwnPropNames = Object.getOwnPropertyNames;
+var __getOwnPropNames2 = Object.getOwnPropertyNames;
 var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
 var __commonJSMin = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, mod), mod.exports);
@@ -33,7 +1385,7 @@ var __exportAll = (all, symbols) => {
 };
 var __copyProps = (to, from, except, desc) => {
   if (from && typeof from === "object" || typeof from === "function") {
-    for (var keys = __getOwnPropNames(from), i = 0, n = keys.length, key; i < n; i++) {
+    for (var keys = __getOwnPropNames2(from), i = 0, n = keys.length, key; i < n; i++) {
       key = keys[i];
       if (!__hasOwnProp.call(to, key) && key !== except) {
         __defProp2(to, key, {
@@ -303,10 +1655,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path12) {
-  if (!path12)
+function getElementAtPath(obj, path13) {
+  if (!path13)
     return obj;
-  return path12.reduce((acc, key) => acc?.[key], obj);
+  return path13.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -646,11 +1998,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path12, issues) {
+function prefixIssues(path13, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path12);
+    iss.path.unshift(path13);
     return iss;
   });
 }
@@ -1099,16 +2451,16 @@ function flattenError(error2, mapper = (issue2) => issue2.message) {
 }
 function formatError(error2, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error3, path12 = []) => {
+  const processError = (error3, path13 = []) => {
     for (const issue2 of error3.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path12, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path13, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path12, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path13, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path12, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path13, ...issue2.path]);
       } else {
-        const fullpath = [...path12, ...issue2.path];
+        const fullpath = [...path13, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -10451,9 +11803,9 @@ var rev2026Codec = {
     });
     const parsed = buildSchemas2026().RequestMetaEnvelopeSchema.safeParse(meta2);
     if (!parsed.success) for (const issue2 of parsed.error.issues) {
-      const path12 = issue2.path.map(String);
-      const key = path12.length > 0 ? path12.join(".") : "_meta";
-      if (path12.length === 1 && issues.some((existing) => existing.key === key && existing.problem === "missing")) continue;
+      const path13 = issue2.path.map(String);
+      const key = path13.length > 0 ? path13.join(".") : "_meta";
+      if (path13.length === 1 && issues.some((existing) => existing.key === key && existing.problem === "missing")) continue;
       issues.push({
         key,
         problem: issue2.message
@@ -10774,29 +12126,29 @@ var PERMITTED_X_MCP_HEADER_TYPES = /* @__PURE__ */ new Set([
 function scanXMcpHeaderDeclarations(inputSchema) {
   const declarations = [];
   const seenLower = /* @__PURE__ */ new Map();
-  const visit = (node2, path12, reachable) => {
+  const visit = (node2, path13, reachable) => {
     if (node2 === null || typeof node2 !== "object") return void 0;
     const schema = node2;
     if (X_MCP_HEADER_KEY in schema) {
-      if (!reachable || path12.length === 0) return `${pathName(path12)}: x-mcp-header is only permitted on properties statically reachable via a chain of 'properties' keys (not under items, additionalProperties, oneOf/anyOf/allOf/not, if/then/else, or $ref)`;
+      if (!reachable || path13.length === 0) return `${pathName(path13)}: x-mcp-header is only permitted on properties statically reachable via a chain of 'properties' keys (not under items, additionalProperties, oneOf/anyOf/allOf/not, if/then/else, or $ref)`;
       const raw = schema[X_MCP_HEADER_KEY];
-      if (typeof raw !== "string" || raw.length === 0) return `${pathName(path12)}: x-mcp-header MUST be a non-empty string`;
-      if (!RFC9110_TOKEN.test(raw)) return `${pathName(path12)}: x-mcp-header '${raw}' is not a valid RFC 9110 token (no spaces, control characters or HTTP delimiters)`;
+      if (typeof raw !== "string" || raw.length === 0) return `${pathName(path13)}: x-mcp-header MUST be a non-empty string`;
+      if (!RFC9110_TOKEN.test(raw)) return `${pathName(path13)}: x-mcp-header '${raw}' is not a valid RFC 9110 token (no spaces, control characters or HTTP delimiters)`;
       const type = typeof schema.type === "string" ? schema.type : void 0;
-      if (type === void 0 || !PERMITTED_X_MCP_HEADER_TYPES.has(type)) return `${pathName(path12)}: x-mcp-header is only permitted on primitive-typed properties (string, integer, boolean); got ${type ?? "<none>"}`;
+      if (type === void 0 || !PERMITTED_X_MCP_HEADER_TYPES.has(type)) return `${pathName(path13)}: x-mcp-header is only permitted on primitive-typed properties (string, integer, boolean); got ${type ?? "<none>"}`;
       const lower = raw.toLowerCase();
       const prior = seenLower.get(lower);
       if (prior !== void 0) return `x-mcp-header '${raw}' is not case-insensitively unique (also declared as '${prior}')`;
       seenLower.set(lower, raw);
       declarations.push({
-        path: path12,
+        path: path13,
         headerName: raw,
         type
       });
     }
     const properties = schema.properties;
     if (properties !== null && typeof properties === "object") for (const [key, child] of Object.entries(properties)) {
-      const fault$1 = visit(child, [...path12, key], reachable);
+      const fault$1 = visit(child, [...path13, key], reachable);
       if (fault$1 !== void 0) return fault$1;
     }
     for (const k of NON_REACHABLE_SUBSCHEMA_KEYWORDS) {
@@ -10804,7 +12156,7 @@ function scanXMcpHeaderDeclarations(inputSchema) {
       if (sub === void 0) continue;
       const branches = Array.isArray(sub) ? sub : sub !== null && typeof sub === "object" && OBJECT_VALUED_SUBSCHEMA_KEYWORDS.has(k) ? Object.values(sub) : [sub];
       for (const branch of branches) {
-        const fault$1 = visit(branch, [...path12, `<${k}>`], false);
+        const fault$1 = visit(branch, [...path13, `<${k}>`], false);
         if (fault$1 !== void 0) return fault$1;
       }
     }
@@ -10844,8 +12196,8 @@ var OBJECT_VALUED_SUBSCHEMA_KEYWORDS = /* @__PURE__ */ new Set([
   "$defs",
   "definitions"
 ]);
-function pathName(path12) {
-  return path12.length === 0 ? "<root>" : path12.join(".");
+function pathName(path13) {
+  return path13.length === 0 ? "<root>" : path13.join(".");
 }
 var HEADER_MISMATCH_ERROR_CODE = -32020;
 var INBOUND_VALIDATION_LADDER = [
@@ -11134,7 +12486,7 @@ var PROPERTY_KEYS_BY_TYPE = {
   array: shapeKeys([UntitledMultiSelectEnumSchemaSchema, TitledMultiSelectEnumSchemaSchema])
 };
 var SUPPORTED_STRING_FORMATS = new Set(StringSchemaSchema.shape.format.unwrap().options);
-function walkProperty(node2, path12, vendor, unsupported) {
+function walkProperty(node2, path13, vendor, unsupported) {
   if (!isJsonObject(node2)) return node2;
   const allowedKeys = typeof node2.type === "string" && Object.hasOwn(PROPERTY_KEYS_BY_TYPE, node2.type) ? PROPERTY_KEYS_BY_TYPE[node2.type] : void 0;
   if (allowedKeys === void 0) return node2;
@@ -11142,8 +12494,8 @@ function walkProperty(node2, path12, vendor, unsupported) {
   for (const [key, value] of Object.entries(node2)) if (allowedKeys.has(key) || isAnnotationOnlyJsonSchemaKeyword(key)) pruned[key] = value;
   else if (key === "pattern" && node2.type === "string" && typeof node2.format === "string") {
     if (!SUPPORTED_STRING_FORMATS.has(node2.format)) pruned[key] = value;
-    else if (typeof value !== "string" || !isLibraryFormatPattern(node2.format, value, vendor)) unsupported.push(`${path12}.${key}`);
-  } else unsupported.push(`${path12}.${key}`);
+    else if (typeof value !== "string" || !isLibraryFormatPattern(node2.format, value, vendor)) unsupported.push(`${path13}.${key}`);
+  } else unsupported.push(`${path13}.${key}`);
   return pruned;
 }
 function walkRequestedSchema(converted, vendor) {
@@ -11160,11 +12512,11 @@ function describeUnsupportedProperties(pruned, fallback) {
   const offenders = Object.entries(pruned.properties).filter(([, node2]) => !parseSchema(PrimitiveSchemaDefinitionSchema, node2).success).map(([name]) => `properties.${name}`);
   return offenders.length > 0 ? offenders.join(", ") : fallback;
 }
-function findDroppedConstraintPaths(original, parsed, path12 = "") {
-  if (Array.isArray(original) && Array.isArray(parsed)) return original.flatMap((item, index) => findDroppedConstraintPaths(item, parsed[index], `${path12}[${index}]`));
+function findDroppedConstraintPaths(original, parsed, path13 = "") {
+  if (Array.isArray(original) && Array.isArray(parsed)) return original.flatMap((item, index) => findDroppedConstraintPaths(item, parsed[index], `${path13}[${index}]`));
   if (!isJsonObject(original) || !isJsonObject(parsed)) return [];
   return Object.entries(original).flatMap(([key, value]) => {
-    const childPath = path12 ? `${path12}.${key}` : key;
+    const childPath = path13 ? `${path13}.${key}` : key;
     if (!Object.prototype.hasOwnProperty.call(parsed, key)) return isAnnotationOnlyJsonSchemaKeyword(key) ? [] : [childPath];
     return findDroppedConstraintPaths(value, parsed[key], childPath);
   });
@@ -15243,8 +16595,8 @@ var require_utils = /* @__PURE__ */ __commonJSMin(((exports, module) => {
     for (let i = 0; i < str.length; i++) if (str[i] === token) ind++;
     return ind;
   }
-  function removeDotSegments(path12) {
-    let input = path12;
+  function removeDotSegments(path13) {
+    let input = path13;
     const output = [];
     let nextSlash = -1;
     let len = 0;
@@ -15397,8 +16749,8 @@ var require_schemes = /* @__PURE__ */ __commonJSMin(((exports, module) => {
       wsComponent.secure = void 0;
     }
     if (wsComponent.resourceName) {
-      const [path12, query] = wsComponent.resourceName.split("?");
-      wsComponent.path = path12 && path12 !== "/" ? path12 : void 0;
+      const [path13, query] = wsComponent.resourceName.split("?");
+      wsComponent.path = path13 && path13 !== "/" ? path13 : void 0;
       wsComponent.query = query;
       wsComponent.resourceName = void 0;
     }
@@ -21538,7 +22890,7 @@ function toError(value) {
 
 // src/host/stdio.ts
 import { homedir as homedir4 } from "node:os";
-import path10 from "node:path";
+import path11 from "node:path";
 
 // src/runtime/resolver.ts
 import { accessSync, existsSync, readFileSync, statSync } from "node:fs";
@@ -21912,688 +23264,8 @@ function errorText(error2) {
   return message.length > 300 ? `${message.slice(0, 300)}\u2026` : message;
 }
 
-// src/store/task-store.ts
-import { appendFileSync, chmodSync, closeSync, copyFileSync, existsSync as existsSync2, mkdirSync as mkdirSync2, openSync, readFileSync as readFileSync3, readSync, readdirSync, rmSync, statSync as statSync3, writeFileSync as writeFileSync2 } from "node:fs";
-import { createHash, randomUUID as randomUUID2 } from "node:crypto";
-import path4 from "node:path";
-import { StringDecoder } from "node:string_decoder";
-
-// src/store/process-lock.ts
-import { mkdirSync, readFileSync as readFileSync2, renameSync, rmdirSync, statSync as statSync2, unlinkSync, writeFileSync } from "node:fs";
-import { randomUUID } from "node:crypto";
-import path3 from "node:path";
-async function withProcessLock(directory, operation, timeoutMs = 3e4) {
-  const deadline = Date.now() + timeoutMs;
-  let release;
-  while (!(release = tryAcquireProcessLock(directory))) {
-    if (Date.now() >= deadline) throw new Error(`timed out waiting for process lock: ${directory}`);
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-  try {
-    return await operation();
-  } finally {
-    release();
-  }
-}
-function tryAcquireProcessLock(directory) {
-  const token = randomUUID();
-  try {
-    mkdirSync(directory, { mode: 448 });
-    writeFileSync(path3.join(directory, "owner.json"), JSON.stringify({ pid: process.pid, token }), { mode: 384 });
-  } catch (error2) {
-    if (error2.code !== "EEXIST") throw error2;
-    try {
-      const owner = JSON.parse(readFileSync2(path3.join(directory, "owner.json"), "utf8"));
-      if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0) throw new Error("invalid lock owner");
-      try {
-        process.kill(owner.pid, 0);
-      } catch (failure2) {
-        if (failure2.code === "ESRCH") {
-          if (reclaimDeadOwner(directory)) return tryAcquireProcessLock(directory);
-        }
-      }
-    } catch {
-      try {
-        if (Date.now() - statSync2(directory).mtimeMs > 3e4) throw new Error(`unreadable lock owner: ${directory}`);
-      } catch (failure2) {
-        if (failure2.code !== "ENOENT") throw failure2;
-      }
-    }
-    return null;
-  }
-  return () => {
-    const owner = JSON.parse(readFileSync2(path3.join(directory, "owner.json"), "utf8"));
-    if (owner.token !== token) throw new Error("process lock ownership changed");
-    unlinkSync(path3.join(directory, "owner.json"));
-    rmdirSync(directory);
-  };
-}
-function reclaimDeadOwner(directory) {
-  const guard = `${directory}.reclaim`;
-  try {
-    mkdirSync(guard);
-  } catch (error2) {
-    if (error2.code === "EEXIST") return false;
-    throw error2;
-  }
-  try {
-    const owner = JSON.parse(readFileSync2(path3.join(directory, "owner.json"), "utf8"));
-    if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0) return false;
-    try {
-      process.kill(owner.pid, 0);
-      return false;
-    } catch (error2) {
-      if (error2.code !== "ESRCH") return false;
-    }
-    const retired = `${directory}.${randomUUID()}.retired`;
-    renameSync(directory, retired);
-    unlinkSync(path3.join(retired, "owner.json"));
-    rmdirSync(retired);
-    return true;
-  } catch (error2) {
-    if (error2.code !== "ENOENT") throw error2;
-    return false;
-  } finally {
-    rmdirSync(guard);
-  }
-}
-
-// src/store/atomic-rename.ts
-import { renameSync as renameSync2 } from "node:fs";
-import { rename } from "node:fs/promises";
-function retryable(error2, deadline) {
-  return process.platform === "win32" && Date.now() < deadline && ["EPERM", "EBUSY", "EACCES"].includes(error2.code ?? "");
-}
-function atomicRenameSync(source, target) {
-  const deadline = Date.now() + 2e3;
-  while (true) {
-    try {
-      renameSync2(source, target);
-      return;
-    } catch (error2) {
-      if (!retryable(error2, deadline)) throw error2;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-    }
-  }
-}
-async function atomicRename(source, target) {
-  const deadline = Date.now() + 2e3;
-  while (true) {
-    try {
-      await rename(source, target);
-      return;
-    } catch (error2) {
-      if (!retryable(error2, deadline)) throw error2;
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-  }
-}
-
-// src/store/task-store.ts
-var TASK_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
-var DEFAULT_MAX_LOG_BYTES = 10 * 1024 * 1024;
-var MAX_CRITICAL_EVENT_RESERVE_BYTES = 256 * 1024;
-var CRITICAL_EVENT_TYPES = /* @__PURE__ */ new Set([
-  "error",
-  "task_finished",
-  "turn_completed",
-  "report_ready",
-  "session_ready",
-  "turn_started",
-  "worker_started",
-  "workspace_ready",
-  "timeout_warning",
-  "model_catalog",
-  "account_provider_sync_failed",
-  "interaction_requested",
-  "interaction_reply_submitted",
-  "cancelled",
-  "cancel_failed",
-  "cleanup_unverified",
-  "outcome_checkpoint_failed",
-  "outcome_recovered"
-]);
-var TaskStore = class {
-  #dataRoot;
-  #tasksRoot;
-  #maxLogBytes;
-  #maxEventBytes;
-  constructor(dataRoot, options = {}) {
-    this.#dataRoot = dataRoot;
-    this.#tasksRoot = path4.join(dataRoot, ".tasks");
-    this.#maxLogBytes = options.maxLogBytes ?? DEFAULT_MAX_LOG_BYTES;
-    this.#maxEventBytes = options.maxEventBytes ?? DEFAULT_MAX_LOG_BYTES;
-    privateMkdir(this.#tasksRoot);
-  }
-  get dataRoot() {
-    return this.#dataRoot;
-  }
-  get tasksRoot() {
-    return this.#tasksRoot;
-  }
-  assertValidTaskId(taskId) {
-    if (typeof taskId !== "string" || !TASK_ID_PATTERN.test(taskId)) {
-      throw new Error(`invalid task_id (must match ${TASK_ID_PATTERN.source}): ${String(taskId)}`);
-    }
-  }
-  taskDir(taskId) {
-    this.assertValidTaskId(taskId);
-    return path4.join(this.#tasksRoot, taskId);
-  }
-  hasTask(taskId) {
-    try {
-      return existsSync2(path4.join(this.taskDir(taskId), "status.json"));
-    } catch {
-      return false;
-    }
-  }
-  listTaskIds() {
-    if (!existsSync2(this.#tasksRoot)) return [];
-    return readdirSync(this.#tasksRoot).filter(
-      (entry) => existsSync2(path4.join(this.#tasksRoot, entry, "status.json"))
-    );
-  }
-  createTask(task, createdAt) {
-    this.assertValidTaskId(task.task_id);
-    const dir = this.taskDir(task.task_id);
-    if (existsSync2(path4.join(dir, "task.json"))) {
-      throw new Error(`task already exists: ${task.task_id}`);
-    }
-    privateMkdir(path4.join(dir, "attempts"));
-    this.#writeJsonAtomic(path4.join(dir, "task.json"), task);
-    const status = {
-      task_id: task.task_id,
-      status: "queued",
-      attempt: 1,
-      created_at: createdAt,
-      updated_at: createdAt,
-      started_at: null,
-      finished_at: null,
-      worker_pid: null,
-      zcode_session_id: null,
-      exit_code: null
-    };
-    this.#writeJsonAtomic(path4.join(dir, "status.json"), status);
-  }
-  readTask(taskId) {
-    const file = path4.join(this.taskDir(taskId), "task.json");
-    const parsed = this.#readJson(file);
-    const task = parsed;
-    if (!task || task.task_id !== taskId || typeof task.workspace !== "string" || !task.workspace || typeof task.objective !== "string" || [task.requirements, task.allowed_paths, task.forbidden_paths, task.acceptance_criteria, task.test_commands].some((items) => !Array.isArray(items) || items.some((item) => typeof item !== "string"))) throw new Error(`corrupt task record: ${file}`);
-    return task;
-  }
-  readSubmission(taskId) {
-    const file = path4.join(this.taskDir(taskId), "submission.json");
-    if (!existsSync2(file)) return null;
-    return this.#readJson(file);
-  }
-  writeSubmission(taskId, submission) {
-    this.#writeJsonAtomic(path4.join(this.taskDir(taskId), "submission.json"), submission);
-  }
-  writeWorkspaceRef(taskId, workspace) {
-    this.#writeJsonAtomic(path4.join(this.taskDir(taskId), "workspace.json"), workspace);
-  }
-  readWorkspaceRef(taskId) {
-    const file = path4.join(this.taskDir(taskId), "workspace.json");
-    if (!existsSync2(file)) return null;
-    const workspace = this.#readJson(file);
-    if (!workspace || typeof workspace.canonicalPath !== "string" || typeof workspace.requestedPath !== "string" || !["direct", "worktree"].includes(workspace.mode)) throw new Error(`corrupt workspace record: ${file}`);
-    return workspace;
-  }
-  readStatus(taskId) {
-    const file = path4.join(this.taskDir(taskId), "status.json");
-    const parsed = this.#readJson(file);
-    if (!parsed || parsed.task_id !== taskId || !["queued", "running", "completed", "failed", "cancelled", "waiting_for_master"].includes(parsed.status) || !Number.isSafeInteger(parsed.attempt) || parsed.attempt < 1 || typeof parsed.created_at !== "string") {
-      throw new Error(`corrupt status record: ${file}`);
-    }
-    return parsed;
-  }
-  /** Read-merge-write with an updated timestamp; atomic via temp file + rename. */
-  writeStatus(taskId, patch, expectedAttempt) {
-    return withEventLock(path4.join(this.taskDir(taskId), "state.lock"), () => {
-      const current = this.readStatus(taskId);
-      if (expectedAttempt !== void 0 && (current.attempt !== expectedAttempt || isTerminalStatus(current.status))) throw new Error("stale or terminal worker status rejected");
-      const next = {
-        ...current,
-        ...patch,
-        task_id: current.task_id,
-        updated_at: (/* @__PURE__ */ new Date()).toISOString()
-      };
-      this.#writeJsonAtomic(path4.join(this.taskDir(taskId), "status.json"), next);
-      return next;
-    });
-  }
-  readResult(taskId) {
-    const file = path4.join(this.taskDir(taskId), "result.json");
-    if (!existsSync2(file)) return null;
-    const result = this.#readJson(file);
-    if (!result || result.task_id !== taskId || !Number.isSafeInteger(result.attempt) || !isTerminalStatus(result.status)) throw new Error(`corrupt result record: ${file}`);
-    return result.attempt === this.readStatus(taskId).attempt ? result : null;
-  }
-  writeResult(taskId, result) {
-    withEventLock(path4.join(this.taskDir(taskId), "state.lock"), () => {
-      if (this.readStatus(taskId).attempt !== result.attempt) throw new Error("stale worker attempt result rejected");
-      this.#writeJsonAtomic(path4.join(this.taskDir(taskId), "result.json"), result);
-    });
-  }
-  commitWorkerResult(taskId, attempt, result, patch) {
-    withEventLock(path4.join(this.taskDir(taskId), "state.lock"), () => {
-      this.assertWorkerAttempt(taskId, attempt);
-      this.#writeJsonAtomic(path4.join(this.taskDir(taskId), "result.json"), result);
-      const current = this.readStatus(taskId);
-      this.#writeJsonAtomic(path4.join(this.taskDir(taskId), "status.json"), { ...current, ...patch, task_id: taskId, attempt, updated_at: (/* @__PURE__ */ new Date()).toISOString() });
-    });
-  }
-  patchRunningAttempt(taskId, attempt, patch) {
-    withEventLock(path4.join(this.taskDir(taskId), "state.lock"), () => {
-      const current = this.readStatus(taskId);
-      if (current.attempt !== attempt || current.status !== "running") return;
-      this.#writeJsonAtomic(path4.join(this.taskDir(taskId), "status.json"), { ...current, ...patch, updated_at: (/* @__PURE__ */ new Date()).toISOString() });
-    });
-  }
-  /** Copies evidence before the continuation status commit; the old result remains recoverable. */
-  archiveResultToAttempt(taskId, attempt) {
-    const dir = this.taskDir(taskId);
-    const source = path4.join(dir, "result.json");
-    if (!existsSync2(source)) return;
-    const targetDir = this.attemptDir(taskId, attempt);
-    privateMkdir(targetDir);
-    copyFileSync(source, path4.join(targetDir, "result.json"));
-    privateFile(path4.join(targetDir, "result.json"));
-  }
-  /** A claim is permanent: a started attempt must never execute again. */
-  claimWorkerExecution(taskId, attempt) {
-    return withEventLock(path4.join(this.taskDir(taskId), "state.lock"), () => {
-      const status = this.readStatus(taskId);
-      if (status.attempt !== attempt || isTerminalStatus(status.status)) return false;
-      privateMkdir(this.attemptDir(taskId, attempt));
-      try {
-        writeFileSync2(path4.join(this.attemptDir(taskId, attempt), "execution.claim"), JSON.stringify({ pid: process.pid }), { flag: "wx", mode: 384 });
-        return true;
-      } catch (error2) {
-        if (error2.code === "EEXIST") return false;
-        throw error2;
-      }
-    });
-  }
-  assertWorkerAttempt(taskId, attempt) {
-    const status = this.readStatus(taskId);
-    if (status.attempt !== attempt || isTerminalStatus(status.status)) throw new Error("stale or terminal worker attempt rejected");
-  }
-  readArchivedResult(taskId, attempt) {
-    const file = path4.join(this.attemptDir(taskId, attempt), "result.json");
-    if (!existsSync2(file)) return null;
-    return this.#readJson(file);
-  }
-  attemptDir(taskId, attempt) {
-    return path4.join(this.taskDir(taskId), "attempts", String(attempt));
-  }
-  writeAttemptFile(taskId, attempt, fileName, content) {
-    const dir = this.attemptDir(taskId, attempt);
-    privateMkdir(dir);
-    this.#writeTextAtomic(path4.join(dir, fileName), content);
-  }
-  writeAttemptMeta(taskId, attempt, fileName, meta2) {
-    const dir = this.attemptDir(taskId, attempt);
-    privateMkdir(dir);
-    this.#writeJsonAtomic(path4.join(dir, fileName), meta2);
-  }
-  readAttemptMeta(taskId, attempt, fileName) {
-    const file = path4.join(this.attemptDir(taskId, attempt), fileName);
-    if (!existsSync2(file)) return null;
-    return this.#readJson(file);
-  }
-  writeWorkerHeartbeat(taskId, attempt, heartbeat) {
-    withEventLock(path4.join(this.taskDir(taskId), "state.lock"), () => {
-      const status = this.readStatus(taskId);
-      const claim2 = this.readAttemptMeta(taskId, attempt, "execution.claim");
-      if (status.attempt !== attempt || status.status !== "running" || status.worker_pid !== heartbeat.worker_pid || claim2?.pid !== heartbeat.worker_pid) {
-        throw new Error("stale or unowned worker heartbeat rejected");
-      }
-      this.#writeJsonAtomic(path4.join(this.attemptDir(taskId, attempt), "heartbeat.json"), heartbeat);
-    });
-  }
-  readWorkerHeartbeat(taskId, attempt) {
-    const value = this.readAttemptMeta(taskId, attempt, "heartbeat.json");
-    if (!value || value.attempt !== attempt || !Number.isSafeInteger(value.worker_pid) || typeof value.heartbeat_at !== "string") return null;
-    return value;
-  }
-  readAttemptText(taskId, attempt, fileName) {
-    const file = path4.join(this.attemptDir(taskId, attempt), fileName);
-    if (!existsSync2(file)) return null;
-    return readFileSync3(file, "utf8");
-  }
-  /**
-   * Atomically claims the single worker-respawn slot for an attempt by
-   * creating the marker file with an exclusive flag, so several Bridge
-   * processes sharing this data root can never spawn two replacement
-   * workers. Returns false when the slot is already claimed.
-   */
-  claimAttemptRespawn(taskId, attempt) {
-    const dir = this.attemptDir(taskId, attempt);
-    privateMkdir(dir);
-    try {
-      closeSync(openSync(path4.join(dir, "respawn.claim"), "wx"));
-      return true;
-    } catch (error2) {
-      if (error2.code === "EEXIST") return false;
-      throw error2;
-    }
-  }
-  /** File time of the respawn claim, or null when the attempt is unclaimed. */
-  respawnClaimedAt(taskId, attempt) {
-    try {
-      return statSync3(path4.join(this.attemptDir(taskId, attempt), "respawn.claim")).mtime;
-    } catch {
-      return null;
-    }
-  }
-  /** Append-only, byte-bounded. Returns whether the chunk was truncated. */
-  appendLog(taskId, kind, text) {
-    if (!text) return { truncated: false };
-    const dir = this.taskDir(taskId);
-    privateMkdir(dir);
-    const file = path4.join(dir, `${kind}.log`);
-    let currentBytes = 0;
-    try {
-      currentBytes = statSync3(file).size;
-    } catch {
-      currentBytes = 0;
-    }
-    const bytes = Buffer.from(text, "utf8");
-    const room = this.#maxLogBytes - currentBytes;
-    if (room <= 0) return { truncated: true };
-    appendFileSync(file, bytes.length <= room ? bytes : bytes.subarray(0, room), { mode: 384 });
-    privateFile(file);
-    return { truncated: bytes.length > room };
-  }
-  readLog(taskId, kind) {
-    const file = path4.join(this.taskDir(taskId), `${kind}.log`);
-    return existsSync2(file) ? readFileSync3(file, "utf8") : "";
-  }
-  appendEvent(taskId, type, summary, details, at = (/* @__PURE__ */ new Date()).toISOString()) {
-    const dir = this.taskDir(taskId);
-    mkdirSync2(dir, { recursive: true });
-    const lockDir = path4.join(dir, "events.lock");
-    return withEventLock(lockDir, () => {
-      const file = path4.join(dir, "events.jsonl");
-      const seqFile = path4.join(dir, "events.seq");
-      let bytes = 0;
-      let previousSeq = 0;
-      let needsSeparator = false;
-      try {
-        const info = statSync3(file);
-        bytes = info.size;
-        let lastByte;
-        if (bytes > 0) {
-          const fd = openSync(file, "r");
-          try {
-            const tail = Buffer.alloc(1);
-            readSync(fd, tail, 0, 1, bytes - 1);
-            lastByte = tail[0];
-          } finally {
-            closeSync(fd);
-          }
-        }
-        needsSeparator = bytes > 0 && lastByte !== 10;
-      } catch (error2) {
-        if (error2.code !== "ENOENT") throw error2;
-        bytes = 0;
-      }
-      try {
-        previousSeq = Number(readFileSync3(seqFile, "utf8"));
-        if (!Number.isSafeInteger(previousSeq) || previousSeq < 0) previousSeq = readLastEventSeq(file);
-      } catch {
-        previousSeq = readLastEventSeq(file);
-      }
-      const event = {
-        seq: previousSeq + 1,
-        at,
-        type: type.slice(0, 80),
-        summary: summary.length <= 2e3 ? summary : `${summary.slice(0, 1970)}\u2026[output truncated]`,
-        ...details && Object.keys(details).length ? { details } : {}
-      };
-      const line = `${JSON.stringify(event)}
-`;
-      const lineBytes = Buffer.byteLength(line, "utf8") + (needsSeparator ? 1 : 0);
-      const critical = CRITICAL_EVENT_TYPES.has(type);
-      const capacity = this.#maxEventBytes + (critical ? MAX_CRITICAL_EVENT_RESERVE_BYTES : 0);
-      if (lineBytes > 64e3 || bytes + lineBytes > capacity) return null;
-      this.#writeTextAtomic(seqFile, String(event.seq));
-      const eventOffset = bytes + (needsSeparator ? 1 : 0);
-      appendFileSync(file, `${needsSeparator ? "\n" : ""}${line}`, { encoding: "utf8", mode: 384 });
-      privateFile(file);
-      if (event.seq % 100 === 0) {
-        const index = path4.join(dir, "events.index");
-        appendFileSync(index, `${event.seq}	${eventOffset}
-`, { encoding: "utf8", mode: 384 });
-        privateFile(index);
-      }
-      return event;
-    });
-  }
-  readEvents(taskId, afterSeq = 0, limit = 100, view = "raw") {
-    const file = path4.join(this.taskDir(taskId), "events.jsonl");
-    if (!existsSync2(file)) return { events: [], nextSeq: afterSeq, hasMore: false, omittedEvents: 0 };
-    let offset = 0;
-    const indexFile = path4.join(this.taskDir(taskId), "events.index");
-    if (existsSync2(indexFile)) {
-      for (const row of readFileSync3(indexFile, "utf8").split(/\r?\n/u)) {
-        const [seqText, offsetText] = row.split("	");
-        const seq = Number(seqText);
-        const candidateOffset = Number(offsetText);
-        if (Number.isInteger(seq) && Number.isSafeInteger(candidateOffset) && seq <= afterSeq) offset = candidateOffset;
-        if (seq > afterSeq) break;
-      }
-    }
-    const fd = openSync(file, "r");
-    const page = [];
-    let hasMore = false;
-    let position = offset;
-    let pending = "";
-    const decoder = new StringDecoder("utf8");
-    const buffer = Buffer.allocUnsafe(64 * 1024);
-    try {
-      while (true) {
-        const count = readSync(fd, buffer, 0, buffer.length, position);
-        if (count <= 0) break;
-        position += count;
-        const lines = `${pending}${decoder.write(buffer.subarray(0, count))}`.split(/\r?\n/u);
-        pending = lines.pop() ?? "";
-        for (const line of lines) {
-          const event = parseProgressEvent(line);
-          if (!event || event.seq <= afterSeq) continue;
-          if (page.length === limit) {
-            hasMore = true;
-            break;
-          }
-          page.push(event);
-        }
-        if (hasMore) break;
-      }
-      pending += decoder.end();
-      if (!hasMore && pending) {
-        const event = parseProgressEvent(pending);
-        if (event && event.seq > afterSeq) {
-          if (page.length === limit) hasMore = true;
-          else page.push(event);
-        }
-      }
-    } finally {
-      closeSync(fd);
-    }
-    let events = page;
-    let omittedEvents = 0;
-    if (view === "summary") {
-      events = [];
-      for (const event of page) {
-        const previous = events.at(-1);
-        if (event.type === "model_output" && previous?.type === "model_output") {
-          const combined = previous.summary + event.summary;
-          events[events.length - 1] = {
-            ...previous,
-            seq: event.seq,
-            at: event.at,
-            summary: combined.length <= 5e3 ? combined : `${combined.slice(0, 4950)}\u2026[output compacted]`
-          };
-          omittedEvents += 1;
-        } else {
-          events.push(event);
-        }
-      }
-    }
-    return {
-      events,
-      nextSeq: page.at(-1)?.seq ?? afterSeq,
-      hasMore,
-      omittedEvents
-    };
-  }
-  writeInteractionRequest(taskId, request, createdAt = (/* @__PURE__ */ new Date()).toISOString()) {
-    const directory = path4.join(this.taskDir(taskId), "interactions");
-    privateMkdir(directory);
-    const file = this.interactionFile(taskId, request.request_id);
-    return withEventLock(path4.join(this.taskDir(taskId), "interactions.lock"), () => {
-      if (existsSync2(file)) {
-        const record3 = this.#readJson(file);
-        if (record3.request_id !== request.request_id || record3.method !== request.method || stableJson(record3.params) !== stableJson(request.params)) {
-          throw new Error("interaction request id collision");
-        }
-        return { record: record3, created: false };
-      }
-      if (Buffer.byteLength(JSON.stringify(request.params), "utf8") > 32e3) {
-        throw new Error("ZCode interaction request exceeded the 32 KB persistence limit");
-      }
-      const record2 = {
-        ...request,
-        state: "pending",
-        created_at: createdAt
-      };
-      this.#writeJsonAtomic(file, record2);
-      return { record: record2, created: true };
-    });
-  }
-  readInteractionRequest(taskId, requestId) {
-    const file = this.interactionFile(taskId, requestId);
-    if (!existsSync2(file)) return null;
-    const record2 = this.#readJson(file);
-    if (record2.request_id !== requestId) throw new Error("interaction request id hash mismatch");
-    return record2;
-  }
-  answerInteractionRequest(taskId, requestId, answer, answeredAt = (/* @__PURE__ */ new Date()).toISOString()) {
-    const file = this.interactionFile(taskId, requestId);
-    return withEventLock(path4.join(this.taskDir(taskId), "interactions.lock"), () => {
-      if (!existsSync2(file)) throw new Error(`unknown ZCode interaction request: ${requestId}`);
-      const current = this.#readJson(file);
-      if (current.request_id !== requestId) throw new Error("interaction request id hash mismatch");
-      if (current.state === "answered") return "already_answered";
-      this.#writeJsonAtomic(file, {
-        ...current,
-        state: "answered",
-        answer,
-        answered_at: answeredAt
-      });
-      return "answered";
-    });
-  }
-  interactionFile(taskId, requestId) {
-    if (!requestId || requestId.length > 512) throw new Error("invalid ZCode interaction request_id");
-    const key = createHash("sha256").update(requestId).digest("hex");
-    return path4.join(this.taskDir(taskId), "interactions", `${this.readStatus(taskId).attempt}-${key}.json`);
-  }
-  #readJson(file) {
-    try {
-      return JSON.parse(readFileSync3(file, "utf8"));
-    } catch (error2) {
-      throw new Error(`unreadable or corrupt JSON record: ${file}`, { cause: error2 });
-    }
-  }
-  #writeJsonAtomic(file, value) {
-    this.#writeTextAtomic(file, JSON.stringify(value, null, 2));
-  }
-  #writeTextAtomic(file, text) {
-    const tmp = `${file}.${randomUUID2()}.tmp`;
-    try {
-      writeFileSync2(tmp, text, { encoding: "utf8", mode: 384 });
-      privateFile(tmp);
-      atomicRenameSync(tmp, file);
-    } catch (error2) {
-      try {
-        rmSync(tmp, { force: true });
-      } catch {
-      }
-      throw error2;
-    }
-  }
-};
-function stableJson(value) {
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
-  if (value && typeof value === "object") return `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`).join(",")}}`;
-  return JSON.stringify(value) ?? "null";
-}
-function withEventLock(lockDir, operation) {
-  const deadline = Date.now() + 1e4;
-  let release;
-  while (!(release = tryAcquireProcessLock(lockDir))) {
-    if (Date.now() >= deadline) throw new Error(`timed out waiting for task state/event lock: ${lockDir}`);
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-  }
-  try {
-    return operation();
-  } finally {
-    release();
-  }
-}
-function privateMkdir(directory) {
-  mkdirSync2(directory, { recursive: true, mode: 448 });
-  privateDirectory(directory);
-}
-function privateDirectory(directory) {
-  if (process.platform !== "win32") chmodSync(directory, 448);
-}
-function privateFile(file) {
-  if (process.platform !== "win32") chmodSync(file, 384);
-}
-function readLastEventSeq(file) {
-  if (!existsSync2(file)) return 0;
-  for (const line of readFileSync3(file, "utf8").trimEnd().split("\n").reverse()) {
-    try {
-      const event = JSON.parse(line);
-      if (Number.isInteger(event.seq)) return event.seq;
-    } catch {
-    }
-  }
-  return 0;
-}
-function parseProgressEvent(line) {
-  if (!line) return null;
-  try {
-    const event = JSON.parse(line);
-    return Number.isInteger(event.seq) ? event : null;
-  } catch {
-    return null;
-  }
-}
-function isTerminalStatus(status) {
-  return status === "completed" || status === "failed" || status === "cancelled" || status === "waiting_for_master";
-}
-function toPublicStatus(status) {
-  const record2 = {
-    task_id: status.task_id,
-    status: status.status,
-    attempt: status.attempt,
-    created_at: status.created_at,
-    updated_at: status.updated_at,
-    started_at: status.started_at,
-    finished_at: status.finished_at,
-    worker_pid: status.worker_pid,
-    zcode_session_id: status.zcode_session_id,
-    exit_code: status.exit_code
-  };
-  if (status.error_code) record2.error_code = status.error_code;
-  if (status.error) record2.error = status.error;
-  return record2;
-}
+// src/host/stdio.ts
+init_task_store();
 
 // src/workspace/direct-provider.ts
 import { realpathSync, statSync as statSync4 } from "node:fs";
@@ -22632,6 +23304,7 @@ function resolveExistingDirectory(input, field) {
 }
 
 // src/manager/task-manager.ts
+init_task_store();
 import path7 from "node:path";
 import { createHash as createHash2 } from "node:crypto";
 import { existsSync as existsSync4, statSync as statSync5, writeFileSync as writeFileSync3 } from "node:fs";
@@ -22646,7 +23319,10 @@ function buildTaskResult(input) {
     finished_at: finishedAt,
     zcode_output: outcome?.response ?? "",
     exit_code: outcome?.exitCode ?? null,
-    session_id: outcome?.sessionId ?? input.sessionId ?? null
+    session_id: outcome?.sessionId ?? input.sessionId ?? null,
+    ...input.usage !== void 0 ? { usage: input.usage } : {},
+    ...input.model !== void 0 ? { model: input.model } : {},
+    ...input.timing !== void 0 ? { timing: input.timing } : {}
   };
   if (input.cancelled || outcome?.cancelled) {
     return {
@@ -22988,6 +23664,9 @@ function validateTaskTimeout(value) {
   return value;
 }
 
+// src/manager/task-manager.ts
+init_process_lock();
+
 // src/prompts/task-prompt.ts
 var MAX_PROMPT_CHARS = 6e4;
 var MAX_SECTION_CHARS = 4e3;
@@ -23094,6 +23773,278 @@ function joinBoundedPreservingTail(sections, requiredTail) {
   throw new Error(`task prompt exceeds ${MAX_PROMPT_CHARS} characters; shorten the task package without dropping constraints`);
 }
 
+// src/runtime/process-probe.ts
+import { readFile } from "node:fs/promises";
+import { spawn as spawn3 } from "node:child_process";
+var PROCESS_IDENTITY_VERSION = 1;
+var DEFAULT_PROBE_TIMEOUT_MS = 5e3;
+var DEFAULT_MAX_CONCURRENT = 2;
+function identityOfFingerprint(pid, fingerprint, precision, now) {
+  return {
+    pid,
+    fingerprint,
+    fingerprint_precision: precision,
+    identity_version: PROCESS_IDENTITY_VERSION,
+    platform: process.platform,
+    captured_at: new Date(now()).toISOString()
+  };
+}
+function verdict(state, reason, now) {
+  return { state, reason_code: reason, observed_at: new Date(now()).toISOString() };
+}
+function failedQuery(reason) {
+  return { ok: false, reason, fingerprints: /* @__PURE__ */ new Map() };
+}
+function windowsBatchQuery(pids, timeoutMs) {
+  return new Promise((resolve) => {
+    const script = `Get-Process -Id ${pids.join(",")} -ErrorAction SilentlyContinue | ForEach-Object { "{0}|{1}" -f $_.Id, $_.StartTime.Ticks }`;
+    const child = spawn3("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], {
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+      shell: false
+    });
+    let stdout = "";
+    let settled = false;
+    const finish = (query) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(query);
+    };
+    const timer = setTimeout(() => {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+      }
+      finish(failedQuery("timeout"));
+    }, timeoutMs);
+    timer.unref();
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    let stderrBytes = 0;
+    child.stderr.on("data", (chunk) => {
+      stderrBytes = Math.min(64e3, stderrBytes + chunk.length);
+    });
+    child.stdout.on("data", (chunk) => {
+      if (stdout.length < 1e6) stdout += chunk;
+    });
+    child.on("error", () => finish(failedQuery("spawn_error")));
+    child.on("close", () => {
+      const map = /* @__PURE__ */ new Map();
+      for (const line of stdout.split(/\r?\n/u)) {
+        const match = /^(\d+)\|(\d+)$/u.exec(line.trim());
+        if (!match) continue;
+        map.set(Number(match[1]), match[2]);
+      }
+      if (map.size === 0) {
+        finish(stderrBytes > 0 ? failedQuery("query_error") : { ok: true, reason: "ok", fingerprints: map });
+        return;
+      }
+      finish({ ok: true, reason: "ok", fingerprints: map });
+    });
+  });
+}
+async function darwinQuery(pids, timeoutMs) {
+  return new Promise((resolve) => {
+    const child = spawn3("ps", ["-o", "pid=,lstart=", "-p", pids.join(",")], {
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+      shell: false
+    });
+    let stdout = "";
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try {
+        child.kill("SIGKILL");
+      } catch {
+      }
+      resolve(failedQuery("timeout"));
+    }, timeoutMs);
+    timer.unref();
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      if (stdout.length < 1e6) stdout += chunk;
+    });
+    child.on("error", () => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        resolve(failedQuery("spawn_error"));
+      }
+    });
+    child.on("close", () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      const map = /* @__PURE__ */ new Map();
+      for (const line of stdout.split(/\r?\n/u)) {
+        const match = /^\s*(\d+)\s+(.+)$/u.exec(line);
+        if (match) map.set(Number(match[1]), match[2].trim());
+      }
+      resolve({ ok: true, reason: "ok", fingerprints: map });
+    });
+  });
+}
+function createPlatformProbe(options = {}) {
+  const timeoutMs = options.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
+  const maxConcurrent = options.maxConcurrent ?? DEFAULT_MAX_CONCURRENT;
+  const now = options.now ?? Date.now;
+  let chain = Promise.resolve();
+  let inFlight = 0;
+  let waiters = [];
+  const schedule = async (operation) => {
+    if (inFlight >= maxConcurrent) {
+      await new Promise((resolve) => waiters.push(resolve));
+    }
+    inFlight += 1;
+    try {
+      return await operation();
+    } finally {
+      inFlight -= 1;
+      const next = waiters.shift();
+      if (next) next();
+    }
+  };
+  const probe = async (requests) => {
+    if (requests.length === 0) return [];
+    const distinct = [...new Set(requests.map((request) => request.pid).filter((pid) => Number.isInteger(pid) && pid > 0))];
+    const query = await schedule(async () => {
+      if (process.platform === "win32") return windowsBatchQuery(distinct, timeoutMs);
+      if (process.platform === "darwin") return darwinQuery(distinct, timeoutMs);
+      if (process.platform === "linux") {
+        const map = /* @__PURE__ */ new Map();
+        for (const pid of distinct) {
+          try {
+            const stat2 = await readFile(`/proc/${pid}/stat`, "utf8");
+            const afterComm = stat2.slice(stat2.lastIndexOf(")") + 2);
+            const fields = afterComm.split(" ");
+            const starttime = fields[19];
+            if (starttime) map.set(pid, starttime.trim());
+          } catch (error2) {
+            if (error2.code === "ENOENT") continue;
+            return failedQuery("proc_read_error");
+          }
+        }
+        return { ok: true, reason: "ok", fingerprints: map };
+      }
+      return failedQuery("unsupported_platform");
+    });
+    return requests.map((request) => {
+      if (!Number.isInteger(request.pid) || request.pid <= 0) return verdict("unknown", "invalid_pid", now);
+      if (!query.ok) return verdict("unknown", `query_${query.reason}`, now);
+      const fingerprint = query.fingerprints.get(request.pid);
+      if (fingerprint === void 0) {
+        return verdict("exited", "pid_absent", now);
+      }
+      if (!request.identity || request.identity.fingerprint === null) {
+        return verdict("unknown", "live_pid_no_fingerprint", now);
+      }
+      if (request.identity.fingerprint_precision === "coarse") {
+        return request.identity.fingerprint === fingerprint ? verdict("unknown", "coarse_fingerprint_match", now) : verdict("exited", "pid_reused_coarse", now);
+      }
+      if (request.identity.fingerprint !== fingerprint) {
+        return verdict("exited", "pid_reused", now);
+      }
+      return verdict("alive", "pid_and_fingerprint_match", now);
+    });
+  };
+  const fingerprintOfPid = async (pid) => {
+    const query = await schedule(async () => {
+      if (process.platform === "win32") return windowsBatchQuery([pid], timeoutMs);
+      if (process.platform === "darwin") return darwinQuery([pid], timeoutMs);
+      if (process.platform === "linux") {
+        const map = /* @__PURE__ */ new Map();
+        try {
+          const stat2 = await readFile(`/proc/${pid}/stat`, "utf8");
+          const afterComm = stat2.slice(stat2.lastIndexOf(")") + 2);
+          const starttime = afterComm.split(" ")[19];
+          if (starttime) map.set(pid, starttime.trim());
+        } catch {
+        }
+        return { ok: true, reason: "ok", fingerprints: map };
+      }
+      return failedQuery("unsupported_platform");
+    });
+    const fingerprint = query.fingerprints.get(pid);
+    if (!query.ok || !fingerprint) return identityOfFingerprint(pid, null, "unknown", now);
+    const precision = process.platform === "darwin" ? "coarse" : "exact";
+    return identityOfFingerprint(pid, fingerprint, precision, now);
+  };
+  return {
+    platform: process.platform,
+    identityOf: fingerprintOfPid,
+    selfIdentity: () => fingerprintOfPid(process.pid),
+    probe
+  };
+}
+function livenessVerdict(pid, isAlive, now) {
+  if (pid === null || !Number.isInteger(pid) || pid <= 0) return verdict("unknown", "no_pid_recorded", now);
+  return isAlive(pid) ? verdict("alive", "kill0_alive_no_identity", now) : verdict("exited", "kill0_pid_absent", now);
+}
+
+// src/manager/task-manager.ts
+init_build();
+
+// src/observation/diagnostics.ts
+function boundedErrorMessage(message, maxChars = 500) {
+  const text = message instanceof Error ? message.message : String(message ?? "");
+  return text.replace(/[\r\n\0\t]/gu, " ").slice(0, maxChars);
+}
+var MAX_COUNTER_KEYS = 64;
+var MAX_LATENCY_SAMPLES = 64;
+var DiagnosticCounters = class {
+  #counters = /* @__PURE__ */ new Map();
+  #latency = [];
+  #now;
+  constructor(now = Date.now) {
+    this.#now = now;
+  }
+  record(reason, detail = "") {
+    const key = `${reason}${detail ? `:${detail}` : ""}`.slice(0, 160);
+    let entry = this.#counters.get(key);
+    if (!entry) {
+      if (this.#counters.size >= MAX_COUNTER_KEYS) {
+        const oldest = this.#counters.keys().next().value;
+        if (oldest !== void 0) this.#counters.delete(oldest);
+      }
+      entry = { count: 0, last_seen_at: new Date(this.#now()).toISOString(), last_reason: reason };
+      this.#counters.set(key, entry);
+    }
+    entry.count += 1;
+    entry.last_seen_at = new Date(this.#now()).toISOString();
+    entry.last_reason = reason;
+    return { count: entry.count, last_seen_at: entry.last_seen_at };
+  }
+  /** Throttle decision: emit a persistent event on the first occurrence and
+   * then every `every`th occurrence, always carrying the cumulative count. */
+  shouldEmit(reason, detail = "", every = 10) {
+    const key = `${reason}${detail ? `:${detail}` : ""}`.slice(0, 160);
+    const entry = this.#counters.get(key);
+    if (!entry) return true;
+    return entry.count === 1 || entry.count % every === 0;
+  }
+  recordLatency(ms) {
+    if (!Number.isFinite(ms)) return;
+    this.#latency.push(ms);
+    if (this.#latency.length > MAX_LATENCY_SAMPLES) this.#latency.shift();
+  }
+  latencySummary() {
+    if (this.#latency.length === 0) return { samples: 0, p50_ms: null, p95_ms: null, max_ms: null };
+    const sorted = [...this.#latency].sort((a, b) => a - b);
+    const percentile = (p) => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p / 100))];
+    return { samples: sorted.length, p50_ms: percentile(50), p95_ms: percentile(95), max_ms: sorted[sorted.length - 1] };
+  }
+  snapshot() {
+    const result = {};
+    for (const [key, entry] of this.#counters) {
+      result[key] = { count: entry.count, last_seen_at: entry.last_seen_at, reason: entry.last_reason };
+    }
+    return result;
+  }
+};
+
 // src/manager/task-manager.ts
 var BridgeTaskManager = class _BridgeTaskManager {
   /** How long a respawn claim counts as in-flight across Bridge processes. */
@@ -23103,11 +24054,14 @@ var BridgeTaskManager = class _BridgeTaskManager {
   #spawnWorker;
   #isProcessRunning;
   #terminateProcessTree;
+  #probe;
   #now;
   #dataRoot;
   #maxConcurrentWorkers;
   #workerStartGraceMs;
+  #stallHintMs;
   #recoveryCooldownMs;
+  #counters = new DiagnosticCounters();
   #timer = null;
   #mutex = Promise.resolve();
   #queuedOperations = 0;
@@ -23118,6 +24072,7 @@ var BridgeTaskManager = class _BridgeTaskManager {
     this.#spawnWorker = options.spawnWorker ?? defaultSpawnWorker;
     this.#isProcessRunning = options.isProcessRunning ?? isProcessRunning;
     this.#terminateProcessTree = options.terminateProcessTree ?? terminateProcessTree;
+    this.#probe = options.probe ?? null;
     this.#now = options.now ?? (() => /* @__PURE__ */ new Date());
     this.#dataRoot = options.store.dataRoot;
     this.#maxConcurrentWorkers = options.maxConcurrentWorkers ?? 8;
@@ -23128,6 +24083,7 @@ var BridgeTaskManager = class _BridgeTaskManager {
     if (!Number.isInteger(this.#workerStartGraceMs) || this.#workerStartGraceMs < 0) {
       throw new RangeError("workerStartGraceMs must be a non-negative integer");
     }
+    this.#stallHintMs = options.stallHintMs ?? 12e4;
     const pollIntervalMs = options.pollIntervalMs ?? 1e3;
     this.#recoveryCooldownMs = pollIntervalMs;
     if (pollIntervalMs > 0) {
@@ -23136,6 +24092,17 @@ var BridgeTaskManager = class _BridgeTaskManager {
       }, pollIntervalMs);
       this.#timer.unref();
     }
+    const probe = this.#probe;
+    if (probe) {
+      void probe.selfIdentity().then(
+        (identity) => publishSelfIdentity(identity),
+        () => void 0
+      );
+    }
+  }
+  /** Bounded live diagnostics (counters + lock latency), for doctor/ops tooling. */
+  diagnostics() {
+    return { counters: this.#counters.snapshot(), lock_wait: this.#counters.latencySummary() };
   }
   /** Stops the reconcile timer; safe to call repeatedly. */
   dispose() {
@@ -23144,7 +24111,10 @@ var BridgeTaskManager = class _BridgeTaskManager {
       this.#timer = null;
     }
   }
-  /** Scans all non-terminal tasks and reconciles them, then pumps the queue. */
+  /** Scans all non-terminal tasks and reconciles them, then pumps the queue.
+   * Per the A2 three-phase design, OS probes run OUTSIDE the manager mutex:
+   * snapshot → async probe → re-verify and commit. One task's failure never
+   * blocks the others. */
   async recoverTasks() {
     if (this.#recoveryPromise) return this.#recoveryPromise;
     const releaseRecovery = tryAcquireProcessLock(path7.join(this.#store.tasksRoot, ".recovery.lock"));
@@ -23154,21 +24124,26 @@ var BridgeTaskManager = class _BridgeTaskManager {
       releaseRecovery();
       return;
     }
-    const run = this.#exclusive(async () => {
+    const run = (async () => {
       for (const taskId of this.#store.listTaskIds()) {
         try {
           const status = this.#safeStatus(taskId);
           if (!status) continue;
           if (isTerminalStatus(status.status)) continue;
           if (status.status === "running") {
-            this.#reconcileRunningLocked(taskId, status);
+            await this.#reconcileRunningThreePhase(taskId, status);
           }
         } catch (error2) {
-          console.error(`Bridge could not reconcile task ${taskId}: ${error2 instanceof Error ? error2.message : String(error2)}`);
+          const reason = this.#counters.record("reconcile_error", taskId);
+          if (this.#counters.shouldEmit("reconcile_error", taskId)) {
+            console.error(`Bridge could not reconcile task ${taskId}: ${boundedErrorMessage(error2)} (occurrence ${reason.count})`);
+          }
         }
       }
-      this.#pumpLocked();
-    });
+      await this.#exclusive(async () => {
+        this.#pumpLocked();
+      });
+    })();
     this.#recoveryPromise = run;
     try {
       await run;
@@ -23182,6 +24157,170 @@ var BridgeTaskManager = class _BridgeTaskManager {
         this.#recoveryPromise = null;
       }
     }
+  }
+  /** Persisted facts needed for one recovery probe cycle. */
+  async #reconcileRunningThreePhase(taskId, status) {
+    const snapshot = {
+      attempt: status.attempt,
+      worker_pid: status.worker_pid,
+      zcode_pid: status.zcode_pid ?? null,
+      started_at: status.started_at,
+      heartbeat: this.#store.readWorkerHeartbeat(taskId, status.attempt),
+      identity: this.#store.readExecutorIdentity(taskId, status.attempt)
+    };
+    const heartbeatAgeMs = snapshot.heartbeat ? this.#now().getTime() - Date.parse(snapshot.heartbeat.heartbeat_at) : Number.NaN;
+    if (snapshot.heartbeat && snapshot.worker_pid !== null && snapshot.heartbeat.worker_pid === snapshot.worker_pid && heartbeatAgeMs >= 0 && heartbeatAgeMs <= 15e3) return;
+    const verdicts = await this.#probeExecutors(snapshot);
+    await this.#exclusive(async () => {
+      const current = this.#safeStatus(taskId);
+      if (!current) return;
+      if (isTerminalStatus(current.status)) return;
+      if (current.attempt !== snapshot.attempt || current.worker_pid !== snapshot.worker_pid || (current.zcode_pid ?? null) !== snapshot.zcode_pid) return;
+      this.#persistProbeVerdicts(taskId, snapshot.attempt, verdicts);
+      this.#applyReconcileVerdicts(taskId, current, snapshot, verdicts);
+    });
+  }
+  async #probeExecutors(snapshot) {
+    const probe = this.#probe;
+    const nowMs = () => this.#now().getTime();
+    const workerIdentity = snapshot.identity?.worker ?? null;
+    const runtimeIdentity = snapshot.identity?.runtime ?? null;
+    if (probe && (snapshot.worker_pid !== null || snapshot.zcode_pid !== null)) {
+      try {
+        const requests = [];
+        if (snapshot.worker_pid !== null) requests.push({ pid: snapshot.worker_pid, identity: workerIdentity });
+        if (snapshot.zcode_pid !== null) requests.push({ pid: snapshot.zcode_pid, identity: runtimeIdentity });
+        const results = await probe.probe(requests);
+        let worker = livenessVerdict(snapshot.worker_pid, this.#isProcessRunning, nowMs);
+        let runtime = snapshot.zcode_pid === null ? { state: "unknown", reason_code: "runtime_pid_not_reported", observed_at: new Date(nowMs()).toISOString() } : livenessVerdict(snapshot.zcode_pid, this.#isProcessRunning, nowMs);
+        let index = 0;
+        if (snapshot.worker_pid !== null) {
+          worker = results[index] ?? worker;
+          index += 1;
+        }
+        if (snapshot.zcode_pid !== null) {
+          runtime = results[index] ?? runtime;
+        }
+        if (worker.state === "unknown") this.#counters.record("probe_unknown_worker", worker.reason_code);
+        if (runtime.state === "unknown") this.#counters.record("probe_unknown_runtime", runtime.reason_code);
+        return { worker, runtime };
+      } catch (error2) {
+        this.#counters.record("probe_failed", boundedErrorMessage(error2, 80));
+      }
+    }
+    return {
+      worker: livenessVerdict(snapshot.worker_pid, this.#isProcessRunning, nowMs),
+      runtime: snapshot.zcode_pid === null ? { state: "unknown", reason_code: "runtime_pid_not_reported", observed_at: new Date(nowMs()).toISOString() } : livenessVerdict(snapshot.zcode_pid, this.#isProcessRunning, nowMs)
+    };
+  }
+  #persistProbeVerdicts(taskId, attempt, verdicts) {
+    try {
+      const current = this.#store.readObservationSnapshot(taskId, attempt).snapshot;
+      const revision = (current?.writers["manager"] ?? -1) + 1;
+      this.#store.writeManagerObservation(taskId, attempt, {
+        worker_probe: { state: verdicts.worker.state, reason_code: verdicts.worker.reason_code },
+        runtime_probe: { state: verdicts.runtime.state, reason_code: verdicts.runtime.reason_code }
+      }, revision, this.#now().toISOString());
+    } catch {
+    }
+  }
+  /** Applies confirmed probe verdicts to one unchanged attempt snapshot. */
+  #applyReconcileVerdicts(taskId, status, snapshot, verdicts) {
+    const persistedResult = this.#store.readResult(taskId);
+    if (persistedResult && persistedResult.attempt === status.attempt) {
+      this.#store.writeStatus(taskId, {
+        status: persistedResult.status,
+        finished_at: persistedResult.finished_at,
+        exit_code: persistedResult.exit_code,
+        zcode_session_id: persistedResult.session_id,
+        error_code: persistedResult.error_code ?? null,
+        error: persistedResult.status === "failed" ? persistedResult.summary : null,
+        worker_pid: null,
+        cleanup_unverified: persistedResult.error_code === "cleanup_failed"
+      });
+      return;
+    }
+    const pid = status.worker_pid;
+    const heartbeat = snapshot.heartbeat;
+    const heartbeatAt = heartbeat ? Date.parse(heartbeat.heartbeat_at) : Number.NaN;
+    const heartbeatAgeMs = this.#now().getTime() - heartbeatAt;
+    if (pid !== null && heartbeat?.worker_pid === pid && heartbeatAgeMs >= 0 && heartbeatAgeMs <= 15e3) return;
+    if (verdicts.worker.state === "alive") return;
+    if (verdicts.worker.state === "unknown" && pid !== null) {
+      const occurrence = this.#counters.record("worker_probe_unknown", verdicts.worker.reason_code);
+      if (this.#counters.shouldEmit("worker_probe_unknown", verdicts.worker.reason_code)) {
+        this.#store.appendEvent(taskId, "probe_unknown", "Worker liveness could not be confirmed; the task stays occupied", {
+          reason_code: verdicts.worker.reason_code,
+          count: occurrence.count,
+          observed_at: verdicts.worker.observed_at
+        }, verdicts.worker.observed_at);
+      }
+      return;
+    }
+    const runtimePid = status.zcode_pid ?? null;
+    if (runtimePid !== null && verdicts.runtime.state === "alive") {
+      if (this.#recoverOutcomeCheckpoint(taskId, status, runtimePid, false)) return;
+      this.#store.writeStatus(taskId, { cleanup_unverified: true, error_code: "cleanup_failed", error: "Worker exited while ZCode remains alive; cancel to verify runtime cleanup" });
+      return;
+    }
+    if (runtimePid !== null && verdicts.runtime.state === "unknown") {
+      if (this.#recoverOutcomeCheckpoint(taskId, status, runtimePid, false)) return;
+      const occurrence = this.#counters.record("runtime_probe_unknown", verdicts.runtime.reason_code);
+      if (this.#counters.shouldEmit("runtime_probe_unknown", verdicts.runtime.reason_code)) {
+        this.#store.appendEvent(taskId, "probe_unknown", "ZCode runtime exit could not be confirmed; cleanup stays unverified", {
+          reason_code: verdicts.runtime.reason_code,
+          count: occurrence.count
+        }, verdicts.runtime.observed_at);
+      }
+      this.#store.writeStatus(taskId, { cleanup_unverified: true, error_code: "cleanup_failed", error: "Worker exited; ZCode runtime exit could not be confirmed; cancel to verify cleanup" });
+      return;
+    }
+    if (this.#recoverOutcomeCheckpoint(taskId, status, runtimePid, true)) return;
+    const startedAtMs = status.started_at === null ? Number.NaN : Date.parse(status.started_at);
+    const withinGrace = Number.isFinite(startedAtMs) && this.#now().getTime() - startedAtMs < this.#workerStartGraceMs;
+    const workerBegan = this.#store.readAttemptMeta(taskId, status.attempt, "started.json") !== null;
+    if (pid === null && withinGrace) return;
+    if (pid !== null && workerBegan && withinGrace) return;
+    if (!workerBegan) {
+      if (this.#store.claimAttemptRespawn(taskId, status.attempt)) {
+        const respawned = this.#spawnWorker(this.#dataRoot, taskId, status.attempt);
+        this.#store.writeStatus(taskId, { worker_pid: respawned.pid });
+        this.#store.appendEvent(
+          taskId,
+          "worker_respawned",
+          `Bridge respawned the worker: previous pid ${String(pid)} exited before writing any task state`,
+          { worker_pid: respawned.pid, worker_pid_previous: pid, attempt: status.attempt }
+        );
+        return;
+      }
+      const claimedAt = this.#store.respawnClaimedAt(taskId, status.attempt);
+      if (claimedAt && Date.now() - claimedAt.getTime() < _BridgeTaskManager.RESPAWN_IN_FLIGHT_MS) return;
+    }
+    const task = this.#store.readTask(taskId);
+    const finishedAt = this.#now().toISOString();
+    const workerStderr = this.#store.readAttemptText(taskId, status.attempt, "worker-stderr.log") ?? "";
+    const failure2 = {
+      code: "worker_lost",
+      message: `worker pid ${String(pid)} is gone without a terminal result${workerStderr.trim() ? "; diagnostic stderr is available in private attempt evidence" : "; worker stderr was empty"}`
+    };
+    const result = buildTaskResult({
+      task,
+      attempt: status.attempt,
+      startedAt: status.started_at,
+      finishedAt,
+      outcome: null,
+      failure: failure2,
+      sessionId: status.zcode_session_id
+    });
+    this.#store.writeResult(taskId, result);
+    this.#store.writeStatus(taskId, {
+      status: "failed",
+      finished_at: finishedAt,
+      error_code: "worker_lost",
+      error: result.summary,
+      worker_pid: null
+    });
+    this.#store.appendEvent(taskId, "error", result.summary, { error_code: "worker_lost" }, finishedAt);
   }
   async createTask(task) {
     return this.#exclusive(async () => {
@@ -23262,7 +24401,34 @@ var BridgeTaskManager = class _BridgeTaskManager {
   }
   async getStatus(taskId) {
     this.#requireTask(taskId);
-    return toPublicStatus(this.#store.readStatus(taskId));
+    const status = this.#store.readStatus(taskId);
+    const observation = this.#safeObservation(taskId, status);
+    return { ...toPublicStatus(status), ...observation ? { observation } : {} };
+  }
+  /** Observation built by the shared judger; a corrupt/failed build degrades
+   * to a minimal unknown observation instead of failing the status read.
+   * Fresh persisted probe verdicts from the recovery scan are included. */
+  #safeObservation(taskId, status) {
+    try {
+      const snapshot = this.#store.readObservationSnapshot(taskId, status.attempt).snapshot;
+      const probes = snapshot?.worker_probe || snapshot?.runtime_probe ? {
+        task_id: taskId,
+        attempt: status.attempt,
+        worker_pid: status.worker_pid,
+        runtime_pid: status.zcode_pid ?? null,
+        worker: snapshot.worker_probe ?? { state: "unknown", reason_code: "not_probed" },
+        runtime: snapshot.runtime_probe ?? { state: "unknown", reason_code: "not_probed" },
+        probed_at: snapshot.updated_at
+      } : null;
+      return buildTaskObservation(this.#store, taskId, status, {
+        now: this.#now,
+        startGraceMs: this.#workerStartGraceMs,
+        stallHintMs: this.#stallHintMs,
+        probes
+      });
+    } catch {
+      return null;
+    }
   }
   async getEvents(input) {
     const afterSeq = input.after_seq ?? 0;
@@ -23280,21 +24446,59 @@ var BridgeTaskManager = class _BridgeTaskManager {
     if (input.view !== void 0 && input.view !== "raw" && input.view !== "summary") {
       throw new TaskManagerError("TASK_INVALID", "view must be raw or summary");
     }
+    if (input.max_bytes !== void 0 && (!Number.isInteger(input.max_bytes) || input.max_bytes < 1024 || input.max_bytes > 32 * 1024 * 1024)) {
+      throw new TaskManagerError("TASK_INVALID", "max_bytes must be an integer from 1024 to 33554432");
+    }
+    let startCursor = null;
+    if (input.scan_cursor !== void 0) {
+      if (typeof input.scan_cursor !== "string" || input.scan_cursor.length > 2048) {
+        throw new TaskManagerError("TASK_INVALID", "scan_cursor must be an opaque cursor string returned by a previous page");
+      }
+      try {
+        const decoded = JSON.parse(Buffer.from(input.scan_cursor, "base64url").toString("utf8"));
+        if (decoded?.v !== 1 || decoded.task_id !== input.task_id) throw new Error("cursor does not belong to this task");
+        startCursor = decoded;
+      } catch {
+        throw new TaskManagerError("TASK_INVALID", "scan_cursor is not a valid cursor for this task; restart the scan with after_seq");
+      }
+    }
     const deadline = Date.now() + waitMs;
-    while (true) {
-      const page = await (async () => {
-        this.#requireTask(input.task_id);
-        const status = this.#store.readStatus(input.task_id);
-        const read = this.#store.readEvents(input.task_id, afterSeq, limit, input.view ?? "raw");
-        return {
-          task_id: input.task_id,
-          status: status.status,
-          events: read.events,
-          next_seq: read.nextSeq,
-          has_more: read.hasMore,
-          ...read.omittedEvents ? { omitted_events: read.omittedEvents } : {}
+    const readPage = () => {
+      this.#requireTask(input.task_id);
+      const status = this.#store.readStatus(input.task_id);
+      const observation = this.#safeObservation(input.task_id, status);
+      const bounded2 = Boolean(startCursor) || input.max_bytes !== void 0;
+      const read = bounded2 ? this.#store.readEventsBounded(input.task_id, { afterSeq, limit, view: input.view ?? "raw", maxBytes: input.max_bytes, cursor: startCursor }) : this.#store.readEvents(input.task_id, afterSeq, limit, input.view ?? "raw");
+      const page = {
+        task_id: input.task_id,
+        status: status.status,
+        events: read.events,
+        next_seq: read.nextSeq,
+        has_more: read.hasMore,
+        ...read.omittedEvents ? { omitted_events: read.omittedEvents } : {},
+        ...observation ? { observation } : {}
+      };
+      if (bounded2) {
+        const scan = read;
+        if (scan.scan_incomplete) page.scan_incomplete = true;
+        if (scan.scan_cursor) page.scan_cursor = encodeScanCursor(scan.scan_cursor);
+        page.scan_metrics = {
+          bytes_read: scan.metrics.bytes_read,
+          records_scanned: scan.metrics.records_scanned,
+          invalid_lines: scan.metrics.invalid_lines,
+          corrupt_count: scan.metrics.corrupt_count,
+          first_corrupt_offset: scan.metrics.first_corrupt_offset,
+          index_fallback: scan.metrics.index_fallback ? 1 : 0
         };
-      })();
+        return { ...page, cursor_invalid: scan.cursor_invalid };
+      }
+      return page;
+    };
+    while (true) {
+      const page = readPage();
+      if (page.cursor_invalid) {
+        throw new TaskManagerError("TASK_INVALID", "scan_cursor no longer matches the task log (log replaced or truncated); restart with after_seq");
+      }
       if (page.events.length || isTerminalStatus(page.status) || Date.now() >= deadline) return page;
       await sleep3(Math.min(250, Math.max(1, deadline - Date.now())));
     }
@@ -23343,7 +24547,7 @@ var BridgeTaskManager = class _BridgeTaskManager {
         request_id: input.request_id,
         method: record2.method,
         decision: input.decision
-      });
+      }, this.#now().toISOString());
       return { task_id: input.task_id, request_id: input.request_id, state: "answered" };
     });
   }
@@ -23441,13 +24645,44 @@ var BridgeTaskManager = class _BridgeTaskManager {
     return this.#exclusive(async () => {
       this.#requireTask(taskId);
       const status = this.#store.readStatus(taskId);
+      const identity = this.#store.readExecutorIdentity(taskId, status.attempt);
+      const probeSnapshot = {
+        attempt: status.attempt,
+        worker_pid: status.worker_pid,
+        zcode_pid: status.zcode_pid ?? null,
+        identity
+      };
+      const verdicts = await this.#probeExecutors(probeSnapshot);
       if (status.cleanup_unverified) {
         if (!status.zcode_pid) throw new TaskManagerError("CANCEL_FAILED", "No ZCode process identity is available to verify cleanup");
+        if (verdicts.runtime.state === "unknown") {
+          throw new TaskManagerError("CANCEL_FAILED", `ZCode cleanup could not be verified: runtime probe returned ${verdicts.runtime.reason_code}`);
+        }
         try {
-          await this.#terminateProcessTree(status.zcode_pid, { graceMs: 500, killWaitMs: 5e3 });
-          if (status.status === "running" && status.worker_pid && this.#isProcessRunning(status.worker_pid)) await this.#terminateProcessTree(status.worker_pid, { graceMs: 500, killWaitMs: 5e3 });
+          if (verdicts.runtime.state === "alive") {
+            await this.#terminateProcessTree(status.zcode_pid, { graceMs: 500, killWaitMs: 5e3 });
+            const after = (await this.#probeExecutors(probeSnapshot)).runtime;
+            if (after.state === "alive") throw new Error("runtime still alive after termination");
+            if (after.state === "unknown") throw new Error(`runtime exit could not be verified (${after.reason_code})`);
+          }
+          if (status.status === "running" && status.worker_pid && verdicts.worker.state === "alive") {
+            await this.#terminateProcessTree(status.worker_pid, { graceMs: 500, killWaitMs: 5e3 });
+          }
         } catch (error2) {
-          throw new TaskManagerError("CANCEL_FAILED", `ZCode cleanup could not be verified: ${String(error2)}`);
+          let recheck;
+          try {
+            recheck = await this.#probeExecutors(probeSnapshot);
+          } catch (recheckError) {
+            throw new TaskManagerError("CANCEL_FAILED", `ZCode cleanup could not be verified: ${String(error2)}; re-verification failed: ${String(recheckError)}`);
+          }
+          const workerRecorded = status.status === "running" && status.worker_pid !== null;
+          if (recheck.runtime.state !== "exited" || workerRecorded && recheck.worker.state !== "exited") {
+            throw new TaskManagerError("CANCEL_FAILED", `ZCode cleanup could not be verified: ${String(error2)}; re-verification observed runtime ${recheck.runtime.state} (${recheck.runtime.reason_code})${workerRecorded ? ` and worker ${recheck.worker.state} (${recheck.worker.reason_code})` : ""}`);
+          }
+          this.#store.appendEvent(taskId, "cleanup_race_resolved", "Termination raced a natural exit; a fresh identity probe confirmed the recorded processes exited", {
+            runtime_reason_code: recheck.runtime.reason_code,
+            worker_reason_code: recheck.worker.reason_code
+          }, this.#now().toISOString());
         }
         if (status.status === "running") {
           const finishedAt2 = this.#now().toISOString();
@@ -23466,7 +24701,18 @@ var BridgeTaskManager = class _BridgeTaskManager {
       }
       const task = this.#store.readTask(taskId);
       if (status.status === "running" && this.#store.readResult(taskId)) {
-        this.#reconcileOneLocked(taskId);
+        const raced2 = this.#store.readResult(taskId);
+        this.#store.writeStatus(taskId, {
+          status: raced2.status,
+          finished_at: raced2.finished_at,
+          exit_code: raced2.exit_code,
+          zcode_session_id: raced2.session_id,
+          error_code: raced2.error_code ?? null,
+          error: raced2.status === "failed" ? raced2.summary : null,
+          worker_pid: null,
+          cleanup_unverified: raced2.error_code === "cleanup_failed"
+        });
+        this.#pumpLocked();
         return toPublicStatus(this.#store.readStatus(taskId));
       }
       if (status.status === "queued") {
@@ -23487,7 +24733,7 @@ var BridgeTaskManager = class _BridgeTaskManager {
         return toPublicStatus(this.#store.readStatus(taskId));
       }
       this.#store.writeStatus(taskId, { cancel_requested: true });
-      this.#store.appendEvent(taskId, "cancel_requested", "Cancellation requested; waiting for process-tree confirmation");
+      this.#store.appendEvent(taskId, "cancel_requested", "Cancellation requested; waiting for process-tree confirmation", void 0, this.#now().toISOString());
       const pid = status.worker_pid;
       if (pid === null) {
         const finishedAt2 = this.#now().toISOString();
@@ -23506,6 +24752,52 @@ var BridgeTaskManager = class _BridgeTaskManager {
           error_code: "worker_lost",
           error: result2.summary
         });
+        return toPublicStatus(this.#store.readStatus(taskId));
+      }
+      if (verdicts.worker.state === "exited") {
+        const racedEarly = this.#store.readResult(taskId);
+        if (racedEarly) {
+          this.#store.writeStatus(taskId, {
+            status: racedEarly.status,
+            finished_at: racedEarly.finished_at,
+            exit_code: racedEarly.exit_code,
+            zcode_session_id: racedEarly.session_id,
+            error_code: racedEarly.error_code ?? null,
+            error: racedEarly.status === "failed" ? racedEarly.summary : null,
+            worker_pid: null,
+            cancel_requested: null,
+            cleanup_unverified: racedEarly.error_code === "cleanup_failed",
+            zcode_pid: racedEarly.error_code === "cleanup_failed" ? status.zcode_pid ?? null : null
+          });
+          this.#pumpLocked();
+          return toPublicStatus(this.#store.readStatus(taskId));
+        }
+        const finishedAt2 = this.#now().toISOString();
+        const reused = verdicts.worker.reason_code.startsWith("pid_reused");
+        const result2 = buildTaskResult({
+          task,
+          attempt: status.attempt,
+          startedAt: status.started_at,
+          finishedAt: finishedAt2,
+          outcome: null,
+          failure: {
+            code: "cancelled",
+            message: reused ? `cancelled by request; the recorded worker pid ${String(pid)} was reused by another process, so the previous executor had already exited` : `cancelled by request; the recorded worker pid ${String(pid)} no longer exists`
+          },
+          cancelled: true,
+          sessionId: status.zcode_session_id
+        });
+        this.#store.writeResult(taskId, result2);
+        this.#store.appendEvent(taskId, "cancelled", "Cancellation confirmed without termination: the recorded worker process was already gone", { reason_code: verdicts.worker.reason_code }, finishedAt2);
+        this.#store.writeStatus(taskId, {
+          status: "cancelled",
+          finished_at: finishedAt2,
+          worker_pid: null,
+          cleanup_unverified: verdicts.runtime.state !== "exited" && status.zcode_pid !== null,
+          zcode_pid: verdicts.runtime.state === "exited" ? null : status.zcode_pid,
+          cancel_requested: null
+        });
+        this.#pumpLocked();
         return toPublicStatus(this.#store.readStatus(taskId));
       }
       const finishedSafely = () => {
@@ -23533,7 +24825,7 @@ var BridgeTaskManager = class _BridgeTaskManager {
           this.#store.writeStatus(taskId, {
             error: `cancellation could not be verified: ${message}`
           });
-          this.#store.appendEvent(taskId, "cancel_failed", message);
+          this.#store.appendEvent(taskId, "cancel_failed", message, void 0, this.#now().toISOString());
           throw new TaskManagerError(
             "CANCEL_FAILED",
             `process-tree termination for task ${taskId} (pid ${pid}) could not be verified: ${message}`
@@ -23586,87 +24878,6 @@ var BridgeTaskManager = class _BridgeTaskManager {
     });
   }
   // ---- internals (must be called under the mutex) ----
-  #reconcileOneLocked(taskId) {
-    const status = this.#store.readStatus(taskId);
-    if (status.status === "running") {
-      this.#reconcileRunningLocked(taskId, status);
-    }
-  }
-  #reconcileRunningLocked(taskId, status) {
-    const persistedResult = this.#store.readResult(taskId);
-    if (persistedResult && persistedResult.attempt === status.attempt) {
-      this.#store.writeStatus(taskId, {
-        status: persistedResult.status,
-        finished_at: persistedResult.finished_at,
-        exit_code: persistedResult.exit_code,
-        zcode_session_id: persistedResult.session_id,
-        error_code: persistedResult.error_code ?? null,
-        error: persistedResult.status === "failed" ? persistedResult.summary : null,
-        worker_pid: null,
-        cleanup_unverified: persistedResult.error_code === "cleanup_failed"
-      });
-      return;
-    }
-    const pid = status.worker_pid;
-    const heartbeat = this.#store.readWorkerHeartbeat(taskId, status.attempt);
-    const heartbeatAt = heartbeat ? Date.parse(heartbeat.heartbeat_at) : Number.NaN;
-    const heartbeatAgeMs = this.#now().getTime() - heartbeatAt;
-    if (pid !== null && heartbeat?.worker_pid === pid && heartbeatAgeMs >= 0 && heartbeatAgeMs <= 15e3) return;
-    const alive = pid !== null && this.#isProcessRunning(pid);
-    if (alive) return;
-    const runtimePid = status.zcode_pid ?? null;
-    if (runtimePid && this.#isProcessRunning(runtimePid)) {
-      if (this.#recoverOutcomeCheckpoint(taskId, status, runtimePid, false)) return;
-      this.#store.writeStatus(taskId, { cleanup_unverified: true, error_code: "cleanup_failed", error: "Worker exited while ZCode remains alive; cancel to verify runtime cleanup" });
-      return;
-    }
-    if (this.#recoverOutcomeCheckpoint(taskId, status, runtimePid, true)) return;
-    const startedAtMs = status.started_at === null ? Number.NaN : Date.parse(status.started_at);
-    const withinGrace = Number.isFinite(startedAtMs) && this.#now().getTime() - startedAtMs < this.#workerStartGraceMs;
-    const workerBegan = this.#store.readAttemptMeta(taskId, status.attempt, "started.json") !== null;
-    if (pid === null && withinGrace) return;
-    if (pid !== null && workerBegan && withinGrace) return;
-    if (!workerBegan) {
-      if (this.#store.claimAttemptRespawn(taskId, status.attempt)) {
-        const respawned = this.#spawnWorker(this.#dataRoot, taskId, status.attempt);
-        this.#store.writeStatus(taskId, { worker_pid: respawned.pid });
-        this.#store.appendEvent(
-          taskId,
-          "worker_respawned",
-          `Bridge respawned the worker: previous pid ${String(pid)} exited before writing any task state`,
-          { worker_pid: respawned.pid, previous_pid: pid, attempt: status.attempt }
-        );
-        return;
-      }
-      const claimedAt = this.#store.respawnClaimedAt(taskId, status.attempt);
-      if (claimedAt && Date.now() - claimedAt.getTime() < _BridgeTaskManager.RESPAWN_IN_FLIGHT_MS) return;
-    }
-    const task = this.#store.readTask(taskId);
-    const finishedAt = this.#now().toISOString();
-    const workerStderr = this.#store.readAttemptText(taskId, status.attempt, "worker-stderr.log") ?? "";
-    const failure2 = {
-      code: "worker_lost",
-      message: `worker pid ${String(pid)} is gone without a terminal result${workerStderr.trim() ? "; diagnostic stderr is available in private attempt evidence" : "; worker stderr was empty"}`
-    };
-    const result = buildTaskResult({
-      task,
-      attempt: status.attempt,
-      startedAt: status.started_at,
-      finishedAt,
-      outcome: null,
-      failure: failure2,
-      sessionId: status.zcode_session_id
-    });
-    this.#store.writeResult(taskId, result);
-    this.#store.writeStatus(taskId, {
-      status: "failed",
-      finished_at: finishedAt,
-      error_code: "worker_lost",
-      error: result.summary,
-      worker_pid: null
-    });
-    this.#store.appendEvent(taskId, "error", result.summary, { error_code: "worker_lost" }, finishedAt);
-  }
   #recoverOutcomeCheckpoint(taskId, status, runtimePid, runtimeExited) {
     const checkpoint = this.#store.readAttemptMeta(taskId, status.attempt, "outcome-checkpoint.json");
     if (!checkpoint || typeof checkpoint.response !== "string") return false;
@@ -23799,7 +25010,7 @@ var BridgeTaskManager = class _BridgeTaskManager {
       return;
     }
     this.#store.patchRunningAttempt(taskId, status.attempt, { worker_pid: pid });
-    this.#store.appendEvent(taskId, "worker_started", "Bridge worker started", { worker_pid: pid });
+    this.#store.appendEvent(taskId, "worker_started", "Bridge worker started", { worker_pid: pid }, this.#now().toISOString());
   }
   #requireTask(taskId) {
     if (!this.#store.hasTask(taskId)) {
@@ -23906,6 +25117,9 @@ function pathsOverlap(left, right) {
   const inside = (value) => value === "" || !path7.isAbsolute(value) && value !== ".." && !value.startsWith(`..${path7.sep}`);
   return inside(relative) || inside(reverse);
 }
+function encodeScanCursor(cursor) {
+  return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
+}
 function stableJson2(value) {
   if (Array.isArray(value)) return `[${value.map(stableJson2).join(",")}]`;
   if (value && typeof value === "object") return `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${stableJson2(item)}`).join(",")}}`;
@@ -24005,7 +25219,9 @@ var zcodeEventsInputSchema = strictObject({
   after_seq: number2().int().nonnegative().optional(),
   limit: number2().int().min(1).max(200).optional(),
   wait_ms: number2().int().min(0).max(25e3).optional(),
-  view: _enum(["raw", "summary"]).optional()
+  view: _enum(["raw", "summary"]).optional(),
+  scan_cursor: string2().max(2048).optional(),
+  max_bytes: number2().int().min(1024).max(33554432).optional()
 });
 var zcodeInteractionReplyInputSchema = strictObject({
   task_id: taskIdSchema,
@@ -24032,6 +25248,25 @@ var taskReceiptSchema = object({
   status: _enum(["queued", "running"]),
   created_at: string2()
 });
+var taskObservationSchema = object({
+  schema_version: literal(1),
+  worker: object({ state: _enum(["alive", "exited", "unknown"]), reason_code: string2(), observed_at: string2() }),
+  runtime: object({ state: _enum(["alive", "exited", "unknown"]), reason_code: string2(), observed_at: string2() }),
+  activity: object({ code: string2(), reason_code: string2(), observed_at: string2() }),
+  result: _enum(["absent", "checkpointed", "committed"]),
+  cleanup: _enum(["not_started", "pending", "verified", "unverified"]),
+  stalled: boolean2(),
+  evidence: object({
+    heartbeat_age_ms: number2().nullable(),
+    last_event_age_ms: number2().nullable(),
+    last_event_seq: number2().nullable(),
+    last_event_type: string2().nullable(),
+    session_id: string2().nullable(),
+    turn_id: string2().nullable(),
+    attempt: number2().int(),
+    status_updated_at: string2().nullable()
+  })
+});
 var taskStatusRecordSchema = object({
   task_id: string2(),
   status: _enum([
@@ -24051,7 +25286,43 @@ var taskStatusRecordSchema = object({
   zcode_session_id: string2().nullable(),
   exit_code: number2().int().nullable(),
   error_code: string2().optional(),
-  error: string2().optional()
+  error: string2().optional(),
+  observation: taskObservationSchema.optional()
+});
+var normalizedUsageSchema = object({
+  source: string2().nullable(),
+  scope: string2().nullable(),
+  observed_at: string2().nullable(),
+  finality: _enum(["reported", "derived", "partial"]),
+  input_tokens: number2().int().nullable(),
+  output_tokens: number2().int().nullable(),
+  total_tokens: number2().int().nullable(),
+  cached_input_tokens: number2().int().nullable(),
+  reasoning_tokens: number2().int().nullable(),
+  conflicts: array(string2()),
+  dropped_unknown_keys: number2().int()
+});
+var executionProfileSchema = object({
+  executor: string2(),
+  provider_id: string2().nullable(),
+  model_id: string2().nullable(),
+  requested_model: string2().nullable(),
+  requested_reasoning_level: string2().nullable(),
+  effective_reasoning_level: string2().nullable(),
+  effective_reasoning_level_source: _enum(["runtime", "not_reported"]),
+  selection_source: string2().nullable(),
+  effective_at: string2().nullable(),
+  session_id: string2().nullable(),
+  turn_id: string2().nullable()
+});
+var attemptTimingSchema = object({
+  queued_ms: number2().int().nullable(),
+  execution_ms: number2().int().nullable(),
+  turn_ms: number2().int().nullable(),
+  finalize_ms: number2().int().nullable(),
+  wall_ms: number2().int().nullable(),
+  derived: boolean2(),
+  notes: array(string2())
 });
 var taskResultSchema = object({
   task_id: string2(),
@@ -24074,7 +25345,10 @@ var taskResultSchema = object({
     tests: array(testReportSchema).optional(),
     issues: array(string2()).optional(),
     needs_master_decision: boolean2().optional()
-  }).optional()
+  }).optional(),
+  usage: normalizedUsageSchema.nullable().optional(),
+  model: executionProfileSchema.nullable().optional(),
+  timing: attemptTimingSchema.nullable().optional()
 });
 var taskProgressEventSchema = object({
   seq: number2().int().positive(),
@@ -24089,7 +25363,18 @@ var taskProgressPageSchema = object({
   events: array(taskProgressEventSchema),
   next_seq: number2().int().nonnegative(),
   has_more: boolean2(),
-  omitted_events: number2().int().nonnegative().optional()
+  omitted_events: number2().int().nonnegative().optional(),
+  observation: taskObservationSchema.optional(),
+  scan_incomplete: boolean2().optional(),
+  scan_cursor: string2().optional(),
+  scan_metrics: object({
+    bytes_read: number2().int(),
+    records_scanned: number2().int(),
+    invalid_lines: number2().int(),
+    corrupt_count: number2().int(),
+    first_corrupt_offset: number2().int().nullable(),
+    index_fallback: number2().int()
+  }).optional()
 });
 var toolErrorSchema = object({
   error: object({
@@ -24135,17 +25420,410 @@ var defaultModelSchema = object({
   model: modelSelectionSchema.nullable()
 });
 
+// src/ledger/mcp.ts
+import { createHash as createHash3 } from "node:crypto";
+
+// src/ledger/bridge.ts
+init_process_lock();
+import { existsSync as existsSync5, mkdirSync as mkdirSync4, readFileSync as readFileSync5, writeFileSync as writeFileSync4 } from "node:fs";
+import path8 from "node:path";
+
+// src/ledger/types.ts
+var LedgerError = class extends Error {
+  code;
+  constructor(code, message) {
+    super(message);
+    this.code = code;
+  }
+};
+
+// src/ledger/bridge.ts
+function executorTaskIdFor(projectTaskId, operationId) {
+  const raw = `b-${projectTaskId}-${operationId}`.replace(/[^A-Za-z0-9_-]/gu, "_");
+  return raw.slice(0, 64).replace(/[_-]+$/u, "");
+}
+var LedgerBridgeLink = class {
+  #ledger;
+  #ledgerDir;
+  #cursorFile;
+  constructor(ledger) {
+    this.#ledger = ledger;
+    this.#ledgerDir = path8.join(ledger.root, ".agent-ledger", "ledger");
+    this.#cursorFile = path8.join(this.#ledgerDir, "bridge-cursors.json");
+  }
+  /** Persists the run intent, then dispatches; every retry of the same
+   * operation keeps the same run and the same executor task id (C2-01). */
+  async dispatchTask(manager, plan) {
+    const task = this.#ledger.getTask(plan.project_task_id);
+    if (task.status === "done" || task.status === "cancelled") {
+      throw new LedgerError("LEDGER_STATE", `cannot dispatch a ${task.status} project task`);
+    }
+    const executorTaskId = executorTaskIdFor(plan.project_task_id, plan.operation_id);
+    const run = this.#ledger.startRun({
+      task_id: plan.project_task_id,
+      executor: { kind: "zcode-bridge" },
+      executor_ref: executorTaskId,
+      run_id: findRunIdByRef(this.#ledger, executorTaskId) ?? void 0
+    }, `dispatch:${plan.operation_id}`, plan.actor ?? { source: "host", id: "local" });
+    try {
+      const receipt = await manager.createTask(plan.buildTaskPackage(executorTaskId));
+      this.#ledger.updateRun(run.run_id, {
+        status: receipt.status === "running" ? "started" : "accepted",
+        executor_ref: executorTaskId
+      }, `accepted:${plan.operation_id}`, { source: "bridge", id: "ledger-link" });
+      return { run_id: run.run_id, executor_task_id: executorTaskId, receipt, status: "accepted" };
+    } catch {
+      this.#ledger.updateRun(run.run_id, {
+        status: "dispatch_unknown",
+        executor_ref: executorTaskId
+      }, `dispatch-unknown:${plan.operation_id}`, { source: "bridge", id: "ledger-link" });
+      return { run_id: run.run_id, executor_task_id: executorTaskId, receipt: null, status: "dispatch_unknown" };
+    }
+  }
+  /** Cancels through the executor API and records request + confirmation. */
+  async cancelRun(manager, runId, operationId) {
+    const run = this.#requireRun(runId);
+    if (run.executor.kind !== "zcode-bridge" || !run.executor_ref) {
+      throw new LedgerError("LEDGER_STATE", "only Bridge runs can be cancelled through the executor API");
+    }
+    const status = await manager.cancelTask(run.executor_ref);
+    this.#ledger.updateRun(runId, {
+      status: status.status === "cancelled" ? "cancelled" : run.status
+    }, `cancel:${operationId}`, { source: "bridge", id: "ledger-link" });
+    return status;
+  }
+  /** Projects Bridge evidence onto the run. Idempotent: replaying the same
+   * Bridge events appends nothing (journal operation dedupe by run+attempt+seq). */
+  async syncRunFromBridge(manager, runId) {
+    const run = this.#requireRun(runId);
+    if (run.executor.kind !== "zcode-bridge" || !run.executor_ref) {
+      throw new LedgerError("LEDGER_STATE", "projection requires a Bridge run");
+    }
+    const cursorState = this.#readCursors();
+    const cursor = cursorState[runId]?.last_seq ?? 0;
+    let projected = 0;
+    let lastSeq = cursor;
+    const page = await manager.getEvents({ task_id: run.executor_ref, after_seq: cursor, limit: 200 });
+    const status = await manager.getStatus(run.executor_ref).catch(() => null);
+    const attempt = status?.attempt ?? null;
+    for (const event of page.events) {
+      const operationId = `proj:${runId}:a${String(attempt)}:s${String(event.seq)}`;
+      const projection = projectEvent(event.type, event.details);
+      if (!projection) {
+        lastSeq = Math.max(lastSeq, event.seq);
+        continue;
+      }
+      try {
+        this.#ledger.updateRun(runId, projection, operationId, { source: "bridge", id: "ledger-link" });
+        projected += 1;
+      } catch (error2) {
+        if (!(error2 instanceof LedgerError) || error2.code !== "LEDGER_CONFLICT") throw error2;
+      }
+      lastSeq = Math.max(lastSeq, event.seq);
+    }
+    if (status && ["completed", "failed", "cancelled", "waiting_for_master"].includes(status.status)) {
+      const result = await manager.getResult(run.executor_ref).catch(() => null);
+      const operationId = `proj:${runId}:terminal:${status.status}:${String(status.attempt)}`;
+      try {
+        this.#ledger.updateRun(runId, {
+          status: status.status === "completed" || status.status === "waiting_for_master" ? "finished" : status.status === "cancelled" ? "cancelled" : "failed",
+          // Only a runtime-confirmed model identity may overwrite the
+          // projection; an all-null worker profile means "not reported".
+          model: result?.model?.model_id ? { provider_id: result.model.provider_id, model_id: result.model.model_id, requested_model: result.model.requested_model, effective_reasoning_level: result.model.effective_reasoning_level, source: result.model.selection_source } : void 0,
+          usage: result?.usage ?? void 0,
+          timing: result?.timing ?? void 0,
+          report_ref: result ? { summary: result.summary.slice(0, 500), files_changed: result.files_changed, tests: result.tests.map((test) => ({ command: test.command, status: test.status })) } : void 0
+        }, operationId, { source: "bridge", id: "ledger-link" });
+        projected += 1;
+      } catch (error2) {
+        if (!(error2 instanceof LedgerError) || error2.code !== "LEDGER_CONFLICT") throw error2;
+      }
+    }
+    if (lastSeq !== cursor) this.#writeCursor(runId, run.executor_ref, lastSeq);
+    return { projected, cursor: lastSeq };
+  }
+  #requireRun(runId) {
+    const run = this.#ledger.listRuns().find((candidate) => candidate.run_id === runId);
+    if (!run) throw new LedgerError("LEDGER_NOT_FOUND", `unknown run: ${runId}`);
+    return run;
+  }
+  #readCursors() {
+    if (!existsSync5(this.#cursorFile)) return {};
+    try {
+      return JSON.parse(readFileSync5(this.#cursorFile, "utf8"));
+    } catch {
+      return {};
+    }
+  }
+  #writeCursor(runId, executorTaskId, lastSeq) {
+    const cursors = this.#readCursors();
+    cursors[runId] = { executor_task_id: executorTaskId, last_seq: lastSeq };
+    mkdirSync4(this.#ledgerDir, { recursive: true });
+    const release = tryAcquireProcessLock(path8.join(this.#ledgerDir, "cursor.lock"));
+    if (!release) return;
+    try {
+      writeFileSync4(this.#cursorFile, JSON.stringify(cursors, null, 2), { mode: 384 });
+    } finally {
+      release();
+    }
+  }
+};
+function findRunIdByRef(ledger, executorTaskId) {
+  return ledger.listRuns().find((run) => run.executor_ref === executorTaskId)?.run_id ?? null;
+}
+function projectEvent(type, details) {
+  switch (type) {
+    case "queued":
+      return { status: "accepted" };
+    case "worker_started":
+      return { status: "started" };
+    case "model_selected":
+      return {
+        model: {
+          provider_id: typeof details?.["provider_id"] === "string" ? details["provider_id"] : null,
+          model_id: typeof details?.["model_id"] === "string" ? details["model_id"] : null,
+          requested_model: typeof details?.["requested_model"] === "string" ? details["requested_model"] : null,
+          effective_reasoning_level: typeof details?.["reasoning_level"] === "string" ? details["reasoning_level"] : null,
+          source: typeof details?.["model_source"] === "string" ? details["model_source"] : null
+        }
+      };
+    case "interaction_requested":
+      return { status: "started" };
+    // blocking fact stays in the event log; run status unchanged
+    case "cleanup_unverified":
+      return { status: "finished" };
+    default:
+      return null;
+  }
+}
+
+// src/ledger/mcp.ts
+function errorResult(code, message) {
+  return { isError: true, content: [{ type: "text", text: `${code}: ${message}` }], structuredContent: { error: { code, message } } };
+}
+function okResult(data) {
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }], structuredContent: data };
+}
+function mapLedgerError(error2) {
+  if (error2 instanceof LedgerError) return errorResult(error2.code, error2.message);
+  if (error2 instanceof TaskManagerError) return errorResult(error2.code, error2.message);
+  throw error2;
+}
+var hostActor = (options) => ({ source: "host", id: options.hostActorId ?? "controlled-host-entry" });
+var projectIdSchema = string2().trim().min(1).optional();
+var taskIdSchema2 = string2().trim().min(1);
+var acSchema = object({ id: string2().trim().min(1), text: string2().trim().min(1) });
+function registerLedgerTools(server, options) {
+  const link = new LedgerBridgeLink(options.store);
+  server.registerTool("ledger_project_create", {
+    title: "Create a project task ledger project",
+    description: "Opt-in project ledger: create a project bound to an explicit absolute workspace. The ledger is independent of Bridge execution state.",
+    inputSchema: strictObject({ project_id: string2().trim().min(1).optional(), title: string2().trim().min(1), workspace: string2().trim().min(1) })
+  }, async (args) => {
+    try {
+      return okResult({ project: options.store.createProject(args, `mcp:project:${args.project_id ?? args.title}:${fingerprintOf(args)}`) });
+    } catch (error2) {
+      return mapLedgerError(error2);
+    }
+  });
+  server.registerTool("ledger_summary", {
+    title: "Read the project ledger summary",
+    description: "Read-only: task list with statuses, review verdicts, and a coverage note. Task-count ratios are never overall engineering completion.",
+    inputSchema: strictObject({ project_id: projectIdSchema })
+  }, async (args) => {
+    try {
+      return okResult(options.store.summary(args.project_id));
+    } catch (error2) {
+      return mapLedgerError(error2);
+    }
+  });
+  server.registerTool("ledger_task_create", {
+    title: "Create a ledger project task",
+    description: "Create a long-lived ProjectTask with numbered acceptance criteria, constraints, dependencies (cycles refused), and an explicit workspace binding.",
+    inputSchema: strictObject({
+      task_id: string2().trim().regex(/^[a-z][a-z0-9_-]{2,63}$/u).optional(),
+      project_id: projectIdSchema,
+      goal: string2().trim().min(1),
+      acceptance_criteria: array(acSchema).min(1),
+      workspace: string2().trim().min(1),
+      dependencies: array(string2()).optional(),
+      epic_id: string2().trim().min(1).nullable().optional(),
+      assignee: string2().trim().min(1).nullable().optional()
+    })
+  }, async (args) => {
+    try {
+      return okResult({ task: options.store.createTask({ ...args, constraints: { allowed_paths: [], forbidden_paths: [] } }, `mcp:task:${args.task_id ?? args.goal}:${fingerprintOf(args)}`) });
+    } catch (error2) {
+      return mapLedgerError(error2);
+    }
+  });
+  server.registerTool("ledger_task_update", {
+    title: "Update a ledger project task definition",
+    description: "Update goal/AC/dependencies. A definition change bumps the definition version and invalidates prior approvals.",
+    inputSchema: strictObject({
+      task_id: taskIdSchema2,
+      goal: string2().trim().min(1).optional(),
+      acceptance_criteria: array(acSchema).optional(),
+      dependencies: array(string2()).optional(),
+      assignee: string2().trim().min(1).nullable().optional(),
+      open_decisions: array(string2()).optional(),
+      expected_revision: number2().int().nonnegative().optional()
+    })
+  }, async (args) => {
+    try {
+      const { task_id, expected_revision, ...patch } = args;
+      return okResult({ task: options.store.updateTask(task_id, patch, `mcp:update:${task_id}:${String(expected_revision ?? options.store.revision)}`, hostActor(options), expected_revision) });
+    } catch (error2) {
+      return mapLedgerError(error2);
+    }
+  });
+  server.registerTool("ledger_task_get", {
+    title: "Read one ledger task",
+    description: "Read-only task detail: definition, ACs, exemptions, runs, and latest review.",
+    inputSchema: strictObject({ task_id: taskIdSchema2 })
+  }, async (args) => {
+    try {
+      const task = options.store.getTask(args.task_id);
+      const runs = options.store.listRuns({ task_id: args.task_id });
+      const review = options.store.latestReview(args.task_id);
+      return okResult({ task, runs, latest_review: review });
+    } catch (error2) {
+      return mapLedgerError(error2);
+    }
+  });
+  server.registerTool("ledger_task_history", {
+    title: "Read ledger task history",
+    description: "Read-only journal history for one task (change authority).",
+    inputSchema: strictObject({ task_id: taskIdSchema2 })
+  }, async (args) => {
+    try {
+      return okResult({ task_id: args.task_id, history: options.store.taskHistory(args.task_id) });
+    } catch (error2) {
+      return mapLedgerError(error2);
+    }
+  });
+  server.registerTool("ledger_run_start", {
+    title: "Start a ledger run and dispatch to the Bridge",
+    description: "Persists the run intent with a deterministic executor task id BEFORE dispatching, then calls zcode_task internally. A lost receipt recovers the same execution; retries reuse the same operation_id. executor 'manual' records external work with evidence instead of dispatching.",
+    inputSchema: strictObject({
+      task_id: taskIdSchema2,
+      operation_id: string2().trim().min(1).max(100),
+      executor: _enum(["zcode-bridge", "manual"]),
+      manual_evidence: string2().trim().min(1).optional(),
+      task_package: object({
+        objective: string2().min(1),
+        requirements: array(string2()),
+        allowed_paths: array(string2()),
+        forbidden_paths: array(string2()),
+        acceptance_criteria: array(string2()),
+        test_commands: array(string2()),
+        context: string2().optional(),
+        timeout_ms: number2().int().min(6e4).max(144e5).optional()
+      }).optional()
+    })
+  }, async (args) => {
+    try {
+      if (args.executor === "manual") {
+        const run = options.store.startRun({ task_id: args.task_id, executor: { kind: "manual" }, manual_evidence: args.manual_evidence }, `mcp:run:${args.operation_id}`, hostActor(options));
+        return okResult({ run_id: run.run_id, status: "recorded" });
+      }
+      if (!args.task_package) {
+        return errorResult("LEDGER_INVALID", "executor zcode-bridge requires task_package (the workspace/worktree come from the ledger task binding)");
+      }
+      const task = options.store.getTask(args.task_id);
+      const outcome = await link.dispatchTask(options.taskManager, {
+        project_task_id: args.task_id,
+        operation_id: args.operation_id,
+        buildTaskPackage: (executorTaskId) => ({
+          task_id: executorTaskId,
+          workspace: task.workspace,
+          objective: args.task_package.objective,
+          requirements: args.task_package.requirements,
+          allowed_paths: args.task_package.allowed_paths,
+          forbidden_paths: args.task_package.forbidden_paths,
+          acceptance_criteria: args.task_package.acceptance_criteria,
+          test_commands: args.task_package.test_commands,
+          ...args.task_package.context !== void 0 ? { context: args.task_package.context } : {},
+          ...args.task_package.timeout_ms !== void 0 ? { timeout_ms: args.task_package.timeout_ms } : {}
+        }),
+        actor: hostActor(options)
+      });
+      return okResult(outcome);
+    } catch (error2) {
+      return mapLedgerError(error2);
+    }
+  });
+  server.registerTool("ledger_run_link", {
+    title: "Project Bridge evidence onto a ledger run",
+    description: "Reads the Bridge task's events and result, projects accepted/started/model-confirmation/finished facts onto the run (idempotent). Never derives the business status: DONE requires the review gate.",
+    inputSchema: strictObject({ run_id: string2().trim().min(1) })
+  }, async (args) => {
+    try {
+      return okResult(await link.syncRunFromBridge(options.taskManager, args.run_id));
+    } catch (error2) {
+      return mapLedgerError(error2);
+    }
+  });
+  server.registerTool("ledger_review", {
+    title: "Record a per-AC review",
+    description: "Controlled host entry: records per-acceptance-criterion verdicts with evidence and binds deliverable fingerprints to the current definition version. Rejection returns the task to ready. Worker self-reports cannot call this.",
+    inputSchema: strictObject({
+      task_id: taskIdSchema2,
+      results: array(object({ ac_id: string2().trim().min(1), verdict: _enum(["pass", "fail", "not_verified"]), evidence: string2().trim().min(1) })).min(1),
+      deliverable_fingerprints: array(object({ path: string2().trim().min(1), sha256: string2().trim().min(1) })).min(1),
+      verdict: _enum(["approved", "rejected"]),
+      reason: string2().trim().min(1).nullable().optional()
+    })
+  }, async (args) => {
+    try {
+      const outcome = options.store.recordReview(args, `mcp:review:${args.task_id}:${fingerprintOf(args)}`, hostActor(options));
+      return okResult(outcome);
+    } catch (error2) {
+      return mapLedgerError(error2);
+    }
+  });
+  server.registerTool("ledger_complete", {
+    title: "Complete a project task (DONE gate)",
+    description: "Controlled host entry: DONE requires a current approved review bound to the current definition version, every AC passed or explicitly exempted, and a delivery receipt for the bound workspace. Refuses otherwise.",
+    inputSchema: strictObject({
+      task_id: taskIdSchema2,
+      delivery: object({ accepted: literal(true), workspace: string2().trim().min(1), evidence: string2().trim().min(1) }),
+      deliverable_fingerprints: array(object({ path: string2().trim().min(1), sha256: string2().trim().min(1) })).optional()
+    })
+  }, async (args) => {
+    try {
+      return okResult({ task: options.store.completeTask(args, `mcp:complete:${args.task_id}:${fingerprintOf(args)}`, hostActor(options)) });
+    } catch (error2) {
+      return mapLedgerError(error2);
+    }
+  });
+  server.registerTool("ledger_reopen", {
+    title: "Reopen a done project task",
+    description: "Explicit reopen event with a reason; prior DONE/review history is preserved, never overwritten.",
+    inputSchema: strictObject({ task_id: taskIdSchema2, reason: string2().trim().min(1) })
+  }, async (args) => {
+    try {
+      return okResult({ task: options.store.reopenTask(args.task_id, args.reason, `mcp:reopen:${args.task_id}:${fingerprintOf(args)}`, hostActor(options)) });
+    } catch (error2) {
+      return mapLedgerError(error2);
+    }
+  });
+}
+function fingerprintOf(value) {
+  return createHash3("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
+}
+
 // src/mcp/server.ts
 var SERVER_NAME = "codex-zcode-bridge";
 var SERVER_VERSION = "1.0.5"; // x-release-please-version
 var EXECUTION_NOT_VERDICT = "Results describe Bridge/ZCode execution only: status 'completed' means the invocation and report normalization finished, NOT that the calling host accepted the work. the calling host must independently review the workspace diff and checks before deciding PASS.";
-function okResult(data) {
+function okResult2(data) {
   return {
     content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
     structuredContent: data
   };
 }
-function errorResult(code, message) {
+function errorResult2(code, message) {
   return {
     isError: true,
     content: [{ type: "text", text: `${code}: ${message}` }],
@@ -24155,12 +25833,12 @@ function errorResult(code, message) {
 async function runTool(operation) {
   try {
     const data = await operation();
-    return okResult(data);
+    return okResult2(data);
   } catch (error2) {
     if (error2 instanceof TaskManagerError) {
-      return errorResult(error2.code, error2.message);
+      return errorResult2(error2.code, error2.message);
     }
-    if (error2 instanceof BridgeError) return errorResult(error2.code.toUpperCase(), error2.message);
+    if (error2 instanceof BridgeError) return errorResult2(error2.code.toUpperCase(), error2.message);
     throw error2;
   }
 }
@@ -24177,7 +25855,7 @@ function createBridgeServer(options) {
       outputSchema: doctorReportSchema
     },
     async () => {
-      if (!options.doctor) return errorResult("DOCTOR_UNAVAILABLE", "Bridge doctor is unavailable in this server instance");
+      if (!options.doctor) return errorResult2("DOCTOR_UNAVAILABLE", "Bridge doctor is unavailable in this server instance");
       return runTool(() => options.doctor());
     }
   );
@@ -24190,7 +25868,7 @@ function createBridgeServer(options) {
       outputSchema: modelCatalogSchema
     },
     async (args) => {
-      if (!options.modelSettings) return errorResult("MODEL_SETTINGS_UNAVAILABLE", "model settings are unavailable in this server instance");
+      if (!options.modelSettings) return errorResult2("MODEL_SETTINGS_UNAVAILABLE", "model settings are unavailable in this server instance");
       return runTool(() => options.modelSettings.listModels(args.workspace));
     }
   );
@@ -24203,7 +25881,7 @@ function createBridgeServer(options) {
       outputSchema: defaultModelSchema
     },
     async () => {
-      if (!options.modelSettings) return errorResult("MODEL_SETTINGS_UNAVAILABLE", "model settings are unavailable in this server instance");
+      if (!options.modelSettings) return errorResult2("MODEL_SETTINGS_UNAVAILABLE", "model settings are unavailable in this server instance");
       return runTool(() => options.modelSettings.getDefaultModel());
     }
   );
@@ -24216,7 +25894,7 @@ function createBridgeServer(options) {
       outputSchema: defaultModelSchema
     },
     async (args) => {
-      if (!options.modelSettings) return errorResult("MODEL_SETTINGS_UNAVAILABLE", "model settings are unavailable in this server instance");
+      if (!options.modelSettings) return errorResult2("MODEL_SETTINGS_UNAVAILABLE", "model settings are unavailable in this server instance");
       return runTool(() => options.modelSettings.setDefaultModel(args));
     }
   );
@@ -24229,7 +25907,7 @@ function createBridgeServer(options) {
       outputSchema: defaultModelSchema
     },
     async () => {
-      if (!options.modelSettings) return errorResult("MODEL_SETTINGS_UNAVAILABLE", "model settings are unavailable in this server instance");
+      if (!options.modelSettings) return errorResult2("MODEL_SETTINGS_UNAVAILABLE", "model settings are unavailable in this server instance");
       return runTool(() => options.modelSettings.clearDefaultModel());
     }
   );
@@ -24262,7 +25940,7 @@ function createBridgeServer(options) {
       outputSchema: taskProgressPageSchema
     },
     async (args) => {
-      if (!manager.getEvents) return errorResult("EVENTS_UNAVAILABLE", "task manager does not provide progress events");
+      if (!manager.getEvents) return errorResult2("EVENTS_UNAVAILABLE", "task manager does not provide progress events");
       return runTool(() => manager.getEvents(args));
     }
   );
@@ -24274,7 +25952,7 @@ function createBridgeServer(options) {
       inputSchema: zcodeInteractionReplyInputSchema
     },
     async (args) => {
-      if (!manager.replyToInteraction) return errorResult("INTERACTIONS_UNAVAILABLE", "task manager does not provide ZCode interaction replies");
+      if (!manager.replyToInteraction) return errorResult2("INTERACTIONS_UNAVAILABLE", "task manager does not provide ZCode interaction replies");
       return runTool(() => manager.replyToInteraction(args));
     }
   );
@@ -24308,6 +25986,9 @@ function createBridgeServer(options) {
     },
     async (args) => runTool(() => manager.cancelTask(args.task_id))
   );
+  if (options.ledger) {
+    registerLedgerTools(server, options.ledger);
+  }
   if (options.enableExperiments) server.registerTool(
     "zcode_progress_probe",
     {
@@ -24349,22 +26030,22 @@ function createBridgeServer(options) {
 }
 
 // src/runtime/doctor.ts
-import { accessSync as accessSync2, constants, existsSync as existsSync6, statSync as statSync6 } from "node:fs";
+import { accessSync as accessSync2, constants, existsSync as existsSync7, statSync as statSync6 } from "node:fs";
 import { execFileSync } from "node:child_process";
 
 // src/runtime/account-provider.ts
-import { createHash as createHash3 } from "node:crypto";
-import { existsSync as existsSync5, readFileSync as readFileSync4 } from "node:fs";
-import path8 from "node:path";
+import { createHash as createHash4 } from "node:crypto";
+import { existsSync as existsSync6, readFileSync as readFileSync6 } from "node:fs";
+import path9 from "node:path";
 function buildAccountProviderPayload(config2) {
   const table = readJson(config2.providerBuiltinConfigFile);
   const providerRules = readProviderRules(table).filter(isRecord).map((rule) => rule).filter((rule) => rule.config?.access?.type === "zhipu-account" && typeof rule.providerId === "string");
   if (!providerRules.length) return null;
   const dataDir = zcodeV2DataDir(config2.providerPersonalConfigFile);
   if (!dataDir) return null;
-  const credentials = readJson(path8.join(dataDir, "config.json"));
+  const credentials = readJson(path9.join(dataDir, "config.json"));
   const credentialProviders = asRecord2(credentials?.provider);
-  const cache = readJson(path8.join(dataDir, "coding-plan-cache.json"));
+  const cache = readJson(path9.join(dataDir, "coding-plan-cache.json"));
   const cacheItems = asRecord2(asRecord2(cache?.entryStatus).items);
   const providers = {};
   const states = {};
@@ -24386,10 +26067,10 @@ function buildAccountProviderPayload(config2) {
     };
   }
   const revision = typeof table?.revision === "number" ? table.revision : 0;
-  const resolvedBuiltinPath = path8.resolve(config2.providerBuiltinConfigFile);
+  const resolvedBuiltinPath = path9.resolve(config2.providerBuiltinConfigFile);
   return {
     revision: `account:codex-zcode-bridge:${Date.now()}`,
-    basedOnZCodeBuiltinRevision: `zcode-builtin:${revision}:${createHash3("sha256").update(resolvedBuiltinPath).digest("hex")}`,
+    basedOnZCodeBuiltinRevision: `zcode-builtin:${revision}:${createHash4("sha256").update(resolvedBuiltinPath).digest("hex")}`,
     providers,
     states
   };
@@ -24408,8 +26089,8 @@ function runtimeAuthReply(providerId, config2) {
   const legacyId = configProviderId(providerId, rule);
   const dataDir = zcodeV2DataDir(config2.providerPersonalConfigFile);
   if (!dataDir) return unavailable;
-  const credentials = readJson(path8.join(dataDir, "config.json"));
-  const cache = readJson(path8.join(dataDir, "coding-plan-cache.json"));
+  const credentials = readJson(path9.join(dataDir, "config.json"));
+  const cache = readJson(path9.join(dataDir, "coding-plan-cache.json"));
   const status = asRecord2(asRecord2(asRecord2(cache?.entryStatus).items)[legacyId]).status;
   const provider = asRecord2(asRecord2(credentials?.provider)[legacyId]);
   const options = asRecord2(provider.options);
@@ -24419,19 +26100,19 @@ function runtimeAuthReply(providerId, config2) {
 }
 function zcodeDataBaseDir(personalProviderConfigFile) {
   const dataDir = zcodeV2DataDir(personalProviderConfigFile);
-  return dataDir ? path8.dirname(path8.dirname(dataDir)) : null;
+  return dataDir ? path9.dirname(path9.dirname(dataDir)) : null;
 }
 function zcodeTasksIndexPath(personalProviderConfigFile) {
   const dataDir = zcodeV2DataDir(personalProviderConfigFile);
-  return dataDir ? path8.join(dataDir, "tasks-index.sqlite") : null;
+  return dataDir ? path9.join(dataDir, "tasks-index.sqlite") : null;
 }
 function zcodeV2DataDir(personalProviderConfigFile) {
-  const absolute = path8.resolve(personalProviderConfigFile);
-  if (path8.basename(absolute).toLowerCase() !== "provider_config.json") return null;
-  const v2Dir = path8.dirname(absolute);
-  if (path8.basename(v2Dir).toLowerCase() !== "v2") return null;
-  const zcodeDir = path8.dirname(v2Dir);
-  if (path8.basename(zcodeDir).toLowerCase() !== ".zcode") return null;
+  const absolute = path9.resolve(personalProviderConfigFile);
+  if (path9.basename(absolute).toLowerCase() !== "provider_config.json") return null;
+  const v2Dir = path9.dirname(absolute);
+  if (path9.basename(v2Dir).toLowerCase() !== "v2") return null;
+  const zcodeDir = path9.dirname(v2Dir);
+  if (path9.basename(zcodeDir).toLowerCase() !== ".zcode") return null;
   return v2Dir;
 }
 function configProviderId(providerId, rule) {
@@ -24446,8 +26127,8 @@ function readProviderRules(table) {
 }
 function readJson(filePath) {
   try {
-    if (!existsSync5(filePath)) return null;
-    const value = JSON.parse(readFileSync4(filePath, "utf8"));
+    if (!existsSync6(filePath)) return null;
+    const value = JSON.parse(readFileSync6(filePath, "utf8"));
     return isRecord(value) ? value : null;
   } catch {
     return null;
@@ -24580,7 +26261,7 @@ async function runBridgeDoctor(options = {}) {
       summary: modelConfigured ? "A Bridge default model is configured; actual app-server availability is checked when a task starts" : "No Bridge model override; the ZCode account default will be used and cannot be confirmed without starting a session"
     });
     const dataRoot = options.dataRoot ?? env["ZCODE_BRIDGE_DATA_DIR"]?.trim() ?? null;
-    if (dataRoot && existsSync6(dataRoot)) {
+    if (dataRoot && existsSync7(dataRoot)) {
       try {
         const info = statSync6(dataRoot);
         accessSync2(dataRoot, constants.W_OK);
@@ -24594,8 +26275,8 @@ async function runBridgeDoctor(options = {}) {
     const indexPath = zcodeTasksIndexPath(config2.providerPersonalConfigFile);
     checks.push({
       name: "desktop_index",
-      status: indexPath && existsSync6(indexPath) ? "ok" : "warning",
-      summary: indexPath && existsSync6(indexPath) ? "ZCode Desktop task index file exists; Desktop refresh timing is not tested" : "ZCode Desktop task index file was not found at the configured data location"
+      status: indexPath && existsSync7(indexPath) ? "ok" : "warning",
+      summary: indexPath && existsSync7(indexPath) ? "ZCode Desktop task index file exists; Desktop refresh timing is not tested" : "ZCode Desktop task index file was not found at the configured data location"
     });
   } else {
     checks.push({ name: "runtime_node", status: "unknown", summary: "Not checked because runtime validation did not complete" });
@@ -24606,6 +26287,48 @@ async function runBridgeDoctor(options = {}) {
   checks.push({ name: "app_server", status: "unknown", summary: "Not probed; doctor does not start an app-server session" });
   checks.push({ name: "start_plan", status: "warning", summary: "Unsupported through the headless Bridge; ZCode Start Plan requires a Desktop captcha session" });
   checks.push({ name: "permission_roundtrip", status: "unknown", summary: "Bridge protocol tests exist; a real ZCode permission-approval roundtrip has not been verified" });
+  checks.push({
+    name: "process_probe",
+    status: process.platform === "win32" || process.platform === "linux" ? "ok" : "warning",
+    summary: process.platform === "win32" ? "Windows process identity uses Get-Process StartTime (FileTime creation fingerprint), batched with a bounded timeout" : process.platform === "linux" ? "Linux process identity uses /proc/<pid>/stat starttime plus boot identity" : process.platform === "darwin" ? "macOS process identity uses ps lstart (second precision; coarse, not an absolute unique identity)" : `Process identity probing is not implemented for ${process.platform}; verdicts stay unknown`
+  });
+  checks.push({
+    name: "codex_host_tokens",
+    status: "unknown",
+    summary: "\u672A\u53D6\u5F97\uFF1A\u5F53\u524D\u5BBF\u4E3B\u672A\u63D0\u4F9B\u672C\u6B21\u8C03\u7528\u7EDF\u8BA1\uFF08Bridge \u65E0\u6CD5\u8BFB\u53D6 Codex \u4E3B\u4F1A\u8BDD per-turn token\uFF1B\u4E0D\u5F97\u7528\u8D26\u6237\u989D\u5EA6\u6216\u6587\u672C\u4F30\u7B97\u4EE3\u66FF\uFF09"
+  });
+  const observedRoot = options.observationDataRoot ?? env["ZCODE_BRIDGE_DATA_DIR"]?.trim() ?? null;
+  if (observedRoot && existsSync7(observedRoot)) {
+    try {
+      const { TaskStore: Store } = await Promise.resolve().then(() => (init_task_store(), task_store_exports));
+      const { buildTaskObservation: buildTaskObservation2, inferExecutionStage: inferExecutionStage2 } = await Promise.resolve().then(() => (init_build(), build_exports));
+      const store = new Store(observedRoot);
+      const active = store.listTaskIds().map((taskId) => {
+        try {
+          const status = store.readStatus(taskId);
+          return { taskId, status };
+        } catch {
+          return null;
+        }
+      }).filter((entry) => entry !== null).filter((entry) => entry.status.status === "running" || entry.status.status === "queued" || entry.status.cleanup_unverified === true).slice(0, 32);
+      if (active.length === 0) {
+        checks.push({ name: "active_tasks", status: "ok", summary: "No queued/running tasks" });
+      } else {
+        const lines = active.map((entry) => {
+          try {
+            const observation = buildTaskObservation2(store, entry.taskId, entry.status);
+            const stage = inferExecutionStage2(store, entry.taskId, entry.status);
+            return `${entry.taskId}#${entry.status.attempt}: ${observation.activity.code} (stage ${stage}, worker ${observation.worker.state}, runtime ${observation.runtime.state}, result ${observation.result}, cleanup ${observation.cleanup}${observation.stalled ? ", stalled-hint" : ""})`;
+          } catch (error2) {
+            return `${entry.taskId}#${entry.status.attempt}: observation unavailable (${safeError(error2)})`;
+          }
+        });
+        checks.push({ name: "active_tasks", status: "ok", summary: `${String(active.length)} active task(s): ${lines.join("; ")}`.slice(0, 900) });
+      }
+    } catch (error2) {
+      checks.push({ name: "active_tasks", status: "unknown", summary: safeError(error2) });
+    }
+  }
   return { checked_at: (/* @__PURE__ */ new Date()).toISOString(), execution_mode: mode, checks };
 }
 function safeError(error2) {
@@ -24614,11 +26337,13 @@ function safeError(error2) {
 }
 
 // src/runtime/model-settings.ts
-import { spawn as spawn3 } from "node:child_process";
-import { createHash as createHash4, randomUUID as randomUUID3 } from "node:crypto";
-import { mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { spawn as spawn4 } from "node:child_process";
+import { createHash as createHash5, randomUUID as randomUUID3 } from "node:crypto";
+import { mkdir, readFile as readFile2, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { homedir as homedir3 } from "node:os";
-import path9 from "node:path";
+import path10 from "node:path";
+init_process_lock();
+init_atomic_rename();
 var RPC_TIMEOUT_MS = 3e4;
 var PROCESS_CLOSE_TIMEOUT_MS = 1500;
 var MODEL_CATALOG_TTL_MS = 24 * 60 * 60 * 1e3;
@@ -24634,7 +26359,7 @@ var ZCodeModelSettings = class {
   }
   async listModels(workspace) {
     const requestedWorkspace = workspace.trim();
-    if (!path9.isAbsolute(requestedWorkspace)) {
+    if (!path10.isAbsolute(requestedWorkspace)) {
       throw new BridgeError("provider_config_invalid", "workspace must be an absolute existing directory");
     }
     let workspacePath;
@@ -24784,25 +26509,25 @@ var ZCodeModelSettings = class {
   #updateConfig(update) {
     const operation = this.#writeQueue.then(async () => {
       await mkdir(this.#host.settingsDirectory, { recursive: true });
-      return withProcessLock(path9.join(this.#host.settingsDirectory, ".settings.lock"), async () => {
-        const configPath = path9.join(this.#host.settingsDirectory, "runtime-config.json");
+      return withProcessLock(path10.join(this.#host.settingsDirectory, ".settings.lock"), async () => {
+        const configPath = path10.join(this.#host.settingsDirectory, "runtime-config.json");
         let config2 = {};
         try {
           const info = await stat(configPath);
           if (!info.isFile() || info.size > 64 * 1024) {
             throw new BridgeError("provider_config_invalid", "Bridge runtime config is not a small regular JSON file");
           }
-          const parsed = JSON.parse(await readFile(configPath, "utf8"));
+          const parsed = JSON.parse(await readFile2(configPath, "utf8"));
           if (!isRecord2(parsed)) throw new BridgeError("provider_config_invalid", "Bridge runtime config must contain a JSON object");
           config2 = parsed;
         } catch (error2) {
           if (isMissingFile(error2)) {
             config2 = {};
             for (const directory of this.#host.legacySettingsDirectories ?? []) {
-              const legacyPath = path9.join(directory, "runtime-config.json");
+              const legacyPath = path10.join(directory, "runtime-config.json");
               try {
                 if ((await stat(legacyPath)).size > 64 * 1024) throw new Error("legacy settings exceed size limit");
-                const legacy = JSON.parse(await readFile(legacyPath, "utf8"));
+                const legacy = JSON.parse(await readFile2(legacyPath, "utf8"));
                 if (!isRecord2(legacy)) throw new Error("invalid legacy settings");
                 loadPersistedRuntimeEnvironment(this.#sourceEnv, this.#homeDir, this.#host);
                 config2 = legacy;
@@ -24844,7 +26569,7 @@ function buildRuntimeChildEnv(config2, source) {
   return env;
 }
 function startAppServer(config2, cwd, env) {
-  const child = spawn3(config2.nodeExecutable, [config2.zcodeEntrypoint, "app-server", "--stdio"], {
+  const child = spawn4(config2.nodeExecutable, [config2.zcodeEntrypoint, "app-server", "--stdio"], {
     cwd,
     env,
     shell: false,
@@ -25003,14 +26728,14 @@ function modelCatalogCachePath(workspace, config2, env, settingsDirectory) {
     personal: config2.providerPersonalConfigFile,
     zcodeHome: env.ZCODE_HOME ?? ""
   });
-  const key = createHash4("sha256").update(identity).digest("hex");
-  return path9.join(settingsDirectory, "model-catalog", `${key}.json`);
+  const key = createHash5("sha256").update(identity).digest("hex");
+  return path10.join(settingsDirectory, "model-catalog", `${key}.json`);
 }
 async function modelCatalogSourceFingerprint(config2, env) {
-  const digest = createHash4("sha256");
+  const digest = createHash5("sha256");
   for (const file of [config2.providerBuiltinConfigFile, config2.providerPersonalConfigFile]) {
     digest.update(file);
-    digest.update(await readFile(file));
+    digest.update(await readFile2(file));
   }
   const entry = await stat(config2.zcodeEntrypoint);
   digest.update(JSON.stringify({ entrypoint: config2.zcodeEntrypoint, size: entry.size, mtimeMs: entry.mtimeMs, mode: env.ZCODE_BRIDGE_MODE ?? "build" }));
@@ -25022,7 +26747,7 @@ async function readModelCatalogCache(cachePath) {
   try {
     const info = await stat(cachePath);
     if (!info.isFile() || info.size > 2 * 1024 * 1024) return null;
-    const value = JSON.parse(await readFile(cachePath, "utf8"));
+    const value = JSON.parse(await readFile2(cachePath, "utf8"));
     if (!isRecord2(value) || !Number.isFinite(value.cached_at_ms) || typeof value.source_fingerprint !== "string" || !Array.isArray(value.models)) return null;
     const models = value.models.map(toCachedCatalogEntry).filter((entry) => entry !== null);
     if (models.length !== value.models.length || models.length === 0) return null;
@@ -25042,7 +26767,7 @@ function toCachedCatalogEntry(value) {
   return result;
 }
 async function writeModelCatalogCache(cachePath, cache) {
-  await mkdir(path9.dirname(cachePath), { recursive: true });
+  await mkdir(path10.dirname(cachePath), { recursive: true });
   const tempPath = `${cachePath}.${process.pid}.${randomUUID3()}.tmp`;
   try {
     await writeFile(tempPath, `${JSON.stringify(cache)}
@@ -25058,13 +26783,13 @@ async function writeModelCatalogCache(cachePath, cache) {
 function resolveDataRoot(env) {
   const override = env["ZCODE_BRIDGE_DATA_DIR"]?.trim();
   if (override) {
-    if (!path10.isAbsolute(override)) {
+    if (!path11.isAbsolute(override)) {
       return {
         dataRoot: findPackageRoot(),
         warning: `ZCODE_BRIDGE_DATA_DIR must be an absolute path; ignoring ${override} and using the Bridge installation directory`
       };
     }
-    return { dataRoot: path10.normalize(override) };
+    return { dataRoot: path11.normalize(override) };
   }
   return { dataRoot: findPackageRoot() };
 }
@@ -25107,7 +26832,8 @@ async function startBridge(host = codexHostProfile(), version2 = SERVER_VERSION)
     store,
     workspaceProvider: new DirectWorkspaceProvider(),
     maxConcurrentWorkers: workerLimit.maxConcurrentWorkers,
-    spawnWorker: createWorkerSpawner(host)
+    spawnWorker: createWorkerSpawner(host),
+    probe: createPlatformProbe()
   });
   const modelSettings = new ZCodeModelSettings(process.env, { host });
   const server = createBridgeServer({
@@ -25140,7 +26866,7 @@ var isEntry = process.argv[1] !== void 0 && sameRealPath(import.meta.url, proces
 function sameRealPath(moduleUrl, argvPath) {
   try {
     const modulePath = realpathSync2(fileURLToPath3(moduleUrl));
-    const entryPath = realpathSync2(path11.resolve(argvPath));
+    const entryPath = realpathSync2(path12.resolve(argvPath));
     return process.platform === "win32" ? modulePath.toLocaleLowerCase("en-US") === entryPath.toLocaleLowerCase("en-US") : modulePath === entryPath;
   } catch {
     return false;

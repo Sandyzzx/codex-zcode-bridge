@@ -6,6 +6,8 @@
 import type {
   AgentHandle,
   CodingAgentAdapter,
+  ExecutionProfile,
+  NormalizedUsage,
   RuntimeResolver,
   TaskResult,
   WorkspaceRef,
@@ -18,6 +20,8 @@ import { buildContinuePrompt, buildTaskPrompt } from "../prompts/task-prompt.js"
 import { buildTaskResult, type TaskFailure } from "../manager/normalize.js";
 import { TaskStore, type WorkerHeartbeat } from "../store/task-store.js";
 import type { BridgeHostProfile } from "../host/profile.js";
+import { createPlatformProbe, type ProcessProbe } from "../runtime/process-probe.js";
+import { normalizeUsage, phaseDuration } from "../usage/normalize.js";
 
 /**
  * The worker needs the frozen adapter contract except that getResult must
@@ -42,6 +46,9 @@ export interface RunWorkerTaskOptions {
   adapter?: WorkerAdapter;
   resolver?: RuntimeResolver;
   now?: () => Date;
+  /** Defaults to the platform probe; the worker persists its own and the
+   * runtime's process identity so recovery never guesses (A2). */
+  probe?: ProcessProbe;
 }
 
 export interface RunWorkerTaskResult {
@@ -52,11 +59,21 @@ export interface RunWorkerTaskResult {
 export async function runWorkerTask(options: RunWorkerTaskOptions): Promise<RunWorkerTaskResult> {
   const store = new TaskStore(options.dataRoot);
   const now = options.now ?? (() => new Date());
+  const probe = options.probe ?? createPlatformProbe();
   const taskId = options.taskId;
   const task = store.readTask(taskId);
   const initialStatus = store.readStatus(taskId);
   const attempt = options.attempt;
   if (!store.claimWorkerExecution(taskId, attempt)) throw new Error("worker attempt already claimed, stale, or terminal");
+
+  let observationRevision = 0;
+  let activityPhase = "preparing";
+  const writePhase = (): void => {
+    observationRevision += 1;
+    try {
+      store.writeWorkerObservation(taskId, attempt, process.pid, { activity_phase: activityPhase }, observationRevision, now().toISOString());
+    } catch { /* observation is advisory; never blocks execution */ }
+  };
 
   // Defensive: the manager normally cancels before the worker starts; if the
   // intent was recorded first, finish as cancelled without touching the agent.
@@ -82,6 +99,20 @@ export async function runWorkerTask(options: RunWorkerTaskOptions): Promise<RunW
     worker_pid: process.pid,
     started_at: startedAt,
   });
+  writePhase();
+  // Persist this executor's OS identity so recovery probes can distinguish a
+  // dead worker from a recycled PID (A2). Best effort and asynchronous.
+  void probe.selfIdentity().then(
+    (identity) => {
+      store.writeExecutorIdentity(taskId, attempt, { worker: identity as unknown as Record<string, unknown> });
+      observationRevision += 1;
+      try {
+        store.writeWorkerObservation(taskId, attempt, process.pid, { worker_identity: identity as unknown as Record<string, unknown> }, observationRevision, now().toISOString());
+      } catch { /* advisory */ }
+    },
+    () => undefined,
+  );
+
   const heartbeat: WorkerHeartbeat = {
     attempt,
     worker_pid: process.pid,
@@ -98,6 +129,7 @@ export async function runWorkerTask(options: RunWorkerTaskOptions): Promise<RunW
     heartbeat.heartbeat_at = now().toISOString();
     heartbeat.heartbeat_seq += 1;
     store.writeWorkerHeartbeat(taskId, attempt, heartbeat);
+    writePhase(); // B3 snapshot rides the heartbeat cadence; heartbeats never touch events
   };
   persistHeartbeat();
   const heartbeatTimer = setInterval(() => {
@@ -123,6 +155,37 @@ export async function runWorkerTask(options: RunWorkerTaskOptions): Promise<RunW
       })
     : buildTaskPrompt(task);
   store.writeAttemptFile(taskId, attempt, "prompt.txt", promptText);
+
+  // B2 correlation record: persisted timestamps for RPC accept, turn start,
+  // and turn completion, written as the events arrive.
+  const correlation: { rpc_accepted_at: string | null; turn_started_at: string | null; turn_completed_at: string | null; turn_id: string | null; session_id: string | null } = {
+    rpc_accepted_at: null,
+    turn_started_at: null,
+    turn_completed_at: null,
+    turn_id: null,
+    session_id: initialStatus.zcode_session_id ?? null,
+  };
+  const persistCorrelation = (): void => {
+    try { store.writeAttemptMeta(taskId, attempt, "turn-correlation.json", { ...correlation }); }
+    catch { /* advisory evidence */ }
+  };
+  const persistCorrelationTimer = setInterval(persistCorrelation, 5_000);
+  persistCorrelationTimer.unref();
+
+  // B4 runtime-confirmed execution profile (model / reasoning depth).
+  const modelProfile: ExecutionProfile = {
+    executor: "zcode",
+    provider_id: null,
+    model_id: null,
+    requested_model: task.model ? `${task.model.provider_id}/${task.model.model_id}` : null,
+    requested_reasoning_level: task.model?.reasoning_level ?? null,
+    effective_reasoning_level: null,
+    effective_reasoning_level_source: "not_reported",
+    selection_source: null,
+    effective_at: null,
+    session_id: initialStatus.zcode_session_id ?? null,
+    turn_id: null,
+  };
 
   let outcome: ZCodeRunOutcome | null = null;
   let failure: TaskFailure | null = null;
@@ -159,11 +222,58 @@ export async function runWorkerTask(options: RunWorkerTaskOptions): Promise<RunW
         const sessionId = event.type === "session_ready" ? event.details?.["session_id"] : undefined;
         if (typeof sessionId === "string") {
           heartbeat.session_id = sessionId;
+          correlation.session_id = sessionId;
+          modelProfile.session_id = sessionId;
           store.writeStatus(taskId, { zcode_session_id: sessionId }, attempt);
         }
-        if (event.type === "turn_started" && typeof event.details?.["turn_id"] === "string") heartbeat.turn_id = event.details["turn_id"];
+        if (event.type === "turn_started") {
+          correlation.rpc_accepted_at = correlation.rpc_accepted_at ?? now().toISOString();
+          correlation.turn_started_at = now().toISOString();
+          if (typeof event.details?.["turn_id"] === "string") {
+            heartbeat.turn_id = event.details["turn_id"];
+            correlation.turn_id = event.details["turn_id"];
+            modelProfile.turn_id = event.details["turn_id"];
+          }
+          activityPhase = "executing";
+          writePhase();
+        }
+        if (event.type === "turn_completed") {
+          correlation.turn_completed_at = now().toISOString();
+          activityPhase = "finalizing";
+          writePhase();
+        }
+        if (event.type === "model_selected") {
+          // Runtime-confirmed model evidence; requested values never impersonate it.
+          if (typeof event.details?.["provider_id"] === "string") modelProfile.provider_id = event.details["provider_id"];
+          if (typeof event.details?.["model_id"] === "string") modelProfile.model_id = event.details["model_id"];
+          if (typeof event.details?.["selected_model"] === "string" && modelProfile.model_id === null) {
+            modelProfile.model_id = event.details["selected_model"];
+          }
+          if (typeof event.details?.["reasoning_level"] === "string") {
+            modelProfile.effective_reasoning_level = event.details["reasoning_level"];
+            modelProfile.effective_reasoning_level_source = "runtime";
+          }
+          if (typeof event.details?.["model_source"] === "string") modelProfile.selection_source = event.details["model_source"];
+          modelProfile.effective_at = now().toISOString();
+        }
         if (typeof event.details?.["event_seq"] === "number") heartbeat.zcode_event_seq = event.details["event_seq"];
-        if (event.type === "app_server_started" && typeof event.details?.["pid"] === "number") store.writeStatus(taskId, { zcode_pid: event.details["pid"] }, attempt);
+        if (event.type === "app_server_started" && typeof event.details?.["pid"] === "number") {
+          store.writeStatus(taskId, { zcode_pid: event.details["pid"] }, attempt);
+          void probe.identityOf(event.details["pid"]).then(
+            (identity) => {
+              store.writeExecutorIdentity(taskId, attempt, { runtime: identity as unknown as Record<string, unknown> });
+              observationRevision += 1;
+              try {
+                store.writeWorkerObservation(taskId, attempt, process.pid, { runtime_identity: identity as unknown as Record<string, unknown> }, observationRevision, now().toISOString());
+              } catch { /* advisory */ }
+            },
+            () => undefined,
+          );
+        }
+      },
+      onInteractionState: (state) => {
+        activityPhase = state === "waiting" ? "waiting_for_permission" : "executing";
+        writePhase();
       },
       onOutcomeCheckpoint: (checkpoint) => {
         store.writeAttemptMeta(taskId, attempt, "outcome-checkpoint.json", {
@@ -179,12 +289,16 @@ export async function runWorkerTask(options: RunWorkerTaskOptions): Promise<RunW
           report_candidate: checkpoint.reportCandidate,
           cleanup_error: checkpoint.cleanupError ?? null,
           cleanup_verified: checkpoint.cleanupVerified === true,
+          usage_normalized: normalizeUsage(checkpoint.usage, { source: "zcode_runtime_turn", scope: checkpoint.sessionId ? `session:${checkpoint.sessionId}` : null, observedAt: now().toISOString() }),
+          model_profile: modelProfile,
         });
       },
       resolveInteraction: async (request, signal) => {
         store.assertWorkerAttempt(taskId, attempt);
         const safeRequest = sanitizeInteractionRequest({ ...request, request_id: `${attempt}:${request.request_id}` });
         const { record, created } = store.writeInteractionRequest(taskId, safeRequest, now().toISOString());
+        activityPhase = request.method === "interaction/requestPermission" ? "waiting_for_permission" : "waiting_for_user";
+        writePhase();
         if (created) {
           const interactionEvent = store.appendEvent(
             taskId,
@@ -196,15 +310,21 @@ export async function runWorkerTask(options: RunWorkerTaskOptions): Promise<RunW
           if (!interactionEvent) {
             const fallback = interactionDecline(request.method, "Bridge could not publish this request to the calling host");
             store.answerInteractionRequest(taskId, safeRequest.request_id, fallback, now().toISOString());
+            activityPhase = "executing";
+            writePhase();
             return fallback;
           }
         }
+        let answer: Record<string, unknown> | null = null;
         while (!signal.aborted) {
           store.assertWorkerAttempt(taskId, attempt);
           const current = store.readInteractionRequest(taskId, safeRequest.request_id);
-          if (current?.state === "answered" && current.answer) return current.answer;
+          if (current?.state === "answered" && current.answer) { answer = current.answer; break; }
           await sleep(250);
         }
+        activityPhase = "executing";
+        writePhase();
+        if (answer) return answer;
         return interactionDecline(request.method, "The task attempt ended");
       },
     });
@@ -254,6 +374,9 @@ export async function runWorkerTask(options: RunWorkerTaskOptions): Promise<RunW
     };
   }
   clearInterval(heartbeatTimer);
+  clearInterval(persistCorrelationTimer);
+  activityPhase = "finalizing";
+  writePhase();
 
   const finishedAt = now().toISOString();
   store.assertWorkerAttempt(taskId, attempt);
@@ -267,6 +390,36 @@ export async function runWorkerTask(options: RunWorkerTaskOptions): Promise<RunW
         ? `${failure.code}: ${failure.message}\n`
         : "",
   );
+
+  // The event-driven profile is authoritative; when the runtime reported the
+  // selection through the outcome only (no model_selected event reached us),
+  // adopt that evidence instead of leaving nulls (B4-12).
+  if (modelProfile.model_id === null && outcome?.modelProfile?.model_id) {
+    Object.assign(modelProfile, outcome.modelProfile);
+  }
+  // Turn boundaries likewise fall back to the outcome's correlation record.
+  correlation.rpc_accepted_at = correlation.rpc_accepted_at ?? outcome?.phaseTimestamps?.rpc_accepted_at ?? null;
+  correlation.turn_started_at = correlation.turn_started_at ?? outcome?.phaseTimestamps?.turn_started_at ?? null;
+  correlation.turn_completed_at = correlation.turn_completed_at ?? outcome?.phaseTimestamps?.turn_completed_at ?? null;
+  if (modelProfile.turn_id === null && correlation.turn_id) modelProfile.turn_id = correlation.turn_id;
+  // B4 timing with explicit boundaries; a regressed/missing clock yields null
+  // notes instead of negative or fabricated values.
+  const timingNotes: string[] = [];
+  const timing = {
+    queued_ms: phaseDuration(initialStatus.created_at, startedAt, timingNotes),
+    execution_ms: phaseDuration(startedAt, finishedAt, timingNotes),
+    turn_ms: phaseDuration(correlation.turn_started_at, correlation.turn_completed_at, timingNotes),
+    finalize_ms: phaseDuration(correlation.turn_completed_at, finishedAt, timingNotes),
+    wall_ms: phaseDuration(startedAt, finishedAt, timingNotes),
+    derived: false,
+    notes: timingNotes,
+  };
+  const usage: NormalizedUsage | null = normalizeUsage(outcome?.usage ?? null, {
+    source: "zcode_runtime_turn",
+    scope: outcome?.sessionId ? `session:${outcome.sessionId}` : null,
+    observedAt: finishedAt,
+  });
+  persistCorrelation();
 
   store.writeAttemptMeta(taskId, attempt, "outcome.json", {
     started_at: startedAt,
@@ -292,6 +445,10 @@ export async function runWorkerTask(options: RunWorkerTaskOptions): Promise<RunW
           cleanupVerified: outcome.cleanupVerified === true,
         }
       : null,
+    usage_normalized: usage,
+    model_profile: modelProfile,
+    timing,
+    correlation: { ...correlation },
     logs: { stdout_truncated: stdoutLog.truncated, stderr_truncated: stderrLog.truncated },
   });
 
@@ -304,6 +461,9 @@ export async function runWorkerTask(options: RunWorkerTaskOptions): Promise<RunW
     failure,
     cancelled: outcome?.cancelled === true || failure?.code === "cancelled",
     sessionId: store.readStatus(taskId).zcode_session_id ?? continueSpec?.previous_session_id,
+    usage,
+    model: modelProfile,
+    timing,
   });
   store.appendEvent(taskId, "task_finished", `Task reached terminal status: ${result.status}`, {
     status: result.status,

@@ -38,6 +38,7 @@ import {
 import type { DoctorReport } from "../runtime/doctor.js";
 import { BridgeError } from "../runtime/errors.js";
 import type { ZCodeModelSettings } from "../runtime/model-settings.js";
+import { registerLedgerTools } from "../ledger/mcp.js";
 
 export const SERVER_NAME = "codex-zcode-bridge";
 export const SERVER_VERSION = "1.0.5"; // x-release-please-version
@@ -49,6 +50,9 @@ export interface BridgeServerOptions {
   serverInfo?: { name: string; version: string };
   instructions?: string;
   enableExperiments?: boolean;
+  /** Opt-in project task ledger (C1-C3). Absent = disabled: the frozen core
+   * tools behave exactly as before and no ledger data is ever created. */
+  ledger?: import("../ledger/mcp.js").LedgerToolOptions;
 }
 
 const EXECUTION_NOT_VERDICT =
@@ -187,7 +191,7 @@ export function createBridgeServer(options: BridgeServerOptions): McpServer {
       inputSchema: zcodeEventsInputSchema,
       outputSchema: taskProgressPageSchema,
     },
-      async (args: { task_id: string; after_seq?: number; limit?: number; wait_ms?: number; view?: "raw" | "summary" }) => {
+      async (args: { task_id: string; after_seq?: number; limit?: number; wait_ms?: number; view?: "raw" | "summary"; scan_cursor?: string; max_bytes?: number }) => {
         if (!manager.getEvents) return errorResult("EVENTS_UNAVAILABLE", "task manager does not provide progress events");
         return runTool(() => manager.getEvents!(args));
       },
@@ -238,6 +242,11 @@ export function createBridgeServer(options: BridgeServerOptions): McpServer {
     },
     async (args: { task_id: string }) => runTool(() => manager.cancelTask(args.task_id)),
   );
+
+  // Opt-in project task ledger tools (C1-C3); never registered by default.
+  if (options.ledger) {
+    registerLedgerTools(server, options.ledger);
+  }
 
   // Temporary experiment tool: verify whether the calling host surfaces MCP progress notifications.
   if (options.enableExperiments) server.registerTool(

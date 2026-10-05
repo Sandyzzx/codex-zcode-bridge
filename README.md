@@ -54,6 +54,10 @@ Codex can delegate the task, monitor execution, inspect the resulting changes, v
 - Read the live ZCode model catalog and reasoning levels, select a provider/model per task, and get/set/clear a Bridge default model.
 - At startup, report the project directory, execution directory, ZCode session, runtime-reported model and reasoning level, and execution mode.
 - Group ZCode Desktop tasks under the Codex project directory; index sync failures do not stop task execution.
+- Unified task observation (`zcode_status.observation`, `zcode_events.observation`): worker/runtime liveness with OS process-identity probing (PID-reuse safe), activity/waiting/stalled hints, result/cleanup state — advisory only, `unknown` never means dead.
+- Bounded, resumable event scans (`zcode_events` with `scan_cursor`/`max_bytes`): complete-line parsing, corruption counters, byte-budgeted reads near the log cap.
+- Per-attempt usage/model/timing evidence in `zcode_result` (`usage`, `model`, `timing`): runtime-reported token numbers only — missing stays "not reported", totals are never recomputed.
+- Optional project task ledger (`ledger_*` tools, opt-in only): long-lived project tasks, runs, per-AC reviews, and a controlled DONE gate that a worker report alone can never satisfy.
 
 ## Install
 

@@ -1175,6 +1175,9 @@ var ZCodeAppServerAdapter = class {
   #now;
   #resolveInteraction;
   #onOutcomeCheckpoint;
+  #onInteractionState;
+  #turnBindingCompatMs;
+  #replayIdleMs;
   #runs = /* @__PURE__ */ new Map();
   #workspaceByTask = /* @__PURE__ */ new Map();
   constructor(options = {}) {
@@ -1187,6 +1190,9 @@ var ZCodeAppServerAdapter = class {
     this.#now = options.now ?? (() => /* @__PURE__ */ new Date());
     this.#resolveInteraction = options.resolveInteraction;
     this.#onOutcomeCheckpoint = options.onOutcomeCheckpoint;
+    this.#onInteractionState = options.onInteractionState;
+    this.#turnBindingCompatMs = options.turnBindingCompatMs ?? 5e3;
+    this.#replayIdleMs = options.replayIdleMs ?? 1e4;
   }
   async startTask(input) {
     return this.#launch(input.task, input.workspace, input.attempt, buildTaskPrompt(input.task), null);
@@ -1269,13 +1275,27 @@ var ZCodeAppServerAdapter = class {
       onEvent: this.#onEvent,
       textOutputStarted: false,
       selectedModel: null,
+      selectedModelSelection: null,
+      selectedReasoningLevel: null,
+      reasoningLevelSource: "not_reported",
+      modelSource: null,
+      requestedModel: null,
+      requestedReasoningLevel: null,
       lastEventSeq: 0,
       lastEventAt: Date.now(),
       interactions: /* @__PURE__ */ new Map(),
       abort: new AbortController(),
       acceptingTurn: false,
       turnId: null,
-      awaitingTurnStart: false
+      awaitingTurnStart: false,
+      rpcAcceptedAt: null,
+      turnStartedAt: null,
+      turnCompletedAt: null,
+      turnBinding: "pending",
+      pendingCompletion: null,
+      bindingTimer: null,
+      pendingTimer: null,
+      replayConsecutiveFailures: 0
     };
     this.#runs.set(handle, entry);
     this.#workspaceByTask.set(task.task_id, workspace.canonicalPath);
@@ -1412,7 +1432,13 @@ var ZCodeAppServerAdapter = class {
         }
         snapshot = modelState;
         entry.selectedModel = readSelectedModel(modelState) ?? requested;
+        entry.selectedModelSelection = selected;
+        entry.modelSource = preferences.modelSource;
+        entry.requestedModel = requested;
+        entry.requestedReasoningLevel = reasoningLevel;
         selectedReasoningLevel = readEffectiveReasoningLevel(modelState);
+        entry.selectedReasoningLevel = selectedReasoningLevel;
+        entry.reasoningLevelSource = selectedReasoningLevel ? "runtime" : "not_reported";
         entry.onEvent({
           type: "model_selected",
           summary: `ZCode selected requested model ${entry.selectedModel}${selectedReasoningLevel ? ` with reasoning level ${selectedReasoningLevel}` : "; runtime did not report its reasoning level"}`,
@@ -1429,6 +1455,8 @@ var ZCodeAppServerAdapter = class {
       }
       const model = readSelectedModel(snapshot);
       entry.selectedModel = entry.selectedModel ?? model;
+      const defaultSelection = readSelectedModelSelection(snapshot);
+      entry.selectedModelSelection = entry.selectedModelSelection ?? defaultSelection;
       if (!entry.selectedModel) {
         const availableModels = readAvailableModels(snapshot);
         entry.onEvent({
@@ -1444,6 +1472,9 @@ var ZCodeAppServerAdapter = class {
       if (!preferences.model) {
         const selected = readSelectedModelSelection(snapshot);
         selectedReasoningLevel = readEffectiveReasoningLevel(snapshot);
+        entry.selectedReasoningLevel = selectedReasoningLevel;
+        entry.reasoningLevelSource = selectedReasoningLevel ? "runtime" : "not_reported";
+        entry.modelSource = preferences.modelSource;
         entry.onEvent({
           type: "model_selected",
           summary: `ZCode runtime selected its session model ${entry.selectedModel}${selectedReasoningLevel ? ` with reasoning level ${selectedReasoningLevel}` : ""}`,
@@ -1506,32 +1537,60 @@ var ZCodeAppServerAdapter = class {
       });
       entry.acceptingTurn = true;
       await client.request("session/send", { sessionId, content: prompt });
-      entry.onEvent({ type: "turn_started", summary: "ZCode accepted the task and started a turn" });
+      entry.rpcAcceptedAt = this.#now().toISOString();
+      entry.onEvent({ type: "turn_started", summary: "ZCode accepted the task and started a turn", details: { rpc_accepted: true, ...entry.turnId ? { turn_id: entry.turnId } : {} } });
+      entry.bindingTimer = setTimeout(() => {
+        if (!entry.awaitingTurnStart) return;
+        entry.awaitingTurnStart = false;
+        entry.turnBinding = "compat";
+        entry.onEvent({
+          type: "turn_binding_compat",
+          summary: "turn.started did not arrive after the accepted send; binding degraded to session-exclusivity compatibility mode"
+        });
+        this.#settlePendingCompletion(entry);
+      }, Math.max(this.#turnBindingCompatMs, 5e3));
+      entry.bindingTimer.unref();
       let replayInFlight = false;
       let replayDisabled = false;
       const replayTimer = setInterval(() => {
-        if (!entry.acceptingTurn || replayInFlight || replayDisabled || Date.now() - entry.lastEventAt < 1e4) return;
+        if (!entry.acceptingTurn || replayInFlight || replayDisabled || Date.now() - entry.lastEventAt < this.#replayIdleMs) return;
         replayInFlight = true;
         void client.request("session/events", { sessionId, afterSeq: entry.lastEventSeq, limit: 500 }).then((value) => {
+          entry.replayConsecutiveFailures = 0;
           const events = asRecord2(value).events;
           if (Array.isArray(events)) client.replayEvents(events);
         }).catch((error) => {
           const message = error instanceof Error ? error.message : String(error);
-          if (message.includes("Unsupported ZCode app-server request") || message.includes("ZCode app-server request failed for session/events")) {
+          if (message.includes("Unsupported ZCode app-server request")) {
             replayDisabled = true;
-            entry.onEvent({ type: "session_event_replay_unavailable", summary: "ZCode session event replay is unavailable; continuing with live event subscription" });
+            entry.onEvent({ type: "session_event_replay_unavailable", summary: "ZCode session event replay is unsupported by this runtime; continuing with live event subscription" });
+            return;
+          }
+          entry.replayConsecutiveFailures += 1;
+          if (entry.replayConsecutiveFailures >= 3) {
+            replayDisabled = true;
+            entry.onEvent({ type: "session_event_replay_unavailable", summary: `ZCode session event replay failed ${String(entry.replayConsecutiveFailures)} times consecutively; continuing with live subscription` });
           }
         }).finally(() => {
           replayInFlight = false;
         });
-      }, 5e3);
+      }, Math.max(50, Math.min(5e3, this.#replayIdleMs)));
       replayTimer.unref();
       let turnResult;
       try {
         turnResult = await turn;
       } finally {
         clearInterval(replayTimer);
+        if (entry.bindingTimer) {
+          clearTimeout(entry.bindingTimer);
+          entry.bindingTimer = null;
+        }
+        if (entry.pendingTimer) {
+          clearTimeout(entry.pendingTimer);
+          entry.pendingTimer = null;
+        }
       }
+      entry.turnCompletedAt = turnResult.completedAt;
       const desktopStatus = turnResult.resultType === "cancelled" ? null : turnResult.resultType && turnResult.resultType !== "success" ? "error" : "completed";
       let outcome;
       if (turnResult.resultType && turnResult.resultType !== "success") {
@@ -1551,7 +1610,39 @@ var ZCodeAppServerAdapter = class {
           agentReport: null,
           reportCandidate: null,
           reportError: `ZCode turn ended with resultType ${turnResult.resultType}`,
-          errorCode: turnResult.resultType === "cancelled" ? "cancelled" : "zcode_nonzero_exit"
+          errorCode: turnResult.resultType === "cancelled" ? "cancelled" : "zcode_nonzero_exit",
+          phaseTimestamps: {
+            rpc_accepted_at: turnResult.rpcAcceptedAt,
+            turn_started_at: turnResult.startedAt,
+            turn_completed_at: turnResult.completedAt
+          },
+          modelProfile: this.#modelProfile(entry)
+        };
+      } else if (turnResult.resultType === null) {
+        const parsedUnknown = parseAgentReport(turnResult.response);
+        outcome = {
+          attempts: 1,
+          cancelled: false,
+          stdout: turnResult.response,
+          stderr: "",
+          exitCode: 1,
+          signal: null,
+          sessionId,
+          response: turnResult.response,
+          usage: turnResult.usage,
+          timedOut: false,
+          stdoutTruncated: false,
+          stderrTruncated: false,
+          agentReport: null,
+          reportCandidate: parsedUnknown.candidate,
+          reportError: `ZCode turn completed without a resultType (binding: ${turnResult.binding}); treated as an unknown terminal state, not a success`,
+          errorCode: "unknown_turn_terminal",
+          phaseTimestamps: {
+            rpc_accepted_at: turnResult.rpcAcceptedAt,
+            turn_started_at: turnResult.startedAt,
+            turn_completed_at: turnResult.completedAt
+          },
+          modelProfile: this.#modelProfile(entry)
         };
       } else {
         const parsed = parseAgentReport(turnResult.response);
@@ -1577,7 +1668,13 @@ var ZCodeAppServerAdapter = class {
             agentReport: null,
             reportCandidate: parsed.candidate,
             reportError: parsed.error,
-            errorCode: "invalid_agent_report"
+            errorCode: "invalid_agent_report",
+            phaseTimestamps: {
+              rpc_accepted_at: turnResult.rpcAcceptedAt,
+              turn_started_at: turnResult.startedAt,
+              turn_completed_at: turnResult.completedAt
+            },
+            modelProfile: this.#modelProfile(entry)
           };
         } else {
           entry.onEvent({
@@ -1585,7 +1682,19 @@ var ZCodeAppServerAdapter = class {
             summary: "ZCode produced its structured execution report",
             details: { needs_master_decision: parsed.report.needs_master_decision }
           });
-          outcome = { ...base, agentReport: parsed.report, reportCandidate: parsed.report, reportError: null, errorCode: null };
+          outcome = {
+            ...base,
+            agentReport: parsed.report,
+            reportCandidate: parsed.report,
+            reportError: null,
+            errorCode: null,
+            phaseTimestamps: {
+              rpc_accepted_at: turnResult.rpcAcceptedAt,
+              turn_started_at: turnResult.startedAt,
+              turn_completed_at: turnResult.completedAt
+            },
+            modelProfile: this.#modelProfile(entry)
+          };
         }
       }
       outcome = { ...outcome, cleanupVerified: false };
@@ -1824,23 +1933,45 @@ var ZCodeAppServerAdapter = class {
         entry.lastEventSeq = params.seq;
       }
       entry.lastEventAt = Date.now();
-      if (type === "turn.started" && turnId) entry.turnId = turnId;
-      if (type === "turn.started") entry.awaitingTurnStart = false;
-      this.#publishSessionEvent(type, payload, entry, params);
+      if (type === "turn.started") {
+        if (turnId) entry.turnId = turnId;
+        entry.awaitingTurnStart = false;
+        entry.turnStartedAt = this.#now().toISOString();
+        if (entry.bindingTimer) {
+          clearTimeout(entry.bindingTimer);
+          entry.bindingTimer = null;
+        }
+      }
       if (type === "turn.completed") {
+        if (entry.awaitingTurnStart) {
+          entry.pendingCompletion = { payload, event: params, heldAt: Date.now() };
+          entry.acceptingTurn = false;
+          if (!entry.pendingTimer) {
+            entry.pendingTimer = setTimeout(() => this.#settlePendingCompletion(entry), this.#turnBindingCompatMs);
+            entry.pendingTimer.unref();
+          }
+          return;
+        }
         entry.acceptingTurn = false;
-        entry.resolveTurn({
-          response: typeof payload.response === "string" ? payload.response : "",
-          usage: publicUsage(payload.usage),
-          resultType: typeof payload.resultType === "string" ? payload.resultType : null
-        });
-      } else if (type === "turn.failed") {
+        entry.turnCompletedAt = this.#now().toISOString();
+        entry.turnBinding = entry.turnId ? "strict" : "compat";
+        this.#publishSessionEvent(type, payload, entry, params);
+        this.#resolveTurnCompleted(entry, payload, params);
+        return;
+      }
+      if (type === "turn.failed") {
         entry.acceptingTurn = false;
+        entry.turnCompletedAt = this.#now().toISOString();
         const problem = asRecord2(payload.error);
         void problem;
+        this.#publishSessionEvent(type, payload, entry, params);
         entry.rejectTurn(new Error("ZCode turn failed"));
+        return;
       }
-      return;
+      this.#publishSessionEvent(type, payload, entry, params);
+      if (type === "turn.started" && entry.pendingCompletion) {
+        this.#settlePendingCompletion(entry);
+      }
     }
     if (message.method === "state.updated") {
       const params = asRecord2(message.params);
@@ -1881,6 +2012,7 @@ var ZCodeAppServerAdapter = class {
     }
     pending = { requestIds: [rpcId], method, paramsSignature, resolving: true };
     entry.interactions.set(requestId, pending);
+    this.#onInteractionState?.("waiting");
     const request = { request_id: requestId, method, params };
     const fallback = interactionDecline(method, "Bridge interaction reply is unavailable");
     void (async () => {
@@ -1898,6 +2030,7 @@ var ZCodeAppServerAdapter = class {
       pending.response = response;
       pending.resolving = false;
       if (entry.abort.signal.aborted) return;
+      this.#onInteractionState?.("resumed");
       for (const id of pending.requestIds) write({ id, result: response });
       entry.onEvent({
         type: "interaction_replied",
@@ -1910,6 +2043,57 @@ var ZCodeAppServerAdapter = class {
         entry.interactions.delete(oldest);
       }
     })().catch(() => entry.rejectTurn(new Error("ZCode interaction delivery failed")));
+  }
+  /** Settles a completion that was held in the pending boundary. */
+  #settlePendingCompletion(entry) {
+    if (entry.pendingTimer) {
+      clearTimeout(entry.pendingTimer);
+      entry.pendingTimer = null;
+    }
+    const held = entry.pendingCompletion;
+    if (!held) return;
+    entry.pendingCompletion = null;
+    if (entry.awaitingTurnStart) {
+      entry.awaitingTurnStart = false;
+      entry.turnBinding = "compat";
+      entry.onEvent({
+        type: "turn_binding_compat",
+        summary: "turn.started never arrived for the accepted send; completion settled through the bounded compatibility window"
+      });
+    }
+    entry.turnCompletedAt = this.#now().toISOString();
+    this.#resolveTurnCompleted(entry, held.payload, held.event);
+  }
+  /** Single settle path for turn completions; resultType is validated here so
+   * an unknown terminal is never mistaken for success (B2). */
+  #resolveTurnCompleted(entry, payload, event) {
+    if (entry.turnBinding === "pending") entry.turnBinding = entry.turnId ? "strict" : "compat";
+    entry.resolveTurn({
+      response: typeof payload.response === "string" ? payload.response : "",
+      usage: publicUsage(payload.usage),
+      resultType: typeof payload.resultType === "string" ? payload.resultType : null,
+      binding: entry.turnBinding,
+      startedAt: entry.turnStartedAt,
+      completedAt: entry.turnCompletedAt ?? this.#now().toISOString(),
+      rpcAcceptedAt: entry.rpcAcceptedAt
+    });
+    void event;
+  }
+  #modelProfile(entry) {
+    if (!entry.selectedModel && !entry.selectedModelSelection) return null;
+    return {
+      executor: "zcode",
+      provider_id: entry.selectedModelSelection?.providerId ?? null,
+      model_id: entry.selectedModelSelection?.modelId ?? entry.selectedModel,
+      requested_model: entry.requestedModel,
+      requested_reasoning_level: entry.requestedReasoningLevel,
+      effective_reasoning_level: entry.selectedReasoningLevel,
+      effective_reasoning_level_source: entry.reasoningLevelSource,
+      selection_source: entry.modelSource ?? "runtime",
+      effective_at: entry.turnStartedAt ?? entry.rpcAcceptedAt ?? null,
+      session_id: entry.sessionId,
+      turn_id: entry.turnId
+    };
   }
   #publishSessionEvent(type, payload, entry, event) {
     if (type === "turn.started") {
@@ -2104,7 +2288,10 @@ function buildTaskResult(input) {
     finished_at: finishedAt,
     zcode_output: outcome?.response ?? "",
     exit_code: outcome?.exitCode ?? null,
-    session_id: outcome?.sessionId ?? input.sessionId ?? null
+    session_id: outcome?.sessionId ?? input.sessionId ?? null,
+    ...input.usage !== void 0 ? { usage: input.usage } : {},
+    ...input.model !== void 0 ? { model: input.model } : {},
+    ...input.timing !== void 0 ? { timing: input.timing } : {}
   };
   if (input.cancelled || outcome?.cancelled) {
     return {
@@ -2184,11 +2371,20 @@ import { StringDecoder } from "node:string_decoder";
 import { mkdirSync, readFileSync as readFileSync3, renameSync, rmdirSync, statSync as statSync2, unlinkSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import path4 from "node:path";
+var selfIdentity = null;
 function tryAcquireProcessLock(directory) {
   const token = randomUUID();
+  const ownerRecord = {
+    pid: process.pid,
+    token,
+    started_at: (/* @__PURE__ */ new Date()).toISOString(),
+    // Fingerprint may be null before the async self-identity probe finishes;
+    // null never authorizes binding a recycled PID to a prior owner.
+    identity: selfIdentity ? { fingerprint: selfIdentity.fingerprint, identity_version: selfIdentity.identity_version, platform: selfIdentity.platform } : null
+  };
   try {
     mkdirSync(directory, { mode: 448 });
-    writeFileSync(path4.join(directory, "owner.json"), JSON.stringify({ pid: process.pid, token }), { mode: 384 });
+    writeFileSync(path4.join(directory, "owner.json"), JSON.stringify(ownerRecord), { mode: 384 });
   } catch (error) {
     if (error.code !== "EEXIST") throw error;
     try {
@@ -2499,6 +2695,183 @@ var TaskStore = class {
     if (!existsSync4(file)) return null;
     return readFileSync4(file, "utf8");
   }
+  // ---- A1 observation evidence (bounded reads, no task bodies) ----
+  /** Bounded persisted evidence for the observation judger. */
+  readObservationEvidence(taskId2, attempt) {
+    const checkpointRaw = this.readAttemptMeta(taskId2, attempt, "outcome-checkpoint.json");
+    const checkpoint = checkpointRaw && typeof checkpointRaw.recorded_at === "string" ? { recorded_at: checkpointRaw.recorded_at } : null;
+    const heartbeat = this.readWorkerHeartbeat(taskId2, attempt);
+    return {
+      checkpoint,
+      heartbeat,
+      last_business_event: this.readLastBusinessEvent(taskId2),
+      pending_interaction: this.readPendingInteraction(taskId2)
+    };
+  }
+  /** Last complete event line, read from a bounded tail window. */
+  readLastBusinessEvent(taskId2) {
+    const file = path5.join(this.taskDir(taskId2), "events.jsonl");
+    if (!existsSync4(file)) return null;
+    let size = 0;
+    try {
+      size = statSync3(file).size;
+    } catch {
+      return null;
+    }
+    if (size === 0) return null;
+    const window = Math.min(8192, size);
+    const buffer = Buffer.allocUnsafe(window);
+    let read = 0;
+    try {
+      const fd = openSync(file, "r");
+      try {
+        read = readSync(fd, buffer, 0, window, size - window);
+      } finally {
+        closeSync(fd);
+      }
+    } catch {
+      return null;
+    }
+    const text = buffer.subarray(0, read).toString("utf8");
+    const newline = text.indexOf("\n");
+    const body = newline >= 0 && window < size ? text.slice(newline + 1) : text;
+    const lines = body.split("\n").filter((line) => line.trim());
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      const event = parseProgressEvent(lines[index]);
+      if (event) return { at: event.at, type: event.type, seq: event.seq };
+    }
+    return null;
+  }
+  /** Distinct event types from a bounded tail window (A3 stage inference). */
+  listRecentEventTypes(taskId2, maxLines) {
+    const file = path5.join(this.taskDir(taskId2), "events.jsonl");
+    if (!existsSync4(file)) return [];
+    let size = 0;
+    try {
+      size = statSync3(file).size;
+    } catch {
+      return [];
+    }
+    const window = Math.min(256 * 1024, size);
+    if (window === 0) return [];
+    const buffer = Buffer.allocUnsafe(window);
+    let read = 0;
+    try {
+      const fd = openSync(file, "r");
+      try {
+        read = readSync(fd, buffer, 0, window, size - window);
+      } finally {
+        closeSync(fd);
+      }
+    } catch {
+      return [];
+    }
+    const text = buffer.subarray(0, read).toString("utf8");
+    const newline = text.indexOf("\n");
+    const body = newline >= 0 && window < size ? text.slice(newline + 1) : text;
+    const types = /* @__PURE__ */ new Set();
+    for (const line of body.split("\n").slice(-maxLines)) {
+      const event = parseProgressEvent(line);
+      if (event) types.add(event.type);
+    }
+    return [...types];
+  }
+  /** Newest unanswered interaction request (bounded directory scan). */
+  readPendingInteraction(taskId2) {
+    const directory = path5.join(this.taskDir(taskId2), "interactions");
+    let entries;
+    try {
+      entries = readdirSync(directory);
+    } catch {
+      return null;
+    }
+    const files = entries.filter((entry) => entry.endsWith(".json")).slice(0, 64);
+    let newest = null;
+    for (const file of files) {
+      try {
+        const record = JSON.parse(readFileSync4(path5.join(directory, file), "utf8"));
+        if (record.state === "pending" && typeof record.method === "string" && typeof record.created_at === "string") {
+          if (!newest || record.created_at > newest.created_at) newest = { method: record.method, created_at: record.created_at };
+        }
+      } catch {
+      }
+    }
+    return newest;
+  }
+  // ---- B3 attempt-scoped observation snapshot (fenced writer) ----
+  /**
+   * Writes worker-owned snapshot fields. Fenced twice: the attempt must still
+   * be the current one, and the writer must own the attempt's execution claim,
+   * so a replaced or stale worker can never overwrite current facts. Revision
+   * is per writer and must strictly increase within one writer identity.
+   */
+  writeWorkerObservation(taskId2, attempt, writerPid, patch, revision, updatedAt = (/* @__PURE__ */ new Date()).toISOString()) {
+    withEventLock(path5.join(this.taskDir(taskId2), "state.lock"), () => {
+      const status = this.readStatus(taskId2);
+      if (status.attempt !== attempt) throw new Error("stale attempt observation rejected");
+      const claim = this.readAttemptMeta(taskId2, attempt, "execution.claim");
+      if (claim?.pid !== writerPid) throw new Error("observation writer does not own the execution claim");
+      this.#mergeObservationSnapshot(taskId2, attempt, "worker", revision, patch, updatedAt);
+    });
+  }
+  /** Writes manager-owned snapshot fields (probe verdicts); worker business
+   * phases are never overwritten from the manager side. */
+  writeManagerObservation(taskId2, attempt, patch, revision, updatedAt = (/* @__PURE__ */ new Date()).toISOString()) {
+    withEventLock(path5.join(this.taskDir(taskId2), "state.lock"), () => {
+      const status = this.readStatus(taskId2);
+      if (status.attempt !== attempt) throw new Error("stale attempt observation rejected");
+      this.#mergeObservationSnapshot(taskId2, attempt, "manager", revision, patch, updatedAt);
+    });
+  }
+  readObservationSnapshot(taskId2, attempt) {
+    const file = path5.join(this.attemptDir(taskId2, attempt), "observation.json");
+    if (!existsSync4(file)) return { snapshot: null, corrupt: false };
+    try {
+      const parsed = JSON.parse(readFileSync4(file, "utf8"));
+      if (parsed.schema_version !== 1 || parsed.task_id !== taskId2 || parsed.attempt !== attempt) {
+        return { snapshot: null, corrupt: true };
+      }
+      return { snapshot: parsed, corrupt: false };
+    } catch {
+      return { snapshot: null, corrupt: true };
+    }
+  }
+  #mergeObservationSnapshot(taskId2, attempt, writer, revision, patch, updatedAt) {
+    if (!Number.isSafeInteger(revision) || revision < 0) throw new Error("observation revision must be a non-negative integer");
+    const current = this.readObservationSnapshot(taskId2, attempt).snapshot;
+    const previousRevision = current?.writers?.[writer] ?? -1;
+    if (revision <= previousRevision) throw new Error("stale observation revision rejected");
+    const carried = current ?? {};
+    const next = {
+      schema_version: 1,
+      task_id: taskId2,
+      attempt,
+      writers: { ...carried.writers, [writer]: revision },
+      updated_at: updatedAt
+    };
+    const workerOwned = ["session_id", "turn_id", "last_runtime_seq", "activity_phase", "worker_identity", "runtime_identity"];
+    const managerOwned = ["worker_probe", "runtime_probe"];
+    for (const key of workerOwned) {
+      if (key in patch) next[key] = patch[key];
+      else if (key in carried) next[key] = carried[key];
+    }
+    for (const key of managerOwned) {
+      if (key in patch) next[key] = patch[key];
+      else if (key in carried) next[key] = carried[key];
+    }
+    this.writeAttemptMeta(taskId2, attempt, "observation.json", next);
+  }
+  // ---- A2 executor identity evidence ----
+  writeExecutorIdentity(taskId2, attempt, identity) {
+    const current = this.readAttemptMeta(taskId2, attempt, "executor-identity.json") ?? {};
+    this.writeAttemptMeta(taskId2, attempt, "executor-identity.json", {
+      ...current,
+      ...identity
+    });
+  }
+  readExecutorIdentity(taskId2, attempt) {
+    return this.readAttemptMeta(taskId2, attempt, "executor-identity.json");
+  }
   /**
    * Atomically claims the single worker-respawn slot for an attempt by
    * creating the marker file with an exclusive flag, so several Bridge
@@ -2599,6 +2972,10 @@ var TaskStore = class {
       const eventOffset = bytes + (needsSeparator ? 1 : 0);
       appendFileSync(file, `${needsSeparator ? "\n" : ""}${line}`, { encoding: "utf8", mode: 384 });
       privateFile(file);
+      const genFile = path5.join(dir, "events.gen");
+      if (!existsSync4(genFile)) {
+        this.#writeTextAtomic(genFile, randomUUID2());
+      }
       if (event.seq % 100 === 0) {
         const index = path5.join(dir, "events.index");
         appendFileSync(index, `${event.seq}	${eventOffset}
@@ -2684,6 +3061,237 @@ var TaskStore = class {
       hasMore,
       omittedEvents
     };
+  }
+  /**
+   * B1 bounded scan: parses complete byte lines only; an unfinished trailing
+   * line is not consumed and the cursor never passes it. Complete corrupt
+   * lines are skipped but counted. The byte budget covers at most the
+   * configured budget plus one read block; exhaustion reports scan_incomplete
+   * and never a has_more=true page with an unchanged after_seq.
+   */
+  readEventsBounded(taskId2, input = {}) {
+    const afterSeq = input.afterSeq ?? 0;
+    const limit = input.limit ?? 100;
+    const view = input.view ?? "raw";
+    const budget = input.maxBytes ?? this.#maxEventBytes;
+    const file = path5.join(this.taskDir(taskId2), "events.jsonl");
+    const empty = {
+      events: [],
+      nextSeq: afterSeq,
+      hasMore: false,
+      omittedEvents: 0,
+      scan_incomplete: false,
+      scan_cursor: null,
+      cursor_invalid: false,
+      metrics: { bytes_read: 0, records_scanned: 0, invalid_lines: 0, corrupt_count: 0, first_corrupt_offset: null, index_fallback: false }
+    };
+    let size = 0;
+    try {
+      size = statSync3(file).size;
+    } catch {
+      return empty;
+    }
+    if (size === 0) return empty;
+    let startOffset = 0;
+    let cursorInvalid = false;
+    if (input.cursor) {
+      const generation = this.readEventGeneration(taskId2);
+      const valid = input.cursor.v === 1 && input.cursor.task_id === taskId2 && generation !== null && input.cursor.generation === generation && Number.isSafeInteger(input.cursor.offset) && input.cursor.offset >= 0 && input.cursor.offset <= size;
+      if (!valid) {
+        return { ...empty, cursor_invalid: true };
+      }
+      startOffset = input.cursor.offset;
+      if (input.cursor.first_seq !== null) {
+        const firstSeq = this.readFirstEventSeq(file, size);
+        if (firstSeq === null || firstSeq !== input.cursor.first_seq) {
+          return { ...empty, cursor_invalid: true };
+        }
+      }
+    }
+    let indexFallback = false;
+    if (startOffset === 0) {
+      const indexFile = path5.join(this.taskDir(taskId2), "events.index");
+      if (existsSync4(indexFile)) {
+        try {
+          let lastSeq = 0;
+          let lastOffset = 0;
+          for (const row of readFileSync4(indexFile, "utf8").split(/\r?\n/u)) {
+            if (!row.trim()) continue;
+            const [seqText, offsetText] = row.split("	");
+            const seq = Number(seqText);
+            const offset = Number(offsetText);
+            if (!Number.isSafeInteger(seq) || !Number.isSafeInteger(offset) || seq <= lastSeq || offset < lastOffset || offset > size) {
+              throw new Error("invalid index row");
+            }
+            lastSeq = seq;
+            lastOffset = offset;
+          }
+          for (const row of readFileSync4(indexFile, "utf8").split(/\r?\n/u)) {
+            const [seqText, offsetText] = row.split("	");
+            const seq = Number(seqText);
+            const offset = Number(offsetText);
+            if (Number.isSafeInteger(seq) && Number.isSafeInteger(offset) && seq <= afterSeq && offset <= size) startOffset = offset;
+            if (Number.isSafeInteger(seq) && seq > afterSeq) break;
+          }
+        } catch {
+          indexFallback = true;
+          startOffset = 0;
+        }
+      }
+    }
+    const events = [];
+    let scanned = 0;
+    let bytesRead = 0;
+    let invalidLines = 0;
+    let corruptCount = 0;
+    let firstCorruptOffset = null;
+    let hasMore = false;
+    let position = startOffset;
+    let lastCompleteOffset = startOffset;
+    let pending = "";
+    let pendingStartOffset = startOffset;
+    let reachedEnd = false;
+    const maxRead = budget + 64 * 1024;
+    const decoder = new StringDecoder("utf8");
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    const fd = openSync(file, "r");
+    const processLine = (line, lineOffset, lineEndOffset) => {
+      lastCompleteOffset = lineEndOffset;
+      if (!line.trim()) return true;
+      const event = parseProgressEvent(line);
+      if (!event) {
+        invalidLines += 1;
+        corruptCount += 1;
+        if (firstCorruptOffset === null) firstCorruptOffset = lineOffset;
+        return true;
+      }
+      scanned += 1;
+      if (event.seq <= afterSeq) return true;
+      if (events.length === limit) {
+        hasMore = true;
+        lastCompleteOffset = lineOffset;
+        return false;
+      }
+      events.push(event);
+      return true;
+    };
+    try {
+      while (bytesRead < maxRead) {
+        const count = readSync(fd, buffer, 0, buffer.length, position);
+        if (count <= 0) {
+          reachedEnd = true;
+          break;
+        }
+        position += count;
+        bytesRead += count;
+        const text = pending + decoder.write(buffer.subarray(0, count));
+        let searchFrom = 0;
+        let consumedBytes = 0;
+        let stopped = false;
+        while (true) {
+          const newline = text.indexOf("\n", searchFrom);
+          if (newline < 0) break;
+          const line = text.slice(searchFrom, newline).replace(/\r$/u, "");
+          const lineBytes = Buffer.byteLength(text.slice(searchFrom, newline + 1), "utf8");
+          const lineOffset = pendingStartOffset + consumedBytes;
+          consumedBytes += lineBytes;
+          searchFrom = newline + 1;
+          if (!processLine(line, lineOffset, pendingStartOffset + consumedBytes)) {
+            stopped = true;
+            break;
+          }
+        }
+        if (stopped) {
+          pending = "";
+          break;
+        }
+        pending = text.slice(searchFrom);
+        pendingStartOffset += consumedBytes;
+      }
+      if (!hasMore) {
+        const tail = pending + decoder.end();
+        let searchFrom = 0;
+        let consumedBytes = 0;
+        while (true) {
+          const newline = tail.indexOf("\n", searchFrom);
+          if (newline < 0) break;
+          const line = tail.slice(searchFrom, newline).replace(/\r$/u, "");
+          const lineBytes = Buffer.byteLength(tail.slice(searchFrom, newline + 1), "utf8");
+          const lineOffset = pendingStartOffset + consumedBytes;
+          consumedBytes += lineBytes;
+          searchFrom = newline + 1;
+          if (!processLine(line, lineOffset, pendingStartOffset + consumedBytes)) break;
+        }
+        if (!hasMore && !reachedEnd && bytesRead >= maxRead) {
+          lastCompleteOffset = pendingStartOffset + consumedBytes;
+        }
+      }
+    } finally {
+      closeSync(fd);
+    }
+    let page = events;
+    let omittedEvents = 0;
+    if (view === "summary") {
+      page = [];
+      for (const event of events) {
+        const previous = page.at(-1);
+        if (event.type === "model_output" && previous?.type === "model_output") {
+          const combined = previous.summary + event.summary;
+          page[page.length - 1] = {
+            ...previous,
+            seq: event.seq,
+            at: event.at,
+            summary: combined.length <= 5e3 ? combined : `${combined.slice(0, 4950)}\u2026[output compacted]`
+          };
+          omittedEvents += 1;
+        } else {
+          page.push(event);
+        }
+      }
+    }
+    const scanIncomplete = !reachedEnd && !hasMore;
+    const nextSeq = page.at(-1)?.seq ?? afterSeq;
+    if (hasMore && nextSeq === afterSeq && !input.cursor) hasMore = false;
+    const cursor = this.readEventGeneration(taskId2) ? { v: 1, task_id: taskId2, generation: this.readEventGeneration(taskId2), offset: lastCompleteOffset, first_seq: input.cursor?.first_seq ?? this.readFirstEventSeq(file, size) } : null;
+    return {
+      events: page,
+      nextSeq,
+      hasMore,
+      omittedEvents,
+      scan_incomplete: scanIncomplete,
+      scan_cursor: cursor,
+      cursor_invalid: false,
+      metrics: { bytes_read: bytesRead, records_scanned: scanned, invalid_lines: invalidLines, corrupt_count: corruptCount, first_corrupt_offset: firstCorruptOffset, index_fallback: indexFallback }
+    };
+  }
+  /** Generation marker detecting log replacement/truncation across reads. */
+  readEventGeneration(taskId2) {
+    try {
+      const value = readFileSync4(path5.join(this.taskDir(taskId2), "events.gen"), "utf8").trim();
+      return value || null;
+    } catch {
+      return null;
+    }
+  }
+  readFirstEventSeq(file, size) {
+    const window = Math.min(64 * 1024, size);
+    const buffer = Buffer.allocUnsafe(window);
+    let read = 0;
+    try {
+      const fd = openSync(file, "r");
+      try {
+        read = readSync(fd, buffer, 0, window, 0);
+      } finally {
+        closeSync(fd);
+      }
+    } catch {
+      return null;
+    }
+    const text = buffer.subarray(0, read).toString("utf8");
+    const newline = text.indexOf("\n");
+    if (newline < 0) return null;
+    const event = parseProgressEvent(text.slice(0, newline).replace(/\r$/u, ""));
+    return event ? event.seq : null;
   }
   writeInteractionRequest(taskId2, request, createdAt = (/* @__PURE__ */ new Date()).toISOString()) {
     const directory = path5.join(this.taskDir(taskId2), "interactions");
@@ -2814,15 +3422,324 @@ function isTerminalStatus(status) {
   return status === "completed" || status === "failed" || status === "cancelled" || status === "waiting_for_master";
 }
 
+// src/runtime/process-probe.ts
+import { readFile } from "node:fs/promises";
+import { spawn as spawn3 } from "node:child_process";
+var PROCESS_IDENTITY_VERSION = 1;
+var DEFAULT_PROBE_TIMEOUT_MS = 5e3;
+var DEFAULT_MAX_CONCURRENT = 2;
+function identityOfFingerprint(pid, fingerprint, precision, now) {
+  return {
+    pid,
+    fingerprint,
+    fingerprint_precision: precision,
+    identity_version: PROCESS_IDENTITY_VERSION,
+    platform: process.platform,
+    captured_at: new Date(now()).toISOString()
+  };
+}
+function verdict(state, reason, now) {
+  return { state, reason_code: reason, observed_at: new Date(now()).toISOString() };
+}
+function failedQuery(reason) {
+  return { ok: false, reason, fingerprints: /* @__PURE__ */ new Map() };
+}
+function windowsBatchQuery(pids, timeoutMs) {
+  return new Promise((resolve) => {
+    const script = `Get-Process -Id ${pids.join(",")} -ErrorAction SilentlyContinue | ForEach-Object { "{0}|{1}" -f $_.Id, $_.StartTime.Ticks }`;
+    const child = spawn3("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], {
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+      shell: false
+    });
+    let stdout = "";
+    let settled = false;
+    const finish = (query) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(query);
+    };
+    const timer = setTimeout(() => {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+      }
+      finish(failedQuery("timeout"));
+    }, timeoutMs);
+    timer.unref();
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    let stderrBytes = 0;
+    child.stderr.on("data", (chunk) => {
+      stderrBytes = Math.min(64e3, stderrBytes + chunk.length);
+    });
+    child.stdout.on("data", (chunk) => {
+      if (stdout.length < 1e6) stdout += chunk;
+    });
+    child.on("error", () => finish(failedQuery("spawn_error")));
+    child.on("close", () => {
+      const map = /* @__PURE__ */ new Map();
+      for (const line of stdout.split(/\r?\n/u)) {
+        const match = /^(\d+)\|(\d+)$/u.exec(line.trim());
+        if (!match) continue;
+        map.set(Number(match[1]), match[2]);
+      }
+      if (map.size === 0) {
+        finish(stderrBytes > 0 ? failedQuery("query_error") : { ok: true, reason: "ok", fingerprints: map });
+        return;
+      }
+      finish({ ok: true, reason: "ok", fingerprints: map });
+    });
+  });
+}
+async function darwinQuery(pids, timeoutMs) {
+  return new Promise((resolve) => {
+    const child = spawn3("ps", ["-o", "pid=,lstart=", "-p", pids.join(",")], {
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+      shell: false
+    });
+    let stdout = "";
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try {
+        child.kill("SIGKILL");
+      } catch {
+      }
+      resolve(failedQuery("timeout"));
+    }, timeoutMs);
+    timer.unref();
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      if (stdout.length < 1e6) stdout += chunk;
+    });
+    child.on("error", () => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        resolve(failedQuery("spawn_error"));
+      }
+    });
+    child.on("close", () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      const map = /* @__PURE__ */ new Map();
+      for (const line of stdout.split(/\r?\n/u)) {
+        const match = /^\s*(\d+)\s+(.+)$/u.exec(line);
+        if (match) map.set(Number(match[1]), match[2].trim());
+      }
+      resolve({ ok: true, reason: "ok", fingerprints: map });
+    });
+  });
+}
+function createPlatformProbe(options = {}) {
+  const timeoutMs = options.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
+  const maxConcurrent = options.maxConcurrent ?? DEFAULT_MAX_CONCURRENT;
+  const now = options.now ?? Date.now;
+  let chain = Promise.resolve();
+  let inFlight = 0;
+  let waiters = [];
+  const schedule = async (operation) => {
+    if (inFlight >= maxConcurrent) {
+      await new Promise((resolve) => waiters.push(resolve));
+    }
+    inFlight += 1;
+    try {
+      return await operation();
+    } finally {
+      inFlight -= 1;
+      const next = waiters.shift();
+      if (next) next();
+    }
+  };
+  const probe = async (requests) => {
+    if (requests.length === 0) return [];
+    const distinct = [...new Set(requests.map((request) => request.pid).filter((pid) => Number.isInteger(pid) && pid > 0))];
+    const query = await schedule(async () => {
+      if (process.platform === "win32") return windowsBatchQuery(distinct, timeoutMs);
+      if (process.platform === "darwin") return darwinQuery(distinct, timeoutMs);
+      if (process.platform === "linux") {
+        const map = /* @__PURE__ */ new Map();
+        for (const pid of distinct) {
+          try {
+            const stat = await readFile(`/proc/${pid}/stat`, "utf8");
+            const afterComm = stat.slice(stat.lastIndexOf(")") + 2);
+            const fields = afterComm.split(" ");
+            const starttime = fields[19];
+            if (starttime) map.set(pid, starttime.trim());
+          } catch (error) {
+            if (error.code === "ENOENT") continue;
+            return failedQuery("proc_read_error");
+          }
+        }
+        return { ok: true, reason: "ok", fingerprints: map };
+      }
+      return failedQuery("unsupported_platform");
+    });
+    return requests.map((request) => {
+      if (!Number.isInteger(request.pid) || request.pid <= 0) return verdict("unknown", "invalid_pid", now);
+      if (!query.ok) return verdict("unknown", `query_${query.reason}`, now);
+      const fingerprint = query.fingerprints.get(request.pid);
+      if (fingerprint === void 0) {
+        return verdict("exited", "pid_absent", now);
+      }
+      if (!request.identity || request.identity.fingerprint === null) {
+        return verdict("unknown", "live_pid_no_fingerprint", now);
+      }
+      if (request.identity.fingerprint_precision === "coarse") {
+        return request.identity.fingerprint === fingerprint ? verdict("unknown", "coarse_fingerprint_match", now) : verdict("exited", "pid_reused_coarse", now);
+      }
+      if (request.identity.fingerprint !== fingerprint) {
+        return verdict("exited", "pid_reused", now);
+      }
+      return verdict("alive", "pid_and_fingerprint_match", now);
+    });
+  };
+  const fingerprintOfPid = async (pid) => {
+    const query = await schedule(async () => {
+      if (process.platform === "win32") return windowsBatchQuery([pid], timeoutMs);
+      if (process.platform === "darwin") return darwinQuery([pid], timeoutMs);
+      if (process.platform === "linux") {
+        const map = /* @__PURE__ */ new Map();
+        try {
+          const stat = await readFile(`/proc/${pid}/stat`, "utf8");
+          const afterComm = stat.slice(stat.lastIndexOf(")") + 2);
+          const starttime = afterComm.split(" ")[19];
+          if (starttime) map.set(pid, starttime.trim());
+        } catch {
+        }
+        return { ok: true, reason: "ok", fingerprints: map };
+      }
+      return failedQuery("unsupported_platform");
+    });
+    const fingerprint = query.fingerprints.get(pid);
+    if (!query.ok || !fingerprint) return identityOfFingerprint(pid, null, "unknown", now);
+    const precision = process.platform === "darwin" ? "coarse" : "exact";
+    return identityOfFingerprint(pid, fingerprint, precision, now);
+  };
+  return {
+    platform: process.platform,
+    identityOf: fingerprintOfPid,
+    selfIdentity: () => fingerprintOfPid(process.pid),
+    probe
+  };
+}
+
+// src/usage/normalize.ts
+var KNOWN_NUMERIC_FIELDS = [
+  ["input_tokens", "inputTokens"],
+  ["output_tokens", "outputTokens"],
+  ["total_tokens", "totalTokens"],
+  ["cached_input_tokens", "cachedInputTokens"],
+  ["reasoning_tokens", "reasoningTokens"]
+];
+var SOURCE_FIELDS = ["source", "usage_source"];
+function acceptNumber(value) {
+  if (value === void 0 || value === null) return { value: null, conflict: null };
+  if (typeof value !== "number") return { value: null, conflict: "non_numeric_rejected" };
+  if (Number.isNaN(value)) return { value: null, conflict: "nan_rejected" };
+  if (!Number.isFinite(value)) return { value: null, conflict: "non_finite_rejected" };
+  if (!Number.isSafeInteger(value)) return { value: null, conflict: "unsafe_integer_rejected" };
+  if (value < 0) return { value: null, conflict: "negative_rejected" };
+  return { value, conflict: null };
+}
+function normalizeUsage(raw, options = {}) {
+  if (raw === null || raw === void 0) return null;
+  if (typeof raw !== "object" || Array.isArray(raw)) return null;
+  const record = raw;
+  const conflicts = /* @__PURE__ */ new Set();
+  const result = {
+    source: null,
+    scope: null,
+    observed_at: null,
+    finality: "reported",
+    input_tokens: null,
+    output_tokens: null,
+    total_tokens: null,
+    cached_input_tokens: null,
+    reasoning_tokens: null,
+    conflicts: [],
+    dropped_unknown_keys: 0
+  };
+  let knownKeys = 0;
+  for (const [canonical, alias] of KNOWN_NUMERIC_FIELDS) {
+    const snake = record[canonical];
+    const camel = record[alias];
+    const hasSnake = snake !== void 0;
+    const hasCamel = camel !== void 0;
+    if (!hasSnake && !hasCamel) continue;
+    knownKeys += 1;
+    if (hasSnake && hasCamel && snake !== camel) conflicts.add("duplicate_synonyms");
+    const accepted = acceptNumber(hasSnake ? snake : camel);
+    if (accepted.conflict) {
+      conflicts.add(accepted.conflict);
+      continue;
+    }
+    result[canonical] = accepted.value;
+  }
+  for (const key of Object.keys(record)) {
+    const known = KNOWN_NUMERIC_FIELDS.some(([canonical, alias]) => key === canonical || key === alias);
+    const source = SOURCE_FIELDS.some((candidate) => key === candidate);
+    if (!known && !source) result.dropped_unknown_keys += 1;
+  }
+  for (const sourceField of SOURCE_FIELDS) {
+    const value = record[sourceField];
+    if (typeof value === "string" && value.trim()) {
+      result.source = options.source ?? value.trim();
+      break;
+    }
+  }
+  if (result.source === null) result.source = options.source ?? null;
+  result.scope = options.scope ?? null;
+  result.observed_at = options.observedAt ?? null;
+  const { input_tokens: input, output_tokens: output, total_tokens: total } = result;
+  if (total !== null && input !== null && output !== null && total !== input + output) {
+    conflicts.add("total_mismatch");
+  }
+  if (options.source?.includes("session_delta")) result.finality = "derived";
+  if (conflicts.size > 0) result.finality = result.finality === "derived" ? "derived" : "partial";
+  result.conflicts = [...conflicts];
+  if (knownKeys === 0 && result.dropped_unknown_keys === 0) return null;
+  return result;
+}
+function phaseDuration(startIso, endIso, notes) {
+  if (!startIso || !endIso) return null;
+  const start = Date.parse(startIso);
+  const end = Date.parse(endIso);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    notes.push("unparsable_timestamp");
+    return null;
+  }
+  if (end < start) {
+    notes.push("clock_regression_dropped");
+    return null;
+  }
+  return end - start;
+}
+
 // src/worker/run-task.ts
 async function runWorkerTask(options) {
   const store = new TaskStore(options.dataRoot);
   const now = options.now ?? (() => /* @__PURE__ */ new Date());
+  const probe = options.probe ?? createPlatformProbe();
   const taskId2 = options.taskId;
   const task = store.readTask(taskId2);
   const initialStatus = store.readStatus(taskId2);
   const attempt = options.attempt;
   if (!store.claimWorkerExecution(taskId2, attempt)) throw new Error("worker attempt already claimed, stale, or terminal");
+  let observationRevision = 0;
+  let activityPhase = "preparing";
+  const writePhase = () => {
+    observationRevision += 1;
+    try {
+      store.writeWorkerObservation(taskId2, attempt, process.pid, { activity_phase: activityPhase }, observationRevision, now().toISOString());
+    } catch {
+    }
+  };
   if (initialStatus.cancel_requested === true) {
     const finishedAt2 = now().toISOString();
     const result2 = buildTaskResult({
@@ -2844,6 +3761,18 @@ async function runWorkerTask(options) {
     worker_pid: process.pid,
     started_at: startedAt
   });
+  writePhase();
+  void probe.selfIdentity().then(
+    (identity) => {
+      store.writeExecutorIdentity(taskId2, attempt, { worker: identity });
+      observationRevision += 1;
+      try {
+        store.writeWorkerObservation(taskId2, attempt, process.pid, { worker_identity: identity }, observationRevision, now().toISOString());
+      } catch {
+      }
+    },
+    () => void 0
+  );
   const heartbeat = {
     attempt,
     worker_pid: process.pid,
@@ -2860,6 +3789,7 @@ async function runWorkerTask(options) {
     heartbeat.heartbeat_at = now().toISOString();
     heartbeat.heartbeat_seq += 1;
     store.writeWorkerHeartbeat(taskId2, attempt, heartbeat);
+    writePhase();
   };
   persistHeartbeat();
   const heartbeatTimer = setInterval(() => {
@@ -2879,6 +3809,34 @@ async function runWorkerTask(options) {
     previousResult
   }) : buildTaskPrompt(task);
   store.writeAttemptFile(taskId2, attempt, "prompt.txt", promptText);
+  const correlation = {
+    rpc_accepted_at: null,
+    turn_started_at: null,
+    turn_completed_at: null,
+    turn_id: null,
+    session_id: initialStatus.zcode_session_id ?? null
+  };
+  const persistCorrelation = () => {
+    try {
+      store.writeAttemptMeta(taskId2, attempt, "turn-correlation.json", { ...correlation });
+    } catch {
+    }
+  };
+  const persistCorrelationTimer = setInterval(persistCorrelation, 5e3);
+  persistCorrelationTimer.unref();
+  const modelProfile = {
+    executor: "zcode",
+    provider_id: null,
+    model_id: null,
+    requested_model: task.model ? `${task.model.provider_id}/${task.model.model_id}` : null,
+    requested_reasoning_level: task.model?.reasoning_level ?? null,
+    effective_reasoning_level: null,
+    effective_reasoning_level_source: "not_reported",
+    selection_source: null,
+    effective_at: null,
+    session_id: initialStatus.zcode_session_id ?? null,
+    turn_id: null
+  };
   let outcome = null;
   let failure = null;
   let pendingModelOutput = "";
@@ -2912,11 +3870,58 @@ async function runWorkerTask(options) {
         const sessionId = event.type === "session_ready" ? event.details?.["session_id"] : void 0;
         if (typeof sessionId === "string") {
           heartbeat.session_id = sessionId;
+          correlation.session_id = sessionId;
+          modelProfile.session_id = sessionId;
           store.writeStatus(taskId2, { zcode_session_id: sessionId }, attempt);
         }
-        if (event.type === "turn_started" && typeof event.details?.["turn_id"] === "string") heartbeat.turn_id = event.details["turn_id"];
+        if (event.type === "turn_started") {
+          correlation.rpc_accepted_at = correlation.rpc_accepted_at ?? now().toISOString();
+          correlation.turn_started_at = now().toISOString();
+          if (typeof event.details?.["turn_id"] === "string") {
+            heartbeat.turn_id = event.details["turn_id"];
+            correlation.turn_id = event.details["turn_id"];
+            modelProfile.turn_id = event.details["turn_id"];
+          }
+          activityPhase = "executing";
+          writePhase();
+        }
+        if (event.type === "turn_completed") {
+          correlation.turn_completed_at = now().toISOString();
+          activityPhase = "finalizing";
+          writePhase();
+        }
+        if (event.type === "model_selected") {
+          if (typeof event.details?.["provider_id"] === "string") modelProfile.provider_id = event.details["provider_id"];
+          if (typeof event.details?.["model_id"] === "string") modelProfile.model_id = event.details["model_id"];
+          if (typeof event.details?.["selected_model"] === "string" && modelProfile.model_id === null) {
+            modelProfile.model_id = event.details["selected_model"];
+          }
+          if (typeof event.details?.["reasoning_level"] === "string") {
+            modelProfile.effective_reasoning_level = event.details["reasoning_level"];
+            modelProfile.effective_reasoning_level_source = "runtime";
+          }
+          if (typeof event.details?.["model_source"] === "string") modelProfile.selection_source = event.details["model_source"];
+          modelProfile.effective_at = now().toISOString();
+        }
         if (typeof event.details?.["event_seq"] === "number") heartbeat.zcode_event_seq = event.details["event_seq"];
-        if (event.type === "app_server_started" && typeof event.details?.["pid"] === "number") store.writeStatus(taskId2, { zcode_pid: event.details["pid"] }, attempt);
+        if (event.type === "app_server_started" && typeof event.details?.["pid"] === "number") {
+          store.writeStatus(taskId2, { zcode_pid: event.details["pid"] }, attempt);
+          void probe.identityOf(event.details["pid"]).then(
+            (identity) => {
+              store.writeExecutorIdentity(taskId2, attempt, { runtime: identity });
+              observationRevision += 1;
+              try {
+                store.writeWorkerObservation(taskId2, attempt, process.pid, { runtime_identity: identity }, observationRevision, now().toISOString());
+              } catch {
+              }
+            },
+            () => void 0
+          );
+        }
+      },
+      onInteractionState: (state) => {
+        activityPhase = state === "waiting" ? "waiting_for_permission" : "executing";
+        writePhase();
       },
       onOutcomeCheckpoint: (checkpoint) => {
         store.writeAttemptMeta(taskId2, attempt, "outcome-checkpoint.json", {
@@ -2931,13 +3936,17 @@ async function runWorkerTask(options) {
           agent_report: checkpoint.agentReport,
           report_candidate: checkpoint.reportCandidate,
           cleanup_error: checkpoint.cleanupError ?? null,
-          cleanup_verified: checkpoint.cleanupVerified === true
+          cleanup_verified: checkpoint.cleanupVerified === true,
+          usage_normalized: normalizeUsage(checkpoint.usage, { source: "zcode_runtime_turn", scope: checkpoint.sessionId ? `session:${checkpoint.sessionId}` : null, observedAt: now().toISOString() }),
+          model_profile: modelProfile
         });
       },
       resolveInteraction: async (request, signal) => {
         store.assertWorkerAttempt(taskId2, attempt);
         const safeRequest = sanitizeInteractionRequest({ ...request, request_id: `${attempt}:${request.request_id}` });
         const { record, created } = store.writeInteractionRequest(taskId2, safeRequest, now().toISOString());
+        activityPhase = request.method === "interaction/requestPermission" ? "waiting_for_permission" : "waiting_for_user";
+        writePhase();
         if (created) {
           const interactionEvent = store.appendEvent(
             taskId2,
@@ -2949,15 +3958,24 @@ async function runWorkerTask(options) {
           if (!interactionEvent) {
             const fallback = interactionDecline2(request.method, "Bridge could not publish this request to the calling host");
             store.answerInteractionRequest(taskId2, safeRequest.request_id, fallback, now().toISOString());
+            activityPhase = "executing";
+            writePhase();
             return fallback;
           }
         }
+        let answer = null;
         while (!signal.aborted) {
           store.assertWorkerAttempt(taskId2, attempt);
           const current = store.readInteractionRequest(taskId2, safeRequest.request_id);
-          if (current?.state === "answered" && current.answer) return current.answer;
+          if (current?.state === "answered" && current.answer) {
+            answer = current.answer;
+            break;
+          }
           await sleep2(250);
         }
+        activityPhase = "executing";
+        writePhase();
+        if (answer) return answer;
         return interactionDecline2(request.method, "The task attempt ended");
       }
     });
@@ -3005,6 +4023,9 @@ async function runWorkerTask(options) {
     };
   }
   clearInterval(heartbeatTimer);
+  clearInterval(persistCorrelationTimer);
+  activityPhase = "finalizing";
+  writePhase();
   const finishedAt = now().toISOString();
   store.assertWorkerAttempt(taskId2, attempt);
   const stdoutLog = store.appendLog(taskId2, "stdout", outcome?.stdout ? `${outcome.stdout}
@@ -3016,6 +4037,29 @@ async function runWorkerTask(options) {
 ` : failure ? `${failure.code}: ${failure.message}
 ` : ""
   );
+  if (modelProfile.model_id === null && outcome?.modelProfile?.model_id) {
+    Object.assign(modelProfile, outcome.modelProfile);
+  }
+  correlation.rpc_accepted_at = correlation.rpc_accepted_at ?? outcome?.phaseTimestamps?.rpc_accepted_at ?? null;
+  correlation.turn_started_at = correlation.turn_started_at ?? outcome?.phaseTimestamps?.turn_started_at ?? null;
+  correlation.turn_completed_at = correlation.turn_completed_at ?? outcome?.phaseTimestamps?.turn_completed_at ?? null;
+  if (modelProfile.turn_id === null && correlation.turn_id) modelProfile.turn_id = correlation.turn_id;
+  const timingNotes = [];
+  const timing = {
+    queued_ms: phaseDuration(initialStatus.created_at, startedAt, timingNotes),
+    execution_ms: phaseDuration(startedAt, finishedAt, timingNotes),
+    turn_ms: phaseDuration(correlation.turn_started_at, correlation.turn_completed_at, timingNotes),
+    finalize_ms: phaseDuration(correlation.turn_completed_at, finishedAt, timingNotes),
+    wall_ms: phaseDuration(startedAt, finishedAt, timingNotes),
+    derived: false,
+    notes: timingNotes
+  };
+  const usage = normalizeUsage(outcome?.usage ?? null, {
+    source: "zcode_runtime_turn",
+    scope: outcome?.sessionId ? `session:${outcome.sessionId}` : null,
+    observedAt: finishedAt
+  });
+  persistCorrelation();
   store.writeAttemptMeta(taskId2, attempt, "outcome.json", {
     started_at: startedAt,
     finished_at: finishedAt,
@@ -3038,6 +4082,10 @@ async function runWorkerTask(options) {
       cleanupError: outcome.cleanupError ?? null,
       cleanupVerified: outcome.cleanupVerified === true
     } : null,
+    usage_normalized: usage,
+    model_profile: modelProfile,
+    timing,
+    correlation: { ...correlation },
     logs: { stdout_truncated: stdoutLog.truncated, stderr_truncated: stderrLog.truncated }
   });
   const result = buildTaskResult({
@@ -3048,7 +4096,10 @@ async function runWorkerTask(options) {
     outcome,
     failure,
     cancelled: outcome?.cancelled === true || failure?.code === "cancelled",
-    sessionId: store.readStatus(taskId2).zcode_session_id ?? continueSpec?.previous_session_id
+    sessionId: store.readStatus(taskId2).zcode_session_id ?? continueSpec?.previous_session_id,
+    usage,
+    model: modelProfile,
+    timing
   });
   store.appendEvent(taskId2, "task_finished", `Task reached terminal status: ${result.status}`, {
     status: result.status,

@@ -2,6 +2,8 @@
 // fields rejected). Rendered with Zod 4 schemas, which the official
 // MCP TypeScript SDK v2 accepts directly as tool input schemas; unknown or
 // missing fields fail input validation before the TaskManager is invoked.
+// Additive optional output fields (observation, scan cursor/metrics, usage)
+// keep old clients working: they may ignore unknown optional keys.
 import * as z from "zod/v4";
 
 export const TASK_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
@@ -50,6 +52,8 @@ export const zcodeEventsInputSchema = z.strictObject({
   limit: z.number().int().min(1).max(200).optional(),
   wait_ms: z.number().int().min(0).max(25_000).optional(),
   view: z.enum(["raw", "summary"]).optional(),
+  scan_cursor: z.string().max(2_048).optional(),
+  max_bytes: z.number().int().min(1_024).max(33_554_432).optional(),
 });
 
 export const zcodeInteractionReplyInputSchema = z.strictObject({
@@ -84,6 +88,26 @@ export const taskReceiptSchema = z.object({
   created_at: z.string(),
 });
 
+const taskObservationSchema = z.object({
+  schema_version: z.literal(1),
+  worker: z.object({ state: z.enum(["alive", "exited", "unknown"]), reason_code: z.string(), observed_at: z.string() }),
+  runtime: z.object({ state: z.enum(["alive", "exited", "unknown"]), reason_code: z.string(), observed_at: z.string() }),
+  activity: z.object({ code: z.string(), reason_code: z.string(), observed_at: z.string() }),
+  result: z.enum(["absent", "checkpointed", "committed"]),
+  cleanup: z.enum(["not_started", "pending", "verified", "unverified"]),
+  stalled: z.boolean(),
+  evidence: z.object({
+    heartbeat_age_ms: z.number().nullable(),
+    last_event_age_ms: z.number().nullable(),
+    last_event_seq: z.number().nullable(),
+    last_event_type: z.string().nullable(),
+    session_id: z.string().nullable(),
+    turn_id: z.string().nullable(),
+    attempt: z.number().int(),
+    status_updated_at: z.string().nullable(),
+  }),
+});
+
 export const taskStatusRecordSchema = z.object({
   task_id: z.string(),
   status: z.enum([
@@ -104,6 +128,45 @@ export const taskStatusRecordSchema = z.object({
   exit_code: z.number().int().nullable(),
   error_code: z.string().optional(),
   error: z.string().optional(),
+  observation: taskObservationSchema.optional(),
+});
+
+const normalizedUsageSchema = z.object({
+  source: z.string().nullable(),
+  scope: z.string().nullable(),
+  observed_at: z.string().nullable(),
+  finality: z.enum(["reported", "derived", "partial"]),
+  input_tokens: z.number().int().nullable(),
+  output_tokens: z.number().int().nullable(),
+  total_tokens: z.number().int().nullable(),
+  cached_input_tokens: z.number().int().nullable(),
+  reasoning_tokens: z.number().int().nullable(),
+  conflicts: z.array(z.string()),
+  dropped_unknown_keys: z.number().int(),
+});
+
+const executionProfileSchema = z.object({
+  executor: z.string(),
+  provider_id: z.string().nullable(),
+  model_id: z.string().nullable(),
+  requested_model: z.string().nullable(),
+  requested_reasoning_level: z.string().nullable(),
+  effective_reasoning_level: z.string().nullable(),
+  effective_reasoning_level_source: z.enum(["runtime", "not_reported"]),
+  selection_source: z.string().nullable(),
+  effective_at: z.string().nullable(),
+  session_id: z.string().nullable(),
+  turn_id: z.string().nullable(),
+});
+
+const attemptTimingSchema = z.object({
+  queued_ms: z.number().int().nullable(),
+  execution_ms: z.number().int().nullable(),
+  turn_ms: z.number().int().nullable(),
+  finalize_ms: z.number().int().nullable(),
+  wall_ms: z.number().int().nullable(),
+  derived: z.boolean(),
+  notes: z.array(z.string()),
 });
 
 export const taskResultSchema = z.object({
@@ -128,6 +191,9 @@ export const taskResultSchema = z.object({
     issues: z.array(z.string()).optional(),
     needs_master_decision: z.boolean().optional(),
   }).optional(),
+  usage: normalizedUsageSchema.nullable().optional(),
+  model: executionProfileSchema.nullable().optional(),
+  timing: attemptTimingSchema.nullable().optional(),
 });
 
 const taskProgressEventSchema = z.object({
@@ -145,6 +211,17 @@ export const taskProgressPageSchema = z.object({
   next_seq: z.number().int().nonnegative(),
   has_more: z.boolean(),
   omitted_events: z.number().int().nonnegative().optional(),
+  observation: taskObservationSchema.optional(),
+  scan_incomplete: z.boolean().optional(),
+  scan_cursor: z.string().optional(),
+  scan_metrics: z.object({
+    bytes_read: z.number().int(),
+    records_scanned: z.number().int(),
+    invalid_lines: z.number().int(),
+    corrupt_count: z.number().int(),
+    first_corrupt_offset: z.number().int().nullable(),
+    index_fallback: z.number().int(),
+  }).optional(),
 });
 
 export const toolErrorSchema = z.object({

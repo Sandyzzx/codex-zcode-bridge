@@ -24,6 +24,8 @@ export interface BridgeDoctorOptions {
   env?: NodeJS.ProcessEnv;
   resolver?: RuntimeResolverOptions;
   dataRoot?: string;
+  /** Explicit task-data root for the A1 active-task observation check. */
+  observationDataRoot?: string;
 }
 
 /** Read-only diagnostics. This does not create a ZCode session or modify either app's data. */
@@ -135,6 +137,65 @@ export async function runBridgeDoctor(options: BridgeDoctorOptions = {}): Promis
   checks.push({ name: "app_server", status: "unknown", summary: "Not probed; doctor does not start an app-server session" });
   checks.push({ name: "start_plan", status: "warning", summary: "Unsupported through the headless Bridge; ZCode Start Plan requires a Desktop captcha session" });
   checks.push({ name: "permission_roundtrip", status: "unknown", summary: "Bridge protocol tests exist; a real ZCode permission-approval roundtrip has not been verified" });
+
+  // A2: report the process-identity probe capability for this platform.
+  checks.push({
+    name: "process_probe",
+    status: process.platform === "win32" || process.platform === "linux" ? "ok" : "warning",
+    summary: process.platform === "win32"
+      ? "Windows process identity uses Get-Process StartTime (FileTime creation fingerprint), batched with a bounded timeout"
+      : process.platform === "linux"
+        ? "Linux process identity uses /proc/<pid>/stat starttime plus boot identity"
+        : process.platform === "darwin"
+          ? "macOS process identity uses ps lstart (second precision; coarse, not an absolute unique identity)"
+          : `Process identity probing is not implemented for ${process.platform}; verdicts stay unknown`,
+  });
+
+  // B4: the Codex main-session token source. The Bridge has no access to the
+  // calling host's per-turn telemetry, so the capability stays unavailable
+  // here; the host feedback layer must state this rather than estimate.
+  checks.push({
+    name: "codex_host_tokens",
+    status: "unknown",
+    summary: "未取得：当前宿主未提供本次调用统计（Bridge 无法读取 Codex 主会话 per-turn token；不得用账户额度或文本估算代替）",
+  });
+
+  // A1: summarize persisted observations of non-terminal tasks via the same
+  // judger used by zcode_status and zcode_events (bounded to 32 tasks).
+  const observedRoot: string | null = options.observationDataRoot ?? env["ZCODE_BRIDGE_DATA_DIR"]?.trim() ?? null;
+  if (observedRoot && existsSync(observedRoot)) {
+    try {
+      const { TaskStore: Store } = await import("../store/task-store.js");
+      const { buildTaskObservation, inferExecutionStage } = await import("../observation/build.js");
+      const store = new Store(observedRoot);
+      const active = store.listTaskIds()
+        .map((taskId) => {
+          try {
+            const status = store.readStatus(taskId);
+            return { taskId, status };
+          } catch { return null; }
+        })
+        .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+        .filter((entry) => entry.status.status === "running" || entry.status.status === "queued" || entry.status.cleanup_unverified === true)
+        .slice(0, 32);
+      if (active.length === 0) {
+        checks.push({ name: "active_tasks", status: "ok", summary: "No queued/running tasks" });
+      } else {
+        const lines = active.map((entry) => {
+          try {
+            const observation = buildTaskObservation(store, entry.taskId, entry.status);
+            const stage = inferExecutionStage(store, entry.taskId, entry.status);
+            return `${entry.taskId}#${entry.status.attempt}: ${observation.activity.code} (stage ${stage}, worker ${observation.worker.state}, runtime ${observation.runtime.state}, result ${observation.result}, cleanup ${observation.cleanup}${observation.stalled ? ", stalled-hint" : ""})`;
+          } catch (error) {
+            return `${entry.taskId}#${entry.status.attempt}: observation unavailable (${safeError(error)})`;
+          }
+        });
+        checks.push({ name: "active_tasks", status: "ok", summary: `${String(active.length)} active task(s): ${lines.join("; ")}`.slice(0, 900) });
+      }
+    } catch (error) {
+      checks.push({ name: "active_tasks", status: "unknown", summary: safeError(error) });
+    }
+  }
 
   return { checked_at: new Date().toISOString(), execution_mode: mode, checks };
 }

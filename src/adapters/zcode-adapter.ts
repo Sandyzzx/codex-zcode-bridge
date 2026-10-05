@@ -50,7 +50,8 @@ export type AdapterErrorCode =
   | "cancelled"
   | "invalid_json"
   | "invalid_agent_report"
-  | "zcode_nonzero_exit";
+  | "zcode_nonzero_exit"
+  | "unknown_turn_terminal";
 
 /**
  * Frozen AgentRunOutcome fields plus adapter-normalization evidence. A
@@ -70,6 +71,14 @@ export interface ZCodeRunOutcome extends AgentRunOutcome {
   /** Process cleanup failed after the turn result was captured. */
   readonly cleanupError?: string | null;
   readonly cleanupVerified?: boolean;
+  /** B2 additive: persisted correlation timestamps (RPC accept / turn start / turn end). */
+  readonly phaseTimestamps?: {
+    readonly rpc_accepted_at?: string | null;
+    readonly turn_started_at?: string | null;
+    readonly turn_completed_at?: string | null;
+  } | null;
+  /** B4 additive: runtime-confirmed model and reasoning-depth evidence. */
+  readonly modelProfile?: import("../interfaces.js").ExecutionProfile | null;
 }
 
 export interface ZCodeAdapterOptions {

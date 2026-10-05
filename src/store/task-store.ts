@@ -24,6 +24,78 @@ export interface InternalTaskStatus extends Omit<TaskStatusRecord, "error_code" 
   zcode_pid?: number | null;
 }
 
+/** A1 evidence bundle read for the observation judger. Never contains task bodies. */
+export interface ObservationEvidence {
+  checkpoint: { recorded_at: string } | null;
+  heartbeat: WorkerHeartbeat | null;
+  last_business_event: { at: string; type: string; seq: number } | null;
+  pending_interaction: { method: string; created_at: string } | null;
+}
+
+/** B3 attempt-scoped observation snapshot: worker-owned execution phases and
+ * manager-owned probe verdicts, merged by field ownership with per-writer
+ * revisions. Observation only — never a substitute for result.json/claim. */
+export interface AttemptObservationSnapshot {
+  schema_version: 1;
+  task_id: string;
+  attempt: number;
+  session_id?: string | null;
+  turn_id?: string | null;
+  last_runtime_seq?: number | null;
+  activity_phase?: string;
+  worker_identity?: Record<string, unknown>;
+  runtime_identity?: Record<string, unknown> | null;
+  worker_probe?: { state: string; reason_code: string };
+  runtime_probe?: { state: string; reason_code: string };
+  writers: { worker?: number; manager?: number };
+  updated_at: string;
+  /** AttemptMeta compatibility for atomic persistence. */
+  [field: string]: unknown;
+}
+
+/** Shape of a persisted process identity (structurally, to avoid a store→probe import cycle). */
+export interface ProcessIdentityLike {
+  pid: number;
+  fingerprint: string | null;
+  fingerprint_precision: string;
+  identity_version: number;
+  platform: string;
+  captured_at: string;
+}
+
+/** B1 opaque scan cursor: bound to the task and log generation plus a byte
+ * offset and the first sequence, so a replaced or truncated log can never
+ * serve another attempt's data through an old cursor. */
+export interface EventsScanCursor {
+  v: 1;
+  task_id: string;
+  generation: string;
+  offset: number;
+  first_seq: number | null;
+}
+
+export interface EventsScanMetrics {
+  bytes_read: number;
+  records_scanned: number;
+  invalid_lines: number;
+  corrupt_count: number;
+  first_corrupt_offset: number | null;
+  index_fallback: boolean;
+}
+
+export interface BoundedEventsRead {
+  events: TaskProgressEvent[];
+  nextSeq: number;
+  hasMore: boolean;
+  omittedEvents: number;
+  /** Budget exhausted before the log end; continue via scan_cursor. */
+  scan_incomplete: boolean;
+  scan_cursor: EventsScanCursor | null;
+  /** The provided cursor no longer matches the log; nothing was read from it. */
+  cursor_invalid: boolean;
+  metrics: EventsScanMetrics;
+}
+
 const TASK_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const DEFAULT_MAX_LOG_BYTES = 10 * 1024 * 1024;
 const MAX_CRITICAL_EVENT_RESERVE_BYTES = 256 * 1024;
@@ -297,6 +369,208 @@ export class TaskStore {
     return readFileSync(file, "utf8");
   }
 
+  // ---- A1 observation evidence (bounded reads, no task bodies) ----
+
+  /** Bounded persisted evidence for the observation judger. */
+  readObservationEvidence(taskId: string, attempt: number): ObservationEvidence {
+    const checkpointRaw = this.readAttemptMeta<{ recorded_at?: unknown }>(taskId, attempt, "outcome-checkpoint.json");
+    const checkpoint = checkpointRaw && typeof checkpointRaw.recorded_at === "string" ? { recorded_at: checkpointRaw.recorded_at } : null;
+    const heartbeat = this.readWorkerHeartbeat(taskId, attempt);
+    return {
+      checkpoint,
+      heartbeat,
+      last_business_event: this.readLastBusinessEvent(taskId),
+      pending_interaction: this.readPendingInteraction(taskId),
+    };
+  }
+
+  /** Last complete event line, read from a bounded tail window. */
+  readLastBusinessEvent(taskId: string): { at: string; type: string; seq: number } | null {
+    const file = path.join(this.taskDir(taskId), "events.jsonl");
+    if (!existsSync(file)) return null;
+    let size = 0;
+    try { size = statSync(file).size; } catch { return null; }
+    if (size === 0) return null;
+    const window = Math.min(8_192, size);
+    const buffer = Buffer.allocUnsafe(window);
+    let read = 0;
+    try {
+      const fd = openSync(file, "r");
+      try { read = readSync(fd, buffer, 0, window, size - window); }
+      finally { closeSync(fd); }
+    } catch { return null; }
+    const text = buffer.subarray(0, read).toString("utf8");
+    const newline = text.indexOf("\n");
+    // Skip the first line only when the window starts mid-file (it may be a
+    // partial line); a window covering the file start needs no skip.
+    const body = newline >= 0 && window < size ? text.slice(newline + 1) : text;
+    const lines = body.split("\n").filter((line) => line.trim());
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      const event = parseProgressEvent(lines[index]!);
+      if (event) return { at: event.at, type: event.type, seq: event.seq };
+    }
+    return null;
+  }
+
+  /** Distinct event types from a bounded tail window (A3 stage inference). */
+  listRecentEventTypes(taskId: string, maxLines: number): string[] {
+    const file = path.join(this.taskDir(taskId), "events.jsonl");
+    if (!existsSync(file)) return [];
+    let size = 0;
+    try { size = statSync(file).size; } catch { return []; }
+    const window = Math.min(256 * 1024, size);
+    if (window === 0) return [];
+    const buffer = Buffer.allocUnsafe(window);
+    let read = 0;
+    try {
+      const fd = openSync(file, "r");
+      try { read = readSync(fd, buffer, 0, window, size - window); }
+      finally { closeSync(fd); }
+    } catch { return []; }
+    const text = buffer.subarray(0, read).toString("utf8");
+    const newline = text.indexOf("\n");
+    // Same partial-first-line rule as readLastBusinessEvent.
+    const body = newline >= 0 && window < size ? text.slice(newline + 1) : text;
+    const types = new Set<string>();
+    for (const line of body.split("\n").slice(-maxLines)) {
+      const event = parseProgressEvent(line);
+      if (event) types.add(event.type);
+    }
+    return [...types];
+  }
+
+  /** Newest unanswered interaction request (bounded directory scan). */
+  readPendingInteraction(taskId: string): { method: string; created_at: string } | null {
+    const directory = path.join(this.taskDir(taskId), "interactions");
+    let entries: string[];
+    try { entries = readdirSync(directory); } catch { return null; }
+    const files = entries.filter((entry) => entry.endsWith(".json")).slice(0, 64);
+    let newest: { method: string; created_at: string } | null = null;
+    for (const file of files) {
+      try {
+        const record = JSON.parse(readFileSync(path.join(directory, file), "utf8")) as ZCodeInteractionRecord;
+        if (record.state === "pending" && typeof record.method === "string" && typeof record.created_at === "string") {
+          if (!newest || record.created_at > newest.created_at) newest = { method: record.method, created_at: record.created_at };
+        }
+      } catch { /* skip unreadable interaction record */ }
+    }
+    return newest;
+  }
+
+  // ---- B3 attempt-scoped observation snapshot (fenced writer) ----
+
+  /**
+   * Writes worker-owned snapshot fields. Fenced twice: the attempt must still
+   * be the current one, and the writer must own the attempt's execution claim,
+   * so a replaced or stale worker can never overwrite current facts. Revision
+   * is per writer and must strictly increase within one writer identity.
+   */
+  writeWorkerObservation(
+    taskId: string,
+    attempt: number,
+    writerPid: number,
+    patch: {
+      session_id?: string | null;
+      turn_id?: string | null;
+      last_runtime_seq?: number | null;
+      activity_phase?: string;
+      worker_identity?: Record<string, unknown> | null;
+      runtime_identity?: Record<string, unknown> | null;
+    },
+    revision: number,
+    updatedAt = new Date().toISOString(),
+  ): void {
+    withEventLock(path.join(this.taskDir(taskId), "state.lock"), () => {
+      const status = this.readStatus(taskId);
+      if (status.attempt !== attempt) throw new Error("stale attempt observation rejected");
+      const claim = this.readAttemptMeta<{ pid?: number }>(taskId, attempt, "execution.claim");
+      if (claim?.pid !== writerPid) throw new Error("observation writer does not own the execution claim");
+      this.#mergeObservationSnapshot(taskId, attempt, "worker", revision, patch, updatedAt);
+    });
+  }
+
+  /** Writes manager-owned snapshot fields (probe verdicts); worker business
+   * phases are never overwritten from the manager side. */
+  writeManagerObservation(
+    taskId: string,
+    attempt: number,
+    patch: {
+      worker_probe?: { state: string; reason_code: string } | null;
+      runtime_probe?: { state: string; reason_code: string } | null;
+    },
+    revision: number,
+    updatedAt = new Date().toISOString(),
+  ): void {
+    withEventLock(path.join(this.taskDir(taskId), "state.lock"), () => {
+      const status = this.readStatus(taskId);
+      if (status.attempt !== attempt) throw new Error("stale attempt observation rejected");
+      this.#mergeObservationSnapshot(taskId, attempt, "manager", revision, patch, updatedAt);
+    });
+  }
+
+  readObservationSnapshot(taskId: string, attempt: number): { snapshot: AttemptObservationSnapshot | null; corrupt: boolean } {
+    const file = path.join(this.attemptDir(taskId, attempt), "observation.json");
+    if (!existsSync(file)) return { snapshot: null, corrupt: false };
+    try {
+      const parsed = JSON.parse(readFileSync(file, "utf8")) as AttemptObservationSnapshot;
+      if (parsed.schema_version !== 1 || parsed.task_id !== taskId || parsed.attempt !== attempt) {
+        return { snapshot: null, corrupt: true };
+      }
+      return { snapshot: parsed, corrupt: false };
+    } catch {
+      return { snapshot: null, corrupt: true };
+    }
+  }
+
+  #mergeObservationSnapshot(
+    taskId: string,
+    attempt: number,
+    writer: "worker" | "manager",
+    revision: number,
+    patch: Record<string, unknown>,
+    updatedAt: string,
+  ): void {
+    if (!Number.isSafeInteger(revision) || revision < 0) throw new Error("observation revision must be a non-negative integer");
+    const current: AttemptObservationSnapshot | null = this.readObservationSnapshot(taskId, attempt).snapshot;
+    const previousRevision = current?.writers?.[writer] ?? -1;
+    if (revision <= previousRevision) throw new Error("stale observation revision rejected");
+    const carried: Partial<AttemptObservationSnapshot> = current ?? {};
+    const next: AttemptObservationSnapshot = {
+      schema_version: 1,
+      task_id: taskId,
+      attempt,
+      writers: { ...carried.writers, [writer]: revision },
+      updated_at: updatedAt,
+    };
+    // Manager patches may only fill manager-owned fields; worker patches only
+    // worker-owned fields. The other side's persisted facts are carried over.
+    const workerOwned = ["session_id", "turn_id", "last_runtime_seq", "activity_phase", "worker_identity", "runtime_identity"] as const;
+    const managerOwned = ["worker_probe", "runtime_probe"] as const;
+    for (const key of workerOwned) {
+      if (key in patch) (next as Record<string, unknown>)[key] = patch[key];
+      else if (key in carried) (next as Record<string, unknown>)[key] = (carried as Record<string, unknown>)[key];
+    }
+    for (const key of managerOwned) {
+      if (key in patch) (next as Record<string, unknown>)[key] = patch[key];
+      else if (key in carried) (next as Record<string, unknown>)[key] = (carried as Record<string, unknown>)[key];
+    }
+    this.writeAttemptMeta(taskId, attempt, "observation.json", next);
+  }
+
+  // ---- A2 executor identity evidence ----
+
+  writeExecutorIdentity(taskId: string, attempt: number, identity: { worker?: Record<string, unknown>; runtime?: Record<string, unknown> | null }): void {
+    const current = this.readAttemptMeta<{ worker?: Record<string, unknown>; runtime?: Record<string, unknown> | null }>(taskId, attempt, "executor-identity.json") ?? {};
+    this.writeAttemptMeta(taskId, attempt, "executor-identity.json", {
+      ...current,
+      ...identity,
+    });
+  }
+
+  readExecutorIdentity(taskId: string, attempt: number): { worker?: ProcessIdentityLike; runtime?: ProcessIdentityLike | null } | null {
+    return this.readAttemptMeta<{ worker?: ProcessIdentityLike; runtime?: ProcessIdentityLike | null }>(taskId, attempt, "executor-identity.json");
+  }
+
   /**
    * Atomically claims the single worker-respawn slot for an attempt by
    * creating the marker file with an exclusive flag, so several Bridge
@@ -403,6 +677,13 @@ export class TaskStore {
       const eventOffset = bytes + (needsSeparator ? 1 : 0);
       appendFileSync(file, `${needsSeparator ? "\n" : ""}${line}`, { encoding: "utf8", mode: 0o600 });
       privateFile(file);
+      // Generation marker: created once per log lifetime, detects wholesale
+      // replacement or truncation for byte cursors. Rewriting the log without
+      // rotating this file invalidates every outstanding cursor (by design).
+      const genFile = path.join(dir, "events.gen");
+      if (!existsSync(genFile)) {
+        this.#writeTextAtomic(genFile, randomUUID());
+      }
       if (event.seq % 100 === 0) {
         const index = path.join(dir, "events.index");
         appendFileSync(index, `${event.seq}\t${eventOffset}\n`, { encoding: "utf8", mode: 0o600 });
@@ -485,6 +766,264 @@ export class TaskStore {
       hasMore,
       omittedEvents,
     };
+  }
+
+  /**
+   * B1 bounded scan: parses complete byte lines only; an unfinished trailing
+   * line is not consumed and the cursor never passes it. Complete corrupt
+   * lines are skipped but counted. The byte budget covers at most the
+   * configured budget plus one read block; exhaustion reports scan_incomplete
+   * and never a has_more=true page with an unchanged after_seq.
+   */
+  readEventsBounded(taskId: string, input: {
+    afterSeq?: number;
+    limit?: number;
+    view?: "raw" | "summary";
+    maxBytes?: number;
+    cursor?: EventsScanCursor | null;
+  } = {}): BoundedEventsRead {
+    const afterSeq = input.afterSeq ?? 0;
+    const limit = input.limit ?? 100;
+    const view = input.view ?? "raw";
+    const budget = input.maxBytes ?? this.#maxEventBytes;
+    const file = path.join(this.taskDir(taskId), "events.jsonl");
+    const empty: BoundedEventsRead = {
+      events: [],
+      nextSeq: afterSeq,
+      hasMore: false,
+      omittedEvents: 0,
+      scan_incomplete: false,
+      scan_cursor: null,
+      cursor_invalid: false,
+      metrics: { bytes_read: 0, records_scanned: 0, invalid_lines: 0, corrupt_count: 0, first_corrupt_offset: null, index_fallback: false },
+    };
+    let size = 0;
+    try { size = statSync(file).size; } catch { return empty; }
+    if (size === 0) return empty;
+
+    let startOffset = 0;
+    let cursorInvalid = false;
+    if (input.cursor) {
+      const generation = this.readEventGeneration(taskId);
+      const valid = input.cursor.v === 1
+        && input.cursor.task_id === taskId
+        && generation !== null
+        && input.cursor.generation === generation
+        && Number.isSafeInteger(input.cursor.offset)
+        && input.cursor.offset >= 0
+        && input.cursor.offset <= size;
+      if (!valid) {
+        return { ...empty, cursor_invalid: true };
+      }
+      startOffset = input.cursor.offset;
+      if (input.cursor.first_seq !== null) {
+        const firstSeq = this.readFirstEventSeq(file, size);
+        if (firstSeq === null || firstSeq !== input.cursor.first_seq) {
+          return { ...empty, cursor_invalid: true };
+        }
+      }
+    }
+
+    // Index is an accelerator only: validate bounds and monotonicity; any
+    // doubt falls back to a safe full scan from offset 0 with a diagnostic.
+    let indexFallback = false;
+    if (startOffset === 0) {
+      const indexFile = path.join(this.taskDir(taskId), "events.index");
+      if (existsSync(indexFile)) {
+        try {
+          let lastSeq = 0;
+          let lastOffset = 0;
+          for (const row of readFileSync(indexFile, "utf8").split(/\r?\n/u)) {
+            if (!row.trim()) continue;
+            const [seqText, offsetText] = row.split("\t");
+            const seq = Number(seqText);
+            const offset = Number(offsetText);
+            if (!Number.isSafeInteger(seq) || !Number.isSafeInteger(offset) || seq <= lastSeq || offset < lastOffset || offset > size) {
+              throw new Error("invalid index row");
+            }
+            lastSeq = seq;
+            lastOffset = offset;
+          }
+          for (const row of readFileSync(indexFile, "utf8").split(/\r?\n/u)) {
+            const [seqText, offsetText] = row.split("\t");
+            const seq = Number(seqText);
+            const offset = Number(offsetText);
+            if (Number.isSafeInteger(seq) && Number.isSafeInteger(offset) && seq <= afterSeq && offset <= size) startOffset = offset;
+            if (Number.isSafeInteger(seq) && seq > afterSeq) break;
+          }
+        } catch {
+          indexFallback = true;
+          startOffset = 0;
+        }
+      }
+    }
+
+    const events: TaskProgressEvent[] = [];
+    let scanned = 0;
+    let bytesRead = 0;
+    let invalidLines = 0;
+    let corruptCount = 0;
+    let firstCorruptOffset: number | null = null;
+    let hasMore = false;
+    let position = startOffset;
+    let lastCompleteOffset = startOffset;
+    let pending = "";
+    // pendingStartOffset is always a BYTE offset into the file.
+    let pendingStartOffset = startOffset;
+    let reachedEnd = false;
+    const maxRead = budget + 64 * 1024;
+    const decoder = new StringDecoder("utf8");
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    const fd = openSync(file, "r");
+    // String indices are character-based while cursors are byte-based; every
+    // consumed line therefore adds its exact UTF-8 byte length.
+    const processLine = (line: string, lineOffset: number, lineEndOffset: number): boolean => {
+      // Returns false when the page filled on this event.
+      lastCompleteOffset = lineEndOffset;
+      if (!line.trim()) return true;
+      const event = parseProgressEvent(line);
+      if (!event) {
+        invalidLines += 1;
+        corruptCount += 1;
+        if (firstCorruptOffset === null) firstCorruptOffset = lineOffset;
+        return true;
+      }
+      scanned += 1;
+      if (event.seq <= afterSeq) return true;
+      if (events.length === limit) {
+        // Page full: the cursor rewinds to the start of this unconsumed
+        // event so a byte-cursor continuation re-reads exactly it.
+        hasMore = true;
+        lastCompleteOffset = lineOffset;
+        return false;
+      }
+      events.push(event);
+      return true;
+    };
+    try {
+      while (bytesRead < maxRead) {
+        const count = readSync(fd, buffer, 0, buffer.length, position);
+        if (count <= 0) { reachedEnd = true; break; }
+        position += count;
+        bytesRead += count;
+        const text = pending + decoder.write(buffer.subarray(0, count));
+        let searchFrom = 0;
+        let consumedBytes = 0;
+        let stopped = false;
+        while (true) {
+          const newline = text.indexOf("\n", searchFrom);
+          if (newline < 0) break;
+          const line = text.slice(searchFrom, newline).replace(/\r$/u, "");
+          const lineBytes = Buffer.byteLength(text.slice(searchFrom, newline + 1), "utf8");
+          const lineOffset = pendingStartOffset + consumedBytes;
+          consumedBytes += lineBytes;
+          searchFrom = newline + 1;
+          if (!processLine(line, lineOffset, pendingStartOffset + consumedBytes)) { stopped = true; break; }
+        }
+        if (stopped) {
+          pending = "";
+          break;
+        }
+        pending = text.slice(searchFrom);
+        pendingStartOffset += consumedBytes;
+      }
+      if (!hasMore) {
+        // Finish the tail block: parse only complete lines. A trailing partial
+        // line is uncommitted — never consumed, never counted corrupt, and
+        // byte cursors stop before it so it can be read once it completes.
+        const tail = pending + decoder.end();
+        let searchFrom = 0;
+        let consumedBytes = 0;
+        while (true) {
+          const newline = tail.indexOf("\n", searchFrom);
+          if (newline < 0) break; // a partial trailing line stops the cursor
+          const line = tail.slice(searchFrom, newline).replace(/\r$/u, "");
+          const lineBytes = Buffer.byteLength(tail.slice(searchFrom, newline + 1), "utf8");
+          const lineOffset = pendingStartOffset + consumedBytes;
+          consumedBytes += lineBytes;
+          searchFrom = newline + 1;
+          if (!processLine(line, lineOffset, pendingStartOffset + consumedBytes)) break;
+        }
+        if (!hasMore && !reachedEnd && bytesRead >= maxRead) {
+          // Budget exhausted with an unconsumed remainder: the cursor stays at
+          // the end of the last complete line so no byte is read twice, and
+          // the response reports the incomplete scan instead of pretending a
+          // full read.
+          lastCompleteOffset = pendingStartOffset + consumedBytes;
+        }
+      }
+    } finally {
+      closeSync(fd);
+    }
+
+    let page = events;
+    let omittedEvents = 0;
+    if (view === "summary") {
+      page = [];
+      for (const event of events) {
+        const previous = page.at(-1);
+        if (event.type === "model_output" && previous?.type === "model_output") {
+          const combined = previous.summary + event.summary;
+          page[page.length - 1] = {
+            ...previous,
+            seq: event.seq,
+            at: event.at,
+            summary: combined.length <= 5_000 ? combined : `${combined.slice(0, 4_950)}…[output compacted]`,
+          };
+          omittedEvents += 1;
+        } else {
+          page.push(event);
+        }
+      }
+    }
+
+    // scan_incomplete means the byte budget ran out before the log end while
+    // returning a full page is not possible; bounded clients continue via the
+    // byte cursor, after_seq clients via has_more (which always advances).
+    const scanIncomplete = !reachedEnd && !hasMore;
+    const nextSeq = page.at(-1)?.seq ?? afterSeq;
+    // Loop guard: never report has_more with an unchanged cursor for old
+    // clients. Progress is carried by the byte cursor for bounded clients.
+    if (hasMore && nextSeq === afterSeq && !input.cursor) hasMore = false;
+    const cursor: EventsScanCursor | null = this.readEventGeneration(taskId)
+      ? { v: 1, task_id: taskId, generation: this.readEventGeneration(taskId)!, offset: lastCompleteOffset, first_seq: input.cursor?.first_seq ?? this.readFirstEventSeq(file, size) }
+      : null;
+    return {
+      events: page,
+      nextSeq,
+      hasMore,
+      omittedEvents,
+      scan_incomplete: scanIncomplete,
+      scan_cursor: cursor,
+      cursor_invalid: false,
+      metrics: { bytes_read: bytesRead, records_scanned: scanned, invalid_lines: invalidLines, corrupt_count: corruptCount, first_corrupt_offset: firstCorruptOffset, index_fallback: indexFallback },
+    };
+  }
+
+  /** Generation marker detecting log replacement/truncation across reads. */
+  readEventGeneration(taskId: string): string | null {
+    try {
+      const value = readFileSync(path.join(this.taskDir(taskId), "events.gen"), "utf8").trim();
+      return value || null;
+    } catch {
+      return null;
+    }
+  }
+
+  private readFirstEventSeq(file: string, size: number): number | null {
+    const window = Math.min(64 * 1024, size);
+    const buffer = Buffer.allocUnsafe(window);
+    let read = 0;
+    try {
+      const fd = openSync(file, "r");
+      try { read = readSync(fd, buffer, 0, window, 0); }
+      finally { closeSync(fd); }
+    } catch { return null; }
+    const text = buffer.subarray(0, read).toString("utf8");
+    const newline = text.indexOf("\n");
+    if (newline < 0) return null;
+    const event = parseProgressEvent(text.slice(0, newline).replace(/\r$/u, ""));
+    return event ? event.seq : null;
   }
 
   writeInteractionRequest(

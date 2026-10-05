@@ -11,6 +11,10 @@ import { FakeAdapter, fakeOutcome, makeManagerFixture } from "./manager-helpers.
 import { withProcessLock } from "../src/store/process-lock.js";
 import { BridgeTaskManager } from "../src/manager/task-manager.js";
 import { DirectWorkspaceProvider } from "../src/workspace/direct-provider.js";
+import { TaskStore } from "../src/store/task-store.js";
+import { makeTask, makeTempDir, removeTempDir } from "./helpers.js";
+import type { ProcessIdentity, ProcessProbe, ProbeRequest, ProbeVerdict } from "../src/runtime/process-probe.js";
+import type { TerminateProcessTree } from "../src/adapters/process-spawn.js";
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const storeUrl = new URL("../src/store/task-store.js", import.meta.url).href;
@@ -64,6 +68,229 @@ test("a taskkill exit race requires a verified terminal result and dead recorded
       await finishing;
     } finally { manager?.dispose(); await fx.cleanup(); }
   }
+});
+
+// ---- A2-04: the Windows cleanup race between the cancel identity probe and taskkill ----
+
+/** Scriptable identity probe: one verdict answer per pid, alive by default. */
+class ScriptedProbe {
+  readonly answers = new Map<number, { state: ProbeVerdict["state"]; reason_code: string }>();
+
+  identityOf(pid: number): Promise<ProcessIdentity> {
+    return Promise.resolve({
+      pid,
+      fingerprint: `fp-${String(pid)}`,
+      fingerprint_precision: "exact",
+      identity_version: 1,
+      platform: process.platform,
+      captured_at: new Date().toISOString(),
+    });
+  }
+
+  selfIdentity(): Promise<ProcessIdentity> {
+    return this.identityOf(process.pid);
+  }
+
+  async probe(requests: readonly ProbeRequest[]): Promise<ProbeVerdict[]> {
+    return requests.map((request) => {
+      const answer = this.answers.get(request.pid);
+      return {
+        state: answer?.state ?? "alive",
+        reason_code: answer?.reason_code ?? "scripted_alive",
+        observed_at: new Date().toISOString(),
+      };
+    });
+  }
+
+  set(pid: number, state: ProbeVerdict["state"], reason: string): void {
+    this.answers.set(pid, { state, reason_code: reason });
+  }
+}
+
+interface CleanupRaceFixture {
+  store: TaskStore;
+  manager: BridgeTaskManager;
+  probe: ScriptedProbe;
+  pidsAlive: Set<number>;
+  terminateCalls: number[];
+  workerPid: number;
+  runtimePid: number;
+  workspaceDir: string;
+  setTerminate: (impl: TerminateProcessTree) => void;
+  dispose: () => Promise<void>;
+}
+
+/** Seeds the field incident (audit-remediation-20261005-zcode-worktree): a
+ * running task holds cleanup_unverified with worker pid 22696 and runtime pid
+ * 26188 recorded, both identities persisted, and both probed alive. */
+async function makeCleanupRaceFixture(options: { persistIdentity?: boolean } = {}): Promise<CleanupRaceFixture> {
+  const dataRoot = await makeTempDir("a204-race");
+  const workspaceDir = await makeTempDir("a204-race-ws");
+  const store = new TaskStore(dataRoot);
+  const probe = new ScriptedProbe();
+  const pidsAlive = new Set<number>();
+  const terminateCalls: number[] = [];
+  const workerPid = 22696;
+  const runtimePid = 26188;
+  let terminateImpl: TerminateProcessTree = async () => {
+    throw new Error("the test must install a terminate script before cancelling");
+  };
+  const manager = new BridgeTaskManager({
+    store,
+    workspaceProvider: new DirectWorkspaceProvider(),
+    spawnWorker: () => {
+      pidsAlive.add(workerPid);
+      return { pid: workerPid };
+    },
+    isProcessRunning: (pid) => pidsAlive.has(pid),
+    terminateProcessTree: (pid, options) => {
+      terminateCalls.push(pid);
+      return terminateImpl(pid, options);
+    },
+    probe: probe as unknown as ProcessProbe,
+    pollIntervalMs: 0,
+  });
+  try {
+    await manager.createTask(makeTask({ workspace: workspaceDir }));
+  } catch (error) {
+    manager.dispose();
+    await removeTempDir(dataRoot);
+    await removeTempDir(workspaceDir);
+    throw error;
+  }
+  store.writeStatus("task_1", { cleanup_unverified: true, zcode_pid: runtimePid });
+  if (options.persistIdentity !== false) {
+    store.writeExecutorIdentity("task_1", 1, {
+      worker: (await probe.identityOf(workerPid)) as unknown as Record<string, unknown>,
+      runtime: (await probe.identityOf(runtimePid)) as unknown as Record<string, unknown>,
+    });
+  }
+  pidsAlive.add(runtimePid);
+  return {
+    store,
+    manager,
+    probe,
+    pidsAlive,
+    terminateCalls,
+    workerPid,
+    runtimePid,
+    workspaceDir,
+    setTerminate: (impl) => { terminateImpl = impl; },
+    dispose: async () => {
+      manager.dispose();
+      await removeTempDir(dataRoot);
+      await removeTempDir(workspaceDir);
+    },
+  };
+}
+
+test("a natural exit between the cancel probe and taskkill resolves cleanup as an idempotent success", async () => {
+  const fx = await makeCleanupRaceFixture();
+  try {
+    // Both recorded processes exit naturally while taskkill is in flight;
+    // taskkill then reports the runtime pid as not found and exits non-zero.
+    fx.setTerminate(async (pid) => {
+      fx.probe.set(pid, "exited", "pid_absent");
+      fx.probe.set(fx.workerPid, "exited", "pid_absent");
+      fx.pidsAlive.delete(pid);
+      fx.pidsAlive.delete(fx.workerPid);
+      throw new Error(`taskkill: 没有找到进程 ${String(pid)}。`);
+    });
+    const status = await fx.manager.cancelTask("task_1");
+    assert.equal(status.status, "cancelled");
+    const persisted = fx.store.readStatus("task_1");
+    assert.equal(persisted.cleanup_unverified ?? false, false, "the probe-verified race clears the flag");
+    assert.equal(persisted.zcode_pid, null);
+    assert.deepEqual(fx.terminateCalls, [fx.runtimePid], "the exited worker pid must never be signalled");
+    assert.equal((await fx.manager.getResult("task_1")).status, "cancelled");
+  } finally { await fx.dispose(); }
+});
+
+test("legacy cleanup without executor identities uses the probe to resolve an exited-PID race", async () => {
+  const fx = await makeCleanupRaceFixture({ persistIdentity: false });
+  try {
+    assert.equal(fx.store.readExecutorIdentity("task_1", 1), null);
+    fx.setTerminate(async (pid) => {
+      fx.probe.set(pid, "exited", "pid_absent");
+      fx.probe.set(fx.workerPid, "exited", "pid_absent");
+      fx.pidsAlive.delete(pid);
+      fx.pidsAlive.delete(fx.workerPid);
+      throw new Error(`taskkill: 没有找到进程 ${String(pid)}。`);
+    });
+    const status = await fx.manager.cancelTask("task_1");
+    assert.equal(status.status, "cancelled");
+    assert.equal(fx.store.readStatus("task_1").cleanup_unverified ?? false, false);
+    assert.equal(fx.store.readStatus("task_1").zcode_pid, null);
+  } finally { await fx.dispose(); }
+});
+
+test("legacy cleanup without executor identities stays occupied when the probe cannot verify exit", async () => {
+  const fx = await makeCleanupRaceFixture({ persistIdentity: false });
+  try {
+    fx.setTerminate(async (pid) => {
+      fx.probe.set(pid, "unknown", "query_timeout");
+      throw new Error(`taskkill: 没有找到进程 ${String(pid)}。`);
+    });
+    await assert.rejects(fx.manager.cancelTask("task_1"), /could not be verified/);
+    const persisted = fx.store.readStatus("task_1");
+    assert.equal(persisted.status, "running");
+    assert.equal(persisted.cleanup_unverified, true);
+    assert.equal(persisted.zcode_pid, fx.runtimePid);
+    await fx.manager.createTask(makeTask({ task_id: "later", workspace: fx.workspaceDir }));
+    assert.equal((await fx.manager.getStatus("later")).status, "queued");
+  } finally { await fx.dispose(); }
+});
+
+test("a cleanup race recheck that answers unknown keeps cleanup_unverified and the occupation", async () => {
+  const fx = await makeCleanupRaceFixture();
+  try {
+    fx.setTerminate(async (pid) => {
+      fx.probe.set(pid, "unknown", "query_timeout");
+      fx.probe.set(fx.workerPid, "exited", "pid_absent");
+      throw new Error(`taskkill: 没有找到进程 ${String(pid)}。`);
+    });
+    await assert.rejects(fx.manager.cancelTask("task_1"), /could not be verified/);
+    const persisted = fx.store.readStatus("task_1");
+    assert.equal(persisted.status, "running");
+    assert.equal(persisted.cleanup_unverified, true);
+    assert.equal(persisted.zcode_pid, fx.runtimePid);
+    assert.deepEqual(fx.terminateCalls, [fx.runtimePid]);
+  } finally { await fx.dispose(); }
+});
+
+test("a cleanup race recheck that answers alive keeps cleanup_unverified and reserves the directory", async () => {
+  const fx = await makeCleanupRaceFixture();
+  try {
+    // taskkill fails for a reason other than a natural exit (access denied)
+    // and the runtime is still there on re-verification.
+    fx.setTerminate(async (pid) => {
+      fx.probe.set(pid, "alive", "pid_and_fingerprint_match");
+      throw new Error("taskkill: 拒绝访问。");
+    });
+    await fx.manager.createTask(makeTask({ task_id: "later", workspace: fx.workspaceDir }));
+    await assert.rejects(fx.manager.cancelTask("task_1"), /could not be verified/);
+    const persisted = fx.store.readStatus("task_1");
+    assert.equal(persisted.status, "running");
+    assert.equal(persisted.cleanup_unverified, true);
+    assert.equal(persisted.zcode_pid, fx.runtimePid);
+    assert.equal((await fx.manager.getStatus("later")).status, "queued", "the execution directory stays reserved");
+  } finally { await fx.dispose(); }
+});
+
+test("a cleanup race that proves only the runtime exited keeps the occupation while the worker is alive", async () => {
+  const fx = await makeCleanupRaceFixture();
+  try {
+    fx.setTerminate(async (pid) => {
+      fx.probe.set(pid, "exited", "pid_absent");
+      fx.probe.set(fx.workerPid, "alive", "pid_and_fingerprint_match");
+      throw new Error(`taskkill: 没有找到进程 ${String(pid)}。`);
+    });
+    await assert.rejects(fx.manager.cancelTask("task_1"), /worker alive/);
+    const persisted = fx.store.readStatus("task_1");
+    assert.equal(persisted.status, "running");
+    assert.equal(persisted.cleanup_unverified, true);
+    assert.deepEqual(fx.terminateCalls, [fx.runtimePid], "a probe-alive worker pid is only ever signalled by an explicit terminate step");
+  } finally { await fx.dispose(); }
 });
 
 function childScript(source: string): Promise<{ code: number | null; output: string }> {
@@ -206,12 +433,28 @@ test("cleanup failure reserves the execution path until termination is verified"
     await fx.manager.createTask(fx.makeTask({ task_id: "later" }));
     assert.equal((await fx.manager.getStatus("later")).status, "queued");
     await assert.rejects(fx.manager.continueTask({ task_id: "task_1", feedback: "retry" }), /cleanup/);
+    // A live orphaned runtime must be terminated and verified: a failed
+    // termination keeps the unverified state and the reserved execution path.
+    fx.pidsAlive.add(4444);
     fx.setTerminateError(new Error("kill failed"));
     await assert.rejects(fx.manager.cancelTask("task_1"), /cleanup/);
     assert.equal((await fx.manager.getStatus("later")).status, "queued");
     fx.setTerminateError(null);
     await fx.manager.cancelTask("task_1");
     assert.equal((await fx.manager.getStatus("later")).status, "running");
+  } finally { await fx.cleanup(); }
+});
+
+test("an already-exited runtime makes cleanup verification idempotent without a kill", async () => {
+  const fx = await makeManagerFixture();
+  try {
+    await fx.manager.createTask(fx.makeTask());
+    await fx.runWorker("task_1", new FakeAdapter());
+    // The runtime pid is gone, but its exit was never verified in-band.
+    fx.store.writeStatus("task_1", { cleanup_unverified: true, zcode_pid: 4444 });
+    await assert.doesNotReject(fx.manager.cancelTask("task_1"));
+    assert.equal(fx.terminateCalls.length, 0, "a probe-confirmed exit must not be signalled again");
+    assert.equal(fx.store.readStatus("task_1").cleanup_unverified ?? false, false);
   } finally { await fx.cleanup(); }
 });
 
