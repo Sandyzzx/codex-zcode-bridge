@@ -41,7 +41,7 @@ import type { ZCodeModelSettings } from "../runtime/model-settings.js";
 import { registerLedgerTools } from "../ledger/mcp.js";
 
 export const SERVER_NAME = "codex-zcode-bridge";
-export const SERVER_VERSION = "1.0.5"; // x-release-please-version
+export const SERVER_VERSION = "1.1.0"; // x-release-please-version
 
 export interface BridgeServerOptions {
   taskManager: TaskManager & Partial<Pick<ProgressTaskManager, "getEvents" | "replyToInteraction">>;
