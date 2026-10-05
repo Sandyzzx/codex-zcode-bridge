@@ -4,6 +4,14 @@
 
 当前版本以 `package.json` 和 Release Please manifest 为准。提交推送到 `master` 后，Release Please 会在有待发布变更时创建发布 PR，并同步更新版本文件与本日志；合并发布 PR 后会生成对应 Git tag 和 GitHub Release。
 
+## [1.2.0](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.1.0...codex-zcode-bridge-v1.2.0) (2026-10-05)
+
+
+### Features
+
+* add provenance-aware task feedback snapshot ([fcd9b6f](https://github.com/Sandyzzx/codex-zcode-bridge/commit/fcd9b6f9cc8f077d8cae6a21fdc954bf1e67459a))
+* add provenance-aware task feedback snapshot ([f1f6b12](https://github.com/Sandyzzx/codex-zcode-bridge/commit/f1f6b12ffe84c42db491e59fb34096a1569489b6))
+
 ## [1.1.0](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.0.5...codex-zcode-bridge-v1.1.0) (2026-10-05)
 
 
