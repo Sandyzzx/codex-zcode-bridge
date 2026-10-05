@@ -4,6 +4,14 @@
 
 当前版本以 `package.json` 和 Release Please manifest 为准。提交推送到 `master` 后，Release Please 会在有待发布变更时创建发布 PR，并同步更新版本文件与本日志；合并发布 PR 后会生成对应 Git tag 和 GitHub Release。
 
+## [1.1.0](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.0.5...codex-zcode-bridge-v1.1.0) (2026-10-05)
+
+
+### Features
+
+* add project task ledger and structured ZCode run reporting ([a814f01](https://github.com/Sandyzzx/codex-zcode-bridge/commit/a814f015921d89c02efdd5021ed8e6dcc86bd98a))
+* add task ledger and structured run reporting ([79082a6](https://github.com/Sandyzzx/codex-zcode-bridge/commit/79082a6711441e09b7310fc0c58c6f64fcd342fb))
+
 ## [1.0.5](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.0.4...codex-zcode-bridge-v1.0.5) (2026-10-03)
 
 
