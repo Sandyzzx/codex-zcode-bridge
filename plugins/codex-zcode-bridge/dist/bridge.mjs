@@ -47,6 +47,9 @@ function describeLockOwner(directory) {
   }
 }
 function tryAcquireProcessLock(directory) {
+  return tryAcquireProcessLockWithRetry(directory, 0);
+}
+function tryAcquireProcessLockWithRetry(directory, retries) {
   const token = randomUUID();
   const staging = `${directory}.${process.pid}.${token}.pending`;
   const ownerRecord = {
@@ -64,7 +67,13 @@ function tryAcquireProcessLock(directory) {
       renameSync(staging, directory);
     } catch (error2) {
       removeStagedLock(staging);
-      if (!existsSync2(directory)) throw error2;
+      if (!existsSync2(directory)) {
+        const code = error2.code;
+        if (retries < 3 && (code === "EEXIST" || code === "EPERM" || code === "EACCES")) {
+          return tryAcquireProcessLockWithRetry(directory, retries + 1);
+        }
+        throw error2;
+      }
       return acquireExistingLock(directory);
     }
   } catch (error2) {

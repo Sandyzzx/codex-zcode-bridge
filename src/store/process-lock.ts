@@ -44,6 +44,10 @@ function describeLockOwner(directory: string): string | null {
 
 /** Shared by short synchronous store transactions and asynchronous managers. */
 export function tryAcquireProcessLock(directory: string): (() => void) | null {
+  return tryAcquireProcessLockWithRetry(directory, 0);
+}
+
+function tryAcquireProcessLockWithRetry(directory: string, retries: number): (() => void) | null {
   const token = randomUUID();
   // Publish only a complete owner record. If the process exits during the
   // write, its private staging directory is harmless and the shared lock
@@ -68,8 +72,16 @@ export function tryAcquireProcessLock(directory: string): (() => void) | null {
       removeStagedLock(staging);
       // Windows may report EEXIST or a directory-specific error when another
       // process wins the publication race. Only inspect it if the destination
-      // actually exists; unrelated rename errors must remain visible.
-      if (!existsSync(directory)) throw error;
+      // actually exists. If a competing owner released between the failed
+      // rename and this check, retry the publication a few times rather than
+      // surfacing a transient EPERM/EEXIST as a failed store transaction.
+      if (!existsSync(directory)) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (retries < 3 && (code === "EEXIST" || code === "EPERM" || code === "EACCES")) {
+          return tryAcquireProcessLockWithRetry(directory, retries + 1);
+        }
+        throw error;
+      }
       return acquireExistingLock(directory);
     }
   } catch (error) {

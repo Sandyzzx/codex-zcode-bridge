@@ -2373,6 +2373,9 @@ import { randomUUID } from "node:crypto";
 import path4 from "node:path";
 var selfIdentity = null;
 function tryAcquireProcessLock(directory) {
+  return tryAcquireProcessLockWithRetry(directory, 0);
+}
+function tryAcquireProcessLockWithRetry(directory, retries) {
   const token = randomUUID();
   const staging = `${directory}.${process.pid}.${token}.pending`;
   const ownerRecord = {
@@ -2390,7 +2393,13 @@ function tryAcquireProcessLock(directory) {
       renameSync(staging, directory);
     } catch (error) {
       removeStagedLock(staging);
-      if (!existsSync4(directory)) throw error;
+      if (!existsSync4(directory)) {
+        const code = error.code;
+        if (retries < 3 && (code === "EEXIST" || code === "EPERM" || code === "EACCES")) {
+          return tryAcquireProcessLockWithRetry(directory, retries + 1);
+        }
+        throw error;
+      }
       return acquireExistingLock(directory);
     }
   } catch (error) {
