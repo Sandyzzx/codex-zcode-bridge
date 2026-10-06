@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { ProcessIdentity } from "../runtime/process-probe.js";
@@ -45,6 +45,10 @@ function describeLockOwner(directory: string): string | null {
 /** Shared by short synchronous store transactions and asynchronous managers. */
 export function tryAcquireProcessLock(directory: string): (() => void) | null {
   const token = randomUUID();
+  // Publish only a complete owner record. If the process exits during the
+  // write, its private staging directory is harmless and the shared lock
+  // path remains absent. Directory rename is the single publication point.
+  const staging = `${directory}.${process.pid}.${token}.pending`;
   const ownerRecord = {
     pid: process.pid,
     token,
@@ -56,30 +60,21 @@ export function tryAcquireProcessLock(directory: string): (() => void) | null {
       : null,
   };
   try {
-    mkdirSync(directory, { mode: 0o700 });
-    writeFileSync(path.join(directory, "owner.json"), JSON.stringify(ownerRecord), { mode: 0o600 });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    mkdirSync(staging, { mode: 0o700 });
+    writeFileSync(path.join(staging, "owner.json"), JSON.stringify(ownerRecord), { mode: 0o600, flag: "wx" });
     try {
-      const owner = JSON.parse(readFileSync(path.join(directory, "owner.json"), "utf8")) as { pid: number };
-      if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0) throw new Error("invalid lock owner");
-      try { process.kill(owner.pid, 0); }
-      catch (failure) {
-        if ((failure as NodeJS.ErrnoException).code === "ESRCH") {
-          if (reclaimDeadOwner(directory)) return tryAcquireProcessLock(directory);
-        }
-      }
-    } catch {
-      // An interrupted acquisition has no owner; allow time for publication.
-      // Ownership is never taken by lock age alone (A2-07): an unreadable
-      // owner stays blocking, and reclaim requires explicit exit evidence.
-      try {
-        if (Date.now() - statSync(directory).mtimeMs > 30_000) throw new Error(`unreadable lock owner: ${directory}`);
-      } catch (failure) {
-        if ((failure as NodeJS.ErrnoException).code !== "ENOENT") throw failure;
-      }
+      renameSync(staging, directory);
+    } catch (error) {
+      removeStagedLock(staging);
+      // Windows may report EEXIST or a directory-specific error when another
+      // process wins the publication race. Only inspect it if the destination
+      // actually exists; unrelated rename errors must remain visible.
+      if (!existsSync(directory)) throw error;
+      return acquireExistingLock(directory);
     }
-    return null;
+  } catch (error) {
+    removeStagedLock(staging);
+    throw error;
   }
   return () => {
     const owner = JSON.parse(readFileSync(path.join(directory, "owner.json"), "utf8")) as { token?: string };
@@ -87,6 +82,33 @@ export function tryAcquireProcessLock(directory: string): (() => void) | null {
     unlinkSync(path.join(directory, "owner.json"));
     rmdirSync(directory);
   };
+}
+
+function acquireExistingLock(directory: string): (() => void) | null {
+  try {
+    const owner = JSON.parse(readFileSync(path.join(directory, "owner.json"), "utf8")) as { pid: number };
+    if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0) throw new Error("invalid lock owner");
+    try { process.kill(owner.pid, 0); }
+    catch (failure) {
+      if ((failure as NodeJS.ErrnoException).code === "ESRCH") {
+        if (reclaimDeadOwner(directory)) return tryAcquireProcessLock(directory);
+      }
+    }
+  } catch {
+    // Never reclaim an unreadable legacy lock by age. It needs explicit
+    // diagnosis; new acquisitions cannot create this state after staged publish.
+    try {
+      if (Date.now() - statSync(directory).mtimeMs > 30_000) throw new Error(`unreadable lock owner: ${directory}`);
+    } catch (failure) {
+      if ((failure as NodeJS.ErrnoException).code !== "ENOENT") throw failure;
+    }
+  }
+  return null;
+}
+
+function removeStagedLock(directory: string): void {
+  try { unlinkSync(path.join(directory, "owner.json")); } catch { /* staging may not have reached the write */ }
+  try { rmdirSync(directory); } catch { /* preserve the original acquisition error */ }
 }
 
 function reclaimDeadOwner(directory: string): boolean {

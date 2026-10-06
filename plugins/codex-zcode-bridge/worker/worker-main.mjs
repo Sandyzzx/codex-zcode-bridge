@@ -2362,18 +2362,19 @@ function truncate(text, maxChars) {
 }
 
 // src/store/task-store.ts
-import { appendFileSync, chmodSync, closeSync, copyFileSync, existsSync as existsSync4, mkdirSync as mkdirSync2, openSync, readFileSync as readFileSync4, readSync, readdirSync, rmSync, statSync as statSync3, writeFileSync as writeFileSync2 } from "node:fs";
+import { appendFileSync, chmodSync, closeSync, copyFileSync, existsSync as existsSync5, mkdirSync as mkdirSync2, openSync, readFileSync as readFileSync4, readSync, readdirSync, rmSync, statSync as statSync3, writeFileSync as writeFileSync2 } from "node:fs";
 import { createHash as createHash2, randomUUID as randomUUID2 } from "node:crypto";
 import path5 from "node:path";
 import { StringDecoder } from "node:string_decoder";
 
 // src/store/process-lock.ts
-import { mkdirSync, readFileSync as readFileSync3, renameSync, rmdirSync, statSync as statSync2, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync as existsSync4, mkdirSync, readFileSync as readFileSync3, renameSync, rmdirSync, statSync as statSync2, unlinkSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import path4 from "node:path";
 var selfIdentity = null;
 function tryAcquireProcessLock(directory) {
   const token = randomUUID();
+  const staging = `${directory}.${process.pid}.${token}.pending`;
   const ownerRecord = {
     pid: process.pid,
     token,
@@ -2383,28 +2384,18 @@ function tryAcquireProcessLock(directory) {
     identity: selfIdentity ? { fingerprint: selfIdentity.fingerprint, identity_version: selfIdentity.identity_version, platform: selfIdentity.platform } : null
   };
   try {
-    mkdirSync(directory, { mode: 448 });
-    writeFileSync(path4.join(directory, "owner.json"), JSON.stringify(ownerRecord), { mode: 384 });
-  } catch (error) {
-    if (error.code !== "EEXIST") throw error;
+    mkdirSync(staging, { mode: 448 });
+    writeFileSync(path4.join(staging, "owner.json"), JSON.stringify(ownerRecord), { mode: 384, flag: "wx" });
     try {
-      const owner = JSON.parse(readFileSync3(path4.join(directory, "owner.json"), "utf8"));
-      if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0) throw new Error("invalid lock owner");
-      try {
-        process.kill(owner.pid, 0);
-      } catch (failure) {
-        if (failure.code === "ESRCH") {
-          if (reclaimDeadOwner(directory)) return tryAcquireProcessLock(directory);
-        }
-      }
-    } catch {
-      try {
-        if (Date.now() - statSync2(directory).mtimeMs > 3e4) throw new Error(`unreadable lock owner: ${directory}`);
-      } catch (failure) {
-        if (failure.code !== "ENOENT") throw failure;
-      }
+      renameSync(staging, directory);
+    } catch (error) {
+      removeStagedLock(staging);
+      if (!existsSync4(directory)) throw error;
+      return acquireExistingLock(directory);
     }
-    return null;
+  } catch (error) {
+    removeStagedLock(staging);
+    throw error;
   }
   return () => {
     const owner = JSON.parse(readFileSync3(path4.join(directory, "owner.json"), "utf8"));
@@ -2412,6 +2403,36 @@ function tryAcquireProcessLock(directory) {
     unlinkSync(path4.join(directory, "owner.json"));
     rmdirSync(directory);
   };
+}
+function acquireExistingLock(directory) {
+  try {
+    const owner = JSON.parse(readFileSync3(path4.join(directory, "owner.json"), "utf8"));
+    if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0) throw new Error("invalid lock owner");
+    try {
+      process.kill(owner.pid, 0);
+    } catch (failure) {
+      if (failure.code === "ESRCH") {
+        if (reclaimDeadOwner(directory)) return tryAcquireProcessLock(directory);
+      }
+    }
+  } catch {
+    try {
+      if (Date.now() - statSync2(directory).mtimeMs > 3e4) throw new Error(`unreadable lock owner: ${directory}`);
+    } catch (failure) {
+      if (failure.code !== "ENOENT") throw failure;
+    }
+  }
+  return null;
+}
+function removeStagedLock(directory) {
+  try {
+    unlinkSync(path4.join(directory, "owner.json"));
+  } catch {
+  }
+  try {
+    rmdirSync(directory);
+  } catch {
+  }
 }
 function reclaimDeadOwner(directory) {
   const guard = `${directory}.reclaim`;
@@ -2514,21 +2535,21 @@ var TaskStore = class {
   }
   hasTask(taskId2) {
     try {
-      return existsSync4(path5.join(this.taskDir(taskId2), "status.json"));
+      return existsSync5(path5.join(this.taskDir(taskId2), "status.json"));
     } catch {
       return false;
     }
   }
   listTaskIds() {
-    if (!existsSync4(this.#tasksRoot)) return [];
+    if (!existsSync5(this.#tasksRoot)) return [];
     return readdirSync(this.#tasksRoot).filter(
-      (entry) => existsSync4(path5.join(this.#tasksRoot, entry, "status.json"))
+      (entry) => existsSync5(path5.join(this.#tasksRoot, entry, "status.json"))
     );
   }
   createTask(task, createdAt) {
     this.assertValidTaskId(task.task_id);
     const dir = this.taskDir(task.task_id);
-    if (existsSync4(path5.join(dir, "task.json"))) {
+    if (existsSync5(path5.join(dir, "task.json"))) {
       throw new Error(`task already exists: ${task.task_id}`);
     }
     privateMkdir(path5.join(dir, "attempts"));
@@ -2556,7 +2577,7 @@ var TaskStore = class {
   }
   readSubmission(taskId2) {
     const file = path5.join(this.taskDir(taskId2), "submission.json");
-    if (!existsSync4(file)) return null;
+    if (!existsSync5(file)) return null;
     return this.#readJson(file);
   }
   writeSubmission(taskId2, submission) {
@@ -2567,7 +2588,7 @@ var TaskStore = class {
   }
   readWorkspaceRef(taskId2) {
     const file = path5.join(this.taskDir(taskId2), "workspace.json");
-    if (!existsSync4(file)) return null;
+    if (!existsSync5(file)) return null;
     const workspace = this.#readJson(file);
     if (!workspace || typeof workspace.canonicalPath !== "string" || typeof workspace.requestedPath !== "string" || !["direct", "worktree"].includes(workspace.mode)) throw new Error(`corrupt workspace record: ${file}`);
     return workspace;
@@ -2597,7 +2618,7 @@ var TaskStore = class {
   }
   readResult(taskId2) {
     const file = path5.join(this.taskDir(taskId2), "result.json");
-    if (!existsSync4(file)) return null;
+    if (!existsSync5(file)) return null;
     const result = this.#readJson(file);
     if (!result || result.task_id !== taskId2 || !Number.isSafeInteger(result.attempt) || !isTerminalStatus(result.status)) throw new Error(`corrupt result record: ${file}`);
     return result.attempt === this.readStatus(taskId2).attempt ? result : null;
@@ -2627,7 +2648,7 @@ var TaskStore = class {
   archiveResultToAttempt(taskId2, attempt) {
     const dir = this.taskDir(taskId2);
     const source = path5.join(dir, "result.json");
-    if (!existsSync4(source)) return;
+    if (!existsSync5(source)) return;
     const targetDir = this.attemptDir(taskId2, attempt);
     privateMkdir(targetDir);
     copyFileSync(source, path5.join(targetDir, "result.json"));
@@ -2654,7 +2675,7 @@ var TaskStore = class {
   }
   readArchivedResult(taskId2, attempt) {
     const file = path5.join(this.attemptDir(taskId2, attempt), "result.json");
-    if (!existsSync4(file)) return null;
+    if (!existsSync5(file)) return null;
     return this.#readJson(file);
   }
   attemptDir(taskId2, attempt) {
@@ -2672,7 +2693,7 @@ var TaskStore = class {
   }
   readAttemptMeta(taskId2, attempt, fileName) {
     const file = path5.join(this.attemptDir(taskId2, attempt), fileName);
-    if (!existsSync4(file)) return null;
+    if (!existsSync5(file)) return null;
     return this.#readJson(file);
   }
   writeWorkerHeartbeat(taskId2, attempt, heartbeat) {
@@ -2692,7 +2713,7 @@ var TaskStore = class {
   }
   readAttemptText(taskId2, attempt, fileName) {
     const file = path5.join(this.attemptDir(taskId2, attempt), fileName);
-    if (!existsSync4(file)) return null;
+    if (!existsSync5(file)) return null;
     return readFileSync4(file, "utf8");
   }
   // ---- A1 observation evidence (bounded reads, no task bodies) ----
@@ -2711,7 +2732,7 @@ var TaskStore = class {
   /** Last complete event line, read from a bounded tail window. */
   readLastBusinessEvent(taskId2) {
     const file = path5.join(this.taskDir(taskId2), "events.jsonl");
-    if (!existsSync4(file)) return null;
+    if (!existsSync5(file)) return null;
     let size = 0;
     try {
       size = statSync3(file).size;
@@ -2745,7 +2766,7 @@ var TaskStore = class {
   /** Distinct event types from a bounded tail window (A3 stage inference). */
   listRecentEventTypes(taskId2, maxLines) {
     const file = path5.join(this.taskDir(taskId2), "events.jsonl");
-    if (!existsSync4(file)) return [];
+    if (!existsSync5(file)) return [];
     let size = 0;
     try {
       size = statSync3(file).size;
@@ -2825,7 +2846,7 @@ var TaskStore = class {
   }
   readObservationSnapshot(taskId2, attempt) {
     const file = path5.join(this.attemptDir(taskId2, attempt), "observation.json");
-    if (!existsSync4(file)) return { snapshot: null, corrupt: false };
+    if (!existsSync5(file)) return { snapshot: null, corrupt: false };
     try {
       const parsed = JSON.parse(readFileSync4(file, "utf8"));
       if (parsed.schema_version !== 1 || parsed.task_id !== taskId2 || parsed.attempt !== attempt) {
@@ -2918,7 +2939,7 @@ var TaskStore = class {
   }
   readLog(taskId2, kind) {
     const file = path5.join(this.taskDir(taskId2), `${kind}.log`);
-    return existsSync4(file) ? readFileSync4(file, "utf8") : "";
+    return existsSync5(file) ? readFileSync4(file, "utf8") : "";
   }
   appendEvent(taskId2, type, summary, details, at = (/* @__PURE__ */ new Date()).toISOString()) {
     const dir = this.taskDir(taskId2);
@@ -2973,7 +2994,7 @@ var TaskStore = class {
       appendFileSync(file, `${needsSeparator ? "\n" : ""}${line}`, { encoding: "utf8", mode: 384 });
       privateFile(file);
       const genFile = path5.join(dir, "events.gen");
-      if (!existsSync4(genFile)) {
+      if (!existsSync5(genFile)) {
         this.#writeTextAtomic(genFile, randomUUID2());
       }
       if (event.seq % 100 === 0) {
@@ -2987,10 +3008,10 @@ var TaskStore = class {
   }
   readEvents(taskId2, afterSeq = 0, limit = 100, view = "raw") {
     const file = path5.join(this.taskDir(taskId2), "events.jsonl");
-    if (!existsSync4(file)) return { events: [], nextSeq: afterSeq, hasMore: false, omittedEvents: 0 };
+    if (!existsSync5(file)) return { events: [], nextSeq: afterSeq, hasMore: false, omittedEvents: 0 };
     let offset = 0;
     const indexFile = path5.join(this.taskDir(taskId2), "events.index");
-    if (existsSync4(indexFile)) {
+    if (existsSync5(indexFile)) {
       for (const row of readFileSync4(indexFile, "utf8").split(/\r?\n/u)) {
         const [seqText, offsetText] = row.split("	");
         const seq = Number(seqText);
@@ -3111,7 +3132,7 @@ var TaskStore = class {
     let indexFallback = false;
     if (startOffset === 0) {
       const indexFile = path5.join(this.taskDir(taskId2), "events.index");
-      if (existsSync4(indexFile)) {
+      if (existsSync5(indexFile)) {
         try {
           let lastSeq = 0;
           let lastOffset = 0;
@@ -3298,7 +3319,7 @@ var TaskStore = class {
     privateMkdir(directory);
     const file = this.interactionFile(taskId2, request.request_id);
     return withEventLock(path5.join(this.taskDir(taskId2), "interactions.lock"), () => {
-      if (existsSync4(file)) {
+      if (existsSync5(file)) {
         const record2 = this.#readJson(file);
         if (record2.request_id !== request.request_id || record2.method !== request.method || stableJson(record2.params) !== stableJson(request.params)) {
           throw new Error("interaction request id collision");
@@ -3319,7 +3340,7 @@ var TaskStore = class {
   }
   readInteractionRequest(taskId2, requestId) {
     const file = this.interactionFile(taskId2, requestId);
-    if (!existsSync4(file)) return null;
+    if (!existsSync5(file)) return null;
     const record = this.#readJson(file);
     if (record.request_id !== requestId) throw new Error("interaction request id hash mismatch");
     return record;
@@ -3327,7 +3348,7 @@ var TaskStore = class {
   answerInteractionRequest(taskId2, requestId, answer, answeredAt = (/* @__PURE__ */ new Date()).toISOString()) {
     const file = this.interactionFile(taskId2, requestId);
     return withEventLock(path5.join(this.taskDir(taskId2), "interactions.lock"), () => {
-      if (!existsSync4(file)) throw new Error(`unknown ZCode interaction request: ${requestId}`);
+      if (!existsSync5(file)) throw new Error(`unknown ZCode interaction request: ${requestId}`);
       const current = this.#readJson(file);
       if (current.request_id !== requestId) throw new Error("interaction request id hash mismatch");
       if (current.state === "answered") return "already_answered";
@@ -3399,7 +3420,7 @@ function privateFile(file) {
   if (process.platform !== "win32") chmodSync(file, 384);
 }
 function readLastEventSeq(file) {
-  if (!existsSync4(file)) return 0;
+  if (!existsSync5(file)) return 0;
   for (const line of readFileSync4(file, "utf8").trimEnd().split("\n").reverse()) {
     try {
       const event = JSON.parse(line);
