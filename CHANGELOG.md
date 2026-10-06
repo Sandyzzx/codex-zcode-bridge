@@ -4,6 +4,15 @@
 
 当前版本以 `package.json` 和 Release Please manifest 为准。提交推送到 `master` 后，Release Please 会在有待发布变更时创建发布 PR，并同步更新版本文件与本日志；合并发布 PR 后会生成对应 Git tag 和 GitHub Release。
 
+## [1.2.1](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.2.0...codex-zcode-bridge-v1.2.1) (2026-10-06)
+
+
+### Bug Fixes
+
+* recover terminal cleanup holds safely ([0c2d834](https://github.com/Sandyzzx/codex-zcode-bridge/commit/0c2d834b783e542abb0f1fc282b162c739d63bf5))
+* recover terminal cleanup holds safely ([8044fda](https://github.com/Sandyzzx/codex-zcode-bridge/commit/8044fda49616c44c900c2dae954a8ce141167825))
+* retry transient Windows lock publication races ([#30](https://github.com/Sandyzzx/codex-zcode-bridge/issues/30)) ([62205f0](https://github.com/Sandyzzx/codex-zcode-bridge/commit/62205f07f6277ff68e30b85d00e81e1431c02a64))
+
 ## [1.2.0](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.1.0...codex-zcode-bridge-v1.2.0) (2026-10-05)
 
 
