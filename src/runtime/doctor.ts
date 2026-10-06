@@ -1,5 +1,6 @@
-import { accessSync, constants, existsSync, statSync } from "node:fs";
+import { accessSync, constants, existsSync, readFileSync, statSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import path from "node:path";
 import { zcodeTasksIndexPath } from "./account-provider.js";
 import { BridgeError } from "./errors.js";
 import { resolveSessionPreferences } from "./session-preferences.js";
@@ -168,7 +169,7 @@ export async function runBridgeDoctor(options: BridgeDoctorOptions = {}): Promis
       const { TaskStore: Store } = await import("../store/task-store.js");
       const { buildTaskObservation, inferExecutionStage } = await import("../observation/build.js");
       const store = new Store(observedRoot);
-      const active = store.listTaskIds()
+      const activeAll = store.listTaskIds()
         .map((taskId) => {
           try {
             const status = store.readStatus(taskId);
@@ -176,8 +177,11 @@ export async function runBridgeDoctor(options: BridgeDoctorOptions = {}): Promis
           } catch { return null; }
         })
         .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
-        .filter((entry) => entry.status.status === "running" || entry.status.status === "queued" || entry.status.cleanup_unverified === true)
-        .slice(0, 32);
+        .filter((entry) => entry.status.status === "running" || entry.status.status === "queued" || entry.status.cleanup_unverified === true);
+      const queued = activeAll.filter((entry) => entry.status.status === "queued");
+      const cleanupPending = activeAll.filter((entry) => entry.status.cleanup_unverified === true);
+      const running = activeAll.filter((entry) => entry.status.status === "running");
+      const active = activeAll.slice(0, 32);
       if (active.length === 0) {
         checks.push({ name: "active_tasks", status: "ok", summary: "No queued/running tasks" });
       } else {
@@ -190,14 +194,56 @@ export async function runBridgeDoctor(options: BridgeDoctorOptions = {}): Promis
             return `${entry.taskId}#${entry.status.attempt}: observation unavailable (${safeError(error)})`;
           }
         });
-        checks.push({ name: "active_tasks", status: "ok", summary: `${String(active.length)} active task(s): ${lines.join("; ")}`.slice(0, 900) });
+        const oldestQueuedAt = queued
+          .map((entry) => Date.parse(entry.status.created_at))
+          .filter(Number.isFinite)
+          .sort((a, b) => a - b)[0];
+        const queueAge = oldestQueuedAt === undefined ? "unknown" : `${Math.floor(Math.max(0, Date.now() - oldestQueuedAt) / 60_000)}m`;
+        const blocked = queued.length > 0 || cleanupPending.length > 0;
+        const summary = `${running.length} running, ${queued.length} queued, ${cleanupPending.length} cleanup-unverified; oldest queue ${queueAge}${blocked ? "; dispatch may be blocked" : ""}. ${lines.join("; ")}`;
+        checks.push({ name: "active_tasks", status: blocked ? "warning" : "ok", summary: summary.slice(0, 1_200) });
       }
+
+      checks.push(inspectRecoveryLock(path.join(store.tasksRoot, ".recovery.lock")));
     } catch (error) {
       checks.push({ name: "active_tasks", status: "unknown", summary: safeError(error) });
     }
   }
 
   return { checked_at: new Date().toISOString(), execution_mode: mode, checks };
+}
+
+function inspectRecoveryLock(lockDirectory: string): DoctorCheck {
+  if (!existsSync(lockDirectory)) {
+    return { name: "recovery_lock", status: "ok", summary: "No persisted recovery lock is blocking task reconciliation" };
+  }
+  try {
+    const lockStat = statSync(lockDirectory);
+    const raw = readFileSync(path.join(lockDirectory, "owner.json"), "utf8");
+    const owner = JSON.parse(raw) as { pid?: number; token?: string };
+    if (!Number.isSafeInteger(owner.pid) || (owner.pid ?? 0) <= 0 || typeof owner.token !== "string" || !owner.token) {
+      throw new Error("invalid lock owner record");
+    }
+    const ageMs = Date.now() - lockStat.mtimeMs;
+    if (ageMs <= 30_000) {
+      return { name: "recovery_lock", status: "ok", summary: "A recent recovery pass owns the reconciliation lock" };
+    }
+    try {
+      process.kill(owner.pid!, 0);
+      return { name: "recovery_lock", status: "warning", summary: "Recovery lock is older than 30 seconds and its owner PID still exists; reconciliation may be stalled" };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") {
+        return { name: "recovery_lock", status: "warning", summary: "Recovery lock owner PID is absent; the next recovery pass should reclaim the lock" };
+      }
+      return { name: "recovery_lock", status: "warning", summary: "Recovery lock owner liveness could not be confirmed" };
+    }
+  } catch (error) {
+    const ageMs = Date.now() - statSync(lockDirectory).mtimeMs;
+    if (ageMs <= 30_000) {
+      return { name: "recovery_lock", status: "warning", summary: "Recovery lock owner record is being published or is unreadable; check again if it persists" };
+    }
+    return { name: "recovery_lock", status: "error", summary: `Recovery lock owner record is unreadable; automated reconciliation is blocked and needs repair (${safeError(error)})` };
+  }
 }
 
 function safeError(error: unknown): string {

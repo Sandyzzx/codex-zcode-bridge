@@ -3,7 +3,7 @@
 // and A3 bounded diagnostics. Each test names the acceptance item it proves.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { TaskStore } from "../src/store/task-store.js";
@@ -335,6 +335,92 @@ test("A1-06: status, events, and doctor share one judger verdict for one snapsho
     const active = report.checks.find((check) => check.name === "active_tasks");
     assert.ok(active, "doctor reports active task observations");
     assert.match(active.summary, /task_1#1: executing/);
+    assert.equal(active.status, "ok", "a running task without a queue or cleanup hold is healthy");
+    assert.equal(report.checks.find((check) => check.name === "recovery_lock")?.status, "ok");
+
+    const recoveryLock = path.join(fx.store.tasksRoot, ".recovery.lock");
+    mkdirSync(recoveryLock);
+    writeFileSync(path.join(recoveryLock, "owner.json"), "");
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(recoveryLock, old, old);
+    const blocked = await runBridgeDoctor({
+      env: { ...process.env, ZCODE_BRIDGE_DATA_DIR: fx.dataRoot, OS: process.env["OS"] },
+      dataRoot: fx.dataRoot,
+      observationDataRoot: fx.dataRoot,
+      resolver: { env: { ...process.env, ZCODE_BRIDGE_NODE: process.execPath, ZCODE_BRIDGE_ZCODE_CJS: "x", ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: "b", ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: "p", ZCODE_BRIDGE_DATA_DIR: fx.dataRoot } as NodeJS.ProcessEnv },
+    });
+    assert.equal(blocked.checks.find((check) => check.name === "recovery_lock")?.status, "error");
+  } finally { await fx.cleanup(); }
+});
+
+test("terminal cleanup recovery releases only a probe-confirmed exit and pumps the waiting path", async () => {
+  const probe = new FakeProbe();
+  const fx = await makeObservedFixture({ probe });
+  try {
+    await fx.manager.createTask(fx.makeTask());
+    await fx.runWorker("task_1", new FakeAdapter());
+    const originalResult = fx.store.readResult("task_1");
+    assert.ok(originalResult);
+    const workerPid = fx.store.readExecutorIdentity("task_1", 1)?.worker?.pid ?? fx.store.readAttemptMeta<{ worker_pid?: number }>("task_1", 1, "started.json")?.worker_pid;
+    assert.ok(workerPid);
+    probe.set(workerPid, "exited", "pid_absent");
+    fx.store.writeStatus("task_1", { cleanup_unverified: true, zcode_pid: 44_444 });
+    probe.set(44_444, "exited", "pid_absent");
+
+    await fx.manager.createTask(fx.makeTask({ task_id: "waiting" }));
+    assert.equal((await fx.manager.getStatus("waiting")).status, "queued", "the unverified directory stays occupied");
+    await fx.manager.recoverTasks();
+
+    const cleaned = fx.store.readStatus("task_1");
+    assert.equal(cleaned.status, "completed", "cleanup does not rewrite the task result status");
+    assert.equal(cleaned.cleanup_unverified ?? false, false);
+    assert.equal(cleaned.zcode_pid, null);
+    assert.deepEqual(fx.store.readResult("task_1"), originalResult, "the original terminal result is preserved");
+    assert.equal((await fx.manager.getStatus("waiting")).status, "running");
+    assert.equal(fx.terminateCalls.length, 0, "recovery verifies exit and never kills a process");
+    assert.ok(fx.store.readEvents("task_1", 0, 100).events.some((event) => event.type === "cleanup_verified"));
+  } finally { await fx.cleanup(); }
+});
+
+test("terminal cleanup recovery retains occupancy when process exit is unknown", async () => {
+  const probe = new FakeProbe();
+  const fx = await makeObservedFixture({ probe });
+  try {
+    await fx.manager.createTask(fx.makeTask());
+    await fx.runWorker("task_1", new FakeAdapter());
+    const workerPid = fx.store.readExecutorIdentity("task_1", 1)?.worker?.pid ?? fx.store.readAttemptMeta<{ worker_pid?: number }>("task_1", 1, "started.json")?.worker_pid;
+    assert.ok(workerPid);
+    probe.set(workerPid, "exited", "pid_absent");
+    fx.store.writeStatus("task_1", { cleanup_unverified: true, zcode_pid: 44_445 });
+    probe.set(44_445, "unknown", "query_timeout");
+    await fx.manager.createTask(fx.makeTask({ task_id: "waiting" }));
+
+    await fx.manager.recoverTasks();
+    assert.equal(fx.store.readStatus("task_1").cleanup_unverified, true);
+    assert.equal(fx.store.readStatus("task_1").zcode_pid, 44_445);
+    assert.equal((await fx.manager.getStatus("waiting")).status, "queued");
+    assert.equal(fx.terminateCalls.length, 0);
+  } finally { await fx.cleanup(); }
+});
+
+test("terminal cleanup recovery discards a stale probe after its PID snapshot changes", async () => {
+  const probe = new FakeProbe();
+  probe.delayMs = 40;
+  const fx = await makeObservedFixture({ probe });
+  try {
+    await fx.manager.createTask(fx.makeTask());
+    await fx.runWorker("task_1", new FakeAdapter());
+    const workerPid = fx.store.readExecutorIdentity("task_1", 1)?.worker?.pid ?? fx.store.readAttemptMeta<{ worker_pid?: number }>("task_1", 1, "started.json")?.worker_pid;
+    assert.ok(workerPid);
+    probe.set(workerPid, "exited", "pid_absent");
+    fx.store.writeStatus("task_1", { cleanup_unverified: true, zcode_pid: 44_446 });
+    probe.set(44_446, "exited", "pid_absent");
+    const recovering = fx.manager.recoverTasks();
+    await delay(5);
+    fx.store.writeStatus("task_1", { zcode_pid: 55_555 });
+    await recovering;
+    assert.equal(fx.store.readStatus("task_1").cleanup_unverified, true);
+    assert.equal(fx.store.readStatus("task_1").zcode_pid, 55_555);
   } finally { await fx.cleanup(); }
 });
 
@@ -515,6 +601,27 @@ test("A2-07: lock owners are never evicted by age; reclaim needs explicit exit e
     const reclaimedOld = tryAcquireProcessLock(oldDir);
     assert.ok(reclaimedOld);
     reclaimedOld();
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("A2-07c: lock publication exposes a complete owner record and ignores abandoned staging dirs", () => {
+  const tmp = mkdtempSync(path.join(tmpdir(), "zcode-bridge-test-a2-lock-publish-"));
+  try {
+    const lockDir = path.join(tmp, "recovery.lock");
+    const abandoned = `${lockDir}.12345.crashed.pending`;
+    mkdirSync(abandoned);
+    writeFileSync(path.join(abandoned, "owner.json"), "");
+
+    const release = tryAcquireProcessLock(lockDir);
+    assert.ok(release, "an incomplete private staging directory must not block the shared lock");
+    const owner = JSON.parse(readFileSync(path.join(lockDir, "owner.json"), "utf8")) as { pid?: number; token?: string };
+    assert.equal(owner.pid, process.pid);
+    assert.ok(owner.token);
+    assert.equal(tryAcquireProcessLock(lockDir), null, "a published live owner keeps the lock");
+    release();
+    assert.equal(existsSync(lockDir), false);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

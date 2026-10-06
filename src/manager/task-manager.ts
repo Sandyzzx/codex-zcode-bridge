@@ -112,7 +112,13 @@ export class BridgeTaskManager implements ProgressTaskManager {
     this.#recoveryCooldownMs = pollIntervalMs;
     if (pollIntervalMs > 0) {
       this.#timer = setInterval(() => {
-        void this.recoverTasks().catch((error) => console.error("Bridge recovery failed:", error instanceof Error ? error.message : String(error)));
+        void this.recoverTasks().catch((error) => {
+          const reason = boundedErrorMessage(error);
+          const occurrence = this.#counters.record("recovery_loop_error", reason);
+          if (this.#counters.shouldEmit("recovery_loop_error", reason, 60)) {
+            console.error(`Bridge recovery failed: ${reason} (occurrence ${occurrence.count})`);
+          }
+        });
       }, pollIntervalMs);
       this.#timer.unref();
     }
@@ -158,9 +164,10 @@ export class BridgeTaskManager implements ProgressTaskManager {
         try {
           const status = this.#safeStatus(taskId);
           if (!status) continue;
-          if (isTerminalStatus(status.status)) continue;
           if (status.status === "running") {
             await this.#reconcileRunningThreePhase(taskId, status);
+          } else if (isTerminalStatus(status.status) && status.cleanup_unverified === true) {
+            await this.#reconcileTerminalCleanup(taskId, status);
           }
         } catch (error) {
           const reason = this.#counters.record("reconcile_error", taskId);
@@ -183,6 +190,67 @@ export class BridgeTaskManager implements ProgressTaskManager {
         this.#recoveryPromise = null;
       }
     }
+  }
+
+  /** Releases terminal-task occupancy only after the persisted executor exits
+   * are independently confirmed. A probe never signals or retries the task. */
+  async #reconcileTerminalCleanup(taskId: string, status: InternalTaskStatus): Promise<void> {
+    const identity = this.#store.readExecutorIdentity(taskId, status.attempt);
+    const started = this.#store.readAttemptMeta<{ worker_pid?: number }>(taskId, status.attempt, "started.json");
+    const snapshot = {
+      attempt: status.attempt,
+      status_worker_pid: status.worker_pid,
+      // A terminal status clears worker_pid before the worker process itself
+      // has necessarily exited. Retain its attempt identity as exit evidence.
+      worker_pid: status.worker_pid ?? identity?.worker?.pid ?? started?.worker_pid ?? null,
+      zcode_pid: status.zcode_pid ?? null,
+      identity,
+    };
+    if (snapshot.worker_pid === null && snapshot.zcode_pid === null) {
+      const occurrence = this.#counters.record("terminal_cleanup_unverifiable", "missing_pid");
+      if (this.#counters.shouldEmit("terminal_cleanup_unverifiable", "missing_pid")) {
+        this.#store.appendEvent(taskId, "cleanup_probe_unknown", "Terminal task has no recorded executor PID; cleanup remains occupied", {
+          reason_code: "missing_executor_pid", count: occurrence.count,
+        }, this.#now().toISOString());
+      }
+      return;
+    }
+
+    const verdicts = await this.#probeExecutors(snapshot);
+    const workerExited = snapshot.worker_pid === null || verdicts.worker.state === "exited";
+    const runtimeExited = snapshot.zcode_pid === null || verdicts.runtime.state === "exited";
+    if (!workerExited || !runtimeExited) {
+      const reason = !runtimeExited ? verdicts.runtime.reason_code : verdicts.worker.reason_code;
+      const occurrence = this.#counters.record("terminal_cleanup_unverifiable", reason);
+      if (this.#counters.shouldEmit("terminal_cleanup_unverifiable", reason)) {
+        this.#store.appendEvent(taskId, "cleanup_probe_unknown", "Terminal task cleanup is not yet verified; its execution path remains occupied", {
+          reason_code: reason, worker_state: verdicts.worker.state, runtime_state: verdicts.runtime.state,
+          count: occurrence.count,
+        }, this.#now().toISOString());
+      }
+      return;
+    }
+
+    await this.#exclusive(async () => {
+      const current = this.#safeStatus(taskId);
+      if (!current || !isTerminalStatus(current.status) || current.cleanup_unverified !== true) return;
+      const currentIdentity = this.#store.readExecutorIdentity(taskId, current.attempt);
+      if (
+        current.attempt !== snapshot.attempt || current.worker_pid !== snapshot.status_worker_pid ||
+        (current.zcode_pid ?? null) !== snapshot.zcode_pid ||
+        currentIdentity?.worker?.pid !== snapshot.identity?.worker?.pid ||
+        currentIdentity?.worker?.fingerprint !== snapshot.identity?.worker?.fingerprint ||
+        currentIdentity?.runtime?.pid !== snapshot.identity?.runtime?.pid ||
+        currentIdentity?.runtime?.fingerprint !== snapshot.identity?.runtime?.fingerprint
+      ) return;
+      this.#store.writeStatus(taskId, { cleanup_unverified: null, worker_pid: null, zcode_pid: null });
+      this.#store.appendEvent(taskId, "cleanup_verified", "Recorded worker and ZCode runtime exits were confirmed; terminal result was preserved", {
+        attempt: snapshot.attempt,
+        worker_reason_code: snapshot.worker_pid === null ? "not_recorded" : verdicts.worker.reason_code,
+        runtime_reason_code: snapshot.zcode_pid === null ? "not_recorded" : verdicts.runtime.reason_code,
+      }, this.#now().toISOString());
+      this.#pumpLocked();
+    });
   }
 
   /** Persisted facts needed for one recovery probe cycle. */
@@ -785,9 +853,10 @@ export class BridgeTaskManager implements ProgressTaskManager {
       this.#requireTask(taskId);
       const status = this.#store.readStatus(taskId);
       const identity = this.#store.readExecutorIdentity(taskId, status.attempt);
+      const started = this.#store.readAttemptMeta<{ worker_pid?: number }>(taskId, status.attempt, "started.json");
       const probeSnapshot = {
         attempt: status.attempt,
-        worker_pid: status.worker_pid,
+        worker_pid: status.worker_pid ?? identity?.worker?.pid ?? started?.worker_pid ?? null,
         zcode_pid: status.zcode_pid ?? null,
         identity,
       };
@@ -795,19 +864,24 @@ export class BridgeTaskManager implements ProgressTaskManager {
       // (A2): a reused PID must never be signalled for the old executor.
       const verdicts = await this.#probeExecutors(probeSnapshot);
       if (status.cleanup_unverified) {
-        if (!status.zcode_pid) throw new TaskManagerError("CANCEL_FAILED", "No ZCode process identity is available to verify cleanup");
-        if (verdicts.runtime.state === "unknown") {
+        if (probeSnapshot.worker_pid === null && probeSnapshot.zcode_pid === null) {
+          throw new TaskManagerError("CANCEL_FAILED", "No worker or ZCode process identity is available to verify cleanup");
+        }
+        if (probeSnapshot.zcode_pid !== null && verdicts.runtime.state === "unknown") {
           throw new TaskManagerError("CANCEL_FAILED", `ZCode cleanup could not be verified: runtime probe returned ${verdicts.runtime.reason_code}`);
         }
+        if (probeSnapshot.worker_pid !== null && verdicts.worker.state === "unknown") {
+          throw new TaskManagerError("CANCEL_FAILED", `Worker cleanup could not be verified: worker probe returned ${verdicts.worker.reason_code}`);
+        }
         try {
-          if (verdicts.runtime.state === "alive") {
-            await this.#terminateProcessTree(status.zcode_pid, { graceMs: 500, killWaitMs: 5_000 });
+          if (probeSnapshot.zcode_pid !== null && verdicts.runtime.state === "alive") {
+            await this.#terminateProcessTree(probeSnapshot.zcode_pid, { graceMs: 500, killWaitMs: 5_000 });
             const after = (await this.#probeExecutors(probeSnapshot)).runtime;
             if (after.state === "alive") throw new Error("runtime still alive after termination");
             if (after.state === "unknown") throw new Error(`runtime exit could not be verified (${after.reason_code})`);
           }
-          if (status.status === "running" && status.worker_pid && verdicts.worker.state === "alive") {
-            await this.#terminateProcessTree(status.worker_pid, { graceMs: 500, killWaitMs: 5_000 });
+          if (probeSnapshot.worker_pid !== null && verdicts.worker.state === "alive") {
+            await this.#terminateProcessTree(probeSnapshot.worker_pid, { graceMs: 500, killWaitMs: 5_000 });
           }
         }
         catch (error) {
@@ -825,8 +899,9 @@ export class BridgeTaskManager implements ProgressTaskManager {
           } catch (recheckError) {
             throw new TaskManagerError("CANCEL_FAILED", `ZCode cleanup could not be verified: ${String(error)}; re-verification failed: ${String(recheckError)}`);
           }
-          const workerRecorded = status.status === "running" && status.worker_pid !== null;
-          if (recheck.runtime.state !== "exited" || (workerRecorded && recheck.worker.state !== "exited")) {
+          const runtimeRecorded = probeSnapshot.zcode_pid !== null;
+          const workerRecorded = probeSnapshot.worker_pid !== null;
+          if ((runtimeRecorded && recheck.runtime.state !== "exited") || (workerRecorded && recheck.worker.state !== "exited")) {
             throw new TaskManagerError("CANCEL_FAILED", `ZCode cleanup could not be verified: ${String(error)}; re-verification observed runtime ${recheck.runtime.state} (${recheck.runtime.reason_code})${workerRecorded ? ` and worker ${recheck.worker.state} (${recheck.worker.reason_code})` : ""}`);
           }
           this.#store.appendEvent(taskId, "cleanup_race_resolved", "Termination raced a natural exit; a fresh identity probe confirmed the recorded processes exited", {
