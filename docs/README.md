@@ -76,7 +76,7 @@ English readers start at [README.md](../README.md). This index is bilingual; the
 | [research/desktop-task-refresh-2026-09-28.md](research/desktop-task-refresh-2026-09-28.md) | 2026-09-28 | ZCode Desktop 任务列表刷新机制 |
 | [research/start-plan-headless-2026-09-27.md](research/start-plan-headless-2026-09-27.md) | 2026-09-27 | Start Plan headless 认证阻塞与 Coding Plan 回归 |
 
-`docs/research/` 里还会随 2026-10-05 的 Native CLI / app-server 研究合并而增加内容；那批文档目前还在独立 PR 中。
+2026-10-05 的 Native CLI / app-server 研究会落在 `docs/research/native-cli-vs-appserver-2026-10-05/`。那批文档目前在独立 PR 中，合并后本索引再补上逐篇条目。
 
 ### 归档 ARCHIVED
 
