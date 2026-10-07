@@ -60,7 +60,11 @@ English readers start at [README.md](../README.md). This index is bilingual; the
 
 | 文档 | 日期 | 说明 |
 |---|---|---|
-| [decisions/README.md](decisions/README.md) | 2026-10-07 | 决策索引与待补 ADR 清单 |
+| [decisions/README.md](decisions/README.md) | 2026-10-07 | 决策索引 |
+| [ADR-001](decisions/ADR-001-appserver-as-production-execution-path.md) | 2026-10-07 | Accepted：生产执行路径使用 app-server |
+| [ADR-002](decisions/ADR-002-manager-owns-task-lifecycle.md) | 2026-10-07 | Accepted：Manager 独占生命周期，worker 通过 attempt claim 入场 |
+| [ADR-003](decisions/ADR-003-execution-directory-prepared-by-host.md) | 2026-10-07 | Accepted：执行目录由调用宿主准备 |
+| [ADR-004](decisions/ADR-004-observation-is-not-control.md) | 2026-10-07 | Proposed：本地材料只作观察面，待 Master 决策 |
 | [decisions/roadmap-decisions-2026-09-27.md](decisions/roadmap-decisions-2026-09-27.md) | 2026-09-27 | 路线图与决策讨论 |
 | [decisions/reliability-repair-plan-v2-2026-10-03.md](decisions/reliability-repair-plan-v2-2026-10-03.md) | 2026-10-03 | 可靠性修复计划，含未完成项 |
 

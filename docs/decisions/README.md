@@ -14,12 +14,16 @@
 
 ## 待补的 ADR
 
-以下主题目前只存在于权威文档的正文叙述里，没有独立决策记录。补写 ADR 时应以现有权威文档为准，搬运已有结论，不新增决策：
+已补写：
 
-- 生产执行路径使用 ZCode app-server，历史 CLI 路径只作 legacy 模块保留。
-- Manager 独占任务生命周期，worker 通过 attempt claim 进入执行。
-- 执行目录（worktree）由调用宿主准备，Bridge 不创建也不删除。
-- 本地 metadata、rollout、日志与 Desktop 索引只作观察面，不作控制面。
+| ADR | 状态 | 主题 |
+|---|---|---|
+| [ADR-001](ADR-001-appserver-as-production-execution-path.md) | Accepted | 生产执行路径使用 ZCode app-server |
+| [ADR-002](ADR-002-manager-owns-task-lifecycle.md) | Accepted | Manager 独占任务生命周期，worker 通过 attempt claim 入场 |
+| [ADR-003](ADR-003-execution-directory-prepared-by-host.md) | Accepted | 执行目录由调用宿主准备，Bridge 不创建也不删除 |
+| [ADR-004](ADR-004-observation-is-not-control.md) | Proposed | 本地材料只作观察面，不作控制面 |
+
+ADR-001 到 ADR-003 只搬运权威文档里已经写明的结论。ADR-004 是唯一需要 Master 决策的一条：仓库文档里没有明文记录"观察面不等于控制面"，此前只有设计讨论，因此它保持 Proposed，不当作已批准决策使用。
 
 ## 命名
 
