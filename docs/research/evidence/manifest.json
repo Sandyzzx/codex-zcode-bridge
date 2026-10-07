@@ -1,0 +1,27 @@
+{
+  "date": "2026-10-05",
+  "bridgeCommit": "2596759198fa826c2b7ac0478c5682da996e9727",
+  "officialCommit": "29628c9acdb81b703bbd4080c207a0e7ce5e276e",
+  "runtimeVersion": "0.16.9",
+  "runtimePath": "C:/Users/Sandy/AppData/Local/Programs/ZCode/resources/glm/zcode.cjs",
+  "runtimeSHA256": "fad4c35c4c36ec210d8a06d3fa0e77de23c8545e2eb6ff90aea1eb38d1e6275f",
+  "nodeVersion": "v24.16.0",
+  "model": "GLM-5.3-Flash",
+  "provider": "account:bigmodel-individual-coding-plan",
+  "storageScope": "own private SQLite and fixtures; credential/config copies excluded",
+  "exportPolicy": "allowlisted runtime fields; request/header/hidden reasoning/raw prompt logs excluded; benchmark task prompts and fixture diffs intentionally included",
+  "observedRuns": 10,
+  "observedCompleted": 10,
+  "controlledRuns": 10,
+  "controlledCompleted": 0,
+  "controlledDisposition": "network failures/timeout; excluded from coding comparison",
+  "notRun": [
+    "concurrent mutating session resume",
+    "real ZCode Job Object containment",
+    "Windows Console Ctrl+C/Ctrl+Break",
+    "CPU/RAM accounting",
+    "Desktop runtime preferences",
+    "full background workflow/subagent performance",
+    "existing project memory handoff"
+  ]
+}

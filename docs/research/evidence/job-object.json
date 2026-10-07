@@ -1,0 +1,10 @@
+{
+  "childPid": 22496,
+  "scope": "owned Node helper tree, not actual ZCode Job integration",
+  "childAliveAfter": false,
+  "assigned": true,
+  "parentPid": 38636,
+  "childAliveBefore": true,
+  "killOnJobClose": true,
+  "parentExited": true
+}

@@ -1,0 +1,701 @@
+{
+  "runtimeVersion": "0.16.9",
+  "model": {
+    "providerId": "account:bigmodel-individual-coding-plan",
+    "modelId": "GLM-5.3-Flash",
+    "options": {
+      "reasoningLevel": "low"
+    }
+  },
+  "executor": "smoke",
+  "created": {
+    "session": {
+      "createdAt": 1791164312332,
+      "mode": "build",
+      "model": {
+        "providerId": "account:bigmodel-individual-coding-plan",
+        "modelId": "GLM-5.3-Flash"
+      },
+      "traceId": "99b060c1-c68f-46a8-98ee-1d88e226818e",
+      "sessionId": "sess_73556814-fdaa-4ac5-9c95-0e981888030e",
+      "sessionKind": "interactive",
+      "status": "idle",
+      "target": null,
+      "title": "",
+      "updatedAt": 1791164312332,
+      "workspace": {
+        "workspacePath": "C:\\Users\\Sandy\\.codex\\tmp\\zcode-executor-audit-20261005\\smoke-workspace",
+        "workspaceKey": "C:\\Users\\Sandy\\.codex\\tmp\\zcode-executor-audit-20261005\\smoke-workspace"
+      }
+    },
+    "runtime": {
+      "eventSeq": 0,
+      "pendingRequestIds": [],
+      "goalVerifications": [],
+      "goalVerificationTimeline": [],
+      "stateRevision": 1
+    },
+    "model": {
+      "providerId": "account:bigmodel-individual-coding-plan",
+      "modelId": "GLM-5.3-Flash",
+      "options": {
+        "reasoningLevel": "low"
+      }
+    },
+    "thought": {
+      "available": [
+        {
+          "label": "low",
+          "value": "low"
+        },
+        {
+          "label": "high",
+          "value": "high"
+        },
+        {
+          "label": "max",
+          "value": "max"
+        }
+      ],
+      "current": "low",
+      "enabled": true
+    },
+    "mode": {
+      "current": "yolo"
+    },
+    "messageCount": 0,
+    "messageShapes": [],
+    "topKeys": [
+      "messages",
+      "projection",
+      "protocol",
+      "runtime",
+      "session",
+      "settings",
+      "slashCommands",
+      "todos",
+      "todoGroups"
+    ],
+    "settingsKeys": [
+      "mode",
+      "model",
+      "permission",
+      "thoughtLevel"
+    ]
+  },
+  "sid": "sess_73556814-fdaa-4ac5-9c95-0e981888030e",
+  "capabilities": {
+    "independentPlanState": true
+  },
+  "seed": {
+    "wallTimeMs": 5484,
+    "terminal": {
+      "type": "turn.completed",
+      "seq": 8,
+      "sessionId": "sess_73556814-fdaa-4ac5-9c95-0e981888030e",
+      "turnId": "turn_bd270ac8-420e-4f3f-b586-df85c84588bc",
+      "at": "2026-10-05T01:38:36.916Z",
+      "payloadKeys": [
+        "response",
+        "tokenCount",
+        "usage",
+        "toolCallCount",
+        "historyRoundCount",
+        "duration",
+        "resultType",
+        "cacheStats"
+      ],
+      "resultType": "success",
+      "usage": {
+        "source": "provider",
+        "modelRequestCount": 1,
+        "inputTokens": 15833,
+        "outputTokens": 7,
+        "totalTokens": 15840,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "reasoningTokens": 0,
+        "webFetchRequests": 0,
+        "webSearchRequests": 0
+      },
+      "response": "AUDIT_FLASH_SEED"
+    },
+    "events": [
+      {
+        "type": "turn.started",
+        "seq": 2,
+        "sessionId": "sess_73556814-fdaa-4ac5-9c95-0e981888030e",
+        "turnId": "turn_bd270ac8-420e-4f3f-b586-df85c84588bc",
+        "at": "2026-10-05T01:38:33.148Z",
+        "payloadKeys": [
+          "executionStartedAt",
+          "turnNumber",
+          "input",
+          "messageId",
+          "foregroundExecutionId",
+          "queryId"
+        ]
+      },
+      {
+        "type": "turn.completed",
+        "seq": 8,
+        "sessionId": "sess_73556814-fdaa-4ac5-9c95-0e981888030e",
+        "turnId": "turn_bd270ac8-420e-4f3f-b586-df85c84588bc",
+        "at": "2026-10-05T01:38:36.916Z",
+        "payloadKeys": [
+          "response",
+          "tokenCount",
+          "usage",
+          "toolCallCount",
+          "historyRoundCount",
+          "duration",
+          "resultType",
+          "cacheStats"
+        ],
+        "resultType": "success",
+        "usage": {
+          "source": "provider",
+          "modelRequestCount": 1,
+          "inputTokens": 15833,
+          "outputTokens": 7,
+          "totalTokens": 15840,
+          "cacheReadTokens": 0,
+          "cacheWriteTokens": 0,
+          "reasoningTokens": 0,
+          "webFetchRequests": 0,
+          "webSearchRequests": 0
+        },
+        "response": "AUDIT_FLASH_SEED"
+      }
+    ]
+  },
+  "seedAfter": {
+    "session": {
+      "createdAt": 1791164313126,
+      "mode": "build",
+      "model": {
+        "providerId": "account:bigmodel-individual-coding-plan",
+        "modelId": "GLM-5.3-Flash"
+      },
+      "traceId": "99b060c1-c68f-46a8-98ee-1d88e226818e",
+      "sessionId": "sess_73556814-fdaa-4ac5-9c95-0e981888030e",
+      "sessionKind": "interactive",
+      "status": "idle",
+      "target": null,
+      "title": "Reply exactly AUDIT_FLASH_SEED. Do not use tools or modif...",
+      "titleSource": "first_input",
+      "updatedAt": 1791164316897,
+      "workspace": {
+        "workspacePath": "C:\\Users\\Sandy\\.codex\\tmp\\zcode-executor-audit-20261005\\smoke-workspace",
+        "workspaceKey": "C:\\Users\\Sandy\\.codex\\tmp\\zcode-executor-audit-20261005\\smoke-workspace"
+      }
+    },
+    "runtime": {
+      "deliveryKind": "desktop-continuous",
+      "eventSeq": 8,
+      "pendingRequestIds": [],
+      "contextUsage": {
+        "cache": {
+          "inputTokens": 15833,
+          "cacheReadTokens": 0,
+          "cacheWriteTokens": 0,
+          "latestHitRate": 0,
+          "hitRate": 0,
+          "hitRateRequestCount": 1,
+          "totalInputTokens": 15833,
+          "totalCacheReadTokens": 0,
+          "totalCacheWriteTokens": 0
+        },
+        "cost": null,
+        "size": 200000,
+        "used": 15840
+      },
+      "goalVerifications": [],
+      "goalVerificationTimeline": [],
+      "stateRevision": 3
+    },
+    "model": {
+      "providerId": "account:bigmodel-individual-coding-plan",
+      "modelId": "GLM-5.3-Flash",
+      "options": {
+        "reasoningLevel": "low"
+      }
+    },
+    "thought": {
+      "available": [
+        {
+          "label": "low",
+          "value": "low"
+        },
+        {
+          "label": "high",
+          "value": "high"
+        },
+        {
+          "label": "max",
+          "value": "max"
+        }
+      ],
+      "current": "low",
+      "enabled": true
+    },
+    "mode": {
+      "current": "yolo"
+    },
+    "messageCount": 3,
+    "messageShapes": [
+      {
+        "keys": [
+          "info",
+          "parts"
+        ]
+      },
+      {
+        "keys": [
+          "info",
+          "parts"
+        ]
+      },
+      {
+        "keys": [
+          "info",
+          "parts"
+        ]
+      }
+    ],
+    "topKeys": [
+      "messages",
+      "projection",
+      "protocol",
+      "runtime",
+      "session",
+      "settings",
+      "slashCommands",
+      "todos",
+      "todoGroups"
+    ],
+    "settingsKeys": [
+      "mode",
+      "model",
+      "permission",
+      "thoughtLevel"
+    ]
+  },
+  "native": {
+    "executor": "native",
+    "wallTimeMs": 7294,
+    "pid": 15404,
+    "exit": {
+      "code": 0,
+      "signal": null
+    },
+    "events": [
+      {
+        "type": "session.resumed",
+        "seq": 2,
+        "sessionId": "sess_73556814-fdaa-4ac5-9c95-0e981888030e",
+        "at": "2026-10-05T01:38:46.798Z",
+        "payloadKeys": [
+          "directory",
+          "interruptedToolCount",
+          "messageCount",
+          "partCount",
+          "recoveredCompactTimelineCount",
+          "recoveredSteerInputCount",
+          "resumedTodoCount"
+        ]
+      },
+      {
+        "type": "turn.started",
+        "seq": 3,
+        "sessionId": "sess_73556814-fdaa-4ac5-9c95-0e981888030e",
+        "turnId": "turn_7e468307-2ccf-400a-96c0-108b00eb872d",
+        "at": "2026-10-05T01:38:46.798Z",
+        "payloadKeys": [
+          "executionStartedAt",
+          "turnNumber",
+          "input",
+          "messageId",
+          "foregroundExecutionId",
+          "queryId"
+        ]
+      },
+      {
+        "type": "turn.completed",
+        "seq": 18,
+        "sessionId": "sess_73556814-fdaa-4ac5-9c95-0e981888030e",
+        "turnId": "turn_7e468307-2ccf-400a-96c0-108b00eb872d",
+        "at": "2026-10-05T01:38:46.798Z",
+        "payloadKeys": [
+          "response",
+          "tokenCount",
+          "usage",
+          "toolCallCount",
+          "historyRoundCount",
+          "duration",
+          "resultType",
+          "cacheStats"
+        ],
+        "resultType": "success",
+        "usage": {
+          "source": "provider",
+          "modelRequestCount": 1,
+          "inputTokens": 19174,
+          "outputTokens": 8,
+          "totalTokens": 19182,
+          "cacheReadTokens": 0,
+          "cacheWriteTokens": 0,
+          "reasoningTokens": 0,
+          "webFetchRequests": 0,
+          "webSearchRequests": 0
+        },
+        "response": "AUDIT_FLASH_SMOKE"
+      }
+    ],
+    "stdoutBytes": 12858,
+    "stderrBytes": 0,
+    "stderrHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "error": []
+  },
+  "resumed": {
+    "session": {
+      "createdAt": 1791164313126,
+      "mode": "build",
+      "model": {
+        "providerId": "account:bigmodel-individual-coding-plan",
+        "modelId": "GLM-5.3-Flash"
+      },
+      "traceId": "99b060c1-c68f-46a8-98ee-1d88e226818e",
+      "sessionId": "sess_73556814-fdaa-4ac5-9c95-0e981888030e",
+      "sessionKind": "interactive",
+      "status": "idle",
+      "target": null,
+      "title": "Reply exactly AUDIT_FLASH_SEED. Do not use tools or modif...",
+      "titleSource": "first_input",
+      "updatedAt": 1791164326475,
+      "workspace": {
+        "workspacePath": "C:\\Users\\Sandy\\.codex\\tmp\\zcode-executor-audit-20261005\\smoke-workspace",
+        "workspaceKey": "C:\\Users\\Sandy\\.codex\\tmp\\zcode-executor-audit-20261005\\smoke-workspace"
+      }
+    },
+    "runtime": {
+      "eventSeq": 2,
+      "pendingRequestIds": [],
+      "contextUsage": {
+        "cache": {
+          "inputTokens": 19174,
+          "cacheReadTokens": 0,
+          "cacheWriteTokens": 0,
+          "latestHitRate": 0,
+          "hitRate": 0,
+          "hitRateRequestCount": 2,
+          "totalInputTokens": 35007,
+          "totalCacheReadTokens": 0,
+          "totalCacheWriteTokens": 0
+        },
+        "cost": null,
+        "size": 200000,
+        "used": 19182
+      },
+      "goalVerifications": [],
+      "goalVerificationTimeline": [],
+      "stateRevision": 0
+    },
+    "model": {
+      "providerId": "account:bigmodel-individual-coding-plan",
+      "modelId": "GLM-5.3-Flash",
+      "options": {
+        "reasoningLevel": "low"
+      }
+    },
+    "thought": {
+      "available": [
+        {
+          "label": "low",
+          "value": "low"
+        },
+        {
+          "label": "high",
+          "value": "high"
+        },
+        {
+          "label": "max",
+          "value": "max"
+        }
+      ],
+      "current": "low",
+      "enabled": true
+    },
+    "mode": {
+      "current": "yolo"
+    },
+    "messageCount": 5,
+    "messageShapes": [
+      {
+        "keys": [
+          "info",
+          "parts"
+        ]
+      },
+      {
+        "keys": [
+          "info",
+          "parts"
+        ]
+      },
+      {
+        "keys": [
+          "info",
+          "parts"
+        ]
+      },
+      {
+        "keys": [
+          "info",
+          "parts"
+        ]
+      },
+      {
+        "keys": [
+          "info",
+          "parts"
+        ]
+      }
+    ],
+    "topKeys": [
+      "messages",
+      "projection",
+      "protocol",
+      "runtime",
+      "session",
+      "settings",
+      "slashCommands",
+      "todos",
+      "todoGroups"
+    ],
+    "settingsKeys": [
+      "mode",
+      "model",
+      "permission",
+      "thoughtLevel"
+    ]
+  },
+  "app": {
+    "wallTimeMs": 7535,
+    "terminal": {
+      "type": "turn.completed",
+      "seq": 10,
+      "sessionId": "sess_73556814-fdaa-4ac5-9c95-0e981888030e",
+      "turnId": "turn_35c071d2-b362-4fa0-b339-7e5078c27c67",
+      "at": "2026-10-05T01:38:54.905Z",
+      "payloadKeys": [
+        "response",
+        "tokenCount",
+        "usage",
+        "toolCallCount",
+        "historyRoundCount",
+        "duration",
+        "resultType",
+        "cacheStats"
+      ],
+      "resultType": "success",
+      "usage": {
+        "source": "provider",
+        "modelRequestCount": 1,
+        "inputTokens": 15886,
+        "outputTokens": 8,
+        "totalTokens": 15894,
+        "cacheReadTokens": 15808,
+        "cacheWriteTokens": 0,
+        "reasoningTokens": 0,
+        "webFetchRequests": 0,
+        "webSearchRequests": 0
+      },
+      "response": "AUDIT_FLASH_CONTINUED"
+    },
+    "events": [
+      {
+        "type": "turn.started",
+        "seq": 3,
+        "sessionId": "sess_73556814-fdaa-4ac5-9c95-0e981888030e",
+        "turnId": "turn_35c071d2-b362-4fa0-b339-7e5078c27c67",
+        "at": "2026-10-05T01:38:49.120Z",
+        "payloadKeys": [
+          "executionStartedAt",
+          "turnNumber",
+          "input",
+          "messageId",
+          "foregroundExecutionId",
+          "queryId"
+        ]
+      },
+      {
+        "type": "turn.completed",
+        "seq": 10,
+        "sessionId": "sess_73556814-fdaa-4ac5-9c95-0e981888030e",
+        "turnId": "turn_35c071d2-b362-4fa0-b339-7e5078c27c67",
+        "at": "2026-10-05T01:38:54.905Z",
+        "payloadKeys": [
+          "response",
+          "tokenCount",
+          "usage",
+          "toolCallCount",
+          "historyRoundCount",
+          "duration",
+          "resultType",
+          "cacheStats"
+        ],
+        "resultType": "success",
+        "usage": {
+          "source": "provider",
+          "modelRequestCount": 1,
+          "inputTokens": 15886,
+          "outputTokens": 8,
+          "totalTokens": 15894,
+          "cacheReadTokens": 15808,
+          "cacheWriteTokens": 0,
+          "reasoningTokens": 0,
+          "webFetchRequests": 0,
+          "webSearchRequests": 0
+        },
+        "response": "AUDIT_FLASH_CONTINUED"
+      }
+    ]
+  },
+  "after": {
+    "session": {
+      "createdAt": 1791164313126,
+      "mode": "build",
+      "model": {
+        "providerId": "account:bigmodel-individual-coding-plan",
+        "modelId": "GLM-5.3-Flash"
+      },
+      "traceId": "99b060c1-c68f-46a8-98ee-1d88e226818e",
+      "sessionId": "sess_73556814-fdaa-4ac5-9c95-0e981888030e",
+      "sessionKind": "interactive",
+      "status": "idle",
+      "target": null,
+      "title": "Reply exactly AUDIT_FLASH_SEED. Do not use tools or modif...",
+      "titleSource": "first_input",
+      "updatedAt": 1791164334882,
+      "workspace": {
+        "workspacePath": "C:\\Users\\Sandy\\.codex\\tmp\\zcode-executor-audit-20261005\\smoke-workspace",
+        "workspaceKey": "C:\\Users\\Sandy\\.codex\\tmp\\zcode-executor-audit-20261005\\smoke-workspace"
+      }
+    },
+    "runtime": {
+      "deliveryKind": "desktop-continuous",
+      "eventSeq": 10,
+      "pendingRequestIds": [],
+      "contextUsage": {
+        "cache": {
+          "inputTokens": 15886,
+          "cacheReadTokens": 15808,
+          "cacheWriteTokens": 0,
+          "latestHitRate": 0.9950900163666121,
+          "hitRate": 0.31061246143870475,
+          "hitRateRequestCount": 3,
+          "totalInputTokens": 50893,
+          "totalCacheReadTokens": 15808,
+          "totalCacheWriteTokens": 0
+        },
+        "cost": null,
+        "size": 200000,
+        "used": 15894
+      },
+      "goalVerifications": [],
+      "goalVerificationTimeline": [],
+      "stateRevision": 2
+    },
+    "model": {
+      "providerId": "account:bigmodel-individual-coding-plan",
+      "modelId": "GLM-5.3-Flash",
+      "options": {
+        "reasoningLevel": "low"
+      }
+    },
+    "thought": {
+      "available": [
+        {
+          "label": "low",
+          "value": "low"
+        },
+        {
+          "label": "high",
+          "value": "high"
+        },
+        {
+          "label": "max",
+          "value": "max"
+        }
+      ],
+      "current": "low",
+      "enabled": true
+    },
+    "mode": {
+      "current": "yolo"
+    },
+    "messageCount": 7,
+    "messageShapes": [
+      {
+        "keys": [
+          "info",
+          "parts"
+        ]
+      },
+      {
+        "keys": [
+          "info",
+          "parts"
+        ]
+      },
+      {
+        "keys": [
+          "info",
+          "parts"
+        ]
+      },
+      {
+        "keys": [
+          "info",
+          "parts"
+        ]
+      },
+      {
+        "keys": [
+          "info",
+          "parts"
+        ]
+      },
+      {
+        "keys": [
+          "info",
+          "parts"
+        ]
+      },
+      {
+        "keys": [
+          "info",
+          "parts"
+        ]
+      }
+    ],
+    "topKeys": [
+      "messages",
+      "projection",
+      "protocol",
+      "runtime",
+      "session",
+      "settings",
+      "slashCommands",
+      "todos",
+      "todoGroups"
+    ],
+    "settingsKeys": [
+      "mode",
+      "model",
+      "permission",
+      "thoughtLevel"
+    ]
+  }
+}
