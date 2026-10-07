@@ -1,5 +1,9 @@
 # ZCode Native CLI 与 app-server 深度审计
 
+> Status: RESEARCH
+> Date: 2026-10-05
+> 研究结论，不代表当前实现。索引见 [README.md](README.md)。
+
 研究日期：2026-10-05。结论适用于下述版本和实验范围，不构成对其他安装版本的保证。
 
 ## 结论

@@ -1,5 +1,9 @@
 # Session Handoff 审计
 
+> Status: RESEARCH
+> Date: 2026-10-05
+> 研究结论，不代表当前实现。索引见 [README.md](README.md)。
+
 **结论：双向顺序恢复可行；“全部 Runtime 状态无损”未证明；正在运行的跨 Host attach/control 不应启用。** 所有实验只使用专用私有 SQLite、独立 fixture 和本次生成的 Session。模型均为 GLM-5.3-Flash / low。
 
 ## A — CLI → app-server

@@ -1,5 +1,9 @@
 # Executor Benchmark 与成本审计
 
+> Status: RESEARCH
+> Date: 2026-10-05
+> 基准数据只适用于记录的版本与场景。索引见 [README.md](README.md)。
+
 ## 范围与方法
 
 用户授权使用 GLM-5.3-Flash。实际完成 5 类编码任务 × 2 Executor 的成功观察组；另尝试 10 次 Memory 对齐补充组，受网络故障全部没有成功执行终态。不是生产 Bridge 的修改验收，也不是统计显著的通用 Coding 排名。

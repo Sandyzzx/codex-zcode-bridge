@@ -1,5 +1,9 @@
 # ZCode Runtime 调用链
 
+> Status: RESEARCH
+> Date: 2026-10-05
+> 基于固定官方提交的源码阅读结果。索引见 [README.md](README.md)。
+
 来源固定为官方提交 `29628c9acdb81b703bbd4080c207a0e7ce5e276e`。以下源码链接均指该提交；安装版行为另见 [总报告](ZCODE_CLI_VS_APPSERVER.md)。
 
 ## 实际汇合点

@@ -1,5 +1,9 @@
 # Executor 架构建议与决策门槛
 
+> Status: RESEARCH
+> Date: 2026-10-05
+> 研究方案，不是已批准决策。若据此改变执行路径，需要单独 ADR。索引见 [README.md](README.md)。
+
 **决策：GO WITH CONDITIONS。** 引入 NativeCliExecutor 的候选实现、保留 AppServerExecutor、建立统一 Run Ledger 与顺序 Handoff，方向合理；本次仅给研究方案。当前没有足够证据把 Native 切成默认 Coding Executor，生产默认继续 app-server。跨 Host concurrent attach/control 为 **NO-GO**，除非上游提供明确 ownership/control 协议或另行证明安全。
 
 ## 15 个问题的直接回答
