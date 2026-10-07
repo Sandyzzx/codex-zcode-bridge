@@ -26069,6 +26069,29 @@ function displayText(value, limit) {
 function oneLine(value, limit) {
   return displayText(value.replace(/\s+/gu, " "), limit);
 }
+function truncatedOneLine(value, limit) {
+  const text = oneLine(value, limit + 1);
+  return text.length > limit ? `${text.slice(0, limit - 1).trimEnd()}\u2026` : text;
+}
+function testCommandLabel(value) {
+  let command = oneLine(value, 2e3);
+  const segments = command.split(/\s*&&\s*/u);
+  if (segments.length > 1) command = segments.at(-1) ?? command;
+  command = command.replace(/^['"]+|['"]+$/gu, "").trim();
+  const dotnet = command.match(/\bdotnet\s+test\s+([^\s]+)(.*)$/iu);
+  if (dotnet) {
+    const project = (dotnet[1] ?? "").split(/[\\/]/u).at(-1)?.replace(/\.csproj$/iu, "") ?? "project";
+    const filterTail = dotnet[2]?.match(/--filter(?:=|\s+)(.+)$/iu)?.[1]?.replace(/["']+$/gu, "").trim();
+    const filter = filterTail?.includes("~") ? filterTail.slice(filterTail.lastIndexOf("~") + 1) : filterTail;
+    return `dotnet test ${project}${filter ? ` \xB7 filter ${oneLine(filter, 64)}` : ""}`;
+  }
+  const packageScript = command.match(/\b(npm|pnpm|yarn)\s+(?:(run)\s+)?([A-Za-z0-9:_-]+)\b/iu);
+  if (packageScript) {
+    return `${packageScript[1]} ${packageScript[2] ? "run " : ""}${packageScript[3]}`;
+  }
+  const tokens = command.match(/(?:"[^"]*"|'[^']*'|[^\s]+)/gu) ?? [];
+  return tokens.slice(0, 2).map((token) => token.replace(/^['"]|['"]$/gu, "")).join(" ").slice(0, 96);
+}
 function renderTaskFeedback(snapshot) {
   const terminalLabel = snapshot.status === "waiting_for_master" ? "WAITING_FOR_MASTER" : ["completed", "failed", "cancelled"].includes(snapshot.status) ? snapshot.status.toUpperCase() : null;
   const lines = [`\u25A3 ZCode \xB7 ${snapshot.task_id}${terminalLabel ? ` \xB7 ${terminalLabel}` : ""}`];
@@ -26101,14 +26124,19 @@ function renderTaskFeedback(snapshot) {
   const result = snapshot.result;
   if (result) {
     lines.push("", "Agent report:");
-    const summary = oneLine(result.summary, 800);
+    const summary = truncatedOneLine(result.summary, 220);
     if (summary) lines.push(summary);
-    lines.push(`Changed: ${result.files_changed.length} files`);
+    const changedCount = result.files_changed.length;
+    lines.push(`Changed: ${changedCount} ${changedCount === 1 ? "file" : "files"}`);
     for (const test of result.tests.slice(0, 3)) {
-      lines.push(`Tests: ${oneLine(test.command, 240)} \xB7 reported ${test.status}`);
+      lines.push(`Tests: ${testCommandLabel(test.command)} \xB7 reported ${test.status}`);
     }
     if (result.tests.length > 3) lines.push(`Tests: ${result.tests.length - 3} more reported`);
-    if (result.issues.length) lines.push(`Issues: ${result.issues.length} reported`);
+    if (result.issues.length) {
+      const issue2 = truncatedOneLine(result.issues[0] ?? "", 140);
+      lines.push(`! ${result.issues.length} reported ${result.issues.length === 1 ? "issue" : "issues"}${issue2 ? ` \xB7 ${issue2}` : ""}`);
+      if (result.issues.length > 1) lines.push(`! ${result.issues.length - 1} more reported issues`);
+    }
     if (result.duration_ms !== null) lines.push(`Duration: ${formatDuration(result.duration_ms)}`);
   }
   return lines.join("\n");
