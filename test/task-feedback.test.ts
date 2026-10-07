@@ -125,10 +125,34 @@ test("renderer labels report claims and avoids unsupported activity or verificat
   const output = renderTaskFeedback(snapshot);
   assert.match(output, /Bridge task completed/);
   assert.match(output, /Agent report:/);
-  assert.match(output, /Changed: 1 files/);
+  assert.match(output, /Changed: 1 file/u);
   assert.match(output, /npm test · reported passed/);
   assert.match(output, /Duration: 3m 42s/);
   assert.doesNotMatch(output, /\bverified\b|\baccepted\b|host acceptance|review pass|must not leak/iu);
+});
+
+test("renderer shortens wrapped test commands and long report text", () => {
+  const longSummary = "Monotonic cleanup deadline implemented. ".repeat(12);
+  const snapshot = buildTaskFeedbackSnapshotV01({
+    status: status({ status: "completed", finished_at: FINISH }),
+    events: [event("report_ready")],
+    result: result({
+      summary: longSummary,
+      tests: [{
+        command: 'cmd.exe /d /s /c "set HOME=C:\\Users\\Sandy&& set TEMP=C:\\Temp&& dotnet test tests\\LumeCAE.RadianceAdapter.Tests\\LumeCAE.RadianceAdapter.Tests.csproj --no-restore --filter FullyQualifiedName~RadianceDeadlineTests"',
+        status: "passed",
+        details: "9/9 passed",
+      }],
+      issues: ["Git Bash rewrites cmd.exe switches; the command was rerun with MSYS_NO_PATHCONV=1."],
+    }),
+  });
+
+  const output = renderTaskFeedback(snapshot);
+  assert.match(output, /dotnet test LumeCAE\.RadianceAdapter\.Tests · filter RadianceDeadlineTests · reported passed/u);
+  assert.match(output, /! 1 reported issue · Git Bash rewrites cmd\.exe switches/u);
+  assert.match(output, /…/u);
+  assert.doesNotMatch(output, /cmd\.exe \/d|HOME=|TEMP=|9\/9 passed/u);
+  assert.ok(output.length < 600, `expected concise output, got ${output.length} characters`);
 });
 
 test("renderer has Bridge-derived text for every task lifecycle status", () => {
