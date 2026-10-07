@@ -75,8 +75,9 @@ English readers start at [README.md](../README.md). This index is bilingual; the
 | [research/phase1-codex-zcode-2026-09-26.md](research/phase1-codex-zcode-2026-09-26.md) | 2026-09-26 | Phase 1 参考项目调研与 V0.1 架构建议 |
 | [research/desktop-task-refresh-2026-09-28.md](research/desktop-task-refresh-2026-09-28.md) | 2026-09-28 | ZCode Desktop 任务列表刷新机制 |
 | [research/start-plan-headless-2026-09-27.md](research/start-plan-headless-2026-09-27.md) | 2026-09-27 | Start Plan headless 认证阻塞与 Coding Plan 回归 |
+| [research/native-cli-vs-appserver-2026-10-05/README.md](research/native-cli-vs-appserver-2026-10-05/README.md) | 2026-10-05 | Native CLI vs app-server 研究：结论、6 篇文档、实验脚本与证据索引 |
 
-2026-10-05 的 Native CLI / app-server 研究会落在 `docs/research/native-cli-vs-appserver-2026-10-05/`。那批文档目前在独立 PR 中，合并后本索引再补上逐篇条目。
+带日期的研究目录可以自带 README 作为该主题的文档地图；逐篇条目写在那份 README 里，不重复列在本索引。
 
 ### 归档 ARCHIVED
 
