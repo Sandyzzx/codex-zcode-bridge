@@ -4,7 +4,7 @@
 
 ## 证据
 
-交付目录 `../evidence` 保存安全摘要：
+进入仓库的只有 `../evidence/manifest.json`：它记录版本、范围、完成与 NOT RUN 清单，以及各证据文件的归档位置与 SHA-256。其余原始 ledger 不进入仓库，归档在 `C:/Users/Sandy/.codex/archived_docs/codex-zcode-bridge/2026-10-05/evidence/native-cli-vs-appserver-20261005`；`archived_docs` 根位置见 `docs/README.md`。下表描述这些 ledger 的内容：
 
 | 文件 | 内容 |
 |---|---|

@@ -10,6 +10,22 @@
   "provider": "account:bigmodel-individual-coding-plan",
   "storageScope": "own private SQLite and fixtures; credential/config copies excluded",
   "exportPolicy": "allowlisted runtime fields; request/header/hidden reasoning/raw prompt logs excluded; benchmark task prompts and fixture diffs intentionally included",
+  "evidenceArchive": {
+    "reason": "Raw ledgers are large; only this manifest is versioned. The ledgers themselves stay in the local archive.",
+    "location": "C:/Users/Sandy/.codex/archived_docs/codex-zcode-bridge/2026-10-05/evidence/native-cli-vs-appserver-20261005",
+    "locationNote": "The archived_docs root is documented in docs/README.md.",
+    "files": [
+      { "name": "benchmark-controlled-failed.json", "bytes": 950188, "sha256": "126cdb8d3bcc5e676d8961b682efa66130fe95bef95fd0571d4ece415d3a5ff1" },
+      { "name": "benchmark-observed.json", "bytes": 527901, "sha256": "b541219006b8e7d16710dcc55bf5b48a0aaff85d2206c2e3e291ec4058c89907" },
+      { "name": "handoff.json", "bytes": 88971, "sha256": "c9162516eff2b90b2cb747f33f1985a133280b427a1e35a6c9e0f286f561d85d" },
+      { "name": "job-object.json", "bytes": 243, "sha256": "a23c3a0e0f61a7963e7de8ed89fb399550001e6e0aab4a51e8df7f409f171c6e" },
+      { "name": "policy.json", "bytes": 59072, "sha256": "f42d748b4d325aa7d664265b00e0c16d8fb29d9b30602bfe10baa64f2d9683f1" },
+      { "name": "process-control.json", "bytes": 10332, "sha256": "c6ae462091f3524cef709a1ba37b810cffe9ae1cadce1146a5f64defd5bc8a3a" },
+      { "name": "reasoning.json", "bytes": 78306, "sha256": "b2d2be58f79e80c9aba73d7d7aedffcf7180682fc85654fc2b0812e8ba1c2f86" },
+      { "name": "smoke-isolated.json", "bytes": 16864, "sha256": "9a8e03c25f0e5890f19a2d68b688d7349cd73fbf1e45db2e039a50ca1a7d2b29" },
+      { "name": "source-task-summary.json", "bytes": 5842, "sha256": "b3cd2939c040886390fcff89e6808e8cb02130c2bae2e26dd6b2d413f9e26fd9" }
+    ]
+  },
   "observedRuns": 10,
   "observedCompleted": 10,
   "controlledRuns": 10,

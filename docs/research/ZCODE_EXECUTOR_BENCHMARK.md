@@ -44,7 +44,7 @@ fixture 为本次新建、可运行的独立 JS 仓库，代表 Bridge 常见逻
 
 质量分为 Codex **非盲评**：4=good，完成要求、修改范围合理、独立验收通过。T1 两边验证方式不同但语义符合；T2 两边 tests 杀死三种缺陷；T3 都正确保持错误 identity 与 backoff；T4 都覆盖 transition；T5 都引入内部 helper、延续 fixture 紧凑风格。没有足够证据给一边更高分。没有把 worker 自报的测试当独立验收。
 
-每 run 的 sessionId、traceId、promptHash、Git commit、原始 task prompt、mode、完整字段、候选 diff 和独立验证结果在 [observed ledger](evidence/benchmark-observed.json)。T1/T3/T4/T5 的 testsPassed=1 指一个独立复合断言检查脚本，不是只有一个断言；T2 是 TAP 单测数量。
+每 run 的 sessionId、traceId、promptHash、Git commit、原始 task prompt、mode、完整字段、候选 diff 和独立验证结果在 observed ledger（`benchmark-observed.json`）。该 ledger 与其余原始证据不进入仓库；归档位置和 SHA-256 见 [evidence manifest](evidence/manifest.json)。T1/T3/T4/T5 的 testsPassed=1 指一个独立复合断言检查脚本，不是只有一个断言；T2 是 TAP 单测数量。
 
 ## 补充组：配置对齐但执行失败
 
@@ -54,7 +54,7 @@ fixture 为本次新建、可运行的独立 JS 仓库，代表 Bridge 常见逻
 
 之后遭遇 `ECONNRESET` / `ENOTFOUND open.bigmodel.cn`。N 的 T1 在 300 秒 supervisor deadline 强杀；其余返回 `turn.failed` 或非零进程退出。其他 run 的初始 request 多次重试到 attempt=11；没有成功的配对任务终态，完整 Token usage 缺失记 null。T1-N 留下的修改独立验收可通过，但执行没有完成，所以仍排除性能组；T5 未修改代码时基线语义测试能通过，这不满足“完成重构”的验收，已补上 artifact produced 检查。
 
-**这组不合并到成功统计，不据此推断编码质量低、app-server 较贵或 Native 较慢。** 尚不确定断连来源是本机 DNS/proxy、网络还是远端；无需凭错误猜测服务故障。详见 [controlled-failed ledger](evidence/benchmark-controlled-failed.json)。
+**这组不合并到成功统计，不据此推断编码质量低、app-server 较贵或 Native 较慢。** 尚不确定断连来源是本机 DNS/proxy、网络还是远端；无需凭错误猜测服务故障。详见 controlled-failed ledger（`benchmark-controlled-failed.json`，位置同上 manifest）。
 
 ## Reasoning 配对探针
 
