@@ -1,6 +1,12 @@
 # 进度集成兼容说明
 
-此文件为历史 Phase 7 源码引用提供当前说明，不重建历史冻结契约。详细架构与事件接口见 [ARCHITECTURE.md](ARCHITECTURE.md) 和 [INTERFACES.md](INTERFACES.md)。
+> Status: ARCHIVED
+> Date: 2026-10-03
+> 有效内容已提炼：worker liveness 与结果恢复进 `../ARCHITECTURE.md`；事件内容、补拉与降级、`session/read` NOT RUN 进 `../INTERFACES.md`。
+> 本文中"本轮没有对真实 app-server 执行 RPC 探针"等表述是 2026-10-03 的状态；2026-10-05 的研究另做了探针，见 `../research/native-cli-vs-appserver-2026-10-05/`。
+> 历史材料，不指导当前开发。
+
+此文件为历史 Phase 7 源码引用提供当前说明，不重建历史冻结契约。详细架构与事件接口见 [ARCHITECTURE.md](../ARCHITECTURE.md) 和 [INTERFACES.md](../INTERFACES.md)。
 
 生产 worker 通过 app-server 订阅 session/event，仅转发可见文本、工具名称/状态和有限生命周期 metadata。隐藏 reasoning 和未知 usage metadata 不进入公开事件。审批必须保留必要的输入以供主代理判断，属于私有任务证据。
 

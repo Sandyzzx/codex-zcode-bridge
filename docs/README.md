@@ -85,13 +85,13 @@ English readers start at [README.md](../README.md). This index is bilingual; the
 | [archive/appserver-capability-matrix-2026-09-27.md](archive/appserver-capability-matrix-2026-09-27.md) | 2026-09-27 | app-server 能力普查，已被 2026-10-05 的能力探针取代 |
 | [archive/mvp-v0.3-2026-09-27.md](archive/mvp-v0.3-2026-09-27.md) | 2026-09-27 | MVP 0.3 版本说明 |
 | [archive/mcp-sdk-v2-migration-2026-09-27.md](archive/mcp-sdk-v2-migration-2026-09-27.md) | 2026-09-27 | MCP SDK v2 迁移记录 |
+| [archive/phase7-live-progress.md](archive/phase7-live-progress.md) | 2026-10-03 | Phase 7 兼容说明；有效内容已提炼进 `ARCHITECTURE.md` / `INTERFACES.md` |
 
 ### 报告 REPORT
 
 | 文档 | 说明 |
 |---|---|
 | [TASK_FEEDBACK_V01_IMPLEMENTATION_REPORT.md](../TASK_FEEDBACK_V01_IMPLEMENTATION_REPORT.md) | Task Feedback v0.1 的交付报告，一次性材料 |
-| [PHASE7_LIVE_PROGRESS.md](PHASE7_LIVE_PROGRESS.md) | Phase 7 兼容说明；有效内容待提炼进 `ARCHITECTURE.md` / `INTERFACES.md` 后移入 `archive/` |
 
 ### 自动生成 Generated
 

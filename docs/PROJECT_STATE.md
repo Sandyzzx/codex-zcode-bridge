@@ -37,6 +37,7 @@
 
 - `session/read` 原生当前状态查询：未接入。
 - 真实 ZCode app-server RPC 探针与跨版本兼容：只在记录过的 0.16.9 路径上观测过。
+- 真实 ZCode 权限审批往返：现有回归使用假运行时，未经真实交互验证。
 - 跨 Host 并发 attach/control：研究阶段结论为 NO-GO，除非上游提供 ownership/control 协议。
 - 真实 GUI 关闭时序、UI 响应与取消时延。
 - 真实 Desktop 数据库写入与刷新行为。
@@ -44,4 +45,4 @@
 
 ## 核对来源
 
-`package.json`、`src/host/stdio.ts`、`src/mcp/server.ts`、`docs/ARCHITECTURE.md`、`docs/INTERFACES.md`、`docs/PHASE7_LIVE_PROGRESS.md`、GitHub Actions 运行记录。文中标注"未运行"的条目没有被上述来源证实，保持未验证状态。
+`package.json`、`src/host/stdio.ts`、`src/mcp/server.ts`、`src/worker/run-task.ts`、`src/adapters/zcode-app-server-adapter.ts`、`docs/ARCHITECTURE.md`、`docs/INTERFACES.md`、GitHub Actions 运行记录。文中标注"未运行"的条目没有被上述来源证实，保持未验证状态。

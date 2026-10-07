@@ -80,5 +80,5 @@ Runtime SHA-256：`B1DF2EF3E5BD76C4AF3ECB296BC003A10D3F13191A26610BD0BA940FEADAD
 - [ZCode Hooks](https://zcode.z.ai/en/docs/hooks)：Hook 子进程协议、工具前/后事件和决策返回格式。
 - [ZCode Commands](https://zcode.z.ai/en/docs/commands)：官方 `/goal`、`/compact` 命令说明。
 - [ZCode Automations](https://zcode.z.ai/en/docs/automations)：官方自动化 UI 与本机运行限制。
-- [本机 Phase 7 协议记录](../PHASE7_LIVE_PROGRESS.md) 和 [双轮 E2E 决策记录](../decisions/roadmap-decisions-2026-09-27.md)。
+- [本机 Phase 7 协议记录](phase7-live-progress.md) 和 [双轮 E2E 决策记录](../decisions/roadmap-decisions-2026-09-27.md)。
 - 社区协议逆向：[ZCode app-server V4 协议笔记](https://github.com/csuftt/zcode-jetbrains-plugin/blob/master/docs/zcode-appserver-protocol.md)。该资料不是官方兼容承诺。

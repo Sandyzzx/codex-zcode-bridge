@@ -1,6 +1,6 @@
-// Streaming ZCode Protocol adapter for Phase 7. The wire protocol is versioned
-// with the installed ZCode runtime; docs/PHASE7_LIVE_PROGRESS.md records the
-// local 0.16.9 observations and compatibility boundary.
+// Streaming ZCode Protocol adapter. The wire protocol is versioned with the
+// installed ZCode runtime; docs/INTERFACES.md records the event cursor and
+// replay boundary, and docs/ZCODE_RUNTIME.md the runtime configuration edge.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { homedir } from "node:os";
 import type {
