@@ -6,6 +6,8 @@
 
 当前状态快照，回答"现在什么能用、什么不能用"。路线图和优先级不在这里。
 
+控制面、权威 Bridge 状态与补充观察的边界见 [decisions/ADR-004](decisions/ADR-004-separate-control-state-and-observation.md)：本地材料可以观察，但不能单独驱动任务状态、状态迁移与恢复结论。
+
 ## 版本与发布
 
 - 当前发布：`1.2.2`（`package.json`、`plugins/codex-zcode-bridge/plugin.json`）。
