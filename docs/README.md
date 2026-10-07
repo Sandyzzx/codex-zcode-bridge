@@ -19,13 +19,13 @@ English readers start at [README.md](../README.md). This index is bilingual; the
 
 ## For Master Agents
 
-按顺序读，不要通读全仓库文档。标 `待建` 的条目属于下一批整理，本批尚未提交：
+按顺序读，不要通读全仓库文档：
 
-1. `docs/PROJECT_STATE.md` —— 当前状态快照（稳定 / 实验 / 不支持 / 调查中）`待建`
+1. `docs/PROJECT_STATE.md` —— 当前状态快照（稳定 / 实验 / 不支持 / 调查中）
 2. `docs/ARCHITECTURE.md` —— 系统现在怎么工作
 3. `docs/INTERFACES.md` —— 合同与兼容边界
-4. `docs/decisions/README.md` —— 已批准决策索引 `待建`
-5. 只在需要证据时读 `docs/research/` `待建`
+4. `docs/decisions/README.md` —— 已批准决策索引
+5. 只在需要证据时读 `docs/research/`
 
 不要默认读 `docs/archive/`。
 
@@ -45,6 +45,7 @@ English readers start at [README.md](../README.md). This index is bilingual; the
 |---|---|---|---|
 | [README.md](../README.md) | en | 2026-10-05 | 未记录 |
 | [README.zh-CN.md](../README.zh-CN.md) | zh | 2026-10-03 | 未记录 |
+| [PROJECT_STATE.md](PROJECT_STATE.md) | zh | 2026-10-07 | 2026-10-07 |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | zh | 2026-10-03 | 未记录 |
 | [INTERFACES.md](INTERFACES.md) | zh | 2026-10-06 | 未记录 |
 | [SHARED_CORE.md](SHARED_CORE.md) | zh | 2026-10-06 | 未记录 |
@@ -55,12 +56,38 @@ English readers start at [README.md](../README.md). This index is bilingual; the
 
 `最后核对` 表示上一次有人把文档内容与代码逐条对照的日期。这一列目前全部为空，说明此前没有这个习惯；新建和修改文档时必须填写，否则该文档只能算"最后更新"，不能算"已验证"。
 
-### 报告与历史 REPORT / ARCHIVED
+### 决策 DECISION
 
-| 文档 | 状态 | 说明 |
+| 文档 | 日期 | 说明 |
 |---|---|---|
-| [TASK_FEEDBACK_V01_IMPLEMENTATION_REPORT.md](../TASK_FEEDBACK_V01_IMPLEMENTATION_REPORT.md) | REPORT | Task Feedback v0.1 的交付报告，一次性材料 |
-| [PHASE7_LIVE_PROGRESS.md](PHASE7_LIVE_PROGRESS.md) | ARCHIVED | Phase 7 兼容说明；有效内容待提炼进 `INTERFACES.md` 后移入 `archive/` |
+| [decisions/README.md](decisions/README.md) | 2026-10-07 | 决策索引与待补 ADR 清单 |
+| [decisions/roadmap-decisions-2026-09-27.md](decisions/roadmap-decisions-2026-09-27.md) | 2026-09-27 | 路线图与决策讨论 |
+| [decisions/reliability-repair-plan-v2-2026-10-03.md](decisions/reliability-repair-plan-v2-2026-10-03.md) | 2026-10-03 | 可靠性修复计划，含未完成项 |
+
+### 研究 RESEARCH
+
+| 文档 | 日期 | 说明 |
+|---|---|---|
+| [research/phase1-codex-zcode-2026-09-26.md](research/phase1-codex-zcode-2026-09-26.md) | 2026-09-26 | Phase 1 参考项目调研与 V0.1 架构建议 |
+| [research/desktop-task-refresh-2026-09-28.md](research/desktop-task-refresh-2026-09-28.md) | 2026-09-28 | ZCode Desktop 任务列表刷新机制 |
+| [research/start-plan-headless-2026-09-27.md](research/start-plan-headless-2026-09-27.md) | 2026-09-27 | Start Plan headless 认证阻塞与 Coding Plan 回归 |
+
+`docs/research/` 里还会随 2026-10-05 的 Native CLI / app-server 研究合并而增加内容；那批文档目前还在独立 PR 中。
+
+### 归档 ARCHIVED
+
+| 文档 | 日期 | 说明 |
+|---|---|---|
+| [archive/appserver-capability-matrix-2026-09-27.md](archive/appserver-capability-matrix-2026-09-27.md) | 2026-09-27 | app-server 能力普查，已被 2026-10-05 的能力探针取代 |
+| [archive/mvp-v0.3-2026-09-27.md](archive/mvp-v0.3-2026-09-27.md) | 2026-09-27 | MVP 0.3 版本说明 |
+| [archive/mcp-sdk-v2-migration-2026-09-27.md](archive/mcp-sdk-v2-migration-2026-09-27.md) | 2026-09-27 | MCP SDK v2 迁移记录 |
+
+### 报告 REPORT
+
+| 文档 | 说明 |
+|---|---|
+| [TASK_FEEDBACK_V01_IMPLEMENTATION_REPORT.md](../TASK_FEEDBACK_V01_IMPLEMENTATION_REPORT.md) | Task Feedback v0.1 的交付报告，一次性材料 |
+| [PHASE7_LIVE_PROGRESS.md](PHASE7_LIVE_PROGRESS.md) | Phase 7 兼容说明；有效内容待提炼进 `ARCHITECTURE.md` / `INTERFACES.md` 后移入 `archive/` |
 
 ### 自动生成 Generated
 
