@@ -18,3 +18,5 @@ docs/*
 !docs/INTERFACES.md
 !docs/ZCODE_RUNTIME.md
 !docs/PHASE7_LIVE_PROGRESS.md
+!docs/research/
+!docs/research/**
