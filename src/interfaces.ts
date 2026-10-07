@@ -1,6 +1,9 @@
-// Frozen contract projection of docs/INTERFACES.md (V0.1, FROZEN).
-// The documents are authoritative; keep this file mechanically in sync.
-// Do not change tool names, required fields, status names, or result semantics.
+// Contract projection of docs/INTERFACES.md, which is authoritative; keep this
+// file in sync with it. The V0.1 "frozen" wording is historical: later additive
+// features are documented in INTERFACES.md, not here.
+// Public tool names, required fields, status names and result semantics are
+// compatibility commitments. Change them only through a decision under
+// docs/decisions/, as required by AGENTS.md.
 // Additive optional fields (observation, usage/timing/model, scan cursor) are
 // backward compatible: old clients ignore them, old records read as absent.
 
