@@ -1,5 +1,8 @@
 # 文档索引 / Documentation
 
+> Status: AUTHORITATIVE（仅指本索引）
+> Last updated: 2026-10-07
+
 英文使用者从 [README.md](../README.md) 开始。技术文档为中文。本文是文档路由：先看状态等级，再按读者路径选文档。
 
 English readers start at [README.md](../README.md). This index is bilingual; the technical documents themselves are written in Chinese.
@@ -15,7 +18,7 @@ English readers start at [README.md](../README.md). This index is bilingual; the
 | `RESEARCH` | 研究结论 | 只作参考，不代表当前实现 |
 | `ARCHIVED` | 历史材料 | 默认不读，只用于追溯 |
 
-现状说明：下面的现有文档在本次整理前没有状态标注，状态由本索引统一指定。文档下次被修改时补上顶部标注。
+每份文档必须在顶部自带标注；本索引只做汇总，不能代替标注。跳过本索引直接打开某份权威文档时，也应能从文件顶部看到状态与核对情况。
 
 ## For Master Agents
 
@@ -46,15 +49,15 @@ English readers start at [README.md](../README.md). This index is bilingual; the
 | [README.md](../README.md) | en | 2026-10-05 | 未记录 |
 | [README.zh-CN.md](../README.zh-CN.md) | zh | 2026-10-03 | 未记录 |
 | [PROJECT_STATE.md](PROJECT_STATE.md) | zh | 2026-10-07 | 2026-10-07 |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | zh | 2026-10-03 | 未记录 |
-| [INTERFACES.md](INTERFACES.md) | zh | 2026-10-06 | 未记录 |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | zh | 2026-10-07 | 2026-10-07（部分） |
+| [INTERFACES.md](INTERFACES.md) | zh | 2026-10-07 | 2026-10-07（部分） |
 | [SHARED_CORE.md](SHARED_CORE.md) | zh | 2026-10-06 | 未记录 |
 | [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md) | zh | 2026-10-03 | 未记录 |
 | [plugins/codex-zcode-bridge/README.md](../plugins/codex-zcode-bridge/README.md) | zh | 2026-10-03 | 未记录 |
 | [plugins/codex-zcode-bridge/SECURITY.md](../plugins/codex-zcode-bridge/SECURITY.md) | zh + en | 2026-10-03 | 未记录 |
 | [plugins/codex-zcode-bridge/skills/zcode-bridge/SKILL.md](../plugins/codex-zcode-bridge/skills/zcode-bridge/SKILL.md) | zh | 2026-10-06 | 未记录 |
 
-`最后核对` 表示上一次有人把文档内容与代码逐条对照的日期。这一列目前全部为空，说明此前没有这个习惯；新建和修改文档时必须填写，否则该文档只能算"最后更新"，不能算"已验证"。
+`最后核对` 表示上一次有人把文档内容与代码逐条对照的日期，`（部分）` 表示只核对了其中一部分条款，具体范围写在文档顶部的 `Last verified` 行。`未记录` 不等于内容有问题，只表示还没有人做过这次核对。新建和修改文档时必须填写，否则该文档只能算"最后更新"，不能算"已验证"。
 
 ### 决策 DECISION
 
@@ -64,7 +67,7 @@ English readers start at [README.md](../README.md). This index is bilingual; the
 | [ADR-001](decisions/ADR-001-appserver-as-production-execution-path.md) | 2026-10-07 | Accepted：生产执行路径使用 app-server |
 | [ADR-002](decisions/ADR-002-manager-owns-task-lifecycle.md) | 2026-10-07 | Accepted：Manager 独占生命周期，worker 通过 attempt claim 入场 |
 | [ADR-003](decisions/ADR-003-execution-directory-prepared-by-host.md) | 2026-10-07 | Accepted：执行目录由调用宿主准备 |
-| [ADR-004](decisions/ADR-004-observation-is-not-control.md) | 2026-10-07 | Proposed：本地材料只作观察面，待 Master 决策 |
+| [ADR-004](decisions/ADR-004-separate-control-state-and-observation.md) | 2026-10-07 | Accepted：分离运行时控制、权威状态与补充观察 |
 | [decisions/roadmap-decisions-2026-09-27.md](decisions/roadmap-decisions-2026-09-27.md) | 2026-09-27 | 路线图与决策讨论 |
 | [decisions/reliability-repair-plan-v2-2026-10-03.md](decisions/reliability-repair-plan-v2-2026-10-03.md) | 2026-10-03 | 可靠性修复计划，含未完成项 |
 
@@ -76,6 +79,7 @@ English readers start at [README.md](../README.md). This index is bilingual; the
 | [research/desktop-task-refresh-2026-09-28.md](research/desktop-task-refresh-2026-09-28.md) | 2026-09-28 | ZCode Desktop 任务列表刷新机制 |
 | [research/start-plan-headless-2026-09-27.md](research/start-plan-headless-2026-09-27.md) | 2026-09-27 | Start Plan headless 认证阻塞与 Coding Plan 回归 |
 | [research/native-cli-vs-appserver-2026-10-05/README.md](research/native-cli-vs-appserver-2026-10-05/README.md) | 2026-10-05 | Native CLI vs app-server 研究：结论、6 篇文档、实验脚本与证据索引 |
+| [research/task-feedback-v0-1-2026-10-05/README.md](research/task-feedback-v0-1-2026-10-05/README.md) | 2026-10-05 | Task Feedback v0.1 的输入：app-server 事件能力探针与两份建议 |
 
 带日期的研究目录可以自带 README 作为该主题的文档地图；逐篇条目写在那份 README 里，不重复列在本索引。
 
@@ -92,7 +96,7 @@ English readers start at [README.md](../README.md). This index is bilingual; the
 
 | 文档 | 说明 |
 |---|---|
-| [TASK_FEEDBACK_V01_IMPLEMENTATION_REPORT.md](../TASK_FEEDBACK_V01_IMPLEMENTATION_REPORT.md) | Task Feedback v0.1 的交付报告，一次性材料 |
+| [reports/task-feedback-v0-1-implementation-2026-10-06.md](reports/task-feedback-v0-1-implementation-2026-10-06.md) | Task Feedback v0.1 的交付报告，一次性材料 |
 
 ### 自动生成 Generated
 

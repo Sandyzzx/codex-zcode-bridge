@@ -12,18 +12,16 @@
 | [roadmap-decisions-2026-09-27.md](roadmap-decisions-2026-09-27.md) | DECISION | 2026-09-27 的路线图与决策讨论。仍然成立的结论需要提炼进 `ARCHITECTURE.md` / `INTERFACES.md`；本文本身不是当前事实来源。 |
 | [reliability-repair-plan-v2-2026-10-03.md](reliability-repair-plan-v2-2026-10-03.md) | DECISION | Bridge 可靠性修复计划。A/B 主要改动已实现；C/D 与宿主启动核验仍有未完成项。 |
 
-## 待补的 ADR
-
-已补写：
+## ADR 索引
 
 | ADR | 状态 | 主题 |
 |---|---|---|
 | [ADR-001](ADR-001-appserver-as-production-execution-path.md) | Accepted | 生产执行路径使用 ZCode app-server |
 | [ADR-002](ADR-002-manager-owns-task-lifecycle.md) | Accepted | Manager 独占任务生命周期，worker 通过 attempt claim 入场 |
 | [ADR-003](ADR-003-execution-directory-prepared-by-host.md) | Accepted | 执行目录由调用宿主准备，Bridge 不创建也不删除 |
-| [ADR-004](ADR-004-observation-is-not-control.md) | Proposed | 本地材料只作观察面，不作控制面 |
+| [ADR-004](ADR-004-separate-control-state-and-observation.md) | Accepted | 分离运行时控制、权威状态与补充观察；Desktop 索引是登记过的集成例外 |
 
-ADR-001 到 ADR-003 只搬运权威文档里已经写明的结论。ADR-004 是唯一需要 Master 决策的一条：仓库文档里没有明文记录"观察面不等于控制面"，此前只有设计讨论，因此它保持 Proposed，不当作已批准决策使用。
+ADR-001 到 ADR-003 只搬运权威文档里已经写明的结论。ADR-004 原先没有明文记录，只有 bridge 之外的设计讨论，因此先以 Proposed 记录；2026-10-07 由 Master 明确按"强化版 A"接受，原则冻结，未因此增加任何读取 ZCode 本地材料的代码。
 
 ## 命名
 
