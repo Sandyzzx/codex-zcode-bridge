@@ -1,5 +1,9 @@
 # ZCode 运行配置边界
 
+> Status: AUTHORITATIVE
+> Last updated: 2026-10-03
+> Last verified: 未逐条核对
+
 当前生产路径是 `node zcode.cjs app-server --stdio`，不是历史 CLI `--prompt --json`。解析入口为 `NodeRuntimeResolver`，配置项与用户设置方法见仓库 README。
 
 Bridge 只读取官方 builtin/personal provider 配置，不复制、不改写内容，也不将环境或凭据写入任务 metadata。personal 配置的 `config.providerConfigRules.providerRules` 必须为非空数组或对象；已知空 stub 被拒绝。结构验证不能证明 provider 可用或账号有权限。

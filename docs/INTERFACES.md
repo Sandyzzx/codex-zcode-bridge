@@ -1,5 +1,10 @@
 # 当前接口与兼容边界
 
+> Status: AUTHORITATIVE
+> Last updated: 2026-10-07
+> Last verified: 2026-10-07（本轮核对事件补拉与降级、`session/read` 未接入、默认工具数 13；其余条款沿用此前记录，未逐条复核）
+> Verified against: ed2d402
+
 准确类型与 schema 以 `src/interfaces.ts` 和 `src/mcp/schemas.ts` 为准。核心公共入口见 [SHARED_CORE.md](SHARED_CORE.md)。历史源码注释中的 V0.1/FROZEN 是沿革说明，不代表当前新增功能已经冻结。
 
 默认 MCP 工具：`zcode_task`、`zcode_status`、`zcode_feedback`、`zcode_result`、`zcode_continue`、`zcode_cancel`、`zcode_events`、`zcode_interaction_reply`、`zcode_doctor`、`zcode_model_catalog`、`zcode_default_model`、`zcode_set_default_model`、`zcode_clear_default_model`。实验 progress probe 需显式启用。
