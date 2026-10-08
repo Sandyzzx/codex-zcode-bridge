@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { buildContinuePrompt, buildTaskPrompt } from "../src/prompts/task-prompt.js";
 import { makeTask } from "./helpers.js";
+import { parseAgentReport } from "../src/adapters/agent-report.js";
+import type { TaskResult } from "../src/interfaces.js";
 
 test("task prompt contains the package and the output contract", () => {
   const prompt = buildTaskPrompt(makeTask({ task_id: "task_prompt" }));
@@ -17,6 +19,31 @@ test("task prompt contains the package and the output contract", () => {
   assert.match(prompt, /ACCEPTANCE CRITERIA/);
   assert.match(prompt, /needs_master_decision/);
   assert.match(prompt, /exactly one JSON object/);
+});
+
+test("mandatory output example is valid JSON with all required fields", () => {
+  const prompt = buildTaskPrompt(makeTask());
+  const line = prompt.split("\n").find((text) => text.startsWith("Valid JSON example"));
+  assert.ok(line);
+  assert.equal(parseAgentReport(line.slice(line.indexOf("{"))).error, null);
+});
+
+test("report-only continuation preserves candidate claims without repeating the implementation task", () => {
+  const result: TaskResult = {
+    task_id: "repair", status: "failed", error_code: "invalid_agent_report", summary: "report.needs_master_decision must be a boolean",
+    files_changed: [], tests: [], issues: [], needs_master_decision: true, zcode_output: "x".repeat(50_000),
+    exit_code: 0, session_id: "session", attempt: 1, started_at: null, finished_at: null,
+    report_candidate: { summary: "actual candidate", files_changed: ["only.txt"], tests: [{ command: "actual test", status: "failed" }], issues: ["known issue"] },
+  };
+  const prompt = buildContinuePrompt({ task: makeTask({ objective: "IMPLEMENTATION_SENTINEL", test_commands: ["DO_NOT_RERUN"] }),
+    feedback: "Correct the report", additionalRequirements: [], previousSessionId: "session", previousResult: result });
+  assert.match(prompt, /actual candidate/);
+  assert.match(prompt, /actual test/);
+  assert.match(prompt, /known issue/);
+  assert.match(prompt, /"status": "failed"/);
+  assert.match(prompt, /Do not use tools/);
+  assert.doesNotMatch(prompt, /IMPLEMENTATION_SENTINEL|DO_NOT_RERUN|ORIGINAL TASK/);
+  assert.ok(prompt.length < 8_000);
 });
 
 test("empty arrays render as explicit none", () => {

@@ -45,26 +45,27 @@ English readers start at [README.md](../README.md). This index is bilingual; the
 |---|---|---|---|
 | [README.md](../README.md) | en | 2026-10-05 | 未记录 |
 | [README.zh-CN.md](../README.zh-CN.md) | zh | 2026-10-03 | 未记录 |
-| [PROJECT_STATE.md](PROJECT_STATE.md) | zh | 2026-10-07 | 2026-10-07 |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | zh | 2026-10-03 | 未记录 |
-| [INTERFACES.md](INTERFACES.md) | zh | 2026-10-06 | 未记录 |
+| [PROJECT_STATE.md](PROJECT_STATE.md) | zh | 2026-10-08 | 2026-10-08，本地源码/回归 |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | zh | 2026-10-08 | 2026-10-08，本地源码/回归 |
+| [INTERFACES.md](INTERFACES.md) | zh | 2026-10-08 | 2026-10-08，本地源码/回归 |
 | [SHARED_CORE.md](SHARED_CORE.md) | zh | 2026-10-06 | 未记录 |
-| [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md) | zh | 2026-10-03 | 未记录 |
+| [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md) | zh | 2026-10-08 | 2026-10-08，本地配置/假运行时 |
 | [plugins/codex-zcode-bridge/README.md](../plugins/codex-zcode-bridge/README.md) | zh | 2026-10-03 | 未记录 |
 | [plugins/codex-zcode-bridge/SECURITY.md](../plugins/codex-zcode-bridge/SECURITY.md) | zh + en | 2026-10-03 | 未记录 |
-| [plugins/codex-zcode-bridge/skills/zcode-bridge/SKILL.md](../plugins/codex-zcode-bridge/skills/zcode-bridge/SKILL.md) | zh | 2026-10-06 | 未记录 |
+| [plugins/codex-zcode-bridge/skills/zcode-bridge/SKILL.md](../plugins/codex-zcode-bridge/skills/zcode-bridge/SKILL.md) | zh | 2026-10-08 | 2026-10-08，本地源码/合同 |
 
-`最后核对` 表示上一次有人把文档内容与代码逐条对照的日期。这一列目前全部为空，说明此前没有这个习惯；新建和修改文档时必须填写，否则该文档只能算"最后更新"，不能算"已验证"。
+`最后核对` 表示上一次有人把文档内容与代码对照的日期及范围；标记为未记录的条目仍缺少核对证据。新建和修改文档时必须填写，否则该文档只能算"最后更新"，不能算"已验证"。本地回归不代表真实 provider 或长期运行通过。
 
 ### 决策 DECISION
 
 | 文档 | 日期 | 说明 |
 |---|---|---|
-| [decisions/README.md](decisions/README.md) | 2026-10-07 | 决策索引 |
+| [decisions/README.md](decisions/README.md) | 2026-10-08 | 决策索引 |
 | [ADR-001](decisions/ADR-001-appserver-as-production-execution-path.md) | 2026-10-07 | Accepted：生产执行路径使用 app-server |
 | [ADR-002](decisions/ADR-002-manager-owns-task-lifecycle.md) | 2026-10-07 | Accepted：Manager 独占生命周期，worker 通过 attempt claim 入场 |
 | [ADR-003](decisions/ADR-003-execution-directory-prepared-by-host.md) | 2026-10-07 | Accepted：执行目录由调用宿主准备 |
 | [ADR-004](decisions/ADR-004-observation-is-not-control.md) | 2026-10-07 | Proposed：本地材料只作观察面，待 Master 决策 |
+| [ADR-005](decisions/ADR-005-long-session-reliability.md) | 2026-10-08 | Accepted：长会话清理、锁释放、报告修复与 provider 兼容 |
 | [decisions/roadmap-decisions-2026-09-27.md](decisions/roadmap-decisions-2026-09-27.md) | 2026-09-27 | 路线图与决策讨论 |
 | [decisions/reliability-repair-plan-v2-2026-10-03.md](decisions/reliability-repair-plan-v2-2026-10-03.md) | 2026-10-03 | 可靠性修复计划，含未完成项 |
 
@@ -93,6 +94,7 @@ English readers start at [README.md](../README.md). This index is bilingual; the
 | 文档 | 说明 |
 |---|---|
 | [TASK_FEEDBACK_V01_IMPLEMENTATION_REPORT.md](../TASK_FEEDBACK_V01_IMPLEMENTATION_REPORT.md) | Task Feedback v0.1 的交付报告，一次性材料 |
+| [reports/2026-10-08-long-session-reliability.md](reports/2026-10-08-long-session-reliability.md) | 长会话故障证据、本地修复、验证与未运行边界 |
 
 ### 自动生成 Generated
 

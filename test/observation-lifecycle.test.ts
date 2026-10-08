@@ -159,6 +159,43 @@ async function seedRunningTask(fx: ObservedFixture, overrides: Partial<TaskPacka
 
 // ---- A1: unified observation contract ----
 
+test("a fresh heartbeat without business events does not assert business execution", () => {
+  const now = T0 + 60_000;
+  const input: import("../src/observation/types.js").JudgeInput = {
+    status: { status: "running", attempt: 1, started_at: iso(0), finished_at: null, worker_pid: 123 },
+    result: null, checkpoint: null, pending_interaction: null, last_business_event: null, now_ms: now,
+    heartbeat: { attempt: 1, worker_pid: 123, heartbeat_at: iso(59_000), last_event_seq: 0, last_event_type: null, session_id: null, turn_id: null },
+  };
+  const observation = judgeTaskObservation(input);
+  assert.equal(observation.worker.state, "alive");
+  assert.equal(observation.activity.code, "unknown");
+  assert.equal(observation.activity.reason_code, "heartbeat_alive_no_business_event");
+  assert.equal(observation.stalled, false);
+  assert.equal(judgeTaskObservation({ ...input, status: { ...input.status, started_at: iso(59_000) } }).activity.code, "starting");
+});
+
+test("a recovery lock release error cannot retain a completed single-flight promise forever", async () => {
+  const fx = await makeObservedFixture();
+  try {
+    await seedRunningTask(fx);
+    fx.advance(60_000); // Expire the heartbeat fast path so the injected probe runs.
+    const original = fx.probe.probe.bind(fx.probe);
+    const lock = path.join(fx.store.tasksRoot, ".recovery.lock");
+    fx.probe.probe = async (requests) => {
+      const answer = await original(requests);
+      writeFileSync(path.join(lock, "owner.json"), JSON.stringify({ pid: process.pid, token: "changed" }));
+      return answer;
+    };
+    await assert.rejects(fx.manager.recoverTasks(), /ownership changed/);
+    const calls = fx.probe.probeCalls;
+    // Fixture-only corrupt lock; no real data roots are touched.
+    rmSync(lock, { recursive: true });
+    fx.probe.probe = original;
+    await fx.manager.recoverTasks();
+    assert.ok(fx.probe.probeCalls > calls, "next recovery must execute a new scan");
+  } finally { await fx.cleanup(); }
+});
+
 test("A1-01: long quiet tool execution with a fresh heartbeat stays running and is never worker_lost", async () => {
   const fx = await makeObservedFixture();
   try {

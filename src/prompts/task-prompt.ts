@@ -55,6 +55,23 @@ export function buildContinuePrompt(input: ContinuePromptInput): string {
       `This run resumes persisted session ${previousSessionId}; earlier conversation context may be available.`,
     );
   }
+  if (previousResult?.error_code === "invalid_agent_report") {
+    // Do not reintroduce implementation instructions or test commands in a
+    // report-only continuation. Candidate claims precede the bounded raw
+    // response so a long response cannot hide the useful structured evidence.
+    sections.push(
+      "REPORT REPAIR MODE: The previous execution has ended. Only its final report failed validation. Do not use tools, edit files, rerun tests, or repeat task work. Return the corrected JSON report from the evidence below. Preserve claims as claims, including not_run and failures. Do not invent tests or missing facts. If needs_master_decision cannot be established, explicitly set it to true and record the uncertainty in issues.",
+      `PROJECT WORKSPACE: ${task.workspace}`,
+      ...(task.worktree_path ? [`HOST-SELECTED EXECUTION WORKTREE: ${task.worktree_path}`] : []),
+      `PREVIOUS REPORT ERROR\n${previousResult.summary}`,
+      `REPORT CANDIDATE CLAIMS (not independently verified)\n${JSON.stringify(previousResult.report_candidate ?? {}, null, 2)}`,
+      `PREVIOUS RESPONSE\n${bounded(previousResult.zcode_output, MAX_SECTION_CHARS)}`,
+      `MASTER FEEDBACK (report repair only)\n${feedback}`,
+      ...(additionalRequirements.length ? [renderList("ADDITIONAL REPORT REQUIREMENTS", [...additionalRequirements])] : []),
+      OUTPUT_CONTRACT,
+    );
+    return joinBoundedPreservingTail(sections, OUTPUT_CONTRACT);
+  }
   if (previousResult) {
     sections.push(
       `PREVIOUS RESULT (normalized claims from the previous attempt)\n${bounded(
@@ -62,11 +79,6 @@ export function buildContinuePrompt(input: ContinuePromptInput): string {
         MAX_SECTION_CHARS,
       )}`,
     );
-    if (previousResult.error_code === "invalid_agent_report") {
-      sections.push(
-        "REPORT REPAIR MODE: The previous attempt's execution has already ended; only its final report failed validation. Do not edit files, rerun tests, or repeat task work. Reconstruct the final JSON report from the previous response and report_candidate. Do not guess missing facts. If a required boolean or other fact cannot be established, set needs_master_decision=true and describe the uncertainty in issues.",
-      );
-    }
   }
   sections.push(`MASTER FEEDBACK (address every point)\n${feedback}`);
   if (additionalRequirements.length > 0) {
@@ -78,9 +90,11 @@ export function buildContinuePrompt(input: ContinuePromptInput): string {
 
 const OUTPUT_CONTRACT = [
   "OUTPUT CONTRACT (mandatory)",
-  "Your final response must be exactly one JSON object with no markdown fences and no text before or after it, matching this shape:",
-  '{"summary": string, "files_changed": string[], "tests": [{"command": string, "status": "passed" | "failed" | "not_run", "details"?: string}], "issues": string[], "needs_master_decision": boolean}',
+  "Your final response must be exactly one JSON object with no markdown fences and no text before or after it.",
+  'Required fields: summary (non-empty string), files_changed (array of strings), tests (array of objects with command string, status "passed" | "failed" | "not_run", optional details string), issues (array of strings), needs_master_decision (JSON boolean).',
+  'Valid JSON example (replace example values with observed facts): {"summary":"Describe the actual work","files_changed":[],"tests":[{"command":"An applicable command","status":"not_run","details":"Explain why it was not run"}],"issues":[],"needs_master_decision":true}',
   "List every file you created or modified in files_changed (workspace-relative paths). Give one tests entry per applicable test command; use status not_run when a command was not applicable or could not run. Record problems in issues. Set needs_master_decision=true only when a required decision is outside your authority; never guess.",
+  "Before sending, check that all five top-level fields exist and needs_master_decision is a JSON boolean true or false, never a quoted string and never text such as needs_master_decision=false. If its value is uncertain, set true and explain in issues. Do not omit it.",
 ].join("\n");
 
 const DECISION_RULE = [

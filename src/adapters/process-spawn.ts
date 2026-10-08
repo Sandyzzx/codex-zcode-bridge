@@ -7,6 +7,8 @@
 // Version 2.0. Modifications: TypeScript ESM, injection-friendly types for the
 // Bridge adapter contract, extra termination verification for this project.
 import { spawn } from "node:child_process";
+import { createPlatformProbe } from "../runtime/process-probe.js";
+import { parseWindowsTreeCapture, terminateWindowsProcessTree, windowsTreeCaptureScript } from "./windows-process-cleanup.js";
 
 export interface OutputStreamLike {
   setEncoding(encoding: "utf8"): void;
@@ -88,8 +90,9 @@ export type TerminateProcessTree = (
 
 /**
  * Terminates a process tree and only resolves after termination is verified.
- * Windows: `taskkill /PID <pid> /T /F`, verified by exit code plus a
- * direct-child liveness poll. POSIX: SIGTERM to the process group, then
+ * Windows: `taskkill /PID <pid> /T /F`, followed by startup-identity checks
+ * of the captured root and descendants, regardless of its exit code.
+ * POSIX: SIGTERM to the process group, then
  * SIGKILL, verified by group/pid liveness polls.
  */
 export const terminateProcessTree: TerminateProcessTree = async (pid, options = {}) => {
@@ -97,17 +100,23 @@ export const terminateProcessTree: TerminateProcessTree = async (pid, options = 
     throw new Error(`A positive integer PID is required, got: ${pid}`);
   }
   if (process.platform === "win32") {
-    const result = await runCommand("taskkill", ["/PID", String(pid), "/T", "/F"], {
-      timeoutMs: 15_000,
+    const probe = createPlatformProbe();
+    await terminateWindowsProcessTree(pid, options.killWaitMs ?? 2_000, {
+      capture: async (root) => {
+        let snapshot: CommandResult;
+        try {
+          snapshot = await runCommand("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", windowsTreeCaptureScript(root)], {
+            timeoutMs: 5_000, maxOutputBytes: 128_000,
+          });
+        } catch { throw new Error("process_tree_snapshot_unverified: query failed"); }
+        if (snapshot.code !== 0 || snapshot.stdoutTruncated || snapshot.stderr.length > 0) {
+          throw new Error("process_tree_snapshot_unverified: query failed or incomplete");
+        }
+        return parseWindowsTreeCapture(snapshot.stdout, root);
+      },
+      probe: (requests) => probe.probe(requests),
+      kill: async (root) => (await runCommand("taskkill", ["/PID", String(root), "/T", "/F"], { timeoutMs: 15_000 })).code,
     });
-    if (result.code !== 0) {
-      throw new Error(
-        result.stderr.trim() || `taskkill exited with code ${String(result.code)}`,
-      );
-    }
-    if (!(await waitForPidExit(pid, options.killWaitMs ?? 2_000))) {
-      throw new Error(`Process tree ${pid} still running after taskkill reported success`);
-    }
     return { pid, signal: "SIGKILL", verified: true };
   }
   signalProcessTree(pid, "SIGTERM");
@@ -126,6 +135,7 @@ interface CommandResult {
   signal: string | null;
   stdout: string;
   stderr: string;
+  stdoutTruncated: boolean;
 }
 
 /** Minimal shell-free runner (used for taskkill). Not for model invocation. */
@@ -174,6 +184,7 @@ function runCommand(
         signal: timedOut ? "SIGKILL" : signal,
         stdout: stdout.value,
         stderr: stderr.value,
+        stdoutTruncated: stdout.truncated,
       });
     });
   });
@@ -204,14 +215,6 @@ function isProcessTreeRunning(pid: number): boolean {
     if ((error as NodeJS.ErrnoException).code === "ESRCH") return isProcessRunning(pid);
     throw error;
   }
-}
-
-async function waitForPidExit(pid: number, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  while (isProcessRunning(pid) && Date.now() < deadline) {
-    await sleep(20);
-  }
-  return !isProcessRunning(pid);
 }
 
 async function waitForProcessTreeExit(pid: number, timeoutMs: number): Promise<boolean> {

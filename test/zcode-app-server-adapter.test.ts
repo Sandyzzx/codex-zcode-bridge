@@ -155,6 +155,22 @@ test("lets the app-server resolve a requested model omitted from the initial cat
   }
 });
 
+test("resolves an unprefixed provider from the runtime catalog without losing the caller request", async () => {
+  const runtime = await makeFakeRuntime({ providerId: "account:plan", modelId: "flash", options: { reasoningLevel: "high" } }, false);
+  try {
+    const adapter = new ZCodeAppServerAdapter({ resolver: { resolve: async () => runtime.config }, timeoutMs: 10_000, childEnvBase: { PATH: process.env.PATH }, homeDir: runtime.root });
+    const handle = await adapter.startTask({ task: { ...task, model: { provider_id: "plan", model_id: "flash", reasoning_level: "high" } }, workspace: makeWorkspace(runtime.root), attempt: 1 });
+    const outcome = await adapter.getResult(handle);
+    assert.equal(outcome.exitCode, 0);
+    assert.equal(outcome.modelProfile?.provider_id, "account:plan");
+    assert.equal(outcome.modelProfile?.requested_model, "plan/flash");
+    const requests = (await readFile(runtime.requestLog, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+    const selection = requests.find((request) => request.method === "session/setModel");
+    assert.equal(selection.params.model.providerId, "account:plan");
+    assert.equal(selection.params.persistAsWorkspaceLastUsed, false);
+  } finally { await rm(runtime.root, { recursive: true, force: true }); }
+});
+
 test("omitting model leaves the ZCode session default untouched", async () => {
   const runtime = await makeFakeRuntime();
   try {

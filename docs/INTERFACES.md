@@ -1,5 +1,9 @@
 # 当前接口与兼容边界
 
+> Status: AUTHORITATIVE
+> Last updated: 2026-10-08
+> Last verified: 2026-10-08，本地源码与回归；原生 session/read 仍 NOT RUN。
+
 准确类型与 schema 以 `src/interfaces.ts` 和 `src/mcp/schemas.ts` 为准。核心公共入口见 [SHARED_CORE.md](SHARED_CORE.md)。历史源码注释中的 V0.1/FROZEN 是沿革说明，不代表当前新增功能已经冻结。
 
 默认 MCP 工具：`zcode_task`、`zcode_status`、`zcode_feedback`、`zcode_result`、`zcode_continue`、`zcode_cancel`、`zcode_events`、`zcode_interaction_reply`、`zcode_doctor`、`zcode_model_catalog`、`zcode_default_model`、`zcode_set_default_model`、`zcode_clear_default_model`。实验 progress probe 需显式启用。
@@ -7,6 +11,8 @@
 TaskPackage 的五个数组必须存在，可为空。workspace 是绝对项目路径；worktree_path 是宿主已准备的执行目录。Bridge 不创建或删除 worktree。task_id 只能是最多 64 字符的字母数字、下划线和连字符。单 attempt timeout 范围 60,000–14,400,000 ms。
 
 任务状态为 queued/running/completed/failed/cancelled/waiting_for_master。后四种结束当前 attempt；completed 表示执行及报告解析完成，宿主仍独立验收。续跑只接受 completed/failed/waiting_for_master，且清理必须已验证；保留同 task ID、执行目录和旧 attempt 证据。
+
+AgentReport 必须包含布尔型 needs_master_decision；缺失或字符串值仍返回 invalid_agent_report，不静默合成。该错误的显式续作使用仅修复报告的 prompt，携带 candidate 与有界原始响应，不重发原实现任务或测试命令，禁止模型编辑或重跑。Bridge 不自动增加修复 turn；禁止工具操作是 prompt 约束，不是 OS 沙箱。心跳而无业务事件时 observation.activity 为 starting（启动宽限内）或 unknown，不声称业务执行。固定反馈模板区分原 attempt 的 cleanup_failed 与后续 cleanup=verified；未确认清理标为未验证，不能写成 NOT RUN。决策见 ADR-005。
 
 任务 objective、requirements、路径、验收、测试命令及续跑 feedback 不截断；完整 prompt 超过 60,000 字符会返回 TASK_INVALID。参考 context 与旧结果摘要仍有明确的截断标记，不能把安全约束只放在参考 context。
 

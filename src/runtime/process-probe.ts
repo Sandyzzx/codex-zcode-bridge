@@ -91,7 +91,7 @@ function failedQuery(reason: string): FingerprintQuery {
 /** Batch Windows probe: one hidden PowerShell call, structured `pid|ticks` lines, bounded timeout. */
 function windowsBatchQuery(pids: number[], timeoutMs: number): Promise<FingerprintQuery> {
   return new Promise((resolve) => {
-    const script = `Get-Process -Id ${pids.join(",")} -ErrorAction SilentlyContinue | ForEach-Object { "{0}|{1}" -f $_.Id, $_.StartTime.Ticks }`;
+    const script = `$ErrorActionPreference = 'Stop'; Get-Process -Id ${pids.join(",")} -ErrorAction SilentlyContinue | ForEach-Object { "{0}|{1}" -f $_.Id, $_.StartTime.Ticks }; 'bridge_probe_complete_v1'`;
     const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], {
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
@@ -119,23 +119,24 @@ function windowsBatchQuery(pids: number[], timeoutMs: number): Promise<Fingerpri
       if (stdout.length < 1_000_000) stdout += chunk;
     });
     child.on("error", () => finish(failedQuery("spawn_error")));
-    child.on("close", () => {
+    child.on("close", (code) => {
       const map = new Map<number, string>();
-      for (const line of stdout.split(/\r?\n/u)) {
-        const match = /^(\d+)\|(\d+)$/u.exec(line.trim());
-        if (!match) continue;
-        map.set(Number(match[1]), match[2]!);
-      }
-      // Rows for missing PIDs are conclusive (Get-Process skips exited PIDs
-      // and exits non-zero), so any parsed row means the query ran. With no
-      // rows at all we cannot tell "all exited" from "broken query" unless
-      // stdout was well-formed but empty, which Get-Process guarantees only
-      // when the query executed: treat empty stdout + empty stderr as an
-      // executed query with zero matches.
-      if (map.size === 0) {
-        finish(stderrBytes > 0 ? failedQuery("query_error") : { ok: true, reason: "ok", fingerprints: map });
+      const lines = stdout.trim().split(/\r?\n/u);
+      if (code !== 0 || stderrBytes > 0 || lines.pop() !== "bridge_probe_complete_v1") {
+        finish(failedQuery("query_error"));
         return;
       }
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const match = /^(\d+)\|(\d+)$/u.exec(line.trim());
+        if (!match || !pids.includes(Number(match[1])) || map.has(Number(match[1]))) {
+          finish(failedQuery("query_error"));
+          return;
+        }
+        map.set(Number(match[1]), match[2]!);
+      }
+      // Only a complete, successful query can prove a missing PID exited.
+      // Partial rows followed by a permission/StartTime failure stay unknown.
       finish({ ok: true, reason: "ok", fingerprints: map });
     });
   });
