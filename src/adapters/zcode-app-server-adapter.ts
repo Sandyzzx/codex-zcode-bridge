@@ -21,7 +21,7 @@ import { BridgeError } from "../runtime/errors.js";
 import { loadPersistedRuntimeEnvironment, NodeRuntimeResolver } from "../runtime/resolver.js";
 import { isProcessRunning, terminateProcessTree } from "./process-spawn.js";
 import { createMinimalOsEnv } from "../runtime/child-env.js";
-import { accountProviderId, buildAccountProviderPayload, runtimeAuthReply, zcodeDataBaseDir, zcodeTasksIndexPath } from "../runtime/account-provider.js";
+import { catalogProviderId, buildAccountProviderPayload, runtimeAuthReply, zcodeDataBaseDir, zcodeTasksIndexPath } from "../runtime/account-provider.js";
 import { resolveSessionPreferences } from "../runtime/session-preferences.js";
 import { resolveTaskTimeout } from "../runtime/task-timeout.js";
 import { registerDesktopTask, updateDesktopTaskStatus, type DesktopTaskIndexEntry, type DesktopTaskStatus } from "./task-index-sync.js";
@@ -396,9 +396,9 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       entry.sessionId = sessionId;
       let selectedReasoningLevel: string | null = null;
       if (preferences.model) {
-        const requestedProviderId = accountProviderId(preferences.model.provider_id, config);
-        const requested = `${requestedProviderId}/${preferences.model.model_id}`;
         const availableModels = readAvailableModels(snapshot);
+        const requestedProviderId = catalogProviderId(preferences.model.provider_id, preferences.model.model_id, availableModels, config);
+        const requested = `${requestedProviderId}/${preferences.model.model_id}`;
         entry.onEvent({
           type: "model_catalog",
           summary: `ZCode runtime advertised ${availableModels.length} selectable model${availableModels.length === 1 ? "" : "s"}`,
@@ -454,7 +454,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         entry.selectedModel = readSelectedModel(modelState) ?? requested;
         entry.selectedModelSelection = selected;
         entry.modelSource = preferences.modelSource;
-        entry.requestedModel = requested;
+        entry.requestedModel = `${preferences.model.provider_id}/${preferences.model.model_id}`;
         entry.requestedReasoningLevel = reasoningLevel;
         selectedReasoningLevel = readEffectiveReasoningLevel(modelState);
         entry.selectedReasoningLevel = selectedReasoningLevel;
@@ -463,7 +463,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
           type: "model_selected",
           summary: `ZCode selected requested model ${entry.selectedModel}${selectedReasoningLevel ? ` with reasoning level ${selectedReasoningLevel}` : "; runtime did not report its reasoning level"}`,
           details: {
-            requested_model: requested,
+            requested_model: entry.requestedModel,
             selected_model: entry.selectedModel,
             provider_id: selected.providerId,
             model_id: selected.modelId,

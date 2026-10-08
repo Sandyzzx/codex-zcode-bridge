@@ -72,10 +72,12 @@ export function accountProviderId(providerId: string, config: ZCodeRuntimeConfig
   // The runtime model catalog already uses this namespace for account-backed
   // providers. Keep it idempotent when callers supply the exact catalog ID.
   if (providerId.startsWith("account:")) return providerId;
-  const table = readJson(config.providerBuiltinConfigFile);
-  for (const rawRule of readProviderRules(table)) {
+  const rules = [config.providerBuiltinConfigFile, config.providerPersonalConfigFile]
+    .flatMap((file) => readProviderRules(readJson(file)));
+  for (const rawRule of rules) {
     if (!isRecord(rawRule)) continue;
     const rule = rawRule as ProviderRule;
+    if (!providerId.startsWith("builtin:") && rule.providerId === `account:${providerId}`) return rule.providerId;
     if (
       !providerId.startsWith("builtin:") &&
       rule.providerId === providerId &&
@@ -88,6 +90,24 @@ export function accountProviderId(providerId: string, config: ZCodeRuntimeConfig
     }
   }
   return providerId;
+}
+
+/** Prefer an exact catalog entry; namespace aliases require runtime evidence
+ * for the same model. Never substitute a different provider by model name. */
+export function catalogProviderId(
+  providerId: string,
+  modelId: string,
+  catalog: readonly { providerId: string; modelId: string }[],
+  config: ZCodeRuntimeConfig,
+): string {
+  const advertised = (candidate: string): boolean => catalog.some((model) => model.providerId === candidate && model.modelId === modelId);
+  if (advertised(providerId)) return providerId;
+  const configured = accountProviderId(providerId, config);
+  if (advertised(configured)) return configured;
+  if (!providerId.startsWith("account:") && !providerId.startsWith("builtin:") && advertised(`account:${providerId}`)) {
+    return `account:${providerId}`;
+  }
+  return configured;
 }
 
 /** Supply coding-plan credentials in memory; Start Plan requires a desktop captcha host. */

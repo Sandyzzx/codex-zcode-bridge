@@ -186,8 +186,8 @@ export class BridgeTaskManager implements ProgressTaskManager {
           writeFileSync(lastRunFile, String(Date.now()), { mode: 0o600 });
         }
       } finally {
-        releaseRecovery();
-        this.#recoveryPromise = null;
+        try { releaseRecovery(); }
+        finally { this.#recoveryPromise = null; }
       }
     }
   }
@@ -1187,31 +1187,23 @@ export class BridgeTaskManager implements ProgressTaskManager {
     return true;
   }
 
-  #runningTaskIdsLocked(): string[] {
-    return this.#store.listTaskIds().filter((taskId) => { const status = this.#safeStatus(taskId); return status?.status === "running" || status?.cleanup_unverified === true; });
-  }
-
-  #queuedTaskIdsLocked(): string[] {
-    return this.#store
-      .listTaskIds()
-      .map((taskId) => ({ taskId, status: this.#safeStatus(taskId) }))
-      .filter((entry) => entry.status?.status === "queued")
-      .sort((a, b) => a.status!.created_at.localeCompare(b.status!.created_at))
-      .map((entry) => entry.taskId);
-  }
-
   #pumpLocked(): void {
-    const running = this.#runningTaskIdsLocked();
+    // Reuse one validated snapshot within this scheduling operation only.
+    // Terminal/corrupt records remain checked; no cross-operation cache can
+    // hide an external worker transition or release an unverified workspace.
+    const snapshot = this.#store.listTaskIds().map((taskId) => ({ taskId, status: this.#safeStatus(taskId) }));
+    const running = snapshot.filter(({ status }) => status?.status === "running" || status?.cleanup_unverified === true).map(({ taskId }) => taskId);
     if (running.length >= this.#maxConcurrentWorkers) return;
 
     const occupiedPaths = running.map((taskId) => this.#executionPathKeyLocked(taskId));
-    for (const taskId of this.#store.listTaskIds()) {
-      if (this.#safeStatus(taskId)) continue;
+    for (const { taskId, status } of snapshot) {
+      if (status) continue;
       try { occupiedPaths.push(this.#executionPathKeyLocked(taskId)); }
       catch { return; } // Unknown execution scope cannot be safely released.
     }
     let slots = this.#maxConcurrentWorkers - running.length;
-    for (const taskId of this.#queuedTaskIdsLocked()) {
+    const queued = snapshot.filter(({ status }) => status?.status === "queued").sort((a, b) => a.status!.created_at.localeCompare(b.status!.created_at));
+    for (const { taskId } of queued) {
       if (slots <= 0) break;
       const executionPath = this.#executionPathKeyLocked(taskId);
       // Never run two ZCode sessions against the same mutable directory.

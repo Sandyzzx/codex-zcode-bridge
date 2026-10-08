@@ -92,7 +92,10 @@ export function judgeTaskObservation(input: JudgeInput): TaskObservation {
     const eventAge = ageMs(now, input.last_business_event?.at, options.clock_jump_guard_ms).value;
     const withinStartGrace = startAge !== null && startAge < options.start_grace_ms;
     if (heartbeatFresh) {
-      if (eventAge !== null && eventAge > options.stall_hint_ms) {
+      if (eventAge === null) {
+        activity = withinStartGrace ? "starting" : "unknown";
+        activityReason = "heartbeat_alive_no_business_event";
+      } else if (eventAge > options.stall_hint_ms) {
         activity = "stalled";
         activityReason = "heartbeat_alive_business_events_stale";
       } else {

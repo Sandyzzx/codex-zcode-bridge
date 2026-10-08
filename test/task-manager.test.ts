@@ -90,6 +90,34 @@ test("with a free slot the task starts immediately as running with a persisted p
   }
 });
 
+test("each scheduling operation validates historical records once and observes later changes", async () => {
+  const fx = await freshFixture();
+  try {
+    const historical = fx.makeTask({ task_id: "historical" });
+    fx.store.createTask(historical, CREATED_AT);
+    fx.store.writeWorkspaceRef(historical.task_id, { requestedPath: fx.workspaceDir, canonicalPath: fx.workspaceDir, mode: "direct" });
+    fx.store.writeStatus(historical.task_id, { status: "completed", worker_pid: null });
+    const originalRead = fx.store.readTask.bind(fx.store);
+    let historicalReads = 0;
+    fx.store.readTask = (taskId) => {
+      if (taskId === historical.task_id) historicalReads += 1;
+      return originalRead(taskId);
+    };
+    await fx.manager.createTask(fx.makeTask());
+    assert.equal(historicalReads, 1, "one health-validation pass, even with free slots");
+    await fx.runWorker("task_1", new FakeAdapter());
+    // A new operation must see cleanup occupancy added after the first scan.
+    fx.store.writeStatus(historical.task_id, { cleanup_unverified: true });
+    historicalReads = 0;
+    const next = await fx.manager.createTask(fx.makeTask({ task_id: "task_2" }));
+    assert.equal(historicalReads, 1, "no cached terminal status across operations");
+    assert.equal(next.status, "queued");
+    assert.equal(fx.spawned.length, 1, "unverified historical cleanup still occupies the workspace");
+  } finally {
+    await fx.cleanup();
+  }
+});
+
 test("getFeedback aggregates allowlisted current-attempt events across event pages", async () => {
   const fx = await freshFixture();
   try {

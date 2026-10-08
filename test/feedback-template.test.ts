@@ -65,6 +65,46 @@ test("A4-02: verified deliverables with unverified cleanup show both facts separ
   assert.match(rendered, /独立验收 \| 通过/);
   assert.match(rendered, /cleanup 未确认|清理未确认|cleanup unverified/i);
   assert.match(rendered, /进程清理/);
+  assert.match(rendered, /进程清理 \| 未验证/);
+});
+
+test("current cleanup verification does not erase the attempt's historical cleanup failure", () => {
+  const record: TaskStatusRecord = {
+    task_id: "task_1", status: "failed", attempt: 1, created_at: "2026-10-04T00:00:00Z", updated_at: "2026-10-04T00:01:00Z",
+    started_at: "2026-10-04T00:00:30Z", finished_at: "2026-10-04T00:01:00Z", worker_pid: null, zcode_session_id: "s", exit_code: 0,
+    observation: {
+      schema_version: 1, worker: { state: "exited", reason_code: "pid_absent", observed_at: "2026-10-04T00:02:00Z" },
+      runtime: { state: "exited", reason_code: "pid_absent", observed_at: "2026-10-04T00:02:00Z" },
+      activity: { code: "finalizing", reason_code: "task_terminal", observed_at: "2026-10-04T00:02:00Z" },
+      result: "committed", cleanup: "verified", stalled: false,
+      evidence: { heartbeat_age_ms: null, last_event_age_ms: 60_000, last_event_seq: 9, last_event_type: "task_finished", session_id: "s", turn_id: null, attempt: 1, status_updated_at: null },
+    },
+  };
+  const result: TaskResult = {
+    task_id: "task_1", status: "failed", attempt: 1, summary: "cleanup_failed", error_code: "cleanup_failed",
+    files_changed: [], tests: [], issues: [], needs_master_decision: true, zcode_output: "", exit_code: 0,
+    session_id: "s", started_at: record.started_at, finished_at: record.finished_at,
+  };
+  const input = feedbackInputFromRecord(record, result);
+  assert.equal(input.result, result);
+  const rendered = renderFeedback(input);
+  assert.match(rendered, /当前进程清理[\s\S]*cleanup=verified/);
+  assert.match(rendered, /原 attempt 清理结果[\s\S]*原 failed 仍保留/);
+  assert.match(rendered, /独立验收 \| 未验证/);
+});
+
+test("record updates without business-event evidence cannot impersonate progress", () => {
+  const record: TaskStatusRecord = {
+    task_id: "t", status: "running", attempt: 1, created_at: "2026-10-04T00:00:00Z", updated_at: "2026-10-04T00:01:00Z",
+    started_at: "2026-10-04T00:00:30Z", finished_at: null, worker_pid: 1, zcode_session_id: null, exit_code: null,
+  };
+  assert.equal(feedbackInputFromRecord(record, null).running?.last_progress_at, null);
+  const terminal = { ...record, status: "failed" as const, attempt: 2 };
+  const oldResult: TaskResult = { task_id: "t", status: "failed", attempt: 1, summary: "old", files_changed: ["old.txt"], tests: [], issues: [], needs_master_decision: true, zcode_output: "", exit_code: 0, session_id: null, started_at: null, finished_at: null };
+  const input = feedbackInputFromRecord(terminal, oldResult);
+  assert.deepEqual(input.delivered, []);
+  assert.equal(input.result, null);
+  assert.deepEqual(input.decisions, []);
 });
 
 test("A4-03: commit/push/release states are explicit with evidence; nothing claims published without an operation", () => {

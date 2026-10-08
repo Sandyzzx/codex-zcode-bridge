@@ -1,5 +1,5 @@
 // src/adapters/zcode-app-server-adapter.ts
-import { spawn as spawn2 } from "node:child_process";
+import { spawn as spawn3 } from "node:child_process";
 import { homedir as homedir3 } from "node:os";
 
 // src/adapters/agent-report.ts
@@ -202,6 +202,24 @@ function buildContinuePrompt(input) {
       `This run resumes persisted session ${previousSessionId}; earlier conversation context may be available.`
     );
   }
+  if (previousResult?.error_code === "invalid_agent_report") {
+    sections.push(
+      "REPORT REPAIR MODE: The previous execution has ended. Only its final report failed validation. Do not use tools, edit files, rerun tests, or repeat task work. Return the corrected JSON report from the evidence below. Preserve claims as claims, including not_run and failures. Do not invent tests or missing facts. If needs_master_decision cannot be established, explicitly set it to true and record the uncertainty in issues.",
+      `PROJECT WORKSPACE: ${task.workspace}`,
+      ...task.worktree_path ? [`HOST-SELECTED EXECUTION WORKTREE: ${task.worktree_path}`] : [],
+      `PREVIOUS REPORT ERROR
+${previousResult.summary}`,
+      `REPORT CANDIDATE CLAIMS (not independently verified)
+${JSON.stringify(previousResult.report_candidate ?? {}, null, 2)}`,
+      `PREVIOUS RESPONSE
+${bounded(previousResult.zcode_output, MAX_SECTION_CHARS)}`,
+      `MASTER FEEDBACK (report repair only)
+${feedback}`,
+      ...additionalRequirements.length ? [renderList("ADDITIONAL REPORT REQUIREMENTS", [...additionalRequirements])] : [],
+      OUTPUT_CONTRACT
+    );
+    return joinBoundedPreservingTail(sections, OUTPUT_CONTRACT);
+  }
   if (previousResult) {
     sections.push(
       `PREVIOUS RESULT (normalized claims from the previous attempt)
@@ -210,11 +228,6 @@ ${bounded(
         MAX_SECTION_CHARS
       )}`
     );
-    if (previousResult.error_code === "invalid_agent_report") {
-      sections.push(
-        "REPORT REPAIR MODE: The previous attempt's execution has already ended; only its final report failed validation. Do not edit files, rerun tests, or repeat task work. Reconstruct the final JSON report from the previous response and report_candidate. Do not guess missing facts. If a required boolean or other fact cannot be established, set needs_master_decision=true and describe the uncertainty in issues."
-      );
-    }
   }
   sections.push(`MASTER FEEDBACK (address every point)
 ${feedback}`);
@@ -227,9 +240,11 @@ ${buildTaskPrompt(task)}`);
 }
 var OUTPUT_CONTRACT = [
   "OUTPUT CONTRACT (mandatory)",
-  "Your final response must be exactly one JSON object with no markdown fences and no text before or after it, matching this shape:",
-  '{"summary": string, "files_changed": string[], "tests": [{"command": string, "status": "passed" | "failed" | "not_run", "details"?: string}], "issues": string[], "needs_master_decision": boolean}',
-  "List every file you created or modified in files_changed (workspace-relative paths). Give one tests entry per applicable test command; use status not_run when a command was not applicable or could not run. Record problems in issues. Set needs_master_decision=true only when a required decision is outside your authority; never guess."
+  "Your final response must be exactly one JSON object with no markdown fences and no text before or after it.",
+  'Required fields: summary (non-empty string), files_changed (array of strings), tests (array of objects with command string, status "passed" | "failed" | "not_run", optional details string), issues (array of strings), needs_master_decision (JSON boolean).',
+  'Valid JSON example (replace example values with observed facts): {"summary":"Describe the actual work","files_changed":[],"tests":[{"command":"An applicable command","status":"not_run","details":"Explain why it was not run"}],"issues":[],"needs_master_decision":true}',
+  "List every file you created or modified in files_changed (workspace-relative paths). Give one tests entry per applicable test command; use status not_run when a command was not applicable or could not run. Record problems in issues. Set needs_master_decision=true only when a required decision is outside your authority; never guess.",
+  "Before sending, check that all five top-level fields exist and needs_master_decision is a JSON boolean true or false, never a quoted string and never text such as needs_master_decision=false. If its value is uncertain, set true and explain in issues. Do not omit it."
 ].join("\n");
 var DECISION_RULE = [
   "DECISION RULE",
@@ -636,7 +651,293 @@ function errorText(error) {
 }
 
 // src/adapters/process-spawn.ts
+import { spawn as spawn2 } from "node:child_process";
+
+// src/runtime/process-probe.ts
+import { readFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
+var PROCESS_IDENTITY_VERSION = 1;
+var DEFAULT_PROBE_TIMEOUT_MS = 5e3;
+var DEFAULT_MAX_CONCURRENT = 2;
+function identityOfFingerprint(pid, fingerprint, precision, now) {
+  return {
+    pid,
+    fingerprint,
+    fingerprint_precision: precision,
+    identity_version: PROCESS_IDENTITY_VERSION,
+    platform: process.platform,
+    captured_at: new Date(now()).toISOString()
+  };
+}
+function verdict(state, reason, now) {
+  return { state, reason_code: reason, observed_at: new Date(now()).toISOString() };
+}
+function failedQuery(reason) {
+  return { ok: false, reason, fingerprints: /* @__PURE__ */ new Map() };
+}
+function windowsBatchQuery(pids, timeoutMs) {
+  return new Promise((resolve) => {
+    const script = `$ErrorActionPreference = 'Stop'; Get-Process -Id ${pids.join(",")} -ErrorAction SilentlyContinue | ForEach-Object { "{0}|{1}" -f $_.Id, $_.StartTime.Ticks }; 'bridge_probe_complete_v1'`;
+    const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], {
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+      shell: false
+    });
+    let stdout = "";
+    let settled = false;
+    const finish = (query) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(query);
+    };
+    const timer = setTimeout(() => {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+      }
+      finish(failedQuery("timeout"));
+    }, timeoutMs);
+    timer.unref();
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    let stderrBytes = 0;
+    child.stderr.on("data", (chunk) => {
+      stderrBytes = Math.min(64e3, stderrBytes + chunk.length);
+    });
+    child.stdout.on("data", (chunk) => {
+      if (stdout.length < 1e6) stdout += chunk;
+    });
+    child.on("error", () => finish(failedQuery("spawn_error")));
+    child.on("close", (code) => {
+      const map = /* @__PURE__ */ new Map();
+      const lines = stdout.trim().split(/\r?\n/u);
+      if (code !== 0 || stderrBytes > 0 || lines.pop() !== "bridge_probe_complete_v1") {
+        finish(failedQuery("query_error"));
+        return;
+      }
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const match = /^(\d+)\|(\d+)$/u.exec(line.trim());
+        if (!match || !pids.includes(Number(match[1])) || map.has(Number(match[1]))) {
+          finish(failedQuery("query_error"));
+          return;
+        }
+        map.set(Number(match[1]), match[2]);
+      }
+      finish({ ok: true, reason: "ok", fingerprints: map });
+    });
+  });
+}
+async function darwinQuery(pids, timeoutMs) {
+  return new Promise((resolve) => {
+    const child = spawn("ps", ["-o", "pid=,lstart=", "-p", pids.join(",")], {
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+      shell: false
+    });
+    let stdout = "";
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try {
+        child.kill("SIGKILL");
+      } catch {
+      }
+      resolve(failedQuery("timeout"));
+    }, timeoutMs);
+    timer.unref();
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      if (stdout.length < 1e6) stdout += chunk;
+    });
+    child.on("error", () => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        resolve(failedQuery("spawn_error"));
+      }
+    });
+    child.on("close", () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      const map = /* @__PURE__ */ new Map();
+      for (const line of stdout.split(/\r?\n/u)) {
+        const match = /^\s*(\d+)\s+(.+)$/u.exec(line);
+        if (match) map.set(Number(match[1]), match[2].trim());
+      }
+      resolve({ ok: true, reason: "ok", fingerprints: map });
+    });
+  });
+}
+function createPlatformProbe(options = {}) {
+  const timeoutMs = options.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
+  const maxConcurrent = options.maxConcurrent ?? DEFAULT_MAX_CONCURRENT;
+  const now = options.now ?? Date.now;
+  let chain = Promise.resolve();
+  let inFlight = 0;
+  let waiters = [];
+  const schedule = async (operation) => {
+    if (inFlight >= maxConcurrent) {
+      await new Promise((resolve) => waiters.push(resolve));
+    }
+    inFlight += 1;
+    try {
+      return await operation();
+    } finally {
+      inFlight -= 1;
+      const next = waiters.shift();
+      if (next) next();
+    }
+  };
+  const probe = async (requests) => {
+    if (requests.length === 0) return [];
+    const distinct = [...new Set(requests.map((request) => request.pid).filter((pid) => Number.isInteger(pid) && pid > 0))];
+    const query = await schedule(async () => {
+      if (process.platform === "win32") return windowsBatchQuery(distinct, timeoutMs);
+      if (process.platform === "darwin") return darwinQuery(distinct, timeoutMs);
+      if (process.platform === "linux") {
+        const map = /* @__PURE__ */ new Map();
+        for (const pid of distinct) {
+          try {
+            const stat = await readFile(`/proc/${pid}/stat`, "utf8");
+            const afterComm = stat.slice(stat.lastIndexOf(")") + 2);
+            const fields = afterComm.split(" ");
+            const starttime = fields[19];
+            if (starttime) map.set(pid, starttime.trim());
+          } catch (error) {
+            if (error.code === "ENOENT") continue;
+            return failedQuery("proc_read_error");
+          }
+        }
+        return { ok: true, reason: "ok", fingerprints: map };
+      }
+      return failedQuery("unsupported_platform");
+    });
+    return requests.map((request) => {
+      if (!Number.isInteger(request.pid) || request.pid <= 0) return verdict("unknown", "invalid_pid", now);
+      if (!query.ok) return verdict("unknown", `query_${query.reason}`, now);
+      const fingerprint = query.fingerprints.get(request.pid);
+      if (fingerprint === void 0) {
+        return verdict("exited", "pid_absent", now);
+      }
+      if (!request.identity || request.identity.fingerprint === null) {
+        return verdict("unknown", "live_pid_no_fingerprint", now);
+      }
+      if (request.identity.fingerprint_precision === "coarse") {
+        return request.identity.fingerprint === fingerprint ? verdict("unknown", "coarse_fingerprint_match", now) : verdict("exited", "pid_reused_coarse", now);
+      }
+      if (request.identity.fingerprint !== fingerprint) {
+        return verdict("exited", "pid_reused", now);
+      }
+      return verdict("alive", "pid_and_fingerprint_match", now);
+    });
+  };
+  const fingerprintOfPid = async (pid) => {
+    const query = await schedule(async () => {
+      if (process.platform === "win32") return windowsBatchQuery([pid], timeoutMs);
+      if (process.platform === "darwin") return darwinQuery([pid], timeoutMs);
+      if (process.platform === "linux") {
+        const map = /* @__PURE__ */ new Map();
+        try {
+          const stat = await readFile(`/proc/${pid}/stat`, "utf8");
+          const afterComm = stat.slice(stat.lastIndexOf(")") + 2);
+          const starttime = afterComm.split(" ")[19];
+          if (starttime) map.set(pid, starttime.trim());
+        } catch {
+        }
+        return { ok: true, reason: "ok", fingerprints: map };
+      }
+      return failedQuery("unsupported_platform");
+    });
+    const fingerprint = query.fingerprints.get(pid);
+    if (!query.ok || !fingerprint) return identityOfFingerprint(pid, null, "unknown", now);
+    const precision = process.platform === "darwin" ? "coarse" : "exact";
+    return identityOfFingerprint(pid, fingerprint, precision, now);
+  };
+  return {
+    platform: process.platform,
+    identityOf: fingerprintOfPid,
+    selfIdentity: () => fingerprintOfPid(process.pid),
+    probe
+  };
+}
+
+// src/adapters/windows-process-cleanup.ts
+import { performance } from "node:perf_hooks";
+async function terminateWindowsProcessTree(pid, killWaitMs, dependencies) {
+  const requests = await dependencies.capture(pid);
+  if (!requests.some((request) => request.pid === pid)) throw new Error("process_tree_snapshot_invalid: root missing");
+  const inspect = async () => {
+    const verdicts = await dependencies.probe(requests);
+    if (verdicts.length !== requests.length || verdicts.some((verdict2) => verdict2.state === "unknown")) {
+      throw new Error("process_tree_probe_unverified: recorded executor exit is unknown");
+    }
+    return verdicts;
+  };
+  const before = await inspect();
+  if (before.every((verdict2) => verdict2.state === "exited")) return;
+  const rootIndex = requests.findIndex((request) => request.pid === pid);
+  if (before[rootIndex]?.state !== "alive") {
+    throw new Error("process_tree_descendants_alive: root exited before termination");
+  }
+  let exitCode = null;
+  let commandFailed = false;
+  try {
+    exitCode = await dependencies.kill(pid);
+  } catch {
+    commandFailed = true;
+  }
+  const deadline = performance.now() + Math.max(0, killWaitMs);
+  for (; ; ) {
+    const after = await inspect();
+    if (after.every((verdict2) => verdict2.state === "exited")) return;
+    if (performance.now() >= deadline) {
+      const reason = commandFailed ? "command_error" : exitCode === null ? "timeout" : `exit_${exitCode}`;
+      throw new Error(`process_tree_cleanup_unverified: taskkill ${reason}; recorded executors remain alive`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+function windowsTreeCaptureScript(pid) {
+  return [
+    "$ErrorActionPreference = 'Stop'",
+    "$all = @(Get-CimInstance Win32_Process -ErrorAction Stop)",
+    `$selected = [System.Collections.Generic.HashSet[int]]::new(); [void]$selected.Add(${pid})`,
+    "do { $changed = $false; foreach ($item in $all) { if ($selected.Contains([int]$item.ParentProcessId)) { if ($selected.Add([int]$item.ProcessId)) { $changed = $true } } } } while ($changed)",
+    "'bridge_tree_snapshot_v1'",
+    "foreach ($candidate in $selected) { $item = Get-Process -Id $candidate -ErrorAction SilentlyContinue; if ($null -eq $item) { '{0}|absent' -f $candidate } else { '{0}|{1}' -f $candidate, $item.StartTime.Ticks } }"
+  ].join("; ");
+}
+function parseWindowsTreeCapture(stdout, pid) {
+  const lines = stdout.trim().split(/\r?\n/u);
+  if (lines.shift() !== "bridge_tree_snapshot_v1") throw new Error("process_tree_snapshot_invalid: protocol missing");
+  const capturedAt = (/* @__PURE__ */ new Date()).toISOString();
+  const requests = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const line of lines) {
+    const match = /^(\d+)\|(\d+|absent)$/u.exec(line.trim());
+    const candidate = Number(match?.[1]);
+    if (!match || !Number.isSafeInteger(candidate) || candidate <= 0 || seen.has(candidate)) {
+      throw new Error("process_tree_snapshot_invalid: malformed identity");
+    }
+    seen.add(candidate);
+    requests.push({ pid: candidate, identity: match[2] === "absent" ? null : {
+      pid: candidate,
+      fingerprint: match[2],
+      fingerprint_precision: "exact",
+      identity_version: 1,
+      platform: "win32",
+      captured_at: capturedAt
+    } });
+  }
+  if (!seen.has(pid)) throw new Error("process_tree_snapshot_invalid: root missing");
+  return requests;
+}
+
+// src/adapters/process-spawn.ts
 function appendBounded(current, chunk, maxBytes) {
   if (!(maxBytes > 0)) return { value: current.value + chunk, truncated: current.truncated };
   const remaining = maxBytes - Buffer.byteLength(current.value, "utf8");
@@ -666,17 +967,26 @@ var terminateProcessTree = async (pid, options = {}) => {
     throw new Error(`A positive integer PID is required, got: ${pid}`);
   }
   if (process.platform === "win32") {
-    const result = await runCommand("taskkill", ["/PID", String(pid), "/T", "/F"], {
-      timeoutMs: 15e3
+    const probe = createPlatformProbe();
+    await terminateWindowsProcessTree(pid, options.killWaitMs ?? 2e3, {
+      capture: async (root) => {
+        let snapshot;
+        try {
+          snapshot = await runCommand("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", windowsTreeCaptureScript(root)], {
+            timeoutMs: 5e3,
+            maxOutputBytes: 128e3
+          });
+        } catch {
+          throw new Error("process_tree_snapshot_unverified: query failed");
+        }
+        if (snapshot.code !== 0 || snapshot.stdoutTruncated || snapshot.stderr.length > 0) {
+          throw new Error("process_tree_snapshot_unverified: query failed or incomplete");
+        }
+        return parseWindowsTreeCapture(snapshot.stdout, root);
+      },
+      probe: (requests) => probe.probe(requests),
+      kill: async (root) => (await runCommand("taskkill", ["/PID", String(root), "/T", "/F"], { timeoutMs: 15e3 })).code
     });
-    if (result.code !== 0) {
-      throw new Error(
-        result.stderr.trim() || `taskkill exited with code ${String(result.code)}`
-      );
-    }
-    if (!await waitForPidExit(pid, options.killWaitMs ?? 2e3)) {
-      throw new Error(`Process tree ${pid} still running after taskkill reported success`);
-    }
     return { pid, signal: "SIGKILL", verified: true };
   }
   signalProcessTree(pid, "SIGTERM");
@@ -691,7 +1001,7 @@ var terminateProcessTree = async (pid, options = {}) => {
 };
 function runCommand(command, args, options) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
+    const child = spawn2(command, args, {
       shell: false,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"]
@@ -725,7 +1035,8 @@ function runCommand(command, args, options) {
         code: timedOut ? null : code,
         signal: timedOut ? "SIGKILL" : signal,
         stdout: stdout.value,
-        stderr: stderr.value
+        stderr: stderr.value,
+        stdoutTruncated: stdout.truncated
       });
     });
   });
@@ -754,13 +1065,6 @@ function isProcessTreeRunning(pid) {
     if (error.code === "ESRCH") return isProcessRunning(pid);
     throw error;
   }
-}
-async function waitForPidExit(pid, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  while (isProcessRunning(pid) && Date.now() < deadline) {
-    await sleep(20);
-  }
-  return !isProcessRunning(pid);
 }
 async function waitForProcessTreeExit(pid, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
@@ -859,10 +1163,11 @@ function buildAccountProviderPayload(config) {
 }
 function accountProviderId(providerId, config) {
   if (providerId.startsWith("account:")) return providerId;
-  const table = readJson(config.providerBuiltinConfigFile);
-  for (const rawRule of readProviderRules(table)) {
+  const rules = [config.providerBuiltinConfigFile, config.providerPersonalConfigFile].flatMap((file) => readProviderRules(readJson(file)));
+  for (const rawRule of rules) {
     if (!isRecord(rawRule)) continue;
     const rule = rawRule;
+    if (!providerId.startsWith("builtin:") && rule.providerId === `account:${providerId}`) return rule.providerId;
     if (!providerId.startsWith("builtin:") && rule.providerId === providerId && rule.config?.access?.type === "zhipu-account") {
       return `account:${providerId}`;
     }
@@ -871,6 +1176,16 @@ function accountProviderId(providerId, config) {
     }
   }
   return providerId;
+}
+function catalogProviderId(providerId, modelId, catalog, config) {
+  const advertised = (candidate) => catalog.some((model) => model.providerId === candidate && model.modelId === modelId);
+  if (advertised(providerId)) return providerId;
+  const configured = accountProviderId(providerId, config);
+  if (advertised(configured)) return configured;
+  if (!providerId.startsWith("account:") && !providerId.startsWith("builtin:") && advertised(`account:${providerId}`)) {
+    return `account:${providerId}`;
+  }
+  return configured;
 }
 function runtimeAuthReply(providerId, config) {
   const unavailable = {
@@ -1389,9 +1704,9 @@ var ZCodeAppServerAdapter = class {
       entry.sessionId = sessionId;
       let selectedReasoningLevel = null;
       if (preferences.model) {
-        const requestedProviderId = accountProviderId(preferences.model.provider_id, config);
-        const requested = `${requestedProviderId}/${preferences.model.model_id}`;
         const availableModels = readAvailableModels(snapshot);
+        const requestedProviderId = catalogProviderId(preferences.model.provider_id, preferences.model.model_id, availableModels, config);
+        const requested = `${requestedProviderId}/${preferences.model.model_id}`;
         entry.onEvent({
           type: "model_catalog",
           summary: `ZCode runtime advertised ${availableModels.length} selectable model${availableModels.length === 1 ? "" : "s"}`,
@@ -1434,7 +1749,7 @@ var ZCodeAppServerAdapter = class {
         entry.selectedModel = readSelectedModel(modelState) ?? requested;
         entry.selectedModelSelection = selected;
         entry.modelSource = preferences.modelSource;
-        entry.requestedModel = requested;
+        entry.requestedModel = `${preferences.model.provider_id}/${preferences.model.model_id}`;
         entry.requestedReasoningLevel = reasoningLevel;
         selectedReasoningLevel = readEffectiveReasoningLevel(modelState);
         entry.selectedReasoningLevel = selectedReasoningLevel;
@@ -1443,7 +1758,7 @@ var ZCodeAppServerAdapter = class {
           type: "model_selected",
           summary: `ZCode selected requested model ${entry.selectedModel}${selectedReasoningLevel ? ` with reasoning level ${selectedReasoningLevel}` : "; runtime did not report its reasoning level"}`,
           details: {
-            requested_model: requested,
+            requested_model: entry.requestedModel,
             selected_model: entry.selectedModel,
             provider_id: selected.providerId,
             model_id: selected.modelId,
@@ -1753,7 +2068,7 @@ var ZCodeAppServerAdapter = class {
     }
   }
   #startAppServer(config, cwd, env, entry) {
-    const child = spawn2(config.nodeExecutable, [config.zcodeEntrypoint, "app-server", "--stdio"], {
+    const child = spawn3(config.nodeExecutable, [config.zcodeEntrypoint, "app-server", "--stdio"], {
       cwd,
       env,
       shell: false,
@@ -2409,8 +2724,9 @@ function tryAcquireProcessLockWithRetry(directory, retries) {
   return () => {
     const owner = JSON.parse(readFileSync3(path4.join(directory, "owner.json"), "utf8"));
     if (owner.token !== token) throw new Error("process lock ownership changed");
-    unlinkSync(path4.join(directory, "owner.json"));
-    rmdirSync(directory);
+    const retired = `${directory}.${token}.retired`;
+    renameSync(directory, retired);
+    removeStagedLock(retired);
   };
 }
 function acquireExistingLock(directory) {
@@ -2462,8 +2778,7 @@ function reclaimDeadOwner(directory) {
     }
     const retired = `${directory}.${randomUUID()}.retired`;
     renameSync(directory, retired);
-    unlinkSync(path4.join(retired, "owner.json"));
-    rmdirSync(retired);
+    removeStagedLock(retired);
     return true;
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
@@ -3450,213 +3765,6 @@ function parseProgressEvent(line) {
 }
 function isTerminalStatus(status) {
   return status === "completed" || status === "failed" || status === "cancelled" || status === "waiting_for_master";
-}
-
-// src/runtime/process-probe.ts
-import { readFile } from "node:fs/promises";
-import { spawn as spawn3 } from "node:child_process";
-var PROCESS_IDENTITY_VERSION = 1;
-var DEFAULT_PROBE_TIMEOUT_MS = 5e3;
-var DEFAULT_MAX_CONCURRENT = 2;
-function identityOfFingerprint(pid, fingerprint, precision, now) {
-  return {
-    pid,
-    fingerprint,
-    fingerprint_precision: precision,
-    identity_version: PROCESS_IDENTITY_VERSION,
-    platform: process.platform,
-    captured_at: new Date(now()).toISOString()
-  };
-}
-function verdict(state, reason, now) {
-  return { state, reason_code: reason, observed_at: new Date(now()).toISOString() };
-}
-function failedQuery(reason) {
-  return { ok: false, reason, fingerprints: /* @__PURE__ */ new Map() };
-}
-function windowsBatchQuery(pids, timeoutMs) {
-  return new Promise((resolve) => {
-    const script = `Get-Process -Id ${pids.join(",")} -ErrorAction SilentlyContinue | ForEach-Object { "{0}|{1}" -f $_.Id, $_.StartTime.Ticks }`;
-    const child = spawn3("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], {
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-      shell: false
-    });
-    let stdout = "";
-    let settled = false;
-    const finish = (query) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve(query);
-    };
-    const timer = setTimeout(() => {
-      try {
-        child.kill("SIGKILL");
-      } catch {
-      }
-      finish(failedQuery("timeout"));
-    }, timeoutMs);
-    timer.unref();
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    let stderrBytes = 0;
-    child.stderr.on("data", (chunk) => {
-      stderrBytes = Math.min(64e3, stderrBytes + chunk.length);
-    });
-    child.stdout.on("data", (chunk) => {
-      if (stdout.length < 1e6) stdout += chunk;
-    });
-    child.on("error", () => finish(failedQuery("spawn_error")));
-    child.on("close", () => {
-      const map = /* @__PURE__ */ new Map();
-      for (const line of stdout.split(/\r?\n/u)) {
-        const match = /^(\d+)\|(\d+)$/u.exec(line.trim());
-        if (!match) continue;
-        map.set(Number(match[1]), match[2]);
-      }
-      if (map.size === 0) {
-        finish(stderrBytes > 0 ? failedQuery("query_error") : { ok: true, reason: "ok", fingerprints: map });
-        return;
-      }
-      finish({ ok: true, reason: "ok", fingerprints: map });
-    });
-  });
-}
-async function darwinQuery(pids, timeoutMs) {
-  return new Promise((resolve) => {
-    const child = spawn3("ps", ["-o", "pid=,lstart=", "-p", pids.join(",")], {
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-      shell: false
-    });
-    let stdout = "";
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      try {
-        child.kill("SIGKILL");
-      } catch {
-      }
-      resolve(failedQuery("timeout"));
-    }, timeoutMs);
-    timer.unref();
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      if (stdout.length < 1e6) stdout += chunk;
-    });
-    child.on("error", () => {
-      if (!settled) {
-        settled = true;
-        clearTimeout(timer);
-        resolve(failedQuery("spawn_error"));
-      }
-    });
-    child.on("close", () => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      const map = /* @__PURE__ */ new Map();
-      for (const line of stdout.split(/\r?\n/u)) {
-        const match = /^\s*(\d+)\s+(.+)$/u.exec(line);
-        if (match) map.set(Number(match[1]), match[2].trim());
-      }
-      resolve({ ok: true, reason: "ok", fingerprints: map });
-    });
-  });
-}
-function createPlatformProbe(options = {}) {
-  const timeoutMs = options.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
-  const maxConcurrent = options.maxConcurrent ?? DEFAULT_MAX_CONCURRENT;
-  const now = options.now ?? Date.now;
-  let chain = Promise.resolve();
-  let inFlight = 0;
-  let waiters = [];
-  const schedule = async (operation) => {
-    if (inFlight >= maxConcurrent) {
-      await new Promise((resolve) => waiters.push(resolve));
-    }
-    inFlight += 1;
-    try {
-      return await operation();
-    } finally {
-      inFlight -= 1;
-      const next = waiters.shift();
-      if (next) next();
-    }
-  };
-  const probe = async (requests) => {
-    if (requests.length === 0) return [];
-    const distinct = [...new Set(requests.map((request) => request.pid).filter((pid) => Number.isInteger(pid) && pid > 0))];
-    const query = await schedule(async () => {
-      if (process.platform === "win32") return windowsBatchQuery(distinct, timeoutMs);
-      if (process.platform === "darwin") return darwinQuery(distinct, timeoutMs);
-      if (process.platform === "linux") {
-        const map = /* @__PURE__ */ new Map();
-        for (const pid of distinct) {
-          try {
-            const stat = await readFile(`/proc/${pid}/stat`, "utf8");
-            const afterComm = stat.slice(stat.lastIndexOf(")") + 2);
-            const fields = afterComm.split(" ");
-            const starttime = fields[19];
-            if (starttime) map.set(pid, starttime.trim());
-          } catch (error) {
-            if (error.code === "ENOENT") continue;
-            return failedQuery("proc_read_error");
-          }
-        }
-        return { ok: true, reason: "ok", fingerprints: map };
-      }
-      return failedQuery("unsupported_platform");
-    });
-    return requests.map((request) => {
-      if (!Number.isInteger(request.pid) || request.pid <= 0) return verdict("unknown", "invalid_pid", now);
-      if (!query.ok) return verdict("unknown", `query_${query.reason}`, now);
-      const fingerprint = query.fingerprints.get(request.pid);
-      if (fingerprint === void 0) {
-        return verdict("exited", "pid_absent", now);
-      }
-      if (!request.identity || request.identity.fingerprint === null) {
-        return verdict("unknown", "live_pid_no_fingerprint", now);
-      }
-      if (request.identity.fingerprint_precision === "coarse") {
-        return request.identity.fingerprint === fingerprint ? verdict("unknown", "coarse_fingerprint_match", now) : verdict("exited", "pid_reused_coarse", now);
-      }
-      if (request.identity.fingerprint !== fingerprint) {
-        return verdict("exited", "pid_reused", now);
-      }
-      return verdict("alive", "pid_and_fingerprint_match", now);
-    });
-  };
-  const fingerprintOfPid = async (pid) => {
-    const query = await schedule(async () => {
-      if (process.platform === "win32") return windowsBatchQuery([pid], timeoutMs);
-      if (process.platform === "darwin") return darwinQuery([pid], timeoutMs);
-      if (process.platform === "linux") {
-        const map = /* @__PURE__ */ new Map();
-        try {
-          const stat = await readFile(`/proc/${pid}/stat`, "utf8");
-          const afterComm = stat.slice(stat.lastIndexOf(")") + 2);
-          const starttime = afterComm.split(" ")[19];
-          if (starttime) map.set(pid, starttime.trim());
-        } catch {
-        }
-        return { ok: true, reason: "ok", fingerprints: map };
-      }
-      return failedQuery("unsupported_platform");
-    });
-    const fingerprint = query.fingerprints.get(pid);
-    if (!query.ok || !fingerprint) return identityOfFingerprint(pid, null, "unknown", now);
-    const precision = process.platform === "darwin" ? "coarse" : "exact";
-    return identityOfFingerprint(pid, fingerprint, precision, now);
-  };
-  return {
-    platform: process.platform,
-    identityOf: fingerprintOfPid,
-    selfIdentity: () => fingerprintOfPid(process.pid),
-    probe
-  };
 }
 
 // src/usage/normalize.ts

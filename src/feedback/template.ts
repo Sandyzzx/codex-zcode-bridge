@@ -163,10 +163,15 @@ export function renderFeedback(input: FeedbackInput): string {
       });
     }
     if (result.error_code) evidenceRows.push({ item: "执行错误码", result: "历史记录", evidence: result.error_code });
-    if (result.report_candidate) evidenceRows.push({ item: "结构化报告", result: "历史记录", evidence: "报告不完整，原始候选已保留（report_candidate）" });
+    if (result.report_candidate) evidenceRows.push({ item: "结构化报告", result: "历史记录", evidence: "候选报告已保留（report_candidate）；不构成宿主独立验收" });
   }
   if (input.observation?.cleanup === "unverified") {
-    evidenceRows.push({ item: "进程清理", result: "NOT RUN", evidence: "cleanup 未确认：结果已恢复，但进程退出未获独立确认；目录保留" });
+    evidenceRows.push({ item: "进程清理", result: "未验证", evidence: "cleanup 未确认：现有证据无法确认进程树退出；目录保留" });
+  } else if (input.observation?.cleanup === "verified") {
+    evidenceRows.push({ item: "当前进程清理", result: "历史记录", evidence: "Bridge 当前观测 cleanup=verified；不改写原 attempt 结果或代替代码验收" });
+    if (input.result?.error_code === "cleanup_failed") {
+      evidenceRows.push({ item: "原 attempt 清理结果", result: "历史记录", evidence: "cleanup_failed 记录当时未能确认清理；后续验证已确认退出，原 failed 仍保留" });
+    }
   }
   if (!evidenceRows.length) evidenceRows.push({ item: "（无证据记录）", result: "未验证", evidence: "本任务没有可展示的检查项" });
   for (const row of evidenceRows.slice(0, 50)) {
@@ -192,25 +197,30 @@ export function renderFeedback(input: FeedbackInput): string {
  * A running record never inherits a previous attempt's usage/timing facts. */
 export function feedbackInputFromRecord(record: TaskStatusRecord, result: TaskResult | null): FeedbackInput {
   const terminal = record.status !== "queued" && record.status !== "running";
+  const currentResult = terminal && result?.task_id === record.task_id && result.attempt === record.attempt && result.status === record.status ? result : null;
   const elapsed = record.started_at ? Math.max(0, Date.now() - Date.parse(record.started_at)) || null : null;
   return {
     objective: `task ${record.task_id}`,
     task_id: record.task_id,
     attempt: record.attempt,
     bridge_status: record.status,
-    delivered: terminal ? result?.files_changed ?? [] : [],
-    usage: terminal ? result?.usage ?? null : null,
-    model: terminal ? result?.model ?? null : null,
-    timing: terminal ? result?.timing ? { ...result.timing, verify_ms: null } : null : null,
+    delivered: currentResult?.files_changed ?? [],
+    usage: currentResult?.usage ?? null,
+    model: currentResult?.model ?? null,
+    timing: currentResult?.timing ? { ...currentResult.timing, verify_ms: null } : null,
+    observation: record.observation ?? null,
+    result: currentResult,
     running: terminal ? null : {
-      phase: record.status,
+      phase: record.observation?.activity.code ?? record.status,
       elapsed_ms: elapsed,
-      last_progress_at: record.updated_at,
+      last_progress_at: record.observation?.evidence.last_event_age_ms !== null && record.observation?.evidence.last_event_age_ms !== undefined
+        ? new Date(Date.parse(record.observation.activity.observed_at) - record.observation.evidence.last_event_age_ms).toISOString()
+        : null,
       blockers: record.status === "waiting_for_master" ? ["任务等待 Master 反馈"] : [],
       tokens_note: "截至当前未取得最终 token（任务未结束）",
     },
     blockers: [],
-    decisions: terminal && result?.needs_master_decision ? ["worker 报告标记需要 Master 决定"] : [],
+    decisions: currentResult?.needs_master_decision ? ["worker 报告标记需要 Master 决定"] : [],
     next_steps: [],
   };
 }

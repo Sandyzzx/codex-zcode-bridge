@@ -91,8 +91,11 @@ function tryAcquireProcessLockWithRetry(directory: string, retries: number): (()
   return () => {
     const owner = JSON.parse(readFileSync(path.join(directory, "owner.json"), "utf8")) as { token?: string };
     if (owner.token !== token) throw new Error("process lock ownership changed");
-    unlinkSync(path.join(directory, "owner.json"));
-    rmdirSync(directory);
+    // Withdraw the complete owner atomically before deleting anything. A
+    // crash during private cleanup must not leave an unreadable shared lock.
+    const retired = `${directory}.${token}.retired`;
+    renameSync(directory, retired);
+    removeStagedLock(retired);
   };
 }
 
@@ -134,8 +137,7 @@ function reclaimDeadOwner(directory: string): boolean {
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") return false; }
     const retired = `${directory}.${randomUUID()}.retired`;
     renameSync(directory, retired);
-    unlinkSync(path.join(retired, "owner.json"));
-    rmdirSync(retired);
+    removeStagedLock(retired);
     return true;
   } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; return false; }
   finally { rmdirSync(guard); }

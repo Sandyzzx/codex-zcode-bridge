@@ -83,8 +83,9 @@ function tryAcquireProcessLockWithRetry(directory, retries) {
   return () => {
     const owner = JSON.parse(readFileSync2(path3.join(directory, "owner.json"), "utf8"));
     if (owner.token !== token) throw new Error("process lock ownership changed");
-    unlinkSync(path3.join(directory, "owner.json"));
-    rmdirSync(directory);
+    const retired = `${directory}.${token}.retired`;
+    renameSync(directory, retired);
+    removeStagedLock(retired);
   };
 }
 function acquireExistingLock(directory) {
@@ -136,8 +137,7 @@ function reclaimDeadOwner(directory) {
     }
     const retired = `${directory}.${randomUUID()}.retired`;
     renameSync(directory, retired);
-    unlinkSync(path3.join(retired, "owner.json"));
-    rmdirSync(retired);
+    removeStagedLock(retired);
     return true;
   } catch (error2) {
     if (error2.code !== "ENOENT") throw error2;
@@ -1269,7 +1269,10 @@ function judgeTaskObservation(input) {
     const eventAge = ageMs(now, input.last_business_event?.at, options.clock_jump_guard_ms).value;
     const withinStartGrace = startAge !== null && startAge < options.start_grace_ms;
     if (heartbeatFresh) {
-      if (eventAge !== null && eventAge > options.stall_hint_ms) {
+      if (eventAge === null) {
+        activity = withinStartGrace ? "starting" : "unknown";
+        activityReason = "heartbeat_alive_no_business_event";
+      } else if (eventAge > options.stall_hint_ms) {
         activity = "stalled";
         activityReason = "heartbeat_alive_business_events_stale";
       } else {
@@ -23546,266 +23549,11 @@ function createWorkerSpawner(host) {
 var defaultSpawnWorker = createWorkerSpawner();
 
 // src/adapters/process-spawn.ts
-import { spawn as spawn2 } from "node:child_process";
-function appendBounded(current, chunk, maxBytes) {
-  if (!(maxBytes > 0)) return { value: current.value + chunk, truncated: current.truncated };
-  const remaining = maxBytes - Buffer.byteLength(current.value, "utf8");
-  if (remaining <= 0) return chunk ? { value: current.value, truncated: true } : current;
-  const bytes = Buffer.from(chunk, "utf8");
-  if (bytes.length <= remaining) {
-    return { value: current.value + chunk, truncated: current.truncated };
-  }
-  return {
-    value: current.value + bytes.subarray(0, remaining).toString("utf8"),
-    truncated: true
-  };
-}
-function isProcessRunning(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error2) {
-    if (error2.code === "EPERM") return true;
-    if (error2.code === "ESRCH") return false;
-    throw error2;
-  }
-}
-var terminateProcessTree = async (pid, options = {}) => {
-  if (!Number.isInteger(pid) || pid <= 0) {
-    throw new Error(`A positive integer PID is required, got: ${pid}`);
-  }
-  if (process.platform === "win32") {
-    const result = await runCommand("taskkill", ["/PID", String(pid), "/T", "/F"], {
-      timeoutMs: 15e3
-    });
-    if (result.code !== 0) {
-      throw new Error(
-        result.stderr.trim() || `taskkill exited with code ${String(result.code)}`
-      );
-    }
-    if (!await waitForPidExit(pid, options.killWaitMs ?? 2e3)) {
-      throw new Error(`Process tree ${pid} still running after taskkill reported success`);
-    }
-    return { pid, signal: "SIGKILL", verified: true };
-  }
-  signalProcessTree(pid, "SIGTERM");
-  if (await waitForProcessTreeExit(pid, options.graceMs ?? 500)) {
-    return { pid, signal: "SIGTERM", verified: true };
-  }
-  signalProcessTree(pid, "SIGKILL");
-  if (!await waitForProcessTreeExit(pid, options.killWaitMs ?? 2e3)) {
-    throw new Error(`Process tree ${pid} did not exit after SIGKILL`);
-  }
-  return { pid, signal: "SIGKILL", verified: true };
-};
-function runCommand(command, args, options) {
-  return new Promise((resolve, reject) => {
-    const child = spawn2(command, args, {
-      shell: false,
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"]
-    });
-    let stdout = { value: "", truncated: false };
-    let stderr = { value: "", truncated: false };
-    child.stdout?.setEncoding("utf8");
-    child.stderr?.setEncoding("utf8");
-    child.stdout?.on("data", (chunk) => {
-      stdout = appendBounded(stdout, chunk, options.maxOutputBytes ?? 1e6);
-    });
-    child.stderr?.on("data", (chunk) => {
-      stderr = appendBounded(stderr, chunk, options.maxOutputBytes ?? 1e6);
-    });
-    let timedOut = false;
-    const timer = options.timeoutMs && options.timeoutMs > 0 ? setTimeout(() => {
-      timedOut = true;
-      try {
-        child.kill("SIGKILL");
-      } catch {
-      }
-    }, options.timeoutMs) : null;
-    timer?.unref();
-    child.on("error", (error2) => {
-      if (timer) clearTimeout(timer);
-      reject(error2);
-    });
-    child.on("close", (code, signal) => {
-      if (timer) clearTimeout(timer);
-      resolve({
-        code: timedOut ? null : code,
-        signal: timedOut ? "SIGKILL" : signal,
-        stdout: stdout.value,
-        stderr: stderr.value
-      });
-    });
-  });
-}
-function signalProcessTree(pid, signal) {
-  try {
-    process.kill(-pid, signal);
-  } catch (error2) {
-    if (error2.code === "ESRCH") {
-      try {
-        process.kill(pid, signal);
-      } catch (inner) {
-        if (inner.code !== "ESRCH") throw inner;
-      }
-    } else {
-      throw error2;
-    }
-  }
-}
-function isProcessTreeRunning(pid) {
-  try {
-    process.kill(-pid, 0);
-    return true;
-  } catch (error2) {
-    if (error2.code === "EPERM") return true;
-    if (error2.code === "ESRCH") return isProcessRunning(pid);
-    throw error2;
-  }
-}
-async function waitForPidExit(pid, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  while (isProcessRunning(pid) && Date.now() < deadline) {
-    await sleep2(20);
-  }
-  return !isProcessRunning(pid);
-}
-async function waitForProcessTreeExit(pid, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  while (isProcessTreeRunning(pid) && Date.now() < deadline) {
-    await sleep2(20);
-  }
-  return !isProcessTreeRunning(pid);
-}
-function sleep2(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-// src/runtime/task-timeout.ts
-var DEFAULT_TASK_TIMEOUT_MS = 60 * 60 * 1e3;
-var MAX_TASK_TIMEOUT_MS = 4 * 60 * 60 * 1e3;
-var MIN_TASK_TIMEOUT_MS = 60 * 1e3;
-function validateTaskTimeout(value) {
-  if (!Number.isSafeInteger(value) || value < MIN_TASK_TIMEOUT_MS || value > MAX_TASK_TIMEOUT_MS) {
-    throw new Error(`timeout_ms must be an integer from ${MIN_TASK_TIMEOUT_MS} to ${MAX_TASK_TIMEOUT_MS}`);
-  }
-  return value;
-}
-
-// src/manager/task-manager.ts
-init_process_lock();
-
-// src/prompts/task-prompt.ts
-var MAX_PROMPT_CHARS = 6e4;
-var MAX_SECTION_CHARS = 4e3;
-var MAX_CONTEXT_CHARS = 2e3;
-function buildTaskPrompt(task) {
-  const sections = [
-    `TASK ID: ${task.task_id}`,
-    "You are a subordinate coding agent executing one bounded task inside the current working directory. Stay inside the workspace; do not touch files outside it.",
-    `PROJECT WORKSPACE: ${task.workspace}`,
-    ...task.worktree_path ? [`HOST-SELECTED EXECUTION WORKTREE: ${task.worktree_path}. Make task changes in the current working directory, which is this worktree; the project workspace above identifies its parent project.`] : [],
-    ...task.model ? [`REQUESTED ZCODE MODEL: ${task.model.provider_id}/${task.model.model_id}${task.model.reasoning_level ? ` (reasoning level: ${task.model.reasoning_level})` : ""}. The Bridge configures this model for the session.`] : [],
-    ...task.timeout_ms ? [`EXECUTION TIME LIMIT: ${task.timeout_ms} ms for this attempt.`] : [],
-    `OBJECTIVE
-${task.objective}`,
-    renderList("REQUIREMENTS", task.requirements),
-    renderPaths("ALLOWED PATHS (write only inside these when provided)", task.allowed_paths),
-    renderPaths("FORBIDDEN PATHS (never create, modify, or delete)", task.forbidden_paths),
-    renderList(
-      "ACCEPTANCE CRITERIA (the master verifies these independently; do not self-certify)",
-      task.acceptance_criteria
-    ),
-    renderList(
-      "TEST COMMANDS (run the applicable ones and report a status for each)",
-      task.test_commands
-    ),
-    DECISION_RULE
-  ];
-  if (task.context && task.context.trim().length > 0) {
-    sections.push(`CONTEXT
-${bounded(task.context, MAX_CONTEXT_CHARS)}`);
-  }
-  return joinBoundedPreservingTail([...sections, OUTPUT_CONTRACT], OUTPUT_CONTRACT);
-}
-function buildContinuePrompt(input) {
-  const { task, feedback, additionalRequirements, previousSessionId, previousResult } = input;
-  const sections = [
-    `TASK ID: ${task.task_id}`,
-    "You are a subordinate coding agent continuing a previous task in the same workspace. Stay inside the workspace.",
-    ...task.model ? [`REQUESTED ZCODE MODEL: ${task.model.provider_id}/${task.model.model_id}${task.model.reasoning_level ? ` (reasoning level: ${task.model.reasoning_level})` : ""}. The Bridge configures this model for the session.`] : []
-  ];
-  if (previousSessionId) {
-    sections.push(
-      `This run resumes persisted session ${previousSessionId}; earlier conversation context may be available.`
-    );
-  }
-  if (previousResult) {
-    sections.push(
-      `PREVIOUS RESULT (normalized claims from the previous attempt)
-${bounded(
-        JSON.stringify(previousResult, null, 2),
-        MAX_SECTION_CHARS
-      )}`
-    );
-    if (previousResult.error_code === "invalid_agent_report") {
-      sections.push(
-        "REPORT REPAIR MODE: The previous attempt's execution has already ended; only its final report failed validation. Do not edit files, rerun tests, or repeat task work. Reconstruct the final JSON report from the previous response and report_candidate. Do not guess missing facts. If a required boolean or other fact cannot be established, set needs_master_decision=true and describe the uncertainty in issues."
-      );
-    }
-  }
-  sections.push(`MASTER FEEDBACK (address every point)
-${feedback}`);
-  if (additionalRequirements.length > 0) {
-    sections.push(renderList("ADDITIONAL REQUIREMENTS", [...additionalRequirements]));
-  }
-  sections.push(`ORIGINAL TASK
-${buildTaskPrompt(task)}`);
-  return joinBoundedPreservingTail(sections, OUTPUT_CONTRACT);
-}
-var OUTPUT_CONTRACT = [
-  "OUTPUT CONTRACT (mandatory)",
-  "Your final response must be exactly one JSON object with no markdown fences and no text before or after it, matching this shape:",
-  '{"summary": string, "files_changed": string[], "tests": [{"command": string, "status": "passed" | "failed" | "not_run", "details"?: string}], "issues": string[], "needs_master_decision": boolean}',
-  "List every file you created or modified in files_changed (workspace-relative paths). Give one tests entry per applicable test command; use status not_run when a command was not applicable or could not run. Record problems in issues. Set needs_master_decision=true only when a required decision is outside your authority; never guess."
-].join("\n");
-var DECISION_RULE = [
-  "DECISION RULE",
-  "Use only this task package, this prompt, repository files you inspect, and available tools; do not assume access to the calling host's conversation.",
-  "Do not choose unresolved items explicitly listed under OPEN DECISIONS; a later explicit Master Feedback decision resolves that item. Also escalate conflicting requirements or missing decisions that would materially change externally visible behavior, even when the calling host did not list them. Record the exact question in issues and set needs_master_decision=true. Continue independent work that does not depend on the decision. For low-impact implementation choices, use the simplest consistent option and state the assumption in issues."
-].join("\n");
-function renderList(title, items) {
-  if (items.length === 0) {
-    return `${title}
-- (none)`;
-  }
-  return `${title}
-${items.map((item) => `- ${item}`).join("\n")}`;
-}
-function renderPaths(title, paths) {
-  if (paths.length === 0) {
-    return `${title}
-- (unspecified; still write only within the workspace)`;
-  }
-  return `${title}
-${paths.map((item) => `- ${item}`).join("\n")}`;
-}
-function bounded(text, maxChars) {
-  if (text.length <= maxChars) return text;
-  return `${text.slice(0, maxChars)}\u2026[truncated]`;
-}
-function joinBoundedPreservingTail(sections, requiredTail) {
-  const joined = sections.join("\n\n");
-  if (joined.length <= MAX_PROMPT_CHARS) return joined;
-  void requiredTail;
-  throw new Error(`task prompt exceeds ${MAX_PROMPT_CHARS} characters; shorten the task package without dropping constraints`);
-}
+import { spawn as spawn3 } from "node:child_process";
 
 // src/runtime/process-probe.ts
 import { readFile } from "node:fs/promises";
-import { spawn as spawn3 } from "node:child_process";
+import { spawn as spawn2 } from "node:child_process";
 var PROCESS_IDENTITY_VERSION = 1;
 var DEFAULT_PROBE_TIMEOUT_MS = 5e3;
 var DEFAULT_MAX_CONCURRENT = 2;
@@ -23827,8 +23575,8 @@ function failedQuery(reason) {
 }
 function windowsBatchQuery(pids, timeoutMs) {
   return new Promise((resolve) => {
-    const script = `Get-Process -Id ${pids.join(",")} -ErrorAction SilentlyContinue | ForEach-Object { "{0}|{1}" -f $_.Id, $_.StartTime.Ticks }`;
-    const child = spawn3("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], {
+    const script = `$ErrorActionPreference = 'Stop'; Get-Process -Id ${pids.join(",")} -ErrorAction SilentlyContinue | ForEach-Object { "{0}|{1}" -f $_.Id, $_.StartTime.Ticks }; 'bridge_probe_complete_v1'`;
+    const child = spawn2("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], {
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
       shell: false
@@ -23859,16 +23607,21 @@ function windowsBatchQuery(pids, timeoutMs) {
       if (stdout.length < 1e6) stdout += chunk;
     });
     child.on("error", () => finish(failedQuery("spawn_error")));
-    child.on("close", () => {
+    child.on("close", (code) => {
       const map = /* @__PURE__ */ new Map();
-      for (const line of stdout.split(/\r?\n/u)) {
-        const match = /^(\d+)\|(\d+)$/u.exec(line.trim());
-        if (!match) continue;
-        map.set(Number(match[1]), match[2]);
-      }
-      if (map.size === 0) {
-        finish(stderrBytes > 0 ? failedQuery("query_error") : { ok: true, reason: "ok", fingerprints: map });
+      const lines = stdout.trim().split(/\r?\n/u);
+      if (code !== 0 || stderrBytes > 0 || lines.pop() !== "bridge_probe_complete_v1") {
+        finish(failedQuery("query_error"));
         return;
+      }
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const match = /^(\d+)\|(\d+)$/u.exec(line.trim());
+        if (!match || !pids.includes(Number(match[1])) || map.has(Number(match[1]))) {
+          finish(failedQuery("query_error"));
+          return;
+        }
+        map.set(Number(match[1]), match[2]);
       }
       finish({ ok: true, reason: "ok", fingerprints: map });
     });
@@ -23876,7 +23629,7 @@ function windowsBatchQuery(pids, timeoutMs) {
 }
 async function darwinQuery(pids, timeoutMs) {
   return new Promise((resolve) => {
-    const child = spawn3("ps", ["-o", "pid=,lstart=", "-p", pids.join(",")], {
+    const child = spawn2("ps", ["-o", "pid=,lstart=", "-p", pids.join(",")], {
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
       shell: false
@@ -24012,6 +23765,353 @@ function createPlatformProbe(options = {}) {
 function livenessVerdict(pid, isAlive, now) {
   if (pid === null || !Number.isInteger(pid) || pid <= 0) return verdict("unknown", "no_pid_recorded", now);
   return isAlive(pid) ? verdict("alive", "kill0_alive_no_identity", now) : verdict("exited", "kill0_pid_absent", now);
+}
+
+// src/adapters/windows-process-cleanup.ts
+import { performance } from "node:perf_hooks";
+async function terminateWindowsProcessTree(pid, killWaitMs, dependencies) {
+  const requests = await dependencies.capture(pid);
+  if (!requests.some((request) => request.pid === pid)) throw new Error("process_tree_snapshot_invalid: root missing");
+  const inspect = async () => {
+    const verdicts = await dependencies.probe(requests);
+    if (verdicts.length !== requests.length || verdicts.some((verdict2) => verdict2.state === "unknown")) {
+      throw new Error("process_tree_probe_unverified: recorded executor exit is unknown");
+    }
+    return verdicts;
+  };
+  const before = await inspect();
+  if (before.every((verdict2) => verdict2.state === "exited")) return;
+  const rootIndex = requests.findIndex((request) => request.pid === pid);
+  if (before[rootIndex]?.state !== "alive") {
+    throw new Error("process_tree_descendants_alive: root exited before termination");
+  }
+  let exitCode = null;
+  let commandFailed = false;
+  try {
+    exitCode = await dependencies.kill(pid);
+  } catch {
+    commandFailed = true;
+  }
+  const deadline = performance.now() + Math.max(0, killWaitMs);
+  for (; ; ) {
+    const after = await inspect();
+    if (after.every((verdict2) => verdict2.state === "exited")) return;
+    if (performance.now() >= deadline) {
+      const reason = commandFailed ? "command_error" : exitCode === null ? "timeout" : `exit_${exitCode}`;
+      throw new Error(`process_tree_cleanup_unverified: taskkill ${reason}; recorded executors remain alive`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+function windowsTreeCaptureScript(pid) {
+  return [
+    "$ErrorActionPreference = 'Stop'",
+    "$all = @(Get-CimInstance Win32_Process -ErrorAction Stop)",
+    `$selected = [System.Collections.Generic.HashSet[int]]::new(); [void]$selected.Add(${pid})`,
+    "do { $changed = $false; foreach ($item in $all) { if ($selected.Contains([int]$item.ParentProcessId)) { if ($selected.Add([int]$item.ProcessId)) { $changed = $true } } } } while ($changed)",
+    "'bridge_tree_snapshot_v1'",
+    "foreach ($candidate in $selected) { $item = Get-Process -Id $candidate -ErrorAction SilentlyContinue; if ($null -eq $item) { '{0}|absent' -f $candidate } else { '{0}|{1}' -f $candidate, $item.StartTime.Ticks } }"
+  ].join("; ");
+}
+function parseWindowsTreeCapture(stdout, pid) {
+  const lines = stdout.trim().split(/\r?\n/u);
+  if (lines.shift() !== "bridge_tree_snapshot_v1") throw new Error("process_tree_snapshot_invalid: protocol missing");
+  const capturedAt = (/* @__PURE__ */ new Date()).toISOString();
+  const requests = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const line of lines) {
+    const match = /^(\d+)\|(\d+|absent)$/u.exec(line.trim());
+    const candidate = Number(match?.[1]);
+    if (!match || !Number.isSafeInteger(candidate) || candidate <= 0 || seen.has(candidate)) {
+      throw new Error("process_tree_snapshot_invalid: malformed identity");
+    }
+    seen.add(candidate);
+    requests.push({ pid: candidate, identity: match[2] === "absent" ? null : {
+      pid: candidate,
+      fingerprint: match[2],
+      fingerprint_precision: "exact",
+      identity_version: 1,
+      platform: "win32",
+      captured_at: capturedAt
+    } });
+  }
+  if (!seen.has(pid)) throw new Error("process_tree_snapshot_invalid: root missing");
+  return requests;
+}
+
+// src/adapters/process-spawn.ts
+function appendBounded(current, chunk, maxBytes) {
+  if (!(maxBytes > 0)) return { value: current.value + chunk, truncated: current.truncated };
+  const remaining = maxBytes - Buffer.byteLength(current.value, "utf8");
+  if (remaining <= 0) return chunk ? { value: current.value, truncated: true } : current;
+  const bytes = Buffer.from(chunk, "utf8");
+  if (bytes.length <= remaining) {
+    return { value: current.value + chunk, truncated: current.truncated };
+  }
+  return {
+    value: current.value + bytes.subarray(0, remaining).toString("utf8"),
+    truncated: true
+  };
+}
+function isProcessRunning(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error2) {
+    if (error2.code === "EPERM") return true;
+    if (error2.code === "ESRCH") return false;
+    throw error2;
+  }
+}
+var terminateProcessTree = async (pid, options = {}) => {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    throw new Error(`A positive integer PID is required, got: ${pid}`);
+  }
+  if (process.platform === "win32") {
+    const probe = createPlatformProbe();
+    await terminateWindowsProcessTree(pid, options.killWaitMs ?? 2e3, {
+      capture: async (root) => {
+        let snapshot;
+        try {
+          snapshot = await runCommand("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", windowsTreeCaptureScript(root)], {
+            timeoutMs: 5e3,
+            maxOutputBytes: 128e3
+          });
+        } catch {
+          throw new Error("process_tree_snapshot_unverified: query failed");
+        }
+        if (snapshot.code !== 0 || snapshot.stdoutTruncated || snapshot.stderr.length > 0) {
+          throw new Error("process_tree_snapshot_unverified: query failed or incomplete");
+        }
+        return parseWindowsTreeCapture(snapshot.stdout, root);
+      },
+      probe: (requests) => probe.probe(requests),
+      kill: async (root) => (await runCommand("taskkill", ["/PID", String(root), "/T", "/F"], { timeoutMs: 15e3 })).code
+    });
+    return { pid, signal: "SIGKILL", verified: true };
+  }
+  signalProcessTree(pid, "SIGTERM");
+  if (await waitForProcessTreeExit(pid, options.graceMs ?? 500)) {
+    return { pid, signal: "SIGTERM", verified: true };
+  }
+  signalProcessTree(pid, "SIGKILL");
+  if (!await waitForProcessTreeExit(pid, options.killWaitMs ?? 2e3)) {
+    throw new Error(`Process tree ${pid} did not exit after SIGKILL`);
+  }
+  return { pid, signal: "SIGKILL", verified: true };
+};
+function runCommand(command, args, options) {
+  return new Promise((resolve, reject) => {
+    const child = spawn3(command, args, {
+      shell: false,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let stdout = { value: "", truncated: false };
+    let stderr = { value: "", truncated: false };
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk) => {
+      stdout = appendBounded(stdout, chunk, options.maxOutputBytes ?? 1e6);
+    });
+    child.stderr?.on("data", (chunk) => {
+      stderr = appendBounded(stderr, chunk, options.maxOutputBytes ?? 1e6);
+    });
+    let timedOut = false;
+    const timer = options.timeoutMs && options.timeoutMs > 0 ? setTimeout(() => {
+      timedOut = true;
+      try {
+        child.kill("SIGKILL");
+      } catch {
+      }
+    }, options.timeoutMs) : null;
+    timer?.unref();
+    child.on("error", (error2) => {
+      if (timer) clearTimeout(timer);
+      reject(error2);
+    });
+    child.on("close", (code, signal) => {
+      if (timer) clearTimeout(timer);
+      resolve({
+        code: timedOut ? null : code,
+        signal: timedOut ? "SIGKILL" : signal,
+        stdout: stdout.value,
+        stderr: stderr.value,
+        stdoutTruncated: stdout.truncated
+      });
+    });
+  });
+}
+function signalProcessTree(pid, signal) {
+  try {
+    process.kill(-pid, signal);
+  } catch (error2) {
+    if (error2.code === "ESRCH") {
+      try {
+        process.kill(pid, signal);
+      } catch (inner) {
+        if (inner.code !== "ESRCH") throw inner;
+      }
+    } else {
+      throw error2;
+    }
+  }
+}
+function isProcessTreeRunning(pid) {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error2) {
+    if (error2.code === "EPERM") return true;
+    if (error2.code === "ESRCH") return isProcessRunning(pid);
+    throw error2;
+  }
+}
+async function waitForProcessTreeExit(pid, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (isProcessTreeRunning(pid) && Date.now() < deadline) {
+    await sleep2(20);
+  }
+  return !isProcessTreeRunning(pid);
+}
+function sleep2(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// src/runtime/task-timeout.ts
+var DEFAULT_TASK_TIMEOUT_MS = 60 * 60 * 1e3;
+var MAX_TASK_TIMEOUT_MS = 4 * 60 * 60 * 1e3;
+var MIN_TASK_TIMEOUT_MS = 60 * 1e3;
+function validateTaskTimeout(value) {
+  if (!Number.isSafeInteger(value) || value < MIN_TASK_TIMEOUT_MS || value > MAX_TASK_TIMEOUT_MS) {
+    throw new Error(`timeout_ms must be an integer from ${MIN_TASK_TIMEOUT_MS} to ${MAX_TASK_TIMEOUT_MS}`);
+  }
+  return value;
+}
+
+// src/manager/task-manager.ts
+init_process_lock();
+
+// src/prompts/task-prompt.ts
+var MAX_PROMPT_CHARS = 6e4;
+var MAX_SECTION_CHARS = 4e3;
+var MAX_CONTEXT_CHARS = 2e3;
+function buildTaskPrompt(task) {
+  const sections = [
+    `TASK ID: ${task.task_id}`,
+    "You are a subordinate coding agent executing one bounded task inside the current working directory. Stay inside the workspace; do not touch files outside it.",
+    `PROJECT WORKSPACE: ${task.workspace}`,
+    ...task.worktree_path ? [`HOST-SELECTED EXECUTION WORKTREE: ${task.worktree_path}. Make task changes in the current working directory, which is this worktree; the project workspace above identifies its parent project.`] : [],
+    ...task.model ? [`REQUESTED ZCODE MODEL: ${task.model.provider_id}/${task.model.model_id}${task.model.reasoning_level ? ` (reasoning level: ${task.model.reasoning_level})` : ""}. The Bridge configures this model for the session.`] : [],
+    ...task.timeout_ms ? [`EXECUTION TIME LIMIT: ${task.timeout_ms} ms for this attempt.`] : [],
+    `OBJECTIVE
+${task.objective}`,
+    renderList("REQUIREMENTS", task.requirements),
+    renderPaths("ALLOWED PATHS (write only inside these when provided)", task.allowed_paths),
+    renderPaths("FORBIDDEN PATHS (never create, modify, or delete)", task.forbidden_paths),
+    renderList(
+      "ACCEPTANCE CRITERIA (the master verifies these independently; do not self-certify)",
+      task.acceptance_criteria
+    ),
+    renderList(
+      "TEST COMMANDS (run the applicable ones and report a status for each)",
+      task.test_commands
+    ),
+    DECISION_RULE
+  ];
+  if (task.context && task.context.trim().length > 0) {
+    sections.push(`CONTEXT
+${bounded(task.context, MAX_CONTEXT_CHARS)}`);
+  }
+  return joinBoundedPreservingTail([...sections, OUTPUT_CONTRACT], OUTPUT_CONTRACT);
+}
+function buildContinuePrompt(input) {
+  const { task, feedback, additionalRequirements, previousSessionId, previousResult } = input;
+  const sections = [
+    `TASK ID: ${task.task_id}`,
+    "You are a subordinate coding agent continuing a previous task in the same workspace. Stay inside the workspace.",
+    ...task.model ? [`REQUESTED ZCODE MODEL: ${task.model.provider_id}/${task.model.model_id}${task.model.reasoning_level ? ` (reasoning level: ${task.model.reasoning_level})` : ""}. The Bridge configures this model for the session.`] : []
+  ];
+  if (previousSessionId) {
+    sections.push(
+      `This run resumes persisted session ${previousSessionId}; earlier conversation context may be available.`
+    );
+  }
+  if (previousResult?.error_code === "invalid_agent_report") {
+    sections.push(
+      "REPORT REPAIR MODE: The previous execution has ended. Only its final report failed validation. Do not use tools, edit files, rerun tests, or repeat task work. Return the corrected JSON report from the evidence below. Preserve claims as claims, including not_run and failures. Do not invent tests or missing facts. If needs_master_decision cannot be established, explicitly set it to true and record the uncertainty in issues.",
+      `PROJECT WORKSPACE: ${task.workspace}`,
+      ...task.worktree_path ? [`HOST-SELECTED EXECUTION WORKTREE: ${task.worktree_path}`] : [],
+      `PREVIOUS REPORT ERROR
+${previousResult.summary}`,
+      `REPORT CANDIDATE CLAIMS (not independently verified)
+${JSON.stringify(previousResult.report_candidate ?? {}, null, 2)}`,
+      `PREVIOUS RESPONSE
+${bounded(previousResult.zcode_output, MAX_SECTION_CHARS)}`,
+      `MASTER FEEDBACK (report repair only)
+${feedback}`,
+      ...additionalRequirements.length ? [renderList("ADDITIONAL REPORT REQUIREMENTS", [...additionalRequirements])] : [],
+      OUTPUT_CONTRACT
+    );
+    return joinBoundedPreservingTail(sections, OUTPUT_CONTRACT);
+  }
+  if (previousResult) {
+    sections.push(
+      `PREVIOUS RESULT (normalized claims from the previous attempt)
+${bounded(
+        JSON.stringify(previousResult, null, 2),
+        MAX_SECTION_CHARS
+      )}`
+    );
+  }
+  sections.push(`MASTER FEEDBACK (address every point)
+${feedback}`);
+  if (additionalRequirements.length > 0) {
+    sections.push(renderList("ADDITIONAL REQUIREMENTS", [...additionalRequirements]));
+  }
+  sections.push(`ORIGINAL TASK
+${buildTaskPrompt(task)}`);
+  return joinBoundedPreservingTail(sections, OUTPUT_CONTRACT);
+}
+var OUTPUT_CONTRACT = [
+  "OUTPUT CONTRACT (mandatory)",
+  "Your final response must be exactly one JSON object with no markdown fences and no text before or after it.",
+  'Required fields: summary (non-empty string), files_changed (array of strings), tests (array of objects with command string, status "passed" | "failed" | "not_run", optional details string), issues (array of strings), needs_master_decision (JSON boolean).',
+  'Valid JSON example (replace example values with observed facts): {"summary":"Describe the actual work","files_changed":[],"tests":[{"command":"An applicable command","status":"not_run","details":"Explain why it was not run"}],"issues":[],"needs_master_decision":true}',
+  "List every file you created or modified in files_changed (workspace-relative paths). Give one tests entry per applicable test command; use status not_run when a command was not applicable or could not run. Record problems in issues. Set needs_master_decision=true only when a required decision is outside your authority; never guess.",
+  "Before sending, check that all five top-level fields exist and needs_master_decision is a JSON boolean true or false, never a quoted string and never text such as needs_master_decision=false. If its value is uncertain, set true and explain in issues. Do not omit it."
+].join("\n");
+var DECISION_RULE = [
+  "DECISION RULE",
+  "Use only this task package, this prompt, repository files you inspect, and available tools; do not assume access to the calling host's conversation.",
+  "Do not choose unresolved items explicitly listed under OPEN DECISIONS; a later explicit Master Feedback decision resolves that item. Also escalate conflicting requirements or missing decisions that would materially change externally visible behavior, even when the calling host did not list them. Record the exact question in issues and set needs_master_decision=true. Continue independent work that does not depend on the decision. For low-impact implementation choices, use the simplest consistent option and state the assumption in issues."
+].join("\n");
+function renderList(title, items) {
+  if (items.length === 0) {
+    return `${title}
+- (none)`;
+  }
+  return `${title}
+${items.map((item) => `- ${item}`).join("\n")}`;
+}
+function renderPaths(title, paths) {
+  if (paths.length === 0) {
+    return `${title}
+- (unspecified; still write only within the workspace)`;
+  }
+  return `${title}
+${paths.map((item) => `- ${item}`).join("\n")}`;
+}
+function bounded(text, maxChars) {
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars)}\u2026[truncated]`;
+}
+function joinBoundedPreservingTail(sections, requiredTail) {
+  const joined = sections.join("\n\n");
+  if (joined.length <= MAX_PROMPT_CHARS) return joined;
+  void requiredTail;
+  throw new Error(`task prompt exceeds ${MAX_PROMPT_CHARS} characters; shorten the task package without dropping constraints`);
 }
 
 // src/manager/task-manager.ts
@@ -24274,8 +24374,11 @@ var BridgeTaskManager = class _BridgeTaskManager {
           writeFileSync3(lastRunFile, String(Date.now()), { mode: 384 });
         }
       } finally {
-        releaseRecovery();
-        this.#recoveryPromise = null;
+        try {
+          releaseRecovery();
+        } finally {
+          this.#recoveryPromise = null;
+        }
       }
     }
   }
@@ -25148,21 +25251,13 @@ var BridgeTaskManager = class _BridgeTaskManager {
     );
     return true;
   }
-  #runningTaskIdsLocked() {
-    return this.#store.listTaskIds().filter((taskId) => {
-      const status = this.#safeStatus(taskId);
-      return status?.status === "running" || status?.cleanup_unverified === true;
-    });
-  }
-  #queuedTaskIdsLocked() {
-    return this.#store.listTaskIds().map((taskId) => ({ taskId, status: this.#safeStatus(taskId) })).filter((entry) => entry.status?.status === "queued").sort((a, b) => a.status.created_at.localeCompare(b.status.created_at)).map((entry) => entry.taskId);
-  }
   #pumpLocked() {
-    const running = this.#runningTaskIdsLocked();
+    const snapshot = this.#store.listTaskIds().map((taskId) => ({ taskId, status: this.#safeStatus(taskId) }));
+    const running = snapshot.filter(({ status }) => status?.status === "running" || status?.cleanup_unverified === true).map(({ taskId }) => taskId);
     if (running.length >= this.#maxConcurrentWorkers) return;
     const occupiedPaths = running.map((taskId) => this.#executionPathKeyLocked(taskId));
-    for (const taskId of this.#store.listTaskIds()) {
-      if (this.#safeStatus(taskId)) continue;
+    for (const { taskId, status } of snapshot) {
+      if (status) continue;
       try {
         occupiedPaths.push(this.#executionPathKeyLocked(taskId));
       } catch {
@@ -25170,7 +25265,8 @@ var BridgeTaskManager = class _BridgeTaskManager {
       }
     }
     let slots = this.#maxConcurrentWorkers - running.length;
-    for (const taskId of this.#queuedTaskIdsLocked()) {
+    const queued = snapshot.filter(({ status }) => status?.status === "queued").sort((a, b) => a.status.created_at.localeCompare(b.status.created_at));
+    for (const { taskId } of queued) {
       if (slots <= 0) break;
       const executionPath = this.#executionPathKeyLocked(taskId);
       if (occupiedPaths.some((occupied) => pathsOverlap(occupied, executionPath))) continue;
