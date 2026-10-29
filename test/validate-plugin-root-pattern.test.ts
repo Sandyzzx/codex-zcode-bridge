@@ -262,10 +262,18 @@ test("an HTTP URL whose host equals a short root is not a development-path leak 
  */
 test("the real validator rejects injected development-path references and keeps the baseline clean", { timeout: 120_000 }, () => {
   const scriptsDir = fileURLToPath(new URL("../../scripts/", import.meta.url));
-  const tempBase = mkdtempSync(path.join(tmpdir(), "bridge-validate-plugin-cli-"));
-  assert.ok(tempBase.startsWith(tmpdir()), "fixture must live under the system temp directory");
+  const tempRoot = path.resolve(tmpdir());
+  const tempBase = mkdtempSync(path.join(tempRoot, "bridge-validate-plugin-cli-"));
   const root = path.join(tempBase, `bridge 修订 (v2)[x]`);
   try {
+    const relativeTempBase = path.relative(tempRoot, tempBase);
+    assert.ok(
+      relativeTempBase !== "" &&
+        relativeTempBase !== ".." &&
+        !relativeTempBase.startsWith(`..${path.sep}`) &&
+        !path.isAbsolute(relativeTempBase),
+      "fixture must live under the system temp directory",
+    );
     const pluginRoot = path.join(root, "plugins", "codex-zcode-bridge");
     for (const directory of [
       path.join(root, "scripts", "lib"),

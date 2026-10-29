@@ -8,12 +8,30 @@ import { runWorkerTask } from "../src/worker/run-task.js";
 import { workerEntryPath } from "../src/manager/spawn-worker.js";
 import { TaskStore } from "../src/store/task-store.js";
 import { BridgeError } from "../src/runtime/errors.js";
+import type { ProcessIdentity, ProcessProbe } from "../src/runtime/process-probe.js";
 import {
   FakeAdapter,
   makeManagerFixture,
   type ManagerFixture,
 } from "./manager-helpers.js";
 import { SESSION_ID, makeTask } from "./helpers.js";
+
+function immediateProbe(): ProcessProbe {
+  const identity = (pid: number): ProcessIdentity => ({
+    pid,
+    fingerprint: `test-fingerprint-${pid}`,
+    fingerprint_precision: "exact",
+    identity_version: 1,
+    platform: process.platform,
+    captured_at: "2026-09-27T00:00:00.000Z",
+  });
+  return {
+    platform: process.platform,
+    identityOf: async (pid) => identity(pid),
+    selfIdentity: async () => identity(process.pid),
+    probe: async () => [],
+  };
+}
 
 async function workerFixture() {
   const fixture: ManagerFixture = await makeManagerFixture();
@@ -66,7 +84,13 @@ test("cancel intent recorded during a running attempt reaches the adapter", { ti
       adapter.cancelCallCount += 1;
       rejectRun(new BridgeError("cancelled", "runtime cancellation verified"));
     };
-    const run = await runWorkerTask({ dataRoot: fixture.dataRoot, taskId: "task_1", attempt: 1, adapter });
+    const run = await runWorkerTask({
+      dataRoot: fixture.dataRoot,
+      taskId: "task_1",
+      attempt: 1,
+      adapter,
+      probe: immediateProbe(),
+    });
     assert.equal(adapter.cancelCallCount, 1);
     assert.equal(run.status, "cancelled");
     assert.equal(store.readResult("task_1")?.summary, "runtime cancellation verified");
