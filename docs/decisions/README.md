@@ -40,3 +40,4 @@ ADR-001 到 ADR-003 只搬运权威文档里已经写明的结论。ADR-004 原�
 | ADR | 状态 | 范围 |
 |---|---|---|
 | [ADR-010](ADR-010-whole-task-delegation.md) | Accepted | 整任务交付、真实阶段门与续作边界；不改变Schema或生命周期 |
+| [ADR-015](ADR-015-master-skill-authorization-and-progressive-loading.md) | Accepted | 显式调用授权与按需文档加载；非Host强制鉴权 |
