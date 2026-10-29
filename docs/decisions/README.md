@@ -34,3 +34,9 @@ ADR-001 到 ADR-003 只搬运权威文档里已经写明的结论。ADR-004 原�
 ## 命名
 
 新决策使用 `ADR-NNN-<slug>.md`，正文至少包含 Status、Date、Context、Decision、Rationale、Consequences。
+
+## 独立功能接收（2026-10-29）
+
+| ADR | 状态 | 范围 |
+|---|---|---|
+| [ADR-010](ADR-010-whole-task-delegation.md) | Accepted | 整任务交付、真实阶段门与续作边界；不改变Schema或生命周期 |

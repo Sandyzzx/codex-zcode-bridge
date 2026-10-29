@@ -176,7 +176,7 @@ export function createBridgeServer(options: BridgeServerOptions): McpServer {
     "zcode_task",
     {
       title: "Submit one ZCode coding task",
-      description: `Create a bounded coding task for the local ZCode subordinate agent. workspace is the the calling host project root and determines the ZCode Desktop project identity. the calling host decides whether to create a worktree; if it does, pass its existing absolute directory as optional worktree_path. The Bridge never creates, selects, or removes a worktree. Without worktree_path, ZCode runs directly in workspace. Optional model selects a ZCode provider_id/model_id for this session without changing the project default. Returns a TaskReceipt; the task runs asynchronously in a detached worker. ${EXECUTION_NOT_VERDICT}`,
+      description: `Create one complete, independently acceptable coding task for the local ZCode Coding Worker. Delegate a deliverable with clear constraints and acceptance criteria; the Worker owns implementation, tests, and repair end to end. workspace is the calling host project root and determines the ZCode Desktop project identity. The calling host decides whether to create a worktree; if it does, pass its existing absolute directory as optional worktree_path. The Bridge never creates, selects, or removes a worktree. Without worktree_path, ZCode runs directly in workspace. Optional model selects a ZCode provider_id/model_id for this session without changing the project default. Returns a TaskReceipt; the task runs asynchronously in a detached worker. ${EXECUTION_NOT_VERDICT}`,
       inputSchema: zcodeTaskInputSchema,
       outputSchema: taskReceiptSchema,
     },
@@ -258,7 +258,7 @@ export function createBridgeServer(options: BridgeServerOptions): McpServer {
     "zcode_continue",
     {
       title: "Continue a ZCode task with master feedback",
-      description: `Continue a finished task with master feedback: reuses the task ID and workspace, increments the attempt, and preserves prior evidence. Allowed from completed, failed, or waiting_for_master. Supply a stable operation_id when retrying after a lost response; the same ID and input will not create another attempt. A decision flagged by ZCode is never auto-approved; the calling host must provide the follow-up instruction. ${EXECUTION_NOT_VERDICT}`,
+      description: `Continue a finished task with master feedback: reuses the task ID and workspace, increments the attempt, and preserves prior evidence. Use this for consolidated acceptance rework, a required decision, controlled recovery, or report repair; it is not routine scheduling for the next implementation step. Allowed from completed, failed, or waiting_for_master. Supply a stable operation_id when retrying after a lost response; the same ID and input will not create another attempt. A decision flagged by ZCode is never auto-approved; the calling host must provide the follow-up instruction. ${EXECUTION_NOT_VERDICT}`,
       inputSchema: zcodeContinueInputSchema,
       outputSchema: taskReceiptSchema,
     },

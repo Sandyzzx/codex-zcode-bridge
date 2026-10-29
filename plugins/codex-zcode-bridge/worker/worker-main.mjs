@@ -171,16 +171,17 @@ var MAX_CONTEXT_CHARS = 2e3;
 function buildTaskPrompt(task) {
   const sections = [
     `TASK ID: ${task.task_id}`,
-    "You are a subordinate coding agent executing one bounded task inside the current working directory. Stay inside the workspace; do not touch files outside it.",
+    "You are the Coding Worker executing one complete task inside the current working directory. Own its delivery end to end. Stay inside the workspace; do not touch files outside it.",
     `PROJECT WORKSPACE: ${task.workspace}`,
     ...task.worktree_path ? [`HOST-SELECTED EXECUTION WORKTREE: ${task.worktree_path}. Make task changes in the current working directory, which is this worktree; the project workspace above identifies its parent project.`] : [],
     ...task.model ? [`REQUESTED ZCODE MODEL: ${task.model.provider_id}/${task.model.model_id}${task.model.reasoning_level ? ` (reasoning level: ${task.model.reasoning_level})` : ""}. The Bridge configures this model for the session.`] : [],
     ...task.timeout_ms ? [`EXECUTION TIME LIMIT: ${task.timeout_ms} ms for this attempt.`] : [],
+    DELIVERY_OWNERSHIP,
     `OBJECTIVE
 ${task.objective}`,
     renderList("REQUIREMENTS", task.requirements),
-    renderPaths("ALLOWED PATHS (write only inside these when provided)", task.allowed_paths),
-    renderPaths("FORBIDDEN PATHS (never create, modify, or delete)", task.forbidden_paths),
+    renderPaths("ALLOWED PATHS (write only inside these when provided; relative paths resolve against the current working directory)", task.allowed_paths),
+    renderPaths("FORBIDDEN PATHS (never create, modify, or delete; relative paths resolve against the current working directory)", task.forbidden_paths),
     renderList(
       "ACCEPTANCE CRITERIA (the master verifies these independently; do not self-certify)",
       task.acceptance_criteria
@@ -201,7 +202,7 @@ function buildContinuePrompt(input2) {
   const { task, feedback, additionalRequirements, previousSessionId, previousResult } = input2;
   const sections = [
     `TASK ID: ${task.task_id}`,
-    "You are a subordinate coding agent continuing a previous task in the same workspace. Stay inside the workspace.",
+    "You are a subordinate coding agent continuing a previous task in the same workspace. Own the remaining delivery end to end. Stay inside the workspace.",
     ...task.model ? [`REQUESTED ZCODE MODEL: ${task.model.provider_id}/${task.model.model_id}${task.model.reasoning_level ? ` (reasoning level: ${task.model.reasoning_level})` : ""}. The Bridge configures this model for the session.`] : []
   ];
   if (previousSessionId) {
@@ -257,6 +258,12 @@ var DECISION_RULE = [
   "DECISION RULE",
   "Use only this task package, this prompt, repository files you inspect, and available tools; do not assume access to the calling host's conversation.",
   "Do not choose unresolved items explicitly listed under OPEN DECISIONS; a later explicit Master Feedback decision resolves that item. Also escalate conflicting requirements or missing decisions that would materially change externally visible behavior, even when the calling host did not list them. Record the exact question in issues and set needs_master_decision=true. Continue independent work that does not depend on the decision. For low-impact implementation choices, use the simplest consistent option and state the assumption in issues."
+].join("\n");
+var DELIVERY_OWNERSHIP = [
+  "DELIVERY OWNERSHIP",
+  "You own this task's complete delivery, not a single step of it. Inspect the repository, plan the work internally, implement every required change, run the applicable tests, fix failures you can resolve within the stated boundaries, and repeat until the acceptance criteria are met or a genuine blocker requires the master.",
+  "Do not stop after a partial step to ask what to do next, and do not wait for the master to list files or functions. Make low-impact implementation choices yourself and record assumptions in issues.",
+  "The master independently verifies the final result; your report is evidence of what you did, not a substitute for that review."
 ].join("\n");
 function renderList(title, items) {
   if (items.length === 0) {
