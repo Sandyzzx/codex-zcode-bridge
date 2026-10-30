@@ -219,22 +219,22 @@ test("non-transient publication errors are not retried", () => {
   } finally { rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });
 
-test("a transient EPERM during withdrawal is retried and the lock is released", () => {
+test("an EPERM storm during withdrawal lasting beyond two seconds is retried and the lock is released", { timeout: 10_000 }, () => {
   const root = mkdtempSync(path.join(tmpdir(), "bridge-lock-withdraw-"));
   try {
     const lock = path.join(root, "state.lock");
     const release = tryAcquireProcessLock(lock);
     assert.ok(release);
-    let failedOnce = false;
+    let failedAttempts = 0;
     withPatchedRenameSync((source, target) => {
-      if (source === lock && target.endsWith(".retired") && !failedOnce) {
-        failedOnce = true;
+      if (source === lock && target.endsWith(".retired") && failedAttempts < 220) {
+        failedAttempts += 1;
         return errnoError("EPERM");
       }
       return null;
     }, () => {
       release();
-      assert.equal(failedOnce, true, "the injected withdrawal failure must have occurred");
+      assert.equal(failedAttempts, 220, "the withdrawal must survive a transient EPERM storm longer than the former two-second budget");
     });
     assert.equal(existsSync(lock), false, "the lock must be withdrawn after the retry");
     assert.deepEqual(readdirSync(root), [], "retired directory must be cleaned");
