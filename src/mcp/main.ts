@@ -24,9 +24,9 @@ function sameRealPath(moduleUrl: string, argvPath: string): boolean {
     return false;
   }
 }
-export async function runBridgeEntrypoint(): Promise<void> {
+export async function runBridgeEntrypoint(bridgeEntryPath = process.argv[1]): Promise<void> {
   try {
-    await startBridge();
+    await startBridge(undefined, undefined, bridgeEntryPath);
   } catch (error: unknown) {
     console.error(`[bridge] fatal: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
     process.exit(1);

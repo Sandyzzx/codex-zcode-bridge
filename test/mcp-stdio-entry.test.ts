@@ -109,10 +109,10 @@ test("worker concurrency defaults to eight and rejects out-of-range configuratio
   assert.match(invalid.warning ?? "", /integer from 1 to 8/);
 });
 
-test("marketplace bundle starts from its plugin root without repo-local dependencies", { timeout: 30_000 }, () => {
+test("marketplace bundle starts through the shipped launcher without repo-local dependencies", { timeout: 30_000 }, () => {
   const dataRoot = mkdtempSync(path.join(tmpdir(), "zcode-bridge-plugin-stdio-"));
   try {
-    const run = spawnSync(process.execPath, ["./dist/bridge.mjs"], {
+    const run = spawnSync(process.execPath, ["./launch-node24.mjs"], {
       cwd: PLUGIN_ROOT,
       input: PROTOCOL_MESSAGES,
       encoding: "utf8",

@@ -36744,7 +36744,7 @@ function serveStdioLifecycleHost(server, manager, options = {}) {
   if (stdin.readableEnded || stdin.destroyed) queueMicrotask(onDisconnect);
   return { shutdown };
 }
-async function startBridge(host = codexHostProfile(), version2 = SERVER_VERSION) {
+async function startBridge(host = codexHostProfile(), version2 = SERVER_VERSION, bridgeEntryPath = process.argv[1]) {
   validateHostProfile(host);
   const authoritySelection = loadInstallAuthoritySelection(host);
   const runtimeEnv = loadPersistedRuntimeEnvironment(process.env, homedir4(), host);
@@ -36769,7 +36769,7 @@ async function startBridge(host = codexHostProfile(), version2 = SERVER_VERSION)
     dataRoot = prepared.dataRoot;
   }
   const provenance = {
-    bridge: fingerprintRuntimeArtifact(process.argv[1]),
+    bridge: fingerprintRuntimeArtifact(bridgeEntryPath),
     worker: fingerprintRuntimeArtifact(host.workerEntryPath ?? workerEntryPath())
   };
   console.error(`[bridge] runtime provenance: ${JSON.stringify({
@@ -36810,7 +36810,7 @@ async function startBridge(host = codexHostProfile(), version2 = SERVER_VERSION)
       managedDataDirectory: true,
       workerEntryPath: host.workerEntryPath ?? workerEntryPath(),
       hostProfile: host,
-      bridgeEntryPath: process.argv[1] ?? "",
+      bridgeEntryPath: bridgeEntryPath ?? "",
       processProbe,
       trustedLocalContext,
       requireAuthorityReceipt: true
@@ -36873,9 +36873,9 @@ function sameRealPath(moduleUrl, argvPath) {
     return false;
   }
 }
-async function runBridgeEntrypoint() {
+async function runBridgeEntrypoint(bridgeEntryPath = process.argv[1]) {
   try {
-    await startBridge();
+    await startBridge(void 0, void 0, bridgeEntryPath);
   } catch (error2) {
     console.error(`[bridge] fatal: ${error2 instanceof Error ? error2.stack ?? error2.message : String(error2)}`);
     process.exit(1);

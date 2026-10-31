@@ -195,7 +195,11 @@ export function serveStdioLifecycleHost(
   return { shutdown };
 }
 
-export async function startBridge(host: BridgeHostProfile = codexHostProfile(), version = SERVER_VERSION): Promise<void> {
+export async function startBridge(
+  host: BridgeHostProfile = codexHostProfile(),
+  version = SERVER_VERSION,
+  bridgeEntryPath = process.argv[1],
+): Promise<void> {
   validateHostProfile(host);
   const authoritySelection = loadInstallAuthoritySelection(host);
   const runtimeEnv = loadPersistedRuntimeEnvironment(process.env, homedir(), host);
@@ -221,7 +225,7 @@ export async function startBridge(host: BridgeHostProfile = codexHostProfile(), 
     dataRoot = prepared.dataRoot;
   }
   const provenance = {
-    bridge: fingerprintRuntimeArtifact(process.argv[1]),
+    bridge: fingerprintRuntimeArtifact(bridgeEntryPath),
     worker: fingerprintRuntimeArtifact(host.workerEntryPath ?? workerEntryPath()),
   };
   console.error(`[bridge] runtime provenance: ${JSON.stringify({
@@ -264,7 +268,7 @@ export async function startBridge(host: BridgeHostProfile = codexHostProfile(), 
       managedDataDirectory: true,
       workerEntryPath: host.workerEntryPath ?? workerEntryPath(),
       hostProfile: host,
-      bridgeEntryPath: process.argv[1] ?? "",
+      bridgeEntryPath: bridgeEntryPath ?? "",
       processProbe,
       trustedLocalContext,
       requireAuthorityReceipt: true,
