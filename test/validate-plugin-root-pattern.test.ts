@@ -282,6 +282,7 @@ test("the real validator rejects injected development-path references and keeps 
       path.join(pluginRoot, "worker", "vendor", "pkg"),
       path.join(pluginRoot, "hooks"),
       path.join(pluginRoot, "skills", "zcode-bridge"),
+      path.join(root, "src", "sqlite-candidate", "wp6b2b1"),
     ]) {
       mkdirSync(directory, { recursive: true });
     }
@@ -289,14 +290,18 @@ test("the real validator rejects injected development-path references and keeps 
     copyFileSync(path.join(scriptsDir, "lib", "repo-root-pattern.mjs"), path.join(root, "scripts", "lib", "repo-root-pattern.mjs"));
 
     const manifest = { name: "codex-zcode-bridge", version: "1.2.5" };
-    const mcp = { mcpServers: { zcode_bridge: { command: "node", args: ["./dist/bridge.mjs"], env: { ZCODE_BRIDGE_PLUGIN_MODE: "1" } } } };
+    const mcp = { mcpServers: { zcode_bridge: { command: "node", args: ["./launch-node24.mjs"], env: { ZCODE_BRIDGE_PLUGIN_MODE: "1" } } } };
     writeFileSync(path.join(root, "package.json"), JSON.stringify(manifest));
     writeFileSync(path.join(pluginRoot, "plugin.json"), JSON.stringify(manifest));
     writeFileSync(path.join(pluginRoot, ".codex-plugin", "plugin.json"), JSON.stringify(manifest));
     writeFileSync(path.join(pluginRoot, "mcp.json"), JSON.stringify(mcp));
     writeFileSync(path.join(pluginRoot, ".mcp.json"), JSON.stringify(mcp));
+    writeFileSync(path.join(pluginRoot, "launch-node24.mjs"), "");
     writeFileSync(path.join(pluginRoot, "worker", "vendor", "package.json"), JSON.stringify({ name: "playwright-core" }));
     writeFileSync(path.join(pluginRoot, "worker", "vendor", "browsers.json"), JSON.stringify({ browsers: [{ name: "chromium" }] }));
+    const schema = "SELECT 1;\n";
+    writeFileSync(path.join(root, "src", "sqlite-candidate", "wp6b2b1", "schema.sql"), schema);
+    writeFileSync(path.join(pluginRoot, "dist", "schema.sql"), schema);
     for (const file of ["hooks/hooks.json", "hooks/session-start.mjs", "hooks/configure-runtime.ps1", "skills/zcode-bridge/SKILL.md"]) {
       writeFileSync(path.join(pluginRoot, file), "");
     }
