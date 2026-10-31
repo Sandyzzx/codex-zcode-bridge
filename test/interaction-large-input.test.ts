@@ -6,7 +6,7 @@
 // reason instead of the old generic "reply unavailable".
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -251,6 +251,17 @@ interface InteractionRuntime {
   content: string;
 }
 
+type InteractionFixture = Awaited<ReturnType<typeof makeManagerFixture>>;
+
+interface InteractionFailureDiagnostic {
+  readonly test_name: string;
+  readonly task_id: string;
+  readonly request_id?: string;
+  readonly started_at: string;
+  readonly phases: readonly { readonly at: string; readonly phase: string }[];
+  readonly error: unknown;
+}
+
 async function makeInteractionRuntime(contentBytes: number): Promise<InteractionRuntime> {
   const root = await mkdtemp(path.join(tmpdir(), "bridge-interaction-e2e-"));
   const entrypoint = path.join(root, "fake-app-server.cjs");
@@ -323,6 +334,151 @@ input.on("close", () => process.exit(0));
   };
 }
 
+function errorSummary(error: unknown): { name: string; message: string; stack?: string } {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+      ...(error.stack ? { stack: error.stack } : {}),
+    };
+  }
+  return { name: "NonError", message: String(error) };
+}
+
+function summarizeInput(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const input = value as Record<string, unknown>;
+  const content = typeof input["content"] === "string" ? input["content"] : null;
+  return {
+    keys: Object.keys(input).sort(),
+    ...(typeof input["path"] === "string" ? { path: input["path"] } : {}),
+    ...(content === null ? {} : {
+      content_bytes: Buffer.byteLength(content, "utf8"),
+      content_sha256: createHash("sha256").update(content).digest("hex"),
+    }),
+  };
+}
+
+function summarizeInteraction(fx: InteractionFixture, taskId: string, requestId: string | undefined): Record<string, unknown> | null {
+  if (!requestId) return null;
+  const record = fx.store.readInteractionRequest(taskId, requestId);
+  if (!record) return null;
+  const answer = record.answer;
+  return {
+    request_id: record.request_id,
+    method: record.method,
+    state: record.state,
+    created_at: record.created_at,
+    ...(record.answered_at ? { answered_at: record.answered_at } : {}),
+    params_bytes: record.params_bytes ?? null,
+    params_sha256: record.params_sha256 ?? null,
+    param_keys: Object.keys(record.params).sort(),
+    input: summarizeInput(record.params["input"]),
+    answer: answer ? {
+      decision: answer["decision"] ?? null,
+      action: answer["action"] ?? null,
+      reason_present: typeof answer["reason"] === "string" && answer["reason"].length > 0,
+    } : null,
+  };
+}
+
+function summarizeRuntimeLog(requestLog: string): unknown[] {
+  if (!existsSync(requestLog)) return [];
+  return readFileSync(requestLog, "utf8")
+    .split(/\r?\n/u)
+    .filter(Boolean)
+    .map((line) => {
+      const parsed = JSON.parse(line) as Record<string, unknown>;
+      if (typeof parsed["reply"] === "object" && parsed["reply"] !== null) {
+        const reply = parsed["reply"] as Record<string, unknown>;
+        return {
+          kind: "reply",
+          decision: reply["decision"] ?? null,
+          action: reply["action"] ?? null,
+          reason_present: typeof reply["reason"] === "string" && reply["reason"].length > 0,
+        };
+      }
+      const params = typeof parsed["params"] === "object" && parsed["params"] !== null
+        ? parsed["params"] as Record<string, unknown>
+        : {};
+      return {
+        kind: "message",
+        id: parsed["id"] ?? null,
+        method: parsed["method"] ?? null,
+        param_keys: Object.keys(params).sort(),
+        input: summarizeInput(params["input"]),
+      };
+    });
+}
+
+function summarizeEvents(fx: InteractionFixture, taskId: string): unknown[] {
+  const events: Array<{ seq: number; at: string; type: string; detail_keys: string[] }> = [];
+  let afterSeq = 0;
+  for (;;) {
+    const page = fx.store.readEvents(taskId, afterSeq, 200);
+    events.push(...page.events.map((event) => ({
+      seq: event.seq,
+      at: event.at,
+      type: event.type,
+      detail_keys: Object.keys(event.details ?? {}).sort(),
+    })));
+    if (!page.hasMore || page.nextSeq <= afterSeq) break;
+    afterSeq = page.nextSeq;
+  }
+  return events;
+}
+
+function preserveInteractionFailureEvidence(
+  fx: InteractionFixture,
+  runtime: InteractionRuntime,
+  diagnostic: InteractionFailureDiagnostic,
+): string {
+  const stamp = new Date().toISOString().replace(/[:.]/gu, "-");
+  const preserved = path.resolve(
+    ".run",
+    "global-functional-audit",
+    "interaction-failure-preserved",
+    `${diagnostic.task_id}-${stamp}-${process.pid}`,
+  );
+  mkdirSync(preserved, { recursive: true });
+  const status = fx.store.readStatus(diagnostic.task_id);
+  const result = fx.store.readResult(diagnostic.task_id);
+  const summary = {
+    schema_version: 1,
+    test_name: diagnostic.test_name,
+    task_id: diagnostic.task_id,
+    request_id: diagnostic.request_id ?? null,
+    started_at: diagnostic.started_at,
+    preserved_at: new Date().toISOString(),
+    process_id: process.pid,
+    phases: diagnostic.phases,
+    error: errorSummary(diagnostic.error),
+    task_status: {
+      status: status.status,
+      attempt: status.attempt,
+      worker_pid: status.worker_pid,
+      exit_code: status.exit_code,
+      error_code: status.error_code ?? null,
+      error: status.error ?? null,
+      execution_observation: status.execution_observation ?? null,
+    },
+    task_result: result ? {
+      status: result.status,
+      attempt: result.attempt,
+      exit_code: result.exit_code,
+      error_code: result.error_code ?? null,
+      summary: result.summary,
+      started_at: result.started_at,
+      finished_at: result.finished_at,
+    } : null,
+    interaction: summarizeInteraction(fx, diagnostic.task_id, diagnostic.request_id),
+    events: summarizeEvents(fx, diagnostic.task_id),
+    fake_runtime_messages: summarizeRuntimeLog(runtime.requestLog),
+  };
+  writeFileSync(path.join(preserved, "summary.json"), `${JSON.stringify(summary, null, 2)}\n`, "utf8");
+  return preserved;
+}
+
 async function waitForInteractionEvent(store: TaskStore, taskId: string): Promise<{ seq: number; details?: Record<string, unknown> }> {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
@@ -336,12 +492,24 @@ async function waitForInteractionEvent(store: TaskStore, taskId: string): Promis
 
 /** Windows: the spawned fake runtime uses the workspace as cwd; teardown may
  * race its exit, so directory removal retries and never fails the test. */
-async function cleanupE2E(fx: { cleanup: () => Promise<void> }, runtimeRoot: string): Promise<void> {
+async function cleanupE2E(
+  fx: InteractionFixture,
+  runtime: InteractionRuntime,
+  diagnostic?: InteractionFailureDiagnostic & { readonly report: (message: string) => void },
+): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 150));
+  if (diagnostic) {
+    try {
+      const preserved = preserveInteractionFailureEvidence(fx, runtime, diagnostic);
+      diagnostic.report(`interaction failure evidence preserved at ${preserved}`);
+    } catch (error) {
+      diagnostic.report(`interaction failure evidence preservation failed: ${errorSummary(error).message}; original fixture roots retained`);
+    }
+  }
   await fx.cleanup().catch(() => undefined);
   for (let attempt = 0; attempt < 10; attempt += 1) {
     try {
-      await rm(runtimeRoot, { recursive: true, force: true });
+      await rm(runtime.root, { recursive: true, force: true });
       return;
     } catch {
       await new Promise((resolve) => setTimeout(resolve, 150));
@@ -349,11 +517,62 @@ async function cleanupE2E(fx: { cleanup: () => Promise<void> }, runtimeRoot: str
   }
 }
 
-test("a 40 KiB Write approval round-trips through the store with the full input in the event", { timeout: 60_000 }, async () => {
+test("interaction failure evidence capture preserves sanitized synthetic context", async () => {
   const fx = await makeManagerFixture();
-  const runtime = await makeInteractionRuntime(40 * 1024);
+  const runtime = await makeInteractionRuntime(1024);
+  let preserved: string | undefined;
   try {
     await fx.manager.createTask(fx.makeTask());
+    const request = permissionRequest(padParams(1024), "diagnostic-request");
+    fx.store.writeInteractionRequest("task_1", request);
+    fx.store.appendEvent("task_1", "interaction_requested", "synthetic diagnostic event", {
+      request_id: request.request_id,
+    });
+    writeFileSync(runtime.requestLog, `${JSON.stringify({
+      method: "interaction/requestPermission",
+      params: { input: { content: "synthetic-diagnostic-content" } },
+    })}\n`, "utf8");
+    preserved = preserveInteractionFailureEvidence(fx, runtime, {
+      test_name: "controlled diagnostic capture",
+      task_id: "task_1",
+      request_id: request.request_id,
+      started_at: new Date().toISOString(),
+      phases: [{ at: new Date().toISOString(), phase: "controlled-failure" }],
+      error: new Error("synthetic failure"),
+    });
+    const summary = JSON.parse(readFileSync(path.join(preserved, "summary.json"), "utf8")) as {
+      error: { message: string };
+      interaction: { state: string; params_bytes: number };
+      events: Array<{ type: string }>;
+      fake_runtime_messages: Array<{ kind: string }>;
+    };
+    assert.equal(summary.error.message, "synthetic failure");
+    assert.equal(summary.interaction.state, "pending");
+    assert.equal(summary.interaction.params_bytes, serializedBytes(request.params));
+    assert.ok(summary.events.some((event) => event.type === "interaction_requested"));
+    assert.ok(summary.fake_runtime_messages.some((message) => message.kind === "message"));
+    assert.equal(existsSync(path.join(preserved, "task-root")), false);
+    assert.equal(existsSync(path.join(preserved, "fake-runtime-requests.jsonl")), false);
+  } finally {
+    if (preserved) rmSync(preserved, { recursive: true, force: true });
+    await cleanupE2E(fx, runtime);
+  }
+});
+
+test("a 40 KiB Write approval round-trips through the store with the full input in the event", { timeout: 60_000 }, async (t) => {
+  const fx = await makeManagerFixture();
+  const runtime = await makeInteractionRuntime(40 * 1024);
+  const startedAt = new Date().toISOString();
+  const phases: Array<{ at: string; phase: string }> = [];
+  let requestId: string | undefined;
+  let failure: unknown;
+  const mark = (phase: string): void => {
+    phases.push({ at: new Date().toISOString(), phase });
+  };
+  try {
+    mark("task-created:start");
+    await fx.manager.createTask(fx.makeTask());
+    mark("task-created:complete");
     const attempt = fx.store.readStatus("task_1").attempt;
     const run = runWorkerTask({
       dataRoot: fx.dataRoot,
@@ -361,17 +580,22 @@ test("a 40 KiB Write approval round-trips through the store with the full input 
       attempt,
       resolver: { resolve: async () => runtime.config },
     });
+    mark("worker-started");
     const event = await waitForInteractionEvent(fx.store, "task_1");
+    requestId = String(event.details?.["request_id"]);
+    mark("interaction-requested");
     assert.equal(event.details?.["preview"], undefined, "40 KiB fits the single-event budget: full detail shape");
     assert.equal((event.details?.["input"] as { content?: string })?.content?.length, 40 * 1024);
-    const requestId = String(event.details?.["request_id"]);
     const record = fx.store.readInteractionRequest("task_1", requestId);
     assert.equal(record?.params_bytes, serializedBytes(record!.params));
     assert.equal(fx.store.verifyInteractionRequestIntegrity("task_1", requestId).ok, true);
     await fx.manager.replyToInteraction({ task_id: "task_1", request_id: requestId, decision: "allow" });
+    mark("allow-replied");
     const { result } = await run;
+    mark("worker-settled");
     assert.equal(result.status, "completed");
     assert.equal(fx.store.readInteractionRequest("task_1", requestId)?.state, "answered");
+    mark("answered-state-verified");
     // The simulated Write executed only after the allow reply, with the exact
     // full content carried by the approval request.
     assert.equal(readFileSync(runtime.artifactPath, "utf8"), runtime.content);
@@ -379,8 +603,21 @@ test("a 40 KiB Write approval round-trips through the store with the full input 
       .map((entry) => JSON.parse(entry) as Record<string, unknown>)
       .filter((entry) => entry["reply"]);
     assert.deepEqual(replies.map((entry) => (entry["reply"] as { decision?: string }).decision), ["allow"]);
+    mark("artifact-and-replies-verified");
+  } catch (error) {
+    failure = error;
+    mark("failed");
+    throw error;
   } finally {
-    await cleanupE2E(fx, runtime.root);
+    await cleanupE2E(fx, runtime, failure ? {
+      test_name: "a 40 KiB Write approval round-trips through the store with the full input in the event",
+      task_id: "task_1",
+      request_id: requestId,
+      started_at: startedAt,
+      phases,
+      error: failure,
+      report: (message) => t.diagnostic(message),
+    } : undefined);
   }
 });
 
@@ -412,7 +649,7 @@ test("an 80 KiB Write approval publishes a bounded preview with a full-request r
     assert.equal(result.status, "completed");
     assert.equal(readFileSync(runtime.artifactPath, "utf8"), runtime.content, "the full 80 KiB content reached the tool after approval");
   } finally {
-    await cleanupE2E(fx, runtime.root);
+    await cleanupE2E(fx, runtime);
   }
 });
 
@@ -449,7 +686,7 @@ test("an over-1MiB Write approval is declined with actual/limit and split advice
     assert.match(replies[0]!.reply.reason ?? "", /Split the input into smaller parts/);
     assert.equal(existsSync(runtime.artifactPath), false, "nothing may execute before a grant");
   } finally {
-    await cleanupE2E(fx, runtime.root);
+    await cleanupE2E(fx, runtime);
   }
 });
 
@@ -492,7 +729,7 @@ test("approving against a corrupt full record is refused; the worker declines ex
     assert.match(replies[0]!.reply.reason ?? "", /can no longer read the full content/);
     assert.equal(existsSync(runtime.artifactPath), false);
   } finally {
-    await cleanupE2E(fx, runtime.root);
+    await cleanupE2E(fx, runtime);
   }
 });
 
@@ -529,7 +766,7 @@ test("an approval against an edited (hash-mismatched) full record is refused", {
     assert.equal(result.status, "completed");
     assert.equal(existsSync(runtime.artifactPath), false);
   } finally {
-    await cleanupE2E(fx, runtime.root);
+    await cleanupE2E(fx, runtime);
   }
 });
 
@@ -636,11 +873,20 @@ test("verification still enforces the 1 MiB persistence limit even with self-con
   }
 });
 
-test("approving a large record whose metadata was stripped is refused and never recorded as granted", { timeout: 60_000 }, async () => {
+test("approving a large record whose metadata was stripped is refused and never recorded as granted", { timeout: 60_000 }, async (t) => {
   const fx = await makeManagerFixture();
   const runtime = await makeInteractionRuntime(40 * 1024);
+  const startedAt = new Date().toISOString();
+  const phases: Array<{ at: string; phase: string }> = [];
+  let requestId: string | undefined;
+  let failure: unknown;
+  const mark = (phase: string): void => {
+    phases.push({ at: new Date().toISOString(), phase });
+  };
   try {
+    mark("task-created:start");
     await fx.manager.createTask(fx.makeTask());
+    mark("task-created:complete");
     const attempt = fx.store.readStatus("task_1").attempt;
     const run = runWorkerTask({
       dataRoot: fx.dataRoot,
@@ -648,12 +894,15 @@ test("approving a large record whose metadata was stripped is refused and never 
       attempt,
       resolver: { resolve: async () => runtime.config },
     });
+    mark("worker-started");
     const event = await waitForInteractionEvent(fx.store, "task_1");
-    const requestId = String(event.details?.["request_id"]);
+    requestId = String(event.details?.["request_id"]);
+    mark("interaction-requested");
     const record = readRecordFile(fx.store, "task_1", requestId);
     delete record.params_bytes;
     delete record.params_sha256;
     writeRecordFile(fx.store, "task_1", requestId, record);
+    mark("metadata-stripped");
     await assert.rejects(
       fx.manager.replyToInteraction({ task_id: "task_1", request_id: requestId, decision: "allow" }),
       (error: unknown) => {
@@ -664,17 +913,34 @@ test("approving a large record whose metadata was stripped is refused and never 
         return true;
       },
     );
+    mark("allow-rejected");
     // The refusal left the record pending with no answer at all.
     const after = fx.store.readInteractionRequest("task_1", requestId);
     assert.equal(after?.state, "pending");
     assert.equal(after?.answer, undefined);
+    mark("pending-state-verified");
     // End the run deterministically; nothing may have executed.
     await fx.manager.replyToInteraction({ task_id: "task_1", request_id: requestId, decision: "deny", reason: "test teardown" });
+    mark("deny-replied");
     const { result } = await run;
+    mark("worker-settled");
     assert.equal(result.status, "completed");
     assert.equal(existsSync(runtime.artifactPath), false);
+    mark("result-and-artifact-verified");
+  } catch (error) {
+    failure = error;
+    mark("failed");
+    throw error;
   } finally {
-    await cleanupE2E(fx, runtime.root);
+    await cleanupE2E(fx, runtime, failure ? {
+      test_name: "approving a large record whose metadata was stripped is refused and never recorded as granted",
+      task_id: "task_1",
+      request_id: requestId,
+      started_at: startedAt,
+      phases,
+      error: failure,
+      report: (message) => t.diagnostic(message),
+    } : undefined);
   }
 });
 
@@ -708,7 +974,7 @@ test("the full record disappearing mid-wait declines explicitly instead of polli
     assert.match(replies[0]!.reply.reason ?? "", /disappeared|can no longer read the full content/);
     assert.equal(existsSync(runtime.artifactPath), false);
   } finally {
-    await cleanupE2E(fx, runtime.root);
+    await cleanupE2E(fx, runtime);
   }
 });
 
@@ -751,6 +1017,6 @@ test("an answered record whose params were edited (self-consistent metadata) is 
     assert.match(replies[0]!.reply.reason ?? "", /no longer matches the request ZCode sent/);
     assert.equal(existsSync(runtime.artifactPath), false, "the edited input must not execute even though the file claimed an allow");
   } finally {
-    await cleanupE2E(fx, runtime.root);
+    await cleanupE2E(fx, runtime);
   }
 });

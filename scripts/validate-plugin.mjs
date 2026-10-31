@@ -32,8 +32,8 @@ for (const [label, manifest] of [["plugin.json", plugin], [".codex-plugin/plugin
 }
 for (const [label, mcp] of [["mcp.json", portableMcp], [".mcp.json", codexMcp]]) {
   const server = mcp.mcpServers?.zcode_bridge;
-  if (server?.command !== "node" || !Array.isArray(server.args) || server.args[0] !== "./dist/bridge.mjs") {
-    throw new Error(`${label} must launch ./dist/bridge.mjs with node`);
+  if (server?.command !== "node" || !Array.isArray(server.args) || server.args[0] !== "./launch-node24.mjs") {
+    throw new Error(`${label} must launch ./launch-node24.mjs with node`);
   }
   if (server.env?.ZCODE_BRIDGE_PLUGIN_MODE !== "1") {
     throw new Error(`${label} must set ZCODE_BRIDGE_PLUGIN_MODE=1`);
@@ -41,7 +41,9 @@ for (const [label, mcp] of [["mcp.json", portableMcp], [".mcp.json", codexMcp]])
 }
 
 for (const relativePath of [
+  "launch-node24.mjs",
   "dist/bridge.mjs",
+  "dist/schema.sql",
   "worker/worker-main.mjs",
   "worker/vendor/pkg/browser-host.cjs",
   "worker/vendor/browsers.json",
@@ -53,6 +55,10 @@ for (const relativePath of [
 ]) {
   await access(path.join(pluginRoot, relativePath));
 }
+
+const packagedSchema = await readFile(path.join(pluginRoot, "dist", "schema.sql"));
+const sourceSchema = await readFile(path.join(root, "src", "sqlite-candidate", "wp6b2b1", "schema.sql"));
+if (!packagedSchema.equals(sourceSchema)) throw new Error("bundled SQLite schema does not match source");
 
 // The installed plugin must load without the development checkout: bundles
 // must not embed the repository's absolute path, and the ESM bundles must not

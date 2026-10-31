@@ -24,9 +24,13 @@ function sameRealPath(moduleUrl: string, argvPath: string): boolean {
     return false;
   }
 }
-if (isEntry) {
-  void startBridge().catch((error: unknown) => {
+export async function runBridgeEntrypoint(): Promise<void> {
+  try {
+    await startBridge();
+  } catch (error: unknown) {
     console.error(`[bridge] fatal: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
     process.exit(1);
-  });
+  }
 }
+
+if (isEntry) void runBridgeEntrypoint();

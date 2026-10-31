@@ -23,6 +23,12 @@ import type { TaskProgressEvent } from "../interfaces.js";
 import type { BridgeHostProfile } from "../host/profile.js";
 import { createPlatformProbe, type ProcessProbe } from "../runtime/process-probe.js";
 import { normalizeUsage, phaseDuration } from "../usage/normalize.js";
+import {
+  verifyWorkerProvenance,
+  type RuntimeArtifactFingerprint,
+  type WorkerProvenanceCheck,
+} from "../runtime/build-provenance.js";
+import { assertJsonWorkerLease } from "../store/json-writer-quiescence.js";
 
 /**
  * The worker needs the frozen adapter contract except that getResult must
@@ -50,6 +56,13 @@ export interface RunWorkerTaskOptions {
   /** Defaults to the platform probe; the worker persists its own and the
    * runtime's process identity so recovery never guesses (A2). */
   probe?: ProcessProbe;
+  readonly runtimeProvenance?: {
+    readonly bridgeLaunchMarker: boolean;
+    readonly rawEnvelope: string | undefined;
+    readonly worker: RuntimeArtifactFingerprint;
+  };
+  readonly writerQuiescence?: boolean;
+  readonly writerLeaseToken?: string;
 }
 
 export interface RunWorkerTaskResult {
@@ -58,14 +71,40 @@ export interface RunWorkerTaskResult {
 }
 
 export async function runWorkerTask(options: RunWorkerTaskOptions): Promise<RunWorkerTaskResult> {
-  const store = new TaskStore(options.dataRoot);
+  const store = new TaskStore(options.dataRoot, {
+    writerQuiescence: options.writerQuiescence,
+    writerLeaseToken: options.writerLeaseToken,
+  });
   const now = options.now ?? (() => new Date());
   const probe = options.probe ?? createPlatformProbe();
   const taskId = options.taskId;
   const task = store.readTask(taskId);
   const initialStatus = store.readStatus(taskId);
   const attempt = options.attempt;
+  if (options.writerQuiescence) assertJsonWorkerLease(options.dataRoot, options.writerLeaseToken, taskId, attempt);
   if (!store.claimWorkerExecution(taskId, attempt)) throw new Error("worker attempt already claimed, stale, or terminal");
+  if (options.runtimeProvenance) {
+    const provenance = verifyWorkerProvenance({
+      bridgeLaunchMarker: options.runtimeProvenance.bridgeLaunchMarker,
+      rawEnvelope: options.runtimeProvenance.rawEnvelope,
+      actualWorker: options.runtimeProvenance.worker,
+    });
+    store.writeAttemptMeta(taskId, attempt, "runtime-provenance.json", {
+      expected: provenance.expected,
+      actual_worker: {
+        path: options.runtimeProvenance.worker.path,
+        sha256: options.runtimeProvenance.worker.sha256,
+      },
+      cleanup_code_bundle_sha256: options.runtimeProvenance.worker.sha256,
+      provenance_status: provenance.status,
+      ...(provenance.status === "rejected" ? { provenance_error_code: provenance.errorCode } : {}),
+      ...(provenance.status === "unverified" ? { provenance_reason: provenance.reason } : {}),
+      worker_matches_expected: provenance.workerMatchesExpected,
+    });
+    if (provenance.status === "rejected") {
+      return commitProvenanceRejection(store, task, attempt, initialStatus.started_at, now().toISOString(), provenance);
+    }
+  }
 
   let observationRevision = 0;
   let activityPhase = "preparing";
@@ -110,9 +149,11 @@ export async function runWorkerTask(options: RunWorkerTaskOptions): Promise<RunW
   // tracked and reaped with a bounded budget before the attempt's terminal
   // artifacts are committed; anything still pending after the budget is
   // dropped (a null identity is documented, valid state per A2) so it can
-  // never write again. The Windows platform probe resolves in roughly half a
-  // second (batch PowerShell Get-Process), so the budget is generous.
-  const IDENTITY_WRITE_REAP_MS = 2_000;
+  // never write again. The budget must stay compatible with the platform
+  // probe's contract timeout (DEFAULT_PROBE_TIMEOUT_MS = 5s on Windows via
+  // batch PowerShell Get-Process); a probe that answers within its contract
+  // must land identity evidence instead of being reaped as lost.
+  const IDENTITY_WRITE_REAP_MS = 5_500;
   const identityWrites = new Set<Promise<void>>();
   let identityWritesClosed = false;
   const trackIdentityWrite = (write: Promise<void>): void => {
@@ -238,6 +279,16 @@ export async function runWorkerTask(options: RunWorkerTaskOptions): Promise<RunW
       const adapter = options.adapter ?? new ZCodeAppServerAdapter({
         host: options.host,
         ...(options.resolver ? { resolver: options.resolver } : {}),
+        // ADR-011: the adapter submits a snapshot only after this attempt's
+        // termination cause is established. The dedicated store entry enforces
+        // attempt/running/PID/claim ownership in one state.lock; any diagnostic
+        // rejection is swallowed here so evidence delivery never alters
+        // execution, cleanup, or the committed result.
+        onFailureFacts: (facts) => {
+          try {
+            store.writeFailureFacts(taskId, attempt, process.pid, facts);
+          } catch { /* diagnostics-only: the write failure is not an execution failure */ }
+        },
         onEvent: (event) => {
           store.assertWorkerAttempt(taskId, attempt);
           if (event.type === "model_output") {
@@ -325,6 +376,7 @@ export async function runWorkerTask(options: RunWorkerTaskOptions): Promise<RunW
             report_candidate: checkpoint.reportCandidate,
             cleanup_error: checkpoint.cleanupError ?? null,
             cleanup_verified: checkpoint.cleanupVerified === true,
+            cleanup_member_pids: checkpoint.cleanupMemberPids ?? [],
             usage_normalized: normalizeUsage(checkpoint.usage, { source: "zcode_runtime_turn", scope: checkpoint.sessionId ? `session:${checkpoint.sessionId}` : null, observedAt: now().toISOString() }),
             model_profile: modelProfile,
           });
@@ -477,10 +529,20 @@ export async function runWorkerTask(options: RunWorkerTaskOptions): Promise<RunW
       flushModelOutput();
     } catch (error) {
       flushModelOutput();
+      const cleanupMemberPids = error instanceof BridgeError && error.code === "cleanup_failed"
+        ? error.memberPids ?? []
+        : [];
       failure = {
         code: error instanceof BridgeError ? error.code : "worker_error",
         message: error instanceof Error ? error.message : String(error),
       };
+      if (cleanupMemberPids.length > 0) {
+        store.writeAttemptMeta(taskId, attempt, "cleanup-failure.json", {
+          member_pids: [...new Set(cleanupMemberPids.filter((pid) => Number.isSafeInteger(pid) && pid > 0))],
+          complete: true,
+          last_error: failure.message.slice(0, 300),
+        });
+      }
     }
     await reapIdentityWrites(); // land identity evidence before terminal artifacts; bounded, then closed
     activityPhase = "finalizing";
@@ -488,6 +550,13 @@ export async function runWorkerTask(options: RunWorkerTaskOptions): Promise<RunW
 
     const finishedAt = now().toISOString();
     store.assertWorkerAttempt(taskId, attempt);
+    if (outcome?.cleanupError && outcome.cleanupMemberPids?.length) {
+      store.writeAttemptMeta(taskId, attempt, "cleanup-failure.json", {
+        member_pids: [...new Set(outcome.cleanupMemberPids.filter((pid) => Number.isSafeInteger(pid) && pid > 0))],
+        complete: true,
+        last_error: outcome.cleanupError.slice(0, 300),
+      });
+    }
     const stdoutLog = store.appendLog(taskId, "stdout", outcome?.stdout ? `${outcome.stdout}\n` : "");
     const stderrLog = store.appendLog(
       taskId,
@@ -551,6 +620,7 @@ export async function runWorkerTask(options: RunWorkerTaskOptions): Promise<RunW
             reportCandidate: outcome.reportCandidate,
             cleanupError: outcome.cleanupError ?? null,
             cleanupVerified: outcome.cleanupVerified === true,
+            cleanupMemberPids: outcome.cleanupMemberPids ?? [],
           }
         : null,
       usage_normalized: usage,
@@ -594,6 +664,43 @@ export async function runWorkerTask(options: RunWorkerTaskOptions): Promise<RunW
     if (persistCorrelationTimer) clearInterval(persistCorrelationTimer);
     await reapIdentityWrites();
   }
+}
+
+function commitProvenanceRejection(
+  store: TaskStore,
+  task: ReturnType<TaskStore["readTask"]>,
+  attempt: number,
+  startedAt: string | null,
+  finishedAt: string,
+  check: Extract<WorkerProvenanceCheck, { status: "rejected" }>,
+): RunWorkerTaskResult {
+  const message = `Worker provenance rejected: ${check.reason}`;
+  const result = buildTaskResult({
+    task,
+    attempt,
+    startedAt,
+    finishedAt,
+    outcome: null,
+    failure: { code: check.errorCode, message },
+  });
+  store.appendEvent(task.task_id, "worker_provenance_rejected", "Worker startup was refused by the Bridge provenance gate", {
+    error_code: check.errorCode,
+  }, finishedAt);
+  store.appendEvent(task.task_id, "task_finished", "Task reached terminal status: failed", {
+    status: "failed",
+    needs_master_decision: true,
+  }, finishedAt);
+  store.commitWorkerResult(task.task_id, attempt, result, {
+    status: "failed",
+    finished_at: finishedAt,
+    exit_code: null,
+    error_code: check.errorCode,
+    error: result.summary,
+    worker_pid: null,
+    zcode_pid: null,
+    cleanup_unverified: false,
+  });
+  return { status: result.status, result };
 }
 
 function interactionSummary(request: ZCodeInteractionRequest): string {

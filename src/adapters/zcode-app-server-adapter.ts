@@ -20,8 +20,27 @@ import type { ZCodeRunOutcome } from "./zcode-adapter.js";
 import { buildContinuePrompt, buildTaskPrompt } from "../prompts/task-prompt.js";
 import { BridgeError } from "../runtime/errors.js";
 import { loadPersistedRuntimeEnvironment, NodeRuntimeResolver } from "../runtime/resolver.js";
-import { captureSpawnGenerationIdentity, childStillOnSpawnGeneration, isProcessRunning, terminateProcessTree } from "./process-spawn.js";
+import { captureSpawnGenerationIdentity, childStillOnSpawnGeneration, isProcessRunning, terminateProcessTree, verifyProcessTreeClaimantsClean, type TerminateProcessTree, type TreeClaimantTarget } from "./process-spawn.js";
 import { createPlatformProbe, type ProcessProbe } from "../runtime/process-probe.js";
+import { WindowsTreeCleanupError, type WindowsTerminationReceipt } from "./windows-process-cleanup.js";
+import {
+  buildFailureFacts,
+  classifyFailureEvidence,
+  evaluateAcceptedUpgrade,
+  matchesExplicitQuotaText,
+  registeredCode,
+  registeredPhase,
+  MODEL_ERROR_CODES,
+  PROVIDER_BUSINESS_CODES,
+  ERROR_TYPE_REGISTRY,
+  RPC_DATA_CODE_REGISTRY,
+  RESULT_TYPE_REGISTRY,
+  REVIEWED_REASON_TOKENS,
+  type FailureEvidenceInput,
+  type FailureFactsV1,
+  type ProcessErrno,
+} from "../diagnostics/failure-facts.js";
+import { randomUUID } from "node:crypto";
 import { createMinimalOsEnv } from "../runtime/child-env.js";
 import { catalogProviderId, buildAccountProviderPayload, runtimeAuthReply, zcodeDataBaseDir, zcodeTasksIndexPath } from "../runtime/account-provider.js";
 import { resolveSessionPreferences } from "../runtime/session-preferences.js";
@@ -75,8 +94,37 @@ interface AppServerClient {
   child: ChildProcessWithoutNullStreams;
   request(method: string, params: JsonRecord): Promise<unknown>;
   replayEvents(events: unknown[]): void;
-  close(): Promise<void>;
+  close(): Promise<WindowsTerminationReceipt | null>;
   readonly stderr: string;
+}
+
+/**
+ * ADR-011: in-memory candidate facts attached (non-enumerably) to the error
+ * that terminates an attempt. Candidates are extracted where the evidence
+ * appears; only the selected termination path may submit the root-cause slot.
+ */
+type FactsCandidate =
+  | { kind: "rpc"; method: string; code: number | null; dataCode: string | null }
+  | { kind: "spawn"; errno: ProcessErrno | null }
+  | { kind: "process_exit" }
+  | { kind: "transport"; method: string }
+  | { kind: "turn"; input: FailureEvidenceInput }
+  | { kind: "protocol" };
+
+const FACTS_CANDIDATE: unique symbol = Symbol("zcodeFailureFactsCandidate");
+
+interface MarkedError extends Error {
+  [FACTS_CANDIDATE]?: FactsCandidate;
+}
+
+function withFactsCandidate<T extends Error>(error: T, candidate: FactsCandidate): T {
+  Object.defineProperty(error, FACTS_CANDIDATE, { value: candidate, enumerable: false, configurable: true });
+  return error;
+}
+
+function readFactsCandidate(error: unknown): FactsCandidate | null {
+  if (!(error instanceof Error)) return null;
+  return (error as MarkedError)[FACTS_CANDIDATE] ?? null;
 }
 
 interface RunEntry {
@@ -133,6 +181,18 @@ interface RunEntry {
   bindingTimer: NodeJS.Timeout | null;
   pendingTimer: NodeJS.Timeout | null;
   replayConsecutiveFailures: number;
+  // ADR-011 send-acceptance evidence (M2) and root-cause slot state (M1).
+  sendAttempted: boolean;
+  sendAcknowledged: boolean;
+  acceptedEvidence: "no" | "unknown" | "yes";
+  sendSeqBaseline: number | null;
+  submitCorrelationId: string | null;
+  boundTurnIds: Set<string>;
+  terminalFactsSubmitted: boolean;
+  /** ADR-011 S1: set by the child error handler; whichever rejection wins the
+   * race, the termination is adjudicated from this spawn fact, not from the
+   * public event order. */
+  spawnFailure: { errno: ProcessErrno | null } | null;
 }
 
 interface TurnResult {
@@ -169,6 +229,8 @@ export interface ZCodeAppServerAdapterOptions {
    */
   homeDir?: string;
   host?: BridgeHostProfile;
+  /** Candidate-only execution profile; omitted JSON path behavior is unchanged. */
+  executionProfileId?: string;
   now?: () => Date;
   resolveInteraction?: (request: ZCodeInteractionRequest, signal: AbortSignal) => Promise<Record<string, unknown>>;
   onOutcomeCheckpoint?: (outcome: ZCodeRunOutcome) => void;
@@ -181,6 +243,31 @@ export interface ZCodeAppServerAdapterOptions {
   /** Platform probe used for the spawn-generation identity capture (ADR-009);
    * defaults to the real platform probe. */
   probe?: ProcessProbe;
+  /** Test seam for identity-bound cleanup and its recorded-tree fallback. */
+  terminateProcessTreeImpl?: TerminateProcessTree;
+  verifyTreeClean?: (targets: readonly TreeClaimantTarget[]) => Promise<{ clean: boolean; livePids: readonly number[]; observedPids: readonly number[] }>;
+  /** Synchronous, best-effort test observation; contains no process identity. */
+  onCleanupDecisionTrace?: (decision: "root_exited_branch") => void;
+  /**
+   * ADR-011 private failure-facts sink, invoked once per attempt after the
+   * termination cause is established. The sink runs behind a diagnostic
+   * boundary: the adapter isolates synchronous throws and asynchronous
+   * rejections so evidence delivery can never alter execution or cleanup.
+   */
+  onFailureFacts?: (facts: FailureFactsV1) => void;
+  /**
+   * M2: enable the strict no-ACK acceptance upgrade. Only fixture runtimes
+   * with a *verified* native send-correlation echo may set this; production
+   * keeps it disabled, so without an ACK the evidence stays "unknown" (NOT RUN
+   * on real runtimes — no unverified protocol parameter is added).
+   */
+  nativeSendCorrelationVerified?: boolean;
+  /**
+   * Test/diagnostic observation of the locally generated send boundary. The
+   * correlation ID is never sent to the runtime in P0; fixtures use this hook
+   * to simulate a verified native echo. Production leaves it unset.
+   */
+  onSendBoundary?: (boundary: { submitCorrelationId: string }) => void;
 }
 
 const RPC_TIMEOUT_MS = 30_000;
@@ -204,12 +291,19 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
   readonly #childEnvBase: NodeJS.ProcessEnv;
   readonly #homeDir: string;
   readonly #host: BridgeHostProfile;
+  readonly #executionProfileId: string | undefined;
   readonly #now: () => Date;
   readonly #resolveInteraction: ZCodeAppServerAdapterOptions["resolveInteraction"];
   readonly #onOutcomeCheckpoint: ZCodeAppServerAdapterOptions["onOutcomeCheckpoint"];
   readonly #onInteractionState: ZCodeAppServerAdapterOptions["onInteractionState"];
+  readonly #terminateProcessTree: TerminateProcessTree;
+  readonly #verifyTreeClean: NonNullable<ZCodeAppServerAdapterOptions["verifyTreeClean"]>;
+  readonly #onCleanupDecisionTrace: ZCodeAppServerAdapterOptions["onCleanupDecisionTrace"];
   readonly #turnBindingCompatMs: number;
   readonly #replayIdleMs: number;
+  readonly #onFailureFacts: ZCodeAppServerAdapterOptions["onFailureFacts"];
+  readonly #nativeSendCorrelationVerified: boolean;
+  readonly #onSendBoundary: ZCodeAppServerAdapterOptions["onSendBoundary"];
   readonly #browser: AdapterBrowserOptions | undefined;
   readonly #probe: ProcessProbe;
   readonly #runs = new Map<AgentHandle, RunEntry>();
@@ -222,13 +316,20 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     this.#childEnvBase = options.childEnvBase ?? process.env;
     this.#homeDir = options.homeDir ?? homedir();
     this.#host = validateHostProfile(options.host ?? codexHostProfile(this.#homeDir));
+    this.#executionProfileId = options.executionProfileId;
     this.#now = options.now ?? (() => new Date());
     this.#probe = options.probe ?? createPlatformProbe();
     this.#resolveInteraction = options.resolveInteraction;
     this.#onOutcomeCheckpoint = options.onOutcomeCheckpoint;
     this.#onInteractionState = options.onInteractionState;
+    this.#terminateProcessTree = options.terminateProcessTreeImpl ?? terminateProcessTree;
+    this.#verifyTreeClean = options.verifyTreeClean ?? verifyProcessTreeClaimantsClean;
+    this.#onCleanupDecisionTrace = options.onCleanupDecisionTrace;
     this.#turnBindingCompatMs = options.turnBindingCompatMs ?? 5_000;
     this.#replayIdleMs = options.replayIdleMs ?? 10_000;
+    this.#onFailureFacts = options.onFailureFacts;
+    this.#nativeSendCorrelationVerified = options.nativeSendCorrelationVerified === true;
+    this.#onSendBoundary = options.onSendBoundary;
     this.#browser = options.browser;
   }
 
@@ -356,6 +457,14 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       bindingTimer: null,
       pendingTimer: null,
       replayConsecutiveFailures: 0,
+      sendAttempted: false,
+      sendAcknowledged: false,
+      acceptedEvidence: "no",
+      sendSeqBaseline: null,
+      submitCorrelationId: null,
+      boundTurnIds: new Set<string>(),
+      terminalFactsSubmitted: false,
+      spawnFailure: null,
       browserConfig: null,
       browserHost: null,
       browserHostClosed: false,
@@ -390,7 +499,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       const runtimeEnv = loadPersistedRuntimeEnvironment(this.#childEnvBase, this.#homeDir, this.#host);
       const timeoutMs = this.#timeoutMs ?? resolveTaskTimeout(task, runtimeEnv);
       const config = await this.#resolver.resolve();
-      const preferences = resolveSessionPreferences(task.model, runtimeEnv);
+      const preferences = resolveSessionPreferences(task.model, runtimeEnv, this.#executionProfileId);
       const childEnv = this.#buildChildEnv(config, runtimeEnv);
       entry.onEvent({ type: "zcode_starting", summary: "Starting ZCode streaming runtime" });
       const client = this.#startAppServer(config, workspace.canonicalPath, childEnv, entry);
@@ -696,6 +805,16 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         : turnResult.resultType && turnResult.resultType !== "success" ? "error" : "completed";
       let outcome: ZCodeRunOutcome;
       if (turnResult.resultType && turnResult.resultType !== "success") {
+        // R1: an execution-terminal resultType is an established root cause;
+        // the specific value stays private while the public code stays generic.
+        if (turnResult.resultType !== "cancelled" && !entry.terminalFactsSubmitted) {
+          this.#emitFailureFacts(entry, {
+            source: "turn_event",
+            phase: "turn_terminal",
+            resultType: turnResult.resultType,
+            accepted: entry.acceptedEvidence,
+          });
+        }
         outcome = {
           attempts: 1,
           cancelled: turnResult.resultType === "cancelled",
@@ -722,6 +841,13 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         };
       } else if (turnResult.resultType === null) {
         // Unknown terminal: event name alone never proves success (B2).
+        if (!entry.terminalFactsSubmitted) {
+          this.#emitFailureFacts(entry, {
+            source: "turn_event",
+            phase: "turn_terminal",
+            accepted: entry.acceptedEvidence,
+          });
+        }
         const parsedUnknown = parseAgentReport(turnResult.response);
         outcome = {
           attempts: 1,
@@ -819,12 +945,22 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       // itself exited cleanly.
       await this.#closeBrowserHost(entry);
       try {
-        await client.close();
+        const cleanupTreeReceipt = await client.close();
         entry.child = null;
         if (entry.browserCleanupError) {
           outcome = { ...outcome, cleanupError: `Managed browser cleanup could not be verified: ${entry.browserCleanupError}`, cleanupVerified: false };
-        } else {
+        } else if (cleanupTreeReceipt) {
+          outcome = { ...outcome, cleanupVerified: true, cleanupTreeReceipt };
+        } else if (process.platform !== "win32") {
+          // POSIX termination resolves only after the process group is absent;
+          // its contract has no Windows identity-bound receipt.
           outcome = { ...outcome, cleanupVerified: true };
+        } else {
+          outcome = {
+            ...outcome,
+            cleanupError: "Identity-bound Windows process-tree cleanup receipt was unavailable",
+            cleanupVerified: false,
+          };
         }
         try { this.#onOutcomeCheckpoint?.(outcome); }
         catch (error) {
@@ -832,11 +968,25 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         }
       } catch (error) {
         const cleanupError = error instanceof Error ? error.message : String(error);
+        const cleanupScan = await this.#scanRootExitedCleanup(client, entry, error);
+        const cleanupMemberPids = cleanupScan?.memberPids ?? this.#cleanupMemberPids(error);
+        const cleanupVerifiedByRecordedScan = cleanupScan?.clean === true;
+        if (cleanupVerifiedByRecordedScan && !entry.browserCleanupError) entry.onEvent({
+          type: "cleanup_verified",
+          summary: "The captured app-server generation had exited; an ADR-009 recorded-tree claimant scan found no live claimants",
+          details: { pid: client.child.pid, evidence: "recorded_tree_claimant_scan" },
+        });
         const combined = entry.browserCleanupError
-          ? `${cleanupError} (managed browser cleanup also unverified: ${entry.browserCleanupError})`
+          ? `Managed browser cleanup could not be verified: ${entry.browserCleanupError} (app-server cleanup also unverified: ${cleanupError})`
           : cleanupError;
-        entry.onEvent({ type: "cleanup_unverified", summary: combined.slice(0, 1_500), details: { pid: client.child.pid } });
-        outcome = { ...outcome, cleanupError: combined, cleanupVerified: false };
+        const cleanupVerified = cleanupVerifiedByRecordedScan && !entry.browserCleanupError;
+        if (!cleanupVerified) entry.onEvent({ type: "cleanup_unverified", summary: combined.slice(0, 1_500), details: { pid: client.child.pid } });
+        outcome = {
+          ...outcome,
+          cleanupError: cleanupVerified ? null : combined,
+          cleanupVerified,
+          ...(cleanupMemberPids.length > 0 ? { cleanupMemberPids } : {}),
+        };
         try { this.#onOutcomeCheckpoint?.(outcome); }
         catch (checkpointError) {
           entry.onEvent({ type: "outcome_checkpoint_failed", summary: checkpointError instanceof Error ? checkpointError.message : String(checkpointError) });
@@ -844,15 +994,63 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       }
       return outcome;
     } catch (error) {
+      // Runtime timeout bounds an active ZCode turn. Once the turn has failed
+      // or been cancelled, cleanup follows its own bounded process-tree
+      // budget and must not relabel that already-observed terminal event.
+      if (timer) { clearTimeout(timer); timer = undefined; }
+      if (warningTimer) { clearTimeout(warningTimer); warningTimer = undefined; }
       await syncDesktopStatus(desktopTask, entry.cancelRequested ? null : "error", entry.onEvent);
       entry.abort.abort();
+      // ADR-011 M1: the root-cause slot is filled only here, after this error
+      // is established as the attempt's termination (never on timeout,
+      // cancellation, or cleanup-only failures), and before cleanup so the
+      // evidence survives a failing teardown. Timeout/cancel/cleanup keep
+      // their lifecycle semantics and never fabricate provider facts.
+      // ADR-011 S1: an observed child spawn error adjudicates the termination
+      // regardless of which rejection won the race with the event loop.
+      const spawnRecovery = entry.spawnFailure && !entry.timedOut && !entry.cancelRequested ? entry.spawnFailure : null;
+      if (!entry.terminalFactsSubmitted && !entry.timedOut && !entry.cancelRequested) {
+        if (spawnRecovery) {
+          this.#emitFailureFacts(entry, {
+            source: "process",
+            phase: "spawn",
+            processErrno: spawnRecovery.errno,
+            accepted: entry.acceptedEvidence,
+          });
+        } else {
+          this.#submitTerminalFactsFromError(entry, error);
+        }
+      }
       await this.#closeBrowserHost(entry);
+      let cleanupFailure: unknown;
       try {
         if (entry.client) await entry.client.close();
         else if (entry.child?.pid) await this.#terminateOwnedChild(entry);
       } catch (cleanupError) {
-        const browserSuffix = entry.browserCleanupError ? ` Managed browser cleanup is also unverified: ${entry.browserCleanupError}` : "";
-        throw new BridgeError("cleanup_failed", `ZCode process termination could not be verified; workspace remains occupied.${browserSuffix}`, { cause: cleanupError });
+        cleanupFailure = cleanupError;
+      }
+      if (cleanupFailure) {
+        const cleanupScan = entry.client
+          ? await this.#scanRootExitedCleanup(entry.client, entry, cleanupFailure)
+          : null;
+        const memberPids = cleanupScan?.memberPids ?? this.#cleanupMemberPids(cleanupFailure);
+        if (cleanupScan?.clean) entry.onEvent({
+          type: "cleanup_verified",
+          summary: "The captured app-server generation had exited; an ADR-009 recorded-tree claimant scan found no live claimants",
+          details: { pid: entry.child?.pid ?? null, evidence: "recorded_tree_claimant_scan" },
+        });
+        if (!cleanupScan?.clean) {
+          const browserSuffix = entry.browserCleanupError ? ` Managed browser cleanup is also unverified: ${entry.browserCleanupError}` : "";
+          entry.onEvent({
+            type: "cleanup_unverified",
+            summary: `ZCode process termination could not be verified; workspace remains occupied.${browserSuffix}`,
+            details: { pid: entry.child?.pid ?? null, member_pids: memberPids },
+          });
+          throw new BridgeError("cleanup_failed", `ZCode process termination could not be verified; workspace remains occupied.${browserSuffix}`, {
+            cause: cleanupFailure,
+            memberPids,
+          });
+        }
       }
       if (entry.browserCleanupError) {
         throw new BridgeError(
@@ -863,9 +1061,16 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       }
       entry.child = null;
       const baseMessage = error instanceof Error ? error.message : String(error);
-      const message = entry.timedOut ? "ZCode run exceeded its wall-clock budget" : entry.cancelRequested ? "ZCode task cancelled" : baseMessage;
-      const code = entry.timedOut ? "timeout" : entry.cancelRequested ? "cancelled" : error instanceof BridgeError ? error.code : "zcode_nonzero_exit";
+      let message = entry.timedOut ? "ZCode run exceeded its wall-clock budget" : entry.cancelRequested ? "ZCode task cancelled" : baseMessage;
+      let code = entry.timedOut ? "timeout" : entry.cancelRequested ? "cancelled" : error instanceof BridgeError ? error.code : "zcode_nonzero_exit";
+      if (spawnRecovery) {
+        code = "spawn_failed";
+        message = spawnRecovery.errno
+          ? `ZCode app-server could not be started (${spawnRecovery.errno}); the configured runtime executable was not found or cannot be executed.`
+          : "ZCode app-server process failed before or during startup";
+      }
       entry.onEvent({ type: "error", summary: message.slice(0, 1_500), details: { error_code: code } });
+      if (spawnRecovery) throw new BridgeError("spawn_failed", message);
       if (error instanceof BridgeError) throw error;
       throw new BridgeError(code, message);
     } finally {
@@ -874,6 +1079,37 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       entry.abort.abort();
       entry.finished = true;
       void startedAt;
+    }
+  }
+
+  #cleanupMemberPids(error: unknown): number[] {
+    const value = (error as { memberPids?: unknown } | null)?.memberPids;
+    return Array.isArray(value)
+      ? [...new Set(value.filter((pid): pid is number => Number.isSafeInteger(pid) && (pid as number) > 0))]
+      : [];
+  }
+
+  async #scanRootExitedCleanup(
+    client: AppServerClient,
+    entry: RunEntry,
+    error: unknown,
+  ): Promise<{ clean: boolean; memberPids: number[] } | null> {
+    let memberPids = this.#cleanupMemberPids(error);
+    if ((error as { code?: unknown } | null)?.code !== "process_tree_root_exited" || !client.child.pid) return null;
+    const pid = client.child.pid;
+    memberPids = [...new Set([pid, ...memberPids])];
+    const fingerprint = entry.childIdentity?.pid === pid ? entry.childIdentity.fingerprint : null;
+    if (!fingerprint) return { clean: false, memberPids };
+    try {
+      const scan = await this.#verifyTreeClean([{ pid, fingerprint }]);
+      memberPids = [...new Set([...memberPids, ...scan.observedPids])];
+      return { clean: scan.clean && scan.livePids.length === 0, memberPids };
+    } catch (scanError) {
+      // An unavailable, malformed, or rejected scan is not cleanup evidence.
+      // A failed scan can already have observed intermediate members. Keep
+      // them for the checkpoint/recovery union even if those parents exit.
+      memberPids = [...new Set([...memberPids, ...this.#cleanupMemberPids(scanError)])];
+      return { clean: false, memberPids };
     }
   }
 
@@ -909,11 +1145,19 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       get signalCode() { return child.signalCode; },
       get exitSeen() { return entry.childExitSeen; },
     };
+    let identityCapture: Promise<{ pid: number; fingerprint: string } | null> | null = null;
     if (process.platform === "win32" && child.pid) {
-      void captureSpawnGenerationIdentity(generationChild, this.#probe).then((identity) => {
+      identityCapture = captureSpawnGenerationIdentity(generationChild, this.#probe).then((identity) => {
         entry.childIdentity = identity;
+        return identity;
       });
     }
+    let spawned = false;
+    child.once("spawn", () => { spawned = true; });
+    // ADR-011 S1: an async spawn failure (ENOENT/EACCES/EPERM) must not be
+    // masked by later "closed before ..." rejections; every subsequent request
+    // surfaces the same marked spawn error so the termination path maps it.
+    let spawnFailure: Error | null = null;
     const pending = new Map<string | number, PendingRpc>();
     // ADR-008: a fatal wire-format failure ends every pending RPC and the turn
     // wait immediately, stops buffering, and reports stable reason + safe size
@@ -923,16 +1167,16 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     // consumed one newline-delimited line at a time; the sum of coalesced
     // frames is never treated as a single frame.
     let protocolFatal: Error | null = null;
-    const failProtocol = (code: "frame_over_limit" | "invalid_frame", frameBytes: number, cause?: unknown, detail?: string): void => {
+    const failProtocol = (code: "frame_over_limit" | "invalid_frame", frameBytes: number, detail?: string): void => {
       if (protocolFatal) return;
       const message = code === "frame_over_limit"
         ? `ZCode app-server protocol frame exceeded the 16 MiB UTF-8 limit (observed ${frameBytes} bytes, limit ${MAX_FRAME_BYTES} bytes)`
         : `ZCode app-server protocol stream delivered an invalid JSON frame (${frameBytes} bytes)${detail ? `: ${detail}` : ""}`;
-      protocolFatal = cause === undefined ? new Error(message) : new Error(message, { cause });
+      protocolFatal = withFactsCandidate(new Error(message), { kind: "protocol" });
       stdoutBuffer = "";
       for (const call of pending.values()) {
         clearTimeout(call.timer);
-        call.reject(new Error(`${message}; ended pending ${call.method} request`));
+        call.reject(withFactsCandidate(new Error(`${message}; ended pending ${call.method} request`), { kind: "protocol" }));
       }
       pending.clear();
       entry.onEvent({
@@ -973,14 +1217,14 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         let parsed: unknown;
         try {
           parsed = JSON.parse(line);
-        } catch (error) {
-          failProtocol("invalid_frame", frameBytes, error);
+        } catch {
+          failProtocol("invalid_frame", frameBytes);
           return;
         }
         // A JSON-RPC frame's top level must be an object; null, arrays, and
         // scalars are wire-format defects, not handler inputs (ADR-008).
         if (!isRecord(parsed)) {
-          failProtocol("invalid_frame", frameBytes, undefined, "the top-level frame value must be a JSON object");
+          failProtocol("invalid_frame", frameBytes, "the top-level frame value must be a JSON object");
           return;
         }
         const message = parsed;
@@ -1005,20 +1249,41 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       if (stderr.length < 64_000) stderr += chunk.slice(0, 64_000 - stderr.length);
     });
     child.on("error", (error) => {
-      closed = true;
-      for (const call of pending.values()) { clearTimeout(call.timer); call.reject(error); }
+      if (!spawned) closed = true;
+      // ADR-011 M4/S1: a spawn failure's raw message can carry the configured
+      // executable path/arguments, so public propagation uses fixed text and
+      // the errno only. ENOENT/EACCES/EPERM map to the existing spawn_failed
+      // code (an async error is spawn evidence even after app_server_started);
+      // facts keep the process-plane evidence without guessing a provider.
+      const rawErrno = typeof (error as NodeJS.ErrnoException).code === "string" ? (error as NodeJS.ErrnoException).code as string : null;
+      const errno = rawErrno === "ENOENT" || rawErrno === "EACCES" || rawErrno === "EPERM" ? rawErrno as ProcessErrno : null;
+      const startupFailure = !spawned && errno !== null;
+      const sanitized = withFactsCandidate(
+        startupFailure
+          ? new BridgeError("spawn_failed", `ZCode app-server could not be started (${errno}); the configured runtime executable was not found or cannot be executed.`)
+          : new Error("ZCode app-server process failed before or during startup"),
+        startupFailure ? { kind: "spawn", errno } : { kind: "process_exit" },
+      );
+      if (startupFailure) {
+        spawnFailure = sanitized;
+        entry.spawnFailure = { errno };
+      }
+      for (const call of pending.values()) {
+        clearTimeout(call.timer);
+        call.reject(withFactsCandidate(new Error(`ZCode app-server process failed; ended pending ${call.method} request`), startupFailure ? { kind: "spawn", errno } : { kind: "process_exit" }));
+      }
       pending.clear();
-      entry.rejectTurn(error);
+      entry.rejectTurn(sanitized);
     });
     child.on("close", (code, signal) => {
       closed = true;
       for (const call of pending.values()) {
         clearTimeout(call.timer);
-        call.reject(new Error(`ZCode app-server exited (${String(code)}${signal ? `, ${signal}` : ""})`));
+        call.reject(withFactsCandidate(new Error(`ZCode app-server exited (${String(code)}${signal ? `, ${signal}` : ""})`), { kind: "process_exit" }));
       }
       pending.clear();
       if (!entry.finished && !entry.timedOut && !entry.cancelRequested) {
-        entry.rejectTurn(new Error(`ZCode app-server exited before turn completion (${String(code)})`));
+        entry.rejectTurn(withFactsCandidate(new Error(`ZCode app-server exited before turn completion (${String(code)})`), { kind: "process_exit" }));
       }
     });
 
@@ -1027,22 +1292,32 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       // A latched fatal protocol reason blocks every later request, so the
       // original wire-format failure surfaces instead of a later timeout
       // (ADR-008).
-      if (protocolFatal) return Promise.reject(new Error(`${protocolFatal.message}; blocked ${method} request after the fatal protocol error`));
-      if (closed) return Promise.reject(new Error(`ZCode app-server is closed before ${method}`));
+      if (protocolFatal) return Promise.reject(withFactsCandidate(new Error(`${protocolFatal.message}; blocked ${method} request after the fatal protocol error`), { kind: "protocol" }));
+      if (closed) {
+        if (spawnFailure) return Promise.reject(spawnFailure);
+        return Promise.reject(withFactsCandidate(new Error(`ZCode app-server is closed before ${method}`), { kind: "rpc", method, code: null, dataCode: null }));
+      }
       const id = ++rpcId;
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
           pending.delete(id);
-          reject(new Error(`ZCode app-server request timed out: ${method}`));
+          reject(withFactsCandidate(new Error(`ZCode app-server request timed out: ${method}`), { kind: "rpc", method, code: null, dataCode: null }));
         }, RPC_TIMEOUT_MS);
         timer.unref();
         pending.set(id, { method, resolve, reject, timer });
-        child.stdin.write(`${JSON.stringify({ id, method, params })}\n`, (error) => {
-          if (!error) return;
+        // ADR-011 M2: attempting the send moves the acceptance evidence from
+        // "no" to "unknown"; only an ACK (or verified strict correlation) may
+        // later establish "yes". The correlation ID is generated locally and
+        // never sent as a protocol parameter in P0.
+        if (method === "session/send") this.#beginSendBoundary(entry);
+        const rejectWrite = (): void => {
           clearTimeout(timer);
           pending.delete(id);
-          reject(error);
-        });
+          reject(withFactsCandidate(new Error("ZCode app-server transport write failed"), { kind: "transport", method }));
+        };
+        try {
+          child.stdin.write(`${JSON.stringify({ id, method, params })}\n`, (error) => { if (error) rejectWrite(); });
+        } catch { rejectWrite(); }
       });
     };
     const replayEvents = (events: unknown[]): void => {
@@ -1054,10 +1329,48 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         });
       }
     };
-    const close = async (): Promise<void> => {
+    let terminationStarted = false;
+    const closeWindowsTree = async (): Promise<WindowsTerminationReceipt | null> => {
+      if (!child.pid) return null;
+      const identity = entry.childIdentity?.pid === child.pid ? entry.childIdentity : null;
+      if (!terminationStarted && entry.childExitSeen && identity?.fingerprint) {
+        try { this.#onCleanupDecisionTrace?.("root_exited_branch"); } catch { /* Diagnostic callbacks cannot affect cleanup. */ }
+        // The original ChildProcess exit was observed; no signal can reach
+        // that generation now. Do not start a termination transaction solely
+        // to rediscover this fact. This is NOT a clean-tree verdict: the
+        // caller must still run the identity-bound recorded claimant scan,
+        // including its PID-reuse and unknown-descendant safety gates.
+        throw new WindowsTreeCleanupError("process_tree_root_exited", "process_tree_root_exited: original child exit observed; recorded-tree verification required (no termination transaction started)", [child.pid]);
+      }
+      // A previous transaction may have observed members before failing.
+      // Never replace such a failure with the original-child-exit shortcut.
+      terminationStarted = true;
+      const terminated = await this.#terminateProcessTree(child.pid, {
+        graceMs: 500,
+        killWaitMs: 5_000,
+        expectedRootFingerprint: identity?.fingerprint ?? null,
+      });
+      return terminated.windows ?? null;
+    };
+    const close = async (): Promise<WindowsTerminationReceipt | null> => {
       if (closed) {
-        if (process.platform !== "win32" && child.pid) await terminateProcessTree(child.pid);
-        return;
+        if (child.pid) {
+          if (process.platform === "win32") {
+            return closeWindowsTree();
+          } else {
+            await terminateProcessTree(child.pid);
+          }
+        }
+        return null;
+      }
+      // Keep the original process generation alive until its caller-bound
+      // identity probe settles. Ending stdin first can let a short-lived
+      // runtime exit while the OS probe is still running; the capture then
+      // correctly rejects the now-unverifiable PID, and cleanup must fail
+      // closed. The probe itself is bounded by ProcessProbe's configured
+      // timeout; a missing identity still remains a cleanup failure.
+      if (process.platform === "win32" && childStillOnSpawnGeneration(generationChild)) {
+        await identityCapture;
       }
       child.stdin.end();
       await new Promise<void>((resolve) => {
@@ -1065,24 +1378,23 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         timer.unref();
         child.once("close", () => { clearTimeout(timer); resolve(); });
       });
-      // The close event is authoritative for this direct child. If it races
-      // the grace timer, check the PID before terminating to avoid turning an
-      // already-exited app-server into a cleanup failure on Windows. The
-      // Windows path additionally requires the spawn-captured identity
-      // (ADR-009): after 'exit' the PID may be recycled and is never
-      // signalled; without a captured identity it refuses (cleanup_failed).
-      if (closed) {
-        if (process.platform !== "win32" && child.pid) await terminateProcessTree(child.pid);
-        return;
+      // Windows must run the identity-bound tree operation even when the
+      // direct child has already exited. A missing root is not proof that its
+      // descendants are gone; process_tree_root_exited is resolved only by
+      // the recorded-tree claimant scan in getResult's cleanup path. The
+      // expected spawn identity prevents signaling a recycled PID.
+      if (process.platform === "win32" && child.pid) {
+        return closeWindowsTree();
       }
       if (child.pid && isProcessRunning(child.pid)) {
-        if (entry.childExitSeen) return;
-        await terminateProcessTree(child.pid, {
+        if (entry.childExitSeen) return null;
+        await this.#terminateProcessTree(child.pid, {
           graceMs: 500,
           killWaitMs: 5_000,
           expectedRootFingerprint: entry.childIdentity?.pid === child.pid ? entry.childIdentity.fingerprint : null,
         });
       }
+      return null;
     };
     return { child, request, replayEvents, close, get stderr() { return stderr; } };
   }
@@ -1147,19 +1459,61 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       pending.delete(id);
       if (message.error && typeof message.error === "object") {
         const error = message.error as JsonRecord;
-        call.reject(new Error(`ZCode app-server request failed for ${call.method}${typeof error.code === "number" ? ` (code ${error.code})` : ""}`));
+        // ADR-011: keep the public rejection message unchanged (method and
+        // numeric JSON-RPC code only); the registered business codes from
+        // error.data.code become an in-memory candidate for the termination
+        // path, never a public field (G-03, M1).
+        const data = asRecord(error.data);
+        const rpcCode = typeof error.code === "number" && Number.isSafeInteger(error.code) ? error.code : null;
+        const dataCode = registeredCode(data.code, RPC_DATA_CODE_REGISTRY);
+        call.reject(withFactsCandidate(
+          new Error(`ZCode app-server request failed for ${call.method}${typeof error.code === "number" ? ` (code ${error.code})` : ""}`),
+          { kind: "rpc", method: call.method, code: rpcCode, dataCode },
+        ));
       } else {
         call.resolve(message.result);
+        // ADR-011 M2: the send ACK is the strongest acceptance evidence.
+        if (call.method === "session/send") {
+          entry.sendAcknowledged = true;
+          entry.acceptedEvidence = "yes";
+        }
       }
       return;
     }
     if (message.method === "session/event") {
       const params = asRecord(message.params);
       if (params.sessionId !== undefined && params.sessionId !== entry.sessionId) return;
-      if (!entry.acceptingTurn) return;
       const type = typeof params.type === "string" ? params.type : "";
       const payload = asRecord(params.payload);
       const turnId = typeof params.turnId === "string" ? params.turnId : typeof payload.turnId === "string" ? payload.turnId : null;
+      // ADR-011 M2: acceptance evidence is evaluated independently of the
+      // compat progress filters below. Without an ACK, "yes" requires verified
+      // native send correlation (production keeps this disabled, so late or
+      // replayed turn events can never upgrade "unknown" — A6).
+      if (
+        this.#nativeSendCorrelationVerified &&
+        typeof params.seq === "number" && params.seq > entry.lastEventSeq &&
+        (!entry.turnId || turnId === entry.turnId) &&
+        entry.sendAttempted &&
+        !entry.sendAcknowledged &&
+        entry.acceptedEvidence === "unknown"
+      ) {
+        const upgrade = evaluateAcceptedUpgrade({
+          sessionId: entry.sessionId ?? "",
+          seqBaseline: entry.sendSeqBaseline,
+          boundTurnIds: entry.boundTurnIds,
+          submitCorrelationId: entry.submitCorrelationId ?? "",
+          nativeCorrelationVerified: true,
+        }, {
+          sessionId: typeof params.sessionId === "string" ? params.sessionId : null,
+          seq: typeof params.seq === "number" ? params.seq : null,
+          turnId,
+          correlationEcho: this.#extractSubmitCorrelationEcho(payload),
+        });
+        if (upgrade === "yes") entry.acceptedEvidence = "yes";
+      }
+      if (turnId) entry.boundTurnIds.add(turnId);
+      if (!entry.acceptingTurn) return;
       if (entry.awaitingTurnStart && type !== "turn.started") return;
       if (entry.turnId && turnId && entry.turnId !== turnId) return;
       if (typeof params.seq === "number") {
@@ -1199,7 +1553,29 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       if (type === "turn.failed") {
         entry.acceptingTurn = false;
         entry.turnCompletedAt = this.#now().toISOString();
-        const quotaExhausted = providerReportedUsageExhaustion(payload.error);
+        // ADR-011: evidence-strength adjudication replaces the old text-only
+        // quota boolean. Structured rate-limit codes defeat quota-flavored
+        // text (false-positive fix); explicit quota business codes keep
+        // zcode_usage_exhausted and cover a generic HTTP 429. The failure is
+        // associated error carries its facts to the selected termination
+        // path; a competing RPC rejection must not inherit this candidate.
+        const extraction = extractTurnFailureEvidence(payload.error);
+        const upstreamPhase = typeof asRecord(payload.error).turnPhase === "string"
+          ? asRecord(payload.error).turnPhase as string
+          : typeof payload.turnPhase === "string" ? payload.turnPhase as string : null;
+        const classification = classifyFailureEvidence({
+          source: "turn_event",
+          phase: upstreamPhase === null ? "turn_terminal" : registeredPhase(upstreamPhase),
+          accepted: entry.acceptedEvidence,
+          ...extraction,
+        });
+        const factsInput: FailureEvidenceInput = {
+          source: "turn_event",
+          phase: upstreamPhase === null ? "turn_terminal" : registeredPhase(upstreamPhase),
+          accepted: entry.acceptedEvidence,
+          ...extraction,
+        };
+        const quotaExhausted = classification.category === "quota_exhausted";
         const failure = quotaExhausted
           ? new BridgeError(
               "zcode_usage_exhausted",
@@ -1207,7 +1583,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
             )
           : new Error("ZCode turn failed");
         this.#publishSessionEvent(type, payload, entry, params, quotaExhausted ? "zcode_usage_exhausted" : "zcode_nonzero_exit");
-        entry.rejectTurn(failure);
+        entry.rejectTurn(withFactsCandidate(failure, { kind: "turn", input: factsInput }));
         return;
       }
       this.#publishSessionEvent(type, payload, entry, params);
@@ -1471,7 +1847,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     entry.resolveTurn({
       response: rawResponse.length > MAX_CAPTURE_CHARS ? rawResponse.slice(0, MAX_CAPTURE_CHARS) : rawResponse,
       usage: publicUsage(payload.usage),
-      resultType: typeof payload.resultType === "string" ? payload.resultType : null,
+      resultType: registeredCode(payload.resultType, RESULT_TYPE_REGISTRY),
       binding: entry.turnBinding,
       startedAt: entry.turnStartedAt,
       completedAt: entry.turnCompletedAt ?? this.#now().toISOString(),
@@ -1496,6 +1872,104 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       session_id: entry.sessionId,
       turn_id: entry.turnId,
     };
+  }
+
+  /** ADR-011 M2: the send boundary snapshot taken when session/send is first
+   * attempted. Acceptance starts as "no", becomes "unknown" at the write
+   * attempt, and only an ACK (or verified strict correlation) reaches "yes". */
+  #beginSendBoundary(entry: RunEntry): void {
+    if (entry.sendAttempted) return;
+    entry.sendAttempted = true;
+    entry.submitCorrelationId = randomUUID();
+    entry.sendSeqBaseline = entry.lastEventSeq > 0 ? entry.lastEventSeq : null;
+    if (entry.acceptedEvidence === "no") entry.acceptedEvidence = "unknown";
+    try {
+      this.#onSendBoundary?.({ submitCorrelationId: entry.submitCorrelationId });
+    } catch {
+      // observation hook failures are diagnostics too
+    }
+  }
+
+  /**
+   * Reads the runtime's echo of this send's correlation ID from a turn event.
+   * P0 adds no unverified protocol parameter to session/send, so production
+   * never produces an echo; the location is only meaningful for fixture
+   * runtimes whose native correlation ability has been verified.
+   */
+  #extractSubmitCorrelationEcho(payload: JsonRecord): string | null {
+    const correlation = asRecord(payload.correlation);
+    return typeof correlation.submit_id === "string" ? correlation.submit_id : null;
+  }
+
+  /**
+   * ADR-011 M1: fills the root-cause slot exactly once per attempt. The
+   * snapshot is whitelist-built and validated; an invalid snapshot is dropped.
+   * The sink runs behind a diagnostic boundary — synchronous throws and
+   * asynchronous rejections are isolated, never forwarded to public events or
+   * error causes, and can never alter execution, cleanup, or the result.
+   */
+  #emitFailureFacts(entry: RunEntry, input: FailureEvidenceInput): void {
+    if (entry.terminalFactsSubmitted) return;
+    entry.terminalFactsSubmitted = true;
+    let facts: FailureFactsV1;
+    try {
+      facts = buildFailureFacts(input);
+    } catch {
+      return; // an invalid snapshot is dropped, not repaired
+    }
+    const callback = this.#onFailureFacts;
+    if (!callback) return;
+    try {
+      const result = callback(facts) as unknown;
+      if (result && typeof (result as Promise<void>).catch === "function") {
+        (result as Promise<void>).catch(() => undefined);
+      }
+    } catch {
+      // diagnostic boundary: the sink failure never escapes (ADR-011)
+    }
+  }
+
+  /** Submits candidate facts derived from the error that was selected as the
+   * termination cause. Errors without a candidate marker are Bridge-side
+   * refusals (config, session snapshot, report parsing) whose worker/report/
+   * cleanup plane does not fit the four fact sources — no facts are invented. */
+  #submitTerminalFactsFromError(entry: RunEntry, error: unknown): void {
+    const candidate = readFactsCandidate(error);
+    if (!candidate) return;
+    const accepted = entry.acceptedEvidence;
+    if (candidate.kind === "turn") {
+      this.#emitFailureFacts(entry, candidate.input);
+      return;
+    }
+    if (candidate.kind === "transport") {
+      this.#emitFailureFacts(entry, { source: "transport", phase: "transport_lost", rpcMethod: candidate.method, accepted });
+      return;
+    }
+    if (candidate.kind === "rpc") {
+      this.#emitFailureFacts(entry, {
+        source: "rpc",
+        phase: entry.sendAttempted ? "rpc_rejected" : "pre_send",
+        rpcMethod: candidate.method,
+        rpcCode: candidate.code,
+        rpcDataCode: candidate.dataCode,
+        accepted,
+      });
+      return;
+    }
+    if (candidate.kind === "spawn") {
+      this.#emitFailureFacts(entry, {
+        source: "process",
+        phase: "spawn",
+        processErrno: candidate.errno,
+        accepted,
+      });
+      return;
+    }
+    if (candidate.kind === "process_exit") {
+      this.#emitFailureFacts(entry, { source: "process", phase: "process_exit", accepted });
+      return;
+    }
+    this.#emitFailureFacts(entry, { source: "transport", phase: "protocol_guard", protocolGuard: true, accepted });
   }
 
   #publishSessionEvent(type: string, payload: JsonRecord, entry: RunEntry, event: JsonRecord, failureCode?: string): void {
@@ -1704,32 +2178,42 @@ function asRecord(value: unknown): JsonRecord {
   return isRecord(value) ? value : {};
 }
 
-/** Classify only explicit quota-exhaustion claims from allowlisted provider fields. */
-function providerReportedUsageExhaustion(value: unknown): boolean {
+/**
+ * ADR-011: bounded in-memory extraction from one turn.failed error payload.
+ * Only registered structured codes are kept; reasons are reduced to reviewed
+ * tokens; the ADR-006 top-level quota text is reduced to a boolean. Raw
+ * messages, underlyingErrorMessage, stacks, headers, and unknown values never
+ * cross this boundary and are never persisted (M4).
+ */
+function extractTurnFailureEvidence(value: unknown): {
+  providerCode: string | null;
+  errorCode: string | null;
+  errorType: string | null;
+  reviewedReason: string | null;
+  httpStatus: number | null;
+  retryableBooleans: boolean[];
+  quotaText: boolean;
+} {
+  if (typeof value === "string") {
+    return { providerCode: null, errorCode: null, errorType: null, reviewedReason: null, httpStatus: null, retryableBooleans: [], quotaText: matchesExplicitQuotaText(value) };
+  }
   const error = asRecord(value);
-  const candidates = [
-    typeof value === "string" ? value : null,
-    typeof error.code === "string" ? error.code : null,
-    typeof error.type === "string" ? error.type : null,
-    typeof error.message === "string" ? error.message : null,
-  ].filter((candidate): candidate is string => candidate !== null)
-    .map((candidate) => candidate.slice(0, 2_048));
-  if (candidates.length === 0) return false;
-
-  const text = candidates.join("\n").normalize("NFKC").toLowerCase();
-  return [
-    /\binsufficient[_\s-]+quota\b/,
-    /\bquota[_\s-]+(?:(?:has[_\s-]+been)[_\s-]+)?(?:exceeded|exhausted|depleted)\b/,
-    /\b(?:usage|token)[_\s-]+quota[_\s-]+(?:exceeded|exhausted|depleted)\b/,
-    /\b(?:usage|token)[_\s-]+limit[_\s-]+(?:exceeded|exhausted|reached)\b/,
-    /\b(?:out[_\s-]+of|no[_\s-]+remaining|insufficient[_\s-]+)(?:[_\s-]+)?credits?\b/,
-    /\bcredits?[_\s-]+(?:exhausted|depleted)\b/,
-    /\bbilling[_\s-]+hard[_\s-]+limit[_\s-]+reached\b/,
-    /(?:用量|额度|配额)(?:已|已经)?(?:用尽|耗尽|用完|不足)/,
-    /(?:用尽|耗尽|用完|不足)(?:了)?(?:用量|额度|配额)/,
-    /(?:超出|超过)(?:了)?(?:当前)?(?:用量|额度|配额)/,
-    /(?:当前)?(?:用量|额度|配额)(?:已经)?(?:超出|不足)/,
-  ].some((pattern) => pattern.test(text));
+  const attribution = asRecord(error.attribution);
+  const retryableBooleans: boolean[] = [];
+  if (typeof attribution.retryable === "boolean") retryableBooleans.push(attribution.retryable);
+  if (typeof error.retryable === "boolean") retryableBooleans.push(error.retryable);
+  const rawReason = typeof attribution.reason === "string" ? attribution.reason : null;
+  return {
+    providerCode: registeredCode(attribution.providerErrorCode, PROVIDER_BUSINESS_CODES),
+    errorCode: registeredCode(error.code, MODEL_ERROR_CODES),
+    errorType: registeredCode(error.type, ERROR_TYPE_REGISTRY),
+    reviewedReason: rawReason !== null && REVIEWED_REASON_TOKENS.has(rawReason) ? rawReason : null,
+    httpStatus: typeof attribution.statusCode === "number" && Number.isSafeInteger(attribution.statusCode) && attribution.statusCode >= 100 && attribution.statusCode <= 599
+      ? attribution.statusCode
+      : null,
+    retryableBooleans,
+    quotaText: matchesExplicitQuotaText(error),
+  };
 }
 
 async function syncDesktopStatus(

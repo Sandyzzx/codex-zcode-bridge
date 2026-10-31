@@ -152,6 +152,8 @@ export interface ManagerFixture {
   /** expectedRootFingerprint received per termination call (null = none). */
   terminateExpected: Array<string | null>;
   setTerminateError: (error: Error | null) => void;
+  /** Installs an awaitable, deterministic termination hook for lifecycle-race tests. */
+  setTerminateHandler: (handler: TerminateProcessTree | null) => void;
   /** Recorded-tree claimant scans requested by the manager (ADR-009). */
   scanCalls: Array<Array<{ pid: number; fingerprint: string | null }>>;
   setScanResult: (result: { clean: boolean; livePids: readonly number[] } | Error) => void;
@@ -181,6 +183,7 @@ export async function makeManagerFixture(options: {
   const terminateExpected: Array<string | null> = [];
   const scanCalls: Array<Array<{ pid: number; fingerprint: string | null }>> = [];
   let terminateError: Error | null = null;
+  let terminateHandler: TerminateProcessTree | null = null;
   let scanResult: { clean: boolean; livePids: readonly number[] } | Error = { clean: true, livePids: [] };
   const clockBaseMs = Date.UTC(2026, 8, 27, 0, 0, 0);
   let clockMs = 1_000;
@@ -189,6 +192,7 @@ export async function makeManagerFixture(options: {
     terminateCalls.push(pid);
     terminateExpected.push(terminateOptions?.expectedRootFingerprint ?? null);
     if (terminateError) throw terminateError;
+    if (terminateHandler) return terminateHandler(pid, terminateOptions);
     pidsAlive.delete(pid);
     return { pid, signal: "SIGKILL", verified: true };
   };
@@ -234,6 +238,7 @@ export async function makeManagerFixture(options: {
     setTerminateError: (error) => {
       terminateError = error;
     },
+    setTerminateHandler: (handler) => { terminateHandler = handler; },
     scanCalls,
     setScanResult: (result) => {
       scanResult = result;

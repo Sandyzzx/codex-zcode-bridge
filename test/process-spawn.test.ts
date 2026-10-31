@@ -11,10 +11,11 @@
 // counts as confirmation. The finally gate confirms every owned pid exited
 // before removing the tree, and an unreported grandchild preserves the tree.
 // Before the production termination call, a read-only ownership precondition
-// verifies the selected tree belongs to this fixture (the matrix2 incident
-// selected stale system rows that merely shared a ParentProcessId); any
-// unrelated, older, or unknown entry fails visibly BEFORE any production
-// signal is sent.
+// verifies the selected tree belongs to this fixture. A stale system row can
+// retain a ParentProcessId after that PID has been reused; an edge whose child
+// creation predates the currently held parent generation is therefore
+// excluded. Any current-generation unrelated or unknown entry still fails
+// visibly BEFORE any production signal is sent.
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
@@ -148,6 +149,29 @@ function snapshotTreeClosure(rootPid: number): TreeRow[] {
   });
 }
 
+/** Resolve PID ancestry against process generations. Windows process rows can
+ * outlive their parent PID generation in CIM snapshots; a child created before
+ * the selected parent's current generation cannot belong to this tree. Equal
+ * or later creation times remain selected and are checked by the strict
+ * fixture ownership guard below. */
+function selectCurrentGenerationClosure(rootPid: number, rows: readonly TreeRow[]): TreeRow[] {
+  const root = rows.find((row) => row.pid === rootPid);
+  if (!root) return [];
+  const selected = new Map<number, TreeRow>([[rootPid, root]]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const row of rows) {
+      if (selected.has(row.pid)) continue;
+      const parent = selected.get(row.parentPid);
+      if (!parent || row.creationFileTime < parent.creationFileTime) continue;
+      selected.set(row.pid, row);
+      changed = true;
+    }
+  }
+  return [...selected.values()];
+}
+
 /**
  * Fixture ownership precondition (2026-10-17 matrix2 Safety addendum): every
  * process selected under the test's root must belong to THIS fixture. Node
@@ -155,13 +179,14 @@ function snapshotTreeClosure(rootPid: number): TreeRow[] {
  * lines reference this run's unique fixture scripts; the sleeper's parent is
  * the root and its creation cannot predate the root's; console hosts hang
  * directly off those verified pids and cannot predate their own parent. All
- * creation-time comparisons are exact BigInt checks with no skew allowance,
- * so a stale system row that merely shares a ParentProcessId fails HERE,
- * before the production terminator is ever invoked. This is a fixture guard,
- * not a production policy; it never skips, fabricates, or re-picks pids.
+ * creation-time comparisons are exact BigInt checks with no skew allowance. A
+ * process row proven older than the selected parent generation is excluded as
+ * a stale PID edge; any same-or-newer unexpected row fails HERE, before the
+ * production terminator is invoked. This is a fixture guard, not a production
+ * policy; it never skips, fabricates, or re-picks pids.
  */
 function assertTreeBelongsToFixture(rootPid: number, grandchildPid: number, parentScript: string, childScript: string): void {
-  const rows = snapshotTreeClosure(rootPid);
+  const rows = selectCurrentGenerationClosure(rootPid, snapshotTreeClosure(rootPid));
   const byPid = new Map(rows.map((row) => [row.pid, row]));
   const root = byPid.get(rootPid);
   if (!root) throw new Error(`ownership precondition failed: root pid ${String(rootPid)} missing from its own snapshot`);
@@ -194,6 +219,19 @@ function assertTreeBelongsToFixture(rootPid: number, grandchildPid: number, pare
     }
   }
 }
+
+test("fixture ownership closure excludes stale parent-PID rows by generation", () => {
+  const rows: TreeRow[] = [
+    { pid: 100, parentPid: 1, name: "node.exe", creationFileTime: 1_000n, commandLine: "parent.cjs" },
+    { pid: 200, parentPid: 100, name: "node.exe", creationFileTime: 1_100n, commandLine: "sleeper.cjs" },
+    { pid: 300, parentPid: 100, name: "msedge.exe", creationFileTime: 900n, commandLine: "old Edge generation" },
+    { pid: 400, parentPid: 100, name: "msedge.exe", creationFileTime: 1_200n, commandLine: "current unexpected child" },
+    { pid: 500, parentPid: 300, name: "node.exe", creationFileTime: 1_300n, commandLine: "not rooted in current generation" },
+  ];
+
+  const selected = selectCurrentGenerationClosure(100, rows);
+  assert.deepEqual(selected.map((row) => row.pid).sort((left, right) => left - right), [100, 200, 400]);
+});
 
 test("terminateProcessTree kills a real Windows process tree and verifies it", { timeout: 30_000 }, async () => {
   if (process.platform !== "win32") {

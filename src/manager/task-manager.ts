@@ -30,7 +30,7 @@ import type { EventsScanCursor, InternalTaskStatus } from "../store/task-store.j
 import { buildTaskResult, type TaskFailure } from "./normalize.js";
 import type { ZCodeRunOutcome } from "../adapters/zcode-adapter.js";
 import { TaskManagerError } from "./errors.js";
-import { defaultSpawnWorker, type SpawnWorker } from "./spawn-worker.js";
+import { defaultSpawnWorker, type SpawnedWorker, type SpawnWorker } from "./spawn-worker.js";
 import { isProcessRunning, terminateProcessTree, verifyProcessTreeClaimantsClean, type TerminateProcessTree, type TreeClaimantTarget } from "../adapters/process-spawn.js";
 import { WindowsTreeCleanupError } from "../adapters/windows-process-cleanup.js";
 import { validateTaskTimeout } from "../runtime/task-timeout.js";
@@ -42,10 +42,14 @@ import { buildTaskObservation } from "../observation/build.js";
 import { DiagnosticCounters, sanitizeDiagnostics, boundedErrorMessage } from "../observation/diagnostics.js";
 import type { ExecutorState } from "../observation/types.js";
 import { buildTaskFeedbackSnapshotV01 } from "../feedback/task-feedback.js";
+import { assertJsonAdmissionOpen, beginJsonWriterDrainUnderManagerLock, bindPendingWorkerJsonWriter, jsonWriterFenceState, registerPendingWorkerJsonWriter, removePendingWorkerJsonWriterSync, releaseManagerJsonWriter } from "../store/json-writer-quiescence.js";
 
 export interface TaskManagerOptions {
-  store: TaskStore;
-  workspaceProvider: WorkspaceProvider;
+  /** JSON authority. Mutually exclusive with lifecycleAuthority. */
+  store?: TaskStore;
+  /** Internal authority binding implementing the same public MCP contract. */
+  lifecycleAuthority?: ProgressTaskManager & { shutdown?: () => Promise<void>; dispose?: () => void; recoverTasks?: () => Promise<void> };
+  workspaceProvider?: WorkspaceProvider;
   /** Defaults to spawning the detached worker-main.js process. */
   spawnWorker?: SpawnWorker;
   /** Defaults to a real PID liveness check. Legacy evidence only (no identity). */
@@ -70,24 +74,30 @@ export interface TaskManagerOptions {
   stallHintMs?: number;
   /** Maximum simultaneous detached workers in this Bridge process. Defaults to 8. */
   maxConcurrentWorkers?: number;
+  /** Durable participant lease registered by the stdio Host before Manager startup. */
+  managerWriterLeaseToken?: string;
 }
 
 export class BridgeTaskManager implements ProgressTaskManager {
   /** How long a respawn claim counts as in-flight across Bridge processes. */
   static readonly RESPAWN_IN_FLIGHT_MS = 10_000;
-  readonly #store: TaskStore;
-  readonly #workspaceProvider: WorkspaceProvider;
-  readonly #spawnWorker: SpawnWorker;
-  readonly #isProcessRunning: (pid: number) => boolean;
-  readonly #terminateProcessTree: TerminateProcessTree;
-  readonly #verifyTreeClean: (targets: readonly TreeClaimantTarget[]) => Promise<{ clean: boolean; livePids: readonly number[]; observedPids?: readonly number[] }>;
-  readonly #probe: ProcessProbe | null;
-  readonly #now: () => Date;
+  readonly #store!: TaskStore;
+  readonly #workspaceProvider!: WorkspaceProvider;
+  readonly #lifecycleAuthority: (ProgressTaskManager & { shutdown?: () => Promise<void>; dispose?: () => void; recoverTasks?: () => Promise<void> }) | null;
+  readonly #spawnWorker!: SpawnWorker;
+  readonly #isProcessRunning!: (pid: number) => boolean;
+  readonly #terminateProcessTree!: TerminateProcessTree;
+  readonly #verifyTreeClean!: (targets: readonly TreeClaimantTarget[]) => Promise<{ clean: boolean; livePids: readonly number[]; observedPids?: readonly number[] }>;
+  readonly #probe!: ProcessProbe | null;
+  readonly #now!: () => Date;
   readonly #dataRoot: string;
   readonly #maxConcurrentWorkers: number;
   readonly #workerStartGraceMs: number;
   readonly #stallHintMs: number;
+  readonly #managerWriterLeaseToken: string | undefined;
   readonly #recoveryCooldownMs: number;
+  /** Task IDs are revalidation hints only; statuses and paths are never cached. */
+  #occupiedTaskHints = new Set<string>();
   readonly #counters = new DiagnosticCounters();
   #timer: NodeJS.Timeout | null = null;
   #mutex: Promise<unknown> = Promise.resolve();
@@ -95,15 +105,31 @@ export class BridgeTaskManager implements ProgressTaskManager {
   #recoveryPromise: Promise<void> | null = null;
 
   constructor(options: TaskManagerOptions) {
-    this.#store = options.store;
-    this.#workspaceProvider = options.workspaceProvider;
+    if (Boolean(options.store) === Boolean(options.lifecycleAuthority)) {
+      throw new TypeError("configure exactly one TaskManager authority");
+    }
+    this.#lifecycleAuthority = options.lifecycleAuthority ?? null;
+    const store = options.store;
+    if (store) this.#store = store;
+    if (options.workspaceProvider) this.#workspaceProvider = options.workspaceProvider;
+    if (options.store && !options.workspaceProvider) throw new TypeError("JSON TaskManager requires a WorkspaceProvider");
+    if (this.#lifecycleAuthority) {
+      this.#dataRoot = "";
+      this.#maxConcurrentWorkers = options.maxConcurrentWorkers ?? 8;
+      this.#workerStartGraceMs = options.workerStartGraceMs ?? 10_000;
+      this.#stallHintMs = options.stallHintMs ?? 120_000;
+      this.#managerWriterLeaseToken = undefined;
+      this.#recoveryCooldownMs = options.pollIntervalMs ?? 1_000;
+      return;
+    }
+    if (!store) throw new TypeError("JSON TaskManager store is required");
     this.#spawnWorker = options.spawnWorker ?? defaultSpawnWorker;
     this.#isProcessRunning = options.isProcessRunning ?? isProcessRunning;
     this.#terminateProcessTree = options.terminateProcessTree ?? terminateProcessTree;
     this.#verifyTreeClean = options.verifyTreeClean ?? verifyProcessTreeClaimantsClean;
     this.#probe = options.probe ?? null;
     this.#now = options.now ?? (() => new Date());
-    this.#dataRoot = options.store.dataRoot;
+    this.#dataRoot = store.dataRoot;
     this.#maxConcurrentWorkers = options.maxConcurrentWorkers ?? 8;
     if (!Number.isInteger(this.#maxConcurrentWorkers) || this.#maxConcurrentWorkers < 1 || this.#maxConcurrentWorkers > 8) {
       throw new RangeError("maxConcurrentWorkers must be an integer from 1 to 8");
@@ -113,6 +139,7 @@ export class BridgeTaskManager implements ProgressTaskManager {
       throw new RangeError("workerStartGraceMs must be a non-negative integer");
     }
     this.#stallHintMs = options.stallHintMs ?? 120_000;
+    this.#managerWriterLeaseToken = options.managerWriterLeaseToken ?? store.writerLeaseToken;
     const pollIntervalMs = options.pollIntervalMs ?? 1_000;
     this.#recoveryCooldownMs = pollIntervalMs;
     if (pollIntervalMs > 0) {
@@ -145,10 +172,35 @@ export class BridgeTaskManager implements ProgressTaskManager {
 
   /** Stops the reconcile timer; safe to call repeatedly. */
   dispose(): void {
+    this.#lifecycleAuthority?.dispose?.();
     if (this.#timer) {
       clearInterval(this.#timer);
       this.#timer = null;
     }
+  }
+
+  /** Closes JSON admission and dispatch for an archive-first cutover. This is
+   * an internal lifecycle operation and is not exposed as an MCP tool. */
+  async beginWriterQuiescence(): Promise<"draining" | "sealed"> {
+    if (this.#lifecycleAuthority) throw new TaskManagerError("TASK_STATE", "JSON writer quiescence is unavailable for this authority");
+    if (!this.#store.writerQuiescenceEnabled || !this.#managerWriterLeaseToken) {
+      throw new TaskManagerError("TASK_STATE", "JSON writer quiescence participant is not configured");
+    }
+    return this.#exclusive(async () => beginJsonWriterDrainUnderManagerLock(this.#dataRoot));
+  }
+
+  /** Graceful host shutdown releases this Manager's roster entry only after
+   * the MCP transport has stopped accepting new calls. Detached Workers have
+   * independent leases and remain accounted for. */
+  async shutdown(): Promise<void> {
+    this.dispose();
+    if (this.#lifecycleAuthority) {
+      await this.#lifecycleAuthority.shutdown?.();
+      return;
+    }
+    if (this.#recoveryPromise) await this.#recoveryPromise.catch(() => undefined);
+    await this.#mutex;
+    if (this.#managerWriterLeaseToken) await releaseManagerJsonWriter(this.#dataRoot, this.#managerWriterLeaseToken);
   }
 
   /** Scans all non-terminal tasks and reconciles them, then pumps the queue.
@@ -156,9 +208,20 @@ export class BridgeTaskManager implements ProgressTaskManager {
    * snapshot → async probe → re-verify and commit. One task's failure never
    * blocks the others. */
   async recoverTasks(): Promise<void> {
+    if (this.#lifecycleAuthority) return this.#lifecycleAuthority.recoverTasks?.() ?? Promise.resolve();
+    if (jsonWriterFenceState(this.#dataRoot) === "sealed") return;
     if (this.#recoveryPromise) return this.#recoveryPromise;
     const releaseRecovery = tryAcquireProcessLock(path.join(this.#store.tasksRoot, ".recovery.lock"));
     if (!releaseRecovery) return;
+    try {
+      if (jsonWriterFenceState(this.#dataRoot) === "sealed") {
+        releaseRecovery();
+        return;
+      }
+    } catch (error) {
+      releaseRecovery();
+      throw error;
+    }
     const lastRunFile = path.join(this.#store.tasksRoot, ".recovery-last-run");
     if (this.#recoveryCooldownMs > 0 && existsSync(lastRunFile) && Date.now() - statSync(lastRunFile).mtimeMs < this.#recoveryCooldownMs) {
       releaseRecovery();
@@ -632,8 +695,22 @@ export class BridgeTaskManager implements ProgressTaskManager {
     // A worker that did start is never auto-respawned: its attempt may have
     // already touched the workspace, so only the master decides to retry.
     if (!workerBegan) {
-      if (this.#store.claimAttemptRespawn(taskId, status.attempt)) {
-        const respawned = this.#spawnWorker(this.#dataRoot, taskId, status.attempt);
+      const fenceState = jsonWriterFenceState(this.#dataRoot);
+      if (fenceState === "open" && this.#store.claimAttemptRespawn(taskId, status.attempt)) {
+        const writerLeaseToken = this.#store.writerQuiescenceEnabled
+          ? registerPendingWorkerJsonWriter(this.#dataRoot, taskId, status.attempt)
+          : null;
+        let respawned: SpawnedWorker;
+        try {
+          respawned = this.#spawnWorker(this.#dataRoot, taskId, status.attempt, writerLeaseToken ?? undefined);
+        } catch (error) {
+          if (writerLeaseToken) {
+            try { removePendingWorkerJsonWriterSync(this.#dataRoot, writerLeaseToken); }
+            catch { /* retain unresolved roster evidence; sealing must remain blocked */ }
+          }
+          throw error;
+        }
+        if (writerLeaseToken) bindPendingWorkerJsonWriter(this.#dataRoot, writerLeaseToken, respawned.pid);
         this.#store.writeStatus(taskId, { worker_pid: respawned.pid });
         this.#store.appendEvent(
           taskId,
@@ -643,9 +720,14 @@ export class BridgeTaskManager implements ProgressTaskManager {
         );
         return;
       }
-      const claimedAt = this.#store.respawnClaimedAt(taskId, status.attempt);
-      if (claimedAt && Date.now() - claimedAt.getTime() < BridgeTaskManager.RESPAWN_IN_FLIGHT_MS) return; // another process's respawn is in flight
-      // Stale claim and still no started.json: the replacement died too.
+      // Quiescence closes all recovery dispatch. An attempt whose Worker
+      // exited before writing its start evidence is finalized as lost below;
+      // it is never respawned after CLOSING/DRAINING.
+      if (fenceState === "open") {
+        const claimedAt = this.#store.respawnClaimedAt(taskId, status.attempt);
+        if (claimedAt && Date.now() - claimedAt.getTime() < BridgeTaskManager.RESPAWN_IN_FLIGHT_MS) return; // another process's respawn is in flight
+        // Stale claim and still no started.json: the replacement died too.
+      }
     }
     const task = this.#store.readTask(taskId);
     const finishedAt = this.#now().toISOString();
@@ -675,7 +757,9 @@ export class BridgeTaskManager implements ProgressTaskManager {
   }
 
   async createTask(task: TaskPackage): Promise<TaskReceipt> {
+    if (this.#lifecycleAuthority) return this.#lifecycleAuthority.createTask(task);
     return this.#exclusive(async () => {
+      this.#assertAdmissionOpen();
       this.#validateTaskPackage(task);
       if (this.#store.hasTask(task.task_id)) {
         const existing = this.#store.readTask(task.task_id);
@@ -755,6 +839,7 @@ export class BridgeTaskManager implements ProgressTaskManager {
   }
 
   async getStatus(taskId: string): Promise<TaskStatusRecord> {
+    if (this.#lifecycleAuthority) return this.#lifecycleAuthority.getStatus(taskId);
     // Status is an atomic persisted snapshot. Do not make callers wait behind
     // a recovery scan or a slow worker cleanup operation; the observation is
     // assembled from persisted evidence only — no OS query on the read path.
@@ -793,6 +878,10 @@ export class BridgeTaskManager implements ProgressTaskManager {
   }
 
   async getEvents(input: GetEventsInput): Promise<TaskProgressPage> {
+    if (this.#lifecycleAuthority) {
+      if (!this.#lifecycleAuthority.getEvents) throw new TaskManagerError("TASK_STATE", "lifecycle authority does not provide events");
+      return this.#lifecycleAuthority.getEvents(input);
+    }
     const afterSeq = input.after_seq ?? 0;
     const limit = input.limit ?? 100;
     const waitMs = input.wait_ms ?? 0;
@@ -869,6 +958,10 @@ export class BridgeTaskManager implements ProgressTaskManager {
   }
 
   async getFeedback(taskId: string): Promise<TaskFeedbackSnapshotV01> {
+    if (this.#lifecycleAuthority) {
+      if (!this.#lifecycleAuthority.getFeedback) throw new TaskManagerError("TASK_STATE", "lifecycle authority does not provide feedback");
+      return this.#lifecycleAuthority.getFeedback(taskId);
+    }
     this.#requireTask(taskId);
     const status = this.#store.readStatus(taskId);
     const startTime = status.started_at ? Date.parse(status.started_at) : Number.NaN;
@@ -900,6 +993,7 @@ export class BridgeTaskManager implements ProgressTaskManager {
   }
 
   async getResult(taskId: string): Promise<TaskResult> {
+    if (this.#lifecycleAuthority) return this.#lifecycleAuthority.getResult(taskId);
     return (async () => {
       this.#requireTask(taskId);
       const status = this.#store.readStatus(taskId);
@@ -921,6 +1015,7 @@ export class BridgeTaskManager implements ProgressTaskManager {
   }
 
   async replyToInteraction(input: ZCodeInteractionReplyInput): Promise<{ task_id: string; request_id: string; state: "answered" }> {
+    if (this.#lifecycleAuthority) return this.#lifecycleAuthority.replyToInteraction(input);
     return this.#exclusive(async () => {
       this.#requireTask(input.task_id);
       if (typeof input.request_id !== "string" || !input.request_id.trim() || input.request_id.length > 512) {
@@ -975,7 +1070,9 @@ export class BridgeTaskManager implements ProgressTaskManager {
   }
 
   async continueTask(input: ContinueTaskInput): Promise<TaskReceipt> {
+    if (this.#lifecycleAuthority) return this.#lifecycleAuthority.continueTask(input);
     return this.#exclusive(async () => {
+      this.#assertAdmissionOpen();
       const taskId = input.task_id;
       this.#requireTask(taskId);
       if (typeof input.feedback !== "string" || input.feedback.trim().length === 0) {
@@ -1072,6 +1169,7 @@ export class BridgeTaskManager implements ProgressTaskManager {
   }
 
   async cancelTask(taskId: string): Promise<TaskStatusRecord> {
+    if (this.#lifecycleAuthority) return this.#lifecycleAuthority.cancelTask(taskId);
     return this.#exclusive(async () => {
       this.#requireTask(taskId);
       const status = this.#store.readStatus(taskId);
@@ -1403,6 +1501,9 @@ export class BridgeTaskManager implements ProgressTaskManager {
       errorCode: typeof checkpoint.error_code === "string" ? checkpoint.error_code : null,
       cleanupError: typeof checkpoint.cleanup_error === "string" ? checkpoint.cleanup_error : null,
       cleanupVerified: checkpoint.cleanup_verified === true,
+      cleanupMemberPids: Array.isArray(checkpoint.cleanup_member_pids)
+        ? checkpoint.cleanup_member_pids.filter((pid): pid is number => Number.isSafeInteger(pid) && (pid as number) > 0)
+        : [],
     } as ZCodeRunOutcome;
     const cleanupVerified = outcome.cleanupVerified && runtimeExited;
     const failure: TaskFailure | null = cleanupVerified ? null : {
@@ -1410,6 +1511,13 @@ export class BridgeTaskManager implements ProgressTaskManager {
       message: outcome.cleanupError ?? "Worker exited before process cleanup could be verified; the ZCode result was recovered from its private checkpoint",
     };
     const finishedAt = this.#now().toISOString();
+    if (!outcome.cleanupVerified && outcome.cleanupMemberPids?.length) {
+      this.#store.writeAttemptMeta(taskId, status.attempt, "cleanup-failure.json", {
+        member_pids: [...new Set(outcome.cleanupMemberPids)],
+        complete: true,
+        last_error: (outcome.cleanupError ?? "recovered cleanup was unverified").slice(0, 300),
+      });
+    }
     const result = buildTaskResult({
       task: this.#store.readTask(taskId),
       attempt: status.attempt,
@@ -1438,11 +1546,35 @@ export class BridgeTaskManager implements ProgressTaskManager {
   }
 
   #pumpLocked(): void {
+    if (jsonWriterFenceState(this.#dataRoot) !== "open") return;
+    // A bounded set of previously observed occupied IDs can avoid rescanning
+    // historical Task payloads only when fresh persisted reads prove every
+    // worker slot is already occupied. Hints never drive scheduling decisions.
+    if (this.#occupiedTaskHints.size >= this.#maxConcurrentWorkers) {
+      const revalidated = new Set<string>();
+      let allSlotsOccupied = true;
+      for (const taskId of this.#occupiedTaskHints) {
+        const status = this.#safeStatus(taskId);
+        if (status?.status === "running" || status?.cleanup_unverified === true) {
+          revalidated.add(taskId);
+          if (revalidated.size >= this.#maxConcurrentWorkers) break;
+        } else {
+          allSlotsOccupied = false;
+        }
+      }
+      if (allSlotsOccupied && revalidated.size >= this.#maxConcurrentWorkers) {
+        this.#occupiedTaskHints = revalidated;
+        return;
+      }
+      this.#occupiedTaskHints = revalidated;
+    }
+
     // Reuse one validated snapshot within this scheduling operation only.
     // Terminal/corrupt records remain checked; no cross-operation cache can
     // hide an external worker transition or release an unverified workspace.
     const snapshot = this.#store.listTaskIds().map((taskId) => ({ taskId, status: this.#safeStatus(taskId) }));
     const running = snapshot.filter(({ status }) => status?.status === "running" || status?.cleanup_unverified === true).map(({ taskId }) => taskId);
+    this.#occupiedTaskHints = new Set(running.slice(0, this.#maxConcurrentWorkers));
     if (running.length >= this.#maxConcurrentWorkers) return;
 
     const occupiedPaths = running.map((taskId) => this.#executionPathKeyLocked(taskId));
@@ -1464,6 +1596,9 @@ export class BridgeTaskManager implements ProgressTaskManager {
       if (this.#store.readStatus(taskId).status === "running") {
         occupiedPaths.push(executionPath);
         slots -= 1;
+        const startedStatus = this.#safeStatus(taskId);
+        if ((startedStatus?.status === "running" || startedStatus?.cleanup_unverified === true)
+          && this.#occupiedTaskHints.size < this.#maxConcurrentWorkers) this.#occupiedTaskHints.add(taskId);
       }
     }
   }
@@ -1483,11 +1618,18 @@ export class BridgeTaskManager implements ProgressTaskManager {
       started_at: this.#now().toISOString(),
       worker_pid: null,
     });
+    const writerLeaseToken = this.#store.writerQuiescenceEnabled
+      ? registerPendingWorkerJsonWriter(this.#dataRoot, taskId, status.attempt)
+      : null;
     let pid: number;
     try {
-      const spawned = this.#spawnWorker(this.#dataRoot, taskId, status.attempt);
+      const spawned = this.#spawnWorker(this.#dataRoot, taskId, status.attempt, writerLeaseToken ?? undefined);
       pid = spawned.pid;
     } catch (error) {
+      if (writerLeaseToken) {
+        try { removePendingWorkerJsonWriterSync(this.#dataRoot, writerLeaseToken); }
+        catch { /* keep the pending evidence; the root cannot be sealed */ }
+      }
       const finishedAt = this.#now().toISOString();
       const message = error instanceof Error ? error.message : String(error);
       const task = this.#store.readTask(taskId);
@@ -1508,6 +1650,19 @@ export class BridgeTaskManager implements ProgressTaskManager {
       });
       this.#store.appendEvent(taskId, "error", result.summary, { error_code: "spawn_failed" }, finishedAt);
       return;
+    }
+    if (writerLeaseToken) {
+      try { bindPendingWorkerJsonWriter(this.#dataRoot, writerLeaseToken, pid); }
+      catch (error) {
+        // A process was launched but its durable participant identity could
+        // not be reconciled. Keep the Task occupied and expose the failure.
+        this.#store.patchRunningAttempt(taskId, status.attempt, { worker_pid: pid, cleanup_unverified: true });
+        this.#store.appendEvent(taskId, "writer_roster_unknown", "Worker was launched but its writer roster binding could not be verified", {
+          worker_pid: pid,
+          reason: boundedErrorMessage(error),
+        }, this.#now().toISOString());
+        return;
+      }
     }
     this.#store.patchRunningAttempt(taskId, status.attempt, { worker_pid: pid });
     this.#store.appendEvent(taskId, "worker_started", "Bridge worker started", { worker_pid: pid, attempt: status.attempt }, this.#now().toISOString());
@@ -1568,6 +1723,13 @@ export class BridgeTaskManager implements ProgressTaskManager {
         (typeof task.model.reasoning_level !== "string" || task.model.reasoning_level.trim().length === 0))
     )) {
       throw new TaskManagerError("TASK_INVALID", "model must include non-empty provider_id and model_id strings");
+    }
+  }
+
+  #assertAdmissionOpen(): void {
+    try { assertJsonAdmissionOpen(this.#dataRoot); }
+    catch (error) {
+      throw new TaskManagerError("TASK_STATE", error instanceof Error ? error.message : "JSON writer fence is closed");
     }
   }
 

@@ -204,10 +204,14 @@ function makeAdapter(
   runtime: ProtocolRuntime,
   events: Array<{ type: string; summary: string; details?: Record<string, unknown> }>,
   timeoutMs = 12_000,
+  onEventObserved?: (type: string, observedAt: number) => void,
 ): ZCodeAppServerAdapter {
   return new ZCodeAppServerAdapter({
     resolver: { resolve: async () => runtime.config },
-    onEvent: (event) => events.push(event),
+    onEvent: (event) => {
+      events.push(event);
+      onEventObserved?.(event.type, performance.now());
+    },
     timeoutMs,
     childEnvBase: { PATH: process.env.PATH },
     homeDir: runtime.root,
@@ -219,9 +223,13 @@ test("a legal session/resume frame larger than the old 2M-char capture limit com
   // bytes / 2,039,924 chars) that the old whole-buffer 2,000,000-char check
   // turned into a fake 30 s RPC timeout.
   const runtime = await makeProtocolRuntime({ resumePadChars: 2_100_000 });
+  const events: Array<{ type: string; summary: string; details?: Record<string, unknown> }> = [];
+  let turnCompletedAt: number | undefined;
   try {
-    const adapter = makeAdapter(runtime, []);
-    const startedAt = Date.now();
+    const adapter = makeAdapter(runtime, events, 12_000, (type, observedAt) => {
+      if (type === "turn_completed") turnCompletedAt ??= observedAt;
+    });
+    const startedAt = performance.now();
     const handle = await adapter.continueTask({
       task,
       workspace: makeWorkspace(runtime.root),
@@ -234,7 +242,7 @@ test("a legal session/resume frame larger than the old 2M-char capture limit com
     const result = await adapter.getResult(handle);
     assert.equal(result.exitCode, 0);
     assert.equal(result.sessionId, SESSION_ID);
-    assert.ok(Date.now() - startedAt < 10_000, "resume must complete promptly, not wait for the 30 s RPC timeout");
+    assert.ok(turnCompletedAt !== undefined && turnCompletedAt - startedAt < 10_000, "the legal resume turn must complete before cleanup finishes");
   } finally {
     await rm(runtime.root, { recursive: true, force: true });
   }
@@ -257,20 +265,22 @@ test("many legal frames coalesced into one write are consumed frame by frame; th
 test("a frame over the 16 MiB limit fails immediately, ends the pending RPC with the protocol reason, and stops buffering", { timeout: 30_000 }, async () => {
   const runtime = await makeProtocolRuntime({ oversizeInsteadOfSubscribeReply: FRAME_LIMIT_BYTES + 65_536 });
   const events: Array<{ type: string; summary: string; details?: Record<string, unknown> }> = [];
+  let protocolErrorAt: number | undefined;
   let runtimePid: number | undefined;
   try {
     const adapter = new ZCodeAppServerAdapter({
       resolver: { resolve: async () => runtime.config },
       onEvent: (event) => {
         events.push(event);
+        if (event.type === "protocol_error") protocolErrorAt ??= performance.now();
         if (event.type === "app_server_started") runtimePid = event.details?.["pid"] as number;
       },
       timeoutMs: 12_000,
       childEnvBase: { PATH: process.env.PATH },
       homeDir: runtime.root,
     });
+    const startedAt = performance.now();
     const handle = await adapter.startTask({ task, workspace: makeWorkspace(runtime.root), attempt: 1 });
-    const startedAt = Date.now();
     await assert.rejects(
       adapter.getResult(handle),
       (error: unknown) => {
@@ -282,7 +292,7 @@ test("a frame over the 16 MiB limit fails immediately, ends the pending RPC with
         return true;
       },
     );
-    assert.ok(Date.now() - startedAt < 10_000, "the over-limit frame must fail well before the 30 s RPC timeout");
+    assert.ok(protocolErrorAt !== undefined && protocolErrorAt - startedAt < 10_000, "the protocol_error event must be emitted before cleanup completes");
     const protocolError = events.find((event) => event.type === "protocol_error");
     assert.ok(protocolError, "a protocol_error event with a stable reason must be published");
     assert.equal(protocolError?.details?.["error_code"], "frame_over_limit");
@@ -300,10 +310,13 @@ test("a frame over the 16 MiB limit fails immediately, ends the pending RPC with
 test("an invalid JSON frame fails immediately; frames after it are not parsed and pending RPCs end with the protocol reason", { timeout: 30_000 }, async () => {
   const runtime = await makeProtocolRuntime({ badJsonOn: "subscribe" });
   const events: Array<{ type: string; summary: string; details?: Record<string, unknown> }> = [];
+  let protocolErrorAt: number | undefined;
   try {
-    const adapter = makeAdapter(runtime, events);
+    const adapter = makeAdapter(runtime, events, 12_000, (type, observedAt) => {
+      if (type === "protocol_error") protocolErrorAt ??= observedAt;
+    });
+    const startedAt = performance.now();
     const handle = await adapter.startTask({ task, workspace: makeWorkspace(runtime.root), attempt: 1 });
-    const startedAt = Date.now();
     await assert.rejects(
       adapter.getResult(handle),
       (error: unknown) => {
@@ -312,7 +325,7 @@ test("an invalid JSON frame fails immediately; frames after it are not parsed an
         return true;
       },
     );
-    assert.ok(Date.now() - startedAt < 10_000, "the invalid frame must fail well before the 30 s RPC timeout");
+    assert.ok(protocolErrorAt !== undefined && protocolErrorAt - startedAt < 10_000, "the protocol_error event must be emitted before cleanup completes");
     const protocolError = events.find((event) => event.type === "protocol_error");
     assert.ok(protocolError);
     assert.equal(protocolError?.details?.["error_code"], "invalid_frame");
@@ -458,8 +471,12 @@ test("a bad-JSON frame in the same chunk as a legal resume reply latches the fat
   // the latched reason was finally masked by the wall-clock budget.
   const runtime = await makeProtocolRuntime({ fatalLineAfterResume: "{" });
   const events: Array<{ type: string; summary: string; details?: Record<string, unknown> }> = [];
+  let protocolErrorAt: number | undefined;
   try {
-    const adapter = makeAdapter(runtime, events);
+    const adapter = makeAdapter(runtime, events, 12_000, (type, observedAt) => {
+      if (type === "protocol_error") protocolErrorAt ??= observedAt;
+    });
+    const startedAt = performance.now();
     const handle = await adapter.continueTask({
       task,
       workspace: makeWorkspace(runtime.root),
@@ -469,7 +486,6 @@ test("a bad-JSON frame in the same chunk as a legal resume reply latches the fat
       previousSessionId: SESSION_ID,
       previousResult: null,
     });
-    const startedAt = Date.now();
     await assert.rejects(
       adapter.getResult(handle),
       (error: unknown) => {
@@ -479,7 +495,7 @@ test("a bad-JSON frame in the same chunk as a legal resume reply latches the fat
         return true;
       },
     );
-    assert.ok(Date.now() - startedAt < 10_000, "the fatal frame must fail fast, not at the wall-clock budget");
+    assert.ok(protocolErrorAt !== undefined && protocolErrorAt - startedAt < 10_000, "the fatal protocol event must precede cleanup completion");
     const protocolError = events.find((event) => event.type === "protocol_error");
     assert.ok(protocolError);
     assert.equal(protocolError?.details?.["error_code"], "invalid_frame");
@@ -492,41 +508,44 @@ test("a bad-JSON frame in the same chunk as a legal resume reply latches the fat
   }
 });
 
-test("null, array, and scalar top-level frames are invalid frames; the fatal latch blocks later requests", { timeout: 60_000 }, async () => {
+for (const fatalLine of ["null", "[]", "42"]) test(`top-level ${fatalLine} frame is invalid and blocks later requests`, { timeout: 30_000 }, async () => {
   // Review R1 case 2: JSON.parse succeeds on these values, but a JSON-RPC
   // frame's top level must be an object. The old code threw a handler
   // TypeError and kept issuing setMode, subscribe, and session/send.
-  for (const fatalLine of ["null", "[]", "42"]) {
-    const runtime = await makeProtocolRuntime({ fatalLineAfterResume: fatalLine });
-    const events: Array<{ type: string; summary: string; details?: Record<string, unknown> }> = [];
-    try {
-      const adapter = makeAdapter(runtime, events);
-      const handle = await adapter.continueTask({
-        task,
-        workspace: makeWorkspace(runtime.root),
-        attempt: 1,
-        feedback: "diagnostic only",
-        additionalRequirements: [],
-        previousSessionId: SESSION_ID,
-        previousResult: null,
-      });
-      await assert.rejects(
-        adapter.getResult(handle),
-        (error: unknown) => {
-          assert.ok(error instanceof BridgeError);
-          assert.match(error.message, /invalid JSON frame/i);
-          assert.match(error.message, /top-level frame value must be a JSON object/i);
-          return true;
-        },
-      );
-      const protocolError = events.find((event) => event.type === "protocol_error");
-      assert.equal(protocolError?.details?.["error_code"], "invalid_frame");
-      const methods = await readRequestMethods(runtime);
-      assert.equal(methods.includes("session/setMode"), false, `no request after a fatal ${fatalLine} frame`);
-      assert.equal(methods.includes("session/send"), false, `no request after a fatal ${fatalLine} frame`);
-    } finally {
-      await rm(runtime.root, { recursive: true, force: true });
-    }
+  const runtime = await makeProtocolRuntime({ fatalLineAfterResume: fatalLine });
+  const events: Array<{ type: string; summary: string; details?: Record<string, unknown> }> = [];
+  let protocolErrorAt: number | undefined;
+  try {
+    const adapter = makeAdapter(runtime, events, 12_000, (type, observedAt) => {
+      if (type === "protocol_error") protocolErrorAt ??= observedAt;
+    });
+    const startedAt = performance.now();
+    const handle = await adapter.continueTask({
+      task,
+      workspace: makeWorkspace(runtime.root),
+      attempt: 1,
+      feedback: "diagnostic only",
+      additionalRequirements: [],
+      previousSessionId: SESSION_ID,
+      previousResult: null,
+    });
+    await assert.rejects(
+      adapter.getResult(handle),
+      (error: unknown) => {
+        assert.ok(error instanceof BridgeError);
+        assert.match(error.message, /invalid JSON frame/i);
+        assert.match(error.message, /top-level frame value must be a JSON object/i);
+        return true;
+      },
+    );
+    assert.ok(protocolErrorAt !== undefined && protocolErrorAt - startedAt < 10_000, "the fatal protocol event must precede cleanup completion");
+    const protocolError = events.find((event) => event.type === "protocol_error");
+    assert.equal(protocolError?.details?.["error_code"], "invalid_frame");
+    const methods = await readRequestMethods(runtime);
+    assert.equal(methods.includes("session/setMode"), false, `no request after a fatal ${fatalLine} frame`);
+    assert.equal(methods.includes("session/send"), false, `no request after a fatal ${fatalLine} frame`);
+  } finally {
+    await rm(runtime.root, { recursive: true, force: true });
   }
 });
 
@@ -535,10 +554,13 @@ test("the frame limit is judged on raw untrimmed frame bytes; whitespace padding
   // spaces trims to a few bytes; the raw frame must still be rejected.
   const runtime = await makeProtocolRuntime({ paddedOversizeSubscribeReply: true });
   const events: Array<{ type: string; summary: string; details?: Record<string, unknown> }> = [];
+  let protocolErrorAt: number | undefined;
   try {
-    const adapter = makeAdapter(runtime, events);
+    const adapter = makeAdapter(runtime, events, 12_000, (type, observedAt) => {
+      if (type === "protocol_error") protocolErrorAt ??= observedAt;
+    });
+    const startedAt = performance.now();
     const handle = await adapter.startTask({ task, workspace: makeWorkspace(runtime.root), attempt: 1 });
-    const startedAt = Date.now();
     await assert.rejects(
       adapter.getResult(handle),
       (error: unknown) => {
@@ -547,7 +569,7 @@ test("the frame limit is judged on raw untrimmed frame bytes; whitespace padding
         return true;
       },
     );
-    assert.ok(Date.now() - startedAt < 10_000, "the padded over-limit frame must fail well before the RPC timeout");
+    assert.ok(protocolErrorAt !== undefined && protocolErrorAt - startedAt < 10_000, "the protocol_error event must be emitted before cleanup completes");
     const protocolError = events.find((event) => event.type === "protocol_error");
     assert.ok(protocolError);
     assert.equal(protocolError?.details?.["error_code"], "frame_over_limit");

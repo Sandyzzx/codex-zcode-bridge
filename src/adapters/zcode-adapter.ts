@@ -74,6 +74,14 @@ export interface ZCodeRunOutcome extends AgentRunOutcome {
   /** Process cleanup failed after the turn result was captured. */
   readonly cleanupError?: string | null;
   readonly cleanupVerified?: boolean;
+  /** Recorded root/member PIDs when cleanup remains unverified. */
+  readonly cleanupMemberPids?: readonly number[];
+  /**
+   * Identity-bound Windows process-tree termination receipt. Present only
+   * when the adapter's direct cleanup transaction proved the full tree gone;
+   * a weaker recorded-tree claimant scan never supplies this receipt.
+   */
+  readonly cleanupTreeReceipt?: import("./windows-process-cleanup.js").WindowsTerminationReceipt;
   /** B2 additive: persisted correlation timestamps (RPC accept / turn start / turn end). */
   readonly phaseTimestamps?: {
     readonly rpc_accepted_at?: string | null;

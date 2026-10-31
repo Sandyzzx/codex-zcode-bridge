@@ -25,13 +25,14 @@
   },
   "scripts": {
     "build": "npm run build:core && npm run build:plugin",
-    "build:test": "tsc --project tsconfig.test.json",
+    "build:test": "tsc --project tsconfig.test.json && node scripts/copy-test-assets.mjs",
     "build:core": "node scripts/build-core.mjs",
     "build:plugin": "node scripts/build-plugin.mjs",
     "typecheck": "tsc --noEmit",
     "test": "npm run build:test && node scripts/test-isolated.mjs",
     "test:clean-entrypoints": "npm run build:test && node scripts/test-clean-entrypoints.mjs",
     "validate:plugin": "node scripts/validate-plugin.mjs",
+    "migrate:json-to-sqlite": "node dist/src/cli/migrate-json-to-sqlite.js",
     "bridge:mcp": "node dist/src/mcp/main.js"
   },
   "bin": {

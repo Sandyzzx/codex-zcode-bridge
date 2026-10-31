@@ -9,6 +9,8 @@ const distDir = path.join(pluginRoot, "dist");
 const workerDir = path.join(pluginRoot, "worker");
 const vendorDir = path.join(workerDir, "vendor");
 await Promise.all([mkdir(distDir, { recursive: true }), mkdir(vendorDir, { recursive: true })]);
+// The bundled SQLite Store resolves its schema relative to bridge.mjs.
+await copyFile(path.join(repoRoot, "src", "sqlite-candidate", "wp6b2b1", "schema.sql"), path.join(distDir, "schema.sql"));
 
 const shared = {
   bundle: true,

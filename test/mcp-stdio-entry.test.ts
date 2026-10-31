@@ -4,7 +4,8 @@
 // a ZCode worker (only initialize/initialized/tools/list/status-on-unknown-id).
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -133,6 +134,19 @@ test("marketplace bundle starts from its plugin root without repo-local dependen
     ]);
     assert.ok(existsSync(path.join(PLUGIN_ROOT, "worker", "worker-main.mjs")), "detached worker bundle must ship beside the MCP server");
     assert.match(run.stderr, /data root/);
+    const provenanceLine = run.stderr.split(/\r?\n/u).find((line) => line.startsWith("[bridge] runtime provenance: "));
+    assert.ok(provenanceLine, "the live Bridge bundle reports its runtime provenance on stderr");
+    const provenance = JSON.parse(provenanceLine.slice("[bridge] runtime provenance: ".length)) as {
+      bridge: { sha256: string | null };
+      worker: { sha256: string | null };
+    };
+    const bridgePath = realpathSync(path.join(PLUGIN_ROOT, "dist", "bridge.mjs"));
+    const workerPath = realpathSync(path.join(PLUGIN_ROOT, "worker", "worker-main.mjs"));
+    const sha256 = (filePath: string) => createHash("sha256").update(readFileSync(filePath)).digest("hex").toUpperCase();
+    assert.equal(provenance.bridge.sha256, sha256(bridgePath));
+    assert.equal(provenance.worker.sha256, sha256(workerPath));
+    assert.equal(provenanceLine.includes(bridgePath), false, "stderr must not expose the Bridge bundle path");
+    assert.equal(provenanceLine.includes(workerPath), false, "stderr must not expose the Worker bundle path");
   } finally {
     rmSync(dataRoot, { recursive: true, force: true });
   }

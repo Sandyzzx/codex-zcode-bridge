@@ -15,6 +15,21 @@ import type { SpawnedProcess, SpawnFunction, SpawnOptionsLike } from "../src/ada
 
 export const SESSION_ID = "sess_11111111-aaaa-4bbb-8ccc-cccccccccccc";
 
+/**
+ * Keep test repositories shallow even when a caller deliberately relocates
+ * TEMP inside a long development worktree. Git for Windows reports
+ * `'$GIT_DIR' too big` for the repository/worktree shape exercised here.
+ */
+function fixtureTempRoot(): string {
+  const configured = process.env.WP6_TEST_FIXTURE_ROOT?.trim();
+  if (configured) {
+    if (!path.isAbsolute(configured)) throw new Error("WP6_TEST_FIXTURE_ROOT must be an absolute path");
+    return configured;
+  }
+  if (process.platform === "win32") return path.join(process.cwd(), ".run", "test-fixtures");
+  return tmpdir();
+}
+
 export class FakeStream {
   readonly #emitter = new EventEmitter();
 
@@ -187,7 +202,10 @@ export function makeWorkspace(canonicalPath = "C:\\work\\demo"): WorkspaceRef {
 }
 
 export async function makeTempDir(label: string): Promise<string> {
-  return mkdtemp(path.join(tmpdir(), `zcode-bridge-test-${label}-`));
+  const root = fixtureTempRoot();
+  const { mkdir } = await import("node:fs/promises");
+  await mkdir(root, { recursive: true });
+  return mkdtemp(path.join(root, `zcode-bridge-test-${label}-`));
 }
 
 /**

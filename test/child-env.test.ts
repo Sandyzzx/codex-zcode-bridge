@@ -9,6 +9,7 @@ test("child environments keep only OS and explicit Bridge settings", () => {
     API_TOKEN: "must-not-leak",
     HTTPS_PROXY: "http://secret-proxy",
     ZCODE_OTHER_SECRET: "must-not-leak",
+    ZCODE_BRIDGE_RUNTIME_PROVENANCE: "must-stay-inside-worker",
     ZCODE_BRIDGE_NODE: "/opt/node",
     ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: "/config/builtin.json",
   };
@@ -29,6 +30,7 @@ test("child environments keep only OS and explicit Bridge settings", () => {
   }
   assert.equal(child.API_TOKEN, undefined);
   assert.equal(child.ZCODE_BRIDGE_NODE, undefined);
+  assert.equal(child.ZCODE_BRIDGE_RUNTIME_PROVENANCE, undefined, "internal provenance is not passed to ZCode children");
 });
 
 test("worker environments forward the env-only browser settings and nothing broader", () => {

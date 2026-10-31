@@ -49,6 +49,7 @@ export function buildContinuePrompt(input: ContinuePromptInput): string {
   const sections: string[] = [
     `TASK ID: ${task.task_id}`,
     "You are a subordinate coding agent continuing a previous task in the same workspace. Own the remaining delivery end to end. Stay inside the workspace.",
+    DELIVERY_OWNERSHIP,
     ...(task.model ? [`REQUESTED ZCODE MODEL: ${task.model.provider_id}/${task.model.model_id}${task.model.reasoning_level ? ` (reasoning level: ${task.model.reasoning_level})` : ""}. The Bridge configures this model for the session.`] : []),
   ];
   if (previousSessionId) {
