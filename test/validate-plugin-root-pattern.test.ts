@@ -300,8 +300,11 @@ test("the real validator rejects injected development-path references and keeps 
     writeFileSync(path.join(pluginRoot, "worker", "vendor", "package.json"), JSON.stringify({ name: "playwright-core" }));
     writeFileSync(path.join(pluginRoot, "worker", "vendor", "browsers.json"), JSON.stringify({ browsers: [{ name: "chromium" }] }));
     const schema = "SELECT 1;\n";
+    const adminSchema = "SELECT 2;\n";
     writeFileSync(path.join(root, "src", "sqlite-candidate", "wp6b2b1", "schema.sql"), schema);
     writeFileSync(path.join(pluginRoot, "dist", "schema.sql"), schema);
+    writeFileSync(path.join(root, "src", "sqlite-candidate", "wp6b2b1", "admin-abandonment.sql"), adminSchema);
+    writeFileSync(path.join(pluginRoot, "dist", "admin-abandonment.sql"), adminSchema);
     for (const file of ["hooks/hooks.json", "hooks/session-start.mjs", "hooks/configure-runtime.ps1", "skills/zcode-bridge/SKILL.md"]) {
       writeFileSync(path.join(pluginRoot, file), "");
     }

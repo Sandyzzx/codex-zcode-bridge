@@ -28,7 +28,7 @@ jobs:
       - run: npm run build
       - run: npm test
       - run: npm run validate:plugin
-      - name: Check plugin schema is tracked
-        run: git ls-files --error-unmatch plugins/codex-zcode-bridge/dist/schema.sql
+      - name: Check plugin schemas are tracked
+        run: git ls-files --error-unmatch plugins/codex-zcode-bridge/dist/schema.sql plugins/codex-zcode-bridge/dist/admin-abandonment.sql
       - name: Check generated plugin bundles are committed
-        run: git diff --exit-code -- plugins/codex-zcode-bridge/dist/bridge.mjs plugins/codex-zcode-bridge/dist/schema.sql plugins/codex-zcode-bridge/worker/worker-main.mjs
+        run: git diff --exit-code -- plugins/codex-zcode-bridge/dist/bridge.mjs plugins/codex-zcode-bridge/dist/schema.sql plugins/codex-zcode-bridge/dist/admin-abandonment.sql plugins/codex-zcode-bridge/worker/worker-main.mjs

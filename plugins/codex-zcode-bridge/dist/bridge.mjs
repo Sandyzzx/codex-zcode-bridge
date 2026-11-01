@@ -4779,19 +4779,25 @@ import { existsSync as existsSync12, lstatSync as lstatSync2, realpathSync as re
 import path17 from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 function schemaObjects(db) {
-  return JSON.stringify(db.prepare(SCHEMA_OBJECT_QUERY).all().map((row) => [row.type, row.name, row.tbl_name, row.sql === null ? null : row.sql.trim()]));
+  return db.prepare(SCHEMA_OBJECT_QUERY).all().map((row) => [row.type, row.name, row.tbl_name, row.sql === null ? null : row.sql.trim()]);
 }
 function assertCandidateSchema(db) {
-  if (expectedSchemaObjects === void 0) {
-    const expected = new DatabaseSync(":memory:");
+  if (expectedBaseSchemaObjects === void 0) {
+    const base = new DatabaseSync(":memory:");
+    const admin = new DatabaseSync(":memory:");
     try {
-      expected.exec(SCHEMA);
-      expectedSchemaObjects = schemaObjects(expected);
+      base.exec(SCHEMA);
+      expectedBaseSchemaObjects = schemaObjects(base);
+      admin.exec(`${SCHEMA}
+${ADMIN_ABANDONMENT_SCHEMA}`);
+      expectedAdminSchemaObjects = schemaObjects(admin);
     } finally {
-      expected.close();
+      base.close();
+      admin.close();
     }
   }
-  if (schemaObjects(db) !== expectedSchemaObjects) fail("candidate_schema_mismatch");
+  const actual = JSON.stringify(schemaObjects(db));
+  if (actual !== JSON.stringify(expectedBaseSchemaObjects) && actual !== JSON.stringify(expectedAdminSchemaObjects)) fail("candidate_schema_mismatch");
 }
 function validateEvidence(eventType, value) {
   const keys = EVIDENCE_KEYS[eventType];
@@ -5043,12 +5049,35 @@ function normalizeCleanupEvidence(value, input) {
   if (Buffer.byteLength(canonical3(value), "utf8") > 4096) fail("cleanup_evidence_too_large");
   return value;
 }
-function presentOperation(row) {
+function presentOperation(row, adminAbandonment) {
   return {
     ...row,
+    ...adminAbandonment ? {
+      physical_phase: row.phase,
+      phase: "admin_abandoned",
+      admin_abandoned: true,
+      result_absent: true,
+      cleanup_verified: false,
+      administrative_release_reason: "cleanup_incomplete",
+      admin_abandonment_audit_digest: adminAbandonment.audit_digest,
+      admin_abandoned_at: adminAbandonment.abandoned_at
+    } : {},
     launch_outcome: row.launch_id === null ? "not_requested" : row.launch_receipt_digest === null ? "unknown_receipt_missing" : "receipt_recorded_process_unverified",
     claim_status: row.claim_id === null ? "not_claimed" : "permanent_claim_recorded"
   };
+}
+function validIsoInstant(value) {
+  return typeof value === "string" && Number.isFinite(Date.parse(value));
+}
+function validateAdminAbandonmentInput(input) {
+  if (!input || Object.getPrototypeOf(input) !== Object.prototype || Object.keys(input).sort().join("|") !== ADMIN_ABANDONMENT_INPUT_KEYS || !validId3(input.operation_id) || !validId3(input.task_id) || !Number.isSafeInteger(input.attempt) || input.attempt < 1 || !Number.isSafeInteger(input.generation) || input.generation < 1 || !Number.isSafeInteger(input.revision) || input.revision < 1 || !validId3(input.claim_id) || typeof input.claim_worker_identity_digest !== "string" || !/^[0-9a-f]{64}$/u.test(input.claim_worker_identity_digest))
+    fail("invalid_admin_abandonment_request");
+  const evidence = input.evidence;
+  if (!evidence || Object.getPrototypeOf(evidence) !== Object.prototype || Object.keys(evidence).sort().join("|") !== ADMIN_ABANDONMENT_EVIDENCE_KEYS || !validIsoInstant(evidence.boot_time) || !validIsoInstant(evidence.failed_at) || !validIsoInstant(evidence.observed_at) || !Number.isSafeInteger(evidence.worker_process_id) || evidence.worker_process_id < 1 || !validText2(evidence.worker_start_fingerprint, 256) || typeof evidence.process_inventory_digest !== "string" || !/^[0-9a-f]{64}$/u.test(evidence.process_inventory_digest) || typeof evidence.platform_probe_digest !== "string" || !/^[0-9a-f]{64}$/u.test(evidence.platform_probe_digest) || typeof evidence.claimant_scan_digest !== "string" || !/^[0-9a-f]{64}$/u.test(evidence.claimant_scan_digest) || evidence.hosts_closed !== true || evidence.writer_closed !== true || evidence.worker_exited !== true || evidence.claimant_scan_clean !== true)
+    fail("invalid_admin_abandonment_evidence");
+  if (Date.parse(evidence.boot_time) <= Date.parse(evidence.failed_at) || Date.parse(evidence.observed_at) < Date.parse(evidence.boot_time))
+    fail("admin_abandonment_generation_boundary_unverified");
+  return input;
 }
 function isBusy(error2) {
   return [5, 6].includes(error2?.errcode) || /SQLITE_(BUSY|LOCKED)/u.test(String(error2?.code ?? "")) || /database is (busy|locked)/iu.test(String(error2?.message ?? ""));
@@ -5461,7 +5490,7 @@ function callDecision(fn, workspace, input) {
     return { state: "unknown" };
   }
 }
-var HERE, SCHEMA, CONSTRUCT, SCHEMA_VERSION, SCHEMA_OBJECT_QUERY, expectedSchemaObjects, RESULT_CONTRACT_VERSION, RESULT_STATUSES, RECOVERY_PHASES, RECOVERY_SOURCES, RECOVERY_REASON_CODES, RECOVERY_QUARANTINE_CODES, RECOVERY_EVIDENCE_KEYS, RECOVERY_LIMIT, RESULT_FIELDS, REQUIRED_RESULT_FIELDS, digest2, rawDigest, EVIDENCE_KEYS, FUTURE_EVENT_TYPES, FUTURE_EVIDENCE_KEYS, EVENT_PHASE, RECOVERY_INPUT_KEYS, AdmissionError, fail, IsolatedAdmissionStore;
+var HERE, SCHEMA, ADMIN_ABANDONMENT_SCHEMA, CONSTRUCT, SCHEMA_VERSION, SCHEMA_OBJECT_QUERY, expectedBaseSchemaObjects, expectedAdminSchemaObjects, RESULT_CONTRACT_VERSION, RESULT_STATUSES, RECOVERY_PHASES, RECOVERY_SOURCES, RECOVERY_REASON_CODES, RECOVERY_QUARANTINE_CODES, RECOVERY_EVIDENCE_KEYS, RECOVERY_LIMIT, RESULT_FIELDS, REQUIRED_RESULT_FIELDS, digest2, rawDigest, EVIDENCE_KEYS, FUTURE_EVENT_TYPES, FUTURE_EVIDENCE_KEYS, EVENT_PHASE, RECOVERY_INPUT_KEYS, ADMIN_ABANDONMENT_INPUT_KEYS, ADMIN_ABANDONMENT_EVIDENCE_KEYS, AdmissionError, fail, IsolatedAdmissionStore;
 var init_store = __esm({
   "src/sqlite-candidate/wp6b2b1/store.mjs"() {
     "use strict";
@@ -5469,6 +5498,7 @@ var init_store = __esm({
     init_json_history_result_exceptions();
     HERE = path17.dirname(fileURLToPath4(import.meta.url));
     SCHEMA = readFileSync11(new URL("./schema.sql", import.meta.url), "utf8");
+    ADMIN_ABANDONMENT_SCHEMA = readFileSync11(new URL("./admin-abandonment.sql", import.meta.url), "utf8");
     CONSTRUCT = /* @__PURE__ */ Symbol("construct");
     SCHEMA_VERSION = 13;
     SCHEMA_OBJECT_QUERY = "SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE type IN ('table','view','index','trigger') AND substr(lower(name),1,7)<>'sqlite_' ORDER BY type COLLATE BINARY,name COLLATE BINARY";
@@ -5523,6 +5553,8 @@ var init_store = __esm({
       launch_failed: "launch_failed"
     });
     RECOVERY_INPUT_KEYS = Object.freeze(["operation_id", "task_id", "attempt", "generation", "expected_revision", "claim_id", "worker_identity_digest", "classification", "reason_code", "evidence_source", "evidence_digest"]);
+    ADMIN_ABANDONMENT_INPUT_KEYS = "attempt|claim_id|claim_worker_identity_digest|evidence|generation|operation_id|revision|task_id";
+    ADMIN_ABANDONMENT_EVIDENCE_KEYS = "boot_time|claimant_scan_clean|claimant_scan_digest|failed_at|hosts_closed|observed_at|platform_probe_digest|process_inventory_digest|worker_exited|worker_process_id|worker_start_fingerprint|writer_closed";
     AdmissionError = class extends Error {
       constructor(code, message = code) {
         super(message);
@@ -5626,6 +5658,11 @@ var init_store = __esm({
       get foreignKeysEnabled() {
         this.#assertOpen();
         return this.#db.prepare("PRAGMA foreign_keys").get().foreign_keys === 1;
+      }
+      #adminAbandonments() {
+        const table = this.#db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='manager_admin_abandonments'").get();
+        if (!table) return /* @__PURE__ */ new Map();
+        return new Map(this.#db.prepare("SELECT * FROM manager_admin_abandonments ORDER BY operation_id").all().map((row) => [row.operation_id, row]));
       }
       /** Production startup requires exactly one durable reason for this root. */
       assertAuthorityReady(expectedRuntimeRosterDigest) {
@@ -6026,7 +6063,8 @@ var init_store = __esm({
           const attempt = attemptRow ? { task_id: attemptRow.task_id, attempt: attemptRow.attempt, generation: attemptRow.generation, status: attemptRow.status, created_at: attemptRow.created_at } : null;
           if (!attempt) fail("task_attempt_projection_mismatch");
           const operationRow = this.#db.prepare("SELECT * FROM manager_operations WHERE operation_kind='attempt_lifecycle' AND task_id=? AND attempt=?").get(taskId, taskRow.current_attempt);
-          const operation = operationRow ? presentOperation(operationRow) : null;
+          const adminAbandonment = operationRow ? this.#adminAbandonments().get(operationRow.operation_id) : void 0;
+          const operation = operationRow ? presentOperation(operationRow, adminAbandonment) : null;
           let result = null;
           if (operationRow?.result_json !== null && operationRow?.result_json !== void 0) {
             try {
@@ -6583,7 +6621,7 @@ var init_store = __esm({
       readOperation(operationId) {
         return this.#readConsistent(() => {
           const row = this.#db.prepare("SELECT * FROM manager_operations WHERE operation_id=?").get(operationId);
-          return row ? presentOperation(row) : null;
+          return row ? presentOperation(row, this.#adminAbandonments().get(operationId)) : null;
         });
       }
       readLifecycleEvents(operationId, { afterSequence = 0, limit = 100 } = {}) {
@@ -6983,12 +7021,162 @@ var init_store = __esm({
           };
         });
       }
+      /**
+       * Narrow operator-only recovery for one durable cleanup_incomplete Hold whose
+       * Worker generation ended before the current Windows boot. This is not a
+       * generic admin API and never records a Result, cleanup_verified, or released
+       * lifecycle event.
+       */
+      adminAbandonHeldOperation(input) {
+        this.#assertWritable();
+        validateAdminAbandonmentInput(input);
+        return this.#transaction(() => {
+          if (!this.#db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='manager_admin_abandonments'").get())
+            this.#db.exec(ADMIN_ABANDONMENT_SCHEMA);
+          const operation = this.#db.prepare("SELECT * FROM manager_operations WHERE operation_id=? AND operation_kind='attempt_lifecycle'").get(input.operation_id);
+          if (!operation) fail("operation_not_found");
+          const existing = this.#db.prepare("SELECT * FROM manager_admin_abandonments WHERE operation_id=?").get(input.operation_id);
+          if (operation.task_id !== input.task_id || operation.attempt !== input.attempt || operation.generation !== input.generation || operation.claim_id !== input.claim_id || operation.claim_worker_identity_digest !== input.claim_worker_identity_digest)
+            fail("admin_abandonment_identity_mismatch");
+          let worker, launch;
+          try {
+            worker = JSON.parse(operation.claim_worker_identity_json);
+            launch = JSON.parse(operation.launch_identity_json);
+          } catch {
+            fail("admin_abandonment_identity_invalid");
+          }
+          if (!worker || worker.source !== "manager_verified_process_probe" || worker.fixture !== false || worker.platform !== "win32" || worker.fingerprint_precision !== "exact" || digest2(canonical3(worker)) !== input.claim_worker_identity_digest || !launch || launch.source !== "manager_os_spawn_observation" || launch.fixture !== false || launch.platform !== "win32" || launch.fingerprint_precision !== "exact" || launch.process_id !== worker.process_id || launch.start_fingerprint !== worker.start_fingerprint || input.evidence.worker_process_id !== worker.process_id || input.evidence.worker_start_fingerprint !== worker.start_fingerprint) fail("admin_abandonment_worker_identity_mismatch");
+          const audit = {
+            boot_time: input.evidence.boot_time,
+            claimant_scan_clean: true,
+            claimant_scan_digest: input.evidence.claimant_scan_digest,
+            cleanup_verified: false,
+            failed_at: input.evidence.failed_at,
+            hosts_closed: true,
+            observed_at: input.evidence.observed_at,
+            platform_probe_digest: input.evidence.platform_probe_digest,
+            process_inventory_digest: input.evidence.process_inventory_digest,
+            result_absent: true,
+            worker_exited: true,
+            writer_closed: true
+          };
+          const auditJson = canonical3(audit), auditDigest = digest2(auditJson);
+          const requestDigest = digest2({
+            operation_id: input.operation_id,
+            task_id: input.task_id,
+            attempt: input.attempt,
+            generation: input.generation,
+            original_revision: input.revision,
+            claim_id: input.claim_id,
+            worker_identity_digest: input.claim_worker_identity_digest,
+            worker_process_id: input.evidence.worker_process_id,
+            worker_start_fingerprint: input.evidence.worker_start_fingerprint,
+            audit_digest: auditDigest
+          });
+          if (existing) {
+            if (existing.task_id === input.task_id && existing.attempt === input.attempt && existing.generation === input.generation && existing.claim_id === input.claim_id && existing.worker_identity_digest === input.claim_worker_identity_digest && existing.original_revision === input.revision && existing.audit_digest === auditDigest && existing.request_digest === requestDigest)
+              return {
+                duplicate: true,
+                operation_id: input.operation_id,
+                task_id: input.task_id,
+                attempt: input.attempt,
+                generation: input.generation,
+                phase: "admin_abandoned",
+                result_absent: true,
+                cleanup_verified: false,
+                revision: operation.revision,
+                event_sequence: existing.event_sequence,
+                audit_digest: existing.audit_digest
+              };
+            fail("admin_abandonment_evidence_conflict");
+          }
+          if (operation.revision !== input.revision) fail("admin_abandonment_identity_mismatch");
+          if (operation.phase !== "running" || operation.result_digest !== null || operation.result_json !== null || operation.result_commit_ref !== null || operation.result_status !== null || operation.result_generation !== null) fail("admin_abandonment_result_or_phase_invalid");
+          const projection = this.#db.prepare(`SELECT t.current_attempt,t.status AS task_status,a.status AS attempt_status,a.generation
+        FROM tasks t JOIN attempts a ON a.task_id=t.task_id AND a.attempt=t.current_attempt
+        WHERE t.task_id=? AND a.attempt=?`).get(input.task_id, input.attempt);
+          if (!projection || projection.current_attempt !== input.attempt || projection.task_status !== "running" || projection.attempt_status !== "running" || projection.generation !== input.generation) fail("admin_abandonment_projection_invalid");
+          const events = this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? ORDER BY sequence").all(input.operation_id);
+          const holds = [];
+          for (const event of events) {
+            if (event.event_type !== "observation_recorded") continue;
+            let evidence;
+            try {
+              evidence = JSON.parse(event.evidence_json);
+            } catch {
+              fail("database_unreadable");
+            }
+            if (evidence.reason === "recovery_hold" && evidence.reason_code === "cleanup_incomplete" && evidence.claim_id === input.claim_id && evidence.worker_identity_digest === input.claim_worker_identity_digest) holds.push({ event, evidence });
+          }
+          if (holds.length === 0) fail("admin_abandonment_cleanup_hold_required");
+          const latestHold = holds.at(-1);
+          if (input.evidence.failed_at !== latestHold.event.at) fail("admin_abandonment_failure_time_mismatch");
+          this.#assertNoUnknownInteraction(input.operation_id);
+          this.#assertNoCancellationIntent(input.operation_id);
+          const changedOperation = this.#db.prepare(`UPDATE manager_operations
+        SET phase='released',revision=revision+1
+        WHERE operation_id=? AND task_id=? AND attempt=? AND generation=? AND phase='running' AND revision=?
+          AND claim_id=? AND claim_generation=? AND claim_worker_identity_digest=?
+          AND result_digest IS NULL AND result_json IS NULL AND result_commit_ref IS NULL`).run(input.operation_id, input.task_id, input.attempt, input.generation, input.revision, input.claim_id, input.generation, input.claim_worker_identity_digest);
+          if (changedOperation.changes !== 1) fail("stale_admin_abandonment_cas");
+          const changedAttempt = this.#db.prepare(`UPDATE attempts SET status='failed'
+        WHERE task_id=? AND attempt=? AND generation=? AND status='running'`).run(input.task_id, input.attempt, input.generation);
+          const changedTask = this.#db.prepare(`UPDATE tasks SET status='failed'
+        WHERE task_id=? AND current_attempt=? AND status='running'`).run(input.task_id, input.attempt);
+          if (changedAttempt.changes !== 1 || changedTask.changes !== 1) fail("admin_abandonment_projection_cas");
+          const eventSequence = input.revision + 1;
+          this.#event(
+            input.operation_id,
+            eventSequence,
+            "observation_recorded",
+            "running",
+            "released",
+            input.generation,
+            { reason: "admin_abandoned", evidence_digest: auditDigest },
+            input.evidence.observed_at
+          );
+          const inserted = this.#db.prepare(`INSERT INTO manager_admin_abandonments(
+        operation_id,operation_kind,task_id,attempt,generation,claim_id,worker_identity_digest,original_revision,event_sequence,
+        outcome,result_absent,cleanup_verified,release_reason,request_digest,audit_json,audit_digest,abandoned_at)
+        VALUES(?,'attempt_lifecycle',?,?,?,?,?,?,?, 'admin_abandoned',1,0,'cleanup_incomplete',?,?,?,?)`).run(
+            input.operation_id,
+            input.task_id,
+            input.attempt,
+            input.generation,
+            input.claim_id,
+            input.claim_worker_identity_digest,
+            input.revision,
+            eventSequence,
+            requestDigest,
+            auditJson,
+            auditDigest,
+            input.evidence.observed_at
+          );
+          if (inserted.changes !== 1) fail("admin_abandonment_insert_failed");
+          return {
+            duplicate: false,
+            operation_id: input.operation_id,
+            task_id: input.task_id,
+            attempt: input.attempt,
+            generation: input.generation,
+            phase: "admin_abandoned",
+            result_absent: true,
+            cleanup_verified: false,
+            revision: eventSequence,
+            event_sequence: eventSequence,
+            audit_digest: auditDigest
+          };
+        });
+      }
       readSnapshot() {
-        const snapshot = this.#readConsistent(() => ({
-          capacity: this.#db.prepare("SELECT * FROM authority_metadata").get(),
-          operations: this.#db.prepare("SELECT * FROM manager_operations ORDER BY operation_id").all().map(presentOperation),
-          events: this.#db.prepare("SELECT * FROM manager_operation_events ORDER BY operation_id,sequence").all()
-        }));
+        const snapshot = this.#readConsistent(() => {
+          const admins = this.#adminAbandonments();
+          return {
+            capacity: this.#db.prepare("SELECT * FROM authority_metadata").get(),
+            operations: this.#db.prepare("SELECT * FROM manager_operations ORDER BY operation_id").all().map((row) => presentOperation(row, admins.get(row.operation_id))),
+            events: this.#db.prepare("SELECT * FROM manager_operation_events ORDER BY operation_id,sequence").all()
+          };
+        });
         return { ...snapshot, root_poisoned: this.poisoned || existsSync12(this.#paths.intent) };
       }
       /** Read-only recovery entry point. Writable Stores cannot be used as Recovery authority. */
@@ -7012,6 +7200,7 @@ var init_store = __esm({
           const meta2 = this.#db.prepare("SELECT * FROM authority_metadata").all();
           const operations = this.#db.prepare("SELECT * FROM manager_operations ORDER BY operation_id").all();
           const events = this.#db.prepare("SELECT * FROM manager_operation_events ORDER BY operation_id,sequence").all();
+          const adminAbandonments = this.#adminAbandonments();
           let integrityError = null;
           try {
             this.#validateContents();
@@ -7023,14 +7212,15 @@ var init_store = __esm({
           const poisoned = this.poisoned, writerIntent = existsSync12(this.#paths.intent);
           const rootBlocked = Boolean(integrityError || meta2.length !== 1 || poisoned || writerIntent);
           const operationsWithRecovery = operations.map((row) => {
-            const active = row.operation_kind === "attempt_lifecycle" && !["released", "cancelled_before_launch"].includes(row.phase);
+            const adminAbandonment = adminAbandonments.get(row.operation_id);
+            const active = row.operation_kind === "attempt_lifecycle" && !adminAbandonment && !["released", "cancelled_before_launch"].includes(row.phase);
             const operationEvents = events.filter((e) => e.operation_id === row.operation_id);
             const recoveryEvents = recoveryEventsFor(operationEvents, row);
             const recoveryClassification = foldedRecoveryClassification(row, operationEvents);
-            const cleanupState = row.phase === "cleanup_verified" || row.phase === "released" ? "verified" : row.phase === "cleanup_unverified" ? "unverified" : row.phase === "result_committed" || row.phase === "cleanup_pending" || row.phase === "quarantined" || active && row.claim_id !== null ? "unknown" : "not_applicable";
+            const cleanupState = adminAbandonment ? "not_applicable" : row.phase === "cleanup_verified" || row.phase === "released" ? "verified" : row.phase === "cleanup_unverified" ? "unverified" : row.phase === "result_committed" || row.phase === "cleanup_pending" || row.phase === "quarantined" || active && row.claim_id !== null ? "unknown" : "not_applicable";
             const blockers = [];
             if (integrityError) blockers.push(integrityError);
-            if (row.operation_kind === "attempt_lifecycle") {
+            if (row.operation_kind === "attempt_lifecycle" && !adminAbandonment) {
               if (row.launch_id !== null && row.launch_receipt_digest === null) blockers.push("launch_outcome_unknown_receipt_missing");
               if (row.claim_id !== null && active && cleanupState !== "verified") blockers.push("manager_os_identity_probe_required");
               if (row.result_digest === null && row.claim_id !== null && active) blockers.push("execution_result_unknown");
@@ -7044,9 +7234,9 @@ var init_store = __esm({
             }
             if (poisoned) blockers.push("root_poisoned");
             if (writerIntent) blockers.push("writer_intent_present_outcome_unknown");
-            const recoveryDecision = integrityError ? "quarantine_read_only" : poisoned || writerIntent || meta2.length !== 1 ? "blocked_read_only" : row.operation_kind === "attempt_lifecycle" && ["released", "cancelled_before_launch"].includes(row.phase) ? "complete" : recoveryClassification === "quarantine" ? "quarantine_read_only" : "hold";
+            const recoveryDecision = integrityError ? "quarantine_read_only" : poisoned || writerIntent || meta2.length !== 1 ? "blocked_read_only" : adminAbandonment ? "complete" : row.operation_kind === "attempt_lifecycle" && ["released", "cancelled_before_launch"].includes(row.phase) ? "complete" : recoveryClassification === "quarantine" ? "quarantine_read_only" : "hold";
             return {
-              ...presentOperation(row),
+              ...presentOperation(row, adminAbandonment),
               recovery_decision: recoveryDecision,
               recovery_blockers: [...new Set(blockers)],
               recovery_classification: recoveryClassification,
@@ -8145,6 +8335,7 @@ var init_store = __esm({
           const slots = this.#db.prepare("SELECT capacity_slot,COUNT(*) n FROM manager_operations WHERE operation_kind='attempt_lifecycle' AND phase NOT IN ('released','cancelled_before_launch') GROUP BY capacity_slot HAVING COUNT(*)>1").all();
           const active = this.#db.prepare("SELECT COUNT(*) n,MAX(capacity_slot) max_slot FROM manager_operations WHERE operation_kind='attempt_lifecycle' AND phase NOT IN ('released','cancelled_before_launch')").get();
           if (slots.length || active.n > m[0].capacity_limit || active.max_slot > m[0].capacity_limit) fail("active_capacity_invariant");
+          const adminAbandonments = this.#adminAbandonments();
           const os2 = this.#db.prepare("SELECT * FROM manager_operations").all();
           for (const o of os2) {
             if (o.operation_kind === "attempt_lifecycle" && o.phase === "running") {
@@ -8189,7 +8380,7 @@ var init_store = __esm({
               if (e.event_type === "cleanup_reverified" && (e.from_phase !== "cleanup_unverified" || e.to_phase !== "cleanup_reverified")) fail("invalid_event_phase");
               if (e.event_type === "released" && (e.from_phase !== "cleanup_verified" || e.to_phase !== "released")) fail("invalid_event_phase");
               if (e.event_type === "launch_intent" && (e.from_phase !== "reserved" || e.to_phase !== "launch_intent")) fail("invalid_event_phase");
-              if (e.event_type === "observation_recorded" && e.from_phase !== e.to_phase) fail("invalid_event_phase");
+              if (e.event_type === "observation_recorded" && e.from_phase !== e.to_phase && !(parsed.reason === "admin_abandoned" && e.from_phase === "running" && e.to_phase === "released")) fail("invalid_event_phase");
               if (e.event_type !== "launch_receipt" && e.event_type !== "claim_committed" && e.event_type !== "launch_intent" && e.event_type !== "observation_recorded" && !e.event_type.startsWith("interaction_") && EVENT_PHASE[e.event_type] !== e.to_phase) fail("invalid_event_phase");
               if (e.event_type.startsWith("interaction_") && (e.from_phase !== "running" || e.to_phase !== "running")) fail("invalid_event_phase");
               if (o.operation_kind === "attempt_lifecycle" && e.generation !== o.generation) fail("invalid_event_phase");
@@ -8358,7 +8549,50 @@ var init_store = __esm({
                 }
                 const expected = o.phase === "quarantined" ? "quarantined" : released.length ? "released" : verified.length ? "cleanup_verified" : unverified.length ? "cleanup_unverified" : "cleanup_pending";
                 if (o.phase !== expected) fail("cleanup_projection_mismatch");
-              } else if (["cleanup_pending", "cleanup_verified", "cleanup_unverified", "cleanup_reverified", "released"].includes(o.phase)) fail("cleanup_projection_mismatch");
+              } else if (["cleanup_pending", "cleanup_verified", "cleanup_unverified", "cleanup_reverified", "released"].includes(o.phase) && !adminAbandonments.has(o.operation_id)) fail("cleanup_projection_mismatch");
+              const adminAbandonment = adminAbandonments.get(o.operation_id);
+              if (adminAbandonment) {
+                let adminWorker;
+                try {
+                  adminWorker = JSON.parse(o.claim_worker_identity_json);
+                } catch {
+                  fail("admin_abandonment_projection_mismatch");
+                }
+                if (!adminWorker || typeof adminWorker !== "object") fail("admin_abandonment_projection_mismatch");
+                const expectedRouteDigest = digest2({
+                  operation_id: o.operation_id,
+                  task_id: o.task_id,
+                  attempt: o.attempt,
+                  generation: o.generation,
+                  original_revision: adminAbandonment.original_revision,
+                  claim_id: o.claim_id,
+                  worker_identity_digest: adminAbandonment.worker_identity_digest,
+                  worker_process_id: adminWorker.process_id,
+                  worker_start_fingerprint: adminWorker.start_fingerprint,
+                  audit_digest: adminAbandonment.audit_digest
+                });
+                if (adminAbandonment.operation_kind !== "attempt_lifecycle" || adminAbandonment.task_id !== o.task_id || adminAbandonment.attempt !== o.attempt || adminAbandonment.generation !== o.generation || adminAbandonment.claim_id !== o.claim_id || adminAbandonment.worker_identity_digest !== o.claim_worker_identity_digest || adminAbandonment.original_revision + 1 !== o.revision || adminAbandonment.event_sequence !== o.revision || adminAbandonment.outcome !== "admin_abandoned" || adminAbandonment.result_absent !== 1 || adminAbandonment.cleanup_verified !== 0 || adminAbandonment.release_reason !== "cleanup_incomplete" || adminAbandonment.audit_digest !== digest2(adminAbandonment.audit_json) || adminAbandonment.request_digest !== expectedRouteDigest || o.phase !== "released" || o.result_digest !== null || o.result_json !== null || o.result_commit_ref !== null || !Number.isFinite(Date.parse(adminAbandonment.abandoned_at))) fail("admin_abandonment_projection_mismatch");
+                const terminalEvent = es.at(-1);
+                let terminalEvidence;
+                try {
+                  terminalEvidence = JSON.parse(terminalEvent.evidence_json);
+                } catch {
+                  fail("admin_abandonment_projection_mismatch");
+                }
+                if (!terminalEvent || terminalEvent.sequence !== adminAbandonment.event_sequence || terminalEvent.event_type !== "observation_recorded" || terminalEvent.from_phase !== "running" || terminalEvent.to_phase !== "released" || terminalEvidence.reason !== "admin_abandoned" || terminalEvidence.evidence_digest !== adminAbandonment.audit_digest)
+                  fail("admin_abandonment_event_mismatch");
+                let audit;
+                try {
+                  audit = JSON.parse(adminAbandonment.audit_json);
+                } catch {
+                  fail("admin_abandonment_audit_invalid");
+                }
+                if (Object.keys(audit).sort().join("|") !== "boot_time|claimant_scan_clean|claimant_scan_digest|cleanup_verified|failed_at|hosts_closed|observed_at|platform_probe_digest|process_inventory_digest|result_absent|worker_exited|writer_closed" || audit.claimant_scan_clean !== true || audit.cleanup_verified !== false || audit.hosts_closed !== true || audit.result_absent !== true || audit.worker_exited !== true || audit.writer_closed !== true || !validIsoInstant(audit.boot_time) || typeof audit.claimant_scan_digest !== "string" || !/^[0-9a-f]{64}$/u.test(audit.claimant_scan_digest) || typeof audit.platform_probe_digest !== "string" || !/^[0-9a-f]{64}$/u.test(audit.platform_probe_digest) || typeof audit.process_inventory_digest !== "string" || !/^[0-9a-f]{64}$/u.test(audit.process_inventory_digest) || !validIsoInstant(audit.failed_at) || !validIsoInstant(audit.observed_at) || Date.parse(audit.boot_time) <= Date.parse(audit.failed_at) || Date.parse(audit.observed_at) < Date.parse(audit.boot_time) || adminAbandonment.abandoned_at !== audit.observed_at) fail("admin_abandonment_audit_invalid");
+                const projection = this.#db.prepare(`SELECT t.current_attempt,t.status AS task_status,a.status AS attempt_status
+              FROM tasks t JOIN attempts a ON a.task_id=t.task_id AND a.attempt=t.current_attempt
+              WHERE t.task_id=? AND a.attempt=? AND a.generation=?`).get(o.task_id, o.attempt, o.generation);
+                if (!projection || projection.current_attempt !== o.attempt || projection.task_status !== "failed" || projection.attempt_status !== "failed") fail("admin_abandonment_projection_mismatch");
+              }
               validateInteractionHistory(this.#db, o, es);
             }
           }
@@ -8734,7 +8968,9 @@ async function openClaimOnlyDriver(options) {
       const operation = asRecord4(operationValue);
       if (operation.operation_kind !== "attempt_lifecycle") return { state: "not_applicable", operation_id: operationId };
       const phase = text(operation.phase, "recovery_phase_missing");
-      if (phase === "released" || phase === "cancelled_before_launch") return { state: "complete", operation_id: operationId, phase };
+      if (phase === "released" || phase === "cancelled_before_launch" || phase === "admin_abandoned") {
+        return { state: "complete", operation_id: operationId, phase };
+      }
       if (phase === "reserved") return { state: "reserved", operation_id: operationId, phase };
       const lifecycleEvents = readAllLifecycleEventsForRecovery(port, operationId);
       const reverifiedCleanup = lifecycleEvents.find((event) => event.event_type === "cleanup_reverified");

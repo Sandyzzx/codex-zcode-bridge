@@ -8,22 +8,33 @@ import { historicalResultExceptionSetDigest, historicalResultExceptionTaskIds, i
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SCHEMA = readFileSync(new URL('./schema.sql', import.meta.url), 'utf8');
+const ADMIN_ABANDONMENT_SCHEMA = readFileSync(new URL('./admin-abandonment.sql', import.meta.url), 'utf8');
 const CONSTRUCT = Symbol('construct');
 const SCHEMA_VERSION = 13;
 // Derive the expected objects from the shipped schema, never from the database
 // being checked. SQLite's own autoindexes and sqlite_sequence are excluded.
 const SCHEMA_OBJECT_QUERY = "SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE type IN ('table','view','index','trigger') AND substr(lower(name),1,7)<>'sqlite_' ORDER BY type COLLATE BINARY,name COLLATE BINARY";
-let expectedSchemaObjects;
+let expectedBaseSchemaObjects;
+let expectedAdminSchemaObjects;
 function schemaObjects(db) {
-  return JSON.stringify(db.prepare(SCHEMA_OBJECT_QUERY).all().map(row=>[row.type,row.name,row.tbl_name,row.sql===null?null:row.sql.trim()]));
+  return db.prepare(SCHEMA_OBJECT_QUERY).all().map(row=>[row.type,row.name,row.tbl_name,row.sql===null?null:row.sql.trim()]);
 }
 function assertCandidateSchema(db) {
-  if(expectedSchemaObjects===undefined){
-    const expected=new DatabaseSync(':memory:');
-    try { expected.exec(SCHEMA);expectedSchemaObjects=schemaObjects(expected); }
-    finally { expected.close(); }
+  if(expectedBaseSchemaObjects===undefined){
+    const base=new DatabaseSync(':memory:');
+    const admin=new DatabaseSync(':memory:');
+    try {
+      base.exec(SCHEMA);
+      expectedBaseSchemaObjects=schemaObjects(base);
+      admin.exec(`${SCHEMA}\n${ADMIN_ABANDONMENT_SCHEMA}`);
+      expectedAdminSchemaObjects=schemaObjects(admin);
+    } finally {
+      base.close();
+      admin.close();
+    }
   }
-  if(schemaObjects(db)!==expectedSchemaObjects)fail('candidate_schema_mismatch');
+  const actual=JSON.stringify(schemaObjects(db));
+  if(actual!==JSON.stringify(expectedBaseSchemaObjects)&&actual!==JSON.stringify(expectedAdminSchemaObjects))fail('candidate_schema_mismatch');
 }
 const RESULT_CONTRACT_VERSION = 1;
 const RESULT_STATUSES = new Set(['completed','failed','cancelled','waiting_for_master']);
@@ -338,8 +349,42 @@ function normalizeCleanupEvidence(value,input){
   if(Buffer.byteLength(canonical(value),'utf8')>4096)fail('cleanup_evidence_too_large');
   return value;
 }
-function presentOperation(row){return {...row,launch_outcome:row.launch_id===null?'not_requested':row.launch_receipt_digest===null?'unknown_receipt_missing':'receipt_recorded_process_unverified',
-  claim_status:row.claim_id===null?'not_claimed':'permanent_claim_recorded'};}
+function presentOperation(row,adminAbandonment){
+  return {...row,...(adminAbandonment?{
+    physical_phase:row.phase,
+    phase:'admin_abandoned',
+    admin_abandoned:true,
+    result_absent:true,
+    cleanup_verified:false,
+    administrative_release_reason:'cleanup_incomplete',
+    admin_abandonment_audit_digest:adminAbandonment.audit_digest,
+    admin_abandoned_at:adminAbandonment.abandoned_at,
+  }:{}),
+  launch_outcome:row.launch_id===null?'not_requested':row.launch_receipt_digest===null?'unknown_receipt_missing':'receipt_recorded_process_unverified',
+  claim_status:row.claim_id===null?'not_claimed':'permanent_claim_recorded'};
+}
+const ADMIN_ABANDONMENT_INPUT_KEYS='attempt|claim_id|claim_worker_identity_digest|evidence|generation|operation_id|revision|task_id';
+const ADMIN_ABANDONMENT_EVIDENCE_KEYS='boot_time|claimant_scan_clean|claimant_scan_digest|failed_at|hosts_closed|observed_at|platform_probe_digest|process_inventory_digest|worker_exited|worker_process_id|worker_start_fingerprint|writer_closed';
+function validIsoInstant(value){return typeof value==='string'&&Number.isFinite(Date.parse(value));}
+function validateAdminAbandonmentInput(input){
+  if(!input||Object.getPrototypeOf(input)!==Object.prototype||Object.keys(input).sort().join('|')!==ADMIN_ABANDONMENT_INPUT_KEYS
+    ||!validId(input.operation_id)||!validId(input.task_id)||!Number.isSafeInteger(input.attempt)||input.attempt<1
+    ||!Number.isSafeInteger(input.generation)||input.generation<1||!Number.isSafeInteger(input.revision)||input.revision<1
+    ||!validId(input.claim_id)||typeof input.claim_worker_identity_digest!=='string'||!/^[0-9a-f]{64}$/u.test(input.claim_worker_identity_digest))
+    fail('invalid_admin_abandonment_request');
+  const evidence=input.evidence;
+  if(!evidence||Object.getPrototypeOf(evidence)!==Object.prototype||Object.keys(evidence).sort().join('|')!==ADMIN_ABANDONMENT_EVIDENCE_KEYS
+    ||!validIsoInstant(evidence.boot_time)||!validIsoInstant(evidence.failed_at)||!validIsoInstant(evidence.observed_at)
+    ||!Number.isSafeInteger(evidence.worker_process_id)||evidence.worker_process_id<1||!validText(evidence.worker_start_fingerprint,256)
+    ||typeof evidence.process_inventory_digest!=='string'||!/^[0-9a-f]{64}$/u.test(evidence.process_inventory_digest)
+    ||typeof evidence.platform_probe_digest!=='string'||!/^[0-9a-f]{64}$/u.test(evidence.platform_probe_digest)
+    ||typeof evidence.claimant_scan_digest!=='string'||!/^[0-9a-f]{64}$/u.test(evidence.claimant_scan_digest)
+    ||evidence.hosts_closed!==true||evidence.writer_closed!==true||evidence.worker_exited!==true||evidence.claimant_scan_clean!==true)
+    fail('invalid_admin_abandonment_evidence');
+  if(Date.parse(evidence.boot_time)<=Date.parse(evidence.failed_at)||Date.parse(evidence.observed_at)<Date.parse(evidence.boot_time))
+    fail('admin_abandonment_generation_boundary_unverified');
+  return input;
+}
 function isBusy(error){return [5,6].includes(error?.errcode)||/SQLITE_(BUSY|LOCKED)/u.test(String(error?.code??''))||/database is (busy|locked)/iu.test(String(error?.message??''));}
 export function canonical(value) {
   if (value === null || typeof value === 'string' || typeof value === 'boolean') return JSON.stringify(value);
@@ -562,6 +607,12 @@ export class IsolatedAdmissionStore {
   checkpoint(){this.#assertOpen();this.#db.exec('PRAGMA wal_checkpoint(TRUNCATE)');}
   get poisoned(){return this.#poisoned||existsSync(this.#paths.poison);}
   get foreignKeysEnabled(){this.#assertOpen();return this.#db.prepare('PRAGMA foreign_keys').get().foreign_keys===1;}
+  #adminAbandonments(){
+    const table=this.#db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='manager_admin_abandonments'").get();
+    if(!table)return new Map();
+    return new Map(this.#db.prepare('SELECT * FROM manager_admin_abandonments ORDER BY operation_id').all()
+      .map(row=>[row.operation_id,row]));
+  }
   /** Production startup requires exactly one durable reason for this root. */
   assertAuthorityReady(expectedRuntimeRosterDigest) {
     return this.#readConsistent(()=>{
@@ -935,7 +986,8 @@ export class IsolatedAdmissionStore {
       const attempt=attemptRow?{task_id:attemptRow.task_id,attempt:attemptRow.attempt,generation:attemptRow.generation,status:attemptRow.status,created_at:attemptRow.created_at}:null;
       if(!attempt)fail('task_attempt_projection_mismatch');
       const operationRow=this.#db.prepare("SELECT * FROM manager_operations WHERE operation_kind='attempt_lifecycle' AND task_id=? AND attempt=?").get(taskId,taskRow.current_attempt);
-      const operation=operationRow?presentOperation(operationRow):null;
+      const adminAbandonment=operationRow?this.#adminAbandonments().get(operationRow.operation_id):undefined;
+      const operation=operationRow?presentOperation(operationRow,adminAbandonment):null;
       let result=null;
       if(operationRow?.result_json!==null&&operationRow?.result_json!==undefined){try{result=JSON.parse(operationRow.result_json);}catch{fail('result_projection_invalid');}}
       else if(attemptRow.queued_cancel_result_json!==null){try{result=JSON.parse(attemptRow.queued_cancel_result_json);}catch{fail('result_projection_invalid');}}
@@ -1318,7 +1370,7 @@ export class IsolatedAdmissionStore {
       return {duplicate:false,operation_id:normalized.operation_id,reservation_id,revision:1,event_sequence:1,capacity_slot:slot.n,phase:'reserved',generation:normalized.generation};
     });
   }
-  readOperation(operationId) { return this.#readConsistent(()=>{const row=this.#db.prepare('SELECT * FROM manager_operations WHERE operation_id=?').get(operationId);return row?presentOperation(row):null;}); }
+  readOperation(operationId) { return this.#readConsistent(()=>{const row=this.#db.prepare('SELECT * FROM manager_operations WHERE operation_id=?').get(operationId);return row?presentOperation(row,this.#adminAbandonments().get(operationId)):null;}); }
   readLifecycleEvents(operationId,{afterSequence=0,limit=100}={}) {
     this.#assertOpen();
     if(!validId(operationId)||!Number.isSafeInteger(afterSequence)||afterSequence<0||!Number.isInteger(limit)||limit<1||limit>200)fail('invalid_event_read');
@@ -1569,10 +1621,115 @@ export class IsolatedAdmissionStore {
         phase:'running',cancel_id:intent.evidence.cancel_id,cancellation_verification_digest:event.evidence_digest};
     });
   }
+  /**
+   * Narrow operator-only recovery for one durable cleanup_incomplete Hold whose
+   * Worker generation ended before the current Windows boot. This is not a
+   * generic admin API and never records a Result, cleanup_verified, or released
+   * lifecycle event.
+   */
+  adminAbandonHeldOperation(input) {
+    this.#assertWritable();
+    validateAdminAbandonmentInput(input);
+    return this.#transaction(()=>{
+      if(!this.#db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='manager_admin_abandonments'").get())
+        this.#db.exec(ADMIN_ABANDONMENT_SCHEMA);
+      const operation=this.#db.prepare("SELECT * FROM manager_operations WHERE operation_id=? AND operation_kind='attempt_lifecycle'").get(input.operation_id);
+      if(!operation)fail('operation_not_found');
+      const existing=this.#db.prepare('SELECT * FROM manager_admin_abandonments WHERE operation_id=?').get(input.operation_id);
+      if(operation.task_id!==input.task_id||operation.attempt!==input.attempt||operation.generation!==input.generation
+        ||operation.claim_id!==input.claim_id||operation.claim_worker_identity_digest!==input.claim_worker_identity_digest)
+        fail('admin_abandonment_identity_mismatch');
+      let worker,launch;
+      try{worker=JSON.parse(operation.claim_worker_identity_json);launch=JSON.parse(operation.launch_identity_json);}catch{fail('admin_abandonment_identity_invalid');}
+      if(!worker||worker.source!=='manager_verified_process_probe'||worker.fixture!==false||worker.platform!=='win32'
+        ||worker.fingerprint_precision!=='exact'||digest(canonical(worker))!==input.claim_worker_identity_digest
+        ||!launch||launch.source!=='manager_os_spawn_observation'||launch.fixture!==false||launch.platform!=='win32'
+        ||launch.fingerprint_precision!=='exact'||launch.process_id!==worker.process_id
+        ||launch.start_fingerprint!==worker.start_fingerprint
+        ||input.evidence.worker_process_id!==worker.process_id
+        ||input.evidence.worker_start_fingerprint!==worker.start_fingerprint)fail('admin_abandonment_worker_identity_mismatch');
+      const audit={
+        boot_time:input.evidence.boot_time,
+        claimant_scan_clean:true,
+        claimant_scan_digest:input.evidence.claimant_scan_digest,
+        cleanup_verified:false,
+        failed_at:input.evidence.failed_at,
+        hosts_closed:true,
+        observed_at:input.evidence.observed_at,
+        platform_probe_digest:input.evidence.platform_probe_digest,
+        process_inventory_digest:input.evidence.process_inventory_digest,
+        result_absent:true,
+        worker_exited:true,
+        writer_closed:true,
+      };
+      const auditJson=canonical(audit),auditDigest=digest(auditJson);
+      const requestDigest=digest({operation_id:input.operation_id,task_id:input.task_id,attempt:input.attempt,generation:input.generation,
+        original_revision:input.revision,claim_id:input.claim_id,worker_identity_digest:input.claim_worker_identity_digest,
+        worker_process_id:input.evidence.worker_process_id,worker_start_fingerprint:input.evidence.worker_start_fingerprint,audit_digest:auditDigest});
+      if(existing){
+        if(existing.task_id===input.task_id&&existing.attempt===input.attempt&&existing.generation===input.generation
+          &&existing.claim_id===input.claim_id&&existing.worker_identity_digest===input.claim_worker_identity_digest
+          &&existing.original_revision===input.revision&&existing.audit_digest===auditDigest&&existing.request_digest===requestDigest)
+          return {duplicate:true,operation_id:input.operation_id,task_id:input.task_id,attempt:input.attempt,generation:input.generation,
+            phase:'admin_abandoned',result_absent:true,cleanup_verified:false,revision:operation.revision,
+            event_sequence:existing.event_sequence,audit_digest:existing.audit_digest};
+        fail('admin_abandonment_evidence_conflict');
+      }
+      if(operation.revision!==input.revision)fail('admin_abandonment_identity_mismatch');
+      if(operation.phase!=='running'||operation.result_digest!==null||operation.result_json!==null||operation.result_commit_ref!==null
+        ||operation.result_status!==null||operation.result_generation!==null) fail('admin_abandonment_result_or_phase_invalid');
+      const projection=this.#db.prepare(`SELECT t.current_attempt,t.status AS task_status,a.status AS attempt_status,a.generation
+        FROM tasks t JOIN attempts a ON a.task_id=t.task_id AND a.attempt=t.current_attempt
+        WHERE t.task_id=? AND a.attempt=?`).get(input.task_id,input.attempt);
+      if(!projection||projection.current_attempt!==input.attempt||projection.task_status!=='running'
+        ||projection.attempt_status!=='running'||projection.generation!==input.generation)fail('admin_abandonment_projection_invalid');
+      const events=this.#db.prepare('SELECT * FROM manager_operation_events WHERE operation_id=? ORDER BY sequence').all(input.operation_id);
+      const holds=[];
+      for(const event of events){
+        if(event.event_type!=='observation_recorded')continue;
+        let evidence;try{evidence=JSON.parse(event.evidence_json);}catch{fail('database_unreadable');}
+        if(evidence.reason==='recovery_hold'&&evidence.reason_code==='cleanup_incomplete'
+          &&evidence.claim_id===input.claim_id&&evidence.worker_identity_digest===input.claim_worker_identity_digest)holds.push({event,evidence});
+      }
+      if(holds.length===0)fail('admin_abandonment_cleanup_hold_required');
+      const latestHold=holds.at(-1);
+      if(input.evidence.failed_at!==latestHold.event.at)fail('admin_abandonment_failure_time_mismatch');
+      this.#assertNoUnknownInteraction(input.operation_id);
+      this.#assertNoCancellationIntent(input.operation_id);
+      const changedOperation=this.#db.prepare(`UPDATE manager_operations
+        SET phase='released',revision=revision+1
+        WHERE operation_id=? AND task_id=? AND attempt=? AND generation=? AND phase='running' AND revision=?
+          AND claim_id=? AND claim_generation=? AND claim_worker_identity_digest=?
+          AND result_digest IS NULL AND result_json IS NULL AND result_commit_ref IS NULL`)
+        .run(input.operation_id,input.task_id,input.attempt,input.generation,input.revision,input.claim_id,input.generation,input.claim_worker_identity_digest);
+      if(changedOperation.changes!==1)fail('stale_admin_abandonment_cas');
+      const changedAttempt=this.#db.prepare(`UPDATE attempts SET status='failed'
+        WHERE task_id=? AND attempt=? AND generation=? AND status='running'`).run(input.task_id,input.attempt,input.generation);
+      const changedTask=this.#db.prepare(`UPDATE tasks SET status='failed'
+        WHERE task_id=? AND current_attempt=? AND status='running'`).run(input.task_id,input.attempt);
+      if(changedAttempt.changes!==1||changedTask.changes!==1)fail('admin_abandonment_projection_cas');
+      const eventSequence=input.revision+1;
+      this.#event(input.operation_id,eventSequence,'observation_recorded','running','released',input.generation,
+        {reason:'admin_abandoned',evidence_digest:auditDigest},input.evidence.observed_at);
+      const inserted=this.#db.prepare(`INSERT INTO manager_admin_abandonments(
+        operation_id,operation_kind,task_id,attempt,generation,claim_id,worker_identity_digest,original_revision,event_sequence,
+        outcome,result_absent,cleanup_verified,release_reason,request_digest,audit_json,audit_digest,abandoned_at)
+        VALUES(?,'attempt_lifecycle',?,?,?,?,?,?,?, 'admin_abandoned',1,0,'cleanup_incomplete',?,?,?,?)`)
+        .run(input.operation_id,input.task_id,input.attempt,input.generation,input.claim_id,input.claim_worker_identity_digest,
+          input.revision,eventSequence,requestDigest,auditJson,auditDigest,input.evidence.observed_at);
+      if(inserted.changes!==1)fail('admin_abandonment_insert_failed');
+      return {duplicate:false,operation_id:input.operation_id,task_id:input.task_id,attempt:input.attempt,generation:input.generation,
+        phase:'admin_abandoned',result_absent:true,cleanup_verified:false,revision:eventSequence,event_sequence:eventSequence,
+        audit_digest:auditDigest};
+    });
+  }
   readSnapshot(){
-    const snapshot=this.#readConsistent(()=>({capacity:this.#db.prepare('SELECT * FROM authority_metadata').get(),
-      operations:this.#db.prepare('SELECT * FROM manager_operations ORDER BY operation_id').all().map(presentOperation),
-      events:this.#db.prepare('SELECT * FROM manager_operation_events ORDER BY operation_id,sequence').all()}));
+    const snapshot=this.#readConsistent(()=>{
+      const admins=this.#adminAbandonments();
+      return {capacity:this.#db.prepare('SELECT * FROM authority_metadata').get(),
+        operations:this.#db.prepare('SELECT * FROM manager_operations ORDER BY operation_id').all().map(row=>presentOperation(row,admins.get(row.operation_id))),
+        events:this.#db.prepare('SELECT * FROM manager_operation_events ORDER BY operation_id,sequence').all()};
+    });
     return {...snapshot,root_poisoned:this.poisoned||existsSync(this.#paths.intent)};
   }
   /** Read-only recovery entry point. Writable Stores cannot be used as Recovery authority. */
@@ -1595,22 +1752,25 @@ export class IsolatedAdmissionStore {
       const meta=this.#db.prepare('SELECT * FROM authority_metadata').all();
       const operations=this.#db.prepare('SELECT * FROM manager_operations ORDER BY operation_id').all();
       const events=this.#db.prepare('SELECT * FROM manager_operation_events ORDER BY operation_id,sequence').all();
+      const adminAbandonments=this.#adminAbandonments();
       let integrityError=null;
       try { this.#validateContents(); } catch(e) { integrityError=e?.code??'projection_event_mismatch'; }
       this.#db.exec('COMMIT'); transaction=false;
       const poisoned=this.poisoned,writerIntent=existsSync(this.#paths.intent);
       const rootBlocked=Boolean(integrityError||meta.length!==1||poisoned||writerIntent);
       const operationsWithRecovery=operations.map(row=>{
-        const active=row.operation_kind==='attempt_lifecycle'&&!['released','cancelled_before_launch'].includes(row.phase);
+        const adminAbandonment=adminAbandonments.get(row.operation_id);
+        const active=row.operation_kind==='attempt_lifecycle'&&!adminAbandonment&&!['released','cancelled_before_launch'].includes(row.phase);
         const operationEvents=events.filter(e=>e.operation_id===row.operation_id);
         const recoveryEvents=recoveryEventsFor(operationEvents,row);
         const recoveryClassification=foldedRecoveryClassification(row,operationEvents);
-        const cleanupState=row.phase==='cleanup_verified'||row.phase==='released'?'verified'
+        const cleanupState=adminAbandonment?'not_applicable'
+          :row.phase==='cleanup_verified'||row.phase==='released'?'verified'
           :row.phase==='cleanup_unverified'?'unverified'
           :row.phase==='result_committed'||row.phase==='cleanup_pending'||row.phase==='quarantined'||active&&row.claim_id!==null?'unknown':'not_applicable';
         const blockers=[];
         if(integrityError)blockers.push(integrityError);
-        if(row.operation_kind==='attempt_lifecycle'){
+        if(row.operation_kind==='attempt_lifecycle'&&!adminAbandonment){
           if(row.launch_id!==null&&row.launch_receipt_digest===null)blockers.push('launch_outcome_unknown_receipt_missing');
           if(row.claim_id!==null&&active&&cleanupState!=='verified')blockers.push('manager_os_identity_probe_required');
           if(row.result_digest===null&&row.claim_id!==null&&active)blockers.push('execution_result_unknown');
@@ -1626,9 +1786,10 @@ export class IsolatedAdmissionStore {
         if(writerIntent)blockers.push('writer_intent_present_outcome_unknown');
         const recoveryDecision=integrityError?'quarantine_read_only'
           :poisoned||writerIntent||meta.length!==1?'blocked_read_only'
+          :adminAbandonment?'complete'
           :row.operation_kind==='attempt_lifecycle'&&['released','cancelled_before_launch'].includes(row.phase)?'complete'
           :recoveryClassification==='quarantine'?'quarantine_read_only':'hold';
-        return { ...presentOperation(row), recovery_decision:recoveryDecision, recovery_blockers:[...new Set(blockers)],
+        return { ...presentOperation(row,adminAbandonment), recovery_decision:recoveryDecision, recovery_blockers:[...new Set(blockers)],
           recovery_classification:recoveryClassification,recovery_observation_count:recoveryEvents.length,
           claim_permanent:row.claim_id!==null, capacity_occupied:active, cleanup_state:cleanupState };
       });
@@ -2408,6 +2569,7 @@ export class IsolatedAdmissionStore {
       const slots=this.#db.prepare("SELECT capacity_slot,COUNT(*) n FROM manager_operations WHERE operation_kind='attempt_lifecycle' AND phase NOT IN ('released','cancelled_before_launch') GROUP BY capacity_slot HAVING COUNT(*)>1").all();
       const active=this.#db.prepare("SELECT COUNT(*) n,MAX(capacity_slot) max_slot FROM manager_operations WHERE operation_kind='attempt_lifecycle' AND phase NOT IN ('released','cancelled_before_launch')").get();
       if(slots.length||active.n>m[0].capacity_limit||active.max_slot>m[0].capacity_limit)fail('active_capacity_invariant');
+      const adminAbandonments=this.#adminAbandonments();
       const os=this.#db.prepare('SELECT * FROM manager_operations').all();for(const o of os){
         if(o.operation_kind==='attempt_lifecycle'&&o.phase==='running'){
           const running=this.#db.prepare("SELECT t.status AS task_status,t.current_attempt,a.status AS attempt_status FROM tasks t JOIN attempts a ON a.task_id=t.task_id AND a.attempt=t.current_attempt WHERE t.task_id=? AND a.attempt=? AND a.generation=?").get(o.task_id,o.attempt,o.generation);
@@ -2446,7 +2608,8 @@ export class IsolatedAdmissionStore {
           if(e.event_type==='cleanup_reverified'&&(e.from_phase!=='cleanup_unverified'||e.to_phase!=='cleanup_reverified'))fail('invalid_event_phase');
           if(e.event_type==='released'&&(e.from_phase!=='cleanup_verified'||e.to_phase!=='released'))fail('invalid_event_phase');
           if(e.event_type==='launch_intent'&&(e.from_phase!=='reserved'||e.to_phase!=='launch_intent'))fail('invalid_event_phase');
-          if(e.event_type==='observation_recorded'&&e.from_phase!==e.to_phase)fail('invalid_event_phase');
+          if(e.event_type==='observation_recorded'&&e.from_phase!==e.to_phase
+            &&!(parsed.reason==='admin_abandoned'&&e.from_phase==='running'&&e.to_phase==='released'))fail('invalid_event_phase');
           if(e.event_type!=='launch_receipt'&&e.event_type!=='claim_committed'&&e.event_type!=='launch_intent'&&e.event_type!=='observation_recorded'
             &&!e.event_type.startsWith('interaction_')&&EVENT_PHASE[e.event_type]!==e.to_phase)fail('invalid_event_phase');
           if(e.event_type.startsWith('interaction_')&&(e.from_phase!=='running'||e.to_phase!=='running'))fail('invalid_event_phase');
@@ -2580,7 +2743,60 @@ export class IsolatedAdmissionStore {
                 ||re.result_commit_ref!==o.result_commit_ref||re.worker_identity_digest!==o.claim_worker_identity_digest)fail('release_history_mismatch');}
             const expected=o.phase==='quarantined'?'quarantined':released.length?'released':verified.length?'cleanup_verified':unverified.length?'cleanup_unverified':'cleanup_pending';
             if(o.phase!==expected)fail('cleanup_projection_mismatch');
-          } else if(['cleanup_pending','cleanup_verified','cleanup_unverified','cleanup_reverified','released'].includes(o.phase))fail('cleanup_projection_mismatch');
+          } else if(['cleanup_pending','cleanup_verified','cleanup_unverified','cleanup_reverified','released'].includes(o.phase)
+            &&!adminAbandonments.has(o.operation_id))fail('cleanup_projection_mismatch');
+          const adminAbandonment=adminAbandonments.get(o.operation_id);
+          if(adminAbandonment){
+            let adminWorker;
+            try{adminWorker=JSON.parse(o.claim_worker_identity_json);}catch{fail('admin_abandonment_projection_mismatch');}
+            if(!adminWorker||typeof adminWorker!=='object')fail('admin_abandonment_projection_mismatch');
+            const expectedRouteDigest=digest({
+              operation_id:o.operation_id,
+              task_id:o.task_id,
+              attempt:o.attempt,
+              generation:o.generation,
+              original_revision:adminAbandonment.original_revision,
+              claim_id:o.claim_id,
+              worker_identity_digest:adminAbandonment.worker_identity_digest,
+              worker_process_id:adminWorker.process_id,
+              worker_start_fingerprint:adminWorker.start_fingerprint,
+              audit_digest:adminAbandonment.audit_digest,
+            });
+            if(adminAbandonment.operation_kind!=='attempt_lifecycle'
+              ||adminAbandonment.task_id!==o.task_id||adminAbandonment.attempt!==o.attempt
+              ||adminAbandonment.generation!==o.generation||adminAbandonment.claim_id!==o.claim_id
+              ||adminAbandonment.worker_identity_digest!==o.claim_worker_identity_digest
+              ||adminAbandonment.original_revision+1!==o.revision||adminAbandonment.event_sequence!==o.revision
+              ||adminAbandonment.outcome!=='admin_abandoned'||adminAbandonment.result_absent!==1
+              ||adminAbandonment.cleanup_verified!==0||adminAbandonment.release_reason!=='cleanup_incomplete'
+              ||adminAbandonment.audit_digest!==digest(adminAbandonment.audit_json)
+              ||adminAbandonment.request_digest!==expectedRouteDigest
+              ||o.phase!=='released'||o.result_digest!==null||o.result_json!==null||o.result_commit_ref!==null
+              ||!Number.isFinite(Date.parse(adminAbandonment.abandoned_at)))fail('admin_abandonment_projection_mismatch');
+            const terminalEvent=es.at(-1);
+            let terminalEvidence;try{terminalEvidence=JSON.parse(terminalEvent.evidence_json);}catch{fail('admin_abandonment_projection_mismatch');}
+            if(!terminalEvent||terminalEvent.sequence!==adminAbandonment.event_sequence||terminalEvent.event_type!=='observation_recorded'
+              ||terminalEvent.from_phase!=='running'||terminalEvent.to_phase!=='released'
+              ||terminalEvidence.reason!=='admin_abandoned'
+              ||terminalEvidence.evidence_digest!==adminAbandonment.audit_digest)
+              fail('admin_abandonment_event_mismatch');
+            let audit;try{audit=JSON.parse(adminAbandonment.audit_json);}catch{fail('admin_abandonment_audit_invalid');}
+            if(Object.keys(audit).sort().join('|')!=='boot_time|claimant_scan_clean|claimant_scan_digest|cleanup_verified|failed_at|hosts_closed|observed_at|platform_probe_digest|process_inventory_digest|result_absent|worker_exited|writer_closed'
+              ||audit.claimant_scan_clean!==true||audit.cleanup_verified!==false||audit.hosts_closed!==true||audit.result_absent!==true
+              ||audit.worker_exited!==true||audit.writer_closed!==true||!validIsoInstant(audit.boot_time)
+              ||typeof audit.claimant_scan_digest!=='string'||!/^[0-9a-f]{64}$/u.test(audit.claimant_scan_digest)
+              ||typeof audit.platform_probe_digest!=='string'||!/^[0-9a-f]{64}$/u.test(audit.platform_probe_digest)
+              ||typeof audit.process_inventory_digest!=='string'||!/^[0-9a-f]{64}$/u.test(audit.process_inventory_digest)
+              ||!validIsoInstant(audit.failed_at)||!validIsoInstant(audit.observed_at)
+              ||Date.parse(audit.boot_time)<=Date.parse(audit.failed_at)
+              ||Date.parse(audit.observed_at)<Date.parse(audit.boot_time)
+              ||adminAbandonment.abandoned_at!==audit.observed_at)fail('admin_abandonment_audit_invalid');
+            const projection=this.#db.prepare(`SELECT t.current_attempt,t.status AS task_status,a.status AS attempt_status
+              FROM tasks t JOIN attempts a ON a.task_id=t.task_id AND a.attempt=t.current_attempt
+              WHERE t.task_id=? AND a.attempt=? AND a.generation=?`).get(o.task_id,o.attempt,o.generation);
+            if(!projection||projection.current_attempt!==o.attempt||projection.task_status!=='failed'
+              ||projection.attempt_status!=='failed')fail('admin_abandonment_projection_mismatch');
+          }
           validateInteractionHistory(this.#db,o,es);
         }
       }

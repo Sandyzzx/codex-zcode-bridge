@@ -22,6 +22,10 @@ try {
     path.join(root, "src", "sqlite-candidate", "wp6b2b1", "schema.sql"),
     path.join(staging, "src", "sqlite-candidate", "wp6b2b1", "schema.sql"),
   );
+  copyFileSync(
+    path.join(root, "src", "sqlite-candidate", "wp6b2b1", "admin-abandonment.sql"),
+    path.join(staging, "src", "sqlite-candidate", "wp6b2b1", "admin-abandonment.sql"),
+  );
   mkdirSync(output, { recursive: true });
   // Reject an output junction escaping the named workspace before any move.
   if (realpathSync(output) !== output || (existsSync(target) && realpathSync(target) !== target)) throw new Error("core output must be a real directory inside the repository");

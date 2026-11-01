@@ -33,6 +33,7 @@
     "test:clean-entrypoints": "npm run build:test && node scripts/test-clean-entrypoints.mjs",
     "validate:plugin": "node scripts/validate-plugin.mjs",
     "migrate:json-to-sqlite": "node dist/src/cli/migrate-json-to-sqlite.js",
+    "admin:abandon-held-operation": "node dist/src/cli/admin-abandon-held-operation.js",
     "bridge:mcp": "node dist/src/mcp/main.js"
   },
   "bin": {

@@ -44,6 +44,7 @@ for (const relativePath of [
   "launch-node24.mjs",
   "dist/bridge.mjs",
   "dist/schema.sql",
+  "dist/admin-abandonment.sql",
   "worker/worker-main.mjs",
   "worker/vendor/pkg/browser-host.cjs",
   "worker/vendor/browsers.json",
@@ -59,6 +60,9 @@ for (const relativePath of [
 const packagedSchema = await readFile(path.join(pluginRoot, "dist", "schema.sql"));
 const sourceSchema = await readFile(path.join(root, "src", "sqlite-candidate", "wp6b2b1", "schema.sql"));
 if (!packagedSchema.equals(sourceSchema)) throw new Error("bundled SQLite schema does not match source");
+const packagedAdminSchema = await readFile(path.join(pluginRoot, "dist", "admin-abandonment.sql"));
+const sourceAdminSchema = await readFile(path.join(root, "src", "sqlite-candidate", "wp6b2b1", "admin-abandonment.sql"));
+if (!packagedAdminSchema.equals(sourceAdminSchema)) throw new Error("bundled administrative SQLite schema does not match source");
 
 // The installed plugin must load without the development checkout: bundles
 // must not embed the repository's absolute path, and the ESM bundles must not

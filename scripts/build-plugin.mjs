@@ -9,8 +9,14 @@ const distDir = path.join(pluginRoot, "dist");
 const workerDir = path.join(pluginRoot, "worker");
 const vendorDir = path.join(workerDir, "vendor");
 await Promise.all([mkdir(distDir, { recursive: true }), mkdir(vendorDir, { recursive: true })]);
-// The bundled SQLite Store resolves its schema relative to bridge.mjs.
-await copyFile(path.join(repoRoot, "src", "sqlite-candidate", "wp6b2b1", "schema.sql"), path.join(distDir, "schema.sql"));
+// The bundled SQLite Store resolves its schemas relative to bridge.mjs.
+await Promise.all([
+  copyFile(path.join(repoRoot, "src", "sqlite-candidate", "wp6b2b1", "schema.sql"), path.join(distDir, "schema.sql")),
+  copyFile(
+    path.join(repoRoot, "src", "sqlite-candidate", "wp6b2b1", "admin-abandonment.sql"),
+    path.join(distDir, "admin-abandonment.sql"),
+  ),
+]);
 
 const shared = {
   bundle: true,

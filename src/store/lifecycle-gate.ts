@@ -487,7 +487,9 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
       const operation = asRecord(operationValue);
       if (operation.operation_kind !== "attempt_lifecycle") return { state: "not_applicable", operation_id: operationId };
       const phase = text(operation.phase, "recovery_phase_missing");
-      if (phase === "released" || phase === "cancelled_before_launch") return { state: "complete", operation_id: operationId, phase };
+      if (phase === "released" || phase === "cancelled_before_launch" || phase === "admin_abandoned") {
+        return { state: "complete", operation_id: operationId, phase };
+      }
       if (phase === "reserved") return { state: "reserved", operation_id: operationId, phase };
 
       const lifecycleEvents = readAllLifecycleEventsForRecovery(port, operationId);
