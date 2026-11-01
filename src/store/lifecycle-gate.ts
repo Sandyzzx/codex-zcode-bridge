@@ -587,6 +587,22 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
         catch { throw new LifecycleGateError("recovery_event_evidence_invalid"); }
       });
 
+      // A second Manager can start while the owning Manager is executing this
+      // Operation. Exact live identity proves only that this Manager must stay
+      // fail-closed/read-only; it does not prove a durable cleanup failure.
+      // Persisting a global Recovery Hold here would prevent the owning Worker
+      // from recording its next interaction request.
+      if (phase === "running" && identityState === "alive") {
+        return {
+          state: "held",
+          operation_id: operationId,
+          phase,
+          reason: "worker_still_alive_managed_elsewhere",
+          identity_state: identityState,
+          probe_reason: probeReason,
+        };
+      }
+
       // Recovery may finish the C2 protocol from result_committed or
       // cleanup_pending. The OD-8 supplement also permits cleanup_unverified
       // to proceed only after fresh exact-identity exit evidence and a clean,

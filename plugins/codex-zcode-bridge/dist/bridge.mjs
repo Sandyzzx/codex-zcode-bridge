@@ -9079,6 +9079,16 @@ async function openClaimOnlyDriver(options) {
           throw new LifecycleGateError("recovery_event_evidence_invalid");
         }
       });
+      if (phase === "running" && identityState === "alive") {
+        return {
+          state: "held",
+          operation_id: operationId,
+          phase,
+          reason: "worker_still_alive_managed_elsewhere",
+          identity_state: identityState,
+          probe_reason: probeReason
+        };
+      }
       let treeOutcome;
       if ((phase === "result_committed" || phase === "cleanup_pending" || phase === "cleanup_unverified") && identityState === "exited") {
         treeOutcome = await processTreeWithDeadline([{ pid: processId, fingerprint }], 3e4);
@@ -35813,7 +35823,7 @@ function formatDuration(durationMs2) {
 
 // src/mcp/server.ts
 var SERVER_NAME = "codex-zcode-bridge";
-var SERVER_VERSION = "1.3.0-rc.2"; // x-release-please-version
+var SERVER_VERSION = "1.3.0-rc.3"; // x-release-please-version
 var EXECUTION_NOT_VERDICT = "Results describe Bridge/ZCode execution only: status 'completed' means the invocation and report normalization finished, NOT that the calling host accepted the work. the calling host must independently review the workspace diff and checks before deciding PASS.";
 function okResult2(data) {
   return {

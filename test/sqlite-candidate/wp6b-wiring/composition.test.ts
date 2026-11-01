@@ -161,6 +161,173 @@ test("SQLite Manager startup runs read-only Recovery and retains unknown active 
   });
 });
 
+test("startup Recovery fences a live Worker per Manager without latching the owning interaction channel", {
+  timeout: 30_000,
+  skip: process.platform !== "win32",
+}, async () => {
+  const taskId = `recovery-live-owner-${randomUUID()}`;
+  const operationId = candidateOperationId(taskId, 1);
+  const processProbe = createPlatformProbe();
+  const child = spawn(process.execPath, ["-e", "setInterval(() => undefined, 1000)"], {
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  let seededOperation: Record<string, unknown> | undefined;
+  let seededEventCount = -1;
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      child.once("spawn", () => resolve());
+      child.once("error", reject);
+    });
+    const processId = child.pid;
+    assert.ok(processId);
+    const identity = await processProbe.identityOf(processId);
+    assert.equal(identity.fingerprint_precision, "exact");
+    assert.ok(identity.fingerprint);
+
+    await withSqliteMcp(async (_client, manager, dataRoot) => {
+      const modules = await loadLifecycleCandidateModules();
+      const recovery = modules.Store.openForRecovery(dataRoot);
+      assert.ok(recovery);
+      try {
+        const recoveryPort = modules.createPort(recovery);
+        const eventsAfterRecovery = recoveryPort.readTaskEvents(taskId).events;
+        assert.equal(eventsAfterRecovery.length, seededEventCount,
+          "a live Worker owned by another Manager must not append a persistent Recovery Hold");
+        const holds = eventsAfterRecovery.filter((event) => {
+          if (event.event_type !== "observation_recorded") return false;
+          try { return JSON.parse(String(event.evidence_json)).reason === "recovery_hold"; }
+          catch { return false; }
+        });
+        assert.deepEqual(holds, [], "live exact identity is a transient per-Manager fence, not cleanup failure evidence");
+        const operationAfterRecovery = recoveryPort.readOperation(operationId) as Record<string, unknown> | null;
+        assert.equal(Number(operationAfterRecovery?.revision), Number(seededOperation?.revision),
+          "Rejecting startup takeover must not advance the owning Operation");
+
+        const blockedTask = syntheticTask(path.join(dataRoot, "workspace"), `blocked-live-owner-${randomUUID()}`) as unknown as Parameters<BridgeTaskManager["createTask"]>[0];
+        await assert.rejects(
+          manager.createTask(blockedTask),
+          /worker_still_alive_managed_elsewhere/u,
+          "the secondary Manager must remain read-only while the exact Worker is live",
+        );
+      } finally {
+        recovery.close();
+      }
+
+      assert.ok(seededOperation);
+      const writer = modules.Store.open(dataRoot);
+      try {
+        const requestId = `request-${randomUUID()}`;
+        const writerStore = writer as unknown as {
+          recordInteractionRequest(input: Readonly<Record<string, unknown>>): Record<string, unknown>;
+        };
+        const interaction = writerStore.recordInteractionRequest({
+          operation_id: operationId,
+          task_id: taskId,
+          attempt: 1,
+          generation: Number(seededOperation.generation),
+          expected_revision: Number(seededOperation.revision),
+          claim_id: String(seededOperation.claim_id),
+          worker_identity_digest: String(seededOperation.claim_worker_identity_digest),
+          request: {
+            request_id: requestId,
+            method: "interaction/requestUserInput",
+            params: { questions: [{ question: "Continue the live owned Worker?" }] },
+          },
+        }) as Record<string, unknown>;
+        assert.equal(interaction.request_id, requestId);
+        assert.equal(interaction.duplicate, false);
+        assert.equal(interaction.event_sequence, Number(seededOperation.revision) + 1);
+      } finally {
+        writer.close();
+      }
+    }, {
+      processProbe,
+      beforeAuthority: (dataRoot, modules, workspace) => {
+        const store = modules.Store.open(dataRoot);
+        try {
+          const port = modules.createPort(store);
+          port.createTask(syntheticTask(workspace, taskId) as unknown as Parameters<typeof port.createTask>[0]);
+          const allow = () => ({ state: "allow", fixture: true });
+          const admitted = port.admitOperation({
+            operation_id: operationId,
+            task_id: taskId,
+            attempt: 1,
+            workspace_ref: workspace,
+          }, {
+            workspaceValidator: allow,
+            executionPermissionCheck: allow,
+          }) as Record<string, unknown>;
+          const launchId = `launch-${taskId}`;
+          const launchRequest = {
+            operation_id: operationId,
+            task_id: taskId,
+            attempt: 1,
+            generation: Number(admitted.generation),
+            revision: Number(admitted.revision),
+            launch_id: launchId,
+            launch_epoch: 1,
+            launch_token: `synthetic-live-owner-token-${taskId}-0123456789`,
+          };
+          const launchIdentityEvidence = {
+            source: "manager_os_spawn_observation",
+            fixture: false,
+            launch_id: launchId,
+            generation: Number(admitted.generation),
+            process_id: processId,
+            start_fingerprint: identity.fingerprint,
+            fingerprint_precision: "exact",
+            identity_version: PROCESS_IDENTITY_VERSION,
+            platform: "win32",
+            captured_at: identity.captured_at,
+          };
+          const intent = port.createLaunchIntent(launchRequest) as Record<string, unknown>;
+          const receipt = port.recordLaunchReceipt({
+            ...launchRequest,
+            revision: Number(intent.revision),
+            receipt_id: `receipt-${taskId}`,
+            launch_identity: {
+              ...launchIdentityEvidence,
+              evidence_digest: candidateEvidenceDigest(launchIdentityEvidence),
+            },
+          }) as Record<string, unknown>;
+          const workerIdentityEvidence = {
+            source: "manager_verified_process_probe",
+            fixture: false,
+            worker_id: `worker-${taskId}`,
+            process_id: processId,
+            start_fingerprint: identity.fingerprint,
+            fingerprint_precision: "exact",
+            identity_version: PROCESS_IDENTITY_VERSION,
+            platform: "win32",
+            captured_at: identity.captured_at,
+          };
+          port.commitPermanentClaim({
+            ...launchRequest,
+            revision: Number(receipt.revision),
+            claim_id: `claim-${taskId}`,
+            worker_identity: {
+              ...workerIdentityEvidence,
+              evidence_digest: candidateEvidenceDigest(workerIdentityEvidence),
+            },
+          } as unknown as Parameters<typeof port.commitPermanentClaim>[0]);
+          seededOperation = port.readOperation(operationId) as Record<string, unknown>;
+          seededEventCount = port.readTaskEvents(taskId).events.length;
+        } finally {
+          store.close();
+        }
+      },
+    });
+  } finally {
+    if (child.exitCode === null) {
+      const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+      child.kill("SIGTERM");
+      await Promise.race([exited, new Promise<void>((resolve) => setTimeout(resolve, 5_000))]);
+    }
+  }
+});
+
 test("SQLite Manager restart releases only persisted cleanup-verified Operations without spawning", { timeout: 30_000 }, async () => {
   const taskId = `recovery-release-${randomUUID()}`;
   const operationId = candidateOperationId(taskId, 1);

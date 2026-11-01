@@ -4,6 +4,15 @@
 
 当前版本以 `package.json` 和 Release Please manifest 为准。提交推送到 `master` 后，Release Please 会在有待发布变更时创建发布 PR，并同步更新版本文件与本日志；合并发布 PR 后会生成对应 Git tag 和 GitHub Release。
 
+## [1.3.0-rc.3](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.3.0-rc.2...codex-zcode-bridge-v1.3.0-rc.3) (2026-11-02)
+
+Preview hotfix.
+
+### Bug Fixes
+
+* prevent a second SQLite Manager from turning an exact, still-running Worker into a persistent global Recovery Hold
+* keep the non-owning Manager read-only without blocking the owning Worker's interaction channel
+
 ## [1.3.0-rc.2](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.3.0-rc.1...codex-zcode-bridge-v1.3.0-rc.2) (2026-11-01)
 
 Preview hotfix.

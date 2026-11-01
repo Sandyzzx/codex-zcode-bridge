@@ -446,7 +446,8 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
           // Manual-Recovery treats an unresolved active executor as a Root
           // safety boundary. Keep read APIs available, but do not dispatch
           // another queued Operation or accept new lifecycle writes on this
-          // Manager while any persisted Operation remains held.
+          // Manager. A live Worker owned by another Manager is a transient
+          // per-Manager fence; it does not persist a global Recovery Hold.
           this.#recoveryBlocked = `operation ${operationId} is held: ${String(outcome.reason ?? "recovery_evidence_unknown")}`;
           this.#schedulerStage("recovery_root_read_only", { operation_id: operationId, reason: this.#recoveryBlocked });
           break;
