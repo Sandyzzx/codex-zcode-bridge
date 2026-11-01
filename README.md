@@ -34,7 +34,7 @@ ZCode and Node.js are not installed automatically by the marketplace.
 
 ## Install the preview
 
-Use the **published Preview tag** rather than `master`. Replace `<preview-tag>` below with the exact tag shown on the [GitHub prerelease](https://github.com/Sandyzzx/codex-zcode-bridge/releases):
+Use the **published Preview tag** rather than `master`. The commands below pin the exact tag shown on the [GitHub prerelease](https://github.com/Sandyzzx/codex-zcode-bridge/releases):
 
 ```sh
 codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-v1.3.0-rc.1
@@ -43,7 +43,20 @@ codex plugin add codex-zcode-bridge@codex-zcode-bridge
 
 Alternatively, register the tagged repository marketplace, then install **Zcode Bridge** in Codex's Plugins Directory. Start a new conversation and review the plugin's `SessionStart` hook. First-run discovery locates the local ZCode runtime and provider settings; it does not copy credentials. Use `zcode_doctor` for installation diagnostics.
 
-**New installations:** the SQLite-backed path starts with an empty task database. Ordinary local project directories and optional Git worktrees do **not** require a `trusted-local-policy.json` or a manually maintained `workspace_roots` list.
+**First activation on a new installation:** after installing the Preview, explicitly select the SQLite Authority before starting the Bridge:
+
+```powershell
+$settings = Join-Path $HOME '.codex\codex-zcode-bridge'
+New-Item -ItemType Directory -Path $settings -Force | Out-Null
+@'
+{
+  "schema_version": 1,
+  "authority": "sqlite"
+}
+'@ | Set-Content -LiteralPath (Join-Path $settings 'authority.json') -Encoding ascii
+```
+
+The first SQLite startup creates `${LOCALAPPDATA}\CodexZCodeBridge\state\bridge.sqlite` with a fresh-install receipt. Ordinary local project directories and optional Git worktrees do **not** require a `trusted-local-policy.json` or a manually maintained `workspace_roots` list. Use this activation step only when no legacy Bridge `.tasks` data exists; installations with existing JSON tasks must use the stop-the-world migration path below.
 
 ## Important: upgrading from JSON storage
 

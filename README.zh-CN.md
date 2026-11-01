@@ -34,7 +34,7 @@ Marketplace 不会替你安装 Node.js 或 ZCode。
 
 ## 安装 Preview
 
-请使用 GitHub **Prerelease 对应的 Tag**，不要在测试预览版时直接跟随 `master`。将 `<preview-tag>` 替换为 [GitHub Releases](https://github.com/Sandyzzx/codex-zcode-bridge/releases) 显示的实际标签：
+请使用 GitHub **Prerelease 对应的 Tag**，不要在测试预览版时直接跟随 `master`。以下命令固定到 [GitHub Releases](https://github.com/Sandyzzx/codex-zcode-bridge/releases) 显示的实际标签：
 
 ```sh
 codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-v1.3.0-rc.1
@@ -43,7 +43,20 @@ codex plugin add codex-zcode-bridge@codex-zcode-bridge
 
 也可以注册对应版本的 Marketplace 后，在 Codex **Plugins Directory** 安装 **Zcode Bridge**。开启新对话，审查并信任 `SessionStart` Hook。首次启动会发现本机的 ZCode 运行时和配置，不复制 Provider 凭据；安装问题可使用 `zcode_doctor` 诊断。
 
-**全新安装：** SQLite 从空任务库开始。普通本地项目目录、可选 Git Worktree 沿用以前的工作方式，不要求新用户创建 `trusted-local-policy.json`，也不要求维护 `workspace_roots` 白名单。
+**全新安装首次启用：** 安装 Preview 后，在启动 Bridge 前显式选择 SQLite Authority：
+
+```powershell
+$settings = Join-Path $HOME '.codex\codex-zcode-bridge'
+New-Item -ItemType Directory -Path $settings -Force | Out-Null
+@'
+{
+  "schema_version": 1,
+  "authority": "sqlite"
+}
+'@ | Set-Content -LiteralPath (Join-Path $settings 'authority.json') -Encoding ascii
+```
+
+第一次以 SQLite 模式启动时，会在 `${LOCALAPPDATA}\CodexZCodeBridge\state\bridge.sqlite` 创建带有 fresh-install receipt 的空数据库。普通本地项目目录、可选 Git Worktree 沿用以前的工作方式，不要求 `trusted-local-policy.json`，也不要求维护 `workspace_roots` 白名单。只有在不存在旧 Bridge `.tasks` 数据时才能使用此首次启用步骤；已有 JSON 任务必须使用下述停机迁移流程。
 
 ## 重要：原 JSON 版本升级说明
 

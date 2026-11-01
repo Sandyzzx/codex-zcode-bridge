@@ -38,6 +38,21 @@ codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git 
 codex plugin add codex-zcode-bridge@codex-zcode-bridge
 ```
 
+For a new installation with no legacy Bridge `.tasks` data, explicitly activate SQLite before starting the Bridge:
+
+```powershell
+$settings = Join-Path $HOME '.codex\codex-zcode-bridge'
+New-Item -ItemType Directory -Path $settings -Force | Out-Null
+@'
+{
+  "schema_version": 1,
+  "authority": "sqlite"
+}
+'@ | Set-Content -LiteralPath (Join-Path $settings 'authority.json') -Encoding ascii
+```
+
+The first SQLite startup creates an empty database and fresh-install receipt. Do not use this activation step for an existing JSON installation; follow the stop-the-world archive-and-cutover procedure instead.
+
 ## 简体中文
 
 ### 主要变化
@@ -67,3 +82,18 @@ codex plugin add codex-zcode-bridge@codex-zcode-bridge
 codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-v1.3.0-rc.1
 codex plugin add codex-zcode-bridge@codex-zcode-bridge
 ```
+
+全新安装且不存在旧 Bridge `.tasks` 数据时，请在启动 Bridge 前显式启用 SQLite：
+
+```powershell
+$settings = Join-Path $HOME '.codex\codex-zcode-bridge'
+New-Item -ItemType Directory -Path $settings -Force | Out-Null
+@'
+{
+  "schema_version": 1,
+  "authority": "sqlite"
+}
+'@ | Set-Content -LiteralPath (Join-Path $settings 'authority.json') -Encoding ascii
+```
+
+第一次以 SQLite 模式启动时会创建空数据库及 fresh-install receipt。已有 JSON 数据的安装不得使用该首次启用步骤，必须执行停机归档与 Authority 切换流程。
