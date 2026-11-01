@@ -203,15 +203,6 @@ async function withRealAdapterMcp(
     mkdirSync(workspace, { recursive: true });
     mkdirSync(settingsDirectory, { recursive: true });
     mkdirSync(dataRoot, { recursive: true });
-    writeFileSync(path.join(settingsDirectory, "trusted-local-policy.json"), JSON.stringify({
-      schema_version: 1,
-      enabled: true,
-      policy_revision: "mvp-real-adapter-v1",
-      workspace_roots: [fixture],
-      execution_profile_id: "local-build-v1",
-      allowed_operation_kinds: ["attempt_lifecycle"],
-      unrestricted: false,
-    }));
     await initializeIsolatedCandidateRoot(dataRoot);
     const modules = await loadLifecycleCandidateModules();
     const store = modules.Store.open(dataRoot);

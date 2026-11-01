@@ -557,7 +557,7 @@ class RawStdioMcpTestClient {
 
 async function withSqliteMcp(
   run: (client: Client, manager: BridgeTaskManager, dataRoot: string, workspace: string) => Promise<void>,
-  options: { readonly testBeforeDispatch?: () => Promise<void>; readonly testOnScheduler?: (stage: string, detail: Readonly<Record<string, unknown>>) => void; readonly onStage?: (stage: string, detail?: Readonly<Record<string, unknown>>) => void; readonly onChildSpawn?: (child: { readonly pid?: number; readonly stderr?: NodeJS.ReadableStream | null; readonly resultChannel?: NodeJS.ReadableStream | null }) => void; readonly beforeAuthority?: (dataRoot: string, modules: Awaited<ReturnType<typeof loadLifecycleCandidateModules>>, workspace: string) => void; readonly prepareDataRoot?: (dataRoot: string, fixture: string) => Promise<void>; readonly databaseFileName?: string; readonly extraWorkspaceRoots?: readonly string[]; readonly enableSyntheticInteractionChannel?: boolean; readonly processProbe?: ProcessProbe; readonly testProcessProbeTimeoutMs?: number; readonly testShutdownWaitMs?: number; readonly stdio?: boolean; readonly preserveFixtureOnFailure?: boolean; readonly onStdioHost?: (host: StdioLifecycleHost) => void; readonly onStdioShutdownComplete?: (reason: string) => void; readonly onStdioShutdownFailure?: (reason: string, error: unknown) => void } = {},
+  options: { readonly testBeforeDispatch?: () => Promise<void>; readonly testOnScheduler?: (stage: string, detail: Readonly<Record<string, unknown>>) => void; readonly onStage?: (stage: string, detail?: Readonly<Record<string, unknown>>) => void; readonly onChildSpawn?: (child: { readonly pid?: number; readonly stderr?: NodeJS.ReadableStream | null; readonly resultChannel?: NodeJS.ReadableStream | null }) => void; readonly beforeAuthority?: (dataRoot: string, modules: Awaited<ReturnType<typeof loadLifecycleCandidateModules>>, workspace: string) => void; readonly prepareDataRoot?: (dataRoot: string, fixture: string) => Promise<void>; readonly databaseFileName?: string; readonly enableSyntheticInteractionChannel?: boolean; readonly processProbe?: ProcessProbe; readonly testProcessProbeTimeoutMs?: number; readonly testShutdownWaitMs?: number; readonly stdio?: boolean; readonly preserveFixtureOnFailure?: boolean; readonly onStdioHost?: (host: StdioLifecycleHost) => void; readonly onStdioShutdownComplete?: (reason: string) => void; readonly onStdioShutdownFailure?: (reason: string, error: unknown) => void } = {},
 ): Promise<void> {
   const fixture = path.join(integrationRoot, randomUUID());
   const dataRoot = path.join(fixture, "sqlite-root");
@@ -572,15 +572,6 @@ async function withSqliteMcp(
   mkdirSync(workspace, { recursive: true });
   mkdirSync(settingsDirectory, { recursive: true });
   mkdirSync(dataRoot, { recursive: true });
-  writeFileSync(path.join(settingsDirectory, "trusted-local-policy.json"), JSON.stringify({
-    schema_version: 1,
-    enabled: true,
-    policy_revision: "od10-mcp-integration-v1",
-    workspace_roots: [fixture, ...(options.extraWorkspaceRoots ?? [])],
-    execution_profile_id: "local-build-v1",
-    allowed_operation_kinds: ["attempt_lifecycle"],
-    unrestricted: false,
-  }));
   const modules = await loadLifecycleCandidateModules();
   if (options.prepareDataRoot) {
     await options.prepareDataRoot(dataRoot, fixture);
@@ -758,15 +749,6 @@ async function runRecoveryBoundedMode(
     mkdirSync(workspace, { recursive: true });
     mkdirSync(settingsDirectory, { recursive: true });
     mkdirSync(dataRoot, { recursive: true });
-    writeFileSync(path.join(settingsDirectory, "trusted-local-policy.json"), JSON.stringify({
-      schema_version: 1,
-      enabled: true,
-      policy_revision: "g4-bounded-recovery-v1",
-      workspace_roots: [fixture],
-      execution_profile_id: "local-build-v1",
-      allowed_operation_kinds: ["attempt_lifecycle"],
-      unrestricted: false,
-    }));
     await initializeIsolatedCandidateRoot(dataRoot);
     const modules = await loadLifecycleCandidateModules();
     const setupStore = modules.Store.open(dataRoot);
@@ -958,15 +940,6 @@ test("Manager Recovery after restart preserves Capacity and Claim when claimant 
       mkdirSync(workspace, { recursive: true });
       mkdirSync(settingsDirectory, { recursive: true });
       mkdirSync(dataRoot, { recursive: true });
-      writeFileSync(path.join(settingsDirectory, "trusted-local-policy.json"), JSON.stringify({
-        schema_version: 1,
-        enabled: true,
-        policy_revision: `g4-recovery-${mode.name}`,
-        workspace_roots: [fixture],
-        execution_profile_id: "local-build-v1",
-        allowed_operation_kinds: ["attempt_lifecycle"],
-        unrestricted: false,
-      }));
       await initializeIsolatedCandidateRoot(dataRoot);
       const modules = await loadLifecycleCandidateModules();
       const setupStore = modules.Store.open(dataRoot);
@@ -1188,6 +1161,155 @@ test("formal MCP Manager routes SQLite Create/Worker/Result/Continue/Events/Feed
     assert.ok((nextEvents.events as Array<Record<string, unknown>>).every((event) => Number(event.seq) > firstCursor));
     assert.equal(existsSync(path.join(dataRoot, ".tasks")), false, "SQLite lifecycle must not write JSON TaskStore state");
   }, { onStage: (stage, detail) => stages.push({ stage, detail }), testOnScheduler: (stage, detail) => stages.push({ stage: `manager_${stage}`, detail }) });
+});
+
+test("SQLite preserves JSON workspace semantics and the Host-selected execution worktree", { timeout: 90_000 }, async () => {
+  const stages: Array<{ stage: string; detail?: Readonly<Record<string, unknown>> }> = [];
+  await withSqliteMcp(async (client, _manager, dataRoot, workspace) => {
+    const fixtureRoot = path.dirname(workspace);
+    const sourceWorkspace = path.join(fixtureRoot, "source-project");
+    const executionWorktree = path.join(fixtureRoot, "execution-worktree");
+    mkdirSync(sourceWorkspace, { recursive: true });
+    mkdirSync(executionWorktree, { recursive: true });
+    const sourceWorkspaceForwardSlash = sourceWorkspace.replaceAll("\\", "/");
+    const executionWorktreeForwardSlash = executionWorktree.replaceAll("\\", "/");
+
+    const taskId = `mcp-worktree-${randomUUID()}`;
+    const invalid = await client.callTool({
+      name: "zcode_task",
+      arguments: {
+        ...syntheticTask(sourceWorkspaceForwardSlash, `mcp-null-worktree-${randomUUID()}`),
+        worktree_path: null,
+      },
+    });
+    assert.equal(invalid.isError, true, "null worktree_path must fail closed before Admission");
+
+    const created = contentObject(await client.callTool({
+      name: "zcode_task",
+      arguments: {
+        ...syntheticTask(sourceWorkspaceForwardSlash, taskId),
+        worktree_path: executionWorktreeForwardSlash,
+      },
+    }), JSON.stringify(stages));
+    assert.equal(created.status, "queued");
+    assert.equal((await waitForTerminal(client, taskId, 1)).status, "completed");
+    await waitForLifecycleEvent(client, taskId, "released");
+
+    const modules = await loadLifecycleCandidateModules();
+    const recovery = modules.Store.openForRecovery(dataRoot);
+    assert.ok(recovery);
+    try {
+      const lifecycle = recovery.readTaskLifecycle(taskId) as Record<string, unknown>;
+      const storedTask = lifecycle.task as Record<string, unknown>;
+      assert.equal(path.resolve(String(storedTask.workspace)), path.resolve(sourceWorkspace));
+      assert.equal(path.resolve(String(storedTask.worktree_path)), path.resolve(executionWorktree));
+      assert.equal(
+        (lifecycle.operation as Record<string, unknown>).workspace_ref,
+        path.resolve(executionWorktree),
+        "Admission must use the execution worktree while retaining the source project",
+      );
+    } finally {
+      recovery.close();
+    }
+
+    const continued = contentObject(await client.callTool({
+      name: "zcode_continue",
+      arguments: {
+        task_id: taskId,
+        feedback: "Continue in the same Host-selected execution worktree",
+        operation_id: `continue-worktree-${randomUUID()}`,
+      },
+    }), JSON.stringify(stages));
+    assert.equal(continued.status, "queued");
+    assert.equal((await waitForTerminal(client, taskId, 2, JSON.stringify(stages))).status, "completed");
+
+    const workerStages = stages.filter(({ stage }) => stage === "worker_report_read_complete");
+    assert.equal(workerStages.length, 2, "both Attempts must report through the real lifecycle gate");
+    assert.ok(workerStages.every(({ detail }) => detail?.workspace_ref === path.resolve(executionWorktree)),
+      "the Worker-facing canonical path must remain the Host-selected execution worktree");
+
+    const nextRecovery = modules.Store.openForRecovery(dataRoot);
+    assert.ok(nextRecovery);
+    try {
+      const nextPort = modules.createPort(nextRecovery);
+      for (const attempt of [1, 2]) {
+        const operation = nextPort.readOperation(candidateOperationId(taskId, attempt)) as Record<string, unknown>;
+        assert.equal(operation.workspace_ref, path.resolve(executionWorktree));
+      }
+      const lifecycle = nextRecovery.readTaskLifecycle(taskId) as Record<string, unknown>;
+      assert.equal(path.resolve(String((lifecycle.task as Record<string, unknown>).worktree_path)), path.resolve(executionWorktree),
+        "Continue must retain the recorded execution worktree");
+    } finally {
+      nextRecovery.close();
+    }
+  }, {
+    onStage: (stage, detail) => stages.push({ stage, detail }),
+    onChildSpawn: () => undefined,
+  });
+});
+
+test("SQLite validates both source workspace and execution worktree immediately before Spawn", { timeout: 90_000 }, async () => {
+  for (const removed of ["workspace", "worktree_path"] as const) {
+    let directoryToRemove: string | undefined;
+    let spawnCount = 0;
+    const stages: Array<{ stage: string; detail?: Readonly<Record<string, unknown>> }> = [];
+    await withSqliteMcp(async (client, _manager, dataRoot, workspace) => {
+      const fixtureRoot = path.dirname(workspace);
+      const sourceWorkspace = path.join(fixtureRoot, "source-project");
+      const executionWorktree = path.join(fixtureRoot, "execution-worktree");
+      mkdirSync(sourceWorkspace, { recursive: true });
+      mkdirSync(executionWorktree, { recursive: true });
+      directoryToRemove = removed === "workspace" ? sourceWorkspace : executionWorktree;
+
+      const taskId = `mcp-ws-${removed === "workspace" ? "source" : "exec"}-${randomUUID()}`;
+      const created = contentObject(await client.callTool({
+        name: "zcode_task",
+        arguments: {
+          ...syntheticTask(sourceWorkspace, taskId),
+          worktree_path: executionWorktree,
+        },
+      }));
+      assert.equal(created.status, "queued");
+      const operationId = candidateOperationId(taskId, 1);
+      const deadline = Date.now() + 30_000;
+      while (Date.now() < deadline && !stages.some(({ stage, detail }) =>
+        stage === "run_complete" && detail?.operation_id === operationId)) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      const completedRun = stages.find(({ stage, detail }) =>
+        stage === "run_complete" && detail?.operation_id === operationId);
+      assert.ok(completedRun, `${removed} must reach a fail-closed pre-Spawn decision`);
+      assert.equal(completedRun.detail?.state, "launch_outcome_unknown");
+      assert.equal(completedRun.detail?.reason, "trusted_local_workspace_use_denied",
+        `${removed} must be revalidated immediately before Worker Spawn`);
+      assert.equal(completedRun.detail?.spawnCount, 0);
+      assert.equal(spawnCount, 0, `removing ${removed} must prevent Worker Spawn`);
+      const status = contentObject(await client.callTool({ name: "zcode_status", arguments: { task_id: taskId } }));
+      assert.equal(status.status, "queued", "a fail-closed pre-Spawn result must not invent a terminal Worker Result");
+
+      const modules = await loadLifecycleCandidateModules();
+      const recovery = modules.Store.openForRecovery(dataRoot);
+      assert.ok(recovery);
+      try {
+        const operation = modules.createPort(recovery).readOperation(operationId) as Record<string, unknown>;
+        assert.equal(operation.phase, "launch_intent", "the launch intent remains durably occupied");
+        assert.notEqual(operation.capacity_slot, null, "an unverified launch path must retain Capacity");
+      } finally {
+        recovery.close();
+      }
+    }, {
+      onStage: (stage, detail) => {
+        stages.push({ stage, detail });
+        // Remove after durable Admission and Launch Intent, immediately before
+        // the production pre-Spawn revalidation.
+        if (stage === "intent_complete" && directoryToRemove) {
+          rmSync(directoryToRemove, { recursive: true, force: true });
+          directoryToRemove = undefined;
+        }
+      },
+      onChildSpawn: () => { spawnCount += 1; },
+    });
+  }
 });
 
 test("startup dispatches only the persisted current queued Attempt and resumes its untouched reserved Operation", { timeout: 90_000 }, async () => {
@@ -1976,7 +2098,6 @@ test("MVP offline cutover archives sealed JSON and starts the sole empty SQLite 
       stdio: true,
       preserveFixtureOnFailure: true,
       databaseFileName: "bridge.sqlite",
-      extraWorkspaceRoots: [workspace],
       prepareDataRoot: async (sqliteRoot) => {
         const migration = await publishJsonAuthority({
           jsonDataRoot: legacyRoot,

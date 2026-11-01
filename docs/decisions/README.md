@@ -24,7 +24,7 @@
 | [ADR-004](ADR-004-separate-control-state-and-observation.md) | Accepted | 分离运行时控制、权威状态与补充观察；Desktop 索引是登记过的集成例外 |
 | [ADR-011](ADR-011-private-failure-diagnostics.md) | Accepted（设计） | P0 私有失败诊断；终止根因、受理三态、原子所有权与有限脱敏；固化记录见 2026-10-18-adr011-p0-consolidation |
 | [ADR-016](ADR-016-stop-the-world-json-to-sqlite-cutover.md) | Accepted | JSON 到 SQLite Task Authority 的停机切换；迁移收据、字节快照与 fail-closed 启动 |
-| [ADR-017](ADR-017-single-user-trusted-local-workspace-admission.md) | Accepted | SQLite Workspace Admission 的单用户可信本地边界；不声称 WP6D 原生身份或同账户竞态保护 |
+| [ADR-017](ADR-017-single-user-trusted-local-workspace-admission.md) | Accepted v2 | SQLite Workspace Admission 复用 JSON 的本地目录与可选执行 worktree 流程；Host capability 保留，无需项目白名单或 `workspace_roots` |
 
 ADR-001 到 ADR-003 只搬运权威文档里已经写明的结论。ADR-004 原先没有明文记录，只有 bridge 之外的设计讨论，因此先以 Proposed 记录；2026-10-07 由 Master 明确按"强化版 A"接受，原则冻结，未因此增加任何读取 ZCode 本地材料的代码。
 

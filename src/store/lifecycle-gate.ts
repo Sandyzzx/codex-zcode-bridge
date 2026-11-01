@@ -968,11 +968,12 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
           admission = readSafeReservedAdmission(port, input, asRecord(existingOperation));
           stage("reserved_operation_resumed", { revision: admission.revision, generation: admission.generation });
         } else {
+          const executionWorkspace = taskExecutionWorkspace(input.task);
           admission = asRecord(port.admitOperation({
             operation_id: input.operationId,
             task_id: input.task.task_id,
             attempt: input.attempt,
-            workspace_ref: input.task.workspace,
+            workspace_ref: executionWorkspace,
           }, {
             workspaceValidator: localPolicy.validateWorkspace,
             executionPermissionCheck: localPolicy.checkPermission,
@@ -1014,11 +1015,13 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
         if (intent.duplicate === true) throw new LifecycleGateError("launch_outcome_unknown", "existing Intent never authorizes another Spawn");
         const intentRevision = positive(intent.revision, "launch_intent_revision_missing");
         stage("intent_complete", { revision: intentRevision });
-        const usePolicy = localPolicy.validateWorkspaceForUse(input.task.workspace);
-        if (usePolicy.state !== "allow") {
-          state = "launch_outcome_unknown";
-          reason = usePolicy.reason;
-          throw new LifecycleGateError("trusted_local_workspace_use_denied", usePolicy.reason);
+        for (const workspace of new Set([input.task.workspace, taskExecutionWorkspace(input.task)])) {
+          const usePolicy = localPolicy.validateWorkspaceForUse(workspace);
+          if (usePolicy.state !== "allow") {
+            state = "launch_outcome_unknown";
+            reason = usePolicy.reason;
+            throw new LifecycleGateError("trusted_local_workspace_use_denied", usePolicy.reason);
+          }
         }
         stage("spawn_bootstrap_start");
         const launch = await spawnAndBootstrapOnce(() => {
@@ -1797,7 +1800,7 @@ function readPersistedAdmissionPolicySnapshot(
 ): AdmissionPolicySnapshot {
   if (operation.operation_id !== input.operationId || operation.task_id !== input.task.task_id
     || operation.attempt !== input.attempt || operation.generation !== generation || operation.revision !== revision
-    || operation.phase !== "reserved" || operation.workspace_ref !== input.task.workspace) {
+    || operation.phase !== "reserved" || operation.workspace_ref !== taskExecutionWorkspace(input.task)) {
     throw new LifecycleGateError("admission_projection_mismatch");
   }
   // readLifecycleEvents performs the Store's full consistency scan, including
@@ -1819,13 +1822,17 @@ function readPersistedAdmissionPolicySnapshot(
     task_id: input.task.task_id,
     attempt: input.attempt,
     generation,
-    workspace_ref: input.task.workspace,
+    workspace_ref: taskExecutionWorkspace(input.task),
     authorization_source: "trusted_local_policy" as const,
     policy_revision: evidence.policy_revision,
     policy_digest: evidence.policy_digest,
     execution_profile_id: evidence.execution_profile_id,
   };
   return { ...base, policy_snapshot_digest: deriveAdmissionPolicySnapshotDigest(base) };
+}
+
+function taskExecutionWorkspace(task: CandidateTaskPackage): string {
+  return task.worktree_path ?? task.workspace;
 }
 
 function verifyPersistedLaunchEvidence(

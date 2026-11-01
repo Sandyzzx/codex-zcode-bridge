@@ -69,7 +69,7 @@ test('general admission refuses caller-supplied Generation and allocates from SQ
   assert.equal(admitted.generation,1);s.close();
 });
 
-test('OD-10 local policy is default-off, scoped, audited, and cannot be supplied by a task request',()=>{
+test('Host local policy is default-off, audited, and cannot be supplied by a task request',()=>{
   const denied=setup('od10-default-off',2,[['od10-off-a',1,null],['od10-off-b',1,null]]);
   const disabled=createTrustedLocalPolicyProvider();
   try{
@@ -80,14 +80,9 @@ test('OD-10 local policy is default-off, scoped, audited, and cannot be supplied
   }finally{denied.s.close();}
 
   const {s}=setup('od10-enabled',2,[['od10-a',1,null],['od10-b',1,null]]);
-  const ownerRoot=workspace('od10-owner-root');
-  const allowedWorkspace=path.join(ownerRoot,'allowed');mkdirSync(allowedWorkspace,{recursive:true});
-  const outsideWorkspace=workspace('od10-outside');
+  const allowedWorkspace=workspace('od10-host-local');
+  const secondWorkspace=workspace('od10-host-local-second');
   const settingsDirectory=path.join(TEMP,'owner-settings'); mkdirSync(settingsDirectory,{recursive:true});
-  writeFileSync(path.join(settingsDirectory,'trusted-local-policy.json'),JSON.stringify({
-    schema_version:1,enabled:true,policy_revision:'owner-policy-1',workspace_roots:[ownerRoot],
-    execution_profile_id:'local-build-v1',allowed_operation_kinds:['attempt_lifecycle'],unrestricted:false,
-  }));
   const policy=createHostTrustedLocalPolicyProvider({name:'candidate-test',settingsDirectory});
   let admitted;
   try{admitted=s.admitOperation({operation_id:'od10-allowed',task_id:'od10-a',attempt:1,workspace_ref:allowedWorkspace,
@@ -98,19 +93,23 @@ test('OD-10 local policy is default-off, scoped, audited, and cannot be supplied
   let event=s.readLifecycleEvents(admitted.operation_id)[0];
   let audit=JSON.parse(event.evidence_json);
   assert.equal(audit.authorization_source,'trusted_local_policy');
-  assert.equal(audit.policy_revision,'owner-policy-1');
+  assert.equal(audit.policy_revision,'single-user-local-v2');
   assert.equal(audit.execution_profile_id,'local-build-v1');
   assert.match(audit.policy_digest,/^[0-9a-f]{64}$/u);
 
-  capture(()=>s.admitOperation({operation_id:'od10-outside',task_id:'od10-b',attempt:1,workspace_ref:outsideWorkspace},{
+  capture(()=>s.admitOperation({operation_id:'od10-relative',task_id:'od10-b',attempt:1,workspace_ref:'relative/path'},{
     workspaceValidator:policy.validateWorkspace,executionPermissionCheck:policy.checkPermission,
-  }),'workspace_validation_denied');
+  }),'workspace_not_absolute');
+  const second=admit(s,{operation_id:'od10-second',task_id:'od10-b',attempt:1,workspace_ref:secondWorkspace},{
+    workspaceValidator:policy.validateWorkspace,executionPermissionCheck:policy.checkPermission,
+  });
+  assert.equal(second.phase,'reserved');
   policy.disable();
   capture(()=>s.admitOperation({operation_id:'od10-after-disable',task_id:'od10-b',attempt:1,workspace_ref:allowedWorkspace},{
     workspaceValidator:policy.validateWorkspace,executionPermissionCheck:policy.checkPermission,
   }),'workspace_validation_unknown');
   assert.equal(s.readOperation(admitted.operation_id).phase,'reserved');
-  assert.equal(s.readSnapshot().operations.filter(x=>x.operation_kind==='attempt_lifecycle').length,1);
+  assert.equal(s.readSnapshot().operations.filter(x=>x.operation_kind==='attempt_lifecycle').length,2);
   assert.equal(s.readLifecycleEvents(admitted.operation_id).length,1,'policy disable does not mutate or release the existing Operation');
   }finally{s.close();}
 });

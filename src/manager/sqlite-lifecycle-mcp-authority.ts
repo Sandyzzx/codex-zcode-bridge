@@ -78,18 +78,26 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     this.#assertRecoveryReady();
     validateTaskPackage(task);
     const policy = this.#driverTrustedPolicy();
-    const requestedPath = task.worktree_path ?? task.workspace;
-    const decision = policy.validateWorkspace({ requestedPath, canonicalPath: requestedPath });
-    if (decision.state !== "allow") throw new TaskManagerError("TASK_INVALID", `SQLite admission rejected: ${decision.state === "unknown" ? decision.reason : decision.reason}`);
-    const use = policy.validateWorkspaceForUse(requestedPath);
-    if (use.state !== "allow") throw new TaskManagerError("TASK_INVALID", `SQLite admission rejected: ${use.state === "unknown" ? use.reason : use.reason}`);
-    const permission = policy.checkPermission({ workspace: requestedPath, task: { ...task, operation_id: `preflight-${task.task_id}`, attempt: 1 } });
+    const sourceDecision = policy.validateWorkspace({ requestedPath: task.workspace, canonicalPath: task.workspace });
+    if (sourceDecision.state !== "allow") throw new TaskManagerError("TASK_INVALID", `SQLite admission rejected: ${sourceDecision.reason}`);
+    const executionPath = task.worktree_path ?? task.workspace;
+    const executionDecision = policy.validateWorkspace({ requestedPath: executionPath, canonicalPath: executionPath });
+    if (executionDecision.state !== "allow") throw new TaskManagerError("TASK_INVALID", `SQLite admission rejected: ${executionDecision.reason}`);
+    const normalizedTask: TaskPackage = {
+      ...task,
+      workspace: sourceDecision.canonical_path,
+      ...(task.worktree_path === undefined ? {} : { worktree_path: executionDecision.canonical_path }),
+    };
+    const permission = policy.checkPermission({
+      workspace: executionDecision.canonical_path,
+      task: { ...normalizedTask, operation_id: `preflight-${task.task_id}`, attempt: 1 },
+    });
     if (permission.state !== "allow") throw new TaskManagerError("TASK_INVALID", `SQLite admission rejected: ${permission.state === "unknown" ? permission.reason : permission.reason}`);
 
     const existingValue = this.#driver.readTaskLifecycle(task.task_id);
     if (existingValue) {
       const existing = asRecord(existingValue);
-      if (canonicalJson(existing.task) !== canonicalJson(task)) {
+      if (canonicalJson(existing.task) !== canonicalJson(normalizedTask)) {
         throw new TaskManagerError("TASK_ID_CONFLICT", `task_id already belongs to a different SQLite request: ${task.task_id}`);
       }
       const projection = asRecord(existing.projection);
@@ -97,10 +105,10 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     }
 
     try {
-      this.#driver.createTask(task as CandidateTaskPackage);
+      this.#driver.createTask(normalizedTask as CandidateTaskPackage);
     } catch (error) {
       const raced = asRecord(this.#driver.readTaskLifecycle(task.task_id));
-      if (!raced || canonicalJson(raced.task) !== canonicalJson(task)) {
+      if (!raced || canonicalJson(raced.task) !== canonicalJson(normalizedTask)) {
         if (errorCode(error) === "task_already_exists") throw new TaskManagerError("TASK_ID_CONFLICT", `task_id already exists with different SQLite input: ${task.task_id}`);
         throw error;
       }
@@ -728,8 +736,11 @@ interface TaskSnapshot {
 }
 
 function validateTaskPackage(task: TaskPackage): void {
+  const worktreePath: unknown = task.worktree_path;
   if (!task || typeof task.task_id !== "string" || !task.task_id.trim() || task.task_id.length > 128
     || typeof task.workspace !== "string" || !task.workspace.trim() || !pathIsAbsolute(task.workspace)
+    || (worktreePath !== undefined
+      && (typeof worktreePath !== "string" || !worktreePath.trim() || !pathIsAbsolute(worktreePath)))
     || typeof task.objective !== "string" || !task.objective.trim()
     || !Array.isArray(task.requirements) || !Array.isArray(task.allowed_paths) || !Array.isArray(task.forbidden_paths)
     || !Array.isArray(task.acceptance_criteria) || !Array.isArray(task.test_commands)) {
@@ -738,7 +749,7 @@ function validateTaskPackage(task: TaskPackage): void {
 }
 
 function pathIsAbsolute(value: string): boolean {
-  return process.platform === "win32" ? /^[A-Za-z]:\\/u.test(value) : value.startsWith("/");
+  return process.platform === "win32" ? /^[A-Za-z]:[\\/]/u.test(value) : value.startsWith("/");
 }
 
 function taskStatus(value: unknown): TaskStatus {

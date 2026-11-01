@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -8,7 +8,6 @@ import { codexHostProfile } from "../../src/host/profile.js";
 import { isTrustedLocalStdioContext } from "../../src/runtime/trusted-local-deployment.js";
 import { createHostTrustedLocalPolicyProvider, loadTrustedLocalPolicyConfig } from "../../src/runtime/trusted-local-policy-config.js";
 import { resolveTrustedLocalExecutionProfile } from "../../src/runtime/trusted-local-profile.js";
-import { createTrustedLocalPolicyProvider } from "../../src/sqlite-candidate/wp6b2b1/trusted-local-policy.js";
 import { LifecycleGateError, openClaimOnlyDriver } from "../../src/store/lifecycle-gate.js";
 
 function fixture(): { root: string; host: ReturnType<typeof codexHostProfile>; workspace: string; file: string } {
@@ -22,69 +21,35 @@ function fixture(): { root: string; host: ReturnType<typeof codexHostProfile>; w
   return { root, host, workspace, file: path.join(settings, "trusted-local-policy.json") };
 }
 
-function policy(workspace: string): Record<string, unknown> {
-  return {
-    schema_version: 1,
-    enabled: true,
-    policy_revision: "owner-r2a-1",
-    workspace_roots: [workspace],
-    execution_profile_id: "local-build-v1",
-    allowed_operation_kinds: ["attempt_lifecycle"],
-    unrestricted: false,
-  };
-}
-
-test("trusted policy loads only from the Host settings file and has a bounded actual profile mapping", () => {
+test("built-in trusted-local policy needs no settings file and preserves the bounded execution profile", () => {
   const fx = fixture();
   try {
-    assert.equal(loadTrustedLocalPolicyConfig(fx.host).status, "disabled");
-    writeFileSync(fx.file, JSON.stringify(policy(fx.workspace)));
+    writeFileSync(fx.file, JSON.stringify({ workspace_roots: ["D:\\not-used"] }));
     const loaded = loadTrustedLocalPolicyConfig(fx.host);
     assert.equal(loaded.status, "loaded");
-    if (loaded.status !== "loaded") return;
+    assert.equal(loaded.source, "built-in-local-stdio");
+    assert.equal(loaded.config.policy_revision, "single-user-local-v2");
     assert.equal(loaded.config.execution_profile_id, "local-build-v1");
     assert.equal(loaded.config.unrestricted, false);
+    assert.equal("workspace_roots" in loaded.config, false);
     assert.equal("deployment" in loaded.config, false, "deployment evidence comes from the Host composition, not policy bytes");
     assert.deepEqual(resolveTrustedLocalExecutionProfile(loaded.config.execution_profile_id), {
       id: "local-build-v1", sessionMode: "build", unrestricted: false,
     });
-    const provider = createTrustedLocalPolicyProvider(loaded.config);
-    assert.equal(provider.checkPermission({
+    const live = createHostTrustedLocalPolicyProvider(fx.host);
+    const decision = live.checkPermission({
       workspace: fx.workspace,
       task: { operation_id: "op-1", task_id: "task-1", attempt: 1, execution_profile_id: "unrestricted" },
-    }).state, "allow");
-    const decision = provider.checkPermission({ workspace: fx.workspace, task: { operation_id: "op-2", task_id: "task-2", attempt: 1 } });
+    });
     assert.equal(decision.state, "allow");
     if (decision.state === "allow") {
       assert.equal(decision.execution_profile_id, "local-build-v1");
       assert.equal(decision.execution_mode, "build");
+      assert.equal(decision.policy_revision, "single-user-local-v2");
     }
-    const live = createHostTrustedLocalPolicyProvider(fx.host);
-    assert.equal(live.checkPermission({ workspace: fx.workspace, task: { operation_id: "op-3", task_id: "task-3", attempt: 1 } }).state, "allow");
     const otherWorkspace = path.join(fx.root, "other-workspace");
     mkdirSync(otherWorkspace);
-    writeFileSync(fx.file, JSON.stringify(policy(otherWorkspace)));
-    assert.equal(live.checkPermission({ workspace: fx.workspace, task: { operation_id: "op-4", task_id: "task-4", attempt: 1 } }).state, "deny");
-    writeFileSync(fx.file, "{invalid");
-    assert.equal(live.checkPermission({ workspace: fx.workspace, task: { operation_id: "op-5", task_id: "task-5", attempt: 1 } }).state, "unknown");
-  } finally {
-    rmSync(fx.root, { recursive: true, force: true });
-  }
-});
-
-test("invalid, unknown-profile, oversized and symlink policy sources fail closed", () => {
-  const fx = fixture();
-  try {
-    writeFileSync(fx.file, JSON.stringify({ ...policy(fx.workspace), extra: true }));
-    assert.equal(loadTrustedLocalPolicyConfig(fx.host).status, "invalid");
-    writeFileSync(fx.file, JSON.stringify({ ...policy(fx.workspace), execution_profile_id: "yolo" }));
-    assert.equal(loadTrustedLocalPolicyConfig(fx.host).status, "invalid");
-    writeFileSync(fx.file, " ".repeat(65_537));
-    assert.equal(loadTrustedLocalPolicyConfig(fx.host).status, "invalid");
-    rmSync(fx.file);
-    symlinkSync(fx.workspace, fx.file, "junction");
-    assert.equal(loadTrustedLocalPolicyConfig(fx.host).status, "invalid");
-    assert.equal(resolveTrustedLocalExecutionProfile("unrestricted"), null);
+    assert.equal(live.checkPermission({ workspace: otherWorkspace, task: { operation_id: "op-2", task_id: "task-2", attempt: 1 } }).state, "allow");
   } finally {
     rmSync(fx.root, { recursive: true, force: true });
   }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
@@ -72,15 +72,6 @@ test("real detached child lifecycle scenarios", async (t) => {
   mkdirSync(runRoot, { recursive: true });
   mkdirSync(workspace, { recursive: true });
   mkdirSync(settingsDirectory, { recursive: true });
-  writeFileSync(path.join(settingsDirectory, "trusted-local-policy.json"), JSON.stringify({
-    schema_version: 1,
-    enabled: true,
-    policy_revision: "od10-test-v1",
-    workspace_roots: [executionRoot],
-    execution_profile_id: "local-build-v1",
-    allowed_operation_kinds: ["attempt_lifecycle"],
-    unrestricted: false,
-  }));
   await initializeIsolatedCandidateRoot(runRoot);
   const driver = await openClaimOnlyDriver({
     dataRoot: runRoot,
@@ -317,7 +308,7 @@ test("real detached child lifecycle scenarios", async (t) => {
             task_id: string; attempt: number; generation: number; workspace_ref: string;
           };
           assert.equal(admission.authorization_source, "trusted_local_policy");
-          assert.equal(admission.policy_revision, "od10-test-v1");
+          assert.equal(admission.policy_revision, "single-user-local-v2");
           assert.equal(admission.execution_profile_id, "local-build-v1");
           assert.match(admission.policy_digest, /^[0-9a-f]{64}$/u);
           const claimIndex = events.findIndex((event) => event.event_type === "claim_committed");

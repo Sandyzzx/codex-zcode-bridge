@@ -4032,7 +4032,6 @@ function createTrustedLocalPolicyProvider(config2) {
   let executionProfileId = "";
   let executionMode = "build";
   let policyDigest = "";
-  let roots = [];
   if (config2 !== void 0) {
     try {
       const parsed = validateConfig(config2);
@@ -4041,17 +4040,9 @@ function createTrustedLocalPolicyProvider(config2) {
       const profile = resolveTrustedLocalExecutionProfile(executionProfileId);
       if (!profile) throw new Error("trusted_local_execution_profile_unknown");
       executionMode = profile.sessionMode;
-      roots = parsed.workspace_roots.map((configuredPath) => ({
-        configuredPath,
-        canonicalPath: resolveLocalDirectory(configuredPath)
-      }));
-      if (new Set(roots.map((root) => windowsKey(root.canonicalPath))).size !== roots.length) {
-        throw new Error("workspace_roots_duplicate");
-      }
       const policyEnvelope = {
-        contract: "od10-trusted-local-policy-candidate-v1",
+        contract: "trusted-local-workspace-policy-v2",
         policy_revision: policyRevision,
-        workspace_roots: roots.map((root) => root.canonicalPath).sort((a, b) => windowsKey(a).localeCompare(windowsKey(b))),
         execution_profile_id: executionProfileId,
         allowed_operation_kinds: ["attempt_lifecycle"],
         unrestricted: false
@@ -4067,27 +4058,27 @@ function createTrustedLocalPolicyProvider(config2) {
     state: "unknown",
     reason: failure2 ?? "trusted_local_mode_disabled"
   });
-  const inScope = (canonicalPath) => {
-    if (!enabled) return "unknown";
-    try {
-      for (const root of roots) {
-        const currentRoot = resolveLocalDirectory(root.configuredPath);
-        if (!sameWindowsPath(currentRoot, root.canonicalPath)) return "unknown";
-        if (withinRoot(root.canonicalPath, canonicalPath)) return "allow";
-      }
-      return "deny";
-    } catch {
-      return "unknown";
-    }
-  };
-  const allowed = () => ({
+  const allowed = (canonicalPath) => ({
     state: "allow",
     source: "trusted_local_policy",
     policy_revision: policyRevision,
     policy_digest: policyDigest,
     execution_profile_id: executionProfileId,
-    execution_mode: executionMode
+    execution_mode: executionMode,
+    canonical_path: canonicalPath
   });
+  const validateWorkspaceForUse = (pathValue) => {
+    if (!enabled) return disabledOrInvalid();
+    if (typeof pathValue !== "string" || !isLocalAbsolute(pathValue)) {
+      return { state: "deny", reason: "workspace_path_form_denied" };
+    }
+    try {
+      return allowed(resolveLocalDirectory(pathValue));
+    } catch (error2) {
+      const reason = error2 instanceof Error && (error2.message === "workspace_unavailable" || error2.message === "workspace_not_directory") ? error2.message : "workspace_unavailable";
+      return { state: "unknown", reason };
+    }
+  };
   return Object.freeze({
     get status() {
       return enabled ? "enabled" : invalid ? "invalid" : "disabled";
@@ -4103,27 +4094,19 @@ function createTrustedLocalPolicyProvider(config2) {
       if (!isLocalAbsolute(input.requestedPath) || !isLocalAbsolute(input.canonicalPath)) {
         return { state: "deny", reason: "workspace_path_form_denied" };
       }
-      const scope = inScope(input.canonicalPath);
-      if (scope === "allow") return allowed();
-      return scope === "deny" ? { state: "deny", reason: "workspace_outside_owner_scope" } : { state: "unknown", reason: "workspace_scope_unknown" };
-    },
-    validateWorkspaceForUse(pathValue) {
-      if (!enabled) return disabledOrInvalid();
-      if (typeof pathValue !== "string" || !isLocalAbsolute(pathValue)) {
-        return { state: "deny", reason: "workspace_path_form_denied" };
-      }
       try {
-        const stat2 = statSync7(pathValue);
-        if (!stat2.isDirectory()) return { state: "deny", reason: "workspace_not_directory" };
-        const canonicalPath = path15.win32.normalize(realpathSync4(pathValue));
-        if (!isLocalAbsolute(canonicalPath)) return { state: "deny", reason: "workspace_path_form_denied" };
-        const scope = inScope(canonicalPath);
-        if (scope === "allow") return allowed();
-        return scope === "deny" ? { state: "deny", reason: "workspace_outside_owner_scope" } : { state: "unknown", reason: "workspace_scope_unknown" };
-      } catch {
-        return { state: "unknown", reason: "workspace_unavailable" };
+        const requested = resolveLocalDirectory(input.requestedPath);
+        const canonical4 = resolveLocalDirectory(input.canonicalPath);
+        if (!sameWindowsPath(requested, canonical4)) {
+          return { state: "deny", reason: "workspace_canonical_mismatch" };
+        }
+        return allowed(canonical4);
+      } catch (error2) {
+        const reason = error2 instanceof Error && (error2.message === "workspace_unavailable" || error2.message === "workspace_not_directory") ? error2.message : "workspace_unavailable";
+        return { state: "unknown", reason };
       }
     },
+    validateWorkspaceForUse,
     checkPermission(input) {
       if (!enabled) return disabledOrInvalid();
       if (!input || typeof input.workspace !== "string" || !isPlainRecord(input.task)) {
@@ -4133,10 +4116,7 @@ function createTrustedLocalPolicyProvider(config2) {
       if (typeof operation.operation_id !== "string" || typeof operation.task_id !== "string" || !Number.isSafeInteger(operation.attempt) || operation.attempt < 1) {
         return { state: "deny", reason: "operation_kind_not_allowed" };
       }
-      const scope = inScope(input.workspace);
-      if (scope === "deny") return { state: "deny", reason: "workspace_outside_owner_scope" };
-      if (scope !== "allow") return { state: "unknown", reason: "workspace_scope_unknown" };
-      return allowed();
+      return validateWorkspaceForUse(input.workspace);
     },
     disable() {
       enabled = false;
@@ -4146,7 +4126,7 @@ function createTrustedLocalPolicyProvider(config2) {
 }
 function validateConfig(value) {
   if (!isPlainRecord(value)) throw new Error("trusted_local_policy_config_invalid");
-  const expected = ["allowed_operation_kinds", "enabled", "execution_profile_id", "policy_revision", "unrestricted", "workspace_roots"];
+  const expected = ["allowed_operation_kinds", "enabled", "execution_profile_id", "policy_revision", "unrestricted"];
   if (Object.keys(value).sort().join("|") !== expected.sort().join("|")) throw new Error("trusted_local_policy_config_fields_invalid");
   if (value.enabled !== true || value.unrestricted !== false || value.allowed_operation_kinds?.length !== 1 || value.allowed_operation_kinds[0] !== "attempt_lifecycle") {
     throw new Error("trusted_local_policy_config_denied");
@@ -4157,26 +4137,23 @@ function validateConfig(value) {
   if (!resolveTrustedLocalExecutionProfile(value.execution_profile_id)) {
     throw new Error("trusted_local_execution_profile_unknown");
   }
-  if (!Array.isArray(value.workspace_roots) || value.workspace_roots.length < 1 || value.workspace_roots.length > 32 || value.workspace_roots.some((item) => typeof item !== "string")) {
-    throw new Error("trusted_local_policy_workspace_roots_invalid");
-  }
   return value;
 }
 function resolveLocalDirectory(input) {
-  if (!isLocalAbsolute(input)) throw new Error("workspace_root_path_form_denied");
-  const stat2 = statSync7(input);
-  if (!stat2.isDirectory()) throw new Error("workspace_root_not_directory");
+  if (!isLocalAbsolute(input)) throw new Error("workspace_path_form_denied");
+  let stat2;
+  try {
+    stat2 = statSync7(input);
+  } catch {
+    throw new Error("workspace_unavailable");
+  }
+  if (!stat2.isDirectory()) throw new Error("workspace_not_directory");
   const canonical4 = realpathSync4(input);
-  if (!isLocalAbsolute(canonical4)) throw new Error("workspace_root_path_form_denied");
+  if (!isLocalAbsolute(canonical4)) throw new Error("workspace_path_form_denied");
   return path15.win32.normalize(canonical4);
 }
 function isLocalAbsolute(value) {
-  return process.platform === "win32" && path15.win32.isAbsolute(value) && /^[A-Za-z]:\\/u.test(value) && !value.startsWith("\\\\");
-}
-function withinRoot(root, candidate) {
-  if (!isLocalAbsolute(candidate)) return false;
-  const relative = path15.win32.relative(root, path15.win32.normalize(candidate));
-  return relative === "" || relative !== ".." && !relative.startsWith(`..${path15.win32.sep}`) && !path15.win32.isAbsolute(relative);
+  return process.platform === "win32" && path15.win32.isAbsolute(value) && /^[A-Za-z]:[\\/]/u.test(value) && !value.startsWith("\\\\");
 }
 function sameWindowsPath(left, right) {
   return windowsKey(path15.win32.normalize(left)) === windowsKey(path15.win32.normalize(right));
@@ -4197,107 +4174,23 @@ var init_trusted_local_policy = __esm({
 });
 
 // src/runtime/trusted-local-policy-config.ts
-import { lstatSync, readFileSync as readFileSync10 } from "node:fs";
-import path16 from "node:path";
-function loadTrustedLocalPolicyConfig(host) {
-  validateHostProfile(host);
-  const source = path16.join(host.settingsDirectory, POLICY_FILE);
-  try {
-    const stat2 = lstatSync(source);
-    if (!stat2.isFile() || stat2.isSymbolicLink()) {
-      return { status: "invalid", source, reason: "trusted_local_policy_not_regular_file" };
-    }
-    if (stat2.size > MAX_POLICY_BYTES) {
-      return { status: "invalid", source, reason: "trusted_local_policy_too_large" };
-    }
-    const value = JSON.parse(readFileSync10(source, "utf8"));
-    const file = validatePolicyFile(value);
-    const profile = resolveTrustedLocalExecutionProfile(file.execution_profile_id);
-    if (!profile) return { status: "invalid", source, reason: "trusted_local_execution_profile_unknown" };
-    return {
-      status: "loaded",
-      source,
-      config: {
-        enabled: true,
-        policy_revision: file.policy_revision,
-        workspace_roots: file.workspace_roots,
-        execution_profile_id: profile.id,
-        allowed_operation_kinds: ["attempt_lifecycle"],
-        unrestricted: false
-      }
-    };
-  } catch (error2) {
-    if (error2.code === "ENOENT") return { status: "disabled", source };
-    return {
-      status: "invalid",
-      source,
-      reason: error2 instanceof Error && error2.message.startsWith("trusted_local_") ? error2.message : "trusted_local_policy_unreadable_or_invalid"
-    };
-  }
-}
 function createHostTrustedLocalPolicyProvider(host) {
   validateHostProfile(host);
-  let disabled = false;
-  const current = () => {
-    if (disabled) return createTrustedLocalPolicyProvider();
-    const loaded = loadTrustedLocalPolicyConfig(host);
-    return createTrustedLocalPolicyProvider(
-      loaded.status === "loaded" ? loaded.config : loaded.status === "invalid" ? null : void 0
-    );
-  };
-  return Object.freeze({
-    get status() {
-      return current().status;
-    },
-    get reason() {
-      return current().reason;
-    },
-    validateWorkspace: (input) => current().validateWorkspace(input),
-    validateWorkspaceForUse: (workspace) => current().validateWorkspaceForUse(workspace),
-    checkPermission: (input) => current().checkPermission(input),
-    disable: () => {
-      disabled = true;
-    }
-  });
+  return createTrustedLocalPolicyProvider(BUILT_IN_POLICY);
 }
-function validatePolicyFile(value) {
-  if (!isRecord3(value)) throw new Error("trusted_local_policy_invalid_json_shape");
-  const keys = Object.keys(value).sort().join("|");
-  if (keys !== [
-    "allowed_operation_kinds",
-    "enabled",
-    "execution_profile_id",
-    "policy_revision",
-    "schema_version",
-    "unrestricted",
-    "workspace_roots"
-  ].sort().join("|")) throw new Error("trusted_local_policy_invalid_fields");
-  if (value.schema_version !== 1 || value.enabled !== true || value.unrestricted !== false || !Array.isArray(value.allowed_operation_kinds) || value.allowed_operation_kinds.length !== 1 || value.allowed_operation_kinds[0] !== "attempt_lifecycle") {
-    throw new Error("trusted_local_policy_invalid_contract");
-  }
-  if (!isId(value.policy_revision) || !isId(value.execution_profile_id)) {
-    throw new Error("trusted_local_policy_invalid_identity");
-  }
-  if (!Array.isArray(value.workspace_roots) || value.workspace_roots.length < 1 || value.workspace_roots.length > 32 || value.workspace_roots.some((item) => typeof item !== "string" || !item.trim())) {
-    throw new Error("trusted_local_policy_invalid_workspace_roots");
-  }
-  return value;
-}
-function isRecord3(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value) && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
-}
-function isId(value) {
-  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(value);
-}
-var MAX_POLICY_BYTES, POLICY_FILE;
+var BUILT_IN_POLICY;
 var init_trusted_local_policy_config = __esm({
   "src/runtime/trusted-local-policy-config.ts"() {
     "use strict";
     init_profile();
     init_trusted_local_policy();
-    init_trusted_local_profile();
-    MAX_POLICY_BYTES = 64 * 1024;
-    POLICY_FILE = "trusted-local-policy.json";
+    BUILT_IN_POLICY = Object.freeze({
+      enabled: true,
+      policy_revision: "single-user-local-v2",
+      execution_profile_id: "local-build-v1",
+      allowed_operation_kinds: Object.freeze(["attempt_lifecycle"]),
+      unrestricted: false
+    });
   }
 });
 
@@ -4882,8 +4775,8 @@ __export(store_exports, {
 });
 import { DatabaseSync } from "node:sqlite";
 import { createHash as createHash14, randomUUID as randomUUID5 } from "node:crypto";
-import { existsSync as existsSync12, lstatSync as lstatSync3, realpathSync as realpathSync6, readFileSync as readFileSync12, writeFileSync as writeFileSync6, openSync as openSync5, closeSync as closeSync5, fsyncSync as fsyncSync3, unlinkSync as unlinkSync2, renameSync as renameSync4, statSync as statSync8 } from "node:fs";
-import path18 from "node:path";
+import { existsSync as existsSync12, lstatSync as lstatSync2, realpathSync as realpathSync6, readFileSync as readFileSync11, writeFileSync as writeFileSync6, openSync as openSync5, closeSync as closeSync5, fsyncSync as fsyncSync3, unlinkSync as unlinkSync2, renameSync as renameSync4, statSync as statSync8 } from "node:fs";
+import path17 from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 function schemaObjects(db) {
   return JSON.stringify(db.prepare(SCHEMA_OBJECT_QUERY).all().map((row) => [row.type, row.name, row.tbl_name, row.sql === null ? null : row.sql.trim()]));
@@ -5213,7 +5106,7 @@ function parseAuthoritySourceManifest(sourceManifestJson, sourceManifestDigest) 
   const parsed = parseHistoricalExceptionManifest(sourceManifestJson, sourceManifestDigest);
   const { manifest } = parsed;
   if (manifest.kind === void 0) return { ...parsed, kind: "historical_projection" };
-  if (manifest.kind !== "raw_json_archive_cutover" || typeof manifest.source_tasks_root !== "string" || !path18.isAbsolute(manifest.source_tasks_root) || typeof manifest.archive_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(manifest.archive_manifest_digest) || typeof manifest.source_files_digest !== "string" || !/^[0-9a-f]{64}$/u.test(manifest.source_files_digest) || manifest.task_count !== 0 || manifest.result_count !== 0 || manifest.event_count !== 0 || !Number.isSafeInteger(manifest.artifact_count) || manifest.artifact_count < 0 || !Number.isSafeInteger(manifest.artifact_bytes) || manifest.artifact_bytes < 0 || !Number.isSafeInteger(manifest.archive_file_count) || manifest.archive_file_count !== manifest.artifact_count || !Number.isSafeInteger(manifest.archive_byte_count) || manifest.archive_byte_count !== manifest.artifact_bytes || parsed.exceptions.length !== 0 || !Array.isArray(manifest.files) || manifest.files.length !== 0)
+  if (manifest.kind !== "raw_json_archive_cutover" || typeof manifest.source_tasks_root !== "string" || !path17.isAbsolute(manifest.source_tasks_root) || typeof manifest.archive_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(manifest.archive_manifest_digest) || typeof manifest.source_files_digest !== "string" || !/^[0-9a-f]{64}$/u.test(manifest.source_files_digest) || manifest.task_count !== 0 || manifest.result_count !== 0 || manifest.event_count !== 0 || !Number.isSafeInteger(manifest.artifact_count) || manifest.artifact_count < 0 || !Number.isSafeInteger(manifest.artifact_bytes) || manifest.artifact_bytes < 0 || !Number.isSafeInteger(manifest.archive_file_count) || manifest.archive_file_count !== manifest.artifact_count || !Number.isSafeInteger(manifest.archive_byte_count) || manifest.archive_byte_count !== manifest.artifact_bytes || parsed.exceptions.length !== 0 || !Array.isArray(manifest.files) || manifest.files.length !== 0)
     fail("invalid_raw_json_archive_cutover_manifest");
   return { ...parsed, kind: "raw_json_archive_cutover" };
 }
@@ -5231,25 +5124,25 @@ function validateHistoricalExceptionSnapshot(snapshot, sourceManifest) {
   }
 }
 function pathsFor(root, { databaseFileName = "operations.sqlite3", managedDataDirectory = false, allowCutoverPending = false, allowUnpublishedCutover = false } = {}) {
-  if (typeof root !== "string" || !path18.isAbsolute(root) || !existsSync12(root) || !lstatSync3(root).isDirectory() || lstatSync3(root).isSymbolicLink()) fail("invalid_data_root");
+  if (typeof root !== "string" || !path17.isAbsolute(root) || !existsSync12(root) || !lstatSync2(root).isDirectory() || lstatSync2(root).isSymbolicLink()) fail("invalid_data_root");
   if (typeof databaseFileName !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/u.test(databaseFileName) || databaseFileName === "." || databaseFileName === "..") fail("invalid_database_file_name");
   const resolved = realpathSync6.native(root);
   if (!managedDataDirectory) {
-    const relative = path18.relative(HERE, resolved);
-    if (!relative || relative.startsWith("..") || path18.isAbsolute(relative)) fail("data_root_outside_candidate");
+    const relative = path17.relative(HERE, resolved);
+    if (!relative || relative.startsWith("..") || path17.isAbsolute(relative)) fail("data_root_outside_candidate");
   }
-  const db = path18.join(resolved, databaseFileName);
+  const db = path17.join(resolved, databaseFileName);
   const files = {
     root: resolved,
     db,
     cutoverPending: `${db}.cutover-pending.json`,
     cutoverPublished: `${db}.cutover-published.json`,
-    poison: path18.join(resolved, "ROOT_POISONED.json"),
-    intent: path18.join(resolved, "WRITER_INTENT.json")
+    poison: path17.join(resolved, "ROOT_POISONED.json"),
+    intent: path17.join(resolved, "WRITER_INTENT.json")
   };
   for (const file of [files.db, `${files.db}-wal`, `${files.db}-shm`, files.cutoverPending, files.cutoverPublished, files.poison, files.intent]) {
     try {
-      const st = lstatSync3(file);
+      const st = lstatSync2(file);
       if (st.isSymbolicLink() || !st.isFile()) fail("unsafe_root_entry");
     } catch (e) {
       if (e instanceof AdmissionError) throw e;
@@ -5261,13 +5154,13 @@ function pathsFor(root, { databaseFileName = "operations.sqlite3", managedDataDi
 function readPublishedCutoverReceipt(file) {
   let value;
   try {
-    value = JSON.parse(readFileSync12(file, "utf8"));
+    value = JSON.parse(readFileSync11(file, "utf8"));
   } catch {
     fail("cutover_publication_receipt_unreadable");
   }
   const keys = ["archive", "created_at", "cutover_id", "database_file", "migration_id", "schema_version", "source_manifest_digest", "source_root_digest", "state"];
   const archiveKeys = ["archive_directory", "byte_count", "file_count", "manifest_digest", "source_tasks_root"];
-  if (!value || Object.getPrototypeOf(value) !== Object.prototype || Object.keys(value).sort().join("|") !== keys.join("|") || value.schema_version !== 1 || value.state !== "authority_switch_receipt" || !validText2(value.migration_id, 128) || !validText2(value.cutover_id, 128) || typeof value.source_root_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.source_root_digest) || typeof value.source_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.source_manifest_digest) || !validText2(value.database_file, 96) || !validText2(value.created_at, 64) || Number.isNaN(Date.parse(value.created_at)) || !value.archive || Object.getPrototypeOf(value.archive) !== Object.prototype || Object.keys(value.archive).sort().join("|") !== archiveKeys.join("|") || !validText2(value.archive.archive_directory, 32767) || !path18.isAbsolute(value.archive.archive_directory) || !validText2(value.archive.source_tasks_root, 32767) || !path18.isAbsolute(value.archive.source_tasks_root) || typeof value.archive.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.archive.manifest_digest) || !Number.isSafeInteger(value.archive.file_count) || value.archive.file_count < 0 || !Number.isSafeInteger(value.archive.byte_count) || value.archive.byte_count < 0) fail("cutover_publication_receipt_invalid");
+  if (!value || Object.getPrototypeOf(value) !== Object.prototype || Object.keys(value).sort().join("|") !== keys.join("|") || value.schema_version !== 1 || value.state !== "authority_switch_receipt" || !validText2(value.migration_id, 128) || !validText2(value.cutover_id, 128) || typeof value.source_root_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.source_root_digest) || typeof value.source_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.source_manifest_digest) || !validText2(value.database_file, 96) || !validText2(value.created_at, 64) || Number.isNaN(Date.parse(value.created_at)) || !value.archive || Object.getPrototypeOf(value.archive) !== Object.prototype || Object.keys(value.archive).sort().join("|") !== archiveKeys.join("|") || !validText2(value.archive.archive_directory, 32767) || !path17.isAbsolute(value.archive.archive_directory) || !validText2(value.archive.source_tasks_root, 32767) || !path17.isAbsolute(value.archive.source_tasks_root) || typeof value.archive.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.archive.manifest_digest) || !Number.isSafeInteger(value.archive.file_count) || value.archive.file_count < 0 || !Number.isSafeInteger(value.archive.byte_count) || value.archive.byte_count < 0) fail("cutover_publication_receipt_invalid");
   return value;
 }
 function assertCutoverPublicationGate(db, paths) {
@@ -5287,7 +5180,7 @@ function assertCutoverPublicationGate(db, paths) {
   }
   const receipt2 = switched[0];
   const publication = readPublishedCutoverReceipt(paths.cutoverPublished);
-  if (publication.database_file !== path18.basename(paths.db) || publication.migration_id !== receipt2.migration_id || publication.cutover_id !== receipt2.cutover_id || publication.source_root_digest !== receipt2.source_root_digest || publication.source_manifest_digest !== receipt2.source_manifest_digest || publication.archive.archive_directory !== receipt2.archive_directory || publication.archive.manifest_digest !== receipt2.archive_manifest_digest || publication.archive.source_tasks_root !== receipt2.archive_source_tasks_root || publication.archive.file_count !== receipt2.archive_file_count || publication.archive.byte_count !== receipt2.archive_byte_count) fail("cutover_publication_receipt_mismatch");
+  if (publication.database_file !== path17.basename(paths.db) || publication.migration_id !== receipt2.migration_id || publication.cutover_id !== receipt2.cutover_id || publication.source_root_digest !== receipt2.source_root_digest || publication.source_manifest_digest !== receipt2.source_manifest_digest || publication.archive.archive_directory !== receipt2.archive_directory || publication.archive.manifest_digest !== receipt2.archive_manifest_digest || publication.archive.source_tasks_root !== receipt2.archive_source_tasks_root || publication.archive.file_count !== receipt2.archive_file_count || publication.archive.byte_count !== receipt2.archive_byte_count) fail("cutover_publication_receipt_mismatch");
 }
 function writePoison(file, value) {
   const tmp = `${file}.${randomUUID5()}.tmp`;
@@ -5535,7 +5428,7 @@ function validateTaskPackage(task) {
 }
 function validateWorkspace(input, validator) {
   if (typeof input !== "string" || !input.trim()) fail("workspace_missing");
-  if (!path18.isAbsolute(input)) fail("workspace_not_absolute");
+  if (!path17.isAbsolute(input)) fail("workspace_not_absolute");
   if (input.replace(/\//g, "\\").startsWith("\\\\")) fail("workspace_unsupported_path_form");
   let st, canonicalPath;
   try {
@@ -5574,8 +5467,8 @@ var init_store = __esm({
     "use strict";
     init_interaction_channel();
     init_json_history_result_exceptions();
-    HERE = path18.dirname(fileURLToPath4(import.meta.url));
-    SCHEMA = readFileSync12(new URL("./schema.sql", import.meta.url), "utf8");
+    HERE = path17.dirname(fileURLToPath4(import.meta.url));
+    SCHEMA = readFileSync11(new URL("./schema.sql", import.meta.url), "utf8");
     CONSTRUCT = /* @__PURE__ */ Symbol("construct");
     SCHEMA_VERSION = 13;
     SCHEMA_OBJECT_QUERY = "SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE type IN ('table','view','index','trigger') AND substr(lower(name),1,7)<>'sqlite_' ORDER BY type COLLATE BINARY,name COLLATE BINARY";
@@ -5781,7 +5674,7 @@ var init_store = __esm({
         const sourceKeys = ["manifest_digest", "manifest_json", "root_digest"];
         const archive = snapshot.archive;
         const archiveKeys = ["archive_directory", "byte_count", "file_count", "manifest_digest", "source_tasks_root"];
-        if (Object.keys(snapshot).sort().join("|") !== topKeys.join("|") || !source || Object.getPrototypeOf(source) !== Object.prototype || Object.keys(source).sort().join("|") !== sourceKeys.join("|") || !archive || Object.getPrototypeOf(archive) !== Object.prototype || Object.keys(archive).sort().join("|") !== archiveKeys.join("|") || !validId3(snapshot.migration_id) || !validId3(snapshot.cutover_id) || !validText2(snapshot.verifier_version, 128) || !validText2(snapshot.protocol_version, 128) || typeof snapshot.runtime_roster_digest !== "string" || !/^[0-9a-f]{64}$/u.test(snapshot.runtime_roster_digest) || typeof source.root_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.root_digest) || typeof source.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.manifest_digest) || typeof source.manifest_json !== "string" || digest2(source.manifest_json) !== source.manifest_digest || !validText2(archive.archive_directory, 32767) || !path18.isAbsolute(archive.archive_directory) || !validText2(archive.source_tasks_root, 32767) || !path18.isAbsolute(archive.source_tasks_root) || typeof archive.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(archive.manifest_digest) || !Number.isSafeInteger(archive.file_count) || archive.file_count < 0 || !Number.isSafeInteger(archive.byte_count) || archive.byte_count < 0) fail("invalid_raw_cutover_snapshot");
+        if (Object.keys(snapshot).sort().join("|") !== topKeys.join("|") || !source || Object.getPrototypeOf(source) !== Object.prototype || Object.keys(source).sort().join("|") !== sourceKeys.join("|") || !archive || Object.getPrototypeOf(archive) !== Object.prototype || Object.keys(archive).sort().join("|") !== archiveKeys.join("|") || !validId3(snapshot.migration_id) || !validId3(snapshot.cutover_id) || !validText2(snapshot.verifier_version, 128) || !validText2(snapshot.protocol_version, 128) || typeof snapshot.runtime_roster_digest !== "string" || !/^[0-9a-f]{64}$/u.test(snapshot.runtime_roster_digest) || typeof source.root_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.root_digest) || typeof source.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.manifest_digest) || typeof source.manifest_json !== "string" || digest2(source.manifest_json) !== source.manifest_digest || !validText2(archive.archive_directory, 32767) || !path17.isAbsolute(archive.archive_directory) || !validText2(archive.source_tasks_root, 32767) || !path17.isAbsolute(archive.source_tasks_root) || typeof archive.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(archive.manifest_digest) || !Number.isSafeInteger(archive.file_count) || archive.file_count < 0 || !Number.isSafeInteger(archive.byte_count) || archive.byte_count < 0) fail("invalid_raw_cutover_snapshot");
         const policy = parseAuthoritySourceManifest(source.manifest_json, source.manifest_digest);
         if (policy.kind !== "raw_json_archive_cutover" || policy.manifest.source_tasks_root !== archive.source_tasks_root || policy.manifest.archive_manifest_digest !== archive.manifest_digest || policy.manifest.archive_file_count !== archive.file_count || policy.manifest.archive_byte_count !== archive.byte_count) fail("raw_cutover_archive_identity_mismatch");
         const at = (/* @__PURE__ */ new Date()).toISOString();
@@ -5855,7 +5748,7 @@ var init_store = __esm({
         const sourceKeys = ["artifact_bytes", "artifact_count", "event_count", "historical_exception_count", "historical_exception_digest", "manifest_digest", "manifest_json", "result_count", "root_digest", "task_count"];
         const archive = snapshot.archive;
         const archiveKeys = ["archive_directory", "byte_count", "file_count", "manifest_digest", "source_tasks_root"];
-        if (!source || Object.getPrototypeOf(source) !== Object.prototype || Object.keys(source).sort().join("|") !== sourceKeys.join("|") || !archive || Object.getPrototypeOf(archive) !== Object.prototype || Object.keys(archive).sort().join("|") !== archiveKeys.join("|") || !validId3(snapshot.migration_id) || !validId3(snapshot.cutover_id) || !validText2(snapshot.verifier_version, 128) || !validText2(snapshot.protocol_version, 128) || typeof snapshot.runtime_roster_digest !== "string" || !/^[0-9a-f]{64}$/u.test(snapshot.runtime_roster_digest) || typeof source.root_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.root_digest) || typeof source.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.manifest_digest) || typeof source.manifest_json !== "string" || digest2(source.manifest_json) !== source.manifest_digest || !validText2(archive.archive_directory, 32767) || !path18.isAbsolute(archive.archive_directory) || !validText2(archive.source_tasks_root, 32767) || !path18.isAbsolute(archive.source_tasks_root) || typeof archive.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(archive.manifest_digest) || !Number.isSafeInteger(archive.file_count) || archive.file_count < 0 || !Number.isSafeInteger(archive.byte_count) || archive.byte_count < 0 || archive.file_count !== source.artifact_count || archive.byte_count !== source.artifact_bytes || !Array.isArray(snapshot.tasks) || !Array.isArray(snapshot.artifacts) || !Array.isArray(snapshot.results) || !Array.isArray(snapshot.events) || !Array.isArray(snapshot.historical_exceptions) || ![source.task_count, source.artifact_count, source.artifact_bytes, source.result_count, source.event_count].every((v) => Number.isSafeInteger(v) && v >= 0) || !Number.isSafeInteger(source.historical_exception_count) || source.historical_exception_count < 0 || typeof source.historical_exception_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.historical_exception_digest) || source.historical_exception_count !== snapshot.historical_exceptions.length || source.historical_exception_digest !== historicalResultExceptionSetDigest(snapshot.historical_exceptions) || source.artifact_count !== snapshot.artifacts.length || source.result_count !== snapshot.results.length || source.event_count !== snapshot.events.length) fail("invalid_migration_snapshot");
+        if (!source || Object.getPrototypeOf(source) !== Object.prototype || Object.keys(source).sort().join("|") !== sourceKeys.join("|") || !archive || Object.getPrototypeOf(archive) !== Object.prototype || Object.keys(archive).sort().join("|") !== archiveKeys.join("|") || !validId3(snapshot.migration_id) || !validId3(snapshot.cutover_id) || !validText2(snapshot.verifier_version, 128) || !validText2(snapshot.protocol_version, 128) || typeof snapshot.runtime_roster_digest !== "string" || !/^[0-9a-f]{64}$/u.test(snapshot.runtime_roster_digest) || typeof source.root_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.root_digest) || typeof source.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.manifest_digest) || typeof source.manifest_json !== "string" || digest2(source.manifest_json) !== source.manifest_digest || !validText2(archive.archive_directory, 32767) || !path17.isAbsolute(archive.archive_directory) || !validText2(archive.source_tasks_root, 32767) || !path17.isAbsolute(archive.source_tasks_root) || typeof archive.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(archive.manifest_digest) || !Number.isSafeInteger(archive.file_count) || archive.file_count < 0 || !Number.isSafeInteger(archive.byte_count) || archive.byte_count < 0 || archive.file_count !== source.artifact_count || archive.byte_count !== source.artifact_bytes || !Array.isArray(snapshot.tasks) || !Array.isArray(snapshot.artifacts) || !Array.isArray(snapshot.results) || !Array.isArray(snapshot.events) || !Array.isArray(snapshot.historical_exceptions) || ![source.task_count, source.artifact_count, source.artifact_bytes, source.result_count, source.event_count].every((v) => Number.isSafeInteger(v) && v >= 0) || !Number.isSafeInteger(source.historical_exception_count) || source.historical_exception_count < 0 || typeof source.historical_exception_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.historical_exception_digest) || source.historical_exception_count !== snapshot.historical_exceptions.length || source.historical_exception_digest !== historicalResultExceptionSetDigest(snapshot.historical_exceptions) || source.artifact_count !== snapshot.artifacts.length || source.result_count !== snapshot.results.length || source.event_count !== snapshot.events.length) fail("invalid_migration_snapshot");
         const sourceManifest = parseHistoricalExceptionManifest(source.manifest_json, source.manifest_digest);
         if (sourceManifest.manifest.task_count !== source.task_count || sourceManifest.manifest.artifact_count !== source.artifact_count || sourceManifest.manifest.artifact_bytes !== source.artifact_bytes || sourceManifest.manifest.result_count !== source.result_count || sourceManifest.manifest.event_count !== source.event_count || sourceManifest.manifest.historical_exception_count !== source.historical_exception_count || sourceManifest.manifest.historical_exception_digest !== source.historical_exception_digest || canonical3(sourceManifest.exceptions) !== canonical3(snapshot.historical_exceptions)) fail("invalid_source_manifest");
         validateHistoricalExceptionSnapshot(snapshot, sourceManifest);
@@ -8038,7 +7931,7 @@ var init_store = __esm({
         } finally {
           if (settled && !this.#poisoned && !existsSync12(this.#paths.poison)) {
             try {
-              const intent = JSON.parse(readFileSync12(this.#paths.intent, "utf8"));
+              const intent = JSON.parse(readFileSync11(this.#paths.intent, "utf8"));
               if (intent.token !== token) fail("writer_intent_identity_mismatch");
               unlinkSync2(this.#paths.intent);
             } catch (e) {
@@ -8079,7 +7972,7 @@ var init_store = __esm({
             if (migrationRuns.length || migratedResultsCount || migratedEventsCount || this.#db.prepare("SELECT COUNT(*) AS n FROM json_artifacts").get().n) fail("fresh_install_contains_legacy_data");
           } else if (authoritySwitches.length) {
             const receipt2 = authoritySwitches[0], migration = migrationRuns[0];
-            if (!migration || migration.state !== "verified" || migration.migration_id !== receipt2.migration_id || migration.source_root_digest !== receipt2.source_root_digest || migration.source_manifest_digest !== receipt2.source_manifest_digest || digest2(migration.source_manifest_json) !== migration.source_manifest_digest || !validText2(migration.archive_directory, 32767) || !path18.isAbsolute(migration.archive_directory) || !validText2(receipt2.archive_directory, 32767) || !path18.isAbsolute(receipt2.archive_directory) || migration.archive_directory !== receipt2.archive_directory || typeof migration.archive_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(migration.archive_manifest_digest) || migration.archive_manifest_digest !== receipt2.archive_manifest_digest || !validText2(migration.archive_source_tasks_root, 32767) || !path18.isAbsolute(migration.archive_source_tasks_root) || migration.archive_source_tasks_root !== receipt2.archive_source_tasks_root || !Number.isSafeInteger(migration.archive_file_count) || migration.archive_file_count < 0 || migration.archive_file_count !== migration.source_artifact_count || migration.archive_file_count !== receipt2.archive_file_count || !Number.isSafeInteger(migration.archive_byte_count) || migration.archive_byte_count < 0 || migration.archive_byte_count !== migration.source_artifact_bytes || migration.archive_byte_count !== receipt2.archive_byte_count || receipt2.schema_version !== SCHEMA_VERSION || !validText2(receipt2.protocol_version, 128) || typeof receipt2.runtime_roster_digest !== "string" || !/^[0-9a-f]{64}$/u.test(receipt2.runtime_roster_digest) || !validText2(receipt2.verifier_version, 128) || !validText2(migration.verifier_version, 128) || receipt2.verifier_version !== migration.verifier_version || !validText2(receipt2.cutover_id, 128) || !validText2(receipt2.created_at, 64) || Number.isNaN(Date.parse(receipt2.created_at)) || !validText2(migration.created_at, 64) || !validText2(migration.verified_at, 64) || Number.isNaN(Date.parse(migration.created_at)) || Number.isNaN(Date.parse(migration.verified_at))) fail("authority_switch_invalid");
+            if (!migration || migration.state !== "verified" || migration.migration_id !== receipt2.migration_id || migration.source_root_digest !== receipt2.source_root_digest || migration.source_manifest_digest !== receipt2.source_manifest_digest || digest2(migration.source_manifest_json) !== migration.source_manifest_digest || !validText2(migration.archive_directory, 32767) || !path17.isAbsolute(migration.archive_directory) || !validText2(receipt2.archive_directory, 32767) || !path17.isAbsolute(receipt2.archive_directory) || migration.archive_directory !== receipt2.archive_directory || typeof migration.archive_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(migration.archive_manifest_digest) || migration.archive_manifest_digest !== receipt2.archive_manifest_digest || !validText2(migration.archive_source_tasks_root, 32767) || !path17.isAbsolute(migration.archive_source_tasks_root) || migration.archive_source_tasks_root !== receipt2.archive_source_tasks_root || !Number.isSafeInteger(migration.archive_file_count) || migration.archive_file_count < 0 || migration.archive_file_count !== migration.source_artifact_count || migration.archive_file_count !== receipt2.archive_file_count || !Number.isSafeInteger(migration.archive_byte_count) || migration.archive_byte_count < 0 || migration.archive_byte_count !== migration.source_artifact_bytes || migration.archive_byte_count !== receipt2.archive_byte_count || receipt2.schema_version !== SCHEMA_VERSION || !validText2(receipt2.protocol_version, 128) || typeof receipt2.runtime_roster_digest !== "string" || !/^[0-9a-f]{64}$/u.test(receipt2.runtime_roster_digest) || !validText2(receipt2.verifier_version, 128) || !validText2(migration.verifier_version, 128) || receipt2.verifier_version !== migration.verifier_version || !validText2(receipt2.cutover_id, 128) || !validText2(receipt2.created_at, 64) || Number.isNaN(Date.parse(receipt2.created_at)) || !validText2(migration.created_at, 64) || !validText2(migration.verified_at, 64) || Number.isNaN(Date.parse(migration.created_at)) || Number.isNaN(Date.parse(migration.verified_at))) fail("authority_switch_invalid");
             const policy = parseAuthoritySourceManifest(migration.source_manifest_json, migration.source_manifest_digest);
             if (policy.manifest.task_count !== migration.source_task_count || policy.manifest.artifact_count !== migration.source_artifact_count || policy.manifest.artifact_bytes !== migration.source_artifact_bytes || policy.manifest.result_count !== migration.source_result_count || policy.manifest.event_count !== migration.source_event_count) fail("authority_switch_invalid");
           } else if (migrationRuns.length || migratedResultsCount || migratedEventsCount || this.#db.prepare("SELECT COUNT(*) AS n FROM json_artifacts").get().n) {
@@ -9421,11 +9314,12 @@ async function openClaimOnlyDriver(options) {
           admission = readSafeReservedAdmission(port, input, asRecord4(existingOperation));
           stage("reserved_operation_resumed", { revision: admission.revision, generation: admission.generation });
         } else {
+          const executionWorkspace = taskExecutionWorkspace(input.task);
           admission = asRecord4(port.admitOperation({
             operation_id: input.operationId,
             task_id: input.task.task_id,
             attempt: input.attempt,
-            workspace_ref: input.task.workspace
+            workspace_ref: executionWorkspace
           }, {
             workspaceValidator: localPolicy.validateWorkspace,
             executionPermissionCheck: localPolicy.checkPermission
@@ -9467,11 +9361,13 @@ async function openClaimOnlyDriver(options) {
         if (intent.duplicate === true) throw new LifecycleGateError("launch_outcome_unknown", "existing Intent never authorizes another Spawn");
         const intentRevision = positive3(intent.revision, "launch_intent_revision_missing");
         stage("intent_complete", { revision: intentRevision });
-        const usePolicy = localPolicy.validateWorkspaceForUse(input.task.workspace);
-        if (usePolicy.state !== "allow") {
-          state = "launch_outcome_unknown";
-          reason = usePolicy.reason;
-          throw new LifecycleGateError("trusted_local_workspace_use_denied", usePolicy.reason);
+        for (const workspace of /* @__PURE__ */ new Set([input.task.workspace, taskExecutionWorkspace(input.task)])) {
+          const usePolicy = localPolicy.validateWorkspaceForUse(workspace);
+          if (usePolicy.state !== "allow") {
+            state = "launch_outcome_unknown";
+            reason = usePolicy.reason;
+            throw new LifecycleGateError("trusted_local_workspace_use_denied", usePolicy.reason);
+          }
         }
         stage("spawn_bootstrap_start");
         const launch = await spawnAndBootstrapOnce(() => {
@@ -10138,7 +10034,7 @@ function readSafeReservedAdmission(port, input, operation) {
   return { generation, revision };
 }
 function readPersistedAdmissionPolicySnapshot(port, input, operation, generation, revision) {
-  if (operation.operation_id !== input.operationId || operation.task_id !== input.task.task_id || operation.attempt !== input.attempt || operation.generation !== generation || operation.revision !== revision || operation.phase !== "reserved" || operation.workspace_ref !== input.task.workspace) {
+  if (operation.operation_id !== input.operationId || operation.task_id !== input.task.task_id || operation.attempt !== input.attempt || operation.generation !== generation || operation.revision !== revision || operation.phase !== "reserved" || operation.workspace_ref !== taskExecutionWorkspace(input.task)) {
     throw new LifecycleGateError("admission_projection_mismatch");
   }
   const events = port.readLifecycleEvents(input.operationId);
@@ -10155,13 +10051,16 @@ function readPersistedAdmissionPolicySnapshot(port, input, operation, generation
     task_id: input.task.task_id,
     attempt: input.attempt,
     generation,
-    workspace_ref: input.task.workspace,
+    workspace_ref: taskExecutionWorkspace(input.task),
     authorization_source: "trusted_local_policy",
     policy_revision: evidence.policy_revision,
     policy_digest: evidence.policy_digest,
     execution_profile_id: evidence.execution_profile_id
   };
   return { ...base, policy_snapshot_digest: deriveAdmissionPolicySnapshotDigest(base) };
+}
+function taskExecutionWorkspace(task) {
+  return task.worktree_path ?? task.workspace;
 }
 function verifyPersistedLaunchEvidence(port, input, operation, snapshot, request, intentRevision, receiptRevision) {
   if (operation.operation_id !== snapshot.operation_id || operation.task_id !== snapshot.task_id || operation.attempt !== snapshot.attempt || operation.generation !== snapshot.generation || operation.workspace_ref !== snapshot.workspace_ref || operation.revision !== receiptRevision || operation.phase !== "launch_intent" || operation.claim_id !== null || operation.launch_id !== request.launch_id || operation.launch_epoch !== request.launch_epoch || operation.launch_receipt_id === null || operation.launch_receipt_digest === null || operation.launch_token_digest !== sha2562(request.launch_token)) {
@@ -10260,12 +10159,13 @@ __export(sqlite_lifecycle_mcp_authority_exports, {
 });
 import { createHash as createHash16, randomBytes } from "node:crypto";
 function validateTaskPackage2(task) {
-  if (!task || typeof task.task_id !== "string" || !task.task_id.trim() || task.task_id.length > 128 || typeof task.workspace !== "string" || !task.workspace.trim() || !pathIsAbsolute(task.workspace) || typeof task.objective !== "string" || !task.objective.trim() || !Array.isArray(task.requirements) || !Array.isArray(task.allowed_paths) || !Array.isArray(task.forbidden_paths) || !Array.isArray(task.acceptance_criteria) || !Array.isArray(task.test_commands)) {
+  const worktreePath = task.worktree_path;
+  if (!task || typeof task.task_id !== "string" || !task.task_id.trim() || task.task_id.length > 128 || typeof task.workspace !== "string" || !task.workspace.trim() || !pathIsAbsolute(task.workspace) || worktreePath !== void 0 && (typeof worktreePath !== "string" || !worktreePath.trim() || !pathIsAbsolute(worktreePath)) || typeof task.objective !== "string" || !task.objective.trim() || !Array.isArray(task.requirements) || !Array.isArray(task.allowed_paths) || !Array.isArray(task.forbidden_paths) || !Array.isArray(task.acceptance_criteria) || !Array.isArray(task.test_commands)) {
     throw new TaskManagerError("TASK_INVALID", "invalid SQLite TaskPackage");
   }
 }
 function pathIsAbsolute(value) {
-  return process.platform === "win32" ? /^[A-Za-z]:\\/u.test(value) : value.startsWith("/");
+  return process.platform === "win32" ? /^[A-Za-z]:[\\/]/u.test(value) : value.startsWith("/");
 }
 function taskStatus(value) {
   if (typeof value !== "string" || !["queued", "running", "completed", "failed", "cancelled", "waiting_for_master"].includes(value)) {
@@ -10423,27 +10323,35 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
         this.#assertRecoveryReady();
         validateTaskPackage2(task);
         const policy = this.#driverTrustedPolicy();
-        const requestedPath = task.worktree_path ?? task.workspace;
-        const decision = policy.validateWorkspace({ requestedPath, canonicalPath: requestedPath });
-        if (decision.state !== "allow") throw new TaskManagerError("TASK_INVALID", `SQLite admission rejected: ${decision.state === "unknown" ? decision.reason : decision.reason}`);
-        const use = policy.validateWorkspaceForUse(requestedPath);
-        if (use.state !== "allow") throw new TaskManagerError("TASK_INVALID", `SQLite admission rejected: ${use.state === "unknown" ? use.reason : use.reason}`);
-        const permission = policy.checkPermission({ workspace: requestedPath, task: { ...task, operation_id: `preflight-${task.task_id}`, attempt: 1 } });
+        const sourceDecision = policy.validateWorkspace({ requestedPath: task.workspace, canonicalPath: task.workspace });
+        if (sourceDecision.state !== "allow") throw new TaskManagerError("TASK_INVALID", `SQLite admission rejected: ${sourceDecision.reason}`);
+        const executionPath = task.worktree_path ?? task.workspace;
+        const executionDecision = policy.validateWorkspace({ requestedPath: executionPath, canonicalPath: executionPath });
+        if (executionDecision.state !== "allow") throw new TaskManagerError("TASK_INVALID", `SQLite admission rejected: ${executionDecision.reason}`);
+        const normalizedTask = {
+          ...task,
+          workspace: sourceDecision.canonical_path,
+          ...task.worktree_path === void 0 ? {} : { worktree_path: executionDecision.canonical_path }
+        };
+        const permission = policy.checkPermission({
+          workspace: executionDecision.canonical_path,
+          task: { ...normalizedTask, operation_id: `preflight-${task.task_id}`, attempt: 1 }
+        });
         if (permission.state !== "allow") throw new TaskManagerError("TASK_INVALID", `SQLite admission rejected: ${permission.state === "unknown" ? permission.reason : permission.reason}`);
         const existingValue = this.#driver.readTaskLifecycle(task.task_id);
         if (existingValue) {
           const existing = asRecord5(existingValue);
-          if (canonicalJson3(existing.task) !== canonicalJson3(task)) {
+          if (canonicalJson3(existing.task) !== canonicalJson3(normalizedTask)) {
             throw new TaskManagerError("TASK_ID_CONFLICT", `task_id already belongs to a different SQLite request: ${task.task_id}`);
           }
           const projection2 = asRecord5(existing.projection);
           return receipt(task.task_id, projection2.status, projection2.created_at);
         }
         try {
-          this.#driver.createTask(task);
+          this.#driver.createTask(normalizedTask);
         } catch (error2) {
           const raced = asRecord5(this.#driver.readTaskLifecycle(task.task_id));
-          if (!raced || canonicalJson3(raced.task) !== canonicalJson3(task)) {
+          if (!raced || canonicalJson3(raced.task) !== canonicalJson3(normalizedTask)) {
             if (errorCode2(error2) === "task_already_exists") throw new TaskManagerError("TASK_ID_CONFLICT", `task_id already exists with different SQLite input: ${task.task_id}`);
             throw error2;
           }
@@ -11026,7 +10934,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
 
 // src/mcp/main.ts
 import { realpathSync as realpathSync7 } from "node:fs";
-import path20 from "node:path";
+import path19 from "node:path";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
 
 // node_modules/@modelcontextprotocol/server/dist/chunk-Br0eD_fh.mjs
@@ -11322,10 +11230,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path21) {
-  if (!path21)
+function getElementAtPath(obj, path20) {
+  if (!path20)
     return obj;
-  return path21.reduce((acc, key) => acc?.[key], obj);
+  return path20.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -11665,11 +11573,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path21, issues) {
+function prefixIssues(path20, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path21);
+    iss.path.unshift(path20);
     return iss;
   });
 }
@@ -12118,16 +12026,16 @@ function flattenError(error2, mapper = (issue2) => issue2.message) {
 }
 function formatError(error2, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error3, path21 = []) => {
+  const processError = (error3, path20 = []) => {
     for (const issue2 of error3.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path21, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path20, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path21, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path20, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path21, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path20, ...issue2.path]);
       } else {
-        const fullpath = [...path21, ...issue2.path];
+        const fullpath = [...path20, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -21470,9 +21378,9 @@ var rev2026Codec = {
     });
     const parsed = buildSchemas2026().RequestMetaEnvelopeSchema.safeParse(meta2);
     if (!parsed.success) for (const issue2 of parsed.error.issues) {
-      const path21 = issue2.path.map(String);
-      const key = path21.length > 0 ? path21.join(".") : "_meta";
-      if (path21.length === 1 && issues.some((existing) => existing.key === key && existing.problem === "missing")) continue;
+      const path20 = issue2.path.map(String);
+      const key = path20.length > 0 ? path20.join(".") : "_meta";
+      if (path20.length === 1 && issues.some((existing) => existing.key === key && existing.problem === "missing")) continue;
       issues.push({
         key,
         problem: issue2.message
@@ -21793,29 +21701,29 @@ var PERMITTED_X_MCP_HEADER_TYPES = /* @__PURE__ */ new Set([
 function scanXMcpHeaderDeclarations(inputSchema) {
   const declarations = [];
   const seenLower = /* @__PURE__ */ new Map();
-  const visit = (node2, path21, reachable) => {
+  const visit = (node2, path20, reachable) => {
     if (node2 === null || typeof node2 !== "object") return void 0;
     const schema = node2;
     if (X_MCP_HEADER_KEY in schema) {
-      if (!reachable || path21.length === 0) return `${pathName(path21)}: x-mcp-header is only permitted on properties statically reachable via a chain of 'properties' keys (not under items, additionalProperties, oneOf/anyOf/allOf/not, if/then/else, or $ref)`;
+      if (!reachable || path20.length === 0) return `${pathName(path20)}: x-mcp-header is only permitted on properties statically reachable via a chain of 'properties' keys (not under items, additionalProperties, oneOf/anyOf/allOf/not, if/then/else, or $ref)`;
       const raw = schema[X_MCP_HEADER_KEY];
-      if (typeof raw !== "string" || raw.length === 0) return `${pathName(path21)}: x-mcp-header MUST be a non-empty string`;
-      if (!RFC9110_TOKEN.test(raw)) return `${pathName(path21)}: x-mcp-header '${raw}' is not a valid RFC 9110 token (no spaces, control characters or HTTP delimiters)`;
+      if (typeof raw !== "string" || raw.length === 0) return `${pathName(path20)}: x-mcp-header MUST be a non-empty string`;
+      if (!RFC9110_TOKEN.test(raw)) return `${pathName(path20)}: x-mcp-header '${raw}' is not a valid RFC 9110 token (no spaces, control characters or HTTP delimiters)`;
       const type = typeof schema.type === "string" ? schema.type : void 0;
-      if (type === void 0 || !PERMITTED_X_MCP_HEADER_TYPES.has(type)) return `${pathName(path21)}: x-mcp-header is only permitted on primitive-typed properties (string, integer, boolean); got ${type ?? "<none>"}`;
+      if (type === void 0 || !PERMITTED_X_MCP_HEADER_TYPES.has(type)) return `${pathName(path20)}: x-mcp-header is only permitted on primitive-typed properties (string, integer, boolean); got ${type ?? "<none>"}`;
       const lower = raw.toLowerCase();
       const prior = seenLower.get(lower);
       if (prior !== void 0) return `x-mcp-header '${raw}' is not case-insensitively unique (also declared as '${prior}')`;
       seenLower.set(lower, raw);
       declarations.push({
-        path: path21,
+        path: path20,
         headerName: raw,
         type
       });
     }
     const properties = schema.properties;
     if (properties !== null && typeof properties === "object") for (const [key, child] of Object.entries(properties)) {
-      const fault$1 = visit(child, [...path21, key], reachable);
+      const fault$1 = visit(child, [...path20, key], reachable);
       if (fault$1 !== void 0) return fault$1;
     }
     for (const k of NON_REACHABLE_SUBSCHEMA_KEYWORDS) {
@@ -21823,7 +21731,7 @@ function scanXMcpHeaderDeclarations(inputSchema) {
       if (sub === void 0) continue;
       const branches = Array.isArray(sub) ? sub : sub !== null && typeof sub === "object" && OBJECT_VALUED_SUBSCHEMA_KEYWORDS.has(k) ? Object.values(sub) : [sub];
       for (const branch of branches) {
-        const fault$1 = visit(branch, [...path21, `<${k}>`], false);
+        const fault$1 = visit(branch, [...path20, `<${k}>`], false);
         if (fault$1 !== void 0) return fault$1;
       }
     }
@@ -21863,8 +21771,8 @@ var OBJECT_VALUED_SUBSCHEMA_KEYWORDS = /* @__PURE__ */ new Set([
   "$defs",
   "definitions"
 ]);
-function pathName(path21) {
-  return path21.length === 0 ? "<root>" : path21.join(".");
+function pathName(path20) {
+  return path20.length === 0 ? "<root>" : path20.join(".");
 }
 var HEADER_MISMATCH_ERROR_CODE = -32020;
 var INBOUND_VALIDATION_LADDER = [
@@ -22153,7 +22061,7 @@ var PROPERTY_KEYS_BY_TYPE = {
   array: shapeKeys([UntitledMultiSelectEnumSchemaSchema, TitledMultiSelectEnumSchemaSchema])
 };
 var SUPPORTED_STRING_FORMATS = new Set(StringSchemaSchema.shape.format.unwrap().options);
-function walkProperty(node2, path21, vendor, unsupported) {
+function walkProperty(node2, path20, vendor, unsupported) {
   if (!isJsonObject(node2)) return node2;
   const allowedKeys = typeof node2.type === "string" && Object.hasOwn(PROPERTY_KEYS_BY_TYPE, node2.type) ? PROPERTY_KEYS_BY_TYPE[node2.type] : void 0;
   if (allowedKeys === void 0) return node2;
@@ -22161,8 +22069,8 @@ function walkProperty(node2, path21, vendor, unsupported) {
   for (const [key, value] of Object.entries(node2)) if (allowedKeys.has(key) || isAnnotationOnlyJsonSchemaKeyword(key)) pruned[key] = value;
   else if (key === "pattern" && node2.type === "string" && typeof node2.format === "string") {
     if (!SUPPORTED_STRING_FORMATS.has(node2.format)) pruned[key] = value;
-    else if (typeof value !== "string" || !isLibraryFormatPattern(node2.format, value, vendor)) unsupported.push(`${path21}.${key}`);
-  } else unsupported.push(`${path21}.${key}`);
+    else if (typeof value !== "string" || !isLibraryFormatPattern(node2.format, value, vendor)) unsupported.push(`${path20}.${key}`);
+  } else unsupported.push(`${path20}.${key}`);
   return pruned;
 }
 function walkRequestedSchema(converted, vendor) {
@@ -22179,11 +22087,11 @@ function describeUnsupportedProperties(pruned, fallback) {
   const offenders = Object.entries(pruned.properties).filter(([, node2]) => !parseSchema(PrimitiveSchemaDefinitionSchema, node2).success).map(([name]) => `properties.${name}`);
   return offenders.length > 0 ? offenders.join(", ") : fallback;
 }
-function findDroppedConstraintPaths(original, parsed, path21 = "") {
-  if (Array.isArray(original) && Array.isArray(parsed)) return original.flatMap((item, index) => findDroppedConstraintPaths(item, parsed[index], `${path21}[${index}]`));
+function findDroppedConstraintPaths(original, parsed, path20 = "") {
+  if (Array.isArray(original) && Array.isArray(parsed)) return original.flatMap((item, index) => findDroppedConstraintPaths(item, parsed[index], `${path20}[${index}]`));
   if (!isJsonObject(original) || !isJsonObject(parsed)) return [];
   return Object.entries(original).flatMap(([key, value]) => {
-    const childPath = path21 ? `${path21}.${key}` : key;
+    const childPath = path20 ? `${path20}.${key}` : key;
     if (!Object.prototype.hasOwnProperty.call(parsed, key)) return isAnnotationOnlyJsonSchemaKeyword(key) ? [] : [childPath];
     return findDroppedConstraintPaths(value, parsed[key], childPath);
   });
@@ -26262,8 +26170,8 @@ var require_utils = /* @__PURE__ */ __commonJSMin(((exports, module) => {
     for (let i = 0; i < str.length; i++) if (str[i] === token) ind++;
     return ind;
   }
-  function removeDotSegments(path21) {
-    let input = path21;
+  function removeDotSegments(path20) {
+    let input = path20;
     const output = [];
     let nextSlash = -1;
     let len = 0;
@@ -26416,8 +26324,8 @@ var require_schemes = /* @__PURE__ */ __commonJSMin(((exports, module) => {
       wsComponent.secure = void 0;
     }
     if (wsComponent.resourceName) {
-      const [path21, query] = wsComponent.resourceName.split("?");
-      wsComponent.path = path21 && path21 !== "/" ? path21 : void 0;
+      const [path20, query] = wsComponent.resourceName.split("?");
+      wsComponent.path = path20 && path20 !== "/" ? path20 : void 0;
       wsComponent.query = query;
       wsComponent.resourceName = void 0;
     }
@@ -32556,9 +32464,9 @@ function toError(value) {
 }
 
 // src/host/stdio.ts
-import { existsSync as existsSync14, lstatSync as lstatSync4, readdirSync as readdirSync3 } from "node:fs";
+import { existsSync as existsSync14, lstatSync as lstatSync3, readdirSync as readdirSync3 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
-import path19 from "node:path";
+import path18 from "node:path";
 
 // src/runtime/resolver.ts
 import { accessSync, existsSync, readFileSync, statSync } from "node:fs";
@@ -36757,9 +36665,9 @@ init_trusted_local_deployment();
 init_json_writer_quiescence();
 
 // src/runtime/sqlite-install-config.ts
-import { existsSync as existsSync11, lstatSync as lstatSync2, mkdirSync as mkdirSync6, readFileSync as readFileSync11, realpathSync as realpathSync5 } from "node:fs";
+import { existsSync as existsSync11, lstatSync, mkdirSync as mkdirSync6, readFileSync as readFileSync10, realpathSync as realpathSync5 } from "node:fs";
 import os from "node:os";
-import path17 from "node:path";
+import path16 from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 init_profile();
 var CONFIG_FILE = "authority.json";
@@ -36775,13 +36683,13 @@ var SqliteInstallConfigurationError = class extends Error {
 };
 function loadInstallAuthoritySelection(host) {
   validateHostProfile(host);
-  const configPath = path17.join(host.settingsDirectory, CONFIG_FILE);
+  const configPath = path16.join(host.settingsDirectory, CONFIG_FILE);
   try {
-    const stat2 = lstatSync2(configPath);
+    const stat2 = lstatSync(configPath);
     if (!stat2.isFile() || stat2.isSymbolicLink()) throw new SqliteInstallConfigurationError("authority_config_not_regular_file");
     if (stat2.size > CONFIG_LIMIT) throw new SqliteInstallConfigurationError("authority_config_too_large");
-    const parsed = JSON.parse(readFileSync11(configPath, "utf8"));
-    if (!isRecord4(parsed)) throw new SqliteInstallConfigurationError("authority_config_invalid_shape");
+    const parsed = JSON.parse(readFileSync10(configPath, "utf8"));
+    if (!isRecord3(parsed)) throw new SqliteInstallConfigurationError("authority_config_invalid_shape");
     const keys = Object.keys(parsed).sort().join("|");
     if (parsed.schema_version !== 1) throw new SqliteInstallConfigurationError("authority_config_version_unsupported");
     if (parsed.authority === "json" && keys === "authority|schema_version") return { state: "json", configPath };
@@ -36804,10 +36712,10 @@ function prepareFreshSqliteStateDirectory(selection, env) {
 }
 function sqliteInstallationRoot(env) {
   const modulePath = fileURLToPath3(import.meta.url);
-  const dist = path17.dirname(modulePath);
-  if (env["ZCODE_BRIDGE_PLUGIN_MODE"] === "1" && path17.basename(modulePath) === "bridge.mjs" && path17.basename(dist) === "dist") {
-    const pluginRoot = path17.dirname(dist);
-    if (!existsSync11(path17.join(pluginRoot, ".codex-plugin", "plugin.json")) || !existsSync11(path17.join(pluginRoot, "launch-node24.mjs"))) {
+  const dist = path16.dirname(modulePath);
+  if (env["ZCODE_BRIDGE_PLUGIN_MODE"] === "1" && path16.basename(modulePath) === "bridge.mjs" && path16.basename(dist) === "dist") {
+    const pluginRoot = path16.dirname(dist);
+    if (!existsSync11(path16.join(pluginRoot, ".codex-plugin", "plugin.json")) || !existsSync11(path16.join(pluginRoot, "launch-node24.mjs"))) {
       throw new SqliteInstallConfigurationError("sqlite_plugin_layout_invalid");
     }
     return pluginRoot;
@@ -36820,10 +36728,10 @@ function resolveSqliteStateDirectory(selection, env) {
 function resolveStateDirectory(selection, env, packageRootValue, tempRootValue) {
   const appRoot = selection.configuredDataRoot || defaultDataRoot(env);
   if (!isLocalAbsolutePath(appRoot)) throw new SqliteInstallConfigurationError("sqlite_data_root_not_local_absolute");
-  const normalizedRoot = path17.resolve(appRoot);
-  const stateDirectory = path17.join(normalizedRoot, "state");
-  const packageRoot = path17.resolve(packageRootValue);
-  const tempRoot = path17.resolve(tempRootValue);
+  const normalizedRoot = path16.resolve(appRoot);
+  const stateDirectory = path16.join(normalizedRoot, "state");
+  const packageRoot = path16.resolve(packageRootValue);
+  const tempRoot = path16.resolve(tempRootValue);
   if (within(packageRoot, normalizedRoot) || within(tempRoot, normalizedRoot) || within(packageRoot, stateDirectory) || within(tempRoot, stateDirectory)) {
     throw new SqliteInstallConfigurationError("sqlite_data_root_reserved_location");
   }
@@ -36831,7 +36739,7 @@ function resolveStateDirectory(selection, env, packageRootValue, tempRootValue) 
 }
 function prepareStateDirectory(selection, env, packageRootValue, tempRootValue) {
   const resolved = resolveStateDirectory(selection, env, packageRootValue, tempRootValue);
-  const normalizedRoot = path17.dirname(resolved.dataRoot);
+  const normalizedRoot = path16.dirname(resolved.dataRoot);
   ensurePlainDirectoryTree(normalizedRoot);
   ensurePlainDirectoryTree(resolved.dataRoot);
   const canonicalState = canonicalDirectory(resolved.dataRoot);
@@ -36841,17 +36749,17 @@ function prepareStateDirectory(selection, env, packageRootValue, tempRootValue) 
 function defaultDataRoot(env) {
   const localAppData = env["LOCALAPPDATA"]?.trim();
   if (!localAppData || !isLocalAbsolutePath(localAppData)) throw new SqliteInstallConfigurationError("local_app_data_unavailable");
-  return path17.join(localAppData, "CodexZCodeBridge");
+  return path16.join(localAppData, "CodexZCodeBridge");
 }
 function ensurePlainDirectoryTree(value) {
   if (!isLocalAbsolutePath(value)) throw new SqliteInstallConfigurationError("sqlite_data_path_not_local");
-  const parsed = path17.parse(value);
-  const segments = value.slice(parsed.root.length).split(path17.sep).filter(Boolean);
+  const parsed = path16.parse(value);
+  const segments = value.slice(parsed.root.length).split(path16.sep).filter(Boolean);
   let current = parsed.root;
   for (const segment of segments) {
-    current = path17.join(current, segment);
+    current = path16.join(current, segment);
     try {
-      const stat2 = lstatSync2(current);
+      const stat2 = lstatSync(current);
       if (!stat2.isDirectory() || stat2.isSymbolicLink()) throw new SqliteInstallConfigurationError("sqlite_data_path_component_unsafe");
       if (!samePath2(realpathSync5.native(current), current)) throw new SqliteInstallConfigurationError("sqlite_data_path_redirected");
     } catch (error2) {
@@ -36861,7 +36769,7 @@ function ensurePlainDirectoryTree(value) {
       } catch (createError) {
         if (createError.code !== "EEXIST") throw new SqliteInstallConfigurationError("sqlite_data_path_create_failed", String(createError));
       }
-      const created = lstatSync2(current);
+      const created = lstatSync(current);
       if (!created.isDirectory() || created.isSymbolicLink() || !samePath2(realpathSync5.native(current), current)) {
         throw new SqliteInstallConfigurationError("sqlite_data_path_create_unverified");
       }
@@ -36870,7 +36778,7 @@ function ensurePlainDirectoryTree(value) {
 }
 function canonicalDirectory(value) {
   try {
-    const stat2 = lstatSync2(value);
+    const stat2 = lstatSync(value);
     const real = realpathSync5.native(value);
     if (!stat2.isDirectory() || stat2.isSymbolicLink() || !samePath2(real, value)) throw new Error("directory_identity_mismatch");
     return real;
@@ -36879,7 +36787,7 @@ function canonicalDirectory(value) {
   }
 }
 function rejectOrphanedDatabaseState(root) {
-  const expected = path17.join(root, FRESH_SQLITE_DATABASE_FILE);
+  const expected = path16.join(root, FRESH_SQLITE_DATABASE_FILE);
   if (existsSync11(expected)) return;
   for (const name of [
     `${FRESH_SQLITE_DATABASE_FILE}-wal`,
@@ -36890,22 +36798,22 @@ function rejectOrphanedDatabaseState(root) {
     "ROOT_POISONED.json",
     "WRITER_INTENT.json"
   ]) {
-    if (existsSync11(path17.join(root, name))) throw new SqliteInstallConfigurationError("sqlite_existing_state_incomplete");
+    if (existsSync11(path16.join(root, name))) throw new SqliteInstallConfigurationError("sqlite_existing_state_incomplete");
   }
 }
 function isLocalAbsolutePath(value) {
-  if (process.platform === "win32") return /^[A-Za-z]:\\/u.test(value) && path17.win32.isAbsolute(value) && !value.startsWith("\\\\");
-  return path17.isAbsolute(value) && !value.startsWith("/proc/") && !value.startsWith("/sys/") && !value.startsWith("/dev/");
+  if (process.platform === "win32") return /^[A-Za-z]:\\/u.test(value) && path16.win32.isAbsolute(value) && !value.startsWith("\\\\");
+  return path16.isAbsolute(value) && !value.startsWith("/proc/") && !value.startsWith("/sys/") && !value.startsWith("/dev/");
 }
 function within(root, candidate) {
-  const relative = path17.relative(root, candidate);
-  return relative === "" || relative !== ".." && !relative.startsWith(`..${path17.sep}`) && !path17.isAbsolute(relative);
+  const relative = path16.relative(root, candidate);
+  return relative === "" || relative !== ".." && !relative.startsWith(`..${path16.sep}`) && !path16.isAbsolute(relative);
 }
 function samePath2(left, right) {
-  const normalize = (value) => process.platform === "win32" ? path17.win32.normalize(value).replace(/[\\/]+$/u, "").toLocaleLowerCase("en-US") : path17.resolve(value);
+  const normalize = (value) => process.platform === "win32" ? path16.win32.normalize(value).replace(/[\\/]+$/u, "").toLocaleLowerCase("en-US") : path16.resolve(value);
   return normalize(left) === normalize(right);
 }
-function isRecord4(value) {
+function isRecord3(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value) && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
 }
 
@@ -36920,16 +36828,16 @@ var SqliteAuthorityStartupError = class extends Error {
 };
 function resolveLegacyJsonDataRoot(host, runtimeEnv) {
   const configured = runtimeEnv["ZCODE_BRIDGE_DATA_DIR"]?.trim();
-  if (configured && path19.isAbsolute(configured)) return path19.normalize(configured);
-  if (host.defaultDataRoot) return path19.normalize(host.defaultDataRoot);
-  if (runtimeEnv["ZCODE_BRIDGE_PLUGIN_MODE"] === "1") return path19.normalize(host.settingsDirectory);
+  if (configured && path18.isAbsolute(configured)) return path18.normalize(configured);
+  if (host.defaultDataRoot) return path18.normalize(host.defaultDataRoot);
+  if (runtimeEnv["ZCODE_BRIDGE_PLUGIN_MODE"] === "1") return path18.normalize(host.settingsDirectory);
   return findPackageRoot();
 }
 function assertFreshInstallLegacyJsonEmpty(legacyDataRoot) {
-  const tasksRoot = path19.join(path19.normalize(legacyDataRoot), ".tasks");
+  const tasksRoot = path18.join(path18.normalize(legacyDataRoot), ".tasks");
   let stat2;
   try {
-    stat2 = lstatSync4(tasksRoot);
+    stat2 = lstatSync3(tasksRoot);
   } catch (error2) {
     if (error2.code === "ENOENT") return;
     throw new SqliteAuthorityStartupError("legacy_json_tasks_root_unreadable");
@@ -36957,13 +36865,13 @@ function createTrustedLocalCandidateContext(host) {
 function resolveDataRoot(env) {
   const override = env["ZCODE_BRIDGE_DATA_DIR"]?.trim();
   if (override) {
-    if (!path19.isAbsolute(override)) {
+    if (!path18.isAbsolute(override)) {
       return {
         dataRoot: findPackageRoot(),
         warning: `ZCODE_BRIDGE_DATA_DIR must be an absolute path; ignoring ${override} and using the Bridge installation directory`
       };
     }
-    return { dataRoot: path19.normalize(override) };
+    return { dataRoot: path18.normalize(override) };
   }
   return { dataRoot: findPackageRoot() };
 }
@@ -37036,7 +36944,7 @@ async function startBridge(host = codexHostProfile(), version2 = SERVER_VERSION,
     warning = resolved.warning;
   } else {
     const resolvedState = resolveSqliteStateDirectory(authoritySelection, process.env);
-    sqliteDatabaseMissing = !existsSync14(path19.join(resolvedState.dataRoot, FRESH_SQLITE_DATABASE_FILE));
+    sqliteDatabaseMissing = !existsSync14(path18.join(resolvedState.dataRoot, FRESH_SQLITE_DATABASE_FILE));
     if (sqliteDatabaseMissing) {
       assertFreshInstallLegacyJsonEmpty(resolveLegacyJsonDataRoot(host, runtimeEnv));
     }
@@ -37073,7 +36981,7 @@ async function startBridge(host = codexHostProfile(), version2 = SERVER_VERSION,
     if (trustedLocalContext.status !== "enabled") {
       throw new Error(`SQLite Authority startup refused: Trusted Local policy is ${trustedLocalContext.status}`);
     }
-    const databasePath = path19.join(dataRoot, FRESH_SQLITE_DATABASE_FILE);
+    const databasePath = path18.join(dataRoot, FRESH_SQLITE_DATABASE_FILE);
     const lifecycleGate = await Promise.resolve().then(() => (init_lifecycle_gate(), lifecycle_gate_exports));
     if (sqliteDatabaseMissing) {
       await lifecycleGate.initializeFreshInstallSqliteRoot(dataRoot, FRESH_SQLITE_DATABASE_FILE);
@@ -37142,7 +37050,7 @@ var isEntry = process.argv[1] !== void 0 && sameRealPath(import.meta.url, proces
 function sameRealPath(moduleUrl, argvPath) {
   try {
     const modulePath = realpathSync7(fileURLToPath5(moduleUrl));
-    const entryPath = realpathSync7(path20.resolve(argvPath));
+    const entryPath = realpathSync7(path19.resolve(argvPath));
     return process.platform === "win32" ? modulePath.toLocaleLowerCase("en-US") === entryPath.toLocaleLowerCase("en-US") : modulePath === entryPath;
   } catch {
     return false;
