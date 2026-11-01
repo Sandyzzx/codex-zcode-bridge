@@ -283,6 +283,7 @@ test("the real validator rejects injected development-path references and keeps 
       path.join(pluginRoot, "hooks"),
       path.join(pluginRoot, "skills", "zcode-bridge"),
       path.join(root, "src", "sqlite-candidate", "wp6b2b1"),
+      path.join(pluginRoot, "skills", "zcode-bridge", "scripts"),
     ]) {
       mkdirSync(directory, { recursive: true });
     }
@@ -305,7 +306,13 @@ test("the real validator rejects injected development-path references and keeps 
     writeFileSync(path.join(pluginRoot, "dist", "schema.sql"), schema);
     writeFileSync(path.join(root, "src", "sqlite-candidate", "wp6b2b1", "admin-abandonment.sql"), adminSchema);
     writeFileSync(path.join(pluginRoot, "dist", "admin-abandonment.sql"), adminSchema);
-    for (const file of ["hooks/hooks.json", "hooks/session-start.mjs", "hooks/configure-runtime.ps1", "skills/zcode-bridge/SKILL.md"]) {
+    for (const file of [
+      "hooks/hooks.json",
+      "hooks/session-start.mjs",
+      "hooks/configure-runtime.ps1",
+      "skills/zcode-bridge/SKILL.md",
+      "skills/zcode-bridge/scripts/codex-master-token-usage.mjs",
+    ]) {
       writeFileSync(path.join(pluginRoot, file), "");
     }
 

@@ -1,155 +1,88 @@
 # Codex → ZCode Bridge
 
-**Use ZCode as a coding worker inside Codex.**
+**Delegate coding to ZCode from Codex; keep planning, review, and acceptance in Codex.**
 
-Delegate coding tasks from Codex to your local ZCode Agent. Codex assigns tasks, monitors progress, reviews the resulting changes, and decides whether to accept the work or send it back for another iteration.
+> **Preview release.** This build introduces SQLite-backed task state and recovery. It has been exercised on a Windows local installation, but other users' installations and operating systems have not been fully validated. Please read the upgrade notes before installing over a JSON-based version.
 
-> **Codex delegates. ZCode codes. Codex reviews.**
+[简体中文](README.zh-CN.md) · [Repository](https://github.com/Sandyzzx/codex-zcode-bridge) · [Releases](https://github.com/Sandyzzx/codex-zcode-bridge/releases)
 
-[![CI](https://github.com/Sandyzzx/codex-zcode-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/Sandyzzx/codex-zcode-bridge/actions/workflows/ci.yml)
-[![GitHub Release](https://img.shields.io/github/v/release/Sandyzzx/codex-zcode-bridge)](https://github.com/Sandyzzx/codex-zcode-bridge/releases)
-[![License](https://img.shields.io/github/license/Sandyzzx/codex-zcode-bridge)](LICENSE)
-[![Node.js](https://img.shields.io/badge/Node.js-22.18%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
-[![Platform](https://img.shields.io/badge/platform-Windows-0078D4?logo=windows&logoColor=white)](#)
+## What it does
 
-[English](README.md) · [简体中文](README.zh-CN.md)
+Codex delegates bounded development work through an MCP bridge to the local ZCode Agent. Codex can follow progress and interactions, inspect the output, and decide whether to accept, cancel, or continue an attempt. ZCode does **not** automatically inherit the whole Codex conversation; include the necessary requirements and acceptance criteria when delegating.
 
----
+The bridge supports direct project directories and an optional Git execution worktree. Codex remains responsible for reviewing actual code changes and running independent acceptance checks. A task reported as `completed` is **not** automatically accepted.
 
-## How it works
+## Highlights
 
-```text
-You
- │  "Implement this feature."
- ▼
-Codex ── delegates task ──▶ Codex → ZCode Bridge ── starts / monitors ──▶ ZCode Agent
- ▲                                                                           │
- └──────────── reviews diff, verifies, accepts or continues ◀── reports ─────┘
-```
+- **Task delegation:** submit, track, cancel, and continue ZCode tasks; the accompanying Master skill supports bounded single-step and whole-task delegation guidance.
+- **Live feedback:** inspect `zcode_status`, `zcode_events`, `zcode_feedback`, and `zcode_result`; reply to pending permissions or questions through the MCP interaction tools.
+- **Model selection:** discover available ZCode provider/model combinations, choose per task, or configure a default.
+- **Master token reporting:** the Master Skill can read an explicit `CODEX_THREAD_ID` from the local Codex rollout and report a bounded task-window delta when a baseline was saved before delegation. It never reads provider credentials or substitutes account quotas, session totals, or text estimates.
+- **Local concurrency:** run work from different execution directories concurrently while coordinating access to overlapping execution paths.
+- **Persistent SQLite state:** durable operations, attempts, claims, event history, cleanup decisions, and crash/restart recovery for **new** tasks.
+- **Explicit recovery:** uncertain cleanup blocks unsafe reuse; an exceptional administrative-abandon path exists for verified terminal holds and must not be treated as ordinary cancellation.
+- **Optional worktree:** preserve the source project identity while executing in a separate Git worktree. Neither a worktree nor task path hints is a security sandbox.
 
-Codex remains responsible for task definition, architecture, review, and acceptance. ZCode handles bounded implementation work in the local development environment. The bridge connects them through MCP and ZCode's local runtime.
+## Requirements
 
-### Example
+- **Windows:** the validated local deployment target. macOS and Linux are not yet verified for this release.
+- **Node.js >= 24.16.0 and < 25** for SQLite mode. The prior JSON runtime's Node >= 22.18 requirement does not cover SQLite.
+- Git, a working local ZCode installation with an authenticated provider, and Codex with plugin/marketplace support.
+- A **single-user, trusted-local** environment. Remote/multi-user and hostile same-account process scenarios are outside this preview's Workspace Admission boundary.
 
-Tell Codex:
+ZCode and Node.js are not installed automatically by the marketplace.
 
-> Use ZCode to implement the provider capability probe, run the tests, and report the changes back for review.
+## Install the preview
 
-Codex can delegate the task, monitor execution, inspect the resulting changes, verify the tests, and accept the result or continue the same ZCode session with follow-up instructions.
-
----
-
-## 中文简介
-
-**在 Codex 中调用 ZCode 干活。** Codex 派发并审查任务，ZCode 负责在本机执行代码工作。
-
-完整中文说明：[README.zh-CN.md](README.zh-CN.md)。
-
----
-
-## Features
-
-- Submit, follow, continue, and cancel ZCode tasks from Codex.
-- Run tasks across multiple projects concurrently; tasks sharing an execution directory are queued.
-- Read the live ZCode model catalog and reasoning levels, select a provider/model per task, and get/set/clear a Bridge default model.
-- At startup, report the project directory, execution directory, ZCode session, runtime-reported model and reasoning level, and execution mode.
-- Group ZCode Desktop tasks under the Codex project directory; index sync failures do not stop task execution.
-- Unified task observation (`zcode_status.observation`, `zcode_events.observation`): worker/runtime liveness with OS process-identity probing (PID-reuse safe), activity/waiting/stalled hints, result/cleanup state — advisory only, `unknown` never means dead.
-- Bounded, resumable event scans (`zcode_events` with `scan_cursor`/`max_bytes`): complete-line parsing, corruption counters, byte-budgeted reads near the log cap.
-- Per-attempt usage/model/timing evidence in `zcode_result` (`usage`, `model`, `timing`): runtime-reported token numbers only — missing stays "not reported", totals are never recomputed.
-- Large approval inputs (ADR-008): tool-permission params persist completely up to 1 MiB (measured on the compact `JSON.stringify(params)` serialization); requests over the 64,000-byte single-event line are published as an explicitly-marked preview with a private full-request reference (path, byte count, SHA256). Approvals verify the record's bytes/SHA256 under the interaction lock; a record that went missing, corrupt, or edited mid-wait is declined explicitly instead of executing.
-- Session frames (ADR-008): newline-delimited JSON-RPC frames are consumed one at a time with a 16 MiB raw-frame UTF-8 limit; a fatal frame error latches its reason, ends pending RPCs and the turn, and blocks further requests instead of surfacing as a timeout.
-- Optional project task ledger (`ledger_*` tools, opt-in only): long-lived project tasks, runs, per-AC reviews, and a controlled DONE gate that a worker report alone can never satisfy.
-
-## Install
-
-Requires Node.js 22.18+, Git, ZCode installed and signed in, and the Codex desktop app or CLI with marketplace support. Real ZCode E2E has only been completed on Windows; macOS and Linux have not been verified.
-
-### Install with Codex CLI
-
-Add the GitHub marketplace and install the plugin:
+Use the **published Preview tag** rather than `master`. Replace `<preview-tag>` below with the exact tag shown on the [GitHub prerelease](https://github.com/Sandyzzx/codex-zcode-bridge/releases):
 
 ```sh
-codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref master
+codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-v1.3.0-rc.1
 codex plugin add codex-zcode-bridge@codex-zcode-bridge
 ```
 
-### Install in the Codex desktop app
+Alternatively, register the tagged repository marketplace, then install **Zcode Bridge** in Codex's Plugins Directory. Start a new conversation and review the plugin's `SessionStart` hook. First-run discovery locates the local ZCode runtime and provider settings; it does not copy credentials. Use `zcode_doctor` for installation diagnostics.
 
-First run the marketplace-add command above to register the GitHub marketplace. Then open Codex's **Plugins Directory**, choose that marketplace, and install **Zcode Bridge**.
+**New installations:** the SQLite-backed path starts with an empty task database. Ordinary local project directories and optional Git worktrees do **not** require a `trusted-local-policy.json` or a manually maintained `workspace_roots` list.
 
-### First run
+## Important: upgrading from JSON storage
 
-After installing, start a new conversation and review and trust the plugin's `SessionStart` hook. On Windows, it discovers and validates Node.js, the ZCode runtime, provider configuration, and data directories, then saves settings to `%USERPROFILE%\.codex\codex-zcode-bridge\runtime-config.json`. It does not write Windows user environment variables or copy provider credentials. Standard installs do not require cloning the repository or running `npm install`. The marketplace does not install Node.js or ZCode for you.
+**Complete or save important tasks before upgrading.** This release deliberately does **not** migrate old JSON task lifecycles into SQLite:
 
-To customize settings, edit `%USERPROFILE%\.codex\codex-zcode-bridge\runtime-config.json` directly. On macOS/Linux, use `~/.codex/codex-zcode-bridge/runtime-config.json`. The Windows first-run hook creates this file; on other platforms, create it if needed. Keep the discovered path fields and change only the values you need:
+- **`queued`** tasks are not automatically dispatched after switching.
+- **`running`** tasks must be allowed to finish or safely cancelled before shutdown.
+- **`waiting_for_master`** tasks must be reviewed or their handoff instructions saved.
+- Old tasks cannot automatically **Resume** or **Continue** in the new SQLite database. Re-submit any unfinished work as a new task when appropriate.
 
-- `ZCODE_BRIDGE_NODE`: absolute path to Node.js (only needed when `node` is not on PATH).
-- `ZCODE_BRIDGE_ZCODE_CJS`: absolute path to the ZCode runtime.
-- `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE` and `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`: absolute paths to the builtin and personal provider config files.
-- `ZCODE_HOME`: absolute path to the actual `.zcode` data directory.
-- `ZCODE_BRIDGE_DATA_DIR`: absolute path to the Bridge task data directory.
-- `ZCODE_BRIDGE_DEFAULT_PROVIDER_ID` and `ZCODE_BRIDGE_DEFAULT_MODEL_ID`: default provider and model IDs; set both.
-- `ZCODE_BRIDGE_MODE`: initial execution mode: `plan`, `build`, `edit`, or `yolo`; defaults to `yolo`. `yolo` allows ordinary tool operations with the current operating-system account's permissions. Set it to `build` to use ZCode's approval rules.
-- `ZCODE_BRIDGE_TIMEOUT_MS`: default wall-clock limit for one task attempt when `timeout_ms` is omitted; 60,000–14,400,000 milliseconds, default 3,600,000 (60 minutes).
-- `ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS`: parallel task limit.
-- `ZCODE_BRIDGE_BROWSER_USE`: optional headless browser host for ZCode's native browser tools; `off` (default) or `headless`. When `headless`, the Bridge worker answers `interaction/browserList`/`interaction/browserExecute` reverse RPCs through a managed CDP backend that launches an installed system Chromium/Edge with an isolated temporary profile (nothing is downloaded and the user's own browser windows are never attached). Optional `ZCODE_BRIDGE_BROWSER_EXECUTABLE` sets an absolute executable path. The native model browser flow was verified on the recorded Windows/ZCode version; see `docs/reports/2026-10-15-browser-and-transport-fixes.md` for scope and remaining limitations.
+The supported design is a **stop-the-world switch**: stop the old JSON writer and workers, verify shutdown, preserve the entire legacy JSON task tree as an immutable/read-only archive, then publish an **empty** SQLite Authority for future tasks. It is **not** a history conversion or an automatic in-place upgrade. Do not delete the archive. Never run a second cutover against an already-published SQLite Authority; after SQLite accepts new writes, restoring a pre-switch JSON snapshot is not a safe rollback.
 
-Save valid JSON; a newly started Bridge reads the config file, which takes precedence over legacy environment variables. `ZCODE_HOME` must point to the `.zcode` directory, and the personal provider config must be at `v2/provider_config.json` inside it. Copy provider/model IDs from your ZCode configuration, and do not edit ZCode's provider files.
+**For an existing installation, do not merely switch an `authority.json` value by hand.** Follow the matching release's validated migration procedure and confirm the target data roots, archive, published receipt and absence of active workers. If a packaged upgrade procedure for your environment is not available, defer upgrading and keep the prior JSON installation until the procedure is verified.
 
-See the [official OpenAI plugin documentation](https://developers.openai.com/plugins/build/plugins) for marketplace and plugin details.
+## Everyday use
 
-## Use
+1. Open the relevant local project in Codex.
+2. Ask Codex to delegate a bounded task to ZCode, including the required context and acceptance criteria.
+3. Monitor events and interactions; review the resulting code, logs, tests, and reported usage.
+4. Accept the result or continue with a focused follow-up task. A successful Worker result is not a substitute for review.
 
-Describe the development task and its acceptance criteria. Codex decides whether to prepare a worktree, then delegates the task to ZCode. ZCode runs in that worktree when provided, or directly in the project directory otherwise. ZCode does not automatically receive the full Codex conversation, so Codex must include any required project decisions and constraints with the task.
+If an MCP request times out, query the existing Task ID before submitting again; use stable operation identifiers for retries when supported. The Bridge's persisted state is designed to prevent unintended duplicate attempts.
 
-ZCode generates the session title from the first task prompt. The Bridge puts `TASK ID` on the first line, but the displayed title may also include following prompt text.
+## Configuration
 
-After execution, Codex should inspect the actual diff and run acceptance checks independently. `completed` means ZCode reported the task finished; it does not mean Codex approved the changes. If an unresolved decision could materially affect behavior, ZCode asks Codex for direction before proceeding on that point.
+On Windows, first-run runtime configuration is stored under `%USERPROFILE%\.codex\codex-zcode-bridge\runtime-config.json`. Common overrides include the ZCode runtime path, provider configuration paths, default provider/model, execution mode, worker concurrency and timeouts. Use the discovered locations rather than copying paths from somebody else's machine.
 
-In ZCode Desktop, find tasks in the Workspace view under the Codex project directory.
+SQLite's production database and archive must be **separate** from the JSON source task directory; their actual locations depend on the installation/upgrade configuration. Do not edit SQLite tables, authority receipts, or migration markers manually. The default ZCode execution mode may allow broad local tool permissions: use an approval-based mode when appropriate and do not place secrets in prompts.
 
-For installation or startup problems, call the `zcode_doctor` MCP tool for setup diagnostics. It does not start a ZCode session. Use `zcode_model_catalog` to read the cached or live app-server model list; a real permission-approval roundtrip still requires an actual task.
+## Limits and troubleshooting
 
-Use `zcode_model_catalog` with the current project path to read app-server model IDs and reasoning levels. Pass a selected `provider_id`/`model_id` in `zcode_task.model` for one task. Use `zcode_set_default_model` to configure the default for future tasks, `zcode_default_model` to read it, and `zcode_clear_default_model` to return to the ZCode session default. The catalog is cached for one day; provider config changes invalidate it. On a cache miss, the Bridge creates and closes a deferred session without sending a prompt. If a refresh fails, it re-reads provider config and retries once. A persistent failure reports an error with a `zcode_doctor` diagnostic step and never returns an expired catalog.
+- Only a Windows single-user local deployment has received real ZCode Provider and production SQLite cutover validation in this development cycle. A Preview is not a cross-platform or general-availability certification.
+- ZCode Start Plan is not established as a supported Bridge path in this release; provider capabilities depend on the user's local ZCode installation.
+- A worker can exit without committing a Result. In that case the bridge intentionally retains a cleanup hold rather than guessing that resource cleanup succeeded. Do not clear holds by editing the database or killing unidentified processes. Preserve diagnostic evidence and use documented, verified recovery procedures.
+- ZCode Desktop may refresh its workspace/session index after the Bridge task is created.
+- A Git worktree is not a sandbox. Permissions and access are governed by the local operating-system account and the selected execution mode.
 
-If a `zcode_task` call times out or loses its response, query or retry with the same `task_id`; identical submissions replay the original receipt and changed content is rejected. For retryable `zcode_continue` calls, supply a stable `operation_id` so a lost response cannot increment the attempt twice.
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/INTERFACES.md`](docs/INTERFACES.md), and the accepted ADR-016 / ADR-017 decisions for implementation contracts. Source builds require the repository's development dependencies; standard plugin installation does not require cloning or `npm install`.
 
-## SQLite migration
+## License
 
-SQLite migration is a stop-the-world migration. Before starting it, finish or save the work required from any `queued`, `running`, or `waiting_for_master` task, stop new task admission, and let known Workers exit. SQLite then starts from a new, empty Task Authority and owns every task created after the cutover.
-
-Existing JSON tasks are preserved only in the verified raw history archive. Unfinished tasks are not automatically resumed by, continued in, or recovered into SQLite. Keep that archive read-only for historical reference. After SQLite accepts new writes, do not restore the pre-cutover JSON snapshot.
-
-## Known issues
-
-- The ZCode Desktop sidebar may not immediately show a new session. The Bridge best-effort syncs the local task index; Desktop controls when the list refreshes.
-- ZCode Start Plan is currently unavailable through the Bridge.
-- Workers have a 10-second cold-start grace window. A worker that never began may be respawned once; an attempt that claimed execution never executes twice. Managers sharing a data root serialize scheduling across processes. Separate data roots do not share a lock; avoid submitting tasks against overlapping execution directories through them.
-- Unverified runtime cleanup reserves the task's execution directory and prevents continuation. Call `zcode_cancel` again to verify cleanup before releasing it. Corrupt records are diagnosed and their known directories remain reserved; an unknown execution scope pauses new scheduling.
-
-## Security and limitations
-
-- The default execution mode is `yolo`. It allows ordinary tool operations with the current operating-system account's permissions; a worktree is not a sandbox. Set `ZCODE_BRIDGE_MODE` to `build` to use ZCode's approval rules. A real permission-approval roundtrip has been verified on the recorded Windows/ZCode version (a single 43,014-byte Write approved through the full persistence and reply path with byte/SHA256-verified content); other approval combinations were not certified. Integrity hashes on approval records detect corruption and accidental edits; they are not a security isolation against a malicious same-OS-account process.
-- A Git worktree isolates the working directory; it is not an operating-system sandbox. `allowed_paths` and `forbidden_paths` describe task constraints but cannot prevent the process from accessing other files or running commands.
-- Codex decides whether to create a worktree. The Bridge uses the supplied project directory and optional worktree path; it does not create or remove worktrees.
-- Parallel tasks use more local resources and provider capacity.
-- The Bridge stores prompts, status, logs, visible model output, events, and results locally in `~/.codex/codex-zcode-bridge/` (on Windows: `%USERPROFILE%\.codex\codex-zcode-bridge\`). Do not include credentials or data in tasks or workspaces if they should not be sent to the selected model service.
-- The Bridge uses the local ZCode app-server. Interactions and available events depend on the installed ZCode version. For AskUserQuestion replies, key `answers` by each full `questions[].question` text and use the selected or explicit answer as its value; do not use the header or option label as the key. Large permission requests arrive as an explicitly-marked preview event with a `full_request` reference (the preview is not the full input; the reference carries byte count and SHA256 over the compact serialized params). Only allow permission requests when the user explicitly authorizes the action.
-
-## Build from source
-
-See [SHARED_CORE.md](docs/SHARED_CORE.md) for host integration, [ARCHITECTURE.md](docs/ARCHITECTURE.md) for current architecture, and [INTERFACES.md](docs/INTERFACES.md) for contracts. `npm test` uses disposable homes and fake runtimes, including a real worker's 60-second timeout; it does not call a real model or write a real Desktop database. Oversized task prompts and corrupt existing runtime settings fail explicitly. The experimental `zcode_progress_probe` is disabled by default.
-
-The repository includes TypeScript source for review and self-builds. With Node.js 22.18+:
-
-```sh
-npm ci
-npm run build
-```
-
-## Acknowledgements and license
-
-Process handling is adapted in part from [cc-plugin-codex](https://github.com/hex1n/cc-plugin-codex); ZCode Desktop task-index integration is adapted in part from [zcode-acp](https://github.com/william0wang/zcode-acp). Thanks to the [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk), [Zod](https://github.com/colinhacks/zod), and the ZCode project. See [NOTICE](NOTICE) for source and copyright details.
-
-This project is licensed under [Apache License 2.0](LICENSE). Third-party components remain subject to their respective licenses.
+Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE) for third-party attributions.

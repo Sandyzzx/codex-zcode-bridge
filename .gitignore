@@ -9,6 +9,7 @@ plugins/codex-zcode-bridge/dist/*
 !test/**
 coverage/
 .run/
+.evidence/
 .npm-cache/
 .tasks/
 src/sqlite-candidate/wp6b2b1/test-temp-*/

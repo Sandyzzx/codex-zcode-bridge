@@ -4,6 +4,17 @@
 
 当前版本以 `package.json` 和 Release Please manifest 为准。提交推送到 `master` 后，Release Please 会在有待发布变更时创建发布 PR，并同步更新版本文件与本日志；合并发布 PR 后会生成对应 Git tag 和 GitHub Release。
 
+## [1.3.0-rc.1](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.2.7...codex-zcode-bridge-v1.3.0-rc.1) (2026-11-01)
+
+Preview release.
+
+### Features
+
+* add SQLite lifecycle authority, archive-first cutover, restart recovery, and audited cleanup-hold administration
+* preserve JSON-compatible local workspace behavior without a new trusted-directory allowlist
+* report a bounded Codex Master-token window from an explicit local Thread rollout
+* retain progressive Skill guidance, dispatch policies, and the Owner-selected Original E artwork
+
 ## [1.2.7](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.2.6...codex-zcode-bridge-v1.2.7) (2026-10-19)
 
 

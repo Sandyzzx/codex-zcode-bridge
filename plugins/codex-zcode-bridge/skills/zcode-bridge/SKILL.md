@@ -6,10 +6,10 @@ description: 用户明确要求使用 ZCode/Codex ZCode Bridge、查询或继续
 # ZCode Bridge — Master Skill
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-10-24
-> Last verified: 2026-10-29，仅静态核对独立功能候选的引用、授权与JSON主线边界；历史离线记录不代表本候选运行时验收。真实Worker、Host按需加载强制与token收益 NOT RUN。
-> Verified against: master 73af9d60ff9bbcbbc1ae1d7b1f9b9fb9fca48bb0 + 本独立功能候选；来源74d4764和经审查的JSON文案。
-> Scope: Master 触发/授权、`auto` 决策、Worker 完整交付、审批与停止条件、按需加载；不修改 Bridge TaskPackage Schema、MCP 工具 API 或 Runtime。
+> Last updated: 2026-11-01
+> Last verified: 2026-11-01，仅核对 Codex Rollout Master token 起点与既有报告字段接入；真实Worker、Host按需加载强制与token收益 NOT RUN。
+> Verified against: bfab3386937f552d4c60761f32df9ea097fcb6f1 + Codex Rollout token候选；来源74d4764和经审查的JSON文案。
+> Scope: Master 触发/授权、`auto` 决策、Worker 完整交付、审批与停止条件、按需加载、Codex 主会话 Token 只读接入；不修改 Bridge TaskPackage Schema、MCP 工具 API 或 Runtime。
 
 ## 核心职责
 
@@ -40,6 +40,7 @@ description: 用户明确要求使用 ZCode/Codex ZCode Bridge、查询或继续
 - **独立验收**：`completed`、Worker 自报和部分测试均不能替代实际 diff/变更检查及适用验证。只对失败证据作受控返工，不能无限原样重派；不得用 `zcode_continue` 偷渡新的阶段或目标。
 - **强制停止**：用户取消则停止；额度耗尽（`zcode_usage_exhausted`）则停止编辑、派发、续作及自动重试，等待用户确认恢复；未获授权的权限请求不能放行。重大未决公共 API、持久化、安全或外部行为决策不得由 Worker 擅自确定。不可把 `stalled`、`unknown` 或进程心跳误判为任务失败/完成。
 - 路径指令、worktree 不等于 OS 沙箱；Bridge Skill 不是服务端可信授权凭证。未获用户相应授权不得提交、推送或发布；不得为了方便更改 provider 配置或将凭据写入任务、日志或仓库。
+- 第一次派发前按[执行监控、互动与审批](references/monitoring-and-approval.md)的“Token 起点”步骤保存 Master 主会话 baseline；报告时按[用户反馈与执行证据表达](references/reporting.md)填充既有 `Codex 主会话 token` 行。
 
 ## 何时加载什么（渐进式披露）
 
