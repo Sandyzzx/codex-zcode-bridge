@@ -64,6 +64,7 @@ test("real detached child lifecycle scenarios", async (t) => {
   mkdirSync(executionRoot, { recursive: true });
   mkdirSync(diagnosticsRoot, { recursive: true });
   mkdirSync(compiledCandidate, { recursive: true });
+  const createdCompiledSchema = !existsSync(compiledSchema);
   if (existsSync(compiledSchema)) {
     assert.equal(readFileSync(compiledSchema, "utf8"), readFileSync(sourceSchema, "utf8"), "preserve and verify any prior schema fixture");
   } else {
@@ -366,7 +367,7 @@ test("real detached child lifecycle scenarios", async (t) => {
       rmSync(runRoot, { recursive: true, force: true });
       rmSync(workspace, { recursive: true, force: true });
       rmSync(settingsDirectory, { recursive: true, force: true });
-      rmSync(compiledSchema, { force: true });
+      if (createdCompiledSchema) rmSync(compiledSchema, { force: true });
       rmSync(executionRoot, { recursive: true, force: true });
     }
   }
