@@ -211,6 +211,7 @@ async function queuedContinuationWithStartedHistory(
   root: string,
   taskId: string,
   includeExactIdentity: boolean,
+  startedAt?: string,
 ): Promise<{ workerPid: number; runtimePid: number }> {
   const probe = processProbe();
   const workerIdentity = await probe.selfIdentity();
@@ -224,7 +225,10 @@ async function queuedContinuationWithStartedHistory(
     worker_pid: workerIdentity.pid,
     zcode_pid: runtimeIdentity.pid,
   }, 1);
-  store.writeAttemptMeta(taskId, 1, "started.json", { worker_pid: workerIdentity.pid });
+  store.writeAttemptMeta(taskId, 1, "started.json", {
+    worker_pid: workerIdentity.pid,
+    ...(startedAt ? { started_at: startedAt } : {}),
+  });
   store.writeAttemptMeta(taskId, 1, "execution.claim", { pid: workerIdentity.pid });
   if (includeExactIdentity) {
     store.writeExecutorIdentity(taskId, 1, {
@@ -622,6 +626,325 @@ test("historical Attempt live or identity-free evidence keeps the JSON fence dra
   }
 });
 
+test("pre-boot terminal Attempts without exact identity are safely distinguishable from live uncertainty", async () => {
+  const bootTimeMs = Date.parse("2026-10-31T04:13:12.500Z");
+  const scenarios = [
+    {
+      name: "historical terminal attempt before boot",
+      taskId: "historical_pre_boot_identity_missing",
+      startedAt: "2026-10-27T15:40:01.478Z",
+      terminalAttempt: 2,
+      expectSealed: true,
+    },
+    {
+      name: "historical terminal attempt after boot",
+      taskId: "historical_post_boot_identity_missing",
+      startedAt: "2026-10-31T05:00:00.000Z",
+      terminalAttempt: 2,
+      expectSealed: false,
+    },
+    {
+      name: "current terminal attempt before boot",
+      taskId: "current_pre_boot_identity_missing",
+      startedAt: "2026-10-27T15:40:01.478Z",
+      terminalAttempt: 1,
+      expectSealed: true,
+    },
+    {
+      name: "current terminal attempt without execution evidence",
+      taskId: "current_terminal_without_execution",
+      startedAt: null,
+      terminalAttempt: 1,
+      expectSealed: true,
+    },
+  ] as const;
+
+  for (const scenario of scenarios) {
+    const root = await makeTempDir("json-writer-pre-boot-history");
+    let managerLease: string | undefined;
+    try {
+      const probe = processProbe();
+      const store = new TaskStore(root);
+      store.createTask(makeTask({ task_id: scenario.taskId }), "2026-10-27T15:40:00.000Z");
+      if (scenario.terminalAttempt === 2) {
+        store.writeStatus(scenario.taskId, {
+          status: "running",
+          attempt: 1,
+          started_at: scenario.startedAt,
+          worker_pid: 42_001,
+          zcode_pid: null,
+        }, 1);
+        store.writeAttemptMeta(scenario.taskId, 1, "started.json", {
+          worker_pid: 42_001,
+          ...(scenario.startedAt ? { started_at: scenario.startedAt } : {}),
+        });
+        store.writeStatus(scenario.taskId, {
+          status: "completed",
+          attempt: 1,
+          finished_at: "2026-10-27T15:41:00.000Z",
+          worker_pid: null,
+          zcode_pid: null,
+        });
+      }
+      store.writeStatus(scenario.taskId, {
+        status: "cancelled",
+        attempt: scenario.terminalAttempt,
+        ...(scenario.terminalAttempt === 1 && scenario.startedAt
+          ? { started_at: scenario.startedAt }
+          : {}),
+        finished_at: "2026-10-27T15:42:00.000Z",
+        worker_pid: null,
+        zcode_pid: null,
+      });
+      const managerLeaseRef: { value?: string } = {};
+      const managerStore = await startDrainedHistoricalTask(root, probe, managerLeaseRef);
+      managerLease = managerLeaseRef.value;
+      let probeCalls = 0;
+      const outcome = await sealJsonWriterRoot(root, managerStore, {
+        ...probe,
+        probe: async () => {
+          probeCalls += 1;
+          return [];
+        },
+      }, undefined, { bootTimeMs });
+      assert.equal(outcome.sealed, scenario.expectSealed, `${scenario.name}: ${JSON.stringify(outcome.blockers)}`);
+      assert.equal(probeCalls, 0, `${scenario.name}: missing exact identity is never replaced with an unbound probe`);
+      if (!scenario.expectSealed) {
+        assert.ok(outcome.blockers.includes(`task_worker_identity_unknown:${scenario.taskId}:1`), scenario.name);
+        assert.equal(jsonWriterFenceState(root), "draining", scenario.name);
+      }
+    } finally {
+      if (managerLease) await releaseManagerJsonWriter(root, managerLease).catch(() => undefined);
+      await removeTempDir(root);
+    }
+  }
+});
+
+test("a pre-boot historical Attempt behind a queued continuation is excluded without weakening post-boot uncertainty", async () => {
+  const bootTimeMs = Date.parse("2026-10-31T04:13:12.500Z");
+  const scenarios = [
+    {
+      name: "queued continuation with pre-boot history",
+      taskId: "queued_continuation_pre_boot",
+      startedAt: "2026-10-27T15:40:01.478Z",
+      expectSealed: true,
+    },
+    {
+      name: "queued continuation with post-boot history",
+      taskId: "queued_continuation_post_boot",
+      startedAt: "2026-10-31T05:00:00.000Z",
+      expectSealed: false,
+    },
+  ] as const;
+
+  for (const scenario of scenarios) {
+    const root = await makeTempDir("json-writer-queued-history-boot");
+    let managerLease: string | undefined;
+    try {
+      const baseProbe = processProbe();
+      await queuedContinuationWithStartedHistory(root, scenario.taskId, false, scenario.startedAt);
+      managerLease = await registerManagerJsonWriter(root, await baseProbe.selfIdentity());
+      const managerStore = new TaskStore(root, { writerQuiescence: true, writerLeaseToken: managerLease });
+      await beginJsonWriterDrain(root);
+      await releaseManagerJsonWriter(root, managerLease);
+      managerLease = undefined;
+
+      let probeCalls = 0;
+      const outcome = await sealJsonWriterRoot(root, managerStore, {
+        ...baseProbe,
+        probe: async () => {
+          probeCalls += 1;
+          return [];
+        },
+      }, undefined, { bootTimeMs });
+      assert.equal(outcome.sealed, scenario.expectSealed, `${scenario.name}: ${JSON.stringify(outcome.blockers)}`);
+      assert.equal(probeCalls, 0, `${scenario.name}: a missing identity is never guessed from PID liveness`);
+      if (scenario.expectSealed) {
+        assert.equal(jsonWriterFenceState(root), "sealed", scenario.name);
+      } else {
+        assert.ok(
+          outcome.blockers.includes(`task_worker_identity_unknown:${scenario.taskId}:1`),
+          scenario.name,
+        );
+        assert.equal(jsonWriterFenceState(root), "draining", scenario.name);
+      }
+    } finally {
+      if (managerLease) await releaseManagerJsonWriter(root, managerLease).catch(() => undefined);
+      await removeTempDir(root);
+    }
+  }
+});
+
+test("pre-boot history cannot hide a current result or malformed cleanup evidence", async () => {
+  const bootTimeMs = Date.parse("2026-10-31T04:13:12.500Z");
+  const scenarios = [
+    {
+      name: "current result without start timestamp",
+      taskId: "current_result_without_start",
+      blocker: "task_worker_identity_unknown:current_result_without_start:1",
+      prepare(store: TaskStore, taskId: string) {
+        writeFileSync(path.join(store.taskDir(taskId), "result.json"), `${JSON.stringify({
+          task_id: taskId,
+          attempt: 1,
+          started_at: null,
+          finished_at: "2026-10-27T15:41:00.000Z",
+          status: "completed",
+          zcode_output: "",
+          exit_code: 0,
+          session_id: null,
+          summary: "completed without a durable start time",
+          files_changed: [],
+          tests: [],
+          issues: [],
+          needs_master_decision: false,
+        }, null, 2)}\n`, "utf8");
+      },
+    },
+    {
+      name: "pre-boot malformed cleanup failure",
+      taskId: "pre_boot_cleanup_failure_incomplete",
+      blocker: "task_cleanup_failure_incomplete:pre_boot_cleanup_failure_incomplete:1",
+      prepare(store: TaskStore, taskId: string) {
+        store.writeAttemptMeta(taskId, 1, "started.json", {
+          worker_pid: 42_002,
+          started_at: "2026-10-27T15:40:01.478Z",
+        });
+        store.writeAttemptMeta(taskId, 1, "cleanup-failure.json", {
+          member_pids: [42_002],
+          complete: false,
+        });
+      },
+    },
+  ] as const;
+
+  for (const scenario of scenarios) {
+    const root = await makeTempDir("json-writer-pre-boot-guard");
+    let managerLease: string | undefined;
+    try {
+      const probe = processProbe();
+      const store = new TaskStore(root);
+      store.createTask(makeTask({ task_id: scenario.taskId }), "2026-10-27T15:40:00.000Z");
+      store.writeStatus(scenario.taskId, {
+        status: "completed",
+        attempt: 1,
+        ...(scenario.name === "pre-boot malformed cleanup failure"
+          ? { started_at: "2026-10-27T15:40:01.478Z" }
+          : {}),
+        finished_at: "2026-10-27T15:41:00.000Z",
+        worker_pid: null,
+        zcode_pid: null,
+      }, 1);
+      scenario.prepare(store, scenario.taskId);
+      const managerLeaseRef: { value?: string } = {};
+      const managerStore = await startDrainedHistoricalTask(root, probe, managerLeaseRef);
+      managerLease = managerLeaseRef.value;
+      const outcome = await sealJsonWriterRoot(root, managerStore, probe, undefined, { bootTimeMs });
+      assert.equal(outcome.sealed, false, scenario.name);
+      assert.ok(outcome.blockers.includes(scenario.blocker), `${scenario.name}: ${JSON.stringify(outcome.blockers)}`);
+      assert.equal(jsonWriterFenceState(root), "draining", scenario.name);
+    } finally {
+      if (managerLease) await releaseManagerJsonWriter(root, managerLease).catch(() => undefined);
+      await removeTempDir(root);
+    }
+  }
+});
+
+test("trusted Result timing and cancellation-before-start replace missing executor identity only after reboot proof", async () => {
+  const bootTimeMs = Date.parse("2026-10-31T04:13:12.500Z");
+  const scenarios = [
+    {
+      name: "historical Result before boot",
+      taskId: "historical_result_before_boot",
+      prepare(store: TaskStore, taskId: string) {
+        store.writeStatus(taskId, {
+          status: "running",
+          attempt: 1,
+          started_at: "2026-09-28T23:44:45.871Z",
+        }, 1);
+        store.writeAttemptMeta(taskId, 1, "result.json", {
+          task_id: taskId,
+          attempt: 1,
+          started_at: "2026-09-28T23:44:45.871Z",
+          finished_at: "2026-09-28T23:44:46.030Z",
+          zcode_output: "",
+          exit_code: null,
+          session_id: null,
+          status: "failed",
+          summary: "historical worker exited",
+          files_changed: [],
+          tests: [],
+          issues: [],
+          needs_master_decision: true,
+          error_code: "worker_lost",
+        });
+        store.writeStatus(taskId, {
+          status: "failed",
+          attempt: 2,
+          started_at: "2026-09-28T23:45:21.000Z",
+          finished_at: "2026-09-28T23:45:22.000Z",
+        });
+      },
+    },
+    {
+      name: "cancelled before start",
+      taskId: "cancelled_before_start",
+      prepare(store: TaskStore, taskId: string) {
+        store.writeStatus(taskId, {
+          status: "cancelled",
+          attempt: 1,
+          started_at: null,
+          finished_at: "2026-10-04T17:55:48.696Z",
+          worker_pid: null,
+          zcode_pid: null,
+        });
+        writeFileSync(path.join(store.taskDir(taskId), "result.json"), `${JSON.stringify({
+          task_id: taskId,
+          attempt: 1,
+          started_at: null,
+          finished_at: "2026-10-04T17:55:48.696Z",
+          zcode_output: "",
+          exit_code: null,
+          session_id: null,
+          status: "cancelled",
+          summary: "cancelled by request before the task started",
+          files_changed: [],
+          tests: [],
+          issues: [],
+          needs_master_decision: false,
+        }, null, 2)}\n`, "utf8");
+      },
+    },
+  ] as const;
+
+  for (const scenario of scenarios) {
+    const root = await makeTempDir("json-writer-trusted-result-timing");
+    let managerLease: string | undefined;
+    try {
+      const probe = processProbe();
+      const store = new TaskStore(root);
+      store.createTask(makeTask({ task_id: scenario.taskId }), "2026-09-28T23:44:00.000Z");
+      scenario.prepare(store, scenario.taskId);
+      const managerLeaseRef: { value?: string } = {};
+      const managerStore = await startDrainedHistoricalTask(root, probe, managerLeaseRef);
+      managerLease = managerLeaseRef.value;
+      let probeCalls = 0;
+      const outcome = await sealJsonWriterRoot(root, managerStore, {
+        ...probe,
+        probe: async () => {
+          probeCalls += 1;
+          return [];
+        },
+      }, undefined, { bootTimeMs });
+      assert.equal(outcome.sealed, true, `${scenario.name}: ${JSON.stringify(outcome.blockers)}`);
+      assert.equal(probeCalls, 0, scenario.name);
+      assert.equal(jsonWriterFenceState(root), "sealed", scenario.name);
+    } finally {
+      if (managerLease) await releaseManagerJsonWriter(root, managerLease).catch(() => undefined);
+      await removeTempDir(root);
+    }
+  }
+});
+
 test("historical cleanup-failure evidence must be complete and well-formed before sealing", async () => {
   const scenarios = [
     {
@@ -740,7 +1063,7 @@ test("a complete historical cleanup-failure record can be archived after its exe
           observed_at: new Date().toISOString(),
         }));
       },
-    });
+    }, undefined, { bootTimeMs: Date.parse("2026-10-30T23:59:00.000Z") });
     assert.equal(outcome.sealed, true, JSON.stringify(outcome.blockers));
     assert.deepEqual(
       requestsSeen.map((requests) => requests.map((request) => request.pid)),
@@ -910,7 +1233,7 @@ test("a live or unidentifiable historical cleanup member keeps the JSON fence dr
               }
         ));
       },
-    });
+    }, undefined, { bootTimeMs: Date.parse("2026-10-30T23:59:00.000Z") });
 
     assert.equal(outcome.sealed, false);
     assert.ok(outcome.blockers.some((blocker) => blocker === `task_cleanup_member_not_confirmed_exited:${taskId}`));

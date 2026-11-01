@@ -195,6 +195,7 @@ export class LifecycleGateError extends Error {
 export interface LifecycleCandidateStore {
   close(): void;
   importJsonAuthoritySnapshot(snapshot: unknown): unknown;
+  recordRawJsonArchiveCutover(snapshot: unknown): unknown;
   checkpoint(): void;
   assertAuthorityReady(expectedRuntimeRosterDigest: string): Readonly<Record<string, unknown>>;
   readSnapshot(): unknown;
@@ -206,6 +207,7 @@ export interface LifecycleCandidateStore {
     readonly limit?: number;
   }): LifecycleEventsPage;
   readMigratedResult(taskId: string, attempt: number): Readonly<Record<string, unknown>> | null;
+  readMigratedHistoryExceptions(): readonly Readonly<Record<string, unknown>>[];
   readMigratedEvents(taskId: string): readonly Readonly<Record<string, unknown>>[];
   readMigratedArtifact(relativePath: string): Readonly<Record<string, unknown>> | null;
   readRecoverySnapshot(): unknown;

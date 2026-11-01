@@ -1,7 +1,7 @@
 # 决策记录 / Decisions
 
 > Status: AUTHORITATIVE（仅指本索引）
-> Last updated: 2026-10-31
+> Last updated: 2026-11-01
 
 本目录保存已批准的架构决策和带日期的决策记录。决策回答"为什么这样定"，当前实现仍以 `ARCHITECTURE.md` / `INTERFACES.md` 为准。
 
@@ -24,6 +24,7 @@
 | [ADR-004](ADR-004-separate-control-state-and-observation.md) | Accepted | 分离运行时控制、权威状态与补充观察；Desktop 索引是登记过的集成例外 |
 | [ADR-011](ADR-011-private-failure-diagnostics.md) | Accepted（设计） | P0 私有失败诊断；终止根因、受理三态、原子所有权与有限脱敏；固化记录见 2026-10-18-adr011-p0-consolidation |
 | [ADR-016](ADR-016-stop-the-world-json-to-sqlite-cutover.md) | Accepted | JSON 到 SQLite Task Authority 的停机切换；迁移收据、字节快照与 fail-closed 启动 |
+| [ADR-017](ADR-017-single-user-trusted-local-workspace-admission.md) | Accepted | SQLite Workspace Admission 的单用户可信本地边界；不声称 WP6D 原生身份或同账户竞态保护 |
 
 ADR-001 到 ADR-003 只搬运权威文档里已经写明的结论。ADR-004 原先没有明文记录，只有 bridge 之外的设计讨论，因此先以 Proposed 记录；2026-10-07 由 Master 明确按"强化版 A"接受，原则冻结，未因此增加任何读取 ZCode 本地材料的代码。
 

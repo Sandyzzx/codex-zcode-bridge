@@ -62,6 +62,12 @@ ZCode Desktop 的 Workspace 视图按 Codex 项目目录查找任务。
 
 遇到安装或启动问题时，调用 MCP 工具 `zcode_doctor` 获取只读诊断。它不会启动 ZCode 会话，也不做真实权限审批；审批链路只能由实际任务验证（记录版本上已完成单次 43,014-byte Write 的真实审批往返实测）。
 
+## SQLite 迁移
+
+SQLite 迁移采用停机切换。升级前必须完成或保存 `queued`、`running`、`waiting_for_master` 等未结束任务所需的工作，停止新任务入场，并让已知 Worker 正常退出。切换后，SQLite 从新的空 Task Authority 开始，只管理切换后创建的任务。
+
+旧 JSON 任务只保存在经过核验的原始历史归档中；其中的未结束任务不会自动恢复、续作或在 SQLite 中 Continue。该归档仅用于历史查询，应保持只读。SQLite 接受新写入后，不得恢复切换前的 JSON 快照。
+
 ## 已知问题
 
 - ZCode Desktop 侧栏可能不会立即刷新并显示新会话。Bridge 会尽力同步本机任务索引，列表刷新时机由 Desktop 决定。

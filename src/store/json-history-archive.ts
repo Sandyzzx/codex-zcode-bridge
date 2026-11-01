@@ -34,6 +34,7 @@ const PAYLOAD_DIR = "payload";
 
 export type JsonHistoryRecordClassification = "complete" | "missing" | "corrupt" | "conflict";
 export type JsonHistoryArchiveStatus = "archived" | "unresolved";
+export type JsonHistoryArchiveMode = "semantic" | "raw";
 
 export interface JsonHistoryArchiveFile {
   readonly path: string;
@@ -74,6 +75,7 @@ export interface JsonHistoryTaskRecord {
 
 export interface JsonHistoryArchiveManifest {
   readonly schema_version: 1;
+  readonly archive_mode?: JsonHistoryArchiveMode;
   readonly archive_status: JsonHistoryArchiveStatus;
   readonly source_tasks_root: string;
   readonly created_at: string;
@@ -102,6 +104,23 @@ export interface JsonHistoryArchiveIdentity {
 export interface JsonHistoryArchiveSnapshot {
   readonly manifest: JsonHistoryArchiveManifest;
   readonly identity: JsonHistoryArchiveIdentity;
+}
+
+export interface JsonHistorySourceScan {
+  readonly source_tasks_root: string;
+  readonly source_digest: string;
+  readonly file_count: number;
+  readonly byte_count: number;
+  readonly files: readonly JsonHistoryArchiveFile[];
+}
+
+export interface CreateJsonHistoryArchiveOptions {
+  /**
+   * Semantic mode retains the historical Task/Result classifier. Raw mode
+   * archives every entry without importing or validating legacy lifecycle
+   * meaning; it is the only mode used by the empty-SQLite cutover.
+   */
+  readonly mode?: JsonHistoryArchiveMode;
 }
 
 interface TreeEntry {
@@ -202,6 +221,10 @@ async function scanTree(root: string): Promise<TreeEntry[]> {
 
   await visit(root, "");
   return entries.sort((a, b) => a.path.localeCompare(b.path, "en"));
+}
+
+function sourceDigest(files: readonly JsonHistoryArchiveFile[]): string {
+  return sha256(JSON.stringify(files));
 }
 
 function publicFiles(entries: readonly TreeEntry[]): JsonHistoryArchiveFile[] {
@@ -651,7 +674,8 @@ export async function readJsonHistoryArchiveSnapshot(archiveDirectory: string): 
   const sourceFiles = manifest.files.filter((file) => file.kind === "file");
   const sourceByteCount = sourceFiles.reduce((sum, file) => sum + file.byte_length, 0);
   if (
-    (manifest.archive_status !== "archived" && manifest.archive_status !== "unresolved")
+    (manifest.archive_mode !== undefined && manifest.archive_mode !== "semantic" && manifest.archive_mode !== "raw")
+    || (manifest.archive_status !== "archived" && manifest.archive_status !== "unresolved")
     || typeof manifest.source_tasks_root !== "string" || !path.isAbsolute(manifest.source_tasks_root)
     || typeof manifest.created_at !== "string" || !Number.isFinite(Date.parse(manifest.created_at))
     || !Number.isSafeInteger(manifest.source_file_count) || manifest.source_file_count < 0
@@ -688,10 +712,46 @@ export async function readArchivedJsonHistoryFile(archiveDirectory: string, rela
   return bytes;
 }
 
+export async function scanJsonHistorySource(sourceTasksRoot: string): Promise<JsonHistorySourceScan> {
+  const source = path.resolve(sourceTasksRoot);
+  const rootInfo = await lstat(source);
+  if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) {
+    throw new Error("source_tasks_root_must_be_a_real_directory");
+  }
+  const sourceCanonical = await realpath(source);
+  const before = await scanTree(sourceCanonical);
+  const after = await scanTree(sourceCanonical);
+  if (!(await compareScans(before, after))) throw new Error("source_changed_during_snapshot");
+  const files = publicFiles(before);
+  return {
+    source_tasks_root: sourceCanonical,
+    source_digest: sourceDigest(files),
+    file_count: files.filter((file) => file.kind === "file").length,
+    byte_count: files.filter((file) => file.kind === "file").reduce((sum, file) => sum + file.byte_length, 0),
+    files,
+  };
+}
+
+export async function verifyJsonHistoryArchiveSource(
+  archiveDirectory: string,
+): Promise<JsonHistoryArchiveSnapshot> {
+  const snapshot = await readJsonHistoryArchiveSnapshot(archiveDirectory);
+  const current = await scanJsonHistorySource(snapshot.identity.source_tasks_root);
+  if (current.file_count !== snapshot.identity.file_count
+    || current.byte_count !== snapshot.identity.byte_count
+    || JSON.stringify(current.files) !== JSON.stringify(snapshot.manifest.files)) {
+    throw new Error("archive_source_changed");
+  }
+  return snapshot;
+}
+
 export async function createJsonHistoryArchive(
   sourceTasksRoot: string,
   archiveDirectory: string,
+  options: CreateJsonHistoryArchiveOptions = {},
 ): Promise<CreateJsonHistoryArchiveResult> {
+  const mode = options.mode ?? "semantic";
+  if (mode !== "semantic" && mode !== "raw") throw new Error("invalid_archive_mode");
   const source = path.resolve(sourceTasksRoot);
   const destination = path.resolve(archiveDirectory);
   assertDisjointPaths(source, destination);
@@ -715,6 +775,7 @@ export async function createJsonHistoryArchive(
     const snapshot = await readJsonHistoryArchiveSnapshot(destination);
     const { manifest, identity } = snapshot;
     if (!sameCanonicalPath(manifest.source_tasks_root, sourceCanonical)) throw new Error("archive_destination_conflict");
+    if ((manifest.archive_mode ?? "semantic") !== mode) throw new Error("archive_mode_conflict");
     const after = await scanTree(source);
     if (!(await compareScans(before, after))) throw new Error("source_changed_during_snapshot");
     const sourceFiles = publicFiles(before);
@@ -731,21 +792,41 @@ export async function createJsonHistoryArchive(
     if (!(await compareScans(before, after))) throw new Error("source_changed_during_snapshot");
     const files = publicFiles(before);
     await verifyPayload(payloadRoot, files);
-    const classified = await classifyArchivePayload(payloadRoot, before);
-    const globalAnomalies = classified.anomalies.filter((anomaly) => !classified.tasks.some((task) => task.anomalies.includes(anomaly)));
-    const archiveStatus: JsonHistoryArchiveStatus = classified.tasks.every((task) => task.archive_status === "archived") && globalAnomalies.length === 0
-      ? "archived"
-      : "unresolved";
+    let tasks: JsonHistoryTaskRecord[] = [];
+    let anomalies: JsonHistoryAnomaly[] = [];
+    let archiveStatus: JsonHistoryArchiveStatus;
+    if (mode === "raw") {
+      const unsupported = before.find((entry) => entry.kind === "unsupported");
+      if (unsupported) throw new Error(`source_unsupported_filesystem_entry:${unsupported.path}`);
+      anomalies = before
+        .filter((entry) => entry.kind === "symlink")
+        .map((entry) => ({
+          code: "unsafe_entry" as const,
+          path: entry.path,
+          record_type: "filesystem" as const,
+          detail: "symlink_target_recorded_but_not_followed",
+        }));
+      archiveStatus = "archived";
+    } else {
+      const classified = await classifyArchivePayload(payloadRoot, before);
+      tasks = classified.tasks;
+      anomalies = classified.anomalies;
+      const globalAnomalies = anomalies.filter((anomaly) => !tasks.some((task) => task.anomalies.includes(anomaly)));
+      archiveStatus = tasks.every((task) => task.archive_status === "archived") && globalAnomalies.length === 0
+        ? "archived"
+        : "unresolved";
+    }
     const manifest: JsonHistoryArchiveManifest = {
       schema_version: ARCHIVE_SCHEMA_VERSION,
+      archive_mode: mode,
       archive_status: archiveStatus,
       source_tasks_root: sourceCanonical,
       created_at: new Date().toISOString(),
       source_file_count: files.filter((file) => file.kind === "file").length,
       source_byte_count: files.filter((file) => file.kind === "file").reduce((sum, file) => sum + file.byte_length, 0),
       files,
-      tasks: classified.tasks,
-      anomalies: classified.anomalies,
+      tasks,
+      anomalies,
     };
     const manifestBytes = stableManifestBytes(manifest);
     const manifestPath = path.join(staging, MANIFEST_NAME);

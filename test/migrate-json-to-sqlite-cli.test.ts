@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -13,8 +13,10 @@ import {
   releaseManagerJsonWriter,
   sealJsonWriterRoot,
 } from "../src/store/json-writer-quiescence.js";
-import { readJsonHistoryArchive } from "../src/store/json-history-archive.js";
-import { scanJsonAuthority } from "../src/store/json-authority-cutover.js";
+import {
+  readJsonHistoryArchive,
+  scanJsonHistorySource,
+} from "../src/store/json-history-archive.js";
 import { TaskStore } from "../src/store/task-store.js";
 import { makeTask, makeTempDir, removeTempDir } from "./helpers.js";
 
@@ -164,7 +166,7 @@ test("cutover apply CLI requires and verifies a complete JSON archive before pub
     const seal = await sealJsonWriterRoot(jsonRoot, new TaskStore(jsonRoot), probe);
     assert.equal(seal.sealed, true, JSON.stringify(seal.blockers));
 
-    const before = await scanJsonAuthority(jsonRoot);
+    const before = await scanJsonHistorySource(path.join(jsonRoot, ".tasks"));
     const result = await runCli([
       "--apply",
       "--json-data-root", jsonRoot,
@@ -175,22 +177,33 @@ test("cutover apply CLI requires and verifies a complete JSON archive before pub
     assert.equal(result.signal, null);
     const output = JSON.parse(result.stdout) as Record<string, unknown>;
     assert.equal(output.status, "published");
-    assert.equal(output.task_count, 1);
+    assert.equal(output.task_count, 0);
+    assert.equal(output.result_count, 0);
+    assert.equal(output.event_count, 0);
+    assert.equal(output.artifact_count, before.file_count);
+    assert.equal(output.artifact_bytes, before.byte_count);
+    assert.equal(output.historical_exception_count, 0);
     assert.equal(existsSync(String(output.publication_receipt_path)), true);
     assert.equal(existsSync(path.join(sqliteRoot, "bridge.sqlite.cutover-pending.json")), false);
+    assert.deepEqual(
+      readdirSync(sqliteRoot).filter((name) => name.includes(".staging")),
+      [],
+      "the CLI must not leave a staging database or sidecar files after publish",
+    );
     const backup = output.backup as Record<string, unknown>;
     assert.equal(backup.disposition, "created");
     assert.equal(backup.archive_directory, backupRoot);
     assert.match(String(backup.archive_manifest_digest), /^[a-f0-9]{64}$/u);
-    assert.equal(backup.archive_source_tasks_root, before.tasks_root);
+    assert.equal(backup.archive_source_tasks_root, before.source_tasks_root);
     assert.equal(backup.archive_status, "archived");
-    assert.equal(backup.source_file_count, before.manifest.artifact_count);
-    assert.equal(backup.source_byte_count, before.manifest.artifact_bytes);
+    assert.equal(backup.source_file_count, before.file_count);
+    assert.equal(backup.source_byte_count, before.byte_count);
     const archive = await readJsonHistoryArchive(backupRoot);
+    assert.equal(archive.archive_mode, "raw");
     assert.equal(archive.archive_status, "archived");
     assert.equal(String(backup.archive_manifest_digest), (output.archive as Record<string, unknown>).manifest_digest);
-    assert.equal(archive.source_file_count, before.manifest.artifact_count);
-    assert.equal(archive.source_byte_count, before.manifest.artifact_bytes);
+    assert.equal(archive.source_file_count, before.file_count);
+    assert.equal(archive.source_byte_count, before.byte_count);
   } finally {
     if (managerLease) await releaseManagerJsonWriter(jsonRoot, managerLease).catch(() => undefined);
     await removeTempDir(root);

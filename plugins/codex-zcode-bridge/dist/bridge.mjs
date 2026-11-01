@@ -716,9 +716,108 @@ exit 12
   }
 });
 
+// src/store/json-history-result-exceptions.mjs
+import { createHash } from "node:crypto";
+function freeze(value) {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const child of Object.values(value)) freeze(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+function canonical(value) {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`;
+}
+function historicalResultExceptionArtifactId(relativePath) {
+  const digest3 = createHash("sha256").update(relativePath).digest("hex");
+  return `artifact-${digest3.slice(0, 40)}`;
+}
+function annotateHistoricalResultException(entry) {
+  return Object.freeze({
+    exception_id: entry.exception_id,
+    task_id: entry.task_id,
+    stored_attempt: entry.stored_attempt,
+    internal_attempt: entry.internal_attempt,
+    relative_path: entry.relative_path,
+    artifact_id: historicalResultExceptionArtifactId(entry.relative_path),
+    sha256: entry.sha256,
+    byte_length: entry.byte_length,
+    archive_anomaly: Object.freeze({ ...entry.archive_anomaly })
+  });
+}
+function historicalResultExceptionSetDigest(entries) {
+  return createHash("sha256").update(canonical(entries)).digest("hex");
+}
+function isCanonicalHistoricalResultExceptionSet(entries) {
+  if (!Array.isArray(entries) || entries.length !== HISTORICAL_RESULT_EXCEPTIONS.length) return false;
+  return HISTORICAL_RESULT_EXCEPTIONS.every((expected, index) => {
+    const actual = entries[index];
+    const annotated = annotateHistoricalResultException(expected);
+    return canonical(actual) === canonical(annotated);
+  });
+}
+function historicalResultExceptionTaskIds(entries) {
+  return [...new Set(entries.map((entry) => entry.task_id))].sort((left, right) => left.localeCompare(right, "en"));
+}
+var HISTORICAL_RESULT_EXCEPTIONS;
+var init_json_history_result_exceptions = __esm({
+  "src/store/json-history-result-exceptions.mjs"() {
+    "use strict";
+    HISTORICAL_RESULT_EXCEPTIONS = freeze([
+      {
+        exception_id: "cad2bim_rm02_attempt_2_result_stored_at_3",
+        task_id: "CAD2BIM_FULL_AUDIT_RM02_001",
+        stored_attempt: 3,
+        internal_attempt: 2,
+        relative_path: "CAD2BIM_FULL_AUDIT_RM02_001/attempts/3/result.json",
+        sha256: "539c76d236155688feb906a8dfb9764f92a2f76ff8e16b97e6177c2e7bd95530",
+        byte_length: 13981,
+        archive_anomaly: {
+          code: "conflicting_projection",
+          path: "CAD2BIM_FULL_AUDIT_RM02_001/attempts/3/result.json",
+          record_type: "attempt",
+          detail: "result_attempt_does_not_match_storage_generation"
+        }
+      },
+      {
+        exception_id: "cad2bim_rm02_attempt_3_result_stored_at_4",
+        task_id: "CAD2BIM_FULL_AUDIT_RM02_001",
+        stored_attempt: 4,
+        internal_attempt: 3,
+        relative_path: "CAD2BIM_FULL_AUDIT_RM02_001/attempts/4/result.json",
+        sha256: "ec6faea33c6b3b7c299b2c4a6094c431b670d807e00398ed03364ec5a1c61cd3",
+        byte_length: 12989,
+        archive_anomaly: {
+          code: "conflicting_projection",
+          path: "CAD2BIM_FULL_AUDIT_RM02_001/attempts/4/result.json",
+          record_type: "attempt",
+          detail: "result_attempt_does_not_match_storage_generation"
+        }
+      },
+      {
+        exception_id: "project_alignment_current_attempt_2_root_result_binds_1",
+        task_id: "PROJECT-ALIGNMENT-DOC-HYGIENE-CLOSE-1-COMMIT-20260930",
+        stored_attempt: 2,
+        internal_attempt: 1,
+        relative_path: "PROJECT-ALIGNMENT-DOC-HYGIENE-CLOSE-1-COMMIT-20260930/result.json",
+        sha256: "494235a230178fe2aeb0128210bba0cf8fec5029202b07b0a1b3648476d3e12e",
+        byte_length: 6247,
+        archive_anomaly: {
+          code: "conflicting_projection",
+          path: "PROJECT-ALIGNMENT-DOC-HYGIENE-CLOSE-1-COMMIT-20260930/result.json",
+          record_type: "result",
+          detail: "result_attempt_does_not_match_storage_generation"
+        }
+      }
+    ]);
+  }
+});
+
 // src/store/json-writer-quiescence.ts
 import { closeSync as closeSync2, existsSync as existsSync5, fsyncSync as fsyncSync2, mkdirSync as mkdirSync2, openSync as openSync2, readFileSync as readFileSync3, readdirSync, realpathSync as realpathSync2, rmSync, writeFileSync as writeFileSync2 } from "node:fs";
-import { randomUUID as randomUUID2 } from "node:crypto";
+import { createHash as createHash2, randomUUID as randomUUID2 } from "node:crypto";
 import path6 from "node:path";
 function jsonWriterFenceState(dataRoot) {
   return readFence(dataRoot)?.state ?? "open";
@@ -1002,6 +1101,7 @@ var init_json_writer_quiescence = __esm({
     init_process_lock();
     init_durable_file_system();
     init_task_store();
+    init_json_history_result_exceptions();
     FENCE_FILE = ".writer-quiescence.json";
     ROSTER_DIR = ".writer-roster";
     REGISTRY_FILE = "registry.json";
@@ -1024,7 +1124,7 @@ __export(task_store_exports, {
   toPublicStatus: () => toPublicStatus
 });
 import { appendFileSync, chmodSync, closeSync as closeSync3, copyFileSync, existsSync as existsSync6, mkdirSync as mkdirSync3, openSync as openSync3, readFileSync as readFileSync4, readSync, readdirSync as readdirSync2, rmSync as rmSync2, statSync as statSync4, writeFileSync as writeFileSync3 } from "node:fs";
-import { createHash, randomUUID as randomUUID3 } from "node:crypto";
+import { createHash as createHash3, randomUUID as randomUUID3 } from "node:crypto";
 import path7 from "node:path";
 import { StringDecoder } from "node:string_decoder";
 function stableJson(value) {
@@ -2074,7 +2174,7 @@ var init_task_store = __esm({
               state: "pending",
               created_at: createdAt,
               params_bytes: bytes,
-              params_sha256: createHash("sha256").update(serialized).digest("hex")
+              params_sha256: createHash3("sha256").update(serialized).digest("hex")
             };
             this.#writeJsonAtomic(file, record3);
             return { record: record3, created: true };
@@ -2134,7 +2234,7 @@ var init_task_store = __esm({
           if (record3.params_bytes !== bytes) {
             return { ok: false, reason: "the persisted byte count does not match the full content" };
           }
-          if (record3.params_sha256 !== createHash("sha256").update(serialized).digest("hex")) {
+          if (record3.params_sha256 !== createHash3("sha256").update(serialized).digest("hex")) {
             return { ok: false, reason: "the persisted SHA256 does not match the full content" };
           }
           return { ok: true };
@@ -2188,7 +2288,7 @@ var init_task_store = __esm({
       }
       interactionFile(taskId, requestId) {
         if (!requestId || requestId.length > 512) throw new Error("invalid ZCode interaction request_id");
-        const key = createHash("sha256").update(requestId).digest("hex");
+        const key = createHash3("sha256").update(requestId).digest("hex");
         return path7.join(this.taskDir(taskId), "interactions", `${this.readStatus(taskId).attempt}-${key}.json`);
       }
       #readJson(file) {
@@ -2319,7 +2419,7 @@ var init_child_env = __esm({
 });
 
 // src/runtime/build-provenance.ts
-import { createHash as createHash2 } from "node:crypto";
+import { createHash as createHash4 } from "node:crypto";
 import { readFileSync as readFileSync5, realpathSync as realpathSync3 } from "node:fs";
 import path8 from "node:path";
 function fingerprintRuntimeArtifact(filePath) {
@@ -2328,7 +2428,7 @@ function fingerprintRuntimeArtifact(filePath) {
     const resolvedPath = realpathSync3(filePath);
     return {
       path: resolvedPath,
-      sha256: createHash2("sha256").update(readFileSync5(resolvedPath)).digest("hex").toUpperCase()
+      sha256: createHash4("sha256").update(readFileSync5(resolvedPath)).digest("hex").toUpperCase()
     };
   } catch {
     return { path: path8.resolve(filePath), sha256: null };
@@ -3921,7 +4021,7 @@ var init_trusted_local_profile = __esm({
 });
 
 // src/sqlite-candidate/wp6b2b1/trusted-local-policy.ts
-import { createHash as createHash7 } from "node:crypto";
+import { createHash as createHash9 } from "node:crypto";
 import { realpathSync as realpathSync4, statSync as statSync7 } from "node:fs";
 import path15 from "node:path";
 function createTrustedLocalPolicyProvider(config2) {
@@ -3956,7 +4056,7 @@ function createTrustedLocalPolicyProvider(config2) {
         allowed_operation_kinds: ["attempt_lifecycle"],
         unrestricted: false
       };
-      policyDigest = createHash7("sha256").update(JSON.stringify(policyEnvelope), "utf8").digest("hex");
+      policyDigest = createHash9("sha256").update(JSON.stringify(policyEnvelope), "utf8").digest("hex");
       enabled = true;
     } catch (error2) {
       invalid = true;
@@ -4066,9 +4166,9 @@ function resolveLocalDirectory(input) {
   if (!isLocalAbsolute(input)) throw new Error("workspace_root_path_form_denied");
   const stat2 = statSync7(input);
   if (!stat2.isDirectory()) throw new Error("workspace_root_not_directory");
-  const canonical3 = realpathSync4(input);
-  if (!isLocalAbsolute(canonical3)) throw new Error("workspace_root_path_form_denied");
-  return path15.win32.normalize(canonical3);
+  const canonical4 = realpathSync4(input);
+  if (!isLocalAbsolute(canonical4)) throw new Error("workspace_root_path_form_denied");
+  return path15.win32.normalize(canonical4);
 }
 function isLocalAbsolute(value) {
   return process.platform === "win32" && path15.win32.isAbsolute(value) && /^[A-Za-z]:\\/u.test(value) && !value.startsWith("\\\\");
@@ -4226,7 +4326,7 @@ var init_trusted_local_deployment = __esm({
 });
 
 // src/sqlite-candidate/wp6b2b1/launch-bootstrap.ts
-import { createHash as createHash8 } from "node:crypto";
+import { createHash as createHash10 } from "node:crypto";
 function createLaunchBootstrap(source) {
   const snapshot = source.policy_snapshot;
   const bootstrap = {
@@ -4313,7 +4413,7 @@ function deriveAdmissionPolicySnapshotDigest(value) {
     policy_digest: value.policy_digest,
     execution_profile_id: value.execution_profile_id
   };
-  return createHash8("sha256").update(canonicalJson(envelope), "utf8").digest("hex");
+  return createHash10("sha256").update(canonicalJson(envelope), "utf8").digest("hex");
 }
 function canonicalJson(value) {
   if (value === null || typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
@@ -4349,7 +4449,7 @@ var init_launch_bootstrap = __esm({
 });
 
 // src/sqlite-candidate/wp6b2b1/launch-identity.ts
-import { createHash as createHash9 } from "node:crypto";
+import { createHash as createHash11 } from "node:crypto";
 async function observeTrustedLaunchIdentity(child, probe, launchId, generation) {
   if (probe.platform !== "win32" || !validText(launchId) || !positive2(generation)) return null;
   const captured = await captureSpawnGenerationIdentity(child, probe);
@@ -4420,14 +4520,14 @@ function validText(value) {
   return value.length > 0 && value.length <= 128 && !/[\x00-\x1f]/u.test(value);
 }
 function digest(value) {
-  return createHash9("sha256").update(canonical(value), "utf8").digest("hex");
+  return createHash11("sha256").update(canonical2(value), "utf8").digest("hex");
 }
-function canonical(value) {
+function canonical2(value) {
   if (value === null || typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
   if (typeof value === "number" && Number.isSafeInteger(value)) return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (Array.isArray(value)) return `[${value.map(canonical2).join(",")}]`;
   if (value && Object.getPrototypeOf(value) === Object.prototype) {
-    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`;
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical2(value[key])}`).join(",")}}`;
   }
   throw new TypeError("invalid identity digest input");
 }
@@ -4505,7 +4605,7 @@ var init_worker_handshake = __esm({
 });
 
 // src/runtime/sqlite-runtime-roster.ts
-import { createHash as createHash10 } from "node:crypto";
+import { createHash as createHash12 } from "node:crypto";
 function currentSqliteRuntimeRoster() {
   return {
     node: process.versions.node,
@@ -4518,7 +4618,7 @@ function currentSqliteRuntimeRoster() {
 }
 function currentSqliteRuntimeRosterDigest() {
   const roster = currentSqliteRuntimeRoster();
-  return createHash10("sha256").update(JSON.stringify(roster)).digest("hex");
+  return createHash12("sha256").update(JSON.stringify(roster)).digest("hex");
 }
 var SQLITE_CUTOVER_PROTOCOL_VERSION, SQLITE_CUTOVER_VERIFIER_VERSION, SQLITE_CANDIDATE_SCHEMA_VERSION;
 var init_sqlite_runtime_roster = __esm({
@@ -4546,7 +4646,7 @@ var init_node_runtime = __esm({
 });
 
 // src/sqlite-candidate/wp6b2b1/interaction-channel.mjs
-import { createHash as createHash11 } from "node:crypto";
+import { createHash as createHash13 } from "node:crypto";
 async function createCandidateInteractionChannel(child, operation, verifyProcessIdentity) {
   if (!child || !Number.isSafeInteger(child.pid) || !Array.isArray(child.stdio) || child.stdio.length < 10 || !operation || operation.operation_kind !== "attempt_lifecycle" || operation.phase !== "running" || !Number.isSafeInteger(operation.generation) || operation.generation < 1 || !operation.claim_id || operation.claim_generation !== operation.generation || !operation.claim_worker_identity_json || !operation.launch_identity_json || !operation.claim_worker_identity_digest || typeof verifyProcessIdentity !== "function") throw coded("interaction_channel_unavailable");
   let worker;
@@ -4724,7 +4824,7 @@ function stableJson3(value, depth = 0) {
   throw coded("interaction_json_invalid");
 }
 function sha256(value) {
-  return createHash11("sha256").update(value).digest("hex");
+  return createHash13("sha256").update(value).digest("hex");
 }
 function coded(code) {
   return Object.assign(new Error(code), { code });
@@ -4776,12 +4876,12 @@ var store_exports = {};
 __export(store_exports, {
   AdmissionError: () => AdmissionError,
   IsolatedAdmissionStore: () => IsolatedAdmissionStore,
-  canonical: () => canonical2,
+  canonical: () => canonical3,
   digest: () => digest2,
   validateWorkspace: () => validateWorkspace
 });
 import { DatabaseSync } from "node:sqlite";
-import { createHash as createHash12, randomUUID as randomUUID5 } from "node:crypto";
+import { createHash as createHash14, randomUUID as randomUUID5 } from "node:crypto";
 import { existsSync as existsSync12, lstatSync as lstatSync3, realpathSync as realpathSync6, readFileSync as readFileSync12, writeFileSync as writeFileSync6, openSync as openSync5, closeSync as closeSync5, fsyncSync as fsyncSync3, unlinkSync as unlinkSync2, renameSync as renameSync4, statSync as statSync8 } from "node:fs";
 import path18 from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
@@ -4835,7 +4935,7 @@ function validateEvidence(eventType, value) {
   if (eventType === "cleanup_reverified" && (!Array.isArray(value.resolved_recovery_event_digests) || value.resolved_recovery_event_digests.length > RECOVERY_LIMIT || value.resolved_recovery_event_digests.some((v) => typeof v !== "string" || !/^[0-9a-f]{64}$/u.test(v)) || new Set(value.resolved_recovery_event_digests).size !== value.resolved_recovery_event_digests.length || value.resolved_recovery_event_digests.join("|") !== [...value.resolved_recovery_event_digests].sort().join("|") || !/^([0-9a-f]{64})$/u.test(value.prior_cleanup_event_digest) || !validId3(value.operation_id) || !validId3(value.task_id) || !Number.isSafeInteger(value.attempt) || value.attempt < 1 || !Number.isSafeInteger(value.generation) || value.generation < 1)) fail("invalid_cleanup_reverification");
   for (const key of ["launch_id", "claim_id"]) if (key in value && !validText2(value[key], 128)) fail("invalid_evidence");
   if ("launch_epoch" in value && (!Number.isInteger(value.launch_epoch) || value.launch_epoch < 1)) fail("invalid_evidence");
-  const json = canonical2(value);
+  const json = canonical3(value);
   if (Buffer.byteLength(json, "utf8") > (eventType === "cleanup_reverified" ? 2048 : 1024)) fail("invalid_evidence");
   return value;
 }
@@ -4846,7 +4946,7 @@ function validateInteractionEvidence(eventType, value) {
   if (eventType === "interaction_requested") {
     if (!["interaction/requestPermission", "interaction/requestUserInput"].includes(value.request_method) || typeof value.request_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.request_digest)) fail("invalid_interaction_evidence");
   } else if (!validId3(value.reply_id) || typeof value.answer_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.answer_digest) || eventType === "interaction_reply_prepared" && (typeof value.prepared_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.prepared_digest)) || eventType === "interaction_reply_committed" && [value.prepared_digest, value.commit_digest].some((v) => typeof v !== "string" || !/^[0-9a-f]{64}$/u.test(v)) || eventType === "interaction_reply_accepted" && [value.ack_digest, value.commit_digest].some((v) => typeof v !== "string" || !/^[0-9a-f]{64}$/u.test(v))) fail("invalid_interaction_evidence");
-  if (Buffer.byteLength(canonical2(value), "utf8") > 1024) fail("invalid_interaction_evidence");
+  if (Buffer.byteLength(canonical3(value), "utf8") > 1024) fail("invalid_interaction_evidence");
 }
 function validateObservationEventEvidence(value) {
   const own2 = Object.keys(value).sort().join("|");
@@ -5014,7 +5114,7 @@ function canonicalTaskResult(result, input) {
   if (Object.hasOwn(result, "usage") && result.usage !== null) validateUsage(result.usage);
   if (Object.hasOwn(result, "model") && result.model !== null) validateModel(result.model);
   if (Object.hasOwn(result, "timing") && result.timing !== null) validateTiming(result.timing);
-  return canonical2(result);
+  return canonical3(result);
 }
 function fixtureLaunchIdentity(value) {
   if (value?.source === "manager_os_spawn_observation") {
@@ -5047,7 +5147,7 @@ function normalizeCleanupEvidence(value, input) {
   const keys = ["attempt", "claim_id", "fixture", "generation", "launch_receipt_digest", "operation_id", "operation_resources_complete", "process_tree_digest", "resources_digest", "result_commit_ref", "root_process_id", "root_start_fingerprint", "source", "task_id", "worker_identity_digest", "worker_tree_complete", "workspace_touched"];
   if (!value || Object.getPrototypeOf(value) !== Object.prototype || Object.keys(value).sort().join("|") !== keys.join("|")) fail("invalid_cleanup_evidence");
   if (!["manager_os_cleanup_verification", "synthetic_fixture"].includes(value.source) || typeof value.fixture !== "boolean" || value.source === "synthetic_fixture" !== value.fixture || value.operation_id !== input.operation_id || value.task_id !== input.task_id || value.attempt !== input.attempt || value.generation !== input.generation || value.claim_id !== input.claim_id || value.worker_identity_digest !== input.claim_worker_identity_digest || !/^([0-9a-f]{64})$/u.test(value.launch_receipt_digest) || !/^([0-9a-f]{64})$/u.test(value.process_tree_digest) || !/^([0-9a-f]{64})$/u.test(value.resources_digest) || !validId3(value.result_commit_ref) || !Number.isSafeInteger(value.root_process_id) || value.root_process_id < 1 || !validText2(value.root_start_fingerprint, 256) || value.worker_tree_complete !== true || value.operation_resources_complete !== true || value.workspace_touched !== false) fail("invalid_cleanup_evidence");
-  if (Buffer.byteLength(canonical2(value), "utf8") > 4096) fail("cleanup_evidence_too_large");
+  if (Buffer.byteLength(canonical3(value), "utf8") > 4096) fail("cleanup_evidence_too_large");
   return value;
 }
 function presentOperation(row) {
@@ -5060,11 +5160,11 @@ function presentOperation(row) {
 function isBusy(error2) {
   return [5, 6].includes(error2?.errcode) || /SQLITE_(BUSY|LOCKED)/u.test(String(error2?.code ?? "")) || /database is (busy|locked)/iu.test(String(error2?.message ?? ""));
 }
-function canonical2(value) {
+function canonical3(value) {
   if (value === null || typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
   if (typeof value === "number" && Number.isSafeInteger(value)) return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(canonical2).join(",")}]`;
-  if (value && Object.getPrototypeOf(value) === Object.prototype) return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${canonical2(value[k])}`).join(",")}}`;
+  if (Array.isArray(value)) return `[${value.map(canonical3).join(",")}]`;
+  if (value && Object.getPrototypeOf(value) === Object.prototype) return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${canonical3(value[k])}`).join(",")}}`;
   throw new AdmissionError("invalid_json_value");
 }
 function containsNonNfcString(value, depth = 0) {
@@ -5078,7 +5178,7 @@ function containsNonNfcString(value, depth = 0) {
   return false;
 }
 function validateRecoveryEventBinding(operation, event, evidence, claimSequence) {
-  if (!RECOVERY_REASON_CODES.has(evidence.reason_code) || !RECOVERY_SOURCES.has(evidence.evidence_source) || event.event_type !== "observation_recorded" || event.operation_id !== operation.operation_id || event.from_phase !== event.to_phase || !RECOVERY_PHASES.has(event.to_phase) || event.sequence !== evidence.expected_revision + 1 || event.generation !== operation.generation || event.sequence > operation.revision || event.evidence_digest !== digest2(event.evidence_json ?? canonical2(evidence)) || evidence.task_id !== operation.task_id || evidence.attempt !== operation.attempt || evidence.claim_id !== operation.claim_id || evidence.worker_identity_digest !== operation.claim_worker_identity_digest || !operation.claim_id || operation.claim_generation !== operation.generation || claimSequence === void 0 || event.sequence <= claimSequence) {
+  if (!RECOVERY_REASON_CODES.has(evidence.reason_code) || !RECOVERY_SOURCES.has(evidence.evidence_source) || event.event_type !== "observation_recorded" || event.operation_id !== operation.operation_id || event.from_phase !== event.to_phase || !RECOVERY_PHASES.has(event.to_phase) || event.sequence !== evidence.expected_revision + 1 || event.generation !== operation.generation || event.sequence > operation.revision || event.evidence_digest !== digest2(event.evidence_json ?? canonical3(evidence)) || evidence.task_id !== operation.task_id || evidence.attempt !== operation.attempt || evidence.claim_id !== operation.claim_id || evidence.worker_identity_digest !== operation.claim_worker_identity_digest || !operation.claim_id || operation.claim_generation !== operation.generation || claimSequence === void 0 || event.sequence <= claimSequence) {
     fail("recovery_event_binding_mismatch");
   }
   if (event.to_phase === "quarantined" && evidence.classification !== "quarantine") fail("recovery_classification_downgrade");
@@ -5096,6 +5196,39 @@ function validateRecoveryEventBinding(operation, event, evidence, claimSequence)
     evidence_digest: evidence.evidence_digest
   };
   if (digest2(recoveryEnvelope(input)) !== evidence.envelope_digest) fail("recovery_envelope_digest_mismatch");
+}
+function parseHistoricalExceptionManifest(sourceManifestJson, sourceManifestDigest) {
+  let manifest;
+  try {
+    manifest = JSON.parse(sourceManifestJson);
+  } catch {
+    fail("invalid_source_manifest");
+  }
+  if (!manifest || Object.getPrototypeOf(manifest) !== Object.prototype || typeof sourceManifestDigest !== "string" || digest2(sourceManifestJson) !== sourceManifestDigest || !Array.isArray(manifest.files)) fail("invalid_source_manifest");
+  const exceptions = manifest.historical_exceptions;
+  if (!Array.isArray(exceptions) || exceptions.length !== 0 && !isCanonicalHistoricalResultExceptionSet(exceptions) || manifest.historical_exception_count !== exceptions.length || manifest.historical_exception_digest !== historicalResultExceptionSetDigest(exceptions)) fail("invalid_historical_exception_policy");
+  return { manifest, exceptions, exceptionTaskIds: historicalResultExceptionTaskIds(exceptions) };
+}
+function parseAuthoritySourceManifest(sourceManifestJson, sourceManifestDigest) {
+  const parsed = parseHistoricalExceptionManifest(sourceManifestJson, sourceManifestDigest);
+  const { manifest } = parsed;
+  if (manifest.kind === void 0) return { ...parsed, kind: "historical_projection" };
+  if (manifest.kind !== "raw_json_archive_cutover" || typeof manifest.source_tasks_root !== "string" || !path18.isAbsolute(manifest.source_tasks_root) || typeof manifest.archive_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(manifest.archive_manifest_digest) || typeof manifest.source_files_digest !== "string" || !/^[0-9a-f]{64}$/u.test(manifest.source_files_digest) || manifest.task_count !== 0 || manifest.result_count !== 0 || manifest.event_count !== 0 || !Number.isSafeInteger(manifest.artifact_count) || manifest.artifact_count < 0 || !Number.isSafeInteger(manifest.artifact_bytes) || manifest.artifact_bytes < 0 || !Number.isSafeInteger(manifest.archive_file_count) || manifest.archive_file_count !== manifest.artifact_count || !Number.isSafeInteger(manifest.archive_byte_count) || manifest.archive_byte_count !== manifest.artifact_bytes || parsed.exceptions.length !== 0 || !Array.isArray(manifest.files) || manifest.files.length !== 0)
+    fail("invalid_raw_json_archive_cutover_manifest");
+  return { ...parsed, kind: "raw_json_archive_cutover" };
+}
+function validateHistoricalExceptionSnapshot(snapshot, sourceManifest) {
+  const { manifest, exceptions, exceptionTaskIds } = sourceManifest;
+  const expectedTaskCount = snapshot.tasks.length + exceptionTaskIds.length;
+  const artifactBytes = snapshot.artifacts.reduce((total, artifact) => total + artifact.byte_length, 0);
+  if (manifest.task_count !== expectedTaskCount || manifest.artifact_count !== snapshot.artifacts.length || manifest.artifact_bytes !== artifactBytes || manifest.result_count !== snapshot.results.length || manifest.event_count !== snapshot.events.length || manifest.historical_exception_count !== exceptions.length || manifest.historical_exception_digest !== historicalResultExceptionSetDigest(exceptions)) fail("invalid_source_manifest");
+  for (const taskId of exceptionTaskIds) {
+    if (snapshot.tasks.some((task) => task.task_id === taskId) || snapshot.results.some((result) => result.task_id === taskId) || snapshot.events.some((event) => event.task_id === taskId) || snapshot.artifacts.some((artifact) => artifact.relative_path.startsWith(`${taskId}/`) && (artifact.task_id !== null || artifact.attempt !== null))) fail("historical_exception_promoted_to_online_authority");
+  }
+  for (const exception of exceptions) {
+    const artifact = snapshot.artifacts.find((candidate) => candidate.relative_path === exception.relative_path);
+    if (!artifact || artifact.artifact_id !== exception.artifact_id || artifact.sha256 !== exception.sha256 || artifact.byte_length !== exception.byte_length || artifact.task_id !== null || artifact.attempt !== null || snapshot.results.some((result) => result.artifact_id === exception.artifact_id)) fail("invalid_historical_exception_artifact");
+  }
 }
 function pathsFor(root, { databaseFileName = "operations.sqlite3", managedDataDirectory = false, allowCutoverPending = false, allowUnpublishedCutover = false } = {}) {
   if (typeof root !== "string" || !path18.isAbsolute(root) || !existsSync12(root) || !lstatSync3(root).isDirectory() || lstatSync3(root).isSymbolicLink()) fail("invalid_data_root");
@@ -5396,7 +5529,7 @@ function validId3(v) {
 function validateTaskPackage(task) {
   if (!task || Object.getPrototypeOf(task) !== Object.prototype || !validId3(task.task_id) || typeof task.workspace !== "string" || !task.workspace || typeof task.objective !== "string" || !["requirements", "allowed_paths", "forbidden_paths", "acceptance_criteria", "test_commands"].every((k) => Array.isArray(task[k]) && task[k].every((v) => typeof v === "string")) || task.worktree_path !== void 0 && typeof task.worktree_path !== "string" || task.context !== void 0 && typeof task.context !== "string" || task.timeout_ms !== void 0 && (!Number.isSafeInteger(task.timeout_ms) || task.timeout_ms < 6e4 || task.timeout_ms > 144e5) || task.model !== void 0 && (!task.model || Object.getPrototypeOf(task.model) !== Object.prototype || typeof task.model.provider_id !== "string" || !task.model.provider_id || typeof task.model.model_id !== "string" || !task.model.model_id))
     fail("invalid_task_package");
-  const json = canonical2(task);
+  const json = canonical3(task);
   if (Buffer.byteLength(json, "utf8") > 1048576) fail("task_package_too_large");
   return task;
 }
@@ -5440,6 +5573,7 @@ var init_store = __esm({
   "src/sqlite-candidate/wp6b2b1/store.mjs"() {
     "use strict";
     init_interaction_channel();
+    init_json_history_result_exceptions();
     HERE = path18.dirname(fileURLToPath4(import.meta.url));
     SCHEMA = readFileSync12(new URL("./schema.sql", import.meta.url), "utf8");
     CONSTRUCT = /* @__PURE__ */ Symbol("construct");
@@ -5455,8 +5589,8 @@ var init_store = __esm({
     RECOVERY_LIMIT = 8;
     RESULT_FIELDS = /* @__PURE__ */ new Set(["task_id", "attempt", "status", "summary", "files_changed", "tests", "issues", "needs_master_decision", "zcode_output", "exit_code", "session_id", "started_at", "finished_at", "error_code", "report_candidate", "usage", "model", "timing"]);
     REQUIRED_RESULT_FIELDS = ["task_id", "attempt", "status", "summary", "files_changed", "tests", "issues", "needs_master_decision", "zcode_output", "exit_code", "session_id", "started_at", "finished_at"];
-    digest2 = (value) => createHash12("sha256").update(typeof value === "string" ? value : canonical2(value)).digest("hex");
-    rawDigest = (value) => createHash12("sha256").update(Buffer.from(value)).digest("hex");
+    digest2 = (value) => createHash14("sha256").update(typeof value === "string" ? value : canonical3(value)).digest("hex");
+    rawDigest = (value) => createHash14("sha256").update(Buffer.from(value)).digest("hex");
     EVIDENCE_KEYS = Object.freeze({
       capacity_policy_committed: ["capacity_limit", "generation"],
       reserved: ["capacity_slot", "reservation_id"],
@@ -5611,6 +5745,9 @@ var init_store = __esm({
             return { kind: "fresh_install", receipt_id: fresh[0].receipt_id, verifier_version: fresh[0].verifier_version };
           }
           const receipt2 = switched[0];
+          const migration = this.#db.prepare("SELECT source_manifest_json,source_manifest_digest FROM migration_runs WHERE migration_id=?").get(receipt2.migration_id);
+          if (!migration) fail("migration_receipt_missing");
+          const policy = parseAuthoritySourceManifest(migration.source_manifest_json, migration.source_manifest_digest);
           if (typeof expectedRuntimeRosterDigest !== "string" || !/^[0-9a-f]{64}$/u.test(expectedRuntimeRosterDigest) || receipt2.runtime_roster_digest !== expectedRuntimeRosterDigest) fail("authority_runtime_roster_mismatch");
           assertCutoverPublicationGate(this.#db, this.#paths);
           return {
@@ -5625,7 +5762,82 @@ var init_store = __esm({
             archive_source_tasks_root: receipt2.archive_source_tasks_root,
             archive_file_count: receipt2.archive_file_count,
             archive_byte_count: receipt2.archive_byte_count,
+            historical_exception_count: policy.exceptions.length,
+            historical_exception_digest: policy.manifest.historical_exception_digest,
+            source_kind: policy.kind,
             verifier_version: receipt2.verifier_version
+          };
+        });
+      }
+      /**
+       * Record a stop-the-world cutover to a new empty SQLite Task Authority.
+       * Legacy history remains solely in the separately verified raw archive.
+       */
+      recordRawJsonArchiveCutover(snapshot) {
+        this.#assertWritable();
+        if (!snapshot || Object.getPrototypeOf(snapshot) !== Object.prototype || snapshot.schema_version !== 1) fail("invalid_raw_cutover_snapshot");
+        const topKeys = ["archive", "cutover_id", "migration_id", "protocol_version", "runtime_roster_digest", "schema_version", "source", "verifier_version"];
+        const source = snapshot.source;
+        const sourceKeys = ["manifest_digest", "manifest_json", "root_digest"];
+        const archive = snapshot.archive;
+        const archiveKeys = ["archive_directory", "byte_count", "file_count", "manifest_digest", "source_tasks_root"];
+        if (Object.keys(snapshot).sort().join("|") !== topKeys.join("|") || !source || Object.getPrototypeOf(source) !== Object.prototype || Object.keys(source).sort().join("|") !== sourceKeys.join("|") || !archive || Object.getPrototypeOf(archive) !== Object.prototype || Object.keys(archive).sort().join("|") !== archiveKeys.join("|") || !validId3(snapshot.migration_id) || !validId3(snapshot.cutover_id) || !validText2(snapshot.verifier_version, 128) || !validText2(snapshot.protocol_version, 128) || typeof snapshot.runtime_roster_digest !== "string" || !/^[0-9a-f]{64}$/u.test(snapshot.runtime_roster_digest) || typeof source.root_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.root_digest) || typeof source.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.manifest_digest) || typeof source.manifest_json !== "string" || digest2(source.manifest_json) !== source.manifest_digest || !validText2(archive.archive_directory, 32767) || !path18.isAbsolute(archive.archive_directory) || !validText2(archive.source_tasks_root, 32767) || !path18.isAbsolute(archive.source_tasks_root) || typeof archive.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(archive.manifest_digest) || !Number.isSafeInteger(archive.file_count) || archive.file_count < 0 || !Number.isSafeInteger(archive.byte_count) || archive.byte_count < 0) fail("invalid_raw_cutover_snapshot");
+        const policy = parseAuthoritySourceManifest(source.manifest_json, source.manifest_digest);
+        if (policy.kind !== "raw_json_archive_cutover" || policy.manifest.source_tasks_root !== archive.source_tasks_root || policy.manifest.archive_manifest_digest !== archive.manifest_digest || policy.manifest.archive_file_count !== archive.file_count || policy.manifest.archive_byte_count !== archive.byte_count) fail("raw_cutover_archive_identity_mismatch");
+        const at = (/* @__PURE__ */ new Date()).toISOString();
+        return this.#transaction(() => {
+          if (this.#db.prepare("SELECT COUNT(*) AS n FROM tasks").get().n !== 0 || this.#db.prepare("SELECT COUNT(*) AS n FROM migration_runs").get().n !== 0 || this.#db.prepare("SELECT COUNT(*) AS n FROM fresh_install_receipt").get().n !== 0 || this.#db.prepare("SELECT COUNT(*) AS n FROM authority_switch").get().n !== 0 || this.#db.prepare("SELECT COUNT(*) AS n FROM manager_operations").get().n !== 0 || this.#db.prepare("SELECT COUNT(*) AS n FROM json_artifacts").get().n !== 0) fail("migration_target_not_empty");
+          this.#db.prepare(`INSERT INTO migration_runs(migration_id,state,source_root_digest,source_manifest_json,source_manifest_digest,
+        source_task_count,source_artifact_count,source_artifact_bytes,source_result_count,source_event_count,
+        archive_directory,archive_manifest_digest,archive_source_tasks_root,archive_file_count,archive_byte_count,
+        verifier_version,created_at,verified_at)
+        VALUES(?,'verified',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+            snapshot.migration_id,
+            source.root_digest,
+            source.manifest_json,
+            source.manifest_digest,
+            0,
+            archive.file_count,
+            archive.byte_count,
+            0,
+            0,
+            archive.archive_directory,
+            archive.manifest_digest,
+            archive.source_tasks_root,
+            archive.file_count,
+            archive.byte_count,
+            snapshot.verifier_version,
+            at,
+            at
+          );
+          const inserted = this.#db.prepare(`INSERT INTO authority_switch(singleton,authority_generation,cutover_id,migration_id,source_root_digest,
+        source_manifest_digest,archive_directory,archive_manifest_digest,archive_source_tasks_root,archive_file_count,
+        archive_byte_count,schema_version,protocol_version,runtime_roster_digest,verifier_version,created_at)
+        VALUES(1,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+            snapshot.cutover_id,
+            snapshot.migration_id,
+            source.root_digest,
+            source.manifest_digest,
+            archive.archive_directory,
+            archive.manifest_digest,
+            archive.source_tasks_root,
+            archive.file_count,
+            archive.byte_count,
+            SCHEMA_VERSION,
+            snapshot.protocol_version,
+            snapshot.runtime_roster_digest,
+            snapshot.verifier_version,
+            at
+          );
+          if (inserted.changes !== 1) fail("authority_switch_insert_failed");
+          return {
+            migration_id: snapshot.migration_id,
+            cutover_id: snapshot.cutover_id,
+            event_cursor: 0,
+            task_count: 0,
+            artifact_count: 0,
+            result_count: 0,
+            historical_exception_count: 0
           };
         });
       }
@@ -5637,13 +5849,16 @@ var init_store = __esm({
       importJsonAuthoritySnapshot(snapshot) {
         this.#assertWritable();
         if (!snapshot || Object.getPrototypeOf(snapshot) !== Object.prototype || snapshot.schema_version !== 1) fail("invalid_migration_snapshot");
-        const topKeys = ["archive", "artifacts", "cutover_id", "events", "migration_id", "protocol_version", "results", "runtime_roster_digest", "schema_version", "source", "tasks", "verifier_version"];
+        const topKeys = ["archive", "artifacts", "cutover_id", "events", "historical_exceptions", "migration_id", "protocol_version", "results", "runtime_roster_digest", "schema_version", "source", "tasks", "verifier_version"];
         if (Object.keys(snapshot).sort().join("|") !== topKeys.join("|")) fail("invalid_migration_snapshot");
         const source = snapshot.source;
-        const sourceKeys = ["artifact_bytes", "artifact_count", "event_count", "manifest_digest", "manifest_json", "result_count", "root_digest", "task_count"];
+        const sourceKeys = ["artifact_bytes", "artifact_count", "event_count", "historical_exception_count", "historical_exception_digest", "manifest_digest", "manifest_json", "result_count", "root_digest", "task_count"];
         const archive = snapshot.archive;
         const archiveKeys = ["archive_directory", "byte_count", "file_count", "manifest_digest", "source_tasks_root"];
-        if (!source || Object.getPrototypeOf(source) !== Object.prototype || Object.keys(source).sort().join("|") !== sourceKeys.join("|") || !archive || Object.getPrototypeOf(archive) !== Object.prototype || Object.keys(archive).sort().join("|") !== archiveKeys.join("|") || !validId3(snapshot.migration_id) || !validId3(snapshot.cutover_id) || !validText2(snapshot.verifier_version, 128) || !validText2(snapshot.protocol_version, 128) || typeof snapshot.runtime_roster_digest !== "string" || !/^[0-9a-f]{64}$/u.test(snapshot.runtime_roster_digest) || typeof source.root_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.root_digest) || typeof source.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.manifest_digest) || typeof source.manifest_json !== "string" || digest2(source.manifest_json) !== source.manifest_digest || !validText2(archive.archive_directory, 32767) || !path18.isAbsolute(archive.archive_directory) || !validText2(archive.source_tasks_root, 32767) || !path18.isAbsolute(archive.source_tasks_root) || typeof archive.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(archive.manifest_digest) || !Number.isSafeInteger(archive.file_count) || archive.file_count < 0 || !Number.isSafeInteger(archive.byte_count) || archive.byte_count < 0 || archive.file_count !== source.artifact_count || archive.byte_count !== source.artifact_bytes || !Array.isArray(snapshot.tasks) || !Array.isArray(snapshot.artifacts) || !Array.isArray(snapshot.results) || !Array.isArray(snapshot.events) || ![source.task_count, source.artifact_count, source.artifact_bytes, source.result_count, source.event_count].every((v) => Number.isSafeInteger(v) && v >= 0) || source.task_count !== snapshot.tasks.length || source.artifact_count !== snapshot.artifacts.length || source.result_count !== snapshot.results.length || source.event_count !== snapshot.events.length) fail("invalid_migration_snapshot");
+        if (!source || Object.getPrototypeOf(source) !== Object.prototype || Object.keys(source).sort().join("|") !== sourceKeys.join("|") || !archive || Object.getPrototypeOf(archive) !== Object.prototype || Object.keys(archive).sort().join("|") !== archiveKeys.join("|") || !validId3(snapshot.migration_id) || !validId3(snapshot.cutover_id) || !validText2(snapshot.verifier_version, 128) || !validText2(snapshot.protocol_version, 128) || typeof snapshot.runtime_roster_digest !== "string" || !/^[0-9a-f]{64}$/u.test(snapshot.runtime_roster_digest) || typeof source.root_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.root_digest) || typeof source.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.manifest_digest) || typeof source.manifest_json !== "string" || digest2(source.manifest_json) !== source.manifest_digest || !validText2(archive.archive_directory, 32767) || !path18.isAbsolute(archive.archive_directory) || !validText2(archive.source_tasks_root, 32767) || !path18.isAbsolute(archive.source_tasks_root) || typeof archive.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(archive.manifest_digest) || !Number.isSafeInteger(archive.file_count) || archive.file_count < 0 || !Number.isSafeInteger(archive.byte_count) || archive.byte_count < 0 || archive.file_count !== source.artifact_count || archive.byte_count !== source.artifact_bytes || !Array.isArray(snapshot.tasks) || !Array.isArray(snapshot.artifacts) || !Array.isArray(snapshot.results) || !Array.isArray(snapshot.events) || !Array.isArray(snapshot.historical_exceptions) || ![source.task_count, source.artifact_count, source.artifact_bytes, source.result_count, source.event_count].every((v) => Number.isSafeInteger(v) && v >= 0) || !Number.isSafeInteger(source.historical_exception_count) || source.historical_exception_count < 0 || typeof source.historical_exception_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.historical_exception_digest) || source.historical_exception_count !== snapshot.historical_exceptions.length || source.historical_exception_digest !== historicalResultExceptionSetDigest(snapshot.historical_exceptions) || source.artifact_count !== snapshot.artifacts.length || source.result_count !== snapshot.results.length || source.event_count !== snapshot.events.length) fail("invalid_migration_snapshot");
+        const sourceManifest = parseHistoricalExceptionManifest(source.manifest_json, source.manifest_digest);
+        if (sourceManifest.manifest.task_count !== source.task_count || sourceManifest.manifest.artifact_count !== source.artifact_count || sourceManifest.manifest.artifact_bytes !== source.artifact_bytes || sourceManifest.manifest.result_count !== source.result_count || sourceManifest.manifest.event_count !== source.event_count || sourceManifest.manifest.historical_exception_count !== source.historical_exception_count || sourceManifest.manifest.historical_exception_digest !== source.historical_exception_digest || canonical3(sourceManifest.exceptions) !== canonical3(snapshot.historical_exceptions)) fail("invalid_source_manifest");
+        validateHistoricalExceptionSnapshot(snapshot, sourceManifest);
         const at = (/* @__PURE__ */ new Date()).toISOString();
         return this.#transaction(() => {
           if (this.#db.prepare("SELECT COUNT(*) AS n FROM tasks").get().n !== 0 || this.#db.prepare("SELECT COUNT(*) AS n FROM migration_runs").get().n !== 0 || this.#db.prepare("SELECT COUNT(*) AS n FROM fresh_install_receipt").get().n !== 0 || this.#db.prepare("SELECT COUNT(*) AS n FROM authority_switch").get().n !== 0 || this.#db.prepare("SELECT COUNT(*) AS n FROM manager_operations").get().n !== 0) fail("migration_target_not_empty");
@@ -5657,7 +5872,7 @@ var init_store = __esm({
               fail("invalid_migrated_task");
             }
             if (task.status === "running") fail("running_task_not_migratable");
-            this.#db.prepare("INSERT INTO tasks(task_id,task_json,status,current_attempt,created_at) VALUES(?,?,?,?,?)").run(task.task_id, canonical2(task.task), task.status, task.current_attempt, task.created_at);
+            this.#db.prepare("INSERT INTO tasks(task_id,task_json,status,current_attempt,created_at) VALUES(?,?,?,?,?)").run(task.task_id, canonical3(task.task), task.status, task.current_attempt, task.created_at);
             const seen = /* @__PURE__ */ new Set();
             for (const attempt of task.attempts) {
               const attemptKeys = ["attempt", "created_at", "status"];
@@ -5730,7 +5945,7 @@ var init_store = __esm({
             const artifact = artifactsById.get(event.artifact_id);
             if (!artifact || artifact.task_id !== event.task_id || artifact.attempt !== null || artifact.relative_path !== `${event.task_id}/events.jsonl`)
               fail("migrated_event_artifact_mismatch");
-            const detailsJson = event.details === null ? null : canonical2(event.details);
+            const detailsJson = event.details === null ? null : canonical3(event.details);
             if (detailsJson !== null && Buffer.byteLength(detailsJson, "utf8") > 1048576) fail("invalid_migrated_event");
             cursor += 1;
             this.#db.prepare(`INSERT INTO migrated_task_events(event_cursor,task_id,attempt,source_sequence,event_type,at,summary,details_json,details_digest,artifact_id)
@@ -5780,7 +5995,8 @@ var init_store = __esm({
             event_cursor: cursor,
             task_count: snapshot.tasks.length,
             artifact_count: snapshot.artifacts.length,
-            result_count: snapshot.results.length
+            result_count: snapshot.results.length,
+            historical_exception_count: snapshot.historical_exceptions.length
           };
         });
       }
@@ -5789,7 +6005,7 @@ var init_store = __esm({
         this.#assertWritable();
         validateTaskPackage(task);
         if (!validText2(createdAt, 64) || Number.isNaN(Date.parse(createdAt))) fail("invalid_task_created_at");
-        const taskJson = canonical2(task);
+        const taskJson = canonical3(task);
         return this.#transaction(() => {
           if (this.#db.prepare("SELECT task_id FROM tasks WHERE task_id=?").get(task.task_id)) fail("task_already_exists");
           this.#db.prepare("INSERT INTO tasks(task_id,task_json,status,current_attempt,created_at) VALUES(?,?,'queued',1,?)").run(task.task_id, taskJson, createdAt);
@@ -5889,6 +6105,14 @@ var init_store = __esm({
           }
           if (digest2(row.result_json) !== row.result_digest) fail("migrated_result_digest_mismatch");
           return { task_id: row.task_id, attempt: row.attempt, result, artifact_id: row.artifact_id };
+        });
+      }
+      /** Read the immutable, archive-only Result exceptions bound into the source Manifest. */
+      readMigratedHistoryExceptions() {
+        return this.#readConsistent(() => {
+          const migration = this.#db.prepare("SELECT source_manifest_json,source_manifest_digest FROM migration_runs").get();
+          if (!migration) return [];
+          return parseHistoricalExceptionManifest(migration.source_manifest_json, migration.source_manifest_digest).exceptions;
         });
       }
       /** Read the Task, current Attempt, bound Operation and verified Result in one snapshot. */
@@ -6306,7 +6530,7 @@ var init_store = __esm({
         if (!validId3(operationId) || operationId !== operationId.trim() || !validId3(input?.task_id) || typeof input?.feedback !== "string" || !input.feedback.trim() || input.additional_requirements !== void 0 && (!Array.isArray(input.additional_requirements) || input.additional_requirements.some((value) => typeof value !== "string"))) fail("invalid_continue_request");
         const additionalRequirements = input.additional_requirements ?? [];
         const publicRequest = { task_id: input.task_id, feedback: input.feedback, additional_requirements: additionalRequirements };
-        const publicRequestJson = canonical2(publicRequest);
+        const publicRequestJson = canonical3(publicRequest);
         if (Buffer.byteLength(publicRequestJson, "utf8") > 1048576) fail("continue_request_too_large");
         const duplicateReceipt = (priorAttempt) => {
           if (priorAttempt.task_id !== input.task_id) fail("continue_operation_conflict");
@@ -6317,7 +6541,7 @@ var init_store = __esm({
             fail("continue_history_mismatch");
           }
           if (!stored || Object.getPrototypeOf(stored) !== Object.prototype || priorAttempt.continuation_operation_id !== operationId || priorAttempt.continuation_digest !== digest2(priorAttempt.continuation_json) || stored.contract !== "wp6b2b-continue-v1" || stored.operation_id !== operationId || stored.task_id !== priorAttempt.task_id) fail("continue_history_mismatch");
-          if (canonical2({ task_id: stored.task_id, feedback: stored.feedback, additional_requirements: stored.additional_requirements }) !== publicRequestJson)
+          if (canonical3({ task_id: stored.task_id, feedback: stored.feedback, additional_requirements: stored.additional_requirements }) !== publicRequestJson)
             fail("continue_operation_conflict");
           return { duplicate: true, operation_id: operationId, task_id: input.task_id, attempt: priorAttempt.attempt, status: "queued", created_at: priorAttempt.created_at };
         };
@@ -6341,7 +6565,7 @@ var init_store = __esm({
           previous_claim_id: input.claim_id,
           previous_worker_identity_digest: input.claim_worker_identity_digest
         };
-        const continuationJson = canonical2(continuation);
+        const continuationJson = canonical3(continuation);
         if (Buffer.byteLength(continuationJson, "utf8") > 1048576) fail("continue_request_too_large");
         const continuationDigest = digest2(continuationJson);
         const prior = this.readOperation(input.previous_operation_id);
@@ -6493,7 +6717,7 @@ var init_store = __esm({
           NULL AS from_phase,'cancelled' AS to_phase,generation,
           queued_cancel_id,queued_cancel_request_digest,queued_cancelled_at AS at,task_id,attempt AS operation_attempt
         FROM attempts WHERE task_id=? AND queued_cancel_event_cursor>? AND queued_cancel_operation_id IS NULL ORDER BY queued_cancel_event_cursor LIMIT ?`).all(taskId, afterCursor, limit + 1).map((row) => {
-            const evidence_json = canonical2({ cancel_id: row.queued_cancel_id, request_digest: row.queued_cancel_request_digest });
+            const evidence_json = canonical3({ cancel_id: row.queued_cancel_id, request_digest: row.queued_cancel_request_digest });
             const { queued_cancel_id, queued_cancel_request_digest, ...event } = row;
             return { ...event, evidence_json, evidence_digest: digest2(evidence_json) };
           });
@@ -6570,7 +6794,7 @@ var init_store = __esm({
             finished_at: at
           };
           canonicalTaskResult(result, { task_id, attempt: expected_attempt, result_status: "cancelled" });
-          const resultJson = canonical2(result), resultDigest = digest2(resultJson);
+          const resultJson = canonical3(result), resultDigest = digest2(resultJson);
           const changedAttempt = this.#db.prepare("UPDATE attempts SET status='cancelled',queued_cancel_id=?,queued_cancel_request_digest=?,queued_cancel_event_cursor=?,queued_cancelled_at=?,queued_cancel_operation_id=?,queued_cancel_result_digest=?,queued_cancel_result_json=? WHERE task_id=? AND attempt=? AND generation IS ? AND status='queued' AND queued_cancel_id IS NULL").run(cancelId, requestDigest, next, at, operation?.operation_id ?? null, resultDigest, resultJson, task_id, expected_attempt, attempt.generation);
           const changedTask = this.#db.prepare("UPDATE tasks SET status='cancelled' WHERE task_id=? AND current_attempt=? AND status='queued'").run(task_id, expected_attempt);
           if (changedAttempt.changes !== 1 || changedTask.changes !== 1) fail("queued_cancel_cas_conflict");
@@ -6986,7 +7210,7 @@ var init_store = __esm({
           const changed = this.#db.prepare("UPDATE manager_operations SET revision=revision+1 WHERE operation_id=? AND generation=? AND revision=?").run(operation_id, generation, revision);
           if (changed.changes !== 1) fail("stale_operation_cas");
           this.#faultPoint("after_projection");
-          const evidenceJson = canonical2(evidence);
+          const evidenceJson = canonical3(evidence);
           this.#event(operation_id, revision + 1, "observation_recorded", "reserved", "reserved", generation, evidence, at);
           return { revision: revision + 1, phase: "reserved" };
         });
@@ -6998,7 +7222,7 @@ var init_store = __esm({
         const envelope = recoveryEnvelope(input), envelopeDigest = digest2(envelope);
         let evidenceJson;
         try {
-          evidenceJson = canonical2(evidence);
+          evidenceJson = canonical3(evidence);
         } catch {
           fail("recovery_evidence_invalid");
         }
@@ -7132,7 +7356,7 @@ var init_store = __esm({
         fixtureLaunchIdentity(input.launch_identity);
         if (input.launch_identity.source === "manager_os_spawn_observation" && (input.launch_identity.launch_id !== input.launch_id || input.launch_identity.generation !== input.generation))
           fail("trusted_launch_identity_binding_mismatch");
-        const tokenDigest = digest2(input.launch_token), identityJson = canonical2(input.launch_identity);
+        const tokenDigest = digest2(input.launch_token), identityJson = canonical3(input.launch_identity);
         const receiptDigest = digest2({
           receipt_id: input.receipt_id,
           operation_id: input.operation_id,
@@ -7187,7 +7411,7 @@ var init_store = __esm({
         this.#assertWritable();
         if (!validLaunchRequest(input) || !validId3(input.claim_id)) fail("invalid_claim");
         fixtureWorkerIdentity(input.worker_identity);
-        const tokenDigest = digest2(input.launch_token), workerJson = canonical2(input.worker_identity), workerDigest = digest2(workerJson);
+        const tokenDigest = digest2(input.launch_token), workerJson = canonical3(input.worker_identity), workerDigest = digest2(workerJson);
         const claimDigest = digest2({
           claim_id: input.claim_id,
           operation_id: input.operation_id,
@@ -7660,7 +7884,7 @@ var init_store = __esm({
         if (!o.claim_id || o.claim_id !== input.claim_id || o.claim_generation !== input.generation || o.claim_worker_identity_digest !== input.claim_worker_identity_digest || !o.claim_worker_identity_json || !o.launch_identity_json)
           fail("cancellation_claim_mismatch");
         fixtureWorkerIdentity(input.worker_identity);
-        const workerJson = canonical2(input.worker_identity);
+        const workerJson = canonical3(input.worker_identity);
         if (workerJson !== o.claim_worker_identity_json || digest2(workerJson) !== o.claim_worker_identity_digest) fail("cancellation_worker_identity_mismatch");
         let launchIdentity;
         try {
@@ -7737,7 +7961,7 @@ var init_store = __esm({
         return row.next_event_cursor;
       }
       #event(id, seq, type, from, to, generation, evidence, at, cursor) {
-        const eventCursor = cursor ?? this.#nextEventCursor(), j = canonical2(validateEvidence(type, evidence));
+        const eventCursor = cursor ?? this.#nextEventCursor(), j = canonical3(validateEvidence(type, evidence));
         this.#db.prepare("INSERT INTO manager_operation_events(event_cursor,operation_id,sequence,event_type,from_phase,to_phase,generation,evidence_json,evidence_digest,at) VALUES(?,?,?,?,?,?,?,?,?,?)").run(eventCursor, id, seq, type, from, to, generation, j, digest2(j), at);
         this.#faultPoint("after_event_insert");
         return eventCursor;
@@ -7856,6 +8080,8 @@ var init_store = __esm({
           } else if (authoritySwitches.length) {
             const receipt2 = authoritySwitches[0], migration = migrationRuns[0];
             if (!migration || migration.state !== "verified" || migration.migration_id !== receipt2.migration_id || migration.source_root_digest !== receipt2.source_root_digest || migration.source_manifest_digest !== receipt2.source_manifest_digest || digest2(migration.source_manifest_json) !== migration.source_manifest_digest || !validText2(migration.archive_directory, 32767) || !path18.isAbsolute(migration.archive_directory) || !validText2(receipt2.archive_directory, 32767) || !path18.isAbsolute(receipt2.archive_directory) || migration.archive_directory !== receipt2.archive_directory || typeof migration.archive_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(migration.archive_manifest_digest) || migration.archive_manifest_digest !== receipt2.archive_manifest_digest || !validText2(migration.archive_source_tasks_root, 32767) || !path18.isAbsolute(migration.archive_source_tasks_root) || migration.archive_source_tasks_root !== receipt2.archive_source_tasks_root || !Number.isSafeInteger(migration.archive_file_count) || migration.archive_file_count < 0 || migration.archive_file_count !== migration.source_artifact_count || migration.archive_file_count !== receipt2.archive_file_count || !Number.isSafeInteger(migration.archive_byte_count) || migration.archive_byte_count < 0 || migration.archive_byte_count !== migration.source_artifact_bytes || migration.archive_byte_count !== receipt2.archive_byte_count || receipt2.schema_version !== SCHEMA_VERSION || !validText2(receipt2.protocol_version, 128) || typeof receipt2.runtime_roster_digest !== "string" || !/^[0-9a-f]{64}$/u.test(receipt2.runtime_roster_digest) || !validText2(receipt2.verifier_version, 128) || !validText2(migration.verifier_version, 128) || receipt2.verifier_version !== migration.verifier_version || !validText2(receipt2.cutover_id, 128) || !validText2(receipt2.created_at, 64) || Number.isNaN(Date.parse(receipt2.created_at)) || !validText2(migration.created_at, 64) || !validText2(migration.verified_at, 64) || Number.isNaN(Date.parse(migration.created_at)) || Number.isNaN(Date.parse(migration.verified_at))) fail("authority_switch_invalid");
+            const policy = parseAuthoritySourceManifest(migration.source_manifest_json, migration.source_manifest_digest);
+            if (policy.manifest.task_count !== migration.source_task_count || policy.manifest.artifact_count !== migration.source_artifact_count || policy.manifest.artifact_bytes !== migration.source_artifact_bytes || policy.manifest.result_count !== migration.source_result_count || policy.manifest.event_count !== migration.source_event_count) fail("authority_switch_invalid");
           } else if (migrationRuns.length || migratedResultsCount || migratedEventsCount || this.#db.prepare("SELECT COUNT(*) AS n FROM json_artifacts").get().n) {
             fail("migration_receipt_missing");
           }
@@ -7875,8 +8101,34 @@ var init_store = __esm({
           }
           if (authoritySwitches.length) {
             const migration = migrationRuns[0];
-            if (!Number.isSafeInteger(migration.source_task_count) || migration.source_task_count < 0 || !Number.isSafeInteger(migration.source_artifact_count) || migration.source_artifact_count < 0 || !Number.isSafeInteger(migration.source_artifact_bytes) || migration.source_artifact_bytes < 0 || !Number.isSafeInteger(migration.source_result_count) || migration.source_result_count < 0 || !Number.isSafeInteger(migration.source_event_count) || migration.source_event_count < 0 || migration.source_task_count > this.#db.prepare("SELECT COUNT(*) AS n FROM tasks").get().n || migration.source_artifact_count !== artifacts.length || migration.source_artifact_bytes !== artifactBytes || migration.source_result_count !== migratedResultsCount || migration.source_event_count !== migratedEventsCount || migration.archive_file_count !== artifacts.length || migration.archive_byte_count !== artifactBytes)
-              fail("migration_counts_mismatch");
+            const policy = parseAuthoritySourceManifest(migration.source_manifest_json, migration.source_manifest_digest);
+            if (policy.kind === "raw_json_archive_cutover") {
+              if (artifacts.length !== 0 || migratedResultsCount !== 0 || migratedEventsCount !== 0 || migration.source_task_count !== 0 || migration.source_result_count !== 0 || migration.source_event_count !== 0 || migration.source_artifact_count !== migration.archive_file_count || migration.source_artifact_bytes !== migration.archive_byte_count)
+                fail("raw_cutover_contains_legacy_projection", JSON.stringify({
+                  artifact_count: artifacts.length,
+                  migrated_result_count: migratedResultsCount,
+                  migrated_event_count: migratedEventsCount,
+                  source_task_count: migration.source_task_count,
+                  source_result_count: migration.source_result_count,
+                  source_event_count: migration.source_event_count,
+                  source_artifact_count: migration.source_artifact_count,
+                  archive_file_count: migration.archive_file_count,
+                  source_artifact_bytes: migration.source_artifact_bytes,
+                  archive_byte_count: migration.archive_byte_count
+                }));
+            } else {
+              const migratedOnlineTaskIds = new Set(artifacts.map((artifact) => artifact.task_id).filter((taskId) => taskId !== null));
+              if (!Number.isSafeInteger(migration.source_task_count) || migration.source_task_count < 0 || !Number.isSafeInteger(migration.source_artifact_count) || migration.source_artifact_count < 0 || !Number.isSafeInteger(migration.source_artifact_bytes) || migration.source_artifact_bytes < 0 || !Number.isSafeInteger(migration.source_result_count) || migration.source_result_count < 0 || !Number.isSafeInteger(migration.source_event_count) || migration.source_event_count < 0 || migration.source_task_count !== migratedOnlineTaskIds.size + policy.exceptionTaskIds.length || migration.source_artifact_count !== artifacts.length || migration.source_artifact_bytes !== artifactBytes || migration.source_result_count !== migratedResultsCount || migration.source_event_count !== migratedEventsCount || migration.archive_file_count !== artifacts.length || migration.archive_byte_count !== artifactBytes)
+                fail("migration_counts_mismatch");
+            }
+            for (const taskId of policy.exceptionTaskIds) {
+              if (this.#db.prepare("SELECT 1 FROM tasks WHERE task_id=?").get(taskId) || this.#db.prepare("SELECT 1 FROM migrated_task_results WHERE task_id=?").get(taskId) || this.#db.prepare("SELECT 1 FROM migrated_task_events WHERE task_id=?").get(taskId) || artifacts.some((artifact) => artifact.relative_path.startsWith(`${taskId}/`) && (artifact.task_id !== null || artifact.attempt !== null))) fail("historical_exception_promoted_to_online_authority");
+            }
+            for (const exception of policy.exceptions) {
+              const artifact = artifactById.get(exception.artifact_id);
+              if (!artifact || artifact.relative_path !== exception.relative_path || artifact.sha256 !== exception.sha256 || artifact.byte_length !== exception.byte_length || artifact.task_id !== null || artifact.attempt !== null || this.#db.prepare("SELECT 1 FROM migrated_task_results WHERE artifact_id=?").get(exception.artifact_id))
+                fail("invalid_historical_exception_artifact");
+            }
           }
           const migratedResults = this.#db.prepare("SELECT * FROM migrated_task_results ORDER BY task_id,attempt").all();
           for (const resultRow of migratedResults) {
@@ -7891,7 +8143,7 @@ var init_store = __esm({
             } catch {
               fail("migrated_result_invalid");
             }
-            if (!task || !artifact || artifact.task_id !== resultRow.task_id || artifact.attempt !== resultRow.attempt && !currentResultArtifact || artifact.relative_path !== expectedPath || canonical2(result) !== resultRow.result_json || digest2(resultRow.result_json) !== resultRow.result_digest) fail("migrated_result_artifact_mismatch");
+            if (!task || !artifact || artifact.task_id !== resultRow.task_id || artifact.attempt !== resultRow.attempt && !currentResultArtifact || artifact.relative_path !== expectedPath || canonical3(result) !== resultRow.result_json || digest2(resultRow.result_json) !== resultRow.result_digest) fail("migrated_result_artifact_mismatch");
           }
           const migratedEvents = this.#db.prepare("SELECT * FROM migrated_task_events ORDER BY event_cursor").all();
           const seenSourceEvents = /* @__PURE__ */ new Set();
@@ -7935,7 +8187,7 @@ var init_store = __esm({
             }
             const requestDigest = digest2({ contract: "wp6a-queued-cancel-v1", task_id: a.task_id, attempt: a.attempt });
             canonicalTaskResult(result, { task_id: a.task_id, attempt: a.attempt, result_status: "cancelled" });
-            if (a.status !== "cancelled" || task?.status !== "cancelled" || task.current_attempt !== a.attempt || !validId3(a.queued_cancel_id) || a.queued_cancel_request_digest !== requestDigest || !Number.isSafeInteger(a.queued_cancel_event_cursor) || a.queued_cancel_event_cursor < 1 || !validText2(a.queued_cancelled_at, 64) || Number.isNaN(Date.parse(a.queued_cancelled_at)) || canonical2(result) !== a.queued_cancel_result_json || a.queued_cancel_result_digest !== digest2(a.queued_cancel_result_json) || result.task_id !== a.task_id || result.attempt !== a.attempt || result.status !== "cancelled" || result.finished_at !== a.queued_cancelled_at || result.started_at !== null || result.needs_master_decision !== false) fail("queued_cancel_projection_mismatch");
+            if (a.status !== "cancelled" || task?.status !== "cancelled" || task.current_attempt !== a.attempt || !validId3(a.queued_cancel_id) || a.queued_cancel_request_digest !== requestDigest || !Number.isSafeInteger(a.queued_cancel_event_cursor) || a.queued_cancel_event_cursor < 1 || !validText2(a.queued_cancelled_at, 64) || Number.isNaN(Date.parse(a.queued_cancelled_at)) || canonical3(result) !== a.queued_cancel_result_json || a.queued_cancel_result_digest !== digest2(a.queued_cancel_result_json) || result.task_id !== a.task_id || result.attempt !== a.attempt || result.status !== "cancelled" || result.finished_at !== a.queued_cancelled_at || result.started_at !== null || result.needs_master_decision !== false) fail("queued_cancel_projection_mismatch");
             if (a.queued_cancel_operation_id === null) {
               if (this.#db.prepare("SELECT operation_id FROM manager_operations WHERE operation_kind='attempt_lifecycle' AND task_id=? AND attempt=?").get(a.task_id, a.attempt)) fail("queued_cancel_operation_missing");
             } else {
@@ -7974,7 +8226,7 @@ var init_store = __esm({
               "previous_worker_identity_digest",
               "task_id"
             ];
-            if (!c || Object.getPrototypeOf(c) !== Object.prototype || Object.keys(c).sort().join("|") !== continuationKeys.join("|") || c.contract !== "wp6b2b-continue-v1" || canonical2(c) !== a.continuation_json || a.continuation_digest !== digest2(a.continuation_json) || c.operation_id !== a.continuation_operation_id || c.task_id !== a.task_id || c.previous_attempt !== a.attempt - 1 || !validId3(c.operation_id) || c.operation_id !== c.operation_id.trim() || !validId3(c.previous_operation_id) || typeof c.feedback !== "string" || !c.feedback.trim() || c.feedback.includes("\0") || !Array.isArray(c.additional_requirements) || c.additional_requirements.some((value) => typeof value !== "string") || !Number.isSafeInteger(c.previous_generation) || c.previous_generation < 1 || !Number.isSafeInteger(c.previous_revision) || c.previous_revision < 1 || !validId3(c.previous_claim_id) || typeof c.previous_worker_identity_digest !== "string" || !/^[0-9a-f]{64}$/u.test(c.previous_worker_identity_digest)) fail("continue_history_mismatch");
+            if (!c || Object.getPrototypeOf(c) !== Object.prototype || Object.keys(c).sort().join("|") !== continuationKeys.join("|") || c.contract !== "wp6b2b-continue-v1" || canonical3(c) !== a.continuation_json || a.continuation_digest !== digest2(a.continuation_json) || c.operation_id !== a.continuation_operation_id || c.task_id !== a.task_id || c.previous_attempt !== a.attempt - 1 || !validId3(c.operation_id) || c.operation_id !== c.operation_id.trim() || !validId3(c.previous_operation_id) || typeof c.feedback !== "string" || !c.feedback.trim() || c.feedback.includes("\0") || !Array.isArray(c.additional_requirements) || c.additional_requirements.some((value) => typeof value !== "string") || !Number.isSafeInteger(c.previous_generation) || c.previous_generation < 1 || !Number.isSafeInteger(c.previous_revision) || c.previous_revision < 1 || !validId3(c.previous_claim_id) || typeof c.previous_worker_identity_digest !== "string" || !/^[0-9a-f]{64}$/u.test(c.previous_worker_identity_digest)) fail("continue_history_mismatch");
             const prior = this.#db.prepare("SELECT * FROM manager_operations WHERE operation_id=? AND operation_kind='attempt_lifecycle'").get(c.previous_operation_id);
             const op = this.#db.prepare("SELECT * FROM manager_operations WHERE operation_kind='attempt_lifecycle' AND task_id=? AND attempt=?").get(a.task_id, a.attempt);
             const priorAttempt = this.#db.prepare("SELECT status,generation FROM attempts WHERE task_id=? AND attempt=?").get(a.task_id, c.previous_attempt);
@@ -8071,7 +8323,7 @@ var init_store = __esm({
                     identity_evidence_digest: evidence.identity_evidence_digest
                   };
                   if (event.sequence <= claims[0].event.sequence || event.from_phase !== "running" || event.to_phase !== "running" || evidence.claim_id !== o.claim_id || evidence.worker_identity_digest !== o.claim_worker_identity_digest || evidence.evidence_digest !== digest2(intent)) fail("cancellation_intent_history_mismatch");
-                  const identityJson = canonical2(worker);
+                  const identityJson = canonical3(worker);
                   if (digest2(identityJson) !== o.claim_worker_identity_digest || worker.process_id !== launchIdentity.process_id || worker.start_fingerprint !== launchIdentity.start_fingerprint) fail("cancellation_identity_history_mismatch");
                 }
                 if (cancellationVerifications.length) {
@@ -8415,7 +8667,7 @@ __export(lifecycle_gate_exports, {
   openClaimOnlyDriver: () => openClaimOnlyDriver,
   readAllLifecycleEventsForRecovery: () => readAllLifecycleEventsForRecovery
 });
-import { createHash as createHash13, randomUUID as randomUUID6 } from "node:crypto";
+import { createHash as createHash15, randomUUID as randomUUID6 } from "node:crypto";
 import { existsSync as existsSync13 } from "node:fs";
 function readAllLifecycleEventsForRecovery(port, operationId) {
   const pageSize = 200;
@@ -9761,7 +10013,7 @@ function asRecord4(value) {
   return value;
 }
 function sha2562(value) {
-  return createHash13("sha256").update(value, "utf8").digest("hex");
+  return createHash15("sha256").update(value, "utf8").digest("hex");
 }
 function positive3(value, code) {
   if (!Number.isSafeInteger(value) || Number(value) < 1) throw new LifecycleGateError(code);
@@ -9965,11 +10217,11 @@ function canonicalJson2(value) {
   throw new LifecycleGateError("cleanup_evidence_not_canonicalizable");
 }
 function digestProvenance(value) {
-  const canonical3 = JSON.stringify({
+  const canonical4 = JSON.stringify({
     bridge: { path: value.bridge.path, sha256: value.bridge.sha256 },
     worker: { path: value.worker.path, sha256: value.worker.sha256 }
   });
-  return sha2562(canonical3);
+  return sha2562(canonical4);
 }
 function interactionKey(taskId, requestId) {
   return `${taskId}\0${requestId}`;
@@ -10006,7 +10258,7 @@ var sqlite_lifecycle_mcp_authority_exports = {};
 __export(sqlite_lifecycle_mcp_authority_exports, {
   SqliteLifecycleMcpAuthority: () => SqliteLifecycleMcpAuthority
 });
-import { createHash as createHash14, randomBytes } from "node:crypto";
+import { createHash as createHash16, randomBytes } from "node:crypto";
 function validateTaskPackage2(task) {
   if (!task || typeof task.task_id !== "string" || !task.task_id.trim() || task.task_id.length > 128 || typeof task.workspace !== "string" || !task.workspace.trim() || !pathIsAbsolute(task.workspace) || typeof task.objective !== "string" || !task.objective.trim() || !Array.isArray(task.requirements) || !Array.isArray(task.allowed_paths) || !Array.isArray(task.forbidden_paths) || !Array.isArray(task.acceptance_criteria) || !Array.isArray(task.test_commands)) {
     throw new TaskManagerError("TASK_INVALID", "invalid SQLite TaskPackage");
@@ -10055,7 +10307,7 @@ function encodeCursor(taskId, cursor) {
   return Buffer.from(JSON.stringify({ v: 1, task_id: taskId, cursor }), "utf8").toString("base64url");
 }
 function operationIdFor(taskId, attempt) {
-  const digest3 = createHash14("sha256").update(`${taskId}\0${attempt}`, "utf8").digest("hex").slice(0, 32);
+  const digest3 = createHash16("sha256").update(`${taskId}\0${attempt}`, "utf8").digest("hex").slice(0, 32);
   return `sqlite-${digest3}`;
 }
 function queueKey(taskId, attempt) {
@@ -10422,6 +10674,15 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
         for (const key of active) {
           const separator = key.lastIndexOf("\0");
           const taskId = key.slice(0, separator);
+          const attempt = Number(key.slice(separator + 1));
+          let alreadyTerminal = false;
+          try {
+            const snapshot = this.#readSnapshot(taskId);
+            const projection = asRecord5(snapshot.projection);
+            alreadyTerminal = Number(snapshot.attempt.attempt) === attempt && isTerminal(taskStatus(projection.status));
+          } catch {
+          }
+          if (alreadyTerminal) continue;
           try {
             const status = await waitUntilDeadline(this.cancelTask(taskId), deadline);
             if (status.status === "running" || status.status === "queued") failures.push(`${taskId}:shutdown_cancel_unconfirmed`);
@@ -10442,6 +10703,20 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
             await waitUntilDeadline(Promise.allSettled(this.#activeRuns.values()).then(() => void 0), deadline);
           } catch {
             failures.push("root:shutdown_worker_wait_timeout");
+          }
+        }
+        for (const key of active) {
+          const separator = key.lastIndexOf("\0");
+          const taskId = key.slice(0, separator);
+          const attempt = Number(key.slice(separator + 1));
+          try {
+            const snapshot = this.#readSnapshot(taskId);
+            const projection = asRecord5(snapshot.projection);
+            const operation = snapshot.operation ? asRecord5(snapshot.operation) : null;
+            const released = Number(snapshot.attempt.attempt) === attempt && isTerminal(taskStatus(projection.status)) && operation?.phase === "released";
+            if (!released) failures.push(`${taskId}:shutdown_release_unverified`);
+          } catch {
+            failures.push(`${taskId}:shutdown_release_unknown`);
           }
         }
         if (failures.length > 0) {
@@ -10542,7 +10817,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
       }
       #makeExecutionObservation(state, taskId, snapshot, reason, observedAt) {
         const operation = snapshot.operation;
-        const reference = createHash14("sha256").update(canonicalJson3({
+        const reference = createHash16("sha256").update(canonicalJson3({
           task_id: taskId,
           attempt: Number(snapshot.projection.current_attempt),
           operation_id: operation?.operation_id ?? null,
@@ -32686,7 +32961,7 @@ function resolveExistingDirectory(input, field) {
 // src/manager/task-manager.ts
 init_task_store();
 import path10 from "node:path";
-import { createHash as createHash3 } from "node:crypto";
+import { createHash as createHash5 } from "node:crypto";
 import { existsSync as existsSync7, statSync as statSync5, writeFileSync as writeFileSync4 } from "node:fs";
 
 // src/manager/normalize.ts
@@ -33645,9 +33920,9 @@ var BridgeTaskManager = class _BridgeTaskManager {
           workspace: existing.workspace,
           ...existing.worktree_path === void 0 ? { worktree_path: void 0 } : { worktree_path: existing.worktree_path }
         };
-        const fingerprint2 = createHash3("sha256").update(stableJson2(normalizedRetry)).digest("hex");
+        const fingerprint2 = createHash5("sha256").update(stableJson2(normalizedRetry)).digest("hex");
         const previous = this.#store.readSubmission(task.task_id);
-        const existingFingerprint = previous?.fingerprint ?? createHash3("sha256").update(stableJson2(existing)).digest("hex");
+        const existingFingerprint = previous?.fingerprint ?? createHash5("sha256").update(stableJson2(existing)).digest("hex");
         if (!sameWorkspace || !sameExecutionPath || existingFingerprint !== fingerprint2) {
           throw new TaskManagerError("TASK_ID_CONFLICT", `task_id already belongs to a different request: ${task.task_id}`);
         }
@@ -33680,7 +33955,7 @@ var BridgeTaskManager = class _BridgeTaskManager {
         workspace: workspaceRef.sourcePath ?? workspaceRef.canonicalPath,
         ...workspaceRef.mode === "worktree" ? { worktree_path: workspaceRef.canonicalPath } : { worktree_path: void 0 }
       };
-      const fingerprint = createHash3("sha256").update(stableJson2(normalizedTask)).digest("hex");
+      const fingerprint = createHash5("sha256").update(stableJson2(normalizedTask)).digest("hex");
       try {
         this.#store.createTask(normalizedTask, createdAt);
         this.#store.writeWorkspaceRef(task.task_id, workspaceRef);
@@ -33931,7 +34206,7 @@ var BridgeTaskManager = class _BridgeTaskManager {
         throw new TaskManagerError("TASK_INVALID", "additional_requirements must be an array of strings");
       }
       const status = this.#store.readStatus(taskId);
-      const continueFingerprint = createHash3("sha256").update(stableJson2({ feedback: input.feedback, additional_requirements: input.additional_requirements ?? [] })).digest("hex");
+      const continueFingerprint = createHash5("sha256").update(stableJson2({ feedback: input.feedback, additional_requirements: input.additional_requirements ?? [] })).digest("hex");
       if (input.operation_id !== void 0 && (typeof input.operation_id !== "string" || !input.operation_id.trim() || input.operation_id.length > 128)) {
         throw new TaskManagerError("TASK_INVALID", "operation_id must be a non-empty string up to 128 characters");
       }
@@ -34897,7 +35172,7 @@ var defaultModelSchema = object({
 });
 
 // src/ledger/mcp.ts
-import { createHash as createHash4 } from "node:crypto";
+import { createHash as createHash6 } from "node:crypto";
 init_errors();
 
 // src/ledger/bridge.ts
@@ -35287,7 +35562,7 @@ function registerLedgerTools(server, options) {
   });
 }
 function fingerprintOf(value) {
-  return createHash4("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
+  return createHash6("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
 }
 
 // src/feedback/renderer.ts
@@ -35625,7 +35900,7 @@ import { execFileSync } from "node:child_process";
 import path13 from "node:path";
 
 // src/runtime/account-provider.ts
-import { createHash as createHash5 } from "node:crypto";
+import { createHash as createHash7 } from "node:crypto";
 import { existsSync as existsSync9, readFileSync as readFileSync8 } from "node:fs";
 import path12 from "node:path";
 function buildAccountProviderPayload(config2) {
@@ -35661,7 +35936,7 @@ function buildAccountProviderPayload(config2) {
   const resolvedBuiltinPath = path12.resolve(config2.providerBuiltinConfigFile);
   return {
     revision: `account:codex-zcode-bridge:${Date.now()}`,
-    basedOnZCodeBuiltinRevision: `zcode-builtin:${revision}:${createHash5("sha256").update(resolvedBuiltinPath).digest("hex")}`,
+    basedOnZCodeBuiltinRevision: `zcode-builtin:${revision}:${createHash7("sha256").update(resolvedBuiltinPath).digest("hex")}`,
     providers,
     states
   };
@@ -35999,7 +36274,7 @@ function safeError(error2) {
 // src/runtime/model-settings.ts
 init_child_env();
 import { spawn as spawn4 } from "node:child_process";
-import { createHash as createHash6, randomUUID as randomUUID4 } from "node:crypto";
+import { createHash as createHash8, randomUUID as randomUUID4 } from "node:crypto";
 import { mkdir, readFile as readFile2, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { homedir as homedir3 } from "node:os";
 import path14 from "node:path";
@@ -36422,11 +36697,11 @@ function modelCatalogCachePath(workspace, config2, env, settingsDirectory) {
     personal: config2.providerPersonalConfigFile,
     zcodeHome: env.ZCODE_HOME ?? ""
   });
-  const key = createHash6("sha256").update(identity).digest("hex");
+  const key = createHash8("sha256").update(identity).digest("hex");
   return path14.join(settingsDirectory, "model-catalog", `${key}.json`);
 }
 async function modelCatalogSourceFingerprint(config2, env) {
-  const digest3 = createHash6("sha256");
+  const digest3 = createHash8("sha256");
   for (const file of [config2.providerBuiltinConfigFile, config2.providerPersonalConfigFile]) {
     digest3.update(file);
     digest3.update(await readFile2(file));

@@ -1,15 +1,23 @@
-# ADR-016：JSON 到 SQLite Task Authority 的停机切换
+# ADR-016（v2）：JSON 到 SQLite Task Authority 的停机切换
 
 > Status: DECISION
-> Decision: ACCEPTED — OWNER DIRECTIVE 2026-10-30
-> Date: 2026-10-30
+> Decision: ACCEPTED — OWNER DIRECTIVE 2026-11-01
+> Date: 2026-10-30（2026-11-01 修订）
+> Version: 2
 > Scope: Task Authority only；Settings 与 Ledger 保持各自既有权威边界
+
+## Version History
+
+- **v1（2026-10-30）：** 冻结停机切换、staging 回读、空 SQLite Authority 与失败保护；曾计划导入并校验历史 Task 生命周期。
+- **v2（2026-11-01）：** Owner 收缩迁移范围。旧 JSON 仅完整归档，不导入 SQLite；SQLite 从空数据库管理切换后的新任务。历史 Result、Interaction、`respawn.claim` 与 Workspace 数据不再作为 SQLite 转换阻断项。保留停机确认、活动进程清理、归档完整性、Authority 唯一性、原子发布和切换失败保护。
 
 ## Context
 
 ADR-014 已冻结单一 Task Authority、停写迁移、staging 回读和不可回退 JSON 的原则，但当前候选把“没有 SQLite 文件”误当成 fresh install。只要 SQLite 根为空，非空 JSON `.tasks` 就可能被静默忽略并创建空库，形成数据丢失。
 
 Owner 已明确选择停机切换：SQLite 将成为唯一 Task 持久化 Authority。项目不实现 JSON/SQLite 双写、热切换或长期双后端兼容。
+
+2026-11-01 Owner 进一步收缩迁移范围：旧 JSON 只作为完整、只读归档保留过去；新的 SQLite 数据根从空数据库开始，只管理切换后的新任务。历史 Task、Attempt、Result、Event、Interaction 和 Workspace 不导入 SQLite，也不要求通过 SQLite 生命周期校验。
 
 ## Runtime Gate
 
@@ -21,20 +29,46 @@ Owner 已明确选择停机切换：SQLite 将成为唯一 Task 持久化 Author
 
 1. **正常启动不执行隐式迁移。** 无 SQLite 数据库且 legacy JSON Task 根非空时，启动必须 fail closed，并要求管理员显式执行停机迁移。不得把“缺少数据库文件”解释成 fresh install。
 2. **Fresh Install 必须有持久收据。** 仅在 legacy JSON Task 根不存在或没有可迁移内容时，才可由显式 fresh-install 入口初始化；数据库内写入单次 `fresh_install_receipt`。缺失收据的 SQLite 根不得作为生产 Authority 启动。
-3. **迁移只接受 sealed snapshot。** 迁移前必须停止 admission、排空或确认全部 Worker 已退出，并封存 JSON writer fence。迁移工具拒绝活动 writer、running Task、`cleanup_unverified`、未知文件、符号链接、损坏 JSON、分叉投影和孤立记录。
-4. **保留完整字节。** 迁移数据库保存经路径校验的完整 legacy Artifact 字节、大小和 SHA-256。未知文件不会被忽略；迁移在该文件被明确归类并纳入 allowlist 前失败。
-5. **保留业务投影。** queued Task 以新的 Attempt 继续调度；Terminal Task 的历史 Result 和公开 Event 必须可读。迁移不得伪造历史 Claim、Operation、Launch、Worker identity 或 Lifecycle Event。
-6. **staging、回读、发布。** 迁移先构建私有 staging SQLite 数据库，在一个事务中导入可验证快照，再由独立打开路径回读 Task、Attempt、Result、Event、Artifact、计数与摘要。回读及源快照复核通过后，写入不可变 `authority_switch` 收据并原子发布为新数据库。
-7. **切换后不读旧权威。** `authority_switch` 存在后，SQLite 是唯一在线 Task Authority。SQLite 缺失、损坏、busy、schema 不匹配或结果未知时，启动和写入必须停止；不得自动恢复旧 JSON 快照，也不得把旧 JSON 当作逐字段 fallback。
-8. **数据回退。** SQLite 接受新写入后，若必须回到 JSON，只能另行设计并验收完整回迁或重放，保留迁移后的 Claim、Operation、Result、Recovery 和清理事实；不能直接恢复切换前的 JSON 快照。
+3. **停止旧 Authority 的全部生产者。** 切换前必须停止新 admission，正常结束或安全处置运行中的 Worker，并封存 JSON writer fence。无法证明 writer、Worker 或 runtime identity 已退出时保持 blocked。
+4. **原始字节归档。** `.tasks` 的全部普通文件、目录和链接元数据必须复制到独立归档，并记录相对路径、类型、字节数、SHA-256、source root 和 Manifest digest。归档不跟随链接目标，不读取或修改 Workspace 指向的外部工作区，不解析 Task、Attempt、Result、Event、Interaction 或 Workspace 的业务语义。
+5. **全新 SQLite。** 发布目标必须是一个新的空 SQLite 数据根。迁移不从 JSON 导入历史 Task、Attempt、Result、Event、Interaction、Workspace 或 Artifact 投影；历史 queued/running Task 不在 SQLite 中恢复、Continue 或重新派发。
+6. **收据绑定。** SQLite 的 `authority_switch` 收据必须绑定 migration/cutover identity、原始 source root digest、archive directory、archive manifest digest、source tasks root、文件数、字节数和 runtime roster。数据库内的历史投影表必须为空。
+7. **staging、回读、原子发布。** 迁移先构造私有 staging SQLite 数据库，写入空 Authority 收据与容量策略，再由独立打开路径回读收据、空历史投影和容量状态。发布前再次验证原始归档与 sealed source 未漂移，随后使用既有 write-through rename 和 pending/published marker 原子发布。
+8. **切换后不读旧权威。** `authority_switch` 存在后，SQLite 是唯一在线 Task Authority。SQLite 缺失、损坏、busy、schema 不匹配或结果未知时，启动和写入必须停止；不得自动恢复旧 JSON 快照，也不得把旧 JSON 当作 fallback。
+9. **数据回退。** SQLite 接受新写入后，若必须回到 JSON，只能另行设计并验收包含 SQLite 新写入的完整回迁或重放；不能直接恢复切换前的 JSON 快照。
+
+### Superseded: Narrow Historical Result Exception — Owner Approval 2026-10-31
+
+该政策属于 2026-10-31 的历史迁移实现，已由 2026-11-01 的原始归档方案取代。保留本节用于追溯，不构成当前迁移要求：
+
+| 存储路径 | 内部绑定 | SHA-256 | Bytes |
+|---|---:|---|---:|
+| `CAD2BIM_FULL_AUDIT_RM02_001/attempts/3/result.json` | Attempt 2 | `539c76d236155688feb906a8dfb9764f92a2f76ff8e16b97e6177c2e7bd95530` | 13,981 |
+| `CAD2BIM_FULL_AUDIT_RM02_001/attempts/4/result.json` | Attempt 3 | `ec6faea33c6b3b7c299b2c4a6094c431b670d807e00398ed03364ec5a1c61cd3` | 12,989 |
+| `PROJECT-ALIGNMENT-DOC-HYGIENE-CLOSE-1-COMMIT-20260930/result.json` | Attempt 1；当时当前 Attempt 为 2，Attempt 2 Result 缺失 | `494235a230178fe2aeb0128210bba0cf8fec5029202b07b0a1b3648476d3e12e` | 6,247 |
+
+旧实现对三处异常、旧格式 Interaction、`respawn.claim`、`worker-stderr-repro.log` 和 `.tasks/workspaces/` 的差异处理记录必须保留为历史证据，但当前切换不再逐项白名单、重映射、修复或导入这些数据。
+
+## Stage 2 Acceptance Under v2
+
+Stage 2 隔离预演只在生产数据的隔离副本上执行，并同时满足：
+
+1. 当前支持的 JSON Authority 参与注册后再正常退出，`--prepare` 能证明全部 writer、已开始 Attempt、Worker 与 Runtime identity 已退出并进入 `sealed`；
+2. `.tasks` 的全部普通文件、目录和链接元数据进入独立 raw archive，清单、文件数、字节数和 source identity 可复核；Workspace 链接不被跟随；
+3. `authority_switch` 绑定 migration、source、archive 与 runtime roster，SQLite 中的历史 Task、Attempt、Result、Event、Artifact、Interaction 和 historical-exception 投影均为零；
+4. 全新 SQLite Authority 能创建和管理切换后的新 Task，并覆盖 Result、Cleanup、Continue 与 Manager 重启恢复；这些行为不读取或续接旧 JSON Task；
+5. 归档、source、staging 回读或 marker 任一步不一致都保持 fail closed；SQLite 接受新写入后不得恢复旧 JSON 快照；
+6. 任何真实生产 `--apply`、Authority 切换、Push、Merge、Tag 或 Release 仍需 Owner 单独授权。
 
 ## Required Evidence
 
 - schema 版本、migration run 与 authority switch receipt 的完整性校验；
-- source manifest 在扫描、导入和发布前保持一致；
-- staging DB 的独立回读结果与源 manifest 一致；
-- terminal Result/Event 与 queued Task 的可读性；
-- running、cleanup unknown、unknown file、claimed snapshot 和 source drift 均 fail closed；
+- JSON writer fence、Worker 退出证明与 runtime roster 在发布前保持一致；
+- raw archive 在创建、staging 回读和最终发布前均与 sealed source 一致；
+- Workspace 链接和 Git 指针只作为原始条目记录，不跟随目标、不修改目标；
+- staging 与最终 SQLite 的 Task、Attempt、Result、Event、Artifact 投影为空；
+- `authority_switch` 收据与 archive identity、source identity、runtime roster 一致；
+- source drift、archive tampering、pending marker、缺失 published marker 和损坏收据均 fail closed；
 - 无 receipt 的 SQLite 根以及“空 SQLite + 非空 JSON”组合均拒绝启动；
 - 迁移、损坏、恢复和回滚演练只使用隔离 root，不接触真实 `.tasks` 或 Provider。
 
@@ -43,7 +77,7 @@ Owner 已明确选择停机切换：SQLite 将成为唯一 Task 持久化 Author
 1. 在现有 JSON `Authority` 仍运行时执行 `npm run migrate:json-to-sqlite -- --prepare --json-data-root <absolute-json-root>`。该步骤关闭新 admission 和 dispatch，并输出仍未退出的 writer 或 Task blocker；未 `sealed` 时以非零码退出。
 2. 正常停止 MCP Host，等待已知 Manager 和 Worker 退出。不得根据进程名终止未知进程，也不得把未知身份改判为退出。
 3. 再次执行同一 `--prepare` 命令。只有在全部 writer、开始过的 Attempt、Worker 与 Runtime identity 均被证明退出后才进入 `sealed`；失败时保持 `draining` 和原 blocker。
-4. 运行 `npm run migrate:json-to-sqlite -- --apply --json-data-root <absolute-json-root> --sqlite-root <absolute-sqlite-root> --backup-root <absolute-archive-root>`。`--apply` 先创建或逐字节核验完整 JSON history archive，再把迁移源绑定到该 archive digest；archive 不完整或源在 archive 后变化时不得创建 SQLite Authority。
+4. 运行 `npm run migrate:json-to-sqlite -- --apply --json-data-root <absolute-json-root> --sqlite-root <absolute-sqlite-root> --backup-root <absolute-archive-root>`。`--apply` 先创建或逐字节核验 raw JSON history archive，再以该 archive 和 sealed source 身份初始化空 SQLite Authority；archive 不完整、Workspace 目标被跟随或源在 archive 后变化时不得发布 SQLite Authority。
 5. 仅在 `authority_switch` 回读与启动验收通过后切换部署配置。SQLite 接受新写入后不得恢复旧 JSON 快照；回退只能通过另行验收的完整回迁或重放。
 
 ### Pending marker recovery
@@ -63,6 +97,6 @@ Windows 上 transfer fence、数据库发布和 published marker 的最终转换
 ## Consequences
 
 - 本次候选可以删除“缺库即空库”的隐式行为。
-- Workspace Admission 仍关闭；本决策不解决 Workspace identity。
-- Legacy JSON Artifact 在 SQLite 中保留为审计材料，不形成双读 Authority。
+- Workspace Admission 按 ADR-017 的单用户可信本地边界执行必需检查；多用户、远程和同账户敌对文件替换不在 v1 支持范围。
+- Legacy JSON 只保留在独立 raw archive 中；SQLite 不保存历史 Task/Result/Event 投影。
 - 完整迁移与回退验收完成前，生产配置继续保持 `JSON_ONLY / SQLITE DISABLED`。

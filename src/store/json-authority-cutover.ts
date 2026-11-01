@@ -12,6 +12,7 @@ import {
   readdirSync,
   realpathSync,
   rmSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -22,9 +23,18 @@ import {
 } from "../runtime/durable-file-system.js";
 import {
   readJsonHistoryArchiveSnapshot,
+  verifyJsonHistoryArchiveSource,
   type JsonHistoryArchiveIdentity,
   type JsonHistoryArchiveSnapshot,
 } from "./json-history-archive.js";
+import {
+  HISTORICAL_RESULT_EXCEPTIONS,
+  annotateHistoricalResultException,
+  historicalResultExceptionArchiveMatches,
+  historicalResultExceptionFor,
+  historicalResultExceptionSetDigest,
+  historicalResultExceptionTaskIds,
+} from "./json-history-result-exceptions.mjs";
 import { jsonWriterFenceState } from "./json-writer-quiescence.js";
 import {
   loadLifecycleCandidateModules,
@@ -120,6 +130,23 @@ export interface JsonAuthorityEvent {
   readonly artifact_id: string;
 }
 
+export interface JsonAuthorityHistoricalException {
+  readonly exception_id: string;
+  readonly task_id: string;
+  readonly stored_attempt: number;
+  readonly internal_attempt: number;
+  readonly relative_path: string;
+  readonly artifact_id: string;
+  readonly sha256: string;
+  readonly byte_length: number;
+  readonly archive_anomaly: {
+    readonly code: string;
+    readonly path: string;
+    readonly record_type: string;
+    readonly detail: string;
+  };
+}
+
 export interface JsonAuthoritySourceManifest {
   readonly root_digest: string;
   readonly manifest_digest: string;
@@ -129,6 +156,8 @@ export interface JsonAuthoritySourceManifest {
   readonly artifact_bytes: number;
   readonly result_count: number;
   readonly event_count: number;
+  readonly historical_exception_count: number;
+  readonly historical_exception_digest: string;
 }
 
 export interface JsonAuthoritySnapshot {
@@ -144,6 +173,7 @@ export interface JsonAuthoritySnapshot {
   readonly artifacts: readonly JsonAuthorityArtifact[];
   readonly results: readonly JsonAuthorityResult[];
   readonly events: readonly JsonAuthorityEvent[];
+  readonly historical_exceptions: readonly JsonAuthorityHistoricalException[];
 }
 
 export interface JsonAuthorityScan {
@@ -176,7 +206,24 @@ export interface PublishJsonAuthorityResult {
   readonly artifact_bytes: number;
   readonly result_count: number;
   readonly event_count: number;
+  readonly historical_exception_count: number;
+  readonly historical_exception_digest: string;
   readonly final_event_cursor: number;
+}
+
+interface RawJsonArchiveCutoverSnapshot {
+  readonly schema_version: 1;
+  readonly migration_id: string;
+  readonly cutover_id: string;
+  readonly protocol_version: typeof SQLITE_CUTOVER_PROTOCOL_VERSION;
+  readonly verifier_version: typeof SQLITE_CUTOVER_VERIFIER_VERSION;
+  readonly runtime_roster_digest: string;
+  readonly source: {
+    readonly root_digest: string;
+    readonly manifest_digest: string;
+    readonly manifest_json: string;
+  };
+  readonly archive: JsonHistoryArchiveIdentity;
 }
 
 interface ScannedFile {
@@ -195,6 +242,7 @@ interface TaskScan {
   readonly files: ReadonlyMap<string, ScannedFile>;
   readonly results: readonly JsonAuthorityResult[];
   readonly events: readonly JsonAuthorityEvent[];
+  readonly historical_exceptions: readonly JsonAuthorityHistoricalException[];
 }
 
 export class JsonAuthorityCutoverError extends Error {
@@ -519,6 +567,7 @@ function scanTask(taskId: string, taskFiles: readonly ScannedFile[]): TaskScan {
   }));
   const artifactIdForPath = new Map(artifacts.map((artifact) => [artifact.relative_path, artifact.artifact_id]));
   const results: JsonAuthorityResult[] = [];
+  const historicalExceptions: JsonAuthorityHistoricalException[] = [];
   const attempts: JsonAuthorityTask["attempts"][number][] = [];
 
   for (let attempt = 1; attempt <= currentAttempt; attempt += 1) {
@@ -529,15 +578,31 @@ function scanTask(taskId: string, taskFiles: readonly ScannedFile[]): TaskScan {
     let attemptStatus = attempt === currentAttempt ? currentStatus : "unknown";
     let createdAt = taskCreatedAt;
     if (resultFile) {
-      const result = parseResult(jsonRecord(resultFile.bytes, relativeResultPath), relativeResultPath, taskId, attempt);
-      attemptStatus = requiredString(result, "status", relativeResultPath);
-      if (typeof result.started_at === "string") createdAt = result.started_at;
-      results.push({
-        task_id: taskId,
+      const resultRecord = jsonRecord(resultFile.bytes, relativeResultPath);
+      const approvedException = historicalResultExceptionFor(
+        taskId,
         attempt,
-        result,
-        artifact_id: artifactIdForPath.get(relativeResultPath)!,
-      });
+        relativeResultPath,
+        resultFile.sha256,
+        resultFile.byte_length,
+      );
+      if (approvedException) {
+        if (requiredString(resultRecord, "task_id", relativeResultPath) !== taskId
+          || requiredAttempt(resultRecord, relativeResultPath) !== approvedException.internal_attempt) {
+          fail("historical_result_exception_identity_mismatch", { path: relativeResultPath });
+        }
+        historicalExceptions.push(annotateHistoricalResultException(approvedException));
+      } else {
+        const result = parseResult(resultRecord, relativeResultPath, taskId, attempt);
+        attemptStatus = requiredString(result, "status", relativeResultPath);
+        if (typeof result.started_at === "string") createdAt = result.started_at;
+        results.push({
+          task_id: taskId,
+          attempt,
+          result,
+          artifact_id: artifactIdForPath.get(relativeResultPath)!,
+        });
+      }
     } else if (attempt !== currentAttempt || currentStatus !== "queued") {
       fail("source_result_missing", { task_id: taskId, attempt });
     }
@@ -545,6 +610,14 @@ function scanTask(taskId: string, taskFiles: readonly ScannedFile[]): TaskScan {
   }
   if (results.some((result) => result.attempt === currentAttempt && currentStatus === "queued")) {
     fail("queued_task_has_result", { task_id: taskId });
+  }
+  if (historicalExceptions.length > 0) {
+    const expected = HISTORICAL_RESULT_EXCEPTIONS
+      .filter((entry) => entry.task_id === taskId);
+    const found = new Set(historicalExceptions.map((entry) => entry.exception_id));
+    if (expected.some((entry) => !found.has(entry.exception_id))) {
+      fail("historical_result_exception_set_incomplete", { task_id: taskId });
+    }
   }
 
   const eventsFile = byPath.get(`${taskId}/events.jsonl`);
@@ -563,24 +636,37 @@ function scanTask(taskId: string, taskFiles: readonly ScannedFile[]): TaskScan {
     files: byPath,
     results,
     events,
+    historical_exceptions: historicalExceptions,
   };
 }
 
-function buildManifest(files: readonly ScannedFile[], tasks: readonly TaskScan[]): JsonAuthoritySourceManifest {
+function buildManifest(
+  files: readonly ScannedFile[],
+  tasks: readonly TaskScan[],
+  historicalExceptions: readonly JsonAuthorityHistoricalException[],
+): JsonAuthoritySourceManifest {
   const fileRows = files.map((file) => ({
     path: file.relative_path,
     byte_length: file.byte_length,
     sha256: file.sha256,
   }));
   const rootDigest = sha256(stableJson(fileRows));
+  const historicalTaskIds = new Set(historicalResultExceptionTaskIds(historicalExceptions));
   const manifest = {
     schema_version: 1,
     files: fileRows,
     task_count: tasks.length,
     artifact_count: files.length,
     artifact_bytes: files.reduce((total, file) => total + file.byte_length, 0),
-    result_count: tasks.reduce((total, task) => total + task.results.length, 0),
-    event_count: tasks.reduce((total, task) => total + task.events.length, 0),
+    result_count: tasks
+      .filter((task) => !historicalTaskIds.has(task.task.task_id))
+      .reduce((total, task) => total + task.results.length, 0),
+    event_count: tasks
+      .filter((task) => !historicalTaskIds.has(task.task.task_id))
+      .reduce((total, task) => total + task.events.length, 0),
+    historical_exception_count: historicalExceptions.length,
+    historical_exception_digest: historicalResultExceptionSetDigest(historicalExceptions),
+    historical_exceptions: historicalExceptions,
   };
   const manifestJson = stableJson(manifest);
   return {
@@ -592,6 +678,8 @@ function buildManifest(files: readonly ScannedFile[], tasks: readonly TaskScan[]
     artifact_bytes: manifest.artifact_bytes,
     result_count: manifest.result_count,
     event_count: manifest.event_count,
+    historical_exception_count: manifest.historical_exception_count,
+    historical_exception_digest: manifest.historical_exception_digest,
   };
 }
 
@@ -603,18 +691,25 @@ export async function scanJsonAuthority(jsonDataRoot: string): Promise<JsonAutho
   const taskIds = [...new Set(files.map((file) => file.task_id).filter((value): value is string => value !== null))]
     .sort((left, right) => left.localeCompare(right, "en"));
   const taskFiles = new Map(taskIds.map((taskId) => [taskId, files.filter((file) => file.task_id === taskId)]));
-  const tasks = taskIds.map((taskId) => scanTask(taskId, taskFiles.get(taskId)!));
+  const scannedTasks = taskIds.map((taskId) => scanTask(taskId, taskFiles.get(taskId)!));
+  const historicalExceptions = scannedTasks
+    .flatMap((task) => task.historical_exceptions)
+    .sort((left, right) => left.relative_path.localeCompare(right.relative_path, "en"));
+  const historicalTaskIds = new Set(historicalResultExceptionTaskIds(historicalExceptions));
+  const tasks = scannedTasks
+    .filter((task) => !historicalTaskIds.has(task.task.task_id))
+    .map((task) => task.task);
   const artifacts = files.map((file) => ({
     artifact_id: `artifact-${sha256(file.relative_path).slice(0, 40)}`,
     relative_path: file.relative_path,
-    task_id: file.task_id,
-    attempt: file.attempt,
+    task_id: file.task_id !== null && historicalTaskIds.has(file.task_id) ? null : file.task_id,
+    attempt: file.task_id !== null && historicalTaskIds.has(file.task_id) ? null : file.attempt,
     kind: file.kind,
     byte_length: file.byte_length,
     sha256: file.sha256,
     content: file.bytes,
   }));
-  const manifest = buildManifest(files, tasks);
+  const manifest = buildManifest(files, scannedTasks, historicalExceptions);
   return {
     data_root: dataRoot,
     tasks_root: tasksRoot,
@@ -624,10 +719,15 @@ export async function scanJsonAuthority(jsonDataRoot: string): Promise<JsonAutho
       protocol_version: SQLITE_CUTOVER_PROTOCOL_VERSION,
       verifier_version: SQLITE_CUTOVER_VERIFIER_VERSION,
       source: manifest,
-      tasks: tasks.map((task) => task.task),
+      tasks,
       artifacts,
-      results: tasks.flatMap((task) => task.results),
-      events: tasks.flatMap((task) => task.events),
+      results: scannedTasks
+        .filter((task) => !historicalTaskIds.has(task.task.task_id))
+        .flatMap((task) => task.results),
+      events: scannedTasks
+        .filter((task) => !historicalTaskIds.has(task.task.task_id))
+        .flatMap((task) => task.events),
+      historical_exceptions: historicalExceptions,
     },
   };
 }
@@ -661,6 +761,20 @@ function removeOwnedStagingFiles(stagingPath: string): void {
   for (const candidate of [stagingPath, `${stagingPath}-wal`, `${stagingPath}-shm`]) {
     try { rmSync(candidate, { force: true }); }
     catch { /* Preserve the primary publish error; the marker remains fail-closed. */ }
+  }
+}
+
+function removeOwnedStagingSidecars(stagingPath: string): void {
+  const walPath = `${stagingPath}-wal`;
+  if (existsSync(walPath) && statSync(walPath).size !== 0) {
+    fail("migration_staging_wal_not_checkpointed", { staging_path: stagingPath });
+  }
+  for (const candidate of [walPath, `${stagingPath}-shm`]) {
+    if (!existsSync(candidate)) continue;
+    rmSync(candidate);
+    if (existsSync(candidate)) {
+      fail("migration_staging_sidecar_cleanup_unverified", { staging_path: stagingPath });
+    }
   }
 }
 
@@ -803,8 +917,13 @@ function sourceManifestFiles(manifest: JsonAuthoritySourceManifest): readonly So
 
 function assertArchiveMatchesScan(archive: JsonHistoryArchiveSnapshot, scan: JsonAuthorityScan): void {
   const { manifest, identity } = archive;
-  if (manifest.archive_status !== "archived" || manifest.anomalies.length !== 0
-    || manifest.tasks.some((task) => task.archive_status !== "archived")) {
+  const historicalExceptions = scan.snapshot.historical_exceptions;
+  const archiveAccepted = historicalExceptions.length === 0
+    ? manifest.archive_status === "archived"
+      && manifest.anomalies.length === 0
+      && manifest.tasks.every((task) => task.archive_status === "archived")
+    : historicalResultExceptionArchiveMatches(manifest);
+  if (!archiveAccepted) {
     fail("json_archive_incomplete");
   }
   if (!sameCanonicalPath(identity.source_tasks_root, scan.tasks_root)
@@ -847,6 +966,7 @@ function verifyReadback(
     readAttempt(taskId: string, attempt: number): Record<string, unknown> | null;
     readTaskLifecycle(taskId: string): Record<string, unknown> | null;
     readMigratedResult(taskId: string, attempt: number): Record<string, unknown> | null;
+    readMigratedHistoryExceptions(): readonly Record<string, unknown>[];
     readMigratedEvents(taskId: string): readonly Record<string, unknown>[];
     readTaskEvents(taskId: string, options?: { afterCursor?: number; limit?: number }): {
       events: readonly Record<string, unknown>[]; nextCursor: number; hasMore: boolean;
@@ -858,6 +978,23 @@ function verifyReadback(
   snapshot: JsonAuthoritySnapshot,
 ): void {
   const expectedEventCursors = new Map(snapshot.events.map((event, index) => [event, index + 1]));
+  const readHistoricalExceptions = store.readMigratedHistoryExceptions();
+  if (stableJson(readHistoricalExceptions) !== stableJson(snapshot.historical_exceptions)) {
+    fail("migration_historical_exception_readback_mismatch");
+  }
+  for (const exception of snapshot.historical_exceptions) {
+    if (store.readTask(exception.task_id) !== null
+      || store.readMigratedResult(exception.task_id, exception.stored_attempt) !== null) {
+      fail("historical_exception_promoted_to_online_authority", {
+        task_id: exception.task_id,
+        attempt: exception.stored_attempt,
+      });
+    }
+    const artifact = store.readMigratedArtifact(exception.relative_path);
+    if (!artifact || artifact.sha256 !== exception.sha256 || artifact.byte_length !== exception.byte_length) {
+      fail("historical_exception_artifact_readback_mismatch", { path: exception.relative_path });
+    }
+  }
   for (const task of snapshot.tasks) {
     const readTask = store.readTask(task.task_id);
     if (!readTask || stableJson(readTask) !== stableJson(task.task)) fail("migration_task_readback_mismatch", { task_id: task.task_id });
@@ -977,6 +1114,8 @@ function verifyReadback(
     || authority.cutover_id !== snapshot.cutover_id
     || authority.source_root_digest !== snapshot.source.root_digest
     || authority.source_manifest_digest !== snapshot.source.manifest_digest
+    || authority.historical_exception_count !== snapshot.source.historical_exception_count
+    || authority.historical_exception_digest !== snapshot.source.historical_exception_digest
     || authority.archive_directory !== snapshot.archive.archive_directory
     || authority.archive_manifest_digest !== snapshot.archive.manifest_digest
     || authority.archive_source_tasks_root !== snapshot.archive.source_tasks_root
@@ -995,20 +1134,109 @@ function closeStore(store: { close(): void }): void {
   store.close();
 }
 
+function rawCutoverSource(archive: JsonHistoryArchiveSnapshot, migrationId: string) {
+  const filesDigest = sha256(stableJson(archive.manifest.files));
+  const manifest = {
+    schema_version: 1,
+    kind: "raw_json_archive_cutover",
+    source_tasks_root: archive.identity.source_tasks_root,
+    source_files_digest: filesDigest,
+    archive_manifest_digest: archive.identity.manifest_digest,
+    archive_file_count: archive.identity.file_count,
+    archive_byte_count: archive.identity.byte_count,
+    task_count: 0,
+    artifact_count: archive.identity.file_count,
+    artifact_bytes: archive.identity.byte_count,
+    result_count: 0,
+    event_count: 0,
+    historical_exception_count: 0,
+    historical_exception_digest: historicalResultExceptionSetDigest([]),
+    historical_exceptions: [],
+    files: [],
+  };
+  const manifestJson = stableJson(manifest);
+  return {
+    source: {
+      root_digest: filesDigest,
+      manifest_digest: sha256(manifestJson),
+      manifest_json: manifestJson,
+    },
+    migrationId,
+  };
+}
+
+function verifyRawCutoverReadback(
+  store: {
+    readTask(taskId: string): Record<string, unknown> | null;
+    readMigratedResult(taskId: string, attempt: number): Record<string, unknown> | null;
+    readMigratedHistoryExceptions(): readonly Record<string, unknown>[];
+    readMigratedEvents(taskId: string): readonly Record<string, unknown>[];
+    readMigratedArtifact(relativePath: string): Record<string, unknown> | null;
+    readRecoverySnapshot(): unknown;
+    assertAuthorityReady(expectedRuntimeRosterDigest: string): Record<string, unknown>;
+    readSnapshot(): unknown;
+  },
+  snapshot: RawJsonArchiveCutoverSnapshot,
+): Record<string, unknown> {
+  if (store.readMigratedHistoryExceptions().length !== 0) {
+    fail("raw_cutover_imported_historical_exceptions");
+  }
+  const authority = store.assertAuthorityReady(snapshot.runtime_roster_digest);
+  if (authority.kind !== "authority_switch"
+    || authority.source_kind !== "raw_json_archive_cutover"
+    || authority.migration_id !== snapshot.migration_id
+    || authority.cutover_id !== snapshot.cutover_id
+    || authority.source_root_digest !== snapshot.source.root_digest
+    || authority.source_manifest_digest !== snapshot.source.manifest_digest
+    || authority.archive_directory !== snapshot.archive.archive_directory
+    || authority.archive_manifest_digest !== snapshot.archive.manifest_digest
+    || authority.archive_source_tasks_root !== snapshot.archive.source_tasks_root
+    || authority.archive_file_count !== snapshot.archive.file_count
+    || authority.archive_byte_count !== snapshot.archive.byte_count
+    || authority.historical_exception_count !== 0) {
+    fail("raw_cutover_authority_receipt_readback_mismatch");
+  }
+  const raw = autoRecord(store.readSnapshot());
+  const operations = Array.isArray(raw.operations) ? raw.operations : null;
+  const events = Array.isArray(raw.events) ? raw.events : null;
+  const capacity = autoRecord(raw.capacity);
+  if (!operations || operations.length !== 1
+    || operations[0]?.operation_kind !== "capacity_policy_change"
+    || !events || events.length !== 1
+    || capacity.policy_generation !== 1
+    || capacity.capacity_limit !== 8
+    || capacity.next_event_cursor !== 1) {
+    fail("raw_cutover_capacity_readback_mismatch");
+  }
+  return raw;
+}
+
 export async function publishJsonAuthority(options: PublishJsonAuthorityOptions): Promise<PublishJsonAuthorityResult> {
   const durability = options.durability ?? defaultDurableFileOperations;
   const databaseFileName = options.databaseFileName ?? "bridge.sqlite";
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/u.test(databaseFileName)
     || databaseFileName === "." || databaseFileName === "..") fail("invalid_database_file_name");
-  const firstScan = await scanJsonAuthority(options.jsonDataRoot);
-  const firstArchive = await loadVerifiedArchive(
+  const jsonRoot = ensurePlainDirectory(options.jsonDataRoot);
+  const tasksRoot = ensurePlainDirectory(path.join(jsonRoot, ".tasks"));
+  if (jsonWriterFenceState(jsonRoot) !== "sealed") fail("json_writer_root_not_sealed");
+  let firstArchive = await loadVerifiedArchive(
     options.archiveDirectory,
     options.expectedArchiveManifestDigest,
   );
-  assertArchiveMatchesScan(firstArchive, firstScan);
+  if (firstArchive.manifest.archive_mode !== "raw") fail("json_archive_mode_invalid");
+  try {
+    firstArchive = await verifyJsonHistoryArchiveSource(firstArchive.identity.archive_directory);
+  } catch (error) {
+    fail("json_archive_source_mismatch", {
+      cause: error instanceof Error ? error.message : String(error),
+    });
+  }
+  if (!sameCanonicalPath(firstArchive.identity.source_tasks_root, tasksRoot)) {
+    fail("json_archive_source_root_mismatch");
+  }
   const sqliteCandidate = canonicalizePotentialPath(options.sqliteRoot);
   assertRootsDisjoint(
-    firstScan.data_root,
+    jsonRoot,
     sqliteCandidate,
     firstArchive.identity.archive_directory,
   );
@@ -1027,11 +1255,15 @@ export async function publishJsonAuthority(options: PublishJsonAuthorityOptions)
   const migrationId = `json-migration-${randomUUID()}`;
   const cutoverId = `authority-cutover-${randomUUID()}`;
   const runtimeRosterDigest = currentSqliteRuntimeRosterDigest();
-  const snapshot: JsonAuthoritySnapshot = {
-    ...firstScan.snapshot,
+  const { source } = rawCutoverSource(firstArchive, migrationId);
+  const snapshot: RawJsonArchiveCutoverSnapshot = {
+    schema_version: 1,
     migration_id: migrationId,
     cutover_id: cutoverId,
+    protocol_version: SQLITE_CUTOVER_PROTOCOL_VERSION,
+    verifier_version: SQLITE_CUTOVER_VERIFIER_VERSION,
     runtime_roster_digest: runtimeRosterDigest,
+    source,
     archive: firstArchive.identity,
   };
   const modules: LifecycleCandidateModules = await loadLifecycleCandidateModules();
@@ -1043,7 +1275,7 @@ export async function publishJsonAuthority(options: PublishJsonAuthorityOptions)
       managedDataDirectory: true,
     });
     try {
-      store.importJsonAuthoritySnapshot(snapshot);
+      store.recordRawJsonArchiveCutover(snapshot);
       const port = modules.createPort(store);
       port.provisionCapacity({
         operation_id: `migrated-capacity-${migrationId}`,
@@ -1064,20 +1296,23 @@ export async function publishJsonAuthority(options: PublishJsonAuthorityOptions)
       allowUnpublishedCutover: true,
     });
     if (!staged) fail("migration_staging_open_failed");
-    try { verifyReadback(staged, snapshot); }
+    try { verifyRawCutoverReadback(staged, snapshot); }
     finally { closeStore(staged); }
+    removeOwnedStagingSidecars(stagingPath);
 
-    const finalSourceScan = await scanJsonAuthority(options.jsonDataRoot);
-    if (!sameManifest(finalSourceScan.manifest, firstScan.manifest)) {
-      fail("json_source_changed_before_publish");
-    }
     const finalArchive = await loadVerifiedArchive(
       options.archiveDirectory,
       options.expectedArchiveManifestDigest,
     );
-    assertArchiveMatchesScan(finalArchive, finalSourceScan);
     if (!sameArchiveIdentity(finalArchive.identity, firstArchive.identity)) {
       fail("json_archive_changed_before_publish");
+    }
+    try {
+      await verifyJsonHistoryArchiveSource(finalArchive.identity.archive_directory);
+    } catch (error) {
+      fail("json_source_changed_before_publish", {
+        cause: error instanceof Error ? error.message : String(error),
+      });
     }
 
     chmodSync(stagingPath, 0o600);
@@ -1087,8 +1322,8 @@ export async function publishJsonAuthority(options: PublishJsonAuthorityOptions)
       state: "authority_switch_receipt",
       migration_id: migrationId,
       cutover_id: cutoverId,
-      source_root_digest: firstScan.manifest.root_digest,
-      source_manifest_digest: firstScan.manifest.manifest_digest,
+      source_root_digest: source.root_digest,
+      source_manifest_digest: source.manifest_digest,
       archive: firstArchive.identity,
       database_file: databaseFileName,
       created_at: new Date().toISOString(),
@@ -1104,7 +1339,7 @@ export async function publishJsonAuthority(options: PublishJsonAuthorityOptions)
     });
     if (!pendingReadback) fail("migration_published_open_failed");
     try {
-      verifyReadback(pendingReadback, snapshot);
+      verifyRawCutoverReadback(pendingReadback, snapshot);
     } finally {
       closeStore(pendingReadback);
     }
@@ -1126,7 +1361,7 @@ export async function publishJsonAuthority(options: PublishJsonAuthorityOptions)
     let authority: Record<string, unknown> | undefined;
     try {
       published.assertAuthorityReady(runtimeRosterDigest);
-      verifyReadback(published, snapshot);
+      verifyRawCutoverReadback(published, snapshot);
       authority = autoRecord(published.readSnapshot());
     } finally {
       closeStore(published);
@@ -1138,14 +1373,16 @@ export async function publishJsonAuthority(options: PublishJsonAuthorityOptions)
       publication_receipt_path: publishedMarkerPath,
       migration_id: migrationId,
       cutover_id: cutoverId,
-      source_manifest_digest: firstScan.manifest.manifest_digest,
-      source_root_digest: firstScan.manifest.root_digest,
+      source_manifest_digest: source.manifest_digest,
+      source_root_digest: source.root_digest,
       archive: firstArchive.identity,
-      task_count: firstScan.manifest.task_count,
-      artifact_count: firstScan.manifest.artifact_count,
-      artifact_bytes: firstScan.manifest.artifact_bytes,
-      result_count: firstScan.manifest.result_count,
-      event_count: firstScan.manifest.event_count,
+      task_count: 0,
+      artifact_count: firstArchive.identity.file_count,
+      artifact_bytes: firstArchive.identity.byte_count,
+      result_count: 0,
+      event_count: 0,
+      historical_exception_count: 0,
+      historical_exception_digest: historicalResultExceptionSetDigest([]),
       final_event_cursor: Number(autoRecord(authority.capacity).next_event_cursor),
     };
     return result;
@@ -1171,7 +1408,10 @@ export function readJsonAuthorityManifest(dataRoot: string): JsonAuthoritySource
   const files = collectFiles(tasksRoot);
   const taskIds = [...new Set(files.map((file) => file.task_id).filter((value): value is string => value !== null))];
   const tasks = taskIds.map((taskId) => scanTask(taskId, files.filter((file) => file.task_id === taskId)));
-  return buildManifest(files, tasks);
+  const historicalExceptions = tasks
+    .flatMap((task) => task.historical_exceptions)
+    .sort((left, right) => left.relative_path.localeCompare(right.relative_path, "en"));
+  return buildManifest(files, tasks, historicalExceptions);
 }
 
 export async function assertSourceFileReadable(filePath: string): Promise<void> {

@@ -1330,11 +1330,14 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       }
     };
     let terminationStarted = false;
+    const traceRootExitedDecision = (): void => {
+      try { this.#onCleanupDecisionTrace?.("root_exited_branch"); } catch { /* Diagnostic callbacks cannot affect cleanup. */ }
+    };
     const closeWindowsTree = async (): Promise<WindowsTerminationReceipt | null> => {
       if (!child.pid) return null;
       const identity = entry.childIdentity?.pid === child.pid ? entry.childIdentity : null;
       if (!terminationStarted && entry.childExitSeen && identity?.fingerprint) {
-        try { this.#onCleanupDecisionTrace?.("root_exited_branch"); } catch { /* Diagnostic callbacks cannot affect cleanup. */ }
+        traceRootExitedDecision();
         // The original ChildProcess exit was observed; no signal can reach
         // that generation now. Do not start a termination transaction solely
         // to rediscover this fact. This is NOT a clean-tree verdict: the
@@ -1345,12 +1348,20 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       // A previous transaction may have observed members before failing.
       // Never replace such a failure with the original-child-exit shortcut.
       terminationStarted = true;
-      const terminated = await this.#terminateProcessTree(child.pid, {
-        graceMs: 500,
-        killWaitMs: 5_000,
-        expectedRootFingerprint: identity?.fingerprint ?? null,
-      });
-      return terminated.windows ?? null;
+      try {
+        const terminated = await this.#terminateProcessTree(child.pid, {
+          graceMs: 500,
+          killWaitMs: 5_000,
+          expectedRootFingerprint: identity?.fingerprint ?? null,
+        });
+        return terminated.windows ?? null;
+      } catch (error) {
+        // A transaction can discover the same root-exited race after its
+        // identity and enumeration work began. Keep the trace bound to the
+        // actual decision while preserving the original exception unchanged.
+        if ((error as { code?: unknown } | null)?.code === "process_tree_root_exited") traceRootExitedDecision();
+        throw error;
+      }
     };
     const close = async (): Promise<WindowsTerminationReceipt | null> => {
       if (closed) {
@@ -1372,20 +1383,24 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       if (process.platform === "win32" && childStillOnSpawnGeneration(generationChild)) {
         await identityCapture;
       }
+      if (process.platform === "win32" && child.pid) {
+        try {
+          // The turn result is already persisted before close() is called.
+          // Keep the original root generation alive until the identity-bound
+          // tree transaction has captured its receipt. Ending stdin first can
+          // let a short-lived app-server exit naturally and downgrade a valid
+          // cleanup to the weaker recorded-tree claimant-scan fallback.
+          return await closeWindowsTree();
+        } finally {
+          child.stdin.end();
+        }
+      }
       child.stdin.end();
       await new Promise<void>((resolve) => {
         const timer = setTimeout(() => resolve(), 1_000);
         timer.unref();
         child.once("close", () => { clearTimeout(timer); resolve(); });
       });
-      // Windows must run the identity-bound tree operation even when the
-      // direct child has already exited. A missing root is not proof that its
-      // descendants are gone; process_tree_root_exited is resolved only by
-      // the recorded-tree claimant scan in getResult's cleanup path. The
-      // expected spawn identity prevents signaling a recycled PID.
-      if (process.platform === "win32" && child.pid) {
-        return closeWindowsTree();
-      }
       if (child.pid && isProcessRunning(child.pid)) {
         if (entry.childExitSeen) return null;
         await this.#terminateProcessTree(child.pid, {

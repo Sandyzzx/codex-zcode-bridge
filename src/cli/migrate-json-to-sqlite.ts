@@ -3,13 +3,14 @@ import { existsSync, lstatSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createPlatformProbe } from "../runtime/process-probe.js";
+import { publishJsonAuthority } from "../store/json-authority-cutover.js";
 import {
-  publishJsonAuthority,
-  scanJsonAuthority,
-} from "../store/json-authority-cutover.js";
-import { createJsonHistoryArchive } from "../store/json-history-archive.js";
+  createJsonHistoryArchive,
+  scanJsonHistorySource,
+} from "../store/json-history-archive.js";
 import {
   beginJsonWriterDrain,
+  jsonWriterFenceState,
   sealJsonWriterRoot,
 } from "../store/json-writer-quiescence.js";
 import { TaskStore } from "../store/task-store.js";
@@ -167,43 +168,37 @@ async function main(): Promise<void> {
     return;
   }
   if (!options.apply) {
-    const scan = await scanJsonAuthority(options.jsonDataRoot);
+    const dataRoot = requirePlainDirectory(options.jsonDataRoot, "json_data_root_unavailable");
+    const tasksRoot = requirePlainDirectory(path.join(dataRoot, ".tasks"), "json_tasks_root_unavailable");
+    const scan = await scanJsonHistorySource(tasksRoot);
     process.stdout.write(`${JSON.stringify({
       status: "validated",
       apply_requested: false,
-      source_manifest_digest: scan.manifest.manifest_digest,
-      source_root_digest: scan.manifest.root_digest,
-      task_count: scan.manifest.task_count,
-      artifact_count: scan.manifest.artifact_count,
-      artifact_bytes: scan.manifest.artifact_bytes,
-      result_count: scan.manifest.result_count,
-      event_count: scan.manifest.event_count,
+      sealed: jsonWriterFenceState(dataRoot) === "sealed",
+      source_digest: scan.source_digest,
+      source_tasks_root: scan.source_tasks_root,
+      artifact_count: scan.file_count,
+      artifact_bytes: scan.byte_count,
     }, null, 2)}\n`);
     return;
   }
   requireDisjointRoots(options.jsonDataRoot, options.sqliteRoot, options.backupRoot);
-  const beforeBackup = await scanJsonAuthority(options.jsonDataRoot);
+  const dataRoot = requirePlainDirectory(options.jsonDataRoot, "json_data_root_unavailable");
+  if (jsonWriterFenceState(dataRoot) !== "sealed") {
+    throw new CliBlockedError("json_writer_root_not_sealed", "JSON writer fence must be sealed before apply");
+  }
+  const tasksRoot = requirePlainDirectory(path.join(dataRoot, ".tasks"), "json_tasks_root_unavailable");
   const archive = await createJsonHistoryArchive(
-    path.join(beforeBackup.data_root, ".tasks"),
+    tasksRoot,
     options.backupRoot,
+    { mode: "raw" },
   );
-  if (archive.manifest.archive_status !== "archived"
-    || archive.manifest.source_file_count !== beforeBackup.manifest.artifact_count
-    || archive.manifest.source_byte_count !== beforeBackup.manifest.artifact_bytes
-    || archive.identity.file_count !== beforeBackup.manifest.artifact_count
-    || archive.identity.byte_count !== beforeBackup.manifest.artifact_bytes
-    || archive.identity.source_tasks_root !== beforeBackup.tasks_root) {
+  if (archive.manifest.archive_mode !== "raw"
+    || archive.manifest.archive_status !== "archived"
+    || archive.identity.source_tasks_root !== tasksRoot) {
     throw new CliBlockedError(
       "json_history_archive_incomplete",
-      "JSON history archive does not match the sealed migration source",
-    );
-  }
-  const afterBackup = await scanJsonAuthority(options.jsonDataRoot);
-  if (afterBackup.manifest.manifest_digest !== beforeBackup.manifest.manifest_digest
-    || afterBackup.manifest.root_digest !== beforeBackup.manifest.root_digest) {
-    throw new CliBlockedError(
-      "json_source_changed_before_archive_confirmation",
-      "sealed JSON source changed while creating its history archive",
+      "raw JSON history archive is not complete or does not match the sealed migration source",
     );
   }
   const result = await publishJsonAuthority({

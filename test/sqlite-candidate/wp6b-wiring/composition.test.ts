@@ -1460,6 +1460,46 @@ test("formal MCP Host shutdown cancels an active Worker and closes only after ve
   }
 });
 
+test("formal MCP Host shutdown lets a committed Result finish Cleanup without cancelling the terminal Attempt", { timeout: 45_000 }, async () => {
+  let managerForStage: BridgeTaskManager | undefined;
+  let resultProjectionVerified = false;
+  let shutdownAtResultProjection: Promise<void> | undefined;
+  await withSqliteMcp(async (_client, manager, dataRoot, workspace) => {
+    managerForStage = manager;
+    const taskId = `mcp-released-shutdown-race-${randomUUID()}`;
+    const created = contentObject(await _client.callTool({ name: "zcode_task", arguments: syntheticTask(workspace, taskId) }));
+    assert.equal(created.status, "queued");
+
+    const deadline = Date.now() + 15_000;
+    while (!resultProjectionVerified && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(resultProjectionVerified, true, "the controlled run must commit its Result before Cleanup completes");
+    assert.ok(shutdownAtResultProjection, "the Result commit boundary must initiate Host shutdown");
+    await shutdownAtResultProjection;
+
+    const modules = await loadLifecycleCandidateModules();
+    const recovery = modules.Store.openForRecovery(dataRoot);
+    assert.ok(recovery);
+    try {
+      const lifecycle = recovery.readTaskLifecycle(taskId) as Record<string, unknown>;
+      const projection = lifecycle.projection as Record<string, unknown>;
+      const operation = lifecycle.operation as Record<string, unknown>;
+      assert.equal(projection.status, "completed", "the Result must remain terminal after shutdown");
+      assert.equal(operation.phase, "released", "verified Cleanup and Capacity Release must remain durable");
+    } finally {
+      recovery.close();
+    }
+  }, {
+    testShutdownWaitMs: 10_000,
+    preserveFixtureOnFailure: true,
+    onStage: (stage) => {
+      if (stage !== "result_projection_verified" || resultProjectionVerified) return;
+      resultProjectionVerified = true;
+      assert.ok(managerForStage, "the Manager must be available after Result commit");
+      shutdownAtResultProjection = managerForStage.shutdown();
+    },
+  });
+});
+
 test("formal MCP Host shutdown is bounded on unknown cancellation and can be retried after verified Cleanup", { timeout: 45_000, skip: process.platform !== "win32" }, async () => {
   const tracePath = process.env["WP6_SHUTDOWN_RETRY_TRACE_PATH"];
   const trace = (name: string, detail?: unknown): void => {
@@ -1847,7 +1887,7 @@ test("formal MCP interaction reply uses persisted SQLite request and a verified 
   });
 });
 
-test("MVP offline cutover migrates sealed JSON into the sole SQLite MCP stdio Authority", { timeout: 90_000, skip: process.platform !== "win32" }, async () => {
+test("MVP offline cutover archives sealed JSON and starts the sole empty SQLite MCP stdio Authority", { timeout: 90_000, skip: process.platform !== "win32" }, async () => {
   const fixture = path.join(integrationRoot, `mvp-offline-cutover-${randomUUID()}`);
   const legacyRoot = path.join(fixture, "legacy-json");
   const workspace = path.join(fixture, "workspace");
@@ -1899,19 +1939,18 @@ test("MVP offline cutover migrates sealed JSON into the sole SQLite MCP stdio Au
     await assert.rejects(registerManagerJsonWriter(legacyRoot, await processProbe.selfIdentity()),
       /new writer registration is closed/u, "the supported Host startup path cannot reacquire the sealed legacy Root");
 
-    const createdArchive = await createJsonHistoryArchive(path.join(legacyRoot, ".tasks"), archivePath);
+    const createdArchive = await createJsonHistoryArchive(path.join(legacyRoot, ".tasks"), archivePath, { mode: "raw" });
+    assert.equal(createdArchive.manifest.archive_mode, "raw");
     assert.equal(createdArchive.manifest.archive_status, "archived");
     const verifiedArchive = await readJsonHistoryArchive(archivePath);
-    assert.equal(verifiedArchive.tasks.find((task) => task.task_id === oldTaskId)?.current_status, "queued");
-    assert.equal(verifiedArchive.tasks.find((task) => task.task_id === oldTaskId)?.archive_status, "archived");
+    assert.equal(verifiedArchive.archive_mode, "raw");
+    assert.equal(verifiedArchive.tasks.length, 0);
     assert.equal(new TaskStore(legacyRoot).readStatus(oldTaskId).status, "queued", "cutover must preserve the original JSON bytes and status");
 
     await withSqliteMcp(async (client, _manager, sqliteRoot, sqliteWorkspace) => {
       assert.notEqual(path.resolve(sqliteRoot), path.resolve(legacyRoot), "SQLite receives a distinct migrated data root");
-      const migratedOldTerminal = await waitForTerminal(client, oldTaskId, 1, "migrated queued JSON Task");
-      assert.equal(migratedOldTerminal.status, "completed", "queued JSON work continues under SQLite Authority");
-      const migratedOldResult = contentObject(await client.callTool({ name: "zcode_result", arguments: { task_id: oldTaskId } }));
-      assert.equal(migratedOldResult.status, "completed");
+      const oldLookup = await client.callTool({ name: "zcode_status", arguments: { task_id: oldTaskId } });
+      assert.equal(oldLookup.isError, true, "legacy JSON Tasks are not imported into the online SQLite Authority");
       const created = contentObject(await client.callTool({ name: "zcode_task", arguments: syntheticTask(sqliteWorkspace, newTaskId) }));
       assert.equal(created.task_id, newTaskId);
       assert.equal(created.status, "queued");
@@ -1927,8 +1966,7 @@ test("MVP offline cutover migrates sealed JSON into the sole SQLite MCP stdio Au
       assert.ok(recovery);
       try {
         const port = modules.createPort(recovery);
-        assert.equal((port.readTaskProjection(oldTaskId) as Record<string, unknown>).status, "completed",
-          "migrated queued JSON work remains a first-class SQLite Task");
+        assert.equal(port.readTaskProjection(oldTaskId), null);
         assert.equal((port.readTaskProjection(newTaskId) as Record<string, unknown>).status, "completed");
       } finally {
         recovery.close();
@@ -1947,7 +1985,7 @@ test("MVP offline cutover migrates sealed JSON into the sole SQLite MCP stdio Au
           expectedArchiveManifestDigest: createdArchive.identity.manifest_digest,
         });
         assert.equal(migration.status, "published");
-        assert.equal(migration.task_count, 1);
+        assert.equal(migration.task_count, 0);
       },
     });
     cutoverCompleted = true;

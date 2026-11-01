@@ -30,7 +30,12 @@ import {
   initializeFreshInstallSqliteRoot,
   loadLifecycleCandidateModules,
 } from "../../../src/store/lifecycle-gate.js";
-import { createJsonHistoryArchive } from "../../../src/store/json-history-archive.js";
+import {
+  createJsonHistoryArchive,
+  readArchivedJsonHistoryFile,
+  readJsonHistoryArchive,
+} from "../../../src/store/json-history-archive.js";
+import { historicalResultExceptionSetDigest } from "../../../src/store/json-history-result-exceptions.mjs";
 import { TaskStore } from "../../../src/store/task-store.js";
 import { makeTask, makeTempDir, removeTempDir } from "../../helpers.js";
 
@@ -88,7 +93,8 @@ async function archiveFixtureRoot(root: string, archiveDirectory: string): Promi
   archiveDirectory: string;
   manifestDigest: string;
 }> {
-  const archive = await createJsonHistoryArchive(path.join(root, ".tasks"), archiveDirectory);
+  const archive = await createJsonHistoryArchive(path.join(root, ".tasks"), archiveDirectory, { mode: "raw" });
+  assert.equal(archive.manifest.archive_mode, "raw");
   assert.equal(archive.manifest.archive_status, "archived", JSON.stringify(archive.manifest.anomalies));
   return {
     archiveDirectory: archive.archive_directory,
@@ -131,7 +137,7 @@ async function withSealedTask(
   }
 }
 
-test("stop-the-world migration preserves raw history, queued work and a monotonic Event cursor", async () => {
+test("stop-the-world migration preserves raw history and starts an empty SQLite Authority", async () => {
   const root = await makeTempDir("json-authority-cutover");
   const jsonRoot = path.join(root, "json-root");
   const archiveRoot = path.join(root, "archive-root");
@@ -197,11 +203,25 @@ test("stop-the-world migration preserves raw history, queued work and a monotoni
     });
     assert.equal(published.status, "published");
     assert.equal(published.archive.manifest_digest, archive.manifestDigest);
-    assert.equal(published.task_count, 2);
-    assert.equal(published.result_count, 1);
-    assert.equal(published.event_count, 2);
+    assert.equal(published.task_count, 0);
+    assert.equal(published.result_count, 0);
+    assert.equal(published.event_count, 0);
+    assert.equal(published.final_event_cursor, 1);
+    assert.equal(published.artifact_count, (await readJsonHistoryArchive(archiveRoot)).source_file_count);
+    assert.equal(published.historical_exception_count, 0);
+    assert.equal(published.historical_exception_digest, historicalResultExceptionSetDigest([]));
     assert.equal(existsSync(path.join(sqliteRoot, "bridge.sqlite.cutover-pending.json")), false);
     assert.equal(existsSync(published.publication_receipt_path), true);
+    assert.deepEqual(
+      readdirSync(sqliteRoot).filter((name) => name.includes(".staging")),
+      [],
+      "a successful publish must not leave staging database or sidecar files",
+    );
+    await assert.rejects(
+      registerManagerJsonWriter(jsonRoot, null),
+      /new writer registration is closed/u,
+      "the sealed JSON root cannot regain write Authority after SQLite publication",
+    );
     const afterPublish = await scanJsonAuthority(jsonRoot);
     assert.equal(
       afterPublish.manifest.manifest_digest,
@@ -220,23 +240,20 @@ test("stop-the-world migration preserves raw history, queued work and a monotoni
         "authority_switch",
       );
       const port = modules.createPort(migrated);
-      const terminal = port.readTaskLifecycle(terminalId) as Record<string, unknown>;
-      assert.equal((terminal.projection as Record<string, unknown>).status, "completed");
-      assert.deepEqual(terminal.result, terminalResult(terminalId, startedAt, finishedAt));
-      assert.equal((port.readTaskLifecycle(queuedId) as Record<string, unknown>).result, null);
+      assert.deepEqual(migrated.readMigratedHistoryExceptions(), []);
+      assert.equal(port.readTaskLifecycle(terminalId), null);
+      assert.equal(port.readTaskLifecycle(queuedId), null);
 
-      const before = port.readTaskEvents(queuedId, { afterCursor: 0, limit: 200 });
-      assert.equal(before.events.length, 0);
-      const oldEvents = port.readTaskEvents(terminalId, { afterCursor: 0, limit: 200 });
-      assert.deepEqual(oldEvents.events.map((event) => event.event_type), ["turn.started", "turn.completed"]);
-      const lastMigratedCursor = Number(oldEvents.events.at(-1)?.cursor);
-
-      const cancellation = port.cancelQueuedAttempt({ task_id: queuedId, expected_attempt: 1 }) as Record<string, unknown>;
-      const after = port.readTaskEvents(queuedId, { afterCursor: 0, limit: 200 });
-      assert.equal(after.events.length, 1);
-      assert.equal(after.events[0]?.event_type, "cancelled");
-      assert.ok(Number(after.events[0]?.cursor) > lastMigratedCursor);
-      assert.equal(Number(cancellation.event_cursor), Number(after.events[0]?.cursor));
+      assert.throws(
+        () => port.readTaskEvents(queuedId, { afterCursor: 0, limit: 200 }),
+        /task_not_found/u,
+        "legacy JSON events are not part of the online SQLite Authority",
+      );
+      assert.throws(
+        () => port.readTaskEvents(terminalId, { afterCursor: 0, limit: 200 }),
+        /task_not_found/u,
+        "legacy JSON events are not part of the online SQLite Authority",
+      );
 
       const created = port.createTask(makeTask({
         task_id: postMigrationId,
@@ -247,6 +264,11 @@ test("stop-the-world migration preserves raw history, queued work and a monotoni
       const postMigration = port.readTaskLifecycle(postMigrationId) as Record<string, unknown>;
       assert.equal((postMigration.projection as Record<string, unknown>).status, "queued");
       assert.equal(postMigration.result, null);
+      const cancellation = port.cancelQueuedAttempt({ task_id: postMigrationId, expected_attempt: 1 }) as Record<string, unknown>;
+      const after = port.readTaskEvents(postMigrationId, { afterCursor: 0, limit: 200 });
+      assert.equal(after.events.length, 1);
+      assert.equal(after.events[0]?.event_type, "cancelled");
+      assert.equal(Number(cancellation.event_cursor), Number(after.events[0]?.cursor));
 
       for (const relativePath of [
         `${terminalId}/result.json`,
@@ -256,13 +278,17 @@ test("stop-the-world migration preserves raw history, queued work and a monotoni
         `${terminalId}/attempts/1/worker-stderr.log`,
         `.recovery-last-run`,
       ]) {
-        const artifact = migrated.readMigratedArtifact(relativePath);
-        assert.ok(artifact, relativePath);
-        assert.deepEqual(Buffer.from(artifact.content as Uint8Array), readFileSync(path.join(jsonRoot, ".tasks", relativePath)));
+        assert.equal(migrated.readMigratedArtifact(relativePath), null);
+        assert.deepEqual(
+          await readArchivedJsonHistoryFile(archiveRoot, relativePath),
+          readFileSync(path.join(jsonRoot, ".tasks", relativePath)),
+        );
       }
       const authority = migrated.assertAuthorityReady(currentSqliteRuntimeRosterDigest()) as Record<string, unknown>;
       assert.equal(authority.archive_directory, archive.archiveDirectory);
       assert.equal(authority.archive_manifest_digest, archive.manifestDigest);
+      assert.equal(authority.historical_exception_count, 0);
+      assert.equal(authority.historical_exception_digest, historicalResultExceptionSetDigest([]));
     } finally {
       migrated.close();
     }
@@ -287,6 +313,68 @@ test("stop-the-world migration preserves raw history, queued work and a monotoni
         managedDataDirectory: true,
       }),
       /cutover_publication_receipt_missing/u,
+    );
+  } finally {
+    await removeTempDir(root);
+  }
+});
+
+test("raw history archive records legacy anomalies without following workspace links", async () => {
+  const root = await makeTempDir("json-history-raw-anomalies");
+  const jsonRoot = path.join(root, "json-root");
+  const tasksRoot = path.join(jsonRoot, ".tasks");
+  const archiveRoot = path.join(root, "archive-root");
+  const externalRoot = path.join(root, "external-workspace");
+  const taskId = "legacy-anomaly-task";
+  mkdirSync(externalRoot, { recursive: true });
+  writeFileSync(path.join(externalRoot, "outside.txt"), "external workspace remains untouched\n", "utf8");
+  mkdirSync(path.join(tasksRoot, "workspaces"), { recursive: true });
+  writeFileSync(path.join(tasksRoot, "workspaces", ".git"), "gitdir: ../external-workspace/.git\n", "utf8");
+
+  try {
+    const store = new TaskStore(jsonRoot);
+    store.createTask(makeTask({ task_id: taskId }), "2026-10-30T01:00:00.000Z");
+    mkdirSync(path.join(store.taskDir(taskId), "interactions"), { recursive: true });
+    mkdirSync(path.join(store.taskDir(taskId), "attempts", "2"), { recursive: true });
+    writeFileSync(path.join(store.taskDir(taskId), "interactions", "legacy-request.json"), "{}\n", "utf8");
+    writeFileSync(path.join(store.taskDir(taskId), "attempts", "2", "respawn.claim"), "legacy respawn claim\n", "utf8");
+    writeFileSync(path.join(store.taskDir(taskId), "worker-stderr-repro.log"), "legacy worker stderr\n", "utf8");
+    writeFileSync(
+      path.join(store.taskDir(taskId), "result.json"),
+      `${JSON.stringify({ task_id: taskId, attempt: 99, status: "completed" })}\n`,
+      "utf8",
+    );
+    symlinkSync(externalRoot, path.join(tasksRoot, "workspaces", "external-workspace"), "junction");
+
+    const archive = await createJsonHistoryArchive(tasksRoot, archiveRoot, { mode: "raw" });
+    assert.equal(archive.manifest.archive_status, "archived");
+    assert.deepEqual(archive.manifest.tasks, []);
+    assert.equal(
+      archive.manifest.anomalies.some((anomaly) =>
+        anomaly.code === "unsafe_entry"
+        && anomaly.path === "workspaces/external-workspace"
+        && anomaly.detail === "symlink_target_recorded_but_not_followed"),
+      true,
+    );
+    for (const relativePath of [
+      "workspaces/.git",
+      `${taskId}/interactions/legacy-request.json`,
+      `${taskId}/attempts/2/respawn.claim`,
+      `${taskId}/worker-stderr-repro.log`,
+      `${taskId}/result.json`,
+    ]) {
+      assert.deepEqual(
+        await readArchivedJsonHistoryFile(archiveRoot, relativePath),
+        readFileSync(path.join(tasksRoot, relativePath)),
+      );
+    }
+    await assert.rejects(
+      readArchivedJsonHistoryFile(archiveRoot, "workspaces/external-workspace"),
+      /archive_file_not_found/u,
+    );
+    assert.equal(
+      readFileSync(path.join(externalRoot, "outside.txt"), "utf8"),
+      "external workspace remains untouched\n",
     );
   } finally {
     await removeTempDir(root);
@@ -590,11 +678,13 @@ test("migration rejects unsafe source records and unknown files before staging",
         exit_code: 0,
       }, 1);
       store.writeResult(taskId, terminalResult(taskId, "2026-10-30T01:00:00.000Z", "2026-10-30T01:02:00.000Z"));
-      const resultPath = path.join(store.taskDir(taskId), "result.json");
+    },
+    async (root, taskId) => {
+      const resultPath = path.join(root, ".tasks", taskId, "result.json");
       const result = JSON.parse(readFileSync(resultPath, "utf8")) as Record<string, unknown>;
       writeFileSync(resultPath, JSON.stringify({ ...result, task_id: "other-task" }), "utf8");
+      await assertCutoverCode(scanJsonAuthority(root), "cross_bound_result");
     },
-    async (root) => assertCutoverCode(scanJsonAuthority(root), "cross_bound_result"),
     exitedProbe(),
   );
 

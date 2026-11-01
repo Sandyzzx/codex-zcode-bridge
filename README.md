@@ -115,6 +115,12 @@ Use `zcode_model_catalog` with the current project path to read app-server model
 
 If a `zcode_task` call times out or loses its response, query or retry with the same `task_id`; identical submissions replay the original receipt and changed content is rejected. For retryable `zcode_continue` calls, supply a stable `operation_id` so a lost response cannot increment the attempt twice.
 
+## SQLite migration
+
+SQLite migration is a stop-the-world migration. Before starting it, finish or save the work required from any `queued`, `running`, or `waiting_for_master` task, stop new task admission, and let known Workers exit. SQLite then starts from a new, empty Task Authority and owns every task created after the cutover.
+
+Existing JSON tasks are preserved only in the verified raw history archive. Unfinished tasks are not automatically resumed by, continued in, or recovered into SQLite. Keep that archive read-only for historical reference. After SQLite accepts new writes, do not restore the pre-cutover JSON snapshot.
+
 ## Known issues
 
 - The ZCode Desktop sidebar may not immediately show a new session. The Bridge best-effort syncs the local task index; Desktop controls when the list refreshes.

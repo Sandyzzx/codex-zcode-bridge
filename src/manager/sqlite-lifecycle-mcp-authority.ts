@@ -350,6 +350,23 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     for (const key of active) {
       const separator = key.lastIndexOf("\0");
       const taskId = key.slice(0, separator);
+      const attempt = Number(key.slice(separator + 1));
+      let alreadyTerminal = false;
+      try {
+        const snapshot = this.#readSnapshot(taskId);
+        const projection = asRecord(snapshot.projection);
+        // Result may already be durably terminal while Cleanup and Capacity
+        // Release are still completing inside the active run Promise. Wait for
+        // that Promise instead of trying to cancel an Attempt that can no
+        // longer be cancelled. Final state is separately required to be
+        // terminal and released below.
+        alreadyTerminal = Number(snapshot.attempt.attempt) === attempt
+          && isTerminal(taskStatus(projection.status));
+      } catch {
+        // An unreadable or mismatched snapshot is not evidence of safe state;
+        // retain the original cancellation path and fail closed.
+      }
+      if (alreadyTerminal) continue;
       try {
         const status = await waitUntilDeadline(this.cancelTask(taskId), deadline);
         if (status.status === "running" || status.status === "queued") failures.push(`${taskId}:shutdown_cancel_unconfirmed`);
@@ -370,6 +387,22 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     if (this.#activeRuns.size > 0) {
       try { await waitUntilDeadline(Promise.allSettled(this.#activeRuns.values()).then(() => undefined), deadline); }
       catch { failures.push("root:shutdown_worker_wait_timeout"); }
+    }
+    for (const key of active) {
+      const separator = key.lastIndexOf("\0");
+      const taskId = key.slice(0, separator);
+      const attempt = Number(key.slice(separator + 1));
+      try {
+        const snapshot = this.#readSnapshot(taskId);
+        const projection = asRecord(snapshot.projection);
+        const operation = snapshot.operation ? asRecord(snapshot.operation) : null;
+        const released = Number(snapshot.attempt.attempt) === attempt
+          && isTerminal(taskStatus(projection.status))
+          && operation?.phase === "released";
+        if (!released) failures.push(`${taskId}:shutdown_release_unverified`);
+      } catch {
+        failures.push(`${taskId}:shutdown_release_unknown`);
+      }
     }
     if (failures.length > 0) {
       // Keep the SQLite handle and Host alive. An uncertain shutdown must not

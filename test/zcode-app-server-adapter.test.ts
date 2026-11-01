@@ -46,6 +46,21 @@ function observeScan(correlation: string, scan: typeof verifyProcessTreeClaimant
   } };
 }
 
+async function awaitOwnedProcessExit(pid: number, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (isProcessRunning(pid) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.equal(isProcessRunning(pid), false, "the owned fake app-server must exit before the root-exited fallback");
+  // PID absence precedes final stdio/native-handle closure on Windows.
+  await new Promise((resolve) => setTimeout(resolve, 100));
+}
+
+async function exitOwnedProcessForRootRace(pid: number): Promise<void> {
+  if (isProcessRunning(pid)) process.kill(pid, "SIGKILL");
+  await awaitOwnedProcessExit(pid);
+}
+
 async function makeFakeRuntime(
   selectedModel: { providerId: string; modelId: string; options?: { reasoningLevel: string } } = { providerId: "provider-default", modelId: "model-default" },
   includeRequestedModel = true,
@@ -189,7 +204,7 @@ test("applies a per-task model override, verifies the selection, and does not pe
 
 test("maps an identity-bound Windows tree receipt into the Adapter outcome", { timeout: 15_000 }, async (t) => {
   if (process.platform !== "win32") return t.skip("Windows identity-bound cleanup receipt");
-  const runtime = await makeFakeRuntime(undefined, true, false, undefined, true);
+  const runtime = await makeFakeRuntime();
   const platformProbe = createPlatformProbe();
   let terminatedPid = 0;
   try {
@@ -199,6 +214,7 @@ test("maps an identity-bound Windows tree receipt into the Adapter outcome", { t
       childEnvBase: { PATH: process.env.PATH },
       terminateProcessTreeImpl: async (pid, options) => {
         terminatedPid = pid;
+        assert.equal(isProcessRunning(pid), true, "Windows cleanup must start before stdin teardown can let the runtime exit");
         const identity = await platformProbe.identityOf(pid);
         assert.equal(identity.fingerprint_precision, "exact");
         assert.equal(identity.fingerprint, options?.expectedRootFingerprint);
@@ -262,15 +278,16 @@ test("trusted local execution profile is bound to the actual app-server session 
 });
 
 test("a root-exited termination race is verified only by a clean recorded-tree scan", { timeout: 8_000 }, async () => {
-  // Delay the fake turn while the Adapter captures the root identity. The
-  // runtime exits naturally on stdin close after that capture settles.
+  // The transaction observes the owned runtime exit before reporting the
+  // root-exited race; only the subsequent claimant scan supplies a verdict.
   const runtime = await makeFakeRuntime(undefined, true, false, undefined, false, null, undefined, 1_200);
   try {
     const adapter = new ZCodeAppServerAdapter({
       resolver: { resolve: async () => runtime.config },
       timeoutMs: 10_000,
       childEnvBase: { PATH: process.env.PATH },
-      terminateProcessTreeImpl: async () => {
+      terminateProcessTreeImpl: async (pid) => {
+        await exitOwnedProcessForRootRace(pid);
         const error = new Error("process_tree_root_exited: process tree cleanup refused") as Error & { code: string };
         error.code = "process_tree_root_exited";
         throw error;
@@ -283,25 +300,23 @@ test("a root-exited termination race is verified only by a clean recorded-tree s
     assert.equal(result.cleanupVerified, true);
     assert.equal(result.cleanupError, null);
   } finally {
-    await new Promise((resolve) => setTimeout(resolve, 600));
     await rm(runtime.root, { recursive: true, force: true });
   }
 });
 
-test("Windows cleanup waits for the caller-bound identity probe before closing a short-lived runtime", { timeout: 10_000 }, async (t) => {
+test("Windows cleanup waits for identity before terminating a live runtime", { timeout: 10_000 }, async (t) => {
   if (process.platform !== "win32") return t.skip("Windows spawn-generation identity capture is platform-specific");
-  const runtime = await makeFakeRuntime(undefined, true, false, undefined, false, null, undefined, 0);
+  const runtime = await makeFakeRuntime(undefined, true, false, undefined, true);
   const platformProbe = createPlatformProbe();
   const probe = {
     ...platformProbe,
     identityOf: async (pid: number) => {
-      // Force the adapter close path to overlap the startup identity read.
-      await new Promise((resolve) => setTimeout(resolve, 1_250));
+      await new Promise((resolve) => setTimeout(resolve, 400));
       return platformProbe.identityOf(pid);
     },
   };
-  const scanned: Array<readonly { pid: number; fingerprint: string | null }[]> = [];
   let terminatorCalls = 0;
+  let terminatedPid = 0;
   try {
     const adapter = new ZCodeAppServerAdapter({
       resolver: { resolve: async () => runtime.config },
@@ -310,34 +325,43 @@ test("Windows cleanup waits for the caller-bound identity probe before closing a
       childEnvBase: { PATH: process.env.PATH },
       terminateProcessTreeImpl: async (pid, options) => {
         terminatorCalls += 1;
-        assert.equal(isProcessRunning(pid), false, "normal close lets the fake runtime exit before the root-exited scan");
+        terminatedPid = pid;
+        assert.equal(isProcessRunning(pid), true, "normal Windows cleanup starts before stdin teardown");
         assert.ok(options?.expectedRootFingerprint, "termination carries the captured spawn-generation identity");
-        const error = new Error("process_tree_root_exited: process tree cleanup refused") as Error & { code: string };
-        error.code = "process_tree_root_exited";
-        throw error;
-      },
-      verifyTreeClean: async (targets) => {
-        assert.ok(targets[0]?.fingerprint, "scanning retains the captured spawn-generation identity");
-        assert.equal(isProcessRunning(targets[0]!.pid), false, "the original runtime closed before scanning");
-        scanned.push(targets);
-        return { clean: true, livePids: [], observedPids: targets.map((target) => target.pid) };
+        const identity = await platformProbe.identityOf(pid);
+        assert.equal(identity.fingerprint, options.expectedRootFingerprint);
+        process.kill(pid, "SIGKILL");
+        await awaitOwnedProcessExit(pid);
+        return {
+          pid,
+          signal: "SIGKILL",
+          verified: true,
+          windows: {
+            rootPid: pid,
+            rounds: 1,
+            members: [{ pid, fingerprint: identity.fingerprint!, creationFileTime: "test-creation" }],
+            kills: [{ pid, status: "killed", exitFileTime: null }],
+            signaled: [pid],
+          },
+        };
       },
     });
     const handle = await adapter.startTask({ task, workspace: makeWorkspace(runtime.root), attempt: 1 });
     const result = await adapter.getResult(handle);
     assert.equal(result.exitCode, 0);
     assert.equal(result.cleanupVerified, true);
-    assert.equal(scanned.length, 1);
-    assert.equal(terminatorCalls, 0, "an observed original-child exit goes directly to the required claimant scan");
-    assert.ok(scanned[0]?.[0]?.fingerprint, "the claimant scan uses the captured root generation");
+    assert.ok(result.cleanupTreeReceipt);
+    assert.equal(terminatorCalls, 1);
+    assert.equal(result.cleanupTreeReceipt.rootPid, terminatedPid);
   } finally {
+    if (terminatedPid > 0 && isProcessRunning(terminatedPid)) process.kill(terminatedPid, "SIGKILL");
     await rm(runtime.root, { recursive: true, force: true });
   }
 });
 
 for (const missingIdentity of [true, false]) test(`observed Windows child exit stays unverified with ${missingIdentity ? "missing identity" : "a rejected claimant scan"}`, { timeout: 10_000 }, async (t) => {
   if (process.platform !== "win32") return t.skip("Windows-only cleanup identity gate");
-  const runtime = await makeFakeRuntime(undefined, true, false, undefined, false, null, undefined, 0);
+  const runtime = await makeFakeRuntime(undefined, true, false, undefined, false, null, undefined, 1_200);
   let scans = 0;
   const platformProbe = createPlatformProbe();
   const trace = observeScan(missingIdentity ? "missing-identity" : "scan-throws", async () => { scans += 1; throw Object.assign(new Error("fixture scan rejected after observing a descendant"), { memberPids: [987_654] }); });
@@ -347,6 +371,12 @@ for (const missingIdentity of [true, false]) test(`observed Windows child exit s
       probe: missingIdentity ? { ...platformProbe, identityOf: async () => { throw new Error("fixture identity unavailable"); } } : platformProbe,
       timeoutMs: 5_000,
       childEnvBase: { PATH: process.env.PATH },
+      terminateProcessTreeImpl: async (pid) => {
+        await exitOwnedProcessForRootRace(pid);
+        const error = new Error("process_tree_root_exited: process tree cleanup refused") as Error & { code: string };
+        error.code = "process_tree_root_exited";
+        throw error;
+      },
       verifyTreeClean: trace.verify,
     });
     const handle = await adapter.startTask({ task, workspace: makeWorkspace(runtime.root), attempt: 1 });
@@ -362,7 +392,7 @@ for (const missingIdentity of [true, false]) test(`observed Windows child exit s
   } finally { t.diagnostic(JSON.stringify(trace.observation)); await rm(runtime.root, { recursive: true, force: true }); }
 });
 
-test("a naturally exited Windows root with no descendants passes the real claimant scan", { timeout: 60_000 }, async (t) => {
+test("a controlled Windows root exit with no descendants passes the real claimant scan", { timeout: 60_000 }, async (t) => {
   if (process.platform !== "win32") return t.skip("Windows-only native process identity and claimant scan");
   const runtime = await makeFakeRuntime(undefined, true, false, undefined, false, null, undefined, 1_200);
   const scanTargets: Array<readonly { pid: number; fingerprint: string | null }[]> = [];
@@ -375,7 +405,7 @@ test("a naturally exited Windows root with no descendants passes the real claima
       timeoutMs: 10_000,
       childEnvBase: { PATH: process.env.PATH },
       terminateProcessTreeImpl: async (pid) => {
-        assert.equal(isProcessRunning(pid), false, "the direct app-server root has naturally exited");
+        await exitOwnedProcessForRootRace(pid);
         const error = new Error("process_tree_root_exited: process tree cleanup refused") as Error & { code: string };
         error.code = "process_tree_root_exited";
         throw error;
@@ -412,7 +442,8 @@ test("a root-exited termination race stays failed when claimant scan sees a live
       },
       timeoutMs: 10_000,
       childEnvBase: { PATH: process.env.PATH },
-      terminateProcessTreeImpl: async () => {
+      terminateProcessTreeImpl: async (pid) => {
+        await exitOwnedProcessForRootRace(pid);
         const error = new Error("process_tree_root_exited: process tree cleanup refused") as Error & { code: string };
         error.code = "process_tree_root_exited";
         throw error;
@@ -437,7 +468,7 @@ test("a root-exited termination race stays failed when claimant scan sees a live
   }
 });
 
-test("a naturally closed Windows root still scans its live descendant before cleanup succeeds", { timeout: 60_000 }, async (t) => {
+test("a controlled Windows root exit still scans its live descendant before cleanup succeeds", { timeout: 60_000 }, async (t) => {
   if (process.platform !== "win32") return t.skip("Windows-only native process identity and claimant scan");
   const controlRoot = await mkdtemp(path.join(tmpdir(), "bridge-adapter-root-exited-"));
   const pidPath = path.join(controlRoot, "descendant.pid");
@@ -462,7 +493,7 @@ test("a naturally closed Windows root still scans its live descendant before cle
       timeoutMs: 10_000,
       childEnvBase: { PATH: process.env.PATH },
       terminateProcessTreeImpl: async (pid) => {
-        assert.equal(isProcessRunning(pid), false, "the direct app-server root has naturally exited");
+        await exitOwnedProcessForRootRace(pid);
         const error = new Error("process_tree_root_exited: process tree cleanup refused") as Error & { code: string };
         error.code = "process_tree_root_exited";
         throw error;
@@ -513,7 +544,7 @@ test("classifies explicit provider usage exhaustion without publishing its raw e
       timeoutMs: 10_000,
       childEnvBase: { PATH: process.env.PATH },
       terminateProcessTreeImpl: async (pid) => {
-        assert.equal(isProcessRunning(pid), false, "the fake app-server naturally closed before the recorded-tree scan");
+        await exitOwnedProcessForRootRace(pid);
         const error = new Error("process_tree_root_exited: process tree cleanup refused") as Error & { code: string };
         error.code = "process_tree_root_exited";
         throw error;
@@ -560,7 +591,7 @@ test("does not misclassify request rate limits or generic 429s as exhausted usag
         timeoutMs: 10_000,
         childEnvBase: { PATH: process.env.PATH },
         terminateProcessTreeImpl: async (pid) => {
-          assert.equal(isProcessRunning(pid), false, "the fake app-server naturally closed before the recorded-tree scan");
+          await exitOwnedProcessForRootRace(pid);
           const error = new Error("process_tree_root_exited: process tree cleanup refused") as Error & { code: string };
           error.code = "process_tree_root_exited";
           throw error;
@@ -595,6 +626,12 @@ test("a Windows provider failure preserves its code only after a real root-exite
       timeoutMs: 60_000,
       childEnvBase: { PATH: process.env.PATH },
       onCleanupDecisionTrace: () => { trace.observation.root_exit_observed = true; },
+      terminateProcessTreeImpl: async (pid) => {
+        await exitOwnedProcessForRootRace(pid);
+        const error = new Error("process_tree_root_exited: process tree cleanup refused") as Error & { code: string };
+        error.code = "process_tree_root_exited";
+        throw error;
+      },
       verifyTreeClean: trace.verify,
     });
     const handle = await adapter.startTask({ task, workspace: makeWorkspace(runtime.root), attempt: 1 });
@@ -624,6 +661,12 @@ for (const scenario of ["unknown", "threw", "callback-throws"] as const) test(`r
       resolver: { resolve: async () => runtime.config }, timeoutMs: 60_000,
       childEnvBase: { PATH: process.env.PATH }, verifyTreeClean: trace.verify,
       onCleanupDecisionTrace: () => { trace.observation.root_exit_observed = true; if (scenario === "callback-throws") throw new Error("synthetic trace failure"); },
+      terminateProcessTreeImpl: async (pid) => {
+        await exitOwnedProcessForRootRace(pid);
+        const error = new Error("process_tree_root_exited: process tree cleanup refused") as Error & { code: string };
+        error.code = "process_tree_root_exited";
+        throw error;
+      },
     });
     const handle = await adapter.startTask({ task, workspace: makeWorkspace(runtime.root), attempt: 1 });
     await assert.rejects(adapter.getResult(handle), (error: unknown) => {
@@ -650,6 +693,12 @@ test("real live claimant preserves cleanup_failed on provider failure", { timeou
       resolver: { resolve: async () => runtime.config }, timeoutMs: 60_000,
       childEnvBase: { PATH: process.env.PATH },
       onCleanupDecisionTrace: () => { trace.observation.root_exit_observed = true; },
+      terminateProcessTreeImpl: async (pid) => {
+        await exitOwnedProcessForRootRace(pid);
+        const error = new Error("process_tree_root_exited: process tree cleanup refused") as Error & { code: string };
+        error.code = "process_tree_root_exited";
+        throw error;
+      },
       verifyTreeClean: async (targets) => {
         descendantPid = Number((await readFile(pidPath, "utf8")).trim());
         assert.ok(Number.isSafeInteger(descendantPid) && descendantPid > 0);
@@ -690,7 +739,7 @@ test("a provider failure remains cleanup_failed when the root-exited scan retain
       timeoutMs: 10_000,
       childEnvBase: { PATH: process.env.PATH },
       terminateProcessTreeImpl: async (pid) => {
-        assert.equal(isProcessRunning(pid), false);
+        await exitOwnedProcessForRootRace(pid);
         const error = new Error("process_tree_root_exited: process tree cleanup refused") as Error & { code: string; memberPids: number[] };
         error.code = "process_tree_root_exited";
         error.memberPids = [pid];
@@ -860,7 +909,7 @@ test("cancels a pending permission with one verified runtime cleanup", { timeout
       timeoutMs: 3_000,
       childEnvBase: { PATH: process.env.PATH },
       terminateProcessTreeImpl: async (pid) => {
-        assert.equal(isProcessRunning(pid), false, "the fake app-server naturally closed after cancellation");
+        await exitOwnedProcessForRootRace(pid);
         const error = new Error("process_tree_root_exited: process tree cleanup refused") as Error & { code: string };
         error.code = "process_tree_root_exited";
         throw error;

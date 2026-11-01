@@ -71,6 +71,8 @@ English readers start at [README.md](../README.md). This index is bilingual; the
 | [ADR-005](decisions/ADR-005-long-session-reliability.md) | 2026-10-08 | Accepted：长会话清理、锁释放、报告修复与 provider 兼容 |
 | [ADR-006](decisions/ADR-006-provider-quota-failure-diagnostics.md) | 2026-10-14 | Accepted：安全识别并明确提示 provider 用量额度耗尽 |
 | [ADR-009](decisions/ADR-009-windows-identity-bound-tree-termination.md) | 2026-10-18 | DECISION：Windows 进程树身份绑定归属与终止（含 PR #47 返修语义） |
+| [ADR-016](decisions/ADR-016-stop-the-world-json-to-sqlite-cutover.md) | 2026-11-01 | DECISION：JSON 到空 SQLite Task Authority 的停机切换 |
+| [ADR-017](decisions/ADR-017-single-user-trusted-local-workspace-admission.md) | 2026-11-01 | DECISION：单用户可信本地 Workspace Admission 边界 |
 | [decisions/roadmap-decisions-2026-09-27.md](decisions/roadmap-decisions-2026-09-27.md) | 2026-09-27 | 路线图与决策讨论 |
 | [decisions/reliability-repair-plan-v2-2026-10-03.md](decisions/reliability-repair-plan-v2-2026-10-03.md) | 2026-10-03 | 可靠性修复计划，含未完成项 |
 

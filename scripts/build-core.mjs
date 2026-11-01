@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, existsSync, realpathSync, renameSync, rmSync } from "node:fs";
+import { copyFileSync, mkdtempSync, mkdirSync, existsSync, realpathSync, renameSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,6 +14,14 @@ try {
   const compiler = createRequire(import.meta.url).resolve("typescript/bin/tsc");
   const run = spawnSync(process.execPath, [compiler, "--project", path.join(root, "tsconfig.json"), "--outDir", staging], { cwd: root, stdio: "inherit" });
   if (run.status !== 0) throw new Error(`core compilation failed (${String(run.status)})`);
+  copyFileSync(
+    path.join(root, "src", "store", "json-history-result-exceptions.mjs"),
+    path.join(staging, "src", "store", "json-history-result-exceptions.mjs"),
+  );
+  copyFileSync(
+    path.join(root, "src", "sqlite-candidate", "wp6b2b1", "schema.sql"),
+    path.join(staging, "src", "sqlite-candidate", "wp6b2b1", "schema.sql"),
+  );
   mkdirSync(output, { recursive: true });
   // Reject an output junction escaping the named workspace before any move.
   if (realpathSync(output) !== output || (existsSync(target) && realpathSync(target) !== target)) throw new Error("core output must be a real directory inside the repository");

@@ -2175,9 +2175,71 @@ var init_task_store = __esm({
   }
 });
 
+// src/store/json-history-result-exceptions.mjs
+function freeze(value) {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const child of Object.values(value)) freeze(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+var HISTORICAL_RESULT_EXCEPTIONS;
+var init_json_history_result_exceptions = __esm({
+  "src/store/json-history-result-exceptions.mjs"() {
+    "use strict";
+    HISTORICAL_RESULT_EXCEPTIONS = freeze([
+      {
+        exception_id: "cad2bim_rm02_attempt_2_result_stored_at_3",
+        task_id: "CAD2BIM_FULL_AUDIT_RM02_001",
+        stored_attempt: 3,
+        internal_attempt: 2,
+        relative_path: "CAD2BIM_FULL_AUDIT_RM02_001/attempts/3/result.json",
+        sha256: "539c76d236155688feb906a8dfb9764f92a2f76ff8e16b97e6177c2e7bd95530",
+        byte_length: 13981,
+        archive_anomaly: {
+          code: "conflicting_projection",
+          path: "CAD2BIM_FULL_AUDIT_RM02_001/attempts/3/result.json",
+          record_type: "attempt",
+          detail: "result_attempt_does_not_match_storage_generation"
+        }
+      },
+      {
+        exception_id: "cad2bim_rm02_attempt_3_result_stored_at_4",
+        task_id: "CAD2BIM_FULL_AUDIT_RM02_001",
+        stored_attempt: 4,
+        internal_attempt: 3,
+        relative_path: "CAD2BIM_FULL_AUDIT_RM02_001/attempts/4/result.json",
+        sha256: "ec6faea33c6b3b7c299b2c4a6094c431b670d807e00398ed03364ec5a1c61cd3",
+        byte_length: 12989,
+        archive_anomaly: {
+          code: "conflicting_projection",
+          path: "CAD2BIM_FULL_AUDIT_RM02_001/attempts/4/result.json",
+          record_type: "attempt",
+          detail: "result_attempt_does_not_match_storage_generation"
+        }
+      },
+      {
+        exception_id: "project_alignment_current_attempt_2_root_result_binds_1",
+        task_id: "PROJECT-ALIGNMENT-DOC-HYGIENE-CLOSE-1-COMMIT-20260930",
+        stored_attempt: 2,
+        internal_attempt: 1,
+        relative_path: "PROJECT-ALIGNMENT-DOC-HYGIENE-CLOSE-1-COMMIT-20260930/result.json",
+        sha256: "494235a230178fe2aeb0128210bba0cf8fec5029202b07b0a1b3648476d3e12e",
+        byte_length: 6247,
+        archive_anomaly: {
+          code: "conflicting_projection",
+          path: "PROJECT-ALIGNMENT-DOC-HYGIENE-CLOSE-1-COMMIT-20260930/result.json",
+          record_type: "result",
+          detail: "result_attempt_does_not_match_storage_generation"
+        }
+      }
+    ]);
+  }
+});
+
 // src/store/json-writer-quiescence.ts
 import { closeSync as closeSync3, existsSync as existsSync4, fsyncSync as fsyncSync2, mkdirSync as mkdirSync3, openSync as openSync3, readFileSync as readFileSync4, readdirSync as readdirSync2, realpathSync as realpathSync2, rmSync as rmSync2, writeFileSync as writeFileSync3 } from "node:fs";
-import { randomUUID as randomUUID3 } from "node:crypto";
+import { createHash as createHash3, randomUUID as randomUUID3 } from "node:crypto";
 import path6 from "node:path";
 function fencePath(dataRoot) {
   return path6.join(dataRoot, ".tasks", FENCE_FILE);
@@ -2399,6 +2461,7 @@ var init_json_writer_quiescence = __esm({
     init_process_lock();
     init_durable_file_system();
     init_task_store();
+    init_json_history_result_exceptions();
     FENCE_FILE = ".writer-quiescence.json";
     ROSTER_DIR = ".writer-roster";
     REGISTRY_FILE = "registry.json";
@@ -4393,7 +4456,7 @@ var init_child_env = __esm({
 });
 
 // src/runtime/account-provider.ts
-import { createHash as createHash3 } from "node:crypto";
+import { createHash as createHash4 } from "node:crypto";
 import { existsSync as existsSync6, readFileSync as readFileSync6 } from "node:fs";
 import path8 from "node:path";
 function buildAccountProviderPayload(config2) {
@@ -4429,7 +4492,7 @@ function buildAccountProviderPayload(config2) {
   const resolvedBuiltinPath = path8.resolve(config2.providerBuiltinConfigFile);
   return {
     revision: `account:codex-zcode-bridge:${Date.now()}`,
-    basedOnZCodeBuiltinRevision: `zcode-builtin:${revision}:${createHash3("sha256").update(resolvedBuiltinPath).digest("hex")}`,
+    basedOnZCodeBuiltinRevision: `zcode-builtin:${revision}:${createHash4("sha256").update(resolvedBuiltinPath).digest("hex")}`,
     providers,
     states
   };
@@ -27272,23 +27335,31 @@ var init_zcode_app_server_adapter = __esm({
           }
         };
         let terminationStarted = false;
+        const traceRootExitedDecision = () => {
+          try {
+            this.#onCleanupDecisionTrace?.("root_exited_branch");
+          } catch {
+          }
+        };
         const closeWindowsTree = async () => {
           if (!child.pid) return null;
           const identity = entry.childIdentity?.pid === child.pid ? entry.childIdentity : null;
           if (!terminationStarted && entry.childExitSeen && identity?.fingerprint) {
-            try {
-              this.#onCleanupDecisionTrace?.("root_exited_branch");
-            } catch {
-            }
+            traceRootExitedDecision();
             throw new WindowsTreeCleanupError("process_tree_root_exited", "process_tree_root_exited: original child exit observed; recorded-tree verification required (no termination transaction started)", [child.pid]);
           }
           terminationStarted = true;
-          const terminated = await this.#terminateProcessTree(child.pid, {
-            graceMs: 500,
-            killWaitMs: 5e3,
-            expectedRootFingerprint: identity?.fingerprint ?? null
-          });
-          return terminated.windows ?? null;
+          try {
+            const terminated = await this.#terminateProcessTree(child.pid, {
+              graceMs: 500,
+              killWaitMs: 5e3,
+              expectedRootFingerprint: identity?.fingerprint ?? null
+            });
+            return terminated.windows ?? null;
+          } catch (error62) {
+            if (error62?.code === "process_tree_root_exited") traceRootExitedDecision();
+            throw error62;
+          }
         };
         const close = async () => {
           if (closed) {
@@ -27304,6 +27375,13 @@ var init_zcode_app_server_adapter = __esm({
           if (process.platform === "win32" && childStillOnSpawnGeneration(generationChild)) {
             await identityCapture;
           }
+          if (process.platform === "win32" && child.pid) {
+            try {
+              return await closeWindowsTree();
+            } finally {
+              child.stdin.end();
+            }
+          }
           child.stdin.end();
           await new Promise((resolve) => {
             const timer = setTimeout(() => resolve(), 1e3);
@@ -27313,9 +27391,6 @@ var init_zcode_app_server_adapter = __esm({
               resolve();
             });
           });
-          if (process.platform === "win32" && child.pid) {
-            return closeWindowsTree();
-          }
           if (child.pid && isProcessRunning(child.pid)) {
             if (entry.childExitSeen) return null;
             await this.#terminateProcessTree(child.pid, {
@@ -28833,7 +28908,7 @@ __export(launch_bootstrap_exports, {
   spawnAndBootstrapOnce: () => spawnAndBootstrapOnce,
   writeLaunchBootstrap: () => writeLaunchBootstrap
 });
-import { createHash as createHash4 } from "node:crypto";
+import { createHash as createHash5 } from "node:crypto";
 function createLaunchBootstrap(source) {
   const snapshot = source.policy_snapshot;
   const bootstrap = {
@@ -28930,7 +29005,7 @@ function deriveAdmissionPolicySnapshotDigest(value) {
     policy_digest: value.policy_digest,
     execution_profile_id: value.execution_profile_id
   };
-  return createHash4("sha256").update(canonicalJson(envelope), "utf8").digest("hex");
+  return createHash5("sha256").update(canonicalJson(envelope), "utf8").digest("hex");
 }
 function canonicalJson(value) {
   if (value === null || typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
@@ -28974,7 +29049,7 @@ __export(interaction_channel_exports, {
   isCandidateInteractionChannel: () => isCandidateInteractionChannel,
   isCandidateInteractionPreparedAcknowledgement: () => isCandidateInteractionPreparedAcknowledgement
 });
-import { createHash as createHash5 } from "node:crypto";
+import { createHash as createHash6 } from "node:crypto";
 async function createCandidateInteractionChannel(child, operation, verifyProcessIdentity) {
   if (!child || !Number.isSafeInteger(child.pid) || !Array.isArray(child.stdio) || child.stdio.length < 10 || !operation || operation.operation_kind !== "attempt_lifecycle" || operation.phase !== "running" || !Number.isSafeInteger(operation.generation) || operation.generation < 1 || !operation.claim_id || operation.claim_generation !== operation.generation || !operation.claim_worker_identity_json || !operation.launch_identity_json || !operation.claim_worker_identity_digest || typeof verifyProcessIdentity !== "function") throw coded("interaction_channel_unavailable");
   let worker;
@@ -29300,7 +29375,7 @@ function stableJson2(value, depth = 0) {
   throw coded("interaction_json_invalid");
 }
 function sha256(value) {
-  return createHash5("sha256").update(value).digest("hex");
+  return createHash6("sha256").update(value).digest("hex");
 }
 function coded(code) {
   return Object.assign(new Error(code), { code });
@@ -29415,7 +29490,7 @@ init_build_provenance();
 init_profile();
 init_json_writer_quiescence();
 init_process_probe();
-import { createHash as createHash6, randomUUID as randomUUID5 } from "node:crypto";
+import { createHash as createHash7, randomUUID as randomUUID5 } from "node:crypto";
 import { closeSync as closeSync4, createWriteStream, readFileSync as readFileSync7, writeFileSync as writeFileSync4 } from "node:fs";
 import { Socket } from "node:net";
 var workerArgs = process.argv.slice(2);
@@ -29719,7 +29794,7 @@ function buildExecutionCleanupProof(outcome) {
     workspace_retained: true,
     adapter_process_id: receipt.rootPid,
     adapter_start_fingerprint: root.fingerprint,
-    process_tree_receipt_digest: createHash6("sha256").update(JSON.stringify(receipt), "utf8").digest("hex"),
+    process_tree_receipt_digest: createHash7("sha256").update(JSON.stringify(receipt), "utf8").digest("hex"),
     process_tree_member_count: receipt.members.length,
     managed_browser_cleanup_verified: true
   };
@@ -29750,7 +29825,7 @@ function digestProvenance(value) {
     bridge: { path: value.bridge.path, sha256: value.bridge.sha256 },
     worker: { path: value.worker.path, sha256: value.worker.sha256 }
   });
-  return createHash6("sha256").update(canonical, "utf8").digest("hex");
+  return createHash7("sha256").update(canonical, "utf8").digest("hex");
 }
 function readPrivateFrame(fd, maximum) {
   const frame = readFileSync7(fd);

@@ -4,6 +4,7 @@ import { existsSync, lstatSync, realpathSync, readFileSync, writeFileSync, openS
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isCandidateInteractionAcknowledgement, isCandidateInteractionPreparedAcknowledgement } from './interaction-channel.mjs';
+import { historicalResultExceptionSetDigest, historicalResultExceptionTaskIds, isCanonicalHistoricalResultExceptionSet } from '../../store/json-history-result-exceptions.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SCHEMA = readFileSync(new URL('./schema.sql', import.meta.url), 'utf8');
@@ -376,6 +377,59 @@ function validateRecoveryEventBinding(operation,event,evidence,claimSequence){
 }
 export class AdmissionError extends Error { constructor(code, message = code) { super(message); this.code = code; } }
 const fail = (code, message) => { throw new AdmissionError(code, message); };
+function parseHistoricalExceptionManifest(sourceManifestJson, sourceManifestDigest) {
+  let manifest;
+  try { manifest=JSON.parse(sourceManifestJson); }
+  catch { fail('invalid_source_manifest'); }
+  if(!manifest||Object.getPrototypeOf(manifest)!==Object.prototype
+    ||typeof sourceManifestDigest!=='string'||digest(sourceManifestJson)!==sourceManifestDigest
+    ||!Array.isArray(manifest.files))fail('invalid_source_manifest');
+  const exceptions=manifest.historical_exceptions;
+  if(!Array.isArray(exceptions)||(exceptions.length!==0&&!isCanonicalHistoricalResultExceptionSet(exceptions))
+    ||manifest.historical_exception_count!==exceptions.length
+    ||manifest.historical_exception_digest!==historicalResultExceptionSetDigest(exceptions))fail('invalid_historical_exception_policy');
+  return {manifest,exceptions,exceptionTaskIds:historicalResultExceptionTaskIds(exceptions)};
+}
+function parseAuthoritySourceManifest(sourceManifestJson, sourceManifestDigest) {
+  const parsed=parseHistoricalExceptionManifest(sourceManifestJson,sourceManifestDigest);
+  const {manifest}=parsed;
+  if(manifest.kind===undefined)return {...parsed,kind:'historical_projection'};
+  if(manifest.kind!=='raw_json_archive_cutover'
+    ||typeof manifest.source_tasks_root!=='string'||!path.isAbsolute(manifest.source_tasks_root)
+    ||typeof manifest.archive_manifest_digest!=='string'||!/^[0-9a-f]{64}$/u.test(manifest.archive_manifest_digest)
+    ||typeof manifest.source_files_digest!=='string'||!/^[0-9a-f]{64}$/u.test(manifest.source_files_digest)
+    ||manifest.task_count!==0||manifest.result_count!==0||manifest.event_count!==0
+    ||!Number.isSafeInteger(manifest.artifact_count)||manifest.artifact_count<0
+    ||!Number.isSafeInteger(manifest.artifact_bytes)||manifest.artifact_bytes<0
+    ||!Number.isSafeInteger(manifest.archive_file_count)||manifest.archive_file_count!==manifest.artifact_count
+    ||!Number.isSafeInteger(manifest.archive_byte_count)||manifest.archive_byte_count!==manifest.artifact_bytes
+    ||parsed.exceptions.length!==0||!Array.isArray(manifest.files)||manifest.files.length!==0)
+    fail('invalid_raw_json_archive_cutover_manifest');
+  return {...parsed,kind:'raw_json_archive_cutover'};
+}
+function validateHistoricalExceptionSnapshot(snapshot, sourceManifest) {
+  const {manifest,exceptions,exceptionTaskIds}=sourceManifest;
+  const expectedTaskCount=snapshot.tasks.length+exceptionTaskIds.length;
+  const artifactBytes=snapshot.artifacts.reduce((total,artifact)=>total+artifact.byte_length,0);
+  if(manifest.task_count!==expectedTaskCount||manifest.artifact_count!==snapshot.artifacts.length
+    ||manifest.artifact_bytes!==artifactBytes||manifest.result_count!==snapshot.results.length
+    ||manifest.event_count!==snapshot.events.length
+    ||manifest.historical_exception_count!==exceptions.length
+    ||manifest.historical_exception_digest!==historicalResultExceptionSetDigest(exceptions))fail('invalid_source_manifest');
+  for(const taskId of exceptionTaskIds){
+    if(snapshot.tasks.some(task=>task.task_id===taskId)
+      ||snapshot.results.some(result=>result.task_id===taskId)
+      ||snapshot.events.some(event=>event.task_id===taskId)
+      ||snapshot.artifacts.some(artifact=>artifact.relative_path.startsWith(`${taskId}/`)
+        &&(artifact.task_id!==null||artifact.attempt!==null)))fail('historical_exception_promoted_to_online_authority');
+  }
+  for(const exception of exceptions){
+    const artifact=snapshot.artifacts.find(candidate=>candidate.relative_path===exception.relative_path);
+    if(!artifact||artifact.artifact_id!==exception.artifact_id||artifact.sha256!==exception.sha256
+      ||artifact.byte_length!==exception.byte_length||artifact.task_id!==null||artifact.attempt!==null
+      ||snapshot.results.some(result=>result.artifact_id===exception.artifact_id))fail('invalid_historical_exception_artifact');
+  }
+}
 function pathsFor(root, { databaseFileName = 'operations.sqlite3', managedDataDirectory = false, allowCutoverPending = false, allowUnpublishedCutover = false } = {}) {
   if (typeof root !== 'string' || !path.isAbsolute(root) || !existsSync(root) || !lstatSync(root).isDirectory() || lstatSync(root).isSymbolicLink()) fail('invalid_data_root');
   if (typeof databaseFileName !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/u.test(databaseFileName)
@@ -522,6 +576,9 @@ export class IsolatedAdmissionStore {
         return {kind:'fresh_install',receipt_id:fresh[0].receipt_id,verifier_version:fresh[0].verifier_version};
       }
       const receipt=switched[0];
+      const migration=this.#db.prepare('SELECT source_manifest_json,source_manifest_digest FROM migration_runs WHERE migration_id=?').get(receipt.migration_id);
+      if(!migration)fail('migration_receipt_missing');
+      const policy=parseAuthoritySourceManifest(migration.source_manifest_json,migration.source_manifest_digest);
       if(typeof expectedRuntimeRosterDigest!=='string'||!/^[0-9a-f]{64}$/u.test(expectedRuntimeRosterDigest)
         ||receipt.runtime_roster_digest!==expectedRuntimeRosterDigest)fail('authority_runtime_roster_mismatch');
       assertCutoverPublicationGate(this.#db,this.#paths);
@@ -530,7 +587,71 @@ export class IsolatedAdmissionStore {
         source_manifest_digest:receipt.source_manifest_digest,archive_directory:receipt.archive_directory,
         archive_manifest_digest:receipt.archive_manifest_digest,archive_source_tasks_root:receipt.archive_source_tasks_root,
         archive_file_count:receipt.archive_file_count,archive_byte_count:receipt.archive_byte_count,
+        historical_exception_count:policy.exceptions.length,
+        historical_exception_digest:policy.manifest.historical_exception_digest,
+        source_kind:policy.kind,
         verifier_version:receipt.verifier_version};
+    });
+  }
+  /**
+   * Record a stop-the-world cutover to a new empty SQLite Task Authority.
+   * Legacy history remains solely in the separately verified raw archive.
+   */
+  recordRawJsonArchiveCutover(snapshot) {
+    this.#assertWritable();
+    if(!snapshot||Object.getPrototypeOf(snapshot)!==Object.prototype||snapshot.schema_version!==1)fail('invalid_raw_cutover_snapshot');
+    const topKeys=['archive','cutover_id','migration_id','protocol_version','runtime_roster_digest','schema_version','source','verifier_version'];
+    const source=snapshot.source;
+    const sourceKeys=['manifest_digest','manifest_json','root_digest'];
+    const archive=snapshot.archive;
+    const archiveKeys=['archive_directory','byte_count','file_count','manifest_digest','source_tasks_root'];
+    if(Object.keys(snapshot).sort().join('|')!==topKeys.join('|')
+      ||!source||Object.getPrototypeOf(source)!==Object.prototype||Object.keys(source).sort().join('|')!==sourceKeys.join('|')
+      ||!archive||Object.getPrototypeOf(archive)!==Object.prototype||Object.keys(archive).sort().join('|')!==archiveKeys.join('|')
+      ||!validId(snapshot.migration_id)||!validId(snapshot.cutover_id)||!validText(snapshot.verifier_version,128)
+      ||!validText(snapshot.protocol_version,128)||typeof snapshot.runtime_roster_digest!=='string'||!/^[0-9a-f]{64}$/u.test(snapshot.runtime_roster_digest)
+      ||typeof source.root_digest!=='string'||!/^[0-9a-f]{64}$/u.test(source.root_digest)
+      ||typeof source.manifest_digest!=='string'||!/^[0-9a-f]{64}$/u.test(source.manifest_digest)
+      ||typeof source.manifest_json!=='string'||digest(source.manifest_json)!==source.manifest_digest
+      ||!validText(archive.archive_directory,32767)||!path.isAbsolute(archive.archive_directory)
+      ||!validText(archive.source_tasks_root,32767)||!path.isAbsolute(archive.source_tasks_root)
+      ||typeof archive.manifest_digest!=='string'||!/^[0-9a-f]{64}$/u.test(archive.manifest_digest)
+      ||!Number.isSafeInteger(archive.file_count)||archive.file_count<0
+      ||!Number.isSafeInteger(archive.byte_count)||archive.byte_count<0)fail('invalid_raw_cutover_snapshot');
+    const policy=parseAuthoritySourceManifest(source.manifest_json,source.manifest_digest);
+    if(policy.kind!=='raw_json_archive_cutover'
+      ||policy.manifest.source_tasks_root!==archive.source_tasks_root
+      ||policy.manifest.archive_manifest_digest!==archive.manifest_digest
+      ||policy.manifest.archive_file_count!==archive.file_count
+      ||policy.manifest.archive_byte_count!==archive.byte_count)fail('raw_cutover_archive_identity_mismatch');
+    const at=new Date().toISOString();
+    return this.#transaction(()=>{
+      if(this.#db.prepare('SELECT COUNT(*) AS n FROM tasks').get().n!==0
+        ||this.#db.prepare('SELECT COUNT(*) AS n FROM migration_runs').get().n!==0
+        ||this.#db.prepare('SELECT COUNT(*) AS n FROM fresh_install_receipt').get().n!==0
+        ||this.#db.prepare('SELECT COUNT(*) AS n FROM authority_switch').get().n!==0
+        ||this.#db.prepare('SELECT COUNT(*) AS n FROM manager_operations').get().n!==0
+        ||this.#db.prepare('SELECT COUNT(*) AS n FROM json_artifacts').get().n!==0)fail('migration_target_not_empty');
+      this.#db.prepare(`INSERT INTO migration_runs(migration_id,state,source_root_digest,source_manifest_json,source_manifest_digest,
+        source_task_count,source_artifact_count,source_artifact_bytes,source_result_count,source_event_count,
+        archive_directory,archive_manifest_digest,archive_source_tasks_root,archive_file_count,archive_byte_count,
+        verifier_version,created_at,verified_at)
+        VALUES(?,'verified',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+        snapshot.migration_id,source.root_digest,source.manifest_json,source.manifest_digest,
+        0,archive.file_count,archive.byte_count,0,0,
+        archive.archive_directory,archive.manifest_digest,archive.source_tasks_root,
+        archive.file_count,archive.byte_count,snapshot.verifier_version,at,at);
+      const inserted=this.#db.prepare(`INSERT INTO authority_switch(singleton,authority_generation,cutover_id,migration_id,source_root_digest,
+        source_manifest_digest,archive_directory,archive_manifest_digest,archive_source_tasks_root,archive_file_count,
+        archive_byte_count,schema_version,protocol_version,runtime_roster_digest,verifier_version,created_at)
+        VALUES(1,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+        snapshot.cutover_id,snapshot.migration_id,source.root_digest,source.manifest_digest,
+        archive.archive_directory,archive.manifest_digest,archive.source_tasks_root,
+        archive.file_count,archive.byte_count,SCHEMA_VERSION,snapshot.protocol_version,
+        snapshot.runtime_roster_digest,snapshot.verifier_version,at);
+      if(inserted.changes!==1)fail('authority_switch_insert_failed');
+      return {migration_id:snapshot.migration_id,cutover_id:snapshot.cutover_id,event_cursor:0,
+        task_count:0,artifact_count:0,result_count:0,historical_exception_count:0};
     });
   }
   /**
@@ -541,10 +662,10 @@ export class IsolatedAdmissionStore {
   importJsonAuthoritySnapshot(snapshot) {
     this.#assertWritable();
     if(!snapshot||Object.getPrototypeOf(snapshot)!==Object.prototype||snapshot.schema_version!==1)fail('invalid_migration_snapshot');
-    const topKeys=['archive','artifacts','cutover_id','events','migration_id','protocol_version','results','runtime_roster_digest','schema_version','source','tasks','verifier_version'];
+    const topKeys=['archive','artifacts','cutover_id','events','historical_exceptions','migration_id','protocol_version','results','runtime_roster_digest','schema_version','source','tasks','verifier_version'];
     if(Object.keys(snapshot).sort().join('|')!==topKeys.join('|'))fail('invalid_migration_snapshot');
     const source=snapshot.source;
-    const sourceKeys=['artifact_bytes','artifact_count','event_count','manifest_digest','manifest_json','result_count','root_digest','task_count'];
+    const sourceKeys=['artifact_bytes','artifact_count','event_count','historical_exception_count','historical_exception_digest','manifest_digest','manifest_json','result_count','root_digest','task_count'];
     const archive=snapshot.archive;
     const archiveKeys=['archive_directory','byte_count','file_count','manifest_digest','source_tasks_root'];
     if(!source||Object.getPrototypeOf(source)!==Object.prototype||Object.keys(source).sort().join('|')!==sourceKeys.join('|')
@@ -561,9 +682,24 @@ export class IsolatedAdmissionStore {
       ||!Number.isSafeInteger(archive.byte_count)||archive.byte_count<0
       ||archive.file_count!==source.artifact_count||archive.byte_count!==source.artifact_bytes
       ||!Array.isArray(snapshot.tasks)||!Array.isArray(snapshot.artifacts)||!Array.isArray(snapshot.results)||!Array.isArray(snapshot.events)
+      ||!Array.isArray(snapshot.historical_exceptions)
       ||![source.task_count,source.artifact_count,source.artifact_bytes,source.result_count,source.event_count].every(v=>Number.isSafeInteger(v)&&v>=0)
-      ||source.task_count!==snapshot.tasks.length||source.artifact_count!==snapshot.artifacts.length
+      ||!Number.isSafeInteger(source.historical_exception_count)||source.historical_exception_count<0
+      ||typeof source.historical_exception_digest!=='string'||!/^[0-9a-f]{64}$/u.test(source.historical_exception_digest)
+      ||source.historical_exception_count!==snapshot.historical_exceptions.length
+      ||source.historical_exception_digest!==historicalResultExceptionSetDigest(snapshot.historical_exceptions)
+      ||source.artifact_count!==snapshot.artifacts.length
       ||source.result_count!==snapshot.results.length||source.event_count!==snapshot.events.length)fail('invalid_migration_snapshot');
+    const sourceManifest=parseHistoricalExceptionManifest(source.manifest_json,source.manifest_digest);
+    if(sourceManifest.manifest.task_count!==source.task_count
+      ||sourceManifest.manifest.artifact_count!==source.artifact_count
+      ||sourceManifest.manifest.artifact_bytes!==source.artifact_bytes
+      ||sourceManifest.manifest.result_count!==source.result_count
+      ||sourceManifest.manifest.event_count!==source.event_count
+      ||sourceManifest.manifest.historical_exception_count!==source.historical_exception_count
+      ||sourceManifest.manifest.historical_exception_digest!==source.historical_exception_digest
+      ||canonical(sourceManifest.exceptions)!==canonical(snapshot.historical_exceptions))fail('invalid_source_manifest');
+    validateHistoricalExceptionSnapshot(snapshot,sourceManifest);
     const at=new Date().toISOString();
     return this.#transaction(()=>{
       if(this.#db.prepare('SELECT COUNT(*) AS n FROM tasks').get().n!==0
@@ -687,7 +823,8 @@ export class IsolatedAdmissionStore {
         SCHEMA_VERSION,snapshot.protocol_version,snapshot.runtime_roster_digest,snapshot.verifier_version,at);
       if(inserted.changes!==1)fail('authority_switch_insert_failed');
       return {migration_id:snapshot.migration_id,cutover_id:snapshot.cutover_id,event_cursor:cursor,
-        task_count:snapshot.tasks.length,artifact_count:snapshot.artifacts.length,result_count:snapshot.results.length};
+        task_count:snapshot.tasks.length,artifact_count:snapshot.artifacts.length,result_count:snapshot.results.length,
+        historical_exception_count:snapshot.historical_exceptions.length};
     });
   }
   /** Persist a TaskPackage and its initial queued Attempt in this candidate authority. */
@@ -776,6 +913,14 @@ export class IsolatedAdmissionStore {
       catch{fail('migrated_result_projection_invalid');}
       if(digest(row.result_json)!==row.result_digest)fail('migrated_result_digest_mismatch');
       return {task_id:row.task_id,attempt:row.attempt,result,artifact_id:row.artifact_id};
+    });
+  }
+  /** Read the immutable, archive-only Result exceptions bound into the source Manifest. */
+  readMigratedHistoryExceptions() {
+    return this.#readConsistent(()=>{
+      const migration=this.#db.prepare('SELECT source_manifest_json,source_manifest_digest FROM migration_runs').get();
+      if(!migration)return [];
+      return parseHistoricalExceptionManifest(migration.source_manifest_json,migration.source_manifest_digest).exceptions;
     });
   }
   /** Read the Task, current Attempt, bound Operation and verified Result in one snapshot. */
@@ -2069,6 +2214,12 @@ export class IsolatedAdmissionStore {
           ||!validText(receipt.cutover_id,128)||!validText(receipt.created_at,64)||Number.isNaN(Date.parse(receipt.created_at))
           ||!validText(migration.created_at,64)||!validText(migration.verified_at,64)
           ||Number.isNaN(Date.parse(migration.created_at))||Number.isNaN(Date.parse(migration.verified_at)))fail('authority_switch_invalid');
+        const policy=parseAuthoritySourceManifest(migration.source_manifest_json,migration.source_manifest_digest);
+        if(policy.manifest.task_count!==migration.source_task_count
+          ||policy.manifest.artifact_count!==migration.source_artifact_count
+          ||policy.manifest.artifact_bytes!==migration.source_artifact_bytes
+          ||policy.manifest.result_count!==migration.source_result_count
+          ||policy.manifest.event_count!==migration.source_event_count)fail('authority_switch_invalid');
       }else if(migrationRuns.length||migratedResultsCount||migratedEventsCount
         ||this.#db.prepare('SELECT COUNT(*) AS n FROM json_artifacts').get().n){
         fail('migration_receipt_missing');
@@ -2094,16 +2245,49 @@ export class IsolatedAdmissionStore {
       }
       if(authoritySwitches.length){
         const migration=migrationRuns[0];
-        if(!Number.isSafeInteger(migration.source_task_count)||migration.source_task_count<0
-          ||!Number.isSafeInteger(migration.source_artifact_count)||migration.source_artifact_count<0
-          ||!Number.isSafeInteger(migration.source_artifact_bytes)||migration.source_artifact_bytes<0
-          ||!Number.isSafeInteger(migration.source_result_count)||migration.source_result_count<0
-          ||!Number.isSafeInteger(migration.source_event_count)||migration.source_event_count<0
-          ||migration.source_task_count>this.#db.prepare('SELECT COUNT(*) AS n FROM tasks').get().n
-          ||migration.source_artifact_count!==artifacts.length||migration.source_artifact_bytes!==artifactBytes
-          ||migration.source_result_count!==migratedResultsCount||migration.source_event_count!==migratedEventsCount
-          ||migration.archive_file_count!==artifacts.length||migration.archive_byte_count!==artifactBytes)
-          fail('migration_counts_mismatch');
+        const policy=parseAuthoritySourceManifest(migration.source_manifest_json,migration.source_manifest_digest);
+        if(policy.kind==='raw_json_archive_cutover'){
+          if(artifacts.length!==0||migratedResultsCount!==0||migratedEventsCount!==0
+            ||migration.source_task_count!==0||migration.source_result_count!==0||migration.source_event_count!==0
+            ||migration.source_artifact_count!==migration.archive_file_count
+            ||migration.source_artifact_bytes!==migration.archive_byte_count)
+            fail('raw_cutover_contains_legacy_projection',JSON.stringify({
+              artifact_count:artifacts.length,
+              migrated_result_count:migratedResultsCount,migrated_event_count:migratedEventsCount,
+              source_task_count:migration.source_task_count,source_result_count:migration.source_result_count,
+              source_event_count:migration.source_event_count,source_artifact_count:migration.source_artifact_count,
+              archive_file_count:migration.archive_file_count,source_artifact_bytes:migration.source_artifact_bytes,
+              archive_byte_count:migration.archive_byte_count
+            }));
+        }else{
+          const migratedOnlineTaskIds=new Set(artifacts
+            .map(artifact=>artifact.task_id)
+            .filter(taskId=>taskId!==null));
+          if(!Number.isSafeInteger(migration.source_task_count)||migration.source_task_count<0
+            ||!Number.isSafeInteger(migration.source_artifact_count)||migration.source_artifact_count<0
+            ||!Number.isSafeInteger(migration.source_artifact_bytes)||migration.source_artifact_bytes<0
+            ||!Number.isSafeInteger(migration.source_result_count)||migration.source_result_count<0
+            ||!Number.isSafeInteger(migration.source_event_count)||migration.source_event_count<0
+            ||migration.source_task_count!==migratedOnlineTaskIds.size+policy.exceptionTaskIds.length
+            ||migration.source_artifact_count!==artifacts.length||migration.source_artifact_bytes!==artifactBytes
+            ||migration.source_result_count!==migratedResultsCount||migration.source_event_count!==migratedEventsCount
+            ||migration.archive_file_count!==artifacts.length||migration.archive_byte_count!==artifactBytes)
+            fail('migration_counts_mismatch');
+        }
+        for(const taskId of policy.exceptionTaskIds){
+          if(this.#db.prepare('SELECT 1 FROM tasks WHERE task_id=?').get(taskId)
+            ||this.#db.prepare('SELECT 1 FROM migrated_task_results WHERE task_id=?').get(taskId)
+            ||this.#db.prepare('SELECT 1 FROM migrated_task_events WHERE task_id=?').get(taskId)
+            ||artifacts.some(artifact=>artifact.relative_path.startsWith(`${taskId}/`)
+              &&(artifact.task_id!==null||artifact.attempt!==null)))fail('historical_exception_promoted_to_online_authority');
+        }
+        for(const exception of policy.exceptions){
+          const artifact=artifactById.get(exception.artifact_id);
+          if(!artifact||artifact.relative_path!==exception.relative_path||artifact.sha256!==exception.sha256
+            ||artifact.byte_length!==exception.byte_length||artifact.task_id!==null||artifact.attempt!==null
+            ||this.#db.prepare('SELECT 1 FROM migrated_task_results WHERE artifact_id=?').get(exception.artifact_id))
+            fail('invalid_historical_exception_artifact');
+        }
       }
       const migratedResults=this.#db.prepare('SELECT * FROM migrated_task_results ORDER BY task_id,attempt').all();
       for(const resultRow of migratedResults){

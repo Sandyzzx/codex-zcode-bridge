@@ -1,6 +1,7 @@
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import type { Dirent } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { uptime } from "node:os";
 import path from "node:path";
 import { tryAcquireProcessLock, withProcessLock } from "./process-lock.js";
 import type { ProbeRequest, ProcessIdentity, ProcessProbe } from "../runtime/process-probe.js";
@@ -10,6 +11,7 @@ import {
 } from "../runtime/durable-file-system.js";
 import type { ProcessIdentityLike, TaskStore } from "./task-store.js";
 import { isTerminalStatus } from "./task-store.js";
+import { historicalResultExceptionFor } from "./json-history-result-exceptions.mjs";
 
 export type JsonWriterFenceState = "closing" | "draining" | "sealed";
 export type JsonWriterKind = "manager" | "worker";
@@ -38,6 +40,11 @@ export interface JsonWriterQuiescenceResult {
   readonly state: JsonWriterFenceState;
   readonly blockers: readonly string[];
   readonly reaped_leases: number;
+}
+
+export interface JsonWriterSealOptions {
+  /** Injectable boot boundary for deterministic pre-boot history tests. */
+  readonly bootTimeMs?: number;
 }
 
 export function jsonWriterFenceState(dataRoot: string): "open" | JsonWriterFenceState {
@@ -417,7 +424,7 @@ function writeFence(
 }
 
 interface AttemptExecutorEvidence {
-  readonly started: { worker_pid?: unknown } | null;
+  readonly started: { worker_pid?: unknown; started_at?: unknown } | null;
   readonly claim: { pid?: unknown } | null;
   readonly identity: { worker?: ProcessIdentityLike; runtime?: ProcessIdentityLike | null } | null;
 }
@@ -452,6 +459,85 @@ function singleAttemptPid(
   return known[0] ?? null;
 }
 
+function validAttemptTimestamp(value: unknown): number | null {
+  if (typeof value !== "string" || value.length === 0) return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+const TERMINAL_RESULT_STATUSES = new Set(["completed", "failed", "cancelled", "waiting_for_master"]);
+
+interface AttemptResultTiming {
+  readonly startedAtMs: number | null;
+  readonly cancelledBeforeStart: boolean;
+}
+
+function isApprovedHistoricalResultException(
+  file: string,
+  taskId: string,
+  attempt: number,
+  current: boolean,
+): boolean {
+  try {
+    const bytes = readFileSync(file);
+    const relativePath = current
+      ? `${taskId}/result.json`
+      : `${taskId}/attempts/${attempt}/result.json`;
+    return historicalResultExceptionFor(
+      taskId,
+      attempt,
+      relativePath,
+      createHash("sha256").update(bytes).digest("hex"),
+      bytes.byteLength,
+    ) !== null;
+  } catch {
+    return false;
+  }
+}
+
+function attemptResultTiming(
+  file: string | null,
+  taskId: string,
+  attempt: number,
+  currentStatus: string | null,
+  blockers: string[],
+): AttemptResultTiming | null {
+  if (file === null) return null;
+  let result: unknown;
+  try {
+    result = JSON.parse(readFileSync(file, "utf8"));
+  } catch {
+    blockers.push(`task_attempt_result_unknown:${taskId}:${attempt}`);
+    return null;
+  }
+  if (
+    !strictObject(result)
+    || result.task_id !== taskId
+    || result.attempt !== attempt
+    || !TERMINAL_RESULT_STATUSES.has(String(result.status))
+    || (currentStatus !== null && result.status !== currentStatus)
+    || (result.started_at !== null && typeof result.started_at !== "string")
+    || typeof result.finished_at !== "string"
+  ) {
+    blockers.push(`task_attempt_result_invalid:${taskId}:${attempt}`);
+    return null;
+  }
+  const startedAtMs = result.started_at === null ? null : validAttemptTimestamp(result.started_at);
+  const finishedAtMs = validAttemptTimestamp(result.finished_at);
+  if (
+    (result.started_at !== null && startedAtMs === null)
+    || finishedAtMs === null
+    || (startedAtMs !== null && finishedAtMs < startedAtMs)
+  ) {
+    blockers.push(`task_attempt_result_invalid:${taskId}:${attempt}`);
+    return null;
+  }
+  return {
+    startedAtMs,
+    cancelledBeforeStart: result.status === "cancelled" && result.started_at === null,
+  };
+}
+
 /** Every byte-preserved Attempt is checked independently. A queued current
  * Attempt may have no execution evidence yet, but any historical marker claims
  * a process generation and must therefore carry exact, probeable identity. */
@@ -460,6 +546,7 @@ function attemptExecutorRequests(
   taskId: string,
   status: ReturnType<TaskStore["readStatus"]>,
   blockers: string[],
+  bootTimeMs: number,
 ): {
   executors: Array<{ pid: number; identity: ProcessIdentity }>;
   cleanupMembers: ProbeRequest[];
@@ -495,9 +582,10 @@ function attemptExecutorRequests(
   const cleanupMembers: ProbeRequest[] = [];
   for (const attempt of [...attempts].sort((left, right) => left - right)) {
     let evidence: AttemptExecutorEvidence;
+    let cleanupFailurePids: number[] = [];
     try {
       evidence = {
-        started: store.readAttemptMeta<{ worker_pid?: unknown }>(taskId, attempt, "started.json"),
+        started: store.readAttemptMeta<{ worker_pid?: unknown; started_at?: unknown }>(taskId, attempt, "started.json"),
         claim: store.readAttemptMeta<{ pid?: unknown }>(taskId, attempt, "execution.claim"),
         identity: store.readExecutorIdentity(taskId, attempt),
       };
@@ -527,22 +615,53 @@ function attemptExecutorRequests(
         blockers.push(`task_cleanup_failure_incomplete:${taskId}:${attempt}`);
         continue;
       }
-      for (const pid of memberPids as number[]) cleanupMembers.push({ pid, identity: null });
+      cleanupFailurePids = memberPids as number[];
     }
 
     const current = attempt === status.attempt;
-    const currentStarted = current
-      && (
-        status.status !== "queued"
-        || (typeof status.started_at === "string" && status.started_at.length > 0)
-        || (status.worker_pid !== undefined && status.worker_pid !== null)
-        || (status.zcode_pid !== undefined && status.zcode_pid !== null)
+    const attemptDir = store.attemptDir(taskId, attempt);
+    const archivedResultPresent = existsSync(path.join(attemptDir, "result.json"));
+    const currentResultPresent = current && existsSync(path.join(store.taskDir(taskId), "result.json"));
+    const resultFile = current
+      ? currentResultPresent ? path.join(store.taskDir(taskId), "result.json") : null
+      : archivedResultPresent ? path.join(attemptDir, "result.json") : null;
+    const approvedHistoricalResult = resultFile !== null
+      && isApprovedHistoricalResultException(resultFile, taskId, attempt, current);
+    const resultTiming = approvedHistoricalResult
+      ? null
+      : attemptResultTiming(
+        resultFile,
+        taskId,
+        attempt,
+        current ? status.status : null,
+        blockers,
       );
+    const currentNeverStartedCancellation = current
+      && status.status === "cancelled"
+      && (status.started_at === undefined || status.started_at === null)
+      && (status.worker_pid === undefined || status.worker_pid === null)
+      && (status.zcode_pid === undefined || status.zcode_pid === null)
+      && evidence.started === null
+      && evidence.claim === null
+      && evidence.identity === null
+      && !cleanupFailurePresent
+      && !archivedResultPresent
+      && resultTiming?.cancelledBeforeStart === true;
+    if (currentNeverStartedCancellation) continue;
+    const currentStarted = current && (
+      status.status === "running"
+      || status.status === "waiting_for_master"
+      || (typeof status.started_at === "string" && status.started_at.length > 0)
+      || (status.worker_pid !== undefined && status.worker_pid !== null)
+      || (status.zcode_pid !== undefined && status.zcode_pid !== null)
+      || currentResultPresent
+    );
     const attemptStarted = currentStarted
       || evidence.started !== null
       || evidence.claim !== null
       || evidence.identity !== null
-      || cleanupFailurePresent;
+      || cleanupFailurePresent
+      || archivedResultPresent;
     if (!attemptStarted) continue;
 
     const startedPid = recordedPid(evidence.started?.worker_pid, taskId, attempt, "started", blockers);
@@ -556,17 +675,11 @@ function attemptExecutorRequests(
       "worker",
       blockers,
     );
-    if (workerPid === null) {
-      blockers.push(`task_worker_identity_unknown:${taskId}:${attempt}`);
-    } else {
-      const workerIdentity = evidence.identity?.worker;
-      if (!workerIdentity || !validIdentity(workerIdentity) || workerIdentity.pid !== workerPid) {
-        blockers.push(`task_worker_identity_unknown:${taskId}:${attempt}`);
-      } else {
-        executors.push({ pid: workerPid, identity: workerIdentity as ProcessIdentity });
-      }
-    }
-
+    const workerIdentity = evidence.identity?.worker;
+    const exactWorkerIdentity = workerPid !== null
+      && workerIdentity !== undefined
+      && validIdentity(workerIdentity)
+      && workerIdentity.pid === workerPid;
     const identityRuntimePid = recordedPid(evidence.identity?.runtime?.pid, taskId, attempt, "runtime_identity", blockers);
     const statusRuntimePid = current ? recordedPid(status.zcode_pid, taskId, attempt, "status_runtime", blockers) : null;
     const runtimePid = singleAttemptPid(
@@ -576,13 +689,35 @@ function attemptExecutorRequests(
       "runtime",
       blockers,
     );
-    if (runtimePid !== null) {
-      const runtimeIdentity = evidence.identity?.runtime;
-      if (!runtimeIdentity || !validIdentity(runtimeIdentity) || runtimeIdentity.pid !== runtimePid) {
-        blockers.push(`task_runtime_identity_unknown:${taskId}:${attempt}`);
-      } else {
-        executors.push({ pid: runtimePid, identity: runtimeIdentity as ProcessIdentity });
-      }
+    const runtimeIdentity = evidence.identity?.runtime;
+    const exactRuntimeIdentity = runtimePid !== null
+      && runtimeIdentity !== undefined
+      && runtimeIdentity !== null
+      && validIdentity(runtimeIdentity)
+      && runtimeIdentity.pid === runtimePid;
+    const attemptTimestamp = validAttemptTimestamp(evidence.started?.started_at)
+      ?? (current ? validAttemptTimestamp(status.started_at) : null)
+      ?? resultTiming?.startedAtMs
+      ?? null;
+    const safelyPreBoot = attemptTimestamp !== null
+      && attemptTimestamp < bootTimeMs;
+
+    if (exactWorkerIdentity) {
+      executors.push({ pid: workerPid, identity: workerIdentity as ProcessIdentity });
+    } else if (!safelyPreBoot) {
+      blockers.push(`task_worker_identity_unknown:${taskId}:${attempt}`);
+    }
+
+    if (runtimePid === null) {
+      // No runtime process was claimed for this Attempt.
+    } else if (exactRuntimeIdentity) {
+      executors.push({ pid: runtimePid, identity: runtimeIdentity as ProcessIdentity });
+    } else if (!safelyPreBoot) {
+      blockers.push(`task_runtime_identity_unknown:${taskId}:${attempt}`);
+    }
+
+    if (!safelyPreBoot) {
+      for (const pid of cleanupFailurePids) cleanupMembers.push({ pid, identity: null });
     }
   }
   return { executors, cleanupMembers };
@@ -595,7 +730,10 @@ export async function sealJsonWriterRoot(
   store: TaskStore,
   probe: ProcessProbe,
   durability: DurableFileOperations = defaultDurableFileOperations,
+  options: JsonWriterSealOptions = {},
 ): Promise<JsonWriterQuiescenceResult> {
+  const bootTimeMs = options.bootTimeMs ?? Date.now() - uptime() * 1_000;
+  if (!Number.isFinite(bootTimeMs) || bootTimeMs <= 0) throw new Error("invalid JSON writer boot boundary");
   return withProcessLock(path.join(store.tasksRoot, ".recovery.lock"), async () =>
     withProcessLock(path.join(store.tasksRoot, ".manager.lock"), async () =>
       withProcessLock(gateLockPath(dataRoot), async () => {
@@ -637,7 +775,7 @@ export async function sealJsonWriterRoot(
         catch { blockers.push(`task_status_unknown:${taskId}`); continue; }
         if (!isTerminalStatus(status.status) && status.status !== "queued") blockers.push(`task_not_terminal:${taskId}:${status.status}`);
         if (status.cleanup_unverified === true) { blockers.push(`cleanup_unverified:${taskId}`); continue; }
-        const { executors, cleanupMembers } = attemptExecutorRequests(store, taskId, status, blockers);
+        const { executors, cleanupMembers } = attemptExecutorRequests(store, taskId, status, blockers, bootTimeMs);
         const requests = [...executors, ...cleanupMembers];
         if (requests.length) {
           let verdicts;
