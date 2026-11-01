@@ -8,6 +8,7 @@ let sandbox: string;
 let codexHome: string;
 
 test.beforeEach(() => {
+  mkdirSync(path.join(process.cwd(), ".evidence"), { recursive: true });
   sandbox = mkdtempSync(path.join(process.cwd(), ".evidence", "rollout-reader-test-"));
   codexHome = path.join(sandbox, "codex-home");
   mkdirSync(path.join(codexHome, "sessions", "2026", "10", "30"), { recursive: true });
