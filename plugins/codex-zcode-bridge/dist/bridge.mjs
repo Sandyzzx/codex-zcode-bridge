@@ -4779,7 +4779,12 @@ import { existsSync as existsSync12, lstatSync as lstatSync2, realpathSync as re
 import path17 from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 function schemaObjects(db) {
-  return db.prepare(SCHEMA_OBJECT_QUERY).all().map((row) => [row.type, row.name, row.tbl_name, row.sql === null ? null : row.sql.trim()]);
+  return db.prepare(SCHEMA_OBJECT_QUERY).all().map((row) => [
+    row.type,
+    row.name,
+    row.tbl_name,
+    row.sql === null ? null : row.sql.trim().replace(/\r\n?/gu, "\n")
+  ]);
 }
 function assertCandidateSchema(db) {
   if (expectedBaseSchemaObjects === void 0) {
@@ -35808,7 +35813,7 @@ function formatDuration(durationMs2) {
 
 // src/mcp/server.ts
 var SERVER_NAME = "codex-zcode-bridge";
-var SERVER_VERSION = "1.3.0-rc.1"; // x-release-please-version
+var SERVER_VERSION = "1.3.0-rc.2"; // x-release-please-version
 var EXECUTION_NOT_VERDICT = "Results describe Bridge/ZCode execution only: status 'completed' means the invocation and report normalization finished, NOT that the calling host accepted the work. the calling host must independently review the workspace diff and checks before deciding PASS.";
 function okResult2(data) {
   return {

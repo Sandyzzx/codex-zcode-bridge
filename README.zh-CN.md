@@ -37,7 +37,7 @@ Marketplace 不会替你安装 Node.js 或 ZCode。
 请使用 GitHub **Prerelease 对应的 Tag**，不要在测试预览版时直接跟随 `master`。以下命令固定到 [GitHub Releases](https://github.com/Sandyzzx/codex-zcode-bridge/releases) 显示的实际标签：
 
 ```sh
-codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-v1.3.0-rc.1
+codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-v1.3.0-rc.2
 codex plugin add codex-zcode-bridge@codex-zcode-bridge
 ```
 

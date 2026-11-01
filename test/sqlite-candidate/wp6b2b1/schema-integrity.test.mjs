@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
-import { existsSync, mkdirSync, mkdtempSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { IsolatedAdmissionStore } from '../../../src/sqlite-candidate/wp6b2b1/store.mjs';
@@ -19,6 +19,15 @@ function mismatch(fn) {assert.throws(fn,error=>error.code==='candidate_schema_mi
 
 test('unmodified v12 database reopens writable and read-only',()=>{
   const f=fresh();f.store.close();
+  const writer=IsolatedAdmissionStore.open(f.root,{managedDataDirectory:true});writer.close();
+  const recovery=IsolatedAdmissionStore.openForRecovery(f.root,{managedDataDirectory:true});recovery.close();
+});
+test('line-ending differences in persisted schema SQL are not schema drift',()=>{
+  const f=fresh();f.store.close();
+  const adminSchema=readFileSync(new URL('../../../src/sqlite-candidate/wp6b2b1/admin-abandonment.sql',import.meta.url),'utf8');
+  const normalized=adminSchema.replace(/\r\n?/gu,'\n');
+  const alternateLineEndings=adminSchema.includes('\r\n')?normalized:normalized.replace(/\n/gu,'\r\n');
+  alter(f.dbPath,alternateLineEndings);
   const writer=IsolatedAdmissionStore.open(f.root,{managedDataDirectory:true});writer.close();
   const recovery=IsolatedAdmissionStore.openForRecovery(f.root,{managedDataDirectory:true});recovery.close();
 });

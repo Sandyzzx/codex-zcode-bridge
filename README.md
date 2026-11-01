@@ -37,7 +37,7 @@ ZCode and Node.js are not installed automatically by the marketplace.
 Use the **published Preview tag** rather than `master`. The commands below pin the exact tag shown on the [GitHub prerelease](https://github.com/Sandyzzx/codex-zcode-bridge/releases):
 
 ```sh
-codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-v1.3.0-rc.1
+codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-v1.3.0-rc.2
 codex plugin add codex-zcode-bridge@codex-zcode-bridge
 ```
 

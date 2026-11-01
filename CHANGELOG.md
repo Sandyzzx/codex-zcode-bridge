@@ -4,6 +4,14 @@
 
 当前版本以 `package.json` 和 Release Please manifest 为准。提交推送到 `master` 后，Release Please 会在有待发布变更时创建发布 PR，并同步更新版本文件与本日志；合并发布 PR 后会生成对应 Git tag 和 GitHub Release。
 
+## [1.3.0-rc.2](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.3.0-rc.1...codex-zcode-bridge-v1.3.0-rc.2) (2026-11-01)
+
+Preview hotfix.
+
+### Bug Fixes
+
+* accept line-ending-equivalent SQLite schema text on Windows while preserving fail-closed schema validation
+
 ## [1.3.0-rc.1](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.2.7...codex-zcode-bridge-v1.3.0-rc.1) (2026-11-01)
 
 Preview release.

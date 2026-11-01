@@ -17,7 +17,12 @@ const SCHEMA_OBJECT_QUERY = "SELECT type,name,tbl_name,sql FROM sqlite_schema WH
 let expectedBaseSchemaObjects;
 let expectedAdminSchemaObjects;
 function schemaObjects(db) {
-  return db.prepare(SCHEMA_OBJECT_QUERY).all().map(row=>[row.type,row.name,row.tbl_name,row.sql===null?null:row.sql.trim()]);
+  return db.prepare(SCHEMA_OBJECT_QUERY).all().map(row=>[
+    row.type,
+    row.name,
+    row.tbl_name,
+    row.sql===null?null:row.sql.trim().replace(/\r\n?/gu,'\n'),
+  ]);
 }
 function assertCandidateSchema(db) {
   if(expectedBaseSchemaObjects===undefined){
