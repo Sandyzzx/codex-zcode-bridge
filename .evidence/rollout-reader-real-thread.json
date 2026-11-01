@@ -1,0 +1,42 @@
+{
+  "probe": "codex-rollout-reader-real-thread",
+  "sourceFileId": "rollout#02313287e439",
+  "threadId": "thread#aac0f15a0faa",
+  "state": "ok",
+  "originator": "Codex Desktop",
+  "provider": "magpie",
+  "cliVersion": "0.166.0-alpha.5.1",
+  "threadSource": "user",
+  "parentThreadId": null,
+  "lineCount": 2515,
+  "tokenCountEventCount": 339,
+  "emptyUsageEventCount": 0,
+  "compactionMarkerCount": 2,
+  "changedDuringRead": false,
+  "latest": {
+    "threadId": "thread#aac0f15a0faa",
+    "turnId": null,
+    "total": {
+      "totalTokens": 43957702,
+      "inputTokens": 43760756,
+      "cachedInputTokens": 42441472,
+      "cacheWriteInputTokens": 0,
+      "outputTokens": 196946,
+      "reasoningOutputTokens": 83585
+    },
+    "last": {
+      "totalTokens": 114153,
+      "inputTokens": 113429,
+      "cachedInputTokens": 111872,
+      "cacheWriteInputTokens": 0,
+      "outputTokens": 724,
+      "reasoningOutputTokens": 0
+    },
+    "modelContextWindow": 258400,
+    "observedAt": "2026-10-30T15:56:37.899Z",
+    "eventOrder": 339,
+    "lineNumber": 2509,
+    "source": "codex_rollout_token_count",
+    "absoluteSnapshot": true
+  }
+}

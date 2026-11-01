@@ -1,0 +1,38 @@
+{
+  "query": {
+    "status": "ok",
+    "source": "codex_rollout",
+    "thread_ref": "thread#aac0f15a0faa",
+    "thread_id_source": "codex_environment",
+    "codex_home_source": "default_user_profile",
+    "read_mode": "initial",
+    "tail_status": "updated",
+    "reset_reason": "initial",
+    "total": {
+      "totalTokens": 65039309,
+      "inputTokens": 64716384,
+      "cachedInputTokens": 62807680,
+      "cacheWriteInputTokens": 0,
+      "outputTokens": 322925,
+      "reasoningOutputTokens": 83585
+    },
+    "last": {
+      "totalTokens": 240425,
+      "inputTokens": 239919,
+      "cachedInputTokens": 238592,
+      "cacheWriteInputTokens": 0,
+      "outputTokens": 506,
+      "reasoningOutputTokens": 0
+    },
+    "model_context_window": 258400,
+    "observed_at": "2026-10-30T17:24:08.639Z",
+    "baseline_total_tokens": 59912094,
+    "report_window_total_tokens": 5127215,
+    "report_window_basis": "absolute_total_delta",
+    "detail": null
+  },
+  "feedback_codex_tokens": {
+    "state": "reported",
+    "note": "本次报告窗口累计 5,127,215（Thread 绝对总量差值，不累加 last）；最近采样总量 240,425，输入 239,919，缓存输入 238,592，缓存写入 0，输出 506，推理 0，上下文窗口 258,400；来源 codex_rollout，观测 2026-10-30T17:24:08.639Z"
+  }
+}

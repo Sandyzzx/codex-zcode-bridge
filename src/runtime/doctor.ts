@@ -179,13 +179,13 @@ export async function runBridgeDoctor(options: BridgeDoctorOptions = {}): Promis
           : `Process identity probing is not implemented for ${process.platform}; verdicts stay unknown`,
   });
 
-  // B4: the Codex main-session token source. The Bridge has no access to the
-  // calling host's per-turn telemetry, so the capability stays unavailable
-  // here; the host feedback layer must state this rather than estimate.
+  // B4: the Master Skill can query the explicit Codex Thread's rollout through
+  // its read-only helper. Doctor itself has no thread-bound execution context,
+  // so it reports the capability as not probed rather than selecting a session.
   checks.push({
     name: "codex_host_tokens",
     status: "unknown",
-    summary: "未取得：当前宿主未提供本次调用统计（Bridge 无法读取 Codex 主会话 per-turn token；不得用账户额度或文本估算代替）",
+    summary: "Not probed here: use the Master Skill helper with the explicit CODEX_THREAD_ID; codex_rollout values require a report-window baseline and must not be replaced by account quotas or text estimates",
   });
 
   // A1: summarize persisted observations of non-terminal tasks via the same

@@ -1,0 +1,15 @@
+{
+  "probe": "installed-app-server-initialize",
+  "classification": "REAL_INSTALLED_BINARY_HANDSHAKE_ONLY",
+  "executable": "<redacted-install-path>\\codex.exe",
+  "cliVersion": "codex-cli 0.166.0-alpha.5.1",
+  "experimentalApiRequested": false,
+  "initializeResponse": {
+    "id": 1,
+    "result": {
+      "userAgent": "Codex Desktop/0.166.0-alpha.5.1 (Windows 10.0.26100; x86_64) dumb (thread-token-usage-e2e-probe; 0.1.0)",
+      "platformFamily": "windows",
+      "platformOs": "windows"
+    }
+  }
+}

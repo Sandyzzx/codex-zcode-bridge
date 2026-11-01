@@ -1,0 +1,31 @@
+{
+  "task": "CODEX_THREAD_TOKEN_USAGE_E2E_20261030",
+  "classification": "REAL_INSTALLED_APPSERVER_AUTH_BLOCKED",
+  "startedAt": "2026-10-30T13:18:49.252Z",
+  "finishedAt": "2026-10-30T13:18:50.089Z",
+  "desktopVersion": "26.1027.3384.0",
+  "cliVersion": "0.166.0-alpha.5.1",
+  "appServerUserAgent": "Codex Desktop/0.166.0-alpha.5.1 (Windows 10.0.26100; x86_64) dumb (thread-token-usage-e2e; 0.1.0)",
+  "experimentalApi": false,
+  "auth": {
+    "state": "unavailable",
+    "accountType": null,
+    "planType": null,
+    "requiresOpenaiAuth": false
+  },
+  "model": null,
+  "threadId": null,
+  "tokenE2e": "BLOCKED_AUTH_UNAVAILABLE",
+  "turns": [],
+  "tokenNotifications": [],
+  "lifecycle": [],
+  "compact": {
+    "state": "NOT_RUN"
+  },
+  "resume": {
+    "state": "NOT_RUN"
+  },
+  "multiAgent": {
+    "state": "NOT_RUN"
+  }
+}

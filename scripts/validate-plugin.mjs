@@ -50,6 +50,7 @@ for (const relativePath of [
   "hooks/session-start.mjs",
   "hooks/configure-runtime.ps1",
   "skills/zcode-bridge/SKILL.md",
+  "skills/zcode-bridge/scripts/codex-master-token-usage.mjs",
 ]) {
   await access(path.join(pluginRoot, relativePath));
 }
@@ -61,7 +62,7 @@ for (const relativePath of [
 // its own directory (module-label comments inside the bundle legitimately
 // mention the packaging path and are not an external dependency).
 const repoRootPattern = buildRepoRootLeakPattern(root);
-for (const relativePath of ["dist/bridge.mjs", "worker/worker-main.mjs", "worker/vendor/pkg/browser-host.cjs"]) {
+for (const relativePath of ["dist/bridge.mjs", "worker/worker-main.mjs", "worker/vendor/pkg/browser-host.cjs", "skills/zcode-bridge/scripts/codex-master-token-usage.mjs"]) {
   const bundle = await readFile(path.join(pluginRoot, relativePath), "utf8");
   if (repoRootPattern.test(bundle)) {
     throw new Error(`${relativePath} embeds the development repository's absolute path`);

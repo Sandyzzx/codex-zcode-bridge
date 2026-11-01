@@ -1,0 +1,38 @@
+{
+  "query": {
+    "status": "ok",
+    "source": "codex_rollout",
+    "thread_ref": "thread#aac0f15a0faa",
+    "thread_id_source": "codex_environment",
+    "codex_home_source": "default_user_profile",
+    "read_mode": "initial",
+    "tail_status": "updated",
+    "reset_reason": "initial",
+    "total": {
+      "totalTokens": 68007579,
+      "inputTokens": 67660894,
+      "cachedInputTokens": 65416576,
+      "cacheWriteInputTokens": 0,
+      "outputTokens": 346685,
+      "reasoningOutputTokens": 83585
+    },
+    "last": {
+      "totalTokens": 93422,
+      "inputTokens": 92789,
+      "cachedInputTokens": 92160,
+      "cacheWriteInputTokens": 0,
+      "outputTokens": 633,
+      "reasoningOutputTokens": 0
+    },
+    "model_context_window": 258400,
+    "observed_at": "2026-10-30T17:49:37.628Z",
+    "baseline_total_tokens": 59912094,
+    "report_window_total_tokens": 8095485,
+    "report_window_basis": "absolute_total_delta",
+    "detail": null
+  },
+  "feedback_codex_tokens": {
+    "state": "reported",
+    "note": "8,095,485"
+  }
+}

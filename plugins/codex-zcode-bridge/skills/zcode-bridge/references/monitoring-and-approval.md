@@ -1,14 +1,15 @@
 # 执行监控、互动与审批
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-10-24
-> Last verified: 2026-10-29，仅静态核对独立功能候选的引用、授权与JSON主线边界；历史离线记录不代表本候选运行时验收。真实Worker、Host按需加载强制与token收益 NOT RUN。
-> Verified against: master 73af9d60ff9bbcbbc1ae1d7b1f9b9fb9fca48bb0 + 本独立功能候选；来源74d4764和经审查的JSON文案。
+> Last updated: 2026-11-01
+> Last verified: 2026-11-01，仅核对 Codex Rollout Master token 起点；真实Worker、Host按需加载强制与token收益 NOT RUN。
+> Verified against: bfab3386937f552d4c60761f32df9ea097fcb6f1 + Codex Rollout token候选；来源74d4764和经审查的JSON文案。
 
 ## 跟进
 
 监控默认被动：Worker 正常实现、测试和修复时只观察进度，不向 ZCode 发送下一步指令；长时间没有输出时先查业务事件、执行目录文件变化、待处理交互、心跳和进程身份，再判断是否阻塞。只有 Worker 主动请求决定/权限、完整交付或明确失败时才介入。
 
+0. 在本次委派开始前取得 Master token 起点：把 `SKILL_DIR` 设为当前 `SKILL.md` 所在目录，运行 `node "$SKILL_DIR/scripts/codex-master-token-usage.mjs"`。只读取 `CODEX_THREAD_ID` 指向的本机 Codex Rollout，不扫描最近活跃会话，不调用模型；保存返回的 `query.total.totalTokens` 作为报告窗口起点。命令返回 `thread_id_missing`、`rollout_not_found`、`thread_identity_unverified`、`no_token_count` 或 `file_changed` 时，保留该明确状态，不得猜测 Thread。
 1. `zcode_task` 返回后立即调用 `zcode_events`（`after_seq: 0, view: "summary"`），不要先做别的工作或只复述 queued receipt。先报告 `workspace_ready` 中的 `project_path`、`execution_path`（如有则说明 Codex 准备的 worktree）和 queued/running 状态。按 `next_seq` 和 `wait_ms` 继续读取，直到出现 `turn_started`、明确启动失败或终态；不要忙轮询。
 2. 在 `turn_started` 后、等待模型输出前，先向用户报告：Codex 项目根目录、实际执行目录、ZCode session ID、runtime 实际报告的 provider/model、runtime 实际报告的思考档位和执行模式。思考档位从 `session_ready.details.reasoning_level` 或 `model_selected.details.reasoning_level` 读取；若只有 `requested_reasoning_level`，说明这是请求值而不是 runtime 确认值；两者都没有时明确说 runtime 未报告档位，不要用模型目录的默认档位冒充当前档位。模式来自 Bridge 配置，默认 `yolo`；若为 `yolo`，明确提醒普通工具操作可能不经审批且使用当前 OS 账户权限，并说明可将 `ZCODE_BRIDGE_MODE` 设为 `build`。若使用 worktree，说明它不是 OS 沙箱。模型字段缺失时明确说 runtime 没有报告；不要把用户请求的模型或项目默认值猜成实际已选模型。
 3. 如果在 `turn_started` 前失败，立即报告 Bridge 的启动错误；只有在 `session_ready` 已出现时才能声称 ZCode session 已创建。不存在 `session_ready` 时说明没有 ZCode session/model 元数据。

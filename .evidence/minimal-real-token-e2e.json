@@ -1,0 +1,63 @@
+{
+  "task": "CODEX_THREAD_TOKEN_USAGE_E2E_20261030",
+  "probe": "minimal-real-appserver-token-e2e",
+  "startedAt": "2026-10-30T14:06:25.214Z",
+  "desktopVersion": "26.1027.3384.0",
+  "cliVersion": "codex-cli 0.166.0-alpha.5.1",
+  "appServerUserAgent": "Codex Desktop/0.166.0-alpha.5.1 (Windows 10.0.26100; x86_64) dumb (thread-token-usage-minimal-e2e; 0.1.0)",
+  "experimentalApi": false,
+  "config": {
+    "modelProvider": "magpie",
+    "configuredModel": "codex/gpt-6.1-sol",
+    "providerType": "responses",
+    "baseUrlHost": "127.0.0.1:3425",
+    "configSource": "effective Codex config.toml; CODEX_HOME env or default user profile",
+    "codexHomeExplicitlySet": false,
+    "configPath": "<redacted>\\config.toml",
+    "requiresOpenaiAuthExplicit": null,
+    "experimentalBearerConfigured": true,
+    "experimentalBearerSupportedSettingUsed": true,
+    "envKeyConfigured": false,
+    "envKeyPresent": null,
+    "authConfigState": "SUPPORTED_PROVIDER_AUTH_CONFIG_PRESENT",
+    "otherAuthFlags": {
+      "experimentalUseFileSecret": false
+    }
+  },
+  "accountRead": {
+    "succeeded": true,
+    "accountPresent": false,
+    "requiresOpenaiAuth": false
+  },
+  "modelList": {
+    "succeeded": true,
+    "visibleCount": 14,
+    "configuredModelFound": true,
+    "defaultModelFound": true,
+    "selectedModel": {
+      "id": "codex/gpt-6.1-sol",
+      "provider": null,
+      "modelContextWindow": null
+    }
+  },
+  "modelRequest": {
+    "succeeded": null,
+    "promptLengthChars": 22,
+    "threadId": "thread#7ea1bc9f449d",
+    "turnId": "turn#ca12879749b4",
+    "completionStatus": "NOT_RETAINED_BY_FIRST_RUN",
+    "tokenNotificationObserved": false,
+    "turnCompletedObserved": null,
+    "failureReason": "NO_CONFIRMED_THREAD_TOKEN_USAGE_NOTIFICATION; TURN_COMPLETION_STATUS_NOT_RETAINED"
+  },
+  "tokenNotifications": [],
+  "classification": "MODEL_REQUEST_FAILED",
+  "finishedAt": "2026-10-30T14:06:34.114Z",
+  "desktopConfigComparison": {
+    "appServerUsesCodexHomeDefault": true,
+    "desktopCommandLineProviderOverrideObserved": false,
+    "desktopProcessCodeXHome": "NOT_READ",
+    "comparison": "PARTIAL_DESKTOP_PROCESS_ENVIRONMENT_NOT_READ"
+  },
+  "classificationMeaning": "The required successful model response plus matching Token Usage notification was not proven; this does not establish provider authentication failure."
+}

@@ -27964,7 +27964,7 @@ async function runBridgeDoctor(options = {}) {
   checks.push({
     name: "codex_host_tokens",
     status: "unknown",
-    summary: "\u672A\u53D6\u5F97\uFF1A\u5F53\u524D\u5BBF\u4E3B\u672A\u63D0\u4F9B\u672C\u6B21\u8C03\u7528\u7EDF\u8BA1\uFF08Bridge \u65E0\u6CD5\u8BFB\u53D6 Codex \u4E3B\u4F1A\u8BDD per-turn token\uFF1B\u4E0D\u5F97\u7528\u8D26\u6237\u989D\u5EA6\u6216\u6587\u672C\u4F30\u7B97\u4EE3\u66FF\uFF09"
+    summary: "Not probed here: use the Master Skill helper with the explicit CODEX_THREAD_ID; codex_rollout values require a report-window baseline and must not be replaced by account quotas or text estimates"
   });
   const observedRoot = options.observationDataRoot ?? env["ZCODE_BRIDGE_DATA_DIR"]?.trim() ?? null;
   if (observedRoot && existsSync8(observedRoot)) {

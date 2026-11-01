@@ -128,7 +128,7 @@ test("A4-04: missing/partial usage and missing host tokens are explicit, never z
   // No usage at all.
   const missing = renderFeedback(baseInput({}));
   assert.match(missing, /ZCode 执行 token \| 未报告/);
-  assert.match(missing, /未取得：当前宿主未提供本次调用统计/);
+  assert.match(missing, /Codex 主会话 token \| 未取得/);
   // Partial attempts: the note carries the partial coverage.
   const partial = renderFeedback(baseInput({ usage: {
     source: "zcode_runtime_turn", scope: null, observed_at: null, finality: "partial",

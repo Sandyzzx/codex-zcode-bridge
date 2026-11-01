@@ -1,0 +1,38 @@
+{
+  "query": {
+    "status": "ok",
+    "source": "codex_rollout",
+    "thread_ref": "thread#aac0f15a0faa",
+    "thread_id_source": "codex_environment",
+    "codex_home_source": "default_user_profile",
+    "read_mode": "initial",
+    "tail_status": "updated",
+    "reset_reason": "initial",
+    "total": {
+      "totalTokens": 60118460,
+      "inputTokens": 59815380,
+      "cachedInputTokens": 57942016,
+      "cacheWriteInputTokens": 0,
+      "outputTokens": 303080,
+      "reasoningOutputTokens": 83585
+    },
+    "last": {
+      "totalTokens": 206366,
+      "inputTokens": 205842,
+      "cachedInputTokens": 205184,
+      "cacheWriteInputTokens": 0,
+      "outputTokens": 524,
+      "reasoningOutputTokens": 0
+    },
+    "model_context_window": 258400,
+    "observed_at": "2026-10-30T17:19:15.894Z",
+    "baseline_total_tokens": null,
+    "report_window_total_tokens": null,
+    "report_window_basis": null,
+    "detail": null
+  },
+  "feedback_codex_tokens": {
+    "state": "unavailable",
+    "note": "未取得：缺少报告窗口起点或当前累计值不可比较；最近采样总量 206,366，输入 205,842，缓存输入 205,184，输出 524，推理 0，上下文窗口 258,400；来源 codex_rollout，观测 2026-10-30T17:19:15.894Z。最近采样不是本次调用消耗"
+  }
+}

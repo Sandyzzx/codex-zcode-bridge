@@ -1,0 +1,91 @@
+{
+  "probe": "codex-rollout-tail-live-readonly",
+  "threadId": "thread#aac0f15a0faa",
+  "codexHomeSource": "default_user_profile",
+  "codexHomePath": "<redacted>",
+  "modelRequestIssued": false,
+  "startedAt": "2026-10-30T16:32:04.777Z",
+  "discovery": {
+    "state": "found",
+    "threadId": "thread#aac0f15a0faa",
+    "filenameCandidateCount": 1,
+    "validatedFileCount": 1,
+    "sourceFileId": "rollout#02313287e439",
+    "parentThreadId": null,
+    "threadSource": "user",
+    "originator": "Codex Desktop",
+    "provider": "magpie",
+    "cliVersion": "0.166.0-alpha.5.1"
+  },
+  "initial": {
+    "status": "updated",
+    "offset": 7349999,
+    "pendingBytes": 0,
+    "snapshot": {
+      "threadId": "thread#aac0f15a0faa",
+      "turnId": null,
+      "total": {
+        "totalTokens": 53737007,
+        "inputTokens": 53483856,
+        "cachedInputTokens": 52086528,
+        "cacheWriteInputTokens": 0,
+        "outputTokens": 253151,
+        "reasoningOutputTokens": 83585
+      },
+      "last": {
+        "totalTokens": 187845,
+        "inputTokens": 187443,
+        "cachedInputTokens": 186752,
+        "cacheWriteInputTokens": 0,
+        "outputTokens": 402,
+        "reasoningOutputTokens": 0
+      },
+      "modelContextWindow": 258400,
+      "observedAt": "2026-10-30T16:29:27.922Z",
+      "eventOrder": 401,
+      "lineNumber": 2956,
+      "source": "codex_rollout_token_count",
+      "absoluteSnapshot": true
+    }
+  },
+  "update": {
+    "status": "updated",
+    "resetReason": null,
+    "bytesRead": 1253,
+    "offset": 7351252,
+    "pendingBytes": 0,
+    "newTokenCountEventCount": 1,
+    "duplicateSnapshotCount": 0,
+    "compactionMarkerCount": 0,
+    "observedAfterCompaction": false,
+    "snapshot": {
+      "threadId": "thread#aac0f15a0faa",
+      "turnId": null,
+      "total": {
+        "totalTokens": 53925212,
+        "inputTokens": 53671784,
+        "cachedInputTokens": 52273920,
+        "cacheWriteInputTokens": 0,
+        "outputTokens": 253428,
+        "reasoningOutputTokens": 83585
+      },
+      "last": {
+        "totalTokens": 188205,
+        "inputTokens": 187928,
+        "cachedInputTokens": 187392,
+        "cacheWriteInputTokens": 0,
+        "outputTokens": 277,
+        "reasoningOutputTokens": 0
+      },
+      "modelContextWindow": 258400,
+      "observedAt": "2026-10-30T16:32:14.829Z",
+      "eventOrder": 402,
+      "lineNumber": 2962,
+      "source": "codex_rollout_token_count",
+      "absoluteSnapshot": true
+    }
+  },
+  "polls": 10,
+  "conclusion": "LIVE_APPEND_OBSERVED",
+  "finishedAt": "2026-10-30T16:32:14.954Z"
+}

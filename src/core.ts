@@ -26,5 +26,7 @@ export type { TaskObservation as ObservationShape, ExecutorObservation, Activity
 export { sanitizeDiagnostics, DiagnosticCounters, DIAGNOSTIC_FIELD_WHITELIST } from "./observation/diagnostics.js";
 // A4 human feedback projection.
 export { renderFeedback, formatTokens, formatDuration, escapeCell, type FeedbackInput } from "./feedback/template.js";
+export { codexMasterTokenFeedback } from "./feedback/codex-master-token.js";
+export { CodexMasterTokenUsageSource, type CodexMasterTokenUsageResult } from "./observability/codex-master-token-usage.js";
 // B4 usage normalization.
 export { normalizeUsage, addNonOverlappingUsage, phaseDuration } from "./usage/normalize.js";
