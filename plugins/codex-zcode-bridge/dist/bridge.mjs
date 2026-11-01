@@ -34892,6 +34892,16 @@ var taskObservationSchema = object({
     status_updated_at: string2().nullable()
   })
 });
+var executionObservationSchema = object({
+  state: _enum([
+    "interrupted_without_result",
+    "worker_identity_unknown",
+    "worker_alive_unmanaged",
+    "cleanup_held"
+  ]),
+  observed_at: string2(),
+  evidence_ref: string2()
+});
 var taskStatusRecordSchema = object({
   task_id: string2(),
   status: _enum([
@@ -34912,7 +34922,8 @@ var taskStatusRecordSchema = object({
   exit_code: number2().int().nullable(),
   error_code: string2().optional(),
   error: string2().optional(),
-  observation: taskObservationSchema.optional()
+  observation: taskObservationSchema.optional(),
+  execution_observation: executionObservationSchema.optional()
 });
 var normalizedUsageSchema = object({
   source: string2().nullable(),
