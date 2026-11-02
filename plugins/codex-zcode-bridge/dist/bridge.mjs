@@ -8960,7 +8960,7 @@ async function tryAcquireWindowsBootstrapLock(root, lockPath, databaseFileName, 
   child.stderr.on("data", (chunk) => {
     stderr += chunk;
   });
-  let previousRecordBase64 = null;
+  const acquiredRecord = {};
   const handshake = await new Promise((resolve) => {
     let settled = false;
     const finish = (state) => {
@@ -8972,9 +8972,10 @@ async function tryAcquireWindowsBootstrapLock(root, lockPath, databaseFileName, 
     const inspectOutput = () => {
       if (/(?:^|\r?\n)BUSY(?:\r?\n|$)/u.test(stdout)) finish("busy");
       else {
-        const match = /(?:^|\r?\n)ACQUIRED:([A-Za-z0-9+/=]*)(?:\r?\n|$)/u.exec(stdout);
+        const match = /(?:^|\r?\n)ACQUIRED_BEGIN:(\d+)\r?\n([\s\S]*?)\r?\nACQUIRED_END(?:\r?\n|$)/u.exec(stdout);
         if (match) {
-          previousRecordBase64 = match[1] ?? "";
+          acquiredRecord.length = Number(match[1]);
+          acquiredRecord.base64 = (match[2] ?? "").replace(/\s+/gu, "");
           finish("acquired");
         }
       }
@@ -8989,7 +8990,10 @@ async function tryAcquireWindowsBootstrapLock(root, lockPath, databaseFileName, 
   });
   if (handshake === "acquired") {
     try {
-      const previous = parsePreviousBootstrapLockRecord(previousRecordBase64 ?? "", databaseFileName);
+      if (acquiredRecord.length === void 0 || acquiredRecord.base64 === void 0 || acquiredRecord.base64.length !== acquiredRecord.length) {
+        throw new LifecycleGateError("sqlite_bootstrap_lock_record_invalid");
+      }
+      const previous = parsePreviousBootstrapLockRecord(acquiredRecord.base64, databaseFileName);
       if (previous?.state === "held") {
         const [verdict2] = await processProbe.probe([{ pid: previous.owner_identity.pid, identity: previous.owner_identity }]);
         if (verdict2?.state === "alive") {
@@ -9409,9 +9413,16 @@ function writeDurableBootstrapMarker(file, marker, options, lock) {
 }
 function parsePreviousBootstrapLockRecord(encoded, databaseFileName) {
   if (encoded.length === 0) return null;
+  if (encoded.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/u.test(encoded)) {
+    throw new LifecycleGateError("sqlite_bootstrap_lock_record_invalid");
+  }
   let value;
   try {
-    value = JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
+    const decoded = Buffer.from(encoded, "base64");
+    if (decoded.toString("base64") !== encoded) {
+      throw new LifecycleGateError("sqlite_bootstrap_lock_record_invalid");
+    }
+    value = JSON.parse(decoded.toString("utf8"));
   } catch {
     throw new LifecycleGateError("sqlite_bootstrap_lock_record_invalid");
   }
@@ -11014,7 +11025,18 @@ try {
     if ($read -ne $buffer.Length) { throw 'short lock record read' }
     $previous = [Convert]::ToBase64String($buffer)
   }
-  [Console]::Out.WriteLine('ACQUIRED:' + $previous)
+  [Console]::Out.WriteLine('ACQUIRED_BEGIN:' + $previous.Length)
+  if ($previous.Length -eq 0) {
+    [Console]::Out.WriteLine('')
+  } else {
+    $offset = 0
+    while ($offset -lt $previous.Length) {
+      $count = [Math]::Min(64, $previous.Length - $offset)
+      [Console]::Out.WriteLine($previous.Substring($offset, $count))
+      $offset += $count
+    }
+  }
+  [Console]::Out.WriteLine('ACQUIRED_END')
   [Console]::Out.Flush()
   $command = [Console]::In.ReadLine()
   if ($command -ne 'COMMIT') {
