@@ -101,7 +101,8 @@ const PROTOCOL_MESSAGES = [
   }),
 ].join("\n") + "\n";
 
-test("compiled stdio entry speaks pure JSON-RPC on stdout and diagnostics on stderr", { timeout: 30_000 }, () => {
+test("compiled stdio entry speaks pure JSON-RPC on stdout and diagnostics on stderr", { timeout: 30_000 }, (t) => {
+  if (process.platform !== "win32") return t.skip("Windows-only Fresh SQLite bootstrap");
   const profile = isolatedInstall("source-entry");
   const dataRoot = path.join(profile.localAppData, "CodexZCodeBridge", "state");
   try {
@@ -176,7 +177,8 @@ test("worker concurrency defaults to eight and rejects out-of-range configuratio
   assert.match(invalid.warning ?? "", /integer from 1 to 8/);
 });
 
-test("marketplace bundle starts through the shipped launcher without repo-local dependencies", { timeout: 30_000 }, () => {
+test("marketplace bundle starts through the shipped launcher without repo-local dependencies", { timeout: 30_000 }, (t) => {
+  if (process.platform !== "win32") return t.skip("Windows-only Fresh SQLite bootstrap");
   const profile = isolatedInstall("marketplace-install", true);
   const dataRoot = path.join(profile.localAppData, "CodexZCodeBridge", "state");
   try {
