@@ -1,9 +1,9 @@
 # ZCode 运行配置边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-10-16
-> Last verified: 2026-10-16，独立验证 Windows/Linux worker 环境转发、Windows 自动发现及真实浏览器后端（见[修复报告](reports/2026-10-16-environment-portability-fixes.md#codex-独立验收2026-10-16)）；其余条目沿用 2026-10-15 核对范围。
-> Verified against: 0e1e319561edf94e0f0cd481ac455ec784eb19dd + 本分支 F1–F3 修复；受测产物指纹见修复报告。
+> Last updated: 2026-11-02
+> Last verified: 2026-10-16，独立验证 Windows/Linux worker 环境转发、Windows 自动发现及真实浏览器后端（见[修复报告](reports/2026-10-16-environment-portability-fixes.md#codex-独立验收2026-10-16)）；其余条目沿用 2026-10-15 核对范围。OD Fresh Bootstrap 条款仅做静态复核，运行验收待完成。
+> Verified against: 0e1e319561edf94e0f0cd481ac455ec784eb19dd + 本分支 F1–F3 修复（既有范围）；Fresh Bootstrap 候选基于 ca0e19c4，未验证。
 
 当前生产路径是 `node zcode.cjs app-server --stdio`，不是历史 CLI `--prompt --json`。解析入口为 `NodeRuntimeResolver`，配置项与用户设置方法见仓库 README。
 
@@ -11,7 +11,7 @@ Bridge 只读取官方 builtin/personal provider 配置，不复制、不改写�
 
 请求模型时优先保留 catalog 中的精确 provider/model。无前缀旧 provider 只有在 catalog 存在同 model 的 account 前缀项，或官方规则确立了对应 account 映射时才解析；不按模型显示名切换其他 provider，catalog 缺席仍由 session/setModel 验证配置标识与模型。account: 标识不重复加前缀。请求值与 runtime 确认值分别保留，不持久化为工作区默认。见 ADR-005。
 
-persisted runtime-config 中已知字段只能是字符串或 null；缺文件允许环境/发现回退，存在但损坏、非 object 或超过 64 KiB 会报配置错误。默认 mode 仍为已披露的 yolo；不能把坏配置当成首次未设置而回退到该模式。
+persisted runtime-config 中已知字段只能是字符串或 null；缺文件允许环境/发现回退，存在但损坏、非 object 或超过 64 KiB 会报配置错误。历史 JSON 路径默认 mode 为已披露的 yolo，也可通过 `ZCODE_BRIDGE_MODE` 配置；当前生产 Bridge 使用 SQLite 唯一 Authority，不保留 JSON 生产路径或故障回退。不能把坏配置当成首次未设置而回退到默认模式。ADR-019 后，单用户本机 SQLite 的固定受信任档案使用 `yolo`，policy revision 为 `single-user-local-v3`；兼容身份 `local-build-v1` 保留为持久化 profile ID，不再表示强制 `build`。该模式使用当前 Windows 用户权限，workspace/worktree 和路径清单不是 OS 沙箱。
 
 浏览器宿主配置（ADR-007）：`ZCODE_BRIDGE_BROWSER_USE` 取 `off`（默认，含空值/未设置/非法值回退为 off）或 `headless`；`ZCODE_BRIDGE_BROWSER_EXECUTABLE` 可选，须为已存在文件的绝对路径，缺省按官方实现解析已安装 Chromium/Edge（不下载浏览器）。两项均为普通字符串配置键，遵循配置优先于环境变量的既有规则；非法 USE 值不阻断任务，仅保持关闭并由 doctor 给出 warning。detached worker 进程按显式键清单转发这两项非秘密设置（2026-10-16 修复：此前 env-only 配置在真实 spawn 边界丢失），其余任意父进程环境与秘密仍不透传。Windows worker 环境保留 `ProgramFiles` / `ProgramFiles(x86)`（接受常见大小写）等非敏感系统目录变量供自动发现使用，发现解析同样不区分大小写键；显式 `ZCODE_BRIDGE_BROWSER_EXECUTABLE` 优先级不变。不向 app-server 传递任何 headless CLI 参数；浏览器由 worker 内的 managed CDP runtime 以独立临时 profile 启动，生命周期见 ARCHITECTURE.md。
 

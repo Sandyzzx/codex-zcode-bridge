@@ -11,12 +11,17 @@ import test from "node:test";
 import {
   makeManagerFixture,
   FakeAdapter,
+  fakeOutcome,
   type ManagerFixture,
 } from "./manager-helpers.js";
 import { TaskStore } from "../src/store/task-store.js";
 import { TaskManagerError } from "../src/manager/errors.js";
+import { BridgeTaskManager } from "../src/manager/task-manager.js";
+import { WindowsTreeCleanupError } from "../src/adapters/windows-process-cleanup.js";
+import { DirectWorkspaceProvider } from "../src/workspace/direct-provider.js";
 import { withProcessLock } from "../src/store/process-lock.js";
 import { runWorkerTask } from "../src/worker/run-task.js";
+import { buildTaskResult } from "../src/manager/normalize.js";
 import { makeTask } from "./helpers.js";
 
 const CREATED_AT = "2026-09-27T00:00:00.000Z";
@@ -668,6 +673,87 @@ test("cancelling a running task terminates and verifies the process tree before 
   }
 });
 
+test("a second cancel queued during verified cleanup observes terminal state without a second transaction", async () => {
+  const fx = await freshFixture();
+  try {
+    await fx.manager.createTask(fx.makeTask());
+    const pid = fx.spawned[0]!.pid;
+    let entered!: () => void;
+    let release!: () => void;
+    const enteredPromise = new Promise<void>((resolve) => { entered = resolve; });
+    const barrier = new Promise<void>((resolve) => { release = resolve; });
+    fx.setTerminateHandler(async (targetPid) => {
+      assert.equal(targetPid, pid);
+      entered();
+      await barrier;
+      fx.pidsAlive.delete(pid);
+      return { pid, signal: "SIGKILL", verified: true };
+    });
+
+    const first = fx.manager.cancelTask("task_1");
+    await enteredPromise;
+    const second = fx.manager.cancelTask("task_1");
+    release();
+    const firstStatus = await first;
+    assert.equal(firstStatus.status, "cancelled");
+    await assert.rejects(second, (error: unknown) => errorCodeOf(error) === "TASK_STATE");
+    assert.deepEqual(fx.terminateCalls, [pid], "the queued duplicate must not start a second cleanup transaction");
+    assert.equal((await fx.manager.getResult("task_1")).status, "cancelled");
+    const events = fx.store.readEvents("task_1", 0, 100).events;
+    assert.equal(events.filter((event) => event.type === "cancel_requested").length, 1);
+    assert.equal(events.filter((event) => event.type === "cancelled").length, 1);
+    assert.equal(events.some((event) => event.type === "cancel_failed"), false);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test("Worker cleanup evidence and terminal commit survive a later manager cleanup failure", async () => {
+  const fx = await freshFixture();
+  try {
+    await fx.manager.createTask(fx.makeTask());
+    const pid = fx.spawned[0]!.pid;
+    fx.store.writeStatus("task_1", { cleanup_unverified: true });
+    let workerCommitted = false;
+    fx.setTerminateHandler(async (targetPid) => {
+      assert.equal(targetPid, pid);
+      fx.store.appendEvent("task_1", "cleanup_verified", "Fake Worker cleanup evidence", { evidence: "recorded_tree_claimant_scan" });
+      const task = fx.store.readTask("task_1");
+      const status = fx.store.readStatus("task_1");
+      const finishedAt = new Date().toISOString();
+      const result = buildTaskResult({ task, attempt: 1, startedAt: status.started_at, finishedAt, outcome: { ...fakeOutcome(), cancelled: true } });
+      fx.store.appendEvent("task_1", "task_finished", `Task reached terminal status: ${result.status}`, { status: result.status }, finishedAt);
+      fx.store.commitWorkerResult("task_1", 1, result, {
+        status: result.status,
+        finished_at: finishedAt,
+        exit_code: result.exit_code,
+        worker_pid: null,
+        cleanup_unverified: false,
+      });
+      workerCommitted = true;
+      fx.pidsAlive.delete(pid);
+      throw new WindowsTreeCleanupError("process_tree_root_identity_unknown", "scripted root identity became unknown", [pid]);
+    });
+
+    await assert.rejects(fx.manager.cancelTask("task_1"), (error: unknown) => errorCodeOf(error) === "CANCEL_FAILED");
+    const committed = await fx.manager.getResult("task_1");
+    const projected = await fx.manager.getStatus("task_1");
+    assert.equal(committed.status, "cancelled", "the Worker result is the immutable terminal outcome");
+    assert.equal(projected.status, "cancelled", "the late cleanup failure cannot change terminal status");
+    assert.equal(fx.store.readStatus("task_1").cleanup_unverified, true, "the manager latch remains until its own claimant gate verifies release");
+    assert.equal(workerCommitted, true, "the controlled Worker reached its commit while cancellation was in flight");
+    const events = fx.store.readEvents("task_1", 0, 100).events;
+    const cleanupVerified = events.findIndex((event) => event.type === "cleanup_verified");
+    const taskFinished = events.findIndex((event) => event.type === "task_finished");
+    const cancelFailed = events.findIndex((event) => event.type === "cancel_failed");
+    assert.ok(cleanupVerified >= 0 && taskFinished > cleanupVerified && cancelFailed > taskFinished, "Worker cleanup, terminal event, then manager failure remain distinct and ordered");
+    assert.deepEqual(fx.store.readAttemptMeta("task_1", 1, "cleanup-failure.json")?.member_pids, [pid]);
+    assert.deepEqual(fx.terminateCalls, [pid], "one requested cancellation caused one tree transaction");
+  } finally {
+    await fx.cleanup();
+  }
+});
+
 test("when tree termination cannot be verified the task stays nonterminal and CANCEL_FAILED is raised", async () => {
   const fx = await freshFixture();
   try {
@@ -712,10 +798,31 @@ test("cancelling a terminal task is rejected", async () => {
   try {
     await fx.manager.createTask(fx.makeTask({ task_id: "task_a" }));
     await fx.manager.cancelTask("task_a"); // hmm: running
+    const resultBefore = await fx.manager.getResult("task_a");
+    const eventsBefore = fx.store.readEvents("task_a", 0, 100).events;
+    const terminateCallsBefore = [...fx.terminateCalls];
     await assert.rejects(
       fx.manager.cancelTask("task_a"),
       (error: unknown) => errorCodeOf(error) === "TASK_STATE",
     );
+    assert.deepEqual(await fx.manager.getResult("task_a"), resultBefore, "terminal TaskResult is unchanged");
+    assert.deepEqual(fx.store.readEvents("task_a", 0, 100).events, eventsBefore, "rejected late cancel adds no audit event");
+    assert.deepEqual(fx.terminateCalls, terminateCallsBefore, "rejected late cancel starts no tree transaction");
+
+    // Reopening a manager over the same TaskStore does not turn a historical
+    // terminal cancel into a new operation or Recovery run.
+    const reopened = new BridgeTaskManager({
+      store: fx.store,
+      workspaceProvider: new DirectWorkspaceProvider(),
+      pollIntervalMs: 0,
+      isProcessRunning: (candidate) => fx.pidsAlive.has(candidate),
+      terminateProcessTree: async () => { throw new Error("late terminal cancel must not terminate"); },
+    });
+    try {
+      await assert.rejects(reopened.cancelTask("task_a"), (error: unknown) => errorCodeOf(error) === "TASK_STATE");
+      assert.deepEqual(await reopened.getResult("task_a"), resultBefore);
+      assert.deepEqual(fx.store.readEvents("task_a", 0, 100).events, eventsBefore);
+    } finally { reopened.dispose(); }
   } finally {
     await fx.cleanup();
   }

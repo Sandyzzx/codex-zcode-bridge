@@ -11,8 +11,10 @@ import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import type { TaskPackage, TaskProgressEvent, TaskResult, TaskStatus, TaskStatusRecord, WorkspaceRef, ZCodeInteractionRecord, ZCodeInteractionRequest } from "../interfaces.js";
+import { validateFailureFacts, type FailureFactsV1 } from "../diagnostics/failure-facts.js";
 import { tryAcquireProcessLock } from "./process-lock.js";
 import { atomicRenameSync } from "./atomic-rename.js";
+import { assertJsonAdmissionOpen, withJsonWriterWritePermit } from "./json-writer-quiescence.js";
 
 /** status.json shape: the frozen TaskStatusRecord plus internal fields. */
 export interface InternalTaskStatus extends Omit<TaskStatusRecord, "error_code" | "error"> {
@@ -140,6 +142,9 @@ const CRITICAL_EVENT_TYPES = new Set([
 export interface TaskStoreOptions {
   maxLogBytes?: number;
   maxEventBytes?: number;
+  /** Enabled only by the production stdio composition and its detached Workers. */
+  writerQuiescence?: boolean;
+  writerLeaseToken?: string;
 }
 
 export interface AttemptMeta {
@@ -164,12 +169,16 @@ export class TaskStore {
   readonly #tasksRoot: string;
   readonly #maxLogBytes: number;
   readonly #maxEventBytes: number;
+  readonly #writerQuiescence: boolean;
+  readonly #writerLeaseToken: string | undefined;
 
   constructor(dataRoot: string, options: TaskStoreOptions = {}) {
     this.#dataRoot = dataRoot;
     this.#tasksRoot = path.join(dataRoot, ".tasks");
     this.#maxLogBytes = options.maxLogBytes ?? DEFAULT_MAX_LOG_BYTES;
     this.#maxEventBytes = options.maxEventBytes ?? DEFAULT_MAX_LOG_BYTES;
+    this.#writerQuiescence = options.writerQuiescence ?? false;
+    this.#writerLeaseToken = options.writerLeaseToken;
     privateMkdir(this.#tasksRoot);
   }
 
@@ -179,6 +188,14 @@ export class TaskStore {
 
   get tasksRoot(): string {
     return this.#tasksRoot;
+  }
+
+  get writerQuiescenceEnabled(): boolean {
+    return this.#writerQuiescence;
+  }
+
+  get writerLeaseToken(): string | undefined {
+    return this.#writerLeaseToken;
   }
 
   assertValidTaskId(taskId: string): void {
@@ -208,6 +225,8 @@ export class TaskStore {
   }
 
   createTask(task: TaskPackage, createdAt: string): void {
+    return this.#withWriterMutation(() => {
+    assertJsonAdmissionOpen(this.#dataRoot);
     this.assertValidTaskId(task.task_id);
     const dir = this.taskDir(task.task_id);
     if (existsSync(path.join(dir, "task.json"))) {
@@ -228,6 +247,7 @@ export class TaskStore {
       exit_code: null,
     };
     this.#writeJsonAtomic(path.join(dir, "status.json"), status);
+    });
   }
 
   readTask(taskId: string): TaskPackage {
@@ -245,11 +265,15 @@ export class TaskStore {
   }
 
   writeSubmission(taskId: string, submission: unknown): void {
+    return this.#withWriterMutation(() => {
     this.#writeJsonAtomic(path.join(this.taskDir(taskId), "submission.json"), submission);
+    }, taskId);
   }
 
   writeWorkspaceRef(taskId: string, workspace: WorkspaceRef): void {
+    return this.#withWriterMutation(() => {
     this.#writeJsonAtomic(path.join(this.taskDir(taskId), "workspace.json"), workspace);
+    }, taskId);
   }
 
   readWorkspaceRef(taskId: string): WorkspaceRef | null {
@@ -271,6 +295,7 @@ export class TaskStore {
 
   /** Read-merge-write with an updated timestamp; atomic via temp file + rename. */
   writeStatus(taskId: string, patch: Partial<InternalTaskStatus>, expectedAttempt?: number): InternalTaskStatus {
+    return this.#withWriterMutation(() => {
     return withEventLock(path.join(this.taskDir(taskId), "state.lock"), () => {
       const current = this.readStatus(taskId);
       if (expectedAttempt !== undefined && (current.attempt !== expectedAttempt || isTerminalStatus(current.status))) throw new Error("stale or terminal worker status rejected");
@@ -283,6 +308,7 @@ export class TaskStore {
       this.#writeJsonAtomic(path.join(this.taskDir(taskId), "status.json"), next);
       return next;
     });
+    }, taskId, expectedAttempt);
   }
 
   readResult(taskId: string): TaskResult | null {
@@ -294,13 +320,16 @@ export class TaskStore {
   }
 
   writeResult(taskId: string, result: TaskResult): void {
+    return this.#withWriterMutation(() => {
     withEventLock(path.join(this.taskDir(taskId), "state.lock"), () => {
       if (this.readStatus(taskId).attempt !== result.attempt) throw new Error("stale worker attempt result rejected");
       this.#writeJsonAtomic(path.join(this.taskDir(taskId), "result.json"), result);
     });
+    }, taskId, result.attempt);
   }
 
   commitWorkerResult(taskId: string, attempt: number, result: TaskResult, patch: Partial<InternalTaskStatus>): void {
+    return this.#withWriterMutation(() => {
     withEventLock(path.join(this.taskDir(taskId), "state.lock"), () => {
       this.assertWorkerAttempt(taskId, attempt);
       this.#writeJsonAtomic(path.join(this.taskDir(taskId), "result.json"), result);
@@ -321,18 +350,22 @@ export class TaskStore {
       }
       this.#writeJsonAtomic(path.join(this.taskDir(taskId), "status.json"), { ...current, ...effective, task_id: taskId, attempt, updated_at: new Date().toISOString() });
     });
+    }, taskId, attempt);
   }
 
   patchRunningAttempt(taskId: string, attempt: number, patch: Partial<InternalTaskStatus>): void {
+    return this.#withWriterMutation(() => {
     withEventLock(path.join(this.taskDir(taskId), "state.lock"), () => {
       const current = this.readStatus(taskId);
       if (current.attempt !== attempt || current.status !== "running") return;
       this.#writeJsonAtomic(path.join(this.taskDir(taskId), "status.json"), { ...current, ...patch, updated_at: new Date().toISOString() });
     });
+    }, taskId, attempt);
   }
 
   /** Copies evidence before the continuation status commit; the old result remains recoverable. */
   archiveResultToAttempt(taskId: string, attempt: number): void {
+    return this.#withWriterMutation(() => {
     const dir = this.taskDir(taskId);
     const source = path.join(dir, "result.json");
     if (!existsSync(source)) return;
@@ -340,10 +373,12 @@ export class TaskStore {
     privateMkdir(targetDir);
     copyFileSync(source, path.join(targetDir, "result.json"));
     privateFile(path.join(targetDir, "result.json"));
+    }, taskId, attempt);
   }
 
   /** A claim is permanent: a started attempt must never execute again. */
   claimWorkerExecution(taskId: string, attempt: number): boolean {
+    return this.#withWriterMutation(() => {
     return withEventLock(path.join(this.taskDir(taskId), "state.lock"), () => {
       const status = this.readStatus(taskId);
       if (status.attempt !== attempt || isTerminalStatus(status.status)) return false;
@@ -356,6 +391,7 @@ export class TaskStore {
         throw error;
       }
     });
+    }, taskId, attempt);
   }
 
   assertWorkerAttempt(taskId: string, attempt: number): void {
@@ -374,15 +410,67 @@ export class TaskStore {
   }
 
   writeAttemptFile(taskId: string, attempt: number, fileName: string, content: string): void {
+    return this.#withWriterMutation(() => {
     const dir = this.attemptDir(taskId, attempt);
     privateMkdir(dir);
     this.#writeTextAtomic(path.join(dir, fileName), content);
+    }, taskId, attempt);
   }
 
   writeAttemptMeta(taskId: string, attempt: number, fileName: string, meta: AttemptMeta): void {
+    return this.#withWriterMutation(() => {
     const dir = this.attemptDir(taskId, attempt);
     privateMkdir(dir);
     this.#writeJsonAtomic(path.join(dir, fileName), meta);
+    }, taskId, attempt);
+  }
+
+  // ---- ADR-011 P0 private failure facts (M3 dedicated ownership entry) ----
+
+  /**
+   * The only write entry for `<attempt>/failure-facts.json`. Inside one
+   * state.lock critical section it verifies status.attempt, running status,
+   * status.worker_pid, and the attempt's execution.claim pid against the
+   * calling worker, then performs the first-write / idempotent no-op decision
+   * and the atomic publish. Plain writeAttemptMeta() must never be used as the
+   * final entry for this file. Every mismatch, corrupt existing snapshot, or
+   * divergent replacement candidate is rejected: the first established root
+   * cause is never replaced, and a terminal attempt is never backfilled. The
+   * caller owns diagnostic isolation — a rejected write must never alter task
+   * state, results, or cleanup (ADR-011).
+   */
+  writeFailureFacts(taskId: string, attempt: number, writerPid: number, facts: FailureFactsV1): "written" | "duplicate" {
+    const file = path.join(this.attemptDir(taskId, attempt), "failure-facts.json");
+    return this.#withWriterMutation(() => withEventLock(path.join(this.taskDir(taskId), "state.lock"), () => {
+      const status = this.readStatus(taskId);
+      if (status.attempt !== attempt) throw new Error("stale attempt failure facts rejected");
+      if (status.status !== "running") throw new Error("non-running attempt failure facts rejected");
+      if (status.worker_pid !== writerPid) throw new Error("failure facts writer does not match the recorded worker pid");
+      const claim = this.readAttemptMeta<{ pid?: number }>(taskId, attempt, "execution.claim");
+      if (!claim || claim.pid !== writerPid) throw new Error("failure facts writer does not own the execution claim");
+      validateFailureFacts(facts);
+      if (existsSync(file)) {
+        // A corrupt existing snapshot stays on disk for diagnosis; it is never
+        // treated as an empty slot and never overwritten.
+        const existing = validateFailureFacts(this.#readJson(file));
+        if (stableJson(existing) === stableJson(facts)) return "duplicate";
+        throw new Error("failure facts root cause already established; divergent snapshot rejected");
+      }
+      this.#writeJsonAtomic(file, facts);
+      return "written";
+    }), taskId, attempt);
+  }
+
+  /** Read-only accessor for diagnostics and tests. Never consulted for manager
+   * state, recovery, occupancy, or READY/DONE decisions (ADR-011). */
+  readFailureFacts(taskId: string, attempt: number): { facts: FailureFactsV1 | null; corrupt: boolean } {
+    const file = path.join(this.attemptDir(taskId, attempt), "failure-facts.json");
+    if (!existsSync(file)) return { facts: null, corrupt: false };
+    try {
+      return { facts: validateFailureFacts(JSON.parse(readFileSync(file, "utf8"))), corrupt: false };
+    } catch {
+      return { facts: null, corrupt: true };
+    }
   }
 
   readAttemptMeta<T = AttemptMeta>(taskId: string, attempt: number, fileName: string): T | null {
@@ -392,6 +480,7 @@ export class TaskStore {
   }
 
   writeWorkerHeartbeat(taskId: string, attempt: number, heartbeat: WorkerHeartbeat): void {
+    return this.#withWriterMutation(() => {
     withEventLock(path.join(this.taskDir(taskId), "state.lock"), () => {
       const status = this.readStatus(taskId);
       const claim = this.readAttemptMeta<{ pid?: number }>(taskId, attempt, "execution.claim");
@@ -400,6 +489,7 @@ export class TaskStore {
       }
       this.#writeJsonAtomic(path.join(this.attemptDir(taskId, attempt), "heartbeat.json"), heartbeat);
     });
+    }, taskId, attempt);
   }
 
   readWorkerHeartbeat(taskId: string, attempt: number): WorkerHeartbeat | null {
@@ -525,6 +615,7 @@ export class TaskStore {
     revision: number,
     updatedAt = new Date().toISOString(),
   ): void {
+    return this.#withWriterMutation(() => {
     withEventLock(path.join(this.taskDir(taskId), "state.lock"), () => {
       const status = this.readStatus(taskId);
       if (status.attempt !== attempt) throw new Error("stale attempt observation rejected");
@@ -532,6 +623,7 @@ export class TaskStore {
       if (claim?.pid !== writerPid) throw new Error("observation writer does not own the execution claim");
       this.#mergeObservationSnapshot(taskId, attempt, "worker", revision, patch, updatedAt);
     });
+    }, taskId, attempt);
   }
 
   /** Writes manager-owned snapshot fields (probe verdicts); worker business
@@ -546,11 +638,13 @@ export class TaskStore {
     revision: number,
     updatedAt = new Date().toISOString(),
   ): void {
+    return this.#withWriterMutation(() => {
     withEventLock(path.join(this.taskDir(taskId), "state.lock"), () => {
       const status = this.readStatus(taskId);
       if (status.attempt !== attempt) throw new Error("stale attempt observation rejected");
       this.#mergeObservationSnapshot(taskId, attempt, "manager", revision, patch, updatedAt);
     });
+    }, taskId, attempt);
   }
 
   readObservationSnapshot(taskId: string, attempt: number): { snapshot: AttemptObservationSnapshot | null; corrupt: boolean } {
@@ -605,11 +699,13 @@ export class TaskStore {
   // ---- A2 executor identity evidence ----
 
   writeExecutorIdentity(taskId: string, attempt: number, identity: { worker?: Record<string, unknown>; runtime?: Record<string, unknown> | null }): void {
+    return this.#withWriterMutation(() => {
     const current = this.readAttemptMeta<{ worker?: Record<string, unknown>; runtime?: Record<string, unknown> | null }>(taskId, attempt, "executor-identity.json") ?? {};
     this.writeAttemptMeta(taskId, attempt, "executor-identity.json", {
       ...current,
       ...identity,
     });
+    }, taskId, attempt);
   }
 
   readExecutorIdentity(taskId: string, attempt: number): { worker?: ProcessIdentityLike; runtime?: ProcessIdentityLike | null } | null {
@@ -623,6 +719,7 @@ export class TaskStore {
    * workers. Returns false when the slot is already claimed.
    */
   claimAttemptRespawn(taskId: string, attempt: number): boolean {
+    return this.#withWriterMutation(() => {
     const dir = this.attemptDir(taskId, attempt);
     privateMkdir(dir);
     try {
@@ -632,6 +729,7 @@ export class TaskStore {
       if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
       throw error;
     }
+    }, taskId, attempt);
   }
 
   /** File time of the respawn claim, or null when the attempt is unclaimed. */
@@ -646,6 +744,7 @@ export class TaskStore {
   /** Append-only, byte-bounded. Returns whether the chunk was truncated. */
   appendLog(taskId: string, kind: "stdout" | "stderr", text: string): { truncated: boolean } {
     if (!text) return { truncated: false };
+    return this.#withWriterMutation(() => {
     const dir = this.taskDir(taskId);
     privateMkdir(dir);
     const file = path.join(dir, `${kind}.log`);
@@ -661,6 +760,7 @@ export class TaskStore {
     appendFileSync(file, bytes.length <= room ? bytes : bytes.subarray(0, room), { mode: 0o600 });
     privateFile(file);
     return { truncated: bytes.length > room };
+    }, taskId);
   }
 
   readLog(taskId: string, kind: "stdout" | "stderr"): string {
@@ -675,6 +775,7 @@ export class TaskStore {
     details?: Record<string, unknown>,
     at = new Date().toISOString(),
   ): TaskProgressEvent | null {
+    return this.#withWriterMutation(() => {
     const dir = this.taskDir(taskId);
     mkdirSync(dir, { recursive: true });
     const lockDir = path.join(dir, "events.lock");
@@ -736,6 +837,7 @@ export class TaskStore {
       }
       return event;
     });
+    }, taskId);
   }
 
   readEvents(taskId: string, afterSeq = 0, limit = 100, view: "raw" | "summary" = "raw"): { events: TaskProgressEvent[]; nextSeq: number; hasMore: boolean; omittedEvents: number } {
@@ -1076,6 +1178,7 @@ export class TaskStore {
     request: ZCodeInteractionRequest,
     createdAt = new Date().toISOString(),
   ): { record: ZCodeInteractionRecord; created: boolean } {
+    return this.#withWriterMutation(() => {
     const directory = path.join(this.taskDir(taskId), "interactions");
     privateMkdir(directory);
     const file = this.interactionFile(taskId, request.request_id);
@@ -1107,6 +1210,7 @@ export class TaskStore {
       this.#writeJsonAtomic(file, record);
       return { record, created: true };
     });
+    }, taskId);
   }
 
   readInteractionRequest(taskId: string, requestId: string): ZCodeInteractionRecord | null {
@@ -1179,6 +1283,7 @@ export class TaskStore {
     answer: Record<string, unknown>,
     answeredAt = new Date().toISOString(),
   ): "answered" | "already_answered" {
+    return this.#withWriterMutation(() => {
     const file = this.interactionFile(taskId, requestId);
     return withEventLock(path.join(this.taskDir(taskId), "interactions.lock"), () => {
       if (!existsSync(file)) throw new Error(`unknown ZCode interaction request: ${requestId}`);
@@ -1193,6 +1298,7 @@ export class TaskStore {
       } satisfies ZCodeInteractionRecord);
       return "answered";
     });
+    }, taskId);
   }
 
   /** ADR-008: approval answers verify the full request inside the same
@@ -1206,6 +1312,7 @@ export class TaskStore {
     options: { requireIntegrity: boolean },
     answeredAt = new Date().toISOString(),
   ): { state: "answered" } | { state: "already_answered" } | { state: "integrity_failed"; reason: string } {
+    return this.#withWriterMutation(() => {
     const file = this.interactionFile(taskId, requestId);
     return withEventLock(path.join(this.taskDir(taskId), "interactions.lock"), () => {
       if (!existsSync(file)) throw new Error(`unknown ZCode interaction request: ${requestId}`);
@@ -1224,6 +1331,7 @@ export class TaskStore {
       } satisfies ZCodeInteractionRecord);
       return { state: "answered" };
     });
+    }, taskId);
   }
 
   private interactionFile(taskId: string, requestId: string): string {
@@ -1255,6 +1363,14 @@ export class TaskStore {
       }
       throw error;
     }
+  }
+
+  #withWriterMutation<T>(operation: () => T, taskId?: string, attempt?: number): T {
+    // Every mutation shares the registration/drain gate so a legacy-shaped
+    // Store cannot race the first registry write and escape participant checks.
+    // With no registry or fence, the permit preserves the existing JSON write.
+    const token = this.#writerQuiescence ? this.#writerLeaseToken : undefined;
+    return withJsonWriterWritePermit(this.#dataRoot, token, taskId, attempt, operation);
   }
 }
 

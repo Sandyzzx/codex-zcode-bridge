@@ -300,6 +300,28 @@ test("zcode_status returns the TaskStatusRecord and maps the argument", async ()
   });
 });
 
+test("zcode_status accepts the additive execution observation", async () => {
+  await withServer(async (client, manager) => {
+    manager.statusRecord = {
+      ...manager.statusRecord,
+      execution_observation: {
+        state: "cleanup_held",
+        observed_at: CREATED_AT,
+        evidence_ref: "sha256:test-evidence",
+      },
+    };
+
+    const result = (await client.callTool({
+      name: "zcode_status",
+      arguments: { task_id: "task_1" },
+    })) as CallToolResult;
+
+    assert.equal(result.isError, undefined);
+    const record = result.structuredContent as unknown as TaskStatusRecord;
+    assert.deepEqual(record.execution_observation, manager.statusRecord.execution_observation);
+  });
+});
+
 test("zcode_feedback returns the additive v0.1 snapshot", async () => {
   await withServer(async (client, manager) => {
     const result = (await client.callTool({

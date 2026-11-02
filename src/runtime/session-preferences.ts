@@ -1,5 +1,6 @@
 import type { TaskPackage, ZCodeModelSelection } from "../interfaces.js";
 import { BridgeError } from "./errors.js";
+import { resolveTrustedLocalExecutionProfile } from "./trusted-local-profile.js";
 
 export const ZCODE_SESSION_MODES = ["plan", "build", "edit", "yolo"] as const;
 export type ZCodeSessionMode = (typeof ZCODE_SESSION_MODES)[number];
@@ -14,11 +15,18 @@ export interface ResolvedSessionPreferences {
 export function resolveSessionPreferences(
   taskModel: TaskPackage["model"],
   env: NodeJS.ProcessEnv,
+  trustedExecutionProfileId?: string,
 ): ResolvedSessionPreferences {
   const providerId = env["ZCODE_BRIDGE_DEFAULT_PROVIDER_ID"]?.trim() ?? "";
   const modelId = env["ZCODE_BRIDGE_DEFAULT_MODEL_ID"]?.trim() ?? "";
   const reasoningLevel = env["ZCODE_BRIDGE_DEFAULT_REASONING_LEVEL"]?.trim() ?? "";
-  const configuredMode = env["ZCODE_BRIDGE_MODE"]?.trim() || "yolo";
+  const trustedProfile = trustedExecutionProfileId === undefined
+    ? null
+    : resolveTrustedLocalExecutionProfile(trustedExecutionProfileId);
+  if (trustedExecutionProfileId !== undefined && !trustedProfile) {
+    throw new BridgeError("provider_config_invalid", "unknown trusted local execution profile");
+  }
+  const configuredMode = trustedProfile?.sessionMode ?? (env["ZCODE_BRIDGE_MODE"]?.trim() || "yolo");
 
   if (Boolean(providerId) !== Boolean(modelId)) {
     throw new BridgeError(

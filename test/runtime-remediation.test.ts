@@ -9,7 +9,7 @@ import { TaskStore } from "../src/store/task-store.js";
 import { runWorkerTask } from "../src/worker/run-task.js";
 import { BridgeTaskManager } from "../src/manager/task-manager.js";
 import { DirectWorkspaceProvider } from "../src/workspace/direct-provider.js";
-import { captureSpawnGenerationIdentity, createPlatformProbe, terminateProcessTree } from "../src/adapters/process-spawn.js";
+import { captureSpawnGenerationIdentity, createPlatformProbe, terminateProcessTree, verifyProcessTreeClaimantsClean } from "../src/adapters/process-spawn.js";
 import { ZCodeModelSettings } from "../src/runtime/model-settings.js";
 import { runtimeFixture } from "./runtime-fixture.js";
 import { makeTask, makeWorkspace } from "./helpers.js";
@@ -81,6 +81,8 @@ test("a real worker delivers a permission reply and exits; a continuation gets a
     for (const attempt of [1, 2]) {
       if (attempt === 2) { store.archiveResultToAttempt("task_1", 1); store.writeStatus("task_1", { status: "queued", attempt: 2, finished_at: null }); }
       const child = spawn(process.execPath, [workerEntry, fixture.root, "task_1", String(attempt)], { env: { ...fixture.env, ZCODE_BRIDGE_HOST_PROFILE: JSON.stringify(fixture.host) }, windowsHide: true, stdio: ["ignore", "ignore", "pipe"] });
+      const childIdentity = await captureSpawnGenerationIdentity(child, createPlatformProbe());
+      assert.ok(childIdentity, `real worker attempt ${attempt} identity must be captured while it is live`);
       let stderr = "";
       child.stderr.on("data", (chunk) => { stderr += String(chunk); });
       const exited = new Promise<number | null>((resolve) => child.once("close", resolve));
@@ -99,7 +101,7 @@ test("a real worker delivers a permission reply and exits; a continuation gets a
         assert.equal(exit, 0, stderr);
         assert.equal(store.readResult("task_1")?.status, "completed");
         priorId = id;
-      } finally { if (child.exitCode === null && child.signalCode === null && child.pid) await terminateFixtureChild(child); }
+      } finally { if (child.exitCode === null && child.signalCode === null && child.pid) await terminateFixtureChild(child, childIdentity); }
     }
   } finally { manager.dispose(); await fixture.cleanup(); }
 });
@@ -108,10 +110,19 @@ test("a real worker delivers a permission reply and exits; a continuation gets a
  * the spawn generation after every await (exit state, not the close flag),
  * so a fingerprint read after an exit-and-recycle race is discarded and the
  * Windows terminator then refuses to signal. */
-async function terminateFixtureChild(child: import("node:child_process").ChildProcess): Promise<void> {
+async function terminateFixtureChild(
+  child: import("node:child_process").ChildProcess,
+  identity: { pid: number; fingerprint: string },
+): Promise<void> {
   if (child.pid === undefined) return;
-  const identity = await captureSpawnGenerationIdentity(child, createPlatformProbe());
-  await terminateProcessTree(child.pid, { expectedRootFingerprint: identity?.fingerprint ?? null, killWaitMs: 5_000 });
+  assert.equal(child.pid, identity.pid, "fixture cleanup keeps the captured process identity");
+  try {
+    await terminateProcessTree(child.pid, { expectedRootFingerprint: identity.fingerprint, killWaitMs: 5_000 });
+  } catch (error) {
+    if ((error as { code?: string }).code !== "process_tree_root_exited") throw error;
+    const scan = await verifyProcessTreeClaimantsClean([{ pid: child.pid, fingerprint: identity.fingerprint }]);
+    if (!scan.clean) throw error;
+  }
 }
 
 test("real worker reaches its 60-second timeout and exits with an unanswered interaction", { timeout: 80_000 }, async () => {
@@ -119,6 +130,8 @@ test("real worker reaches its 60-second timeout and exits with an unanswered int
   const store = new TaskStore(fixture.root);
   store.createTask(makeTask({ workspace: fixture.root, timeout_ms: 60_000 }), new Date().toISOString());
   const child = spawn(process.execPath, [workerEntry, fixture.root, "task_1", "1"], { env: { ...fixture.env, ZCODE_BRIDGE_HOST_PROFILE: JSON.stringify(fixture.host) }, windowsHide: true, stdio: ["ignore", "ignore", "pipe"] });
+  const childIdentity = await captureSpawnGenerationIdentity(child, createPlatformProbe());
+  assert.ok(childIdentity, "timeout worker identity must be captured while it is live");
   let stderr = "";
   child.stderr.on("data", (chunk) => { stderr += String(chunk); });
   try {
@@ -129,7 +142,7 @@ test("real worker reaches its 60-second timeout and exits with an unanswered int
     assert.equal(store.readStatus("task_1").worker_pid, null);
     assert.equal(store.readStatus("task_1").zcode_pid, null);
   } finally {
-    if (child.exitCode === null && child.signalCode === null && child.pid) await terminateFixtureChild(child);
+    if (child.exitCode === null && child.signalCode === null && child.pid) await terminateFixtureChild(child, childIdentity);
     await fixture.cleanup();
   }
 });

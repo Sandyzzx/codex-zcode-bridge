@@ -262,10 +262,18 @@ test("an HTTP URL whose host equals a short root is not a development-path leak 
  */
 test("the real validator rejects injected development-path references and keeps the baseline clean", { timeout: 120_000 }, () => {
   const scriptsDir = fileURLToPath(new URL("../../scripts/", import.meta.url));
-  const tempBase = mkdtempSync(path.join(tmpdir(), "bridge-validate-plugin-cli-"));
-  assert.ok(tempBase.startsWith(tmpdir()), "fixture must live under the system temp directory");
+  const tempRoot = path.resolve(tmpdir());
+  const tempBase = mkdtempSync(path.join(tempRoot, "bridge-validate-plugin-cli-"));
   const root = path.join(tempBase, `bridge 修订 (v2)[x]`);
   try {
+    const relativeTempBase = path.relative(tempRoot, tempBase);
+    assert.ok(
+      relativeTempBase !== "" &&
+        relativeTempBase !== ".." &&
+        !relativeTempBase.startsWith(`..${path.sep}`) &&
+        !path.isAbsolute(relativeTempBase),
+      "fixture must live under the system temp directory",
+    );
     const pluginRoot = path.join(root, "plugins", "codex-zcode-bridge");
     for (const directory of [
       path.join(root, "scripts", "lib"),
@@ -274,6 +282,8 @@ test("the real validator rejects injected development-path references and keeps 
       path.join(pluginRoot, "worker", "vendor", "pkg"),
       path.join(pluginRoot, "hooks"),
       path.join(pluginRoot, "skills", "zcode-bridge"),
+      path.join(root, "src", "sqlite-candidate", "wp6b2b1"),
+      path.join(pluginRoot, "skills", "zcode-bridge", "scripts"),
     ]) {
       mkdirSync(directory, { recursive: true });
     }
@@ -281,15 +291,28 @@ test("the real validator rejects injected development-path references and keeps 
     copyFileSync(path.join(scriptsDir, "lib", "repo-root-pattern.mjs"), path.join(root, "scripts", "lib", "repo-root-pattern.mjs"));
 
     const manifest = { name: "codex-zcode-bridge", version: "1.2.5" };
-    const mcp = { mcpServers: { zcode_bridge: { command: "node", args: ["./dist/bridge.mjs"], env: { ZCODE_BRIDGE_PLUGIN_MODE: "1" } } } };
+    const mcp = { mcpServers: { zcode_bridge: { command: "node", args: ["./launch-node24.mjs"], env: { ZCODE_BRIDGE_PLUGIN_MODE: "1" } } } };
     writeFileSync(path.join(root, "package.json"), JSON.stringify(manifest));
     writeFileSync(path.join(pluginRoot, "plugin.json"), JSON.stringify(manifest));
     writeFileSync(path.join(pluginRoot, ".codex-plugin", "plugin.json"), JSON.stringify(manifest));
     writeFileSync(path.join(pluginRoot, "mcp.json"), JSON.stringify(mcp));
     writeFileSync(path.join(pluginRoot, ".mcp.json"), JSON.stringify(mcp));
+    writeFileSync(path.join(pluginRoot, "launch-node24.mjs"), "");
     writeFileSync(path.join(pluginRoot, "worker", "vendor", "package.json"), JSON.stringify({ name: "playwright-core" }));
     writeFileSync(path.join(pluginRoot, "worker", "vendor", "browsers.json"), JSON.stringify({ browsers: [{ name: "chromium" }] }));
-    for (const file of ["hooks/hooks.json", "hooks/session-start.mjs", "hooks/configure-runtime.ps1", "skills/zcode-bridge/SKILL.md"]) {
+    const schema = "SELECT 1;\n";
+    const adminSchema = "SELECT 2;\n";
+    writeFileSync(path.join(root, "src", "sqlite-candidate", "wp6b2b1", "schema.sql"), schema);
+    writeFileSync(path.join(pluginRoot, "dist", "schema.sql"), schema);
+    writeFileSync(path.join(root, "src", "sqlite-candidate", "wp6b2b1", "admin-abandonment.sql"), adminSchema);
+    writeFileSync(path.join(pluginRoot, "dist", "admin-abandonment.sql"), adminSchema);
+    for (const file of [
+      "hooks/hooks.json",
+      "hooks/session-start.mjs",
+      "hooks/configure-runtime.ps1",
+      "skills/zcode-bridge/SKILL.md",
+      "skills/zcode-bridge/scripts/codex-master-token-usage.mjs",
+    ]) {
       writeFileSync(path.join(pluginRoot, file), "");
     }
 

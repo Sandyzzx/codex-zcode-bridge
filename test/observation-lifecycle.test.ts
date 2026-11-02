@@ -686,19 +686,23 @@ test("A2-08: the platform probe answers alive for a live process with a matching
   if (process.platform === "win32" || process.platform === "linux") {
     assert.ok(identity.fingerprint, `${process.platform} must expose a startup fingerprint`);
     assert.equal(identity.fingerprint_precision, "exact");
-    const verdicts = await probe.probe([{ pid: process.pid, identity }]);
+    const absentIdentity: import("../src/runtime/process-probe.js").ProcessIdentity = { pid: 987654, fingerprint: "fp-gone", fingerprint_precision: "exact", identity_version: 1, platform: process.platform, captured_at: new Date().toISOString() };
+    // Batch duplicate and absent PIDs so Windows starts one bounded PowerShell
+    // query instead of paying that startup cost once per assertion.
+    const verdicts = await probe.probe([
+      { pid: process.pid, identity },
+      { pid: process.pid, identity: { ...identity, fingerprint: "definitely-not-the-same" } },
+      { pid: 987654, identity: absentIdentity },
+    ]);
     assert.equal(verdicts[0]!.state, "alive");
     assert.equal(verdicts[0]!.reason_code, "pid_and_fingerprint_match");
     // A mismatched fingerprint on the same live PID proves reuse.
-    const reused = await probe.probe([{ pid: process.pid, identity: { ...identity, fingerprint: "definitely-not-the-same" } }]);
-    assert.equal(reused[0]!.state, "exited");
-    assert.equal(reused[0]!.reason_code, "pid_reused");
+    assert.equal(verdicts[1]!.state, "exited");
+    assert.equal(verdicts[1]!.reason_code, "pid_reused");
     // An absent (but plausible) PID is conclusive exit evidence. Huge PIDs
     // make Get-Process itself error, which correctly answers unknown instead.
-    const absentIdentity: import("../src/runtime/process-probe.js").ProcessIdentity = { pid: 987654, fingerprint: "fp-gone", fingerprint_precision: "exact", identity_version: 1, platform: process.platform, captured_at: new Date().toISOString() };
-    const absent = await probe.probe([{ pid: 987654, identity: absentIdentity }]);
-    assert.equal(absent[0]!.state, "exited");
-    assert.equal(absent[0]!.reason_code, "pid_absent");
+    assert.equal(verdicts[2]!.state, "exited");
+    assert.equal(verdicts[2]!.reason_code, "pid_absent");
   } else {
     // macOS/other: the probe must answer without claiming exact identity.
     const verdicts = await probe.probe([{ pid: process.pid, identity }]);

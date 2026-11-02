@@ -15,6 +15,11 @@ export interface FeedbackVerificationItem {
   evidence: string;
 }
 
+export interface FeedbackCodexTokens {
+  state: "unavailable" | "reported";
+  note: string;
+}
+
 export interface FeedbackInput {
   objective: string;
   task_id: string;
@@ -26,9 +31,9 @@ export interface FeedbackInput {
   /** Master-side independent verification record (absent = 未验证). */
   verification?: { outcome: "通过" | "未通过" | "未验证" | "部分验证"; scope: string; items: FeedbackVerificationItem[] } | null;
   delivery?: { accepted?: FeedbackFact; committed?: FeedbackFact; pushed?: FeedbackFact; released?: FeedbackFact };
-  /** Codex main-session tokens: unavailable until the host provides a
-   * per-turn source. Never substituted from quotas or text estimates. */
-  codex_tokens?: { state: "unavailable" | "reported"; note: string } | null;
+  /** Codex main-session report-window delta, rendered as one verified integer.
+   * Detailed Rollout telemetry remains in the observability result. */
+  codex_tokens?: FeedbackCodexTokens | null;
   usage?: NormalizedUsage | null;
   usage_note?: string;
   model?: ExecutionProfile | null;
@@ -142,7 +147,7 @@ export function renderFeedback(input: FeedbackInput): string {
   const wall = timing ? formatDuration(timing.wall_ms ?? null) : UNKNOWN;
   const derivedMark = timing?.derived ? "（derived：跨重启/续跑由墙钟推导）" : "";
   lines.push(`| 本次耗时 | 排队 ${queue}；执行 ${execution}${derivedMark}；独立验证 ${verify}；报告周期合计 ${wall}。未知项不并入总数。 |`);
-  lines.push(`| Codex 主会话 token | ${input.codex_tokens ? (input.codex_tokens.state === "unavailable" ? escapeCell(input.codex_tokens.note) : escapeCell(input.codex_tokens.note)) : "未取得：当前宿主未提供本次调用统计"} |`);
+  lines.push(`| Codex 主会话 token | ${escapeCell(input.codex_tokens?.note ?? "未取得")} |`);
   const usageText = input.running
     ? input.running.tokens_note
     : usageSummary(input.usage, input.usage_note);

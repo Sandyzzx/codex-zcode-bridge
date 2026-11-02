@@ -112,6 +112,17 @@ const taskObservationSchema = z.object({
   }),
 });
 
+const executionObservationSchema = z.object({
+  state: z.enum([
+    "interrupted_without_result",
+    "worker_identity_unknown",
+    "worker_alive_unmanaged",
+    "cleanup_held",
+  ]),
+  observed_at: z.string(),
+  evidence_ref: z.string(),
+});
+
 export const taskStatusRecordSchema = z.object({
   task_id: z.string(),
   status: z.enum([
@@ -133,6 +144,7 @@ export const taskStatusRecordSchema = z.object({
   error_code: z.string().optional(),
   error: z.string().optional(),
   observation: taskObservationSchema.optional(),
+  execution_observation: executionObservationSchema.optional(),
 });
 
 const normalizedUsageSchema = z.object({

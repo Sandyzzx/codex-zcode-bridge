@@ -35,7 +35,7 @@ const DESTINATION_PRESENT_CONTENTION_CODES = new Set(["EEXIST", "ENOTEMPTY"]);
 /** Bounded budgets for the transient retries; exhaustion keeps the original
  * error visible instead of spinning. */
 const PUBLICATION_RETRY_ATTEMPTS = 3;
-const WITHDRAW_RETRY_MS = 2_000;
+const WITHDRAW_RETRY_MS = 5_000;
 const SHARED_GUARD_RETRY_MS = 2_000;
 const PRIVATE_CLEANUP_RETRY_MS = 1_000;
 const RETRY_PAUSE_MS = 10;
@@ -156,15 +156,17 @@ function tryAcquireProcessLockWithRetry(directory: string, retries: number): (()
   };
 }
 
-/** Observed (real cross-process contention, 2026-10-17): the withdrawal
- * rename of the held lock directory fails transiently with EPERM. The
- * mechanism is a working hypothesis, not handle-level verified: a competitor
- * inspecting owner.json (acquireExistingLock) or a scanner plausibly holds a
- * handle inside the directory for milliseconds, which Windows refuses to
- * rename across. Retry only the whitelisted codes within a bounded budget;
- * on exhaustion the error stays visible and the shared lock keeps its
- * complete owner record, so the next acquisition still sees a live owner
- * instead of an unreadable or half-deleted lock. */
+/** Observed (real cross-process contention, 2026-10-17 and the full JSON
+ * regression on 2026-10-30): the withdrawal rename of the held lock
+ * directory fails transiently with EPERM. The mechanism is a working
+ * hypothesis, not handle-level verified: a competitor inspecting owner.json
+ * (acquireExistingLock), a scanner, or another process handle inside the
+ * directory can make Windows refuse the rename. The 2026-10-30 failure
+ * exceeded the former two-second budget under load. Retry only the
+ * whitelisted codes within this bounded five-second budget; on exhaustion the
+ * error stays visible and the shared lock keeps its complete owner record, so
+ * the next acquisition still sees a live owner instead of an unreadable or
+ * half-deleted lock. */
 function renameWithTransientRetry(source: string, target: string): void {
   const deadline = Date.now() + WITHDRAW_RETRY_MS;
   while (true) {

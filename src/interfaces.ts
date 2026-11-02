@@ -239,6 +239,15 @@ export interface TaskStatusRecord {
   error?: string;
   /** A1 additive: unified observation; advisory evidence, never a verdict override. */
   observation?: TaskObservation;
+  /** Read-only process/lifecycle observation for Manual-Recovery MVP; never a persisted Task status. */
+  execution_observation?: ExecutionObservation;
+}
+
+export interface ExecutionObservation {
+  readonly state: "interrupted_without_result" | "worker_identity_unknown" | "worker_alive_unmanaged" | "cleanup_held";
+  readonly observed_at: string;
+  /** Opaque digest reference; contains no PID, token, or raw process identity. */
+  readonly evidence_ref: string;
 }
 
 /** Append-only, user-visible execution evidence. Never includes hidden reasoning; interaction requests may expose bounded tool input for a decision. */

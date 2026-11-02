@@ -23,6 +23,8 @@ interface ProbeReceipt {
   unrelated_secret: string | null;
   programfiles: string | null;
   programfiles_x86: string | null;
+  runtime_provenance: string | null;
+  bridge_launch_marker: boolean;
   zcode_bridge_keys: string[];
 }
 
@@ -53,6 +55,8 @@ function writeProbeWorker(scriptPath: string, receiptPath: string, releasePath: 
     "  unrelated_secret: lookup('BRIDGE_TEST_UNRELATED_SECRET'),",
     "  programfiles: lookup('PROGRAMFILES'),",
     "  programfiles_x86: lookup('PROGRAMFILES(X86)'),",
+    "  runtime_provenance: lookup('ZCODE_BRIDGE_RUNTIME_PROVENANCE'),",
+    "  bridge_launch_marker: process.argv.includes('--zcode-bridge-launch-v1'),",
     "  zcode_bridge_keys: Object.keys(process.env).filter((name) => name.startsWith('ZCODE_BRIDGE_')).sort(),",
     "};",
     "fs.writeFileSync(receipt, JSON.stringify(snapshot, null, 2));",
@@ -117,6 +121,7 @@ test("a real detached worker receives env-only browser settings while secrets st
     }
 
     const receipt = await waitForReceipt(receiptPath, 30_000);
+    assert.equal(receipt.bridge_launch_marker, true, "the spawner adds its fixed launch-mode marker outside task fields");
     assert.equal(receipt.browser_use, "headless", "env-only ZCODE_BRIDGE_BROWSER_USE must reach the detached worker");
     assert.equal(receipt.browser_executable, fakeExecutable, "env-only ZCODE_BRIDGE_BROWSER_EXECUTABLE must reach the detached worker");
     assert.equal(receipt.secret_probe, null, "an arbitrary ZCODE_BRIDGE_ secret must not reach the worker");
@@ -159,11 +164,20 @@ test("without browser settings the worker env stays default-off (keys absent, no
     }
 
     const receipt = await waitForReceipt(receiptPath, 30_000);
+    assert.equal(receipt.bridge_launch_marker, true, "the spawner marks Bridge-launched workers independently of provenance env presence");
     assert.equal(receipt.browser_use, null, "unset browser mode must not arrive as any value (default off)");
     assert.equal(receipt.browser_executable, null, "unset browser executable must not arrive");
-    // Only the spawner's own host-profile injection may appear: forwarding must
-    // stay an explicit key list, not a ZCODE_BRIDGE_* namespace copy.
-    assert.deepEqual(receipt.zcode_bridge_keys, ["ZCODE_BRIDGE_HOST_PROFILE"]);
+    // These two keys are explicit Bridge-to-Worker protocol fields. Arbitrary
+    // ZCODE_BRIDGE_* variables remain filtered, and runtime provenance is not
+    // forwarded again to the ZCode app-server child.
+    assert.deepEqual(receipt.zcode_bridge_keys, ["ZCODE_BRIDGE_HOST_PROFILE", "ZCODE_BRIDGE_RUNTIME_PROVENANCE"]);
+    const provenance = JSON.parse(receipt.runtime_provenance ?? "null") as {
+      bridge?: { sha256?: string | null };
+      worker?: { path?: string | null; sha256?: string | null };
+    } | null;
+    assert.ok(provenance?.bridge && provenance.worker, "the spawner supplies the internal provenance envelope");
+    assert.match(provenance.worker.sha256 ?? "", /^[A-F0-9]{64}$/u);
+    assert.equal(provenance.worker.path, probeWorker);
   } catch (error) {
     primaryFailed = true;
     throw error;

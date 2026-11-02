@@ -21,6 +21,15 @@ test("task prompt contains the package and the output contract", () => {
   assert.match(prompt, /exactly one JSON object/);
 });
 
+test("the worker prompt assigns whole-task delivery ownership", () => {
+  const prompt = buildTaskPrompt(makeTask());
+  assert.match(prompt, /one complete task/);
+  assert.match(prompt, /DELIVERY OWNERSHIP/);
+  assert.match(prompt, /implement every required change/);
+  assert.match(prompt, /Do not stop after a partial step/);
+  assert.match(prompt, /your report is evidence of what you did/);
+});
+
 test("mandatory output example is valid JSON with all required fields", () => {
   const prompt = buildTaskPrompt(makeTask());
   const line = prompt.split("\n").find((text) => text.startsWith("Valid JSON example"));
@@ -90,5 +99,6 @@ test("continue prompt carries feedback, additional requirements, and prior resul
   assert.match(prompt, /Keep the public API stable/);
   assert.match(prompt, /previous attempt summary/);
   assert.match(prompt, /sess_abc/);
+  assert.match(prompt, /DELIVERY OWNERSHIP/);
   assert.match(prompt, /needs_master_decision/);
 });

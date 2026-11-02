@@ -4,6 +4,44 @@
 
 当前版本以 `package.json` 和 Release Please manifest 为准。提交推送到 `master` 后，Release Please 会在有待发布变更时创建发布 PR，并同步更新版本文件与本日志；合并发布 PR 后会生成对应 Git tag 和 GitHub Release。
 
+## [1.3.0-rc.4](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.3.0-rc.3...codex-zcode-bridge-v1.3.0-rc.4) (2026-11-02)
+
+Preview local-trust hotfix.
+
+### Bug Fixes
+
+* keep a transiently unknown Worker probe scoped to the scanning Manager instead of latching a global Recovery Hold
+* use the single-user local `yolo` execution profile for SQLite so ordinary coding work can run unattended like the JSON path
+* preserve explicit Owner boundaries for publishing, production Authority changes, credentials, and destructive operations outside task scope
+
+## [1.3.0-rc.3](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.3.0-rc.2...codex-zcode-bridge-v1.3.0-rc.3) (2026-11-02)
+
+Preview hotfix.
+
+### Bug Fixes
+
+* prevent a second SQLite Manager from turning an exact, still-running Worker into a persistent global Recovery Hold
+* keep the non-owning Manager read-only without blocking the owning Worker's interaction channel
+
+## [1.3.0-rc.2](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.3.0-rc.1...codex-zcode-bridge-v1.3.0-rc.2) (2026-11-01)
+
+Preview hotfix.
+
+### Bug Fixes
+
+* accept line-ending-equivalent SQLite schema text on Windows while preserving fail-closed schema validation
+
+## [1.3.0-rc.1](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.2.7...codex-zcode-bridge-v1.3.0-rc.1) (2026-11-01)
+
+Preview release.
+
+### Features
+
+* add SQLite lifecycle authority, archive-first cutover, restart recovery, and audited cleanup-hold administration
+* preserve JSON-compatible local workspace behavior without a new trusted-directory allowlist
+* report a bounded Codex Master-token window from an explicit local Thread rollout
+* retain progressive Skill guidance, dispatch policies, and the Owner-selected Original E artwork
+
 ## [1.2.7](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.2.6...codex-zcode-bridge-v1.2.7) (2026-10-19)
 
 

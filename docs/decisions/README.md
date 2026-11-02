@@ -1,7 +1,7 @@
 # 决策记录 / Decisions
 
 > Status: AUTHORITATIVE（仅指本索引）
-> Last updated: 2026-10-08
+> Last updated: 2026-11-01
 
 本目录保存已批准的架构决策和带日期的决策记录。决策回答"为什么这样定"，当前实现仍以 `ARCHITECTURE.md` / `INTERFACES.md` 为准。
 
@@ -22,6 +22,11 @@
 | [ADR-002](ADR-002-manager-owns-task-lifecycle.md) | Accepted | Manager 独占任务生命周期，worker 通过 attempt claim 入场 |
 | [ADR-003](ADR-003-execution-directory-prepared-by-host.md) | Accepted | 执行目录由调用宿主准备，Bridge 不创建也不删除 |
 | [ADR-004](ADR-004-separate-control-state-and-observation.md) | Accepted | 分离运行时控制、权威状态与补充观察；Desktop 索引是登记过的集成例外 |
+| [ADR-011](ADR-011-private-failure-diagnostics.md) | Accepted（设计） | P0 私有失败诊断；终止根因、受理三态、原子所有权与有限脱敏；固化记录见 2026-10-18-adr011-p0-consolidation |
+| [ADR-016](ADR-016-stop-the-world-json-to-sqlite-cutover.md) | Accepted v3 | SQLite 唯一 Authority；新装与升级统一 Fresh Bootstrap，旧 JSON 完全脱钩，损坏 SQLite fail closed |
+| [ADR-017](ADR-017-single-user-trusted-local-workspace-admission.md) | Accepted v2 | SQLite Workspace Admission 复用 JSON 的本地目录与可选执行 worktree 流程；Host capability 保留，无需项目白名单或 `workspace_roots` |
+| [ADR-018](ADR-018-administrative-abandonment-of-cleanup-incomplete-hold.md) | Accepted | 对已确认执行世代结束的 `cleanup_incomplete` Hold 执行一次性、证据绑定且不可重入的行政结案 |
+| [ADR-019](ADR-019-local-trust-and-recovery-fence.md) | Accepted | 单用户本机 SQLite 使用与 JSON 一致的 `yolo` 普通工具流程；运行中 Worker 的临时探针不确定性只隔离当前 Manager，不写全局 Recovery Hold |
 
 ADR-001 到 ADR-003 只搬运权威文档里已经写明的结论。ADR-004 原先没有明文记录，只有 bridge 之外的设计讨论，因此先以 Proposed 记录；2026-10-07 由 Master 明确按"强化版 A"接受，原则冻结，未因此增加任何读取 ZCode 本地材料的代码。
 
@@ -34,3 +39,10 @@ ADR-001 到 ADR-003 只搬运权威文档里已经写明的结论。ADR-004 原�
 ## 命名
 
 新决策使用 `ADR-NNN-<slug>.md`，正文至少包含 Status、Date、Context、Decision、Rationale、Consequences。
+
+## 独立功能接收（2026-10-29）
+
+| ADR | 状态 | 范围 |
+|---|---|---|
+| [ADR-010](ADR-010-whole-task-delegation.md) | Accepted | 整任务交付、真实阶段门与续作边界；不改变Schema或生命周期 |
+| [ADR-015](ADR-015-master-skill-authorization-and-progressive-loading.md) | Accepted | 显式调用授权与按需文档加载；非Host强制鉴权 |
