@@ -160,6 +160,12 @@ async function prepareJsonAuthority(jsonDataRoot: string): Promise<Record<string
 }
 
 async function main(): Promise<void> {
+  throw new CliBlockedError(
+    "json_to_sqlite_migration_removed",
+    "JSON-to-SQLite migration is no longer supported; SQLite bootstraps an empty Authority and does not read JSON task data",
+  );
+  // Retained below as historical source for auditability. This code is
+  // intentionally unreachable from the packaged CLI entrypoint.
   const options = parseArgs(process.argv.slice(2));
   if (options.prepare) {
     const result = await prepareJsonAuthority(options.jsonDataRoot);

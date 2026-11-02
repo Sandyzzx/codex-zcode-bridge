@@ -9,15 +9,17 @@ const CONFIG_FILE = "authority.json";
 const CONFIG_LIMIT = 8 * 1024;
 export const FRESH_SQLITE_DATABASE_FILE = "bridge.sqlite";
 
-export type InstallAuthoritySelection =
-  | { readonly state: "json"; readonly configPath: string }
-  | { readonly state: "sqlite"; readonly configPath: string; readonly configuredDataRoot: string };
+export type InstallAuthoritySelection = {
+  readonly state: "sqlite";
+  readonly configPath: string;
+  readonly configuredDataRoot: string;
+};
 
 export class SqliteInstallConfigurationError extends Error {
   constructor(readonly code: string, message = code) { super(message); this.name = "SqliteInstallConfigurationError"; }
 }
 
-/** A missing file preserves legacy JSON behavior; every explicit bad file fails startup. */
+/** SQLite is the sole production authority. Legacy JSON selection is accepted only as an upgrade hint. */
 export function loadInstallAuthoritySelection(host: BridgeHostProfile): InstallAuthoritySelection {
   validateHostProfile(host);
   const configPath = path.join(host.settingsDirectory, CONFIG_FILE);
@@ -29,7 +31,9 @@ export function loadInstallAuthoritySelection(host: BridgeHostProfile): InstallA
     if (!isRecord(parsed)) throw new SqliteInstallConfigurationError("authority_config_invalid_shape");
     const keys = Object.keys(parsed).sort().join("|");
     if (parsed.schema_version !== 1) throw new SqliteInstallConfigurationError("authority_config_version_unsupported");
-    if (parsed.authority === "json" && keys === "authority|schema_version") return { state: "json", configPath };
+    if (parsed.authority === "json" && keys === "authority|schema_version") {
+      return { state: "sqlite", configPath, configuredDataRoot: "" };
+    }
     if (parsed.authority !== "sqlite" || (keys !== "authority|schema_version" && keys !== "authority|data_root|schema_version")) {
       throw new SqliteInstallConfigurationError("authority_config_invalid_contract");
     }
@@ -39,7 +43,7 @@ export function loadInstallAuthoritySelection(host: BridgeHostProfile): InstallA
     }
     return { state: "sqlite", configPath, configuredDataRoot };
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { state: "json", configPath };
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { state: "sqlite", configPath, configuredDataRoot: "" };
     if (error instanceof SqliteInstallConfigurationError) throw error;
     throw new SqliteInstallConfigurationError("authority_config_unreadable_or_invalid", error instanceof Error ? error.message : "authority config failed");
   }

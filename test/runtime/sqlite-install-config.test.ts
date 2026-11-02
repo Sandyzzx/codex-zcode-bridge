@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -36,11 +36,26 @@ function writeAuthority(settingsDirectory: string, value: unknown): string {
   return file;
 }
 
-checkedTest("missing authority config preserves JSON and never infers from a database", () => {
+checkedTest("missing authority config selects the default SQLite production Authority", () => {
   const fx = fixture("missing-config");
   mkdirSync(path.join(fx.root, "state"), { recursive: true });
   writeFileSync(path.join(fx.root, "state", "bridge.sqlite"), "unrelated bytes");
-  assert.equal(loadInstallAuthoritySelection(fx.host).state, "json");
+  const selection = loadInstallAuthoritySelection(fx.host);
+  assert.equal(selection.state, "sqlite");
+  assert.equal(selection.configuredDataRoot, "");
+});
+
+checkedTest("legacy JSON authority configuration selects SQLite without reading task history", () => {
+  const fx = fixture("legacy-json-config");
+  const legacyTasks = path.join(fx.root, ".tasks", "old-task");
+  mkdirSync(legacyTasks, { recursive: true });
+  const historyFile = path.join(legacyTasks, "result.json");
+  writeFileSync(historyFile, "legacy history remains byte-for-byte unchanged", "utf8");
+  writeAuthority(fx.settingsDirectory, { schema_version: 1, authority: "json" });
+
+  const selection = loadInstallAuthoritySelection(fx.host);
+  assert.deepEqual(selection, { state: "sqlite", configPath: path.join(fx.settingsDirectory, "authority.json"), configuredDataRoot: "" });
+  assert.equal(readFileSync(historyFile, "utf8"), "legacy history remains byte-for-byte unchanged");
 });
 
 checkedTest("an explicit malformed authority config rejects instead of falling back to JSON", () => {
@@ -112,4 +127,37 @@ checkedTest("SQLite state directory cannot coincide with the plugin root", () =>
   }), (error: unknown) => typeof error === "object" && error !== null && "code" in error
     && (error as { code: unknown }).code === "sqlite_data_root_reserved_location");
   assert.equal(existsSync(path.join(fx.root, "state")), false);
+});
+
+checkedTest("an unavailable default data-root parent fails before initialization", () => {
+  const fx = fixture("unwritable-root-parent");
+  const blockedLocalAppData = path.join(fx.root, "blocked-local-app-data");
+  writeFileSync(blockedLocalAppData, "regular file blocks directory creation", "utf8");
+  const selection = loadInstallAuthoritySelection(fx.host);
+  assert.equal(selection.state, "sqlite");
+  if (selection.state !== "sqlite") return;
+  assert.throws(() => prepareFreshSqliteStateDirectoryForTest(selection, { LOCALAPPDATA: blockedLocalAppData } as NodeJS.ProcessEnv, {
+    packageRoot: path.join(fx.root, "synthetic-plugin-install"),
+    tempRoot: path.join(fx.root, "synthetic-temp-root"),
+  }), (error: unknown) => typeof error === "object" && error !== null && "code" in error
+    && ["sqlite_data_path_component_unsafe", "sqlite_data_path_redirected"].includes((error as { code: string }).code));
+  assert.equal(existsSync(path.join(blockedLocalAppData, "CodexZCodeBridge")), false);
+});
+
+checkedTest("a redirected default data root is rejected before creating SQLite state", () => {
+  const fx = fixture("redirected-default-root");
+  const localAppData = path.join(fx.root, "local-app-data");
+  const redirectedTarget = path.join(fx.root, "redirect-target");
+  mkdirSync(localAppData, { recursive: true });
+  mkdirSync(redirectedTarget, { recursive: true });
+  symlinkSync(redirectedTarget, path.join(localAppData, "CodexZCodeBridge"), process.platform === "win32" ? "junction" : "dir");
+  const selection = loadInstallAuthoritySelection(fx.host);
+  assert.equal(selection.state, "sqlite");
+  if (selection.state !== "sqlite") return;
+  assert.throws(() => prepareFreshSqliteStateDirectoryForTest(selection, { LOCALAPPDATA: localAppData } as NodeJS.ProcessEnv, {
+    packageRoot: path.join(fx.root, "synthetic-plugin-install"),
+    tempRoot: path.join(fx.root, "synthetic-temp-root"),
+  }), (error: unknown) => typeof error === "object" && error !== null && "code" in error
+    && ["sqlite_data_path_component_unsafe", "sqlite_data_path_redirected"].includes((error as { code: string }).code));
+  assert.equal(existsSync(path.join(redirectedTarget, "state")), false);
 });

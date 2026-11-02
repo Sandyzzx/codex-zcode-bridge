@@ -32,6 +32,9 @@ try {
   // store directly. Keep it in the default CI entry without duplicating it.
   if (args.every((arg) => arg.startsWith("--"))) {
     args.push("dist-test/test/*.test.js", "test/sqlite-candidate/wp6b2b1/schema-integrity.test.mjs");
+    if (process.platform === "win32") {
+      args.push("dist-test/test/runtime/sqlite-bootstrap-cross-process.test.js");
+    }
   }
   // Windows lifecycle suites share full-system CIM scans and disk-heavy lock
   // fixtures. Serialize files without changing assertions or test coverage.

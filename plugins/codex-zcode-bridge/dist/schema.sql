@@ -53,8 +53,8 @@ CREATE TABLE authority_metadata (
       OR (policy_generation>0 AND policy_version=1 AND capacity_limit IS NOT NULL AND policy_operation_id IS NOT NULL))
 ) STRICT;
 
--- A fresh database is usable only when construction explicitly records why it
--- did not migrate an existing JSON Task authority.
+-- A fresh database is usable only after its bootstrap and Capacity policy have
+-- committed a durable production Authority receipt.
 CREATE TABLE fresh_install_receipt (
   singleton INTEGER PRIMARY KEY CHECK(singleton=1),
   receipt_id TEXT NOT NULL UNIQUE CHECK(length(receipt_id) BETWEEN 1 AND 128),

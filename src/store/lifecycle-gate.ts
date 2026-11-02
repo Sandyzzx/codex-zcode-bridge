@@ -1,11 +1,12 @@
 /**
- * Isolated WP6 lifecycle composition. Production startBridge does
- * not import this module; JSON remains the sole production authority.
+ * SQLite lifecycle composition shared by production startup and isolated tests.
  */
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, linkSync, lstatSync, openSync, readFileSync, readdirSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import path from "node:path";
 import type { Readable } from "node:stream";
-import { createPlatformProbe, PROCESS_IDENTITY_VERSION, type ProcessProbe, type ProbeRequest, type ProbeVerdict } from "../runtime/process-probe.js";
+import { createPlatformProbe, PROCESS_IDENTITY_VERSION, type ProcessIdentity, type ProcessProbe, type ProbeRequest, type ProbeVerdict } from "../runtime/process-probe.js";
 import { terminateProcessTree, verifyProcessTreeClaimantsClean } from "../adapters/process-spawn.js";
 import { fingerprintRuntimeArtifact, type RuntimeBuildProvenance } from "../runtime/build-provenance.js";
 import { spawnClaimOnlyWorker, type ClaimOnlyWorkerProcess } from "../manager/spawn-worker.js";
@@ -319,33 +320,803 @@ export async function initializeIsolatedCandidateRoot(root: string, version = pr
   }
 }
 
-/** Initialize the explicit Fresh Install database without changing candidate-root defaults. */
+const freshBootstrapPromises = new Map<string, Promise<Readonly<Record<string, unknown>>>>();
+const DEFAULT_FRESH_BOOTSTRAP_LOCK_TIMEOUT_MS = 30_000;
+const FRESH_BOOTSTRAP_LOCK_RETRY_MS = 75;
+const FRESH_BOOTSTRAP_LOCK_HANDSHAKE_TIMEOUT_MS = 10_000;
+const FRESH_BOOTSTRAP_LOCK_RELEASE_TIMEOUT_MS = 3_000;
+
+export type FreshBootstrapStage =
+  | "lock_acquired"
+  | "intent_written"
+  | "marker_temp_written"
+  | "schema_initialized"
+  | "before_ready_receipt"
+  | "ready_receipt_written"
+  | "capacity_provisioned"
+  | "database_staged"
+  | "database_published"
+  | "ready";
+
+export interface FreshBootstrapOptions {
+  /** Cross-process lock acquisition budget. The default is 30 seconds. */
+  readonly lockTimeoutMs?: number;
+  /** Deterministic test/evidence hook. Production callers leave this unset. */
+  readonly onStage?: (stage: FreshBootstrapStage) => void;
+}
+
+/**
+ * Ensure the production SQLite Authority exists and is fully usable before MCP
+ * service construction. The per-process Promise coalesces concurrent startup
+ * callers; the durable pending marker makes an interrupted unpublished
+ * bootstrap recoverable without treating an unmarked corrupt database as new.
+ */
 export async function initializeFreshInstallSqliteRoot(
   root: string,
   databaseFileName: string,
   version = process.versions.node,
-): Promise<{ readonly receiptId: string; readonly verifierVersion: string }> {
+  processProbe: ProcessProbe = createPlatformProbe(),
+  options: FreshBootstrapOptions = {},
+): Promise<Readonly<Record<string, unknown>>> {
+  if (typeof databaseFileName !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/u.test(databaseFileName)
+    || databaseFileName === "." || databaseFileName === "..") {
+    throw new LifecycleGateError("sqlite_bootstrap_database_name_invalid");
+  }
   const modules = await loadLifecycleCandidateModules(version);
+  const key = path.join(path.resolve(root), databaseFileName);
+  const pending = freshBootstrapPromises.get(key);
+  if (pending) return pending;
+  const operation = ensureFreshSqliteAuthority(root, databaseFileName, modules, processProbe, options);
+  freshBootstrapPromises.set(key, operation);
+  try { return await operation; }
+  finally { if (freshBootstrapPromises.get(key) === operation) freshBootstrapPromises.delete(key); }
+}
+
+interface FreshBootstrapMarker {
+  readonly schema_version: 1;
+  readonly state: "sqlite_bootstrap_pending";
+  readonly database_file: string;
+  readonly stage_file: string;
+  readonly token: string;
+  readonly owner_identity: ProcessIdentity;
+}
+
+interface FreshBootstrapLock {
+  assertHeld(): void;
+  release(): Promise<void>;
+}
+
+interface FreshBootstrapLockRecord {
+  readonly schema_version: 1;
+  readonly state: "held";
+  readonly database_file: string;
+  readonly owner_identity: ProcessIdentity;
+  readonly acquired_at: string;
+  readonly token: string;
+}
+
+interface ReleasedFreshBootstrapLockRecord {
+  readonly schema_version: 1;
+  readonly state: "released";
+  readonly database_file: string;
+  readonly released_at: string;
+}
+
+type FreshBootstrapLockAttempt =
+  | { readonly kind: "acquired"; readonly lock: FreshBootstrapLock }
+  | { readonly kind: "busy" };
+
+async function acquireFreshBootstrapLock(
+  root: string,
+  databaseFileName: string,
+  timeoutMs: number,
+  ownerIdentity: ProcessIdentity,
+  processProbe: ProcessProbe,
+): Promise<FreshBootstrapLock> {
+  if (process.platform !== "win32") {
+    throw new LifecycleGateError(
+      "sqlite_bootstrap_lock_platform_unsupported",
+      "Fresh SQLite bootstrap requires the Windows exclusive-file-handle lock",
+    );
+  }
+  const lockPath = path.join(root, `${databaseFileName}.bootstrap.lock`);
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    assertFreshBootstrapRootPath(root);
+    assertBootstrapLockPath(lockPath);
+    const attempt = await tryAcquireWindowsBootstrapLock(root, lockPath, databaseFileName, ownerIdentity, processProbe);
+    if (attempt.kind === "acquired") return attempt.lock;
+    if (Date.now() >= deadline) {
+      throw new LifecycleGateError(
+        "sqlite_bootstrap_lock_timeout",
+        `timed out waiting ${timeoutMs} ms for the SQLite bootstrap lock`,
+      );
+    }
+    await delay(Math.min(FRESH_BOOTSTRAP_LOCK_RETRY_MS, Math.max(1, deadline - Date.now())));
+  }
+}
+
+function assertBootstrapLockPath(lockPath: string): void {
   try {
-    const receiptId = `fresh-install-${randomUUID()}`;
-    const store = modules.Store.initialize(root, {
-      databaseFileName,
+    const stat = lstatSync(lockPath);
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      throw new LifecycleGateError("sqlite_bootstrap_lock_unsafe_entry");
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+}
+
+async function tryAcquireWindowsBootstrapLock(
+  root: string,
+  lockPath: string,
+  databaseFileName: string,
+  ownerIdentity: ProcessIdentity,
+  processProbe: ProcessProbe,
+): Promise<FreshBootstrapLockAttempt> {
+  const record = `${JSON.stringify({
+    schema_version: 1,
+    state: "held",
+    database_file: databaseFileName,
+    owner_identity: ownerIdentity,
+    acquired_at: new Date().toISOString(),
+    token: randomUUID(),
+  } satisfies FreshBootstrapLockRecord)}\n`;
+  const releaseRecord = `${JSON.stringify({
+    schema_version: 1,
+    state: "released",
+    database_file: databaseFileName,
+    released_at: new Date().toISOString(),
+  } satisfies ReleasedFreshBootstrapLockRecord)}\n`;
+  const systemRoot = process.env["SystemRoot"];
+  const absolutePowerShell = systemRoot
+    ? path.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+    : "powershell.exe";
+  const executable = existsSync(absolutePowerShell) ? absolutePowerShell : "powershell.exe";
+  const child = spawn(executable, [
+    "-NoLogo",
+    "-NoProfile",
+    "-NonInteractive",
+    "-EncodedCommand",
+    Buffer.from(WINDOWS_BOOTSTRAP_LOCK_SCRIPT, "utf16le").toString("base64"),
+  ], {
+    cwd: root,
+    env: {
+      ...process.env,
+      ZCODE_BOOTSTRAP_LOCK_FILE: lockPath,
+      ZCODE_BOOTSTRAP_LOCK_RECORD_B64: Buffer.from(record, "utf8").toString("base64"),
+      ZCODE_BOOTSTRAP_LOCK_RELEASE_RECORD_B64: Buffer.from(releaseRecord, "utf8").toString("base64"),
+    },
+    stdio: ["pipe", "pipe", "pipe"],
+    windowsHide: true,
+  });
+  const exitPromise = new Promise<{ readonly code: number | null; readonly signal: NodeJS.Signals | null }>((resolve) => {
+    child.once("exit", (code, signal) => resolve({ code, signal }));
+  });
+  let helperExit: { readonly code: number | null; readonly signal: NodeJS.Signals | null } | null = null;
+  void exitPromise.then((exit) => { helperExit = exit; });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  // A helper can disappear between an ownership check and the next pipe write.
+  // The exit promise is authoritative; suppress the derived EPIPE event so it
+  // cannot bypass the bootstrap's first-error path.
+  child.stdin.on("error", () => {});
+  child.stdout.on("data", (chunk: string) => { stdout += chunk; });
+  child.stderr.on("data", (chunk: string) => { stderr += chunk; });
+
+  let previousRecordBase64: string | null = null;
+  const handshake = await new Promise<"acquired" | "busy" | "failed">((resolve) => {
+    let settled = false;
+    const finish = (state: "acquired" | "busy" | "failed") => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(state);
+    };
+    const inspectOutput = () => {
+      if (/(?:^|\r?\n)BUSY(?:\r?\n|$)/u.test(stdout)) finish("busy");
+      else {
+        const match = /(?:^|\r?\n)ACQUIRED:([A-Za-z0-9+/=]*)(?:\r?\n|$)/u.exec(stdout);
+        if (match) {
+          previousRecordBase64 = match[1] ?? "";
+          finish("acquired");
+        }
+      }
+    };
+    child.stdout.on("data", inspectOutput);
+    child.once("error", () => finish("failed"));
+    void exitPromise.then(({ code }) => finish(code === 73 ? "busy" : "failed"));
+    const timer = setTimeout(() => {
+      finish("failed");
+      child.kill();
+    }, FRESH_BOOTSTRAP_LOCK_HANDSHAKE_TIMEOUT_MS);
+  });
+
+  if (handshake === "acquired") {
+    try {
+      const previous = parsePreviousBootstrapLockRecord(previousRecordBase64 ?? "", databaseFileName);
+      if (previous?.state === "held") {
+        const [verdict] = await processProbe.probe([{ pid: previous.owner_identity.pid, identity: previous.owner_identity }]);
+        if (verdict?.state === "alive") {
+          throw new LifecycleGateError(
+            "sqlite_bootstrap_previous_owner_still_alive",
+            "the previous bootstrap owner is still running after its exclusive lock helper exited",
+          );
+        }
+        if (verdict?.state !== "exited") {
+          throw new LifecycleGateError(
+            "sqlite_bootstrap_previous_owner_unknown",
+            "the previous bootstrap owner's process identity could not be proven exited",
+          );
+        }
+      }
+      child.stdin.write("COMMIT\n");
+      await new Promise<void>((resolve, reject) => {
+        let settled = false;
+        const finish = (error?: unknown) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          if (error) reject(error);
+          else resolve();
+        };
+        const inspectOutput = () => {
+          if (/(?:^|\r?\n)LOCKED(?:\r?\n|$)/u.test(stdout)) finish();
+        };
+        child.stdout.on("data", inspectOutput);
+        void exitPromise.then(({ code, signal }) => finish(new LifecycleGateError(
+          "sqlite_bootstrap_lock_helper_failed",
+          `exclusive lock helper exited before commit with code ${code ?? "null"} and signal ${signal ?? "none"}; ${stderr.trim()}`,
+        )));
+        inspectOutput();
+        const timer = setTimeout(() => {
+          finish(new LifecycleGateError("sqlite_bootstrap_lock_helper_timeout"));
+          child.kill();
+        }, FRESH_BOOTSTRAP_LOCK_HANDSHAKE_TIMEOUT_MS);
+      });
+    } catch (error) {
+      child.stdin.end();
+      await waitForChildExit(child, exitPromise, FRESH_BOOTSTRAP_LOCK_RELEASE_TIMEOUT_MS);
+      throw error;
+    }
+    try {
+      assertBootstrapLockPath(lockPath);
+    } catch (error) {
+      child.stdin.end();
+      await waitForChildExit(child, exitPromise, FRESH_BOOTSTRAP_LOCK_RELEASE_TIMEOUT_MS);
+      throw error;
+    }
+    let released = false;
+    return {
+      kind: "acquired",
+      lock: {
+        assertHeld: () => {
+          if (released || helperExit !== null || child.exitCode !== null || child.signalCode !== null
+            || !processExists(child.pid)) {
+            throw new LifecycleGateError(
+              "sqlite_bootstrap_lock_lost",
+              "the SQLite bootstrap lock helper exited while the bootstrap was in progress",
+            );
+          }
+        },
+        release: async () => {
+          if (released) return;
+          released = true;
+          let exit = helperExit;
+          if (exit === null && child.exitCode === null && child.signalCode === null && processExists(child.pid)) {
+            child.stdin.write("RELEASE\n");
+            await waitForChildExit(child, exitPromise, FRESH_BOOTSTRAP_LOCK_RELEASE_TIMEOUT_MS);
+            exit = await exitPromise;
+          } else {
+            exit ??= await exitPromise;
+          }
+          if (exit.code !== 0 || exit.signal !== null) {
+            throw new LifecycleGateError(
+              "sqlite_bootstrap_lock_lost",
+              `exclusive lock helper exited abnormally with code ${exit.code ?? "null"} and signal ${exit.signal ?? "none"}`,
+            );
+          }
+        },
+      },
+    };
+  }
+  if (handshake === "busy") {
+    child.stdin.end();
+    await waitForChildExit(child, exitPromise, FRESH_BOOTSTRAP_LOCK_RELEASE_TIMEOUT_MS);
+    return { kind: "busy" };
+  }
+  child.stdin.end();
+  await waitForChildExit(child, exitPromise, FRESH_BOOTSTRAP_LOCK_RELEASE_TIMEOUT_MS);
+  throw new LifecycleGateError(
+    "sqlite_bootstrap_lock_helper_failed",
+    stderr.trim() || `exclusive lock helper exited with code ${child.exitCode ?? "unknown"}`,
+  );
+}
+
+function processExists(pid: number | undefined): boolean {
+  if (!pid || !Number.isSafeInteger(pid) || pid < 1) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ESRCH") return false;
+    if (code === "EPERM") return true;
+    throw new LifecycleGateError(
+      "sqlite_bootstrap_lock_helper_unknown",
+      error instanceof Error ? error.message : "bootstrap lock helper liveness could not be determined",
+    );
+  }
+}
+
+async function waitForChildExit(
+  child: ChildProcessWithoutNullStreams,
+  exitPromise: Promise<unknown>,
+  timeoutMs: number,
+): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  const timedOut = await Promise.race([
+    exitPromise.then(() => false),
+    new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(true), timeoutMs); }),
+  ]);
+  if (timer) clearTimeout(timer);
+  if (!timedOut) return;
+  child.kill();
+  const killed = await Promise.race([
+    exitPromise.then(() => true),
+    new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs); }),
+  ]);
+  if (timer) clearTimeout(timer);
+  if (!killed) {
+    throw new LifecycleGateError("sqlite_bootstrap_lock_helper_exit_timeout");
+  }
+}
+
+function emitFreshBootstrapStage(options: FreshBootstrapOptions, stage: FreshBootstrapStage): void {
+  options.onStage?.(stage);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+const WINDOWS_BOOTSTRAP_LOCK_SCRIPT = String.raw`
+$ErrorActionPreference = 'Stop'
+$stream = $null
+try {
+  try {
+    $stream = [System.IO.FileStream]::new(
+      $env:ZCODE_BOOTSTRAP_LOCK_FILE,
+      [System.IO.FileMode]::OpenOrCreate,
+      [System.IO.FileAccess]::ReadWrite,
+      [System.IO.FileShare]::None
+    )
+  } catch [System.IO.IOException] {
+    [Console]::Out.WriteLine('BUSY')
+    [Console]::Out.Flush()
+    exit 73
+  }
+  if ($stream.Length -gt 16384) {
+    [Console]::Error.WriteLine('existing lock record exceeds 16 KiB')
+    exit 77
+  }
+  $previous = ''
+  if ($stream.Length -gt 0) {
+    $stream.Position = 0
+    $buffer = New-Object byte[] $stream.Length
+    $read = $stream.Read($buffer, 0, $buffer.Length)
+    if ($read -ne $buffer.Length) { throw 'short lock record read' }
+    $previous = [Convert]::ToBase64String($buffer)
+  }
+  [Console]::Out.WriteLine('ACQUIRED:' + $previous)
+  [Console]::Out.Flush()
+  $command = [Console]::In.ReadLine()
+  if ($command -ne 'COMMIT') {
+    exit 75
+  }
+  $record = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:ZCODE_BOOTSTRAP_LOCK_RECORD_B64))
+  $bytes = [Text.Encoding]::UTF8.GetBytes($record)
+  $stream.SetLength(0)
+  $stream.Position = 0
+  $stream.Write($bytes, 0, $bytes.Length)
+  $stream.Flush($true)
+  [Console]::Out.WriteLine('LOCKED')
+  [Console]::Out.Flush()
+  do {
+    $command = [Console]::In.ReadLine()
+  } while ($null -ne $command -and $command -ne 'RELEASE')
+  if ($command -ne 'RELEASE') {
+    exit 76
+  }
+  $releasedRecord = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:ZCODE_BOOTSTRAP_LOCK_RELEASE_RECORD_B64))
+  $releasedBytes = [Text.Encoding]::UTF8.GetBytes($releasedRecord)
+  $stream.SetLength(0)
+  $stream.Position = 0
+  $stream.Write($releasedBytes, 0, $releasedBytes.Length)
+  $stream.Flush($true)
+} catch {
+  [Console]::Error.WriteLine($_.Exception.GetType().FullName + ': ' + $_.Exception.Message)
+  exit 74
+} finally {
+  if ($null -ne $stream) { $stream.Dispose() }
+}
+`;
+
+async function ensureFreshSqliteAuthority(
+  root: string,
+  databaseFileName: string,
+  modules: LifecycleCandidateModules,
+  processProbe: ProcessProbe,
+  options: FreshBootstrapOptions,
+): Promise<Readonly<Record<string, unknown>>> {
+  const resolvedRoot = path.resolve(root);
+  assertFreshBootstrapRootPath(resolvedRoot);
+  const databasePath = path.join(resolvedRoot, databaseFileName);
+  const pendingPath = `${databasePath}.bootstrap-pending.json`;
+  const markerTempPath = `${databasePath}.bootstrap-marker.tmp`;
+  const lockTimeoutMs = options.lockTimeoutMs ?? DEFAULT_FRESH_BOOTSTRAP_LOCK_TIMEOUT_MS;
+  if (!Number.isSafeInteger(lockTimeoutMs) || lockTimeoutMs < 1 || lockTimeoutMs > 5 * 60_000) {
+    throw new LifecycleGateError("sqlite_bootstrap_lock_timeout_invalid");
+  }
+  const ownerIdentity = await processProbe.selfIdentity();
+  if (ownerIdentity.fingerprint_precision !== "exact" || !ownerIdentity.fingerprint
+    || ownerIdentity.identity_version !== PROCESS_IDENTITY_VERSION || ownerIdentity.pid !== process.pid) {
+    throw new LifecycleGateError("sqlite_bootstrap_owner_identity_unknown");
+  }
+  const lock = await acquireFreshBootstrapLock(
+    resolvedRoot,
+    databaseFileName,
+    lockTimeoutMs,
+    ownerIdentity,
+    processProbe,
+  );
+  let result: Readonly<Record<string, unknown>> | undefined;
+  let primaryError: unknown;
+  try {
+    lock.assertHeld();
+    emitFreshBootstrapStage(options, "lock_acquired");
+    for (;;) {
+      assertFreshBootstrapRootPath(resolvedRoot);
+      lock.assertHeld();
+      if (existsSync(markerTempPath)) {
+        // This path is inspected only while the cross-process exclusive lock is
+        // held. Its existence therefore cannot indicate another live writer.
+        const tempStat = lstatSync(markerTempPath);
+        if (!tempStat.isFile() || tempStat.isSymbolicLink() || existsSync(databasePath) && !existsSync(pendingPath)) {
+          throw new LifecycleGateError("sqlite_bootstrap_marker_temp_unexpected");
+        }
+      }
+      if (existsSync(pendingPath)) {
+        const marker = readFreshBootstrapMarker(pendingPath, databaseFileName);
+        if (existsSync(databasePath)) {
+          const published = tryReadReadySqliteAuthority(modules, resolvedRoot, databaseFileName, true);
+          if (published?.kind === "fresh_install" && published.receipt_id === `fresh-install-${marker.token}`) {
+            const stagePath = path.join(resolvedRoot, marker.stage_file);
+            removeOwnedBootstrapFile(stagePath);
+            removeOwnedBootstrapFile(`${stagePath}-wal`);
+            removeOwnedBootstrapFile(`${stagePath}-shm`);
+            removeOwnedBootstrapFile(`${stagePath}-journal`);
+            unlinkSync(pendingPath);
+            removeOwnedBootstrapFile(markerTempPath);
+            emitFreshBootstrapStage(options, "ready");
+            result = normalizeReadySqliteAuthority(published);
+            break;
+          }
+          // A database at the production path may be a valid but unrelated
+          // Authority or a damaged post-publication result. Never delete it
+          // based only on a pending marker; the marker does not prove the
+          // database file's identity.
+          throw new LifecycleGateError("sqlite_bootstrap_published_database_unverified");
+        }
+        const stagePath = path.join(resolvedRoot, marker.stage_file);
+        removeOwnedBootstrapFile(stagePath);
+        removeOwnedBootstrapFile(`${stagePath}-wal`);
+        removeOwnedBootstrapFile(`${stagePath}-shm`);
+        removeOwnedBootstrapFile(`${stagePath}-journal`);
+        unlinkSync(pendingPath);
+        removeOwnedBootstrapFile(markerTempPath);
+        continue;
+      }
+
+      if (existsSync(markerTempPath)) {
+        // A temp marker without a published marker or database cannot have
+        // started SQLite initialization. Keep the deletion bound to this
+        // reserved regular-file name; all other unexpected root entries fail
+        // closed below.
+        removeOwnedBootstrapFile(markerTempPath);
+      }
+
+      if (existsSync(databasePath)) {
+        const existing = tryReadReadySqliteAuthority(modules, resolvedRoot, databaseFileName, false);
+        if (!existing) throw new LifecycleGateError("sqlite_existing_database_unverified", "existing SQLite database is not a valid production Authority");
+        emitFreshBootstrapStage(options, "ready");
+        result = normalizeReadySqliteAuthority(existing);
+        break;
+      }
+
+      assertFreshBootstrapRootEmpty(resolvedRoot, databaseFileName);
+      const token = randomUUID();
+      const stageFile = `${databaseFileName}.bootstrap-${token}.stage`;
+      const marker: FreshBootstrapMarker = {
+        schema_version: 1,
+        state: "sqlite_bootstrap_pending",
+        database_file: databaseFileName,
+        stage_file: stageFile,
+        token,
+        owner_identity: ownerIdentity,
+      };
+      assertFreshBootstrapRootPath(resolvedRoot);
+      writeDurableBootstrapMarker(pendingPath, marker, options, lock);
+      emitFreshBootstrapStage(options, "intent_written");
+      result = await constructAndPublishFreshSqlite(
+        resolvedRoot,
+        databaseFileName,
+        marker,
+        modules,
+        lock,
+        options,
+      );
+      emitFreshBootstrapStage(options, "ready");
+      break;
+    }
+  } catch (error) {
+    primaryError = error instanceof LifecycleGateError
+      ? error
+      : new LifecycleGateError("sqlite_initialization_failed", error instanceof Error ? error.message : "initialization failed");
+  }
+  try {
+    await lock.release();
+  } catch (error) {
+    if (primaryError === undefined) {
+      primaryError = new LifecycleGateError(
+        "sqlite_bootstrap_lock_release_failed",
+        error instanceof Error ? error.message : "bootstrap lock release failed",
+      );
+    }
+  }
+  if (primaryError !== undefined) throw primaryError;
+  if (!result) throw new LifecycleGateError("sqlite_initialization_failed", "bootstrap completed without a result");
+  return result;
+}
+
+async function constructAndPublishFreshSqlite(
+  root: string,
+  databaseFileName: string,
+  marker: FreshBootstrapMarker,
+  modules: LifecycleCandidateModules,
+  lock: FreshBootstrapLock,
+  options: FreshBootstrapOptions,
+): Promise<Readonly<Record<string, unknown>>> {
+  const databasePath = path.join(root, databaseFileName);
+  const pendingPath = `${databasePath}.bootstrap-pending.json`;
+  const stagePath = path.join(root, marker.stage_file);
+  let published = false;
+  try {
+    lock.assertHeld();
+    assertFreshBootstrapRootPath(root);
+    const receiptId = `fresh-install-${marker.token}`;
+    const stageStore = modules.Store.initialize(root, {
+      databaseFileName: marker.stage_file,
       managedDataDirectory: true,
       freshInstallReceiptId: receiptId,
+      freshInstallCapacityLimit: 8,
       verifierVersion: SQLITE_CUTOVER_VERIFIER_VERSION,
+      onFreshBootstrapStage: (stage: FreshBootstrapStage) => emitFreshBootstrapStage(options, stage),
     });
+    stageStore.close();
+    lock.assertHeld();
+    syncRegularFile(stagePath);
+    emitFreshBootstrapStage(options, "database_staged");
+    const staged = modules.Store.open(root, { databaseFileName: marker.stage_file, managedDataDirectory: true });
     try {
-      const port = modules.createPort(store);
-      port.provisionCapacity({
-        operation_id: "fresh-install-capacity-v1",
-        capacity_limit: 8,
-        expected_generation: 0,
-        maintenance: { dispatch_blocked: true, writers_drained: true },
-      });
-    } finally { store.close(); }
-    return { receiptId, verifierVersion: SQLITE_CUTOVER_VERIFIER_VERSION };
+      lock.assertHeld();
+      staged.assertAuthorityReady(currentSqliteRuntimeRosterDigest());
+    }
+    finally { staged.close(); }
+
+    lock.assertHeld();
+    assertFreshBootstrapRootPath(root);
+    if (existsSync(databasePath)) throw new LifecycleGateError("sqlite_database_appeared_during_bootstrap");
+    linkSync(stagePath, databasePath);
+    published = true;
+    unlinkSync(stagePath);
+    const ready = tryReadReadySqliteAuthority(modules, root, databaseFileName, true);
+    if (!ready) throw new LifecycleGateError("sqlite_bootstrap_readback_failed");
+    unlinkSync(pendingPath);
+    emitFreshBootstrapStage(options, "database_published");
+    return normalizeReadySqliteAuthority(ready);
   } catch (error) {
-    throw new LifecycleGateError("sqlite_initialization_failed", error instanceof Error ? error.message : "initialization failed");
+    if (!published) {
+      let cleanupOwned = false;
+      try {
+        lock.assertHeld();
+        cleanupOwned = true;
+      } catch { /* a lost lock must not let this owner delete the next owner's evidence */ }
+      if (!cleanupOwned) throw error;
+      removeOwnedBootstrapFile(stagePath);
+      removeOwnedBootstrapFile(`${stagePath}-wal`);
+      removeOwnedBootstrapFile(`${stagePath}-shm`);
+      removeOwnedBootstrapFile(`${stagePath}-journal`);
+      removeOwnedBootstrapFile(pendingPath);
+      removeOwnedBootstrapFile(`${databasePath}.bootstrap-marker.tmp`);
+    }
+    throw error;
+  }
+}
+
+function tryReadReadySqliteAuthority(
+  modules: LifecycleCandidateModules,
+  root: string,
+  databaseFileName: string,
+  allowPending: boolean,
+): Readonly<Record<string, unknown>> | null {
+  let store: LifecycleCandidateStore | undefined;
+  try {
+    store = modules.Store.open(root, {
+      databaseFileName,
+      managedDataDirectory: true,
+      ...(allowPending ? { allowFreshBootstrapPending: true } : {}),
+    });
+    return store.assertAuthorityReady(currentSqliteRuntimeRosterDigest());
+  } catch {
+    return null;
+  } finally { store?.close(); }
+}
+
+function normalizeReadySqliteAuthority(value: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
+  if (value.kind === "fresh_install") {
+    return { authorityKind: "fresh_install", receiptId: value.receipt_id, verifierVersion: value.verifier_version };
+  }
+  return { authorityKind: "authority_switch" };
+}
+
+function assertFreshBootstrapRootEmpty(root: string, databaseFileName: string): void {
+  const allowed = new Set([
+    `${databaseFileName}.bootstrap-pending.json`,
+    `${databaseFileName}.bootstrap.lock`,
+  ]);
+  for (const name of readdirSync(root)) {
+    if (!allowed.has(name)) throw new LifecycleGateError("sqlite_existing_state_incomplete", `unexpected SQLite root entry: ${name}`);
+  }
+}
+
+function assertFreshBootstrapRootPath(root: string): void {
+  try {
+    const stat = lstatSync(root);
+    const real = realpathSync.native(root);
+    const normalize = (value: string) => process.platform === "win32"
+      ? path.win32.normalize(value).replace(/[\\/]+$/u, "").toLocaleLowerCase("en-US")
+      : path.resolve(value);
+    if (!stat.isDirectory() || stat.isSymbolicLink() || normalize(real) !== normalize(root)) {
+      throw new LifecycleGateError("sqlite_data_root_redirected");
+    }
+  } catch (error) {
+    if (error instanceof LifecycleGateError) throw error;
+    throw new LifecycleGateError("sqlite_data_root_unverified", error instanceof Error ? error.message : "data root unavailable");
+  }
+}
+
+function readFreshBootstrapMarker(file: string, databaseFileName: string): FreshBootstrapMarker {
+  try {
+    const stat = lstatSync(file);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 16 * 1024) throw new Error("unsafe_marker");
+    const value = JSON.parse(readFileSync(file, "utf8")) as FreshBootstrapMarker;
+    const expectedStagePrefix = `${databaseFileName}.bootstrap-`;
+    if (value.schema_version !== 1 || value.state !== "sqlite_bootstrap_pending" || value.database_file !== databaseFileName
+      || typeof value.token !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(value.token)
+      || value.stage_file !== `${expectedStagePrefix}${value.token}.stage`
+      || !value.owner_identity || value.owner_identity.pid < 1 || !Number.isSafeInteger(value.owner_identity.pid)
+      || value.owner_identity.fingerprint_precision !== "exact" || !value.owner_identity.fingerprint
+      || value.owner_identity.identity_version !== PROCESS_IDENTITY_VERSION || !value.owner_identity.platform
+      || !value.owner_identity.captured_at || Number.isNaN(Date.parse(value.owner_identity.captured_at))) throw new Error("invalid_marker");
+    return value;
+  } catch (error) {
+    throw new LifecycleGateError("sqlite_bootstrap_marker_invalid", error instanceof Error ? error.message : "invalid marker");
+  }
+}
+
+function writeDurableBootstrapMarker(
+  file: string,
+  marker: FreshBootstrapMarker,
+  options: FreshBootstrapOptions,
+  lock: FreshBootstrapLock,
+): void {
+  let fd: number | undefined;
+  let created = false;
+  const temp = `${file.slice(0, -".bootstrap-pending.json".length)}.bootstrap-marker.tmp`;
+  let tempCreated = false;
+  try {
+    lock.assertHeld();
+    fd = openSync(temp, "wx", 0o600);
+    lock.assertHeld();
+    tempCreated = true;
+    writeFileSync(fd, `${JSON.stringify(marker)}\n`, "utf8");
+    fsyncSync(fd);
+    lock.assertHeld();
+    closeSync(fd);
+    fd = undefined;
+    emitFreshBootstrapStage(options, "marker_temp_written");
+    lock.assertHeld();
+    // linkSync is an exclusive atomic publication: it cannot overwrite a
+    // marker created by another process between the preflight and this point.
+    linkSync(temp, file);
+    created = true;
+    lock.assertHeld();
+    unlinkSync(temp);
+    tempCreated = false;
+  } catch (error) {
+    if (fd !== undefined) { try { closeSync(fd); } catch { /* preserve the marker write error */ } }
+    let cleanupOwned = false;
+    try {
+      lock.assertHeld();
+      cleanupOwned = true;
+    } catch { /* a lost lock must leave recovery evidence for the next owner */ }
+    if (cleanupOwned && created) { try { unlinkSync(file); } catch { /* a surviving malformed marker fails closed */ } }
+    if (cleanupOwned && tempCreated) { try { unlinkSync(temp); } catch { /* a surviving reserved temp is handled on next startup */ } }
+    throw error;
+  }
+}
+
+function parsePreviousBootstrapLockRecord(
+  encoded: string,
+  databaseFileName: string,
+): FreshBootstrapLockRecord | ReleasedFreshBootstrapLockRecord | null {
+  if (encoded.length === 0) return null;
+  let value: unknown;
+  try {
+    value = JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
+  } catch {
+    throw new LifecycleGateError("sqlite_bootstrap_lock_record_invalid");
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new LifecycleGateError("sqlite_bootstrap_lock_record_invalid");
+  }
+  const record = value as Record<string, unknown>;
+  if (record["schema_version"] !== 1 || record["database_file"] !== databaseFileName) {
+    throw new LifecycleGateError("sqlite_bootstrap_lock_record_invalid");
+  }
+  if (record["state"] === "released") {
+    if (typeof record["released_at"] !== "string" || Number.isNaN(Date.parse(record["released_at"]))) {
+      throw new LifecycleGateError("sqlite_bootstrap_lock_record_invalid");
+    }
+    return record as unknown as ReleasedFreshBootstrapLockRecord;
+  }
+  if (record["state"] !== "held"
+    || typeof record["acquired_at"] !== "string" || Number.isNaN(Date.parse(record["acquired_at"]))
+    || typeof record["token"] !== "string"
+    || !record["owner_identity"] || typeof record["owner_identity"] !== "object") {
+    throw new LifecycleGateError("sqlite_bootstrap_lock_record_invalid");
+  }
+  const identity = record["owner_identity"] as Record<string, unknown>;
+  if (identity["fingerprint_precision"] !== "exact"
+    || typeof identity["fingerprint"] !== "string" || identity["fingerprint"].length === 0
+    || identity["identity_version"] !== PROCESS_IDENTITY_VERSION
+    || !Number.isSafeInteger(identity["pid"]) || Number(identity["pid"]) < 1
+    || typeof identity["platform"] !== "string"
+    || typeof identity["captured_at"] !== "string" || Number.isNaN(Date.parse(identity["captured_at"]))) {
+    throw new LifecycleGateError("sqlite_bootstrap_lock_record_invalid");
+  }
+  return record as unknown as FreshBootstrapLockRecord;
+}
+
+function syncRegularFile(file: string): void {
+  const stat = lstatSync(file);
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new LifecycleGateError("sqlite_bootstrap_stage_unsafe");
+  // Windows FlushFileBuffers requires a writable handle even when the caller
+  // only intends to force previously written SQLite bytes to stable storage.
+  const fd = openSync(file, "r+");
+  try { fsyncSync(fd); } finally { closeSync(fd); }
+}
+
+function removeOwnedBootstrapFile(file: string): void {
+  try {
+    const stat = lstatSync(file);
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new LifecycleGateError("sqlite_bootstrap_recovery_unsafe_entry");
+    unlinkSync(file);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
 }
 

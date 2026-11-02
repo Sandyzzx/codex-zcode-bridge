@@ -2,7 +2,7 @@
 
 **Codex 负责规划、派发和验收，ZCode 在本机执行开发任务。**
 
-> **Preview 预览版。** 本版本引入 SQLite 持久化任务状态和恢复机制。已经在 Windows 本地生产环境验证，但尚不代表其他用户环境或跨平台兼容性已全面通过。原 JSON 用户升级前请务必阅读迁移说明。
+> **Preview 预览版。** 当前工作树包含尚未发布的 SQLite 自动初始化改动。已发布的 `v1.3.0-rc.4` 不含此自动 Bootstrap；下文的新行为仅适用于未来发布的候选版本。其他用户环境和跨平台兼容性尚未全面验证。
 
 [English](README.md) · [项目仓库](https://github.com/Sandyzzx/codex-zcode-bridge) · [版本发布](https://github.com/Sandyzzx/codex-zcode-bridge/releases)
 
@@ -43,35 +43,20 @@ codex plugin add codex-zcode-bridge@codex-zcode-bridge
 
 也可以注册对应版本的 Marketplace 后，在 Codex **Plugins Directory** 安装 **Zcode Bridge**。开启新对话，审查并信任 `SessionStart` Hook。首次启动会发现本机的 ZCode 运行时和配置，不复制 Provider 凭据；安装问题可使用 `zcode_doctor` 诊断。
 
-**全新安装首次启用：** 安装 Preview 后，在启动 Bridge 前显式选择 SQLite Authority：
+**即将发布的 SQLite 自动启动（尚未发布）：** 此候选发布后，首次启动插件时，Bridge 会自动创建并验证 `${LOCALAPPDATA}\CodexZCodeBridge\state\bridge.sqlite`，完成默认 Capacity provision 后才接受 MCP 请求。Marketplace 新装和旧 JSON 版本升级将使用同一流程。无需创建 `authority.json`、运行 SQLite 激活或 JSON 迁移命令，也无需配置 `trusted-local-policy.json` 或维护 `workspace_roots` 白名单。当前已发布的 `v1.3.0-rc.4` 尚未包含此行为。
 
-```powershell
-$settings = Join-Path $HOME '.codex\codex-zcode-bridge'
-New-Item -ItemType Directory -Path $settings -Force | Out-Null
-@'
-{
-  "schema_version": 1,
-  "authority": "sqlite"
-}
-'@ | Set-Content -LiteralPath (Join-Path $settings 'authority.json') -Encoding ascii
-```
-
-第一次以 SQLite 模式启动时，会在 `${LOCALAPPDATA}\CodexZCodeBridge\state\bridge.sqlite` 创建带有 fresh-install receipt 的空数据库。普通本地项目目录、可选 Git Worktree 沿用以前的工作方式，不要求 `trusted-local-policy.json`，也不要求维护 `workspace_roots` 白名单。只有在不存在旧 Bridge `.tasks` 数据时才能使用此首次启用步骤；已有 JSON 任务必须使用下述停机迁移流程。
+已有有效 SQLite 数据库会原样复用，不会重置。数据库损坏、SQLite 状态不完整、Schema 不受支持或完整性验证失败时，Bridge 会停止启动；不会回退 JSON，也不会覆盖数据库。
 
 ## 重要：原 JSON 版本升级说明
 
-**升级前请先完成重要任务，或保存尚未完成的任务说明。** 新版本不会把旧 JSON 任务的生命周期状态导入 SQLite：
+**升级前请先完成重要任务，或保存尚未完成的任务说明。** 新 SQLite 数据库从空状态开始，不会迁移旧 JSON 任务生命周期：
 
-- **`queued` 排队任务：** 切换后不会自动开始执行。
+- **`queued` 排队任务：** 升级后不会自动开始执行。
 - **`running` 运行中任务：** 升级前等待执行结束，或按正常流程安全取消并完成清理。
 - **`waiting_for_master` 待验收任务：** 请先完成审查或保存必要的交接信息。
-- **旧任务不支持自动 Resume / Continue：** 如需继续工作，请在 SQLite 模式下新建任务。
+- 旧任务不会自动 **Resume / Continue**；需要继续的工作应在新版本中重新创建任务。
 
-正式迁移采用 **停机切换**：停止旧 JSON Writer/Worker，核验退出状态，将原 `.tasks` 目录完整保留为只读归档，然后发布**空 SQLite Authority**，仅管理切换后的新任务。**不会把旧历史转换成 SQLite，也不会自动静默升级。**
-
-请长期保留旧 JSON 归档，切勿重复对已经发布的 SQLite Authority 执行迁移。SQLite 已产生新写入后，不得简单恢复切换前 JSON 快照，否则可能丢失新任务数据。
-
-**已有 JSON 用户不要只手工修改 `authority.json`。** 应使用与所安装版本匹配、经过验证的停机迁移流程，确认数据根、归档、发布回执与旧 Worker 退出状态。若尚无适用于自己环境的正式迁移步骤，应先保留旧版本，暂缓升级。
+Bridge 不读取、导入、归档、修改或删除旧 JSON 文件。是否留存由用户自行决定；旧任务历史不会出现在 SQLite 中。
 
 ## 日常使用
 
@@ -86,7 +71,7 @@ New-Item -ItemType Directory -Path $settings -Force | Out-Null
 
 Windows 首次运行配置位于 `%USERPROFILE%\.codex\codex-zcode-bridge\runtime-config.json`。可以按需覆盖 ZCode 路径、Provider 配置、默认模型、执行模式、并发和超时，但不要复制他人电脑的绝对路径。
 
-SQLite 生产数据库、旧 JSON 源目录与归档目录必须分开；实际位置由安装与迁移配置决定。不要手工改写 SQLite 表、Authority Receipt 或迁移 Marker。
+SQLite 默认使用当前用户的数据根。不要手工改写 SQLite 表、Authority Receipt 或 Bootstrap Marker。
 
 在受支持的 Windows 单用户可信本地部署中，SQLite 使用固定受信任的 `yolo` 执行档案，与 JSON 路径的普通无人值守编码工作流一致。它以当前 Windows 账户权限运行，不是沙箱，也不是提权。工作区内的普通读取、编辑、构建、测试和任务范围内清理可以自动执行；Push、Merge、Tag、Release、生产 Authority 切换、任务范围外删除、凭据修改和真实生产任务数据访问仍需用户明确授权。任务 Prompt、Skill、worktree 和路径清单不能自行授予这些权限。不要在 Prompt 中放入凭据。
 

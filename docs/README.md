@@ -1,7 +1,7 @@
 # 文档索引 / Documentation
 
 > Status: AUTHORITATIVE（仅指本索引）
-> Last updated: 2026-10-18
+> Last updated: 2026-11-02
 
 英文使用者从 [README.md](../README.md) 开始。技术文档为中文。本文是文档路由：先看状态等级，再按读者路径选文档。
 
@@ -71,7 +71,7 @@ English readers start at [README.md](../README.md). This index is bilingual; the
 | [ADR-005](decisions/ADR-005-long-session-reliability.md) | 2026-10-08 | Accepted：长会话清理、锁释放、报告修复与 provider 兼容 |
 | [ADR-006](decisions/ADR-006-provider-quota-failure-diagnostics.md) | 2026-10-14 | Accepted：安全识别并明确提示 provider 用量额度耗尽 |
 | [ADR-009](decisions/ADR-009-windows-identity-bound-tree-termination.md) | 2026-10-18 | DECISION：Windows 进程树身份绑定归属与终止（含 PR #47 返修语义） |
-| [ADR-016](decisions/ADR-016-stop-the-world-json-to-sqlite-cutover.md) | 2026-11-01 | DECISION：JSON 到空 SQLite Task Authority 的停机切换 |
+| [ADR-016](decisions/ADR-016-stop-the-world-json-to-sqlite-cutover.md) | 2026-11-02 | DECISION：SQLite Fresh Bootstrap；旧 JSON 不迁移、不参与运行 |
 | [ADR-017](decisions/ADR-017-single-user-trusted-local-workspace-admission.md) | 2026-11-01 | DECISION：单用户可信本地 Workspace Admission 边界 |
 | [ADR-018](decisions/ADR-018-administrative-abandonment-of-cleanup-incomplete-hold.md) | 2026-11-01 | DECISION：证据绑定的一次性 `admin_abandoned` Hold 恢复 |
 | [ADR-019](decisions/ADR-019-local-trust-and-recovery-fence.md) | 2026-11-02 | DECISION：单用户本机 `yolo` 执行档案与 Recovery Manager 所有权围栏 |

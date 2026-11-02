@@ -480,7 +480,7 @@ function validateHistoricalExceptionSnapshot(snapshot, sourceManifest) {
       ||snapshot.results.some(result=>result.artifact_id===exception.artifact_id))fail('invalid_historical_exception_artifact');
   }
 }
-function pathsFor(root, { databaseFileName = 'operations.sqlite3', managedDataDirectory = false, allowCutoverPending = false, allowUnpublishedCutover = false } = {}) {
+function pathsFor(root, { databaseFileName = 'operations.sqlite3', managedDataDirectory = false, allowCutoverPending = false, allowUnpublishedCutover = false, allowFreshBootstrapPending = false } = {}) {
   if (typeof root !== 'string' || !path.isAbsolute(root) || !existsSync(root) || !lstatSync(root).isDirectory() || lstatSync(root).isSymbolicLink()) fail('invalid_data_root');
   if (typeof databaseFileName !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/u.test(databaseFileName)
     || databaseFileName==='.' || databaseFileName==='..') fail('invalid_database_file_name');
@@ -490,14 +490,14 @@ function pathsFor(root, { databaseFileName = 'operations.sqlite3', managedDataDi
     if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) fail('data_root_outside_candidate');
   }
   const db=path.join(resolved,databaseFileName);
-  const files={ root: resolved, db, cutoverPending: `${db}.cutover-pending.json`,
+  const files={ root: resolved, db, bootstrapPending: `${db}.bootstrap-pending.json`, cutoverPending: `${db}.cutover-pending.json`,
     cutoverPublished: `${db}.cutover-published.json`,
     poison: path.join(resolved, 'ROOT_POISONED.json'), intent: path.join(resolved, 'WRITER_INTENT.json') };
-  for(const file of [files.db,`${files.db}-wal`,`${files.db}-shm`,files.cutoverPending,files.cutoverPublished,files.poison,files.intent]) {
+  for(const file of [files.db,`${files.db}-wal`,`${files.db}-shm`,files.bootstrapPending,files.cutoverPending,files.cutoverPublished,files.poison,files.intent]) {
     try { const st=lstatSync(file); if(st.isSymbolicLink()||!st.isFile()) fail('unsafe_root_entry'); }
     catch(e) { if(e instanceof AdmissionError) throw e; if(e?.code!=='ENOENT') fail('unsafe_root_entry'); }
   }
-  return { ...files, allowCutoverPending, allowUnpublishedCutover };
+  return { ...files, allowBootstrapPending: allowFreshBootstrapPending, allowCutoverPending, allowUnpublishedCutover };
 }
 function readPublishedCutoverReceipt(file) {
   let value;
@@ -560,23 +560,43 @@ export class IsolatedAdmissionStore {
   static initialize(root, options = {}) {
     const p=pathsFor(root, options);
     if (existsSync(p.db) || existsSync(p.cutoverPending) || existsSync(p.cutoverPublished) || existsSync(p.poison) || existsSync(p.intent)) fail('root_not_empty');
+    if (options.onFreshBootstrapStage!==undefined&&typeof options.onFreshBootstrapStage!=='function')fail('invalid_fresh_bootstrap_stage_hook');
+    const freshBootstrapStage=options.onFreshBootstrapStage;
     const db=new DatabaseSync(p.db, { timeout: 5000 });
     try {
       db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; BEGIN IMMEDIATE');
       db.exec(SCHEMA);
       db.prepare('INSERT INTO authority_metadata(singleton,schema_version,next_generation) VALUES(1,?,0)').run(SCHEMA_VERSION);
+      if(options.freshInstallReceiptId!==undefined)freshBootstrapStage?.('schema_initialized');
       if (options.freshInstallReceiptId !== undefined) {
-        if (!validText(options.freshInstallReceiptId,128) || !validText(options.verifierVersion,128)) fail('invalid_fresh_install_receipt');
+        if (!validText(options.freshInstallReceiptId,128) || !validText(options.verifierVersion,128)
+          || !Number.isInteger(options.freshInstallCapacityLimit) || options.freshInstallCapacityLimit<1 || options.freshInstallCapacityLimit>8) fail('invalid_fresh_install_receipt');
+        freshBootstrapStage?.('before_ready_receipt');
         db.prepare('INSERT INTO fresh_install_receipt(singleton,receipt_id,verifier_version,created_at) VALUES(1,?,?,?)')
           .run(options.freshInstallReceiptId,options.verifierVersion,new Date().toISOString());
+        freshBootstrapStage?.('ready_receipt_written');
+        const operationId='fresh-install-capacity-v1';
+        const capacityLimit=options.freshInstallCapacityLimit;
+        const requestDigest=digest({operation_id:operationId,capacity_limit:capacityLimit,expected_generation:0});
+        const at=new Date().toISOString();
+        db.prepare("INSERT INTO manager_operations(operation_id,operation_kind,request_digest,revision,phase,policy_generation,capacity_limit,created_at) VALUES(?,'capacity_policy_change',?,1,'policy_change_committed',1,?,?)")
+          .run(operationId,requestDigest,capacityLimit,at);
+        const evidenceJson=canonical({generation:1,capacity_limit:capacityLimit});
+        const evidenceDigest=digest(evidenceJson);
+        db.prepare("INSERT INTO manager_operation_events(event_cursor,operation_id,sequence,event_type,from_phase,to_phase,generation,evidence_json,evidence_digest,at) VALUES(1,?,1,'capacity_policy_committed',NULL,'policy_change_committed',NULL,?,?,?)")
+          .run(operationId,evidenceJson,evidenceDigest,at);
+        db.prepare('UPDATE authority_metadata SET next_event_cursor=1,policy_version=1,policy_generation=1,capacity_limit=?,policy_operation_id=? WHERE singleton=1')
+          .run(capacityLimit,operationId);
       }
       db.exec(`PRAGMA user_version=${SCHEMA_VERSION}; COMMIT`);
+      if(options.freshInstallReceiptId!==undefined)freshBootstrapStage?.('capacity_provisioned');
     }
     catch(e) { try { db.exec('ROLLBACK'); } catch {} db.close(); throw e; }
     return new IsolatedAdmissionStore(CONSTRUCT,db,p);
   }
   static open(root,{fault, ...pathOptions}={}) {
     const p=pathsFor(root, pathOptions);
+    if(existsSync(p.bootstrapPending)&&!p.allowBootstrapPending) fail('sqlite_bootstrap_pending');
     if(existsSync(p.cutoverPending)) fail('cutover_publish_pending');
     if(existsSync(p.poison)) fail('root_poisoned');
     if(!existsSync(p.db)) fail('database_missing');
@@ -595,6 +615,7 @@ export class IsolatedAdmissionStore {
   /** Open only the current candidate schema read-only for conservative recovery inspection. */
   static openForRecovery(root, options = {}) {
     const p=pathsFor(root, options);
+    if(existsSync(p.bootstrapPending))fail('sqlite_bootstrap_pending');
     if(existsSync(p.cutoverPending)&&!p.allowCutoverPending) fail('cutover_publish_pending');
     if(!existsSync(p.db))fail('database_missing');
     const db=new DatabaseSync(p.db,{timeout:5000,readOnly:true});
@@ -621,9 +642,14 @@ export class IsolatedAdmissionStore {
   /** Production startup requires exactly one durable reason for this root. */
   assertAuthorityReady(expectedRuntimeRosterDigest) {
     return this.#readConsistent(()=>{
+      const integrity=this.#db.prepare('PRAGMA integrity_check').all();
+      if(integrity.length!==1||integrity[0].integrity_check!=='ok')fail('database_corrupt');
       const fresh=this.#db.prepare('SELECT * FROM fresh_install_receipt').all();
       const switched=this.#db.prepare('SELECT * FROM authority_switch').all();
       if(fresh.length+switched.length!==1)fail('authority_receipt_missing_or_ambiguous');
+      const metadata=this.#db.prepare('SELECT policy_generation,capacity_limit,policy_operation_id FROM authority_metadata WHERE singleton=1').get();
+      if(!metadata||metadata.policy_generation<1||metadata.capacity_limit<1||metadata.capacity_limit>8
+        ||!validId(metadata.policy_operation_id))fail('capacity_policy_missing');
       if(fresh.length){
         if(this.#db.prepare('SELECT COUNT(*) AS n FROM migration_runs').get().n!==0
           ||this.#db.prepare('SELECT COUNT(*) AS n FROM json_artifacts').get().n!==0

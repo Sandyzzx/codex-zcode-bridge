@@ -1,9 +1,9 @@
 # 当前架构
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-10-18
-> Last verified: 2026-10-18，PR #47 claimant 扫描返修（P1-A/P1-B、逐边持有证明的外来代排除、hold 响应校验、终止预算语义）经专项、Manager baseline-RED 复验与 evaluator 契约探针回归（worker 自测；Codex 独立矩阵待运行），证据索引见[公开返修报告](reports/2026-10-18-pr47-claimant-repair.md)；其余沿承 2026-10-17 的 ADR-009 全量矩阵核对范围。
-> Verified against: cab82a918514c6329f4982477b7eb0e8ada6cc01 + ADR-019 工作区修复；受测源码指纹见各修复记录。
+> Last updated: 2026-11-02
+> Last verified: 2026-10-18，PR #47 claimant 扫描返修（P1-A/P1-B、逐边持有证明的外来代排除、hold 响应校验、终止预算语义）经专项、Manager baseline-RED 复验与 evaluator 契约探针回归（worker 自测；Codex 独立矩阵待运行），证据索引见[公开返修报告](reports/2026-10-18-pr47-claimant-repair.md)；其余沿承 2026-10-17 的 ADR-009 全量矩阵核对范围。2026-11-02 Fresh Bootstrap 仅做代码审查，运行验收待完成。
+> Verified against: cab82a918514c6329f4982477b7eb0e8ada6cc01 + ADR-019 工作区修复；Fresh Bootstrap 候选基于 ca0e19c4，未验证。
 
 本文件描述当前代码，不是历史阶段的冻结设计。公共类型见 `src/interfaces.ts`，MCP schema 见 `src/mcp/schemas.ts`；共享边界见 [SHARED_CORE.md](SHARED_CORE.md)。
 
@@ -35,7 +35,9 @@ ZCode app-server（zcode.cjs app-server --stdio）
 
 合同级定义见 [INTERFACES.md](INTERFACES.md)。
 
-`src/mcp/main.ts` 仅为 Codex 入口；`src/host/stdio.ts` 组合宿主 profile、运行配置、TaskStore、DirectWorkspaceProvider、BridgeTaskManager 和 MCP server。启动不创建 ZCode session；坏的 Bridge 配置会明确阻止启动。doctor 对坏配置返回 error。
+`src/mcp/main.ts` 仅为 Codex 入口；`src/host/stdio.ts` 组合宿主 profile、运行配置、SQLite lifecycle Manager 和 MCP server。启动不创建 ZCode session；坏的 Bridge 配置会明确阻止启动。doctor 对坏配置返回 error。
+
+当前 SQLite Bootstrap 候选在 `startBridge()` 中先校验本地 SQLite 根并 await Fresh Bootstrap，再创建 SQLite Manager、MCP Server 和 stdio transport；初始化失败会输出 `SQLITE_INITIALIZATION_FAILED` 并使入口以非零状态退出，只有 transport 成功挂接后才报告 `SQLITE_READY`。无 `authority.json` 与旧 `authority: "json"` 升级配置均指向默认 SQLite 根；生产启动不扫描 JSON `.tasks`，不迁移、不归档或回退 JSON。Fresh Bootstrap 使用 Windows 持久 `<database>.bootstrap.lock` 文件上的独占 `FileShare.None` 句柄；文件存在不代表上锁，正常释放先写 `released` 审计记录再关闭句柄并保留文件。marker 检查、恢复、Schema/Receipt/Capacity 初始化和最终发布全部在锁内执行。原 owner 同步检查锁辅助进程；辅助进程被终止时不得继续发布，也不得删除下一 owner 的 pending/temp。等待者在取得新句柄后，只把先前 `held` 记录中的精确 owner 身份用于拒绝接管仍在运行的旧 owner；PID、指纹或 marker 存在性本身都不能授予锁。
 
 Manager 用进程内 promise 队列以及同一 data root 下的 `.tasks/.manager.lock` 序列化调度。锁记录 owner PID 与 best-effort 启动身份，活 owner 不因时间超限被驱逐；死 owner 由串行 reclaim guard 回收。获取时原子发布完整 owner；释放时原子移出完整目录，再清理私有 retired 目录，避免释放中退出留下缺 owner 的共享锁。不可读取的旧 owner 仍明确报错，不按年龄删除。恢复 single-flight 即使释放锁抛错也会复位。不同 data root 不共享调度锁，需要调用宿主避免向重叠目录提交冲突任务。锁 owner 回收仍依赖 PID 的 ESRCH，尚未按保存的 fingerprint 判断复用。
 

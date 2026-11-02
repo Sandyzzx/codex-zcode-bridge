@@ -1,41 +1,41 @@
-# ADR-016（v2）：JSON 到 SQLite Task Authority 的停机切换
+# ADR-016（v3）：SQLite Fresh Bootstrap 与旧 JSON 脱钩
 
 > Status: DECISION
-> Decision: ACCEPTED — OWNER DIRECTIVE 2026-11-01
-> Date: 2026-10-30（2026-11-01 修订）
-> Version: 2
+> Decision: ACCEPTED — OWNER DECISION OD 2026-11-02；实现与验收待完成
+> Date: 2026-10-30（2026-11-01、2026-11-02 修订）
+> Version: 3
 > Scope: Task Authority only；Settings 与 Ledger 保持各自既有权威边界
 
 ## Version History
 
 - **v1（2026-10-30）：** 冻结停机切换、staging 回读、空 SQLite Authority 与失败保护；曾计划导入并校验历史 Task 生命周期。
 - **v2（2026-11-01）：** Owner 收缩迁移范围。旧 JSON 仅完整归档，不导入 SQLite；SQLite 从空数据库管理切换后的新任务。历史 Result、Interaction、`respawn.claim` 与 Workspace 数据不再作为 SQLite 转换阻断项。保留停机确认、活动进程清理、归档完整性、Authority 唯一性、原子发布和切换失败保护。
+- **v3（2026-11-02，OD）：** 取消 JSON → SQLite 迁移。所有没有可验证 SQLite 生产数据库的安装统一使用 Fresh SQLite Bootstrap；旧 JSON 数据完全脱离启动判定和 SQLite 运行，不读取、迁移、归档、修改或删除。只有 Bootstrap 成功后才发布 SQLite Authority。既有有效 SQLite 原样恢复；SQLite 残留损坏或状态不明时 fail closed。
 
 ## Context
 
-ADR-014 已冻结单一 Task Authority、停写迁移、staging 回读和不可回退 JSON 的原则，但当前候选把“没有 SQLite 文件”误当成 fresh install。只要 SQLite 根为空，非空 JSON `.tasks` 就可能被静默忽略并创建空库，形成数据丢失。
+Owner 于 2026-11-02 接受 OD：从本版本起 SQLite 是唯一生产 Task Authority。凡当前安装没有可验证的 SQLite 生产数据库，无论 Marketplace 新装、旧 JSON 升级或其他既有安装，均走相同的 Fresh SQLite Bootstrap。SQLite 负责启动后的新任务；旧 JSON 历史与 SQLite 启动、状态恢复和任务生命周期完全脱钩。
 
-Owner 已明确选择停机切换：SQLite 将成为唯一 Task 持久化 Authority。项目不实现 JSON/SQLite 双写、热切换或长期双后端兼容。
-
-2026-11-01 Owner 进一步收缩迁移范围：旧 JSON 只作为完整、只读归档保留过去；新的 SQLite 数据根从空数据库开始，只管理切换后的新任务。历史 Task、Attempt、Result、Event、Interaction 和 Workspace 不导入 SQLite，也不要求通过 SQLite 生命周期校验。
+本决策取代 v2 的 JSON 停机归档/导入 CLI 切换流程。运行时不得扫描旧 `.tasks`、从 JSON 迁移状态、创建 JSON 归档或回退 JSON。旧 JSON 文件留存与否由用户自行决定；Bridge 不触碰这些文件。
 
 ## Runtime Gate
 
-- 产品安装范围继续由 `package.json` 的 Node.js `>=22.18` 约束；JSON Authority 在该范围内的启动行为保持不变。
-- SQLite Authority 仍要求稳定 Node.js `>=24.16.0 <25`。该门槛在 SQLite 模块加载前执行；Node.js 22 配置为 JSON 或不存在的 `authority.json` 时可正常启动，配置为 SQLite 时必须以 `sqlite_runtime_unsupported` 拒绝。
-- `launch-node24.mjs` 是兼容 Node.js 22 语法和产品引擎范围的入口 shim，不代表所有 Authority 都要求 Node.js 24。正式提高产品引擎、CI 或 esbuild 目标仍需单独 Owner 决策。
+- 产品安装范围仍由 `package.json` 与 `launch-node24.mjs` 的已发布运行时合同决定。SQLite 启动必须在加载 SQLite 模块前检查其 Node 版本门槛；不支持的版本明确失败，不回退 JSON。
+- Authority 选择不再提供 JSON 生产模式。没有 `authority.json` 时使用默认 SQLite 数据根；历史合法 `authority:"json"` 配置只作为升级兼容输入，不得使 Bridge 读取或启动 JSON Task Authority。有效 SQLite 自定义 data root 配置继续用于定位已有 SQLite 数据库。
+- 本 ADR 不自行扩大 Node 引擎范围；README/manifest 的发布要求必须与最终验证过的 Launcher 和 SQLite 运行时一致。
 
 ## Decision
 
-1. **正常启动不执行隐式迁移。** 无 SQLite 数据库且 legacy JSON Task 根非空时，启动必须 fail closed，并要求管理员显式执行停机迁移。不得把“缺少数据库文件”解释成 fresh install。
-2. **Fresh Install 必须有持久收据。** 仅在 legacy JSON Task 根不存在或没有可迁移内容时，才可由显式 fresh-install 入口初始化；数据库内写入单次 `fresh_install_receipt`。缺失收据的 SQLite 根不得作为生产 Authority 启动。
-3. **停止旧 Authority 的全部生产者。** 切换前必须停止新 admission，正常结束或安全处置运行中的 Worker，并封存 JSON writer fence。无法证明 writer、Worker 或 runtime identity 已退出时保持 blocked。
-4. **原始字节归档。** `.tasks` 的全部普通文件、目录和链接元数据必须复制到独立归档，并记录相对路径、类型、字节数、SHA-256、source root 和 Manifest digest。归档不跟随链接目标，不读取或修改 Workspace 指向的外部工作区，不解析 Task、Attempt、Result、Event、Interaction 或 Workspace 的业务语义。
-5. **全新 SQLite。** 发布目标必须是一个新的空 SQLite 数据根。迁移不从 JSON 导入历史 Task、Attempt、Result、Event、Interaction、Workspace 或 Artifact 投影；历史 queued/running Task 不在 SQLite 中恢复、Continue 或重新派发。
-6. **收据绑定。** SQLite 的 `authority_switch` 收据必须绑定 migration/cutover identity、原始 source root digest、archive directory、archive manifest digest、source tasks root、文件数、字节数和 runtime roster。数据库内的历史投影表必须为空。
-7. **staging、回读、原子发布。** 迁移先构造私有 staging SQLite 数据库，写入空 Authority 收据与容量策略，再由独立打开路径回读收据、空历史投影和容量状态。发布前再次验证原始归档与 sealed source 未漂移，随后使用既有 write-through rename 和 pending/published marker 原子发布。
-8. **切换后不读旧权威。** `authority_switch` 存在后，SQLite 是唯一在线 Task Authority。SQLite 缺失、损坏、busy、schema 不匹配或结果未知时，启动和写入必须停止；不得自动恢复旧 JSON 快照，也不得把旧 JSON 当作 fallback。
-9. **数据回退。** SQLite 接受新写入后，若必须回到 JSON，只能另行设计并验收包含 SQLite 新写入的完整回迁或重放；不能直接恢复切换前的 JSON 快照。
+1. **SQLite 是唯一生产 Authority。** 新安装、升级安装和其他没有有效 SQLite 的安装都不能启动 JSON Task Authority。SQLite 失败时不得静默回退 JSON。
+2. **无有效数据库时自动 Bootstrap。** 启动发现默认/已配置的本地 SQLite 数据根没有数据库，且没有表明既有或中断 SQLite 状态的文件时，自动安全创建目录、初始化 Schema、写入 fresh-install receipt、provision Capacity 并验证完整性。Bootstrap 完成前 MCP 业务服务不得接受请求；失败须报告 `SQLITE_INITIALIZATION_FAILED` 并拒绝启动。
+3. **只在发布成功后承认 Authority。** Authority receipt 必须在 Schema、Capacity 和完整性校验都成功后持久提交。存在 receipt 但缺少 Capacity、receipt 不一致或数据库未通过校验时拒绝启动。不能留下被业务服务接受的半初始化根。
+4. **升级不访问 JSON。** Bootstrap 不扫描、解析、归档、复制、修改或删除 `.tasks`、JSON Task 文件或 Workspace 内容。旧 JSON 任务不导入、不恢复、不 Continue；是否由用户另行留存不属于 Bridge 行为。
+5. **区分从未初始化与已有 SQLite 故障。** 仅在没有 SQLite 数据库且没有 SQLite bootstrap/cutover/poison/intent/WAL/SHM/staging 等 SQLite 状态痕迹时创建新库。数据库存在时必须按当前受支持 Schema 与 receipt 正常打开；损坏、版本未知、receipt 缺失/矛盾或其他 SQLite 痕迹不完整时 fail closed，不覆盖或重建。
+6. **已有有效 SQLite 原样保留。** 合法 fresh-install 或历史 cutover receipt 的有效数据库按既有升级合同打开；schema 升级只能使用显式、受版本控制的 SQLite migration，不能重置数据库。并发 MCP 请求共享同一启动 Bootstrap Promise；初始化必须幂等，重启不能重置任务。
+7. **Bootstrap 使用跨进程独占 OS 锁。** Windows 上一次 Bootstrap 的完整状态检查、Intent 写入、Schema/Receipt/Capacity 初始化、回读与发布均由一个持久 `<database>.bootstrap.lock` 文件的独占句柄保护。锁文件可以长期存在；活跃所有权只由 `FileShare.None` 句柄判定。释放由锁辅助进程写入 `released` 审计记录并关闭句柄，文件本身保留。锁记录中的 owner PID 与启动 fingerprint 不能授予锁；等待者只有在取得新的独占句柄后，才能用该精确身份拒绝接管一个“句柄已消失但原 owner 进程仍存活”的异常现场。原 owner 必须同时检查锁辅助进程是否存在；辅助进程被终止或异常退出时，后续状态/发布步骤立即以 `sqlite_bootstrap_lock_lost` fail closed，且不得清理可能属于下一恢复者的 pending/temp 文件。等待者在有界时间内重试；超时、原 owner 身份存活/未知或无法确认锁状态时 fail closed。不得删除其他活动进程持有的 lock/marker 文件。
+8. **中断恢复有证据边界。** 只有取得上述跨进程独占锁后，才允许检查并恢复 SQLite 专用中断状态。Bootstrap 发布采用事务/原子发布；只有能证明 Authority 尚未发布、没有接受业务写入且 staging 属于中断 Bootstrap 的情况才可安全重试，其他不确定状态保持 fail closed。marker 中的进程身份仅用于审计，不能替代锁所有权。不得仅凭数据库文件缺失、临时 marker 存在或为空就覆盖重建。
+9. **保留安全根路径与 admission。** 使用 `%LOCALAPPDATA%\\CodexZCodeBridge\\state\\bridge.sqlite` 默认路径，维持本地绝对路径、目录身份、symlink/reparse、Workspace Admission、Claim、Worker identity、Cleanup、Recovery 与 Release 门禁。用户不需要 workspace 白名单或 Trusted Local 配置文件。
+10. **不再提供 JSON 生产迁移/回退。** v2 的停机 JSON writer seal、raw archive、`--prepare`/`--apply`、Authority switch 与回退流程均为历史实现，不再是当前产品运行路径或用户升级步骤。源码/测试证据可为追溯保留，但不能由当前插件入口或受支持命令触发。旧 JSON 永远不是回退 Authority。
 
 ### Superseded: Narrow Historical Result Exception — Owner Approval 2026-10-31
 
@@ -49,38 +49,39 @@ Owner 已明确选择停机切换：SQLite 将成为唯一 Task 持久化 Author
 
 旧实现对三处异常、旧格式 Interaction、`respawn.claim`、`worker-stderr-repro.log` 和 `.tasks/workspaces/` 的差异处理记录必须保留为历史证据，但当前切换不再逐项白名单、重映射、修复或导入这些数据。
 
-## Stage 2 Acceptance Under v2
+## Bootstrap Acceptance Under v3
 
-Stage 2 隔离预演只在生产数据的隔离副本上执行，并同时满足：
+Bootstrap 验收使用全新的隔离用户数据目录和模拟 Marketplace Bundle；不读取真实生产数据，并同时满足：
 
-1. 当前支持的 JSON Authority 参与注册后再正常退出，`--prepare` 能证明全部 writer、已开始 Attempt、Worker 与 Runtime identity 已退出并进入 `sealed`；
-2. `.tasks` 的全部普通文件、目录和链接元数据进入独立 raw archive，清单、文件数、字节数和 source identity 可复核；Workspace 链接不被跟随；
-3. `authority_switch` 绑定 migration、source、archive 与 runtime roster，SQLite 中的历史 Task、Attempt、Result、Event、Artifact、Interaction 和 historical-exception 投影均为零；
-4. 全新 SQLite Authority 能创建和管理切换后的新 Task，并覆盖 Result、Cleanup、Continue 与 Manager 重启恢复；这些行为不读取或续接旧 JSON Task；
-5. 归档、source、staging 回读或 marker 任一步不一致都保持 fail closed；SQLite 接受新写入后不得恢复旧 JSON 快照；
-6. 任何真实生产 `--apply`、Authority 切换、Push、Merge、Tag 或 Release 仍需 Owner 单独授权。
+1. Marketplace 全新安装和存在旧 JSON `.tasks` 的升级安装都不读取、不改动 JSON，且执行相同 Bootstrap；
+2. 第一次 MCP 工具调用在 Bootstrap 成功后可用，初始化前请求不会被接受；两个独立进程并发启动、锁等待与锁超时都遵守独占句柄协议，成功路径只产生一个初始化和 Capacity provision；
+3. Host 重启后 SQLite 数据及 Task 状态保持不变，receipt 不重复，Capacity 不重复创建；已存在有效 SQLite 用户正常恢复；
+4. 初始化目录不可写、坏 schema、损坏数据库、权限错误、symlink/reparse 或不完整 SQLite 痕迹均明确失败且不转 JSON；
+5. 使用多个独立 Node 进程验证两个进程同时首次启动、活动持有者保护、独立终止锁辅助进程后原 owner 失锁失败且他人不得接管、Intent、Schema、Ready Receipt 前和 Capacity 后强制退出、锁超时、崩溃后接管及多个恢复进程；只有取得独占锁、原 owner 已证退出且未发布状态的证据完整时才幂等恢复；
+6. 首次任务覆盖 admission、capacity、Claim/Worker identity、Result、Cleanup、Release、Continue 与重启 Recovery；SQLite `integrity_check=ok`；
+7. 发布 Bundle 含全部 bootstrap/runtime/schema 资源，隔离 Marketplace 安装不执行任何手动激活命令；
+8. 历史 JSON 存在与否不改变 SQLite 的 Authority 选择；不得为证明此项而读取、导入、归档或修改用户 JSON 内容。
 
-## Required Evidence
+## Required Evidence Under v3
 
-- schema 版本、migration run 与 authority switch receipt 的完整性校验；
-- JSON writer fence、Worker 退出证明与 runtime roster 在发布前保持一致；
-- raw archive 在创建、staging 回读和最终发布前均与 sealed source 一致；
-- Workspace 链接和 Git 指针只作为原始条目记录，不跟随目标、不修改目标；
-- staging 与最终 SQLite 的 Task、Attempt、Result、Event、Artifact 投影为空；
-- `authority_switch` 收据与 archive identity、source identity、runtime roster 一致；
-- source drift、archive tampering、pending marker、缺失 published marker 和损坏收据均 fail closed；
-- 无 receipt 的 SQLite 根以及“空 SQLite + 非空 JSON”组合均拒绝启动；
-- 迁移、损坏、恢复和回滚演练只使用隔离 root，不接触真实 `.tasks` 或 Provider。
+- schema 版本与 fresh-install/cutover receipt 的完整性校验；
+- SQLite `integrity_check`、外键与 Capacity policy 一致性；
+- initialized database 不被重置，未发布中断状态只按可验证 marker 恢复；
+- 多个并发 MCP startup/request 只有一个 Bootstrap 完成，业务请求在其前不可达；独立进程的锁等待、超时和崩溃接管均有真实退出码证据；
+- SQLite 缺失、损坏、配置矛盾和运行时不受支持时没有 JSON 回退；
+- 旧 JSON 有/无两种 fixture 均保持字节与目录状态不变，且不进入 SQLite 投影；
+- Marketplace 隔离安装的实际加载 Bridge/Worker/Schema 资源与冻结候选一致；
+- 全新与升级模拟、失败和恢复仅使用项目内隔离 root，不接触真实生产数据库、`.tasks` 或 Provider。
 
-## Operational Procedure
+## Runtime Procedure Under v3
 
-1. 在现有 JSON `Authority` 仍运行时执行 `npm run migrate:json-to-sqlite -- --prepare --json-data-root <absolute-json-root>`。该步骤关闭新 admission 和 dispatch，并输出仍未退出的 writer 或 Task blocker；未 `sealed` 时以非零码退出。
-2. 正常停止 MCP Host，等待已知 Manager 和 Worker 退出。不得根据进程名终止未知进程，也不得把未知身份改判为退出。
-3. 再次执行同一 `--prepare` 命令。只有在全部 writer、开始过的 Attempt、Worker 与 Runtime identity 均被证明退出后才进入 `sealed`；失败时保持 `draining` 和原 blocker。
-4. 运行 `npm run migrate:json-to-sqlite -- --apply --json-data-root <absolute-json-root> --sqlite-root <absolute-sqlite-root> --backup-root <absolute-archive-root>`。`--apply` 先创建或逐字节核验 raw JSON history archive，再以该 archive 和 sealed source 身份初始化空 SQLite Authority；archive 不完整、Workspace 目标被跟随或源在 archive 后变化时不得发布 SQLite Authority。
-5. 仅在 `authority_switch` 回读与启动验收通过后切换部署配置。SQLite 接受新写入后不得恢复旧 JSON 快照；回退只能通过另行验收的完整回迁或重放。
+1. 插件启动时解析默认或已配置 SQLite 根并执行路径安全校验。
+2. 若发现有效 SQLite 数据库，执行 schema、receipt、完整性和 Capacity 校验后恢复该数据库；不重置现有任务。
+3. 进程内 Promise 合并只作为短路优化；真正的跨进程所有权由 `<database>.bootstrap.lock` 上的 Windows 独占 `FileShare.None` 句柄持有。取得锁后统一执行状态检查、中断恢复、SQLite 初始化、receipt/Capacity 提交、staging 回读和原子发布，最后关闭句柄并保留锁文件。
+4. 只有 Bootstrap/恢复验证完成后才创建 MCP Manager 与服务并接受业务请求。失败输出 `SQLITE_INITIALIZATION_FAILED` 并终止启动；不回退 JSON。
+5. 若数据库缺失但存在 SQLite 状态残留，或任一状态不确定，停止并保留现场；仅在已验证的未发布 Bootstrap 中断协议范围内重试。
 
-### Pending marker recovery
+### Historical v2 cutover marker recovery (not used by v3 bootstrap)
 
 发布过程在 SQLite 数据库旁写入 `<database>.cutover-pending.json`，随后以 write-through rename 发布 staging 数据库并进行独立回读。回读通过后，pending marker 以 write-through rename 转为 `<database>.cutover-published.json`。正常 `Store.open()` 与不带豁免的 `openForRecovery()` 在 pending marker 存在、published marker 缺失或两份 marker 同时存在时必须拒绝启动；authority receipt 还必须与 published marker 的 migration、cutover、source 和 archive identity 完全一致。
 
@@ -96,7 +97,9 @@ Windows 上 transfer fence、数据库发布和 published marker 的最终转换
 
 ## Consequences
 
-- 本次候选可以删除“缺库即空库”的隐式行为。
+- 新安装和旧 JSON 升级拥有相同的首次 SQLite Bootstrap 体验；不存在 JSON 生产运行路径或静默回退。
+- Bridge 不再读取或自动归档旧 JSON。旧文件是否保留由用户自行决定；其历史任务不会出现在新 SQLite 中。
+- 已有有效 SQLite 保持原样并恢复；损坏、状态矛盾或未完成发布状态不会触发覆盖重建。
+- v1/v2 停机迁移合同、Result 异常政策、归档和 marker 证据仍保留在版本历史与旧实现中，仅供追溯，不是 v3 的操作步骤。
 - Workspace Admission 按 ADR-017 的单用户可信本地边界执行必需检查；多用户、远程和同账户敌对文件替换不在 v1 支持范围。
-- Legacy JSON 只保留在独立 raw archive 中；SQLite 不保存历史 Task/Result/Event 投影。
-- 完整迁移与回退验收完成前，生产配置继续保持 `JSON_ONLY / SQLITE DISABLED`。
+- 本 ADR 是已批准决策，不代表 v3 实现、Marketplace E2E 或生产安装验收已经通过。

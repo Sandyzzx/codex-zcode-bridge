@@ -2,10 +2,12 @@
 
 > Status: AUTHORITATIVE
 > Last updated: 2026-11-02
-> Last verified: 2026-11-02，ADR-019 的本地信任模式与 Recovery Manager 所有权围栏；当前完整回归结果另见本轮证据。
-> Verified against: cab82a918514c6329f4982477b7eb0e8ada6cc01 + ADR-019 工作区修复；受测源码指纹见本轮证据。
+> Last verified: 2026-11-02，ADR-019 的本地信任模式与 Recovery Manager 所有权围栏；OD Fresh Bootstrap 的静态合同复核完成，运行验收待完成。
+> Verified against: cab82a918514c6329f4982477b7eb0e8ada6cc01 + ADR-019 工作区修复（既有范围）；Fresh Bootstrap 候选基于 ca0e19c4，未验证。
 
 准确类型与 schema 以 `src/interfaces.ts` 和 `src/mcp/schemas.ts` 为准。核心公共入口见 [SHARED_CORE.md](SHARED_CORE.md)。历史源码注释中的 V0.1/FROZEN 是沿革说明，不代表当前新增功能已经冻结。
+
+生产 Task Authority 为 SQLite。Marketplace 新装和无有效 SQLite 数据库的升级安装在 MCP 服务启动前执行相同 Fresh Bootstrap；旧 JSON `.tasks` 不参与 Authority 选择、恢复或新任务处理。Bootstrap 失败时拒绝服务，不回退 JSON；旧任务不会自动迁移或续接。该 OD 实现当前仍是未验收候选。
 
 默认 MCP 工具：`zcode_task`、`zcode_status`、`zcode_feedback`、`zcode_result`、`zcode_continue`、`zcode_cancel`、`zcode_events`、`zcode_interaction_reply`、`zcode_doctor`、`zcode_model_catalog`、`zcode_default_model`、`zcode_set_default_model`、`zcode_clear_default_model`。实验 progress probe 需显式启用。
 

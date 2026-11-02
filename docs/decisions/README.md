@@ -23,7 +23,7 @@
 | [ADR-003](ADR-003-execution-directory-prepared-by-host.md) | Accepted | 执行目录由调用宿主准备，Bridge 不创建也不删除 |
 | [ADR-004](ADR-004-separate-control-state-and-observation.md) | Accepted | 分离运行时控制、权威状态与补充观察；Desktop 索引是登记过的集成例外 |
 | [ADR-011](ADR-011-private-failure-diagnostics.md) | Accepted（设计） | P0 私有失败诊断；终止根因、受理三态、原子所有权与有限脱敏；固化记录见 2026-10-18-adr011-p0-consolidation |
-| [ADR-016](ADR-016-stop-the-world-json-to-sqlite-cutover.md) | Accepted | JSON 到 SQLite Task Authority 的停机切换；迁移收据、字节快照与 fail-closed 启动 |
+| [ADR-016](ADR-016-stop-the-world-json-to-sqlite-cutover.md) | Accepted v3 | SQLite 唯一 Authority；新装与升级统一 Fresh Bootstrap，旧 JSON 完全脱钩，损坏 SQLite fail closed |
 | [ADR-017](ADR-017-single-user-trusted-local-workspace-admission.md) | Accepted v2 | SQLite Workspace Admission 复用 JSON 的本地目录与可选执行 worktree 流程；Host capability 保留，无需项目白名单或 `workspace_roots` |
 | [ADR-018](ADR-018-administrative-abandonment-of-cleanup-incomplete-hold.md) | Accepted | 对已确认执行世代结束的 `cleanup_incomplete` Hold 执行一次性、证据绑定且不可重入的行政结案 |
 | [ADR-019](ADR-019-local-trust-and-recovery-fence.md) | Accepted | 单用户本机 SQLite 使用与 JSON 一致的 `yolo` 普通工具流程；运行中 Worker 的临时探针不确定性只隔离当前 Manager，不写全局 Recovery Hold |

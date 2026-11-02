@@ -7,81 +7,30 @@
 // written to stderr. A connected Host keeps the transport available until
 // lifecycle shutdown verifies Cleanup; stdin EOF is handled separately.
 import { serveStdio, StdioServerTransport, type StdioServerHandle } from "@modelcontextprotocol/server/stdio";
-import { existsSync, lstatSync, readdirSync } from "node:fs";
 import type { Readable, Writable } from "node:stream";
 import { homedir } from "node:os";
 import path from "node:path";
 import { findPackageRoot, loadPersistedRuntimeEnvironment } from "../runtime/resolver.js";
-import { DirectWorkspaceProvider } from "../workspace/direct-provider.js";
 import { BridgeTaskManager } from "../manager/task-manager.js";
 import { createBridgeServer } from "../mcp/server.js";
 import { DEFAULT_TASK_TIMEOUT_MS, validateTaskTimeout } from "../runtime/task-timeout.js";
 import { runBridgeDoctor } from "../runtime/doctor.js";
 import { ZCodeModelSettings } from "../runtime/model-settings.js";
 import { codexHostProfile, validateHostProfile, type BridgeHostProfile } from "./profile.js";
-import { createWorkerSpawner, workerEntryPath } from "../manager/spawn-worker.js";
-import { createPlatformProbe, type ProcessIdentity } from "../runtime/process-probe.js";
+import { workerEntryPath } from "../manager/spawn-worker.js";
+import { createPlatformProbe } from "../runtime/process-probe.js";
 import { fingerprintRuntimeArtifact } from "../runtime/build-provenance.js";
 import { createTrustedLocalStdioContext } from "../runtime/trusted-local-deployment.js";
 import { SERVER_VERSION } from "../mcp/server.js";
-import { registerManagerJsonWriter } from "../store/json-writer-quiescence.js";
 import {
   loadInstallAuthoritySelection,
   prepareFreshSqliteStateDirectory,
-  resolveSqliteStateDirectory,
   FRESH_SQLITE_DATABASE_FILE,
 } from "../runtime/sqlite-install-config.js";
 
 export interface DataRootResolution {
   readonly dataRoot: string;
   readonly warning?: string;
-}
-
-export class SqliteAuthorityStartupError extends Error {
-  constructor(readonly code: string, message = code) {
-    super(message);
-    this.name = "SqliteAuthorityStartupError";
-  }
-}
-
-/** Resolve the JSON root that the same Host would have used before an explicit SQLite switch. */
-export function resolveLegacyJsonDataRoot(host: BridgeHostProfile, runtimeEnv: NodeJS.ProcessEnv): string {
-  const configured = runtimeEnv["ZCODE_BRIDGE_DATA_DIR"]?.trim();
-  if (configured && path.isAbsolute(configured)) return path.normalize(configured);
-  if (host.defaultDataRoot) return path.normalize(host.defaultDataRoot);
-  if (runtimeEnv["ZCODE_BRIDGE_PLUGIN_MODE"] === "1") return path.normalize(host.settingsDirectory);
-  return findPackageRoot();
-}
-
-/**
- * A missing SQLite database is a fresh install only when the legacy Task root
- * is absent or empty. The check is read-only and never treats unreadable or
- * redirected state as empty.
- */
-export function assertFreshInstallLegacyJsonEmpty(legacyDataRoot: string): void {
-  const tasksRoot = path.join(path.normalize(legacyDataRoot), ".tasks");
-  let stat;
-  try {
-    stat = lstatSync(tasksRoot);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-    throw new SqliteAuthorityStartupError("legacy_json_tasks_root_unreadable");
-  }
-  if (!stat.isDirectory() || stat.isSymbolicLink()) {
-    throw new SqliteAuthorityStartupError("legacy_json_tasks_root_unsafe");
-  }
-  let entries: string[];
-  try {
-    entries = readdirSync(tasksRoot);
-  } catch {
-    throw new SqliteAuthorityStartupError("legacy_json_tasks_root_unreadable");
-  }
-  if (entries.length > 0) {
-    throw new SqliteAuthorityStartupError(
-      "migration_required_for_existing_json_authority",
-      "SQLite is missing while the legacy JSON Task root contains state; run the explicit stop-the-world migration",
-    );
-  }
 }
 
 /** Internal capability factory used only by the local stdio Host composition. */
@@ -201,29 +150,19 @@ export async function startBridge(
   bridgeEntryPath = process.argv[1],
 ): Promise<void> {
   validateHostProfile(host);
-  const authoritySelection = loadInstallAuthoritySelection(host);
-  const runtimeEnv = loadPersistedRuntimeEnvironment(process.env, homedir(), host);
-  let dataRoot = "";
-  let warning: string | undefined;
-  let sqliteDatabaseMissing = false;
-  if (authoritySelection.state === "json") {
-    if (!runtimeEnv["ZCODE_BRIDGE_DATA_DIR"]?.trim() && host.defaultDataRoot) runtimeEnv["ZCODE_BRIDGE_DATA_DIR"] = host.defaultDataRoot;
-    // Keep legacy JSON records outside the versioned marketplace cache.
-    if (process.env["ZCODE_BRIDGE_PLUGIN_MODE"] === "1" && !runtimeEnv["ZCODE_BRIDGE_DATA_DIR"]?.trim()) {
-      runtimeEnv["ZCODE_BRIDGE_DATA_DIR"] = host.settingsDirectory;
-    }
-    const resolved = resolveDataRoot(runtimeEnv);
-    dataRoot = resolved.dataRoot;
-    warning = resolved.warning;
-  } else {
-    const resolvedState = resolveSqliteStateDirectory(authoritySelection, process.env);
-    sqliteDatabaseMissing = !existsSync(path.join(resolvedState.dataRoot, FRESH_SQLITE_DATABASE_FILE));
-    if (sqliteDatabaseMissing) {
-      assertFreshInstallLegacyJsonEmpty(resolveLegacyJsonDataRoot(host, runtimeEnv));
-    }
-    const prepared = prepareFreshSqliteStateDirectory(authoritySelection, process.env);
-    dataRoot = prepared.dataRoot;
+  console.error("[bridge] SQLITE_INITIALIZING");
+  let authoritySelection: ReturnType<typeof loadInstallAuthoritySelection>;
+  let runtimeEnv: ReturnType<typeof loadPersistedRuntimeEnvironment>;
+  let prepared: ReturnType<typeof prepareFreshSqliteStateDirectory>;
+  try {
+    runtimeEnv = loadPersistedRuntimeEnvironment(process.env, homedir(), host);
+    authoritySelection = loadInstallAuthoritySelection(host);
+    prepared = prepareFreshSqliteStateDirectory(authoritySelection, process.env);
+  } catch (error) {
+    console.error(`[bridge] SQLITE_INITIALIZATION_FAILED: ${error instanceof Error ? error.message : String(error)}`);
+    throw error;
   }
+  const dataRoot = prepared.dataRoot;
   const provenance = {
     bridge: fingerprintRuntimeArtifact(bridgeEntryPath),
     worker: fingerprintRuntimeArtifact(host.workerEntryPath ?? workerEntryPath()),
@@ -232,9 +171,6 @@ export async function startBridge(
     bridge: { sha256: provenance.bridge.sha256 },
     worker: { sha256: provenance.worker.sha256 },
   })}`);
-  if (warning) {
-    console.error(`[bridge] ${warning}`);
-  }
   console.error(`[bridge] data root: ${dataRoot}`);
 
   const workerLimit = resolveMaxConcurrentWorkers(runtimeEnv);
@@ -251,16 +187,15 @@ export async function startBridge(
 
   const processProbe = createPlatformProbe();
   let manager: BridgeTaskManager;
-  if (authoritySelection.state === "sqlite") {
-    const trustedLocalContext = createTrustedLocalCandidateContext(host);
+  const databasePath = path.join(dataRoot, FRESH_SQLITE_DATABASE_FILE);
+  let trustedLocalContext: ReturnType<typeof createTrustedLocalCandidateContext>;
+  try {
+    trustedLocalContext = createTrustedLocalCandidateContext(host);
     if (trustedLocalContext.status !== "enabled") {
       throw new Error(`SQLite Authority startup refused: Trusted Local policy is ${trustedLocalContext.status}`);
     }
-    const databasePath = path.join(dataRoot, FRESH_SQLITE_DATABASE_FILE);
     const lifecycleGate = await import("../store/lifecycle-gate.js");
-    if (sqliteDatabaseMissing) {
-      await lifecycleGate.initializeFreshInstallSqliteRoot(dataRoot, FRESH_SQLITE_DATABASE_FILE);
-    }
+    await lifecycleGate.initializeFreshInstallSqliteRoot(dataRoot, FRESH_SQLITE_DATABASE_FILE, process.versions.node, processProbe);
     const { SqliteLifecycleMcpAuthority } = await import("../manager/sqlite-lifecycle-mcp-authority.js");
     const authority = await SqliteLifecycleMcpAuthority.create({
       dataRoot,
@@ -274,25 +209,9 @@ export async function startBridge(
       requireAuthorityReceipt: true,
     });
     manager = new BridgeTaskManager({ lifecycleAuthority: authority, maxConcurrentWorkers: workerLimit.maxConcurrentWorkers });
-    console.error(`[bridge] SQLite Authority ready at ${databasePath}`);
-  } else {
-    let managerIdentity: ProcessIdentity | null = null;
-    try {
-      const observed = await processProbe.selfIdentity();
-      if (observed.fingerprint_precision === "exact" && observed.fingerprint) managerIdentity = observed;
-    }
-    catch { /* normal JSON startup remains available; cutover cannot seal unknown identity */ }
-    const managerWriterLeaseToken = await registerManagerJsonWriter(dataRoot, managerIdentity);
-    const { TaskStore } = await import("../store/task-store.js");
-    const store = new TaskStore(dataRoot, { writerQuiescence: true, writerLeaseToken: managerWriterLeaseToken });
-    manager = new BridgeTaskManager({
-      store,
-      workspaceProvider: new DirectWorkspaceProvider(),
-      maxConcurrentWorkers: workerLimit.maxConcurrentWorkers,
-      spawnWorker: createWorkerSpawner(host, provenance, { writerQuiescence: true }),
-      probe: processProbe,
-      managerWriterLeaseToken,
-    });
+  } catch (error) {
+    console.error(`[bridge] SQLITE_INITIALIZATION_FAILED: ${error instanceof Error ? error.message : String(error)}`);
+    throw error;
   }
   const modelSettings = new ZCodeModelSettings(process.env, { host });
   const server = createBridgeServer({
@@ -318,5 +237,6 @@ export async function startBridge(
   process.on("SIGINT", () => shutdown("SIGINT"));
   process.on("SIGTERM", () => shutdown("SIGTERM"));
 
+  console.error(`[bridge] SQLITE_READY at ${databasePath}`);
   console.error(`[bridge] ${host.name} stdio MCP server ready`);
 }

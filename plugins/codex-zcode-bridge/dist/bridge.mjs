@@ -292,9 +292,9 @@ var init_failure_facts = __esm({
 });
 
 // src/store/process-lock.ts
-import { existsSync as existsSync3, mkdirSync, readFileSync as readFileSync2, renameSync, rmdirSync, statSync as statSync3, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync as existsSync2, mkdirSync, readFileSync as readFileSync2, renameSync, rmdirSync, statSync as statSync2, unlinkSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import path4 from "node:path";
+import path3 from "node:path";
 function isTransientLockFsError(error2) {
   return TRANSIENT_LOCK_FS_CODES.has(error2?.code ?? "");
 }
@@ -322,7 +322,7 @@ async function withProcessLock(directory, operation, timeoutMs = 3e4) {
 }
 function describeLockOwner(directory) {
   try {
-    const owner = JSON.parse(readFileSync2(path4.join(directory, "owner.json"), "utf8"));
+    const owner = JSON.parse(readFileSync2(path3.join(directory, "owner.json"), "utf8"));
     if (!Number.isSafeInteger(owner.pid)) return null;
     return `pid ${String(owner.pid)}${owner.started_at ? `, started ${owner.started_at}` : ""}`;
   } catch {
@@ -334,7 +334,7 @@ function tryAcquireProcessLock(directory) {
 }
 function tryAcquireProcessLockWithRetry(directory, retries) {
   const token = randomUUID();
-  if (existsSync3(directory)) return acquireExistingLock(directory);
+  if (existsSync2(directory)) return acquireExistingLock(directory);
   const staging = `${directory}.${process.pid}.${token}.pending`;
   const ownerRecord = {
     pid: process.pid,
@@ -346,14 +346,14 @@ function tryAcquireProcessLockWithRetry(directory, retries) {
   };
   try {
     mkdirSync(staging, { mode: 448 });
-    writeFileSync(path4.join(staging, "owner.json"), JSON.stringify(ownerRecord), { mode: 384, flag: "wx" });
+    writeFileSync(path3.join(staging, "owner.json"), JSON.stringify(ownerRecord), { mode: 384, flag: "wx" });
     try {
       renameSync(staging, directory);
     } catch (error2) {
       removeStagedLock(staging);
       const code = error2.code;
       if (!isTransientLockFsError(error2)) throw error2;
-      if (DESTINATION_PRESENT_CONTENTION_CODES.has(code ?? "") || existsSync3(directory)) {
+      if (DESTINATION_PRESENT_CONTENTION_CODES.has(code ?? "") || existsSync2(directory)) {
         return acquireExistingLock(directory);
       }
       if (retries < PUBLICATION_RETRY_ATTEMPTS) {
@@ -367,7 +367,7 @@ function tryAcquireProcessLockWithRetry(directory, retries) {
     throw error2;
   }
   return () => {
-    const owner = JSON.parse(readFileSync2(path4.join(directory, "owner.json"), "utf8"));
+    const owner = JSON.parse(readFileSync2(path3.join(directory, "owner.json"), "utf8"));
     if (owner.token !== token) throw new Error("process lock ownership changed");
     const retired = `${directory}.${token}.retired`;
     renameWithTransientRetry(directory, retired);
@@ -389,11 +389,11 @@ function renameWithTransientRetry(source, target) {
 function acquireExistingLock(directory) {
   let owner;
   try {
-    owner = JSON.parse(readFileSync2(path4.join(directory, "owner.json"), "utf8"));
+    owner = JSON.parse(readFileSync2(path3.join(directory, "owner.json"), "utf8"));
     if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0) throw new Error("invalid lock owner");
   } catch {
     try {
-      if (Date.now() - statSync3(directory).mtimeMs > 3e4) throw new Error(`unreadable lock owner: ${directory}`);
+      if (Date.now() - statSync2(directory).mtimeMs > 3e4) throw new Error(`unreadable lock owner: ${directory}`);
     } catch (failure2) {
       if (failure2.code !== "ENOENT") throw failure2;
     }
@@ -409,7 +409,7 @@ function acquireExistingLock(directory) {
   return null;
 }
 function removeStagedLock(directory) {
-  removePrivateFile(path4.join(directory, "owner.json"));
+  removePrivateFile(path3.join(directory, "owner.json"));
   removePrivateDirectory(directory);
 }
 function removePrivateFile(file) {
@@ -448,7 +448,7 @@ function reclaimDeadOwner(directory) {
   }
   let outcome;
   try {
-    const owner = JSON.parse(readFileSync2(path4.join(directory, "owner.json"), "utf8"));
+    const owner = JSON.parse(readFileSync2(path3.join(directory, "owner.json"), "utf8"));
     if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0) {
       outcome = { kind: "busy" };
     } else {
@@ -551,17 +551,17 @@ var init_atomic_rename = __esm({
 
 // src/runtime/durable-file-system.ts
 import { spawnSync } from "node:child_process";
-import { closeSync, existsSync as existsSync4, fsyncSync, openSync, renameSync as renameSync3 } from "node:fs";
-import path5 from "node:path";
+import { closeSync, existsSync as existsSync3, fsyncSync, openSync, renameSync as renameSync3 } from "node:fs";
+import path4 from "node:path";
 function canonicalParent(filePath) {
-  return path5.dirname(path5.resolve(filePath));
+  return path4.dirname(path4.resolve(filePath));
 }
 function assertSameDirectory(source, destination) {
   const left = canonicalParent(source);
   const right = canonicalParent(destination);
   const same = process.platform === "win32" ? left.toLocaleLowerCase("en-US") === right.toLocaleLowerCase("en-US") : left === right;
   if (!same) throw new Error("durable file operation requires one directory");
-  if (path5.resolve(source) === path5.resolve(destination)) {
+  if (path4.resolve(source) === path4.resolve(destination)) {
     throw new Error("durable file operation requires distinct files");
   }
 }
@@ -610,7 +610,7 @@ function runWindowsHelper(operation, source, destination, replace) {
 function moveFileSync(source, destination, replace) {
   assertSameDirectory(source, destination);
   if (process.platform === "win32") {
-    runWindowsHelper("move", path5.resolve(source), path5.resolve(destination), replace);
+    runWindowsHelper("move", path4.resolve(source), path4.resolve(destination), replace);
     return;
   }
   renameSync3(source, destination);
@@ -699,13 +699,13 @@ exit 12
     WINDOWS_HELPER_COMMAND = Buffer.from(WINDOWS_HELPER_SCRIPT, "utf16le").toString("base64");
     defaultDurableFileOperations = Object.freeze({
       replaceFileSync(source, destination) {
-        moveFileSync(source, destination, existsSync4(destination));
+        moveFileSync(source, destination, existsSync3(destination));
       },
       moveFileSync(source, destination) {
         moveFileSync(source, destination, false);
       },
       flushDirectorySync(directory) {
-        const resolved = path5.resolve(directory);
+        const resolved = path4.resolve(directory);
         if (process.platform === "win32") {
           runWindowsHelper("flush", resolved, null, false);
           return;
@@ -816,31 +816,31 @@ var init_json_history_result_exceptions = __esm({
 });
 
 // src/store/json-writer-quiescence.ts
-import { closeSync as closeSync2, existsSync as existsSync5, fsyncSync as fsyncSync2, mkdirSync as mkdirSync2, openSync as openSync2, readFileSync as readFileSync3, readdirSync, realpathSync as realpathSync2, rmSync, writeFileSync as writeFileSync2 } from "node:fs";
+import { closeSync as closeSync2, existsSync as existsSync4, fsyncSync as fsyncSync2, mkdirSync as mkdirSync2, openSync as openSync2, readFileSync as readFileSync3, readdirSync, realpathSync, rmSync, writeFileSync as writeFileSync2 } from "node:fs";
 import { createHash as createHash2, randomUUID as randomUUID2 } from "node:crypto";
-import path6 from "node:path";
+import path5 from "node:path";
 function jsonWriterFenceState(dataRoot) {
   return readFence(dataRoot)?.state ?? "open";
 }
 function fencePath(dataRoot) {
-  return path6.join(dataRoot, ".tasks", FENCE_FILE);
+  return path5.join(dataRoot, ".tasks", FENCE_FILE);
 }
 function rosterPath(dataRoot) {
-  return path6.join(dataRoot, ".tasks", ROSTER_DIR);
+  return path5.join(dataRoot, ".tasks", ROSTER_DIR);
 }
 function leasePath(dataRoot, token) {
   if (!/^[a-f0-9-]{36}$/u.test(token)) throw new Error("invalid JSON writer lease token");
-  return path6.join(rosterPath(dataRoot), `${token}.json`);
+  return path5.join(rosterPath(dataRoot), `${token}.json`);
 }
 function gateLockPath(dataRoot) {
-  return path6.join(dataRoot, ".tasks", GATE_LOCK);
+  return path5.join(dataRoot, ".tasks", GATE_LOCK);
 }
 function strictObject2(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 function readFence(dataRoot) {
   const file = fencePath(dataRoot);
-  if (!existsSync5(file)) return null;
+  if (!existsSync4(file)) return null;
   let value;
   try {
     value = JSON.parse(readFileSync3(file, "utf8"));
@@ -853,7 +853,7 @@ function readFence(dataRoot) {
   return value;
 }
 function writeJsonAtomic(file, value, durability = defaultDurableFileOperations) {
-  mkdirSync2(path6.dirname(file), { recursive: true, mode: 448 });
+  mkdirSync2(path5.dirname(file), { recursive: true, mode: 448 });
   const temporary = `${file}.${randomUUID2()}.tmp`;
   let fd;
   try {
@@ -909,7 +909,7 @@ function withSyncGateLock(dataRoot, operation) {
   }
 }
 function withJsonWriterWritePermit(dataRoot, token, taskId, attempt, operation) {
-  const resolved = realpathSync2(dataRoot);
+  const resolved = realpathSync(dataRoot);
   const key = process.platform === "win32" ? resolved.toLocaleLowerCase("en-US") : resolved;
   const active = activeWritePermits.get(key);
   if (active) {
@@ -933,7 +933,7 @@ function withJsonWriterWritePermit(dataRoot, token, taskId, attempt, operation) 
 }
 function readLease(dataRoot, token) {
   const file = leasePath(dataRoot, token);
-  if (!existsSync5(file)) return null;
+  if (!existsSync4(file)) return null;
   let value;
   try {
     value = JSON.parse(readFileSync3(file, "utf8"));
@@ -953,8 +953,8 @@ function validIdentity(value) {
   return Number.isSafeInteger(value.pid) && value.pid > 0 && typeof value.fingerprint === "string" && value.fingerprint.length > 0 && value.fingerprint_precision === "exact" && Number.isSafeInteger(value.identity_version) && typeof value.platform === "string" && typeof value.captured_at === "string" && Number.isFinite(Date.parse(value.captured_at));
 }
 function registryEnabled(dataRoot) {
-  const file = path6.join(rosterPath(dataRoot), REGISTRY_FILE);
-  if (!existsSync5(file)) return false;
+  const file = path5.join(rosterPath(dataRoot), REGISTRY_FILE);
+  if (!existsSync4(file)) return false;
   let value;
   try {
     value = JSON.parse(readFileSync3(file, "utf8"));
@@ -995,7 +995,7 @@ function assertLeaseMutationScope(dataRoot, lease, taskId, attempt) {
   }
   let status;
   try {
-    status = JSON.parse(readFileSync3(path6.join(dataRoot, ".tasks", taskId, "status.json"), "utf8"));
+    status = JSON.parse(readFileSync3(path5.join(dataRoot, ".tasks", taskId, "status.json"), "utf8"));
   } catch (error2) {
     throw new Error("Worker Task status is unreadable; write rejected", { cause: error2 });
   }
@@ -1006,26 +1006,6 @@ function assertLeaseMutationScope(dataRoot, lease, taskId, attempt) {
 function assertJsonAdmissionOpen(dataRoot) {
   const fence = readFence(dataRoot);
   if (fence) throw new Error(`JSON writer fence is ${fence.state}; new task admission is closed`);
-}
-async function registerManagerJsonWriter(dataRoot, identity) {
-  const token = randomUUID2();
-  mkdirSync2(path6.join(dataRoot, ".tasks"), { recursive: true, mode: 448 });
-  await withProcessLock(gateLockPath(dataRoot), async () => {
-    ensureFenceOpen(dataRoot);
-    mkdirSync2(rosterPath(dataRoot), { recursive: true, mode: 448 });
-    const registry2 = path6.join(rosterPath(dataRoot), REGISTRY_FILE);
-    if (!existsSync5(registry2)) writeJsonAtomic(registry2, { schema_version: 1, created_at: (/* @__PURE__ */ new Date()).toISOString() });
-    if (identity && (!validIdentity(identity) || identity.pid !== process.pid)) throw new Error("Manager process identity is invalid");
-    writeJsonAtomic(leasePath(dataRoot, token), {
-      schema_version: 1,
-      token,
-      kind: "manager",
-      pid: process.pid,
-      identity,
-      created_at: (/* @__PURE__ */ new Date()).toISOString()
-    });
-  });
-  return token;
 }
 async function releaseManagerJsonWriter(dataRoot, token) {
   await withProcessLock(gateLockPath(dataRoot), async () => {
@@ -1123,9 +1103,9 @@ __export(task_store_exports, {
   stableJson: () => stableJson,
   toPublicStatus: () => toPublicStatus
 });
-import { appendFileSync, chmodSync, closeSync as closeSync3, copyFileSync, existsSync as existsSync6, mkdirSync as mkdirSync3, openSync as openSync3, readFileSync as readFileSync4, readSync, readdirSync as readdirSync2, rmSync as rmSync2, statSync as statSync4, writeFileSync as writeFileSync3 } from "node:fs";
+import { appendFileSync, chmodSync, closeSync as closeSync3, copyFileSync, existsSync as existsSync5, mkdirSync as mkdirSync3, openSync as openSync3, readFileSync as readFileSync4, readSync, readdirSync as readdirSync2, rmSync as rmSync2, statSync as statSync3, writeFileSync as writeFileSync3 } from "node:fs";
 import { createHash as createHash3, randomUUID as randomUUID3 } from "node:crypto";
-import path7 from "node:path";
+import path6 from "node:path";
 import { StringDecoder } from "node:string_decoder";
 function stableJson(value) {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
@@ -1156,7 +1136,7 @@ function privateFile(file) {
   if (process.platform !== "win32") chmodSync(file, 384);
 }
 function readLastEventSeq(file) {
-  if (!existsSync6(file)) return 0;
+  if (!existsSync5(file)) return 0;
   for (const line of readFileSync4(file, "utf8").trimEnd().split("\n").reverse()) {
     try {
       const event = JSON.parse(line);
@@ -1255,7 +1235,7 @@ var init_task_store = __esm({
       #writerLeaseToken;
       constructor(dataRoot, options = {}) {
         this.#dataRoot = dataRoot;
-        this.#tasksRoot = path7.join(dataRoot, ".tasks");
+        this.#tasksRoot = path6.join(dataRoot, ".tasks");
         this.#maxLogBytes = options.maxLogBytes ?? DEFAULT_MAX_LOG_BYTES;
         this.#maxEventBytes = options.maxEventBytes ?? DEFAULT_MAX_LOG_BYTES;
         this.#writerQuiescence = options.writerQuiescence ?? false;
@@ -1281,19 +1261,19 @@ var init_task_store = __esm({
       }
       taskDir(taskId) {
         this.assertValidTaskId(taskId);
-        return path7.join(this.#tasksRoot, taskId);
+        return path6.join(this.#tasksRoot, taskId);
       }
       hasTask(taskId) {
         try {
-          return existsSync6(path7.join(this.taskDir(taskId), "status.json"));
+          return existsSync5(path6.join(this.taskDir(taskId), "status.json"));
         } catch {
           return false;
         }
       }
       listTaskIds() {
-        if (!existsSync6(this.#tasksRoot)) return [];
+        if (!existsSync5(this.#tasksRoot)) return [];
         return readdirSync2(this.#tasksRoot).filter(
-          (entry) => existsSync6(path7.join(this.#tasksRoot, entry, "status.json"))
+          (entry) => existsSync5(path6.join(this.#tasksRoot, entry, "status.json"))
         );
       }
       createTask(task, createdAt) {
@@ -1301,11 +1281,11 @@ var init_task_store = __esm({
           assertJsonAdmissionOpen(this.#dataRoot);
           this.assertValidTaskId(task.task_id);
           const dir = this.taskDir(task.task_id);
-          if (existsSync6(path7.join(dir, "task.json"))) {
+          if (existsSync5(path6.join(dir, "task.json"))) {
             throw new Error(`task already exists: ${task.task_id}`);
           }
-          privateMkdir(path7.join(dir, "attempts"));
-          this.#writeJsonAtomic(path7.join(dir, "task.json"), task);
+          privateMkdir(path6.join(dir, "attempts"));
+          this.#writeJsonAtomic(path6.join(dir, "task.json"), task);
           const status = {
             task_id: task.task_id,
             status: "queued",
@@ -1318,40 +1298,40 @@ var init_task_store = __esm({
             zcode_session_id: null,
             exit_code: null
           };
-          this.#writeJsonAtomic(path7.join(dir, "status.json"), status);
+          this.#writeJsonAtomic(path6.join(dir, "status.json"), status);
         });
       }
       readTask(taskId) {
-        const file = path7.join(this.taskDir(taskId), "task.json");
+        const file = path6.join(this.taskDir(taskId), "task.json");
         const parsed = this.#readJson(file);
         const task = parsed;
         if (!task || task.task_id !== taskId || typeof task.workspace !== "string" || !task.workspace || typeof task.objective !== "string" || [task.requirements, task.allowed_paths, task.forbidden_paths, task.acceptance_criteria, task.test_commands].some((items) => !Array.isArray(items) || items.some((item) => typeof item !== "string"))) throw new Error(`corrupt task record: ${file}`);
         return task;
       }
       readSubmission(taskId) {
-        const file = path7.join(this.taskDir(taskId), "submission.json");
-        if (!existsSync6(file)) return null;
+        const file = path6.join(this.taskDir(taskId), "submission.json");
+        if (!existsSync5(file)) return null;
         return this.#readJson(file);
       }
       writeSubmission(taskId, submission) {
         return this.#withWriterMutation(() => {
-          this.#writeJsonAtomic(path7.join(this.taskDir(taskId), "submission.json"), submission);
+          this.#writeJsonAtomic(path6.join(this.taskDir(taskId), "submission.json"), submission);
         }, taskId);
       }
       writeWorkspaceRef(taskId, workspace) {
         return this.#withWriterMutation(() => {
-          this.#writeJsonAtomic(path7.join(this.taskDir(taskId), "workspace.json"), workspace);
+          this.#writeJsonAtomic(path6.join(this.taskDir(taskId), "workspace.json"), workspace);
         }, taskId);
       }
       readWorkspaceRef(taskId) {
-        const file = path7.join(this.taskDir(taskId), "workspace.json");
-        if (!existsSync6(file)) return null;
+        const file = path6.join(this.taskDir(taskId), "workspace.json");
+        if (!existsSync5(file)) return null;
         const workspace = this.#readJson(file);
         if (!workspace || typeof workspace.canonicalPath !== "string" || typeof workspace.requestedPath !== "string" || !["direct", "worktree"].includes(workspace.mode)) throw new Error(`corrupt workspace record: ${file}`);
         return workspace;
       }
       readStatus(taskId) {
-        const file = path7.join(this.taskDir(taskId), "status.json");
+        const file = path6.join(this.taskDir(taskId), "status.json");
         const parsed = this.#readJson(file);
         if (!parsed || parsed.task_id !== taskId || !["queued", "running", "completed", "failed", "cancelled", "waiting_for_master"].includes(parsed.status) || !Number.isSafeInteger(parsed.attempt) || parsed.attempt < 1 || typeof parsed.created_at !== "string") {
           throw new Error(`corrupt status record: ${file}`);
@@ -1361,7 +1341,7 @@ var init_task_store = __esm({
       /** Read-merge-write with an updated timestamp; atomic via temp file + rename. */
       writeStatus(taskId, patch, expectedAttempt) {
         return this.#withWriterMutation(() => {
-          return withEventLock(path7.join(this.taskDir(taskId), "state.lock"), () => {
+          return withEventLock(path6.join(this.taskDir(taskId), "state.lock"), () => {
             const current = this.readStatus(taskId);
             if (expectedAttempt !== void 0 && (current.attempt !== expectedAttempt || isTerminalStatus(current.status))) throw new Error("stale or terminal worker status rejected");
             const next = {
@@ -1370,31 +1350,31 @@ var init_task_store = __esm({
               task_id: current.task_id,
               updated_at: (/* @__PURE__ */ new Date()).toISOString()
             };
-            this.#writeJsonAtomic(path7.join(this.taskDir(taskId), "status.json"), next);
+            this.#writeJsonAtomic(path6.join(this.taskDir(taskId), "status.json"), next);
             return next;
           });
         }, taskId, expectedAttempt);
       }
       readResult(taskId) {
-        const file = path7.join(this.taskDir(taskId), "result.json");
-        if (!existsSync6(file)) return null;
+        const file = path6.join(this.taskDir(taskId), "result.json");
+        if (!existsSync5(file)) return null;
         const result = this.#readJson(file);
         if (!result || result.task_id !== taskId || !Number.isSafeInteger(result.attempt) || !isTerminalStatus(result.status)) throw new Error(`corrupt result record: ${file}`);
         return result.attempt === this.readStatus(taskId).attempt ? result : null;
       }
       writeResult(taskId, result) {
         return this.#withWriterMutation(() => {
-          withEventLock(path7.join(this.taskDir(taskId), "state.lock"), () => {
+          withEventLock(path6.join(this.taskDir(taskId), "state.lock"), () => {
             if (this.readStatus(taskId).attempt !== result.attempt) throw new Error("stale worker attempt result rejected");
-            this.#writeJsonAtomic(path7.join(this.taskDir(taskId), "result.json"), result);
+            this.#writeJsonAtomic(path6.join(this.taskDir(taskId), "result.json"), result);
           });
         }, taskId, result.attempt);
       }
       commitWorkerResult(taskId, attempt, result, patch) {
         return this.#withWriterMutation(() => {
-          withEventLock(path7.join(this.taskDir(taskId), "state.lock"), () => {
+          withEventLock(path6.join(this.taskDir(taskId), "state.lock"), () => {
             this.assertWorkerAttempt(taskId, attempt);
-            this.#writeJsonAtomic(path7.join(this.taskDir(taskId), "result.json"), result);
+            this.#writeJsonAtomic(path6.join(this.taskDir(taskId), "result.json"), result);
             const current = this.readStatus(taskId);
             let effective = patch;
             if (current.cleanup_unverified === true) {
@@ -1403,16 +1383,16 @@ var init_task_store = __esm({
                 effective = { ...effective, error: current.error };
               }
             }
-            this.#writeJsonAtomic(path7.join(this.taskDir(taskId), "status.json"), { ...current, ...effective, task_id: taskId, attempt, updated_at: (/* @__PURE__ */ new Date()).toISOString() });
+            this.#writeJsonAtomic(path6.join(this.taskDir(taskId), "status.json"), { ...current, ...effective, task_id: taskId, attempt, updated_at: (/* @__PURE__ */ new Date()).toISOString() });
           });
         }, taskId, attempt);
       }
       patchRunningAttempt(taskId, attempt, patch) {
         return this.#withWriterMutation(() => {
-          withEventLock(path7.join(this.taskDir(taskId), "state.lock"), () => {
+          withEventLock(path6.join(this.taskDir(taskId), "state.lock"), () => {
             const current = this.readStatus(taskId);
             if (current.attempt !== attempt || current.status !== "running") return;
-            this.#writeJsonAtomic(path7.join(this.taskDir(taskId), "status.json"), { ...current, ...patch, updated_at: (/* @__PURE__ */ new Date()).toISOString() });
+            this.#writeJsonAtomic(path6.join(this.taskDir(taskId), "status.json"), { ...current, ...patch, updated_at: (/* @__PURE__ */ new Date()).toISOString() });
           });
         }, taskId, attempt);
       }
@@ -1420,23 +1400,23 @@ var init_task_store = __esm({
       archiveResultToAttempt(taskId, attempt) {
         return this.#withWriterMutation(() => {
           const dir = this.taskDir(taskId);
-          const source = path7.join(dir, "result.json");
-          if (!existsSync6(source)) return;
+          const source = path6.join(dir, "result.json");
+          if (!existsSync5(source)) return;
           const targetDir = this.attemptDir(taskId, attempt);
           privateMkdir(targetDir);
-          copyFileSync(source, path7.join(targetDir, "result.json"));
-          privateFile(path7.join(targetDir, "result.json"));
+          copyFileSync(source, path6.join(targetDir, "result.json"));
+          privateFile(path6.join(targetDir, "result.json"));
         }, taskId, attempt);
       }
       /** A claim is permanent: a started attempt must never execute again. */
       claimWorkerExecution(taskId, attempt) {
         return this.#withWriterMutation(() => {
-          return withEventLock(path7.join(this.taskDir(taskId), "state.lock"), () => {
+          return withEventLock(path6.join(this.taskDir(taskId), "state.lock"), () => {
             const status = this.readStatus(taskId);
             if (status.attempt !== attempt || isTerminalStatus(status.status)) return false;
             privateMkdir(this.attemptDir(taskId, attempt));
             try {
-              writeFileSync3(path7.join(this.attemptDir(taskId, attempt), "execution.claim"), JSON.stringify({ pid: process.pid }), { flag: "wx", mode: 384 });
+              writeFileSync3(path6.join(this.attemptDir(taskId, attempt), "execution.claim"), JSON.stringify({ pid: process.pid }), { flag: "wx", mode: 384 });
               return true;
             } catch (error2) {
               if (error2.code === "EEXIST") return false;
@@ -1450,25 +1430,25 @@ var init_task_store = __esm({
         if (status.attempt !== attempt || isTerminalStatus(status.status)) throw new Error("stale or terminal worker attempt rejected");
       }
       readArchivedResult(taskId, attempt) {
-        const file = path7.join(this.attemptDir(taskId, attempt), "result.json");
-        if (!existsSync6(file)) return null;
+        const file = path6.join(this.attemptDir(taskId, attempt), "result.json");
+        if (!existsSync5(file)) return null;
         return this.#readJson(file);
       }
       attemptDir(taskId, attempt) {
-        return path7.join(this.taskDir(taskId), "attempts", String(attempt));
+        return path6.join(this.taskDir(taskId), "attempts", String(attempt));
       }
       writeAttemptFile(taskId, attempt, fileName, content) {
         return this.#withWriterMutation(() => {
           const dir = this.attemptDir(taskId, attempt);
           privateMkdir(dir);
-          this.#writeTextAtomic(path7.join(dir, fileName), content);
+          this.#writeTextAtomic(path6.join(dir, fileName), content);
         }, taskId, attempt);
       }
       writeAttemptMeta(taskId, attempt, fileName, meta2) {
         return this.#withWriterMutation(() => {
           const dir = this.attemptDir(taskId, attempt);
           privateMkdir(dir);
-          this.#writeJsonAtomic(path7.join(dir, fileName), meta2);
+          this.#writeJsonAtomic(path6.join(dir, fileName), meta2);
         }, taskId, attempt);
       }
       // ---- ADR-011 P0 private failure facts (M3 dedicated ownership entry) ----
@@ -1485,8 +1465,8 @@ var init_task_store = __esm({
        * state, results, or cleanup (ADR-011).
        */
       writeFailureFacts(taskId, attempt, writerPid, facts) {
-        const file = path7.join(this.attemptDir(taskId, attempt), "failure-facts.json");
-        return this.#withWriterMutation(() => withEventLock(path7.join(this.taskDir(taskId), "state.lock"), () => {
+        const file = path6.join(this.attemptDir(taskId, attempt), "failure-facts.json");
+        return this.#withWriterMutation(() => withEventLock(path6.join(this.taskDir(taskId), "state.lock"), () => {
           const status = this.readStatus(taskId);
           if (status.attempt !== attempt) throw new Error("stale attempt failure facts rejected");
           if (status.status !== "running") throw new Error("non-running attempt failure facts rejected");
@@ -1494,7 +1474,7 @@ var init_task_store = __esm({
           const claim2 = this.readAttemptMeta(taskId, attempt, "execution.claim");
           if (!claim2 || claim2.pid !== writerPid) throw new Error("failure facts writer does not own the execution claim");
           validateFailureFacts(facts);
-          if (existsSync6(file)) {
+          if (existsSync5(file)) {
             const existing = validateFailureFacts(this.#readJson(file));
             if (stableJson(existing) === stableJson(facts)) return "duplicate";
             throw new Error("failure facts root cause already established; divergent snapshot rejected");
@@ -1506,8 +1486,8 @@ var init_task_store = __esm({
       /** Read-only accessor for diagnostics and tests. Never consulted for manager
        * state, recovery, occupancy, or READY/DONE decisions (ADR-011). */
       readFailureFacts(taskId, attempt) {
-        const file = path7.join(this.attemptDir(taskId, attempt), "failure-facts.json");
-        if (!existsSync6(file)) return { facts: null, corrupt: false };
+        const file = path6.join(this.attemptDir(taskId, attempt), "failure-facts.json");
+        if (!existsSync5(file)) return { facts: null, corrupt: false };
         try {
           return { facts: validateFailureFacts(JSON.parse(readFileSync4(file, "utf8"))), corrupt: false };
         } catch {
@@ -1515,19 +1495,19 @@ var init_task_store = __esm({
         }
       }
       readAttemptMeta(taskId, attempt, fileName) {
-        const file = path7.join(this.attemptDir(taskId, attempt), fileName);
-        if (!existsSync6(file)) return null;
+        const file = path6.join(this.attemptDir(taskId, attempt), fileName);
+        if (!existsSync5(file)) return null;
         return this.#readJson(file);
       }
       writeWorkerHeartbeat(taskId, attempt, heartbeat) {
         return this.#withWriterMutation(() => {
-          withEventLock(path7.join(this.taskDir(taskId), "state.lock"), () => {
+          withEventLock(path6.join(this.taskDir(taskId), "state.lock"), () => {
             const status = this.readStatus(taskId);
             const claim2 = this.readAttemptMeta(taskId, attempt, "execution.claim");
             if (status.attempt !== attempt || status.status !== "running" || status.worker_pid !== heartbeat.worker_pid || claim2?.pid !== heartbeat.worker_pid) {
               throw new Error("stale or unowned worker heartbeat rejected");
             }
-            this.#writeJsonAtomic(path7.join(this.attemptDir(taskId, attempt), "heartbeat.json"), heartbeat);
+            this.#writeJsonAtomic(path6.join(this.attemptDir(taskId, attempt), "heartbeat.json"), heartbeat);
           });
         }, taskId, attempt);
       }
@@ -1537,8 +1517,8 @@ var init_task_store = __esm({
         return value;
       }
       readAttemptText(taskId, attempt, fileName) {
-        const file = path7.join(this.attemptDir(taskId, attempt), fileName);
-        if (!existsSync6(file)) return null;
+        const file = path6.join(this.attemptDir(taskId, attempt), fileName);
+        if (!existsSync5(file)) return null;
         return readFileSync4(file, "utf8");
       }
       // ---- A1 observation evidence (bounded reads, no task bodies) ----
@@ -1556,11 +1536,11 @@ var init_task_store = __esm({
       }
       /** Last complete event line, read from a bounded tail window. */
       readLastBusinessEvent(taskId) {
-        const file = path7.join(this.taskDir(taskId), "events.jsonl");
-        if (!existsSync6(file)) return null;
+        const file = path6.join(this.taskDir(taskId), "events.jsonl");
+        if (!existsSync5(file)) return null;
         let size = 0;
         try {
-          size = statSync4(file).size;
+          size = statSync3(file).size;
         } catch {
           return null;
         }
@@ -1590,11 +1570,11 @@ var init_task_store = __esm({
       }
       /** Distinct event types from a bounded tail window (A3 stage inference). */
       listRecentEventTypes(taskId, maxLines) {
-        const file = path7.join(this.taskDir(taskId), "events.jsonl");
-        if (!existsSync6(file)) return [];
+        const file = path6.join(this.taskDir(taskId), "events.jsonl");
+        if (!existsSync5(file)) return [];
         let size = 0;
         try {
-          size = statSync4(file).size;
+          size = statSync3(file).size;
         } catch {
           return [];
         }
@@ -1624,7 +1604,7 @@ var init_task_store = __esm({
       }
       /** Newest unanswered interaction request (bounded directory scan). */
       readPendingInteraction(taskId) {
-        const directory = path7.join(this.taskDir(taskId), "interactions");
+        const directory = path6.join(this.taskDir(taskId), "interactions");
         let entries;
         try {
           entries = readdirSync2(directory);
@@ -1635,7 +1615,7 @@ var init_task_store = __esm({
         let newest = null;
         for (const file of files) {
           try {
-            const record3 = JSON.parse(readFileSync4(path7.join(directory, file), "utf8"));
+            const record3 = JSON.parse(readFileSync4(path6.join(directory, file), "utf8"));
             if (record3.state === "pending" && typeof record3.method === "string" && typeof record3.created_at === "string") {
               if (!newest || record3.created_at > newest.created_at) newest = { method: record3.method, created_at: record3.created_at };
             }
@@ -1653,7 +1633,7 @@ var init_task_store = __esm({
        */
       writeWorkerObservation(taskId, attempt, writerPid, patch, revision, updatedAt = (/* @__PURE__ */ new Date()).toISOString()) {
         return this.#withWriterMutation(() => {
-          withEventLock(path7.join(this.taskDir(taskId), "state.lock"), () => {
+          withEventLock(path6.join(this.taskDir(taskId), "state.lock"), () => {
             const status = this.readStatus(taskId);
             if (status.attempt !== attempt) throw new Error("stale attempt observation rejected");
             const claim2 = this.readAttemptMeta(taskId, attempt, "execution.claim");
@@ -1666,7 +1646,7 @@ var init_task_store = __esm({
        * phases are never overwritten from the manager side. */
       writeManagerObservation(taskId, attempt, patch, revision, updatedAt = (/* @__PURE__ */ new Date()).toISOString()) {
         return this.#withWriterMutation(() => {
-          withEventLock(path7.join(this.taskDir(taskId), "state.lock"), () => {
+          withEventLock(path6.join(this.taskDir(taskId), "state.lock"), () => {
             const status = this.readStatus(taskId);
             if (status.attempt !== attempt) throw new Error("stale attempt observation rejected");
             this.#mergeObservationSnapshot(taskId, attempt, "manager", revision, patch, updatedAt);
@@ -1674,8 +1654,8 @@ var init_task_store = __esm({
         }, taskId, attempt);
       }
       readObservationSnapshot(taskId, attempt) {
-        const file = path7.join(this.attemptDir(taskId, attempt), "observation.json");
-        if (!existsSync6(file)) return { snapshot: null, corrupt: false };
+        const file = path6.join(this.attemptDir(taskId, attempt), "observation.json");
+        if (!existsSync5(file)) return { snapshot: null, corrupt: false };
         try {
           const parsed = JSON.parse(readFileSync4(file, "utf8"));
           if (parsed.schema_version !== 1 || parsed.task_id !== taskId || parsed.attempt !== attempt) {
@@ -1735,7 +1715,7 @@ var init_task_store = __esm({
           const dir = this.attemptDir(taskId, attempt);
           privateMkdir(dir);
           try {
-            closeSync3(openSync3(path7.join(dir, "respawn.claim"), "wx"));
+            closeSync3(openSync3(path6.join(dir, "respawn.claim"), "wx"));
             return true;
           } catch (error2) {
             if (error2.code === "EEXIST") return false;
@@ -1746,7 +1726,7 @@ var init_task_store = __esm({
       /** File time of the respawn claim, or null when the attempt is unclaimed. */
       respawnClaimedAt(taskId, attempt) {
         try {
-          return statSync4(path7.join(this.attemptDir(taskId, attempt), "respawn.claim")).mtime;
+          return statSync3(path6.join(this.attemptDir(taskId, attempt), "respawn.claim")).mtime;
         } catch {
           return null;
         }
@@ -1757,10 +1737,10 @@ var init_task_store = __esm({
         return this.#withWriterMutation(() => {
           const dir = this.taskDir(taskId);
           privateMkdir(dir);
-          const file = path7.join(dir, `${kind}.log`);
+          const file = path6.join(dir, `${kind}.log`);
           let currentBytes = 0;
           try {
-            currentBytes = statSync4(file).size;
+            currentBytes = statSync3(file).size;
           } catch {
             currentBytes = 0;
           }
@@ -1773,22 +1753,22 @@ var init_task_store = __esm({
         }, taskId);
       }
       readLog(taskId, kind) {
-        const file = path7.join(this.taskDir(taskId), `${kind}.log`);
-        return existsSync6(file) ? readFileSync4(file, "utf8") : "";
+        const file = path6.join(this.taskDir(taskId), `${kind}.log`);
+        return existsSync5(file) ? readFileSync4(file, "utf8") : "";
       }
       appendEvent(taskId, type, summary, details, at = (/* @__PURE__ */ new Date()).toISOString()) {
         return this.#withWriterMutation(() => {
           const dir = this.taskDir(taskId);
           mkdirSync3(dir, { recursive: true });
-          const lockDir = path7.join(dir, "events.lock");
+          const lockDir = path6.join(dir, "events.lock");
           return withEventLock(lockDir, () => {
-            const file = path7.join(dir, "events.jsonl");
-            const seqFile = path7.join(dir, "events.seq");
+            const file = path6.join(dir, "events.jsonl");
+            const seqFile = path6.join(dir, "events.seq");
             let bytes = 0;
             let previousSeq = 0;
             let needsSeparator = false;
             try {
-              const info = statSync4(file);
+              const info = statSync3(file);
               bytes = info.size;
               let lastByte;
               if (bytes > 0) {
@@ -1829,12 +1809,12 @@ var init_task_store = __esm({
             const eventOffset = bytes + (needsSeparator ? 1 : 0);
             appendFileSync(file, `${needsSeparator ? "\n" : ""}${line}`, { encoding: "utf8", mode: 384 });
             privateFile(file);
-            const genFile = path7.join(dir, "events.gen");
-            if (!existsSync6(genFile)) {
+            const genFile = path6.join(dir, "events.gen");
+            if (!existsSync5(genFile)) {
               this.#writeTextAtomic(genFile, randomUUID3());
             }
             if (event.seq % 100 === 0) {
-              const index = path7.join(dir, "events.index");
+              const index = path6.join(dir, "events.index");
               appendFileSync(index, `${event.seq}	${eventOffset}
 `, { encoding: "utf8", mode: 384 });
               privateFile(index);
@@ -1844,11 +1824,11 @@ var init_task_store = __esm({
         }, taskId);
       }
       readEvents(taskId, afterSeq = 0, limit = 100, view = "raw") {
-        const file = path7.join(this.taskDir(taskId), "events.jsonl");
-        if (!existsSync6(file)) return { events: [], nextSeq: afterSeq, hasMore: false, omittedEvents: 0 };
+        const file = path6.join(this.taskDir(taskId), "events.jsonl");
+        if (!existsSync5(file)) return { events: [], nextSeq: afterSeq, hasMore: false, omittedEvents: 0 };
         let offset = 0;
-        const indexFile = path7.join(this.taskDir(taskId), "events.index");
-        if (existsSync6(indexFile)) {
+        const indexFile = path6.join(this.taskDir(taskId), "events.index");
+        if (existsSync5(indexFile)) {
           for (const row of readFileSync4(indexFile, "utf8").split(/\r?\n/u)) {
             const [seqText, offsetText] = row.split("	");
             const seq = Number(seqText);
@@ -1932,7 +1912,7 @@ var init_task_store = __esm({
         const limit = input.limit ?? 100;
         const view = input.view ?? "raw";
         const budget = input.maxBytes ?? this.#maxEventBytes;
-        const file = path7.join(this.taskDir(taskId), "events.jsonl");
+        const file = path6.join(this.taskDir(taskId), "events.jsonl");
         const empty = {
           events: [],
           nextSeq: afterSeq,
@@ -1945,7 +1925,7 @@ var init_task_store = __esm({
         };
         let size = 0;
         try {
-          size = statSync4(file).size;
+          size = statSync3(file).size;
         } catch {
           return empty;
         }
@@ -1968,8 +1948,8 @@ var init_task_store = __esm({
         }
         let indexFallback = false;
         if (startOffset === 0) {
-          const indexFile = path7.join(this.taskDir(taskId), "events.index");
-          if (existsSync6(indexFile)) {
+          const indexFile = path6.join(this.taskDir(taskId), "events.index");
+          if (existsSync5(indexFile)) {
             try {
               let lastSeq = 0;
               let lastOffset = 0;
@@ -2125,7 +2105,7 @@ var init_task_store = __esm({
       /** Generation marker detecting log replacement/truncation across reads. */
       readEventGeneration(taskId) {
         try {
-          const value = readFileSync4(path7.join(this.taskDir(taskId), "events.gen"), "utf8").trim();
+          const value = readFileSync4(path6.join(this.taskDir(taskId), "events.gen"), "utf8").trim();
           return value || null;
         } catch {
           return null;
@@ -2153,11 +2133,11 @@ var init_task_store = __esm({
       }
       writeInteractionRequest(taskId, request, createdAt = (/* @__PURE__ */ new Date()).toISOString()) {
         return this.#withWriterMutation(() => {
-          const directory = path7.join(this.taskDir(taskId), "interactions");
+          const directory = path6.join(this.taskDir(taskId), "interactions");
           privateMkdir(directory);
           const file = this.interactionFile(taskId, request.request_id);
-          return withEventLock(path7.join(this.taskDir(taskId), "interactions.lock"), () => {
-            if (existsSync6(file)) {
+          return withEventLock(path6.join(this.taskDir(taskId), "interactions.lock"), () => {
+            if (existsSync5(file)) {
               const record4 = this.#readJson(file);
               if (record4.request_id !== request.request_id || record4.method !== request.method || stableJson(record4.params) !== stableJson(request.params)) {
                 throw new Error("interaction request id collision");
@@ -2183,7 +2163,7 @@ var init_task_store = __esm({
       }
       readInteractionRequest(taskId, requestId) {
         const file = this.interactionFile(taskId, requestId);
-        if (!existsSync6(file)) return null;
+        if (!existsSync5(file)) return null;
         const record3 = this.#readJson(file);
         if (record3.request_id !== requestId) throw new Error("interaction request id hash mismatch");
         return record3;
@@ -2207,7 +2187,7 @@ var init_task_store = __esm({
       verifyInteractionRequestIntegrity(taskId, requestId) {
         const file = this.interactionFile(taskId, requestId);
         try {
-          if (!existsSync6(file)) return { ok: false, reason: "the full request record is missing" };
+          if (!existsSync5(file)) return { ok: false, reason: "the full request record is missing" };
           const record3 = this.#readJson(file);
           if (record3.request_id !== requestId) return { ok: false, reason: "the persisted request id does not match this request" };
           if (record3.state !== "pending" && record3.state !== "answered") return { ok: false, reason: "the persisted request state is unreadable" };
@@ -2245,8 +2225,8 @@ var init_task_store = __esm({
       answerInteractionRequest(taskId, requestId, answer, answeredAt = (/* @__PURE__ */ new Date()).toISOString()) {
         return this.#withWriterMutation(() => {
           const file = this.interactionFile(taskId, requestId);
-          return withEventLock(path7.join(this.taskDir(taskId), "interactions.lock"), () => {
-            if (!existsSync6(file)) throw new Error(`unknown ZCode interaction request: ${requestId}`);
+          return withEventLock(path6.join(this.taskDir(taskId), "interactions.lock"), () => {
+            if (!existsSync5(file)) throw new Error(`unknown ZCode interaction request: ${requestId}`);
             const current = this.#readJson(file);
             if (current.request_id !== requestId) throw new Error("interaction request id hash mismatch");
             if (current.state === "answered") return "already_answered";
@@ -2267,8 +2247,8 @@ var init_task_store = __esm({
       answerInteractionRequestVerified(taskId, requestId, answer, options, answeredAt = (/* @__PURE__ */ new Date()).toISOString()) {
         return this.#withWriterMutation(() => {
           const file = this.interactionFile(taskId, requestId);
-          return withEventLock(path7.join(this.taskDir(taskId), "interactions.lock"), () => {
-            if (!existsSync6(file)) throw new Error(`unknown ZCode interaction request: ${requestId}`);
+          return withEventLock(path6.join(this.taskDir(taskId), "interactions.lock"), () => {
+            if (!existsSync5(file)) throw new Error(`unknown ZCode interaction request: ${requestId}`);
             const current = this.#readJson(file);
             if (current.request_id !== requestId) throw new Error("interaction request id hash mismatch");
             if (current.state === "answered") return { state: "already_answered" };
@@ -2289,7 +2269,7 @@ var init_task_store = __esm({
       interactionFile(taskId, requestId) {
         if (!requestId || requestId.length > 512) throw new Error("invalid ZCode interaction request_id");
         const key = createHash3("sha256").update(requestId).digest("hex");
-        return path7.join(this.taskDir(taskId), "interactions", `${this.readStatus(taskId).attempt}-${key}.json`);
+        return path6.join(this.taskDir(taskId), "interactions", `${this.readStatus(taskId).attempt}-${key}.json`);
       }
       #readJson(file) {
         try {
@@ -2420,18 +2400,18 @@ var init_child_env = __esm({
 
 // src/runtime/build-provenance.ts
 import { createHash as createHash4 } from "node:crypto";
-import { readFileSync as readFileSync5, realpathSync as realpathSync3 } from "node:fs";
-import path8 from "node:path";
+import { readFileSync as readFileSync5, realpathSync as realpathSync2 } from "node:fs";
+import path7 from "node:path";
 function fingerprintRuntimeArtifact(filePath) {
   if (!filePath) return { path: null, sha256: null };
   try {
-    const resolvedPath = realpathSync3(filePath);
+    const resolvedPath = realpathSync2(filePath);
     return {
       path: resolvedPath,
       sha256: createHash4("sha256").update(readFileSync5(resolvedPath)).digest("hex").toUpperCase()
     };
   } catch {
-    return { path: path8.resolve(filePath), sha256: null };
+    return { path: path7.resolve(filePath), sha256: null };
   }
 }
 var BRIDGE_WORKER_LAUNCH_MARKER;
@@ -2445,10 +2425,10 @@ var init_build_provenance = __esm({
 // src/manager/spawn-worker.ts
 import { spawn } from "node:child_process";
 import { closeSync as closeSync4, mkdirSync as mkdirSync4, openSync as openSync4 } from "node:fs";
-import path9 from "node:path";
+import path8 from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 function spawnClaimOnlyWorker(workerPath, provenance, options = {}) {
-  if (!path9.isAbsolute(workerPath)) throw new TypeError("claim-only worker path must be absolute");
+  if (!path8.isAbsolute(workerPath)) throw new TypeError("claim-only worker path must be absolute");
   if (options.dropAfterPrepared && !options.interactionChannel) throw new TypeError("interaction channel is required for drop-after-prepared");
   const env = {
     ...createWorkerEnv(process.env),
@@ -2467,7 +2447,7 @@ function spawnClaimOnlyWorker(workerPath, provenance, options = {}) {
     shell: false,
     stdio: options.interactionChannel ? ["ignore", "ignore", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe"] : ["ignore", "ignore", "pipe", "pipe", "pipe", "pipe", "pipe"],
     windowsHide: true,
-    cwd: path9.dirname(workerPath),
+    cwd: path8.dirname(workerPath),
     env
   });
   const pipes = child.stdio;
@@ -2500,9 +2480,9 @@ function createWorkerSpawner(host, provenance, options = {}) {
     worker: fingerprintRuntimeArtifact(host?.workerEntryPath ?? workerEntryPath())
   };
   return (dataRoot, taskId, attempt, writerLeaseToken) => {
-    const attemptDir = path9.join(dataRoot, ".tasks", taskId, "attempts", String(attempt));
+    const attemptDir = path8.join(dataRoot, ".tasks", taskId, "attempts", String(attempt));
     mkdirSync4(attemptDir, { recursive: true });
-    const stderrFd = openSync4(path9.join(attemptDir, "worker-stderr.log"), "a", 384);
+    const stderrFd = openSync4(path8.join(attemptDir, "worker-stderr.log"), "a", 384);
     try {
       const workerEnv = {
         ...createWorkerEnv(process.env),
@@ -4024,8 +4004,8 @@ var init_trusted_local_profile = __esm({
 
 // src/sqlite-candidate/wp6b2b1/trusted-local-policy.ts
 import { createHash as createHash9 } from "node:crypto";
-import { realpathSync as realpathSync4, statSync as statSync7 } from "node:fs";
-import path15 from "node:path";
+import { realpathSync as realpathSync3, statSync as statSync6 } from "node:fs";
+import path14 from "node:path";
 function createTrustedLocalPolicyProvider(config2) {
   let enabled = false;
   let invalid = false;
@@ -4145,20 +4125,20 @@ function resolveLocalDirectory(input) {
   if (!isLocalAbsolute(input)) throw new Error("workspace_path_form_denied");
   let stat2;
   try {
-    stat2 = statSync7(input);
+    stat2 = statSync6(input);
   } catch {
     throw new Error("workspace_unavailable");
   }
   if (!stat2.isDirectory()) throw new Error("workspace_not_directory");
-  const canonical4 = realpathSync4(input);
+  const canonical4 = realpathSync3(input);
   if (!isLocalAbsolute(canonical4)) throw new Error("workspace_path_form_denied");
-  return path15.win32.normalize(canonical4);
+  return path14.win32.normalize(canonical4);
 }
 function isLocalAbsolute(value) {
-  return process.platform === "win32" && path15.win32.isAbsolute(value) && /^[A-Za-z]:[\\/]/u.test(value) && !value.startsWith("\\\\");
+  return process.platform === "win32" && path14.win32.isAbsolute(value) && /^[A-Za-z]:[\\/]/u.test(value) && !value.startsWith("\\\\");
 }
 function sameWindowsPath(left, right) {
-  return windowsKey(path15.win32.normalize(left)) === windowsKey(path15.win32.normalize(right));
+  return windowsKey(path14.win32.normalize(left)) === windowsKey(path14.win32.normalize(right));
 }
 function windowsKey(value) {
   return value.replace(/[\\/]+$/u, "").toLocaleLowerCase("en-US");
@@ -4777,8 +4757,8 @@ __export(store_exports, {
 });
 import { DatabaseSync } from "node:sqlite";
 import { createHash as createHash14, randomUUID as randomUUID5 } from "node:crypto";
-import { existsSync as existsSync12, lstatSync as lstatSync2, realpathSync as realpathSync6, readFileSync as readFileSync11, writeFileSync as writeFileSync6, openSync as openSync5, closeSync as closeSync5, fsyncSync as fsyncSync3, unlinkSync as unlinkSync2, renameSync as renameSync4, statSync as statSync8 } from "node:fs";
-import path17 from "node:path";
+import { existsSync as existsSync11, lstatSync as lstatSync2, realpathSync as realpathSync5, readFileSync as readFileSync11, writeFileSync as writeFileSync6, openSync as openSync5, closeSync as closeSync5, fsyncSync as fsyncSync3, unlinkSync as unlinkSync2, renameSync as renameSync4, statSync as statSync7 } from "node:fs";
+import path16 from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 function schemaObjects(db) {
   return db.prepare(SCHEMA_OBJECT_QUERY).all().map((row) => [
@@ -5142,7 +5122,7 @@ function parseAuthoritySourceManifest(sourceManifestJson, sourceManifestDigest) 
   const parsed = parseHistoricalExceptionManifest(sourceManifestJson, sourceManifestDigest);
   const { manifest } = parsed;
   if (manifest.kind === void 0) return { ...parsed, kind: "historical_projection" };
-  if (manifest.kind !== "raw_json_archive_cutover" || typeof manifest.source_tasks_root !== "string" || !path17.isAbsolute(manifest.source_tasks_root) || typeof manifest.archive_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(manifest.archive_manifest_digest) || typeof manifest.source_files_digest !== "string" || !/^[0-9a-f]{64}$/u.test(manifest.source_files_digest) || manifest.task_count !== 0 || manifest.result_count !== 0 || manifest.event_count !== 0 || !Number.isSafeInteger(manifest.artifact_count) || manifest.artifact_count < 0 || !Number.isSafeInteger(manifest.artifact_bytes) || manifest.artifact_bytes < 0 || !Number.isSafeInteger(manifest.archive_file_count) || manifest.archive_file_count !== manifest.artifact_count || !Number.isSafeInteger(manifest.archive_byte_count) || manifest.archive_byte_count !== manifest.artifact_bytes || parsed.exceptions.length !== 0 || !Array.isArray(manifest.files) || manifest.files.length !== 0)
+  if (manifest.kind !== "raw_json_archive_cutover" || typeof manifest.source_tasks_root !== "string" || !path16.isAbsolute(manifest.source_tasks_root) || typeof manifest.archive_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(manifest.archive_manifest_digest) || typeof manifest.source_files_digest !== "string" || !/^[0-9a-f]{64}$/u.test(manifest.source_files_digest) || manifest.task_count !== 0 || manifest.result_count !== 0 || manifest.event_count !== 0 || !Number.isSafeInteger(manifest.artifact_count) || manifest.artifact_count < 0 || !Number.isSafeInteger(manifest.artifact_bytes) || manifest.artifact_bytes < 0 || !Number.isSafeInteger(manifest.archive_file_count) || manifest.archive_file_count !== manifest.artifact_count || !Number.isSafeInteger(manifest.archive_byte_count) || manifest.archive_byte_count !== manifest.artifact_bytes || parsed.exceptions.length !== 0 || !Array.isArray(manifest.files) || manifest.files.length !== 0)
     fail("invalid_raw_json_archive_cutover_manifest");
   return { ...parsed, kind: "raw_json_archive_cutover" };
 }
@@ -5159,24 +5139,25 @@ function validateHistoricalExceptionSnapshot(snapshot, sourceManifest) {
     if (!artifact || artifact.artifact_id !== exception.artifact_id || artifact.sha256 !== exception.sha256 || artifact.byte_length !== exception.byte_length || artifact.task_id !== null || artifact.attempt !== null || snapshot.results.some((result) => result.artifact_id === exception.artifact_id)) fail("invalid_historical_exception_artifact");
   }
 }
-function pathsFor(root, { databaseFileName = "operations.sqlite3", managedDataDirectory = false, allowCutoverPending = false, allowUnpublishedCutover = false } = {}) {
-  if (typeof root !== "string" || !path17.isAbsolute(root) || !existsSync12(root) || !lstatSync2(root).isDirectory() || lstatSync2(root).isSymbolicLink()) fail("invalid_data_root");
+function pathsFor(root, { databaseFileName = "operations.sqlite3", managedDataDirectory = false, allowCutoverPending = false, allowUnpublishedCutover = false, allowFreshBootstrapPending = false } = {}) {
+  if (typeof root !== "string" || !path16.isAbsolute(root) || !existsSync11(root) || !lstatSync2(root).isDirectory() || lstatSync2(root).isSymbolicLink()) fail("invalid_data_root");
   if (typeof databaseFileName !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/u.test(databaseFileName) || databaseFileName === "." || databaseFileName === "..") fail("invalid_database_file_name");
-  const resolved = realpathSync6.native(root);
+  const resolved = realpathSync5.native(root);
   if (!managedDataDirectory) {
-    const relative = path17.relative(HERE, resolved);
-    if (!relative || relative.startsWith("..") || path17.isAbsolute(relative)) fail("data_root_outside_candidate");
+    const relative = path16.relative(HERE, resolved);
+    if (!relative || relative.startsWith("..") || path16.isAbsolute(relative)) fail("data_root_outside_candidate");
   }
-  const db = path17.join(resolved, databaseFileName);
+  const db = path16.join(resolved, databaseFileName);
   const files = {
     root: resolved,
     db,
+    bootstrapPending: `${db}.bootstrap-pending.json`,
     cutoverPending: `${db}.cutover-pending.json`,
     cutoverPublished: `${db}.cutover-published.json`,
-    poison: path17.join(resolved, "ROOT_POISONED.json"),
-    intent: path17.join(resolved, "WRITER_INTENT.json")
+    poison: path16.join(resolved, "ROOT_POISONED.json"),
+    intent: path16.join(resolved, "WRITER_INTENT.json")
   };
-  for (const file of [files.db, `${files.db}-wal`, `${files.db}-shm`, files.cutoverPending, files.cutoverPublished, files.poison, files.intent]) {
+  for (const file of [files.db, `${files.db}-wal`, `${files.db}-shm`, files.bootstrapPending, files.cutoverPending, files.cutoverPublished, files.poison, files.intent]) {
     try {
       const st = lstatSync2(file);
       if (st.isSymbolicLink() || !st.isFile()) fail("unsafe_root_entry");
@@ -5185,7 +5166,7 @@ function pathsFor(root, { databaseFileName = "operations.sqlite3", managedDataDi
       if (e?.code !== "ENOENT") fail("unsafe_root_entry");
     }
   }
-  return { ...files, allowCutoverPending, allowUnpublishedCutover };
+  return { ...files, allowBootstrapPending: allowFreshBootstrapPending, allowCutoverPending, allowUnpublishedCutover };
 }
 function readPublishedCutoverReceipt(file) {
   let value;
@@ -5196,15 +5177,15 @@ function readPublishedCutoverReceipt(file) {
   }
   const keys = ["archive", "created_at", "cutover_id", "database_file", "migration_id", "schema_version", "source_manifest_digest", "source_root_digest", "state"];
   const archiveKeys = ["archive_directory", "byte_count", "file_count", "manifest_digest", "source_tasks_root"];
-  if (!value || Object.getPrototypeOf(value) !== Object.prototype || Object.keys(value).sort().join("|") !== keys.join("|") || value.schema_version !== 1 || value.state !== "authority_switch_receipt" || !validText2(value.migration_id, 128) || !validText2(value.cutover_id, 128) || typeof value.source_root_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.source_root_digest) || typeof value.source_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.source_manifest_digest) || !validText2(value.database_file, 96) || !validText2(value.created_at, 64) || Number.isNaN(Date.parse(value.created_at)) || !value.archive || Object.getPrototypeOf(value.archive) !== Object.prototype || Object.keys(value.archive).sort().join("|") !== archiveKeys.join("|") || !validText2(value.archive.archive_directory, 32767) || !path17.isAbsolute(value.archive.archive_directory) || !validText2(value.archive.source_tasks_root, 32767) || !path17.isAbsolute(value.archive.source_tasks_root) || typeof value.archive.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.archive.manifest_digest) || !Number.isSafeInteger(value.archive.file_count) || value.archive.file_count < 0 || !Number.isSafeInteger(value.archive.byte_count) || value.archive.byte_count < 0) fail("cutover_publication_receipt_invalid");
+  if (!value || Object.getPrototypeOf(value) !== Object.prototype || Object.keys(value).sort().join("|") !== keys.join("|") || value.schema_version !== 1 || value.state !== "authority_switch_receipt" || !validText2(value.migration_id, 128) || !validText2(value.cutover_id, 128) || typeof value.source_root_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.source_root_digest) || typeof value.source_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.source_manifest_digest) || !validText2(value.database_file, 96) || !validText2(value.created_at, 64) || Number.isNaN(Date.parse(value.created_at)) || !value.archive || Object.getPrototypeOf(value.archive) !== Object.prototype || Object.keys(value.archive).sort().join("|") !== archiveKeys.join("|") || !validText2(value.archive.archive_directory, 32767) || !path16.isAbsolute(value.archive.archive_directory) || !validText2(value.archive.source_tasks_root, 32767) || !path16.isAbsolute(value.archive.source_tasks_root) || typeof value.archive.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.archive.manifest_digest) || !Number.isSafeInteger(value.archive.file_count) || value.archive.file_count < 0 || !Number.isSafeInteger(value.archive.byte_count) || value.archive.byte_count < 0) fail("cutover_publication_receipt_invalid");
   return value;
 }
 function assertCutoverPublicationGate(db, paths) {
   const switched = db.prepare("SELECT * FROM authority_switch").all();
   if (switched.length === 0) return;
   if (switched.length !== 1) fail("authority_receipt_missing_or_ambiguous");
-  const pending = existsSync12(paths.cutoverPending);
-  const published = existsSync12(paths.cutoverPublished);
+  const pending = existsSync11(paths.cutoverPending);
+  const published = existsSync11(paths.cutoverPublished);
   if (pending && published) fail("cutover_publication_receipt_ambiguous");
   if (pending) {
     if (!paths.allowCutoverPending) fail("cutover_publish_pending");
@@ -5216,7 +5197,7 @@ function assertCutoverPublicationGate(db, paths) {
   }
   const receipt2 = switched[0];
   const publication = readPublishedCutoverReceipt(paths.cutoverPublished);
-  if (publication.database_file !== path17.basename(paths.db) || publication.migration_id !== receipt2.migration_id || publication.cutover_id !== receipt2.cutover_id || publication.source_root_digest !== receipt2.source_root_digest || publication.source_manifest_digest !== receipt2.source_manifest_digest || publication.archive.archive_directory !== receipt2.archive_directory || publication.archive.manifest_digest !== receipt2.archive_manifest_digest || publication.archive.source_tasks_root !== receipt2.archive_source_tasks_root || publication.archive.file_count !== receipt2.archive_file_count || publication.archive.byte_count !== receipt2.archive_byte_count) fail("cutover_publication_receipt_mismatch");
+  if (publication.database_file !== path16.basename(paths.db) || publication.migration_id !== receipt2.migration_id || publication.cutover_id !== receipt2.cutover_id || publication.source_root_digest !== receipt2.source_root_digest || publication.source_manifest_digest !== receipt2.source_manifest_digest || publication.archive.archive_directory !== receipt2.archive_directory || publication.archive.manifest_digest !== receipt2.archive_manifest_digest || publication.archive.source_tasks_root !== receipt2.archive_source_tasks_root || publication.archive.file_count !== receipt2.archive_file_count || publication.archive.byte_count !== receipt2.archive_byte_count) fail("cutover_publication_receipt_mismatch");
 }
 function writePoison(file, value) {
   const tmp = `${file}.${randomUUID5()}.tmp`;
@@ -5230,7 +5211,7 @@ function writePoison(file, value) {
   try {
     renameSync4(tmp, file);
   } catch (error2) {
-    if (!existsSync12(file)) throw error2;
+    if (!existsSync11(file)) throw error2;
     try {
       unlinkSync2(tmp);
     } catch {
@@ -5464,12 +5445,12 @@ function validateTaskPackage(task) {
 }
 function validateWorkspace(input, validator) {
   if (typeof input !== "string" || !input.trim()) fail("workspace_missing");
-  if (!path17.isAbsolute(input)) fail("workspace_not_absolute");
+  if (!path16.isAbsolute(input)) fail("workspace_not_absolute");
   if (input.replace(/\//g, "\\").startsWith("\\\\")) fail("workspace_unsupported_path_form");
   let st, canonicalPath;
   try {
-    st = statSync8(input);
-    canonicalPath = realpathSync6(input);
+    st = statSync7(input);
+    canonicalPath = realpathSync5(input);
   } catch {
     fail("workspace_unavailable");
   }
@@ -5503,7 +5484,7 @@ var init_store = __esm({
     "use strict";
     init_interaction_channel();
     init_json_history_result_exceptions();
-    HERE = path17.dirname(fileURLToPath4(import.meta.url));
+    HERE = path16.dirname(fileURLToPath4(import.meta.url));
     SCHEMA = readFileSync11(new URL("./schema.sql", import.meta.url), "utf8");
     ADMIN_ABANDONMENT_SCHEMA = readFileSync11(new URL("./admin-abandonment.sql", import.meta.url), "utf8");
     CONSTRUCT = /* @__PURE__ */ Symbol("construct");
@@ -5587,17 +5568,32 @@ var init_store = __esm({
       }
       static initialize(root, options = {}) {
         const p = pathsFor(root, options);
-        if (existsSync12(p.db) || existsSync12(p.cutoverPending) || existsSync12(p.cutoverPublished) || existsSync12(p.poison) || existsSync12(p.intent)) fail("root_not_empty");
+        if (existsSync11(p.db) || existsSync11(p.cutoverPending) || existsSync11(p.cutoverPublished) || existsSync11(p.poison) || existsSync11(p.intent)) fail("root_not_empty");
+        if (options.onFreshBootstrapStage !== void 0 && typeof options.onFreshBootstrapStage !== "function") fail("invalid_fresh_bootstrap_stage_hook");
+        const freshBootstrapStage = options.onFreshBootstrapStage;
         const db = new DatabaseSync(p.db, { timeout: 5e3 });
         try {
           db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; BEGIN IMMEDIATE");
           db.exec(SCHEMA);
           db.prepare("INSERT INTO authority_metadata(singleton,schema_version,next_generation) VALUES(1,?,0)").run(SCHEMA_VERSION);
+          if (options.freshInstallReceiptId !== void 0) freshBootstrapStage?.("schema_initialized");
           if (options.freshInstallReceiptId !== void 0) {
-            if (!validText2(options.freshInstallReceiptId, 128) || !validText2(options.verifierVersion, 128)) fail("invalid_fresh_install_receipt");
+            if (!validText2(options.freshInstallReceiptId, 128) || !validText2(options.verifierVersion, 128) || !Number.isInteger(options.freshInstallCapacityLimit) || options.freshInstallCapacityLimit < 1 || options.freshInstallCapacityLimit > 8) fail("invalid_fresh_install_receipt");
+            freshBootstrapStage?.("before_ready_receipt");
             db.prepare("INSERT INTO fresh_install_receipt(singleton,receipt_id,verifier_version,created_at) VALUES(1,?,?,?)").run(options.freshInstallReceiptId, options.verifierVersion, (/* @__PURE__ */ new Date()).toISOString());
+            freshBootstrapStage?.("ready_receipt_written");
+            const operationId = "fresh-install-capacity-v1";
+            const capacityLimit = options.freshInstallCapacityLimit;
+            const requestDigest = digest2({ operation_id: operationId, capacity_limit: capacityLimit, expected_generation: 0 });
+            const at = (/* @__PURE__ */ new Date()).toISOString();
+            db.prepare("INSERT INTO manager_operations(operation_id,operation_kind,request_digest,revision,phase,policy_generation,capacity_limit,created_at) VALUES(?,'capacity_policy_change',?,1,'policy_change_committed',1,?,?)").run(operationId, requestDigest, capacityLimit, at);
+            const evidenceJson = canonical3({ generation: 1, capacity_limit: capacityLimit });
+            const evidenceDigest = digest2(evidenceJson);
+            db.prepare("INSERT INTO manager_operation_events(event_cursor,operation_id,sequence,event_type,from_phase,to_phase,generation,evidence_json,evidence_digest,at) VALUES(1,?,1,'capacity_policy_committed',NULL,'policy_change_committed',NULL,?,?,?)").run(operationId, evidenceJson, evidenceDigest, at);
+            db.prepare("UPDATE authority_metadata SET next_event_cursor=1,policy_version=1,policy_generation=1,capacity_limit=?,policy_operation_id=? WHERE singleton=1").run(capacityLimit, operationId);
           }
           db.exec(`PRAGMA user_version=${SCHEMA_VERSION}; COMMIT`);
+          if (options.freshInstallReceiptId !== void 0) freshBootstrapStage?.("capacity_provisioned");
         } catch (e) {
           try {
             db.exec("ROLLBACK");
@@ -5610,9 +5606,10 @@ var init_store = __esm({
       }
       static open(root, { fault, ...pathOptions } = {}) {
         const p = pathsFor(root, pathOptions);
-        if (existsSync12(p.cutoverPending)) fail("cutover_publish_pending");
-        if (existsSync12(p.poison)) fail("root_poisoned");
-        if (!existsSync12(p.db)) fail("database_missing");
+        if (existsSync11(p.bootstrapPending) && !p.allowBootstrapPending) fail("sqlite_bootstrap_pending");
+        if (existsSync11(p.cutoverPending)) fail("cutover_publish_pending");
+        if (existsSync11(p.poison)) fail("root_poisoned");
+        if (!existsSync11(p.db)) fail("database_missing");
         const db = new DatabaseSync(p.db, { timeout: 5e3 });
         db.exec("PRAGMA foreign_keys=ON");
         const s = new _IsolatedAdmissionStore(CONSTRUCT, db, p, fault);
@@ -5632,8 +5629,9 @@ var init_store = __esm({
       /** Open only the current candidate schema read-only for conservative recovery inspection. */
       static openForRecovery(root, options = {}) {
         const p = pathsFor(root, options);
-        if (existsSync12(p.cutoverPending) && !p.allowCutoverPending) fail("cutover_publish_pending");
-        if (!existsSync12(p.db)) fail("database_missing");
+        if (existsSync11(p.bootstrapPending)) fail("sqlite_bootstrap_pending");
+        if (existsSync11(p.cutoverPending) && !p.allowCutoverPending) fail("cutover_publish_pending");
+        if (!existsSync11(p.db)) fail("database_missing");
         const db = new DatabaseSync(p.db, { timeout: 5e3, readOnly: true });
         try {
           if (db.prepare("PRAGMA user_version").get().user_version !== SCHEMA_VERSION) fail("schema_version_unknown");
@@ -5660,7 +5658,7 @@ var init_store = __esm({
         this.#db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
       }
       get poisoned() {
-        return this.#poisoned || existsSync12(this.#paths.poison);
+        return this.#poisoned || existsSync11(this.#paths.poison);
       }
       get foreignKeysEnabled() {
         this.#assertOpen();
@@ -5674,9 +5672,13 @@ var init_store = __esm({
       /** Production startup requires exactly one durable reason for this root. */
       assertAuthorityReady(expectedRuntimeRosterDigest) {
         return this.#readConsistent(() => {
+          const integrity = this.#db.prepare("PRAGMA integrity_check").all();
+          if (integrity.length !== 1 || integrity[0].integrity_check !== "ok") fail("database_corrupt");
           const fresh = this.#db.prepare("SELECT * FROM fresh_install_receipt").all();
           const switched = this.#db.prepare("SELECT * FROM authority_switch").all();
           if (fresh.length + switched.length !== 1) fail("authority_receipt_missing_or_ambiguous");
+          const metadata = this.#db.prepare("SELECT policy_generation,capacity_limit,policy_operation_id FROM authority_metadata WHERE singleton=1").get();
+          if (!metadata || metadata.policy_generation < 1 || metadata.capacity_limit < 1 || metadata.capacity_limit > 8 || !validId3(metadata.policy_operation_id)) fail("capacity_policy_missing");
           if (fresh.length) {
             if (this.#db.prepare("SELECT COUNT(*) AS n FROM migration_runs").get().n !== 0 || this.#db.prepare("SELECT COUNT(*) AS n FROM json_artifacts").get().n !== 0 || this.#db.prepare("SELECT COUNT(*) AS n FROM migrated_task_results").get().n !== 0 || this.#db.prepare("SELECT COUNT(*) AS n FROM migrated_task_events").get().n !== 0) fail("fresh_install_contains_legacy_data");
             return { kind: "fresh_install", receipt_id: fresh[0].receipt_id, verifier_version: fresh[0].verifier_version };
@@ -5718,7 +5720,7 @@ var init_store = __esm({
         const sourceKeys = ["manifest_digest", "manifest_json", "root_digest"];
         const archive = snapshot.archive;
         const archiveKeys = ["archive_directory", "byte_count", "file_count", "manifest_digest", "source_tasks_root"];
-        if (Object.keys(snapshot).sort().join("|") !== topKeys.join("|") || !source || Object.getPrototypeOf(source) !== Object.prototype || Object.keys(source).sort().join("|") !== sourceKeys.join("|") || !archive || Object.getPrototypeOf(archive) !== Object.prototype || Object.keys(archive).sort().join("|") !== archiveKeys.join("|") || !validId3(snapshot.migration_id) || !validId3(snapshot.cutover_id) || !validText2(snapshot.verifier_version, 128) || !validText2(snapshot.protocol_version, 128) || typeof snapshot.runtime_roster_digest !== "string" || !/^[0-9a-f]{64}$/u.test(snapshot.runtime_roster_digest) || typeof source.root_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.root_digest) || typeof source.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.manifest_digest) || typeof source.manifest_json !== "string" || digest2(source.manifest_json) !== source.manifest_digest || !validText2(archive.archive_directory, 32767) || !path17.isAbsolute(archive.archive_directory) || !validText2(archive.source_tasks_root, 32767) || !path17.isAbsolute(archive.source_tasks_root) || typeof archive.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(archive.manifest_digest) || !Number.isSafeInteger(archive.file_count) || archive.file_count < 0 || !Number.isSafeInteger(archive.byte_count) || archive.byte_count < 0) fail("invalid_raw_cutover_snapshot");
+        if (Object.keys(snapshot).sort().join("|") !== topKeys.join("|") || !source || Object.getPrototypeOf(source) !== Object.prototype || Object.keys(source).sort().join("|") !== sourceKeys.join("|") || !archive || Object.getPrototypeOf(archive) !== Object.prototype || Object.keys(archive).sort().join("|") !== archiveKeys.join("|") || !validId3(snapshot.migration_id) || !validId3(snapshot.cutover_id) || !validText2(snapshot.verifier_version, 128) || !validText2(snapshot.protocol_version, 128) || typeof snapshot.runtime_roster_digest !== "string" || !/^[0-9a-f]{64}$/u.test(snapshot.runtime_roster_digest) || typeof source.root_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.root_digest) || typeof source.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.manifest_digest) || typeof source.manifest_json !== "string" || digest2(source.manifest_json) !== source.manifest_digest || !validText2(archive.archive_directory, 32767) || !path16.isAbsolute(archive.archive_directory) || !validText2(archive.source_tasks_root, 32767) || !path16.isAbsolute(archive.source_tasks_root) || typeof archive.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(archive.manifest_digest) || !Number.isSafeInteger(archive.file_count) || archive.file_count < 0 || !Number.isSafeInteger(archive.byte_count) || archive.byte_count < 0) fail("invalid_raw_cutover_snapshot");
         const policy = parseAuthoritySourceManifest(source.manifest_json, source.manifest_digest);
         if (policy.kind !== "raw_json_archive_cutover" || policy.manifest.source_tasks_root !== archive.source_tasks_root || policy.manifest.archive_manifest_digest !== archive.manifest_digest || policy.manifest.archive_file_count !== archive.file_count || policy.manifest.archive_byte_count !== archive.byte_count) fail("raw_cutover_archive_identity_mismatch");
         const at = (/* @__PURE__ */ new Date()).toISOString();
@@ -5792,7 +5794,7 @@ var init_store = __esm({
         const sourceKeys = ["artifact_bytes", "artifact_count", "event_count", "historical_exception_count", "historical_exception_digest", "manifest_digest", "manifest_json", "result_count", "root_digest", "task_count"];
         const archive = snapshot.archive;
         const archiveKeys = ["archive_directory", "byte_count", "file_count", "manifest_digest", "source_tasks_root"];
-        if (!source || Object.getPrototypeOf(source) !== Object.prototype || Object.keys(source).sort().join("|") !== sourceKeys.join("|") || !archive || Object.getPrototypeOf(archive) !== Object.prototype || Object.keys(archive).sort().join("|") !== archiveKeys.join("|") || !validId3(snapshot.migration_id) || !validId3(snapshot.cutover_id) || !validText2(snapshot.verifier_version, 128) || !validText2(snapshot.protocol_version, 128) || typeof snapshot.runtime_roster_digest !== "string" || !/^[0-9a-f]{64}$/u.test(snapshot.runtime_roster_digest) || typeof source.root_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.root_digest) || typeof source.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.manifest_digest) || typeof source.manifest_json !== "string" || digest2(source.manifest_json) !== source.manifest_digest || !validText2(archive.archive_directory, 32767) || !path17.isAbsolute(archive.archive_directory) || !validText2(archive.source_tasks_root, 32767) || !path17.isAbsolute(archive.source_tasks_root) || typeof archive.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(archive.manifest_digest) || !Number.isSafeInteger(archive.file_count) || archive.file_count < 0 || !Number.isSafeInteger(archive.byte_count) || archive.byte_count < 0 || archive.file_count !== source.artifact_count || archive.byte_count !== source.artifact_bytes || !Array.isArray(snapshot.tasks) || !Array.isArray(snapshot.artifacts) || !Array.isArray(snapshot.results) || !Array.isArray(snapshot.events) || !Array.isArray(snapshot.historical_exceptions) || ![source.task_count, source.artifact_count, source.artifact_bytes, source.result_count, source.event_count].every((v) => Number.isSafeInteger(v) && v >= 0) || !Number.isSafeInteger(source.historical_exception_count) || source.historical_exception_count < 0 || typeof source.historical_exception_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.historical_exception_digest) || source.historical_exception_count !== snapshot.historical_exceptions.length || source.historical_exception_digest !== historicalResultExceptionSetDigest(snapshot.historical_exceptions) || source.artifact_count !== snapshot.artifacts.length || source.result_count !== snapshot.results.length || source.event_count !== snapshot.events.length) fail("invalid_migration_snapshot");
+        if (!source || Object.getPrototypeOf(source) !== Object.prototype || Object.keys(source).sort().join("|") !== sourceKeys.join("|") || !archive || Object.getPrototypeOf(archive) !== Object.prototype || Object.keys(archive).sort().join("|") !== archiveKeys.join("|") || !validId3(snapshot.migration_id) || !validId3(snapshot.cutover_id) || !validText2(snapshot.verifier_version, 128) || !validText2(snapshot.protocol_version, 128) || typeof snapshot.runtime_roster_digest !== "string" || !/^[0-9a-f]{64}$/u.test(snapshot.runtime_roster_digest) || typeof source.root_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.root_digest) || typeof source.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.manifest_digest) || typeof source.manifest_json !== "string" || digest2(source.manifest_json) !== source.manifest_digest || !validText2(archive.archive_directory, 32767) || !path16.isAbsolute(archive.archive_directory) || !validText2(archive.source_tasks_root, 32767) || !path16.isAbsolute(archive.source_tasks_root) || typeof archive.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(archive.manifest_digest) || !Number.isSafeInteger(archive.file_count) || archive.file_count < 0 || !Number.isSafeInteger(archive.byte_count) || archive.byte_count < 0 || archive.file_count !== source.artifact_count || archive.byte_count !== source.artifact_bytes || !Array.isArray(snapshot.tasks) || !Array.isArray(snapshot.artifacts) || !Array.isArray(snapshot.results) || !Array.isArray(snapshot.events) || !Array.isArray(snapshot.historical_exceptions) || ![source.task_count, source.artifact_count, source.artifact_bytes, source.result_count, source.event_count].every((v) => Number.isSafeInteger(v) && v >= 0) || !Number.isSafeInteger(source.historical_exception_count) || source.historical_exception_count < 0 || typeof source.historical_exception_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.historical_exception_digest) || source.historical_exception_count !== snapshot.historical_exceptions.length || source.historical_exception_digest !== historicalResultExceptionSetDigest(snapshot.historical_exceptions) || source.artifact_count !== snapshot.artifacts.length || source.result_count !== snapshot.results.length || source.event_count !== snapshot.events.length) fail("invalid_migration_snapshot");
         const sourceManifest = parseHistoricalExceptionManifest(source.manifest_json, source.manifest_digest);
         if (sourceManifest.manifest.task_count !== source.task_count || sourceManifest.manifest.artifact_count !== source.artifact_count || sourceManifest.manifest.artifact_bytes !== source.artifact_bytes || sourceManifest.manifest.result_count !== source.result_count || sourceManifest.manifest.event_count !== source.event_count || sourceManifest.manifest.historical_exception_count !== source.historical_exception_count || sourceManifest.manifest.historical_exception_digest !== source.historical_exception_digest || canonical3(sourceManifest.exceptions) !== canonical3(snapshot.historical_exceptions)) fail("invalid_source_manifest");
         validateHistoricalExceptionSnapshot(snapshot, sourceManifest);
@@ -7184,7 +7186,7 @@ var init_store = __esm({
             events: this.#db.prepare("SELECT * FROM manager_operation_events ORDER BY operation_id,sequence").all()
           };
         });
-        return { ...snapshot, root_poisoned: this.poisoned || existsSync12(this.#paths.intent) };
+        return { ...snapshot, root_poisoned: this.poisoned || existsSync11(this.#paths.intent) };
       }
       /** Read-only recovery entry point. Writable Stores cannot be used as Recovery authority. */
       readRecoverySnapshot() {
@@ -7216,7 +7218,7 @@ var init_store = __esm({
           }
           this.#db.exec("COMMIT");
           transaction = false;
-          const poisoned = this.poisoned, writerIntent = existsSync12(this.#paths.intent);
+          const poisoned = this.poisoned, writerIntent = existsSync11(this.#paths.intent);
           const rootBlocked = Boolean(integrityError || meta2.length !== 1 || poisoned || writerIntent);
           const operationsWithRecovery = operations.map((row) => {
             const adminAbandonment = adminAbandonments.get(row.operation_id);
@@ -8126,7 +8128,7 @@ var init_store = __esm({
           }
           throw e;
         } finally {
-          if (settled && !this.#poisoned && !existsSync12(this.#paths.poison)) {
+          if (settled && !this.#poisoned && !existsSync11(this.#paths.poison)) {
             try {
               const intent = JSON.parse(readFileSync11(this.#paths.intent, "utf8"));
               if (intent.token !== token) fail("writer_intent_identity_mismatch");
@@ -8169,7 +8171,7 @@ var init_store = __esm({
             if (migrationRuns.length || migratedResultsCount || migratedEventsCount || this.#db.prepare("SELECT COUNT(*) AS n FROM json_artifacts").get().n) fail("fresh_install_contains_legacy_data");
           } else if (authoritySwitches.length) {
             const receipt2 = authoritySwitches[0], migration = migrationRuns[0];
-            if (!migration || migration.state !== "verified" || migration.migration_id !== receipt2.migration_id || migration.source_root_digest !== receipt2.source_root_digest || migration.source_manifest_digest !== receipt2.source_manifest_digest || digest2(migration.source_manifest_json) !== migration.source_manifest_digest || !validText2(migration.archive_directory, 32767) || !path17.isAbsolute(migration.archive_directory) || !validText2(receipt2.archive_directory, 32767) || !path17.isAbsolute(receipt2.archive_directory) || migration.archive_directory !== receipt2.archive_directory || typeof migration.archive_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(migration.archive_manifest_digest) || migration.archive_manifest_digest !== receipt2.archive_manifest_digest || !validText2(migration.archive_source_tasks_root, 32767) || !path17.isAbsolute(migration.archive_source_tasks_root) || migration.archive_source_tasks_root !== receipt2.archive_source_tasks_root || !Number.isSafeInteger(migration.archive_file_count) || migration.archive_file_count < 0 || migration.archive_file_count !== migration.source_artifact_count || migration.archive_file_count !== receipt2.archive_file_count || !Number.isSafeInteger(migration.archive_byte_count) || migration.archive_byte_count < 0 || migration.archive_byte_count !== migration.source_artifact_bytes || migration.archive_byte_count !== receipt2.archive_byte_count || receipt2.schema_version !== SCHEMA_VERSION || !validText2(receipt2.protocol_version, 128) || typeof receipt2.runtime_roster_digest !== "string" || !/^[0-9a-f]{64}$/u.test(receipt2.runtime_roster_digest) || !validText2(receipt2.verifier_version, 128) || !validText2(migration.verifier_version, 128) || receipt2.verifier_version !== migration.verifier_version || !validText2(receipt2.cutover_id, 128) || !validText2(receipt2.created_at, 64) || Number.isNaN(Date.parse(receipt2.created_at)) || !validText2(migration.created_at, 64) || !validText2(migration.verified_at, 64) || Number.isNaN(Date.parse(migration.created_at)) || Number.isNaN(Date.parse(migration.verified_at))) fail("authority_switch_invalid");
+            if (!migration || migration.state !== "verified" || migration.migration_id !== receipt2.migration_id || migration.source_root_digest !== receipt2.source_root_digest || migration.source_manifest_digest !== receipt2.source_manifest_digest || digest2(migration.source_manifest_json) !== migration.source_manifest_digest || !validText2(migration.archive_directory, 32767) || !path16.isAbsolute(migration.archive_directory) || !validText2(receipt2.archive_directory, 32767) || !path16.isAbsolute(receipt2.archive_directory) || migration.archive_directory !== receipt2.archive_directory || typeof migration.archive_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(migration.archive_manifest_digest) || migration.archive_manifest_digest !== receipt2.archive_manifest_digest || !validText2(migration.archive_source_tasks_root, 32767) || !path16.isAbsolute(migration.archive_source_tasks_root) || migration.archive_source_tasks_root !== receipt2.archive_source_tasks_root || !Number.isSafeInteger(migration.archive_file_count) || migration.archive_file_count < 0 || migration.archive_file_count !== migration.source_artifact_count || migration.archive_file_count !== receipt2.archive_file_count || !Number.isSafeInteger(migration.archive_byte_count) || migration.archive_byte_count < 0 || migration.archive_byte_count !== migration.source_artifact_bytes || migration.archive_byte_count !== receipt2.archive_byte_count || receipt2.schema_version !== SCHEMA_VERSION || !validText2(receipt2.protocol_version, 128) || typeof receipt2.runtime_roster_digest !== "string" || !/^[0-9a-f]{64}$/u.test(receipt2.runtime_roster_digest) || !validText2(receipt2.verifier_version, 128) || !validText2(migration.verifier_version, 128) || receipt2.verifier_version !== migration.verifier_version || !validText2(receipt2.cutover_id, 128) || !validText2(receipt2.created_at, 64) || Number.isNaN(Date.parse(receipt2.created_at)) || !validText2(migration.created_at, 64) || !validText2(migration.verified_at, 64) || Number.isNaN(Date.parse(migration.created_at)) || Number.isNaN(Date.parse(migration.verified_at))) fail("authority_switch_invalid");
             const policy = parseAuthoritySourceManifest(migration.source_manifest_json, migration.source_manifest_digest);
             if (policy.manifest.task_count !== migration.source_task_count || policy.manifest.artifact_count !== migration.source_artifact_count || policy.manifest.artifact_bytes !== migration.source_artifact_bytes || policy.manifest.result_count !== migration.source_result_count || policy.manifest.event_count !== migration.source_event_count) fail("authority_switch_invalid");
           } else if (migrationRuns.length || migratedResultsCount || migratedEventsCount || this.#db.prepare("SELECT COUNT(*) AS n FROM json_artifacts").get().n) {
@@ -8802,7 +8804,9 @@ __export(lifecycle_gate_exports, {
   readAllLifecycleEventsForRecovery: () => readAllLifecycleEventsForRecovery
 });
 import { createHash as createHash15, randomUUID as randomUUID6 } from "node:crypto";
-import { existsSync as existsSync13 } from "node:fs";
+import { closeSync as closeSync6, existsSync as existsSync12, fsyncSync as fsyncSync4, linkSync, lstatSync as lstatSync3, openSync as openSync6, readFileSync as readFileSync12, readdirSync as readdirSync3, realpathSync as realpathSync6, unlinkSync as unlinkSync3, writeFileSync as writeFileSync7 } from "node:fs";
+import { spawn as spawn5 } from "node:child_process";
+import path17 from "node:path";
 function readAllLifecycleEventsForRecovery(port, operationId) {
   const pageSize = 200;
   const events = [];
@@ -8851,30 +8855,605 @@ async function initializeIsolatedCandidateRoot(root, version2 = process.versions
     throw new LifecycleGateError("sqlite_initialization_failed", error2 instanceof Error ? error2.message : "initialization failed");
   }
 }
-async function initializeFreshInstallSqliteRoot(root, databaseFileName, version2 = process.versions.node) {
+async function initializeFreshInstallSqliteRoot(root, databaseFileName, version2 = process.versions.node, processProbe = createPlatformProbe(), options = {}) {
+  if (typeof databaseFileName !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/u.test(databaseFileName) || databaseFileName === "." || databaseFileName === "..") {
+    throw new LifecycleGateError("sqlite_bootstrap_database_name_invalid");
+  }
   const modules = await loadLifecycleCandidateModules(version2);
+  const key = path17.join(path17.resolve(root), databaseFileName);
+  const pending = freshBootstrapPromises.get(key);
+  if (pending) return pending;
+  const operation = ensureFreshSqliteAuthority(root, databaseFileName, modules, processProbe, options);
+  freshBootstrapPromises.set(key, operation);
   try {
-    const receiptId = `fresh-install-${randomUUID6()}`;
-    const store = modules.Store.initialize(root, {
-      databaseFileName,
+    return await operation;
+  } finally {
+    if (freshBootstrapPromises.get(key) === operation) freshBootstrapPromises.delete(key);
+  }
+}
+async function acquireFreshBootstrapLock(root, databaseFileName, timeoutMs, ownerIdentity, processProbe) {
+  if (process.platform !== "win32") {
+    throw new LifecycleGateError(
+      "sqlite_bootstrap_lock_platform_unsupported",
+      "Fresh SQLite bootstrap requires the Windows exclusive-file-handle lock"
+    );
+  }
+  const lockPath = path17.join(root, `${databaseFileName}.bootstrap.lock`);
+  const deadline = Date.now() + timeoutMs;
+  for (; ; ) {
+    assertFreshBootstrapRootPath(root);
+    assertBootstrapLockPath(lockPath);
+    const attempt = await tryAcquireWindowsBootstrapLock(root, lockPath, databaseFileName, ownerIdentity, processProbe);
+    if (attempt.kind === "acquired") return attempt.lock;
+    if (Date.now() >= deadline) {
+      throw new LifecycleGateError(
+        "sqlite_bootstrap_lock_timeout",
+        `timed out waiting ${timeoutMs} ms for the SQLite bootstrap lock`
+      );
+    }
+    await delay(Math.min(FRESH_BOOTSTRAP_LOCK_RETRY_MS, Math.max(1, deadline - Date.now())));
+  }
+}
+function assertBootstrapLockPath(lockPath) {
+  try {
+    const stat2 = lstatSync3(lockPath);
+    if (!stat2.isFile() || stat2.isSymbolicLink()) {
+      throw new LifecycleGateError("sqlite_bootstrap_lock_unsafe_entry");
+    }
+  } catch (error2) {
+    if (error2.code !== "ENOENT") throw error2;
+  }
+}
+async function tryAcquireWindowsBootstrapLock(root, lockPath, databaseFileName, ownerIdentity, processProbe) {
+  const record3 = `${JSON.stringify({
+    schema_version: 1,
+    state: "held",
+    database_file: databaseFileName,
+    owner_identity: ownerIdentity,
+    acquired_at: (/* @__PURE__ */ new Date()).toISOString(),
+    token: randomUUID6()
+  })}
+`;
+  const releaseRecord = `${JSON.stringify({
+    schema_version: 1,
+    state: "released",
+    database_file: databaseFileName,
+    released_at: (/* @__PURE__ */ new Date()).toISOString()
+  })}
+`;
+  const systemRoot = process.env["SystemRoot"];
+  const absolutePowerShell = systemRoot ? path17.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe") : "powershell.exe";
+  const executable = existsSync12(absolutePowerShell) ? absolutePowerShell : "powershell.exe";
+  const child = spawn5(executable, [
+    "-NoLogo",
+    "-NoProfile",
+    "-NonInteractive",
+    "-EncodedCommand",
+    Buffer.from(WINDOWS_BOOTSTRAP_LOCK_SCRIPT, "utf16le").toString("base64")
+  ], {
+    cwd: root,
+    env: {
+      ...process.env,
+      ZCODE_BOOTSTRAP_LOCK_FILE: lockPath,
+      ZCODE_BOOTSTRAP_LOCK_RECORD_B64: Buffer.from(record3, "utf8").toString("base64"),
+      ZCODE_BOOTSTRAP_LOCK_RELEASE_RECORD_B64: Buffer.from(releaseRecord, "utf8").toString("base64")
+    },
+    stdio: ["pipe", "pipe", "pipe"],
+    windowsHide: true
+  });
+  const exitPromise = new Promise((resolve) => {
+    child.once("exit", (code, signal) => resolve({ code, signal }));
+  });
+  let helperExit = null;
+  void exitPromise.then((exit) => {
+    helperExit = exit;
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdin.on("error", () => {
+  });
+  child.stdout.on("data", (chunk) => {
+    stdout += chunk;
+  });
+  child.stderr.on("data", (chunk) => {
+    stderr += chunk;
+  });
+  let previousRecordBase64 = null;
+  const handshake = await new Promise((resolve) => {
+    let settled = false;
+    const finish = (state) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(state);
+    };
+    const inspectOutput = () => {
+      if (/(?:^|\r?\n)BUSY(?:\r?\n|$)/u.test(stdout)) finish("busy");
+      else {
+        const match = /(?:^|\r?\n)ACQUIRED:([A-Za-z0-9+/=]*)(?:\r?\n|$)/u.exec(stdout);
+        if (match) {
+          previousRecordBase64 = match[1] ?? "";
+          finish("acquired");
+        }
+      }
+    };
+    child.stdout.on("data", inspectOutput);
+    child.once("error", () => finish("failed"));
+    void exitPromise.then(({ code }) => finish(code === 73 ? "busy" : "failed"));
+    const timer = setTimeout(() => {
+      finish("failed");
+      child.kill();
+    }, FRESH_BOOTSTRAP_LOCK_HANDSHAKE_TIMEOUT_MS);
+  });
+  if (handshake === "acquired") {
+    try {
+      const previous = parsePreviousBootstrapLockRecord(previousRecordBase64 ?? "", databaseFileName);
+      if (previous?.state === "held") {
+        const [verdict2] = await processProbe.probe([{ pid: previous.owner_identity.pid, identity: previous.owner_identity }]);
+        if (verdict2?.state === "alive") {
+          throw new LifecycleGateError(
+            "sqlite_bootstrap_previous_owner_still_alive",
+            "the previous bootstrap owner is still running after its exclusive lock helper exited"
+          );
+        }
+        if (verdict2?.state !== "exited") {
+          throw new LifecycleGateError(
+            "sqlite_bootstrap_previous_owner_unknown",
+            "the previous bootstrap owner's process identity could not be proven exited"
+          );
+        }
+      }
+      child.stdin.write("COMMIT\n");
+      await new Promise((resolve, reject) => {
+        let settled = false;
+        const finish = (error2) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          if (error2) reject(error2);
+          else resolve();
+        };
+        const inspectOutput = () => {
+          if (/(?:^|\r?\n)LOCKED(?:\r?\n|$)/u.test(stdout)) finish();
+        };
+        child.stdout.on("data", inspectOutput);
+        void exitPromise.then(({ code, signal }) => finish(new LifecycleGateError(
+          "sqlite_bootstrap_lock_helper_failed",
+          `exclusive lock helper exited before commit with code ${code ?? "null"} and signal ${signal ?? "none"}; ${stderr.trim()}`
+        )));
+        inspectOutput();
+        const timer = setTimeout(() => {
+          finish(new LifecycleGateError("sqlite_bootstrap_lock_helper_timeout"));
+          child.kill();
+        }, FRESH_BOOTSTRAP_LOCK_HANDSHAKE_TIMEOUT_MS);
+      });
+    } catch (error2) {
+      child.stdin.end();
+      await waitForChildExit(child, exitPromise, FRESH_BOOTSTRAP_LOCK_RELEASE_TIMEOUT_MS);
+      throw error2;
+    }
+    try {
+      assertBootstrapLockPath(lockPath);
+    } catch (error2) {
+      child.stdin.end();
+      await waitForChildExit(child, exitPromise, FRESH_BOOTSTRAP_LOCK_RELEASE_TIMEOUT_MS);
+      throw error2;
+    }
+    let released = false;
+    return {
+      kind: "acquired",
+      lock: {
+        assertHeld: () => {
+          if (released || helperExit !== null || child.exitCode !== null || child.signalCode !== null || !processExists(child.pid)) {
+            throw new LifecycleGateError(
+              "sqlite_bootstrap_lock_lost",
+              "the SQLite bootstrap lock helper exited while the bootstrap was in progress"
+            );
+          }
+        },
+        release: async () => {
+          if (released) return;
+          released = true;
+          let exit = helperExit;
+          if (exit === null && child.exitCode === null && child.signalCode === null && processExists(child.pid)) {
+            child.stdin.write("RELEASE\n");
+            await waitForChildExit(child, exitPromise, FRESH_BOOTSTRAP_LOCK_RELEASE_TIMEOUT_MS);
+            exit = await exitPromise;
+          } else {
+            exit ??= await exitPromise;
+          }
+          if (exit.code !== 0 || exit.signal !== null) {
+            throw new LifecycleGateError(
+              "sqlite_bootstrap_lock_lost",
+              `exclusive lock helper exited abnormally with code ${exit.code ?? "null"} and signal ${exit.signal ?? "none"}`
+            );
+          }
+        }
+      }
+    };
+  }
+  if (handshake === "busy") {
+    child.stdin.end();
+    await waitForChildExit(child, exitPromise, FRESH_BOOTSTRAP_LOCK_RELEASE_TIMEOUT_MS);
+    return { kind: "busy" };
+  }
+  child.stdin.end();
+  await waitForChildExit(child, exitPromise, FRESH_BOOTSTRAP_LOCK_RELEASE_TIMEOUT_MS);
+  throw new LifecycleGateError(
+    "sqlite_bootstrap_lock_helper_failed",
+    stderr.trim() || `exclusive lock helper exited with code ${child.exitCode ?? "unknown"}`
+  );
+}
+function processExists(pid) {
+  if (!pid || !Number.isSafeInteger(pid) || pid < 1) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error2) {
+    const code = error2.code;
+    if (code === "ESRCH") return false;
+    if (code === "EPERM") return true;
+    throw new LifecycleGateError(
+      "sqlite_bootstrap_lock_helper_unknown",
+      error2 instanceof Error ? error2.message : "bootstrap lock helper liveness could not be determined"
+    );
+  }
+}
+async function waitForChildExit(child, exitPromise, timeoutMs) {
+  let timer;
+  const timedOut = await Promise.race([
+    exitPromise.then(() => false),
+    new Promise((resolve) => {
+      timer = setTimeout(() => resolve(true), timeoutMs);
+    })
+  ]);
+  if (timer) clearTimeout(timer);
+  if (!timedOut) return;
+  child.kill();
+  const killed = await Promise.race([
+    exitPromise.then(() => true),
+    new Promise((resolve) => {
+      timer = setTimeout(() => resolve(false), timeoutMs);
+    })
+  ]);
+  if (timer) clearTimeout(timer);
+  if (!killed) {
+    throw new LifecycleGateError("sqlite_bootstrap_lock_helper_exit_timeout");
+  }
+}
+function emitFreshBootstrapStage(options, stage) {
+  options.onStage?.(stage);
+}
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+async function ensureFreshSqliteAuthority(root, databaseFileName, modules, processProbe, options) {
+  const resolvedRoot = path17.resolve(root);
+  assertFreshBootstrapRootPath(resolvedRoot);
+  const databasePath = path17.join(resolvedRoot, databaseFileName);
+  const pendingPath = `${databasePath}.bootstrap-pending.json`;
+  const markerTempPath = `${databasePath}.bootstrap-marker.tmp`;
+  const lockTimeoutMs = options.lockTimeoutMs ?? DEFAULT_FRESH_BOOTSTRAP_LOCK_TIMEOUT_MS;
+  if (!Number.isSafeInteger(lockTimeoutMs) || lockTimeoutMs < 1 || lockTimeoutMs > 5 * 6e4) {
+    throw new LifecycleGateError("sqlite_bootstrap_lock_timeout_invalid");
+  }
+  const ownerIdentity = await processProbe.selfIdentity();
+  if (ownerIdentity.fingerprint_precision !== "exact" || !ownerIdentity.fingerprint || ownerIdentity.identity_version !== PROCESS_IDENTITY_VERSION || ownerIdentity.pid !== process.pid) {
+    throw new LifecycleGateError("sqlite_bootstrap_owner_identity_unknown");
+  }
+  const lock = await acquireFreshBootstrapLock(
+    resolvedRoot,
+    databaseFileName,
+    lockTimeoutMs,
+    ownerIdentity,
+    processProbe
+  );
+  let result;
+  let primaryError;
+  try {
+    lock.assertHeld();
+    emitFreshBootstrapStage(options, "lock_acquired");
+    for (; ; ) {
+      assertFreshBootstrapRootPath(resolvedRoot);
+      lock.assertHeld();
+      if (existsSync12(markerTempPath)) {
+        const tempStat = lstatSync3(markerTempPath);
+        if (!tempStat.isFile() || tempStat.isSymbolicLink() || existsSync12(databasePath) && !existsSync12(pendingPath)) {
+          throw new LifecycleGateError("sqlite_bootstrap_marker_temp_unexpected");
+        }
+      }
+      if (existsSync12(pendingPath)) {
+        const marker2 = readFreshBootstrapMarker(pendingPath, databaseFileName);
+        if (existsSync12(databasePath)) {
+          const published = tryReadReadySqliteAuthority(modules, resolvedRoot, databaseFileName, true);
+          if (published?.kind === "fresh_install" && published.receipt_id === `fresh-install-${marker2.token}`) {
+            const stagePath2 = path17.join(resolvedRoot, marker2.stage_file);
+            removeOwnedBootstrapFile(stagePath2);
+            removeOwnedBootstrapFile(`${stagePath2}-wal`);
+            removeOwnedBootstrapFile(`${stagePath2}-shm`);
+            removeOwnedBootstrapFile(`${stagePath2}-journal`);
+            unlinkSync3(pendingPath);
+            removeOwnedBootstrapFile(markerTempPath);
+            emitFreshBootstrapStage(options, "ready");
+            result = normalizeReadySqliteAuthority(published);
+            break;
+          }
+          throw new LifecycleGateError("sqlite_bootstrap_published_database_unverified");
+        }
+        const stagePath = path17.join(resolvedRoot, marker2.stage_file);
+        removeOwnedBootstrapFile(stagePath);
+        removeOwnedBootstrapFile(`${stagePath}-wal`);
+        removeOwnedBootstrapFile(`${stagePath}-shm`);
+        removeOwnedBootstrapFile(`${stagePath}-journal`);
+        unlinkSync3(pendingPath);
+        removeOwnedBootstrapFile(markerTempPath);
+        continue;
+      }
+      if (existsSync12(markerTempPath)) {
+        removeOwnedBootstrapFile(markerTempPath);
+      }
+      if (existsSync12(databasePath)) {
+        const existing = tryReadReadySqliteAuthority(modules, resolvedRoot, databaseFileName, false);
+        if (!existing) throw new LifecycleGateError("sqlite_existing_database_unverified", "existing SQLite database is not a valid production Authority");
+        emitFreshBootstrapStage(options, "ready");
+        result = normalizeReadySqliteAuthority(existing);
+        break;
+      }
+      assertFreshBootstrapRootEmpty(resolvedRoot, databaseFileName);
+      const token = randomUUID6();
+      const stageFile = `${databaseFileName}.bootstrap-${token}.stage`;
+      const marker = {
+        schema_version: 1,
+        state: "sqlite_bootstrap_pending",
+        database_file: databaseFileName,
+        stage_file: stageFile,
+        token,
+        owner_identity: ownerIdentity
+      };
+      assertFreshBootstrapRootPath(resolvedRoot);
+      writeDurableBootstrapMarker(pendingPath, marker, options, lock);
+      emitFreshBootstrapStage(options, "intent_written");
+      result = await constructAndPublishFreshSqlite(
+        resolvedRoot,
+        databaseFileName,
+        marker,
+        modules,
+        lock,
+        options
+      );
+      emitFreshBootstrapStage(options, "ready");
+      break;
+    }
+  } catch (error2) {
+    primaryError = error2 instanceof LifecycleGateError ? error2 : new LifecycleGateError("sqlite_initialization_failed", error2 instanceof Error ? error2.message : "initialization failed");
+  }
+  try {
+    await lock.release();
+  } catch (error2) {
+    if (primaryError === void 0) {
+      primaryError = new LifecycleGateError(
+        "sqlite_bootstrap_lock_release_failed",
+        error2 instanceof Error ? error2.message : "bootstrap lock release failed"
+      );
+    }
+  }
+  if (primaryError !== void 0) throw primaryError;
+  if (!result) throw new LifecycleGateError("sqlite_initialization_failed", "bootstrap completed without a result");
+  return result;
+}
+async function constructAndPublishFreshSqlite(root, databaseFileName, marker, modules, lock, options) {
+  const databasePath = path17.join(root, databaseFileName);
+  const pendingPath = `${databasePath}.bootstrap-pending.json`;
+  const stagePath = path17.join(root, marker.stage_file);
+  let published = false;
+  try {
+    lock.assertHeld();
+    assertFreshBootstrapRootPath(root);
+    const receiptId = `fresh-install-${marker.token}`;
+    const stageStore = modules.Store.initialize(root, {
+      databaseFileName: marker.stage_file,
       managedDataDirectory: true,
       freshInstallReceiptId: receiptId,
-      verifierVersion: SQLITE_CUTOVER_VERIFIER_VERSION
+      freshInstallCapacityLimit: 8,
+      verifierVersion: SQLITE_CUTOVER_VERIFIER_VERSION,
+      onFreshBootstrapStage: (stage) => emitFreshBootstrapStage(options, stage)
     });
+    stageStore.close();
+    lock.assertHeld();
+    syncRegularFile(stagePath);
+    emitFreshBootstrapStage(options, "database_staged");
+    const staged = modules.Store.open(root, { databaseFileName: marker.stage_file, managedDataDirectory: true });
     try {
-      const port = modules.createPort(store);
-      port.provisionCapacity({
-        operation_id: "fresh-install-capacity-v1",
-        capacity_limit: 8,
-        expected_generation: 0,
-        maintenance: { dispatch_blocked: true, writers_drained: true }
-      });
+      lock.assertHeld();
+      staged.assertAuthorityReady(currentSqliteRuntimeRosterDigest());
     } finally {
-      store.close();
+      staged.close();
     }
-    return { receiptId, verifierVersion: SQLITE_CUTOVER_VERIFIER_VERSION };
+    lock.assertHeld();
+    assertFreshBootstrapRootPath(root);
+    if (existsSync12(databasePath)) throw new LifecycleGateError("sqlite_database_appeared_during_bootstrap");
+    linkSync(stagePath, databasePath);
+    published = true;
+    unlinkSync3(stagePath);
+    const ready = tryReadReadySqliteAuthority(modules, root, databaseFileName, true);
+    if (!ready) throw new LifecycleGateError("sqlite_bootstrap_readback_failed");
+    unlinkSync3(pendingPath);
+    emitFreshBootstrapStage(options, "database_published");
+    return normalizeReadySqliteAuthority(ready);
   } catch (error2) {
-    throw new LifecycleGateError("sqlite_initialization_failed", error2 instanceof Error ? error2.message : "initialization failed");
+    if (!published) {
+      let cleanupOwned = false;
+      try {
+        lock.assertHeld();
+        cleanupOwned = true;
+      } catch {
+      }
+      if (!cleanupOwned) throw error2;
+      removeOwnedBootstrapFile(stagePath);
+      removeOwnedBootstrapFile(`${stagePath}-wal`);
+      removeOwnedBootstrapFile(`${stagePath}-shm`);
+      removeOwnedBootstrapFile(`${stagePath}-journal`);
+      removeOwnedBootstrapFile(pendingPath);
+      removeOwnedBootstrapFile(`${databasePath}.bootstrap-marker.tmp`);
+    }
+    throw error2;
+  }
+}
+function tryReadReadySqliteAuthority(modules, root, databaseFileName, allowPending) {
+  let store;
+  try {
+    store = modules.Store.open(root, {
+      databaseFileName,
+      managedDataDirectory: true,
+      ...allowPending ? { allowFreshBootstrapPending: true } : {}
+    });
+    return store.assertAuthorityReady(currentSqliteRuntimeRosterDigest());
+  } catch {
+    return null;
+  } finally {
+    store?.close();
+  }
+}
+function normalizeReadySqliteAuthority(value) {
+  if (value.kind === "fresh_install") {
+    return { authorityKind: "fresh_install", receiptId: value.receipt_id, verifierVersion: value.verifier_version };
+  }
+  return { authorityKind: "authority_switch" };
+}
+function assertFreshBootstrapRootEmpty(root, databaseFileName) {
+  const allowed = /* @__PURE__ */ new Set([
+    `${databaseFileName}.bootstrap-pending.json`,
+    `${databaseFileName}.bootstrap.lock`
+  ]);
+  for (const name of readdirSync3(root)) {
+    if (!allowed.has(name)) throw new LifecycleGateError("sqlite_existing_state_incomplete", `unexpected SQLite root entry: ${name}`);
+  }
+}
+function assertFreshBootstrapRootPath(root) {
+  try {
+    const stat2 = lstatSync3(root);
+    const real = realpathSync6.native(root);
+    const normalize = (value) => process.platform === "win32" ? path17.win32.normalize(value).replace(/[\\/]+$/u, "").toLocaleLowerCase("en-US") : path17.resolve(value);
+    if (!stat2.isDirectory() || stat2.isSymbolicLink() || normalize(real) !== normalize(root)) {
+      throw new LifecycleGateError("sqlite_data_root_redirected");
+    }
+  } catch (error2) {
+    if (error2 instanceof LifecycleGateError) throw error2;
+    throw new LifecycleGateError("sqlite_data_root_unverified", error2 instanceof Error ? error2.message : "data root unavailable");
+  }
+}
+function readFreshBootstrapMarker(file, databaseFileName) {
+  try {
+    const stat2 = lstatSync3(file);
+    if (!stat2.isFile() || stat2.isSymbolicLink() || stat2.size > 16 * 1024) throw new Error("unsafe_marker");
+    const value = JSON.parse(readFileSync12(file, "utf8"));
+    const expectedStagePrefix = `${databaseFileName}.bootstrap-`;
+    if (value.schema_version !== 1 || value.state !== "sqlite_bootstrap_pending" || value.database_file !== databaseFileName || typeof value.token !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(value.token) || value.stage_file !== `${expectedStagePrefix}${value.token}.stage` || !value.owner_identity || value.owner_identity.pid < 1 || !Number.isSafeInteger(value.owner_identity.pid) || value.owner_identity.fingerprint_precision !== "exact" || !value.owner_identity.fingerprint || value.owner_identity.identity_version !== PROCESS_IDENTITY_VERSION || !value.owner_identity.platform || !value.owner_identity.captured_at || Number.isNaN(Date.parse(value.owner_identity.captured_at))) throw new Error("invalid_marker");
+    return value;
+  } catch (error2) {
+    throw new LifecycleGateError("sqlite_bootstrap_marker_invalid", error2 instanceof Error ? error2.message : "invalid marker");
+  }
+}
+function writeDurableBootstrapMarker(file, marker, options, lock) {
+  let fd;
+  let created = false;
+  const temp = `${file.slice(0, -".bootstrap-pending.json".length)}.bootstrap-marker.tmp`;
+  let tempCreated = false;
+  try {
+    lock.assertHeld();
+    fd = openSync6(temp, "wx", 384);
+    lock.assertHeld();
+    tempCreated = true;
+    writeFileSync7(fd, `${JSON.stringify(marker)}
+`, "utf8");
+    fsyncSync4(fd);
+    lock.assertHeld();
+    closeSync6(fd);
+    fd = void 0;
+    emitFreshBootstrapStage(options, "marker_temp_written");
+    lock.assertHeld();
+    linkSync(temp, file);
+    created = true;
+    lock.assertHeld();
+    unlinkSync3(temp);
+    tempCreated = false;
+  } catch (error2) {
+    if (fd !== void 0) {
+      try {
+        closeSync6(fd);
+      } catch {
+      }
+    }
+    let cleanupOwned = false;
+    try {
+      lock.assertHeld();
+      cleanupOwned = true;
+    } catch {
+    }
+    if (cleanupOwned && created) {
+      try {
+        unlinkSync3(file);
+      } catch {
+      }
+    }
+    if (cleanupOwned && tempCreated) {
+      try {
+        unlinkSync3(temp);
+      } catch {
+      }
+    }
+    throw error2;
+  }
+}
+function parsePreviousBootstrapLockRecord(encoded, databaseFileName) {
+  if (encoded.length === 0) return null;
+  let value;
+  try {
+    value = JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
+  } catch {
+    throw new LifecycleGateError("sqlite_bootstrap_lock_record_invalid");
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new LifecycleGateError("sqlite_bootstrap_lock_record_invalid");
+  }
+  const record3 = value;
+  if (record3["schema_version"] !== 1 || record3["database_file"] !== databaseFileName) {
+    throw new LifecycleGateError("sqlite_bootstrap_lock_record_invalid");
+  }
+  if (record3["state"] === "released") {
+    if (typeof record3["released_at"] !== "string" || Number.isNaN(Date.parse(record3["released_at"]))) {
+      throw new LifecycleGateError("sqlite_bootstrap_lock_record_invalid");
+    }
+    return record3;
+  }
+  if (record3["state"] !== "held" || typeof record3["acquired_at"] !== "string" || Number.isNaN(Date.parse(record3["acquired_at"])) || typeof record3["token"] !== "string" || !record3["owner_identity"] || typeof record3["owner_identity"] !== "object") {
+    throw new LifecycleGateError("sqlite_bootstrap_lock_record_invalid");
+  }
+  const identity = record3["owner_identity"];
+  if (identity["fingerprint_precision"] !== "exact" || typeof identity["fingerprint"] !== "string" || identity["fingerprint"].length === 0 || identity["identity_version"] !== PROCESS_IDENTITY_VERSION || !Number.isSafeInteger(identity["pid"]) || Number(identity["pid"]) < 1 || typeof identity["platform"] !== "string" || typeof identity["captured_at"] !== "string" || Number.isNaN(Date.parse(identity["captured_at"]))) {
+    throw new LifecycleGateError("sqlite_bootstrap_lock_record_invalid");
+  }
+  return record3;
+}
+function syncRegularFile(file) {
+  const stat2 = lstatSync3(file);
+  if (!stat2.isFile() || stat2.isSymbolicLink()) throw new LifecycleGateError("sqlite_bootstrap_stage_unsafe");
+  const fd = openSync6(file, "r+");
+  try {
+    fsyncSync4(fd);
+  } finally {
+    closeSync6(fd);
+  }
+}
+function removeOwnedBootstrapFile(file) {
+  try {
+    const stat2 = lstatSync3(file);
+    if (!stat2.isFile() || stat2.isSymbolicLink()) throw new LifecycleGateError("sqlite_bootstrap_recovery_unsafe_entry");
+    unlinkSync3(file);
+  } catch (error2) {
+    if (error2.code !== "ENOENT") throw error2;
   }
 }
 async function openClaimOnlyDriver(options) {
@@ -8893,7 +9472,7 @@ async function openClaimOnlyDriver(options) {
   const modules = await (options.loadModules?.() ?? loadLifecycleCandidateModules());
   let raw;
   try {
-    if (!existsSync13(options.dataRoot)) throw new LifecycleGateError("sqlite_database_missing", "candidate database must be initialized explicitly");
+    if (!existsSync12(options.dataRoot)) throw new LifecycleGateError("sqlite_database_missing", "candidate database must be initialized explicitly");
     raw = modules.Store.open(options.dataRoot, {
       ...options.databaseFileName ? { databaseFileName: options.databaseFileName } : {},
       ...options.managedDataDirectory ? { managedDataDirectory: true } : {}
@@ -10378,7 +10957,7 @@ function digestProvenance(value) {
 function interactionKey(taskId, requestId) {
   return `${taskId}\0${requestId}`;
 }
-var DEFAULT_PROCESS_PROBE_TIMEOUT_MS, LifecycleGateError;
+var DEFAULT_PROCESS_PROBE_TIMEOUT_MS, LifecycleGateError, freshBootstrapPromises, DEFAULT_FRESH_BOOTSTRAP_LOCK_TIMEOUT_MS, FRESH_BOOTSTRAP_LOCK_RETRY_MS, FRESH_BOOTSTRAP_LOCK_HANDSHAKE_TIMEOUT_MS, FRESH_BOOTSTRAP_LOCK_RELEASE_TIMEOUT_MS, WINDOWS_BOOTSTRAP_LOCK_SCRIPT;
 var init_lifecycle_gate = __esm({
   "src/store/lifecycle-gate.ts"() {
     "use strict";
@@ -10402,6 +10981,72 @@ var init_lifecycle_gate = __esm({
       }
       code;
     };
+    freshBootstrapPromises = /* @__PURE__ */ new Map();
+    DEFAULT_FRESH_BOOTSTRAP_LOCK_TIMEOUT_MS = 3e4;
+    FRESH_BOOTSTRAP_LOCK_RETRY_MS = 75;
+    FRESH_BOOTSTRAP_LOCK_HANDSHAKE_TIMEOUT_MS = 1e4;
+    FRESH_BOOTSTRAP_LOCK_RELEASE_TIMEOUT_MS = 3e3;
+    WINDOWS_BOOTSTRAP_LOCK_SCRIPT = String.raw`
+$ErrorActionPreference = 'Stop'
+$stream = $null
+try {
+  try {
+    $stream = [System.IO.FileStream]::new(
+      $env:ZCODE_BOOTSTRAP_LOCK_FILE,
+      [System.IO.FileMode]::OpenOrCreate,
+      [System.IO.FileAccess]::ReadWrite,
+      [System.IO.FileShare]::None
+    )
+  } catch [System.IO.IOException] {
+    [Console]::Out.WriteLine('BUSY')
+    [Console]::Out.Flush()
+    exit 73
+  }
+  if ($stream.Length -gt 16384) {
+    [Console]::Error.WriteLine('existing lock record exceeds 16 KiB')
+    exit 77
+  }
+  $previous = ''
+  if ($stream.Length -gt 0) {
+    $stream.Position = 0
+    $buffer = New-Object byte[] $stream.Length
+    $read = $stream.Read($buffer, 0, $buffer.Length)
+    if ($read -ne $buffer.Length) { throw 'short lock record read' }
+    $previous = [Convert]::ToBase64String($buffer)
+  }
+  [Console]::Out.WriteLine('ACQUIRED:' + $previous)
+  [Console]::Out.Flush()
+  $command = [Console]::In.ReadLine()
+  if ($command -ne 'COMMIT') {
+    exit 75
+  }
+  $record = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:ZCODE_BOOTSTRAP_LOCK_RECORD_B64))
+  $bytes = [Text.Encoding]::UTF8.GetBytes($record)
+  $stream.SetLength(0)
+  $stream.Position = 0
+  $stream.Write($bytes, 0, $bytes.Length)
+  $stream.Flush($true)
+  [Console]::Out.WriteLine('LOCKED')
+  [Console]::Out.Flush()
+  do {
+    $command = [Console]::In.ReadLine()
+  } while ($null -ne $command -and $command -ne 'RELEASE')
+  if ($command -ne 'RELEASE') {
+    exit 76
+  }
+  $releasedRecord = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:ZCODE_BOOTSTRAP_LOCK_RELEASE_RECORD_B64))
+  $releasedBytes = [Text.Encoding]::UTF8.GetBytes($releasedRecord)
+  $stream.SetLength(0)
+  $stream.Position = 0
+  $stream.Write($releasedBytes, 0, $releasedBytes.Length)
+  $stream.Flush($true)
+} catch {
+  [Console]::Error.WriteLine($_.Exception.GetType().FullName + ': ' + $_.Exception.Message)
+  exit 74
+} finally {
+  if ($null -ne $stream) { $stream.Dispose() }
+}
+`;
   }
 });
 
@@ -10469,7 +11114,7 @@ function queueKey(taskId, attempt) {
 function isTerminal(status) {
   return ["completed", "failed", "cancelled", "waiting_for_master"].includes(status);
 }
-function delay(ms) {
+function delay2(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 async function waitUntilDeadline(operation, deadline) {
@@ -10714,7 +11359,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
               ...scanIncomplete ? { scan_incomplete: true, scan_cursor: encodeCursor(input.task_id, nextCursor) } : {}
             };
           }
-          await delay(Math.min(250, Math.max(1, deadline - Date.now())));
+          await delay2(Math.min(250, Math.max(1, deadline - Date.now())));
         }
       }
       async getFeedback(taskId) {
@@ -32717,7 +33362,6 @@ function toError(value) {
 }
 
 // src/host/stdio.ts
-import { existsSync as existsSync14, lstatSync as lstatSync3, readdirSync as readdirSync3 } from "node:fs";
 import { homedir as homedir4 } from "node:os";
 import path18 from "node:path";
 
@@ -33083,47 +33727,11 @@ function errorText(error2) {
   return message.length > 300 ? `${message.slice(0, 300)}\u2026` : message;
 }
 
-// src/workspace/direct-provider.ts
-import { realpathSync, statSync as statSync2 } from "node:fs";
-import path3 from "node:path";
-var DirectWorkspaceProvider = class {
-  async resolve(workspacePath, _taskId, executionPath) {
-    const projectPath = resolveExistingDirectory(workspacePath, "workspace");
-    const execution = executionPath === void 0 ? projectPath : resolveExistingDirectory(executionPath, "worktree_path");
-    return {
-      requestedPath: projectPath.canonicalPath,
-      canonicalPath: execution.canonicalPath,
-      mode: executionPath === void 0 ? "direct" : "worktree",
-      ...executionPath === void 0 ? {} : { sourcePath: projectPath.canonicalPath }
-    };
-  }
-  async release(_workspace) {
-  }
-};
-function resolveExistingDirectory(input, field) {
-  if (typeof input !== "string" || input.trim().length === 0) {
-    throw new Error(`${field} must be a non-empty string`);
-  }
-  if (!path3.isAbsolute(input)) throw new Error(`${field} must be an absolute path: ${input}`);
-  let stat2;
-  try {
-    stat2 = statSync2(input);
-  } catch {
-    throw new Error(`${field} does not exist: ${input}`);
-  }
-  if (!stat2.isDirectory()) throw new Error(`${field} is not a directory: ${input}`);
-  try {
-    return { requestedPath: input, canonicalPath: realpathSync(input) };
-  } catch {
-    throw new Error(`${field} could not be canonicalized: ${input}`);
-  }
-}
-
 // src/manager/task-manager.ts
 init_task_store();
-import path10 from "node:path";
+import path9 from "node:path";
 import { createHash as createHash5 } from "node:crypto";
-import { existsSync as existsSync7, statSync as statSync5, writeFileSync as writeFileSync4 } from "node:fs";
+import { existsSync as existsSync6, statSync as statSync4, writeFileSync as writeFileSync4 } from "node:fs";
 
 // src/manager/normalize.ts
 function buildTaskResult(input) {
@@ -33630,7 +34238,7 @@ var BridgeTaskManager = class _BridgeTaskManager {
     if (this.#lifecycleAuthority) return this.#lifecycleAuthority.recoverTasks?.() ?? Promise.resolve();
     if (jsonWriterFenceState(this.#dataRoot) === "sealed") return;
     if (this.#recoveryPromise) return this.#recoveryPromise;
-    const releaseRecovery = tryAcquireProcessLock(path10.join(this.#store.tasksRoot, ".recovery.lock"));
+    const releaseRecovery = tryAcquireProcessLock(path9.join(this.#store.tasksRoot, ".recovery.lock"));
     if (!releaseRecovery) return;
     try {
       if (jsonWriterFenceState(this.#dataRoot) === "sealed") {
@@ -33641,8 +34249,8 @@ var BridgeTaskManager = class _BridgeTaskManager {
       releaseRecovery();
       throw error2;
     }
-    const lastRunFile = path10.join(this.#store.tasksRoot, ".recovery-last-run");
-    if (this.#recoveryCooldownMs > 0 && existsSync7(lastRunFile) && Date.now() - statSync5(lastRunFile).mtimeMs < this.#recoveryCooldownMs) {
+    const lastRunFile = path9.join(this.#store.tasksRoot, ".recovery-last-run");
+    if (this.#recoveryCooldownMs > 0 && existsSync6(lastRunFile) && Date.now() - statSync4(lastRunFile).mtimeMs < this.#recoveryCooldownMs) {
       releaseRecovery();
       return;
     }
@@ -34074,8 +34682,8 @@ var BridgeTaskManager = class _BridgeTaskManager {
       if (this.#store.hasTask(task.task_id)) {
         const existing = this.#store.readTask(task.task_id);
         const ref = this.#store.readWorkspaceRef(task.task_id);
-        const sameWorkspace = path10.resolve(task.workspace) === path10.resolve(ref?.requestedPath ?? existing.workspace);
-        const sameExecutionPath = task.worktree_path === void 0 ? existing.worktree_path === void 0 : existing.worktree_path !== void 0 && path10.resolve(task.worktree_path) === path10.resolve(ref?.canonicalPath ?? existing.worktree_path);
+        const sameWorkspace = path9.resolve(task.workspace) === path9.resolve(ref?.requestedPath ?? existing.workspace);
+        const sameExecutionPath = task.worktree_path === void 0 ? existing.worktree_path === void 0 : existing.worktree_path !== void 0 && path9.resolve(task.worktree_path) === path9.resolve(ref?.canonicalPath ?? existing.worktree_path);
         const normalizedRetry = {
           ...task,
           workspace: existing.workspace,
@@ -34818,7 +35426,7 @@ var BridgeTaskManager = class _BridgeTaskManager {
   #executionPathKeyLocked(taskId) {
     const recorded = this.#store.readWorkspaceRef(taskId)?.canonicalPath;
     const task = recorded ? null : this.#store.readTask(taskId);
-    const resolved = path10.resolve(recorded ?? task.worktree_path ?? task.workspace);
+    const resolved = path9.resolve(recorded ?? task.worktree_path ?? task.workspace);
     return process.platform === "win32" ? resolved.toLocaleLowerCase("en-US") : resolved;
   }
   #startWorkerLocked(taskId) {
@@ -34952,7 +35560,7 @@ var BridgeTaskManager = class _BridgeTaskManager {
       clearTimeout(timeout);
       this.#queuedOperations = Math.max(0, this.#queuedOperations - 1);
       try {
-        return await withProcessLock(path10.join(this.#store.tasksRoot, ".manager.lock"), operation, 5e3);
+        return await withProcessLock(path9.join(this.#store.tasksRoot, ".manager.lock"), operation, 5e3);
       } catch (error2) {
         if (error2 instanceof Error && error2.message.startsWith("timed out waiting for process lock:")) {
           throw new TaskManagerError("REQUEST_QUEUE_TIMEOUT", "Bridge operation did not acquire the shared scheduling lock within 5 seconds; retry with the same task_id");
@@ -34984,9 +35592,9 @@ var BridgeTaskManager = class _BridgeTaskManager {
   }
 };
 function pathsOverlap(left, right) {
-  const relative = path10.relative(left, right);
-  const reverse = path10.relative(right, left);
-  const inside = (value) => value === "" || !path10.isAbsolute(value) && value !== ".." && !value.startsWith(`..${path10.sep}`);
+  const relative = path9.relative(left, right);
+  const reverse = path9.relative(right, left);
+  const inside = (value) => value === "" || !path9.isAbsolute(value) && value !== ".." && !value.startsWith(`..${path9.sep}`);
   return inside(relative) || inside(reverse);
 }
 function encodeScanCursor(cursor) {
@@ -35349,8 +35957,8 @@ init_errors();
 
 // src/ledger/bridge.ts
 init_process_lock();
-import { existsSync as existsSync8, mkdirSync as mkdirSync5, readFileSync as readFileSync7, writeFileSync as writeFileSync5 } from "node:fs";
-import path11 from "node:path";
+import { existsSync as existsSync7, mkdirSync as mkdirSync5, readFileSync as readFileSync7, writeFileSync as writeFileSync5 } from "node:fs";
+import path10 from "node:path";
 
 // src/ledger/types.ts
 var LedgerError = class extends Error {
@@ -35372,8 +35980,8 @@ var LedgerBridgeLink = class {
   #cursorFile;
   constructor(ledger) {
     this.#ledger = ledger;
-    this.#ledgerDir = path11.join(ledger.root, ".agent-ledger", "ledger");
-    this.#cursorFile = path11.join(this.#ledgerDir, "bridge-cursors.json");
+    this.#ledgerDir = path10.join(ledger.root, ".agent-ledger", "ledger");
+    this.#cursorFile = path10.join(this.#ledgerDir, "bridge-cursors.json");
   }
   /** Persists the run intent, then dispatches; every retry of the same
    * operation keeps the same run and the same executor task id (C2-01). */
@@ -35472,7 +36080,7 @@ var LedgerBridgeLink = class {
     return run;
   }
   #readCursors() {
-    if (!existsSync8(this.#cursorFile)) return {};
+    if (!existsSync7(this.#cursorFile)) return {};
     try {
       return JSON.parse(readFileSync7(this.#cursorFile, "utf8"));
     } catch {
@@ -35483,7 +36091,7 @@ var LedgerBridgeLink = class {
     const cursors = this.#readCursors();
     cursors[runId] = { executor_task_id: executorTaskId, last_seq: lastSeq };
     mkdirSync5(this.#ledgerDir, { recursive: true });
-    const release = tryAcquireProcessLock(path11.join(this.#ledgerDir, "cursor.lock"));
+    const release = tryAcquireProcessLock(path10.join(this.#ledgerDir, "cursor.lock"));
     if (!release) return;
     try {
       writeFileSync5(this.#cursorFile, JSON.stringify(cursors, null, 2), { mode: 384 });
@@ -36067,23 +36675,23 @@ function createBridgeServer(options) {
 }
 
 // src/runtime/doctor.ts
-import { accessSync as accessSync2, constants, existsSync as existsSync10, readFileSync as readFileSync9, statSync as statSync6 } from "node:fs";
+import { accessSync as accessSync2, constants, existsSync as existsSync9, readFileSync as readFileSync9, statSync as statSync5 } from "node:fs";
 import { execFileSync } from "node:child_process";
-import path13 from "node:path";
+import path12 from "node:path";
 
 // src/runtime/account-provider.ts
 import { createHash as createHash7 } from "node:crypto";
-import { existsSync as existsSync9, readFileSync as readFileSync8 } from "node:fs";
-import path12 from "node:path";
+import { existsSync as existsSync8, readFileSync as readFileSync8 } from "node:fs";
+import path11 from "node:path";
 function buildAccountProviderPayload(config2) {
   const table = readJson(config2.providerBuiltinConfigFile);
   const providerRules = readProviderRules(table).filter(isRecord).map((rule) => rule).filter((rule) => rule.config?.access?.type === "zhipu-account" && typeof rule.providerId === "string");
   if (!providerRules.length) return null;
   const dataDir = zcodeV2DataDir(config2.providerPersonalConfigFile);
   if (!dataDir) return null;
-  const credentials = readJson(path12.join(dataDir, "config.json"));
+  const credentials = readJson(path11.join(dataDir, "config.json"));
   const credentialProviders = asRecord2(credentials?.provider);
-  const cache = readJson(path12.join(dataDir, "coding-plan-cache.json"));
+  const cache = readJson(path11.join(dataDir, "coding-plan-cache.json"));
   const cacheItems = asRecord2(asRecord2(cache?.entryStatus).items);
   const providers = {};
   const states = {};
@@ -36105,7 +36713,7 @@ function buildAccountProviderPayload(config2) {
     };
   }
   const revision = typeof table?.revision === "number" ? table.revision : 0;
-  const resolvedBuiltinPath = path12.resolve(config2.providerBuiltinConfigFile);
+  const resolvedBuiltinPath = path11.resolve(config2.providerBuiltinConfigFile);
   return {
     revision: `account:codex-zcode-bridge:${Date.now()}`,
     basedOnZCodeBuiltinRevision: `zcode-builtin:${revision}:${createHash7("sha256").update(resolvedBuiltinPath).digest("hex")}`,
@@ -36127,8 +36735,8 @@ function runtimeAuthReply(providerId, config2) {
   const legacyId = configProviderId(providerId, rule);
   const dataDir = zcodeV2DataDir(config2.providerPersonalConfigFile);
   if (!dataDir) return unavailable;
-  const credentials = readJson(path12.join(dataDir, "config.json"));
-  const cache = readJson(path12.join(dataDir, "coding-plan-cache.json"));
+  const credentials = readJson(path11.join(dataDir, "config.json"));
+  const cache = readJson(path11.join(dataDir, "coding-plan-cache.json"));
   const status = asRecord2(asRecord2(asRecord2(cache?.entryStatus).items)[legacyId]).status;
   const provider = asRecord2(asRecord2(credentials?.provider)[legacyId]);
   const options = asRecord2(provider.options);
@@ -36138,19 +36746,19 @@ function runtimeAuthReply(providerId, config2) {
 }
 function zcodeDataBaseDir(personalProviderConfigFile) {
   const dataDir = zcodeV2DataDir(personalProviderConfigFile);
-  return dataDir ? path12.dirname(path12.dirname(dataDir)) : null;
+  return dataDir ? path11.dirname(path11.dirname(dataDir)) : null;
 }
 function zcodeTasksIndexPath(personalProviderConfigFile) {
   const dataDir = zcodeV2DataDir(personalProviderConfigFile);
-  return dataDir ? path12.join(dataDir, "tasks-index.sqlite") : null;
+  return dataDir ? path11.join(dataDir, "tasks-index.sqlite") : null;
 }
 function zcodeV2DataDir(personalProviderConfigFile) {
-  const absolute = path12.resolve(personalProviderConfigFile);
-  if (path12.basename(absolute).toLowerCase() !== "provider_config.json") return null;
-  const v2Dir = path12.dirname(absolute);
-  if (path12.basename(v2Dir).toLowerCase() !== "v2") return null;
-  const zcodeDir = path12.dirname(v2Dir);
-  if (path12.basename(zcodeDir).toLowerCase() !== ".zcode") return null;
+  const absolute = path11.resolve(personalProviderConfigFile);
+  if (path11.basename(absolute).toLowerCase() !== "provider_config.json") return null;
+  const v2Dir = path11.dirname(absolute);
+  if (path11.basename(v2Dir).toLowerCase() !== "v2") return null;
+  const zcodeDir = path11.dirname(v2Dir);
+  if (path11.basename(zcodeDir).toLowerCase() !== ".zcode") return null;
   return v2Dir;
 }
 function configProviderId(providerId, rule) {
@@ -36165,7 +36773,7 @@ function readProviderRules(table) {
 }
 function readJson(filePath) {
   try {
-    if (!existsSync9(filePath)) return null;
+    if (!existsSync8(filePath)) return null;
     const value = JSON.parse(readFileSync8(filePath, "utf8"));
     return isRecord(value) ? value : null;
   } catch {
@@ -36313,10 +36921,10 @@ async function runBridgeDoctor(options = {}) {
       });
     } else if (browserUse === "headless") {
       if (browserExecutable) {
-        if (!path13.isAbsolute(browserExecutable)) {
+        if (!path12.isAbsolute(browserExecutable)) {
           checks.push({ name: "browser_host", status: "error", summary: `ZCODE_BRIDGE_BROWSER_EXECUTABLE must be an absolute path: ${browserExecutable}` });
-        } else if (existsSync10(browserExecutable)) {
-          checks.push({ name: "browser_host", status: "ok", summary: `Headless browser host is enabled with the configured executable (${path13.basename(browserExecutable)})` });
+        } else if (existsSync9(browserExecutable)) {
+          checks.push({ name: "browser_host", status: "ok", summary: `Headless browser host is enabled with the configured executable (${path12.basename(browserExecutable)})` });
         } else {
           checks.push({ name: "browser_host", status: "error", summary: `Configured browser executable does not exist: ${browserExecutable}` });
         }
@@ -36327,9 +36935,9 @@ async function runBridgeDoctor(options = {}) {
       checks.push({ name: "browser_host", status: "warning", summary: `ZCODE_BRIDGE_BROWSER_USE must be "off" or "headless"; got "${browserUse}" \u2014 the browser host stays disabled` });
     }
     const dataRoot = options.dataRoot ?? env["ZCODE_BRIDGE_DATA_DIR"]?.trim() ?? null;
-    if (dataRoot && existsSync10(dataRoot)) {
+    if (dataRoot && existsSync9(dataRoot)) {
       try {
-        const info = statSync6(dataRoot);
+        const info = statSync5(dataRoot);
         accessSync2(dataRoot, constants.W_OK);
         checks.push({ name: "task_data", status: info.isDirectory() ? "ok" : "error", summary: info.isDirectory() ? "Bridge task data directory exists and is writable" : "Bridge task data path is not a directory" });
       } catch {
@@ -36341,8 +36949,8 @@ async function runBridgeDoctor(options = {}) {
     const indexPath = zcodeTasksIndexPath(config2.providerPersonalConfigFile);
     checks.push({
       name: "desktop_index",
-      status: indexPath && existsSync10(indexPath) ? "ok" : "warning",
-      summary: indexPath && existsSync10(indexPath) ? "ZCode Desktop task index file exists; Desktop refresh timing is not tested" : "ZCode Desktop task index file was not found at the configured data location"
+      status: indexPath && existsSync9(indexPath) ? "ok" : "warning",
+      summary: indexPath && existsSync9(indexPath) ? "ZCode Desktop task index file exists; Desktop refresh timing is not tested" : "ZCode Desktop task index file was not found at the configured data location"
     });
   } else {
     checks.push({ name: "runtime_node", status: "unknown", summary: "Not checked because runtime validation did not complete" });
@@ -36364,7 +36972,7 @@ async function runBridgeDoctor(options = {}) {
     summary: "Not probed here: use the Master Skill helper with the explicit CODEX_THREAD_ID; codex_rollout values require a report-window baseline and must not be replaced by account quotas or text estimates"
   });
   const observedRoot = options.observationDataRoot ?? env["ZCODE_BRIDGE_DATA_DIR"]?.trim() ?? null;
-  if (observedRoot && existsSync10(observedRoot)) {
+  if (observedRoot && existsSync9(observedRoot)) {
     try {
       const { TaskStore: Store } = await Promise.resolve().then(() => (init_task_store(), task_store_exports));
       const { buildTaskObservation: buildTaskObservation2, inferExecutionStage: inferExecutionStage2 } = await Promise.resolve().then(() => (init_build(), build_exports));
@@ -36399,7 +37007,7 @@ async function runBridgeDoctor(options = {}) {
         const summary = `${running.length} running, ${queued.length} queued, ${cleanupPending.length} cleanup-unverified; oldest queue ${queueAge}${blocked ? "; dispatch may be blocked" : ""}. ${lines.join("; ")}`;
         checks.push({ name: "active_tasks", status: blocked ? "warning" : "ok", summary: summary.slice(0, 1200) });
       }
-      checks.push(inspectRecoveryLock(path13.join(store.tasksRoot, ".recovery.lock")));
+      checks.push(inspectRecoveryLock(path12.join(store.tasksRoot, ".recovery.lock")));
     } catch (error2) {
       checks.push({ name: "active_tasks", status: "unknown", summary: safeError(error2) });
     }
@@ -36407,12 +37015,12 @@ async function runBridgeDoctor(options = {}) {
   return { checked_at: (/* @__PURE__ */ new Date()).toISOString(), execution_mode: mode, checks };
 }
 function inspectRecoveryLock(lockDirectory) {
-  if (!existsSync10(lockDirectory)) {
+  if (!existsSync9(lockDirectory)) {
     return { name: "recovery_lock", status: "ok", summary: "No persisted recovery lock is blocking task reconciliation" };
   }
   try {
-    const lockStat = statSync6(lockDirectory);
-    const raw = readFileSync9(path13.join(lockDirectory, "owner.json"), "utf8");
+    const lockStat = statSync5(lockDirectory);
+    const raw = readFileSync9(path12.join(lockDirectory, "owner.json"), "utf8");
     const owner = JSON.parse(raw);
     if (!Number.isSafeInteger(owner.pid) || (owner.pid ?? 0) <= 0 || typeof owner.token !== "string" || !owner.token) {
       throw new Error("invalid lock owner record");
@@ -36431,7 +37039,7 @@ function inspectRecoveryLock(lockDirectory) {
       return { name: "recovery_lock", status: "warning", summary: "Recovery lock owner liveness could not be confirmed" };
     }
   } catch (error2) {
-    const ageMs2 = Date.now() - statSync6(lockDirectory).mtimeMs;
+    const ageMs2 = Date.now() - statSync5(lockDirectory).mtimeMs;
     if (ageMs2 <= 3e4) {
       return { name: "recovery_lock", status: "warning", summary: "Recovery lock owner record is being published or is unreadable; check again if it persists" };
     }
@@ -36449,7 +37057,7 @@ import { spawn as spawn4 } from "node:child_process";
 import { createHash as createHash8, randomUUID as randomUUID4 } from "node:crypto";
 import { mkdir, readFile as readFile2, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { homedir as homedir3 } from "node:os";
-import path14 from "node:path";
+import path13 from "node:path";
 init_process_spawn();
 init_profile();
 init_process_lock();
@@ -36469,7 +37077,7 @@ var ZCodeModelSettings = class {
   }
   async listModels(workspace) {
     const requestedWorkspace = workspace.trim();
-    if (!path14.isAbsolute(requestedWorkspace)) {
+    if (!path13.isAbsolute(requestedWorkspace)) {
       throw new BridgeError("provider_config_invalid", "workspace must be an absolute existing directory");
     }
     let workspacePath;
@@ -36619,8 +37227,8 @@ var ZCodeModelSettings = class {
   #updateConfig(update) {
     const operation = this.#writeQueue.then(async () => {
       await mkdir(this.#host.settingsDirectory, { recursive: true });
-      return withProcessLock(path14.join(this.#host.settingsDirectory, ".settings.lock"), async () => {
-        const configPath = path14.join(this.#host.settingsDirectory, "runtime-config.json");
+      return withProcessLock(path13.join(this.#host.settingsDirectory, ".settings.lock"), async () => {
+        const configPath = path13.join(this.#host.settingsDirectory, "runtime-config.json");
         let config2 = {};
         try {
           const info = await stat(configPath);
@@ -36634,7 +37242,7 @@ var ZCodeModelSettings = class {
           if (isMissingFile(error2)) {
             config2 = {};
             for (const directory of this.#host.legacySettingsDirectories ?? []) {
-              const legacyPath = path14.join(directory, "runtime-config.json");
+              const legacyPath = path13.join(directory, "runtime-config.json");
               try {
                 if ((await stat(legacyPath)).size > 64 * 1024) throw new Error("legacy settings exceed size limit");
                 const legacy = JSON.parse(await readFile2(legacyPath, "utf8"));
@@ -36870,7 +37478,7 @@ function modelCatalogCachePath(workspace, config2, env, settingsDirectory) {
     zcodeHome: env.ZCODE_HOME ?? ""
   });
   const key = createHash8("sha256").update(identity).digest("hex");
-  return path14.join(settingsDirectory, "model-catalog", `${key}.json`);
+  return path13.join(settingsDirectory, "model-catalog", `${key}.json`);
 }
 async function modelCatalogSourceFingerprint(config2, env) {
   const digest3 = createHash8("sha256");
@@ -36908,7 +37516,7 @@ function toCachedCatalogEntry(value) {
   return result;
 }
 async function writeModelCatalogCache(cachePath, cache) {
-  await mkdir(path14.dirname(cachePath), { recursive: true });
+  await mkdir(path13.dirname(cachePath), { recursive: true });
   const tempPath = `${cachePath}.${process.pid}.${randomUUID4()}.tmp`;
   try {
     await writeFile(tempPath, `${JSON.stringify(cache)}
@@ -36926,12 +37534,11 @@ init_spawn_worker();
 init_process_probe();
 init_build_provenance();
 init_trusted_local_deployment();
-init_json_writer_quiescence();
 
 // src/runtime/sqlite-install-config.ts
-import { existsSync as existsSync11, lstatSync, mkdirSync as mkdirSync6, readFileSync as readFileSync10, realpathSync as realpathSync5 } from "node:fs";
+import { existsSync as existsSync10, lstatSync, mkdirSync as mkdirSync6, readFileSync as readFileSync10, realpathSync as realpathSync4 } from "node:fs";
 import os from "node:os";
-import path16 from "node:path";
+import path15 from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 init_profile();
 var CONFIG_FILE = "authority.json";
@@ -36947,7 +37554,7 @@ var SqliteInstallConfigurationError = class extends Error {
 };
 function loadInstallAuthoritySelection(host) {
   validateHostProfile(host);
-  const configPath = path16.join(host.settingsDirectory, CONFIG_FILE);
+  const configPath = path15.join(host.settingsDirectory, CONFIG_FILE);
   try {
     const stat2 = lstatSync(configPath);
     if (!stat2.isFile() || stat2.isSymbolicLink()) throw new SqliteInstallConfigurationError("authority_config_not_regular_file");
@@ -36956,7 +37563,9 @@ function loadInstallAuthoritySelection(host) {
     if (!isRecord3(parsed)) throw new SqliteInstallConfigurationError("authority_config_invalid_shape");
     const keys = Object.keys(parsed).sort().join("|");
     if (parsed.schema_version !== 1) throw new SqliteInstallConfigurationError("authority_config_version_unsupported");
-    if (parsed.authority === "json" && keys === "authority|schema_version") return { state: "json", configPath };
+    if (parsed.authority === "json" && keys === "authority|schema_version") {
+      return { state: "sqlite", configPath, configuredDataRoot: "" };
+    }
     if (parsed.authority !== "sqlite" || keys !== "authority|schema_version" && keys !== "authority|data_root|schema_version") {
       throw new SqliteInstallConfigurationError("authority_config_invalid_contract");
     }
@@ -36966,7 +37575,7 @@ function loadInstallAuthoritySelection(host) {
     }
     return { state: "sqlite", configPath, configuredDataRoot };
   } catch (error2) {
-    if (error2.code === "ENOENT") return { state: "json", configPath };
+    if (error2.code === "ENOENT") return { state: "sqlite", configPath, configuredDataRoot: "" };
     if (error2 instanceof SqliteInstallConfigurationError) throw error2;
     throw new SqliteInstallConfigurationError("authority_config_unreadable_or_invalid", error2 instanceof Error ? error2.message : "authority config failed");
   }
@@ -36976,26 +37585,23 @@ function prepareFreshSqliteStateDirectory(selection, env) {
 }
 function sqliteInstallationRoot(env) {
   const modulePath = fileURLToPath3(import.meta.url);
-  const dist = path16.dirname(modulePath);
-  if (env["ZCODE_BRIDGE_PLUGIN_MODE"] === "1" && path16.basename(modulePath) === "bridge.mjs" && path16.basename(dist) === "dist") {
-    const pluginRoot = path16.dirname(dist);
-    if (!existsSync11(path16.join(pluginRoot, ".codex-plugin", "plugin.json")) || !existsSync11(path16.join(pluginRoot, "launch-node24.mjs"))) {
+  const dist = path15.dirname(modulePath);
+  if (env["ZCODE_BRIDGE_PLUGIN_MODE"] === "1" && path15.basename(modulePath) === "bridge.mjs" && path15.basename(dist) === "dist") {
+    const pluginRoot = path15.dirname(dist);
+    if (!existsSync10(path15.join(pluginRoot, ".codex-plugin", "plugin.json")) || !existsSync10(path15.join(pluginRoot, "launch-node24.mjs"))) {
       throw new SqliteInstallConfigurationError("sqlite_plugin_layout_invalid");
     }
     return pluginRoot;
   }
   return findPackageRoot();
 }
-function resolveSqliteStateDirectory(selection, env) {
-  return resolveStateDirectory(selection, env, sqliteInstallationRoot(env), os.tmpdir());
-}
 function resolveStateDirectory(selection, env, packageRootValue, tempRootValue) {
   const appRoot = selection.configuredDataRoot || defaultDataRoot(env);
   if (!isLocalAbsolutePath(appRoot)) throw new SqliteInstallConfigurationError("sqlite_data_root_not_local_absolute");
-  const normalizedRoot = path16.resolve(appRoot);
-  const stateDirectory = path16.join(normalizedRoot, "state");
-  const packageRoot = path16.resolve(packageRootValue);
-  const tempRoot = path16.resolve(tempRootValue);
+  const normalizedRoot = path15.resolve(appRoot);
+  const stateDirectory = path15.join(normalizedRoot, "state");
+  const packageRoot = path15.resolve(packageRootValue);
+  const tempRoot = path15.resolve(tempRootValue);
   if (within(packageRoot, normalizedRoot) || within(tempRoot, normalizedRoot) || within(packageRoot, stateDirectory) || within(tempRoot, stateDirectory)) {
     throw new SqliteInstallConfigurationError("sqlite_data_root_reserved_location");
   }
@@ -37003,7 +37609,7 @@ function resolveStateDirectory(selection, env, packageRootValue, tempRootValue) 
 }
 function prepareStateDirectory(selection, env, packageRootValue, tempRootValue) {
   const resolved = resolveStateDirectory(selection, env, packageRootValue, tempRootValue);
-  const normalizedRoot = path16.dirname(resolved.dataRoot);
+  const normalizedRoot = path15.dirname(resolved.dataRoot);
   ensurePlainDirectoryTree(normalizedRoot);
   ensurePlainDirectoryTree(resolved.dataRoot);
   const canonicalState = canonicalDirectory(resolved.dataRoot);
@@ -37013,19 +37619,19 @@ function prepareStateDirectory(selection, env, packageRootValue, tempRootValue) 
 function defaultDataRoot(env) {
   const localAppData = env["LOCALAPPDATA"]?.trim();
   if (!localAppData || !isLocalAbsolutePath(localAppData)) throw new SqliteInstallConfigurationError("local_app_data_unavailable");
-  return path16.join(localAppData, "CodexZCodeBridge");
+  return path15.join(localAppData, "CodexZCodeBridge");
 }
 function ensurePlainDirectoryTree(value) {
   if (!isLocalAbsolutePath(value)) throw new SqliteInstallConfigurationError("sqlite_data_path_not_local");
-  const parsed = path16.parse(value);
-  const segments = value.slice(parsed.root.length).split(path16.sep).filter(Boolean);
+  const parsed = path15.parse(value);
+  const segments = value.slice(parsed.root.length).split(path15.sep).filter(Boolean);
   let current = parsed.root;
   for (const segment of segments) {
-    current = path16.join(current, segment);
+    current = path15.join(current, segment);
     try {
       const stat2 = lstatSync(current);
       if (!stat2.isDirectory() || stat2.isSymbolicLink()) throw new SqliteInstallConfigurationError("sqlite_data_path_component_unsafe");
-      if (!samePath2(realpathSync5.native(current), current)) throw new SqliteInstallConfigurationError("sqlite_data_path_redirected");
+      if (!samePath2(realpathSync4.native(current), current)) throw new SqliteInstallConfigurationError("sqlite_data_path_redirected");
     } catch (error2) {
       if (error2.code !== "ENOENT") throw error2;
       try {
@@ -37034,7 +37640,7 @@ function ensurePlainDirectoryTree(value) {
         if (createError.code !== "EEXIST") throw new SqliteInstallConfigurationError("sqlite_data_path_create_failed", String(createError));
       }
       const created = lstatSync(current);
-      if (!created.isDirectory() || created.isSymbolicLink() || !samePath2(realpathSync5.native(current), current)) {
+      if (!created.isDirectory() || created.isSymbolicLink() || !samePath2(realpathSync4.native(current), current)) {
         throw new SqliteInstallConfigurationError("sqlite_data_path_create_unverified");
       }
     }
@@ -37043,7 +37649,7 @@ function ensurePlainDirectoryTree(value) {
 function canonicalDirectory(value) {
   try {
     const stat2 = lstatSync(value);
-    const real = realpathSync5.native(value);
+    const real = realpathSync4.native(value);
     if (!stat2.isDirectory() || stat2.isSymbolicLink() || !samePath2(real, value)) throw new Error("directory_identity_mismatch");
     return real;
   } catch (error2) {
@@ -37051,8 +37657,8 @@ function canonicalDirectory(value) {
   }
 }
 function rejectOrphanedDatabaseState(root) {
-  const expected = path16.join(root, FRESH_SQLITE_DATABASE_FILE);
-  if (existsSync11(expected)) return;
+  const expected = path15.join(root, FRESH_SQLITE_DATABASE_FILE);
+  if (existsSync10(expected)) return;
   for (const name of [
     `${FRESH_SQLITE_DATABASE_FILE}-wal`,
     `${FRESH_SQLITE_DATABASE_FILE}-shm`,
@@ -37062,19 +37668,19 @@ function rejectOrphanedDatabaseState(root) {
     "ROOT_POISONED.json",
     "WRITER_INTENT.json"
   ]) {
-    if (existsSync11(path16.join(root, name))) throw new SqliteInstallConfigurationError("sqlite_existing_state_incomplete");
+    if (existsSync10(path15.join(root, name))) throw new SqliteInstallConfigurationError("sqlite_existing_state_incomplete");
   }
 }
 function isLocalAbsolutePath(value) {
-  if (process.platform === "win32") return /^[A-Za-z]:\\/u.test(value) && path16.win32.isAbsolute(value) && !value.startsWith("\\\\");
-  return path16.isAbsolute(value) && !value.startsWith("/proc/") && !value.startsWith("/sys/") && !value.startsWith("/dev/");
+  if (process.platform === "win32") return /^[A-Za-z]:\\/u.test(value) && path15.win32.isAbsolute(value) && !value.startsWith("\\\\");
+  return path15.isAbsolute(value) && !value.startsWith("/proc/") && !value.startsWith("/sys/") && !value.startsWith("/dev/");
 }
 function within(root, candidate) {
-  const relative = path16.relative(root, candidate);
-  return relative === "" || relative !== ".." && !relative.startsWith(`..${path16.sep}`) && !path16.isAbsolute(relative);
+  const relative = path15.relative(root, candidate);
+  return relative === "" || relative !== ".." && !relative.startsWith(`..${path15.sep}`) && !path15.isAbsolute(relative);
 }
 function samePath2(left, right) {
-  const normalize = (value) => process.platform === "win32" ? path16.win32.normalize(value).replace(/[\\/]+$/u, "").toLocaleLowerCase("en-US") : path16.resolve(value);
+  const normalize = (value) => process.platform === "win32" ? path15.win32.normalize(value).replace(/[\\/]+$/u, "").toLocaleLowerCase("en-US") : path15.resolve(value);
   return normalize(left) === normalize(right);
 }
 function isRecord3(value) {
@@ -37082,46 +37688,6 @@ function isRecord3(value) {
 }
 
 // src/host/stdio.ts
-var SqliteAuthorityStartupError = class extends Error {
-  constructor(code, message = code) {
-    super(message);
-    this.code = code;
-    this.name = "SqliteAuthorityStartupError";
-  }
-  code;
-};
-function resolveLegacyJsonDataRoot(host, runtimeEnv) {
-  const configured = runtimeEnv["ZCODE_BRIDGE_DATA_DIR"]?.trim();
-  if (configured && path18.isAbsolute(configured)) return path18.normalize(configured);
-  if (host.defaultDataRoot) return path18.normalize(host.defaultDataRoot);
-  if (runtimeEnv["ZCODE_BRIDGE_PLUGIN_MODE"] === "1") return path18.normalize(host.settingsDirectory);
-  return findPackageRoot();
-}
-function assertFreshInstallLegacyJsonEmpty(legacyDataRoot) {
-  const tasksRoot = path18.join(path18.normalize(legacyDataRoot), ".tasks");
-  let stat2;
-  try {
-    stat2 = lstatSync3(tasksRoot);
-  } catch (error2) {
-    if (error2.code === "ENOENT") return;
-    throw new SqliteAuthorityStartupError("legacy_json_tasks_root_unreadable");
-  }
-  if (!stat2.isDirectory() || stat2.isSymbolicLink()) {
-    throw new SqliteAuthorityStartupError("legacy_json_tasks_root_unsafe");
-  }
-  let entries;
-  try {
-    entries = readdirSync3(tasksRoot);
-  } catch {
-    throw new SqliteAuthorityStartupError("legacy_json_tasks_root_unreadable");
-  }
-  if (entries.length > 0) {
-    throw new SqliteAuthorityStartupError(
-      "migration_required_for_existing_json_authority",
-      "SQLite is missing while the legacy JSON Task root contains state; run the explicit stop-the-world migration"
-    );
-  }
-}
 function createTrustedLocalCandidateContext(host) {
   validateHostProfile(host);
   return createTrustedLocalStdioContext(host);
@@ -37193,28 +37759,19 @@ function serveStdioLifecycleHost(server, manager, options = {}) {
 }
 async function startBridge(host = codexHostProfile(), version2 = SERVER_VERSION, bridgeEntryPath = process.argv[1]) {
   validateHostProfile(host);
-  const authoritySelection = loadInstallAuthoritySelection(host);
-  const runtimeEnv = loadPersistedRuntimeEnvironment(process.env, homedir4(), host);
-  let dataRoot = "";
-  let warning;
-  let sqliteDatabaseMissing = false;
-  if (authoritySelection.state === "json") {
-    if (!runtimeEnv["ZCODE_BRIDGE_DATA_DIR"]?.trim() && host.defaultDataRoot) runtimeEnv["ZCODE_BRIDGE_DATA_DIR"] = host.defaultDataRoot;
-    if (process.env["ZCODE_BRIDGE_PLUGIN_MODE"] === "1" && !runtimeEnv["ZCODE_BRIDGE_DATA_DIR"]?.trim()) {
-      runtimeEnv["ZCODE_BRIDGE_DATA_DIR"] = host.settingsDirectory;
-    }
-    const resolved = resolveDataRoot(runtimeEnv);
-    dataRoot = resolved.dataRoot;
-    warning = resolved.warning;
-  } else {
-    const resolvedState = resolveSqliteStateDirectory(authoritySelection, process.env);
-    sqliteDatabaseMissing = !existsSync14(path18.join(resolvedState.dataRoot, FRESH_SQLITE_DATABASE_FILE));
-    if (sqliteDatabaseMissing) {
-      assertFreshInstallLegacyJsonEmpty(resolveLegacyJsonDataRoot(host, runtimeEnv));
-    }
-    const prepared = prepareFreshSqliteStateDirectory(authoritySelection, process.env);
-    dataRoot = prepared.dataRoot;
+  console.error("[bridge] SQLITE_INITIALIZING");
+  let authoritySelection;
+  let runtimeEnv;
+  let prepared;
+  try {
+    runtimeEnv = loadPersistedRuntimeEnvironment(process.env, homedir4(), host);
+    authoritySelection = loadInstallAuthoritySelection(host);
+    prepared = prepareFreshSqliteStateDirectory(authoritySelection, process.env);
+  } catch (error2) {
+    console.error(`[bridge] SQLITE_INITIALIZATION_FAILED: ${error2 instanceof Error ? error2.message : String(error2)}`);
+    throw error2;
   }
+  const dataRoot = prepared.dataRoot;
   const provenance = {
     bridge: fingerprintRuntimeArtifact(bridgeEntryPath),
     worker: fingerprintRuntimeArtifact(host.workerEntryPath ?? workerEntryPath())
@@ -37223,9 +37780,6 @@ async function startBridge(host = codexHostProfile(), version2 = SERVER_VERSION,
     bridge: { sha256: provenance.bridge.sha256 },
     worker: { sha256: provenance.worker.sha256 }
   })}`);
-  if (warning) {
-    console.error(`[bridge] ${warning}`);
-  }
   console.error(`[bridge] data root: ${dataRoot}`);
   const workerLimit = resolveMaxConcurrentWorkers(runtimeEnv);
   if (workerLimit.warning) console.error(`[bridge] ${workerLimit.warning}`);
@@ -37240,16 +37794,15 @@ async function startBridge(host = codexHostProfile(), version2 = SERVER_VERSION,
   }
   const processProbe = createPlatformProbe();
   let manager;
-  if (authoritySelection.state === "sqlite") {
-    const trustedLocalContext = createTrustedLocalCandidateContext(host);
+  const databasePath = path18.join(dataRoot, FRESH_SQLITE_DATABASE_FILE);
+  let trustedLocalContext;
+  try {
+    trustedLocalContext = createTrustedLocalCandidateContext(host);
     if (trustedLocalContext.status !== "enabled") {
       throw new Error(`SQLite Authority startup refused: Trusted Local policy is ${trustedLocalContext.status}`);
     }
-    const databasePath = path18.join(dataRoot, FRESH_SQLITE_DATABASE_FILE);
     const lifecycleGate = await Promise.resolve().then(() => (init_lifecycle_gate(), lifecycle_gate_exports));
-    if (sqliteDatabaseMissing) {
-      await lifecycleGate.initializeFreshInstallSqliteRoot(dataRoot, FRESH_SQLITE_DATABASE_FILE);
-    }
+    await lifecycleGate.initializeFreshInstallSqliteRoot(dataRoot, FRESH_SQLITE_DATABASE_FILE, process.versions.node, processProbe);
     const { SqliteLifecycleMcpAuthority: SqliteLifecycleMcpAuthority2 } = await Promise.resolve().then(() => (init_sqlite_lifecycle_mcp_authority(), sqlite_lifecycle_mcp_authority_exports));
     const authority = await SqliteLifecycleMcpAuthority2.create({
       dataRoot,
@@ -37263,25 +37816,9 @@ async function startBridge(host = codexHostProfile(), version2 = SERVER_VERSION,
       requireAuthorityReceipt: true
     });
     manager = new BridgeTaskManager({ lifecycleAuthority: authority, maxConcurrentWorkers: workerLimit.maxConcurrentWorkers });
-    console.error(`[bridge] SQLite Authority ready at ${databasePath}`);
-  } else {
-    let managerIdentity = null;
-    try {
-      const observed = await processProbe.selfIdentity();
-      if (observed.fingerprint_precision === "exact" && observed.fingerprint) managerIdentity = observed;
-    } catch {
-    }
-    const managerWriterLeaseToken = await registerManagerJsonWriter(dataRoot, managerIdentity);
-    const { TaskStore: TaskStore3 } = await Promise.resolve().then(() => (init_task_store(), task_store_exports));
-    const store = new TaskStore3(dataRoot, { writerQuiescence: true, writerLeaseToken: managerWriterLeaseToken });
-    manager = new BridgeTaskManager({
-      store,
-      workspaceProvider: new DirectWorkspaceProvider(),
-      maxConcurrentWorkers: workerLimit.maxConcurrentWorkers,
-      spawnWorker: createWorkerSpawner(host, provenance, { writerQuiescence: true }),
-      probe: processProbe,
-      managerWriterLeaseToken
-    });
+  } catch (error2) {
+    console.error(`[bridge] SQLITE_INITIALIZATION_FAILED: ${error2 instanceof Error ? error2.message : String(error2)}`);
+    throw error2;
   }
   const modelSettings = new ZCodeModelSettings(process.env, { host });
   const server = createBridgeServer({
@@ -37306,6 +37843,7 @@ async function startBridge(host = codexHostProfile(), version2 = SERVER_VERSION,
   };
   process.on("SIGINT", () => shutdown("SIGINT"));
   process.on("SIGTERM", () => shutdown("SIGTERM"));
+  console.error(`[bridge] SQLITE_READY at ${databasePath}`);
   console.error(`[bridge] ${host.name} stdio MCP server ready`);
 }
 

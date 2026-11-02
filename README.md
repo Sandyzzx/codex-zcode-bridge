@@ -2,7 +2,7 @@
 
 **Delegate coding to ZCode from Codex; keep planning, review, and acceptance in Codex.**
 
-> **Preview release.** This build introduces SQLite-backed task state and recovery. It has been exercised on a Windows local installation, but other users' installations and operating systems have not been fully validated. Please read the upgrade notes before installing over a JSON-based version.
+> **Preview release.** This checkout contains unreleased SQLite bootstrap changes. The published `v1.3.0-rc.4` tag does not include automatic bootstrap; the behavior described below applies only after the upcoming candidate is released. Other users' installations and operating systems have not been fully validated.
 
 [简体中文](README.zh-CN.md) · [Repository](https://github.com/Sandyzzx/codex-zcode-bridge) · [Releases](https://github.com/Sandyzzx/codex-zcode-bridge/releases)
 
@@ -43,33 +43,20 @@ codex plugin add codex-zcode-bridge@codex-zcode-bridge
 
 Alternatively, register the tagged repository marketplace, then install **Zcode Bridge** in Codex's Plugins Directory. Start a new conversation and review the plugin's `SessionStart` hook. First-run discovery locates the local ZCode runtime and provider settings; it does not copy credentials. Use `zcode_doctor` for installation diagnostics.
 
-**First activation on a new installation:** after installing the Preview, explicitly select the SQLite Authority before starting the Bridge:
+**Upcoming automatic SQLite startup (unreleased candidate):** after this candidate is released, the first plugin start will create and validate `${LOCALAPPDATA}\CodexZCodeBridge\state\bridge.sqlite` and provision its default capacity before accepting MCP requests. Marketplace installs and upgrades from the old JSON version will use the same bootstrap. No `authority.json`, SQLite activation command, JSON migration command, `trusted-local-policy.json`, or manually maintained `workspace_roots` list will be required. The currently published `v1.3.0-rc.4` behavior is not changed by this source checkout.
 
-```powershell
-$settings = Join-Path $HOME '.codex\codex-zcode-bridge'
-New-Item -ItemType Directory -Path $settings -Force | Out-Null
-@'
-{
-  "schema_version": 1,
-  "authority": "sqlite"
-}
-'@ | Set-Content -LiteralPath (Join-Path $settings 'authority.json') -Encoding ascii
-```
-
-The first SQLite startup creates `${LOCALAPPDATA}\CodexZCodeBridge\state\bridge.sqlite` with a fresh-install receipt. Ordinary local project directories and optional Git worktrees do **not** require a `trusted-local-policy.json` or a manually maintained `workspace_roots` list. Use this activation step only when no legacy Bridge `.tasks` data exists; installations with existing JSON tasks must use the stop-the-world migration path below.
+An existing valid SQLite database is reopened without reset. A damaged database, incomplete SQLite state, unsupported schema, or failed integrity check stops startup; the Bridge never falls back to JSON or replaces the database.
 
 ## Important: upgrading from JSON storage
 
-**Complete or save important tasks before upgrading.** This release deliberately does **not** migrate old JSON task lifecycles into SQLite:
+**Complete or save important tasks before upgrading.** The new SQLite database starts empty and does **not** migrate old JSON task lifecycles:
 
-- **`queued`** tasks are not automatically dispatched after switching.
-- **`running`** tasks must be allowed to finish or safely cancelled before shutdown.
-- **`waiting_for_master`** tasks must be reviewed or their handoff instructions saved.
-- Old tasks cannot automatically **Resume** or **Continue** in the new SQLite database. Re-submit any unfinished work as a new task when appropriate.
+- **`queued`** tasks are not automatically dispatched after upgrading.
+- **`running`** tasks should be allowed to finish or safely cancelled before shutdown.
+- **`waiting_for_master`** tasks should be reviewed or their handoff instructions saved.
+- Old tasks cannot automatically **Resume** or **Continue**. Re-submit unfinished work as new tasks when appropriate.
 
-The supported design is a **stop-the-world switch**: stop the old JSON writer and workers, verify shutdown, preserve the entire legacy JSON task tree as an immutable/read-only archive, then publish an **empty** SQLite Authority for future tasks. It is **not** a history conversion or an automatic in-place upgrade. Do not delete the archive. Never run a second cutover against an already-published SQLite Authority; after SQLite accepts new writes, restoring a pre-switch JSON snapshot is not a safe rollback.
-
-**For an existing installation, do not merely switch an `authority.json` value by hand.** Follow the matching release's validated migration procedure and confirm the target data roots, archive, published receipt and absence of active workers. If a packaged upgrade procedure for your environment is not available, defer upgrading and keep the prior JSON installation until the procedure is verified.
+Old JSON files remain untouched and are not read, imported, archived, or deleted by the Bridge. Decide yourself whether to retain them after considering your backup needs. Old task history will not appear in SQLite.
 
 ## Everyday use
 
@@ -84,7 +71,7 @@ If an MCP request times out, query the existing Task ID before submitting again;
 
 On Windows, first-run runtime configuration is stored under `%USERPROFILE%\.codex\codex-zcode-bridge\runtime-config.json`. Common overrides include the ZCode runtime path, provider configuration paths, default provider/model, execution mode, worker concurrency and timeouts. Use the discovered locations rather than copying paths from somebody else's machine.
 
-SQLite's production database and archive must be **separate** from the JSON source task directory; their actual locations depend on the installation/upgrade configuration. Do not edit SQLite tables, authority receipts, or migration markers manually.
+The SQLite database uses the default per-user data root unless an existing valid SQLite install configuration selects another local root. Do not edit SQLite tables, authority receipts, or bootstrap markers manually.
 
 For the supported Windows single-user local deployment, SQLite uses a fixed trusted-local `yolo` execution profile, matching the JSON path's ordinary unattended coding workflow. It runs with the current Windows account's permissions and is not a sandbox or an elevation mechanism. Ordinary workspace reads, edits, builds, tests, and cleanup inside the task scope can run automatically. Push, merge, tag, release, production Authority changes, deletion outside task scope, credential changes, and access to real production task data still require explicit user authorization. Task prompts, Skills, worktrees, and path lists cannot grant those permissions. Do not place secrets in prompts.
 

@@ -5,6 +5,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpath
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { DatabaseSync } from "node:sqlite";
 import { assertSupportedNodeRuntime, isSupportedNodeVersion, SUPPORTED_NODE_RANGE } from "../src/runtime/node-runtime.js";
 
 test("SQLite runtime gate accepts Node 24.16+ and rejects Node 22, early 24, prerelease, and Node 25", () => {
@@ -57,7 +58,7 @@ test("marketplace launcher preserves the Node 22.18+ product gate before loading
   }
 });
 
-test("marketplace launcher starts the actual built Bridge bundle and completes an isolated MCP initialize", { timeout: 45_000, skip: process.platform !== "win32" }, async () => {
+test("Marketplace launcher automatically bootstraps SQLite before the first MCP initialize", { timeout: 45_000, skip: process.platform !== "win32" }, async () => {
   assert.equal(process.versions.node, "24.16.0", "this R1 launcher acceptance run uses the pinned Node runtime");
   const pluginRoot = path.resolve("plugins/codex-zcode-bridge");
   const launcherPath = realpathSync(path.join(pluginRoot, "launch-node24.mjs"));
@@ -65,9 +66,14 @@ test("marketplace launcher starts the actual built Bridge bundle and completes a
   assert.ok(existsSync(launcherPath));
   assert.ok(existsSync(bundlePath));
 
-  const fixtureRoot = mkdtempSync(path.join(os.tmpdir(), "wp6-r1-real-launcher-"));
-  const dataRoot = path.join(fixtureRoot, "data-root");
+  // Keep synthetic app data outside the test runner's TEMP root. Production
+  // path validation intentionally rejects persistent SQLite data beneath TEMP.
+  const fixtureBase = path.resolve(".run");
+  mkdirSync(fixtureBase, { recursive: true });
+  const fixtureRoot = mkdtempSync(path.join(fixtureBase, "marketplace-launcher-sqlite-"));
   const isolatedHome = path.join(fixtureRoot, "home");
+  const localAppData = path.join(isolatedHome, "AppData", "Local");
+  const dataRoot = path.join(localAppData, "CodexZCodeBridge", "state");
   mkdirSync(dataRoot, { recursive: true });
   mkdirSync(isolatedHome, { recursive: true });
   const childEnv: NodeJS.ProcessEnv = {
@@ -80,9 +86,8 @@ test("marketplace launcher starts the actual built Bridge bundle and completes a
     USERPROFILE: isolatedHome,
     HOME: isolatedHome,
     APPDATA: path.join(isolatedHome, "AppData", "Roaming"),
-    LOCALAPPDATA: path.join(isolatedHome, "AppData", "Local"),
+    LOCALAPPDATA: localAppData,
     ZCODE_BRIDGE_PLUGIN_MODE: "1",
-    ZCODE_BRIDGE_DATA_DIR: dataRoot,
   };
   const stdout: string[] = [];
   const stderr: string[] = [];
@@ -234,6 +239,11 @@ test("marketplace launcher starts the actual built Bridge bundle and completes a
     assert.ok(stderr.join("").includes(`data root: ${dataRoot}`), "Bridge must use the isolated synthetic data root");
     assert.doesNotMatch(stderr.join(""), /fatal:|Unsupported Node/u);
     assert.ok(!stdout.join("").includes("[bridge]"), "stdout must remain JSON-RPC only");
+    assert.equal(
+      existsSync(path.join(isolatedHome, ".codex", "codex-zcode-bridge", "authority.json")),
+      false,
+      "first-use SQLite bootstrap must not require a manual Authority activation file",
+    );
 
     const dataFiles: string[] = [];
     const visit = (directory: string): void => {
@@ -244,7 +254,16 @@ test("marketplace launcher starts the actual built Bridge bundle and completes a
       }
     };
     visit(dataRoot);
-    assert.equal(dataFiles.some((name) => /\.(?:db|sqlite|sqlite3)(?:$|-)/iu.test(name)), false, "JSON initialize must not create SQLite storage");
+    assert.equal(dataFiles.some((name) => /(?:^|[\\/])bridge\.sqlite$/iu.test(name)), true, "the first Marketplace MCP initialize must bootstrap SQLite automatically");
+    assert.equal(existsSync(path.join(dataRoot, "bridge.sqlite.bootstrap-pending.json")), false, "successful startup must publish and clear the bootstrap marker");
+    const database = new DatabaseSync(path.join(dataRoot, "bridge.sqlite"), { readOnly: true });
+    try {
+      assert.equal(database.prepare("PRAGMA integrity_check").get()?.integrity_check, "ok");
+      assert.equal(database.prepare("SELECT COUNT(*) AS n FROM fresh_install_receipt").get()?.n, 1);
+      assert.equal(database.prepare("SELECT COUNT(*) AS n FROM manager_operations").get()?.n, 1);
+      assert.equal(database.prepare("SELECT operation_id FROM manager_operations").get()?.operation_id, "fresh-install-capacity-v1");
+      assert.equal(database.prepare("SELECT COUNT(*) AS n FROM manager_operation_events").get()?.n, 1);
+    } finally { database.close(); }
     evidence["dataFiles"] = dataFiles;
     evidence["stdout"] = stdout.join("");
     evidence["stderr"] = stderr.join("");

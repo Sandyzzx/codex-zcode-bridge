@@ -4,10 +4,6 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, 
 import path from "node:path";
 import test from "node:test";
 import type { TaskResult } from "../../../src/interfaces.js";
-import {
-  assertFreshInstallLegacyJsonEmpty,
-  SqliteAuthorityStartupError,
-} from "../../../src/host/stdio.js";
 import { createPlatformProbe } from "../../../src/runtime/process-probe.js";
 import type { ProcessProbe } from "../../../src/runtime/process-probe.js";
 import {
@@ -525,21 +521,17 @@ test("sealed JSON drift after archive creation fails before a SQLite target is c
   }
 });
 
-test("fresh SQLite requires an empty legacy JSON root and a durable receipt", async () => {
+test("fresh SQLite requires a durable receipt and does not depend on legacy JSON history", async () => {
   const root = await makeTempDir("json-authority-startup-gate");
   const legacyRoot = path.join(root, "legacy");
   const sqliteRoot = path.join(root, "sqlite");
-  mkdirSync(path.join(legacyRoot, ".tasks"), { recursive: true });
+  const legacyTaskRoot = path.join(legacyRoot, ".tasks", "existing-task");
+  mkdirSync(legacyTaskRoot, { recursive: true });
+  const legacyResult = path.join(legacyTaskRoot, "result.json");
+  writeFileSync(legacyResult, "legacy history stays untouched", "utf8");
+  const legacyResultBytes = readFileSync(legacyResult);
   mkdirSync(sqliteRoot, { recursive: true });
   try {
-    assertFreshInstallLegacyJsonEmpty(legacyRoot);
-    mkdirSync(path.join(legacyRoot, ".tasks", "existing-task"), { recursive: true });
-    assert.throws(
-      () => assertFreshInstallLegacyJsonEmpty(legacyRoot),
-      (error: unknown) => error instanceof SqliteAuthorityStartupError
-        && error.code === "migration_required_for_existing_json_authority",
-    );
-
     const modules = await loadLifecycleCandidateModules();
     const unreceipted = modules.Store.initialize(sqliteRoot, {
       databaseFileName: "bridge.sqlite",
@@ -586,6 +578,7 @@ test("fresh SQLite requires an empty legacy JSON root and a durable receipt", as
     mkdirSync(freshRoot, { recursive: true });
     const receipt = await initializeFreshInstallSqliteRoot(freshRoot, "bridge.sqlite");
     assert.equal(receipt.verifierVersion, CUTOVER_VERIFIER);
+    assert.deepEqual(readFileSync(legacyResult), legacyResultBytes, "legacy JSON data remains untouched during fresh bootstrap");
     const fresh = modules.Store.open(freshRoot, {
       databaseFileName: "bridge.sqlite",
       managedDataDirectory: true,

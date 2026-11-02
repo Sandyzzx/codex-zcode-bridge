@@ -2,8 +2,8 @@
 
 > Status: AUTHORITATIVE
 > Last updated: 2026-11-02
-> Last verified: 2026-11-02，ADR-019 的本机 `yolo` SQLite 执行档案、alive/unknown Recovery Manager 所有权围栏及原 Manager interaction/cancel 可用性由受影响 112 项定向测试复验；完整发布回归与 Bundle 身份另见 rc.4 发布证据。
-> Verified against: cab82a918514c6329f4982477b7eb0e8ada6cc01 + ADR-019 工作区修复；受测源码指纹见本轮证据。
+> Last verified: 2026-11-02，ADR-019 的本机 `yolo` SQLite 执行档案、alive/unknown Recovery Manager 所有权围栏及原 Manager interaction/cancel 可用性由受影响 112 项定向测试复验；完整发布回归与 Bundle 身份另见 rc.4 发布证据。OD Fresh Bootstrap 候选尚未执行验证。
+> Verified against: 已验收运行版本 cab82a918514c6329f4982477b7eb0e8ada6cc01；本地 OD 候选基于 ca0e19c4，未验收。
 
 当前状态快照，回答"现在什么能用、什么不能用"。路线图和优先级不在这里。
 
@@ -18,6 +18,8 @@
 ## 本分支改动
 
 本分支基于上游 1.2.6（0902236），加入三项修复。
+
+OD Fresh Bootstrap 是尚未验收的本地候选：rc.4 已发布版本仍可能要求旧 Authority 激活；该候选将新装和旧 JSON 升级统一改为自动创建或恢复 SQLite。实现、Bundle 与 Marketplace E2E 尚未验证，不能将下方候选文档描述当作当前已发布行为。
 
 单用户本机信任与 Recovery 所有权（ADR-019）：SQLite 固定受信任执行档案改用与 JSON 默认路径一致的 `yolo` 普通工具流程，policy revision 为 `single-user-local-v3`；兼容 profile ID `local-build-v1` 保留。SQLite startup Recovery 对 running Operation 的精确 `alive` 或临时 `unknown` Worker 仅隔离当前扫描 Manager，不写持久全局 Hold；原 Manager 仍可记录 interaction reply 与 cancel intent。已证实退出但 Result/Cleanup/Release 不完整时继续 fail-closed。
 
