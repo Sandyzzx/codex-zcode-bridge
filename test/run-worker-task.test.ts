@@ -384,7 +384,7 @@ test("the shipped Worker bundle records its actual build identity without starti
     const workerPath = path.resolve("plugins/codex-zcode-bridge/worker/worker-main.mjs");
     const workerSha = createHash("sha256").update(readFileSync(workerPath)).digest("hex").toUpperCase();
     const expected = {
-      bridge: { path: "C:\\isolated\\dist\\bridge.mjs", sha256: "A".repeat(64) },
+      bridge: { path: path.join(fixture.workspaceDir, "dist", "bridge.mjs"), sha256: "A".repeat(64) },
       worker: { path: workerPath, sha256: workerSha },
     };
     const run = spawnSync(process.execPath, [workerPath, fixture.dataRoot, "task_1", "1", BRIDGE_WORKER_LAUNCH_MARKER], {

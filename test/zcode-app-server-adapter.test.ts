@@ -277,7 +277,8 @@ test("trusted local execution profile is bound to the actual app-server session 
   }
 });
 
-test("a root-exited termination race is verified only by a clean recorded-tree scan", { timeout: 8_000 }, async () => {
+test("a root-exited termination race is verified only by a clean recorded-tree scan", { timeout: 8_000 }, async (t) => {
+  if (process.platform !== "win32") return t.skip("Windows-only native process identity and claimant scan");
   // The transaction observes the owned runtime exit before reporting the
   // root-exited race; only the subsequent claimant scan supplies a verdict.
   const runtime = await makeFakeRuntime(undefined, true, false, undefined, false, null, undefined, 1_200);
@@ -431,7 +432,8 @@ test("a controlled Windows root exit with no descendants passes the real claiman
   }
 });
 
-test("a root-exited termination race stays failed when claimant scan sees a live descendant", { timeout: 8_000 }, async () => {
+test("a root-exited termination race stays failed when claimant scan sees a live descendant", { timeout: 8_000 }, async (t) => {
+  if (process.platform !== "win32") return t.skip("Windows-only native process identity and claimant scan");
   const runtime = await makeFakeRuntime(undefined, true, false, undefined, false, null, undefined, 1_200);
   let appServerPid = 0;
   try {
@@ -529,7 +531,8 @@ test("a controlled Windows root exit still scans its live descendant before clea
   }
 });
 
-test("classifies explicit provider usage exhaustion without publishing its raw error", async () => {
+test("classifies explicit provider usage exhaustion without publishing its raw error", async (t) => {
+  if (process.platform !== "win32") return t.skip("Windows-only native process identity and claimant scan");
   const privateMarker = "PRIVATE_PROVIDER_DETAIL_7f4b";
   const runtime = await makeFakeRuntime(undefined, true, false, {
     code: "insufficient_quota",
@@ -888,7 +891,8 @@ test("keeps the runtime-selected reasoning options when the requested model is a
   }
 });
 
-test("cancels a pending permission with one verified runtime cleanup", { timeout: 5_000 }, async () => {
+test("cancels a pending permission with one verified runtime cleanup", { timeout: 5_000 }, async (t) => {
+  if (process.platform !== "win32") return t.skip("Windows-only native process identity and claimant scan");
   const runtime = await makeFakeRuntime(undefined, true, true, undefined, false, null, undefined, 1_200);
   let ready!: () => void;
   const interactionReady = new Promise<void>((resolve) => { ready = resolve; });

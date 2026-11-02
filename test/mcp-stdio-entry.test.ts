@@ -30,9 +30,10 @@ after(() => {
 function isolatedInstall(name: string, copyPlugin = false) {
   const root = path.join(fixtureRoot, name);
   const userProfile = path.join(root, "user-profile");
-  const localAppDataBase = process.env["LOCALAPPDATA"];
-  assert.ok(localAppDataBase && path.isAbsolute(localAppDataBase), "test requires an absolute real LOCALAPPDATA base");
+  const localAppDataBase = process.env["LOCALAPPDATA"] ?? tmpdir();
+  assert.ok(path.isAbsolute(localAppDataBase), "test requires an absolute real temporary base");
   const tempBase = path.join(localAppDataBase, "Temp");
+  mkdirSync(tempBase, { recursive: true });
   const systemTemp = mkdtempSync(path.join(tempBase, "zcode-bridge-e2e-"));
   ownedSystemTempRoots.push(systemTemp);
   const realTempBase = realpathSync(tempBase);
