@@ -2,7 +2,7 @@
 
 **Delegate coding to ZCode from Codex; keep planning, review, and acceptance in Codex.**
 
-> **Preview release.** This checkout contains unreleased SQLite bootstrap changes. The published `v1.3.0-rc.4` tag does not include automatic bootstrap; the behavior described below applies only after the upcoming candidate is released. Other users' installations and operating systems have not been fully validated.
+> **Stable release.** `v1.3.0` introduces automatic SQLite bootstrap for new installations and upgrades without an existing SQLite database. Windows single-user local installations are the validated deployment target; other platforms have not been fully validated.
 
 [简体中文](README.zh-CN.md) · [Repository](https://github.com/Sandyzzx/codex-zcode-bridge) · [Releases](https://github.com/Sandyzzx/codex-zcode-bridge/releases)
 
@@ -32,18 +32,18 @@ The bridge supports direct project directories and an optional Git execution wor
 
 ZCode and Node.js are not installed automatically by the marketplace.
 
-## Install the preview
+## Install v1.3.0
 
-Use the **published Preview tag** rather than `master`. The commands below pin the exact tag shown on the [GitHub prerelease](https://github.com/Sandyzzx/codex-zcode-bridge/releases):
+Use the **published stable tag** rather than `master`. The commands below pin the exact tag shown on [GitHub Releases](https://github.com/Sandyzzx/codex-zcode-bridge/releases):
 
 ```sh
-codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-v1.3.0-rc.4
+codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-v1.3.0
 codex plugin add codex-zcode-bridge@codex-zcode-bridge
 ```
 
 Alternatively, register the tagged repository marketplace, then install **Zcode Bridge** in Codex's Plugins Directory. Start a new conversation and review the plugin's `SessionStart` hook. First-run discovery locates the local ZCode runtime and provider settings; it does not copy credentials. Use `zcode_doctor` for installation diagnostics.
 
-**Upcoming automatic SQLite startup (unreleased candidate):** after this candidate is released, the first plugin start will create and validate `${LOCALAPPDATA}\CodexZCodeBridge\state\bridge.sqlite` and provision its default capacity before accepting MCP requests. Marketplace installs and upgrades from the old JSON version will use the same bootstrap. No `authority.json`, SQLite activation command, JSON migration command, `trusted-local-policy.json`, or manually maintained `workspace_roots` list will be required. The currently published `v1.3.0-rc.4` behavior is not changed by this source checkout.
+**Automatic SQLite startup:** the first plugin start creates and validates `${LOCALAPPDATA}\CodexZCodeBridge\state\bridge.sqlite` and provisions its default capacity before accepting MCP requests. Marketplace installs and upgrades from the old JSON version use the same bootstrap. No `authority.json`, SQLite activation command, JSON migration command, `trusted-local-policy.json`, or manually maintained `workspace_roots` list is required.
 
 An existing valid SQLite database is reopened without reset. A damaged database, incomplete SQLite state, unsupported schema, or failed integrity check stops startup; the Bridge never falls back to JSON or replaces the database.
 
@@ -77,7 +77,7 @@ For the supported Windows single-user local deployment, SQLite uses a fixed trus
 
 ## Limits and troubleshooting
 
-- Only a Windows single-user local deployment has received real ZCode Provider and production SQLite cutover validation in this development cycle. A Preview is not a cross-platform or general-availability certification.
+- Only a Windows single-user local deployment has received real ZCode Provider and production SQLite cutover validation in this development cycle. This release is not a cross-platform or general-availability certification.
 - ZCode Start Plan is not established as a supported Bridge path in this release; provider capabilities depend on the user's local ZCode installation.
 - A worker can exit without committing a Result. In that case the bridge intentionally retains a cleanup hold rather than guessing that resource cleanup succeeded. Do not clear holds by editing the database or killing unidentified processes. Preserve diagnostic evidence and use documented, verified recovery procedures.
 - ZCode Desktop may refresh its workspace/session index after the Bridge task is created.
