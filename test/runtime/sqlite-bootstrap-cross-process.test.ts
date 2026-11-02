@@ -138,6 +138,7 @@ async function finish(run: WorkerRun): Promise<WorkerStatus> {
     schema_version: 1,
     pid: run.child.pid,
     exit,
+    stdout: output?.stdout ?? "",
     stderr: output?.stderr ?? "",
     final_status: status,
   }, null, 2)}\n`, "utf8");
