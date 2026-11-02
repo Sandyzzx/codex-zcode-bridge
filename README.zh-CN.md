@@ -2,7 +2,7 @@
 
 **Codex 负责规划、派发和验收，ZCode 在本机执行开发任务。**
 
-> **Preview 预览版。** 当前工作树包含尚未发布的 SQLite 自动初始化改动。已发布的 `v1.3.0-rc.4` 不含此自动 Bootstrap；下文的新行为仅适用于未来发布的候选版本。其他用户环境和跨平台兼容性尚未全面验证。
+> **稳定版。** `v1.3.0` 为没有既有 SQLite 数据库的新安装及升级用户自动初始化 SQLite。Windows 单用户本地环境是本版本已验证的部署目标；其他平台尚未完整验证。
 
 [English](README.md) · [项目仓库](https://github.com/Sandyzzx/codex-zcode-bridge) · [版本发布](https://github.com/Sandyzzx/codex-zcode-bridge/releases)
 
@@ -32,18 +32,18 @@ ZCode 不会自动获得 Codex 的完整对话上下文；Master 应随任务提
 
 Marketplace 不会替你安装 Node.js 或 ZCode。
 
-## 安装 Preview
+## 安装 v1.3.0
 
-请使用 GitHub **Prerelease 对应的 Tag**，不要在测试预览版时直接跟随 `master`。以下命令固定到 [GitHub Releases](https://github.com/Sandyzzx/codex-zcode-bridge/releases) 显示的实际标签：
+请使用 GitHub **正式 Release 对应的 Tag**，不要直接跟随 `master`。以下命令固定到 [GitHub Releases](https://github.com/Sandyzzx/codex-zcode-bridge/releases) 显示的实际标签：
 
 ```sh
-codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-v1.3.0-rc.4
+codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-v1.3.0
 codex plugin add codex-zcode-bridge@codex-zcode-bridge
 ```
 
 也可以注册对应版本的 Marketplace 后，在 Codex **Plugins Directory** 安装 **Zcode Bridge**。开启新对话，审查并信任 `SessionStart` Hook。首次启动会发现本机的 ZCode 运行时和配置，不复制 Provider 凭据；安装问题可使用 `zcode_doctor` 诊断。
 
-**即将发布的 SQLite 自动启动（尚未发布）：** 此候选发布后，首次启动插件时，Bridge 会自动创建并验证 `${LOCALAPPDATA}\CodexZCodeBridge\state\bridge.sqlite`，完成默认 Capacity provision 后才接受 MCP 请求。Marketplace 新装和旧 JSON 版本升级将使用同一流程。无需创建 `authority.json`、运行 SQLite 激活或 JSON 迁移命令，也无需配置 `trusted-local-policy.json` 或维护 `workspace_roots` 白名单。当前已发布的 `v1.3.0-rc.4` 尚未包含此行为。
+**SQLite 自动启动：** 首次启动插件时，Bridge 会自动创建并验证 `${LOCALAPPDATA}\CodexZCodeBridge\state\bridge.sqlite`，完成默认 Capacity provision 后才接受 MCP 请求。Marketplace 新装和旧 JSON 版本升级使用同一流程。无需创建 `authority.json`、运行 SQLite 激活或 JSON 迁移命令，也无需配置 `trusted-local-policy.json` 或维护 `workspace_roots` 白名单。
 
 已有有效 SQLite 数据库会原样复用，不会重置。数据库损坏、SQLite 状态不完整、Schema 不受支持或完整性验证失败时，Bridge 会停止启动；不会回退 JSON，也不会覆盖数据库。
 
@@ -77,7 +77,7 @@ SQLite 默认使用当前用户的数据根。不要手工改写 SQLite 表、Au
 
 ## 已知限制与排障
 
-- 本轮真实 Provider 与 SQLite 生产切换仅在 Windows 单用户可信本地环境得到验证；Preview 不代表其他平台已获得生产认证。
+- 本轮真实 Provider 与 SQLite 生产切换仅在 Windows 单用户可信本地环境得到验证；本版本不代表其他平台已获得生产认证。
 - ZCode Start Plan 目前不作为本版本已验证的 Bridge 支持路径；具体 Provider 能力取决于本机 ZCode 环境。
 - Worker 在未提交 Result 时可能异常退出。Bridge 会保留 Cleanup Hold，而不是假设进程资源已完全关闭。不要直接编辑数据库或按进程名终止未知进程；应保存证据并使用正式恢复方案。
 - ZCode Desktop 中的任务列表可能延后刷新。
