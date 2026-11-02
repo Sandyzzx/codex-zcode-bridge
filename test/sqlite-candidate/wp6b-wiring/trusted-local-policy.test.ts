@@ -14,7 +14,7 @@ writeFileSync(nonDirectory, "fixture");
 
 const config = (overrides: Partial<TrustedLocalPolicyConfig> = {}): TrustedLocalPolicyConfig => ({
   enabled: true,
-  policy_revision: "single-user-local-v2",
+  policy_revision: "single-user-local-v3",
   execution_profile_id: "local-build-v1",
   allowed_operation_kinds: ["attempt_lifecycle"],
   unrestricted: false,
@@ -40,7 +40,7 @@ test("Host policy accepts ordinary existing local project directories without a 
     assert.equal(allowed.state, "allow");
     if (allowed.state === "allow") {
       assert.equal(allowed.source, "trusted_local_policy");
-      assert.equal(allowed.policy_revision, "single-user-local-v2");
+      assert.equal(allowed.policy_revision, "single-user-local-v3");
       assert.equal(allowed.execution_profile_id, "local-build-v1");
       assert.match(allowed.policy_digest, /^[0-9a-f]{64}$/u);
       assert.equal(path.win32.normalize(allowed.canonical_path), path.win32.normalize(workspace));
@@ -82,7 +82,7 @@ test("TaskPackage, Prompt and Worker fields cannot supply or raise the Host poli
   if (decision.state === "allow") {
     assert.equal(decision.source, "trusted_local_policy");
     assert.equal(decision.execution_profile_id, "local-build-v1");
-    assert.equal(decision.policy_revision, "single-user-local-v2");
+    assert.equal(decision.policy_revision, "single-user-local-v3");
   }
   assert.equal(provider.checkPermission({
     workspace: firstWorkspace,

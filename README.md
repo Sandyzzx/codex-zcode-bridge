@@ -37,7 +37,7 @@ ZCode and Node.js are not installed automatically by the marketplace.
 Use the **published Preview tag** rather than `master`. The commands below pin the exact tag shown on the [GitHub prerelease](https://github.com/Sandyzzx/codex-zcode-bridge/releases):
 
 ```sh
-codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-v1.3.0-rc.3
+codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-v1.3.0-rc.4
 codex plugin add codex-zcode-bridge@codex-zcode-bridge
 ```
 
@@ -84,7 +84,9 @@ If an MCP request times out, query the existing Task ID before submitting again;
 
 On Windows, first-run runtime configuration is stored under `%USERPROFILE%\.codex\codex-zcode-bridge\runtime-config.json`. Common overrides include the ZCode runtime path, provider configuration paths, default provider/model, execution mode, worker concurrency and timeouts. Use the discovered locations rather than copying paths from somebody else's machine.
 
-SQLite's production database and archive must be **separate** from the JSON source task directory; their actual locations depend on the installation/upgrade configuration. Do not edit SQLite tables, authority receipts, or migration markers manually. The default ZCode execution mode may allow broad local tool permissions: use an approval-based mode when appropriate and do not place secrets in prompts.
+SQLite's production database and archive must be **separate** from the JSON source task directory; their actual locations depend on the installation/upgrade configuration. Do not edit SQLite tables, authority receipts, or migration markers manually.
+
+For the supported Windows single-user local deployment, SQLite uses a fixed trusted-local `yolo` execution profile, matching the JSON path's ordinary unattended coding workflow. It runs with the current Windows account's permissions and is not a sandbox or an elevation mechanism. Ordinary workspace reads, edits, builds, tests, and cleanup inside the task scope can run automatically. Push, merge, tag, release, production Authority changes, deletion outside task scope, credential changes, and access to real production task data still require explicit user authorization. Task prompts, Skills, worktrees, and path lists cannot grant those permissions. Do not place secrets in prompts.
 
 ## Limits and troubleshooting
 

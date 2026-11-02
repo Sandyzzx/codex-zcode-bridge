@@ -5,14 +5,16 @@
  */
 export interface TrustedLocalExecutionProfile {
   readonly id: string;
-  readonly sessionMode: "build";
+  readonly sessionMode: "yolo";
   readonly unrestricted: false;
 }
 
 const PROFILES: Readonly<Record<string, TrustedLocalExecutionProfile>> = Object.freeze({
   "local-build-v1": Object.freeze({
     id: "local-build-v1",
-    sessionMode: "build",
+    // Keep the persisted profile ID for compatibility. The local single-user
+    // Bridge now uses the same ordinary-tool yolo mode as the JSON Host path.
+    sessionMode: "yolo",
     unrestricted: false,
   }),
 });

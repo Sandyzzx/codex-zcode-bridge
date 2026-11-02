@@ -37,7 +37,7 @@ export interface WorkerReportedIdentity {
   readonly policy_revision?: string;
   readonly policy_digest?: string;
   readonly execution_profile_id?: string;
-  readonly execution_mode?: "build";
+  readonly execution_mode?: "yolo";
   readonly unrestricted?: false;
   readonly policy_snapshot_digest?: string;
   readonly provenance_digest?: string;
@@ -97,7 +97,7 @@ export async function verifyHandshakeAndCommitClaim(
       || report.authorization_source !== expected.authorization_source || report.workspace_ref !== expected.workspace_ref
       || report.policy_revision !== expected.policy_revision || report.policy_digest !== expected.policy_digest
       || report.execution_profile_id !== expected.execution_profile_id
-      || report.policy_snapshot_digest !== expected.policy_snapshot_digest || report.execution_mode !== "build"
+      || report.policy_snapshot_digest !== expected.policy_snapshot_digest || report.execution_mode !== "yolo"
       || report.unrestricted !== false || !/^[0-9a-f]{64}$/u.test(expectedProvenanceDigest ?? "")
       || report.provenance_digest !== expectedProvenanceDigest) {
       return { state: "claim_rejected", reason: "worker_report_mismatch" };

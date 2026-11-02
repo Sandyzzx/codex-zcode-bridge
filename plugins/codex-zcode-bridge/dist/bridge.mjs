@@ -4013,7 +4013,9 @@ var init_trusted_local_profile = __esm({
     PROFILES = Object.freeze({
       "local-build-v1": Object.freeze({
         id: "local-build-v1",
-        sessionMode: "build",
+        // Keep the persisted profile ID for compatibility. The local single-user
+        // Bridge now uses the same ordinary-tool yolo mode as the JSON Host path.
+        sessionMode: "yolo",
         unrestricted: false
       })
     });
@@ -4030,7 +4032,7 @@ function createTrustedLocalPolicyProvider(config2) {
   let failure2 = config2 === void 0 ? "trusted_local_mode_disabled" : null;
   let policyRevision = "";
   let executionProfileId = "";
-  let executionMode = "build";
+  let executionMode = "yolo";
   let policyDigest = "";
   if (config2 !== void 0) {
     try {
@@ -4186,7 +4188,7 @@ var init_trusted_local_policy_config = __esm({
     init_trusted_local_policy();
     BUILT_IN_POLICY = Object.freeze({
       enabled: true,
-      policy_revision: "single-user-local-v2",
+      policy_revision: "single-user-local-v3",
       execution_profile_id: "local-build-v1",
       allowed_operation_kinds: Object.freeze(["attempt_lifecycle"]),
       unrestricted: false
@@ -4441,7 +4443,7 @@ async function verifyHandshakeAndCommitClaim(store, operation, report, launchTok
   }
   if (expectedPolicySnapshot) {
     const expected = expectedPolicySnapshot;
-    if (expected.operation_id !== operation.operation_id || expected.task_id !== operation.task_id || expected.attempt !== operation.attempt || expected.generation !== operation.generation || report.authorization_source !== expected.authorization_source || report.workspace_ref !== expected.workspace_ref || report.policy_revision !== expected.policy_revision || report.policy_digest !== expected.policy_digest || report.execution_profile_id !== expected.execution_profile_id || report.policy_snapshot_digest !== expected.policy_snapshot_digest || report.execution_mode !== "build" || report.unrestricted !== false || !/^[0-9a-f]{64}$/u.test(expectedProvenanceDigest ?? "") || report.provenance_digest !== expectedProvenanceDigest) {
+    if (expected.operation_id !== operation.operation_id || expected.task_id !== operation.task_id || expected.attempt !== operation.attempt || expected.generation !== operation.generation || report.authorization_source !== expected.authorization_source || report.workspace_ref !== expected.workspace_ref || report.policy_revision !== expected.policy_revision || report.policy_digest !== expected.policy_digest || report.execution_profile_id !== expected.execution_profile_id || report.policy_snapshot_digest !== expected.policy_snapshot_digest || report.execution_mode !== "yolo" || report.unrestricted !== false || !/^[0-9a-f]{64}$/u.test(expectedProvenanceDigest ?? "") || report.provenance_digest !== expectedProvenanceDigest) {
       return { state: "claim_rejected", reason: "worker_report_mismatch" };
     }
     onStage?.("worker_policy_snapshot_verified");
@@ -9079,12 +9081,12 @@ async function openClaimOnlyDriver(options) {
           throw new LifecycleGateError("recovery_event_evidence_invalid");
         }
       });
-      if (phase === "running" && identityState === "alive") {
+      if (phase === "running" && identityState !== "exited") {
         return {
           state: "held",
           operation_id: operationId,
           phase,
-          reason: "worker_still_alive_managed_elsewhere",
+          reason: identityState === "alive" ? "worker_still_alive_managed_elsewhere" : "worker_identity_unknown_managed_elsewhere",
           identity_state: identityState,
           probe_reason: probeReason
         };
@@ -35823,7 +35825,7 @@ function formatDuration(durationMs2) {
 
 // src/mcp/server.ts
 var SERVER_NAME = "codex-zcode-bridge";
-var SERVER_VERSION = "1.3.0-rc.3"; // x-release-please-version
+var SERVER_VERSION = "1.3.0-rc.4"; // x-release-please-version
 var EXECUTION_NOT_VERDICT = "Results describe Bridge/ZCode execution only: status 'completed' means the invocation and report normalization finished, NOT that the calling host accepted the work. the calling host must independently review the workspace diff and checks before deciding PASS.";
 function okResult2(data) {
   return {

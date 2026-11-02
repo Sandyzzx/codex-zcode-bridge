@@ -4,6 +4,16 @@
 
 当前版本以 `package.json` 和 Release Please manifest 为准。提交推送到 `master` 后，Release Please 会在有待发布变更时创建发布 PR，并同步更新版本文件与本日志；合并发布 PR 后会生成对应 Git tag 和 GitHub Release。
 
+## [1.3.0-rc.4](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.3.0-rc.3...codex-zcode-bridge-v1.3.0-rc.4) (2026-11-02)
+
+Preview local-trust hotfix.
+
+### Bug Fixes
+
+* keep a transiently unknown Worker probe scoped to the scanning Manager instead of latching a global Recovery Hold
+* use the single-user local `yolo` execution profile for SQLite so ordinary coding work can run unattended like the JSON path
+* preserve explicit Owner boundaries for publishing, production Authority changes, credentials, and destructive operations outside task scope
+
 ## [1.3.0-rc.3](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.3.0-rc.2...codex-zcode-bridge-v1.3.0-rc.3) (2026-11-02)
 
 Preview hotfix.

@@ -118,7 +118,7 @@ async function runClaimOnlyHandshake(options: { readonly interactionMode: boolea
   options.onStage?.("execution profile validation");
   const { resolveTrustedLocalExecutionProfile } = await import("../runtime/trusted-local-profile.js");
   const profile = resolveTrustedLocalExecutionProfile(bootstrap.execution_profile_id);
-  if (!profile || profile.sessionMode !== "build" || profile.unrestricted !== false) throw new Error("worker execution profile rejected");
+  if (!profile || profile.sessionMode !== "yolo" || profile.unrestricted !== false) throw new Error("worker execution profile rejected");
   options.onStage?.("process probe module load");
   const { createPlatformProbe } = await import("../runtime/process-probe.js");
   options.onStage?.("process probe initialization");
@@ -254,7 +254,7 @@ interface SqliteExecutionEnvelope {
 function validateExecutionEnvelope(value: unknown, bootstrap: {
   readonly operation_id: string; readonly task_id: string; readonly attempt: number; readonly generation: number;
   readonly workspace_ref: string; readonly execution_profile_id: string; readonly policy_snapshot_digest: string;
-}, profile: { readonly id: string; readonly sessionMode: "build"; readonly unrestricted: false }): SqliteExecutionEnvelope {
+}, profile: { readonly id: string; readonly sessionMode: "yolo"; readonly unrestricted: false }): SqliteExecutionEnvelope {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("post-Claim execution envelope is required");
   const envelope = value as Record<string, unknown>;
   if (Object.keys(envelope).sort().join("|") !== "adapter_mode|attempt|continuation|execution_profile_id|generation|host_profile|operation_id|policy_snapshot_digest|previous_result|protocol|task|task_id|workspace_ref"

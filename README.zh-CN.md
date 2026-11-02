@@ -37,7 +37,7 @@ Marketplace 不会替你安装 Node.js 或 ZCode。
 请使用 GitHub **Prerelease 对应的 Tag**，不要在测试预览版时直接跟随 `master`。以下命令固定到 [GitHub Releases](https://github.com/Sandyzzx/codex-zcode-bridge/releases) 显示的实际标签：
 
 ```sh
-codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-v1.3.0-rc.3
+codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-v1.3.0-rc.4
 codex plugin add codex-zcode-bridge@codex-zcode-bridge
 ```
 
@@ -86,7 +86,9 @@ New-Item -ItemType Directory -Path $settings -Force | Out-Null
 
 Windows 首次运行配置位于 `%USERPROFILE%\.codex\codex-zcode-bridge\runtime-config.json`。可以按需覆盖 ZCode 路径、Provider 配置、默认模型、执行模式、并发和超时，但不要复制他人电脑的绝对路径。
 
-SQLite 生产数据库、旧 JSON 源目录与归档目录必须分开；实际位置由安装与迁移配置决定。不要手工改写 SQLite 表、Authority Receipt 或迁移 Marker。某些执行模式可能赋予 ZCode 较宽的本机工具权限，涉及权限审批时应选择适合的执行模式，不要在 Prompt 中放入凭据。
+SQLite 生产数据库、旧 JSON 源目录与归档目录必须分开；实际位置由安装与迁移配置决定。不要手工改写 SQLite 表、Authority Receipt 或迁移 Marker。
+
+在受支持的 Windows 单用户可信本地部署中，SQLite 使用固定受信任的 `yolo` 执行档案，与 JSON 路径的普通无人值守编码工作流一致。它以当前 Windows 账户权限运行，不是沙箱，也不是提权。工作区内的普通读取、编辑、构建、测试和任务范围内清理可以自动执行；Push、Merge、Tag、Release、生产 Authority 切换、任务范围外删除、凭据修改和真实生产任务数据访问仍需用户明确授权。任务 Prompt、Skill、worktree 和路径清单不能自行授予这些权限。不要在 Prompt 中放入凭据。
 
 ## 已知限制与排障
 

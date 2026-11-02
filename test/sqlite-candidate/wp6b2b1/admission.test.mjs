@@ -93,7 +93,7 @@ test('Host local policy is default-off, audited, and cannot be supplied by a tas
   let event=s.readLifecycleEvents(admitted.operation_id)[0];
   let audit=JSON.parse(event.evidence_json);
   assert.equal(audit.authorization_source,'trusted_local_policy');
-  assert.equal(audit.policy_revision,'single-user-local-v2');
+  assert.equal(audit.policy_revision,'single-user-local-v3');
   assert.equal(audit.execution_profile_id,'local-build-v1');
   assert.match(audit.policy_digest,/^[0-9a-f]{64}$/u);
 
@@ -226,7 +226,7 @@ test('isolated Manager harness persists Intent before Spawn, probes Receipt, and
   assert.deepEqual(await verifyHandshakeAndCommitClaim(s,persisted,report,request.launch_token,'claim-missing-policy',countedProbe,
     expectedSnapshot,'c'.repeat(64)),{state:'claim_rejected',reason:'worker_report_mismatch'});
   const tamperedPolicyReport={...report,authorization_source:'trusted_local_policy',workspace_ref:ws,policy_revision:'policy-v1',
-    policy_digest:'a'.repeat(64),execution_profile_id:'local-build-v1',execution_mode:'build',unrestricted:false,
+    policy_digest:'a'.repeat(64),execution_profile_id:'local-build-v1',execution_mode:'yolo',unrestricted:false,
     policy_snapshot_digest:expectedSnapshot.policy_snapshot_digest,provenance_digest:'d'.repeat(64)};
   assert.deepEqual(await verifyHandshakeAndCommitClaim(s,persisted,tamperedPolicyReport,request.launch_token,'claim-tampered-policy',countedProbe,
     expectedSnapshot,'c'.repeat(64)),{state:'claim_rejected',reason:'worker_report_mismatch'});

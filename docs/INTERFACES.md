@@ -1,15 +1,19 @@
 # 当前接口与兼容边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-10-15
-> Last verified: 2026-10-15，最新上游整合分支的验证结果见[审查说明](reports/2026-10-15-browser-and-transport-fixes.md)；旧版本实测与当前分支回归分别记录。
-> Verified against: 上游fae74e45033a50fb560c0014d1a6d60a7dc771d1 + 本分支修复；受测源码指纹见审查说明。
+> Last updated: 2026-11-02
+> Last verified: 2026-11-02，ADR-019 的本地信任模式与 Recovery Manager 所有权围栏；当前完整回归结果另见本轮证据。
+> Verified against: cab82a918514c6329f4982477b7eb0e8ada6cc01 + ADR-019 工作区修复；受测源码指纹见本轮证据。
 
 准确类型与 schema 以 `src/interfaces.ts` 和 `src/mcp/schemas.ts` 为准。核心公共入口见 [SHARED_CORE.md](SHARED_CORE.md)。历史源码注释中的 V0.1/FROZEN 是沿革说明，不代表当前新增功能已经冻结。
 
 默认 MCP 工具：`zcode_task`、`zcode_status`、`zcode_feedback`、`zcode_result`、`zcode_continue`、`zcode_cancel`、`zcode_events`、`zcode_interaction_reply`、`zcode_doctor`、`zcode_model_catalog`、`zcode_default_model`、`zcode_set_default_model`、`zcode_clear_default_model`。实验 progress probe 需显式启用。
 
 TaskPackage 的五个数组必须存在，可为空。workspace 是绝对项目路径；worktree_path 是宿主已准备的执行目录。Bridge 不创建或删除 worktree。task_id 只能是最多 64 字符的字母数字、下划线和连字符。单 attempt timeout 范围 60,000–14,400,000 ms。
+
+单用户本机 SQLite Host 的受信任执行档案使用 `yolo`，与 JSON 默认路径一样自动放行工作区内的普通读取、编辑、构建、测试和任务范围内清理。配置文件 `trusted-local-policy.json`、`workspace_roots` 和项目登记不是使用前提。Post-Claim Worker 仍须通过精确 Host policy snapshot、Workspace、Claim 和进程身份握手；TaskPackage、prompt 或 Skill 不能自行产生或提升该授权。Push、Merge、Tag、Release、生产 Authority 切换、任务范围外删除、凭据修改和真实生产任务数据操作保留为用户决策。
+
+SQLite startup Recovery 对 running Operation 采用 Manager 所有权围栏：精确 `alive` 或临时 `unknown` Worker 只让当前扫描 Manager 进入只读，不追加全局 `cleanup_incomplete` Hold。原执行 Manager 对 interaction reply 和 cancel intent 的权威写入保持可用。已证实 Worker 退出但 Result、Cleanup 或 Release 不完整时仍 fail closed；客户端不得把一次 transient manager fence 当成 Worker 已退出、任务已取消或资源已释放。
 
 任务状态为 queued/running/completed/failed/cancelled/waiting_for_master。后四种结束当前 attempt；completed 表示执行及报告解析完成，宿主仍独立验收。续跑只接受 completed/failed/waiting_for_master，且清理必须已验证；保留同 task ID、执行目录和旧 attempt 证据。
 

@@ -588,16 +588,19 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
       });
 
       // A second Manager can start while the owning Manager is executing this
-      // Operation. Exact live identity proves only that this Manager must stay
-      // fail-closed/read-only; it does not prove a durable cleanup failure.
-      // Persisting a global Recovery Hold here would prevent the owning Worker
-      // from recording its next interaction request.
-      if (phase === "running" && identityState === "alive") {
+      // Operation. A live exact identity, or a transient probe failure, proves
+      // only that this Manager must stay fail-closed/read-only. Neither proves
+      // a durable cleanup failure. Persisting a global Recovery Hold here would
+      // prevent the owning Worker from recording its next interaction request
+      // or cancellation intent.
+      if (phase === "running" && identityState !== "exited") {
         return {
           state: "held",
           operation_id: operationId,
           phase,
-          reason: "worker_still_alive_managed_elsewhere",
+          reason: identityState === "alive"
+            ? "worker_still_alive_managed_elsewhere"
+            : "worker_identity_unknown_managed_elsewhere",
           identity_state: identityState,
           probe_reason: probeReason,
         };

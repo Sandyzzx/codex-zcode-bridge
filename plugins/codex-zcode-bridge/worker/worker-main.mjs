@@ -4609,7 +4609,9 @@ var init_trusted_local_profile = __esm({
     PROFILES = Object.freeze({
       "local-build-v1": Object.freeze({
         id: "local-build-v1",
-        sessionMode: "build",
+        // Keep the persisted profile ID for compatibility. The local single-user
+        // Bridge now uses the same ordinary-tool yolo mode as the JSON Host path.
+        sessionMode: "yolo",
         unrestricted: false
       })
     });
@@ -29582,7 +29584,7 @@ async function runClaimOnlyHandshake(options) {
   options.onStage?.("execution profile validation");
   const { resolveTrustedLocalExecutionProfile: resolveTrustedLocalExecutionProfile2 } = await Promise.resolve().then(() => (init_trusted_local_profile(), trusted_local_profile_exports));
   const profile = resolveTrustedLocalExecutionProfile2(bootstrap.execution_profile_id);
-  if (!profile || profile.sessionMode !== "build" || profile.unrestricted !== false) throw new Error("worker execution profile rejected");
+  if (!profile || profile.sessionMode !== "yolo" || profile.unrestricted !== false) throw new Error("worker execution profile rejected");
   options.onStage?.("process probe module load");
   const { createPlatformProbe: createPlatformProbe2 } = await Promise.resolve().then(() => (init_process_probe(), process_probe_exports));
   options.onStage?.("process probe initialization");

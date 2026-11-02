@@ -12,7 +12,7 @@ export interface TrustedLocalPolicyConfig {
 }
 
 export type PolicyDecision =
-  | { readonly state: "allow"; readonly source: "trusted_local_policy"; readonly policy_revision: string; readonly policy_digest: string; readonly execution_profile_id: string; readonly execution_mode: "build"; readonly canonical_path: string }
+  | { readonly state: "allow"; readonly source: "trusted_local_policy"; readonly policy_revision: string; readonly policy_digest: string; readonly execution_profile_id: string; readonly execution_mode: "yolo"; readonly canonical_path: string }
   | { readonly state: "deny" | "unknown"; readonly reason: string };
 
 export interface TrustedLocalPolicyProvider {
@@ -38,7 +38,7 @@ export function createTrustedLocalPolicyProvider(config?: unknown): TrustedLocal
   let failure: string | null = config === undefined ? "trusted_local_mode_disabled" : null;
   let policyRevision = "";
   let executionProfileId = "";
-  let executionMode: "build" = "build";
+  let executionMode: "yolo" = "yolo";
   let policyDigest = "";
 
   if (config !== undefined) {

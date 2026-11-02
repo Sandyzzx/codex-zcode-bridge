@@ -3,7 +3,7 @@ import { createTrustedLocalPolicyProvider, type TrustedLocalPolicyConfig, type T
 
 const BUILT_IN_POLICY: TrustedLocalPolicyConfig = Object.freeze({
   enabled: true,
-  policy_revision: "single-user-local-v2",
+  policy_revision: "single-user-local-v3",
   execution_profile_id: "local-build-v1",
   allowed_operation_kinds: Object.freeze(["attempt_lifecycle"] as const),
   unrestricted: false,

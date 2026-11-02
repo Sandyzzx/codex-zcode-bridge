@@ -1,9 +1,9 @@
 # Project State
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-10-18
-> Last verified: 2026-10-18，PR #47 返修行为已由 Codex 独立验收：冻结候选上六组 fake 探针（契约 10、已死父跨根 4、记录外来边 5、根行代 3、观察历史 2 模式、真实 Manager 重建 2 模式）× Node 22.18.0/24.16.0 全过；完整独立平台矩阵——Windows 22.18.0 全量 509/508/1 skip、Windows 24.16.0 全量 509/507/2 skip、Windows 24.19.0 受影响九套件 152/152/0、Linux 22.18.0 全量 511/508/3 skip、Linux 24.20.0 全量 511/507/4 skip，均 0 fail，各平台 typecheck/build/validate:plugin/clean-entrypoints(4/4) 通过（git diff --check 于 Windows 工作区通过；Linux 首次聚合 bundle 比较失败为评估器符号链接致来源注释差异，实体依赖重建后字节一致并 validate 通过，原失败保留）；跳过项为平台专有用例如实记录。维护者机器特定 process-lock 失败未在本机自然复现，仅机制修复有确定性证据（见 ADR-009 与返修报告）。本轮（attempt-7）仅注释/文档/记录收尾，源码行为字节不变（bundle 重建后字节一致）。worker 分版本自测计数见各 attempt 记录，与独立结果不混计；最终源码冻结、任务资源清理与 PR 更新由 Codex 负责。
-> Verified against: 628984ca625a4d307b859d9f32d49e52e2d21ee6 + 本分支修复；受测源码指纹见修复记录与本轮私有归档。
+> Last updated: 2026-11-02
+> Last verified: 2026-11-02，ADR-019 的本机 `yolo` SQLite 执行档案、alive/unknown Recovery Manager 所有权围栏及原 Manager interaction/cancel 可用性由受影响 112 项定向测试复验；完整发布回归与 Bundle 身份另见 rc.4 发布证据。
+> Verified against: cab82a918514c6329f4982477b7eb0e8ada6cc01 + ADR-019 工作区修复；受测源码指纹见本轮证据。
 
 当前状态快照，回答"现在什么能用、什么不能用"。路线图和优先级不在这里。
 
@@ -11,13 +11,15 @@
 
 ## 版本与发布
 
-- 当前审查基线：`1.2.6`（`package.json`、`plugins/codex-zcode-bridge/plugin.json`）。
+- 当前审查基线：`1.3.0-rc.4`（`package.json`、`plugins/codex-zcode-bridge/plugin.json`）。
 - 发布方式：release-please 监听 `master`，合并后自动开版本 PR；合并版本 PR 才产生 tag 与 GitHub Release。
 - CI：`.github/workflows/ci.yml`，ubuntu 与 windows 两个作业，跑 typecheck、build、test、validate:plugin，并校验生成的 bundle 已随源码提交。
 
 ## 本分支改动
 
 本分支基于上游 1.2.6（0902236），加入三项修复。
+
+单用户本机信任与 Recovery 所有权（ADR-019）：SQLite 固定受信任执行档案改用与 JSON 默认路径一致的 `yolo` 普通工具流程，policy revision 为 `single-user-local-v3`；兼容 profile ID `local-build-v1` 保留。SQLite startup Recovery 对 running Operation 的精确 `alive` 或临时 `unknown` Worker 仅隔离当前扫描 Manager，不写持久全局 Hold；原 Manager 仍可记录 interaction reply 与 cancel intent。已证实退出但 Result/Cleanup/Release 不完整时继续 fail-closed。
 
 Windows 文件系统时序与根守卫（前轮）：`state.lock` 发布前存在性预检(已存在的空/未知 owner 锁不被 POSIX rename 覆盖)、发布 rename 的 EEXIST/ENOTEMPTY 按确定目的在场竞争移交 existing-owner 策略(不逃逸、不烧重试预算;EPERM/EACCES/EBUSY 目的缺失保持有界重试后可见抛出)、撤回 rename 对白名单瞬时码有界重试(撤回耗尽后锁保持完整、存活 owner 不驱逐;非瞬时码与共享 reclaim guard 清理失败保持可见,guard 清理在全部出口单点执行);worker 的迟到 self/runtime identity 写盘在终态前有界收束、超时丢弃,不再复活已清理的 store;测试 fixture 树清理带 Node 文档化有界重试;`buildRepoRootLeakPattern` 拒绝文件系统根输入（POSIX 根、盘符根及其词法等价写法、UNC 共享根）并修复 URL 主机名等于短根的误报。版本号未提升，不代表已发布；证据与边界见[修复记录](reports/2026-10-17-filesystem-root-guards.md)。
 

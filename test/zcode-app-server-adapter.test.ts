@@ -271,7 +271,7 @@ test("trusted local execution profile is bound to the actual app-server session 
     const requests = (await readFile(runtime.requestLog, "utf8"))
       .trim().split("\n").map((line) => JSON.parse(line) as { method?: string; params?: Record<string, unknown> });
     const create = requests.find((request) => request.method === "session/create");
-    assert.equal(create?.params?.mode, "build");
+    assert.equal(create?.params?.mode, "yolo");
   } finally {
     await rm(runtime.root, { recursive: true, force: true });
   }

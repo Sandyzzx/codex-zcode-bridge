@@ -28,13 +28,13 @@ test("built-in trusted-local policy needs no settings file and preserves the bou
     const loaded = loadTrustedLocalPolicyConfig(fx.host);
     assert.equal(loaded.status, "loaded");
     assert.equal(loaded.source, "built-in-local-stdio");
-    assert.equal(loaded.config.policy_revision, "single-user-local-v2");
+    assert.equal(loaded.config.policy_revision, "single-user-local-v3");
     assert.equal(loaded.config.execution_profile_id, "local-build-v1");
     assert.equal(loaded.config.unrestricted, false);
     assert.equal("workspace_roots" in loaded.config, false);
     assert.equal("deployment" in loaded.config, false, "deployment evidence comes from the Host composition, not policy bytes");
     assert.deepEqual(resolveTrustedLocalExecutionProfile(loaded.config.execution_profile_id), {
-      id: "local-build-v1", sessionMode: "build", unrestricted: false,
+      id: "local-build-v1", sessionMode: "yolo", unrestricted: false,
     });
     const live = createHostTrustedLocalPolicyProvider(fx.host);
     const decision = live.checkPermission({
@@ -44,8 +44,8 @@ test("built-in trusted-local policy needs no settings file and preserves the bou
     assert.equal(decision.state, "allow");
     if (decision.state === "allow") {
       assert.equal(decision.execution_profile_id, "local-build-v1");
-      assert.equal(decision.execution_mode, "build");
-      assert.equal(decision.policy_revision, "single-user-local-v2");
+      assert.equal(decision.execution_mode, "yolo");
+      assert.equal(decision.policy_revision, "single-user-local-v3");
     }
     const otherWorkspace = path.join(fx.root, "other-workspace");
     mkdirSync(otherWorkspace);

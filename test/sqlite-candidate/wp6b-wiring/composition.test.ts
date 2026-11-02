@@ -161,13 +161,24 @@ test("SQLite Manager startup runs read-only Recovery and retains unknown active 
   });
 });
 
-test("startup Recovery fences a live Worker per Manager without latching the owning interaction channel", {
-  timeout: 30_000,
-  skip: process.platform !== "win32",
-}, async () => {
+for (const recoveryProbeMode of ["alive", "unknown"] as const) test(
+  `startup Recovery fences a ${recoveryProbeMode} Worker per Manager without latching interaction or cancellation`, {
+    timeout: 30_000,
+    skip: process.platform !== "win32",
+  }, async () => {
   const taskId = `recovery-live-owner-${randomUUID()}`;
   const operationId = candidateOperationId(taskId, 1);
-  const processProbe = createPlatformProbe();
+  const actualProbe = createPlatformProbe();
+  const recoveryProbe: ProcessProbe = recoveryProbeMode === "alive"
+    ? actualProbe
+    : {
+        ...actualProbe,
+        probe: async (requests) => requests.map(() => ({
+          state: "unknown" as const,
+          reason_code: "transient_probe_timeout",
+          observed_at: new Date().toISOString(),
+        })),
+      };
   const child = spawn(process.execPath, ["-e", "setInterval(() => undefined, 1000)"], {
     stdio: "ignore",
     windowsHide: true,
@@ -182,7 +193,7 @@ test("startup Recovery fences a live Worker per Manager without latching the own
     });
     const processId = child.pid;
     assert.ok(processId);
-    const identity = await processProbe.identityOf(processId);
+    const identity = await actualProbe.identityOf(processId);
     assert.equal(identity.fingerprint_precision, "exact");
     assert.ok(identity.fingerprint);
 
@@ -194,13 +205,13 @@ test("startup Recovery fences a live Worker per Manager without latching the own
         const recoveryPort = modules.createPort(recovery);
         const eventsAfterRecovery = recoveryPort.readTaskEvents(taskId).events;
         assert.equal(eventsAfterRecovery.length, seededEventCount,
-          "a live Worker owned by another Manager must not append a persistent Recovery Hold");
+          "a running Worker owned by another Manager must not append a persistent Recovery Hold");
         const holds = eventsAfterRecovery.filter((event) => {
           if (event.event_type !== "observation_recorded") return false;
           try { return JSON.parse(String(event.evidence_json)).reason === "recovery_hold"; }
           catch { return false; }
         });
-        assert.deepEqual(holds, [], "live exact identity is a transient per-Manager fence, not cleanup failure evidence");
+        assert.deepEqual(holds, [], "alive or transiently unknown Worker identity is a per-Manager fence, not cleanup failure evidence");
         const operationAfterRecovery = recoveryPort.readOperation(operationId) as Record<string, unknown> | null;
         assert.equal(Number(operationAfterRecovery?.revision), Number(seededOperation?.revision),
           "Rejecting startup takeover must not advance the owning Operation");
@@ -208,28 +219,36 @@ test("startup Recovery fences a live Worker per Manager without latching the own
         const blockedTask = syntheticTask(path.join(dataRoot, "workspace"), `blocked-live-owner-${randomUUID()}`) as unknown as Parameters<BridgeTaskManager["createTask"]>[0];
         await assert.rejects(
           manager.createTask(blockedTask),
-          /worker_still_alive_managed_elsewhere/u,
-          "the secondary Manager must remain read-only while the exact Worker is live",
+          recoveryProbeMode === "alive"
+            ? /worker_still_alive_managed_elsewhere/u
+            : /worker_identity_unknown_managed_elsewhere/u,
+          `the secondary Manager must remain read-only while Worker identity is ${recoveryProbeMode}`,
         );
       } finally {
         recovery.close();
       }
 
       assert.ok(seededOperation);
+      const seeded = seededOperation;
       const writer = modules.Store.open(dataRoot);
       try {
         const requestId = `request-${randomUUID()}`;
         const writerStore = writer as unknown as {
           recordInteractionRequest(input: Readonly<Record<string, unknown>>): Record<string, unknown>;
+          requestCancellation(
+            input: Readonly<Record<string, unknown>>,
+            evidence: Readonly<Record<string, unknown>>,
+            verifier: (input: Readonly<Record<string, unknown>>) => Readonly<Record<string, unknown>>,
+          ): Readonly<Record<string, unknown>>;
         };
         const interaction = writerStore.recordInteractionRequest({
           operation_id: operationId,
           task_id: taskId,
           attempt: 1,
-          generation: Number(seededOperation.generation),
-          expected_revision: Number(seededOperation.revision),
-          claim_id: String(seededOperation.claim_id),
-          worker_identity_digest: String(seededOperation.claim_worker_identity_digest),
+          generation: Number(seeded.generation),
+          expected_revision: Number(seeded.revision),
+          claim_id: String(seeded.claim_id),
+          worker_identity_digest: String(seeded.claim_worker_identity_digest),
           request: {
             request_id: requestId,
             method: "interaction/requestUserInput",
@@ -238,12 +257,37 @@ test("startup Recovery fences a live Worker per Manager without latching the own
         }) as Record<string, unknown>;
         assert.equal(interaction.request_id, requestId);
         assert.equal(interaction.duplicate, false);
-        assert.equal(interaction.event_sequence, Number(seededOperation.revision) + 1);
+        assert.equal(interaction.event_sequence, Number(seeded.revision) + 1);
+        const workerIdentity = JSON.parse(String(seeded.claim_worker_identity_json)) as Record<string, unknown>;
+        const identityEvidence = {
+          contract: "synthetic-owner-fence-cancel-v1",
+          process_id: processId,
+          start_fingerprint: identity.fingerprint,
+          observed_at: new Date().toISOString(),
+        };
+        const identityEvidenceDigest = candidateEvidenceDigest(identityEvidence);
+        const cancellation = writerStore.requestCancellation({
+          operation_id: operationId,
+          task_id: taskId,
+          attempt: 1,
+          generation: Number(seeded.generation),
+          revision: Number(interaction.revision),
+          claim_id: String(seeded.claim_id),
+          claim_worker_identity_digest: String(seeded.claim_worker_identity_digest),
+          worker_identity: workerIdentity,
+        }, identityEvidence, () => ({
+          state: "alive",
+          worker_identity_digest: String(seeded.claim_worker_identity_digest),
+          evidence_digest: identityEvidenceDigest,
+        }));
+        assert.equal(cancellation.identity_state, "alive");
+        assert.equal(Number(cancellation.revision), Number(interaction.revision) + 1,
+          "the owning Manager must still be able to persist cancellation intent");
       } finally {
         writer.close();
       }
     }, {
-      processProbe,
+      processProbe: recoveryProbe,
       beforeAuthority: (dataRoot, modules, workspace) => {
         const store = modules.Store.open(dataRoot);
         try {
@@ -326,7 +370,7 @@ test("startup Recovery fences a live Worker per Manager without latching the own
       await Promise.race([exited, new Promise<void>((resolve) => setTimeout(resolve, 5_000))]);
     }
   }
-});
+  });
 
 test("SQLite Manager restart releases only persisted cleanup-verified Operations without spawning", { timeout: 30_000 }, async () => {
   const taskId = `recovery-release-${randomUUID()}`;

@@ -309,7 +309,7 @@ test("real detached child lifecycle scenarios", async (t) => {
             task_id: string; attempt: number; generation: number; workspace_ref: string;
           };
           assert.equal(admission.authorization_source, "trusted_local_policy");
-          assert.equal(admission.policy_revision, "single-user-local-v2");
+          assert.equal(admission.policy_revision, "single-user-local-v3");
           assert.equal(admission.execution_profile_id, "local-build-v1");
           assert.match(admission.policy_digest, /^[0-9a-f]{64}$/u);
           const claimIndex = events.findIndex((event) => event.event_type === "claim_committed");
