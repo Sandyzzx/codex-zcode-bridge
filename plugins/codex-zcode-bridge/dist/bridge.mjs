@@ -2730,7 +2730,7 @@ function windowsPowerShellExecutable() {
 }
 function windowsBatchQuery(pids, timeoutMs, onFailure) {
   return new Promise((resolve) => {
-    const script = `$env:PSModulePath = Join-Path $PSHOME 'Modules'; $ErrorActionPreference = 'Stop'; Get-Process -Id ${pids.join(",")} -ErrorAction SilentlyContinue | ForEach-Object { "{0}|{1}" -f $_.Id, $_.StartTime.Ticks }; 'bridge_probe_complete_v1'`;
+    const script = `$ErrorActionPreference = 'Stop'; foreach ($id in @(${pids.join(",")})) { try { $target = [System.Diagnostics.Process]::GetProcessById($id); try { [Console]::Out.WriteLine(("{0}|{1}" -f $id, $target.StartTime.Ticks)) } finally { $target.Dispose() } } catch [System.ArgumentException] { } }; [Console]::Out.WriteLine('bridge_probe_complete_v1')`;
     const child = spawn2(windowsPowerShellExecutable(), ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], {
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
@@ -37369,7 +37369,7 @@ async function runBridgeDoctor(options = {}) {
   checks.push({
     name: "process_probe",
     status: process.platform === "win32" || process.platform === "linux" ? "ok" : "warning",
-    summary: process.platform === "win32" ? "Windows process identity uses Get-Process StartTime (FileTime creation fingerprint), batched with a bounded timeout" : process.platform === "linux" ? "Linux process identity uses /proc/<pid>/stat starttime plus boot identity" : process.platform === "darwin" ? "macOS process identity uses ps lstart (second precision; coarse, not an absolute unique identity)" : `Process identity probing is not implemented for ${process.platform}; verdicts stay unknown`
+    summary: process.platform === "win32" ? "Windows process identity uses .NET Process.StartTime ticks through a bounded PowerShell query" : process.platform === "linux" ? "Linux process identity uses /proc/<pid>/stat starttime plus boot identity" : process.platform === "darwin" ? "macOS process identity uses ps lstart (second precision; coarse, not an absolute unique identity)" : `Process identity probing is not implemented for ${process.platform}; verdicts stay unknown`
   });
   checks.push({
     name: "codex_host_tokens",

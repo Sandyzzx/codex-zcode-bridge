@@ -341,7 +341,7 @@ export async function runBridgeDoctor(options: BridgeDoctorOptions = {}): Promis
     name: "process_probe",
     status: process.platform === "win32" || process.platform === "linux" ? "ok" : "warning",
     summary: process.platform === "win32"
-      ? "Windows process identity uses Get-Process StartTime (FileTime creation fingerprint), batched with a bounded timeout"
+      ? "Windows process identity uses .NET Process.StartTime ticks through a bounded PowerShell query"
       : process.platform === "linux"
         ? "Linux process identity uses /proc/<pid>/stat starttime plus boot identity"
         : process.platform === "darwin"

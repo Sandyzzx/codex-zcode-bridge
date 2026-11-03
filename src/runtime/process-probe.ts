@@ -1,6 +1,6 @@
 // A2 narrow process-identity interface. OS-level capability verified on
-// Windows 10 (2026-10-04): PowerShell `Get-Process -Id a,b,c` exposes
-// `StartTime.Ticks` (.NET FileTime, 100ns creation fingerprint) in ~350ms for
+// Windows 10 (2026-10-04): PowerShell's .NET Process API exposes
+// `StartTime.Ticks` (100ns creation fingerprint) in ~350ms for
 // a batch query; absent PIDs are skipped silently (non-terminating error) so
 // a missing PID in the output is conclusive exit evidence. The probe never
 // treats query failures as death: permission errors, timeouts, and unparsable
@@ -105,14 +105,14 @@ function windowsPowerShellExecutable(): string {
     : "powershell.exe";
 }
 
-/** Batch Windows probe: one hidden PowerShell call, structured `pid|ticks` lines, bounded timeout. */
+/** Batch Windows probe: one hidden PowerShell/.NET call, structured `pid|ticks` lines, bounded timeout. */
 function windowsBatchQuery(
   pids: number[],
   timeoutMs: number,
   onFailure?: (reason: WindowsQueryFailureReason) => void,
 ): Promise<FingerprintQuery> {
   return new Promise((resolve) => {
-    const script = `$env:PSModulePath = Join-Path $PSHOME 'Modules'; $ErrorActionPreference = 'Stop'; Get-Process -Id ${pids.join(",")} -ErrorAction SilentlyContinue | ForEach-Object { "{0}|{1}" -f $_.Id, $_.StartTime.Ticks }; 'bridge_probe_complete_v1'`;
+    const script = `$ErrorActionPreference = 'Stop'; foreach ($id in @(${pids.join(",")})) { try { $target = [System.Diagnostics.Process]::GetProcessById($id); try { [Console]::Out.WriteLine(("{0}|{1}" -f $id, $target.StartTime.Ticks)) } finally { $target.Dispose() } } catch [System.ArgumentException] { } }; [Console]::Out.WriteLine('bridge_probe_complete_v1')`;
     const child = spawn(windowsPowerShellExecutable(), ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], {
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,

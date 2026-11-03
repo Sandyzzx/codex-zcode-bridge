@@ -2508,7 +2508,7 @@ function windowsPowerShellExecutable() {
 }
 function windowsBatchQuery(pids, timeoutMs, onFailure) {
   return new Promise((resolve) => {
-    const script = `$env:PSModulePath = Join-Path $PSHOME 'Modules'; $ErrorActionPreference = 'Stop'; Get-Process -Id ${pids.join(",")} -ErrorAction SilentlyContinue | ForEach-Object { "{0}|{1}" -f $_.Id, $_.StartTime.Ticks }; 'bridge_probe_complete_v1'`;
+    const script = `$ErrorActionPreference = 'Stop'; foreach ($id in @(${pids.join(",")})) { try { $target = [System.Diagnostics.Process]::GetProcessById($id); try { [Console]::Out.WriteLine(("{0}|{1}" -f $id, $target.StartTime.Ticks)) } finally { $target.Dispose() } } catch [System.ArgumentException] { } }; [Console]::Out.WriteLine('bridge_probe_complete_v1')`;
     const child = spawn(windowsPowerShellExecutable(), ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], {
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
