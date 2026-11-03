@@ -37132,16 +37132,15 @@ async function runBridgeDoctor(options = {}) {
         dataDirSummary = `ZCODE_HOME (${explicitHome}) and ZCODE_DATA_BASE_DIR (${explicitBase}) conflict; ZCODE_HOME must be <ZCODE_DATA_BASE_DIR>/.zcode`;
       }
     }
-    if (dataDirStatus === "ok" && (explicitHome || explicitBase) && (!homeValid || !baseValid)) {
+    if (dataDirStatus === "ok" && (explicitHome && !homeValid || explicitBase && !baseValid)) {
       dataDirStatus = "error";
       dataDirSummary += "; the explicit value must be a full Windows absolute path";
     }
     if (dataDirStatus === "ok") {
       try {
-        if (!existsSync10(effectiveBase)) {
-          dataDirStatus = "warning";
-          dataDirSummary += "; directory does not exist yet (the Bridge never creates ZCode data directories)";
-        } else if (!statSync5(effectiveBase).isDirectory()) {
+        const inspectDirectory = options.dataDirStat ?? statSync5;
+        const directoryInfo = inspectDirectory(effectiveBase);
+        if (!directoryInfo.isDirectory()) {
           dataDirStatus = "error";
           dataDirSummary += "; path exists but is not a directory";
         } else {
@@ -37149,8 +37148,13 @@ async function runBridgeDoctor(options = {}) {
         }
       } catch (error2) {
         const code = error2.code;
-        dataDirStatus = isPermissionDeniedCode(error2) ? "error" : "warning";
-        dataDirSummary += isPermissionDeniedCode(error2) ? "; permission denied while inspecting the directory" : `; could not be inspected (${safeError(error2)})`;
+        if (code === "ENOENT") {
+          dataDirStatus = "warning";
+          dataDirSummary += "; directory does not exist yet (the Bridge never creates ZCode data directories)";
+        } else {
+          dataDirStatus = isPermissionDeniedCode(error2) ? "error" : "warning";
+          dataDirSummary += isPermissionDeniedCode(error2) ? "; permission denied while inspecting the directory" : `; could not be inspected (${safeError(error2)})`;
+        }
       }
     }
     checks.push({ name: "zcode_data_dir", status: dataDirStatus, summary: dataDirSummary });

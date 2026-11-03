@@ -208,6 +208,17 @@ test("doctor verifies explicit runtime, reports effective data sources, and hide
     assert.match(explicitChecks.get("zcode_install")?.summary ?? "", /auto-discovery would choose .*Automatic/u);
     assert.match(explicitChecks.get("zcode_data_dir")?.summary ?? "", new RegExp(`${dataBase.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")} \\(from explicit ZCODE_DATA_BASE_DIR\\)`));
 
+    const deniedData = await runBridgeDoctor({
+      env: explicitEnv,
+      resolver: { env: explicitEnv, homeDir: home, packageRoot: root },
+      dataDirStat: () => {
+        throw Object.assign(new Error("access denied"), { code: "EPERM" });
+      },
+    });
+    const deniedDataCheck = deniedData.checks.find((check) => check.name === "zcode_data_dir");
+    assert.equal(deniedDataCheck?.status, "error");
+    assert.match(deniedDataCheck?.summary ?? "", /permission denied while inspecting/u);
+
     const permissionEnv = {
       HOME: home,
       USERPROFILE: home,

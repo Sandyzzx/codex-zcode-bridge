@@ -29,6 +29,8 @@ export interface BridgeDoctorOptions {
   dataRoot?: string;
   /** Test-only read seam for injected setting.json failures; never used to expose contents. */
   settingReadFile?: (filePath: string) => string;
+  /** Test-only stat seam for directory access failures. */
+  dataDirStat?: (filePath: string) => { isDirectory(): boolean };
   /** Explicit task-data root for the A1 active-task observation check. */
   observationDataRoot?: string;
 }
@@ -153,16 +155,15 @@ export async function runBridgeDoctor(options: BridgeDoctorOptions = {}): Promis
         dataDirSummary = `ZCODE_HOME (${explicitHome}) and ZCODE_DATA_BASE_DIR (${explicitBase}) conflict; ZCODE_HOME must be <ZCODE_DATA_BASE_DIR>/.zcode`;
       }
     }
-    if (dataDirStatus === "ok" && (explicitHome || explicitBase) && (!homeValid || !baseValid)) {
+    if (dataDirStatus === "ok" && ((explicitHome && !homeValid) || (explicitBase && !baseValid))) {
       dataDirStatus = "error";
       dataDirSummary += "; the explicit value must be a full Windows absolute path";
     }
     if (dataDirStatus === "ok") {
       try {
-        if (!existsSync(effectiveBase)) {
-          dataDirStatus = "warning";
-          dataDirSummary += "; directory does not exist yet (the Bridge never creates ZCode data directories)";
-        } else if (!statSync(effectiveBase).isDirectory()) {
+        const inspectDirectory = options.dataDirStat ?? statSync;
+        const directoryInfo = inspectDirectory(effectiveBase);
+        if (!directoryInfo.isDirectory()) {
           dataDirStatus = "error";
           dataDirSummary += "; path exists but is not a directory";
         } else {
@@ -170,8 +171,13 @@ export async function runBridgeDoctor(options: BridgeDoctorOptions = {}): Promis
         }
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
-        dataDirStatus = isPermissionDeniedCode(error) ? "error" : "warning";
-        dataDirSummary += isPermissionDeniedCode(error) ? "; permission denied while inspecting the directory" : `; could not be inspected (${safeError(error)})`;
+        if (code === "ENOENT") {
+          dataDirStatus = "warning";
+          dataDirSummary += "; directory does not exist yet (the Bridge never creates ZCode data directories)";
+        } else {
+          dataDirStatus = isPermissionDeniedCode(error) ? "error" : "warning";
+          dataDirSummary += isPermissionDeniedCode(error) ? "; permission denied while inspecting the directory" : `; could not be inspected (${safeError(error)})`;
+        }
       }
     }
     checks.push({ name: "zcode_data_dir", status: dataDirStatus, summary: dataDirSummary });
