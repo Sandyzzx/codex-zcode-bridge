@@ -1,7 +1,7 @@
 /**
  * Unified ZCode path discovery.
  *
- * Contracts (docs/ZCODE_RUNTIME.md, ADR-020):
+ * Contracts (docs/ZCODE_RUNTIME.md, ADR-021):
  * - User directory follows Magpie's Windows HOME rule (internal/appdir/zcode.go,
  *   v0.1.2127, reimplemented independently): HOME wins only when it is a rooted
  *   absolute path whose cleaned form equals USERPROFILE (case-insensitive on
@@ -64,7 +64,7 @@ export function resolveUserHome(
   }
 
   if (homeRaw) {
-    const rooted = pathImpl.isAbsolute(homeRaw);
+    const rooted = isWindowsAbsolutePath(homeRaw);
     const matchesUserProfile = userProfileRaw !== null
       && sameCleanPath(homeRaw, userProfileRaw, pathImpl, true);
     if (rooted && matchesUserProfile) {
@@ -144,7 +144,7 @@ export function discoverZCodeData(
     try {
       text = readFile(settingFile);
     } catch (error) {
-      settingStatus = (error as NodeJS.ErrnoException).code === "EACCES" ? "permission_denied" : "unreadable";
+      settingStatus = isPermissionDeniedCode(error) ? "permission_denied" : "unreadable";
       settingError = error instanceof Error ? error.message : String(error);
       text = "";
     }
@@ -169,7 +169,7 @@ export function discoverZCodeData(
             settingError = "dataBaseDir must be a string when present";
           } else {
             const trimmed = raw.trim();
-            if (trimmed && pathImpl.isAbsolute(trimmed)) {
+            if (trimmed && isWindowsAbsolutePath(trimmed)) {
               configuredDataBaseDir = pathImpl.resolve(trimmed);
             } else if (trimmed) {
               // A relative dataBaseDir is ignored (ZCode behavior), not an error.
@@ -194,6 +194,28 @@ export function discoverZCodeData(
     zcodeV2Dir: pathImpl.join(dataBaseDir, ".zcode", "v2"),
     migrated: configuredDataBaseDir !== null,
   };
+}
+
+/**
+ * Windows full absolute path rule used by Magpie. `C:foo`, `C:`, and `\foo`
+ * are drive-relative or drive-less forms; only drive-qualified paths and UNC
+ * paths containing server/share are absolute.
+ */
+export function isWindowsAbsolutePath(value: string): boolean {
+  return /^[A-Za-z]:[\\/]/u.test(value)
+    || /^\/\/[^\\/]+[\\/][^\\/]+(?:[\\/].*)?$/u.test(value)
+    || /^\\\\[^\\/]+[\\/][^\\/]+(?:[\\/].*)?$/u.test(value);
+}
+
+/** Applies the strict Windows rule only on Windows; POSIX keeps its own rule. */
+export function isAbsolutePathForPlatform(value: string, platform: NodeJS.Platform = process.platform): boolean {
+  return platform === "win32" ? isWindowsAbsolutePath(value) : path.isAbsolute(value);
+}
+
+/** Classifies Windows access failures consistently instead of handling only EACCES. */
+export function isPermissionDeniedCode(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  return code === "EACCES" || code === "EPERM";
 }
 
 export type InstallSource = "ZCODE_WINDOWS_APP_INSTALL_DIR" | "LOCALAPPDATA" | "ProgramFiles";

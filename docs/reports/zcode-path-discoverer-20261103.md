@@ -27,7 +27,7 @@ Magpie `yetone/magpie` v0.1.2127 `internal/appdir/zcode.go`（`ZCodeHome`/`ZCode
 | `src/runtime/doctor.ts` | 新增 `user_home`、`desktop_settings`、`zcode_data_dir`、`zcode_install`、`worker_env_consistency` 检查 |
 | `plugins/codex-zcode-bridge/hooks/configure-runtime.ps1` | 同规则发现（`Resolve-UserHomeDirectory`/`Get-ZCodePathDiscovery`）、显式冲突检查、`Find-DefaultRuntime` 同安装要求、`-PrintPathDiscovery` JSON 输出 |
 | `test/zcode-paths.test.ts` | 新增：WP 测试矩阵 + PowerShell 跨实现一致性测试 |
-| `docs/decisions/ADR-020-zcode-path-discovery.md` | 新增决策记录 |
+| `docs/decisions/ADR-021-zcode-path-discovery.md` | 新增决策记录 |
 | `docs/decisions/README.md` | ADR 索引补充 |
 | `docs/ZCODE_RUNTIME.md` | 新增"路径发现合同"一节 |
 | `plugins/codex-zcode-bridge/dist/bridge.mjs`、`worker/worker-main.mjs` | 由 `npm run build` 同步重建 |
@@ -92,9 +92,9 @@ MCP 公开工具 schema、SQLite Authority、Admission、Worker 生命周期、S
 
 1. **负载类 flake（非本任务引入的证据不完整）**：ledger EPERM rename 与 worker 5 秒退出窗口在满负载下偶发；隔离复跑均通过。已按证据等级标注，未修改这些测试或其超时窗口。
 2. **临时数据**：参考用 Magpie 克隆残留在 `%TEMP%\magpie-ref-677425e2`（删除命令被沙箱策略拦截）；内容为公开仓库 v0.1.2127 检出，可随时手动删除。
-3. **ADR-020 编号冲突风险**：本分支 ADR-020 为路径发现；`codex/attention-state-research-20261102` 研究分支另有未合并的 ADR-020（attention）。合并顺序需 Master 协调，后合方需改号。
-4. **ADR-020 状态**：按 WP 授权实施，标注"待 Master 独立审查确认"；未 push/merge/tag/release。
+3. **ADR 编号已改号**：Attention/Thin Waiter 保留 ADR-020；路径发现已改为 ADR-021。
+4. **ADR-021 状态**：原始实施已由独立审查判定 CHANGES REQUIRED；修复见 `zcode-path-discoverer-repair-20261103.md`，最终以 Master 复审为准。
 
 ## 最终结论
 
-**PASS（待 Master 独立审查）**——实现、合同文档、测试矩阵、PowerShell 一致性、doctor 诊断与真实环境只读验证完成；四项验收命令通过；完整回归失败项已逐项处置并标注证据等级。无未处理的 BLOCKED 项。
+**SUPERSEDED（原始交付报告）**——独立最终审查发现 PS 5.1/7 drive-relative、PS 5.1 UTF-8、doctor 诊断与 ADR 编号问题；修复记录见 `zcode-path-discoverer-repair-20261103.md`。

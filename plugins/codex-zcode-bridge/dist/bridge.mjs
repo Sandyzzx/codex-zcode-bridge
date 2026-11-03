@@ -33,7 +33,7 @@ function resolveUserHome(env, options = {}) {
     return { userHome: pathImpl.resolve(fallback2), source: userProfileRaw ? "USERPROFILE" : "FALLBACK", homeRaw: null, homeConflict: null };
   }
   if (homeRaw) {
-    const rooted = pathImpl.isAbsolute(homeRaw);
+    const rooted = isWindowsAbsolutePath(homeRaw);
     const matchesUserProfile = userProfileRaw !== null && sameCleanPath(homeRaw, userProfileRaw, pathImpl, true);
     if (rooted && matchesUserProfile) {
       return { userHome: pathImpl.resolve(homeRaw), source: "HOME", homeRaw, homeConflict: null };
@@ -74,7 +74,7 @@ function discoverZCodeData(env, options = {}) {
     try {
       text2 = readFile3(settingFile);
     } catch (error2) {
-      settingStatus = error2.code === "EACCES" ? "permission_denied" : "unreadable";
+      settingStatus = isPermissionDeniedCode(error2) ? "permission_denied" : "unreadable";
       settingError = error2 instanceof Error ? error2.message : String(error2);
       text2 = "";
     }
@@ -98,7 +98,7 @@ function discoverZCodeData(env, options = {}) {
             settingError = "dataBaseDir must be a string when present";
           } else {
             const trimmed = raw.trim();
-            if (trimmed && pathImpl.isAbsolute(trimmed)) {
+            if (trimmed && isWindowsAbsolutePath(trimmed)) {
               configuredDataBaseDir = pathImpl.resolve(trimmed);
             } else if (trimmed) {
               settingError = "dataBaseDir is a relative path and was ignored";
@@ -121,6 +121,16 @@ function discoverZCodeData(env, options = {}) {
     zcodeV2Dir: pathImpl.join(dataBaseDir, ".zcode", "v2"),
     migrated: configuredDataBaseDir !== null
   };
+}
+function isWindowsAbsolutePath(value) {
+  return /^[A-Za-z]:[\\/]/u.test(value) || /^\/\/[^\\/]+[\\/][^\\/]+(?:[\\/].*)?$/u.test(value) || /^\\\\[^\\/]+[\\/][^\\/]+(?:[\\/].*)?$/u.test(value);
+}
+function isAbsolutePathForPlatform(value, platform = process.platform) {
+  return platform === "win32" ? isWindowsAbsolutePath(value) : path.isAbsolute(value);
+}
+function isPermissionDeniedCode(error2) {
+  const code = error2?.code;
+  return code === "EACCES" || code === "EPERM";
 }
 function discoverZCodeInstall(env, options = {}) {
   const platform = options.platform ?? process.platform;
@@ -33648,6 +33658,9 @@ var NodeRuntimeResolver = class {
     const data = discoverZCodeData(env, { fallbackHomeDir: this.#homeDir });
     const zcodeHome = resolveZcodeHome(env);
     const explicitDataBaseDir = env["ZCODE_DATA_BASE_DIR"]?.trim() || null;
+    if (explicitDataBaseDir && !isAbsolutePathForPlatform(explicitDataBaseDir)) {
+      throw new BridgeError("provider_config_invalid", "ZCODE_DATA_BASE_DIR must be an absolute path");
+    }
     if (zcodeHome && explicitDataBaseDir && !sameFileSystemPath(path3.dirname(zcodeHome), explicitDataBaseDir)) {
       throw new BridgeError(
         "provider_config_invalid",
@@ -33847,7 +33860,7 @@ var NodeRuntimeResolver = class {
 function resolveZcodeHome(env) {
   const configured = env["ZCODE_HOME"]?.trim();
   if (!configured) return null;
-  if (!path3.isAbsolute(configured)) {
+  if (!isAbsolutePathForPlatform(configured)) {
     throw new BridgeError("provider_config_invalid", "ZCODE_HOME must be an absolute path");
   }
   const resolved = path3.normalize(configured);
@@ -37063,7 +37076,10 @@ async function runBridgeDoctor(options = {}) {
   let dataDiscovery = null;
   try {
     const home = resolveUserHome(env, { fallbackHomeDir: options.resolver?.homeDir });
-    dataDiscovery = discoverZCodeData(env, { fallbackHomeDir: options.resolver?.homeDir });
+    dataDiscovery = discoverZCodeData(env, {
+      fallbackHomeDir: options.resolver?.homeDir,
+      ...options.settingReadFile ? { readFile: options.settingReadFile } : {}
+    });
     const homeSource = home.source === "HOME" ? "HOME (verified against USERPROFILE)" : home.source === "USERPROFILE" ? `USERPROFILE${home.homeConflict ? `; HOME was rejected: ${home.homeConflict}` : ""}` : "fallback (os.homedir)";
     checks.push({
       name: "user_home",
@@ -37083,37 +37099,58 @@ async function runBridgeDoctor(options = {}) {
       unreadable: `setting.json could not be read${setting.settingError ? ` (${setting.settingError})` : ""}; the default data location applies`,
       permission_denied: "setting.json is not readable due to permissions; the default data location applies"
     };
+    const relativeDataBaseDir = setting.settingStatus === "ok" && setting.settingError?.includes("dataBaseDir is a relative path");
+    const settingSummary = relativeDataBaseDir ? `${settingStatusText.ok}; dataBaseDir is a relative path and was ignored` : settingStatusText[setting.settingStatus] ?? "setting.json status unknown";
     checks.push({
       name: "desktop_settings",
-      status: setting.settingStatus === "ok" || setting.settingStatus === "absent" ? "ok" : setting.settingStatus === "permission_denied" ? "error" : "warning",
-      summary: settingStatusText[setting.settingStatus] ?? "setting.json status unknown"
+      status: relativeDataBaseDir ? "warning" : setting.settingStatus === "ok" || setting.settingStatus === "absent" ? "ok" : setting.settingStatus === "permission_denied" ? "error" : "warning",
+      summary: settingSummary
     });
     const explicitHome = env["ZCODE_HOME"]?.trim();
     const explicitBase = env["ZCODE_DATA_BASE_DIR"]?.trim();
-    const baseSource = explicitHome ? "explicit ZCODE_HOME (parent directory)" : explicitBase ? "explicit ZCODE_DATA_BASE_DIR" : setting.migrated ? "setting.json dataBaseDir" : "default (user directory)";
+    const homeValid = explicitHome ? isAbsolutePathForPlatform(explicitHome) : false;
+    const baseValid = explicitBase ? isAbsolutePathForPlatform(explicitBase) : false;
+    let effectiveBase = setting.dataBaseDir;
+    let baseSource;
+    if (explicitHome && homeValid) {
+      effectiveBase = path13.dirname(path13.resolve(explicitHome));
+      baseSource = explicitBase ? "explicit ZCODE_HOME and ZCODE_DATA_BASE_DIR (consistent)" : "explicit ZCODE_HOME (parent directory)";
+    } else if (explicitBase && baseValid) {
+      effectiveBase = path13.resolve(explicitBase);
+      baseSource = "explicit ZCODE_DATA_BASE_DIR";
+    } else if (explicitHome || explicitBase) {
+      effectiveBase = path13.resolve(explicitHome ?? explicitBase);
+      baseSource = `explicit ${explicitHome ? "ZCODE_HOME" : "ZCODE_DATA_BASE_DIR"} (invalid absolute path)`;
+    } else {
+      baseSource = setting.migrated ? "setting.json dataBaseDir" : "default (user directory)";
+    }
     let dataDirStatus = "ok";
-    let dataDirSummary = `ZCode data base directory: ${setting.dataBaseDir} (from ${baseSource})`;
+    let dataDirSummary = `ZCode data base directory: ${effectiveBase} (from ${baseSource})`;
     if (explicitHome && explicitBase) {
       if (!sameFileSystemPath(path13.dirname(path13.resolve(explicitHome)), path13.resolve(explicitBase))) {
         dataDirStatus = "error";
         dataDirSummary = `ZCODE_HOME (${explicitHome}) and ZCODE_DATA_BASE_DIR (${explicitBase}) conflict; ZCODE_HOME must be <ZCODE_DATA_BASE_DIR>/.zcode`;
       }
     }
+    if (dataDirStatus === "ok" && (explicitHome || explicitBase) && (!homeValid || !baseValid)) {
+      dataDirStatus = "error";
+      dataDirSummary += "; the explicit value must be a full Windows absolute path";
+    }
     if (dataDirStatus === "ok") {
       try {
-        if (!existsSync10(setting.dataBaseDir)) {
+        if (!existsSync10(effectiveBase)) {
           dataDirStatus = "warning";
           dataDirSummary += "; directory does not exist yet (the Bridge never creates ZCode data directories)";
-        } else if (!statSync5(setting.dataBaseDir).isDirectory()) {
+        } else if (!statSync5(effectiveBase).isDirectory()) {
           dataDirStatus = "error";
           dataDirSummary += "; path exists but is not a directory";
         } else {
-          dataDirSummary += setting.migrated ? "; migrated data directory exists" : "; directory exists";
+          dataDirSummary += !explicitHome && !explicitBase && setting.migrated ? "; migrated data directory exists" : "; directory exists";
         }
       } catch (error2) {
         const code = error2.code;
-        dataDirStatus = code === "EACCES" ? "error" : "warning";
-        dataDirSummary += code === "EACCES" ? "; permission denied while inspecting the directory" : `; could not be inspected (${safeError(error2)})`;
+        dataDirStatus = isPermissionDeniedCode(error2) ? "error" : "warning";
+        dataDirSummary += isPermissionDeniedCode(error2) ? "; permission denied while inspecting the directory" : `; could not be inspected (${safeError(error2)})`;
       }
     }
     checks.push({ name: "zcode_data_dir", status: dataDirStatus, summary: dataDirSummary });
@@ -37121,10 +37158,22 @@ async function runBridgeDoctor(options = {}) {
   const install = discoverZCodeInstall(env, { requireBuiltin: !env["ZCODE_BUILTIN_PROVIDER_CONFIG_FILE"]?.trim() });
   const explicitRuntime = env["ZCODE_BRIDGE_ZCODE_CJS"]?.trim();
   if (explicitRuntime) {
+    let explicitRuntimeStatus = "ok";
+    const automaticDiscovery = install.installDir ? `; auto-discovery would choose ${install.installDir} (${install.source})` : "; auto-discovery found no complete installation";
+    let explicitRuntimeSummary = `Runtime is explicitly configured (ZCODE_BRIDGE_ZCODE_CJS); the builtin provider config is derived from the same installation: ${path13.dirname(path13.dirname(explicitRuntime))}${automaticDiscovery}`;
+    try {
+      if (!isAbsolutePathForPlatform(explicitRuntime)) throw new Error("not a full absolute path");
+      const runtimeStat = statSync5(explicitRuntime);
+      if (!runtimeStat.isFile()) throw new Error("not a regular file");
+      accessSync2(explicitRuntime, constants.R_OK);
+    } catch (error2) {
+      explicitRuntimeStatus = "error";
+      explicitRuntimeSummary = isPermissionDeniedCode(error2) ? `Explicit runtime exists but is not readable: ${explicitRuntime}` : `Explicit runtime was configured but is not a readable file: ${explicitRuntime}`;
+    }
     checks.push({
       name: "zcode_install",
-      status: "ok",
-      summary: `Runtime is explicitly configured (ZCODE_BRIDGE_ZCODE_CJS); the builtin provider config is derived from the same installation`
+      status: explicitRuntimeStatus,
+      summary: explicitRuntimeSummary
     });
   } else if (install.installDir) {
     checks.push({

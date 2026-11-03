@@ -1,6 +1,6 @@
-# ADR-020: 统一 ZCode 路径发现（Path Discoverer）
+# ADR-021: 统一 ZCode 路径发现（Path Discoverer）
 
-> Status: DECISION — Accepted（依据 2026-11-03 WP「ZCode Path Discoverer 路径发现器开发」的Owner 授权实施，待 Master 独立审查确认）
+> Status: DECISION — Accepted（依据 2026-11-03 Owner 授权实施与 WP-REPAIR 修复；最终合并以独立复审为准）
 > Date: 2026-11-03
 > Scope: Bridge 的 ZCode 用户目录、数据目录、安装目录路径发现、验证与诊断
 > Related: ADR-016, ADR-017, ADR-019
@@ -21,7 +21,10 @@ Windows 下 ZCode Desktop 的安装路径、用户目录与数据目录各有多
    候选之一，未形成统一的发现结果；PowerShell 与 TypeScript 的读取顺序存在差异。
 3. 自动发现可能把不同安装目录的 `zcode.cjs` 与 `zcode-builtin.json` 混用。
 4. 显式 `ZCODE_HOME` 与显式 `ZCODE_DATA_BASE_DIR` 冲突时被静默忽略其一。
-5. Worker 环境在 Windows 上不转发 `HOME`，而 ZCode 自身优先读 `HOME`，
+5. PowerShell 的 `IsPathRooted` 会误判 `C:foo`，PS 5.1 还可能把 UTF-8 无 BOM
+   的 setting.json 按 ANSI/GBK 读取；doctor 也可能把未验证的显式 runtime 或
+   非生效数据路径报成正常。
+6. Worker 环境在 Windows 上不转发 `HOME`，而 ZCode 自身优先读 `HOME`，
    可能出现主进程与 Worker/子进程解析出不同数据目录。
 
 冻结合同保持不变：`ZCODE_HOME` 指 `.zcode` 目录本身，`ZCODE_DATA_BASE_DIR` 指其父目录；
@@ -35,7 +38,9 @@ Windows 下 ZCode Desktop 的安装路径、用户目录与数据目录各有多
 2. 用户目录采用 Magpie 判定原则（Windows）：`HOME` 仅在非空、绝对路径、
    且清理后与 `USERPROFILE` 相同（Windows 大小写不敏感）时采用；否则回退 `USERPROFILE`，
    并保留冲突原因供诊断。`setting.json` 永远从该用户目录读取。
-3. 数据目录：`dataBaseDir` 只有在非空且为绝对路径时生效，否则回退用户目录。
+3. 数据目录：Windows 的 `dataBaseDir` 只有在非空且为完整绝对路径时生效；
+   `C:\foo`、`C:/foo` 和含 server/share 的 UNC 是绝对路径；`C:foo`、`C:`、
+   `\foo` 不是完整绝对路径。无效值回退用户目录。
    `userHome`、`settingFile`、`dataBaseDir`、`zcodeDataDir`（`dataBaseDir/.zcode`）、
    `zcodeV2Dir`（`dataBaseDir/.zcode/v2`）是五个独立字段，不得合并为一个 `ZCODE_HOME`。
    Bridge 不创建、不迁移任何 ZCode 数据目录。
@@ -50,7 +55,8 @@ Windows 下 ZCode Desktop 的安装路径、用户目录与数据目录各有多
    Bridge 解析出的用户目录，`USERPROFILE` 原样保留；不新增任何凭据或任意父进程变量透传。
 7. Doctor 增加用户目录来源与冲突、setting.json 状态、数据目录来源与迁移、
    安装目录来源与同安装校验、Worker 环境一致性检查；只输出路径与来源，
-   不输出 credentials、JWT、API Key 或配置文件正文。
+   不输出 credentials、JWT、API Key 或配置文件正文。显式 runtime 必须验证为
+   可读文件；EPERM 与 EACCES 都按权限失败处理；相对 `dataBaseDir` 降级为 warning。
 
 ## Consequences
 

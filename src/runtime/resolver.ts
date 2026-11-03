@@ -12,7 +12,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { BridgeError } from "./errors.js";
-import { builtinConfigForRuntime, discoverZCodeData, discoverZCodeInstall, sameFileSystemPath } from "./paths.js";
+import { builtinConfigForRuntime, discoverZCodeData, discoverZCodeInstall, isAbsolutePathForPlatform, sameFileSystemPath } from "./paths.js";
 import type { RuntimeResolver, ZCodeRuntimeConfig } from "../interfaces.js";
 import { codexHostProfile, validateHostProfile, type BridgeHostProfile } from "../host/profile.js";
 
@@ -111,6 +111,9 @@ export class NodeRuntimeResolver implements RuntimeResolver {
     const data = discoverZCodeData(env, { fallbackHomeDir: this.#homeDir });
     const zcodeHome = resolveZcodeHome(env);
     const explicitDataBaseDir = env["ZCODE_DATA_BASE_DIR"]?.trim() || null;
+    if (explicitDataBaseDir && !isAbsolutePathForPlatform(explicitDataBaseDir)) {
+      throw new BridgeError("provider_config_invalid", "ZCODE_DATA_BASE_DIR must be an absolute path");
+    }
     if (zcodeHome && explicitDataBaseDir && !sameFileSystemPath(path.dirname(zcodeHome), explicitDataBaseDir)) {
       throw new BridgeError(
         "provider_config_invalid",
@@ -342,7 +345,7 @@ export class NodeRuntimeResolver implements RuntimeResolver {
 function resolveZcodeHome(env: NodeJS.ProcessEnv): string | null {
   const configured = env["ZCODE_HOME"]?.trim();
   if (!configured) return null;
-  if (!path.isAbsolute(configured)) {
+  if (!isAbsolutePathForPlatform(configured)) {
     throw new BridgeError("provider_config_invalid", "ZCODE_HOME must be an absolute path");
   }
   const resolved = path.normalize(configured);

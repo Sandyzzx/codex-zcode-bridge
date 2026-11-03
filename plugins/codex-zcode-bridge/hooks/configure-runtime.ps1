@@ -23,6 +23,16 @@ param(
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+
+function Test-WindowsAbsolutePath {
+    param([AllowEmptyString()][string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+    # PowerShell's IsPathRooted treats both `C:foo` and `C:` as rooted. Node and
+    # Magpie require the drive separator or a UNC server/share prefix.
+    return [bool]($Path -match '^[A-Za-z]:[\\/]' -or
+        $Path -match '^[\\/]{2}[^\\/]+[\\/][^\\/]+(?:[\\/].*)?$')
+}
+
 $script:RuntimeSettingsDirectory = Join-Path $HOME ".codex\codex-zcode-bridge"
 $script:RuntimeSettings = $null
 $script:ResolvedNodeExecutable = $null
@@ -30,14 +40,14 @@ $script:ResolvedNodeExecutable = $null
 $legacyDataRoot = [Environment]::GetEnvironmentVariable("ZCODE_BRIDGE_DATA_DIR", "Process")
 if (-not $legacyDataRoot) { $legacyDataRoot = [Environment]::GetEnvironmentVariable("ZCODE_BRIDGE_DATA_DIR", "User") }
 $settingsCandidates = @((Join-Path $script:RuntimeSettingsDirectory "runtime-config.json"))
-if ($legacyDataRoot -and [IO.Path]::IsPathRooted($legacyDataRoot)) {
+if ($legacyDataRoot -and (Test-WindowsAbsolutePath $legacyDataRoot)) {
     $settingsCandidates += (Join-Path ([IO.Path]::GetFullPath($legacyDataRoot)) "runtime-config.json")
 }
 foreach ($settingsCandidate in ($settingsCandidates | Select-Object -Unique)) {
     if (-not (Test-Path -LiteralPath $settingsCandidate -PathType Leaf)) { continue }
     try {
         if ((Get-Item -LiteralPath $settingsCandidate).Length -gt 65536) { throw "Runtime settings exceed 64 KB." }
-        $candidateSettings = Get-Content -LiteralPath $settingsCandidate -Raw | ConvertFrom-Json
+        $candidateSettings = [IO.File]::ReadAllText($settingsCandidate, [Text.Encoding]::UTF8) | ConvertFrom-Json
         if ($null -ne $candidateSettings -and $candidateSettings -isnot [Array] -and $candidateSettings -is [PSCustomObject]) {
             $script:RuntimeSettings = $candidateSettings
             break
@@ -50,7 +60,7 @@ foreach ($settingsCandidate in ($settingsCandidates | Select-Object -Unique)) {
 
 function Resolve-ExistingFile {
     param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Label)
-    if (-not [IO.Path]::IsPathRooted($Path)) { throw "$Label must be an absolute path." }
+    if (-not (Test-WindowsAbsolutePath $Path)) { throw "$Label must be an absolute path." }
     $resolved = [IO.Path]::GetFullPath($Path)
     if (-not (Test-Path -LiteralPath $resolved -PathType Leaf)) { throw "$Label file does not exist: $resolved" }
     return $resolved
@@ -115,7 +125,7 @@ function Test-ProviderConfig {
 function Read-DesktopDataBaseDir {
     param([Parameter(Mandatory)][string]$Path)
     try {
-        $settings = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+        $settings = [IO.File]::ReadAllText($Path, [Text.Encoding]::UTF8) | ConvertFrom-Json
     } catch {
         throw "ZCode Desktop settings are not valid JSON: $Path"
     }
@@ -132,13 +142,13 @@ function Resolve-UserHomeDirectory {
     # (case-insensitive) to USERPROFILE; test or WSL directories never win.
     $homeRaw = if ($env:HOME) { $env:HOME.Trim() } else { $null }
     $userProfile = if ($env:USERPROFILE) { $env:USERPROFILE.Trim() } else { $null }
-    if ($homeRaw -and [IO.Path]::IsPathRooted($homeRaw) -and $userProfile -and
+    if ($homeRaw -and (Test-WindowsAbsolutePath $homeRaw) -and $userProfile -and
         ([IO.Path]::GetFullPath($homeRaw) -ieq [IO.Path]::GetFullPath($userProfile))) {
         return [PSCustomObject]@{ UserHome = [IO.Path]::GetFullPath($homeRaw); Source = "HOME"; HomeConflict = $null }
     }
     $conflict = $null
     if ($homeRaw) {
-        if (-not [IO.Path]::IsPathRooted($homeRaw)) {
+        if (-not (Test-WindowsAbsolutePath $homeRaw)) {
             $conflict = "HOME is set but is not an absolute path"
         } elseif (-not $userProfile) {
             $conflict = "HOME is set but USERPROFILE is not, so HOME cannot be verified as the current Windows user directory"
@@ -167,7 +177,7 @@ function Get-ZCodePathDiscovery {
             $raw = Read-DesktopDataBaseDir -Path $settingFile
             $settingStatus = "ok"
             if ($raw) {
-                if ([IO.Path]::IsPathRooted($raw)) { $configuredDataBaseDir = [IO.Path]::GetFullPath($raw) }
+                if (Test-WindowsAbsolutePath $raw) { $configuredDataBaseDir = [IO.Path]::GetFullPath($raw) }
                 else { $settingError = "dataBaseDir is a relative path and was ignored" }
             }
         } catch {
@@ -209,8 +219,8 @@ function Get-ZCodePathDiscovery {
         configuredDataBaseDir = $configuredDataBaseDir
         dataBaseDir = $dataBaseDir
         dataBaseDirSource = if ($configuredDataBaseDir) { "setting.json" } else { "default" }
-        zcodeDataDir = Join-Path $dataBaseDir ".zcode"
-        zcodeV2Dir = Join-Path $dataBaseDir ".zcode\v2"
+        zcodeDataDir = [IO.Path]::Combine($dataBaseDir, ".zcode")
+        zcodeV2Dir = [IO.Path]::Combine($dataBaseDir, ".zcode", "v2")
         migrated = [bool]$configuredDataBaseDir
         install = [PSCustomObject]@{
             installDir = if ($install) { $install.root } else { $null }
@@ -277,7 +287,7 @@ function Write-BridgeRuntimeSettings {
 
 function Resolve-ZCodeHome {
     param([Parameter(Mandatory)][string]$Path)
-    if (-not [IO.Path]::IsPathRooted($Path)) { throw "ZCODE_HOME must be an absolute path." }
+    if (-not (Test-WindowsAbsolutePath $Path)) { throw "ZCODE_HOME must be an absolute path." }
     $resolved = [IO.Path]::GetFullPath($Path)
     if ([IO.Path]::GetFileName($resolved).ToLowerInvariant() -ne ".zcode") {
         throw "ZCODE_HOME must point to the .zcode directory, not its parent."
@@ -328,7 +338,7 @@ $configuredZCodeHome = if ($ZCodeHome) { Resolve-ZCodeHome $ZCodeHome }
 
 if ($configuredZCodeHome) {
     $explicitDataBaseDirForConflict = Get-ConfiguredEnvironmentValue "ZCODE_DATA_BASE_DIR"
-    if ($explicitDataBaseDirForConflict -and [IO.Path]::IsPathRooted($explicitDataBaseDirForConflict) -and
+    if ($explicitDataBaseDirForConflict -and (Test-WindowsAbsolutePath $explicitDataBaseDirForConflict) -and
         [IO.Path]::GetFullPath((Split-Path ([IO.Path]::GetFullPath($configuredZCodeHome)) -Parent)) -ine [IO.Path]::GetFullPath($explicitDataBaseDirForConflict)) {
         throw "ZCODE_HOME ($configuredZCodeHome) and ZCODE_DATA_BASE_DIR ($explicitDataBaseDirForConflict) conflict; ZCODE_HOME must be <ZCODE_DATA_BASE_DIR>/.zcode."
     }
@@ -373,7 +383,7 @@ $effectiveDataBaseDir = if ($configuredZCodeHome) { Split-Path $configuredZCodeH
     elseif ((Get-ConfiguredEnvironmentValue "ZCODE_DATA_BASE_DIR")) { Get-ConfiguredEnvironmentValue "ZCODE_DATA_BASE_DIR" }
     else { $null }
 if ($effectiveDataBaseDir) {
-    if (-not [IO.Path]::IsPathRooted($effectiveDataBaseDir)) { throw "ZCODE_DATA_BASE_DIR must be an absolute path: $effectiveDataBaseDir" }
+    if (-not (Test-WindowsAbsolutePath $effectiveDataBaseDir)) { throw "ZCODE_DATA_BASE_DIR must be an absolute path: $effectiveDataBaseDir" }
     $effectiveDataBaseDir = [IO.Path]::GetFullPath($effectiveDataBaseDir)
     if (-not (Test-Path -LiteralPath $effectiveDataBaseDir -PathType Container)) { throw "ZCODE_DATA_BASE_DIR does not exist: $effectiveDataBaseDir" }
 }
@@ -403,7 +413,7 @@ if ($PSBoundParameters.ContainsKey("MaxConcurrentWorkers")) {
 }
 $effectiveDataDir = Get-ConfiguredEnvironmentValue "ZCODE_BRIDGE_DATA_DIR"
 if (-not $effectiveDataDir) { $effectiveDataDir = Join-Path $HOME ".codex\codex-zcode-bridge" }
-if (-not [IO.Path]::IsPathRooted($effectiveDataDir)) { throw "ZCODE_BRIDGE_DATA_DIR must be an absolute path: $effectiveDataDir" }
+if (-not (Test-WindowsAbsolutePath $effectiveDataDir)) { throw "ZCODE_BRIDGE_DATA_DIR must be an absolute path: $effectiveDataDir" }
 $effectiveDataDir = [IO.Path]::GetFullPath($effectiveDataDir)
 
 $effectiveBrowserUse = if ($BrowserUse) { $BrowserUse } elseif ((Get-ConfiguredEnvironmentValue "ZCODE_BRIDGE_BROWSER_USE")) { Get-ConfiguredEnvironmentValue "ZCODE_BRIDGE_BROWSER_USE" } else { "off" }
@@ -412,7 +422,7 @@ if ($effectiveBrowserUse -notin @("off", "headless")) {
 }
 $effectiveBrowserExecutable = if ($BrowserExecutablePath) { $BrowserExecutablePath.Trim() } else { Get-ConfiguredEnvironmentValue "ZCODE_BRIDGE_BROWSER_EXECUTABLE" }
 if ($effectiveBrowserExecutable) {
-    if (-not [IO.Path]::IsPathRooted($effectiveBrowserExecutable)) { throw "ZCODE_BRIDGE_BROWSER_EXECUTABLE must be an absolute path: $effectiveBrowserExecutable" }
+    if (-not (Test-WindowsAbsolutePath $effectiveBrowserExecutable)) { throw "ZCODE_BRIDGE_BROWSER_EXECUTABLE must be an absolute path: $effectiveBrowserExecutable" }
     $effectiveBrowserExecutable = [IO.Path]::GetFullPath($effectiveBrowserExecutable)
     if (-not (Test-Path -LiteralPath $effectiveBrowserExecutable -PathType Leaf)) { throw "Browser executable does not exist: $effectiveBrowserExecutable" }
 }

@@ -3038,7 +3038,7 @@ function resolveUserHome(env, options = {}) {
     return { userHome: pathImpl.resolve(fallback2), source: userProfileRaw ? "USERPROFILE" : "FALLBACK", homeRaw: null, homeConflict: null };
   }
   if (homeRaw) {
-    const rooted = pathImpl.isAbsolute(homeRaw);
+    const rooted = isWindowsAbsolutePath(homeRaw);
     const matchesUserProfile = userProfileRaw !== null && sameCleanPath(homeRaw, userProfileRaw, pathImpl, true);
     if (rooted && matchesUserProfile) {
       return { userHome: pathImpl.resolve(homeRaw), source: "HOME", homeRaw, homeConflict: null };
@@ -3079,7 +3079,7 @@ function discoverZCodeData(env, options = {}) {
     try {
       text = readFile2(settingFile);
     } catch (error62) {
-      settingStatus = error62.code === "EACCES" ? "permission_denied" : "unreadable";
+      settingStatus = isPermissionDeniedCode(error62) ? "permission_denied" : "unreadable";
       settingError = error62 instanceof Error ? error62.message : String(error62);
       text = "";
     }
@@ -3103,7 +3103,7 @@ function discoverZCodeData(env, options = {}) {
             settingError = "dataBaseDir must be a string when present";
           } else {
             const trimmed = raw.trim();
-            if (trimmed && pathImpl.isAbsolute(trimmed)) {
+            if (trimmed && isWindowsAbsolutePath(trimmed)) {
               configuredDataBaseDir = pathImpl.resolve(trimmed);
             } else if (trimmed) {
               settingError = "dataBaseDir is a relative path and was ignored";
@@ -3126,6 +3126,16 @@ function discoverZCodeData(env, options = {}) {
     zcodeV2Dir: pathImpl.join(dataBaseDir, ".zcode", "v2"),
     migrated: configuredDataBaseDir !== null
   };
+}
+function isWindowsAbsolutePath(value) {
+  return /^[A-Za-z]:[\\/]/u.test(value) || /^\/\/[^\\/]+[\\/][^\\/]+(?:[\\/].*)?$/u.test(value) || /^\\\\[^\\/]+[\\/][^\\/]+(?:[\\/].*)?$/u.test(value);
+}
+function isAbsolutePathForPlatform(value, platform = process.platform) {
+  return platform === "win32" ? isWindowsAbsolutePath(value) : path7.isAbsolute(value);
+}
+function isPermissionDeniedCode(error62) {
+  const code = error62?.code;
+  return code === "EACCES" || code === "EPERM";
 }
 function discoverZCodeInstall(env, options = {}) {
   const platform = options.platform ?? process.platform;
@@ -3224,7 +3234,7 @@ function loadPersistedRuntimeEnvironment(source, homeDir = homedir2(), host = co
 function resolveZcodeHome(env) {
   const configured = env["ZCODE_HOME"]?.trim();
   if (!configured) return null;
-  if (!path8.isAbsolute(configured)) {
+  if (!isAbsolutePathForPlatform(configured)) {
     throw new BridgeError("provider_config_invalid", "ZCODE_HOME must be an absolute path");
   }
   const resolved = path8.normalize(configured);
@@ -3325,6 +3335,9 @@ var init_resolver = __esm({
         const data = discoverZCodeData(env, { fallbackHomeDir: this.#homeDir });
         const zcodeHome = resolveZcodeHome(env);
         const explicitDataBaseDir = env["ZCODE_DATA_BASE_DIR"]?.trim() || null;
+        if (explicitDataBaseDir && !isAbsolutePathForPlatform(explicitDataBaseDir)) {
+          throw new BridgeError("provider_config_invalid", "ZCODE_DATA_BASE_DIR must be an absolute path");
+        }
         if (zcodeHome && explicitDataBaseDir && !sameFileSystemPath(path8.dirname(zcodeHome), explicitDataBaseDir)) {
           throw new BridgeError(
             "provider_config_invalid",

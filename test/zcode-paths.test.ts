@@ -1,4 +1,4 @@
-// Unified ZCode path discovery matrix (WP: Path Discoverer, ADR-020).
+// Unified ZCode path discovery matrix (WP: Path Discoverer, ADR-021).
 // All scenarios use injected environments and disposable temp directories;
 // no test reads or writes real ZCode user data.
 import assert from "node:assert/strict";
