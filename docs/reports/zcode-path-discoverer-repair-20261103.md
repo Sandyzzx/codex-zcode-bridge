@@ -14,15 +14,15 @@
 | Repair rename-only Commit | `c95b9c42ab9a236c9e723a4e63f9dae09cf1cacb` |
 | Repair implementation Commit | `c505c240f8bb21d9b7417d8c7a8c4f3323e0b633` |
 | Repair implementation Tree | `62601d4f98afe0d6f6ced2c8ada42b71929b57c9` |
-| 当前修复代码 HEAD | `82df9879a1b2b85fa7faaa94bc086e03ef30b061` |
-| 当前修复代码 Tree | `c5122b3d81e0be57caec9f2384f3cb118716ca93` |
+| 当前修复代码 HEAD | `df38f13006f418d40a9f06461682e880cb8bb572` |
+| 当前修复代码 Tree | `72d1a075baeffd70105a3df81439588875b0916b` |
 | PR | `#54`，open，等待本轮 CI 与 Master 独立复审；未 merge/tag/release |
 
 `c95b9c42` 是 `git mv` 的 ADR 文件 rename；由于后续显式 `git add` 的旧 pathspec 已不存在，该暂存 rename 被独立提交。未 amend、未 reset、未 cherry-pick。`c505c24` 包含全部修复内容与测试，保留原始实施提交。
 
 ## 修改文件
 
-- `plugins/codex-zcode-bridge/hooks/configure-runtime.ps1`：新增完整 Windows 绝对路径判定；PS5.1/PS7 统一 UTF-8 读取；dataBaseDir、HOME、显式路径和输出拼接均不再依赖 `IsPathRooted`。
+- `plugins/codex-zcode-bridge/hooks/configure-runtime.ps1`：新增完整 Windows 绝对路径判定，并与 TypeScript 的规范 UNC 分隔符规则一致；PS5.1/PS7 统一 UTF-8 读取；dataBaseDir、HOME、显式路径和输出拼接均不再依赖 `IsPathRooted`。
 - `src/runtime/paths.ts`：新增 `isWindowsAbsolutePath`、`isAbsolutePathForPlatform`、`isPermissionDeniedCode`；Windows HOME 与 `dataBaseDir` 使用完整 Windows 绝对路径规则，POSIX `dataBaseDir` 使用 POSIX 规则；EPERM 与 EACCES 都归类 permission denied。
 - `src/runtime/resolver.ts`：Windows 拒绝 drive-relative 的 `ZCODE_DATA_BASE_DIR`/`ZCODE_HOME`；POSIX 语义保持不变。
 - `src/runtime/doctor.ts`：验证显式 runtime 文件；报告实际生效 dataBaseDir 和来源；相对 `dataBaseDir` warning；EPERM/EACCES error；报告 automatic discovery 与 explicit runtime 的关系；不输出配置正文或凭据。
@@ -36,14 +36,14 @@
 
 新增定向测试 `PowerShell 5.1 and 7 match TypeScript...` 同时调用 `powershell`（PS5.1）和 `pwsh`（PS7），对以下 setting.json 场景逐字段比较 `settingStatus`、`configuredDataBaseDir`、`dataBaseDir`、`dataBaseDirSource`、`zcodeDataDir`、`zcodeV2Dir`：
 
-1. `C:foo`：PS5.1/PS7 与 TS 都忽略并回退默认用户目录。
+1. `C:foo`、`C:`、`\\foo`：PS5.1/PS7 与 TS 都忽略并回退默认用户目录。
 2. `D:\foo bar`：PS5.1/PS7 与 TS 都接受 drive-absolute 路径。
-3. `\\127.0.0.1\share\foo`：PS5.1/PS7 与 TS 都接受 UNC 绝对路径。
+3. `\\127.0.0.1\share\foo`：PS5.1/PS7 与 TS 都接受 UNC 绝对路径；混合分隔符的 UNC 形式均拒绝。
 4. `Q:\中文 目录\zcode-data`：setting.json 以 UTF-8 无 BOM 写入，PS5.1/PS7 与 TS 都得到同一非 ASCII 迁移路径。
 
 `\foo`、`C:`、`C:foo` 的分类由 TypeScript 单元测试固定为非完整绝对路径；PS1 使用等价 `Test-WindowsAbsolutePath`。显式 override 与显式 conflict 测试对 PS5.1/PS7 各执行一次：override 输出 effective explicit data base 且与 `NodeRuntimeResolver` personal 配置一致；conflict 返回非零并报 `ZCODE_HOME ... ZCODE_DATA_BASE_DIR ... conflict`；`-WhatIf` 与 `-PrintPathDiscovery` 后 runtime-config.json 不存在。
 
-定向修复测试结果：4 tests，4 pass，0 fail，0 skipped。
+定向 PowerShell/Doctor 修复测试结果：4 tests，4 pass，0 fail，0 skipped。PowerShell 场景逐项覆盖 `C:foo`、`C:`、`\\foo`、规范 UNC、混合分隔符 UNC、绝对盘符路径及 Unicode；PS5.1 与 PS7 均通过。
 
 ## Doctor 证据
 
@@ -68,10 +68,10 @@
 |---|---|
 | `npm run typecheck` | PASS |
 | `npm run validate:plugin`（仓库的 validate 命令） | PASS |
-| `npm test`（先执行 `build:test`） | 697 tests：695 pass，0 fail，2 skipped，duration 1,260,120.867 ms |
+| `npm test`（先执行 `build:test`） | 697 tests：695 pass，0 fail，2 skipped，duration 1,236,922.695 ms |
 | `git diff --check` | PASS |
 
-原审查候选为 692 tests（690 pass，2 skipped）。修复新增 5 tests，因此总数为 697；skip 仍为同 2 项，无原有断言、timeout 或测试数量减少。Ubuntu CI 首轮暴露 Windows 路径单测错误使用 POSIX 临时路径，随后暴露解析器无条件采用 Windows dataBaseDir 规则；分别修复测试隔离与跨平台解析后，当前提交的 CI 正在重新运行。
+原审查候选为 692 tests（690 pass，2 skipped）。修复新增 5 tests，因此总数为 697；skip 仍为同 2 项，无原有断言、timeout 或测试数量减少。Ubuntu CI 首轮暴露 Windows 路径单测错误使用 POSIX 临时路径，随后暴露解析器无条件采用 Windows dataBaseDir 规则；最终 PowerShell 审查又补齐了严格 UNC 分隔符和 `C:`/`\\foo` 测试。当前最终提交的 CI 正在重新运行。
 
 ## 构建一致性
 
@@ -80,7 +80,7 @@
 - `plugins/codex-zcode-bridge/dist/bridge.mjs`：`BE6F71C3BFF8C306E7F81A5AE1C96832903361A8F8EBB979FC7451E33E793156`
 - `plugins/codex-zcode-bridge/worker/worker-main.mjs`：`0FB4426C2F039E298041F4EBCAF850DF254D3948ABE9FD29B5B06978FDD9CED3`
 
-第一次复验尝试在 `scripts/build-core.mjs:33` 出现一次 Windows `EPERM rename .build-core-KYnjXB\src -> dist\src`；未修改命令或重试逻辑，随后同一命令连续两次成功。该错误与既有 Ledger rename 环境抖动同类，未在本轮修复范围中改变构建脚本。
+Windows `scripts/build-core.mjs:33` 的目录 rename 偶发 `EPERM` 仍可复现。运行时源码变更后连续两次成功构建且哈希一致；本次只改 PowerShell 与测试后，最新本地两次构建在同一 rename 步骤失败。未修改构建命令、脚本或重试逻辑；GitHub 对前一代码提交的 Windows build 步骤通过，最终提交的 CI 仍待完成。
 
 ## 未解决问题
 
@@ -89,4 +89,4 @@
 
 ## 结论
 
-PASS——审查要求的 P1、ADR-021 与 P2 doctor 修复已实现，本地完整回归通过；最终提交 `82df987` 的 GitHub 双平台 CI 与 Master 独立复审仍待完成。合并和 release-please 流程尚未触发。
+PASS——审查要求的 P1、ADR-021 与 P2 doctor 修复已实现，本地完整回归通过；最终提交 `df38f13` 的 GitHub 双平台 CI 与 Master 独立复审仍待完成。合并和 release-please 流程尚未触发。
