@@ -18,7 +18,9 @@
 | 本轮修复前 Tree | `2b0f4d4151dcb00f476ecdf7fd735d0a68ad823c` |
 | 本轮 Doctor 修复提交 | `4282b8fc64c97399416d8a9a9d53e59bc799cb67` |
 | Doctor 修复提交 Tree | `21700367bda13fa5c98a3ceba89a88745493957c` |
-| 报告更新 | 紧随 Doctor 修复提交的独立文档提交；提交身份由分支历史记录 |
+| 平台大小写修正提交 | `8fad454b4d4f78d82b75fbbbdee3c049346fb26a` |
+| 平台大小写修正 Tree | `b283e73164712a575c54b450e8cc355090c48043` |
+| 报告更新 | 独立文档提交，位于平台大小写修正之后 |
 | PR | `#54`，open；远程旧 HEAD 的 Ubuntu CI 通过、Windows CI 在锁 rename EPERM 失败；本轮提交后需重新验证 |
 
 `c95b9c42` 是 `git mv` 的 ADR 文件 rename；由于后续显式 `git add` 的旧 pathspec 已不存在，该暂存 rename 被独立提交。未 amend、未 reset、未 cherry-pick。`c505c24` 包含全部修复内容与测试，保留原始实施提交。
@@ -57,6 +59,7 @@
 - 显式 `ZCODE_DATA_BASE_DIR` 与 setting.json 不一致：`zcode_data_dir` 报告显式路径及 `explicit ZCODE_DATA_BASE_DIR` 来源。
 - `dataBaseDir=C:foo`：`desktop_settings=warning`，说明 relative path 被忽略；effective data directory 回退用户目录。
 - 注入 `EPERM`：`desktop_settings=error`。
+- Worker 与主进程目录比较使用平台文件系统规则：Windows 大小写不敏感，POSIX 大小写敏感；对应 `sameFileSystemPath` 单测覆盖两种语义。
 - 设置 JSON 中注入 `TOKEN_DO_NOT_LEAK`：doctor JSON 序列化结果不包含该 token。doctor 不启动 AppServer、不执行真实模型请求。
 
 ## ADR-021 核对
@@ -71,7 +74,7 @@
 |---|---|
 | `npm run typecheck` | PASS |
 | `npm run validate:plugin`（仓库的 validate 命令） | PASS |
-| `npm test`（先执行 `build:test`） | 697 tests：695 pass，0 fail，2 skipped，duration 1,208,188.690 ms |
+| `npm test`（先执行 `build:test`） | 697 tests：695 pass，0 fail，2 skipped，duration 1,365,822.545 ms |
 | `git diff --check` | PASS |
 
 原审查候选为 692 tests（690 pass，2 skipped）。修复新增 5 tests，因此总数为 697；skip 仍为同 2 项，无原有断言、timeout 或测试数量减少。Ubuntu CI 首轮暴露 Windows 路径单测错误使用 POSIX 临时路径，随后暴露解析器无条件采用 Windows dataBaseDir 规则；最终 PowerShell 审查又补齐了严格 UNC 分隔符和 `C:`/`\\foo` 测试。
@@ -80,9 +83,9 @@
 
 ## 构建一致性
 
-本轮 Doctor 代码变更后的首次构建成功；随后的构建遇到一次 `scripts/build-core.mjs:33` 的目录 rename `EPERM`，未进入 plugin bundle 阶段；再下一次完整构建成功。两次成功构建的产物 SHA256 完全一致：
+本轮 Doctor 代码变更后的完整构建成功；其后一次重复构建遇到 `scripts/build-core.mjs:33` 目录 rename `EPERM`，未进入 plugin bundle 阶段，再下一次完整构建成功。平台大小写修正后构建又遇到两次同类 `EPERM`，随后完整构建成功。最后一次成功构建已将平台感知路径比较打入 bundle；该修正前后的 bridge bundle 哈希因此不同。当前最终产物 SHA256：
 
-- `plugins/codex-zcode-bridge/dist/bridge.mjs`：`3574719B5C5A280E382176FCEDB2E6A74B13B5724A06D953F64329C68F07735B`
+- `plugins/codex-zcode-bridge/dist/bridge.mjs`：`B1E575FC1D896E6BC974A35EFC1E41CB41239BDF5CDA85C82021F66877138AD8`
 - `plugins/codex-zcode-bridge/worker/worker-main.mjs`：`0FB4426C2F039E298041F4EBCAF850DF254D3948ABE9FD29B5B06978FDD9CED3`
 
 Windows `scripts/build-core.mjs:33` 的目录 rename 偶发 `EPERM` 仍可复现。未修改构建命令、脚本或重试逻辑。旧远程 HEAD 的 Windows CI build 步骤通过；新提交的 CI 仍待完成。
@@ -94,4 +97,4 @@ Windows `scripts/build-core.mjs:33` 的目录 rename 偶发 `EPERM` 仍可复现
 
 ## 结论
 
-PASS（本地修复验收）——P1、ADR-021 与 P2 Doctor 修复已实现；PS5.1/PS7 对照、697 项完整回归及两次成功构建产物哈希一致均有证据。Doctor 修复提交为 `4282b8fc64c97399416d8a9a9d53e59bc799cb67`，Tree 为 `21700367bda13fa5c98a3ceba89a88745493957c`；本报告已作为紧随其后的独立文档提交记录。远程旧 HEAD 存在 Windows `process-lock` EPERM CI 失败；新候选双平台 CI 尚未完成。未合并，未触发 release-please。
+PASS（本地修复验收）——P1、ADR-021 与 P2 Doctor 修复已实现；PS5.1/PS7 对照、697 项完整回归及最终构建产物证据通过。Doctor 修复提交为 `4282b8fc64c97399416d8a9a9d53e59bc799cb67`；平台大小写修正提交为 `8fad454b4d4f78d82b75fbbbdee3c049346fb26a`。旧 HEAD `045bdf15` 的双平台 CI 通过；本次平台修正的新 HEAD CI 尚未运行。未合并，未触发 release-please。
