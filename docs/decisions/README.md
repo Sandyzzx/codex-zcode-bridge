@@ -28,6 +28,8 @@
 | [ADR-018](ADR-018-administrative-abandonment-of-cleanup-incomplete-hold.md) | Accepted | 对已确认执行世代结束的 `cleanup_incomplete` Hold 执行一次性、证据绑定且不可重入的行政结案 |
 | [ADR-019](ADR-019-local-trust-and-recovery-fence.md) | Accepted | 单用户本机 SQLite 使用与 JSON 一致的 `yolo` 普通工具流程；运行中 Worker 的临时探针不确定性只隔离当前 Manager，不写全局 Recovery Hold |
 | [ADR-021](ADR-021-zcode-path-discovery.md) | Accepted（待 Master 审查） | 统一 ZCode 路径发现：Windows HOME 判定、`setting.json` dataBaseDir、同安装校验、显式冲突报错与 Worker 环境一致性 |
+| [ADR-022](ADR-022-authority-bound-doctor.md) | 本次缺陷修复 | doctor 使用当前 SQLite Authority 的一致读与 Manager 恢复围栏；禁止回退 JSON 误报健康 |
+| [ADR-023](ADR-023-completion-window-cleanup-prewarm.md) | 本次缺陷修复 | Windows 清理 helper 在完成窗口空预热；身份绑定终止与失败闭合不变 |
 
 ADR-001 到 ADR-003 只搬运权威文档里已经写明的结论。ADR-004 原先没有明文记录，只有 bridge 之外的设计讨论，因此先以 Proposed 记录；2026-10-07 由 Master 明确按"强化版 A"接受，原则冻结，未因此增加任何读取 ZCode 本地材料的代码。
 

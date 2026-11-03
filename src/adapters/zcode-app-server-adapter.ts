@@ -22,7 +22,7 @@ import { BridgeError } from "../runtime/errors.js";
 import { loadPersistedRuntimeEnvironment, NodeRuntimeResolver } from "../runtime/resolver.js";
 import { captureSpawnGenerationIdentity, childStillOnSpawnGeneration, isProcessRunning, terminateProcessTree, verifyProcessTreeClaimantsClean, type TerminateProcessTree, type TreeClaimantTarget } from "./process-spawn.js";
 import { createPlatformProbe, type ProcessProbe } from "../runtime/process-probe.js";
-import { WindowsTreeCleanupError, type WindowsTerminationReceipt } from "./windows-process-cleanup.js";
+import { WindowsTreeCleanupError, openPowerShellTreeTransaction, terminateWindowsProcessTree, type WindowsTerminationReceipt, type WindowsTreeTransactionLike } from "./windows-process-cleanup.js";
 import {
   buildFailureFacts,
   classifyFailureEvidence,
@@ -94,6 +94,8 @@ interface AppServerClient {
   child: ChildProcessWithoutNullStreams;
   request(method: string, params: JsonRecord): Promise<unknown>;
   replayEvents(events: unknown[]): void;
+  /** Start the ADR-009 helper during completion processing; it holds no PID. */
+  prewarmCleanup(): void;
   close(): Promise<WindowsTerminationReceipt | null>;
   readonly stderr: string;
 }
@@ -297,6 +299,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
   readonly #onOutcomeCheckpoint: ZCodeAppServerAdapterOptions["onOutcomeCheckpoint"];
   readonly #onInteractionState: ZCodeAppServerAdapterOptions["onInteractionState"];
   readonly #terminateProcessTree: TerminateProcessTree;
+  readonly #usesDefaultProcessTerminator: boolean;
   readonly #verifyTreeClean: NonNullable<ZCodeAppServerAdapterOptions["verifyTreeClean"]>;
   readonly #onCleanupDecisionTrace: ZCodeAppServerAdapterOptions["onCleanupDecisionTrace"];
   readonly #turnBindingCompatMs: number;
@@ -322,6 +325,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     this.#resolveInteraction = options.resolveInteraction;
     this.#onOutcomeCheckpoint = options.onOutcomeCheckpoint;
     this.#onInteractionState = options.onInteractionState;
+    this.#usesDefaultProcessTerminator = options.terminateProcessTreeImpl === undefined;
     this.#terminateProcessTree = options.terminateProcessTreeImpl ?? terminateProcessTree;
     this.#verifyTreeClean = options.verifyTreeClean ?? verifyProcessTreeClaimantsClean;
     this.#onCleanupDecisionTrace = options.onCleanupDecisionTrace;
@@ -1154,6 +1158,13 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     }
     let spawned = false;
     child.once("spawn", () => { spawned = true; });
+    let cleanupTransaction: Promise<WindowsTreeTransactionLike> | null = null;
+    const prewarmCleanup = (): void => {
+      if (process.platform !== "win32" || !this.#usesDefaultProcessTerminator
+        || cleanupTransaction || closed || !child.pid) return;
+      cleanupTransaction = openPowerShellTreeTransaction();
+      void cleanupTransaction.catch(() => undefined);
+    };
     // ADR-011 S1: an async spawn failure (ENOENT/EACCES/EPERM) must not be
     // masked by later "closed before ..." rejections; every subsequent request
     // surfaces the same marked spawn error so the termination path maps it.
@@ -1338,6 +1349,9 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       const identity = entry.childIdentity?.pid === child.pid ? entry.childIdentity : null;
       if (!terminationStarted && entry.childExitSeen && identity?.fingerprint) {
         traceRootExitedDecision();
+        const pendingTransaction = cleanupTransaction;
+        cleanupTransaction = null;
+        if (pendingTransaction) await (await pendingTransaction).close();
         // The original ChildProcess exit was observed; no signal can reach
         // that generation now. Do not start a termination transaction solely
         // to rediscover this fact. This is NOT a clean-tree verdict: the
@@ -1349,11 +1363,36 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       // Never replace such a failure with the original-child-exit shortcut.
       terminationStarted = true;
       try {
-        const terminated = await this.#terminateProcessTree(child.pid, {
-          graceMs: 500,
-          killWaitMs: 5_000,
-          expectedRootFingerprint: identity?.fingerprint ?? null,
-        });
+        let terminated: Awaited<ReturnType<TerminateProcessTree>>;
+        const pendingTransaction = cleanupTransaction;
+        cleanupTransaction = null;
+        if (pendingTransaction) {
+          try {
+            const transaction = await pendingTransaction;
+            terminated = {
+              pid: child.pid,
+              signal: "SIGKILL",
+              verified: true,
+              windows: await terminateWindowsProcessTree(child.pid, identity?.fingerprint ?? null, 5_000, {
+                open: async () => transaction,
+              }),
+            };
+          } catch {
+            // The prewarmed helper is diagnostic acceleration only. If its
+            // startup raced termination, fall back to the exact ADR-009 path.
+            terminated = await this.#terminateProcessTree(child.pid, {
+              graceMs: 500,
+              killWaitMs: 5_000,
+              expectedRootFingerprint: identity?.fingerprint ?? null,
+            });
+          }
+        } else {
+          terminated = await this.#terminateProcessTree(child.pid, {
+            graceMs: 500,
+            killWaitMs: 5_000,
+            expectedRootFingerprint: identity?.fingerprint ?? null,
+          });
+        }
         return terminated.windows ?? null;
       } catch (error) {
         // A transaction can discover the same root-exited race after its
@@ -1384,16 +1423,12 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         await identityCapture;
       }
       if (process.platform === "win32" && child.pid) {
-        try {
-          // The turn result is already persisted before close() is called.
-          // Keep the original root generation alive until the identity-bound
-          // tree transaction has captured its receipt. Ending stdin first can
-          // let a short-lived app-server exit naturally and downgrade a valid
-          // cleanup to the weaker recorded-tree claimant-scan fallback.
-          return await closeWindowsTree();
-        } finally {
-          child.stdin.end();
-        }
+        // The turn result is already persisted before close() is called.
+        // Keep the original root generation alive until the identity-bound
+        // tree transaction has captured its receipt. Ending stdin first can
+        // let a short-lived app-server exit naturally and downgrade a valid
+        // cleanup to the weaker recorded-tree claimant-scan fallback.
+        return await closeWindowsTree();
       }
       child.stdin.end();
       await new Promise<void>((resolve) => {
@@ -1411,7 +1446,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       }
       return null;
     };
-    return { child, request, replayEvents, close, get stderr() { return stderr; } };
+    return { child, request, replayEvents, prewarmCleanup, close, get stderr() { return stderr; } };
   }
 
   /** ADR-009: terminate the adapter's own spawned child with the identity
@@ -1857,6 +1892,10 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
    * (ADR-008); the full text has already streamed through model_output events
    * up to the event-log capacity. */
   #resolveTurnCompleted(entry: RunEntry, payload: JsonRecord, event: JsonRecord): void {
+    // Report parsing, checkpoint persistence, desktop sync, and browser close
+    // give the cleanup helper a bounded overlap window without holding any
+    // process handle. The identity/ownership checks remain entirely at close.
+    if (process.platform === "win32") entry.client?.prewarmCleanup();
     if (entry.turnBinding === "pending") entry.turnBinding = entry.turnId ? "strict" : "compat";
     const rawResponse = typeof payload.response === "string" ? payload.response : "";
     entry.resolveTurn({

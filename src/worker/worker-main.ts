@@ -124,7 +124,11 @@ async function runClaimOnlyHandshake(options: { readonly interactionMode: boolea
   options.onStage?.("process probe initialization");
   // Match the bounded Windows identity budget used by the isolated launch
   // identity verifier. Unknown identity still fails closed at the limit.
-  const probe = createPlatformProbe({ timeoutMs: 10_000 });
+  let processProbeFailure: string | undefined;
+  const probe = createPlatformProbe({
+    timeoutMs: 10_000,
+    onWindowsQueryFailure: (reason) => { processProbeFailure = reason; },
+  });
   options.onStage?.("identity platform check");
   if (probe.platform !== "win32") throw new Error("claim-only identity requires verified Windows process identity");
   options.onStage?.("process identity probe");
@@ -133,7 +137,9 @@ async function runClaimOnlyHandshake(options: { readonly interactionMode: boolea
   if (identity.platform !== "win32" || identity.fingerprint_precision !== "exact"
     || typeof identity.fingerprint !== "string" || !identity.fingerprint) {
     options.onStage?.(`process identity rejected platform=${identity.platform} precision=${identity.fingerprint_precision} fingerprint=${identity.fingerprint ? "present" : "missing"}`);
-    throw new Error("worker identity unavailable");
+    const error = new Error("worker identity unavailable") as Error & { code?: string };
+    error.code = `worker_identity_${processProbeFailure ?? "unknown"}`;
+    throw error;
   }
 
   const report = {

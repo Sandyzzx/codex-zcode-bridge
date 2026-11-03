@@ -1,9 +1,9 @@
 # ZCode 运行配置边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-03
-> Last verified: 2026-11-03，核对了新增的"路径发现合同"一节与 `src/runtime/paths.ts` 实现、测试矩阵及 PowerShell `-PrintPathDiscovery` 一致性测试；其余条目沿用 2026-10-16 核对范围（Windows/Linux worker 环境转发、Windows 自动发现及真实浏览器后端），Fresh Bootstrap 条款仍为静态复核。
-> Verified against: 58947ad770353b62ca3efccb2c6fd47c00e56894 + 本分支路径发现改动（未合并提交，见 codex/zcode-path-discoverer-20261103）
+> Last updated: 2026-11-04
+> Last verified: 2026-11-04，核对了 Windows 进程身份探针、PowerShell 启动路径及 Worker 环境预检；其余条目沿用 2026-11-03 核对范围（路径发现合同与 PowerShell `-PrintPathDiscovery` 一致性测试），Fresh Bootstrap 条款仍为静态复核。
+> Verified against: 879568c211bac6233817acc90923e23d7861ca79 + 21ffa7581aac7f3cc6cc9ef1234b1d896864df96
 
 当前生产路径是 `node zcode.cjs app-server --stdio`，不是历史 CLI `--prompt --json`。解析入口为 `NodeRuntimeResolver`，配置项与用户设置方法见仓库 README。
 
@@ -27,7 +27,7 @@
 4. personal provider 配置候选顺序：显式 `ZCODE_DATA_BASE_DIR` → `setting.json` 发现的 `dataBaseDir` → 用户目录。credentials 与 personal 配置在数据目录；builtin 配置在安装目录；CLI 配置、AGENTS.md、Skills 在用户目录——Desktop 数据迁移不迁移 CLI 用户配置。
 5. runtime-config.json 仅持久化显式来源的 `ZCODE_HOME`/`ZCODE_DATA_BASE_DIR`；`setting.json` 的发现值不持久化，保证 Desktop 后续迁移可被跟随。
 
-Windows 子进程环境：`createMinimalOsEnv`/`createWorkerEnv` 把 `HOME` 归一为 Bridge 解析出的用户目录（`USERPROFILE` 原样保留），使 Worker 与 ZCode 子进程使用与主进程相同的数据目录；不透传任意父进程环境变量或凭据。
+Windows 子进程环境：`createMinimalOsEnv`/`createWorkerEnv` 把 `HOME` 归一为 Bridge 解析出的用户目录（`USERPROFILE` 原样保留），使 Worker 与 ZCode 子进程使用与主进程相同的数据目录；不透传任意父进程环境变量或凭据。Windows 进程身份探针从 `SystemRoot` 绝对路径启动系统 Windows PowerShell，通过 .NET `Process.GetProcessById().StartTime.Ticks` 读取创建指纹；它不依赖父进程的 `PSModulePath`，查询失败仍为 unknown。
 
 Bridge 只读取官方 builtin/personal provider 配置，不复制、不改写内容，也不将环境或凭据写入任务 metadata。personal 配置的 `config.providerConfigRules.providerRules` 必须为非空数组或对象；已知空 stub 被拒绝。结构验证不能证明 provider 可用或账号有权限。
 

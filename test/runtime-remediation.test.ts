@@ -98,6 +98,17 @@ test("a real worker delivers a permission reply and exits; a continuation gets a
         assert.equal(store.readInteractionRequest("task_1", id)?.state, "pending");
         await manager.replyToInteraction({ task_id: "task_1", request_id: id, decision: "allow" });
         const exit = await Promise.race([exited, delay(5_000).then(() => "hung")]);
+        if (exit === "hung") {
+          await writeFile(path.join(".run", "evidence", "failure-investigation", `runtime-remediation-hang-${Date.now()}-${attempt}.json`), JSON.stringify({
+            attempt, request_id: id, exit,
+            child: { pid: child.pid, exit_code: child.exitCode, signal_code: child.signalCode, killed: child.killed },
+            status: store.readStatus("task_1"),
+            result: store.readResult("task_1"),
+            interaction: store.readInteractionRequest("task_1", id),
+            events_tail: store.readEvents("task_1", 0, 200).events.slice(-20),
+            stderr,
+          }, null, 2), "utf8");
+        }
         assert.equal(exit, 0, stderr);
         assert.equal(store.readResult("task_1")?.status, "completed");
         priorId = id;

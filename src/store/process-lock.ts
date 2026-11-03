@@ -34,7 +34,8 @@ const TRANSIENT_LOCK_FS_CODES = new Set(["EEXIST", "EPERM", "EACCES", "EBUSY", "
 const DESTINATION_PRESENT_CONTENTION_CODES = new Set(["EEXIST", "ENOTEMPTY"]);
 /** Bounded budgets for the transient retries; exhaustion keeps the original
  * error visible instead of spinning. */
-const PUBLICATION_RETRY_ATTEMPTS = 3;
+const PUBLICATION_RETRY_ATTEMPTS = 5;
+const PUBLICATION_RETRY_PAUSE_MS = 50;
 const WITHDRAW_RETRY_MS = 5_000;
 const SHARED_GUARD_RETRY_MS = 2_000;
 const PRIVATE_CLEANUP_RETRY_MS = 1_000;
@@ -44,8 +45,8 @@ function isTransientLockFsError(error: unknown): boolean {
   return TRANSIENT_LOCK_FS_CODES.has((error as NodeJS.ErrnoException)?.code ?? "");
 }
 
-function pauseBriefly(): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, RETRY_PAUSE_MS);
+function pauseBriefly(delayMs = RETRY_PAUSE_MS): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
 }
 
 export function publishSelfIdentity(identity: ProcessIdentity): void {
@@ -136,7 +137,7 @@ function tryAcquireProcessLockWithRetry(directory: string, retries: number): (()
         return acquireExistingLock(directory);
       }
       if (retries < PUBLICATION_RETRY_ATTEMPTS) {
-        pauseBriefly();
+        pauseBriefly(PUBLICATION_RETRY_PAUSE_MS);
         return tryAcquireProcessLockWithRetry(directory, retries + 1);
       }
       throw error;

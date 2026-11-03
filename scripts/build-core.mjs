@@ -10,6 +10,24 @@ const output = path.join(root, "dist");
 const target = path.join(output, "src");
 const backup = path.join(staging, "previous-src");
 let replaced = false;
+
+// Windows Defender can briefly hold a freshly emitted tree open. This retry is
+// only for transient EPERM; every other rename failure stays immediately visible.
+function renameWithTransientEpermRetry(source, destination) {
+  const backoff = new Int32Array(new SharedArrayBuffer(4));
+  let lastError;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      renameSync(source, destination);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (error?.code !== "EPERM") throw error;
+      Atomics.wait(backoff, 0, 0, 10 * (attempt + 1));
+    }
+  }
+  throw lastError;
+}
 try {
   const compiler = createRequire(import.meta.url).resolve("typescript/bin/tsc");
   const run = spawnSync(process.execPath, [compiler, "--project", path.join(root, "tsconfig.json"), "--outDir", staging], { cwd: root, stdio: "inherit" });
@@ -29,9 +47,9 @@ try {
   mkdirSync(output, { recursive: true });
   // Reject an output junction escaping the named workspace before any move.
   if (realpathSync(output) !== output || (existsSync(target) && realpathSync(target) !== target)) throw new Error("core output must be a real directory inside the repository");
-  if (existsSync(target)) renameSync(target, backup);
-  try { renameSync(path.join(staging, "src"), target); replaced = true; }
-  catch (error) { if (existsSync(backup)) renameSync(backup, target); throw error; }
+  if (existsSync(target)) renameWithTransientEpermRetry(target, backup);
+  try { renameWithTransientEpermRetry(path.join(staging, "src"), target); replaced = true; }
+  catch (error) { if (existsSync(backup)) renameWithTransientEpermRetry(backup, target); throw error; }
 } finally {
   // staging is generated under the verified repository root, including backup.
   if (path.dirname(staging) !== root || realpathSync(staging) !== staging) throw new Error("unexpected core staging path");

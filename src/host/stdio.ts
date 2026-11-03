@@ -14,7 +14,7 @@ import { findPackageRoot, loadPersistedRuntimeEnvironment } from "../runtime/res
 import { BridgeTaskManager } from "../manager/task-manager.js";
 import { createBridgeServer } from "../mcp/server.js";
 import { DEFAULT_TASK_TIMEOUT_MS, validateTaskTimeout } from "../runtime/task-timeout.js";
-import { runBridgeDoctor } from "../runtime/doctor.js";
+import { runBridgeDoctor, type DoctorCheck } from "../runtime/doctor.js";
 import { ZCodeModelSettings } from "../runtime/model-settings.js";
 import { codexHostProfile, validateHostProfile, type BridgeHostProfile } from "./profile.js";
 import { workerEntryPath } from "../manager/spawn-worker.js";
@@ -187,6 +187,7 @@ export async function startBridge(
 
   const processProbe = createPlatformProbe();
   let manager: BridgeTaskManager;
+  let lifecycleChecks: () => readonly DoctorCheck[];
   const databasePath = path.join(dataRoot, FRESH_SQLITE_DATABASE_FILE);
   let trustedLocalContext: ReturnType<typeof createTrustedLocalCandidateContext>;
   try {
@@ -209,6 +210,7 @@ export async function startBridge(
       requireAuthorityReceipt: true,
     });
     manager = new BridgeTaskManager({ lifecycleAuthority: authority, maxConcurrentWorkers: workerLimit.maxConcurrentWorkers });
+    lifecycleChecks = () => authority.getDoctorChecks();
   } catch (error) {
     console.error(`[bridge] SQLITE_INITIALIZATION_FAILED: ${error instanceof Error ? error.message : String(error)}`);
     throw error;
@@ -216,7 +218,7 @@ export async function startBridge(
   const modelSettings = new ZCodeModelSettings(process.env, { host });
   const server = createBridgeServer({
     taskManager: manager,
-    doctor: () => runBridgeDoctor({ env: runtimeEnv, dataRoot, resolver: { host } }),
+    doctor: () => runBridgeDoctor({ env: runtimeEnv, dataRoot, resolver: { host }, lifecycleChecks }),
     modelSettings,
     serverInfo: { name: host.name, version },
     instructions: host.instructions,

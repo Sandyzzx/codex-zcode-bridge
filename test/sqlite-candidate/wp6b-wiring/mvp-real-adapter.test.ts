@@ -39,9 +39,12 @@ function writeFakeRuntime(name: string, variant: "success" | "failure"): FakeRun
   const root = path.join(fixtureRoot, name);
   mkdirSync(root, { recursive: true });
   mkdirSync(path.join(root, ".zcode", "v2"), { recursive: true });
-  const entrypoint = path.join(root, "fake-app-server.cjs");
+  // Resolver derives the builtin pair from <runtime>/../../config/provider;
+  // make the fixture mimic the production resources/glm runtime layout.
+  const entrypoint = path.join(root, "resources", "glm", "fake-app-server.cjs");
   const requestLog = path.join(root, "requests.jsonl");
   const taskInput = path.join(root, "task-input.json");
+  const builtinConfig = path.join(root, "resources", "config", "provider", "zcode-builtin.json");
   const report = JSON.stringify({
     summary: "synthetic MVP real-adapter report",
     files_changed: [],
@@ -103,14 +106,16 @@ function writeFakeRuntime(name: string, variant: "success" | "failure"): FakeRun
     `  }`,
     `});`,
   ].join("\n");
+  mkdirSync(path.dirname(entrypoint), { recursive: true });
   writeFileSync(entrypoint, script, "utf8");
   writeFileSync(taskInput, JSON.stringify({ task_id: "TASK_ID" }), "utf8");
-  writeFileSync(path.join(root, "builtin.json"), JSON.stringify({ config: { providers: [] } }), "utf8");
+  mkdirSync(path.dirname(builtinConfig), { recursive: true });
+  writeFileSync(builtinConfig, JSON.stringify({ config: { providers: [] } }), "utf8");
   const zcodeHomeV2 = path.join(root, ".zcode", "v2");
   writeFileSync(path.join(zcodeHomeV2, "provider_config.json"), JSON.stringify({
     config: { providerConfigRules: { providerRules: { "provider-default": { upstream: { type: "synthetic" } } } } },
   }), "utf8");
-  return { entrypoint, requestLog, taskInput, builtinConfig: path.join(root, "builtin.json"), personalConfig: path.join(zcodeHomeV2, "provider_config.json"), zcodeHomeV2 };
+  return { entrypoint, requestLog, taskInput, builtinConfig, personalConfig: path.join(zcodeHomeV2, "provider_config.json"), zcodeHomeV2 };
 }
 
 function contentObject(result: { readonly structuredContent?: unknown; readonly isError?: boolean }, diagnostic = ""): Record<string, unknown> {
@@ -184,7 +189,8 @@ async function waitForInteractionRequest(client: Client, taskId: string): Promis
 
 async function withRealAdapterMcp(
   run: (client: Client, manager: BridgeTaskManager, dataRoot: string, workspace: string, runtime: FakeRuntimeFixture) => Promise<void>,
-  options: { readonly runtimeVariant?: "success" | "failure"; readonly preserveFixtureOnFailure?: boolean; readonly stderrCollector?: { readonly lines: string[] } } = {},
+  options: { readonly runtimeVariant?: "success" | "failure"; readonly preserveFixtureOnFailure?: boolean;
+    readonly stderrCollector?: { readonly lines: string[] }; readonly lifecycleCollector?: { readonly lines: string[] } } = {},
 ): Promise<void> {
   const fixture = path.join(fixtureRoot, randomUUID());
   const dataRoot = path.join(fixture, "sqlite-root");
@@ -197,7 +203,7 @@ async function withRealAdapterMcp(
     if (existsSync(candidateSchema)) {
       assert.equal(readFileSync(candidateSchema, "utf8"), readFileSync(sourceSchema, "utf8"), "compiled schema must match the tested source schema");
     } else {
-      copyFileSync(schema());
+      writeFileSync(candidateSchema, readFileSync(sourceSchema, "utf8"));
     }
     mkdirSync(fixtureRoot, { recursive: true });
     mkdirSync(workspace, { recursive: true });
@@ -241,9 +247,8 @@ async function withRealAdapterMcp(
             child.stderr?.on("data", (chunk: string) => options.stderrCollector?.lines.push(chunk));
           },
         } : {}),
-        testOnScheduler: (stage, detail) => {
-          if (stage === "driver_run_returned") console.error(`[bridge-manager] ${stage} ${JSON.stringify(detail)}`);
-        },
+        testOnScheduler: (stage, detail) => options.lifecycleCollector?.lines.push(`[bridge-manager] ${stage} ${JSON.stringify(detail)}`),
+        onStage: (stage, detail) => options.lifecycleCollector?.lines.push(`[bridge-lifecycle] ${stage} ${JSON.stringify(detail ?? {})}`),
       });
       const manager = new BridgeTaskManager({ lifecycleAuthority: authority });
       const server = createBridgeServer({ taskManager: manager });
@@ -265,6 +270,9 @@ async function withRealAdapterMcp(
       if (previousZcodeHome === undefined) delete process.env["ZCODE_HOME"]; else process.env["ZCODE_HOME"] = previousZcodeHome;
     }
   } finally {
+    if (!successful && options.lifecycleCollector?.lines.length) {
+      console.error("SQLite lifecycle stages:\n" + options.lifecycleCollector.lines.join("\n"));
+    }
     if (successful || !options.preserveFixtureOnFailure) {
       try { rmSync(fixture, { recursive: true, force: true }); } catch { /* retain fixture if Windows still holds a handle */ }
     }
@@ -281,6 +289,7 @@ function copyFileSync(source: string): void {
 
 test("formal MCP lifecycle runs a real ZCodeAppServerAdapter against a controlled fake app-server", { timeout: 120_000 }, async () => {
   const stderrLines: string[] = [];
+  const lifecycleLines: string[] = [];
   try {
     await withRealAdapterMcp(async (client, _manager, _dataRoot, workspace, runtime) => {
       const taskId = `mvp-real-${randomUUID()}`;
@@ -319,7 +328,7 @@ test("formal MCP lifecycle runs a real ZCodeAppServerAdapter against a controlle
     } finally {
       eventsRoot.close();
     }
-    }, { stderrCollector: { lines: stderrLines }, preserveFixtureOnFailure: true });
+    }, { stderrCollector: { lines: stderrLines }, lifecycleCollector: { lines: lifecycleLines }, preserveFixtureOnFailure: true });
   } catch (error) {
     console.error("worker stderr:\n" + stderrLines.join("\n"));
     throw error;
@@ -337,6 +346,7 @@ test("test-only fake adapter capability cannot be injected through MCP TaskPacka
 });
 
 test("an adapter turn failure commits a failed Result without faking success", { timeout: 120_000 }, async () => {
+  const lifecycleLines: string[] = [];
   await withRealAdapterMcp(async (client, _manager, _dataRoot, workspace) => {
     const taskId = `mvp-failed-${randomUUID()}`;
     const created = contentObject(await client.callTool({ name: "zcode_task", arguments: syntheticTask(workspace, taskId) }));
@@ -346,5 +356,5 @@ test("an adapter turn failure commits a failed Result without faking success", {
     await waitForLifecycleEvent(client, taskId, "result_committed");
     const result = contentObject(await client.callTool({ name: "zcode_result", arguments: { task_id: taskId } }));
     assert.equal(result.status, "failed");
-  }, { runtimeVariant: "failure", preserveFixtureOnFailure: true });
+  }, { runtimeVariant: "failure", lifecycleCollector: { lines: lifecycleLines }, preserveFixtureOnFailure: true });
 });

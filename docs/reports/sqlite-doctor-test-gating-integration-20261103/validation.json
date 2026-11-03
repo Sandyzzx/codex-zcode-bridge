@@ -1,0 +1,111 @@
+{
+  "verdict": "PASS — ISOLATED CANDIDATE",
+  "timestamp": "2026-11-03T16:03:38Z",
+  "baseline": "879568c211bac6233817acc90923e23d7861ca79",
+  "branch": "codex/sqlite-doctor-test-gating-integration-20261103",
+  "worktree": "D:/codex-zcode-bridge/.run/sqlite-doctor-test-gating-integration-20261103",
+  "uncommitted": true,
+  "inventory": {
+    "files": 90,
+    "declarations": 878,
+    "by_type": { "Unit": 207, "Integration": 670, "Stress": 1 },
+    "delta_from_test_gating": { "files": 1, "declarations": 6, "cause": "test/sqlite-doctor.test.ts" },
+    "generation_consistency": "PASS"
+  },
+  "selector": {
+    "unit_tests": { "pass": 10, "fail": 0 },
+    "final_selection": "FULL_SUITE",
+    "changed_files": 33,
+    "full_suite_reasons": [
+      "full-suite-path:package.json",
+      "full-suite-path:scripts/build-core.mjs",
+      "full-suite-path:scripts/run-affected-tests.mjs",
+      "full-suite-path:scripts/run-stress-tests.mjs",
+      "full-suite-path:scripts/test-impact-selector.mjs",
+      "full-suite-path:test/test-impact-map.json"
+    ],
+    "unmapped_source_fallback_verified": true
+  },
+  "gates": {
+    "typecheck": { "status": "PASS", "log": ".run/evidence/gate5-final-revised/typecheck.log" },
+    "build": { "status": "PASS", "log": ".run/evidence/gate5-final-revised/build.log" },
+    "validate_plugin": { "status": "PASS", "log": ".run/evidence/gate5-final-revised/validate-plugin.log" },
+    "diff_check": { "status": "PASS", "log": ".run/evidence/gate5-final-revised/git-diff-check.log" },
+    "affected_initial": { "tests": 713, "pass": 710, "fail": 1, "skip": 2, "status": "FAIL" },
+    "affected_final": { "tests": 713, "pass": 711, "fail": 0, "skip": 2, "duration_ms": 1186016.8403, "status": "PASS", "scope": "NARROW_TOP_LEVEL_GLOB" },
+    "expanded_initial": { "tests": 806, "pass": 797, "fail": 7, "skip": 2, "duration_ms": 1531883.027, "status": "FAIL", "log": ".run/evidence/gate2-retry-full/test.log", "log_sha256": "0312BE15622DDA413CD2764698BF5FABD6BF4F749EF930FD33B9A3BA3692E0AA" },
+    "expanded_final": { "tests": 806, "pass": 804, "fail": 0, "skip": 2, "duration_ms": 1395494.5134, "status": "PASS", "log": ".run/evidence/gate2-expanded-final/test.log", "log_sha256": "B7DB7A7C46FE0D1CEF66A5ACBA7FB35F884069A74E70D10FB5B25EF15DCBD882" },
+    "stress_b3_05": {
+      "tests": 1, "pass": 1, "fail": 0, "skip": 0,
+      "active_tasks": 32,
+      "historical_tasks": 10000,
+      "setup_budget_seconds": 720,
+      "timeout_seconds": 900,
+      "setup_ms": 296701,
+      "test_duration_ms": 358234.8017,
+      "wrapper_duration_ms": 369110,
+      "status_p95_ms": 8.16,
+      "recovery_ms": 13901.7,
+      "cleanup_ms": 9790,
+      "status": "PASS"
+    },
+    "expanded_b3_05": {
+      "tests": 1, "pass": 1, "fail": 0, "skip": 0,
+      "active_tasks": 32,
+      "historical_tasks": 10000,
+      "setup_budget_seconds": 720,
+      "timeout_seconds": 900,
+      "setup_ms": 294276,
+      "status_p95_ms": 2.94,
+      "recovery_ms": 13350.9,
+      "cleanup_ms": 9786,
+      "test_duration_ms": 357143.5999,
+      "status": "PASS",
+      "log": ".run/evidence/gate2-expanded-final/test.log"
+    },
+    "clean_entrypoints": { "tests": 4, "pass": 4, "fail": 0, "skip": 0, "duration_ms": 5004.5842, "status": "PASS", "log": ".run/evidence/gate5-final-revised/clean-entrypoints.log" },
+    "artifact_rebuild_identity": { "files_compared": 8, "identical": true, "status": "PASS", "manifest": ".run/evidence/gate5-final-revised/artifact-manifest.json" },
+    "vendor_git_clean": true
+  },
+  "remote_ci_first_attempt": {
+    "run_id": 41672498692,
+    "commit": "7b4dcaa9a9e1dc5bc9b20c2aa9eead3d31f29cbd",
+    "ubuntu": { "tests": 803, "pass": 717, "fail": 32, "skip": 54, "duration_ms": 107208.284869, "status": "FAIL" },
+    "failure_class": "Windows-only SQLite bootstrap and trusted-local policy tests were run on POSIX",
+    "remediation": "POSIX runner explicitly excludes the eight Windows-only integration files; Windows remains the full 806-test gate",
+    "next_run": "PENDING_AFTER_RUNNER_FIX_PUSH"
+  },
+  "runtime_close_remediation": {
+    "initial_failure": { "duration_ms": 13635.2228, "assertion": "hung !== 0" },
+    "isolated_pre_fix": { "run": 1, "pass": false, "duration_ms": 15904.8425 },
+    "diagnostic_evidence": ".run/evidence/failure-investigation/repro-runtime-close.json",
+    "fix": "ADR-023 completion-window cleanup helper prewarm",
+    "post_fix_target_reproductions": { "runs": 10, "pass": 10, "attempt_ms_range": [3513, 5265] },
+    "post_fix_runtime_suite_runs": { "runs": 5, "pass": 5 },
+    "final_full_suite_case_duration_ms": 9055.8979,
+    "historical_root_cause_fully_proven": false
+  },
+  "artifacts": {
+    "bridge_bundle_sha256": "f4f834cffc71e0ad248604720f06213ba5fbd6ebcf61eef7436457a05f6dffdd",
+    "worker_bundle_sha256": "08a0206b3a76757e0014cc0b587b11a315fe49db4e5b0ed5206ab708dbb24d19",
+    "browser_host_sha256": "b750aeff5cae48d6cdb71e068b0b8d96592cba52b57a514fedad515615c55b4e",
+    "browsers_json_sha256": "2cfd419f71ac6475d81e1301fa86c34cf2a2a6bae2a0da4b5a2b18310216b6bf",
+    "vendor_package_json_sha256": "1d6b6f80ffb0c52865af0f9fe01abf2140df019e49ae6ac134605e462d583f3a"
+  },
+  "production": {
+    "installed_bridge_sha256": "b0a2cf8cbaa8734e0bab3e0a4e76dd34e2ab91e31352fe086da276ce925ea1f7",
+    "installed_worker_sha256": "4cef5244cb36aec79af370e96817a380c621d06c4b0244741e72b690387abfd1",
+    "installed_plugin_replaced": false,
+    "production_sqlite_written": false,
+    "task78_hold_released": false,
+    "task78_admin_abandonment_executed": false,
+    "current_production_hash": "NOT VERIFIED: files locked by running host at 2026-11-03T14:20:09Z",
+    "prior_snapshot_hash_consistent": true,
+    "provider_live_e2e": "NOT RUN"
+  },
+  "remaining": {
+    "commit_push_merge_release": "NOT AUTHORIZED",
+    "task78_admin_abandonment": "REQUIRES SEPARATE OWNER AUTHORIZATION AND HOST SHUTDOWN",
+    "live_provider_e2e": "NOT RUN"
+  }
+}

@@ -37,6 +37,8 @@
 
 ## 提交与验证
 
-- 代码改动跑 `npm run typecheck`、`npm test`、`npm run build`、`npm run validate:plugin`，并保证 `git diff --check` 干净。
+- 日常开发先跑 `npm run test:affected`；它始终包含 typecheck、build、plugin validation 和 `git diff --check`，并按影响映射选择测试。只有结果实际命中压力测试边界才运行该压力测试；报告中必须显式区分已运行压力测试与 `STRESS_TESTS_NOT_APPLICABLE`。
+- R4、发布候选冻结、SQLite/生产架构切换或测试执行器重大变更跑 `npm run test:full`。CI 保留完整 `npm test`。不得为缩短时间删除测试、增加 SKIP、修改断言或降低预算。
+- `npm test` 仍是完整隔离回归入口。文档-only 变更至少跑 `npm run test:affected` 的 T0 部分；其 `NO_TESTS_APPLICABLE` 不是测试 PASS。
 - `plugins/codex-zcode-bridge/dist/bridge.mjs` 与 `worker/worker-main.mjs` 是提交物，必须与源码同步；CI 会校验它们没有落后。
 - 不默认提交、推送或发布。发布走 release-please，合并到 `master` 之后由它生成版本 PR。
