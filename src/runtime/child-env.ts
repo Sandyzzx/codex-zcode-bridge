@@ -1,3 +1,5 @@
+import { resolveUserHome } from "./paths.js";
+
 /** Environment variables needed to start Node/ZCode without inheriting secrets. */
 const WINDOWS_OS_ENV = new Set([
   "PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP",
@@ -12,18 +14,36 @@ const POSIX_OS_ENV = new Set([
   "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME",
 ]);
 
-export function createMinimalOsEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const allowed = process.platform === "win32" ? WINDOWS_OS_ENV : POSIX_OS_ENV;
+export interface MinimalOsEnvOptions {
+  /** Defaults to process.platform; injectable for tests. */
+  platform?: NodeJS.Platform;
+}
+
+export function createMinimalOsEnv(source: NodeJS.ProcessEnv, options: MinimalOsEnvOptions = {}): NodeJS.ProcessEnv {
+  const platform = options.platform ?? process.platform;
+  const allowed = platform === "win32" ? WINDOWS_OS_ENV : POSIX_OS_ENV;
   const env: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(source)) {
     if (allowed.has(key.toUpperCase()) && value !== undefined) env[key] = value;
+  }
+  if (platform === "win32") {
+    // ZCode itself prefers HOME over homedir() for its data directory, so the
+    // child must see the same unified user directory the Bridge resolved
+    // (Magpie rule) instead of a parent-process HOME pointing at a test or
+    // WSL directory. USERPROFILE is forwarded unchanged.
+    try {
+      const home = resolveUserHome(source, { platform });
+      if (home.userHome) env["HOME"] = home.userHome;
+    } catch {
+      // No resolvable user directory: leave the filtered environment as-is.
+    }
   }
   return env;
 }
 
 /** Detached workers need Bridge configuration, but never arbitrary parent secrets. */
-export function createWorkerEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const env = createMinimalOsEnv(source);
+export function createWorkerEnv(source: NodeJS.ProcessEnv, options: MinimalOsEnvOptions = {}): NodeJS.ProcessEnv {
+  const env = createMinimalOsEnv(source, options);
   const explicitBridgeKeys = new Set([
     "ZCODE_BRIDGE_NODE", "ZCODE_BRIDGE_ZCODE_CJS", "ZCODE_BRIDGE_DATA_DIR",
     "ZCODE_BRIDGE_DEFAULT_PROVIDER_ID", "ZCODE_BRIDGE_DEFAULT_MODEL_ID",
