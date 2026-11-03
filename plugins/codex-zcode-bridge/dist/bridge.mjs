@@ -467,8 +467,8 @@ import path4 from "node:path";
 function isTransientLockFsError(error2) {
   return TRANSIENT_LOCK_FS_CODES.has(error2?.code ?? "");
 }
-function pauseBriefly() {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, RETRY_PAUSE_MS);
+function pauseBriefly(delayMs = RETRY_PAUSE_MS) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
 }
 function publishSelfIdentity(identity) {
   selfIdentity = identity;
@@ -526,7 +526,7 @@ function tryAcquireProcessLockWithRetry(directory, retries) {
         return acquireExistingLock(directory);
       }
       if (retries < PUBLICATION_RETRY_ATTEMPTS) {
-        pauseBriefly();
+        pauseBriefly(PUBLICATION_RETRY_PAUSE_MS);
         return tryAcquireProcessLockWithRetry(directory, retries + 1);
       }
       throw error2;
@@ -667,14 +667,15 @@ function removeSharedGuard(guard) {
     }
   }
 }
-var selfIdentity, TRANSIENT_LOCK_FS_CODES, DESTINATION_PRESENT_CONTENTION_CODES, PUBLICATION_RETRY_ATTEMPTS, WITHDRAW_RETRY_MS, SHARED_GUARD_RETRY_MS, PRIVATE_CLEANUP_RETRY_MS, RETRY_PAUSE_MS;
+var selfIdentity, TRANSIENT_LOCK_FS_CODES, DESTINATION_PRESENT_CONTENTION_CODES, PUBLICATION_RETRY_ATTEMPTS, PUBLICATION_RETRY_PAUSE_MS, WITHDRAW_RETRY_MS, SHARED_GUARD_RETRY_MS, PRIVATE_CLEANUP_RETRY_MS, RETRY_PAUSE_MS;
 var init_process_lock = __esm({
   "src/store/process-lock.ts"() {
     "use strict";
     selfIdentity = null;
     TRANSIENT_LOCK_FS_CODES = /* @__PURE__ */ new Set(["EEXIST", "EPERM", "EACCES", "EBUSY", "ENOTEMPTY"]);
     DESTINATION_PRESENT_CONTENTION_CODES = /* @__PURE__ */ new Set(["EEXIST", "ENOTEMPTY"]);
-    PUBLICATION_RETRY_ATTEMPTS = 3;
+    PUBLICATION_RETRY_ATTEMPTS = 5;
+    PUBLICATION_RETRY_PAUSE_MS = 50;
     WITHDRAW_RETRY_MS = 5e3;
     SHARED_GUARD_RETRY_MS = 2e3;
     PRIVATE_CLEANUP_RETRY_MS = 1e3;
