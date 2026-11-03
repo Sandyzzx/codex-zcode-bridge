@@ -51,7 +51,17 @@ export interface PlatformProbeOptions {
   readonly timeoutMs?: number;
   readonly maxConcurrent?: number;
   readonly now?: () => number;
+  /** Receives fixed diagnostic codes for failed Windows process queries. */
+  readonly onWindowsQueryFailure?: (reason: WindowsQueryFailureReason) => void;
 }
+
+export type WindowsQueryFailureReason =
+  | "timeout"
+  | "spawn_error"
+  | "nonzero_exit"
+  | "stderr"
+  | "missing_completion_marker"
+  | "malformed_output";
 
 const DEFAULT_PROBE_TIMEOUT_MS = 5_000;
 const DEFAULT_MAX_CONCURRENT = 2;
@@ -89,7 +99,11 @@ function failedQuery(reason: string): FingerprintQuery {
 }
 
 /** Batch Windows probe: one hidden PowerShell call, structured `pid|ticks` lines, bounded timeout. */
-function windowsBatchQuery(pids: number[], timeoutMs: number): Promise<FingerprintQuery> {
+function windowsBatchQuery(
+  pids: number[],
+  timeoutMs: number,
+  onFailure?: (reason: WindowsQueryFailureReason) => void,
+): Promise<FingerprintQuery> {
   return new Promise((resolve) => {
     const script = `$ErrorActionPreference = 'Stop'; Get-Process -Id ${pids.join(",")} -ErrorAction SilentlyContinue | ForEach-Object { "{0}|{1}" -f $_.Id, $_.StartTime.Ticks }; 'bridge_probe_complete_v1'`;
     const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], {
@@ -99,6 +113,11 @@ function windowsBatchQuery(pids: number[], timeoutMs: number): Promise<Fingerpri
     });
     let stdout = "";
     let settled = false;
+    const fail = (reason: WindowsQueryFailureReason): void => {
+      if (settled) return;
+      try { onFailure?.(reason); } catch { /* diagnostics cannot change probe behavior */ }
+      finish(failedQuery(reason));
+    };
     const finish = (query: FingerprintQuery): void => {
       if (settled) return;
       settled = true;
@@ -107,7 +126,7 @@ function windowsBatchQuery(pids: number[], timeoutMs: number): Promise<Fingerpri
     };
     const timer = setTimeout(() => {
       try { child.kill("SIGKILL"); } catch { /* already gone */ }
-      finish(failedQuery("timeout"));
+      fail("timeout");
     }, timeoutMs);
     timer.unref();
     child.stdout.setEncoding("utf8");
@@ -118,19 +137,27 @@ function windowsBatchQuery(pids: number[], timeoutMs: number): Promise<Fingerpri
     child.stdout.on("data", (chunk: string) => {
       if (stdout.length < 1_000_000) stdout += chunk;
     });
-    child.on("error", () => finish(failedQuery("spawn_error")));
+    child.on("error", () => fail("spawn_error"));
     child.on("close", (code) => {
       const map = new Map<number, string>();
       const lines = stdout.trim().split(/\r?\n/u);
-      if (code !== 0 || stderrBytes > 0 || lines.pop() !== "bridge_probe_complete_v1") {
-        finish(failedQuery("query_error"));
+      if (code !== 0) {
+        fail("nonzero_exit");
+        return;
+      }
+      if (stderrBytes > 0) {
+        fail("stderr");
+        return;
+      }
+      if (lines.pop() !== "bridge_probe_complete_v1") {
+        fail("missing_completion_marker");
         return;
       }
       for (const line of lines) {
         if (!line.trim()) continue;
         const match = /^(\d+)\|(\d+)$/u.exec(line.trim());
         if (!match || !pids.includes(Number(match[1])) || map.has(Number(match[1]))) {
-          finish(failedQuery("query_error"));
+          fail("malformed_output");
           return;
         }
         map.set(Number(match[1]), match[2]!);
@@ -207,7 +234,7 @@ export function createPlatformProbe(options: PlatformProbeOptions = {}): Process
     if (requests.length === 0) return [];
     const distinct = [...new Set(requests.map((request) => request.pid).filter((pid) => Number.isInteger(pid) && pid > 0))];
     const query = await schedule(async () => {
-      if (process.platform === "win32") return windowsBatchQuery(distinct, timeoutMs);
+      if (process.platform === "win32") return windowsBatchQuery(distinct, timeoutMs, options.onWindowsQueryFailure);
       if (process.platform === "darwin") return darwinQuery(distinct, timeoutMs);
       if (process.platform === "linux") {
         const map = new Map<number, string>();
@@ -260,7 +287,7 @@ export function createPlatformProbe(options: PlatformProbeOptions = {}): Process
 
   const fingerprintOfPid = async (pid: number): Promise<ProcessIdentity> => {
     const query = await schedule(async () => {
-      if (process.platform === "win32") return windowsBatchQuery([pid], timeoutMs);
+      if (process.platform === "win32") return windowsBatchQuery([pid], timeoutMs, options.onWindowsQueryFailure);
       if (process.platform === "darwin") return darwinQuery([pid], timeoutMs);
       if (process.platform === "linux") {
         const map = new Map<number, string>();

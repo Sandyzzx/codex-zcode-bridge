@@ -26,6 +26,9 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run build
+      - name: Verify Windows worker process identity
+        if: runner.os == 'Windows'
+        run: node scripts/verify-windows-worker-identity.mjs
       - run: npm test
       - run: npm run validate:plugin
       - name: Check plugin schemas are tracked

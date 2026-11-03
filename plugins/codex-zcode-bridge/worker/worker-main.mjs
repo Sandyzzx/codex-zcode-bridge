@@ -2502,7 +2502,7 @@ function verdict(state, reason, now) {
 function failedQuery(reason) {
   return { ok: false, reason, fingerprints: /* @__PURE__ */ new Map() };
 }
-function windowsBatchQuery(pids, timeoutMs) {
+function windowsBatchQuery(pids, timeoutMs, onFailure) {
   return new Promise((resolve) => {
     const script = `$ErrorActionPreference = 'Stop'; Get-Process -Id ${pids.join(",")} -ErrorAction SilentlyContinue | ForEach-Object { "{0}|{1}" -f $_.Id, $_.StartTime.Ticks }; 'bridge_probe_complete_v1'`;
     const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], {
@@ -2512,6 +2512,14 @@ function windowsBatchQuery(pids, timeoutMs) {
     });
     let stdout = "";
     let settled = false;
+    const fail = (reason) => {
+      if (settled) return;
+      try {
+        onFailure?.(reason);
+      } catch {
+      }
+      finish(failedQuery(reason));
+    };
     const finish = (query) => {
       if (settled) return;
       settled = true;
@@ -2523,7 +2531,7 @@ function windowsBatchQuery(pids, timeoutMs) {
         child.kill("SIGKILL");
       } catch {
       }
-      finish(failedQuery("timeout"));
+      fail("timeout");
     }, timeoutMs);
     timer.unref();
     child.stdout.setEncoding("utf8");
@@ -2535,19 +2543,27 @@ function windowsBatchQuery(pids, timeoutMs) {
     child.stdout.on("data", (chunk) => {
       if (stdout.length < 1e6) stdout += chunk;
     });
-    child.on("error", () => finish(failedQuery("spawn_error")));
+    child.on("error", () => fail("spawn_error"));
     child.on("close", (code) => {
       const map2 = /* @__PURE__ */ new Map();
       const lines = stdout.trim().split(/\r?\n/u);
-      if (code !== 0 || stderrBytes > 0 || lines.pop() !== "bridge_probe_complete_v1") {
-        finish(failedQuery("query_error"));
+      if (code !== 0) {
+        fail("nonzero_exit");
+        return;
+      }
+      if (stderrBytes > 0) {
+        fail("stderr");
+        return;
+      }
+      if (lines.pop() !== "bridge_probe_complete_v1") {
+        fail("missing_completion_marker");
         return;
       }
       for (const line of lines) {
         if (!line.trim()) continue;
         const match = /^(\d+)\|(\d+)$/u.exec(line.trim());
         if (!match || !pids.includes(Number(match[1])) || map2.has(Number(match[1]))) {
-          finish(failedQuery("query_error"));
+          fail("malformed_output");
           return;
         }
         map2.set(Number(match[1]), match[2]);
@@ -2623,7 +2639,7 @@ function createPlatformProbe(options = {}) {
     if (requests.length === 0) return [];
     const distinct = [...new Set(requests.map((request) => request.pid).filter((pid) => Number.isInteger(pid) && pid > 0))];
     const query = await schedule(async () => {
-      if (process.platform === "win32") return windowsBatchQuery(distinct, timeoutMs);
+      if (process.platform === "win32") return windowsBatchQuery(distinct, timeoutMs, options.onWindowsQueryFailure);
       if (process.platform === "darwin") return darwinQuery(distinct, timeoutMs);
       if (process.platform === "linux") {
         const map2 = /* @__PURE__ */ new Map();
@@ -2664,7 +2680,7 @@ function createPlatformProbe(options = {}) {
   };
   const fingerprintOfPid = async (pid) => {
     const query = await schedule(async () => {
-      if (process.platform === "win32") return windowsBatchQuery([pid], timeoutMs);
+      if (process.platform === "win32") return windowsBatchQuery([pid], timeoutMs, options.onWindowsQueryFailure);
       if (process.platform === "darwin") return darwinQuery([pid], timeoutMs);
       if (process.platform === "linux") {
         const map2 = /* @__PURE__ */ new Map();
@@ -29791,7 +29807,13 @@ async function runClaimOnlyHandshake(options) {
   options.onStage?.("process probe module load");
   const { createPlatformProbe: createPlatformProbe2 } = await Promise.resolve().then(() => (init_process_probe(), process_probe_exports));
   options.onStage?.("process probe initialization");
-  const probe = createPlatformProbe2({ timeoutMs: 1e4 });
+  let processProbeFailure;
+  const probe = createPlatformProbe2({
+    timeoutMs: 1e4,
+    onWindowsQueryFailure: (reason) => {
+      processProbeFailure = reason;
+    }
+  });
   options.onStage?.("identity platform check");
   if (probe.platform !== "win32") throw new Error("claim-only identity requires verified Windows process identity");
   options.onStage?.("process identity probe");
@@ -29799,7 +29821,9 @@ async function runClaimOnlyHandshake(options) {
   options.onStage?.("process identity validation");
   if (identity.platform !== "win32" || identity.fingerprint_precision !== "exact" || typeof identity.fingerprint !== "string" || !identity.fingerprint) {
     options.onStage?.(`process identity rejected platform=${identity.platform} precision=${identity.fingerprint_precision} fingerprint=${identity.fingerprint ? "present" : "missing"}`);
-    throw new Error("worker identity unavailable");
+    const error62 = new Error("worker identity unavailable");
+    error62.code = `worker_identity_${processProbeFailure ?? "unknown"}`;
+    throw error62;
   }
   const report = {
     worker_id: randomUUID5(),
