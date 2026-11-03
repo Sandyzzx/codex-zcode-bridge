@@ -169,7 +169,7 @@ export function discoverZCodeData(
             settingError = "dataBaseDir must be a string when present";
           } else {
             const trimmed = raw.trim();
-            if (trimmed && isWindowsAbsolutePath(trimmed)) {
+            if (trimmed && isAbsolutePathForPlatform(trimmed, platform)) {
               configuredDataBaseDir = pathImpl.resolve(trimmed);
             } else if (trimmed) {
               // A relative dataBaseDir is ignored (ZCode behavior), not an error.

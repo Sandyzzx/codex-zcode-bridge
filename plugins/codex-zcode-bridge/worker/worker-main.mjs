@@ -3103,7 +3103,7 @@ function discoverZCodeData(env, options = {}) {
             settingError = "dataBaseDir must be a string when present";
           } else {
             const trimmed = raw.trim();
-            if (trimmed && isWindowsAbsolutePath(trimmed)) {
+            if (trimmed && isAbsolutePathForPlatform(trimmed, platform)) {
               configuredDataBaseDir = pathImpl.resolve(trimmed);
             } else if (trimmed) {
               settingError = "dataBaseDir is a relative path and was ignored";

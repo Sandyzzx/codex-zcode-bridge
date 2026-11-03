@@ -168,6 +168,23 @@ test("dataBaseDir on a different drive or with spaces and Unicode is honored ver
   assert.equal(data.migrated, true);
 });
 
+test("POSIX dataBaseDir migration uses a POSIX absolute path", () => {
+  const userHome = "/home/fixture";
+  const migrated = "/mnt/data/用户目录";
+  const settingFile = path.posix.join(userHome, ".zcode", "v2", "setting.json");
+  const data = discoverZCodeData(
+    { HOME: userHome },
+    {
+      platform: "linux",
+      fileExists: (candidate) => candidate === settingFile,
+      readFile: () => JSON.stringify({ dataBaseDir: migrated }),
+    },
+  );
+  assert.equal(data.dataBaseDir, migrated);
+  assert.equal(data.dataBaseDirSource, "setting.json");
+  assert.equal(data.zcodeV2Dir, path.posix.join(migrated, ".zcode", "v2"));
+});
+
 test("install discovery follows the fixed priority and rejects mixed installations", () => {
   const existing = new Set<string>();
   const runtimeFile = (install: string) => path.win32.join(install, "resources", "glm", "zcode.cjs");
