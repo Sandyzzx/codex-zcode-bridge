@@ -23,15 +23,6 @@ function runProbe(env) {
   return { status: result.status, error: result.error?.code ?? null, ...diagnostic };
 }
 
-const workerEnv = createWorkerEnv(process.env);
-const workerResult = runProbe(workerEnv);
-const modulePath = Object.entries(process.env).find(([key]) => key.toLowerCase() === "psmodulepath");
-const modulePathResult = modulePath
-  ? runProbe({ ...workerEnv, [modulePath[0]]: modulePath[1] })
-  : { status: null, error: "runner_psmodulepath_unavailable" };
-console.log(JSON.stringify({
-  worker_environment: workerResult,
-  worker_environment_with_runner_module_path: modulePathResult,
-  runner_module_path_present: Boolean(modulePath?.[1]),
-}));
-if (workerResult.status !== 0) process.exitCode = 1;
+const result = runProbe(createWorkerEnv(process.env));
+console.log(JSON.stringify(result));
+if (result.status !== 0) process.exitCode = 1;
