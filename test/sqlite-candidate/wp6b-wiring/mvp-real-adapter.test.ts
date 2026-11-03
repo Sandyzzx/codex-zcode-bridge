@@ -189,7 +189,8 @@ async function waitForInteractionRequest(client: Client, taskId: string): Promis
 
 async function withRealAdapterMcp(
   run: (client: Client, manager: BridgeTaskManager, dataRoot: string, workspace: string, runtime: FakeRuntimeFixture) => Promise<void>,
-  options: { readonly runtimeVariant?: "success" | "failure"; readonly preserveFixtureOnFailure?: boolean; readonly stderrCollector?: { readonly lines: string[] } } = {},
+  options: { readonly runtimeVariant?: "success" | "failure"; readonly preserveFixtureOnFailure?: boolean;
+    readonly stderrCollector?: { readonly lines: string[] }; readonly lifecycleCollector?: { readonly lines: string[] } } = {},
 ): Promise<void> {
   const fixture = path.join(fixtureRoot, randomUUID());
   const dataRoot = path.join(fixture, "sqlite-root");
@@ -246,9 +247,8 @@ async function withRealAdapterMcp(
             child.stderr?.on("data", (chunk: string) => options.stderrCollector?.lines.push(chunk));
           },
         } : {}),
-        testOnScheduler: (stage, detail) => {
-          if (stage === "driver_run_returned") console.error(`[bridge-manager] ${stage} ${JSON.stringify(detail)}`);
-        },
+        testOnScheduler: (stage, detail) => options.lifecycleCollector?.lines.push(`[bridge-manager] ${stage} ${JSON.stringify(detail)}`),
+        onStage: (stage, detail) => options.lifecycleCollector?.lines.push(`[bridge-lifecycle] ${stage} ${JSON.stringify(detail ?? {})}`),
       });
       const manager = new BridgeTaskManager({ lifecycleAuthority: authority });
       const server = createBridgeServer({ taskManager: manager });
@@ -270,6 +270,9 @@ async function withRealAdapterMcp(
       if (previousZcodeHome === undefined) delete process.env["ZCODE_HOME"]; else process.env["ZCODE_HOME"] = previousZcodeHome;
     }
   } finally {
+    if (!successful && options.lifecycleCollector?.lines.length) {
+      console.error("SQLite lifecycle stages:\n" + options.lifecycleCollector.lines.join("\n"));
+    }
     if (successful || !options.preserveFixtureOnFailure) {
       try { rmSync(fixture, { recursive: true, force: true }); } catch { /* retain fixture if Windows still holds a handle */ }
     }
@@ -286,6 +289,7 @@ function copyFileSync(source: string): void {
 
 test("formal MCP lifecycle runs a real ZCodeAppServerAdapter against a controlled fake app-server", { timeout: 120_000 }, async () => {
   const stderrLines: string[] = [];
+  const lifecycleLines: string[] = [];
   try {
     await withRealAdapterMcp(async (client, _manager, _dataRoot, workspace, runtime) => {
       const taskId = `mvp-real-${randomUUID()}`;
@@ -324,7 +328,7 @@ test("formal MCP lifecycle runs a real ZCodeAppServerAdapter against a controlle
     } finally {
       eventsRoot.close();
     }
-    }, { stderrCollector: { lines: stderrLines }, preserveFixtureOnFailure: true });
+    }, { stderrCollector: { lines: stderrLines }, lifecycleCollector: { lines: lifecycleLines }, preserveFixtureOnFailure: true });
   } catch (error) {
     console.error("worker stderr:\n" + stderrLines.join("\n"));
     throw error;
@@ -342,6 +346,7 @@ test("test-only fake adapter capability cannot be injected through MCP TaskPacka
 });
 
 test("an adapter turn failure commits a failed Result without faking success", { timeout: 120_000 }, async () => {
+  const lifecycleLines: string[] = [];
   await withRealAdapterMcp(async (client, _manager, _dataRoot, workspace) => {
     const taskId = `mvp-failed-${randomUUID()}`;
     const created = contentObject(await client.callTool({ name: "zcode_task", arguments: syntheticTask(workspace, taskId) }));
@@ -351,5 +356,5 @@ test("an adapter turn failure commits a failed Result without faking success", {
     await waitForLifecycleEvent(client, taskId, "result_committed");
     const result = contentObject(await client.callTool({ name: "zcode_result", arguments: { task_id: taskId } }));
     assert.equal(result.status, "failed");
-  }, { runtimeVariant: "failure", preserveFixtureOnFailure: true });
+  }, { runtimeVariant: "failure", lifecycleCollector: { lines: lifecycleLines }, preserveFixtureOnFailure: true });
 });
