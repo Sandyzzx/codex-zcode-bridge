@@ -225,7 +225,7 @@ export async function runBridgeDoctor(options: BridgeDoctorOptions = {}): Promis
     const workerEnv = createWorkerEnv(sourceEnv);
     const mainHome = resolveUserHome(env, { fallbackHomeDir: options.resolver?.homeDir });
     const workerHome = resolveUserHome(workerEnv, { fallbackHomeDir: options.resolver?.homeDir });
-    const sameHome = mainHome.userHome.toLowerCase() === workerHome.userHome.toLowerCase();
+    const sameHome = sameFileSystemPath(mainHome.userHome, workerHome.userHome);
     checks.push({
       name: "worker_env_consistency",
       status: sameHome ? "ok" : "error",
