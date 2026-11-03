@@ -30,7 +30,8 @@ function Test-WindowsAbsolutePath {
     # PowerShell's IsPathRooted treats both `C:foo` and `C:` as rooted. Node and
     # Magpie require the drive separator or a UNC server/share prefix.
     return [bool]($Path -match '^[A-Za-z]:[\\/]' -or
-        $Path -match '^[\\/]{2}[^\\/]+[\\/][^\\/]+(?:[\\/].*)?$')
+        $Path -match '^\\\\[^\\/]+\\[^\\/]+(?:[\\/].*)?$' -or
+        $Path -match '^//[^\\/]+/[^\\/]+(?:/.*)?$')
 }
 
 $script:RuntimeSettingsDirectory = Join-Path $HOME ".codex\codex-zcode-bridge"

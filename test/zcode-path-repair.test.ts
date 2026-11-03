@@ -64,6 +64,7 @@ test("Windows path classification separates drive-qualified, drive-relative, and
   assert.equal(isWindowsAbsolutePath("C:foo"), false);
   assert.equal(isWindowsAbsolutePath("C:"), false);
   assert.equal(isWindowsAbsolutePath("\\foo"), false);
+  assert.equal(isWindowsAbsolutePath("\\/server\\share"), false);
   assert.equal(isWindowsAbsolutePath("\\\\server\\share\\foo"), true);
   assert.equal(isWindowsAbsolutePath("//server/share/foo"), true);
   assert.equal(isWindowsAbsolutePath("//server"), false);
@@ -80,8 +81,11 @@ test("PowerShell 5.1 and 7 match TypeScript for absolute, drive-relative, UNC, U
   try {
     const scenarios = [
       { name: "drive-relative", setting: { dataBaseDir: "C:foo" } },
+      { name: "drive-only", setting: { dataBaseDir: "C:" } },
+      { name: "root-relative", setting: { dataBaseDir: "\\foo" } },
       { name: "drive-absolute", setting: { dataBaseDir: "D:\\foo bar" } },
       { name: "unc-absolute", setting: { dataBaseDir: "\\\\127.0.0.1\\share\\foo" } },
+      { name: "mixed-unc-separators", setting: { dataBaseDir: "\\/server\\share" } },
       { name: "utf8-unicode", setting: { dataBaseDir: "Q:\\中文 目录\\zcode-data" } },
     ];
     for (const shell of shells) {
