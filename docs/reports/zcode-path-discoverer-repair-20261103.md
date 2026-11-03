@@ -14,19 +14,21 @@
 | Repair rename-only Commit | `c95b9c42ab9a236c9e723a4e63f9dae09cf1cacb` |
 | Repair implementation Commit | `c505c240f8bb21d9b7417d8c7a8c4f3323e0b633` |
 | Repair implementation Tree | `62601d4f98afe0d6f6ced2c8ada42b71929b57c9` |
-| 最终 HEAD | 本报告作为后续 docs commit 提交后，由交付回复记录；未 push/merge/tag/release |
+| 当前修复代码 HEAD | `82df9879a1b2b85fa7faaa94bc086e03ef30b061` |
+| 当前修复代码 Tree | `c5122b3d81e0be57caec9f2384f3cb118716ca93` |
+| PR | `#54`，open，等待本轮 CI 与 Master 独立复审；未 merge/tag/release |
 
 `c95b9c42` 是 `git mv` 的 ADR 文件 rename；由于后续显式 `git add` 的旧 pathspec 已不存在，该暂存 rename 被独立提交。未 amend、未 reset、未 cherry-pick。`c505c24` 包含全部修复内容与测试，保留原始实施提交。
 
 ## 修改文件
 
 - `plugins/codex-zcode-bridge/hooks/configure-runtime.ps1`：新增完整 Windows 绝对路径判定；PS5.1/PS7 统一 UTF-8 读取；dataBaseDir、HOME、显式路径和输出拼接均不再依赖 `IsPathRooted`。
-- `src/runtime/paths.ts`：新增 `isWindowsAbsolutePath`、`isAbsolutePathForPlatform`、`isPermissionDeniedCode`；HOME 与 `dataBaseDir` 使用同一完整绝对路径规则；EPERM 与 EACCES 都归类 permission denied。
+- `src/runtime/paths.ts`：新增 `isWindowsAbsolutePath`、`isAbsolutePathForPlatform`、`isPermissionDeniedCode`；Windows HOME 与 `dataBaseDir` 使用完整 Windows 绝对路径规则，POSIX `dataBaseDir` 使用 POSIX 规则；EPERM 与 EACCES 都归类 permission denied。
 - `src/runtime/resolver.ts`：Windows 拒绝 drive-relative 的 `ZCODE_DATA_BASE_DIR`/`ZCODE_HOME`；POSIX 语义保持不变。
 - `src/runtime/doctor.ts`：验证显式 runtime 文件；报告实际生效 dataBaseDir 和来源；相对 `dataBaseDir` warning；EPERM/EACCES error；报告 automatic discovery 与 explicit runtime 的关系；不输出配置正文或凭据。
 - `docs/decisions/ADR-020-zcode-path-discovery.md` -> `docs/decisions/ADR-021-zcode-path-discovery.md`：改号并补充完整路径规则。
 - `docs/ZCODE_RUNTIME.md`、`docs/decisions/README.md`、原始交付报告：同步 ADR-021 与复审状态。
-- `test/zcode-paths.test.ts`：ADR 引用同步。
+- `test/zcode-paths.test.ts`：ADR 引用同步；Windows 规则测试改用虚拟文件系统，使其可在 POSIX runner 执行；新增 POSIX dataBaseDir 迁移覆盖。
 - `test/zcode-path-repair.test.ts`：新增 4 个修复矩阵测试。
 - `plugins/codex-zcode-bridge/dist/bridge.mjs`、`plugins/codex-zcode-bridge/worker/worker-main.mjs`：生产构建同步。
 
@@ -66,25 +68,25 @@
 |---|---|
 | `npm run typecheck` | PASS |
 | `npm run validate:plugin`（仓库的 validate 命令） | PASS |
-| `npm test`（先执行 `build:test`） | 696 tests：694 pass，0 fail，2 skipped，duration 1,167,933.815 ms |
+| `npm test`（先执行 `build:test`） | 697 tests：695 pass，0 fail，2 skipped，duration 1,260,120.867 ms |
 | `git diff --check` | PASS |
 
-原审查候选为 692 tests（690 pass，2 skipped）。本修复新增 4 tests，因此总数为 696；skip 仍为同 2 项，无原有断言、timeout 或测试数量减少。
+原审查候选为 692 tests（690 pass，2 skipped）。修复新增 5 tests，因此总数为 697；skip 仍为同 2 项，无原有断言、timeout 或测试数量减少。Ubuntu CI 首轮暴露 Windows 路径单测错误使用 POSIX 临时路径，随后暴露解析器无条件采用 Windows dataBaseDir 规则；分别修复测试隔离与跨平台解析后，当前提交的 CI 正在重新运行。
 
 ## 构建一致性
 
 修复后的生产 bundle 连续两次成功构建，SHA256 完全一致：
 
-- `plugins/codex-zcode-bridge/dist/bridge.mjs`：`907E777BA42CF82AB2CEE205C962F03CB010A76E7B211F5530B17FB83565A128`
-- `plugins/codex-zcode-bridge/worker/worker-main.mjs`：`8BDEDE6FBAC217CDFCFF0BB5360690C85069BEFEB2C7C73830A56236A1EF8798`
+- `plugins/codex-zcode-bridge/dist/bridge.mjs`：`BE6F71C3BFF8C306E7F81A5AE1C96832903361A8F8EBB979FC7451E33E793156`
+- `plugins/codex-zcode-bridge/worker/worker-main.mjs`：`0FB4426C2F039E298041F4EBCAF850DF254D3948ABE9FD29B5B06978FDD9CED3`
 
 第一次复验尝试在 `scripts/build-core.mjs:33` 出现一次 Windows `EPERM rename .build-core-KYnjXB\src -> dist\src`；未修改命令或重试逻辑，随后同一命令连续两次成功。该错误与既有 Ledger rename 环境抖动同类，未在本轮修复范围中改变构建脚本。
 
 ## 未解决问题
 
-1. Windows 构建/文件 rename 的偶发 EPERM 仍存在环境性残留；本轮无新增自然复现数据，也未扩大修复范围。
+1. Windows 构建/文件 rename 的偶发 EPERM 仍存在环境性残留；本轮观察到多次间歇失败，其间连续成功构建且产物哈希稳定。未修改构建脚本或增加重试。
 2. `createWorkerEnv` 返回普通对象后再次解析时，非规范大小写 key 的注入边界仍大小写敏感；真实 Windows `process.env` 链路保持正确，此项属此前审查的 P2 备注，不在本次 WP 明确修复列表内。
 
 ## 结论
 
-PASS——审查要求的 P1、ADR-021 与 P2 doctor 修复已实现并通过完整回归；最终合并由 Master 复审决定。
+PASS——审查要求的 P1、ADR-021 与 P2 doctor 修复已实现，本地完整回归通过；最终提交 `82df987` 的 GitHub 双平台 CI 与 Master 独立复审仍待完成。合并和 release-please 流程尚未触发。
