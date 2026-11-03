@@ -12,6 +12,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { BridgeError } from "./errors.js";
+import { builtinConfigForRuntime, discoverZCodeData, discoverZCodeInstall, sameFileSystemPath } from "./paths.js";
 import type { RuntimeResolver, ZCodeRuntimeConfig } from "../interfaces.js";
 import { codexHostProfile, validateHostProfile, type BridgeHostProfile } from "../host/profile.js";
 
@@ -107,7 +108,16 @@ export class NodeRuntimeResolver implements RuntimeResolver {
 
   async resolve(): Promise<ZCodeRuntimeConfig> {
     const env = loadPersistedRuntimeEnvironment(this.#env, this.#homeDir, this.#host);
+    const data = discoverZCodeData(env, { fallbackHomeDir: this.#homeDir });
     const zcodeHome = resolveZcodeHome(env);
+    const explicitDataBaseDir = env["ZCODE_DATA_BASE_DIR"]?.trim() || null;
+    if (zcodeHome && explicitDataBaseDir && !sameFileSystemPath(path.dirname(zcodeHome), explicitDataBaseDir)) {
+      throw new BridgeError(
+        "provider_config_invalid",
+        `ZCODE_HOME (${zcodeHome}) and ZCODE_DATA_BASE_DIR (${explicitDataBaseDir}) conflict; ` +
+          "ZCODE_HOME must name <ZCODE_DATA_BASE_DIR>/.zcode. Fix one of them instead of relying on silent selection.",
+      );
+    }
 
     // Node executable: explicit override or `node` on PATH (frozen contract).
     let nodeExecutable = "node";
@@ -121,7 +131,10 @@ export class NodeRuntimeResolver implements RuntimeResolver {
     }
 
     // zcode.cjs entrypoint: explicit override or discovery in the installation.
+    const builtinEnv = env["ZCODE_BUILTIN_PROVIDER_CONFIG_FILE"]?.trim() || null;
+    const personalEnv = env["ZCODE_PERSONAL_PROVIDER_CONFIG_FILE"]?.trim() || null;
     let zcodeEntrypoint: string;
+    let explicitRuntime = false;
     const entryOverride = env["ZCODE_BRIDGE_ZCODE_CJS"]?.trim();
     if (entryOverride) {
       this.#assertReadableFile(
@@ -129,22 +142,22 @@ export class NodeRuntimeResolver implements RuntimeResolver {
         "ZCODE_BRIDGE_ZCODE_CJS is set but is not a readable file",
       );
       zcodeEntrypoint = entryOverride;
+      explicitRuntime = true;
     } else {
-      const candidates = installCandidates(env, ["resources", "glm", "zcode.cjs"]);
-      const discovered = candidates.find(isReadableFile);
-      if (!discovered) {
+      // Auto-discovery requires the runtime and builtin config to come from
+      // the same installation so mixed-version files are never combined.
+      const install = discoverZCodeInstall(env, { requireBuiltin: !builtinEnv });
+      if (!install.zcodeEntrypoint) {
         throw new BridgeError(
           "runtime_not_found",
-          `zcode.cjs was not found; searched: ${candidates.join(", ") || "(no installation roots available)"}`,
+          `zcode.cjs${builtinEnv ? "" : " with a same-install zcode-builtin.json"} was not found; searched: ` +
+            (install.candidates.map((candidate) => `${candidate.root} (runtime: ${candidate.runtimeExists}, builtin: ${candidate.builtinExists})`).join(", ") || "(no installation roots available)"),
         );
       }
-      zcodeEntrypoint = discovered;
+      zcodeEntrypoint = install.zcodeEntrypoint;
     }
 
     // Provider pair (see class doc). An inherited pair must be complete.
-    const builtinEnv = env["ZCODE_BUILTIN_PROVIDER_CONFIG_FILE"]?.trim() || null;
-    const personalEnv = env["ZCODE_PERSONAL_PROVIDER_CONFIG_FILE"]?.trim() || null;
-
     let builtinConfigFile: string;
     let personalConfigFile: string;
 
@@ -157,23 +170,29 @@ export class NodeRuntimeResolver implements RuntimeResolver {
       if (builtinEnv) {
         this.#validateBuiltinConfig(builtinEnv);
         builtinConfigFile = builtinEnv;
+      } else if (explicitRuntime) {
+        // Derive the builtin config from the explicit runtime's installation
+        // so the pair never mixes two installations.
+        const derived = builtinConfigForRuntime(zcodeEntrypoint);
+        if (!isReadableFile(derived)) {
+          throw new BridgeError(
+            "provider_config_missing",
+            `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE is not set and the builtin config was not found next to the configured runtime; expected: ${derived}`,
+          );
+        }
+        this.#validateBuiltinConfig(derived);
+        builtinConfigFile = derived;
       } else {
-        const candidates = installCandidates(env, [
-          "resources",
-          "config",
-          "provider",
-          "zcode-builtin.json",
-        ]);
-        const discovered = candidates.find(isReadableFile);
-        if (!discovered) {
+        const install = discoverZCodeInstall(env, { requireBuiltin: true });
+        if (!install.builtinConfigFile) {
           throw new BridgeError(
             "provider_config_missing",
             "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE is not set and no builtin provider config was found in the ZCode installation; searched: " +
-              (candidates.join(", ") || "(no installation roots available)"),
+              (install.candidates.map((candidate) => `${candidate.root} (runtime: ${candidate.runtimeExists}, builtin: ${candidate.builtinExists})`).join(", ") || "(no installation roots available)"),
           );
         }
-        this.#validateBuiltinConfig(discovered);
-        builtinConfigFile = discovered;
+        this.#validateBuiltinConfig(install.builtinConfigFile);
+        builtinConfigFile = install.builtinConfigFile;
       }
 
       if (personalEnv) {
@@ -183,9 +202,9 @@ export class NodeRuntimeResolver implements RuntimeResolver {
         const candidates = zcodeHome
           ? [path.join(zcodeHome, "v2", "provider_config.json")]
           : [
-              env["ZCODE_DATA_BASE_DIR"]?.trim(),
-              ...configuredDataBaseDirs(this.#homeDir),
-              this.#homeDir,
+              explicitDataBaseDir,
+              data.configuredDataBaseDir,
+              data.userHome,
             ]
               .filter((base): base is string => Boolean(base))
               .filter((base, index, values) => values.indexOf(base) === index)
@@ -318,37 +337,6 @@ export class NodeRuntimeResolver implements RuntimeResolver {
     }
     return parsed;
   }
-}
-
-function installCandidates(env: NodeJS.ProcessEnv, relative: readonly string[]): string[] {
-  const roots = [
-    env["ZCODE_WINDOWS_APP_INSTALL_DIR"]?.trim(),
-    env["LOCALAPPDATA"]?.trim()
-      ? path.join(env["LOCALAPPDATA"]!.trim(), "Programs", "ZCode")
-      : null,
-    env["ProgramFiles"]?.trim()
-      ? path.join(env["ProgramFiles"]!.trim(), "ZCode")
-      : null,
-  ].filter((root): root is string => Boolean(root));
-  return roots.map((root) => path.join(root, ...relative));
-}
-
-/** Read ZCode Desktop's configured data directory without exposing settings content. */
-function configuredDataBaseDirs(homeDir: string): string[] {
-  const candidates = [path.join(homeDir, ".zcode", "v2", "setting.json")];
-  for (const settingPath of candidates) {
-    try {
-      const parsed: unknown = JSON.parse(readFileSync(settingPath, "utf8"));
-      if (!isPlainObject(parsed)) continue;
-      const dataBaseDir = parsed["dataBaseDir"];
-      if (typeof dataBaseDir === "string" && path.isAbsolute(dataBaseDir.trim())) {
-        return [path.normalize(dataBaseDir.trim())];
-      }
-    } catch {
-      // Missing or unreadable Desktop settings do not block normal discovery.
-    }
-  }
-  return [];
 }
 
 function resolveZcodeHome(env: NodeJS.ProcessEnv): string | null {

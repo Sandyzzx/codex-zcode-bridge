@@ -3,6 +3,8 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { zcodeTasksIndexPath } from "./account-provider.js";
 import { BridgeError } from "./errors.js";
+import { createWorkerEnv } from "./child-env.js";
+import { discoverZCodeData, discoverZCodeInstall, resolveUserHome, sameFileSystemPath } from "./paths.js";
 import { resolveSessionPreferences } from "./session-preferences.js";
 import { loadPersistedRuntimeEnvironment, NodeRuntimeResolver, type RuntimeResolverOptions } from "./resolver.js";
 import type { ZCodeRuntimeConfig } from "../interfaces.js";
@@ -69,6 +71,119 @@ export async function runBridgeDoctor(options: BridgeDoctorOptions = {}): Promis
   }
 
   let config: ZCodeRuntimeConfig | null = null;
+  // Unified path discovery diagnostics (ADR-020). These checks only report
+  // locations and discovery sources; they never read or print settings or
+  // provider config contents, credentials, or keys.
+  let dataDiscovery: ReturnType<typeof discoverZCodeData> | null = null;
+  try {
+    const home = resolveUserHome(env, { fallbackHomeDir: options.resolver?.homeDir });
+    dataDiscovery = discoverZCodeData(env, { fallbackHomeDir: options.resolver?.homeDir });
+    const homeSource = home.source === "HOME"
+      ? "HOME (verified against USERPROFILE)"
+      : home.source === "USERPROFILE"
+        ? `USERPROFILE${home.homeConflict ? `; HOME was rejected: ${home.homeConflict}` : ""}`
+        : "fallback (os.homedir)";
+    checks.push({
+      name: "user_home",
+      status: home.homeConflict ? "warning" : "ok",
+      summary: `User directory: ${home.userHome} (from ${homeSource})`,
+    });
+  } catch (error) {
+    checks.push({ name: "user_home", status: "error", summary: `User directory discovery failed: ${safeError(error)}` });
+  }
+
+  if (dataDiscovery) {
+    const setting = dataDiscovery;
+    const settingStatusText: Record<string, string> = {
+      absent: "setting.json is not present; the default data location applies",
+      ok: setting.migrated
+        ? `setting.json is valid and moves the data directory to ${setting.dataBaseDir}`
+        : "setting.json is valid; no dataBaseDir override, so the default data location applies",
+      invalid_json: "setting.json is not valid JSON; the default data location applies",
+      invalid_shape: `setting.json has an unexpected shape${setting.settingError ? ` (${setting.settingError})` : ""}; the default data location applies`,
+      unreadable: `setting.json could not be read${setting.settingError ? ` (${setting.settingError})` : ""}; the default data location applies`,
+      permission_denied: "setting.json is not readable due to permissions; the default data location applies",
+    };
+    checks.push({
+      name: "desktop_settings",
+      status: setting.settingStatus === "ok" || setting.settingStatus === "absent" ? "ok" : setting.settingStatus === "permission_denied" ? "error" : "warning",
+      summary: settingStatusText[setting.settingStatus] ?? "setting.json status unknown",
+    });
+    const explicitHome = env["ZCODE_HOME"]?.trim();
+    const explicitBase = env["ZCODE_DATA_BASE_DIR"]?.trim();
+    const baseSource = explicitHome
+      ? "explicit ZCODE_HOME (parent directory)"
+      : explicitBase
+        ? "explicit ZCODE_DATA_BASE_DIR"
+        : setting.migrated
+          ? "setting.json dataBaseDir"
+          : "default (user directory)";
+    let dataDirStatus: DoctorStatus = "ok";
+    let dataDirSummary = `ZCode data base directory: ${setting.dataBaseDir} (from ${baseSource})`;
+    if (explicitHome && explicitBase) {
+      if (!sameFileSystemPath(path.dirname(path.resolve(explicitHome)), path.resolve(explicitBase))) {
+        dataDirStatus = "error";
+        dataDirSummary = `ZCODE_HOME (${explicitHome}) and ZCODE_DATA_BASE_DIR (${explicitBase}) conflict; ZCODE_HOME must be <ZCODE_DATA_BASE_DIR>/.zcode`;
+      }
+    }
+    if (dataDirStatus === "ok") {
+      try {
+        if (!existsSync(setting.dataBaseDir)) {
+          dataDirStatus = "warning";
+          dataDirSummary += "; directory does not exist yet (the Bridge never creates ZCode data directories)";
+        } else if (!statSync(setting.dataBaseDir).isDirectory()) {
+          dataDirStatus = "error";
+          dataDirSummary += "; path exists but is not a directory";
+        } else {
+          dataDirSummary += setting.migrated ? "; migrated data directory exists" : "; directory exists";
+        }
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        dataDirStatus = code === "EACCES" ? "error" : "warning";
+        dataDirSummary += code === "EACCES" ? "; permission denied while inspecting the directory" : `; could not be inspected (${safeError(error)})`;
+      }
+    }
+    checks.push({ name: "zcode_data_dir", status: dataDirStatus, summary: dataDirSummary });
+  }
+
+  const install = discoverZCodeInstall(env, { requireBuiltin: !env["ZCODE_BUILTIN_PROVIDER_CONFIG_FILE"]?.trim() });
+  const explicitRuntime = env["ZCODE_BRIDGE_ZCODE_CJS"]?.trim();
+  if (explicitRuntime) {
+    checks.push({
+      name: "zcode_install",
+      status: "ok",
+      summary: `Runtime is explicitly configured (ZCODE_BRIDGE_ZCODE_CJS); the builtin provider config is derived from the same installation`,
+    });
+  } else if (install.installDir) {
+    checks.push({
+      name: "zcode_install",
+      status: "ok",
+      summary: `ZCode installation: ${install.installDir} (discovered via ${install.source}); runtime and builtin provider config come from the same installation`,
+    });
+  } else {
+    checks.push({
+      name: "zcode_install",
+      status: "warning",
+      summary: `No ZCode installation was auto-discovered; searched: ${install.candidates.map((candidate) => `${candidate.root} (runtime: ${candidate.runtimeExists}, builtin: ${candidate.builtinExists})`).join(", ") || "(no installation roots available)"}`,
+    });
+  }
+
+  try {
+    const workerEnv = createWorkerEnv(sourceEnv);
+    const mainHome = resolveUserHome(env, { fallbackHomeDir: options.resolver?.homeDir });
+    const workerHome = resolveUserHome(workerEnv, { fallbackHomeDir: options.resolver?.homeDir });
+    const sameHome = mainHome.userHome.toLowerCase() === workerHome.userHome.toLowerCase();
+    checks.push({
+      name: "worker_env_consistency",
+      status: sameHome ? "ok" : "error",
+      summary: sameHome
+        ? `Detached worker environment resolves the same user directory as the Bridge: ${mainHome.userHome}`
+        : `Detached worker user directory (${workerHome.userHome}) differs from the Bridge (${mainHome.userHome})`,
+    });
+  } catch (error) {
+    checks.push({ name: "worker_env_consistency", status: "unknown", summary: `Worker environment consistency could not be determined: ${safeError(error)}` });
+  }
+
   try {
     config = await new NodeRuntimeResolver({ ...options.resolver, env }).resolve();
     checks.push({ name: "zcode_runtime", status: "ok", summary: "ZCode runtime was found and its configured path is readable" });

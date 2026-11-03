@@ -14,7 +14,11 @@ param(
     # enabled the managed runtime uses an isolated temporary profile and can
     # be pointed at an installed system browser executable.
     [ValidateSet("off", "headless")][string]$BrowserUse,
-    [string]$BrowserExecutablePath
+    [string]$BrowserExecutablePath,
+    # Print the unified path discovery result as JSON and exit without
+    # validating a runtime or persisting settings (used by consistency tests
+    # and for diagnosis).
+    [switch]$PrintPathDiscovery
 )
 
 $ErrorActionPreference = "Stop"
@@ -110,27 +114,127 @@ function Test-ProviderConfig {
 
 function Read-DesktopDataBaseDir {
     param([Parameter(Mandatory)][string]$Path)
-    $configuredNode = $script:ResolvedNodeExecutable
-    if (-not $configuredNode) { $configuredNode = Get-ConfiguredEnvironmentValue "ZCODE_BRIDGE_NODE" }
-    $nodeExecutable = if ($configuredNode) { $configuredNode }
-        else { (Get-Command node -ErrorAction Stop).Source }
-    $reader = @'
-const fs = require('node:fs');
-const value = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
-if (value && typeof value.dataBaseDir === 'string') process.stdout.write(value.dataBaseDir);
-'@
-    $result = & $nodeExecutable -e $reader $Path 2>$null
-    if ($LASTEXITCODE -ne 0) { throw "Could not parse Desktop settings: $Path" }
-    return ([string]$result).Trim()
+    try {
+        $settings = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    } catch {
+        throw "ZCode Desktop settings are not valid JSON: $Path"
+    }
+    if ($null -eq $settings -or $settings -isnot [PSCustomObject]) { throw "ZCode Desktop settings must contain a JSON object: $Path" }
+    $property = $settings.PSObject.Properties["dataBaseDir"]
+    if (-not $property -or $null -eq $property.Value) { return "" }
+    if ($property.Value -isnot [string]) { throw "ZCode Desktop settings dataBaseDir must be a string: $Path" }
+    return ([string]$property.Value).Trim()
+}
+
+function Resolve-UserHomeDirectory {
+    # Magpie's Windows HOME rule (internal/appdir/zcode.go v0.1.2127,
+    # reimplemented): HOME wins only when it is a rooted absolute path equal
+    # (case-insensitive) to USERPROFILE; test or WSL directories never win.
+    $homeRaw = if ($env:HOME) { $env:HOME.Trim() } else { $null }
+    $userProfile = if ($env:USERPROFILE) { $env:USERPROFILE.Trim() } else { $null }
+    if ($homeRaw -and [IO.Path]::IsPathRooted($homeRaw) -and $userProfile -and
+        ([IO.Path]::GetFullPath($homeRaw) -ieq [IO.Path]::GetFullPath($userProfile))) {
+        return [PSCustomObject]@{ UserHome = [IO.Path]::GetFullPath($homeRaw); Source = "HOME"; HomeConflict = $null }
+    }
+    $conflict = $null
+    if ($homeRaw) {
+        if (-not [IO.Path]::IsPathRooted($homeRaw)) {
+            $conflict = "HOME is set but is not an absolute path"
+        } elseif (-not $userProfile) {
+            $conflict = "HOME is set but USERPROFILE is not, so HOME cannot be verified as the current Windows user directory"
+        } else {
+            $conflict = "HOME is set but does not match USERPROFILE (test or WSL directories must not override the Windows user directory)"
+        }
+    }
+    if ($userProfile) {
+        return [PSCustomObject]@{ UserHome = [IO.Path]::GetFullPath($userProfile); Source = "USERPROFILE"; HomeConflict = $conflict }
+    }
+    return [PSCustomObject]@{ UserHome = $HOME; Source = "FALLBACK"; HomeConflict = $conflict }
+}
+
+function Get-ZCodePathDiscovery {
+    # Mirrors src/runtime/paths.ts so PowerShell and Node agree on the
+    # user directory, Desktop dataBaseDir discovery, and install candidates.
+    # Note: never name a local variable "$home" — it collides with the
+    # read-only automatic $HOME variable (PowerShell is case-insensitive).
+    $resolvedHome = Resolve-UserHomeDirectory
+    $settingFile = Join-Path $resolvedHome.UserHome ".zcode\v2\setting.json"
+    $settingStatus = "absent"
+    $settingError = $null
+    $configuredDataBaseDir = $null
+    if (Test-Path -LiteralPath $settingFile -PathType Leaf) {
+        try {
+            $raw = Read-DesktopDataBaseDir -Path $settingFile
+            $settingStatus = "ok"
+            if ($raw) {
+                if ([IO.Path]::IsPathRooted($raw)) { $configuredDataBaseDir = [IO.Path]::GetFullPath($raw) }
+                else { $settingError = "dataBaseDir is a relative path and was ignored" }
+            }
+        } catch {
+            $message = $_.Exception.Message
+            if ($message -match "not valid JSON") { $settingStatus = "invalid_json" }
+            elseif ($message -match "must contain a JSON object" -or $message -match "dataBaseDir must be a string") { $settingStatus = "invalid_shape" }
+            else { $settingStatus = "unreadable" }
+            $settingError = $message
+        }
+    }
+    $dataBaseDir = if ($configuredDataBaseDir) { $configuredDataBaseDir } else { $resolvedHome.UserHome }
+    $installCandidates = @()
+    $explicitInstall = Get-ConfiguredEnvironmentValue "ZCODE_WINDOWS_APP_INSTALL_DIR"
+    if ($explicitInstall) { $installCandidates += [PSCustomObject]@{ root = $explicitInstall; source = "ZCODE_WINDOWS_APP_INSTALL_DIR" } }
+    if ($env:LOCALAPPDATA) { $installCandidates += [PSCustomObject]@{ root = (Join-Path $env:LOCALAPPDATA "Programs\ZCode"); source = "LOCALAPPDATA" } }
+    if ($env:ProgramFiles) { $installCandidates += [PSCustomObject]@{ root = (Join-Path $env:ProgramFiles "ZCode"); source = "ProgramFiles" } }
+    $installCandidates = @($installCandidates | ForEach-Object {
+        [PSCustomObject]@{
+            root = $_.root
+            source = $_.source
+            runtimeExists = [bool](Test-Path -LiteralPath (Join-Path $_.root "resources\glm\zcode.cjs") -PathType Leaf)
+            builtinExists = [bool](Test-Path -LiteralPath (Join-Path $_.root "resources\config\provider\zcode-builtin.json") -PathType Leaf)
+        }
+    })
+    $install = $null
+    foreach ($candidate in $installCandidates) {
+        if ($candidate.runtimeExists -and $candidate.builtinExists) {
+            $install = $candidate
+            break
+        }
+    }
+    return [PSCustomObject]@{
+        userHome = $resolvedHome.UserHome
+        userHomeSource = $resolvedHome.Source
+        homeConflict = $resolvedHome.HomeConflict
+        settingFile = $settingFile
+        settingStatus = $settingStatus
+        settingError = $settingError
+        configuredDataBaseDir = $configuredDataBaseDir
+        dataBaseDir = $dataBaseDir
+        dataBaseDirSource = if ($configuredDataBaseDir) { "setting.json" } else { "default" }
+        zcodeDataDir = Join-Path $dataBaseDir ".zcode"
+        zcodeV2Dir = Join-Path $dataBaseDir ".zcode\v2"
+        migrated = [bool]$configuredDataBaseDir
+        install = [PSCustomObject]@{
+            installDir = if ($install) { $install.root } else { $null }
+            source = if ($install) { $install.source } else { $null }
+            zcodeEntrypoint = if ($install) { Join-Path $install.root "resources\glm\zcode.cjs" } else { $null }
+            builtinConfigFile = if ($install) { Join-Path $install.root "resources\config\provider\zcode-builtin.json" } else { $null }
+            candidates = $installCandidates
+        }
+    }
 }
 
 function Find-DefaultRuntime {
+    param([bool]$RequireBuiltin = $true)
     $roots = @(Get-ConfiguredEnvironmentValue "ZCODE_WINDOWS_APP_INSTALL_DIR")
     if ($env:LOCALAPPDATA) { $roots += (Join-Path $env:LOCALAPPDATA "Programs\ZCode") }
     if ($env:ProgramFiles) { $roots += (Join-Path $env:ProgramFiles "ZCode") }
     foreach ($root in ($roots | Where-Object { $_ } | Select-Object -Unique)) {
         $candidate = Join-Path $root "resources\glm\zcode.cjs"
-        if (Test-Path -LiteralPath $candidate -PathType Leaf) { return [IO.Path]::GetFullPath($candidate) }
+        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
+        if ($RequireBuiltin) {
+            $builtin = Join-Path $root "resources\config\provider\zcode-builtin.json"
+            if (-not (Test-Path -LiteralPath $builtin -PathType Leaf)) { continue }
+        }
+        return [IO.Path]::GetFullPath($candidate)
     }
     return $null
 }
@@ -184,6 +288,13 @@ function Resolve-ZCodeHome {
 
 if ($env:OS -ne "Windows_NT") { throw "This configuration script is for Windows PowerShell." }
 
+$pathDiscovery = Get-ZCodePathDiscovery
+
+if ($PrintPathDiscovery) {
+    $pathDiscovery | ConvertTo-Json -Depth 6
+    return
+}
+
 # Discover and validate first; the resolved runtime paths are then persisted so
 # the Bridge and detached workers use the same installation on later launches.
 $configuredNode = if ($NodeExecutablePath) { $NodeExecutablePath } else { Get-ConfiguredEnvironmentValue "ZCODE_BRIDGE_NODE" }
@@ -199,9 +310,10 @@ if ($LASTEXITCODE -ne 0 -or $nodeVersionText -notmatch '^v?(\d+)\.(\d+)\.(\d+)')
 $nodeMajor = [int]$Matches[1]; $nodeMinor = [int]$Matches[2]
 if ($nodeMajor -lt 22 -or ($nodeMajor -eq 22 -and $nodeMinor -lt 18)) { throw "Node.js 22.18+ is required; found $nodeVersionText." }
 
+$explicitBuiltinConfigured = [bool]$BuiltinProviderConfigPath -or [bool](Get-ConfiguredEnvironmentValue "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE")
 $effectiveRuntime = if ($ZCodeRuntimePath) { Resolve-ExistingFile $ZCodeRuntimePath "ZCode runtime" }
     elseif ((Get-ConfiguredEnvironmentValue "ZCODE_BRIDGE_ZCODE_CJS")) { Resolve-ExistingFile (Get-ConfiguredEnvironmentValue "ZCODE_BRIDGE_ZCODE_CJS") "ZCODE_BRIDGE_ZCODE_CJS" }
-    else { Find-DefaultRuntime }
+    else { Find-DefaultRuntime -RequireBuiltin (-not $explicitBuiltinConfigured) }
 if (-not $effectiveRuntime) { throw "Could not discover ZCode runtime. Pass -ZCodeRuntimePath with the absolute path to resources\glm\zcode.cjs." }
 
 $effectiveBuiltin = if ($BuiltinProviderConfigPath) { Resolve-ExistingFile $BuiltinProviderConfigPath "Builtin provider config" }
@@ -214,17 +326,19 @@ $configuredZCodeHome = if ($ZCodeHome) { Resolve-ZCodeHome $ZCodeHome }
     elseif ((Get-ConfiguredEnvironmentValue "ZCODE_HOME")) { Resolve-ZCodeHome (Get-ConfiguredEnvironmentValue "ZCODE_HOME") }
     else { $null }
 
+if ($configuredZCodeHome) {
+    $explicitDataBaseDirForConflict = Get-ConfiguredEnvironmentValue "ZCODE_DATA_BASE_DIR"
+    if ($explicitDataBaseDirForConflict -and [IO.Path]::IsPathRooted($explicitDataBaseDirForConflict) -and
+        [IO.Path]::GetFullPath((Split-Path ([IO.Path]::GetFullPath($configuredZCodeHome)) -Parent)) -ine [IO.Path]::GetFullPath($explicitDataBaseDirForConflict)) {
+        throw "ZCODE_HOME ($configuredZCodeHome) and ZCODE_DATA_BASE_DIR ($explicitDataBaseDirForConflict) conflict; ZCODE_HOME must be <ZCODE_DATA_BASE_DIR>/.zcode."
+    }
+}
+
 $effectivePersonal = if ($PersonalProviderConfigPath) { Resolve-ExistingFile $PersonalProviderConfigPath "Personal provider config" }
     elseif ((Get-ConfiguredEnvironmentValue "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE")) { Resolve-ExistingFile (Get-ConfiguredEnvironmentValue "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE") "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE" }
     elseif ($configuredZCodeHome) { Join-Path $configuredZCodeHome "v2\provider_config.json" }
     else {
-        $desktopDataBase = $null
-        $settingsPath = Join-Path $HOME ".zcode\v2\setting.json"
-        if (Test-Path -LiteralPath $settingsPath -PathType Leaf) {
-            try { $desktopDataBase = Read-DesktopDataBaseDir $settingsPath }
-            catch { Write-Warning "Could not read ZCode Desktop dataBaseDir from settings.json." }
-        }
-        $bases = @((Get-ConfiguredEnvironmentValue "ZCODE_DATA_BASE_DIR"), $desktopDataBase, $HOME) | Where-Object { $_ }
+        $bases = @((Get-ConfiguredEnvironmentValue "ZCODE_DATA_BASE_DIR"), $pathDiscovery.ConfiguredDataBaseDir, $pathDiscovery.UserHome) | Where-Object { $_ }
         $found = $null
         foreach ($base in ($bases | Select-Object -Unique)) {
             $candidate = Join-Path $base ".zcode\v2\provider_config.json"

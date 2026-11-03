@@ -150,7 +150,8 @@ test("missing runtime raises runtime_not_found with searched locations", async (
     await assert.rejects(resolver.resolve(), (error: unknown) => {
       assert.ok(error instanceof BridgeError);
       assert.equal(error.code, "runtime_not_found");
-      assert.match(error.message, /zcode\.cjs was not found/);
+      assert.match(error.message, /zcode\.cjs.* was not found/);
+      assert.match(error.message, /searched: /u);
       return true;
     });
   } finally {
