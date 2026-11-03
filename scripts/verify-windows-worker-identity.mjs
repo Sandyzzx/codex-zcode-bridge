@@ -10,15 +10,28 @@ const childSource = [
   "console.log(JSON.stringify({ platform: identity.platform, precision: identity.fingerprint_precision, hasFingerprint: Boolean(identity.fingerprint), failures }));",
   "if (identity.platform !== 'win32' || identity.fingerprint_precision !== 'exact' || !identity.fingerprint) process.exitCode = 1;",
 ].join("\n");
-const result = spawnSync(process.execPath, ["--input-type=module", "-e", childSource], {
-  env: createWorkerEnv(process.env),
-  encoding: "utf8",
-  windowsHide: true,
-  timeout: 15_000,
-});
-if (result.error) throw new Error(`Windows worker identity smoke failed: ${result.error.code ?? "spawn_error"}`);
-const output = result.stdout.trim().split(/\r?\n/u).at(-1) ?? "{}";
-let diagnostic;
-try { diagnostic = JSON.parse(output); } catch { diagnostic = { output: "unparseable" }; }
-console.log(JSON.stringify({ status: result.status, ...diagnostic }));
-if (result.status !== 0) process.exitCode = 1;
+function runProbe(env) {
+  const result = spawnSync(process.execPath, ["--input-type=module", "-e", childSource], {
+    env,
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: 15_000,
+  });
+  const output = result.stdout?.trim().split(/\r?\n/u).at(-1) ?? "{}";
+  let diagnostic;
+  try { diagnostic = JSON.parse(output); } catch { diagnostic = { output: "unparseable" }; }
+  return { status: result.status, error: result.error?.code ?? null, ...diagnostic };
+}
+
+const workerEnv = createWorkerEnv(process.env);
+const workerResult = runProbe(workerEnv);
+const modulePath = Object.entries(process.env).find(([key]) => key.toLowerCase() === "psmodulepath");
+const modulePathResult = modulePath
+  ? runProbe({ ...workerEnv, [modulePath[0]]: modulePath[1] })
+  : { status: null, error: "runner_psmodulepath_unavailable" };
+console.log(JSON.stringify({
+  worker_environment: workerResult,
+  worker_environment_with_runner_module_path: modulePathResult,
+  runner_module_path_present: Boolean(modulePath?.[1]),
+}));
+if (workerResult.status !== 0) process.exitCode = 1;
