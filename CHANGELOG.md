@@ -4,6 +4,24 @@
 
 当前版本以 `package.json` 和 Release Please manifest 为准。提交推送到 `master` 后，Release Please 会在有待发布变更时创建发布 PR，并同步更新版本文件与本日志；合并发布 PR 后会生成对应 Git tag 和 GitHub Release。
 
+## [1.5.0](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.4.0...codex-zcode-bridge-v1.5.0) (2026-11-03)
+
+
+### Features
+
+* bind doctor to SQLite authority and add test impact gating ([ba9277d](https://github.com/Sandyzzx/codex-zcode-bridge/commit/ba9277df8ee1daef0434b1e8b26645f1e80e4044))
+* bind doctor to SQLite authority and add test impact gating ([7b4dcaa](https://github.com/Sandyzzx/codex-zcode-bridge/commit/7b4dcaa9a9e1dc5bc9b20c2aa9eead3d31f29cbd))
+
+
+### Bug Fixes
+
+* **ci:** diagnose Windows worker identity probes ([23958d8](https://github.com/Sandyzzx/codex-zcode-bridge/commit/23958d8098dfed4016d0a7c60895b6651f663898))
+* **runtime:** avoid PowerShell module lookup in identity probe ([21ffa75](https://github.com/Sandyzzx/codex-zcode-bridge/commit/21ffa7581aac7f3cc6cc9ef1234b1d896864df96))
+* **runtime:** launch Windows identity probe directly ([2ee975d](https://github.com/Sandyzzx/codex-zcode-bridge/commit/2ee975df603aafe9b5246d831dbfd30aba761000))
+* **runtime:** pin Windows PowerShell module discovery ([3925eab](https://github.com/Sandyzzx/codex-zcode-bridge/commit/3925eabae634b3d4b7a48aa190ae3e4615875066))
+* **store:** widen bounded transient lock retries ([6050e1e](https://github.com/Sandyzzx/codex-zcode-bridge/commit/6050e1ecc0e3d5e11fba6c51a3365bcd0bdc03bf))
+* **test:** respect Windows-only SQLite lifecycle support on POSIX ([bf06f52](https://github.com/Sandyzzx/codex-zcode-bridge/commit/bf06f5204723915ebfe3723c18a181736a292556))
+
 ## [1.4.0](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.3.0...codex-zcode-bridge-v1.4.0) (2026-11-03)
 
 
