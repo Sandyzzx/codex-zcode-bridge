@@ -18,7 +18,7 @@
 | 本轮修复前 Tree | `2b0f4d4151dcb00f476ecdf7fd735d0a68ad823c` |
 | 本轮 Doctor 修复提交 | `4282b8fc64c97399416d8a9a9d53e59bc799cb67` |
 | Doctor 修复提交 Tree | `21700367bda13fa5c98a3ceba89a88745493957c` |
-| 报告更新提交 | 本报告提交后补录 |
+| 报告更新 | 紧随 Doctor 修复提交的独立文档提交；提交身份由分支历史记录 |
 | PR | `#54`，open；远程旧 HEAD 的 Ubuntu CI 通过、Windows CI 在锁 rename EPERM 失败；本轮提交后需重新验证 |
 
 `c95b9c42` 是 `git mv` 的 ADR 文件 rename；由于后续显式 `git add` 的旧 pathspec 已不存在，该暂存 rename 被独立提交。未 amend、未 reset、未 cherry-pick。`c505c24` 包含全部修复内容与测试，保留原始实施提交。
@@ -94,4 +94,4 @@ Windows `scripts/build-core.mjs:33` 的目录 rename 偶发 `EPERM` 仍可复现
 
 ## 结论
 
-PASS（本地修复验收）——P1、ADR-021 与 P2 Doctor 修复已实现；PS5.1/PS7 对照、697 项完整回归及两次成功构建产物哈希一致均有证据。Doctor 修复提交为 `4282b8fc64c97399416d8a9a9d53e59bc799cb67`，Tree 为 `21700367bda13fa5c98a3ceba89a88745493957c`；本报告由后续报告提交补录其最终身份。远程旧 HEAD 存在 Windows `process-lock` EPERM CI 失败；新候选双平台 CI 尚未完成。未合并，未触发 release-please。
+PASS（本地修复验收）——P1、ADR-021 与 P2 Doctor 修复已实现；PS5.1/PS7 对照、697 项完整回归及两次成功构建产物哈希一致均有证据。Doctor 修复提交为 `4282b8fc64c97399416d8a9a9d53e59bc799cb67`，Tree 为 `21700367bda13fa5c98a3ceba89a88745493957c`；本报告已作为紧随其后的独立文档提交记录。远程旧 HEAD 存在 Windows `process-lock` EPERM CI 失败；新候选双平台 CI 尚未完成。未合并，未触发 release-please。
