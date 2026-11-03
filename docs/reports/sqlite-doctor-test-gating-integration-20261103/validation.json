@@ -67,6 +67,14 @@
     "artifact_rebuild_identity": { "files_compared": 8, "identical": true, "status": "PASS", "manifest": ".run/evidence/gate5-final-revised/artifact-manifest.json" },
     "vendor_git_clean": true
   },
+  "remote_ci_first_attempt": {
+    "run_id": 41672498692,
+    "commit": "7b4dcaa9a9e1dc5bc9b20c2aa9eead3d31f29cbd",
+    "ubuntu": { "tests": 803, "pass": 717, "fail": 32, "skip": 54, "duration_ms": 107208.284869, "status": "FAIL" },
+    "failure_class": "Windows-only SQLite bootstrap and trusted-local policy tests were run on POSIX",
+    "remediation": "POSIX runner explicitly excludes the eight Windows-only integration files; Windows remains the full 806-test gate",
+    "next_run": "PENDING_AFTER_RUNNER_FIX_PUSH"
+  },
   "runtime_close_remediation": {
     "initial_failure": { "duration_ms": 13635.2228, "assertion": "hung !== 0" },
     "isolated_pre_fix": { "run": 1, "pass": false, "duration_ms": 15904.8425 },

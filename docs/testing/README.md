@@ -2,7 +2,7 @@
 
 > Status: AUTHORITATIVE
 > Last updated: 2026-11-03
-> Last verified: 2026-11-03，核对 `package.json` scripts、`scripts/test-isolated.mjs` 的 `dist-test/test/**/*.test.js` 默认语义、`scripts/test-impact-selector.mjs`、`test/test-impact-map.json`、选择器 10/10 单元测试、dry-run 输出与 Windows 扩展完整隔离回归 804 pass/2 skip/0 fail
+> Last verified: 2026-11-03，核对 `package.json` scripts、Windows `npm test` 执行全部 `dist-test/test/**/*.test.js`，POSIX 按平台合同排除 8 个 Windows-only SQLite lifecycle 文件；选择器 10/10 单元测试、dry-run 输出与 Windows 扩展回归 804 pass/2 skip/0 fail
 > Verified against: 本分支实施快照（见 `docs/reports/test-impact-gating-20261103.md`）
 
 本规范只改变测试触发方式，不删除测试、不增加 SKIP、不降低断言或预算。现有完整隔离回归继续保留。
@@ -15,13 +15,15 @@
 | T1 | 直接依赖的快速单元/集成测试 | 变更命中影响映射时 |
 | T2 | 跨 Manager/Worker/Store/Adapter/Host 集成测试 | 变更命中对应模块边界时 |
 | T3 | 已登记压力测试 | 只在压力边界命中时 |
-| T4 | `npm test` 完整隔离串行回归 | CI、R4、发布候选、关键架构切换或测试基础设施变更 |
+| T4 | `npm test` 平台适用的完整隔离回归；Windows 执行全部映射集成测试 | CI、R4、发布候选、关键架构切换或测试基础设施变更 |
 
-日常入口是 `npm run test:affected`。它无条件执行 T0，然后读取已提交（相对 upstream merge-base）、暂存、未暂存和未跟踪变更，输出影响域、选中测试、未触发压力测试和理由。`npm run test:stress -- --file=<file>` 按文件执行登记压力测试；不带参数执行全部登记压力测试。`npm run test:full` 是正式完整验收入口；`npm test` 的语义不变，仍是完整隔离回归，CI 也继续运行完整 `npm test`。
+日常入口是 `npm run test:affected`。它无条件执行 T0，然后读取已提交（相对 upstream merge-base）、暂存、未暂存和未跟踪变更，输出影响域、选中测试、未触发压力测试和理由。`npm run test:stress -- --file=<file>` 按文件执行登记压力测试；不带参数执行全部登记压力测试。`npm run test:full` 是正式完整验收入口；`npm test` 保持完整隔离回归语义，并按操作系统合同选择可执行的测试集。
 
 `test:affected` 不能在无测试匹配时输出测试 PASS；结果是显式的 `NO_TESTS_APPLICABLE`，文档-only 变更仍必须通过 T0。无法识别源码、新增未知源码或测试基础设施、公共接口、共享错误合同、构建/CI/runner/map 变更都会进入 `FULL_SUITE` 回退。默认测试运行器保持 Windows 串行、Linux 使用 Node test 默认并发，不改变超时和断言。
 
 完整静态清单由 `npm run test:inventory` 从 AST 和影响映射生成到 `test-inventory.json`。每条记录包含稳定 Test ID、文件/行、类型、Gate、静态依赖、资源类别、触发路径、压力边界和运行证据。没有当场测量的运行时标记为 `NOT_MEASURED`；只有 B3-05 引用历史报告，不能把历史基准当作本次实测。
+
+Windows 的 `npm test` 执行全部嵌套测试和 SQLite bootstrap cross-process 用例。POSIX 的 `npm test` 执行其余完整清单，并明确排除要求 Windows exclusive-file-handle bootstrap 或 Windows-local Trusted Local Policy 的八个集成测试文件；这些路径在 POSIX 产品合同中 fail-closed，不能在该平台执行其成功生命周期。Windows CI 是这些测试的执行门禁，不将其改成 SKIP 或放宽断言。
 
 ## B3-05
 

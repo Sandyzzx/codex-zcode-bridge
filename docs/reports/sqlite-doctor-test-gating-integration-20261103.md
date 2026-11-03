@@ -38,6 +38,13 @@ tests。因此它只能作为历史窄选证据保留，不能改写为完整 In
 修正后的第二次扩展回归为 **PASS**：806 项，804 pass、0 fail、2 个既有
 SKIP，耗时 1,395,494.5134 ms；日志与 SHA256 见最终门禁表。
 
+发布 PR 的首次 Ubuntu CI 在 803 项中出现 32 个失败、717 pass、54 skip，
+失败全部集中于 POSIX 不支持的 Windows exclusive-file-handle bootstrap 与
+Windows-local Trusted Local Policy 路径。代码合同本身明确在 POSIX fail-closed；
+修订后的测试 runner 在 POSIX 显式排除这 8 个 Windows-only 集成测试文件，并
+打印排除清单。Windows runner 继续执行全部嵌套测试，覆盖全部 806 项。此次
+平台分流不增加测试内 SKIP、不改断言，也不修改产品平台合同。
+
 ## 会话故障与对应修复
 
 目标 LumeCAE Master 会话中，Task78 的原 Worker 进程已不存在，但 Bridge SQLite
@@ -114,12 +121,13 @@ Fetch 后 `origin/master` 仍为 `879568c2`，没有共同基线之后的新提�
 | `test:affected` 历史窄选最终 | PASS：713 / 711 pass / 0 fail / 2 skip；1,186,016.8403 ms；不是完整 Inventory 回归 | `gate2-final/test-affected.log` |
 | 扩展 `npm test` 首次 | FAIL：806 / 797 pass / 7 fail / 2 skip；1,531,883.027 ms | `.run/evidence/gate2-retry-full/test.log`；SHA256 `0312BE15622DDA413CD2764698BF5FABD6BF4F749EF930FD33B9A3BA3692E0AA` |
 | 扩展 `npm test` 最终 | PASS：806 / 804 pass / 0 fail / 2 skip；1,395,494.5134 ms | `.run/evidence/gate2-expanded-final/test.log`；SHA256 `B7DB7A7C46FE0D1CEF66A5ACBA7FB35F884069A74E70D10FB5B25EF15DCBD882` |
+| PR #56 首轮 Ubuntu CI | FAIL：803 / 717 pass / 32 fail / 54 skip；107,208.284869 ms；32 项均来自 Windows-only 文件 | GitHub Actions run `41672498692`；修复 runner 后等待新 head 的双平台 CI |
 | B3-05 | PASS，1/1，0 skip；测试 358,234.8017 ms，wrapper 369,110 ms | `gate4-stress/test-stress.log`、`result.json` |
 | 最终扩展运行中的 B3-05 | PASS，1/1；测试 357,143.5999 ms，32/10,000 setup 294,276 ms | `gate2-expanded-final/test.log` |
 | Clean entrypoints | 4/4 PASS；5,004.5842 ms | `.run/evidence/gate5-final-revised/clean-entrypoints.log` |
 | 产物重建一致性 | 8 个产物哈希前后一致 | `.run/evidence/gate5-final-revised/artifact-manifest.json` |
 
-最终 `test:affected` 选择报告为 FULL_SUITE，理由可追溯到：
+Windows 的最终 `test:affected` 选择报告为 FULL_SUITE，理由可追溯到：
 `package.json`、`scripts/build-core.mjs`、三个 runner/map 脚本和
 `test/test-impact-map.json`。共 33 个 changed files，涉及
 appserver-adapter、ci-release-contract、manager-lifecycle、mcp-host、
