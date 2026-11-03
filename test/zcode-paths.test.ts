@@ -94,55 +94,65 @@ test("POSIX discovery keeps HOME first", () => {
 });
 
 test("setting.json dataBaseDir drives the data directory only when absolute", () => {
-  const { root, cleanup } = makeFixture();
-  try {
-    const userHome = path.join(root, "user");
-    const migrated = path.join(root, "moved data");
-    writeSetting(userHome, JSON.stringify({ dataBaseDir: migrated }));
-    const data = discoverZCodeData({ USERPROFILE: userHome }, { platform: "win32" });
-    assert.equal(data.settingStatus, "ok");
-    assert.equal(data.dataBaseDirSource, "setting.json");
-    assert.equal(data.dataBaseDir, path.win32.resolve(migrated));
-    assert.equal(data.migrated, true);
-    assert.equal(data.zcodeDataDir, path.win32.resolve(migrated, ".zcode"));
-    assert.equal(data.zcodeV2Dir, path.win32.resolve(migrated, ".zcode", "v2"));
-    assert.equal(data.userHome, path.win32.resolve(userHome), "settingFile stays in the original user directory");
-  } finally {
-    cleanup();
-  }
+  const userHome = "C:\\Users\\Fixture";
+  const migrated = "Q:\\moved data";
+  const settingFile = path.win32.join(userHome, ".zcode", "v2", "setting.json");
+  const data = discoverZCodeData(
+    { USERPROFILE: userHome },
+    {
+      platform: "win32",
+      fileExists: (candidate) => candidate === settingFile,
+      readFile: (candidate) => {
+        assert.equal(candidate, settingFile);
+        return JSON.stringify({ dataBaseDir: migrated });
+      },
+    },
+  );
+  assert.equal(data.settingStatus, "ok");
+  assert.equal(data.dataBaseDirSource, "setting.json");
+  assert.equal(data.dataBaseDir, path.win32.resolve(migrated));
+  assert.equal(data.migrated, true);
+  assert.equal(data.zcodeDataDir, path.win32.resolve(migrated, ".zcode"));
+  assert.equal(data.zcodeV2Dir, path.win32.resolve(migrated, ".zcode", "v2"));
+  assert.equal(data.userHome, path.win32.resolve(userHome), "settingFile stays in the original user directory");
 });
 
 test("missing, broken, empty, relative, or non-string dataBaseDir safely falls back", () => {
-  const { root, cleanup } = makeFixture();
-  try {
-    const userHome = path.join(root, "user");
-    const base = { USERPROFILE: userHome };
+  const userHome = "C:\\Users\\Fixture";
+  const base = { USERPROFILE: userHome };
+  const settingFile = path.win32.join(userHome, ".zcode", "v2", "setting.json");
+  let settingBody: string | null = null;
+  const options = {
+    platform: "win32" as NodeJS.Platform,
+    fileExists: (candidate: string) => settingBody !== null && candidate === settingFile,
+    readFile: (candidate: string) => {
+      assert.equal(candidate, settingFile);
+      return settingBody!;
+    },
+  };
 
-    const absent = discoverZCodeData(base, { platform: "win32" });
-    assert.equal(absent.settingStatus, "absent");
-    assert.equal(absent.dataBaseDirSource, "default");
+  const absent = discoverZCodeData(base, options);
+  assert.equal(absent.settingStatus, "absent");
+  assert.equal(absent.dataBaseDirSource, "default");
 
-    writeSetting(userHome, "{not json");
-    const broken = discoverZCodeData(base, { platform: "win32" });
-    assert.equal(broken.settingStatus, "invalid_json");
-    assert.equal(broken.dataBaseDirSource, "default");
+  settingBody = "{not json";
+  const broken = discoverZCodeData(base, options);
+  assert.equal(broken.settingStatus, "invalid_json");
+  assert.equal(broken.dataBaseDirSource, "default");
 
-    writeSetting(userHome, JSON.stringify({ dataBaseDir: "" }));
-    assert.equal(discoverZCodeData(base, { platform: "win32" }).dataBaseDirSource, "default");
+  settingBody = JSON.stringify({ dataBaseDir: "" });
+  assert.equal(discoverZCodeData(base, options).dataBaseDirSource, "default");
 
-    writeSetting(userHome, JSON.stringify({ dataBaseDir: "relative/dir" }));
-    const relative = discoverZCodeData(base, { platform: "win32" });
-    assert.equal(relative.dataBaseDirSource, "default");
-    assert.match(relative.settingError!, /relative path/u);
+  settingBody = JSON.stringify({ dataBaseDir: "relative/dir" });
+  const relative = discoverZCodeData(base, options);
+  assert.equal(relative.dataBaseDirSource, "default");
+  assert.match(relative.settingError!, /relative path/u);
 
-    writeSetting(userHome, JSON.stringify({ dataBaseDir: 42 }));
-    assert.equal(discoverZCodeData(base, { platform: "win32" }).settingStatus, "invalid_shape");
+  settingBody = JSON.stringify({ dataBaseDir: 42 });
+  assert.equal(discoverZCodeData(base, options).settingStatus, "invalid_shape");
 
-    writeSetting(userHome, "[]");
-    assert.equal(discoverZCodeData(base, { platform: "win32" }).settingStatus, "invalid_shape");
-  } finally {
-    cleanup();
-  }
+  settingBody = "[]";
+  assert.equal(discoverZCodeData(base, options).settingStatus, "invalid_shape");
 });
 
 test("dataBaseDir on a different drive or with spaces and Unicode is honored verbatim", () => {
@@ -159,43 +169,40 @@ test("dataBaseDir on a different drive or with spaces and Unicode is honored ver
 });
 
 test("install discovery follows the fixed priority and rejects mixed installations", () => {
-  const { root, cleanup } = makeFixture();
-  try {
-    const explicitRoot = makeInstall(root, "explicit");
-    const localRoot = makeInstall(root, "local");
-    const programFilesRoot = makeInstall(root, "pf");
-    const baseEnv = { LOCALAPPDATA: path.join(root, "local-parent"), ProgramFiles: path.join(root, "pf-parent") };
-    // Position the roots so priority, not existence order, decides.
-    const localInstall = path.join(root, "local-parent", "Programs", "ZCode");
-    const pfInstall = path.join(root, "pf-parent", "ZCode");
-    rmSync(localRoot, { recursive: true, force: true });
-    rmSync(programFilesRoot, { recursive: true, force: true });
-    mkdirSync(path.dirname(localInstall), { recursive: true });
-    mkdirSync(path.dirname(pfInstall), { recursive: true });
-    for (const install of [localInstall, pfInstall]) {
-      mkdirSync(path.join(install, "resources", "glm"), { recursive: true });
-      writeFileSync(path.join(install, "resources", "glm", "zcode.cjs"), "// fake");
-      mkdirSync(path.join(install, "resources", "config", "provider"), { recursive: true });
-      writeFileSync(path.join(install, "resources", "config", "provider", "zcode-builtin.json"), BUILTIN);
-    }
+  const existing = new Set<string>();
+  const runtimeFile = (install: string) => path.win32.join(install, "resources", "glm", "zcode.cjs");
+  const builtinFile = (install: string) => path.win32.join(install, "resources", "config", "provider", "zcode-builtin.json");
+  const makeVirtualInstall = (root: string): string => {
+    existing.add(runtimeFile(root));
+    existing.add(builtinFile(root));
+    return root;
+  };
+  const explicitRoot = makeVirtualInstall("C:\\Apps\\ZCode-explicit");
+  const localInstall = makeVirtualInstall("C:\\Users\\Fixture\\AppData\\Local\\Programs\\ZCode");
+  const pfInstall = makeVirtualInstall("C:\\Program Files\\ZCode");
+  const baseEnv = {
+    LOCALAPPDATA: "C:\\Users\\Fixture\\AppData\\Local",
+    ProgramFiles: "C:\\Program Files",
+  };
+  const fileExists = (candidate: string) => existing.has(candidate);
 
-    const none = discoverZCodeInstall(baseEnv, { platform: "win32" });
-    assert.equal(none.installDir, localInstall, "LOCALAPPDATA outranks ProgramFiles");
-    assert.equal(none.source, "LOCALAPPDATA");
+  const none = discoverZCodeInstall(baseEnv, { platform: "win32", fileExists });
+  assert.equal(none.installDir, localInstall, "LOCALAPPDATA outranks ProgramFiles");
+  assert.equal(none.source, "LOCALAPPDATA");
 
-    const explicit = discoverZCodeInstall({ ...baseEnv, ZCODE_WINDOWS_APP_INSTALL_DIR: explicitRoot }, { platform: "win32" });
-    assert.equal(explicit.installDir, explicitRoot);
-    assert.equal(explicit.source, "ZCODE_WINDOWS_APP_INSTALL_DIR");
-    assert.equal(explicit.zcodeEntrypoint, path.join(explicitRoot, "resources", "glm", "zcode.cjs"));
+  const explicit = discoverZCodeInstall(
+    { ...baseEnv, ZCODE_WINDOWS_APP_INSTALL_DIR: explicitRoot },
+    { platform: "win32", fileExists },
+  );
+  assert.equal(explicit.installDir, explicitRoot);
+  assert.equal(explicit.source, "ZCODE_WINDOWS_APP_INSTALL_DIR");
+  assert.equal(explicit.zcodeEntrypoint, runtimeFile(explicitRoot));
 
-    // A root with a runtime but no builtin is skipped instead of mixed.
-    rmSync(path.join(localInstall, "resources", "config", "provider", "zcode-builtin.json"));
-    const mixed = discoverZCodeInstall(baseEnv, { platform: "win32" });
-    assert.equal(mixed.installDir, pfInstall);
-    assert.equal(mixed.candidates.find((candidate) => candidate.root === localInstall)?.builtinExists, false);
-  } finally {
-    cleanup();
-  }
+  // A root with a runtime but no builtin is skipped instead of mixed.
+  existing.delete(builtinFile(localInstall));
+  const mixed = discoverZCodeInstall(baseEnv, { platform: "win32", fileExists });
+  assert.equal(mixed.installDir, pfInstall);
+  assert.equal(mixed.candidates.find((candidate) => candidate.root === localInstall)?.builtinExists, false);
 });
 
 test("explicit runtime derives its builtin config from the same installation", async () => {
@@ -264,7 +271,7 @@ test("detached worker environments resolve the same user directory as the Bridge
     USERPROFILE: "C:\\Users\\Sandy",
     PATH: "safe-path",
   };
-  const workerEnv = createWorkerEnv(source);
+  const workerEnv = createWorkerEnv(source, { platform: "win32" });
   const workerHome = resolveUserHome(workerEnv, { platform: "win32" });
   const mainHome = resolveUserHome(source, { platform: "win32" });
   assert.equal(workerHome.userHome, mainHome.userHome);
@@ -285,8 +292,10 @@ test("worker and main resolver agree on the personal provider config location", 
     mkdirSync(path.join(migrated, ".zcode", "v2"), { recursive: true });
     writeFileSync(path.join(migrated, ".zcode", "v2", "provider_config.json"), REAL_PERSONAL);
     writeFileSync(path.join(root, "node.exe"), "// fake node");
-    const sourceEnv = { USERPROFILE: userHome, HOME: "D:\\bridge-test-home" };
-    const workerEnv = createWorkerEnv(sourceEnv);
+    // Keep this resolver integration portable; the Windows HOME/USERPROFILE
+    // mismatch itself is covered by createWorkerEnv's dedicated test above.
+    const sourceEnv = { USERPROFILE: userHome, HOME: userHome };
+    const workerEnv = createWorkerEnv(sourceEnv, { platform: process.platform });
     for (const env of [sourceEnv, workerEnv]) {
       const resolved = await new NodeRuntimeResolver({
         env: { ...env, ZCODE_BRIDGE_NODE: path.join(root, "node.exe"), ZCODE_BRIDGE_ZCODE_CJS: path.join(install, "resources", "glm", "zcode.cjs") },
