@@ -56,7 +56,7 @@
 
 ## ADR-021 核对
 
-- 当前候选工作树中唯一的 ADR-020 引用位于原始交付报告第 95 行，语义是“Attention/Thin Waiter 保留 ADR-020；Path Discoverer 改为 ADR-021”。
+- ADR-020 仅在改号说明和旧文件名迁移记录中出现，表示 Attention/Thin Waiter 保留该编号；Path Discoverer 决策编号均为 ADR-021。
 - Path Discoverer 本体、索引、源码注释、测试注释、合同和报告引用均已使用 ADR-021。
 - 未修改 Attention/Thin Waiter 分支。
 
