@@ -1,6 +1,6 @@
 # ZCode Path Discoverer 修复报告（2026-11-03）
 
-> Status: REPORT（待 Master 复审）
+> Status: REPORT（本轮复审完成；等待最终候选 CI）
 > Branch: `codex/zcode-path-discoverer-20261103`
 > Worktree: `D:\codex-zcode-bridge\.run\zcode-path-discoverer-20261103`
 
@@ -14,9 +14,12 @@
 | Repair rename-only Commit | `c95b9c42ab9a236c9e723a4e63f9dae09cf1cacb` |
 | Repair implementation Commit | `c505c240f8bb21d9b7417d8c7a8c4f3323e0b633` |
 | Repair implementation Tree | `62601d4f98afe0d6f6ced2c8ada42b71929b57c9` |
-| 当前修复代码 HEAD | `df38f13006f418d40a9f06461682e880cb8bb572` |
-| 当前修复代码 Tree | `72d1a075baeffd70105a3df81439588875b0916b` |
-| PR | `#54`，open，等待本轮 CI 与 Master 独立复审；未 merge/tag/release |
+| 本轮修复前 HEAD | `eec76db22110b2cbd3f3854dd614f0efbde4eb24` |
+| 本轮修复前 Tree | `2b0f4d4151dcb00f476ecdf7fd735d0a68ad823c` |
+| 本轮 Doctor 修复提交 | `4282b8fc64c97399416d8a9a9d53e59bc799cb67` |
+| Doctor 修复提交 Tree | `21700367bda13fa5c98a3ceba89a88745493957c` |
+| 报告更新提交 | 本报告提交后补录 |
+| PR | `#54`，open；远程旧 HEAD 的 Ubuntu CI 通过、Windows CI 在锁 rename EPERM 失败；本轮提交后需重新验证 |
 
 `c95b9c42` 是 `git mv` 的 ADR 文件 rename；由于后续显式 `git add` 的旧 pathspec 已不存在，该暂存 rename 被独立提交。未 amend、未 reset、未 cherry-pick。`c505c24` 包含全部修复内容与测试，保留原始实施提交。
 
@@ -25,7 +28,7 @@
 - `plugins/codex-zcode-bridge/hooks/configure-runtime.ps1`：新增完整 Windows 绝对路径判定，并与 TypeScript 的规范 UNC 分隔符规则一致；PS5.1/PS7 统一 UTF-8 读取；dataBaseDir、HOME、显式路径和输出拼接均不再依赖 `IsPathRooted`。
 - `src/runtime/paths.ts`：新增 `isWindowsAbsolutePath`、`isAbsolutePathForPlatform`、`isPermissionDeniedCode`；Windows HOME 与 `dataBaseDir` 使用完整 Windows 绝对路径规则，POSIX `dataBaseDir` 使用 POSIX 规则；EPERM 与 EACCES 都归类 permission denied。
 - `src/runtime/resolver.ts`：Windows 拒绝 drive-relative 的 `ZCODE_DATA_BASE_DIR`/`ZCODE_HOME`；POSIX 语义保持不变。
-- `src/runtime/doctor.ts`：验证显式 runtime 文件；报告实际生效 dataBaseDir 和来源；相对 `dataBaseDir` warning；EPERM/EACCES error；报告 automatic discovery 与 explicit runtime 的关系；不输出配置正文或凭据。
+- `src/runtime/doctor.ts`：验证显式 runtime 文件；报告实际生效 dataBaseDir 和来源；相对 `dataBaseDir` warning；通过 `stat` 将 ENOENT 作为缺失 warning、EPERM/EACCES 作为权限 error；报告 automatic discovery 与 explicit runtime 的关系；不输出配置正文或凭据。
 - `docs/decisions/ADR-020-zcode-path-discovery.md` -> `docs/decisions/ADR-021-zcode-path-discovery.md`：改号并补充完整路径规则。
 - `docs/ZCODE_RUNTIME.md`、`docs/decisions/README.md`、原始交付报告：同步 ADR-021 与复审状态。
 - `test/zcode-paths.test.ts`：ADR 引用同步；Windows 规则测试改用虚拟文件系统，使其可在 POSIX runner 执行；新增 POSIX dataBaseDir 迁移覆盖。
@@ -68,19 +71,21 @@
 |---|---|
 | `npm run typecheck` | PASS |
 | `npm run validate:plugin`（仓库的 validate 命令） | PASS |
-| `npm test`（先执行 `build:test`） | 697 tests：695 pass，0 fail，2 skipped，duration 1,236,922.695 ms |
+| `npm test`（先执行 `build:test`） | 697 tests：695 pass，0 fail，2 skipped，duration 1,208,188.690 ms |
 | `git diff --check` | PASS |
 
-原审查候选为 692 tests（690 pass，2 skipped）。修复新增 5 tests，因此总数为 697；skip 仍为同 2 项，无原有断言、timeout 或测试数量减少。Ubuntu CI 首轮暴露 Windows 路径单测错误使用 POSIX 临时路径，随后暴露解析器无条件采用 Windows dataBaseDir 规则；最终 PowerShell 审查又补齐了严格 UNC 分隔符和 `C:`/`\\foo` 测试。当前最终提交的 CI 正在重新运行。
+原审查候选为 692 tests（690 pass，2 skipped）。修复新增 5 tests，因此总数为 697；skip 仍为同 2 项，无原有断言、timeout 或测试数量减少。Ubuntu CI 首轮暴露 Windows 路径单测错误使用 POSIX 临时路径，随后暴露解析器无条件采用 Windows dataBaseDir 规则；最终 PowerShell 审查又补齐了严格 UNC 分隔符和 `C:`/`\\foo` 测试。
+
+本轮独立重跑的完整 Windows `npm test` 为 695 pass、2 skipped、0 fail。PR 旧 HEAD `eec76db` 的 Windows CI 单独失败于 `test/process-lock.test.js` 的真实跨进程锁竞争，错误为 pending lock rename 的 `EPERM`；同一 run 的 Ubuntu CI 成功，Windows typecheck/build 在该失败前均成功。本轮未触碰锁实现或断言。原审查已完成基线与候选各 5 次对照；不重复压力复跑。新提交仍须取得其自身 CI 结果。
 
 ## 构建一致性
 
-修复后的生产 bundle 连续两次成功构建，SHA256 完全一致：
+本轮 Doctor 代码变更后的首次构建成功；随后的构建遇到一次 `scripts/build-core.mjs:33` 的目录 rename `EPERM`，未进入 plugin bundle 阶段；再下一次完整构建成功。两次成功构建的产物 SHA256 完全一致：
 
-- `plugins/codex-zcode-bridge/dist/bridge.mjs`：`BE6F71C3BFF8C306E7F81A5AE1C96832903361A8F8EBB979FC7451E33E793156`
+- `plugins/codex-zcode-bridge/dist/bridge.mjs`：`3574719B5C5A280E382176FCEDB2E6A74B13B5724A06D953F64329C68F07735B`
 - `plugins/codex-zcode-bridge/worker/worker-main.mjs`：`0FB4426C2F039E298041F4EBCAF850DF254D3948ABE9FD29B5B06978FDD9CED3`
 
-Windows `scripts/build-core.mjs:33` 的目录 rename 偶发 `EPERM` 仍可复现。运行时源码变更后连续两次成功构建且哈希一致；本次只改 PowerShell 与测试后，最新本地两次构建在同一 rename 步骤失败。未修改构建命令、脚本或重试逻辑；GitHub 对前一代码提交的 Windows build 步骤通过，最终提交的 CI 仍待完成。
+Windows `scripts/build-core.mjs:33` 的目录 rename 偶发 `EPERM` 仍可复现。未修改构建命令、脚本或重试逻辑。旧远程 HEAD 的 Windows CI build 步骤通过；新提交的 CI 仍待完成。
 
 ## 未解决问题
 
@@ -89,4 +94,4 @@ Windows `scripts/build-core.mjs:33` 的目录 rename 偶发 `EPERM` 仍可复现
 
 ## 结论
 
-PASS——审查要求的 P1、ADR-021 与 P2 doctor 修复已实现，本地完整回归通过；最终提交 `df38f13` 的 GitHub 双平台 CI 与 Master 独立复审仍待完成。合并和 release-please 流程尚未触发。
+PASS（本地修复验收）——P1、ADR-021 与 P2 Doctor 修复已实现；PS5.1/PS7 对照、697 项完整回归及两次成功构建产物哈希一致均有证据。Doctor 修复提交为 `4282b8fc64c97399416d8a9a9d53e59bc799cb67`，Tree 为 `21700367bda13fa5c98a3ceba89a88745493957c`；本报告由后续报告提交补录其最终身份。远程旧 HEAD 存在 Windows `process-lock` EPERM CI 失败；新候选双平台 CI 尚未完成。未合并，未触发 release-please。
