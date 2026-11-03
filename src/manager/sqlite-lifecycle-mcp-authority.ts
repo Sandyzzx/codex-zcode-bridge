@@ -18,6 +18,8 @@ import type { ClaimOnlyDriverOptions, CandidateTaskPackage, ClaimOnlyRunResult }
 import { openClaimOnlyDriver } from "../store/lifecycle-gate.js";
 import { TaskManagerError } from "./errors.js";
 import { createPlatformProbe, PROCESS_IDENTITY_VERSION, type ProcessIdentity, type ProcessProbe } from "../runtime/process-probe.js";
+import { buildSqliteDoctorChecks } from "../runtime/sqlite-doctor.js";
+import type { DoctorCheck } from "../runtime/doctor.js";
 
 const EXECUTION_OBSERVATION_PROBE_BUDGET_MS = 5_000;
 const DEFAULT_HOST_SHUTDOWN_WAIT_MS = 60_000;
@@ -419,6 +421,12 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     }
     this.#closed = true;
     this.#driver.close();
+  }
+
+  /** Read the same SQLite root and Manager fence used by lifecycle mutations. */
+  getDoctorChecks(): DoctorCheck[] {
+    this.#assertOpen();
+    return buildSqliteDoctorChecks(this.#driver.readRecoverySnapshot(), this.#recoveryBlocked);
   }
 
   async recoverTasks(): Promise<void> {

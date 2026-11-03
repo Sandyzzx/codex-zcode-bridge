@@ -1783,6 +1783,7 @@ export class IsolatedAdmissionStore {
       const meta=this.#db.prepare('SELECT * FROM authority_metadata').all();
       const operations=this.#db.prepare('SELECT * FROM manager_operations ORDER BY operation_id').all();
       const events=this.#db.prepare('SELECT * FROM manager_operation_events ORDER BY operation_id,sequence').all();
+      const taskProjections=this.#db.prepare('SELECT task_id,current_attempt,status,created_at FROM tasks ORDER BY task_id').all();
       const adminAbandonments=this.#adminAbandonments();
       let integrityError=null;
       try { this.#validateContents(); } catch(e) { integrityError=e?.code??'projection_event_mismatch'; }
@@ -1826,7 +1827,7 @@ export class IsolatedAdmissionStore {
       });
       return { schema_version:3, root_status:integrityError?'quarantined_read_only':rootBlocked?'blocked_read_only':'consistent_read_only',
         root_blockers:[...new Set([...(integrityError?[integrityError]:[]),...(poisoned?['root_poisoned']:[]),...(writerIntent?['writer_intent_present_outcome_unknown']:[]),...(meta.length!==1?['authority_metadata_invalid']:[])])],
-        capacity:meta.length===1?meta[0]:null, operations:operationsWithRecovery, events,
+        capacity:meta.length===1?meta[0]:null, operations:operationsWithRecovery, events, task_projections:taskProjections,
         verified_event_projection_consistency:!integrityError, writes_allowed:false, cleanup_performed:false, claim_release_performed:false, operation_release_performed:false };
     } catch(e) {
       if(transaction){try{this.#db.exec('ROLLBACK');}catch{}}

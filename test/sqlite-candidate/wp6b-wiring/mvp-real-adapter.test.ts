@@ -39,9 +39,12 @@ function writeFakeRuntime(name: string, variant: "success" | "failure"): FakeRun
   const root = path.join(fixtureRoot, name);
   mkdirSync(root, { recursive: true });
   mkdirSync(path.join(root, ".zcode", "v2"), { recursive: true });
-  const entrypoint = path.join(root, "fake-app-server.cjs");
+  // Resolver derives the builtin pair from <runtime>/../../config/provider;
+  // make the fixture mimic the production resources/glm runtime layout.
+  const entrypoint = path.join(root, "resources", "glm", "fake-app-server.cjs");
   const requestLog = path.join(root, "requests.jsonl");
   const taskInput = path.join(root, "task-input.json");
+  const builtinConfig = path.join(root, "resources", "config", "provider", "zcode-builtin.json");
   const report = JSON.stringify({
     summary: "synthetic MVP real-adapter report",
     files_changed: [],
@@ -103,14 +106,16 @@ function writeFakeRuntime(name: string, variant: "success" | "failure"): FakeRun
     `  }`,
     `});`,
   ].join("\n");
+  mkdirSync(path.dirname(entrypoint), { recursive: true });
   writeFileSync(entrypoint, script, "utf8");
   writeFileSync(taskInput, JSON.stringify({ task_id: "TASK_ID" }), "utf8");
-  writeFileSync(path.join(root, "builtin.json"), JSON.stringify({ config: { providers: [] } }), "utf8");
+  mkdirSync(path.dirname(builtinConfig), { recursive: true });
+  writeFileSync(builtinConfig, JSON.stringify({ config: { providers: [] } }), "utf8");
   const zcodeHomeV2 = path.join(root, ".zcode", "v2");
   writeFileSync(path.join(zcodeHomeV2, "provider_config.json"), JSON.stringify({
     config: { providerConfigRules: { providerRules: { "provider-default": { upstream: { type: "synthetic" } } } } },
   }), "utf8");
-  return { entrypoint, requestLog, taskInput, builtinConfig: path.join(root, "builtin.json"), personalConfig: path.join(zcodeHomeV2, "provider_config.json"), zcodeHomeV2 };
+  return { entrypoint, requestLog, taskInput, builtinConfig, personalConfig: path.join(zcodeHomeV2, "provider_config.json"), zcodeHomeV2 };
 }
 
 function contentObject(result: { readonly structuredContent?: unknown; readonly isError?: boolean }, diagnostic = ""): Record<string, unknown> {
@@ -197,7 +202,7 @@ async function withRealAdapterMcp(
     if (existsSync(candidateSchema)) {
       assert.equal(readFileSync(candidateSchema, "utf8"), readFileSync(sourceSchema, "utf8"), "compiled schema must match the tested source schema");
     } else {
-      copyFileSync(schema());
+      writeFileSync(candidateSchema, readFileSync(sourceSchema, "utf8"));
     }
     mkdirSync(fixtureRoot, { recursive: true });
     mkdirSync(workspace, { recursive: true });

@@ -19,6 +19,7 @@ import { beginJsonWriterDrain, registerManagerJsonWriter, sealJsonWriterRoot } f
 import { TaskStore } from "../../../src/store/task-store.js";
 import { DirectWorkspaceProvider } from "../../../src/workspace/direct-provider.js";
 import { createPlatformProbe, PROCESS_IDENTITY_VERSION, type ProcessProbe, type ProbeRequest, type ProbeVerdict } from "../../../src/runtime/process-probe.js";
+import { runBridgeDoctor } from "../../../src/runtime/doctor.js";
 
 const source = (name: string): string => readFileSync(path.join(process.cwd(), "src", name), "utf8");
 
@@ -55,12 +56,14 @@ function redactTestDiagnostic(value: unknown): unknown {
   return redacted;
 }
 
-test("production Host composition keeps JSON as default and exposes no test Fake adapter", () => {
+test("production Host composition initializes the bound SQLite Authority and exposes no test Fake adapter", () => {
   const host = source("host/stdio.ts");
-  assert.match(host, /const \{ TaskStore \} = await import\("\.\.\/store\/task-store\.js"\)/u);
-  assert.match(host, /new TaskStore\(dataRoot,\s*\{\s*writerQuiescence:\s*true,\s*writerLeaseToken:\s*managerWriterLeaseToken\s*\}\)/u);
-  assert.match(host, /registerManagerJsonWriter\(dataRoot,/u);
+  assert.match(host, /initializeFreshInstallSqliteRoot\(dataRoot,\s*FRESH_SQLITE_DATABASE_FILE/u);
+  assert.match(host, /const \{ SqliteLifecycleMcpAuthority \} = await import\("\.\.\/manager\/sqlite-lifecycle-mcp-authority\.js"\)/u);
   assert.match(host, /new BridgeTaskManager\(/u);
+  assert.match(host, /lifecycleAuthority:\s*authority/u);
+  assert.match(host, /lifecycleChecks = \(\) => authority\.getDoctorChecks\(\)/u);
+  assert.match(host, /lifecycleChecks\s*\}/u);
   assert.doesNotMatch(host, /testOnlyFakeAdapter|executeFakeResultAdapter|adapter_mode\s*:\s*"test_fake"/u,
     "the formal Host entry must not expose the explicit Fake test capability");
 });
@@ -212,6 +215,11 @@ for (const recoveryProbeMode of ["alive", "unknown"] as const) test(
           catch { return false; }
         });
         assert.deepEqual(holds, [], "alive or transiently unknown Worker identity is a per-Manager fence, not cleanup failure evidence");
+        const doctor = await _client.callTool({ name: "zcode_doctor", arguments: {} });
+        const report = doctor.structuredContent as { checks: Array<{ name: string; status: string; summary: string }> };
+        const recoveryCheck = report.checks.find((check) => check.name === "recovery_lock");
+        assert.equal(recoveryCheck?.status, "warning", "doctor must expose the same per-Manager fence as mutations");
+        assert.match(recoveryCheck!.summary, /managed_elsewhere/u);
         const operationAfterRecovery = recoveryPort.readOperation(operationId) as Record<string, unknown> | null;
         assert.equal(Number(operationAfterRecovery?.revision), Number(seededOperation?.revision),
           "Rejecting startup takeover must not advance the owning Operation");
@@ -515,7 +523,10 @@ test("SQLite Manager restart releases only persisted cleanup-verified Operations
 
 const projectRoot = process.cwd();
 const compiledCandidate = path.join(projectRoot, "dist-test", "src", "sqlite-candidate", "wp6b2b1");
-const integrationRoot = path.join(compiledCandidate, ".wp6-od13-mcp-integration");
+// Keep the fixture root inside the candidate boundary while staying well below
+// Windows legacy MAX_PATH for the UUID-named cutover staging database and its
+// WAL/SHM sidecars.
+const integrationRoot = path.join(compiledCandidate, ".wp6i");
 
 test("Recovery reads lifecycle evidence across the Store's bounded 200-event pages", () => {
   const firstPage = Array.from({ length: 200 }, (_, index) => ({ sequence: index + 1, event_type: "interaction_requested" }));
@@ -818,7 +829,10 @@ async function withSqliteMcp(
     testOnlyFakeAdapter: true,
   });
   const manager = new BridgeTaskManager({ lifecycleAuthority: authority });
-  const server = createBridgeServer({ taskManager: manager });
+  const server = createBridgeServer({ taskManager: manager,
+    doctor: () => runBridgeDoctor({ env: {}, resolver: { homeDir: settingsDirectory, packageRoot: fixture },
+      dataRoot, lifecycleChecks: () => authority.getDoctorChecks() }),
+  });
   let client: Client;
   let closeClient: () => Promise<void>;
   if (options.stdio) {

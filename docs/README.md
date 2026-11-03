@@ -1,7 +1,7 @@
 # 文档索引 / Documentation
 
 > Status: AUTHORITATIVE（仅指本索引）
-> Last updated: 2026-11-02
+> Last updated: 2026-11-03
 
 英文使用者从 [README.md](../README.md) 开始。技术文档为中文。本文是文档路由：先看状态等级，再按读者路径选文档。
 
@@ -56,6 +56,7 @@ English readers start at [README.md](../README.md). This index is bilingual; the
 | [plugins/codex-zcode-bridge/README.md](../plugins/codex-zcode-bridge/README.md) | zh | 2026-10-03 | 未记录 |
 | [plugins/codex-zcode-bridge/SECURITY.md](../plugins/codex-zcode-bridge/SECURITY.md) | zh + en | 2026-10-03 | 未记录 |
 | [plugins/codex-zcode-bridge/skills/zcode-bridge/SKILL.md](../plugins/codex-zcode-bridge/skills/zcode-bridge/SKILL.md) | zh | 2026-10-08 | 2026-10-08，本地源码/合同 |
+| [testing/README.md](testing/README.md) | zh | 2026-11-03 | 2026-11-03，测试命令/选择器/映射与 B3-05 触发合同 |
 
 `最后核对` 表示上一次有人把文档内容与代码对照的日期及范围；标记为未记录的条目仍缺少核对证据。新建和修改文档时必须填写，否则该文档只能算"最后更新"，不能算"已验证"。本地回归不代表真实 provider 或长期运行通过。
 

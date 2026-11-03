@@ -13,7 +13,9 @@ import {
   loadLifecycleCandidateModules,
 } from "../../src/store/lifecycle-gate.js";
 
-const fixtureRoot = path.join(process.cwd(), ".run", "sqlite-bootstrap-policy-20261102", `fresh-install-${randomUUID()}`);
+// Keep the Windows bootstrap staging database and journal below legacy
+// MAX_PATH even in deeply nested integration worktrees.
+const fixtureRoot = path.join(process.cwd(), ".run", "sqlite-bootstrap", `fresh-install-${randomUUID()}`);
 let failed = false;
 
 test.before(() => { mkdirSync(fixtureRoot, { recursive: true }); });

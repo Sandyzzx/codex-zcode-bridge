@@ -27,6 +27,8 @@ export interface BridgeDoctorOptions {
   env?: NodeJS.ProcessEnv;
   resolver?: RuntimeResolverOptions;
   dataRoot?: string;
+  /** Bound lifecycle Authority; production must not infer SQLite health from JSON files. */
+  lifecycleChecks?: () => readonly DoctorCheck[] | Promise<readonly DoctorCheck[]>;
   /** Test-only read seam for injected setting.json failures; never used to expose contents. */
   settingReadFile?: (filePath: string) => string;
   /** Test-only stat seam for directory access failures. */
@@ -356,10 +358,19 @@ export async function runBridgeDoctor(options: BridgeDoctorOptions = {}): Promis
     summary: "Not probed here: use the Master Skill helper with the explicit CODEX_THREAD_ID; codex_rollout values require a report-window baseline and must not be replaced by account quotas or text estimates",
   });
 
-  // A1: summarize persisted observations of non-terminal tasks via the same
-  // judger used by zcode_status and zcode_events (bounded to 32 tasks).
-  const observedRoot: string | null = options.observationDataRoot ?? env["ZCODE_BRIDGE_DATA_DIR"]?.trim() ?? null;
-  if (observedRoot && existsSync(observedRoot)) {
+  // Read the bound lifecycle Authority first. JSON observations remain only
+  // for explicit legacy callers and never stand in for a SQLite snapshot.
+  const observedRoot: string | null = options.observationDataRoot ?? options.dataRoot ?? env["ZCODE_BRIDGE_DATA_DIR"]?.trim() ?? null;
+  if (options.lifecycleChecks) {
+    try { checks.push(...await options.lifecycleChecks()); }
+    catch (error) {
+      checks.push({ name: "active_tasks", status: "unknown", summary: `SQLite lifecycle diagnostics unavailable: ${safeError(error)}` });
+      checks.push({ name: "recovery_lock", status: "unknown", summary: "SQLite Recovery state is unknown; the bound Authority could not be read" });
+    }
+  } else if (observedRoot && existsSync(path.join(observedRoot, "bridge.sqlite"))) {
+    checks.push({ name: "active_tasks", status: "unknown", summary: "SQLite data root is present but no lifecycle Authority diagnostics are bound" });
+    checks.push({ name: "recovery_lock", status: "unknown", summary: "SQLite Recovery state is unknown; JSON recovery locks are not authoritative" });
+  } else if (observedRoot && existsSync(observedRoot)) {
     try {
       const { TaskStore: Store } = await import("../store/task-store.js");
       const { buildTaskObservation, inferExecutionStage } = await import("../observation/build.js");

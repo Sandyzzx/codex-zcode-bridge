@@ -26588,6 +26588,7 @@ var init_zcode_app_server_adapter = __esm({
       #onOutcomeCheckpoint;
       #onInteractionState;
       #terminateProcessTree;
+      #usesDefaultProcessTerminator;
       #verifyTreeClean;
       #onCleanupDecisionTrace;
       #turnBindingCompatMs;
@@ -26612,6 +26613,7 @@ var init_zcode_app_server_adapter = __esm({
         this.#resolveInteraction = options.resolveInteraction;
         this.#onOutcomeCheckpoint = options.onOutcomeCheckpoint;
         this.#onInteractionState = options.onInteractionState;
+        this.#usesDefaultProcessTerminator = options.terminateProcessTreeImpl === void 0;
         this.#terminateProcessTree = options.terminateProcessTreeImpl ?? terminateProcessTree;
         this.#verifyTreeClean = options.verifyTreeClean ?? verifyProcessTreeClaimantsClean;
         this.#onCleanupDecisionTrace = options.onCleanupDecisionTrace;
@@ -27363,6 +27365,12 @@ var init_zcode_app_server_adapter = __esm({
         child.once("spawn", () => {
           spawned = true;
         });
+        let cleanupTransaction = null;
+        const prewarmCleanup = () => {
+          if (process.platform !== "win32" || !this.#usesDefaultProcessTerminator || cleanupTransaction || closed || !child.pid) return;
+          cleanupTransaction = openPowerShellTreeTransaction();
+          void cleanupTransaction.catch(() => void 0);
+        };
         let spawnFailure = null;
         const pending = /* @__PURE__ */ new Map();
         let protocolFatal = null;
@@ -27520,15 +27528,41 @@ var init_zcode_app_server_adapter = __esm({
           const identity = entry.childIdentity?.pid === child.pid ? entry.childIdentity : null;
           if (!terminationStarted && entry.childExitSeen && identity?.fingerprint) {
             traceRootExitedDecision();
+            const pendingTransaction = cleanupTransaction;
+            cleanupTransaction = null;
+            if (pendingTransaction) await (await pendingTransaction).close();
             throw new WindowsTreeCleanupError("process_tree_root_exited", "process_tree_root_exited: original child exit observed; recorded-tree verification required (no termination transaction started)", [child.pid]);
           }
           terminationStarted = true;
           try {
-            const terminated = await this.#terminateProcessTree(child.pid, {
-              graceMs: 500,
-              killWaitMs: 5e3,
-              expectedRootFingerprint: identity?.fingerprint ?? null
-            });
+            let terminated;
+            const pendingTransaction = cleanupTransaction;
+            cleanupTransaction = null;
+            if (pendingTransaction) {
+              try {
+                const transaction = await pendingTransaction;
+                terminated = {
+                  pid: child.pid,
+                  signal: "SIGKILL",
+                  verified: true,
+                  windows: await terminateWindowsProcessTree(child.pid, identity?.fingerprint ?? null, 5e3, {
+                    open: async () => transaction
+                  })
+                };
+              } catch {
+                terminated = await this.#terminateProcessTree(child.pid, {
+                  graceMs: 500,
+                  killWaitMs: 5e3,
+                  expectedRootFingerprint: identity?.fingerprint ?? null
+                });
+              }
+            } else {
+              terminated = await this.#terminateProcessTree(child.pid, {
+                graceMs: 500,
+                killWaitMs: 5e3,
+                expectedRootFingerprint: identity?.fingerprint ?? null
+              });
+            }
             return terminated.windows ?? null;
           } catch (error62) {
             if (error62?.code === "process_tree_root_exited") traceRootExitedDecision();
@@ -27550,11 +27584,7 @@ var init_zcode_app_server_adapter = __esm({
             await identityCapture;
           }
           if (process.platform === "win32" && child.pid) {
-            try {
-              return await closeWindowsTree();
-            } finally {
-              child.stdin.end();
-            }
+            return await closeWindowsTree();
           }
           child.stdin.end();
           await new Promise((resolve) => {
@@ -27575,7 +27605,7 @@ var init_zcode_app_server_adapter = __esm({
           }
           return null;
         };
-        return { child, request, replayEvents, close, get stderr() {
+        return { child, request, replayEvents, prewarmCleanup, close, get stderr() {
           return stderr;
         } };
       }
@@ -27966,6 +27996,7 @@ var init_zcode_app_server_adapter = __esm({
        * (ADR-008); the full text has already streamed through model_output events
        * up to the event-log capacity. */
       #resolveTurnCompleted(entry, payload, event) {
+        if (process.platform === "win32") entry.client?.prewarmCleanup();
         if (entry.turnBinding === "pending") entry.turnBinding = entry.turnId ? "strict" : "compat";
         const rawResponse = typeof payload.response === "string" ? payload.response : "";
         entry.resolveTurn({

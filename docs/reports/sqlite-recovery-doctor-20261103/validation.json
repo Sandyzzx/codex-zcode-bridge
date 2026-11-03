@@ -1,0 +1,96 @@
+{
+  "timestamp": "2026-11-03T11:12:52.810Z",
+  "base_commit": "879568c211bac6233817acc90923e23d7861ca79",
+  "branch": "codex/sqlite-recovery-doctor-20261103",
+  "uncommitted": true,
+  "tests": {
+    "typecheck": "PASS",
+    "full_initial": {
+      "tests": 703,
+      "pass": 700,
+      "fail": 1,
+      "skip": 2,
+      "status": "FAIL",
+      "failure": "runtime-remediation real worker 5s close wait: hung !== 0"
+    },
+    "full_final_source": "NOT RUN",
+    "failed_case_isolated_retest": {
+      "pass": 1,
+      "fail": 0
+    },
+    "final_recovery_tests": {
+      "pass": 42,
+      "fail": 0
+    },
+    "manager_fence_tests": {
+      "pass": 2,
+      "fail": 0
+    },
+    "clean_entrypoints": {
+      "pass": 4,
+      "fail": 0
+    },
+    "build": "PASS",
+    "validate_plugin": "PASS",
+    "diff_check": "PASS"
+  },
+  "files": [
+    {
+      "file": "src/host/stdio.ts",
+      "sha256": "efdd4f3125b9d1431d81a1e255f597435481c9b708dee3c86ba71a36be2ff2fd",
+      "git_clean_blob": "ec444293cdce4c9009b3221473eccaca81a5f7b5"
+    },
+    {
+      "file": "src/manager/sqlite-lifecycle-mcp-authority.ts",
+      "sha256": "3d65690eabb89e3716b29864215bef23329ca6b12dbdc995f35235aa1d75411c",
+      "git_clean_blob": "8b0f8728fbe2f39cc380711b6c36895f376483fe"
+    },
+    {
+      "file": "src/runtime/doctor.ts",
+      "sha256": "6c825d19708452a06f4a8dceeb6de8f380d2220c60b6904feb4d7676efaa1f42",
+      "git_clean_blob": "ddc3d45cc9888e4271bdfe7d9fd4530f44deaed5"
+    },
+    {
+      "file": "src/runtime/sqlite-doctor.ts",
+      "sha256": "e2cc1677e5e0542e1958b31b20acda36136c3794c525a575cdf93475a331c591",
+      "git_clean_blob": "9b68dd4864e304bd2c40645aa2a20df6dcb8cae1"
+    },
+    {
+      "file": "src/sqlite-candidate/wp6b2b1/store.mjs",
+      "sha256": "cc296573b6f5619d7cb24e8906f67fbeda8674a72800bf81218da58c50d33a6b",
+      "git_clean_blob": "e6cf389271a9c1f01bc4fcfa23b819fc5c7f2a7d"
+    },
+    {
+      "file": "test/sqlite-doctor.test.ts",
+      "sha256": "2be7c22ca1e7115da373cdcfc322369d8711cf287c80807ef6525945f191a302",
+      "git_clean_blob": "720dce8e5ec39f5004e447fa1ff7529cf1b264f5"
+    },
+    {
+      "file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
+      "sha256": "a3af84605f35d942a870c202cab7401217b6e9ef8f2808deb99151e717ec82e6",
+      "git_clean_blob": "f4a25ae8085ea90cd4206b65a010f18854da4e29"
+    },
+    {
+      "file": "plugins/codex-zcode-bridge/dist/bridge.mjs",
+      "sha256": "f4f834cffc71e0ad248604720f06213ba5fbd6ebcf61eef7436457a05f6dffdd",
+      "git_clean_blob": "f5e54b14ea9b26695c304a24388caee8f0ff93cf"
+    },
+    {
+      "file": "plugins/codex-zcode-bridge/worker/worker-main.mjs",
+      "sha256": "4cef5244cb36aec79af370e96817a380c621d06c4b0244741e72b690387abfd1",
+      "git_clean_blob": "cb84ce51d273829936a495b201f4c663ccd81abd"
+    }
+  ],
+  "production": {
+    "task_database_unchanged": true,
+    "hashes_after": {
+      "bridge.sqlite": "f88e602f7c00b9dcbafa9dbb7f82ab75e5900181970ca332724e2d67702ed42c",
+      "bridge.sqlite-wal": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bridge.sqlite-shm": "fd4c9fda9cd3f9ae7c962b0ddf37232294d55580e1aa165aa06129b8549389eb"
+    },
+    "installed_bridge_sha256": "b0a2cf8cbaa8734e0bab3e0a4e76dd34e2ab91e31352fe086da276ce925ea1f7",
+    "installed_bridge_unmodified": true,
+    "task78_hold_released": false,
+    "provider_e2e": "NOT RUN"
+  }
+}
