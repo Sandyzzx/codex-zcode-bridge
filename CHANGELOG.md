@@ -4,6 +4,25 @@
 
 当前版本以 `package.json` 和 Release Please manifest 为准。提交推送到 `master` 后，Release Please 会在有待发布变更时创建发布 PR，并同步更新版本文件与本日志；合并发布 PR 后会生成对应 Git tag 和 GitHub Release。
 
+## [1.4.0](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.3.0...codex-zcode-bridge-v1.4.0) (2026-11-03)
+
+
+### Features
+
+* unify ZCode path discovery ([32ed22f](https://github.com/Sandyzzx/codex-zcode-bridge/commit/32ed22fb743e97dd40d69f9e8c92ea912178c6b5))
+* unify ZCode path discovery ([32ed22f](https://github.com/Sandyzzx/codex-zcode-bridge/commit/32ed22fb743e97dd40d69f9e8c92ea912178c6b5))
+* unify ZCode path discovery ([c39909a](https://github.com/Sandyzzx/codex-zcode-bridge/commit/c39909a5718396f463de08b1a812cf309f3a1616))
+
+
+### Bug Fixes
+
+* align PowerShell UNC path classification ([df38f13](https://github.com/Sandyzzx/codex-zcode-bridge/commit/df38f13006f418d40a9f06461682e880cb8bb572))
+* classify doctor data directory access errors ([4282b8f](https://github.com/Sandyzzx/codex-zcode-bridge/commit/4282b8fc64c97399416d8a9a9d53e59bc799cb67))
+* compare worker paths by platform rules ([8fad454](https://github.com/Sandyzzx/codex-zcode-bridge/commit/8fad454b4d4f78d82b75fbbbdee3c049346fb26a))
+* honor POSIX data directory migrations ([82df987](https://github.com/Sandyzzx/codex-zcode-bridge/commit/82df9879a1b2b85fa7faaa94bc086e03ef30b061))
+* repair path discovery validation and doctor diagnostics ([c505c24](https://github.com/Sandyzzx/codex-zcode-bridge/commit/c505c240f8bb21d9b7417d8c7a8c4f3323e0b633))
+* repair ZCode path discovery review findings ([c95b9c4](https://github.com/Sandyzzx/codex-zcode-bridge/commit/c95b9c42ab9a236c9e723a4e63f9dae09cf1cacb))
+
 ## [1.3.0](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.3.0-rc.4...codex-zcode-bridge-v1.3.0) (2026-11-02)
 
 
