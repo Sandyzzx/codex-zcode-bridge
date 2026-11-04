@@ -243,6 +243,14 @@ export interface TaskStatusRecord {
   execution_observation?: ExecutionObservation;
 }
 
+/** Read-only current-attempt view for hosts that only need to know whether the task needs attention. */
+export interface TaskAttentionSnapshot {
+  task_id: string;
+  attempt: number;
+  status: TaskStatus;
+  pending_requests: string[];
+}
+
 export interface ExecutionObservation {
   readonly state: "interrupted_without_result" | "worker_identity_unknown" | "worker_alive_unmanaged" | "cleanup_held";
   readonly observed_at: string;
@@ -305,6 +313,8 @@ export interface TaskProgressPage {
   scan_cursor?: string;
   /** B1 additive: bounded-scan metrics (bytes read, corrupt lines, index fallback). */
   scan_metrics?: Record<string, number | null>;
+  /** Current-Attempt attention facts, present only for wait_for: "attention". */
+  attention?: TaskAttentionSnapshot;
 }
 
 /** Compact, provenance-aware view of one Bridge task attempt. */
@@ -361,6 +371,8 @@ export interface GetEventsInput {
   scan_cursor?: string;
   /** B1 additive: byte budget for the bounded scan path (ignored without scan_cursor semantics). */
   max_bytes?: number;
+  /** Wait on authoritative current-Attempt attention instead of ordinary events. */
+  wait_for?: "attention";
 }
 
 export interface TaskManager {
@@ -375,6 +387,7 @@ export interface TaskManager {
 export interface ProgressTaskManager extends TaskManager {
   getEvents(input: GetEventsInput): Promise<TaskProgressPage>;
   getFeedback?(taskId: string): Promise<TaskFeedbackSnapshotV01>;
+  getAttention?(taskId: string): Promise<TaskAttentionSnapshot>;
   replyToInteraction(input: ZCodeInteractionReplyInput): Promise<{ task_id: string; request_id: string; state: "answered" }>;
 }
 

@@ -114,6 +114,13 @@ export interface CandidateTaskLifecycleSnapshot {
   readonly continuation: CandidateContinuationEnvelope | null;
 }
 
+export interface CandidateTaskAttentionSnapshot {
+  readonly task_id: string;
+  readonly attempt: number;
+  readonly status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'waiting_for_master';
+  readonly pending_requests: readonly string[];
+}
+
 export interface CandidateTaskFeedbackSnapshot {
   readonly schema_version: '0.1';
   readonly task_id: string;
@@ -363,6 +370,7 @@ export interface SqliteLifecyclePort {
   readTaskProjection(taskId: string): { task_id: string; status: string; current_attempt: number; created_at: string } | null;
   readAttempt(taskId: string, attempt: number): { task_id: string; attempt: number; generation: number | null; status: string; created_at: string } | null;
   readTaskLifecycle(taskId: string): CandidateTaskLifecycleSnapshot | null;
+  readTaskAttention(taskId: string): CandidateTaskAttentionSnapshot | null;
   readRecoverableQueuedAttempts(): readonly Readonly<{
     readonly task: CandidateTaskPackage;
     readonly task_id: string;

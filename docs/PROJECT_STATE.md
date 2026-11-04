@@ -1,9 +1,9 @@
 # Project State
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-02
-> Last verified: 2026-11-02，ADR-019 的本机 `yolo` SQLite 执行档案、alive/unknown Recovery Manager 所有权围栏及原 Manager interaction/cancel 可用性由受影响 112 项定向测试复验；完整发布回归与 Bundle 身份另见 rc.4 发布证据。OD Fresh Bootstrap 候选尚未执行验证。
-> Verified against: 已验收运行版本 cab82a918514c6329f4982477b7eb0e8ada6cc01；本地 OD 候选基于 ca0e19c4，未验收。
+> Last updated: 2026-11-04
+> Last verified: 2026-11-04，核对 SQLite Attention Core、统一 Events、Thin Waiter、MCP schema、插件 Bundle、Node 24.16 全量回归（823 通过、2 跳过）与 Worktree 状态；Claude Code 后台唤醒和独立代码审查未完成。
+> Verified against: 77dd5f14ee61701ac15872192429ecd4f53e1323 + 本 Worktree Attention 集成候选
 
 当前状态快照，回答"现在什么能用、什么不能用"。路线图和优先级不在这里。
 
@@ -35,6 +35,7 @@ PR #47 claimant 扫描与预算返修（本轮，2026-10-18，含 review-round-1
 - TaskManager 生命周期：`queued` / `running` / `completed` / `failed` / `cancelled` / `waiting_for_master`，含 attempt 独占、续跑归档、清理验证。
 - MCP 默认工具 13 个，清单见 `INTERFACES.md`。
 - `zcode_events` 的增量事件、cursor 与 raw/summary 视图。
+- `zcode_events(wait_for="attention")` 与只读 `dist/wait-task.mjs`（ADR-024）：SQLite 单事务读取当前 Task/Attempt/Pending，终态优先、当前 Attempt 隔离、普通事件不唤醒且不推进 cursor；JSON 内存 Authority 明确 unsupported，SQLite 缺库 fail closed。
 - `zcode_feedback` 的 `TaskFeedbackSnapshotV01`。
 - 工作区隔离：执行目录由调用宿主准备，Bridge 不创建也不删除 worktree。
 - 模型选择：可按任务覆盖 provider/model，不持久化为工作区默认。
@@ -61,6 +62,7 @@ PR #47 claimant 扫描与预算返修（本轮，2026-10-18，含 review-round-1
 - Linux x64浏览器发现与Chromium操作已在本轮rootless断网容器验证；macOS/ARM及其它浏览器安装布局仍未验证。
 
 - `session/read` 原生当前状态查询：未接入。
+- Codex 隔离 CLI Marketplace 安装及合成 SQLite MCP 查询：已完成 Attention 与默认 Events 查询；真实 ZCode Worker/provider 任务未运行。Claude Code 后台唤醒 E2E 未运行（当前环境没有 `claude` CLI）。
 - 真实 ZCode app-server RPC 探针与跨版本兼容：只在记录过的 0.16.9 路径上观测过。
 - 真实 ZCode 权限审批的其他分支：本次 Windows build 模式 allow_once 往返已实测，其他审批组合未据此认证。
 - 跨 Host 并发 attach/control：研究阶段结论为 NO-GO，除非上游提供 ownership/control 协议。

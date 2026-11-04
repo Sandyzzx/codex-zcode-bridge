@@ -15,7 +15,7 @@ The bridge supports direct project directories and an optional Git execution wor
 ## Highlights
 
 - **Task delegation:** submit, track, cancel, and continue ZCode tasks; the accompanying Master skill supports bounded single-step and whole-task delegation guidance.
-- **Live feedback:** inspect `zcode_status`, `zcode_events`, `zcode_feedback`, and `zcode_result`; reply to pending permissions or questions through the MCP interaction tools.
+- **Live feedback:** inspect `zcode_status`, `zcode_events`, `zcode_feedback`, and `zcode_result`; reply to pending permissions or questions through the MCP interaction tools. Use the optional `zcode_events(wait_for="attention")` mode, or the bundled read-only `dist/wait-task.mjs` for a background host waiter.
 - **Model selection:** discover available ZCode provider/model combinations, choose per task, or configure a default.
 - **Master token reporting:** the Master Skill can read an explicit `CODEX_THREAD_ID` from the local Codex rollout and report a bounded task-window delta when a baseline was saved before delegation. It never reads provider credentials or substitutes account quotas, session totals, or text estimates.
 - **Local concurrency:** run work from different execution directories concurrently while coordinating access to overlapping execution paths.

@@ -1097,45 +1097,85 @@ export class IsolatedAdmissionStore {
   readInteractionRequest(taskId,requestId) {
     if(!validId(taskId)||typeof requestId!=='string'||!validId(requestId)||requestId.length>512)fail('invalid_interaction_request_id');
     return this.#readConsistent(()=>{
-      const task=this.#db.prepare('SELECT current_attempt FROM tasks WHERE task_id=?').get(taskId);if(!task)fail('task_not_found');
-      const payload=this.#db.prepare('SELECT * FROM manager_interaction_payloads WHERE task_id=? AND attempt=? AND request_id=?').get(taskId,task.current_attempt,requestId);
-      if(!payload)return null;
-      const events=this.#db.prepare("SELECT sequence,event_type,evidence_json,evidence_digest FROM manager_operation_events WHERE operation_id=? AND json_extract(evidence_json,'$.request_id')=? AND event_type IN ('interaction_requested','interaction_reply_intent','interaction_reply_prepared','interaction_reply_committed','interaction_reply_accepted') ORDER BY sequence")
-        .all(payload.operation_id,requestId).map(e=>({...e,evidence:JSON.parse(e.evidence_json)}));
-      const requestEvent=events.find(e=>e.event_type==='interaction_requested');
-      const intent=events.find(e=>e.event_type==='interaction_reply_intent');
-      const prepared=events.find(e=>e.event_type==='interaction_reply_prepared');
-      const committed=events.find(e=>e.event_type==='interaction_reply_committed');
-      const accepted=events.find(e=>e.event_type==='interaction_reply_accepted');
-      if(!requestEvent||events.filter(e=>e.event_type==='interaction_requested').length!==1||events.filter(e=>e.event_type==='interaction_reply_intent').length>1
-        ||events.filter(e=>e.event_type==='interaction_reply_prepared').length>1||events.filter(e=>e.event_type==='interaction_reply_committed').length>1
-        ||events.filter(e=>e.event_type==='interaction_reply_accepted').length>1||accepted&&!committed
-        ||events.some(e=>e.evidence_digest!==digest(e.evidence_json))
-        ||requestEvent.evidence.request_digest!==payload.request_digest||requestEvent.evidence.request_method!==payload.request_method
-        ||intent&&(intent.sequence<=requestEvent.sequence||intent.evidence.reply_id!==payload.reply_id||intent.evidence.answer_digest!==payload.answer_digest)
-        ||prepared&&(!intent||prepared.sequence!==intent.sequence+1||prepared.evidence.reply_id!==payload.reply_id
-          ||prepared.evidence.answer_digest!==payload.answer_digest)
-        ||committed&&(!prepared||committed.sequence!==prepared.sequence+1||committed.evidence.reply_id!==payload.reply_id
-          ||committed.evidence.answer_digest!==payload.answer_digest||committed.evidence.prepared_digest!==prepared.evidence.prepared_digest)
-        ||accepted&&(!committed||accepted.sequence!==committed.sequence+1||accepted.evidence.reply_id!==payload.reply_id
-          ||accepted.evidence.answer_digest!==payload.answer_digest||accepted.evidence.commit_digest!==committed.evidence.commit_digest))fail('interaction_history_mismatch');
-      const request=JSON.parse(payload.request_json);
-      if(!validateInteractionRequest(request)||interactionCanonical(request)!==payload.request_json
-        ||request.request_id!==requestId||request.method!==payload.request_method
-        ||payload.request_digest!==interactionDigest({interaction_contract_version:1,operation_id:payload.operation_id,task_id:payload.task_id,
-          attempt:payload.attempt,generation:payload.generation,claim_id:payload.claim_id,worker_identity_digest:payload.worker_identity_digest,request}))
-        fail('interaction_history_mismatch');
-      if(intent){const answer=JSON.parse(payload.answer_json);
-        if(interactionCanonical(answer)!==payload.answer_json||!validPersistedInteractionAnswer(request,answer)
-          ||payload.answer_digest!==interactionDigest({interaction_reply_contract_version:1,operation_id:payload.operation_id,task_id:payload.task_id,
-            attempt:payload.attempt,generation:payload.generation,claim_id:payload.claim_id,worker_identity_digest:payload.worker_identity_digest,request_id:requestId,answer}))
-          fail('interaction_history_mismatch');}
-      return {operation_id:payload.operation_id,task_id:payload.task_id,attempt:payload.attempt,generation:payload.generation,
-        claim_id:payload.claim_id,worker_identity_digest:payload.worker_identity_digest,request,
-        request_digest:payload.request_digest,state:accepted?'answered':intent?'unknown':'pending',
-        ...(intent?{reply_id:intent.evidence.reply_id,answer_digest:intent.evidence.answer_digest}:{}),
-        ...(accepted?{answer:JSON.parse(payload.answer_json),ack_digest:accepted.evidence.ack_digest}:{})};
+      const task=this.#db.prepare('SELECT task_id,current_attempt FROM tasks WHERE task_id=?').get(taskId);if(!task)fail('task_not_found');
+      return this.#readInteractionRequestInSnapshot(task,requestId);
     });
+  }
+  /** Read current Attention facts in one SQLite snapshot without mutating state. */
+  readTaskAttention(taskId) {
+    if(!validId(taskId))fail('invalid_task_id');
+    return this.#readConsistent(()=>{
+      const task=this.#db.prepare('SELECT task_id,status,current_attempt FROM tasks WHERE task_id=?').get(taskId);
+      if(!task)return null;
+      const attempt=this.#db.prepare('SELECT attempt,generation,status FROM attempts WHERE task_id=? AND attempt=?').get(taskId,task.current_attempt);
+      if(!attempt||attempt.attempt!==task.current_attempt||attempt.status!==task.status)fail('task_attempt_projection_mismatch');
+      const pending=[];
+      if(task.status==='completed'||task.status==='failed'||task.status==='cancelled'||task.status==='waiting_for_master'){
+        return {task_id:task.task_id,attempt:task.current_attempt,status:task.status,pending_requests:[]};
+      }
+      if(task.status==='queued')return {task_id:task.task_id,attempt:task.current_attempt,status:task.status,pending_requests:[]};
+      if(task.status!=='running')fail('task_attempt_projection_mismatch');
+      const operation=this.#db.prepare("SELECT * FROM manager_operations WHERE operation_kind='attempt_lifecycle' AND task_id=? AND attempt=?").get(taskId,task.current_attempt);
+      if(!operation||attempt.status!=='running'||operation.phase!=='running'||operation.generation!==attempt.generation
+        ||operation.claim_generation!==operation.generation||!operation.claim_id||!operation.claim_worker_identity_digest)
+        fail('interaction_task_projection_mismatch');
+      // Keep orphan payloads as candidates so the strict request reader can
+      // reject corruption instead of silently returning an empty array.
+      const candidates=this.#db.prepare(`SELECT p.request_id,e.sequence
+        FROM manager_interaction_payloads p
+        LEFT JOIN manager_operation_events e ON e.operation_id=p.operation_id
+          AND e.event_type='interaction_requested'
+          AND json_extract(e.evidence_json,'$.request_id')=p.request_id
+        WHERE p.operation_id=? AND p.task_id=? AND p.attempt=?
+        ORDER BY e.sequence,p.rowid`).all(operation.operation_id,taskId,task.current_attempt);
+      for(const candidate of candidates){
+        const request=this.#readInteractionRequestInSnapshot(task,candidate.request_id);
+        if(!request)fail('interaction_history_mismatch');
+        if(request.state==='unknown')fail('interaction_reply_outcome_unknown');
+        if(request.state==='pending')pending.push(candidate.request_id);
+      }
+      return {task_id:task.task_id,attempt:task.current_attempt,status:task.status,pending_requests:pending};
+    });
+  }
+  #readInteractionRequestInSnapshot(task,requestId) {
+    const requestIdValue=String(requestId);
+    const payload=this.#db.prepare('SELECT * FROM manager_interaction_payloads WHERE task_id=? AND attempt=? AND request_id=?').get(task.task_id,task.current_attempt,requestIdValue);
+    if(!payload)return null;
+    const events=this.#db.prepare("SELECT sequence,event_type,evidence_json,evidence_digest FROM manager_operation_events WHERE operation_id=? AND json_extract(evidence_json,'$.request_id')=? AND event_type IN ('interaction_requested','interaction_reply_intent','interaction_reply_prepared','interaction_reply_committed','interaction_reply_accepted') ORDER BY sequence")
+      .all(payload.operation_id,requestIdValue).map(e=>({...e,evidence:JSON.parse(e.evidence_json)}));
+    const requestEvent=events.find(e=>e.event_type==='interaction_requested');
+    const intent=events.find(e=>e.event_type==='interaction_reply_intent');
+    const prepared=events.find(e=>e.event_type==='interaction_reply_prepared');
+    const committed=events.find(e=>e.event_type==='interaction_reply_committed');
+    const accepted=events.find(e=>e.event_type==='interaction_reply_accepted');
+    if(!requestEvent||events.filter(e=>e.event_type==='interaction_requested').length!==1||events.filter(e=>e.event_type==='interaction_reply_intent').length>1
+      ||events.filter(e=>e.event_type==='interaction_reply_prepared').length>1||events.filter(e=>e.event_type==='interaction_reply_committed').length>1
+      ||events.filter(e=>e.event_type==='interaction_reply_accepted').length>1||accepted&&!committed
+      ||events.some(e=>e.evidence_digest!==digest(e.evidence_json))
+      ||requestEvent.evidence.request_digest!==payload.request_digest||requestEvent.evidence.request_method!==payload.request_method
+      ||intent&&(intent.sequence<=requestEvent.sequence||intent.evidence.reply_id!==payload.reply_id||intent.evidence.answer_digest!==payload.answer_digest)
+      ||prepared&&(!intent||prepared.sequence!==intent.sequence+1||prepared.evidence.reply_id!==payload.reply_id
+        ||prepared.evidence.answer_digest!==payload.answer_digest)
+      ||committed&&(!prepared||committed.sequence!==prepared.sequence+1||committed.evidence.reply_id!==payload.reply_id
+        ||committed.evidence.answer_digest!==payload.answer_digest||committed.evidence.prepared_digest!==prepared.evidence.prepared_digest)
+      ||accepted&&(!committed||accepted.sequence!==committed.sequence+1||accepted.evidence.reply_id!==payload.reply_id
+        ||accepted.evidence.answer_digest!==payload.answer_digest||accepted.evidence.commit_digest!==committed.evidence.commit_digest))fail('interaction_history_mismatch');
+    const request=JSON.parse(payload.request_json);
+    if(!validateInteractionRequest(request)||interactionCanonical(request)!==payload.request_json
+      ||request.request_id!==requestIdValue||request.method!==payload.request_method
+      ||payload.request_digest!==interactionDigest({interaction_contract_version:1,operation_id:payload.operation_id,task_id:payload.task_id,
+        attempt:payload.attempt,generation:payload.generation,claim_id:payload.claim_id,worker_identity_digest:payload.worker_identity_digest,request}))
+      fail('interaction_history_mismatch');
+    if(intent){const answer=JSON.parse(payload.answer_json);
+      if(interactionCanonical(answer)!==payload.answer_json||!validPersistedInteractionAnswer(request,answer)
+        ||payload.answer_digest!==interactionDigest({interaction_reply_contract_version:1,operation_id:payload.operation_id,task_id:payload.task_id,
+          attempt:payload.attempt,generation:payload.generation,claim_id:payload.claim_id,worker_identity_digest:payload.worker_identity_digest,request_id:requestIdValue,answer}))
+        fail('interaction_history_mismatch');}
+    return {operation_id:payload.operation_id,task_id:payload.task_id,attempt:payload.attempt,generation:payload.generation,
+      claim_id:payload.claim_id,worker_identity_digest:payload.worker_identity_digest,request,
+      request_digest:payload.request_digest,state:accepted?'answered':intent?'unknown':'pending',
+      ...(intent?{reply_id:intent.evidence.reply_id,answer_digest:intent.evidence.answer_digest}:{}),
+      ...(accepted?{answer:JSON.parse(payload.answer_json),ack_digest:accepted.evidence.ack_digest}:{})};
   }
   /** Persist reply intent before any channel write. An intent without accepted ack is never replayed. */
   beginInteractionReply(input) {

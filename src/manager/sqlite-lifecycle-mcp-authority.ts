@@ -4,6 +4,7 @@ import type {
   ContinueTaskInput,
   GetEventsInput,
   ProgressTaskManager,
+  TaskAttentionSnapshot,
   TaskFeedbackSnapshotV01,
   TaskPackage,
   TaskProgressEvent,
@@ -18,6 +19,7 @@ import type {
 import type { ClaimOnlyDriverOptions, CandidateTaskPackage, ClaimOnlyRunResult } from "../store/lifecycle-gate.js";
 import { openClaimOnlyDriver } from "../store/lifecycle-gate.js";
 import { TaskManagerError } from "./errors.js";
+import { parseTaskAttentionSnapshot } from "../attention/snapshot.js";
 import { createPlatformProbe, PROCESS_IDENTITY_VERSION, type ProcessIdentity, type ProcessProbe } from "../runtime/process-probe.js";
 import { buildSqliteDoctorChecks } from "../runtime/sqlite-doctor.js";
 import type { DoctorCheck } from "../runtime/doctor.js";
@@ -157,6 +159,22 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       ...(executionObservation ? { execution_observation: executionObservation } : {}),
       ...(Number(attempt.attempt) > 0 ? {} : {}),
     };
+  }
+
+  async getAttention(taskId: string): Promise<TaskAttentionSnapshot> {
+    this.#assertOpen();
+    let value: unknown;
+    try {
+      value = this.#driver.readTaskAttention(taskId);
+    } catch (error) {
+      const code = errorCode(error);
+      throw new TaskManagerError(
+        "TASK_STATE",
+        `SQLite attention read failed${code ? `: ${code}` : ""}`,
+      );
+    }
+    if (value === null) throw new TaskManagerError("TASK_NOT_FOUND", `unknown SQLite task: ${taskId}`);
+    return parseTaskAttentionSnapshot(value, taskId);
   }
 
   async getResult(taskId: string): Promise<TaskResult> {

@@ -16,7 +16,7 @@ export class UnsupportedLifecycleOperationError extends Error {
 }
 
 const B1_METHODS = Object.freeze([
-  'createTask', 'readTask', 'readTaskProjection', 'readAttempt', 'readTaskLifecycle', 'readRecoverableQueuedAttempts', 'readTaskEvents', 'readTaskFeedback',
+  'createTask', 'readTask', 'readTaskProjection', 'readAttempt', 'readTaskLifecycle', 'readTaskAttention', 'readRecoverableQueuedAttempts', 'readTaskEvents', 'readTaskFeedback',
   'provisionCapacity', 'assertCapacityPolicy', 'admitOperation', 'readOperation',
   'createLaunchIntent', 'recordLaunchReceipt', 'commitPermanentClaim',
 ]);

@@ -31,6 +31,7 @@
 | [ADR-022](ADR-022-authority-bound-doctor.md) | 本次缺陷修复 | doctor 使用当前 SQLite Authority 的一致读与 Manager 恢复围栏；禁止回退 JSON 误报健康 |
 | [ADR-023](ADR-023-completion-window-cleanup-prewarm.md) | 本次缺陷修复 | Windows 清理 helper 在完成窗口空预热；身份绑定终止与失败闭合不变 |
 | [ADR-024](ADR-024-scoped-sqlite-hold-and-local-cleanup-recovery.md) | Accepted（候选分支） | SQLite Hold 限制到 Operation/执行路径；精确身份退出加 clean claimant scan 可走普通 evidence-only Recovery |
+| [ADR-024](ADR-024-sqlite-attention-unified-waiting.md) | Accepted — Owner directive 2026-11-04 | SQLite Attention Core、`zcode_events(wait_for="attention")` 与共享只读 Thin Waiter |
 
 ADR-001 到 ADR-003 只搬运权威文档里已经写明的结论。ADR-004 原先没有明文记录，只有 bridge 之外的设计讨论，因此先以 Proposed 记录；2026-10-07 由 Master 明确按"强化版 A"接受，原则冻结，未因此增加任何读取 ZCode 本地材料的代码。
 

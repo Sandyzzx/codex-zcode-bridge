@@ -12,6 +12,7 @@ import type {
   ContinueTaskInput,
   ProgressTaskManager,
   TaskManager,
+  TaskAttentionSnapshot,
   TaskPackage,
   TaskReceipt,
   TaskResult,
@@ -48,7 +49,7 @@ export const SERVER_NAME = "codex-zcode-bridge";
 export const SERVER_VERSION = "1.5.0"; // x-release-please-version
 
 export interface BridgeServerOptions {
-  taskManager: TaskManager & Partial<Pick<ProgressTaskManager, "getEvents" | "getFeedback" | "replyToInteraction">>;
+  taskManager: TaskManager & Partial<Pick<ProgressTaskManager, "getEvents" | "getFeedback" | "getAttention" | "replyToInteraction">>;
   doctor?: () => Promise<DoctorReport>;
   modelSettings?: Pick<ZCodeModelSettings, "listModels" | "getDefaultModel" | "setDefaultModel" | "clearDefaultModel">;
   serverInfo?: { name: string; version: string };
@@ -220,11 +221,11 @@ export function createBridgeServer(options: BridgeServerOptions): McpServer {
     "zcode_events",
     {
       title: "Read live ZCode execution events",
-      description: "Read persisted progress events for a task. Set view to summary to merge adjacent model text chunks; raw is the default. next_seq advances across all scanned events, including merged chunks. Immediately after submission, report the project path, effective execution path (and worktree path when supplied), and queued/running state from the first events. Keep polling until turn_started or startup failure; before longer monitoring, report the ZCode session, runtime-reported selected model, runtime-reported reasoning level when present, and execution mode. Set after_seq to the last next_seq returned and wait_ms up to 25000. Hidden reasoning is excluded. interaction_requested events include bounded tool/request details needed for a deliberate permission or input decision.",
+      description: "Read persisted progress events for a task. Set view to summary to merge adjacent model text chunks; raw is the default. next_seq advances across all scanned events, including merged chunks. Immediately after submission, report the project path, effective execution path (and worktree path when supplied), and queued/running state from the first events. Keep polling until turn_started or startup failure; before longer monitoring, report the ZCode session, runtime-reported selected model, runtime-reported reasoning level when present, and execution mode. Set after_seq to the last next_seq returned and wait_ms up to 25000. Set wait_for to attention to wait only for a current-Attempt pending request, a terminal status, or an Attempt change; ordinary events do not wake this mode. Hidden reasoning is excluded. interaction_requested events include bounded tool/request details needed for a deliberate permission or input decision.",
       inputSchema: zcodeEventsInputSchema,
       outputSchema: taskProgressPageSchema,
     },
-      async (args: { task_id: string; after_seq?: number; limit?: number; wait_ms?: number; view?: "raw" | "summary"; scan_cursor?: string; max_bytes?: number }) => {
+      async (args: { task_id: string; after_seq?: number; limit?: number; wait_ms?: number; view?: "raw" | "summary"; scan_cursor?: string; max_bytes?: number; wait_for?: "attention" }) => {
         if (!manager.getEvents) return errorResult("EVENTS_UNAVAILABLE", "task manager does not provide progress events");
         return runTool(() => manager.getEvents!(args));
       },
@@ -326,4 +327,4 @@ export function createBridgeServer(options: BridgeServerOptions): McpServer {
 }
 
 // Re-exported for consumers that want the receipt/result shapes.
-export type { TaskReceipt, TaskResult, TaskStatusRecord };
+export type { TaskAttentionSnapshot, TaskReceipt, TaskResult, TaskStatusRecord };

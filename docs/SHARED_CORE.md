@@ -31,7 +31,7 @@ await startBridge({
 
 Codex 默认配置目录保持 `~/.codex/codex-zcode-bridge`。运行配置仍优先于环境变量。`legacySettingsDirectories` 仅在宿主明确配置时启用；缺文件才回退，存在但损坏的文件会报错。首次写入默认模型会复制完整 legacy 设置到宿主 canonical 文件，并保留未知字段；不会修改 legacy 文件。不要默认共享两个宿主的可变任务目录。
 
-公共 MCP 工具名称、schema 和业务语义由核心维护，宿主可传服务身份与 instructions。描述与 task prompt 使用调用宿主的中性措辞。`zcode_feedback` 是向后兼容的只读 snapshot 与文本 renderer；原有 `zcode_events`、`zcode_status` 和 `zcode_result` 保持原契约。`zcode_progress_probe` 是实验工具，默认关闭；只有直接调用 `createBridgeServer({ enableExperiments: true, ... })` 才启用。
+公共 MCP 工具名称、schema 和业务语义由核心维护，宿主可传服务身份与 instructions。描述与 task prompt 使用调用宿主的中性措辞。Task Attention 不作为独立公共工具发布，而是 `zcode_events` 的 SQLite-only 可选等待模式；默认事件契约保持兼容。宿主内 MCP 调用与插件包内 `dist/wait-task.mjs` 复用同一 snapshot validator 和等待谓词。`zcode_feedback` 是向后兼容的只读 snapshot 与文本 renderer；原有 `zcode_events`、`zcode_status` 和 `zcode_result` 保持原契约。`zcode_progress_probe` 是实验工具，默认关闭；只有直接调用 `createBridgeServer({ enableExperiments: true, ... })` 才启用。
 
 fork 接入顺序：构建并锁定本项目制品 → 用宿主入口替换公共模块中的路径/身份修改 → 将共享 worker 打入宿主制品 → 验证 stdio、任务执行、续跑、审批、模型缓存和自包含安装 → 独立发布。共享修复先进入本项目，fork 通过升级核心制品接收，避免长期各自修改任务核心。本轮只改造本项目，未修改 dsh，也未创建发布。
 

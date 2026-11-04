@@ -143,6 +143,7 @@ interface ClaimOnlyPort {
   reverifyCleanup(input: CandidateCleanupFence & { readonly cleanup_evidence: Readonly<Record<string, unknown>> }): Readonly<Record<string, unknown>>;
   releaseCapacity(input: CandidateCleanupFence & { readonly cleanup_digest: string }): Readonly<Record<string, unknown>>;
   readTaskLifecycle(taskId: string): unknown;
+  readTaskAttention(taskId: string): Readonly<Record<string, unknown>> | null;
   readRecoverableQueuedAttempts(): readonly Readonly<Record<string, unknown>>[];
   readTaskEvents(taskId: string, options?: { readonly afterCursor?: number; readonly limit?: number }): LifecycleEventsPage;
   readTaskFeedback(taskId: string): unknown;
@@ -212,6 +213,7 @@ export interface LifecycleCandidateStore {
   readTask(taskId: string): Readonly<Record<string, unknown>> | null;
   readAttempt(taskId: string, attempt: number): Readonly<Record<string, unknown>> | null;
   readTaskLifecycle(taskId: string): Readonly<Record<string, unknown>> | null;
+  readTaskAttention(taskId: string): Readonly<Record<string, unknown>> | null;
   readTaskEvents(taskId: string, options?: {
     readonly afterCursor?: number;
     readonly limit?: number;
@@ -1172,6 +1174,7 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
   provisionCapacity(input: unknown): unknown;
   createTask(task: CandidateTaskPackage): unknown;
   readTaskLifecycle(taskId: string): unknown;
+  readTaskAttention(taskId: string): unknown;
   readTaskEvents(taskId: string, options?: { readonly afterCursor?: number; readonly limit?: number }): LifecycleEventsPage;
   readCommittedResult(operationId: string): CandidateCommittedResult | null;
   readTaskFeedback(taskId: string): unknown;
@@ -1677,6 +1680,7 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
     },
     createTask: (task) => port.createTask(task),
     readTaskLifecycle: (taskId) => port.readTaskLifecycle(taskId),
+    readTaskAttention: (taskId) => port.readTaskAttention(taskId),
     readTaskEvents: (taskId, options) => port.readTaskEvents(taskId, options),
     readCommittedResult: (operationId) => port.readCommittedResult(operationId),
     readTaskFeedback: (taskId) => port.readTaskFeedback(taskId),

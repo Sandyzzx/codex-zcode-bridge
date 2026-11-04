@@ -15,7 +15,7 @@ ZCode 不会自动获得 Codex 的完整对话上下文；Master 应随任务提
 ## 核心能力
 
 - **任务派发：** 创建、查看、取消、续作 ZCode 任务；Master Skill 支持单次派发与整任务派发的工作指导。
-- **事件与反馈：** 通过 `zcode_status`、`zcode_events`、`zcode_feedback`、`zcode_result` 跟踪任务，并通过 MCP 交互工具处理权限或用户提问。
+- **事件与反馈：** 通过 `zcode_status`、`zcode_events`、`zcode_feedback`、`zcode_result` 跟踪任务，并通过 MCP 交互工具处理权限或用户提问。可用 `zcode_events(wait_for="attention")` 等待权威 Attention；后台命令场景使用插件内只读 `dist/wait-task.mjs`。
 - **模型选择：** 查询 ZCode 的 provider / model，按任务指定模型或设置默认模型。
 - **Codex 主会话 Token：** Master Skill 可在显式提供 `CODEX_THREAD_ID` 时只读本机 Codex Rollout；委派前保存起点后，报告有边界的任务窗口增量。不会读取 Provider 凭据，也不会用账户额度、会话总量或文本长度估算。
 - **并行调度：** 不同执行目录可并行工作，重叠执行范围受调度协调。

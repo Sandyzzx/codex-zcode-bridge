@@ -100,7 +100,7 @@ async function withinStage(promise, stage, timeoutMs = 12_000) {
   } finally { clearTimeout(timer); }
 }
 
-function makePriorAttempt(store, taskId, workspace, resultStatus = 'completed', finishCleanup = true) {
+function makePriorAttempt(store, taskId, workspace, resultStatus = 'completed', finishCleanup = true, pendingRequestIds = []) {
   const operationId = `prior-${taskId}`;
   store.createTask(task(taskId, workspace), '2026-10-25T00:00:00.000Z');
   const admitted = store.admitOperation({ operation_id: operationId, task_id: taskId, attempt: 1, workspace_ref: workspace }, gates);
@@ -132,6 +132,7 @@ function makePriorAttempt(store, taskId, workspace, resultStatus = 'completed', 
         worker_tree_complete:true,evidence_digest:digest(evidence)}:false);
     cancelVerificationDigest=verified.cancellation_verification_digest;
   }
+  for (const requestId of pendingRequestIds) recordStoreInteraction(store, operationId, taskId, requestId);
   const result = { task_id: taskId, attempt: 1, status: resultStatus, summary: 'synthetic prior result', files_changed: [], tests: [], issues: [],
     needs_master_decision: resultStatus === 'waiting_for_master', zcode_output: '', exit_code: 0, session_id: null,
     started_at: '2026-10-25T00:00:00.000Z', finished_at: '2026-10-25T00:00:01.000Z' };
@@ -162,6 +163,55 @@ function makeCandidateStore(label, capacity = 2) {
   store.provisionCapacity({ operation_id: `policy-${label}`, capacity_limit: capacity, expected_generation: 0,
     maintenance: { dispatch_blocked: true, writers_drained: true } });
   return { r, workspace, store, port: createSqliteLifecyclePort(store) };
+}
+
+function makeRunningAttentionTask(label) {
+  const fixture = makeCandidateStore(label, 1);
+  const taskId = `attention-task-${label}`;
+  const operationId = `attention-operation-${label}`;
+  fixture.store.createTask(task(taskId, fixture.workspace));
+  const admitted = fixture.store.admitOperation({
+    operation_id: operationId,
+    task_id: taskId,
+    attempt: 1,
+    workspace_ref: fixture.workspace,
+  }, gates);
+  const launch = {
+    operation_id: operationId,
+    task_id: taskId,
+    attempt: 1,
+    generation: admitted.generation,
+    revision: admitted.revision,
+    launch_id: `attention-launch-${label}`,
+    launch_epoch: 1,
+    launch_token: `attention-launch-token-${label}-0123456789`,
+  };
+  const intent = fixture.store.createLaunchIntent(launch);
+  const receipt = fixture.store.recordLaunchReceipt({
+    ...launch,
+    revision: intent.revision,
+    receipt_id: `attention-receipt-${label}`,
+    launch_identity: {
+      source: 'synthetic_fixture',
+      fixture: true,
+      process_id: 42333,
+      start_fingerprint: `attention-start-${label}`,
+    },
+  });
+  fixture.store.commitPermanentClaim({
+    ...launch,
+    revision: receipt.revision,
+    claim_id: `attention-claim-${label}`,
+    worker_identity: {
+      source: 'synthetic_fixture',
+      fixture: true,
+      worker_id: `attention-worker-${label}`,
+      incarnation: `attention-incarnation-${label}`,
+      process_id: 42333,
+      start_fingerprint: `attention-start-${label}`,
+    },
+  });
+  return { ...fixture, taskId, operationId };
 }
 
 async function makeRunningInteraction(label, mode = 'normal') {
@@ -272,6 +322,122 @@ test('runtime Schema is self-contained and persists a Task with its initial Atte
     } finally { db.close(); }
     assert.throws(() => store.createTask(task('task-projection', workspace)), error => error.code === 'task_already_exists');
   } finally { store.close(); }
+});
+
+test('Attention query returns current-Attempt pending request IDs in event order', () => {
+  const fixture = makeRunningAttentionTask('pending-order');
+  try {
+    recordStoreInteraction(fixture.store, fixture.operationId, fixture.taskId, 'request-z');
+    recordStoreInteraction(fixture.store, fixture.operationId, fixture.taskId, 'request-a');
+    assert.deepEqual(fixture.port.readTaskAttention(fixture.taskId), {
+      task_id: fixture.taskId,
+      attempt: 1,
+      status: 'running',
+      pending_requests: ['request-z', 'request-a'],
+    });
+  } finally {
+    fixture.store.close();
+  }
+});
+
+test('Attention query reports queued and cancelled Tasks without inventing an Operation', () => {
+  const fixture = makeCandidateStore('attention-queued-cancelled');
+  const taskId = 'attention-queued-cancelled-task';
+  try {
+    fixture.port.createTask(task(taskId, fixture.workspace));
+    assert.deepEqual(fixture.port.readTaskAttention(taskId), {
+      task_id: taskId,
+      attempt: 1,
+      status: 'queued',
+      pending_requests: [],
+    });
+    fixture.port.cancelQueuedAttempt({ task_id: taskId, expected_attempt: 1 });
+    assert.deepEqual(fixture.port.readTaskAttention(taskId), {
+      task_id: taskId,
+      attempt: 1,
+      status: 'cancelled',
+      pending_requests: [],
+    });
+  } finally {
+    fixture.store.close();
+  }
+});
+
+test('Attention query gives terminal Task status precedence over historical pending payloads', () => {
+  for (const status of ['completed', 'failed', 'waiting_for_master']) {
+    const fixture = makeRunningAttentionTask(`terminal-${status}`);
+    try {
+      const requestId = `historical-request-${status}`;
+      recordStoreInteraction(fixture.store, fixture.operationId, fixture.taskId, requestId);
+      const operation = fixture.store.readOperation(fixture.operationId);
+      const result = {
+        task_id: fixture.taskId,
+        attempt: 1,
+        status,
+        summary: 'synthetic terminal result',
+        files_changed: [],
+        tests: [],
+        issues: [],
+        needs_master_decision: status === 'waiting_for_master',
+        zcode_output: '',
+        exit_code: status === 'completed' ? 0 : 1,
+        session_id: null,
+        started_at: '2026-10-25T00:00:00.000Z',
+        finished_at: '2026-10-25T00:00:01.000Z',
+      };
+      fixture.store.commitResult({
+        operation_id: fixture.operationId,
+        task_id: fixture.taskId,
+        attempt: 1,
+        generation: operation.generation,
+        revision: operation.revision,
+        claim_id: operation.claim_id,
+        claim_worker_identity_digest: operation.claim_worker_identity_digest,
+        result_status: status,
+        result,
+      });
+      assert.deepEqual(fixture.port.readTaskAttention(fixture.taskId), {
+        task_id: fixture.taskId,
+        attempt: 1,
+        status,
+        pending_requests: [],
+      });
+      assert.equal(fixture.store.readInteractionRequest(fixture.taskId, requestId).state, 'pending');
+    } finally {
+      fixture.store.close();
+    }
+  }
+});
+
+test('Attention query switches to the new Attempt and ignores prior-Attempt requests', () => {
+  const fixture = makeCandidateStore('attention-continued');
+  try {
+    const prior = makePriorAttempt(
+      fixture.store,
+      'attention-continued-task',
+      fixture.workspace,
+      'completed',
+      true,
+      ['prior-attempt-request'],
+    );
+    assert.deepEqual(fixture.port.readTaskAttention(prior.task_id), {
+      task_id: prior.task_id,
+      attempt: 1,
+      status: 'completed',
+      pending_requests: [],
+    });
+    assert.equal(fixture.store.readInteractionRequest(prior.task_id, 'prior-attempt-request').state, 'pending');
+    fixture.port.createNextAttempt(continueInput(prior, 'attention-continue-key'), gates);
+    assert.deepEqual(fixture.port.readTaskAttention(prior.task_id), {
+      task_id: prior.task_id,
+      attempt: 2,
+      status: 'queued',
+      pending_requests: [],
+    });
+    assert.equal(fixture.store.readInteractionRequest(prior.task_id, 'prior-attempt-request'), null);
+  } finally {
+    fixture.store.close();
+  }
 });
 
 test('Queued Cancel persists a Task-scoped result and cursor without inventing an Operation', () => {
@@ -499,11 +665,23 @@ test('Candidate Worker interaction persists intent and commit before answer deli
       .catch(error => { throw new Error(`interaction request failed; pid=${fixture.child.pid}; stderr=${fixture.workerStderr()}`, { cause: error }); });
     assert.equal(request.duplicate, false);
     assert.equal(fixture.store.readInteractionRequest(fixture.taskId, 'request-two-phase').state, 'pending');
+    assert.deepEqual(fixture.store.readTaskAttention(fixture.taskId), {
+      task_id: fixture.taskId,
+      attempt: 1,
+      status: 'running',
+      pending_requests: ['request-two-phase'],
+    });
     const outcome = await withinStage(fixture.port.replyToInteractionRequest({ task_id: fixture.taskId, request_id: 'request-two-phase',
       decision: 'accept', answers: { 'Continue?': 'yes' } }, fixture.channel), 'reply to interaction request', 30_000)
       .catch(error => { throw new Error(`interaction reply failed; pid=${fixture.child.pid}; exit=${fixture.child.exitCode}; stderr=${fixture.workerStderr()}`, { cause: error }); });
     assert.equal(outcome.state, 'answered');
     assert.equal(outcome.duplicate, false);
+    assert.deepEqual(fixture.store.readTaskAttention(fixture.taskId), {
+      task_id: fixture.taskId,
+      attempt: 1,
+      status: 'running',
+      pending_requests: [],
+    });
     fixture.child.stdio[8]?.end();
     fixture.child.stdio[7]?.destroy();
     fixture.child.stdio[9]?.destroy();
@@ -548,6 +726,10 @@ test('Candidate Worker interaction remains latched after a lost commit ACK and n
     assert.deepEqual(before.map(event => event.event_type), [
       'interaction_requested', 'interaction_reply_intent', 'interaction_reply_prepared', 'interaction_reply_committed',
     ]);
+    assert.throws(
+      () => fixture.store.readTaskAttention(fixture.taskId),
+      error => error.code === 'interaction_reply_outcome_unknown',
+    );
     fixture.store.close();
     const reopened = IsolatedAdmissionStore.open(fixture.r);
     const port = createSqliteLifecyclePort(reopened);
