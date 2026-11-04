@@ -620,11 +620,12 @@ export class IsolatedAdmissionStore {
     if(!existsSync(p.db))fail('database_missing');
     const db=new DatabaseSync(p.db,{timeout:5000,readOnly:true});
     try {
+      db.exec('PRAGMA foreign_keys=ON');
+      db.exec('PRAGMA query_only=ON');
       if(db.prepare('PRAGMA user_version').get().user_version!==SCHEMA_VERSION)fail('schema_version_unknown');
       const columns=new Set(db.prepare('PRAGMA table_info(manager_operations)').all().map(x=>x.name));
       if(!['result_status','result_generation','result_digest','result_json','result_commit_ref'].every(x=>columns.has(x)))fail('candidate_schema_mismatch');
       if(!db.prepare("SELECT 1 FROM pragma_table_info('manager_operation_events') WHERE name='event_cursor'").get())fail('candidate_schema_mismatch');
-      db.exec('PRAGMA foreign_keys=ON');
       assertCutoverPublicationGate(db,p);
       return new IsolatedAdmissionStore(CONSTRUCT,db,p,undefined,true);
     } catch(e) { db.close(); if(e instanceof AdmissionError)throw e; fail('database_unreadable',String(e)); }
@@ -633,6 +634,7 @@ export class IsolatedAdmissionStore {
   checkpoint(){this.#assertOpen();this.#db.exec('PRAGMA wal_checkpoint(TRUNCATE)');}
   get poisoned(){return this.#poisoned||existsSync(this.#paths.poison);}
   get foreignKeysEnabled(){this.#assertOpen();return this.#db.prepare('PRAGMA foreign_keys').get().foreign_keys===1;}
+  get queryOnlyEnabled(){this.#assertOpen();return this.#db.prepare('PRAGMA query_only').get().query_only===1;}
   #adminAbandonments(){
     const table=this.#db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='manager_admin_abandonments'").get();
     if(!table)return new Map();

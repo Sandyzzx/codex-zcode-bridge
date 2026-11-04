@@ -5878,11 +5878,12 @@ var init_store = __esm({
         if (!existsSync12(p.db)) fail("database_missing");
         const db = new DatabaseSync(p.db, { timeout: 5e3, readOnly: true });
         try {
+          db.exec("PRAGMA foreign_keys=ON");
+          db.exec("PRAGMA query_only=ON");
           if (db.prepare("PRAGMA user_version").get().user_version !== SCHEMA_VERSION) fail("schema_version_unknown");
           const columns = new Set(db.prepare("PRAGMA table_info(manager_operations)").all().map((x) => x.name));
           if (!["result_status", "result_generation", "result_digest", "result_json", "result_commit_ref"].every((x) => columns.has(x))) fail("candidate_schema_mismatch");
           if (!db.prepare("SELECT 1 FROM pragma_table_info('manager_operation_events') WHERE name='event_cursor'").get()) fail("candidate_schema_mismatch");
-          db.exec("PRAGMA foreign_keys=ON");
           assertCutoverPublicationGate(db, p);
           return new _IsolatedAdmissionStore(CONSTRUCT, db, p, void 0, true);
         } catch (e) {
@@ -5907,6 +5908,10 @@ var init_store = __esm({
       get foreignKeysEnabled() {
         this.#assertOpen();
         return this.#db.prepare("PRAGMA foreign_keys").get().foreign_keys === 1;
+      }
+      get queryOnlyEnabled() {
+        this.#assertOpen();
+        return this.#db.prepare("PRAGMA query_only").get().query_only === 1;
       }
       #adminAbandonments() {
         const table = this.#db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='manager_admin_abandonments'").get();
@@ -11719,6 +11724,9 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
           value = this.#driver.readTaskAttention(taskId);
         } catch (error2) {
           const code = errorCode2(error2);
+          if (code === "interaction_reply_outcome_unknown") {
+            throw new TaskManagerError(code, code);
+          }
           throw new TaskManagerError(
             "TASK_STATE",
             `SQLite attention read failed${code ? `: ${code}` : ""}`
@@ -35400,7 +35408,16 @@ var BridgeTaskManager = class _BridgeTaskManager {
     }
   }
   async #waitForAttention(input) {
-    this.#validateEventsInput(input);
+    const cursor = this.#validateEventsInput(input);
+    if (input.scan_cursor !== void 0 && this.#lifecycleAuthority) {
+      const sqliteCursor = cursor?.cursor;
+      if (!Number.isSafeInteger(sqliteCursor) || Number(sqliteCursor) < 0) {
+        throw new TaskManagerError("TASK_INVALID", "scan_cursor is not a valid cursor for this SQLite task");
+      }
+      if (input.after_seq !== void 0 && input.after_seq !== sqliteCursor) {
+        throw new TaskManagerError("TASK_INVALID", "after_seq conflicts with scan_cursor");
+      }
+    }
     const waitMs = input.wait_ms ?? 0;
     await waitForAttentionSnapshot({ read: () => this.getAttention(input.task_id), timeoutMs: waitMs });
     const page = await this.getEvents({ ...input, wait_for: void 0, wait_ms: 0 });
@@ -38323,7 +38340,9 @@ function prepareFreshSqliteStateDirectory(selection, env) {
 function sqliteInstallationRoot(env) {
   const modulePath = fileURLToPath3(import.meta.url);
   const dist = path16.dirname(modulePath);
-  if (env["ZCODE_BRIDGE_PLUGIN_MODE"] === "1" && path16.basename(modulePath) === "bridge.mjs" && path16.basename(dist) === "dist") {
+  const entry = path16.basename(modulePath);
+  const pluginEntry = entry === "wait-task.mjs" || entry === "bridge.mjs" && env["ZCODE_BRIDGE_PLUGIN_MODE"] === "1";
+  if (pluginEntry && path16.basename(dist) === "dist") {
     const pluginRoot = path16.dirname(dist);
     if (!existsSync11(path16.join(pluginRoot, ".codex-plugin", "plugin.json")) || !existsSync11(path16.join(pluginRoot, "launch-node24.mjs"))) {
       throw new SqliteInstallConfigurationError("sqlite_plugin_layout_invalid");

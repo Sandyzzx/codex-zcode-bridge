@@ -168,6 +168,9 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       value = this.#driver.readTaskAttention(taskId);
     } catch (error) {
       const code = errorCode(error);
+      if (code === "interaction_reply_outcome_unknown") {
+        throw new TaskManagerError(code, code);
+      }
       throw new TaskManagerError(
         "TASK_STATE",
         `SQLite attention read failed${code ? `: ${code}` : ""}`,

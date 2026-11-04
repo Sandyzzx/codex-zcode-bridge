@@ -1050,6 +1050,7 @@ test('Spoofed sqlite_sequence rows fail closed in writable and read-only validat
   finally { db.close(); }
   assert.throws(() => IsolatedAdmissionStore.open(r), error => error.code === 'event_cursor_invalid');
   const recovery = IsolatedAdmissionStore.openForRecovery(r);
+  assert.equal(recovery.queryOnlyEnabled, true);
   try {
     const snapshot = recovery.readRecoverySnapshot();
     assert.equal(snapshot.root_status, 'quarantined_read_only');

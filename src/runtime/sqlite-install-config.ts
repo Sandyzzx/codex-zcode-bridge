@@ -58,12 +58,15 @@ export function prepareFreshSqliteStateDirectory(
 }
 
 // A marketplace plugin ships plugin manifests rather than a package.json.
-// Only the actual bundled bridge in its expected layout may use that root;
-// source/core entry points retain their existing package-root resolution.
+// Its bundled Bridge and Thin Waiter may use that root; source/core entry
+// points retain their existing package-root resolution.
 function sqliteInstallationRoot(env: NodeJS.ProcessEnv): string {
   const modulePath = fileURLToPath(import.meta.url);
   const dist = path.dirname(modulePath);
-  if (env["ZCODE_BRIDGE_PLUGIN_MODE"] === "1" && path.basename(modulePath) === "bridge.mjs" && path.basename(dist) === "dist") {
+  const entry = path.basename(modulePath);
+  const pluginEntry = entry === "wait-task.mjs"
+    || (entry === "bridge.mjs" && env["ZCODE_BRIDGE_PLUGIN_MODE"] === "1");
+  if (pluginEntry && path.basename(dist) === "dist") {
     const pluginRoot = path.dirname(dist);
     if (!existsSync(path.join(pluginRoot, ".codex-plugin", "plugin.json")) || !existsSync(path.join(pluginRoot, "launch-node24.mjs"))) {
       throw new SqliteInstallConfigurationError("sqlite_plugin_layout_invalid");

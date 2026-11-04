@@ -1023,11 +1023,12 @@ var init_store = __esm({
         if (!existsSync(p.db)) fail("database_missing");
         const db = new DatabaseSync(p.db, { timeout: 5e3, readOnly: true });
         try {
+          db.exec("PRAGMA foreign_keys=ON");
+          db.exec("PRAGMA query_only=ON");
           if (db.prepare("PRAGMA user_version").get().user_version !== SCHEMA_VERSION) fail("schema_version_unknown");
           const columns = new Set(db.prepare("PRAGMA table_info(manager_operations)").all().map((x) => x.name));
           if (!["result_status", "result_generation", "result_digest", "result_json", "result_commit_ref"].every((x) => columns.has(x))) fail("candidate_schema_mismatch");
           if (!db.prepare("SELECT 1 FROM pragma_table_info('manager_operation_events') WHERE name='event_cursor'").get()) fail("candidate_schema_mismatch");
-          db.exec("PRAGMA foreign_keys=ON");
           assertCutoverPublicationGate(db, p);
           return new _IsolatedAdmissionStore(CONSTRUCT, db, p, void 0, true);
         } catch (e) {
@@ -1052,6 +1053,10 @@ var init_store = __esm({
       get foreignKeysEnabled() {
         this.#assertOpen();
         return this.#db.prepare("PRAGMA foreign_keys").get().foreign_keys === 1;
+      }
+      get queryOnlyEnabled() {
+        this.#assertOpen();
+        return this.#db.prepare("PRAGMA query_only").get().query_only === 1;
       }
       #adminAbandonments() {
         const table = this.#db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='manager_admin_abandonments'").get();
@@ -4259,7 +4264,9 @@ function loadInstallAuthoritySelection(host) {
 function sqliteInstallationRoot(env) {
   const modulePath = fileURLToPath3(import.meta.url);
   const dist = path5.dirname(modulePath);
-  if (env["ZCODE_BRIDGE_PLUGIN_MODE"] === "1" && path5.basename(modulePath) === "bridge.mjs" && path5.basename(dist) === "dist") {
+  const entry = path5.basename(modulePath);
+  const pluginEntry = entry === "wait-task.mjs" || entry === "bridge.mjs" && env["ZCODE_BRIDGE_PLUGIN_MODE"] === "1";
+  if (pluginEntry && path5.basename(dist) === "dist") {
     const pluginRoot = path5.dirname(dist);
     if (!existsSync3(path5.join(pluginRoot, ".codex-plugin", "plugin.json")) || !existsSync3(path5.join(pluginRoot, "launch-node24.mjs"))) {
       throw new SqliteInstallConfigurationError("sqlite_plugin_layout_invalid");

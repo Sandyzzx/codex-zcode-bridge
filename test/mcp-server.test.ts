@@ -229,8 +229,8 @@ test("zcode_events maps the optional attention wait and returns the nested snaps
 test("zcode_events attention mode propagates uncertain reply state, never an empty success", async () => {
   await withServer(async (client, manager) => {
     manager.error = new TaskManagerError(
-      "TASK_STATE",
-      "SQLite attention read failed: interaction_reply_outcome_unknown",
+      "interaction_reply_outcome_unknown",
+      "interaction_reply_outcome_unknown",
     );
     const result = (await client.callTool({
       name: "zcode_events",
@@ -238,7 +238,7 @@ test("zcode_events attention mode propagates uncertain reply state, never an emp
     })) as CallToolResult;
     assert.equal(result.isError, true);
     const structured = result.structuredContent as { error: { code: string; message: string } };
-    assert.equal(structured.error.code, "TASK_STATE");
+    assert.equal(structured.error.code, "interaction_reply_outcome_unknown");
     assert.match(structured.error.message, /interaction_reply_outcome_unknown/u);
   });
 });

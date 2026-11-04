@@ -101,31 +101,38 @@ test("attention read failures are not converted into empty success", async () =>
   authority.getAttention = async (taskId: string): Promise<TaskAttentionSnapshot> => {
     authority.attentionReads.push(taskId);
     if (authority.attentionReads.length === 1) return running();
-    throw new TaskManagerError("TASK_STATE", "SQLite attention read failed: interaction_reply_outcome_unknown");
+    throw new TaskManagerError("interaction_reply_outcome_unknown", "interaction_reply_outcome_unknown");
   };
   const manager = managerFor(authority);
   await assert.rejects(
     manager.getEvents({ task_id: "task_1", wait_ms: 350, wait_for: "attention" }),
     (error: unknown) => error instanceof TaskManagerError
-      && error.code === "TASK_STATE"
+      && error.code === "interaction_reply_outcome_unknown"
       && /interaction_reply_outcome_unknown/u.test(error.message),
   );
   assert.equal(authority.eventReads.length, 0, "the event cursor must not be read or advanced after an Attention failure");
 });
 
 test("attention validates cursor inputs before entering the wait loop", async () => {
-  const authority = new FakeAttentionAuthority([running()]);
-  const manager = managerFor(authority);
-  const started = Date.now();
-  await assert.rejects(
-    manager.getEvents({ task_id: "task_1", wait_ms: 25_000, wait_for: "attention", scan_cursor: "not-a-cursor" }),
-    (error: unknown) => error instanceof TaskManagerError
-      && error.code === "TASK_INVALID"
-      && /scan_cursor/u.test(error.message),
-  );
-  assert.ok(Date.now() - started < 1_000, "invalid input must fail without waiting for attention");
-  assert.equal(authority.attentionReads.length, 0);
-  assert.equal(authority.eventReads.length, 0);
+  const cases = [
+    { scan_cursor: "not-a-cursor" },
+    { scan_cursor: Buffer.from(JSON.stringify({ v: 1, task_id: "task_1" })).toString("base64url") },
+    { after_seq: 7, scan_cursor: Buffer.from(JSON.stringify({ v: 1, task_id: "task_1", cursor: 6 })).toString("base64url") },
+  ];
+  for (const input of cases) {
+    const authority = new FakeAttentionAuthority([running()]);
+    const manager = managerFor(authority);
+    const started = Date.now();
+    await assert.rejects(
+      manager.getEvents({ task_id: "task_1", wait_ms: 25_000, wait_for: "attention", ...input }),
+      (error: unknown) => error instanceof TaskManagerError
+        && error.code === "TASK_INVALID"
+        && /scan_cursor|after_seq/u.test(error.message),
+    );
+    assert.ok(Date.now() - started < 1_000, "invalid input must fail without waiting for attention");
+    assert.equal(authority.attentionReads.length, 0);
+    assert.equal(authority.eventReads.length, 0);
+  }
 });
 
 test("JSON Authority explicitly rejects attention waiting", async () => {

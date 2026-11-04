@@ -947,7 +947,16 @@ export class BridgeTaskManager implements ProgressTaskManager {
   }
 
   async #waitForAttention(input: GetEventsInput): Promise<TaskProgressPage> {
-    this.#validateEventsInput(input);
+    const cursor = this.#validateEventsInput(input);
+    if (input.scan_cursor !== undefined && this.#lifecycleAuthority) {
+      const sqliteCursor = (cursor as unknown as { cursor?: unknown } | null)?.cursor;
+      if (!Number.isSafeInteger(sqliteCursor) || Number(sqliteCursor) < 0) {
+        throw new TaskManagerError("TASK_INVALID", "scan_cursor is not a valid cursor for this SQLite task");
+      }
+      if (input.after_seq !== undefined && input.after_seq !== sqliteCursor) {
+        throw new TaskManagerError("TASK_INVALID", "after_seq conflicts with scan_cursor");
+      }
+    }
     const waitMs = input.wait_ms ?? 0;
     await waitForAttentionSnapshot({ read: () => this.getAttention(input.task_id), timeoutMs: waitMs });
     const page = await this.getEvents({ ...input, wait_for: undefined, wait_ms: 0 });

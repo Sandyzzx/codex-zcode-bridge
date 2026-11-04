@@ -356,7 +356,7 @@ test("documented installed-plugin layout starts without a development package.js
   mkdirSync(fixtureRootPath, { recursive: true });
   const root = mkdtempSync(path.join(fixtureRootPath, "bridge-installed-waiter-"));
   const module = await storeModule();
-  const pluginRoot = path.join(root, "plugin");
+  const pluginRoot = path.join(root, "a", "b", "c", "d", "e", "f", "g", "plugin");
   const settings = path.join(root, "home", ".codex", "codex-zcode-bridge");
   const appRoot = mkdtempSync(path.join(systemTempRoot(), "bridge-waiter-app-"));
   const stateRoot = path.join(appRoot, "state");
