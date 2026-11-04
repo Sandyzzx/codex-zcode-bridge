@@ -14,12 +14,15 @@ import {
 import { TaskManagerError } from "../src/manager/errors.js";
 import type {
   ContinueTaskInput,
+  ProgressTaskManager,
+  TaskAttentionSnapshot,
   TaskManager,
   TaskPackage,
   TaskReceipt,
   TaskResult,
   TaskStatusRecord,
   TaskFeedbackSnapshotV01,
+  TaskProgressPage,
   ZCodeInteractionReplyInput,
 } from "../src/interfaces.js";
 import { SESSION_ID, makeTask } from "./helpers.js";
@@ -68,7 +71,20 @@ class FakeTaskManager implements TaskManager {
     interaction: { state: "not_observed", kind: null },
     result: null,
   };
+  attention: TaskAttentionSnapshot = {
+    task_id: "task_1",
+    attempt: 1,
+    status: "running",
+    pending_requests: ["permission-1"],
+  };
   error: TaskManagerError | null = null;
+  events: TaskProgressPage = {
+    task_id: "task_1",
+    status: "running",
+    events: [],
+    next_seq: 0,
+    has_more: false,
+  };
 
   async createTask(task: TaskPackage): Promise<TaskReceipt> {
     this.calls.push({ method: "createTask", args: task });
@@ -92,6 +108,18 @@ class FakeTaskManager implements TaskManager {
     this.calls.push({ method: "getFeedback", args: taskId });
     if (this.error) throw this.error;
     return { ...this.feedback, task_id: taskId };
+  }
+
+  async getAttention(taskId: string): Promise<TaskAttentionSnapshot> {
+    this.calls.push({ method: "getAttention", args: taskId });
+    if (this.error) throw this.error;
+    return { ...this.attention, task_id: taskId };
+  }
+
+  async getEvents(input: Parameters<NonNullable<ProgressTaskManager["getEvents"]>>[0]): Promise<TaskProgressPage> {
+    this.calls.push({ method: "getEvents", args: input });
+    if (this.error) throw this.error;
+    return { ...this.events, task_id: input.task_id };
   }
 
   async continueTask(input: ContinueTaskInput): Promise<TaskReceipt> {
@@ -173,6 +201,57 @@ test("zcode_doctor returns read-only setup diagnostics", async () => {
     assert.equal(result.isError, undefined);
     assert.deepEqual(result.structuredContent, report);
   }, async () => report);
+});
+
+test("zcode_events maps the optional attention wait and returns the nested snapshot", async () => {
+  await withServer(async (client, manager) => {
+    manager.events = {
+      ...manager.events,
+      attention: manager.attention,
+    };
+    const result = (await client.callTool({
+      name: "zcode_events",
+      arguments: { task_id: "task_1", after_seq: 7, wait_ms: 250, wait_for: "attention" },
+    })) as CallToolResult;
+    assert.equal(result.isError, undefined);
+    const structured = result.structuredContent as { attention?: TaskAttentionSnapshot };
+    assert.deepEqual(structured.attention, manager.attention);
+    assert.equal(manager.calls[0]?.method, "getEvents");
+    assert.deepEqual(manager.calls[0]?.args, {
+      task_id: "task_1",
+      after_seq: 7,
+      wait_ms: 250,
+      wait_for: "attention",
+    });
+  });
+});
+
+test("zcode_events attention mode propagates uncertain reply state, never an empty success", async () => {
+  await withServer(async (client, manager) => {
+    manager.error = new TaskManagerError(
+      "interaction_reply_outcome_unknown",
+      "interaction_reply_outcome_unknown",
+    );
+    const result = (await client.callTool({
+      name: "zcode_events",
+      arguments: { task_id: "task_1", wait_for: "attention" },
+    })) as CallToolResult;
+    assert.equal(result.isError, true);
+    const structured = result.structuredContent as { error: { code: string; message: string } };
+    assert.equal(structured.error.code, "interaction_reply_outcome_unknown");
+    assert.match(structured.error.message, /interaction_reply_outcome_unknown/u);
+  });
+});
+
+test("zcode_events rejects an unknown wait_for value before the manager runs", async () => {
+  await withServer(async (client, manager) => {
+    const result = (await client.callTool({
+      name: "zcode_events",
+      arguments: { task_id: "task_1", wait_for: "terminal" },
+    })) as CallToolResult;
+    assert.equal(result.isError, true);
+    assert.equal(manager.calls.length, 0);
+  });
 });
 
 test("zcode_interaction_reply forwards a bounded explicit decision", async () => {

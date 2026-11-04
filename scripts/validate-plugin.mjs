@@ -43,6 +43,7 @@ for (const [label, mcp] of [["mcp.json", portableMcp], [".mcp.json", codexMcp]])
 for (const relativePath of [
   "launch-node24.mjs",
   "dist/bridge.mjs",
+  "dist/wait-task.mjs",
   "dist/schema.sql",
   "dist/admin-abandonment.sql",
   "worker/worker-main.mjs",
@@ -65,6 +66,17 @@ const packagedAdminSchema = await readFile(path.join(pluginRoot, "dist", "admin-
 const sourceAdminSchema = await readFile(path.join(root, "src", "sqlite-candidate", "wp6b2b1", "admin-abandonment.sql"));
 if (!packagedAdminSchema.equals(sourceAdminSchema)) throw new Error("bundled administrative SQLite schema does not match source");
 
+const pluginNotice = await readFile(path.join(pluginRoot, "NOTICE"), "utf8");
+if (!pluginNotice.includes("PR #49 of")
+  || !pluginNotice.includes("13ab83626a7fa7f35319a21244215c2915ecb112")
+  || !pluginNotice.includes("Bill <chen.pengyu1@student.zy.cdut.edu.cn>")) {
+  throw new Error("plugin NOTICE must preserve the PR #49 waiter attribution");
+}
+const waiterBundle = await readFile(path.join(pluginRoot, "dist", "wait-task.mjs"), "utf8");
+if (!waiterBundle.includes("PR #49 of codex-zcode-bridge") || !waiterBundle.includes("13ab83626a7fa7f35319a21244215c2915ecb112")) {
+  throw new Error("bundled wait-task.mjs must retain the PR #49 attribution banner");
+}
+
 // The installed plugin must load without the development checkout: bundles
 // must not embed the repository's absolute path, and the ESM bundles must not
 // statically import playwright-core — the pinned runtime ships only inside
@@ -72,13 +84,13 @@ if (!packagedAdminSchema.equals(sourceAdminSchema)) throw new Error("bundled adm
 // its own directory (module-label comments inside the bundle legitimately
 // mention the packaging path and are not an external dependency).
 const repoRootPattern = buildRepoRootLeakPattern(root);
-for (const relativePath of ["dist/bridge.mjs", "worker/worker-main.mjs", "worker/vendor/pkg/browser-host.cjs", "skills/zcode-bridge/scripts/codex-master-token-usage.mjs"]) {
+for (const relativePath of ["dist/bridge.mjs", "dist/wait-task.mjs", "worker/worker-main.mjs", "worker/vendor/pkg/browser-host.cjs", "skills/zcode-bridge/scripts/codex-master-token-usage.mjs"]) {
   const bundle = await readFile(path.join(pluginRoot, relativePath), "utf8");
   if (repoRootPattern.test(bundle)) {
     throw new Error(`${relativePath} embeds the development repository's absolute path`);
   }
 }
-for (const relativePath of ["dist/bridge.mjs", "worker/worker-main.mjs"]) {
+for (const relativePath of ["dist/bridge.mjs", "dist/wait-task.mjs", "worker/worker-main.mjs"]) {
   const bundle = await readFile(path.join(pluginRoot, relativePath), "utf8");
   if (/(?:from|import)\s*["']playwright-core["']/u.test(bundle)) {
     throw new Error(`${relativePath} statically imports playwright-core; the browser backend must load through the vendored bundle`);

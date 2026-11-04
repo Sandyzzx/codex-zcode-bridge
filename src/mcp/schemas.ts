@@ -58,6 +58,7 @@ export const zcodeEventsInputSchema = z.strictObject({
   view: z.enum(["raw", "summary"]).optional(),
   scan_cursor: z.string().max(2_048).optional(),
   max_bytes: z.number().int().min(1_024).max(33_554_432).optional(),
+  wait_for: z.literal("attention").optional(),
 });
 
 export const zcodeInteractionReplyInputSchema = z.strictObject({
@@ -145,6 +146,20 @@ export const taskStatusRecordSchema = z.object({
   error: z.string().optional(),
   observation: taskObservationSchema.optional(),
   execution_observation: executionObservationSchema.optional(),
+});
+
+export const taskAttentionSnapshotSchema = z.strictObject({
+  task_id: z.string(),
+  attempt: z.number().int().positive(),
+  status: z.enum([
+    "queued",
+    "running",
+    "completed",
+    "failed",
+    "cancelled",
+    "waiting_for_master",
+  ]),
+  pending_requests: z.array(z.string().min(1).max(512)),
 });
 
 const normalizedUsageSchema = z.object({
@@ -238,6 +253,7 @@ export const taskProgressPageSchema = z.object({
     first_corrupt_offset: z.number().int().nullable(),
     index_fallback: z.number().int(),
   }).optional(),
+  attention: taskAttentionSnapshotSchema.optional(),
 });
 
 export const taskFeedbackSnapshotV01Schema = z.strictObject({

@@ -45,6 +45,19 @@ test("approval, quota-stop and independent acceptance survive progressive disclo
   assert.match(reference("runtime-boundaries.md"), /不是.*凭证|不是.*鉴权/);
 });
 
+test("Master proactively reports known cleanup Holds and gates Recovery on authorization", () => {
+  const recovery = reference("review-and-recovery.md");
+  assert.match(skill, /已知或当前跟踪的 Task[\s\S]*failed[\s\S]*cleanup_unverified[\s\S]*向用户报告/);
+  assert.match(skill, /MCP 没有 Task 枚举工具[\s\S]*不能主动发现未知 Task/);
+  assert.match(skill, /`zcode_status` 也不返回 workspace/);
+  assert.match(skill, /缺失时明确说未知/);
+  assert.match(skill, /先向用户请求明确授权[\s\S]*授权前不得调用/);
+  assert.match(skill, /获准后只调用现有 `zcode_cancel`[\s\S]*再用 `zcode_status` 检查结果/);
+  assert.match(recovery, /failed \+ cleanup_unverified/);
+  assert.match(recovery, /明确授权/);
+  assert.match(recovery, /成功后先检查 workspace Git diff\/WIP[\s\S]*再决定是否发起新 Attempt/);
+});
+
 test("Skill does not claim SQLite or unmerged release-intent behavior is deployed", () => {
   assert.doesNotMatch(skill, /SQLite 协作合同允许/);
   assert.match(reference("runtime-boundaries.md"), /当前主线不提供release-intent/);

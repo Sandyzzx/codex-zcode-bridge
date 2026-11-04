@@ -11,7 +11,8 @@ export type TaskManagerErrorCode =
   | "REQUEST_QUEUE_TIMEOUT"
   | "TASK_INVALID"
   | "TASK_STATE"
-  | "CANCEL_FAILED";
+  | "CANCEL_FAILED"
+  | "interaction_reply_outcome_unknown";
 
 export class TaskManagerError extends Error {
   readonly code: TaskManagerErrorCode;

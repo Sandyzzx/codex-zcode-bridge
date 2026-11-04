@@ -1,7 +1,7 @@
 # 文档索引 / Documentation
 
 > Status: AUTHORITATIVE（仅指本索引）
-> Last updated: 2026-11-03
+> Last updated: 2026-11-04
 
 英文使用者从 [README.md](../README.md) 开始。技术文档为中文。本文是文档路由：先看状态等级，再按读者路径选文档。
 
@@ -76,6 +76,7 @@ English readers start at [README.md](../README.md). This index is bilingual; the
 | [ADR-017](decisions/ADR-017-single-user-trusted-local-workspace-admission.md) | 2026-11-01 | DECISION：单用户可信本地 Workspace Admission 边界 |
 | [ADR-018](decisions/ADR-018-administrative-abandonment-of-cleanup-incomplete-hold.md) | 2026-11-01 | DECISION：证据绑定的一次性 `admin_abandoned` Hold 恢复 |
 | [ADR-019](decisions/ADR-019-local-trust-and-recovery-fence.md) | 2026-11-02 | DECISION：单用户本机 `yolo` 执行档案与 Recovery Manager 所有权围栏 |
+| [ADR-024](decisions/ADR-024-scoped-sqlite-hold-and-local-cleanup-recovery.md) | 2026-11-04 | 候选分支决策：SQLite Hold 限制到 Operation/执行路径；本机 evidence-only Recovery |
 | [decisions/roadmap-decisions-2026-09-27.md](decisions/roadmap-decisions-2026-09-27.md) | 2026-09-27 | 路线图与决策讨论 |
 | [decisions/reliability-repair-plan-v2-2026-10-03.md](decisions/reliability-repair-plan-v2-2026-10-03.md) | 2026-10-03 | 可靠性修复计划，含未完成项 |
 
@@ -108,6 +109,7 @@ English readers start at [README.md](../README.md). This index is bilingual; the
 | [reports/2026-10-08-long-session-reliability.md](reports/2026-10-08-long-session-reliability.md) | 长会话故障证据、本地修复、验证与未运行边界 |
 | [reports/2026-10-17-filesystem-root-guards.md](reports/2026-10-17-filesystem-root-guards.md) | Windows 锁时序重试、teardown 容错与文件系统根守卫的证据、修复与边界 |
 | [reports/2026-10-18-pr47-claimant-repair.md](reports/2026-10-18-pr47-claimant-repair.md) | PR #47 claimant 扫描 P1 返修、逐边持有证明、hold 校验与预算语义的证据与边界 |
+| [reports/sqlite-hold-simplification-2026-11-04.md](reports/sqlite-hold-simplification-2026-11-04.md) | JSON/SQLite 生命周期差异、Operation scoped Recovery、Provider retry 候选与本轮验收边界 |
 
 ### 自动生成 Generated
 

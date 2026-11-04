@@ -28,9 +28,22 @@ const shared = {
   packages: "bundle",
   logLevel: "info",
 };
+const waiterAttribution = [
+  "// Thin host waiter adapted from PR #49 of codex-zcode-bridge",
+  "// (head 13ab83626a7fa7f35319a21244215c2915ecb112), contributed by Bill",
+  "// <chen.pengyu1@student.zy.cdut.edu.cn>, licensed under Apache-2.0.",
+  "// The task-state observation is replaced by the shared SQLite Attention Core.",
+].join("\n");
 
 await Promise.all([
   build({ ...shared, format: "esm", entryPoints: [path.join(repoRoot, "src", "mcp", "main.ts")], outfile: path.join(distDir, "bridge.mjs") }),
+  build({
+    ...shared,
+    format: "esm",
+    banner: { js: waiterAttribution },
+    entryPoints: [path.join(repoRoot, "src", "cli", "wait-task.ts")],
+    outfile: path.join(distDir, "wait-task.mjs"),
+  }),
   build({ ...shared, format: "esm", entryPoints: [path.join(repoRoot, "src", "worker", "worker-main.ts")], outfile: path.join(workerDir, "worker-main.mjs") }),
   build({ ...shared, format: "esm", entryPoints: [path.join(repoRoot, "src", "observability", "codex-master-token-cli.ts")], outfile: path.join(skillScriptsDir, "codex-master-token-usage.mjs") }),
 ]);

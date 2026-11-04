@@ -298,6 +298,7 @@ test("the real validator rejects injected development-path references and keeps 
     writeFileSync(path.join(pluginRoot, "mcp.json"), JSON.stringify(mcp));
     writeFileSync(path.join(pluginRoot, ".mcp.json"), JSON.stringify(mcp));
     writeFileSync(path.join(pluginRoot, "launch-node24.mjs"), "");
+    writeFileSync(path.join(pluginRoot, "NOTICE"), "PR #49 of codex-zcode-bridge 13ab83626a7fa7f35319a21244215c2915ecb112 Bill <chen.pengyu1@student.zy.cdut.edu.cn>\n");
     writeFileSync(path.join(pluginRoot, "worker", "vendor", "package.json"), JSON.stringify({ name: "playwright-core" }));
     writeFileSync(path.join(pluginRoot, "worker", "vendor", "browsers.json"), JSON.stringify({ browsers: [{ name: "chromium" }] }));
     const schema = "SELECT 1;\n";
@@ -326,6 +327,8 @@ test("the real validator rejects injected development-path references and keeps 
       "// vendor loader keeps worker/vendor/pkg/browser-host.cjs self-contained",
     ].join("\n");
     const bundlePath = path.join(pluginRoot, "dist", "bridge.mjs");
+    const waiterPath = path.join(pluginRoot, "dist", "wait-task.mjs");
+    writeFileSync(waiterPath, "// PR #49 of codex-zcode-bridge 13ab83626a7fa7f35319a21244215c2915ecb112\n");
     writeFileSync(path.join(pluginRoot, "worker", "worker-main.mjs"), `${baseline}\n`, "utf8");
     writeFileSync(path.join(pluginRoot, "worker", "vendor", "pkg", "browser-host.cjs"), `${baseline}\n`, "utf8");
 

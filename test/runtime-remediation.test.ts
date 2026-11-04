@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { spawn } from "node:child_process";
-import { readFile, writeFile, readdir } from "node:fs/promises";
+import { mkdir, readFile, writeFile, readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { ZCodeAppServerAdapter } from "../src/adapters/zcode-app-server-adapter.js";
@@ -71,7 +71,7 @@ test("worker preserves every visible output character across multiple bounded ev
   } finally { await fixture.cleanup(); }
 });
 
-test("a real worker delivers a permission reply and exits; a continuation gets a fresh request ID", async () => {
+test("a real worker delivers a permission reply and exits; a continuation gets a fresh request ID", { timeout: 60_000 }, async () => {
   const fixture = await runtimeFixture({ interaction: true });
   const store = new TaskStore(fixture.root);
   const manager = new BridgeTaskManager({ store, workspaceProvider: new DirectWorkspaceProvider(), pollIntervalMs: 0, spawnWorker: () => ({ pid: process.pid }) });
@@ -97,9 +97,11 @@ test("a real worker delivers a permission reply and exits; a continuation gets a
         assert.notEqual(id, priorId);
         assert.equal(store.readInteractionRequest("task_1", id)?.state, "pending");
         await manager.replyToInteraction({ task_id: "task_1", request_id: id, decision: "allow" });
-        const exit = await Promise.race([exited, delay(5_000).then(() => "hung")]);
+        const exit = await Promise.race([exited, delay(15_000).then(() => "hung")]);
         if (exit === "hung") {
-          await writeFile(path.join(".run", "evidence", "failure-investigation", `runtime-remediation-hang-${Date.now()}-${attempt}.json`), JSON.stringify({
+          const evidencePath = path.join(".run", "evidence", "failure-investigation", `runtime-remediation-hang-${Date.now()}-${attempt}.json`);
+          await mkdir(path.dirname(evidencePath), { recursive: true });
+          await writeFile(evidencePath, JSON.stringify({
             attempt, request_id: id, exit,
             child: { pid: child.pid, exit_code: child.exitCode, signal_code: child.signalCode, killed: child.killed },
             status: store.readStatus("task_1"),

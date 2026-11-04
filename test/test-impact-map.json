@@ -282,6 +282,7 @@
     { "file": "test/sqlite-candidate/wp6b-wiring/admission-to-claim.test.ts", "type": "Integration", "gate": "T2", "domains": ["sqlite-persistence", "manager-lifecycle", "mcp-host"] },
     { "file": "test/sqlite-candidate/wp6b-wiring/bootstrap.test.ts", "type": "Integration", "gate": "T2", "domains": ["sqlite-persistence", "worker-launch"] },
     { "file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts", "type": "Integration", "gate": "T2", "domains": ["sqlite-persistence", "manager-lifecycle", "mcp-host", "json-task-store"] },
+    { "file": "test/sqlite-scoped-hold-scheduler.test.ts", "type": "Integration", "gate": "T2", "domains": ["sqlite-persistence", "manager-lifecycle"] },
     { "file": "test/sqlite-doctor.test.ts", "type": "Integration", "gate": "T2", "domains": ["sqlite-persistence", "manager-lifecycle", "mcp-host"] },
     { "file": "test/sqlite-candidate/wp6b-wiring/json-authority-cutover.test.ts", "type": "Integration", "gate": "T2", "domains": ["sqlite-persistence", "json-task-store", "manager-lifecycle"] },
     { "file": "test/sqlite-candidate/wp6b-wiring/lifecycle-gate.test.ts", "type": "Unit", "gate": "T1", "domains": ["sqlite-persistence"] },

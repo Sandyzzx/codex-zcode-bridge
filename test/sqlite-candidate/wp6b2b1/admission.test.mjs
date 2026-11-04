@@ -118,8 +118,8 @@ test('two real child processes race for capacity one; capacity and Attempt uniqu
   const {r,s}=setup('race',1,[['race-a',1,101],['race-b',1,102]]);s.close();const ws=workspace('race-shared');
   const args=[['race-a','1','101'],['race-b','1','102']];const results=await Promise.all(args.map(a=>child([r,...a,ws])));
   assert.equal(results.filter(x=>x.out.ok).length,1,JSON.stringify(results));
-  const loser=results.findIndex(x=>!x.out.ok);assert.ok(['capacity_exhausted','root_writer_busy'].includes(results[loser].out.code),JSON.stringify(results));
-  let retry=null;if(results[loser].out.code==='root_writer_busy'){retry=await child([r,...args[loser],ws]);assert.equal(retry.out.code,'capacity_exhausted',JSON.stringify(retry));}
+  const loser=results.findIndex(x=>!x.out.ok);assert.ok(['capacity_exhausted','workspace_already_occupied','root_writer_busy'].includes(results[loser].out.code),JSON.stringify(results));
+  let retry=null;if(results[loser].out.code==='root_writer_busy'){retry=await child([r,...args[loser],ws]);assert.ok(['capacity_exhausted','workspace_already_occupied'].includes(retry.out.code),JSON.stringify(retry));}
   writeFileSync(path.join(r,'process-race-evidence.json'),JSON.stringify({children:results.map((x,i)=>({args:args[i],exit:x.code,result:x.out})),retry:retry&&{exit:retry.code,result:retry.out},workspace:ws},null,2));
   const verify=IsolatedAdmissionStore.open(r);const snap=verify.readSnapshot();assert.equal(snap.operations.filter(x=>x.operation_kind==='attempt_lifecycle').length,1);assert.equal(snap.events.filter(x=>x.event_type==='reserved').length,1);verify.close();
 });
@@ -139,19 +139,18 @@ test('same Attempt uniqueness, duplicate request idempotency, and operation ID d
   s.close();
 });
 
-test('different Attempts can use identical, parent/child, or identity-unknown Workspace references',()=>{
+test('active Admission reserves an overlapping Workspace until its Operation releases',()=>{
   const {s}=setup('shared-workspace',3);const parent=workspace('parent');const childPath=path.join(parent,'child');mkdirSync(childPath,{recursive:true});
   const a=admit(s,input('t1',1,11,'shared-a',parent),options);
-  const b=admit(s,input('t2',1,21,'shared-b',parent),options);
-  const c=admit(s,input('t3',1,31,'shared-c',childPath),options);
-  assert.deepEqual([a.phase,b.phase,c.phase],['reserved','reserved','reserved']);
-  assert.equal(s.readSnapshot().operations.filter(x=>x.operation_kind==='attempt_lifecycle').length,3);s.close();
+  capture(()=>admit(s,input('t2',1,21,'shared-b',parent),options),'workspace_already_occupied');
+  capture(()=>admit(s,input('t3',1,31,'shared-c',childPath),options),'workspace_already_occupied');
+  assert.equal(s.readSnapshot().operations.filter(x=>x.operation_kind==='attempt_lifecycle').length,1);
+  assert.equal(s.readOperation(a.operation_id).phase,'reserved');s.close();
 });
 
 test('Generation is transactionally allocated, idempotent, distinct from Attempt, and durable after reopen',async()=>{
   const rows=[['gen-a',7,null],['gen-b',7,null],['gen-c',1,null]];const {r,s}=setup('generation-authority',3,rows);s.close();
-  const ws=workspace('generation-shared');
-  const payloads=rows.slice(0,2).map(([task,attempt])=>({operation_id:`allocated-${task}`,task_id:task,attempt,workspace_ref:ws}));
+  const payloads=rows.slice(0,2).map(([task,attempt])=>({operation_id:`allocated-${task}`,task_id:task,attempt,workspace_ref:workspace(`generation-${task}`)}));
   const results=await Promise.all(payloads.map(async p=>{
     for(let retry=0;retry<6;retry++){
       const result=await lifecycleChild('admit',r,p);
@@ -171,7 +170,7 @@ test('Generation is transactionally allocated, idempotent, distinct from Attempt
   const db=new DatabaseSync(path.join(r,'operations.sqlite3'));
   try{assert.equal(db.prepare('SELECT next_generation FROM authority_metadata').get().next_generation,Math.max(...generations));}
   finally{db.close();}
-  reopened=IsolatedAdmissionStore.open(r);const next={operation_id:'allocated-gen-c',task_id:'gen-c',attempt:1,workspace_ref:ws};
+  reopened=IsolatedAdmissionStore.open(r);const next={operation_id:'allocated-gen-c',task_id:'gen-c',attempt:1,workspace_ref:workspace('generation-third')};
   const third=admit(reopened,next,options);assert.ok(third.generation>Math.max(...generations));reopened.close();
 });
 
@@ -511,11 +510,16 @@ test('two child processes compete for one permanent Claim; same identity retry s
   const verify=IsolatedAdmissionStore.open(r);assert.equal(verify.readOperation(a.operation_id).phase,'running');verify.close();
 });
 
-test('same Workspace permits distinct Attempts to hold independent Launch and Claim facts',()=>{
-  const {r,s}=setup('shared-workspace-launch',2);const ws=workspace('same-workspace-launch');
-  const a=admit(s,input('t1',1,11,'shared-launch-a',ws),options),b=admit(s,input('t2',1,21,'shared-launch-b',ws),options);
-  for(const aop of [a,b]){const intent=launchInput(s,aop.operation_id);s.createLaunchIntent(intent);s.recordLaunchReceipt(receiptInput(intent));s.commitPermanentClaim(claimInput(intent,3,`worker-${aop.operation_id}`));}
-  assert.equal(s.readSnapshot().operations.filter(o=>o.phase==='running').length,2);s.close();
+test('separate Managers racing the same Workspace can admit only one Operation',async()=>{
+  const {r,s}=setup('shared-workspace-launch',2,[['race-workspace-a',1,11],['race-workspace-b',1,21]]);s.close();const ws=workspace('same-workspace-launch');
+  const requests=[
+    {operation_id:'shared-launch-a',task_id:'race-workspace-a',attempt:1,generation:11,workspace_ref:ws},
+    {operation_id:'shared-launch-b',task_id:'race-workspace-b',attempt:1,generation:21,workspace_ref:ws},
+  ];
+  const results=await Promise.all(requests.map(request=>lifecycleChild('admit',r,request)));
+  assert.equal(results.filter(result=>result.out.ok).length,1,JSON.stringify(results));
+  assert.equal(results.filter(result=>result.out.code==='workspace_already_occupied'||result.out.code==='root_writer_busy').length,1,JSON.stringify(results));
+  const verify=IsolatedAdmissionStore.open(r);assert.equal(verify.readSnapshot().operations.filter(o=>o.operation_kind==='attempt_lifecycle').length,1);verify.close();
 });
 
 test('known rollback keeps Intent, Receipt, Claim, Task status, and event projection unchanged',()=>{

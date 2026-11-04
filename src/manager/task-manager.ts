@@ -11,6 +11,7 @@ import type {
   ContinueTaskInput,
   GetEventsInput,
   ProgressTaskManager,
+  TaskAttentionSnapshot,
   TaskObservation,
   TaskPackage,
   TaskProgressPage,
@@ -43,6 +44,7 @@ import { DiagnosticCounters, sanitizeDiagnostics, boundedErrorMessage } from "..
 import type { ExecutorState } from "../observation/types.js";
 import { buildTaskFeedbackSnapshotV01 } from "../feedback/task-feedback.js";
 import { assertJsonAdmissionOpen, beginJsonWriterDrainUnderManagerLock, bindPendingWorkerJsonWriter, jsonWriterFenceState, registerPendingWorkerJsonWriter, removePendingWorkerJsonWriterSync, releaseManagerJsonWriter } from "../store/json-writer-quiescence.js";
+import { waitForAttentionSnapshot } from "../attention/wait.js";
 
 export interface TaskManagerOptions {
   /** JSON authority. Mutually exclusive with lifecycleAuthority. */
@@ -849,6 +851,16 @@ export class BridgeTaskManager implements ProgressTaskManager {
     return { ...toPublicStatus(status), ...(observation ? { observation } : {}) };
   }
 
+  async getAttention(taskId: string): Promise<TaskAttentionSnapshot> {
+    if (!this.#lifecycleAuthority) {
+      throw new TaskManagerError("TASK_STATE", "attention waiting is unsupported for the JSON Authority");
+    }
+    if (!this.#lifecycleAuthority.getAttention) {
+      throw new TaskManagerError("TASK_STATE", "lifecycle authority does not provide attention snapshots");
+    }
+    return this.#lifecycleAuthority.getAttention(taskId);
+  }
+
   /** Observation built by the shared judger; a corrupt/failed build degrades
    * to a minimal unknown observation instead of failing the status read.
    * Fresh persisted probe verdicts from the recovery scan are included. */
@@ -878,6 +890,11 @@ export class BridgeTaskManager implements ProgressTaskManager {
   }
 
   async getEvents(input: GetEventsInput): Promise<TaskProgressPage> {
+    if (input.wait_for !== undefined && input.wait_for !== "attention") {
+      throw new TaskManagerError("TASK_INVALID", "wait_for must be attention when provided");
+    }
+    if (input.wait_for === "attention") return this.#waitForAttention(input);
+    const startCursor = this.#validateEventsInput(input);
     if (this.#lifecycleAuthority) {
       if (!this.#lifecycleAuthority.getEvents) throw new TaskManagerError("TASK_STATE", "lifecycle authority does not provide events");
       return this.#lifecycleAuthority.getEvents(input);
@@ -885,34 +902,6 @@ export class BridgeTaskManager implements ProgressTaskManager {
     const afterSeq = input.after_seq ?? 0;
     const limit = input.limit ?? 100;
     const waitMs = input.wait_ms ?? 0;
-    if (!Number.isInteger(afterSeq) || afterSeq < 0) {
-      throw new TaskManagerError("TASK_INVALID", "after_seq must be a non-negative integer");
-    }
-    if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
-      throw new TaskManagerError("TASK_INVALID", "limit must be an integer from 1 to 200");
-    }
-    if (!Number.isInteger(waitMs) || waitMs < 0 || waitMs > 25_000) {
-      throw new TaskManagerError("TASK_INVALID", "wait_ms must be an integer from 0 to 25000");
-    }
-    if (input.view !== undefined && input.view !== "raw" && input.view !== "summary") {
-      throw new TaskManagerError("TASK_INVALID", "view must be raw or summary");
-    }
-    if (input.max_bytes !== undefined && (!Number.isInteger(input.max_bytes) || input.max_bytes < 1024 || input.max_bytes > 32 * 1024 * 1024)) {
-      throw new TaskManagerError("TASK_INVALID", "max_bytes must be an integer from 1024 to 33554432");
-    }
-    let startCursor: EventsScanCursor | null = null;
-    if (input.scan_cursor !== undefined) {
-      if (typeof input.scan_cursor !== "string" || input.scan_cursor.length > 2_048) {
-        throw new TaskManagerError("TASK_INVALID", "scan_cursor must be an opaque cursor string returned by a previous page");
-      }
-      try {
-        const decoded = JSON.parse(Buffer.from(input.scan_cursor, "base64url").toString("utf8")) as EventsScanCursor;
-        if (decoded?.v !== 1 || decoded.task_id !== input.task_id) throw new Error("cursor does not belong to this task");
-        startCursor = decoded;
-      } catch {
-        throw new TaskManagerError("TASK_INVALID", "scan_cursor is not a valid cursor for this task; restart the scan with after_seq");
-      }
-    }
     const deadline = Date.now() + waitMs;
     const readPage = (): TaskProgressPage & { cursor_invalid?: boolean } => {
       this.#requireTask(input.task_id);
@@ -954,6 +943,56 @@ export class BridgeTaskManager implements ProgressTaskManager {
       }
       if (page.events.length || isTerminalStatus(page.status) || Date.now() >= deadline) return page;
       await sleep(Math.min(250, Math.max(1, deadline - Date.now())));
+    }
+  }
+
+  async #waitForAttention(input: GetEventsInput): Promise<TaskProgressPage> {
+    const cursor = this.#validateEventsInput(input);
+    if (input.scan_cursor !== undefined && this.#lifecycleAuthority) {
+      const sqliteCursor = (cursor as unknown as { cursor?: unknown } | null)?.cursor;
+      if (!Number.isSafeInteger(sqliteCursor) || Number(sqliteCursor) < 0) {
+        throw new TaskManagerError("TASK_INVALID", "scan_cursor is not a valid cursor for this SQLite task");
+      }
+      if (input.after_seq !== undefined && input.after_seq !== sqliteCursor) {
+        throw new TaskManagerError("TASK_INVALID", "after_seq conflicts with scan_cursor");
+      }
+    }
+    const waitMs = input.wait_ms ?? 0;
+    await waitForAttentionSnapshot({ read: () => this.getAttention(input.task_id), timeoutMs: waitMs });
+    const page = await this.getEvents({ ...input, wait_for: undefined, wait_ms: 0 });
+    const finalAttention = await this.getAttention(input.task_id);
+    return { ...page, status: finalAttention.status, attention: finalAttention };
+  }
+
+  #validateEventsInput(input: GetEventsInput): EventsScanCursor | null {
+    const afterSeq = input.after_seq ?? 0;
+    const limit = input.limit ?? 100;
+    const waitMs = input.wait_ms ?? 0;
+    if (!Number.isInteger(afterSeq) || afterSeq < 0) {
+      throw new TaskManagerError("TASK_INVALID", "after_seq must be a non-negative integer");
+    }
+    if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
+      throw new TaskManagerError("TASK_INVALID", "limit must be an integer from 1 to 200");
+    }
+    if (!Number.isInteger(waitMs) || waitMs < 0 || waitMs > 25_000) {
+      throw new TaskManagerError("TASK_INVALID", "wait_ms must be an integer from 0 to 25000");
+    }
+    if (input.view !== undefined && input.view !== "raw" && input.view !== "summary") {
+      throw new TaskManagerError("TASK_INVALID", "view must be raw or summary");
+    }
+    if (input.max_bytes !== undefined && (!Number.isInteger(input.max_bytes) || input.max_bytes < 1024 || input.max_bytes > 32 * 1024 * 1024)) {
+      throw new TaskManagerError("TASK_INVALID", "max_bytes must be an integer from 1024 to 33554432");
+    }
+    if (input.scan_cursor === undefined) return null;
+    if (typeof input.scan_cursor !== "string" || input.scan_cursor.length > 2_048) {
+      throw new TaskManagerError("TASK_INVALID", "scan_cursor must be an opaque cursor string returned by a previous page");
+    }
+    try {
+      const decoded = JSON.parse(Buffer.from(input.scan_cursor, "base64url").toString("utf8")) as EventsScanCursor;
+      if (decoded?.v !== 1 || decoded.task_id !== input.task_id) throw new Error("cursor does not belong to this task");
+      return decoded;
+    } catch {
+      throw new TaskManagerError("TASK_INVALID", "scan_cursor is not a valid cursor for this task; restart the scan with after_seq");
     }
   }
 
