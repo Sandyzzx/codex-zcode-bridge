@@ -1,7 +1,7 @@
 # 决策记录 / Decisions
 
 > Status: AUTHORITATIVE（仅指本索引）
-> Last updated: 2026-11-01
+> Last updated: 2026-11-04
 
 本目录保存已批准的架构决策和带日期的决策记录。决策回答"为什么这样定"，当前实现仍以 `ARCHITECTURE.md` / `INTERFACES.md` 为准。
 
@@ -26,10 +26,11 @@
 | [ADR-016](ADR-016-stop-the-world-json-to-sqlite-cutover.md) | Accepted v3 | SQLite 唯一 Authority；新装与升级统一 Fresh Bootstrap，旧 JSON 完全脱钩，损坏 SQLite fail closed |
 | [ADR-017](ADR-017-single-user-trusted-local-workspace-admission.md) | Accepted v2 | SQLite Workspace Admission 复用 JSON 的本地目录与可选执行 worktree 流程；Host capability 保留，无需项目白名单或 `workspace_roots` |
 | [ADR-018](ADR-018-administrative-abandonment-of-cleanup-incomplete-hold.md) | Accepted | 对已确认执行世代结束的 `cleanup_incomplete` Hold 执行一次性、证据绑定且不可重入的行政结案 |
-| [ADR-019](ADR-019-local-trust-and-recovery-fence.md) | Accepted | 单用户本机 SQLite 使用与 JSON 一致的 `yolo` 普通工具流程；运行中 Worker 的临时探针不确定性只隔离当前 Manager，不写全局 Recovery Hold |
+| [ADR-019](ADR-019-local-trust-and-recovery-fence.md) | Accepted，Recovery 条款由 ADR-024 取代 | 保留本地信任与授权边界；Operation Recovery/派发围栏以 ADR-024 为准 |
 | [ADR-021](ADR-021-zcode-path-discovery.md) | Accepted（待 Master 审查） | 统一 ZCode 路径发现：Windows HOME 判定、`setting.json` dataBaseDir、同安装校验、显式冲突报错与 Worker 环境一致性 |
 | [ADR-022](ADR-022-authority-bound-doctor.md) | 本次缺陷修复 | doctor 使用当前 SQLite Authority 的一致读与 Manager 恢复围栏；禁止回退 JSON 误报健康 |
 | [ADR-023](ADR-023-completion-window-cleanup-prewarm.md) | 本次缺陷修复 | Windows 清理 helper 在完成窗口空预热；身份绑定终止与失败闭合不变 |
+| [ADR-024](ADR-024-scoped-sqlite-hold-and-local-cleanup-recovery.md) | Accepted（候选分支） | SQLite Hold 限制到 Operation/执行路径；精确身份退出加 clean claimant scan 可走普通 evidence-only Recovery |
 
 ADR-001 到 ADR-003 只搬运权威文档里已经写明的结论。ADR-004 原先没有明文记录，只有 bridge 之外的设计讨论，因此先以 Proposed 记录；2026-10-07 由 Master 明确按"强化版 A"接受，原则冻结，未因此增加任何读取 ZCode 本地材料的代码。
 

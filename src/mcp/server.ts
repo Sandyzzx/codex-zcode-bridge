@@ -268,8 +268,8 @@ export function createBridgeServer(options: BridgeServerOptions): McpServer {
   server.registerTool(
     "zcode_cancel",
     {
-      title: "Cancel a queued or running ZCode task",
-      description: `Cancel a queued or running task. Running cancellation returns only after the worker process tree termination is confirmed. ${EXECUTION_NOT_VERDICT}`,
+      title: "Cancel or recover a ZCode task",
+      description: `Cancel a queued or running task, or recover a failed SQLite task whose cleanup is unverified. Held-operation recovery may terminate the original Worker by its recorded process identity; callers must obtain explicit user authorization first. Recovery does not replay the task or create an Attempt and returns only the Task status record. ${EXECUTION_NOT_VERDICT}`,
       inputSchema: taskIdOnlyInputSchema,
       outputSchema: taskStatusRecordSchema,
     },

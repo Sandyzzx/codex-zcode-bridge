@@ -114,6 +114,8 @@ type FactsCandidate =
   | { kind: "protocol" };
 
 const FACTS_CANDIDATE: unique symbol = Symbol("zcodeFailureFactsCandidate");
+const PROVIDER_RETRY_LIMIT = 2;
+const MAX_PROVIDER_RETRY_AFTER_MS = 60_000;
 
 interface MarkedError extends Error {
   [FACTS_CANDIDATE]?: FactsCandidate;
@@ -164,6 +166,9 @@ interface RunEntry {
   acceptingTurn: boolean;
   turnId: string | null;
   awaitingTurnStart: boolean;
+  prompt: string | null;
+  providerSendNumber: number;
+  providerRetryTimer: NodeJS.Timeout | null;
   // ADR-007 browser host state: bound once the session exists, closed with
   // the attempt in every terminal path; a failed browser teardown keeps the
   // final outcome unverified instead of being swallowed by app-server cleanup.
@@ -264,6 +269,8 @@ export interface ZCodeAppServerAdapterOptions {
    * on real runtimes — no unverified protocol parameter is added).
    */
   nativeSendCorrelationVerified?: boolean;
+  /** Provider-level retries are safe only before the model turn starts. */
+  providerRetryLimit?: number;
   /**
    * Test/diagnostic observation of the locally generated send boundary. The
    * correlation ID is never sent to the runtime in P0; fixtures use this hook
@@ -306,6 +313,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
   readonly #replayIdleMs: number;
   readonly #onFailureFacts: ZCodeAppServerAdapterOptions["onFailureFacts"];
   readonly #nativeSendCorrelationVerified: boolean;
+  readonly #providerRetryLimit: number;
   readonly #onSendBoundary: ZCodeAppServerAdapterOptions["onSendBoundary"];
   readonly #browser: AdapterBrowserOptions | undefined;
   readonly #probe: ProcessProbe;
@@ -333,6 +341,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     this.#replayIdleMs = options.replayIdleMs ?? 10_000;
     this.#onFailureFacts = options.onFailureFacts;
     this.#nativeSendCorrelationVerified = options.nativeSendCorrelationVerified === true;
+    this.#providerRetryLimit = options.providerRetryLimit ?? PROVIDER_RETRY_LIMIT;
     this.#onSendBoundary = options.onSendBoundary;
     this.#browser = options.browser;
   }
@@ -453,6 +462,9 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       acceptingTurn: false,
       turnId: null,
       awaitingTurnStart: false,
+      prompt: null,
+      providerSendNumber: 0,
+      providerRetryTimer: null,
       rpcAcceptedAt: null,
       turnStartedAt: null,
       turnCompletedAt: null,
@@ -748,6 +760,8 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         afterSeq: runtimeSeq,
       });
       entry.acceptingTurn = true;
+      entry.prompt = prompt;
+      entry.providerSendNumber = 1;
       await client.request("session/send", { sessionId, content: prompt });
       entry.rpcAcceptedAt = this.#now().toISOString();
       entry.onEvent({ type: "turn_started", summary: "ZCode accepted the task and started a turn", details: { rpc_accepted: true, ...(entry.turnId ? { turn_id: entry.turnId } : {}) } });
@@ -802,6 +816,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         clearInterval(replayTimer);
         if (entry.bindingTimer) { clearTimeout(entry.bindingTimer); entry.bindingTimer = null; }
         if (entry.pendingTimer) { clearTimeout(entry.pendingTimer); entry.pendingTimer = null; }
+        if (entry.providerRetryTimer) { clearTimeout(entry.providerRetryTimer); entry.providerRetryTimer = null; }
       }
       entry.turnCompletedAt = turnResult.completedAt;
       const desktopStatus: DesktopTaskStatus = turnResult.resultType === "cancelled"
@@ -1626,6 +1641,12 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
           ...extraction,
         };
         const quotaExhausted = classification.category === "quota_exhausted";
+        const retryDelayMs = quotaExhausted ? null
+          : this.#preTurnProviderRetryDelayMs(entry, asRecord(payload.error), extraction, classification.category);
+        if (retryDelayMs !== null) {
+          this.#schedulePreTurnProviderRetry(entry, retryDelayMs);
+          return;
+        }
         const failure = quotaExhausted
           ? new BridgeError(
               "zcode_usage_exhausted",
@@ -1911,6 +1932,92 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     void event;
   }
 
+  #preTurnProviderRetryDelayMs(
+    entry: RunEntry,
+    error: JsonRecord,
+    extraction: ReturnType<typeof extractTurnFailureEvidence>,
+    category: string,
+  ): number | null {
+    if (entry.providerSendNumber > this.#providerRetryLimit || entry.turnStartedAt || entry.turnId
+      || entry.turnBinding !== "pending"
+      || !entry.prompt || entry.cancelRequested || entry.timedOut) return null;
+    // session/send already crossed the runtime boundary for every turn.failed
+    // event. Until the runtime provides verified Provider non-acceptance
+    // evidence, acceptedEvidence is unknown/yes and a retry could duplicate work.
+    if (entry.acceptedEvidence !== "no") return null;
+    if (extraction.retryableBooleans.includes(false)) return null;
+    const explicitRateLimitRejection = category === "rate_limited" && extraction.httpStatus === 429;
+    if (!explicitRateLimitRejection) return null;
+    const attribution = asRecord(error.attribution);
+    const retryAfterMs = typeof error.retryAfterMs === "number" && Number.isFinite(error.retryAfterMs)
+      ? error.retryAfterMs
+      : typeof attribution.retryAfterMs === "number" && Number.isFinite(attribution.retryAfterMs)
+        ? attribution.retryAfterMs
+        : retryAfterMilliseconds(error.retryAfter ?? attribution.retryAfter);
+    if (retryAfterMs !== null && (retryAfterMs < 0 || retryAfterMs > MAX_PROVIDER_RETRY_AFTER_MS)) return null;
+    return retryAfterMs ?? 1_000;
+  }
+
+  #schedulePreTurnProviderRetry(entry: RunEntry, delayMs: number): void {
+    const attemptNumber = entry.providerSendNumber + 1;
+    entry.providerSendNumber = attemptNumber;
+    entry.acceptingTurn = false;
+    if (entry.bindingTimer) { clearTimeout(entry.bindingTimer); entry.bindingTimer = null; }
+    this.#publishSessionEvent("provider_retry_scheduled", {
+      attempt: attemptNumber,
+      delay_ms: delayMs,
+      scope: "pre_turn",
+    }, entry, {});
+    entry.providerRetryTimer = setTimeout(() => {
+      entry.providerRetryTimer = null;
+      void this.#retryPreTurnProviderSend(entry, attemptNumber);
+    }, delayMs);
+    entry.providerRetryTimer.unref();
+  }
+
+  async #retryPreTurnProviderSend(entry: RunEntry, attemptNumber: number): Promise<void> {
+    if (entry.finished || entry.cancelRequested || entry.timedOut || !entry.client || !entry.sessionId || !entry.prompt) return;
+    entry.acceptingTurn = true;
+    // Match the initial send's binding rule before session/send can emit an
+    // immediate terminal event. A zero-baseline runtime uses compatibility;
+    // a runtime with prior events must bind a fresh turn.started first.
+    entry.awaitingTurnStart = entry.sendSeqBaseline !== null;
+    entry.turnBinding = "pending";
+    entry.turnId = null;
+    try {
+      await entry.client.request("session/send", { sessionId: entry.sessionId, content: entry.prompt });
+      entry.rpcAcceptedAt = this.#now().toISOString();
+      entry.acceptingTurn = true;
+      entry.turnBinding = "pending";
+      entry.turnId = null;
+      this.#publishSessionEvent("provider_retry_send_accepted", {
+        attempt: attemptNumber,
+        scope: "pre_turn",
+      }, entry, {});
+      entry.bindingTimer = setTimeout(() => {
+        if (!entry.awaitingTurnStart) return;
+        entry.awaitingTurnStart = false;
+        entry.turnBinding = "compat";
+        entry.onEvent({
+          type: "turn_binding_compat",
+          summary: "turn.started did not arrive after the provider retry; binding degraded to the documented compatibility mode",
+        });
+        this.#settlePendingCompletion(entry);
+      }, Math.max(this.#turnBindingCompatMs, 5_000));
+      entry.bindingTimer.unref();
+    } catch (error) {
+      entry.acceptingTurn = false;
+      entry.rejectTurn(withFactsCandidate(error instanceof Error ? error : new Error("ZCode provider retry failed"), {
+        kind: "turn",
+        input: {
+          source: "turn_event",
+          phase: "turn_terminal",
+          accepted: entry.acceptedEvidence,
+        },
+      }));
+    }
+  }
+
   #modelProfile(entry: RunEntry): import("../interfaces.js").ExecutionProfile | null {
     if (!entry.selectedModel && !entry.selectedModelSelection) return null;
     return {
@@ -2067,6 +2174,20 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         summary: `${name}: ${state}`,
         details: { tool_name: name, state, ...(callId ? { tool_call_id: callId } : {}) },
       });
+    } else if (type === "provider_retry_scheduled" || type === "provider_retry_send_accepted") {
+      entry.onEvent({
+        type,
+        summary: type === "provider_retry_scheduled"
+          ? `ZCode transient provider failure scheduled pre-turn retry ${Number(payload.attempt)}`
+          : `ZCode pre-turn provider retry ${Number(payload.attempt)} accepted`,
+        details: {
+          attempt: Number(payload.attempt),
+          retry_scope: payload.scope,
+          ...(type === "provider_retry_scheduled" && typeof payload.delay_ms === "number"
+            ? { retry_after_ms: payload.delay_ms }
+            : {}),
+        },
+      });
     } else if (type === "turn.completed") {
       entry.onEvent({
         type: "turn_completed",
@@ -2105,6 +2226,15 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     if (!entry) throw new Error(`${method}: unknown agent handle (task ${handle.taskId})`);
     return entry;
   }
+}
+
+function retryAfterMilliseconds(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value * 1_000;
+  if (typeof value !== "string" || !value.trim()) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) return seconds * 1_000;
+  const dateMs = Date.parse(value);
+  return Number.isFinite(dateMs) ? Math.max(0, dateMs - Date.now()) : null;
 }
 
 function interactionDecline(

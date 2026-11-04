@@ -1372,6 +1372,8 @@ export class IsolatedAdmissionStore {
       if(prior){if(prior.request_digest!==d)fail('operation_id_conflict');return {duplicate:true,operation_id:prior.operation_id,generation:prior.generation,revision:prior.revision,phase:prior.phase};}
       const same=this.#db.prepare("SELECT operation_id FROM manager_operations WHERE operation_kind='attempt_lifecycle' AND task_id=? AND attempt=?").get(requested.task_id,requested.attempt);
       if(same)fail('attempt_already_admitted');
+      const occupiedWorkspaces=this.#db.prepare("SELECT workspace_ref FROM manager_operations WHERE operation_kind='attempt_lifecycle' AND phase NOT IN ('released','cancelled_before_launch')").all();
+      if(occupiedWorkspaces.some(row=>typeof row.workspace_ref==='string'&&workspacePathsOverlap(w,row.workspace_ref)))fail('workspace_already_occupied');
       const meta=this.#db.prepare('SELECT * FROM authority_metadata WHERE singleton=1').get();
       if(!meta||meta.policy_version!==1||meta.policy_generation<1)fail('capacity_policy_missing');
       const active=this.#db.prepare("SELECT COUNT(*) AS n FROM manager_operations WHERE operation_kind='attempt_lifecycle' AND phase NOT IN ('released','cancelled_before_launch')").get().n;
@@ -2834,6 +2836,13 @@ export class IsolatedAdmissionStore {
       }
     } catch(e) {if(e instanceof AdmissionError)throw e;fail('database_unreadable',String(e));}
   }
+}
+
+function workspacePathsOverlap(left,right) {
+  const a=path.win32.resolve(left).toLowerCase();
+  const b=path.win32.resolve(right).toLowerCase();
+  const contains=(parent,child)=>child===parent||child.startsWith(parent.endsWith('\\')?parent:`${parent}\\`);
+  return contains(a,b)||contains(b,a);
 }
 function validateInteractionHistory(db,operation,events){
   const payloads=db.prepare('SELECT * FROM manager_interaction_payloads WHERE operation_id=? ORDER BY request_id').all(operation.operation_id);

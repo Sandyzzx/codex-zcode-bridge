@@ -5417,6 +5417,12 @@ function writePoison(file, value) {
     }
   }
 }
+function workspacePathsOverlap(left, right) {
+  const a = path17.win32.resolve(left).toLowerCase();
+  const b = path17.win32.resolve(right).toLowerCase();
+  const contains = (parent, child) => child === parent || child.startsWith(parent.endsWith("\\") ? parent : `${parent}\\`);
+  return contains(a, b) || contains(b, a);
+}
 function validateInteractionHistory(db, operation, events) {
   const payloads = db.prepare("SELECT * FROM manager_interaction_payloads WHERE operation_id=? ORDER BY request_id").all(operation.operation_id);
   const interactionEvents = events.filter((event) => event.event_type.startsWith("interaction_"));
@@ -6796,6 +6802,8 @@ var init_store = __esm({
           }
           const same = this.#db.prepare("SELECT operation_id FROM manager_operations WHERE operation_kind='attempt_lifecycle' AND task_id=? AND attempt=?").get(requested.task_id, requested.attempt);
           if (same) fail("attempt_already_admitted");
+          const occupiedWorkspaces = this.#db.prepare("SELECT workspace_ref FROM manager_operations WHERE operation_kind='attempt_lifecycle' AND phase NOT IN ('released','cancelled_before_launch')").all();
+          if (occupiedWorkspaces.some((row2) => typeof row2.workspace_ref === "string" && workspacePathsOverlap(w, row2.workspace_ref))) fail("workspace_already_occupied");
           const meta2 = this.#db.prepare("SELECT * FROM authority_metadata WHERE singleton=1").get();
           if (!meta2 || meta2.policy_version !== 1 || meta2.policy_generation < 1) fail("capacity_policy_missing");
           const active = this.#db.prepare("SELECT COUNT(*) AS n FROM manager_operations WHERE operation_kind='attempt_lifecycle' AND phase NOT IN ('released','cancelled_before_launch')").get().n;
@@ -9008,6 +9016,9 @@ import { createHash as createHash15, randomUUID as randomUUID6 } from "node:cryp
 import { closeSync as closeSync6, existsSync as existsSync13, fsyncSync as fsyncSync4, linkSync, lstatSync as lstatSync3, openSync as openSync6, readFileSync as readFileSync13, readdirSync as readdirSync3, realpathSync as realpathSync6, unlinkSync as unlinkSync3, writeFileSync as writeFileSync7 } from "node:fs";
 import { spawn as spawn5 } from "node:child_process";
 import path18 from "node:path";
+function recoveryStopKey(dataRoot, databaseFileName, operationId) {
+  return `${path18.resolve(dataRoot)}\0${databaseFileName ?? "operations.sqlite3"}\0${operationId}`;
+}
 function readAllLifecycleEventsForRecovery(port, operationId) {
   const pageSize = 200;
   const events = [];
@@ -9760,13 +9771,15 @@ async function openClaimOnlyDriver(options) {
       }
     },
     readRecoverableQueuedAttempts: () => port.readRecoverableQueuedAttempts(),
-    async recoverOperation(operationId) {
+    async recoverOperation(operationId, recoveryOptions = {}) {
+      const stopKey = recoveryStopKey(options.dataRoot, options.databaseFileName, operationId);
       const operationValue = port.readOperation(operationId);
       if (!operationValue) throw new LifecycleGateError("recovery_operation_missing");
       const operation = asRecord4(operationValue);
       if (operation.operation_kind !== "attempt_lifecycle") return { state: "not_applicable", operation_id: operationId };
       const phase = text(operation.phase, "recovery_phase_missing");
       if (phase === "released" || phase === "cancelled_before_launch" || phase === "admin_abandoned") {
+        if (phase === "released") verifiedRecoveryStops.delete(stopKey);
         return { state: "complete", operation_id: operationId, phase };
       }
       if (phase === "reserved") return { state: "reserved", operation_id: operationId, phase };
@@ -9826,6 +9839,7 @@ async function openClaimOnlyDriver(options) {
           cleanup_digest: cleanupDigest
         }));
         if (release.phase !== "released" || release.capacity_released !== true) throw new LifecycleGateError("recovery_release_not_persisted");
+        verifiedRecoveryStops.delete(stopKey);
         return { state: "released", operation_id: operationId, phase: "released", revision: release.revision };
       }
       const claimId = operation.claim_id;
@@ -9861,9 +9875,9 @@ async function openClaimOnlyDriver(options) {
       const probeOutcome = await probeWithDeadline(probe, { pid: processId, identity }, processProbeTimeoutMs);
       if (probeOutcome.status === "resolved") verdict2 = probeOutcome.verdict;
       else probeFailure = probeOutcome.status === "timeout" ? "probe_timeout" : "probe_rejected";
-      const identityState = verdict2?.state === "alive" || verdict2?.state === "exited" ? verdict2.state : "unknown";
+      let identityState = verdict2?.state === "alive" || verdict2?.state === "exited" ? verdict2.state : "unknown";
       const cleanupPhase = phase === "result_committed" || phase === "cleanup_pending" || phase === "cleanup_unverified";
-      const probeReason = probeFailure ?? (typeof verdict2?.reason_code === "string" ? verdict2.reason_code : "probe_result_unknown");
+      let probeReason = probeFailure ?? (typeof verdict2?.reason_code === "string" ? verdict2.reason_code : "probe_result_unknown");
       const cancellationRequested = lifecycleEvents.some((event) => {
         if (event.event_type !== "observation_recorded") return false;
         try {
@@ -9882,18 +9896,54 @@ async function openClaimOnlyDriver(options) {
           probe_reason: probeReason
         };
       }
+      if (phase === "cleanup_unverified" && recoveryOptions.stopAliveWorker === true && identityState === "alive") {
+        try {
+          let stop = verifiedRecoveryStops.get(stopKey);
+          if (!stop) {
+            stop = (async () => {
+              if (options.testStopWorkerForRecovery) {
+                await options.testStopWorkerForRecovery(processId, fingerprint);
+              } else {
+                const stopped = await terminateProcessTree(processId, {
+                  graceMs: 500,
+                  killWaitMs: 5e3,
+                  expectedRootFingerprint: fingerprint
+                });
+                if (stopped.verified !== true) throw new LifecycleGateError("recovery_worker_stop_unverified");
+              }
+            })();
+            verifiedRecoveryStops.set(stopKey, stop);
+            try {
+              await stop;
+            } catch (error2) {
+              if (verifiedRecoveryStops.get(stopKey) === stop) verifiedRecoveryStops.delete(stopKey);
+              throw error2;
+            }
+          } else {
+            await stop;
+          }
+          const afterStop = await probeWithDeadline(probe, { pid: processId, identity }, processProbeTimeoutMs);
+          const afterStopVerdict = afterStop.status === "resolved" ? afterStop.verdict : void 0;
+          identityState = afterStopVerdict?.state === "exited" ? "exited" : afterStopVerdict?.state === "alive" ? "alive" : "unknown";
+          probeReason = afterStopVerdict?.reason_code ?? (identityState === "exited" ? "worker_stopped_and_exit_verified" : "worker_stop_exit_unverified");
+        } catch (error2) {
+          identityState = "unknown";
+          probeReason = errorCode(error2) ?? "worker_stop_unverified";
+        }
+      }
       let treeOutcome;
       if ((phase === "result_committed" || phase === "cleanup_pending" || phase === "cleanup_unverified") && identityState === "exited") {
         treeOutcome = await processTreeWithDeadline([{ pid: processId, fingerprint }], 3e4);
       }
       if ((phase === "result_committed" || phase === "cleanup_pending" || phase === "cleanup_unverified") && identityState === "exited") {
-        const completeCleanupClosureAvailable = false;
+        const completeCleanupClosureAvailable = treeOutcome?.status === "resolved" && treeOutcome.result.clean === true && treeOutcome.result.livePids.length === 0;
         if (completeCleanupClosureAvailable && treeOutcome?.status === "resolved" && treeOutcome.result.clean === true && treeOutcome.result.livePids.length === 0) {
           const currentOperation = asRecord4(port.readOperation(operationId));
           if (currentOperation.task_id !== operation.task_id || Number(currentOperation.attempt) !== Number(operation.attempt) || Number(currentOperation.generation) !== Number(operation.generation) || currentOperation.claim_id !== claimId || currentOperation.claim_worker_identity_digest !== workerDigest) {
             return { state: "held", operation_id: operationId, phase: String(currentOperation.phase), reason: "recovery_identity_fence_changed" };
           }
           if (currentOperation.phase === "released") {
+            verifiedRecoveryStops.delete(stopKey);
             return {
               state: "released",
               operation_id: operationId,
@@ -9922,6 +9972,7 @@ async function openClaimOnlyDriver(options) {
               cleanup_digest: text(verifiedEvidence.cleanup_digest, "recovery_cleanup_digest_missing")
             }));
             if (released2.phase !== "released" || released2.capacity_released !== true) throw new LifecycleGateError("recovery_release_not_persisted");
+            verifiedRecoveryStops.delete(stopKey);
             return {
               state: "released",
               operation_id: operationId,
@@ -9955,6 +10006,7 @@ async function openClaimOnlyDriver(options) {
             claim_id: text(claimId, "recovery_claim_id_missing"),
             claim_worker_identity_digest: text(workerDigest, "recovery_claim_identity_missing")
           };
+          if (currentPhase === "cleanup_unverified") await options.testBeforeRecoveryWrite?.(operationId, currentPhase);
           const pending = currentPhase === "result_committed" ? asRecord4(port.beginCleanup(fence)) : currentOperation;
           const expectedCleanupPhase = currentPhase === "cleanup_unverified" ? "cleanup_unverified" : "cleanup_pending";
           if (pending.phase !== expectedCleanupPhase || pending.operation_id !== operationId || Number(pending.generation) !== fence.generation) {
@@ -9977,7 +10029,7 @@ async function openClaimOnlyDriver(options) {
           };
           const resourceFacts = {
             contract: "sqlite-candidate-recovery-operation-resources-v1",
-            adapter: "fake_candidate_adapter",
+            adapter: options.testOnlyFakeAdapter ? "fake_candidate_adapter" : "zcode_app_server",
             operation_id: operationId,
             generation: fence.generation,
             claim_id: fence.claim_id,
@@ -10019,6 +10071,7 @@ async function openClaimOnlyDriver(options) {
           if (released.phase !== "released" || released.capacity_released !== true) {
             throw new LifecycleGateError("recovery_release_not_persisted");
           }
+          verifiedRecoveryStops.delete(stopKey);
           return {
             state: "released",
             operation_id: operationId,
@@ -10830,6 +10883,7 @@ async function finalizeClaimedWorkerCleanup(port, input, generation, claimId, pr
   if (recorded.cleanup_verified !== true || recorded.phase !== "cleanup_verified") {
     throw new LifecycleGateError("cleanup_evidence_not_persisted");
   }
+  stage("cleanup_verified_persisted", { revision: recorded.revision, cleanup_digest: recorded.cleanup_digest });
   const cleanupDigest = text(recorded.cleanup_digest, "cleanup_digest_missing");
   const released = asRecord4(port.releaseCapacity({
     ...cleanupFence,
@@ -11169,7 +11223,7 @@ function digestProvenance(value) {
 function interactionKey(taskId, requestId) {
   return `${taskId}\0${requestId}`;
 }
-var DEFAULT_PROCESS_PROBE_TIMEOUT_MS, LifecycleGateError, freshBootstrapPromises, DEFAULT_FRESH_BOOTSTRAP_LOCK_TIMEOUT_MS, FRESH_BOOTSTRAP_LOCK_RETRY_MS, FRESH_BOOTSTRAP_LOCK_HANDSHAKE_TIMEOUT_MS, FRESH_BOOTSTRAP_LOCK_RELEASE_TIMEOUT_MS, WINDOWS_BOOTSTRAP_LOCK_SCRIPT;
+var DEFAULT_PROCESS_PROBE_TIMEOUT_MS, verifiedRecoveryStops, LifecycleGateError, freshBootstrapPromises, DEFAULT_FRESH_BOOTSTRAP_LOCK_TIMEOUT_MS, FRESH_BOOTSTRAP_LOCK_RETRY_MS, FRESH_BOOTSTRAP_LOCK_HANDSHAKE_TIMEOUT_MS, FRESH_BOOTSTRAP_LOCK_RELEASE_TIMEOUT_MS, WINDOWS_BOOTSTRAP_LOCK_SCRIPT;
 var init_lifecycle_gate = __esm({
   "src/store/lifecycle-gate.ts"() {
     "use strict";
@@ -11185,6 +11239,7 @@ var init_lifecycle_gate = __esm({
     init_sqlite_runtime_roster();
     init_node_runtime();
     DEFAULT_PROCESS_PROBE_TIMEOUT_MS = 5e3;
+    verifiedRecoveryStops = /* @__PURE__ */ new Map();
     LifecycleGateError = class extends Error {
       constructor(code, message = code) {
         super(message);
@@ -11326,6 +11381,7 @@ __export(sqlite_lifecycle_mcp_authority_exports, {
   SqliteLifecycleMcpAuthority: () => SqliteLifecycleMcpAuthority
 });
 import { createHash as createHash16, randomBytes } from "node:crypto";
+import path19 from "node:path";
 function validateTaskPackage2(task) {
   const worktreePath = task.worktree_path;
   if (!task || typeof task.task_id !== "string" || !task.task_id.trim() || task.task_id.length > 128 || typeof task.workspace !== "string" || !task.workspace.trim() || !pathIsAbsolute(task.workspace) || worktreePath !== void 0 && (typeof worktreePath !== "string" || !worktreePath.trim() || !pathIsAbsolute(worktreePath)) || typeof task.objective !== "string" || !task.objective.trim() || !Array.isArray(task.requirements) || !Array.isArray(task.allowed_paths) || !Array.isArray(task.forbidden_paths) || !Array.isArray(task.acceptance_criteria) || !Array.isArray(task.test_commands)) {
@@ -11377,6 +11433,18 @@ function encodeCursor(taskId, cursor) {
 function operationIdFor(taskId, attempt) {
   const digest3 = createHash16("sha256").update(`${taskId}\0${attempt}`, "utf8").digest("hex").slice(0, 32);
   return `sqlite-${digest3}`;
+}
+function taskExecutionPath(task) {
+  return task.worktree_path ?? task.workspace;
+}
+function executionPathsOverlap(left, right) {
+  const leftPath = normalizeExecutionPath(left);
+  const rightPath = normalizeExecutionPath(right);
+  return leftPath === rightPath || leftPath.startsWith(rightPath + path19.sep) || rightPath.startsWith(leftPath + path19.sep);
+}
+function normalizeExecutionPath(value) {
+  const resolved = path19.resolve(value).replace(/[\\/]+$/u, "");
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 function queueKey(taskId, attempt) {
   return `${taskId}\0${attempt}`;
@@ -11458,20 +11526,21 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
       #driver;
       #queue = [];
       #activeRuns = /* @__PURE__ */ new Map();
+      #recoveryRuns = /* @__PURE__ */ new Map();
+      #dispatchingPaths = /* @__PURE__ */ new Set();
       #queued = /* @__PURE__ */ new Set();
-      #active = false;
+      #active = 0;
       #closed = false;
       #shuttingDown = false;
       #shutdownPromise = null;
-      #pumpPromise = null;
+      #pumpPromises = /* @__PURE__ */ new Set();
       #recoveryComplete = false;
       #pumpPending = false;
       #awaitingDispatchPrerequisite = false;
       #pumpRetryTimer = null;
+      #workspaceRetryTimer = null;
       #capacityRetryMs = 100;
       #pumpFailure = null;
-      #dispatchingTaskId = null;
-      #dispatchingKey = null;
       #recoveryBlocked = null;
       #testBeforeDispatch;
       #testOnScheduler;
@@ -11709,6 +11778,48 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
           this.#schedulePump();
           return this.getStatus(taskId);
         }
+        const operation = snapshot.operation ? asRecord5(snapshot.operation) : null;
+        if (projection.status === "failed" && operation?.phase === "released") {
+          return this.getStatus(taskId);
+        }
+        if (projection.status === "failed" && operation && operation.phase === "cleanup_unverified") {
+          const recoveryKey = queueKey(taskId, Number(attempt.attempt));
+          const existingRecovery = this.#recoveryRuns.get(recoveryKey);
+          if (existingRecovery) return existingRecovery;
+          const recovery = Promise.resolve().then(async () => {
+            const readReleased = async () => {
+              const latest = this.#readSnapshot(taskId);
+              const latestProjection = asRecord5(latest.projection);
+              const latestOperation = latest.operation ? asRecord5(latest.operation) : null;
+              return latestProjection.status === "failed" && latestOperation?.phase === "released" ? this.getStatus(taskId) : null;
+            };
+            let outcome;
+            try {
+              outcome = asRecord5(await this.#driver.recoverOperation(
+                string4(operation.operation_id, "operation_id_missing"),
+                { stopAliveWorker: true }
+              ));
+            } catch (error2) {
+              const released = await readReleased();
+              if (released) return released;
+              throw error2;
+            }
+            if (outcome.state !== "released" && outcome.state !== "complete") {
+              const released = await readReleased();
+              if (released) return released;
+              const reason = typeof outcome.reason === "string" ? outcome.reason : "worker_cleanup_unverified";
+              throw new TaskManagerError("CANCEL_FAILED", `SQLite cleanup remains occupied for this workspace: ${reason}`);
+            }
+            this.#schedulePump();
+            return this.getStatus(taskId);
+          });
+          this.#recoveryRuns.set(recoveryKey, recovery);
+          try {
+            return await recovery;
+          } finally {
+            if (this.#recoveryRuns.get(recoveryKey) === recovery) this.#recoveryRuns.delete(recoveryKey);
+          }
+        }
         throw new TaskManagerError("TASK_STATE", `zcode_cancel is not allowed from SQLite status ${String(projection.status)}`);
       }
       async replyToInteraction(input) {
@@ -11734,6 +11845,8 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
         this.#shuttingDown = true;
         if (this.#pumpRetryTimer) clearTimeout(this.#pumpRetryTimer);
         this.#pumpRetryTimer = null;
+        if (this.#workspaceRetryTimer) clearTimeout(this.#workspaceRetryTimer);
+        this.#workspaceRetryTimer = null;
         const attempt = this.#shutdownGracefully();
         let tracked;
         tracked = attempt.catch((error2) => {
@@ -11767,7 +11880,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
             failures.push(`${taskId}:${errorCode2(error2) ?? (error2 instanceof Error && error2.message === "shutdown_wait_timeout" ? "shutdown_wait_timeout" : "shutdown_cancel_failed")}`);
           }
         }
-        const pump = this.#pumpPromise;
+        const pump = Promise.allSettled(this.#pumpPromises).then(() => void 0);
         if (pump && (active.length > 0 || !this.#awaitingDispatchPrerequisite)) {
           try {
             await waitUntilDeadline(pump, deadline);
@@ -11832,13 +11945,14 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
               reason: outcome.reason ?? null
             });
             if (outcome.state === "held") {
-              this.#recoveryBlocked = `operation ${operationId} is held: ${String(outcome.reason ?? "recovery_evidence_unknown")}`;
-              this.#schedulerStage("recovery_root_read_only", { operation_id: operationId, reason: this.#recoveryBlocked });
-              break;
+              this.#schedulerStage("recovery_workspace_scoped", {
+                operation_id: operationId,
+                reason: outcome.reason ?? "recovery_evidence_unknown"
+              });
             }
           }
           snapshot = this.#validateRecoverySnapshot(this.#driver.readRecoverySnapshot());
-          const queued = this.#recoveryBlocked ? [] : this.#driver.readRecoverableQueuedAttempts();
+          const queued = this.#driver.readRecoverableQueuedAttempts();
           for (const value of queued) {
             const candidate = asRecord5(value);
             if (candidate.dispatchable === true && typeof candidate.task_id === "string" && Number.isSafeInteger(candidate.attempt) && Number(candidate.attempt) > 0) {
@@ -11856,9 +11970,9 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
           this.#recoveryComplete = true;
           this.#schedulerStage("recovery_complete", {
             recoverable_queued_attempts: queued.filter((value) => value.dispatchable === true).length,
-            root_read_only: this.#recoveryBlocked !== null
+            root_read_only: false
           });
-          if (!this.#recoveryBlocked) this.#schedulePump();
+          this.#schedulePump();
         } catch (error2) {
           this.#recoveryBlocked = error2 instanceof Error ? error2.message : String(error2);
           this.#pumpFailure = { taskId: "root", reason: errorCode2(error2) ?? "recovery_snapshot_unavailable" };
@@ -11970,7 +12084,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
           return;
         }
         const key = queueKey(taskId, attempt);
-        if (this.#queued.has(key) || this.#dispatchingKey === key) {
+        if (this.#queued.has(key) || this.#activeRuns.has(key)) {
           this.#schedulerStage("enqueue_duplicate", { task_id: taskId, attempt, queue_depth: this.#queue.length });
           return;
         }
@@ -11991,7 +12105,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
           });
           return;
         }
-        if (this.#pumpRetryTimer) {
+        if (this.#pumpRetryTimer || this.#workspaceRetryTimer) {
           this.#schedulerStage("schedule_waiting_for_capacity", { retry_ms: this.#capacityRetryMs, queue_depth: this.#queue.length });
           return;
         }
@@ -12001,31 +12115,45 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
           this.#pumpPending = false;
           this.#schedulerStage("scheduled_callback", { active: this.#active, queue_depth: this.#queue.length });
           const running = this.#pump();
-          this.#pumpPromise = running;
-          const failedTaskId = this.#dispatchingTaskId;
+          this.#pumpPromises.add(running);
           void running.catch((error2) => {
             const reason = errorCode2(error2) ?? "dispatch_failed";
-            this.#pumpFailure = { taskId: failedTaskId ?? "unknown", reason };
+            this.#pumpFailure = { taskId: "unknown", reason };
           }).finally(() => {
-            if (this.#pumpPromise === running) this.#pumpPromise = null;
+            this.#pumpPromises.delete(running);
           });
         });
       }
+      #scheduleWorkspaceRetry() {
+        if (this.#closed || this.#shuttingDown || !this.#recoveryComplete || this.#pumpFailure || this.#queue.length === 0) return;
+        if (this.#workspaceRetryTimer) return;
+        this.#workspaceRetryTimer = setTimeout(() => {
+          this.#workspaceRetryTimer = null;
+          this.#schedulePump();
+        }, 1e3);
+        this.#workspaceRetryTimer.unref?.();
+      }
+      #activeExecutionPaths(excludeOperationId) {
+        const snapshot = this.#validateRecoverySnapshot(this.#driver.readRecoverySnapshot());
+        return snapshot.operations.flatMap((value) => {
+          const operation = asRecord5(value);
+          return operation.operation_id !== excludeOperationId && operation.capacity_occupied === true && typeof operation.workspace_ref === "string" ? [operation.workspace_ref] : [];
+        });
+      }
       async #pump() {
-        if (this.#closed || this.#shuttingDown || this.#active) {
+        if (this.#closed || this.#shuttingDown) {
           this.#schedulerStage("pump_skipped", { closed: this.#closed, shutting_down: this.#shuttingDown, active: this.#active, queue_depth: this.#queue.length });
           return;
         }
-        this.#active = true;
+        this.#active += 1;
         this.#schedulerStage("pump_started", { queue_depth: this.#queue.length });
         let capacityBlocked = false;
+        const deferredByWorkspace = [];
         try {
           while (!this.#closed && !this.#shuttingDown && this.#queue.length > 0) {
             const next = this.#queue.shift();
             const nextKey = queueKey(next.taskId, next.attempt);
             this.#schedulerStage("dispatch_dequeued", { task_id: next.taskId, attempt: next.attempt, queue_depth: this.#queue.length });
-            this.#dispatchingTaskId = next.taskId;
-            this.#dispatchingKey = nextKey;
             this.#queued.delete(nextKey);
             let snapshot;
             try {
@@ -12035,6 +12163,19 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
             }
             if (snapshot.projection.status !== "queued" || Number(snapshot.attempt.attempt) !== next.attempt) continue;
             const operationId = operationIdFor(next.taskId, next.attempt);
+            const executionPath = taskExecutionPath(snapshot.task);
+            const workspaceConflict = [...this.#activeExecutionPaths(operationId), ...this.#dispatchingPaths].find((occupiedPath) => executionPathsOverlap(occupiedPath, executionPath));
+            if (workspaceConflict) {
+              this.#schedulerStage("dispatch_deferred_workspace_occupied", {
+                task_id: next.taskId,
+                attempt: next.attempt,
+                execution_path: executionPath,
+                occupied_path: workspaceConflict
+              });
+              deferredByWorkspace.push(next);
+              this.#queued.add(nextKey);
+              continue;
+            }
             if (this.#testBeforeDispatch) {
               this.#awaitingDispatchPrerequisite = true;
               try {
@@ -12044,6 +12185,8 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
               }
             }
             if (this.#closed || this.#shuttingDown) break;
+            const dispatchPathKey = normalizeExecutionPath(executionPath);
+            this.#dispatchingPaths.add(dispatchPathKey);
             const runPromise = this.#driver.run({
               task: snapshot.task,
               operationId,
@@ -12059,6 +12202,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
               run = await runPromise;
             } finally {
               if (this.#activeRuns.get(nextKey) === runPromise) this.#activeRuns.delete(nextKey);
+              this.#dispatchingPaths.delete(dispatchPathKey);
             }
             this.#schedulerStage("driver_run_returned", { task_id: next.taskId, attempt: next.attempt, state: run.state, queue_depth: this.#queue.length });
             this.#acceptRunOutcome(run);
@@ -12070,14 +12214,25 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
               this.#capacityRetryMs = Math.min(this.#capacityRetryMs * 2, 2e3);
               break;
             }
+            if (after.projection.status === "queued" && after.operation === null && run.reason === "workspace_already_occupied") {
+              deferredByWorkspace.push(next);
+              this.#queued.add(queueKey(next.taskId, next.attempt));
+              this.#schedulerStage("dispatch_deferred_workspace_admission_race", {
+                task_id: next.taskId,
+                attempt: next.attempt,
+                reason: run.reason
+              });
+              continue;
+            }
             this.#capacityRetryMs = 100;
             if (after.operation?.phase === "released") continue;
             if (after.operation && after.operation.phase !== "released" && after.operation.phase !== "cancelled_before_launch") break;
           }
+          for (const item of deferredByWorkspace.reverse()) {
+            this.#queue.unshift(item);
+          }
         } finally {
-          this.#active = false;
-          this.#dispatchingTaskId = null;
-          this.#dispatchingKey = null;
+          this.#active = Math.max(0, this.#active - 1);
           this.#schedulerStage("pump_finished", { queue_depth: this.#queue.length, pump_failure: this.#pumpFailure?.reason ?? null });
           if (capacityBlocked && !this.#closed && !this.#pumpFailure && this.#queue.length > 0) {
             this.#pumpRetryTimer = setTimeout(() => {
@@ -12085,6 +12240,8 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
               this.#schedulePump();
             }, this.#capacityRetryMs);
             this.#pumpRetryTimer.unref?.();
+          } else if (deferredByWorkspace.length > 0 && !this.#closed && !this.#pumpFailure && this.#queue.length > 0) {
+            this.#scheduleWorkspaceRetry();
           } else this.#schedulePump();
         }
       }
@@ -12108,7 +12265,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
 
 // src/mcp/main.ts
 import { realpathSync as realpathSync7 } from "node:fs";
-import path20 from "node:path";
+import path21 from "node:path";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
 
 // node_modules/@modelcontextprotocol/server/dist/chunk-Br0eD_fh.mjs
@@ -12404,10 +12561,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path21) {
-  if (!path21)
+function getElementAtPath(obj, path22) {
+  if (!path22)
     return obj;
-  return path21.reduce((acc, key) => acc?.[key], obj);
+  return path22.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -12747,11 +12904,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path21, issues) {
+function prefixIssues(path22, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path21);
+    iss.path.unshift(path22);
     return iss;
   });
 }
@@ -13200,16 +13357,16 @@ function flattenError(error2, mapper = (issue2) => issue2.message) {
 }
 function formatError(error2, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error3, path21 = []) => {
+  const processError = (error3, path22 = []) => {
     for (const issue2 of error3.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path21, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path22, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path21, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path22, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path21, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path22, ...issue2.path]);
       } else {
-        const fullpath = [...path21, ...issue2.path];
+        const fullpath = [...path22, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -22552,9 +22709,9 @@ var rev2026Codec = {
     });
     const parsed = buildSchemas2026().RequestMetaEnvelopeSchema.safeParse(meta2);
     if (!parsed.success) for (const issue2 of parsed.error.issues) {
-      const path21 = issue2.path.map(String);
-      const key = path21.length > 0 ? path21.join(".") : "_meta";
-      if (path21.length === 1 && issues.some((existing) => existing.key === key && existing.problem === "missing")) continue;
+      const path22 = issue2.path.map(String);
+      const key = path22.length > 0 ? path22.join(".") : "_meta";
+      if (path22.length === 1 && issues.some((existing) => existing.key === key && existing.problem === "missing")) continue;
       issues.push({
         key,
         problem: issue2.message
@@ -22875,29 +23032,29 @@ var PERMITTED_X_MCP_HEADER_TYPES = /* @__PURE__ */ new Set([
 function scanXMcpHeaderDeclarations(inputSchema) {
   const declarations = [];
   const seenLower = /* @__PURE__ */ new Map();
-  const visit = (node2, path21, reachable) => {
+  const visit = (node2, path22, reachable) => {
     if (node2 === null || typeof node2 !== "object") return void 0;
     const schema = node2;
     if (X_MCP_HEADER_KEY in schema) {
-      if (!reachable || path21.length === 0) return `${pathName(path21)}: x-mcp-header is only permitted on properties statically reachable via a chain of 'properties' keys (not under items, additionalProperties, oneOf/anyOf/allOf/not, if/then/else, or $ref)`;
+      if (!reachable || path22.length === 0) return `${pathName(path22)}: x-mcp-header is only permitted on properties statically reachable via a chain of 'properties' keys (not under items, additionalProperties, oneOf/anyOf/allOf/not, if/then/else, or $ref)`;
       const raw = schema[X_MCP_HEADER_KEY];
-      if (typeof raw !== "string" || raw.length === 0) return `${pathName(path21)}: x-mcp-header MUST be a non-empty string`;
-      if (!RFC9110_TOKEN.test(raw)) return `${pathName(path21)}: x-mcp-header '${raw}' is not a valid RFC 9110 token (no spaces, control characters or HTTP delimiters)`;
+      if (typeof raw !== "string" || raw.length === 0) return `${pathName(path22)}: x-mcp-header MUST be a non-empty string`;
+      if (!RFC9110_TOKEN.test(raw)) return `${pathName(path22)}: x-mcp-header '${raw}' is not a valid RFC 9110 token (no spaces, control characters or HTTP delimiters)`;
       const type = typeof schema.type === "string" ? schema.type : void 0;
-      if (type === void 0 || !PERMITTED_X_MCP_HEADER_TYPES.has(type)) return `${pathName(path21)}: x-mcp-header is only permitted on primitive-typed properties (string, integer, boolean); got ${type ?? "<none>"}`;
+      if (type === void 0 || !PERMITTED_X_MCP_HEADER_TYPES.has(type)) return `${pathName(path22)}: x-mcp-header is only permitted on primitive-typed properties (string, integer, boolean); got ${type ?? "<none>"}`;
       const lower = raw.toLowerCase();
       const prior = seenLower.get(lower);
       if (prior !== void 0) return `x-mcp-header '${raw}' is not case-insensitively unique (also declared as '${prior}')`;
       seenLower.set(lower, raw);
       declarations.push({
-        path: path21,
+        path: path22,
         headerName: raw,
         type
       });
     }
     const properties = schema.properties;
     if (properties !== null && typeof properties === "object") for (const [key, child] of Object.entries(properties)) {
-      const fault$1 = visit(child, [...path21, key], reachable);
+      const fault$1 = visit(child, [...path22, key], reachable);
       if (fault$1 !== void 0) return fault$1;
     }
     for (const k of NON_REACHABLE_SUBSCHEMA_KEYWORDS) {
@@ -22905,7 +23062,7 @@ function scanXMcpHeaderDeclarations(inputSchema) {
       if (sub === void 0) continue;
       const branches = Array.isArray(sub) ? sub : sub !== null && typeof sub === "object" && OBJECT_VALUED_SUBSCHEMA_KEYWORDS.has(k) ? Object.values(sub) : [sub];
       for (const branch of branches) {
-        const fault$1 = visit(branch, [...path21, `<${k}>`], false);
+        const fault$1 = visit(branch, [...path22, `<${k}>`], false);
         if (fault$1 !== void 0) return fault$1;
       }
     }
@@ -22945,8 +23102,8 @@ var OBJECT_VALUED_SUBSCHEMA_KEYWORDS = /* @__PURE__ */ new Set([
   "$defs",
   "definitions"
 ]);
-function pathName(path21) {
-  return path21.length === 0 ? "<root>" : path21.join(".");
+function pathName(path22) {
+  return path22.length === 0 ? "<root>" : path22.join(".");
 }
 var HEADER_MISMATCH_ERROR_CODE = -32020;
 var INBOUND_VALIDATION_LADDER = [
@@ -23235,7 +23392,7 @@ var PROPERTY_KEYS_BY_TYPE = {
   array: shapeKeys([UntitledMultiSelectEnumSchemaSchema, TitledMultiSelectEnumSchemaSchema])
 };
 var SUPPORTED_STRING_FORMATS = new Set(StringSchemaSchema.shape.format.unwrap().options);
-function walkProperty(node2, path21, vendor, unsupported) {
+function walkProperty(node2, path22, vendor, unsupported) {
   if (!isJsonObject(node2)) return node2;
   const allowedKeys = typeof node2.type === "string" && Object.hasOwn(PROPERTY_KEYS_BY_TYPE, node2.type) ? PROPERTY_KEYS_BY_TYPE[node2.type] : void 0;
   if (allowedKeys === void 0) return node2;
@@ -23243,8 +23400,8 @@ function walkProperty(node2, path21, vendor, unsupported) {
   for (const [key, value] of Object.entries(node2)) if (allowedKeys.has(key) || isAnnotationOnlyJsonSchemaKeyword(key)) pruned[key] = value;
   else if (key === "pattern" && node2.type === "string" && typeof node2.format === "string") {
     if (!SUPPORTED_STRING_FORMATS.has(node2.format)) pruned[key] = value;
-    else if (typeof value !== "string" || !isLibraryFormatPattern(node2.format, value, vendor)) unsupported.push(`${path21}.${key}`);
-  } else unsupported.push(`${path21}.${key}`);
+    else if (typeof value !== "string" || !isLibraryFormatPattern(node2.format, value, vendor)) unsupported.push(`${path22}.${key}`);
+  } else unsupported.push(`${path22}.${key}`);
   return pruned;
 }
 function walkRequestedSchema(converted, vendor) {
@@ -23261,11 +23418,11 @@ function describeUnsupportedProperties(pruned, fallback) {
   const offenders = Object.entries(pruned.properties).filter(([, node2]) => !parseSchema(PrimitiveSchemaDefinitionSchema, node2).success).map(([name]) => `properties.${name}`);
   return offenders.length > 0 ? offenders.join(", ") : fallback;
 }
-function findDroppedConstraintPaths(original, parsed, path21 = "") {
-  if (Array.isArray(original) && Array.isArray(parsed)) return original.flatMap((item, index) => findDroppedConstraintPaths(item, parsed[index], `${path21}[${index}]`));
+function findDroppedConstraintPaths(original, parsed, path22 = "") {
+  if (Array.isArray(original) && Array.isArray(parsed)) return original.flatMap((item, index) => findDroppedConstraintPaths(item, parsed[index], `${path22}[${index}]`));
   if (!isJsonObject(original) || !isJsonObject(parsed)) return [];
   return Object.entries(original).flatMap(([key, value]) => {
-    const childPath = path21 ? `${path21}.${key}` : key;
+    const childPath = path22 ? `${path22}.${key}` : key;
     if (!Object.prototype.hasOwnProperty.call(parsed, key)) return isAnnotationOnlyJsonSchemaKeyword(key) ? [] : [childPath];
     return findDroppedConstraintPaths(value, parsed[key], childPath);
   });
@@ -27344,8 +27501,8 @@ var require_utils = /* @__PURE__ */ __commonJSMin(((exports, module) => {
     for (let i = 0; i < str.length; i++) if (str[i] === token) ind++;
     return ind;
   }
-  function removeDotSegments(path21) {
-    let input = path21;
+  function removeDotSegments(path22) {
+    let input = path22;
     const output = [];
     let nextSlash = -1;
     let len = 0;
@@ -27498,8 +27655,8 @@ var require_schemes = /* @__PURE__ */ __commonJSMin(((exports, module) => {
       wsComponent.secure = void 0;
     }
     if (wsComponent.resourceName) {
-      const [path21, query] = wsComponent.resourceName.split("?");
-      wsComponent.path = path21 && path21 !== "/" ? path21 : void 0;
+      const [path22, query] = wsComponent.resourceName.split("?");
+      wsComponent.path = path22 && path22 !== "/" ? path22 : void 0;
       wsComponent.query = query;
       wsComponent.resourceName = void 0;
     }
@@ -33639,7 +33796,7 @@ function toError(value) {
 
 // src/host/stdio.ts
 import { homedir as homedir4 } from "node:os";
-import path19 from "node:path";
+import path20 from "node:path";
 
 // src/runtime/resolver.ts
 import { accessSync, existsSync as existsSync2, readFileSync as readFileSync2, statSync } from "node:fs";
@@ -36894,8 +37051,8 @@ function createBridgeServer(options) {
   server.registerTool(
     "zcode_cancel",
     {
-      title: "Cancel a queued or running ZCode task",
-      description: `Cancel a queued or running task. Running cancellation returns only after the worker process tree termination is confirmed. ${EXECUTION_NOT_VERDICT}`,
+      title: "Cancel or recover a ZCode task",
+      description: `Cancel a queued or running task, or recover a failed SQLite task whose cleanup is unverified. Held-operation recovery may terminate the original Worker by its recorded process identity; callers must obtain explicit user authorization first. Recovery does not replay the task or create an Attempt and returns only the Task status record. ${EXECUTION_NOT_VERDICT}`,
       inputSchema: taskIdOnlyInputSchema,
       outputSchema: taskStatusRecordSchema
     },
@@ -38111,13 +38268,13 @@ function createTrustedLocalCandidateContext(host) {
 function resolveDataRoot(env) {
   const override = env["ZCODE_BRIDGE_DATA_DIR"]?.trim();
   if (override) {
-    if (!path19.isAbsolute(override)) {
+    if (!path20.isAbsolute(override)) {
       return {
         dataRoot: findPackageRoot(),
         warning: `ZCODE_BRIDGE_DATA_DIR must be an absolute path; ignoring ${override} and using the Bridge installation directory`
       };
     }
-    return { dataRoot: path19.normalize(override) };
+    return { dataRoot: path20.normalize(override) };
   }
   return { dataRoot: findPackageRoot() };
 }
@@ -38211,7 +38368,7 @@ async function startBridge(host = codexHostProfile(), version2 = SERVER_VERSION,
   const processProbe = createPlatformProbe();
   let manager;
   let lifecycleChecks;
-  const databasePath = path19.join(dataRoot, FRESH_SQLITE_DATABASE_FILE);
+  const databasePath = path20.join(dataRoot, FRESH_SQLITE_DATABASE_FILE);
   let trustedLocalContext;
   try {
     trustedLocalContext = createTrustedLocalCandidateContext(host);
@@ -38270,7 +38427,7 @@ var isEntry = process.argv[1] !== void 0 && sameRealPath(import.meta.url, proces
 function sameRealPath(moduleUrl, argvPath) {
   try {
     const modulePath = realpathSync7(fileURLToPath5(moduleUrl));
-    const entryPath = realpathSync7(path20.resolve(argvPath));
+    const entryPath = realpathSync7(path21.resolve(argvPath));
     return process.platform === "win32" ? modulePath.toLocaleLowerCase("en-US") === entryPath.toLocaleLowerCase("en-US") : modulePath === entryPath;
   } catch {
     return false;

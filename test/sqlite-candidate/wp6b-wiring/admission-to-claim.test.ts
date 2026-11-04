@@ -17,14 +17,15 @@ const runRoot = path.join(compiledCandidate, `.wp6b-b2-${randomUUID()}`);
 const executionRoot = path.join(root, ".run", "wp6-execution-20261024", `admission-to-claim-${randomUUID()}`);
 const diagnosticsRoot = path.join(root, ".run", "wp6-execution-20261024", "logs");
 const workspace = path.join(executionRoot, "workspace");
+const rejectedClaimWorkspace = path.join(executionRoot, "claim-cas-rejected-workspace");
 const settingsDirectory = path.join(executionRoot, "settings");
 const stageLogPath = path.join(diagnosticsRoot, `admission-to-claim-${path.basename(executionRoot)}.stages.jsonl`);
 const childStderrPath = path.join(diagnosticsRoot, `admission-to-claim-${path.basename(executionRoot)}.worker-stderr.log`);
 const workerEntryPath = path.join(root, "dist-test", "src", "worker", "worker-main.js");
 const bridgeEntryPath = path.join(root, "dist-test", "test", "sqlite-candidate", "wp6b-wiring", "admission-to-claim.test.js");
-const task = (taskId: string): CandidateTaskPackage => ({
+const task = (taskId: string, taskWorkspace = workspace): CandidateTaskPackage => ({
   task_id: taskId,
-  workspace,
+  workspace: taskWorkspace,
   objective: "Synthetic Claim-only lifecycle test",
   requirements: ["synthetic"],
   allowed_paths: [],
@@ -72,6 +73,7 @@ test("real detached child lifecycle scenarios", async (t) => {
   }
   mkdirSync(runRoot, { recursive: true });
   mkdirSync(workspace, { recursive: true });
+  mkdirSync(rejectedClaimWorkspace, { recursive: true });
   mkdirSync(settingsDirectory, { recursive: true });
   await initializeIsolatedCandidateRoot(runRoot);
   const driver = await openClaimOnlyDriver({
@@ -119,7 +121,7 @@ test("real detached child lifecycle scenarios", async (t) => {
     });
     const firstTask = task("task-b2-e2e-a");
     const secondTask = task("task-b2-e2e-b");
-    const rejectedTask = task("task-b2-e2e-c");
+    const rejectedTask = task("task-b2-e2e-c", rejectedClaimWorkspace);
     const unknownCommitTask = task("task-b2-e2e-d");
     driver.createTask(firstTask);
     driver.createTask(secondTask);
@@ -366,6 +368,7 @@ test("real detached child lifecycle scenarios", async (t) => {
     if (completed) {
       rmSync(runRoot, { recursive: true, force: true });
       rmSync(workspace, { recursive: true, force: true });
+      rmSync(rejectedClaimWorkspace, { recursive: true, force: true });
       rmSync(settingsDirectory, { recursive: true, force: true });
       if (createdCompiledSchema) rmSync(compiledSchema, { force: true });
       rmSync(executionRoot, { recursive: true, force: true });

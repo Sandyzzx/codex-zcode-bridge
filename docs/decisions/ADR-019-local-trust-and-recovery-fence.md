@@ -6,6 +6,12 @@
 > Scope: single-user local stdio Bridge, SQLite Worker admission and startup Recovery
 > Related: ADR-002, ADR-017, ADR-018
 
+> Supersession note (2026-11-04): ADR-024 replaces Decisions 5–8 only for
+> Operation-scoped startup Recovery, dispatch, and explicit cleanup recovery.
+> Decisions 1–4 on trusted-local execution and authorization boundaries remain
+> in force. The previous per-Manager read-only fence no longer blocks unrelated
+> workspaces; SQLite Admission now serializes overlapping workspace ownership.
+
 ## Context
 
 The supported deployment is one trusted user running Codex and the Bridge under

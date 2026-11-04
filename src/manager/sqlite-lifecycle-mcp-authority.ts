@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import path from "node:path";
 import type {
   ContinueTaskInput,
   GetEventsInput,
@@ -42,20 +43,21 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
   readonly #driver: Driver;
   readonly #queue: Array<{ taskId: string; attempt: number }> = [];
   readonly #activeRuns = new Map<string, Promise<ClaimOnlyRunResult>>();
+  readonly #recoveryRuns = new Map<string, Promise<TaskStatusRecord>>();
+  readonly #dispatchingPaths = new Set<string>();
   readonly #queued = new Set<string>();
-  #active = false;
+  #active = 0;
   #closed = false;
   #shuttingDown = false;
   #shutdownPromise: Promise<void> | null = null;
-  #pumpPromise: Promise<void> | null = null;
+  readonly #pumpPromises = new Set<Promise<void>>();
   #recoveryComplete = false;
   #pumpPending = false;
   #awaitingDispatchPrerequisite = false;
   #pumpRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  #workspaceRetryTimer: ReturnType<typeof setTimeout> | null = null;
   #capacityRetryMs = 100;
   #pumpFailure: { readonly taskId: string; readonly reason: string } | null = null;
-  #dispatchingTaskId: string | null = null;
-  #dispatchingKey: string | null = null;
   #recoveryBlocked: string | null = null;
   readonly #testBeforeDispatch?: () => Promise<void>;
   readonly #testOnScheduler?: (stage: string, detail: Readonly<Record<string, unknown>>) => void;
@@ -95,7 +97,6 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       task: { ...normalizedTask, operation_id: `preflight-${task.task_id}`, attempt: 1 },
     });
     if (permission.state !== "allow") throw new TaskManagerError("TASK_INVALID", `SQLite admission rejected: ${permission.state === "unknown" ? permission.reason : permission.reason}`);
-
     const existingValue = this.#driver.readTaskLifecycle(task.task_id);
     if (existingValue) {
       const existing = asRecord(existingValue);
@@ -310,6 +311,55 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       this.#schedulePump();
       return this.getStatus(taskId);
     }
+    const operation = snapshot.operation ? asRecord(snapshot.operation) : null;
+    if (projection.status === "failed" && operation?.phase === "released") {
+      // A repeated recovery request is a read-only no-op after the durable
+      // Release; do not append another lifecycle event or stop a new PID.
+      return this.getStatus(taskId);
+    }
+    if (projection.status === "failed" && operation && operation.phase === "cleanup_unverified") {
+      const recoveryKey = queueKey(taskId, Number(attempt.attempt));
+      const existingRecovery = this.#recoveryRuns.get(recoveryKey);
+      if (existingRecovery) return existingRecovery;
+      const recovery = Promise.resolve().then(async () => {
+        const readReleased = async (): Promise<TaskStatusRecord | null> => {
+          const latest = this.#readSnapshot(taskId);
+          const latestProjection = asRecord(latest.projection);
+          const latestOperation = latest.operation ? asRecord(latest.operation) : null;
+          return latestProjection.status === "failed" && latestOperation?.phase === "released"
+            ? this.getStatus(taskId)
+            : null;
+        };
+        let outcome: Record<string, unknown>;
+        try {
+          outcome = asRecord(await this.#driver.recoverOperation(
+            string(operation.operation_id, "operation_id_missing"),
+            { stopAliveWorker: true },
+          ));
+        } catch (error) {
+          // A concurrent Recovery may have won the revision CAS. Re-read the
+          // SQLite Authority before returning the race as an error.
+          const released = await readReleased();
+          if (released) return released;
+          throw error;
+        }
+        if (outcome.state !== "released" && outcome.state !== "complete") {
+          // A stale Recovery can report a changed revision instead of throwing
+          // from the CAS. Re-read here too; only durable Release is success.
+          const released = await readReleased();
+          if (released) return released;
+          const reason = typeof outcome.reason === "string" ? outcome.reason : "worker_cleanup_unverified";
+          throw new TaskManagerError("CANCEL_FAILED", `SQLite cleanup remains occupied for this workspace: ${reason}`);
+        }
+        this.#schedulePump();
+        return this.getStatus(taskId);
+      });
+      this.#recoveryRuns.set(recoveryKey, recovery);
+      try { return await recovery; }
+      finally {
+        if (this.#recoveryRuns.get(recoveryKey) === recovery) this.#recoveryRuns.delete(recoveryKey);
+      }
+    }
     throw new TaskManagerError("TASK_STATE", `zcode_cancel is not allowed from SQLite status ${String(projection.status)}`);
   }
 
@@ -338,6 +388,8 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     this.#shuttingDown = true;
     if (this.#pumpRetryTimer) clearTimeout(this.#pumpRetryTimer);
     this.#pumpRetryTimer = null;
+    if (this.#workspaceRetryTimer) clearTimeout(this.#workspaceRetryTimer);
+    this.#workspaceRetryTimer = null;
     const attempt = this.#shutdownGracefully();
     let tracked: Promise<void>;
     tracked = attempt.catch((error: unknown) => {
@@ -385,7 +437,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
           ? "shutdown_wait_timeout" : "shutdown_cancel_failed")}`);
       }
     }
-    const pump = this.#pumpPromise;
+    const pump = Promise.allSettled(this.#pumpPromises).then(() => undefined);
     // A pump waiting before Spawn has no Worker to clean up. The monotonic
     // shutdown fence makes it stop immediately after its prerequisite wakes;
     // waiting for that prerequisite could make shutdown depend on a blocked
@@ -451,18 +503,17 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
           operation_id: operationId, phase: operation.phase, state: outcome.state ?? "unknown", reason: outcome.reason ?? null,
         });
         if (outcome.state === "held") {
-          // Manual-Recovery treats an unresolved active executor as a Root
-          // safety boundary. Keep read APIs available, but do not dispatch
-          // another queued Operation or accept new lifecycle writes on this
-          // Manager. A live Worker owned by another Manager is a transient
-          // per-Manager fence; it does not persist a global Recovery Hold.
-          this.#recoveryBlocked = `operation ${operationId} is held: ${String(outcome.reason ?? "recovery_evidence_unknown")}`;
-          this.#schedulerStage("recovery_root_read_only", { operation_id: operationId, reason: this.#recoveryBlocked });
-          break;
+          // An unresolved executor or cleanup failure holds only its own
+          // Operation/workspace. The dispatch gate prevents another Worker
+          // in that path while unrelated work continues.
+          this.#schedulerStage("recovery_workspace_scoped", {
+            operation_id: operationId,
+            reason: outcome.reason ?? "recovery_evidence_unknown",
+          });
         }
       }
       snapshot = this.#validateRecoverySnapshot(this.#driver.readRecoverySnapshot());
-      const queued = this.#recoveryBlocked ? [] : this.#driver.readRecoverableQueuedAttempts();
+      const queued = this.#driver.readRecoverableQueuedAttempts();
       for (const value of queued) {
         const candidate = asRecord(value);
         if (candidate.dispatchable === true && typeof candidate.task_id === "string"
@@ -478,8 +529,8 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       }
       this.#recoveryComplete = true;
       this.#schedulerStage("recovery_complete", { recoverable_queued_attempts: queued.filter((value) => value.dispatchable === true).length,
-        root_read_only: this.#recoveryBlocked !== null });
-      if (!this.#recoveryBlocked) this.#schedulePump();
+        root_read_only: false });
+      this.#schedulePump();
     } catch (error) {
       this.#recoveryBlocked = error instanceof Error ? error.message : String(error);
       this.#pumpFailure = { taskId: "root", reason: errorCode(error) ?? "recovery_snapshot_unavailable" };
@@ -601,7 +652,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       return;
     }
     const key = queueKey(taskId, attempt);
-    if (this.#queued.has(key) || this.#dispatchingKey === key) {
+    if (this.#queued.has(key) || this.#activeRuns.has(key)) {
       this.#schedulerStage("enqueue_duplicate", { task_id: taskId, attempt, queue_depth: this.#queue.length });
       return;
     }
@@ -617,7 +668,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
         pump_failure: this.#pumpFailure?.reason ?? null, pump_pending: this.#pumpPending, active: this.#active, queue_depth: this.#queue.length });
       return;
     }
-    if (this.#pumpRetryTimer) {
+    if (this.#pumpRetryTimer || this.#workspaceRetryTimer) {
       this.#schedulerStage("schedule_waiting_for_capacity", { retry_ms: this.#capacityRetryMs, queue_depth: this.#queue.length });
       return;
     }
@@ -627,37 +678,66 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       this.#pumpPending = false;
       this.#schedulerStage("scheduled_callback", { active: this.#active, queue_depth: this.#queue.length });
       const running = this.#pump();
-      this.#pumpPromise = running;
-      const failedTaskId = this.#dispatchingTaskId;
+      this.#pumpPromises.add(running);
       void running.catch((error: unknown) => {
         const reason = errorCode(error) ?? "dispatch_failed";
-        this.#pumpFailure = { taskId: failedTaskId ?? "unknown", reason };
+        this.#pumpFailure = { taskId: "unknown", reason };
       }).finally(() => {
-        if (this.#pumpPromise === running) this.#pumpPromise = null;
+        this.#pumpPromises.delete(running);
       });
     });
   }
 
+  #scheduleWorkspaceRetry(): void {
+    if (this.#closed || this.#shuttingDown || !this.#recoveryComplete || this.#pumpFailure || this.#queue.length === 0) return;
+    if (this.#workspaceRetryTimer) return;
+    this.#workspaceRetryTimer = setTimeout(() => {
+      this.#workspaceRetryTimer = null;
+      this.#schedulePump();
+    }, 1_000);
+    this.#workspaceRetryTimer.unref?.();
+  }
+
+  #activeExecutionPaths(excludeOperationId?: string): readonly string[] {
+    const snapshot = this.#validateRecoverySnapshot(this.#driver.readRecoverySnapshot());
+    return snapshot.operations.flatMap((value) => {
+      const operation = asRecord(value);
+      return operation.operation_id !== excludeOperationId && operation.capacity_occupied === true && typeof operation.workspace_ref === "string"
+        ? [operation.workspace_ref]
+        : [];
+    });
+  }
+
   async #pump(): Promise<void> {
-    if (this.#closed || this.#shuttingDown || this.#active) {
+    if (this.#closed || this.#shuttingDown) {
       this.#schedulerStage("pump_skipped", { closed: this.#closed, shutting_down: this.#shuttingDown, active: this.#active, queue_depth: this.#queue.length });
       return;
     }
-    this.#active = true;
+    this.#active += 1;
     this.#schedulerStage("pump_started", { queue_depth: this.#queue.length });
     let capacityBlocked = false;
+    const deferredByWorkspace: Array<{ taskId: string; attempt: number }> = [];
     try {
       while (!this.#closed && !this.#shuttingDown && this.#queue.length > 0) {
         const next = this.#queue.shift()!;
         const nextKey = queueKey(next.taskId, next.attempt);
         this.#schedulerStage("dispatch_dequeued", { task_id: next.taskId, attempt: next.attempt, queue_depth: this.#queue.length });
-        this.#dispatchingTaskId = next.taskId;
-        this.#dispatchingKey = nextKey;
         this.#queued.delete(nextKey);
         let snapshot: TaskSnapshot;
         try { snapshot = this.#readSnapshot(next.taskId); } catch { continue; }
         if (snapshot.projection.status !== "queued" || Number(snapshot.attempt.attempt) !== next.attempt) continue;
         const operationId = operationIdFor(next.taskId, next.attempt);
+        const executionPath = taskExecutionPath(snapshot.task);
+        const workspaceConflict = [...this.#activeExecutionPaths(operationId), ...this.#dispatchingPaths]
+          .find((occupiedPath) => executionPathsOverlap(occupiedPath, executionPath));
+        if (workspaceConflict) {
+          this.#schedulerStage("dispatch_deferred_workspace_occupied", {
+            task_id: next.taskId, attempt: next.attempt, execution_path: executionPath, occupied_path: workspaceConflict,
+          });
+          deferredByWorkspace.push(next);
+          this.#queued.add(nextKey);
+          continue;
+        }
         if (this.#testBeforeDispatch) {
           this.#awaitingDispatchPrerequisite = true;
           try { await this.#testBeforeDispatch(); }
@@ -667,6 +747,8 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
         // pending. The durable queued Attempt remains authoritative; never
         // start a Worker after this Manager has closed its SQLite handle.
         if (this.#closed || this.#shuttingDown) break;
+        const dispatchPathKey = normalizeExecutionPath(executionPath);
+        this.#dispatchingPaths.add(dispatchPathKey);
         const runPromise = this.#driver.run({
           task: snapshot.task as CandidateTaskPackage,
           operationId,
@@ -681,7 +763,10 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
         this.#activeRuns.set(nextKey, runPromise);
         let run: ClaimOnlyRunResult;
         try { run = await runPromise; }
-        finally { if (this.#activeRuns.get(nextKey) === runPromise) this.#activeRuns.delete(nextKey); }
+        finally {
+          if (this.#activeRuns.get(nextKey) === runPromise) this.#activeRuns.delete(nextKey);
+          this.#dispatchingPaths.delete(dispatchPathKey);
+        }
         this.#schedulerStage("driver_run_returned", { task_id: next.taskId, attempt: next.attempt, state: run.state, queue_depth: this.#queue.length });
         this.#acceptRunOutcome(run);
         const after = this.#readSnapshot(next.taskId);
@@ -694,14 +779,27 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
           this.#capacityRetryMs = Math.min(this.#capacityRetryMs * 2, 2_000);
           break;
         }
+        if (after.projection.status === "queued" && after.operation === null && run.reason === "workspace_already_occupied") {
+          // A different Bridge Manager may have won the SQLite admission race
+          // after this Manager's snapshot. Keep the Attempt queued and retry
+          // after a bounded delay; the transactional workspace fence prevents
+          // a second Worker from entering during that window.
+          deferredByWorkspace.push(next);
+          this.#queued.add(queueKey(next.taskId, next.attempt));
+          this.#schedulerStage("dispatch_deferred_workspace_admission_race", {
+            task_id: next.taskId, attempt: next.attempt, reason: run.reason,
+          });
+          continue;
+        }
         this.#capacityRetryMs = 100;
         if (after.operation?.phase === "released") continue;
         if (after.operation && after.operation.phase !== "released" && after.operation.phase !== "cancelled_before_launch") break;
       }
+      for (const item of deferredByWorkspace.reverse()) {
+        this.#queue.unshift(item);
+      }
     } finally {
-      this.#active = false;
-      this.#dispatchingTaskId = null;
-      this.#dispatchingKey = null;
+      this.#active = Math.max(0, this.#active - 1);
       this.#schedulerStage("pump_finished", { queue_depth: this.#queue.length, pump_failure: this.#pumpFailure?.reason ?? null });
       if (capacityBlocked && !this.#closed && !this.#pumpFailure && this.#queue.length > 0) {
         this.#pumpRetryTimer = setTimeout(() => {
@@ -709,6 +807,8 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
           this.#schedulePump();
         }, this.#capacityRetryMs);
         this.#pumpRetryTimer.unref?.();
+      } else if (deferredByWorkspace.length > 0 && !this.#closed && !this.#pumpFailure && this.#queue.length > 0) {
+        this.#scheduleWorkspaceRetry();
       } else this.#schedulePump();
     }
   }
@@ -804,6 +904,22 @@ function encodeCursor(taskId: string, cursor: number): string {
 function operationIdFor(taskId: string, attempt: number): string {
   const digest = createHash("sha256").update(`${taskId}\0${attempt}`, "utf8").digest("hex").slice(0, 32);
   return `sqlite-${digest}`;
+}
+
+function taskExecutionPath(task: TaskPackage): string {
+  return task.worktree_path ?? task.workspace;
+}
+
+function executionPathsOverlap(left: string, right: string): boolean {
+  const leftPath = normalizeExecutionPath(left);
+  const rightPath = normalizeExecutionPath(right);
+  return leftPath === rightPath || leftPath.startsWith(rightPath + path.sep)
+    || rightPath.startsWith(leftPath + path.sep);
+}
+
+function normalizeExecutionPath(value: string): string {
+  const resolved = path.resolve(value).replace(/[\\/]+$/u, "");
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
 function queueKey(taskId: string, attempt: number): string { return `${taskId}\0${attempt}`; }

@@ -20,6 +20,7 @@ import { TaskStore } from "../../../src/store/task-store.js";
 import { DirectWorkspaceProvider } from "../../../src/workspace/direct-provider.js";
 import { createPlatformProbe, PROCESS_IDENTITY_VERSION, type ProcessProbe, type ProbeRequest, type ProbeVerdict } from "../../../src/runtime/process-probe.js";
 import { runBridgeDoctor } from "../../../src/runtime/doctor.js";
+import { terminateProcessTree } from "../../../src/adapters/process-spawn.js";
 
 const source = (name: string): string => readFileSync(path.join(process.cwd(), "src", name), "utf8");
 
@@ -102,8 +103,18 @@ test("SQLite Manager startup runs read-only Recovery and retains unknown active 
       assert.equal(operation?.capacity_occupied, true);
       const queuedStatus = contentObject(await _client.callTool({ name: "zcode_status", arguments: { task_id: queuedTaskId } }));
       assert.equal(queuedStatus.status, "queued", "a held Operation must not cause a different queued Task to dispatch");
-      await assert.rejects(manager.createTask(syntheticTask(workspace, `blocked-by-operation-hold-${taskId}`) as unknown as Parameters<BridgeTaskManager["createTask"]>[0]),
-        /blocked by Recovery/u, "a held Operation must make the affected Root read-only for new Admission");
+      const beforeRetry = JSON.stringify(port.readRecoverySnapshot());
+      await assert.rejects(manager.recoverTasks(), /startup-only/u, "Recovery must not be re-entered while the Manager is live");
+      assert.equal(JSON.stringify(port.readRecoverySnapshot()), beforeRetry, "rejected Recovery re-entry must not alter lifecycle state");
+      const sameWorkspace = await manager.createTask(syntheticTask(workspace, `same-path-${randomUUID()}`) as unknown as Parameters<BridgeTaskManager["createTask"]>[0]);
+      assert.equal(sameWorkspace.status, "queued", "new work may queue behind the occupied execution path");
+      const independentWorkspace = path.join(dataRoot, "independent-workspace");
+      mkdirSync(independentWorkspace, { recursive: true });
+      const independentTaskId = `independent-${randomUUID()}`;
+      const independent = await manager.createTask(syntheticTask(independentWorkspace, independentTaskId) as unknown as Parameters<BridgeTaskManager["createTask"]>[0]);
+      assert.ok(["queued", "running"].includes(independent.status), "another execution path remains admissible");
+      assert.equal((await waitForTerminal(_client, independentTaskId, 1)).status, "completed");
+      await waitForLifecycleEvent(_client, independentTaskId, "released");
       const eventsBeforeObservation = port.readTaskEvents(taskId).events.length;
       const observed = contentObject(await _client.callTool({ name: "zcode_status", arguments: { task_id: taskId } }));
       const executionObservation = observed.execution_observation as Record<string, unknown>;
@@ -112,12 +123,9 @@ test("SQLite Manager startup runs read-only Recovery and retains unknown active 
       assert.match(String(executionObservation.evidence_ref), /^[0-9a-f]{64}$/u);
       assert.doesNotMatch(JSON.stringify(executionObservation), /43210/u, "observation reference must not disclose a PID");
       assert.equal(port.readTaskEvents(taskId).events.length, eventsBeforeObservation, "Status observation is read-only and must not append lifecycle events");
-      const beforeJson = JSON.stringify(snapshotBefore);
-      await assert.rejects(manager.recoverTasks(), /startup-only/u, "Recovery must not be re-entered while the Manager is live");
-      assert.equal(JSON.stringify(port.readRecoverySnapshot()), beforeJson, "rejected Recovery re-entry must not alter lifecycle state");
-      await assert.rejects(manager.createTask(syntheticTask(path.join(dataRoot, "workspace"), `blocked-${taskId}`) as unknown as Parameters<BridgeTaskManager["createTask"]>[0]), /blocked by Recovery/u);
-      assert.equal(port.readTaskProjection(`blocked-${taskId}`), null, "a blocked Recovery root must reject admission before writing Task state");
-      assert.equal(spawnCount, 0, "startup Recovery must not Spawn or replay a Worker");
+      const anotherQueued = await manager.createTask(syntheticTask(workspace, `queued-${randomUUID()}`) as unknown as Parameters<BridgeTaskManager["createTask"]>[0]);
+      assert.equal(anotherQueued.status, "queued", "work on the occupied path stays queued");
+      assert.equal(spawnCount, 1, "startup Recovery must not replay the held Worker; only unrelated work may Spawn");
     } finally {
       recovery.close();
     }
@@ -218,20 +226,19 @@ for (const recoveryProbeMode of ["alive", "unknown"] as const) test(
         const doctor = await _client.callTool({ name: "zcode_doctor", arguments: {} });
         const report = doctor.structuredContent as { checks: Array<{ name: string; status: string; summary: string }> };
         const recoveryCheck = report.checks.find((check) => check.name === "recovery_lock");
-        assert.equal(recoveryCheck?.status, "warning", "doctor must expose the same per-Manager fence as mutations");
-        assert.match(recoveryCheck!.summary, /managed_elsewhere/u);
+        assert.equal(recoveryCheck?.status, "ok", "a Worker on another Manager must not make the SQLite root read-only");
         const operationAfterRecovery = recoveryPort.readOperation(operationId) as Record<string, unknown> | null;
         assert.equal(Number(operationAfterRecovery?.revision), Number(seededOperation?.revision),
           "Rejecting startup takeover must not advance the owning Operation");
 
-        const blockedTask = syntheticTask(path.join(dataRoot, "workspace"), `blocked-live-owner-${randomUUID()}`) as unknown as Parameters<BridgeTaskManager["createTask"]>[0];
-        await assert.rejects(
-          manager.createTask(blockedTask),
-          recoveryProbeMode === "alive"
-            ? /worker_still_alive_managed_elsewhere/u
-            : /worker_identity_unknown_managed_elsewhere/u,
-          `the secondary Manager must remain read-only while Worker identity is ${recoveryProbeMode}`,
-        );
+        const blockedTask = syntheticTask(String(seededOperation?.workspace_ref), `blocked-live-owner-${randomUUID()}`) as unknown as Parameters<BridgeTaskManager["createTask"]>[0];
+        const queuedOnOccupiedPath = await manager.createTask(blockedTask);
+        assert.equal(queuedOnOccupiedPath.status, "queued", "same-path work remains queued behind uncertain Worker occupancy");
+        const independentWorkspace = path.join(dataRoot, "independent-workspace");
+        mkdirSync(independentWorkspace, { recursive: true });
+        const independentTaskId = `independent-live-owner-${randomUUID()}`;
+        const independent = await manager.createTask(syntheticTask(independentWorkspace, independentTaskId) as unknown as Parameters<BridgeTaskManager["createTask"]>[0]);
+        assert.ok(["queued", "running"].includes(independent.status), "another workspace remains writable");
       } finally {
         recovery.close();
       }
@@ -779,7 +786,7 @@ class RawStdioMcpTestClient {
 
 async function withSqliteMcp(
   run: (client: Client, manager: BridgeTaskManager, dataRoot: string, workspace: string) => Promise<void>,
-  options: { readonly testBeforeDispatch?: () => Promise<void>; readonly testOnScheduler?: (stage: string, detail: Readonly<Record<string, unknown>>) => void; readonly onStage?: (stage: string, detail?: Readonly<Record<string, unknown>>) => void; readonly onChildSpawn?: (child: { readonly pid?: number; readonly stderr?: NodeJS.ReadableStream | null; readonly resultChannel?: NodeJS.ReadableStream | null }) => void; readonly beforeAuthority?: (dataRoot: string, modules: Awaited<ReturnType<typeof loadLifecycleCandidateModules>>, workspace: string) => void; readonly prepareDataRoot?: (dataRoot: string, fixture: string) => Promise<void>; readonly databaseFileName?: string; readonly enableSyntheticInteractionChannel?: boolean; readonly processProbe?: ProcessProbe; readonly testProcessProbeTimeoutMs?: number; readonly testShutdownWaitMs?: number; readonly stdio?: boolean; readonly preserveFixtureOnFailure?: boolean; readonly onStdioHost?: (host: StdioLifecycleHost) => void; readonly onStdioShutdownComplete?: (reason: string) => void; readonly onStdioShutdownFailure?: (reason: string, error: unknown) => void } = {},
+  options: { readonly testBeforeDispatch?: () => Promise<void>; readonly testOnScheduler?: (stage: string, detail: Readonly<Record<string, unknown>>) => void; readonly onStage?: (stage: string, detail?: Readonly<Record<string, unknown>>) => void; readonly onChildSpawn?: (child: { readonly pid?: number; readonly stderr?: NodeJS.ReadableStream | null; readonly resultChannel?: NodeJS.ReadableStream | null }) => void; readonly beforeAuthority?: (dataRoot: string, modules: Awaited<ReturnType<typeof loadLifecycleCandidateModules>>, workspace: string) => void; readonly prepareDataRoot?: (dataRoot: string, fixture: string) => Promise<void>; readonly databaseFileName?: string; readonly enableSyntheticInteractionChannel?: boolean; readonly processProbe?: ProcessProbe; readonly testProcessProbeTimeoutMs?: number; readonly testShutdownWaitMs?: number; readonly testStopWorkerForRecovery?: (pid: number, expectedFingerprint: string) => Promise<void>; readonly testBeforeRecoveryWrite?: (operationId: string, phase: string) => Promise<void>; readonly stdio?: boolean; readonly preserveFixtureOnFailure?: boolean; readonly onStdioHost?: (host: StdioLifecycleHost) => void; readonly onStdioShutdownComplete?: (reason: string) => void; readonly onStdioShutdownFailure?: (reason: string, error: unknown) => void } = {},
 ): Promise<void> {
   const fixture = path.join(integrationRoot, randomUUID());
   const dataRoot = path.join(fixture, "sqlite-root");
@@ -820,6 +827,8 @@ async function withSqliteMcp(
     trustedLocalContext: createTrustedLocalCandidateContext({ name: "sqlite-mcp-test", settingsDirectory }),
     ...(options.processProbe ? { processProbe: options.processProbe } : {}),
     ...(options.testProcessProbeTimeoutMs !== undefined ? { testProcessProbeTimeoutMs: options.testProcessProbeTimeoutMs } : {}),
+    ...(options.testStopWorkerForRecovery ? { testStopWorkerForRecovery: options.testStopWorkerForRecovery } : {}),
+    ...(options.testBeforeRecoveryWrite ? { testBeforeRecoveryWrite: options.testBeforeRecoveryWrite } : {}),
     ...(options.testShutdownWaitMs !== undefined ? { testShutdownWaitMs: options.testShutdownWaitMs } : {}),
     ...(options.testBeforeDispatch ? { testBeforeDispatch: options.testBeforeDispatch } : {}),
     ...(options.testOnScheduler ? { testOnScheduler: options.testOnScheduler } : {}),
@@ -941,9 +950,11 @@ const recoveryModes = [
     recoveryProbe: async (requests: readonly ProbeRequest[]): Promise<ProbeVerdict[]> => requests.map(() => ({
       state: "exited", reason_code: "synthetic_exact_identity_absent", observed_at: new Date().toISOString(),
     })), expectedReason: "cleanup_incomplete" },
-  { name: "cleanup_unverified_exact_exit", maximumRecoveryMs: 30_000, recoveryProbe: async (requests: readonly ProbeRequest[]): Promise<ProbeVerdict[]> => requests.map(() => ({
+  { name: "cleanup_unverified_exact_exit", maximumRecoveryMs: 30_000, releaseWhenClean: true, recoveryProbe: async (requests: readonly ProbeRequest[]): Promise<ProbeVerdict[]> => requests.map(() => ({
     state: "exited", reason_code: "synthetic_exact_identity_absent", observed_at: new Date().toISOString(),
   })), expectedReason: "cleanup_incomplete" },
+  { name: "cleanup_unverified_explicit_stop_alive", explicitStopAliveRecovery: true, expectedReason: "cleanup_incomplete" },
+  { name: "cleanup_unverified_explicit_stop_failure", explicitStopAliveRecovery: true, failRecoveryStop: true, expectedReason: "cleanup_incomplete" },
 ] as const;
 
 for (const mode of recoveryModes) {
@@ -993,6 +1004,10 @@ async function runRecoveryBoundedMode(
     const runStages: Array<{ stage: string; detail?: Readonly<Record<string, unknown>> }> = [];
     const platformProbe = createPlatformProbe();
     let runProbeCalls = 0;
+    let explicitRecoveryIdentity: "idle" | "alive" | "exited" = "idle";
+    let recoveryStopCalls = 0;
+    let expectedRecoveryPid: number | null = null;
+    let expectedRecoveryFingerprint: string | null = null;
     const baseProbe: ProcessProbe = {
       platform: platformProbe.platform,
       identityOf: (pid) => platformProbe.identityOf(pid),
@@ -1000,6 +1015,14 @@ async function runRecoveryBoundedMode(
       probe: async (requests) => {
         runProbeCalls += 1;
         if (runProbeCalls <= 2) return await platformProbe.probe(requests);
+        if ("explicitStopAliveRecovery" in mode && mode.explicitStopAliveRecovery && explicitRecoveryIdentity !== "idle") {
+          const identityState: "alive" | "exited" = explicitRecoveryIdentity === "exited" ? "exited" : "alive";
+          return requests.map(() => ({
+            state: identityState,
+            reason_code: `synthetic_${identityState}`,
+            observed_at: new Date().toISOString(),
+          }));
+        }
         return requests.map(() => ({ state: "unknown", reason_code: "initial_cleanup_unavailable", observed_at: new Date().toISOString() }));
       },
     };
@@ -1012,6 +1035,15 @@ async function runRecoveryBoundedMode(
       testOnlyFakeAdapter: true,
       processProbe: baseProbe,
       testProcessProbeTimeoutMs: 500,
+      ...( "explicitStopAliveRecovery" in mode && mode.explicitStopAliveRecovery ? {
+        testStopWorkerForRecovery: async (pid: number, expectedFingerprint: string) => {
+          recoveryStopCalls += 1;
+          assert.equal(pid, expectedRecoveryPid, "Recovery stop must target the persisted Claim PID");
+          assert.equal(expectedFingerprint, expectedRecoveryFingerprint, "Recovery stop must bind the persisted Claim fingerprint");
+          if ("failRecoveryStop" in mode && mode.failRecoveryStop) throw new Error("synthetic_identity_bound_stop_failed");
+          explicitRecoveryIdentity = "exited";
+        },
+      } : {}),
       onStage: (stage, detail) => runStages.push({ stage, detail }),
     });
     driver.createTask(task);
@@ -1019,6 +1051,43 @@ async function runRecoveryBoundedMode(
     assert.equal(run.state, "result_committed", `synthetic Worker must commit its Result before Recovery (${mode.name}): ${JSON.stringify({ run, runStages })}`);
     assert.equal(run.workerExitCode, 0, `synthetic Worker must exit before Recovery Probe (${mode.name})`);
     assert.equal(run.cleanupState, "unverified", `unknown initial cleanup must retain the Operation (${mode.name})`);
+    if ("explicitStopAliveRecovery" in mode && mode.explicitStopAliveRecovery) {
+      const identityStore = modules.Store.openForRecovery(dataRoot);
+      assert.ok(identityStore);
+      try {
+        const operation = modules.createPort(identityStore).readOperation(operationId) as Record<string, unknown>;
+        const claim = JSON.parse(String(operation.claim_worker_identity_json)) as Record<string, unknown>;
+        const launch = JSON.parse(String(operation.launch_identity_json)) as Record<string, unknown>;
+        expectedRecoveryPid = Number(claim.process_id);
+        expectedRecoveryFingerprint = String(claim.start_fingerprint);
+        assert.equal(launch.process_id, expectedRecoveryPid);
+        assert.equal(launch.start_fingerprint, expectedRecoveryFingerprint);
+      } finally { identityStore.close(); }
+      explicitRecoveryIdentity = "alive";
+      const recovery = await driver.recoverOperation(operationId, { stopAliveWorker: true });
+      assert.equal(recoveryStopCalls, 1, "explicit Recovery must try the bound Worker stop exactly once");
+      const persisted = modules.Store.openForRecovery(dataRoot);
+      assert.ok(persisted);
+      try {
+        const snapshot = modules.createPort(persisted).readRecoverySnapshot() as {
+          operations: Array<{ operation_id: string; capacity_occupied: boolean; phase: string }>;
+        };
+        const operation = snapshot.operations.find((item) => item.operation_id === operationId);
+        if ("failRecoveryStop" in mode && mode.failRecoveryStop) {
+          assert.equal(recovery.state, "held");
+          assert.equal((recovery as Record<string, unknown>).identity_state, "unknown");
+          assert.equal(operation?.capacity_occupied, true, "an unverified stop must retain workspace occupancy");
+          assert.equal(operation?.phase, "cleanup_unverified");
+        } else {
+          assert.equal(recovery.state, "released", JSON.stringify(recovery));
+          assert.equal((recovery as Record<string, unknown>).cleanup_recovered, true);
+          assert.equal(operation?.capacity_occupied, false);
+          assert.equal(operation?.phase, "released");
+        }
+      } finally { persisted.close(); }
+      successful = true;
+      return;
+    }
     driver.close();
     driver = undefined;
 
@@ -1080,7 +1149,7 @@ async function runRecoveryBoundedMode(
             holdPort.recordRecoveryObservation(observation, evidence);
           } finally { holdStore.close(); }
         }
-        return mode.recoveryProbe ? await mode.recoveryProbe(requests) : platformProbe.probe(requests);
+        return "recoveryProbe" in mode && mode.recoveryProbe ? await mode.recoveryProbe(requests) : platformProbe.probe(requests);
       },
     };
     let recoverySpawnCount = 0;
@@ -1105,9 +1174,10 @@ async function runRecoveryBoundedMode(
       const recoveryPort = modules.createPort(recoveryStore);
       const snapshot = recoveryPort.readRecoverySnapshot() as { operations: Array<Record<string, unknown>> };
       const operation = snapshot.operations.find((item) => item.operation_id === operationId);
-      assert.equal(operation?.phase, "cleanup_unverified");
-      assert.equal(operation?.recovery_classification, "hold");
-      assert.equal(operation?.capacity_occupied, true);
+      const released = "releaseWhenClean" in mode && mode.releaseWhenClean === true;
+      assert.equal(operation?.phase, released ? "released" : "cleanup_unverified");
+      assert.equal(operation?.recovery_classification, released ? "normal" : "hold");
+      assert.equal(operation?.capacity_occupied, !released);
       assert.equal(operation?.claim_permanent, true);
 
       const lifecycle = recoveryPort.readLifecycleEvents(operationId);
@@ -1115,15 +1185,19 @@ async function runRecoveryBoundedMode(
         const evidence = JSON.parse(String(event.evidence_json)) as Record<string, unknown>;
         return evidence;
       }).filter((evidence) => evidence.reason === "recovery_hold");
-      assert.ok(recoveryEvents.length >= 1, "incomplete cleanup proof must persist a queryable Recovery Hold");
-      assert.ok(recoveryEvents.some((evidence) => evidence.reason_code === mode.expectedReason),
-        "the persistent event must identify why cleanup could not be released");
-      assert.ok(recoveryEvents.every((evidence) => evidence.classification === "hold"));
+      if (released) {
+        assert.equal(recoveryEvents.length, 0, "exact exit and clean claimant evidence must release without inventing a Hold");
+      } else {
+        assert.ok(recoveryEvents.length >= 1, "incomplete cleanup proof must persist a queryable Recovery Hold");
+        assert.ok(recoveryEvents.some((evidence) => evidence.reason_code === mode.expectedReason),
+          "the persistent event must identify why cleanup could not be released");
+        assert.ok(recoveryEvents.every((evidence) => evidence.classification === "hold"));
+      }
       assert.ok(recoveryEvents.every((evidence) => /^[0-9a-f]{64}$/u.test(String(evidence.evidence_digest))),
         "each persistent event must bind its Recovery evidence by digest");
-      assert.equal(lifecycle.filter((event) => event.event_type === "cleanup_reverified").length, 0);
-      assert.equal(lifecycle.filter((event) => event.event_type === "cleanup_verified").length, 0);
-      assert.equal(lifecycle.filter((event) => event.event_type === "released").length, 0);
+      assert.equal(lifecycle.filter((event) => event.event_type === "cleanup_reverified").length, released ? 1 : 0);
+      assert.equal(lifecycle.filter((event) => event.event_type === "cleanup_verified").length, released ? 1 : 0);
+      assert.equal(lifecycle.filter((event) => event.event_type === "released").length, released ? 1 : 0);
       assert.equal(lifecycle.filter((event) => event.event_type === "result_committed").length, 1);
       assert.equal(lifecycle.filter((event) => event.event_type === "claim_committed").length, 1);
       assert.equal(lifecycle.filter((event) => event.event_type === "launch_intent").length, 1,
@@ -1140,7 +1214,7 @@ async function runRecoveryBoundedMode(
   }
 }
 
-test("Manager Recovery after restart preserves Capacity and Claim when claimant scan lacks complete closure evidence", { timeout: 120_000, skip: process.platform !== "win32" }, async () => {
+test("Manager Recovery after restart releases exact exited Workers only after a clean claimant scan", { timeout: 120_000, skip: process.platform !== "win32" }, async () => {
   const modes = [
     { id: "rc", name: "result-committed-before-cleanup", interruptAt: "result_projection_verified", expectedPhase: "result_committed", concurrent: false, separateManagerProcess: false },
     { id: "cp", name: "cleanup-pending-after-manager-interruption", interruptAt: "cleanup_pending_persisted", expectedPhase: "cleanup_pending", concurrent: true, separateManagerProcess: true },
@@ -1306,24 +1380,22 @@ test("Manager Recovery after restart preserves Capacity and Claim when claimant 
         const operation = port.readOperation(operationId) as Record<string, unknown>;
         const snapshot = port.readRecoverySnapshot() as { capacity: Record<string, unknown>; operations: Array<Record<string, unknown>> };
         const recovered = snapshot.operations.find((row) => row.operation_id === operationId);
-        assert.equal(operation.phase, mode.expectedPhase);
-        assert.equal(recovered?.capacity_occupied, true);
+        assert.equal(operation.phase, "released");
+        assert.equal(recovered?.capacity_occupied, false);
         assert.equal(recovered?.claim_permanent, true, "Release frees only capacity and never reclaims the permanent Claim");
-        assert.equal(snapshot.operations.filter((row) => row.capacity_occupied === true).length, 1);
+        assert.equal(snapshot.operations.filter((row) => row.capacity_occupied === true).length, 0);
         const events = port.readLifecycleEvents(operationId);
         assert.equal(events.filter((event) => event.event_type === "result_committed").length, 1);
-        assert.equal(events.filter((event) => event.event_type === "cleanup_pending").length, mode.expectedPhase === "cleanup_pending" ? 1 : 0);
-        assert.equal(events.filter((event) => event.event_type === "cleanup_verified").length, 0);
-        assert.equal(events.filter((event) => event.event_type === "released").length, 0);
+        assert.equal(events.filter((event) => event.event_type === "cleanup_pending").length, 1);
+        assert.equal(events.filter((event) => event.event_type === "cleanup_verified").length, 1);
+        assert.equal(events.filter((event) => event.event_type === "released").length, 1);
         const holds = events.filter((event) => event.event_type === "observation_recorded")
           .map((event) => JSON.parse(String(event.evidence_json)) as Record<string, unknown>)
           .filter((evidence) => evidence.reason === "recovery_hold");
-        assert.ok(holds.length >= 1);
-        assert.ok(holds.some((evidence) => evidence.reason_code === "cleanup_incomplete"));
+        assert.equal(holds.length, 0, "a clean claimant scan completes normal Recovery without a synthetic Hold");
       } finally { afterRecovery.close(); }
 
-        // Reopen once more as a second restart: the persisted Hold remains
-        // occupied and Recovery does not infer Cleanup or Release.
+        // Reopen once more as a second restart: the released Operation stays terminal.
       for (const authority of authorities) await authority.shutdown();
       authorities.length = 0;
       const repeated = await SqliteLifecycleMcpAuthority.create({
@@ -1339,14 +1411,183 @@ test("Manager Recovery after restart preserves Capacity and Claim when claimant 
       assert.ok(afterRepeat);
       try {
         const events = modules.createPort(afterRepeat).readLifecycleEvents(operationId);
-          assert.equal(events.filter((event) => event.event_type === "cleanup_verified").length, 0);
-          assert.equal(events.filter((event) => event.event_type === "released").length, 0);
+          assert.equal(events.filter((event) => event.event_type === "cleanup_verified").length, 1);
+          assert.equal(events.filter((event) => event.event_type === "released").length, 1);
       } finally { afterRepeat.close(); }
       successful = true;
     } finally {
       for (const authority of authorities) await authority.shutdown().catch(() => undefined);
       driver?.close();
       if (successful) rmSync(fixture, { recursive: true, force: true });
+    }
+  }
+});
+
+test("ADR-024 six lifecycle crash boundaries use hard Manager-process exits and restart Recovery", { timeout: 180_000, skip: process.platform !== "win32" }, async () => {
+  const cases = [
+    { name: "Admission persisted before Launch", interruptAt: "admission_complete", phase: "reserved", claimed: false, terminalAfterRestart: true },
+    { name: "Launch intent persisted before process creation", interruptAt: "intent_complete", phase: "launch_intent", claimed: false, terminalAfterRestart: false },
+    { name: "Worker started and reported before Claim persistence", interruptAt: "worker_report_read_complete", phase: "launch_intent", claimed: false, terminalAfterRestart: false },
+    { name: "Claim persisted before Manager receives Result", interruptAt: "claim_committed", phase: "running", claimed: true, terminalAfterRestart: false },
+    { name: "Result committed before Cleanup", interruptAt: "result_projection_verified", phase: "result_committed", claimed: true, terminalAfterRestart: true },
+    { name: "Cleanup verified before Release", interruptAt: "cleanup_verified_persisted", phase: "cleanup_verified", claimed: true, terminalAfterRestart: true },
+  ] as const;
+
+  for (const scenario of cases) {
+    const fixture = path.join(integrationRoot, `adr024-crash-${randomUUID()}`);
+    const dataRoot = path.join(fixture, "sqlite-root");
+    const workspace = path.join(fixture, "workspace");
+    const settingsDirectory = path.join(fixture, "settings");
+    const taskId = `adr024-${randomUUID()}`;
+    const operationId = candidateOperationId(taskId, 1);
+    const workerEntryPath = path.join(projectRoot, "dist-test", "src", "worker", "worker-main.js");
+    const bridgeEntryPath = fileURLToPath(import.meta.url);
+    const launchId = `launch-${randomUUID()}`;
+    const launchToken = `crash-matrix-${randomUUID()}-0123456789`;
+    mkdirSync(compiledCandidate, { recursive: true });
+    if (existsSync(candidateSchema)) {
+      assert.equal(readFileSync(candidateSchema, "utf8"), readFileSync(sourceSchema, "utf8"));
+    } else copyFileSync(sourceSchema, candidateSchema);
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(settingsDirectory, { recursive: true });
+    mkdirSync(dataRoot, { recursive: true });
+    await initializeIsolatedCandidateRoot(dataRoot);
+    const setupStore = (await loadLifecycleCandidateModules()).Store.open(dataRoot);
+    try {
+      (await loadLifecycleCandidateModules()).createPort(setupStore).provisionCapacity({
+        operation_id: `capacity-${randomUUID()}`, capacity_limit: 1, expected_generation: 0,
+        maintenance: { dispatch_blocked: true, writers_drained: true },
+      });
+    } finally { setupStore.close(); }
+
+    const childScript = `
+      import fs from 'node:fs';
+      import path from 'node:path';
+      import { pathToFileURL } from 'node:url';
+      const [dataRoot, settingsDirectory, workspace, taskJson, operationId, launchId, launchToken, workerEntryPath, bridgeEntryPath, interruptAt] = process.argv.slice(1);
+      const gate = await import(pathToFileURL(path.join(process.cwd(), 'dist-test/src/store/lifecycle-gate.js')).href);
+      const host = await import(pathToFileURL(path.join(process.cwd(), 'dist-test/src/host/stdio.js')).href);
+      const driver = await gate.openClaimOnlyDriver({
+        dataRoot, workerEntryPath, bridgeEntryPath,
+        trustedLocalContext: host.createTrustedLocalCandidateContext({ name: 'adr024-hard-crash', settingsDirectory }),
+        testOnlyFakeAdapter: true,
+        onStage(stage, detail) {
+          if (stage !== interruptAt) return;
+          fs.writeSync(1, 'ADR024_CRASH=' + JSON.stringify({ stage, detail }) + '\\n');
+          process.exit(86);
+        },
+      });
+      const task = JSON.parse(taskJson);
+      driver.createTask(task);
+      await driver.run({ task, operationId, launchId, launchToken, attempt: 1 });
+      process.exit(87);
+    `;
+    const crashedManager = spawn(process.execPath, ["--input-type=module", "-e", childScript, dataRoot, settingsDirectory,
+      workspace, JSON.stringify(syntheticTask(workspace, taskId)), operationId, launchId, launchToken,
+      workerEntryPath, bridgeEntryPath, scenario.interruptAt], {
+      cwd: projectRoot, env: process.env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true,
+    });
+    let stdout = "";
+    let stderr = "";
+    crashedManager.stdout.setEncoding("utf8").on("data", (chunk: string) => { stdout += chunk; });
+    crashedManager.stderr.setEncoding("utf8").on("data", (chunk: string) => { stderr += chunk; });
+    const processExit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
+      crashedManager.once("error", reject);
+      crashedManager.once("close", (code, signal) => resolve({ code, signal }));
+    });
+    assert.equal(processExit.code, 86, `${scenario.name}: Manager must hard-exit at the injected boundary; ${stderr}`);
+    const crashLine = stdout.split(/\r?\n/u).find((line) => line.startsWith("ADR024_CRASH="));
+    assert.ok(crashLine, `${scenario.name}: parent must observe the exact injected stage`);
+    assert.equal((JSON.parse(crashLine.slice("ADR024_CRASH=".length)) as { stage: string }).stage, scenario.interruptAt);
+
+    const modules = await loadLifecycleCandidateModules();
+    const beforeRestart = modules.Store.openForRecovery(dataRoot);
+    assert.ok(beforeRestart);
+    let launchIdentity: Record<string, unknown> | null = null;
+    try {
+      const port = modules.createPort(beforeRestart);
+      const operation = port.readOperation(operationId) as Record<string, unknown>;
+      assert.equal(operation.phase, scenario.phase, `${scenario.name}: exact durable phase survives Manager process exit`);
+      assert.equal(operation.claim_id !== null, scenario.claimed, `${scenario.name}: Claim persistence boundary is exact`);
+      assert.equal(operation.capacity_slot !== null, true, `${scenario.name}: Capacity stays reserved at every boundary`);
+      if (operation.launch_identity_json) launchIdentity = JSON.parse(String(operation.launch_identity_json)) as Record<string, unknown>;
+      if (scenario.interruptAt === "worker_report_read_complete") {
+        assert.ok(operation.launch_receipt_id, "the Worker has started and reported, while permanent Claim is still absent");
+        assert.equal(operation.claim_id, null);
+      }
+      if (scenario.interruptAt === "claim_committed") assert.ok(operation.claim_id);
+      if (scenario.interruptAt === "result_projection_verified") assert.ok(operation.result_commit_ref);
+      const snapshot = port.readRecoverySnapshot() as { operations: Array<Record<string, unknown>> };
+      assert.equal(snapshot.operations.find((item) => item.operation_id === operationId)?.capacity_occupied, true);
+    } finally { beforeRestart.close(); }
+
+    let authority: SqliteLifecycleMcpAuthority | undefined;
+    let manager: BridgeTaskManager | undefined;
+    let server: ReturnType<typeof createBridgeServer> | undefined;
+    let client: Client | undefined;
+    let recoverySpawns = 0;
+    try {
+      authority = await SqliteLifecycleMcpAuthority.create({
+        dataRoot, workerEntryPath, bridgeEntryPath,
+        trustedLocalContext: createTrustedLocalCandidateContext({ name: `adr024-restart-${scenario.interruptAt}`, settingsDirectory }),
+        processProbe: createPlatformProbe(), testProcessProbeTimeoutMs: 5_000,
+        testOnlyFakeAdapter: true, onChildSpawn: () => { recoverySpawns += 1; },
+      });
+      manager = new BridgeTaskManager({ lifecycleAuthority: authority });
+      server = createBridgeServer({ taskManager: manager });
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      client = new Client({ name: "adr024-crash-recovery-test", version: "0.0.1" });
+      await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+      if (scenario.terminalAfterRestart) {
+        const status = await waitForTerminal(client, taskId, 1, scenario.name);
+        assert.equal(status.status, "completed", `${scenario.name}: authorized persisted Attempt recovers without replay`);
+        await waitForLifecycleEvent(client, taskId, "released");
+        const expectedSpawns = scenario.interruptAt === "admission_complete" ? 1 : 0;
+        assert.equal(recoverySpawns, expectedSpawns, `${scenario.name}: Recovery only dispatches a proven unstarted Attempt`);
+      } else {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        const status = await client.callTool({ name: "zcode_status", arguments: { task_id: taskId } });
+        assert.equal((contentObject(status)).status, scenario.interruptAt === "claim_committed" ? "running" : "queued");
+        assert.equal(recoverySpawns, 0, `${scenario.name}: uncertain Launch/Claim must never Spawn a second Worker`);
+      }
+
+      const afterRestart = modules.Store.openForRecovery(dataRoot);
+      assert.ok(afterRestart);
+      try {
+        const port = modules.createPort(afterRestart);
+        const operation = port.readOperation(operationId) as Record<string, unknown>;
+        const snapshot = port.readRecoverySnapshot() as { operations: Array<Record<string, unknown>> };
+        const recovered = snapshot.operations.find((item) => item.operation_id === operationId);
+        if (scenario.terminalAfterRestart) {
+          assert.equal(operation.phase, "released", `${scenario.name}: Recovery finishes only after valid cleanup evidence`);
+          assert.equal(recovered?.capacity_occupied, false);
+        } else {
+          assert.equal(operation.phase, scenario.phase, `${scenario.name}: inconclusive crash boundary remains held`);
+          assert.equal(recovered?.capacity_occupied, true, `${scenario.name}: uncertain Worker keeps Capacity and Workspace occupied`);
+        }
+        const events = port.readLifecycleEvents(operationId);
+        assert.equal(events.filter((event) => event.event_type === "released").length,
+          scenario.terminalAfterRestart ? 1 : 0, `${scenario.name}: Release count follows verified recovery only`);
+      } finally { afterRestart.close(); }
+    } finally {
+      await client?.close().catch(() => undefined);
+      await server?.close().catch(() => undefined);
+      await manager?.shutdown().catch(() => undefined);
+      if (launchIdentity && typeof launchIdentity.process_id === "number" && typeof launchIdentity.start_fingerprint === "string") {
+        const identity = {
+          pid: launchIdentity.process_id, fingerprint: launchIdentity.start_fingerprint,
+          fingerprint_precision: "exact" as const, identity_version: PROCESS_IDENTITY_VERSION,
+          platform: "win32" as const, captured_at: String(launchIdentity.captured_at),
+        };
+        const cleanupProbe = createPlatformProbe();
+        const verdict = await cleanupProbe.probe([{ pid: identity.pid, identity }]).catch(() => []);
+        if (verdict[0]?.state === "alive") {
+          await terminateProcessTree(identity.pid, { graceMs: 500, killWaitMs: 5_000,
+            expectedRootFingerprint: identity.fingerprint }).catch(() => undefined);
+        }
+      }
+      rmSync(fixture, { recursive: true, force: true });
     }
   }
 });
@@ -1737,6 +1978,183 @@ test("formal MCP running Cancel persists intent, verifies the Worker tree, and r
       child.stderr?.on("data", (chunk: Buffer | string) => trace("worker-stderr", chunk.toString().trim()));
     },
   });
+});
+
+test("formal MCP concurrent zcode_cancel calls recover one held Task with one verified termination and Release", { timeout: 90_000, skip: process.platform !== "win32" }, async () => {
+  const child = spawn(process.execPath, ["-e", "process.stdout.write('ready\\n'); setInterval(() => undefined, 1000)"], {
+    stdio: ["ignore", "pipe", "ignore"], windowsHide: true,
+  });
+  let childExited = false;
+  child.once("exit", () => { childExited = true; });
+  await new Promise<void>((resolve, reject) => {
+    child.once("error", reject);
+    child.stdout.once("data", () => resolve());
+  });
+  assert.ok(child.pid && Number.isSafeInteger(child.pid));
+  const probe = createPlatformProbe();
+  const identity = await probe.identityOf(child.pid);
+  assert.equal(identity.platform, "win32");
+  assert.equal(identity.fingerprint_precision, "exact");
+  assert.ok(identity.fingerprint);
+
+  const taskId = `mcp-concurrent-recovery-${randomUUID()}`;
+  const operationId = candidateOperationId(taskId, 1);
+  let priorCleanupFailureDigest: string | undefined;
+  let stopHookCalls = 0;
+  let signaledTreeMembers = 0;
+  let recoveryWriteArrivals = 0;
+  let releaseRecoveryWrites: (() => void) | undefined;
+  const recoveryWriteGate = new Promise<void>((resolve) => { releaseRecoveryWrites = resolve; });
+  const testBeforeRecoveryWrite = async (seenOperationId: string, phase: string): Promise<void> => {
+    assert.equal(seenOperationId, operationId);
+    assert.equal(phase, "cleanup_unverified");
+    recoveryWriteArrivals += 1;
+    if (recoveryWriteArrivals === 2) releaseRecoveryWrites?.();
+    await recoveryWriteGate;
+  };
+  const testStopWorkerForRecovery = async (pid: number, expectedFingerprint: string): Promise<void> => {
+    stopHookCalls += 1;
+    // Exercise the real Windows identity-bound process-tree terminator for
+    // each independent Manager. A second caller may observe an already-exited
+    // tree, but it must not issue another effective signal.
+    const stopped = await terminateProcessTree(pid, { graceMs: 500, killWaitMs: 5_000, expectedRootFingerprint: expectedFingerprint });
+    assert.equal(stopped.verified, true);
+    signaledTreeMembers += stopped.windows?.signaled.length ?? 0;
+  };
+  try {
+    await withSqliteMcp(async (client, _manager, dataRoot) => {
+      const before = contentObject(await client.callTool({ name: "zcode_status", arguments: { task_id: taskId } }));
+      assert.equal(before.status, "failed");
+      assert.equal(before.attempt, 1);
+      const secondSettings = path.join(dataRoot, "second-manager-settings");
+      mkdirSync(secondSettings, { recursive: true });
+      const secondAuthority = await SqliteLifecycleMcpAuthority.create({
+        dataRoot,
+        workerEntryPath: path.join(projectRoot, "dist-test", "src", "worker", "worker-main.js"),
+        bridgeEntryPath: fileURLToPath(import.meta.url),
+        trustedLocalContext: createTrustedLocalCandidateContext({ name: "sqlite-mcp-second-recovery-test", settingsDirectory: secondSettings }),
+        processProbe: probe,
+        testStopWorkerForRecovery,
+        testBeforeRecoveryWrite,
+        testOnlyFakeAdapter: true,
+      });
+      const secondManager = new BridgeTaskManager({ lifecycleAuthority: secondAuthority });
+      const secondServer = createBridgeServer({ taskManager: secondManager });
+      const [secondClientTransport, secondServerTransport] = InMemoryTransport.createLinkedPair();
+      const secondClient = new Client({ name: "sqlite-lifecycle-second-cancel-test", version: "0.0.1" });
+      await Promise.all([secondServer.connect(secondServerTransport), secondClient.connect(secondClientTransport)]);
+      try {
+      const [firstResult, duplicateResult, competingManagerResult] = await Promise.all([
+        client.callTool({ name: "zcode_cancel", arguments: { task_id: taskId } }),
+        client.callTool({ name: "zcode_cancel", arguments: { task_id: taskId } }),
+        secondClient.callTool({ name: "zcode_cancel", arguments: { task_id: taskId } }),
+      ]);
+      const first = contentObject(firstResult);
+      const duplicate = contentObject(duplicateResult);
+      const competingManager = contentObject(competingManagerResult);
+      assert.deepEqual(first, duplicate, "two concurrent MCP calls on one Manager must share one Recovery result");
+      assert.deepEqual(first, competingManager, "the concurrent Manager loser must reread and return durable Release");
+      assert.equal(first.status, "failed", "cleanup Recovery must preserve the historical failed Result");
+      assert.equal(first.attempt, 1, "Recovery must not create a new Attempt");
+      assert.equal(recoveryWriteArrivals, 2, "both independent Managers must reach the same pre-CAS snapshot");
+      assert.equal(stopHookCalls, 1, "Managers sharing this Authority must coalesce the identity-bound stop before the process-tree signal");
+      assert.ok(signaledTreeMembers >= 1, "the single real Windows tree termination must contain its verified process signals");
+      assert.equal(childExited, true, "the original Windows child must exit before Release");
+
+      const modules = await loadLifecycleCandidateModules();
+      const store = modules.Store.openForRecovery(dataRoot);
+      assert.ok(store);
+      try {
+        const port = modules.createPort(store);
+        const operation = port.readOperation(operationId) as Record<string, unknown>;
+        const lifecycle = port.readLifecycleEvents(operationId) as Array<Record<string, unknown>>;
+        const cleanupFailure = lifecycle.filter((event) => event.event_type === "cleanup_unverified");
+        assert.equal(cleanupFailure.length, 1, "the prior cleanup failure is retained exactly once");
+        assert.equal(cleanupFailure[0]?.evidence_digest, priorCleanupFailureDigest,
+          "Recovery must not replace or rewrite the historical cleanup failure evidence");
+        assert.equal(lifecycle.filter((event) => event.event_type === "cleanup_reverified").length, 1);
+        assert.equal(lifecycle.filter((event) => event.event_type === "cleanup_verified").length, 1);
+        assert.equal(lifecycle.filter((event) => event.event_type === "released").length, 1,
+          "concurrent callers must append only one effective Release");
+        assert.equal(operation.phase, "released");
+        const recovery = port.readRecoverySnapshot() as { operations: Array<Record<string, unknown>> };
+        assert.equal(recovery.operations.find((item) => item.operation_id === operationId)?.capacity_occupied, false);
+      } finally { store.close(); }
+      } finally {
+        releaseRecoveryWrites?.();
+        await secondClient.close().catch(() => undefined);
+        await secondServer.close().catch(() => undefined);
+        await secondManager.shutdown().catch(() => undefined);
+      }
+    }, {
+      preserveFixtureOnFailure: true,
+      processProbe: probe,
+      testStopWorkerForRecovery,
+      testBeforeRecoveryWrite,
+      beforeAuthority: (dataRoot, modules, workspace) => {
+        const store = modules.Store.open(dataRoot);
+        try {
+          const port = modules.createPort(store);
+          port.createTask(syntheticTask(workspace, taskId) as unknown as Parameters<typeof port.createTask>[0]);
+          const allow = () => ({ state: "allow", fixture: true });
+          const admitted = port.admitOperation({ operation_id: operationId, task_id: taskId, attempt: 1, workspace_ref: workspace }, {
+            workspaceValidator: allow, executionPermissionCheck: allow,
+          }) as Record<string, unknown>;
+          const launchRequest = {
+            operation_id: operationId, task_id: taskId, attempt: 1, generation: Number(admitted.generation),
+            revision: Number(admitted.revision), launch_id: `launch-${taskId}`, launch_epoch: 1,
+            launch_token: `recovery-token-${taskId}-0123456789`,
+          };
+          const launchIdentityEvidence = {
+            source: "manager_os_spawn_observation", fixture: false, launch_id: launchRequest.launch_id,
+            generation: Number(admitted.generation), process_id: child.pid, start_fingerprint: identity.fingerprint,
+            fingerprint_precision: "exact", identity_version: PROCESS_IDENTITY_VERSION, platform: "win32",
+            captured_at: identity.captured_at,
+          };
+          const launchIdentity = { ...launchIdentityEvidence, evidence_digest: candidateEvidenceDigest(launchIdentityEvidence) };
+          const intent = port.createLaunchIntent(launchRequest) as Record<string, unknown>;
+          const receipt = port.recordLaunchReceipt({ ...launchRequest, revision: Number(intent.revision), receipt_id: `receipt-${taskId}`, launch_identity: launchIdentity }) as Record<string, unknown>;
+          const workerIdentityEvidence = {
+            source: "manager_verified_process_probe", fixture: false, worker_id: `worker-${taskId}`,
+            process_id: child.pid, start_fingerprint: identity.fingerprint, fingerprint_precision: "exact",
+            identity_version: PROCESS_IDENTITY_VERSION, platform: "win32", captured_at: identity.captured_at,
+          };
+          const workerIdentity = { ...workerIdentityEvidence, evidence_digest: candidateEvidenceDigest(workerIdentityEvidence) };
+          const claim = port.commitPermanentClaim({ ...launchRequest, revision: Number(receipt.revision),
+            claim_id: `claim-${taskId}`, worker_identity: workerIdentity } as unknown as Parameters<typeof port.commitPermanentClaim>[0]) as Record<string, unknown>;
+          const operation = port.readOperation(operationId) as Record<string, unknown>;
+          const result = {
+            task_id: taskId, attempt: 1, status: "failed" as const, summary: "injected prior Worker failure",
+            files_changed: [], tests: [], issues: [], needs_master_decision: false, zcode_output: "synthetic failure",
+            error_code: "zcode_nonzero_exit", exit_code: 1, session_id: null,
+            started_at: new Date(Date.now() - 2_000).toISOString(), finished_at: new Date().toISOString(),
+          };
+          port.commitResult({ operation_id: operationId, task_id: taskId, attempt: 1, generation: Number(operation.generation),
+            revision: Number(operation.revision), claim_id: String(claim.claim_id),
+            claim_worker_identity_digest: String(operation.claim_worker_identity_digest), result_status: "failed", result });
+          const committed = port.readOperation(operationId) as Record<string, unknown>;
+          const cleanupFence = {
+            operation_id: operationId, task_id: taskId, attempt: 1, generation: Number(committed.generation),
+            revision: Number(committed.revision), claim_id: String(committed.claim_id),
+            claim_worker_identity_digest: String(committed.claim_worker_identity_digest),
+          };
+          const pending = port.beginCleanup(cleanupFence) as Record<string, unknown>;
+          port.recordCleanupEvidence({ ...cleanupFence, revision: Number(pending.revision), outcome: "unverified",
+            probe_state: "alive", reason: "injected_concurrent_cancel_fixture" });
+          priorCleanupFailureDigest = (port.readLifecycleEvents(operationId) as Array<Record<string, unknown>>)
+            .find((event) => event.event_type === "cleanup_unverified")?.evidence_digest as string | undefined;
+          assert.ok(priorCleanupFailureDigest);
+        } finally { store.close(); }
+      },
+    });
+  } finally {
+    if (!childExited) {
+      const stillThere = await probe.probe([{ pid: child.pid!, identity }]).catch(() => []);
+      if (stillThere[0]?.state === "alive") {
+        await terminateProcessTree(child.pid!, { graceMs: 500, killWaitMs: 5_000, expectedRootFingerprint: identity.fingerprint! }).catch(() => undefined);
+      }
+    }
+  }
 });
 
 test("formal MCP Host shutdown cancels an active Worker and closes only after verified Cleanup and Release", { timeout: 90_000 }, async () => {
@@ -2154,7 +2572,7 @@ test("stdio EOF attempts graceful shutdown without promising a disconnected quer
   });
 });
 
-test("stdio Host restart keeps a persisted active Operation Root-held without replay", { timeout: 45_000, skip: process.platform !== "win32" }, async () => {
+test("stdio Host restart preserves active Operation occupancy without replay or Root Hold", { timeout: 45_000, skip: process.platform !== "win32" }, async () => {
   const taskId = `m3-restart-held-${randomUUID()}`;
   let spawned = 0;
   const platformProbe = createPlatformProbe();
@@ -2168,9 +2586,8 @@ test("stdio Host restart keeps a persisted active Operation Root-held without re
     const status = contentObject(await client.callTool({ name: "zcode_status", arguments: { task_id: taskId } }));
     assert.equal(status.status, "running", "restart reads the persisted active Attempt rather than synthesizing a terminal Result");
     assert.ok(["worker_identity_unknown", "worker_alive_unmanaged"].includes(String((status.execution_observation as Record<string, unknown> | undefined)?.state)));
-    const blocked = await client.callTool({ name: "zcode_task", arguments: syntheticTask(workspace, `m3-restart-new-${randomUUID()}`) });
-    assert.equal(blocked.isError, true, "persisted active Operation must block new Admission after restart");
-    assert.match(JSON.stringify(blocked), /blocked by Recovery/u);
+    const queued = contentObject(await client.callTool({ name: "zcode_task", arguments: syntheticTask(workspace, `m3-restart-new-${randomUUID()}`) }));
+    assert.equal(queued.status, "queued", "same-path work stays queued behind the persisted active Operation");
     assert.equal(spawned, 0, "restart must not Spawn, Resume, Retry or Replay the active Attempt");
   }, {
     stdio: true,

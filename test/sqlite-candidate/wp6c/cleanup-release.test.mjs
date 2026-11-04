@@ -24,6 +24,7 @@ function makeStore(label='cleanup',{capacity=2,fault}={}){
   return {root:r,store,workspace};
 }
 function addResult(f,suffix,{workspace=f.workspace}={}){
+  mkdirSync(workspace,{recursive:true});
   const taskId=`task-${suffix}`,operationId=`operation-${suffix}`,launchId=`launch-${suffix}`;
   f.store.createTask({task_id:taskId,workspace,objective:'synthetic cleanup/release test',requirements:[],allowed_paths:[],forbidden_paths:[],acceptance_criteria:[],test_commands:[]},'2026-10-23T00:00:00.000Z');
   const allow=()=>({state:'allow',fixture:true});
@@ -101,7 +102,7 @@ async function retryBusyReverify(rootPath,request){
 after(()=>{for(const store of stores){try{store.close();}catch{}}});
 
 test('verified cleanup is operation-scoped and release frees only its own slot',()=>{
-  const f=makeStore('positive'),a=addResult(f,'a'),b=addResult(f,'b');
+  const f=makeStore('positive'),a=addResult(f,'a'),b=addResult(f,'b',{workspace:path.join(TEMP,'other-workspace-positive')});
   const {pending,outcome}=verified(f,a);assert.equal(pending.phase,'cleanup_pending');assert.equal(outcome.phase,'cleanup_verified');
   const before=rows(f,a);assert.equal(before.operation.phase,'cleanup_verified');assert.equal(before.active,2);
   const release=f.store.releaseCapacity({...a,revision:outcome.revision,cleanup_digest:outcome.cleanup_digest});
@@ -113,7 +114,7 @@ test('verified cleanup is operation-scoped and release frees only its own slot',
 });
 
 test('Recovery distinguishes verified cleanup awaiting Release from unknown cleanup for a shared Workspace',()=>{
-  const f=makeStore('recovery-independent'),a=addResult(f,'recovery-a'),b=addResult(f,'recovery-b');
+  const f=makeStore('recovery-independent'),a=addResult(f,'recovery-a'),b=addResult(f,'recovery-b',{workspace:path.join(TEMP,'other-workspace-recovery')});
   verified(f,a);
   f.store.close();
   const recovery=IsolatedAdmissionStore.openForRecovery(f.root),port=createSqliteLifecyclePort(recovery);
@@ -344,11 +345,12 @@ test('two processes racing to release one Operation produce one release Event',a
   assert.equal(rows(f,a).events.filter(e=>e.event_type==='released').length,1);assert.equal(rows(f,a).active,0);
 });
 
-test('same Workspace Operations are independent and cleanup never deletes shared Workspace',()=>{
-  const f=makeStore('shared-workspace'),a=addResult(f,'share-a'),b=addResult(f,'share-b');
+test('same Workspace admission rejects a second Operation and cleanup preserves the Workspace',()=>{
+  const f=makeStore('shared-workspace'),a=addResult(f,'share-a');
+  assert.throws(()=>addResult(f,'share-b'),e=>e instanceof AdmissionError&&e.code==='workspace_already_occupied');
   const done=verified(f,a),released=f.store.releaseCapacity({...a,revision:done.outcome.revision,cleanup_digest:done.outcome.cleanup_digest});
-  assert.equal(released.phase,'released');assert.equal(f.store.readOperation(b.operation_id).phase,'result_committed');
-  assert.equal(rows(f,b).active,1);assert.equal(existsSync(f.workspace),true);f.store.close();
+  assert.equal(released.phase,'released');assert.equal(f.store.readOperation('operation-share-b'),null);
+  assert.equal(rows(f,a).active,0);assert.equal(existsSync(f.workspace),true);f.store.close();
 });
 
 test('known failure after Cleanup projection rolls back both projection and Event',()=>{
@@ -386,13 +388,13 @@ test('unknown Release commit poisons the root and prevents further writes or gue
 });
 
 test('Recovery latch fences C2 Cleanup Pending, Cleanup Evidence, and Release while preserving other Operations',()=>{
-  const f=makeStore('recovery-latch',{capacity:4}),pendingRef=addResult(f,'latched-pending'),verifiedRef=addResult(f,'latched-release');
+  const f=makeStore('recovery-latch',{capacity:4}),pendingRef=addResult(f,'latched-pending'),verifiedRef=addResult(f,'latched-release',{workspace:path.join(TEMP,'other-workspace-latched-release')});
   recoveryHold(f,pendingRef,'quarantine');
   assert.throws(()=>f.store.beginCleanup({...pendingRef}),e=>e instanceof AdmissionError&&e.code==='operation_recovery_latched');
   const pending=begin(f,verifiedRef);recoveryHold(f,verifiedRef);
   assert.throws(()=>f.store.recordCleanupEvidence({...verifiedRef,revision:pending.revision,outcome:'verified',cleanup_evidence:verifiedEvidence(verifiedRef)}),
     e=>e instanceof AdmissionError&&e.code==='operation_recovery_latched');
-  const verifiedOp=addResult(f,'latched-verified');const cleanup=verified(f,verifiedOp);recoveryHold(f,verifiedOp);
+  const verifiedOp=addResult(f,'latched-verified',{workspace:path.join(TEMP,'third-workspace-latched-verified')});const cleanup=verified(f,verifiedOp);recoveryHold(f,verifiedOp);
   assert.throws(()=>f.store.releaseCapacity({...verifiedOp,revision:cleanup.outcome.revision,cleanup_digest:cleanup.outcome.cleanup_digest}),
     e=>e instanceof AdmissionError&&e.code==='operation_recovery_latched');
   const rowsAfter=rows(f,verifiedOp);assert.equal(rowsAfter.operation.phase,'cleanup_verified');assert.equal(rowsAfter.active,3);

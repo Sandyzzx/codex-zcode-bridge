@@ -1,9 +1,9 @@
 # 当前接口与兼容边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-02
-> Last verified: 2026-11-02，ADR-019 的本地信任模式与 Recovery Manager 所有权围栏；OD Fresh Bootstrap 的静态合同复核完成，运行验收待完成。
-> Verified against: cab82a918514c6329f4982477b7eb0e8ada6cc01 + ADR-019 工作区修复（既有范围）；Fresh Bootstrap 候选基于 ca0e19c4，未验证。
+> Last updated: 2026-11-04
+> Last verified: 2026-11-04，核对 Operation scoped Hold、`zcode_cancel` 参数/返回和 Provider 未接受证据边界；本轮 Windows Node `v24.16.0` 完整套件 818 项中 816 通过、0 失败、2 跳过；独立 Reviewer 对合同闭合为 PARTIAL，见[简化报告](reports/sqlite-hold-simplification-2026-11-04.md)。
+> Verified against: 77dd5f14 + sqlite-hold-simplify-20261104 未提交候选；本文件仅核对本轮涉及范围。
 
 准确类型与 schema 以 `src/interfaces.ts` 和 `src/mcp/schemas.ts` 为准。核心公共入口见 [SHARED_CORE.md](SHARED_CORE.md)。历史源码注释中的 V0.1/FROZEN 是沿革说明，不代表当前新增功能已经冻结。
 
@@ -15,7 +15,13 @@ TaskPackage 的五个数组必须存在，可为空。workspace 是绝对项目�
 
 单用户本机 SQLite Host 的受信任执行档案使用 `yolo`，与 JSON 默认路径一样自动放行工作区内的普通读取、编辑、构建、测试和任务范围内清理。配置文件 `trusted-local-policy.json`、`workspace_roots` 和项目登记不是使用前提。Post-Claim Worker 仍须通过精确 Host policy snapshot、Workspace、Claim 和进程身份握手；TaskPackage、prompt 或 Skill 不能自行产生或提升该授权。Push、Merge、Tag、Release、生产 Authority 切换、任务范围外删除、凭据修改和真实生产任务数据操作保留为用户决策。
 
-SQLite startup Recovery 对 running Operation 采用 Manager 所有权围栏：精确 `alive` 或临时 `unknown` Worker 只让当前扫描 Manager 进入只读，不追加全局 `cleanup_incomplete` Hold。原执行 Manager 对 interaction reply 和 cancel intent 的权威写入保持可用。已证实 Worker 退出但 Result、Cleanup 或 Release 不完整时仍 fail closed；客户端不得把一次 transient manager fence 当成 Worker 已退出、任务已取消或资源已释放。
+SQLite startup Recovery 与调度按 Operation 和执行路径隔离。精确 `alive` 或临时 `unknown` Worker 不转移执行权，也不释放其 Claim/Capacity；同一路径及重叠路径保持占用并排队，其他路径可继续派发。数据库根损坏或一致性无法解释时仍 fail closed。客户端不得把一次 transient Manager fence 当成 Worker 已退出、任务已取消或资源已释放。
+
+执行路径在 SQLite Admission 事务中按活动 Operation 检查，覆盖不同 Bridge Manager 同时尝试同一或重叠目录的竞态。输掉 Admission 的 Attempt 保持 `queued`，不 Spawn；路径释放后由调度器重新尝试。此约束不改变公开 Task 状态或 MCP schema。
+
+`failed` Task 对应 `cleanup_unverified` Operation 时，`zcode_cancel` 可执行仅验证清理的恢复：不重放 prompt、不创建 Attempt、不覆盖失败 Result。显式 cancel 可以对仍存活的原 Worker 使用已记录的精确 PID/start fingerprint 调用身份绑定终止，并重新 probe。仅当原身份已退出、recorded-tree claimant scan clean、无未解决 interaction 且 Operation revision CAS 成功时，才记录本次新 cleanup evidence 并释放容量。未知、仍存活、证据扫描失败或并发 CAS 竞争都保留该执行路径占用。启动 Recovery 不终止存活 Worker。历史 cleanup failure 与 Attempt 事件保持可审计。
+
+当前 app-server 不提供可验证的 Provider 未接受标记；`turn.failed` 中的 `retryable` 或 `attribution.statusCode` 单独不足以证明请求未被接受。因此 HTTP 429、5xx、网络超时、连接重置和 DNS 错误均不自动重发，避免重复执行。若未来协议提供可信的未接受证据，才可在同一 Worker/Attempt 内有限重试，并遵守有界 `Retry-After`；已观察 `turn.started` 后始终不重试。401/403、额度不足、无效请求和其他错误以普通失败 Result 通知 Master。模型请求失败本身不设置全局 Hold；清理失败单独决定原执行路径是否仍被占用。
 
 任务状态为 queued/running/completed/failed/cancelled/waiting_for_master。后四种结束当前 attempt；completed 表示执行及报告解析完成，宿主仍独立验收。续跑只接受 completed/failed/waiting_for_master，且清理必须已验证；保留同 task ID、执行目录和旧 attempt 证据。
 

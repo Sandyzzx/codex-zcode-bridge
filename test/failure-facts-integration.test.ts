@@ -66,6 +66,9 @@ interface FakeRuntimeOptions {
   sideEffectFile?: string;
   exitAfterSendMs?: { delayMs: number; code: number };
   turnFailure?: unknown;
+  turnFailureOnSends?: number[];
+  turnStartOnSend?: boolean;
+  turnId?: string;
   turnResultType?: string;
   completeDelayMs?: number;
   interaction?: boolean;
@@ -96,6 +99,9 @@ const requestLog = ${JSON.stringify(requestLog)};
 const opts = ${JSON.stringify(options)};
 const report = ${JSON.stringify(validReport())};
 let turnFinished = false;
+let sendNumber = 0;
+let nextEventSeq = 89;
+let currentTurnId = null;
 const sleep = (ms) => { const b = new Int32Array(new SharedArrayBuffer(4)); Atomics.wait(b, 0, 0, ms); };
 function emit(params) { process.stdout.write(JSON.stringify({ method: "session/event", params }) + "\n"); }
 function snapshot() {
@@ -108,14 +114,20 @@ function snapshot() {
 function finishTurn() {
   if (turnFinished) return;
   turnFinished = true;
-  if (opts.turnFailure !== undefined) { emit({ seq: 90, type: "turn.failed", payload: { error: opts.turnFailure } }); return; }
+  const shouldFail = opts.turnFailureOnSends
+    ? opts.turnFailureOnSends.includes(sendNumber)
+    : opts.turnFailure !== undefined;
+  if (shouldFail) {
+    emit({ seq: ++nextEventSeq, sessionId, ...(currentTurnId ? { turnId: currentTurnId } : {}), type: "turn.failed", payload: { error: opts.turnFailure } });
+    return;
+  }
   const resultType = opts.turnResultType || "success";
-  emit({ seq: 90, type: "turn.completed", payload: { response: opts.reportOverride === undefined ? JSON.stringify(report) : opts.reportOverride, usage: { totalTokens: 4 }, resultType } });
+  emit({ seq: ++nextEventSeq, type: "turn.completed", payload: { response: opts.reportOverride === undefined ? JSON.stringify(report) : opts.reportOverride, usage: { totalTokens: 4 }, resultType } });
 }
 const input = readline.createInterface({ input: process.stdin });
 input.on("line", (line) => {
   const message = JSON.parse(line);
-  fs.appendFileSync(requestLog, JSON.stringify(message) + "\n");
+  fs.appendFileSync(requestLog, JSON.stringify({ ...message, received_at: Date.now() }) + "\n");
   if (message.method === "session/create" || message.method === "session/resume") {
     if (opts.preSendReject && opts.preSendReject.method === message.method) {
       process.stdout.write(JSON.stringify({ id: message.id, error: { code: opts.preSendReject.code === undefined ? -32603 : opts.preSendReject.code, data: { code: opts.preSendReject.dataCode === undefined ? null : opts.preSendReject.dataCode, message: opts.preSendReject.dataMessage === undefined ? "rejected" : opts.preSendReject.dataMessage } } }) + "\n");
@@ -131,6 +143,9 @@ input.on("line", (line) => {
     if (opts.replayUnsupported) process.stdout.write(JSON.stringify({ id: message.id, error: { code: -32601, message: "Unsupported ZCode app-server request: session/events" } }) + "\n");
     else process.stdout.write(JSON.stringify({ id: message.id, result: { events: [] } }) + "\n");
   } else if (message.method === "session/send") {
+    sendNumber += 1;
+    turnFinished = false;
+    currentTurnId = null;
     if (opts.sideEffectFile) { try { fs.writeFileSync(opts.sideEffectFile, "written-by-runtime\n"); } catch (error) {} }
     if (opts.sendAck === false) {
       // no reply: the ACK is dropped
@@ -142,6 +157,10 @@ input.on("line", (line) => {
       process.stdout.write(JSON.stringify({ id: message.id, result: {} }) + "\n");
     }
     if (opts.malformedFrame) { process.stdout.write(opts.malformedFrame + "\n"); return; }
+    if (opts.turnStartOnSend) {
+      currentTurnId = opts.turnId || "turn-fixture-" + sendNumber;
+      emit({ seq: ++nextEventSeq, sessionId, type: "turn.started", payload: { turnId: currentTurnId } });
+    }
     for (const params of opts.preSendEvents || []) emit(params);
     if (opts.echoFile) {
       let echo = null;
@@ -221,6 +240,7 @@ async function makeWorkerFixture(workspace: string): Promise<FactsWorkerFixture>
   const task = makeTask({
     task_id: TASK_ID,
     workspace,
+    model: { provider_id: "provider-default", model_id: "model-default" },
     objective: "Return the requested report",
     timeout_ms: 60_000,
   });
@@ -386,6 +406,9 @@ test("A2: a dropped ACK with a real runtime side effect stays unknown and never 
     assert.equal(facts!.accepted_before_error, "unknown", "a dropped ACK after a send write is unknown, never no");
     assert.equal(facts!.source, "process");
     assert.equal(facts!.phase, "process_exit");
+    const requests = await readRequestLog(runtime.requestLog);
+    assert.equal(requests.filter((request) => request["method"] === "session/send").length, 1,
+      "an unknown acceptance outcome must never trigger a duplicate send");
   } finally {
     await fixture.cleanup();
     await runtime.cleanup();
@@ -1128,7 +1151,7 @@ test("L2: deleted, corrupt, and forged facts never influence status, results, or
   }
 });
 
-test("L3: any classification or runtime_retryable=true never spawns a worker, continues, or replays the prompt", { timeout: 40_000 }, async () => {
+test("L3: a retryable flag alone does not prove Provider non-acceptance", { timeout: 40_000 }, async () => {
   const runtime = await makeFakeRuntime({
     turnFailure: {
       code: "rate_limit_error",
@@ -1145,15 +1168,168 @@ test("L3: any classification or runtime_retryable=true never spawns a worker, co
       resolver: { resolve: async () => runtime.config },
     });
     assert.equal(run.result.status, "failed");
-    assert.equal(run.result.error_code, "zcode_nonzero_exit", "a retryable rate limit is still a plain public failure");
+    assert.equal(run.result.error_code, "zcode_nonzero_exit");
     const { facts } = fixture.store.readFailureFacts(TASK_ID, fixture.attempt);
     assert.equal(facts!.category, "rate_limited");
     assert.equal(facts!.runtime_retryable, true);
     assert.equal(facts!.runtime_retryable_basis, "reported");
-    // No respawn slot, no second attempt, no prompt replay: one send total.
+    // No respawn slot or repeat send: the runtime's retryable flag does not
+    // prove that the Provider did not accept this request.
     assert.equal(existsSync(path.join(fixture.dataRoot, ".tasks", TASK_ID, "attempts", String(fixture.attempt), "respawn.claim")), false);
     assert.equal(fixture.store.readStatus(TASK_ID).attempt, fixture.attempt);
     assert.equal(fixture.store.readStatus(TASK_ID).status, "failed");
+    const requests = await readRequestLog(runtime.requestLog);
+    assert.equal(requests.filter((request) => request["method"] === "session/send").length, 1);
+  } finally {
+    await fixture.cleanup();
+    await runtime.cleanup();
+  }
+});
+
+test("L3b: HTTP 429 is not retried until Provider non-acceptance can be verified", { timeout: 40_000 }, async () => {
+  const runtime = await makeFakeRuntime({
+    turnFailure: {
+      code: "rate_limit_error",
+      type: "model_rate_limited",
+      attribution: { statusCode: 429, retryable: true, retryAfterMs: 100 },
+    },
+    turnFailureOnSends: [1],
+  });
+  const fixture = await makeWorkerFixture(runtime.root);
+  try {
+    const run = await runWorkerTask({
+      dataRoot: fixture.dataRoot,
+      taskId: TASK_ID,
+      attempt: fixture.attempt,
+      resolver: { resolve: async () => runtime.config },
+    });
+    assert.equal(run.result.status, "failed");
+    assert.equal(fixture.store.readFailureFacts(TASK_ID, fixture.attempt).facts?.category, "rate_limited");
+    const requests = await readRequestLog(runtime.requestLog);
+    const sends = requests.filter((request) => request["method"] === "session/send");
+    assert.equal(sends.length, 1, "a statusCode field alone does not establish trusted Provider rejection provenance");
+  } finally {
+    await fixture.cleanup();
+    await runtime.cleanup();
+  }
+});
+
+test("L3b2: HTTP 429 beyond the bounded Retry-After wait is not retried early", { timeout: 40_000 }, async () => {
+  const runtime = await makeFakeRuntime({
+    turnFailure: { code: "rate_limit_error", attribution: { statusCode: 429, retryAfterMs: 60_001 } },
+  });
+  const fixture = await makeWorkerFixture(runtime.root);
+  try {
+    const run = await runWorkerTask({
+      dataRoot: fixture.dataRoot,
+      taskId: TASK_ID,
+      attempt: fixture.attempt,
+      resolver: { resolve: async () => runtime.config },
+    });
+    assert.equal(run.result.status, "failed");
+    const requests = await readRequestLog(runtime.requestLog);
+    assert.equal(requests.filter((request) => request["method"] === "session/send").length, 1,
+      "the adapter must not violate a Retry-After longer than its automatic retry budget");
+  } finally {
+    await fixture.cleanup();
+    await runtime.cleanup();
+  }
+});
+
+test("L3c1: HTTP 5xx does not retry when request acceptance is unknown", { timeout: 40_000 }, async () => {
+  const runtime = await makeFakeRuntime({
+    turnFailure: { code: "provider_unavailable", attribution: { statusCode: 503 } },
+    turnFailureOnSends: [1],
+  });
+  const fixture = await makeWorkerFixture(runtime.root);
+  try {
+    const run = await runWorkerTask({ dataRoot: fixture.dataRoot, taskId: TASK_ID, attempt: fixture.attempt, resolver: { resolve: async () => runtime.config } });
+    assert.equal(run.result.status, "failed");
+    const requests = await readRequestLog(runtime.requestLog);
+    assert.equal(requests.filter((request) => request["method"] === "session/send").length, 1);
+  } finally { await fixture.cleanup(); await runtime.cleanup(); }
+});
+
+test("L3c2: network failure with unknown acceptance does not resend", { timeout: 20_000 }, async () => {
+  const runtime = await makeFakeRuntime({
+    turnFailure: { code: "ECONNRESET", type: "connection_reset" },
+    turnFailureOnSends: [1],
+  });
+  const fixture = await makeWorkerFixture(runtime.root);
+  const adapter = new ZCodeAppServerAdapter({
+    resolver: { resolve: async () => runtime.config },
+    timeoutMs: 15_000,
+    childEnvBase: { PATH: process.env.PATH },
+    homeDir: runtime.root,
+  });
+  const handle = await adapter.startTask({
+    task: fixture.task,
+    workspace: { requestedPath: runtime.root, canonicalPath: runtime.root, mode: "direct" },
+    attempt: fixture.attempt,
+  });
+  try {
+    await assert.rejects(adapter.getResult(handle), /turn failed/u);
+    const requests = await readRequestLog(runtime.requestLog);
+    assert.equal(requests.filter((request) => request["method"] === "session/send").length, 1);
+  } finally {
+    await adapter.cancelTask(handle).catch(() => undefined);
+    await fixture.cleanup();
+    await runtime.cleanup();
+  }
+});
+
+test("L3e: a bound turn-start prevents retry after a terminal Provider or transport failure", { timeout: 45_000 }, async () => {
+  const cases = [
+    { name: "HTTP 429", turnFailure: { code: "rate_limit_error", attribution: { statusCode: 429, retryable: true } } },
+    { name: "HTTP 503", turnFailure: { code: "provider_unavailable", attribution: { statusCode: 503, retryable: true } } },
+    { name: "connection closed", exitAfterSendMs: { delayMs: 100, code: 1 } },
+  ] as const;
+  for (const scenario of cases) {
+    const runtime = await makeFakeRuntime({
+      ...scenario,
+      turnStartOnSend: true,
+      turnId: `bound-${scenario.name.replace(/\W/gu, "-")}`,
+    });
+    const fixture = await makeWorkerFixture(runtime.root);
+    try {
+      const run = await runWorkerTask({
+        dataRoot: fixture.dataRoot,
+        taskId: TASK_ID,
+        attempt: fixture.attempt,
+        resolver: { resolve: async () => runtime.config },
+      });
+      assert.equal(run.result.status, "failed", `${scenario.name} must remain a failed attempt`);
+      const persisted = fixture.store.readEvents(TASK_ID, 0, 200).events;
+      assert.ok(persisted.some((event) => event.type === "turn_started"),
+        `${scenario.name}: a session-bound turn.started must reach the Worker`);
+      const boundStarts = persisted.filter((event) => event.type === "turn_started"
+        && (event.details as Record<string, unknown> | undefined)?.turn_id === `bound-${scenario.name.replace(/\W/gu, "-")}`);
+      assert.equal(boundStarts.length, 1, `${scenario.name}: the runtime turn identity must bind exactly once`);
+      const requests = await readRequestLog(runtime.requestLog);
+      assert.equal(requests.filter((request) => request["method"] === "session/send").length, 1,
+        `${scenario.name}: turn-started work must never be sent again`);
+      assert.equal(fixture.store.readStatus(TASK_ID).attempt, fixture.attempt,
+        `${scenario.name}: the failed Worker attempt must not be silently replaced`);
+    } finally {
+      await fixture.cleanup();
+      await runtime.cleanup();
+    }
+  }
+});
+
+test("L3d: auth failures do not retry", { timeout: 40_000 }, async () => {
+  const runtime = await makeFakeRuntime({
+    turnFailure: { code: "authentication_failed", type: "auth_failed", attribution: { statusCode: 401 } },
+  });
+  const fixture = await makeWorkerFixture(runtime.root);
+  try {
+    const run = await runWorkerTask({
+      dataRoot: fixture.dataRoot,
+      taskId: TASK_ID,
+      attempt: fixture.attempt,
+      resolver: { resolve: async () => runtime.config },
+    });
+    assert.equal(run.result.status, "failed");
     const requests = await readRequestLog(runtime.requestLog);
     assert.equal(requests.filter((request) => request["method"] === "session/send").length, 1);
   } finally {
