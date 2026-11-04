@@ -1,4 +1,4 @@
-# ADR-024：SQLite Attention 统一等待与 Thin Waiter
+# ADR-025：SQLite Attention 统一等待与 Thin Waiter
 
 > Status: DECISION
 > Decision: ACCEPTED — OWNER DIRECTIVE 2026-11-04

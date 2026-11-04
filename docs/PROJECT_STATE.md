@@ -35,7 +35,7 @@ PR #47 claimant 扫描与预算返修（本轮，2026-10-18，含 review-round-1
 - TaskManager 生命周期：`queued` / `running` / `completed` / `failed` / `cancelled` / `waiting_for_master`，含 attempt 独占、续跑归档、清理验证。
 - MCP 默认工具 13 个，清单见 `INTERFACES.md`。
 - `zcode_events` 的增量事件、cursor 与 raw/summary 视图。
-- `zcode_events(wait_for="attention")` 与只读 `dist/wait-task.mjs`（ADR-024）：SQLite 单事务读取当前 Task/Attempt/Pending，终态优先、当前 Attempt 隔离、普通事件不唤醒且不推进 cursor；JSON 内存 Authority 明确 unsupported，SQLite 缺库 fail closed。
+- `zcode_events(wait_for="attention")` 与只读 `dist/wait-task.mjs`（ADR-025）：SQLite 单事务读取当前 Task/Attempt/Pending，终态优先、当前 Attempt 隔离、普通事件不唤醒且不推进 cursor；JSON 内存 Authority 明确 unsupported，SQLite 缺库 fail closed。
 - `zcode_feedback` 的 `TaskFeedbackSnapshotV01`。
 - 工作区隔离：执行目录由调用宿主准备，Bridge 不创建也不删除 worktree。
 - 模型选择：可按任务覆盖 provider/model，不持久化为工作区默认。
