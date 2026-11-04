@@ -25,10 +25,13 @@ function fixtureRoot(): string {
   return mkdtempSync(path.join(tmpdir(), "bridge-thin-wait-"));
 }
 
-// test-isolated redirects Node's TMP under the repository, while SQLite
-// authority roots are explicitly rejected inside the package tree.
+// test-isolated redirects Node's TMP into a private fixture tree, while the
+// waiter rejects data roots inside the package tree or the redirected temp
+// root. Use a writable root outside both: the drive root on Windows, and the
+// fixture root one level above the redirected temp directory on POSIX.
 function systemTempRoot(): string {
-  return path.parse(tmpdir()).root;
+  if (process.platform === "win32") return path.parse(tmpdir()).root;
+  return path.dirname(tmpdir());
 }
 
 async function storeModule(): Promise<StoreModule> {
