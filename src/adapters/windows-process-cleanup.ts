@@ -1056,6 +1056,13 @@ export const TRANSPORT_MAX_BUFFERED_BYTES = 8_388_608;
 export const TRANSPORT_MAX_BUFFERED_LINES = 65_536;
 export const TRANSPORT_MAX_ENUM_ROWS = 4_096;
 export const TRANSPORT_TOTAL_SESSION_MS_DEFAULT = 120_000;
+/**
+ * Compiling the Win32 helper through Add-Type is much slower on a loaded
+ * hosted Windows runner than on an interactive workstation. Keep this separate
+ * from per-command budgets: a 20-second cold startup produced CI-only cleanup
+ * failures even though the helper itself had not stalled.
+ */
+export const TRANSPORT_HELPER_STARTUP_MS_DEFAULT = 60_000;
 
 export interface TransportBounds {
   maxLineBytes?: number;
@@ -1215,7 +1222,7 @@ export class PowerShellTreeTransaction implements WindowsTreeTransactionLike {
     });
   }
 
-  static async start(timeoutMs = 20_000): Promise<PowerShellTreeTransaction> {
+  static async start(timeoutMs = TRANSPORT_HELPER_STARTUP_MS_DEFAULT): Promise<PowerShellTreeTransaction> {
     const encoded = Buffer.from(windowsTreeTransactionScript(), "utf16le").toString("base64");
     const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded], {
       shell: false,
