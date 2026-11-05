@@ -8,7 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createSqliteLifecyclePort, UnsupportedLifecycleOperationError } from '../../../src/sqlite-candidate/wp6b2b1/lifecycle-port.mjs';
 import { digest, IsolatedAdmissionStore } from '../../../src/sqlite-candidate/wp6b2b1/store.mjs';
-import { createPlatformProbe } from '../../../dist/src/runtime/process-probe.js';
+import { createPlatformProbe } from '../../../dist-test/src/runtime/process-probe.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const TEMP = process.env.WP6C_TEST_TEMP_ROOT ? path.resolve(process.env.WP6C_TEST_TEMP_ROOT)
@@ -98,6 +98,17 @@ async function withinStage(promise, stage, timeoutMs = 12_000) {
       timer = setTimeout(() => reject(new Error(`${stage} exceeded ${timeoutMs}ms`)), timeoutMs);
     })]);
   } finally { clearTimeout(timer); }
+}
+
+function recordStoreInteraction(store, operationId, taskId, requestId) {
+  const operation = store.readOperation(operationId);
+  return store.recordInteractionRequest({
+    operation_id: operationId, task_id: taskId, attempt: operation.attempt,
+    generation: operation.generation, expected_revision: operation.revision,
+    claim_id: operation.claim_id, worker_identity_digest: operation.claim_worker_identity_digest,
+    request: { request_id: requestId, method: 'interaction/requestPermission',
+      params: { options: [{ kind: 'allow_once', label: 'Allow' }] } },
+  });
 }
 
 function makePriorAttempt(store, taskId, workspace, resultStatus = 'completed', finishCleanup = true, pendingRequestIds = []) {
@@ -225,7 +236,7 @@ async function makeRunningInteraction(label, mode = 'normal') {
     launch_token: `interaction-launch-token-${label}-0123456789` };
   const intent = fixture.store.createLaunchIntent(launch);
   const channelUrl = new URL('../../../src/sqlite-candidate/wp6b2b1/interaction-channel.mjs', import.meta.url).href;
-  const probeUrl = new URL('../../../dist/src/runtime/process-probe.js', import.meta.url).href;
+  const probeUrl = new URL('../../../dist-test/src/runtime/process-probe.js', import.meta.url).href;
   const workerProgram = `import {createReadStream,createWriteStream} from 'node:fs';
     const {createCandidateWorkerInteractionChannel}=await import(${JSON.stringify(channelUrl)});
     const {createPlatformProbe}=await import(${JSON.stringify(probeUrl)});
@@ -773,7 +784,7 @@ test('claim-only Worker consumes its identity-bound interaction channel before r
       workspace_ref: fixture.workspace, authorization_source: 'trusted_local_policy', policy_revision: 'synthetic-policy-v1',
       policy_digest: 'b'.repeat(64), execution_profile_id: 'local-build-v1' };
     const { createLaunchBootstrap, deriveAdmissionPolicySnapshotDigest, encodeLaunchBootstrap } = await import('../../../dist-test/src/sqlite-candidate/wp6b2b1/launch-bootstrap.js');
-    const { fingerprintRuntimeArtifact } = await import('../../../dist/src/runtime/build-provenance.js');
+    const { fingerprintRuntimeArtifact } = await import('../../../dist-test/src/runtime/build-provenance.js');
     const { spawnClaimOnlyWorker } = await import('../../../dist-test/src/manager/spawn-worker.js');
     const workerPath = path.resolve(process.cwd(), 'dist-test/src/worker/worker-main.js');
     const provenance = { bridge: { path: null, sha256: null }, worker: fingerprintRuntimeArtifact(workerPath) };
@@ -955,8 +966,10 @@ test('Continue persists a queued Attempt without reserving Capacity while anothe
   try {
     const prior = makePriorAttempt(fixture.store, 'continue-capacity-task', fixture.workspace);
     const otherTaskId = 'continue-capacity-other-task';
-    fixture.store.createTask(task(otherTaskId, fixture.workspace));
-    const occupied = fixture.store.admitOperation({ operation_id: 'continue-capacity-occupied', task_id: otherTaskId, attempt: 1, workspace_ref: fixture.workspace }, gates);
+    const otherWorkspace = path.join(TEMP, 'continue-capacity-other-workspace');
+    mkdirSync(otherWorkspace);
+    fixture.store.createTask(task(otherTaskId, otherWorkspace));
+    const occupied = fixture.store.admitOperation({ operation_id: 'continue-capacity-occupied', task_id: otherTaskId, attempt: 1, workspace_ref: otherWorkspace }, gates);
     const queued = fixture.port.createNextAttempt(continueInput(prior, 'continue-capacity-key'), gates);
     assert.equal(queued.status, 'queued');
     assert.equal(fixture.store.readTaskProjection(prior.task_id).current_attempt, 2);
@@ -1060,60 +1073,45 @@ test('Spoofed sqlite_sequence rows fail closed in writable and read-only validat
 });
 
 test('Task event cursor is durable, task-scoped, and spans successive Attempt Operations', async () => {
-  const { IsolatedAdmissionStore } = await importedStore();
-  const r = root('task-event-cursor');
-  const ws = path.join(TEMP, 'workspace-event-cursor');
-  mkdirSync(ws, { recursive: true });
-  let store = IsolatedAdmissionStore.initialize(r);
-  store.createTask(task('cursor-task', ws), '2026-10-23T00:00:00.000Z');
-  store.createTask(task('unrelated-cursor-task', ws), '2026-10-23T00:00:00.000Z');
-  store.provisionCapacity({ operation_id: 'cursor-policy', capacity_limit: 3, expected_generation: 0,
-    maintenance: { dispatch_blocked: true, writers_drained: true } });
-  store.admitOperation({ operation_id: 'cursor-op-a1', task_id: 'cursor-task', attempt: 1, workspace_ref: ws }, gates);
-  store.close();
-
-  // Synthetic Continue-shaped projection only: Continue behavior itself is not implemented here.
-  const db = new DatabaseSync(path.join(r, 'operations.sqlite3'));
+  const { store, r, workspace } = makeCandidateStore('task-event-cursor', 3);
+  let afterPrior, newCursor;
   try {
-    db.exec('BEGIN IMMEDIATE');
-    db.prepare("UPDATE tasks SET current_attempt=2,status='queued' WHERE task_id='cursor-task'").run();
-    db.prepare("INSERT INTO attempts(task_id,attempt,generation,status,created_at) VALUES('cursor-task',2,NULL,'queued','2026-10-23T00:00:01.000Z')").run();
-    db.exec('COMMIT');
-  } catch (error) { try { db.exec('ROLLBACK'); } catch {} throw error; }
-  finally { db.close(); }
-
-  store = IsolatedAdmissionStore.open(r);
-  try {
-    store.admitOperation({ operation_id: 'cursor-op-a2', task_id: 'cursor-task', attempt: 2, workspace_ref: ws }, gates);
-    store.admitOperation({ operation_id: 'cursor-op-other', task_id: 'unrelated-cursor-task', attempt: 1, workspace_ref: ws }, gates);
-    const eventsPage = store.readTaskEvents('cursor-task', { limit: 2 });
-    const events = eventsPage.events;
-    assert.deepEqual(events.map(event => event.operation_id), ['cursor-op-a1', 'cursor-op-a2']);
-    assert.deepEqual(events.map(event => event.operation_attempt), [1, 2]);
-    assert.ok(events[1].cursor > events[0].cursor);
-    assert.deepEqual(events.map(event => event.sequence), events.map(event => event.cursor));
-    assert.deepEqual(events.map(event => event.operation_sequence), [1, 1]);
-    assert.deepEqual(events.map(event => event.cursor), [2, 3]);
-    assert.equal(eventsPage.hasMore, false, 'a full page with no following task event is not marked as having more');
-    assert.equal(eventsPage.nextCursor, events[1].cursor);
-    const firstPage = store.readTaskEvents('cursor-task', { limit: 1 });
-    assert.equal(firstPage.hasMore, true);
-    assert.equal(firstPage.nextCursor, firstPage.events[0].cursor);
-    assert.deepEqual(firstPage.events.map(event => [event.sequence,event.operation_sequence]), [[2,1]]);
-    const resumed = store.readTaskEvents('cursor-task', { afterCursor: firstPage.nextCursor, limit: 1 });
-    assert.deepEqual(resumed.events.map(event => [event.operation_id,event.sequence,event.operation_sequence]), [['cursor-op-a2',3,1]]);
+    const prior = makePriorAttempt(store, 'cursor-task', workspace);
+    const oldEvents = store.readTaskEvents('cursor-task').events;
+    afterPrior = oldEvents.at(-1).cursor;
+    store.createNextAttempt(continueInput(prior, 'cursor-continue'), gates);
+    store.admitOperation({ operation_id: 'cursor-op-a2', task_id: 'cursor-task', attempt: 2, workspace_ref: workspace }, gates);
+    const otherWorkspace = path.join(TEMP, 'workspace-unrelated-cursor');
+    mkdirSync(otherWorkspace);
+    store.createTask(task('unrelated-cursor-task', otherWorkspace));
+    store.admitOperation({ operation_id: 'cursor-op-other', task_id: 'unrelated-cursor-task', attempt: 1, workspace_ref: otherWorkspace }, gates);
+    const all = store.readTaskEvents('cursor-task', { limit: 200 });
+    assert.equal(all.hasMore, false);
+    assert.deepEqual(all.events.slice(0, oldEvents.length), oldEvents);
+    assert.ok(oldEvents.every(event => event.operation_attempt === 1));
+    const next = all.events.at(-1);
+    newCursor = next.cursor;
+    assert.deepEqual([next.operation_id, next.operation_attempt, next.operation_sequence], ['cursor-op-a2',2,1]);
+    assert.equal(newCursor, afterPrior + 1);
+    assert.ok(all.events.every((event,i,rows) => event.sequence === event.cursor && (!i || event.cursor > rows[i-1].cursor)));
+    const first = store.readTaskEvents('cursor-task', { limit: 2 });
+    assert.equal(first.hasMore, true);
+    assert.deepEqual(first.events, oldEvents.slice(0,2));
+    assert.equal(first.nextCursor, first.events.at(-1).cursor);
+    const resumed = store.readTaskEvents('cursor-task', { afterCursor: afterPrior, limit: 1 });
+    assert.deepEqual(resumed.events, [next]);
     assert.equal(resumed.hasMore, false);
-    assert.equal(resumed.nextCursor, 3);
-    const empty = store.readTaskEvents('cursor-task', { afterCursor: 100, limit: 1 });
-    assert.deepEqual(empty, { events: [], nextCursor: 100, hasMore: false });
+    assert.equal(resumed.nextCursor, newCursor);
+    const empty = store.readTaskEvents('cursor-task', { afterCursor: newCursor, limit: 1 });
+    assert.deepEqual(empty, { events: [], nextCursor: newCursor, hasMore: false });
     assert.equal(store.readTaskEvents('unrelated-cursor-task').events.length, 1);
   } finally { store.close(); }
 
   const reopened = IsolatedAdmissionStore.open(r);
   try {
-    const resumed = reopened.readTaskEvents('cursor-task', { afterCursor: 2 });
-    assert.deepEqual(resumed.events.map(event => [event.operation_id, event.sequence, event.operation_sequence]), [['cursor-op-a2', 3, 1]]);
-    assert.equal(resumed.nextCursor, 3);
+    const resumed = reopened.readTaskEvents('cursor-task', { afterCursor: afterPrior });
+    assert.deepEqual(resumed.events.map(event => [event.operation_id, event.sequence, event.operation_sequence]), [['cursor-op-a2', newCursor, 1]]);
+    assert.equal(resumed.nextCursor, newCursor);
     assert.equal(resumed.hasMore, false);
   } finally { reopened.close(); }
   const recovery = IsolatedAdmissionStore.openForRecovery(r);

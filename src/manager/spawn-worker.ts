@@ -13,7 +13,7 @@ export interface SpawnedWorker {
 
 export type SpawnWorker = (dataRoot: string, taskId: string, attempt: number, writerLeaseToken?: string) => SpawnedWorker;
 
-/** Test-only cross-process claim worker. It is never selected by startBridge(). */
+/** SQLite production Worker with private lifecycle channels. */
 export interface ClaimOnlyWorkerProcess extends ChildProcess {
   readonly bootstrapChannel: Writable | null;
   readonly reportChannel: Readable | null;
@@ -29,7 +29,7 @@ export type SqliteWorkerAdapterMode = "zcode_app_server" | "test_fake";
 
 /**
  * Launch the existing Worker entry with private one-shot control pipes for the
- * isolated WP6B Claim-only harness. No Bootstrap value is placed in argv/env.
+ * SQLite lifecycle driver. No Bootstrap value is placed in argv/env.
  */
 export function spawnClaimOnlyWorker(
   workerPath: string,
@@ -45,8 +45,6 @@ export function spawnClaimOnlyWorker(
   const args = [workerPath, ...(options.interactionChannel ? ["--bridge-sqlite-interaction-v1"] : []),
     ...(options.dropAfterPrepared ? ["--bridge-sqlite-interaction-drop-after-prepared-v1"] : []), BRIDGE_WORKER_LAUNCH_MARKER];
   const child = spawn(process.execPath, args, {
-    // Match the production detached-worker process boundary while retaining
-    // this test-only harness's direct ChildProcess handle and private pipes.
     detached: true,
     shell: false,
     stdio: options.interactionChannel
@@ -56,6 +54,11 @@ export function spawnClaimOnlyWorker(
     cwd: path.dirname(workerPath),
     env,
   }) as ClaimOnlyWorkerProcess;
+  // Workers synchronously write diagnostics to fd 2. Always drain it, including
+  // when no diagnostic observer is installed, so a full OS pipe cannot block
+  // the Worker before Result/exit. Observers may still subscribe to data;
+  // unobserved bytes are discarded without accumulating logs in memory.
+  child.stderr?.resume();
   const pipes = child.stdio as unknown as readonly (Readable | Writable | null)[];
   let exitSeen = false;
   Object.defineProperties(child, {

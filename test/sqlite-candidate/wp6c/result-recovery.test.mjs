@@ -578,8 +578,9 @@ test('C3B known rollback preserves projection and Unknown Commit poisons the roo
   }finally{unknown.close();}
 });
 
-test('C3B same-Workspace Operations remain independent after one Operation is latched',()=>{
-  const {root:r,store}=makeRunning('c3b-workspace-isolation'),workspace=path.join(TEMP,'workspace');
+test('C3B different-Workspace Operations remain independent after one Operation is latched',()=>{
+  const {root:r,store}=makeRunning('c3b-workspace-isolation'),workspace=path.join(TEMP,'workspace-other');
+  mkdirSync(workspace,{recursive:true});
   const otherTask={task_id:'task-other',workspace,objective:'synthetic second operation',requirements:[],allowed_paths:[],forbidden_paths:[],acceptance_criteria:[],test_commands:[]};
   store.createTask(otherTask,'2026-10-23T00:00:00.000Z');const allow=()=>({state:'allow',fixture:true});
   const admitted=store.admitOperation({operation_id:'operation-other',task_id:'task-other',attempt:1,workspace_ref:workspace},{workspaceValidator:allow,executionPermissionCheck:allow});

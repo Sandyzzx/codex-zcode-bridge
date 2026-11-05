@@ -40,7 +40,7 @@ interface FakeRuntimeFixture {
   readonly zcodeHomeV2: string;
 }
 
-function writeFakeRuntime(name: string, variant: "success" | "failure"): FakeRuntimeFixture {
+function writeFakeRuntime(name: string, variant: "success" | "failure" | "stderr-flood"): FakeRuntimeFixture {
   const root = path.join(fixtureRoot, name);
   mkdirSync(root, { recursive: true });
   mkdirSync(path.join(root, ".zcode", "v2"), { recursive: true });
@@ -63,7 +63,10 @@ function writeFakeRuntime(name: string, variant: "success" | "failure"): FakeRun
     : [
       `const task = JSON.parse(fs.readFileSync(${JSON.stringify(taskInput)}, "utf8"));`,
       `const report = ${JSON.stringify(report)}.replace("TASK_ID", task.task_id);`,
-      `process.stdout.write(JSON.stringify({ method: "session/event", params: { seq: 1, type: "turn.completed", payload: { response: report, usage: { totalTokens: 4 }, resultType: "success" } } }) + "\\n");`,
+      ...(variant === "stderr-flood" ? [
+        `for (let seq = 1; seq <= 32000; seq++) process.stdout.write(JSON.stringify({ method: "session/event", params: { seq, type: "model.streaming", payload: { kind: "text_delta", delta: "x" } } }) + "\\n");`,
+      ] : []),
+      `process.stdout.write(JSON.stringify({ method: "session/event", params: { seq: ${variant === "stderr-flood" ? 32001 : 1}, type: "turn.completed", payload: { response: report, usage: { totalTokens: 4 }, resultType: "success" } } }) + "\\n");`,
     ].join("\n");
   const script = [
     `const readline = require("node:readline");`,
@@ -102,7 +105,7 @@ function writeFakeRuntime(name: string, variant: "success" | "failure"): FakeRun
     `    process.stdout.write(JSON.stringify({ id: message.id, result: {} }) + "\\n");`,
     `  } else if (message.method === "session/send") {`,
     `    process.stdout.write(JSON.stringify({ id: message.id, result: {} }) + "\\n");`,
-    `    if (${variant === "success"} && !interactionSent) {`,
+    `    if (${variant !== "failure"} && !interactionSent) {`,
     `      interactionSent = true;`,
     `      for (const rpcId of ["interaction-rpc-1", "interaction-rpc-2"]) {`,
     `        process.stdout.write(JSON.stringify({ id: rpcId, method: "interaction/requestPermission", params: { requestId: "permission-1", sessionId, toolCallId: "call-1", toolName: "Bash", reason: "Run the synthetic build command", input: { command: "npm run build" }, options: [{ kind: "allow_once" }, { kind: "deny" }] } }) + "\\n");`,
@@ -200,7 +203,7 @@ async function waitForInteractionRequest(client: Client, taskId: string): Promis
 
 async function withRealAdapterMcp(
   run: (client: Client, manager: BridgeTaskManager, dataRoot: string, workspace: string, runtime: FakeRuntimeFixture) => Promise<void>,
-  options: { readonly runtimeVariant?: "success" | "failure"; readonly preserveFixtureOnFailure?: boolean;
+  options: { readonly runtimeVariant?: "success" | "failure" | "stderr-flood"; readonly preserveFixtureOnFailure?: boolean;
     readonly stderrCollector?: { readonly lines: string[] }; readonly lifecycleCollector?: { readonly lines: string[] } } = {},
 ): Promise<void> {
   const fixture = path.join(fixtureRoot, randomUUID());
@@ -297,6 +300,24 @@ function schema(): string {
 function copyFileSync(source: string): void {
   writeFileSync(candidateSchema, readFileSync(source, "utf8"), "utf8");
 }
+
+test("SQLite production Worker survives streaming stderr backpressure without a diagnostic recorder", { timeout: 120_000 }, async () => {
+  await withRealAdapterMcp(async (client, _manager, _dataRoot, workspace, runtime) => {
+    const taskId = `mvp-stderr-${randomUUID()}`;
+    contentObject(await client.callTool({ name: "zcode_task", arguments: syntheticTask(workspace, taskId) }));
+    const interaction = await waitForInteractionRequest(client, taskId);
+    const request = interaction.details as Record<string, unknown>;
+    contentObject(await client.callTool({ name: "zcode_interaction_reply", arguments: {
+      task_id: taskId, request_id: String(request.request_id), decision: "allow",
+    } }));
+    assert.equal((await waitForTerminal(client, taskId, 1)).status, "completed");
+    await waitForLifecycleEvent(client, taskId, "released");
+    const result = contentObject(await client.callTool({ name: "zcode_result", arguments: { task_id: taskId } }));
+    assert.match(String(result.summary), /synthetic MVP real-adapter report/u);
+    const requests = readFileSync(runtime.requestLog, "utf8").trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+    assert.equal(requests.filter((message) => message.method === "session/send").length, 1);
+  }, { runtimeVariant: "stderr-flood" });
+});
 
 test("formal MCP lifecycle runs a real ZCodeAppServerAdapter against a controlled fake app-server", { timeout: 120_000 }, async () => {
   const stderrLines: string[] = [];

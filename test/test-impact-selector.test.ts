@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { selectAffectedTests } from "../scripts/test-impact-selector.mjs";
+import { automaticTestEntries, compiledTestPath } from "../scripts/lib/test-files.mjs";
 
-const map = JSON.parse(readFileSync(new URL("./test-impact-map.json", import.meta.url), "utf8"));
+const map: { tests: Array<{ file: string; gate: string; type: string; domains: string[] }>; domains: Array<{ id: string; paths: string[] }>; stress_tests: any[]; full_suite_paths: string[] }
+  = JSON.parse(readFileSync(new URL("./test-impact-map.json", import.meta.url), "utf8"));
 const selectorUrl = pathToFileURL(path.resolve(import.meta.dirname, "../scripts/test-impact-selector.mjs")).href;
 
 function filesFor(selectorFile: string): string[] {
@@ -13,7 +16,6 @@ function filesFor(selectorFile: string): string[] {
   if (selectorFile === "task-store") return ["src/store/task-store.ts"];
   if (selectorFile === "sqlite-schema") return ["src/sqlite-candidate/wp6b2b1/schema.sql"];
   if (selectorFile === "worker") return ["src/worker/run-task.ts"];
-  if (selectorFile === "attention") throw new Error("Attention is not part of this master snapshot");
   if (selectorFile === "docs") return ["docs/reports/example.md"];
   if (selectorFile === "unknown-source") return ["src/example/new-domain.ts"];
   if (selectorFile === "test-runner") return ["scripts/test-isolated.mjs"];
@@ -109,4 +111,52 @@ test("explicit baseline changes are just another deterministic changed-file inpu
 test("selector module exports stable policy functions", async () => {
   const module = await importSelector();
   assert.equal(typeof module.selectAffectedTests, "function");
+});
+
+test("every automatic selection excludes manual E2E and support fixtures", () => {
+  const forbidden = new Set(map.tests.filter((entry) => entry.gate === "MANUAL_E2E" || entry.type === "Fixture").map((entry) => entry.file));
+  const changed = [...map.domains.flatMap((domain) => domain.paths), ...forbidden, "package.json", "src/unknown-file.ts"];
+  for (const platform of ["win32", "linux"] as const) {
+    for (const file of changed) {
+      const selection = selectAffectedTests({ changedFiles: [file], map, platform });
+      assert.equal(selection.selected_tests.some((entry) => forbidden.has(entry.file)), false, `${platform}: ${file}`);
+    }
+  }
+});
+
+test("Attention and Thin Waiter consumers follow their real production dependencies", () => {
+  for (const dependency of ["src/runtime/sqlite-install-config.ts", "src/sqlite-candidate/wp6b2b1/store.mjs",
+    "src/sqlite-candidate/wp6b2b1/schema.sql", "src/attention/read-only.ts", "src/attention/snapshot.ts",
+    "src/attention/wait.ts", "src/cli/wait-task.ts", "src/manager/sqlite-lifecycle-mcp-authority.ts", "src/runtime/paths.ts"]) {
+    const selection = selectAffectedTests({ changedFiles: [dependency], map });
+    for (const consumer of ["test/attention-wait.test.ts", "test/wait-task.test.ts"]) {
+      assert.ok(selection.selected_tests.some((entry) => entry.file === consumer), `${dependency} must select ${consumer}`);
+    }
+    assert.equal(selection.mode, "TARGETED", dependency);
+  }
+});
+
+test("manifest covers all executable sources and full selection matches the actual runner", () => {
+  function sources(directory: string): string[] {
+    return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+      const file = `${directory}/${entry.name}`;
+      return entry.isDirectory() ? sources(file) : /\.test\.(ts|mjs)$/u.test(file) ? [file] : [];
+    });
+  }
+  const mapped = new Set(map.tests.map((entry) => entry.file));
+  assert.equal(mapped.size, map.tests.length, "duplicate manifest entries");
+  for (const file of sources("test")) assert.ok(mapped.has(file), `unmapped executable test: ${file}`);
+  for (const entry of map.tests) assert.ok(existsSync(entry.file), `stale manifest entry: ${entry.file}`);
+  for (const platform of ["win32", "linux"] as const) {
+    const selection = selectAffectedTests({ changedFiles: ["package.json"], map, platform });
+    assert.deepEqual(selection.selected_tests.map((entry) => entry.file).sort(), automaticTestEntries(map, platform).map((entry: { file: string }) => entry.file).sort());
+  }
+  const listed = spawnSync(process.execPath, ["scripts/test-isolated.mjs", "--list"], { encoding: "utf8" });
+  assert.equal(listed.status, 0, listed.stderr);
+  assert.deepEqual(JSON.parse(listed.stdout), automaticTestEntries(map).map((entry: { file: string }) => compiledTestPath(entry.file)).sort());
+  for (const file of ["test/live-project-root.mjs", "test/sqlite-candidate/wp6b2b1/worker-process.mjs", "test/unknown.test.mjs"]) {
+    const rejected = spawnSync(process.execPath, ["scripts/test-isolated.mjs", "--list", file], { encoding: "utf8" });
+    assert.notEqual(rejected.status, 0, file);
+    assert.match(rejected.stderr, /Not an automatic test/u);
+  }
 });

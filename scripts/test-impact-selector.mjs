@@ -3,6 +3,8 @@
  * execution makes policy deterministic and directly unit-testable.
  */
 
+import { isAutomaticTest } from "./lib/test-files.mjs";
+
 const POSIX_SEPARATOR = /\//u;
 
 function toPosixPath(value) {
@@ -57,7 +59,7 @@ function affectedDomains(changedFiles, map) {
   return { domains: [...domains].sort(), reasonsByDomain };
 }
 
-export function selectAffectedTests({ changedFiles, map, includeStress = true }) {
+export function selectAffectedTests({ changedFiles, map, includeStress = true, platform = process.platform }) {
   const normalizedFiles = [...new Set(changedFiles.map(toPosixPath))].sort((left, right) => left.localeCompare(right, "en"));
   const { domains, reasonsByDomain } = affectedDomains(normalizedFiles, map);
   const fullSuiteReasons = [];
@@ -91,7 +93,7 @@ export function selectAffectedTests({ changedFiles, map, includeStress = true })
   const stressByFile = new Map(map.stress_tests.map((entry) => [entry.file, entry]));
   const selected = new Map();
   const addSelected = (entry, reason, stressInfo = undefined) => {
-    if (!entry) return;
+    if (!entry || !isAutomaticTest(entry, platform)) return;
     const registeredStress = stressInfo ?? stressByFile.get(entry.file);
     if (!selected.has(entry.file)) {
       selected.set(entry.file, { ...entry, reasons: [], stress: registeredStress });
@@ -103,8 +105,6 @@ export function selectAffectedTests({ changedFiles, map, includeStress = true })
 
   if (fullSuiteReasons.length > 0) {
     for (const entry of map.tests) {
-      // Manual live E2E is intentionally not fed to scripts/test-isolated.mjs.
-      if (entry.gate === "MANUAL_E2E") continue;
       // The wrapper represents this case with npm test, so don't duplicate the
       // suite into a fragment. Preserve individual stress metadata for output.
       const stressInfo = stressByFile.get(entry.file);
@@ -124,7 +124,6 @@ export function selectAffectedTests({ changedFiles, map, includeStress = true })
 
   for (const file of normalizedFiles) {
     const direct = testByFile.get(file);
-    if (direct?.gate === "MANUAL_E2E") continue;
     if (direct) addSelected(direct, `changed-test:${file}`);
   }
   for (const domain of domains) {

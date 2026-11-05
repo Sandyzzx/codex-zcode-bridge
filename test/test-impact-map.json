@@ -31,6 +31,7 @@
         "scripts/test-isolated.mjs",
         "scripts/test-clean-entrypoints.mjs",
         "scripts/test-impact-selector.mjs",
+        "scripts/lib/test-files.mjs",
         "scripts/run-affected-tests.mjs",
         "scripts/run-stress-tests.mjs",
         "test/test-impact-map.json",
@@ -184,6 +185,26 @@
       ]
     },
     {
+      "id": "attention-waiting",
+      "description": "Shared Attention snapshot, MCP waiting and standalone read-only Thin Waiter consumers.",
+      "paths": [
+        "src/attention/**",
+        "src/cli/wait-task.ts",
+        "src/runtime/sqlite-install-config.ts",
+        "src/runtime/node-runtime.ts",
+        "src/runtime/paths.ts",
+        "src/runtime/child-env.ts",
+        "src/sqlite-candidate/wp6b2b1/store.mjs",
+        "src/sqlite-candidate/wp6b2b1/lifecycle-port.mjs",
+        "src/sqlite-candidate/wp6b2b1/schema.sql",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts",
+        "src/manager/task-manager.ts",
+        "src/host/stdio.ts",
+        "plugins/codex-zcode-bridge/dist/wait-task.mjs",
+        "plugins/codex-zcode-bridge/launch-node24.mjs"
+      ]
+    },
+    {
       "id": "mcp-host",
       "description": "MCP server, stdio entry, task index synchronization, and Host-facing schemas.",
       "paths": [
@@ -231,6 +252,9 @@
   "tests": [
     { "file": "test/account-provider.test.ts", "type": "Unit", "gate": "T1", "domains": ["provider-catalog"] },
     { "file": "test/agent-report.test.ts", "type": "Unit", "gate": "T1", "domains": ["task-prompt-and-report"] },
+    { "file": "test/spawn-worker-stderr.test.ts", "type": "Integration", "gate": "T2", "domains": ["worker-launch"] },
+    { "file": "test/attention-wait.test.ts", "type": "Unit", "gate": "T1", "domains": ["attention-waiting", "interface-contract", "mcp-host"] },
+    { "file": "test/wait-task.test.ts", "type": "Integration", "gate": "T2", "domains": ["attention-waiting", "interface-contract", "mcp-host"] },
     { "file": "test/audit-remediation.test.ts", "type": "Integration", "gate": "T2", "domains": ["manager-lifecycle", "worker-launch", "process-cleanup-and-locks", "workspace-provider", "json-task-store"] },
     { "file": "test/batch2-evidence.test.ts", "type": "Integration", "gate": "T2", "domains": ["json-task-store", "manager-lifecycle", "worker-launch", "workspace-provider", "feedback-and-token-observability"] },
     { "file": "test/batch2-performance.test.ts", "type": "Stress", "gate": "T3", "domains": ["json-task-store", "manager-lifecycle", "workspace-provider", "sqlite-persistence"], "stress": true },
@@ -349,6 +373,7 @@
     "scripts/test-isolated.mjs",
     "scripts/test-clean-entrypoints.mjs",
     "scripts/test-impact-selector.mjs",
+    "scripts/lib/test-files.mjs",
     "scripts/run-affected-tests.mjs",
     "scripts/run-stress-tests.mjs",
     "test/test-impact-map.json",

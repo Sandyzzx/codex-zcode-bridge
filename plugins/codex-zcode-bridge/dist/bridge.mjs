@@ -2620,8 +2620,6 @@ function spawnClaimOnlyWorker(workerPath, provenance, options = {}) {
     BRIDGE_WORKER_LAUNCH_MARKER
   ];
   const child = spawn(process.execPath, args, {
-    // Match the production detached-worker process boundary while retaining
-    // this test-only harness's direct ChildProcess handle and private pipes.
     detached: true,
     shell: false,
     stdio: options.interactionChannel ? ["ignore", "ignore", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe"] : ["ignore", "ignore", "pipe", "pipe", "pipe", "pipe", "pipe"],
@@ -2629,6 +2627,7 @@ function spawnClaimOnlyWorker(workerPath, provenance, options = {}) {
     cwd: path9.dirname(workerPath),
     env
   });
+  child.stderr?.resume();
   const pipes = child.stdio;
   let exitSeen = false;
   Object.defineProperties(child, {
