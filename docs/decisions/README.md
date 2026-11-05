@@ -1,9 +1,11 @@
 # 决策记录 / Decisions
 
 > Status: AUTHORITATIVE（仅指本索引）
-> Last updated: 2026-11-04
+> Last updated: 2026-11-05
+> Last verified: 2026-11-05，仅核对 ADR-026 的新增路由和待批准状态；其余条目未在本轮复核
+> Verified against: 21a8d377bc79bbab8de3ba1af5b2e4417248b0db（实现与测试快照；提案尚未批准）
 
-本目录保存已批准的架构决策和带日期的决策记录。决策回答"为什么这样定"，当前实现仍以 `ARCHITECTURE.md` / `INTERFACES.md` 为准。
+本目录保存架构决策、待批准提案和带日期的决策记录；是否批准以各文档的 Decision 字段为准。决策回答"为什么这样定"，当前实现仍以 `ARCHITECTURE.md` / `INTERFACES.md` 为准。
 
 ## 现有记录
 
@@ -32,6 +34,7 @@
 | [ADR-023](ADR-023-completion-window-cleanup-prewarm.md) | 本次缺陷修复 | Windows 清理 helper 在完成窗口空预热；身份绑定终止与失败闭合不变 |
 | [ADR-024](ADR-024-scoped-sqlite-hold-and-local-cleanup-recovery.md) | Accepted（候选分支） | SQLite Hold 限制到 Operation/执行路径；精确身份退出加 clean claimant scan 可走普通 evidence-only Recovery |
 | [ADR-025](ADR-025-sqlite-attention-unified-waiting.md) | Accepted — Owner directive 2026-11-04（整合时由 ADR-024 重编号，避免与 scoped Hold ADR 冲突） | SQLite Attention Core、`zcode_events(wait_for="attention")` 与共享只读 Thin Waiter |
+| [ADR-026](ADR-026-sqlite-result-contract.md) | Proposed — 待 Owner 批准；未实施 Schema/Migration | 统一 Result 文本与 UTF-8 容量；32MiB Result、独立 envelope 余量与显式 v14 升级 |
 
 ADR-001 到 ADR-003 只搬运权威文档里已经写明的结论。ADR-004 原先没有明文记录，只有 bridge 之外的设计讨论，因此先以 Proposed 记录；2026-10-07 由 Master 明确按"强化版 A"接受，原则冻结，未因此增加任何读取 ZCode 本地材料的代码。
 
