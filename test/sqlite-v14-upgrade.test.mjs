@@ -4,6 +4,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {existsSync,readFileSync,writeFileSync} from 'node:fs';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
+import {createHash} from 'node:crypto';
 import {IsolatedAdmissionStore,digest,canonical} from '../src/sqlite-candidate/wp6b2b1/store.mjs';
 import {createSqliteLifecyclePort} from '../src/sqlite-candidate/wp6b2b1/lifecycle-port.mjs';
 import {historicalResultExceptionSetDigest} from '../src/store/json-history-result-exceptions.mjs';
@@ -96,4 +97,45 @@ test('shipped standalone upgrade command validates an isolated copy and leaves t
   assert.equal(JSON.parse(output).destination_version,14);
   const source=new DatabaseSync(path.join(old,'operations.sqlite3'),{readOnly:true}),destination=new DatabaseSync(path.join(target,'operations.sqlite3'),{readOnly:true});
   try{assert.equal(source.prepare('PRAGMA user_version').get().user_version,13);assert.equal(destination.prepare('PRAGMA user_version').get().user_version,14);}finally{source.close();destination.close();}
+});
+
+test('v13 historical projections retain BLOB artifacts, legacy Result and event bytes through copy and shipped CLI',()=>{
+  const seed=fixture('projection-seed'),taskId='legacy-projection';
+  const value={...result(taskId),summary:'legacy Unicode 中文😀'};
+  const event={artifact_id:'legacy-events',task_id:taskId,attempt:1,source_sequence:1,event_type:'legacy_completed',at:'2026-11-05T00:00:00Z',summary:'legacy event',details:{retained:true}};
+  const artifacts=[
+    {artifact_id:'legacy-result',relative_path:`${taskId}/result.json`,task_id:taskId,attempt:null,kind:'task_result',content:Buffer.from(canonical(value))},
+    {artifact_id:'legacy-binary',relative_path:`${taskId}/attempts/1/output.bin`,task_id:taskId,attempt:1,kind:'attempt_file',content:Buffer.from([0,255,128,10,13,42])},
+    {artifact_id:'legacy-events',relative_path:`${taskId}/events.jsonl`,task_id:taskId,attempt:null,kind:'events',content:Buffer.from(JSON.stringify(event)+'\n')},
+  ].map(a=>({...a,byte_length:a.content.length,sha256:createHash('sha256').update(a.content).digest('hex')}));
+  const byteCount=artifacts.reduce((n,a)=>n+a.byte_length,0);
+  const manifest={files:artifacts.map(a=>({relative_path:a.relative_path,sha256:a.sha256,byte_length:a.byte_length})),task_count:1,result_count:1,event_count:1,artifact_count:artifacts.length,artifact_bytes:byteCount,
+    historical_exceptions:[],historical_exception_count:0,historical_exception_digest:historicalResultExceptionSetDigest([])};
+  const archive={archive_directory:fixture('projection-archive'),source_tasks_root:fixture('projection-legacy-source'),manifest_digest:'c'.repeat(64),file_count:artifacts.length,byte_count:byteCount};
+  const source={task_count:1,result_count:1,event_count:1,artifact_count:artifacts.length,artifact_bytes:byteCount,historical_exception_count:0,historical_exception_digest:historicalResultExceptionSetDigest([]),root_digest:'d'.repeat(64),manifest_json:canonical(manifest),manifest_digest:digest(canonical(manifest))};
+  const roster=version=>digest(JSON.stringify({node:process.versions.node,sqlite:process.versions.sqlite??'unavailable',platform:process.platform,architecture:process.arch,schema_version:version,cutover_protocol_version:'wp6-stop-world-json-sqlite-v1'}));
+  const s=IsolatedAdmissionStore.initialize(seed,{managedDataDirectory:true});
+  const receipt={schema_version:1,state:'authority_switch_receipt',cutover_id:'projection-cutover',migration_id:'projection-migration',source_root_digest:source.root_digest,source_manifest_digest:source.manifest_digest,database_file:'operations.sqlite3',archive,created_at:'2026-11-05T00:00:00Z'};
+  try{
+    s.importJsonAuthoritySnapshot({schema_version:1,cutover_id:receipt.cutover_id,migration_id:receipt.migration_id,source,archive,tasks:[{task_id:taskId,task:{task_id:taskId,workspace:seed,objective:'historical fixture',requirements:[],allowed_paths:[],forbidden_paths:[],acceptance_criteria:[],test_commands:[]},status:'completed',current_attempt:1,created_at:'2026-11-05T00:00:00Z',attempts:[{attempt:1,status:'completed',created_at:'2026-11-05T00:00:00Z'}]}],
+      artifacts,results:[{task_id:taskId,attempt:1,result:value,artifact_id:'legacy-result'}],events:[event],historical_exceptions:[],protocol_version:'wp6-stop-world-json-sqlite-v1',runtime_roster_digest:roster(14),verifier_version:'wp6-json-cutover-v1'});
+    writeFileSync(path.join(seed,'operations.sqlite3.cutover-published.json'),JSON.stringify(receipt));
+    s.provisionCapacity({operation_id:'legacy-policy',capacity_limit:8,expected_generation:0,maintenance:{dispatch_blocked:true,writers_drained:true}});
+  }finally{s.close();}
+  const old=fixture('projection-v13');historicalV13(seed,old,{oldRoster:roster(13)});
+  writeFileSync(path.join(old,'operations.sqlite3.cutover-published.json'),JSON.stringify(receipt));
+  for(const mode of ['library','cli']){
+    const target=fixture(`projection-v14-${mode}`);
+    const output=mode==='library'?IsolatedAdmissionStore.upgradeV13Copy(old,target,{...options,expectedV13RuntimeRosterDigest:roster(13),runtimeRosterDigest:roster(14)}):JSON.parse(execFileSync(process.execPath,[path.resolve('plugins/codex-zcode-bridge/dist/upgrade-sqlite-v14.mjs'),'--source',old,'--destination',target,'--database','operations.sqlite3','--offline'],{encoding:'utf8',timeout:30000}));
+    for(const table of output.tables)if(!['authority_metadata','authority_switch'].includes(table.table))assert.equal(table.source_digest,table.destination_digest,table.table);
+    const check=IsolatedAdmissionStore.open(target,{managedDataDirectory:true});
+    try{assert.deepEqual(check.readTaskLifecycle(taskId).result,value);assert.equal(check.assertAuthorityReady(roster(14)).kind,'authority_switch');}finally{check.close();}
+    const db=new DatabaseSync(path.join(target,'operations.sqlite3'),{readOnly:true});
+    try{
+      for(const original of artifacts)assert.deepEqual(Buffer.from(db.prepare('SELECT content FROM json_artifacts WHERE artifact_id=?').get(original.artifact_id).content),original.content);
+      assert.equal(db.prepare('SELECT result_digest FROM migrated_task_results WHERE task_id=?').get(taskId).result_digest,digest(canonical(value)));
+      assert.equal(db.prepare('SELECT event_cursor FROM migrated_task_events').get().event_cursor,1);
+      assert.equal(db.prepare('SELECT next_event_cursor FROM authority_metadata').get().next_event_cursor,2);
+    }finally{db.close();}
+  }
 });

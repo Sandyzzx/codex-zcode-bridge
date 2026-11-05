@@ -54,6 +54,11 @@ const RECOVERY_EVIDENCE_KEYS = Object.freeze(['attempt','claim_id','classificati
 const RECOVERY_LIMIT = 8;
 export const digest = value => createHash('sha256').update(typeof value === 'string' ? value : canonical(value)).digest('hex');
 const rawDigest = value => createHash('sha256').update(Buffer.from(value)).digest('hex');
+// SQLite rows may contain BLOBs. Hash their native bytes without converting
+// historical artifacts into JSON text or allocating a base64 copy.
+const upgradeRowJson = row => canonical(Object.fromEntries(Object.entries(row).map(([key,value])=>[
+  key,value instanceof Uint8Array?{sqlite_type:'blob',bytes:value.byteLength,sha256:createHash('sha256').update(value).digest('hex')}:value,
+])));
 const EVIDENCE_KEYS = Object.freeze({
   capacity_policy_committed: ['capacity_limit','generation'],
   reserved: ['capacity_slot','reservation_id'],
@@ -550,13 +555,13 @@ export class IsolatedAdmissionStore {
         const insert=target.prepare('INSERT INTO '+q(name)+'('+names.map(q).join(',')+') VALUES('+names.map(()=>'?').join(',')+')');
         const before=createHash('sha256'),expected=createHash('sha256');let count=0;
         for(const raw of db.prepare(select).iterate()){
-          const row={...raw};before.update(canonical(row)+'\n');
+          const row={...raw};before.update(upgradeRowJson(row)+'\n');
           if(name==='authority_metadata'||name==='authority_switch')row.schema_version=14;
           if(name==='authority_switch')row.runtime_roster_digest=runtimeRosterDigest;
-          expected.update(canonical(row)+'\n');insert.run(...names.map(key=>row[key]));count++;
+          expected.update(upgradeRowJson(row)+'\n');insert.run(...names.map(key=>row[key]));count++;
         }
         const after=createHash('sha256');let copied=0;
-        for(const raw of target.prepare(select).iterate()){after.update(canonical({...raw})+'\n');copied++;}
+        for(const raw of target.prepare(select).iterate()){after.update(upgradeRowJson(raw)+'\n');copied++;}
         const expectedDigest=expected.digest('hex'),afterDigest=after.digest('hex');
         if(count!==copied||expectedDigest!==afterDigest)fail('upgrade_row_parity_failed');
         verification.push({table:name,rows:count,source_digest:before.digest('hex'),destination_digest:afterDigest});

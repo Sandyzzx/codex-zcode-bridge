@@ -5804,7 +5804,7 @@ function callDecision(fn, workspace, input) {
     return { state: "unknown" };
   }
 }
-var HERE, SCHEMA, ADMIN_ABANDONMENT_SCHEMA, CONSTRUCT, SCHEMA_VERSION, SCHEMA_OBJECT_QUERY, expectedSchemas, RESULT_CONTRACT_VERSION, RESULT_STATUSES2, RECOVERY_PHASES, RECOVERY_SOURCES, RECOVERY_REASON_CODES, RECOVERY_QUARANTINE_CODES, RECOVERY_EVIDENCE_KEYS, RECOVERY_LIMIT, digest2, rawDigest, EVIDENCE_KEYS, FUTURE_EVENT_TYPES, FUTURE_EVIDENCE_KEYS, EVENT_PHASE, RECOVERY_INPUT_KEYS, ADMIN_ABANDONMENT_INPUT_KEYS, ADMIN_ABANDONMENT_EVIDENCE_KEYS, AdmissionError, fail2, IsolatedAdmissionStore;
+var HERE, SCHEMA, ADMIN_ABANDONMENT_SCHEMA, CONSTRUCT, SCHEMA_VERSION, SCHEMA_OBJECT_QUERY, expectedSchemas, RESULT_CONTRACT_VERSION, RESULT_STATUSES2, RECOVERY_PHASES, RECOVERY_SOURCES, RECOVERY_REASON_CODES, RECOVERY_QUARANTINE_CODES, RECOVERY_EVIDENCE_KEYS, RECOVERY_LIMIT, digest2, rawDigest, upgradeRowJson, EVIDENCE_KEYS, FUTURE_EVENT_TYPES, FUTURE_EVIDENCE_KEYS, EVENT_PHASE, RECOVERY_INPUT_KEYS, ADMIN_ABANDONMENT_INPUT_KEYS, ADMIN_ABANDONMENT_EVIDENCE_KEYS, AdmissionError, fail2, IsolatedAdmissionStore;
 var init_store = __esm({
   "src/sqlite-candidate/wp6b2b1/store.mjs"() {
     "use strict";
@@ -5828,6 +5828,10 @@ var init_store = __esm({
     RECOVERY_LIMIT = 8;
     digest2 = (value) => createHash14("sha256").update(typeof value === "string" ? value : canonical4(value)).digest("hex");
     rawDigest = (value) => createHash14("sha256").update(Buffer.from(value)).digest("hex");
+    upgradeRowJson = (row) => canonical4(Object.fromEntries(Object.entries(row).map(([key, value]) => [
+      key,
+      value instanceof Uint8Array ? { sqlite_type: "blob", bytes: value.byteLength, sha256: createHash14("sha256").update(value).digest("hex") } : value
+    ])));
     EVIDENCE_KEYS = Object.freeze({
       capacity_policy_committed: ["capacity_limit", "generation"],
       reserved: ["capacity_slot", "reservation_id"],
@@ -5953,17 +5957,17 @@ var init_store = __esm({
             let count = 0;
             for (const raw of db.prepare(select).iterate()) {
               const row = { ...raw };
-              before.update(canonical4(row) + "\n");
+              before.update(upgradeRowJson(row) + "\n");
               if (name === "authority_metadata" || name === "authority_switch") row.schema_version = 14;
               if (name === "authority_switch") row.runtime_roster_digest = runtimeRosterDigest;
-              expected.update(canonical4(row) + "\n");
+              expected.update(upgradeRowJson(row) + "\n");
               insert.run(...names.map((key) => row[key]));
               count++;
             }
             const after = createHash14("sha256");
             let copied = 0;
             for (const raw of target.prepare(select).iterate()) {
-              after.update(canonical4({ ...raw }) + "\n");
+              after.update(upgradeRowJson(raw) + "\n");
               copied++;
             }
             const expectedDigest = expected.digest("hex"), afterDigest = after.digest("hex");
