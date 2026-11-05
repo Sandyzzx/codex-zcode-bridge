@@ -4,6 +4,26 @@
 
 当前版本以 `package.json` 和 Release Please manifest 为准。提交推送到 `master` 后，Release Please 会在有待发布变更时创建发布 PR，并同步更新版本文件与本日志；合并发布 PR 后会生成对应 Git tag 和 GitHub Release。
 
+## [1.6.0](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.5.0...codex-zcode-bridge-v1.6.0) (2026-11-05)
+
+
+### Features
+
+* ADR-024 scoped hold recovery + unified attention thin waiter (M2 integration) ([c770345](https://github.com/Sandyzzx/codex-zcode-bridge/commit/c7703451b51d6cb7d0922671a739e672bd690b7e))
+* **sqlite:** scope hold recovery to workspace per ADR-024 ([9b7b0c7](https://github.com/Sandyzzx/codex-zcode-bridge/commit/9b7b0c7a7f2ea5be0d7be70dc04ebec6fb64a24a))
+* unify attention waiting with thin waiter ([785304d](https://github.com/Sandyzzx/codex-zcode-bridge/commit/785304d359a61b9dc11aa1a438ca5780594766f5))
+
+
+### Bug Fixes
+
+* address M2 attention waiter review findings ([b3ac540](https://github.com/Sandyzzx/codex-zcode-bridge/commit/b3ac540e295994277d05881309d08231edcf5c17))
+* allow bounded startup time for Windows cleanup helper ([fc73947](https://github.com/Sandyzzx/codex-zcode-bridge/commit/fc739471d0a566d19ec6d9a308c8b5c34b53d7da))
+* avoid duplicate turn-start events on coalesced ACKs ([a6ba76c](https://github.com/Sandyzzx/codex-zcode-bridge/commit/a6ba76c7a3ddb97e4c7f37754eb85c7eb9c9d82b))
+* exit claim-only workers deterministically after result write ([7fbbfce](https://github.com/Sandyzzx/codex-zcode-bridge/commit/7fbbfceca166eba7e51110c8c64727b8bceaf19f))
+* keep the MVP fake app-server alive in hosted CI ([78115c1](https://github.com/Sandyzzx/codex-zcode-bridge/commit/78115c188c66233b4f83561d2fca1e5fec70b1da))
+* keep worker alive through app-server and cleanup-helper teardown races ([4a3763e](https://github.com/Sandyzzx/codex-zcode-bridge/commit/4a3763ebbd61f8b9d12b9464e2e406df70d0ce88))
+* keep Worker alive through app-server and cleanup-helper teardown races ([f8cfb51](https://github.com/Sandyzzx/codex-zcode-bridge/commit/f8cfb510c9ba8a0be31b5887277a7ff7cf7c4dfa))
+
 ## [1.5.0](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.4.0...codex-zcode-bridge-v1.5.0) (2026-11-03)
 
 
