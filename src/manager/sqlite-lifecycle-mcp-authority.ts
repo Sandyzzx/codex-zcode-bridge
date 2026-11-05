@@ -156,6 +156,10 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       exit_code: typeof result?.exit_code === "number" ? result.exit_code : null,
       ...(typeof result?.error_code === "string" ? { error_code: result.error_code } : {}),
       ...(typeof result?.summary === "string" && status === "failed" ? { error: result.summary } : {}),
+      ...(!result && typeof snapshot.result_submission_error === "string" ? {
+        error_code: snapshot.result_submission_error,
+        error: `Worker Result not committed: ${snapshot.result_submission_error}; execution is not retried and resources remain held pending identity-bound Recovery`,
+      } : {}),
       ...(executionObservation ? { execution_observation: executionObservation } : {}),
       ...(Number(attempt.attempt) > 0 ? {} : {}),
     };
@@ -182,7 +186,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
 
   async getResult(taskId: string): Promise<TaskResult> {
     const snapshot = this.#readSnapshot(taskId);
-    if (!snapshot.result) throw new TaskManagerError("TASK_NOT_FINISHED", `task ${taskId} has no committed SQLite Result`);
+    if (!snapshot.result) throw new TaskManagerError("TASK_NOT_FINISHED", `task ${taskId} has no committed SQLite Result${snapshot.result_submission_error ? `: ${String(snapshot.result_submission_error)}; Recovery required; no automatic retry` : ""}`);
     return snapshot.result as unknown as TaskResult;
   }
 
@@ -652,7 +656,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     }
   }
 
-  #readSnapshot(taskId: string): { task: TaskPackage; projection: Record<string, unknown>; attempt: Record<string, unknown>; operation: Record<string, unknown> | null; result: TaskResult | null; continuation: Record<string, unknown> | null } {
+  #readSnapshot(taskId: string): { task: TaskPackage; projection: Record<string, unknown>; attempt: Record<string, unknown>; operation: Record<string, unknown> | null; result: TaskResult | null; continuation: Record<string, unknown> | null; result_submission_error: string | null } {
     this.#assertOpen();
     const value = this.#driver.readTaskLifecycle(taskId);
     if (!value) throw new TaskManagerError("TASK_NOT_FOUND", `unknown SQLite task: ${taskId}`);
@@ -664,6 +668,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       operation: snapshot.operation ? asRecord(snapshot.operation) : null,
       result: snapshot.result as TaskResult | null,
       continuation: snapshot.continuation ? asRecord(snapshot.continuation) : null,
+      result_submission_error: typeof snapshot.result_submission_error === "string" ? snapshot.result_submission_error : null,
     };
   }
 

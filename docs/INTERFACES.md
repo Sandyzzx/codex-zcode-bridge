@@ -12,6 +12,10 @@
 
 准确类型与 schema 以 `src/interfaces.ts` 和 `src/mcp/schemas.ts` 为准。核心公共入口见 [SHARED_CORE.md](SHARED_CORE.md)。历史源码注释中的 V0.1/FROZEN 是沿革说明，不代表当前新增功能已经冻结。
 
+ADR-026（Owner 已批准）：SQLite v14 的 TaskResult 上限为 **33,554,432 个 canonical JSON UTF-8 字节**，不是字符数；Worker Result envelope 另限 262,144 字节，私有帧上限为两者之和，换行分隔符另计 1 字节。AgentReport/TaskResult 报告正文、issues、tests command/details 和 files_changed 允许合法 JSON Unicode/多行文本及超过 256 项；身份、Claim/CAS 和执行元数据仍使用原合同。`src/result-contract.mjs` 统一报告语义、序列化和容量定义，SQL CHECK 使用同一 UTF-8 字节门槛。
+
+已执行的报告如果确定违反类型/容量合同，Worker 将其转换为独立的基础设施 `failed` Result：`error_code` 为 `invalid_result_payload` 或 `result_too_large`，summary 明确原报告未提交，超限报告带实际 canonical 字节数。该失败不是对原报告裁剪后的成功结果，不重派执行；清理仍要求原执行 proof 和 Manager 的精确身份验证。无法读取帧或确定未提交的 Store 错误以 operation-scoped `observation_recorded` 诊断及 `zcode_status.error_code/error` 暴露，保留 running/占用，使用现有 Recovery/经批准的行政路径处理；数据库无法写诊断时输出 `SQLITE_RESULT_SUBMISSION_FAILED`。COMMIT ACK 不确定则输出只读对账信息并保留 poison/WRITER_INTENT，不替换 Result、不自动清理或重试。Schema 升级是显式停机复制操作，见运行配置文档。
+
 生产 Task Authority 为 SQLite。Marketplace 新装和无有效 SQLite 数据库的升级安装在 MCP 服务启动前执行相同 Fresh Bootstrap；旧 JSON `.tasks` 不参与 Authority 选择、恢复或新任务处理。Bootstrap 失败时拒绝服务，不回退 JSON；旧任务不会自动迁移或续接。该 OD 实现当前仍是未验收候选。
 
 默认 MCP 工具：`zcode_task`、`zcode_status`、`zcode_feedback`、`zcode_result`、`zcode_continue`、`zcode_cancel`、`zcode_events`、`zcode_interaction_reply`、`zcode_doctor`、`zcode_model_catalog`、`zcode_default_model`、`zcode_set_default_model`、`zcode_clear_default_model`。实验 progress probe 需显式启用。

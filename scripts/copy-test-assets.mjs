@@ -29,3 +29,5 @@ await Promise.all([
   copyFile(impactMapSource, impactMapDestination),
 ]);
 console.log("Copied SQLite schemas and the test impact map into the compiled test layout.");
+
+await copyFile(path.join(repoRoot,'src/sqlite-candidate/wp6b2b1/schema-v13.sql'),path.join(repoRoot,'dist-test/src/sqlite-candidate/wp6b2b1/schema-v13.sql'));

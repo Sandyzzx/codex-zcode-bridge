@@ -49,7 +49,8 @@
       "paths": [
         "src/interfaces.ts",
         "src/mcp/schemas.ts",
-        "src/adapters/zcode-envelope-types.ts"
+        "src/adapters/zcode-envelope-types.ts",
+        "src/result-contract.mjs"
       ]
     },
     {
@@ -322,6 +323,9 @@
     { "file": "test/sqlite-candidate/wp6c/admin-abandonment.test.mjs", "type": "Integration", "gate": "T2", "domains": ["sqlite-persistence", "manager-lifecycle", "mcp-host"] },
     { "file": "test/sqlite-candidate/wp6c/cleanup-release.test.mjs", "type": "Integration", "gate": "T2", "domains": ["sqlite-persistence", "manager-lifecycle", "process-cleanup-and-locks"] },
     { "file": "test/sqlite-candidate/wp6c/result-recovery.test.mjs", "type": "Integration", "gate": "T2", "domains": ["sqlite-persistence", "manager-lifecycle", "process-cleanup-and-locks"] },
+    { "file": "test/sqlite-result-v14.test.mjs", "type": "Integration", "gate": "T2", "domains": ["sqlite-persistence", "manager-lifecycle", "process-cleanup-and-locks"] },
+    { "file": "test/mcp-result-v14.test.mjs", "type": "Integration", "gate": "T2", "domains": ["sqlite-persistence", "mcp-host", "interface-contract"] },
+    { "file": "test/sqlite-v14-upgrade.test.mjs", "type": "Integration", "gate": "T2", "domains": ["sqlite-persistence", "manager-lifecycle", "process-cleanup-and-locks"] },
     { "file": "test/task-feedback.test.ts", "type": "Unit", "gate": "T1", "domains": ["feedback-and-token-observability", "mcp-host"] },
     { "file": "test/task-manager.test.ts", "type": "Integration", "gate": "T2", "domains": ["manager-lifecycle", "json-task-store", "process-cleanup-and-locks", "workspace-provider", "worker-launch"] },
     { "file": "test/task-prompt.test.ts", "type": "Unit", "gate": "T1", "domains": ["task-prompt-and-report"] },
@@ -366,6 +370,7 @@
     }
   ],
   "full_suite_paths": [
+    "src/result-contract.mjs",
     "src/interfaces.ts",
     "src/mcp/schemas.ts",
     "src/adapters/zcode-envelope-types.ts",

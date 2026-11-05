@@ -13,6 +13,168 @@ var __export = (target, all) => {
     __defProp(target, name, { get: all[name], enumerable: true });
 };
 
+// src/result-contract.mjs
+function canonical(value) {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
+  if (typeof value === "number" && Number.isSafeInteger(value)) return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value && Object.getPrototypeOf(value) === Object.prototype) return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${canonical(value[k])}`).join(",")}}`;
+  throw new ResultContractError("invalid_json_value");
+}
+function isStringArray(value) {
+  return Array.isArray(value) && value.every((x) => typeof x === "string");
+}
+function validateTestReport(value) {
+  if (!value || Object.getPrototypeOf(value) !== Object.prototype) return { ok: false, error: "entry is not an object" };
+  if (typeof value.command !== "string") return { ok: false, error: "command must be a string" };
+  if (!["passed", "failed", "not_run"].includes(value.status)) return { ok: false, error: "status must be one of passed|failed|not_run" };
+  if (value.details !== void 0 && typeof value.details !== "string") return { ok: false, error: "details must be a string when present" };
+  return { ok: true, test: { command: value.command, status: value.status, ...value.details === void 0 ? {} : { details: value.details } } };
+}
+function validateReportFields(value, partial2 = false) {
+  if (!value || Object.getPrototypeOf(value) !== Object.prototype) fail("invalid_result_payload", "report is not a JSON object");
+  for (const key of ["summary", "files_changed", "tests", "issues", "needs_master_decision"]) {
+    if (partial2 && !Object.hasOwn(value, key)) continue;
+    const v = value[key];
+    if (key === "tests") {
+      if (!Array.isArray(v)) fail("invalid_result_payload", "report.tests must be an array");
+      for (const entry of v) {
+        const parsed = validateTestReport(entry);
+        if (!parsed.ok) fail("invalid_result_payload", `report.tests entry invalid: ${parsed.error}`);
+      }
+    } else if (key === "summary" ? typeof v !== "string" : key === "needs_master_decision" ? typeof v !== "boolean" : !isStringArray(v)) {
+      fail("invalid_result_payload", `report.${key} must be ${key === "summary" ? "a string" : key === "needs_master_decision" ? "a boolean" : "an array of strings"}`);
+    }
+  }
+}
+function validateAgentReport(value) {
+  try {
+    validateReportFields(value);
+  } catch (error62) {
+    return { ok: false, error: error62.message };
+  }
+  if (!value.summary.trim()) return { ok: false, error: "report.summary must be a non-empty string" };
+  return { ok: true, report: { summary: value.summary, files_changed: value.files_changed, tests: value.tests.map((x) => validateTestReport(x).test), issues: value.issues, needs_master_decision: value.needs_master_decision } };
+}
+function submissionFailure(result, error62) {
+  const code = error62?.code === "result_too_large" ? "result_too_large" : "invalid_result_payload";
+  const summary = code === "result_too_large" ? error62.message : `Result schema invalid (${String(error62?.message ?? "invalid_result_payload").slice(0, 512)}); original report not committed`;
+  return {
+    task_id: result.task_id,
+    attempt: result.attempt,
+    status: "failed",
+    summary,
+    files_changed: [],
+    tests: [],
+    issues: [summary],
+    needs_master_decision: true,
+    zcode_output: "",
+    exit_code: null,
+    session_id: null,
+    started_at: null,
+    finished_at: (/* @__PURE__ */ new Date()).toISOString(),
+    error_code: code
+  };
+}
+function assertWorkerResultEnvelope(frame) {
+  const bytes = Buffer.byteLength(canonical({ ...frame, result: null }), "utf8") - 4;
+  if (bytes > MAX_RESULT_ENVELOPE_BYTES) throw new ResultContractError("result_envelope_too_large", `Worker Result envelope ${bytes} bytes exceeds ${MAX_RESULT_ENVELOPE_BYTES}`);
+}
+function prepareWorkerResultFrameParts(frame) {
+  assertWorkerResultEnvelope(frame);
+  let resultJson;
+  try {
+    resultJson = canonicalTaskResult(frame.result, { task_id: frame.task_id, attempt: frame.attempt, result_status: frame.result?.status });
+  } catch (error62) {
+    const result = submissionFailure({ task_id: frame.task_id, attempt: frame.attempt }, error62);
+    resultJson = canonicalTaskResult(result, { task_id: frame.task_id, attempt: frame.attempt, result_status: "failed" });
+  }
+  const parts = ["{"];
+  for (const key of Object.keys(frame).sort()) {
+    if (parts.length > 1) parts.push(",");
+    parts.push(JSON.stringify(key), ":", key === "result" ? resultJson : canonical(frame[key]));
+  }
+  parts.push("}");
+  const bytes = parts.reduce((sum, part) => sum + Buffer.byteLength(part, "utf8"), 0);
+  if (bytes - Buffer.byteLength(resultJson, "utf8") > MAX_RESULT_ENVELOPE_BYTES || bytes > MAX_WORKER_RESULT_FRAME_BYTES)
+    throw new ResultContractError("result_envelope_too_large", "Worker Result envelope exceeds 256 KiB allowance");
+  return parts;
+}
+function validText(value, max) {
+  return typeof value === "string" && value.length > 0 && value.length <= max && !/[\x00-\x1f]/u.test(value);
+}
+function isNullableText(value, max = 4096) {
+  return value === null || typeof value === "string" && value.length <= max && !/[\x00-\x1f]/u.test(value);
+}
+function validateStringArray(value, maxItems = 256) {
+  if (!Array.isArray(value) || value.length > maxItems || value.some((x) => typeof x !== "string" || x.length > 4096 || /[\x00-\x1f]/u.test(x))) fail("invalid_result_payload");
+}
+function validateResultObject(value, keys, required2 = []) {
+  if (!value || Object.getPrototypeOf(value) !== Object.prototype) fail("invalid_result_payload");
+  const own2 = Object.keys(value);
+  if (own2.some((k) => !keys.has(k)) || required2.some((k) => !Object.hasOwn(value, k))) fail("invalid_result_payload");
+}
+function validateUsage(value) {
+  validateResultObject(
+    value,
+    /* @__PURE__ */ new Set(["source", "scope", "observed_at", "finality", "input_tokens", "output_tokens", "total_tokens", "cached_input_tokens", "reasoning_tokens", "conflicts", "dropped_unknown_keys"]),
+    ["source", "scope", "observed_at", "finality", "input_tokens", "output_tokens", "total_tokens", "cached_input_tokens", "reasoning_tokens", "conflicts", "dropped_unknown_keys"]
+  );
+  if (!isNullableText(value.source) || !isNullableText(value.scope) || !isNullableText(value.observed_at) || !["reported", "derived", "partial"].includes(value.finality) || ["input_tokens", "output_tokens", "total_tokens", "cached_input_tokens", "reasoning_tokens"].some((k) => value[k] !== null && (!Number.isSafeInteger(value[k]) || value[k] < 0)) || !Number.isSafeInteger(value.dropped_unknown_keys) || value.dropped_unknown_keys < 0) fail("invalid_result_payload");
+  validateStringArray(value.conflicts, 64);
+}
+function validateModel(value) {
+  validateResultObject(
+    value,
+    /* @__PURE__ */ new Set(["executor", "provider_id", "model_id", "requested_model", "requested_reasoning_level", "effective_reasoning_level", "effective_reasoning_level_source", "selection_source", "effective_at", "session_id", "turn_id"]),
+    ["executor", "provider_id", "model_id", "requested_model", "requested_reasoning_level", "effective_reasoning_level", "effective_reasoning_level_source", "selection_source", "effective_at", "session_id", "turn_id"]
+  );
+  if (typeof value.executor !== "string" || !["runtime", "not_reported"].includes(value.effective_reasoning_level_source) || ["provider_id", "model_id", "requested_model", "requested_reasoning_level", "effective_reasoning_level", "selection_source", "effective_at", "session_id", "turn_id"].some((k) => !isNullableText(value[k]))) fail("invalid_result_payload");
+}
+function validateTiming(value) {
+  validateResultObject(value, /* @__PURE__ */ new Set(["queued_ms", "execution_ms", "turn_ms", "finalize_ms", "wall_ms", "derived", "notes"]), ["queued_ms", "execution_ms", "turn_ms", "finalize_ms", "wall_ms", "derived", "notes"]);
+  if (["queued_ms", "execution_ms", "turn_ms", "finalize_ms", "wall_ms"].some((k) => value[k] !== null && (!Number.isSafeInteger(value[k]) || value[k] < 0)) || typeof value.derived !== "boolean") fail("invalid_result_payload");
+  validateStringArray(value.notes, 64);
+}
+function canonicalTaskResult(result, input2) {
+  validateResultObject(result, RESULT_FIELDS, REQUIRED_RESULT_FIELDS);
+  if (result.task_id !== input2.task_id || result.attempt !== input2.attempt || result.status !== input2.result_status || !RESULT_STATUSES.has(result.status) || typeof result.summary !== "string" || typeof result.zcode_output !== "string" || typeof result.needs_master_decision !== "boolean" || result.exit_code !== null && !Number.isSafeInteger(result.exit_code) || !isNullableText(result.session_id) || !isNullableText(result.started_at, 64) || !isNullableText(result.finished_at, 64)) fail("invalid_result_payload");
+  validateReportFields(result);
+  if (Object.hasOwn(result, "error_code") && !validText(result.error_code, 128)) fail("invalid_result_payload");
+  if (Object.hasOwn(result, "report_candidate")) {
+    validateResultObject(result.report_candidate, /* @__PURE__ */ new Set(["summary", "files_changed", "tests", "issues", "needs_master_decision"]));
+    validateReportFields(result.report_candidate, true);
+  }
+  if (Object.hasOwn(result, "usage") && result.usage !== null) validateUsage(result.usage);
+  if (Object.hasOwn(result, "model") && result.model !== null) validateModel(result.model);
+  if (Object.hasOwn(result, "timing") && result.timing !== null) validateTiming(result.timing);
+  const json2 = canonical(result);
+  const bytes = Buffer.byteLength(json2, "utf8");
+  if (bytes > MAX_TASK_RESULT_BYTES) throw new ResultContractError("result_too_large", `canonical TaskResult ${bytes} bytes exceeds ${MAX_TASK_RESULT_BYTES}; original report not committed`);
+  return json2;
+}
+var MAX_TASK_RESULT_BYTES, MAX_RESULT_ENVELOPE_BYTES, MAX_WORKER_RESULT_FRAME_BYTES, ResultContractError, fail, RESULT_STATUSES, RESULT_FIELDS, REQUIRED_RESULT_FIELDS;
+var init_result_contract = __esm({
+  "src/result-contract.mjs"() {
+    "use strict";
+    MAX_TASK_RESULT_BYTES = 32 * 1024 * 1024;
+    MAX_RESULT_ENVELOPE_BYTES = 256 * 1024;
+    MAX_WORKER_RESULT_FRAME_BYTES = MAX_TASK_RESULT_BYTES + MAX_RESULT_ENVELOPE_BYTES;
+    ResultContractError = class extends Error {
+      constructor(code, message = code) {
+        super(message);
+        this.code = code;
+      }
+    };
+    fail = (code, message = code) => {
+      throw new ResultContractError(code, message);
+    };
+    RESULT_STATUSES = /* @__PURE__ */ new Set(["completed", "failed", "cancelled", "waiting_for_master"]);
+    RESULT_FIELDS = /* @__PURE__ */ new Set(["task_id", "attempt", "status", "summary", "files_changed", "tests", "issues", "needs_master_decision", "zcode_output", "exit_code", "session_id", "started_at", "finished_at", "error_code", "report_candidate", "usage", "model", "timing"]);
+    REQUIRED_RESULT_FIELDS = ["task_id", "attempt", "status", "summary", "files_changed", "tests", "issues", "needs_master_decision", "zcode_output", "exit_code", "session_id", "started_at", "finished_at"];
+  }
+});
+
 // src/runtime/build-provenance.ts
 import { createHash } from "node:crypto";
 import { readFileSync, realpathSync } from "node:fs";
@@ -2517,7 +2679,7 @@ function windowsBatchQuery(pids, timeoutMs, onFailure) {
     });
     let stdout = "";
     let settled = false;
-    const fail = (reason) => {
+    const fail2 = (reason) => {
       if (settled) return;
       try {
         onFailure?.(reason);
@@ -2536,7 +2698,7 @@ function windowsBatchQuery(pids, timeoutMs, onFailure) {
         child.kill("SIGKILL");
       } catch {
       }
-      fail("timeout");
+      fail2("timeout");
     }, timeoutMs);
     timer.unref();
     child.stdout.setEncoding("utf8");
@@ -2548,27 +2710,27 @@ function windowsBatchQuery(pids, timeoutMs, onFailure) {
     child.stdout.on("data", (chunk) => {
       if (stdout.length < 1e6) stdout += chunk;
     });
-    child.on("error", () => fail("spawn_error"));
+    child.on("error", () => fail2("spawn_error"));
     child.on("close", (code) => {
       const map2 = /* @__PURE__ */ new Map();
       const lines = stdout.trim().split(/\r?\n/u);
       if (code !== 0) {
-        fail("nonzero_exit");
+        fail2("nonzero_exit");
         return;
       }
       if (stderrBytes > 0) {
-        fail("stderr");
+        fail2("stderr");
         return;
       }
       if (lines.pop() !== "bridge_probe_complete_v1") {
-        fail("missing_completion_marker");
+        fail2("missing_completion_marker");
         return;
       }
       for (const line of lines) {
         if (!line.trim()) continue;
         const match = /^(\d+)\|(\d+)$/u.exec(line.trim());
         if (!match || !pids.includes(Number(match[1])) || map2.has(Number(match[1]))) {
-          fail("malformed_output");
+          fail2("malformed_output");
           return;
         }
         map2.set(Number(match[1]), match[2]);
@@ -2731,7 +2893,7 @@ function parseAgentReport(responseText) {
   let lastError = null;
   let lastCandidate = null;
   for (const candidate of extractJsonObjects(responseText)) {
-    const validated = validateAgentReport(candidate);
+    const validated = validateAgentReport2(candidate);
     if (validated.ok) {
       return { report: validated.report, candidate: validated.report, error: null };
     }
@@ -2748,13 +2910,13 @@ function extractReportCandidate(value) {
   if (!isPlainObject(value)) return null;
   const candidate = {};
   if (typeof value["summary"] === "string") candidate.summary = value["summary"];
-  if (isStringArray(value["files_changed"])) candidate.files_changed = value["files_changed"];
-  if (isStringArray(value["issues"])) candidate.issues = value["issues"];
+  if (isStringArray2(value["files_changed"])) candidate.files_changed = value["files_changed"];
+  if (isStringArray2(value["issues"])) candidate.issues = value["issues"];
   if (typeof value["needs_master_decision"] === "boolean") candidate.needs_master_decision = value["needs_master_decision"];
   if (Array.isArray(value["tests"])) {
     const tests = [];
     for (const entry of value["tests"]) {
-      const test = validateTestReport(entry);
+      const test = validateTestReport2(entry);
       if (!test.ok) return candidate;
       tests.push(test.test);
     }
@@ -2762,69 +2924,11 @@ function extractReportCandidate(value) {
   }
   return Object.keys(candidate).length ? candidate : null;
 }
-function validateAgentReport(value) {
-  if (!isPlainObject(value)) {
-    return { ok: false, error: "report is not a JSON object" };
-  }
-  const summary = value["summary"];
-  if (typeof summary !== "string" || summary.trim().length === 0) {
-    return { ok: false, error: "report.summary must be a non-empty string" };
-  }
-  const filesChanged = value["files_changed"];
-  if (!isStringArray(filesChanged)) {
-    return { ok: false, error: "report.files_changed must be an array of strings" };
-  }
-  const testsRaw = value["tests"];
-  if (!Array.isArray(testsRaw)) {
-    return { ok: false, error: "report.tests must be an array" };
-  }
-  const tests = [];
-  for (const entry of testsRaw) {
-    const test = validateTestReport(entry);
-    if (!test.ok) {
-      return { ok: false, error: `report.tests entry invalid: ${test.error}` };
-    }
-    tests.push(test.test);
-  }
-  const issues = value["issues"];
-  if (!isStringArray(issues)) {
-    return { ok: false, error: "report.issues must be an array of strings" };
-  }
-  const needsMasterDecision = value["needs_master_decision"];
-  if (typeof needsMasterDecision !== "boolean") {
-    return { ok: false, error: "report.needs_master_decision must be a boolean" };
-  }
-  return {
-    ok: true,
-    report: {
-      summary,
-      files_changed: filesChanged,
-      tests,
-      issues,
-      needs_master_decision: needsMasterDecision
-    }
-  };
+function validateAgentReport2(value) {
+  return validateAgentReport(value);
 }
-function validateTestReport(value) {
-  if (!isPlainObject(value)) {
-    return { ok: false, error: "entry is not an object" };
-  }
-  const command = value["command"];
-  if (typeof command !== "string") {
-    return { ok: false, error: "command must be a string" };
-  }
-  const status = value["status"];
-  if (typeof status !== "string" || !TEST_STATUSES.has(status)) {
-    return { ok: false, error: "status must be one of passed|failed|not_run" };
-  }
-  const details = value["details"];
-  if (details !== void 0 && typeof details !== "string") {
-    return { ok: false, error: "details must be a string when present" };
-  }
-  return {
-    ok: true,
-    test: details === void 0 ? { command, status } : { command, status, details }
-  };
+function validateTestReport2(value) {
+  return validateTestReport(value);
 }
 function* extractJsonObjects(text) {
   if (text.trimStart().startsWith("{")) {
@@ -2872,17 +2976,17 @@ function* extractJsonObjects(text) {
     }
   }
 }
-function isStringArray(value) {
+function isStringArray2(value) {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string");
 }
 function isPlainObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-var TEST_STATUSES, MAX_SCAN_CHARS;
+var MAX_SCAN_CHARS;
 var init_agent_report = __esm({
   "src/adapters/agent-report.ts"() {
     "use strict";
-    TEST_STATUSES = /* @__PURE__ */ new Set(["passed", "failed", "not_run"]);
+    init_result_contract();
     MAX_SCAN_CHARS = 4e5;
   }
 });
@@ -28451,8 +28555,8 @@ function normalizeUsage(raw, options = {}) {
     dropped_unknown_keys: 0
   };
   let knownKeys = 0;
-  for (const [canonical, alias] of KNOWN_NUMERIC_FIELDS) {
-    const snake = record2[canonical];
+  for (const [canonical2, alias] of KNOWN_NUMERIC_FIELDS) {
+    const snake = record2[canonical2];
     const camel = record2[alias];
     const hasSnake = snake !== void 0;
     const hasCamel = camel !== void 0;
@@ -28464,10 +28568,10 @@ function normalizeUsage(raw, options = {}) {
       conflicts.add(accepted.conflict);
       continue;
     }
-    result[canonical] = accepted.value;
+    result[canonical2] = accepted.value;
   }
   for (const key of Object.keys(record2)) {
-    const known = KNOWN_NUMERIC_FIELDS.some(([canonical, alias]) => key === canonical || key === alias);
+    const known = KNOWN_NUMERIC_FIELDS.some(([canonical2, alias]) => key === canonical2 || key === alias);
     const source = SOURCE_FIELDS.some((candidate) => key === candidate);
     if (!known && !source) result.dropped_unknown_keys += 1;
   }
@@ -29823,6 +29927,7 @@ var init_fake_result_adapter = __esm({
 });
 
 // src/worker/worker-main.ts
+init_result_contract();
 init_build_provenance();
 init_profile();
 init_json_writer_quiescence();
@@ -30042,7 +30147,7 @@ async function runClaimOnlyHandshake(options) {
     options.onStage?.(execution.adapter_mode === "test_fake" ? "test adapter start" : "zcode adapter start");
     const resultFrame = execution.adapter_mode === "test_fake" ? await runExplicitFakeAdapter(bootstrap, execution, candidateInteraction) : await runZCodeAdapter(bootstrap, execution, candidateInteraction);
     options.onStage?.("adapter result frame prepared");
-    writePrivateFrame(6, resultFrame);
+    writePrivateFrame(6, resultFrame, prepareWorkerResultFrameParts(resultFrame));
     options.onStage?.("adapter result frame written");
   } finally {
     options.onStage?.("worker interaction close start");
@@ -30205,11 +30310,11 @@ async function closeOwnedStreams(streams) {
   })));
 }
 function digestProvenance(value) {
-  const canonical = JSON.stringify({
+  const canonical2 = JSON.stringify({
     bridge: { path: value.bridge.path, sha256: value.bridge.sha256 },
     worker: { path: value.worker.path, sha256: value.worker.sha256 }
   });
-  return createHash7("sha256").update(canonical, "utf8").digest("hex");
+  return createHash7("sha256").update(canonical2, "utf8").digest("hex");
 }
 function readPrivateFrame(fd, maximum) {
   const frame = readFileSync8(fd);
@@ -30217,9 +30322,16 @@ function readPrivateFrame(fd, maximum) {
   if (frame.byteLength > maximum) throw new Error("private frame exceeded limit");
   return frame;
 }
-function writePrivateFrame(fd, value) {
-  const frame = Buffer.from(`${JSON.stringify(value)}
-`, "utf8");
-  writeFileSync4(fd, frame);
+function writePrivateFrame(fd, value, encoded = JSON.stringify(value)) {
+  for (const part of typeof encoded === "string" ? [encoded] : encoded) {
+    for (let offset = 0; offset < part.length; ) {
+      let end = Math.min(offset + 64 * 1024, part.length);
+      const last = part.charCodeAt(end - 1);
+      if (end < part.length && last >= 55296 && last <= 56319) end--;
+      writeFileSync4(fd, part.slice(offset, end), "utf8");
+      offset = end;
+    }
+  }
+  writeFileSync4(fd, "\n", "utf8");
   closeSync4(fd);
 }

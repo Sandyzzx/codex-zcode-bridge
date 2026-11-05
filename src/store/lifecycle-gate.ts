@@ -1,3 +1,4 @@
+import { MAX_WORKER_RESULT_FRAME_BYTES, canonicalTaskResult, submissionFailure, assertWorkerResultEnvelope } from "../result-contract.mjs";
 /**
  * SQLite lifecycle composition shared by production startup and isolated tests.
  */
@@ -137,6 +138,7 @@ interface ClaimOnlyPort {
   readTaskProjection(taskId: string): unknown;
   readAttempt(taskId: string, attempt: number): unknown;
   commitResult(input: CandidateResultCommitInput): CandidateResultCommitOutcome;
+  recordResultSubmissionFailure?(input: Readonly<Record<string, unknown>>, reason: string): unknown;
   readCommittedResult(operationId: string): CandidateCommittedResult | null;
   beginCleanup(input: CandidateCleanupFence): Readonly<Record<string, unknown>>;
   recordCleanupEvidence(input: CandidateCleanupFence & Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>>;
@@ -999,7 +1001,8 @@ function tryReadReadySqliteAuthority(
       ...(allowPending ? { allowFreshBootstrapPending: true } : {}),
     });
     return store.assertAuthorityReady(currentSqliteRuntimeRosterDigest());
-  } catch {
+  } catch (error) {
+    if (errorCode(error) === "schema_upgrade_required") throw error;
     return null;
   } finally { store?.close(); }
 }
@@ -1281,6 +1284,17 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
   const localPolicy = options.trustedLocalContext.policy;
   const interactionChannels = new Map<string, CandidateInteractionChannel>();
   const activeWorkers = new Map<string, { readonly child: ClaimOnlyWorkerProcess; readonly input: ClaimOnlyRunInput }>();
+  // A completed frame may be large. Finalize one already-exited Worker's
+  // Result/Cleanup at a time so synchronous SQLite work cannot consume another
+  // finalizer's OS probe budget. Executing Workers and pipe reads remain live.
+  let resultFinalization = Promise.resolve();
+  const takeResultFinalization = async (): Promise<() => void> => {
+    const preceding = resultFinalization;
+    let release!: () => void;
+    resultFinalization = new Promise<void>((resolve) => { release = resolve; });
+    await preceding;
+    return release;
+  };
   const cancellationProofs = new Map<string, { readonly input: ClaimOnlyRunInput; readonly child: ClaimOnlyWorkerProcess; readonly cancelId: string; readonly verificationDigest: string; readonly identityState: "alive" | "exited"; readonly terminationState: "terminated" | "already_exited"; readonly processTreeDigest: string; readonly livePids: readonly number[]; readonly observedPids: readonly number[]; readonly workerExitCode: number }>();
   const provenance: RuntimeBuildProvenance = {
     bridge: fingerprintRuntimeArtifact(options.bridgeEntryPath),
@@ -2059,7 +2073,7 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
           try {
             stage("worker_result_frame_read_start");
             const resultWaitMs = Math.min(60 * 60_000, input.task.timeout_ms ?? 60 * 60_000) + 30_000;
-            rawResult = await readJsonLine(child.resultChannel, 16 * 1024 * 1024, resultWaitMs);
+            rawResult = await readJsonLine(child.resultChannel, MAX_WORKER_RESULT_FRAME_BYTES + 1, resultWaitMs);
             stage("worker_result_frame_read_complete");
           } catch (error) {
             state = "result_rejected";
@@ -2071,105 +2085,113 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
           await interactionPump;
           stage("worker_close", { pid: child.pid ?? null, exitCode: workerExitCode });
 
-          if (state !== "result_rejected") {
-            if (workerExitCode !== 0) {
-              state = "result_rejected";
-              reason = "worker_result_exit_unverified";
-              stage("worker_result_rejected", { reason, workerExitCode });
-            } else {
-              try {
-                const resultFrame = validateWorkerResultFrame(rawResult, {
-                  operation_id: input.operationId,
-                  task_id: input.task.task_id,
-                  attempt: input.attempt,
-                  generation,
-                  workspace_ref: policySnapshot.workspace_ref,
-                  policy_snapshot_digest: policySnapshot.policy_snapshot_digest,
-                });
-                if (!options.testOnlyFakeAdapter && resultFrame.execution_cleanup?.source === "explicit_test_fake") {
-                  throw new LifecycleGateError("test_adapter_frame_forbidden");
-                }
-                const executionCleanup = trustedExecutionCleanupProof(
-                  resultFrame.execution_cleanup,
-                  options.testOnlyFakeAdapter === true,
-                );
-                stage("worker_result_verified", { status: resultFrame.result.status });
-                const current = asRecord(port.readOperation(input.operationId));
-                verifyPersistedClaimEvidence(port, current, input, generation, claimId);
-                const revision = positive(current.revision, "result_revision_missing");
-                const identityDigest = text(current.claim_worker_identity_digest, "result_claim_identity_missing");
-                const commitInput: CandidateResultCommitInput = {
-                  operation_id: input.operationId,
-                  task_id: input.task.task_id,
-                  attempt: input.attempt,
-                  generation,
-                  revision,
-                  claim_id: claimId,
-                  claim_worker_identity_digest: identityDigest,
-                  result_status: resultFrame.result.status,
-                  result: resultFrame.result,
-                };
-                stage("result_commit_start", { revision, status: resultFrame.result.status });
-                let commit: CandidateResultCommitOutcome;
+          const releaseResultFinalization = await takeResultFinalization();
+          try {
+            if (state !== "result_rejected") {
+              if (workerExitCode !== 0) {
+                state = "result_rejected";
+                reason = "worker_result_exit_unverified";
+                stage("worker_result_rejected", { reason, workerExitCode });
+              } else {
                 try {
-                  commit = port.commitResult(commitInput);
-                } catch (error) {
-                  const code = errorCode(error);
-                  state = code === "transaction_outcome_unknown" ? "result_outcome_unknown" : "result_rejected";
-                  reason = code ?? "result_commit_failed";
-                  stage("result_commit_failed", { reason, unknown: state === "result_outcome_unknown" });
-                  throw new LifecycleGateError("result_commit_terminal", reason);
-                }
-                stage("result_commit_ack", {
-                  duplicate: commit.duplicate,
-                  conflict: commit.conflict,
-                  phase: commit.phase,
-                  revision: commit.revision,
-                  result_digest: commit.result_digest,
-                });
-                if (commit.conflict || commit.quarantined) {
-                  state = "result_conflict";
-                  reason = "conflicting_result_quarantined";
-                  stage("result_conflict", { revision: commit.revision });
-                } else {
+                  const resultFrame = { ...validateWorkerResultFrame(rawResult, {
+                    operation_id: input.operationId,
+                    task_id: input.task.task_id,
+                    attempt: input.attempt,
+                    generation,
+                    workspace_ref: policySnapshot.workspace_ref,
+                    policy_snapshot_digest: policySnapshot.policy_snapshot_digest,
+                  }) };
+                  if (!options.testOnlyFakeAdapter && resultFrame.execution_cleanup?.source === "explicit_test_fake") {
+                    throw new LifecycleGateError("test_adapter_frame_forbidden");
+                  }
+                  const executionCleanup = trustedExecutionCleanupProof(
+                    resultFrame.execution_cleanup,
+                    options.testOnlyFakeAdapter === true,
+                  );
+                  try { canonicalTaskResult(resultFrame.result, {task_id:input.task.task_id, attempt:input.attempt, result_status:resultFrame.result.status}); }
+                  catch(error) {
+                    // Identity and cleanup proof were checked before replacing an invalid report.
+                    resultFrame.result = submissionFailure({task_id:input.task.task_id,attempt:input.attempt},error) as CandidateTaskResult;
+                  }
+                  stage("worker_result_verified", { status: resultFrame.result.status });
+                  const current = asRecord(port.readOperation(input.operationId));
+                  verifyPersistedClaimEvidence(port, current, input, generation, claimId);
+                  const revision = positive(current.revision, "result_revision_missing");
+                  const identityDigest = text(current.claim_worker_identity_digest, "result_claim_identity_missing");
+                  const commitInput: CandidateResultCommitInput = {
+                    operation_id: input.operationId,
+                    task_id: input.task.task_id,
+                    attempt: input.attempt,
+                    generation,
+                    revision,
+                    claim_id: claimId,
+                    claim_worker_identity_digest: identityDigest,
+                    result_status: resultFrame.result.status,
+                    result: resultFrame.result,
+                  };
+                  stage("result_commit_start", { revision, status: resultFrame.result.status });
+                  let commit: CandidateResultCommitOutcome;
                   try {
-                    const persistedResult = port.readCommittedResult(input.operationId);
-                    const currentAfter = asRecord(port.readOperation(input.operationId));
-                    verifyPersistedResult(port, currentAfter, persistedResult, commitInput, commit);
-                    committedResult = resultFrame.result;
-                    resultStatus = resultFrame.result.status;
-                    resultDigest = text(commit.result_digest, "result_digest_missing");
-                    state = "result_committed";
-                    reason = "result_committed";
-                    stage("result_projection_verified", { revision: commit.revision, status: resultStatus, result_digest: resultDigest });
-                    cleanupState = await finalizeClaimedWorkerCleanup(port, input, generation, claimId, probe, processProbeTimeoutMs, workerExitCode,
-                      executionCleanup, executionCleanup ? "adapter_verified" : "adapter_unverified",
-                      (name, detail) => stage(name, detail));
-                    stage("cleanup_complete", { cleanup_state: cleanupState });
+                    commit = port.commitResult(commitInput);
                   } catch (error) {
-                    if (state === "result_committed") {
-                      cleanupState = "unknown";
-                      reason = errorCode(error) ?? "cleanup_outcome_unknown";
-                      stage("cleanup_outcome_unknown", { reason });
-                    } else {
-                      state = "result_outcome_unknown";
-                      reason = errorCode(error) ?? "result_projection_verification_failed";
-                      stage("result_projection_unknown", { reason });
+                    const code = errorCode(error);
+                    state = code === "transaction_outcome_unknown" ? "result_outcome_unknown" : "result_rejected";
+                    reason = code ?? "result_commit_failed";
+                    stage("result_commit_failed", { reason, unknown: state === "result_outcome_unknown" });
+                    throw new LifecycleGateError("result_commit_terminal", reason);
+                  }
+                  stage("result_commit_ack", {
+                    duplicate: commit.duplicate,
+                    conflict: commit.conflict,
+                    phase: commit.phase,
+                    revision: commit.revision,
+                    result_digest: commit.result_digest,
+                  });
+                  if (commit.conflict || commit.quarantined) {
+                    state = "result_conflict";
+                    reason = "conflicting_result_quarantined";
+                    stage("result_conflict", { revision: commit.revision });
+                  } else {
+                    try {
+                      const persistedResult = port.readCommittedResult(input.operationId);
+                      const currentAfter = asRecord(port.readOperation(input.operationId));
+                      verifyPersistedResult(port, currentAfter, persistedResult, commitInput, commit);
+                      committedResult = resultFrame.result;
+                      resultStatus = resultFrame.result.status;
+                      resultDigest = text(commit.result_digest, "result_digest_missing");
+                      state = "result_committed";
+                      reason = "result_committed";
+                      stage("result_projection_verified", { revision: commit.revision, status: resultStatus, result_digest: resultDigest });
+                      cleanupState = await finalizeClaimedWorkerCleanup(port, input, generation, claimId, probe, processProbeTimeoutMs, workerExitCode,
+                        executionCleanup, executionCleanup ? "adapter_verified" : "adapter_unverified",
+                        (name, detail) => stage(name, detail));
+                      stage("cleanup_complete", { cleanup_state: cleanupState });
+                    } catch (error) {
+                      if (state === "result_committed") {
+                        cleanupState = "unknown";
+                        reason = errorCode(error) ?? "cleanup_outcome_unknown";
+                        stage("cleanup_outcome_unknown", { reason });
+                      } else {
+                        state = "result_outcome_unknown";
+                        reason = errorCode(error) ?? "result_projection_verification_failed";
+                        stage("result_projection_unknown", { reason });
+                      }
                     }
                   }
-                }
-              } catch (error) {
-                if (error instanceof LifecycleGateError && error.code === "result_commit_terminal") {
-                  // The Store or commit verifier supplied the terminal result
-                  // state above. Do not retry an Adapter or Result write.
-                } else {
-                  state = "result_rejected";
-                  reason = errorCode(error) ?? "worker_result_invalid";
-                  stage("worker_result_rejected", { reason });
+                } catch (error) {
+                  if (error instanceof LifecycleGateError && error.code === "result_commit_terminal") {
+                    // The Store or commit verifier supplied the terminal result
+                    // state above. Do not retry an Adapter or Result write.
+                  } else {
+                    state = "result_rejected";
+                    reason = errorCode(error) ?? "worker_result_invalid";
+                    stage("worker_result_rejected", { reason });
+                  }
                 }
               }
             }
-          }
+          } finally { releaseResultFinalization(); }
         }
       } catch (error) {
         if (state === "launch_outcome_unknown") reason = error instanceof LifecycleGateError ? error.code : "claim_only_lifecycle_failed";
@@ -2179,6 +2201,38 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
           try { await rejectChild(child); workerExitCode = await waitForClose(child, 5_000); } catch { /* remain unknown and retain the claim/intent */ }
         }
       } finally {
+        if (state === "result_rejected") {
+          try {
+            const current = asRecord(port.readOperation(input.operationId));
+            if (current.phase === "running" && current.result_digest === null && current.task_id === input.task.task_id && current.attempt === input.attempt) {
+              port.recordResultSubmissionFailure?.({ operation_id: input.operationId, generation: current.generation, revision: current.revision,
+                claim_id: current.claim_id, claim_worker_identity_digest: current.claim_worker_identity_digest },
+                /^[a-z0-9_]{1,128}$/u.test(reason) ? reason : "worker_result_unavailable");
+            }
+          } catch (error) {
+            stage("result_failure_diagnostic_unavailable", { reason: errorCode(error) ?? "diagnostic_write_failed" });
+          }
+        }
+        if (state === "result_rejected" || state === "result_outcome_unknown") {
+          // No retry or release. This remains observable even if SQLite cannot
+          // persist a diagnostic. Existing read-only Recovery inspects the root.
+          process.stderr.write(`SQLITE_RESULT_SUBMISSION_FAILED ${JSON.stringify({operation_id:input.operationId,task_id:input.task.task_id,state,reason})}\n`);
+          if (state === "result_outcome_unknown") {
+            try {
+              const recoveryStore = modules.Store.openForRecovery(options.dataRoot, {
+                ...(options.databaseFileName ? { databaseFileName: options.databaseFileName } : {}),
+                ...(options.managedDataDirectory ? { managedDataDirectory: true } : {}),
+              });
+              try {
+                const snapshot = asRecord(modules.createPort(recoveryStore as object).readRecoverySnapshot());
+                const matching = Array.isArray(snapshot.operations) ? snapshot.operations.map(asRecord).find(o => o.operation_id === input.operationId) : null;
+                const reconciled = { root_status: snapshot.root_status, phase: matching?.phase ?? null, result_digest: matching?.result_digest ?? null };
+                stage("result_outcome_reconciled_read_only", reconciled);
+                process.stderr.write(`SQLITE_RESULT_OUTCOME_UNKNOWN ${JSON.stringify({operation_id:input.operationId,...reconciled})}\n`);
+              } finally { recoveryStore?.close(); }
+            } catch { /* poisoned root/marker remains the durable recovery fence */ }
+          }
+        }
         const active = activeWorkers.get(input.operationId);
         if (active?.child === child) activeWorkers.delete(input.operationId);
         try {
@@ -2394,7 +2448,18 @@ async function readJsonLine(stream: Readable | null, limit: number, timeoutMs: n
       stream.removeListener("end", onEnd);
       stream.removeListener("error", onError);
     };
-    const fail = (error: Error): void => { cleanup(); reject(error); };
+    const fail = (error: Error): void => {
+      cleanup(); chunks.length = 0;
+      // Preserve the original rejection while draining the owned pipe; a late
+      // reset after rejection must not become an unhandled stream error.
+      if (!stream.closed) {
+        const drainingError = (): void => {};
+        stream.on("error", drainingError);
+        stream.once("close", () => stream.removeListener("error", drainingError));
+        stream.resume();
+      }
+      reject(error);
+    };
     const onData = (chunk: Buffer | string): void => {
       const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       size += bytes.length;
@@ -2404,6 +2469,7 @@ async function readJsonLine(stream: Readable | null, limit: number, timeoutMs: n
     const onEnd = (): void => {
       try {
         const bytes = Buffer.concat(chunks, size);
+        chunks.length = 0;
         if (!bytes.length || bytes.at(-1) !== 0x0a || bytes.subarray(0, -1).includes(0x0a)) throw new Error("invalid worker report frame");
         const value: unknown = JSON.parse(bytes.subarray(0, -1).toString("utf8"));
         cleanup();
@@ -2498,6 +2564,7 @@ function validateWorkerResultFrame(
   expected: Pick<AdmissionPolicySnapshot, "operation_id" | "task_id" | "attempt" | "generation" | "workspace_ref" | "policy_snapshot_digest">,
 ): CandidateWorkerResultFrame {
   const frame = asRecord(value);
+  assertWorkerResultEnvelope(frame);
   if (Object.keys(frame).sort().join("|") !== "attempt|execution_cleanup|execution_cleanup_verified|generation|operation_id|policy_snapshot_digest|protocol|result|task_id|workspace_ref"
     || frame.protocol !== "bridge-sqlite-candidate-result-v1"
     || frame.operation_id !== expected.operation_id || frame.task_id !== expected.task_id

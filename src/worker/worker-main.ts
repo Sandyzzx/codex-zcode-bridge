@@ -1,3 +1,4 @@
+import { prepareWorkerResultFrameParts } from "../result-contract.mjs";
 // Worker process shell (ARCHITECTURE component 6): one detached Bridge worker
 // per active task. Uses the app-server adapter and persists progress/results
 // so MCP server restarts do not erase task evidence.
@@ -254,7 +255,7 @@ async function runClaimOnlyHandshake(options: { readonly interactionMode: boolea
       ? await runExplicitFakeAdapter(bootstrap, execution, candidateInteraction)
       : await runZCodeAdapter(bootstrap, execution, candidateInteraction);
     options.onStage?.("adapter result frame prepared");
-    writePrivateFrame(6, resultFrame);
+    writePrivateFrame(6, resultFrame, prepareWorkerResultFrameParts(resultFrame));
     options.onStage?.("adapter result frame written");
   } finally {
     // The Manager closes its interaction endpoints after observing the result.
@@ -490,8 +491,18 @@ function readPrivateFrame(fd: number, maximum: number): Buffer {
   return frame;
 }
 
-function writePrivateFrame(fd: number, value: unknown): void {
-  const frame = Buffer.from(`${JSON.stringify(value)}\n`, "utf8");
-  writeFileSync(fd, frame);
+function writePrivateFrame(fd: number, value: unknown, encoded: string | readonly string[] = JSON.stringify(value)): void {
+  // Keep pipe backpressure, without a second full-size UTF-8 buffer or copying
+  // the entire encoded frame merely to append its delimiter.
+  for (const part of typeof encoded === "string" ? [encoded] : encoded) {
+    for (let offset = 0; offset < part.length;) {
+      let end = Math.min(offset + 64 * 1024, part.length);
+      const last = part.charCodeAt(end - 1);
+      if (end < part.length && last >= 0xd800 && last <= 0xdbff) end--;
+      writeFileSync(fd, part.slice(offset, end), "utf8");
+      offset = end;
+    }
+  }
+  writeFileSync(fd, "\n", "utf8");
   closeSync(fd);
 }

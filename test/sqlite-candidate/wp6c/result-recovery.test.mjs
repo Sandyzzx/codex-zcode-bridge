@@ -261,7 +261,7 @@ test('Result rejects status projection mismatches, unknown fields, and payloads 
   capture(()=>store.commitResult({...request,result_status:'cancelled',cancel_verification_digest:'f'.repeat(64)}),'invalid_result_payload');
   capture(()=>store.commitResult({...request,result:{...request.result,status:'failed'}}),'invalid_result_payload');
   capture(()=>store.commitResult({...request,result:{...request.result,unexpected:'field'}}),'invalid_result_payload');
-  capture(()=>store.commitResult({...request,result:{...request.result,zcode_output:'x'.repeat(66000)}}),'result_too_large');
+  capture(()=>store.commitResult({...request,result:{...request.result,zcode_output:'x'.repeat(32*1024*1024)}}),'result_too_large');
   assert.equal(store.readOperation(request.operation_id).phase,'running');
   assert.equal(readRows(r).events.filter(x=>x.event_type==='result_committed').length,0);
   store.close();

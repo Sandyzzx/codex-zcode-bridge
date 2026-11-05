@@ -324,7 +324,7 @@ test('runtime Schema is self-contained and persists a Task with its initial Atte
     assert.deepEqual(store.readTaskEvents('task-projection'), { events: [], nextCursor: 0, hasMore: false });
     const db = new DatabaseSync(path.join(r, 'operations.sqlite3'), { readOnly: true });
     try {
-      assert.equal(db.prepare('PRAGMA user_version').get().user_version, 13);
+      assert.equal(db.prepare('PRAGMA user_version').get().user_version, 14);
       assert.deepEqual(db.prepare("SELECT name FROM sqlite_schema WHERE type='table' ORDER BY name").all().map(row => row.name), [
         'attempts', 'authority_metadata', 'authority_switch', 'fresh_install_receipt', 'json_artifacts',
         'manager_interaction_payloads', 'manager_operation_events', 'manager_operations', 'migrated_task_events',

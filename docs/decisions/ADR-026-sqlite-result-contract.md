@@ -1,9 +1,9 @@
-# ADR-026：SQLite Result 语义、容量与兼容升级（待批准）
+# ADR-026：SQLite Result 语义、容量与兼容升级（Owner 已批准）
 
 > Status: DECISION
-> Decision: PROPOSED — AWAITING OWNER APPROVAL；本轮不得据此修改 Schema 或执行 Migration
+> Decision: APPROVED — Owner 于 2026-11-05 授权 R2 本地实现与隔离副本验证；不授权生产 Migration
 > Date: 2026-11-05
-> Evidence baseline: `aabbb0a959ee234508c62731ed5122f28dfcf5b0`，Node 24.16.0 / Windows；本轮仅改测试执行与 stderr，Result/SQL 原实现未改。
+> Proposal evidence baseline: `aabbb0a959ee234508c62731ed5122f28dfcf5b0`，Node 24.16.0 / Windows；下文 Context 为批准前 v13 的历史证据，R2 实施与验收另记。
 
 ## Context — 问题与实测
 
@@ -17,7 +17,7 @@ AgentReport parser 和公开 TaskResult 接受普通字符串数组；Store 另�
 
 可复现实验：[probe.mjs](../research/sqlite-result-contract-20261105/probe.mjs)。运行 `npm run build:test` 后执行该脚本；仅新建项目内自有数据库。结果保存在 `.run/execution/result-contract-evidence.json`。这是当前缺陷证据，**不是新容量已经实现/迁移通过**。
 
-## Decision — 推荐决策（待批准）
+## Decision — 推荐决策（Owner 已批准）
 
 ### 1. 一个语义合同，一种精确计量
 
@@ -76,4 +76,4 @@ COMMIT ACK 丢失/transaction_outcome_unknown 则按 Claim、operation revision�
 
 ## Owner 批准点
 
-批准或调整本提案的三项实质决定：**共享文本/数量语义；32MiB Result 与 256KiB envelope 空间；显式 v14 升级及非自动生产迁移**。批准前，当前 64KiB 生产缺陷保持公开、Result/schema/迁移代码保持原样，不宣布已修复。
+Owner 已批准三项实质决定：**共享文本/数量语义；32MiB Result 与 256KiB envelope 空间；显式 v14 升级及非自动生产迁移**。实现验收独立记录，生产数据库迁移仍须另行授权。

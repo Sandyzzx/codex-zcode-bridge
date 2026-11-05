@@ -77,6 +77,16 @@ For the supported Windows single-user local deployment, SQLite uses a fixed trus
 
 ## Limits and troubleshooting
 
+SQLite v14 uses the [ADR-026 Result contract](docs/decisions/ADR-026-sqlite-result-contract.md): a complete canonical TaskResult may contain at most 32 MiB of UTF-8 JSON, with another 256 KiB reserved for the private Worker envelope. Report strings and arrays share the Adapter's text semantics. A rejected report produces an explicit infrastructure failure; uncertain commits retain their recovery fences and are never automatically executed again.
+
+Existing v13 databases require an explicit **offline copy upgrade**; startup never migrates them. Stop every Bridge host/Manager, keep the original data root and configuration, and create an empty destination `state` directory. From the installed plugin root, run:
+
+```powershell
+node ./dist/upgrade-sqlite-v14.mjs --source "D:/BridgeOld/state" --destination "D:/BridgeV14/state" --database bridge.sqlite --offline
+```
+
+The tool verifies schema, receipts, lifecycle quiescence, rows, events, digests and foreign keys before publishing a receipt. It refuses unresolved operations or unknown writer/poison markers. Use the same Node/SQLite/platform runtime recorded by a v13 cutover receipt. After successful verification, explicitly change the host's `authority.json` `data_root` to `D:/BridgeV14` (the parent of `state`) and start the new version. Production upgrades require separate Owner authorization. Before new writes, rollback means restoring the old configuration and old binary; after new writes, preserve both roots and obtain a forward-fix or reconciled rollback plan. See [the operational details](docs/ZCODE_RUNTIME.md#sqlite-v13--v14-显式升级adr-026).
+
 - Only a Windows single-user local deployment has received real ZCode Provider and production SQLite cutover validation in this development cycle. This release is not a cross-platform or general-availability certification.
 - ZCode Start Plan is not established as a supported Bridge path in this release; provider capabilities depend on the user's local ZCode installation.
 - A worker can exit without committing a Result. In that case the bridge intentionally retains a cleanup hold rather than guessing that resource cleanup succeeded. Do not clear holds by editing the database or killing unidentified processes. Preserve diagnostic evidence and use documented, verified recovery procedures.

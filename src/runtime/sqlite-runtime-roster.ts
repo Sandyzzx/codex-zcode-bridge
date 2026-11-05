@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 export const SQLITE_CUTOVER_PROTOCOL_VERSION = "wp6-stop-world-json-sqlite-v1";
 export const SQLITE_CUTOVER_VERIFIER_VERSION = "wp6-json-cutover-v1";
-export const SQLITE_CANDIDATE_SCHEMA_VERSION = 13;
+export const SQLITE_CANDIDATE_SCHEMA_VERSION = 14;
 
 export interface SqliteRuntimeRoster {
   readonly node: string;

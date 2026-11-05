@@ -20,7 +20,7 @@ const B1_METHODS = Object.freeze([
   'provisionCapacity', 'assertCapacityPolicy', 'admitOperation', 'readOperation',
   'createLaunchIntent', 'recordLaunchReceipt', 'commitPermanentClaim',
 ]);
-const C1_METHODS = Object.freeze(['readLifecycleEvents','commitResult','readCommittedResult']);
+const C1_METHODS = Object.freeze(['readLifecycleEvents','commitResult','readCommittedResult','recordResultSubmissionFailure']);
 const C2_METHODS = Object.freeze(['beginCleanup','recordCleanupEvidence','reverifyCleanup','releaseCapacity']);
 const C3_READ_METHODS = Object.freeze(['readRecoverySnapshot']);
 const CANCEL_METHODS = Object.freeze(['requestCancellation','recordCancellationVerification']);
