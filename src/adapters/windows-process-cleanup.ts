@@ -1150,6 +1150,12 @@ export class PowerShellTreeTransaction implements WindowsTreeTransactionLike {
       this.#fail(new Error("process_tree_transport_stderr"));
     });
     child.on("error", (error) => this.#fail(new Error(`process_tree_transport_error: ${String(error.message)}`)));
+    // A helper that dies mid-transaction turns every later stdin write into
+    // EPIPE. The transport must fail closed (cleanup stays unverified) — an
+    // unhandled stream error here instead killed the whole Worker process
+    // after the Result frame was already written (Windows CI evidence:
+    // silent worker exit code 1 while the transaction helper exited early).
+    child.stdin.on("error", () => this.#fail(new Error("process_tree_transport_stdin_error")));
     child.on("close", (code, signal) => {
       this.#closed = true;
       this.#exitCode = code;

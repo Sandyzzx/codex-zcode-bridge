@@ -4275,6 +4275,7 @@ var init_windows_process_cleanup = __esm({
           this.#fail(new Error("process_tree_transport_stderr"));
         });
         child.on("error", (error62) => this.#fail(new Error(`process_tree_transport_error: ${String(error62.message)}`)));
+        child.stdin.on("error", () => this.#fail(new Error("process_tree_transport_stdin_error")));
         child.on("close", (code, signal) => {
           this.#closed = true;
           this.#exitCode = code;
@@ -27443,6 +27444,8 @@ var init_zcode_app_server_adapter = __esm({
         child.stdout.setEncoding("utf8");
         child.stderr.setEncoding("utf8");
         child.stdin.on("error", () => void 0);
+        child.stdout.on("error", () => void 0);
+        child.stderr.on("error", () => void 0);
         child.stdout.on("data", (chunk) => {
           if (protocolFatal) return;
           stdoutBuffer += chunk;
@@ -29822,7 +29825,7 @@ init_profile();
 init_json_writer_quiescence();
 init_process_probe();
 import { createHash as createHash7, randomUUID as randomUUID5 } from "node:crypto";
-import { closeSync as closeSync4, createWriteStream, readFileSync as readFileSync8, writeFileSync as writeFileSync4 } from "node:fs";
+import { closeSync as closeSync4, createWriteStream, readFileSync as readFileSync8, writeFileSync as writeFileSync4, writeSync } from "node:fs";
 import { Socket } from "node:net";
 var workerArgs = process.argv.slice(2);
 var bridgeLaunchMarker = workerArgs.at(-1) === BRIDGE_WORKER_LAUNCH_MARKER;
@@ -29832,6 +29835,25 @@ var positionalArgs = bridgeLaunchMarker ? workerArgs.slice(0, -1).filter((argume
 if (bridgeLaunchMarker && positionalArgs.length === 0) {
   let claimOnlyStage = "start";
   let interactionStreamsCreated = false;
+  const writeFatalDiagnostic = (origin, error62) => {
+    const message = error62 instanceof Error ? `${error62.name}: ${error62.message}` : String(error62);
+    const frames = error62 instanceof Error && typeof error62.stack === "string" ? error62.stack.split("\n").slice(1, 6).join("\n") : "";
+    try {
+      writeSync(2, `[bridge-worker] fatal ${origin} at ${claimOnlyStage}: ${message.slice(0, 300)}
+${frames.slice(0, 1200)}
+`);
+    } catch {
+    }
+  };
+  const reallyExit = process.reallyExit.bind(process);
+  process.on("uncaughtException", (error62) => {
+    writeFatalDiagnostic("uncaught_exception", error62);
+    reallyExit(1);
+  });
+  process.on("unhandledRejection", (reason) => {
+    writeFatalDiagnostic("unhandled_rejection", reason);
+    reallyExit(1);
+  });
   try {
     if (dropAfterPrepared && !interactionMode) throw new Error("interaction test mode required");
     await runClaimOnlyHandshake({ interactionMode, dropAfterPrepared, onStage: (stage) => {

@@ -23,7 +23,11 @@ const fixtureRoot = path.join(compiledCandidate, ".wp6-mvp-real-adapter");
 
 test.after(() => {
   if (process.env["MVP_KEEP_FIXTURE"] === "1") return;
-  rmSync(fixtureRoot, { recursive: true, force: true });
+  // A leaked fixture process (for example a fake app-server kept alive by a
+  // failed cleanup verification) may still hold a handle at this point.
+  // Retain the tree for OS-level cleanup instead of failing the whole suite
+  // with EPERM, matching the per-fixture removal policy in the harness.
+  try { rmSync(fixtureRoot, { recursive: true, force: true }); } catch { /* fixture retained */ }
 });
 
 interface FakeRuntimeFixture {

@@ -1223,6 +1223,13 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     // attempt's stdin teardown after cancel/timeout; a late write must fail
     // silently instead of raising an unhandled stream error.
     child.stdin.on("error", () => undefined);
+    // The identity-bound terminator kills this child after the turn. A read
+    // error that surfaces during that teardown race must not become an
+    // uncaught exception that kills the Worker after the Result frame was
+    // written; the existing exit/protocol handling already owns every
+    // pre-teardown failure classification.
+    child.stdout.on("error", () => undefined);
+    child.stderr.on("error", () => undefined);
     child.stdout.on("data", (chunk: string) => {
       if (protocolFatal) return;
       stdoutBuffer += chunk;

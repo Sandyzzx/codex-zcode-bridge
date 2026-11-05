@@ -4,7 +4,7 @@
 //
 // Usage: node worker-main.js <dataRoot> <taskId>
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, createWriteStream, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, createWriteStream, readFileSync, writeFileSync, writeSync } from "node:fs";
 import { Socket } from "node:net";
 import { BRIDGE_WORKER_LAUNCH_MARKER, fingerprintRuntimeArtifact, verifyWorkerProvenance } from "../runtime/build-provenance.js";
 import { validateHostProfile, type BridgeHostProfile } from "../host/profile.js";
@@ -26,6 +26,21 @@ const positionalArgs = bridgeLaunchMarker ? workerArgs.slice(0, -1).filter(argum
 if (bridgeLaunchMarker && positionalArgs.length === 0) {
   let claimOnlyStage = "start";
   let interactionStreamsCreated = false;
+  // CI evidence: the Worker once died silently with exit code 1 after the
+  // Result frame was written. Worker stderr is a pipe here, so the default
+  // fatal report is an async write that can be truncated by the immediate
+  // exit. Flush a bounded, sanitized reason synchronously and keep the same
+  // exit-code semantics the Manager verifies.
+  const writeFatalDiagnostic = (origin: string, error: unknown): void => {
+    const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    const frames = error instanceof Error && typeof error.stack === "string"
+      ? error.stack.split("\n").slice(1, 6).join("\n") : "";
+    try { writeSync(2, `[bridge-worker] fatal ${origin} at ${claimOnlyStage}: ${message.slice(0, 300)}\n${frames.slice(0, 1_200)}\n`); }
+    catch { /* stderr may already be gone */ }
+  };
+  const reallyExit = (process as NodeJS.Process & { reallyExit(code?: number): void }).reallyExit.bind(process);
+  process.on("uncaughtException", (error) => { writeFatalDiagnostic("uncaught_exception", error); reallyExit(1); });
+  process.on("unhandledRejection", (reason) => { writeFatalDiagnostic("unhandled_rejection", reason); reallyExit(1); });
   try {
     if (dropAfterPrepared && !interactionMode) throw new Error("interaction test mode required");
     await runClaimOnlyHandshake({ interactionMode, dropAfterPrepared, onStage: (stage) => {
