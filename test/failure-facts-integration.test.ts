@@ -68,6 +68,7 @@ interface FakeRuntimeOptions {
   turnFailure?: unknown;
   turnFailureOnSends?: number[];
   turnStartOnSend?: boolean;
+  coalesceSendAckWithTurnStart?: boolean;
   turnId?: string;
   turnResultType?: string;
   completeDelayMs?: number;
@@ -153,11 +154,19 @@ input.on("line", (line) => {
       process.stdout.write(JSON.stringify({ id: message.id, error: { code: opts.sendRpcError.code === undefined ? -32603 : opts.sendRpcError.code, data: { code: opts.sendRpcError.dataCode === undefined ? null : opts.sendRpcError.dataCode } } }) + "\n");
       if (opts.turnAfterRpcRejection) emit({ seq: 90, type: "turn.failed", payload: { error: opts.turnAfterRpcRejection } });
       return;
+    } else if (opts.turnStartOnSend && opts.coalesceSendAckWithTurnStart) {
+      // Coalescing mimics hosted CI transports where the ACK and first event
+      // are delivered to Node in one stdout chunk before the send microtask.
+      currentTurnId = opts.turnId || "turn-fixture-" + sendNumber;
+      process.stdout.write([
+        JSON.stringify({ id: message.id, result: {} }),
+        JSON.stringify({ method: "session/event", params: { seq: ++nextEventSeq, sessionId, type: "turn.started", payload: { turnId: currentTurnId } } }),
+      ].join("\n") + "\n");
     } else {
       process.stdout.write(JSON.stringify({ id: message.id, result: {} }) + "\n");
     }
     if (opts.malformedFrame) { process.stdout.write(opts.malformedFrame + "\n"); return; }
-    if (opts.turnStartOnSend) {
+    if (opts.turnStartOnSend && !opts.coalesceSendAckWithTurnStart) {
       currentTurnId = opts.turnId || "turn-fixture-" + sendNumber;
       emit({ seq: ++nextEventSeq, sessionId, type: "turn.started", payload: { turnId: currentTurnId } });
     }
@@ -1288,6 +1297,7 @@ test("L3e: a bound turn-start prevents retry after a terminal Provider or transp
     const runtime = await makeFakeRuntime({
       ...scenario,
       turnStartOnSend: true,
+      coalesceSendAckWithTurnStart: true,
       turnId: `bound-${scenario.name.replace(/\W/gu, "-")}`,
     });
     const fixture = await makeWorkerFixture(runtime.root);

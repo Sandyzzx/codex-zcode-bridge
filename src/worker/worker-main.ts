@@ -4,7 +4,7 @@
 //
 // Usage: node worker-main.js <dataRoot> <taskId>
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, createWriteStream, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, createWriteStream, readFileSync, writeFileSync, writeSync } from "node:fs";
 import { Socket } from "node:net";
 import { BRIDGE_WORKER_LAUNCH_MARKER, fingerprintRuntimeArtifact, verifyWorkerProvenance } from "../runtime/build-provenance.js";
 import { validateHostProfile, type BridgeHostProfile } from "../host/profile.js";
@@ -26,13 +26,32 @@ const positionalArgs = bridgeLaunchMarker ? workerArgs.slice(0, -1).filter(argum
 if (bridgeLaunchMarker && positionalArgs.length === 0) {
   let claimOnlyStage = "start";
   let interactionStreamsCreated = false;
+  // CI evidence: the Worker once died silently with exit code 1 after the
+  // Result frame was written. Worker stderr is a pipe here, so the default
+  // fatal report is an async write that can be truncated by the immediate
+  // exit. Flush a bounded, sanitized reason synchronously and keep the same
+  // exit-code semantics the Manager verifies.
+  const writeFatalDiagnostic = (origin: string, error: unknown): void => {
+    const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    const frames = error instanceof Error && typeof error.stack === "string"
+      ? error.stack.split("\n").slice(1, 6).join("\n") : "";
+    writeDiagnostic(`[bridge-worker] fatal ${origin} at ${claimOnlyStage}: ${message.slice(0, 300)}\n${frames.slice(0, 1_200)}\n`);
+  };
+  const reallyExit = (process as NodeJS.Process & { reallyExit(code?: number): void }).reallyExit.bind(process);
+  process.on("exit", (code) => {
+    // Keep the final lifecycle marker synchronous: Manager-side result and
+    // close decisions depend on the process exit code, not on async stderr.
+    writeDiagnostic(`[bridge-worker] exit code=${String(code)}\n`);
+  });
+  process.on("uncaughtException", (error) => { writeFatalDiagnostic("uncaught_exception", error); reallyExit(1); });
+  process.on("unhandledRejection", (reason) => { writeFatalDiagnostic("unhandled_rejection", reason); reallyExit(1); });
   try {
     if (dropAfterPrepared && !interactionMode) throw new Error("interaction test mode required");
     await runClaimOnlyHandshake({ interactionMode, dropAfterPrepared, onStage: (stage) => {
       claimOnlyStage = stage;
       // The interaction harness uses only fixed diagnostic stage labels; it
       // never writes Bootstrap, identity, request, or token values to stderr.
-      if (interactionMode) process.stderr.write(`[bridge-worker] claim-only stage=${stage}\n`);
+      if (interactionMode) writeDiagnostic(`[bridge-worker] claim-only stage=${stage}\n`);
     }, onInteractionStreamsCreated: () => { interactionStreamsCreated = true; } });
     process.exitCode = 0;
   } catch (error) {
@@ -49,9 +68,15 @@ if (bridgeLaunchMarker && positionalArgs.length === 0) {
     const failureCode = error && typeof error === "object" && "code" in error
       && typeof (error as { readonly code?: unknown }).code === "string"
       ? (error as { readonly code: string }).code : "unclassified";
-    console.error(`[bridge-worker] claim-only handshake rejected${interactionMode ? ` at ${claimOnlyStage} code=${failureCode}` : ""}`);
+    writeDiagnostic(`[bridge-worker] claim-only handshake rejected${interactionMode ? ` at ${claimOnlyStage} code=${failureCode}` : ""}\n`);
     process.exitCode = 3;
   }
+  // At this point the Result frame has been written synchronously and owned
+  // interaction streams are closed. CI repeatedly showed that relying on the
+  // event loop to drain can leave teardown handles alive (or expose the idle
+  // Worker to a cleanup race), so exit deterministically with the same code
+  // the Manager already verifies.
+  process.exit(process.exitCode ?? 0);
 } else {
   const [dataRoot, taskId, attemptText] = positionalArgs;
   if (positionalArgs.length !== 3 || !dataRoot || !taskId || !attemptText || !/^[1-9]\d*$/u.test(attemptText) || !Number.isSafeInteger(Number(attemptText))) {
@@ -311,7 +336,27 @@ async function runZCodeAdapter(
   const adapter = new ZCodeAppServerAdapter({
     host: execution.host_profile,
     executionProfileId: execution.execution_profile_id,
-    onEvent: () => undefined,
+    onEvent: (event) => {
+      // Bounded lifecycle evidence without request payloads. This distinguishes
+      // a Worker that reached adapter cleanup from one killed before cleanup.
+      if (!interactionMode) return;
+      if (event.type === "cleanup_unverified") {
+        const summary = event.summary;
+        const reason = summary.startsWith("Managed browser cleanup")
+          ? "browser_cleanup"
+          : summary.includes("process_tree_root_exited")
+            ? "root_exited_scan_unverified"
+            : summary.includes("Identity-bound Windows process-tree cleanup receipt")
+              ? "receipt_unavailable"
+              : "unclassified";
+        // cleanup summaries are Adapter-generated, already exposed through task
+        // events, and contain bounded failure classifications rather than task
+        // payloads. Keep the same text in Worker stderr for lifecycle triage.
+        writeDiagnostic(`[bridge-worker] adapter event=${event.type} reason=${reason} summary=${summary.slice(0, 500)}\n`);
+        return;
+      }
+      writeDiagnostic(`[bridge-worker] adapter event=${event.type}\n`);
+    },
     resolveInteraction: interaction ? async (request, signal) => {
       if (signal.aborted) return { action: "decline" };
       await interaction.sendRequest(request);
@@ -417,6 +462,10 @@ function requiredStringArray(value: unknown, error: string): string[] {
 }
 
 function nullableString(value: unknown): string | null { return typeof value === "string" ? value : null; }
+
+function writeDiagnostic(line: string): void {
+  try { writeSync(2, line); } catch { /* stderr may already be gone */ }
+}
 
 async function closeOwnedStreams(streams: ReadonlyArray<{ readonly closed: boolean; destroy(): unknown; once(event: "close", listener: () => void): unknown }>): Promise<void> {
   await Promise.all(streams.map((stream) => new Promise<void>((resolve) => {

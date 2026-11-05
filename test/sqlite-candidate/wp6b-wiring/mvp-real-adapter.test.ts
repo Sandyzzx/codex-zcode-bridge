@@ -23,12 +23,17 @@ const fixtureRoot = path.join(compiledCandidate, ".wp6-mvp-real-adapter");
 
 test.after(() => {
   if (process.env["MVP_KEEP_FIXTURE"] === "1") return;
-  rmSync(fixtureRoot, { recursive: true, force: true });
+  // A leaked fixture process (for example a fake app-server kept alive by a
+  // failed cleanup verification) may still hold a handle at this point.
+  // Retain the tree for OS-level cleanup instead of failing the whole suite
+  // with EPERM, matching the per-fixture removal policy in the harness.
+  try { rmSync(fixtureRoot, { recursive: true, force: true }); } catch { /* fixture retained */ }
 });
 
 interface FakeRuntimeFixture {
   readonly entrypoint: string;
   readonly requestLog: string;
+  readonly exitLog: string;
   readonly taskInput: string;
   readonly builtinConfig: string;
   readonly personalConfig: string;
@@ -43,6 +48,7 @@ function writeFakeRuntime(name: string, variant: "success" | "failure"): FakeRun
   // make the fixture mimic the production resources/glm runtime layout.
   const entrypoint = path.join(root, "resources", "glm", "fake-app-server.cjs");
   const requestLog = path.join(root, "requests.jsonl");
+  const exitLog = path.join(root, "exit.log");
   const taskInput = path.join(root, "task-input.json");
   const builtinConfig = path.join(root, "resources", "config", "provider", "zcode-builtin.json");
   const report = JSON.stringify({
@@ -64,6 +70,7 @@ function writeFakeRuntime(name: string, variant: "success" | "failure"): FakeRun
     `const fs = require("node:fs");`,
     `const sessionId = "mvp-session-1";`,
     `const requestLog = ${JSON.stringify(requestLog)};`,
+    `const exitLog = ${JSON.stringify(exitLog)};`,
     `let selected = { providerId: "provider-default", modelId: "model-default" };`,
     `let turnFinished = false;`,
     `let interactionSent = false;`,
@@ -78,7 +85,11 @@ function writeFakeRuntime(name: string, variant: "success" | "failure"): FakeRun
     `const input = readline.createInterface({ input: process.stdin });`,
     // Keep the fake app-server alive after stdin ends so the adapter exercises
     // its real identity-bound termination transaction and produces a receipt.
-    `setInterval(() => {}, 1 << 30);`,
+    // The callback and shorter interval avoid relying on an effectively empty
+    // long-duration timer as the sole live-handle evidence in hosted Windows CI.
+    `const keepAlive = setInterval(() => { void Date.now(); }, 1_000);`,
+    `process.on("exit", (code) => { try { fs.appendFileSync(exitLog, "exit=" + String(code) + "\\n"); } catch {} });`,
+    `input.on("close", () => { try { fs.appendFileSync(exitLog, "stdin_close\\n"); } catch {} });`,
     `input.on("line", (line) => {`,
     `  const message = JSON.parse(line);`,
     `  fs.appendFileSync(requestLog, JSON.stringify(message) + "\\n");`,
@@ -115,7 +126,7 @@ function writeFakeRuntime(name: string, variant: "success" | "failure"): FakeRun
   writeFileSync(path.join(zcodeHomeV2, "provider_config.json"), JSON.stringify({
     config: { providerConfigRules: { providerRules: { "provider-default": { upstream: { type: "synthetic" } } } } },
   }), "utf8");
-  return { entrypoint, requestLog, taskInput, builtinConfig, personalConfig: path.join(zcodeHomeV2, "provider_config.json"), zcodeHomeV2 };
+  return { entrypoint, requestLog, exitLog, taskInput, builtinConfig, personalConfig: path.join(zcodeHomeV2, "provider_config.json"), zcodeHomeV2 };
 }
 
 function contentObject(result: { readonly structuredContent?: unknown; readonly isError?: boolean }, diagnostic = ""): Record<string, unknown> {
@@ -290,8 +301,10 @@ function copyFileSync(source: string): void {
 test("formal MCP lifecycle runs a real ZCodeAppServerAdapter against a controlled fake app-server", { timeout: 120_000 }, async () => {
   const stderrLines: string[] = [];
   const lifecycleLines: string[] = [];
+  let fixtureRuntime: FakeRuntimeFixture | undefined;
   try {
     await withRealAdapterMcp(async (client, _manager, _dataRoot, workspace, runtime) => {
+      fixtureRuntime = runtime;
       const taskId = `mvp-real-${randomUUID()}`;
       const created = contentObject(await client.callTool({ name: "zcode_task", arguments: syntheticTask(workspace, taskId) }));
       assert.equal(created.task_id, taskId);
@@ -331,6 +344,9 @@ test("formal MCP lifecycle runs a real ZCodeAppServerAdapter against a controlle
     }, { stderrCollector: { lines: stderrLines }, lifecycleCollector: { lines: lifecycleLines }, preserveFixtureOnFailure: true });
   } catch (error) {
     console.error("worker stderr:\n" + stderrLines.join("\n"));
+    if (fixtureRuntime && existsSync(fixtureRuntime.exitLog)) {
+      console.error("fake app-server lifecycle:\n" + readFileSync(fixtureRuntime.exitLog, "utf8"));
+    }
     throw error;
   }
 });
@@ -347,14 +363,25 @@ test("test-only fake adapter capability cannot be injected through MCP TaskPacka
 
 test("an adapter turn failure commits a failed Result without faking success", { timeout: 120_000 }, async () => {
   const lifecycleLines: string[] = [];
-  await withRealAdapterMcp(async (client, _manager, _dataRoot, workspace) => {
-    const taskId = `mvp-failed-${randomUUID()}`;
-    const created = contentObject(await client.callTool({ name: "zcode_task", arguments: syntheticTask(workspace, taskId) }));
-    assert.equal(created.status, "queued");
-    const status = await waitForTerminal(client, taskId, 1);
-    assert.equal(status.status, "failed", "a turn.failed payload must produce a failed Result, never a synthetic completed");
-    await waitForLifecycleEvent(client, taskId, "result_committed");
-    const result = contentObject(await client.callTool({ name: "zcode_result", arguments: { task_id: taskId } }));
-    assert.equal(result.status, "failed");
-  }, { runtimeVariant: "failure", lifecycleCollector: { lines: lifecycleLines }, preserveFixtureOnFailure: true });
+  const stderrLines: string[] = [];
+  let fixtureRuntime: FakeRuntimeFixture | undefined;
+  try {
+    await withRealAdapterMcp(async (client, _manager, _dataRoot, workspace, runtime) => {
+      fixtureRuntime = runtime;
+      const taskId = `mvp-failed-${randomUUID()}`;
+      const created = contentObject(await client.callTool({ name: "zcode_task", arguments: syntheticTask(workspace, taskId) }));
+      assert.equal(created.status, "queued");
+      const status = await waitForTerminal(client, taskId, 1);
+      assert.equal(status.status, "failed", "a turn.failed payload must produce a failed Result, never a synthetic completed");
+      await waitForLifecycleEvent(client, taskId, "result_committed");
+      const result = contentObject(await client.callTool({ name: "zcode_result", arguments: { task_id: taskId } }));
+      assert.equal(result.status, "failed");
+    }, { runtimeVariant: "failure", stderrCollector: { lines: stderrLines }, lifecycleCollector: { lines: lifecycleLines }, preserveFixtureOnFailure: true });
+  } catch (error) {
+    console.error("worker stderr:\n" + stderrLines.join("\n"));
+    if (fixtureRuntime && existsSync(fixtureRuntime.exitLog)) {
+      console.error("fake app-server lifecycle:\n" + readFileSync(fixtureRuntime.exitLog, "utf8"));
+    }
+    throw error;
+  }
 });
