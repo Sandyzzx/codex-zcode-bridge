@@ -800,6 +800,19 @@ test('claim-only Worker consumes its identity-bound interaction channel before r
       policy_snapshot_digest: deriveAdmissionPolicySnapshotDigest(policy) } });
     stage = 'bootstrap delivery';
     child.bootstrapChannel.end(encodeLaunchBootstrap(bootstrap));
+    if (process.platform !== 'win32') {
+      // The SQLite Worker requires exact Windows identity. Exercise its real
+      // fail-closed boundary here instead of claiming POSIX can run this path.
+      const [bytes, [code]] = await Promise.all([
+        withinStage(readStreamToEnd(child.reportChannel, 8_192), 'unsupported identity report'),
+        withinStage(childClosed, 'unsupported Worker close'),
+      ]);
+      assert.equal(code, 3);
+      assert.equal(bytes.length, 0);
+      assert.equal(fixture.store.readOperation(operationId).claim_id, null);
+      assert.equal(fixture.store.readOperation(operationId).phase, 'launch_intent');
+      return;
+    }
     stage = 'identity report';
     const reportBytes = await withinStage(readSingleLineFrame(child.reportChannel, 8_192), 'identity report').catch(error => {
         throw new Error(`identity report stream failed; pid=${child.pid}; exit=${child.exitCode}; signal=${child.signalCode}; stderr=${Buffer.concat(workerStderr).toString('utf8')}`,

@@ -259,6 +259,16 @@ test('restarted Manager skips the abandoned Task and dispatches a new Task',{tim
     await assert.rejects(()=>manager.getResult(f.taskId),/no committed SQLite Result/u);
 
     const nextTaskId='task-after-admin-abandonment';
+    if(process.platform!=='win32'){
+      await assert.rejects(()=>manager.createTask(task(nextTaskId,f.workspace)),error=>error.code==='TASK_INVALID');
+      assert.equal((await manager.getStatus(f.taskId)).status,'failed');
+      const recovery=IsolatedAdmissionStore.openForRecovery(f.root);
+      try{
+        assert.equal(recovery.readOperation(f.operationId).phase,'admin_abandoned');
+        assert.equal(recovery.readRecoverySnapshot().root_status,'consistent_read_only');
+      }finally{recovery.close();}
+      return;
+    }
     const receipt=await manager.createTask(task(nextTaskId,f.workspace));
     assert.equal(receipt.status,'queued');
     const deadline=Date.now()+30_000;
