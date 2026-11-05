@@ -764,7 +764,12 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       entry.providerSendNumber = 1;
       await client.request("session/send", { sessionId, content: prompt });
       entry.rpcAcceptedAt = this.#now().toISOString();
-      entry.onEvent({ type: "turn_started", summary: "ZCode accepted the task and started a turn", details: { rpc_accepted: true, ...(entry.turnId ? { turn_id: entry.turnId } : {}) } });
+      // A coalesced ACK + turn.started chunk can settle this send microtask
+      // after the runtime's stronger turn.started event was already published.
+      // Do not emit a second turn-start event for that same accepted turn.
+      if (!entry.turnStartedAt) {
+        entry.onEvent({ type: "turn_started", summary: "ZCode accepted the task and started a turn", details: { rpc_accepted: true, ...(entry.turnId ? { turn_id: entry.turnId } : {}) } });
+      }
       // B2: if the runtime does not deliver turn.started for the accepted
       // send within a bounded window, degrade to the documented compat path
       // (session exclusivity + replay boundary), visibly — never silently.

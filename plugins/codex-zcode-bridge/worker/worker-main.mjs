@@ -27031,7 +27031,9 @@ var init_zcode_app_server_adapter = __esm({
           entry.providerSendNumber = 1;
           await client.request("session/send", { sessionId, content: prompt });
           entry.rpcAcceptedAt = this.#now().toISOString();
-          entry.onEvent({ type: "turn_started", summary: "ZCode accepted the task and started a turn", details: { rpc_accepted: true, ...entry.turnId ? { turn_id: entry.turnId } : {} } });
+          if (!entry.turnStartedAt) {
+            entry.onEvent({ type: "turn_started", summary: "ZCode accepted the task and started a turn", details: { rpc_accepted: true, ...entry.turnId ? { turn_id: entry.turnId } : {} } });
+          }
           entry.bindingTimer = setTimeout(() => {
             if (!entry.awaitingTurnStart) return;
             entry.awaitingTurnStart = false;
