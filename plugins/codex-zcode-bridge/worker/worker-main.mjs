@@ -30081,7 +30081,15 @@ async function runZCodeAdapter(bootstrap, execution, interaction) {
     host: execution.host_profile,
     executionProfileId: execution.execution_profile_id,
     onEvent: (event) => {
-      if (interactionMode) writeDiagnostic(`[bridge-worker] adapter event=${event.type}
+      if (!interactionMode) return;
+      if (event.type === "cleanup_unverified") {
+        const summary = event.summary;
+        const reason = summary.startsWith("Managed browser cleanup") ? "browser_cleanup" : summary.includes("process_tree_root_exited") ? "root_exited_scan_unverified" : summary.includes("Identity-bound Windows process-tree cleanup receipt") ? "receipt_unavailable" : "unclassified";
+        writeDiagnostic(`[bridge-worker] adapter event=${event.type} reason=${reason}
+`);
+        return;
+      }
+      writeDiagnostic(`[bridge-worker] adapter event=${event.type}
 `);
     },
     resolveInteraction: interaction ? async (request, signal) => {

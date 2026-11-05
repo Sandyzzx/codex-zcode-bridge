@@ -339,7 +339,20 @@ async function runZCodeAdapter(
     onEvent: (event) => {
       // Bounded lifecycle evidence without request payloads. This distinguishes
       // a Worker that reached adapter cleanup from one killed before cleanup.
-      if (interactionMode) writeDiagnostic(`[bridge-worker] adapter event=${event.type}\n`);
+      if (!interactionMode) return;
+      if (event.type === "cleanup_unverified") {
+        const summary = event.summary;
+        const reason = summary.startsWith("Managed browser cleanup")
+          ? "browser_cleanup"
+          : summary.includes("process_tree_root_exited")
+            ? "root_exited_scan_unverified"
+            : summary.includes("Identity-bound Windows process-tree cleanup receipt")
+              ? "receipt_unavailable"
+              : "unclassified";
+        writeDiagnostic(`[bridge-worker] adapter event=${event.type} reason=${reason}\n`);
+        return;
+      }
+      writeDiagnostic(`[bridge-worker] adapter event=${event.type}\n`);
     },
     resolveInteraction: interaction ? async (request, signal) => {
       if (signal.aborted) return { action: "decline" };
