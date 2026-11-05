@@ -30085,7 +30085,7 @@ async function runZCodeAdapter(bootstrap, execution, interaction) {
       if (event.type === "cleanup_unverified") {
         const summary = event.summary;
         const reason = summary.startsWith("Managed browser cleanup") ? "browser_cleanup" : summary.includes("process_tree_root_exited") ? "root_exited_scan_unverified" : summary.includes("Identity-bound Windows process-tree cleanup receipt") ? "receipt_unavailable" : "unclassified";
-        writeDiagnostic(`[bridge-worker] adapter event=${event.type} reason=${reason}
+        writeDiagnostic(`[bridge-worker] adapter event=${event.type} reason=${reason} summary=${summary.slice(0, 500)}
 `);
         return;
       }

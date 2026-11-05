@@ -349,7 +349,10 @@ async function runZCodeAdapter(
             : summary.includes("Identity-bound Windows process-tree cleanup receipt")
               ? "receipt_unavailable"
               : "unclassified";
-        writeDiagnostic(`[bridge-worker] adapter event=${event.type} reason=${reason}\n`);
+        // cleanup summaries are Adapter-generated, already exposed through task
+        // events, and contain bounded failure classifications rather than task
+        // payloads. Keep the same text in Worker stderr for lifecycle triage.
+        writeDiagnostic(`[bridge-worker] adapter event=${event.type} reason=${reason} summary=${summary.slice(0, 500)}\n`);
         return;
       }
       writeDiagnostic(`[bridge-worker] adapter event=${event.type}\n`);
