@@ -29838,14 +29838,15 @@ if (bridgeLaunchMarker && positionalArgs.length === 0) {
   const writeFatalDiagnostic = (origin, error62) => {
     const message = error62 instanceof Error ? `${error62.name}: ${error62.message}` : String(error62);
     const frames = error62 instanceof Error && typeof error62.stack === "string" ? error62.stack.split("\n").slice(1, 6).join("\n") : "";
-    try {
-      writeSync(2, `[bridge-worker] fatal ${origin} at ${claimOnlyStage}: ${message.slice(0, 300)}
+    writeDiagnostic(`[bridge-worker] fatal ${origin} at ${claimOnlyStage}: ${message.slice(0, 300)}
 ${frames.slice(0, 1200)}
 `);
-    } catch {
-    }
   };
   const reallyExit = process.reallyExit.bind(process);
+  process.on("exit", (code) => {
+    writeDiagnostic(`[bridge-worker] exit code=${String(code)}
+`);
+  });
   process.on("uncaughtException", (error62) => {
     writeFatalDiagnostic("uncaught_exception", error62);
     reallyExit(1);
@@ -29858,7 +29859,7 @@ ${frames.slice(0, 1200)}
     if (dropAfterPrepared && !interactionMode) throw new Error("interaction test mode required");
     await runClaimOnlyHandshake({ interactionMode, dropAfterPrepared, onStage: (stage) => {
       claimOnlyStage = stage;
-      if (interactionMode) process.stderr.write(`[bridge-worker] claim-only stage=${stage}
+      if (interactionMode) writeDiagnostic(`[bridge-worker] claim-only stage=${stage}
 `);
     }, onInteractionStreamsCreated: () => {
       interactionStreamsCreated = true;
@@ -29874,9 +29875,11 @@ ${frames.slice(0, 1200)}
       }
     }
     const failureCode = error62 && typeof error62 === "object" && "code" in error62 && typeof error62.code === "string" ? error62.code : "unclassified";
-    console.error(`[bridge-worker] claim-only handshake rejected${interactionMode ? ` at ${claimOnlyStage} code=${failureCode}` : ""}`);
+    writeDiagnostic(`[bridge-worker] claim-only handshake rejected${interactionMode ? ` at ${claimOnlyStage} code=${failureCode}` : ""}
+`);
     process.exitCode = 3;
   }
+  process.exit(process.exitCode ?? 0);
 } else {
   const [dataRoot, taskId, attemptText] = positionalArgs;
   if (positionalArgs.length !== 3 || !dataRoot || !taskId || !attemptText || !/^[1-9]\d*$/u.test(attemptText) || !Number.isSafeInteger(Number(attemptText))) {
@@ -30077,7 +30080,10 @@ async function runZCodeAdapter(bootstrap, execution, interaction) {
   const adapter = new ZCodeAppServerAdapter2({
     host: execution.host_profile,
     executionProfileId: execution.execution_profile_id,
-    onEvent: () => void 0,
+    onEvent: (event) => {
+      if (interactionMode) writeDiagnostic(`[bridge-worker] adapter event=${event.type}
+`);
+    },
     resolveInteraction: interaction ? async (request, signal) => {
       if (signal.aborted) return { action: "decline" };
       await interaction.sendRequest(request);
@@ -30170,6 +30176,12 @@ function requiredStringArray(value, error62) {
 }
 function nullableString(value) {
   return typeof value === "string" ? value : null;
+}
+function writeDiagnostic(line) {
+  try {
+    writeSync(2, line);
+  } catch {
+  }
 }
 async function closeOwnedStreams(streams) {
   await Promise.all(streams.map((stream) => new Promise((resolve) => {

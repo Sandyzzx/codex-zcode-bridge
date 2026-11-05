@@ -351,14 +351,20 @@ test("test-only fake adapter capability cannot be injected through MCP TaskPacka
 
 test("an adapter turn failure commits a failed Result without faking success", { timeout: 120_000 }, async () => {
   const lifecycleLines: string[] = [];
-  await withRealAdapterMcp(async (client, _manager, _dataRoot, workspace) => {
-    const taskId = `mvp-failed-${randomUUID()}`;
-    const created = contentObject(await client.callTool({ name: "zcode_task", arguments: syntheticTask(workspace, taskId) }));
-    assert.equal(created.status, "queued");
-    const status = await waitForTerminal(client, taskId, 1);
-    assert.equal(status.status, "failed", "a turn.failed payload must produce a failed Result, never a synthetic completed");
-    await waitForLifecycleEvent(client, taskId, "result_committed");
-    const result = contentObject(await client.callTool({ name: "zcode_result", arguments: { task_id: taskId } }));
-    assert.equal(result.status, "failed");
-  }, { runtimeVariant: "failure", lifecycleCollector: { lines: lifecycleLines }, preserveFixtureOnFailure: true });
+  const stderrLines: string[] = [];
+  try {
+    await withRealAdapterMcp(async (client, _manager, _dataRoot, workspace) => {
+      const taskId = `mvp-failed-${randomUUID()}`;
+      const created = contentObject(await client.callTool({ name: "zcode_task", arguments: syntheticTask(workspace, taskId) }));
+      assert.equal(created.status, "queued");
+      const status = await waitForTerminal(client, taskId, 1);
+      assert.equal(status.status, "failed", "a turn.failed payload must produce a failed Result, never a synthetic completed");
+      await waitForLifecycleEvent(client, taskId, "result_committed");
+      const result = contentObject(await client.callTool({ name: "zcode_result", arguments: { task_id: taskId } }));
+      assert.equal(result.status, "failed");
+    }, { runtimeVariant: "failure", stderrCollector: { lines: stderrLines }, lifecycleCollector: { lines: lifecycleLines }, preserveFixtureOnFailure: true });
+  } catch (error) {
+    console.error("worker stderr:\n" + stderrLines.join("\n"));
+    throw error;
+  }
 });

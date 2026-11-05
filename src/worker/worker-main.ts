@@ -35,10 +35,14 @@ if (bridgeLaunchMarker && positionalArgs.length === 0) {
     const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
     const frames = error instanceof Error && typeof error.stack === "string"
       ? error.stack.split("\n").slice(1, 6).join("\n") : "";
-    try { writeSync(2, `[bridge-worker] fatal ${origin} at ${claimOnlyStage}: ${message.slice(0, 300)}\n${frames.slice(0, 1_200)}\n`); }
-    catch { /* stderr may already be gone */ }
+    writeDiagnostic(`[bridge-worker] fatal ${origin} at ${claimOnlyStage}: ${message.slice(0, 300)}\n${frames.slice(0, 1_200)}\n`);
   };
   const reallyExit = (process as NodeJS.Process & { reallyExit(code?: number): void }).reallyExit.bind(process);
+  process.on("exit", (code) => {
+    // Keep the final lifecycle marker synchronous: Manager-side result and
+    // close decisions depend on the process exit code, not on async stderr.
+    writeDiagnostic(`[bridge-worker] exit code=${String(code)}\n`);
+  });
   process.on("uncaughtException", (error) => { writeFatalDiagnostic("uncaught_exception", error); reallyExit(1); });
   process.on("unhandledRejection", (reason) => { writeFatalDiagnostic("unhandled_rejection", reason); reallyExit(1); });
   try {
@@ -47,7 +51,7 @@ if (bridgeLaunchMarker && positionalArgs.length === 0) {
       claimOnlyStage = stage;
       // The interaction harness uses only fixed diagnostic stage labels; it
       // never writes Bootstrap, identity, request, or token values to stderr.
-      if (interactionMode) process.stderr.write(`[bridge-worker] claim-only stage=${stage}\n`);
+      if (interactionMode) writeDiagnostic(`[bridge-worker] claim-only stage=${stage}\n`);
     }, onInteractionStreamsCreated: () => { interactionStreamsCreated = true; } });
     process.exitCode = 0;
   } catch (error) {
@@ -64,9 +68,15 @@ if (bridgeLaunchMarker && positionalArgs.length === 0) {
     const failureCode = error && typeof error === "object" && "code" in error
       && typeof (error as { readonly code?: unknown }).code === "string"
       ? (error as { readonly code: string }).code : "unclassified";
-    console.error(`[bridge-worker] claim-only handshake rejected${interactionMode ? ` at ${claimOnlyStage} code=${failureCode}` : ""}`);
+    writeDiagnostic(`[bridge-worker] claim-only handshake rejected${interactionMode ? ` at ${claimOnlyStage} code=${failureCode}` : ""}\n`);
     process.exitCode = 3;
   }
+  // At this point the Result frame has been written synchronously and owned
+  // interaction streams are closed. CI repeatedly showed that relying on the
+  // event loop to drain can leave teardown handles alive (or expose the idle
+  // Worker to a cleanup race), so exit deterministically with the same code
+  // the Manager already verifies.
+  process.exit(process.exitCode ?? 0);
 } else {
   const [dataRoot, taskId, attemptText] = positionalArgs;
   if (positionalArgs.length !== 3 || !dataRoot || !taskId || !attemptText || !/^[1-9]\d*$/u.test(attemptText) || !Number.isSafeInteger(Number(attemptText))) {
@@ -326,7 +336,11 @@ async function runZCodeAdapter(
   const adapter = new ZCodeAppServerAdapter({
     host: execution.host_profile,
     executionProfileId: execution.execution_profile_id,
-    onEvent: () => undefined,
+    onEvent: (event) => {
+      // Bounded lifecycle evidence without request payloads. This distinguishes
+      // a Worker that reached adapter cleanup from one killed before cleanup.
+      if (interactionMode) writeDiagnostic(`[bridge-worker] adapter event=${event.type}\n`);
+    },
     resolveInteraction: interaction ? async (request, signal) => {
       if (signal.aborted) return { action: "decline" };
       await interaction.sendRequest(request);
@@ -432,6 +446,10 @@ function requiredStringArray(value: unknown, error: string): string[] {
 }
 
 function nullableString(value: unknown): string | null { return typeof value === "string" ? value : null; }
+
+function writeDiagnostic(line: string): void {
+  try { writeSync(2, line); } catch { /* stderr may already be gone */ }
+}
 
 async function closeOwnedStreams(streams: ReadonlyArray<{ readonly closed: boolean; destroy(): unknown; once(event: "close", listener: () => void): unknown }>): Promise<void> {
   await Promise.all(streams.map((stream) => new Promise<void>((resolve) => {
