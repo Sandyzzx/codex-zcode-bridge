@@ -1,0 +1,6 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {encodeFrame,SingleFrame,validatePacket} from './frame.mjs';
+const scope={account:'a',provider:'p',model:'m',task:'t',attempt:1,session:'s',turn:'u'};
+test('split multibyte UTF-8 decodes exactly once',()=>{const f=encodeFrame({v:'模型'});const d=new SingleFrame();let out;for(const b of f)out=d.push(Buffer.from([b]))??out;assert.deepEqual(out,{v:'模型'});d.end();assert.throws(()=>d.push(Buffer.from([0])),/extra_frame/);});
+test('rejects oversized and coalesced extra frames',()=>{const a=encodeFrame({v:1});assert.throws(()=>new SingleFrame(2).push(a),/frame_size/);assert.throws(()=>new SingleFrame().push(Buffer.concat([a,a])),/extra_frame/);});
+test('rejects malformed UTF-8 and truncated frame',()=>{const d=new SingleFrame();assert.throws(()=>d.push(Buffer.from([0,0,0,1,255])),/invalid_utf8/);const t=new SingleFrame();t.push(Buffer.from([0,0]));assert.throws(()=>t.end(),/incomplete_frame/);});
+test('requires finite expiry and matching real scope',()=>{for(const expiresAt of [undefined,NaN,Infinity,0])assert.throws(()=>validatePacket({id:'x',jwt:'fixture',scope,expiresAt},scope));assert.throws(()=>validatePacket({id:'x',jwt:'fixture',scope:{...scope,turn:'different'},expiresAt:Date.now()+1000},scope),/scope_mismatch/);});

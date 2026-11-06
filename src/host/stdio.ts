@@ -189,6 +189,36 @@ export async function startBridge(
   let manager: BridgeTaskManager;
   let lifecycleChecks: () => readonly DoctorCheck[];
   const databasePath = path.join(dataRoot, FRESH_SQLITE_DATABASE_FILE);
+  // Start Plan production auth (P0). Constructed only on Windows when the
+  // official credential store already holds a valid identity; otherwise it
+  // stays absent and Start Plan tasks fail closed through the existing
+  // runtime-auth path. Coding Plan providers never enter this issuer.
+  const startPlanAuthController = new AbortController();
+  let startPlanPrivateAuth: import("../store/lifecycle-gate.js").ClaimOnlyDriverOptions["startPlanPrivateAuth"] | undefined;
+  if (process.platform === "win32") {
+    try {
+      const { readOfficialStartPlanCredential, createProductionStartPlanAuth, StartPlanBillingEntitlement, readOfficialCliVersion } = await import("../runtime/start-plan-production-auth.js");
+      if (readOfficialStartPlanCredential(dataRoot)) {
+        let cachedCliVersion: Promise<string | undefined> | undefined;
+        startPlanPrivateAuth = createProductionStartPlanAuth({
+          dataRoot,
+          signal: startPlanAuthController.signal,
+          entitlement: new StartPlanBillingEntitlement({
+            getAppVersion: async () => {
+              const zcodeEntry = runtimeEnv["ZCODE_BRIDGE_ZCODE_CJS"]?.trim() || undefined;
+              if (!zcodeEntry) return undefined;
+              cachedCliVersion ??= readOfficialCliVersion(zcodeEntry);
+              return await cachedCliVersion;
+            },
+          }),
+        }) ?? undefined;
+      }
+    } catch (error) {
+      // A broken official credential read must not block Bridge startup; the
+      // absent issuer keeps Start Plan fail-closed per task.
+      console.error(`[bridge] start plan auth issuer unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
   let trustedLocalContext: ReturnType<typeof createTrustedLocalCandidateContext>;
   try {
     trustedLocalContext = createTrustedLocalCandidateContext(host);
@@ -208,6 +238,7 @@ export async function startBridge(
       processProbe,
       trustedLocalContext,
       requireAuthorityReceipt: true,
+      ...(startPlanPrivateAuth ? { startPlanPrivateAuth } : {}),
     });
     manager = new BridgeTaskManager({ lifecycleAuthority: authority, maxConcurrentWorkers: workerLimit.maxConcurrentWorkers });
     lifecycleChecks = () => authority.getDoctorChecks();
@@ -229,6 +260,7 @@ export async function startBridge(
       console.error(`[bridge] ${reason} shutdown retained the lifecycle Root because cleanup was not verified: ${error instanceof Error ? error.message : String(error)}`);
     },
     onShutdownComplete: (reason) => {
+      startPlanAuthController.abort();
       if (reason !== "EOF") process.exit(0);
     },
   });

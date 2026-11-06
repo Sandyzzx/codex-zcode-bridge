@@ -1,0 +1,16 @@
+import {spawn,execFile} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
+const start=process.hrtime.bigint();
+const log=(event,extra={})=>console.log(JSON.stringify({ms:Number(process.hrtime.bigint()-start)/1e6,event,...extra}));
+const child=spawn(process.execPath,[fileURLToPath(new URL('./worker.mjs',import.meta.url))],{stdio:['ignore','ignore','pipe','pipe'],windowsHide:true});
+log('spawn_return',{pid:child.pid,pipe:!!child.stdio[3]});
+child.on('spawn',()=>log('spawn'));
+child.on('error',e=>log('child_error',{message:e.message}));
+child.on('exit',(code,signal)=>log('exit',{code,signal}));
+child.on('close',(code,signal)=>log('close',{code,signal}));
+child.stderr.on('data',d=>log('stderr',{text:d.toString().slice(0,500)}));
+const pipe=child.stdio[3];
+pipe.on('data',d=>{log('pipe_read',{bytes:d.length,preview:d.toString().slice(0,160)}); if(d.toString().includes('ready')) { log('probe_start');execFile('powershell.exe',['-NoProfile','-NonInteractive','-Command',`$ErrorActionPreference='Stop'; (Get-Process -Id ${child.pid}).StartTime.Ticks.ToString()`],{windowsHide:true,timeout:5000},(e,out,err)=>{log('probe_end',{ok:!e,output:out.trim(),stderr:err.trim(),error:e?.message});pipe.destroy();}); }});
+pipe.on('error',e=>log('pipe_error',{message:e.message}));
+pipe.on('close',()=>log('pipe_close'));
+setTimeout(()=>{log('deadline');pipe.destroy();if(child.exitCode===null)child.kill();},10000).unref();

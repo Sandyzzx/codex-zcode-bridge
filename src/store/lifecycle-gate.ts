@@ -33,6 +33,10 @@ import {
   SQLITE_CUTOVER_VERIFIER_VERSION,
 } from "../runtime/sqlite-runtime-roster.js";
 import { isSupportedNodeVersion } from "../runtime/node-runtime.js";
+import { servePrivateCredential } from "../runtime/start-plan-private-channel.js";
+import type { PrivateCredentialLease, PrivateLeaseBinding } from "../runtime/start-plan-private-lease.js";
+import { WorkerHandleGate } from "../runtime/start-plan-handle-gate.js";
+import type { WindowsTreeTransactionLike } from "../adapters/windows-process-cleanup.js";
 
 const DEFAULT_PROCESS_PROBE_TIMEOUT_MS = 5_000;
 // Share a verified process-tree stop across Managers using the same local
@@ -262,6 +266,20 @@ export interface ClaimOnlyDriverOptions {
   readonly enableSyntheticInteractionChannel?: boolean;
   /** Test-only injection. Production composition must not set this option. */
   readonly testOnlyFakeAdapter?: true;
+  /** Internal explicit opt-in only. The issuer must perform live entitlement
+   * checks before creating a lease; never derived from a TaskPackage. */
+  readonly startPlanPrivateAuth?: {
+    readonly account: string;
+    /** Aborted when authorization or active account identity is invalidated. */
+    readonly signal: AbortSignal;
+    issue(binding: Readonly<PrivateLeaseBinding>, signal: AbortSignal): Promise<PrivateCredentialLease>;
+  };
+  /** Injectable Worker-handle transaction factory for tests and non-Windows
+   * CI. Production uses the real kernel-handle helper on Windows; when absent
+   * on a non-Windows host the gate fails closed instead of trusting a PID
+   * snapshot. The factory receives the launch receipt ticks so a controlled
+   * fake can verify the same identity contract. */
+  readonly startPlanPrivateAuthHandleTransaction?: (pid: number, expectedCreationTicks: string) => Promise<WindowsTreeTransactionLike>;
 }
 
 export interface ClaimOnlyRunInput {
@@ -1280,8 +1298,8 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
   const port = modules.createPort(raw as object, { workerIdentityVerifier, cancellationVerifier, recoveryEvidenceVerifier });
   const localPolicy = options.trustedLocalContext.policy;
   const interactionChannels = new Map<string, CandidateInteractionChannel>();
-  const activeWorkers = new Map<string, { readonly child: ClaimOnlyWorkerProcess; readonly input: ClaimOnlyRunInput }>();
-  const cancellationProofs = new Map<string, { readonly input: ClaimOnlyRunInput; readonly child: ClaimOnlyWorkerProcess; readonly cancelId: string; readonly verificationDigest: string; readonly identityState: "alive" | "exited"; readonly terminationState: "terminated" | "already_exited"; readonly processTreeDigest: string; readonly livePids: readonly number[]; readonly observedPids: readonly number[]; readonly workerExitCode: number }>();
+  const activeWorkers = new Map<string, { readonly child: ClaimOnlyWorkerProcess; readonly input: ClaimOnlyRunInput; readonly privateAuthAbort?: AbortController; readonly privateAuthState?: { cancelled: boolean; phase: "resolving" | "delivering" | "acknowledged" }; readonly releasePrivateAuth?: () => void; readonly closeHandleGate?: () => Promise<void> }>();
+  const cancellationProofs = new Map<string, { readonly input: ClaimOnlyRunInput; readonly child: ClaimOnlyWorkerProcess; readonly cancelId: string; readonly verificationDigest: string; readonly identityState: "alive" | "exited"; readonly terminationState: "terminated" | "already_exited"; readonly processTreeDigest: string; readonly livePids: readonly number[]; readonly observedPids: readonly number[]; readonly workerExitCode: number | null }>();
   const provenance: RuntimeBuildProvenance = {
     bridge: fingerprintRuntimeArtifact(options.bridgeEntryPath),
     worker: fingerprintRuntimeArtifact(options.workerEntryPath),
@@ -1727,6 +1745,15 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
         start_fingerprint: processIdentity.fingerprint };
       const intent = asRecord(port.requestCancellation(fence, identityEvidence));
       if (intent.result_won === true) return intent;
+      // Do not destroy the credential pipes here. Doing so converts an
+      // in-flight Start Plan request into an immediate Worker EOF/result and
+      // lets that failure race the durable cancellation proof. Mark the
+      // request cancelled, terminate the bound Worker, and let the owner-exit
+      // path revoke both pending delivery and the credential channel.
+      if (active.privateAuthState) {
+        active.privateAuthState.cancelled = true;
+      }
+      await active.closeHandleGate?.();
       const cancelId = text(intent.cancel_id, "cancellation_intent_missing");
       const terminationState: "terminated" | "already_exited" = identityVerdict.state === "alive" ? "terminated" : "already_exited";
       if (identityVerdict.state === "alive") {
@@ -1735,19 +1762,21 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
         if (terminated.verified !== true) throw new LifecycleGateError("cancellation_tree_termination_unverified");
       }
       const workerExitCode = await waitForClose(active.child, 15_000);
-      if (workerExitCode === null) throw new LifecycleGateError("cancellation_worker_exit_unknown");
+      const terminationSignal = workerExitCode === null ? active.child.signalCode ?? null : null;
+      if (workerExitCode === null && terminationSignal === null) throw new LifecycleGateError("cancellation_worker_exit_unknown");
       const scan = await verifyProcessTreeClaimantsClean([{ pid: processIdentity.pid, fingerprint: processIdentity.fingerprint }]);
       if (!scan.clean || scan.livePids.length > 0) throw new LifecycleGateError("cancellation_tree_not_clean");
       const processTreeFacts = { contract: "sqlite-candidate-cancelled-worker-tree-v1", operation_id: operationId,
         task_id: taskId, attempt, generation: Number(operation.generation), claim_id: fence.claim_id, cancel_id: cancelId,
         worker_identity_digest: fence.claim_worker_identity_digest, root_process_id: processIdentity.pid,
         root_start_fingerprint: processIdentity.fingerprint, identity_state: identityVerdict.state,
-        termination_state: terminationState, worker_exit_code: workerExitCode, scan_clean: true,
+        termination_state: terminationState, worker_exit_code: workerExitCode, worker_termination_signal: terminationSignal, scan_clean: true,
         live_pids: [], observed_pids: [...scan.observedPids].sort((a, b) => a - b) };
       const treeEvidence = { source: "manager_process_tree_verification", outcome: "verified", operation_id: operationId,
         task_id: taskId, attempt, generation: Number(operation.generation), cancel_id: cancelId, claim_id: fence.claim_id,
         worker_identity_digest: fence.claim_worker_identity_digest, root_process_id: processIdentity.pid,
         root_start_fingerprint: processIdentity.fingerprint, worker_tree_complete: true, scan_clean: true,
+        termination_signal: terminationSignal,
         live_pids: [], termination_state: terminationState, process_tree_digest: sha256(canonicalJson(processTreeFacts)) };
       const current = asRecord(port.readOperation(operationId));
       const verification = asRecord(port.recordCancellationVerification({ ...fence, revision: Number(current.revision) }, treeEvidence));
@@ -1811,6 +1840,8 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
         cleanup_digest: text(recorded.cleanup_digest, "cancellation_cleanup_digest_missing") }));
       if (released.phase !== "released" || released.capacity_released !== true) throw new LifecycleGateError("cancellation_release_not_persisted");
       cancellationProofs.delete(operationId);
+      const retired = [...activeWorkers.entries()].find(([, value]) => value.input.task.task_id === taskId && value.input.attempt === attempt && value.child === proof.child);
+      if (retired) activeWorkers.delete(retired[0]);
       return { cancelled: true, phase: "released", cleanup_verified: true };
     },
     readInteractionRequest: (taskId, requestId) => port.readInteractionRequest(taskId, requestId),
@@ -1909,10 +1940,13 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
           }
         }
         stage("spawn_bootstrap_start");
+        const usePrivateAuth = input.task.model?.provider_id === "account:bigmodel-start-plan" && !!options.startPlanPrivateAuth;
+        if (usePrivateAuth && (!options.startPlanPrivateAuth?.account || !options.startPlanPrivateAuth.signal || options.startPlanPrivateAuth.signal.aborted || options.testOnlyFakeAdapter)) throw new LifecycleGateError("private_auth_configuration_invalid");
         const launch = await spawnAndBootstrapOnce(() => {
           spawnCount += 1;
           child = spawnClaimOnlyWorker(options.workerEntryPath, provenance, {
             ...(options.enableSyntheticInteractionChannel || !options.testOnlyFakeAdapter ? { interactionChannel: true } : {}),
+            ...(usePrivateAuth ? { privateAuthChannel: true } : {}),
           });
           options.onChildSpawn?.(child);
           return child as PrivateBootstrapChild;
@@ -1993,7 +2027,30 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
           reason = "result_not_committed";
           stopBoundary = "result";
           stage("claim_committed", { claim_id: claimId });
-          activeWorkers.set(input.operationId, { child, input });
+          const privateAuthAbort = new AbortController();
+          const privateAuthState = { cancelled: false, phase: "resolving" as "resolving" | "delivering" | "acknowledged" };
+          const accountSignal = usePrivateAuth ? options.startPlanPrivateAuth!.signal : undefined;
+          const revokeOnAccountChange = (): void => privateAuthAbort.abort();
+          accountSignal?.addEventListener("abort", revokeOnAccountChange, { once: true });
+          if (accountSignal?.aborted) privateAuthAbort.abort();
+          let handleGate: WorkerHandleGate | undefined;
+          const closeHandleGate = async (): Promise<void> => {
+            const gate = handleGate;
+            handleGate = undefined;
+            if (gate) await gate.close().catch(() => undefined);
+          };
+          activeWorkers.set(input.operationId, { child, input, ...(usePrivateAuth ? { privateAuthAbort,
+            privateAuthState,
+            releasePrivateAuth: () => accountSignal?.removeEventListener("abort", revokeOnAccountChange),
+            closeHandleGate } : {}) });
+          if (usePrivateAuth) {
+            if (!child.privateAuthLifetimeChannel) throw new LifecycleGateError("private_auth_lifetime_unavailable");
+            const lifetime = child.privateAuthLifetimeChannel;
+            lifetime.on("error", () => privateAuthAbort.abort());
+            privateAuthAbort.signal.addEventListener("abort", () => lifetime.destroy(), { once: true });
+            if (privateAuthAbort.signal.aborted) lifetime.destroy();
+            else lifetime.write(Buffer.from([1]));
+          }
           // Task and execution configuration are sent only after the durable
           // Claim. Production always selects the real ZCode Adapter. The fake
           // path requires this internal test-only capability and is never
@@ -2012,10 +2069,85 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
             host_profile: workerHostProfile,
             continuation: input.continuation ?? null,
             previous_result: input.previousResult ?? null,
+            ...(usePrivateAuth ? { private_auth: { account: options.startPlanPrivateAuth!.account, claim: claimId } } : {}),
           });
           stage("claim_continue_sent", { claim_id: claimId });
 
           let interactionPump: Promise<void> | undefined;
+          let privateAuthPump: Promise<unknown> | undefined;
+          if (usePrivateAuth) {
+            const owner = child;
+            const claimed = asRecord(port.readOperation(input.operationId));
+            const worker = parseEvidence(String(claimed.claim_worker_identity_json), "private_auth_identity_invalid");
+            if (!owner.privateAuthRequestChannel || !owner.privateAuthResponseChannel || !owner.privateAuthAcknowledgementChannel
+              || typeof owner.pid !== "number" || claimed.phase !== "running" || claimed.claim_id !== claimId || claimed.claim_generation !== generation
+              || worker.process_id !== owner.pid || worker.fingerprint_precision !== "exact" || typeof worker.start_fingerprint !== "string") {
+              throw new LifecycleGateError("private_auth_binding_invalid");
+            }
+            // P0-C production identity gate: hold one kernel handle on the
+            // Worker and verify its exact creation time against the launch
+            // receipt before any credential can be delivered.
+            try {
+              handleGate = await WorkerHandleGate.open({
+                pid: owner.pid,
+                expectedCreationTicks: String(worker.start_fingerprint),
+                ...(options.startPlanPrivateAuthHandleTransaction ? { transaction: await options.startPlanPrivateAuthHandleTransaction(owner.pid, String(worker.start_fingerprint)) } : {}),
+              });
+            } catch (error) {
+              throw new LifecycleGateError(`private_auth_handle_gate_unavailable: ${error instanceof Error ? error.message : String(error)}`);
+            }
+            owner.once("exit", () => privateAuthAbort.abort());
+            privateAuthPump = servePrivateCredential({ request: owner.privateAuthRequestChannel, response: owner.privateAuthResponseChannel,
+              acknowledgement: owner.privateAuthAcknowledgementChannel, signal: privateAuthAbort.signal, timeoutMs: 60_000,
+              resolveLease: async (request, signal) => {
+                const candidate = asRecord(request.binding);
+                if (candidate.account !== options.startPlanPrivateAuth!.account || candidate.provider !== input.task.model?.provider_id
+                  || candidate.model !== input.task.model?.model_id || candidate.task !== input.task.task_id || candidate.attempt !== input.attempt
+                  || candidate.operation !== input.operationId || candidate.generation !== generation || candidate.claim !== claimId
+                  || candidate.pid !== owner.pid || candidate.creation !== worker.start_fingerprint
+                  || typeof candidate.session !== "string" || !candidate.session || typeof candidate.turn !== "string" || !candidate.turn) {
+                  throw new Error("private_auth_binding_invalid");
+                }
+                const binding = Object.freeze({ ...candidate }) as unknown as PrivateLeaseBinding;
+                const waitUntilOwnerExit = (): Promise<never> => new Promise((_, reject) => {
+                  if (privateAuthAbort.signal.aborted) { reject(new Error("private_auth_cancelled")); return; }
+                  privateAuthAbort.signal.addEventListener("abort", () => reject(new Error("private_auth_cancelled")), { once: true });
+                });
+                const verifyWorker = async (): Promise<boolean> => {
+                  const current = asRecord(port.readOperation(input.operationId));
+                  if (signal.aborted || owner.exitCode !== null || owner.signalCode !== null || current.phase !== "running"
+                    || current.claim_id !== claimId || current.claim_generation !== generation
+                    || current.claim_worker_identity_digest !== claimed.claim_worker_identity_digest) return false;
+                  // The held kernel handle is the authoritative identity
+                  // evidence; a snapshot probe alone is not accepted here.
+                  await handleGate?.assertAlive();
+                  return !signal.aborted && owner.exitCode === null && owner.signalCode === null;
+                };
+                if (!await verifyWorker()) throw new Error("private_auth_identity_invalid");
+                const lease = await options.startPlanPrivateAuth!.issue(binding, signal);
+                // A cancellation request must remain durable while its process
+                // proof is in flight. Leave the pipes open, revoke the lease,
+                // and let the pending private-auth request be aborted by the
+                // Worker's own exit signal rather than fabricating an EOF.
+                if (signal.aborted || privateAuthState.cancelled) {
+                  lease.revoke();
+                  await waitUntilOwnerExit();
+                }
+                privateAuthState.phase = "delivering";
+                return { lease, binding, verifyWorker };
+              },
+            }).then(() => {
+              privateAuthState.phase = "acknowledged";
+              const lifetime = owner.privateAuthLifetimeChannel;
+              if (privateAuthAbort.signal.aborted || !lifetime || lifetime.destroyed || lifetime.writableEnded) { privateAuthAbort.abort(); return; }
+              lifetime.write(Buffer.from([2]), (error) => { if (error) privateAuthAbort.abort(); });
+            }).catch(() => {
+              // A failed or uncertain delivery is terminal. Closing the
+              // lifetime pipe also revokes any Worker-side cached lease once
+              // the Worker observes EOF; never attempt a second delivery.
+              privateAuthAbort.abort();
+            });
+          }
           if (options.enableSyntheticInteractionChannel || !options.testOnlyFakeAdapter) {
             const claimedOperation = asRecord(port.readOperation(input.operationId));
             const channel = await port.openInteractionChannel(child, claimedOperation, async ({ child: observedChild, expected }) => {
@@ -2068,6 +2200,9 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
           }
 
           workerExitCode = await waitForClose(child, 15_000);
+          privateAuthAbort.abort();
+          await privateAuthPump;
+          await closeHandleGate();
           await interactionPump;
           stage("worker_close", { pid: child.pid ?? null, exitCode: workerExitCode });
 
@@ -2180,7 +2315,19 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
         }
       } finally {
         const active = activeWorkers.get(input.operationId);
-        if (active?.child === child) activeWorkers.delete(input.operationId);
+        if (active && active.child === child) {
+          active.privateAuthAbort?.abort();
+          active.releasePrivateAuth?.();
+          await active.closeHandleGate?.();
+          // An Operation that is still `running` (e.g. the Worker died before
+          // producing a valid result) keeps its bound Worker handle so a later
+          // cancellation can verify the exited identity and release the
+          // attempt instead of losing all cancellation evidence.
+          let operationStillRunning = true;
+          try { operationStillRunning = asRecord(port.readOperation(input.operationId)).phase === "running"; }
+          catch { operationStillRunning = true; }
+          if (!operationStillRunning) activeWorkers.delete(input.operationId);
+        }
         try {
           operation = port.readOperation(input.operationId);
           task = port.readTaskProjection(input.task.task_id);
@@ -2420,6 +2567,13 @@ async function readJsonLine(stream: Readable | null, limit: number, timeoutMs: n
 
 async function waitForClose(child: ClaimOnlyWorkerProcess, timeoutMs: number): Promise<number | null> {
   if (child.exitCode !== null) return child.exitCode;
+  // A signal-terminated child keeps `exitCode === null`, and its 'close'
+  // event may already have fired before this call registers a listener.
+  // Once 'exit' was observed and every stdio stream is closed, the close
+  // evidence is complete; waiting again would only time out.
+  const stdioClosed = (child.stdio as ReadonlyArray<{ destroyed?: boolean; closed?: boolean } | null>)
+    .every((stream) => stream === null || stream.destroyed === true || stream.closed === true);
+  if (child.exitSeen === true && stdioClosed) return child.exitCode;
   return await new Promise((resolve, reject) => {
     const timer = setTimeout(() => { child.removeListener("close", onClose); reject(new LifecycleGateError("worker_stop_timeout")); }, timeoutMs);
     const onClose = (code: number | null): void => { clearTimeout(timer); resolve(code); };

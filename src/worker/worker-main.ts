@@ -10,6 +10,7 @@ import { BRIDGE_WORKER_LAUNCH_MARKER, fingerprintRuntimeArtifact, verifyWorkerPr
 import { validateHostProfile, type BridgeHostProfile } from "../host/profile.js";
 import { activateWorkerJsonWriter, jsonWriterParticipationRequired, releaseWorkerJsonWriter } from "../store/json-writer-quiescence.js";
 import { createPlatformProbe } from "../runtime/process-probe.js";
+import { StartPlanSecretRedactor } from "../runtime/start-plan-secret-redactor.js";
 import type { TaskPackage, WorkspaceRef } from "../interfaces.js";
 import type {
   CandidateExecutionCleanupProof,
@@ -20,9 +21,10 @@ import type {
 const workerArgs = process.argv.slice(2);
 const bridgeLaunchMarker = workerArgs.at(-1) === BRIDGE_WORKER_LAUNCH_MARKER;
 const interactionMode = workerArgs.includes("--bridge-sqlite-interaction-v1");
+const privateAuthMode = workerArgs.includes("--bridge-sqlite-private-auth-v1");
 const dropAfterPrepared = workerArgs.includes("--bridge-sqlite-interaction-drop-after-prepared-v1");
 const positionalArgs = bridgeLaunchMarker ? workerArgs.slice(0, -1).filter(argument =>
-  argument !== "--bridge-sqlite-interaction-v1" && argument !== "--bridge-sqlite-interaction-drop-after-prepared-v1") : workerArgs;
+  argument !== "--bridge-sqlite-interaction-v1" && argument !== "--bridge-sqlite-interaction-drop-after-prepared-v1" && argument !== "--bridge-sqlite-private-auth-v1") : workerArgs;
 if (bridgeLaunchMarker && positionalArgs.length === 0) {
   let claimOnlyStage = "start";
   let interactionStreamsCreated = false;
@@ -47,7 +49,7 @@ if (bridgeLaunchMarker && positionalArgs.length === 0) {
   process.on("unhandledRejection", (reason) => { writeFatalDiagnostic("unhandled_rejection", reason); reallyExit(1); });
   try {
     if (dropAfterPrepared && !interactionMode) throw new Error("interaction test mode required");
-    await runClaimOnlyHandshake({ interactionMode, dropAfterPrepared, onStage: (stage) => {
+    await runClaimOnlyHandshake({ interactionMode, privateAuthMode, dropAfterPrepared, onStage: (stage) => {
       claimOnlyStage = stage;
       // The interaction harness uses only fixed diagnostic stage labels; it
       // never writes Bootstrap, identity, request, or token values to stderr.
@@ -65,6 +67,7 @@ if (bridgeLaunchMarker && positionalArgs.length === 0) {
         try { closeSync(fd); } catch { /* descriptor may already be closed */ }
       }
     }
+    if (privateAuthMode) for (const fd of [10, 11, 12, 13]) { try { closeSync(fd); } catch { /* already closed */ } }
     const failureCode = error && typeof error === "object" && "code" in error
       && typeof (error as { readonly code?: unknown }).code === "string"
       ? (error as { readonly code: string }).code : "unclassified";
@@ -126,7 +129,7 @@ if (bridgeLaunchMarker && positionalArgs.length === 0) {
   }
 }
 
-async function runClaimOnlyHandshake(options: { readonly interactionMode: boolean; readonly dropAfterPrepared: boolean;
+async function runClaimOnlyHandshake(options: { readonly interactionMode: boolean; readonly privateAuthMode: boolean; readonly dropAfterPrepared: boolean;
   readonly onStage?: (stage: string) => void; readonly onInteractionStreamsCreated?: () => void }): Promise<void> {
   options.onStage?.("provenance verification");
   if (process.argv.at(-1) !== BRIDGE_WORKER_LAUNCH_MARKER) throw new Error("launch marker required");
@@ -200,6 +203,7 @@ async function runClaimOnlyHandshake(options: { readonly interactionMode: boolea
     throw new Error("claim was not committed");
   }
   const execution = validateExecutionEnvelope(decisionRecord.execution, bootstrap, profile);
+  if (options.privateAuthMode !== Boolean(execution.private_auth)) throw new Error("private auth mode mismatch");
 
   let closeInteraction: (() => Promise<void>) | undefined;
   let candidateInteraction: Awaited<ReturnType<typeof import("../sqlite-candidate/wp6b2b1/interaction-channel.mjs").createCandidateWorkerInteractionChannel>> | undefined;
@@ -252,7 +256,7 @@ async function runClaimOnlyHandshake(options: { readonly interactionMode: boolea
     options.onStage?.(execution.adapter_mode === "test_fake" ? "test adapter start" : "zcode adapter start");
     const resultFrame = execution.adapter_mode === "test_fake"
       ? await runExplicitFakeAdapter(bootstrap, execution, candidateInteraction)
-      : await runZCodeAdapter(bootstrap, execution, candidateInteraction);
+      : await runZCodeAdapter(bootstrap, execution, candidateInteraction, options.privateAuthMode ? identity : undefined);
     options.onStage?.("adapter result frame prepared");
     writePrivateFrame(6, resultFrame);
     options.onStage?.("adapter result frame written");
@@ -280,6 +284,7 @@ interface SqliteExecutionEnvelope {
   readonly host_profile: BridgeHostProfile;
   readonly continuation: Readonly<Record<string, unknown>> | null;
   readonly previous_result: CandidateTaskResult | null;
+  readonly private_auth?: { readonly account: string; readonly claim: string };
 }
 
 function validateExecutionEnvelope(value: unknown, bootstrap: {
@@ -288,7 +293,8 @@ function validateExecutionEnvelope(value: unknown, bootstrap: {
 }, profile: { readonly id: string; readonly sessionMode: "yolo"; readonly unrestricted: false }): SqliteExecutionEnvelope {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("post-Claim execution envelope is required");
   const envelope = value as Record<string, unknown>;
-  if (Object.keys(envelope).sort().join("|") !== "adapter_mode|attempt|continuation|execution_profile_id|generation|host_profile|operation_id|policy_snapshot_digest|previous_result|protocol|task|task_id|workspace_ref"
+  const envelopeKeys = Object.keys(envelope).sort().join("|");
+  if (!["adapter_mode|attempt|continuation|execution_profile_id|generation|host_profile|operation_id|policy_snapshot_digest|previous_result|protocol|task|task_id|workspace_ref", "adapter_mode|attempt|continuation|execution_profile_id|generation|host_profile|operation_id|policy_snapshot_digest|previous_result|private_auth|protocol|task|task_id|workspace_ref"].includes(envelopeKeys)
     || envelope.protocol !== "bridge-sqlite-execution-envelope-v1"
     || envelope.operation_id !== bootstrap.operation_id || envelope.task_id !== bootstrap.task_id
     || envelope.attempt !== bootstrap.attempt || envelope.generation !== bootstrap.generation
@@ -306,6 +312,12 @@ function validateExecutionEnvelope(value: unknown, bootstrap: {
   }
   if (!envelope.host_profile || typeof envelope.host_profile !== "object" || Array.isArray(envelope.host_profile)) {
     throw new Error("post-Claim Host profile is required");
+  }
+  if (envelope.private_auth !== undefined) {
+    const auth = envelope.private_auth as Record<string, unknown> | null;
+    if (!auth || typeof auth !== "object" || Array.isArray(auth) || Object.keys(auth).sort().join("|") !== "account|claim"
+      || typeof auth.account !== "string" || !auth.account || typeof auth.claim !== "string" || !auth.claim
+      || task.model?.provider_id !== "account:bigmodel-start-plan") throw new Error("private auth binding rejected");
   }
   validateHostProfile(envelope.host_profile as BridgeHostProfile);
   return envelope as unknown as SqliteExecutionEnvelope;
@@ -326,13 +338,35 @@ async function runZCodeAdapter(
   bootstrap: { readonly operation_id: string; readonly task_id: string; readonly attempt: number; readonly generation: number; readonly workspace_ref: string; readonly policy_snapshot_digest: string },
   execution: SqliteExecutionEnvelope,
   interaction: Awaited<ReturnType<typeof import("../sqlite-candidate/wp6b2b1/interaction-channel.mjs").createCandidateWorkerInteractionChannel>> | undefined,
+  workerIdentity?: import("../runtime/process-probe.js").ProcessIdentity,
 ): Promise<CandidateWorkerResultFrame> {
   if (execution.adapter_mode !== "zcode_app_server") throw new Error("real ZCode Adapter mode is required");
   const { ZCodeAppServerAdapter } = await import("../adapters/zcode-app-server-adapter.js");
   const { buildTaskResult } = await import("../manager/normalize.js");
   const startedAt = new Date().toISOString();
   let outcome: import("../adapters/zcode-adapter.js").ZCodeRunOutcome | null = null;
+  let failureCleanupReceipt: import("../adapters/windows-process-cleanup.js").WindowsTerminationReceipt | null = null;
   let failure: { code: string; message: string } | null = null;
+  let cachedAuth: { readonly apiKey: string; readonly expiresAt: number; readonly sessionId: string; readonly turnId: string; readonly providerId: string; readonly modelId: string } | null = null;
+  let privateAuthExpiryTimer: NodeJS.Timeout | undefined;
+  let privateAuthStarted = false;
+  const secretRedactor = execution.private_auth ? new StartPlanSecretRedactor() : undefined;
+  let privateAuthParentLive = false;
+  let privateAuthConfirmed = false;
+  let notifyPrivateAuthConfirmation: (() => void) | undefined;
+  const privateAuthLifetime = execution.private_auth ? new Socket({ fd: 13, readable: true, writable: false }) : undefined;
+  privateAuthLifetime?.on("data", (chunk: Buffer) => {
+    for (const byte of chunk) {
+      if (!privateAuthParentLive && !privateAuthConfirmed && byte === 1) privateAuthParentLive = true;
+      else if (privateAuthParentLive && !privateAuthConfirmed && byte === 2) { privateAuthConfirmed = true; notifyPrivateAuthConfirmation?.(); }
+      else { revokeParentLease(); privateAuthLifetime.destroy(); break; }
+    }
+  });
+  const clearCachedAuth = (): void => { cachedAuth = null; if (privateAuthExpiryTimer) { clearTimeout(privateAuthExpiryTimer); privateAuthExpiryTimer = undefined; } };
+  const revokeParentLease = (): void => { privateAuthParentLive = false; clearCachedAuth(); notifyPrivateAuthConfirmation?.(); };
+  privateAuthLifetime?.once("end", revokeParentLease);
+  privateAuthLifetime?.once("close", revokeParentLease);
+  privateAuthLifetime?.once("error", revokeParentLease);
   const adapter = new ZCodeAppServerAdapter({
     host: execution.host_profile,
     executionProfileId: execution.execution_profile_id,
@@ -357,6 +391,56 @@ async function runZCodeAdapter(
       }
       writeDiagnostic(`[bridge-worker] adapter event=${event.type}\n`);
     },
+    onVerifiedFailureCleanup: (receipt) => { failureCleanupReceipt = receipt; },
+    ...(secretRedactor ? {
+      sanitizeStartPlanFrame: (value: Record<string, unknown>) => secretRedactor.value(value) as Record<string, unknown>,
+      sanitizeStartPlanText: (value: string) => secretRedactor.text(value),
+    } : {}),
+    resolveStartPlanRuntimeAuth: execution.private_auth ? async (scope, signal) => {
+      if (signal.aborted || !privateAuthParentLive || !workerIdentity || workerIdentity.pid !== process.pid || workerIdentity.fingerprint_precision !== "exact" || !workerIdentity.fingerprint) throw new Error("private auth unavailable");
+      if (cachedAuth) {
+        if (cachedAuth.sessionId !== scope.sessionId || cachedAuth.turnId !== scope.turnId || cachedAuth.providerId !== scope.providerId || cachedAuth.modelId !== scope.modelId || cachedAuth.expiresAt <= Date.now()) throw new Error("private auth unavailable");
+        const current = cachedAuth;
+        return { ...current, isValid: () => privateAuthParentLive && !signal.aborted && cachedAuth === current && current.expiresAt > Date.now() };
+      }
+      if (privateAuthStarted) throw new Error("private auth unavailable");
+      privateAuthStarted = true;
+      const { receivePrivateCredential } = await import("../runtime/start-plan-private-channel.js");
+      const auth = execution.private_auth!;
+      const request = createWriteStream(process.execPath, { fd: 10 });
+      const acknowledgement = createWriteStream(process.execPath, { fd: 12 });
+      let responseOpened = false;
+      let result: Awaited<ReturnType<typeof receivePrivateCredential>>;
+      try { result = await receivePrivateCredential({ request, response: () => { responseOpened = true; return new Socket({ fd: 11, readable: true, writable: false }); }, acknowledgement,
+        binding: { account: auth.account, provider: scope.providerId, model: scope.modelId, task: bootstrap.task_id,
+          attempt: bootstrap.attempt, operation: bootstrap.operation_id, generation: bootstrap.generation, claim: auth.claim,
+          session: scope.sessionId, turn: scope.turnId, pid: workerIdentity.pid, creation: workerIdentity.fingerprint },
+        signal, timeoutMs: 15_000 }); }
+      finally { if (!responseOpened) { try { closeSync(11); } catch { /* not open */ } } }
+      // The Worker has only written an ACK at this point. Wait for the
+      // Manager to confirm it accepted that ACK before using the credential.
+      await new Promise<void>((resolve, reject) => {
+        let timer: NodeJS.Timeout | undefined;
+        const cleanup = (): void => { if (timer) clearTimeout(timer); signal.removeEventListener("abort", check); notifyPrivateAuthConfirmation = undefined; };
+        const check = (): void => {
+          if (signal.aborted || !privateAuthParentLive || result.expiresAt <= Date.now()) { cleanup(); reject(new Error("private auth unavailable")); }
+          else if (privateAuthConfirmed) { cleanup(); resolve(); }
+        };
+        notifyPrivateAuthConfirmation = check;
+        signal.addEventListener("abort", check, { once: true });
+        timer = setTimeout(() => { cleanup(); reject(new Error("private auth unavailable")); }, Math.max(0, Math.min(15_000, result.expiresAt - Date.now())));
+        timer.unref();
+        check();
+      });
+      if (signal.aborted || !privateAuthParentLive) throw new Error("private auth unavailable");
+      secretRedactor?.register(result.jwt);
+      cachedAuth = { apiKey: result.jwt, expiresAt: result.expiresAt, ...scope };
+      privateAuthExpiryTimer = setTimeout(clearCachedAuth, Math.max(0, result.expiresAt - Date.now()));
+      privateAuthExpiryTimer.unref();
+      signal.addEventListener("abort", clearCachedAuth, { once: true });
+      const current = cachedAuth;
+      return { ...current, isValid: () => privateAuthParentLive && !signal.aborted && cachedAuth === current && current.expiresAt > Date.now() };
+    } : undefined,
     resolveInteraction: interaction ? async (request, signal) => {
       if (signal.aborted) return { action: "decline" };
       await interaction.sendRequest(request);
@@ -387,6 +471,10 @@ async function runZCodeAdapter(
   } catch (error) {
     failure = { code: error instanceof Error && "code" in error && typeof (error as { code?: unknown }).code === "string"
       ? (error as { code: string }).code : "worker_error", message: error instanceof Error ? error.message : String(error) };
+  } finally {
+    clearCachedAuth();
+    privateAuthLifetime?.destroy();
+    if (execution.private_auth && !privateAuthStarted) for (const fd of [10, 11, 12]) { try { closeSync(fd); } catch { /* not open */ } }
   }
   const finishedAt = new Date().toISOString();
   const taskResult = buildTaskResult({ task: execution.task, attempt: bootstrap.attempt, startedAt, finishedAt, outcome, failure });
@@ -410,7 +498,8 @@ async function runZCodeAdapter(
     ...(taskResult.error_code ? { error_code: taskResult.error_code } : {}),
     ...(taskResult.report_candidate ? { report_candidate: taskResult.report_candidate as Record<string, unknown> } : {}),
   };
-  const executionCleanup = buildExecutionCleanupProof(outcome);
+  const executionCleanup = buildExecutionCleanupProof(outcome, failureCleanupReceipt);
+  secretRedactor?.close();
   return {
     protocol: "bridge-sqlite-candidate-result-v1",
     operation_id: bootstrap.operation_id,
@@ -427,9 +516,10 @@ async function runZCodeAdapter(
 
 function buildExecutionCleanupProof(
   outcome: import("../adapters/zcode-adapter.js").ZCodeRunOutcome | null,
+  failureReceipt: import("../adapters/windows-process-cleanup.js").WindowsTerminationReceipt | null = null,
 ): CandidateExecutionCleanupProof | null {
-  const receipt = outcome?.cleanupTreeReceipt;
-  if (outcome?.cleanupVerified !== true || outcome.cleanupError || !receipt) return null;
+  const receipt = failureReceipt ?? outcome?.cleanupTreeReceipt;
+  if (!receipt || (!failureReceipt && (outcome?.cleanupVerified !== true || outcome.cleanupError))) return null;
   const root = receipt.members.find((member) => member.pid === receipt.rootPid);
   if (!root || !root.fingerprint || receipt.members.length < 1
     || !Number.isSafeInteger(receipt.rootPid) || receipt.rootPid < 1) return null;

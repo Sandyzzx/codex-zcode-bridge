@@ -22,6 +22,10 @@ export interface ClaimOnlyWorkerProcess extends ChildProcess {
   readonly interactionRequestChannel: Readable | null;
   readonly interactionReplyChannel: Writable | null;
   readonly interactionAcknowledgementChannel: Readable | null;
+  readonly privateAuthRequestChannel: Readable | null;
+  readonly privateAuthResponseChannel: Writable | null;
+  readonly privateAuthAcknowledgementChannel: Readable | null;
+  readonly privateAuthLifetimeChannel: Writable | null;
   readonly exitSeen: boolean;
 }
 
@@ -34,22 +38,26 @@ export type SqliteWorkerAdapterMode = "zcode_app_server" | "test_fake";
 export function spawnClaimOnlyWorker(
   workerPath: string,
   provenance: RuntimeBuildProvenance,
-  options: { readonly interactionChannel?: boolean; readonly dropAfterPrepared?: boolean } = {},
+  options: { readonly interactionChannel?: boolean; readonly dropAfterPrepared?: boolean; readonly privateAuthChannel?: boolean } = {},
 ): ClaimOnlyWorkerProcess {
   if (!path.isAbsolute(workerPath)) throw new TypeError("claim-only worker path must be absolute");
   if (options.dropAfterPrepared && !options.interactionChannel) throw new TypeError("interaction channel is required for drop-after-prepared");
+  if (options.privateAuthChannel && !options.interactionChannel) throw new TypeError("private auth requires interaction channel allocation");
   const env = {
     ...createWorkerEnv(process.env),
     ZCODE_BRIDGE_RUNTIME_PROVENANCE: JSON.stringify(provenance),
   };
   const args = [workerPath, ...(options.interactionChannel ? ["--bridge-sqlite-interaction-v1"] : []),
+    ...(options.privateAuthChannel ? ["--bridge-sqlite-private-auth-v1"] : []),
     ...(options.dropAfterPrepared ? ["--bridge-sqlite-interaction-drop-after-prepared-v1"] : []), BRIDGE_WORKER_LAUNCH_MARKER];
   const child = spawn(process.execPath, args, {
     // Match the production detached-worker process boundary while retaining
     // this test-only harness's direct ChildProcess handle and private pipes.
     detached: true,
     shell: false,
-    stdio: options.interactionChannel
+    stdio: options.privateAuthChannel
+      ? ["ignore", "ignore", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe"]
+      : options.interactionChannel
       ? ["ignore", "ignore", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe"]
       : ["ignore", "ignore", "pipe", "pipe", "pipe", "pipe", "pipe"],
     windowsHide: true,
@@ -66,6 +74,10 @@ export function spawnClaimOnlyWorker(
     interactionRequestChannel: { enumerable: false, get: () => pipes[7] as Readable | null },
     interactionReplyChannel: { enumerable: false, get: () => pipes[8] as Writable | null },
     interactionAcknowledgementChannel: { enumerable: false, get: () => pipes[9] as Readable | null },
+    privateAuthRequestChannel: { enumerable: false, get: () => pipes[10] as Readable | null },
+    privateAuthResponseChannel: { enumerable: false, get: () => pipes[11] as Writable | null },
+    privateAuthAcknowledgementChannel: { enumerable: false, get: () => pipes[12] as Readable | null },
+    privateAuthLifetimeChannel: { enumerable: false, get: () => pipes[13] as Writable | null },
     exitSeen: { enumerable: false, get: () => exitSeen },
   });
   child.once("exit", () => { exitSeen = true; });

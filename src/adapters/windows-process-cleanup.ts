@@ -345,10 +345,21 @@ export interface KillOutcome {
   readonly detail?: string;
 }
 
+/** Non-destructive liveness read from an already-held handle. The creation
+ * FILETIME comes from the same held handle, so a positive answer cannot
+ * describe a reused PID. */
+export interface AliveOutcome {
+  readonly status: "alive" | "exited" | "not_held" | "error";
+  readonly creationFileTime: string | null;
+  readonly exitFileTime: string | null;
+  readonly error?: number;
+}
+
 export interface WindowsTreeTransactionLike {
   enumerate(): Promise<readonly WindowsProcessRow[]>;
   hold(pids: readonly number[]): Promise<readonly HoldOutcome[]>;
   kill(pid: number, expectedTicks: string, waitMs: number): Promise<KillOutcome>;
+  alive?(pid: number): Promise<AliveOutcome>;
   close(): Promise<void>;
 }
 
@@ -976,6 +987,14 @@ export function windowsTreeTransactionScript(): string {
     "    Held.Clear();",
     "    return closed.ToString() + \"|\" + failed.ToString();",
     "  }",
+    "  public static string Alive(int pid) {",
+    "    IntPtr h;",
+    "    if (!Held.TryGetValue(pid, out h) || h == IntPtr.Zero) { return \"not_held||\"; }",
+    "    long c, e, k, u;",
+    "    if (!GetProcessTimes(h, out c, out e, out k, out u)) { return \"error||\" + Marshal.GetLastWin32Error().ToString(); }",
+    "    if (e != 0) { return \"exited|\" + e.ToString() + \"|\"; }",
+    "    return \"alive|\" + c.ToString() + \"|\";",
+    "  }",
     "}",
     "'@",
     "[Console]::Out.WriteLine('READY'); [Console]::Out.Flush()",
@@ -1018,6 +1037,12 @@ export function windowsTreeTransactionScript(): string {
     "    elseif ($r[0] -eq 'not_held') { [Console]::Out.WriteLine(('K {0} not_held 0' -f $kpid)) }",
     "    else { [Console]::Out.WriteLine(('K {0} error {1}' -f $kpid, $r[1])) }",
     "    [Console]::Out.WriteLine('KILL_END'); [Console]::Out.Flush()",
+    "  } elseif ($parts[0] -eq 'alive') {",
+    "    $apid = [int]$parts[1]",
+    "    $r = [BridgeTreeTx]::Alive($apid).Split('|')",
+    "    if ($r[0] -eq 'alive' -or $r[0] -eq 'exited') { [Console]::Out.WriteLine(('A {0} {1} {2}' -f $apid, $r[0], $r[1])) }",
+    "    else { [Console]::Out.WriteLine(('A {0} {1} {2}' -f $apid, $r[0], $(if ([string]::IsNullOrEmpty($r[2])) { '0' } else { $r[2] }))) }",
+    "    [Console]::Out.WriteLine('ALIVE_END'); [Console]::Out.Flush()",
     "  } elseif ($parts[0] -eq 'close') {",
     "    $r = [BridgeTreeTx]::CloseAll().Split('|')",
     "    [Console]::Out.WriteLine(('CLOSED {0} {1}' -f $r[0], $r[1])); [Console]::Out.Flush()",
@@ -1309,6 +1334,23 @@ export class PowerShellTreeTransaction implements WindowsTreeTransactionLike {
       status,
       exitFileTime: status === "signaled" || status === "already_exited" || status === "wait_timeout" ? (value === "0" ? null : value) : null,
       detail: status === "identity_changed" ? value : undefined,
+    };
+  }
+
+  async alive(pid: number): Promise<AliveOutcome> {
+    this.#child.stdin.write(`alive ${String(pid)}\n`);
+    const line = await this.#nextLine(10_000, "alive response");
+    const end = await this.#nextLine(5_000, "alive terminator");
+    if (end !== "ALIVE_END") throw new Error("process_tree_alive_invalid: terminator missing");
+    const match = /^A (\d{1,12}) (alive|exited|not_held|error) (\d{1,25})$/u.exec(line);
+    if (!match || Number(match[1]) !== pid) throw new Error("process_tree_alive_invalid: malformed response");
+    const status = match[2] as AliveOutcome["status"];
+    const value = match[3]!;
+    return {
+      status,
+      creationFileTime: status === "alive" ? value : null,
+      exitFileTime: status === "exited" ? value : null,
+      error: status === "not_held" || status === "error" ? Number(value) : undefined,
     };
   }
 
