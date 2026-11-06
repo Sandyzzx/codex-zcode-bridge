@@ -3487,6 +3487,7 @@ var init_resolver = __esm({
           zcodeEntrypoint,
           providerBuiltinConfigFile: builtinConfigFile,
           providerPersonalConfigFile: personalConfigFile,
+          zcodeDataRoot: data.zcodeDataDir,
           dataRoot
         };
       }
@@ -26890,6 +26891,9 @@ var init_zcode_app_server_adapter = __esm({
                 type: "account_provider_sync_failed",
                 summary: error62 instanceof Error ? error62.message : "ZCode account provider synchronization failed"
               });
+              if (task.model?.provider_id === "account:bigmodel-start-plan" && this.#resolveStartPlanRuntimeAuth) {
+                throw new BridgeError("provider_config_invalid", "ZCode rejected Start Plan provider registration before session creation.");
+              }
             }
           }
           let snapshot;
@@ -30057,6 +30061,10 @@ async function servePrivateCredential(options) {
       });
     });
     lease = resolved.lease;
+    if (!lease.isActive()) {
+      lease = void 0;
+      throw new Error("private_auth_delivery_failed");
+    }
     await lease.redeem(request.binding, resolved.verifyWorker, async (jwt2, expiresAt) => {
       await writePrivateFrame(options.response, {
         protocol: "start-plan-private-response-v1",

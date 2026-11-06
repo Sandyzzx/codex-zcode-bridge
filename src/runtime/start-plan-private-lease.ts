@@ -48,6 +48,10 @@ export class PrivateCredentialLease {
 
   revoke(): void { this.#state = "revoked"; this.#credential = null; }
 
+  /** Synchronous claim check before redeem; an already-claimed lease belongs
+   * to its in-flight delivery and must not be revoked by a competing call. */
+  isActive(): boolean { return this.#state === "active"; }
+
   async redeem(
     requested: PrivateLeaseBinding,
     verifyWorker: (binding: Readonly<PrivateLeaseBinding>) => Promise<boolean>,

@@ -10,7 +10,7 @@ import { serveStdio, StdioServerTransport, type StdioServerHandle } from "@model
 import type { Readable, Writable } from "node:stream";
 import { homedir } from "node:os";
 import path from "node:path";
-import { findPackageRoot, loadPersistedRuntimeEnvironment } from "../runtime/resolver.js";
+import { findPackageRoot, loadPersistedRuntimeEnvironment, NodeRuntimeResolver } from "../runtime/resolver.js";
 import { BridgeTaskManager } from "../manager/task-manager.js";
 import { createBridgeServer } from "../mcp/server.js";
 import { DEFAULT_TASK_TIMEOUT_MS, validateTaskTimeout } from "../runtime/task-timeout.js";
@@ -198,16 +198,18 @@ export async function startBridge(
   if (process.platform === "win32") {
     try {
       const { readOfficialStartPlanCredential, createProductionStartPlanAuth, StartPlanBillingEntitlement, readOfficialCliVersion } = await import("../runtime/start-plan-production-auth.js");
-      if (readOfficialStartPlanCredential(dataRoot)) {
+      // Runtime discovery is intentionally independent from the Bridge SQLite
+      // root: credentials and Device ID come from the official ZCode root,
+      // while the version comes from the same resolved official entrypoint.
+      const officialRuntime = await new NodeRuntimeResolver({ env: runtimeEnv, homeDir: homedir(), host }).resolve();
+      if (readOfficialStartPlanCredential(officialRuntime.zcodeDataRoot)) {
         let cachedCliVersion: Promise<string | undefined> | undefined;
         startPlanPrivateAuth = createProductionStartPlanAuth({
-          dataRoot,
+          zcodeDataRoot: officialRuntime.zcodeDataRoot,
           signal: startPlanAuthController.signal,
           entitlement: new StartPlanBillingEntitlement({
             getAppVersion: async () => {
-              const zcodeEntry = runtimeEnv["ZCODE_BRIDGE_ZCODE_CJS"]?.trim() || undefined;
-              if (!zcodeEntry) return undefined;
-              cachedCliVersion ??= readOfficialCliVersion(zcodeEntry);
+              cachedCliVersion ??= readOfficialCliVersion(officialRuntime.zcodeEntrypoint);
               return await cachedCliVersion;
             },
           }),

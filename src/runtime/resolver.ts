@@ -267,6 +267,7 @@ export class NodeRuntimeResolver implements RuntimeResolver {
       zcodeEntrypoint,
       providerBuiltinConfigFile: builtinConfigFile,
       providerPersonalConfigFile: personalConfigFile,
+      zcodeDataRoot: data.zcodeDataDir,
       dataRoot,
     };
   }

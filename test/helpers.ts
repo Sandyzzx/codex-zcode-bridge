@@ -146,6 +146,7 @@ export function fakeConfig(overrides: Partial<ZCodeRuntimeConfig> = {}): ZCodeRu
     zcodeEntrypoint: "C:\\fake\\zcode.cjs",
     providerBuiltinConfigFile: "C:\\fake\\zcode-builtin.json",
     providerPersonalConfigFile: "C:\\fake\\provider_config.json",
+    zcodeDataRoot: "C:\\fake\\zcode-data",
     dataRoot: "C:\\fake\\data",
     ...overrides,
   };

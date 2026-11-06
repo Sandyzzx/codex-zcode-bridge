@@ -11,6 +11,7 @@ export type EntitlementStatus =
   | "no_entitlement"
   | "model_unavailable"
   | "quota_exhausted"
+  | "rate_limited"
   | "forbidden"
   | "unauthorized"
   | "unusual_activity"
@@ -53,6 +54,19 @@ interface OfficialCredentialRecord {
   readonly "oauth:bigmodel:user_info"?: unknown;
 }
 
+/** Observed official billing envelope. Only field presence is interpreted;
+ * message text is never echoed into Bridge diagnostics. */
+interface OfficialBillingEnvelope {
+  readonly success?: unknown;
+  readonly code?: unknown;
+  readonly msg?: unknown;
+  readonly data?: {
+    readonly plans?: unknown;
+    readonly balances?: unknown;
+    readonly server_time?: unknown;
+  };
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
@@ -73,10 +87,106 @@ function decodeJwtPayload(jwt: string): Record<string, unknown> | null {
   }
 }
 
-/** Reads the official Start Plan credential from the real production data
- * root. The value exists in memory only; callers must never persist it. */
-export function readOfficialStartPlanCredential(dataRoot: string): OfficialStartPlanCredential | null {
-  const credentialsPath = path.join(dataRoot, ".zcode", "v2", "credentials.json");
+function asOfficialBillingEnvelope(value: unknown): OfficialBillingEnvelope | null {
+  if (!isRecord(value)) return null;
+  const data = isRecord(value.data) ? value.data : undefined;
+  return {
+    success: value.success,
+    code: value.code,
+    msg: value.msg,
+    ...(data ? { data: {
+      plans: data.plans,
+      balances: data.balances,
+      server_time: data.server_time,
+    } } : {}),
+  };
+}
+
+function isSuccessfulBusinessEnvelope(envelope: OfficialBillingEnvelope): boolean {
+  return envelope.success !== false
+    && (envelope.code === undefined || envelope.code === 0 || envelope.code === 200);
+}
+
+function stringKeyedArray(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value)
+    ? value.filter(isRecord) as Array<Record<string, unknown>>
+    : [];
+}
+
+function hasActiveStartPlan(envelope: OfficialBillingEnvelope): boolean {
+  const plans = stringKeyedArray(envelope.data?.plans);
+  return plans.some((plan) => {
+    const status = typeof plan.status === "string" ? plan.status.trim().toLowerCase() : "";
+    const planId = typeof plan.plan_id === "string" ? plan.plan_id.trim().toLowerCase() : "";
+    const name = typeof plan.name === "string" ? plan.name.trim().toLowerCase() : "";
+    const startPlanIdentity = planId.includes("start-plan") || planId.includes("start plan")
+      || name.includes("start-plan") || name.includes("start plan");
+    return status === "active" && startPlanIdentity;
+  });
+}
+
+function startPlanBalanceModelIds(balances: Array<Record<string, unknown>>): string[] {
+  const seen = new Set<string>();
+  const models: string[] = [];
+  for (const balance of balances) {
+    const capabilities = Array.isArray(balance.capabilities) ? balance.capabilities : [];
+    const capabilityModels = capabilities.flatMap((capability) => {
+      const raw = typeof capability === "string" ? capability.trim().toLowerCase() : "";
+      return raw.startsWith("model:") ? [raw.slice(6).trim()] : [];
+    }).filter(Boolean);
+    const candidates = capabilityModels.length > 0
+      ? capabilityModels
+      : typeof balance.show_name === "string" ? [balance.show_name.trim().toLowerCase()] : [];
+    for (const model of candidates) {
+      if (!model || seen.has(model)) continue;
+      seen.add(model);
+      models.push(model);
+    }
+  }
+  return models;
+}
+
+function numericUnit(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() && Number.isFinite(Number(value))) return Number(value);
+  return null;
+}
+
+function requestedModelQuotaExhausted(
+  balances: Array<Record<string, unknown>>,
+  requestedModel: string,
+): boolean {
+  const relevant = balances.filter((balance) => {
+    const capabilities = Array.isArray(balance.capabilities) ? balance.capabilities : [];
+    const models = capabilities.flatMap((capability) => {
+      const raw = typeof capability === "string" ? capability.trim().toLowerCase() : "";
+      return raw.startsWith("model:") ? [raw.slice(6).trim()] : [];
+    }).filter(Boolean);
+    return models.length > 0 ? models.includes(requestedModel)
+      : typeof balance.show_name === "string" && balance.show_name.trim().toLowerCase() === requestedModel;
+  });
+  if (relevant.length === 0) return false;
+  return relevant.every((balance) => numericUnit(balance.remaining_units) === 0);
+}
+
+function extractProviderCode(value: Record<string, unknown> | undefined): string | undefined {
+  if (!value) return undefined;
+  const error = isRecord(value.error) ? value.error : undefined;
+  const candidates = [
+    value.providerCode,
+    error?.providerCode,
+    error && isRecord(error) ? error.code : undefined,
+    value.code,
+  ];
+  const raw = candidates.find((candidate) => typeof candidate === "number" || typeof candidate === "string");
+  return typeof raw === "number" || typeof raw === "string" ? String(raw) : undefined;
+}
+
+/** Reads the official Start Plan credential from the official ZCode data
+ * root, never the Bridge SQLite data root. The value exists in memory only;
+ * callers must never persist it. */
+export function readOfficialStartPlanCredential(zcodeDataRoot: string): OfficialStartPlanCredential | null {
+  const credentialsPath = path.join(zcodeDataRoot, "v2", "credentials.json");
   let parsed: OfficialCredentialRecord;
   try {
     parsed = JSON.parse(readFileSync(credentialsPath, "utf8")) as OfficialCredentialRecord;
@@ -94,7 +204,7 @@ export function readOfficialStartPlanCredential(dataRoot: string): OfficialStart
   const expiresAt = typeof exp === "number" && Number.isFinite(exp) && exp > 0 ? exp * 1_000 : null;
   let deviceMid = "";
   try {
-    const telemetry = JSON.parse(readFileSync(path.join(dataRoot, ".zcode", "v2", "telemetry-state.json"), "utf8")) as { deviceMid?: unknown };
+    const telemetry = JSON.parse(readFileSync(path.join(zcodeDataRoot, "v2", "telemetry-state.json"), "utf8")) as { deviceMid?: unknown };
     if (typeof telemetry.deviceMid === "string" && telemetry.deviceMid.trim()) deviceMid = telemetry.deviceMid.trim();
   } catch { /* deviceMid stays empty; entitlement check treats it as required */ }
   if (!deviceMid) return null;
@@ -110,25 +220,37 @@ export function classifyEntitlementFailure(input: {
   statusCode: number;
   providerCode?: string;
   body?: Record<string, unknown>;
-}): { status: EntitlementStatus; reason: string } {
+  model?: string;
+}): { status: EntitlementStatus; reason: string; providerCode?: string } {
   const code = input.providerCode?.trim();
-  if (code === "3007") return { status: "captcha_required", reason: "provider requested captcha verification" };
-  if (code === "3012") return { status: "unusual_activity", reason: "provider blocked this identity due to unusual activity" };
-  if (code === "3001") return { status: "billing_parameter_error", reason: "billing request parameters were rejected" };
+  const providerCode = code ? code : undefined;
+  if (code === "3007") return { status: "captcha_required", reason: "provider requested captcha verification", providerCode };
+  if (code === "3012") return { status: "unusual_activity", reason: "provider blocked this identity due to unusual activity", providerCode };
+  if (code === "3001") return { status: "billing_parameter_error", reason: "billing request parameters were rejected", providerCode };
   if (input.statusCode === 401) return { status: "unauthorized", reason: "credential was rejected as unauthenticated" };
   if (input.statusCode === 403) return { status: "forbidden", reason: "credential is authenticated but forbidden from this plan or model" };
-  const data = isRecord(input.body?.data) ? input.body.data : input.body;
-  if (isRecord(data)) {
-    const quota = data.quota_remaining ?? data.balance ?? data.remaining;
-    if (typeof quota === "number" && quota <= 0) return { status: "quota_exhausted", reason: "plan quota is exhausted" };
-    const models = data.models ?? data.available_models;
-    if (Array.isArray(models) && models.length > 0) {
-      return { status: "no_entitlement", reason: "plan exists but the requested model is not in its entitlement list" };
+  const envelope = asOfficialBillingEnvelope(input.body);
+  if (envelope && isSuccessfulBusinessEnvelope(envelope) && hasActiveStartPlan(envelope)) {
+    const balances = stringKeyedArray(envelope.data?.balances);
+    const models = startPlanBalanceModelIds(balances);
+    if (models.length === 0) {
+      return { status: "unavailable", reason: "billing response proved the plan but not the requested model" };
     }
+    const requested = input.model?.trim().toLowerCase();
+    if (!requested) return { status: "unavailable", reason: "billing response had no requested model identity to authorize" };
+    if (!models.includes(requested)) {
+      return { status: "model_unavailable", reason: "active Start Plan does not list the requested model" };
+    }
+    if (requestedModelQuotaExhausted(balances, requested)) {
+      return { status: "quota_exhausted", reason: "plan quota is exhausted for the requested model" };
+    }
+    return { status: "entitled", reason: "active Start Plan lists the requested model" };
+  } else if (envelope && isSuccessfulBusinessEnvelope(envelope) && !hasActiveStartPlan(envelope)) {
+    return { status: "no_entitlement", reason: "no active Start Plan was present in the billing response" };
   }
-  if (input.statusCode === 429) return { status: "unavailable", reason: "rate limited; quota state unknown from status alone" };
+  if (input.statusCode === 429) return { status: "rate_limited", reason: "rate limited; quota state unknown from status alone" };
   if (input.statusCode >= 500) return { status: "unavailable", reason: "entitlement service error" };
-  if (input.statusCode >= 400) return { status: "no_entitlement", reason: "entitlement query rejected without a recognized provider code" };
+  if (input.statusCode >= 400) return { status: "unavailable", reason: "entitlement query rejected without a recognized provider code" };
   return { status: "unavailable", reason: "entitlement response could not be interpreted" };
 }
 
@@ -173,16 +295,10 @@ export class StartPlanBillingEntitlement implements StartPlanLiveEntitlement {
       response = await this.#fetchImpl(url, {
         method: "GET",
         headers: {
-          // Official-observed header shapes for the Start Plan control plane
-          // (billing query). This is not a model request and must never be
-          // used as one; app version and device identity come from the
-          // official runtime sources, never from TaskPackage input.
+          // Observed official balance requests use Authorization only. This
+          // is a read-only billing query, never a model request; app version
+          // comes from the official runtime and identity remains in memory.
           Authorization: `Bearer ${input.jwt}`,
-          "X-Device-Mid": input.deviceMid,
-          "User-Agent": `ZCode/${appVersion}`,
-          "X-ZCode-App-Version": appVersion,
-          "HTTP-Referer": this.#origin,
-          "X-Title": "Z Code@cli",
         },
         signal: input.signal,
       });
@@ -191,9 +307,27 @@ export class StartPlanBillingEntitlement implements StartPlanLiveEntitlement {
       return { status: "unavailable", reason: "entitlement transport failed", observedAt };
     }
     if (response.status === 200) {
-      let requestId = "";
-      try { requestId = response.headers.get("x-request-id") ?? ""; } catch { /* header access is safe, keep empty */ }
-      return { status: "entitled", observedAt: this.#now(), requestId };
+      let body: Record<string, unknown> | undefined;
+      let providerCode: string | undefined;
+      try {
+        const parsed: unknown = await response.json();
+        if (isRecord(parsed)) {
+          body = parsed;
+          providerCode = extractProviderCode(parsed);
+        }
+      } catch { /* malformed success transport is not entitlement evidence */ }
+      const classified = this.#interpretBillingBody({
+        statusCode: response.status,
+        providerCode,
+        body,
+        model: input.model,
+      });
+      if (classified.status === "entitled") {
+        let requestId = "";
+        try { requestId = (response.headers.get("x-request-id") ?? "").trim(); } catch { /* header access is safe, keep empty */ }
+        return { status: "entitled", observedAt: this.#now(), requestId };
+      }
+      return { ...classified, observedAt: this.#now() };
     }
     let body: Record<string, unknown> | undefined;
     let providerCode: string | undefined;
@@ -201,19 +335,26 @@ export class StartPlanBillingEntitlement implements StartPlanLiveEntitlement {
       const parsed: unknown = await response.json();
       if (isRecord(parsed)) {
         body = parsed;
-        const error = isRecord(parsed.error) ? parsed.error : null;
-        const raw = error?.providerCode ?? parsed.providerCode ?? (error ? (error as Record<string, unknown>).code : undefined) ?? parsed.code;
-        if (typeof raw === "number" || typeof raw === "string") providerCode = String(raw);
+        providerCode = extractProviderCode(parsed);
       }
     } catch { /* body unreadable; classification falls back to status */ }
-    return { ...classifyEntitlementFailure({ statusCode: response.status, providerCode, body }), observedAt };
+    return { ...this.#interpretBillingBody({ statusCode: response.status, providerCode, body, model: input.model }), observedAt };
+  }
+
+  #interpretBillingBody(input: {
+    statusCode: number;
+    providerCode?: string;
+    body?: Record<string, unknown>;
+    model: string;
+  }): { status: EntitlementStatus; reason: string } {
+    return classifyEntitlementFailure(input);
   }
 
 }
 
 export interface ProductionAuthIssuerOptions {
-  /** Real production data root (the parent of `.zcode`). */
-  readonly dataRoot: string;
+  /** Official ZCode data root (`<data base>/.zcode`). */
+  readonly zcodeDataRoot: string;
   /** Aborted when the Host shuts down or the account is invalidated. */
   readonly signal: AbortSignal;
   readonly entitlement: StartPlanLiveEntitlement;
@@ -227,7 +368,7 @@ export type ProductionAuthIssuer = NonNullable<import("../store/lifecycle-gate.j
  * credential read succeeded; Coding Plan providers never enter this path. */
 export function createProductionStartPlanAuth(options: ProductionAuthIssuerOptions): ProductionAuthIssuer | null {
   const now = options.now ?? Date.now;
-  const initial = readOfficialStartPlanCredential(options.dataRoot);
+  const initial = readOfficialStartPlanCredential(options.zcodeDataRoot);
   if (!initial) return null;
   return {
     // Captured from the official credential at construction; issue() re-reads
@@ -235,9 +376,10 @@ export function createProductionStartPlanAuth(options: ProductionAuthIssuerOptio
     account: initial.account,
     signal: options.signal,
     async issue(binding, signal) {
-      const credential = readOfficialStartPlanCredential(options.dataRoot);
+      const credential = readOfficialStartPlanCredential(options.zcodeDataRoot);
       if (!credential) throw new Error("start_plan_credential_unavailable");
       if (binding.account !== credential.account) throw new Error("start_plan_account_identity_invalid");
+      if (credential.expiresAt !== null && credential.expiresAt <= now()) throw new Error("start_plan_credential_expired");
       if (signal.aborted) throw new Error("start_plan_issuer_cancelled");
       const entitlement = options.entitlement;
       const verdict = await entitlement.check({

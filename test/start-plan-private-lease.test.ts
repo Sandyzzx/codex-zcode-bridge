@@ -19,6 +19,17 @@ test("private lease consumes once and rejects every mismatched identity field", 
   assert.equal(count, 1);
 });
 
+test("a competing redeem does not revoke an in-flight lease", async () => {
+  let release!: (value: boolean) => void;
+  const lease = create();
+  assert.equal(lease.isActive(), true);
+  const first = lease.redeem(binding, () => new Promise<boolean>((resolve) => { release = resolve; }), async () => {}, new AbortController().signal);
+  assert.equal(lease.isActive(), false);
+  await assert.rejects(lease.redeem(binding, async () => true, async () => assert.fail(), new AbortController().signal));
+  release(true);
+  await first;
+});
+
 test("ACK loss and cancellation during write never permit retransmission", async () => {
   const lease = create(); const controller = new AbortController(); let calls = 0;
   await assert.rejects(lease.redeem(binding, async () => true, async () => { calls++; controller.abort(); throw new Error("ack lost"); }, controller.signal));

@@ -195,6 +195,7 @@ void frameLimitBytes; void captureChars;
       zcodeEntrypoint: entrypoint,
       providerBuiltinConfigFile: path.join(root, "builtin.json"),
       providerPersonalConfigFile: path.join(root, "personal.json"),
+      zcodeDataRoot: path.join(root, "zcode-data"),
       dataRoot: root,
     },
   };
@@ -410,6 +411,7 @@ input.on("close", () => process.exit(0));
           zcodeEntrypoint: entrypoint,
           providerBuiltinConfigFile: path.join(root, "builtin.json"),
           providerPersonalConfigFile: path.join(root, "personal.json"),
+          zcodeDataRoot: path.join(root, "zcode-data"),
           dataRoot: root,
         }),
       },

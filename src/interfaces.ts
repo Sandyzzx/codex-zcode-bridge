@@ -207,6 +207,8 @@ export interface ZCodeRuntimeConfig {
   readonly zcodeEntrypoint: string;
   readonly providerBuiltinConfigFile: string;
   readonly providerPersonalConfigFile: string;
+  /** Official ZCode data root (`<data base>/.zcode`), not the Bridge SQLite root. */
+  readonly zcodeDataRoot: string;
   readonly dataRoot: string;
 }
 

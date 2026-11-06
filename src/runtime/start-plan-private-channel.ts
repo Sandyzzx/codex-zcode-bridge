@@ -49,6 +49,12 @@ export async function servePrivateCredential(options: {
       }, () => { cleanup(); reject(new Error("private_auth_unavailable")); });
     });
     lease = resolved.lease;
+    // A competing Worker's immediate lease conflict is its own failure. It
+    // must not revoke the shared lease while the first delivery is in flight.
+    if (!lease.isActive()) {
+      lease = undefined;
+      throw new Error("private_auth_delivery_failed");
+    }
     await lease.redeem(request.binding as PrivateLeaseBinding, resolved.verifyWorker, async (jwt, expiresAt) => {
       await writePrivateFrame(options.response, { protocol: "start-plan-private-response-v1", requestId: request.requestId,
         binding: resolved.binding, jwt, expiresAt }, maximum, bounded.signal);

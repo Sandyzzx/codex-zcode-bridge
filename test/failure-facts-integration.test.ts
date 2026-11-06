@@ -213,6 +213,7 @@ input.on("line", (line) => {
       zcodeEntrypoint: entrypoint,
       providerBuiltinConfigFile: builtin,
       providerPersonalConfigFile: personal,
+      zcodeDataRoot: path.join(root, "zcode-data"),
       dataRoot: root,
     },
     cleanup: () => rm(root, { recursive: true, force: true }),

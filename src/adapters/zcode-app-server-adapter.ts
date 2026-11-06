@@ -578,6 +578,13 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
             type: "account_provider_sync_failed",
             summary: error instanceof Error ? error.message : "ZCode account provider synchronization failed",
           });
+          // Provider registration is a precondition for Start Plan. Its
+          // private runtime-auth callback happens only after send, so letting
+          // this RPC failure proceed could cross session/send without a
+          // registered provider. Coding Plan behavior remains unchanged.
+          if (task.model?.provider_id === "account:bigmodel-start-plan" && this.#resolveStartPlanRuntimeAuth) {
+            throw new BridgeError("provider_config_invalid", "ZCode rejected Start Plan provider registration before session creation.");
+          }
         }
       }
 
