@@ -27434,7 +27434,8 @@ var init_zcode_app_server_adapter = __esm({
           let scan = null;
           if (error62 && entry.client) scan = await this.#scanRootExitedCleanup(entry.client, entry, error62);
           if (expired) return timeoutOutcome;
-          const treeVerified = error62 ? scan?.clean === true : !!receipt || process.platform !== "win32" || !entry.child;
+          const noSpawn = entry.spawnFailure !== null && !entry.child?.pid;
+          const treeVerified = noSpawn || (error62 ? scan?.clean === true : !!receipt || process.platform !== "win32" || !entry.child);
           const cleanupVerified = treeVerified && !entry.browserCleanupError;
           const reason = entry.browserCleanupError ? "Managed browser cleanup could not be verified: " + entry.browserCleanupError : error62 instanceof Error ? error62.message : "Identity-bound Windows process-tree cleanup receipt was unavailable";
           const members2 = scan?.memberPids ?? this.#cleanupMemberPids(error62);

@@ -342,7 +342,9 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       // Release; do not append another lifecycle event or stop a new PID.
       return this.getStatus(taskId);
     }
-    if (isTerminal(projection.status as TaskStatus) && snapshot.result && operation && operation.phase === "cleanup_unverified") {
+    if (isTerminal(projection.status as TaskStatus) && operation && operation.phase === "cleanup_unverified") {
+      // Recovery verifies the committed Result binding in the Driver before
+      // CAS/Release; do not duplicate it with a snapshot truthiness check.
       const recoveryKey = queueKey(taskId, Number(attempt.attempt));
       const existingRecovery = this.#recoveryRuns.get(recoveryKey);
       if (existingRecovery) return existingRecovery;

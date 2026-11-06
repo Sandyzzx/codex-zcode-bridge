@@ -1055,7 +1055,11 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       let scan: { clean: boolean; memberPids: number[] } | null = null;
       if (error && entry.client) scan = await this.#scanRootExitedCleanup(entry.client, entry, error);
       if (expired) return timeoutOutcome;
-      const treeVerified = error ? scan?.clean === true : !!receipt || process.platform !== "win32" || !entry.child;
+      // An asynchronous spawn error before 'spawn', with no allocated PID,
+      // proves that this app-server child never existed. An unknown generation
+      // or an exited PID still requires the existing tree evidence.
+      const noSpawn = entry.spawnFailure !== null && !entry.child?.pid;
+      const treeVerified = noSpawn || (error ? scan?.clean === true : !!receipt || process.platform !== "win32" || !entry.child);
       const cleanupVerified = treeVerified && !entry.browserCleanupError;
       const reason = entry.browserCleanupError ? "Managed browser cleanup could not be verified: " + entry.browserCleanupError
         : error instanceof Error ? error.message : "Identity-bound Windows process-tree cleanup receipt was unavailable";

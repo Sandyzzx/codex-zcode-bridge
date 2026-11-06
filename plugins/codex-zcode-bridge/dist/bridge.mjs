@@ -11479,6 +11479,12 @@ async function openClaimOnlyDriver(options) {
                 }
               } catch (error2) {
                 if (error2 instanceof LifecycleGateError && error2.code === "result_commit_terminal") {
+                  try {
+                    workerExitCode = await waitForClose(child, workerCloseWaitMs, interactionPump);
+                  } catch (closeError) {
+                    stage("worker_close_unverified", { reason: errorCode(closeError) ?? "worker_stop_timeout" });
+                  }
+                  stage("worker_close", { pid: child.pid ?? null, exitCode: workerExitCode });
                 } else {
                   state = "result_rejected";
                   reason = errorCode(error2) ?? "worker_result_invalid";
@@ -12642,7 +12648,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
         if (isTerminal(projection.status) && operation?.phase === "released") {
           return this.getStatus(taskId);
         }
-        if (isTerminal(projection.status) && snapshot.result && operation && operation.phase === "cleanup_unverified") {
+        if (isTerminal(projection.status) && operation && operation.phase === "cleanup_unverified") {
           const recoveryKey = queueKey(taskId, Number(attempt.attempt));
           const existingRecovery = this.#recoveryRuns.get(recoveryKey);
           if (existingRecovery) return existingRecovery;

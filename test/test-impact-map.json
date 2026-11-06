@@ -105,6 +105,7 @@
       "description": "ZCode AppServer adapter, transport framing, provider failures, and failure-facts integration.",
       "paths": [
         "src/adapters/zcode-app-server-adapter.ts",
+        "src/runtime/task-timeout.ts",
         "src/runtime/errors.ts",
         "src/diagnostics/failure-facts.ts"
       ]
@@ -170,6 +171,7 @@
         "src/runtime/sqlite-install-config.ts",
         "src/runtime/sqlite-runtime-roster.ts",
         "src/store/lifecycle-gate.ts",
+        "src/runtime/task-timeout.ts",
         "src/store/json-authority-cutover.ts",
         "src/store/json-history-archive.ts",
         "src/store/json-writer-quiescence.ts",

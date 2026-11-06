@@ -2209,6 +2209,11 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
                   if (error instanceof LifecycleGateError && error.code === "result_commit_terminal") {
                     // The Store or commit verifier supplied the terminal result
                     // state above. Do not retry an Adapter or Result write.
+                    // A failed/uncertain ACK does not prevent bounded exit
+                    // observation. It never authorizes Cleanup or Release.
+                    try { workerExitCode = await waitForClose(child, workerCloseWaitMs, interactionPump); }
+                    catch (closeError) { stage("worker_close_unverified", { reason: errorCode(closeError) ?? "worker_stop_timeout" }); }
+                    stage("worker_close", { pid: child.pid ?? null, exitCode: workerExitCode });
                   } else {
                     state = "result_rejected";
                     reason = errorCode(error) ?? "worker_result_invalid";

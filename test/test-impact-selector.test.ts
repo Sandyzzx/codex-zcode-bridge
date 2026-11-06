@@ -59,6 +59,11 @@ test("Worker and protocol-adapter source changes select corresponding integratio
   assert.ok(adapter.selected_tests.some((entry) => entry.file === "test/zcode-app-server-adapter.test.ts"));
   assert.ok(adapter.selected_tests.some((entry) => entry.file === "test/session-frames.test.ts"));
   assert.equal(worker.selected_tests.some((entry) => entry.file === "test/batch2-performance.test.ts"), false);
+  const deadlines = selectAffectedTests({ changedFiles: ["src/runtime/task-timeout.ts"], map });
+  for (const file of ["test/task-timeout.test.ts", "test/zcode-app-server-adapter.test.ts", "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts"]) {
+    assert.ok(deadlines.selected_tests.some((entry) => entry.file === file), `shared deadline changes must select ${file}`);
+  }
+  assert.equal(deadlines.stress_mode, "STRESS_TEST_REQUIRED");
 });
 
 test("documentation-only changes never select stress or executable tests", () => {
