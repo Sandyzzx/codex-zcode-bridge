@@ -9,6 +9,7 @@
 
 - 生产只有 SQLite v14 Task Authority、一个 Lifecycle Manager 和 Worker→app-server 链。旧 JSON 调度/恢复锁及直接 Worker runner 已退役；禁止扫描旧 .tasks 或手工删除未知 Hold/WRITER_INTENT。
 - Capacity、永久 Claim 和路径互斥以 SQLite 持久事实为准。同/重叠执行路径保持占用；Result、进程退出、树 Cleanup 与 Release 分别核实。配置日志不是实际并发验收证据。
+- 当前主线不提供release-intent回收合同；本轮不引入按时间或单个 PID 回收锁/未知 Hold 的机制。模型设置与可选 Ledger 的文件锁仍按原所有者和进程身份合同处理。
 - 单次执行默认上限为 60 分钟；可在任务中设置 `timeout_ms`（60 秒至 4 小时），或用 `ZCODE_BRIDGE_TIMEOUT_MS` 设置用户默认值。超时后 Bridge 尝试终止该次进程树并保留 attempt 证据；清理未确认时不得宣称资源已释放。
 - 每个任务通过本机 ZCode app-server 运行。单用户本机 SQLite 使用固定受信任档案 `yolo`，ADR-019 后不再强制覆盖为 `build`。`yolo` 会放行普通工具操作并使用当前 Windows 账户权限；这不是提权，也不是沙箱。记录版本上已完成单次 43,014-byte Write 的真实权限审批往返实测；其他审批组合未据此认证。告知用户实际执行模式和当前账户权限边界。
 - `workspace` 是项目身份路径；`worktree_path`（如提供）是实际执行路径。Codex 决定是否准备 worktree，Bridge 只校验并使用所给路径。Git worktree 是工作区隔离，不是 OS 沙箱。allowed_paths / forbidden_paths 是 worker 指令；不得声称它们能强制阻止所有越界命令。
