@@ -1,9 +1,9 @@
 # 当前架构
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-04
-> Last verified: 2026-11-04，本轮候选在 Windows Node `v24.16.0` 的 `npm run test:full` 中 818 项、816 通过、0 失败、2 跳过；真实 Codex GUI 重启和生产 Task79 Recovery 未运行，独立 Reviewer 对合同闭合为 PARTIAL，见[简化报告](reports/sqlite-hold-simplification-2026-11-04.md)。
-> Verified against: 77dd5f14 + sqlite-hold-simplify-20261104 未提交候选；本文件仅核对本轮涉及范围。
+> Last updated: 2026-11-06
+> Last verified: 2026-11-06，仅核对 R3 执行/清理期限所有者、提交顺序和终态清理恢复；其余条目沿用历史核对范围，未重新认证。
+> Verified against: 4fc3d91731da38cc022afe80e474e510a70735ac（R3 本地候选，未发布）
 
 本文件描述当前代码，不是历史阶段的冻结设计。公共类型见 `src/interfaces.ts`，MCP schema 见 `src/mcp/schemas.ts`；共享边界见 [SHARED_CORE.md](SHARED_CORE.md)。
 
@@ -43,7 +43,9 @@ JSON TaskManager 用进程内 promise 队列以及同一 data root 下的 `.task
 
 SQLite Manager 启动时执行只读 Recovery。Recovery Hold 限定到 Operation；调度从 SQLite Recovery snapshot 读取仍占用的执行路径，同路径或重叠路径任务排队，其他路径可继续使用 Capacity。精确 Worker 身份为 `alive` 或暂时 `unknown` 时不转移执行权、不终止 Worker、不释放 Claim/Capacity；进程身份或数据库完整性无法读取时，才对无法安全解释的范围 fail closed。Manager 间的所有权围栏不把单个 Operation Hold 升级成 SQLite 根的全局停派。
 
-终态 `failed` 且 Operation 处于 `cleanup_unverified` 时，普通 `zcode_cancel` 可以启动 evidence-only Recovery。恢复读取原 Worker 精确身份并重新 probe；若仍存活，显式 cancel 可用该 PID/start fingerprint 调用现有 Windows 身份绑定树终止，再 probe 原身份并扫描 recorded-tree claimants。只有精确原身份已退出、扫描 clean、没有 unresolved interaction，才以 Operation revision CAS 记录新的 cleanup evidence 并释放 Capacity。它不创建新 Attempt、不改写失败 Result，也不把历史 `cleanup_unverified` 改名为原先的 `cleanup_verified`；未知、存活、扫描异常或 CAS 竞争仍保留该路径占用。启动 Recovery 不擅自停止 Worker。无法证明时可留给 ADR-018 的一次性行政兜底，不要求常规重启。
+已有终态 Result 且 Operation 处于 `cleanup_unverified` 时，普通 `zcode_cancel` 可以启动 evidence-only Recovery。恢复读取原 Worker 精确身份并重新 probe；若仍存活，显式 cancel 可用该 PID/start fingerprint 调用现有 Windows 身份绑定树终止，再 probe 原身份并扫描 recorded-tree claimants。只有精确原身份已退出、扫描 clean、没有 unresolved interaction，才以 Operation revision CAS 记录新的 cleanup evidence 并释放 Capacity。它不创建新 Attempt、不改写原 Result，也不把历史 `cleanup_unverified` 改名为原先的 `cleanup_verified`；未知、存活、扫描异常或 CAS 竞争仍保留该路径占用。启动 Recovery 不擅自停止 Worker。无法证明时可留给 ADR-018 的一次性行政兜底，不要求常规重启。
+
+R3（[ADR-027](decisions/ADR-027-execution-and-cleanup-deadlines.md)）将每次执行有效 timeout 的选择集中到 Manager，Worker 通过原私有 Task envelope 接收快照，Adapter 复用现有执行计时器。成功和错误清理共用一条 300s 有界路径，迟到 helper 不升级已发布的 cleanup snapshot。Manager 不再以 1h 封顶 Result 等待，也不在落库前无限等 Worker close/interaction pump；Result commit 与 Cleanup/Release 分离。Result 交付后退出/树证据不足时保留工作区，既有 zcode_cancel 可对已提交的所有终态 Result 做仅清理恢复，原身份、claimant scan 与 CAS 不变。Host 关闭只解除本地观察，不产生 cleanup evidence，不接管或重派未知 Worker。
 
 同一 data root 内，FIFO 队列按 Worker 上限和执行路径重叠规则启动 detached Worker。路径在派发决策到 Operation Claim 期间先占用，避免并发 pump 对同一路径同时派发；SQLite Admission 事务检查仍活动 Operation 的同/重叠路径，跨 Manager 竞争也只允许一个 Operation 预留路径。SQLite 原子 Claim 与 Attempt 目录永久 `execution.claim` 共同拒绝重复、旧 Attempt 和终态入场。Spawner 显式传 Attempt。Worker 提交校验当前 Attempt/非终态；Manager 的延迟身份写入只作用于仍 running 的同一 Operation。独立路径可以并发执行。
 

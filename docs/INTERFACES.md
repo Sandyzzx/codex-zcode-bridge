@@ -1,14 +1,9 @@
 # 当前接口与兼容边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-04
-<<<<<<< HEAD
-> Last verified: 2026-11-04，核对 Operation scoped Hold、`zcode_cancel` 参数/返回和 Provider 未接受证据边界（Windows Node `v24.16.0` 完整套件 818 项中 816 通过、0 失败、2 跳过；独立 Reviewer 对合同闭合为 PARTIAL，见[简化报告](reports/sqlite-hold-simplification-2026-11-04.md)）；同日核对 SQLite Attention Core、`zcode_events` Attention 扩展、只读 Thin Waiter、MCP schema 与默认事件 cursor（真实 Claude 与 Marketplace Host E2E 状态见 M2 集成报告）。
-> Verified against: 77dd5f14 + sqlite-hold-simplify-20261104 候选（ADR-024 scoped Hold）+ Attention 集成候选 2205654b；整合 Worktree 重核交叉点后以整合提交为准。
-=======
-> Last verified: 2026-11-04，核对 SQLite Attention Core、`zcode_events` Attention 扩展、只读 Thin Waiter、MCP schema 与默认事件 cursor；真实 Claude Code 与 Marketplace Host E2E 未在本轮完成。
-> Verified against: 77dd5f14ee61701ac15872192429ecd4f53e1323 + 本 Worktree Attention 集成候选
->>>>>>> 43b41579 (feat: unify attention waiting with thin waiter)
+> Last updated: 2026-11-06
+> Last verified: 2026-11-06，仅核对 R3 期限、Result/Cleanup 分离及终态清理恢复合同；其余条目沿用历史核对范围，未重新认证。
+> Verified against: 4fc3d91731da38cc022afe80e474e510a70735ac（R3 本地候选，未发布）
 
 准确类型与 schema 以 `src/interfaces.ts` 和 `src/mcp/schemas.ts` 为准。核心公共入口见 [SHARED_CORE.md](SHARED_CORE.md)。历史源码注释中的 V0.1/FROZEN 是沿革说明，不代表当前新增功能已经冻结。
 
@@ -30,13 +25,15 @@ node dist/wait-task.mjs --task <task_id> [--timeout-s S] [--poll-ms MS] [--data-
 
 TaskPackage 的五个数组必须存在，可为空。workspace 是绝对项目路径；worktree_path 是宿主已准备的执行目录。Bridge 不创建或删除 worktree。task_id 只能是最多 64 字符的字母数字、下划线和连字符。单 attempt timeout 范围 60,000–14,400,000 ms。
 
+ADR-027：Manager 每次执行解析有效时限（Task override > Host 持久化/环境默认 > 1h），将 60s–4h 的快照传给 Worker/Adapter。执行包括 resolver/启动/turn；turn 终结或错误/取消后撤销执行计时器，清理另用 300s 总预算。Claim 后执行 envelope 写入限 15s；Result 管道等待为有效执行时长 + 300s + 30s。完整、绑定且合法的单帧 Result 先提交，再以 15s 总预算等待 Worker close/interaction drain，并执行既有精确身份验证。晚退出、缺 proof 或清理超时保持 cleanup_unverified/Workspace 占用，不丢弃已提交 Result。没有 Result 时的等待超时仅产生持久诊断，不等于 Worker 退出或用户取消；活 Manager 保留句柄供显式身份绑定取消。Manager 重启后无 Result 的一般恢复仍未在 R3 实现。详见 [ADR-027](decisions/ADR-027-execution-and-cleanup-deadlines.md)。
+
 单用户本机 SQLite Host 的受信任执行档案使用 `yolo`，与 JSON 默认路径一样自动放行工作区内的普通读取、编辑、构建、测试和任务范围内清理。配置文件 `trusted-local-policy.json`、`workspace_roots` 和项目登记不是使用前提。Post-Claim Worker 仍须通过精确 Host policy snapshot、Workspace、Claim 和进程身份握手；TaskPackage、prompt 或 Skill 不能自行产生或提升该授权。Push、Merge、Tag、Release、生产 Authority 切换、任务范围外删除、凭据修改和真实生产任务数据操作保留为用户决策。
 
 SQLite startup Recovery 与调度按 Operation 和执行路径隔离。精确 `alive` 或临时 `unknown` Worker 不转移执行权，也不释放其 Claim/Capacity；同一路径及重叠路径保持占用并排队，其他路径可继续派发。数据库根损坏或一致性无法解释时仍 fail closed。客户端不得把一次 transient Manager fence 当成 Worker 已退出、任务已取消或资源已释放。
 
 执行路径在 SQLite Admission 事务中按活动 Operation 检查，覆盖不同 Bridge Manager 同时尝试同一或重叠目录的竞态。输掉 Admission 的 Attempt 保持 `queued`，不 Spawn；路径释放后由调度器重新尝试。此约束不改变公开 Task 状态或 MCP schema。
 
-`failed` Task 对应 `cleanup_unverified` Operation 时，`zcode_cancel` 可执行仅验证清理的恢复：不重放 prompt、不创建 Attempt、不覆盖失败 Result。显式 cancel 可以对仍存活的原 Worker 使用已记录的精确 PID/start fingerprint 调用身份绑定终止，并重新 probe。仅当原身份已退出、recorded-tree claimant scan clean、无未解决 interaction 且 Operation revision CAS 成功时，才记录本次新 cleanup evidence 并释放容量。未知、仍存活、证据扫描失败或并发 CAS 竞争都保留该执行路径占用。启动 Recovery 不终止存活 Worker。历史 cleanup failure 与 Attempt 事件保持可审计。
+已持久化终态 Result（completed/failed/cancelled/waiting_for_master）的 Task 对应 `cleanup_unverified` Operation 时，`zcode_cancel` 可执行仅验证清理的恢复：不重放 prompt、不创建 Attempt、不覆盖原 Result。显式 cancel 可以对仍存活的原 Worker 使用已记录的精确 PID/start fingerprint 调用身份绑定终止，并重新 probe。仅当原身份已退出、recorded-tree claimant scan clean、无未解决 interaction 且 Operation revision CAS 成功时，才记录本次新 cleanup evidence 并释放容量。未知、仍存活、证据扫描失败或并发 CAS 竞争都保留该执行路径占用。启动 Recovery 不终止存活 Worker。历史 cleanup failure 与 Attempt 事件保持可审计。
 
 当前 app-server 不提供可验证的 Provider 未接受标记；`turn.failed` 中的 `retryable` 或 `attribution.statusCode` 单独不足以证明请求未被接受。因此 HTTP 429、5xx、网络超时、连接重置和 DNS 错误均不自动重发，避免重复执行。若未来协议提供可信的未接受证据，才可在同一 Worker/Attempt 内有限重试，并遵守有界 `Retry-After`；已观察 `turn.started` 后始终不重试。401/403、额度不足、无效请求和其他错误以普通失败 Result 通知 Master。模型请求失败本身不设置全局 Hold；清理失败单独决定原执行路径是否仍被占用。
 

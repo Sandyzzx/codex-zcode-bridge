@@ -7,7 +7,7 @@
 
 ## 决策
 
-Manager 在每次执行前使用现有 resolver 解析一次 task override / Host 持久化环境 / 1h 默认，保持 60s–4h。只在私有执行 envelope 的 Task 副本填入有效 timeout_ms，不改持久 Task、MCP schema、Result 32 MiB 或 SQLite v14。Worker 使用该快照，不重新选择默认期限。
+Manager 在每次执行前使用现有 resolver 解析一次 task override / Host 持久化环境 / 1h 默认，保持 60s–4h。只在私有执行 envelope 的 Task 副本填入有效 timeout_ms，不改持久 Task、MCP schema、Result 32 MiB 或 SQLite v14。Worker 使用该快照，不重新选择默认期限。Bootstrap/身份握手/Claim 在执行 envelope 交付之前，保留既有 Launch 协议期限，不计入 Adapter 的执行预算，也不改写 R4 的失败分类。
 
 Adapter 的执行计时器从执行初始化开始，包含 resolver、启动和 turn；正常终结或错误/取消确定后立即撤销。RPC、身份探针等局部期限仍保留各自职责，但不能让初始化无限等待执行取消。清理复用原来的 browser close、身份绑定树终止及 claimant scan，统一由 Adapter 的一个独立 **300s** 总预算约束，正常/失败共享同一路径，不额外增加执行 watchdog。该预算容纳现有 120s helper 会话及回退/扫描、browser close 等阶段；没有放宽底层身份验证或 helper 上限。耗尽只表示 cleanup unverified，不能表示树已消失。迟到清理不能回写已发布的 Result 或自动释放占用。
 
@@ -15,7 +15,7 @@ Claim 后私有执行 envelope 的写入单独限 **15s**，防止 Worker 不读
 
 Manager 的完整 Result 管道读取预算为 **有效执行时长 + 300s 清理 + 30s 交付余量**，不再封顶 1h。执行预算从 Adapter 开始，Manager 的等待从交付执行 envelope 后开始；交付余量覆盖 Worker 初始化及编码/管道差异，并非新的执行时间。没有完整帧则保留 R2 的持久提交失败诊断及 Claim/Workspace 占用，不重派、不伪造 Result、不把基础设施超时写成用户取消。
 
-完整单帧 EOF、绑定/Claim/Result 合同通过后即可提交 Result；Worker 退出属于 Cleanup 的前置证据，不能作为丢弃合法 Result 的条件。提交后 Worker close 与 interaction pump drain 共用 **15s**，再用现有 **5s** 精确身份探针验证；未退出/非零退出/未知身份/缺 Adapter proof 都持久记录 cleanup_unverified 并保留占用。Result 已提交并不等于 Cleanup 或 Release。
+完整单帧 EOF、绑定/Claim/Result 合同通过后即可提交 Result；Worker 退出属于 Cleanup 的前置证据，不能作为丢弃合法 Result 的条件。提交后 Worker close 与 interaction pump drain 共用 **15s**，再用现有 **5s** 精确身份探针验证；未退出/非零退出/未知身份/缺 Adapter proof 都持久记录 cleanup_unverified 并保留占用。Result 已提交并不等于 Cleanup 或 Release。Store 拒写或 ACK 不明时，仍可在同一 15s 预算内观察 Worker close 并保留退出诊断；这不授权 Cleanup/Release，也不改变只读对账和占用围栏。
 
 Manager 的有界等待结束后，仍存活 Worker 的现有内存 handle 保留到实际 close，以支持显式身份绑定取消；不会继续无限 await interaction pump。Host 关闭只关闭本地观察通道和 Store，不将失去 IPC 当作清理成功。重启继续遵守现有 Recovery：活/未知不重派，已提交 Result 可按原身份/树证据做仅清理恢复；无 Result 的一般结案仍是 R5，不在本轮实现。
 

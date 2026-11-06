@@ -1,11 +1,19 @@
 # ZCode 运行配置边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-04
-> Last verified: 2026-11-04，核对了 Windows 进程身份探针、PowerShell 启动路径及 Worker 环境预检；其余条目沿用 2026-11-03 核对范围（路径发现合同与 PowerShell `-PrintPathDiscovery` 一致性测试），Fresh Bootstrap 条款仍为静态复核。
-> Verified against: 879568c211bac6233817acc90923e23d7861ca79 + 21ffa7581aac7f3cc6cc9ef1234b1d896864df96
+> Last updated: 2026-11-06
+> Last verified: 2026-11-06，仅核对 R3 任务期限解析、阶段预算及 R2 容量保持边界；其余条目沿用历史核对范围，未重新认证。
+> Verified against: 4fc3d91731da38cc022afe80e474e510a70735ac（R3 本地候选，未发布）
 
 当前生产路径是 `node zcode.cjs app-server --stdio`，不是历史 CLI `--prompt --json`。解析入口为 `NodeRuntimeResolver`，配置项与用户设置方法见仓库 README。
+
+## 执行与清理期限（ADR-027）
+
+SQLite Manager 在派发每个 Attempt 前读取该 Host 的持久 runtime environment；`timeout_ms` 显式值优先，其次 `ZCODE_BRIDGE_TIMEOUT_MS`，无有效默认值时用 3,600,000 ms。范围保持 60,000–14,400,000 ms。有效值只写私有 Task 副本，不改公开持久 Task。Worker Adapter 使用同一快照，不因环境变化重新选期限。
+
+执行计时包含 runtime resolver、app-server 启动和 turn，到终结/错误/取消即停止。Adapter 清理总预算固定 300,000 ms；已有 Windows helper/身份验证期限不放宽，不增加用户配置。Manager 的私有执行写入限 15,000 ms；Result 等待为 execution + 330,000 ms；提交后的 close 与 interaction drain 共用 15,000 ms，再用现有 5,000 ms 身份探针。Host shutdown 继续独立使用原 60,000 ms 等待上限；不能证明原活跃任务 Cleanup/Release 时显式失败并保留所有权，不将它复用为任务执行期限。JS 定时器是协作式期限，不是 OS 硬实时保证。
+
+Cleanup 超时只发布 unverified；迟到确认不会自动改写 Result 或释放 Workspace。执行 timeout 可形成 failed/timeout Result；清理未证实则仍保留占用。Result 已提交时可显式调用 zcode_cancel 仅清理原世代；Result 未到的超时保留 running 和诊断，禁止假定未执行并重派。Manager 退出/重启不放宽这些证据要求。R2 的 32 MiB/v14 不变，Host 大 Result 读取限制按 Owner 决定延后。
 
 ## SQLite v13 → v14 显式升级（ADR-026）
 

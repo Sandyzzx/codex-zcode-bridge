@@ -1,7 +1,9 @@
 # 文档索引 / Documentation
 
 > Status: AUTHORITATIVE（仅指本索引）
-> Last updated: 2026-11-04
+> Last updated: 2026-11-06
+> Last verified: 2026-11-06，仅核对 R3 期限文档与 ADR-026/027 路由；其余条目未重核
+> Verified against: 4fc3d91731da38cc022afe80e474e510a70735ac（R3 本地候选）
 
 英文使用者从 [README.md](../README.md) 开始。技术文档为中文。本文是文档路由：先看状态等级，再按读者路径选文档。
 
@@ -49,10 +51,10 @@ English readers start at [README.md](../README.md). This index is bilingual; the
 | [README.md](../README.md) | en | 2026-10-05 | 未记录 |
 | [README.zh-CN.md](../README.zh-CN.md) | zh | 2026-10-03 | 未记录 |
 | [PROJECT_STATE.md](PROJECT_STATE.md) | zh | 2026-10-18 | 部分核对；详见文档顶部 |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | zh | 2026-10-18 | 部分核对；详见文档顶部 |
-| [INTERFACES.md](INTERFACES.md) | zh | 2026-10-14 | 部分核对；详见文档顶部 |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | zh | 2026-11-06 | 2026-11-06，仅 R3 期限/清理范围 |
+| [INTERFACES.md](INTERFACES.md) | zh | 2026-11-06 | 2026-11-06，仅 R3 期限/清理范围 |
 | [SHARED_CORE.md](SHARED_CORE.md) | zh | 2026-10-06 | 未记录 |
-| [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md) | zh | 2026-10-14 | 2026-10-08，本地配置/假运行时 |
+| [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md) | zh | 2026-11-06 | 2026-11-06，仅 R3 期限/清理范围 |
 | [plugins/codex-zcode-bridge/README.md](../plugins/codex-zcode-bridge/README.md) | zh | 2026-10-03 | 未记录 |
 | [plugins/codex-zcode-bridge/SECURITY.md](../plugins/codex-zcode-bridge/SECURITY.md) | zh + en | 2026-10-03 | 未记录 |
 | [plugins/codex-zcode-bridge/skills/zcode-bridge/SKILL.md](../plugins/codex-zcode-bridge/skills/zcode-bridge/SKILL.md) | zh | 2026-10-08 | 2026-10-08，本地源码/合同 |
@@ -77,6 +79,8 @@ English readers start at [README.md](../README.md). This index is bilingual; the
 | [ADR-018](decisions/ADR-018-administrative-abandonment-of-cleanup-incomplete-hold.md) | 2026-11-01 | DECISION：证据绑定的一次性 `admin_abandoned` Hold 恢复 |
 | [ADR-019](decisions/ADR-019-local-trust-and-recovery-fence.md) | 2026-11-02 | DECISION：单用户本机 `yolo` 执行档案与 Recovery Manager 所有权围栏 |
 | [ADR-024](decisions/ADR-024-scoped-sqlite-hold-and-local-cleanup-recovery.md) | 2026-11-04 | 候选分支决策：SQLite Hold 限制到 Operation/执行路径；本机 evidence-only Recovery |
+| [ADR-026](decisions/ADR-026-sqlite-result-contract.md) | 2026-11-05 | Owner 已批准：32 MiB Result、独立 envelope 余量与显式 v14 升级 |
+| [ADR-027](decisions/ADR-027-execution-and-cleanup-deadlines.md) | 2026-11-06 | R3 本地候选：执行/清理/交付期限与 Result 分离 |
 | [decisions/roadmap-decisions-2026-09-27.md](decisions/roadmap-decisions-2026-09-27.md) | 2026-09-27 | 路线图与决策讨论 |
 | [decisions/reliability-repair-plan-v2-2026-10-03.md](decisions/reliability-repair-plan-v2-2026-10-03.md) | 2026-10-03 | 可靠性修复计划，含未完成项 |
 
@@ -105,6 +109,7 @@ English readers start at [README.md](../README.md). This index is bilingual; the
 
 | 文档 | 说明 |
 |---|---|
+| [reports/sqlite-r3-deadlines-2026-11-06.md](reports/sqlite-r3-deadlines-2026-11-06.md) | R3 期限合同、真实 Windows 生命周期与最终验收证据 |
 | [reports/task-feedback-v0-1-implementation-2026-10-06.md](reports/task-feedback-v0-1-implementation-2026-10-06.md) | Task Feedback v0.1 的交付报告，一次性材料 |
 | [reports/2026-10-08-long-session-reliability.md](reports/2026-10-08-long-session-reliability.md) | 长会话故障证据、本地修复、验证与未运行边界 |
 | [reports/2026-10-17-filesystem-root-guards.md](reports/2026-10-17-filesystem-root-guards.md) | Windows 锁时序重试、teardown 容错与文件系统根守卫的证据、修复与边界 |
