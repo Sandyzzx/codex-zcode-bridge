@@ -6,6 +6,9 @@ import { createHash, randomUUID } from "node:crypto";
 import { closeSync, existsSync, fsyncSync, linkSync, lstatSync, openSync, readFileSync, readdirSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
+import { homedir } from "node:os";
+import { loadPersistedRuntimeEnvironment } from "../runtime/resolver.js";
+import { resolveTaskTimeout, resultWaitBudgetMs, WORKER_CLOSE_TIMEOUT_MS, EXECUTION_DELIVERY_TIMEOUT_MS } from "../runtime/task-timeout.js";
 import type { Readable } from "node:stream";
 import { createPlatformProbe, PROCESS_IDENTITY_VERSION, type ProcessIdentity, type ProcessProbe, type ProbeRequest, type ProbeVerdict } from "../runtime/process-probe.js";
 import { terminateProcessTree, verifyProcessTreeClaimantsClean } from "../adapters/process-spawn.js";
@@ -249,6 +252,9 @@ export interface ClaimOnlyDriverOptions {
   readonly processProbe?: ProcessProbe;
   /** Test-only shortening of the fixed Manager probe deadline; production uses 5 seconds. */
   readonly testProcessProbeTimeoutMs?: number;
+  /** Internal test seams: only shorten fixed production phase waits. */
+  readonly testResultWaitMs?: number;
+  readonly testWorkerCloseWaitMs?: number;
   readonly loadModules?: () => Promise<LifecycleCandidateModules>;
   /** Opaque capability created by the local stdio Host composition. */
   readonly trustedLocalContext?: TrustedLocalStdioContext;
@@ -1839,11 +1845,27 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
       interactionChannels.delete(key);
       return result;
     },
-    close: () => raw.close(),
+    close: () => {
+      // Closing this Host detaches observation; it is never cleanup evidence.
+      for (const { child } of activeWorkers.values()) {
+        for (const stream of child.stdio) stream?.destroy();
+        child.unref();
+      }
+      activeWorkers.clear();
+      raw.close();
+    },
     async run(input) {
       if (!Number.isSafeInteger(input.attempt) || input.attempt < 1) {
         throw new LifecycleGateError("attempt_invalid");
       }
+      const runtimeEnv = loadPersistedRuntimeEnvironment(process.env, homedir(), workerHostProfile);
+      const executionTimeoutMs = resolveTaskTimeout(input.task, runtimeEnv);
+      const executionTask = { ...input.task, timeout_ms: executionTimeoutMs };
+      const resultWaitMs = options.testResultWaitMs ?? resultWaitBudgetMs(executionTimeoutMs);
+      const workerCloseWaitMs = options.testWorkerCloseWaitMs ?? WORKER_CLOSE_TIMEOUT_MS;
+      if (!Number.isSafeInteger(resultWaitMs) || resultWaitMs < 1 || resultWaitMs > resultWaitBudgetMs(executionTimeoutMs)
+        || !Number.isSafeInteger(workerCloseWaitMs) || workerCloseWaitMs < 1 || workerCloseWaitMs > WORKER_CLOSE_TIMEOUT_MS) throw new LifecycleGateError("invalid_phase_test_budget");
+      let runFinished = false, workerClosed = false;
       let child: ClaimOnlyWorkerProcess | undefined;
       let operation: unknown = null;
       let task: unknown = null;
@@ -2008,11 +2030,15 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
           stopBoundary = "result";
           stage("claim_committed", { claim_id: claimId });
           activeWorkers.set(input.operationId, { child, input });
+          child.once("close", () => {
+            workerClosed = true;
+            if (runFinished && activeWorkers.get(input.operationId)?.child === child) activeWorkers.delete(input.operationId);
+          });
           // Task and execution configuration are sent only after the durable
           // Claim. Production always selects the real ZCode Adapter. The fake
           // path requires this internal test-only capability and is never
           // selected by the Host's normal configuration.
-          await sendDecision(child, "claim_committed", {
+          try { await sendDecision(child, "claim_committed", {
             protocol: "bridge-sqlite-execution-envelope-v1",
             operation_id: input.operationId,
             task_id: input.task.task_id,
@@ -2022,12 +2048,16 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
             policy_snapshot_digest: policySnapshot.policy_snapshot_digest,
             execution_profile_id: policySnapshot.execution_profile_id,
             adapter_mode: options.testOnlyFakeAdapter ? "test_fake" : "zcode_app_server",
-            task: input.task,
+            task: executionTask,
             host_profile: workerHostProfile,
             continuation: input.continuation ?? null,
             previous_result: input.previousResult ?? null,
-          });
-          stage("claim_continue_sent", { claim_id: claimId });
+          }); } catch (error) {
+            state = "result_rejected";
+            reason = errorCode(error) ?? "private_execution_delivery_failed";
+            throw error;
+          }
+          stage("claim_continue_sent", { claim_id: claimId, execution_timeout_ms: executionTimeoutMs, result_wait_ms: resultWaitMs });
 
           let interactionPump: Promise<void> | undefined;
           if (options.enableSyntheticInteractionChannel || !options.testOnlyFakeAdapter) {
@@ -2072,7 +2102,6 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
           let rawResult: unknown;
           try {
             stage("worker_result_frame_read_start");
-            const resultWaitMs = Math.min(60 * 60_000, input.task.timeout_ms ?? 60 * 60_000) + 30_000;
             rawResult = await readJsonLine(child.resultChannel, MAX_WORKER_RESULT_FRAME_BYTES + 1, resultWaitMs);
             stage("worker_result_frame_read_complete");
           } catch (error) {
@@ -2081,18 +2110,11 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
             stage("worker_result_unavailable", { reason });
           }
 
-          workerExitCode = await waitForClose(child, 15_000);
-          await interactionPump;
-          stage("worker_close", { pid: child.pid ?? null, exitCode: workerExitCode });
+
 
           const releaseResultFinalization = await takeResultFinalization();
           try {
             if (state !== "result_rejected") {
-              if (workerExitCode !== 0) {
-                state = "result_rejected";
-                reason = "worker_result_exit_unverified";
-                stage("worker_result_rejected", { reason, workerExitCode });
-              } else {
                 try {
                   const resultFrame = { ...validateWorkerResultFrame(rawResult, {
                     operation_id: input.operationId,
@@ -2163,6 +2185,10 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
                       state = "result_committed";
                       reason = "result_committed";
                       stage("result_projection_verified", { revision: commit.revision, status: resultStatus, result_digest: resultDigest });
+                      // The complete bound frame is durable before waiting for Worker shutdown.
+                      try { workerExitCode = await waitForClose(child, workerCloseWaitMs, interactionPump); }
+                      catch (error) { stage("worker_close_unverified", { reason: errorCode(error) ?? "worker_stop_timeout" }); }
+                      stage("worker_close", { pid: child.pid ?? null, exitCode: workerExitCode });
                       cleanupState = await finalizeClaimedWorkerCleanup(port, input, generation, claimId, probe, processProbeTimeoutMs, workerExitCode,
                         executionCleanup, executionCleanup ? "adapter_verified" : "adapter_unverified",
                         (name, detail) => stage(name, detail));
@@ -2189,7 +2215,6 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
                     stage("worker_result_rejected", { reason });
                   }
                 }
-              }
             }
           } finally { releaseResultFinalization(); }
         }
@@ -2198,7 +2223,10 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
         else if (state === "result_outcome_unknown") reason = errorCode(error) ?? reason;
         else reason = errorCode(error) ?? reason;
         if (child && workerExitCode === null) {
-          try { await rejectChild(child); workerExitCode = await waitForClose(child, 5_000); } catch { /* remain unknown and retain the claim/intent */ }
+          try {
+            if (activeWorkers.get(input.operationId)?.child !== child) await rejectChild(child);
+            workerExitCode = await waitForClose(child, workerCloseWaitMs);
+          } catch { /* keep the known handle and durable occupancy; never re-dispatch */ }
         }
       } finally {
         if (state === "result_rejected") {
@@ -2234,7 +2262,8 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
           }
         }
         const active = activeWorkers.get(input.operationId);
-        if (active?.child === child) activeWorkers.delete(input.operationId);
+        runFinished = true;
+        if (active?.child === child && workerClosed) activeWorkers.delete(input.operationId);
         try {
           operation = port.readOperation(input.operationId);
           task = port.readTaskProjection(input.task.task_id);
@@ -2431,8 +2460,12 @@ async function sendDecision(
   const frame = Buffer.from(`${JSON.stringify({ protocol: "bridge-claim-decision-v1", state, ...(execution ? { execution } : {}) })}\n`, "utf8");
   if (frame.byteLength > 1_100_000) throw new LifecycleGateError("private_execution_envelope_too_large");
   await new Promise<void>((resolve, reject) => {
-    channel.once("error", reject);
-    channel.once("finish", resolve);
+    const timer = setTimeout(() => {
+      channel.destroy();
+      reject(new LifecycleGateError("private_execution_delivery_timeout"));
+    }, EXECUTION_DELIVERY_TIMEOUT_MS);
+    channel.once("error", error => { clearTimeout(timer); reject(error); });
+    channel.once("finish", () => { clearTimeout(timer); resolve(); });
     channel.end(frame);
   });
 }
@@ -2484,13 +2517,20 @@ async function readJsonLine(stream: Readable | null, limit: number, timeoutMs: n
   });
 }
 
-async function waitForClose(child: ClaimOnlyWorkerProcess, timeoutMs: number): Promise<number | null> {
-  if (child.exitCode !== null) return child.exitCode;
-  return await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => { child.removeListener("close", onClose); reject(new LifecycleGateError("worker_stop_timeout")); }, timeoutMs);
-    const onClose = (code: number | null): void => { clearTimeout(timer); resolve(code); };
-    child.once("close", onClose);
-  });
+async function waitForClose(child: ClaimOnlyWorkerProcess, timeoutMs: number, drain?: Promise<void>): Promise<number | null> {
+  let timer: NodeJS.Timeout | undefined;
+  let onClose: ((code: number | null) => void) | undefined;
+  const closed = child.exitCode !== null || child.signalCode !== null ? Promise.resolve(child.exitCode)
+    : new Promise<number | null>(resolve => { onClose = resolve; child.once("close", onClose); });
+  try {
+    return await Promise.race([
+      Promise.all([closed, drain]).then(([code]) => code),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new LifecycleGateError("worker_stop_timeout")), timeoutMs); }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (onClose) child.removeListener("close", onClose);
+  }
 }
 
 async function probeWithDeadline(

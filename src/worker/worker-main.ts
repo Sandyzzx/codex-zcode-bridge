@@ -336,6 +336,10 @@ async function runZCodeAdapter(
   let failure: { code: string; message: string } | null = null;
   const adapter = new ZCodeAppServerAdapter({
     host: execution.host_profile,
+    // Manager resolved this attempt's effective budget before dispatch.
+    timeoutMs: execution.task.timeout_ms,
+    // Preserve cleanup evidence on an execution error as well as success.
+    onOutcomeCheckpoint: (checkpoint) => { outcome = checkpoint; },
     executionProfileId: execution.execution_profile_id,
     onEvent: (event) => {
       // Bounded lifecycle evidence without request payloads. This distinguishes

@@ -41,7 +41,7 @@ interface FakeRuntimeFixture {
   readonly zcodeHomeV2: string;
 }
 
-function writeFakeRuntime(name: string, variant: "success" | "failure" | "stderr-flood" | "large-result"): FakeRuntimeFixture {
+function writeFakeRuntime(name: string, variant: "success" | "failure" | "stderr-flood" | "large-result" | "deadline-success" | "deadline-hang"): FakeRuntimeFixture {
   const root = path.join(fixtureRoot, name);
   mkdirSync(root, { recursive: true });
   mkdirSync(path.join(root, ".zcode", "v2"), { recursive: true });
@@ -106,7 +106,8 @@ function writeFakeRuntime(name: string, variant: "success" | "failure" | "stderr
     `    process.stdout.write(JSON.stringify({ id: message.id, result: {} }) + "\\n");`,
     `  } else if (message.method === "session/send") {`,
     `    process.stdout.write(JSON.stringify({ id: message.id, result: {} }) + "\\n");`,
-    `    if (${variant !== "failure"} && !interactionSent) {`,
+    `    if (${variant === "deadline-hang"}) return;`,
+    `    if (${variant !== "failure" && !variant.startsWith("deadline-")} && !interactionSent) {`,
     `      interactionSent = true;`,
     `      for (const rpcId of ["interaction-rpc-1", "interaction-rpc-2"]) {`,
     `        process.stdout.write(JSON.stringify({ id: rpcId, method: "interaction/requestPermission", params: { requestId: "permission-1", sessionId, toolCallId: "call-1", toolName: "Bash", reason: "Run the synthetic build command", input: { command: "npm run build" }, options: [{ kind: "allow_once" }, { kind: "deny" }] } }) + "\\n");`,
@@ -204,8 +205,9 @@ async function waitForInteractionRequest(client: Client, taskId: string): Promis
 
 async function withRealAdapterMcp(
   run: (client: Client, manager: BridgeTaskManager, dataRoot: string, workspace: string, runtime: FakeRuntimeFixture) => Promise<void>,
-  options: { readonly runtimeVariant?: "success" | "failure" | "stderr-flood" | "large-result"; readonly preserveFixtureOnFailure?: boolean;
+  options: { readonly runtimeVariant?: "success" | "failure" | "stderr-flood" | "large-result" | "deadline-success" | "deadline-hang"; readonly preserveFixtureOnFailure?: boolean;
     readonly workerOverride?: string; readonly testOnlyFakeAdapter?: true;
+    readonly resultWaitMs?: number; readonly workerCloseWaitMs?: number;
     readonly resultFault?: "commit_ack_lost" | "after_projection";
     readonly stderrCollector?: { readonly lines: string[] }; readonly lifecycleCollector?: { readonly lines: string[] } } = {},
 ): Promise<void> {
@@ -251,6 +253,8 @@ async function withRealAdapterMcp(
       authority = await SqliteLifecycleMcpAuthority.create({
         dataRoot,
         workerEntryPath: options.workerOverride ?? workerEntryPath,
+        ...(options.resultWaitMs ? {testResultWaitMs:options.resultWaitMs} : {}),
+        ...(options.workerCloseWaitMs ? {testWorkerCloseWaitMs:options.workerCloseWaitMs} : {}),
         ...(options.testOnlyFakeAdapter ? { testOnlyFakeAdapter: true as const } : {}),
         ...(options.resultFault ? {loadModules:async()=>{
           const original=await loadLifecycleCandidateModules();
@@ -522,4 +526,136 @@ test("ADR-026 Manager distinguishes known rollback from lost COMMIT ACK without 
       }finally{store.close();}
     },{testOnlyFakeAdapter:true,resultFault:fault,lifecycleCollector:lifecycle});
   }
+});
+
+// Only test fixtures change data generation/timing; production Spawner, Adapter,
+// Manager, CAS, SQLite, process identity and cleanup implementation remain real.
+async function deadlineWorker(name: string, mode: 'budget'|'execution-timeout'|'late-cleanup'|'late-close'|'no-result'|'blocked-envelope'):Promise<string>{
+  mkdirSync(fixtureRoot,{recursive:true});const outfile=path.join(fixtureRoot,`r3-${name}.mjs`);
+  await build({entryPoints:[path.join(projectRoot,'src/worker/worker-main.ts')],outfile,bundle:true,platform:'node',format:'esm',target:'node24',packages:'external',logLevel:'silent',plugins:[{name:'r3-controlled-lifecycle',setup(b){
+    b.onLoad({filter:/worker-main\.ts$/},async args=>{
+      let source=readFileSync(args.path,'utf8').replaceAll('\r\n','\n');
+      if(mode==='budget')source=source.replace('return executeFakeResultAdapter(bootstrap as Parameters<typeof executeFakeResultAdapter>[0]);',`const frame=executeFakeResultAdapter(bootstrap as Parameters<typeof executeFakeResultAdapter>[0]);frame.result.summary='effective_timeout_ms='+String(execution.task.timeout_ms);return frame;`);
+      if(mode==='execution-timeout')source=source.replace('timeoutMs: execution.task.timeout_ms,','timeoutMs: 5000,');
+      if(mode==='late-cleanup'){
+        source=`import {terminateProcessTree as actualTerminate} from ${JSON.stringify(path.join(projectRoot,'src/adapters/process-spawn.ts'))};\n`+source;
+        source=source.replace('timeoutMs: execution.task.timeout_ms,',`timeoutMs: execution.task.timeout_ms,testCleanupTimeoutMs:100,terminateProcessTreeImpl:async(pid,options)=>{await new Promise(r=>setTimeout(r,1500));return actualTerminate(pid,options);},`);
+      }
+      if(mode==='late-close')source=source.replace('options.onStage?.("adapter result frame written");','options.onStage?.("adapter result frame written"); await new Promise(r=>setTimeout(r,10000));');
+      if(mode==='no-result')source=source.replace('options.onStage?.("adapter result frame prepared");','options.onStage?.("adapter result frame prepared"); await new Promise(r=>setTimeout(r,1000000));');
+      if(mode==='blocked-envelope')source=source.replace('  const decision = readPrivateFrame(5, 1_100_000);','  await new Promise(r=>setTimeout(r,1000000));\n  const decision = readPrivateFrame(5, 1_100_000);');
+      return {contents:source,loader:'ts',resolveDir:path.dirname(args.path)};
+    });
+  }}]});return outfile;
+}
+
+async function operationFor(dataRoot:string,taskId:string):Promise<Record<string,unknown>>{
+  const modules=await loadLifecycleCandidateModules();const store=modules.Store.open(dataRoot)!;
+  try{return store.readTaskLifecycle(taskId)!.operation as Record<string,unknown>;}finally{store.close();}
+}
+
+test('ADR-027 Manager and actual Worker share the environment default and four-hour Task override', {timeout:60000},async()=>{
+  const worker=await deadlineWorker('budget','budget'),before=process.env['ZCODE_BRIDGE_TIMEOUT_MS'];
+  process.env['ZCODE_BRIDGE_TIMEOUT_MS']='90000';
+  try{for(const override of [undefined,4*60*60_000]){
+    const lifecycle={lines:[] as string[]};
+    await withRealAdapterMcp(async(client,_manager,_dataRoot,workspace)=>{
+      const taskId=`r3-budget-${randomUUID()}`;
+      contentObject(await client.callTool({name:'zcode_task',arguments:{...syntheticTask(workspace,taskId),...(override?{timeout_ms:override}:{})}}));
+      await waitForTerminal(client,taskId,1);await waitForLifecycleEvent(client,taskId,'released');
+      const expected=override??90000;
+      assert.equal(contentObject(await client.callTool({name:'zcode_result',arguments:{task_id:taskId}})).summary,`effective_timeout_ms=${expected}`);
+      const sent=lifecycle.lines.find(line=>line.startsWith('[bridge-lifecycle] claim_continue_sent '));assert.ok(sent);
+      const detail=JSON.parse(sent.slice(sent.indexOf('{')));assert.equal(detail.execution_timeout_ms,expected);assert.equal(detail.result_wait_ms,expected+330000);
+    },{workerOverride:worker,testOnlyFakeAdapter:true,lifecycleCollector:lifecycle});
+  }}finally{if(before===undefined)delete process.env['ZCODE_BRIDGE_TIMEOUT_MS'];else process.env['ZCODE_BRIDGE_TIMEOUT_MS']=before;}
+});
+
+test('ADR-027 actual Worker execution timeout commits a timeout Result and releases only with real Windows cleanup proof', {timeout:90000},async()=>{
+  const worker=await deadlineWorker('timeout','execution-timeout');
+  await withRealAdapterMcp(async(client,_manager,dataRoot,workspace,runtime)=>{
+    const taskId=`r3-timeout-${randomUUID()}`;
+    contentObject(await client.callTool({name:'zcode_task',arguments:syntheticTask(workspace,taskId)}));
+    assert.equal((await waitForTerminal(client,taskId,1)).status,'failed');
+    await waitForLifecycleEvent(client,taskId,'released');
+    const result=contentObject(await client.callTool({name:'zcode_result',arguments:{task_id:taskId}}));
+    assert.equal(result.error_code,'timeout');assert.equal((await operationFor(dataRoot,taskId)).phase,'released');
+    const requests=readFileSync(runtime.requestLog,'utf8').trim().split('\n').map(line=>JSON.parse(line));
+    assert.equal(requests.filter(r=>r.method==='session/send').length,1);
+  },{workerOverride:worker,runtimeVariant:'deadline-hang'});
+});
+
+test('ADR-027 cleanup expiry persists a failed Result and late cleanup cannot silently release its Workspace', {timeout:90000},async()=>{
+  const worker=await deadlineWorker('cleanup','late-cleanup');
+  await withRealAdapterMcp(async(client,_manager,dataRoot,workspace)=>{
+    const taskId=`r3-cleanup-${randomUUID()}`;
+    contentObject(await client.callTool({name:'zcode_task',arguments:syntheticTask(workspace,taskId)}));
+    assert.equal((await waitForTerminal(client,taskId,1)).status,'failed');
+    await waitForLifecycleEvent(client,taskId,'cleanup_unverified');
+    const result=contentObject(await client.callTool({name:'zcode_result',arguments:{task_id:taskId}}));
+    assert.equal(result.error_code,'cleanup_failed');
+    const operation=await operationFor(dataRoot,taskId);assert.equal(operation.phase,'cleanup_unverified');
+    // Explicit evidence-only recovery can stop the exact live generation or
+    // prove that the delayed cleanup already finished; neither path re-executes.
+    contentObject(await client.callTool({name:'zcode_cancel',arguments:{task_id:taskId}}));
+    await waitForLifecycleEvent(client,taskId,'released');
+    assert.deepEqual(contentObject(await client.callTool({name:'zcode_result',arguments:{task_id:taskId}})),result);
+  },{workerOverride:worker,runtimeVariant:'deadline-success',workerCloseWaitMs:100});
+});
+
+test('ADR-027 Result survives a late Worker close and Manager restart; completed Result allows cleanup-only cancel', {timeout:90000},async()=>{
+  const worker=await deadlineWorker('close','late-close');
+  await withRealAdapterMcp(async(client,manager,dataRoot,workspace)=>{
+    const taskId=`r3-close-${randomUUID()}`;
+    contentObject(await client.callTool({name:'zcode_task',arguments:syntheticTask(workspace,taskId)}));
+    await waitForTerminal(client,taskId,1);await waitForLifecycleEvent(client,taskId,'cleanup_unverified');
+    const result=contentObject(await client.callTool({name:'zcode_result',arguments:{task_id:taskId}}));assert.equal(result.status,'completed');
+    assert.equal((await operationFor(dataRoot,taskId)).phase,'cleanup_unverified');
+    await manager.shutdown();
+    const host={name:'mvp-real-adapter-test',settingsDirectory:path.join(path.dirname(dataRoot),'settings')};
+    const authority=await SqliteLifecycleMcpAuthority.create({dataRoot,workerEntryPath:worker,bridgeEntryPath:fileURLToPath(import.meta.url),hostProfile:host,trustedLocalContext:createTrustedLocalCandidateContext(host),testOnlyFakeAdapter:true});
+    const restarted=new BridgeTaskManager({lifecycleAuthority:authority});
+    try{
+      assert.deepEqual(await restarted.getResult(taskId),result);
+      const recovered=await restarted.cancelTask(taskId);assert.equal(recovered.status,'completed');
+      assert.equal((await operationFor(dataRoot,taskId)).phase,'released');
+      assert.equal((await restarted.cancelTask(taskId)).status,'completed');
+      assert.deepEqual(await restarted.getResult(taskId),result);
+    }finally{await restarted.shutdown();}
+  },{workerOverride:worker,testOnlyFakeAdapter:true,workerCloseWaitMs:100});
+});
+
+test('ADR-027 Manager result deadline keeps the real claimed Worker cancellable instead of dropping its handle', {timeout:90000},async()=>{
+  const worker=await deadlineWorker('missing','no-result');
+  await withRealAdapterMcp(async(client,_manager,dataRoot,workspace)=>{
+    const taskId=`r3-no-result-${randomUUID()}`;
+    contentObject(await client.callTool({name:'zcode_task',arguments:syntheticTask(workspace,taskId)}));
+    const until=Date.now()+30000;let status:Record<string,unknown>={};
+    while(Date.now()<until){status=contentObject(await client.callTool({name:'zcode_status',arguments:{task_id:taskId}}));if(status.error_code==='private_report_timeout')break;await new Promise(r=>setTimeout(r,30));}
+    assert.equal(status.error_code,'private_report_timeout');assert.equal(status.status,'running');
+    assert.equal((await operationFor(dataRoot,taskId)).phase,'running');
+    contentObject(await client.callTool({name:'zcode_cancel',arguments:{task_id:taskId}}));
+    assert.equal((await waitForTerminal(client,taskId,1)).status,'cancelled');
+    await waitForLifecycleEvent(client,taskId,'released');
+  },{workerOverride:worker,testOnlyFakeAdapter:true,resultWaitMs:500});
+});
+
+test('ADR-027 blocked execution-envelope pipe expires visibly and retains the exact Worker for cancellation', {timeout:90000},async()=>{
+  const worker=await deadlineWorker('delivery','blocked-envelope');
+  const lifecycle={lines:[] as string[]};
+  await withRealAdapterMcp(async(client,_manager,dataRoot,workspace)=>{
+    const taskId=`r3-delivery-${randomUUID()}`;
+    // A valid Task below the existing 1.1 MB envelope cap exceeds the real
+    // Windows pipe buffer. The actual Worker reports identity but never reads fd5.
+    contentObject(await client.callTool({name:'zcode_task',arguments:{...syntheticTask(workspace,taskId),context:'x'.repeat(1_000_000)}}));
+    const until=Date.now()+45000;let status:Record<string,unknown>={};
+    while(Date.now()<until){status=contentObject(await client.callTool({name:'zcode_status',arguments:{task_id:taskId}}));if(status.error_code==='private_execution_delivery_timeout')break;await new Promise(r=>setTimeout(r,30));}
+    assert.equal(status.error_code,'private_execution_delivery_timeout');assert.equal(status.status,'running');
+    assert.equal((await operationFor(dataRoot,taskId)).phase,'running');
+    assert.equal(lifecycle.lines.filter(line=>line.startsWith('[bridge-lifecycle] claim_committed ')).length,1);
+    assert.equal(lifecycle.lines.filter(line=>line.startsWith('[bridge-lifecycle] claim_continue_sent ')).length,0);
+    contentObject(await client.callTool({name:'zcode_cancel',arguments:{task_id:taskId}}));
+    assert.equal((await waitForTerminal(client,taskId,1)).status,'cancelled');
+    await waitForLifecycleEvent(client,taskId,'released');
+  },{workerOverride:worker,testOnlyFakeAdapter:true,workerCloseWaitMs:100,lifecycleCollector:lifecycle});
 });

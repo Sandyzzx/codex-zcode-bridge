@@ -337,12 +337,12 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       return this.getStatus(taskId);
     }
     const operation = snapshot.operation ? asRecord(snapshot.operation) : null;
-    if (projection.status === "failed" && operation?.phase === "released") {
+    if (isTerminal(projection.status as TaskStatus) && operation?.phase === "released") {
       // A repeated recovery request is a read-only no-op after the durable
       // Release; do not append another lifecycle event or stop a new PID.
       return this.getStatus(taskId);
     }
-    if (projection.status === "failed" && operation && operation.phase === "cleanup_unverified") {
+    if (isTerminal(projection.status as TaskStatus) && snapshot.result && operation && operation.phase === "cleanup_unverified") {
       const recoveryKey = queueKey(taskId, Number(attempt.attempt));
       const existingRecovery = this.#recoveryRuns.get(recoveryKey);
       if (existingRecovery) return existingRecovery;
@@ -351,7 +351,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
           const latest = this.#readSnapshot(taskId);
           const latestProjection = asRecord(latest.projection);
           const latestOperation = latest.operation ? asRecord(latest.operation) : null;
-          return latestProjection.status === "failed" && latestOperation?.phase === "released"
+          return isTerminal(latestProjection.status as TaskStatus) && latestOperation?.phase === "released"
             ? this.getStatus(taskId)
             : null;
         };

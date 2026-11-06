@@ -14,6 +14,24 @@ var __export = (target, all) => {
     __defProp(target, name, { get: all[name], enumerable: true });
 };
 
+// src/runtime/errors.ts
+var BridgeError;
+var init_errors = __esm({
+  "src/runtime/errors.ts"() {
+    "use strict";
+    BridgeError = class extends Error {
+      code;
+      memberPids;
+      constructor(code, message, options) {
+        super(message, options);
+        this.name = "BridgeError";
+        this.code = code;
+        if (options?.memberPids?.length) this.memberPids = [...new Set(options.memberPids.filter((pid) => Number.isSafeInteger(pid) && pid > 0))];
+      }
+    };
+  }
+});
+
 // src/runtime/paths.ts
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -200,6 +218,355 @@ function validateHostProfile(host) {
 var init_profile = __esm({
   "src/host/profile.ts"() {
     "use strict";
+  }
+});
+
+// src/runtime/resolver.ts
+import { accessSync, existsSync as existsSync2, readFileSync as readFileSync2, statSync } from "node:fs";
+import { homedir as homedir2 } from "node:os";
+import path3 from "node:path";
+import { fileURLToPath } from "node:url";
+function loadPersistedRuntimeEnvironment(source, homeDir = homedir2(), host = codexHostProfile(homeDir)) {
+  validateHostProfile(host);
+  const settingsPaths = [host.settingsDirectory, ...host.legacySettingsDirectories ?? []].map((directory) => path3.join(directory, "runtime-config.json"));
+  const legacyDataRoot = source["ZCODE_BRIDGE_DATA_DIR"]?.trim();
+  if (legacyDataRoot && path3.isAbsolute(legacyDataRoot)) {
+    settingsPaths.push(path3.join(legacyDataRoot, "runtime-config.json"));
+  }
+  let parsed = null;
+  const seenPaths = /* @__PURE__ */ new Set();
+  for (const settingsPath of settingsPaths) {
+    const normalized = path3.resolve(settingsPath);
+    const identity = process.platform === "win32" ? normalized.toLocaleLowerCase("en-US") : normalized;
+    if (seenPaths.has(identity)) continue;
+    seenPaths.add(identity);
+    try {
+      if (statSync(normalized).size > 64 * 1024) throw new Error("runtime settings exceed 64 KB");
+      const candidate = JSON.parse(readFileSync2(normalized, "utf8"));
+      if (isPlainObject3(candidate)) {
+        parsed = candidate;
+        break;
+      }
+      throw new Error("runtime settings must be an object");
+    } catch (error2) {
+      if (error2.code === "ENOENT") continue;
+      throw new BridgeError("provider_config_invalid", `invalid Bridge runtime settings: ${normalized}`, { cause: error2 });
+    }
+  }
+  if (!parsed) return { ...source };
+  const env = { ...source };
+  for (const key of PERSISTED_RUNTIME_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(parsed, key)) continue;
+    const value = parsed[key];
+    if (typeof value === "string") env[key] = value.trim();
+    else if (value === null) env[key] = "";
+    else throw new BridgeError("provider_config_invalid", `Bridge runtime setting ${key} must be a string or null`);
+  }
+  return env;
+}
+function resolveZcodeHome(env) {
+  const configured = env["ZCODE_HOME"]?.trim();
+  if (!configured) return null;
+  if (!isAbsolutePathForPlatform(configured)) {
+    throw new BridgeError("provider_config_invalid", "ZCODE_HOME must be an absolute path");
+  }
+  const resolved = path3.normalize(configured);
+  if (path3.basename(resolved).toLowerCase() !== ".zcode") {
+    throw new BridgeError(
+      "provider_config_invalid",
+      "ZCODE_HOME must name a .zcode directory so app-server can use the same data root"
+    );
+  }
+  try {
+    if (!statSync(resolved).isDirectory()) {
+      throw new BridgeError("provider_config_invalid", `ZCODE_HOME is not a directory: ${resolved}`);
+    }
+  } catch (error2) {
+    if (error2 instanceof BridgeError) throw error2;
+    throw new BridgeError("provider_config_missing", `ZCODE_HOME directory does not exist: ${resolved}`);
+  }
+  return resolved;
+}
+function samePath(left, right) {
+  const resolvedLeft = path3.resolve(left);
+  const resolvedRight = path3.resolve(right);
+  return process.platform === "win32" ? resolvedLeft.toLowerCase() === resolvedRight.toLowerCase() : resolvedLeft === resolvedRight;
+}
+function isReadableFile(filePath) {
+  try {
+    if (!existsSync2(filePath) || !statSync(filePath).isFile()) return false;
+    accessSync(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function findPackageRoot(startDir) {
+  let current = startDir ?? path3.dirname(fileURLToPath(import.meta.url));
+  for (let depth = 0; depth < 10; depth++) {
+    if (existsSync2(path3.join(current, "package.json"))) {
+      return current;
+    }
+    const parent = path3.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  throw new Error(
+    `Cannot locate the Bridge package root (no package.json above ${startDir ?? "module directory"})`
+  );
+}
+function isPlainObject3(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function isNonEmptyCollection(value) {
+  if (Array.isArray(value)) return value.length > 0;
+  if (isPlainObject3(value)) return Object.keys(value).length > 0;
+  return false;
+}
+function errorText(error2) {
+  const message = error2 instanceof Error ? error2.message : String(error2);
+  return message.length > 300 ? `${message.slice(0, 300)}\u2026` : message;
+}
+var PERSISTED_RUNTIME_KEYS, NodeRuntimeResolver;
+var init_resolver = __esm({
+  "src/runtime/resolver.ts"() {
+    "use strict";
+    init_errors();
+    init_paths();
+    init_profile();
+    PERSISTED_RUNTIME_KEYS = [
+      "ZCODE_BRIDGE_NODE",
+      "ZCODE_BRIDGE_ZCODE_CJS",
+      "ZCODE_BRIDGE_DATA_DIR",
+      "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE",
+      "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE",
+      "ZCODE_HOME",
+      "ZCODE_DATA_BASE_DIR",
+      "ZCODE_WINDOWS_APP_INSTALL_DIR",
+      "ZCODE_BRIDGE_DEFAULT_PROVIDER_ID",
+      "ZCODE_BRIDGE_DEFAULT_MODEL_ID",
+      "ZCODE_BRIDGE_DEFAULT_REASONING_LEVEL",
+      "ZCODE_BRIDGE_MODE",
+      "ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS",
+      "ZCODE_BRIDGE_TIMEOUT_MS",
+      "ZCODE_BRIDGE_BROWSER_USE",
+      "ZCODE_BRIDGE_BROWSER_EXECUTABLE"
+    ];
+    NodeRuntimeResolver = class {
+      #env;
+      #homeDir;
+      #packageRoot;
+      #host;
+      constructor(options = {}) {
+        this.#env = options.env ?? process.env;
+        this.#homeDir = options.homeDir ?? homedir2();
+        this.#packageRoot = options.packageRoot ?? null;
+        this.#host = validateHostProfile(options.host ?? codexHostProfile(this.#homeDir));
+      }
+      async resolve() {
+        const env = loadPersistedRuntimeEnvironment(this.#env, this.#homeDir, this.#host);
+        const data = discoverZCodeData(env, { fallbackHomeDir: this.#homeDir });
+        const zcodeHome = resolveZcodeHome(env);
+        const explicitDataBaseDir = env["ZCODE_DATA_BASE_DIR"]?.trim() || null;
+        if (explicitDataBaseDir && !isAbsolutePathForPlatform(explicitDataBaseDir)) {
+          throw new BridgeError("provider_config_invalid", "ZCODE_DATA_BASE_DIR must be an absolute path");
+        }
+        if (zcodeHome && explicitDataBaseDir && !sameFileSystemPath(path3.dirname(zcodeHome), explicitDataBaseDir)) {
+          throw new BridgeError(
+            "provider_config_invalid",
+            `ZCODE_HOME (${zcodeHome}) and ZCODE_DATA_BASE_DIR (${explicitDataBaseDir}) conflict; ZCODE_HOME must name <ZCODE_DATA_BASE_DIR>/.zcode. Fix one of them instead of relying on silent selection.`
+          );
+        }
+        let nodeExecutable = "node";
+        const nodeOverride = env["ZCODE_BRIDGE_NODE"]?.trim();
+        if (nodeOverride) {
+          this.#assertReadableFile(
+            nodeOverride,
+            "ZCODE_BRIDGE_NODE is set but is not a readable file"
+          );
+          nodeExecutable = nodeOverride;
+        }
+        const builtinEnv = env["ZCODE_BUILTIN_PROVIDER_CONFIG_FILE"]?.trim() || null;
+        const personalEnv = env["ZCODE_PERSONAL_PROVIDER_CONFIG_FILE"]?.trim() || null;
+        let zcodeEntrypoint;
+        let explicitRuntime = false;
+        const entryOverride = env["ZCODE_BRIDGE_ZCODE_CJS"]?.trim();
+        if (entryOverride) {
+          this.#assertReadableFile(
+            entryOverride,
+            "ZCODE_BRIDGE_ZCODE_CJS is set but is not a readable file"
+          );
+          zcodeEntrypoint = entryOverride;
+          explicitRuntime = true;
+        } else {
+          const install = discoverZCodeInstall(env, { requireBuiltin: !builtinEnv });
+          if (!install.zcodeEntrypoint) {
+            throw new BridgeError(
+              "runtime_not_found",
+              `zcode.cjs${builtinEnv ? "" : " with a same-install zcode-builtin.json"} was not found; searched: ` + (install.candidates.map((candidate) => `${candidate.root} (runtime: ${candidate.runtimeExists}, builtin: ${candidate.builtinExists})`).join(", ") || "(no installation roots available)")
+            );
+          }
+          zcodeEntrypoint = install.zcodeEntrypoint;
+        }
+        let builtinConfigFile;
+        let personalConfigFile;
+        if (builtinEnv && personalEnv) {
+          this.#validateBuiltinConfig(builtinEnv);
+          this.#validatePersonalConfig(personalEnv);
+          builtinConfigFile = builtinEnv;
+          personalConfigFile = personalEnv;
+        } else {
+          if (builtinEnv) {
+            this.#validateBuiltinConfig(builtinEnv);
+            builtinConfigFile = builtinEnv;
+          } else if (explicitRuntime) {
+            const derived2 = builtinConfigForRuntime(zcodeEntrypoint);
+            if (!isReadableFile(derived2)) {
+              throw new BridgeError(
+                "provider_config_missing",
+                `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE is not set and the builtin config was not found next to the configured runtime; expected: ${derived2}`
+              );
+            }
+            this.#validateBuiltinConfig(derived2);
+            builtinConfigFile = derived2;
+          } else {
+            const install = discoverZCodeInstall(env, { requireBuiltin: true });
+            if (!install.builtinConfigFile) {
+              throw new BridgeError(
+                "provider_config_missing",
+                "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE is not set and no builtin provider config was found in the ZCode installation; searched: " + (install.candidates.map((candidate) => `${candidate.root} (runtime: ${candidate.runtimeExists}, builtin: ${candidate.builtinExists})`).join(", ") || "(no installation roots available)")
+              );
+            }
+            this.#validateBuiltinConfig(install.builtinConfigFile);
+            builtinConfigFile = install.builtinConfigFile;
+          }
+          if (personalEnv) {
+            this.#validatePersonalConfig(personalEnv);
+            personalConfigFile = personalEnv;
+          } else {
+            const candidates = zcodeHome ? [path3.join(zcodeHome, "v2", "provider_config.json")] : [
+              explicitDataBaseDir,
+              data.configuredDataBaseDir,
+              data.userHome
+            ].filter((base) => Boolean(base)).filter((base, index, values) => values.indexOf(base) === index).map((base) => path3.join(base, ".zcode", "v2", "provider_config.json"));
+            const existing = candidates.filter((candidate) => existsSync2(candidate));
+            if (existing.length === 0) {
+              throw new BridgeError(
+                "provider_config_missing",
+                "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE is not set and no personal provider config exists at any of: " + candidates.join(", ")
+              );
+            }
+            let accepted = null;
+            let lastError = null;
+            for (const candidate of existing) {
+              try {
+                this.#validatePersonalConfig(candidate);
+                accepted = candidate;
+                break;
+              } catch (error2) {
+                lastError = error2 instanceof Error ? error2.message : String(error2);
+              }
+            }
+            if (!accepted) {
+              throw new BridgeError(
+                "provider_config_invalid",
+                `No usable personal provider config among: ${existing.join(", ")}; last validation failure: ${lastError ?? "unknown"}`
+              );
+            }
+            personalConfigFile = accepted;
+          }
+        }
+        if (zcodeHome && !samePath(personalConfigFile, path3.join(zcodeHome, "v2", "provider_config.json"))) {
+          throw new BridgeError(
+            "provider_config_invalid",
+            `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE must be ZCODE_HOME/v2/provider_config.json (${zcodeHome})`
+          );
+        }
+        const dataOverride = env["ZCODE_BRIDGE_DATA_DIR"]?.trim();
+        let dataRoot;
+        if (dataOverride) {
+          if (!path3.isAbsolute(dataOverride)) {
+            throw new Error(
+              `ZCODE_BRIDGE_DATA_DIR must be an absolute path when set, got: ${dataOverride}`
+            );
+          }
+          dataRoot = path3.normalize(dataOverride);
+        } else {
+          dataRoot = this.#packageRoot ?? findPackageRoot();
+        }
+        return {
+          nodeExecutable,
+          zcodeEntrypoint,
+          providerBuiltinConfigFile: builtinConfigFile,
+          providerPersonalConfigFile: personalConfigFile,
+          dataRoot
+        };
+      }
+      #assertReadableFile(filePath, label) {
+        if (!isReadableFile(filePath)) {
+          throw new BridgeError("runtime_not_found", `${label}: ${filePath}`);
+        }
+      }
+      /**
+       * Structure validation only. The verified differential signal for the
+       * CLI-created stub is an empty providerRules map (see docs/ZCODE_RUNTIME.md);
+       * rejecting it implements "never silently select a known stub".
+       */
+      #validatePersonalConfig(filePath) {
+        const parsed = this.#readJsonConfig(filePath, "personal provider config");
+        const config2 = parsed["config"];
+        if (!isPlainObject3(config2)) {
+          throw new BridgeError(
+            "provider_config_invalid",
+            `Personal provider config has no config object: ${filePath}`
+          );
+        }
+        const providerConfigRules = config2["providerConfigRules"];
+        const rules = isPlainObject3(providerConfigRules) ? providerConfigRules["providerRules"] : void 0;
+        if (!isNonEmptyCollection(rules)) {
+          throw new BridgeError(
+            "provider_config_invalid",
+            `Personal provider config contains no provider rules (this matches the known CLI-created stub shape): ${filePath}`
+          );
+        }
+      }
+      #validateBuiltinConfig(filePath) {
+        const parsed = this.#readJsonConfig(filePath, "builtin provider config");
+        if (!isPlainObject3(parsed["config"])) {
+          throw new BridgeError(
+            "provider_config_invalid",
+            `Builtin provider config has no config object: ${filePath}`
+          );
+        }
+      }
+      #readJsonConfig(filePath, label) {
+        if (!isReadableFile(filePath)) {
+          throw new BridgeError("provider_config_missing", `${label} not found: ${filePath}`);
+        }
+        let text2;
+        try {
+          text2 = readFileSync2(filePath, "utf8");
+        } catch (error2) {
+          throw new BridgeError(
+            "provider_config_invalid",
+            `${label} is not readable: ${filePath} (${errorText(error2)})`
+          );
+        }
+        let parsed;
+        try {
+          parsed = JSON.parse(text2);
+        } catch (error2) {
+          throw new BridgeError(
+            "provider_config_invalid",
+            `${label} is not valid JSON: ${filePath}`
+          );
+        }
+        if (!isPlainObject3(parsed)) {
+          throw new BridgeError("provider_config_invalid", `${label} is not a JSON object: ${filePath}`);
+        }
+        return parsed;
+      }
+    };
   }
 });
 
@@ -2475,7 +2842,7 @@ var init_task_store = __esm({
 
 // src/manager/errors.ts
 var TaskManagerError;
-var init_errors = __esm({
+var init_errors2 = __esm({
   "src/manager/errors.ts"() {
     "use strict";
     TaskManagerError = class extends Error {
@@ -3978,6 +4345,40 @@ var init_process_spawn = __esm({
   }
 });
 
+// src/runtime/task-timeout.ts
+function resultWaitBudgetMs(executionTimeoutMs) {
+  return executionTimeoutMs + ADAPTER_CLEANUP_TIMEOUT_MS + RESULT_DELIVERY_GRACE_MS;
+}
+function resolveTaskTimeout(task, env) {
+  if (task.timeout_ms !== void 0) return validateTaskTimeout(task.timeout_ms);
+  const raw = env["ZCODE_BRIDGE_TIMEOUT_MS"]?.trim();
+  if (!raw) return DEFAULT_TASK_TIMEOUT_MS;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < MIN_TASK_TIMEOUT_MS || value > MAX_TASK_TIMEOUT_MS) {
+    return DEFAULT_TASK_TIMEOUT_MS;
+  }
+  return value;
+}
+function validateTaskTimeout(value) {
+  if (!Number.isSafeInteger(value) || value < MIN_TASK_TIMEOUT_MS || value > MAX_TASK_TIMEOUT_MS) {
+    throw new Error(`timeout_ms must be an integer from ${MIN_TASK_TIMEOUT_MS} to ${MAX_TASK_TIMEOUT_MS}`);
+  }
+  return value;
+}
+var DEFAULT_TASK_TIMEOUT_MS, MAX_TASK_TIMEOUT_MS, ADAPTER_CLEANUP_TIMEOUT_MS, RESULT_DELIVERY_GRACE_MS, WORKER_CLOSE_TIMEOUT_MS, EXECUTION_DELIVERY_TIMEOUT_MS, MIN_TASK_TIMEOUT_MS;
+var init_task_timeout = __esm({
+  "src/runtime/task-timeout.ts"() {
+    "use strict";
+    DEFAULT_TASK_TIMEOUT_MS = 60 * 60 * 1e3;
+    MAX_TASK_TIMEOUT_MS = 4 * 60 * 60 * 1e3;
+    ADAPTER_CLEANUP_TIMEOUT_MS = 3e5;
+    RESULT_DELIVERY_GRACE_MS = 3e4;
+    WORKER_CLOSE_TIMEOUT_MS = 15e3;
+    EXECUTION_DELIVERY_TIMEOUT_MS = 15e3;
+    MIN_TASK_TIMEOUT_MS = 60 * 1e3;
+  }
+});
+
 // src/observation/types.ts
 function judgeOptionsWith(overrides) {
   const merged = { ...DEFAULT_JUDGE_OPTIONS };
@@ -4209,7 +4610,7 @@ var TASK_STATUSES;
 var init_snapshot = __esm({
   "src/attention/snapshot.ts"() {
     "use strict";
-    init_errors();
+    init_errors2();
     TASK_STATUSES = /* @__PURE__ */ new Set([
       "queued",
       "running",
@@ -9338,6 +9739,7 @@ import { createHash as createHash15, randomUUID as randomUUID6 } from "node:cryp
 import { closeSync as closeSync6, existsSync as existsSync13, fsyncSync as fsyncSync4, linkSync, lstatSync as lstatSync3, openSync as openSync6, readFileSync as readFileSync13, readdirSync as readdirSync4, realpathSync as realpathSync6, unlinkSync as unlinkSync3, writeFileSync as writeFileSync7 } from "node:fs";
 import { spawn as spawn5 } from "node:child_process";
 import path18 from "node:path";
+import { homedir as homedir4 } from "node:os";
 function recoveryStopKey(dataRoot, databaseFileName, operationId) {
   return `${path18.resolve(dataRoot)}\0${databaseFileName ?? "operations.sqlite3"}\0${operationId}`;
 }
@@ -10718,11 +11120,25 @@ async function openClaimOnlyDriver(options) {
       interactionChannels.delete(key);
       return result;
     },
-    close: () => raw.close(),
+    close: () => {
+      for (const { child } of activeWorkers.values()) {
+        for (const stream of child.stdio) stream?.destroy();
+        child.unref();
+      }
+      activeWorkers.clear();
+      raw.close();
+    },
     async run(input) {
       if (!Number.isSafeInteger(input.attempt) || input.attempt < 1) {
         throw new LifecycleGateError("attempt_invalid");
       }
+      const runtimeEnv = loadPersistedRuntimeEnvironment(process.env, homedir4(), workerHostProfile);
+      const executionTimeoutMs = resolveTaskTimeout(input.task, runtimeEnv);
+      const executionTask = { ...input.task, timeout_ms: executionTimeoutMs };
+      const resultWaitMs = options.testResultWaitMs ?? resultWaitBudgetMs(executionTimeoutMs);
+      const workerCloseWaitMs = options.testWorkerCloseWaitMs ?? WORKER_CLOSE_TIMEOUT_MS;
+      if (!Number.isSafeInteger(resultWaitMs) || resultWaitMs < 1 || resultWaitMs > resultWaitBudgetMs(executionTimeoutMs) || !Number.isSafeInteger(workerCloseWaitMs) || workerCloseWaitMs < 1 || workerCloseWaitMs > WORKER_CLOSE_TIMEOUT_MS) throw new LifecycleGateError("invalid_phase_test_budget");
+      let runFinished = false, workerClosed = false;
       let child;
       let operation = null;
       let task = null;
@@ -10885,22 +11301,32 @@ async function openClaimOnlyDriver(options) {
           stopBoundary = "result";
           stage("claim_committed", { claim_id: claimId });
           activeWorkers.set(input.operationId, { child, input });
-          await sendDecision(child, "claim_committed", {
-            protocol: "bridge-sqlite-execution-envelope-v1",
-            operation_id: input.operationId,
-            task_id: input.task.task_id,
-            attempt: input.attempt,
-            generation,
-            workspace_ref: policySnapshot.workspace_ref,
-            policy_snapshot_digest: policySnapshot.policy_snapshot_digest,
-            execution_profile_id: policySnapshot.execution_profile_id,
-            adapter_mode: options.testOnlyFakeAdapter ? "test_fake" : "zcode_app_server",
-            task: input.task,
-            host_profile: workerHostProfile,
-            continuation: input.continuation ?? null,
-            previous_result: input.previousResult ?? null
+          child.once("close", () => {
+            workerClosed = true;
+            if (runFinished && activeWorkers.get(input.operationId)?.child === child) activeWorkers.delete(input.operationId);
           });
-          stage("claim_continue_sent", { claim_id: claimId });
+          try {
+            await sendDecision(child, "claim_committed", {
+              protocol: "bridge-sqlite-execution-envelope-v1",
+              operation_id: input.operationId,
+              task_id: input.task.task_id,
+              attempt: input.attempt,
+              generation,
+              workspace_ref: policySnapshot.workspace_ref,
+              policy_snapshot_digest: policySnapshot.policy_snapshot_digest,
+              execution_profile_id: policySnapshot.execution_profile_id,
+              adapter_mode: options.testOnlyFakeAdapter ? "test_fake" : "zcode_app_server",
+              task: executionTask,
+              host_profile: workerHostProfile,
+              continuation: input.continuation ?? null,
+              previous_result: input.previousResult ?? null
+            });
+          } catch (error2) {
+            state = "result_rejected";
+            reason = errorCode(error2) ?? "private_execution_delivery_failed";
+            throw error2;
+          }
+          stage("claim_continue_sent", { claim_id: claimId, execution_timeout_ms: executionTimeoutMs, result_wait_ms: resultWaitMs });
           let interactionPump;
           if (options.enableSyntheticInteractionChannel || !options.testOnlyFakeAdapter) {
             const claimedOperation = asRecord4(port.readOperation(input.operationId));
@@ -10940,7 +11366,6 @@ async function openClaimOnlyDriver(options) {
           let rawResult;
           try {
             stage("worker_result_frame_read_start");
-            const resultWaitMs = Math.min(60 * 6e4, input.task.timeout_ms ?? 60 * 6e4) + 3e4;
             rawResult = await readJsonLine(child.resultChannel, MAX_WORKER_RESULT_FRAME_BYTES + 1, resultWaitMs);
             stage("worker_result_frame_read_complete");
           } catch (error2) {
@@ -10948,119 +11373,116 @@ async function openClaimOnlyDriver(options) {
             reason = error2 instanceof Error ? error2.message : "worker_result_unavailable";
             stage("worker_result_unavailable", { reason });
           }
-          workerExitCode = await waitForClose(child, 15e3);
-          await interactionPump;
-          stage("worker_close", { pid: child.pid ?? null, exitCode: workerExitCode });
           const releaseResultFinalization = await takeResultFinalization();
           try {
             if (state !== "result_rejected") {
-              if (workerExitCode !== 0) {
-                state = "result_rejected";
-                reason = "worker_result_exit_unverified";
-                stage("worker_result_rejected", { reason, workerExitCode });
-              } else {
+              try {
+                const resultFrame = { ...validateWorkerResultFrame(rawResult, {
+                  operation_id: input.operationId,
+                  task_id: input.task.task_id,
+                  attempt: input.attempt,
+                  generation,
+                  workspace_ref: policySnapshot.workspace_ref,
+                  policy_snapshot_digest: policySnapshot.policy_snapshot_digest
+                }) };
+                if (!options.testOnlyFakeAdapter && resultFrame.execution_cleanup?.source === "explicit_test_fake") {
+                  throw new LifecycleGateError("test_adapter_frame_forbidden");
+                }
+                const executionCleanup = trustedExecutionCleanupProof(
+                  resultFrame.execution_cleanup,
+                  options.testOnlyFakeAdapter === true
+                );
                 try {
-                  const resultFrame = { ...validateWorkerResultFrame(rawResult, {
-                    operation_id: input.operationId,
-                    task_id: input.task.task_id,
-                    attempt: input.attempt,
-                    generation,
-                    workspace_ref: policySnapshot.workspace_ref,
-                    policy_snapshot_digest: policySnapshot.policy_snapshot_digest
-                  }) };
-                  if (!options.testOnlyFakeAdapter && resultFrame.execution_cleanup?.source === "explicit_test_fake") {
-                    throw new LifecycleGateError("test_adapter_frame_forbidden");
-                  }
-                  const executionCleanup = trustedExecutionCleanupProof(
-                    resultFrame.execution_cleanup,
-                    options.testOnlyFakeAdapter === true
-                  );
+                  canonicalTaskResult(resultFrame.result, { task_id: input.task.task_id, attempt: input.attempt, result_status: resultFrame.result.status });
+                } catch (error2) {
+                  resultFrame.result = submissionFailure({ task_id: input.task.task_id, attempt: input.attempt }, error2);
+                }
+                stage("worker_result_verified", { status: resultFrame.result.status });
+                const current = asRecord4(port.readOperation(input.operationId));
+                verifyPersistedClaimEvidence(port, current, input, generation, claimId);
+                const revision2 = positive3(current.revision, "result_revision_missing");
+                const identityDigest = text(current.claim_worker_identity_digest, "result_claim_identity_missing");
+                const commitInput = {
+                  operation_id: input.operationId,
+                  task_id: input.task.task_id,
+                  attempt: input.attempt,
+                  generation,
+                  revision: revision2,
+                  claim_id: claimId,
+                  claim_worker_identity_digest: identityDigest,
+                  result_status: resultFrame.result.status,
+                  result: resultFrame.result
+                };
+                stage("result_commit_start", { revision: revision2, status: resultFrame.result.status });
+                let commit;
+                try {
+                  commit = port.commitResult(commitInput);
+                } catch (error2) {
+                  const code = errorCode(error2);
+                  state = code === "transaction_outcome_unknown" ? "result_outcome_unknown" : "result_rejected";
+                  reason = code ?? "result_commit_failed";
+                  stage("result_commit_failed", { reason, unknown: state === "result_outcome_unknown" });
+                  throw new LifecycleGateError("result_commit_terminal", reason);
+                }
+                stage("result_commit_ack", {
+                  duplicate: commit.duplicate,
+                  conflict: commit.conflict,
+                  phase: commit.phase,
+                  revision: commit.revision,
+                  result_digest: commit.result_digest
+                });
+                if (commit.conflict || commit.quarantined) {
+                  state = "result_conflict";
+                  reason = "conflicting_result_quarantined";
+                  stage("result_conflict", { revision: commit.revision });
+                } else {
                   try {
-                    canonicalTaskResult(resultFrame.result, { task_id: input.task.task_id, attempt: input.attempt, result_status: resultFrame.result.status });
-                  } catch (error2) {
-                    resultFrame.result = submissionFailure({ task_id: input.task.task_id, attempt: input.attempt }, error2);
-                  }
-                  stage("worker_result_verified", { status: resultFrame.result.status });
-                  const current = asRecord4(port.readOperation(input.operationId));
-                  verifyPersistedClaimEvidence(port, current, input, generation, claimId);
-                  const revision2 = positive3(current.revision, "result_revision_missing");
-                  const identityDigest = text(current.claim_worker_identity_digest, "result_claim_identity_missing");
-                  const commitInput = {
-                    operation_id: input.operationId,
-                    task_id: input.task.task_id,
-                    attempt: input.attempt,
-                    generation,
-                    revision: revision2,
-                    claim_id: claimId,
-                    claim_worker_identity_digest: identityDigest,
-                    result_status: resultFrame.result.status,
-                    result: resultFrame.result
-                  };
-                  stage("result_commit_start", { revision: revision2, status: resultFrame.result.status });
-                  let commit;
-                  try {
-                    commit = port.commitResult(commitInput);
-                  } catch (error2) {
-                    const code = errorCode(error2);
-                    state = code === "transaction_outcome_unknown" ? "result_outcome_unknown" : "result_rejected";
-                    reason = code ?? "result_commit_failed";
-                    stage("result_commit_failed", { reason, unknown: state === "result_outcome_unknown" });
-                    throw new LifecycleGateError("result_commit_terminal", reason);
-                  }
-                  stage("result_commit_ack", {
-                    duplicate: commit.duplicate,
-                    conflict: commit.conflict,
-                    phase: commit.phase,
-                    revision: commit.revision,
-                    result_digest: commit.result_digest
-                  });
-                  if (commit.conflict || commit.quarantined) {
-                    state = "result_conflict";
-                    reason = "conflicting_result_quarantined";
-                    stage("result_conflict", { revision: commit.revision });
-                  } else {
+                    const persistedResult = port.readCommittedResult(input.operationId);
+                    const currentAfter = asRecord4(port.readOperation(input.operationId));
+                    verifyPersistedResult(port, currentAfter, persistedResult, commitInput, commit);
+                    committedResult = resultFrame.result;
+                    resultStatus = resultFrame.result.status;
+                    resultDigest = text(commit.result_digest, "result_digest_missing");
+                    state = "result_committed";
+                    reason = "result_committed";
+                    stage("result_projection_verified", { revision: commit.revision, status: resultStatus, result_digest: resultDigest });
                     try {
-                      const persistedResult = port.readCommittedResult(input.operationId);
-                      const currentAfter = asRecord4(port.readOperation(input.operationId));
-                      verifyPersistedResult(port, currentAfter, persistedResult, commitInput, commit);
-                      committedResult = resultFrame.result;
-                      resultStatus = resultFrame.result.status;
-                      resultDigest = text(commit.result_digest, "result_digest_missing");
-                      state = "result_committed";
-                      reason = "result_committed";
-                      stage("result_projection_verified", { revision: commit.revision, status: resultStatus, result_digest: resultDigest });
-                      cleanupState = await finalizeClaimedWorkerCleanup(
-                        port,
-                        input,
-                        generation,
-                        claimId,
-                        probe,
-                        processProbeTimeoutMs,
-                        workerExitCode,
-                        executionCleanup,
-                        executionCleanup ? "adapter_verified" : "adapter_unverified",
-                        (name, detail) => stage(name, detail)
-                      );
-                      stage("cleanup_complete", { cleanup_state: cleanupState });
+                      workerExitCode = await waitForClose(child, workerCloseWaitMs, interactionPump);
                     } catch (error2) {
-                      if (state === "result_committed") {
-                        cleanupState = "unknown";
-                        reason = errorCode(error2) ?? "cleanup_outcome_unknown";
-                        stage("cleanup_outcome_unknown", { reason });
-                      } else {
-                        state = "result_outcome_unknown";
-                        reason = errorCode(error2) ?? "result_projection_verification_failed";
-                        stage("result_projection_unknown", { reason });
-                      }
+                      stage("worker_close_unverified", { reason: errorCode(error2) ?? "worker_stop_timeout" });
+                    }
+                    stage("worker_close", { pid: child.pid ?? null, exitCode: workerExitCode });
+                    cleanupState = await finalizeClaimedWorkerCleanup(
+                      port,
+                      input,
+                      generation,
+                      claimId,
+                      probe,
+                      processProbeTimeoutMs,
+                      workerExitCode,
+                      executionCleanup,
+                      executionCleanup ? "adapter_verified" : "adapter_unverified",
+                      (name, detail) => stage(name, detail)
+                    );
+                    stage("cleanup_complete", { cleanup_state: cleanupState });
+                  } catch (error2) {
+                    if (state === "result_committed") {
+                      cleanupState = "unknown";
+                      reason = errorCode(error2) ?? "cleanup_outcome_unknown";
+                      stage("cleanup_outcome_unknown", { reason });
+                    } else {
+                      state = "result_outcome_unknown";
+                      reason = errorCode(error2) ?? "result_projection_verification_failed";
+                      stage("result_projection_unknown", { reason });
                     }
                   }
-                } catch (error2) {
-                  if (error2 instanceof LifecycleGateError && error2.code === "result_commit_terminal") {
-                  } else {
-                    state = "result_rejected";
-                    reason = errorCode(error2) ?? "worker_result_invalid";
-                    stage("worker_result_rejected", { reason });
-                  }
+                }
+              } catch (error2) {
+                if (error2 instanceof LifecycleGateError && error2.code === "result_commit_terminal") {
+                } else {
+                  state = "result_rejected";
+                  reason = errorCode(error2) ?? "worker_result_invalid";
+                  stage("worker_result_rejected", { reason });
                 }
               }
             }
@@ -11074,8 +11496,8 @@ async function openClaimOnlyDriver(options) {
         else reason = errorCode(error2) ?? reason;
         if (child && workerExitCode === null) {
           try {
-            await rejectChild(child);
-            workerExitCode = await waitForClose(child, 5e3);
+            if (activeWorkers.get(input.operationId)?.child !== child) await rejectChild(child);
+            workerExitCode = await waitForClose(child, workerCloseWaitMs);
           } catch {
           }
         }
@@ -11123,7 +11545,8 @@ async function openClaimOnlyDriver(options) {
           }
         }
         const active = activeWorkers.get(input.operationId);
-        if (active?.child === child) activeWorkers.delete(input.operationId);
+        runFinished = true;
+        if (active?.child === child && workerClosed) activeWorkers.delete(input.operationId);
         try {
           operation = port.readOperation(input.operationId);
           task = port.readTaskProjection(input.task.task_id);
@@ -11300,8 +11723,18 @@ async function sendDecision(child, state, execution) {
 `, "utf8");
   if (frame.byteLength > 11e5) throw new LifecycleGateError("private_execution_envelope_too_large");
   await new Promise((resolve, reject) => {
-    channel.once("error", reject);
-    channel.once("finish", resolve);
+    const timer = setTimeout(() => {
+      channel.destroy();
+      reject(new LifecycleGateError("private_execution_delivery_timeout"));
+    }, EXECUTION_DELIVERY_TIMEOUT_MS);
+    channel.once("error", (error2) => {
+      clearTimeout(timer);
+      reject(error2);
+    });
+    channel.once("finish", () => {
+      clearTimeout(timer);
+      resolve();
+    });
     channel.end(frame);
   });
 }
@@ -11353,19 +11786,24 @@ async function readJsonLine(stream, limit, timeoutMs) {
     stream.once("error", onError);
   });
 }
-async function waitForClose(child, timeoutMs) {
-  if (child.exitCode !== null) return child.exitCode;
-  return await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      child.removeListener("close", onClose);
-      reject(new LifecycleGateError("worker_stop_timeout"));
-    }, timeoutMs);
-    const onClose = (code) => {
-      clearTimeout(timer);
-      resolve(code);
-    };
+async function waitForClose(child, timeoutMs, drain) {
+  let timer;
+  let onClose;
+  const closed = child.exitCode !== null || child.signalCode !== null ? Promise.resolve(child.exitCode) : new Promise((resolve) => {
+    onClose = resolve;
     child.once("close", onClose);
   });
+  try {
+    return await Promise.race([
+      Promise.all([closed, drain]).then(([code]) => code),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new LifecycleGateError("worker_stop_timeout")), timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (onClose) child.removeListener("close", onClose);
+  }
 }
 async function probeWithDeadline(probe, request, timeoutMs) {
   let timer;
@@ -11624,6 +12062,8 @@ var init_lifecycle_gate = __esm({
   "src/store/lifecycle-gate.ts"() {
     "use strict";
     init_result_contract();
+    init_resolver();
+    init_task_timeout();
     init_process_probe();
     init_process_spawn();
     init_build_provenance();
@@ -11914,7 +12354,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
   "src/manager/sqlite-lifecycle-mcp-authority.ts"() {
     "use strict";
     init_lifecycle_gate();
-    init_errors();
+    init_errors2();
     init_snapshot();
     init_process_probe();
     init_sqlite_doctor();
@@ -12199,10 +12639,10 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
           return this.getStatus(taskId);
         }
         const operation = snapshot.operation ? asRecord5(snapshot.operation) : null;
-        if (projection.status === "failed" && operation?.phase === "released") {
+        if (isTerminal(projection.status) && operation?.phase === "released") {
           return this.getStatus(taskId);
         }
-        if (projection.status === "failed" && operation && operation.phase === "cleanup_unverified") {
+        if (isTerminal(projection.status) && snapshot.result && operation && operation.phase === "cleanup_unverified") {
           const recoveryKey = queueKey(taskId, Number(attempt.attempt));
           const existingRecovery = this.#recoveryRuns.get(recoveryKey);
           if (existingRecovery) return existingRecovery;
@@ -12211,7 +12651,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
               const latest = this.#readSnapshot(taskId);
               const latestProjection = asRecord5(latest.projection);
               const latestOperation = latest.operation ? asRecord5(latest.operation) : null;
-              return latestProjection.status === "failed" && latestOperation?.phase === "released" ? this.getStatus(taskId) : null;
+              return isTerminal(latestProjection.status) && latestOperation?.phase === "released" ? this.getStatus(taskId) : null;
             };
             let outcome;
             try {
@@ -34216,364 +34656,9 @@ function toError(value) {
 }
 
 // src/host/stdio.ts
-import { homedir as homedir4 } from "node:os";
+init_resolver();
+import { homedir as homedir5 } from "node:os";
 import path20 from "node:path";
-
-// src/runtime/resolver.ts
-import { accessSync, existsSync as existsSync2, readFileSync as readFileSync2, statSync } from "node:fs";
-import { homedir as homedir2 } from "node:os";
-import path3 from "node:path";
-import { fileURLToPath } from "node:url";
-
-// src/runtime/errors.ts
-var BridgeError = class extends Error {
-  code;
-  memberPids;
-  constructor(code, message, options) {
-    super(message, options);
-    this.name = "BridgeError";
-    this.code = code;
-    if (options?.memberPids?.length) this.memberPids = [...new Set(options.memberPids.filter((pid) => Number.isSafeInteger(pid) && pid > 0))];
-  }
-};
-
-// src/runtime/resolver.ts
-init_paths();
-init_profile();
-var PERSISTED_RUNTIME_KEYS = [
-  "ZCODE_BRIDGE_NODE",
-  "ZCODE_BRIDGE_ZCODE_CJS",
-  "ZCODE_BRIDGE_DATA_DIR",
-  "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE",
-  "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE",
-  "ZCODE_HOME",
-  "ZCODE_DATA_BASE_DIR",
-  "ZCODE_WINDOWS_APP_INSTALL_DIR",
-  "ZCODE_BRIDGE_DEFAULT_PROVIDER_ID",
-  "ZCODE_BRIDGE_DEFAULT_MODEL_ID",
-  "ZCODE_BRIDGE_DEFAULT_REASONING_LEVEL",
-  "ZCODE_BRIDGE_MODE",
-  "ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS",
-  "ZCODE_BRIDGE_TIMEOUT_MS",
-  "ZCODE_BRIDGE_BROWSER_USE",
-  "ZCODE_BRIDGE_BROWSER_EXECUTABLE"
-];
-function loadPersistedRuntimeEnvironment(source, homeDir = homedir2(), host = codexHostProfile(homeDir)) {
-  validateHostProfile(host);
-  const settingsPaths = [host.settingsDirectory, ...host.legacySettingsDirectories ?? []].map((directory) => path3.join(directory, "runtime-config.json"));
-  const legacyDataRoot = source["ZCODE_BRIDGE_DATA_DIR"]?.trim();
-  if (legacyDataRoot && path3.isAbsolute(legacyDataRoot)) {
-    settingsPaths.push(path3.join(legacyDataRoot, "runtime-config.json"));
-  }
-  let parsed = null;
-  const seenPaths = /* @__PURE__ */ new Set();
-  for (const settingsPath of settingsPaths) {
-    const normalized = path3.resolve(settingsPath);
-    const identity = process.platform === "win32" ? normalized.toLocaleLowerCase("en-US") : normalized;
-    if (seenPaths.has(identity)) continue;
-    seenPaths.add(identity);
-    try {
-      if (statSync(normalized).size > 64 * 1024) throw new Error("runtime settings exceed 64 KB");
-      const candidate = JSON.parse(readFileSync2(normalized, "utf8"));
-      if (isPlainObject3(candidate)) {
-        parsed = candidate;
-        break;
-      }
-      throw new Error("runtime settings must be an object");
-    } catch (error2) {
-      if (error2.code === "ENOENT") continue;
-      throw new BridgeError("provider_config_invalid", `invalid Bridge runtime settings: ${normalized}`, { cause: error2 });
-    }
-  }
-  if (!parsed) return { ...source };
-  const env = { ...source };
-  for (const key of PERSISTED_RUNTIME_KEYS) {
-    if (!Object.prototype.hasOwnProperty.call(parsed, key)) continue;
-    const value = parsed[key];
-    if (typeof value === "string") env[key] = value.trim();
-    else if (value === null) env[key] = "";
-    else throw new BridgeError("provider_config_invalid", `Bridge runtime setting ${key} must be a string or null`);
-  }
-  return env;
-}
-var NodeRuntimeResolver = class {
-  #env;
-  #homeDir;
-  #packageRoot;
-  #host;
-  constructor(options = {}) {
-    this.#env = options.env ?? process.env;
-    this.#homeDir = options.homeDir ?? homedir2();
-    this.#packageRoot = options.packageRoot ?? null;
-    this.#host = validateHostProfile(options.host ?? codexHostProfile(this.#homeDir));
-  }
-  async resolve() {
-    const env = loadPersistedRuntimeEnvironment(this.#env, this.#homeDir, this.#host);
-    const data = discoverZCodeData(env, { fallbackHomeDir: this.#homeDir });
-    const zcodeHome = resolveZcodeHome(env);
-    const explicitDataBaseDir = env["ZCODE_DATA_BASE_DIR"]?.trim() || null;
-    if (explicitDataBaseDir && !isAbsolutePathForPlatform(explicitDataBaseDir)) {
-      throw new BridgeError("provider_config_invalid", "ZCODE_DATA_BASE_DIR must be an absolute path");
-    }
-    if (zcodeHome && explicitDataBaseDir && !sameFileSystemPath(path3.dirname(zcodeHome), explicitDataBaseDir)) {
-      throw new BridgeError(
-        "provider_config_invalid",
-        `ZCODE_HOME (${zcodeHome}) and ZCODE_DATA_BASE_DIR (${explicitDataBaseDir}) conflict; ZCODE_HOME must name <ZCODE_DATA_BASE_DIR>/.zcode. Fix one of them instead of relying on silent selection.`
-      );
-    }
-    let nodeExecutable = "node";
-    const nodeOverride = env["ZCODE_BRIDGE_NODE"]?.trim();
-    if (nodeOverride) {
-      this.#assertReadableFile(
-        nodeOverride,
-        "ZCODE_BRIDGE_NODE is set but is not a readable file"
-      );
-      nodeExecutable = nodeOverride;
-    }
-    const builtinEnv = env["ZCODE_BUILTIN_PROVIDER_CONFIG_FILE"]?.trim() || null;
-    const personalEnv = env["ZCODE_PERSONAL_PROVIDER_CONFIG_FILE"]?.trim() || null;
-    let zcodeEntrypoint;
-    let explicitRuntime = false;
-    const entryOverride = env["ZCODE_BRIDGE_ZCODE_CJS"]?.trim();
-    if (entryOverride) {
-      this.#assertReadableFile(
-        entryOverride,
-        "ZCODE_BRIDGE_ZCODE_CJS is set but is not a readable file"
-      );
-      zcodeEntrypoint = entryOverride;
-      explicitRuntime = true;
-    } else {
-      const install = discoverZCodeInstall(env, { requireBuiltin: !builtinEnv });
-      if (!install.zcodeEntrypoint) {
-        throw new BridgeError(
-          "runtime_not_found",
-          `zcode.cjs${builtinEnv ? "" : " with a same-install zcode-builtin.json"} was not found; searched: ` + (install.candidates.map((candidate) => `${candidate.root} (runtime: ${candidate.runtimeExists}, builtin: ${candidate.builtinExists})`).join(", ") || "(no installation roots available)")
-        );
-      }
-      zcodeEntrypoint = install.zcodeEntrypoint;
-    }
-    let builtinConfigFile;
-    let personalConfigFile;
-    if (builtinEnv && personalEnv) {
-      this.#validateBuiltinConfig(builtinEnv);
-      this.#validatePersonalConfig(personalEnv);
-      builtinConfigFile = builtinEnv;
-      personalConfigFile = personalEnv;
-    } else {
-      if (builtinEnv) {
-        this.#validateBuiltinConfig(builtinEnv);
-        builtinConfigFile = builtinEnv;
-      } else if (explicitRuntime) {
-        const derived2 = builtinConfigForRuntime(zcodeEntrypoint);
-        if (!isReadableFile(derived2)) {
-          throw new BridgeError(
-            "provider_config_missing",
-            `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE is not set and the builtin config was not found next to the configured runtime; expected: ${derived2}`
-          );
-        }
-        this.#validateBuiltinConfig(derived2);
-        builtinConfigFile = derived2;
-      } else {
-        const install = discoverZCodeInstall(env, { requireBuiltin: true });
-        if (!install.builtinConfigFile) {
-          throw new BridgeError(
-            "provider_config_missing",
-            "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE is not set and no builtin provider config was found in the ZCode installation; searched: " + (install.candidates.map((candidate) => `${candidate.root} (runtime: ${candidate.runtimeExists}, builtin: ${candidate.builtinExists})`).join(", ") || "(no installation roots available)")
-          );
-        }
-        this.#validateBuiltinConfig(install.builtinConfigFile);
-        builtinConfigFile = install.builtinConfigFile;
-      }
-      if (personalEnv) {
-        this.#validatePersonalConfig(personalEnv);
-        personalConfigFile = personalEnv;
-      } else {
-        const candidates = zcodeHome ? [path3.join(zcodeHome, "v2", "provider_config.json")] : [
-          explicitDataBaseDir,
-          data.configuredDataBaseDir,
-          data.userHome
-        ].filter((base) => Boolean(base)).filter((base, index, values) => values.indexOf(base) === index).map((base) => path3.join(base, ".zcode", "v2", "provider_config.json"));
-        const existing = candidates.filter((candidate) => existsSync2(candidate));
-        if (existing.length === 0) {
-          throw new BridgeError(
-            "provider_config_missing",
-            "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE is not set and no personal provider config exists at any of: " + candidates.join(", ")
-          );
-        }
-        let accepted = null;
-        let lastError = null;
-        for (const candidate of existing) {
-          try {
-            this.#validatePersonalConfig(candidate);
-            accepted = candidate;
-            break;
-          } catch (error2) {
-            lastError = error2 instanceof Error ? error2.message : String(error2);
-          }
-        }
-        if (!accepted) {
-          throw new BridgeError(
-            "provider_config_invalid",
-            `No usable personal provider config among: ${existing.join(", ")}; last validation failure: ${lastError ?? "unknown"}`
-          );
-        }
-        personalConfigFile = accepted;
-      }
-    }
-    if (zcodeHome && !samePath(personalConfigFile, path3.join(zcodeHome, "v2", "provider_config.json"))) {
-      throw new BridgeError(
-        "provider_config_invalid",
-        `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE must be ZCODE_HOME/v2/provider_config.json (${zcodeHome})`
-      );
-    }
-    const dataOverride = env["ZCODE_BRIDGE_DATA_DIR"]?.trim();
-    let dataRoot;
-    if (dataOverride) {
-      if (!path3.isAbsolute(dataOverride)) {
-        throw new Error(
-          `ZCODE_BRIDGE_DATA_DIR must be an absolute path when set, got: ${dataOverride}`
-        );
-      }
-      dataRoot = path3.normalize(dataOverride);
-    } else {
-      dataRoot = this.#packageRoot ?? findPackageRoot();
-    }
-    return {
-      nodeExecutable,
-      zcodeEntrypoint,
-      providerBuiltinConfigFile: builtinConfigFile,
-      providerPersonalConfigFile: personalConfigFile,
-      dataRoot
-    };
-  }
-  #assertReadableFile(filePath, label) {
-    if (!isReadableFile(filePath)) {
-      throw new BridgeError("runtime_not_found", `${label}: ${filePath}`);
-    }
-  }
-  /**
-   * Structure validation only. The verified differential signal for the
-   * CLI-created stub is an empty providerRules map (see docs/ZCODE_RUNTIME.md);
-   * rejecting it implements "never silently select a known stub".
-   */
-  #validatePersonalConfig(filePath) {
-    const parsed = this.#readJsonConfig(filePath, "personal provider config");
-    const config2 = parsed["config"];
-    if (!isPlainObject3(config2)) {
-      throw new BridgeError(
-        "provider_config_invalid",
-        `Personal provider config has no config object: ${filePath}`
-      );
-    }
-    const providerConfigRules = config2["providerConfigRules"];
-    const rules = isPlainObject3(providerConfigRules) ? providerConfigRules["providerRules"] : void 0;
-    if (!isNonEmptyCollection(rules)) {
-      throw new BridgeError(
-        "provider_config_invalid",
-        `Personal provider config contains no provider rules (this matches the known CLI-created stub shape): ${filePath}`
-      );
-    }
-  }
-  #validateBuiltinConfig(filePath) {
-    const parsed = this.#readJsonConfig(filePath, "builtin provider config");
-    if (!isPlainObject3(parsed["config"])) {
-      throw new BridgeError(
-        "provider_config_invalid",
-        `Builtin provider config has no config object: ${filePath}`
-      );
-    }
-  }
-  #readJsonConfig(filePath, label) {
-    if (!isReadableFile(filePath)) {
-      throw new BridgeError("provider_config_missing", `${label} not found: ${filePath}`);
-    }
-    let text2;
-    try {
-      text2 = readFileSync2(filePath, "utf8");
-    } catch (error2) {
-      throw new BridgeError(
-        "provider_config_invalid",
-        `${label} is not readable: ${filePath} (${errorText(error2)})`
-      );
-    }
-    let parsed;
-    try {
-      parsed = JSON.parse(text2);
-    } catch (error2) {
-      throw new BridgeError(
-        "provider_config_invalid",
-        `${label} is not valid JSON: ${filePath}`
-      );
-    }
-    if (!isPlainObject3(parsed)) {
-      throw new BridgeError("provider_config_invalid", `${label} is not a JSON object: ${filePath}`);
-    }
-    return parsed;
-  }
-};
-function resolveZcodeHome(env) {
-  const configured = env["ZCODE_HOME"]?.trim();
-  if (!configured) return null;
-  if (!isAbsolutePathForPlatform(configured)) {
-    throw new BridgeError("provider_config_invalid", "ZCODE_HOME must be an absolute path");
-  }
-  const resolved = path3.normalize(configured);
-  if (path3.basename(resolved).toLowerCase() !== ".zcode") {
-    throw new BridgeError(
-      "provider_config_invalid",
-      "ZCODE_HOME must name a .zcode directory so app-server can use the same data root"
-    );
-  }
-  try {
-    if (!statSync(resolved).isDirectory()) {
-      throw new BridgeError("provider_config_invalid", `ZCODE_HOME is not a directory: ${resolved}`);
-    }
-  } catch (error2) {
-    if (error2 instanceof BridgeError) throw error2;
-    throw new BridgeError("provider_config_missing", `ZCODE_HOME directory does not exist: ${resolved}`);
-  }
-  return resolved;
-}
-function samePath(left, right) {
-  const resolvedLeft = path3.resolve(left);
-  const resolvedRight = path3.resolve(right);
-  return process.platform === "win32" ? resolvedLeft.toLowerCase() === resolvedRight.toLowerCase() : resolvedLeft === resolvedRight;
-}
-function isReadableFile(filePath) {
-  try {
-    if (!existsSync2(filePath) || !statSync(filePath).isFile()) return false;
-    accessSync(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-function findPackageRoot(startDir) {
-  let current = startDir ?? path3.dirname(fileURLToPath(import.meta.url));
-  for (let depth = 0; depth < 10; depth++) {
-    if (existsSync2(path3.join(current, "package.json"))) {
-      return current;
-    }
-    const parent = path3.dirname(current);
-    if (parent === current) break;
-    current = parent;
-  }
-  throw new Error(
-    `Cannot locate the Bridge package root (no package.json above ${startDir ?? "module directory"})`
-  );
-}
-function isPlainObject3(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function isNonEmptyCollection(value) {
-  if (Array.isArray(value)) return value.length > 0;
-  if (isPlainObject3(value)) return Object.keys(value).length > 0;
-  return false;
-}
-function errorText(error2) {
-  const message = error2 instanceof Error ? error2.message : String(error2);
-  return message.length > 300 ? `${message.slice(0, 300)}\u2026` : message;
-}
 
 // src/manager/task-manager.ts
 init_task_store();
@@ -34665,23 +34750,11 @@ function truncate(text2, maxChars) {
 }
 
 // src/manager/task-manager.ts
-init_errors();
+init_errors2();
 init_spawn_worker();
 init_process_spawn();
 init_windows_process_cleanup();
-
-// src/runtime/task-timeout.ts
-var DEFAULT_TASK_TIMEOUT_MS = 60 * 60 * 1e3;
-var MAX_TASK_TIMEOUT_MS = 4 * 60 * 60 * 1e3;
-var MIN_TASK_TIMEOUT_MS = 60 * 1e3;
-function validateTaskTimeout(value) {
-  if (!Number.isSafeInteger(value) || value < MIN_TASK_TIMEOUT_MS || value > MAX_TASK_TIMEOUT_MS) {
-    throw new Error(`timeout_ms must be an integer from ${MIN_TASK_TIMEOUT_MS} to ${MAX_TASK_TIMEOUT_MS}`);
-  }
-  return value;
-}
-
-// src/manager/task-manager.ts
+init_task_timeout();
 init_process_lock();
 
 // src/prompts/task-prompt.ts
@@ -36576,7 +36649,7 @@ function sleep3(ms) {
 var DEFAULT_MAX_REQUEST_BODY_SIZE = 4 * 1024 * 1024;
 
 // src/mcp/server.ts
-init_errors();
+init_errors2();
 
 // src/mcp/schemas.ts
 var TASK_ID_PATTERN2 = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
@@ -36878,9 +36951,12 @@ var defaultModelSchema = object({
   model: modelSelectionSchema.nullable()
 });
 
+// src/mcp/server.ts
+init_errors();
+
 // src/ledger/mcp.ts
 import { createHash as createHash6 } from "node:crypto";
-init_errors();
+init_errors2();
 
 // src/ledger/bridge.ts
 init_process_lock();
@@ -37601,6 +37677,9 @@ function createBridgeServer(options) {
   return server;
 }
 
+// src/host/stdio.ts
+init_task_timeout();
+
 // src/runtime/doctor.ts
 import { accessSync as accessSync2, constants, existsSync as existsSync10, readFileSync as readFileSync10, statSync as statSync5 } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -37715,10 +37794,12 @@ function isRecord2(value) {
 }
 
 // src/runtime/doctor.ts
+init_errors();
 init_child_env();
 init_paths();
 
 // src/runtime/session-preferences.ts
+init_errors();
 init_trusted_local_profile();
 var ZCODE_SESSION_MODES = ["plan", "build", "edit", "yolo"];
 function resolveSessionPreferences(taskModel, env, trustedExecutionProfileId) {
@@ -37772,6 +37853,7 @@ function isSessionMode(value) {
 }
 
 // src/runtime/doctor.ts
+init_resolver();
 async function runBridgeDoctor(options = {}) {
   const sourceEnv = options.env ?? process.env;
   let env = sourceEnv;
@@ -38131,6 +38213,8 @@ import { createHash as createHash8, randomUUID as randomUUID4 } from "node:crypt
 import { mkdir, readFile as readFile2, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { homedir as homedir3 } from "node:os";
 import path14 from "node:path";
+init_errors();
+init_resolver();
 init_process_spawn();
 init_profile();
 init_process_lock();
@@ -38609,11 +38693,12 @@ init_build_provenance();
 init_trusted_local_deployment();
 
 // src/runtime/sqlite-install-config.ts
+init_resolver();
+init_profile();
 import { existsSync as existsSync11, lstatSync, mkdirSync as mkdirSync6, readFileSync as readFileSync11, realpathSync as realpathSync4 } from "node:fs";
 import os from "node:os";
 import path16 from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
-init_profile();
 var CONFIG_FILE = "authority.json";
 var CONFIG_LIMIT = 8 * 1024;
 var FRESH_SQLITE_DATABASE_FILE = "bridge.sqlite";
@@ -38839,7 +38924,7 @@ async function startBridge(host = codexHostProfile(), version2 = SERVER_VERSION,
   let runtimeEnv;
   let prepared;
   try {
-    runtimeEnv = loadPersistedRuntimeEnvironment(process.env, homedir4(), host);
+    runtimeEnv = loadPersistedRuntimeEnvironment(process.env, homedir5(), host);
     authoritySelection = loadInstallAuthoritySelection(host);
     prepared = prepareFreshSqliteStateDirectory(authoritySelection, process.env);
   } catch (error2) {

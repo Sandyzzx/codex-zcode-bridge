@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { ZCodeAppServerAdapter } from "../src/adapters/zcode-app-server-adapter.js";
-import { createPlatformProbe, isProcessRunning, verifyProcessTreeClaimantsClean } from "../src/adapters/process-spawn.js";
+import { createPlatformProbe, isProcessRunning, verifyProcessTreeClaimantsClean, terminateProcessTree } from "../src/adapters/process-spawn.js";
 import { BridgeError } from "../src/runtime/errors.js";
 import type { TaskPackage, ZCodeRuntimeConfig } from "../src/interfaces.js";
 import { makeWorkspace, SESSION_ID, validReport } from "./helpers.js";
@@ -960,4 +960,46 @@ test("forwards a permission decision to ZCode and resolves duplicate request IDs
   } finally {
     await rm(runtime.root, { recursive: true, force: true });
   }
+});
+
+test("ADR-027 successful execution stops its timer while real Windows cleanup uses an independent budget", {timeout:30000}, async()=>{
+  const runtime=await makeFakeRuntime(undefined,true,true,undefined,true);
+  let signal: AbortSignal|undefined, abortedDuringCleanup: boolean|undefined;
+  try{
+    const adapter=new ZCodeAppServerAdapter({resolver:{resolve:async()=>runtime.config},timeoutMs:5000,
+      childEnvBase:{PATH:process.env.PATH},homeDir:runtime.root,
+      resolveInteraction:async(_request,abort)=>{signal=abort;return {decision:'deny',reason:'controlled test'};},
+      terminateProcessTreeImpl:async(pid,options)=>{
+        await new Promise(resolve=>setTimeout(resolve,5200));
+        abortedDuringCleanup=signal?.aborted;
+        return terminateProcessTree(pid,options);
+      }});
+    const handle=await adapter.startTask({task,workspace:makeWorkspace(runtime.root),attempt:1});
+    const outcome=await adapter.getResult(handle);
+    assert.ok(signal);assert.equal(abortedDuringCleanup,false);
+    assert.equal(outcome.timedOut,false);assert.equal(outcome.cleanupVerified,true);
+    assert.equal(outcome.agentReport?.summary,validReport().summary);
+  }finally{await rm(runtime.root,{recursive:true,force:true});}
+});
+
+test("ADR-027 cleanup deadline publishes one unverified snapshot and ignores late real cleanup confirmation", {timeout:30000},async(t)=>{
+  const runtime=await makeFakeRuntime(undefined,true,false,undefined,true);
+  let release!:()=>void, entered=false, finished!:()=>void;
+  const gate=new Promise<void>(resolve=>{release=resolve;});
+  const done=new Promise<void>(resolve=>{finished=resolve;});
+  const snapshots:Array<import('../src/adapters/zcode-adapter.js').ZCodeRunOutcome>=[];
+  t.after(async()=>{release();if(entered)await done;await rm(runtime.root,{recursive:true,force:true});});
+  const adapter=new ZCodeAppServerAdapter({resolver:{resolve:async()=>runtime.config},timeoutMs:10000,testCleanupTimeoutMs:100,
+    childEnvBase:{PATH:process.env.PATH},homeDir:runtime.root,onOutcomeCheckpoint:o=>snapshots.push(o),
+    terminateProcessTreeImpl:async(pid,options)=>{entered=true;await gate;try{return await terminateProcessTree(pid,options);}finally{finished();}}});
+  const handle=await adapter.startTask({task,workspace:makeWorkspace(runtime.root),attempt:1});
+  const outcome=await adapter.getResult(handle);
+  assert.equal(outcome.cleanupVerified,false);assert.match(outcome.cleanupError??'',/cleanup deadline/);
+  assert.equal(outcome.timedOut,false);assert.ok(outcome.agentReport);
+  const checkpointCount=snapshots.length;
+  const until=Date.now()+5000;while(!entered&&Date.now()<until)await new Promise(r=>setTimeout(r,20));
+  assert.equal(entered,true);
+  release();await done;await new Promise(r=>setTimeout(r,30));
+  assert.equal(snapshots.length,checkpointCount);
+  assert.ok(snapshots.every(o=>o.cleanupVerified===false));
 });
