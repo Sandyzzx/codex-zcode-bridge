@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - master
+      - prereview
 
 permissions:
   contents: read
