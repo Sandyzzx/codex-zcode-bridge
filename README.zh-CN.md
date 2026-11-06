@@ -73,7 +73,7 @@ Windows 首次运行配置位于 `%USERPROFILE%\.codex\codex-zcode-bridge\runtim
 
 SQLite 默认使用当前用户的数据根。不要手工改写 SQLite 表、Authority Receipt 或 Bootstrap Marker。
 
-在受支持的 Windows 单用户可信本地部署中，SQLite 使用固定受信任的 `yolo` 执行档案，与 JSON 路径的普通无人值守编码工作流一致。它以当前 Windows 账户权限运行，不是沙箱，也不是提权。工作区内的普通读取、编辑、构建、测试和任务范围内清理可以自动执行；Push、Merge、Tag、Release、生产 Authority 切换、任务范围外删除、凭据修改和真实生产任务数据访问仍需用户明确授权。任务 Prompt、Skill、worktree 和路径清单不能自行授予这些权限。不要在 Prompt 中放入凭据。
+在受支持的 Windows 单用户可信本地部署中，SQLite 使用固定受信任的 `yolo` 执行档案。它以当前 Windows 账户权限运行，不是沙箱，也不是提权。工作区内的普通读取、编辑、构建、测试和任务范围内清理可以自动执行；Push、Merge、Tag、Release、生产 Authority 切换、任务范围外删除、凭据修改和真实生产任务数据访问仍需用户明确授权。任务 Prompt、Skill、worktree 和路径清单不能自行授予这些权限。不要在 Prompt 中放入凭据。
 
 ## 已知限制与排障
 

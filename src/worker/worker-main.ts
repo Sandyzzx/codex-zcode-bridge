@@ -9,7 +9,6 @@ import { closeSync, createWriteStream, readFileSync, writeFileSync, writeSync } 
 import { Socket } from "node:net";
 import { BRIDGE_WORKER_LAUNCH_MARKER, fingerprintRuntimeArtifact, verifyWorkerProvenance } from "../runtime/build-provenance.js";
 import { validateHostProfile, type BridgeHostProfile } from "../host/profile.js";
-import { activateWorkerJsonWriter, jsonWriterParticipationRequired, releaseWorkerJsonWriter } from "../store/json-writer-quiescence.js";
 import { createPlatformProbe } from "../runtime/process-probe.js";
 import type { TaskPackage, WorkspaceRef } from "../interfaces.js";
 import type {
@@ -79,52 +78,8 @@ if (bridgeLaunchMarker && positionalArgs.length === 0) {
   // the Manager already verifies.
   process.exit(process.exitCode ?? 0);
 } else {
-  const [dataRoot, taskId, attemptText] = positionalArgs;
-  if (positionalArgs.length !== 3 || !dataRoot || !taskId || !attemptText || !/^[1-9]\d*$/u.test(attemptText) || !Number.isSafeInteger(Number(attemptText))) {
-    console.error("usage: node worker-main.js <dataRoot> <taskId> <attempt>");
-    process.exit(2);
-  }
-
-  try {
-    // Keep the JSON TaskStore/Adapter graph lazy: the isolated Claim-only
-    // branch above must never load or enter it.
-    const leaseToken = process.env["ZCODE_BRIDGE_JSON_WRITER_LEASE"];
-    const writerQuiescence = jsonWriterParticipationRequired(dataRoot);
-    if (writerQuiescence && !leaseToken) throw new Error("JSON writer participant lease is required");
-    const probe = writerQuiescence ? createPlatformProbe() : undefined;
-    let leaseActivated = false;
-    try {
-      if (leaseToken && probe) {
-        const identity = await probe.selfIdentity();
-        await activateWorkerJsonWriter(dataRoot, leaseToken, taskId, Number(attemptText), identity);
-        leaseActivated = true;
-      }
-      const { runWorkerTask } = await import("./run-task.js");
-      const hostText = process.env["ZCODE_BRIDGE_HOST_PROFILE"];
-      const host = hostText ? validateHostProfile(JSON.parse(hostText) as BridgeHostProfile) : undefined;
-      const rawEnvelope = process.env["ZCODE_BRIDGE_RUNTIME_PROVENANCE"];
-      const worker = fingerprintRuntimeArtifact(process.argv[1]);
-      const { status } = await runWorkerTask({
-        dataRoot,
-        taskId,
-        host,
-        attempt: Number(attemptText),
-        probe,
-        writerQuiescence,
-        writerLeaseToken: leaseToken,
-        runtimeProvenance: { bridgeLaunchMarker, rawEnvelope, worker },
-      });
-      process.exitCode = 0;
-      void status;
-    } finally {
-      if (leaseActivated && leaseToken) await releaseWorkerJsonWriter(dataRoot, leaseToken);
-    }
-  } catch (error) {
-    // Store-level or unexpected failure: leave the record for the manager to
-    // reconcile to worker_lost on restart.
-    console.error(error instanceof Error ? error.stack ?? error.message : String(error));
-    process.exitCode = 1;
-  }
+  console.error("usage: Worker requires the SQLite private lifecycle channels");
+  process.exit(2);
 }
 
 async function runClaimOnlyHandshake(options: { readonly interactionMode: boolean; readonly dropAfterPrepared: boolean;
@@ -332,7 +287,7 @@ async function runZCodeAdapter(
   const { ZCodeAppServerAdapter } = await import("../adapters/zcode-app-server-adapter.js");
   const { buildTaskResult } = await import("../manager/normalize.js");
   const startedAt = new Date().toISOString();
-  let outcome: import("../adapters/zcode-adapter.js").ZCodeRunOutcome | null = null;
+  let outcome: import("../adapters/run-outcome.js").ZCodeRunOutcome | null = null;
   let failure: { code: string; message: string } | null = null;
   const adapter = new ZCodeAppServerAdapter({
     host: execution.host_profile,
@@ -431,7 +386,7 @@ async function runZCodeAdapter(
 }
 
 function buildExecutionCleanupProof(
-  outcome: import("../adapters/zcode-adapter.js").ZCodeRunOutcome | null,
+  outcome: import("../adapters/run-outcome.js").ZCodeRunOutcome | null,
 ): CandidateExecutionCleanupProof | null {
   const receipt = outcome?.cleanupTreeReceipt;
   if (outcome?.cleanupVerified !== true || outcome.cleanupError || !receipt) return null;

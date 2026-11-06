@@ -1283,3 +1283,20 @@ test('candidate Port has no production JSON Store or Adapter dependency', () => 
     assert.doesNotMatch(source, /store\/task-store|BridgeTaskManager|zcode-adapter|run-task/u, relative);
   }
 });
+
+test('SQLite interaction retains large UTF-8 input and rejects oversize before mutating the Claim',()=>{
+  const f=makeRunningAttentionTask('large-input-contract');
+  try{
+    const current=()=>f.store.readOperation(f.operationId);
+    const request={request_id:'large-permission',method:'interaction/requestPermission',params:{input:{content:'大🙂'.repeat(12000)},options:[{kind:'allow_once',label:'Allow'}]}};
+    const o=current();
+    const ref={operation_id:f.operationId,task_id:f.taskId,attempt:1,generation:o.generation,expected_revision:o.revision,claim_id:o.claim_id,worker_identity_digest:o.claim_worker_identity_digest};
+    f.store.recordInteractionRequest({...ref,request});
+    const saved=f.store.readInteractionRequest(f.taskId,request.request_id);
+    assert.deepEqual(saved.request,request);
+    const before=current();
+    const oversized={...request,request_id:'oversized-permission',params:{input:{content:'中'.repeat(400000)}}};
+    assert.throws(()=>f.store.recordInteractionRequest({...ref,expected_revision:before.revision,request:oversized}),e=>e.code==='interaction_request_too_large');
+    assert.deepEqual(current(),before);assert.equal(current().claim_status,'permanent_claim_recorded');
+  }finally{f.store.close();}
+});

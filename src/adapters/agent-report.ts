@@ -1,6 +1,6 @@
 // Structured subordinate report parsing per docs/INTERFACES.md (frozen):
-// "The adapter parses the CLI JSON envelope first, then parses/validates
-// `response` as AgentReport." The response may contain surrounding prose, so
+// The app-server adapter parses and validates
+// `response` as AgentReport. The response may contain surrounding prose, so
 // balanced JSON-object candidates are scanned; `needs_master_decision` is
 // required and never synthesized.
 import type { AgentReport, TestReport } from "../interfaces.js";

@@ -1,58 +1,47 @@
-# 决策记录 / Decisions
+# 决策路由 / Decisions
 
 > Status: AUTHORITATIVE（仅指本索引）
-> Last updated: 2026-11-06
-> Last verified: 2026-11-06，核对 ADR-028 的 R4 接受状态、边界与 ADR-027 路由；其余条目沿用历史核对范围，未重新认证。
-> Verified against: cbf0305b0f548b065fcfab0ffaa7159554f6d69d（R4 本地候选基线，未发布）
+> Last updated: 2026-11-07
+> Last verified: 2026-11-07，核对现有 ADR 的适用范围及 ADR-029 退役影响；历史实验结论未重新认证。
+> Verified against: a46137fe46b567271a7756be819361132625278c + ADR-029 本地候选
 
-本目录保存架构决策、待批准提案和带日期的决策记录；是否批准以各文档的 Decision 字段为准。决策回答"为什么这样定"，当前实现仍以 `ARCHITECTURE.md` / `INTERFACES.md` 为准。
+先读当前 [架构](../ARCHITECTURE.md)/[接口](../INTERFACES.md)，只在需要解释取舍时加载对应决策。文件保持原路径和历史正文；Partially superseded 的标注优先于历史段落，不得拿旧 JSON 实现恢复当前合同。
 
-## 现有记录
+## 当前有效 / Active
 
-| 文档 | 状态 | 说明 |
+| 主题 | 决策 | 范围 |
 |---|---|---|
-| [roadmap-decisions-2026-09-27.md](roadmap-decisions-2026-09-27.md) | DECISION | 2026-09-27 的路线图与决策讨论。仍然成立的结论需要提炼进 `ARCHITECTURE.md` / `INTERFACES.md`；本文本身不是当前事实来源。 |
-| [reliability-repair-plan-v2-2026-10-03.md](reliability-repair-plan-v2-2026-10-03.md) | DECISION | Bridge 可靠性修复计划。A/B 主要改动已实现；C/D 与宿主启动核验仍有未完成项。 |
-| [ADR-005](ADR-005-long-session-reliability.md) | Accepted | 长会话 Windows 清理验证、原子锁释放、报告续作与 catalog provider 兼容；历史记录保持不变。 |
-| [ADR-006](ADR-006-provider-quota-failure-diagnostics.md) | Accepted | 仅对白名单 provider 错误字段分类明确的用量额度耗尽；不公开原始 RPC 错误。 |
+| 执行链 | [001](ADR-001-appserver-as-production-execution-path.md)、[003](ADR-003-execution-directory-prepared-by-host.md) | app-server 唯一路径；Host 准备执行目录 |
+| Authority/观察 | [004](ADR-004-separate-control-state-and-observation.md)、[016 v3](ADR-016-stop-the-world-json-to-sqlite-cutover.md) | SQLite-only Fresh Bootstrap；补充观察不是状态 Authority |
+| Provider/报告 | [006](ADR-006-provider-quota-failure-diagnostics.md) | 明确额度耗尽分类；不自动重试 |
+| Browser | [007](ADR-007-browser-host-rpc.md) | 可选独立 managed CDP；默认关闭 |
+| Windows 身份 | [009](ADR-009-windows-identity-bound-tree-termination.md)、[023](ADR-023-completion-window-cleanup-prewarm.md) | 原生句柄/claimant proof；空 helper 预热 |
+| Master 委派 | [010](ADR-010-whole-task-delegation.md)、[015](ADR-015-master-skill-authorization-and-progressive-loading.md) | whole_task 默认、授权和按需加载 |
+| Workspace | [017](ADR-017-single-user-trusted-local-workspace-admission.md) | 单用户本机 Admission；无需项目白名单 |
+| Recovery | [018](ADR-018-administrative-abandonment-of-cleanup-incomplete-hold.md)、[024](ADR-024-scoped-sqlite-hold-and-local-cleanup-recovery.md) | 行政兜底与 Operation scoped Hold/清理恢复；R5 补足显式取消 |
+| 配置/诊断 | [021](ADR-021-zcode-path-discovery.md)、[022](ADR-022-authority-bound-doctor.md) | ZCode 路径发现；诊断绑定 SQLite |
+| Attention | [025](ADR-025-sqlite-attention-unified-waiting.md) | SQLite snapshot、被动等待与 Thin Waiter |
+| Result | [026](ADR-026-sqlite-result-contract.md) | 32 MiB、256 KiB envelope、v14 与显式离线升级 |
+| 期限 | [027](ADR-027-execution-and-cleanup-deadlines.md) | Owner 已接受 R3；执行/交付/清理分工 |
+| Launch | [028](ADR-028-pre-intent-workspace-refusal.md) | Owner 已接受 R4；Intent 前拒绝与 Intent 后 unknown |
+| 退役/Core | [029](ADR-029-legacy-runtime-retirement.md) | Owner 已批准内部及公共 Core 退役；未来主版本发布 |
 
-## ADR 索引
+## 部分被替代 / Partially superseded
 
-| ADR | 状态 | 主题 |
+| 决策 | 仍生效 | 已退役/替代 |
 |---|---|---|
-| [ADR-001](ADR-001-appserver-as-production-execution-path.md) | Accepted | 生产执行路径使用 ZCode app-server |
-| [ADR-002](ADR-002-manager-owns-task-lifecycle.md) | Accepted | Manager 独占任务生命周期，worker 通过 attempt claim 入场 |
-| [ADR-003](ADR-003-execution-directory-prepared-by-host.md) | Accepted | 执行目录由调用宿主准备，Bridge 不创建也不删除 |
-| [ADR-004](ADR-004-separate-control-state-and-observation.md) | Accepted | 分离运行时控制、权威状态与补充观察；Desktop 索引是登记过的集成例外 |
-| [ADR-011](ADR-011-private-failure-diagnostics.md) | Accepted（设计） | P0 私有失败诊断；终止根因、受理三态、原子所有权与有限脱敏；固化记录见 2026-10-18-adr011-p0-consolidation |
-| [ADR-016](ADR-016-stop-the-world-json-to-sqlite-cutover.md) | Accepted v3 | SQLite 唯一 Authority；新装与升级统一 Fresh Bootstrap，旧 JSON 完全脱钩，损坏 SQLite fail closed |
-| [ADR-017](ADR-017-single-user-trusted-local-workspace-admission.md) | Accepted v2 | SQLite Workspace Admission 复用 JSON 的本地目录与可选执行 worktree 流程；Host capability 保留，无需项目白名单或 `workspace_roots` |
-| [ADR-018](ADR-018-administrative-abandonment-of-cleanup-incomplete-hold.md) | Accepted | 对已确认执行世代结束的 `cleanup_incomplete` Hold 执行一次性、证据绑定且不可重入的行政结案 |
-| [ADR-019](ADR-019-local-trust-and-recovery-fence.md) | Accepted，Recovery 条款由 ADR-024 取代 | 保留本地信任与授权边界；Operation Recovery/派发围栏以 ADR-024 为准 |
-| [ADR-021](ADR-021-zcode-path-discovery.md) | Accepted（待 Master 审查） | 统一 ZCode 路径发现：Windows HOME 判定、`setting.json` dataBaseDir、同安装校验、显式冲突报错与 Worker 环境一致性 |
-| [ADR-022](ADR-022-authority-bound-doctor.md) | 本次缺陷修复 | doctor 使用当前 SQLite Authority 的一致读与 Manager 恢复围栏；禁止回退 JSON 误报健康 |
-| [ADR-023](ADR-023-completion-window-cleanup-prewarm.md) | 本次缺陷修复 | Windows 清理 helper 在完成窗口空预热；身份绑定终止与失败闭合不变 |
-| [ADR-024](ADR-024-scoped-sqlite-hold-and-local-cleanup-recovery.md) | Accepted（候选分支） | SQLite Hold 限制到 Operation/执行路径；精确身份退出加 clean claimant scan 可走普通 evidence-only Recovery |
-| [ADR-025](ADR-025-sqlite-attention-unified-waiting.md) | Accepted — Owner directive 2026-11-04（整合时由 ADR-024 重编号，避免与 scoped Hold ADR 冲突） | SQLite Attention Core、`zcode_events(wait_for="attention")` 与共享只读 Thin Waiter |
-| [ADR-026](ADR-026-sqlite-result-contract.md) | Accepted — Owner 已批准，本地 v14 实现；生产迁移未授权 | 统一 Result 文本与 UTF-8 容量；32MiB Result、独立 envelope 余量与显式 v14 升级 |
-| [ADR-027](ADR-027-execution-and-cleanup-deadlines.md) | Owner 授权 R3 本地实现/隔离验证，待本轮验收 | 一次解析执行期限、独立清理预算、先提交 Result 再验证退出与树清理 |
-| [ADR-028](ADR-028-pre-intent-workspace-refusal.md) | Accepted for local R4 implementation — Owner R4 directive，2026-11-06 | 最终 Workspace use 校验先于 Launch Intent；确定性拒绝可 queued Cancel，Intent 后保持 conservative unknown |
+| [002](ADR-002-manager-owns-task-lifecycle.md) | Manager 管生命周期、Claim 防重放 | JSON Manager/Store/Worker 具体实现被 016/024/029 替代 |
+| [005](ADR-005-long-session-reliability.md) | 严格报告、显式报告修复、模型身份解析 | 旧 JSON pump/heartbeat/checkpoint、Task 调度锁退休；Windows 清理以 009、期限以 027 为准 |
+| [008](ADR-008-session-frames-and-large-interactions.md) | app-server 帧边界、输入资源有界原则 | JSON full_request 文件/64KB 事件预览协议退役；SQLite request/reply/ACK 以当前接口为准 |
+| ADR-011（历史编号；原文未纳入当前仓库） | Adapter 受理事实/根因/隐私边界 | JSON failure-facts 文件与 state.lock 所有权不再是生产机制；未扩展到 R7 |
+| [019](ADR-019-local-trust-and-recovery-fence.md) | 单用户本机信任及 yolo profile | Recovery 围栏由 024/R5 替代；JSON 双链描述由 029 替代 |
 
-ADR-001 到 ADR-003 只搬运权威文档里已经写明的结论。ADR-004 原先没有明文记录，只有 bridge 之外的设计讨论，因此先以 Proposed 记录；2026-10-07 由 Master 明确按"强化版 A"接受，原则冻结，未因此增加任何读取 ZCode 本地材料的代码。
+016 的 v1/v2 归档/导入方案已被同文件 v3 取代；保留旧 receipt/schema 读取不等于保留迁移执行器。
 
-## 本分支待维护者审查的实现
+## 历史追溯 / Historical only
 
-- [ADR-007](ADR-007-browser-host-rpc.md)：可选headless浏览器宿主；默认关闭，限定版本实测。
-- [ADR-008](ADR-008-session-frames-and-large-interactions.md)：会话帧与大审批输入；独立资源边界及可恢复错误。
-- [ADR-009](ADR-009-windows-identity-bound-tree-termination.md)：Windows 进程树身份绑定归属与终止；句柄事务、零容差区间归属、单调失败锁存与有界传输。
+[2026-09-27 路线图](roadmap-decisions-2026-09-27.md) 与 [2026-10-03 修复计划](reliability-repair-plan-v2-2026-10-03.md) 仅供追溯，当前事实已分流到架构/接口和专题 ADR。不再作为 Master 默认阅读前置。
 
-## 命名
+ADR-009/026/027/028 原有关键合同保留。未因数量多而合并决策；完整/部分/历史分类降低默认加载范围。新决策只记录真实合同取舍，不重复源码和测试日志。
 
-新决策使用 `ADR-NNN-<slug>.md`，正文至少包含 Status、Date、Context、Decision、Rationale、Consequences。
-
-## 独立功能接收（2026-10-29）
-
-| ADR | 状态 | 范围 |
-|---|---|---|
-| [ADR-010](ADR-010-whole-task-delegation.md) | Accepted | 整任务交付、真实阶段门与续作边界；不改变Schema或生命周期 |
-| [ADR-015](ADR-015-master-skill-authorization-and-progressive-loading.md) | Accepted | 显式调用授权与按需文档加载；非Host强制鉴权 |
+核验发现：旧索引链接的 ADR-011 文件在集成基线 Git tree 中并不存在，本轮不伪造已批准原文。Adapter 诊断当前事实由源码/接口与保留的分类回归证明；需要历史原文时由 Owner 提供外部归档。

@@ -11,7 +11,7 @@ import type { Readable, Writable } from "node:stream";
 import { homedir } from "node:os";
 import path from "node:path";
 import { findPackageRoot, loadPersistedRuntimeEnvironment } from "../runtime/resolver.js";
-import { BridgeTaskManager } from "../manager/task-manager.js";
+import type { SqliteLifecycleMcpAuthority } from "../manager/sqlite-lifecycle-mcp-authority.js";
 import { createBridgeServer } from "../mcp/server.js";
 import { DEFAULT_TASK_TIMEOUT_MS, validateTaskTimeout } from "../runtime/task-timeout.js";
 import { runBridgeDoctor, type DoctorCheck } from "../runtime/doctor.js";
@@ -88,7 +88,7 @@ export interface StdioLifecycleHost {
  */
 export function serveStdioLifecycleHost(
   server: ReturnType<typeof createBridgeServer>,
-  manager: Pick<BridgeTaskManager, "shutdown">,
+  manager: Pick<SqliteLifecycleMcpAuthority, "shutdown">,
   options: {
     readonly stdin?: Readable;
     readonly stdout?: Writable;
@@ -186,7 +186,7 @@ export async function startBridge(
   }
 
   const processProbe = createPlatformProbe();
-  let manager: BridgeTaskManager;
+  let manager: SqliteLifecycleMcpAuthority;
   let lifecycleChecks: () => readonly DoctorCheck[];
   const databasePath = path.join(dataRoot, FRESH_SQLITE_DATABASE_FILE);
   let trustedLocalContext: ReturnType<typeof createTrustedLocalCandidateContext>;
@@ -209,7 +209,7 @@ export async function startBridge(
       trustedLocalContext,
       requireAuthorityReceipt: true,
     });
-    manager = new BridgeTaskManager({ lifecycleAuthority: authority, maxConcurrentWorkers: workerLimit.maxConcurrentWorkers });
+    manager = authority;
     lifecycleChecks = () => authority.getDoctorChecks();
   } catch (error) {
     console.error(`[bridge] SQLITE_INITIALIZATION_FAILED: ${error instanceof Error ? error.message : String(error)}`);

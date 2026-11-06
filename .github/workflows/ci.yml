@@ -37,3 +37,28 @@ jobs:
         run: git ls-files --error-unmatch plugins/codex-zcode-bridge/dist/schema.sql plugins/codex-zcode-bridge/dist/schema-v13.sql plugins/codex-zcode-bridge/dist/admin-abandonment.sql plugins/codex-zcode-bridge/dist/upgrade-sqlite-v14.mjs
       - name: Check generated plugin bundles are committed
         run: git diff --exit-code -- plugins/codex-zcode-bridge/dist/bridge.mjs plugins/codex-zcode-bridge/dist/wait-task.mjs plugins/codex-zcode-bridge/dist/schema.sql plugins/codex-zcode-bridge/dist/schema-v13.sql plugins/codex-zcode-bridge/dist/admin-abandonment.sql plugins/codex-zcode-bridge/dist/upgrade-sqlite-v14.mjs plugins/codex-zcode-bridge/worker/worker-main.mjs
+
+  sqlite-stress:
+    name: SQLite resource matrix (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24.16.0
+      - id: impact
+        name: Select SQLite resource boundary
+        env:
+          STRESS_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          STRESS_HEAD: ${{ github.sha }}
+        run: node scripts/select-sqlite-stress.mjs "${{ env.STRESS_BASE }}" "${{ env.STRESS_HEAD }}"
+      - if: steps.impact.outputs.required == 'true'
+        run: npm ci
+      - if: steps.impact.outputs.required == 'true'
+        run: npm run test:stress

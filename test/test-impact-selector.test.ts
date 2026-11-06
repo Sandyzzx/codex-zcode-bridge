@@ -13,9 +13,9 @@ const selectorUrl = pathToFileURL(path.resolve(import.meta.dirname, "../scripts/
 
 function filesFor(selectorFile: string): string[] {
   if (selectorFile === "path-discovery") return ["src/runtime/paths.ts"];
-  if (selectorFile === "task-store") return ["src/store/task-store.ts"];
+  if (selectorFile === "task-store") return ["src/sqlite-candidate/wp6b2b1/store.mjs"];
   if (selectorFile === "sqlite-schema") return ["src/sqlite-candidate/wp6b2b1/schema.sql"];
-  if (selectorFile === "worker") return ["src/worker/run-task.ts"];
+  if (selectorFile === "worker") return ["src/worker/worker-main.ts"];
   if (selectorFile === "docs") return ["docs/reports/example.md"];
   if (selectorFile === "unknown-source") return ["src/example/new-domain.ts"];
   if (selectorFile === "test-runner") return ["scripts/test-isolated.mjs"];
@@ -27,38 +27,37 @@ async function importSelector(): Promise<typeof import("../scripts/test-impact-s
   return import(selectorUrl);
 }
 
-test("path discovery changes select path tests but not B3-05", () => {
+test("path discovery changes select path tests but not SQLite stress", () => {
   const selection = selectAffectedTests({ changedFiles: filesFor("path-discovery"), map });
   const files = selection.selected_tests.map((entry) => entry.file);
   assert.ok(files.includes("test/zcode-paths.test.ts"));
   assert.ok(files.includes("test/zcode-path-repair.test.ts"));
   assert.ok(files.includes("test/worker-env-portability.test.ts"));
-  assert.equal(files.includes("test/batch2-performance.test.ts"), false);
+  assert.equal(files.includes("test/sqlite-resource-stress.test.mjs"), false);
   assert.equal(selection.mode, "TARGETED");
   assert.equal(selection.stress_mode, "STRESS_TESTS_NOT_APPLICABLE");
 });
 
-test("TaskStore and SQLite schema changes trigger B3-05 with frozen parameters", () => {
+test("SQLite Store and schema changes trigger SQLite stress with frozen parameters", () => {
   for (const files of [filesFor("task-store"), filesFor("sqlite-schema")]) {
     const selection = selectAffectedTests({ changedFiles: files, map });
-    const stress = selection.selected_tests.find((entry) => entry.file === "test/batch2-performance.test.ts");
+    const stress = selection.selected_tests.find((entry) => entry.file === "test/sqlite-resource-stress.test.mjs");
     assert.ok(stress?.stress);
     assert.equal(selection.stress_mode, "STRESS_TEST_REQUIRED");
-    assert.equal(stress?.stress?.parameters_frozen.active_tasks, 32);
-    assert.equal(stress?.stress?.parameters_frozen.historical_tasks, 10_000);
-    assert.equal(stress?.stress?.parameters_frozen.existing_test_timeout_seconds, 900);
-    assert.equal(stress?.stress?.parameters_frozen.setup_performance_budget_seconds, 720);
+    assert.equal(stress?.stress?.parameters_frozen.capacity_limit, 8);
+    assert.equal(stress?.stress?.parameters_frozen.historical_tasks, 256);
+    assert.equal(stress?.stress?.parameters_frozen.existing_test_timeout_seconds, 120);
   }
 });
 
 test("Worker and protocol-adapter source changes select corresponding integration tests", () => {
   const worker = selectAffectedTests({ changedFiles: filesFor("worker"), map });
-  assert.ok(worker.selected_tests.some((entry) => entry.file === "test/run-worker-task.test.ts"));
-  assert.ok(worker.selected_tests.some((entry) => entry.file === "test/task-manager.test.ts"));
+  assert.ok(worker.selected_tests.some((entry) => entry.file === "test/spawn-worker-stderr.test.ts"));
+  assert.ok(worker.selected_tests.some((entry) => entry.file === "test/sqlite-candidate/wp6b-wiring/composition.test.ts"));
   const adapter = selectAffectedTests({ changedFiles: ["src/adapters/zcode-app-server-adapter.ts"], map });
   assert.ok(adapter.selected_tests.some((entry) => entry.file === "test/zcode-app-server-adapter.test.ts"));
   assert.ok(adapter.selected_tests.some((entry) => entry.file === "test/session-frames.test.ts"));
-  assert.equal(worker.selected_tests.some((entry) => entry.file === "test/batch2-performance.test.ts"), false);
+  assert.equal(worker.selected_tests.some((entry) => entry.file === "test/sqlite-resource-stress.test.mjs"), false);
   const deadlines = selectAffectedTests({ changedFiles: ["src/runtime/task-timeout.ts"], map });
   for (const file of ["test/task-timeout.test.ts", "test/zcode-app-server-adapter.test.ts", "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts"]) {
     assert.ok(deadlines.selected_tests.some((entry) => entry.file === file), `shared deadline changes must select ${file}`);
@@ -87,8 +86,8 @@ test("runner and shared fixture changes force the complete regression", () => {
     const changed = Array.isArray(file) ? file : [file];
     const selection = selectAffectedTests({ changedFiles: changed, map });
     assert.equal(selection.mode, "FULL_SUITE");
-    assert.equal(selection.stress_mode, "INCLUDED_BY_FULL_SUITE");
-    assert.ok(selection.selected_tests.some((entry) => entry.file === "test/batch2-performance.test.ts"));
+    assert.equal(selection.stress_mode, "SEPARATE_STRESS_GATE");
+    assert.equal(selection.selected_tests.some((entry) => entry.file === "test/sqlite-resource-stress.test.mjs"), false);
   }
 });
 
@@ -101,13 +100,13 @@ test("renames preserve mapping by selecting both old and new paths", () => {
 test("staged, unstaged, and untracked files use the same pure selection behavior", () => {
   // The Git wrapper records all three sources into one sorted list before this
   // function is called. The same file set must therefore produce one result.
-  const once = selectAffectedTests({ changedFiles: ["src/store/task-store.ts"], map });
-  const twice = selectAffectedTests({ changedFiles: ["src/store/task-store.ts"], map });
+  const once = selectAffectedTests({ changedFiles: ["src/sqlite-candidate/wp6b2b1/store.mjs"], map });
+  const twice = selectAffectedTests({ changedFiles: ["src/sqlite-candidate/wp6b2b1/store.mjs"], map });
   assert.deepEqual(twice, once);
 });
 
 test("explicit baseline changes are just another deterministic changed-file input", () => {
-  const files = ["package.json", "src/store/task-store.ts", "docs/example.md"];
+  const files = ["package.json", "src/sqlite-candidate/wp6b2b1/store.mjs", "docs/example.md"];
   const first = selectAffectedTests({ changedFiles: files, map });
   const second = selectAffectedTests({ changedFiles: [...files].sort().reverse(), map });
   assert.deepEqual(second, first);
@@ -119,11 +118,12 @@ test("selector module exports stable policy functions", async () => {
 });
 
 test("every automatic selection excludes manual E2E and support fixtures", () => {
-  const forbidden = new Set(map.tests.filter((entry) => entry.gate === "MANUAL_E2E" || entry.type === "Fixture").map((entry) => entry.file));
+  const policyMap = { ...map, tests: [...map.tests, {file:"test/manual-only.mjs",gate:"MANUAL_E2E",type:"E2E",domains:["appserver-adapter"]}] };
+  const forbidden = new Set(policyMap.tests.filter((entry) => entry.gate === "MANUAL_E2E" || entry.type === "Fixture").map((entry) => entry.file));
   const changed = [...map.domains.flatMap((domain) => domain.paths), ...forbidden, "package.json", "src/unknown-file.ts"];
   for (const platform of ["win32", "linux"] as const) {
     for (const file of changed) {
-      const selection = selectAffectedTests({ changedFiles: [file], map, platform });
+      const selection = selectAffectedTests({ changedFiles: [file], map: policyMap, platform });
       assert.equal(selection.selected_tests.some((entry) => forbidden.has(entry.file)), false, `${platform}: ${file}`);
     }
   }

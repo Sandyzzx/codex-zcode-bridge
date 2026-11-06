@@ -6,7 +6,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
-import { BridgeTaskManager } from "../../../src/manager/task-manager.js";
 import { SqliteLifecycleMcpAuthority } from "../../../src/manager/sqlite-lifecycle-mcp-authority.js";
 import { createBridgeServer } from "../../../src/mcp/server.js";
 import { createTrustedLocalCandidateContext } from "../../../src/host/stdio.js";
@@ -204,7 +203,7 @@ async function waitForInteractionRequest(client: Client, taskId: string): Promis
 }
 
 async function withRealAdapterMcp(
-  run: (client: Client, manager: BridgeTaskManager, dataRoot: string, workspace: string, runtime: FakeRuntimeFixture) => Promise<void>,
+  run: (client: Client, manager: SqliteLifecycleMcpAuthority, dataRoot: string, workspace: string, runtime: FakeRuntimeFixture) => Promise<void>,
   options: { readonly runtimeVariant?: "success" | "failure" | "stderr-flood" | "large-result" | "deadline-success" | "deadline-hang"; readonly preserveFixtureOnFailure?: boolean;
     readonly workerOverride?: string; readonly testOnlyFakeAdapter?: true;
     readonly resultWaitMs?: number; readonly workerCloseWaitMs?: number;
@@ -283,7 +282,7 @@ async function withRealAdapterMcp(
         testOnScheduler: (stage, detail) => options.lifecycleCollector?.lines.push(`[bridge-manager] ${stage} ${JSON.stringify(detail)}`),
         onStage: (stage, detail) => options.lifecycleCollector?.lines.push(`[bridge-lifecycle] ${stage} ${JSON.stringify(detail ?? {})}`),
       });
-      const manager = new BridgeTaskManager({ lifecycleAuthority: authority });
+      const manager = authority;
       const server = createBridgeServer({ taskManager: manager });
       const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
       const client = new Client({ name: "mvp-real-adapter-test", version: "0.0.1" });
@@ -614,7 +613,7 @@ test('ADR-027 Result survives a late Worker close and Manager restart; completed
     await manager.shutdown();
     const host={name:'mvp-real-adapter-test',settingsDirectory:path.join(path.dirname(dataRoot),'settings')};
     const authority=await SqliteLifecycleMcpAuthority.create({dataRoot,workerEntryPath:worker,bridgeEntryPath:fileURLToPath(import.meta.url),hostProfile:host,trustedLocalContext:createTrustedLocalCandidateContext(host),testOnlyFakeAdapter:true});
-    const restarted=new BridgeTaskManager({lifecycleAuthority:authority});
+    const restarted=authority;
     try{
       assert.deepEqual(await restarted.getResult(taskId),result);
       const recovered=await restarted.cancelTask(taskId);assert.equal(recovered.status,'completed');

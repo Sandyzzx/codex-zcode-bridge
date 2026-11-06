@@ -16,7 +16,7 @@ import type {
   ZCodeRuntimeConfig,
 } from "../interfaces.js";
 import { parseAgentReport } from "./agent-report.js";
-import type { ZCodeRunOutcome } from "./zcode-adapter.js";
+import type { ZCodeRunOutcome } from "./run-outcome.js";
 import { buildContinuePrompt, buildTaskPrompt } from "../prompts/task-prompt.js";
 import { BridgeError } from "../runtime/errors.js";
 import { loadPersistedRuntimeEnvironment, NodeRuntimeResolver } from "../runtime/resolver.js";

@@ -9,15 +9,10 @@ import { PassThrough } from "node:stream";
 import test from "node:test";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { build } from "esbuild";
-import { BridgeTaskManager } from "../../../src/manager/task-manager.js";
 import { SqliteLifecycleMcpAuthority } from "../../../src/manager/sqlite-lifecycle-mcp-authority.js";
 import { createBridgeServer } from "../../../src/mcp/server.js";
 import { createTrustedLocalCandidateContext, serveStdioLifecycleHost, type StdioLifecycleHost } from "../../../src/host/stdio.js";
 import { initializeIsolatedCandidateRoot, loadLifecycleCandidateModules, openClaimOnlyDriver, readAllLifecycleEventsForRecovery } from "../../../src/store/lifecycle-gate.js";
-import { createJsonHistoryArchive, readJsonHistoryArchive } from "../../../src/store/json-history-archive.js";
-import { publishJsonAuthority } from "../../../src/store/json-authority-cutover.js";
-import { beginJsonWriterDrain, registerManagerJsonWriter, sealJsonWriterRoot } from "../../../src/store/json-writer-quiescence.js";
-import { TaskStore } from "../../../src/store/task-store.js";
 import { DirectWorkspaceProvider } from "../../../src/workspace/direct-provider.js";
 import { createPlatformProbe, PROCESS_IDENTITY_VERSION, type ProcessProbe, type ProbeRequest, type ProbeVerdict } from "../../../src/runtime/process-probe.js";
 import { runBridgeDoctor } from "../../../src/runtime/doctor.js";
@@ -62,21 +57,11 @@ test("production Host composition initializes the bound SQLite Authority and exp
   const host = source("host/stdio.ts");
   assert.match(host, /initializeFreshInstallSqliteRoot\(dataRoot,\s*FRESH_SQLITE_DATABASE_FILE/u);
   assert.match(host, /const \{ SqliteLifecycleMcpAuthority \} = await import\("\.\.\/manager\/sqlite-lifecycle-mcp-authority\.js"\)/u);
-  assert.match(host, /new BridgeTaskManager\(/u);
-  assert.match(host, /lifecycleAuthority:\s*authority/u);
+  assert.match(host, /manager = authority/u);
   assert.match(host, /lifecycleChecks = \(\) => authority\.getDoctorChecks\(\)/u);
   assert.match(host, /lifecycleChecks\s*\}/u);
   assert.doesNotMatch(host, /testOnlyFakeAdapter|executeFakeResultAdapter|adapter_mode\s*:\s*"test_fake"/u,
     "the formal Host entry must not expose the explicit Fake test capability");
-});
-
-test("JSON Worker path lazily imports the unchanged TaskStore/Adapter runner only without fd 3", () => {
-  const worker = source("worker/worker-main.ts");
-  assert.match(worker, /bridgeLaunchMarker && positionalArgs\.length === 0/u);
-  assert.match(worker, /await runClaimOnlyHandshake\(\{ interactionMode, dropAfterPrepared,/u);
-  assert.match(worker, /const \{ runWorkerTask \} = await import\("\.\/run-task\.js"\)/u);
-  assert.match(worker, /else \{[\s\S]*?await import\("\.\/run-task\.js"\)/u);
-  assert.doesNotMatch(worker, /from ["']\.\.\/sqlite-candidate\/wp6b2b1\/store\.mjs/u);
 });
 
 test("claim-only lifecycle composition has no JSON TaskStore or real Adapter dependency", () => {
@@ -107,12 +92,12 @@ test("SQLite Manager startup runs read-only Recovery and retains unknown active 
       const beforeRetry = JSON.stringify(port.readRecoverySnapshot());
       await assert.rejects(manager.recoverTasks(), /startup-only/u, "Recovery must not be re-entered while the Manager is live");
       assert.equal(JSON.stringify(port.readRecoverySnapshot()), beforeRetry, "rejected Recovery re-entry must not alter lifecycle state");
-      const sameWorkspace = await manager.createTask(syntheticTask(workspace, `same-path-${randomUUID()}`) as unknown as Parameters<BridgeTaskManager["createTask"]>[0]);
+      const sameWorkspace = await manager.createTask(syntheticTask(workspace, `same-path-${randomUUID()}`) as unknown as Parameters<SqliteLifecycleMcpAuthority["createTask"]>[0]);
       assert.equal(sameWorkspace.status, "queued", "new work may queue behind the occupied execution path");
       const independentWorkspace = path.join(dataRoot, "independent-workspace");
       mkdirSync(independentWorkspace, { recursive: true });
       const independentTaskId = `independent-${randomUUID()}`;
-      const independent = await manager.createTask(syntheticTask(independentWorkspace, independentTaskId) as unknown as Parameters<BridgeTaskManager["createTask"]>[0]);
+      const independent = await manager.createTask(syntheticTask(independentWorkspace, independentTaskId) as unknown as Parameters<SqliteLifecycleMcpAuthority["createTask"]>[0]);
       assert.ok(["queued", "running"].includes(independent.status), "another execution path remains admissible");
       assert.equal((await waitForTerminal(_client, independentTaskId, 1)).status, "completed");
       await waitForLifecycleEvent(_client, independentTaskId, "released");
@@ -124,7 +109,7 @@ test("SQLite Manager startup runs read-only Recovery and retains unknown active 
       assert.match(String(executionObservation.evidence_ref), /^[0-9a-f]{64}$/u);
       assert.doesNotMatch(JSON.stringify(executionObservation), /43210/u, "observation reference must not disclose a PID");
       assert.equal(port.readTaskEvents(taskId).events.length, eventsBeforeObservation, "Status observation is read-only and must not append lifecycle events");
-      const anotherQueued = await manager.createTask(syntheticTask(workspace, `queued-${randomUUID()}`) as unknown as Parameters<BridgeTaskManager["createTask"]>[0]);
+      const anotherQueued = await manager.createTask(syntheticTask(workspace, `queued-${randomUUID()}`) as unknown as Parameters<SqliteLifecycleMcpAuthority["createTask"]>[0]);
       assert.equal(anotherQueued.status, "queued", "work on the occupied path stays queued");
       assert.equal(spawnCount, 1, "startup Recovery must not replay the held Worker; only unrelated work may Spawn");
     } finally {
@@ -232,13 +217,13 @@ for (const recoveryProbeMode of ["alive", "unknown"] as const) test(
         assert.equal(Number(operationAfterRecovery?.revision), Number(seededOperation?.revision),
           "Rejecting startup takeover must not advance the owning Operation");
 
-        const blockedTask = syntheticTask(String(seededOperation?.workspace_ref), `blocked-live-owner-${randomUUID()}`) as unknown as Parameters<BridgeTaskManager["createTask"]>[0];
+        const blockedTask = syntheticTask(String(seededOperation?.workspace_ref), `blocked-live-owner-${randomUUID()}`) as unknown as Parameters<SqliteLifecycleMcpAuthority["createTask"]>[0];
         const queuedOnOccupiedPath = await manager.createTask(blockedTask);
         assert.equal(queuedOnOccupiedPath.status, "queued", "same-path work remains queued behind uncertain Worker occupancy");
         const independentWorkspace = path.join(dataRoot, "independent-workspace");
         mkdirSync(independentWorkspace, { recursive: true });
         const independentTaskId = `independent-live-owner-${randomUUID()}`;
-        const independent = await manager.createTask(syntheticTask(independentWorkspace, independentTaskId) as unknown as Parameters<BridgeTaskManager["createTask"]>[0]);
+        const independent = await manager.createTask(syntheticTask(independentWorkspace, independentTaskId) as unknown as Parameters<SqliteLifecycleMcpAuthority["createTask"]>[0]);
         assert.ok(["queued", "running"].includes(independent.status), "another workspace remains writable");
       } finally {
         recovery.close();
@@ -817,7 +802,7 @@ class RawStdioMcpTestClient {
 }
 
 async function withSqliteMcp(
-  run: (client: Client, manager: BridgeTaskManager, dataRoot: string, workspace: string) => Promise<void>,
+  run: (client: Client, manager: SqliteLifecycleMcpAuthority, dataRoot: string, workspace: string) => Promise<void>,
   options: { readonly testBeforeDispatch?: () => Promise<void>; readonly testOnScheduler?: (stage: string, detail: Readonly<Record<string, unknown>>) => void; readonly onStage?: (stage: string, detail?: Readonly<Record<string, unknown>>) => void; readonly onChildSpawn?: (child: { readonly pid?: number; readonly stderr?: NodeJS.ReadableStream | null; readonly resultChannel?: NodeJS.ReadableStream | null }) => void; readonly beforeAuthority?: (dataRoot: string, modules: Awaited<ReturnType<typeof loadLifecycleCandidateModules>>, workspace: string) => void; readonly prepareDataRoot?: (dataRoot: string, fixture: string) => Promise<void>; readonly databaseFileName?: string; readonly enableSyntheticInteractionChannel?: boolean; readonly processProbe?: ProcessProbe; readonly testProcessProbeTimeoutMs?: number; readonly testShutdownWaitMs?: number; readonly testStopWorkerForRecovery?: (pid: number, expectedFingerprint: string) => Promise<void>; readonly testBeforeRecoveryWrite?: (operationId: string, phase: string) => Promise<void>; readonly stdio?: boolean; readonly preserveFixtureOnFailure?: boolean; readonly onStdioHost?: (host: StdioLifecycleHost) => void; readonly onStdioShutdownComplete?: (reason: string) => void; readonly onStdioShutdownFailure?: (reason: string, error: unknown) => void } = {},
 ): Promise<void> {
   const fixture = path.join(integrationRoot, randomUUID());
@@ -869,7 +854,7 @@ async function withSqliteMcp(
     ...(options.enableSyntheticInteractionChannel ? { enableSyntheticInteractionChannel: true } : {}),
     testOnlyFakeAdapter: true,
   });
-  const manager = new BridgeTaskManager({ lifecycleAuthority: authority });
+  const manager = authority;
   const server = createBridgeServer({ taskManager: manager,
     doctor: () => runBridgeDoctor({ env: {}, resolver: { homeDir: settingsDirectory, packageRoot: fixture },
       dataRoot, lifecycleChecks: () => authority.getDoctorChecks() }),
@@ -1006,7 +991,7 @@ async function runRecoveryBoundedMode(
   const settingsDirectory = path.join(fixture, "settings");
   let successful = false;
   let driver: Awaited<ReturnType<typeof openClaimOnlyDriver>> | undefined;
-  let recoveryManager: BridgeTaskManager | undefined;
+  let recoveryManager: SqliteLifecycleMcpAuthority | undefined;
   try {
     mkdirSync(compiledCandidate, { recursive: true });
     if (existsSync(candidateSchema)) {
@@ -1194,7 +1179,7 @@ async function runRecoveryBoundedMode(
       testProcessProbeTimeoutMs: 100,
       onChildSpawn: () => { recoverySpawnCount += 1; },
     });
-    recoveryManager = new BridgeTaskManager({ lifecycleAuthority: recoveryAuthority });
+    recoveryManager = recoveryAuthority;
     const elapsedMs = Date.now() - startedAt;
     const maximumRecoveryMs = "maximumRecoveryMs" in mode ? mode.maximumRecoveryMs : 2_000;
     assert.ok(elapsedMs < maximumRecoveryMs, `Recovery must return within a controlled bound, observed ${elapsedMs}ms (${mode.name})`);
@@ -1554,7 +1539,7 @@ test("ADR-024 six lifecycle crash boundaries use hard Manager-process exits and 
     } finally { beforeRestart.close(); }
 
     let authority: SqliteLifecycleMcpAuthority | undefined;
-    let manager: BridgeTaskManager | undefined;
+    let manager: SqliteLifecycleMcpAuthority | undefined;
     let server: ReturnType<typeof createBridgeServer> | undefined;
     let client: Client | undefined;
     let recoverySpawns = 0;
@@ -1565,7 +1550,7 @@ test("ADR-024 six lifecycle crash boundaries use hard Manager-process exits and 
         processProbe: createPlatformProbe(), testProcessProbeTimeoutMs: 5_000,
         testOnlyFakeAdapter: true, onChildSpawn: () => { recoverySpawns += 1; },
       });
-      manager = new BridgeTaskManager({ lifecycleAuthority: authority });
+      manager = authority;
       server = createBridgeServer({ taskManager: manager });
       const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
       client = new Client({ name: "adr024-crash-recovery-test", version: "0.0.1" });
@@ -1777,7 +1762,7 @@ test("R5 explicit cancel closes claimed Result-absent Workers after Manager hard
         }
       : realProbe;
     let authority: SqliteLifecycleMcpAuthority | undefined;
-    let manager: BridgeTaskManager | undefined;
+    let manager: SqliteLifecycleMcpAuthority | undefined;
     let server: ReturnType<typeof createBridgeServer> | undefined;
     let client: Client | undefined;
     let recoverySpawns = 0;
@@ -1788,7 +1773,7 @@ test("R5 explicit cancel closes claimed Result-absent Workers after Manager hard
         processProbe: authorityProbe, testProcessProbeTimeoutMs: 5_000,
         testOnlyFakeAdapter: true, onChildSpawn: () => { recoverySpawns += 1; },
       });
-      manager = new BridgeTaskManager({ lifecycleAuthority: authority });
+      manager = authority;
       server = createBridgeServer({ taskManager: manager });
       const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
       client = new Client({ name: "r5-result-absent-restart", version: "0.0.1" });
@@ -2285,7 +2270,7 @@ test("formal MCP Continue survives Manager shutdown before Spawn and is dispatch
   let priorManagerSpawns = 0;
   let restartedManagerSpawns = 0;
   const restarted = {
-    manager: null as BridgeTaskManager | null,
+    manager: null as SqliteLifecycleMcpAuthority | null,
     server: null as ReturnType<typeof createBridgeServer> | null,
     client: null as Client | null,
   };
@@ -2315,7 +2300,7 @@ test("formal MCP Continue survives Manager shutdown before Spawn and is dispatch
         onChildSpawn: () => { restartedManagerSpawns += 1; },
         testOnlyFakeAdapter: true,
       });
-      restarted.manager = new BridgeTaskManager({ lifecycleAuthority: authority });
+      restarted.manager = authority;
       restarted.server = createBridgeServer({ taskManager: restarted.manager });
       const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
       restarted.client = new Client({ name: "sqlite-lifecycle-restart-test", version: "0.0.1" });
@@ -2487,7 +2472,7 @@ test("formal MCP concurrent zcode_cancel calls recover one held Task with one ve
         testBeforeRecoveryWrite,
         testOnlyFakeAdapter: true,
       });
-      const secondManager = new BridgeTaskManager({ lifecycleAuthority: secondAuthority });
+      const secondManager = secondAuthority;
       const secondServer = createBridgeServer({ taskManager: secondManager });
       const [secondClientTransport, secondServerTransport] = InMemoryTransport.createLinkedPair();
       const secondClient = new Client({ name: "sqlite-lifecycle-second-cancel-test", version: "0.0.1" });
@@ -2611,7 +2596,7 @@ test("formal MCP Host shutdown cancels an active Worker and closes only after ve
   const trace = (name: string, detail?: unknown): void => {
     if (tracePath) appendFileSync(tracePath, `${new Date().toISOString()} ${name} ${JSON.stringify(redactTestDiagnostic(detail ?? null))}\n`, "utf8");
   };
-  const restarted = { manager: null as BridgeTaskManager | null, server: null as ReturnType<typeof createBridgeServer> | null, client: null as Client | null };
+  const restarted = { manager: null as SqliteLifecycleMcpAuthority | null, server: null as ReturnType<typeof createBridgeServer> | null, client: null as Client | null };
   let spawned = 0;
   try {
     await withSqliteMcp(async (client, manager, dataRoot, workspace) => {
@@ -2641,7 +2626,7 @@ test("formal MCP Host shutdown cancels an active Worker and closes only after ve
         trustedLocalContext: createTrustedLocalCandidateContext({ name: "sqlite-shutdown-reopen-test", settingsDirectory }),
         onChildSpawn: () => { spawned += 100; },
       });
-      restarted.manager = new BridgeTaskManager({ lifecycleAuthority: authority });
+      restarted.manager = authority;
       restarted.server = createBridgeServer({ taskManager: restarted.manager });
       const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
       restarted.client = new Client({ name: "sqlite-shutdown-reopen-test", version: "0.0.1" });
@@ -2675,7 +2660,7 @@ test("formal MCP Host shutdown cancels an active Worker and closes only after ve
 });
 
 test("formal MCP Host shutdown lets a committed Result finish Cleanup without cancelling the terminal Attempt", { timeout: 45_000 }, async () => {
-  let managerForStage: BridgeTaskManager | undefined;
+  let managerForStage: SqliteLifecycleMcpAuthority | undefined;
   let resultProjectionVerified = false;
   let shutdownAtResultProjection: Promise<void> | undefined;
   await withSqliteMcp(async (_client, manager, dataRoot, workspace) => {
@@ -3100,113 +3085,34 @@ test("formal MCP interaction reply uses persisted SQLite request and a verified 
   });
 });
 
-test("MVP offline cutover archives sealed JSON and starts the sole empty SQLite MCP stdio Authority", { timeout: 90_000, skip: process.platform !== "win32" }, async () => {
-  const fixture = path.join(integrationRoot, `mvp-offline-cutover-${randomUUID()}`);
-  const legacyRoot = path.join(fixture, "legacy-json");
-  const workspace = path.join(fixture, "workspace");
-  const archivePath = path.join(fixture, "archive");
-  const oldTaskId = `legacy-queued-${randomUUID()}`;
-  const newTaskId = `sqlite-new-${randomUUID()}`;
-  mkdirSync(workspace, { recursive: true });
-  mkdirSync(legacyRoot, { recursive: true });
-  const processProbe = createPlatformProbe();
-  const seedStore = new TaskStore(legacyRoot);
-  seedStore.createTask(syntheticTask(workspace, oldTaskId) as unknown as Parameters<TaskStore["createTask"]>[0], new Date().toISOString());
 
-  let jsonManager: BridgeTaskManager | undefined;
-  let jsonServer: ReturnType<typeof createBridgeServer> | undefined;
-  let jsonClient: RawStdioMcpTestClient | undefined;
-  let cutoverCompleted = false;
-  try {
-    const writerLease = await registerManagerJsonWriter(legacyRoot, await processProbe.selfIdentity());
-    const jsonStore = new TaskStore(legacyRoot, { writerQuiescence: true, writerLeaseToken: writerLease });
-    jsonManager = new BridgeTaskManager({
-      store: jsonStore,
-      workspaceProvider: new DirectWorkspaceProvider(),
-      pollIntervalMs: 0,
-      probe: processProbe,
-      managerWriterLeaseToken: writerLease,
-      spawnWorker: () => { throw new Error("cutover fixture must preserve its queued Task without dispatch"); },
-    });
-    jsonServer = createBridgeServer({ taskManager: jsonManager });
-    jsonClient = new RawStdioMcpTestClient();
-    const host = serveStdioLifecycleHost(jsonServer, jsonManager, { stdin: jsonClient.stdin, stdout: jsonClient.stdout });
-    await jsonClient.initialize();
-    const oldStatus = contentObject(await (jsonClient as unknown as Client).callTool({ name: "zcode_status", arguments: { task_id: oldTaskId } }));
-    assert.equal(oldStatus.status, "queued", "the old JSON Task remains real queued history before cutover");
-
-    assert.equal(await jsonManager.beginWriterQuiescence(), "draining");
-    const rejected = await (jsonClient as unknown as Client).callTool({
-      name: "zcode_task",
-      arguments: syntheticTask(workspace, `json-after-drain-${randomUUID()}`),
-    });
-    assert.equal(rejected.isError, true, "the connected old Host rejects new admission after drain begins");
-    assert.equal(await host.shutdown("OFFLINE_CUTOVER"), true, "the old Host closes only after Manager shutdown completes");
-    await jsonClient.close();
-    await jsonServer.close();
-    await jsonManager.shutdown();
-
-    const sealStore = new TaskStore(legacyRoot);
-    const sealed = await sealJsonWriterRoot(legacyRoot, sealStore, processProbe);
-    assert.equal(sealed.sealed, true, "all supported JSON participants and started executions must be absent before Seal");
-    await assert.rejects(registerManagerJsonWriter(legacyRoot, await processProbe.selfIdentity()),
-      /new writer registration is closed/u, "the supported Host startup path cannot reacquire the sealed legacy Root");
-
-    const createdArchive = await createJsonHistoryArchive(path.join(legacyRoot, ".tasks"), archivePath, { mode: "raw" });
-    assert.equal(createdArchive.manifest.archive_mode, "raw");
-    assert.equal(createdArchive.manifest.archive_status, "archived");
-    const verifiedArchive = await readJsonHistoryArchive(archivePath);
-    assert.equal(verifiedArchive.archive_mode, "raw");
-    assert.equal(verifiedArchive.tasks.length, 0);
-    assert.equal(new TaskStore(legacyRoot).readStatus(oldTaskId).status, "queued", "cutover must preserve the original JSON bytes and status");
-
-    await withSqliteMcp(async (client, _manager, sqliteRoot, sqliteWorkspace) => {
-      assert.notEqual(path.resolve(sqliteRoot), path.resolve(legacyRoot), "SQLite receives a distinct migrated data root");
-      const oldLookup = await client.callTool({ name: "zcode_status", arguments: { task_id: oldTaskId } });
-      assert.equal(oldLookup.isError, true, "legacy JSON Tasks are not imported into the online SQLite Authority");
-      const created = contentObject(await client.callTool({ name: "zcode_task", arguments: syntheticTask(sqliteWorkspace, newTaskId) }));
-      assert.equal(created.task_id, newTaskId);
-      assert.equal(created.status, "queued");
-      const terminal = await waitForTerminal(client, newTaskId, 1, "new SQLite work after migration");
-      assert.equal(terminal.status, "completed");
-      const result = contentObject(await client.callTool({ name: "zcode_result", arguments: { task_id: newTaskId } }));
-      assert.equal(result.status, "completed");
-      const modules = await loadLifecycleCandidateModules();
-      const recovery = modules.Store.openForRecovery(sqliteRoot, {
-        databaseFileName: "bridge.sqlite",
-        managedDataDirectory: true,
-      });
-      assert.ok(recovery);
-      try {
-        const port = modules.createPort(recovery);
-        assert.equal(port.readTaskProjection(oldTaskId), null);
-        assert.equal((port.readTaskProjection(newTaskId) as Record<string, unknown>).status, "completed");
-      } finally {
-        recovery.close();
+test("SQLite Manager preserves attention waiting and rejects invalid cursors before waiting", {timeout:30000}, async()=>{
+  let release!:()=>void;
+  const gate=new Promise<void>(resolve=>{release=resolve;});
+  const taskId="attention-sqlite-"+randomUUID();
+  await withSqliteMcp(async(client,manager,_dataRoot,workspace)=>{
+    try{
+      await manager.createTask(syntheticTask(workspace,taskId) as unknown as Parameters<typeof manager.createTask>[0]);
+      for(const input of [{scan_cursor:"bad"},{scan_cursor:Buffer.from(JSON.stringify({v:1,task_id:taskId})).toString("base64url")},{after_seq:7,scan_cursor:Buffer.from(JSON.stringify({v:1,task_id:taskId,cursor:6})).toString("base64url")}]){
+        const started=Date.now();
+        await assert.rejects(manager.getEvents({task_id:taskId,wait_for:"attention",wait_ms:25000,...input}),error=>(error as {code?:string}).code==="TASK_INVALID");
+        assert.ok(Date.now()-started<1000);
       }
-      assert.equal(existsSync(path.join(sqliteRoot, ".tasks")), false, "the SQLite task never writes JSON TaskStore files");
-    }, {
-      stdio: true,
-      preserveFixtureOnFailure: true,
-      databaseFileName: "bridge.sqlite",
-      prepareDataRoot: async (sqliteRoot) => {
-        const migration = await publishJsonAuthority({
-          jsonDataRoot: legacyRoot,
-          sqliteRoot,
-          archiveDirectory: createdArchive.archive_directory,
-          expectedArchiveManifestDigest: createdArchive.identity.manifest_digest,
-        });
-        assert.equal(migration.status, "published");
-        assert.equal(migration.task_count, 0);
-      },
-    });
-    cutoverCompleted = true;
-  } finally {
-    if (jsonClient) await jsonClient.close().catch(() => undefined);
-    if (jsonServer) await jsonServer.close().catch(() => undefined);
-    if (jsonManager) await jsonManager.shutdown().catch(() => undefined);
-    if (cutoverCompleted) {
-      try { rmSync(fixture, { recursive: true, force: true }); } catch { /* preserve fixture if Windows retains a handle */ }
-    }
-  }
+      const start=Date.now();
+      const page=await manager.getEvents({task_id:taskId,wait_for:"attention",wait_ms:60});
+      assert.ok(Date.now()-start>=50,"ordinary queued events must not wake attention");
+      assert.equal(page.attention?.status,"queued");assert.ok(page.events.length>0);
+      await manager.cancelTask(taskId);
+      const terminal=await manager.getEvents({task_id:taskId,wait_for:"attention",wait_ms:25000});
+      assert.equal(terminal.status,"cancelled");assert.equal(terminal.attention?.attempt,1);
+    }finally{release();}
+  },{testBeforeDispatch:()=>gate,beforeAuthority:(dataRoot,modules,workspace)=>{
+    const store=modules.Store.open(dataRoot)!;
+    try{
+      const port=modules.createPort(store);
+      port.createTask(syntheticTask(workspace,taskId) as unknown as Parameters<typeof port.createTask>[0]);
+      const allow=()=>({state:"allow",fixture:true});
+      port.admitOperation({operation_id:"attention-op",task_id:taskId,attempt:1,workspace_ref:workspace},{workspaceValidator:allow,executionPermissionCheck:allow});
+    }finally{store.close();}
+  }});
 });

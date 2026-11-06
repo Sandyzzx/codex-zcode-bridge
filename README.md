@@ -73,7 +73,7 @@ On Windows, first-run runtime configuration is stored under `%USERPROFILE%\.code
 
 The SQLite database uses the default per-user data root unless an existing valid SQLite install configuration selects another local root. Do not edit SQLite tables, authority receipts, or bootstrap markers manually.
 
-For the supported Windows single-user local deployment, SQLite uses a fixed trusted-local `yolo` execution profile, matching the JSON path's ordinary unattended coding workflow. It runs with the current Windows account's permissions and is not a sandbox or an elevation mechanism. Ordinary workspace reads, edits, builds, tests, and cleanup inside the task scope can run automatically. Push, merge, tag, release, production Authority changes, deletion outside task scope, credential changes, and access to real production task data still require explicit user authorization. Task prompts, Skills, worktrees, and path lists cannot grant those permissions. Do not place secrets in prompts.
+For the supported Windows single-user local deployment, SQLite uses a fixed trusted-local `yolo` execution profile, It runs with the current Windows account's permissions and is not a sandbox or an elevation mechanism. Ordinary workspace reads, edits, builds, tests, and cleanup inside the task scope can run automatically. Push, merge, tag, release, production Authority changes, deletion outside task scope, credential changes, and access to real production task data still require explicit user authorization. Task prompts, Skills, worktrees, and path lists cannot grant those permissions. Do not place secrets in prompts.
 
 ## Limits and troubleshooting
 

@@ -9,7 +9,7 @@ const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url))
 const map = JSON.parse(readFileSync(path.join(repositoryRoot, "test/test-impact-map.json"), "utf8"));
 const args = process.argv.slice(2);
 const requested = args.filter((argument) => argument.startsWith("--file=")).map((argument) => argument.slice("--file=".length));
-const automaticFiles = new Set(automaticTestEntries(map).map((entry) => entry.file));
+const automaticFiles = new Set(automaticTestEntries(map, process.platform, { includeStress: true }).map((entry) => entry.file));
 const registered = map.stress_tests.filter((entry) => automaticFiles.has(entry.file));
 const stressTests = requested.length > 0
   ? registered.filter((entry) => requested.includes(entry.file))

@@ -5,9 +5,9 @@ import { spawnSync } from "node:child_process";
 import { automaticTestEntries, compiledTestPath } from "./lib/test-files.mjs";
 
 const map = JSON.parse(readFileSync(new URL("../test/test-impact-map.json", import.meta.url), "utf8"));
-const automatic = automaticTestEntries(map).map((entry) => compiledTestPath(entry.file)).sort();
 const requestedArgs = process.argv.slice(2);
 const requestedFiles = requestedArgs.filter((arg) => !arg.startsWith("--"));
+const automatic = automaticTestEntries(map, process.platform, { includeStress: requestedFiles.length > 0 }).map((entry) => compiledTestPath(entry.file)).sort();
 for (const file of requestedFiles) {
   if (!automatic.includes(file.replaceAll("\\", "/").replace(/^\.\//u, ""))) {
     throw new Error(`Not an automatic test for ${process.platform}: ${file}. Manual E2E and fixtures require their explicit entrypoints.`);

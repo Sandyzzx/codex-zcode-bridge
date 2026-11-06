@@ -107,6 +107,7 @@ export function selectAffectedTests({ changedFiles, map, includeStress = true, p
     for (const entry of map.tests) {
       // The wrapper represents this case with npm test, so don't duplicate the
       // suite into a fragment. Preserve individual stress metadata for output.
+      if (entry.stress) continue;
       const stressInfo = stressByFile.get(entry.file);
       addSelected(entry, `full-suite:${fullSuiteReasons[0]}`, stressInfo);
     }
@@ -117,8 +118,8 @@ export function selectAffectedTests({ changedFiles, map, includeStress = true, p
       domain_reasons: Object.fromEntries([...reasonsByDomain].map(([key, value]) => [key, value])),
       full_suite_reasons: fullSuiteReasons.sort(),
       selected_tests: [...selected.values()],
-      stress_tests: includeStress ? map.stress_tests : [],
-      stress_mode: includeStress ? "INCLUDED_BY_FULL_SUITE" : "EXPLICITLY_EXCLUDED",
+      stress_tests: [],
+      stress_mode: "SEPARATE_STRESS_GATE",
     };
   }
 

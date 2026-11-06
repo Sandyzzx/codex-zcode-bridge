@@ -36,11 +36,11 @@
         "scripts/run-stress-tests.mjs",
         "test/test-impact-map.json",
         "test/helpers.ts",
-        "test/manager-helpers.ts",
         "test/runtime-fixture.ts",
         "test/runtime/bootstrap-lock-worker.mjs",
         "test/sqlite-candidate/wp6b2b1/lifecycle-process.mjs",
-        "test/sqlite-candidate/wp6b2b1/worker-process.mjs"
+        "test/sqlite-candidate/wp6b2b1/worker-process.mjs",
+        "scripts/select-sqlite-stress.mjs"
       ]
     },
     {
@@ -49,7 +49,6 @@
       "paths": [
         "src/interfaces.ts",
         "src/mcp/schemas.ts",
-        "src/adapters/zcode-envelope-types.ts",
         "src/result-contract.mjs"
       ]
     },
@@ -77,8 +76,7 @@
       "id": "workspace-provider",
       "description": "Direct and Git worktree workspace provisioning.",
       "paths": [
-        "src/workspace/direct-provider.ts",
-        "src/workspace/git-worktree-provider.ts"
+        "src/workspace/direct-provider.ts"
       ]
     },
     {
@@ -87,17 +85,8 @@
       "paths": [
         "src/prompts/task-prompt.ts",
         "src/adapters/agent-report.ts",
-        "src/adapters/envelope.ts"
-      ]
-    },
-    {
-      "id": "legacy-zcode-adapter",
-      "description": "Direct CLI ZCode adapter, process spawning, timeouts, and legacy retry generation.",
-      "paths": [
-        "src/adapters/zcode-adapter.ts",
-        "src/adapters/process-spawn.ts",
-        "src/adapters/zcode-loader.cjs",
-        "src/runtime/task-timeout.ts"
+        "src/adapters/run-outcome.ts",
+        "src/manager/normalize.ts"
       ]
     },
     {
@@ -119,12 +108,12 @@
     },
     {
       "id": "manager-lifecycle",
-      "description": "Bridge TaskManager lifecycle, scheduling, interaction records, and Manager normalization.",
+      "description": "SQLite Lifecycle Manager scheduling and public lifecycle port.",
       "paths": [
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
-        "src/manager/task-manager.ts",
-        "src/runtime/process-probe.ts"
+        "src/runtime/process-probe.ts",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts"
       ]
     },
     {
@@ -135,7 +124,6 @@
         "src/runtime/build-provenance.ts",
         "src/runtime/child-env.ts",
         "src/runtime/node-runtime.ts",
-        "src/worker/run-task.ts",
         "src/worker/worker-main.ts"
       ]
     },
@@ -152,18 +140,6 @@
       ]
     },
     {
-      "id": "json-task-store",
-      "description": "JSON TaskStore CRUD/status/event scanning, writer quiescence, history exceptions, and observation backing.",
-      "paths": [
-        "src/store/task-store.ts",
-        "src/store/json-writer-quiescence.ts",
-        "src/store/json-history-archive.ts",
-        "src/store/json-authority-cutover.ts",
-        "src/observation/**",
-        "src/usage/normalize.ts"
-      ]
-    },
-    {
       "id": "sqlite-persistence",
       "description": "SQLite bootstrap, schema, admission/CAS, lifecycle port, migration, recovery, and Bridge data-root activation.",
       "paths": [
@@ -172,19 +148,16 @@
         "src/runtime/sqlite-runtime-roster.ts",
         "src/store/lifecycle-gate.ts",
         "src/runtime/task-timeout.ts",
-        "src/store/json-authority-cutover.ts",
-        "src/store/json-history-archive.ts",
-        "src/store/json-writer-quiescence.ts",
         "src/manager/sqlite-lifecycle-mcp-authority.ts",
         "src/cli/admin-abandon-held-operation.ts",
-        "src/cli/migrate-json-to-sqlite.ts",
         "src/host/profile.ts",
         "src/host/stdio.ts",
         "src/runtime/doctor.ts",
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts"
+        "src/runtime/trusted-local-profile.ts",
+        "src/cli/upgrade-sqlite-v14.ts"
       ]
     },
     {
@@ -201,7 +174,6 @@
         "src/sqlite-candidate/wp6b2b1/lifecycle-port.mjs",
         "src/sqlite-candidate/wp6b2b1/schema.sql",
         "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/manager/task-manager.ts",
         "src/host/stdio.ts",
         "plugins/codex-zcode-bridge/dist/wait-task.mjs",
         "plugins/codex-zcode-bridge/launch-node24.mjs"
@@ -253,129 +225,95 @@
     }
   ],
   "tests": [
-    { "file": "test/account-provider.test.ts", "type": "Unit", "gate": "T1", "domains": ["provider-catalog"] },
-    { "file": "test/agent-report.test.ts", "type": "Unit", "gate": "T1", "domains": ["task-prompt-and-report"] },
-    { "file": "test/spawn-worker-stderr.test.ts", "type": "Integration", "gate": "T2", "domains": ["worker-launch"] },
-    { "file": "test/attention-wait.test.ts", "type": "Unit", "gate": "T1", "domains": ["attention-waiting", "interface-contract", "mcp-host"] },
-    { "file": "test/wait-task.test.ts", "type": "Integration", "gate": "T2", "domains": ["attention-waiting", "interface-contract", "mcp-host"] },
-    { "file": "test/audit-remediation.test.ts", "type": "Integration", "gate": "T2", "domains": ["manager-lifecycle", "worker-launch", "process-cleanup-and-locks", "workspace-provider", "json-task-store"] },
-    { "file": "test/batch2-evidence.test.ts", "type": "Integration", "gate": "T2", "domains": ["json-task-store", "manager-lifecycle", "worker-launch", "workspace-provider", "feedback-and-token-observability"] },
-    { "file": "test/batch2-performance.test.ts", "type": "Stress", "gate": "T3", "domains": ["json-task-store", "manager-lifecycle", "workspace-provider", "sqlite-persistence"], "stress": true },
-    { "file": "test/browser-executable.test.ts", "type": "Unit", "gate": "T1", "domains": ["browser-host"] },
-    { "file": "test/browser-host-adapter.test.ts", "type": "Integration", "gate": "T2", "domains": ["browser-host", "appserver-adapter"] },
-    { "file": "test/browser-host.test.ts", "type": "Unit", "gate": "T1", "domains": ["browser-host"] },
-    { "file": "test/browser-protocol.test.ts", "type": "Unit", "gate": "T1", "domains": ["browser-host"] },
-    { "file": "test/browser-runtime-close.test.ts", "type": "Integration", "gate": "T2", "domains": ["browser-host"] },
-    { "file": "test/child-env.test.ts", "type": "Unit", "gate": "T1", "domains": ["zcode-path-discovery", "worker-launch"] },
-    { "file": "test/codex-master-token-usage.test.ts", "type": "Unit", "gate": "T1", "domains": ["feedback-and-token-observability"] },
-    { "file": "test/codex-rollout-token-source.test.ts", "type": "Unit", "gate": "T1", "domains": ["feedback-and-token-observability"] },
-    { "file": "test/codex-rollout-token-tail.test.ts", "type": "Unit", "gate": "T1", "domains": ["feedback-and-token-observability"] },
-    { "file": "test/direct-workspace-provider.test.ts", "type": "Unit", "gate": "T1", "domains": ["workspace-provider", "manager-lifecycle"] },
-    { "file": "test/failure-facts-integration.test.ts", "type": "Integration", "gate": "T2", "domains": ["appserver-adapter", "manager-lifecycle", "json-task-store", "legacy-zcode-adapter"] },
-    { "file": "test/feedback-template.test.ts", "type": "Unit", "gate": "T1", "domains": ["feedback-and-token-observability"] },
-    { "file": "test/git-worktree-provider.test.ts", "type": "Unit", "gate": "T1", "domains": ["workspace-provider"] },
-    { "file": "test/host-and-index.test.ts", "type": "Integration", "gate": "T2", "domains": ["mcp-host", "provider-catalog", "interface-contract"] },
-    { "file": "test/interaction-large-input.test.ts", "type": "Integration", "gate": "T2", "domains": ["json-task-store", "manager-lifecycle", "interface-contract"] },
-    { "file": "test/json-history-result-exceptions.test.ts", "type": "Unit", "gate": "T1", "domains": ["json-task-store"] },
-    { "file": "test/json-writer-quiescence.test.ts", "type": "Integration", "gate": "T2", "domains": ["json-task-store", "manager-lifecycle", "process-cleanup-and-locks"] },
-    { "file": "test/late-identity-lifecycle.test.ts", "type": "Integration", "gate": "T2", "domains": ["manager-lifecycle", "worker-launch", "process-cleanup-and-locks"] },
-    { "file": "test/ledger-bridge-review.test.ts", "type": "Integration", "gate": "T2", "domains": ["ledger", "manager-lifecycle", "json-task-store"] },
-    { "file": "test/ledger-core.test.ts", "type": "Unit", "gate": "T1", "domains": ["ledger"] },
-    { "file": "test/ledger-mcp.test.ts", "type": "Integration", "gate": "T2", "domains": ["ledger", "mcp-host", "manager-lifecycle"] },
-    { "file": "test/legacy-retry-generation.test.ts", "type": "Unit", "gate": "T1", "domains": ["legacy-zcode-adapter"] },
-    { "file": "test/manager-claimant-gate.test.ts", "type": "Integration", "gate": "T2", "domains": ["process-cleanup-and-locks"] },
-    { "file": "test/manager-recovery-latch.test.ts", "type": "Integration", "gate": "T2", "domains": ["process-cleanup-and-locks", "manager-lifecycle"] },
-    { "file": "test/mcp-server.test.ts", "type": "Integration", "gate": "T2", "domains": ["mcp-host", "manager-lifecycle", "interface-contract"] },
-    { "file": "test/mcp-stdio-entry.test.ts", "type": "Integration", "gate": "T2", "domains": ["mcp-host", "ci-release-contract"] },
-    { "file": "test/migrate-json-to-sqlite-cli.test.ts", "type": "Integration", "gate": "T2", "domains": ["sqlite-persistence", "json-task-store"] },
-    { "file": "test/node-runtime.test.ts", "type": "Integration", "gate": "T1", "domains": ["zcode-path-discovery", "worker-launch"] },
-    { "file": "test/observation-lifecycle.test.ts", "type": "Integration", "gate": "T2", "domains": ["json-task-store", "manager-lifecycle", "feedback-and-token-observability", "process-cleanup-and-locks"] },
-    { "file": "test/owned-fixture-cleanup.test.ts", "type": "Integration", "gate": "T2", "domains": ["process-cleanup-and-locks", "legacy-zcode-adapter"] },
-    { "file": "test/process-lock.test.ts", "type": "Integration", "gate": "T2", "domains": ["process-cleanup-and-locks", "json-task-store"] },
-    { "file": "test/process-spawn.test.ts", "type": "Integration", "gate": "T2", "domains": ["process-cleanup-and-locks", "legacy-zcode-adapter"] },
-    { "file": "test/run-worker-task.test.ts", "type": "Integration", "gate": "T2", "domains": ["manager-lifecycle", "worker-launch", "json-task-store"] },
-    { "file": "test/runtime-preferences.test.ts", "type": "Unit", "gate": "T1", "domains": ["provider-catalog", "zcode-path-discovery"] },
-    { "file": "test/runtime-provenance.test.ts", "type": "Unit", "gate": "T1", "domains": ["worker-launch"] },
-    { "file": "test/runtime-remediation.test.ts", "type": "Integration", "gate": "T2", "domains": ["manager-lifecycle", "worker-launch", "appserver-adapter", "json-task-store", "workspace-provider"] },
-    { "file": "test/runtime-resolver.test.ts", "type": "Unit", "gate": "T1", "domains": ["zcode-path-discovery"] },
-    { "file": "test/runtime/bootstrap-lock-worker.mjs", "type": "Fixture", "gate": "T2", "domains": ["test-execution-contract"] },
-    { "file": "test/runtime/sqlite-bootstrap-cross-process.test.ts", "type": "Integration", "gate": "T2", "domains": ["sqlite-persistence", "process-cleanup-and-locks"] },
-    { "file": "test/runtime/sqlite-fresh-install.test.ts", "type": "Integration", "gate": "T2", "domains": ["sqlite-persistence"] },
-    { "file": "test/runtime/sqlite-install-config.test.ts", "type": "Unit", "gate": "T1", "domains": ["sqlite-persistence", "zcode-path-discovery"] },
-    { "file": "test/runtime/trusted-local-policy-config.test.ts", "type": "Unit", "gate": "T1", "domains": ["sqlite-persistence", "mcp-host"] },
-    { "file": "test/session-frames.test.ts", "type": "Integration", "gate": "T2", "domains": ["appserver-adapter", "process-cleanup-and-locks"] },
-    { "file": "test/skill-policy.test.ts", "type": "Unit", "gate": "T1", "domains": ["plugin-skill-metadata"] },
-    { "file": "test/spawn-generation-identity.test.ts", "type": "Integration", "gate": "T2", "domains": ["legacy-zcode-adapter", "process-cleanup-and-locks"] },
-    { "file": "test/sqlite-candidate/wp6b-wiring/admission-to-claim.test.ts", "type": "Integration", "gate": "T2", "domains": ["sqlite-persistence", "manager-lifecycle", "mcp-host"] },
-    { "file": "test/sqlite-candidate/wp6b-wiring/bootstrap.test.ts", "type": "Integration", "gate": "T2", "domains": ["sqlite-persistence", "worker-launch"] },
-    { "file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts", "type": "Integration", "gate": "T2", "domains": ["sqlite-persistence", "manager-lifecycle", "mcp-host", "json-task-store"] },
-    { "file": "test/sqlite-scoped-hold-scheduler.test.ts", "type": "Integration", "gate": "T2", "domains": ["sqlite-persistence", "manager-lifecycle"] },
-    { "file": "test/sqlite-doctor.test.ts", "type": "Integration", "gate": "T2", "domains": ["sqlite-persistence", "manager-lifecycle", "mcp-host"] },
-    { "file": "test/sqlite-candidate/wp6b-wiring/json-authority-cutover.test.ts", "type": "Integration", "gate": "T2", "domains": ["sqlite-persistence", "json-task-store", "manager-lifecycle"] },
-    { "file": "test/sqlite-candidate/wp6b-wiring/lifecycle-gate.test.ts", "type": "Unit", "gate": "T1", "domains": ["sqlite-persistence"] },
-    { "file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts", "type": "Integration", "gate": "T2", "domains": ["sqlite-persistence", "manager-lifecycle", "mcp-host", "appserver-adapter"] },
-    { "file": "test/sqlite-candidate/wp6b-wiring/trusted-local-policy.test.ts", "type": "Unit", "gate": "T1", "domains": ["sqlite-persistence"] },
-    { "file": "test/sqlite-candidate/wp6b2b1/admission.test.mjs", "type": "Integration", "gate": "T2", "domains": ["sqlite-persistence", "process-cleanup-and-locks"] },
-    { "file": "test/sqlite-candidate/wp6b2b1/launch-bootstrap.test.ts", "type": "Integration", "gate": "T2", "domains": ["sqlite-persistence", "worker-launch"] },
-    { "file": "test/sqlite-candidate/wp6b2b1/launch-identity.test.mjs", "type": "Integration", "gate": "T2", "domains": ["sqlite-persistence", "process-cleanup-and-locks"] },
-    { "file": "test/sqlite-candidate/wp6b2b1/lifecycle-port.test.mjs", "type": "Integration", "gate": "T2", "domains": ["sqlite-persistence", "manager-lifecycle", "worker-launch"] },
-    { "file": "test/sqlite-candidate/wp6b2b1/lifecycle-process.mjs", "type": "Fixture", "gate": "T2", "domains": ["test-execution-contract"] },
-    { "file": "test/sqlite-candidate/wp6b2b1/schema-integrity.test.mjs", "type": "Integration", "gate": "T2", "domains": ["sqlite-persistence"] },
-    { "file": "test/sqlite-candidate/wp6b2b1/worker-process.mjs", "type": "Fixture", "gate": "T2", "domains": ["test-execution-contract"] },
-    { "file": "test/sqlite-candidate/wp6c/admin-abandonment.test.mjs", "type": "Integration", "gate": "T2", "domains": ["sqlite-persistence", "manager-lifecycle", "mcp-host"] },
-    { "file": "test/sqlite-candidate/wp6c/cleanup-release.test.mjs", "type": "Integration", "gate": "T2", "domains": ["sqlite-persistence", "manager-lifecycle", "process-cleanup-and-locks"] },
-    { "file": "test/sqlite-candidate/wp6c/result-recovery.test.mjs", "type": "Integration", "gate": "T2", "domains": ["sqlite-persistence", "manager-lifecycle", "process-cleanup-and-locks"] },
-    { "file": "test/sqlite-result-v14.test.mjs", "type": "Integration", "gate": "T2", "domains": ["sqlite-persistence", "manager-lifecycle", "process-cleanup-and-locks"] },
-    { "file": "test/mcp-result-v14.test.mjs", "type": "Integration", "gate": "T2", "domains": ["sqlite-persistence", "mcp-host", "interface-contract"] },
-    { "file": "test/sqlite-v14-upgrade.test.mjs", "type": "Integration", "gate": "T2", "domains": ["sqlite-persistence", "manager-lifecycle", "process-cleanup-and-locks"] },
-    { "file": "test/task-feedback.test.ts", "type": "Unit", "gate": "T1", "domains": ["feedback-and-token-observability", "mcp-host"] },
-    { "file": "test/task-manager.test.ts", "type": "Integration", "gate": "T2", "domains": ["manager-lifecycle", "json-task-store", "process-cleanup-and-locks", "workspace-provider", "worker-launch"] },
-    { "file": "test/task-prompt.test.ts", "type": "Unit", "gate": "T1", "domains": ["task-prompt-and-report"] },
-    { "file": "test/task-store.test.ts", "type": "Unit", "gate": "T1", "domains": ["json-task-store"] },
-    { "file": "test/task-timeout.test.ts", "type": "Unit", "gate": "T1", "domains": ["legacy-zcode-adapter"] },
-    { "file": "test/test-impact-selector.test.ts", "type": "Unit", "gate": "T1", "domains": ["test-execution-contract"] },
-    { "file": "test/teardown-retry.test.ts", "type": "Unit", "gate": "T1", "domains": ["test-execution-contract"] },
-    { "file": "test/thread-token-usage.test.ts", "type": "Unit", "gate": "T1", "domains": ["feedback-and-token-observability"] },
-    { "file": "test/validate-plugin-root-pattern.test.ts", "type": "Unit", "gate": "T1", "domains": ["ci-release-contract"] },
-    { "file": "test/windows-cleanup-review-regressions.test.ts", "type": "Integration", "gate": "T2", "domains": ["process-cleanup-and-locks"] },
-    { "file": "test/windows-process-cleanup.test.ts", "type": "Integration", "gate": "T2", "domains": ["process-cleanup-and-locks", "manager-lifecycle"] },
-    { "file": "test/windows-recorded-tree-native.test.ts", "type": "Integration", "gate": "T2", "domains": ["process-cleanup-and-locks", "legacy-zcode-adapter"] },
-    { "file": "test/windows-transport-bounds.test.ts", "type": "Integration", "gate": "T2", "domains": ["process-cleanup-and-locks"] },
-    { "file": "test/worker-env-portability.test.ts", "type": "Integration", "gate": "T1", "domains": ["worker-launch", "zcode-path-discovery"] },
-    { "file": "test/zcode-adapter.test.ts", "type": "Integration", "gate": "T2", "domains": ["legacy-zcode-adapter", "process-cleanup-and-locks", "task-prompt-and-report"] },
-    { "file": "test/zcode-app-server-adapter.test.ts", "type": "Integration", "gate": "T2", "domains": ["appserver-adapter", "process-cleanup-and-locks", "provider-catalog"] },
-    { "file": "test/zcode-path-repair.test.ts", "type": "Integration", "gate": "T1", "domains": ["zcode-path-discovery"] },
-    { "file": "test/zcode-paths.test.ts", "type": "Integration", "gate": "T1", "domains": ["zcode-path-discovery", "worker-launch"] },
-    { "file": "test/live-integration.mjs", "type": "E2E", "gate": "MANUAL_E2E", "domains": ["appserver-adapter", "manager-lifecycle", "workspace-provider"] },
-    { "file": "test/live-parallel.mjs", "type": "E2E", "gate": "MANUAL_E2E", "domains": ["manager-lifecycle", "workspace-provider"] },
-    { "file": "test/live-project-root.mjs", "type": "E2E", "gate": "MANUAL_E2E", "domains": ["manager-lifecycle", "workspace-provider", "zcode-path-discovery"] },
-    { "file": "test/live-smoke.mjs", "type": "E2E", "gate": "MANUAL_E2E", "domains": ["zcode-path-discovery", "legacy-zcode-adapter"] }
+    {"file":"test/account-provider.test.ts","type":"Unit","gate":"T1","domains":["provider-catalog"]},
+    {"file":"test/agent-report.test.ts","type":"Unit","gate":"T1","domains":["task-prompt-and-report"]},
+    {"file":"test/spawn-worker-stderr.test.ts","type":"Integration","gate":"T2","domains":["worker-launch"]},
+    {"file":"test/attention-wait.test.ts","type":"Unit","gate":"T1","domains":["attention-waiting","interface-contract","mcp-host"]},
+    {"file":"test/wait-task.test.ts","type":"Integration","gate":"T2","domains":["attention-waiting","interface-contract","mcp-host"]},
+    {"file":"test/batch2-evidence.test.ts","type":"Integration","gate":"T2","domains":["manager-lifecycle","worker-launch","workspace-provider","feedback-and-token-observability"]},
+    {"file":"test/browser-executable.test.ts","type":"Unit","gate":"T1","domains":["browser-host"]},
+    {"file":"test/browser-host-adapter.test.ts","type":"Integration","gate":"T2","domains":["browser-host","appserver-adapter"]},
+    {"file":"test/browser-host.test.ts","type":"Unit","gate":"T1","domains":["browser-host"]},
+    {"file":"test/browser-protocol.test.ts","type":"Unit","gate":"T1","domains":["browser-host"]},
+    {"file":"test/browser-runtime-close.test.ts","type":"Integration","gate":"T2","domains":["browser-host"]},
+    {"file":"test/child-env.test.ts","type":"Unit","gate":"T1","domains":["zcode-path-discovery","worker-launch"]},
+    {"file":"test/codex-master-token-usage.test.ts","type":"Unit","gate":"T1","domains":["feedback-and-token-observability"]},
+    {"file":"test/codex-rollout-token-source.test.ts","type":"Unit","gate":"T1","domains":["feedback-and-token-observability"]},
+    {"file":"test/codex-rollout-token-tail.test.ts","type":"Unit","gate":"T1","domains":["feedback-and-token-observability"]},
+    {"file":"test/direct-workspace-provider.test.ts","type":"Unit","gate":"T1","domains":["workspace-provider","manager-lifecycle"]},
+    {"file":"test/failure-facts-integration.test.ts","type":"Integration","gate":"T2","domains":["appserver-adapter","manager-lifecycle"]},
+    {"file":"test/feedback-template.test.ts","type":"Unit","gate":"T1","domains":["feedback-and-token-observability"]},
+    {"file":"test/host-and-index.test.ts","type":"Integration","gate":"T2","domains":["mcp-host","provider-catalog","interface-contract"]},
+    {"file":"test/json-history-result-exceptions.test.ts","type":"Unit","gate":"T1","domains":["sqlite-persistence"]},
+    {"file":"test/ledger-bridge-review.test.ts","type":"Integration","gate":"T2","domains":["ledger","manager-lifecycle"]},
+    {"file":"test/ledger-core.test.ts","type":"Unit","gate":"T1","domains":["ledger"]},
+    {"file":"test/ledger-mcp.test.ts","type":"Integration","gate":"T2","domains":["ledger","mcp-host","manager-lifecycle"]},
+    {"file":"test/mcp-server.test.ts","type":"Integration","gate":"T2","domains":["mcp-host","manager-lifecycle","interface-contract"]},
+    {"file":"test/mcp-stdio-entry.test.ts","type":"Integration","gate":"T2","domains":["mcp-host","ci-release-contract"]},
+    {"file":"test/node-runtime.test.ts","type":"Integration","gate":"T1","domains":["zcode-path-discovery","worker-launch"]},
+    {"file":"test/owned-fixture-cleanup.test.ts","type":"Integration","gate":"T2","domains":["process-cleanup-and-locks"]},
+    {"file":"test/process-lock.test.ts","type":"Integration","gate":"T2","domains":["process-cleanup-and-locks"]},
+    {"file":"test/process-spawn.test.ts","type":"Integration","gate":"T2","domains":["process-cleanup-and-locks"]},
+    {"file":"test/run-worker-task.test.ts","type":"Integration","gate":"T2","domains":["manager-lifecycle","worker-launch"]},
+    {"file":"test/runtime-preferences.test.ts","type":"Unit","gate":"T1","domains":["provider-catalog","zcode-path-discovery"]},
+    {"file":"test/runtime-provenance.test.ts","type":"Unit","gate":"T1","domains":["worker-launch"]},
+    {"file":"test/runtime-remediation.test.ts","type":"Integration","gate":"T2","domains":["manager-lifecycle","worker-launch","appserver-adapter","workspace-provider"]},
+    {"file":"test/runtime-resolver.test.ts","type":"Unit","gate":"T1","domains":["zcode-path-discovery"]},
+    {"file":"test/runtime/bootstrap-lock-worker.mjs","type":"Fixture","gate":"T2","domains":["test-execution-contract"]},
+    {"file":"test/runtime/sqlite-bootstrap-cross-process.test.ts","type":"Integration","gate":"T2","domains":["sqlite-persistence","process-cleanup-and-locks"]},
+    {"file":"test/runtime/sqlite-fresh-install.test.ts","type":"Integration","gate":"T2","domains":["sqlite-persistence"]},
+    {"file":"test/runtime/sqlite-install-config.test.ts","type":"Unit","gate":"T1","domains":["sqlite-persistence","zcode-path-discovery"]},
+    {"file":"test/runtime/trusted-local-policy-config.test.ts","type":"Unit","gate":"T1","domains":["sqlite-persistence","mcp-host"]},
+    {"file":"test/session-frames.test.ts","type":"Integration","gate":"T2","domains":["appserver-adapter","process-cleanup-and-locks"]},
+    {"file":"test/skill-policy.test.ts","type":"Unit","gate":"T1","domains":["plugin-skill-metadata"]},
+    {"file":"test/spawn-generation-identity.test.ts","type":"Integration","gate":"T2","domains":["process-cleanup-and-locks"]},
+    {"file":"test/sqlite-candidate/wp6b-wiring/admission-to-claim.test.ts","type":"Integration","gate":"T2","domains":["sqlite-persistence","manager-lifecycle","mcp-host"]},
+    {"file":"test/sqlite-candidate/wp6b-wiring/bootstrap.test.ts","type":"Integration","gate":"T2","domains":["sqlite-persistence","worker-launch"]},
+    {"file":"test/sqlite-candidate/wp6b-wiring/composition.test.ts","type":"Integration","gate":"T2","domains":["sqlite-persistence","manager-lifecycle","mcp-host","worker-launch"]},
+    {"file":"test/sqlite-scoped-hold-scheduler.test.ts","type":"Integration","gate":"T2","domains":["sqlite-persistence","manager-lifecycle"]},
+    {"file":"test/sqlite-doctor.test.ts","type":"Integration","gate":"T2","domains":["sqlite-persistence","manager-lifecycle","mcp-host"]},
+    {"file":"test/sqlite-candidate/wp6b-wiring/lifecycle-gate.test.ts","type":"Unit","gate":"T1","domains":["sqlite-persistence"]},
+    {"file":"test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts","type":"Integration","gate":"T2","domains":["sqlite-persistence","manager-lifecycle","mcp-host","appserver-adapter","worker-launch"]},
+    {"file":"test/sqlite-candidate/wp6b-wiring/trusted-local-policy.test.ts","type":"Unit","gate":"T1","domains":["sqlite-persistence"]},
+    {"file":"test/sqlite-candidate/wp6b2b1/admission.test.mjs","type":"Integration","gate":"T2","domains":["sqlite-persistence","process-cleanup-and-locks"]},
+    {"file":"test/sqlite-candidate/wp6b2b1/launch-bootstrap.test.ts","type":"Integration","gate":"T2","domains":["sqlite-persistence","worker-launch"]},
+    {"file":"test/sqlite-candidate/wp6b2b1/launch-identity.test.mjs","type":"Integration","gate":"T2","domains":["sqlite-persistence","process-cleanup-and-locks"]},
+    {"file":"test/sqlite-candidate/wp6b2b1/lifecycle-port.test.mjs","type":"Integration","gate":"T2","domains":["sqlite-persistence","manager-lifecycle","worker-launch"]},
+    {"file":"test/sqlite-candidate/wp6b2b1/lifecycle-process.mjs","type":"Fixture","gate":"T2","domains":["test-execution-contract"]},
+    {"file":"test/sqlite-candidate/wp6b2b1/schema-integrity.test.mjs","type":"Integration","gate":"T2","domains":["sqlite-persistence"]},
+    {"file":"test/sqlite-candidate/wp6b2b1/worker-process.mjs","type":"Fixture","gate":"T2","domains":["test-execution-contract"]},
+    {"file":"test/sqlite-candidate/wp6c/admin-abandonment.test.mjs","type":"Integration","gate":"T2","domains":["sqlite-persistence","manager-lifecycle","mcp-host"]},
+    {"file":"test/sqlite-candidate/wp6c/cleanup-release.test.mjs","type":"Integration","gate":"T2","domains":["sqlite-persistence","manager-lifecycle","process-cleanup-and-locks"]},
+    {"file":"test/sqlite-candidate/wp6c/result-recovery.test.mjs","type":"Integration","gate":"T2","domains":["sqlite-persistence","manager-lifecycle","process-cleanup-and-locks"]},
+    {"file":"test/sqlite-result-v14.test.mjs","type":"Integration","gate":"T2","domains":["sqlite-persistence","manager-lifecycle","process-cleanup-and-locks"]},
+    {"file":"test/mcp-result-v14.test.mjs","type":"Integration","gate":"T2","domains":["sqlite-persistence","mcp-host","interface-contract"]},
+    {"file":"test/sqlite-v14-upgrade.test.mjs","type":"Integration","gate":"T2","domains":["sqlite-persistence","manager-lifecycle","process-cleanup-and-locks"]},
+    {"file":"test/task-feedback.test.ts","type":"Unit","gate":"T1","domains":["feedback-and-token-observability","mcp-host"]},
+    {"file":"test/task-prompt.test.ts","type":"Unit","gate":"T1","domains":["task-prompt-and-report"]},
+    {"file":"test/task-timeout.test.ts","type":"Unit","gate":"T1","domains":["appserver-adapter","sqlite-persistence"]},
+    {"file":"test/test-impact-selector.test.ts","type":"Unit","gate":"T1","domains":["test-execution-contract"]},
+    {"file":"test/teardown-retry.test.ts","type":"Unit","gate":"T1","domains":["test-execution-contract"]},
+    {"file":"test/thread-token-usage.test.ts","type":"Unit","gate":"T1","domains":["feedback-and-token-observability"]},
+    {"file":"test/validate-plugin-root-pattern.test.ts","type":"Unit","gate":"T1","domains":["ci-release-contract"]},
+    {"file":"test/windows-cleanup-review-regressions.test.ts","type":"Integration","gate":"T2","domains":["process-cleanup-and-locks"]},
+    {"file":"test/windows-process-cleanup.test.ts","type":"Integration","gate":"T2","domains":["process-cleanup-and-locks","manager-lifecycle"]},
+    {"file":"test/windows-recorded-tree-native.test.ts","type":"Integration","gate":"T2","domains":["process-cleanup-and-locks"]},
+    {"file":"test/windows-transport-bounds.test.ts","type":"Integration","gate":"T2","domains":["process-cleanup-and-locks"]},
+    {"file":"test/zcode-app-server-adapter.test.ts","type":"Integration","gate":"T2","domains":["appserver-adapter","process-cleanup-and-locks","provider-catalog"]},
+    {"file":"test/zcode-path-repair.test.ts","type":"Integration","gate":"T1","domains":["zcode-path-discovery"]},
+    {"file":"test/zcode-paths.test.ts","type":"Integration","gate":"T1","domains":["zcode-path-discovery","worker-launch"]},
+    {"file":"test/sqlite-resource-stress.test.mjs","type":"Stress","gate":"T3","domains":["sqlite-persistence"],"stress":true},
+    {"file":"test/worker-env-portability.test.ts","type":"Integration","gate":"T2","domains":["worker-launch","zcode-path-discovery"]},
+    {"file":"test/observation-lifecycle.test.ts","type":"Integration","gate":"T2","domains":["process-cleanup-and-locks","feedback-and-token-observability"]},
+    {"file":"test/normalize-result.test.ts","type":"Unit","gate":"T1","domains":["task-prompt-and-report","feedback-and-token-observability"]}
   ],
   "stress_tests": [
-    {
-      "file": "test/batch2-performance.test.ts",
-      "test_id": "B3-05",
-      "boundary": "JSON TaskStore status/recovery latency, bounded event scans, and scale trend with many historical tasks",
-      "trigger_domains": ["json-task-store", "manager-lifecycle", "workspace-provider", "sqlite-persistence", "test-execution-contract"],
-      "parameters_frozen": {
-        "active_tasks": 32,
-        "historical_tasks": 10000,
-        "setup_performance_budget_seconds": 720,
-        "existing_test_timeout_seconds": 900
-      },
-      "historical_baseline": {
-        "source": "docs/reports/2026-10-08-long-session-reliability.md",
-        "scenario": "32 active / 10,000 historical setup",
-        "observed_milliseconds": 732770,
-        "verification": "Reported historical evidence; not re-measured by this work package."
-      }
-    }
+    {"file":"test/sqlite-resource-stress.test.mjs","test_id":"SQLITE-STRESS-01","boundary":"SQLite v14 history/WAL/checkpoint, same-fence cross-process CAS and eight independent admissions","trigger_domains":["sqlite-persistence"],"parameters_frozen":{"historical_tasks":256,"concurrent_claimants":4,"capacity_limit":8,"existing_test_timeout_seconds":120}}
   ],
   "full_suite_paths": [
     "src/result-contract.mjs",
     "src/interfaces.ts",
     "src/mcp/schemas.ts",
-    "src/adapters/zcode-envelope-types.ts",
     "src/runtime/errors.ts",
     "scripts/test-isolated.mjs",
     "scripts/test-clean-entrypoints.mjs",
@@ -385,7 +323,6 @@
     "scripts/run-stress-tests.mjs",
     "test/test-impact-map.json",
     "test/helpers.ts",
-    "test/manager-helpers.ts",
     "test/runtime-fixture.ts",
     "test/runtime/bootstrap-lock-worker.mjs",
     "test/sqlite-candidate/wp6b2b1/lifecycle-process.mjs",
@@ -397,6 +334,7 @@
     ".github/workflows/**",
     "scripts/build-core.mjs",
     "scripts/build-plugin.mjs",
-    "scripts/validate-plugin.mjs"
+    "scripts/validate-plugin.mjs",
+    "scripts/select-sqlite-stress.mjs"
   ]
 }

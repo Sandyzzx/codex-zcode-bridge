@@ -987,7 +987,7 @@ test("ADR-027 cleanup deadline publishes one unverified snapshot and ignores lat
   let release!:()=>void, entered=false, finished!:()=>void;
   const gate=new Promise<void>(resolve=>{release=resolve;});
   const done=new Promise<void>(resolve=>{finished=resolve;});
-  const snapshots:Array<import('../src/adapters/zcode-adapter.js').ZCodeRunOutcome>=[];
+  const snapshots:Array<import('../src/adapters/run-outcome.js').ZCodeRunOutcome>=[];
   t.after(async()=>{release();if(entered)await done;await rm(runtime.root,{recursive:true,force:true});});
   const adapter=new ZCodeAppServerAdapter({resolver:{resolve:async()=>runtime.config},timeoutMs:10000,testCleanupTimeoutMs:100,
     childEnvBase:{PATH:process.env.PATH},homeDir:runtime.root,onOutcomeCheckpoint:o=>snapshots.push(o),

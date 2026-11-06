@@ -19,6 +19,7 @@ import type {
 import type { ClaimOnlyDriverOptions, CandidateTaskPackage, ClaimOnlyRunResult } from "../store/lifecycle-gate.js";
 import { openClaimOnlyDriver } from "../store/lifecycle-gate.js";
 import { TaskManagerError } from "./errors.js";
+import { waitForAttentionSnapshot } from "../attention/wait.js";
 import { parseTaskAttentionSnapshot } from "../attention/snapshot.js";
 import { createPlatformProbe, PROCESS_IDENTITY_VERSION, type ProcessIdentity, type ProcessProbe } from "../runtime/process-probe.js";
 import { buildSqliteDoctorChecks } from "../runtime/sqlite-doctor.js";
@@ -28,19 +29,13 @@ const EXECUTION_OBSERVATION_PROBE_BUDGET_MS = 5_000;
 const DEFAULT_HOST_SHUTDOWN_WAIT_MS = 60_000;
 
 type Driver = Awaited<ReturnType<typeof openClaimOnlyDriver>>;
-type SqliteAuthorityOptions = ClaimOnlyDriverOptions & {
+export type SqliteAuthorityOptions = ClaimOnlyDriverOptions & {
   readonly testBeforeDispatch?: () => Promise<void>;
   readonly testOnScheduler?: (stage: string, detail: Readonly<Record<string, unknown>>) => void;
   readonly testShutdownWaitMs?: number;
 };
 
-/**
- * MCP-facing adapter for the existing SQLite Lifecycle Port. It owns no
- * persistence facts: Task, Attempt, Operation, Result, Event and Claim reads
- * all come from the bound SQLite driver. The outer BridgeTaskManager remains
- * the single public Manager contract and delegates to this binding only when
- * explicitly constructed for an isolated SQLite composition.
- */
+/** SQLite Lifecycle Manager. Owns scheduling; the bound driver owns durable facts. */
 export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
   readonly #driver: Driver;
   readonly #queue: Array<{ taskId: string; attempt: number }> = [];
@@ -192,6 +187,9 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
 
   async getEvents(input: GetEventsInput): Promise<TaskProgressPage> {
     this.#assertOpen();
+    if (input.wait_for !== undefined && input.wait_for !== "attention") throw new TaskManagerError("TASK_INVALID", "wait_for must be attention when provided");
+    if (input.view !== undefined && input.view !== "raw" && input.view !== "summary") throw new TaskManagerError("TASK_INVALID", "view must be raw or summary");
+    if (input.max_bytes !== undefined && (!Number.isInteger(input.max_bytes) || input.max_bytes < 1024 || input.max_bytes > 32 * 1024 * 1024)) throw new TaskManagerError("TASK_INVALID", "max_bytes must be between 1024 and 33554432");
     const afterSeq = input.after_seq ?? 0;
     const limit = input.limit ?? 100;
     const waitMs = input.wait_ms ?? 0;
@@ -204,6 +202,12 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       const decoded = decodeCursor(input.scan_cursor, input.task_id);
       if (input.after_seq !== undefined && input.after_seq !== decoded) throw new TaskManagerError("TASK_INVALID", "after_seq conflicts with scan_cursor");
       cursor = decoded;
+    }
+    if (input.wait_for === "attention") {
+      await waitForAttentionSnapshot({ read: () => this.getAttention(input.task_id), timeoutMs: waitMs });
+      const page = await this.getEvents({ ...input, wait_for: undefined, wait_ms: 0 });
+      const attention = await this.getAttention(input.task_id);
+      return { ...page, status: attention.status, attention };
     }
     const deadline = Date.now() + waitMs;
     while (true) {
@@ -222,9 +226,6 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       let nextCursor = page.nextCursor;
       let scanIncomplete = false;
       if (input.max_bytes !== undefined) {
-        if (!Number.isInteger(input.max_bytes) || input.max_bytes < 1024 || input.max_bytes > 32 * 1024 * 1024) {
-          throw new TaskManagerError("TASK_INVALID", "max_bytes must be between 1024 and 33554432");
-        }
         let bytes = 0;
         let kept = 0;
         for (const event of events) {
