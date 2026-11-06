@@ -212,6 +212,21 @@ test("HTTP 200 alone is not entitlement evidence", async () => {
       body: billingBody({ balances: [{ capabilities: [`model:${MODEL}`], remaining_units: 0 }] }),
       expected: "quota_exhausted",
     },
+    {
+      name: "missing remaining_units",
+      body: billingBody({ balances: [{ capabilities: [`model:${MODEL}`] }] }),
+      expected: "unavailable",
+    },
+    {
+      name: "non-numeric remaining_units",
+      body: billingBody({ balances: [{ capabilities: [`model:${MODEL}`], remaining_units: "many" }] }),
+      expected: "unavailable",
+    },
+    {
+      name: "negative remaining_units",
+      body: billingBody({ balances: [{ capabilities: [`model:${MODEL}`], remaining_units: -1 }] }),
+      expected: "unavailable",
+    },
     { name: "invalid JSON", body: "{not-json", expected: "unavailable" },
   ];
   for (const item of cases) {
@@ -249,6 +264,24 @@ test("authorized model proof returns entitled with the response request ID", asy
   if (!("requestId" in verdict)) throw new Error("authorized verdict omitted request ID");
   assert.equal(verdict.requestId, "synthetic-request-id");
   assert.equal(requests.length, 1);
+});
+
+test("non-200 billing responses never prove entitlement from the body", async () => {
+  for (const statusCode of [429, 500, 503, 405]) {
+    const { fetch: fetchImpl } = fakeBillingFetch(billingBody(), statusCode);
+    const entitlement = new StartPlanBillingEntitlement({ getAppVersion: async () => "3.17.4", fetchImpl });
+    const verdict = await entitlement.check({
+      account: ACCOUNT_A,
+      provider: "account:bigmodel-start-plan",
+      model: MODEL,
+      deviceMid: DEVICE_ID,
+      jwt: syntheticJwt(),
+      signal: new AbortController().signal,
+    });
+    assert.notEqual(verdict.status, "entitled", `HTTP ${statusCode} must not prove entitlement`);
+  }
+  assert.equal(classifyEntitlementFailure({ statusCode: 429, body: billingBody(), model: MODEL }).status, "rate_limited");
+  assert.equal(classifyEntitlementFailure({ statusCode: 500, body: billingBody(), model: MODEL }).status, "unavailable");
 });
 
 test("failure classes and provider codes stay independent", async () => {

@@ -4621,7 +4621,7 @@ function numericUnit(value) {
   if (typeof value === "string" && value.trim() && Number.isFinite(Number(value))) return Number(value);
   return null;
 }
-function requestedModelQuotaExhausted(balances, requestedModel) {
+function requestedModelQuotaVerdict(balances, requestedModel) {
   const relevant = balances.filter((balance) => {
     const capabilities = Array.isArray(balance.capabilities) ? balance.capabilities : [];
     const models = capabilities.flatMap((capability) => {
@@ -4630,8 +4630,10 @@ function requestedModelQuotaExhausted(balances, requestedModel) {
     }).filter(Boolean);
     return models.length > 0 ? models.includes(requestedModel) : typeof balance.show_name === "string" && balance.show_name.trim().toLowerCase() === requestedModel;
   });
-  if (relevant.length === 0) return false;
-  return relevant.every((balance) => numericUnit(balance.remaining_units) === 0);
+  if (relevant.length === 0) return "unproven";
+  const units = relevant.map((balance) => numericUnit(balance.remaining_units));
+  if (units.some((unit) => unit === null || unit < 0)) return "unproven";
+  return units.every((unit) => unit === 0) ? "exhausted" : "available";
 }
 function extractProviderCode(value) {
   if (!value) return void 0;
@@ -4679,7 +4681,7 @@ function classifyEntitlementFailure(input) {
   if (code === "3001") return { status: "billing_parameter_error", reason: "billing request parameters were rejected", providerCode };
   if (input.statusCode === 401) return { status: "unauthorized", reason: "credential was rejected as unauthenticated" };
   if (input.statusCode === 403) return { status: "forbidden", reason: "credential is authenticated but forbidden from this plan or model" };
-  const envelope = asOfficialBillingEnvelope(input.body);
+  const envelope = input.statusCode === 200 ? asOfficialBillingEnvelope(input.body) : void 0;
   if (envelope && isSuccessfulBusinessEnvelope(envelope) && hasActiveStartPlan(envelope)) {
     const balances = stringKeyedArray(envelope.data?.balances);
     const models = startPlanBalanceModelIds(balances);
@@ -4691,7 +4693,11 @@ function classifyEntitlementFailure(input) {
     if (!models.includes(requested)) {
       return { status: "model_unavailable", reason: "active Start Plan does not list the requested model" };
     }
-    if (requestedModelQuotaExhausted(balances, requested)) {
+    const quota = requestedModelQuotaVerdict(balances, requested);
+    if (quota === "unproven") {
+      return { status: "unavailable", reason: "billing response did not prove available quota for the requested model" };
+    }
+    if (quota === "exhausted") {
       return { status: "quota_exhausted", reason: "plan quota is exhausted for the requested model" };
     }
     return { status: "entitled", reason: "active Start Plan lists the requested model" };

@@ -152,10 +152,10 @@ function numericUnit(value: unknown): number | null {
   return null;
 }
 
-function requestedModelQuotaExhausted(
+function requestedModelQuotaVerdict(
   balances: Array<Record<string, unknown>>,
   requestedModel: string,
-): boolean {
+): "exhausted" | "unproven" | "available" {
   const relevant = balances.filter((balance) => {
     const capabilities = Array.isArray(balance.capabilities) ? balance.capabilities : [];
     const models = capabilities.flatMap((capability) => {
@@ -165,8 +165,12 @@ function requestedModelQuotaExhausted(
     return models.length > 0 ? models.includes(requestedModel)
       : typeof balance.show_name === "string" && balance.show_name.trim().toLowerCase() === requestedModel;
   });
-  if (relevant.length === 0) return false;
-  return relevant.every((balance) => numericUnit(balance.remaining_units) === 0);
+  if (relevant.length === 0) return "unproven";
+  const units = relevant.map((balance) => numericUnit(balance.remaining_units));
+  // A missing, non-numeric, or negative remaining_units value is not quota
+  // evidence; entitlement must fail closed instead of being presumed.
+  if (units.some((unit) => unit === null || unit < 0)) return "unproven";
+  return units.every((unit) => unit === 0) ? "exhausted" : "available";
 }
 
 function extractProviderCode(value: Record<string, unknown> | undefined): string | undefined {
@@ -229,7 +233,10 @@ export function classifyEntitlementFailure(input: {
   if (code === "3001") return { status: "billing_parameter_error", reason: "billing request parameters were rejected", providerCode };
   if (input.statusCode === 401) return { status: "unauthorized", reason: "credential was rejected as unauthenticated" };
   if (input.statusCode === 403) return { status: "forbidden", reason: "credential is authenticated but forbidden from this plan or model" };
-  const envelope = asOfficialBillingEnvelope(input.body);
+  // Body-derived entitlement facts are only provable on a 200 exchange;
+  // 429/5xx responses must keep their status-based classification even when
+  // the body carries an entitled-looking envelope.
+  const envelope = input.statusCode === 200 ? asOfficialBillingEnvelope(input.body) : undefined;
   if (envelope && isSuccessfulBusinessEnvelope(envelope) && hasActiveStartPlan(envelope)) {
     const balances = stringKeyedArray(envelope.data?.balances);
     const models = startPlanBalanceModelIds(balances);
@@ -241,7 +248,11 @@ export function classifyEntitlementFailure(input: {
     if (!models.includes(requested)) {
       return { status: "model_unavailable", reason: "active Start Plan does not list the requested model" };
     }
-    if (requestedModelQuotaExhausted(balances, requested)) {
+    const quota = requestedModelQuotaVerdict(balances, requested);
+    if (quota === "unproven") {
+      return { status: "unavailable", reason: "billing response did not prove available quota for the requested model" };
+    }
+    if (quota === "exhausted") {
       return { status: "quota_exhausted", reason: "plan quota is exhausted for the requested model" };
     }
     return { status: "entitled", reason: "active Start Plan lists the requested model" };
