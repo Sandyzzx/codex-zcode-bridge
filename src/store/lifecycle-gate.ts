@@ -1301,7 +1301,13 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
     await preceding;
     return release;
   };
-  const cancellationProofs = new Map<string, { readonly input: ClaimOnlyRunInput; readonly child: ClaimOnlyWorkerProcess; readonly cancelId: string; readonly verificationDigest: string; readonly identityState: "alive" | "exited"; readonly terminationState: "terminated" | "already_exited"; readonly processTreeDigest: string; readonly livePids: readonly number[]; readonly observedPids: readonly number[]; readonly workerExitCode: number }>();
+  const cancellationProofs = new Map<string, {
+    readonly task_id: string;
+    readonly attempt: number;
+    readonly child: ClaimOnlyWorkerProcess | null;
+    readonly verificationDigest: string;
+    readonly processTreeDigest: string;
+  }>();
   const provenance: RuntimeBuildProvenance = {
     bridge: fingerprintRuntimeArtifact(options.bridgeEntryPath),
     worker: fingerprintRuntimeArtifact(options.workerEntryPath),
@@ -1428,20 +1434,19 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
         catch { throw new LifecycleGateError("recovery_event_evidence_invalid"); }
       });
 
-      // A second Manager can start while the owning Manager is executing this
-      // Operation. A live exact identity, or a transient probe failure, proves
-      // only that this Manager must stay fail-closed/read-only. Neither proves
-      // a durable cleanup failure. Persisting a global Recovery Hold here would
-      // prevent the owning Worker from recording its next interaction request
-      // or cancellation intent.
-      if (phase === "running" && identityState !== "exited") {
+      // A running Operation with no Result remains occupied regardless of the
+      // fresh identity verdict. A second Manager must not turn that observation
+      // into a durable Recovery Hold: the original Worker may still be owned
+      // elsewhere, and explicit zcode_cancel must remain able to verify the
+      // persisted Claim and close the existing cancellation/CAS path.
+      if (phase === "running") {
         return {
           state: "held",
           operation_id: operationId,
           phase,
-          reason: identityState === "alive"
-            ? "worker_still_alive_managed_elsewhere"
-            : "worker_identity_unknown_managed_elsewhere",
+          reason: identityState === "alive" ? "worker_still_alive_managed_elsewhere"
+            : identityState === "exited" ? "worker_exited_without_committed_result"
+              : "worker_identity_unknown_managed_elsewhere",
           identity_state: identityState,
           probe_reason: probeReason,
         };
@@ -1713,21 +1718,33 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
     recordCancellationVerification: (input, evidence) => port.recordCancellationVerification(input, evidence),
     async cancelRunning(taskId, attempt) {
       const activeEntry = [...activeWorkers.entries()].find(([, value]) => value.input.task.task_id === taskId && value.input.attempt === attempt);
-      const operationId = activeEntry?.[0];
       const active = activeEntry?.[1];
-      if (!operationId || !active || !active.child.pid) {
-        throw new LifecycleGateError("cancellation_worker_unavailable", "no bound Worker process handle exists for this SQLite Attempt");
+      let operationId = activeEntry?.[0];
+      if (!operationId) {
+        const lifecycleValue = port.readTaskLifecycle(taskId);
+        if (!lifecycleValue) throw new LifecycleGateError("cancellation_task_missing");
+        const lifecycle = asRecord(lifecycleValue);
+        const projection = asRecord(lifecycle.projection);
+        if (Number(projection.current_attempt) !== attempt || !lifecycle.operation) {
+          throw new LifecycleGateError("cancellation_operation_unavailable", "the current SQLite Attempt has no cancellable Operation");
+        }
+        operationId = text(asRecord(lifecycle.operation).operation_id, "cancellation_operation_id_missing");
       }
       const operation = asRecord(port.readOperation(operationId));
       if (operation.phase !== "running" || operation.task_id !== taskId || Number(operation.attempt) !== attempt) {
         return { result_won: operation.result_digest !== null, operation_id: operationId, phase: operation.phase, result_status: operation.result_status };
       }
       const worker = parseEvidence(String(operation.claim_worker_identity_json), "cancellation_worker_identity_invalid");
-      if (worker.source !== "manager_verified_process_probe" || worker.fixture !== false || Number(worker.process_id) !== active.child.pid
-        || worker.platform !== "win32" || worker.fingerprint_precision !== "exact" || typeof worker.start_fingerprint !== "string") {
+      const workerPid = positive(Number(worker.process_id), "cancellation_worker_pid_invalid");
+      if (active?.child.pid !== undefined && active.child.pid !== workerPid) {
         throw new LifecycleGateError("cancellation_worker_identity_mismatch");
       }
-      const processIdentity = { pid: Number(worker.process_id), fingerprint: String(worker.start_fingerprint),
+      if (worker.source !== "manager_verified_process_probe" || worker.fixture !== false
+        || worker.platform !== "win32" || worker.fingerprint_precision !== "exact"
+        || worker.identity_version !== PROCESS_IDENTITY_VERSION || typeof worker.start_fingerprint !== "string") {
+        throw new LifecycleGateError("cancellation_worker_identity_mismatch");
+      }
+      const processIdentity = { pid: workerPid, fingerprint: String(worker.start_fingerprint),
         fingerprint_precision: "exact" as const, identity_version: PROCESS_IDENTITY_VERSION, platform: "win32",
         captured_at: String(worker.captured_at) };
       const identityOutcome = await probeWithDeadline(probe, { pid: processIdentity.pid, identity: processIdentity }, processProbeTimeoutMs);
@@ -1748,14 +1765,44 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
       const intent = asRecord(port.requestCancellation(fence, identityEvidence));
       if (intent.result_won === true) return intent;
       const cancelId = text(intent.cancel_id, "cancellation_intent_missing");
+      const persistedVerification = readAllLifecycleEventsForRecovery(port, operationId).find((event) => {
+        if (event.event_type !== "observation_recorded") return false;
+        try { return parseEvidence(event.evidence_json, "cancellation_verification_invalid").reason === "cancel_tree_verified"; }
+        catch { throw new LifecycleGateError("cancellation_verification_invalid"); }
+      });
+      if (persistedVerification) {
+        if (identityVerdict.state !== "exited") throw new LifecycleGateError("cancellation_verification_conflict");
+        const persistedEvidence = parseEvidence(persistedVerification.evidence_json, "cancellation_verification_invalid");
+        if (persistedEvidence.cancel_id !== cancelId || persistedEvidence.claim_id !== fence.claim_id
+          || persistedEvidence.worker_identity_digest !== fence.claim_worker_identity_digest
+          || persistedEvidence.root_process_id !== processIdentity.pid
+          || persistedEvidence.root_start_fingerprint !== processIdentity.fingerprint
+          || persistedEvidence.worker_tree_complete !== true) {
+          throw new LifecycleGateError("cancellation_verification_conflict");
+        }
+        const verificationDigest = text(persistedVerification.evidence_digest, "cancellation_verification_missing");
+        const processTreeDigest = text(persistedEvidence.process_tree_digest, "cancellation_process_tree_digest_missing");
+        cancellationProofs.set(operationId, { task_id: taskId, attempt, child: active?.child ?? null,
+          verificationDigest, processTreeDigest });
+        return { duplicate: true, result_won: false, operation_id: operationId, cancel_id: cancelId,
+          phase: operation.phase, cancellation_verification_digest: verificationDigest };
+      }
       const terminationState: "terminated" | "already_exited" = identityVerdict.state === "alive" ? "terminated" : "already_exited";
       if (identityVerdict.state === "alive") {
         const terminated = await terminateProcessTree(processIdentity.pid, { graceMs: 500, killWaitMs: 5_000,
           expectedRootFingerprint: processIdentity.fingerprint });
         if (terminated.verified !== true) throw new LifecycleGateError("cancellation_tree_termination_unverified");
       }
-      const workerExitCode = await waitForClose(active.child, 15_000);
-      if (workerExitCode === null) throw new LifecycleGateError("cancellation_worker_exit_unknown");
+      let workerExitCode: number | null = null;
+      if (active?.child) {
+        workerExitCode = await waitForClose(active.child, 15_000);
+        if (workerExitCode === null) throw new LifecycleGateError("cancellation_worker_exit_unknown");
+      } else if (identityVerdict.state === "alive") {
+        const afterStop = await probeWithDeadline(probe, { pid: processIdentity.pid, identity: processIdentity }, processProbeTimeoutMs);
+        if (afterStop.status !== "resolved" || afterStop.verdict?.state !== "exited") {
+          throw new LifecycleGateError("cancellation_worker_exit_unknown");
+        }
+      }
       const scan = await verifyProcessTreeClaimantsClean([{ pid: processIdentity.pid, fingerprint: processIdentity.fingerprint }]);
       if (!scan.clean || scan.livePids.length > 0) throw new LifecycleGateError("cancellation_tree_not_clean");
       const processTreeFacts = { contract: "sqlite-candidate-cancelled-worker-tree-v1", operation_id: operationId,
@@ -1773,13 +1820,12 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
       const verification = asRecord(port.recordCancellationVerification({ ...fence, revision: Number(current.revision) }, treeEvidence));
       if (verification.result_won === true) return verification;
       const verificationDigest = text(verification.cancellation_verification_digest, "cancellation_verification_missing");
-      cancellationProofs.set(operationId, { input: active.input, child: active.child, cancelId, verificationDigest,
-        identityState: identityVerdict.state, terminationState, processTreeDigest: String(treeEvidence.process_tree_digest),
-        livePids: [], observedPids: [...scan.observedPids], workerExitCode });
+      cancellationProofs.set(operationId, { task_id: taskId, attempt, child: active?.child ?? null,
+        verificationDigest, processTreeDigest: String(treeEvidence.process_tree_digest) });
       return { ...verification, result_won: false, cancellation_verification_digest: verificationDigest };
     },
     async completeRunningCancellation(taskId, attempt) {
-      const proofEntry = [...cancellationProofs.entries()].find(([, value]) => value.input.task.task_id === taskId && value.input.attempt === attempt);
+      const proofEntry = [...cancellationProofs.entries()].find(([, value]) => value.task_id === taskId && value.attempt === attempt);
       const operationId = proofEntry?.[0];
       const proof = proofEntry?.[1];
       if (!operationId || !proof) throw new LifecycleGateError("cancellation_verification_missing");
@@ -1807,8 +1853,11 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
       const pending = asRecord(port.beginCleanup(cleanupBase));
       if (pending.phase !== "cleanup_pending") throw new LifecycleGateError("cancellation_cleanup_pending_missing");
       const cleanupFence = { ...cleanupBase, revision: Number(pending.revision) };
-      const streams = proof.child.stdio as ReadonlyArray<{ destroyed?: boolean; closed?: boolean } | null>;
-      const workerStdioClosed = streams.every((stream) => stream === null || stream.destroyed === true || stream.closed === true);
+      const streams = proof.child?.stdio as ReadonlyArray<{ destroyed?: boolean; closed?: boolean } | null> | undefined;
+      // After a Manager restart there is no inherited local handle. Exact
+      // process exit plus the clean recorded-tree scan is the closure proof.
+      const workerStdioClosed = streams === undefined
+        || streams.every((stream) => stream === null || stream.destroyed === true || stream.closed === true);
       const worker = parseEvidence(String(operation.claim_worker_identity_json), "cancellation_worker_identity_invalid");
       const resourceFacts = { contract: "sqlite-candidate-cancelled-worker-resources-v1",
         adapter: options.testOnlyFakeAdapter ? "explicit_test_fake" : "zcode_app_server",
