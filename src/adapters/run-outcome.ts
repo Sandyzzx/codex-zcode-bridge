@@ -44,4 +44,3 @@ export interface ZCodeRunOutcome extends AgentRunOutcome {
   /** B4 additive: runtime-confirmed model and reasoning-depth evidence. */
   readonly modelProfile?: import("../interfaces.js").ExecutionProfile | null;
 }
-
