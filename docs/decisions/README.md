@@ -2,8 +2,8 @@
 
 > Status: AUTHORITATIVE（仅指本索引）
 > Last updated: 2026-11-06
-> Last verified: 2026-11-06，仅核对 R3 ADR-026 批准状态和 ADR-027 路由；其余条目沿用历史核对范围，未重新认证。
-> Verified against: 4fc3d91731da38cc022afe80e474e510a70735ac（R3 本地候选，未发布）
+> Last verified: 2026-11-06，核对 ADR-028 的 R4 接受状态、边界与 ADR-027 路由；其余条目沿用历史核对范围，未重新认证。
+> Verified against: cbf0305b0f548b065fcfab0ffaa7159554f6d69d（R4 本地候选基线，未发布）
 
 本目录保存架构决策、待批准提案和带日期的决策记录；是否批准以各文档的 Decision 字段为准。决策回答"为什么这样定"，当前实现仍以 `ARCHITECTURE.md` / `INTERFACES.md` 为准。
 
@@ -36,6 +36,7 @@
 | [ADR-025](ADR-025-sqlite-attention-unified-waiting.md) | Accepted — Owner directive 2026-11-04（整合时由 ADR-024 重编号，避免与 scoped Hold ADR 冲突） | SQLite Attention Core、`zcode_events(wait_for="attention")` 与共享只读 Thin Waiter |
 | [ADR-026](ADR-026-sqlite-result-contract.md) | Accepted — Owner 已批准，本地 v14 实现；生产迁移未授权 | 统一 Result 文本与 UTF-8 容量；32MiB Result、独立 envelope 余量与显式 v14 升级 |
 | [ADR-027](ADR-027-execution-and-cleanup-deadlines.md) | Owner 授权 R3 本地实现/隔离验证，待本轮验收 | 一次解析执行期限、独立清理预算、先提交 Result 再验证退出与树清理 |
+| [ADR-028](ADR-028-pre-intent-workspace-refusal.md) | Accepted for local R4 implementation — Owner R4 directive，2026-11-06 | 最终 Workspace use 校验先于 Launch Intent；确定性拒绝可 queued Cancel，Intent 后保持 conservative unknown |
 
 ADR-001 到 ADR-003 只搬运权威文档里已经写明的结论。ADR-004 原先没有明文记录，只有 bridge 之外的设计讨论，因此先以 Proposed 记录；2026-10-07 由 Master 明确按"强化版 A"接受，原则冻结，未因此增加任何读取 ZCode 本地材料的代码。
 

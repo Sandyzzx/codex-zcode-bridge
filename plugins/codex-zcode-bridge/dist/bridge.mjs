@@ -11193,6 +11193,14 @@ async function openClaimOnlyDriver(options) {
           throw error2;
         }
         stage("reserved_snapshot_read_complete", { policy_snapshot_digest: policySnapshot.policy_snapshot_digest });
+        for (const workspace of /* @__PURE__ */ new Set([input.task.workspace, taskExecutionWorkspace(input.task)])) {
+          const usePolicy = localPolicy.validateWorkspaceForUse(workspace);
+          if (usePolicy.state !== "allow") {
+            state = "launch_outcome_unknown";
+            reason = usePolicy.reason;
+            throw new LifecycleGateError("trusted_local_workspace_use_denied", usePolicy.reason);
+          }
+        }
         const launchRequest = {
           operation_id: input.operationId,
           task_id: input.task.task_id,
@@ -11208,14 +11216,6 @@ async function openClaimOnlyDriver(options) {
         if (intent.duplicate === true) throw new LifecycleGateError("launch_outcome_unknown", "existing Intent never authorizes another Spawn");
         const intentRevision = positive3(intent.revision, "launch_intent_revision_missing");
         stage("intent_complete", { revision: intentRevision });
-        for (const workspace of /* @__PURE__ */ new Set([input.task.workspace, taskExecutionWorkspace(input.task)])) {
-          const usePolicy = localPolicy.validateWorkspaceForUse(workspace);
-          if (usePolicy.state !== "allow") {
-            state = "launch_outcome_unknown";
-            reason = usePolicy.reason;
-            throw new LifecycleGateError("trusted_local_workspace_use_denied", usePolicy.reason);
-          }
-        }
         stage("spawn_bootstrap_start");
         const launch = await spawnAndBootstrapOnce(() => {
           spawnCount += 1;

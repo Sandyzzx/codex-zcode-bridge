@@ -2,8 +2,8 @@
 
 > Status: AUTHORITATIVE（仅指本索引）
 > Last updated: 2026-11-06
-> Last verified: 2026-11-06，仅核对 R3 期限文档与 ADR-026/027 路由；其余条目未重核
-> Verified against: 4fc3d91731da38cc022afe80e474e510a70735ac（R3 本地候选）
+> Last verified: 2026-11-06，核对 R4/ADR-028 路由与 R3/R4 文档入口；其余条目未重核
+> Verified against: cbf0305b0f548b065fcfab0ffaa7159554f6d69d（R4 本地候选基线）
 
 英文使用者从 [README.md](../README.md) 开始。技术文档为中文。本文是文档路由：先看状态等级，再按读者路径选文档。
 
@@ -81,6 +81,7 @@ English readers start at [README.md](../README.md). This index is bilingual; the
 | [ADR-024](decisions/ADR-024-scoped-sqlite-hold-and-local-cleanup-recovery.md) | 2026-11-04 | 候选分支决策：SQLite Hold 限制到 Operation/执行路径；本机 evidence-only Recovery |
 | [ADR-026](decisions/ADR-026-sqlite-result-contract.md) | 2026-11-05 | Owner 已批准：32 MiB Result、独立 envelope 余量与显式 v14 升级 |
 | [ADR-027](decisions/ADR-027-execution-and-cleanup-deadlines.md) | 2026-11-06 | R3 本地候选：执行/清理/交付期限与 Result 分离 |
+| [ADR-028](decisions/ADR-028-pre-intent-workspace-refusal.md) | 2026-11-06 | R4 本地候选：Intent 前 Workspace 拒绝与 Launch unknown 边界 |
 | [decisions/roadmap-decisions-2026-09-27.md](decisions/roadmap-decisions-2026-09-27.md) | 2026-09-27 | 路线图与决策讨论 |
 | [decisions/reliability-repair-plan-v2-2026-10-03.md](decisions/reliability-repair-plan-v2-2026-10-03.md) | 2026-10-03 | 可靠性修复计划，含未完成项 |
 

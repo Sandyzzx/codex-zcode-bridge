@@ -1714,7 +1714,7 @@ test("SQLite preserves JSON workspace semantics and the Host-selected execution 
   });
 });
 
-test("SQLite validates both source workspace and execution worktree immediately before Spawn", { timeout: 90_000 }, async () => {
+test("SQLite rejects workspace loss before Launch Intent and queued Cancel releases the untouched reservation", { timeout: 90_000 }, async () => {
   for (const removed of ["workspace", "worktree_path"] as const) {
     let directoryToRemove: string | undefined;
     let spawnCount = 0;
@@ -1725,7 +1725,8 @@ test("SQLite validates both source workspace and execution worktree immediately 
       const executionWorktree = path.join(fixtureRoot, "execution-worktree");
       mkdirSync(sourceWorkspace, { recursive: true });
       mkdirSync(executionWorktree, { recursive: true });
-      directoryToRemove = removed === "workspace" ? sourceWorkspace : executionWorktree;
+      const refusedDirectory = removed === "workspace" ? sourceWorkspace : executionWorktree;
+      directoryToRemove = refusedDirectory;
 
       const taskId = `mcp-ws-${removed === "workspace" ? "source" : "exec"}-${randomUUID()}`;
       const created = contentObject(await client.callTool({
@@ -1747,28 +1748,69 @@ test("SQLite validates both source workspace and execution worktree immediately 
       assert.ok(completedRun, `${removed} must reach a fail-closed pre-Spawn decision`);
       assert.equal(completedRun.detail?.state, "launch_outcome_unknown");
       assert.equal(completedRun.detail?.reason, "trusted_local_workspace_use_denied",
-        `${removed} must be revalidated immediately before Worker Spawn`);
+        `${removed} must be revalidated before the durable Launch Intent`);
       assert.equal(completedRun.detail?.spawnCount, 0);
       assert.equal(spawnCount, 0, `removing ${removed} must prevent Worker Spawn`);
       const status = contentObject(await client.callTool({ name: "zcode_status", arguments: { task_id: taskId } }));
-      assert.equal(status.status, "queued", "a fail-closed pre-Spawn result must not invent a terminal Worker Result");
+      assert.equal(status.status, "queued", "a pre-Intent refusal must not invent a terminal Worker Result");
 
       const modules = await loadLifecycleCandidateModules();
       const recovery = modules.Store.openForRecovery(dataRoot);
       assert.ok(recovery);
       try {
-        const operation = modules.createPort(recovery).readOperation(operationId) as Record<string, unknown>;
-        assert.equal(operation.phase, "launch_intent", "the launch intent remains durably occupied");
-        assert.notEqual(operation.capacity_slot, null, "an unverified launch path must retain Capacity");
+        const port = modules.createPort(recovery);
+        const operation = port.readOperation(operationId) as Record<string, unknown>;
+        const snapshotOperation = (port.readRecoverySnapshot() as { operations: Array<Record<string, unknown>> })
+          .operations.find((candidate) => candidate.operation_id === operationId);
+        assert.equal(operation.phase, "reserved", "a deterministic pre-Spawn refusal must leave an untouched reservation");
+        assert.equal(operation.launch_id, null, "the refusal must not persist a Launch Intent");
+        assert.equal(snapshotOperation?.capacity_occupied, true, "the untouched reservation still retains Capacity until Cancel");
+        assert.deepEqual(port.readLifecycleEvents(operationId).map((event) => event.event_type), ["reserved"],
+          "the refusal must not append launch evidence");
       } finally {
         recovery.close();
       }
+
+      const cancelled = contentObject(await client.callTool({ name: "zcode_cancel", arguments: { task_id: taskId } }));
+      assert.equal(cancelled.status, "cancelled");
+
+      const afterCancel = modules.Store.openForRecovery(dataRoot);
+      assert.ok(afterCancel);
+      try {
+        const port = modules.createPort(afterCancel);
+        const operation = port.readOperation(operationId) as Record<string, unknown>;
+        const snapshotOperation = (port.readRecoverySnapshot() as { operations: Array<Record<string, unknown>> })
+          .operations.find((candidate) => candidate.operation_id === operationId);
+        assert.equal(operation.phase, "cancelled_before_launch");
+        assert.equal(snapshotOperation?.capacity_occupied, false, "queued Cancel must release the untouched reservation");
+        assert.deepEqual(port.readLifecycleEvents(operationId).map((event) => event.event_type),
+          ["reserved", "cancelled_before_launch"]);
+        assert.equal((port.readTaskProjection(taskId) as Record<string, unknown>).status, "cancelled");
+      } finally {
+        afterCancel.close();
+      }
+
+      mkdirSync(refusedDirectory, { recursive: true });
+      const nextTaskId = `mcp-ws-next-${removed === "workspace" ? "source" : "exec"}-${randomUUID()}`;
+      const nextCreated = contentObject(await client.callTool({
+        name: "zcode_task",
+        arguments: {
+          ...syntheticTask(sourceWorkspace, nextTaskId),
+          worktree_path: executionWorktree,
+        },
+      }));
+      assert.equal(nextCreated.status, "queued");
+      assert.equal((await waitForTerminal(client, nextTaskId, 1)).status, "completed",
+        "the cancelled path and Capacity must accept a later Task");
+      await waitForLifecycleEvent(client, nextTaskId, "released");
+      const nextOperation = contentObject(await client.callTool({ name: "zcode_status", arguments: { task_id: nextTaskId } }));
+      assert.equal(nextOperation.status, "completed");
     }, {
       onStage: (stage, detail) => {
         stages.push({ stage, detail });
-        // Remove after durable Admission and Launch Intent, immediately before
-        // the production pre-Spawn revalidation.
-        if (stage === "intent_complete" && directoryToRemove) {
+        // Remove after the consistent Admission snapshot, immediately before
+        // the final Workspace-use check and Launch Intent.
+        if (stage === "reserved_snapshot_read_complete" && directoryToRemove) {
           rmSync(directoryToRemove, { recursive: true, force: true });
           directoryToRemove = undefined;
         }
