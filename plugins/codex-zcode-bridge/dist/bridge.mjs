@@ -214,37 +214,37 @@ function validateFailureFacts(value) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error("failure facts must be a JSON object");
   }
-  const record4 = value;
-  for (const key of Object.keys(record4)) {
+  const record5 = value;
+  for (const key of Object.keys(record5)) {
     if (!FACTS_KEYS.has(key)) throw new Error("failure facts has an unknown field");
   }
   for (const key of FACTS_KEYS) {
-    if (!(key in record4)) throw new Error(`failure facts is missing the field: ${key}`);
+    if (!(key in record5)) throw new Error(`failure facts is missing the field: ${key}`);
   }
-  if (record4["schema_version"] !== "1") throw new Error('failure facts schema_version must be "1"');
-  if (!FAILURE_SOURCES.includes(record4["source"])) {
+  if (record5["schema_version"] !== "1") throw new Error('failure facts schema_version must be "1"');
+  if (!FAILURE_SOURCES.includes(record5["source"])) {
     throw new Error("failure facts source is not in the frozen registry");
   }
-  if (!FAILURE_PHASE_SET.has(record4["phase"])) {
+  if (!FAILURE_PHASE_SET.has(record5["phase"])) {
     throw new Error("failure facts phase is not in the frozen registry");
   }
-  if (!ACCEPTED_STATES.includes(record4["accepted_before_error"])) {
+  if (!ACCEPTED_STATES.includes(record5["accepted_before_error"])) {
     throw new Error("failure facts accepted_before_error must be yes, no, or unknown");
   }
-  if (!FAILURE_CATEGORIES.includes(record4["category"])) {
+  if (!FAILURE_CATEGORIES.includes(record5["category"])) {
     throw new Error("failure facts category is not in the frozen registry");
   }
-  if (!CONFIDENCE_LEVELS.includes(record4["confidence"])) {
+  if (!CONFIDENCE_LEVELS.includes(record5["confidence"])) {
     throw new Error("failure facts confidence is not in the frozen registry");
   }
-  if (!EVIDENCE_BASES.includes(record4["evidence_basis"])) {
+  if (!EVIDENCE_BASES.includes(record5["evidence_basis"])) {
     throw new Error("failure facts evidence_basis is not in the frozen registry");
   }
-  if (typeof record4["evidence_conflict"] !== "boolean") {
+  if (typeof record5["evidence_conflict"] !== "boolean") {
     throw new Error("failure facts evidence_conflict must be a boolean");
   }
-  const retryable2 = record4["runtime_retryable"];
-  const retryableBasis = record4["runtime_retryable_basis"];
+  const retryable2 = record5["runtime_retryable"];
+  const retryableBasis = record5["runtime_retryable_basis"];
   if (retryable2 !== null && typeof retryable2 !== "boolean") {
     throw new Error("failure facts runtime_retryable must be a boolean or null");
   }
@@ -266,7 +266,7 @@ function validateFailureFacts(value) {
     ["result_type", RESULT_TYPE_REGISTRY]
   ];
   for (const [key, registry2] of codeFields) {
-    const item = record4[key];
+    const item = record5[key];
     if (item === null) continue;
     if (key !== "rpc_method" && (typeof item !== "string" || !CODE_PATTERN.test(item))) {
       throw new Error(`failure facts field ${key} is not a bounded code value`);
@@ -275,16 +275,16 @@ function validateFailureFacts(value) {
       throw new Error(`failure facts field ${key} is not a registered value`);
     }
   }
-  if (record4["rpc_code"] !== null && safeIntegerOrNull(record4["rpc_code"]) === null) {
+  if (record5["rpc_code"] !== null && safeIntegerOrNull(record5["rpc_code"]) === null) {
     throw new Error("failure facts rpc_code must be a safe integer or null");
   }
-  if (record4["http_status"] !== null && httpStatusOrNull(record4["http_status"]) === null) {
+  if (record5["http_status"] !== null && httpStatusOrNull(record5["http_status"]) === null) {
     throw new Error("failure facts http_status must be an integer in 100..599 or null");
   }
-  if (record4["process_errno"] !== null && !PROCESS_ERRNOS.includes(record4["process_errno"])) {
+  if (record5["process_errno"] !== null && !PROCESS_ERRNOS.includes(record5["process_errno"])) {
     throw new Error("failure facts process_errno must be ENOENT, EACCES, EPERM, or null");
   }
-  const bytes = Buffer.byteLength(JSON.stringify(record4), "utf8");
+  const bytes = Buffer.byteLength(JSON.stringify(record5), "utf8");
   if (bytes > MAX_FAILURE_FACTS_BYTES) {
     throw new Error(`failure facts snapshot exceeds the ${MAX_FAILURE_FACTS_BYTES}-byte limit (${bytes} bytes)`);
   }
@@ -1241,8 +1241,8 @@ async function beginJsonWriterDrainUnderManagerLock(dataRoot, durability = defau
     return "draining";
   });
 }
-function writeFence(dataRoot, record4, durability = defaultDurableFileOperations) {
-  writeJsonAtomic(fencePath(dataRoot), record4, durability);
+function writeFence(dataRoot, record5, durability = defaultDurableFileOperations) {
+  writeJsonAtomic(fencePath(dataRoot), record5, durability);
 }
 var FENCE_FILE, ROSTER_DIR, REGISTRY_FILE, GATE_LOCK, ATOMIC_RENAME_RETRY_MS, ATOMIC_RENAME_RETRY_PAUSE_MS, TRANSIENT_ATOMIC_RENAME_CODES, activeWritePermits;
 var init_json_writer_quiescence = __esm({
@@ -1329,7 +1329,7 @@ function isTerminalStatus(status) {
   return status === "completed" || status === "failed" || status === "cancelled" || status === "waiting_for_master";
 }
 function toPublicStatus(status) {
-  const record4 = {
+  const record5 = {
     task_id: status.task_id,
     status: status.status,
     attempt: status.attempt,
@@ -1341,9 +1341,9 @@ function toPublicStatus(status) {
     zcode_session_id: status.zcode_session_id,
     exit_code: status.exit_code
   };
-  if (status.error_code) record4.error_code = status.error_code;
-  if (status.error) record4.error = status.error;
-  return record4;
+  if (status.error_code) record5.error_code = status.error_code;
+  if (status.error) record5.error = status.error;
+  return record5;
 }
 var TASK_ID_PATTERN, DEFAULT_MAX_LOG_BYTES, MAX_INTERACTION_PARAMS_BYTES, LEGACY_INTERACTION_PARAMS_BYTES, SHA256_HEX_PATTERN, InteractionRequestTooLargeError, MAX_CRITICAL_EVENT_RESERVE_BYTES, CRITICAL_EVENT_TYPES, TaskStore;
 var init_task_store = __esm({
@@ -1785,9 +1785,9 @@ var init_task_store = __esm({
         let newest = null;
         for (const file of files) {
           try {
-            const record4 = JSON.parse(readFileSync5(path7.join(directory, file), "utf8"));
-            if (record4.state === "pending" && typeof record4.method === "string" && typeof record4.created_at === "string") {
-              if (!newest || record4.created_at > newest.created_at) newest = { method: record4.method, created_at: record4.created_at };
+            const record5 = JSON.parse(readFileSync5(path7.join(directory, file), "utf8"));
+            if (record5.state === "pending" && typeof record5.method === "string" && typeof record5.created_at === "string") {
+              if (!newest || record5.created_at > newest.created_at) newest = { method: record5.method, created_at: record5.created_at };
             }
           } catch {
           }
@@ -2308,35 +2308,35 @@ var init_task_store = __esm({
           const file = this.interactionFile(taskId, request.request_id);
           return withEventLock(path7.join(this.taskDir(taskId), "interactions.lock"), () => {
             if (existsSync6(file)) {
-              const record5 = this.#readJson(file);
-              if (record5.request_id !== request.request_id || record5.method !== request.method || stableJson(record5.params) !== stableJson(request.params)) {
+              const record6 = this.#readJson(file);
+              if (record6.request_id !== request.request_id || record6.method !== request.method || stableJson(record6.params) !== stableJson(request.params)) {
                 throw new Error("interaction request id collision");
               }
-              return { record: record5, created: false };
+              return { record: record6, created: false };
             }
             const serialized = JSON.stringify(request.params);
             const bytes = Buffer.byteLength(serialized, "utf8");
             if (bytes > MAX_INTERACTION_PARAMS_BYTES) {
               throw new InteractionRequestTooLargeError(bytes, MAX_INTERACTION_PARAMS_BYTES);
             }
-            const record4 = {
+            const record5 = {
               ...request,
               state: "pending",
               created_at: createdAt,
               params_bytes: bytes,
               params_sha256: createHash3("sha256").update(serialized).digest("hex")
             };
-            this.#writeJsonAtomic(file, record4);
-            return { record: record4, created: true };
+            this.#writeJsonAtomic(file, record5);
+            return { record: record5, created: true };
           });
         }, taskId);
       }
       readInteractionRequest(taskId, requestId) {
         const file = this.interactionFile(taskId, requestId);
         if (!existsSync6(file)) return null;
-        const record4 = this.#readJson(file);
-        if (record4.request_id !== requestId) throw new Error("interaction request id hash mismatch");
-        return record4;
+        const record5 = this.#readJson(file);
+        if (record5.request_id !== requestId) throw new Error("interaction request id hash mismatch");
+        return record5;
       }
       /** Absolute path of one attempt's private full-request record; referenced
        * by bounded interaction_requested preview events (ADR-008). */
@@ -2358,16 +2358,16 @@ var init_task_store = __esm({
         const file = this.interactionFile(taskId, requestId);
         try {
           if (!existsSync6(file)) return { ok: false, reason: "the full request record is missing" };
-          const record4 = this.#readJson(file);
-          if (record4.request_id !== requestId) return { ok: false, reason: "the persisted request id does not match this request" };
-          if (record4.state !== "pending" && record4.state !== "answered") return { ok: false, reason: "the persisted request state is unreadable" };
-          const serialized = JSON.stringify(record4.params);
+          const record5 = this.#readJson(file);
+          if (record5.request_id !== requestId) return { ok: false, reason: "the persisted request id does not match this request" };
+          if (record5.state !== "pending" && record5.state !== "answered") return { ok: false, reason: "the persisted request state is unreadable" };
+          const serialized = JSON.stringify(record5.params);
           const bytes = Buffer.byteLength(serialized, "utf8");
           if (bytes > MAX_INTERACTION_PARAMS_BYTES) {
             return { ok: false, reason: `the full request content is ${bytes} UTF-8 bytes, over the ${MAX_INTERACTION_PARAMS_BYTES}-byte persistence limit` };
           }
-          const hasBytes = record4.params_bytes !== void 0;
-          const hasHash = record4.params_sha256 !== void 0;
+          const hasBytes = record5.params_bytes !== void 0;
+          const hasHash = record5.params_sha256 !== void 0;
           if (!hasBytes && !hasHash) {
             if (bytes <= LEGACY_INTERACTION_PARAMS_BYTES) return { ok: true };
             return { ok: false, reason: `the full request record carries no integrity metadata but is ${bytes} UTF-8 bytes, over the legacy ${LEGACY_INTERACTION_PARAMS_BYTES}-byte limit; it cannot be treated as a legacy record` };
@@ -2375,16 +2375,16 @@ var init_task_store = __esm({
           if (!hasBytes || !hasHash) {
             return { ok: false, reason: "the full request record has incomplete integrity metadata (byte count and SHA256 must both be present)" };
           }
-          if (typeof record4.params_bytes !== "number" || !Number.isSafeInteger(record4.params_bytes) || record4.params_bytes < 0) {
+          if (typeof record5.params_bytes !== "number" || !Number.isSafeInteger(record5.params_bytes) || record5.params_bytes < 0) {
             return { ok: false, reason: "the persisted byte count is not a valid non-negative integer" };
           }
-          if (typeof record4.params_sha256 !== "string" || !SHA256_HEX_PATTERN.test(record4.params_sha256)) {
+          if (typeof record5.params_sha256 !== "string" || !SHA256_HEX_PATTERN.test(record5.params_sha256)) {
             return { ok: false, reason: "the persisted SHA256 is not a valid 64-character hex digest" };
           }
-          if (record4.params_bytes !== bytes) {
+          if (record5.params_bytes !== bytes) {
             return { ok: false, reason: "the persisted byte count does not match the full content" };
           }
-          if (record4.params_sha256 !== createHash3("sha256").update(serialized).digest("hex")) {
+          if (record5.params_sha256 !== createHash3("sha256").update(serialized).digest("hex")) {
             return { ok: false, reason: "the persisted SHA256 does not match the full content" };
           }
           return { ok: true };
@@ -2609,6 +2609,7 @@ import { fileURLToPath as fileURLToPath2 } from "node:url";
 function spawnClaimOnlyWorker(workerPath, provenance, options = {}) {
   if (!path9.isAbsolute(workerPath)) throw new TypeError("claim-only worker path must be absolute");
   if (options.dropAfterPrepared && !options.interactionChannel) throw new TypeError("interaction channel is required for drop-after-prepared");
+  if (options.privateAuthChannel && !options.interactionChannel) throw new TypeError("private auth requires interaction channel allocation");
   const env = {
     ...createWorkerEnv(process.env),
     ZCODE_BRIDGE_RUNTIME_PROVENANCE: JSON.stringify(provenance)
@@ -2616,6 +2617,7 @@ function spawnClaimOnlyWorker(workerPath, provenance, options = {}) {
   const args = [
     workerPath,
     ...options.interactionChannel ? ["--bridge-sqlite-interaction-v1"] : [],
+    ...options.privateAuthChannel ? ["--bridge-sqlite-private-auth-v1"] : [],
     ...options.dropAfterPrepared ? ["--bridge-sqlite-interaction-drop-after-prepared-v1"] : [],
     BRIDGE_WORKER_LAUNCH_MARKER
   ];
@@ -2624,7 +2626,7 @@ function spawnClaimOnlyWorker(workerPath, provenance, options = {}) {
     // this test-only harness's direct ChildProcess handle and private pipes.
     detached: true,
     shell: false,
-    stdio: options.interactionChannel ? ["ignore", "ignore", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe"] : ["ignore", "ignore", "pipe", "pipe", "pipe", "pipe", "pipe"],
+    stdio: options.privateAuthChannel ? ["ignore", "ignore", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe"] : options.interactionChannel ? ["ignore", "ignore", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe"] : ["ignore", "ignore", "pipe", "pipe", "pipe", "pipe", "pipe"],
     windowsHide: true,
     cwd: path9.dirname(workerPath),
     env
@@ -2639,6 +2641,10 @@ function spawnClaimOnlyWorker(workerPath, provenance, options = {}) {
     interactionRequestChannel: { enumerable: false, get: () => pipes[7] },
     interactionReplyChannel: { enumerable: false, get: () => pipes[8] },
     interactionAcknowledgementChannel: { enumerable: false, get: () => pipes[9] },
+    privateAuthRequestChannel: { enumerable: false, get: () => pipes[10] },
+    privateAuthResponseChannel: { enumerable: false, get: () => pipes[11] },
+    privateAuthAcknowledgementChannel: { enumerable: false, get: () => pipes[12] },
+    privateAuthLifetimeChannel: { enumerable: false, get: () => pipes[13] },
     exitSeen: { enumerable: false, get: () => exitSeen }
   });
   child.once("exit", () => {
@@ -3211,8 +3217,8 @@ async function terminateWindowsProcessTree(pid, expectedRootTicks, killWaitMs, d
         }
       }
       const unconfirmedMembers = members2.filter((m) => {
-        const record4 = killed.get(m.pid);
-        return record4 === void 0 || record4.exitFileTime === null;
+        const record5 = killed.get(m.pid);
+        return record5 === void 0 || record5.exitFileTime === null;
       });
       if (now() >= deadline && unconfirmedMembers.length > 0) {
         throw new WindowsTreeCleanupError(
@@ -3515,6 +3521,14 @@ function windowsTreeTransactionScript() {
     "    Held.Clear();",
     '    return closed.ToString() + "|" + failed.ToString();',
     "  }",
+    "  public static string Alive(int pid) {",
+    "    IntPtr h;",
+    '    if (!Held.TryGetValue(pid, out h) || h == IntPtr.Zero) { return "not_held||"; }',
+    "    long c, e, k, u;",
+    '    if (!GetProcessTimes(h, out c, out e, out k, out u)) { return "error||" + Marshal.GetLastWin32Error().ToString(); }',
+    '    if (e != 0) { return "exited|" + e.ToString() + "|"; }',
+    '    return "alive|" + c.ToString() + "|";',
+    "  }",
     "}",
     "'@",
     "[Console]::Out.WriteLine('READY'); [Console]::Out.Flush()",
@@ -3557,6 +3571,12 @@ function windowsTreeTransactionScript() {
     "    elseif ($r[0] -eq 'not_held') { [Console]::Out.WriteLine(('K {0} not_held 0' -f $kpid)) }",
     "    else { [Console]::Out.WriteLine(('K {0} error {1}' -f $kpid, $r[1])) }",
     "    [Console]::Out.WriteLine('KILL_END'); [Console]::Out.Flush()",
+    "  } elseif ($parts[0] -eq 'alive') {",
+    "    $apid = [int]$parts[1]",
+    "    $r = [BridgeTreeTx]::Alive($apid).Split('|')",
+    "    if ($r[0] -eq 'alive' -or $r[0] -eq 'exited') { [Console]::Out.WriteLine(('A {0} {1} {2}' -f $apid, $r[0], $r[1])) }",
+    "    else { [Console]::Out.WriteLine(('A {0} {1} {2}' -f $apid, $r[0], $(if ([string]::IsNullOrEmpty($r[2])) { '0' } else { $r[2] }))) }",
+    "    [Console]::Out.WriteLine('ALIVE_END'); [Console]::Out.Flush()",
     "  } elseif ($parts[0] -eq 'close') {",
     "    $r = [BridgeTreeTx]::CloseAll().Split('|')",
     "    [Console]::Out.WriteLine(('CLOSED {0} {1}' -f $r[0], $r[1])); [Console]::Out.Flush()",
@@ -3801,6 +3821,23 @@ var init_windows_process_cleanup = __esm({
           status,
           exitFileTime: status === "signaled" || status === "already_exited" || status === "wait_timeout" ? value === "0" ? null : value : null,
           detail: status === "identity_changed" ? value : void 0
+        };
+      }
+      async alive(pid) {
+        this.#child.stdin.write(`alive ${String(pid)}
+`);
+        const line = await this.#nextLine(1e4, "alive response");
+        const end = await this.#nextLine(5e3, "alive terminator");
+        if (end !== "ALIVE_END") throw new Error("process_tree_alive_invalid: terminator missing");
+        const match = /^A (\d{1,12}) (alive|exited|not_held|error) (\d{1,25})$/u.exec(line);
+        if (!match || Number(match[1]) !== pid) throw new Error("process_tree_alive_invalid: malformed response");
+        const status = match[2];
+        const value = match[3];
+        return {
+          status,
+          creationFileTime: status === "alive" ? value : null,
+          exitFileTime: status === "exited" ? value : null,
+          error: status === "not_held" || status === "error" ? Number(value) : void 0
         };
       }
       async close() {
@@ -4440,6 +4477,384 @@ var init_trusted_local_deployment = __esm({
   }
 });
 
+// src/runtime/start-plan-private-lease.ts
+function validBinding(value) {
+  return !!value && textFields.every((key) => typeof value[key] === "string" && value[key].length > 0) && numberFields.every((key) => Number.isSafeInteger(value[key]) && value[key] > 0);
+}
+function sameBinding(left, right) {
+  return validBinding(left) && validBinding(right) && textFields.every((key) => left[key] === right[key]) && numberFields.every((key) => left[key] === right[key]);
+}
+var textFields, numberFields, PrivateCredentialLease;
+var init_start_plan_private_lease = __esm({
+  "src/runtime/start-plan-private-lease.ts"() {
+    "use strict";
+    textFields = ["account", "provider", "model", "task", "operation", "claim", "session", "turn", "creation"];
+    numberFields = ["attempt", "generation", "pid"];
+    PrivateCredentialLease = class {
+      #binding;
+      #expiresAt;
+      #now;
+      #credential;
+      #state = "active";
+      constructor(binding, credential, expiresAt, now = Date.now) {
+        const createdAt = now();
+        if (!validBinding(binding) || typeof credential !== "string" || !credential || !Number.isFinite(expiresAt) || !Number.isFinite(createdAt) || expiresAt <= createdAt || expiresAt - createdAt > 6e4) {
+          throw new Error("credential_lease_invalid");
+        }
+        this.#binding = Object.freeze({ ...binding });
+        this.#credential = credential;
+        this.#expiresAt = expiresAt;
+        this.#now = now;
+      }
+      revoke() {
+        this.#state = "revoked";
+        this.#credential = null;
+      }
+      /** Synchronous claim check before redeem; an already-claimed lease belongs
+       * to its in-flight delivery and must not be revoked by a competing call. */
+      isActive() {
+        return this.#state === "active";
+      }
+      async redeem(requested, verifyWorker, deliver, signal) {
+        if (this.#state !== "active") throw new Error("credential_lease_unavailable");
+        this.#state = "checking";
+        try {
+          if (signal.aborted || !Number.isFinite(this.#now()) || this.#now() >= this.#expiresAt || !sameBinding(this.#binding, requested)) throw new Error("credential_lease_rejected");
+          if (!await verifyWorker(this.#binding)) throw new Error("credential_lease_rejected");
+          if (this.#state !== "checking" || signal.aborted || !Number.isFinite(this.#now()) || this.#now() >= this.#expiresAt || !this.#credential) {
+            throw new Error("credential_lease_rejected");
+          }
+          this.#state = "delivering";
+          const credential = this.#credential;
+          this.#credential = null;
+          await deliver(credential, this.#expiresAt);
+          if (signal.aborted || this.#state !== "delivering") throw new Error("credential_delivery_unknown");
+          this.#state = "consumed";
+        } catch {
+          this.revoke();
+          throw new Error("credential_lease_unavailable");
+        }
+      }
+    };
+  }
+});
+
+// src/runtime/start-plan-production-auth.ts
+var start_plan_production_auth_exports = {};
+__export(start_plan_production_auth_exports, {
+  StartPlanBillingEntitlement: () => StartPlanBillingEntitlement,
+  classifyEntitlementFailure: () => classifyEntitlementFailure,
+  createProductionStartPlanAuth: () => createProductionStartPlanAuth,
+  readOfficialCliVersion: () => readOfficialCliVersion,
+  readOfficialStartPlanCredential: () => readOfficialStartPlanCredential
+});
+import { readFileSync as readFileSync12 } from "node:fs";
+import { spawn as spawn5 } from "node:child_process";
+import path17 from "node:path";
+function isRecord5(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+function looksLikeJwt(value) {
+  const parts = value.split(".");
+  return parts.length === 3 && parts.every((part) => part.length > 0);
+}
+function decodeJwtPayload(jwt) {
+  try {
+    const payload = jwt.split(".")[1];
+    const json = Buffer.from(payload, "base64url").toString("utf8");
+    const parsed = JSON.parse(json);
+    return isRecord5(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+function asOfficialBillingEnvelope(value) {
+  if (!isRecord5(value)) return null;
+  const data = isRecord5(value.data) ? value.data : void 0;
+  return {
+    success: value.success,
+    code: value.code,
+    msg: value.msg,
+    ...data ? { data: {
+      plans: data.plans,
+      balances: data.balances,
+      server_time: data.server_time
+    } } : {}
+  };
+}
+function isSuccessfulBusinessEnvelope(envelope) {
+  return envelope.success !== false && (envelope.code === void 0 || envelope.code === 0 || envelope.code === 200);
+}
+function stringKeyedArray(value) {
+  return Array.isArray(value) ? value.filter(isRecord5) : [];
+}
+function hasActiveStartPlan(envelope) {
+  const plans = stringKeyedArray(envelope.data?.plans);
+  return plans.some((plan) => {
+    const status = typeof plan.status === "string" ? plan.status.trim().toLowerCase() : "";
+    const planId = typeof plan.plan_id === "string" ? plan.plan_id.trim().toLowerCase() : "";
+    const name = typeof plan.name === "string" ? plan.name.trim().toLowerCase() : "";
+    const startPlanIdentity = planId.includes("start-plan") || planId.includes("start plan") || name.includes("start-plan") || name.includes("start plan");
+    return status === "active" && startPlanIdentity;
+  });
+}
+function startPlanBalanceModelIds(balances) {
+  const seen = /* @__PURE__ */ new Set();
+  const models = [];
+  for (const balance of balances) {
+    const capabilities = Array.isArray(balance.capabilities) ? balance.capabilities : [];
+    const capabilityModels = capabilities.flatMap((capability) => {
+      const raw = typeof capability === "string" ? capability.trim().toLowerCase() : "";
+      return raw.startsWith("model:") ? [raw.slice(6).trim()] : [];
+    }).filter(Boolean);
+    const candidates = capabilityModels.length > 0 ? capabilityModels : typeof balance.show_name === "string" ? [balance.show_name.trim().toLowerCase()] : [];
+    for (const model of candidates) {
+      if (!model || seen.has(model)) continue;
+      seen.add(model);
+      models.push(model);
+    }
+  }
+  return models;
+}
+function numericUnit(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() && Number.isFinite(Number(value))) return Number(value);
+  return null;
+}
+function requestedModelQuotaVerdict(balances, requestedModel) {
+  const relevant = balances.filter((balance) => {
+    const capabilities = Array.isArray(balance.capabilities) ? balance.capabilities : [];
+    const models = capabilities.flatMap((capability) => {
+      const raw = typeof capability === "string" ? capability.trim().toLowerCase() : "";
+      return raw.startsWith("model:") ? [raw.slice(6).trim()] : [];
+    }).filter(Boolean);
+    return models.length > 0 ? models.includes(requestedModel) : typeof balance.show_name === "string" && balance.show_name.trim().toLowerCase() === requestedModel;
+  });
+  if (relevant.length === 0) return "unproven";
+  const units = relevant.map((balance) => numericUnit(balance.remaining_units));
+  if (units.some((unit) => unit === null || unit < 0)) return "unproven";
+  return units.every((unit) => unit === 0) ? "exhausted" : "available";
+}
+function extractProviderCode(value) {
+  if (!value) return void 0;
+  const error2 = isRecord5(value.error) ? value.error : void 0;
+  const candidates = [
+    value.providerCode,
+    error2?.providerCode,
+    error2 && isRecord5(error2) ? error2.code : void 0,
+    value.code
+  ];
+  const raw = candidates.find((candidate) => typeof candidate === "number" || typeof candidate === "string");
+  return typeof raw === "number" || typeof raw === "string" ? String(raw) : void 0;
+}
+function readOfficialStartPlanCredential(zcodeDataRoot) {
+  const credentialsPath = path17.join(zcodeDataRoot, "v2", "credentials.json");
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync12(credentialsPath, "utf8"));
+  } catch {
+    return null;
+  }
+  const jwt = typeof parsed.zcodejwttoken === "string" ? parsed.zcodejwttoken.trim() : "";
+  if (!jwt || !looksLikeJwt(jwt)) return null;
+  const userInfo = isRecord5(parsed["oauth:bigmodel:user_info"]) ? parsed["oauth:bigmodel:user_info"] : null;
+  const accountCandidates = [userInfo?.id, userInfo?.user_id, userInfo?.account_id, userInfo?.email];
+  const account = accountCandidates.find((candidate) => typeof candidate === "string" && candidate.length > 0);
+  if (!account) return null;
+  const payload = decodeJwtPayload(jwt);
+  const exp = payload?.exp;
+  const expiresAt = typeof exp === "number" && Number.isFinite(exp) && exp > 0 ? exp * 1e3 : null;
+  let deviceMid = "";
+  try {
+    const telemetry = JSON.parse(readFileSync12(path17.join(zcodeDataRoot, "v2", "telemetry-state.json"), "utf8"));
+    if (typeof telemetry.deviceMid === "string" && telemetry.deviceMid.trim()) deviceMid = telemetry.deviceMid.trim();
+  } catch {
+  }
+  if (!deviceMid) return null;
+  return { jwt, account, expiresAt, deviceMid };
+}
+function classifyEntitlementFailure(input) {
+  const code = input.providerCode?.trim();
+  const providerCode = code ? code : void 0;
+  if (code === "3007") return { status: "captcha_required", reason: "provider requested captcha verification", providerCode };
+  if (code === "3012") return { status: "unusual_activity", reason: "provider blocked this identity due to unusual activity", providerCode };
+  if (code === "3001") return { status: "billing_parameter_error", reason: "billing request parameters were rejected", providerCode };
+  if (input.statusCode === 401) return { status: "unauthorized", reason: "credential was rejected as unauthenticated" };
+  if (input.statusCode === 403) return { status: "forbidden", reason: "credential is authenticated but forbidden from this plan or model" };
+  const envelope = input.statusCode === 200 ? asOfficialBillingEnvelope(input.body) : void 0;
+  if (envelope && isSuccessfulBusinessEnvelope(envelope) && hasActiveStartPlan(envelope)) {
+    const balances = stringKeyedArray(envelope.data?.balances);
+    const models = startPlanBalanceModelIds(balances);
+    if (models.length === 0) {
+      return { status: "unavailable", reason: "billing response proved the plan but not the requested model" };
+    }
+    const requested = input.model?.trim().toLowerCase();
+    if (!requested) return { status: "unavailable", reason: "billing response had no requested model identity to authorize" };
+    if (!models.includes(requested)) {
+      return { status: "model_unavailable", reason: "active Start Plan does not list the requested model" };
+    }
+    const quota = requestedModelQuotaVerdict(balances, requested);
+    if (quota === "unproven") {
+      return { status: "unavailable", reason: "billing response did not prove available quota for the requested model" };
+    }
+    if (quota === "exhausted") {
+      return { status: "quota_exhausted", reason: "plan quota is exhausted for the requested model" };
+    }
+    return { status: "entitled", reason: "active Start Plan lists the requested model" };
+  } else if (envelope && isSuccessfulBusinessEnvelope(envelope) && !hasActiveStartPlan(envelope)) {
+    return { status: "no_entitlement", reason: "no active Start Plan was present in the billing response" };
+  }
+  if (input.statusCode === 429) return { status: "rate_limited", reason: "rate limited; quota state unknown from status alone" };
+  if (input.statusCode >= 500) return { status: "unavailable", reason: "entitlement service error" };
+  if (input.statusCode >= 400) return { status: "unavailable", reason: "entitlement query rejected without a recognized provider code" };
+  return { status: "unavailable", reason: "entitlement response could not be interpreted" };
+}
+function createProductionStartPlanAuth(options) {
+  const now = options.now ?? Date.now;
+  const initial = readOfficialStartPlanCredential(options.zcodeDataRoot);
+  if (!initial) return null;
+  return {
+    // Captured from the official credential at construction; issue() re-reads
+    // the credential and rejects if the account identity changed mid-run.
+    account: initial.account,
+    signal: options.signal,
+    async issue(binding, signal) {
+      const credential = readOfficialStartPlanCredential(options.zcodeDataRoot);
+      if (!credential) throw new Error("start_plan_credential_unavailable");
+      if (binding.account !== credential.account) throw new Error("start_plan_account_identity_invalid");
+      if (credential.expiresAt !== null && credential.expiresAt <= now()) throw new Error("start_plan_credential_expired");
+      if (signal.aborted) throw new Error("start_plan_issuer_cancelled");
+      const entitlement = options.entitlement;
+      const verdict2 = await entitlement.check({
+        account: credential.account,
+        provider: binding.provider,
+        model: binding.model,
+        deviceMid: credential.deviceMid,
+        jwt: credential.jwt,
+        signal
+      });
+      if (verdict2.status !== "entitled") {
+        throw new Error(`start_plan_entitlement_rejected:${verdict2.status}${verdict2.providerCode ? `:${verdict2.providerCode}` : ""}`);
+      }
+      const createdAt = now();
+      const expiresAt = Math.min(credential.expiresAt ?? Number.MAX_SAFE_INTEGER, createdAt + 3e4);
+      return new PrivateCredentialLease(binding, credential.jwt, expiresAt, now);
+    }
+  };
+}
+async function readOfficialCliVersion(zcodeEntrypoint) {
+  const key = path17.resolve(zcodeEntrypoint);
+  const cached2 = officialCliVersionCache.get(key);
+  if (cached2) return cached2;
+  const version2 = await new Promise((resolve) => {
+    const child = spawn5(process.execPath, [key, "--version"], { shell: false, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
+    let out = "";
+    const timer = setTimeout(() => {
+      child.kill();
+      resolve(void 0);
+    }, 15e3);
+    timer.unref();
+    child.stdout.on("data", (chunk) => {
+      out += chunk.toString("utf8");
+    });
+    child.on("error", () => {
+      clearTimeout(timer);
+      resolve(void 0);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      const value = out.trim();
+      resolve(code === 0 && /^\d+\.\d+\.\d+/.test(value) ? value : void 0);
+    });
+  });
+  if (version2) officialCliVersionCache.set(key, version2);
+  return version2;
+}
+var OFFICIAL_START_PLAN_ORIGIN, StartPlanBillingEntitlement, officialCliVersionCache;
+var init_start_plan_production_auth = __esm({
+  "src/runtime/start-plan-production-auth.ts"() {
+    "use strict";
+    init_start_plan_private_lease();
+    OFFICIAL_START_PLAN_ORIGIN = "https://zcode.z.ai";
+    StartPlanBillingEntitlement = class {
+      #origin;
+      #getAppVersion;
+      #fetchImpl;
+      #now;
+      constructor(options) {
+        this.#origin = (options.origin ?? OFFICIAL_START_PLAN_ORIGIN).replace(/\/+$/, "");
+        this.#getAppVersion = options.getAppVersion;
+        this.#fetchImpl = options.fetchImpl ?? fetch;
+        this.#now = options.now ?? Date.now;
+      }
+      async check(input) {
+        const observedAt = this.#now();
+        const appVersion = await this.#getAppVersion();
+        if (!appVersion) return { status: "unavailable", reason: "official cli version unavailable; refusing to guess", observedAt };
+        const url2 = `${this.#origin}/api/v1/zcode-plan/billing/balance?app_version=${encodeURIComponent(appVersion)}`;
+        let response;
+        try {
+          response = await this.#fetchImpl(url2, {
+            method: "GET",
+            headers: {
+              // Observed official balance requests use Authorization only. This
+              // is a read-only billing query, never a model request; app version
+              // comes from the official runtime and identity remains in memory.
+              Authorization: `Bearer ${input.jwt}`
+            },
+            signal: input.signal
+          });
+        } catch (error2) {
+          if (input.signal.aborted) throw error2;
+          return { status: "unavailable", reason: "entitlement transport failed", observedAt };
+        }
+        if (response.status === 200) {
+          let body2;
+          let providerCode2;
+          try {
+            const parsed = await response.json();
+            if (isRecord5(parsed)) {
+              body2 = parsed;
+              providerCode2 = extractProviderCode(parsed);
+            }
+          } catch {
+          }
+          const classified = this.#interpretBillingBody({
+            statusCode: response.status,
+            providerCode: providerCode2,
+            body: body2,
+            model: input.model
+          });
+          if (classified.status === "entitled") {
+            let requestId = "";
+            try {
+              requestId = (response.headers.get("x-request-id") ?? "").trim();
+            } catch {
+            }
+            return { status: "entitled", observedAt: this.#now(), requestId };
+          }
+          return { ...classified, observedAt: this.#now() };
+        }
+        let body;
+        let providerCode;
+        try {
+          const parsed = await response.json();
+          if (isRecord5(parsed)) {
+            body = parsed;
+            providerCode = extractProviderCode(parsed);
+          }
+        } catch {
+        }
+        return { ...this.#interpretBillingBody({ statusCode: response.status, providerCode, body, model: input.model }), observedAt };
+      }
+      #interpretBillingBody(input) {
+        return classifyEntitlementFailure(input);
+      }
+    };
+    officialCliVersionCache = /* @__PURE__ */ new Map();
+  }
+});
+
 // src/sqlite-candidate/wp6b2b1/launch-bootstrap.ts
 import { createHash as createHash10 } from "node:crypto";
 function createLaunchBootstrap(source) {
@@ -4510,8 +4925,8 @@ async function spawnAndBootstrapOnce(spawnChild, source) {
 }
 function validate2(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError("invalid launch bootstrap");
-  const record4 = value;
-  if (Object.keys(record4).sort().join("\0") !== [...KEYS].sort().join("\0") || record4.protocol !== "bridge-launch-bootstrap-v1" || !validId(record4.operation_id) || !validId(record4.task_id) || !validId(record4.launch_id) || !validToken(record4.launch_token) || !positive(record4.attempt) || !positive(record4.generation) || !positive(record4.launch_epoch) || record4.authorization_source !== "trusted_local_policy" || !validWorkspace(record4.workspace_ref) || !validId(record4.policy_revision) || !validDigest(record4.policy_digest) || !validId(record4.execution_profile_id) || !validDigest(record4.policy_snapshot_digest) || record4.policy_snapshot_digest !== deriveAdmissionPolicySnapshotDigest(record4)) {
+  const record5 = value;
+  if (Object.keys(record5).sort().join("\0") !== [...KEYS].sort().join("\0") || record5.protocol !== "bridge-launch-bootstrap-v1" || !validId(record5.operation_id) || !validId(record5.task_id) || !validId(record5.launch_id) || !validToken(record5.launch_token) || !positive(record5.attempt) || !positive(record5.generation) || !positive(record5.launch_epoch) || record5.authorization_source !== "trusted_local_policy" || !validWorkspace(record5.workspace_ref) || !validId(record5.policy_revision) || !validDigest(record5.policy_digest) || !validId(record5.execution_profile_id) || !validDigest(record5.policy_snapshot_digest) || record5.policy_snapshot_digest !== deriveAdmissionPolicySnapshotDigest(record5)) {
     throw new TypeError("invalid launch bootstrap fields");
   }
 }
@@ -4760,6 +5175,269 @@ var init_node_runtime = __esm({
   }
 });
 
+// src/runtime/start-plan-private-frame.ts
+import { TextDecoder as TextDecoder2 } from "node:util";
+async function readPrivateFrame(stream, maximum2, signal) {
+  if (!Number.isSafeInteger(maximum2) || maximum2 < 1 || signal.aborted) throw new Error("private_frame_unavailable");
+  const chunks = [];
+  let total = 0;
+  const abort = () => {
+    stream.destroy();
+  };
+  signal.addEventListener("abort", abort, { once: true });
+  try {
+    for await (const chunk of stream) {
+      if (signal.aborted) throw new Error("private_frame_cancelled");
+      const bytes2 = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      total += bytes2.length;
+      if (total > maximum2 + 4) throw new Error("private_frame_too_large");
+      chunks.push(bytes2);
+      if (total >= 4) {
+        const prefix = Buffer.concat(chunks, total).readUInt32BE(0);
+        if (prefix < 1 || prefix > maximum2) throw new Error("private_frame_size_invalid");
+        if (total > prefix + 4) throw new Error("private_frame_extra_data");
+      }
+    }
+    if (signal.aborted || total < 4) throw new Error("private_frame_incomplete");
+    const bytes = Buffer.concat(chunks, total);
+    const length = bytes.readUInt32BE(0);
+    if (length < 1 || length > maximum2 || total !== length + 4) throw new Error("private_frame_incomplete");
+    let value;
+    try {
+      value = JSON.parse(new TextDecoder2("utf-8", { fatal: true }).decode(bytes.subarray(4)));
+    } catch {
+      throw new Error("private_frame_invalid");
+    }
+    return value;
+  } catch (error2) {
+    if (signal.aborted) throw new Error("private_frame_cancelled");
+    if (error2 instanceof Error && /^private_frame_[a-z_]+$/u.test(error2.message)) throw error2;
+    throw new Error("private_frame_transport_failed");
+  } finally {
+    signal.removeEventListener("abort", abort);
+    chunks.length = 0;
+  }
+}
+async function writePrivateFrame(stream, value, maximum2, signal) {
+  if (signal.aborted) throw new Error("private_frame_cancelled");
+  const json = JSON.stringify(value);
+  if (typeof json !== "string") throw new Error("private_frame_invalid");
+  const body = Buffer.from(json, "utf8");
+  if (!Number.isSafeInteger(maximum2) || maximum2 < 1 || body.length < 1 || body.length > maximum2) throw new Error("private_frame_size_invalid");
+  const prefix = Buffer.allocUnsafe(4);
+  prefix.writeUInt32BE(body.length);
+  const frame = Buffer.concat([prefix, body]);
+  const abort = () => {
+    stream.destroy();
+  };
+  signal.addEventListener("abort", abort, { once: true });
+  try {
+    await new Promise((resolve, reject) => {
+      const onError = () => {
+        cleanup();
+        reject(new Error("private_frame_delivery_unknown"));
+      };
+      const onClose = () => {
+        cleanup();
+        reject(new Error("private_frame_delivery_unknown"));
+      };
+      const onFinish = () => {
+        cleanup();
+        resolve();
+      };
+      const cleanup = () => {
+        stream.removeListener("error", onError);
+        stream.removeListener("close", onClose);
+        stream.removeListener("finish", onFinish);
+      };
+      stream.once("error", onError);
+      stream.once("close", onClose);
+      stream.once("finish", onFinish);
+      if (signal.aborted) {
+        cleanup();
+        reject(new Error("private_frame_delivery_unknown"));
+        return;
+      }
+      stream.end(frame);
+    });
+    if (signal.aborted) throw new Error("private_frame_delivery_unknown");
+  } finally {
+    signal.removeEventListener("abort", abort);
+  }
+}
+var init_start_plan_private_frame = __esm({
+  "src/runtime/start-plan-private-frame.ts"() {
+    "use strict";
+  }
+});
+
+// src/runtime/start-plan-private-channel.ts
+function record3(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("private_auth_invalid");
+  return value;
+}
+function exactKeys(value, keys) {
+  if (Object.keys(value).sort().join("|") !== [...keys].sort().join("|")) throw new Error("private_auth_invalid");
+}
+function boundedSignal(parent, timeoutMs) {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 6e4) throw new Error("private_auth_invalid");
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  parent.addEventListener("abort", abort, { once: true });
+  if (parent.aborted) abort();
+  const timer = setTimeout(abort, timeoutMs);
+  timer.unref();
+  return { signal: controller.signal, close() {
+    clearTimeout(timer);
+    parent.removeEventListener("abort", abort);
+  } };
+}
+async function servePrivateCredential(options) {
+  const bounded3 = boundedSignal(options.signal, options.timeoutMs);
+  let lease;
+  try {
+    const request = record3(await readPrivateFrame(options.request, maximum, bounded3.signal));
+    exactKeys(request, ["protocol", "requestId", "binding"]);
+    if (request.protocol !== "start-plan-private-request-v1" || typeof request.requestId !== "string" || !request.requestId) throw new Error("private_auth_invalid");
+    const resolved = await new Promise((resolve, reject) => {
+      const abort = () => {
+        cleanup();
+        reject(new Error("private_auth_cancelled"));
+      };
+      const cleanup = () => bounded3.signal.removeEventListener("abort", abort);
+      bounded3.signal.addEventListener("abort", abort, { once: true });
+      if (bounded3.signal.aborted) {
+        abort();
+        return;
+      }
+      void Promise.resolve().then(() => options.resolveLease(Object.freeze({ ...request }), bounded3.signal)).then((value) => {
+        if (bounded3.signal.aborted) {
+          value.lease.revoke();
+          return;
+        }
+        cleanup();
+        resolve(value);
+      }, () => {
+        cleanup();
+        reject(new Error("private_auth_unavailable"));
+      });
+    });
+    lease = resolved.lease;
+    if (!lease.isActive()) {
+      lease = void 0;
+      throw new Error("private_auth_delivery_failed");
+    }
+    await lease.redeem(request.binding, resolved.verifyWorker, async (jwt, expiresAt) => {
+      await writePrivateFrame(options.response, {
+        protocol: "start-plan-private-response-v1",
+        requestId: request.requestId,
+        binding: resolved.binding,
+        jwt,
+        expiresAt
+      }, maximum, bounded3.signal);
+      const ack = record3(await readPrivateFrame(options.acknowledgement, maximum, bounded3.signal));
+      exactKeys(ack, ["protocol", "requestId"]);
+      if (ack.protocol !== "start-plan-private-ack-v1" || ack.requestId !== request.requestId) throw new Error("private_auth_ack_invalid");
+    }, bounded3.signal);
+    return "acknowledged";
+  } catch {
+    lease?.revoke();
+    throw new Error("private_auth_delivery_failed");
+  } finally {
+    bounded3.close();
+    options.request.destroy();
+    options.response.destroy();
+    options.acknowledgement.destroy();
+  }
+}
+var maximum;
+var init_start_plan_private_channel = __esm({
+  "src/runtime/start-plan-private-channel.ts"() {
+    "use strict";
+    init_start_plan_private_frame();
+    maximum = 16384;
+  }
+});
+
+// src/runtime/start-plan-handle-gate.ts
+var HandleGateError, WorkerHandleGate;
+var init_start_plan_handle_gate = __esm({
+  "src/runtime/start-plan-handle-gate.ts"() {
+    "use strict";
+    init_windows_process_cleanup();
+    HandleGateError = class extends Error {
+      code;
+      detail;
+      constructor(code, detail) {
+        super(`start_plan_${code}${detail ? `: ${detail}` : ""}`);
+        this.name = "HandleGateError";
+        this.code = code;
+        this.detail = detail;
+      }
+    };
+    WorkerHandleGate = class _WorkerHandleGate {
+      #transaction;
+      #pid;
+      #creationFileTime;
+      #closed = false;
+      constructor(transaction, pid, creationFileTime) {
+        this.#transaction = transaction;
+        this.#pid = pid;
+        this.#creationFileTime = creationFileTime;
+      }
+      static platformSupported() {
+        return process.platform === "win32";
+      }
+      /** Holds one kernel handle on `pid` and verifies its exact creation time
+       * against the launch receipt fingerprint (StartTime.Ticks read at spawn). */
+      static async open(options) {
+        if (!_WorkerHandleGate.platformSupported() && !options.transaction) {
+          throw new HandleGateError("handle_gate_platform_unsupported");
+        }
+        const owned = !options.transaction;
+        let transaction = options.transaction;
+        try {
+          transaction ??= await openPowerShellTreeTransaction();
+          const [hold] = await transaction.hold([options.pid]);
+          if (!hold || hold.status !== "ok" || !hold.creationFileTime || !hold.creationTicks) {
+            throw new HandleGateError("handle_gate_hold_rejected", hold ? `${hold.status}${hold.error ? ` win32=${String(hold.error)}` : ""}` : "no outcome");
+          }
+          if (hold.creationTicks !== options.expectedCreationTicks) {
+            throw new HandleGateError("handle_gate_identity_mismatch", `held=${hold.creationTicks} expected=${options.expectedCreationTicks}`);
+          }
+          return new _WorkerHandleGate(transaction, options.pid, hold.creationFileTime);
+        } catch (error2) {
+          if (owned && transaction) await transaction.close().catch(() => void 0);
+          throw error2;
+        }
+      }
+      /** Non-destructive liveness read on the held handle. exited / not_held /
+       * transport failure are all terminal rejections; nothing is inferred. */
+      async assertAlive() {
+        if (this.#closed) throw new HandleGateError("handle_gate_not_alive", "gate closed");
+        if (!this.#transaction.alive) throw new HandleGateError("handle_gate_unsupported_transaction");
+        let outcome;
+        try {
+          outcome = await this.#transaction.alive(this.#pid);
+        } catch (error2) {
+          throw new HandleGateError("handle_gate_transport_failed", error2 instanceof Error ? error2.message : String(error2));
+        }
+        if (outcome.status !== "alive") {
+          throw new HandleGateError("handle_gate_not_alive", `${outcome.status}${outcome.error ? ` win32=${String(outcome.error)}` : ""}`);
+        }
+        if (outcome.creationFileTime !== this.#creationFileTime) {
+          throw new HandleGateError("handle_gate_identity_changed", `now=${outcome.creationFileTime} expected=${this.#creationFileTime}`);
+        }
+      }
+      async close() {
+        if (this.#closed) return;
+        this.#closed = true;
+        await this.#transaction.close();
+      }
+    };
+  }
+});
+
 // src/sqlite-candidate/wp6b2b1/interaction-channel.mjs
 import { createHash as createHash13 } from "node:crypto";
 async function createCandidateInteractionChannel(child, operation, verifyProcessIdentity) {
@@ -4807,7 +5485,7 @@ async function createCandidateInteractionChannel(child, operation, verifyProcess
       await verifyLive();
       const frame = await requestReader.read();
       const expected = ["attempt", "claim_id", "generation", "operation_id", "process_id", "protocol", "request", "start_fingerprint", "task_id", "worker_identity_digest"];
-      if (Object.keys(frame).sort().join("|") !== expected.join("|") || frame.protocol !== "bridge-sqlite-interaction-request-v1" || !sameBinding(frame, binding) || !validRequest(frame.request)) throw coded("interaction_frame_identity_mismatch");
+      if (Object.keys(frame).sort().join("|") !== expected.join("|") || frame.protocol !== "bridge-sqlite-interaction-request-v1" || !sameBinding2(frame, binding) || !validRequest(frame.request)) throw coded("interaction_frame_identity_mismatch");
       return Object.freeze({ binding, request: Object.freeze(frame.request) });
     },
     async prepareReply(reply) {
@@ -4815,7 +5493,7 @@ async function createCandidateInteractionChannel(child, operation, verifyProcess
       sendPending = true;
       try {
         await verifyLive();
-        if (!sameBinding(reply, binding) || !validId2(reply.request_id) || !validId2(reply.reply_id) || !Number.isSafeInteger(reply.revision) || reply.revision < 1 || !/^[0-9a-f]{64}$/u.test(reply.answer_digest) || !reply.answer || Object.getPrototypeOf(reply.answer) !== Object.prototype) throw coded("interaction_reply_binding_mismatch");
+        if (!sameBinding2(reply, binding) || !validId2(reply.request_id) || !validId2(reply.reply_id) || !Number.isSafeInteger(reply.revision) || reply.revision < 1 || !/^[0-9a-f]{64}$/u.test(reply.answer_digest) || !reply.answer || Object.getPrototypeOf(reply.answer) !== Object.prototype) throw coded("interaction_reply_binding_mismatch");
         const frame = {
           protocol: "bridge-sqlite-interaction-prepare-v1",
           ...binding,
@@ -4845,7 +5523,7 @@ async function createCandidateInteractionChannel(child, operation, verifyProcess
     },
     async commitReply(reply, commit) {
       if (sendPending) throw coded("interaction_channel_busy");
-      if (!commit || commit.state !== "committed" || !sameBinding(commit, binding) || commit.request_id !== reply.request_id || commit.reply_id !== reply.reply_id || commit.answer_digest !== reply.answer_digest || !Number.isSafeInteger(commit.revision) || !/^[0-9a-f]{64}$/u.test(commit.prepared_digest) || !/^[0-9a-f]{64}$/u.test(commit.commit_digest)) throw coded("interaction_commit_binding_mismatch");
+      if (!commit || commit.state !== "committed" || !sameBinding2(commit, binding) || commit.request_id !== reply.request_id || commit.reply_id !== reply.reply_id || commit.answer_digest !== reply.answer_digest || !Number.isSafeInteger(commit.revision) || !/^[0-9a-f]{64}$/u.test(commit.prepared_digest) || !/^[0-9a-f]{64}$/u.test(commit.commit_digest)) throw coded("interaction_commit_binding_mismatch");
       sendPending = true;
       try {
         await verifyLive();
@@ -4906,10 +5584,10 @@ async function writeFrame(stream, frame) {
 }
 function validateAck(ack, state, binding, reply) {
   const keys = ["answer_digest", "attempt", "claim_id", "generation", "operation_id", "process_id", "protocol", "reply_id", "request_id", "revision", "start_fingerprint", "state", "task_id", "worker_identity_digest"];
-  if (Object.keys(ack).sort().join("|") !== keys.join("|") || ack.protocol !== "bridge-sqlite-interaction-ack-v1" || ack.state !== state || !sameBinding(ack, binding) || ack.request_id !== reply.request_id || ack.reply_id !== reply.reply_id || ack.revision !== reply.revision || ack.answer_digest !== reply.answer_digest)
+  if (Object.keys(ack).sort().join("|") !== keys.join("|") || ack.protocol !== "bridge-sqlite-interaction-ack-v1" || ack.state !== state || !sameBinding2(ack, binding) || ack.request_id !== reply.request_id || ack.reply_id !== reply.reply_id || ack.revision !== reply.revision || ack.answer_digest !== reply.answer_digest)
     throw coded("interaction_ack_mismatch");
 }
-function sameBinding(value, binding) {
+function sameBinding2(value, binding) {
   return value.operation_id === binding.operation_id && value.task_id === binding.task_id && value.attempt === binding.attempt && value.generation === binding.generation && value.claim_id === binding.claim_id && value.worker_identity_digest === binding.worker_identity_digest && value.process_id === binding.process_id && value.start_fingerprint === binding.start_fingerprint;
 }
 function validRequest(value) {
@@ -4959,13 +5637,13 @@ var init_interaction_channel = __esm({
       constructor(stream) {
         this.#iterator = stream[Symbol.asyncIterator]();
       }
-      async read(maximum = MAX_FRAME_BYTES2) {
+      async read(maximum2 = MAX_FRAME_BYTES2) {
         for (; ; ) {
           const end = this.#buffer.indexOf(10);
           if (end >= 0) {
             const frame = this.#buffer.subarray(0, end);
             this.#buffer = this.#buffer.subarray(end + 1);
-            if (!frame.length || frame.length > maximum) throw coded("interaction_frame_invalid");
+            if (!frame.length || frame.length > maximum2) throw coded("interaction_frame_invalid");
             let value;
             try {
               value = JSON.parse(frame.toString("utf8"));
@@ -4975,7 +5653,7 @@ var init_interaction_channel = __esm({
             if (!value || typeof value !== "object" || Array.isArray(value)) throw coded("interaction_frame_invalid");
             return value;
           }
-          if (this.#buffer.length > maximum) throw coded("interaction_frame_too_large");
+          if (this.#buffer.length > maximum2) throw coded("interaction_frame_too_large");
           const next = await this.#iterator.next();
           if (next.done) throw coded(this.#buffer.length ? "interaction_frame_truncated" : "interaction_channel_closed");
           const chunk = Buffer.isBuffer(next.value) ? next.value : Buffer.from(next.value);
@@ -4997,8 +5675,8 @@ __export(store_exports, {
 });
 import { DatabaseSync } from "node:sqlite";
 import { createHash as createHash14, randomUUID as randomUUID5 } from "node:crypto";
-import { existsSync as existsSync12, lstatSync as lstatSync2, realpathSync as realpathSync5, readFileSync as readFileSync12, writeFileSync as writeFileSync6, openSync as openSync5, closeSync as closeSync5, fsyncSync as fsyncSync3, unlinkSync as unlinkSync2, renameSync as renameSync4, statSync as statSync7 } from "node:fs";
-import path17 from "node:path";
+import { existsSync as existsSync12, lstatSync as lstatSync2, realpathSync as realpathSync5, readFileSync as readFileSync13, writeFileSync as writeFileSync6, openSync as openSync5, closeSync as closeSync5, fsyncSync as fsyncSync3, unlinkSync as unlinkSync2, renameSync as renameSync4, statSync as statSync7 } from "node:fs";
+import path18 from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 function schemaObjects(db) {
   return db.prepare(SCHEMA_OBJECT_QUERY).all().map((row) => [
@@ -5362,7 +6040,7 @@ function parseAuthoritySourceManifest(sourceManifestJson, sourceManifestDigest) 
   const parsed = parseHistoricalExceptionManifest(sourceManifestJson, sourceManifestDigest);
   const { manifest } = parsed;
   if (manifest.kind === void 0) return { ...parsed, kind: "historical_projection" };
-  if (manifest.kind !== "raw_json_archive_cutover" || typeof manifest.source_tasks_root !== "string" || !path17.isAbsolute(manifest.source_tasks_root) || typeof manifest.archive_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(manifest.archive_manifest_digest) || typeof manifest.source_files_digest !== "string" || !/^[0-9a-f]{64}$/u.test(manifest.source_files_digest) || manifest.task_count !== 0 || manifest.result_count !== 0 || manifest.event_count !== 0 || !Number.isSafeInteger(manifest.artifact_count) || manifest.artifact_count < 0 || !Number.isSafeInteger(manifest.artifact_bytes) || manifest.artifact_bytes < 0 || !Number.isSafeInteger(manifest.archive_file_count) || manifest.archive_file_count !== manifest.artifact_count || !Number.isSafeInteger(manifest.archive_byte_count) || manifest.archive_byte_count !== manifest.artifact_bytes || parsed.exceptions.length !== 0 || !Array.isArray(manifest.files) || manifest.files.length !== 0)
+  if (manifest.kind !== "raw_json_archive_cutover" || typeof manifest.source_tasks_root !== "string" || !path18.isAbsolute(manifest.source_tasks_root) || typeof manifest.archive_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(manifest.archive_manifest_digest) || typeof manifest.source_files_digest !== "string" || !/^[0-9a-f]{64}$/u.test(manifest.source_files_digest) || manifest.task_count !== 0 || manifest.result_count !== 0 || manifest.event_count !== 0 || !Number.isSafeInteger(manifest.artifact_count) || manifest.artifact_count < 0 || !Number.isSafeInteger(manifest.artifact_bytes) || manifest.artifact_bytes < 0 || !Number.isSafeInteger(manifest.archive_file_count) || manifest.archive_file_count !== manifest.artifact_count || !Number.isSafeInteger(manifest.archive_byte_count) || manifest.archive_byte_count !== manifest.artifact_bytes || parsed.exceptions.length !== 0 || !Array.isArray(manifest.files) || manifest.files.length !== 0)
     fail("invalid_raw_json_archive_cutover_manifest");
   return { ...parsed, kind: "raw_json_archive_cutover" };
 }
@@ -5380,22 +6058,22 @@ function validateHistoricalExceptionSnapshot(snapshot, sourceManifest) {
   }
 }
 function pathsFor(root, { databaseFileName = "operations.sqlite3", managedDataDirectory = false, allowCutoverPending = false, allowUnpublishedCutover = false, allowFreshBootstrapPending = false } = {}) {
-  if (typeof root !== "string" || !path17.isAbsolute(root) || !existsSync12(root) || !lstatSync2(root).isDirectory() || lstatSync2(root).isSymbolicLink()) fail("invalid_data_root");
+  if (typeof root !== "string" || !path18.isAbsolute(root) || !existsSync12(root) || !lstatSync2(root).isDirectory() || lstatSync2(root).isSymbolicLink()) fail("invalid_data_root");
   if (typeof databaseFileName !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/u.test(databaseFileName) || databaseFileName === "." || databaseFileName === "..") fail("invalid_database_file_name");
   const resolved = realpathSync5.native(root);
   if (!managedDataDirectory) {
-    const relative = path17.relative(HERE, resolved);
-    if (!relative || relative.startsWith("..") || path17.isAbsolute(relative)) fail("data_root_outside_candidate");
+    const relative = path18.relative(HERE, resolved);
+    if (!relative || relative.startsWith("..") || path18.isAbsolute(relative)) fail("data_root_outside_candidate");
   }
-  const db = path17.join(resolved, databaseFileName);
+  const db = path18.join(resolved, databaseFileName);
   const files = {
     root: resolved,
     db,
     bootstrapPending: `${db}.bootstrap-pending.json`,
     cutoverPending: `${db}.cutover-pending.json`,
     cutoverPublished: `${db}.cutover-published.json`,
-    poison: path17.join(resolved, "ROOT_POISONED.json"),
-    intent: path17.join(resolved, "WRITER_INTENT.json")
+    poison: path18.join(resolved, "ROOT_POISONED.json"),
+    intent: path18.join(resolved, "WRITER_INTENT.json")
   };
   for (const file of [files.db, `${files.db}-wal`, `${files.db}-shm`, files.bootstrapPending, files.cutoverPending, files.cutoverPublished, files.poison, files.intent]) {
     try {
@@ -5411,13 +6089,13 @@ function pathsFor(root, { databaseFileName = "operations.sqlite3", managedDataDi
 function readPublishedCutoverReceipt(file) {
   let value;
   try {
-    value = JSON.parse(readFileSync12(file, "utf8"));
+    value = JSON.parse(readFileSync13(file, "utf8"));
   } catch {
     fail("cutover_publication_receipt_unreadable");
   }
   const keys = ["archive", "created_at", "cutover_id", "database_file", "migration_id", "schema_version", "source_manifest_digest", "source_root_digest", "state"];
   const archiveKeys = ["archive_directory", "byte_count", "file_count", "manifest_digest", "source_tasks_root"];
-  if (!value || Object.getPrototypeOf(value) !== Object.prototype || Object.keys(value).sort().join("|") !== keys.join("|") || value.schema_version !== 1 || value.state !== "authority_switch_receipt" || !validText2(value.migration_id, 128) || !validText2(value.cutover_id, 128) || typeof value.source_root_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.source_root_digest) || typeof value.source_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.source_manifest_digest) || !validText2(value.database_file, 96) || !validText2(value.created_at, 64) || Number.isNaN(Date.parse(value.created_at)) || !value.archive || Object.getPrototypeOf(value.archive) !== Object.prototype || Object.keys(value.archive).sort().join("|") !== archiveKeys.join("|") || !validText2(value.archive.archive_directory, 32767) || !path17.isAbsolute(value.archive.archive_directory) || !validText2(value.archive.source_tasks_root, 32767) || !path17.isAbsolute(value.archive.source_tasks_root) || typeof value.archive.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.archive.manifest_digest) || !Number.isSafeInteger(value.archive.file_count) || value.archive.file_count < 0 || !Number.isSafeInteger(value.archive.byte_count) || value.archive.byte_count < 0) fail("cutover_publication_receipt_invalid");
+  if (!value || Object.getPrototypeOf(value) !== Object.prototype || Object.keys(value).sort().join("|") !== keys.join("|") || value.schema_version !== 1 || value.state !== "authority_switch_receipt" || !validText2(value.migration_id, 128) || !validText2(value.cutover_id, 128) || typeof value.source_root_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.source_root_digest) || typeof value.source_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.source_manifest_digest) || !validText2(value.database_file, 96) || !validText2(value.created_at, 64) || Number.isNaN(Date.parse(value.created_at)) || !value.archive || Object.getPrototypeOf(value.archive) !== Object.prototype || Object.keys(value.archive).sort().join("|") !== archiveKeys.join("|") || !validText2(value.archive.archive_directory, 32767) || !path18.isAbsolute(value.archive.archive_directory) || !validText2(value.archive.source_tasks_root, 32767) || !path18.isAbsolute(value.archive.source_tasks_root) || typeof value.archive.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.archive.manifest_digest) || !Number.isSafeInteger(value.archive.file_count) || value.archive.file_count < 0 || !Number.isSafeInteger(value.archive.byte_count) || value.archive.byte_count < 0) fail("cutover_publication_receipt_invalid");
   return value;
 }
 function assertCutoverPublicationGate(db, paths) {
@@ -5437,7 +6115,7 @@ function assertCutoverPublicationGate(db, paths) {
   }
   const receipt2 = switched[0];
   const publication = readPublishedCutoverReceipt(paths.cutoverPublished);
-  if (publication.database_file !== path17.basename(paths.db) || publication.migration_id !== receipt2.migration_id || publication.cutover_id !== receipt2.cutover_id || publication.source_root_digest !== receipt2.source_root_digest || publication.source_manifest_digest !== receipt2.source_manifest_digest || publication.archive.archive_directory !== receipt2.archive_directory || publication.archive.manifest_digest !== receipt2.archive_manifest_digest || publication.archive.source_tasks_root !== receipt2.archive_source_tasks_root || publication.archive.file_count !== receipt2.archive_file_count || publication.archive.byte_count !== receipt2.archive_byte_count) fail("cutover_publication_receipt_mismatch");
+  if (publication.database_file !== path18.basename(paths.db) || publication.migration_id !== receipt2.migration_id || publication.cutover_id !== receipt2.cutover_id || publication.source_root_digest !== receipt2.source_root_digest || publication.source_manifest_digest !== receipt2.source_manifest_digest || publication.archive.archive_directory !== receipt2.archive_directory || publication.archive.manifest_digest !== receipt2.archive_manifest_digest || publication.archive.source_tasks_root !== receipt2.archive_source_tasks_root || publication.archive.file_count !== receipt2.archive_file_count || publication.archive.byte_count !== receipt2.archive_byte_count) fail("cutover_publication_receipt_mismatch");
 }
 function writePoison(file, value) {
   const tmp = `${file}.${randomUUID5()}.tmp`;
@@ -5459,8 +6137,8 @@ function writePoison(file, value) {
   }
 }
 function workspacePathsOverlap(left, right) {
-  const a = path17.win32.resolve(left).toLowerCase();
-  const b = path17.win32.resolve(right).toLowerCase();
+  const a = path18.win32.resolve(left).toLowerCase();
+  const b = path18.win32.resolve(right).toLowerCase();
   const contains = (parent, child) => child === parent || child.startsWith(parent.endsWith("\\") ? parent : `${parent}\\`);
   return contains(a, b) || contains(b, a);
 }
@@ -5691,7 +6369,7 @@ function validateTaskPackage(task) {
 }
 function validateWorkspace(input, validator) {
   if (typeof input !== "string" || !input.trim()) fail("workspace_missing");
-  if (!path17.isAbsolute(input)) fail("workspace_not_absolute");
+  if (!path18.isAbsolute(input)) fail("workspace_not_absolute");
   if (input.replace(/\//g, "\\").startsWith("\\\\")) fail("workspace_unsupported_path_form");
   let st, canonicalPath;
   try {
@@ -5730,9 +6408,9 @@ var init_store = __esm({
     "use strict";
     init_interaction_channel();
     init_json_history_result_exceptions();
-    HERE = path17.dirname(fileURLToPath4(import.meta.url));
-    SCHEMA = readFileSync12(new URL("./schema.sql", import.meta.url), "utf8");
-    ADMIN_ABANDONMENT_SCHEMA = readFileSync12(new URL("./admin-abandonment.sql", import.meta.url), "utf8");
+    HERE = path18.dirname(fileURLToPath4(import.meta.url));
+    SCHEMA = readFileSync13(new URL("./schema.sql", import.meta.url), "utf8");
+    ADMIN_ABANDONMENT_SCHEMA = readFileSync13(new URL("./admin-abandonment.sql", import.meta.url), "utf8");
     CONSTRUCT = /* @__PURE__ */ Symbol("construct");
     SCHEMA_VERSION = 13;
     SCHEMA_OBJECT_QUERY = "SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE type IN ('table','view','index','trigger') AND substr(lower(name),1,7)<>'sqlite_' ORDER BY type COLLATE BINARY,name COLLATE BINARY";
@@ -5971,7 +6649,7 @@ var init_store = __esm({
         const sourceKeys = ["manifest_digest", "manifest_json", "root_digest"];
         const archive = snapshot.archive;
         const archiveKeys = ["archive_directory", "byte_count", "file_count", "manifest_digest", "source_tasks_root"];
-        if (Object.keys(snapshot).sort().join("|") !== topKeys.join("|") || !source || Object.getPrototypeOf(source) !== Object.prototype || Object.keys(source).sort().join("|") !== sourceKeys.join("|") || !archive || Object.getPrototypeOf(archive) !== Object.prototype || Object.keys(archive).sort().join("|") !== archiveKeys.join("|") || !validId3(snapshot.migration_id) || !validId3(snapshot.cutover_id) || !validText2(snapshot.verifier_version, 128) || !validText2(snapshot.protocol_version, 128) || typeof snapshot.runtime_roster_digest !== "string" || !/^[0-9a-f]{64}$/u.test(snapshot.runtime_roster_digest) || typeof source.root_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.root_digest) || typeof source.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.manifest_digest) || typeof source.manifest_json !== "string" || digest2(source.manifest_json) !== source.manifest_digest || !validText2(archive.archive_directory, 32767) || !path17.isAbsolute(archive.archive_directory) || !validText2(archive.source_tasks_root, 32767) || !path17.isAbsolute(archive.source_tasks_root) || typeof archive.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(archive.manifest_digest) || !Number.isSafeInteger(archive.file_count) || archive.file_count < 0 || !Number.isSafeInteger(archive.byte_count) || archive.byte_count < 0) fail("invalid_raw_cutover_snapshot");
+        if (Object.keys(snapshot).sort().join("|") !== topKeys.join("|") || !source || Object.getPrototypeOf(source) !== Object.prototype || Object.keys(source).sort().join("|") !== sourceKeys.join("|") || !archive || Object.getPrototypeOf(archive) !== Object.prototype || Object.keys(archive).sort().join("|") !== archiveKeys.join("|") || !validId3(snapshot.migration_id) || !validId3(snapshot.cutover_id) || !validText2(snapshot.verifier_version, 128) || !validText2(snapshot.protocol_version, 128) || typeof snapshot.runtime_roster_digest !== "string" || !/^[0-9a-f]{64}$/u.test(snapshot.runtime_roster_digest) || typeof source.root_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.root_digest) || typeof source.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.manifest_digest) || typeof source.manifest_json !== "string" || digest2(source.manifest_json) !== source.manifest_digest || !validText2(archive.archive_directory, 32767) || !path18.isAbsolute(archive.archive_directory) || !validText2(archive.source_tasks_root, 32767) || !path18.isAbsolute(archive.source_tasks_root) || typeof archive.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(archive.manifest_digest) || !Number.isSafeInteger(archive.file_count) || archive.file_count < 0 || !Number.isSafeInteger(archive.byte_count) || archive.byte_count < 0) fail("invalid_raw_cutover_snapshot");
         const policy = parseAuthoritySourceManifest(source.manifest_json, source.manifest_digest);
         if (policy.kind !== "raw_json_archive_cutover" || policy.manifest.source_tasks_root !== archive.source_tasks_root || policy.manifest.archive_manifest_digest !== archive.manifest_digest || policy.manifest.archive_file_count !== archive.file_count || policy.manifest.archive_byte_count !== archive.byte_count) fail("raw_cutover_archive_identity_mismatch");
         const at = (/* @__PURE__ */ new Date()).toISOString();
@@ -6045,7 +6723,7 @@ var init_store = __esm({
         const sourceKeys = ["artifact_bytes", "artifact_count", "event_count", "historical_exception_count", "historical_exception_digest", "manifest_digest", "manifest_json", "result_count", "root_digest", "task_count"];
         const archive = snapshot.archive;
         const archiveKeys = ["archive_directory", "byte_count", "file_count", "manifest_digest", "source_tasks_root"];
-        if (!source || Object.getPrototypeOf(source) !== Object.prototype || Object.keys(source).sort().join("|") !== sourceKeys.join("|") || !archive || Object.getPrototypeOf(archive) !== Object.prototype || Object.keys(archive).sort().join("|") !== archiveKeys.join("|") || !validId3(snapshot.migration_id) || !validId3(snapshot.cutover_id) || !validText2(snapshot.verifier_version, 128) || !validText2(snapshot.protocol_version, 128) || typeof snapshot.runtime_roster_digest !== "string" || !/^[0-9a-f]{64}$/u.test(snapshot.runtime_roster_digest) || typeof source.root_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.root_digest) || typeof source.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.manifest_digest) || typeof source.manifest_json !== "string" || digest2(source.manifest_json) !== source.manifest_digest || !validText2(archive.archive_directory, 32767) || !path17.isAbsolute(archive.archive_directory) || !validText2(archive.source_tasks_root, 32767) || !path17.isAbsolute(archive.source_tasks_root) || typeof archive.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(archive.manifest_digest) || !Number.isSafeInteger(archive.file_count) || archive.file_count < 0 || !Number.isSafeInteger(archive.byte_count) || archive.byte_count < 0 || archive.file_count !== source.artifact_count || archive.byte_count !== source.artifact_bytes || !Array.isArray(snapshot.tasks) || !Array.isArray(snapshot.artifacts) || !Array.isArray(snapshot.results) || !Array.isArray(snapshot.events) || !Array.isArray(snapshot.historical_exceptions) || ![source.task_count, source.artifact_count, source.artifact_bytes, source.result_count, source.event_count].every((v) => Number.isSafeInteger(v) && v >= 0) || !Number.isSafeInteger(source.historical_exception_count) || source.historical_exception_count < 0 || typeof source.historical_exception_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.historical_exception_digest) || source.historical_exception_count !== snapshot.historical_exceptions.length || source.historical_exception_digest !== historicalResultExceptionSetDigest(snapshot.historical_exceptions) || source.artifact_count !== snapshot.artifacts.length || source.result_count !== snapshot.results.length || source.event_count !== snapshot.events.length) fail("invalid_migration_snapshot");
+        if (!source || Object.getPrototypeOf(source) !== Object.prototype || Object.keys(source).sort().join("|") !== sourceKeys.join("|") || !archive || Object.getPrototypeOf(archive) !== Object.prototype || Object.keys(archive).sort().join("|") !== archiveKeys.join("|") || !validId3(snapshot.migration_id) || !validId3(snapshot.cutover_id) || !validText2(snapshot.verifier_version, 128) || !validText2(snapshot.protocol_version, 128) || typeof snapshot.runtime_roster_digest !== "string" || !/^[0-9a-f]{64}$/u.test(snapshot.runtime_roster_digest) || typeof source.root_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.root_digest) || typeof source.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.manifest_digest) || typeof source.manifest_json !== "string" || digest2(source.manifest_json) !== source.manifest_digest || !validText2(archive.archive_directory, 32767) || !path18.isAbsolute(archive.archive_directory) || !validText2(archive.source_tasks_root, 32767) || !path18.isAbsolute(archive.source_tasks_root) || typeof archive.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(archive.manifest_digest) || !Number.isSafeInteger(archive.file_count) || archive.file_count < 0 || !Number.isSafeInteger(archive.byte_count) || archive.byte_count < 0 || archive.file_count !== source.artifact_count || archive.byte_count !== source.artifact_bytes || !Array.isArray(snapshot.tasks) || !Array.isArray(snapshot.artifacts) || !Array.isArray(snapshot.results) || !Array.isArray(snapshot.events) || !Array.isArray(snapshot.historical_exceptions) || ![source.task_count, source.artifact_count, source.artifact_bytes, source.result_count, source.event_count].every((v) => Number.isSafeInteger(v) && v >= 0) || !Number.isSafeInteger(source.historical_exception_count) || source.historical_exception_count < 0 || typeof source.historical_exception_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.historical_exception_digest) || source.historical_exception_count !== snapshot.historical_exceptions.length || source.historical_exception_digest !== historicalResultExceptionSetDigest(snapshot.historical_exceptions) || source.artifact_count !== snapshot.artifacts.length || source.result_count !== snapshot.results.length || source.event_count !== snapshot.events.length) fail("invalid_migration_snapshot");
         const sourceManifest = parseHistoricalExceptionManifest(source.manifest_json, source.manifest_digest);
         if (sourceManifest.manifest.task_count !== source.task_count || sourceManifest.manifest.artifact_count !== source.artifact_count || sourceManifest.manifest.artifact_bytes !== source.artifact_bytes || sourceManifest.manifest.result_count !== source.result_count || sourceManifest.manifest.event_count !== source.event_count || sourceManifest.manifest.historical_exception_count !== source.historical_exception_count || sourceManifest.manifest.historical_exception_digest !== source.historical_exception_digest || canonical3(sourceManifest.exceptions) !== canonical3(snapshot.historical_exceptions)) fail("invalid_source_manifest");
         validateHistoricalExceptionSnapshot(snapshot, sourceManifest);
@@ -8422,7 +9100,7 @@ var init_store = __esm({
         } finally {
           if (settled && !this.#poisoned && !existsSync12(this.#paths.poison)) {
             try {
-              const intent = JSON.parse(readFileSync12(this.#paths.intent, "utf8"));
+              const intent = JSON.parse(readFileSync13(this.#paths.intent, "utf8"));
               if (intent.token !== token) fail("writer_intent_identity_mismatch");
               unlinkSync2(this.#paths.intent);
             } catch (e) {
@@ -8463,7 +9141,7 @@ var init_store = __esm({
             if (migrationRuns.length || migratedResultsCount || migratedEventsCount || this.#db.prepare("SELECT COUNT(*) AS n FROM json_artifacts").get().n) fail("fresh_install_contains_legacy_data");
           } else if (authoritySwitches.length) {
             const receipt2 = authoritySwitches[0], migration = migrationRuns[0];
-            if (!migration || migration.state !== "verified" || migration.migration_id !== receipt2.migration_id || migration.source_root_digest !== receipt2.source_root_digest || migration.source_manifest_digest !== receipt2.source_manifest_digest || digest2(migration.source_manifest_json) !== migration.source_manifest_digest || !validText2(migration.archive_directory, 32767) || !path17.isAbsolute(migration.archive_directory) || !validText2(receipt2.archive_directory, 32767) || !path17.isAbsolute(receipt2.archive_directory) || migration.archive_directory !== receipt2.archive_directory || typeof migration.archive_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(migration.archive_manifest_digest) || migration.archive_manifest_digest !== receipt2.archive_manifest_digest || !validText2(migration.archive_source_tasks_root, 32767) || !path17.isAbsolute(migration.archive_source_tasks_root) || migration.archive_source_tasks_root !== receipt2.archive_source_tasks_root || !Number.isSafeInteger(migration.archive_file_count) || migration.archive_file_count < 0 || migration.archive_file_count !== migration.source_artifact_count || migration.archive_file_count !== receipt2.archive_file_count || !Number.isSafeInteger(migration.archive_byte_count) || migration.archive_byte_count < 0 || migration.archive_byte_count !== migration.source_artifact_bytes || migration.archive_byte_count !== receipt2.archive_byte_count || receipt2.schema_version !== SCHEMA_VERSION || !validText2(receipt2.protocol_version, 128) || typeof receipt2.runtime_roster_digest !== "string" || !/^[0-9a-f]{64}$/u.test(receipt2.runtime_roster_digest) || !validText2(receipt2.verifier_version, 128) || !validText2(migration.verifier_version, 128) || receipt2.verifier_version !== migration.verifier_version || !validText2(receipt2.cutover_id, 128) || !validText2(receipt2.created_at, 64) || Number.isNaN(Date.parse(receipt2.created_at)) || !validText2(migration.created_at, 64) || !validText2(migration.verified_at, 64) || Number.isNaN(Date.parse(migration.created_at)) || Number.isNaN(Date.parse(migration.verified_at))) fail("authority_switch_invalid");
+            if (!migration || migration.state !== "verified" || migration.migration_id !== receipt2.migration_id || migration.source_root_digest !== receipt2.source_root_digest || migration.source_manifest_digest !== receipt2.source_manifest_digest || digest2(migration.source_manifest_json) !== migration.source_manifest_digest || !validText2(migration.archive_directory, 32767) || !path18.isAbsolute(migration.archive_directory) || !validText2(receipt2.archive_directory, 32767) || !path18.isAbsolute(receipt2.archive_directory) || migration.archive_directory !== receipt2.archive_directory || typeof migration.archive_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(migration.archive_manifest_digest) || migration.archive_manifest_digest !== receipt2.archive_manifest_digest || !validText2(migration.archive_source_tasks_root, 32767) || !path18.isAbsolute(migration.archive_source_tasks_root) || migration.archive_source_tasks_root !== receipt2.archive_source_tasks_root || !Number.isSafeInteger(migration.archive_file_count) || migration.archive_file_count < 0 || migration.archive_file_count !== migration.source_artifact_count || migration.archive_file_count !== receipt2.archive_file_count || !Number.isSafeInteger(migration.archive_byte_count) || migration.archive_byte_count < 0 || migration.archive_byte_count !== migration.source_artifact_bytes || migration.archive_byte_count !== receipt2.archive_byte_count || receipt2.schema_version !== SCHEMA_VERSION || !validText2(receipt2.protocol_version, 128) || typeof receipt2.runtime_roster_digest !== "string" || !/^[0-9a-f]{64}$/u.test(receipt2.runtime_roster_digest) || !validText2(receipt2.verifier_version, 128) || !validText2(migration.verifier_version, 128) || receipt2.verifier_version !== migration.verifier_version || !validText2(receipt2.cutover_id, 128) || !validText2(receipt2.created_at, 64) || Number.isNaN(Date.parse(receipt2.created_at)) || !validText2(migration.created_at, 64) || !validText2(migration.verified_at, 64) || Number.isNaN(Date.parse(migration.created_at)) || Number.isNaN(Date.parse(migration.verified_at))) fail("authority_switch_invalid");
             const policy = parseAuthoritySourceManifest(migration.source_manifest_json, migration.source_manifest_digest);
             if (policy.manifest.task_count !== migration.source_task_count || policy.manifest.artifact_count !== migration.source_artifact_count || policy.manifest.artifact_bytes !== migration.source_artifact_bytes || policy.manifest.result_count !== migration.source_result_count || policy.manifest.event_count !== migration.source_event_count) fail("authority_switch_invalid");
           } else if (migrationRuns.length || migratedResultsCount || migratedEventsCount || this.#db.prepare("SELECT COUNT(*) AS n FROM json_artifacts").get().n) {
@@ -9097,11 +9775,11 @@ __export(lifecycle_gate_exports, {
   readAllLifecycleEventsForRecovery: () => readAllLifecycleEventsForRecovery
 });
 import { createHash as createHash15, randomUUID as randomUUID6 } from "node:crypto";
-import { closeSync as closeSync6, existsSync as existsSync13, fsyncSync as fsyncSync4, linkSync, lstatSync as lstatSync3, openSync as openSync6, readFileSync as readFileSync13, readdirSync as readdirSync3, realpathSync as realpathSync6, unlinkSync as unlinkSync3, writeFileSync as writeFileSync7 } from "node:fs";
-import { spawn as spawn5 } from "node:child_process";
-import path18 from "node:path";
+import { closeSync as closeSync6, existsSync as existsSync13, fsyncSync as fsyncSync4, linkSync, lstatSync as lstatSync3, openSync as openSync6, readFileSync as readFileSync14, readdirSync as readdirSync3, realpathSync as realpathSync6, unlinkSync as unlinkSync3, writeFileSync as writeFileSync7 } from "node:fs";
+import { spawn as spawn6 } from "node:child_process";
+import path19 from "node:path";
 function recoveryStopKey(dataRoot, databaseFileName, operationId) {
-  return `${path18.resolve(dataRoot)}\0${databaseFileName ?? "operations.sqlite3"}\0${operationId}`;
+  return `${path19.resolve(dataRoot)}\0${databaseFileName ?? "operations.sqlite3"}\0${operationId}`;
 }
 function readAllLifecycleEventsForRecovery(port, operationId) {
   const pageSize = 200;
@@ -9156,7 +9834,7 @@ async function initializeFreshInstallSqliteRoot(root, databaseFileName, version2
     throw new LifecycleGateError("sqlite_bootstrap_database_name_invalid");
   }
   const modules = await loadLifecycleCandidateModules(version2);
-  const key = path18.join(path18.resolve(root), databaseFileName);
+  const key = path19.join(path19.resolve(root), databaseFileName);
   const pending = freshBootstrapPromises.get(key);
   if (pending) return pending;
   const operation = ensureFreshSqliteAuthority(root, databaseFileName, modules, processProbe, options);
@@ -9174,7 +9852,7 @@ async function acquireFreshBootstrapLock(root, databaseFileName, timeoutMs, owne
       "Fresh SQLite bootstrap requires the Windows exclusive-file-handle lock"
     );
   }
-  const lockPath = path18.join(root, `${databaseFileName}.bootstrap.lock`);
+  const lockPath = path19.join(root, `${databaseFileName}.bootstrap.lock`);
   const deadline = Date.now() + timeoutMs;
   for (; ; ) {
     assertFreshBootstrapRootPath(root);
@@ -9201,7 +9879,7 @@ function assertBootstrapLockPath(lockPath) {
   }
 }
 async function tryAcquireWindowsBootstrapLock(root, lockPath, databaseFileName, ownerIdentity, processProbe) {
-  const record4 = `${JSON.stringify({
+  const record5 = `${JSON.stringify({
     schema_version: 1,
     state: "held",
     database_file: databaseFileName,
@@ -9218,9 +9896,9 @@ async function tryAcquireWindowsBootstrapLock(root, lockPath, databaseFileName, 
   })}
 `;
   const systemRoot = process.env["SystemRoot"];
-  const absolutePowerShell = systemRoot ? path18.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe") : "powershell.exe";
+  const absolutePowerShell = systemRoot ? path19.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe") : "powershell.exe";
   const executable = existsSync13(absolutePowerShell) ? absolutePowerShell : "powershell.exe";
-  const child = spawn5(executable, [
+  const child = spawn6(executable, [
     "-NoLogo",
     "-NoProfile",
     "-NonInteractive",
@@ -9231,7 +9909,7 @@ async function tryAcquireWindowsBootstrapLock(root, lockPath, databaseFileName, 
     env: {
       ...process.env,
       ZCODE_BOOTSTRAP_LOCK_FILE: lockPath,
-      ZCODE_BOOTSTRAP_LOCK_RECORD_B64: Buffer.from(record4, "utf8").toString("base64"),
+      ZCODE_BOOTSTRAP_LOCK_RECORD_B64: Buffer.from(record5, "utf8").toString("base64"),
       ZCODE_BOOTSTRAP_LOCK_RELEASE_RECORD_B64: Buffer.from(releaseRecord, "utf8").toString("base64")
     },
     stdio: ["pipe", "pipe", "pipe"],
@@ -9430,9 +10108,9 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 async function ensureFreshSqliteAuthority(root, databaseFileName, modules, processProbe, options) {
-  const resolvedRoot = path18.resolve(root);
+  const resolvedRoot = path19.resolve(root);
   assertFreshBootstrapRootPath(resolvedRoot);
-  const databasePath = path18.join(resolvedRoot, databaseFileName);
+  const databasePath = path19.join(resolvedRoot, databaseFileName);
   const pendingPath = `${databasePath}.bootstrap-pending.json`;
   const markerTempPath = `${databasePath}.bootstrap-marker.tmp`;
   const lockTimeoutMs = options.lockTimeoutMs ?? DEFAULT_FRESH_BOOTSTRAP_LOCK_TIMEOUT_MS;
@@ -9469,7 +10147,7 @@ async function ensureFreshSqliteAuthority(root, databaseFileName, modules, proce
         if (existsSync13(databasePath)) {
           const published = tryReadReadySqliteAuthority(modules, resolvedRoot, databaseFileName, true);
           if (published?.kind === "fresh_install" && published.receipt_id === `fresh-install-${marker2.token}`) {
-            const stagePath2 = path18.join(resolvedRoot, marker2.stage_file);
+            const stagePath2 = path19.join(resolvedRoot, marker2.stage_file);
             removeOwnedBootstrapFile(stagePath2);
             removeOwnedBootstrapFile(`${stagePath2}-wal`);
             removeOwnedBootstrapFile(`${stagePath2}-shm`);
@@ -9482,7 +10160,7 @@ async function ensureFreshSqliteAuthority(root, databaseFileName, modules, proce
           }
           throw new LifecycleGateError("sqlite_bootstrap_published_database_unverified");
         }
-        const stagePath = path18.join(resolvedRoot, marker2.stage_file);
+        const stagePath = path19.join(resolvedRoot, marker2.stage_file);
         removeOwnedBootstrapFile(stagePath);
         removeOwnedBootstrapFile(`${stagePath}-wal`);
         removeOwnedBootstrapFile(`${stagePath}-shm`);
@@ -9544,9 +10222,9 @@ async function ensureFreshSqliteAuthority(root, databaseFileName, modules, proce
   return result;
 }
 async function constructAndPublishFreshSqlite(root, databaseFileName, marker, modules, lock, options) {
-  const databasePath = path18.join(root, databaseFileName);
+  const databasePath = path19.join(root, databaseFileName);
   const pendingPath = `${databasePath}.bootstrap-pending.json`;
-  const stagePath = path18.join(root, marker.stage_file);
+  const stagePath = path19.join(root, marker.stage_file);
   let published = false;
   try {
     lock.assertHeld();
@@ -9635,7 +10313,7 @@ function assertFreshBootstrapRootPath(root) {
   try {
     const stat2 = lstatSync3(root);
     const real = realpathSync6.native(root);
-    const normalize = (value) => process.platform === "win32" ? path18.win32.normalize(value).replace(/[\\/]+$/u, "").toLocaleLowerCase("en-US") : path18.resolve(value);
+    const normalize = (value) => process.platform === "win32" ? path19.win32.normalize(value).replace(/[\\/]+$/u, "").toLocaleLowerCase("en-US") : path19.resolve(value);
     if (!stat2.isDirectory() || stat2.isSymbolicLink() || normalize(real) !== normalize(root)) {
       throw new LifecycleGateError("sqlite_data_root_redirected");
     }
@@ -9648,7 +10326,7 @@ function readFreshBootstrapMarker(file, databaseFileName) {
   try {
     const stat2 = lstatSync3(file);
     if (!stat2.isFile() || stat2.isSymbolicLink() || stat2.size > 16 * 1024) throw new Error("unsafe_marker");
-    const value = JSON.parse(readFileSync13(file, "utf8"));
+    const value = JSON.parse(readFileSync14(file, "utf8"));
     const expectedStagePrefix = `${databaseFileName}.bootstrap-`;
     if (value.schema_version !== 1 || value.state !== "sqlite_bootstrap_pending" || value.database_file !== databaseFileName || typeof value.token !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(value.token) || value.stage_file !== `${expectedStagePrefix}${value.token}.stage` || !value.owner_identity || value.owner_identity.pid < 1 || !Number.isSafeInteger(value.owner_identity.pid) || value.owner_identity.fingerprint_precision !== "exact" || !value.owner_identity.fingerprint || value.owner_identity.identity_version !== PROCESS_IDENTITY_VERSION || !value.owner_identity.platform || !value.owner_identity.captured_at || Number.isNaN(Date.parse(value.owner_identity.captured_at))) throw new Error("invalid_marker");
     return value;
@@ -9725,24 +10403,24 @@ function parsePreviousBootstrapLockRecord(encoded, databaseFileName) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new LifecycleGateError("sqlite_bootstrap_lock_record_invalid");
   }
-  const record4 = value;
-  if (record4["schema_version"] !== 1 || record4["database_file"] !== databaseFileName) {
+  const record5 = value;
+  if (record5["schema_version"] !== 1 || record5["database_file"] !== databaseFileName) {
     throw new LifecycleGateError("sqlite_bootstrap_lock_record_invalid");
   }
-  if (record4["state"] === "released") {
-    if (typeof record4["released_at"] !== "string" || Number.isNaN(Date.parse(record4["released_at"]))) {
+  if (record5["state"] === "released") {
+    if (typeof record5["released_at"] !== "string" || Number.isNaN(Date.parse(record5["released_at"]))) {
       throw new LifecycleGateError("sqlite_bootstrap_lock_record_invalid");
     }
-    return record4;
+    return record5;
   }
-  if (record4["state"] !== "held" || typeof record4["acquired_at"] !== "string" || Number.isNaN(Date.parse(record4["acquired_at"])) || typeof record4["token"] !== "string" || !record4["owner_identity"] || typeof record4["owner_identity"] !== "object") {
+  if (record5["state"] !== "held" || typeof record5["acquired_at"] !== "string" || Number.isNaN(Date.parse(record5["acquired_at"])) || typeof record5["token"] !== "string" || !record5["owner_identity"] || typeof record5["owner_identity"] !== "object") {
     throw new LifecycleGateError("sqlite_bootstrap_lock_record_invalid");
   }
-  const identity = record4["owner_identity"];
+  const identity = record5["owner_identity"];
   if (identity["fingerprint_precision"] !== "exact" || typeof identity["fingerprint"] !== "string" || identity["fingerprint"].length === 0 || identity["identity_version"] !== PROCESS_IDENTITY_VERSION || !Number.isSafeInteger(identity["pid"]) || Number(identity["pid"]) < 1 || typeof identity["platform"] !== "string" || typeof identity["captured_at"] !== "string" || Number.isNaN(Date.parse(identity["captured_at"]))) {
     throw new LifecycleGateError("sqlite_bootstrap_lock_record_invalid");
   }
-  return record4;
+  return record5;
 }
 function syncRegularFile(file) {
   const stat2 = lstatSync3(file);
@@ -10285,6 +10963,10 @@ async function openClaimOnlyDriver(options) {
       };
       const intent = asRecord4(port.requestCancellation(fence, identityEvidence));
       if (intent.result_won === true) return intent;
+      if (active.privateAuthState) {
+        active.privateAuthState.cancelled = true;
+      }
+      await active.closeHandleGate?.();
       const cancelId = text(intent.cancel_id, "cancellation_intent_missing");
       const terminationState = identityVerdict.state === "alive" ? "terminated" : "already_exited";
       if (identityVerdict.state === "alive") {
@@ -10296,7 +10978,8 @@ async function openClaimOnlyDriver(options) {
         if (terminated.verified !== true) throw new LifecycleGateError("cancellation_tree_termination_unverified");
       }
       const workerExitCode = await waitForClose(active.child, 15e3);
-      if (workerExitCode === null) throw new LifecycleGateError("cancellation_worker_exit_unknown");
+      const terminationSignal = workerExitCode === null ? active.child.signalCode ?? null : null;
+      if (workerExitCode === null && terminationSignal === null) throw new LifecycleGateError("cancellation_worker_exit_unknown");
       const scan = await verifyProcessTreeClaimantsClean([{ pid: processIdentity.pid, fingerprint: processIdentity.fingerprint }]);
       if (!scan.clean || scan.livePids.length > 0) throw new LifecycleGateError("cancellation_tree_not_clean");
       const processTreeFacts = {
@@ -10313,6 +10996,7 @@ async function openClaimOnlyDriver(options) {
         identity_state: identityVerdict.state,
         termination_state: terminationState,
         worker_exit_code: workerExitCode,
+        worker_termination_signal: terminationSignal,
         scan_clean: true,
         live_pids: [],
         observed_pids: [...scan.observedPids].sort((a, b) => a - b)
@@ -10331,6 +11015,7 @@ async function openClaimOnlyDriver(options) {
         root_start_fingerprint: processIdentity.fingerprint,
         worker_tree_complete: true,
         scan_clean: true,
+        termination_signal: terminationSignal,
         live_pids: [],
         termination_state: terminationState,
         process_tree_digest: sha2562(canonicalJson2(processTreeFacts))
@@ -10455,6 +11140,8 @@ async function openClaimOnlyDriver(options) {
       }));
       if (released.phase !== "released" || released.capacity_released !== true) throw new LifecycleGateError("cancellation_release_not_persisted");
       cancellationProofs.delete(operationId);
+      const retired = [...activeWorkers.entries()].find(([, value]) => value.input.task.task_id === taskId && value.input.attempt === attempt && value.child === proof.child);
+      if (retired) activeWorkers.delete(retired[0]);
       return { cancelled: true, phase: "released", cleanup_verified: true };
     },
     readInteractionRequest: (taskId, requestId) => port.readInteractionRequest(taskId, requestId),
@@ -10552,10 +11239,13 @@ async function openClaimOnlyDriver(options) {
           }
         }
         stage("spawn_bootstrap_start");
+        const usePrivateAuth = input.task.model?.provider_id === "account:bigmodel-start-plan" && !!options.startPlanPrivateAuth;
+        if (usePrivateAuth && (!options.startPlanPrivateAuth?.account || !options.startPlanPrivateAuth.signal || options.startPlanPrivateAuth.signal.aborted || options.testOnlyFakeAdapter)) throw new LifecycleGateError("private_auth_configuration_invalid");
         const launch = await spawnAndBootstrapOnce(() => {
           spawnCount += 1;
           child = spawnClaimOnlyWorker(options.workerEntryPath, provenance, {
-            ...options.enableSyntheticInteractionChannel || !options.testOnlyFakeAdapter ? { interactionChannel: true } : {}
+            ...options.enableSyntheticInteractionChannel || !options.testOnlyFakeAdapter ? { interactionChannel: true } : {},
+            ...usePrivateAuth ? { privateAuthChannel: true } : {}
           });
           options.onChildSpawn?.(child);
           return child;
@@ -10635,7 +11325,32 @@ async function openClaimOnlyDriver(options) {
           reason = "result_not_committed";
           stopBoundary = "result";
           stage("claim_committed", { claim_id: claimId });
-          activeWorkers.set(input.operationId, { child, input });
+          const privateAuthAbort = new AbortController();
+          const privateAuthState = { cancelled: false, phase: "resolving" };
+          const accountSignal = usePrivateAuth ? options.startPlanPrivateAuth.signal : void 0;
+          const revokeOnAccountChange = () => privateAuthAbort.abort();
+          accountSignal?.addEventListener("abort", revokeOnAccountChange, { once: true });
+          if (accountSignal?.aborted) privateAuthAbort.abort();
+          let handleGate;
+          const closeHandleGate = async () => {
+            const gate = handleGate;
+            handleGate = void 0;
+            if (gate) await gate.close().catch(() => void 0);
+          };
+          activeWorkers.set(input.operationId, { child, input, ...usePrivateAuth ? {
+            privateAuthAbort,
+            privateAuthState,
+            releasePrivateAuth: () => accountSignal?.removeEventListener("abort", revokeOnAccountChange),
+            closeHandleGate
+          } : {} });
+          if (usePrivateAuth) {
+            if (!child.privateAuthLifetimeChannel) throw new LifecycleGateError("private_auth_lifetime_unavailable");
+            const lifetime = child.privateAuthLifetimeChannel;
+            lifetime.on("error", () => privateAuthAbort.abort());
+            privateAuthAbort.signal.addEventListener("abort", () => lifetime.destroy(), { once: true });
+            if (privateAuthAbort.signal.aborted) lifetime.destroy();
+            else lifetime.write(Buffer.from([1]));
+          }
           await sendDecision(child, "claim_committed", {
             protocol: "bridge-sqlite-execution-envelope-v1",
             operation_id: input.operationId,
@@ -10649,10 +11364,77 @@ async function openClaimOnlyDriver(options) {
             task: input.task,
             host_profile: workerHostProfile,
             continuation: input.continuation ?? null,
-            previous_result: input.previousResult ?? null
+            previous_result: input.previousResult ?? null,
+            ...usePrivateAuth ? { private_auth: { account: options.startPlanPrivateAuth.account, claim: claimId } } : {}
           });
           stage("claim_continue_sent", { claim_id: claimId });
           let interactionPump;
+          let privateAuthPump;
+          if (usePrivateAuth) {
+            const owner = child;
+            const claimed = asRecord4(port.readOperation(input.operationId));
+            const worker = parseEvidence(String(claimed.claim_worker_identity_json), "private_auth_identity_invalid");
+            if (!owner.privateAuthRequestChannel || !owner.privateAuthResponseChannel || !owner.privateAuthAcknowledgementChannel || typeof owner.pid !== "number" || claimed.phase !== "running" || claimed.claim_id !== claimId || claimed.claim_generation !== generation || worker.process_id !== owner.pid || worker.fingerprint_precision !== "exact" || typeof worker.start_fingerprint !== "string") {
+              throw new LifecycleGateError("private_auth_binding_invalid");
+            }
+            try {
+              handleGate = await WorkerHandleGate.open({
+                pid: owner.pid,
+                expectedCreationTicks: String(worker.start_fingerprint),
+                ...options.startPlanPrivateAuthHandleTransaction ? { transaction: await options.startPlanPrivateAuthHandleTransaction(owner.pid, String(worker.start_fingerprint)) } : {}
+              });
+            } catch (error2) {
+              throw new LifecycleGateError(`private_auth_handle_gate_unavailable: ${error2 instanceof Error ? error2.message : String(error2)}`);
+            }
+            owner.once("exit", () => privateAuthAbort.abort());
+            privateAuthPump = servePrivateCredential({
+              request: owner.privateAuthRequestChannel,
+              response: owner.privateAuthResponseChannel,
+              acknowledgement: owner.privateAuthAcknowledgementChannel,
+              signal: privateAuthAbort.signal,
+              timeoutMs: 6e4,
+              resolveLease: async (request, signal) => {
+                const candidate = asRecord4(request.binding);
+                if (candidate.account !== options.startPlanPrivateAuth.account || candidate.provider !== input.task.model?.provider_id || candidate.model !== input.task.model?.model_id || candidate.task !== input.task.task_id || candidate.attempt !== input.attempt || candidate.operation !== input.operationId || candidate.generation !== generation || candidate.claim !== claimId || candidate.pid !== owner.pid || candidate.creation !== worker.start_fingerprint || typeof candidate.session !== "string" || !candidate.session || typeof candidate.turn !== "string" || !candidate.turn) {
+                  throw new Error("private_auth_binding_invalid");
+                }
+                const binding = Object.freeze({ ...candidate });
+                const waitUntilOwnerExit = () => new Promise((_, reject) => {
+                  if (privateAuthAbort.signal.aborted) {
+                    reject(new Error("private_auth_cancelled"));
+                    return;
+                  }
+                  privateAuthAbort.signal.addEventListener("abort", () => reject(new Error("private_auth_cancelled")), { once: true });
+                });
+                const verifyWorker = async () => {
+                  const current = asRecord4(port.readOperation(input.operationId));
+                  if (signal.aborted || owner.exitCode !== null || owner.signalCode !== null || current.phase !== "running" || current.claim_id !== claimId || current.claim_generation !== generation || current.claim_worker_identity_digest !== claimed.claim_worker_identity_digest) return false;
+                  await handleGate?.assertAlive();
+                  return !signal.aborted && owner.exitCode === null && owner.signalCode === null;
+                };
+                if (!await verifyWorker()) throw new Error("private_auth_identity_invalid");
+                const lease = await options.startPlanPrivateAuth.issue(binding, signal);
+                if (signal.aborted || privateAuthState.cancelled) {
+                  lease.revoke();
+                  await waitUntilOwnerExit();
+                }
+                privateAuthState.phase = "delivering";
+                return { lease, binding, verifyWorker };
+              }
+            }).then(() => {
+              privateAuthState.phase = "acknowledged";
+              const lifetime = owner.privateAuthLifetimeChannel;
+              if (privateAuthAbort.signal.aborted || !lifetime || lifetime.destroyed || lifetime.writableEnded) {
+                privateAuthAbort.abort();
+                return;
+              }
+              lifetime.write(Buffer.from([2]), (error2) => {
+                if (error2) privateAuthAbort.abort();
+              });
+            }).catch(() => {
+              privateAuthAbort.abort();
+            });
+          }
           if (options.enableSyntheticInteractionChannel || !options.testOnlyFakeAdapter) {
             const claimedOperation = asRecord4(port.readOperation(input.operationId));
             const channel = await port.openInteractionChannel(child, claimedOperation, async ({ child: observedChild, expected }) => {
@@ -10700,6 +11482,9 @@ async function openClaimOnlyDriver(options) {
             stage("worker_result_unavailable", { reason });
           }
           workerExitCode = await waitForClose(child, 15e3);
+          privateAuthAbort.abort();
+          await privateAuthPump;
+          await closeHandleGate();
           await interactionPump;
           stage("worker_close", { pid: child.pid ?? null, exitCode: workerExitCode });
           if (state !== "result_rejected") {
@@ -10822,7 +11607,18 @@ async function openClaimOnlyDriver(options) {
         }
       } finally {
         const active = activeWorkers.get(input.operationId);
-        if (active?.child === child) activeWorkers.delete(input.operationId);
+        if (active && active.child === child) {
+          active.privateAuthAbort?.abort();
+          active.releasePrivateAuth?.();
+          await active.closeHandleGate?.();
+          let operationStillRunning = true;
+          try {
+            operationStillRunning = asRecord4(port.readOperation(input.operationId)).phase === "running";
+          } catch {
+            operationStillRunning = true;
+          }
+          if (!operationStillRunning) activeWorkers.delete(input.operationId);
+        }
         try {
           operation = port.readOperation(input.operationId);
           task = port.readTaskProjection(input.task.task_id);
@@ -11045,6 +11841,8 @@ async function readJsonLine(stream, limit, timeoutMs) {
 }
 async function waitForClose(child, timeoutMs) {
   if (child.exitCode !== null) return child.exitCode;
+  const stdioClosed = child.stdio.every((stream) => stream === null || stream.destroyed === true || stream.closed === true);
+  if (child.exitSeen === true && stdioClosed) return child.exitCode;
   return await new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       child.removeListener("close", onClose);
@@ -11293,8 +12091,8 @@ function canonicalJson2(value) {
   if (typeof value === "number" && Number.isSafeInteger(value)) return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(canonicalJson2).join(",")}]`;
   if (value && Object.getPrototypeOf(value) === Object.prototype) {
-    const record4 = value;
-    return `{${Object.keys(record4).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson2(record4[key])}`).join(",")}}`;
+    const record5 = value;
+    return `{${Object.keys(record5).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson2(record5[key])}`).join(",")}}`;
   }
   throw new LifecycleGateError("cleanup_evidence_not_canonicalizable");
 }
@@ -11323,6 +12121,8 @@ var init_lifecycle_gate = __esm({
     init_profile();
     init_sqlite_runtime_roster();
     init_node_runtime();
+    init_start_plan_private_channel();
+    init_start_plan_handle_gate();
     DEFAULT_PROCESS_PROBE_TIMEOUT_MS = 5e3;
     verifiedRecoveryStops = /* @__PURE__ */ new Map();
     LifecycleGateError = class extends Error {
@@ -11415,15 +12215,15 @@ try {
 
 // src/runtime/sqlite-doctor.ts
 function buildSqliteDoctorChecks(value, managerFence) {
-  const snapshot = record3(value);
+  const snapshot = record4(value);
   if (snapshot.root_status !== "consistent_read_only" || snapshot.verified_event_projection_consistency !== true || snapshot.writes_allowed !== false || snapshot.cleanup_performed !== false || snapshot.claim_release_performed !== false || snapshot.operation_release_performed !== false || !Array.isArray(snapshot.operations) || !Array.isArray(snapshot.task_projections)) {
     return [
       { name: "active_tasks", status: "unknown", summary: "SQLite lifecycle snapshot is unavailable or inconsistent; task occupancy is unknown" },
       { name: "recovery_lock", status: "error", summary: bounded2(`SQLite Recovery snapshot is not verified: ${String(snapshot.root_status ?? "unavailable")}; ${Array.isArray(snapshot.root_blockers) ? snapshot.root_blockers.join(", ") : "snapshot_invalid"}`) }
     ];
   }
-  const operations = snapshot.operations.map(record3);
-  const tasks = snapshot.task_projections.map(record3);
+  const operations = snapshot.operations.map(record4);
+  const tasks = snapshot.task_projections.map(record4);
   const occupied = operations.filter((operation) => operation.capacity_occupied === true);
   const durableHolds = occupied.filter((operation) => operation.recovery_classification === "hold" || operation.recovery_classification === "quarantine");
   const queued = tasks.filter((task) => task.status === "queued");
@@ -11447,7 +12247,7 @@ function buildSqliteDoctorChecks(value, managerFence) {
     recovery
   ];
 }
-function record3(value) {
+function record4(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("SQLite diagnostic record is invalid");
   return value;
 }
@@ -11466,7 +12266,7 @@ __export(sqlite_lifecycle_mcp_authority_exports, {
   SqliteLifecycleMcpAuthority: () => SqliteLifecycleMcpAuthority
 });
 import { createHash as createHash16, randomBytes } from "node:crypto";
-import path19 from "node:path";
+import path20 from "node:path";
 function validateTaskPackage2(task) {
   const worktreePath = task.worktree_path;
   if (!task || typeof task.task_id !== "string" || !task.task_id.trim() || task.task_id.length > 128 || typeof task.workspace !== "string" || !task.workspace.trim() || !pathIsAbsolute(task.workspace) || worktreePath !== void 0 && (typeof worktreePath !== "string" || !worktreePath.trim() || !pathIsAbsolute(worktreePath)) || typeof task.objective !== "string" || !task.objective.trim() || !Array.isArray(task.requirements) || !Array.isArray(task.allowed_paths) || !Array.isArray(task.forbidden_paths) || !Array.isArray(task.acceptance_criteria) || !Array.isArray(task.test_commands)) {
@@ -11525,10 +12325,10 @@ function taskExecutionPath(task) {
 function executionPathsOverlap(left, right) {
   const leftPath = normalizeExecutionPath(left);
   const rightPath = normalizeExecutionPath(right);
-  return leftPath === rightPath || leftPath.startsWith(rightPath + path19.sep) || rightPath.startsWith(leftPath + path19.sep);
+  return leftPath === rightPath || leftPath.startsWith(rightPath + path20.sep) || rightPath.startsWith(leftPath + path20.sep);
 }
 function normalizeExecutionPath(value) {
-  const resolved = path19.resolve(value).replace(/[\\/]+$/u, "");
+  const resolved = path20.resolve(value).replace(/[\\/]+$/u, "");
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 function queueKey(taskId, attempt) {
@@ -11572,8 +12372,8 @@ async function boundedObservationProbe(probe, pid, identity) {
 function canonicalJson3(value) {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(canonicalJson3).join(",")}]`;
-  const record4 = value;
-  return `{${Object.keys(record4).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson3(record4[key])}`).join(",")}}`;
+  const record5 = value;
+  return `{${Object.keys(record5).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson3(record5[key])}`).join(",")}}`;
 }
 function asRecord5(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new TaskManagerError("TASK_STATE", "invalid SQLite lifecycle projection");
@@ -12369,7 +13169,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
 
 // src/mcp/main.ts
 import { realpathSync as realpathSync7 } from "node:fs";
-import path21 from "node:path";
+import path22 from "node:path";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
 
 // node_modules/@modelcontextprotocol/server/dist/chunk-Br0eD_fh.mjs
@@ -12665,10 +13465,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path22) {
-  if (!path22)
+function getElementAtPath(obj, path23) {
+  if (!path23)
     return obj;
-  return path22.reduce((acc, key) => acc?.[key], obj);
+  return path23.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -13008,11 +13808,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path22, issues) {
+function prefixIssues(path23, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path22);
+    iss.path.unshift(path23);
     return iss;
   });
 }
@@ -13461,16 +14261,16 @@ function flattenError(error2, mapper = (issue2) => issue2.message) {
 }
 function formatError(error2, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error3, path22 = []) => {
+  const processError = (error3, path23 = []) => {
     for (const issue2 of error3.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path22, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path23, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path22, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path23, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path22, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path23, ...issue2.path]);
       } else {
-        const fullpath = [...path22, ...issue2.path];
+        const fullpath = [...path23, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -13794,7 +14594,7 @@ var $ZodCheckNumberFormat = /* @__PURE__ */ $constructor("$ZodCheckNumberFormat"
   def.format = def.format || "float64";
   const isInt = def.format?.includes("int");
   const origin = isInt ? "int" : "number";
-  const [minimum, maximum] = NUMBER_FORMAT_RANGES[def.format];
+  const [minimum, maximum2] = NUMBER_FORMAT_RANGES[def.format];
   inst._zod.check = (payload) => {
     const input = payload.value;
     if (isInt) {
@@ -13847,12 +14647,12 @@ var $ZodCheckNumberFormat = /* @__PURE__ */ $constructor("$ZodCheckNumberFormat"
         continue: !def.abort
       });
     }
-    if (input > maximum) {
+    if (input > maximum2) {
       payload.issues.push({
         origin: "number",
         input,
         code: "too_big",
-        maximum,
+        maximum: maximum2,
         inclusive: true,
         inst,
         continue: !def.abort
@@ -16636,11 +17436,11 @@ function _multipleOf(value, params) {
   });
 }
 // @__NO_SIDE_EFFECTS__
-function _maxLength(maximum, params) {
+function _maxLength(maximum2, params) {
   const ch = new $ZodCheckMaxLength({
     check: "max_length",
     ...normalizeParams(params),
-    maximum
+    maximum: maximum2
   });
   return ch;
 }
@@ -17356,9 +18156,9 @@ var minContributor = (agg, def) => narrowMin(agg, "minimum", def.minimum);
 var maxContributor = (agg, def) => narrowMax(agg, "maximum", def.maximum);
 var formatContributor = (ranges) => (agg, def) => {
   setFormat(agg, def.format);
-  const [minimum, maximum] = ranges[def.format];
+  const [minimum, maximum2] = ranges[def.format];
   narrowMin(agg, "minimum", minimum);
-  narrowMax(agg, "maximum", maximum);
+  narrowMax(agg, "maximum", maximum2);
 };
 var contributors = {
   greater_than: (agg, def) => narrowMin(agg, def.inclusive ? "minimum" : "exclusiveMinimum", def.value),
@@ -17427,11 +18227,11 @@ var exactPattern = (p) => exactPatterns.get(p) ?? p;
 var stringProcessor = (schema, ctx, _json, _params) => {
   const json = _json;
   json.type = "string";
-  const { minimum, maximum, format, patterns, contentEncoding, laxFormat } = aggregateChecks(schema);
+  const { minimum, maximum: maximum2, format, patterns, contentEncoding, laxFormat } = aggregateChecks(schema);
   if (typeof minimum === "number")
     json.minLength = minimum;
-  if (typeof maximum === "number")
-    json.maxLength = maximum;
+  if (typeof maximum2 === "number")
+    json.maxLength = maximum2;
   if (format) {
     json.format = formatMap[format] ?? format;
     if (json.format === "")
@@ -17458,10 +18258,10 @@ var stringProcessor = (schema, ctx, _json, _params) => {
 };
 var numberProcessor = (schema, ctx, _json, params) => {
   const json = _json;
-  const { minimum, maximum, multipleOf, exclusiveMaximum, exclusiveMinimum, isInt } = aggregateChecks(schema);
+  const { minimum, maximum: maximum2, multipleOf, exclusiveMaximum, exclusiveMinimum, isInt } = aggregateChecks(schema);
   json.type = isInt ? "integer" : "number";
   const exMin = typeof exclusiveMinimum === "number" && exclusiveMinimum >= (minimum ?? Number.NEGATIVE_INFINITY);
-  const exMax = typeof exclusiveMaximum === "number" && exclusiveMaximum <= (maximum ?? Number.POSITIVE_INFINITY);
+  const exMax = typeof exclusiveMaximum === "number" && exclusiveMaximum <= (maximum2 ?? Number.POSITIVE_INFINITY);
   const legacy = ctx.target === "draft-04" || ctx.target === "openapi-3.0";
   if (exMin) {
     if (legacy) {
@@ -17480,8 +18280,8 @@ var numberProcessor = (schema, ctx, _json, params) => {
     } else {
       json.exclusiveMaximum = exclusiveMaximum;
     }
-  } else if (typeof maximum === "number") {
-    json.maximum = maximum;
+  } else if (typeof maximum2 === "number") {
+    json.maximum = maximum2;
   }
   if (multipleOf) {
     const divisors = /* @__PURE__ */ new Set();
@@ -17601,11 +18401,11 @@ var fileProcessor = (schema, _ctx, json, _params) => {
   _json.type = "string";
   _json.format = "binary";
   _json.contentEncoding = "binary";
-  const { minimum, maximum, mime } = aggregateChecks(schema);
+  const { minimum, maximum: maximum2, mime } = aggregateChecks(schema);
   if (minimum !== void 0)
     _json.minLength = minimum;
-  if (maximum !== void 0)
-    _json.maxLength = maximum;
+  if (maximum2 !== void 0)
+    _json.maxLength = maximum2;
   if (!mime)
     return;
   if (mime.length === 0)
@@ -17636,11 +18436,11 @@ var setProcessor = (schema, ctx, json, params) => {
 var arrayProcessor = (schema, ctx, _json, params) => {
   const json = _json;
   const def = schema._zod.def;
-  const { minimum, maximum } = aggregateChecks(schema);
+  const { minimum, maximum: maximum2 } = aggregateChecks(schema);
   if (typeof minimum === "number")
     json.minItems = minimum;
-  if (typeof maximum === "number")
-    json.maxItems = maximum;
+  if (typeof maximum2 === "number")
+    json.maxItems = maximum2;
   json.type = "array";
   json.items = processSchema(def.element, ctx, {
     ...params,
@@ -17784,11 +18584,11 @@ var tupleProcessor = (schema, ctx, _json, params) => {
     if (isClosed)
       json.maxItems = maxItems;
   }
-  const { minimum, maximum } = aggregateChecks(schema);
+  const { minimum, maximum: maximum2 } = aggregateChecks(schema);
   if (typeof minimum === "number")
     json.minItems = minimum;
-  if (typeof maximum === "number")
-    json.maxItems = maximum;
+  if (typeof maximum2 === "number")
+    json.maxItems = maximum2;
 };
 function stringifyKeyNames(bySchema, json, visited) {
   if (json.$ref) {
@@ -17814,7 +18614,7 @@ function stringifyKeyNames(bySchema, json, visited) {
   const values = json.enum ?? (json.const !== void 0 ? [json.const] : void 0);
   if (!numericType && !values?.some((v) => typeof v === "number"))
     return json;
-  const { minimum, maximum, exclusiveMinimum, exclusiveMaximum, multipleOf, format, id, ...rest } = json;
+  const { minimum, maximum: maximum2, exclusiveMinimum, exclusiveMaximum, multipleOf, format, id, ...rest } = json;
   if (rest.enum)
     rest.enum = rest.enum.map((v) => typeof v === "number" ? String(v) : v);
   else if (typeof rest.const === "number")
@@ -17834,8 +18634,8 @@ function rewriteKeyNames(ctx) {
       bySchema.set(entry.schema, entry);
   }
   const rewrites = /* @__PURE__ */ new Map();
-  for (const record4 of pendingRecords.get(ctx) ?? []) {
-    const seen = ctx.seen.get(record4);
+  for (const record5 of pendingRecords.get(ctx) ?? []) {
+    const seen = ctx.seen.get(record5);
     const names = (seen?.def ?? seen?.schema)?.propertyNames;
     if (!names || names === true || rewrites.has(names))
       continue;
@@ -18574,8 +19374,8 @@ var ZodNumber = /* @__PURE__ */ $constructor(
       return Math.max(minimum ?? Number.NEGATIVE_INFINITY, exclusiveMinimum ?? Number.NEGATIVE_INFINITY);
     },
     maxValue: (inst) => {
-      const { maximum, exclusiveMaximum } = aggregateChecks(inst);
-      return Math.min(maximum ?? Number.POSITIVE_INFINITY, exclusiveMaximum ?? Number.POSITIVE_INFINITY);
+      const { maximum: maximum2, exclusiveMaximum } = aggregateChecks(inst);
+      return Math.min(maximum2 ?? Number.POSITIVE_INFINITY, exclusiveMaximum ?? Number.POSITIVE_INFINITY);
     },
     isInt: (inst) => {
       const { isInt, multipleOf } = aggregateChecks(inst);
@@ -18742,8 +19542,8 @@ var ZodDate = /* @__PURE__ */ $constructor(
       return minimum ? new Date(minimum) : null;
     },
     maxDate: (inst) => {
-      const { maximum } = aggregateChecks(inst);
-      return maximum ? new Date(maximum) : null;
+      const { maximum: maximum2 } = aggregateChecks(inst);
+      return maximum2 ? new Date(maximum2) : null;
     }
   }, {})
 );
@@ -22813,9 +23613,9 @@ var rev2026Codec = {
     });
     const parsed = buildSchemas2026().RequestMetaEnvelopeSchema.safeParse(meta2);
     if (!parsed.success) for (const issue2 of parsed.error.issues) {
-      const path22 = issue2.path.map(String);
-      const key = path22.length > 0 ? path22.join(".") : "_meta";
-      if (path22.length === 1 && issues.some((existing) => existing.key === key && existing.problem === "missing")) continue;
+      const path23 = issue2.path.map(String);
+      const key = path23.length > 0 ? path23.join(".") : "_meta";
+      if (path23.length === 1 && issues.some((existing) => existing.key === key && existing.problem === "missing")) continue;
       issues.push({
         key,
         problem: issue2.message
@@ -23136,29 +23936,29 @@ var PERMITTED_X_MCP_HEADER_TYPES = /* @__PURE__ */ new Set([
 function scanXMcpHeaderDeclarations(inputSchema) {
   const declarations = [];
   const seenLower = /* @__PURE__ */ new Map();
-  const visit = (node2, path22, reachable) => {
+  const visit = (node2, path23, reachable) => {
     if (node2 === null || typeof node2 !== "object") return void 0;
     const schema = node2;
     if (X_MCP_HEADER_KEY in schema) {
-      if (!reachable || path22.length === 0) return `${pathName(path22)}: x-mcp-header is only permitted on properties statically reachable via a chain of 'properties' keys (not under items, additionalProperties, oneOf/anyOf/allOf/not, if/then/else, or $ref)`;
+      if (!reachable || path23.length === 0) return `${pathName(path23)}: x-mcp-header is only permitted on properties statically reachable via a chain of 'properties' keys (not under items, additionalProperties, oneOf/anyOf/allOf/not, if/then/else, or $ref)`;
       const raw = schema[X_MCP_HEADER_KEY];
-      if (typeof raw !== "string" || raw.length === 0) return `${pathName(path22)}: x-mcp-header MUST be a non-empty string`;
-      if (!RFC9110_TOKEN.test(raw)) return `${pathName(path22)}: x-mcp-header '${raw}' is not a valid RFC 9110 token (no spaces, control characters or HTTP delimiters)`;
+      if (typeof raw !== "string" || raw.length === 0) return `${pathName(path23)}: x-mcp-header MUST be a non-empty string`;
+      if (!RFC9110_TOKEN.test(raw)) return `${pathName(path23)}: x-mcp-header '${raw}' is not a valid RFC 9110 token (no spaces, control characters or HTTP delimiters)`;
       const type = typeof schema.type === "string" ? schema.type : void 0;
-      if (type === void 0 || !PERMITTED_X_MCP_HEADER_TYPES.has(type)) return `${pathName(path22)}: x-mcp-header is only permitted on primitive-typed properties (string, integer, boolean); got ${type ?? "<none>"}`;
+      if (type === void 0 || !PERMITTED_X_MCP_HEADER_TYPES.has(type)) return `${pathName(path23)}: x-mcp-header is only permitted on primitive-typed properties (string, integer, boolean); got ${type ?? "<none>"}`;
       const lower = raw.toLowerCase();
       const prior = seenLower.get(lower);
       if (prior !== void 0) return `x-mcp-header '${raw}' is not case-insensitively unique (also declared as '${prior}')`;
       seenLower.set(lower, raw);
       declarations.push({
-        path: path22,
+        path: path23,
         headerName: raw,
         type
       });
     }
     const properties = schema.properties;
     if (properties !== null && typeof properties === "object") for (const [key, child] of Object.entries(properties)) {
-      const fault$1 = visit(child, [...path22, key], reachable);
+      const fault$1 = visit(child, [...path23, key], reachable);
       if (fault$1 !== void 0) return fault$1;
     }
     for (const k of NON_REACHABLE_SUBSCHEMA_KEYWORDS) {
@@ -23166,7 +23966,7 @@ function scanXMcpHeaderDeclarations(inputSchema) {
       if (sub === void 0) continue;
       const branches = Array.isArray(sub) ? sub : sub !== null && typeof sub === "object" && OBJECT_VALUED_SUBSCHEMA_KEYWORDS.has(k) ? Object.values(sub) : [sub];
       for (const branch of branches) {
-        const fault$1 = visit(branch, [...path22, `<${k}>`], false);
+        const fault$1 = visit(branch, [...path23, `<${k}>`], false);
         if (fault$1 !== void 0) return fault$1;
       }
     }
@@ -23206,8 +24006,8 @@ var OBJECT_VALUED_SUBSCHEMA_KEYWORDS = /* @__PURE__ */ new Set([
   "$defs",
   "definitions"
 ]);
-function pathName(path22) {
-  return path22.length === 0 ? "<root>" : path22.join(".");
+function pathName(path23) {
+  return path23.length === 0 ? "<root>" : path23.join(".");
 }
 var HEADER_MISMATCH_ERROR_CODE = -32020;
 var INBOUND_VALIDATION_LADDER = [
@@ -23496,7 +24296,7 @@ var PROPERTY_KEYS_BY_TYPE = {
   array: shapeKeys([UntitledMultiSelectEnumSchemaSchema, TitledMultiSelectEnumSchemaSchema])
 };
 var SUPPORTED_STRING_FORMATS = new Set(StringSchemaSchema.shape.format.unwrap().options);
-function walkProperty(node2, path22, vendor, unsupported) {
+function walkProperty(node2, path23, vendor, unsupported) {
   if (!isJsonObject(node2)) return node2;
   const allowedKeys = typeof node2.type === "string" && Object.hasOwn(PROPERTY_KEYS_BY_TYPE, node2.type) ? PROPERTY_KEYS_BY_TYPE[node2.type] : void 0;
   if (allowedKeys === void 0) return node2;
@@ -23504,8 +24304,8 @@ function walkProperty(node2, path22, vendor, unsupported) {
   for (const [key, value] of Object.entries(node2)) if (allowedKeys.has(key) || isAnnotationOnlyJsonSchemaKeyword(key)) pruned[key] = value;
   else if (key === "pattern" && node2.type === "string" && typeof node2.format === "string") {
     if (!SUPPORTED_STRING_FORMATS.has(node2.format)) pruned[key] = value;
-    else if (typeof value !== "string" || !isLibraryFormatPattern(node2.format, value, vendor)) unsupported.push(`${path22}.${key}`);
-  } else unsupported.push(`${path22}.${key}`);
+    else if (typeof value !== "string" || !isLibraryFormatPattern(node2.format, value, vendor)) unsupported.push(`${path23}.${key}`);
+  } else unsupported.push(`${path23}.${key}`);
   return pruned;
 }
 function walkRequestedSchema(converted, vendor) {
@@ -23522,11 +24322,11 @@ function describeUnsupportedProperties(pruned, fallback) {
   const offenders = Object.entries(pruned.properties).filter(([, node2]) => !parseSchema(PrimitiveSchemaDefinitionSchema, node2).success).map(([name]) => `properties.${name}`);
   return offenders.length > 0 ? offenders.join(", ") : fallback;
 }
-function findDroppedConstraintPaths(original, parsed, path22 = "") {
-  if (Array.isArray(original) && Array.isArray(parsed)) return original.flatMap((item, index) => findDroppedConstraintPaths(item, parsed[index], `${path22}[${index}]`));
+function findDroppedConstraintPaths(original, parsed, path23 = "") {
+  if (Array.isArray(original) && Array.isArray(parsed)) return original.flatMap((item, index) => findDroppedConstraintPaths(item, parsed[index], `${path23}[${index}]`));
   if (!isJsonObject(original) || !isJsonObject(parsed)) return [];
   return Object.entries(original).flatMap(([key, value]) => {
-    const childPath = path22 ? `${path22}.${key}` : key;
+    const childPath = path23 ? `${path23}.${key}` : key;
     if (!Object.prototype.hasOwnProperty.call(parsed, key)) return isAnnotationOnlyJsonSchemaKeyword(key) ? [] : [childPath];
     return findDroppedConstraintPaths(value, parsed[key], childPath);
   });
@@ -27605,8 +28405,8 @@ var require_utils = /* @__PURE__ */ __commonJSMin(((exports, module) => {
     for (let i = 0; i < str.length; i++) if (str[i] === token) ind++;
     return ind;
   }
-  function removeDotSegments(path22) {
-    let input = path22;
+  function removeDotSegments(path23) {
+    let input = path23;
     const output = [];
     let nextSlash = -1;
     let len = 0;
@@ -27759,8 +28559,8 @@ var require_schemes = /* @__PURE__ */ __commonJSMin(((exports, module) => {
       wsComponent.secure = void 0;
     }
     if (wsComponent.resourceName) {
-      const [path22, query] = wsComponent.resourceName.split("?");
-      wsComponent.path = path22 && path22 !== "/" ? path22 : void 0;
+      const [path23, query] = wsComponent.resourceName.split("?");
+      wsComponent.path = path23 && path23 !== "/" ? path23 : void 0;
       wsComponent.query = query;
       wsComponent.resourceName = void 0;
     }
@@ -33900,7 +34700,7 @@ function toError(value) {
 
 // src/host/stdio.ts
 import { homedir as homedir4 } from "node:os";
-import path20 from "node:path";
+import path21 from "node:path";
 
 // src/runtime/resolver.ts
 import { accessSync, existsSync as existsSync2, readFileSync as readFileSync2, statSync } from "node:fs";
@@ -34126,6 +34926,7 @@ var NodeRuntimeResolver = class {
       zcodeEntrypoint,
       providerBuiltinConfigFile: builtinConfigFile,
       providerPersonalConfigFile: personalConfigFile,
+      zcodeDataRoot: data.zcodeDataDir,
       dataRoot
     };
   }
@@ -35523,11 +36324,11 @@ var BridgeTaskManager = class _BridgeTaskManager {
       if (status.status !== "running") {
         throw new TaskManagerError("TASK_STATE", `ZCode interaction can only be answered while the task is running (status: ${status.status})`);
       }
-      let record4;
+      let record5;
       try {
         const read = this.#store.readInteractionRequest(input.task_id, input.request_id);
         if (!read) throw new TaskManagerError("TASK_NOT_FOUND", `unknown ZCode interaction request: ${input.request_id}`);
-        record4 = read;
+        record5 = read;
       } catch (error2) {
         if (error2 instanceof TaskManagerError) throw error2;
         throw new TaskManagerError(
@@ -35535,10 +36336,10 @@ var BridgeTaskManager = class _BridgeTaskManager {
           `ZCode interaction request ${input.request_id} could not be read: the persisted full request is unreadable or corrupt`
         );
       }
-      if (record4.state === "answered") {
+      if (record5.state === "answered") {
         throw new TaskManagerError("TASK_STATE", `ZCode interaction request ${input.request_id} was already answered`);
       }
-      const answer = buildInteractionAnswer(record4, input);
+      const answer = buildInteractionAnswer(record5, input);
       const answered = input.decision === "allow" || input.decision === "accept" ? this.#store.answerInteractionRequestVerified(input.task_id, input.request_id, answer, { requireIntegrity: true }, this.#now().toISOString()) : { state: this.#store.answerInteractionRequest(input.task_id, input.request_id, answer, this.#now().toISOString()) };
       if (answered.state === "already_answered") {
         throw new TaskManagerError("TASK_STATE", `ZCode interaction request ${input.request_id} was already answered`);
@@ -35551,7 +36352,7 @@ var BridgeTaskManager = class _BridgeTaskManager {
       }
       this.#store.appendEvent(input.task_id, "interaction_reply_submitted", "the calling host submitted a response to the ZCode interaction", {
         request_id: input.request_id,
-        method: record4.method,
+        method: record5.method,
         decision: input.decision
       }, this.#now().toISOString());
       return { task_id: input.task_id, request_id: input.request_id, state: "answered" };
@@ -36200,9 +37001,9 @@ function stableJson2(value) {
   if (value && typeof value === "object") return `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${stableJson2(item)}`).join(",")}}`;
   return JSON.stringify(value);
 }
-function buildInteractionAnswer(record4, input) {
-  const params = record4.params;
-  if (record4.method === "interaction/requestPermission") {
+function buildInteractionAnswer(record5, input) {
+  const params = record5.params;
+  if (record5.method === "interaction/requestPermission") {
     if (input.decision !== "allow" && input.decision !== "deny") {
       throw new TaskManagerError("TASK_INVALID", "permission requests require decision allow or deny");
     }
@@ -37043,7 +37844,7 @@ function formatDuration(durationMs2) {
 
 // src/mcp/server.ts
 var SERVER_NAME = "codex-zcode-bridge";
-var SERVER_VERSION = "1.6.0-prereview.1"; // x-release-please-version
+var SERVER_VERSION = "1.6.0-prereview.2"; // x-release-please-version
 var EXECUTION_NOT_VERDICT = "Results describe Bridge/ZCode execution only: status 'completed' means the invocation and report normalization finished, NOT that the calling host accepted the work. the calling host must independently review the workspace diff and checks before deciding PASS.";
 function okResult2(data) {
   return {
@@ -38210,8 +39011,8 @@ function toModelRef(value) {
   const ref = asRecord3(value);
   return typeof ref.providerId === "string" && typeof ref.modelId === "string" ? { provider_id: ref.providerId, model_id: ref.modelId } : null;
 }
-function nestedString(record4, keys) {
-  let value = record4;
+function nestedString(record5, keys) {
+  let value = record5;
   for (const key of keys) value = asRecord3(value)[key];
   return typeof value === "string" ? value : null;
 }
@@ -38453,13 +39254,13 @@ function createTrustedLocalCandidateContext(host) {
 function resolveDataRoot(env) {
   const override = env["ZCODE_BRIDGE_DATA_DIR"]?.trim();
   if (override) {
-    if (!path20.isAbsolute(override)) {
+    if (!path21.isAbsolute(override)) {
       return {
         dataRoot: findPackageRoot(),
         warning: `ZCODE_BRIDGE_DATA_DIR must be an absolute path; ignoring ${override} and using the Bridge installation directory`
       };
     }
-    return { dataRoot: path20.normalize(override) };
+    return { dataRoot: path21.normalize(override) };
   }
   return { dataRoot: findPackageRoot() };
 }
@@ -38553,7 +39354,30 @@ async function startBridge(host = codexHostProfile(), version2 = SERVER_VERSION,
   const processProbe = createPlatformProbe();
   let manager;
   let lifecycleChecks;
-  const databasePath = path20.join(dataRoot, FRESH_SQLITE_DATABASE_FILE);
+  const databasePath = path21.join(dataRoot, FRESH_SQLITE_DATABASE_FILE);
+  const startPlanAuthController = new AbortController();
+  let startPlanPrivateAuth;
+  if (process.platform === "win32") {
+    try {
+      const { readOfficialStartPlanCredential: readOfficialStartPlanCredential2, createProductionStartPlanAuth: createProductionStartPlanAuth2, StartPlanBillingEntitlement: StartPlanBillingEntitlement2, readOfficialCliVersion: readOfficialCliVersion2 } = await Promise.resolve().then(() => (init_start_plan_production_auth(), start_plan_production_auth_exports));
+      const officialRuntime = await new NodeRuntimeResolver({ env: runtimeEnv, homeDir: homedir4(), host }).resolve();
+      if (readOfficialStartPlanCredential2(officialRuntime.zcodeDataRoot)) {
+        let cachedCliVersion;
+        startPlanPrivateAuth = createProductionStartPlanAuth2({
+          zcodeDataRoot: officialRuntime.zcodeDataRoot,
+          signal: startPlanAuthController.signal,
+          entitlement: new StartPlanBillingEntitlement2({
+            getAppVersion: async () => {
+              cachedCliVersion ??= readOfficialCliVersion2(officialRuntime.zcodeEntrypoint);
+              return await cachedCliVersion;
+            }
+          })
+        }) ?? void 0;
+      }
+    } catch (error2) {
+      console.error(`[bridge] start plan auth issuer unavailable: ${error2 instanceof Error ? error2.message : String(error2)}`);
+    }
+  }
   let trustedLocalContext;
   try {
     trustedLocalContext = createTrustedLocalCandidateContext(host);
@@ -38572,7 +39396,8 @@ async function startBridge(host = codexHostProfile(), version2 = SERVER_VERSION,
       bridgeEntryPath: bridgeEntryPath ?? "",
       processProbe,
       trustedLocalContext,
-      requireAuthorityReceipt: true
+      requireAuthorityReceipt: true,
+      ...startPlanPrivateAuth ? { startPlanPrivateAuth } : {}
     });
     manager = new BridgeTaskManager({ lifecycleAuthority: authority, maxConcurrentWorkers: workerLimit.maxConcurrentWorkers });
     lifecycleChecks = () => authority.getDoctorChecks();
@@ -38594,6 +39419,7 @@ async function startBridge(host = codexHostProfile(), version2 = SERVER_VERSION,
       console.error(`[bridge] ${reason} shutdown retained the lifecycle Root because cleanup was not verified: ${error2 instanceof Error ? error2.message : String(error2)}`);
     },
     onShutdownComplete: (reason) => {
+      startPlanAuthController.abort();
       if (reason !== "EOF") process.exit(0);
     }
   });
@@ -38612,7 +39438,7 @@ var isEntry = process.argv[1] !== void 0 && sameRealPath(import.meta.url, proces
 function sameRealPath(moduleUrl, argvPath) {
   try {
     const modulePath = realpathSync7(fileURLToPath5(moduleUrl));
-    const entryPath = realpathSync7(path21.resolve(argvPath));
+    const entryPath = realpathSync7(path22.resolve(argvPath));
     return process.platform === "win32" ? modulePath.toLocaleLowerCase("en-US") === entryPath.toLocaleLowerCase("en-US") : modulePath === entryPath;
   } catch {
     return false;

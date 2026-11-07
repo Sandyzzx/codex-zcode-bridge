@@ -404,6 +404,7 @@ input.on("line", (line) => {
       zcodeEntrypoint: entrypoint,
       providerBuiltinConfigFile: path.join(root, "builtin.json"),
       providerPersonalConfigFile: path.join(root, "personal.json"),
+      zcodeDataRoot: path.join(root, "zcode-data"),
       dataRoot: root,
     },
     cleanup: () => rmSync(root, { recursive: true, force: true }),

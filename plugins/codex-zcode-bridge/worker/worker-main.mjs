@@ -667,37 +667,37 @@ function validateFailureFacts(value) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error("failure facts must be a JSON object");
   }
-  const record2 = value;
-  for (const key of Object.keys(record2)) {
+  const record3 = value;
+  for (const key of Object.keys(record3)) {
     if (!FACTS_KEYS.has(key)) throw new Error("failure facts has an unknown field");
   }
   for (const key of FACTS_KEYS) {
-    if (!(key in record2)) throw new Error(`failure facts is missing the field: ${key}`);
+    if (!(key in record3)) throw new Error(`failure facts is missing the field: ${key}`);
   }
-  if (record2["schema_version"] !== "1") throw new Error('failure facts schema_version must be "1"');
-  if (!FAILURE_SOURCES.includes(record2["source"])) {
+  if (record3["schema_version"] !== "1") throw new Error('failure facts schema_version must be "1"');
+  if (!FAILURE_SOURCES.includes(record3["source"])) {
     throw new Error("failure facts source is not in the frozen registry");
   }
-  if (!FAILURE_PHASE_SET.has(record2["phase"])) {
+  if (!FAILURE_PHASE_SET.has(record3["phase"])) {
     throw new Error("failure facts phase is not in the frozen registry");
   }
-  if (!ACCEPTED_STATES.includes(record2["accepted_before_error"])) {
+  if (!ACCEPTED_STATES.includes(record3["accepted_before_error"])) {
     throw new Error("failure facts accepted_before_error must be yes, no, or unknown");
   }
-  if (!FAILURE_CATEGORIES.includes(record2["category"])) {
+  if (!FAILURE_CATEGORIES.includes(record3["category"])) {
     throw new Error("failure facts category is not in the frozen registry");
   }
-  if (!CONFIDENCE_LEVELS.includes(record2["confidence"])) {
+  if (!CONFIDENCE_LEVELS.includes(record3["confidence"])) {
     throw new Error("failure facts confidence is not in the frozen registry");
   }
-  if (!EVIDENCE_BASES.includes(record2["evidence_basis"])) {
+  if (!EVIDENCE_BASES.includes(record3["evidence_basis"])) {
     throw new Error("failure facts evidence_basis is not in the frozen registry");
   }
-  if (typeof record2["evidence_conflict"] !== "boolean") {
+  if (typeof record3["evidence_conflict"] !== "boolean") {
     throw new Error("failure facts evidence_conflict must be a boolean");
   }
-  const retryable2 = record2["runtime_retryable"];
-  const retryableBasis = record2["runtime_retryable_basis"];
+  const retryable2 = record3["runtime_retryable"];
+  const retryableBasis = record3["runtime_retryable_basis"];
   if (retryable2 !== null && typeof retryable2 !== "boolean") {
     throw new Error("failure facts runtime_retryable must be a boolean or null");
   }
@@ -719,7 +719,7 @@ function validateFailureFacts(value) {
     ["result_type", RESULT_TYPE_REGISTRY]
   ];
   for (const [key, registry2] of codeFields) {
-    const item = record2[key];
+    const item = record3[key];
     if (item === null) continue;
     if (key !== "rpc_method" && (typeof item !== "string" || !CODE_PATTERN.test(item))) {
       throw new Error(`failure facts field ${key} is not a bounded code value`);
@@ -728,16 +728,16 @@ function validateFailureFacts(value) {
       throw new Error(`failure facts field ${key} is not a registered value`);
     }
   }
-  if (record2["rpc_code"] !== null && safeIntegerOrNull(record2["rpc_code"]) === null) {
+  if (record3["rpc_code"] !== null && safeIntegerOrNull(record3["rpc_code"]) === null) {
     throw new Error("failure facts rpc_code must be a safe integer or null");
   }
-  if (record2["http_status"] !== null && httpStatusOrNull(record2["http_status"]) === null) {
+  if (record3["http_status"] !== null && httpStatusOrNull(record3["http_status"]) === null) {
     throw new Error("failure facts http_status must be an integer in 100..599 or null");
   }
-  if (record2["process_errno"] !== null && !PROCESS_ERRNOS.includes(record2["process_errno"])) {
+  if (record3["process_errno"] !== null && !PROCESS_ERRNOS.includes(record3["process_errno"])) {
     throw new Error("failure facts process_errno must be ENOENT, EACCES, EPERM, or null");
   }
-  const bytes = Buffer.byteLength(JSON.stringify(record2), "utf8");
+  const bytes = Buffer.byteLength(JSON.stringify(record3), "utf8");
   if (bytes > MAX_FAILURE_FACTS_BYTES) {
     throw new Error(`failure facts snapshot exceeds the ${MAX_FAILURE_FACTS_BYTES}-byte limit (${bytes} bytes)`);
   }
@@ -1488,9 +1488,9 @@ var init_task_store = __esm({
         let newest = null;
         for (const file2 of files) {
           try {
-            const record2 = JSON.parse(readFileSync3(path5.join(directory, file2), "utf8"));
-            if (record2.state === "pending" && typeof record2.method === "string" && typeof record2.created_at === "string") {
-              if (!newest || record2.created_at > newest.created_at) newest = { method: record2.method, created_at: record2.created_at };
+            const record3 = JSON.parse(readFileSync3(path5.join(directory, file2), "utf8"));
+            if (record3.state === "pending" && typeof record3.method === "string" && typeof record3.created_at === "string") {
+              if (!newest || record3.created_at > newest.created_at) newest = { method: record3.method, created_at: record3.created_at };
             }
           } catch {
           }
@@ -2011,35 +2011,35 @@ var init_task_store = __esm({
           const file2 = this.interactionFile(taskId, request.request_id);
           return withEventLock(path5.join(this.taskDir(taskId), "interactions.lock"), () => {
             if (existsSync3(file2)) {
-              const record3 = this.#readJson(file2);
-              if (record3.request_id !== request.request_id || record3.method !== request.method || stableJson(record3.params) !== stableJson(request.params)) {
+              const record4 = this.#readJson(file2);
+              if (record4.request_id !== request.request_id || record4.method !== request.method || stableJson(record4.params) !== stableJson(request.params)) {
                 throw new Error("interaction request id collision");
               }
-              return { record: record3, created: false };
+              return { record: record4, created: false };
             }
             const serialized = JSON.stringify(request.params);
             const bytes = Buffer.byteLength(serialized, "utf8");
             if (bytes > MAX_INTERACTION_PARAMS_BYTES) {
               throw new InteractionRequestTooLargeError(bytes, MAX_INTERACTION_PARAMS_BYTES);
             }
-            const record2 = {
+            const record3 = {
               ...request,
               state: "pending",
               created_at: createdAt,
               params_bytes: bytes,
               params_sha256: createHash2("sha256").update(serialized).digest("hex")
             };
-            this.#writeJsonAtomic(file2, record2);
-            return { record: record2, created: true };
+            this.#writeJsonAtomic(file2, record3);
+            return { record: record3, created: true };
           });
         }, taskId);
       }
       readInteractionRequest(taskId, requestId) {
         const file2 = this.interactionFile(taskId, requestId);
         if (!existsSync3(file2)) return null;
-        const record2 = this.#readJson(file2);
-        if (record2.request_id !== requestId) throw new Error("interaction request id hash mismatch");
-        return record2;
+        const record3 = this.#readJson(file2);
+        if (record3.request_id !== requestId) throw new Error("interaction request id hash mismatch");
+        return record3;
       }
       /** Absolute path of one attempt's private full-request record; referenced
        * by bounded interaction_requested preview events (ADR-008). */
@@ -2061,16 +2061,16 @@ var init_task_store = __esm({
         const file2 = this.interactionFile(taskId, requestId);
         try {
           if (!existsSync3(file2)) return { ok: false, reason: "the full request record is missing" };
-          const record2 = this.#readJson(file2);
-          if (record2.request_id !== requestId) return { ok: false, reason: "the persisted request id does not match this request" };
-          if (record2.state !== "pending" && record2.state !== "answered") return { ok: false, reason: "the persisted request state is unreadable" };
-          const serialized = JSON.stringify(record2.params);
+          const record3 = this.#readJson(file2);
+          if (record3.request_id !== requestId) return { ok: false, reason: "the persisted request id does not match this request" };
+          if (record3.state !== "pending" && record3.state !== "answered") return { ok: false, reason: "the persisted request state is unreadable" };
+          const serialized = JSON.stringify(record3.params);
           const bytes = Buffer.byteLength(serialized, "utf8");
           if (bytes > MAX_INTERACTION_PARAMS_BYTES) {
             return { ok: false, reason: `the full request content is ${bytes} UTF-8 bytes, over the ${MAX_INTERACTION_PARAMS_BYTES}-byte persistence limit` };
           }
-          const hasBytes = record2.params_bytes !== void 0;
-          const hasHash = record2.params_sha256 !== void 0;
+          const hasBytes = record3.params_bytes !== void 0;
+          const hasHash = record3.params_sha256 !== void 0;
           if (!hasBytes && !hasHash) {
             if (bytes <= LEGACY_INTERACTION_PARAMS_BYTES) return { ok: true };
             return { ok: false, reason: `the full request record carries no integrity metadata but is ${bytes} UTF-8 bytes, over the legacy ${LEGACY_INTERACTION_PARAMS_BYTES}-byte limit; it cannot be treated as a legacy record` };
@@ -2078,16 +2078,16 @@ var init_task_store = __esm({
           if (!hasBytes || !hasHash) {
             return { ok: false, reason: "the full request record has incomplete integrity metadata (byte count and SHA256 must both be present)" };
           }
-          if (typeof record2.params_bytes !== "number" || !Number.isSafeInteger(record2.params_bytes) || record2.params_bytes < 0) {
+          if (typeof record3.params_bytes !== "number" || !Number.isSafeInteger(record3.params_bytes) || record3.params_bytes < 0) {
             return { ok: false, reason: "the persisted byte count is not a valid non-negative integer" };
           }
-          if (typeof record2.params_sha256 !== "string" || !SHA256_HEX_PATTERN.test(record2.params_sha256)) {
+          if (typeof record3.params_sha256 !== "string" || !SHA256_HEX_PATTERN.test(record3.params_sha256)) {
             return { ok: false, reason: "the persisted SHA256 is not a valid 64-character hex digest" };
           }
-          if (record2.params_bytes !== bytes) {
+          if (record3.params_bytes !== bytes) {
             return { ok: false, reason: "the persisted byte count does not match the full content" };
           }
-          if (record2.params_sha256 !== createHash2("sha256").update(serialized).digest("hex")) {
+          if (record3.params_sha256 !== createHash2("sha256").update(serialized).digest("hex")) {
             return { ok: false, reason: "the persisted SHA256 does not match the full content" };
           }
           return { ok: true };
@@ -3487,6 +3487,7 @@ var init_resolver = __esm({
           zcodeEntrypoint,
           providerBuiltinConfigFile: builtinConfigFile,
           providerPersonalConfigFile: personalConfigFile,
+          zcodeDataRoot: data.zcodeDataDir,
           dataRoot
         };
       }
@@ -3821,8 +3822,8 @@ async function terminateWindowsProcessTree(pid, expectedRootTicks, killWaitMs, d
         }
       }
       const unconfirmedMembers = members2.filter((m) => {
-        const record2 = killed.get(m.pid);
-        return record2 === void 0 || record2.exitFileTime === null;
+        const record3 = killed.get(m.pid);
+        return record3 === void 0 || record3.exitFileTime === null;
       });
       if (now() >= deadline && unconfirmedMembers.length > 0) {
         throw new WindowsTreeCleanupError(
@@ -4125,6 +4126,14 @@ function windowsTreeTransactionScript() {
     "    Held.Clear();",
     '    return closed.ToString() + "|" + failed.ToString();',
     "  }",
+    "  public static string Alive(int pid) {",
+    "    IntPtr h;",
+    '    if (!Held.TryGetValue(pid, out h) || h == IntPtr.Zero) { return "not_held||"; }',
+    "    long c, e, k, u;",
+    '    if (!GetProcessTimes(h, out c, out e, out k, out u)) { return "error||" + Marshal.GetLastWin32Error().ToString(); }',
+    '    if (e != 0) { return "exited|" + e.ToString() + "|"; }',
+    '    return "alive|" + c.ToString() + "|";',
+    "  }",
     "}",
     "'@",
     "[Console]::Out.WriteLine('READY'); [Console]::Out.Flush()",
@@ -4167,6 +4176,12 @@ function windowsTreeTransactionScript() {
     "    elseif ($r[0] -eq 'not_held') { [Console]::Out.WriteLine(('K {0} not_held 0' -f $kpid)) }",
     "    else { [Console]::Out.WriteLine(('K {0} error {1}' -f $kpid, $r[1])) }",
     "    [Console]::Out.WriteLine('KILL_END'); [Console]::Out.Flush()",
+    "  } elseif ($parts[0] -eq 'alive') {",
+    "    $apid = [int]$parts[1]",
+    "    $r = [BridgeTreeTx]::Alive($apid).Split('|')",
+    "    if ($r[0] -eq 'alive' -or $r[0] -eq 'exited') { [Console]::Out.WriteLine(('A {0} {1} {2}' -f $apid, $r[0], $r[1])) }",
+    "    else { [Console]::Out.WriteLine(('A {0} {1} {2}' -f $apid, $r[0], $(if ([string]::IsNullOrEmpty($r[2])) { '0' } else { $r[2] }))) }",
+    "    [Console]::Out.WriteLine('ALIVE_END'); [Console]::Out.Flush()",
     "  } elseif ($parts[0] -eq 'close') {",
     "    $r = [BridgeTreeTx]::CloseAll().Split('|')",
     "    [Console]::Out.WriteLine(('CLOSED {0} {1}' -f $r[0], $r[1])); [Console]::Out.Flush()",
@@ -4413,6 +4428,23 @@ var init_windows_process_cleanup = __esm({
           detail: status === "identity_changed" ? value : void 0
         };
       }
+      async alive(pid) {
+        this.#child.stdin.write(`alive ${String(pid)}
+`);
+        const line = await this.#nextLine(1e4, "alive response");
+        const end = await this.#nextLine(5e3, "alive terminator");
+        if (end !== "ALIVE_END") throw new Error("process_tree_alive_invalid: terminator missing");
+        const match = /^A (\d{1,12}) (alive|exited|not_held|error) (\d{1,25})$/u.exec(line);
+        if (!match || Number(match[1]) !== pid) throw new Error("process_tree_alive_invalid: malformed response");
+        const status = match[2];
+        const value = match[3];
+        return {
+          status,
+          creationFileTime: status === "alive" ? value : null,
+          exitFileTime: status === "exited" ? value : null,
+          error: status === "not_held" || status === "error" ? Number(value) : void 0
+        };
+      }
       async close() {
         let failure2 = this.#failure;
         if (!failure2 && !this.#closed) {
@@ -4651,7 +4683,7 @@ var init_child_env = __esm({
 });
 
 // src/runtime/account-provider.ts
-import { createHash as createHash4 } from "node:crypto";
+import { createHash as createHash5 } from "node:crypto";
 import { existsSync as existsSync7, readFileSync as readFileSync7 } from "node:fs";
 import path9 from "node:path";
 function buildAccountProviderPayload(config2) {
@@ -4687,7 +4719,7 @@ function buildAccountProviderPayload(config2) {
   const resolvedBuiltinPath = path9.resolve(config2.providerBuiltinConfigFile);
   return {
     revision: `account:codex-zcode-bridge:${Date.now()}`,
-    basedOnZCodeBuiltinRevision: `zcode-builtin:${revision}:${createHash4("sha256").update(resolvedBuiltinPath).digest("hex")}`,
+    basedOnZCodeBuiltinRevision: `zcode-builtin:${revision}:${createHash5("sha256").update(resolvedBuiltinPath).digest("hex")}`,
     providers,
     states
   };
@@ -6665,7 +6697,7 @@ var init_checks = __esm({
       def.format = def.format || "float64";
       const isInt = def.format?.includes("int");
       const origin = isInt ? "int" : "number";
-      const [minimum, maximum] = NUMBER_FORMAT_RANGES[def.format];
+      const [minimum, maximum2] = NUMBER_FORMAT_RANGES[def.format];
       inst._zod.check = (payload) => {
         const input2 = payload.value;
         if (isInt) {
@@ -6718,12 +6750,12 @@ var init_checks = __esm({
             continue: !def.abort
           });
         }
-        if (input2 > maximum) {
+        if (input2 > maximum2) {
           payload.issues.push({
             origin: "number",
             input: input2,
             code: "too_big",
-            maximum,
+            maximum: maximum2,
             inclusive: true,
             inst,
             continue: !def.abort
@@ -6733,7 +6765,7 @@ var init_checks = __esm({
     });
     $ZodCheckBigIntFormat = /* @__PURE__ */ $constructor("$ZodCheckBigIntFormat", (inst, def) => {
       $ZodCheck.init(inst, def);
-      const [minimum, maximum] = BIGINT_FORMAT_RANGES[def.format];
+      const [minimum, maximum2] = BIGINT_FORMAT_RANGES[def.format];
       inst._zod.check = (payload) => {
         const input2 = payload.value;
         if (input2 < minimum) {
@@ -6747,12 +6779,12 @@ var init_checks = __esm({
             continue: !def.abort
           });
         }
-        if (input2 > maximum) {
+        if (input2 > maximum2) {
           payload.issues.push({
             origin: "bigint",
             input: input2,
             code: "too_big",
-            maximum,
+            maximum: maximum2,
             inclusive: true,
             inst,
             continue: !def.abort
@@ -7713,7 +7745,7 @@ function leafPattern(schema) {
   let pattern = def.pattern;
   let isInt = !!def.format?.includes("int");
   let minimum;
-  let maximum;
+  let maximum2;
   for (const ch of def.checks ?? []) {
     const d = ch._zod.def;
     if (d.pattern)
@@ -7723,15 +7755,15 @@ function leafPattern(schema) {
     const hi = d.maximum ?? d.length;
     if (lo !== void 0 && (minimum === void 0 || lo > minimum))
       minimum = lo;
-    if (hi !== void 0 && (maximum === void 0 || hi < maximum))
-      maximum = hi;
+    if (hi !== void 0 && (maximum2 === void 0 || hi < maximum2))
+      maximum2 = hi;
   }
   if (pattern)
     return pattern.source;
-  if (minimum !== void 0 && maximum !== void 0 && minimum > maximum)
+  if (minimum !== void 0 && maximum2 !== void 0 && minimum > maximum2)
     return "(?!)";
-  if (minimum !== void 0 || maximum !== void 0)
-    return string({ minimum, maximum }).source;
+  if (minimum !== void 0 || maximum2 !== void 0)
+    return string({ minimum, maximum: maximum2 }).source;
   const own2 = schema._zod.pattern;
   return (isInt && own2 === number ? integer : own2)?.source;
 }
@@ -20045,11 +20077,11 @@ function _multipleOf(value, params) {
   });
 }
 // @__NO_SIDE_EFFECTS__
-function _maxSize(maximum, params) {
+function _maxSize(maximum2, params) {
   return new $ZodCheckMaxSize({
     check: "max_size",
     ...normalizeParams(params),
-    maximum
+    maximum: maximum2
   });
 }
 // @__NO_SIDE_EFFECTS__
@@ -20069,11 +20101,11 @@ function _size(size, params) {
   });
 }
 // @__NO_SIDE_EFFECTS__
-function _maxLength(maximum, params) {
+function _maxLength(maximum2, params) {
   const ch = new $ZodCheckMaxLength({
     check: "max_length",
     ...normalizeParams(params),
-    maximum
+    maximum: maximum2
   });
   return ch;
 }
@@ -21168,7 +21200,7 @@ function stringifyKeyNames(bySchema, json2, visited) {
   const values = json2.enum ?? (json2.const !== void 0 ? [json2.const] : void 0);
   if (!numericType && !values?.some((v) => typeof v === "number"))
     return json2;
-  const { minimum, maximum, exclusiveMinimum, exclusiveMaximum, multipleOf, format, id, ...rest } = json2;
+  const { minimum, maximum: maximum2, exclusiveMinimum, exclusiveMaximum, multipleOf, format, id, ...rest } = json2;
   if (rest.enum)
     rest.enum = rest.enum.map((v) => typeof v === "number" ? String(v) : v);
   else if (typeof rest.const === "number")
@@ -21187,8 +21219,8 @@ function rewriteKeyNames(ctx) {
       bySchema.set(entry.schema, entry);
   }
   const rewrites = /* @__PURE__ */ new Map();
-  for (const record2 of pendingRecords.get(ctx) ?? []) {
-    const seen = ctx.seen.get(record2);
+  for (const record3 of pendingRecords.get(ctx) ?? []) {
+    const seen = ctx.seen.get(record3);
     const names = (seen?.def ?? seen?.schema)?.propertyNames;
     if (!names || names === true || rewrites.has(names))
       continue;
@@ -21293,9 +21325,9 @@ var init_json_schema_processors = __esm({
     maxContributor = (agg, def) => narrowMax(agg, "maximum", def.maximum);
     formatContributor = (ranges) => (agg, def) => {
       setFormat(agg, def.format);
-      const [minimum, maximum] = ranges[def.format];
+      const [minimum, maximum2] = ranges[def.format];
       narrowMin(agg, "minimum", minimum);
-      narrowMax(agg, "maximum", maximum);
+      narrowMax(agg, "maximum", maximum2);
     };
     contributors = {
       greater_than: (agg, def) => narrowMin(agg, def.inclusive ? "minimum" : "exclusiveMinimum", def.value),
@@ -21336,11 +21368,11 @@ var init_json_schema_processors = __esm({
     stringProcessor = (schema, ctx, _json, _params) => {
       const json2 = _json;
       json2.type = "string";
-      const { minimum, maximum, format, patterns, contentEncoding, laxFormat } = aggregateChecks(schema);
+      const { minimum, maximum: maximum2, format, patterns, contentEncoding, laxFormat } = aggregateChecks(schema);
       if (typeof minimum === "number")
         json2.minLength = minimum;
-      if (typeof maximum === "number")
-        json2.maxLength = maximum;
+      if (typeof maximum2 === "number")
+        json2.maxLength = maximum2;
       if (format) {
         json2.format = formatMap[format] ?? format;
         if (json2.format === "")
@@ -21367,10 +21399,10 @@ var init_json_schema_processors = __esm({
     };
     numberProcessor = (schema, ctx, _json, params) => {
       const json2 = _json;
-      const { minimum, maximum, multipleOf, exclusiveMaximum, exclusiveMinimum, isInt } = aggregateChecks(schema);
+      const { minimum, maximum: maximum2, multipleOf, exclusiveMaximum, exclusiveMinimum, isInt } = aggregateChecks(schema);
       json2.type = isInt ? "integer" : "number";
       const exMin = typeof exclusiveMinimum === "number" && exclusiveMinimum >= (minimum ?? Number.NEGATIVE_INFINITY);
-      const exMax = typeof exclusiveMaximum === "number" && exclusiveMaximum <= (maximum ?? Number.POSITIVE_INFINITY);
+      const exMax = typeof exclusiveMaximum === "number" && exclusiveMaximum <= (maximum2 ?? Number.POSITIVE_INFINITY);
       const legacy = ctx.target === "draft-04" || ctx.target === "openapi-3.0";
       if (exMin) {
         if (legacy) {
@@ -21389,8 +21421,8 @@ var init_json_schema_processors = __esm({
         } else {
           json2.exclusiveMaximum = exclusiveMaximum;
         }
-      } else if (typeof maximum === "number") {
-        json2.maximum = maximum;
+      } else if (typeof maximum2 === "number") {
+        json2.maximum = maximum2;
       }
       if (multipleOf) {
         const divisors = /* @__PURE__ */ new Set();
@@ -21510,11 +21542,11 @@ var init_json_schema_processors = __esm({
       _json.type = "string";
       _json.format = "binary";
       _json.contentEncoding = "binary";
-      const { minimum, maximum, mime } = aggregateChecks(schema);
+      const { minimum, maximum: maximum2, mime } = aggregateChecks(schema);
       if (minimum !== void 0)
         _json.minLength = minimum;
-      if (maximum !== void 0)
-        _json.maxLength = maximum;
+      if (maximum2 !== void 0)
+        _json.maxLength = maximum2;
       if (!mime)
         return;
       if (mime.length === 0)
@@ -21545,11 +21577,11 @@ var init_json_schema_processors = __esm({
     arrayProcessor = (schema, ctx, _json, params) => {
       const json2 = _json;
       const def = schema._zod.def;
-      const { minimum, maximum } = aggregateChecks(schema);
+      const { minimum, maximum: maximum2 } = aggregateChecks(schema);
       if (typeof minimum === "number")
         json2.minItems = minimum;
-      if (typeof maximum === "number")
-        json2.maxItems = maximum;
+      if (typeof maximum2 === "number")
+        json2.maxItems = maximum2;
       json2.type = "array";
       json2.items = processSchema(def.element, ctx, {
         ...params,
@@ -21683,11 +21715,11 @@ var init_json_schema_processors = __esm({
         if (isClosed)
           json2.maxItems = maxItems;
       }
-      const { minimum, maximum } = aggregateChecks(schema);
+      const { minimum, maximum: maximum2 } = aggregateChecks(schema);
       if (typeof minimum === "number")
         json2.minItems = minimum;
-      if (typeof maximum === "number")
-        json2.maxItems = maximum;
+      if (typeof maximum2 === "number")
+        json2.maxItems = maximum2;
     };
     pendingRecords = /* @__PURE__ */ new WeakMap();
     recordProcessor = (schema, ctx, _json, params) => {
@@ -23536,8 +23568,8 @@ var init_schemas2 = __esm({
           return Math.max(minimum ?? Number.NEGATIVE_INFINITY, exclusiveMinimum ?? Number.NEGATIVE_INFINITY);
         },
         maxValue: (inst) => {
-          const { maximum, exclusiveMaximum } = aggregateChecks(inst);
-          return Math.min(maximum ?? Number.POSITIVE_INFINITY, exclusiveMaximum ?? Number.POSITIVE_INFINITY);
+          const { maximum: maximum2, exclusiveMaximum } = aggregateChecks(inst);
+          return Math.min(maximum2 ?? Number.POSITIVE_INFINITY, exclusiveMaximum ?? Number.POSITIVE_INFINITY);
         },
         isInt: (inst) => {
           const { isInt, multipleOf } = aggregateChecks(inst);
@@ -23702,8 +23734,8 @@ var init_schemas2 = __esm({
           return minimum ? new Date(minimum) : null;
         },
         maxDate: (inst) => {
-          const { maximum } = aggregateChecks(inst);
-          return maximum ? new Date(maximum) : null;
+          const { maximum: maximum2 } = aggregateChecks(inst);
+          return maximum2 ? new Date(maximum2) : null;
         }
       }, {})
     );
@@ -26523,13 +26555,13 @@ function readEffectiveReasoningLevel(snapshot) {
   const level = thoughtLevel.current;
   return typeof level === "string" && level.trim() ? level.trim() : null;
 }
-function nestedString(record2, path12) {
-  let value = record2;
+function nestedString(record3, path12) {
+  let value = record3;
   for (const part of path12) value = asRecord2(value)[part];
   return typeof value === "string" ? value : null;
 }
-function nestedNumber(record2, path12) {
-  let value = record2;
+function nestedNumber(record3, path12) {
+  let value = record3;
   for (const part of path12) value = asRecord2(value)[part];
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
@@ -26609,6 +26641,10 @@ var init_zcode_app_server_adapter = __esm({
     MAX_CAPTURE_CHARS = 2e6;
     MAX_FRAME_BYTES = 16 * 1024 * 1024;
     ZCodeAppServerAdapter = class {
+      #resolveStartPlanRuntimeAuth;
+      #sanitizeStartPlanFrame;
+      #sanitizeStartPlanText;
+      #onVerifiedFailureCleanup;
       #resolver;
       #onEvent;
       #timeoutMs;
@@ -26635,6 +26671,10 @@ var init_zcode_app_server_adapter = __esm({
       #runs = /* @__PURE__ */ new Map();
       #workspaceByTask = /* @__PURE__ */ new Map();
       constructor(options = {}) {
+        this.#resolveStartPlanRuntimeAuth = options.resolveStartPlanRuntimeAuth;
+        this.#sanitizeStartPlanFrame = options.sanitizeStartPlanFrame;
+        this.#sanitizeStartPlanText = options.sanitizeStartPlanText;
+        this.#onVerifiedFailureCleanup = options.onVerifiedFailureCleanup;
         this.#resolver = options.resolver ?? new NodeRuntimeResolver({ env: options.childEnvBase, homeDir: options.homeDir, host: options.host });
         this.#onEvent = options.onEvent ?? (() => void 0);
         this.#timeoutMs = options.timeoutMs ?? null;
@@ -26808,6 +26848,9 @@ var init_zcode_app_server_adapter = __esm({
           const config2 = await this.#resolver.resolve();
           const preferences = resolveSessionPreferences(task.model, runtimeEnv, this.#executionProfileId);
           const childEnv = this.#buildChildEnv(config2, runtimeEnv);
+          if (this.#resolveStartPlanRuntimeAuth && task.model?.provider_id === "account:bigmodel-start-plan") {
+            childEnv.ZCODE_MODEL_RETRY_MAX_RETRIES = "0";
+          }
           entry.onEvent({ type: "zcode_starting", summary: "Starting ZCode streaming runtime" });
           const client = this.#startAppServer(config2, workspace.canonicalPath, childEnv, entry);
           entry.client = client;
@@ -26848,6 +26891,9 @@ var init_zcode_app_server_adapter = __esm({
                 type: "account_provider_sync_failed",
                 summary: error62 instanceof Error ? error62.message : "ZCode account provider synchronization failed"
               });
+              if (task.model?.provider_id === "account:bigmodel-start-plan" && this.#resolveStartPlanRuntimeAuth) {
+                throw new BridgeError("provider_config_invalid", "ZCode rejected Start Plan provider registration before session creation.");
+              }
             }
           }
           let snapshot;
@@ -27296,8 +27342,9 @@ var init_zcode_app_server_adapter = __esm({
           }
           await this.#closeBrowserHost(entry);
           let cleanupFailure;
+          let failureCleanupReceipt = null;
           try {
-            if (entry.client) await entry.client.close();
+            if (entry.client) failureCleanupReceipt = await entry.client.close();
             else if (entry.child?.pid) await this.#terminateOwnedChild(entry);
           } catch (cleanupError) {
             cleanupFailure = cleanupError;
@@ -27315,7 +27362,11 @@ var init_zcode_app_server_adapter = __esm({
               entry.onEvent({
                 type: "cleanup_unverified",
                 summary: `ZCode process termination could not be verified; workspace remains occupied.${browserSuffix}`,
-                details: { pid: entry.child?.pid ?? null, member_pids: memberPids }
+                details: {
+                  pid: entry.child?.pid ?? null,
+                  member_pids: memberPids,
+                  ...cleanupScan?.scanError ? { scan_error: cleanupScan.scanError } : {}
+                }
               });
               throw new BridgeError("cleanup_failed", `ZCode process termination could not be verified; workspace remains occupied.${browserSuffix}`, {
                 cause: cleanupFailure,
@@ -27329,6 +27380,12 @@ var init_zcode_app_server_adapter = __esm({
               `ZCode process termination was verified, but the managed browser cleanup could not be verified: ${entry.browserCleanupError}`,
               { cause: error62 }
             );
+          }
+          if (failureCleanupReceipt && !cleanupFailure) {
+            try {
+              this.#onVerifiedFailureCleanup?.(failureCleanupReceipt);
+            } catch {
+            }
           }
           entry.child = null;
           const baseMessage = error62 instanceof Error ? error62.message : String(error62);
@@ -27367,7 +27424,7 @@ var init_zcode_app_server_adapter = __esm({
           return { clean: scan.clean && scan.livePids.length === 0, memberPids };
         } catch (scanError) {
           memberPids = [.../* @__PURE__ */ new Set([...memberPids, ...this.#cleanupMemberPids(scanError)])];
-          return { clean: false, memberPids };
+          return { clean: false, memberPids, scanError: (scanError instanceof Error ? scanError.message : String(scanError)).slice(0, 500) };
         }
       }
       #startAppServer(config2, cwd, env, entry) {
@@ -27474,7 +27531,7 @@ var init_zcode_app_server_adapter = __esm({
               failProtocol("invalid_frame", frameBytes, "the top-level frame value must be a JSON object");
               return;
             }
-            const message = parsed;
+            const message = this.#sanitizeStartPlanFrame ? this.#sanitizeStartPlanFrame(parsed) : parsed;
             try {
               this.#handleMessage(message, entry, pending, config2, (reply) => {
                 child.stdin.write(`${JSON.stringify(reply)}
@@ -27653,8 +27710,9 @@ var init_zcode_app_server_adapter = __esm({
           }
           return null;
         };
+        const sanitizeStderr = this.#sanitizeStartPlanText;
         return { child, request, replayEvents, prewarmCleanup, close, get stderr() {
-          return stderr;
+          return sanitizeStderr ? sanitizeStderr(stderr) : stderr;
         } };
       }
       /** ADR-009: terminate the adapter's own spawned child with the identity
@@ -27690,6 +27748,33 @@ var init_zcode_app_server_adapter = __esm({
             const params = asRecord2(message.params);
             const selection = asRecord2(params.modelSelection);
             const providerId = typeof selection.providerId === "string" ? selection.providerId : typeof params.providerId === "string" ? params.providerId : void 0;
+            if (providerId === "account:bigmodel-start-plan" && this.#resolveStartPlanRuntimeAuth) {
+              const replySafely = (result) => {
+                try {
+                  write({ id, result });
+                } catch {
+                  entry.rejectTurn(new Error("Start Plan authorization transport failed."));
+                }
+              };
+              const modelId = typeof selection.modelId === "string" ? selection.modelId : "";
+              const selected = entry.selectedModelSelection;
+              const turnId = typeof params.turnId === "string" ? params.turnId : "";
+              const sessionId = typeof params.sessionId === "string" ? params.sessionId : "";
+              if (typeof params.providerId === "string" && params.providerId !== providerId || !entry.acceptingTurn || !entry.turnId || turnId !== entry.turnId || !entry.sessionId || sessionId !== entry.sessionId || !selected || selected.providerId !== providerId || selected.modelId !== modelId || entry.abort.signal.aborted) {
+                replySafely({ headersApplied: false, errorMessage: "Start Plan runtime identity is not verified." });
+                return;
+              }
+              void this.#resolveStartPlanRuntimeAuth({ sessionId, turnId, providerId, modelId }, entry.abort.signal).then((credential) => {
+                if (entry.abort.signal.aborted || !entry.acceptingTurn || entry.turnId !== turnId || entry.sessionId !== sessionId || !credential || typeof credential.apiKey !== "string" || !credential.apiKey || !Number.isFinite(credential.expiresAt) || credential.expiresAt <= Date.now() || !credential.isValid()) {
+                  replySafely({ headersApplied: false, errorMessage: "Start Plan authorization is unavailable." });
+                  return;
+                }
+                replySafely({ headersApplied: true, requestAuth: { apiKey: credential.apiKey } });
+              }).catch(() => {
+                if (!entry.abort.signal.aborted) replySafely({ headersApplied: false, errorMessage: "Start Plan authorization is unavailable." });
+              });
+              return;
+            }
             write({ id, result: runtimeAuthReply(providerId, config2) });
           }
           return;
@@ -28435,7 +28520,7 @@ function acceptNumber(value) {
 function normalizeUsage(raw, options = {}) {
   if (raw === null || raw === void 0) return null;
   if (typeof raw !== "object" || Array.isArray(raw)) return null;
-  const record2 = raw;
+  const record3 = raw;
   const conflicts = /* @__PURE__ */ new Set();
   const result = {
     source: null,
@@ -28452,8 +28537,8 @@ function normalizeUsage(raw, options = {}) {
   };
   let knownKeys = 0;
   for (const [canonical, alias] of KNOWN_NUMERIC_FIELDS) {
-    const snake = record2[canonical];
-    const camel = record2[alias];
+    const snake = record3[canonical];
+    const camel = record3[alias];
     const hasSnake = snake !== void 0;
     const hasCamel = camel !== void 0;
     if (!hasSnake && !hasCamel) continue;
@@ -28466,13 +28551,13 @@ function normalizeUsage(raw, options = {}) {
     }
     result[canonical] = accepted.value;
   }
-  for (const key of Object.keys(record2)) {
+  for (const key of Object.keys(record3)) {
     const known = KNOWN_NUMERIC_FIELDS.some(([canonical, alias]) => key === canonical || key === alias);
     const source = SOURCE_FIELDS.some((candidate) => key === candidate);
     if (!known && !source) result.dropped_unknown_keys += 1;
   }
   for (const sourceField of SOURCE_FIELDS) {
-    const value = record2[sourceField];
+    const value = record3[sourceField];
     if (typeof value === "string" && value.trim()) {
       result.source = options.source ?? value.trim();
       break;
@@ -28806,11 +28891,11 @@ async function runWorkerTask(options) {
         resolveInteraction: async (request, signal) => {
           store.assertWorkerAttempt(taskId, attempt);
           const safeRequest = sanitizeInteractionRequest({ ...request, request_id: `${attempt}:${request.request_id}` });
-          let record2;
+          let record3;
           let created = false;
           try {
             const written = store.writeInteractionRequest(taskId, safeRequest, now().toISOString());
-            record2 = written.record;
+            record3 = written.record;
             created = written.created;
           } catch (error62) {
             if (error62 instanceof InteractionRequestTooLargeError) {
@@ -28839,7 +28924,7 @@ async function runWorkerTask(options) {
           activityPhase = request.method === "interaction/requestPermission" ? "waiting_for_permission" : "waiting_for_user";
           writePhase();
           if (created) {
-            const published = publishInteractionRequest(store, taskId, safeRequest, record2);
+            const published = publishInteractionRequest(store, taskId, safeRequest, record3);
             if (!published.event) {
               store.appendEvent(taskId, "interaction_request_undeliverable", `ZCode requested approval but the Bridge could not publish it to the calling host (${published.declineReason}); the request was declined and nothing was executed`, {
                 error_code: "interaction_publish_failed",
@@ -29126,17 +29211,17 @@ function publicInteractionDetails(request) {
   }
   return details;
 }
-function publishInteractionRequest(store, taskId, request, record2) {
-  const full = store.appendEvent(taskId, "interaction_requested", interactionSummary(request), publicInteractionDetails(request), record2.created_at);
+function publishInteractionRequest(store, taskId, request, record3) {
+  const full = store.appendEvent(taskId, "interaction_requested", interactionSummary(request), publicInteractionDetails(request), record3.created_at);
   if (full) return { event: full, declineReason: "" };
-  const preview = store.appendEvent(taskId, "interaction_requested", interactionSummary(request), previewInteractionDetails(store, taskId, request, record2), record2.created_at);
+  const preview = store.appendEvent(taskId, "interaction_requested", interactionSummary(request), previewInteractionDetails(store, taskId, request, record3), record3.created_at);
   if (preview) return { event: preview, declineReason: "" };
   return {
     event: null,
     declineReason: "Bridge could not publish this request to the calling host because the task event log is out of capacity; the request was declined and nothing was executed. Retry with a smaller input after freeing task history."
   };
 }
-function previewInteractionDetails(store, taskId, request, record2) {
+function previewInteractionDetails(store, taskId, request, record3) {
   const params = request.params;
   const inputBytes = Buffer.byteLength(JSON.stringify(params.input ?? null), "utf8");
   const details = {
@@ -29169,8 +29254,8 @@ function previewInteractionDetails(store, taskId, request, record2) {
     task_id: taskId,
     request_id: request.request_id,
     file: store.interactionRequestPath(taskId, request.request_id),
-    ...typeof record2.params_bytes === "number" ? { bytes: record2.params_bytes } : {},
-    ...record2.params_sha256 ? { sha256: record2.params_sha256 } : {}
+    ...typeof record3.params_bytes === "number" ? { bytes: record3.params_bytes } : {},
+    ...record3.params_sha256 ? { sha256: record3.params_sha256 } : {}
   };
   return details;
 }
@@ -29245,7 +29330,7 @@ __export(launch_bootstrap_exports, {
   spawnAndBootstrapOnce: () => spawnAndBootstrapOnce,
   writeLaunchBootstrap: () => writeLaunchBootstrap
 });
-import { createHash as createHash5 } from "node:crypto";
+import { createHash as createHash6 } from "node:crypto";
 function createLaunchBootstrap(source) {
   const snapshot = source.policy_snapshot;
   const bootstrap = {
@@ -29324,8 +29409,8 @@ async function spawnAndBootstrapOnce(spawnChild, source) {
 }
 function validate2(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError("invalid launch bootstrap");
-  const record2 = value;
-  if (Object.keys(record2).sort().join("\0") !== [...KEYS].sort().join("\0") || record2.protocol !== "bridge-launch-bootstrap-v1" || !validId(record2.operation_id) || !validId(record2.task_id) || !validId(record2.launch_id) || !validToken(record2.launch_token) || !positive(record2.attempt) || !positive(record2.generation) || !positive(record2.launch_epoch) || record2.authorization_source !== "trusted_local_policy" || !validWorkspace(record2.workspace_ref) || !validId(record2.policy_revision) || !validDigest(record2.policy_digest) || !validId(record2.execution_profile_id) || !validDigest(record2.policy_snapshot_digest) || record2.policy_snapshot_digest !== deriveAdmissionPolicySnapshotDigest(record2)) {
+  const record3 = value;
+  if (Object.keys(record3).sort().join("\0") !== [...KEYS].sort().join("\0") || record3.protocol !== "bridge-launch-bootstrap-v1" || !validId(record3.operation_id) || !validId(record3.task_id) || !validId(record3.launch_id) || !validToken(record3.launch_token) || !positive(record3.attempt) || !positive(record3.generation) || !positive(record3.launch_epoch) || record3.authorization_source !== "trusted_local_policy" || !validWorkspace(record3.workspace_ref) || !validId(record3.policy_revision) || !validDigest(record3.policy_digest) || !validId(record3.execution_profile_id) || !validDigest(record3.policy_snapshot_digest) || record3.policy_snapshot_digest !== deriveAdmissionPolicySnapshotDigest(record3)) {
     throw new TypeError("invalid launch bootstrap fields");
   }
 }
@@ -29342,7 +29427,7 @@ function deriveAdmissionPolicySnapshotDigest(value) {
     policy_digest: value.policy_digest,
     execution_profile_id: value.execution_profile_id
   };
-  return createHash5("sha256").update(canonicalJson(envelope), "utf8").digest("hex");
+  return createHash6("sha256").update(canonicalJson(envelope), "utf8").digest("hex");
 }
 function canonicalJson(value) {
   if (value === null || typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
@@ -29386,7 +29471,7 @@ __export(interaction_channel_exports, {
   isCandidateInteractionChannel: () => isCandidateInteractionChannel,
   isCandidateInteractionPreparedAcknowledgement: () => isCandidateInteractionPreparedAcknowledgement
 });
-import { createHash as createHash6 } from "node:crypto";
+import { createHash as createHash7 } from "node:crypto";
 async function createCandidateInteractionChannel(child, operation, verifyProcessIdentity) {
   if (!child || !Number.isSafeInteger(child.pid) || !Array.isArray(child.stdio) || child.stdio.length < 10 || !operation || operation.operation_kind !== "attempt_lifecycle" || operation.phase !== "running" || !Number.isSafeInteger(operation.generation) || operation.generation < 1 || !operation.claim_id || operation.claim_generation !== operation.generation || !operation.claim_worker_identity_json || !operation.launch_identity_json || !operation.claim_worker_identity_digest || typeof verifyProcessIdentity !== "function") throw coded("interaction_channel_unavailable");
   let worker;
@@ -29712,7 +29797,7 @@ function stableJson2(value, depth = 0) {
   throw coded("interaction_json_invalid");
 }
 function sha256(value) {
-  return createHash6("sha256").update(value).digest("hex");
+  return createHash7("sha256").update(value).digest("hex");
 }
 function coded(code) {
   return Object.assign(new Error(code), { code });
@@ -29748,13 +29833,13 @@ var init_interaction_channel = __esm({
       constructor(stream) {
         this.#iterator = stream[Symbol.asyncIterator]();
       }
-      async read(maximum = MAX_FRAME_BYTES3) {
+      async read(maximum2 = MAX_FRAME_BYTES3) {
         for (; ; ) {
           const end = this.#buffer.indexOf(10);
           if (end >= 0) {
             const frame = this.#buffer.subarray(0, end);
             this.#buffer = this.#buffer.subarray(end + 1);
-            if (!frame.length || frame.length > maximum) throw coded("interaction_frame_invalid");
+            if (!frame.length || frame.length > maximum2) throw coded("interaction_frame_invalid");
             let value;
             try {
               value = JSON.parse(frame.toString("utf8"));
@@ -29764,7 +29849,7 @@ var init_interaction_channel = __esm({
             if (!value || typeof value !== "object" || Array.isArray(value)) throw coded("interaction_frame_invalid");
             return value;
           }
-          if (this.#buffer.length > maximum) throw coded("interaction_frame_too_large");
+          if (this.#buffer.length > maximum2) throw coded("interaction_frame_too_large");
           const next = await this.#iterator.next();
           if (next.done) throw coded(this.#buffer.length ? "interaction_frame_truncated" : "interaction_channel_closed");
           const chunk = Buffer.isBuffer(next.value) ? next.value : Buffer.from(next.value);
@@ -29822,19 +29907,282 @@ var init_fake_result_adapter = __esm({
   }
 });
 
+// src/runtime/start-plan-private-frame.ts
+import { TextDecoder } from "node:util";
+async function readPrivateFrame(stream, maximum2, signal) {
+  if (!Number.isSafeInteger(maximum2) || maximum2 < 1 || signal.aborted) throw new Error("private_frame_unavailable");
+  const chunks = [];
+  let total = 0;
+  const abort = () => {
+    stream.destroy();
+  };
+  signal.addEventListener("abort", abort, { once: true });
+  try {
+    for await (const chunk of stream) {
+      if (signal.aborted) throw new Error("private_frame_cancelled");
+      const bytes2 = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      total += bytes2.length;
+      if (total > maximum2 + 4) throw new Error("private_frame_too_large");
+      chunks.push(bytes2);
+      if (total >= 4) {
+        const prefix = Buffer.concat(chunks, total).readUInt32BE(0);
+        if (prefix < 1 || prefix > maximum2) throw new Error("private_frame_size_invalid");
+        if (total > prefix + 4) throw new Error("private_frame_extra_data");
+      }
+    }
+    if (signal.aborted || total < 4) throw new Error("private_frame_incomplete");
+    const bytes = Buffer.concat(chunks, total);
+    const length = bytes.readUInt32BE(0);
+    if (length < 1 || length > maximum2 || total !== length + 4) throw new Error("private_frame_incomplete");
+    let value;
+    try {
+      value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(4)));
+    } catch {
+      throw new Error("private_frame_invalid");
+    }
+    return value;
+  } catch (error62) {
+    if (signal.aborted) throw new Error("private_frame_cancelled");
+    if (error62 instanceof Error && /^private_frame_[a-z_]+$/u.test(error62.message)) throw error62;
+    throw new Error("private_frame_transport_failed");
+  } finally {
+    signal.removeEventListener("abort", abort);
+    chunks.length = 0;
+  }
+}
+async function writePrivateFrame(stream, value, maximum2, signal) {
+  if (signal.aborted) throw new Error("private_frame_cancelled");
+  const json2 = JSON.stringify(value);
+  if (typeof json2 !== "string") throw new Error("private_frame_invalid");
+  const body = Buffer.from(json2, "utf8");
+  if (!Number.isSafeInteger(maximum2) || maximum2 < 1 || body.length < 1 || body.length > maximum2) throw new Error("private_frame_size_invalid");
+  const prefix = Buffer.allocUnsafe(4);
+  prefix.writeUInt32BE(body.length);
+  const frame = Buffer.concat([prefix, body]);
+  const abort = () => {
+    stream.destroy();
+  };
+  signal.addEventListener("abort", abort, { once: true });
+  try {
+    await new Promise((resolve, reject) => {
+      const onError = () => {
+        cleanup();
+        reject(new Error("private_frame_delivery_unknown"));
+      };
+      const onClose = () => {
+        cleanup();
+        reject(new Error("private_frame_delivery_unknown"));
+      };
+      const onFinish = () => {
+        cleanup();
+        resolve();
+      };
+      const cleanup = () => {
+        stream.removeListener("error", onError);
+        stream.removeListener("close", onClose);
+        stream.removeListener("finish", onFinish);
+      };
+      stream.once("error", onError);
+      stream.once("close", onClose);
+      stream.once("finish", onFinish);
+      if (signal.aborted) {
+        cleanup();
+        reject(new Error("private_frame_delivery_unknown"));
+        return;
+      }
+      stream.end(frame);
+    });
+    if (signal.aborted) throw new Error("private_frame_delivery_unknown");
+  } finally {
+    signal.removeEventListener("abort", abort);
+  }
+}
+var init_start_plan_private_frame = __esm({
+  "src/runtime/start-plan-private-frame.ts"() {
+    "use strict";
+  }
+});
+
+// src/runtime/start-plan-private-channel.ts
+var start_plan_private_channel_exports = {};
+__export(start_plan_private_channel_exports, {
+  receivePrivateCredential: () => receivePrivateCredential,
+  servePrivateCredential: () => servePrivateCredential
+});
+import { randomUUID as randomUUID5 } from "node:crypto";
+function record2(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("private_auth_invalid");
+  return value;
+}
+function exactKeys(value, keys) {
+  if (Object.keys(value).sort().join("|") !== [...keys].sort().join("|")) throw new Error("private_auth_invalid");
+}
+function boundedSignal(parent, timeoutMs) {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 6e4) throw new Error("private_auth_invalid");
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  parent.addEventListener("abort", abort, { once: true });
+  if (parent.aborted) abort();
+  const timer = setTimeout(abort, timeoutMs);
+  timer.unref();
+  return { signal: controller.signal, close() {
+    clearTimeout(timer);
+    parent.removeEventListener("abort", abort);
+  } };
+}
+async function servePrivateCredential(options) {
+  const bounded2 = boundedSignal(options.signal, options.timeoutMs);
+  let lease;
+  try {
+    const request = record2(await readPrivateFrame(options.request, maximum, bounded2.signal));
+    exactKeys(request, ["protocol", "requestId", "binding"]);
+    if (request.protocol !== "start-plan-private-request-v1" || typeof request.requestId !== "string" || !request.requestId) throw new Error("private_auth_invalid");
+    const resolved = await new Promise((resolve, reject) => {
+      const abort = () => {
+        cleanup();
+        reject(new Error("private_auth_cancelled"));
+      };
+      const cleanup = () => bounded2.signal.removeEventListener("abort", abort);
+      bounded2.signal.addEventListener("abort", abort, { once: true });
+      if (bounded2.signal.aborted) {
+        abort();
+        return;
+      }
+      void Promise.resolve().then(() => options.resolveLease(Object.freeze({ ...request }), bounded2.signal)).then((value) => {
+        if (bounded2.signal.aborted) {
+          value.lease.revoke();
+          return;
+        }
+        cleanup();
+        resolve(value);
+      }, () => {
+        cleanup();
+        reject(new Error("private_auth_unavailable"));
+      });
+    });
+    lease = resolved.lease;
+    if (!lease.isActive()) {
+      lease = void 0;
+      throw new Error("private_auth_delivery_failed");
+    }
+    await lease.redeem(request.binding, resolved.verifyWorker, async (jwt2, expiresAt) => {
+      await writePrivateFrame(options.response, {
+        protocol: "start-plan-private-response-v1",
+        requestId: request.requestId,
+        binding: resolved.binding,
+        jwt: jwt2,
+        expiresAt
+      }, maximum, bounded2.signal);
+      const ack = record2(await readPrivateFrame(options.acknowledgement, maximum, bounded2.signal));
+      exactKeys(ack, ["protocol", "requestId"]);
+      if (ack.protocol !== "start-plan-private-ack-v1" || ack.requestId !== request.requestId) throw new Error("private_auth_ack_invalid");
+    }, bounded2.signal);
+    return "acknowledged";
+  } catch {
+    lease?.revoke();
+    throw new Error("private_auth_delivery_failed");
+  } finally {
+    bounded2.close();
+    options.request.destroy();
+    options.response.destroy();
+    options.acknowledgement.destroy();
+  }
+}
+async function receivePrivateCredential(options) {
+  const bounded2 = boundedSignal(options.signal, options.timeoutMs);
+  const requestId = randomUUID5();
+  let responseStream;
+  try {
+    await writePrivateFrame(options.request, { protocol: "start-plan-private-request-v1", requestId, binding: options.binding }, maximum, bounded2.signal);
+    responseStream = typeof options.response === "function" ? options.response() : options.response;
+    const response = record2(await readPrivateFrame(responseStream, maximum, bounded2.signal));
+    exactKeys(response, ["protocol", "requestId", "binding", "jwt", "expiresAt"]);
+    const binding = record2(response.binding);
+    const keys = ["account", "provider", "model", "task", "attempt", "operation", "generation", "claim", "session", "turn", "pid", "creation"];
+    exactKeys(binding, keys);
+    const now = (options.now ?? Date.now)();
+    if (response.protocol !== "start-plan-private-response-v1" || response.requestId !== requestId || keys.some((key) => binding[key] !== options.binding[key]) || typeof response.jwt !== "string" || !response.jwt || typeof response.expiresAt !== "number" || !Number.isFinite(response.expiresAt) || !Number.isFinite(now) || response.expiresAt <= now || bounded2.signal.aborted) throw new Error("private_auth_invalid");
+    await writePrivateFrame(options.acknowledgement, { protocol: "start-plan-private-ack-v1", requestId }, maximum, bounded2.signal);
+    if (bounded2.signal.aborted) throw new Error("private_auth_invalid");
+    return { jwt: response.jwt, expiresAt: response.expiresAt };
+  } catch {
+    throw new Error("private_auth_receive_failed");
+  } finally {
+    bounded2.close();
+    options.request.destroy();
+    responseStream?.destroy();
+    options.acknowledgement.destroy();
+  }
+}
+var maximum;
+var init_start_plan_private_channel = __esm({
+  "src/runtime/start-plan-private-channel.ts"() {
+    "use strict";
+    init_start_plan_private_frame();
+    maximum = 16384;
+  }
+});
+
 // src/worker/worker-main.ts
 init_build_provenance();
 init_profile();
 init_json_writer_quiescence();
 init_process_probe();
-import { createHash as createHash7, randomUUID as randomUUID5 } from "node:crypto";
+import { createHash as createHash8, randomUUID as randomUUID6 } from "node:crypto";
 import { closeSync as closeSync4, createWriteStream, readFileSync as readFileSync8, writeFileSync as writeFileSync4, writeSync } from "node:fs";
 import { Socket } from "node:net";
+
+// src/runtime/start-plan-secret-redactor.ts
+import { createHash as createHash4 } from "node:crypto";
+var StartPlanSecretRedactor = class {
+  #length = 0;
+  #prefix = "";
+  #digest = "";
+  register(secret) {
+    if (typeof secret !== "string" || secret.length < 2) throw new Error("private_auth_invalid");
+    this.#length = secret.length;
+    this.#prefix = secret.slice(0, Math.min(8, secret.length - 1));
+    this.#digest = createHash4("sha256").update(secret, "utf8").digest("hex");
+  }
+  text(input2) {
+    if (!this.#length || input2.length < this.#length) return input2;
+    let cursor = 0, checked = 0, out = "";
+    for (; ; ) {
+      const index = input2.indexOf(this.#prefix, cursor);
+      if (index < 0 || index + this.#length > input2.length) return out + input2.slice(cursor);
+      if (++checked > 128) return "[REDACTED]";
+      const candidate = input2.slice(index, index + this.#length);
+      if (createHash4("sha256").update(candidate, "utf8").digest("hex") === this.#digest) {
+        out += input2.slice(cursor, index) + "[REDACTED]";
+        cursor = index + this.#length;
+      } else {
+        out += input2.slice(cursor, index + 1);
+        cursor = index + 1;
+      }
+    }
+  }
+  value(value) {
+    if (typeof value === "string") return this.text(value);
+    if (Array.isArray(value)) return value.map((item) => this.value(item));
+    if (value && typeof value === "object") {
+      return Object.fromEntries(Object.entries(value).map(([key, item]) => [this.text(key), this.value(item)]));
+    }
+    return value;
+  }
+  close() {
+    this.#length = 0;
+    this.#prefix = "";
+    this.#digest = "";
+  }
+};
+
+// src/worker/worker-main.ts
 var workerArgs = process.argv.slice(2);
 var bridgeLaunchMarker = workerArgs.at(-1) === BRIDGE_WORKER_LAUNCH_MARKER;
 var interactionMode = workerArgs.includes("--bridge-sqlite-interaction-v1");
+var privateAuthMode = workerArgs.includes("--bridge-sqlite-private-auth-v1");
 var dropAfterPrepared = workerArgs.includes("--bridge-sqlite-interaction-drop-after-prepared-v1");
-var positionalArgs = bridgeLaunchMarker ? workerArgs.slice(0, -1).filter((argument) => argument !== "--bridge-sqlite-interaction-v1" && argument !== "--bridge-sqlite-interaction-drop-after-prepared-v1") : workerArgs;
+var positionalArgs = bridgeLaunchMarker ? workerArgs.slice(0, -1).filter((argument) => argument !== "--bridge-sqlite-interaction-v1" && argument !== "--bridge-sqlite-interaction-drop-after-prepared-v1" && argument !== "--bridge-sqlite-private-auth-v1") : workerArgs;
 if (bridgeLaunchMarker && positionalArgs.length === 0) {
   let claimOnlyStage = "start";
   let interactionStreamsCreated = false;
@@ -29860,7 +30208,7 @@ ${frames.slice(0, 1200)}
   });
   try {
     if (dropAfterPrepared && !interactionMode) throw new Error("interaction test mode required");
-    await runClaimOnlyHandshake({ interactionMode, dropAfterPrepared, onStage: (stage) => {
+    await runClaimOnlyHandshake({ interactionMode, privateAuthMode, dropAfterPrepared, onStage: (stage) => {
       claimOnlyStage = stage;
       if (interactionMode) writeDiagnostic(`[bridge-worker] claim-only stage=${stage}
 `);
@@ -29875,6 +30223,12 @@ ${frames.slice(0, 1200)}
           closeSync4(fd);
         } catch {
         }
+      }
+    }
+    if (privateAuthMode) for (const fd of [10, 11, 12, 13]) {
+      try {
+        closeSync4(fd);
+      } catch {
       }
     }
     const failureCode = error62 && typeof error62 === "object" && "code" in error62 && typeof error62.code === "string" ? error62.code : "unclassified";
@@ -29934,7 +30288,7 @@ async function runClaimOnlyHandshake(options) {
   const provenance = verifyWorkerProvenance({ bridgeLaunchMarker: true, rawEnvelope, actualWorker: worker });
   if (provenance.status !== "verified") throw new Error("worker provenance rejected");
   options.onStage?.("bootstrap read");
-  const frame = readPrivateFrame(3, 8192);
+  const frame = readPrivateFrame2(3, 8192);
   options.onStage?.("bootstrap decode");
   const { decodeLaunchBootstrap: decodeLaunchBootstrap2 } = await Promise.resolve().then(() => (init_launch_bootstrap(), launch_bootstrap_exports));
   const bootstrap = decodeLaunchBootstrap2(frame);
@@ -29964,7 +30318,7 @@ async function runClaimOnlyHandshake(options) {
     throw error62;
   }
   const report = {
-    worker_id: randomUUID5(),
+    worker_id: randomUUID6(),
     operation_id: bootstrap.operation_id,
     task_id: bootstrap.task_id,
     attempt: bootstrap.attempt,
@@ -29984,9 +30338,9 @@ async function runClaimOnlyHandshake(options) {
     provenance_digest: digestProvenance(provenance.expected)
   };
   options.onStage?.("identity report write");
-  writePrivateFrame(4, report);
+  writePrivateFrame2(4, report);
   options.onStage?.("Claim decision read");
-  const decision = readPrivateFrame(5, 11e5);
+  const decision = readPrivateFrame2(5, 11e5);
   const value = JSON.parse(decision.subarray(0, -1).toString("utf8"));
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("claim was not committed");
   const decisionRecord = value;
@@ -29996,6 +30350,7 @@ async function runClaimOnlyHandshake(options) {
     throw new Error("claim was not committed");
   }
   const execution = validateExecutionEnvelope(decisionRecord.execution, bootstrap, profile);
+  if (options.privateAuthMode !== Boolean(execution.private_auth)) throw new Error("private auth mode mismatch");
   let closeInteraction;
   let candidateInteraction;
   if (options.interactionMode) {
@@ -30040,9 +30395,9 @@ async function runClaimOnlyHandshake(options) {
   }
   try {
     options.onStage?.(execution.adapter_mode === "test_fake" ? "test adapter start" : "zcode adapter start");
-    const resultFrame = execution.adapter_mode === "test_fake" ? await runExplicitFakeAdapter(bootstrap, execution, candidateInteraction) : await runZCodeAdapter(bootstrap, execution, candidateInteraction);
+    const resultFrame = execution.adapter_mode === "test_fake" ? await runExplicitFakeAdapter(bootstrap, execution, candidateInteraction) : await runZCodeAdapter(bootstrap, execution, candidateInteraction, options.privateAuthMode ? identity : void 0);
     options.onStage?.("adapter result frame prepared");
-    writePrivateFrame(6, resultFrame);
+    writePrivateFrame2(6, resultFrame);
     options.onStage?.("adapter result frame written");
   } finally {
     options.onStage?.("worker interaction close start");
@@ -30054,7 +30409,8 @@ async function runClaimOnlyHandshake(options) {
 function validateExecutionEnvelope(value, bootstrap, profile) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("post-Claim execution envelope is required");
   const envelope = value;
-  if (Object.keys(envelope).sort().join("|") !== "adapter_mode|attempt|continuation|execution_profile_id|generation|host_profile|operation_id|policy_snapshot_digest|previous_result|protocol|task|task_id|workspace_ref" || envelope.protocol !== "bridge-sqlite-execution-envelope-v1" || envelope.operation_id !== bootstrap.operation_id || envelope.task_id !== bootstrap.task_id || envelope.attempt !== bootstrap.attempt || envelope.generation !== bootstrap.generation || envelope.workspace_ref !== bootstrap.workspace_ref || envelope.policy_snapshot_digest !== bootstrap.policy_snapshot_digest || envelope.execution_profile_id !== profile.id || !["zcode_app_server", "test_fake"].includes(String(envelope.adapter_mode))) {
+  const envelopeKeys = Object.keys(envelope).sort().join("|");
+  if (!["adapter_mode|attempt|continuation|execution_profile_id|generation|host_profile|operation_id|policy_snapshot_digest|previous_result|protocol|task|task_id|workspace_ref", "adapter_mode|attempt|continuation|execution_profile_id|generation|host_profile|operation_id|policy_snapshot_digest|previous_result|private_auth|protocol|task|task_id|workspace_ref"].includes(envelopeKeys) || envelope.protocol !== "bridge-sqlite-execution-envelope-v1" || envelope.operation_id !== bootstrap.operation_id || envelope.task_id !== bootstrap.task_id || envelope.attempt !== bootstrap.attempt || envelope.generation !== bootstrap.generation || envelope.workspace_ref !== bootstrap.workspace_ref || envelope.policy_snapshot_digest !== bootstrap.policy_snapshot_digest || envelope.execution_profile_id !== profile.id || !["zcode_app_server", "test_fake"].includes(String(envelope.adapter_mode))) {
     throw new Error("post-Claim execution envelope binding rejected");
   }
   const task = envelope.task;
@@ -30063,6 +30419,10 @@ function validateExecutionEnvelope(value, bootstrap, profile) {
   }
   if (!envelope.host_profile || typeof envelope.host_profile !== "object" || Array.isArray(envelope.host_profile)) {
     throw new Error("post-Claim Host profile is required");
+  }
+  if (envelope.private_auth !== void 0) {
+    const auth = envelope.private_auth;
+    if (!auth || typeof auth !== "object" || Array.isArray(auth) || Object.keys(auth).sort().join("|") !== "account|claim" || typeof auth.account !== "string" || !auth.account || typeof auth.claim !== "string" || !auth.claim || task.model?.provider_id !== "account:bigmodel-start-plan") throw new Error("private auth binding rejected");
   }
   validateHostProfile(envelope.host_profile);
   return envelope;
@@ -30073,13 +30433,50 @@ async function runExplicitFakeAdapter(bootstrap, execution, interaction) {
   const { executeFakeResultAdapter: executeFakeResultAdapter2 } = await Promise.resolve().then(() => (init_fake_result_adapter(), fake_result_adapter_exports));
   return executeFakeResultAdapter2(bootstrap);
 }
-async function runZCodeAdapter(bootstrap, execution, interaction) {
+async function runZCodeAdapter(bootstrap, execution, interaction, workerIdentity) {
   if (execution.adapter_mode !== "zcode_app_server") throw new Error("real ZCode Adapter mode is required");
   const { ZCodeAppServerAdapter: ZCodeAppServerAdapter2 } = await Promise.resolve().then(() => (init_zcode_app_server_adapter(), zcode_app_server_adapter_exports));
   const { buildTaskResult: buildTaskResult2 } = await Promise.resolve().then(() => (init_normalize(), normalize_exports));
   const startedAt = (/* @__PURE__ */ new Date()).toISOString();
   let outcome = null;
+  let failureCleanupReceipt = null;
   let failure2 = null;
+  let cachedAuth = null;
+  let privateAuthExpiryTimer;
+  let privateAuthStarted = false;
+  const secretRedactor = execution.private_auth ? new StartPlanSecretRedactor() : void 0;
+  let privateAuthParentLive = false;
+  let privateAuthConfirmed = false;
+  let notifyPrivateAuthConfirmation;
+  const privateAuthLifetime = execution.private_auth ? new Socket({ fd: 13, readable: true, writable: false }) : void 0;
+  privateAuthLifetime?.on("data", (chunk) => {
+    for (const byte of chunk) {
+      if (!privateAuthParentLive && !privateAuthConfirmed && byte === 1) privateAuthParentLive = true;
+      else if (privateAuthParentLive && !privateAuthConfirmed && byte === 2) {
+        privateAuthConfirmed = true;
+        notifyPrivateAuthConfirmation?.();
+      } else {
+        revokeParentLease();
+        privateAuthLifetime.destroy();
+        break;
+      }
+    }
+  });
+  const clearCachedAuth = () => {
+    cachedAuth = null;
+    if (privateAuthExpiryTimer) {
+      clearTimeout(privateAuthExpiryTimer);
+      privateAuthExpiryTimer = void 0;
+    }
+  };
+  const revokeParentLease = () => {
+    privateAuthParentLive = false;
+    clearCachedAuth();
+    notifyPrivateAuthConfirmation?.();
+  };
+  privateAuthLifetime?.once("end", revokeParentLease);
+  privateAuthLifetime?.once("close", revokeParentLease);
+  privateAuthLifetime?.once("error", revokeParentLease);
   const adapter = new ZCodeAppServerAdapter2({
     host: execution.host_profile,
     executionProfileId: execution.execution_profile_id,
@@ -30095,6 +30492,95 @@ async function runZCodeAdapter(bootstrap, execution, interaction) {
       writeDiagnostic(`[bridge-worker] adapter event=${event.type}
 `);
     },
+    onVerifiedFailureCleanup: (receipt) => {
+      failureCleanupReceipt = receipt;
+    },
+    ...secretRedactor ? {
+      sanitizeStartPlanFrame: (value) => secretRedactor.value(value),
+      sanitizeStartPlanText: (value) => secretRedactor.text(value)
+    } : {},
+    resolveStartPlanRuntimeAuth: execution.private_auth ? async (scope, signal) => {
+      if (signal.aborted || !privateAuthParentLive || !workerIdentity || workerIdentity.pid !== process.pid || workerIdentity.fingerprint_precision !== "exact" || !workerIdentity.fingerprint) throw new Error("private auth unavailable");
+      if (cachedAuth) {
+        if (cachedAuth.sessionId !== scope.sessionId || cachedAuth.turnId !== scope.turnId || cachedAuth.providerId !== scope.providerId || cachedAuth.modelId !== scope.modelId || cachedAuth.expiresAt <= Date.now()) throw new Error("private auth unavailable");
+        const current2 = cachedAuth;
+        return { ...current2, isValid: () => privateAuthParentLive && !signal.aborted && cachedAuth === current2 && current2.expiresAt > Date.now() };
+      }
+      if (privateAuthStarted) throw new Error("private auth unavailable");
+      privateAuthStarted = true;
+      const { receivePrivateCredential: receivePrivateCredential2 } = await Promise.resolve().then(() => (init_start_plan_private_channel(), start_plan_private_channel_exports));
+      const auth = execution.private_auth;
+      const request = createWriteStream(process.execPath, { fd: 10 });
+      const acknowledgement = createWriteStream(process.execPath, { fd: 12 });
+      let responseOpened = false;
+      let result2;
+      try {
+        result2 = await receivePrivateCredential2({
+          request,
+          response: () => {
+            responseOpened = true;
+            return new Socket({ fd: 11, readable: true, writable: false });
+          },
+          acknowledgement,
+          binding: {
+            account: auth.account,
+            provider: scope.providerId,
+            model: scope.modelId,
+            task: bootstrap.task_id,
+            attempt: bootstrap.attempt,
+            operation: bootstrap.operation_id,
+            generation: bootstrap.generation,
+            claim: auth.claim,
+            session: scope.sessionId,
+            turn: scope.turnId,
+            pid: workerIdentity.pid,
+            creation: workerIdentity.fingerprint
+          },
+          signal,
+          timeoutMs: 15e3
+        });
+      } finally {
+        if (!responseOpened) {
+          try {
+            closeSync4(11);
+          } catch {
+          }
+        }
+      }
+      await new Promise((resolve, reject) => {
+        let timer;
+        const cleanup = () => {
+          if (timer) clearTimeout(timer);
+          signal.removeEventListener("abort", check2);
+          notifyPrivateAuthConfirmation = void 0;
+        };
+        const check2 = () => {
+          if (signal.aborted || !privateAuthParentLive || result2.expiresAt <= Date.now()) {
+            cleanup();
+            reject(new Error("private auth unavailable"));
+          } else if (privateAuthConfirmed) {
+            cleanup();
+            resolve();
+          }
+        };
+        notifyPrivateAuthConfirmation = check2;
+        signal.addEventListener("abort", check2, { once: true });
+        timer = setTimeout(() => {
+          cleanup();
+          reject(new Error("private auth unavailable"));
+        }, Math.max(0, Math.min(15e3, result2.expiresAt - Date.now())));
+        timer.unref();
+        check2();
+      });
+      if (signal.aborted || !privateAuthParentLive) throw new Error("private auth unavailable");
+      secretRedactor?.register(result2.jwt);
+      cachedAuth = { apiKey: result2.jwt, expiresAt: result2.expiresAt, ...scope };
+      privateAuthExpiryTimer = setTimeout(clearCachedAuth, Math.max(0, result2.expiresAt - Date.now()));
+      privateAuthExpiryTimer.unref();
+      signal.addEventListener("abort", clearCachedAuth, { once: true });
+      const current = cachedAuth;
+      return { ...current, isValid: () => privateAuthParentLive && !signal.aborted && cachedAuth === current && current.expiresAt > Date.now() };
+    } : void 0,
     resolveInteraction: interaction ? async (request, signal) => {
       if (signal.aborted) return { action: "decline" };
       await interaction.sendRequest(request);
@@ -30122,6 +30608,15 @@ async function runZCodeAdapter(bootstrap, execution, interaction) {
     if (outcome.cleanupError) failure2 = { code: "cleanup_failed", message: outcome.cleanupError };
   } catch (error62) {
     failure2 = { code: error62 instanceof Error && "code" in error62 && typeof error62.code === "string" ? error62.code : "worker_error", message: error62 instanceof Error ? error62.message : String(error62) };
+  } finally {
+    clearCachedAuth();
+    privateAuthLifetime?.destroy();
+    if (execution.private_auth && !privateAuthStarted) for (const fd of [10, 11, 12]) {
+      try {
+        closeSync4(fd);
+      } catch {
+      }
+    }
   }
   const finishedAt = (/* @__PURE__ */ new Date()).toISOString();
   const taskResult = buildTaskResult2({ task: execution.task, attempt: bootstrap.attempt, startedAt, finishedAt, outcome, failure: failure2 });
@@ -30145,7 +30640,8 @@ async function runZCodeAdapter(bootstrap, execution, interaction) {
     ...taskResult.error_code ? { error_code: taskResult.error_code } : {},
     ...taskResult.report_candidate ? { report_candidate: taskResult.report_candidate } : {}
   };
-  const executionCleanup = buildExecutionCleanupProof(outcome);
+  const executionCleanup = buildExecutionCleanupProof(outcome, failureCleanupReceipt);
+  secretRedactor?.close();
   return {
     protocol: "bridge-sqlite-candidate-result-v1",
     operation_id: bootstrap.operation_id,
@@ -30159,9 +30655,9 @@ async function runZCodeAdapter(bootstrap, execution, interaction) {
     result
   };
 }
-function buildExecutionCleanupProof(outcome) {
-  const receipt = outcome?.cleanupTreeReceipt;
-  if (outcome?.cleanupVerified !== true || outcome.cleanupError || !receipt) return null;
+function buildExecutionCleanupProof(outcome, failureReceipt = null) {
+  const receipt = failureReceipt ?? outcome?.cleanupTreeReceipt;
+  if (!receipt || !failureReceipt && (outcome?.cleanupVerified !== true || outcome.cleanupError)) return null;
   const root = receipt.members.find((member) => member.pid === receipt.rootPid);
   if (!root || !root.fingerprint || receipt.members.length < 1 || !Number.isSafeInteger(receipt.rootPid) || receipt.rootPid < 1) return null;
   return {
@@ -30172,7 +30668,7 @@ function buildExecutionCleanupProof(outcome) {
     workspace_retained: true,
     adapter_process_id: receipt.rootPid,
     adapter_start_fingerprint: root.fingerprint,
-    process_tree_receipt_digest: createHash7("sha256").update(JSON.stringify(receipt), "utf8").digest("hex"),
+    process_tree_receipt_digest: createHash8("sha256").update(JSON.stringify(receipt), "utf8").digest("hex"),
     process_tree_member_count: receipt.members.length,
     managed_browser_cleanup_verified: true
   };
@@ -30209,15 +30705,15 @@ function digestProvenance(value) {
     bridge: { path: value.bridge.path, sha256: value.bridge.sha256 },
     worker: { path: value.worker.path, sha256: value.worker.sha256 }
   });
-  return createHash7("sha256").update(canonical, "utf8").digest("hex");
+  return createHash8("sha256").update(canonical, "utf8").digest("hex");
 }
-function readPrivateFrame(fd, maximum) {
+function readPrivateFrame2(fd, maximum2) {
   const frame = readFileSync8(fd);
   closeSync4(fd);
-  if (frame.byteLength > maximum) throw new Error("private frame exceeded limit");
+  if (frame.byteLength > maximum2) throw new Error("private frame exceeded limit");
   return frame;
 }
-function writePrivateFrame(fd, value) {
+function writePrivateFrame2(fd, value) {
   const frame = Buffer.from(`${JSON.stringify(value)}
 `, "utf8");
   writeFileSync4(fd, frame);

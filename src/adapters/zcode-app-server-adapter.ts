@@ -223,6 +223,13 @@ interface ResolvedBrowserConfig {
 }
 
 export interface ZCodeAppServerAdapterOptions {
+  /** Internal opt-in credential broker. It is not a TaskPackage field. */
+  resolveStartPlanRuntimeAuth?: (scope: { readonly sessionId: string; readonly turnId: string; readonly providerId: string; readonly modelId: string }, signal: AbortSignal) => Promise<{ readonly apiKey: string; readonly expiresAt: number; readonly isValid: () => boolean }>;
+  /** Internal output sanitizers owned by the same credential broker. */
+  sanitizeStartPlanFrame?: (value: Record<string, unknown>) => Record<string, unknown>;
+  sanitizeStartPlanText?: (value: string) => string;
+  /** Internal evidence callback: never implies cleanup from a failed scan. */
+  onVerifiedFailureCleanup?: (receipt: WindowsTerminationReceipt) => void;
   resolver?: RuntimeResolver;
   onEvent?: ProgressSink;
   timeoutMs?: number;
@@ -294,6 +301,10 @@ const MAX_FRAME_BYTES = 16 * 1024 * 1024;
  * requests are emitted; hidden reasoning and tool outputs are excluded.
  */
 export class ZCodeAppServerAdapter implements CodingAgentAdapter {
+  readonly #resolveStartPlanRuntimeAuth: ZCodeAppServerAdapterOptions["resolveStartPlanRuntimeAuth"];
+  readonly #sanitizeStartPlanFrame: ZCodeAppServerAdapterOptions["sanitizeStartPlanFrame"];
+  readonly #sanitizeStartPlanText: ZCodeAppServerAdapterOptions["sanitizeStartPlanText"];
+  readonly #onVerifiedFailureCleanup: ZCodeAppServerAdapterOptions["onVerifiedFailureCleanup"];
   readonly #resolver: RuntimeResolver;
   readonly #onEvent: ProgressSink;
   readonly #timeoutMs: number | null;
@@ -321,6 +332,10 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
   readonly #workspaceByTask = new Map<string, string>();
 
   constructor(options: ZCodeAppServerAdapterOptions = {}) {
+    this.#resolveStartPlanRuntimeAuth = options.resolveStartPlanRuntimeAuth;
+    this.#sanitizeStartPlanFrame = options.sanitizeStartPlanFrame;
+    this.#sanitizeStartPlanText = options.sanitizeStartPlanText;
+    this.#onVerifiedFailureCleanup = options.onVerifiedFailureCleanup;
     this.#resolver = options.resolver ?? new NodeRuntimeResolver({ env: options.childEnvBase, homeDir: options.homeDir, host: options.host });
     this.#onEvent = options.onEvent ?? (() => undefined);
     this.#timeoutMs = options.timeoutMs ?? null;
@@ -517,6 +532,11 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       const config = await this.#resolver.resolve();
       const preferences = resolveSessionPreferences(task.model, runtimeEnv, this.#executionProfileId);
       const childEnv = this.#buildChildEnv(config, runtimeEnv);
+      // Observed ZCode CLI retry budget. Restrict the explicitly brokered
+      // Start Plan attempt; never change the Coding Plan default environment.
+      if (this.#resolveStartPlanRuntimeAuth && task.model?.provider_id === "account:bigmodel-start-plan") {
+        childEnv.ZCODE_MODEL_RETRY_MAX_RETRIES = "0";
+      }
       entry.onEvent({ type: "zcode_starting", summary: "Starting ZCode streaming runtime" });
       const client = this.#startAppServer(config, workspace.canonicalPath, childEnv, entry);
       entry.client = client;
@@ -558,6 +578,13 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
             type: "account_provider_sync_failed",
             summary: error instanceof Error ? error.message : "ZCode account provider synchronization failed",
           });
+          // Provider registration is a precondition for Start Plan. Its
+          // private runtime-auth callback happens only after send, so letting
+          // this RPC failure proceed could cross session/send without a
+          // registered provider. Coding Plan behavior remains unchanged.
+          if (task.model?.provider_id === "account:bigmodel-start-plan" && this.#resolveStartPlanRuntimeAuth) {
+            throw new BridgeError("provider_config_invalid", "ZCode rejected Start Plan provider registration before session creation.");
+          }
         }
       }
 
@@ -1047,8 +1074,9 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       }
       await this.#closeBrowserHost(entry);
       let cleanupFailure: unknown;
+      let failureCleanupReceipt: WindowsTerminationReceipt | null = null;
       try {
-        if (entry.client) await entry.client.close();
+        if (entry.client) failureCleanupReceipt = await entry.client.close();
         else if (entry.child?.pid) await this.#terminateOwnedChild(entry);
       } catch (cleanupError) {
         cleanupFailure = cleanupError;
@@ -1068,7 +1096,8 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
           entry.onEvent({
             type: "cleanup_unverified",
             summary: `ZCode process termination could not be verified; workspace remains occupied.${browserSuffix}`,
-            details: { pid: entry.child?.pid ?? null, member_pids: memberPids },
+            details: { pid: entry.child?.pid ?? null, member_pids: memberPids,
+              ...(cleanupScan?.scanError ? { scan_error: cleanupScan.scanError } : {}) },
           });
           throw new BridgeError("cleanup_failed", `ZCode process termination could not be verified; workspace remains occupied.${browserSuffix}`, {
             cause: cleanupFailure,
@@ -1082,6 +1111,9 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
           `ZCode process termination was verified, but the managed browser cleanup could not be verified: ${entry.browserCleanupError}`,
           { cause: error },
         );
+      }
+      if (failureCleanupReceipt && !cleanupFailure) {
+        try { this.#onVerifiedFailureCleanup?.(failureCleanupReceipt); } catch { /* evidence callback cannot change the failure */ }
       }
       entry.child = null;
       const baseMessage = error instanceof Error ? error.message : String(error);
@@ -1117,7 +1149,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     client: AppServerClient,
     entry: RunEntry,
     error: unknown,
-  ): Promise<{ clean: boolean; memberPids: number[] } | null> {
+  ): Promise<{ clean: boolean; memberPids: number[]; scanError?: string } | null> {
     let memberPids = this.#cleanupMemberPids(error);
     if ((error as { code?: unknown } | null)?.code !== "process_tree_root_exited" || !client.child.pid) return null;
     const pid = client.child.pid;
@@ -1133,7 +1165,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       // A failed scan can already have observed intermediate members. Keep
       // them for the checkpoint/recovery union even if those parents exit.
       memberPids = [...new Set([...memberPids, ...this.#cleanupMemberPids(scanError)])];
-      return { clean: false, memberPids };
+      return { clean: false, memberPids, scanError: (scanError instanceof Error ? scanError.message : String(scanError)).slice(0, 500) };
     }
   }
 
@@ -1265,7 +1297,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
           failProtocol("invalid_frame", frameBytes, "the top-level frame value must be a JSON object");
           return;
         }
-        const message = parsed;
+        const message = this.#sanitizeStartPlanFrame ? this.#sanitizeStartPlanFrame(parsed) : parsed;
         try {
           this.#handleMessage(message, entry, pending, config, (reply) => {
             child.stdin.write(`${JSON.stringify(reply)}\n`);
@@ -1473,7 +1505,8 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       }
       return null;
     };
-    return { child, request, replayEvents, prewarmCleanup, close, get stderr() { return stderr; } };
+    const sanitizeStderr = this.#sanitizeStartPlanText;
+    return { child, request, replayEvents, prewarmCleanup, close, get stderr() { return sanitizeStderr ? sanitizeStderr(stderr) : stderr; } };
   }
 
   /** ADR-009: terminate the adapter's own spawned child with the identity
@@ -1518,6 +1551,34 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         const providerId = typeof selection.providerId === "string"
           ? selection.providerId
           : typeof params.providerId === "string" ? params.providerId : undefined;
+        if (providerId === "account:bigmodel-start-plan" && this.#resolveStartPlanRuntimeAuth) {
+          const replySafely = (result: JsonRecord): void => {
+            try { write({ id, result }); } catch { entry.rejectTurn(new Error("Start Plan authorization transport failed.")); }
+          };
+          const modelId = typeof selection.modelId === "string" ? selection.modelId : "";
+          const selected = entry.selectedModelSelection;
+          const turnId = typeof params.turnId === "string" ? params.turnId : "";
+          const sessionId = typeof params.sessionId === "string" ? params.sessionId : "";
+          if ((typeof params.providerId === "string" && params.providerId !== providerId)
+            || !entry.acceptingTurn || !entry.turnId || turnId !== entry.turnId || !entry.sessionId || sessionId !== entry.sessionId
+            || !selected || selected.providerId !== providerId || selected.modelId !== modelId || entry.abort.signal.aborted) {
+            replySafely({ headersApplied: false, errorMessage: "Start Plan runtime identity is not verified." });
+            return;
+          }
+          void this.#resolveStartPlanRuntimeAuth({ sessionId, turnId, providerId, modelId }, entry.abort.signal)
+            .then((credential) => {
+              if (entry.abort.signal.aborted || !entry.acceptingTurn || entry.turnId !== turnId || entry.sessionId !== sessionId
+                || !credential || typeof credential.apiKey !== "string" || !credential.apiKey
+                || !Number.isFinite(credential.expiresAt) || credential.expiresAt <= Date.now() || !credential.isValid()) {
+                replySafely({ headersApplied: false, errorMessage: "Start Plan authorization is unavailable." });
+                return;
+              }
+              replySafely({ headersApplied: true, requestAuth: { apiKey: credential.apiKey } });
+            }).catch(() => {
+              if (!entry.abort.signal.aborted) replySafely({ headersApplied: false, errorMessage: "Start Plan authorization is unavailable." });
+            });
+          return;
+        }
         write({ id, result: runtimeAuthReply(providerId, config) });
       }
       return;

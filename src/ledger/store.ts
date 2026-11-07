@@ -4,8 +4,9 @@
 // Definitions are imported from .agent-ledger/project.json + tasks/*.json
 // (JSON chosen over YAML to keep the bundle dependency-free; the schema is
 // identical and validated — recorded as an implementation assumption).
-import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { atomicRenameSync } from "../store/atomic-rename.js";
 import { tryAcquireProcessLock } from "../store/process-lock.js";
 import { createHash } from "node:crypto";
 import { randomUUID } from "node:crypto";
@@ -982,6 +983,11 @@ function summarizeResult(state: LedgerState, event: LedgerEvent): Record<string,
 }
 
 function writeTextAtomic(tmp: string, text: string, target: string): void {
-  writeFileSync(tmp, text, { encoding: "utf8", mode: 0o600 });
-  renameSync(tmp, target);
+  try {
+    writeFileSync(tmp, text, { encoding: "utf8", mode: 0o600 });
+    atomicRenameSync(tmp, target);
+  } catch (error) {
+    try { rmSync(tmp, { force: true }); } catch { /* preserve the primary error */ }
+    throw error;
+  }
 }

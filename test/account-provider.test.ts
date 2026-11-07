@@ -34,6 +34,7 @@ test("account provider IDs are idempotent while legacy builtin IDs still map", (
     zcodeEntrypoint: "unused",
     providerBuiltinConfigFile: providerConfigPath,
     providerPersonalConfigFile: "unused",
+    zcodeDataRoot: "unused",
     dataRoot: root,
   };
 
@@ -49,6 +50,7 @@ test("account provider IDs are idempotent while legacy builtin IDs still map", (
 test("catalog aliases require the same advertised model and preserve exact provider IDs", () => {
   const config: ZCodeRuntimeConfig = {
     nodeExecutable: process.execPath, zcodeEntrypoint: "unused", dataRoot: "unused",
+    zcodeDataRoot: "unused",
     providerBuiltinConfigFile: "missing-builtin.json", providerPersonalConfigFile: "missing-personal.json",
   };
   const account = { providerId: "account:plan", modelId: "flash" };

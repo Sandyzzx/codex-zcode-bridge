@@ -72,7 +72,7 @@ test("production Host composition initializes the bound SQLite Authority and exp
 test("JSON Worker path lazily imports the unchanged TaskStore/Adapter runner only without fd 3", () => {
   const worker = source("worker/worker-main.ts");
   assert.match(worker, /bridgeLaunchMarker && positionalArgs\.length === 0/u);
-  assert.match(worker, /await runClaimOnlyHandshake\(\{ interactionMode, dropAfterPrepared,/u);
+  assert.match(worker, /await runClaimOnlyHandshake\(\{ interactionMode, privateAuthMode, dropAfterPrepared,/u);
   assert.match(worker, /const \{ runWorkerTask \} = await import\("\.\/run-task\.js"\)/u);
   assert.match(worker, /else \{[\s\S]*?await import\("\.\/run-task\.js"\)/u);
   assert.doesNotMatch(worker, /from ["']\.\.\/sqlite-candidate\/wp6b2b1\/store\.mjs/u);

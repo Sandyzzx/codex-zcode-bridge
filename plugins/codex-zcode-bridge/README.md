@@ -4,6 +4,14 @@
 
 把开发任务从 Codex 交给本机 ZCode Agent，在 Codex 中跟进进度并审查实际改动。
 
+### 本渠道当前版本：1.6.0-prereview.2
+
+本预览版包含 **Start Plan 实验性集成**（Windows、原生 ZCode AppServer）：官方 ZCode 本机凭据读取、只读 Billing 权益核验、一次性私有凭据交付、进程 HANDLE 身份门禁、取消和崩溃恢复。Coding Plan 的既有执行路径保持不变。
+
+**验收范围**：Start Plan 合成集成及 Windows/Ubuntu CI 已通过；**真实 Start Plan 账户、验证码和模型端到端调用尚未验收**。无可验证权益或遇到需要 Desktop 交互的验证码时拒绝执行；账户 3012 unusual activity 的根因未确认。本渠道面向开发者测试，不保证 Start Plan 已可在所有账号上使用。
+
+反馈问题请提交至 [GitHub Issues](https://github.com/Sandyzzx/codex-zcode-bridge/issues)，尽量提供脱敏的错误码、ZCode CLI 版本和 Bridge 事件；**不要提交 JWT、Cookie、Device ID 或完整账户日志**。
+
 ## 使用前
 
 需要 Node.js 22.18+、Git、已安装并登录的 ZCode，以及支持插件 marketplace 的 Codex。

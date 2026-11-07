@@ -70,6 +70,7 @@ async function makeFakeRuntime(
   exitAfterTurnMs: number | null = null,
   descendantControl?: { readonly pidPath: string; readonly releasePath: string },
   turnDelayMs = 0,
+  runtimeAuth = false,
 ): Promise<{ root: string; config: ZCodeRuntimeConfig; requestLog: string }> {
   const root = await mkdtemp(path.join(tmpdir(), "bridge-app-server-test-"));
   const entrypoint = path.join(root, "fake-app-server.cjs");
@@ -104,7 +105,7 @@ function finishTurn() {
   const params = turnFailure === null
     ? { seq: 1, type: "turn.completed", payload: { response: JSON.stringify(report), usage: { totalTokens: 4 }, resultType: "success" } }
     : { seq: 1, type: "turn.failed", payload: { error: turnFailure } };
-  process.stdout.write(JSON.stringify({ method: "session/event", params }) + "\n");
+  process.stdout.write(JSON.stringify({ method: "session/event", params: ${runtimeAuth} ? { ...params, seq: 2, sessionId, turnId: "turn-fixture" } : params }) + "\n");
 }
 function snapshot() {
   return {
@@ -126,6 +127,11 @@ input.on("line", (line) => {
     process.stdout.write(JSON.stringify({ id: message.id, result: {} }) + "\n");
   } else if (message.method === "session/send") {
     process.stdout.write(JSON.stringify({ id: message.id, result: {} }) + "\n");
+    if (${runtimeAuth}) {
+      process.stdout.write(JSON.stringify({ method: "session/event", params: { sessionId, seq: 1, turnId: "turn-fixture", type: "turn.started", payload: { turnId: "turn-fixture" } } }) + "\n");
+      process.stdout.write(JSON.stringify({ id: "auth-rpc", method: "interaction/requestProviderRuntimeHeaders", params: { sessionId, turnId: "turn-fixture", modelSelection: selected } }) + "\n");
+      return;
+    }
     const reportTurn = () => {
       if (${interactionRequest}) {
         for (const rpcId of ["interaction-rpc-1", "interaction-rpc-2"]) {
@@ -140,6 +146,8 @@ input.on("line", (line) => {
       if (${exitAfterTurnMs !== null}) setTimeout(() => process.exit(0), ${exitAfterTurnMs ?? 0});
     };
     if (${turnDelayMs} > 0) setTimeout(reportTurn, ${turnDelayMs}); else reportTurn();
+  } else if (message.id === "auth-rpc") {
+    finishTurn();
   } else if (message.id === "interaction-rpc-1" || message.id === "interaction-rpc-2") {
     if (message.result && message.result.decision) finishTurn();
   } else {
@@ -156,10 +164,33 @@ input.on("line", (line) => {
       zcodeEntrypoint: entrypoint,
       providerBuiltinConfigFile: path.join(root, "builtin.json"),
       providerPersonalConfigFile: path.join(root, "personal.json"),
+      zcodeDataRoot: path.join(root, "zcode-data"),
       dataRoot: root,
     },
   };
 }
+
+test("runtime auth refuses a lease revoked before its reply is written", async () => {
+  const runtime = await makeFakeRuntime({ providerId: "account:bigmodel-start-plan", modelId: "GLM-5.3-Flash" }, true, false, undefined, true, null, undefined, 0, true);
+  let valid = true;
+  try {
+    const adapter = new ZCodeAppServerAdapter({
+      resolver: { resolve: async () => runtime.config }, timeoutMs: 10_000,
+      childEnvBase: { PATH: process.env.PATH },
+      resolveStartPlanRuntimeAuth: async () => {
+        const credential = { apiKey: "synthetic-revoked-marker", expiresAt: Date.now() + 10_000, isValid: () => valid };
+        queueMicrotask(() => { valid = false; });
+        return credential;
+      },
+    });
+    const handle = await adapter.startTask({ task: { ...task, model: { provider_id: "account:bigmodel-start-plan", model_id: "GLM-5.3-Flash" } }, workspace: makeWorkspace(runtime.root), attempt: 1 });
+    await adapter.getResult(handle);
+    const wire = await readFile(runtime.requestLog, "utf8");
+    const reply = wire.trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>).find((message) => message.id === "auth-rpc");
+    assert.equal((reply?.result as { headersApplied?: boolean } | undefined)?.headersApplied, false);
+    assert.equal(wire.includes("synthetic-revoked-marker"), false);
+  } finally { await rm(runtime.root, { recursive: true, force: true }); }
+});
 
 test("applies a per-task model override, verifies the selection, and does not persist it as the workspace default", async () => {
   const runtime = await makeFakeRuntime(
@@ -251,6 +282,40 @@ test("maps an identity-bound Windows tree receipt into the Adapter outcome", { t
     if (terminatedPid > 0 && isProcessRunning(terminatedPid)) {
       process.kill(terminatedPid, "SIGKILL");
     }
+    await rm(runtime.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
+});
+
+test("failed turn exposes only an actual identity-bound cleanup receipt to the internal worker", { timeout: 15_000 }, async (t) => {
+  if (process.platform !== "win32") return t.skip("Windows identity-bound cleanup receipt");
+  const runtime = await makeFakeRuntime(undefined, true, false, { message: "synthetic turn failure" }, true);
+  const platformProbe = createPlatformProbe();
+  let terminatedPid = 0;
+  let receiptPid = 0;
+  try {
+    const adapter = new ZCodeAppServerAdapter({
+      resolver: { resolve: async () => runtime.config }, timeoutMs: 10_000,
+      childEnvBase: { PATH: process.env.PATH },
+      onVerifiedFailureCleanup: (receipt) => { receiptPid = receipt.rootPid; },
+      terminateProcessTreeImpl: async (pid, options) => {
+        terminatedPid = pid;
+        const identity = await platformProbe.identityOf(pid);
+        assert.equal(identity.fingerprint_precision, "exact");
+        assert.equal(identity.fingerprint, options?.expectedRootFingerprint);
+        process.kill(pid, "SIGKILL");
+        await awaitOwnedProcessExit(pid);
+        return { pid, signal: "SIGKILL", verified: true, windows: {
+          rootPid: pid, rounds: 1, members: [{ pid, fingerprint: identity.fingerprint!, creationFileTime: "test-creation" }],
+          kills: [{ pid, status: "killed", exitFileTime: null }], signaled: [pid],
+        } };
+      },
+    });
+    const handle = await adapter.startTask({ task, workspace: makeWorkspace(runtime.root), attempt: 1 });
+    await assert.rejects(adapter.getResult(handle));
+    assert.equal(receiptPid, terminatedPid);
+    assert.ok(receiptPid > 0);
+  } finally {
+    if (terminatedPid > 0 && isProcessRunning(terminatedPid)) process.kill(terminatedPid, "SIGKILL");
     await rm(runtime.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 });
