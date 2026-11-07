@@ -2,7 +2,7 @@
 
 **Delegate coding to ZCode from Codex; keep planning, review, and acceptance in Codex.**
 
-> **Stable release.** `v1.3.0` introduces automatic SQLite bootstrap for new installations and upgrades without an existing SQLite database. Windows single-user local installations are the validated deployment target; other platforms have not been fully validated.
+> **Release channels.** Stable is `v1.6.0` (tag `codex-zcode-bridge-v1.6.0`) for general users, without the unverified experimental Start Plan integration. Preview is `1.6.0-preview.2` on the `preview` branch (Marketplace `codex-zcode-bridge-preview`) for developers and testers; it contains the experimental Start Plan P0 integration whose real-account end-to-end flow is **not** accepted. Windows single-user local installations remain the validated deployment target; other platforms have not been fully validated.
 
 [简体中文](README.zh-CN.md) · [Repository](https://github.com/Sandyzzx/codex-zcode-bridge) · [Releases](https://github.com/Sandyzzx/codex-zcode-bridge/releases)
 
@@ -32,14 +32,41 @@ The bridge supports direct project directories and an optional Git execution wor
 
 ZCode and Node.js are not installed automatically by the marketplace.
 
-## Install v1.3.0
+## Install
 
-Use the **published stable tag** rather than `master`. The commands below pin the exact tag shown on [GitHub Releases](https://github.com/Sandyzzx/codex-zcode-bridge/releases):
+Two channels are published. **Use one channel per Codex installation.** Branch refs keep updating; tags are fixed snapshots and do not track later commits.
+
+### Stable (general users)
+
+Use the **published stable tag** rather than `master`:
 
 ```sh
-codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-v1.3.0
+codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-v1.6.0
 codex plugin add codex-zcode-bridge@codex-zcode-bridge
 ```
+
+### Preview (developers and testers)
+
+The preview channel tracks the `preview` branch and contains the experimental Start Plan P0 integration. Marketplace ID: `codex-zcode-bridge-preview`.
+
+```sh
+codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref preview
+codex plugin add codex-zcode-bridge@codex-zcode-bridge-preview
+```
+
+Update the moving preview marketplace with:
+
+```sh
+codex plugin marketplace upgrade codex-zcode-bridge-preview
+```
+
+To pin the tested release snapshot instead of following the branch, add the marketplace with the preview tag:
+
+```sh
+codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-preview-v1.6.0-preview.2
+```
+
+Branch refs keep updating with later preview commits; a tag is a fixed snapshot and does not track them. To switch an existing marketplace between a branch and a tag, re-run `marketplace add` with the desired `--ref` (or `codex plugin marketplace remove` first and add again); if the actual behavior differs, verify with `codex plugin marketplace add --help` instead of guessing.
 
 Alternatively, register the tagged repository marketplace, then install **Zcode Bridge** in Codex's Plugins Directory. Start a new conversation and review the plugin's `SessionStart` hook. First-run discovery locates the local ZCode runtime and provider settings; it does not copy credentials. Use `zcode_doctor` for installation diagnostics.
 
@@ -78,7 +105,7 @@ For the supported Windows single-user local deployment, SQLite uses a fixed trus
 ## Limits and troubleshooting
 
 - Only a Windows single-user local deployment has received real ZCode Provider and production SQLite cutover validation in this development cycle. This release is not a cross-platform or general-availability certification.
-- ZCode Start Plan is not established as a supported Bridge path in this release; provider capabilities depend on the user's local ZCode installation.
+- The stable channel does not include Start Plan support. The preview channel contains the experimental Start Plan P0 integration, but real Start Plan account/model end-to-end acceptance has not been performed; provider capabilities still depend on the user's local ZCode installation.
 - A worker can exit without committing a Result. In that case the bridge intentionally retains a cleanup hold rather than guessing that resource cleanup succeeded. Do not clear holds by editing the database or killing unidentified processes. Preserve diagnostic evidence and use documented, verified recovery procedures.
 - ZCode Desktop may refresh its workspace/session index after the Bridge task is created.
 - A Git worktree is not a sandbox. Permissions and access are governed by the local operating-system account and the selected execution mode.
