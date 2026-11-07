@@ -4775,14 +4775,30 @@ function createProductionStartPlanAuth(options) {
     // the credential and rejects if the account identity changed mid-run.
     account: initial.account,
     signal: options.signal,
+    async prepare(provider, model, signal) {
+      if (provider !== "account:bigmodel-start-plan" || !model || signal.aborted) return false;
+      const credential = readOfficialStartPlanCredential(options.zcodeDataRoot, env);
+      if (!credential || credential.account !== initial.account || credential.expiresAt !== null && credential.expiresAt <= now()) return false;
+      const verdict2 = await options.entitlement.check({
+        account: credential.account,
+        provider,
+        model,
+        deviceMid: credential.deviceMid,
+        jwt: credential.jwt,
+        signal
+      });
+      return verdict2.status === "entitled" && !signal.aborted;
+    },
     async issue(binding, signal) {
       const credential = readOfficialStartPlanCredential(options.zcodeDataRoot, env);
       if (!credential) throw new Error("start_plan_credential_unavailable");
       if (binding.account !== credential.account) throw new Error("start_plan_account_identity_invalid");
       if (credential.expiresAt !== null && credential.expiresAt <= now()) throw new Error("start_plan_credential_expired");
       if (signal.aborted) throw new Error("start_plan_issuer_cancelled");
-      const entitlement = options.entitlement;
-      const verdict2 = await entitlement.check({
+      if (binding.provider !== "account:bigmodel-start-plan" || !binding.model) {
+        throw new Error("start_plan_identity_invalid");
+      }
+      const verdict2 = await options.entitlement.check({
         account: credential.account,
         provider: binding.provider,
         model: binding.model,
@@ -4827,7 +4843,7 @@ async function readOfficialCliVersion(zcodeEntrypoint) {
   if (version2) officialCliVersionCache.set(key, version2);
   return version2;
 }
-var OFFICIAL_CREDENTIAL_ENCRYPTION_PREFIX, OFFICIAL_CREDENTIAL_IV_BYTES, OFFICIAL_CREDENTIAL_AUTH_TAG_BYTES, OFFICIAL_START_PLAN_ORIGIN, StartPlanBillingEntitlement, officialCliVersionCache;
+var OFFICIAL_CREDENTIAL_ENCRYPTION_PREFIX, OFFICIAL_CREDENTIAL_IV_BYTES, OFFICIAL_CREDENTIAL_AUTH_TAG_BYTES, OFFICIAL_START_PLAN_ORIGIN, BILLING_REQUEST_TIMEOUT_MS, StartPlanBillingEntitlement, officialCliVersionCache;
 var init_start_plan_production_auth = __esm({
   "src/runtime/start-plan-production-auth.ts"() {
     "use strict";
@@ -4836,6 +4852,7 @@ var init_start_plan_production_auth = __esm({
     OFFICIAL_CREDENTIAL_IV_BYTES = 12;
     OFFICIAL_CREDENTIAL_AUTH_TAG_BYTES = 16;
     OFFICIAL_START_PLAN_ORIGIN = "https://zcode.z.ai";
+    BILLING_REQUEST_TIMEOUT_MS = 15e3;
     StartPlanBillingEntitlement = class {
       #origin;
       #getAppVersion;
@@ -4862,7 +4879,7 @@ var init_start_plan_production_auth = __esm({
               // comes from the official runtime and identity remains in memory.
               Authorization: `Bearer ${input.jwt}`
             },
-            signal: input.signal
+            signal: AbortSignal.any([input.signal, AbortSignal.timeout(BILLING_REQUEST_TIMEOUT_MS)])
           });
         } catch (error2) {
           if (input.signal.aborted) throw error2;
@@ -11391,6 +11408,7 @@ async function openClaimOnlyDriver(options) {
           const revokeOnAccountChange = () => privateAuthAbort.abort();
           accountSignal?.addEventListener("abort", revokeOnAccountChange, { once: true });
           if (accountSignal?.aborted) privateAuthAbort.abort();
+          let startPlanEntitled = false;
           let handleGate;
           const closeHandleGate = async () => {
             const gate = handleGate;
@@ -11410,6 +11428,17 @@ async function openClaimOnlyDriver(options) {
             privateAuthAbort.signal.addEventListener("abort", () => lifetime.destroy(), { once: true });
             if (privateAuthAbort.signal.aborted) lifetime.destroy();
             else lifetime.write(Buffer.from([1]));
+            try {
+              startPlanEntitled = await options.startPlanPrivateAuth.prepare(
+                input.task.model.provider_id,
+                input.task.model.model_id,
+                privateAuthAbort.signal
+              );
+            } catch {
+              startPlanEntitled = false;
+            }
+            if (privateAuthAbort.signal.aborted) startPlanEntitled = false;
+            stage("start_plan_entitlement_preflight", { entitled: startPlanEntitled });
           }
           await sendDecision(child, "claim_committed", {
             protocol: "bridge-sqlite-execution-envelope-v1",
@@ -11425,7 +11454,13 @@ async function openClaimOnlyDriver(options) {
             host_profile: workerHostProfile,
             continuation: input.continuation ?? null,
             previous_result: input.previousResult ?? null,
-            ...usePrivateAuth ? { private_auth: { account: options.startPlanPrivateAuth.account, claim: claimId } } : {}
+            ...usePrivateAuth ? { private_auth: {
+              account: options.startPlanPrivateAuth.account,
+              claim: claimId,
+              provider: input.task.model.provider_id,
+              model: input.task.model.model_id,
+              entitled: startPlanEntitled
+            } } : {}
           });
           stage("claim_continue_sent", { claim_id: claimId });
           let interactionPump;
@@ -11989,6 +12024,12 @@ function validateExecutionCleanupProof(value) {
     throw new LifecycleGateError("worker_cleanup_proof_invalid");
   }
   if (proof.source === "zcode_app_server_adapter") {
+    if (proof.method === "adapter_not_started") {
+      if (Object.keys(proof).sort().join("|") !== "complete|contract|managed_browser_cleanup_verified|method|reason|source|workspace_retained" || proof.reason !== "start_plan_preflight_rejected") {
+        throw new LifecycleGateError("worker_cleanup_proof_invalid");
+      }
+      return proof;
+    }
     if (Object.keys(proof).sort().join("|") !== "adapter_process_id|adapter_start_fingerprint|complete|contract|managed_browser_cleanup_verified|method|process_tree_member_count|process_tree_receipt_digest|source|workspace_retained" || proof.method !== "identity_bound_windows_tree_cleanup" || !Number.isSafeInteger(proof.adapter_process_id) || Number(proof.adapter_process_id) < 1 || typeof proof.adapter_start_fingerprint !== "string" || proof.adapter_start_fingerprint.length === 0 || typeof proof.process_tree_receipt_digest !== "string" || !/^[0-9a-f]{64}$/u.test(proof.process_tree_receipt_digest) || !Number.isSafeInteger(proof.process_tree_member_count) || Number(proof.process_tree_member_count) < 1) {
       throw new LifecycleGateError("worker_cleanup_proof_invalid");
     }
@@ -12005,7 +12046,7 @@ function validateExecutionCleanupProof(value) {
 function trustedExecutionCleanupProof(proof, testOnlyFakeAdapter) {
   if (!proof) return null;
   if (testOnlyFakeAdapter) return proof.source === "explicit_test_fake" ? proof : null;
-  return proof.source === "zcode_app_server_adapter" && proof.method === "identity_bound_windows_tree_cleanup" && proof.complete === true && proof.managed_browser_cleanup_verified === true && proof.workspace_retained === true ? proof : null;
+  return proof.source === "zcode_app_server_adapter" && proof.complete === true && proof.managed_browser_cleanup_verified === true && proof.workspace_retained === true && (proof.method === "identity_bound_windows_tree_cleanup" || proof.method === "adapter_not_started" && proof.reason === "start_plan_preflight_rejected") ? proof : null;
 }
 function verifyPersistedClaimEvidence(port, operation, input, generation, claimId) {
   if (operation.operation_id !== input.operationId || operation.task_id !== input.task.task_id || operation.attempt !== input.attempt || operation.generation !== generation || operation.phase !== "running" || operation.claim_id !== claimId || operation.claim_generation !== generation || !validSnapshotDigest(operation.claim_worker_identity_digest)) {
@@ -38163,7 +38204,7 @@ import path13 from "node:path";
 import { createHash as createHash7 } from "node:crypto";
 import { existsSync as existsSync9, readFileSync as readFileSync9 } from "node:fs";
 import path12 from "node:path";
-function buildAccountProviderPayload(config2) {
+function buildAccountProviderPayload(config2, verifiedSelection) {
   const table = readJson(config2.providerBuiltinConfigFile);
   const providerRules = readProviderRules(table).filter(isRecord2).map((rule) => rule).filter((rule) => rule.config?.access?.type === "zhipu-account" && typeof rule.providerId === "string");
   if (!providerRules.length) return null;
@@ -38181,7 +38222,12 @@ function buildAccountProviderPayload(config2) {
     const cacheStatus = asRecord2(cacheItems[legacyId]).status;
     const legacyConfig = asRecord2(credentialProviders[legacyId]);
     const options = asRecord2(legacyConfig.options);
-    const entitled = cacheStatus === "available" || legacyConfig.enabled === true && typeof options.apiKey === "string" && options.apiKey.trim().length > 0;
+    const selectedEntitled = verifiedSelection?.providerId === providerId && Array.isArray(rule.config?.builtinModelIds) && rule.config.builtinModelIds.includes(verifiedSelection.modelId);
+    if (verifiedSelection?.providerId === providerId && !selectedEntitled) {
+      throw new Error("start_plan_model_not_registered");
+    }
+    const legacyEntitled = providerId === "account:bigmodel-start-plan" ? false : cacheStatus === "available" || legacyConfig.enabled === true && typeof options.apiKey === "string" && options.apiKey.trim().length > 0;
+    const entitled = selectedEntitled || legacyEntitled;
     providers[providerId] = {
       ...Array.isArray(rule.config?.builtinModelIds) ? { builtinModelIds: rule.config.builtinModelIds } : {},
       access: { type: "zhipu-account", entitled }
@@ -38575,7 +38621,7 @@ async function runBridgeDoctor(options = {}) {
     checks.push({ name: "desktop_index", status: "unknown", summary: "Not checked because the active ZCode data location is unknown" });
   }
   checks.push({ name: "app_server", status: "unknown", summary: "Not probed; doctor does not start an app-server session" });
-  checks.push({ name: "start_plan", status: "warning", summary: "Unsupported through the headless Bridge; ZCode Start Plan requires a Desktop captcha session" });
+  checks.push({ name: "start_plan", status: "warning", summary: "Selected Start Plan tasks require a live account/model entitlement check before provider registration; CAPTCHA-required responses fail closed, and Doctor does not send Billing requests" });
   checks.push({ name: "permission_roundtrip", status: "unknown", summary: "Bridge protocol tests exist; a real ZCode permission-approval roundtrip has not been verified" });
   checks.push({
     name: "process_probe",
@@ -38728,13 +38774,15 @@ var ZCodeModelSettings = class {
     const cached2 = await readModelCatalogCache(source.cachePath);
     const cacheAge = cached2 ? Date.now() - cached2.cached_at_ms : null;
     if (cached2 && cached2.source_fingerprint === source.fingerprint && cacheAge !== null && cacheAge >= 0 && cacheAge < MODEL_CATALOG_TTL_MS) {
+      const warning = startPlanCatalogWarning(buildAccountProviderPayload(source.config), cached2.models);
       return {
         workspace: workspacePath,
         current_model: null,
         models: cached2.models,
         account_provider_sync: "not_needed",
         cache_status: "fresh",
-        cached_at: new Date(cached2.cached_at_ms).toISOString()
+        cached_at: new Date(cached2.cached_at_ms).toISOString(),
+        ...warning ? { warning } : {}
       };
     }
     let lastError;
@@ -38791,6 +38839,7 @@ var ZCodeModelSettings = class {
       if (models.length === 0) throw new BridgeError("zcode_nonzero_exit", "ZCode app-server returned an empty model catalog for this workspace");
       const cachedAt = Date.now();
       await writeModelCatalogCache(cachePath, { cached_at_ms: cachedAt, source_fingerprint: fingerprint, models }).catch(() => void 0);
+      warning = startPlanCatalogWarning(accountPayload, models);
       return {
         workspace: workspacePath,
         current_model: current,
@@ -39108,6 +39157,7 @@ function modelCatalogCachePath(workspace, config2, env, settingsDirectory) {
 }
 async function modelCatalogSourceFingerprint(config2, env) {
   const digest3 = createHash8("sha256");
+  digest3.update("start-plan-task-scoped-live-billing-v1");
   for (const file of [config2.providerBuiltinConfigFile, config2.providerPersonalConfigFile]) {
     digest3.update(file);
     digest3.update(await readFile2(file));
@@ -39117,6 +39167,11 @@ async function modelCatalogSourceFingerprint(config2, env) {
   const account = buildAccountProviderPayload(config2);
   if (account) digest3.update(JSON.stringify({ providers: account.providers, states: account.states, builtinRevision: account.basedOnZCodeBuiltinRevision }));
   return digest3.digest("hex");
+}
+function startPlanCatalogWarning(account, models) {
+  const providerId = "account:bigmodel-start-plan";
+  if (!account?.providers[providerId] || account.states[providerId]?.entitled === true || models.some((model) => model.provider_id === providerId)) return void 0;
+  return "Start Plan models are checked for a selected task; this catalog read does not send Billing requests.";
 }
 async function readModelCatalogCache(cachePath) {
   try {

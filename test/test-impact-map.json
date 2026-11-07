@@ -57,7 +57,8 @@
       "paths": [
         "src/runtime/account-provider.ts",
         "src/runtime/model-settings.ts",
-        "src/runtime/session-preferences.ts"
+        "src/runtime/session-preferences.ts",
+        "src/runtime/start-plan-production-auth.ts"
       ]
     },
     {
@@ -230,6 +231,7 @@
   ],
   "tests": [
     { "file": "test/account-provider.test.ts", "type": "Unit", "gate": "T1", "domains": ["provider-catalog"] },
+    { "file": "test/start-plan-production-auth.test.ts", "type": "Integration", "gate": "T2", "domains": ["provider-catalog", "appserver-adapter"] },
     { "file": "test/agent-report.test.ts", "type": "Unit", "gate": "T1", "domains": ["task-prompt-and-report"] },
     { "file": "test/audit-remediation.test.ts", "type": "Integration", "gate": "T2", "domains": ["manager-lifecycle", "worker-launch", "process-cleanup-and-locks", "workspace-provider", "json-task-store"] },
     { "file": "test/batch2-evidence.test.ts", "type": "Integration", "gate": "T2", "domains": ["json-task-store", "manager-lifecycle", "worker-launch", "workspace-provider", "feedback-and-token-observability"] },

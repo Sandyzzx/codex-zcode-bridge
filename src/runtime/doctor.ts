@@ -333,7 +333,7 @@ export async function runBridgeDoctor(options: BridgeDoctorOptions = {}): Promis
   }
 
   checks.push({ name: "app_server", status: "unknown", summary: "Not probed; doctor does not start an app-server session" });
-  checks.push({ name: "start_plan", status: "warning", summary: "Unsupported through the headless Bridge; ZCode Start Plan requires a Desktop captcha session" });
+  checks.push({ name: "start_plan", status: "warning", summary: "Selected Start Plan tasks require a live account/model entitlement check before provider registration; CAPTCHA-required responses fail closed, and Doctor does not send Billing requests" });
   checks.push({ name: "permission_roundtrip", status: "unknown", summary: "Bridge protocol tests exist; a real ZCode permission-approval roundtrip has not been verified" });
 
   // A2: report the process-identity probe capability for this platform.

@@ -48,7 +48,7 @@ interface FakeRuntimeFixture {
   readonly zcodeHomeV2: string;
 }
 
-type RuntimeVariant = "success" | "failure" | "private-auth" | "private-auth-echo" | "private-auth-wrong-turn" | "private-auth-wrong-claim" | "private-auth-account-switch" | "private-auth-hold" | "private-auth-eof-recheck" | "private-auth-interaction";
+type RuntimeVariant = "success" | "failure" | "private-auth" | "private-auth-echo" | "private-auth-wrong-turn" | "private-auth-wrong-claim" | "private-auth-account-switch" | "private-auth-hold" | "private-auth-eof-recheck" | "private-auth-interaction" | "private-auth-preflight-reject";
 function writeFakeRuntime(name: string, variant: RuntimeVariant): FakeRuntimeFixture {
   const root = path.join(fixtureRoot, name);
   mkdirSync(root, { recursive: true });
@@ -103,7 +103,9 @@ function writeFakeRuntime(name: string, variant: RuntimeVariant): FakeRuntimeFix
     `input.on("line", (line) => {`,
     `  const message = JSON.parse(line);`,
     `  if (message.id !== "private-auth-rpc" && message.id !== "private-auth-recheck") fs.appendFileSync(requestLog, JSON.stringify(message) + "\\n");`,
-    `  if (message.method === "session/create" || message.method === "session/resume") {`,
+    `  if (message.method === "provider/updateAccountConfig") {`,
+    `    process.stdout.write(JSON.stringify({ id: message.id, result: {} }) + "\\n");`,
+    `  } else if (message.method === "session/create" || message.method === "session/resume") {`,
     `    process.stdout.write(JSON.stringify({ id: message.id, result: snapshot() }) + "\\n");`,
     `  } else if (message.method === "session/setModel") {`,
     `    selected = message.params.model;`,
@@ -147,7 +149,15 @@ function writeFakeRuntime(name: string, variant: RuntimeVariant): FakeRuntimeFix
   writeFileSync(entrypoint, script, "utf8");
   writeFileSync(taskInput, JSON.stringify({ task_id: "TASK_ID" }), "utf8");
   mkdirSync(path.dirname(builtinConfig), { recursive: true });
-  writeFileSync(builtinConfig, JSON.stringify({ config: { providers: [] } }), "utf8");
+  writeFileSync(builtinConfig, JSON.stringify({
+    config: {
+      providers: [],
+      providerConfigRules: { providerRules: [{
+        providerId: "account:bigmodel-start-plan",
+        config: { builtinModelIds: ["GLM-5.3-Flash"], access: { type: "zhipu-account", mode: "start-plan", accountType: "bigmodel" } },
+      }] },
+    },
+  }), "utf8");
   const zcodeHomeV2 = path.join(root, ".zcode", "v2");
   writeFileSync(path.join(zcodeHomeV2, "provider_config.json"), JSON.stringify({
     config: { providerConfigRules: { providerRules: { "provider-default": { upstream: { type: "synthetic" } } } } },
@@ -291,6 +301,7 @@ async function withRealAdapterMcp(
         ...(options.runtimeVariant?.startsWith("private-auth") ? { startPlanPrivateAuth: {
           account: "synthetic-account",
           signal: accountController.signal,
+          prepare: async () => options.runtimeVariant !== "private-auth-preflight-reject",
           issue: async (binding: import("../../../src/runtime/start-plan-private-lease.js").PrivateLeaseBinding, signal: AbortSignal) => {
             if (signal.aborted) throw new Error("cancelled");
             if (options.issueCount) options.issueCount.count++;
@@ -500,12 +511,33 @@ for (const variant of ["private-auth-wrong-turn", "private-auth-wrong-claim", "p
       assert.equal(selection.length, 1);
       const model = (selection[0]?.params as { model?: { providerId?: string } } | undefined)?.model;
       assert.equal(model?.providerId, "account:bigmodel-start-plan");
+    const providerSync = requests.find((item) => item.method === "provider/updateAccountConfig");
+    assert.ok(providerSync, "live entitlement must be followed by native Provider registration");
+    const syncParams = providerSync.params as { states?: Record<string, { entitled?: boolean; current?: boolean }> };
+    assert.equal(syncParams.states?.["account:bigmodel-start-plan"]?.entitled, true);
+    assert.equal(syncParams.states?.["account:bigmodel-start-plan"]?.current, true);
+    assert.equal(JSON.stringify(providerSync).includes("SYNTHETIC_GATE2_SECRET_93d9422b"), false);
       const marker = Buffer.from("SYNTHETIC_GATE2_SECRET_93d9422b");
       const scan = (directory: string): void => { for (const name of readdirSync(directory)) { const item = path.join(directory, name); const stat = lstatSync(item); if (stat.isSymbolicLink()) continue; if (stat.isDirectory()) scan(item); else if (stat.isFile()) assert.equal(readFileSync(item).includes(marker), false, `secret marker in ${item}`); } };
       scan(dataRoot);
     }, { runtimeVariant: variant, issueCount, preserveFixtureOnFailure: true });
   });
 }
+
+test("Start Plan Billing preflight rejection prevents AppServer startup and private lease delivery", { timeout: 120_000 }, async () => {
+  const issueCount = { count: 0 };
+  await withRealAdapterMcp(async (client, _manager, _dataRoot, workspace, runtime) => {
+    const taskId = `private-preflight-reject-${randomUUID()}`;
+    contentObject(await client.callTool({ name: "zcode_task", arguments: {
+      ...syntheticTask(workspace, taskId),
+      model: { provider_id: "account:bigmodel-start-plan", model_id: "GLM-5.3-Flash" },
+    } }));
+    assert.equal((await waitForTerminal(client, taskId, 1)).status, "failed");
+    await waitForLifecycleEvent(client, taskId, "released");
+    assert.equal(issueCount.count, 0, "no private credential lease may be issued after preflight rejection");
+    assert.equal(existsSync(runtime.requestLog), false, "a rejected preflight must not start AppServer or send provider/session requests");
+  }, { runtimeVariant: "private-auth-preflight-reject", issueCount, preserveFixtureOnFailure: true });
+});
 
 test("SQLite interaction persistence redacts a synthetic credential echoed by AppServer", { timeout: 120_000 }, async () => {
   const stderr = { lines: [] as string[] };

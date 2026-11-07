@@ -272,6 +272,8 @@ export interface ClaimOnlyDriverOptions {
     readonly account: string;
     /** Aborted when authorization or active account identity is invalidated. */
     readonly signal: AbortSignal;
+    /** One task-scoped live entitlement check before provider registration. */
+    prepare(provider: string, model: string, signal: AbortSignal): Promise<boolean>;
     issue(binding: Readonly<PrivateLeaseBinding>, signal: AbortSignal): Promise<PrivateCredentialLease>;
   };
   /** Injectable Worker-handle transaction factory for tests and non-Windows
@@ -2033,6 +2035,7 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
           const revokeOnAccountChange = (): void => privateAuthAbort.abort();
           accountSignal?.addEventListener("abort", revokeOnAccountChange, { once: true });
           if (accountSignal?.aborted) privateAuthAbort.abort();
+          let startPlanEntitled = false;
           let handleGate: WorkerHandleGate | undefined;
           const closeHandleGate = async (): Promise<void> => {
             const gate = handleGate;
@@ -2050,6 +2053,17 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
             privateAuthAbort.signal.addEventListener("abort", () => lifetime.destroy(), { once: true });
             if (privateAuthAbort.signal.aborted) lifetime.destroy();
             else lifetime.write(Buffer.from([1]));
+            try {
+              startPlanEntitled = await options.startPlanPrivateAuth!.prepare(
+                input.task.model!.provider_id,
+                input.task.model!.model_id,
+                privateAuthAbort.signal,
+              );
+            } catch {
+              startPlanEntitled = false;
+            }
+            if (privateAuthAbort.signal.aborted) startPlanEntitled = false;
+            stage("start_plan_entitlement_preflight", { entitled: startPlanEntitled });
           }
           // Task and execution configuration are sent only after the durable
           // Claim. Production always selects the real ZCode Adapter. The fake
@@ -2069,7 +2083,13 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
             host_profile: workerHostProfile,
             continuation: input.continuation ?? null,
             previous_result: input.previousResult ?? null,
-            ...(usePrivateAuth ? { private_auth: { account: options.startPlanPrivateAuth!.account, claim: claimId } } : {}),
+            ...(usePrivateAuth ? { private_auth: {
+              account: options.startPlanPrivateAuth!.account,
+              claim: claimId,
+              provider: input.task.model!.provider_id,
+              model: input.task.model!.model_id,
+              entitled: startPlanEntitled,
+            } } : {}),
           });
           stage("claim_continue_sent", { claim_id: claimId });
 
@@ -2680,6 +2700,14 @@ function validateExecutionCleanupProof(value: unknown): CandidateExecutionCleanu
     throw new LifecycleGateError("worker_cleanup_proof_invalid");
   }
   if (proof.source === "zcode_app_server_adapter") {
+    if (proof.method === "adapter_not_started") {
+      if (Object.keys(proof).sort().join("|")
+        !== "complete|contract|managed_browser_cleanup_verified|method|reason|source|workspace_retained"
+        || proof.reason !== "start_plan_preflight_rejected") {
+        throw new LifecycleGateError("worker_cleanup_proof_invalid");
+      }
+      return proof as unknown as CandidateExecutionCleanupProof;
+    }
     if (Object.keys(proof).sort().join("|")
       !== "adapter_process_id|adapter_start_fingerprint|complete|contract|managed_browser_cleanup_verified|method|process_tree_member_count|process_tree_receipt_digest|source|workspace_retained"
       || proof.method !== "identity_bound_windows_tree_cleanup"
@@ -2710,10 +2738,11 @@ function trustedExecutionCleanupProof(
   if (!proof) return null;
   if (testOnlyFakeAdapter) return proof.source === "explicit_test_fake" ? proof : null;
   return proof.source === "zcode_app_server_adapter"
-    && proof.method === "identity_bound_windows_tree_cleanup"
     && proof.complete === true
     && proof.managed_browser_cleanup_verified === true
     && proof.workspace_retained === true
+    && (proof.method === "identity_bound_windows_tree_cleanup"
+      || proof.method === "adapter_not_started" && proof.reason === "start_plan_preflight_rejected")
     ? proof
     : null;
 }

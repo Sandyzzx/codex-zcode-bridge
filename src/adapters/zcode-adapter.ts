@@ -51,6 +51,7 @@ export type AdapterErrorCode =
   | "spawn_failed"
   | "timeout"
   | "cancelled"
+  | "provider_config_invalid"
   | "invalid_json"
   | "invalid_agent_report"
   | "zcode_nonzero_exit"
@@ -74,6 +75,8 @@ export interface ZCodeRunOutcome extends AgentRunOutcome {
   /** Process cleanup failed after the turn result was captured. */
   readonly cleanupError?: string | null;
   readonly cleanupVerified?: boolean;
+  /** Adapter-specific evidence that no runtime resource was created. */
+  readonly cleanupNotRequired?: "start_plan_preflight_rejected";
   /** Recorded root/member PIDs when cleanup remains unverified. */
   readonly cleanupMemberPids?: readonly number[];
   /**

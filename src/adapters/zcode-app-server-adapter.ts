@@ -225,6 +225,8 @@ interface ResolvedBrowserConfig {
 export interface ZCodeAppServerAdapterOptions {
   /** Internal opt-in credential broker. It is not a TaskPackage field. */
   resolveStartPlanRuntimeAuth?: (scope: { readonly sessionId: string; readonly turnId: string; readonly providerId: string; readonly modelId: string }, signal: AbortSignal) => Promise<{ readonly apiKey: string; readonly expiresAt: number; readonly isValid: () => boolean }>;
+  /** Task-scoped live Billing verdict delivered by the SQLite authority. */
+  startPlanProviderEntitled?: boolean;
   /** Internal output sanitizers owned by the same credential broker. */
   sanitizeStartPlanFrame?: (value: Record<string, unknown>) => Record<string, unknown>;
   sanitizeStartPlanText?: (value: string) => string;
@@ -302,6 +304,7 @@ const MAX_FRAME_BYTES = 16 * 1024 * 1024;
  */
 export class ZCodeAppServerAdapter implements CodingAgentAdapter {
   readonly #resolveStartPlanRuntimeAuth: ZCodeAppServerAdapterOptions["resolveStartPlanRuntimeAuth"];
+  readonly #startPlanProviderEntitled: boolean;
   readonly #sanitizeStartPlanFrame: ZCodeAppServerAdapterOptions["sanitizeStartPlanFrame"];
   readonly #sanitizeStartPlanText: ZCodeAppServerAdapterOptions["sanitizeStartPlanText"];
   readonly #onVerifiedFailureCleanup: ZCodeAppServerAdapterOptions["onVerifiedFailureCleanup"];
@@ -333,6 +336,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
 
   constructor(options: ZCodeAppServerAdapterOptions = {}) {
     this.#resolveStartPlanRuntimeAuth = options.resolveStartPlanRuntimeAuth;
+    this.#startPlanProviderEntitled = options.startPlanProviderEntitled === true;
     this.#sanitizeStartPlanFrame = options.sanitizeStartPlanFrame;
     this.#sanitizeStartPlanText = options.sanitizeStartPlanText;
     this.#onVerifiedFailureCleanup = options.onVerifiedFailureCleanup;
@@ -532,6 +536,29 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       const config = await this.#resolver.resolve();
       const preferences = resolveSessionPreferences(task.model, runtimeEnv, this.#executionProfileId);
       const childEnv = this.#buildChildEnv(config, runtimeEnv);
+      const startPlanSelected = this.#resolveStartPlanRuntimeAuth !== undefined
+        && task.model?.provider_id === "account:bigmodel-start-plan";
+      if (startPlanSelected && !this.#startPlanProviderEntitled) {
+        return this.#startPlanReadinessFailure(entry, "Start Plan live entitlement was not verified; no ZCode session was started.");
+      }
+      let accountProviderPayload: ReturnType<typeof buildAccountProviderPayload>;
+      try {
+        accountProviderPayload = buildAccountProviderPayload(config, startPlanSelected
+          ? { providerId: "account:bigmodel-start-plan", modelId: task.model!.model_id }
+          : undefined);
+      } catch (error) {
+        if (startPlanSelected) {
+          return this.#startPlanReadinessFailure(entry, error instanceof Error && error.message === "start_plan_model_not_registered"
+            ? "The requested Start Plan model is not present in the official provider registry."
+            : "Start Plan provider snapshot could not be prepared after live entitlement verification.");
+        }
+        throw error;
+      }
+      if (startPlanSelected && (!accountProviderPayload?.providers["account:bigmodel-start-plan"]
+        || accountProviderPayload.providers["account:bigmodel-start-plan"].access.entitled !== true
+        || accountProviderPayload.states["account:bigmodel-start-plan"]?.current !== true)) {
+        return this.#startPlanReadinessFailure(entry, "Start Plan provider snapshot could not be prepared after live entitlement verification.");
+      }
       // Observed ZCode CLI retry budget. Restrict the explicitly brokered
       // Start Plan attempt; never change the Coding Plan default environment.
       if (this.#resolveStartPlanRuntimeAuth && task.model?.provider_id === "account:bigmodel-start-plan") {
@@ -557,7 +584,6 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       }, Math.max(15_000, timeoutMs - Math.min(300_000, Math.floor(timeoutMs / 2))));
       warningTimer.unref();
 
-      const accountProviderPayload = buildAccountProviderPayload(config);
       if (accountProviderPayload) {
         try {
           const syncResult = asRecord(await client.request(
@@ -1945,6 +1971,35 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         } });
       }
     });
+  }
+
+  #startPlanReadinessFailure(entry: RunEntry, message: string): ZCodeRunOutcome {
+    const outcome: ZCodeRunOutcome = {
+      exitCode: 1,
+      signal: null,
+      stdout: "",
+      stderr: "",
+      sessionId: null,
+      response: null,
+      usage: null,
+      timedOut: false,
+      agentReport: null,
+      reportCandidate: null,
+      reportError: message,
+      errorCode: "provider_config_invalid",
+      cancelled: false,
+      stdoutTruncated: false,
+      stderrTruncated: false,
+      attempts: 1,
+      cleanupNotRequired: "start_plan_preflight_rejected",
+      // No app-server or browser was created, so there are no Adapter-owned
+      // runtime resources to clean. SQLite still independently verifies the
+      // Worker close before it releases the execution path.
+      cleanupVerified: true,
+    };
+    entry.onEvent({ type: "error", summary: message, details: { error_code: "provider_config_invalid" } });
+    try { this.#onOutcomeCheckpoint?.(outcome); } catch { /* checkpoint observation cannot change refusal */ }
+    return outcome;
   }
 
   async #closeBrowserHost(entry: RunEntry): Promise<void> {

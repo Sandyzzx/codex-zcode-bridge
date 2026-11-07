@@ -113,6 +113,7 @@ export class ZCodeModelSettings {
     const cacheAge = cached ? Date.now() - cached.cached_at_ms : null;
     if (cached && cached.source_fingerprint === source.fingerprint && cacheAge !== null &&
         cacheAge >= 0 && cacheAge < MODEL_CATALOG_TTL_MS) {
+      const warning = startPlanCatalogWarning(buildAccountProviderPayload(source.config), cached.models);
       return {
         workspace: workspacePath,
         current_model: null,
@@ -120,6 +121,7 @@ export class ZCodeModelSettings {
         account_provider_sync: "not_needed",
         cache_status: "fresh",
         cached_at: new Date(cached.cached_at_ms).toISOString(),
+        ...(warning ? { warning } : {}),
       };
     }
     let lastError: unknown;
@@ -184,6 +186,7 @@ export class ZCodeModelSettings {
       if (models.length === 0) throw new BridgeError("zcode_nonzero_exit", "ZCode app-server returned an empty model catalog for this workspace");
       const cachedAt = Date.now();
       await writeModelCatalogCache(cachePath, { cached_at_ms: cachedAt, source_fingerprint: fingerprint, models }).catch(() => undefined);
+      warning = startPlanCatalogWarning(accountPayload, models);
       return {
         workspace: workspacePath,
         current_model: current,
@@ -503,6 +506,7 @@ function modelCatalogCachePath(workspace: string, config: ZCodeRuntimeConfig, en
 
 async function modelCatalogSourceFingerprint(config: ZCodeRuntimeConfig, env: NodeJS.ProcessEnv): Promise<string> {
   const digest = createHash("sha256");
+  digest.update("start-plan-task-scoped-live-billing-v1");
   // Hash only: provider contents and credentials are never written to cache.
   for (const file of [config.providerBuiltinConfigFile, config.providerPersonalConfigFile]) {
     digest.update(file);
@@ -513,6 +517,16 @@ async function modelCatalogSourceFingerprint(config: ZCodeRuntimeConfig, env: No
   const account = buildAccountProviderPayload(config);
   if (account) digest.update(JSON.stringify({ providers: account.providers, states: account.states, builtinRevision: account.basedOnZCodeBuiltinRevision }));
   return digest.digest("hex");
+}
+
+function startPlanCatalogWarning(
+  account: ReturnType<typeof buildAccountProviderPayload>,
+  models: readonly ZCodeModelCatalogEntry[],
+): string | undefined {
+  const providerId = "account:bigmodel-start-plan";
+  if (!account?.providers[providerId] || account.states[providerId]?.entitled === true
+    || models.some((model) => model.provider_id === providerId)) return undefined;
+  return "Start Plan models are checked for a selected task; this catalog read does not send Billing requests.";
 }
 
 async function readModelCatalogCache(cachePath: string): Promise<CachedModelCatalog | null> {

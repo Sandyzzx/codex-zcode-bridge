@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -118,7 +118,9 @@ const input = readline.createInterface({ input: process.stdin });
 input.on("line", (line) => {
   const message = JSON.parse(line);
   fs.appendFileSync(requestLog, JSON.stringify(message) + "\n");
-  if (message.method === "session/create") {
+  if (message.method === "provider/updateAccountConfig") {
+    process.stdout.write(JSON.stringify({ id: message.id, result: {} }) + "\n");
+  } else if (message.method === "session/create") {
     process.stdout.write(JSON.stringify({ id: message.id, result: snapshot() }) + "\n");
   } else if (message.method === "session/setModel") {
     selected = message.params.model;
@@ -174,9 +176,18 @@ test("runtime auth refuses a lease revoked before its reply is written", async (
   const runtime = await makeFakeRuntime({ providerId: "account:bigmodel-start-plan", modelId: "GLM-5.3-Flash" }, true, false, undefined, true, null, undefined, 0, true);
   let valid = true;
   try {
+    const personalConfig = path.join(runtime.root, ".zcode", "v2", "provider_config.json");
+    await mkdir(path.dirname(personalConfig), { recursive: true });
+    await writeFile(runtime.config.providerBuiltinConfigFile, JSON.stringify({ config: { providerConfigRules: { providerRules: [{
+      providerId: "account:bigmodel-start-plan",
+      config: { builtinModelIds: ["GLM-5.3-Flash"], access: { type: "zhipu-account", mode: "start-plan", accountType: "bigmodel" } },
+    }] } } }));
+    await writeFile(personalConfig, JSON.stringify({ config: { providerConfigRules: { providerRules: [] } } }));
+    const runtimeConfig = { ...runtime.config, providerPersonalConfigFile: personalConfig };
     const adapter = new ZCodeAppServerAdapter({
-      resolver: { resolve: async () => runtime.config }, timeoutMs: 10_000,
+      resolver: { resolve: async () => runtimeConfig }, timeoutMs: 10_000,
       childEnvBase: { PATH: process.env.PATH },
+      startPlanProviderEntitled: true,
       resolveStartPlanRuntimeAuth: async () => {
         const credential = { apiKey: "synthetic-revoked-marker", expiresAt: Date.now() + 10_000, isValid: () => valid };
         queueMicrotask(() => { valid = false; });

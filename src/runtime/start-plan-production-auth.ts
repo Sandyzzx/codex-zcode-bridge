@@ -352,6 +352,7 @@ export interface BillingEntitlementOptions {
 }
 
 const OFFICIAL_START_PLAN_ORIGIN = "https://zcode.z.ai";
+const BILLING_REQUEST_TIMEOUT_MS = 15_000;
 
 /** Production-shaped live entitlement client. One attempt per check, no
  * retries, no caching: every credential delivery re-checks live state. */
@@ -383,7 +384,7 @@ export class StartPlanBillingEntitlement implements StartPlanLiveEntitlement {
           // comes from the official runtime and identity remains in memory.
           Authorization: `Bearer ${input.jwt}`,
         },
-        signal: input.signal,
+        signal: AbortSignal.any([input.signal, AbortSignal.timeout(BILLING_REQUEST_TIMEOUT_MS)]),
       });
     } catch (error) {
       if (input.signal.aborted) throw error;
@@ -461,14 +462,31 @@ export function createProductionStartPlanAuth(options: ProductionAuthIssuerOptio
     // the credential and rejects if the account identity changed mid-run.
     account: initial.account,
     signal: options.signal,
+    async prepare(provider, model, signal) {
+      if (provider !== "account:bigmodel-start-plan" || !model || signal.aborted) return false;
+      const credential = readOfficialStartPlanCredential(options.zcodeDataRoot, env);
+      if (!credential || credential.account !== initial.account
+        || credential.expiresAt !== null && credential.expiresAt <= now()) return false;
+      const verdict = await options.entitlement.check({
+        account: credential.account,
+        provider,
+        model,
+        deviceMid: credential.deviceMid,
+        jwt: credential.jwt,
+        signal,
+      });
+      return verdict.status === "entitled" && !signal.aborted;
+    },
     async issue(binding, signal) {
       const credential = readOfficialStartPlanCredential(options.zcodeDataRoot, env);
       if (!credential) throw new Error("start_plan_credential_unavailable");
       if (binding.account !== credential.account) throw new Error("start_plan_account_identity_invalid");
       if (credential.expiresAt !== null && credential.expiresAt <= now()) throw new Error("start_plan_credential_expired");
       if (signal.aborted) throw new Error("start_plan_issuer_cancelled");
-      const entitlement = options.entitlement;
-      const verdict = await entitlement.check({
+      if (binding.provider !== "account:bigmodel-start-plan" || !binding.model) {
+        throw new Error("start_plan_identity_invalid");
+      }
+      const verdict = await options.entitlement.check({
         account: credential.account,
         provider: binding.provider,
         model: binding.model,

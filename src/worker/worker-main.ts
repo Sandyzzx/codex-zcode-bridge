@@ -284,7 +284,13 @@ interface SqliteExecutionEnvelope {
   readonly host_profile: BridgeHostProfile;
   readonly continuation: Readonly<Record<string, unknown>> | null;
   readonly previous_result: CandidateTaskResult | null;
-  readonly private_auth?: { readonly account: string; readonly claim: string };
+  readonly private_auth?: {
+    readonly account: string;
+    readonly claim: string;
+    readonly provider: "account:bigmodel-start-plan";
+    readonly model: string;
+    readonly entitled: boolean;
+  };
 }
 
 function validateExecutionEnvelope(value: unknown, bootstrap: {
@@ -315,9 +321,14 @@ function validateExecutionEnvelope(value: unknown, bootstrap: {
   }
   if (envelope.private_auth !== undefined) {
     const auth = envelope.private_auth as Record<string, unknown> | null;
-    if (!auth || typeof auth !== "object" || Array.isArray(auth) || Object.keys(auth).sort().join("|") !== "account|claim"
+    if (!auth || typeof auth !== "object" || Array.isArray(auth)
+      || Object.keys(auth).sort().join("|") !== "account|claim|entitled|model|provider"
       || typeof auth.account !== "string" || !auth.account || typeof auth.claim !== "string" || !auth.claim
-      || task.model?.provider_id !== "account:bigmodel-start-plan") throw new Error("private auth binding rejected");
+      || auth.provider !== "account:bigmodel-start-plan" || typeof auth.model !== "string" || !auth.model
+      || typeof auth.entitled !== "boolean"
+      || task.model?.provider_id !== auth.provider || task.model.model_id !== auth.model) {
+      throw new Error("private auth binding rejected");
+    }
   }
   validateHostProfile(envelope.host_profile as BridgeHostProfile);
   return envelope as unknown as SqliteExecutionEnvelope;
@@ -370,6 +381,7 @@ async function runZCodeAdapter(
   const adapter = new ZCodeAppServerAdapter({
     host: execution.host_profile,
     executionProfileId: execution.execution_profile_id,
+    ...(execution.private_auth ? { startPlanProviderEntitled: execution.private_auth.entitled } : {}),
     onEvent: (event) => {
       // Bounded lifecycle evidence without request payloads. This distinguishes
       // a Worker that reached adapter cleanup from one killed before cleanup.
@@ -519,6 +531,19 @@ function buildExecutionCleanupProof(
   failureReceipt: import("../adapters/windows-process-cleanup.js").WindowsTerminationReceipt | null = null,
 ): CandidateExecutionCleanupProof | null {
   const receipt = failureReceipt ?? outcome?.cleanupTreeReceipt;
+  if (!failureReceipt && outcome?.cleanupVerified === true && !outcome.cleanupError
+    && outcome.cleanupNotRequired === "start_plan_preflight_rejected"
+    && outcome.errorCode === "provider_config_invalid" && outcome.sessionId === null && !outcome.cleanupTreeReceipt) {
+    return {
+      contract: "candidate-execution-cleanup-proof-v1",
+      source: "zcode_app_server_adapter",
+      method: "adapter_not_started",
+      reason: "start_plan_preflight_rejected",
+      complete: true,
+      workspace_retained: true,
+      managed_browser_cleanup_verified: true,
+    };
+  }
   if (!receipt || (!failureReceipt && (outcome?.cleanupVerified !== true || outcome.cleanupError))) return null;
   const root = receipt.members.find((member) => member.pid === receipt.rootPid);
   if (!root || !root.fingerprint || receipt.members.length < 1

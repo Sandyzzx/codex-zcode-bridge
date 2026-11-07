@@ -4686,7 +4686,7 @@ var init_child_env = __esm({
 import { createHash as createHash5 } from "node:crypto";
 import { existsSync as existsSync7, readFileSync as readFileSync7 } from "node:fs";
 import path9 from "node:path";
-function buildAccountProviderPayload(config2) {
+function buildAccountProviderPayload(config2, verifiedSelection) {
   const table = readJson(config2.providerBuiltinConfigFile);
   const providerRules = readProviderRules(table).filter(isRecord2).map((rule) => rule).filter((rule) => rule.config?.access?.type === "zhipu-account" && typeof rule.providerId === "string");
   if (!providerRules.length) return null;
@@ -4704,7 +4704,12 @@ function buildAccountProviderPayload(config2) {
     const cacheStatus = asRecord(cacheItems[legacyId]).status;
     const legacyConfig = asRecord(credentialProviders[legacyId]);
     const options = asRecord(legacyConfig.options);
-    const entitled = cacheStatus === "available" || legacyConfig.enabled === true && typeof options.apiKey === "string" && options.apiKey.trim().length > 0;
+    const selectedEntitled = verifiedSelection?.providerId === providerId && Array.isArray(rule.config?.builtinModelIds) && rule.config.builtinModelIds.includes(verifiedSelection.modelId);
+    if (verifiedSelection?.providerId === providerId && !selectedEntitled) {
+      throw new Error("start_plan_model_not_registered");
+    }
+    const legacyEntitled = providerId === "account:bigmodel-start-plan" ? false : cacheStatus === "available" || legacyConfig.enabled === true && typeof options.apiKey === "string" && options.apiKey.trim().length > 0;
+    const entitled = selectedEntitled || legacyEntitled;
     providers[providerId] = {
       ...Array.isArray(rule.config?.builtinModelIds) ? { builtinModelIds: rule.config.builtinModelIds } : {},
       access: { type: "zhipu-account", entitled }
@@ -26642,6 +26647,7 @@ var init_zcode_app_server_adapter = __esm({
     MAX_FRAME_BYTES = 16 * 1024 * 1024;
     ZCodeAppServerAdapter = class {
       #resolveStartPlanRuntimeAuth;
+      #startPlanProviderEntitled;
       #sanitizeStartPlanFrame;
       #sanitizeStartPlanText;
       #onVerifiedFailureCleanup;
@@ -26672,6 +26678,7 @@ var init_zcode_app_server_adapter = __esm({
       #workspaceByTask = /* @__PURE__ */ new Map();
       constructor(options = {}) {
         this.#resolveStartPlanRuntimeAuth = options.resolveStartPlanRuntimeAuth;
+        this.#startPlanProviderEntitled = options.startPlanProviderEntitled === true;
         this.#sanitizeStartPlanFrame = options.sanitizeStartPlanFrame;
         this.#sanitizeStartPlanText = options.sanitizeStartPlanText;
         this.#onVerifiedFailureCleanup = options.onVerifiedFailureCleanup;
@@ -26848,6 +26855,22 @@ var init_zcode_app_server_adapter = __esm({
           const config2 = await this.#resolver.resolve();
           const preferences = resolveSessionPreferences(task.model, runtimeEnv, this.#executionProfileId);
           const childEnv = this.#buildChildEnv(config2, runtimeEnv);
+          const startPlanSelected = this.#resolveStartPlanRuntimeAuth !== void 0 && task.model?.provider_id === "account:bigmodel-start-plan";
+          if (startPlanSelected && !this.#startPlanProviderEntitled) {
+            return this.#startPlanReadinessFailure(entry, "Start Plan live entitlement was not verified; no ZCode session was started.");
+          }
+          let accountProviderPayload;
+          try {
+            accountProviderPayload = buildAccountProviderPayload(config2, startPlanSelected ? { providerId: "account:bigmodel-start-plan", modelId: task.model.model_id } : void 0);
+          } catch (error62) {
+            if (startPlanSelected) {
+              return this.#startPlanReadinessFailure(entry, error62 instanceof Error && error62.message === "start_plan_model_not_registered" ? "The requested Start Plan model is not present in the official provider registry." : "Start Plan provider snapshot could not be prepared after live entitlement verification.");
+            }
+            throw error62;
+          }
+          if (startPlanSelected && (!accountProviderPayload?.providers["account:bigmodel-start-plan"] || accountProviderPayload.providers["account:bigmodel-start-plan"].access.entitled !== true || accountProviderPayload.states["account:bigmodel-start-plan"]?.current !== true)) {
+            return this.#startPlanReadinessFailure(entry, "Start Plan provider snapshot could not be prepared after live entitlement verification.");
+          }
           if (this.#resolveStartPlanRuntimeAuth && task.model?.provider_id === "account:bigmodel-start-plan") {
             childEnv.ZCODE_MODEL_RETRY_MAX_RETRIES = "0";
           }
@@ -26870,7 +26893,6 @@ var init_zcode_app_server_adapter = __esm({
             });
           }, Math.max(15e3, timeoutMs - Math.min(3e5, Math.floor(timeoutMs / 2))));
           warningTimer.unref();
-          const accountProviderPayload = buildAccountProviderPayload(config2);
           if (accountProviderPayload) {
             try {
               const syncResult = asRecord2(await client.request(
@@ -28095,6 +28117,37 @@ var init_zcode_app_server_adapter = __esm({
             } });
           }
         });
+      }
+      #startPlanReadinessFailure(entry, message) {
+        const outcome = {
+          exitCode: 1,
+          signal: null,
+          stdout: "",
+          stderr: "",
+          sessionId: null,
+          response: null,
+          usage: null,
+          timedOut: false,
+          agentReport: null,
+          reportCandidate: null,
+          reportError: message,
+          errorCode: "provider_config_invalid",
+          cancelled: false,
+          stdoutTruncated: false,
+          stderrTruncated: false,
+          attempts: 1,
+          cleanupNotRequired: "start_plan_preflight_rejected",
+          // No app-server or browser was created, so there are no Adapter-owned
+          // runtime resources to clean. SQLite still independently verifies the
+          // Worker close before it releases the execution path.
+          cleanupVerified: true
+        };
+        entry.onEvent({ type: "error", summary: message, details: { error_code: "provider_config_invalid" } });
+        try {
+          this.#onOutcomeCheckpoint?.(outcome);
+        } catch {
+        }
+        return outcome;
       }
       async #closeBrowserHost(entry) {
         if (!entry.browserHost || entry.browserHostClosed) return;
@@ -30422,7 +30475,9 @@ function validateExecutionEnvelope(value, bootstrap, profile) {
   }
   if (envelope.private_auth !== void 0) {
     const auth = envelope.private_auth;
-    if (!auth || typeof auth !== "object" || Array.isArray(auth) || Object.keys(auth).sort().join("|") !== "account|claim" || typeof auth.account !== "string" || !auth.account || typeof auth.claim !== "string" || !auth.claim || task.model?.provider_id !== "account:bigmodel-start-plan") throw new Error("private auth binding rejected");
+    if (!auth || typeof auth !== "object" || Array.isArray(auth) || Object.keys(auth).sort().join("|") !== "account|claim|entitled|model|provider" || typeof auth.account !== "string" || !auth.account || typeof auth.claim !== "string" || !auth.claim || auth.provider !== "account:bigmodel-start-plan" || typeof auth.model !== "string" || !auth.model || typeof auth.entitled !== "boolean" || task.model?.provider_id !== auth.provider || task.model.model_id !== auth.model) {
+      throw new Error("private auth binding rejected");
+    }
   }
   validateHostProfile(envelope.host_profile);
   return envelope;
@@ -30480,6 +30535,7 @@ async function runZCodeAdapter(bootstrap, execution, interaction, workerIdentity
   const adapter = new ZCodeAppServerAdapter2({
     host: execution.host_profile,
     executionProfileId: execution.execution_profile_id,
+    ...execution.private_auth ? { startPlanProviderEntitled: execution.private_auth.entitled } : {},
     onEvent: (event) => {
       if (!interactionMode) return;
       if (event.type === "cleanup_unverified") {
@@ -30657,6 +30713,17 @@ async function runZCodeAdapter(bootstrap, execution, interaction, workerIdentity
 }
 function buildExecutionCleanupProof(outcome, failureReceipt = null) {
   const receipt = failureReceipt ?? outcome?.cleanupTreeReceipt;
+  if (!failureReceipt && outcome?.cleanupVerified === true && !outcome.cleanupError && outcome.cleanupNotRequired === "start_plan_preflight_rejected" && outcome.errorCode === "provider_config_invalid" && outcome.sessionId === null && !outcome.cleanupTreeReceipt) {
+    return {
+      contract: "candidate-execution-cleanup-proof-v1",
+      source: "zcode_app_server_adapter",
+      method: "adapter_not_started",
+      reason: "start_plan_preflight_rejected",
+      complete: true,
+      workspace_retained: true,
+      managed_browser_cleanup_verified: true
+    };
+  }
   if (!receipt || !failureReceipt && (outcome?.cleanupVerified !== true || outcome.cleanupError)) return null;
   const root = receipt.members.find((member) => member.pid === receipt.rootPid);
   if (!root || !root.fingerprint || receipt.members.length < 1 || !Number.isSafeInteger(receipt.rootPid) || receipt.rootPid < 1) return null;
