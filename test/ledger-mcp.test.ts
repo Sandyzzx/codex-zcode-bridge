@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { createBridgeServer } from "../src/mcp/server.js";
 import { LedgerStore } from "../src/ledger/store.js";
-import type { BridgeTaskManager } from "../src/manager/task-manager.js";
+import type { ProgressTaskManager } from "../src/interfaces.js";
 import type { TaskPackage, TaskReceipt } from "../src/interfaces.js";
 
 const CREATED_AT = "2026-09-27T00:00:00.000Z";
@@ -22,7 +22,7 @@ const minimalManager = {
   cancelTask: async () => { throw new Error("not used"); },
   getEvents: async () => ({ task_id: "x", status: "queued" as const, events: [], next_seq: 0, has_more: false }),
   replyToInteraction: async () => { throw new Error("not used"); },
-} as unknown as BridgeTaskManager;
+} as unknown as ProgressTaskManager;
 
 interface LedgerFixture {
   client: Client;

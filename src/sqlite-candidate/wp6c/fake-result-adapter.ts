@@ -47,6 +47,18 @@ export type CandidateExecutionCleanupProof =
     }
   | {
       readonly contract: "candidate-execution-cleanup-proof-v1";
+      readonly source: "zcode_app_server_adapter";
+      readonly method: "verified_recorded_tree_scan";
+      readonly complete: true;
+      readonly workspace_retained: true;
+      readonly adapter_process_id: number;
+      readonly adapter_start_fingerprint: string;
+      readonly process_tree_scan_digest: string;
+      readonly process_tree_member_count: number;
+      readonly managed_browser_cleanup_verified: true;
+    }
+  | {
+      readonly contract: "candidate-execution-cleanup-proof-v1";
       readonly source: "explicit_test_fake";
       readonly method: "synthetic_fixture";
       readonly complete: true;

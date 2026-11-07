@@ -7,7 +7,7 @@
 // master must review), and a master-requested cancellation is false. The flag
 // is never silently defaulted to false from missing evidence.
 import type { AttemptTiming, ExecutionProfile, NormalizedUsage, TaskPackage, TaskResult, TestReport } from "../interfaces.js";
-import type { ZCodeRunOutcome } from "../adapters/zcode-adapter.js";
+import type { ZCodeRunOutcome } from "../adapters/run-outcome.js";
 
 export interface TaskFailure {
   readonly code: string;

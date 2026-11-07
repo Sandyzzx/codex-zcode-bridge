@@ -9,7 +9,6 @@ import { promisify } from 'node:util';
 import { AdmissionError, digest, IsolatedAdmissionStore } from '../../../src/sqlite-candidate/wp6b2b1/store.mjs';
 import { createSqliteLifecyclePort } from '../../../src/sqlite-candidate/wp6b2b1/lifecycle-port.mjs';
 import { createTrustedLocalCandidateContext } from '../../../dist-test/src/host/stdio.js';
-import { BridgeTaskManager } from '../../../dist-test/src/manager/task-manager.js';
 import { SqliteLifecycleMcpAuthority } from '../../../dist-test/src/manager/sqlite-lifecycle-mcp-authority.js';
 import { createPlatformProbe } from '../../../dist-test/src/runtime/process-probe.js';
 import { parseArgs } from '../../../dist-test/src/cli/admin-abandon-held-operation.js';
@@ -252,13 +251,23 @@ test('restarted Manager skips the abandoned Task and dispatches a new Task',{tim
       loadModules:async()=>({Store:IsolatedAdmissionStore,createPort:createSqliteLifecyclePort}),
       testOnlyFakeAdapter:true,
     });
-    manager=new BridgeTaskManager({lifecycleAuthority:authority});
+    manager=authority;
     const abandoned=await manager.getStatus(f.taskId);
     assert.equal(abandoned.status,'failed');
     assert.equal(abandoned.worker_pid,null);
     await assert.rejects(()=>manager.getResult(f.taskId),/no committed SQLite Result/u);
 
     const nextTaskId='task-after-admin-abandonment';
+    if(process.platform!=='win32'){
+      await assert.rejects(()=>manager.createTask(task(nextTaskId,f.workspace)),error=>error.code==='TASK_INVALID');
+      assert.equal((await manager.getStatus(f.taskId)).status,'failed');
+      const recovery=IsolatedAdmissionStore.openForRecovery(f.root);
+      try{
+        assert.equal(recovery.readOperation(f.operationId).phase,'admin_abandoned');
+        assert.equal(recovery.readRecoverySnapshot().root_status,'consistent_read_only');
+      }finally{recovery.close();}
+      return;
+    }
     const receipt=await manager.createTask(task(nextTaskId,f.workspace));
     assert.equal(receipt.status,'queued');
     const deadline=Date.now()+30_000;
@@ -287,7 +296,7 @@ test('restarted Manager skips the abandoned Task and dispatches a new Task',{tim
   }
 });
 
-test('the compiled operator CLI succeeds in a child process and performs the exact CAS',async()=>{
+test('the compiled operator CLI performs Windows CAS or refuses unsupported platforms without mutation',async()=>{
   const f=fixture('cli-success');
   try{
     const operation=f.store.readOperation(f.operationId);
@@ -313,6 +322,12 @@ const result=await executeCli(${JSON.stringify(argv)},{
 process.stdout.write(JSON.stringify(result));
 `,'utf8');
     const env={...process.env};delete env.NODE_TEST_CONTEXT;
+    if(process.platform!=='win32'){
+      const before=JSON.stringify(rows(f));
+      await assert.rejects(execFileAsync(process.execPath,[childScript],{cwd:PROJECT_ROOT,env,windowsHide:true,maxBuffer:1_000_000}),error=>/windows_required/u.test(error.stderr));
+      assert.equal(JSON.stringify(rows(f)),before,"unsupported CLI must not mutate the isolated database");
+      return;
+    }
     const execution=await execFileAsync(process.execPath,[childScript],{cwd:PROJECT_ROOT,env,windowsHide:true,maxBuffer:1_000_000});
     assert.equal(execution.stderr,'');
     const result=JSON.parse(execution.stdout);

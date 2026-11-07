@@ -125,9 +125,10 @@ test('two real child processes race for capacity one; capacity and Attempt uniqu
 });
 
 test('policy upper bound of eight admits eight Workers and rejects a ninth',()=>{
-  const rows=Array.from({length:9},(_,i)=>[`upper-${i+1}`,1,1000+i]);const {s}=setup('upper-bound',8,rows);const ws=workspace('upper-bound-shared');
-  for(let i=0;i<8;i++)admit(s,input(rows[i][0],1,rows[i][2],`upper-op-${i+1}`,ws),options);
-  capture(()=>admit(s,input(rows[8][0],1,rows[8][2],'upper-op-9',ws),options),'capacity_exhausted');
+  const rows=Array.from({length:9},(_,i)=>[`upper-${i+1}`,1,1000+i]);const {s}=setup('upper-bound',8,rows);
+  const paths=rows.map((_,i)=>workspace(`upper-bound-${i}`));
+  for(let i=0;i<8;i++)admit(s,input(rows[i][0],1,rows[i][2],`upper-op-${i+1}`,paths[i]),options);
+  capture(()=>admit(s,input(rows[8][0],1,rows[8][2],'upper-op-9',paths[8]),options),'capacity_exhausted');
   assert.equal(s.readSnapshot().operations.filter(x=>x.operation_kind==='attempt_lifecycle').length,8);s.close();
 });
 
@@ -431,12 +432,12 @@ test('Launch Intent is exact-CAS, replay-safe, and does not assert that a proces
   capture(()=>s.createLaunchIntent({...intent,revision:0}),'invalid_launch_intent');
   capture(()=>s.createLaunchIntent({...intent,generation:intent.generation+1}),'operation_identity_mismatch');
   const current=s.readOperation(admitted.operation_id);assert.equal(current.revision,2);assert.equal(current.launch_outcome,'unknown_receipt_missing');
-  capture(()=>admit(s,input('t2',1,21,'blocked-by-intent'),options),'capacity_exhausted');s.close();
+  capture(()=>admit(s,input('t2',1,21,'blocked-by-intent',workspace('intent-capacity-other')),options),'capacity_exhausted');s.close();
   const reopened=IsolatedAdmissionStore.open(r);assert.equal(reopened.readSnapshot().operations[0].launch_outcome,'unknown_receipt_missing');reopened.close();
 });
 
 test('Launch Receipt validates Intent identity/token/epoch, supports delayed and exact duplicate receipt',()=>{
-  const {r,s}=setup('launch-receipt',2);const a=admit(s,input(),options);const b=admit(s,input('t2',1,21,'op-t2-1'),options);
+  const {r,s}=setup('launch-receipt',2);const a=admit(s,input(),options);const b=admit(s,input('t2',1,21,'op-t2-1',workspace('receipt-other')),options);
   const intent=launchInput(s,a.operation_id);s.createLaunchIntent(intent);const delayed=receiptInput(intent);
   const missing=s.readOperation(a.operation_id);assert.equal(missing.launch_outcome,'unknown_receipt_missing');
   capture(()=>s.recordLaunchReceipt({...delayed,launch_id:'other-launch'}),'launch_receipt_intent_mismatch');
@@ -470,7 +471,7 @@ test('Permanent Claim requires matching Receipt and atomically sets Task, Attemp
     assert.equal(db.prepare('SELECT phase FROM manager_operations WHERE operation_id=?').get(a.operation_id).phase,'running');
     assert.equal(db.prepare("SELECT event_type FROM manager_operation_events WHERE operation_id=? ORDER BY sequence DESC LIMIT 1").get(a.operation_id).event_type,'claim_committed');
   }finally{db.close();}
-  capture(()=>admit(s,input('t2',1,21,'slot-stays-occupied'),options),'capacity_exhausted');s.close();
+  capture(()=>admit(s,input('t2',1,21,'slot-stays-occupied',workspace('claim-capacity-other')),options),'capacity_exhausted');s.close();
   const reopened=IsolatedAdmissionStore.open(r);assert.equal(reopened.readOperation(a.operation_id).claim_id,claim.claim_id);
   assert.equal(reopened.commitPermanentClaim({...claim,revision:3}).duplicate,true);
   capture(()=>reopened.commitPermanentClaim({...claim,worker_identity:{...claim.worker_identity,worker_id:'different-worker'}}),'claim_conflict');

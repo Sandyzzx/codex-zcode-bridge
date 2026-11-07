@@ -1,38 +1,31 @@
-# Test Impact Gating
+# 测试入口与成本边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-03
-> Last verified: 2026-11-03，核对 `package.json` scripts、Windows `npm test` 执行全部 `dist-test/test/**/*.test.js`，POSIX 按平台合同排除 8 个 Windows-only SQLite lifecycle 文件；选择器 10/10 单元测试、dry-run 输出与 Windows 扩展回归 804 pass/2 skip/0 fail
-> Verified against: 本分支实施快照（见 `docs/reports/test-impact-gating-20261103.md`）
+> Last updated: 2026-11-07
+> Last verified: 2026-11-07，核对 ADR-029 自动/压力清单、selector 与退役范围；实际结果见本轮报告。
+> Verified against: a46137fe46b567271a7756be819361132625278c + ADR-029 本地候选
 
-本规范只改变测试触发方式，不删除测试、不增加 SKIP、不降低断言或预算。现有完整隔离回归继续保留。
+`test/test-impact-map.json` 为可执行清单唯一来源。共享资格规则禁止 MANUAL_E2E、Fixture 自动执行，显式误传同样拒绝；源 .test.ts/.test.mjs、map 与实际 --list 由回归对账。生成的 test-inventory.json 是静态声明/历史证据索引，不决定执行。
 
-## 分层与命令
+| 入口 | 行为 |
+|---|---|
+| npm run test:affected | 必跑 T0（typecheck/build/plugin validation/diff check），按真实依赖选择功能/压力测试；未知源码或基础设施变化回退完整功能回归 |
+| npm test | 编译并运行本平台全部功能测试；不隐式执行登记压力矩阵 |
+| npm run test:full | typecheck/build/npm test/plugin validation；冻结 Windows 门禁 |
+| npm run test:stress | 编译后显式运行登记资源矩阵；支持 --file=<registered file> |
+| npm run test:clean-entrypoints | 无 production dist 的 compiled stdio、shipped launcher、Worker 拒绝和 bundled Core |
+| node scripts/test-isolated.mjs --list | 本平台实际默认执行集合 |
 
-| 层级 | 内容 | 触发 |
-|---|---|---|
-| T0 | `typecheck`、`build`、`validate:plugin`、`git diff --check` | 每次变更 |
-| T1 | 直接依赖的快速单元/集成测试 | 变更命中影响映射时 |
-| T2 | 跨 Manager/Worker/Store/Adapter/Host 集成测试 | 变更命中对应模块边界时 |
-| T3 | 已登记压力测试 | 只在压力边界命中时 |
-| T4 | `npm test` 平台适用的完整隔离回归；Windows 执行全部映射集成测试 | CI、R4、发布候选、关键架构切换或测试基础设施变更 |
+FULL_SUITE 表示完整功能回归，压力状态为 SEPARATE_STRESS_GATE。SQLite 边界的 targeted selection 标记 STRESS_TEST_REQUIRED；显式 test:stress 或受影响文件入口可执行压力项。文档-only 是 NO_TESTS_APPLICABLE，dry-run 是 DRY_RUN_ONLY，都不能称测试 PASS。
 
-日常入口是 `npm run test:affected`。它无条件执行 T0，然后读取已提交（相对 upstream merge-base）、暂存、未暂存和未跟踪变更，输出影响域、选中测试、未触发压力测试和理由。`npm run test:stress -- --file=<file>` 按文件执行登记压力测试；不带参数执行全部登记压力测试。`npm run test:full` 是正式完整验收入口；`npm test` 保持完整隔离回归语义，并按操作系统合同选择可执行的测试集。
+Windows 进程/身份套件按文件串行；其他平台保留既有 Windows-only 限制并打印排除清单，不通过新增 SKIP 获得绿色。现有 admin-abandonment CLI 测试在 Windows 验证成功/CAS，在其他平台验证 windows_required 且数据库逻辑事实不变；生产 guard 不变。
 
-`test:affected` 不能在无测试匹配时输出测试 PASS；结果是显式的 `NO_TESTS_APPLICABLE`，文档-only 变更仍必须通过 T0。无法识别源码、新增未知源码或测试基础设施、公共接口、共享错误合同、构建/CI/runner/map 变更都会进入 `FULL_SUITE` 回退。默认测试运行器保持 Windows 串行、Linux 使用 Node test 默认并发，不改变超时和断言。
+## 退役与保留
 
-完整静态清单由 `npm run test:inventory` 从 AST 和影响映射生成到 `test-inventory.json`。每条记录包含稳定 Test ID、文件/行、类型、Gate、静态依赖、资源类别、触发路径、压力边界和运行证据。没有当场测量的运行时标记为 `NOT_MEASURED`；只有 B3-05 引用历史报告，不能把历史基准当作本次实测。
+JSON B3-05 是 TaskStore/TaskManager 的 32 active/10,000 historical 与 JSON event scan 测试，随旧实现删除，不是 SQLite v14 的性能证据。其 695.904s 集成基线只作为历史成本保留。
 
-Windows 的 `npm test` 执行全部嵌套测试和 SQLite bootstrap cross-process 用例。POSIX 的 `npm test` 执行其余完整清单，并明确排除要求 Windows exclusive-file-handle bootstrap 或 Windows-local Trusted Local Policy 的八个集成测试文件；这些路径在 POSIX 产品合同中 fail-closed，不能在该平台执行其成功生命周期。Windows CI 是这些测试的执行门禁，不将其改成 SKIP 或放宽断言。
+SQLite 功能门禁继续覆盖永久 Claim、CAS、路径/Capacity 竞争、Result、Recovery、Interaction、Cleanup、v13→v14、真实 Worker/Windows 管道和 R1–R5。混合用例保留 Adapter/进程/隐私部分；旧 JSON 写盘、checkpoint、respawn、roster 和专属锁协议退役，逐项依据见本轮报告。
 
-## B3-05
+SQLITE-STRESS-01 使用生产 Store/事务 API：0/32/256 已取消历史任务、WAL reader snapshot 与 checkpoint、四进程同 Result CAS、八进程 Admission/Capacity。使用真实 SQLite、隔离根和受控 synthetic identity，不假称真实 Provider/进程树压力认证。旧大 Result 1/2/4/8 资源证据仍独立保留，不把此矩阵推广为任意规模性能保证。
 
-`test/batch2-performance.test.ts` 中的 `B3-05` 是当前唯一登记的正式压力测试。它验证 JSON TaskStore/TaskManager 在 32 active 与 10,000 historical 任务下的状态、恢复和有界事件扫描边界，保留 900 秒 timeout 和 720 秒 setup 性能预算；所有既有断言不变。历史报告记录 732,770 ms setup，本次未重测，不能据此宣称当前基准。
-
-B3-05 只在这些边界命中时触发：JSON TaskStore 读写/扫描、Manager 遍历/查询/恢复、workspace provider 的执行路径、SQLite persistence/schema/bootstrap/admission/CAS/lifecycle 合同，或 B3-05 自身/fixture/test runner/map。`src/runtime/paths.ts`、ZCode HOME/USERPROFILE/dataBaseDir、Provider 配置路径、PowerShell 路径脚本、与 TaskStore 无关的 Doctor 路径诊断、普通 MCP 文档/图标/插件元数据不触发 B3-05。Bridge 自己的 TaskStore 数据目录与 ZCode 用户数据 `.zcode` 是不同边界；只有真实影响 TaskStore 打开/读写/迁移路径才触发。
-
-当前仓库快照没有独立的 Attention/Waiter、Worker 并发压测或 SQLite WAL/CAS 大规模正式压力测试登记；相关生命周期测试归入 T2。不得按测试名称假设其它测试是压力测试；新增正式压力测试必须先补影响映射、命令、预算和基准。
-
-## Agent 工作流
-
-开发中先运行 `npm run test:affected`；只有选择结果实际命中 T3 才运行压力测试。失败不得进入下一阶段。交付报告必须写明：实际运行命令、通过/失败、压力测试运行了还是未运行、未运行的真实影响域理由、`NO_TESTS_APPLICABLE` 不等于 PASS、以及是否需要 R4 完整回归。R4 在专门验收快照上运行 `npm run test:full` 和 Full G6，不减少测试、不添加 SKIP、不改断言。
+压力资源与功能断言分开报告；不复制 10,000 次 JSON 文件准备，不提高原测试 timeout，不减小 32 MiB 合同，不以 SKIP 或放宽断言换耗时。CI 保留完整 npm test；登记压力矩阵通过独立 CI job 调度。

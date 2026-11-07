@@ -1,3 +1,4 @@
+import { prepareWorkerResultFrameParts } from "../result-contract.mjs";
 // Worker process shell (ARCHITECTURE component 6): one detached Bridge worker
 // per active task. Uses the app-server adapter and persists progress/results
 // so MCP server restarts do not erase task evidence.
@@ -8,7 +9,6 @@ import { closeSync, createWriteStream, readFileSync, writeFileSync, writeSync } 
 import { Socket } from "node:net";
 import { BRIDGE_WORKER_LAUNCH_MARKER, fingerprintRuntimeArtifact, verifyWorkerProvenance } from "../runtime/build-provenance.js";
 import { validateHostProfile, type BridgeHostProfile } from "../host/profile.js";
-import { activateWorkerJsonWriter, jsonWriterParticipationRequired, releaseWorkerJsonWriter } from "../store/json-writer-quiescence.js";
 import { createPlatformProbe } from "../runtime/process-probe.js";
 import { StartPlanSecretRedactor } from "../runtime/start-plan-secret-redactor.js";
 import type { TaskPackage, WorkspaceRef } from "../interfaces.js";
@@ -81,52 +81,8 @@ if (bridgeLaunchMarker && positionalArgs.length === 0) {
   // the Manager already verifies.
   process.exit(process.exitCode ?? 0);
 } else {
-  const [dataRoot, taskId, attemptText] = positionalArgs;
-  if (positionalArgs.length !== 3 || !dataRoot || !taskId || !attemptText || !/^[1-9]\d*$/u.test(attemptText) || !Number.isSafeInteger(Number(attemptText))) {
-    console.error("usage: node worker-main.js <dataRoot> <taskId> <attempt>");
-    process.exit(2);
-  }
-
-  try {
-    // Keep the JSON TaskStore/Adapter graph lazy: the isolated Claim-only
-    // branch above must never load or enter it.
-    const leaseToken = process.env["ZCODE_BRIDGE_JSON_WRITER_LEASE"];
-    const writerQuiescence = jsonWriterParticipationRequired(dataRoot);
-    if (writerQuiescence && !leaseToken) throw new Error("JSON writer participant lease is required");
-    const probe = writerQuiescence ? createPlatformProbe() : undefined;
-    let leaseActivated = false;
-    try {
-      if (leaseToken && probe) {
-        const identity = await probe.selfIdentity();
-        await activateWorkerJsonWriter(dataRoot, leaseToken, taskId, Number(attemptText), identity);
-        leaseActivated = true;
-      }
-      const { runWorkerTask } = await import("./run-task.js");
-      const hostText = process.env["ZCODE_BRIDGE_HOST_PROFILE"];
-      const host = hostText ? validateHostProfile(JSON.parse(hostText) as BridgeHostProfile) : undefined;
-      const rawEnvelope = process.env["ZCODE_BRIDGE_RUNTIME_PROVENANCE"];
-      const worker = fingerprintRuntimeArtifact(process.argv[1]);
-      const { status } = await runWorkerTask({
-        dataRoot,
-        taskId,
-        host,
-        attempt: Number(attemptText),
-        probe,
-        writerQuiescence,
-        writerLeaseToken: leaseToken,
-        runtimeProvenance: { bridgeLaunchMarker, rawEnvelope, worker },
-      });
-      process.exitCode = 0;
-      void status;
-    } finally {
-      if (leaseActivated && leaseToken) await releaseWorkerJsonWriter(dataRoot, leaseToken);
-    }
-  } catch (error) {
-    // Store-level or unexpected failure: leave the record for the manager to
-    // reconcile to worker_lost on restart.
-    console.error(error instanceof Error ? error.stack ?? error.message : String(error));
-    process.exitCode = 1;
-  }
+  console.error("usage: Worker requires the SQLite private lifecycle channels");
+  process.exit(2);
 }
 
 async function runClaimOnlyHandshake(options: { readonly interactionMode: boolean; readonly privateAuthMode: boolean; readonly dropAfterPrepared: boolean;
@@ -258,7 +214,7 @@ async function runClaimOnlyHandshake(options: { readonly interactionMode: boolea
       ? await runExplicitFakeAdapter(bootstrap, execution, candidateInteraction)
       : await runZCodeAdapter(bootstrap, execution, candidateInteraction, options.privateAuthMode ? identity : undefined);
     options.onStage?.("adapter result frame prepared");
-    writePrivateFrame(6, resultFrame);
+    writePrivateFrame(6, resultFrame, prepareWorkerResultFrameParts(resultFrame));
     options.onStage?.("adapter result frame written");
   } finally {
     // The Manager closes its interaction endpoints after observing the result.
@@ -355,8 +311,7 @@ async function runZCodeAdapter(
   const { ZCodeAppServerAdapter } = await import("../adapters/zcode-app-server-adapter.js");
   const { buildTaskResult } = await import("../manager/normalize.js");
   const startedAt = new Date().toISOString();
-  let outcome: import("../adapters/zcode-adapter.js").ZCodeRunOutcome | null = null;
-  let failureCleanupReceipt: import("../adapters/windows-process-cleanup.js").WindowsTerminationReceipt | null = null;
+  let outcome: import("../adapters/run-outcome.js").ZCodeRunOutcome | null = null;
   let failure: { code: string; message: string } | null = null;
   let cachedAuth: { readonly apiKey: string; readonly expiresAt: number; readonly sessionId: string; readonly turnId: string; readonly providerId: string; readonly modelId: string } | null = null;
   let privateAuthExpiryTimer: NodeJS.Timeout | undefined;
@@ -380,6 +335,10 @@ async function runZCodeAdapter(
   privateAuthLifetime?.once("error", revokeParentLease);
   const adapter = new ZCodeAppServerAdapter({
     host: execution.host_profile,
+    // Manager resolved this attempt's effective budget before dispatch.
+    timeoutMs: execution.task.timeout_ms,
+    // Preserve cleanup evidence on an execution error as well as success.
+    onOutcomeCheckpoint: (checkpoint) => { outcome = checkpoint; },
     executionProfileId: execution.execution_profile_id,
     ...(execution.private_auth ? { startPlanProviderEntitled: execution.private_auth.entitled } : {}),
     onEvent: (event) => {
@@ -403,7 +362,6 @@ async function runZCodeAdapter(
       }
       writeDiagnostic(`[bridge-worker] adapter event=${event.type}\n`);
     },
-    onVerifiedFailureCleanup: (receipt) => { failureCleanupReceipt = receipt; },
     ...(secretRedactor ? {
       sanitizeStartPlanFrame: (value: Record<string, unknown>) => secretRedactor.value(value) as Record<string, unknown>,
       sanitizeStartPlanText: (value: string) => secretRedactor.text(value),
@@ -510,7 +468,7 @@ async function runZCodeAdapter(
     ...(taskResult.error_code ? { error_code: taskResult.error_code } : {}),
     ...(taskResult.report_candidate ? { report_candidate: taskResult.report_candidate as Record<string, unknown> } : {}),
   };
-  const executionCleanup = buildExecutionCleanupProof(outcome, failureCleanupReceipt);
+  const executionCleanup = buildExecutionCleanupProof(outcome);
   secretRedactor?.close();
   return {
     protocol: "bridge-sqlite-candidate-result-v1",
@@ -527,11 +485,10 @@ async function runZCodeAdapter(
 }
 
 function buildExecutionCleanupProof(
-  outcome: import("../adapters/zcode-adapter.js").ZCodeRunOutcome | null,
-  failureReceipt: import("../adapters/windows-process-cleanup.js").WindowsTerminationReceipt | null = null,
+  outcome: import("../adapters/run-outcome.js").ZCodeRunOutcome | null,
 ): CandidateExecutionCleanupProof | null {
-  const receipt = failureReceipt ?? outcome?.cleanupTreeReceipt;
-  if (!failureReceipt && outcome?.cleanupVerified === true && !outcome.cleanupError
+  const receipt = outcome?.cleanupTreeReceipt;
+  if (outcome?.cleanupVerified === true && !outcome.cleanupError
     && outcome.cleanupNotRequired === "start_plan_preflight_rejected"
     && outcome.errorCode === "provider_config_invalid" && outcome.sessionId === null && !outcome.cleanupTreeReceipt) {
     return {
@@ -544,7 +501,25 @@ function buildExecutionCleanupProof(
       managed_browser_cleanup_verified: true,
     };
   }
-  if (!receipt || (!failureReceipt && (outcome?.cleanupVerified !== true || outcome.cleanupError))) return null;
+  if (outcome?.cleanupVerified !== true || outcome.cleanupError) return null;
+  if (!receipt) {
+    const scan = outcome.cleanupTreeScan;
+    if (!scan || !Number.isSafeInteger(scan.rootPid) || scan.rootPid < 1 || !scan.rootFingerprint
+      || !/^[0-9a-f]{64}$/u.test(scan.evidenceDigest) || !Number.isSafeInteger(scan.observedMemberCount)
+      || scan.observedMemberCount < 1) return null;
+    return {
+      contract: "candidate-execution-cleanup-proof-v1",
+      source: "zcode_app_server_adapter",
+      method: "verified_recorded_tree_scan",
+      complete: true,
+      workspace_retained: true,
+      adapter_process_id: scan.rootPid,
+      adapter_start_fingerprint: scan.rootFingerprint,
+      process_tree_scan_digest: scan.evidenceDigest,
+      process_tree_member_count: scan.observedMemberCount,
+      managed_browser_cleanup_verified: true,
+    };
+  }
   const root = receipt.members.find((member) => member.pid === receipt.rootPid);
   if (!root || !root.fingerprint || receipt.members.length < 1
     || !Number.isSafeInteger(receipt.rootPid) || receipt.rootPid < 1) return null;
@@ -605,8 +580,18 @@ function readPrivateFrame(fd: number, maximum: number): Buffer {
   return frame;
 }
 
-function writePrivateFrame(fd: number, value: unknown): void {
-  const frame = Buffer.from(`${JSON.stringify(value)}\n`, "utf8");
-  writeFileSync(fd, frame);
+function writePrivateFrame(fd: number, value: unknown, encoded: string | readonly string[] = JSON.stringify(value)): void {
+  // Keep pipe backpressure, without a second full-size UTF-8 buffer or copying
+  // the entire encoded frame merely to append its delimiter.
+  for (const part of typeof encoded === "string" ? [encoded] : encoded) {
+    for (let offset = 0; offset < part.length;) {
+      let end = Math.min(offset + 64 * 1024, part.length);
+      const last = part.charCodeAt(end - 1);
+      if (end < part.length && last >= 0xd800 && last <= 0xdbff) end--;
+      writeFileSync(fd, part.slice(offset, end), "utf8");
+      offset = end;
+    }
+  }
+  writeFileSync(fd, "\n", "utf8");
   closeSync(fd);
 }

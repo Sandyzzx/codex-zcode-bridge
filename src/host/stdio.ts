@@ -10,8 +10,8 @@ import { serveStdio, StdioServerTransport, type StdioServerHandle } from "@model
 import type { Readable, Writable } from "node:stream";
 import { homedir } from "node:os";
 import path from "node:path";
-import { findPackageRoot, loadPersistedRuntimeEnvironment, NodeRuntimeResolver } from "../runtime/resolver.js";
-import { BridgeTaskManager } from "../manager/task-manager.js";
+import { findPackageRoot, loadPersistedRuntimeEnvironment } from "../runtime/resolver.js";
+import type { SqliteLifecycleMcpAuthority } from "../manager/sqlite-lifecycle-mcp-authority.js";
 import { createBridgeServer } from "../mcp/server.js";
 import { DEFAULT_TASK_TIMEOUT_MS, validateTaskTimeout } from "../runtime/task-timeout.js";
 import { runBridgeDoctor, type DoctorCheck } from "../runtime/doctor.js";
@@ -88,7 +88,7 @@ export interface StdioLifecycleHost {
  */
 export function serveStdioLifecycleHost(
   server: ReturnType<typeof createBridgeServer>,
-  manager: Pick<BridgeTaskManager, "shutdown">,
+  manager: Pick<SqliteLifecycleMcpAuthority, "shutdown">,
   options: {
     readonly stdin?: Readable;
     readonly stdout?: Writable;
@@ -186,41 +186,9 @@ export async function startBridge(
   }
 
   const processProbe = createPlatformProbe();
-  let manager: BridgeTaskManager;
+  let manager: SqliteLifecycleMcpAuthority;
   let lifecycleChecks: () => readonly DoctorCheck[];
   const databasePath = path.join(dataRoot, FRESH_SQLITE_DATABASE_FILE);
-  // Start Plan production auth (P0). Constructed only on Windows when the
-  // official credential store already holds a valid identity; otherwise it
-  // stays absent and Start Plan tasks fail closed through the existing
-  // runtime-auth path. Coding Plan providers never enter this issuer.
-  const startPlanAuthController = new AbortController();
-  let startPlanPrivateAuth: import("../store/lifecycle-gate.js").ClaimOnlyDriverOptions["startPlanPrivateAuth"] | undefined;
-  if (process.platform === "win32") {
-    try {
-      const { readOfficialStartPlanCredential, createProductionStartPlanAuth, StartPlanBillingEntitlement, readOfficialCliVersion } = await import("../runtime/start-plan-production-auth.js");
-      // Runtime discovery is intentionally independent from the Bridge SQLite
-      // root: credentials and Device ID come from the official ZCode root,
-      // while the version comes from the same resolved official entrypoint.
-      const officialRuntime = await new NodeRuntimeResolver({ env: runtimeEnv, homeDir: homedir(), host }).resolve();
-      if (readOfficialStartPlanCredential(officialRuntime.zcodeDataRoot)) {
-        let cachedCliVersion: Promise<string | undefined> | undefined;
-        startPlanPrivateAuth = createProductionStartPlanAuth({
-          zcodeDataRoot: officialRuntime.zcodeDataRoot,
-          signal: startPlanAuthController.signal,
-          entitlement: new StartPlanBillingEntitlement({
-            getAppVersion: async () => {
-              cachedCliVersion ??= readOfficialCliVersion(officialRuntime.zcodeEntrypoint);
-              return await cachedCliVersion;
-            },
-          }),
-        }) ?? undefined;
-      }
-    } catch (error) {
-      // A broken official credential read must not block Bridge startup; the
-      // absent issuer keeps Start Plan fail-closed per task.
-      console.error(`[bridge] start plan auth issuer unavailable: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
   let trustedLocalContext: ReturnType<typeof createTrustedLocalCandidateContext>;
   try {
     trustedLocalContext = createTrustedLocalCandidateContext(host);
@@ -240,9 +208,8 @@ export async function startBridge(
       processProbe,
       trustedLocalContext,
       requireAuthorityReceipt: true,
-      ...(startPlanPrivateAuth ? { startPlanPrivateAuth } : {}),
     });
-    manager = new BridgeTaskManager({ lifecycleAuthority: authority, maxConcurrentWorkers: workerLimit.maxConcurrentWorkers });
+    manager = authority;
     lifecycleChecks = () => authority.getDoctorChecks();
   } catch (error) {
     console.error(`[bridge] SQLITE_INITIALIZATION_FAILED: ${error instanceof Error ? error.message : String(error)}`);
@@ -262,7 +229,6 @@ export async function startBridge(
       console.error(`[bridge] ${reason} shutdown retained the lifecycle Root because cleanup was not verified: ${error instanceof Error ? error.message : String(error)}`);
     },
     onShutdownComplete: (reason) => {
-      startPlanAuthController.abort();
       if (reason !== "EOF") process.exit(0);
     },
   });

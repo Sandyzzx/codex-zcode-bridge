@@ -16,7 +16,7 @@ import type {
   ZCodeRuntimeConfig,
 } from "../interfaces.js";
 import { parseAgentReport } from "./agent-report.js";
-import type { ZCodeRunOutcome } from "./zcode-adapter.js";
+import type { ZCodeRunOutcome } from "./run-outcome.js";
 import { buildContinuePrompt, buildTaskPrompt } from "../prompts/task-prompt.js";
 import { BridgeError } from "../runtime/errors.js";
 import { loadPersistedRuntimeEnvironment, NodeRuntimeResolver } from "../runtime/resolver.js";
@@ -40,11 +40,11 @@ import {
   type FailureFactsV1,
   type ProcessErrno,
 } from "../diagnostics/failure-facts.js";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createMinimalOsEnv } from "../runtime/child-env.js";
 import { catalogProviderId, buildAccountProviderPayload, runtimeAuthReply, zcodeDataBaseDir, zcodeTasksIndexPath } from "../runtime/account-provider.js";
 import { resolveSessionPreferences } from "../runtime/session-preferences.js";
-import { resolveTaskTimeout } from "../runtime/task-timeout.js";
+import { ADAPTER_CLEANUP_TIMEOUT_MS, resolveTaskTimeout } from "../runtime/task-timeout.js";
 import { registerDesktopTask, updateDesktopTaskStatus, type DesktopTaskIndexEntry, type DesktopTaskStatus } from "./task-index-sync.js";
 import { codexHostProfile, validateHostProfile, type BridgeHostProfile } from "../host/profile.js";
 import { browserListParamsSchema, browserExecuteParamsSchema, type BrowserListParams, type BrowserExecuteParams } from "../browser/params.js";
@@ -235,6 +235,8 @@ export interface ZCodeAppServerAdapterOptions {
   resolver?: RuntimeResolver;
   onEvent?: ProgressSink;
   timeoutMs?: number;
+  /** Internal test seam: shorten the fixed cleanup budget, never extend it. */
+  testCleanupTimeoutMs?: number;
   childEnvBase?: NodeJS.ProcessEnv;
   /** 浏览器宿主覆盖项；缺省按持久化运行配置解析（默认 off）。 */
   browser?: AdapterBrowserOptions;
@@ -311,6 +313,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
   readonly #resolver: RuntimeResolver;
   readonly #onEvent: ProgressSink;
   readonly #timeoutMs: number | null;
+  readonly #cleanupTimeoutMs: number;
   readonly #childEnvBase: NodeJS.ProcessEnv;
   readonly #homeDir: string;
   readonly #host: BridgeHostProfile;
@@ -343,6 +346,8 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     this.#resolver = options.resolver ?? new NodeRuntimeResolver({ env: options.childEnvBase, homeDir: options.homeDir, host: options.host });
     this.#onEvent = options.onEvent ?? (() => undefined);
     this.#timeoutMs = options.timeoutMs ?? null;
+    this.#cleanupTimeoutMs = options.testCleanupTimeoutMs ?? ADAPTER_CLEANUP_TIMEOUT_MS;
+    if (!Number.isSafeInteger(this.#cleanupTimeoutMs) || this.#cleanupTimeoutMs < 1 || this.#cleanupTimeoutMs > ADAPTER_CLEANUP_TIMEOUT_MS) throw new Error("invalid cleanup test budget");
     this.#childEnvBase = options.childEnvBase ?? process.env;
     this.#homeDir = options.homeDir ?? homedir();
     this.#host = validateHostProfile(options.host ?? codexHostProfile(this.#homeDir));
@@ -533,9 +538,27 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     try {
       const runtimeEnv = loadPersistedRuntimeEnvironment(this.#childEnvBase, this.#homeDir, this.#host);
       const timeoutMs = this.#timeoutMs ?? resolveTaskTimeout(task, runtimeEnv);
-      const config = await this.#resolver.resolve();
-      const preferences = resolveSessionPreferences(task.model, runtimeEnv, this.#executionProfileId);
-      const childEnv = this.#buildChildEnv(config, runtimeEnv);
+      timer = setTimeout(() => {
+        entry.timedOut = true;
+        entry.abort.abort();
+        entry.rejectTurn(new Error(`ZCode run exceeded ${timeoutMs}ms wall-clock budget`));
+      }, timeoutMs);
+      timer.unref();
+      warningTimer = setTimeout(() => {
+        entry.onEvent({
+          type: "timeout_warning",
+          summary: `Task is approaching its ${timeoutMs}ms execution limit`,
+          details: { timeout_ms: timeoutMs, remaining_ms: Math.min(300_000, Math.floor(timeoutMs / 2)) },
+        });
+      }, Math.max(15_000, timeoutMs - Math.min(300_000, Math.floor(timeoutMs / 2))));
+      warningTimer.unref();
+      const config = await new Promise<ZCodeRuntimeConfig>((resolve, reject) => {
+        const aborted = (): void => reject(new Error("ZCode execution aborted during runtime resolution"));
+        entry.abort.signal.addEventListener("abort", aborted, { once: true });
+        if (entry.abort.signal.aborted) aborted();
+        void this.#resolver.resolve().then(resolve, reject).finally(() => entry.abort.signal.removeEventListener("abort", aborted));
+      });
+      entry.abort.signal.throwIfAborted();
       const startPlanSelected = this.#resolveStartPlanRuntimeAuth !== undefined
         && task.model?.provider_id === "account:bigmodel-start-plan";
       if (startPlanSelected && !this.#startPlanProviderEntitled) {
@@ -559,30 +582,16 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         || accountProviderPayload.states["account:bigmodel-start-plan"]?.current !== true)) {
         return this.#startPlanReadinessFailure(entry, "Start Plan provider snapshot could not be prepared after live entitlement verification.");
       }
-      // Observed ZCode CLI retry budget. Restrict the explicitly brokered
-      // Start Plan attempt; never change the Coding Plan default environment.
-      if (this.#resolveStartPlanRuntimeAuth && task.model?.provider_id === "account:bigmodel-start-plan") {
-        childEnv.ZCODE_MODEL_RETRY_MAX_RETRIES = "0";
-      }
+      const preferences = resolveSessionPreferences(task.model, runtimeEnv, this.#executionProfileId);
+      const childEnv = this.#buildChildEnv(config, runtimeEnv);
+      // This retry setting is limited to the explicitly brokered Start Plan
+      // attempt and does not change the Coding Plan default environment.
+      if (startPlanSelected) childEnv.ZCODE_MODEL_RETRY_MAX_RETRIES = "0";
       entry.onEvent({ type: "zcode_starting", summary: "Starting ZCode streaming runtime" });
       const client = this.#startAppServer(config, workspace.canonicalPath, childEnv, entry);
       entry.client = client;
       entry.child = client.child;
       entry.onEvent({ type: "app_server_started", summary: "ZCode app-server process started", details: { pid: client.child.pid } });
-      timer = setTimeout(() => {
-        entry.timedOut = true;
-        entry.abort.abort();
-        entry.rejectTurn(new Error(`ZCode run exceeded ${timeoutMs}ms wall-clock budget`));
-      }, timeoutMs);
-      timer.unref();
-      warningTimer = setTimeout(() => {
-        entry.onEvent({
-          type: "timeout_warning",
-          summary: `Task is approaching its ${timeoutMs}ms execution limit`,
-          details: { timeout_ms: timeoutMs, remaining_ms: Math.min(300_000, Math.floor(timeoutMs / 2)) },
-        });
-      }, Math.max(15_000, timeoutMs - Math.min(300_000, Math.floor(timeoutMs / 2))));
-      warningTimer.unref();
 
       if (accountProviderPayload) {
         try {
@@ -876,6 +885,8 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         if (entry.pendingTimer) { clearTimeout(entry.pendingTimer); entry.pendingTimer = null; }
         if (entry.providerRetryTimer) { clearTimeout(entry.providerRetryTimer); entry.providerRetryTimer = null; }
       }
+      if (timer) { clearTimeout(timer); timer = undefined; }
+      if (warningTimer) { clearTimeout(warningTimer); warningTimer = undefined; }
       entry.turnCompletedAt = turnResult.completedAt;
       const desktopStatus: DesktopTaskStatus = turnResult.resultType === "cancelled"
         ? null
@@ -1015,61 +1026,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       } catch (error) {
         entry.onEvent({ type: "desktop_status_sync_failed", summary: error instanceof Error ? error.message : String(error) });
       }
-      // The browser host belongs to this attempt; close it before the
-      // app-server so its bounded teardown is reported independently. The
-      // final cleanup verdict combines both resources: a browser that could
-      // not be closed keeps the outcome unverified even when the app-server
-      // itself exited cleanly.
-      await this.#closeBrowserHost(entry);
-      try {
-        const cleanupTreeReceipt = await client.close();
-        entry.child = null;
-        if (entry.browserCleanupError) {
-          outcome = { ...outcome, cleanupError: `Managed browser cleanup could not be verified: ${entry.browserCleanupError}`, cleanupVerified: false };
-        } else if (cleanupTreeReceipt) {
-          outcome = { ...outcome, cleanupVerified: true, cleanupTreeReceipt };
-        } else if (process.platform !== "win32") {
-          // POSIX termination resolves only after the process group is absent;
-          // its contract has no Windows identity-bound receipt.
-          outcome = { ...outcome, cleanupVerified: true };
-        } else {
-          outcome = {
-            ...outcome,
-            cleanupError: "Identity-bound Windows process-tree cleanup receipt was unavailable",
-            cleanupVerified: false,
-          };
-        }
-        try { this.#onOutcomeCheckpoint?.(outcome); }
-        catch (error) {
-          entry.onEvent({ type: "outcome_checkpoint_failed", summary: error instanceof Error ? error.message : String(error) });
-        }
-      } catch (error) {
-        const cleanupError = error instanceof Error ? error.message : String(error);
-        const cleanupScan = await this.#scanRootExitedCleanup(client, entry, error);
-        const cleanupMemberPids = cleanupScan?.memberPids ?? this.#cleanupMemberPids(error);
-        const cleanupVerifiedByRecordedScan = cleanupScan?.clean === true;
-        if (cleanupVerifiedByRecordedScan && !entry.browserCleanupError) entry.onEvent({
-          type: "cleanup_verified",
-          summary: "The captured app-server generation had exited; an ADR-009 recorded-tree claimant scan found no live claimants",
-          details: { pid: client.child.pid, evidence: "recorded_tree_claimant_scan" },
-        });
-        const combined = entry.browserCleanupError
-          ? `Managed browser cleanup could not be verified: ${entry.browserCleanupError} (app-server cleanup also unverified: ${cleanupError})`
-          : cleanupError;
-        const cleanupVerified = cleanupVerifiedByRecordedScan && !entry.browserCleanupError;
-        if (!cleanupVerified) entry.onEvent({ type: "cleanup_unverified", summary: combined.slice(0, 1_500), details: { pid: client.child.pid } });
-        outcome = {
-          ...outcome,
-          cleanupError: cleanupVerified ? null : combined,
-          cleanupVerified,
-          ...(cleanupMemberPids.length > 0 ? { cleanupMemberPids } : {}),
-        };
-        try { this.#onOutcomeCheckpoint?.(outcome); }
-        catch (checkpointError) {
-          entry.onEvent({ type: "outcome_checkpoint_failed", summary: checkpointError instanceof Error ? checkpointError.message : String(checkpointError) });
-        }
-      }
-      return outcome;
+      return await this.#completeCleanup(entry, outcome);
     } catch (error) {
       // Runtime timeout bounds an active ZCode turn. Once the turn has failed
       // or been cancelled, cleanup follows its own bounded process-tree
@@ -1151,6 +1108,15 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
           ? `ZCode app-server could not be started (${spawnRecovery.errno}); the configured runtime executable was not found or cannot be executed.`
           : "ZCode app-server process failed before or during startup";
       }
+      const failedOutcome: ZCodeRunOutcome = {
+        attempts: 1, cancelled: entry.cancelRequested, timedOut: entry.timedOut,
+        stdoutTruncated: false, stderrTruncated: false, stdout: "", stderr: "",
+        exitCode: null, signal: null, sessionId: entry.sessionId, response: "", usage: null,
+        agentReport: null, reportCandidate: null, reportError: message,
+        errorCode: code as ZCodeRunOutcome["errorCode"], cleanupVerified: false,
+      };
+      const cleaned = await this.#completeCleanup(entry, failedOutcome);
+      if (!cleaned.cleanupVerified) throw new BridgeError("cleanup_failed", `${message}; cleanup: ${cleaned.cleanupError ?? "unverified"}`, { cause: error, memberPids: cleaned.cleanupMemberPids });
       entry.onEvent({ type: "error", summary: message.slice(0, 1_500), details: { error_code: code } });
       if (spawnRecovery) throw new BridgeError("spawn_failed", message);
       if (error instanceof BridgeError) throw error;
@@ -1162,6 +1128,73 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       entry.finished = true;
       void startedAt;
     }
+  }
+
+  /** One independent cleanup deadline for success, failure and cancellation. */
+  async #completeCleanup(entry: RunEntry, outcome: ZCodeRunOutcome): Promise<ZCodeRunOutcome> {
+    let expired = false;
+    const timeoutOutcome: ZCodeRunOutcome = { ...outcome, cleanupVerified: false,
+      cleanupError: "Adapter cleanup deadline exceeded; workspace remains occupied",
+      cleanupMemberPids: entry.child?.pid ? [entry.child.pid] : [] };
+    let timer: NodeJS.Timeout | undefined;
+    const cleanup = (async (): Promise<ZCodeRunOutcome> => {
+      await this.#closeBrowserHost(entry);
+      if (expired) return timeoutOutcome;
+      let receipt: WindowsTerminationReceipt | null = null;
+      let error: unknown;
+      try {
+        if (entry.client) receipt = await entry.client.close();
+        else if (entry.child?.pid) await this.#terminateOwnedChild(entry);
+      } catch (failure) { error = failure; }
+      if (expired) return timeoutOutcome;
+      let scan: { clean: boolean; memberPids: number[] } | null = null;
+      if (error && entry.client) scan = await this.#scanRootExitedCleanup(entry.client, entry, error);
+      if (expired) return timeoutOutcome;
+      // An asynchronous spawn error before 'spawn', with no allocated PID,
+      // proves that this app-server child never existed. An unknown generation
+      // or an exited PID still requires the existing tree evidence.
+      const noSpawn = entry.spawnFailure !== null && !entry.child?.pid;
+      const treeVerified = noSpawn || (error ? scan?.clean === true : !!receipt || process.platform !== "win32" || !entry.child);
+      const cleanupVerified = treeVerified && !entry.browserCleanupError;
+      const reason = entry.browserCleanupError ? "Managed browser cleanup could not be verified: " + entry.browserCleanupError
+        : error instanceof Error ? error.message : "Identity-bound Windows process-tree cleanup receipt was unavailable";
+      const members = scan?.memberPids ?? this.#cleanupMemberPids(error);
+      const scanRootPid = entry.client?.child.pid;
+      const scanRootFingerprint = scanRootPid && entry.childIdentity?.pid === scanRootPid
+        ? entry.childIdentity.fingerprint : null;
+      const cleanupTreeScan = scan?.clean && cleanupVerified && scanRootPid && scanRootFingerprint
+        ? {
+          rootPid: scanRootPid,
+          rootFingerprint: scanRootFingerprint,
+          evidenceDigest: createHash("sha256").update(JSON.stringify({
+            rootPid: scanRootPid,
+            rootFingerprint: scanRootFingerprint,
+            memberPids: [...scan.memberPids].sort((left, right) => left - right),
+          }), "utf8").digest("hex"),
+          observedMemberCount: scan.memberPids.length,
+        }
+        : undefined;
+      if (scan?.clean && cleanupVerified) entry.onEvent({ type: "cleanup_verified",
+        summary: "The captured app-server generation had exited; an ADR-009 recorded-tree claimant scan found no live claimants",
+        details: { pid: entry.child?.pid ?? null, evidence: "recorded_tree_claimant_scan" } });
+      if (cleanupVerified) entry.child = null;
+      return { ...outcome, cleanupVerified,
+        ...(cleanupVerified && !error ? {} : { cleanupError: cleanupVerified ? null : reason }),
+        ...(receipt ? { cleanupTreeReceipt: receipt } : {}),
+        ...(cleanupTreeScan ? { cleanupTreeScan } : {}),
+        ...(members.length ? { cleanupMemberPids: members } : {}) };
+    })();
+    try {
+      const result = await Promise.race([cleanup, new Promise<ZCodeRunOutcome>(resolve => {
+        timer = setTimeout(() => { expired = true; resolve(timeoutOutcome); }, this.#cleanupTimeoutMs);
+        timer.unref();
+      })]);
+      if (!result.cleanupVerified) entry.onEvent({ type: "cleanup_unverified", summary: (result.cleanupError ?? "cleanup unverified").slice(0, 1500), details: { pid: entry.child?.pid ?? null } });
+      // Only the winning snapshot is published. Late helper completion cannot upgrade it.
+      try { this.#onOutcomeCheckpoint?.(result); }
+      catch (error) { entry.onEvent({ type: "outcome_checkpoint_failed", summary: error instanceof Error ? error.message : String(error) }); }
+      return result;
+    } finally { if (timer) clearTimeout(timer); }
   }
 
   #cleanupMemberPids(error: unknown): number[] {
