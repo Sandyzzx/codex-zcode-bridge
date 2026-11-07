@@ -2,7 +2,7 @@
 
 **Codex 负责规划、派发和验收，ZCode 在本机执行开发任务。**
 
-> **稳定版。** `v1.3.0` 为没有既有 SQLite 数据库的新安装及升级用户自动初始化 SQLite。Windows 单用户本地环境是本版本已验证的部署目标；其他平台尚未完整验证。
+> **发布渠道。** 稳定版为 `v1.6.0`（Tag `codex-zcode-bridge-v1.6.0`），面向普通用户，不包含未经真实环境验收的 Start Plan 实验性集成。预览版为 `1.6.0-preview.2`，位于 `preview` 分支（独立 Marketplace `codex-zcode-bridge-preview`），面向开发者和测试用户，包含 Start Plan P0 实验性集成，但真实账户端到端流程**尚未验收**。Windows 单用户本地环境仍是已验证的部署目标；其他平台尚未完整验证。
 
 [English](README.md) · [项目仓库](https://github.com/Sandyzzx/codex-zcode-bridge) · [版本发布](https://github.com/Sandyzzx/codex-zcode-bridge/releases)
 
@@ -32,14 +32,41 @@ ZCode 不会自动获得 Codex 的完整对话上下文；Master 应随任务提
 
 Marketplace 不会替你安装 Node.js 或 ZCode。
 
-## 安装 v1.3.0
+## 安装
 
-请使用 GitHub **正式 Release 对应的 Tag**，不要直接跟随 `master`。以下命令固定到 [GitHub Releases](https://github.com/Sandyzzx/codex-zcode-bridge/releases) 显示的实际标签：
+项目发布两个渠道，**同一 Codex 安装只使用一个渠道**。分支引用持续更新；Tag 是固定快照，不会自动跟随后续提交。
+
+### 稳定版（普通用户）
+
+请使用 GitHub **正式 Release 对应的 Tag**，不要直接跟随 `master`：
 
 ```sh
-codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-v1.3.0
+codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-v1.6.0
 codex plugin add codex-zcode-bridge@codex-zcode-bridge
 ```
+
+### 预览版（开发者和测试用户）
+
+预览版跟随 `preview` 分支持续更新，包含 Start Plan P0 实验性集成。Marketplace ID：`codex-zcode-bridge-preview`。
+
+```sh
+codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref preview
+codex plugin add codex-zcode-bridge@codex-zcode-bridge-preview
+```
+
+更新预览版 Marketplace：
+
+```sh
+codex plugin marketplace upgrade codex-zcode-bridge-preview
+```
+
+如需固定到已验收的发布快照而不是跟随分支，使用预览版 Tag 注册 Marketplace：
+
+```sh
+codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-preview-v1.6.0-preview.2
+```
+
+**分支用于持续更新，Tag 用于固定快照；Tag 本身不会自动跟踪后续预览提交。** 如需在已有 Marketplace 上切换分支或固定版本，重新执行 `marketplace add ... --ref <ref>`（必要时先用 `codex plugin marketplace remove` 移除后重新添加）；若实际行为与本文不符，以 `codex plugin marketplace add --help` 为准，不要猜测参数。
 
 也可以注册对应版本的 Marketplace 后，在 Codex **Plugins Directory** 安装 **Zcode Bridge**。开启新对话，审查并信任 `SessionStart` Hook。首次启动会发现本机的 ZCode 运行时和配置，不复制 Provider 凭据；安装问题可使用 `zcode_doctor` 诊断。
 
@@ -78,7 +105,7 @@ SQLite 默认使用当前用户的数据根。不要手工改写 SQLite 表、Au
 ## 已知限制与排障
 
 - 本轮真实 Provider 与 SQLite 生产切换仅在 Windows 单用户可信本地环境得到验证；本版本不代表其他平台已获得生产认证。
-- ZCode Start Plan 目前不作为本版本已验证的 Bridge 支持路径；具体 Provider 能力取决于本机 ZCode 环境。
+- 稳定版不包含 Start Plan 支持。预览版包含 Start Plan P0 实验性集成，但尚未进行真实账户/模型端到端验收；具体 Provider 能力仍取决于本机 ZCode 环境。
 - Worker 在未提交 Result 时可能异常退出。Bridge 会保留 Cleanup Hold，而不是假设进程资源已完全关闭。不要直接编辑数据库或按进程名终止未知进程；应保存证据并使用正式恢复方案。
 - ZCode Desktop 中的任务列表可能延后刷新。
 - Git Worktree 仅隔离工作目录，不是操作系统安全沙箱。
