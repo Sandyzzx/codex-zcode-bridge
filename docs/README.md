@@ -110,6 +110,7 @@ English readers start at [README.md](../README.md). This index is bilingual; the
 | [reports/2026-10-17-filesystem-root-guards.md](reports/2026-10-17-filesystem-root-guards.md) | Windows 锁时序重试、teardown 容错与文件系统根守卫的证据、修复与边界 |
 | [reports/2026-10-18-pr47-claimant-repair.md](reports/2026-10-18-pr47-claimant-repair.md) | PR #47 claimant 扫描 P1 返修、逐边持有证明、hold 校验与预算语义的证据与边界 |
 | [reports/sqlite-hold-simplification-2026-11-04.md](reports/sqlite-hold-simplification-2026-11-04.md) | JSON/SQLite 生命周期差异、Operation scoped Recovery、Provider retry 候选与本轮验收边界 |
+| [reports/2026-11-07-start-plan-credential-format.md](reports/2026-11-07-start-plan-credential-format.md) | 官方 ZCode `enc:v1:` credential value、Start Plan 凭据解析兼容、合成回归与本机只读发现证据 |
 
 ### 自动生成 Generated
 

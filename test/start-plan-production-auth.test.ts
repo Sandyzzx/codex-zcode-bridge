@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { createCipheriv, createHash, randomBytes } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, platform, tmpdir, userInfo } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
@@ -21,6 +22,7 @@ const DEVICE_ID = "synthetic-device-mid-fixed";
 const ACCOUNT_A = "synthetic-account-a";
 const ACCOUNT_B = "synthetic-account-b";
 const MODEL = "glm-5.3-flash";
+const CREDENTIAL_SECRET = "synthetic-official-credential-secret";
 
 function makeRoot(prefix: string): { root: string; cleanup: () => void } {
   const root = mkdtempSync(path.join(tmpdir(), prefix));
@@ -35,19 +37,103 @@ function syntheticJwt(payload: Record<string, unknown> = {}): string {
   return `${base64url({ alg: "synthetic" })}.${base64url(payload)}.synthetic-signature`;
 }
 
+function encryptCredential(value: string, secret = CREDENTIAL_SECRET): string {
+  const iv = randomBytes(12);
+  const key = createHash("sha256").update(secret).digest();
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const encrypted = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
+  return `enc:v1:${iv.toString("base64url")}.${cipher.getAuthTag().toString("base64url")}.${encrypted.toString("base64url")}`;
+}
+
+function syntheticMachineFallbackSecret(): string {
+  let username = "unknown";
+  try {
+    username = userInfo().username;
+  } catch {
+    // Match the production fallback's best-effort username lookup.
+  }
+  return `zcode-credential-fallback:${platform()}:${homedir()}:${username}`;
+}
+
+function replaceEncryptedSegment(envelope: string, index: number, replacement: string): string {
+  const segments = envelope.slice("enc:v1:".length).split(".");
+  segments[index] = replacement;
+  return `enc:v1:${segments.join(".")}`;
+}
+
+function tamperCiphertextPreservingAuthTag(envelope: string): string {
+  const segments = envelope.slice("enc:v1:".length).split(".");
+  const ciphertext = Buffer.from(segments[2]!, "base64url");
+  ciphertext[0] = ciphertext[0]! ^ 0xff;
+  segments[2] = ciphertext.toString("base64url");
+  return `enc:v1:${segments.join(".")}`;
+}
+
 function writeCredential(
   zcodeRoot: string,
-  options: { jwt?: string; account?: string; deviceMid?: string } = {},
+  options: {
+    jwt?: string;
+    account?: string;
+    deviceMid?: string | null;
+    officialString?: boolean;
+    encryptionSecret?: string;
+    userInfo?: unknown;
+  } = {},
 ): void {
   const v2 = path.join(zcodeRoot, "v2");
   mkdirSync(v2, { recursive: true });
+  const jwt = options.jwt ?? syntheticJwt({ account: ACCOUNT_A, exp: 4_000 });
+  const account = options.account ?? ACCOUNT_A;
+  const userInfo = options.userInfo ?? {
+    id: account,
+    username: "synthetic-user",
+    displayName: "Synthetic User",
+    rawProfile: {
+      user_id: account,
+      name: "Synthetic User",
+      email: "synthetic@example.invalid",
+      avatar: "",
+      zcodeProfileSchemaVersion: 1,
+    },
+  };
   writeFileSync(path.join(v2, "credentials.json"), JSON.stringify({
-    zcodejwttoken: options.jwt ?? syntheticJwt({ account: ACCOUNT_A, exp: 4_000 }),
-    "oauth:bigmodel:user_info": { id: options.account ?? ACCOUNT_A },
+    zcodejwttoken: options.officialString ? encryptCredential(jwt, options.encryptionSecret) : jwt,
+    "oauth:bigmodel:user_info": options.officialString
+      ? encryptCredential(JSON.stringify(userInfo), options.encryptionSecret)
+      : userInfo,
   }));
   writeFileSync(path.join(v2, "telemetry-state.json"), JSON.stringify({
-    deviceMid: options.deviceMid ?? DEVICE_ID,
+    deviceMid: options.deviceMid === null ? undefined : options.deviceMid ?? DEVICE_ID,
   }));
+}
+
+function writeRawCredentialRecord(zcodeRoot: string, record: unknown): void {
+  const v2 = path.join(zcodeRoot, "v2");
+  mkdirSync(v2, { recursive: true });
+  writeFileSync(path.join(v2, "credentials.json"), JSON.stringify(record));
+  writeFileSync(path.join(v2, "telemetry-state.json"), JSON.stringify({ deviceMid: DEVICE_ID }));
+}
+
+function assertRejectedWithoutEntitlement(
+  root: string,
+  env: NodeJS.ProcessEnv,
+  label: string,
+): void {
+  assert.equal(readOfficialStartPlanCredential(root, env), null, label);
+  let entitlementCalls = 0;
+  const issuer = createProductionStartPlanAuth({
+    zcodeDataRoot: root,
+    env,
+    signal: new AbortController().signal,
+    entitlement: {
+      check: async () => {
+        entitlementCalls += 1;
+        return { status: "entitled", observedAt: 1, requestId: "must-not-be-used" };
+      },
+    },
+  });
+  assert.equal(issuer, null, label);
+  assert.equal(entitlementCalls, 0, label);
 }
 
 function billingBody(overrides: {
@@ -155,6 +241,165 @@ test("reads official credentials from the resolved ZCode root while keeping SQLi
     assert.equal(readOfficialStartPlanCredential(config.zcodeDataRoot)?.deviceMid, DEVICE_ID);
   } finally {
     cleanup();
+  }
+});
+
+test("reads encrypted official string credentials and preserves the object format", () => {
+  const official = makeRoot("start-plan-official-string-");
+  const legacyObject = makeRoot("start-plan-object-format-");
+  try {
+    writeCredential(official.root, { officialString: true });
+    const credential = readOfficialStartPlanCredential(official.root, {
+      ZCODE_CREDENTIAL_SECRET: CREDENTIAL_SECRET,
+    });
+    assert.ok(credential);
+    assert.equal(credential.account, ACCOUNT_A);
+    assert.equal(credential.deviceMid, DEVICE_ID);
+
+    writeCredential(legacyObject.root);
+    const legacy = readOfficialStartPlanCredential(legacyObject.root, {
+      ZCODE_CREDENTIAL_SECRET: CREDENTIAL_SECRET,
+    });
+    assert.ok(legacy);
+    assert.equal(legacy.account, ACCOUNT_A);
+  } finally {
+    official.cleanup();
+    legacyObject.cleanup();
+  }
+});
+
+test("uses the official machine fallback only when no explicit credential secret exists", () => {
+  const { root, cleanup } = makeRoot("start-plan-machine-fallback-");
+  try {
+    const fallbackSecret = syntheticMachineFallbackSecret();
+    writeCredential(root, {
+      officialString: true,
+      encryptionSecret: fallbackSecret,
+    });
+
+    const credential = readOfficialStartPlanCredential(root, {});
+    assert.ok(credential);
+    assert.equal(credential.account, ACCOUNT_A);
+    assert.equal(credential.deviceMid, DEVICE_ID);
+
+    assert.equal(readOfficialStartPlanCredential(root, {
+      ZCODE_CREDENTIAL_SECRET: CREDENTIAL_SECRET,
+    }), null);
+  } finally {
+    cleanup();
+  }
+});
+
+test("reads plaintext JSON string user_info without changing the object-format path", () => {
+  const { root, cleanup } = makeRoot("start-plan-plaintext-user-info-");
+  try {
+    writeCredential(root, {
+      userInfo: JSON.stringify({ user_id: ACCOUNT_A, displayName: "Synthetic User" }),
+    });
+    const credential = readOfficialStartPlanCredential(root, {});
+    assert.ok(credential);
+    assert.equal(credential.account, ACCOUNT_A);
+    assert.equal(credential.deviceMid, DEVICE_ID);
+  } finally {
+    cleanup();
+  }
+});
+
+test("invalid credential records and cryptographic envelopes fail closed before entitlement", () => {
+  const encryptedUserInfo = encryptCredential(JSON.stringify({ id: ACCOUNT_A }));
+  const cases: Array<{
+    name: string;
+    setup: (root: string) => void;
+    env?: NodeJS.ProcessEnv;
+  }> = [
+    {
+      name: "null credentials root",
+      setup: (root) => writeRawCredentialRecord(root, null),
+    },
+    {
+      name: "array credentials root",
+      setup: (root) => writeRawCredentialRecord(root, []),
+    },
+    {
+      name: "non-record credentials root",
+      setup: (root) => writeRawCredentialRecord(root, 42),
+    },
+    {
+      name: "malformed encrypted envelope",
+      setup: (root) => writeCredential(root, {
+        userInfo: "enc:v1:not-a-valid-envelope",
+        officialString: false,
+      }),
+    },
+    {
+      name: "invalid encrypted IV",
+      setup: (root) => writeCredential(root, {
+        userInfo: replaceEncryptedSegment(
+          encryptedUserInfo,
+          0,
+          Buffer.alloc(11).toString("base64url"),
+        ),
+      }),
+    },
+    {
+      name: "invalid encrypted auth tag",
+      setup: (root) => writeCredential(root, {
+        userInfo: replaceEncryptedSegment(
+          encryptedUserInfo,
+          1,
+          Buffer.alloc(15).toString("base64url"),
+        ),
+      }),
+    },
+    {
+      name: "invalid encrypted ciphertext",
+      setup: (root) => writeCredential(root, {
+        userInfo: replaceEncryptedSegment(encryptedUserInfo, 2, "%"),
+      }),
+    },
+    {
+      name: "AES-GCM authentication failure",
+      setup: (root) => writeCredential(root, {
+        userInfo: tamperCiphertextPreservingAuthTag(encryptedUserInfo),
+      }),
+    },
+    {
+      name: "non-JSON string",
+      setup: (root) => writeCredential(root, { userInfo: "not-json" }),
+    },
+    {
+      name: "wrong credential secret",
+      setup: (root) => writeCredential(root, { officialString: true }),
+      env: { ZCODE_CREDENTIAL_SECRET: "wrong-synthetic-secret" },
+    },
+    {
+      name: "missing verifiable account identity",
+      setup: (root) => writeCredential(root, {
+        officialString: true,
+        userInfo: { displayName: "Synthetic" },
+      }),
+    },
+    {
+      name: "invalid JWT payload",
+      setup: (root) => writeCredential(root, { jwt: "synthetic-header.not-json.synthetic-signature" }),
+    },
+    {
+      name: "missing Device ID",
+      setup: (root) => writeCredential(root, { deviceMid: null }),
+    },
+  ];
+  for (const item of cases) {
+    const { root, cleanup } = makeRoot("start-plan-invalid-credential-");
+    try {
+      item.setup(root);
+      assertRejectedWithoutEntitlement(
+        root,
+        item.env ?? { ZCODE_CREDENTIAL_SECRET: CREDENTIAL_SECRET },
+        item.name,
+      );
+    } finally {
+      cleanup();
+    }
   }
 });
 
@@ -339,6 +584,58 @@ test("issuer fails closed for missing JWT, expired JWT, and account switch witho
     );
   } finally {
     switched.cleanup();
+  }
+});
+
+test("issuer rejects an account identity switch after construction without contacting entitlement", async () => {
+  const { root, cleanup } = makeRoot("start-plan-account-switch-after-construction-");
+  try {
+    writeCredential(root, { officialString: true });
+    let entitlementCalls = 0;
+    const issuer = createProductionStartPlanAuth({
+      zcodeDataRoot: root,
+      env: { ZCODE_CREDENTIAL_SECRET: CREDENTIAL_SECRET },
+      signal: new AbortController().signal,
+      entitlement: {
+        check: async () => {
+          entitlementCalls += 1;
+          return { status: "entitled", observedAt: 1, requestId: "must-not-be-used" };
+        },
+      },
+    });
+    assert.ok(issuer);
+    assert.equal(issuer.account, ACCOUNT_A);
+    writeCredential(root, { officialString: true, account: ACCOUNT_B });
+    await assert.rejects(
+      issuer.issue(binding(), new AbortController().signal),
+      /start_plan_account_identity_invalid/u,
+    );
+    assert.equal(entitlementCalls, 0);
+  } finally {
+    cleanup();
+  }
+});
+
+test("credential failure prevents issuer creation and billing calls", () => {
+  const { root, cleanup } = makeRoot("start-plan-credential-billing-gate-");
+  try {
+    writeCredential(root, { officialString: true, userInfo: { displayName: "Synthetic" } });
+    let entitlementCalls = 0;
+    const issuer = createProductionStartPlanAuth({
+      zcodeDataRoot: root,
+      env: { ZCODE_CREDENTIAL_SECRET: CREDENTIAL_SECRET },
+      signal: new AbortController().signal,
+      entitlement: {
+        check: async () => {
+          entitlementCalls += 1;
+          return { status: "entitled", observedAt: 1, requestId: "must-not-be-used" };
+        },
+      },
+    });
+    assert.equal(issuer, null);
+    assert.equal(entitlementCalls, 0);
+  } finally {
+    cleanup();
   }
 });
 
