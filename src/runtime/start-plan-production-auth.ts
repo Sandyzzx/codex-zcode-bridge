@@ -1,5 +1,10 @@
 import { readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
+import {
+  createDecipheriv as cryptoCreateDecipheriv,
+  createHash as cryptoCreateHash,
+} from "node:crypto";
+import { homedir as osHomedir, platform as osPlatform, userInfo as osUserInfo } from "node:os";
 import path from "node:path";
 import { PrivateCredentialLease, type PrivateLeaseBinding } from "./start-plan-private-lease.js";
 
@@ -54,6 +59,10 @@ interface OfficialCredentialRecord {
   readonly "oauth:bigmodel:user_info"?: unknown;
 }
 
+const OFFICIAL_CREDENTIAL_ENCRYPTION_PREFIX = "enc:v1:";
+const OFFICIAL_CREDENTIAL_IV_BYTES = 12;
+const OFFICIAL_CREDENTIAL_AUTH_TAG_BYTES = 16;
+
 /** Observed official billing envelope. Only field presence is interpreted;
  * message text is never echoed into Bridge diagnostics. */
 interface OfficialBillingEnvelope {
@@ -69,6 +78,61 @@ interface OfficialBillingEnvelope {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function officialCredentialSecret(env: NodeJS.ProcessEnv): string {
+  const explicit = env["ZCODE_CREDENTIAL_SECRET"]?.trim();
+  if (explicit) return explicit;
+  let username = "unknown";
+  try {
+    username = osUserInfo().username;
+  } catch {
+    // Match the official fallback when the OS user cannot be resolved.
+  }
+  return `zcode-credential-fallback:${osPlatform()}:${osHomedir()}:${username}`;
+}
+
+/** Decodes the official credential store's per-value AES-256-GCM envelope.
+ * Legacy plaintext values are returned unchanged, matching the official
+ * credential store behavior. */
+function decodeOfficialCredentialString(value: string, env: NodeJS.ProcessEnv): string | null {
+  if (!value.startsWith(OFFICIAL_CREDENTIAL_ENCRYPTION_PREFIX)) return value;
+  try {
+    const segments = value.slice(OFFICIAL_CREDENTIAL_ENCRYPTION_PREFIX.length).split(".");
+    if (segments.length !== 3 || segments.some((segment) => segment.length === 0)) return null;
+    const [ivSegment, authTagSegment, encryptedSegment] = segments as [string, string, string];
+    const iv = Buffer.from(ivSegment, "base64url");
+    const authTag = Buffer.from(authTagSegment, "base64url");
+    const encrypted = Buffer.from(encryptedSegment, "base64url");
+    if (iv.length !== OFFICIAL_CREDENTIAL_IV_BYTES || authTag.length !== OFFICIAL_CREDENTIAL_AUTH_TAG_BYTES) {
+      return null;
+    }
+    const key = cryptoCreateHash("sha256").update(officialCredentialSecret(env)).digest();
+    const decipher = cryptoCreateDecipheriv("aes-256-gcm", key, iv);
+    decipher.setAuthTag(authTag);
+    return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString("utf8");
+  } catch {
+    return null;
+  }
+}
+
+function readOfficialCredentialString(value: unknown, env: NodeJS.ProcessEnv): string | null {
+  if (typeof value !== "string") return null;
+  return decodeOfficialCredentialString(value, env);
+}
+
+function readOfficialUserInfo(value: unknown, env: NodeJS.ProcessEnv): Record<string, unknown> | null {
+  // Preserve the previously accepted synthetic/legacy object shape.
+  if (isRecord(value)) return value;
+  if (typeof value !== "string") return null;
+  const decoded = decodeOfficialCredentialString(value, env);
+  if (decoded === null) return null;
+  try {
+    const parsed: unknown = JSON.parse(decoded);
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 function looksLikeJwt(value: string): boolean {
@@ -189,7 +253,10 @@ function extractProviderCode(value: Record<string, unknown> | undefined): string
 /** Reads the official Start Plan credential from the official ZCode data
  * root, never the Bridge SQLite data root. The value exists in memory only;
  * callers must never persist it. */
-export function readOfficialStartPlanCredential(zcodeDataRoot: string): OfficialStartPlanCredential | null {
+export function readOfficialStartPlanCredential(
+  zcodeDataRoot: string,
+  env: NodeJS.ProcessEnv = process.env,
+): OfficialStartPlanCredential | null {
   const credentialsPath = path.join(zcodeDataRoot, "v2", "credentials.json");
   let parsed: OfficialCredentialRecord;
   try {
@@ -197,13 +264,17 @@ export function readOfficialStartPlanCredential(zcodeDataRoot: string): Official
   } catch {
     return null;
   }
-  const jwt = typeof parsed.zcodejwttoken === "string" ? parsed.zcodejwttoken.trim() : "";
+  const jwt = readOfficialCredentialString(parsed.zcodejwttoken, env)?.trim() ?? "";
   if (!jwt || !looksLikeJwt(jwt)) return null;
-  const userInfo = isRecord(parsed["oauth:bigmodel:user_info"]) ? parsed["oauth:bigmodel:user_info"] : null;
+  const userInfo = readOfficialUserInfo(parsed["oauth:bigmodel:user_info"], env);
+  if (!userInfo) return null;
   const accountCandidates = [userInfo?.id, userInfo?.user_id, userInfo?.account_id, userInfo?.email];
-  const account = accountCandidates.find((candidate): candidate is string => typeof candidate === "string" && candidate.length > 0);
+  const account = accountCandidates.find((candidate): candidate is string =>
+    typeof candidate === "string" && candidate.trim().length > 0
+  )?.trim();
   if (!account) return null;
   const payload = decodeJwtPayload(jwt);
+  if (!payload) return null;
   const exp = payload?.exp;
   const expiresAt = typeof exp === "number" && Number.isFinite(exp) && exp > 0 ? exp * 1_000 : null;
   let deviceMid = "";
@@ -366,6 +437,8 @@ export class StartPlanBillingEntitlement implements StartPlanLiveEntitlement {
 export interface ProductionAuthIssuerOptions {
   /** Official ZCode data root (`<data base>/.zcode`). */
   readonly zcodeDataRoot: string;
+  /** Credential key environment, injectable for isolated tests. */
+  readonly env?: NodeJS.ProcessEnv;
   /** Aborted when the Host shuts down or the account is invalidated. */
   readonly signal: AbortSignal;
   readonly entitlement: StartPlanLiveEntitlement;
@@ -379,7 +452,8 @@ export type ProductionAuthIssuer = NonNullable<import("../store/lifecycle-gate.j
  * credential read succeeded; Coding Plan providers never enter this path. */
 export function createProductionStartPlanAuth(options: ProductionAuthIssuerOptions): ProductionAuthIssuer | null {
   const now = options.now ?? Date.now;
-  const initial = readOfficialStartPlanCredential(options.zcodeDataRoot);
+  const env = options.env ?? process.env;
+  const initial = readOfficialStartPlanCredential(options.zcodeDataRoot, env);
   if (!initial) return null;
   return {
     // Captured from the official credential at construction; issue() re-reads
@@ -387,7 +461,7 @@ export function createProductionStartPlanAuth(options: ProductionAuthIssuerOptio
     account: initial.account,
     signal: options.signal,
     async issue(binding, signal) {
-      const credential = readOfficialStartPlanCredential(options.zcodeDataRoot);
+      const credential = readOfficialStartPlanCredential(options.zcodeDataRoot, env);
       if (!credential) throw new Error("start_plan_credential_unavailable");
       if (binding.account !== credential.account) throw new Error("start_plan_account_identity_invalid");
       if (credential.expiresAt !== null && credential.expiresAt <= now()) throw new Error("start_plan_credential_expired");

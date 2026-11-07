@@ -4550,9 +4550,60 @@ __export(start_plan_production_auth_exports, {
 });
 import { readFileSync as readFileSync12 } from "node:fs";
 import { spawn as spawn5 } from "node:child_process";
+import {
+  createDecipheriv as cryptoCreateDecipheriv,
+  createHash as cryptoCreateHash
+} from "node:crypto";
+import { homedir as osHomedir, platform as osPlatform, userInfo as osUserInfo } from "node:os";
 import path17 from "node:path";
 function isRecord5(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
+}
+function officialCredentialSecret(env) {
+  const explicit = env["ZCODE_CREDENTIAL_SECRET"]?.trim();
+  if (explicit) return explicit;
+  let username = "unknown";
+  try {
+    username = osUserInfo().username;
+  } catch {
+  }
+  return `zcode-credential-fallback:${osPlatform()}:${osHomedir()}:${username}`;
+}
+function decodeOfficialCredentialString(value, env) {
+  if (!value.startsWith(OFFICIAL_CREDENTIAL_ENCRYPTION_PREFIX)) return value;
+  try {
+    const segments = value.slice(OFFICIAL_CREDENTIAL_ENCRYPTION_PREFIX.length).split(".");
+    if (segments.length !== 3 || segments.some((segment) => segment.length === 0)) return null;
+    const [ivSegment, authTagSegment, encryptedSegment] = segments;
+    const iv = Buffer.from(ivSegment, "base64url");
+    const authTag = Buffer.from(authTagSegment, "base64url");
+    const encrypted = Buffer.from(encryptedSegment, "base64url");
+    if (iv.length !== OFFICIAL_CREDENTIAL_IV_BYTES || authTag.length !== OFFICIAL_CREDENTIAL_AUTH_TAG_BYTES) {
+      return null;
+    }
+    const key = cryptoCreateHash("sha256").update(officialCredentialSecret(env)).digest();
+    const decipher = cryptoCreateDecipheriv("aes-256-gcm", key, iv);
+    decipher.setAuthTag(authTag);
+    return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString("utf8");
+  } catch {
+    return null;
+  }
+}
+function readOfficialCredentialString(value, env) {
+  if (typeof value !== "string") return null;
+  return decodeOfficialCredentialString(value, env);
+}
+function readOfficialUserInfo(value, env) {
+  if (isRecord5(value)) return value;
+  if (typeof value !== "string") return null;
+  const decoded = decodeOfficialCredentialString(value, env);
+  if (decoded === null) return null;
+  try {
+    const parsed = JSON.parse(decoded);
+    return isRecord5(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 function looksLikeJwt(value) {
   const parts = value.split(".");
@@ -4647,7 +4698,7 @@ function extractProviderCode(value) {
   const raw = candidates.find((candidate) => typeof candidate === "number" || typeof candidate === "string");
   return typeof raw === "number" || typeof raw === "string" ? String(raw) : void 0;
 }
-function readOfficialStartPlanCredential(zcodeDataRoot) {
+function readOfficialStartPlanCredential(zcodeDataRoot, env = process.env) {
   const credentialsPath = path17.join(zcodeDataRoot, "v2", "credentials.json");
   let parsed;
   try {
@@ -4655,13 +4706,17 @@ function readOfficialStartPlanCredential(zcodeDataRoot) {
   } catch {
     return null;
   }
-  const jwt = typeof parsed.zcodejwttoken === "string" ? parsed.zcodejwttoken.trim() : "";
+  const jwt = readOfficialCredentialString(parsed.zcodejwttoken, env)?.trim() ?? "";
   if (!jwt || !looksLikeJwt(jwt)) return null;
-  const userInfo = isRecord5(parsed["oauth:bigmodel:user_info"]) ? parsed["oauth:bigmodel:user_info"] : null;
+  const userInfo = readOfficialUserInfo(parsed["oauth:bigmodel:user_info"], env);
+  if (!userInfo) return null;
   const accountCandidates = [userInfo?.id, userInfo?.user_id, userInfo?.account_id, userInfo?.email];
-  const account = accountCandidates.find((candidate) => typeof candidate === "string" && candidate.length > 0);
+  const account = accountCandidates.find(
+    (candidate) => typeof candidate === "string" && candidate.trim().length > 0
+  )?.trim();
   if (!account) return null;
   const payload = decodeJwtPayload(jwt);
+  if (!payload) return null;
   const exp = payload?.exp;
   const expiresAt = typeof exp === "number" && Number.isFinite(exp) && exp > 0 ? exp * 1e3 : null;
   let deviceMid = "";
@@ -4711,7 +4766,8 @@ function classifyEntitlementFailure(input) {
 }
 function createProductionStartPlanAuth(options) {
   const now = options.now ?? Date.now;
-  const initial = readOfficialStartPlanCredential(options.zcodeDataRoot);
+  const env = options.env ?? process.env;
+  const initial = readOfficialStartPlanCredential(options.zcodeDataRoot, env);
   if (!initial) return null;
   return {
     // Captured from the official credential at construction; issue() re-reads
@@ -4719,7 +4775,7 @@ function createProductionStartPlanAuth(options) {
     account: initial.account,
     signal: options.signal,
     async issue(binding, signal) {
-      const credential = readOfficialStartPlanCredential(options.zcodeDataRoot);
+      const credential = readOfficialStartPlanCredential(options.zcodeDataRoot, env);
       if (!credential) throw new Error("start_plan_credential_unavailable");
       if (binding.account !== credential.account) throw new Error("start_plan_account_identity_invalid");
       if (credential.expiresAt !== null && credential.expiresAt <= now()) throw new Error("start_plan_credential_expired");
@@ -4770,11 +4826,14 @@ async function readOfficialCliVersion(zcodeEntrypoint) {
   if (version2) officialCliVersionCache.set(key, version2);
   return version2;
 }
-var OFFICIAL_START_PLAN_ORIGIN, StartPlanBillingEntitlement, officialCliVersionCache;
+var OFFICIAL_CREDENTIAL_ENCRYPTION_PREFIX, OFFICIAL_CREDENTIAL_IV_BYTES, OFFICIAL_CREDENTIAL_AUTH_TAG_BYTES, OFFICIAL_START_PLAN_ORIGIN, StartPlanBillingEntitlement, officialCliVersionCache;
 var init_start_plan_production_auth = __esm({
   "src/runtime/start-plan-production-auth.ts"() {
     "use strict";
     init_start_plan_private_lease();
+    OFFICIAL_CREDENTIAL_ENCRYPTION_PREFIX = "enc:v1:";
+    OFFICIAL_CREDENTIAL_IV_BYTES = 12;
+    OFFICIAL_CREDENTIAL_AUTH_TAG_BYTES = 16;
     OFFICIAL_START_PLAN_ORIGIN = "https://zcode.z.ai";
     StartPlanBillingEntitlement = class {
       #origin;
