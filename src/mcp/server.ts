@@ -46,7 +46,7 @@ import { registerLedgerTools } from "../ledger/mcp.js";
 import { renderTaskFeedback } from "../feedback/renderer.js";
 
 export const SERVER_NAME = "codex-zcode-bridge";
-export const SERVER_VERSION = "1.6.0-preview.2"; // x-release-please-version
+export const SERVER_VERSION = "1.6.0-preview.3"; // x-release-please-version
 
 export interface BridgeServerOptions {
   taskManager: TaskManager & Partial<Pick<ProgressTaskManager, "getEvents" | "getFeedback" | "getAttention" | "replyToInteraction">>;

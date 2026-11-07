@@ -2,7 +2,7 @@
 
 **Delegate coding to ZCode from Codex; keep planning, review, and acceptance in Codex.**
 
-> **Release channels.** Stable is `v1.6.0` (tag `codex-zcode-bridge-v1.6.0`) for general users, without the unverified experimental Start Plan integration. Preview is `1.6.0-preview.2` on the `preview` branch (Marketplace `codex-zcode-bridge-preview`) for developers and testers; it contains the experimental Start Plan P0 integration whose real-account end-to-end flow is **not** accepted. Windows single-user local installations remain the validated deployment target; other platforms have not been fully validated.
+> **Release channels.** Stable is `v1.6.0` (tag `codex-zcode-bridge-v1.6.0`) for general users, without the unverified experimental Start Plan integration. Preview is `1.6.0-preview.3` on the `preview` branch (Marketplace `codex-zcode-bridge-preview`) for developers and testers; it contains the experimental Start Plan P0 integration whose real-account end-to-end flow is **not** accepted. Windows single-user local installations remain the validated deployment target; other platforms have not been fully validated.
 
 [简体中文](README.zh-CN.md) · [Repository](https://github.com/Sandyzzx/codex-zcode-bridge) · [Releases](https://github.com/Sandyzzx/codex-zcode-bridge/releases)
 
@@ -63,7 +63,7 @@ codex plugin marketplace upgrade codex-zcode-bridge-preview
 To pin the tested release snapshot instead of following the branch, add the marketplace with the preview tag:
 
 ```sh
-codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-preview-v1.6.0-preview.2
+codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-preview-v1.6.0-preview.3
 ```
 
 Branch refs keep updating with later preview commits; a tag is a fixed snapshot and does not track them. To switch an existing marketplace between a branch and a tag, re-run `marketplace add` with the desired `--ref` (or `codex plugin marketplace remove` first and add again); if the actual behavior differs, verify with `codex plugin marketplace add --help` instead of guessing.

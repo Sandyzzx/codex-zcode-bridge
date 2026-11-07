@@ -4,7 +4,7 @@
 
 把开发任务从 Codex 交给本机 ZCode Agent，在 Codex 中跟进进度并审查实际改动。
 
-### 本渠道当前版本：1.6.0-preview.2
+### 本渠道当前版本：1.6.0-preview.3
 
 本预览版包含 **Start Plan 实验性集成**（Windows、原生 ZCode AppServer）：官方 ZCode 本机凭据读取、只读 Billing 权益核验、一次性私有凭据交付、进程 HANDLE 身份门禁、取消和崩溃恢复。Coding Plan 的既有执行路径保持不变。
 
@@ -34,7 +34,7 @@ codex plugin marketplace upgrade codex-zcode-bridge-preview
 **更新模型：** 上述 `--ref preview` 安装会跟随 `preview` 分支自动获取后续预览提交。如需固定到当前已验收快照或回滚，使用预览版 Tag 注册：
 
 ```sh
-codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-preview-v1.6.0-preview.2
+codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-preview-v1.6.0-preview.3
 ```
 
 **分支用于持续更新，Tag 用于固定快照；Tag 本身不会自动跟踪后续预览提交。** 如需在已有 Marketplace 上切换分支或固定版本，重新执行 `marketplace add ... --ref <ref>`（必要时先用 `codex plugin marketplace remove` 移除后重新添加）；若实际行为与本文不符，以 `codex plugin marketplace add --help` 为准。本渠道尚未完成 Codex Marketplace 客户端实际安装/升级验收。
