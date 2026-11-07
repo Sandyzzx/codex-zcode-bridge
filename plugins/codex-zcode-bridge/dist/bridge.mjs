@@ -4706,6 +4706,7 @@ function readOfficialStartPlanCredential(zcodeDataRoot, env = process.env) {
   } catch {
     return null;
   }
+  if (!isRecord5(parsed)) return null;
   const jwt = readOfficialCredentialString(parsed.zcodejwttoken, env)?.trim() ?? "";
   if (!jwt || !looksLikeJwt(jwt)) return null;
   const userInfo = readOfficialUserInfo(parsed["oauth:bigmodel:user_info"], env);
@@ -12492,19 +12493,26 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
       #shutdownWaitMs;
       #context;
       #processProbe;
-      constructor(driver, context, processProbe, testBeforeDispatch, testOnScheduler, shutdownWaitMs = DEFAULT_HOST_SHUTDOWN_WAIT_MS) {
+      #startPlanAuthAvailable;
+      #testOnlyFakeAdapter;
+      constructor(driver, context, processProbe, testBeforeDispatch, testOnScheduler, shutdownWaitMs = DEFAULT_HOST_SHUTDOWN_WAIT_MS, startPlanAuthAvailable = false, testOnlyFakeAdapter = false) {
         this.#driver = driver;
         this.#context = context;
         this.#processProbe = processProbe;
         this.#testBeforeDispatch = testBeforeDispatch;
         this.#testOnScheduler = testOnScheduler;
         this.#shutdownWaitMs = shutdownWaitMs;
+        this.#startPlanAuthAvailable = startPlanAuthAvailable;
+        this.#testOnlyFakeAdapter = testOnlyFakeAdapter;
       }
       async createTask(task) {
         this.#assertOpen();
         this.#assertAccepting();
         this.#assertRecoveryReady();
         validateTaskPackage2(task);
+        if (task.model?.provider_id === "account:bigmodel-start-plan" && !this.#startPlanAuthAvailable && !this.#testOnlyFakeAdapter) {
+          throw new TaskManagerError("TASK_INVALID", "official Start Plan credentials are unavailable");
+        }
         const policy = this.#driverTrustedPolicy();
         const sourceDecision = policy.validateWorkspace({ requestedPath: task.workspace, canonicalPath: task.workspace });
         if (sourceDecision.state !== "allow") throw new TaskManagerError("TASK_INVALID", `SQLite admission rejected: ${sourceDecision.reason}`);
@@ -13017,7 +13025,9 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
           processProbe,
           testBeforeDispatch,
           testOnScheduler,
-          shutdownWaitMs
+          shutdownWaitMs,
+          options.startPlanPrivateAuth !== void 0,
+          options.testOnlyFakeAdapter === true
         );
         try {
           await authority.recoverTasks();

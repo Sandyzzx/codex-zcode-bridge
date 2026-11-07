@@ -258,12 +258,13 @@ export function readOfficialStartPlanCredential(
   env: NodeJS.ProcessEnv = process.env,
 ): OfficialStartPlanCredential | null {
   const credentialsPath = path.join(zcodeDataRoot, "v2", "credentials.json");
-  let parsed: OfficialCredentialRecord;
+  let parsed: unknown;
   try {
-    parsed = JSON.parse(readFileSync(credentialsPath, "utf8")) as OfficialCredentialRecord;
+    parsed = JSON.parse(readFileSync(credentialsPath, "utf8"));
   } catch {
     return null;
   }
+  if (!isRecord(parsed)) return null;
   const jwt = readOfficialCredentialString(parsed.zcodejwttoken, env)?.trim() ?? "";
   if (!jwt || !looksLikeJwt(jwt)) return null;
   const userInfo = readOfficialUserInfo(parsed["oauth:bigmodel:user_info"], env);

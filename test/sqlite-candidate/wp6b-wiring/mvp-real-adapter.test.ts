@@ -428,6 +428,23 @@ test("formal MCP lifecycle runs a real ZCodeAppServerAdapter against a controlle
   }
 });
 
+test("Start Plan without official auth is rejected before task persistence or Provider requests", { timeout: 120_000 }, async () => {
+  await withRealAdapterMcp(async (client, _manager, _dataRoot, workspace, runtime) => {
+    const taskId = `private-auth-missing-${randomUUID()}`;
+    const rejected = await client.callTool({ name: "zcode_task", arguments: {
+      ...syntheticTask(workspace, taskId),
+      model: { provider_id: "account:bigmodel-start-plan", model_id: "GLM-5.3-Flash" },
+    } });
+    assert.equal(rejected.isError, true);
+    const error = rejected.structuredContent as { error?: { code?: string; message?: string } } | undefined;
+    assert.equal(error?.error?.code, "TASK_INVALID");
+    assert.match(error?.error?.message ?? "", /Start Plan credentials are unavailable/u);
+    const status = await client.callTool({ name: "zcode_status", arguments: { task_id: taskId } });
+    assert.equal(status.isError, true);
+    assert.equal(existsSync(runtime.requestLog), false, "no app-server Provider or model request may start");
+  }, { preserveFixtureOnFailure: true });
+});
+
 for (const variant of ["private-auth", "private-auth-echo"] as const) test(`SQLite Worker private auth ${variant} keeps synthetic credential out of persisted output`, { timeout: 120_000 }, async () => {
   const stderr = { lines: [] as string[] };
   let workerArgs: readonly string[] | undefined;

@@ -91,22 +91,28 @@ JWT、Device ID、Cookie、邮箱、账户 ID 或用户资料值。核验结果�
 
 1. 官方 `enc:v1:` 字符串格式成功。
 2. 原 object 格式继续成功。
-3. malformed envelope、非 JSON string、错误密钥拒绝。
-4. 缺少可验证账户身份拒绝。
-5. JWT payload 无效拒绝。
-6. JWT 过期拒绝。
-7. 构造后账户身份切换拒绝且 Billing 调用为 0。
-8. Device ID 缺失拒绝。
-9. 凭据失败时 Auth Issuer 不构造且 Billing 调用为 0。
-10. Coding Plan callback 行为不变。
+3. 未设置显式 Secret 时，官方机器 fallback 密钥成功读取合成加密凭据；
+   显式 Secret 存在时不会错误回退到机器密钥。
+4. plaintext JSON string `user_info` 成功。
+5. credentials 根为 `null`、数组或其他非 record 时拒绝。
+6. malformed envelope、IV、auth tag、ciphertext、AES-GCM 认证失败和
+   非 JSON string 拒绝。
+7. 缺少可验证账户身份、JWT payload 无效和 Device ID 缺失拒绝。
+8. JWT 过期、构造后账户身份切换拒绝且 Billing 调用为 0。
+9. 所有凭据解析失败都使 Auth Issuer 不构造，Billing 调用为 0，不能进入
+   Provider 或模型侧。
+10. SQLite Start Plan 请求在官方 Auth 缺失时于 Task 持久化前拒绝，不创建
+    Worker、Provider Session 或发送模型请求。
+11. Coding Plan callback 行为不变。
 
 验证结果：
 
-- 定向测试：14/14 PASS。
+- 定向测试：16/16 PASS。
+- Start Plan 无官方 Auth 的 SQLite 提交边界测试：1/1 PASS。
 - `npm run test:affected`：因新增源码/测试尚未登记影响映射，按规范回退
   `FULL_SUITE`，不是跳过。
-- 完整隔离回归：891 tests，889 pass，2 skip，0 fail。
-- B3-05 已实际运行。
+- 完整隔离回归：894 tests，892 pass，2 skip，0 fail。
+- 完整回归包含并实际运行 B3-05（555558.2567ms）。
 - typecheck、build、plugin validation、`git diff --check`：PASS。
 
 ## 本机凭据发现

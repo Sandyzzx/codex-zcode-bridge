@@ -66,16 +66,20 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
   readonly #shutdownWaitMs: number;
   readonly #context: NonNullable<ClaimOnlyDriverOptions["trustedLocalContext"]>;
   readonly #processProbe: ProcessProbe;
+  readonly #startPlanAuthAvailable: boolean;
+  readonly #testOnlyFakeAdapter: boolean;
 
   private constructor(driver: Driver, context: NonNullable<ClaimOnlyDriverOptions["trustedLocalContext"]>, processProbe: ProcessProbe,
     testBeforeDispatch?: () => Promise<void>, testOnScheduler?: SqliteAuthorityOptions["testOnScheduler"],
-    shutdownWaitMs = DEFAULT_HOST_SHUTDOWN_WAIT_MS) {
+    shutdownWaitMs = DEFAULT_HOST_SHUTDOWN_WAIT_MS, startPlanAuthAvailable = false, testOnlyFakeAdapter = false) {
     this.#driver = driver;
     this.#context = context;
     this.#processProbe = processProbe;
     this.#testBeforeDispatch = testBeforeDispatch;
     this.#testOnScheduler = testOnScheduler;
     this.#shutdownWaitMs = shutdownWaitMs;
+    this.#startPlanAuthAvailable = startPlanAuthAvailable;
+    this.#testOnlyFakeAdapter = testOnlyFakeAdapter;
   }
 
   async createTask(task: TaskPackage): Promise<TaskReceipt> {
@@ -83,6 +87,10 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     this.#assertAccepting();
     this.#assertRecoveryReady();
     validateTaskPackage(task);
+    if (task.model?.provider_id === "account:bigmodel-start-plan"
+      && !this.#startPlanAuthAvailable && !this.#testOnlyFakeAdapter) {
+      throw new TaskManagerError("TASK_INVALID", "official Start Plan credentials are unavailable");
+    }
     const policy = this.#driverTrustedPolicy();
     const sourceDecision = policy.validateWorkspace({ requestedPath: task.workspace, canonicalPath: task.workspace });
     if (sourceDecision.state !== "allow") throw new TaskManagerError("TASK_INVALID", `SQLite admission rejected: ${sourceDecision.reason}`);
@@ -642,7 +650,8 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     }
     const processProbe = options.processProbe ?? createPlatformProbe();
     const authority = new SqliteLifecycleMcpAuthority(await openClaimOnlyDriver({ ...driverOptions, processProbe }), options.trustedLocalContext,
-      processProbe, testBeforeDispatch, testOnScheduler, shutdownWaitMs);
+      processProbe, testBeforeDispatch, testOnScheduler, shutdownWaitMs,
+      options.startPlanPrivateAuth !== undefined, options.testOnlyFakeAdapter === true);
     try {
       await authority.recoverTasks();
       return authority;
