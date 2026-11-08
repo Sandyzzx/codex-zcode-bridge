@@ -339,6 +339,12 @@ async function runZCodeAdapter(
     timeoutMs: execution.task.timeout_ms,
     // Preserve cleanup evidence on an execution error as well as success.
     onOutcomeCheckpoint: (checkpoint) => { outcome = checkpoint; },
+    // ADR-011: the validated FailureFactsV1 snapshot leaves the Worker only
+    // through this bounded diagnostic stderr line; it is never part of the
+    // Result frame or public events.
+    onFailureFacts: (facts) => {
+      writeDiagnostic(`[bridge-worker] failure-facts ${JSON.stringify(facts)}\n`);
+    },
     executionProfileId: execution.execution_profile_id,
     ...(execution.private_auth ? { startPlanProviderEntitled: execution.private_auth.entitled } : {}),
     onEvent: (event) => {

@@ -22,6 +22,7 @@ import { createPlatformProbe } from "../runtime/process-probe.js";
 import { fingerprintRuntimeArtifact } from "../runtime/build-provenance.js";
 import { createTrustedLocalStdioContext } from "../runtime/trusted-local-deployment.js";
 import { SERVER_VERSION } from "../mcp/server.js";
+import { validateFailureFacts } from "../diagnostics/failure-facts.js";
 import {
   loadInstallAuthoritySelection,
   prepareFreshSqliteStateDirectory,
@@ -105,6 +106,22 @@ export function resolveMaxConcurrentWorkers(env: NodeJS.ProcessEnv): WorkerLimit
     };
   }
   return { maxConcurrentWorkers: Number(raw) };
+}
+
+/**
+ * Validates one Worker stderr line carrying the ADR-011 failure-facts marker.
+ * Returns the bounded compact snapshot, or null when the line is not a
+ * trusted FailureFactsV1 (wrong marker, malformed JSON, unregistered fields,
+ * or over the byte cap enforced by validateFailureFacts).
+ */
+export function formatWorkerFailureFactsLine(line: string): string | null {
+  const marker = "[bridge-worker] failure-facts ";
+  if (!line.startsWith(marker)) return null;
+  try {
+    return JSON.stringify(validateFailureFacts(JSON.parse(line.slice(marker.length))));
+  } catch {
+    return null;
+  }
 }
 
 export interface StdioLifecycleHost {
@@ -252,6 +269,12 @@ export async function startBridge(
       trustedLocalContext,
       requireAuthorityReceipt: true,
       ...(startPlanIssuer ? { startPlanPrivateAuth: startPlanIssuer } : {}),
+      onWorkerDiagnosticLine: (line) => {
+        const facts = formatWorkerFailureFactsLine(line);
+        // Diagnostic stderr only: this line never enters MCP results, events,
+        // or any persisted surface.
+        if (facts) console.error(`[bridge] worker failure-facts ${facts}`);
+      },
     });
     manager = authority;
     lifecycleChecks = () => authority.getDoctorChecks();

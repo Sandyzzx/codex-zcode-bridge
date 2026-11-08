@@ -266,6 +266,10 @@ export interface ClaimOnlyDriverOptions {
   readonly onStage?: (stage: string, detail?: Readonly<Record<string, unknown>>) => void;
   /** Test-only callback to attach a draining stderr recorder immediately after Spawn. */
   readonly onChildSpawn?: (child: ClaimOnlyWorkerProcess) => void;
+  /** Bounded private diagnostics: forwards Worker stderr lines that carry the
+   * ADR-011 failure-facts marker. The composition validates the snapshot;
+   * unvalidated content never reaches Host diagnostics. */
+  readonly onWorkerDiagnosticLine?: (line: string) => void;
   /** Test-only seam for the explicit Recovery stop path; production always uses identity-bound OS termination. */
   readonly testStopWorkerForRecovery?: (pid: number, expectedFingerprint: string) => Promise<void>;
   /** Test-only barrier immediately before evidence/CAS writes in a cleanup Recovery race. */
@@ -2044,6 +2048,7 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
           child = spawnClaimOnlyWorker(options.workerEntryPath, provenance, {
             ...(options.enableSyntheticInteractionChannel || !options.testOnlyFakeAdapter ? { interactionChannel: true } : {}),
             ...(usePrivateAuth ? { privateAuthChannel: true } : {}),
+            ...(options.onWorkerDiagnosticLine ? { onWorkerDiagnosticLine: options.onWorkerDiagnosticLine } : {}),
           });
           options.onChildSpawn?.(child);
           return child as PrivateBootstrapChild;

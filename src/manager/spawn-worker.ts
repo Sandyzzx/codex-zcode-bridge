@@ -30,7 +30,11 @@ export type SqliteWorkerAdapterMode = "zcode_app_server" | "test_fake";
 export function spawnClaimOnlyWorker(
   workerPath: string,
   provenance: RuntimeBuildProvenance,
-  options: { readonly interactionChannel?: boolean; readonly dropAfterPrepared?: boolean; readonly privateAuthChannel?: boolean } = {},
+  options: { readonly interactionChannel?: boolean; readonly dropAfterPrepared?: boolean; readonly privateAuthChannel?: boolean;
+    /** Bounded private diagnostics: complete Worker stderr lines matching the
+     * ADR-011 failure-facts marker are forwarded for validated handling;
+     * every other byte stays discarded. */
+    readonly onWorkerDiagnosticLine?: (line: string) => void } = {},
 ): ClaimOnlyWorkerProcess {
   if (!path.isAbsolute(workerPath)) throw new TypeError("claim-only worker path must be absolute");
   if (options.dropAfterPrepared && !options.interactionChannel) throw new TypeError("interaction channel is required for drop-after-prepared");
@@ -58,7 +62,29 @@ export function spawnClaimOnlyWorker(
   // when no diagnostic observer is installed, so a full OS pipe cannot block
   // the Worker before Result/exit. Observers may still subscribe to data;
   // unobserved bytes are discarded without accumulating logs in memory.
-  child.stderr?.resume();
+  const diagnosticSink = options.onWorkerDiagnosticLine;
+  if (diagnosticSink) {
+    child.stderr?.setEncoding("utf8");
+    let pending = "";
+    child.stderr?.on("data", (chunk: string) => {
+      pending += chunk;
+      if (pending.length > 65_536) {
+        // Oversized garbage is dropped, never queued: diagnostics cannot
+        // block or grow unbounded ahead of Result/exit.
+        pending = pending.slice(pending.lastIndexOf("\n") + 1);
+        return;
+      }
+      for (;;) {
+        const index = pending.indexOf("\n");
+        if (index < 0) break;
+        const line = pending.slice(0, index);
+        pending = pending.slice(index + 1);
+        if (line.startsWith("[bridge-worker] failure-facts ")) diagnosticSink(line);
+      }
+    });
+  } else {
+    child.stderr?.resume();
+  }
   const pipes = child.stdio as unknown as readonly (Readable | Writable | null)[];
   let exitSeen = false;
   Object.defineProperties(child, {

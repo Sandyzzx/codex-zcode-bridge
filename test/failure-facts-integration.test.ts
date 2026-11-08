@@ -14,6 +14,7 @@ import test from "node:test";
 import { buildTaskResult } from "../src/manager/normalize.js";
 import { ZCodeAppServerAdapter } from "../src/adapters/zcode-app-server-adapter.js";
 import { type FailureFactsV1 } from "../src/diagnostics/failure-facts.js";
+import { formatWorkerFailureFactsLine } from "../src/host/stdio.js";
 import { BridgeError } from "../src/runtime/errors.js";
 import type { TaskPackage, ZCodeRuntimeConfig } from "../src/interfaces.js";
 import type { ZCodeRunOutcome } from "../src/adapters/run-outcome.js";
@@ -1030,4 +1031,46 @@ test("T1: the live adapter reports reported booleans only, and contradictory boo
   } finally {
     await runtime.cleanup();
   }
+});
+
+// ---- Host stderr exit validation (ADR-011 private diagnostic boundary) ------
+
+const VALID_FACTS: FailureFactsV1 = {
+  schema_version: "1",
+  source: "turn_event",
+  phase: "turn_terminal",
+  rpc_method: null,
+  rpc_code: null,
+  rpc_data_code: null,
+  error_type: "model_error",
+  error_code: "model_request_failed",
+  provider_code: "3007",
+  http_status: 429,
+  accepted_before_error: "yes",
+  category: "rate_limited",
+  confidence: "inferred",
+  evidence_basis: "http_status",
+  evidence_conflict: false,
+  runtime_retryable: false,
+  runtime_retryable_basis: "reported",
+  result_type: null,
+  process_errno: null,
+};
+
+test("H1: the Host validator accepts a trusted Worker failure-facts stderr line", () => {
+  const line = `[bridge-worker] failure-facts ${JSON.stringify(VALID_FACTS)}`;
+  assert.equal(formatWorkerFailureFactsLine(line), JSON.stringify(VALID_FACTS));
+});
+
+test("H2: non-marker lines, malformed JSON, and unregistered snapshots are dropped", () => {
+  assert.equal(formatWorkerFailureFactsLine("not a facts line"), null);
+  assert.equal(formatWorkerFailureFactsLine("[bridge-worker] adapter event=cleanup_unverified"), null);
+  assert.equal(formatWorkerFailureFactsLine("[bridge-worker] failure-facts {broken"), null);
+  assert.equal(formatWorkerFailureFactsLine("[bridge-worker] failure-facts [1,2,3]"), null);
+  // An unknown field means unvalidated content: the whole snapshot is dropped.
+  const injected = JSON.stringify({ ...VALID_FACTS, upstream_message: "SENTINEL_H2_secret" });
+  assert.equal(formatWorkerFailureFactsLine(`[bridge-worker] failure-facts ${injected}`), null);
+  // A missing field is equally untrusted.
+  const { provider_code: _omitted, ...incomplete } = VALID_FACTS;
+  assert.equal(formatWorkerFailureFactsLine(`[bridge-worker] failure-facts ${JSON.stringify(incomplete)}`), null);
 });

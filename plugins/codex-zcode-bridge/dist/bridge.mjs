@@ -2086,7 +2086,27 @@ function spawnClaimOnlyWorker(workerPath, provenance, options = {}) {
     cwd: path10.dirname(workerPath),
     env
   });
-  child.stderr?.resume();
+  const diagnosticSink = options.onWorkerDiagnosticLine;
+  if (diagnosticSink) {
+    child.stderr?.setEncoding("utf8");
+    let pending = "";
+    child.stderr?.on("data", (chunk) => {
+      pending += chunk;
+      if (pending.length > 65536) {
+        pending = pending.slice(pending.lastIndexOf("\n") + 1);
+        return;
+      }
+      for (; ; ) {
+        const index = pending.indexOf("\n");
+        if (index < 0) break;
+        const line = pending.slice(0, index);
+        pending = pending.slice(index + 1);
+        if (line.startsWith("[bridge-worker] failure-facts ")) diagnosticSink(line);
+      }
+    });
+  } else {
+    child.stderr?.resume();
+  }
   const pipes = child.stdio;
   let exitSeen = false;
   Object.defineProperties(child, {
@@ -9584,7 +9604,8 @@ async function openClaimOnlyDriver(options) {
           spawnCount += 1;
           child = spawnClaimOnlyWorker(options.workerEntryPath, provenance, {
             ...options.enableSyntheticInteractionChannel || !options.testOnlyFakeAdapter ? { interactionChannel: true } : {},
-            ...usePrivateAuth ? { privateAuthChannel: true } : {}
+            ...usePrivateAuth ? { privateAuthChannel: true } : {},
+            ...options.onWorkerDiagnosticLine ? { onWorkerDiagnosticLine: options.onWorkerDiagnosticLine } : {}
           });
           options.onChildSpawn?.(child);
           return child;
@@ -35514,6 +35535,257 @@ init_process_probe();
 init_build_provenance();
 init_trusted_local_deployment();
 
+// src/diagnostics/failure-facts.ts
+var FAILURE_PHASES = [
+  "unknown",
+  "pre_send",
+  "send_pending",
+  "rpc_rejected",
+  "turn_started",
+  "processing_input",
+  "awaiting_model_response",
+  "streaming",
+  "scheduling_tools",
+  "executing_tools",
+  "aggregating_results",
+  "awaiting_permission",
+  "completing",
+  "error",
+  "compact",
+  "rewind",
+  "model_creation",
+  "turn_terminal",
+  "spawn",
+  "process_exit",
+  "transport_lost",
+  "protocol_guard"
+];
+var FAILURE_PHASE_SET = new Set(FAILURE_PHASES);
+var FAILURE_SOURCES = ["rpc", "turn_event", "process", "transport"];
+var ACCEPTED_STATES = ["yes", "no", "unknown"];
+var FAILURE_CATEGORIES = [
+  "quota_exhausted",
+  "rate_limited",
+  "auth_failed",
+  "network_failure",
+  "context_exceeded",
+  "invalid_request",
+  "model_unavailable",
+  "execution_failed",
+  "protocol_failure",
+  "unknown"
+];
+var CONFIDENCE_LEVELS = ["confirmed", "inferred", "unknown"];
+var EVIDENCE_BASES = [
+  "business_code",
+  "runtime_type_or_reason",
+  "http_status",
+  "result_type",
+  "process_errno",
+  "protocol_guard",
+  "text",
+  "conflict",
+  "none"
+];
+var PROCESS_ERRNOS = ["ENOENT", "EACCES", "EPERM"];
+var QUOTA_BUSINESS_CODES = /* @__PURE__ */ new Set([
+  "insufficient_quota",
+  "credit_balance_exhausted",
+  "organization_spend_limit_exceeded",
+  "project_spend_limit_exceeded",
+  "organization_usage_limit_exceeded",
+  "exceeded_current_quota_error"
+]);
+var RATE_LIMIT_STRING_CODES = /* @__PURE__ */ new Set([
+  "rate_limit_error",
+  "rate_limit_reached_error"
+]);
+var PROVIDER_NUMERIC_CODES = /* @__PURE__ */ new Set([
+  "1005",
+  "1006",
+  "1261",
+  "3001",
+  "3006",
+  "3007",
+  "3008",
+  "3009",
+  "3010",
+  "1302",
+  "1303",
+  "1304",
+  "1305",
+  "1308",
+  "1310",
+  "1313",
+  "3002"
+]);
+var PROVIDER_BUSINESS_CODES = /* @__PURE__ */ new Set([
+  ...QUOTA_BUSINESS_CODES,
+  ...RATE_LIMIT_STRING_CODES,
+  ...PROVIDER_NUMERIC_CODES
+]);
+var MODEL_ERROR_CODES = /* @__PURE__ */ new Set([
+  "invalid_model_selection",
+  "model_config_missing",
+  "provider_not_found",
+  "provider_not_configured",
+  "model_not_found",
+  "invalid_model_request",
+  "invalid_model_response",
+  "model_request_failed",
+  "model_request_auth_missing",
+  "model_request_cancelled",
+  "model_request_timeout",
+  "model_rate_limited",
+  "model_context_exceeded",
+  ...PROVIDER_BUSINESS_CODES
+]);
+var ERROR_TYPE_REGISTRY = /* @__PURE__ */ new Set([
+  "model_error",
+  "model_timeout",
+  "model_rate_limited",
+  "model_context_exceeded",
+  "tool_not_found",
+  "tool_execution_failed",
+  "tool_timeout",
+  "tool_cancelled",
+  "tool_max_calls",
+  "permission_denied",
+  "permission_timeout",
+  "storage_error",
+  "configuration_error",
+  "unknown_error",
+  ...MODEL_ERROR_CODES
+]);
+var RPC_DATA_CODE_REGISTRY = MODEL_ERROR_CODES;
+var RESULT_TYPE_REGISTRY = /* @__PURE__ */ new Set([
+  "success",
+  "cancelled",
+  "error_max_turns",
+  "error_max_budget",
+  "error_during_execution",
+  "error_max_tool_calls"
+]);
+var RPC_METHOD_REGISTRY = /* @__PURE__ */ new Set([
+  "provider/updateAccountConfig",
+  "session/create",
+  "session/resume",
+  "session/setMode",
+  "session/setModel",
+  "session/subscribe",
+  "session/send",
+  "session/events"
+]);
+var MAX_FAILURE_FACTS_BYTES = 4096;
+var FACTS_KEYS = /* @__PURE__ */ new Set([
+  "schema_version",
+  "source",
+  "phase",
+  "rpc_method",
+  "rpc_code",
+  "rpc_data_code",
+  "error_type",
+  "error_code",
+  "provider_code",
+  "http_status",
+  "accepted_before_error",
+  "category",
+  "confidence",
+  "evidence_basis",
+  "evidence_conflict",
+  "runtime_retryable",
+  "runtime_retryable_basis",
+  "result_type",
+  "process_errno"
+]);
+var CODE_PATTERN = /^[A-Za-z0-9_.:-]{1,64}$/u;
+function safeIntegerOrNull(value) {
+  return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
+}
+function httpStatusOrNull(value) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 100 && value <= 599 ? value : null;
+}
+function validateFailureFacts(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("failure facts must be a JSON object");
+  }
+  const record4 = value;
+  for (const key of Object.keys(record4)) {
+    if (!FACTS_KEYS.has(key)) throw new Error("failure facts has an unknown field");
+  }
+  for (const key of FACTS_KEYS) {
+    if (!(key in record4)) throw new Error(`failure facts is missing the field: ${key}`);
+  }
+  if (record4["schema_version"] !== "1") throw new Error('failure facts schema_version must be "1"');
+  if (!FAILURE_SOURCES.includes(record4["source"])) {
+    throw new Error("failure facts source is not in the frozen registry");
+  }
+  if (!FAILURE_PHASE_SET.has(record4["phase"])) {
+    throw new Error("failure facts phase is not in the frozen registry");
+  }
+  if (!ACCEPTED_STATES.includes(record4["accepted_before_error"])) {
+    throw new Error("failure facts accepted_before_error must be yes, no, or unknown");
+  }
+  if (!FAILURE_CATEGORIES.includes(record4["category"])) {
+    throw new Error("failure facts category is not in the frozen registry");
+  }
+  if (!CONFIDENCE_LEVELS.includes(record4["confidence"])) {
+    throw new Error("failure facts confidence is not in the frozen registry");
+  }
+  if (!EVIDENCE_BASES.includes(record4["evidence_basis"])) {
+    throw new Error("failure facts evidence_basis is not in the frozen registry");
+  }
+  if (typeof record4["evidence_conflict"] !== "boolean") {
+    throw new Error("failure facts evidence_conflict must be a boolean");
+  }
+  const retryable2 = record4["runtime_retryable"];
+  const retryableBasis = record4["runtime_retryable_basis"];
+  if (retryable2 !== null && typeof retryable2 !== "boolean") {
+    throw new Error("failure facts runtime_retryable must be a boolean or null");
+  }
+  if (retryableBasis !== null && retryableBasis !== "reported") {
+    throw new Error("failure facts runtime_retryable_basis must be reported or null in P0; versioned_mapping is disabled");
+  }
+  if (retryable2 === null !== (retryableBasis === null)) {
+    throw new Error("failure facts runtime_retryable and runtime_retryable_basis must be null together");
+  }
+  const codeFields = [
+    // rpc_method strings contain "/" by design; membership in the frozen
+    // method registry is the whole validation, the bounded code pattern
+    // applies only to code families.
+    ["rpc_method", RPC_METHOD_REGISTRY],
+    ["rpc_data_code", RPC_DATA_CODE_REGISTRY],
+    ["error_type", ERROR_TYPE_REGISTRY],
+    ["error_code", MODEL_ERROR_CODES],
+    ["provider_code", PROVIDER_BUSINESS_CODES],
+    ["result_type", RESULT_TYPE_REGISTRY]
+  ];
+  for (const [key, registry2] of codeFields) {
+    const item = record4[key];
+    if (item === null) continue;
+    if (key !== "rpc_method" && (typeof item !== "string" || !CODE_PATTERN.test(item))) {
+      throw new Error(`failure facts field ${key} is not a bounded code value`);
+    }
+    if (typeof item !== "string" || !registry2.has(item)) {
+      throw new Error(`failure facts field ${key} is not a registered value`);
+    }
+  }
+  if (record4["rpc_code"] !== null && safeIntegerOrNull(record4["rpc_code"]) === null) {
+    throw new Error("failure facts rpc_code must be a safe integer or null");
+  }
+  if (record4["http_status"] !== null && httpStatusOrNull(record4["http_status"]) === null) {
+    throw new Error("failure facts http_status must be an integer in 100..599 or null");
+  }
+  if (record4["process_errno"] !== null && !PROCESS_ERRNOS.includes(record4["process_errno"])) {
+    throw new Error("failure facts process_errno must be ENOENT, EACCES, EPERM, or null");
+  }
+  const bytes = Buffer.byteLength(JSON.stringify(record4), "utf8");
+  if (bytes > MAX_FAILURE_FACTS_BYTES) {
+    throw new Error(`failure facts snapshot exceeds the ${MAX_FAILURE_FACTS_BYTES}-byte limit (${bytes} bytes)`);
+  }
+  return value;
+}
+
 // src/runtime/sqlite-install-config.ts
 init_resolver();
 init_profile();
@@ -35717,6 +35989,15 @@ function resolveMaxConcurrentWorkers(env) {
   }
   return { maxConcurrentWorkers: Number(raw) };
 }
+function formatWorkerFailureFactsLine(line) {
+  const marker = "[bridge-worker] failure-facts ";
+  if (!line.startsWith(marker)) return null;
+  try {
+    return JSON.stringify(validateFailureFacts(JSON.parse(line.slice(marker.length))));
+  } catch {
+    return null;
+  }
+}
 function serveStdioLifecycleHost(server, manager, options = {}) {
   const stdin = options.stdin ?? process.stdin;
   const stdout = options.stdout ?? process.stdout;
@@ -35823,7 +36104,11 @@ async function startBridge(host = codexHostProfile(), version2 = SERVER_VERSION,
       processProbe,
       trustedLocalContext,
       requireAuthorityReceipt: true,
-      ...startPlanIssuer ? { startPlanPrivateAuth: startPlanIssuer } : {}
+      ...startPlanIssuer ? { startPlanPrivateAuth: startPlanIssuer } : {},
+      onWorkerDiagnosticLine: (line) => {
+        const facts = formatWorkerFailureFactsLine(line);
+        if (facts) console.error(`[bridge] worker failure-facts ${facts}`);
+      }
     });
     manager = authority;
     lifecycleChecks = () => authority.getDoctorChecks();

@@ -51,6 +51,7 @@ interface FakeRuntimeFixture {
 }
 
 type RuntimeVariant = "success" | "failure" | "stderr-flood" | "large-result" | "deadline-success" | "deadline-hang"
+  | "facts-turn-failure"
   | "private-auth" | "private-auth-echo" | "private-auth-wrong-turn" | "private-auth-wrong-claim"
   | "private-auth-account-switch" | "private-auth-hold" | "private-auth-eof-recheck" | "private-auth-interaction"
   | "private-auth-preflight-reject";
@@ -74,6 +75,8 @@ function writeFakeRuntime(name: string, variant: RuntimeVariant): FakeRuntimeFix
   });
   const finishTurn = variant === "failure"
     ? `process.stdout.write(JSON.stringify({ method: "session/event", params: { seq: 1, type: "turn.failed", payload: { error: { message: "synthetic adapter failure" } } } }) + "\\n");`
+    : variant === "facts-turn-failure"
+    ? `process.stdout.write(JSON.stringify({ method: "session/event", params: { seq: 1, type: "turn.failed", payload: { error: { code: "model_request_failed", type: "model_error", message: "SENTINEL_FF_MESSAGE provider rejected the turn", attribution: { providerErrorCode: "3007", statusCode: 429, retryable: false } } } } }) + "\\n");`
     : [
       `const task = JSON.parse(fs.readFileSync(${JSON.stringify(taskInput)}, "utf8"));`,
       `const report = ${JSON.stringify(report)}.replace("TASK_ID", task.task_id)${variant === "private-auth-echo" ? '.replace("synthetic MVP real-adapter report", "echo " + receivedCredential)' : ''};`,
@@ -130,7 +133,7 @@ function writeFakeRuntime(name: string, variant: RuntimeVariant): FakeRuntimeFix
       `    return;`,
     ] : []),
     `    if (${variant === "deadline-hang"}) return;`,
-    `    if (${variant !== "failure" && !variant.startsWith("deadline-")} && !interactionSent) {`,
+    `    if (${variant !== "failure" && variant !== "facts-turn-failure" && !variant.startsWith("deadline-")} && !interactionSent) {`,
     `      interactionSent = true;`,
     `      for (const rpcId of ["interaction-rpc-1", "interaction-rpc-2"]) {`,
     `        process.stdout.write(JSON.stringify({ id: rpcId, method: "interaction/requestPermission", params: { requestId: "permission-1", sessionId, toolCallId: "call-1", toolName: "Bash", reason: "Run the synthetic build command", input: { command: "npm run build" }, options: [{ kind: "allow_once" }, { kind: "deny" }] } }) + "\\n");`,
@@ -254,6 +257,9 @@ async function withRealAdapterMcp(
    * does (createHostStartPlanIssuer); when absent the legacy synthetic
    * issuer object is used. */
   readonly issuerFactory?: (runtime: FakeRuntimeFixture, host: BridgeHostProfile) => Promise<ProductionAuthIssuer | null>;
+  /** Captures the Worker stderr lines forwarded by the production
+   * onWorkerDiagnosticLine wiring (ADR-011 failure-facts marker only). */
+  readonly workerDiagnosticCollector?: { readonly lines: string[] };
     readonly resultWaitMs?: number; readonly workerCloseWaitMs?: number;
     readonly resultFault?: "commit_ack_lost" | "after_projection";
     readonly onDriverRunReturned?: (detail: Record<string, unknown>) => void } = {},
@@ -333,6 +339,9 @@ async function withRealAdapterMcp(
         // the adapter away from the controlled fake app-server.
         hostProfile,
         trustedLocalContext: createTrustedLocalCandidateContext(hostProfile),
+        ...(options.workerDiagnosticCollector ? {
+          onWorkerDiagnosticLine: (line: string) => { options.workerDiagnosticCollector!.lines.push(line); },
+        } : {}),
         ...(options.runtimeVariant?.startsWith("private-auth") ? { startPlanPrivateAuth: options.issuerFactory ? hostIssuer! : {
           account: "synthetic-account",
           signal: accountController.signal,
@@ -1275,6 +1284,58 @@ test("an adapter turn failure commits a failed Result without faking success", {
     if (fixtureRuntime && existsSync(fixtureRuntime.exitLog)) {
       console.error("fake app-server lifecycle:\n" + readFileSync(fixtureRuntime.exitLog, "utf8"));
     }
+    throw error;
+  }
+});
+
+test("ADR-011 failure facts cross the Worker stderr diagnostic exit and the Host validator without failure payloads", { timeout: 120_000 }, async () => {
+  const stderr = { lines: [] as string[] };
+  const diagnostics = { lines: [] as string[] };
+  const marker = "[bridge-worker] failure-facts ";
+  const sentinel = "SENTINEL_FF_MESSAGE";
+  try {
+    await withRealAdapterMcp(async (client, _manager, _dataRoot, workspace, runtime) => {
+      const taskId = `mvp-facts-${randomUUID()}`;
+      const created = contentObject(await client.callTool({ name: "zcode_task", arguments: syntheticTask(workspace, taskId) }));
+      assert.equal(created.status, "queued");
+      const status = await waitForTerminal(client, taskId, 1);
+      assert.equal(status.status, "failed");
+      await waitForLifecycleEvent(client, taskId, "result_committed");
+      await waitForLifecycleEvent(client, taskId, "released");
+      const result = contentObject(await client.callTool({ name: "zcode_result", arguments: { task_id: taskId } }));
+      assert.equal(result.status, "failed");
+      // Exactly one validated snapshot leaves the Worker through stderr.
+      const factDeadline = Date.now() + 10_000;
+      const factLines = (): string[] => stderr.lines.join("").split("\n").filter((line) => line.startsWith(marker));
+      while (Date.now() < factDeadline && factLines().length === 0) await new Promise((resolve) => setTimeout(resolve, 50));
+      assert.equal(factLines().length, 1, `exactly one failure-facts line expected: ${JSON.stringify(stderr.lines)}`);
+      const facts = JSON.parse(factLines()[0]!.slice(marker.length)) as Record<string, unknown>;
+      assert.equal(facts.schema_version, "1");
+      assert.equal(facts.source, "turn_event");
+      assert.equal(facts.phase, "turn_terminal");
+      assert.equal(facts.provider_code, "3007");
+      assert.equal(facts.http_status, 429);
+      assert.equal(facts.error_code, "model_request_failed");
+      assert.equal(facts.category, "rate_limited");
+      assert.equal(facts.confidence, "inferred");
+      assert.equal(facts.evidence_basis, "http_status");
+      assert.equal(facts.runtime_retryable, false);
+      assert.equal(facts.accepted_before_error, "yes");
+      // The production Manager wiring forwards the same line once.
+      const forwardDeadline = Date.now() + 10_000;
+      while (Date.now() < forwardDeadline && diagnostics.lines.length === 0) await new Promise((resolve) => setTimeout(resolve, 50));
+      assert.equal(diagnostics.lines.length, 1);
+      assert.equal(JSON.parse(diagnostics.lines[0]!.slice(marker.length)).provider_code, "3007");
+      // Raw failure payloads stay out of every diagnostic or result surface.
+      for (const surface of [stderr.lines.join(""), diagnostics.lines.join(""), JSON.stringify(result), JSON.stringify(status)]) {
+        assert.equal(surface.includes(sentinel), false, "upstream failure text must never reach diagnostics or results");
+      }
+      // Classification never creates a retry: exactly one model send.
+      const requests = readFileSync(runtime.requestLog, "utf8").trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+      assert.equal(requests.filter((message) => message.method === "session/send").length, 1);
+    }, { runtimeVariant: "facts-turn-failure", stderrCollector: stderr, workerDiagnosticCollector: diagnostics, preserveFixtureOnFailure: true });
+  } catch (error) {
+    console.error("worker stderr:\n" + stderr.lines.join("\n") + "\nforwarded diagnostics:\n" + diagnostics.lines.join("\n"));
     throw error;
   }
 });
