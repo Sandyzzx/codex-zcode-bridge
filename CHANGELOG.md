@@ -4,6 +4,23 @@
 
 当前版本以 `package.json` 和 Release Please manifest 为准。提交推送到 `master` 后，Release Please 会在有待发布变更时创建发布 PR，并同步更新版本文件与本日志；合并发布 PR 后会生成对应 Git tag 和 GitHub Release。
 
+## [2.0.0-preview.1](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-preview-v1.6.0-preview.3...codex-zcode-bridge-preview-v2.0.0-preview.1) (2026-11-08)
+
+Preview 2.0 集成版本（EXPERIMENTAL / PREREVIEW ONLY，仅面向开发者和测试用户；发布目标为 `preview` 分支，不经过 Release Please）。
+
+### Features
+
+* SQLite-only 统一生产架构：单一 SQLite Authority 与单一 Lifecycle Manager，JSON TaskStore/Manager 与旧 CLI 执行链退役（PR #67）。
+* Start Plan 实验性集成：官方加密凭据发现（`enc:v1:` AES-256-GCM）、实时模型级 Billing 权益门、Provider 注册前置校验、私有凭据一次性租约与 HANDLE 身份门禁（PR #62、#65、#67）。
+* Windows 清理加速与锁发布重试预算修复：失败清理路径预启动 ADR-009 辅助进程；`state.lock` 发布 rename 重试与撤回路径对齐到 5 秒有界预算（PR #67）。
+
+### BREAKING CHANGES
+
+* 公共 Core 计划在下一主版本进行破坏性调整；Preview 渠道不承诺 Core API 兼容性。
+* SQLite-only 架构退役 JSON/CLI 生产执行链：旧 JSON 任务历史不会被迁移或读取。
+* SQLite v13 数据库不自动迁移：升级要求先停所有 Bridge host/Manager，再用 `dist/upgrade-sqlite-v14.mjs` 执行显式离线复制升级，然后切换 `authority.json` 的 `data_root`（见 README 与 `docs/ZCODE_RUNTIME.md`）。
+* SQLite 模式要求 Node.js `>=24.16.0 <25`；旧 JSON 运行时的 Node `>=22.18` 要求不再适用。
+
 ## [1.6.0](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.5.0...codex-zcode-bridge-v1.6.0) (2026-11-05)
 
 
