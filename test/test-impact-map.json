@@ -57,6 +57,7 @@
       "description": "Provider/account catalog, model selection, session preferences, and Doctor preference checks.",
       "paths": [
         "src/runtime/account-provider.ts",
+        "src/runtime/model-routing.ts",
         "src/runtime/model-settings.ts",
         "src/runtime/session-preferences.ts",
         "src/runtime/start-plan-production-auth.ts"
@@ -231,6 +232,14 @@
     }
   ],
   "tests": [
+    {
+      "file": "test/model-routing.test.ts",
+      "type": "Unit",
+      "gate": "T1",
+      "domains": [
+        "provider-catalog"
+      ]
+    },
     {
       "file": "test/account-provider.test.ts",
       "type": "Unit",

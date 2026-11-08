@@ -26,6 +26,7 @@
 | Launch | [028](ADR-028-pre-intent-workspace-refusal.md) | Owner 已接受 R4；Intent 前拒绝与 Intent 后 unknown |
 | 退役/Core | [029](ADR-029-legacy-runtime-retirement.md) | Owner 已批准内部及公共 Core 退役；未来主版本发布 |
 | Start Plan Provider | [030](ADR-030-start-plan-provider-preflight.md) | 任务级实时权益预检、Provider 注册门及失败清理边界；不得从旧缓存推断权益 |
+| Model Routing | [031](ADR-031-model-routing-v1.md) | Start Plan 别名、`prefer_startplan` 自动选路与动态凭据发现；路由不替代实时授权 |
 
 ## 部分被替代 / Partially superseded
 

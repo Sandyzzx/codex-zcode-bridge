@@ -16,6 +16,11 @@ import type { ProductionAuthIssuer, StartPlanLiveEntitlement } from "../../../sr
 import { initializeIsolatedCandidateRoot, loadLifecycleCandidateModules } from "../../../src/store/lifecycle-gate.js";
 import { PrivateCredentialLease } from "../../../src/runtime/start-plan-private-lease.js";
 import { createPlatformProbe } from "../../../src/runtime/process-probe.js";
+import {
+  createTaskModelRouter,
+  readStartPlanRoutingRegistry,
+  StartPlanEntitlementJournal,
+} from "../../../src/runtime/model-routing.js";
 
 const projectRoot = process.cwd();
 const compiledCandidate = path.join(projectRoot, "dist-test", "src", "sqlite-candidate", "wp6b2b1");
@@ -167,6 +172,11 @@ function writeFakeRuntime(name: string, variant: RuntimeVariant): FakeRuntimeFix
       providerConfigRules: { providerRules: [{
         providerId: "account:bigmodel-start-plan",
         config: { builtinModelIds: ["GLM-5.3-Flash"], access: { type: "zhipu-account", mode: "start-plan", accountType: "bigmodel" } },
+        // ADR-031 fallback target: a coding plan provider advertising the
+        // same official model id in the fixture registry.
+      }, {
+        providerId: "builtin:bigmodel-coding-plan",
+        config: { builtinModelIds: ["GLM-5.3-Flash"], access: { type: "api-key", mode: "individual-coding-plan" } },
       }] },
     },
   }), "utf8");
@@ -257,6 +267,13 @@ async function withRealAdapterMcp(
    * does (createHostStartPlanIssuer); when absent the legacy synthetic
    * issuer object is used. */
   readonly issuerFactory?: (runtime: FakeRuntimeFixture, host: BridgeHostProfile) => Promise<ProductionAuthIssuer | null>;
+  /** ADR-031 per-dispatch issuer discovery: consulted by the gate on every
+   * Start Plan launch so login/logout/account switches are observed without
+   * recreating the Authority. */
+  readonly startPlanIssuerPerDispatch?: (runtime: FakeRuntimeFixture, host: BridgeHostProfile) => Promise<ProductionAuthIssuer | null>;
+  /** ADR-031 task-creation routing hooks: builds the production router over
+   * the fixture's official provider registry. */
+  readonly routingHooks?: { readonly journal: StartPlanEntitlementJournal; readonly preferStartPlan?: boolean; readonly defaultProviderId?: string };
   /** Captures the Worker stderr lines forwarded by the production
    * onWorkerDiagnosticLine wiring (ADR-011 failure-facts marker only). */
   readonly workerDiagnosticCollector?: { readonly lines: string[] };
@@ -342,7 +359,14 @@ async function withRealAdapterMcp(
         ...(options.workerDiagnosticCollector ? {
           onWorkerDiagnosticLine: (line: string) => { options.workerDiagnosticCollector!.lines.push(line); },
         } : {}),
-        ...(options.runtimeVariant?.startsWith("private-auth") ? { startPlanPrivateAuth: options.issuerFactory ? hostIssuer! : {
+        ...(options.routingHooks ? { routeTaskModel: createTaskModelRouter({
+          settings: () => ({ preferStartPlan: options.routingHooks!.preferStartPlan ?? true, defaultProviderId: options.routingHooks!.defaultProviderId ?? "" }),
+          journal: options.routingHooks.journal,
+          registry: async () => readStartPlanRoutingRegistry({ providerBuiltinConfigFile: runtime.builtinConfig, providerPersonalConfigFile: runtime.personalConfig }),
+        }) } : {}),
+        ...(options.runtimeVariant?.startsWith("private-auth") ? (options.startPlanIssuerPerDispatch
+          ? { startPlanPrivateAuthFactory: async () => await options.startPlanIssuerPerDispatch!(runtime, hostProfile) ?? null }
+          : { startPlanPrivateAuth: options.issuerFactory ? hostIssuer! : {
           account: "synthetic-account",
           signal: accountController.signal,
           prepare: async () => options.runtimeVariant !== "private-auth-preflight-reject",
@@ -354,7 +378,7 @@ async function withRealAdapterMcp(
             const actualBinding = options.runtimeVariant === "private-auth-wrong-claim" ? { ...binding, claim: "other-claim" } : binding;
             return options.issueOverride?.(actualBinding) ?? new PrivateCredentialLease(actualBinding, "SYNTHETIC_GATE2_SECRET_93d9422b", Date.now() + 30_000);
           },
-        } } : {}),
+        } } ) : {}),
         ...(options.stderrCollector || options.onWorkerSpawn ? {
           onChildSpawn: (child: ChildProcess) => {
             options.onWorkerSpawn?.(child);
@@ -1601,15 +1625,20 @@ function encryptHostCredential(value: string, secret: string): string {
   return `enc:v1:${iv.toString("base64url")}.${cipher.getAuthTag().toString("base64url")}.${encrypted.toString("base64url")}`;
 }
 
-function writeHostCredentials(runtime: FakeRuntimeFixture): void {
+function writeHostCredentials(runtime: FakeRuntimeFixture, account: string = HOST_ACCOUNT): void {
+  const jwt = [
+    Buffer.from(JSON.stringify({ alg: "synthetic" }), "utf8").toString("base64url"),
+    Buffer.from(JSON.stringify({ account, exp: Math.floor(Date.now() / 1000) + 3_600 }), "utf8").toString("base64url"),
+    "synthetic-signature",
+  ].join(".");
   writeFileSync(path.join(runtime.zcodeHomeV2, "credentials.json"), JSON.stringify({
-    zcodejwttoken: encryptHostCredential(HOST_JWT, HOST_CREDENTIAL_SECRET),
+    zcodejwttoken: encryptHostCredential(jwt, HOST_CREDENTIAL_SECRET),
     "oauth:bigmodel:user_info": encryptHostCredential(JSON.stringify({
-      id: HOST_ACCOUNT,
+      id: account,
       username: "synthetic-host-user",
       displayName: "Synthetic Host User",
       rawProfile: {
-        user_id: HOST_ACCOUNT,
+        user_id: account,
         name: "Synthetic Host User",
         email: "synthetic-host@example.invalid",
         avatar: "",
@@ -1716,4 +1745,141 @@ test("missing Start Plan credentials keep the host issuer unavailable without af
     });
     return issuerObserved;
   }, preserveFixtureOnFailure: true });
+});
+
+// ---- ADR-031 Model Routing v1 — Gate E1 synthetic acceptance ----
+// The production wiring under test: per-dispatch issuer discovery through
+// startPlanPrivateAuthFactory plus the task-creation routing hook. Synthetic
+// credentials only; every Billing call is the controlled fake gate.
+
+function routingEnvIssuerFactory(gate: { entitlement: StartPlanLiveEntitlement }, journal: StartPlanEntitlementJournal,
+  loginState: { account: string | null }) {
+  return async (runtime: FakeRuntimeFixture, host: BridgeHostProfile): Promise<ProductionAuthIssuer | null> => {
+    if (loginState.account) writeHostCredentials(runtime, loginState.account);
+    return createHostStartPlanIssuer({
+      env: { ...process.env, HOME: runtime.runtimeRoot, USERPROFILE: runtime.runtimeRoot, ZCODE_CREDENTIAL_SECRET: HOST_CREDENTIAL_SECRET },
+      homeDir: runtime.runtimeRoot,
+      host,
+      signal: new AbortController().signal,
+      entitlement: gate.entitlement,
+      journal,
+    });
+  };
+}
+
+test("ADR-031 Gate E1: a post-startup login is observed by the next dispatch and account switches never cross identities", { timeout: 240_000 }, async () => {
+  const gate = fakeHostBillingGate("entitled");
+  const journal = new StartPlanEntitlementJournal();
+  const loginState = { account: null as string | null };
+  await withRealAdapterMcp(async (client, _manager, _dataRoot, workspace, runtime) => {
+    // Logged out at startup: the plain model routes to Start Plan and the
+    // task is refused at creation (pre-intent, ADR-028 semantics), never
+    // silently re-routed to Coding Plan.
+    const loggedOut = `routing-logged-out-${randomUUID()}`;
+    const refusal = await client.callTool({ name: "zcode_task", arguments: {
+      ...syntheticTask(workspace, loggedOut), model: { model_id: "GLM-5.3-Flash" },
+    } });
+    assert.equal(refusal.isError, true, "a logged-out Start Plan task must be refused at creation");
+    assert.match(JSON.stringify(refusal), /official Start Plan credentials are unavailable/u);
+    assert.equal(gate.checks.length, 0, "a missing credential must fail before any Billing request");
+
+    // User logs in inside ZCode: the next task reads the fresh credential.
+    loginState.account = HOST_ACCOUNT;
+    const loggedIn = `routing-logged-in-${randomUUID()}`;
+    contentObject(await client.callTool({ name: "zcode_task", arguments: {
+      ...syntheticTask(workspace, loggedIn), model: { model_id: "GLM-5.3-Flash" },
+    } }));
+    assert.equal((await waitForTerminal(client, loggedIn, 1)).status, "completed");
+    await waitForLifecycleEvent(client, loggedIn, "released");
+
+    // Account switch: the new task binds to the new account; running tasks
+    // keep their bound identity (covered by the private-auth-account-switch
+    // lifecycle variant).
+    loginState.account = "synthetic-account-b";
+    const switched = `routing-account-b-${randomUUID()}`;
+    contentObject(await client.callTool({ name: "zcode_task", arguments: {
+      ...syntheticTask(workspace, switched), model: { model_id: "GLM-5.3-Flash" },
+    } }));
+    assert.equal((await waitForTerminal(client, switched, 1)).status, "completed");
+    await waitForLifecycleEvent(client, switched, "released");
+
+    assert.deepEqual(gate.checks.map(({ account, provider, model, deviceMid }) => ({ account, provider, model, deviceMid })), [
+      { account: HOST_ACCOUNT, provider: "account:bigmodel-start-plan", model: "GLM-5.3-Flash", deviceMid: HOST_DEVICE_MID },
+      { account: HOST_ACCOUNT, provider: "account:bigmodel-start-plan", model: "GLM-5.3-Flash", deviceMid: HOST_DEVICE_MID },
+      { account: "synthetic-account-b", provider: "account:bigmodel-start-plan", model: "GLM-5.3-Flash", deviceMid: HOST_DEVICE_MID },
+      { account: "synthetic-account-b", provider: "account:bigmodel-start-plan", model: "GLM-5.3-Flash", deviceMid: HOST_DEVICE_MID },
+    ]);
+    assert.equal(journal.latest("GLM-5.3-Flash"), "entitled", "live Billing verdicts must feed the routing journal");
+    const log = readFileSync(runtime.requestLog, "utf8");
+    assert.ok(log.includes("GLM-5.3-Flash"), "the AppServer must receive the raw official model id");
+    assert.equal(log.includes("-StartPlan"), false, "the user-visible alias must never reach the AppServer");
+    assert.equal(log.includes("synthetic-signature"), false, "the official credential must never appear in app-server traffic");
+  }, { runtimeVariant: "private-auth", startPlanIssuerPerDispatch: routingEnvIssuerFactory(gate, journal, loginState),
+    routingHooks: { journal }, preserveFixtureOnFailure: true });
+});
+
+test("ADR-031 Gate E1: an explicit -StartPlan alias executes the raw model id over Start Plan", { timeout: 180_000 }, async () => {
+  const gate = fakeHostBillingGate("entitled");
+  const journal = new StartPlanEntitlementJournal();
+  const loginState = { account: HOST_ACCOUNT };
+  await withRealAdapterMcp(async (client, _manager, _dataRoot, workspace, runtime) => {
+    const taskId = `routing-alias-${randomUUID()}`;
+    contentObject(await client.callTool({ name: "zcode_task", arguments: {
+      ...syntheticTask(workspace, taskId), model: { model_id: "GLM-5.3-Flash-StartPlan" },
+    } }));
+    assert.equal((await waitForTerminal(client, taskId, 1)).status, "completed");
+    await waitForLifecycleEvent(client, taskId, "released");
+    assert.deepEqual(gate.checks.map(({ account, model }) => ({ account, model })), [
+      { account: HOST_ACCOUNT, model: "GLM-5.3-Flash" },
+      { account: HOST_ACCOUNT, model: "GLM-5.3-Flash" },
+    ]);
+    const requests = readFileSync(runtime.requestLog, "utf8").trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+    const setModel = requests.find((message) => message.method === "session/setModel") as { params?: { model?: { providerId?: string; modelId?: string } } } | undefined;
+    assert.equal(setModel?.params?.model?.modelId, "GLM-5.3-Flash");
+    assert.equal(setModel?.params?.model?.providerId, "account:bigmodel-start-plan");
+    assert.equal(JSON.stringify(requests).includes("-StartPlan"), false);
+  }, { runtimeVariant: "private-auth", startPlanIssuerPerDispatch: routingEnvIssuerFactory(gate, journal, loginState),
+    routingHooks: { journal }, preserveFixtureOnFailure: true });
+});
+
+test("ADR-031 Gate E1: a confirmed unavailable verdict falls back to the coding plan provider without Billing", { timeout: 180_000 }, async () => {
+  const gate = fakeHostBillingGate("entitled");
+  const journal = new StartPlanEntitlementJournal();
+  journal.record("GLM-5.3-Flash", "no_entitlement", Date.now());
+  await withRealAdapterMcp(async (client, _manager, _dataRoot, workspace, runtime) => {
+    const taskId = `routing-fallback-${randomUUID()}`;
+    contentObject(await client.callTool({ name: "zcode_task", arguments: {
+      ...syntheticTask(workspace, taskId), model: { model_id: "GLM-5.3-Flash" },
+    } }));
+    const interaction = await waitForInteractionRequest(client, taskId);
+    const request = interaction.details as Record<string, unknown>;
+    const requestId = String(request.request_id ?? (request.payload as Record<string, unknown> | undefined)?.request_id ?? "permission-1");
+    contentObject(await client.callTool({ name: "zcode_interaction_reply", arguments: { task_id: taskId, request_id: requestId, decision: "allow" } }));
+    assert.equal((await waitForTerminal(client, taskId, 1)).status, "completed");
+    await waitForLifecycleEvent(client, taskId, "released");
+    assert.equal(gate.checks.length, 0, "the execution-time fallback must not consume a Billing request");
+    const requests = readFileSync(runtime.requestLog, "utf8").trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+    const setModel = requests.find((message) => message.method === "session/setModel") as { params?: { model?: { providerId?: string; modelId?: string } } } | undefined;
+    assert.equal(setModel?.params?.model?.providerId, "builtin:bigmodel-coding-plan");
+    assert.equal(setModel?.params?.model?.modelId, "GLM-5.3-Flash", "the fallback must keep the same official model id");
+  }, { runtimeVariant: "success", routingHooks: { journal }, preserveFixtureOnFailure: true });
+});
+
+test("ADR-031 Gate E1: billing rejections never trigger a silent fallback", { timeout: 180_000 }, async () => {
+  const gate = fakeHostBillingGate("billing_parameter_error");
+  const journal = new StartPlanEntitlementJournal();
+  const loginState = { account: HOST_ACCOUNT };
+  await withRealAdapterMcp(async (client, _manager, _dataRoot, workspace) => {
+    for (const round of [1, 2]) {
+      const taskId = `routing-no-fallback-${round}-${randomUUID()}`;
+      contentObject(await client.callTool({ name: "zcode_task", arguments: {
+        ...syntheticTask(workspace, taskId), model: { model_id: "GLM-5.3-Flash" },
+      } }));
+      assert.equal((await waitForTerminal(client, taskId, 1)).status, "failed", `round ${round}: an unresolved Billing verdict must not fall back to Coding Plan`);
+      await waitForLifecycleEvent(client, taskId, "released");
+    }
+    assert.equal(gate.checks.length, 2, "each task performs exactly one rejected preflight and no lease delivery");
+    assert.equal(journal.latest("GLM-5.3-Flash"), "billing_parameter_error");
+  }, { runtimeVariant: "private-auth-preflight-reject", startPlanIssuerPerDispatch: routingEnvIssuerFactory(gate, journal, loginState),
+    routingHooks: { journal }, preserveFixtureOnFailure: true });
 });

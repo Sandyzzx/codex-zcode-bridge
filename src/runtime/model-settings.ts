@@ -7,6 +7,7 @@ import { createInterface } from "node:readline";
 import { createMinimalOsEnv } from "./child-env.js";
 import { buildAccountProviderPayload, zcodeDataBaseDir, runtimeAuthReply } from "./account-provider.js";
 import { BridgeError } from "./errors.js";
+import { readStartPlanRoutingRegistry, startPlanAliasCatalogEntries } from "./model-routing.js";
 import { loadPersistedRuntimeEnvironment, NodeRuntimeResolver } from "./resolver.js";
 import { ZCODE_SESSION_MODES, type ZCodeSessionMode } from "./session-preferences.js";
 import type { ZCodeRuntimeConfig } from "../interfaces.js";
@@ -113,11 +114,12 @@ export class ZCodeModelSettings {
     const cacheAge = cached ? Date.now() - cached.cached_at_ms : null;
     if (cached && cached.source_fingerprint === source.fingerprint && cacheAge !== null &&
         cacheAge >= 0 && cacheAge < MODEL_CATALOG_TTL_MS) {
-      const warning = startPlanCatalogWarning(buildAccountProviderPayload(source.config), cached.models);
+      const cachedModels = withStartPlanAliasEntries(cached.models, source.config);
+      const warning = startPlanCatalogWarning(buildAccountProviderPayload(source.config), cachedModels);
       return {
         workspace: workspacePath,
         current_model: null,
-        models: cached.models,
+        models: cachedModels,
         account_provider_sync: "not_needed",
         cache_status: "fresh",
         cached_at: new Date(cached.cached_at_ms).toISOString(),
@@ -181,7 +183,9 @@ export class ZCodeModelSettings {
       const settings = asRecord(snapshot.settings);
       const modelSettings = asRecord(settings.model);
       const rawAvailable = Array.isArray(modelSettings.available) ? modelSettings.available : [];
-      const models = rawAvailable.map(toCatalogEntry).filter((entry): entry is ZCodeModelCatalogEntry => entry !== null);
+      // ADR-031: expose the Start Plan aliases next to the runtime catalog so
+      // Masters can select `<ModelId>-StartPlan` without knowing provider ids.
+      const models = withStartPlanAliasEntries(rawAvailable.map(toCatalogEntry).filter((entry): entry is ZCodeModelCatalogEntry => entry !== null), config);
       const current = toModelRef(modelSettings.current);
       if (models.length === 0) throw new BridgeError("zcode_nonzero_exit", "ZCode app-server returned an empty model catalog for this workspace");
       const cachedAt = Date.now();
@@ -527,6 +531,24 @@ function startPlanCatalogWarning(
   if (!account?.providers[providerId] || account.states[providerId]?.entitled === true
     || models.some((model) => model.provider_id === providerId)) return undefined;
   return "Start Plan models are checked for a selected task; this catalog read does not send Billing requests.";
+}
+
+/** Appends `<ModelId>-StartPlan` catalog entries derived from the official
+ * provider registry. Presentation only: alias entries carry no entitlement
+ * claim and never replace a runtime-advertised entry. */
+function withStartPlanAliasEntries(models: ZCodeModelCatalogEntry[], config: ZCodeRuntimeConfig): ZCodeModelCatalogEntry[] {
+  let aliases: ReturnType<typeof startPlanAliasCatalogEntries>;
+  try {
+    aliases = startPlanAliasCatalogEntries(readStartPlanRoutingRegistry(config));
+  } catch {
+    return models;
+  }
+  if (!aliases.length) return models;
+  const seen = new Set(models.map((model) => `${model.provider_id}\n${model.model_id}`));
+  const additions = aliases
+    .filter((alias) => !seen.has(`${alias.provider_id}\n${alias.model_id}`))
+    .map((alias) => ({ ...alias }));
+  return [...models, ...additions];
 }
 
 async function readModelCatalogCache(cachePath: string): Promise<CachedModelCatalog | null> {

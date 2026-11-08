@@ -32,6 +32,7 @@
 1. 确认 Codex 项目根目录，并始终把它作为 zcode_task 的 `workspace`。根据 Codex 对任务的执行指示决定是否需要 worktree；需要时由 Codex 创建并准备，再把其现存绝对路径作为 `worktree_path`。Bridge 不创建、选择或删除 worktree；未提供该字段时任务直接在项目根目录执行。
 2. 将 objective、requirements 和 acceptance_criteria 写具体，五个数组字段均须存在，路径及测试数组按适用性填写或留空；相对路径以实际执行目录为基准，路径约束只是任务指令，不是强制沙箱。验收标准描述可观察的交付结果；只有确实属于必要约束的内部步骤才写进 requirements。只在任务需要时传入精简的 `context`，按 `PROJECT DECISIONS`、`CONSTRAINTS`、`RELEVANT FILES`、`OPEN DECISIONS — DO NOT CHOOSE` 组织；不要复制整段 Codex 对话。没有未决事项时省略该小节。不要把验收责任交给 ZCode。
 3. 模型优先级固定为：任务或用户指定 → Bridge 持久默认（`ZCODE_BRIDGE_DEFAULT_PROVIDER_ID` / `ZCODE_BRIDGE_DEFAULT_MODEL_ID`）→ ZCode session 默认。用户指定时传入 model: { provider_id, model_id }，优先使用 runtime 报告的精确标识；Bridge 会识别配置中声明的旧版 builtin ID 和账户 provider ID。若模型预检失败，从 `model_catalog` 事件复制 runtime 实际报告的完整标识再重试；不要猜思考档位。用户未指定时省略 model，由 Bridge 决定是否应用持久默认。
+   - Start Plan 别名：目录中的 `<ModelId>-StartPlan`（如 `GLM-5.3-Flash-StartPlan`）表示经 Start Plan 执行同一模型；只在用户明确要求 Start Plan 或显式选择该别名时传入。省略 `provider_id` 的普通模型由 Bridge 按路由设置（`ZCODE_BRIDGE_PREFER_STARTPLAN`，默认开启）在任务创建时一次性选路；目录别名条目不代表实时权益，权益失败以任务状态为准，不要在执行中跨套餐补跑。
 4. 初始预算可沿用已配置默认值，仅在任务需要时显式设置 timeout_ms。超时或失败后先检查最后业务事件、执行目录中的文件变化和实际未完成项，再决定续作；不要只缩短预算或用新 task_id 原样重派。需要返工时写明上一轮的具体失败证据和新的验收条件。
 5. 调用 zcode_task。同一完整交付只用一个 task_id；MCP 报错时先解释和解决具体配置问题，不要重复提交相同 task_id。
 
