@@ -26028,6 +26028,7 @@ var init_zcode_app_server_adapter = __esm({
               this.#submitTerminalFactsFromError(entry, error62);
             }
           }
+          entry.onEvent({ type: "cleanup_started", summary: "Adapter entered bounded failure cleanup" });
           await this.#closeBrowserHost(entry);
           let cleanupFailure;
           let failureCleanupReceipt = null;
@@ -26430,7 +26431,15 @@ var init_zcode_app_server_adapter = __esm({
             cleanupTransaction = null;
             if (pendingTransaction) {
               try {
-                const transaction = await pendingTransaction;
+                let transactionTimer;
+                const transaction = await Promise.race([
+                  pendingTransaction,
+                  new Promise((_, reject) => {
+                    transactionTimer = setTimeout(() => reject(new Error("cleanup transaction startup timeout")), 15e3);
+                    transactionTimer.unref();
+                  })
+                ]);
+                if (transactionTimer) clearTimeout(transactionTimer);
                 terminated = {
                   pid: child.pid,
                   signal: "SIGKILL",

@@ -1055,6 +1055,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
           this.#submitTerminalFactsFromError(entry, error);
         }
       }
+      entry.onEvent({ type: "cleanup_started", summary: "Adapter entered bounded failure cleanup" });
       await this.#closeBrowserHost(entry);
       let cleanupFailure: unknown;
       let failureCleanupReceipt: WindowsTerminationReceipt | null = null;
@@ -1486,7 +1487,17 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         cleanupTransaction = null;
         if (pendingTransaction) {
           try {
-            const transaction = await pendingTransaction;
+            // The prewarmed helper is acceleration only; a stalled transaction
+            // startup must never park the Worker's cleanup indefinitely.
+            let transactionTimer: NodeJS.Timeout | undefined;
+            const transaction = await Promise.race([
+              pendingTransaction,
+              new Promise<never>((_, reject) => {
+                transactionTimer = setTimeout(() => reject(new Error("cleanup transaction startup timeout")), 15_000);
+                transactionTimer.unref();
+              }),
+            ]);
+            if (transactionTimer) clearTimeout(transactionTimer);
             terminated = {
               pid: child.pid,
               signal: "SIGKILL",
