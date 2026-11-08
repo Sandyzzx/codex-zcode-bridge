@@ -87,16 +87,21 @@ function abandonmentInput(f,hold,overrides={}){
 function failure(fn,code){assert.throws(fn,error=>error instanceof AdmissionError&&error.code===code);}
 function rows(f){
   const db=new DatabaseSync(path.join(f.root,'operations.sqlite3'),{readOnly:true});
-  try{return {
-    operation:db.prepare('SELECT * FROM manager_operations WHERE operation_id=?').get(f.operationId),
-    task:db.prepare('SELECT * FROM tasks WHERE task_id=?').get(f.taskId),
-    attempt:db.prepare('SELECT * FROM attempts WHERE task_id=? AND attempt=1').get(f.taskId),
-    events:db.prepare('SELECT * FROM manager_operation_events WHERE operation_id=? ORDER BY sequence').all(f.operationId),
-    admin:db.prepare('SELECT * FROM manager_admin_abandonments WHERE operation_id=?').get(f.operationId),
-    active:db.prepare("SELECT COUNT(*) AS n FROM manager_operations WHERE operation_kind='attempt_lifecycle' AND phase NOT IN ('released','cancelled_before_launch')").get().n,
-    integrity:db.prepare('PRAGMA integrity_check').get().integrity_check,
-    foreignKeys:db.prepare('PRAGMA foreign_key_check').all(),
-  };}finally{db.close();}
+  try{
+    // The abandonment ledger is created lazily by the first abandonment, so a
+    // refused CLI run on non-Windows must read as unchanged, not throw.
+    const hasAdminTable=db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name='manager_admin_abandonments'").get().n===1;
+    return {
+      operation:db.prepare('SELECT * FROM manager_operations WHERE operation_id=?').get(f.operationId),
+      task:db.prepare('SELECT * FROM tasks WHERE task_id=?').get(f.taskId),
+      attempt:db.prepare('SELECT * FROM attempts WHERE task_id=? AND attempt=1').get(f.taskId),
+      events:db.prepare('SELECT * FROM manager_operation_events WHERE operation_id=? ORDER BY sequence').all(f.operationId),
+      admin:hasAdminTable?db.prepare('SELECT * FROM manager_admin_abandonments WHERE operation_id=?').get(f.operationId):null,
+      active:db.prepare("SELECT COUNT(*) AS n FROM manager_operations WHERE operation_kind='attempt_lifecycle' AND phase NOT IN ('released','cancelled_before_launch')").get().n,
+      integrity:db.prepare('PRAGMA integrity_check').get().integrity_check,
+      foreignKeys:db.prepare('PRAGMA foreign_key_check').all(),
+    };
+  }finally{db.close();}
 }
 function mutateAdminRow(root,sql,value){
   const db=new DatabaseSync(path.join(root,'operations.sqlite3'));

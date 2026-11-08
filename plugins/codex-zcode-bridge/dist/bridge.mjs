@@ -9389,7 +9389,13 @@ async function openClaimOnlyDriver(options) {
           } catch (error2) {
             state = "result_rejected";
             reason = error2 instanceof Error ? error2.message : "worker_result_unavailable";
-            stage("worker_result_unavailable", { reason });
+            stage("worker_result_unavailable", {
+              reason,
+              child_exit_code: child.exitCode ?? null,
+              child_signal: child.signalCode ?? null,
+              child_exit_seen: child.exitSeen === true,
+              spawn_count: spawnCount
+            });
           }
           privateAuthAbort.abort();
           await privateAuthPump;
@@ -9778,6 +9784,7 @@ async function sendDecision(child, state, execution) {
 }
 async function readJsonLine(stream, limit, timeoutMs) {
   if (!stream) throw new LifecycleGateError("private_report_channel_unavailable");
+  const startedAtMs = Date.now();
   return await new Promise((resolve, reject) => {
     const chunks = [];
     let size = 0;
@@ -9809,7 +9816,9 @@ async function readJsonLine(stream, limit, timeoutMs) {
       try {
         const bytes = Buffer.concat(chunks, size);
         chunks.length = 0;
-        if (!bytes.length || bytes.at(-1) !== 10 || bytes.subarray(0, -1).includes(10)) throw new Error("invalid worker report frame");
+        if (!bytes.length || bytes.at(-1) !== 10 || bytes.subarray(0, -1).includes(10)) {
+          throw new Error(`invalid worker report frame (bytes=${bytes.length}, trailing_newline=${bytes.at(-1) === 10}, embedded_newline=${bytes.subarray(0, -1).includes(10)}, elapsed_ms=${Date.now() - startedAtMs})`);
+        }
         const value = JSON.parse(bytes.subarray(0, -1).toString("utf8"));
         cleanup();
         resolve(value);

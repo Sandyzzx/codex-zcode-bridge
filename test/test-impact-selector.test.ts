@@ -51,18 +51,25 @@ test("SQLite Store and schema changes trigger SQLite stress with frozen paramete
 });
 
 test("Worker and protocol-adapter source changes select corresponding integration tests", () => {
-  const worker = selectAffectedTests({ changedFiles: filesFor("worker"), map });
+  const worker = selectAffectedTests({ changedFiles: filesFor("worker"), map, platform: "win32" });
   assert.ok(worker.selected_tests.some((entry) => entry.file === "test/spawn-worker-stderr.test.ts"));
   assert.ok(worker.selected_tests.some((entry) => entry.file === "test/sqlite-candidate/wp6b-wiring/composition.test.ts"));
-  const adapter = selectAffectedTests({ changedFiles: ["src/adapters/zcode-app-server-adapter.ts"], map });
+  const workerLinux = selectAffectedTests({ changedFiles: filesFor("worker"), map, platform: "linux" });
+  assert.ok(workerLinux.selected_tests.some((entry) => entry.file === "test/spawn-worker-stderr.test.ts"));
+  assert.equal(workerLinux.selected_tests.some((entry) => entry.file === "test/sqlite-candidate/wp6b-wiring/composition.test.ts"), false,
+    "Windows-only composition coverage must not run on Linux");
+  const adapter = selectAffectedTests({ changedFiles: ["src/adapters/zcode-app-server-adapter.ts"], map, platform: "win32" });
   assert.ok(adapter.selected_tests.some((entry) => entry.file === "test/zcode-app-server-adapter.test.ts"));
   assert.ok(adapter.selected_tests.some((entry) => entry.file === "test/session-frames.test.ts"));
   assert.equal(worker.selected_tests.some((entry) => entry.file === "test/sqlite-resource-stress.test.mjs"), false);
-  const deadlines = selectAffectedTests({ changedFiles: ["src/runtime/task-timeout.ts"], map });
+  const deadlines = selectAffectedTests({ changedFiles: ["src/runtime/task-timeout.ts"], map, platform: "win32" });
   for (const file of ["test/task-timeout.test.ts", "test/zcode-app-server-adapter.test.ts", "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts"]) {
     assert.ok(deadlines.selected_tests.some((entry) => entry.file === file), `shared deadline changes must select ${file}`);
   }
   assert.equal(deadlines.stress_mode, "STRESS_TEST_REQUIRED");
+  const deadlinesLinux = selectAffectedTests({ changedFiles: ["src/runtime/task-timeout.ts"], map, platform: "linux" });
+  assert.equal(deadlinesLinux.selected_tests.some((entry) => entry.file === "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts"), false,
+    "Windows-only real-adapter deadline coverage must not run on Linux");
 });
 
 test("documentation-only changes never select stress or executable tests", () => {

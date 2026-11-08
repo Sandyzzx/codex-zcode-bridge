@@ -28087,6 +28087,7 @@ async function runZCodeAdapter(bootstrap, execution, interaction, workerIdentity
   } catch (error62) {
     failure2 = { code: error62 instanceof Error && "code" in error62 && typeof error62.code === "string" ? error62.code : "worker_error", message: error62 instanceof Error ? error62.message : String(error62) };
   } finally {
+    writeDiagnostic("[bridge-worker] adapter run settled\n");
     clearCachedAuth();
     privateAuthLifetime?.destroy();
     if (execution.private_auth && !privateAuthStarted) for (const fd of [10, 11, 12]) {

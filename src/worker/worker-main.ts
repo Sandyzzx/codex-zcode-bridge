@@ -442,6 +442,7 @@ async function runZCodeAdapter(
     failure = { code: error instanceof Error && "code" in error && typeof (error as { code?: unknown }).code === "string"
       ? (error as { code: string }).code : "worker_error", message: error instanceof Error ? error.message : String(error) };
   } finally {
+    writeDiagnostic("[bridge-worker] adapter run settled\n");
     clearCachedAuth();
     privateAuthLifetime?.destroy();
     if (execution.private_auth && !privateAuthStarted) for (const fd of [10, 11, 12]) { try { closeSync(fd); } catch { /* not open */ } }

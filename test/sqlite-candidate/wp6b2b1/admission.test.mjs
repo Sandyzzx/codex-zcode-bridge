@@ -85,32 +85,44 @@ test('Host local policy is default-off, audited, and cannot be supplied by a tas
   const settingsDirectory=path.join(TEMP,'owner-settings'); mkdirSync(settingsDirectory,{recursive:true});
   const policy=createHostTrustedLocalPolicyProvider({name:'candidate-test',settingsDirectory});
   let admitted;
-  try{admitted=s.admitOperation({operation_id:'od10-allowed',task_id:'od10-a',attempt:1,workspace_ref:allowedWorkspace,
-    permission:'allow',execution_profile_id:'unrestricted',host_authorized:true},{
-    workspaceValidator:policy.validateWorkspace,executionPermissionCheck:policy.checkPermission,
-  });
-  assert.equal(admitted.phase,'reserved');
-  let event=s.readLifecycleEvents(admitted.operation_id)[0];
-  let audit=JSON.parse(event.evidence_json);
-  assert.equal(audit.authorization_source,'trusted_local_policy');
-  assert.equal(audit.policy_revision,'single-user-local-v3');
-  assert.equal(audit.execution_profile_id,'local-build-v1');
-  assert.match(audit.policy_digest,/^[0-9a-f]{64}$/u);
+  try{
+    if(process.platform!=='win32'){
+      // Windows trusted-local authorization cannot grant admission on other
+      // platforms; the enabled provider must still deny without mutating the
+      // root instead of being treated as an available authorization.
+      capture(()=>s.admitOperation({operation_id:'od10-allowed',task_id:'od10-a',attempt:1,workspace_ref:allowedWorkspace,
+        permission:'allow',execution_profile_id:'unrestricted',host_authorized:true},{
+        workspaceValidator:policy.validateWorkspace,executionPermissionCheck:policy.checkPermission,
+      }),'workspace_validation_denied');
+      assert.equal(s.readSnapshot().operations.filter(x=>x.operation_kind==='attempt_lifecycle').length,0);
+      return;
+    }
+    admitted=s.admitOperation({operation_id:'od10-allowed',task_id:'od10-a',attempt:1,workspace_ref:allowedWorkspace,
+      permission:'allow',execution_profile_id:'unrestricted',host_authorized:true},{
+      workspaceValidator:policy.validateWorkspace,executionPermissionCheck:policy.checkPermission,
+    });
+    assert.equal(admitted.phase,'reserved');
+    let event=s.readLifecycleEvents(admitted.operation_id)[0];
+    let audit=JSON.parse(event.evidence_json);
+    assert.equal(audit.authorization_source,'trusted_local_policy');
+    assert.equal(audit.policy_revision,'single-user-local-v3');
+    assert.equal(audit.execution_profile_id,'local-build-v1');
+    assert.match(audit.policy_digest,/^[0-9a-f]{64}$/u);
 
-  capture(()=>s.admitOperation({operation_id:'od10-relative',task_id:'od10-b',attempt:1,workspace_ref:'relative/path'},{
-    workspaceValidator:policy.validateWorkspace,executionPermissionCheck:policy.checkPermission,
-  }),'workspace_not_absolute');
-  const second=admit(s,{operation_id:'od10-second',task_id:'od10-b',attempt:1,workspace_ref:secondWorkspace},{
-    workspaceValidator:policy.validateWorkspace,executionPermissionCheck:policy.checkPermission,
-  });
-  assert.equal(second.phase,'reserved');
-  policy.disable();
-  capture(()=>s.admitOperation({operation_id:'od10-after-disable',task_id:'od10-b',attempt:1,workspace_ref:allowedWorkspace},{
-    workspaceValidator:policy.validateWorkspace,executionPermissionCheck:policy.checkPermission,
-  }),'workspace_validation_unknown');
-  assert.equal(s.readOperation(admitted.operation_id).phase,'reserved');
-  assert.equal(s.readSnapshot().operations.filter(x=>x.operation_kind==='attempt_lifecycle').length,2);
-  assert.equal(s.readLifecycleEvents(admitted.operation_id).length,1,'policy disable does not mutate or release the existing Operation');
+    capture(()=>s.admitOperation({operation_id:'od10-relative',task_id:'od10-b',attempt:1,workspace_ref:'relative/path'},{
+      workspaceValidator:policy.validateWorkspace,executionPermissionCheck:policy.checkPermission,
+    }),'workspace_not_absolute');
+    const second=admit(s,{operation_id:'od10-second',task_id:'od10-b',attempt:1,workspace_ref:secondWorkspace},{
+      workspaceValidator:policy.validateWorkspace,executionPermissionCheck:policy.checkPermission,
+    });
+    assert.equal(second.phase,'reserved');
+    policy.disable();
+    capture(()=>s.admitOperation({operation_id:'od10-after-disable',task_id:'od10-b',attempt:1,workspace_ref:allowedWorkspace},{
+      workspaceValidator:policy.validateWorkspace,executionPermissionCheck:policy.checkPermission,
+    }),'workspace_validation_unknown');
+    assert.equal(s.readOperation(admitted.operation_id).phase,'reserved');
+    assert.equal(s.readSnapshot().operations.filter(x=>x.operation_kind==='attempt_lifecycle').length,2);
+    assert.equal(s.readLifecycleEvents(admitted.operation_id).length,1,'policy disable does not mutate or release the existing Operation');
   }finally{s.close();}
 });
 

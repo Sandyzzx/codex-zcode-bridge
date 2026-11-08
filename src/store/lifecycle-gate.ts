@@ -2329,7 +2329,9 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
           } catch (error) {
             state = "result_rejected";
             reason = error instanceof Error ? error.message : "worker_result_unavailable";
-            stage("worker_result_unavailable", { reason });
+            stage("worker_result_unavailable", { reason, child_exit_code: child.exitCode ?? null,
+              child_signal: child.signalCode ?? null, child_exit_seen: child.exitSeen === true,
+              spawn_count: spawnCount });
           }
 
           // A complete Worker Result frame is durable execution output. Revoke
@@ -2717,6 +2719,7 @@ async function sendDecision(
 
 async function readJsonLine(stream: Readable | null, limit: number, timeoutMs: number): Promise<unknown> {
   if (!stream) throw new LifecycleGateError("private_report_channel_unavailable");
+  const startedAtMs = Date.now();
   return await new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
@@ -2748,7 +2751,15 @@ async function readJsonLine(stream: Readable | null, limit: number, timeoutMs: n
       try {
         const bytes = Buffer.concat(chunks, size);
         chunks.length = 0;
-        if (!bytes.length || bytes.at(-1) !== 0x0a || bytes.subarray(0, -1).includes(0x0a)) throw new Error("invalid worker report frame");
+        if (!bytes.length || bytes.at(-1) !== 0x0a || bytes.subarray(0, -1).includes(0x0a)) {
+          // Bounded diagnostic facts only: byte count and frame shape, never
+          // frame content. These distinguish an empty premature EOF from a
+          // partial or delimiter-broken frame on hosted CI.
+          throw new Error(`invalid worker report frame (bytes=${bytes.length},`
+            + ` trailing_newline=${bytes.at(-1) === 0x0a},`
+            + ` embedded_newline=${bytes.subarray(0, -1).includes(0x0a)},`
+            + ` elapsed_ms=${Date.now() - startedAtMs})`);
+        }
         const value: unknown = JSON.parse(bytes.subarray(0, -1).toString("utf8"));
         cleanup();
         resolve(value);
