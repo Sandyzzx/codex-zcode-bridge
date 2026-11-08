@@ -1415,16 +1415,22 @@ test('ADR-027 Manager and actual Worker share the environment default and four-h
 
 test('ADR-027 actual Worker execution timeout commits a timeout Result and releases only with real Windows cleanup proof', {timeout:90000},async()=>{
   const worker=await deadlineWorker('timeout','execution-timeout');
-  await withRealAdapterMcp(async(client,_manager,dataRoot,workspace,runtime)=>{
-    const taskId=`r3-timeout-${randomUUID()}`;
-    contentObject(await client.callTool({name:'zcode_task',arguments:syntheticTask(workspace,taskId)}));
-    assert.equal((await waitForTerminal(client,taskId,1)).status,'failed');
-    await waitForLifecycleEvent(client,taskId,'released');
-    const result=contentObject(await client.callTool({name:'zcode_result',arguments:{task_id:taskId}}));
-    assert.equal(result.error_code,'timeout');assert.equal((await operationFor(dataRoot,taskId)).phase,'released');
-    const requests=readFileSync(runtime.requestLog,'utf8').trim().split('\n').map(line=>JSON.parse(line));
-    assert.equal(requests.filter(r=>r.method==='session/send').length,1);
-  },{workerOverride:worker,runtimeVariant:'deadline-hang'});
+  const workerStderr:string[]=[];const lifecycleLines:string[]=[];
+  try{
+    await withRealAdapterMcp(async(client,_manager,dataRoot,workspace,runtime)=>{
+      const taskId=`r3-timeout-${randomUUID()}`;
+      contentObject(await client.callTool({name:'zcode_task',arguments:syntheticTask(workspace,taskId)}));
+      assert.equal((await waitForTerminal(client,taskId,1)).status,'failed');
+      await waitForLifecycleEvent(client,taskId,'released');
+      const result=contentObject(await client.callTool({name:'zcode_result',arguments:{task_id:taskId}}));
+      assert.equal(result.error_code,'timeout');assert.equal((await operationFor(dataRoot,taskId)).phase,'released');
+      const requests=readFileSync(runtime.requestLog,'utf8').trim().split('\n').map(line=>JSON.parse(line));
+      assert.equal(requests.filter(r=>r.method==='session/send').length,1);
+    },{workerOverride:worker,runtimeVariant:'deadline-hang',stderrCollector:{lines:workerStderr},lifecycleCollector:{lines:lifecycleLines}});
+  }catch(error){
+    console.error('worker stderr:\n'+workerStderr.join('\n'));
+    throw error;
+  }
 });
 
 test('ADR-027 cleanup expiry persists a failed Result and late cleanup cannot silently release its Workspace', {timeout:90000},async()=>{

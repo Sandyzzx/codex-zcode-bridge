@@ -33135,8 +33135,8 @@ import path4 from "node:path";
 var selfIdentity = null;
 var TRANSIENT_LOCK_FS_CODES = /* @__PURE__ */ new Set(["EEXIST", "EPERM", "EACCES", "EBUSY", "ENOTEMPTY"]);
 var DESTINATION_PRESENT_CONTENTION_CODES = /* @__PURE__ */ new Set(["EEXIST", "ENOTEMPTY"]);
-var PUBLICATION_RETRY_ATTEMPTS = 5;
 var PUBLICATION_RETRY_PAUSE_MS = 50;
+var PUBLICATION_RETRY_MS = 5e3;
 var WITHDRAW_RETRY_MS = 5e3;
 var SHARED_GUARD_RETRY_MS = 2e3;
 var PRIVATE_CLEANUP_RETRY_MS = 1e3;
@@ -33173,9 +33173,9 @@ function describeLockOwner(directory) {
   }
 }
 function tryAcquireProcessLock(directory) {
-  return tryAcquireProcessLockWithRetry(directory, 0);
+  return tryAcquireProcessLockWithRetry(directory, Date.now() + PUBLICATION_RETRY_MS);
 }
-function tryAcquireProcessLockWithRetry(directory, retries) {
+function tryAcquireProcessLockWithRetry(directory, deadline) {
   const token = randomUUID();
   if (existsSync3(directory)) return acquireExistingLock(directory);
   const staging = `${directory}.${process.pid}.${token}.pending`;
@@ -33199,9 +33199,9 @@ function tryAcquireProcessLockWithRetry(directory, retries) {
       if (DESTINATION_PRESENT_CONTENTION_CODES.has(code ?? "") || existsSync3(directory)) {
         return acquireExistingLock(directory);
       }
-      if (retries < PUBLICATION_RETRY_ATTEMPTS) {
+      if (Date.now() < deadline) {
         pauseBriefly(PUBLICATION_RETRY_PAUSE_MS);
-        return tryAcquireProcessLockWithRetry(directory, retries + 1);
+        return tryAcquireProcessLockWithRetry(directory, deadline);
       }
       throw error2;
     }

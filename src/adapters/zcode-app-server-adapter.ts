@@ -1033,6 +1033,11 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       // budget and must not relabel that already-observed terminal event.
       if (timer) { clearTimeout(timer); timer = undefined; }
       if (warningTimer) { clearTimeout(warningTimer); warningTimer = undefined; }
+      // ADR-009 helper acceleration covers failure cleanup too. Without the
+      // prewarm the Windows tree teardown parks on a cold PowerShell startup
+      // whose 60s bound dwarfs the completion-path budget and delays the
+      // Result frame (PR #67 CI evidence: r3-timeout kept running past 45s).
+      if (process.platform === "win32") entry.client?.prewarmCleanup();
       await syncDesktopStatus(desktopTask, entry.cancelRequested ? null : "error", entry.onEvent);
       entry.abort.abort();
       // ADR-011 M1: the root-cause slot is filled only here, after this error

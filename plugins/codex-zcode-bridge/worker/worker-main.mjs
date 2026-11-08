@@ -26013,6 +26013,7 @@ var init_zcode_app_server_adapter = __esm({
             clearTimeout(warningTimer);
             warningTimer = void 0;
           }
+          if (process.platform === "win32") entry.client?.prewarmCleanup();
           await syncDesktopStatus(desktopTask, entry.cancelRequested ? null : "error", entry.onEvent);
           entry.abort.abort();
           const spawnRecovery = entry.spawnFailure && !entry.timedOut && !entry.cancelRequested ? entry.spawnFailure : null;
