@@ -1074,3 +1074,27 @@ test("H2: non-marker lines, malformed JSON, and unregistered snapshots are dropp
   const { provider_code: _omitted, ...incomplete } = VALID_FACTS;
   assert.equal(formatWorkerFailureFactsLine(`[bridge-worker] failure-facts ${JSON.stringify(incomplete)}`), null);
 });
+
+test("H3: risk-control and unknown provider codes outside the frozen registry never fabricate facts", { timeout: 40_000 }, async () => {
+  for (const providerErrorCode of ["3012", "9999"]) {
+    const runtime = await makeFakeRuntime({
+      turnFailure: { code: "model_request_failed", message: `SENTINEL_H3 ${providerErrorCode} failure text`, attribution: { providerErrorCode } },
+    });
+    const fixture = makeAdapterFixture(runtime.root);
+    try {
+      const run = await runAdapter({ fixture, resolver: { resolve: async () => runtime.config } });
+      assert.equal(run.result.status, "failed");
+      assert.equal(run.result.error_code, "zcode_nonzero_exit");
+      const facts = fixture.facts;
+      assert.ok(facts);
+      assert.equal(facts.provider_code, null, `${providerErrorCode} is not in the frozen registry and must never be fabricated`);
+      assert.equal(facts.category, "unknown");
+      assert.equal(facts.confidence, "unknown");
+      assert.equal(facts.evidence_basis, "none");
+      assert.ok(!JSON.stringify(facts).includes("SENTINEL_H3"), "upstream text never crosses the facts boundary");
+      assert.ok(!JSON.stringify(facts).includes(providerErrorCode), "unregistered codes are not persisted");
+    } finally {
+      await runtime.cleanup();
+    }
+  }
+});
