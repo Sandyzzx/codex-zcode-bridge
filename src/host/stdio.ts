@@ -27,6 +27,7 @@ import {
   prepareFreshSqliteStateDirectory,
   FRESH_SQLITE_DATABASE_FILE,
 } from "../runtime/sqlite-install-config.js";
+import type { ProductionAuthIssuer, StartPlanLiveEntitlement } from "../runtime/start-plan-production-auth.js";
 
 export interface DataRootResolution {
   readonly dataRoot: string;
@@ -57,6 +58,40 @@ export function resolveDataRoot(env: NodeJS.ProcessEnv): DataRootResolution {
 export interface WorkerLimitResolution {
   readonly maxConcurrentWorkers: number;
   readonly warning?: string;
+}
+
+export interface HostStartPlanIssuerOptions {
+  readonly env: NodeJS.ProcessEnv;
+  readonly homeDir: string;
+  readonly host: BridgeHostProfile;
+  /** Aborted when the Host shuts down; revokes pending Lease delivery. */
+  readonly signal: AbortSignal;
+  /** Test-only override; production always uses the official Billing endpoint. */
+  readonly entitlement?: StartPlanLiveEntitlement;
+}
+
+/** Builds the production Start Plan issuer exactly as `startBridge` wires it.
+ * Official credential discovery is read-only; a missing or broken ZCode
+ * setup returns null so Bridge startup and Coding Plan are never blocked,
+ * and the Start Plan provider simply stays fail-closed per task. */
+export async function createHostStartPlanIssuer(options: HostStartPlanIssuerOptions): Promise<ProductionAuthIssuer | null> {
+  try {
+    const { NodeRuntimeResolver } = await import("../runtime/resolver.js");
+    const config = await new NodeRuntimeResolver({ env: options.env, homeDir: options.homeDir, host: options.host }).resolve();
+    if (!config.zcodeEntrypoint || !config.zcodeDataRoot) return null;
+    const { createProductionStartPlanAuth, StartPlanBillingEntitlement, readOfficialCliVersion } = await import("../runtime/start-plan-production-auth.js");
+    const entrypoint = config.zcodeEntrypoint;
+    return createProductionStartPlanAuth({
+      zcodeDataRoot: config.zcodeDataRoot,
+      env: options.env,
+      signal: options.signal,
+      entitlement: options.entitlement ?? new StartPlanBillingEntitlement({
+        getAppVersion: () => readOfficialCliVersion(entrypoint),
+      }),
+    });
+  } catch {
+    return null;
+  }
 }
 
 /** Defaults to eight concurrent workers; invalid values fail safely back to one worker. */
@@ -185,6 +220,14 @@ export async function startBridge(
     }
   }
 
+  const startPlanAuthAbort = new AbortController();
+  const startPlanIssuer = await createHostStartPlanIssuer({
+    env: process.env,
+    homeDir: homedir(),
+    host,
+    signal: startPlanAuthAbort.signal,
+  });
+
   const processProbe = createPlatformProbe();
   let manager: SqliteLifecycleMcpAuthority;
   let lifecycleChecks: () => readonly DoctorCheck[];
@@ -208,10 +251,12 @@ export async function startBridge(
       processProbe,
       trustedLocalContext,
       requireAuthorityReceipt: true,
+      ...(startPlanIssuer ? { startPlanPrivateAuth: startPlanIssuer } : {}),
     });
     manager = authority;
     lifecycleChecks = () => authority.getDoctorChecks();
   } catch (error) {
+    startPlanAuthAbort.abort();
     console.error(`[bridge] SQLITE_INITIALIZATION_FAILED: ${error instanceof Error ? error.message : String(error)}`);
     throw error;
   }
@@ -225,10 +270,12 @@ export async function startBridge(
   });
   const stdioHost = serveStdioLifecycleHost(server, manager, {
     onShutdownFailure: (reason, error) => {
+      startPlanAuthAbort.abort();
       process.exitCode = 1;
       console.error(`[bridge] ${reason} shutdown retained the lifecycle Root because cleanup was not verified: ${error instanceof Error ? error.message : String(error)}`);
     },
     onShutdownComplete: (reason) => {
+      startPlanAuthAbort.abort();
       if (reason !== "EOF") process.exit(0);
     },
   });

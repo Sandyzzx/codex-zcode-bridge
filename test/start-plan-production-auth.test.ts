@@ -488,10 +488,25 @@ test("HTTP 200 alone is not entitlement evidence", async () => {
     assert.equal(verdict.status, item.expected, item.name);
     assert.notEqual(verdict.status, "entitled");
     assert.equal(requests.length, 1);
-    assert.equal(requests[0]!.url, "https://zcode.z.ai/api/v1/zcode-plan/billing/balance?app_version=3.17.4");
-    assert.equal(requests[0]!.headers.get("x-device-mid"), null);
+    assert.equal(requests[0]!.url, "https://zcode.z.ai/api/v1/zcode-plan/billing/balance?app_version=3.17.4&mid=synthetic-device-mid-fixed");
+    assert.equal(requests[0]!.headers.get("x-device-mid"), DEVICE_ID);
     assert.match(requests[0]!.headers.get("authorization") ?? "", /^Bearer /u);
   }
+});
+
+test("billing checks fail closed without an official device identity", async () => {
+  const { fetch: fetchImpl, requests } = fakeBillingFetch(billingBody(), 200, "synthetic-request-id");
+  const entitlement = new StartPlanBillingEntitlement({ getAppVersion: async () => "3.17.4", fetchImpl });
+  const verdict = await entitlement.check({
+    account: ACCOUNT_A,
+    provider: "account:bigmodel-start-plan",
+    model: MODEL,
+    deviceMid: "   ",
+    jwt: syntheticJwt(),
+    signal: new AbortController().signal,
+  });
+  assert.equal(verdict.status, "unavailable");
+  assert.equal(requests.length, 0, "a missing device identity must not produce a Billing request");
 });
 
 test("authorized model proof returns entitled with the response request ID", async () => {
@@ -688,7 +703,10 @@ test("provider preparation is model/account bound and entitlement is rechecked b
     assert.ok(issuer);
     assert.equal(await issuer.prepare("account:other", MODEL, new AbortController().signal), false);
     assert.equal(checks.length, 0, "unsupported providers must be rejected before Billing");
-    assert.equal(await issuer.prepare("account:bigmodel-start-plan", "unentitled-model", new AbortController().signal), false);
+    await assert.rejects(
+      issuer.prepare("account:bigmodel-start-plan", "unentitled-model", new AbortController().signal),
+      /start_plan_entitlement_rejected:no_entitlement/u,
+    );
     assert.equal(checks.length, 1, "an unentitled model receives one live check but no provider authorization");
     assert.equal(await issuer.prepare("account:bigmodel-start-plan", MODEL, new AbortController().signal), true);
     assert.equal(checks.length, 2);
@@ -700,6 +718,33 @@ test("provider preparation is model/account bound and entitlement is rechecked b
       { account: ACCOUNT_A, provider: "account:bigmodel-start-plan", model: MODEL, deviceMid: DEVICE_ID },
       { account: ACCOUNT_A, provider: "account:bigmodel-start-plan", model: MODEL, deviceMid: DEVICE_ID },
     ]);
+  } finally {
+    cleanup();
+  }
+});
+
+test("billing rejections surface a sanitized provider classification through prepare", async () => {
+  const { root, cleanup } = makeRoot("start-plan-prepare-reject-");
+  try {
+    writeCredential(root);
+    let prepareCalls = 0;
+    const issuer = createProductionStartPlanAuth({
+      zcodeDataRoot: root,
+      now: () => 1_000,
+      signal: new AbortController().signal,
+      entitlement: {
+        check: async () => {
+          prepareCalls += 1;
+          return { status: "billing_parameter_error", reason: "synthetic parameter rejection", providerCode: "3001", observedAt: 1 };
+        },
+      },
+    });
+    assert.ok(issuer);
+    await assert.rejects(
+      issuer.prepare("account:bigmodel-start-plan", MODEL, new AbortController().signal),
+      /start_plan_entitlement_rejected:billing_parameter_error:3001/u,
+    );
+    assert.equal(prepareCalls, 1);
   } finally {
     cleanup();
   }

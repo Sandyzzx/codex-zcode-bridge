@@ -2154,8 +2154,11 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
                 input.task.model!.model_id,
                 privateAuthAbort.signal,
               );
-            } catch {
+            } catch (error) {
               startPlanEntitled = false;
+              stage("start_plan_entitlement_preflight_rejected", {
+                ...classifyStartPlanEntitlementRejection(error),
+              });
             }
             if (privateAuthAbort.signal.aborted) startPlanEntitled = false;
             stage("start_plan_entitlement_preflight", { entitled: startPlanEntitled });
@@ -3167,6 +3170,17 @@ function parseEvidence(value: unknown, errorCode: string): Record<string, unknow
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("not an object");
     return parsed as Record<string, unknown>;
   } catch { throw new LifecycleGateError(errorCode); }
+}
+
+/** Extracts a sanitized entitlement rejection classification from the
+ * production issuer's `start_plan_entitlement_rejected:<status>[:<code>]`
+ * errors. Arbitrary error text is never echoed; unknown failures map to
+ * transport_unavailable without leaking message content. */
+function classifyStartPlanEntitlementRejection(error: unknown): { classification: string; provider_code?: string } {
+  const message = error instanceof Error ? error.message : "";
+  const match = /^start_plan_entitlement_rejected:([a-z_]+)(?::([0-9A-Za-z_.-]{1,32}))?$/u.exec(message);
+  if (match && match[1]) return { classification: match[1], ...(match[2] ? { provider_code: match[2] } : {}) };
+  return { classification: "transport_unavailable" };
 }
 
 function validSnapshotText(value: unknown): value is string {

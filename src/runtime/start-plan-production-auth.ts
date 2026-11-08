@@ -373,16 +373,21 @@ export class StartPlanBillingEntitlement implements StartPlanLiveEntitlement {
     const observedAt = this.#now();
     const appVersion = await this.#getAppVersion();
     if (!appVersion) return { status: "unavailable", reason: "official cli version unavailable; refusing to guess", observedAt };
-    const url = `${this.#origin}/api/v1/zcode-plan/billing/balance?app_version=${encodeURIComponent(appVersion)}`;
+    if (!input.deviceMid.trim()) return { status: "unavailable", reason: "official device identity unavailable; refusing to guess", observedAt };
+    const url = `${this.#origin}/api/v1/zcode-plan/billing/balance?app_version=${encodeURIComponent(appVersion)}&mid=${encodeURIComponent(input.deviceMid)}`;
     let response: Response;
     try {
       response = await this.#fetchImpl(url, {
         method: "GET",
         headers: {
-          // Observed official balance requests use Authorization only. This
-          // is a read-only billing query, never a model request; app version
-          // comes from the official runtime and identity remains in memory.
+          // Observed official balance requests carry the persistent device
+          // identity in both the `mid` query and the `X-Device-Mid` header
+          // (2026-11-06 native request audit); omitting them is rejected
+          // with provider code 3001. This is a read-only billing query,
+          // never a model request; app version comes from the official
+          // runtime and identity remains in memory.
           Authorization: `Bearer ${input.jwt}`,
+          "X-Device-Mid": input.deviceMid,
         },
         signal: AbortSignal.any([input.signal, AbortSignal.timeout(BILLING_REQUEST_TIMEOUT_MS)]),
       });
@@ -475,7 +480,14 @@ export function createProductionStartPlanAuth(options: ProductionAuthIssuerOptio
         jwt: credential.jwt,
         signal,
       });
-      return verdict.status === "entitled" && !signal.aborted;
+      if (signal.aborted) return false;
+      if (verdict.status !== "entitled") {
+        // Mirror the issue() rejection shape so the lifecycle gate can stage
+        // a sanitized classification; the gate treats throw and false the
+        // same (fail-closed), this only preserves the diagnosable verdict.
+        throw new Error(`start_plan_entitlement_rejected:${verdict.status}${verdict.providerCode ? `:${verdict.providerCode}` : ""}`);
+      }
+      return true;
     },
     async issue(binding, signal) {
       const credential = readOfficialStartPlanCredential(options.zcodeDataRoot, env);

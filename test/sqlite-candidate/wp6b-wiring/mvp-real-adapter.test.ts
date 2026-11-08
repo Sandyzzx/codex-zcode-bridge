@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { randomUUID, createHash } from "node:crypto";
+import { randomUUID, createHash, createCipheriv, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, lstatSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,7 +10,9 @@ import { build } from "esbuild";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { SqliteLifecycleMcpAuthority } from "../../../src/manager/sqlite-lifecycle-mcp-authority.js";
 import { createBridgeServer } from "../../../src/mcp/server.js";
-import { createTrustedLocalCandidateContext } from "../../../src/host/stdio.js";
+import { createTrustedLocalCandidateContext, createHostStartPlanIssuer } from "../../../src/host/stdio.js";
+import type { BridgeHostProfile } from "../../../src/host/profile.js";
+import type { ProductionAuthIssuer, StartPlanLiveEntitlement } from "../../../src/runtime/start-plan-production-auth.js";
 import { initializeIsolatedCandidateRoot, loadLifecycleCandidateModules } from "../../../src/store/lifecycle-gate.js";
 import { PrivateCredentialLease } from "../../../src/runtime/start-plan-private-lease.js";
 import { createPlatformProbe } from "../../../src/runtime/process-probe.js";
@@ -248,6 +250,10 @@ async function withRealAdapterMcp(
     readonly onWorkerSpawn?: (child: ChildProcess) => void; readonly issueCount?: { count: number };
     readonly issueOverride?: (binding: import("../../../src/runtime/start-plan-private-lease.js").PrivateLeaseBinding) => PrivateCredentialLease | Promise<PrivateCredentialLease>;
     readonly workerOverride?: string; readonly testOnlyFakeAdapter?: true;
+  /** Builds the Start Plan issuer exactly like the production stdio host
+   * does (createHostStartPlanIssuer); when absent the legacy synthetic
+   * issuer object is used. */
+  readonly issuerFactory?: (runtime: FakeRuntimeFixture, host: BridgeHostProfile) => Promise<ProductionAuthIssuer | null>;
     readonly resultWaitMs?: number; readonly workerCloseWaitMs?: number;
     readonly resultFault?: "commit_ack_lost" | "after_projection";
     readonly onDriverRunReturned?: (detail: Record<string, unknown>) => void } = {},
@@ -260,6 +266,7 @@ async function withRealAdapterMcp(
   let authorityShutdownError: unknown;
   let runOrCloseFailure: unknown;
   const runtime = writeFakeRuntime(path.basename(fixture), options.runtimeVariant ?? "success");
+  const hostProfile: BridgeHostProfile = { name: "mvp-real-adapter-test", settingsDirectory };
   try {
     mkdirSync(compiledCandidate, { recursive: true });
     if (existsSync(candidateSchema)) {
@@ -295,6 +302,10 @@ async function withRealAdapterMcp(
     process.env["ZCODE_PERSONAL_PROVIDER_CONFIG_FILE"] = runtime.personalConfig;
     // The resolver requires ZCODE_HOME to name the .zcode directory itself.
     process.env["ZCODE_HOME"] = path.dirname(runtime.zcodeHomeV2);
+    const hostIssuer = options.issuerFactory ? (await options.issuerFactory(runtime, hostProfile)) ?? undefined : undefined;
+    if (options.issuerFactory && options.runtimeVariant?.startsWith("private-auth")) {
+      assert.ok(hostIssuer, "the host issuer factory must produce an issuer for Start Plan variants");
+    }
     let authority: SqliteLifecycleMcpAuthority | undefined;
     try {
       const accountController = new AbortController();
@@ -320,9 +331,9 @@ async function withRealAdapterMcp(
         // runtime-config.json of this Host profile. Point it at the fixture
         // settings directory so the real user's runtime config cannot steer
         // the adapter away from the controlled fake app-server.
-        hostProfile: { name: "mvp-real-adapter-test", settingsDirectory },
-        trustedLocalContext: createTrustedLocalCandidateContext({ name: "mvp-real-adapter-test", settingsDirectory }),
-        ...(options.runtimeVariant?.startsWith("private-auth") ? { startPlanPrivateAuth: {
+        hostProfile,
+        trustedLocalContext: createTrustedLocalCandidateContext(hostProfile),
+        ...(options.runtimeVariant?.startsWith("private-auth") ? { startPlanPrivateAuth: options.issuerFactory ? hostIssuer! : {
           account: "synthetic-account",
           signal: accountController.signal,
           prepare: async () => options.runtimeVariant !== "private-auth-preflight-reject",
@@ -1506,4 +1517,142 @@ test('ADR-027 blocked execution-envelope pipe expires visibly and retains the ex
     assert.equal((await waitForTerminal(client,taskId,1)).status,'cancelled');
     await waitForLifecycleEvent(client,taskId,'released');
   },{workerOverride:worker,testOnlyFakeAdapter:true,workerCloseWaitMs:100,lifecycleCollector:lifecycle});
+});
+
+// Host composition layer: these tests build the Start Plan issuer exactly
+// the way the production stdio host does (createHostStartPlanIssuer) and
+// prove the wiring reaches the SQLite gate with a controlled fake Billing
+// gate. Synthetic credentials only; no network and no real account.
+const HOST_CREDENTIAL_SECRET = "synthetic-host-credential-secret";
+const HOST_ACCOUNT = "synthetic-account";
+const HOST_DEVICE_MID = "synthetic-host-device-mid";
+const HOST_JWT = [
+  Buffer.from(JSON.stringify({ alg: "synthetic" }), "utf8").toString("base64url"),
+  Buffer.from(JSON.stringify({ account: HOST_ACCOUNT, exp: Math.floor(Date.now() / 1000) + 3_600 }), "utf8").toString("base64url"),
+  "synthetic-signature",
+].join(".");
+
+function encryptHostCredential(value: string, secret: string): string {
+  const iv = randomBytes(12);
+  const key = createHash("sha256").update(secret).digest();
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const encrypted = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
+  return `enc:v1:${iv.toString("base64url")}.${cipher.getAuthTag().toString("base64url")}.${encrypted.toString("base64url")}`;
+}
+
+function writeHostCredentials(runtime: FakeRuntimeFixture): void {
+  writeFileSync(path.join(runtime.zcodeHomeV2, "credentials.json"), JSON.stringify({
+    zcodejwttoken: encryptHostCredential(HOST_JWT, HOST_CREDENTIAL_SECRET),
+    "oauth:bigmodel:user_info": encryptHostCredential(JSON.stringify({
+      id: HOST_ACCOUNT,
+      username: "synthetic-host-user",
+      displayName: "Synthetic Host User",
+      rawProfile: {
+        user_id: HOST_ACCOUNT,
+        name: "Synthetic Host User",
+        email: "synthetic-host@example.invalid",
+        avatar: "",
+        zcodeProfileSchemaVersion: 1,
+      },
+    }), HOST_CREDENTIAL_SECRET),
+  }));
+  writeFileSync(path.join(runtime.zcodeHomeV2, "telemetry-state.json"), JSON.stringify({ deviceMid: HOST_DEVICE_MID }));
+}
+
+function fakeHostBillingGate(outcome: "entitled" | "billing_parameter_error") {
+  const checks: Array<{ account: string; provider: string; model: string; deviceMid: string }> = [];
+  const entitlement: StartPlanLiveEntitlement = {
+    check: async (input) => {
+      checks.push({ account: input.account, provider: input.provider, model: input.model, deviceMid: input.deviceMid });
+      return outcome === "entitled"
+        ? { status: "entitled", observedAt: checks.length, requestId: `synthetic-${checks.length}` }
+        : { status: "billing_parameter_error", reason: "synthetic billing parameter rejection", providerCode: "3001", observedAt: checks.length };
+    },
+  };
+  return { checks, entitlement };
+}
+
+function hostIssuerFactory(entitlement: StartPlanLiveEntitlement, options: { writeCredentials?: boolean } = {}) {
+  return async (runtime: FakeRuntimeFixture, host: BridgeHostProfile): Promise<ProductionAuthIssuer | null> => {
+    if (options.writeCredentials !== false) writeHostCredentials(runtime);
+    return createHostStartPlanIssuer({
+      // Redirect the Windows user home so official credential discovery can
+      // only ever see this fixture's .zcode tree, never the real account.
+      env: { ...process.env, HOME: runtime.runtimeRoot, USERPROFILE: runtime.runtimeRoot, ZCODE_CREDENTIAL_SECRET: HOST_CREDENTIAL_SECRET },
+      homeDir: runtime.runtimeRoot,
+      host,
+      signal: new AbortController().signal,
+      entitlement,
+    });
+  };
+}
+
+test("startBridge's host issuer wiring reaches the fake Billing gate and completes a Start Plan task", { timeout: 120_000 }, async () => {
+  const gate = fakeHostBillingGate("entitled");
+  await withRealAdapterMcp(async (client, _manager, _dataRoot, workspace, runtime) => {
+    const taskId = `host-wired-success-${randomUUID()}`;
+    contentObject(await client.callTool({ name: "zcode_task", arguments: {
+      ...syntheticTask(workspace, taskId), model: { provider_id: "account:bigmodel-start-plan", model_id: "GLM-5.3-Flash" },
+    } }));
+    // The private-auth fixture path never surfaces a permission interaction;
+    // the app-server's runtime-headers RPC is the credential delivery point.
+    assert.equal((await waitForTerminal(client, taskId, 1)).status, "completed");
+    await waitForLifecycleEvent(client, taskId, "released");
+    assert.deepEqual(gate.checks.map(({ account, provider, model, deviceMid }) => ({ account, provider, model, deviceMid })), [
+      { account: HOST_ACCOUNT, provider: "account:bigmodel-start-plan", model: "GLM-5.3-Flash", deviceMid: HOST_DEVICE_MID },
+      { account: HOST_ACCOUNT, provider: "account:bigmodel-start-plan", model: "GLM-5.3-Flash", deviceMid: HOST_DEVICE_MID },
+    ]);
+    const requests = readFileSync(runtime.requestLog, "utf8").trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+    assert.ok(requests.some((message) => message.method === "session/create"), "Billing success must reach Provider registration and session creation");
+    assert.ok(requests.some((message) => message.method === "session/send"), "Billing success must reach the Worker turn");
+    assert.ok(requests.some((message) => (message as { auth_applied?: boolean }).auth_applied === true), "the private lease must be delivered after Billing success");
+    assert.equal(JSON.stringify(requests).includes(HOST_JWT), false, "the delivered credential must never appear in the app-server request log");
+  }, { runtimeVariant: "private-auth", issuerFactory: hostIssuerFactory(gate.entitlement), preserveFixtureOnFailure: true });
+});
+
+test("host-wired issuer surfaces a sanitized Billing rejection and never starts the AppServer", { timeout: 120_000 }, async () => {
+  const gate = fakeHostBillingGate("billing_parameter_error");
+  const lifecycle = { lines: [] as string[] };
+  await withRealAdapterMcp(async (client, _manager, _dataRoot, workspace, runtime) => {
+    const taskId = `host-wired-reject-${randomUUID()}`;
+    contentObject(await client.callTool({ name: "zcode_task", arguments: {
+      ...syntheticTask(workspace, taskId), model: { provider_id: "account:bigmodel-start-plan", model_id: "GLM-5.3-Flash" },
+    } }));
+    assert.equal((await waitForTerminal(client, taskId, 1)).status, "failed");
+    await waitForLifecycleEvent(client, taskId, "released");
+    assert.equal(gate.checks.length, 1, "a Billing rejection must stop before lease delivery");
+    assert.equal(existsSync(runtime.requestLog), false, "a Billing rejection must not start the AppServer or send session requests");
+    const rejection = lifecycle.lines.find((line) => line.includes("start_plan_entitlement_preflight_rejected"));
+    assert.ok(rejection, "the gate must stage a sanitized entitlement rejection classification");
+    const detail = JSON.parse(rejection.slice(rejection.indexOf("{"))) as Record<string, unknown>;
+    assert.equal(detail.classification, "billing_parameter_error");
+    assert.equal(detail.provider_code, "3001");
+    assert.equal(JSON.stringify(detail).includes("3001:") || JSON.stringify(detail).toLowerCase().includes("synthetic"), false,
+      "the staged diagnostic must stay within the sanitized classification shape");
+  }, { runtimeVariant: "private-auth-preflight-reject", issuerFactory: hostIssuerFactory(gate.entitlement), lifecycleCollector: lifecycle, preserveFixtureOnFailure: true });
+});
+
+test("missing Start Plan credentials keep the host issuer unavailable without affecting Coding Plan", { timeout: 120_000 }, async () => {
+  const gate = fakeHostBillingGate("entitled");
+  let issuerObserved: ProductionAuthIssuer | null | undefined;
+  await withRealAdapterMcp(async (client, _manager, _dataRoot, workspace, runtime) => {
+    assert.equal(issuerObserved, null, "missing official credentials must keep the host issuer unavailable");
+    const taskId = `host-wired-coding-plan-${randomUUID()}`;
+    contentObject(await client.callTool({ name: "zcode_task", arguments: syntheticTask(workspace, taskId) }));
+    const interaction = await waitForInteractionRequest(client, taskId);
+    const request = interaction.details as Record<string, unknown>;
+    const requestId = String(request.request_id ?? (request.payload as Record<string, unknown> | undefined)?.request_id ?? "permission-1");
+    contentObject(await client.callTool({ name: "zcode_interaction_reply", arguments: { task_id: taskId, request_id: requestId, decision: "allow" } }));
+    assert.equal((await waitForTerminal(client, taskId, 1)).status, "completed");
+    await waitForLifecycleEvent(client, taskId, "released");
+    assert.equal(gate.checks.length, 0, "Coding Plan must never touch the Start Plan Billing gate");
+    const requests = readFileSync(runtime.requestLog, "utf8").trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+    assert.ok(requests.some((message) => message.method === "session/send"), "the Coding Plan path must run the full Worker turn");
+  }, { runtimeVariant: "success", issuerFactory: async (runtime, host) => {
+    issuerObserved = await createHostStartPlanIssuer({
+      env: { ...process.env, HOME: runtime.runtimeRoot, USERPROFILE: runtime.runtimeRoot },
+      homeDir: runtime.runtimeRoot, host, signal: new AbortController().signal, entitlement: gate.entitlement,
+    });
+    return issuerObserved;
+  }, preserveFixtureOnFailure: true });
 });
