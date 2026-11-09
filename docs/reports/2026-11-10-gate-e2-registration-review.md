@@ -92,7 +92,7 @@ typecheck: PASS
 build: PASS
 plugin_validation: PASS
 diff_check: PASS
-windows_ci: FAIL (one non-reproduced lifecycle observation)
+windows_ci: PASS (rerun after one non-reproduced lifecycle observation)
 ubuntu_ci: PASS
 sqlite_stress_windows: PASS
 sqlite_stress_ubuntu: PASS
@@ -130,6 +130,21 @@ supports a pre-existing intermittent Windows cleanup/observation risk rather
 than a deterministic registration-repair regression. The exact environmental
 cause remains `UNCONFIRMED`; a later green rerun must not be presented as a
 root-cause proof.
+
+The documentation follow-up at `1d0515da46cf35101e19c6ed56a2ce98f9dceac9`
+completed a fresh remote run,
+[`42667649815`](https://github.com/Sandyzzx/codex-zcode-bridge/actions/runs/42667649815),
+with all required jobs successful:
+
+```yaml
+windows_verify: PASS
+ubuntu_verify: PASS
+sqlite_resource_matrix_windows: PASS
+sqlite_resource_matrix_ubuntu: PASS
+```
+
+This rerun closes the CI gate for the candidate while preserving the original
+intermittent observation and its `UNCONFIRMED` root cause as residual risk.
 
 ## Preview 2 release preparation
 
