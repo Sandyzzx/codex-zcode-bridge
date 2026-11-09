@@ -224,7 +224,7 @@ test("task-scoped current authorizes only the selected account provider", () => 
     assert.equal(startTask?.providers["account:bigmodel-start-plan"]?.access.entitled, true);
     assert.equal(startTask?.states["account:bigmodel-start-plan"]?.current, true);
     assert.equal(startTask?.providers["account:bigmodel-individual-coding-plan"]?.access.entitled, true);
-    assert.equal(startTask?.states["account:bigmodel-individual-coding-plan"]?.current, undefined);
+    assert.equal(startTask?.states["account:bigmodel-individual-coding-plan"]?.current, false);
 
     writeFileSync(fixture.settingPath, JSON.stringify({
       providerFamilyConnectionSelections: { bigmodel: { kind: "start-plan" } },
@@ -236,7 +236,7 @@ test("task-scoped current authorizes only the selected account provider", () => 
       "account:bigmodel-individual-coding-plan",
     );
     assert.equal(codingTask?.states["account:bigmodel-individual-coding-plan"]?.current, true);
-    assert.equal(codingTask?.states["account:bigmodel-start-plan"]?.current, undefined);
+    assert.equal(codingTask?.states["account:bigmodel-start-plan"]?.current, false);
     assert.equal(codingTask?.providers["account:bigmodel-individual-coding-plan"]?.access.entitled, true);
     assert.equal(codingTask?.states["account:bigmodel-individual-coding-plan"]?.entitled, true);
     assert.deepEqual(runtimeAuthReply("account:bigmodel-individual-coding-plan", fixture.config), {
@@ -244,8 +244,17 @@ test("task-scoped current authorizes only the selected account provider", () => 
       requestAuth: { apiKey: "synthetic-coding-plan-key" },
     });
 
-    assert.equal(codingTask?.states["account:bigmodel-offpeak-idle-plan"]?.current, undefined);
-    assert.equal(codingTask?.states["account:bigmodel-highspeed-card"]?.current, undefined);
+    assert.equal(codingTask?.states["account:bigmodel-offpeak-idle-plan"]?.current, false);
+    assert.equal(codingTask?.states["account:bigmodel-highspeed-card"]?.current, false);
+
+    for (const payload of [startTask, codingTask]) {
+      let currentCount = 0;
+      for (const [providerId, state] of Object.entries(payload?.states ?? {})) {
+        assert.equal(typeof state.current, "boolean", `${providerId} must have a boolean current state`);
+        if (state.current) currentCount += 1;
+      }
+      assert.equal(currentCount, 1, "exactly one task account provider may be current");
+    }
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
