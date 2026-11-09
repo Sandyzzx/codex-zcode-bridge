@@ -4,16 +4,30 @@
 
 ## 使用前
 
-需要 Node.js 22.18+、Git、已安装并登录的 ZCode，以及支持插件 marketplace 的 Codex。
+当前 Preview 版本为 `2.0.0-preview.1`，需要 Node.js `>=24.16.0 <25`、Git、已安装并登录的 ZCode，以及支持插件 marketplace 的 Codex。
 
-添加本项目 GitHub marketplace 并安装 **Zcode Bridge**：在桌面应用中先用 CLI 注册 marketplace，再到 **Plugins Directory** 选择并安装；CLI 用户可直接按下方命令安装。之后开启新对话并检查、信任插件的 `SessionStart` hook。Windows 上 hook 会检查本机环境并报告配置问题。Marketplace 安装无需克隆源码或运行 `npm install`；Node.js 和 ZCode 需另行安装。
+添加 Preview marketplace 并安装 **Zcode Bridge (Preview)**：在桌面应用中先用 CLI 注册 marketplace，再到 **Plugins Directory** 选择并安装；CLI 用户可直接按下方命令安装。之后开启新对话并检查、信任插件的 `SessionStart` hook。Windows 上 hook 会检查本机环境并报告配置问题。Marketplace 安装无需克隆源码或运行 `npm install`；Node.js 和 ZCode 需另行安装。
 
-CLI 安装示例：
+Preview 安装：
 
 ```sh
-codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref master
-codex plugin add codex-zcode-bridge@codex-zcode-bridge
+codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref preview
+codex plugin add codex-zcode-bridge@codex-zcode-bridge-preview
 ```
+
+已安装 Preview marketplace 的更新命令：
+
+```sh
+codex plugin marketplace upgrade codex-zcode-bridge-preview
+```
+
+固定到已验收的 Preview 快照：
+
+```sh
+codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-preview-v2.0.0-preview.1
+```
+
+`preview` 分支用于持续更新；Tag 是固定快照，不会跟随后续 Preview 提交。
 
 ## 派发任务
 
@@ -29,7 +43,7 @@ codex plugin add codex-zcode-bridge@codex-zcode-bridge
 
 ZCode 以当前操作系统用户权限运行。Git worktree 不是 OS 沙箱；`allowed_paths` 和 `forbidden_paths` 是任务指令，不能强制限制文件或命令访问。普通本地读取、编辑、构建、测试和批准范围内的清理可按 `yolo` 策略执行；Push、Merge、Tag、Release、生产 Authority 切换、任务范围外的数据删除、凭据修改和真实生产任务数据操作仍需用户明确授权。任务 prompt、Skill 或 worktree 选择不能自行产生这些授权。任务 prompt、日志、可见模型输出和结果会保存在本机 `.codex/codex-zcode-bridge/` 目录。派发前请检查任务可见的工作区内容。
 
-Marketplace 用户配置自定义 ZCode 路径或默认模型的说明见[中文安装指南](https://github.com/Sandyzzx/codex-zcode-bridge/blob/master/README.zh-CN.md#安装)。
+Marketplace 用户配置自定义 ZCode 路径或默认模型的说明见 [Preview 中文安装指南](https://github.com/Sandyzzx/codex-zcode-bridge/blob/preview/README.zh-CN.md#安装)。
 
 Start Plan 支持仍属实验性能力，真实账户 Billing 和模型 E2E 尚未验收。3012 unusual activity 的根因未确认；需要 Desktop CAPTCHA 的场景不支持无交互处理。Billing 响应的成功结构仍缺少真实样本核验。不要把凭据发现、Provider 注册或合成测试结果当作真实模型请求成功。
 - **Read-only wait helper:** hosts with background-command completion can run the bundled `dist/wait-task.mjs` against the same SQLite Attention Core. The helper never approves, cancels, or mutates task state; its notification still depends on the host lifecycle.
