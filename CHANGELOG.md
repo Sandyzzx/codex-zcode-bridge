@@ -4,6 +4,30 @@
 
 当前版本以 `package.json` 和 Release Please manifest 为准。提交推送到 `master` 后，Release Please 会在有待发布变更时创建发布 PR，并同步更新版本文件与本日志；合并发布 PR 后会生成对应 Git tag 和 GitHub Release。
 
+## [2.0.0-preview.2](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-preview-v2.0.0-preview.1...codex-zcode-bridge-preview-v2.0.0-preview.2) (2026-11-10)
+
+Preview 2.0 Account Provider 注册兼容性修复（EXPERIMENTAL / PREVIEW ONLY，仅面向开发者和测试用户；发布目标为 `preview` 分支，不经过 Release Please）。
+
+### Fixed
+
+* AppServer 0.17.1 任务级 Account Provider Snapshot 现在为每个 Provider 发布明确的布尔 `current`，并仅将任务选中的 Provider 标记为当前。
+* Start Plan Provider 注册失败继续阻止 Session 创建和模型 Turn，同时通过 ADR-011 保留经过白名单过滤的 RPC 诊断。
+* 超时或请求前通道关闭不再被错误归类为已观察到 JSON-RPC Error Frame 的拒绝。
+
+### Validation
+
+* 官方 AppServer 0.17.1 原生合成注册测试。
+* Start Plan 三模型目录与 `GLM-5.3-Flash` 模型选择测试。
+* Built-in Revision 来源一致性验证。
+* Coding Plan 兼容性回归。
+* Windows、Ubuntu Verify 与 SQLite resource matrix 通过。
+
+### Not verified
+
+* 本版本发布时尚未完成真实 Start Plan 模型请求验收。
+* 原始 HTTP 405 根因仍未确认。
+* 3012 未在本轮历史证据中观察到。
+
 ## [2.0.0-preview.1](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-preview-v1.6.0-preview.3...codex-zcode-bridge-preview-v2.0.0-preview.1) (2026-11-08)
 
 Preview 2.0 集成版本（EXPERIMENTAL / PREREVIEW ONLY，仅面向开发者和测试用户；发布目标为 `preview` 分支，不经过 Release Please）。
