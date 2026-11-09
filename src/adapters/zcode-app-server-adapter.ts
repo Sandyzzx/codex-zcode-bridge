@@ -114,7 +114,7 @@ interface AppServerClient {
  * appears; only the selected termination path may submit the root-cause slot.
  */
 type FactsCandidate =
-  | { kind: "rpc"; method: string; code: number | null; dataCode: string | null }
+  | { kind: "rpc"; method: string; code: number | null; dataCode: string | null; rejected: boolean }
   | { kind: "spawn"; errno: ProcessErrno | null }
   | { kind: "process_exit" }
   | { kind: "transport"; method: string }
@@ -147,9 +147,10 @@ function registrationFailure(error: unknown): {
   candidate: FactsCandidate | null;
 } {
   const candidate = readFactsCandidate(error);
+  const rpcRejected = candidate?.kind === "rpc" && candidate.rejected;
   const details: JsonRecord = {
     failure_stage: "provider_registration",
-    failure_kind: candidate?.kind === "rpc"
+    failure_kind: rpcRejected
       ? "RPC_REJECTED"
       : candidate?.kind === "transport"
         ? "TRANSPORT_FAILURE"
@@ -167,7 +168,7 @@ function registrationFailure(error: unknown): {
     if (candidate.dataCode !== null) details.rpc_data_code = candidate.dataCode;
   }
   return {
-    summary: candidate?.kind === "rpc"
+    summary: rpcRejected
       ? "ZCode rejected account provider registration"
       : candidate?.kind === "transport"
         ? "ZCode account provider registration transport failed"
@@ -1512,13 +1513,19 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       if (protocolFatal) return Promise.reject(withFactsCandidate(new Error(`${protocolFatal.message}; blocked ${method} request after the fatal protocol error`), { kind: "protocol" }));
       if (closed) {
         if (spawnFailure) return Promise.reject(spawnFailure);
-        return Promise.reject(withFactsCandidate(new Error(`ZCode app-server is closed before ${method}`), { kind: "rpc", method, code: null, dataCode: null }));
+        return Promise.reject(withFactsCandidate(
+          new Error(`ZCode app-server is closed before ${method}`),
+          { kind: "rpc", method, code: null, dataCode: null, rejected: false },
+        ));
       }
       const id = ++rpcId;
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
           pending.delete(id);
-          reject(withFactsCandidate(new Error(`ZCode app-server request timed out: ${method}`), { kind: "rpc", method, code: null, dataCode: null }));
+          reject(withFactsCandidate(
+            new Error(`ZCode app-server request timed out: ${method}`),
+            { kind: "rpc", method, code: null, dataCode: null, rejected: false },
+          ));
         }, RPC_TIMEOUT_MS);
         timer.unref();
         pending.set(id, { method, resolve, reject, timer });
@@ -1763,7 +1770,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         const dataCode = registeredCode(data.code, RPC_DATA_CODE_REGISTRY);
         call.reject(withFactsCandidate(
           new Error(`ZCode app-server request failed for ${call.method}${typeof error.code === "number" ? ` (code ${error.code})` : ""}`),
-          { kind: "rpc", method: call.method, code: rpcCode, dataCode },
+          { kind: "rpc", method: call.method, code: rpcCode, dataCode, rejected: true },
         ));
       } else {
         call.resolve(message.result);

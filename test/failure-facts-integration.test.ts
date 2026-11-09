@@ -503,6 +503,47 @@ test("A1c: Start Plan registration app-server exit is distinct from an RPC rejec
   }
 });
 
+test("A1d: an unstructured RPC error frame remains a rejection without invented codes", { timeout: 30_000 }, async () => {
+  const modelId = "GLM-5.3-Flash";
+  const runtime = await makeFakeRuntime({ accountSyncError: {} });
+  const config = await withStartPlanAccountSyncLayout(runtime, modelId);
+  const fixture = makeAdapterFixture(runtime.root);
+  fixture.task = {
+    ...fixture.task,
+    model: { provider_id: "account:bigmodel-start-plan", model_id: modelId },
+  };
+  try {
+    const run = await runAdapter({
+      fixture,
+      resolver: { resolve: async () => config },
+      startPlanProviderEntitled: true,
+      resolveStartPlanRuntimeAuth: async () => { throw new Error("registration failure must precede private auth"); },
+    });
+    assert.equal(run.result.status, "failed");
+    assert.equal(run.result.error_code, "provider_config_invalid");
+    const facts = fixture.facts;
+    assert.ok(facts, JSON.stringify({ result: run.result, events: fixture.events }));
+    assert.equal(facts.source, "rpc");
+    assert.equal(facts.phase, "pre_send");
+    assert.equal(facts.rpc_method, "provider/updateAccountConfig");
+    assert.equal(facts.rpc_code, null);
+    assert.equal(facts.rpc_data_code, null);
+    const syncFailure = fixture.events.find((event) => event.type === "account_provider_sync_failed");
+    assert.ok(syncFailure);
+    assert.deepEqual(syncFailure.details, {
+      failure_stage: "provider_registration",
+      failure_kind: "RPC_REJECTED",
+      rpc_method: "provider/updateAccountConfig",
+    });
+    const methods = (await readRequestLog(runtime.requestLog)).map((item) => item["method"]);
+    assert.equal(methods.includes("provider/updateAccountConfig"), true);
+    assert.equal(methods.includes("session/create"), false);
+    assert.equal(methods.includes("session/send"), false);
+  } finally {
+    await runtime.cleanup();
+  }
+});
+
 test("A2: a dropped ACK with a real runtime side effect stays unknown and never asserts no execution", { timeout: 30_000 }, async () => {
   const sideEffectFile = path.join(tmpdir(), `bridge-facts-sideeffect-${Date.now()}-${process.pid}.txt`);
   const runtime = await makeFakeRuntime({
