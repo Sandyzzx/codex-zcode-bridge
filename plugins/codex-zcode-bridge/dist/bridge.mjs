@@ -34688,7 +34688,7 @@ function readAccountProviderSource(config2, verifiedSelection, homeDir, taskProv
       connectionSelectionsInvalid,
       connectionSelections
     );
-    const current = taskAccountProviderId ? planKind === "off-peak" || planKind === "highspeed" ? void 0 : providerId === taskAccountProviderId ? true : desktopCurrent === true ? void 0 : desktopCurrent : desktopCurrent;
+    const current = taskAccountProviderId ? providerId === taskAccountProviderId : desktopCurrent;
     return {
       providerId,
       legacyId,

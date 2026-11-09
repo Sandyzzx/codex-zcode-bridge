@@ -17,6 +17,7 @@ import { BridgeError } from "../src/runtime/errors.js";
 import { makeWorkspace, validReport, TEMP_TREE_REMOVE_OPTIONS } from "./helpers.js";
 import type { PrivateLeaseBinding } from "../src/runtime/start-plan-private-lease.js";
 import type { ZCodeRuntimeConfig } from "../src/interfaces.js";
+import type { FailureFactsV1 } from "../src/diagnostics/failure-facts.js";
 
 const DEVICE_ID = "synthetic-device-mid-fixed";
 const ACCOUNT_A = "synthetic-account-a";
@@ -776,6 +777,7 @@ test("provider preparation refuses account changes and aborted tasks without Bil
 test("Start Plan provider registration rejection prevents session creation and session/send", async () => {
   const { root, cleanup } = makeRoot("start-plan-provider-gate-");
   try {
+    const sentinel = "SENTINEL_GATE_E2_REGISTRATION_MESSAGE";
     const personal = path.join(root, ".zcode", "v2", "provider_config.json");
     mkdirSync(path.dirname(personal), { recursive: true });
     const entrypoint = path.join(root, "fake-app-server.cjs");
@@ -810,7 +812,11 @@ input.on("line", (text) => {
   const message = JSON.parse(text);
   fs.appendFileSync(requestLog, JSON.stringify(message) + "\n");
   if (message.method === "provider/updateAccountConfig") {
-    line({ id: message.id, error: { code: -32000, message: "synthetic provider registration rejected" } });
+    line({ id: message.id, error: {
+      code: -32603,
+      message: ${JSON.stringify(sentinel)},
+      data: { code: "provider_not_configured", message: ${JSON.stringify(sentinel)} },
+    } });
   } else if (message.method === "session/create" || message.method === "session/setModel") {
     line({ id: message.id, result: snapshot() });
   } else if (message.method === "session/send") {
@@ -858,12 +864,16 @@ input.on("close", () => process.exit(0));
     assert.match(unentitledResult.reportError ?? "", /live entitlement was not verified/u);
     assert.equal(existsSync(requestLog), false, "unentitled Start Plan must not spawn or contact AppServer");
     let callbackCalls = 0;
+    let facts: FailureFactsV1 | null = null;
+    const events: Array<{ type: string; summary: string; details?: Record<string, unknown> }> = [];
     const adapter = new ZCodeAppServerAdapter({
       resolver: { resolve: async () => config },
       timeoutMs: 10_000,
       childEnvBase: { PATH: process.env["PATH"] ?? "" },
       homeDir: root,
       startPlanProviderEntitled: true,
+      onEvent: (event) => events.push(event),
+      onFailureFacts: (value) => { facts = value; },
       resolveStartPlanRuntimeAuth: async () => {
         callbackCalls += 1;
         throw new Error("runtime auth must not run before provider registration");
@@ -889,6 +899,23 @@ input.on("close", () => process.exit(0));
       assert.equal(error.code, "provider_config_invalid");
       return true;
     });
+    const capturedFacts = facts as FailureFactsV1 | null;
+    assert.ok(capturedFacts);
+    assert.equal(capturedFacts.source, "rpc");
+    assert.equal(capturedFacts.phase, "pre_send");
+    assert.equal(capturedFacts.rpc_method, "provider/updateAccountConfig");
+    assert.equal(capturedFacts.rpc_code, -32603);
+    assert.equal(capturedFacts.rpc_data_code, "provider_not_configured");
+    const syncFailure = events.find((event) => event.type === "account_provider_sync_failed");
+    assert.ok(syncFailure);
+    assert.deepEqual(syncFailure.details, {
+      failure_stage: "provider_registration",
+      failure_kind: "RPC_REJECTED",
+      rpc_method: "provider/updateAccountConfig",
+      rpc_error_code: -32603,
+      rpc_data_code: "provider_not_configured",
+    });
+    assert.equal(JSON.stringify({ facts: capturedFacts, events }).includes(sentinel), false);
     assert.equal(callbackCalls, 0);
     const methods = readFileSync(requestLog, "utf8").trim().split("\n")
       .map((line) => (JSON.parse(line) as { method?: string }).method);

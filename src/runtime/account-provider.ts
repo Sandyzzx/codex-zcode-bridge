@@ -266,12 +266,12 @@ function readAccountProviderSource(
       connectionSelectionsInvalid,
       connectionSelections,
     );
+    // AppServer 0.17.1 accepts optional `current` at the schema boundary, but
+    // its model catalog is empty when any task-scoped account provider omits
+    // it. Publish an explicit boolean for every account entry and keep only the
+    // task-selected provider current.
     const current = taskAccountProviderId
-      ? (planKind === "off-peak" || planKind === "highspeed"
-          ? undefined
-          : providerId === taskAccountProviderId
-            ? true
-            : desktopCurrent === true ? undefined : desktopCurrent)
+      ? providerId === taskAccountProviderId
       : desktopCurrent;
     return {
       providerId,

@@ -3542,7 +3542,7 @@ function readAccountProviderSource(config2, verifiedSelection, homeDir, taskProv
       connectionSelectionsInvalid,
       connectionSelections
     );
-    const current = taskAccountProviderId ? planKind === "off-peak" || planKind === "highspeed" ? void 0 : providerId === taskAccountProviderId ? true : desktopCurrent === true ? void 0 : desktopCurrent : desktopCurrent;
+    const current = taskAccountProviderId ? providerId === taskAccountProviderId : desktopCurrent;
     return {
       providerId,
       legacyId,
@@ -25241,6 +25241,23 @@ function readFactsCandidate(error62) {
   if (!(error62 instanceof Error)) return null;
   return error62[FACTS_CANDIDATE] ?? null;
 }
+function registrationFailure(error62) {
+  const candidate = readFactsCandidate(error62);
+  const details = {
+    failure_stage: "provider_registration",
+    failure_kind: candidate?.kind === "rpc" ? "RPC_REJECTED" : candidate?.kind === "transport" ? "TRANSPORT_FAILURE" : candidate?.kind === "process_exit" ? "APPSERVER_EXITED" : candidate?.kind === "spawn" ? "APPSERVER_SPAWN_FAILED" : candidate?.kind === "protocol" ? "PROTOCOL_FAILURE" : "UNKNOWN"
+  };
+  if (candidate?.kind === "rpc") {
+    details.rpc_method = "provider/updateAccountConfig";
+    if (candidate.code !== null) details.rpc_error_code = candidate.code;
+    if (candidate.dataCode !== null) details.rpc_data_code = candidate.dataCode;
+  }
+  return {
+    summary: candidate?.kind === "rpc" ? "ZCode rejected account provider registration" : candidate?.kind === "transport" ? "ZCode account provider registration transport failed" : candidate?.kind === "process_exit" ? "ZCode app-server exited during account provider registration" : "ZCode account provider registration failed",
+    details,
+    candidate
+  };
+}
 function retryAfterMilliseconds(value) {
   if (typeof value === "number" && Number.isFinite(value)) return value * 1e3;
   if (typeof value !== "string" || !value.trim()) return null;
@@ -25722,12 +25739,19 @@ var init_zcode_app_server_adapter = __esm({
                 }
               });
             } catch (error62) {
+              const failure2 = registrationFailure(error62);
               entry.onEvent({
                 type: "account_provider_sync_failed",
-                summary: error62 instanceof Error ? error62.message : "ZCode account provider synchronization failed"
+                summary: failure2.summary,
+                details: failure2.details
               });
               if (startPlanSelected) {
-                throw new BridgeError("provider_config_invalid", "ZCode rejected Start Plan provider registration before session creation.");
+                const registrationError = new BridgeError(
+                  "provider_config_invalid",
+                  "ZCode rejected Start Plan provider registration before session creation."
+                );
+                if (failure2.candidate) withFactsCandidate(registrationError, failure2.candidate);
+                throw registrationError;
               }
             }
           }

@@ -378,7 +378,7 @@ test("verified Start Plan receives task-scoped current while Desktop selects Cod
     assert.equal(payload?.providers?.["account:bigmodel-start-plan"]?.access?.entitled, true);
     assert.equal(payload?.states?.["account:bigmodel-start-plan"]?.current, true);
     assert.equal(payload?.providers?.["account:bigmodel-individual-coding-plan"]?.access?.entitled, true);
-    assert.equal(payload?.states?.["account:bigmodel-individual-coding-plan"]?.current, undefined);
+    assert.equal(payload?.states?.["account:bigmodel-individual-coding-plan"]?.current, false);
   } finally { await rm(runtime.root, { recursive: true, force: true }); }
 });
 
@@ -441,7 +441,7 @@ test("explicit Coding Plan receives task-scoped current when Desktop selects Sta
     const sync = messages.find((message) => message.method === "provider/updateAccountConfig");
     const payload = sync?.params as { states?: Record<string, { current?: boolean }> } | undefined;
     assert.equal(payload?.states?.["account:bigmodel-individual-coding-plan"]?.current, true);
-    assert.equal(payload?.states?.["account:bigmodel-start-plan"]?.current, undefined);
+    assert.equal(payload?.states?.["account:bigmodel-start-plan"]?.current, false);
     assert.deepEqual(messages.find((message) => message.id === "auth-rpc")?.result, {
       headersApplied: true,
       requestAuth: { apiKey: "synthetic-coding-plan-api-key" },

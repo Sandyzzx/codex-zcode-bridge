@@ -139,6 +139,46 @@ function readFactsCandidate(error: unknown): FactsCandidate | null {
   return (error as MarkedError)[FACTS_CANDIDATE] ?? null;
 }
 
+/** Safe registration diagnostics: only controlled enums and registry-backed
+ * RPC fields leave the private adapter boundary. Upstream text is never copied. */
+function registrationFailure(error: unknown): {
+  summary: string;
+  details: JsonRecord;
+  candidate: FactsCandidate | null;
+} {
+  const candidate = readFactsCandidate(error);
+  const details: JsonRecord = {
+    failure_stage: "provider_registration",
+    failure_kind: candidate?.kind === "rpc"
+      ? "RPC_REJECTED"
+      : candidate?.kind === "transport"
+        ? "TRANSPORT_FAILURE"
+        : candidate?.kind === "process_exit"
+          ? "APPSERVER_EXITED"
+          : candidate?.kind === "spawn"
+            ? "APPSERVER_SPAWN_FAILED"
+            : candidate?.kind === "protocol"
+              ? "PROTOCOL_FAILURE"
+              : "UNKNOWN",
+  };
+  if (candidate?.kind === "rpc") {
+    details.rpc_method = "provider/updateAccountConfig";
+    if (candidate.code !== null) details.rpc_error_code = candidate.code;
+    if (candidate.dataCode !== null) details.rpc_data_code = candidate.dataCode;
+  }
+  return {
+    summary: candidate?.kind === "rpc"
+      ? "ZCode rejected account provider registration"
+      : candidate?.kind === "transport"
+        ? "ZCode account provider registration transport failed"
+        : candidate?.kind === "process_exit"
+          ? "ZCode app-server exited during account provider registration"
+          : "ZCode account provider registration failed",
+    details,
+    candidate,
+  };
+}
+
 interface RunEntry {
   handle: AgentHandle;
   child: ChildProcessWithoutNullStreams | null;
@@ -644,16 +684,23 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
             },
           });
         } catch (error) {
+          const failure = registrationFailure(error);
           entry.onEvent({
             type: "account_provider_sync_failed",
-            summary: error instanceof Error ? error.message : "ZCode account provider synchronization failed",
+            summary: failure.summary,
+            details: failure.details,
           });
           // Provider registration is a precondition for Start Plan. Its
           // private runtime-auth callback happens only after send, so letting
           // this RPC failure proceed could cross session/send without a
           // registered provider. Coding Plan behavior remains unchanged.
           if (startPlanSelected) {
-            throw new BridgeError("provider_config_invalid", "ZCode rejected Start Plan provider registration before session creation.");
+            const registrationError = new BridgeError(
+              "provider_config_invalid",
+              "ZCode rejected Start Plan provider registration before session creation.",
+            );
+            if (failure.candidate) withFactsCandidate(registrationError, failure.candidate);
+            throw registrationError;
           }
         }
       }

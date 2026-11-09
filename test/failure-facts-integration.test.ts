@@ -59,6 +59,7 @@ test("D1b: unknown resultType and invalid protocol frames never expose upstream 
 
 interface FakeRuntimeOptions {
   accountSyncError?: unknown;
+  accountSyncExitCode?: number;
   preSendReject?: { method: "session/create" | "session/resume"; code?: number; dataCode?: string | null; dataMessage?: string };
   sendAck?: boolean;
   sendRpcError?: { code?: number; dataCode?: string | null };
@@ -135,7 +136,8 @@ input.on("line", (line) => {
     }
     process.stdout.write(JSON.stringify({ id: message.id, result: snapshot() }) + "\n");
   } else if (message.method === "provider/updateAccountConfig") {
-    if (opts.accountSyncError) process.stdout.write(JSON.stringify({ id: message.id, error: opts.accountSyncError }) + "\n");
+    if (opts.accountSyncExitCode !== undefined) process.exit(opts.accountSyncExitCode);
+    else if (opts.accountSyncError) process.stdout.write(JSON.stringify({ id: message.id, error: opts.accountSyncError }) + "\n");
     else process.stdout.write(JSON.stringify({ id: message.id, result: { status: "ok" } }) + "\n");
   } else if (message.method === "session/setModel" || message.method === "session/setMode" || message.method === "session/subscribe") {
     process.stdout.write(JSON.stringify({ id: message.id, result: message.method === "session/setModel" ? snapshot() : {} }) + "\n");
@@ -230,7 +232,36 @@ async function withAccountSyncLayout(runtime: { root: string; config: ZCodeRunti
     revision: 1,
     config: { providerConfigRules: { providerRules: [{ providerId: "account:fixture", config: { access: { type: "zhipu-account" } } }] } },
   }), "utf8");
-  return { ...runtime.config, providerPersonalConfigFile: personal };
+  return {
+    ...runtime.config,
+    providerPersonalConfigFile: personal,
+    zcodeDataRoot: path.join(runtime.root, ".zcode"),
+  };
+}
+
+async function withStartPlanAccountSyncLayout(
+  runtime: { root: string; config: ZCodeRuntimeConfig },
+  modelId: string,
+): Promise<ZCodeRuntimeConfig> {
+  const v2 = path.join(runtime.root, ".zcode", "v2");
+  await mkdir(v2, { recursive: true });
+  const personal = path.join(v2, "provider_config.json");
+  await writeFile(personal, JSON.stringify({ config: { providerConfigRules: { providerRules: [] } } }), "utf8");
+  await writeFile(runtime.config.providerBuiltinConfigFile, JSON.stringify({
+    revision: 1,
+    config: { providerConfigRules: { providerRules: [{
+      providerId: "account:bigmodel-start-plan",
+      config: {
+        builtinModelIds: [modelId],
+        access: { type: "zhipu-account", mode: "start-plan", accountType: "bigmodel" },
+      },
+    }] } },
+  }), "utf8");
+  return {
+    ...runtime.config,
+    providerPersonalConfigFile: personal,
+    zcodeDataRoot: path.join(runtime.root, ".zcode"),
+  };
 }
 
 // ---- Direct Adapter fixture -------------------------------------------------
@@ -244,7 +275,12 @@ interface AdapterFixture {
 function makeAdapterFixture(workspace: string): AdapterFixture {
   return {task: makeTask({task_id: TASK_ID, workspace, model: {provider_id:"provider-default",model_id:"model-default"}, timeout_ms:60_000}), attempt:1, facts:null, events:[]};
 }
-async function runAdapter(options: {fixture: AdapterFixture; resolver: import("../src/interfaces.js").RuntimeResolver}) {
+async function runAdapter(options: {
+  fixture: AdapterFixture;
+  resolver: import("../src/interfaces.js").RuntimeResolver;
+  startPlanProviderEntitled?: boolean;
+  resolveStartPlanRuntimeAuth?: () => Promise<never>;
+}) {
   const fixture=options.fixture;
   const startedAt=new Date().toISOString();
   let outcome: ZCodeRunOutcome | null=null;
@@ -252,7 +288,9 @@ async function runAdapter(options: {fixture: AdapterFixture; resolver: import(".
   const adapter=new ZCodeAppServerAdapter({resolver:options.resolver, timeoutMs:fixture.task.timeout_ms,
     childEnvBase:{PATH:process.env.PATH},homeDir:fixture.task.workspace,
     onEvent:event=>fixture.events.push(event),onFailureFacts:facts=>{fixture.facts=facts;},
-    onOutcomeCheckpoint:value=>{outcome=value;}});
+    onOutcomeCheckpoint:value=>{outcome=value;},
+    startPlanProviderEntitled:options.startPlanProviderEntitled,
+    resolveStartPlanRuntimeAuth:options.resolveStartPlanRuntimeAuth});
   try {
     const handle=await adapter.startTask({task:fixture.task,attempt:fixture.attempt,workspace:{requestedPath:fixture.task.workspace,canonicalPath:fixture.task.workspace,mode:"direct"}});
     outcome=await adapter.getResult(handle);
@@ -368,6 +406,98 @@ test("A1: a pre-send session/create rejection records accepted=no with the RPC c
     const errorEvent = events.find((event) => event.type === "error");
     assert.ok(errorEvent);
     assertNoSentinel(errorEvent, sentinel);
+  } finally {
+    await runtime.cleanup();
+  }
+});
+
+test("A1b: Start Plan registration RPC rejection preserves structured private facts without upstream text", { timeout: 30_000 }, async () => {
+  const sentinel = "SENTINEL_A1B_registration_message";
+  const modelId = "GLM-5.3-Flash";
+  const runtime = await makeFakeRuntime({
+    accountSyncError: {
+      code: -32603,
+      message: sentinel,
+      data: { code: "provider_not_configured", message: sentinel },
+    },
+  });
+  const config = await withStartPlanAccountSyncLayout(runtime, modelId);
+  const fixture = makeAdapterFixture(runtime.root);
+  fixture.task = {
+    ...fixture.task,
+    model: { provider_id: "account:bigmodel-start-plan", model_id: modelId },
+  };
+  try {
+    const run = await runAdapter({
+      fixture,
+      resolver: { resolve: async () => config },
+      startPlanProviderEntitled: true,
+      resolveStartPlanRuntimeAuth: async () => { throw new Error("registration failure must precede private auth"); },
+    });
+    assert.equal(run.result.status, "failed");
+    assert.equal(run.result.error_code, "provider_config_invalid");
+    const facts = fixture.facts;
+    assert.ok(facts, JSON.stringify({ result: run.result, events: fixture.events }));
+    assert.equal(facts.source, "rpc");
+    assert.equal(facts.phase, "pre_send");
+    assert.equal(facts.rpc_method, "provider/updateAccountConfig");
+    assert.equal(facts.rpc_code, -32603);
+    assert.equal(facts.rpc_data_code, "provider_not_configured");
+    const syncFailure = fixture.events.find((event) => event.type === "account_provider_sync_failed");
+    assert.ok(syncFailure);
+    assert.deepEqual(syncFailure.details, {
+      failure_stage: "provider_registration",
+      failure_kind: "RPC_REJECTED",
+      rpc_method: "provider/updateAccountConfig",
+      rpc_error_code: -32603,
+      rpc_data_code: "provider_not_configured",
+    });
+    assertNoSentinel(run.result, sentinel);
+    assertNoSentinel(fixture.events, sentinel);
+    assertNoSentinel(facts, sentinel);
+    const methods = (await readRequestLog(runtime.requestLog)).map((item) => item["method"]);
+    assert.equal(methods.includes("provider/updateAccountConfig"), true);
+    assert.equal(methods.includes("session/create"), false);
+    assert.equal(methods.includes("session/send"), false);
+  } finally {
+    await runtime.cleanup();
+  }
+});
+
+test("A1c: Start Plan registration app-server exit is distinct from an RPC rejection", { timeout: 30_000 }, async () => {
+  const modelId = "GLM-5.3-Flash";
+  const runtime = await makeFakeRuntime({ accountSyncExitCode: 0 });
+  const config = await withStartPlanAccountSyncLayout(runtime, modelId);
+  const fixture = makeAdapterFixture(runtime.root);
+  fixture.task = {
+    ...fixture.task,
+    model: { provider_id: "account:bigmodel-start-plan", model_id: modelId },
+  };
+  try {
+    const run = await runAdapter({
+      fixture,
+      resolver: { resolve: async () => config },
+      startPlanProviderEntitled: true,
+      resolveStartPlanRuntimeAuth: async () => { throw new Error("registration failure must precede private auth"); },
+    });
+    assert.equal(run.result.status, "failed");
+    assert.equal(run.result.status, "failed");
+    const facts = fixture.facts;
+    assert.ok(facts, JSON.stringify({ result: run.result, events: fixture.events }));
+    assert.equal(facts.source, "process");
+    assert.equal(facts.phase, "process_exit");
+    assert.equal(facts.rpc_method, null);
+    assert.equal(facts.rpc_code, null);
+    const syncFailure = fixture.events.find((event) => event.type === "account_provider_sync_failed");
+    assert.ok(syncFailure);
+    assert.deepEqual(syncFailure.details, {
+      failure_stage: "provider_registration",
+      failure_kind: "APPSERVER_EXITED",
+    });
+    const methods = (await readRequestLog(runtime.requestLog)).map((item) => item["method"]);
+    assert.equal(methods.includes("provider/updateAccountConfig"), true);
+    assert.equal(methods.includes("session/create"), false);
+    assert.equal(methods.includes("session/send"), false);
   } finally {
     await runtime.cleanup();
   }
