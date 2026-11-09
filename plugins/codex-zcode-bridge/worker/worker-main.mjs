@@ -3408,48 +3408,39 @@ var init_child_env = __esm({
 import { createHash as createHash5 } from "node:crypto";
 import { existsSync as existsSync3, readFileSync as readFileSync4 } from "node:fs";
 import path5 from "node:path";
-function buildAccountProviderPayload(config2, verifiedSelection) {
-  const table = readJson(config2.providerBuiltinConfigFile);
-  const providerRules = readProviderRules(table).filter(isRecord2).map((rule) => rule).filter((rule) => rule.config?.access?.type === "zhipu-account" && typeof rule.providerId === "string");
-  if (!providerRules.length) return null;
-  const dataDir = zcodeV2DataDir(config2.providerPersonalConfigFile);
-  if (!dataDir) return null;
-  const credentials = readJson(path5.join(dataDir, "config.json"));
-  const credentialProviders = asRecord(credentials?.provider);
-  const cache = readJson(path5.join(dataDir, "coding-plan-cache.json"));
-  const cacheItems = asRecord(asRecord(cache?.entryStatus).items);
+function buildAccountProviderPayload(config2, verifiedSelection, homeDir) {
+  const source = readAccountProviderSource(config2, verifiedSelection, homeDir);
+  if (!source) return null;
   const providers = {};
   const states = {};
-  for (const rule of providerRules) {
-    const providerId = rule.providerId;
-    const legacyId = configProviderId(providerId, rule);
-    const cacheStatus = asRecord(cacheItems[legacyId]).status;
-    const legacyConfig = asRecord(credentialProviders[legacyId]);
-    const options = asRecord(legacyConfig.options);
-    const selectedEntitled = verifiedSelection?.providerId === providerId && Array.isArray(rule.config?.builtinModelIds) && rule.config.builtinModelIds.includes(verifiedSelection.modelId);
-    if (verifiedSelection?.providerId === providerId && !selectedEntitled) {
-      throw new Error("start_plan_model_not_registered");
-    }
-    const legacyEntitled = providerId === "account:bigmodel-start-plan" ? false : cacheStatus === "available" || legacyConfig.enabled === true && typeof options.apiKey === "string" && options.apiKey.trim().length > 0;
-    const entitled = selectedEntitled || legacyEntitled;
-    providers[providerId] = {
-      ...Array.isArray(rule.config?.builtinModelIds) ? { builtinModelIds: rule.config.builtinModelIds } : {},
-      access: { type: "zhipu-account", entitled }
+  for (const entry of source.entries) {
+    providers[entry.providerId] = {
+      ...entry.builtinModelIds.length ? { builtinModelIds: [...entry.builtinModelIds] } : {},
+      access: { type: entry.accessType, entitled: entry.entitled }
     };
-    states[providerId] = {
-      availability: entitled ? "available" : "unavailable",
-      entitled,
-      current: entitled
+    states[entry.providerId] = {
+      availability: entry.availability,
+      entitled: entry.entitled,
+      current: entry.current
     };
   }
-  const revision = typeof table?.revision === "number" ? table.revision : 0;
-  const resolvedBuiltinPath = path5.resolve(config2.providerBuiltinConfigFile);
   return {
-    revision: `account:codex-zcode-bridge:${Date.now()}`,
-    basedOnZCodeBuiltinRevision: `zcode-builtin:${revision}:${createHash5("sha256").update(resolvedBuiltinPath).digest("hex")}`,
+    revision: accountProviderRevision(source.builtinRevision, providers, states),
+    basedOnZCodeBuiltinRevision: source.builtinRevision,
     providers,
     states
   };
+}
+function accountSettingFile(homeDir) {
+  return path5.join(homeDir, ".zcode", "v2", "setting.json");
+}
+function accountProviderPlanKind(providerId, config2) {
+  if (!providerId?.startsWith("account:")) return null;
+  const table = readJson(config2.providerBuiltinConfigFile);
+  const rule = readProviderRules(table).find(
+    (candidate) => isRecord2(candidate) && candidate.providerId === providerId
+  );
+  return normalizePlanKind(rule?.config?.access?.mode);
 }
 function accountProviderId(providerId, config2) {
   if (providerId.startsWith("account:")) return providerId;
@@ -3482,23 +3473,10 @@ function runtimeAuthReply(providerId, config2) {
     headersApplied: false,
     errorMessage: "Start Plan requires a ZCode desktop captcha session; this headless app-server bridge cannot provide it."
   };
-  if (!providerId?.startsWith("account:")) return unavailable;
-  const table = readJson(config2.providerBuiltinConfigFile);
-  const rule = readProviderRules(table).find(
-    (candidate) => isRecord2(candidate) && candidate.providerId === providerId
-  );
-  if (rule?.config?.access?.mode !== "individual-coding-plan") return unavailable;
-  const legacyId = configProviderId(providerId, rule);
-  const dataDir = zcodeV2DataDir(config2.providerPersonalConfigFile);
-  if (!dataDir) return unavailable;
-  const credentials = readJson(path5.join(dataDir, "config.json"));
-  const cache = readJson(path5.join(dataDir, "coding-plan-cache.json"));
-  const status = asRecord(asRecord(asRecord(cache?.entryStatus).items)[legacyId]).status;
-  const provider = asRecord(asRecord(credentials?.provider)[legacyId]);
-  const options = asRecord(provider.options);
-  const apiKey = typeof options.apiKey === "string" ? options.apiKey.trim() : "";
-  if (!apiKey || status !== "available" && provider.enabled !== true) return unavailable;
-  return { headersApplied: true, requestAuth: { apiKey } };
+  const source = readAccountProviderSource(config2, void 0, void 0);
+  const entry = source?.entries.find((candidate) => candidate.providerId === providerId);
+  if (entry?.planKind !== "individual-coding-plan" || !entry.entitled || !entry.apiKey) return unavailable;
+  return { headersApplied: true, requestAuth: { apiKey: entry.apiKey } };
 }
 function zcodeDataBaseDir(personalProviderConfigFile) {
   const dataDir = zcodeV2DataDir(personalProviderConfigFile);
@@ -3516,6 +3494,73 @@ function zcodeV2DataDir(personalProviderConfigFile) {
   const zcodeDir = path5.dirname(v2Dir);
   if (path5.basename(zcodeDir).toLowerCase() !== ".zcode") return null;
   return v2Dir;
+}
+function readAccountProviderSource(config2, verifiedSelection, homeDir) {
+  const table = readJson(config2.providerBuiltinConfigFile);
+  const providerRules = readProviderRules(table).filter(isRecord2).map((rule) => rule).filter((rule) => rule.config?.access?.type === "zhipu-account" && typeof rule.providerId === "string").sort((left, right) => left.providerId.localeCompare(right.providerId));
+  if (!providerRules.length) return null;
+  const officialDataRoot = path5.resolve(config2.zcodeDataRoot);
+  const officialV2Dir = zcodeV2Dir(officialDataRoot);
+  if (!officialV2Dir) return null;
+  const credentials = readJson(path5.join(officialV2Dir, "config.json"));
+  const credentialProviders = asRecord(credentials?.provider);
+  const cache = readJson(path5.join(officialV2Dir, "coding-plan-cache.json"));
+  const cacheItems = asRecord(asRecord(cache?.entryStatus).items);
+  const settingFile = homeDir ? accountSettingFile(homeDir) : path5.join(officialV2Dir, "setting.json");
+  const settings = readJson(settingFile);
+  const selectedKeys = asRecord(settings?.modelProviderFamilySelectedKeys);
+  const connectionSelections = asRecord(settings?.providerFamilyConnectionSelections);
+  const entries = providerRules.map((rule) => {
+    const providerId = rule.providerId;
+    const legacyId = configProviderId(providerId, rule);
+    const cacheStatus = asRecord(cacheItems[legacyId]).status;
+    const legacyConfig = asRecord(credentialProviders[legacyId]);
+    const options = asRecord(legacyConfig.options);
+    const apiKey = typeof options.apiKey === "string" ? options.apiKey.trim() : "";
+    const selectedEntitled = verifiedSelection?.providerId === providerId && Array.isArray(rule.config?.builtinModelIds) && rule.config.builtinModelIds.includes(verifiedSelection.modelId);
+    if (verifiedSelection?.providerId === providerId && !selectedEntitled) {
+      throw new Error("start_plan_model_not_registered");
+    }
+    const entitled = normalizePlanKind(rule.config?.access?.mode) === "start-plan" ? selectedEntitled : cacheStatus === "available" || legacyConfig.enabled === true && apiKey.length > 0;
+    return {
+      providerId,
+      legacyId,
+      planKind: normalizePlanKind(rule.config?.access?.mode),
+      accessType: rule.config?.access?.type ?? "zhipu-account",
+      builtinModelIds: [...rule.config?.builtinModelIds ?? []].sort(),
+      entitled,
+      availability: entitled ? "available" : "unavailable",
+      current: isCurrentProvider(rule, legacyId, selectedKeys, connectionSelections),
+      apiKey
+    };
+  });
+  const builtinRevision = zcodeBuiltinRevision(table, config2.providerBuiltinConfigFile);
+  return { officialDataRoot, officialV2Dir, settingFile, builtinRevision, entries };
+}
+function zcodeV2Dir(zcodeDataRoot) {
+  if (path5.basename(zcodeDataRoot).toLowerCase() !== ".zcode") return null;
+  return path5.join(zcodeDataRoot, "v2");
+}
+function zcodeBuiltinRevision(table, sourceFile) {
+  const revision = typeof table?.revision === "number" ? table.revision : 0;
+  const sourceDigest = createHash5("sha256").update(path5.resolve(sourceFile)).digest("hex");
+  return `zcode-builtin:${revision}:${sourceDigest}`;
+}
+function accountProviderRevision(builtinRevision, providers, states) {
+  return `account:${JSON.stringify([builtinRevision, providers, states])}`;
+}
+function isCurrentProvider(rule, legacyId, selectedKeys, connectionSelections) {
+  const access = rule.config?.access;
+  if (!access?.accountType) return false;
+  const selected = selectedKeys[access.accountType];
+  if (typeof selected === "string") {
+    return selected === legacyId || selected.endsWith(`:${legacyId}`);
+  }
+  const connection = asRecord(connectionSelections[access.accountType]);
+  return typeof connection.kind === "string" && connection.kind === access.mode;
+}
+function normalizePlanKind(value) {
+  return value === "start-plan" || value === "individual-coding-plan" || value === "team-coding-plan" || value === "off-peak" || value === "highspeed" ? value : null;
 }
 function configProviderId(providerId, rule) {
   const access = rule.config?.access;
@@ -25575,20 +25620,24 @@ var init_zcode_app_server_adapter = __esm({
             void this.#resolver.resolve().then(resolve, reject).finally(() => entry.abort.signal.removeEventListener("abort", aborted2));
           });
           entry.abort.signal.throwIfAborted();
-          const startPlanSelected = this.#resolveStartPlanRuntimeAuth !== void 0 && task.model?.provider_id === "account:bigmodel-start-plan";
+          const startPlanSelected = this.#resolveStartPlanRuntimeAuth !== void 0 && accountProviderPlanKind(task.model?.provider_id, config2) === "start-plan";
           if (startPlanSelected && !this.#startPlanProviderEntitled) {
             return this.#startPlanReadinessFailure(entry, "Start Plan live entitlement was not verified; no ZCode session was started.");
           }
           let accountProviderPayload;
           try {
-            accountProviderPayload = buildAccountProviderPayload(config2, startPlanSelected ? { providerId: "account:bigmodel-start-plan", modelId: task.model.model_id } : void 0);
+            accountProviderPayload = buildAccountProviderPayload(
+              config2,
+              startPlanSelected ? { providerId: "account:bigmodel-start-plan", modelId: task.model.model_id } : void 0,
+              this.#homeDir
+            );
           } catch (error62) {
             if (startPlanSelected) {
               return this.#startPlanReadinessFailure(entry, error62 instanceof Error && error62.message === "start_plan_model_not_registered" ? "The requested Start Plan model is not present in the official provider registry." : "Start Plan provider snapshot could not be prepared after live entitlement verification.");
             }
             throw error62;
           }
-          if (startPlanSelected && (!accountProviderPayload?.providers["account:bigmodel-start-plan"] || accountProviderPayload.providers["account:bigmodel-start-plan"].access.entitled !== true || accountProviderPayload.states["account:bigmodel-start-plan"]?.current !== true)) {
+          if (startPlanSelected && (!accountProviderPayload?.providers["account:bigmodel-start-plan"] || accountProviderPayload.providers["account:bigmodel-start-plan"].access.entitled !== true)) {
             return this.#startPlanReadinessFailure(entry, "Start Plan provider snapshot could not be prepared after live entitlement verification.");
           }
           const preferences = resolveSessionPreferences(task.model, runtimeEnv, this.#executionProfileId);
@@ -25619,7 +25668,7 @@ var init_zcode_app_server_adapter = __esm({
                 type: "account_provider_sync_failed",
                 summary: error62 instanceof Error ? error62.message : "ZCode account provider synchronization failed"
               });
-              if (task.model?.provider_id === "account:bigmodel-start-plan" && this.#resolveStartPlanRuntimeAuth) {
+              if (startPlanSelected) {
                 throw new BridgeError("provider_config_invalid", "ZCode rejected Start Plan provider registration before session creation.");
               }
             }
@@ -26544,7 +26593,7 @@ var init_zcode_app_server_adapter = __esm({
             const params = asRecord2(message.params);
             const selection = asRecord2(params.modelSelection);
             const providerId = typeof selection.providerId === "string" ? selection.providerId : typeof params.providerId === "string" ? params.providerId : void 0;
-            if (providerId === "account:bigmodel-start-plan" && this.#resolveStartPlanRuntimeAuth) {
+            if (accountProviderPlanKind(providerId, config2) === "start-plan" && this.#resolveStartPlanRuntimeAuth) {
               const replySafely = (result) => {
                 try {
                   write({ id, result });

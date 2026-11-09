@@ -183,7 +183,11 @@ test("runtime auth refuses a lease revoked before its reply is written", async (
       config: { builtinModelIds: ["GLM-5.3-Flash"], access: { type: "zhipu-account", mode: "start-plan", accountType: "bigmodel" } },
     }] } } }));
     await writeFile(personalConfig, JSON.stringify({ config: { providerConfigRules: { providerRules: [] } } }));
-    const runtimeConfig = { ...runtime.config, providerPersonalConfigFile: personalConfig };
+    const runtimeConfig = {
+      ...runtime.config,
+      providerPersonalConfigFile: personalConfig,
+      zcodeDataRoot: path.join(runtime.root, ".zcode"),
+    };
     const adapter = new ZCodeAppServerAdapter({
       resolver: { resolve: async () => runtimeConfig }, timeoutMs: 10_000,
       childEnvBase: { PATH: process.env.PATH },
@@ -200,6 +204,102 @@ test("runtime auth refuses a lease revoked before its reply is written", async (
     const reply = wire.trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>).find((message) => message.id === "auth-rpc");
     assert.equal((reply?.result as { headersApplied?: boolean } | undefined)?.headersApplied, false);
     assert.equal(wire.includes("synthetic-revoked-marker"), false);
+  } finally { await rm(runtime.root, { recursive: true, force: true }); }
+});
+
+test("runtime auth dispatcher injects a verified Start Plan lease only into the matching turn", async () => {
+  const runtime = await makeFakeRuntime({ providerId: "account:bigmodel-start-plan", modelId: "GLM-5.3-Flash" }, true, false, undefined, true, null, undefined, 0, true);
+  const events: Array<{ type: string; summary: string; details?: Record<string, unknown> }> = [];
+  try {
+    const personalConfig = path.join(runtime.root, ".zcode", "v2", "provider_config.json");
+    await mkdir(path.dirname(personalConfig), { recursive: true });
+    await writeFile(runtime.config.providerBuiltinConfigFile, JSON.stringify({ revision: 9, config: { providerConfigRules: { providerRules: [{
+      providerId: "account:bigmodel-start-plan",
+      config: { builtinModelIds: ["GLM-5.3-Flash"], access: { type: "zhipu-account", mode: "start-plan", accountType: "bigmodel" } },
+    }] } } }));
+    await writeFile(personalConfig, JSON.stringify({ config: { providerConfigRules: { providerRules: [] } } }));
+    let authCalls = 0;
+    const adapter = new ZCodeAppServerAdapter({
+      resolver: { resolve: async () => ({
+        ...runtime.config,
+        providerPersonalConfigFile: personalConfig,
+        zcodeDataRoot: path.join(runtime.root, ".zcode"),
+      }) },
+      timeoutMs: 10_000,
+      childEnvBase: { PATH: process.env.PATH },
+      homeDir: runtime.root,
+      startPlanProviderEntitled: true,
+      onEvent: (event) => events.push(event),
+      resolveStartPlanRuntimeAuth: async (scope) => {
+        authCalls += 1;
+        assert.deepEqual(scope, {
+          sessionId: SESSION_ID,
+          turnId: "turn-fixture",
+          providerId: "account:bigmodel-start-plan",
+          modelId: "GLM-5.3-Flash",
+        });
+        return { apiKey: "synthetic-start-plan-jwt-marker", expiresAt: Date.now() + 10_000, isValid: () => true };
+      },
+    });
+    const handle = await adapter.startTask({
+      task: { ...task, model: { provider_id: "account:bigmodel-start-plan", model_id: "GLM-5.3-Flash" } },
+      workspace: makeWorkspace(runtime.root),
+      attempt: 1,
+    });
+    const result = await adapter.getResult(handle);
+    assert.equal(result.exitCode, 0);
+    assert.equal(authCalls, 1);
+    const messages = (await readFile(runtime.requestLog, "utf8")).trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+    const reply = messages.find((message) => message.id === "auth-rpc");
+    assert.deepEqual(reply?.result, {
+      headersApplied: true,
+      requestAuth: { apiKey: "synthetic-start-plan-jwt-marker" },
+    });
+    assert.equal(JSON.stringify(events).includes("synthetic-start-plan-jwt-marker"), false);
+  } finally { await rm(runtime.root, { recursive: true, force: true }); }
+});
+
+test("runtime auth dispatcher preserves Coding Plan API key injection", async () => {
+  const runtime = await makeFakeRuntime({ providerId: "account:bigmodel-individual-coding-plan", modelId: "GLM-5.2" }, true, false, undefined, true, null, undefined, 0, true);
+  try {
+    const zcodeDataRoot = path.join(runtime.root, ".zcode");
+    const personalConfig = path.join(zcodeDataRoot, "v2", "provider_config.json");
+    await mkdir(path.dirname(personalConfig), { recursive: true });
+    await writeFile(runtime.config.providerBuiltinConfigFile, JSON.stringify({ revision: 10, config: { providerConfigRules: { providerRules: [{
+      providerId: "account:bigmodel-individual-coding-plan",
+      config: { builtinModelIds: ["GLM-5.2"], access: { type: "zhipu-account", mode: "individual-coding-plan", accountType: "bigmodel" } },
+    }] } } }));
+    await writeFile(personalConfig, JSON.stringify({ config: { providerConfigRules: { providerRules: [] } } }));
+    await writeFile(path.join(zcodeDataRoot, "v2", "config.json"), JSON.stringify({
+      provider: { "builtin:bigmodel-coding-plan": { enabled: true, options: { apiKey: "synthetic-coding-plan-api-key" } } },
+    }));
+    await writeFile(path.join(zcodeDataRoot, "v2", "coding-plan-cache.json"), JSON.stringify({
+      entryStatus: { items: { "builtin:bigmodel-coding-plan": { status: "available" } } },
+    }));
+    let startPlanAuthCalls = 0;
+    const adapter = new ZCodeAppServerAdapter({
+      resolver: { resolve: async () => ({ ...runtime.config, providerPersonalConfigFile: personalConfig, zcodeDataRoot }) },
+      timeoutMs: 10_000,
+      childEnvBase: { PATH: process.env.PATH },
+      homeDir: runtime.root,
+      resolveStartPlanRuntimeAuth: async () => {
+        startPlanAuthCalls += 1;
+        throw new Error("Coding Plan must not enter the Start Plan lease dispatcher");
+      },
+    });
+    const handle = await adapter.startTask({
+      task: { ...task, model: { provider_id: "account:bigmodel-individual-coding-plan", model_id: "GLM-5.2" } },
+      workspace: makeWorkspace(runtime.root),
+      attempt: 1,
+    });
+    const result = await adapter.getResult(handle);
+    assert.equal(result.exitCode, 0);
+    assert.equal(startPlanAuthCalls, 0);
+    const messages = (await readFile(runtime.requestLog, "utf8")).trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+    assert.deepEqual(messages.find((message) => message.id === "auth-rpc")?.result, {
+      headersApplied: true,
+      requestAuth: { apiKey: "synthetic-coding-plan-api-key" },
+    });
   } finally { await rm(runtime.root, { recursive: true, force: true }); }
 });
 

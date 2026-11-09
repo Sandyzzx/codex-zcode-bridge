@@ -828,7 +828,7 @@ input.on("close", () => process.exit(0));
       zcodeEntrypoint: entrypoint,
       providerBuiltinConfigFile: builtin,
       providerPersonalConfigFile: personal,
-      zcodeDataRoot: path.join(root, "official-zcode"),
+      zcodeDataRoot: path.join(root, ".zcode"),
       dataRoot: path.join(root, "bridge-sqlite"),
     };
     const unentitledAdapter = new ZCodeAppServerAdapter({
@@ -955,7 +955,7 @@ input.on("close", () => process.exit(0));
       zcodeEntrypoint: entrypoint,
       providerBuiltinConfigFile: builtin,
       providerPersonalConfigFile: personal,
-      zcodeDataRoot: path.join(root, "official-zcode"),
+      zcodeDataRoot: path.join(root, ".zcode"),
       dataRoot: path.join(root, "bridge-sqlite"),
     };
     const adapter = new ZCodeAppServerAdapter({

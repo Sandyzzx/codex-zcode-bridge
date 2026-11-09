@@ -34596,71 +34596,41 @@ import path7 from "node:path";
 import { createHash as createHash2 } from "node:crypto";
 import { existsSync as existsSync5, readFileSync as readFileSync5 } from "node:fs";
 import path6 from "node:path";
-function buildAccountProviderPayload(config2, verifiedSelection) {
-  const table = readJson(config2.providerBuiltinConfigFile);
-  const providerRules = readProviderRules(table).filter(isRecord).map((rule) => rule).filter((rule) => rule.config?.access?.type === "zhipu-account" && typeof rule.providerId === "string");
-  if (!providerRules.length) return null;
-  const dataDir = zcodeV2DataDir(config2.providerPersonalConfigFile);
-  if (!dataDir) return null;
-  const credentials = readJson(path6.join(dataDir, "config.json"));
-  const credentialProviders = asRecord(credentials?.provider);
-  const cache = readJson(path6.join(dataDir, "coding-plan-cache.json"));
-  const cacheItems = asRecord(asRecord(cache?.entryStatus).items);
+function buildAccountProviderPayload(config2, verifiedSelection, homeDir) {
+  const source = readAccountProviderSource(config2, verifiedSelection, homeDir);
+  if (!source) return null;
   const providers = {};
   const states = {};
-  for (const rule of providerRules) {
-    const providerId = rule.providerId;
-    const legacyId = configProviderId(providerId, rule);
-    const cacheStatus = asRecord(cacheItems[legacyId]).status;
-    const legacyConfig = asRecord(credentialProviders[legacyId]);
-    const options = asRecord(legacyConfig.options);
-    const selectedEntitled = verifiedSelection?.providerId === providerId && Array.isArray(rule.config?.builtinModelIds) && rule.config.builtinModelIds.includes(verifiedSelection.modelId);
-    if (verifiedSelection?.providerId === providerId && !selectedEntitled) {
-      throw new Error("start_plan_model_not_registered");
-    }
-    const legacyEntitled = providerId === "account:bigmodel-start-plan" ? false : cacheStatus === "available" || legacyConfig.enabled === true && typeof options.apiKey === "string" && options.apiKey.trim().length > 0;
-    const entitled = selectedEntitled || legacyEntitled;
-    providers[providerId] = {
-      ...Array.isArray(rule.config?.builtinModelIds) ? { builtinModelIds: rule.config.builtinModelIds } : {},
-      access: { type: "zhipu-account", entitled }
+  for (const entry of source.entries) {
+    providers[entry.providerId] = {
+      ...entry.builtinModelIds.length ? { builtinModelIds: [...entry.builtinModelIds] } : {},
+      access: { type: entry.accessType, entitled: entry.entitled }
     };
-    states[providerId] = {
-      availability: entitled ? "available" : "unavailable",
-      entitled,
-      current: entitled
+    states[entry.providerId] = {
+      availability: entry.availability,
+      entitled: entry.entitled,
+      current: entry.current
     };
   }
-  const revision = typeof table?.revision === "number" ? table.revision : 0;
-  const resolvedBuiltinPath = path6.resolve(config2.providerBuiltinConfigFile);
   return {
-    revision: `account:codex-zcode-bridge:${Date.now()}`,
-    basedOnZCodeBuiltinRevision: `zcode-builtin:${revision}:${createHash2("sha256").update(resolvedBuiltinPath).digest("hex")}`,
+    revision: accountProviderRevision(source.builtinRevision, providers, states),
+    basedOnZCodeBuiltinRevision: source.builtinRevision,
     providers,
     states
   };
+}
+function accountSettingFile(homeDir) {
+  return path6.join(homeDir, ".zcode", "v2", "setting.json");
 }
 function runtimeAuthReply(providerId, config2) {
   const unavailable = {
     headersApplied: false,
     errorMessage: "Start Plan requires a ZCode desktop captcha session; this headless app-server bridge cannot provide it."
   };
-  if (!providerId?.startsWith("account:")) return unavailable;
-  const table = readJson(config2.providerBuiltinConfigFile);
-  const rule = readProviderRules(table).find(
-    (candidate) => isRecord(candidate) && candidate.providerId === providerId
-  );
-  if (rule?.config?.access?.mode !== "individual-coding-plan") return unavailable;
-  const legacyId = configProviderId(providerId, rule);
-  const dataDir = zcodeV2DataDir(config2.providerPersonalConfigFile);
-  if (!dataDir) return unavailable;
-  const credentials = readJson(path6.join(dataDir, "config.json"));
-  const cache = readJson(path6.join(dataDir, "coding-plan-cache.json"));
-  const status = asRecord(asRecord(asRecord(cache?.entryStatus).items)[legacyId]).status;
-  const provider = asRecord(asRecord(credentials?.provider)[legacyId]);
-  const options = asRecord(provider.options);
-  const apiKey = typeof options.apiKey === "string" ? options.apiKey.trim() : "";
-  if (!apiKey || status !== "available" && provider.enabled !== true) return unavailable;
-  return { headersApplied: true, requestAuth: { apiKey } };
+  const source = readAccountProviderSource(config2, void 0, void 0);
+  const entry = source?.entries.find((candidate) => candidate.providerId === providerId);
+  if (entry?.planKind !== "individual-coding-plan" || !entry.entitled || !entry.apiKey) return unavailable;
+  return { headersApplied: true, requestAuth: { apiKey: entry.apiKey } };
 }
 function zcodeDataBaseDir(personalProviderConfigFile) {
   const dataDir = zcodeV2DataDir(personalProviderConfigFile);
@@ -34678,6 +34648,73 @@ function zcodeV2DataDir(personalProviderConfigFile) {
   const zcodeDir = path6.dirname(v2Dir);
   if (path6.basename(zcodeDir).toLowerCase() !== ".zcode") return null;
   return v2Dir;
+}
+function readAccountProviderSource(config2, verifiedSelection, homeDir) {
+  const table = readJson(config2.providerBuiltinConfigFile);
+  const providerRules = readProviderRules(table).filter(isRecord).map((rule) => rule).filter((rule) => rule.config?.access?.type === "zhipu-account" && typeof rule.providerId === "string").sort((left, right) => left.providerId.localeCompare(right.providerId));
+  if (!providerRules.length) return null;
+  const officialDataRoot = path6.resolve(config2.zcodeDataRoot);
+  const officialV2Dir = zcodeV2Dir(officialDataRoot);
+  if (!officialV2Dir) return null;
+  const credentials = readJson(path6.join(officialV2Dir, "config.json"));
+  const credentialProviders = asRecord(credentials?.provider);
+  const cache = readJson(path6.join(officialV2Dir, "coding-plan-cache.json"));
+  const cacheItems = asRecord(asRecord(cache?.entryStatus).items);
+  const settingFile = homeDir ? accountSettingFile(homeDir) : path6.join(officialV2Dir, "setting.json");
+  const settings = readJson(settingFile);
+  const selectedKeys = asRecord(settings?.modelProviderFamilySelectedKeys);
+  const connectionSelections = asRecord(settings?.providerFamilyConnectionSelections);
+  const entries = providerRules.map((rule) => {
+    const providerId = rule.providerId;
+    const legacyId = configProviderId(providerId, rule);
+    const cacheStatus = asRecord(cacheItems[legacyId]).status;
+    const legacyConfig = asRecord(credentialProviders[legacyId]);
+    const options = asRecord(legacyConfig.options);
+    const apiKey = typeof options.apiKey === "string" ? options.apiKey.trim() : "";
+    const selectedEntitled = verifiedSelection?.providerId === providerId && Array.isArray(rule.config?.builtinModelIds) && rule.config.builtinModelIds.includes(verifiedSelection.modelId);
+    if (verifiedSelection?.providerId === providerId && !selectedEntitled) {
+      throw new Error("start_plan_model_not_registered");
+    }
+    const entitled = normalizePlanKind(rule.config?.access?.mode) === "start-plan" ? selectedEntitled : cacheStatus === "available" || legacyConfig.enabled === true && apiKey.length > 0;
+    return {
+      providerId,
+      legacyId,
+      planKind: normalizePlanKind(rule.config?.access?.mode),
+      accessType: rule.config?.access?.type ?? "zhipu-account",
+      builtinModelIds: [...rule.config?.builtinModelIds ?? []].sort(),
+      entitled,
+      availability: entitled ? "available" : "unavailable",
+      current: isCurrentProvider(rule, legacyId, selectedKeys, connectionSelections),
+      apiKey
+    };
+  });
+  const builtinRevision = zcodeBuiltinRevision(table, config2.providerBuiltinConfigFile);
+  return { officialDataRoot, officialV2Dir, settingFile, builtinRevision, entries };
+}
+function zcodeV2Dir(zcodeDataRoot) {
+  if (path6.basename(zcodeDataRoot).toLowerCase() !== ".zcode") return null;
+  return path6.join(zcodeDataRoot, "v2");
+}
+function zcodeBuiltinRevision(table, sourceFile) {
+  const revision = typeof table?.revision === "number" ? table.revision : 0;
+  const sourceDigest = createHash2("sha256").update(path6.resolve(sourceFile)).digest("hex");
+  return `zcode-builtin:${revision}:${sourceDigest}`;
+}
+function accountProviderRevision(builtinRevision, providers, states) {
+  return `account:${JSON.stringify([builtinRevision, providers, states])}`;
+}
+function isCurrentProvider(rule, legacyId, selectedKeys, connectionSelections) {
+  const access = rule.config?.access;
+  if (!access?.accountType) return false;
+  const selected = selectedKeys[access.accountType];
+  if (typeof selected === "string") {
+    return selected === legacyId || selected.endsWith(`:${legacyId}`);
+  }
+  const connection = asRecord(connectionSelections[access.accountType]);
+  return typeof connection.kind === "string" && connection.kind === access.mode;
+}
+function normalizePlanKind(value) {
+  return value === "start-plan" || value === "individual-coding-plan" || value === "team-coding-plan" || value === "off-peak" || value === "highspeed" ? value : null;
 }
 function configProviderId(providerId, rule) {
   const access = rule.config?.access;
@@ -35294,7 +35331,7 @@ var ZCodeModelSettings = class {
     const cacheAge = cached2 ? Date.now() - cached2.cached_at_ms : null;
     if (cached2 && cached2.source_fingerprint === source.fingerprint && cacheAge !== null && cacheAge >= 0 && cacheAge < MODEL_CATALOG_TTL_MS) {
       const cachedModels = withStartPlanAliasEntries(cached2.models, source.config);
-      const warning = startPlanCatalogWarning(buildAccountProviderPayload(source.config), cachedModels);
+      const warning = startPlanCatalogWarning(buildAccountProviderPayload(source.config, void 0, this.#homeDir), cachedModels);
       return {
         workspace: workspacePath,
         current_model: null,
@@ -35322,7 +35359,7 @@ var ZCodeModelSettings = class {
     const runtimeEnv = loadPersistedRuntimeEnvironment(this.#sourceEnv, this.#homeDir, this.#host);
     const config2 = await new NodeRuntimeResolver({ env: runtimeEnv, homeDir: this.#homeDir, host: this.#host }).resolve();
     const cachePath = modelCatalogCachePath(workspacePath, config2, runtimeEnv, this.#host.settingsDirectory);
-    const fingerprint = await modelCatalogSourceFingerprint(config2, runtimeEnv);
+    const fingerprint = await modelCatalogSourceFingerprint(config2, runtimeEnv, this.#homeDir);
     return { config: config2, runtimeEnv, cachePath, fingerprint };
   }
   async #readLiveCatalog(workspacePath, source) {
@@ -35333,7 +35370,7 @@ var ZCodeModelSettings = class {
     let accountSync = "not_needed";
     let warning;
     try {
-      const accountPayload = buildAccountProviderPayload(config2);
+      const accountPayload = buildAccountProviderPayload(config2, void 0, this.#homeDir);
       if (accountPayload) {
         try {
           await client.request("provider/updateAccountConfig", accountPayload);
@@ -35675,7 +35712,7 @@ function modelCatalogCachePath(workspace, config2, env, settingsDirectory) {
   const key = createHash3("sha256").update(identity).digest("hex");
   return path8.join(settingsDirectory, "model-catalog", `${key}.json`);
 }
-async function modelCatalogSourceFingerprint(config2, env) {
+async function modelCatalogSourceFingerprint(config2, env, homeDir) {
   const digest3 = createHash3("sha256");
   digest3.update("start-plan-task-scoped-live-billing-v1");
   for (const file of [config2.providerBuiltinConfigFile, config2.providerPersonalConfigFile]) {
@@ -35684,7 +35721,7 @@ async function modelCatalogSourceFingerprint(config2, env) {
   }
   const entry = await stat(config2.zcodeEntrypoint);
   digest3.update(JSON.stringify({ entrypoint: config2.zcodeEntrypoint, size: entry.size, mtimeMs: entry.mtimeMs, mode: env.ZCODE_BRIDGE_MODE ?? "build" }));
-  const account = buildAccountProviderPayload(config2);
+  const account = buildAccountProviderPayload(config2, void 0, homeDir);
   if (account) digest3.update(JSON.stringify({ providers: account.providers, states: account.states, builtinRevision: account.basedOnZCodeBuiltinRevision }));
   return digest3.digest("hex");
 }

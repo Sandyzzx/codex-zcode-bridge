@@ -42,7 +42,14 @@ import {
 } from "../diagnostics/failure-facts.js";
 import { createHash, randomUUID } from "node:crypto";
 import { createMinimalOsEnv } from "../runtime/child-env.js";
-import { catalogProviderId, buildAccountProviderPayload, runtimeAuthReply, zcodeDataBaseDir, zcodeTasksIndexPath } from "../runtime/account-provider.js";
+import {
+  accountProviderPlanKind,
+  buildAccountProviderPayload,
+  catalogProviderId,
+  runtimeAuthReply,
+  zcodeDataBaseDir,
+  zcodeTasksIndexPath,
+} from "../runtime/account-provider.js";
 import { resolveSessionPreferences } from "../runtime/session-preferences.js";
 import { ADAPTER_CLEANUP_TIMEOUT_MS, resolveTaskTimeout } from "../runtime/task-timeout.js";
 import { registerDesktopTask, updateDesktopTaskStatus, type DesktopTaskIndexEntry, type DesktopTaskStatus } from "./task-index-sync.js";
@@ -560,15 +567,19 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       });
       entry.abort.signal.throwIfAborted();
       const startPlanSelected = this.#resolveStartPlanRuntimeAuth !== undefined
-        && task.model?.provider_id === "account:bigmodel-start-plan";
+        && accountProviderPlanKind(task.model?.provider_id, config) === "start-plan";
       if (startPlanSelected && !this.#startPlanProviderEntitled) {
         return this.#startPlanReadinessFailure(entry, "Start Plan live entitlement was not verified; no ZCode session was started.");
       }
       let accountProviderPayload: ReturnType<typeof buildAccountProviderPayload>;
       try {
-        accountProviderPayload = buildAccountProviderPayload(config, startPlanSelected
-          ? { providerId: "account:bigmodel-start-plan", modelId: task.model!.model_id }
-          : undefined);
+        accountProviderPayload = buildAccountProviderPayload(
+          config,
+          startPlanSelected
+            ? { providerId: "account:bigmodel-start-plan", modelId: task.model!.model_id }
+            : undefined,
+          this.#homeDir,
+        );
       } catch (error) {
         if (startPlanSelected) {
           return this.#startPlanReadinessFailure(entry, error instanceof Error && error.message === "start_plan_model_not_registered"
@@ -578,8 +589,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         throw error;
       }
       if (startPlanSelected && (!accountProviderPayload?.providers["account:bigmodel-start-plan"]
-        || accountProviderPayload.providers["account:bigmodel-start-plan"].access.entitled !== true
-        || accountProviderPayload.states["account:bigmodel-start-plan"]?.current !== true)) {
+        || accountProviderPayload.providers["account:bigmodel-start-plan"].access.entitled !== true)) {
         return this.#startPlanReadinessFailure(entry, "Start Plan provider snapshot could not be prepared after live entitlement verification.");
       }
       const preferences = resolveSessionPreferences(task.model, runtimeEnv, this.#executionProfileId);
@@ -617,7 +627,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
           // private runtime-auth callback happens only after send, so letting
           // this RPC failure proceed could cross session/send without a
           // registered provider. Coding Plan behavior remains unchanged.
-          if (task.model?.provider_id === "account:bigmodel-start-plan" && this.#resolveStartPlanRuntimeAuth) {
+          if (startPlanSelected) {
             throw new BridgeError("provider_config_invalid", "ZCode rejected Start Plan provider registration before session creation.");
           }
         }
@@ -1626,7 +1636,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         const providerId = typeof selection.providerId === "string"
           ? selection.providerId
           : typeof params.providerId === "string" ? params.providerId : undefined;
-        if (providerId === "account:bigmodel-start-plan" && this.#resolveStartPlanRuntimeAuth) {
+        if (accountProviderPlanKind(providerId, config) === "start-plan" && this.#resolveStartPlanRuntimeAuth) {
           const replySafely = (result: JsonRecord): void => {
             try { write({ id, result }); } catch { entry.rejectTurn(new Error("Start Plan authorization transport failed.")); }
           };

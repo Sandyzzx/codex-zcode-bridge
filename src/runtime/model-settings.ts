@@ -115,7 +115,7 @@ export class ZCodeModelSettings {
     if (cached && cached.source_fingerprint === source.fingerprint && cacheAge !== null &&
         cacheAge >= 0 && cacheAge < MODEL_CATALOG_TTL_MS) {
       const cachedModels = withStartPlanAliasEntries(cached.models, source.config);
-      const warning = startPlanCatalogWarning(buildAccountProviderPayload(source.config), cachedModels);
+      const warning = startPlanCatalogWarning(buildAccountProviderPayload(source.config, undefined, this.#homeDir), cachedModels);
       return {
         workspace: workspacePath,
         current_model: null,
@@ -146,7 +146,7 @@ export class ZCodeModelSettings {
     const runtimeEnv = loadPersistedRuntimeEnvironment(this.#sourceEnv, this.#homeDir, this.#host);
     const config = await new NodeRuntimeResolver({ env: runtimeEnv, homeDir: this.#homeDir, host: this.#host }).resolve();
     const cachePath = modelCatalogCachePath(workspacePath, config, runtimeEnv, this.#host.settingsDirectory);
-    const fingerprint = await modelCatalogSourceFingerprint(config, runtimeEnv);
+    const fingerprint = await modelCatalogSourceFingerprint(config, runtimeEnv, this.#homeDir);
     return { config, runtimeEnv, cachePath, fingerprint };
   }
 
@@ -158,7 +158,7 @@ export class ZCodeModelSettings {
     let accountSync: ZCodeModelCatalog["account_provider_sync"] = "not_needed";
     let warning: string | undefined;
     try {
-      const accountPayload = buildAccountProviderPayload(config);
+      const accountPayload = buildAccountProviderPayload(config, undefined, this.#homeDir);
       if (accountPayload) {
         try {
           await client.request("provider/updateAccountConfig", accountPayload as unknown as JsonRecord);
@@ -508,7 +508,11 @@ function modelCatalogCachePath(workspace: string, config: ZCodeRuntimeConfig, en
   return path.join(settingsDirectory, "model-catalog", `${key}.json`);
 }
 
-async function modelCatalogSourceFingerprint(config: ZCodeRuntimeConfig, env: NodeJS.ProcessEnv): Promise<string> {
+async function modelCatalogSourceFingerprint(
+  config: ZCodeRuntimeConfig,
+  env: NodeJS.ProcessEnv,
+  homeDir: string,
+): Promise<string> {
   const digest = createHash("sha256");
   digest.update("start-plan-task-scoped-live-billing-v1");
   // Hash only: provider contents and credentials are never written to cache.
@@ -518,7 +522,7 @@ async function modelCatalogSourceFingerprint(config: ZCodeRuntimeConfig, env: No
   }
   const entry = await stat(config.zcodeEntrypoint);
   digest.update(JSON.stringify({ entrypoint: config.zcodeEntrypoint, size: entry.size, mtimeMs: entry.mtimeMs, mode: env.ZCODE_BRIDGE_MODE ?? "build" }));
-  const account = buildAccountProviderPayload(config);
+  const account = buildAccountProviderPayload(config, undefined, homeDir);
   if (account) digest.update(JSON.stringify({ providers: account.providers, states: account.states, builtinRevision: account.basedOnZCodeBuiltinRevision }));
   return digest.digest("hex");
 }

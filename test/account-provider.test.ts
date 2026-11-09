@@ -1,9 +1,15 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { accountProviderId, buildAccountProviderPayload, catalogProviderId } from "../src/runtime/account-provider.js";
+import {
+  accountProviderId,
+  buildAccountProviderPayload,
+  catalogProviderId,
+  runtimeAuthReply,
+} from "../src/runtime/account-provider.js";
 import type { ZCodeRuntimeConfig } from "../src/interfaces.js";
 
 test("account provider IDs are idempotent while legacy builtin IDs still map", () => {
@@ -62,35 +68,78 @@ test("catalog aliases require the same advertised model and preserve exact provi
   assert.equal(catalogProviderId("builtin:plan", "flash", [account], config), "builtin:plan");
 });
 
-test("legacy cache and API key cannot entitle Start Plan, while an exact verified selection can", () => {
+test("official account snapshot keeps Start and Coding Plan facts independent and revision stable", () => {
   const root = mkdtempSync(path.join(tmpdir(), "zcode-bridge-start-plan-provider-entitlement-"));
   const builtinPath = path.join(root, "resources", "config", "provider", "builtin.json");
   const personalPath = path.join(root, ".zcode", "v2", "provider_config.json");
+  const settingPath = path.join(root, ".zcode", "v2", "setting.json");
   const modelId = "GLM-5.3-Flash";
   mkdirSync(path.dirname(builtinPath), { recursive: true });
   mkdirSync(path.dirname(personalPath), { recursive: true });
   writeFileSync(builtinPath, JSON.stringify({ revision: 1, config: { providerConfigRules: { providerRules: [
     { providerId: "account:bigmodel-start-plan", config: { builtinModelIds: [modelId], access: { type: "zhipu-account", mode: "start-plan", accountType: "bigmodel" } } },
+    { providerId: "account:bigmodel-individual-coding-plan", config: { builtinModelIds: [modelId], access: { type: "zhipu-account", mode: "individual-coding-plan", accountType: "bigmodel" } } },
   ] } } }));
   writeFileSync(personalPath, JSON.stringify({ config: { providerConfigRules: { providerRules: [] } } }));
   writeFileSync(path.join(root, ".zcode", "v2", "config.json"), JSON.stringify({
-    config: { provider: { "builtin:bigmodel-start-plan": { enabled: true, options: { apiKey: "synthetic-legacy-key" } } } },
+    provider: {
+      "builtin:bigmodel-start-plan": { enabled: true, options: { apiKey: "synthetic-start-plan-legacy-key" } },
+      "builtin:bigmodel-coding-plan": { enabled: true, options: { apiKey: "synthetic-coding-plan-key" } },
+    },
   }));
   const dataDir = path.join(root, ".zcode", "v2");
   const cacheDir = path.join(dataDir, "coding-plan-cache.json");
-  writeFileSync(cacheDir, JSON.stringify({ entryStatus: { items: { "builtin:bigmodel-start-plan": { status: "available" } } } }));
+  writeFileSync(cacheDir, JSON.stringify({ entryStatus: { items: {
+    "builtin:bigmodel-start-plan": { status: "available" },
+    "builtin:bigmodel-coding-plan": { status: "available" },
+  } } }));
+  writeFileSync(settingPath, JSON.stringify({
+    modelProviderFamilySelectedKeys: { bigmodel: "coding-plan:builtin:bigmodel-coding-plan" },
+    providerFamilyConnectionSelections: { bigmodel: { kind: "individual-coding-plan" } },
+  }));
   const config: ZCodeRuntimeConfig = {
-    nodeExecutable: process.execPath, zcodeEntrypoint: "unused", dataRoot: path.join(root, "sqlite"), zcodeDataRoot: path.join(root, "official"),
+    nodeExecutable: process.execPath, zcodeEntrypoint: "unused", dataRoot: path.join(root, "sqlite"), zcodeDataRoot: path.join(root, ".zcode"),
     providerBuiltinConfigFile: builtinPath, providerPersonalConfigFile: personalPath,
   };
   try {
-    const withoutLiveCheck = buildAccountProviderPayload(config);
+    const withoutLiveCheck = buildAccountProviderPayload(config, undefined, root);
+    const stableRepeat = buildAccountProviderPayload(config, undefined, root);
+    assert.equal(withoutLiveCheck?.revision, stableRepeat?.revision);
+    assert.match(withoutLiveCheck?.revision ?? "", /^account:\[/u);
+    assert.equal(
+      withoutLiveCheck?.basedOnZCodeBuiltinRevision,
+      `zcode-builtin:1:${createHash("sha256").update(path.resolve(builtinPath)).digest("hex")}`,
+    );
     assert.equal(withoutLiveCheck?.providers["account:bigmodel-start-plan"]?.access.entitled, false);
     assert.equal(withoutLiveCheck?.states["account:bigmodel-start-plan"]?.current, false);
-    const withLiveCheck = buildAccountProviderPayload(config, { providerId: "account:bigmodel-start-plan", modelId });
+    assert.equal(withoutLiveCheck?.providers["account:bigmodel-individual-coding-plan"]?.access.entitled, true);
+    assert.equal(withoutLiveCheck?.states["account:bigmodel-individual-coding-plan"]?.current, true);
+    assert.equal(JSON.stringify(withoutLiveCheck).includes("synthetic-coding-plan-key"), false);
+    assert.deepEqual(runtimeAuthReply("account:bigmodel-individual-coding-plan", config), {
+      headersApplied: true,
+      requestAuth: { apiKey: "synthetic-coding-plan-key" },
+    });
+    assert.equal((runtimeAuthReply("account:bigmodel-start-plan", config) as { headersApplied?: boolean }).headersApplied, false);
+
+    const withLiveCheck = buildAccountProviderPayload(config, { providerId: "account:bigmodel-start-plan", modelId }, root);
     assert.equal(withLiveCheck?.providers["account:bigmodel-start-plan"]?.access.entitled, true);
-    assert.equal(withLiveCheck?.states["account:bigmodel-start-plan"]?.current, true);
-    assert.throws(() => buildAccountProviderPayload(config, { providerId: "account:bigmodel-start-plan", modelId: "unregistered-model" }), /start_plan_model_not_registered/u);
+    assert.equal(withLiveCheck?.states["account:bigmodel-start-plan"]?.current, false);
+    assert.equal(withLiveCheck?.providers["account:bigmodel-individual-coding-plan"]?.access.entitled, true);
+    assert.equal(withLiveCheck?.states["account:bigmodel-individual-coding-plan"]?.current, true);
+    assert.notEqual(withLiveCheck?.revision, withoutLiveCheck?.revision);
+    assert.throws(() => buildAccountProviderPayload(
+      config,
+      { providerId: "account:bigmodel-start-plan", modelId: "unregistered-model" },
+      root,
+    ), /start_plan_model_not_registered/u);
+
+    writeFileSync(settingPath, JSON.stringify({
+      modelProviderFamilySelectedKeys: { bigmodel: "start-plan:builtin:bigmodel-start-plan" },
+      providerFamilyConnectionSelections: { bigmodel: { kind: "start-plan" } },
+    }));
+    const startCurrent = buildAccountProviderPayload(config, undefined, root);
+    assert.equal(startCurrent?.states["account:bigmodel-start-plan"]?.current, true);
+    assert.equal(startCurrent?.states["account:bigmodel-individual-coding-plan"]?.current, false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

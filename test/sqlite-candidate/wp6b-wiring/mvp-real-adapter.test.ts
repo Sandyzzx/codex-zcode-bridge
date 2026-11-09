@@ -605,7 +605,9 @@ for (const variant of ["private-auth-wrong-turn", "private-auth-wrong-claim", "p
     assert.ok(providerSync, "live entitlement must be followed by native Provider registration");
     const syncParams = providerSync.params as { states?: Record<string, { entitled?: boolean; current?: boolean }> };
     assert.equal(syncParams.states?.["account:bigmodel-start-plan"]?.entitled, true);
-    assert.equal(syncParams.states?.["account:bigmodel-start-plan"]?.current, true);
+    // Runtime entitlement is task/model scoped. "current" follows the
+    // official connection selection and must not be derived from entitlement.
+    assert.equal(syncParams.states?.["account:bigmodel-start-plan"]?.current, false);
     assert.equal(JSON.stringify(providerSync).includes("SYNTHETIC_GATE2_SECRET_93d9422b"), false);
       const marker = Buffer.from("SYNTHETIC_GATE2_SECRET_93d9422b");
       const scan = (directory: string): void => { for (const name of readdirSync(directory)) { const item = path.join(directory, name); const stat = lstatSync(item); if (stat.isSymbolicLink()) continue; if (stat.isDirectory()) scan(item); else if (stat.isFile()) assert.equal(readFileSync(item).includes(marker), false, `secret marker in ${item}`); } };
