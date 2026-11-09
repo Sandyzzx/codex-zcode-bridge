@@ -20,8 +20,16 @@ interface AccountProviderPayload {
   states: Record<string, { availability: "available" | "unavailable"; entitled: boolean; current: boolean }>;
 }
 
+export interface VerifiedAccountProviderSelection {
+  readonly providerId: "account:bigmodel-start-plan";
+  readonly modelId: string;
+}
+
 /** Build the account entitlement snapshot expected by hosted ZCode app-server. */
-export function buildAccountProviderPayload(config: ZCodeRuntimeConfig): AccountProviderPayload | null {
+export function buildAccountProviderPayload(
+  config: ZCodeRuntimeConfig,
+  verifiedSelection?: VerifiedAccountProviderSelection,
+): AccountProviderPayload | null {
   const table = readJson(config.providerBuiltinConfigFile);
   const providerRules = readProviderRules(table)
     .filter(isRecord)
@@ -44,8 +52,20 @@ export function buildAccountProviderPayload(config: ZCodeRuntimeConfig): Account
     const cacheStatus = asRecord(cacheItems[legacyId]).status;
     const legacyConfig = asRecord(credentialProviders[legacyId]);
     const options = asRecord(legacyConfig.options);
-    const entitled = cacheStatus === "available" ||
-      (legacyConfig.enabled === true && typeof options.apiKey === "string" && options.apiKey.trim().length > 0);
+    const selectedEntitled = verifiedSelection?.providerId === providerId
+      && Array.isArray(rule.config?.builtinModelIds)
+      && rule.config.builtinModelIds.includes(verifiedSelection.modelId);
+    if (verifiedSelection?.providerId === providerId && !selectedEntitled) {
+      throw new Error("start_plan_model_not_registered");
+    }
+    // Start Plan's live Billing verdict is task/model scoped. A legacy cache
+    // entry or old apiKey must never make this provider executable or visible
+    // as entitled; only the exact verified selection can do so.
+    const legacyEntitled = providerId === "account:bigmodel-start-plan"
+      ? false
+      : cacheStatus === "available" ||
+        (legacyConfig.enabled === true && typeof options.apiKey === "string" && options.apiKey.trim().length > 0);
+    const entitled = selectedEntitled || legacyEntitled;
     providers[providerId] = {
       ...(Array.isArray(rule.config?.builtinModelIds) ? { builtinModelIds: rule.config.builtinModelIds } : {}),
       access: { type: "zhipu-account", entitled },

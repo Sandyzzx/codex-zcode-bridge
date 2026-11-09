@@ -1,77 +1,30 @@
 # Project State
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-04
-> Last verified: 2026-11-04，核对 SQLite Attention Core、统一 Events、Thin Waiter、MCP schema、插件 Bundle、Node 24.16 全量回归（823 通过、2 跳过）与 Worktree 状态；Claude Code 后台唤醒和独立代码审查未完成。
-> Verified against: 77dd5f14ee61701ac15872192429ecd4f53e1323 + 本 Worktree Attention 集成候选
+> Last updated: 2026-11-07
+> Last verified: 2026-11-07，核对集成基线与 ADR-029 退役候选范围；最终回归数据见交付报告。
+> Verified against: a46137fe46b567271a7756be819361132625278c + ADR-029 本地候选（未发布）
 
-当前状态快照，回答"现在什么能用、什么不能用"。路线图和优先级不在这里。
+已发布基线为 v1.6.0 / aabbb0a959ee234508c62731ed5122f28dfcf5b0。R1–R5 的本地集成为 a46137fe；本轮在独立 Worktree 退役旧运行时，不代表 master、安装插件或生产数据库已经更新。
 
-控制面、权威 Bridge 状态与补充观察的边界见 [decisions/ADR-004](decisions/ADR-004-separate-control-state-and-observation.md)：本地材料可以观察，但不能单独驱动任务状态、状态迁移与恢复结论。
+## 当前候选
 
-## 版本与发布
+- 一个 SQLite Task Authority（v14）、一个 Lifecycle Manager、一条 Worker→ZCode app-server 生产链。旧 JSON TaskStore/Manager/Worker、CLI Adapter 和 GitWorktreeProvider 已删除。
+- R1 stderr 排水、R2 32 MiB Result 与显式离线升级、R3 阶段期限、R4 pre-Intent 拒绝、R5 重启后的显式取消保持；Claim 永久、Result 与 Cleanup/Release 独立。
+- Attention/Thin Waiter 使用只读 SQLite snapshot；Doctor 绑定同一 Authority。旧 JSON 用户文件不读取、不迁移、不删除。
+- 公共 Core API 退役获 Owner 批准，未来按主版本发布；Marketplace MCP 工具/schema 与 SQLite v14 不变。外部 fork 升级未验证。
+- JSON B3-05 随旧 Store 退役；SQLite 功能回归保留，资源压力单独运行或由实际影响选择。完整 Windows 结果与前后指标以本轮报告为准。
 
-- 当前审查基线：`1.3.0-rc.4`（`package.json`、`plugins/codex-zcode-bridge/plugin.json`）。
-- 发布方式：release-please 监听 `master`，合并后自动开版本 PR；合并版本 PR 才产生 tag 与 GitHub Release。
-- CI：`.github/workflows/ci.yml`，ubuntu 与 windows 两个作业，跑 typecheck、build、test、validate:plugin，并校验生成的 bundle 已随源码提交。
+## 明确边界
 
-## 本分支改动
+当前运行支持受信任的单用户 Windows 本地部署。任务使用固定 yolo profile，以当前账户权限执行；路径声明与 worktree 不是 OS 沙箱。公开完成状态表示执行结束，Owner 仍需独立验收。
 
-本分支基于上游 1.2.6（0902236），加入三项修复。
+Host 大 Result 接收限制和 1.1 MB 续作输入限制按 Owner 决定延后；不得重派已完成任务绕过读取问题。不新增 Chunk API、不扩大输入、不开展 R6/R7。
 
-OD Fresh Bootstrap 是尚未验收的本地候选：rc.4 已发布版本仍可能要求旧 Authority 激活；该候选将新装和旧 JSON 升级统一改为自动创建或恢复 SQLite。实现、Bundle 与 Marketplace E2E 尚未验证，不能将下方候选文档描述当作当前已发布行为。
+原生 Ubuntu 本轮尚未运行；已知 admin-abandonment 测试的平台错误改为 Windows 保留成功/CAS、其他平台断言拒绝且数据库不变，生产身份限制不变。历史 QEMU MCP 超时原因未定，不能当作原生 Ubuntu 产品缺陷或 PASS。
 
-单用户本机信任与 Recovery 所有权（ADR-019）：SQLite 固定受信任执行档案改用与 JSON 默认路径一致的 `yolo` 普通工具流程，policy revision 为 `single-user-local-v3`；兼容 profile ID `local-build-v1` 保留。SQLite startup Recovery 对 running Operation 的精确 `alive` 或临时 `unknown` Worker 仅隔离当前扫描 Manager，不写持久全局 Hold；原 Manager 仍可记录 interaction reply 与 cancel intent。已证实退出但 Result/Cleanup/Release 不完整时继续 fail-closed。
+## 未认证能力
 
-Windows 文件系统时序与根守卫（前轮）：`state.lock` 发布前存在性预检(已存在的空/未知 owner 锁不被 POSIX rename 覆盖)、发布 rename 的 EEXIST/ENOTEMPTY 按确定目的在场竞争移交 existing-owner 策略(不逃逸、不烧重试预算;EPERM/EACCES/EBUSY 目的缺失保持有界重试后可见抛出)、撤回 rename 对白名单瞬时码有界重试(撤回耗尽后锁保持完整、存活 owner 不驱逐;非瞬时码与共享 reclaim guard 清理失败保持可见,guard 清理在全部出口单点执行);worker 的迟到 self/runtime identity 写盘在终态前有界收束、超时丢弃,不再复活已清理的 store;测试 fixture 树清理带 Node 文档化有界重试;`buildRepoRootLeakPattern` 拒绝文件系统根输入（POSIX 根、盘符根及其词法等价写法、UNC 共享根）并修复 URL 主机名等于短根的误报。版本号未提升，不代表已发布；证据与边界见[修复记录](reports/2026-10-17-filesystem-root-guards.md)。
+真实 Provider 长时/四小时墙钟运行、当前 Native Host 最大 Result 完整接收、外部 dsh/fork 升级、Claude 后台唤醒、跨 Host attach/control、其他平台生产身份生命周期均未由本轮证明。浏览器默认关闭，限定版本的历史证据不推广到所有模型/runtime。
 
-Windows 进程树身份绑定归属与终止（ADR-009，2026-10-17 轮）：生产 Windows 清理重写为单持久 PowerShell 事务——每个已验证成员持有原生句柄（持有期间 PID 不可复用），归属按 CIM 表示区间与句柄精确创建/退出时间零容差证明，早于父创建的旧记录在触碰前排除；信号仅在"同一句柄内 GetProcessTimes 验证、同一句柄内 TerminateProcess"发出，`taskkill /T` 移除；Windows 终止必须携带调用者期望根指纹（spawn 代捕获/持久化 identity），POSIX 语义不变。未解析 hold、候选消失、传输异常、helper 关闭失败均携带完整已知成员集合显式失败；manager 端 `cleanup_unverified` 单调锁存（恢复路径、worker 晚到提交、连续失败、记录损坏/截断均不得抹除），释放由后续 cancel 的新鲜 probe 与 recorded-tree claimant 扫描门控。传输有界（1 MiB/行、8 MiB/65536 行缓冲、4096 枚举行、120 s 会话）。
-
-PR #47 claimant 扫描与预算返修（本轮，2026-10-18，含 review-round-1 R1–R4 与 review-round-2 S1/S2 返工）：S1——多记录根证据单调合并，claimant 路径优先于相对其他根的外来排除；S2——扫描 false/拒绝时任务相关观察经既有 cleanup-failure/marker 持久化并入后续 scanTargets（不含已证外来者与响应载荷任意 PID），空闭包正常释放。其余：P1-A——枚举与 hold 之间消失的记录 PID 视为已死，其存活子代计入 claimant，不再被过期枚举 live 集合漏掉；P1-B——外来换代父的后代仅在每条边持有证明成立时排除（边的父代被持有且与枚举行同代一致、子代创建表示区间严格晚于该持有精确创建时间、子代自身再被持有核验后递归同判），相等精度/更早/跨界/未知/中间代消失-拒绝-换代的子代保持占用，"外来换代父排除整棵子树"的旧保证撤回；hold 响应按请求校验（数量、PID、ok 必含可用精确身份字段），畸形证据拒绝扫描而非证明 clean；终止预算语义——kill 截止只对无句柄确认退出时间的成员报 `process_tree_cleanup_unverified`，全部已确认退出的成员继续闭包确认轮直至证明为空（仍受 120 s 传输会话预算约束），修复"全表枚举慢 + WMI 滞留已终止成员行"时对已证明退出的误报。维护者 Node 24.16.0 两项 process-lock 失败在本机 24.16.0 未复现（阶段计时与边界见 ADR-009 与[公开返修报告](reports/2026-10-18-pr47-claimant-repair.md)），不宣称版本归因或根治。
-
-## 稳定
-
-- Windows 进程树终止（ADR-009）：本机 Node 22/24 全量、专项单测、有界真实 fixture（正向身份绑定终止、错误指纹拒绝且零信号、缺身份拒绝、独立收束）与 Codex 九脚本十用例反例通过；2026-10-18 PR #47 返修后维护者原始反例、组合矩阵、真实 Manager 消费门禁与预算语义回归通过（attempt-1 版本 44/3/93/19 项为分文件历史计数；attempt-2 版本为 53/4 项加 evaluator 探针 10/10×3 Node）。claimant 闭包外（未观察中间祖先）不可证明，外来换代父不排除未证明的后代，不以完整清理名义宣称。
-- TaskManager 生命周期：`queued` / `running` / `completed` / `failed` / `cancelled` / `waiting_for_master`，含 attempt 独占、续跑归档、清理验证。
-- MCP 默认工具 13 个，清单见 `INTERFACES.md`。
-- `zcode_events` 的增量事件、cursor 与 raw/summary 视图。
-- `zcode_events(wait_for="attention")` 与只读 `dist/wait-task.mjs`（ADR-025）：SQLite 单事务读取当前 Task/Attempt/Pending，终态优先、当前 Attempt 隔离、普通事件不唤醒且不推进 cursor；JSON 内存 Authority 明确 unsupported，SQLite 缺库 fail closed。
-- `zcode_feedback` 的 `TaskFeedbackSnapshotV01`。
-- 工作区隔离：执行目录由调用宿主准备，Bridge 不创建也不删除 worktree。
-- 模型选择：可按任务覆盖 provider/model，不持久化为工作区默认。
-- 并发：同一 data root 内默认最多 8 个 worker，可用 `ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS` 在 1–8 之间调整。
-- 会话帧传输（ADR-008）：换行 JSON-RPC 帧逐条消费，单帧 16 MiB 原始未 trim 字节上限；致命帧错误锁存原因、终止 pending RPC/turn 并阻止后续 request。真实 resume 帧（观测 2,139,927 UTF-8 bytes，曾触发旧伪 30s 超时）与分片/合包/UTF-8 边界由回归覆盖。
-- 大审批输入（ADR-008）：审批 params 完整私有保存至 1 MiB（`JSON.stringify(params)` 紧凑序列化计量），带 bytes/SHA256 元数据；批准在 interaction 锁内校验，等待中记录丢失/损坏/改动时明确 decline。真实链路已实测：build 模式单次 43,014-byte Write 走完整审批往返，审批 params 45,704 bytes，文件与批准内容字节/SHA256 一致，cleanup verified（1.2.3修复版本的本机实测，当前分支回归范围另列）。超过 64,000-byte 事件行的大请求按显式预览 + `full_request` 完整引用发布；该 >64KB 预览与 1 MiB 边界由合成回归验证，与真实 43,014-byte Write 属不同验证强度，不混称。
-
-## 实验
-
-- `zcode_progress_probe`：默认关闭，只有直接调用 `createBridgeServer({ enableExperiments: true })` 才注册。
-- Desktop 索引同步：best effort，事务内校验 schema 与 Bridge owner；尚未写入真实 Desktop 数据库。
-- 可选 headless 浏览器宿主（ADR-007）：默认关闭；显式启用后通过独立managed CDP后端处理browserList/browserExecute。1.2.3修复版本曾在Windows Edge和ZCode Agent 0.16.9验证原生工具链；历史本机1.2.4整合验证见[审查说明](reports/2026-10-15-browser-and-transport-fixes.md)。本轮1.2.6修复包已完成Windows Edge/Linux Chromium的打包MCP初始化与真实browser backend操作，范围见[本轮记录](reports/2026-10-17-filesystem-root-guards.md)，不等同其它模型或app-server版本的原生工具认证。桌面IAB、Computer Use、录制及子会话派生未实现。
-
-## 不支持
-
-- Start Plan 的 headless 认证：app-server 需要桌面渲染器提供的验证码会话，Bridge 不伪造、不绕过。当前 headless 开发路径使用 Coding Plan。见 `research/start-plan-headless-2026-09-27.md`。
-
-## 调查中 / NOT RUN
-
-以下为仍在调查或未完成认证的边界；已观察证据与未验证范围分别说明：
-
-- 浏览器原生链路仅在独立验收记录所列版本验证，其他模型、版本、平台未扩展验证。
-- 浏览器宿主的跨安装版本兼容：协议 schema 依观测 commit `aac4755666d09fdcd70272fcf063c077a639015f` 适配；咨询字段做了容错，身份字段缺失或不可解析仍拒绝，但未在其它 app-server 版本上实测。
-- Linux x64浏览器发现与Chromium操作已在本轮rootless断网容器验证；macOS/ARM及其它浏览器安装布局仍未验证。
-
-- `session/read` 原生当前状态查询：未接入。
-- Codex 隔离 CLI Marketplace 安装及合成 SQLite MCP 查询：已完成 Attention 与默认 Events 查询；真实 ZCode Worker/provider 任务未运行。Claude Code 后台唤醒 E2E 未运行（当前环境没有 `claude` CLI）。
-- 真实 ZCode app-server RPC 探针与跨版本兼容：只在记录过的 0.16.9 路径上观测过。
-- 真实 ZCode 权限审批的其他分支：本次 Windows build 模式 allow_once 往返已实测，其他审批组合未据此认证。
-- 跨 Host 并发 attach/control：研究阶段结论为 NO-GO，除非上游提供 ownership/control 协议。
-- 真实 GUI 关闭时序、UI 响应与取消时延。
-- 真实 Desktop 数据库写入与刷新行为。
-- 其他 PID 复用与自行脱离进程组的后代场景：ADR-009 覆盖已记录 PID 的 claimant 闭包与句柄可证明窗口；闭包外（未观察中间祖先、对抗性伪造创建时间）不在证明范围。
-- 旧不可读取 owner 与崩溃遗留 reclaim guard 的安全恢复；没有按年龄清除旧锁。
-- 长会话真实 provider/报告一次合格率。调度已减少同次重复扫描，仍有随历史库增长的全量校验成本。
-
-## 核对来源
-
-`package.json`、`src/host/stdio.ts`、`src/mcp/server.ts`、`src/worker/run-task.ts`、`src/adapters/zcode-app-server-adapter.ts`、`docs/ARCHITECTURE.md`、`docs/INTERFACES.md`、GitHub Actions 运行记录。文中标注"未运行"的条目没有被上述来源证实，保持未验证状态。
+当前设计从 [架构](ARCHITECTURE.md) 与 [接口](INTERFACES.md) 阅读；需要解释取舍时从 [ADR 索引](decisions/README.md) 按主题加载。历史审计和原始失败证据保留，默认不读取 archive/research。

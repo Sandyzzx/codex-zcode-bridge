@@ -5,9 +5,6 @@ import { mkdir, readFile, writeFile, readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { ZCodeAppServerAdapter } from "../src/adapters/zcode-app-server-adapter.js";
-import { TaskStore } from "../src/store/task-store.js";
-import { runWorkerTask } from "../src/worker/run-task.js";
-import { BridgeTaskManager } from "../src/manager/task-manager.js";
 import { DirectWorkspaceProvider } from "../src/workspace/direct-provider.js";
 import { captureSpawnGenerationIdentity, createPlatformProbe, terminateProcessTree, verifyProcessTreeClaimantsClean } from "../src/adapters/process-spawn.js";
 import { ZCodeModelSettings } from "../src/runtime/model-settings.js";
@@ -52,112 +49,6 @@ test("raw runtime failure messages never enter public progress", async () => {
     await assert.rejects(adapter.getResult(handle), /turn failed/);
     assert.doesNotMatch(JSON.stringify(events), /PRIVATE_RUNTIME_ERROR/);
   } finally { await fixture.cleanup(); }
-});
-
-test("worker preserves every visible output character across multiple bounded events", async () => {
-  const output = "可见输出🙂".repeat(1_000);
-  const fixture = await runtimeFixture({ output });
-  try {
-    const store = new TaskStore(fixture.root);
-    store.createTask(makeTask({ workspace: fixture.root }), new Date().toISOString());
-    // Use the production adapter and its worker callbacks, with only discovery isolated.
-    const envBefore = { ...process.env };
-    Object.assign(process.env, fixture.env);
-    try { await runWorkerTask({ dataRoot: fixture.root, taskId: "task_1", attempt: 1, host: fixture.host }); }
-    finally { for (const key of Object.keys(process.env)) if (!(key in envBefore)) delete process.env[key]; Object.assign(process.env, envBefore); }
-    const chunks = store.readEvents("task_1", 0, 200).events.filter((event) => event.type === "model_output");
-    assert.ok(chunks.length > 1);
-    assert.equal(chunks.map((event) => event.summary).join(""), output);
-  } finally { await fixture.cleanup(); }
-});
-
-test("a real worker delivers a permission reply and exits; a continuation gets a fresh request ID", { timeout: 60_000 }, async () => {
-  const fixture = await runtimeFixture({ interaction: true });
-  const store = new TaskStore(fixture.root);
-  const manager = new BridgeTaskManager({ store, workspaceProvider: new DirectWorkspaceProvider(), pollIntervalMs: 0, spawnWorker: () => ({ pid: process.pid }) });
-  try {
-    store.createTask(makeTask({ workspace: fixture.root }), new Date().toISOString());
-    let priorId = "";
-    for (const attempt of [1, 2]) {
-      if (attempt === 2) { store.archiveResultToAttempt("task_1", 1); store.writeStatus("task_1", { status: "queued", attempt: 2, finished_at: null }); }
-      const child = spawn(process.execPath, [workerEntry, fixture.root, "task_1", String(attempt)], { env: { ...fixture.env, ZCODE_BRIDGE_HOST_PROFILE: JSON.stringify(fixture.host) }, windowsHide: true, stdio: ["ignore", "ignore", "pipe"] });
-      const childIdentity = await captureSpawnGenerationIdentity(child, createPlatformProbe());
-      assert.ok(childIdentity, `real worker attempt ${attempt} identity must be captured while it is live`);
-      let stderr = "";
-      child.stderr.on("data", (chunk) => { stderr += String(chunk); });
-      const exited = new Promise<number | null>((resolve) => child.once("close", resolve));
-      try {
-        const deadline = Date.now() + 5_000;
-        let id = "";
-        while (!id && Date.now() < deadline) {
-          id = String(store.readEvents("task_1", 0, 200).events.find((event) => event.type === "interaction_requested" && String(event.details?.request_id).startsWith(`${attempt}:`))?.details?.request_id ?? "");
-          if (!id) await delay(25);
-        }
-        assert.ok(id, stderr);
-        assert.notEqual(id, priorId);
-        assert.equal(store.readInteractionRequest("task_1", id)?.state, "pending");
-        await manager.replyToInteraction({ task_id: "task_1", request_id: id, decision: "allow" });
-        const exit = await Promise.race([exited, delay(15_000).then(() => "hung")]);
-        if (exit === "hung") {
-          const evidencePath = path.join(".run", "evidence", "failure-investigation", `runtime-remediation-hang-${Date.now()}-${attempt}.json`);
-          await mkdir(path.dirname(evidencePath), { recursive: true });
-          await writeFile(evidencePath, JSON.stringify({
-            attempt, request_id: id, exit,
-            child: { pid: child.pid, exit_code: child.exitCode, signal_code: child.signalCode, killed: child.killed },
-            status: store.readStatus("task_1"),
-            result: store.readResult("task_1"),
-            interaction: store.readInteractionRequest("task_1", id),
-            events_tail: store.readEvents("task_1", 0, 200).events.slice(-20),
-            stderr,
-          }, null, 2), "utf8");
-        }
-        assert.equal(exit, 0, stderr);
-        assert.equal(store.readResult("task_1")?.status, "completed");
-        priorId = id;
-      } finally { if (child.exitCode === null && child.signalCode === null && child.pid) await terminateFixtureChild(child, childIdentity); }
-    }
-  } finally { manager.dispose(); await fixture.cleanup(); }
-});
-
-/** ADR-009: holds the ORIGINAL ChildProcess. The shared capture re-verifies
- * the spawn generation after every await (exit state, not the close flag),
- * so a fingerprint read after an exit-and-recycle race is discarded and the
- * Windows terminator then refuses to signal. */
-async function terminateFixtureChild(
-  child: import("node:child_process").ChildProcess,
-  identity: { pid: number; fingerprint: string },
-): Promise<void> {
-  if (child.pid === undefined) return;
-  assert.equal(child.pid, identity.pid, "fixture cleanup keeps the captured process identity");
-  try {
-    await terminateProcessTree(child.pid, { expectedRootFingerprint: identity.fingerprint, killWaitMs: 5_000 });
-  } catch (error) {
-    if ((error as { code?: string }).code !== "process_tree_root_exited") throw error;
-    const scan = await verifyProcessTreeClaimantsClean([{ pid: child.pid, fingerprint: identity.fingerprint }]);
-    if (!scan.clean) throw error;
-  }
-}
-
-test("real worker reaches its 60-second timeout and exits with an unanswered interaction", { timeout: 80_000 }, async () => {
-  const fixture = await runtimeFixture({ interaction: true });
-  const store = new TaskStore(fixture.root);
-  store.createTask(makeTask({ workspace: fixture.root, timeout_ms: 60_000 }), new Date().toISOString());
-  const child = spawn(process.execPath, [workerEntry, fixture.root, "task_1", "1"], { env: { ...fixture.env, ZCODE_BRIDGE_HOST_PROFILE: JSON.stringify(fixture.host) }, windowsHide: true, stdio: ["ignore", "ignore", "pipe"] });
-  const childIdentity = await captureSpawnGenerationIdentity(child, createPlatformProbe());
-  assert.ok(childIdentity, "timeout worker identity must be captured while it is live");
-  let stderr = "";
-  child.stderr.on("data", (chunk) => { stderr += String(chunk); });
-  try {
-    const exited = new Promise<number | null>((resolve) => child.once("close", resolve));
-    const exit = await Promise.race([exited, delay(70_000).then(() => "hung")]);
-    assert.equal(exit, 0, stderr);
-    assert.equal(store.readResult("task_1")?.error_code, "timeout");
-    assert.equal(store.readStatus("task_1").worker_pid, null);
-    assert.equal(store.readStatus("task_1").zcode_pid, null);
-  } finally {
-    if (child.exitCode === null && child.signalCode === null && child.pid) await terminateFixtureChild(child, childIdentity);
-    await fixture.cleanup();
-  }
 });
 
 test("host-specific defaults and cache remain isolated, preserve unknown settings, and refresh on provider change", async () => {

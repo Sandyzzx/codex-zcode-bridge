@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { ZCodeAppServerAdapter } from "../src/adapters/zcode-app-server-adapter.js";
-import { createPlatformProbe, isProcessRunning, verifyProcessTreeClaimantsClean } from "../src/adapters/process-spawn.js";
+import { createPlatformProbe, isProcessRunning, verifyProcessTreeClaimantsClean, terminateProcessTree } from "../src/adapters/process-spawn.js";
 import { BridgeError } from "../src/runtime/errors.js";
 import type { TaskPackage, ZCodeRuntimeConfig } from "../src/interfaces.js";
 import { makeWorkspace, SESSION_ID, validReport } from "./helpers.js";
@@ -118,7 +118,9 @@ const input = readline.createInterface({ input: process.stdin });
 input.on("line", (line) => {
   const message = JSON.parse(line);
   fs.appendFileSync(requestLog, JSON.stringify(message) + "\n");
-  if (message.method === "session/create") {
+  if (message.method === "provider/updateAccountConfig") {
+    process.stdout.write(JSON.stringify({ id: message.id, result: {} }) + "\n");
+  } else if (message.method === "session/create") {
     process.stdout.write(JSON.stringify({ id: message.id, result: snapshot() }) + "\n");
   } else if (message.method === "session/setModel") {
     selected = message.params.model;
@@ -174,9 +176,18 @@ test("runtime auth refuses a lease revoked before its reply is written", async (
   const runtime = await makeFakeRuntime({ providerId: "account:bigmodel-start-plan", modelId: "GLM-5.3-Flash" }, true, false, undefined, true, null, undefined, 0, true);
   let valid = true;
   try {
+    const personalConfig = path.join(runtime.root, ".zcode", "v2", "provider_config.json");
+    await mkdir(path.dirname(personalConfig), { recursive: true });
+    await writeFile(runtime.config.providerBuiltinConfigFile, JSON.stringify({ config: { providerConfigRules: { providerRules: [{
+      providerId: "account:bigmodel-start-plan",
+      config: { builtinModelIds: ["GLM-5.3-Flash"], access: { type: "zhipu-account", mode: "start-plan", accountType: "bigmodel" } },
+    }] } } }));
+    await writeFile(personalConfig, JSON.stringify({ config: { providerConfigRules: { providerRules: [] } } }));
+    const runtimeConfig = { ...runtime.config, providerPersonalConfigFile: personalConfig };
     const adapter = new ZCodeAppServerAdapter({
-      resolver: { resolve: async () => runtime.config }, timeoutMs: 10_000,
+      resolver: { resolve: async () => runtimeConfig }, timeoutMs: 10_000,
       childEnvBase: { PATH: process.env.PATH },
+      startPlanProviderEntitled: true,
       resolveStartPlanRuntimeAuth: async () => {
         const credential = { apiKey: "synthetic-revoked-marker", expiresAt: Date.now() + 10_000, isValid: () => valid };
         queueMicrotask(() => { valid = false; });
@@ -1025,4 +1036,46 @@ test("forwards a permission decision to ZCode and resolves duplicate request IDs
   } finally {
     await rm(runtime.root, { recursive: true, force: true });
   }
+});
+
+test("ADR-027 successful execution stops its timer while real Windows cleanup uses an independent budget", {timeout:30000}, async()=>{
+  const runtime=await makeFakeRuntime(undefined,true,true,undefined,true);
+  let signal: AbortSignal|undefined, abortedDuringCleanup: boolean|undefined;
+  try{
+    const adapter=new ZCodeAppServerAdapter({resolver:{resolve:async()=>runtime.config},timeoutMs:5000,
+      childEnvBase:{PATH:process.env.PATH},homeDir:runtime.root,
+      resolveInteraction:async(_request,abort)=>{signal=abort;return {decision:'deny',reason:'controlled test'};},
+      terminateProcessTreeImpl:async(pid,options)=>{
+        await new Promise(resolve=>setTimeout(resolve,5200));
+        abortedDuringCleanup=signal?.aborted;
+        return terminateProcessTree(pid,options);
+      }});
+    const handle=await adapter.startTask({task,workspace:makeWorkspace(runtime.root),attempt:1});
+    const outcome=await adapter.getResult(handle);
+    assert.ok(signal);assert.equal(abortedDuringCleanup,false);
+    assert.equal(outcome.timedOut,false);assert.equal(outcome.cleanupVerified,true);
+    assert.equal(outcome.agentReport?.summary,validReport().summary);
+  }finally{await rm(runtime.root,{recursive:true,force:true});}
+});
+
+test("ADR-027 cleanup deadline publishes one unverified snapshot and ignores late real cleanup confirmation", {timeout:30000},async(t)=>{
+  const runtime=await makeFakeRuntime(undefined,true,false,undefined,true);
+  let release!:()=>void, entered=false, finished!:()=>void;
+  const gate=new Promise<void>(resolve=>{release=resolve;});
+  const done=new Promise<void>(resolve=>{finished=resolve;});
+  const snapshots:Array<import('../src/adapters/run-outcome.js').ZCodeRunOutcome>=[];
+  t.after(async()=>{release();if(entered)await done;await rm(runtime.root,{recursive:true,force:true});});
+  const adapter=new ZCodeAppServerAdapter({resolver:{resolve:async()=>runtime.config},timeoutMs:10000,testCleanupTimeoutMs:100,
+    childEnvBase:{PATH:process.env.PATH},homeDir:runtime.root,onOutcomeCheckpoint:o=>snapshots.push(o),
+    terminateProcessTreeImpl:async(pid,options)=>{entered=true;await gate;try{return await terminateProcessTree(pid,options);}finally{finished();}}});
+  const handle=await adapter.startTask({task,workspace:makeWorkspace(runtime.root),attempt:1});
+  const outcome=await adapter.getResult(handle);
+  assert.equal(outcome.cleanupVerified,false);assert.match(outcome.cleanupError??'',/cleanup deadline/);
+  assert.equal(outcome.timedOut,false);assert.ok(outcome.agentReport);
+  const checkpointCount=snapshots.length;
+  const until=Date.now()+5000;while(!entered&&Date.now()<until)await new Promise(r=>setTimeout(r,20));
+  assert.equal(entered,true);
+  release();await done;await new Promise(r=>setTimeout(r,30));
+  assert.equal(snapshots.length,checkpointCount);
+  assert.ok(snapshots.every(o=>o.cleanupVerified===false));
 });

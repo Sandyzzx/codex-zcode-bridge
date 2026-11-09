@@ -1,5 +1,7 @@
 # ADR-008：恢复会话协议帧与大审批输入
 
+> Applicability: PARTIALLY SUPERSEDED — ADR-029，2026-11-07。app-server 帧资源边界保留；旧 JSON full_request/64KB 事件预览协议已随 ADR-029 退役，SQLite 交互以当前 INTERFACES 为准。历史正文保留用于追溯。
+
 > Status: DECISION / Implemented proposal for maintainer review
 > Date: 2026-10-15
 

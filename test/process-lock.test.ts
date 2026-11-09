@@ -199,7 +199,7 @@ test("publication budget exhaustion fails visibly with the original code and lea
       attempts += 1;
       return errnoError("EPERM");
     }, () => tryAcquireProcessLock(lock)), (error: NodeJS.ErrnoException) => error.code === "EPERM");
-    assert.ok(attempts >= 2 && attempts <= 6, `retry must be bounded (attempts: ${attempts})`);
+    assert.ok(attempts >= 2 && attempts <= 110, `retry must be bounded by the five-second publication deadline (attempts: ${attempts})`);
     assert.equal(existsSync(lock), false, "nothing may be published on exhaustion");
     assert.deepEqual(readdirSync(root), [], "staging directories must be cleaned between attempts");
   } finally { rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }

@@ -1,0 +1,10 @@
+import fs from 'node:fs';import path from 'node:path';import {execFileSync} from 'node:child_process';
+import {selectAffectedTests} from './test-impact-selector.mjs';
+const [base,head]=process.argv.slice(2);
+if(!base||!head)throw new Error('usage: select-sqlite-stress <base> <head>');
+const changedFiles=execFileSync('git',['diff','--name-only',base,head],{encoding:'utf8'}).trim().split(/\r?\n/u).filter(Boolean);
+const map=JSON.parse(fs.readFileSync('test/test-impact-map.json','utf8'));
+const selection=selectAffectedTests({changedFiles,map});
+const required=selection.mode==='FULL_SUITE'||selection.affected_domains.includes('sqlite-persistence')||selection.stress_tests.length>0;
+console.log(JSON.stringify({required,mode:selection.mode,affected_domains:selection.affected_domains}));
+if(process.env.GITHUB_OUTPUT)fs.appendFileSync(process.env.GITHUB_OUTPUT,`required=${required}\n`);

@@ -1,6 +1,6 @@
 # Bridge 路线图与决策记录
 
-> Status: DECISION
+> Status: ARCHIVED — 历史规划，当前合同请从 decisions/README.md 路由。
 > Date: 2026-09-27
 > 当时的路线图与决策记录。其中仍然成立的结论应提炼进 `ARCHITECTURE.md` / `INTERFACES.md`；本文本身不作为当前事实来源。
 

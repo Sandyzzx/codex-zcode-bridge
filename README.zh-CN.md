@@ -2,7 +2,7 @@
 
 **Codex 负责规划、派发和验收，ZCode 在本机执行开发任务。**
 
-> **发布渠道。** 稳定版为 `v1.6.0`（Tag `codex-zcode-bridge-v1.6.0`），面向普通用户，不包含未经真实环境验收的 Start Plan 实验性集成。预览版为 `1.6.0-preview.3`，位于 `preview` 分支（独立 Marketplace `codex-zcode-bridge-preview`），面向开发者和测试用户，包含 Start Plan P0 实验性集成，但真实账户端到端流程**尚未验收**。Windows 单用户本地环境仍是已验证的部署目标；其他平台尚未完整验证。
+> **发布渠道。** 稳定版为 `v1.6.0`（Tag `codex-zcode-bridge-v1.6.0`），面向普通用户，不包含未经真实环境验收的 Start Plan 实验性集成。预览版为 `2.0.0-preview.1`，位于 `preview` 分支（独立 Marketplace `codex-zcode-bridge-preview`），面向开发者和测试用户，包含 Start Plan P0 实验性集成，但真实账户端到端流程**尚未验收**。Windows 单用户本地环境仍是已验证的部署目标；其他平台尚未完整验证。
 
 [English](README.md) · [项目仓库](https://github.com/Sandyzzx/codex-zcode-bridge) · [版本发布](https://github.com/Sandyzzx/codex-zcode-bridge/releases)
 
@@ -63,7 +63,7 @@ codex plugin marketplace upgrade codex-zcode-bridge-preview
 如需固定到已验收的发布快照而不是跟随分支，使用预览版 Tag 注册 Marketplace：
 
 ```sh
-codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-preview-v1.6.0-preview.3
+codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-preview-v2.0.0-preview.1
 ```
 
 **分支用于持续更新，Tag 用于固定快照；Tag 本身不会自动跟踪后续预览提交。** 如需在已有 Marketplace 上切换分支或固定版本，重新执行 `marketplace add ... --ref <ref>`（必要时先用 `codex plugin marketplace remove` 移除后重新添加）；若实际行为与本文不符，以 `codex plugin marketplace add --help` 为准，不要猜测参数。
@@ -100,7 +100,7 @@ Windows 首次运行配置位于 `%USERPROFILE%\.codex\codex-zcode-bridge\runtim
 
 SQLite 默认使用当前用户的数据根。不要手工改写 SQLite 表、Authority Receipt 或 Bootstrap Marker。
 
-在受支持的 Windows 单用户可信本地部署中，SQLite 使用固定受信任的 `yolo` 执行档案，与 JSON 路径的普通无人值守编码工作流一致。它以当前 Windows 账户权限运行，不是沙箱，也不是提权。工作区内的普通读取、编辑、构建、测试和任务范围内清理可以自动执行；Push、Merge、Tag、Release、生产 Authority 切换、任务范围外删除、凭据修改和真实生产任务数据访问仍需用户明确授权。任务 Prompt、Skill、worktree 和路径清单不能自行授予这些权限。不要在 Prompt 中放入凭据。
+在受支持的 Windows 单用户可信本地部署中，SQLite 使用固定受信任的 `yolo` 执行档案。它以当前 Windows 账户权限运行，不是沙箱，也不是提权。工作区内的普通读取、编辑、构建、测试和任务范围内清理可以自动执行；Push、Merge、Tag、Release、生产 Authority 切换、任务范围外删除、凭据修改和真实生产任务数据访问仍需用户明确授权。任务 Prompt、Skill、worktree 和路径清单不能自行授予这些权限。不要在 Prompt 中放入凭据。
 
 ## 已知限制与排障
 

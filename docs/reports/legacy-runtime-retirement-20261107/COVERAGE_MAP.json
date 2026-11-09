@@ -1,0 +1,1097 @@
+{
+  "baseline": "a46137fe46b567271a7756be819361132625278c",
+  "notes": [
+    "Static declarations, not runtime test count. Retired names include renamed and ported tests; evaluate replacement scope, not raw count.",
+    "R7 event/usage persistence was never provided by the production SQLite path. Removing JSON-only tests does not claim that gap is fixed."
+  ],
+  "files": [
+    {
+      "file": "test/account-provider.test.ts",
+      "status": "retained",
+      "before_declarations": 2,
+      "after_declarations": 2,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/agent-report.test.ts",
+      "status": "retained",
+      "before_declarations": 7,
+      "after_declarations": 7,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/attention-wait.test.ts",
+      "status": "split_or_ported",
+      "before_declarations": 6,
+      "after_declarations": 2,
+      "retired_names": [
+        "\"attention wait ignores ordinary events and ends on a current-Attempt pending request\"",
+        "\"attention wait returns a terminal snapshot without polling\"",
+        "\"attention wait ends when the Attempt changes\"",
+        "\"attention read failures are not converted into empty success\"",
+        "\"attention validates cursor inputs before entering the wait loop\"",
+        "\"JSON Authority explicitly rejects attention waiting\""
+      ],
+      "replacement": [
+        "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
+        "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
+        "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
+        "test/sqlite-candidate/wp6c/result-recovery.test.mjs"
+      ]
+    },
+    {
+      "file": "test/audit-remediation.test.ts",
+      "status": "retired",
+      "before_declarations": 25,
+      "after_declarations": 0,
+      "retired_names": [
+        "\"cooperative cancellation waits for the verified worker result without a second termination\"",
+        "\"a worker result arriving after the manager's verified cancellation is stale and cannot replace it\"",
+        "\"a taskkill exit race requires a verified terminal result and dead recorded processes\"",
+        "\"a termination failure stays occupied; a later cancel releases only after probes AND the recorded-tree scan\"",
+        "\"legacy cleanup without executor identities releases through the same scan gate\"",
+        "\"a scan that still observes live claimants keeps the retry occupied\"",
+        "\"legacy cleanup without executor identities stays occupied when the probe cannot verify exit\"",
+        "\"a cleanup race recheck that answers unknown keeps cleanup_unverified and the occupation\"",
+        "\"a cleanup race recheck that answers alive keeps cleanup_unverified and reserves the directory\"",
+        "\"a cleanup race that proves only the runtime exited keeps the occupation while the worker is alive\"",
+        "\"two real workers can enter an attempt only once; terminal and stale attempts never execute\"",
+        "\"separate manager processes serialize submissions sharing an execution directory\"",
+        "\"interaction answers are attempt-scoped and parameter collisions are refused\"",
+        "\"invalid existing runtime settings fail closed while missing settings permit discovery\"",
+        "\"oversized constraints are rejected before accepting a task or continuation\"",
+        "\"corrupt status is isolated and does not block a healthy unrelated task\"",
+        "\"continuation preparation survives interruption and old results cannot finish new attempts\"",
+        "\"runtime cancellation normalizes to cancelled without an invalid-report failure\"",
+        "\"a known session survives adapter failure and is supplied to continuation\"",
+        "\"cleanup failure reserves the execution path until termination is verified\"",
+        "\"an already-exited runtime makes cleanup verification idempotent without a kill\"",
+        "\"process lock protects asynchronous sections across manager instances\"",
+        "\"cancelling an orphaned live runtime reaches a terminal state before releasing queued work\"",
+        "\"a worker already in flight cannot overwrite a later attempt\"",
+        "\"event append reads only a tail byte and paged Unicode events remain complete\""
+      ],
+      "replacement": [
+        "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
+        "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
+        "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
+        "test/sqlite-candidate/wp6c/result-recovery.test.mjs"
+      ]
+    },
+    {
+      "file": "test/batch2-evidence.test.ts",
+      "status": "split_or_ported",
+      "before_declarations": 22,
+      "after_declarations": 10,
+      "retired_names": [
+        "\"B1-01: multibyte events split across read blocks stay whole; complete bad lines are counted, good ones preserved\"",
+        "\"B1-02: a half-written tail is not consumed; after completion it is returned exactly once\"",
+        "\"B1-03: a budget consumed by corrupt lines still advances the byte cursor and reports incompleteness\"",
+        "\"B1-04: a missing/corrupt/out-of-range index falls back safely; replaced or truncated logs invalidate cursors\"",
+        "\"B1-05: legacy and bounded pagination reassemble identically; summary merging counts separately from corruption\"",
+        "\"B1-06: ownership/state JSON corruption never adopts the skip-bad-line policy; isolation keeps other tasks safe\"",
+        "\"B3-01: attempt-1 writers are fenced out after attempt 2 starts (heartbeat, snapshot, result, status)\"",
+        "\"B3-02: a replaced writer or stale revision cannot overwrite current facts within one attempt\"",
+        "\"B3-03: a lost or corrupt snapshot degrades to diagnostics without fake values; clock skew downgrades evidence\"",
+        "\"B3-04: old tasks without snapshots and new tasks with them coexist; clients keep working\"",
+        "\"B2-04: a completed turn survives a crash via checkpoint; an old attempt cannot overwrite a new one\"",
+        "\"B4-04: worker persistence keeps usage/timing for success, failure, cancel, and checkpoint paths; old files read as absent\""
+      ],
+      "replacement": [
+        "test/failure-facts-integration.test.ts",
+        "test/batch2-evidence.test.ts",
+        "test/normalize-result.test.ts"
+      ]
+    },
+    {
+      "file": "test/batch2-performance.test.ts",
+      "status": "retired",
+      "before_declarations": 1,
+      "after_declarations": 0,
+      "retired_names": [
+        "\"B3-05: status returns within budget while probes are slow; bounded scans respect the byte budget; scale trend recorded\""
+      ],
+      "replacement": [
+        "test/sqlite-resource-stress.test.mjs (new SQLite workload, not equivalent JSON benchmark)"
+      ]
+    },
+    {
+      "file": "test/browser-executable.test.ts",
+      "status": "retained",
+      "before_declarations": 5,
+      "after_declarations": 5,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/browser-host-adapter.test.ts",
+      "status": "retained",
+      "before_declarations": 8,
+      "after_declarations": 8,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/browser-host.test.ts",
+      "status": "retained",
+      "before_declarations": 14,
+      "after_declarations": 14,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/browser-protocol.test.ts",
+      "status": "retained",
+      "before_declarations": 7,
+      "after_declarations": 7,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/browser-runtime-close.test.ts",
+      "status": "retained",
+      "before_declarations": 4,
+      "after_declarations": 4,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/child-env.test.ts",
+      "status": "retained",
+      "before_declarations": 3,
+      "after_declarations": 3,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/codex-master-token-usage.test.ts",
+      "status": "retained",
+      "before_declarations": 8,
+      "after_declarations": 8,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/codex-rollout-token-source.test.ts",
+      "status": "retained",
+      "before_declarations": 5,
+      "after_declarations": 5,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/codex-rollout-token-tail.test.ts",
+      "status": "retained",
+      "before_declarations": 8,
+      "after_declarations": 8,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/direct-workspace-provider.test.ts",
+      "status": "retained",
+      "before_declarations": 3,
+      "after_declarations": 3,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/failure-facts-integration.test.ts",
+      "status": "split_or_ported",
+      "before_declarations": 33,
+      "after_declarations": 28,
+      "retired_names": [
+        "\"D1a+D1b: sentinel-saturated turn failures leak nothing into facts, events, results, or logs\"",
+        "\"D3: a failing facts write and failing events never change the original result, and no IO text escapes\"",
+        "\"D5: every ownership mismatch is rejected inside the dedicated entry, and the same state.lock serializes writers\"",
+        "\"D4+D6: stale workers, attempt switches, duplicates, divergent candidates, and corrupt files never replace a root cause\"",
+        "\"L1: cleanup_failed keeps its lifecycle priority while the established quota root cause is preserved\"",
+        "\"L2: deleted, corrupt, and forged facts never influence status, results, or any manager/ledger consumption\""
+      ],
+      "replacement": [
+        "test/failure-facts-integration.test.ts",
+        "test/batch2-evidence.test.ts",
+        "test/normalize-result.test.ts"
+      ]
+    },
+    {
+      "file": "test/feedback-template.test.ts",
+      "status": "retained",
+      "before_declarations": 11,
+      "after_declarations": 11,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/git-worktree-provider.test.ts",
+      "status": "retired",
+      "before_declarations": 3,
+      "after_declarations": 0,
+      "retired_names": [
+        "\"snapshots dirty source files into an isolated task worktree and reuses it\"",
+        "\"rejects non-Git workspaces and invalid task identifiers\"",
+        "\"excludes common credential files from the task snapshot without changing the source index\""
+      ],
+      "replacement": [
+        "Retired CLI/provider behavior; shared native identity tests and app-server suite retained"
+      ]
+    },
+    {
+      "file": "test/host-and-index.test.ts",
+      "status": "retained",
+      "before_declarations": 6,
+      "after_declarations": 6,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/interaction-large-input.test.ts",
+      "status": "retired",
+      "before_declarations": 19,
+      "after_declarations": 0,
+      "retired_names": [
+        "\"a request over the 1 MiB limit is rejected with actual and limit bytes and no file is created\"",
+        "\"duplicate ids compare the complete input, not a bounded preview\"",
+        "\"records carry byte count and SHA256 metadata and stay isolated per attempt\"",
+        "\"integrity verification rejects missing, corrupt, and edited full records\"",
+        "\"publishing a small request keeps the compatible full-detail event shape\"",
+        "\"publishing a large request emits one bounded preview event with a full-request reference\"",
+        "\"when the event log is out of capacity, publishing fails with an explicit recoverable reason\"",
+        "\"interaction failure evidence capture preserves sanitized synthetic context\"",
+        "\"a 40 KiB Write approval round-trips through the store with the full input in the event\"",
+        "\"an 80 KiB Write approval publishes a bounded preview with a full-request reference and still round-trips\"",
+        "\"an over-1MiB Write approval is declined with actual/limit and split advice; nothing executes and no approval hangs\"",
+        "\"approving against a corrupt full record is refused; the worker declines explicitly and nothing executes\"",
+        "\"an approval against an edited (hash-mismatched) full record is refused\"",
+        "\"a large record with its integrity metadata stripped cannot pass verification as legacy (review probe)\"",
+        "\"partial or wrong-type integrity metadata fails verification; genuinely legacy small records stay compatible\"",
+        "\"verification still enforces the 1 MiB persistence limit even with self-consistent metadata\"",
+        "\"approving a large record whose metadata was stripped is refused and never recorded as granted\"",
+        "\"the full record disappearing mid-wait declines explicitly instead of polling forever\"",
+        "\"an answered record whose params were edited (self-consistent metadata) is not consumed as authorization\""
+      ],
+      "replacement": [
+        "test/sqlite-candidate/wp6b2b1/lifecycle-port.test.mjs",
+        "test/sqlite-candidate/wp6b-wiring/composition.test.ts"
+      ]
+    },
+    {
+      "file": "test/json-history-result-exceptions.test.ts",
+      "status": "retained",
+      "before_declarations": 3,
+      "after_declarations": 3,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/json-writer-quiescence.test.ts",
+      "status": "retired",
+      "before_declarations": 27,
+      "after_declarations": 0,
+      "retired_names": [
+        "\"the final JSON fence is published only after a durable atomic replacement\"",
+        "\"a failed durable fence replacement never reports a successful seal\"",
+        "\"BridgeTaskManager closes admission and queue dispatch while preserving queued JSON history\"",
+        "\"sealed root rejects a late fenced TaskStore write before creating task paths\"",
+        "\"an unconfigured TaskStore cannot bypass an active writer registry or fence\"",
+        "\"corrupt quiescence state fails closed for an otherwise registered writer\"",
+        "\"a Manager roster lease with unknown identity prevents sealing and remains recorded\"",
+        "\"a started terminal Task without exact Worker identity prevents sealing\"",
+        "\"a queued continuation still probes every exact identity from its started historical Attempt\"",
+        "\"a queued current Attempt with retained executor PIDs is still probed before sealing\"",
+        "\"historical Attempt live or identity-free evidence keeps the JSON fence draining\"",
+        "\"pre-boot terminal Attempts without exact identity are safely distinguishable from live uncertainty\"",
+        "\"a pre-boot historical Attempt behind a queued continuation is excluded without weakening post-boot uncertainty\"",
+        "\"pre-boot history cannot hide a current result or malformed cleanup evidence\"",
+        "\"trusted Result timing and cancellation-before-start replace missing executor identity only after reboot proof\"",
+        "\"historical cleanup-failure evidence must be complete and well-formed before sealing\"",
+        "\"a complete historical cleanup-failure record can be archived after its executor exited\"",
+        "\"the production Windows process probe confirms a real exited cleanup member before sealing\"",
+        "\"the production Windows process probe keeps the fence draining for a real live cleanup member\"",
+        "\"a live or unidentifiable historical cleanup member keeps the JSON fence draining\"",
+        "\"a historical cleanup-failure record alone still requires exact executor identity\"",
+        "\"unknown Manager identity blocks sealing and a registered Worker can drain without writing after seal\"",
+        "\"TaskStore mutation and drain transition serialize across processes\"",
+        "\"FailureFacts mutation and seal serialize across processes\"",
+        "\"recovery does not respawn a never-started Worker after JSON drain begins\"",
+        "\"open-fence recovery respawn registers and binds its Worker lease\"",
+        "\"worker identity evidence persists through a delayed probe and seal confirms exit from exact identity\""
+      ],
+      "replacement": [
+        "Retired JSON migration/drain protocol; SQLite Fresh Bootstrap and v13 upgrade remain independently tested"
+      ]
+    },
+    {
+      "file": "test/late-identity-lifecycle.test.ts",
+      "status": "retired",
+      "before_declarations": 4,
+      "after_declarations": 0,
+      "retired_names": [
+        "\"identity resolving within the reap budget is persisted before the worker returns\"",
+        "\"identity settled explicitly after removal is dropped and never resurrects the store (kills the self-identity fence mutant)\"",
+        "\"a genuinely rejecting identity probe on the failure path has no unhandled rejection and no resurrection (kills the fence mutant too)\"",
+        "\"the real adapter's late runtime identity settled after removal is reaped identically (kills the runtime fence mutant)\""
+      ],
+      "replacement": [
+        "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
+        "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
+        "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
+        "test/sqlite-candidate/wp6c/result-recovery.test.mjs"
+      ]
+    },
+    {
+      "file": "test/ledger-bridge-review.test.ts",
+      "status": "retained",
+      "before_declarations": 12,
+      "after_declarations": 12,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/ledger-core.test.ts",
+      "status": "retained",
+      "before_declarations": 14,
+      "after_declarations": 14,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/ledger-mcp.test.ts",
+      "status": "retained",
+      "before_declarations": 2,
+      "after_declarations": 2,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/legacy-retry-generation.test.ts",
+      "status": "retired",
+      "before_declarations": 2,
+      "after_declarations": 0,
+      "retired_names": [
+        "\"C1: after a transient first generation, cancelling the live second generation really terminates it with its own identity\"",
+        "\"C1: a late identity capture from generation 1 never overwrites generation 2's identity\""
+      ],
+      "replacement": [
+        "Retired CLI/provider behavior; shared native identity tests and app-server suite retained"
+      ]
+    },
+    {
+      "file": "test/manager-claimant-gate.test.ts",
+      "status": "retired",
+      "before_declarations": 7,
+      "after_declarations": 0,
+      "retired_names": [
+        "\"manager gate P1-B: a foreign-reused worker pid with an old-generation child keeps the task and directory occupied\"",
+        "\"manager gate P1-A: the recorded root vanishing between enumeration and hold keeps occupancy through its live child\"",
+        "\"manager gate: a latched task retains the worker SLOT against a different execution directory at max concurrency 1\"",
+        "\"manager gate: a rejected scan keeps the latch instead of releasing or narrowing\"",
+        "\"manager gate S1: a pid foreign to its own record but a live child of another dead recorded member keeps occupancy\"",
+        "\"manager gate S2: a false scan persists its observed members and later cancels keep scanning them\"",
+        "\"manager gate S2: a rejected scan after observing a candidate retains it across later cancels\""
+      ],
+      "replacement": [
+        "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
+        "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
+        "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
+        "test/sqlite-candidate/wp6c/result-recovery.test.mjs"
+      ]
+    },
+    {
+      "file": "test/manager-recovery-latch.test.ts",
+      "status": "retired",
+      "before_declarations": 7,
+      "after_declarations": 0,
+      "retired_names": [
+        "\"R1: recoverTasks cannot release a task whose latched cleanup failure carries known members\"",
+        "\"R1/R3: a corrupt failure record fails the later cancel closed instead of narrowing the scan\"",
+        "\"R1 boundary: a latched terminal task WITHOUT a member-bearing failure record still recovers via probes\"",
+        "\"R3: the durable status marker recovers the member set when the failure record is missing\"",
+        "\"R3 addendum: a failure record with a missing member_pids field fails closed\"",
+        "\"R3 addendum: a truncated member marker cannot restore the full set and fails closed\"",
+        "\"R3 addendum 13:39: three consecutive terminator failures never wash an incomplete member set back to complete\""
+      ],
+      "replacement": [
+        "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
+        "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
+        "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
+        "test/sqlite-candidate/wp6c/result-recovery.test.mjs"
+      ]
+    },
+    {
+      "file": "test/mcp-result-v14.test.mjs",
+      "status": "retained",
+      "before_declarations": 1,
+      "after_declarations": 1,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/mcp-server.test.ts",
+      "status": "retained",
+      "before_declarations": 22,
+      "after_declarations": 22,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/mcp-stdio-entry.test.ts",
+      "status": "retained",
+      "before_declarations": 4,
+      "after_declarations": 4,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/migrate-json-to-sqlite-cli.test.ts",
+      "status": "retired",
+      "before_declarations": 1,
+      "after_declarations": 0,
+      "retired_names": [
+        "\"the historical JSON-to-SQLite CLI refuses execution and has no supported npm entry\""
+      ],
+      "replacement": [
+        "Retired JSON migration/drain protocol; SQLite Fresh Bootstrap and v13 upgrade remain independently tested"
+      ]
+    },
+    {
+      "file": "test/node-runtime.test.ts",
+      "status": "retained",
+      "before_declarations": 3,
+      "after_declarations": 3,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/observation-lifecycle.test.ts",
+      "status": "split_or_ported",
+      "before_declarations": 27,
+      "after_declarations": 7,
+      "retired_names": [
+        "\"a recovery lock release error cannot retain a completed single-flight promise forever\"",
+        "\"A1-01: long quiet tool execution with a fresh heartbeat stays running and is never worker_lost\"",
+        "\"A1-02: a pending permission request past the stall threshold shows waiting, not failure; the answer resumes executing\"",
+        "\"A1-03: a fresh heartbeat with stale business events shows the stall hint without masking or re-dispatch\"",
+        "\"A1-04: an unknown probe never kills a task, keeps occupancy, and blocks the same directory\"",
+        "\"A1-05: a committed result is never downgraded by a stale running/stalled observation\"",
+        "\"A1-06: status, events, and doctor share one judger verdict for one snapshot\"",
+        "\"terminal cleanup recovery releases only a probe-confirmed exit and pumps the waiting path\"",
+        "\"terminal cleanup recovery retains occupancy when process exit is unknown\"",
+        "\"terminal cleanup recovery discards a stale probe after its PID snapshot changes\"",
+        "\"A2-01: a reused PID counts the old executor exited and cancel never signals the new owner\"",
+        "\"A2-02: probe permission errors, timeouts, and fingerprint failures answer unknown and keep the attempt\"",
+        "\"A2-03: a manager restart recovers the same live worker without creating a second executor\"",
+        "\"A2-04: cancel racing a natural exit keeps the worker result; a confirmed exit without a result is idempotent\"",
+        "\"A2-05: an exited worker with a live runtime keeps the directory reserved\"",
+        "\"A2-06: a probe result computed against an older snapshot cannot touch a newer state\"",
+        "\"A3-01: synthesized tasks localize the failure stage\"",
+        "\"A3-02: status reads stay fast while a slow cancellation holds the manager mutex\"",
+        "\"A3-03: diagnostics projections never expose task bodies, credentials, or reasoning\"",
+        "\"A3-04: heartbeats never grow the public event log; failures keep count + last seen across restarts\""
+      ],
+      "replacement": [
+        "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
+        "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
+        "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
+        "test/sqlite-candidate/wp6c/result-recovery.test.mjs"
+      ]
+    },
+    {
+      "file": "test/owned-fixture-cleanup.test.ts",
+      "status": "retained",
+      "before_declarations": 3,
+      "after_declarations": 3,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/process-lock.test.ts",
+      "status": "retained",
+      "before_declarations": 19,
+      "after_declarations": 19,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/process-spawn.test.ts",
+      "status": "retained",
+      "before_declarations": 5,
+      "after_declarations": 5,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/run-worker-task.test.ts",
+      "status": "split_or_ported",
+      "before_declarations": 17,
+      "after_declarations": 1,
+      "retired_names": [
+        "\"successful run persists running state, attempt evidence, logs, and a completed result\"",
+        "\"runtime build provenance is stored in attempt-private metadata\"",
+        "\"Bridge provenance mismatch commits failure before resolver or adapter side effects\"",
+        "\"cancel intent recorded during a running attempt reaches the adapter\"",
+        "\"needs_master_decision=true maps to waiting_for_master, not completed\"",
+        "\"adapter failure maps to failed with the adapter error code preserved\"",
+        "\"cleanup failure persists recorded member PIDs before committing the terminal result\"",
+        "\"cleanup_failed exceptions preserve member evidence for recovery\"",
+        "\"injected resolver failure surfaces as a distinct config error before any adapter call\"",
+        "\"a pre-recorded cancel intent finishes cancelled without touching the adapter\"",
+        "\"continuation spec drives continueTask with feedback and prior evidence\"",
+        "\"the shipped Worker bundle records its actual build identity without starting ZCode\"",
+        "\"Bridge launch marker makes a missing provenance environment field fail before ZCode startup\"",
+        "\"legacy direct Worker launch records unverified and remains compatible\"",
+        "\"identity evidence survives a 2.5s probe inside the 5.5s reap budget and lands before terminal artifacts\"",
+        "\"identity reap window still closes on a probe that never answers, without unbounded waiting\""
+      ],
+      "replacement": [
+        "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
+        "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
+        "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
+        "test/sqlite-candidate/wp6c/result-recovery.test.mjs"
+      ]
+    },
+    {
+      "file": "test/runtime-preferences.test.ts",
+      "status": "retained",
+      "before_declarations": 2,
+      "after_declarations": 2,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/runtime-provenance.test.ts",
+      "status": "retained",
+      "before_declarations": 8,
+      "after_declarations": 8,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/runtime-remediation.test.ts",
+      "status": "split_or_ported",
+      "before_declarations": 7,
+      "after_declarations": 4,
+      "retired_names": [
+        "\"worker preserves every visible output character across multiple bounded events\"",
+        "\"a real worker delivers a permission reply and exits; a continuation gets a fresh request ID\"",
+        "\"real worker reaches its 60-second timeout and exits with an unanswered interaction\""
+      ],
+      "replacement": [
+        "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
+        "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
+        "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
+        "test/sqlite-candidate/wp6c/result-recovery.test.mjs"
+      ]
+    },
+    {
+      "file": "test/runtime-resolver.test.ts",
+      "status": "retained",
+      "before_declarations": 12,
+      "after_declarations": 12,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/runtime/sqlite-bootstrap-cross-process.test.ts",
+      "status": "retained",
+      "before_declarations": 1,
+      "after_declarations": 1,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/runtime/sqlite-fresh-install.test.ts",
+      "status": "retained",
+      "before_declarations": 1,
+      "after_declarations": 1,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/runtime/sqlite-install-config.test.ts",
+      "status": "retained",
+      "before_declarations": 1,
+      "after_declarations": 1,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/runtime/trusted-local-policy-config.test.ts",
+      "status": "retained",
+      "before_declarations": 2,
+      "after_declarations": 2,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/session-frames.test.ts",
+      "status": "retained",
+      "before_declarations": 10,
+      "after_declarations": 10,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/skill-policy.test.ts",
+      "status": "retained",
+      "before_declarations": 7,
+      "after_declarations": 7,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/spawn-generation-identity.test.ts",
+      "status": "split_or_ported",
+      "before_declarations": 13,
+      "after_declarations": 10,
+      "retired_names": [
+        "\"consumer: a live child's exact identity is handed to the terminator through the adapter chain\"",
+        "\"consumer: an identity that raced the child's exit is never handed over (null expected, refused in production)\"",
+        "\"consumer: an already-exited child is never terminated (exit ends the provable generation)\""
+      ],
+      "replacement": [
+        "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
+        "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
+        "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
+        "test/sqlite-candidate/wp6c/result-recovery.test.mjs"
+      ]
+    },
+    {
+      "file": "test/spawn-worker-stderr.test.ts",
+      "status": "retained",
+      "before_declarations": 1,
+      "after_declarations": 1,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/sqlite-candidate/wp6b-wiring/admission-to-claim.test.ts",
+      "status": "retained",
+      "before_declarations": 2,
+      "after_declarations": 2,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/sqlite-candidate/wp6b-wiring/bootstrap.test.ts",
+      "status": "retained",
+      "before_declarations": 7,
+      "after_declarations": 7,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
+      "status": "split_or_ported",
+      "before_declarations": 31,
+      "after_declarations": 30,
+      "retired_names": [
+        "\"JSON Worker path lazily imports the unchanged TaskStore/Adapter runner only without fd 3\"",
+        "\"MVP offline cutover archives sealed JSON and starts the sole empty SQLite MCP stdio Authority\""
+      ],
+      "replacement": [
+        "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
+        "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
+        "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
+        "test/sqlite-candidate/wp6c/result-recovery.test.mjs"
+      ]
+    },
+    {
+      "file": "test/sqlite-candidate/wp6b-wiring/json-authority-cutover.test.ts",
+      "status": "retired",
+      "before_declarations": 8,
+      "after_declarations": 0,
+      "retired_names": [
+        "\"stop-the-world migration preserves raw history and starts an empty SQLite Authority\"",
+        "\"raw history archive records legacy anomalies without following workspace links\"",
+        "\"a failed durable publication marker transition remains fail-closed\"",
+        "\"archive-first migration rejects archive identity drift before creating a SQLite target\"",
+        "\"archive payload tampering fails before a SQLite target is created\"",
+        "\"sealed JSON drift after archive creation fails before a SQLite target is created\"",
+        "\"fresh SQLite requires a durable receipt and does not depend on legacy JSON history\"",
+        "\"migration rejects unsafe source records and unknown files before staging\""
+      ],
+      "replacement": [
+        "Retired JSON migration/drain protocol; SQLite Fresh Bootstrap and v13 upgrade remain independently tested"
+      ]
+    },
+    {
+      "file": "test/sqlite-candidate/wp6b-wiring/lifecycle-gate.test.ts",
+      "status": "retained",
+      "before_declarations": 3,
+      "after_declarations": 3,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
+      "status": "retained",
+      "before_declarations": 13,
+      "after_declarations": 13,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/sqlite-candidate/wp6b-wiring/trusted-local-policy.test.ts",
+      "status": "retained",
+      "before_declarations": 8,
+      "after_declarations": 8,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/sqlite-candidate/wp6b2b1/admission.test.mjs",
+      "status": "retained",
+      "before_declarations": 34,
+      "after_declarations": 34,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/sqlite-candidate/wp6b2b1/launch-bootstrap.test.ts",
+      "status": "retained",
+      "before_declarations": 4,
+      "after_declarations": 4,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/sqlite-candidate/wp6b2b1/launch-identity.test.mjs",
+      "status": "retained",
+      "before_declarations": 2,
+      "after_declarations": 2,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/sqlite-candidate/wp6b2b1/lifecycle-port.test.mjs",
+      "status": "retained",
+      "before_declarations": 28,
+      "after_declarations": 29,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/sqlite-candidate/wp6b2b1/schema-integrity.test.mjs",
+      "status": "retained",
+      "before_declarations": 6,
+      "after_declarations": 6,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/sqlite-candidate/wp6c/admin-abandonment.test.mjs",
+      "status": "split_or_ported",
+      "before_declarations": 6,
+      "after_declarations": 6,
+      "retired_names": [
+        "'the compiled operator CLI succeeds in a child process and performs the exact CAS'"
+      ],
+      "replacement": [
+        "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
+        "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
+        "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
+        "test/sqlite-candidate/wp6c/result-recovery.test.mjs"
+      ]
+    },
+    {
+      "file": "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
+      "status": "retained",
+      "before_declarations": 24,
+      "after_declarations": 24,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/sqlite-candidate/wp6c/result-recovery.test.mjs",
+      "status": "retained",
+      "before_declarations": 29,
+      "after_declarations": 29,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/sqlite-doctor.test.ts",
+      "status": "retained",
+      "before_declarations": 6,
+      "after_declarations": 6,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/sqlite-result-v14.test.mjs",
+      "status": "retained",
+      "before_declarations": 7,
+      "after_declarations": 7,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/sqlite-scoped-hold-scheduler.test.ts",
+      "status": "retained",
+      "before_declarations": 5,
+      "after_declarations": 5,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/sqlite-v14-upgrade.test.mjs",
+      "status": "retained",
+      "before_declarations": 7,
+      "after_declarations": 7,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/task-feedback.test.ts",
+      "status": "retained",
+      "before_declarations": 7,
+      "after_declarations": 7,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/task-manager.test.ts",
+      "status": "retired",
+      "before_declarations": 33,
+      "after_declarations": 0,
+      "retired_names": [
+        "\"invalid task packages are rejected with TASK_INVALID and leave no records\"",
+        "\"same task_id and payload replays the original receipt; changed payload conflicts\"",
+        "\"with a free slot the task starts immediately as running with a persisted pid\"",
+        "\"each scheduling operation validates historical records once and observes later changes\"",
+        "\"getFeedback aggregates allowlisted current-attempt events across event pages\"",
+        "\"status snapshot reads bypass the manager scheduling lock\"",
+        "\"a second task queues FIFO and starts only after the slot frees\"",
+        "\"different project roots run concurrently while the same mutable directory is serialized\"",
+        "\"multiple sessions of one project may run in distinct supplied worktrees\"",
+        "\"parallel recovery keeps live workers in their slots and starts queued work after a worker is lost\"",
+        "\"FIFO order is honored for multiple queued tasks (created_at ordering)\"",
+        "\"getResult enforces TASK_NOT_FOUND and TASK_NOT_FINISHED and returns the normalized result\"",
+        "\"getResult returns a waiting_for_master result for the finished attempt\"",
+        "\"interaction replies enforce request state and map permission/input answers\"",
+        "\"an adapter failure produces failed with error_code and a master-review flag\"",
+        "\"a dead worker without a terminal result reconciles to failed/worker_lost and frees the slot\"",
+        "\"a mid-spawn running status with no pid is left alone during the grace and respawned after it\"",
+        "\"a worker that dies before starting is respawned immediately on the same attempt\"",
+        "\"a replacement that also dies before starting is finalized once its claim goes stale\"",
+        "\"a worker that started but died is never respawned; a persisted result still wins during the grace\"",
+        "\"recovery of persisted queued tasks starts them FIFO; a live worker keeps its slot\"",
+        "\"continueTask archives prior evidence, passes feedback through, and increments attempt\"",
+        "\"continueTask is rejected from non-terminal states and for empty feedback\"",
+        "\"cancelling a queued task cancels it immediately without any worker\"",
+        "\"cancelling a running task terminates and verifies the process tree before recording cancelled\"",
+        "\"a second cancel queued during verified cleanup observes terminal state without a second transaction\"",
+        "\"Worker cleanup evidence and terminal commit survive a later manager cleanup failure\"",
+        "\"when tree termination cannot be verified the task stays nonterminal and CANCEL_FAILED is raised\"",
+        "\"a worker that completes during cancellation wins: the persisted terminal result is kept\"",
+        "\"cancelling a terminal task is rejected\"",
+        "\"workspace canonicalization: the persisted task stores the canonical path\"",
+        "\"spawn failure of the worker process records failed/spawn_failed and frees the slot\"",
+        "\"runWorkerTask through the harness end-to-end reaches a terminal TaskStatusRecord\""
+      ],
+      "replacement": [
+        "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
+        "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
+        "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
+        "test/sqlite-candidate/wp6c/result-recovery.test.mjs"
+      ]
+    },
+    {
+      "file": "test/task-prompt.test.ts",
+      "status": "retained",
+      "before_declarations": 8,
+      "after_declarations": 8,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/task-store.test.ts",
+      "status": "retired",
+      "before_declarations": 9,
+      "after_declarations": 0,
+      "retired_names": [
+        "\"create/read roundtrip and duplicate rejection\"",
+        "\"interaction requests are durable, deduplicated, and answered atomically\"",
+        "\"interaction params persist complete up to 1 MiB (ADR-008); the old 32 KB limit is gone\"",
+        "\"task evidence uses private POSIX permissions\"",
+        "\"invalid task ids are rejected before touching the filesystem\"",
+        "\"writeStatus merges patches, bumps updated_at, and leaves no temp files\"",
+        "\"corrupt status records are reported, not silently accepted\"",
+        "\"logs are append-only, separate, and byte-bounded\"",
+        "\"archive preserves the current result until the continuation status is committed\""
+      ],
+      "replacement": [
+        "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
+        "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
+        "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
+        "test/sqlite-candidate/wp6c/result-recovery.test.mjs"
+      ]
+    },
+    {
+      "file": "test/task-timeout.test.ts",
+      "status": "retained",
+      "before_declarations": 3,
+      "after_declarations": 3,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/teardown-retry.test.ts",
+      "status": "retained",
+      "before_declarations": 3,
+      "after_declarations": 3,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/test-impact-selector.test.ts",
+      "status": "split_or_ported",
+      "before_declarations": 13,
+      "after_declarations": 13,
+      "retired_names": [
+        "\"path discovery changes select path tests but not B3-05\"",
+        "\"TaskStore and SQLite schema changes trigger B3-05 with frozen parameters\""
+      ],
+      "replacement": [
+        "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
+        "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
+        "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
+        "test/sqlite-candidate/wp6c/result-recovery.test.mjs"
+      ]
+    },
+    {
+      "file": "test/thread-token-usage.test.ts",
+      "status": "retained",
+      "before_declarations": 16,
+      "after_declarations": 16,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/validate-plugin-root-pattern.test.ts",
+      "status": "retained",
+      "before_declarations": 15,
+      "after_declarations": 15,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/wait-task.test.ts",
+      "status": "retained",
+      "before_declarations": 10,
+      "after_declarations": 10,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/windows-cleanup-review-regressions.test.ts",
+      "status": "retained",
+      "before_declarations": 10,
+      "after_declarations": 10,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/windows-process-cleanup.test.ts",
+      "status": "retained",
+      "before_declarations": 67,
+      "after_declarations": 67,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/windows-recorded-tree-native.test.ts",
+      "status": "retained",
+      "before_declarations": 1,
+      "after_declarations": 1,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/windows-transport-bounds.test.ts",
+      "status": "retained",
+      "before_declarations": 11,
+      "after_declarations": 11,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/worker-env-portability.test.ts",
+      "status": "split_or_ported",
+      "before_declarations": 3,
+      "after_declarations": 1,
+      "retired_names": [
+        "\"a real detached worker receives env-only browser settings while secrets stay filtered\"",
+        "\"without browser settings the worker env stays default-off (keys absent, no broad ZCODE_BRIDGE_ forwarding)\"",
+        "\"receipt is not exit: a held real worker is confirmed exited before its fixture tree is removed\""
+      ],
+      "replacement": [
+        "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
+        "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
+        "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
+        "test/sqlite-candidate/wp6c/result-recovery.test.mjs"
+      ]
+    },
+    {
+      "file": "test/zcode-adapter.test.ts",
+      "status": "retired",
+      "before_declarations": 19,
+      "after_declarations": 0,
+      "retired_names": [
+        "\"invocation uses an argv array with the loader, forwards frozen switches, and injects only the provider pair\"",
+        "\"successful run normalizes envelope and AgentReport\"",
+        "\"report embedded in prose is extracted; needs_master_decision=true is preserved\"",
+        "\"exit 0 with non-JSON stdout is invalid_json and never a success\"",
+        "\"missing needs_master_decision is invalid_agent_report, never synthesized\"",
+        "\"nonzero exit maps to zcode_nonzero_exit with stderr evidence; JSON is not parsed\"",
+        "\"transient release error is retried at most twice, then succeeds\"",
+        "\"persistent transient failure exhausts retries and reports zcode_nonzero_exit\"",
+        "\"timeout terminates the process tree, reports timeout, and cleans the prompt file\"",
+        "\"cancelTask terminates the tree and the outcome reports cancelled; repeat cancels are idempotent\"",
+        "\"cancellation whose tree termination cannot be verified throws from cancelTask; a natural clean completion still yields the completed result\"",
+        "\"continueTask resumes with --resume, rejects workspace switches, and verifies the returned session id\"",
+        "\"continueTask to a different workspace is rejected before any spawn\"",
+        "\"resume session id mismatch is surfaced as invalid_json with both ids in the message\"",
+        "\"spawn throwing synchronously rejects getResult with spawn_failed\"",
+        "\"spawn error events reject getResult with spawn_failed and clean the prompt file\"",
+        "\"outputs are bounded separately\"",
+        "\"getStatus reports running before completion and exited with evidence after\"",
+        "\"getResult returns the identical settled outcome on repeated calls\""
+      ],
+      "replacement": [
+        "Retired CLI/provider behavior; shared native identity tests and app-server suite retained"
+      ]
+    },
+    {
+      "file": "test/zcode-app-server-adapter.test.ts",
+      "status": "retained",
+      "before_declarations": 25,
+      "after_declarations": 25,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/zcode-path-repair.test.ts",
+      "status": "retained",
+      "before_declarations": 4,
+      "after_declarations": 4,
+      "retired_names": [],
+      "replacement": []
+    },
+    {
+      "file": "test/zcode-paths.test.ts",
+      "status": "retained",
+      "before_declarations": 17,
+      "after_declarations": 17,
+      "retired_names": [],
+      "replacement": []
+    }
+  ],
+  "new_tests": [
+    "test/normalize-result.test.ts",
+    "test/sqlite-resource-stress.test.mjs"
+  ]
+}

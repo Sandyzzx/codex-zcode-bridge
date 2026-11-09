@@ -352,6 +352,7 @@ export interface BillingEntitlementOptions {
 }
 
 const OFFICIAL_START_PLAN_ORIGIN = "https://zcode.z.ai";
+const BILLING_REQUEST_TIMEOUT_MS = 15_000;
 
 /** Production-shaped live entitlement client. One attempt per check, no
  * retries, no caching: every credential delivery re-checks live state. */
@@ -372,18 +373,23 @@ export class StartPlanBillingEntitlement implements StartPlanLiveEntitlement {
     const observedAt = this.#now();
     const appVersion = await this.#getAppVersion();
     if (!appVersion) return { status: "unavailable", reason: "official cli version unavailable; refusing to guess", observedAt };
-    const url = `${this.#origin}/api/v1/zcode-plan/billing/balance?app_version=${encodeURIComponent(appVersion)}`;
+    if (!input.deviceMid.trim()) return { status: "unavailable", reason: "official device identity unavailable; refusing to guess", observedAt };
+    const url = `${this.#origin}/api/v1/zcode-plan/billing/balance?app_version=${encodeURIComponent(appVersion)}&mid=${encodeURIComponent(input.deviceMid)}`;
     let response: Response;
     try {
       response = await this.#fetchImpl(url, {
         method: "GET",
         headers: {
-          // Observed official balance requests use Authorization only. This
-          // is a read-only billing query, never a model request; app version
-          // comes from the official runtime and identity remains in memory.
+          // Observed official balance requests carry the persistent device
+          // identity in both the `mid` query and the `X-Device-Mid` header
+          // (2026-11-06 native request audit); omitting them is rejected
+          // with provider code 3001. This is a read-only billing query,
+          // never a model request; app version comes from the official
+          // runtime and identity remains in memory.
           Authorization: `Bearer ${input.jwt}`,
+          "X-Device-Mid": input.deviceMid,
         },
-        signal: input.signal,
+        signal: AbortSignal.any([input.signal, AbortSignal.timeout(BILLING_REQUEST_TIMEOUT_MS)]),
       });
     } catch (error) {
       if (input.signal.aborted) throw error;
@@ -461,14 +467,38 @@ export function createProductionStartPlanAuth(options: ProductionAuthIssuerOptio
     // the credential and rejects if the account identity changed mid-run.
     account: initial.account,
     signal: options.signal,
+    async prepare(provider, model, signal) {
+      if (provider !== "account:bigmodel-start-plan" || !model || signal.aborted) return false;
+      const credential = readOfficialStartPlanCredential(options.zcodeDataRoot, env);
+      if (!credential || credential.account !== initial.account
+        || credential.expiresAt !== null && credential.expiresAt <= now()) return false;
+      const verdict = await options.entitlement.check({
+        account: credential.account,
+        provider,
+        model,
+        deviceMid: credential.deviceMid,
+        jwt: credential.jwt,
+        signal,
+      });
+      if (signal.aborted) return false;
+      if (verdict.status !== "entitled") {
+        // Mirror the issue() rejection shape so the lifecycle gate can stage
+        // a sanitized classification; the gate treats throw and false the
+        // same (fail-closed), this only preserves the diagnosable verdict.
+        throw new Error(`start_plan_entitlement_rejected:${verdict.status}${verdict.providerCode ? `:${verdict.providerCode}` : ""}`);
+      }
+      return true;
+    },
     async issue(binding, signal) {
       const credential = readOfficialStartPlanCredential(options.zcodeDataRoot, env);
       if (!credential) throw new Error("start_plan_credential_unavailable");
       if (binding.account !== credential.account) throw new Error("start_plan_account_identity_invalid");
       if (credential.expiresAt !== null && credential.expiresAt <= now()) throw new Error("start_plan_credential_expired");
       if (signal.aborted) throw new Error("start_plan_issuer_cancelled");
-      const entitlement = options.entitlement;
-      const verdict = await entitlement.check({
+      if (binding.provider !== "account:bigmodel-start-plan" || !binding.model) {
+        throw new Error("start_plan_identity_invalid");
+      }
+      const verdict = await options.entitlement.check({
         account: credential.account,
         provider: binding.provider,
         model: binding.model,

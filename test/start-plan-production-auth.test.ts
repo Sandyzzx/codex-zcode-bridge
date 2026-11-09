@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createCipheriv, createHash, randomBytes } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, platform, tmpdir, userInfo } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -488,10 +488,25 @@ test("HTTP 200 alone is not entitlement evidence", async () => {
     assert.equal(verdict.status, item.expected, item.name);
     assert.notEqual(verdict.status, "entitled");
     assert.equal(requests.length, 1);
-    assert.equal(requests[0]!.url, "https://zcode.z.ai/api/v1/zcode-plan/billing/balance?app_version=3.17.4");
-    assert.equal(requests[0]!.headers.get("x-device-mid"), null);
+    assert.equal(requests[0]!.url, "https://zcode.z.ai/api/v1/zcode-plan/billing/balance?app_version=3.17.4&mid=synthetic-device-mid-fixed");
+    assert.equal(requests[0]!.headers.get("x-device-mid"), DEVICE_ID);
     assert.match(requests[0]!.headers.get("authorization") ?? "", /^Bearer /u);
   }
+});
+
+test("billing checks fail closed without an official device identity", async () => {
+  const { fetch: fetchImpl, requests } = fakeBillingFetch(billingBody(), 200, "synthetic-request-id");
+  const entitlement = new StartPlanBillingEntitlement({ getAppVersion: async () => "3.17.4", fetchImpl });
+  const verdict = await entitlement.check({
+    account: ACCOUNT_A,
+    provider: "account:bigmodel-start-plan",
+    model: MODEL,
+    deviceMid: "   ",
+    jwt: syntheticJwt(),
+    signal: new AbortController().signal,
+  });
+  assert.equal(verdict.status, "unavailable");
+  assert.equal(requests.length, 0, "a missing device identity must not produce a Billing request");
 });
 
 test("authorized model proof returns entitled with the response request ID", async () => {
@@ -667,6 +682,97 @@ test("issuer checks the model with the unchanged official device identity before
   }
 });
 
+test("provider preparation is model/account bound and entitlement is rechecked before private lease delivery", async () => {
+  const { root, cleanup } = makeRoot("start-plan-provider-preflight-");
+  try {
+    writeCredential(root);
+    const checks: Array<{ account: string; provider: string; model: string; deviceMid: string }> = [];
+    const issuer = createProductionStartPlanAuth({
+      zcodeDataRoot: root,
+      signal: new AbortController().signal,
+      now: () => 1_000,
+      entitlement: {
+        check: async (input) => {
+          checks.push({ account: input.account, provider: input.provider, model: input.model, deviceMid: input.deviceMid });
+          return input.model === MODEL
+            ? { status: "entitled", observedAt: checks.length, requestId: `synthetic-${checks.length}` }
+            : { status: "no_entitlement", reason: "synthetic model not entitled", observedAt: checks.length };
+        },
+      },
+    });
+    assert.ok(issuer);
+    assert.equal(await issuer.prepare("account:other", MODEL, new AbortController().signal), false);
+    assert.equal(checks.length, 0, "unsupported providers must be rejected before Billing");
+    await assert.rejects(
+      issuer.prepare("account:bigmodel-start-plan", "unentitled-model", new AbortController().signal),
+      /start_plan_entitlement_rejected:no_entitlement/u,
+    );
+    assert.equal(checks.length, 1, "an unentitled model receives one live check but no provider authorization");
+    assert.equal(await issuer.prepare("account:bigmodel-start-plan", MODEL, new AbortController().signal), true);
+    assert.equal(checks.length, 2);
+    const lease = await issuer.issue(binding(), new AbortController().signal);
+    assert.ok(lease);
+    assert.equal(checks.length, 3, "lease delivery must perform a fresh Billing check after preflight");
+    assert.deepEqual(checks.map(({ account, provider, model, deviceMid }) => ({ account, provider, model, deviceMid })), [
+      { account: ACCOUNT_A, provider: "account:bigmodel-start-plan", model: "unentitled-model", deviceMid: DEVICE_ID },
+      { account: ACCOUNT_A, provider: "account:bigmodel-start-plan", model: MODEL, deviceMid: DEVICE_ID },
+      { account: ACCOUNT_A, provider: "account:bigmodel-start-plan", model: MODEL, deviceMid: DEVICE_ID },
+    ]);
+  } finally {
+    cleanup();
+  }
+});
+
+test("billing rejections surface a sanitized provider classification through prepare", async () => {
+  const { root, cleanup } = makeRoot("start-plan-prepare-reject-");
+  try {
+    writeCredential(root);
+    let prepareCalls = 0;
+    const issuer = createProductionStartPlanAuth({
+      zcodeDataRoot: root,
+      now: () => 1_000,
+      signal: new AbortController().signal,
+      entitlement: {
+        check: async () => {
+          prepareCalls += 1;
+          return { status: "billing_parameter_error", reason: "synthetic parameter rejection", providerCode: "3001", observedAt: 1 };
+        },
+      },
+    });
+    assert.ok(issuer);
+    await assert.rejects(
+      issuer.prepare("account:bigmodel-start-plan", MODEL, new AbortController().signal),
+      /start_plan_entitlement_rejected:billing_parameter_error:3001/u,
+    );
+    assert.equal(prepareCalls, 1);
+  } finally {
+    cleanup();
+  }
+});
+
+test("provider preparation refuses account changes and aborted tasks without Billing", async () => {
+  const { root, cleanup } = makeRoot("start-plan-provider-preflight-account-");
+  try {
+    writeCredential(root);
+    let entitlementCalls = 0;
+    const issuer = createProductionStartPlanAuth({
+      zcodeDataRoot: root,
+      env: { ZCODE_CREDENTIAL_SECRET: CREDENTIAL_SECRET },
+      signal: new AbortController().signal,
+      entitlement: { check: async () => { entitlementCalls += 1; return { status: "entitled", observedAt: 1, requestId: "synthetic" }; } },
+    });
+    assert.ok(issuer);
+    writeCredential(root, { officialString: true, account: ACCOUNT_B });
+    assert.equal(await issuer.prepare("account:bigmodel-start-plan", MODEL, new AbortController().signal), false);
+    const aborted = new AbortController();
+    aborted.abort();
+    assert.equal(await issuer.prepare("account:bigmodel-start-plan", MODEL, aborted.signal), false);
+    assert.equal(entitlementCalls, 0);
+  } finally {
+    cleanup();
+  }
+});
+
 test("Start Plan provider registration rejection prevents session creation and session/send", async () => {
   const { root, cleanup } = makeRoot("start-plan-provider-gate-");
   try {
@@ -680,7 +786,7 @@ test("Start Plan provider registration rejection prevents session creation and s
       revision: 7,
       config: { providerConfigRules: { providerRules: [{
         providerId: "account:bigmodel-start-plan",
-        config: { access: { type: "zhipu-account", mode: "start-plan", accountType: "bigmodel" } },
+        config: { builtinModelIds: [MODEL.toUpperCase()], access: { type: "zhipu-account", mode: "start-plan", accountType: "bigmodel" } },
       }] } },
     }));
     writeFileSync(personal, JSON.stringify({
@@ -725,12 +831,39 @@ input.on("close", () => process.exit(0));
       zcodeDataRoot: path.join(root, "official-zcode"),
       dataRoot: path.join(root, "bridge-sqlite"),
     };
+    const unentitledAdapter = new ZCodeAppServerAdapter({
+      resolver: { resolve: async () => config },
+      timeoutMs: 10_000,
+      childEnvBase: { PATH: process.env["PATH"] ?? "" },
+      homeDir: root,
+      resolveStartPlanRuntimeAuth: async () => { throw new Error("runtime auth must not run before live Billing"); },
+    });
+    const unentitledHandle = await unentitledAdapter.startTask({
+      task: {
+        task_id: "start-plan-preflight-rejected",
+        workspace: "C:\\unused",
+        objective: "A task without verified live entitlement must not reach AppServer",
+        requirements: [],
+        allowed_paths: [],
+        forbidden_paths: [],
+        acceptance_criteria: [],
+        test_commands: [],
+        model: { provider_id: "account:bigmodel-start-plan", model_id: MODEL.toUpperCase() },
+      },
+      workspace: makeWorkspace(root),
+      attempt: 1,
+    });
+    const unentitledResult = await unentitledAdapter.getResult(unentitledHandle);
+    assert.equal(unentitledResult.errorCode, "provider_config_invalid");
+    assert.match(unentitledResult.reportError ?? "", /live entitlement was not verified/u);
+    assert.equal(existsSync(requestLog), false, "unentitled Start Plan must not spawn or contact AppServer");
     let callbackCalls = 0;
     const adapter = new ZCodeAppServerAdapter({
       resolver: { resolve: async () => config },
       timeoutMs: 10_000,
       childEnvBase: { PATH: process.env["PATH"] ?? "" },
       homeDir: root,
+      startPlanProviderEntitled: true,
       resolveStartPlanRuntimeAuth: async () => {
         callbackCalls += 1;
         throw new Error("runtime auth must not run before provider registration");

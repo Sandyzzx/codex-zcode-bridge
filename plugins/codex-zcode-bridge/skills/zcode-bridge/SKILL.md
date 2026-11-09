@@ -6,9 +6,9 @@ description: 用户明确要求使用 ZCode/Codex ZCode Bridge、查询或继续
 # ZCode Bridge — Master Skill
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-04
-> Last verified: 2026-11-04，静态核对新增 Hold 主动发现、`zcode_cancel` 参数/返回结构和授权流程；真实 Host 与生产恢复 E2E NOT RUN。
-> Verified against: bfab3386937f552d4c60761f32df9ea097fcb6f1 + Codex Rollout token候选；来源74d4764和经审查的JSON文案。
+> Last updated: 2026-11-07
+> Last verified: 2026-11-07，仅核对 SQLite-only 边界与渐进加载路由；真实 Host/生产恢复未由本轮认证。
+> Verified against: a46137fe46b567271a7756be819361132625278c + ADR-029 本地候选（未发布）
 > Scope: Master 触发/授权、Hold 主动发现与恢复、`auto` 决策、Worker 完整交付、审批与停止条件、按需加载、Codex 主会话 Token 只读接入；不修改 Bridge TaskPackage Schema 或 MCP 工具 API。
 
 ## 核心职责
@@ -64,6 +64,8 @@ description: 用户明确要求使用 ZCode/Codex ZCode Bridge、查询或继续
 | Worker 终态、验收、返工、接收改动 | [review-and-recovery.md](references/review-and-recovery.md) |
 | 锁/清理/权限/工作区/配置异常 | [runtime-boundaries.md](references/runtime-boundaries.md)；如涉及审批，另读 monitoring 文档 |
 | 准备向用户报告任务结果 | [reporting.md](references/reporting.md) |
+
+生产运行只使用 SQLite Authority 与 Worker→app-server；旧 JSON 任务文件不是可用恢复源。普通委派只按本表加载 references；涉及 Bridge 实现/合同诊断时先读仓库 docs/PROJECT_STATE.md，再按问题选择 ARCHITECTURE、INTERFACES 或 decisions/README.md 的主题入口。不默认读取全部 ADR、归档、研究日志或生成 bundle。
 
 ## 信息所有权与冲突处理
 

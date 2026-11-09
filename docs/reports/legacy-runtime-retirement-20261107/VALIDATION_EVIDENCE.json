@@ -1,0 +1,478 @@
+{
+  "verdict": "ARCHITECTURE_SIMPLIFICATION_PASS",
+  "scope": "local Windows isolated candidate, not release or external Host/fork acceptance",
+  "baseline": "a46137fe46b567271a7756be819361132625278c",
+  "frozen_head": "6b254089a49a112e9881d40813f16d96c079a582",
+  "frozen_tree": "cf2c30818225dda602199b990df367be64bb2138",
+  "environment": {
+    "node": "v24.16.0",
+    "platform": "win32",
+    "release": "10.0.26100",
+    "architecture": "x64"
+  },
+  "full": {
+    "command": "npm run test:full",
+    "started_at": "2026-11-07T00:44:09.8013995+08:00",
+    "head": "6b254089a49a112e9881d40813f16d96c079a582",
+    "tree": "cf2c30818225dda602199b990df367be64bb2138",
+    "exit_code": 0,
+    "wall_ms": 825622.9938,
+    "ended_at": "2026-11-07T00:57:55.5746910+08:00",
+    "tests": 776,
+    "suites": 0,
+    "pass": 775,
+    "fail": 0,
+    "cancelled": 0,
+    "skipped": 1,
+    "todo": 0,
+    "duration_ms": 800143.9568,
+    "slowest": [
+      {
+        "name": "ADR-027 blocked execution-envelope pipe expires visibly and retains the exact Worker for cancellation",
+        "duration_ms": 22630.4357,
+        "outcome": "pass",
+        "detail": ""
+      },
+      {
+        "name": "R5 explicit cancel closes claimed Result-absent Workers after Manager hard exit and restart",
+        "duration_ms": 20113.9204,
+        "outcome": "pass",
+        "detail": ""
+      },
+      {
+        "name": "maximum persisted Result survives real MCP stdio with both structuredContent and text JSON",
+        "duration_ms": 17590.4754,
+        "outcome": "pass",
+        "detail": ""
+      },
+      {
+        "name": "ADR-024 six lifecycle crash boundaries use hard Manager-process exits and restart Recovery",
+        "duration_ms": 16230.2462,
+        "outcome": "pass",
+        "detail": ""
+      },
+      {
+        "name": "PowerShell 5.1 and 7 match TypeScript for absolute, drive-relative, UNC, UTF-8, and Unicode paths",
+        "duration_ms": 14012.4734,
+        "outcome": "pass",
+        "detail": ""
+      },
+      {
+        "name": "ADR-026 production Worker Result encoder and Windows pipes deliver exact 32 MiB and converge +1/schema failure",
+        "duration_ms": 13923.0006,
+        "outcome": "pass",
+        "detail": ""
+      },
+      {
+        "name": "a failing terminator or a child that never closes makes the reap fail visibly before any cleanup",
+        "duration_ms": 13181.3106,
+        "outcome": "pass",
+        "detail": ""
+      },
+      {
+        "name": "ADR-027 actual Worker execution timeout commits a timeout Result and releases only with real Windows cleanup proof",
+        "duration_ms": 11781.9036,
+        "outcome": "pass",
+        "detail": ""
+      },
+      {
+        "name": "B2-01: normal, completion-before-start, and completion-then-start all settle exactly once",
+        "duration_ms": 11565.205,
+        "outcome": "pass",
+        "detail": ""
+      },
+      {
+        "name": "stale generation and cross-session or cross-workspace requests are declined",
+        "duration_ms": 10054.1216,
+        "outcome": "pass",
+        "detail": ""
+      },
+      {
+        "name": "S2: an abnormal process exit after startup keeps process-plane unknown facts and the generic public code",
+        "duration_ms": 9859.4536,
+        "outcome": "pass",
+        "detail": ""
+      },
+      {
+        "name": "SQLite production Worker survives streaming stderr backpressure without a diagnostic recorder",
+        "duration_ms": 9538.622,
+        "outcome": "pass",
+        "detail": ""
+      }
+    ],
+    "skips": [
+      {
+        "name": "injected ENOTEMPTY: default rm fails visibly, the fixture budget survives it, permanent errors still fail",
+        "duration_ms": 0.3272,
+        "outcome": "skip",
+        "detail": "# SKIP"
+      }
+    ]
+  },
+  "first_full": {
+    "command": "npm run test:full",
+    "ended_at": "2026-11-07T00:43:05.1198045+08:00",
+    "started_at": "2026-11-07T00:29:16.6091501+08:00",
+    "head": "78711eb890a3c9dcaa364cfc9efb0dd24d54ee09",
+    "tree": "1c5f396342d1da8569e7e3af864af393568e3116",
+    "exit_code": 1,
+    "wall_ms": 828510.6544,
+    "tests": 776,
+    "pass": 774,
+    "fail": 1,
+    "skipped": 1,
+    "failure": "Skill boundary text omitted; restored release-intent statement, original assertion retained"
+  },
+  "targeted": {
+    "production": {
+      "tests": 16,
+      "pass": 16,
+      "duration_ms": 176194.3632
+    },
+    "stress_and_selector": {
+      "tests": 23,
+      "pass": 23,
+      "duration_ms": 14160.3846
+    },
+    "clean_entrypoints": {
+      "tests": 4,
+      "pass": 4,
+      "duration_ms": 8318.7801
+    },
+    "skill_boundary": {
+      "tests": 7,
+      "pass": 7,
+      "duration_ms": 130.4766
+    }
+  },
+  "stress": {
+    "history": {
+      "metrics": [
+        {
+          "tasks": 0,
+          "setup_ms": 0.10120000000000573,
+          "read_p95_ms": 0,
+          "db_bytes": 4096,
+          "wal_bytes": 234872
+        },
+        {
+          "tasks": 32,
+          "setup_ms": 710.2689,
+          "read_p95_ms": 0.23679999999990287,
+          "db_bytes": 4096,
+          "wal_bytes": 2290752
+        },
+        {
+          "tasks": 256,
+          "setup_ms": 9640.4501,
+          "read_p95_ms": 0.16519999999945867,
+          "db_bytes": 528384,
+          "wal_bytes": 4132392
+        }
+      ],
+      "checkpoint_wal_bytes": 0,
+      "max_rss_kib": 104688
+    },
+    "cas": [
+      {
+        "ok": true,
+        "duplicate": false
+      },
+      {
+        "ok": false,
+        "code": "root_writer_busy"
+      },
+      {
+        "ok": false,
+        "code": "root_writer_busy"
+      },
+      {
+        "ok": false,
+        "code": "root_writer_busy"
+      }
+    ],
+    "admission": {
+      "processes": 8,
+      "initial_outcomes": [
+        "reserved",
+        "reserved",
+        "root_writer_busy",
+        "root_writer_busy",
+        "reserved",
+        "root_writer_busy",
+        "reserved",
+        "reserved"
+      ]
+    }
+  },
+  "invariant_blobs": [
+    {
+      "file": "src/store/lifecycle-gate.ts",
+      "blob": "0a6b92aeec385d972a9a175f7d28889f165e59c6",
+      "unchanged": true
+    },
+    {
+      "file": "src/sqlite-candidate/wp6b2b1/store.mjs",
+      "blob": "936d06589b12847bbf28679f8d8946c0fcc4c85d",
+      "unchanged": true
+    },
+    {
+      "file": "src/sqlite-candidate/wp6b2b1/schema.sql",
+      "blob": "dfc07cdcd5b14e19a9774b4a37e14a8c667391f0",
+      "unchanged": true
+    },
+    {
+      "file": "src/sqlite-candidate/wp6b2b1/schema-v13.sql",
+      "blob": "0e5e451507abc12d69eae79693d58caa94998d83",
+      "unchanged": true
+    },
+    {
+      "file": "src/result-contract.mjs",
+      "blob": "66767a521c998625c343866b64dd11163220ecb5",
+      "unchanged": true
+    },
+    {
+      "file": "src/runtime/task-timeout.ts",
+      "blob": "1e5a7ec8218a90a63e0d94ca39a1843e684ddddd",
+      "unchanged": true
+    },
+    {
+      "file": "src/mcp/schemas.ts",
+      "blob": "01f55a3643e58c1075f4a7d5c274c24dff46f581",
+      "unchanged": true
+    }
+  ],
+  "automatic_functional_files": [
+    "dist-test/test/account-provider.test.js",
+    "dist-test/test/agent-report.test.js",
+    "dist-test/test/attention-wait.test.js",
+    "dist-test/test/batch2-evidence.test.js",
+    "dist-test/test/browser-executable.test.js",
+    "dist-test/test/browser-host-adapter.test.js",
+    "dist-test/test/browser-host.test.js",
+    "dist-test/test/browser-protocol.test.js",
+    "dist-test/test/browser-runtime-close.test.js",
+    "dist-test/test/child-env.test.js",
+    "dist-test/test/codex-master-token-usage.test.js",
+    "dist-test/test/codex-rollout-token-source.test.js",
+    "dist-test/test/codex-rollout-token-tail.test.js",
+    "dist-test/test/direct-workspace-provider.test.js",
+    "dist-test/test/failure-facts-integration.test.js",
+    "dist-test/test/feedback-template.test.js",
+    "dist-test/test/host-and-index.test.js",
+    "dist-test/test/json-history-result-exceptions.test.js",
+    "dist-test/test/ledger-bridge-review.test.js",
+    "dist-test/test/ledger-core.test.js",
+    "dist-test/test/ledger-mcp.test.js",
+    "dist-test/test/mcp-server.test.js",
+    "dist-test/test/mcp-stdio-entry.test.js",
+    "dist-test/test/node-runtime.test.js",
+    "dist-test/test/normalize-result.test.js",
+    "dist-test/test/observation-lifecycle.test.js",
+    "dist-test/test/owned-fixture-cleanup.test.js",
+    "dist-test/test/process-lock.test.js",
+    "dist-test/test/process-spawn.test.js",
+    "dist-test/test/run-worker-task.test.js",
+    "dist-test/test/runtime-preferences.test.js",
+    "dist-test/test/runtime-provenance.test.js",
+    "dist-test/test/runtime-remediation.test.js",
+    "dist-test/test/runtime-resolver.test.js",
+    "dist-test/test/runtime/sqlite-bootstrap-cross-process.test.js",
+    "dist-test/test/runtime/sqlite-fresh-install.test.js",
+    "dist-test/test/runtime/sqlite-install-config.test.js",
+    "dist-test/test/runtime/trusted-local-policy-config.test.js",
+    "dist-test/test/session-frames.test.js",
+    "dist-test/test/skill-policy.test.js",
+    "dist-test/test/spawn-generation-identity.test.js",
+    "dist-test/test/spawn-worker-stderr.test.js",
+    "dist-test/test/sqlite-candidate/wp6b-wiring/admission-to-claim.test.js",
+    "dist-test/test/sqlite-candidate/wp6b-wiring/bootstrap.test.js",
+    "dist-test/test/sqlite-candidate/wp6b-wiring/composition.test.js",
+    "dist-test/test/sqlite-candidate/wp6b-wiring/lifecycle-gate.test.js",
+    "dist-test/test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.js",
+    "dist-test/test/sqlite-candidate/wp6b-wiring/trusted-local-policy.test.js",
+    "dist-test/test/sqlite-candidate/wp6b2b1/launch-bootstrap.test.js",
+    "dist-test/test/sqlite-doctor.test.js",
+    "dist-test/test/sqlite-scoped-hold-scheduler.test.js",
+    "dist-test/test/task-feedback.test.js",
+    "dist-test/test/task-prompt.test.js",
+    "dist-test/test/task-timeout.test.js",
+    "dist-test/test/teardown-retry.test.js",
+    "dist-test/test/test-impact-selector.test.js",
+    "dist-test/test/thread-token-usage.test.js",
+    "dist-test/test/validate-plugin-root-pattern.test.js",
+    "dist-test/test/wait-task.test.js",
+    "dist-test/test/windows-cleanup-review-regressions.test.js",
+    "dist-test/test/windows-process-cleanup.test.js",
+    "dist-test/test/windows-recorded-tree-native.test.js",
+    "dist-test/test/windows-transport-bounds.test.js",
+    "dist-test/test/worker-env-portability.test.js",
+    "dist-test/test/zcode-app-server-adapter.test.js",
+    "dist-test/test/zcode-path-repair.test.js",
+    "dist-test/test/zcode-paths.test.js",
+    "test/mcp-result-v14.test.mjs",
+    "test/sqlite-candidate/wp6b2b1/admission.test.mjs",
+    "test/sqlite-candidate/wp6b2b1/launch-identity.test.mjs",
+    "test/sqlite-candidate/wp6b2b1/lifecycle-port.test.mjs",
+    "test/sqlite-candidate/wp6b2b1/schema-integrity.test.mjs",
+    "test/sqlite-candidate/wp6c/admin-abandonment.test.mjs",
+    "test/sqlite-candidate/wp6c/cleanup-release.test.mjs",
+    "test/sqlite-candidate/wp6c/result-recovery.test.mjs",
+    "test/sqlite-result-v14.test.mjs",
+    "test/sqlite-v14-upgrade.test.mjs"
+  ],
+  "markdown_links": {
+    "baseline_broken": 5,
+    "after_broken": 4,
+    "new_broken": [],
+    "existing_broken": [
+      {
+        "file": "docs/reports/sqlite-r3-deadlines-2026-11-06.md",
+        "target": "../../.run/evidence/r3-windows-full-final-cases.json",
+        "resolved": ".run/evidence/r3-windows-full-final-cases.json"
+      },
+      {
+        "file": "docs/reports/sqlite-r3-deadlines-2026-11-06.md",
+        "target": "../../.run/evidence/r3-validation-runs.json",
+        "resolved": ".run/evidence/r3-validation-runs.json"
+      },
+      {
+        "file": "docs/research/native-cli-vs-appserver-2026-10-05/ZCODE_RUNTIME_CALLCHAIN.md",
+        "target": "../../src/runtime/model-settings.ts",
+        "resolved": "docs/src/runtime/model-settings.ts"
+      },
+      {
+        "file": "docs/research/native-cli-vs-appserver-2026-10-05/ZCODE_RUNTIME_CALLCHAIN.md",
+        "target": "../../src/adapters/zcode-app-server-adapter.ts",
+        "resolved": "docs/src/adapters/zcode-app-server-adapter.ts"
+      }
+    ],
+    "baseline_missing_adr": [
+      {
+        "file": "docs/decisions/README.md",
+        "target": "ADR-011-private-failure-diagnostics.md",
+        "resolved": "docs/decisions/ADR-011-private-failure-diagnostics.md"
+      }
+    ]
+  },
+  "package_smoke": {
+    "status": "PASS",
+    "scope": "extracted local npm pack imports and historical schema presence; dependencies resolved from candidate node_modules, not an external fork install",
+    "removed": [
+      "TaskStore",
+      "BridgeTaskManager",
+      "createWorkerSpawner",
+      "runWorkerTask",
+      "buildTaskObservation"
+    ],
+    "retained": [
+      "SqliteLifecycleMcpAuthority",
+      "startBridge",
+      "createBridgeServer"
+    ]
+  },
+  "logs": [
+    {
+      "file": ".run/windows-full.log",
+      "bytes": 93047,
+      "sha256": "0e3a9d7255be887e058af334b35c540513750d88e607ff8ee225fa8dc58aa529"
+    },
+    {
+      "file": ".run/windows-full-run.json",
+      "bytes": 302,
+      "sha256": "c4db7023c4aed59c0f8de2f13b35f2c3ae2040b59065a872ff281ebc71b9d81f"
+    },
+    {
+      "file": ".run/windows-full-final.log",
+      "bytes": 84747,
+      "sha256": "8e38b8bc4fe6082cf0f6d0c378ad81d0bc480ebd46eb72bb802a7df2f5c05725"
+    },
+    {
+      "file": ".run/windows-full-final-run.json",
+      "bytes": 302,
+      "sha256": "3bddc43bc1ecf802ed2e3e7dee0bfb9f3ede771ecf0acc8b03666b30379a0033"
+    },
+    {
+      "file": ".run/production-targeted.log",
+      "bytes": 3422,
+      "sha256": "a639575153d0c8db928070afc3c900b4cbc9bab0ff2561a12db67e070b73f32e"
+    },
+    {
+      "file": ".run/stress-selector-shared-final.log",
+      "bytes": 2933,
+      "sha256": "c8c33cf557f37abbe687fde98154f9cb5889b614bb6b057e596a0873a769031e"
+    },
+    {
+      "file": ".run/clean-entrypoints.log",
+      "bytes": 830,
+      "sha256": "1b1b713f83ec2253d62e3c83178d8906d77b604a4a9d8c744fd721ecc750328e"
+    },
+    {
+      "file": ".run/skill-policy-fixed.log",
+      "bytes": 737,
+      "sha256": "034aa14d72e6f0a1a8c37f5c3d40e3387cad6ca35ae5ee4c8cd9a792b04e6de4"
+    },
+    {
+      "file": ".run/targeted-port.log",
+      "bytes": 8280,
+      "sha256": "b6fd70f12686ca5c24ca95829d200dfb5ce8f220d48edc147d9536acbddfa288"
+    },
+    {
+      "file": ".run/affected-t0-final.log",
+      "bytes": 63588,
+      "sha256": "af429b93c4f91f428db42854c3f0b865070c7046078ed700e1435558bf2c51cd"
+    },
+    {
+      "file": ".run/package-smoke.json",
+      "bytes": 419,
+      "sha256": "ae9b1c53cf8f0a8b3c7d10d8208adeeec57c19489d32d1cf68dd9ff00f83129d"
+    },
+    {
+      "file": ".run/production-graph.json",
+      "bytes": 7141,
+      "sha256": "a10b1d4b82adb48a7e0d8a82a88ca794af05c07744f12072e03eb6f9f64c9305"
+    },
+    {
+      "file": ".run/markdown-links.json",
+      "bytes": 1181,
+      "sha256": "a7aa5f5faf92023952df49dce1d4ae2e682792af55181a9f333f02f48c1a1654"
+    },
+    {
+      "file": ".run/windows-final-cases.json",
+      "bytes": 134709,
+      "sha256": "7df79d2f5d11c1130e678501cfc81e5762c76ea9313ecae89932f8df89d63363"
+    },
+    {
+      "file": ".run/docs-final-t0.log",
+      "bytes": 3519,
+      "sha256": "e690e76ef93a2b54aab6e0cf0d0b281ede6b4e0287493a133d55ed10e3e20819"
+    },
+    {
+      "file": ".run/final-process-snapshot.json",
+      "bytes": 194,
+      "sha256": "eadeb04a4bc1f2492c261142bbea54cf4d68650eea5f79c920969df6aab8693b"
+    }
+  ],
+  "not_run": [
+    "native Ubuntu",
+    "remote CI jobs",
+    "external dsh/fork migration",
+    "current real Codex Host maximum Result reception",
+    "real Provider long-running session"
+  ],
+  "deferred": [
+    "R6 scheduler",
+    "R7 ordinary events and runtime usage persistence",
+    "Result Chunk API",
+    "continuation input expansion"
+  ],
+  "documentation_T0": {
+    "command": "npm run test:affected -- --base 6b254089a49a112e9881d40813f16d96c079a582",
+    "result": "T0_PASS; NO_TESTS_APPLICABLE; not an executable-test PASS"
+  },
+  "final_scoped_process_snapshot": {
+    "observed_at": "2026-11-07T00:59:33.9499837+08:00",
+    "scope": "node.exe command line explicitly references candidate worktree; read-only snapshot, no termination",
+    "processes": []
+  }
+}
