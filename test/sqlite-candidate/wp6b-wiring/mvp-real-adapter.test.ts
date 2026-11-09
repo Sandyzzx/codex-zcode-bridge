@@ -207,8 +207,13 @@ function syntheticTask(workspace: string, taskId: string): Record<string, unknow
   };
 }
 
-async function waitForTerminal(client: Client, taskId: string, expectedAttempt: number): Promise<Record<string, unknown>> {
-  const deadline = Date.now() + 45_000;
+async function waitForTerminal(
+  client: Client,
+  taskId: string,
+  expectedAttempt: number,
+  timeoutMs = 45_000,
+): Promise<Record<string, unknown>> {
+  const deadline = Date.now() + timeoutMs;
   const observed: string[] = [];
   while (Date.now() < deadline) {
     const status = contentObject(await client.callTool({ name: "zcode_status", arguments: { task_id: taskId } }));
@@ -1511,14 +1516,17 @@ test('ADR-027 Manager and actual Worker share the environment default and four-h
   }}finally{if(before===undefined)delete process.env['ZCODE_BRIDGE_TIMEOUT_MS'];else process.env['ZCODE_BRIDGE_TIMEOUT_MS']=before;}
 });
 
-test('ADR-027 actual Worker execution timeout commits a timeout Result and releases only with real Windows cleanup proof', {timeout:90000},async()=>{
+test('ADR-027 actual Worker execution timeout commits a timeout Result and releases only with real Windows cleanup proof', {timeout:120000},async()=>{
   const worker=await deadlineWorker('timeout','execution-timeout');
   const workerStderr:string[]=[];const lifecycleLines:string[]=[];
   try{
     await withRealAdapterMcp(async(client,_manager,dataRoot,workspace,runtime)=>{
       const taskId=`r3-timeout-${randomUUID()}`;
       contentObject(await client.callTool({name:'zcode_task',arguments:syntheticTask(workspace,taskId)}));
-      assert.equal((await waitForTerminal(client,taskId,1)).status,'failed');
+      // The production cleanup path may wait 15s for the prewarmed helper and
+      // then allow a 60s cold helper fallback. The generic 45s test polling
+      // window is shorter than that designed bound.
+      assert.equal((await waitForTerminal(client,taskId,1,90_000)).status,'failed');
       await waitForLifecycleEvent(client,taskId,'released');
       const result=contentObject(await client.callTool({name:'zcode_result',arguments:{task_id:taskId}}));
       assert.equal(result.error_code,'timeout');assert.equal((await operationFor(dataRoot,taskId)).phase,'released');
@@ -1527,6 +1535,7 @@ test('ADR-027 actual Worker execution timeout commits a timeout Result and relea
     },{workerOverride:worker,runtimeVariant:'deadline-hang',stderrCollector:{lines:workerStderr},lifecycleCollector:{lines:lifecycleLines}});
   }catch(error){
     console.error('worker stderr:\n'+workerStderr.join('\n'));
+    console.error('worker lifecycle tail:\n'+lifecycleLines.slice(-200).join('\n'));
     throw error;
   }
 });
