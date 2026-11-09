@@ -92,14 +92,44 @@ typecheck: PASS
 build: PASS
 plugin_validation: PASS
 diff_check: PASS
-windows_ci: NOT_RUN
-ubuntu_ci: NOT_RUN
-sqlite_stress: NOT_APPLICABLE
+windows_ci: FAIL (one non-reproduced lifecycle observation)
+ubuntu_ci: PASS
+sqlite_stress_windows: PASS
+sqlite_stress_ubuntu: PASS
 ```
 
 The targeted serial run covered Account Provider snapshots, Start Plan
 production auth, registration diagnostics, Coding Plan behavior, Result
 handling, Windows cleanup behavior, and adapter lifecycle tests.
+
+### Remote CI reconciliation
+
+Remote run
+[`42664201772`](https://github.com/Sandyzzx/codex-zcode-bridge/actions/runs/42664201772)
+tested commit `6b65f4531fb2943abfa0d7c370e334dd582d582f`.
+
+```yaml
+ubuntu_verify: PASS
+windows_verify: FAIL
+sqlite_resource_matrix_ubuntu: PASS
+sqlite_resource_matrix_windows: PASS
+windows_totals: 872 tests; 870 PASS; 1 SKIP; 1 FAIL
+```
+
+The sole Windows failure was the existing `ADR-024 six lifecycle crash
+boundaries` test. The task reached a terminal `completed` projection, but its
+separate assertion did not observe the `released` lifecycle event within the
+30-second observation window. No task ID, Result, Cleanup, or Release
+assertion was relaxed.
+
+The failing test file has the same Git blob in this candidate and
+`origin/preview`, and this PR does not modify the SQLite Manager, lifecycle
+gate, Cleanup, Release, or process-probe implementation. Three fresh isolated
+Windows executions of the exact test passed locally (1/1 PASS each). This
+supports a pre-existing intermittent Windows cleanup/observation risk rather
+than a deterministic registration-repair regression. The exact environmental
+cause remains `UNCONFIRMED`; a later green rerun must not be presented as a
+root-cause proof.
 
 ## Preview 2 release preparation
 
@@ -151,6 +181,6 @@ After an independently authorized Preview release:
 
 - The original Gate E2 RPC error body was not retained.
 - No real Start Plan turn has passed; HTTP 405 and 3012 remain unconfirmed.
-- Windows cleanup has an observed intermittent race in prior parallel runs;
-  this review did not change or weaken lifecycle assertions.
-- Remote Windows/Ubuntu CI has not yet run for the final review commit.
+- Windows cleanup has an observed intermittent race in prior and current runs;
+  this review did not change or weaken lifecycle assertions. Its root cause
+  remains `UNCONFIRMED`.
