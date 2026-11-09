@@ -89,6 +89,8 @@ const sessionId = ${JSON.stringify(SESSION_ID)};
 const requestLog = ${JSON.stringify(requestLog)};
 const descendantControl = ${JSON.stringify(descendantControl ?? null)};
 let selected = ${JSON.stringify(selectedModel)};
+let accountProviders = {};
+let accountStates = {};
 const turnFailure = ${JSON.stringify(turnFailure ?? null)};
 if (${keepAliveAfterTurn}) setInterval(() => {}, 1_000);
 if (descendantControl) {
@@ -119,10 +121,22 @@ input.on("line", (line) => {
   const message = JSON.parse(line);
   fs.appendFileSync(requestLog, JSON.stringify(message) + "\n");
   if (message.method === "provider/updateAccountConfig") {
+    accountProviders = message.params && typeof message.params.providers === "object" ? message.params.providers : {};
+    accountStates = message.params && typeof message.params.states === "object" ? message.params.states : {};
     process.stdout.write(JSON.stringify({ id: message.id, result: {} }) + "\n");
   } else if (message.method === "session/create") {
     process.stdout.write(JSON.stringify({ id: message.id, result: snapshot() }) + "\n");
   } else if (message.method === "session/setModel") {
+    const requestedProviderId = message.params && message.params.model ? message.params.model.providerId : "";
+    if (typeof requestedProviderId === "string" && requestedProviderId.startsWith("account:")) {
+      const provider = accountProviders[requestedProviderId];
+      const state = accountStates[requestedProviderId];
+      const hasAccountSnapshot = Object.keys(accountProviders).length > 0 || Object.keys(accountStates).length > 0;
+      if (hasAccountSnapshot && (!provider || provider.access?.entitled !== true || state?.current === false)) {
+        process.stdout.write(JSON.stringify({ id: message.id, error: { code: -32602, message: "provider_not_executable" } }) + "\n");
+        return;
+      }
+    }
     selected = message.params.model;
     process.stdout.write(JSON.stringify({ id: message.id, result: snapshot() }) + "\n");
   } else if (message.method === "session/subscribe") {
@@ -301,6 +315,199 @@ test("runtime auth dispatcher preserves Coding Plan API key injection", async ()
       requestAuth: { apiKey: "synthetic-coding-plan-api-key" },
     });
   } finally { await rm(runtime.root, { recursive: true, force: true }); }
+});
+
+test("verified Start Plan receives task-scoped current while Desktop selects Coding Plan", async () => {
+  const runtime = await makeFakeRuntime(
+    { providerId: "account:bigmodel-individual-coding-plan", modelId: "GLM-5.3-Flash" },
+    true,
+    false,
+    undefined,
+    false,
+    null,
+    undefined,
+    0,
+    true,
+  );
+  try {
+    const zcodeDataRoot = path.join(runtime.root, ".zcode");
+    const personalConfig = path.join(zcodeDataRoot, "v2", "provider_config.json");
+    await mkdir(path.dirname(personalConfig), { recursive: true });
+    await writeFile(runtime.config.providerBuiltinConfigFile, JSON.stringify({ revision: 11, config: { providerConfigRules: { providerRules: [
+      {
+        providerId: "account:bigmodel-start-plan",
+        config: { builtinModelIds: ["GLM-5.3-Flash"], access: { type: "zhipu-account", mode: "start-plan", accountType: "bigmodel" } },
+      },
+      {
+        providerId: "account:bigmodel-individual-coding-plan",
+        config: { builtinModelIds: ["GLM-5.3-Flash"], access: { type: "zhipu-account", mode: "individual-coding-plan", accountType: "bigmodel" } },
+      },
+    ] } } }));
+    await writeFile(personalConfig, JSON.stringify({ config: { providerConfigRules: { providerRules: [] } } }));
+    await writeFile(path.join(zcodeDataRoot, "v2", "config.json"), JSON.stringify({
+      provider: { "builtin:bigmodel-coding-plan": { enabled: true, options: { apiKey: "synthetic-coding-plan-api-key" } } },
+    }));
+    await writeFile(path.join(zcodeDataRoot, "v2", "coding-plan-cache.json"), JSON.stringify({
+      entryStatus: { items: { "builtin:bigmodel-coding-plan": { status: "available" } } },
+    }));
+    await writeFile(path.join(zcodeDataRoot, "v2", "setting.json"), JSON.stringify({
+      providerFamilyConnectionSelections: { bigmodel: { kind: "individual-coding-plan" } },
+    }));
+    const adapter = new ZCodeAppServerAdapter({
+      resolver: { resolve: async () => ({ ...runtime.config, providerPersonalConfigFile: personalConfig, zcodeDataRoot }) },
+      timeoutMs: 10_000,
+      childEnvBase: { PATH: process.env.PATH },
+      homeDir: runtime.root,
+      startPlanProviderEntitled: true,
+      resolveStartPlanRuntimeAuth: async () => ({
+        apiKey: "synthetic-start-plan-jwt-marker",
+        expiresAt: Date.now() + 10_000,
+        isValid: () => true,
+      }),
+    });
+    const handle = await adapter.startTask({
+      task: { ...task, model: { provider_id: "account:bigmodel-start-plan", model_id: "GLM-5.3-Flash" } },
+      workspace: makeWorkspace(runtime.root),
+      attempt: 1,
+    });
+    const result = await adapter.getResult(handle);
+    assert.equal(result.exitCode, 0);
+    const messages = (await readFile(runtime.requestLog, "utf8")).trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+    const sync = messages.find((message) => message.method === "provider/updateAccountConfig");
+    const payload = sync?.params as { providers?: Record<string, { access?: { entitled?: boolean } }>; states?: Record<string, { current?: boolean }> } | undefined;
+    assert.equal(payload?.providers?.["account:bigmodel-start-plan"]?.access?.entitled, true);
+    assert.equal(payload?.states?.["account:bigmodel-start-plan"]?.current, true);
+    assert.equal(payload?.providers?.["account:bigmodel-individual-coding-plan"]?.access?.entitled, true);
+    assert.equal(payload?.states?.["account:bigmodel-individual-coding-plan"]?.current, undefined);
+  } finally { await rm(runtime.root, { recursive: true, force: true }); }
+});
+
+test("explicit Coding Plan receives task-scoped current when Desktop selects Start Plan", async () => {
+  const runtime = await makeFakeRuntime(
+    { providerId: "account:bigmodel-start-plan", modelId: "GLM-5.3-Flash" },
+    true,
+    false,
+    undefined,
+    false,
+    null,
+    undefined,
+    0,
+    true,
+  );
+  try {
+    const zcodeDataRoot = path.join(runtime.root, ".zcode");
+    const personalConfig = path.join(zcodeDataRoot, "v2", "provider_config.json");
+    await mkdir(path.dirname(personalConfig), { recursive: true });
+    await writeFile(runtime.config.providerBuiltinConfigFile, JSON.stringify({ revision: 12, config: { providerConfigRules: { providerRules: [
+      {
+        providerId: "account:bigmodel-start-plan",
+        config: { builtinModelIds: ["GLM-5.3-Flash"], access: { type: "zhipu-account", mode: "start-plan", accountType: "bigmodel" } },
+      },
+      {
+        providerId: "account:bigmodel-individual-coding-plan",
+        config: { builtinModelIds: ["GLM-5.3-Flash"], access: { type: "zhipu-account", mode: "individual-coding-plan", accountType: "bigmodel" } },
+      },
+    ] } } }));
+    await writeFile(personalConfig, JSON.stringify({ config: { providerConfigRules: { providerRules: [] } } }));
+    await writeFile(path.join(zcodeDataRoot, "v2", "config.json"), JSON.stringify({
+      provider: { "builtin:bigmodel-coding-plan": { enabled: true, options: { apiKey: "synthetic-coding-plan-api-key" } } },
+    }));
+    await writeFile(path.join(zcodeDataRoot, "v2", "coding-plan-cache.json"), JSON.stringify({
+      entryStatus: { items: { "builtin:bigmodel-coding-plan": { status: "available" } } },
+    }));
+    await writeFile(path.join(zcodeDataRoot, "v2", "setting.json"), JSON.stringify({
+      providerFamilyConnectionSelections: { bigmodel: { kind: "start-plan" } },
+    }));
+    let startPlanAuthCalls = 0;
+    const adapter = new ZCodeAppServerAdapter({
+      resolver: { resolve: async () => ({ ...runtime.config, providerPersonalConfigFile: personalConfig, zcodeDataRoot }) },
+      timeoutMs: 10_000,
+      childEnvBase: { PATH: process.env.PATH },
+      homeDir: runtime.root,
+      resolveStartPlanRuntimeAuth: async () => {
+        startPlanAuthCalls += 1;
+        throw new Error("Coding Plan must not use the Start Plan lease");
+      },
+    });
+    const handle = await adapter.startTask({
+      task: { ...task, model: { provider_id: "account:bigmodel-individual-coding-plan", model_id: "GLM-5.3-Flash" } },
+      workspace: makeWorkspace(runtime.root),
+      attempt: 1,
+    });
+    const result = await adapter.getResult(handle);
+    assert.equal(result.exitCode, 0);
+    assert.equal(startPlanAuthCalls, 0);
+    const messages = (await readFile(runtime.requestLog, "utf8")).trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+    const sync = messages.find((message) => message.method === "provider/updateAccountConfig");
+    const payload = sync?.params as { states?: Record<string, { current?: boolean }> } | undefined;
+    assert.equal(payload?.states?.["account:bigmodel-individual-coding-plan"]?.current, true);
+    assert.equal(payload?.states?.["account:bigmodel-start-plan"]?.current, undefined);
+    assert.deepEqual(messages.find((message) => message.id === "auth-rpc")?.result, {
+      headersApplied: true,
+      requestAuth: { apiKey: "synthetic-coding-plan-api-key" },
+    });
+  } finally { await rm(runtime.root, { recursive: true, force: true }); }
+});
+
+test("unsupported or malformed Start Plan registry bindings fail before Session creation", async () => {
+  for (const scenario of [
+    {
+      providerId: "account:zai-start-plan",
+      rule: {
+        providerId: "account:zai-start-plan",
+        config: { builtinModelIds: ["GLM-5.3-Flash"], access: { type: "zhipu-account", mode: "start-plan", accountType: "zai" } },
+      },
+    },
+    {
+      providerId: "account:bigmodel-start-plan",
+      rule: null,
+    },
+    {
+      providerId: "account:bigmodel-start-plan",
+      rule: {
+        providerId: "account:bigmodel-start-plan",
+        config: { builtinModelIds: ["GLM-5.3-Flash"], access: { type: "zhipu-account", mode: "individual-coding-plan", accountType: "bigmodel" } },
+      },
+    },
+    {
+      providerId: "account:bigmodel-start-plan",
+      rule: {
+        providerId: "account:bigmodel-start-plan",
+        config: { builtinModelIds: ["GLM-5.3-Flash"], access: { type: "api-key", mode: "start-plan", accountType: "bigmodel" } },
+      },
+    },
+  ] as const) {
+    const runtime = await makeFakeRuntime();
+    try {
+      await writeFile(runtime.config.providerBuiltinConfigFile, JSON.stringify({
+        revision: 13,
+        config: { providerConfigRules: { providerRules: scenario.rule ? [scenario.rule] : [] } },
+      }));
+      const events: Array<{ type: string }> = [];
+      const adapter = new ZCodeAppServerAdapter({
+        resolver: { resolve: async () => runtime.config },
+        timeoutMs: 10_000,
+        childEnvBase: { PATH: process.env.PATH },
+        startPlanProviderEntitled: true,
+        resolveStartPlanRuntimeAuth: async () => ({
+          apiKey: "synthetic-start-plan-jwt-marker",
+          expiresAt: Date.now() + 10_000,
+          isValid: () => true,
+        }),
+        onEvent: (event) => events.push(event),
+      });
+      const handle = await adapter.startTask({
+        task: { ...task, model: { provider_id: scenario.providerId, model_id: "GLM-5.3-Flash" } },
+        workspace: makeWorkspace(runtime.root),
+        attempt: 1,
+      });
+      const result = await adapter.getResult(handle);
+      assert.equal(result.exitCode, 1);
+      assert.equal(events.some((event) => event.type === "app_server_started"), false);
+    } finally {
+      await rm(runtime.root, { recursive: true, force: true });
+    }
+  }
 });
 
 test("applies a per-task model override, verifies the selection, and does not persist it as the workspace default", async () => {

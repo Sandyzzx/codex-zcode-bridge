@@ -34596,8 +34596,8 @@ import path7 from "node:path";
 import { createHash as createHash2 } from "node:crypto";
 import { existsSync as existsSync5, readFileSync as readFileSync5 } from "node:fs";
 import path6 from "node:path";
-function buildAccountProviderPayload(config2, verifiedSelection, homeDir) {
-  const source = readAccountProviderSource(config2, verifiedSelection, homeDir);
+function buildAccountProviderPayload(config2, verifiedSelection, homeDir, taskProviderId) {
+  const source = readAccountProviderSource(config2, verifiedSelection, homeDir, taskProviderId);
   if (!source) return null;
   const providers = {};
   const states = {};
@@ -34609,7 +34609,7 @@ function buildAccountProviderPayload(config2, verifiedSelection, homeDir) {
     states[entry.providerId] = {
       availability: entry.availability,
       entitled: entry.entitled,
-      current: entry.current
+      ...entry.current === void 0 ? {} : { current: entry.current }
     };
   }
   return {
@@ -34649,7 +34649,7 @@ function zcodeV2DataDir(personalProviderConfigFile) {
   if (path6.basename(zcodeDir).toLowerCase() !== ".zcode") return null;
   return v2Dir;
 }
-function readAccountProviderSource(config2, verifiedSelection, homeDir) {
+function readAccountProviderSource(config2, verifiedSelection, homeDir, taskProviderId) {
   const table = readJson(config2.providerBuiltinConfigFile);
   const providerRules = readProviderRules(table).filter(isRecord).map((rule) => rule).filter((rule) => rule.config?.access?.type === "zhipu-account" && typeof rule.providerId === "string").sort((left, right) => left.providerId.localeCompare(right.providerId));
   if (!providerRules.length) return null;
@@ -34663,10 +34663,15 @@ function readAccountProviderSource(config2, verifiedSelection, homeDir) {
   const settingFile = homeDir ? accountSettingFile(homeDir) : path6.join(officialV2Dir, "setting.json");
   const settings = readJson(settingFile);
   const selectedKeys = asRecord(settings?.modelProviderFamilySelectedKeys);
-  const connectionSelections = asRecord(settings?.providerFamilyConnectionSelections);
+  const rawConnectionSelections = settings?.providerFamilyConnectionSelections;
+  const connectionSelectionsPresent = settings !== null && Object.prototype.hasOwnProperty.call(settings, "providerFamilyConnectionSelections");
+  const connectionSelections = asRecord(rawConnectionSelections);
+  const connectionSelectionsInvalid = connectionSelectionsPresent && !isRecord(rawConnectionSelections);
+  const taskAccountProviderId = taskProviderId && providerRules.some((rule) => rule.providerId === taskProviderId) ? taskProviderId : null;
   const entries = providerRules.map((rule) => {
     const providerId = rule.providerId;
     const legacyId = configProviderId(providerId, rule);
+    const planKind = normalizePlanKind(rule.config?.access?.mode);
     const cacheStatus = asRecord(cacheItems[legacyId]).status;
     const legacyConfig = asRecord(credentialProviders[legacyId]);
     const options = asRecord(legacyConfig.options);
@@ -34675,16 +34680,24 @@ function readAccountProviderSource(config2, verifiedSelection, homeDir) {
     if (verifiedSelection?.providerId === providerId && !selectedEntitled) {
       throw new Error("start_plan_model_not_registered");
     }
-    const entitled = normalizePlanKind(rule.config?.access?.mode) === "start-plan" ? selectedEntitled : cacheStatus === "available" || legacyConfig.enabled === true && apiKey.length > 0;
+    const entitled = planKind === "start-plan" ? selectedEntitled : cacheStatus === "available" || legacyConfig.enabled === true && apiKey.length > 0;
+    const desktopCurrent = isCurrentProvider(
+      rule,
+      legacyId,
+      selectedKeys,
+      connectionSelectionsInvalid,
+      connectionSelections
+    );
+    const current = taskAccountProviderId ? planKind === "off-peak" || planKind === "highspeed" ? void 0 : providerId === taskAccountProviderId ? true : desktopCurrent === true ? void 0 : desktopCurrent : desktopCurrent;
     return {
       providerId,
       legacyId,
-      planKind: normalizePlanKind(rule.config?.access?.mode),
+      planKind,
       accessType: rule.config?.access?.type ?? "zhipu-account",
-      builtinModelIds: [...rule.config?.builtinModelIds ?? []].sort(),
+      builtinModelIds: [...rule.config?.builtinModelIds ?? []],
       entitled,
       availability: entitled ? "available" : "unavailable",
-      current: isCurrentProvider(rule, legacyId, selectedKeys, connectionSelections),
+      current,
       apiKey
     };
   });
@@ -34703,15 +34716,27 @@ function zcodeBuiltinRevision(table, sourceFile) {
 function accountProviderRevision(builtinRevision, providers, states) {
   return `account:${JSON.stringify([builtinRevision, providers, states])}`;
 }
-function isCurrentProvider(rule, legacyId, selectedKeys, connectionSelections) {
+function isCurrentProvider(rule, legacyId, selectedKeys, connectionSelectionsInvalid, connectionSelections) {
   const access = rule.config?.access;
   if (!access?.accountType) return false;
-  const selected = selectedKeys[access.accountType];
-  if (typeof selected === "string") {
-    return selected === legacyId || selected.endsWith(`:${legacyId}`);
+  if (access.mode === "off-peak" || access.mode === "highspeed") return void 0;
+  if (connectionSelectionsInvalid) return false;
+  if (Object.prototype.hasOwnProperty.call(connectionSelections, access.accountType)) {
+    const connection = asRecord(connectionSelections[access.accountType]);
+    if (!isConnectionSelectionKind(connection.kind)) return false;
+    if (connection.kind === "team-coding-plan" && (!isNonEmptyString(connection.productId) || !isNonEmptyString(connection.organizationId) || !isNonEmptyString(connection.projectId))) {
+      return false;
+    }
+    return connection.kind === access.mode;
   }
-  const connection = asRecord(connectionSelections[access.accountType]);
-  return typeof connection.kind === "string" && connection.kind === access.mode;
+  const selected = selectedKeys[access.accountType];
+  return typeof selected === "string" && (selected === legacyId || selected.endsWith(`:${legacyId}`));
+}
+function isConnectionSelectionKind(value) {
+  return value === "start-plan" || value === "individual-coding-plan" || value === "team-coding-plan";
+}
+function isNonEmptyString(value) {
+  return typeof value === "string" && value.trim().length > 0;
 }
 function normalizePlanKind(value) {
   return value === "start-plan" || value === "individual-coding-plan" || value === "team-coding-plan" || value === "off-peak" || value === "highspeed" ? value : null;

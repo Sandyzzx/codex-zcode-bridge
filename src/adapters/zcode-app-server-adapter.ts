@@ -43,7 +43,8 @@ import {
 import { createHash, randomUUID } from "node:crypto";
 import { createMinimalOsEnv } from "../runtime/child-env.js";
 import {
-  accountProviderPlanKind,
+  accountProviderRuleFacts,
+  BIGMODEL_START_PLAN_PROVIDER_ID,
   buildAccountProviderPayload,
   catalogProviderId,
   runtimeAuthReply,
@@ -566,8 +567,31 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         void this.#resolver.resolve().then(resolve, reject).finally(() => entry.abort.signal.removeEventListener("abort", aborted));
       });
       entry.abort.signal.throwIfAborted();
-      const startPlanSelected = this.#resolveStartPlanRuntimeAuth !== undefined
-        && accountProviderPlanKind(task.model?.provider_id, config) === "start-plan";
+      const taskProviderId = task.model?.provider_id;
+      const taskProviderFacts = accountProviderRuleFacts(taskProviderId, config);
+      const otherStartPlanSelected = taskProviderFacts?.planKind === "start-plan"
+        && taskProviderId !== BIGMODEL_START_PLAN_PROVIDER_ID;
+      if (otherStartPlanSelected) {
+        return this.#startPlanReadinessFailure(
+          entry,
+          "Only the BigModel Start Plan provider has a supported Bridge credential binding; no ZCode session was started.",
+        );
+      }
+      const exactStartPlanRegistryValid = taskProviderFacts?.planKind === "start-plan"
+        && taskProviderFacts.accountType === "bigmodel";
+      if (taskProviderId === BIGMODEL_START_PLAN_PROVIDER_ID && !exactStartPlanRegistryValid) {
+        return this.#startPlanReadinessFailure(
+          entry,
+          "The BigModel Start Plan provider is missing or invalid in the official provider registry; no ZCode session was started.",
+        );
+      }
+      const startPlanSelected = taskProviderId === BIGMODEL_START_PLAN_PROVIDER_ID && exactStartPlanRegistryValid;
+      if (startPlanSelected && !this.#resolveStartPlanRuntimeAuth) {
+        return this.#startPlanReadinessFailure(
+          entry,
+          "Start Plan runtime authorization is unavailable; no ZCode session was started.",
+        );
+      }
       if (startPlanSelected && !this.#startPlanProviderEntitled) {
         return this.#startPlanReadinessFailure(entry, "Start Plan live entitlement was not verified; no ZCode session was started.");
       }
@@ -576,9 +600,10 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         accountProviderPayload = buildAccountProviderPayload(
           config,
           startPlanSelected
-            ? { providerId: "account:bigmodel-start-plan", modelId: task.model!.model_id }
+            ? { providerId: BIGMODEL_START_PLAN_PROVIDER_ID, modelId: task.model!.model_id }
             : undefined,
           this.#homeDir,
+          taskProviderId,
         );
       } catch (error) {
         if (startPlanSelected) {
@@ -588,8 +613,8 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         }
         throw error;
       }
-      if (startPlanSelected && (!accountProviderPayload?.providers["account:bigmodel-start-plan"]
-        || accountProviderPayload.providers["account:bigmodel-start-plan"].access.entitled !== true)) {
+      if (startPlanSelected && (!accountProviderPayload?.providers[BIGMODEL_START_PLAN_PROVIDER_ID]
+        || accountProviderPayload.providers[BIGMODEL_START_PLAN_PROVIDER_ID].access.entitled !== true)) {
         return this.#startPlanReadinessFailure(entry, "Start Plan provider snapshot could not be prepared after live entitlement verification.");
       }
       const preferences = resolveSessionPreferences(task.model, runtimeEnv, this.#executionProfileId);
@@ -1636,7 +1661,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         const providerId = typeof selection.providerId === "string"
           ? selection.providerId
           : typeof params.providerId === "string" ? params.providerId : undefined;
-        if (accountProviderPlanKind(providerId, config) === "start-plan" && this.#resolveStartPlanRuntimeAuth) {
+        if (providerId === BIGMODEL_START_PLAN_PROVIDER_ID && this.#resolveStartPlanRuntimeAuth) {
           const replySafely = (result: JsonRecord): void => {
             try { write({ id, result }); } catch { entry.rejectTurn(new Error("Start Plan authorization transport failed.")); }
           };
