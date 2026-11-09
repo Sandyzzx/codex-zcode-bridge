@@ -33,6 +33,10 @@ export type SqliteAuthorityOptions = ClaimOnlyDriverOptions & {
   readonly testBeforeDispatch?: () => Promise<void>;
   readonly testOnScheduler?: (stage: string, detail: Readonly<Record<string, unknown>>) => void;
   readonly testShutdownWaitMs?: number;
+  /** Host-supplied ADR-031 task-creation routing hook. Runs before
+   * TaskPackage validation and persistence so every stored task carries the
+   * fully resolved provider/model selection. */
+  readonly routeTaskModel?: (task: TaskPackage) => Promise<TaskPackage>;
 };
 
 /** SQLite Lifecycle Manager. Owns scheduling; the bound driver owns durable facts. */
@@ -62,11 +66,17 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
   readonly #context: NonNullable<ClaimOnlyDriverOptions["trustedLocalContext"]>;
   readonly #processProbe: ProcessProbe;
   readonly #startPlanAuthAvailable: boolean;
+  readonly #startPlanAuthInjected: boolean;
+  readonly #startPlanPrivateAuthFactory?: () => Promise<NonNullable<ClaimOnlyDriverOptions["startPlanPrivateAuth"]> | null>;
   readonly #testOnlyFakeAdapter: boolean;
+  readonly #routeTaskModel?: (task: TaskPackage) => Promise<TaskPackage>;
 
   private constructor(driver: Driver, context: NonNullable<ClaimOnlyDriverOptions["trustedLocalContext"]>, processProbe: ProcessProbe,
     testBeforeDispatch?: () => Promise<void>, testOnScheduler?: SqliteAuthorityOptions["testOnScheduler"],
-    shutdownWaitMs = DEFAULT_HOST_SHUTDOWN_WAIT_MS, startPlanAuthAvailable = false, testOnlyFakeAdapter = false) {
+    shutdownWaitMs = DEFAULT_HOST_SHUTDOWN_WAIT_MS, startPlanAuthAvailable = false, testOnlyFakeAdapter = false,
+    routeTaskModel?: (task: TaskPackage) => Promise<TaskPackage>,
+    startPlanAuthInjected = false,
+    startPlanPrivateAuthFactory?: () => Promise<NonNullable<ClaimOnlyDriverOptions["startPlanPrivateAuth"]> | null>) {
     this.#driver = driver;
     this.#context = context;
     this.#processProbe = processProbe;
@@ -74,17 +84,36 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     this.#testOnScheduler = testOnScheduler;
     this.#shutdownWaitMs = shutdownWaitMs;
     this.#startPlanAuthAvailable = startPlanAuthAvailable;
+    this.#startPlanAuthInjected = startPlanAuthInjected;
+    this.#startPlanPrivateAuthFactory = startPlanPrivateAuthFactory;
     this.#testOnlyFakeAdapter = testOnlyFakeAdapter;
+    this.#routeTaskModel = routeTaskModel;
   }
 
   async createTask(task: TaskPackage): Promise<TaskReceipt> {
     this.#assertOpen();
     this.#assertAccepting();
     this.#assertRecoveryReady();
+    // ADR-031: routing runs before validation so a provider-less model input
+    // is resolved to the actual provider/model that will be persisted.
+    task = this.#routeTaskModel ? await this.#routeTaskModel(task) : task;
+    if (task.model && !task.model.provider_id?.trim()) {
+      throw new TaskManagerError("TASK_INVALID", "model.provider_id is required because task model routing is not configured");
+    }
     validateTaskPackage(task);
-    if (task.model?.provider_id === "account:bigmodel-start-plan"
-      && !this.#startPlanAuthAvailable && !this.#testOnlyFakeAdapter) {
-      throw new TaskManagerError("TASK_INVALID", "official Start Plan credentials are unavailable");
+    // ADR-031: Start Plan credential discovery is on-demand. With an injected
+    // issuer the availability fact is fixed; with the host factory this
+    // pre-intent refusal reads the current official credential state, so a
+    // logout rejects the new task at creation instead of stranding an
+    // Operation in launch-outcome-unknown. Dispatch re-resolves the factory,
+    // keeping the window between creation and spawn covered by the frozen
+    // launch-unknown recovery semantics.
+    if (task.model?.provider_id === "account:bigmodel-start-plan" && !this.#testOnlyFakeAdapter) {
+      if (!this.#startPlanAuthAvailable) throw new TaskManagerError("TASK_INVALID", "official Start Plan credentials are unavailable");
+      if (!this.#startPlanAuthInjected) {
+        const issuer = await this.#startPlanPrivateAuthFactory?.().catch(() => null) ?? null;
+        if (!issuer) throw new TaskManagerError("TASK_INVALID", "official Start Plan credentials are unavailable");
+      }
     }
     const policy = this.#driverTrustedPolicy();
     const sourceDecision = policy.validateWorkspace({ requestedPath: task.workspace, canonicalPath: task.workspace });
@@ -650,7 +679,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
 
   static async create(options: SqliteAuthorityOptions): Promise<SqliteLifecycleMcpAuthority> {
     if (!options.trustedLocalContext) throw new TaskManagerError("TASK_STATE", "trusted local context is required");
-    const { testBeforeDispatch, testOnScheduler, testShutdownWaitMs, ...driverOptions } = options;
+    const { testBeforeDispatch, testOnScheduler, testShutdownWaitMs, routeTaskModel, ...driverOptions } = options;
     const shutdownWaitMs = testShutdownWaitMs ?? DEFAULT_HOST_SHUTDOWN_WAIT_MS;
     if (!Number.isSafeInteger(shutdownWaitMs) || shutdownWaitMs < 1 || shutdownWaitMs > DEFAULT_HOST_SHUTDOWN_WAIT_MS) {
       throw new TaskManagerError("TASK_STATE", "invalid Host shutdown wait budget");
@@ -658,7 +687,9 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     const processProbe = options.processProbe ?? createPlatformProbe();
     const authority = new SqliteLifecycleMcpAuthority(await openClaimOnlyDriver({ ...driverOptions, processProbe }), options.trustedLocalContext,
       processProbe, testBeforeDispatch, testOnScheduler, shutdownWaitMs,
-      options.startPlanPrivateAuth !== undefined, options.testOnlyFakeAdapter === true);
+      options.startPlanPrivateAuth !== undefined || options.startPlanPrivateAuthFactory !== undefined,
+      options.testOnlyFakeAdapter === true, routeTaskModel,
+      options.startPlanPrivateAuth !== undefined, options.startPlanPrivateAuthFactory);
     try {
       await authority.recoverTasks();
       return authority;

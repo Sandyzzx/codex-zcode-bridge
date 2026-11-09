@@ -352,6 +352,7 @@ var init_resolver = __esm({
       "ZCODE_BRIDGE_DEFAULT_PROVIDER_ID",
       "ZCODE_BRIDGE_DEFAULT_MODEL_ID",
       "ZCODE_BRIDGE_DEFAULT_REASONING_LEVEL",
+      "ZCODE_BRIDGE_PREFER_STARTPLAN",
       "ZCODE_BRIDGE_MODE",
       "ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS",
       "ZCODE_BRIDGE_TIMEOUT_MS",
@@ -2037,7 +2038,7 @@ var init_process_spawn = __esm({
 
 // src/runtime/build-provenance.ts
 import { createHash as createHash4 } from "node:crypto";
-import { readFileSync as readFileSync7, realpathSync } from "node:fs";
+import { readFileSync as readFileSync8, realpathSync } from "node:fs";
 import path9 from "node:path";
 function fingerprintRuntimeArtifact(filePath) {
   if (!filePath) return { path: null, sha256: null };
@@ -2045,7 +2046,7 @@ function fingerprintRuntimeArtifact(filePath) {
     const resolvedPath = realpathSync(filePath);
     return {
       path: resolvedPath,
-      sha256: createHash4("sha256").update(readFileSync7(resolvedPath)).digest("hex").toUpperCase()
+      sha256: createHash4("sha256").update(readFileSync8(resolvedPath)).digest("hex").toUpperCase()
     };
   } catch {
     return { path: path9.resolve(filePath), sha256: null };
@@ -2411,7 +2412,7 @@ __export(start_plan_production_auth_exports, {
   readOfficialCliVersion: () => readOfficialCliVersion,
   readOfficialStartPlanCredential: () => readOfficialStartPlanCredential
 });
-import { readFileSync as readFileSync9 } from "node:fs";
+import { readFileSync as readFileSync10 } from "node:fs";
 import { spawn as spawn5 } from "node:child_process";
 import {
   createDecipheriv as cryptoCreateDecipheriv,
@@ -2419,7 +2420,7 @@ import {
 } from "node:crypto";
 import { homedir as osHomedir, platform as osPlatform, userInfo as osUserInfo } from "node:os";
 import path13 from "node:path";
-function isRecord4(value) {
+function isRecord5(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 function officialCredentialSecret(env) {
@@ -2457,13 +2458,13 @@ function readOfficialCredentialString(value, env) {
   return decodeOfficialCredentialString(value, env);
 }
 function readOfficialUserInfo(value, env) {
-  if (isRecord4(value)) return value;
+  if (isRecord5(value)) return value;
   if (typeof value !== "string") return null;
   const decoded = decodeOfficialCredentialString(value, env);
   if (decoded === null) return null;
   try {
     const parsed = JSON.parse(decoded);
-    return isRecord4(parsed) ? parsed : null;
+    return isRecord5(parsed) ? parsed : null;
   } catch {
     return null;
   }
@@ -2477,14 +2478,14 @@ function decodeJwtPayload(jwt) {
     const payload = jwt.split(".")[1];
     const json = Buffer.from(payload, "base64url").toString("utf8");
     const parsed = JSON.parse(json);
-    return isRecord4(parsed) ? parsed : null;
+    return isRecord5(parsed) ? parsed : null;
   } catch {
     return null;
   }
 }
 function asOfficialBillingEnvelope(value) {
-  if (!isRecord4(value)) return null;
-  const data = isRecord4(value.data) ? value.data : void 0;
+  if (!isRecord5(value)) return null;
+  const data = isRecord5(value.data) ? value.data : void 0;
   return {
     success: value.success,
     code: value.code,
@@ -2500,7 +2501,7 @@ function isSuccessfulBusinessEnvelope(envelope) {
   return envelope.success !== false && (envelope.code === void 0 || envelope.code === 0 || envelope.code === 200);
 }
 function stringKeyedArray(value) {
-  return Array.isArray(value) ? value.filter(isRecord4) : [];
+  return Array.isArray(value) ? value.filter(isRecord5) : [];
 }
 function hasActiveStartPlan(envelope) {
   const plans = stringKeyedArray(envelope.data?.plans);
@@ -2551,11 +2552,11 @@ function requestedModelQuotaVerdict(balances, requestedModel) {
 }
 function extractProviderCode(value) {
   if (!value) return void 0;
-  const error2 = isRecord4(value.error) ? value.error : void 0;
+  const error2 = isRecord5(value.error) ? value.error : void 0;
   const candidates = [
     value.providerCode,
     error2?.providerCode,
-    error2 && isRecord4(error2) ? error2.code : void 0,
+    error2 && isRecord5(error2) ? error2.code : void 0,
     value.code
   ];
   const raw = candidates.find((candidate) => typeof candidate === "number" || typeof candidate === "string");
@@ -2565,11 +2566,11 @@ function readOfficialStartPlanCredential(zcodeDataRoot, env = process.env) {
   const credentialsPath = path13.join(zcodeDataRoot, "v2", "credentials.json");
   let parsed;
   try {
-    parsed = JSON.parse(readFileSync9(credentialsPath, "utf8"));
+    parsed = JSON.parse(readFileSync10(credentialsPath, "utf8"));
   } catch {
     return null;
   }
-  if (!isRecord4(parsed)) return null;
+  if (!isRecord5(parsed)) return null;
   const jwt = readOfficialCredentialString(parsed.zcodejwttoken, env)?.trim() ?? "";
   if (!jwt || !looksLikeJwt(jwt)) return null;
   const userInfo = readOfficialUserInfo(parsed["oauth:bigmodel:user_info"], env);
@@ -2585,7 +2586,7 @@ function readOfficialStartPlanCredential(zcodeDataRoot, env = process.env) {
   const expiresAt = typeof exp === "number" && Number.isFinite(exp) && exp > 0 ? exp * 1e3 : null;
   let deviceMid = "";
   try {
-    const telemetry = JSON.parse(readFileSync9(path13.join(zcodeDataRoot, "v2", "telemetry-state.json"), "utf8"));
+    const telemetry = JSON.parse(readFileSync10(path13.join(zcodeDataRoot, "v2", "telemetry-state.json"), "utf8"));
     if (typeof telemetry.deviceMid === "string" && telemetry.deviceMid.trim()) deviceMid = telemetry.deviceMid.trim();
   } catch {
   }
@@ -2762,7 +2763,7 @@ var init_start_plan_production_auth = __esm({
           let providerCode2;
           try {
             const parsed = await response.json();
-            if (isRecord4(parsed)) {
+            if (isRecord5(parsed)) {
               body2 = parsed;
               providerCode2 = extractProviderCode(parsed);
             }
@@ -2788,7 +2789,7 @@ var init_start_plan_production_auth = __esm({
         let providerCode;
         try {
           const parsed = await response.json();
-          if (isRecord4(parsed)) {
+          if (isRecord5(parsed)) {
             body = parsed;
             providerCode = extractProviderCode(parsed);
           }
@@ -3856,7 +3857,7 @@ __export(store_exports, {
 });
 import { DatabaseSync } from "node:sqlite";
 import { createHash as createHash11, randomUUID as randomUUID3 } from "node:crypto";
-import { existsSync as existsSync8, lstatSync as lstatSync2, realpathSync as realpathSync4, readFileSync as readFileSync10, writeFileSync as writeFileSync3, openSync, closeSync, fsyncSync, unlinkSync as unlinkSync2, renameSync as renameSync2, statSync as statSync5, readdirSync } from "node:fs";
+import { existsSync as existsSync9, lstatSync as lstatSync2, realpathSync as realpathSync4, readFileSync as readFileSync11, writeFileSync as writeFileSync3, openSync, closeSync, fsyncSync, unlinkSync as unlinkSync2, renameSync as renameSync2, statSync as statSync5, readdirSync } from "node:fs";
 import path14 from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 function canonical4(value) {
@@ -3878,7 +3879,7 @@ function assertCandidateSchema(db, version2 = SCHEMA_VERSION) {
   if (!expectedSchemas.has(version2)) {
     const base = new DatabaseSync(":memory:"), admin = new DatabaseSync(":memory:");
     try {
-      const schema = version2 === 13 ? readFileSync10(new URL("./schema-v13.sql", import.meta.url), "utf8") : SCHEMA;
+      const schema = version2 === 13 ? readFileSync11(new URL("./schema-v13.sql", import.meta.url), "utf8") : SCHEMA;
       base.exec(schema);
       admin.exec(schema + "\n" + ADMIN_ABANDONMENT_SCHEMA);
       expectedSchemas.set(version2, [JSON.stringify(schemaObjects(base)), JSON.stringify(schemaObjects(admin))]);
@@ -4187,7 +4188,7 @@ function validateHistoricalExceptionSnapshot(snapshot, sourceManifest) {
   }
 }
 function pathsFor(root, { databaseFileName = "operations.sqlite3", managedDataDirectory = false, allowCutoverPending = false, allowUnpublishedCutover = false, allowFreshBootstrapPending = false } = {}) {
-  if (typeof root !== "string" || !path14.isAbsolute(root) || !existsSync8(root) || !lstatSync2(root).isDirectory() || lstatSync2(root).isSymbolicLink()) fail2("invalid_data_root");
+  if (typeof root !== "string" || !path14.isAbsolute(root) || !existsSync9(root) || !lstatSync2(root).isDirectory() || lstatSync2(root).isSymbolicLink()) fail2("invalid_data_root");
   if (typeof databaseFileName !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/u.test(databaseFileName) || databaseFileName === "." || databaseFileName === "..") fail2("invalid_database_file_name");
   const resolved = realpathSync4.native(root);
   if (!managedDataDirectory) {
@@ -4218,7 +4219,7 @@ function pathsFor(root, { databaseFileName = "operations.sqlite3", managedDataDi
 function readPublishedCutoverReceipt(file) {
   let value;
   try {
-    value = JSON.parse(readFileSync10(file, "utf8"));
+    value = JSON.parse(readFileSync11(file, "utf8"));
   } catch {
     fail2("cutover_publication_receipt_unreadable");
   }
@@ -4231,8 +4232,8 @@ function assertCutoverPublicationGate(db, paths) {
   const switched = db.prepare("SELECT * FROM authority_switch").all();
   if (switched.length === 0) return;
   if (switched.length !== 1) fail2("authority_receipt_missing_or_ambiguous");
-  const pending = existsSync8(paths.cutoverPending);
-  const published = existsSync8(paths.cutoverPublished);
+  const pending = existsSync9(paths.cutoverPending);
+  const published = existsSync9(paths.cutoverPublished);
   if (pending && published) fail2("cutover_publication_receipt_ambiguous");
   if (pending) {
     if (!paths.allowCutoverPending) fail2("cutover_publish_pending");
@@ -4258,7 +4259,7 @@ function writePoison(file, value) {
   try {
     renameSync2(tmp, file);
   } catch (error2) {
-    if (!existsSync8(file)) throw error2;
+    if (!existsSync9(file)) throw error2;
     try {
       unlinkSync2(tmp);
     } catch {
@@ -4539,8 +4540,8 @@ var init_store = __esm({
     init_interaction_channel();
     init_json_history_result_exceptions();
     HERE = path14.dirname(fileURLToPath4(import.meta.url));
-    SCHEMA = readFileSync10(new URL("./schema.sql", import.meta.url), "utf8");
-    ADMIN_ABANDONMENT_SCHEMA = readFileSync10(new URL("./admin-abandonment.sql", import.meta.url), "utf8");
+    SCHEMA = readFileSync11(new URL("./schema.sql", import.meta.url), "utf8");
+    ADMIN_ABANDONMENT_SCHEMA = readFileSync11(new URL("./admin-abandonment.sql", import.meta.url), "utf8");
     CONSTRUCT = /* @__PURE__ */ Symbol("construct");
     SCHEMA_VERSION = 14;
     SCHEMA_OBJECT_QUERY = "SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE type IN ('table','view','index','trigger') AND substr(lower(name),1,7)<>'sqlite_' ORDER BY type COLLATE BINARY,name COLLATE BINARY";
@@ -4643,10 +4644,10 @@ var init_store = __esm({
         const source = pathsFor(sourceRoot, options), destination = pathsFor(destinationRoot, options);
         if (source.root === destination.root || path14.resolve(sourceRoot) === path14.resolve(destinationRoot)) fail2("upgrade_same_root");
         const blocked = () => {
-          for (const file of [source.intent, source.poison, source.bootstrapPending, source.cutoverPending]) if (existsSync8(file)) fail2("upgrade_source_blocked");
+          for (const file of [source.intent, source.poison, source.bootstrapPending, source.cutoverPending]) if (existsSync9(file)) fail2("upgrade_source_blocked");
         };
         blocked();
-        if (!existsSync8(source.db)) fail2("database_missing");
+        if (!existsSync9(source.db)) fail2("database_missing");
         const db = new DatabaseSync(source.db, { timeout: 1e3 });
         let target, locked = false;
         try {
@@ -4708,7 +4709,7 @@ var init_store = __esm({
           for (const row of triggers) target.exec(row.sql);
           target.exec("PRAGMA user_version=14; COMMIT; PRAGMA foreign_keys=ON");
           if (target.prepare("PRAGMA integrity_check").get().integrity_check !== "ok" || target.prepare("PRAGMA foreign_key_check").all().length) fail2("upgrade_integrity_failed");
-          if (existsSync8(source.cutoverPublished)) writeFileSync3(destination.cutoverPublished, readFileSync10(source.cutoverPublished), { flag: "wx", mode: 384 });
+          if (existsSync9(source.cutoverPublished)) writeFileSync3(destination.cutoverPublished, readFileSync11(source.cutoverPublished), { flag: "wx", mode: 384 });
           const upgraded = new _IsolatedAdmissionStore(CONSTRUCT, target, destination);
           upgraded.#validateContents();
           upgraded.assertAuthorityReady(runtimeRosterDigest);
@@ -4752,7 +4753,7 @@ var init_store = __esm({
       }
       static initialize(root, options = {}) {
         const p = pathsFor(root, options);
-        if (existsSync8(p.db) || existsSync8(p.cutoverPending) || existsSync8(p.cutoverPublished) || existsSync8(p.poison) || existsSync8(p.intent)) fail2("root_not_empty");
+        if (existsSync9(p.db) || existsSync9(p.cutoverPending) || existsSync9(p.cutoverPublished) || existsSync9(p.poison) || existsSync9(p.intent)) fail2("root_not_empty");
         if (options.onFreshBootstrapStage !== void 0 && typeof options.onFreshBootstrapStage !== "function") fail2("invalid_fresh_bootstrap_stage_hook");
         const freshBootstrapStage = options.onFreshBootstrapStage;
         const db = new DatabaseSync(p.db, { timeout: 5e3 });
@@ -4790,10 +4791,10 @@ var init_store = __esm({
       }
       static open(root, { fault, ...pathOptions } = {}) {
         const p = pathsFor(root, pathOptions);
-        if (existsSync8(p.bootstrapPending) && !p.allowBootstrapPending) fail2("sqlite_bootstrap_pending");
-        if (existsSync8(p.cutoverPending)) fail2("cutover_publish_pending");
-        if (existsSync8(p.poison)) fail2("root_poisoned");
-        if (!existsSync8(p.db)) fail2("database_missing");
+        if (existsSync9(p.bootstrapPending) && !p.allowBootstrapPending) fail2("sqlite_bootstrap_pending");
+        if (existsSync9(p.cutoverPending)) fail2("cutover_publish_pending");
+        if (existsSync9(p.poison)) fail2("root_poisoned");
+        if (!existsSync9(p.db)) fail2("database_missing");
         const db = new DatabaseSync(p.db, { timeout: 5e3 });
         db.exec("PRAGMA foreign_keys=ON");
         const s = new _IsolatedAdmissionStore(CONSTRUCT, db, p, fault);
@@ -4814,9 +4815,9 @@ var init_store = __esm({
       /** Open only the current candidate schema read-only for conservative recovery inspection. */
       static openForRecovery(root, options = {}) {
         const p = pathsFor(root, options);
-        if (existsSync8(p.bootstrapPending)) fail2("sqlite_bootstrap_pending");
-        if (existsSync8(p.cutoverPending) && !p.allowCutoverPending) fail2("cutover_publish_pending");
-        if (!existsSync8(p.db)) fail2("database_missing");
+        if (existsSync9(p.bootstrapPending)) fail2("sqlite_bootstrap_pending");
+        if (existsSync9(p.cutoverPending) && !p.allowCutoverPending) fail2("cutover_publish_pending");
+        if (!existsSync9(p.db)) fail2("database_missing");
         const db = new DatabaseSync(p.db, { timeout: 5e3, readOnly: true });
         try {
           db.exec("PRAGMA foreign_keys=ON");
@@ -4844,7 +4845,7 @@ var init_store = __esm({
         this.#db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
       }
       get poisoned() {
-        return this.#poisoned || existsSync8(this.#paths.poison);
+        return this.#poisoned || existsSync9(this.#paths.poison);
       }
       get foreignKeysEnabled() {
         this.#assertOpen();
@@ -6418,7 +6419,7 @@ var init_store = __esm({
             events: this.#db.prepare("SELECT * FROM manager_operation_events ORDER BY operation_id,sequence").all()
           };
         });
-        return { ...snapshot, root_poisoned: this.poisoned || existsSync8(this.#paths.intent) };
+        return { ...snapshot, root_poisoned: this.poisoned || existsSync9(this.#paths.intent) };
       }
       /** Read-only recovery entry point. Writable Stores cannot be used as Recovery authority. */
       readRecoverySnapshot() {
@@ -6451,7 +6452,7 @@ var init_store = __esm({
           }
           this.#db.exec("COMMIT");
           transaction = false;
-          const poisoned = this.poisoned, writerIntent = existsSync8(this.#paths.intent);
+          const poisoned = this.poisoned, writerIntent = existsSync9(this.#paths.intent);
           const rootBlocked = Boolean(integrityError || meta2.length !== 1 || poisoned || writerIntent);
           const operationsWithRecovery = operations.map((row) => {
             const adminAbandonment = adminAbandonments.get(row.operation_id);
@@ -7380,9 +7381,9 @@ var init_store = __esm({
           }
           throw e;
         } finally {
-          if (settled && !this.#poisoned && !existsSync8(this.#paths.poison)) {
+          if (settled && !this.#poisoned && !existsSync9(this.#paths.poison)) {
             try {
-              const intent = JSON.parse(readFileSync10(this.#paths.intent, "utf8"));
+              const intent = JSON.parse(readFileSync11(this.#paths.intent, "utf8"));
               if (intent.token !== token) fail2("writer_intent_identity_mismatch");
               unlinkSync2(this.#paths.intent);
             } catch (e) {
@@ -8062,7 +8063,7 @@ __export(lifecycle_gate_exports, {
   readAllLifecycleEventsForRecovery: () => readAllLifecycleEventsForRecovery
 });
 import { createHash as createHash12, randomUUID as randomUUID4 } from "node:crypto";
-import { closeSync as closeSync2, existsSync as existsSync9, fsyncSync as fsyncSync2, linkSync, lstatSync as lstatSync3, openSync as openSync2, readFileSync as readFileSync11, readdirSync as readdirSync2, realpathSync as realpathSync5, unlinkSync as unlinkSync3, writeFileSync as writeFileSync4 } from "node:fs";
+import { closeSync as closeSync2, existsSync as existsSync10, fsyncSync as fsyncSync2, linkSync, lstatSync as lstatSync3, openSync as openSync2, readFileSync as readFileSync12, readdirSync as readdirSync2, realpathSync as realpathSync5, unlinkSync as unlinkSync3, writeFileSync as writeFileSync4 } from "node:fs";
 import { spawn as spawn6 } from "node:child_process";
 import path15 from "node:path";
 import { homedir as homedir4 } from "node:os";
@@ -8185,7 +8186,7 @@ async function tryAcquireWindowsBootstrapLock(root, lockPath, databaseFileName, 
 `;
   const systemRoot = process.env["SystemRoot"];
   const absolutePowerShell = systemRoot ? path15.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe") : "powershell.exe";
-  const executable = existsSync9(absolutePowerShell) ? absolutePowerShell : "powershell.exe";
+  const executable = existsSync10(absolutePowerShell) ? absolutePowerShell : "powershell.exe";
   const child = spawn6(executable, [
     "-NoLogo",
     "-NoProfile",
@@ -8424,15 +8425,15 @@ async function ensureFreshSqliteAuthority(root, databaseFileName, modules, proce
     for (; ; ) {
       assertFreshBootstrapRootPath(resolvedRoot);
       lock.assertHeld();
-      if (existsSync9(markerTempPath)) {
+      if (existsSync10(markerTempPath)) {
         const tempStat = lstatSync3(markerTempPath);
-        if (!tempStat.isFile() || tempStat.isSymbolicLink() || existsSync9(databasePath) && !existsSync9(pendingPath)) {
+        if (!tempStat.isFile() || tempStat.isSymbolicLink() || existsSync10(databasePath) && !existsSync10(pendingPath)) {
           throw new LifecycleGateError("sqlite_bootstrap_marker_temp_unexpected");
         }
       }
-      if (existsSync9(pendingPath)) {
+      if (existsSync10(pendingPath)) {
         const marker2 = readFreshBootstrapMarker(pendingPath, databaseFileName);
-        if (existsSync9(databasePath)) {
+        if (existsSync10(databasePath)) {
           const published = tryReadReadySqliteAuthority(modules, resolvedRoot, databaseFileName, true);
           if (published?.kind === "fresh_install" && published.receipt_id === `fresh-install-${marker2.token}`) {
             const stagePath2 = path15.join(resolvedRoot, marker2.stage_file);
@@ -8457,10 +8458,10 @@ async function ensureFreshSqliteAuthority(root, databaseFileName, modules, proce
         removeOwnedBootstrapFile(markerTempPath);
         continue;
       }
-      if (existsSync9(markerTempPath)) {
+      if (existsSync10(markerTempPath)) {
         removeOwnedBootstrapFile(markerTempPath);
       }
-      if (existsSync9(databasePath)) {
+      if (existsSync10(databasePath)) {
         const existing = tryReadReadySqliteAuthority(modules, resolvedRoot, databaseFileName, false);
         if (!existing) throw new LifecycleGateError("sqlite_existing_database_unverified", "existing SQLite database is not a valid production Authority");
         emitFreshBootstrapStage(options, "ready");
@@ -8539,7 +8540,7 @@ async function constructAndPublishFreshSqlite(root, databaseFileName, marker, mo
     }
     lock.assertHeld();
     assertFreshBootstrapRootPath(root);
-    if (existsSync9(databasePath)) throw new LifecycleGateError("sqlite_database_appeared_during_bootstrap");
+    if (existsSync10(databasePath)) throw new LifecycleGateError("sqlite_database_appeared_during_bootstrap");
     linkSync(stagePath, databasePath);
     published = true;
     unlinkSync3(stagePath);
@@ -8615,7 +8616,7 @@ function readFreshBootstrapMarker(file, databaseFileName) {
   try {
     const stat2 = lstatSync3(file);
     if (!stat2.isFile() || stat2.isSymbolicLink() || stat2.size > 16 * 1024) throw new Error("unsafe_marker");
-    const value = JSON.parse(readFileSync11(file, "utf8"));
+    const value = JSON.parse(readFileSync12(file, "utf8"));
     const expectedStagePrefix = `${databaseFileName}.bootstrap-`;
     if (value.schema_version !== 1 || value.state !== "sqlite_bootstrap_pending" || value.database_file !== databaseFileName || typeof value.token !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(value.token) || value.stage_file !== `${expectedStagePrefix}${value.token}.stage` || !value.owner_identity || value.owner_identity.pid < 1 || !Number.isSafeInteger(value.owner_identity.pid) || value.owner_identity.fingerprint_precision !== "exact" || !value.owner_identity.fingerprint || value.owner_identity.identity_version !== PROCESS_IDENTITY_VERSION || !value.owner_identity.platform || !value.owner_identity.captured_at || Number.isNaN(Date.parse(value.owner_identity.captured_at))) throw new Error("invalid_marker");
     return value;
@@ -8746,7 +8747,7 @@ async function openClaimOnlyDriver(options) {
   const modules = await (options.loadModules?.() ?? loadLifecycleCandidateModules());
   let raw;
   try {
-    if (!existsSync9(options.dataRoot)) throw new LifecycleGateError("sqlite_database_missing", "candidate database must be initialized explicitly");
+    if (!existsSync10(options.dataRoot)) throw new LifecycleGateError("sqlite_database_missing", "candidate database must be initialized explicitly");
     raw = modules.Store.open(options.dataRoot, {
       ...options.databaseFileName ? { databaseFileName: options.databaseFileName } : {},
       ...options.managedDataDirectory ? { managedDataDirectory: true } : {}
@@ -9598,8 +9599,14 @@ async function openClaimOnlyDriver(options) {
         const intentRevision = positive3(intent.revision, "launch_intent_revision_missing");
         stage("intent_complete", { revision: intentRevision });
         stage("spawn_bootstrap_start");
-        const usePrivateAuth = input.task.model?.provider_id === "account:bigmodel-start-plan" && !!options.startPlanPrivateAuth;
-        if (usePrivateAuth && (!options.startPlanPrivateAuth?.account || !options.startPlanPrivateAuth.signal || options.startPlanPrivateAuth.signal.aborted || options.testOnlyFakeAdapter)) throw new LifecycleGateError("private_auth_configuration_invalid");
+        const startPlanRequested = input.task.model?.provider_id === "account:bigmodel-start-plan";
+        const startPlanPrivateAuth = options.startPlanPrivateAuth ?? (startPlanRequested && !options.testOnlyFakeAdapter ? await options.startPlanPrivateAuthFactory?.().catch(() => null) ?? null : null);
+        if (startPlanRequested && !startPlanPrivateAuth && !options.testOnlyFakeAdapter) {
+          throw new LifecycleGateError("start_plan_private_auth_unavailable");
+        }
+        const usePrivateAuth = startPlanRequested && !!startPlanPrivateAuth;
+        if (usePrivateAuth && (!startPlanPrivateAuth.account || !startPlanPrivateAuth.signal || startPlanPrivateAuth.signal.aborted || options.testOnlyFakeAdapter)) throw new LifecycleGateError("private_auth_configuration_invalid");
+        stage("start_plan_private_auth_resolved", { requested: startPlanRequested, resolved: usePrivateAuth, source: options.startPlanPrivateAuth ? "injected" : "factory" });
         const launch = await spawnAndBootstrapOnce(() => {
           spawnCount += 1;
           child = spawnClaimOnlyWorker(options.workerEntryPath, provenance, {
@@ -9687,7 +9694,7 @@ async function openClaimOnlyDriver(options) {
           stage("claim_committed", { claim_id: claimId });
           const privateAuthAbort = new AbortController();
           const privateAuthState = { cancelled: false, phase: "resolving" };
-          const accountSignal = usePrivateAuth ? options.startPlanPrivateAuth.signal : void 0;
+          const accountSignal = usePrivateAuth ? startPlanPrivateAuth.signal : void 0;
           const revokeOnAccountChange = () => privateAuthAbort.abort();
           accountSignal?.addEventListener("abort", revokeOnAccountChange, { once: true });
           if (accountSignal?.aborted) privateAuthAbort.abort();
@@ -9712,7 +9719,7 @@ async function openClaimOnlyDriver(options) {
             if (privateAuthAbort.signal.aborted) lifetime.destroy();
             else lifetime.write(Buffer.from([1]));
             try {
-              startPlanEntitled = await options.startPlanPrivateAuth.prepare(
+              startPlanEntitled = await startPlanPrivateAuth.prepare(
                 input.task.model.provider_id,
                 input.task.model.model_id,
                 privateAuthAbort.signal
@@ -9760,7 +9767,7 @@ async function openClaimOnlyDriver(options) {
               continuation: input.continuation ?? null,
               previous_result: input.previousResult ?? null,
               ...usePrivateAuth ? { private_auth: {
-                account: options.startPlanPrivateAuth.account,
+                account: startPlanPrivateAuth.account,
                 claim: claimId,
                 provider: input.task.model.provider_id,
                 model: input.task.model.model_id,
@@ -9800,7 +9807,7 @@ async function openClaimOnlyDriver(options) {
               timeoutMs: 6e4,
               resolveLease: async (request, signal) => {
                 const candidate = asRecord3(request.binding);
-                if (candidate.account !== options.startPlanPrivateAuth.account || candidate.provider !== input.task.model?.provider_id || candidate.model !== input.task.model?.model_id || candidate.task !== input.task.task_id || candidate.attempt !== input.attempt || candidate.operation !== input.operationId || candidate.generation !== generation || candidate.claim !== claimId || candidate.pid !== owner.pid || candidate.creation !== worker.start_fingerprint || typeof candidate.session !== "string" || !candidate.session || typeof candidate.turn !== "string" || !candidate.turn) {
+                if (candidate.account !== startPlanPrivateAuth.account || candidate.provider !== input.task.model?.provider_id || candidate.model !== input.task.model?.model_id || candidate.task !== input.task.task_id || candidate.attempt !== input.attempt || candidate.operation !== input.operationId || candidate.generation !== generation || candidate.claim !== claimId || candidate.pid !== owner.pid || candidate.creation !== worker.start_fingerprint || typeof candidate.session !== "string" || !candidate.session || typeof candidate.turn !== "string" || !candidate.turn) {
                   throw new Error("private_auth_binding_invalid");
                 }
                 const binding = Object.freeze({ ...candidate });
@@ -9818,7 +9825,7 @@ async function openClaimOnlyDriver(options) {
                   return !signal.aborted && owner.exitCode === null && owner.signalCode === null;
                 };
                 if (!await verifyWorker()) throw new Error("private_auth_identity_invalid");
-                const lease = await options.startPlanPrivateAuth.issue(binding, signal);
+                const lease = await startPlanPrivateAuth.issue(binding, signal);
                 if (signal.aborted || privateAuthState.cancelled) {
                   lease.revoke();
                   await waitUntilOwnerExit();
@@ -10730,7 +10737,7 @@ try {
 
 // src/attention/snapshot.ts
 function parseTaskAttentionSnapshot(value, expectedTaskId) {
-  if (!isRecord5(value)) throw new TaskManagerError("TASK_STATE", "SQLite attention projection is invalid");
+  if (!isRecord6(value)) throw new TaskManagerError("TASK_STATE", "SQLite attention projection is invalid");
   const taskId = value.task_id;
   const attempt = value.attempt;
   const status = value.status;
@@ -10748,7 +10755,7 @@ function parseTaskAttentionSnapshot(value, expectedTaskId) {
 function isAttentionTerminalStatus(status) {
   return status === "completed" || status === "failed" || status === "cancelled" || status === "waiting_for_master";
 }
-function isRecord5(value) {
+function isRecord6(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 var TASK_STATUSES;
@@ -11022,8 +11029,11 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
       #context;
       #processProbe;
       #startPlanAuthAvailable;
+      #startPlanAuthInjected;
+      #startPlanPrivateAuthFactory;
       #testOnlyFakeAdapter;
-      constructor(driver, context, processProbe, testBeforeDispatch, testOnScheduler, shutdownWaitMs = DEFAULT_HOST_SHUTDOWN_WAIT_MS, startPlanAuthAvailable = false, testOnlyFakeAdapter = false) {
+      #routeTaskModel;
+      constructor(driver, context, processProbe, testBeforeDispatch, testOnScheduler, shutdownWaitMs = DEFAULT_HOST_SHUTDOWN_WAIT_MS, startPlanAuthAvailable = false, testOnlyFakeAdapter = false, routeTaskModel2, startPlanAuthInjected = false, startPlanPrivateAuthFactory) {
         this.#driver = driver;
         this.#context = context;
         this.#processProbe = processProbe;
@@ -11031,15 +11041,26 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
         this.#testOnScheduler = testOnScheduler;
         this.#shutdownWaitMs = shutdownWaitMs;
         this.#startPlanAuthAvailable = startPlanAuthAvailable;
+        this.#startPlanAuthInjected = startPlanAuthInjected;
+        this.#startPlanPrivateAuthFactory = startPlanPrivateAuthFactory;
         this.#testOnlyFakeAdapter = testOnlyFakeAdapter;
+        this.#routeTaskModel = routeTaskModel2;
       }
       async createTask(task) {
         this.#assertOpen();
         this.#assertAccepting();
         this.#assertRecoveryReady();
+        task = this.#routeTaskModel ? await this.#routeTaskModel(task) : task;
+        if (task.model && !task.model.provider_id?.trim()) {
+          throw new TaskManagerError("TASK_INVALID", "model.provider_id is required because task model routing is not configured");
+        }
         validateTaskPackage2(task);
-        if (task.model?.provider_id === "account:bigmodel-start-plan" && !this.#startPlanAuthAvailable && !this.#testOnlyFakeAdapter) {
-          throw new TaskManagerError("TASK_INVALID", "official Start Plan credentials are unavailable");
+        if (task.model?.provider_id === "account:bigmodel-start-plan" && !this.#testOnlyFakeAdapter) {
+          if (!this.#startPlanAuthAvailable) throw new TaskManagerError("TASK_INVALID", "official Start Plan credentials are unavailable");
+          if (!this.#startPlanAuthInjected) {
+            const issuer = await this.#startPlanPrivateAuthFactory?.().catch(() => null) ?? null;
+            if (!issuer) throw new TaskManagerError("TASK_INVALID", "official Start Plan credentials are unavailable");
+          }
         }
         const policy = this.#driverTrustedPolicy();
         const sourceDecision = policy.validateWorkspace({ requestedPath: task.workspace, canonicalPath: task.workspace });
@@ -11551,7 +11572,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
       }
       static async create(options) {
         if (!options.trustedLocalContext) throw new TaskManagerError("TASK_STATE", "trusted local context is required");
-        const { testBeforeDispatch, testOnScheduler, testShutdownWaitMs, ...driverOptions } = options;
+        const { testBeforeDispatch, testOnScheduler, testShutdownWaitMs, routeTaskModel: routeTaskModel2, ...driverOptions } = options;
         const shutdownWaitMs = testShutdownWaitMs ?? DEFAULT_HOST_SHUTDOWN_WAIT_MS;
         if (!Number.isSafeInteger(shutdownWaitMs) || shutdownWaitMs < 1 || shutdownWaitMs > DEFAULT_HOST_SHUTDOWN_WAIT_MS) {
           throw new TaskManagerError("TASK_STATE", "invalid Host shutdown wait budget");
@@ -11564,8 +11585,11 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
           testBeforeDispatch,
           testOnScheduler,
           shutdownWaitMs,
+          options.startPlanPrivateAuth !== void 0 || options.startPlanPrivateAuthFactory !== void 0,
+          options.testOnlyFakeAdapter === true,
+          routeTaskModel2,
           options.startPlanPrivateAuth !== void 0,
-          options.testOnlyFakeAdapter === true
+          options.startPlanPrivateAuthFactory
         );
         try {
           await authority.recoverTasks();
@@ -33326,7 +33350,11 @@ var zcodeTaskInputSchema = strictObject({
   workspace: string2().min(1),
   worktree_path: string2().min(1).optional(),
   model: strictObject({
-    provider_id: string2().trim().min(1),
+    // ADR-031: provider_id is optional so a plain model (or a
+    // `<ModelId>-StartPlan` alias) is routed once at task creation via
+    // ZCODE_BRIDGE_PREFER_STARTPLAN; an explicit provider stays mandatory
+    // when supplied.
+    provider_id: string2().trim().min(1).optional(),
     model_id: string2().trim().min(1),
     reasoning_level: string2().trim().min(1).optional()
   }).optional(),
@@ -34369,7 +34397,7 @@ function createBridgeServer(options) {
     "zcode_model_catalog",
     {
       title: "Read available ZCode models",
-      description: "Read models and reasoning levels for this workspace. The Bridge caches the catalog for 24 hours, refreshes when provider settings change or the cache expires, and re-reads provider config before retrying a failed refresh. A cache response has current_model=null; use provider_id/model_id from models in zcode_task.model.",
+      description: "Read models and reasoning levels for this workspace. The Bridge caches the catalog for 24 hours, refreshes when provider settings change or the cache expires, and re-reads provider config before retrying a failed refresh. A cache response has current_model=null; use provider_id/model_id from models in zcode_task.model. Start Plan entries appear as <ModelId>-StartPlan aliases and are entitlement-checked live when such a task runs.",
       inputSchema: zcodeModelCatalogInputSchema,
       outputSchema: modelCatalogSchema
     },
@@ -34421,7 +34449,7 @@ function createBridgeServer(options) {
     "zcode_task",
     {
       title: "Submit one ZCode coding task",
-      description: `Create one complete, independently acceptable coding task for the local ZCode Coding Worker. Delegate a deliverable with clear constraints and acceptance criteria; the Worker owns implementation, tests, and repair end to end. workspace is the calling host project root and determines the ZCode Desktop project identity. The calling host decides whether to create a worktree; if it does, pass its existing absolute directory as optional worktree_path. The Bridge never creates, selects, or removes a worktree. Without worktree_path, ZCode runs directly in workspace. Optional model selects a ZCode provider_id/model_id for this session without changing the project default. Returns a TaskReceipt; the task runs asynchronously in a detached worker. ${EXECUTION_NOT_VERDICT}`,
+      description: `Create one complete, independently acceptable coding task for the local ZCode Coding Worker. Delegate a deliverable with clear constraints and acceptance criteria; the Worker owns implementation, tests, and repair end to end. workspace is the calling host project root and determines the ZCode Desktop project identity. The calling host decides whether to create a worktree; if it does, pass its existing absolute directory as optional worktree_path. The Bridge never creates, selects, or removes a worktree. Without worktree_path, ZCode runs directly in workspace. Optional model: pass provider_id+model_id to force that provider, or omit provider_id with a plain model id or a <ModelId>-StartPlan alias to route once per task (prefer_startplan, default true, prefers Start Plan for plain models). Returns a TaskReceipt; the task runs asynchronously in a detached worker. ${EXECUTION_NOT_VERDICT}`,
       inputSchema: zcodeTaskInputSchema,
       outputSchema: taskReceiptSchema
     },
@@ -34568,71 +34596,41 @@ import path7 from "node:path";
 import { createHash as createHash2 } from "node:crypto";
 import { existsSync as existsSync5, readFileSync as readFileSync5 } from "node:fs";
 import path6 from "node:path";
-function buildAccountProviderPayload(config2, verifiedSelection) {
-  const table = readJson(config2.providerBuiltinConfigFile);
-  const providerRules = readProviderRules(table).filter(isRecord).map((rule) => rule).filter((rule) => rule.config?.access?.type === "zhipu-account" && typeof rule.providerId === "string");
-  if (!providerRules.length) return null;
-  const dataDir = zcodeV2DataDir(config2.providerPersonalConfigFile);
-  if (!dataDir) return null;
-  const credentials = readJson(path6.join(dataDir, "config.json"));
-  const credentialProviders = asRecord(credentials?.provider);
-  const cache = readJson(path6.join(dataDir, "coding-plan-cache.json"));
-  const cacheItems = asRecord(asRecord(cache?.entryStatus).items);
+function buildAccountProviderPayload(config2, verifiedSelection, homeDir, taskProviderId) {
+  const source = readAccountProviderSource(config2, verifiedSelection, homeDir, taskProviderId);
+  if (!source) return null;
   const providers = {};
   const states = {};
-  for (const rule of providerRules) {
-    const providerId = rule.providerId;
-    const legacyId = configProviderId(providerId, rule);
-    const cacheStatus = asRecord(cacheItems[legacyId]).status;
-    const legacyConfig = asRecord(credentialProviders[legacyId]);
-    const options = asRecord(legacyConfig.options);
-    const selectedEntitled = verifiedSelection?.providerId === providerId && Array.isArray(rule.config?.builtinModelIds) && rule.config.builtinModelIds.includes(verifiedSelection.modelId);
-    if (verifiedSelection?.providerId === providerId && !selectedEntitled) {
-      throw new Error("start_plan_model_not_registered");
-    }
-    const legacyEntitled = providerId === "account:bigmodel-start-plan" ? false : cacheStatus === "available" || legacyConfig.enabled === true && typeof options.apiKey === "string" && options.apiKey.trim().length > 0;
-    const entitled = selectedEntitled || legacyEntitled;
-    providers[providerId] = {
-      ...Array.isArray(rule.config?.builtinModelIds) ? { builtinModelIds: rule.config.builtinModelIds } : {},
-      access: { type: "zhipu-account", entitled }
+  for (const entry of source.entries) {
+    providers[entry.providerId] = {
+      ...entry.builtinModelIds.length ? { builtinModelIds: [...entry.builtinModelIds] } : {},
+      access: { type: entry.accessType, entitled: entry.entitled }
     };
-    states[providerId] = {
-      availability: entitled ? "available" : "unavailable",
-      entitled,
-      current: entitled
+    states[entry.providerId] = {
+      availability: entry.availability,
+      entitled: entry.entitled,
+      ...entry.current === void 0 ? {} : { current: entry.current }
     };
   }
-  const revision = typeof table?.revision === "number" ? table.revision : 0;
-  const resolvedBuiltinPath = path6.resolve(config2.providerBuiltinConfigFile);
   return {
-    revision: `account:codex-zcode-bridge:${Date.now()}`,
-    basedOnZCodeBuiltinRevision: `zcode-builtin:${revision}:${createHash2("sha256").update(resolvedBuiltinPath).digest("hex")}`,
+    revision: accountProviderRevision(source.builtinRevision, providers, states),
+    basedOnZCodeBuiltinRevision: source.builtinRevision,
     providers,
     states
   };
+}
+function accountSettingFile(homeDir) {
+  return path6.join(homeDir, ".zcode", "v2", "setting.json");
 }
 function runtimeAuthReply(providerId, config2) {
   const unavailable = {
     headersApplied: false,
     errorMessage: "Start Plan requires a ZCode desktop captcha session; this headless app-server bridge cannot provide it."
   };
-  if (!providerId?.startsWith("account:")) return unavailable;
-  const table = readJson(config2.providerBuiltinConfigFile);
-  const rule = readProviderRules(table).find(
-    (candidate) => isRecord(candidate) && candidate.providerId === providerId
-  );
-  if (rule?.config?.access?.mode !== "individual-coding-plan") return unavailable;
-  const legacyId = configProviderId(providerId, rule);
-  const dataDir = zcodeV2DataDir(config2.providerPersonalConfigFile);
-  if (!dataDir) return unavailable;
-  const credentials = readJson(path6.join(dataDir, "config.json"));
-  const cache = readJson(path6.join(dataDir, "coding-plan-cache.json"));
-  const status = asRecord(asRecord(asRecord(cache?.entryStatus).items)[legacyId]).status;
-  const provider = asRecord(asRecord(credentials?.provider)[legacyId]);
-  const options = asRecord(provider.options);
-  const apiKey = typeof options.apiKey === "string" ? options.apiKey.trim() : "";
-  if (!apiKey || status !== "available" && provider.enabled !== true) return unavailable;
-  return { headersApplied: true, requestAuth: { apiKey } };
+  const source = readAccountProviderSource(config2, void 0, void 0);
+  const entry = source?.entries.find((candidate) => candidate.providerId === providerId);
+  if (entry?.planKind !== "individual-coding-plan" || !entry.entitled || !entry.apiKey) return unavailable;
+  return { headersApplied: true, requestAuth: { apiKey: entry.apiKey } };
 }
 function zcodeDataBaseDir(personalProviderConfigFile) {
   const dataDir = zcodeV2DataDir(personalProviderConfigFile);
@@ -34650,6 +34648,98 @@ function zcodeV2DataDir(personalProviderConfigFile) {
   const zcodeDir = path6.dirname(v2Dir);
   if (path6.basename(zcodeDir).toLowerCase() !== ".zcode") return null;
   return v2Dir;
+}
+function readAccountProviderSource(config2, verifiedSelection, homeDir, taskProviderId) {
+  const table = readJson(config2.providerBuiltinConfigFile);
+  const providerRules = readProviderRules(table).filter(isRecord).map((rule) => rule).filter((rule) => rule.config?.access?.type === "zhipu-account" && typeof rule.providerId === "string").sort((left, right) => left.providerId.localeCompare(right.providerId));
+  if (!providerRules.length) return null;
+  const officialDataRoot = path6.resolve(config2.zcodeDataRoot);
+  const officialV2Dir = zcodeV2Dir(officialDataRoot);
+  if (!officialV2Dir) return null;
+  const credentials = readJson(path6.join(officialV2Dir, "config.json"));
+  const credentialProviders = asRecord(credentials?.provider);
+  const cache = readJson(path6.join(officialV2Dir, "coding-plan-cache.json"));
+  const cacheItems = asRecord(asRecord(cache?.entryStatus).items);
+  const settingFile = homeDir ? accountSettingFile(homeDir) : path6.join(officialV2Dir, "setting.json");
+  const settings = readJson(settingFile);
+  const selectedKeys = asRecord(settings?.modelProviderFamilySelectedKeys);
+  const rawConnectionSelections = settings?.providerFamilyConnectionSelections;
+  const connectionSelectionsPresent = settings !== null && Object.prototype.hasOwnProperty.call(settings, "providerFamilyConnectionSelections");
+  const connectionSelections = asRecord(rawConnectionSelections);
+  const connectionSelectionsInvalid = connectionSelectionsPresent && !isRecord(rawConnectionSelections);
+  const taskAccountProviderId = taskProviderId && providerRules.some((rule) => rule.providerId === taskProviderId) ? taskProviderId : null;
+  const entries = providerRules.map((rule) => {
+    const providerId = rule.providerId;
+    const legacyId = configProviderId(providerId, rule);
+    const planKind = normalizePlanKind(rule.config?.access?.mode);
+    const cacheStatus = asRecord(cacheItems[legacyId]).status;
+    const legacyConfig = asRecord(credentialProviders[legacyId]);
+    const options = asRecord(legacyConfig.options);
+    const apiKey = typeof options.apiKey === "string" ? options.apiKey.trim() : "";
+    const selectedEntitled = verifiedSelection?.providerId === providerId && Array.isArray(rule.config?.builtinModelIds) && rule.config.builtinModelIds.includes(verifiedSelection.modelId);
+    if (verifiedSelection?.providerId === providerId && !selectedEntitled) {
+      throw new Error("start_plan_model_not_registered");
+    }
+    const entitled = planKind === "start-plan" ? selectedEntitled : cacheStatus === "available" || legacyConfig.enabled === true && apiKey.length > 0;
+    const desktopCurrent = isCurrentProvider(
+      rule,
+      legacyId,
+      selectedKeys,
+      connectionSelectionsInvalid,
+      connectionSelections
+    );
+    const current = taskAccountProviderId ? planKind === "off-peak" || planKind === "highspeed" ? void 0 : providerId === taskAccountProviderId ? true : desktopCurrent === true ? void 0 : desktopCurrent : desktopCurrent;
+    return {
+      providerId,
+      legacyId,
+      planKind,
+      accessType: rule.config?.access?.type ?? "zhipu-account",
+      builtinModelIds: [...rule.config?.builtinModelIds ?? []],
+      entitled,
+      availability: entitled ? "available" : "unavailable",
+      current,
+      apiKey
+    };
+  });
+  const builtinRevision = zcodeBuiltinRevision(table, config2.providerBuiltinConfigFile);
+  return { officialDataRoot, officialV2Dir, settingFile, builtinRevision, entries };
+}
+function zcodeV2Dir(zcodeDataRoot) {
+  if (path6.basename(zcodeDataRoot).toLowerCase() !== ".zcode") return null;
+  return path6.join(zcodeDataRoot, "v2");
+}
+function zcodeBuiltinRevision(table, sourceFile) {
+  const revision = typeof table?.revision === "number" ? table.revision : 0;
+  const sourceDigest = createHash2("sha256").update(path6.resolve(sourceFile)).digest("hex");
+  return `zcode-builtin:${revision}:${sourceDigest}`;
+}
+function accountProviderRevision(builtinRevision, providers, states) {
+  return `account:${JSON.stringify([builtinRevision, providers, states])}`;
+}
+function isCurrentProvider(rule, legacyId, selectedKeys, connectionSelectionsInvalid, connectionSelections) {
+  const access = rule.config?.access;
+  if (!access?.accountType) return false;
+  if (access.mode === "off-peak" || access.mode === "highspeed") return void 0;
+  if (connectionSelectionsInvalid) return false;
+  if (Object.prototype.hasOwnProperty.call(connectionSelections, access.accountType)) {
+    const connection = asRecord(connectionSelections[access.accountType]);
+    if (!isConnectionSelectionKind(connection.kind)) return false;
+    if (connection.kind === "team-coding-plan" && (!isNonEmptyString(connection.productId) || !isNonEmptyString(connection.organizationId) || !isNonEmptyString(connection.projectId))) {
+      return false;
+    }
+    return connection.kind === access.mode;
+  }
+  const selected = selectedKeys[access.accountType];
+  return typeof selected === "string" && (selected === legacyId || selected.endsWith(`:${legacyId}`));
+}
+function isConnectionSelectionKind(value) {
+  return value === "start-plan" || value === "individual-coding-plan" || value === "team-coding-plan";
+}
+function isNonEmptyString(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+function normalizePlanKind(value) {
+  return value === "start-plan" || value === "individual-coding-plan" || value === "team-coding-plan" || value === "off-peak" || value === "highspeed" ? value : null;
 }
 function configProviderId(providerId, rule) {
   const access = rule.config?.access;
@@ -35030,6 +35120,178 @@ import { mkdir, readFile as readFile2, realpath, rm, stat, writeFile } from "nod
 import { homedir as homedir3 } from "node:os";
 import path8 from "node:path";
 init_errors();
+
+// src/runtime/model-routing.ts
+init_errors();
+import { existsSync as existsSync7, readFileSync as readFileSync7 } from "node:fs";
+var START_PLAN_PROVIDER_ID = "account:bigmodel-start-plan";
+var START_PLAN_ALIAS_SUFFIX = "-StartPlan";
+function stripStartPlanAlias(modelId) {
+  if (!modelId.endsWith(START_PLAN_ALIAS_SUFFIX)) return null;
+  const base = modelId.slice(0, -START_PLAN_ALIAS_SUFFIX.length).trim();
+  return base ? base : null;
+}
+function readStartPlanRoutingRegistry(config2) {
+  const rules = [config2.providerBuiltinConfigFile, config2.providerPersonalConfigFile].flatMap((file) => readProviderRules2(readJson2(file)));
+  const startPlanModelIds = [];
+  const codingPlanProviders = [];
+  for (const rule of rules) {
+    if (!isRecord2(rule) || typeof rule.providerId !== "string") continue;
+    const access = isRecord2(rule.config) && isRecord2(rule.config.access) ? rule.config.access : null;
+    const builtin = isRecord2(rule.config) && Array.isArray(rule.config.builtinModelIds) ? rule.config.builtinModelIds.filter((id) => typeof id === "string" && id.trim().length > 0) : [];
+    if (rule.providerId === START_PLAN_PROVIDER_ID) {
+      for (const id of builtin) if (!startPlanModelIds.includes(id)) startPlanModelIds.push(id);
+      continue;
+    }
+    if (access?.mode === "individual-coding-plan" && builtin.length > 0) {
+      codingPlanProviders.push({ providerId: rule.providerId, modelIds: builtin });
+    }
+  }
+  return { startPlanModelIds, codingPlanProviders };
+}
+function startPlanAliasCatalogEntries(registry2) {
+  return registry2.startPlanModelIds.map((modelId) => ({
+    provider_id: START_PLAN_PROVIDER_ID,
+    model_id: `${modelId}${START_PLAN_ALIAS_SUFFIX}`,
+    label: `${modelId} (Start Plan)`,
+    provider_label: "Start Plan"
+  }));
+}
+var FALLBACK_VERDICTS = /* @__PURE__ */ new Set(["no_entitlement", "quota_exhausted", "model_unavailable"]);
+function resolvePreferStartPlan(env) {
+  const raw = env["ZCODE_BRIDGE_PREFER_STARTPLAN"]?.trim();
+  if (!raw) return true;
+  const normalized = raw.toLowerCase();
+  if (normalized === "true") return true;
+  if (normalized === "false") return false;
+  throw new BridgeError("provider_config_invalid", "ZCODE_BRIDGE_PREFER_STARTPLAN must be true or false");
+}
+var StartPlanEntitlementJournal = class {
+  #verdicts = /* @__PURE__ */ new Map();
+  record(model, status, observedAt) {
+    this.#verdicts.set(model, { status, observedAt });
+  }
+  latest(model) {
+    return this.#verdicts.get(model)?.status ?? null;
+  }
+};
+var RecordingStartPlanEntitlement = class {
+  #inner;
+  #journal;
+  constructor(inner, journal) {
+    this.#inner = inner;
+    this.#journal = journal;
+  }
+  async check(input) {
+    const verdict2 = await this.#inner.check(input);
+    this.#journal.record(input.model, verdict2.status, verdict2.observedAt);
+    return verdict2;
+  }
+};
+function createTaskModelRouter(options) {
+  const cacheLimit = options.cacheLimit ?? 500;
+  const cache = /* @__PURE__ */ new Map();
+  return async (task) => {
+    if (!task.model) return task;
+    const cached2 = cache.get(task.task_id);
+    if (cached2) return { ...task, model: cached2 };
+    const raw = {
+      model_id: task.model.model_id.trim(),
+      ...task.model.provider_id?.trim() ? { provider_id: task.model.provider_id.trim() } : {},
+      ...task.model.reasoning_level?.trim() ? { reasoning_level: task.model.reasoning_level.trim() } : {}
+    };
+    if (!raw.model_id) throw new BridgeError("provider_config_invalid", "model_id must not be blank");
+    const settings = options.settings();
+    const registry2 = await options.registry();
+    const routed = routeTaskModel(raw, settings, registry2, options.journal);
+    cache.set(task.task_id, routed.resolved);
+    if (cache.size > cacheLimit) {
+      const oldest = cache.keys().next().value;
+      if (oldest !== void 0) cache.delete(oldest);
+    }
+    return { ...task, model: routed.resolved };
+  };
+}
+function routeTaskModel(raw, settings, registry2, journal) {
+  const reasoning = raw.reasoning_level?.trim();
+  const withReasoning = (modelId) => ({
+    provider_id: "",
+    model_id: modelId,
+    ...reasoning ? { reasoning_level: reasoning } : {}
+  });
+  if (raw.provider_id) {
+    if (raw.provider_id === START_PLAN_PROVIDER_ID) {
+      const base = stripStartPlanAlias(raw.model_id) ?? raw.model_id;
+      if (registry2 && registry2.startPlanModelIds.length > 0 && !registry2.startPlanModelIds.includes(base)) {
+        throw new BridgeError("provider_config_invalid", `the requested Start Plan model is not present in the official provider registry: ${base}`);
+      }
+      return { mode: "explicit-start-plan", requested: raw, resolved: { ...withReasoning(base), provider_id: START_PLAN_PROVIDER_ID } };
+    }
+    return { mode: "explicit-provider", requested: raw, resolved: { ...withReasoning(raw.model_id), provider_id: raw.provider_id } };
+  }
+  const aliasBase = stripStartPlanAlias(raw.model_id);
+  if (aliasBase) {
+    if (!registry2 || registry2.startPlanModelIds.length === 0 || !registry2.startPlanModelIds.includes(aliasBase)) {
+      throw new BridgeError("provider_config_invalid", `unknown Start Plan model alias: ${raw.model_id}`);
+    }
+    return {
+      mode: "explicit-start-plan",
+      requested: raw,
+      resolved: { ...withReasoning(aliasBase), provider_id: START_PLAN_PROVIDER_ID }
+    };
+  }
+  if (settings.preferStartPlan) {
+    const verdict2 = journal.latest(raw.model_id);
+    if (verdict2 && FALLBACK_VERDICTS.has(verdict2)) {
+      const providerId2 = resolveCodingPlanProvider(raw.model_id, settings, registry2);
+      if (providerId2) {
+        return {
+          mode: "fallback-coding-plan",
+          requested: raw,
+          resolved: { ...withReasoning(raw.model_id), provider_id: providerId2 },
+          reason: `start plan verdict ${verdict2} for this model; routing to the coding plan provider`
+        };
+      }
+      return {
+        mode: "auto-start-plan",
+        requested: raw,
+        resolved: { ...withReasoning(raw.model_id), provider_id: START_PLAN_PROVIDER_ID },
+        reason: `start plan verdict ${verdict2} but no coding plan provider supports this model; deferring to the live preflight`
+      };
+    }
+    return { mode: "auto-start-plan", requested: raw, resolved: { ...withReasoning(raw.model_id), provider_id: START_PLAN_PROVIDER_ID } };
+  }
+  const providerId = resolveCodingPlanProvider(raw.model_id, settings, registry2);
+  if (!providerId) {
+    throw new BridgeError("provider_config_invalid", `no coding plan provider supports the model: ${raw.model_id}`);
+  }
+  return { mode: "prefer-off-coding-plan", requested: raw, resolved: { ...withReasoning(raw.model_id), provider_id: providerId } };
+}
+function resolveCodingPlanProvider(modelId, settings, registry2) {
+  if (settings.defaultProviderId && settings.defaultProviderId !== START_PLAN_PROVIDER_ID && (!registry2 || registry2.codingPlanProviders.some((provider) => provider.providerId === settings.defaultProviderId && provider.modelIds.includes(modelId)))) {
+    return settings.defaultProviderId;
+  }
+  return registry2?.codingPlanProviders.find((provider) => provider.modelIds.includes(modelId))?.providerId ?? null;
+}
+function readJson2(filePath) {
+  try {
+    if (!existsSync7(filePath)) return null;
+    const value = JSON.parse(readFileSync7(filePath, "utf8"));
+    return isRecord2(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+function readProviderRules2(table) {
+  const providerConfigRules = isRecord2(table?.config) ? table.config : {};
+  const rules = isRecord2(providerConfigRules.providerConfigRules) ? providerConfigRules.providerConfigRules.providerRules : void 0;
+  return Array.isArray(rules) ? rules : [];
+}
+function isRecord2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// src/runtime/model-settings.ts
 init_resolver();
 init_process_spawn();
 init_profile();
@@ -35093,11 +35355,12 @@ var ZCodeModelSettings = class {
     const cached2 = await readModelCatalogCache(source.cachePath);
     const cacheAge = cached2 ? Date.now() - cached2.cached_at_ms : null;
     if (cached2 && cached2.source_fingerprint === source.fingerprint && cacheAge !== null && cacheAge >= 0 && cacheAge < MODEL_CATALOG_TTL_MS) {
-      const warning = startPlanCatalogWarning(buildAccountProviderPayload(source.config), cached2.models);
+      const cachedModels = withStartPlanAliasEntries(cached2.models, source.config);
+      const warning = startPlanCatalogWarning(buildAccountProviderPayload(source.config, void 0, this.#homeDir), cachedModels);
       return {
         workspace: workspacePath,
         current_model: null,
-        models: cached2.models,
+        models: cachedModels,
         account_provider_sync: "not_needed",
         cache_status: "fresh",
         cached_at: new Date(cached2.cached_at_ms).toISOString(),
@@ -35121,7 +35384,7 @@ var ZCodeModelSettings = class {
     const runtimeEnv = loadPersistedRuntimeEnvironment(this.#sourceEnv, this.#homeDir, this.#host);
     const config2 = await new NodeRuntimeResolver({ env: runtimeEnv, homeDir: this.#homeDir, host: this.#host }).resolve();
     const cachePath = modelCatalogCachePath(workspacePath, config2, runtimeEnv, this.#host.settingsDirectory);
-    const fingerprint = await modelCatalogSourceFingerprint(config2, runtimeEnv);
+    const fingerprint = await modelCatalogSourceFingerprint(config2, runtimeEnv, this.#homeDir);
     return { config: config2, runtimeEnv, cachePath, fingerprint };
   }
   async #readLiveCatalog(workspacePath, source) {
@@ -35132,7 +35395,7 @@ var ZCodeModelSettings = class {
     let accountSync = "not_needed";
     let warning;
     try {
-      const accountPayload = buildAccountProviderPayload(config2);
+      const accountPayload = buildAccountProviderPayload(config2, void 0, this.#homeDir);
       if (accountPayload) {
         try {
           await client.request("provider/updateAccountConfig", accountPayload);
@@ -35153,7 +35416,7 @@ var ZCodeModelSettings = class {
       const settings = asRecord2(snapshot.settings);
       const modelSettings = asRecord2(settings.model);
       const rawAvailable = Array.isArray(modelSettings.available) ? modelSettings.available : [];
-      const models = rawAvailable.map(toCatalogEntry).filter((entry) => entry !== null);
+      const models = withStartPlanAliasEntries(rawAvailable.map(toCatalogEntry).filter((entry) => entry !== null), config2);
       const current = toModelRef(modelSettings.current);
       if (models.length === 0) throw new BridgeError("zcode_nonzero_exit", "ZCode app-server returned an empty model catalog for this workspace");
       const cachedAt = Date.now();
@@ -35230,7 +35493,7 @@ var ZCodeModelSettings = class {
             throw new BridgeError("provider_config_invalid", "Bridge runtime config is not a small regular JSON file");
           }
           const parsed = JSON.parse(await readFile2(configPath, "utf8"));
-          if (!isRecord2(parsed)) throw new BridgeError("provider_config_invalid", "Bridge runtime config must contain a JSON object");
+          if (!isRecord3(parsed)) throw new BridgeError("provider_config_invalid", "Bridge runtime config must contain a JSON object");
           config2 = parsed;
         } catch (error2) {
           if (isMissingFile(error2)) {
@@ -35240,7 +35503,7 @@ var ZCodeModelSettings = class {
               try {
                 if ((await stat(legacyPath)).size > 64 * 1024) throw new Error("legacy settings exceed size limit");
                 const legacy = JSON.parse(await readFile2(legacyPath, "utf8"));
-                if (!isRecord2(legacy)) throw new Error("invalid legacy settings");
+                if (!isRecord3(legacy)) throw new Error("invalid legacy settings");
                 loadPersistedRuntimeEnvironment(this.#sourceEnv, this.#homeDir, this.#host);
                 config2 = legacy;
                 break;
@@ -35454,9 +35717,9 @@ function nestedString(record4, keys) {
   return typeof value === "string" ? value : null;
 }
 function asRecord2(value) {
-  return isRecord2(value) ? value : {};
+  return isRecord3(value) ? value : {};
 }
-function isRecord2(value) {
+function isRecord3(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function isMissingFile(error2) {
@@ -35474,7 +35737,7 @@ function modelCatalogCachePath(workspace, config2, env, settingsDirectory) {
   const key = createHash3("sha256").update(identity).digest("hex");
   return path8.join(settingsDirectory, "model-catalog", `${key}.json`);
 }
-async function modelCatalogSourceFingerprint(config2, env) {
+async function modelCatalogSourceFingerprint(config2, env, homeDir) {
   const digest3 = createHash3("sha256");
   digest3.update("start-plan-task-scoped-live-billing-v1");
   for (const file of [config2.providerBuiltinConfigFile, config2.providerPersonalConfigFile]) {
@@ -35483,7 +35746,7 @@ async function modelCatalogSourceFingerprint(config2, env) {
   }
   const entry = await stat(config2.zcodeEntrypoint);
   digest3.update(JSON.stringify({ entrypoint: config2.zcodeEntrypoint, size: entry.size, mtimeMs: entry.mtimeMs, mode: env.ZCODE_BRIDGE_MODE ?? "build" }));
-  const account = buildAccountProviderPayload(config2);
+  const account = buildAccountProviderPayload(config2, void 0, homeDir);
   if (account) digest3.update(JSON.stringify({ providers: account.providers, states: account.states, builtinRevision: account.basedOnZCodeBuiltinRevision }));
   return digest3.digest("hex");
 }
@@ -35492,12 +35755,26 @@ function startPlanCatalogWarning(account, models) {
   if (!account?.providers[providerId] || account.states[providerId]?.entitled === true || models.some((model) => model.provider_id === providerId)) return void 0;
   return "Start Plan models are checked for a selected task; this catalog read does not send Billing requests.";
 }
+function withStartPlanAliasEntries(models, config2) {
+  let aliases;
+  try {
+    aliases = startPlanAliasCatalogEntries(readStartPlanRoutingRegistry(config2));
+  } catch {
+    return models;
+  }
+  if (!aliases.length) return models;
+  const seen = new Set(models.map((model) => `${model.provider_id}
+${model.model_id}`));
+  const additions = aliases.filter((alias) => !seen.has(`${alias.provider_id}
+${alias.model_id}`)).map((alias) => ({ ...alias }));
+  return [...models, ...additions];
+}
 async function readModelCatalogCache(cachePath) {
   try {
     const info = await stat(cachePath);
     if (!info.isFile() || info.size > 2 * 1024 * 1024) return null;
     const value = JSON.parse(await readFile2(cachePath, "utf8"));
-    if (!isRecord2(value) || !Number.isFinite(value.cached_at_ms) || typeof value.source_fingerprint !== "string" || !Array.isArray(value.models)) return null;
+    if (!isRecord3(value) || !Number.isFinite(value.cached_at_ms) || typeof value.source_fingerprint !== "string" || !Array.isArray(value.models)) return null;
     const models = value.models.map(toCachedCatalogEntry).filter((entry) => entry !== null);
     if (models.length !== value.models.length || models.length === 0) return null;
     return { cached_at_ms: value.cached_at_ms, source_fingerprint: value.source_fingerprint, models };
@@ -35506,8 +35783,8 @@ async function readModelCatalogCache(cachePath) {
   }
 }
 function toCachedCatalogEntry(value) {
-  if (!isRecord2(value) || typeof value.provider_id !== "string" || !value.provider_id || typeof value.model_id !== "string" || !value.model_id || typeof value.label !== "string") return null;
-  if (value.reasoning_levels !== void 0 && (!Array.isArray(value.reasoning_levels) || !value.reasoning_levels.every((level) => isRecord2(level) && typeof level.value === "string" && typeof level.label === "string"))) return null;
+  if (!isRecord3(value) || typeof value.provider_id !== "string" || !value.provider_id || typeof value.model_id !== "string" || !value.model_id || typeof value.label !== "string") return null;
+  if (value.reasoning_levels !== void 0 && (!Array.isArray(value.reasoning_levels) || !value.reasoning_levels.every((level) => isRecord3(level) && typeof level.value === "string" && typeof level.label === "string"))) return null;
   for (const key of ["provider_label", "reasoning_default_level", "disabled_reason"]) if (value[key] !== void 0 && typeof value[key] !== "string") return null;
   for (const key of ["context_window", "max_output_tokens"]) if (value[key] !== void 0 && (typeof value[key] !== "number" || !Number.isFinite(value[key]) || value[key] < 0)) return null;
   const result = {};
@@ -35789,7 +36066,7 @@ function validateFailureFacts(value) {
 // src/runtime/sqlite-install-config.ts
 init_resolver();
 init_profile();
-import { existsSync as existsSync7, lstatSync, mkdirSync as mkdirSync3, readFileSync as readFileSync8, realpathSync as realpathSync3 } from "node:fs";
+import { existsSync as existsSync8, lstatSync, mkdirSync as mkdirSync3, readFileSync as readFileSync9, realpathSync as realpathSync3 } from "node:fs";
 import os from "node:os";
 import path12 from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
@@ -35811,8 +36088,8 @@ function loadInstallAuthoritySelection(host) {
     const stat2 = lstatSync(configPath);
     if (!stat2.isFile() || stat2.isSymbolicLink()) throw new SqliteInstallConfigurationError("authority_config_not_regular_file");
     if (stat2.size > CONFIG_LIMIT) throw new SqliteInstallConfigurationError("authority_config_too_large");
-    const parsed = JSON.parse(readFileSync8(configPath, "utf8"));
-    if (!isRecord3(parsed)) throw new SqliteInstallConfigurationError("authority_config_invalid_shape");
+    const parsed = JSON.parse(readFileSync9(configPath, "utf8"));
+    if (!isRecord4(parsed)) throw new SqliteInstallConfigurationError("authority_config_invalid_shape");
     const keys = Object.keys(parsed).sort().join("|");
     if (parsed.schema_version !== 1) throw new SqliteInstallConfigurationError("authority_config_version_unsupported");
     if (parsed.authority === "json" && keys === "authority|schema_version") {
@@ -35842,7 +36119,7 @@ function sqliteInstallationRoot(env) {
   const pluginEntry = entry === "wait-task.mjs" || entry === "bridge.mjs" && env["ZCODE_BRIDGE_PLUGIN_MODE"] === "1";
   if (pluginEntry && path12.basename(dist) === "dist") {
     const pluginRoot = path12.dirname(dist);
-    if (!existsSync7(path12.join(pluginRoot, ".codex-plugin", "plugin.json")) || !existsSync7(path12.join(pluginRoot, "launch-node24.mjs"))) {
+    if (!existsSync8(path12.join(pluginRoot, ".codex-plugin", "plugin.json")) || !existsSync8(path12.join(pluginRoot, "launch-node24.mjs"))) {
       throw new SqliteInstallConfigurationError("sqlite_plugin_layout_invalid");
     }
     return pluginRoot;
@@ -35912,7 +36189,7 @@ function canonicalDirectory(value) {
 }
 function rejectOrphanedDatabaseState(root) {
   const expected = path12.join(root, FRESH_SQLITE_DATABASE_FILE);
-  if (existsSync7(expected)) return;
+  if (existsSync8(expected)) return;
   for (const name of [
     `${FRESH_SQLITE_DATABASE_FILE}-wal`,
     `${FRESH_SQLITE_DATABASE_FILE}-shm`,
@@ -35922,7 +36199,7 @@ function rejectOrphanedDatabaseState(root) {
     "ROOT_POISONED.json",
     "WRITER_INTENT.json"
   ]) {
-    if (existsSync7(path12.join(root, name))) throw new SqliteInstallConfigurationError("sqlite_existing_state_incomplete");
+    if (existsSync8(path12.join(root, name))) throw new SqliteInstallConfigurationError("sqlite_existing_state_incomplete");
   }
 }
 function isLocalAbsolutePath(value) {
@@ -35937,11 +36214,12 @@ function samePath2(left, right) {
   const normalize = (value) => process.platform === "win32" ? path12.win32.normalize(value).replace(/[\\/]+$/u, "").toLocaleLowerCase("en-US") : path12.resolve(value);
   return normalize(left) === normalize(right);
 }
-function isRecord3(value) {
+function isRecord4(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value) && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
 }
 
 // src/host/stdio.ts
+init_errors();
 function createTrustedLocalCandidateContext(host) {
   validateHostProfile(host);
   return createTrustedLocalStdioContext(host);
@@ -35966,13 +36244,14 @@ async function createHostStartPlanIssuer(options) {
     if (!config2.zcodeEntrypoint || !config2.zcodeDataRoot) return null;
     const { createProductionStartPlanAuth: createProductionStartPlanAuth2, StartPlanBillingEntitlement: StartPlanBillingEntitlement2, readOfficialCliVersion: readOfficialCliVersion2 } = await Promise.resolve().then(() => (init_start_plan_production_auth(), start_plan_production_auth_exports));
     const entrypoint = config2.zcodeEntrypoint;
+    const billingEntitlement = options.entitlement ?? new StartPlanBillingEntitlement2({
+      getAppVersion: () => readOfficialCliVersion2(entrypoint)
+    });
     return createProductionStartPlanAuth2({
       zcodeDataRoot: config2.zcodeDataRoot,
       env: options.env,
       signal: options.signal,
-      entitlement: options.entitlement ?? new StartPlanBillingEntitlement2({
-        getAppVersion: () => readOfficialCliVersion2(entrypoint)
-      })
+      entitlement: options.journal ? new RecordingStartPlanEntitlement(billingEntitlement, options.journal) : billingEntitlement
     });
   } catch {
     return null;
@@ -36075,11 +36354,28 @@ async function startBridge(host = codexHostProfile(), version2 = SERVER_VERSION,
     }
   }
   const startPlanAuthAbort = new AbortController();
-  const startPlanIssuer = await createHostStartPlanIssuer({
-    env: process.env,
-    homeDir: homedir5(),
-    host,
-    signal: startPlanAuthAbort.signal
+  const modelRoutingJournal = new StartPlanEntitlementJournal();
+  const routeTaskModel2 = createTaskModelRouter({
+    settings: () => {
+      const persistedEnv = loadPersistedRuntimeEnvironment(process.env, homedir5(), host);
+      return {
+        preferStartPlan: resolvePreferStartPlan(persistedEnv),
+        defaultProviderId: persistedEnv["ZCODE_BRIDGE_DEFAULT_PROVIDER_ID"]?.trim() ?? ""
+      };
+    },
+    journal: modelRoutingJournal,
+    registry: async () => {
+      try {
+        const persistedEnv = loadPersistedRuntimeEnvironment(process.env, homedir5(), host);
+        const config2 = await new NodeRuntimeResolver({ env: persistedEnv, homeDir: homedir5(), host }).resolve();
+        return readStartPlanRoutingRegistry(config2);
+      } catch (error2) {
+        throw new BridgeError(
+          "provider_config_invalid",
+          `ZCode runtime configuration could not be resolved for model routing: ${error2 instanceof Error ? error2.message : String(error2)}`
+        );
+      }
+    }
   });
   const processProbe = createPlatformProbe();
   let manager;
@@ -36104,7 +36400,14 @@ async function startBridge(host = codexHostProfile(), version2 = SERVER_VERSION,
       processProbe,
       trustedLocalContext,
       requireAuthorityReceipt: true,
-      ...startPlanIssuer ? { startPlanPrivateAuth: startPlanIssuer } : {},
+      startPlanPrivateAuthFactory: () => createHostStartPlanIssuer({
+        env: process.env,
+        homeDir: homedir5(),
+        host,
+        signal: startPlanAuthAbort.signal,
+        journal: modelRoutingJournal
+      }),
+      routeTaskModel: routeTaskModel2,
       onWorkerDiagnosticLine: (line) => {
         const facts = formatWorkerFailureFactsLine(line);
         if (facts) console.error(`[bridge] worker failure-facts ${facts}`);

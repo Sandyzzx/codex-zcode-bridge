@@ -288,6 +288,13 @@ export interface ClaimOnlyDriverOptions {
     prepare(provider: string, model: string, signal: AbortSignal): Promise<boolean>;
     issue(binding: Readonly<PrivateLeaseBinding>, signal: AbortSignal): Promise<PrivateCredentialLease>;
   };
+  /** Host-supplied on-demand issuer discovery (ADR-031): consulted only when
+   * a task actually requires Start Plan authentication, so a post-startup
+   * login/logout/account switch is observed by the next dispatch without any
+   * polling. The factory must fail closed (null) when no usable official
+   * credential exists; a returned issuer still performs live entitlement
+   * checks before any lease. */
+  readonly startPlanPrivateAuthFactory?: () => Promise<NonNullable<ClaimOnlyDriverOptions["startPlanPrivateAuth"]> | null>;
   /** Injectable Worker-handle transaction factory for tests and non-Windows
    * CI. Production uses the real kernel-handle helper on Windows; when absent
    * on a non-Windows host the gate fails closed instead of trusting a PID
@@ -2041,8 +2048,22 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
         const intentRevision = positive(intent.revision, "launch_intent_revision_missing");
         stage("intent_complete", { revision: intentRevision });
         stage("spawn_bootstrap_start");
-        const usePrivateAuth = input.task.model?.provider_id === "account:bigmodel-start-plan" && !!options.startPlanPrivateAuth;
-        if (usePrivateAuth && (!options.startPlanPrivateAuth?.account || !options.startPlanPrivateAuth.signal || options.startPlanPrivateAuth.signal.aborted || options.testOnlyFakeAdapter)) throw new LifecycleGateError("private_auth_configuration_invalid");
+        // ADR-031 dynamic credential discovery: resolve the issuer once per
+        // launch so each dispatch observes the current official login state.
+        // The resolved issuer stays bound to this run; a mid-run account
+        // change is rejected by the credential delivery checks, never
+        // crossed over silently.
+        const startPlanRequested = input.task.model?.provider_id === "account:bigmodel-start-plan";
+        const startPlanPrivateAuth = options.startPlanPrivateAuth
+          ?? (startPlanRequested && !options.testOnlyFakeAdapter
+            ? await options.startPlanPrivateAuthFactory?.().catch(() => null) ?? null
+            : null);
+        if (startPlanRequested && !startPlanPrivateAuth && !options.testOnlyFakeAdapter) {
+          throw new LifecycleGateError("start_plan_private_auth_unavailable");
+        }
+        const usePrivateAuth = startPlanRequested && !!startPlanPrivateAuth;
+        if (usePrivateAuth && (!startPlanPrivateAuth!.account || !startPlanPrivateAuth!.signal || startPlanPrivateAuth!.signal.aborted || options.testOnlyFakeAdapter)) throw new LifecycleGateError("private_auth_configuration_invalid");
+        stage("start_plan_private_auth_resolved", { requested: startPlanRequested, resolved: usePrivateAuth, source: options.startPlanPrivateAuth ? "injected" : "factory" });
         const launch = await spawnAndBootstrapOnce(() => {
           spawnCount += 1;
           child = spawnClaimOnlyWorker(options.workerEntryPath, provenance, {
@@ -2131,7 +2152,7 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
           stage("claim_committed", { claim_id: claimId });
           const privateAuthAbort = new AbortController();
           const privateAuthState = { cancelled: false, phase: "resolving" as "resolving" | "delivering" | "acknowledged" };
-          const accountSignal = usePrivateAuth ? options.startPlanPrivateAuth!.signal : undefined;
+          const accountSignal = usePrivateAuth ? startPlanPrivateAuth!.signal : undefined;
           const revokeOnAccountChange = (): void => privateAuthAbort.abort();
           accountSignal?.addEventListener("abort", revokeOnAccountChange, { once: true });
           if (accountSignal?.aborted) privateAuthAbort.abort();
@@ -2154,7 +2175,7 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
             if (privateAuthAbort.signal.aborted) lifetime.destroy();
             else lifetime.write(Buffer.from([1]));
             try {
-              startPlanEntitled = await options.startPlanPrivateAuth!.prepare(
+              startPlanEntitled = await startPlanPrivateAuth!.prepare(
                 input.task.model!.provider_id,
                 input.task.model!.model_id,
                 privateAuthAbort.signal,
@@ -2202,7 +2223,7 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
             continuation: input.continuation ?? null,
             previous_result: input.previousResult ?? null,
             ...(usePrivateAuth ? { private_auth: {
-              account: options.startPlanPrivateAuth!.account,
+              account: startPlanPrivateAuth!.account,
               claim: claimId,
               provider: input.task.model!.provider_id,
               model: input.task.model!.model_id,
@@ -2243,7 +2264,7 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
               acknowledgement: owner.privateAuthAcknowledgementChannel, signal: privateAuthAbort.signal, timeoutMs: 60_000,
               resolveLease: async (request, signal) => {
                 const candidate = asRecord(request.binding);
-                if (candidate.account !== options.startPlanPrivateAuth!.account || candidate.provider !== input.task.model?.provider_id
+                if (candidate.account !== startPlanPrivateAuth!.account || candidate.provider !== input.task.model?.provider_id
                   || candidate.model !== input.task.model?.model_id || candidate.task !== input.task.task_id || candidate.attempt !== input.attempt
                   || candidate.operation !== input.operationId || candidate.generation !== generation || candidate.claim !== claimId
                   || candidate.pid !== owner.pid || candidate.creation !== worker.start_fingerprint
@@ -2266,7 +2287,7 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
                   return !signal.aborted && owner.exitCode === null && owner.signalCode === null;
                 };
                 if (!await verifyWorker()) throw new Error("private_auth_identity_invalid");
-                const lease = await options.startPlanPrivateAuth!.issue(binding, signal);
+                const lease = await startPlanPrivateAuth!.issue(binding, signal);
                 // A cancellation request must remain durable while its process
                 // proof is in flight. Leave the pipes open, revoke the lease,
                 // and let the pending private-auth request be aborted by the

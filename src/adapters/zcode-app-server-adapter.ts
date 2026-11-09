@@ -42,7 +42,15 @@ import {
 } from "../diagnostics/failure-facts.js";
 import { createHash, randomUUID } from "node:crypto";
 import { createMinimalOsEnv } from "../runtime/child-env.js";
-import { catalogProviderId, buildAccountProviderPayload, runtimeAuthReply, zcodeDataBaseDir, zcodeTasksIndexPath } from "../runtime/account-provider.js";
+import {
+  accountProviderRuleFacts,
+  BIGMODEL_START_PLAN_PROVIDER_ID,
+  buildAccountProviderPayload,
+  catalogProviderId,
+  runtimeAuthReply,
+  zcodeDataBaseDir,
+  zcodeTasksIndexPath,
+} from "../runtime/account-provider.js";
 import { resolveSessionPreferences } from "../runtime/session-preferences.js";
 import { ADAPTER_CLEANUP_TIMEOUT_MS, resolveTaskTimeout } from "../runtime/task-timeout.js";
 import { registerDesktopTask, updateDesktopTaskStatus, type DesktopTaskIndexEntry, type DesktopTaskStatus } from "./task-index-sync.js";
@@ -559,16 +567,44 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         void this.#resolver.resolve().then(resolve, reject).finally(() => entry.abort.signal.removeEventListener("abort", aborted));
       });
       entry.abort.signal.throwIfAborted();
-      const startPlanSelected = this.#resolveStartPlanRuntimeAuth !== undefined
-        && task.model?.provider_id === "account:bigmodel-start-plan";
+      const taskProviderId = task.model?.provider_id;
+      const taskProviderFacts = accountProviderRuleFacts(taskProviderId, config);
+      const otherStartPlanSelected = taskProviderFacts?.planKind === "start-plan"
+        && taskProviderId !== BIGMODEL_START_PLAN_PROVIDER_ID;
+      if (otherStartPlanSelected) {
+        return this.#startPlanReadinessFailure(
+          entry,
+          "Only the BigModel Start Plan provider has a supported Bridge credential binding; no ZCode session was started.",
+        );
+      }
+      const exactStartPlanRegistryValid = taskProviderFacts?.planKind === "start-plan"
+        && taskProviderFacts.accountType === "bigmodel";
+      if (taskProviderId === BIGMODEL_START_PLAN_PROVIDER_ID && !exactStartPlanRegistryValid) {
+        return this.#startPlanReadinessFailure(
+          entry,
+          "The BigModel Start Plan provider is missing or invalid in the official provider registry; no ZCode session was started.",
+        );
+      }
+      const startPlanSelected = taskProviderId === BIGMODEL_START_PLAN_PROVIDER_ID && exactStartPlanRegistryValid;
+      if (startPlanSelected && !this.#resolveStartPlanRuntimeAuth) {
+        return this.#startPlanReadinessFailure(
+          entry,
+          "Start Plan runtime authorization is unavailable; no ZCode session was started.",
+        );
+      }
       if (startPlanSelected && !this.#startPlanProviderEntitled) {
         return this.#startPlanReadinessFailure(entry, "Start Plan live entitlement was not verified; no ZCode session was started.");
       }
       let accountProviderPayload: ReturnType<typeof buildAccountProviderPayload>;
       try {
-        accountProviderPayload = buildAccountProviderPayload(config, startPlanSelected
-          ? { providerId: "account:bigmodel-start-plan", modelId: task.model!.model_id }
-          : undefined);
+        accountProviderPayload = buildAccountProviderPayload(
+          config,
+          startPlanSelected
+            ? { providerId: BIGMODEL_START_PLAN_PROVIDER_ID, modelId: task.model!.model_id }
+            : undefined,
+          this.#homeDir,
+          taskProviderId,
+        );
       } catch (error) {
         if (startPlanSelected) {
           return this.#startPlanReadinessFailure(entry, error instanceof Error && error.message === "start_plan_model_not_registered"
@@ -577,9 +613,8 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         }
         throw error;
       }
-      if (startPlanSelected && (!accountProviderPayload?.providers["account:bigmodel-start-plan"]
-        || accountProviderPayload.providers["account:bigmodel-start-plan"].access.entitled !== true
-        || accountProviderPayload.states["account:bigmodel-start-plan"]?.current !== true)) {
+      if (startPlanSelected && (!accountProviderPayload?.providers[BIGMODEL_START_PLAN_PROVIDER_ID]
+        || accountProviderPayload.providers[BIGMODEL_START_PLAN_PROVIDER_ID].access.entitled !== true)) {
         return this.#startPlanReadinessFailure(entry, "Start Plan provider snapshot could not be prepared after live entitlement verification.");
       }
       const preferences = resolveSessionPreferences(task.model, runtimeEnv, this.#executionProfileId);
@@ -617,7 +652,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
           // private runtime-auth callback happens only after send, so letting
           // this RPC failure proceed could cross session/send without a
           // registered provider. Coding Plan behavior remains unchanged.
-          if (task.model?.provider_id === "account:bigmodel-start-plan" && this.#resolveStartPlanRuntimeAuth) {
+          if (startPlanSelected) {
             throw new BridgeError("provider_config_invalid", "ZCode rejected Start Plan provider registration before session creation.");
           }
         }
@@ -1626,7 +1661,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         const providerId = typeof selection.providerId === "string"
           ? selection.providerId
           : typeof params.providerId === "string" ? params.providerId : undefined;
-        if (providerId === "account:bigmodel-start-plan" && this.#resolveStartPlanRuntimeAuth) {
+        if (providerId === BIGMODEL_START_PLAN_PROVIDER_ID && this.#resolveStartPlanRuntimeAuth) {
           const replySafely = (result: JsonRecord): void => {
             try { write({ id, result }); } catch { entry.rejectTurn(new Error("Start Plan authorization transport failed.")); }
           };

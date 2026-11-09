@@ -10,7 +10,7 @@ import { serveStdio, StdioServerTransport, type StdioServerHandle } from "@model
 import type { Readable, Writable } from "node:stream";
 import { homedir } from "node:os";
 import path from "node:path";
-import { findPackageRoot, loadPersistedRuntimeEnvironment } from "../runtime/resolver.js";
+import { findPackageRoot, loadPersistedRuntimeEnvironment, NodeRuntimeResolver } from "../runtime/resolver.js";
 import type { SqliteLifecycleMcpAuthority } from "../manager/sqlite-lifecycle-mcp-authority.js";
 import { createBridgeServer } from "../mcp/server.js";
 import { DEFAULT_TASK_TIMEOUT_MS, validateTaskTimeout } from "../runtime/task-timeout.js";
@@ -29,6 +29,14 @@ import {
   FRESH_SQLITE_DATABASE_FILE,
 } from "../runtime/sqlite-install-config.js";
 import type { ProductionAuthIssuer, StartPlanLiveEntitlement } from "../runtime/start-plan-production-auth.js";
+import {
+  createTaskModelRouter,
+  readStartPlanRoutingRegistry,
+  RecordingStartPlanEntitlement,
+  resolvePreferStartPlan,
+  StartPlanEntitlementJournal,
+} from "../runtime/model-routing.js";
+import { BridgeError } from "../runtime/errors.js";
 
 export interface DataRootResolution {
   readonly dataRoot: string;
@@ -69,6 +77,9 @@ export interface HostStartPlanIssuerOptions {
   readonly signal: AbortSignal;
   /** Test-only override; production always uses the official Billing endpoint. */
   readonly entitlement?: StartPlanLiveEntitlement;
+  /** ADR-031 routing journal fed by every live Billing verdict; advisory
+   * execution-routing facts only, never an authorization cache. */
+  readonly journal?: StartPlanEntitlementJournal;
 }
 
 /** Builds the production Start Plan issuer exactly as `startBridge` wires it.
@@ -82,13 +93,14 @@ export async function createHostStartPlanIssuer(options: HostStartPlanIssuerOpti
     if (!config.zcodeEntrypoint || !config.zcodeDataRoot) return null;
     const { createProductionStartPlanAuth, StartPlanBillingEntitlement, readOfficialCliVersion } = await import("../runtime/start-plan-production-auth.js");
     const entrypoint = config.zcodeEntrypoint;
+    const billingEntitlement = options.entitlement ?? new StartPlanBillingEntitlement({
+      getAppVersion: () => readOfficialCliVersion(entrypoint),
+    });
     return createProductionStartPlanAuth({
       zcodeDataRoot: config.zcodeDataRoot,
       env: options.env,
       signal: options.signal,
-      entitlement: options.entitlement ?? new StartPlanBillingEntitlement({
-        getAppVersion: () => readOfficialCliVersion(entrypoint),
-      }),
+      entitlement: options.journal ? new RecordingStartPlanEntitlement(billingEntitlement, options.journal) : billingEntitlement,
     });
   } catch {
     return null;
@@ -238,11 +250,31 @@ export async function startBridge(
   }
 
   const startPlanAuthAbort = new AbortController();
-  const startPlanIssuer = await createHostStartPlanIssuer({
-    env: process.env,
-    homeDir: homedir(),
-    host,
-    signal: startPlanAuthAbort.signal,
+  // ADR-031: Start Plan issuer discovery is per-dispatch, so a login,
+  // logout, or account switch after startup is observed by the next task.
+  const modelRoutingJournal = new StartPlanEntitlementJournal();
+  const routeTaskModel = createTaskModelRouter({
+    settings: () => {
+      const persistedEnv = loadPersistedRuntimeEnvironment(process.env, homedir(), host);
+      return {
+        preferStartPlan: resolvePreferStartPlan(persistedEnv),
+        defaultProviderId: persistedEnv["ZCODE_BRIDGE_DEFAULT_PROVIDER_ID"]?.trim() ?? "",
+      };
+    },
+    journal: modelRoutingJournal,
+    registry: async () => {
+      try {
+        const persistedEnv = loadPersistedRuntimeEnvironment(process.env, homedir(), host);
+        const config = await new NodeRuntimeResolver({ env: persistedEnv, homeDir: homedir(), host }).resolve();
+        return readStartPlanRoutingRegistry(config);
+      } catch (error) {
+        // Routing needs the official registry only to resolve provider-less
+        // model selections; explicit provider tasks keep working and the
+        // task preflight still re-validates alias targets.
+        throw new BridgeError("provider_config_invalid",
+          `ZCode runtime configuration could not be resolved for model routing: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    },
   });
 
   const processProbe = createPlatformProbe();
@@ -268,7 +300,14 @@ export async function startBridge(
       processProbe,
       trustedLocalContext,
       requireAuthorityReceipt: true,
-      ...(startPlanIssuer ? { startPlanPrivateAuth: startPlanIssuer } : {}),
+      startPlanPrivateAuthFactory: () => createHostStartPlanIssuer({
+        env: process.env,
+        homeDir: homedir(),
+        host,
+        signal: startPlanAuthAbort.signal,
+        journal: modelRoutingJournal,
+      }),
+      routeTaskModel,
       onWorkerDiagnosticLine: (line) => {
         const facts = formatWorkerFailureFactsLine(line);
         // Diagnostic stderr only: this line never enters MCP results, events,
