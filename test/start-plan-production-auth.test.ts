@@ -671,7 +671,9 @@ test("issuer checks the model with the unchanged official device identity before
         },
       },
     });
-    const lease = await issuer?.issue(binding(), new AbortController().signal);
+    assert.ok(issuer);
+    assert.equal(await issuer.prepare("account:bigmodel-start-plan", MODEL, new AbortController().signal), true);
+    const lease = await issuer.issue(binding(), new AbortController().signal);
     assert.ok(lease);
     assert.deepEqual(observed, [{
       deviceMid: DEVICE_ID,
@@ -683,7 +685,7 @@ test("issuer checks the model with the unchanged official device identity before
   }
 });
 
-test("provider preparation is model/account bound and entitlement is rechecked before private lease delivery", async () => {
+test("provider preparation is model/account bound and lease issuance reuses its entitlement verdict", async () => {
   const { root, cleanup } = makeRoot("start-plan-provider-preflight-");
   try {
     writeCredential(root);
@@ -704,21 +706,216 @@ test("provider preparation is model/account bound and entitlement is rechecked b
     assert.ok(issuer);
     assert.equal(await issuer.prepare("account:other", MODEL, new AbortController().signal), false);
     assert.equal(checks.length, 0, "unsupported providers must be rejected before Billing");
-    await assert.rejects(
-      issuer.prepare("account:bigmodel-start-plan", "unentitled-model", new AbortController().signal),
-      /start_plan_entitlement_rejected:no_entitlement/u,
-    );
-    assert.equal(checks.length, 1, "an unentitled model receives one live check but no provider authorization");
     assert.equal(await issuer.prepare("account:bigmodel-start-plan", MODEL, new AbortController().signal), true);
-    assert.equal(checks.length, 2);
+    assert.equal(checks.length, 1);
+    assert.equal(await issuer.prepare("account:bigmodel-start-plan", MODEL, new AbortController().signal), true);
+    assert.equal(checks.length, 1, "repeated preparation must reuse the task-scoped verdict");
     const lease = await issuer.issue(binding(), new AbortController().signal);
     assert.ok(lease);
-    assert.equal(checks.length, 3, "lease delivery must perform a fresh Billing check after preflight");
+    assert.equal(checks.length, 1, "lease issuance must reuse the preparation verdict");
+    await assert.rejects(
+      issuer.issue(binding({ task: "separate-task" }), new AbortController().signal),
+      /start_plan_lease_already_issued/u,
+    );
+    assert.equal(checks.length, 1, "repeated lease access must not trigger another Billing check");
     assert.deepEqual(checks.map(({ account, provider, model, deviceMid }) => ({ account, provider, model, deviceMid })), [
-      { account: ACCOUNT_A, provider: "account:bigmodel-start-plan", model: "unentitled-model", deviceMid: DEVICE_ID },
-      { account: ACCOUNT_A, provider: "account:bigmodel-start-plan", model: MODEL, deviceMid: DEVICE_ID },
       { account: ACCOUNT_A, provider: "account:bigmodel-start-plan", model: MODEL, deviceMid: DEVICE_ID },
     ]);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a valid JWT remains usable after the first model iteration exceeds 30 seconds", async () => {
+  const { root, cleanup } = makeRoot("start-plan-multi-iteration-expiry-");
+  try {
+    let now = 1_000;
+    let checks = 0;
+    writeCredential(root, { jwt: syntheticJwt({ account: ACCOUNT_A, exp: 100 }) });
+    const issuer = createProductionStartPlanAuth({
+      zcodeDataRoot: root,
+      signal: new AbortController().signal,
+      now: () => now,
+      entitlement: {
+        check: async () => {
+          checks += 1;
+          return { status: "entitled", observedAt: now, requestId: "synthetic" };
+        },
+      },
+    });
+    assert.ok(issuer);
+    assert.equal(await issuer.prepare("account:bigmodel-start-plan", MODEL, new AbortController().signal), true);
+    const lease = await issuer.issue(binding(), new AbortController().signal);
+    let deliveredExpiry = 0;
+    await lease.redeem(binding(), async () => true, async (_credential, expiresAt) => {
+      deliveredExpiry = expiresAt;
+    }, new AbortController().signal);
+    now += 43_170;
+    assert.equal(deliveredExpiry, 100_000);
+    assert.ok(deliveredExpiry > now, "the actual JWT expiry, not the delivery deadline, bounds Worker reuse");
+    assert.equal(checks, 1, "prepare remains the only Billing check");
+  } finally {
+    cleanup();
+  }
+});
+
+test("no-exp credentials use the task lifetime and genuinely expired JWTs fail before lease issuance", async () => {
+  const noExpiry = makeRoot("start-plan-no-expiry-");
+  try {
+    writeCredential(noExpiry.root, { jwt: syntheticJwt({ account: ACCOUNT_A }) });
+    const issuer = createProductionStartPlanAuth({
+      zcodeDataRoot: noExpiry.root,
+      signal: new AbortController().signal,
+      now: () => 1_000,
+      entitlement: { check: async () => ({ status: "entitled", observedAt: 1_000, requestId: "synthetic" }) },
+    });
+    assert.ok(issuer);
+    assert.equal(await issuer.prepare("account:bigmodel-start-plan", MODEL, new AbortController().signal), true);
+    const lease = await issuer.issue(binding(), new AbortController().signal);
+    let deliveredExpiry = 0;
+    await lease.redeem(binding(), async () => true, async (_credential, expiresAt) => {
+      deliveredExpiry = expiresAt;
+    }, new AbortController().signal);
+    assert.equal(deliveredExpiry, Number.MAX_SAFE_INTEGER);
+  } finally {
+    noExpiry.cleanup();
+  }
+
+  const expired = makeRoot("start-plan-expired-after-prepare-");
+  try {
+    let now = 1_000;
+    let checks = 0;
+    writeCredential(expired.root, { jwt: syntheticJwt({ account: ACCOUNT_A, exp: 4 }) });
+    const issuer = createProductionStartPlanAuth({
+      zcodeDataRoot: expired.root,
+      signal: new AbortController().signal,
+      now: () => now,
+      entitlement: {
+        check: async () => {
+          checks += 1;
+          return { status: "entitled", observedAt: now, requestId: "synthetic" };
+        },
+      },
+    });
+    assert.ok(issuer);
+    assert.equal(await issuer.prepare("account:bigmodel-start-plan", MODEL, new AbortController().signal), true);
+    now = 4_000;
+    await assert.rejects(issuer.issue(binding(), new AbortController().signal), /start_plan_credential_expired/u);
+    assert.equal(checks, 1);
+  } finally {
+    expired.cleanup();
+  }
+});
+
+test("an unentitled or account-switched task remains fail-closed without a second Billing check", async () => {
+  const unentitled = makeRoot("start-plan-unentitled-reuse-");
+  try {
+    writeCredential(unentitled.root);
+    let checks = 0;
+    const issuer = createProductionStartPlanAuth({
+      zcodeDataRoot: unentitled.root,
+      signal: new AbortController().signal,
+      now: () => 1_000,
+      entitlement: {
+        check: async () => {
+          checks += 1;
+          return { status: "no_entitlement", reason: "synthetic", observedAt: 1_000 };
+        },
+      },
+    });
+    assert.ok(issuer);
+    await assert.rejects(
+      issuer.prepare("account:bigmodel-start-plan", MODEL, new AbortController().signal),
+      /start_plan_entitlement_rejected:no_entitlement/u,
+    );
+    await assert.rejects(
+      issuer.prepare("account:bigmodel-start-plan", MODEL, new AbortController().signal),
+      /start_plan_entitlement_rejected:no_entitlement/u,
+    );
+    assert.equal(checks, 1);
+  } finally {
+    unentitled.cleanup();
+  }
+
+  const switched = makeRoot("start-plan-switch-after-prepare-");
+  try {
+    writeCredential(switched.root);
+    let checks = 0;
+    const issuer = createProductionStartPlanAuth({
+      zcodeDataRoot: switched.root,
+      signal: new AbortController().signal,
+      now: () => 1_000,
+      entitlement: {
+        check: async () => {
+          checks += 1;
+          return { status: "entitled", observedAt: 1_000, requestId: "synthetic" };
+        },
+      },
+    });
+    assert.ok(issuer);
+    assert.equal(await issuer.prepare("account:bigmodel-start-plan", MODEL, new AbortController().signal), true);
+    writeCredential(switched.root, { account: ACCOUNT_B });
+    await assert.rejects(
+      issuer.issue(binding(), new AbortController().signal),
+      /start_plan_account_identity_invalid/u,
+    );
+    assert.equal(checks, 1);
+  } finally {
+    switched.cleanup();
+  }
+});
+
+test("separate tasks independently perform exactly one Billing check", async () => {
+  const { root, cleanup } = makeRoot("start-plan-separate-tasks-");
+  try {
+    writeCredential(root);
+    let checks = 0;
+    const makeIssuer = () => createProductionStartPlanAuth({
+      zcodeDataRoot: root,
+      signal: new AbortController().signal,
+      now: () => 1_000,
+      entitlement: {
+        check: async () => {
+          checks += 1;
+          return { status: "entitled", observedAt: checks, requestId: `synthetic-${checks}` };
+        },
+      },
+    });
+    const first = makeIssuer();
+    const second = makeIssuer();
+    assert.ok(first);
+    assert.ok(second);
+    assert.equal(await first.prepare("account:bigmodel-start-plan", MODEL, new AbortController().signal), true);
+    assert.equal(await second.prepare("account:bigmodel-start-plan", MODEL, new AbortController().signal), true);
+    await first.issue(binding({ task: "task-one" }), new AbortController().signal);
+    await second.issue(binding({ task: "task-two" }), new AbortController().signal);
+    assert.equal(checks, 2);
+  } finally {
+    cleanup();
+  }
+});
+
+test("prepare and lease issuance produce exactly one Billing GET per task", async () => {
+  const { root, cleanup } = makeRoot("start-plan-single-billing-get-");
+  try {
+    writeCredential(root, { jwt: syntheticJwt({ account: ACCOUNT_A, exp: 100 }) });
+    const billing = fakeBillingFetch(billingBody(), 200, "synthetic-request");
+    const entitlement = new StartPlanBillingEntitlement({
+      getAppVersion: async () => "3.17.4",
+      fetchImpl: billing.fetch,
+    });
+    const issuer = createProductionStartPlanAuth({
+      zcodeDataRoot: root,
+      signal: new AbortController().signal,
+      now: () => 1_000,
+      entitlement,
+    });
+    assert.ok(issuer);
+    assert.equal(await issuer.prepare("account:bigmodel-start-plan", MODEL, new AbortController().signal), true);
+    await issuer.issue(binding(), new AbortController().signal);
+    assert.equal(billing.requests.length, 1);
+    assert.equal(new URL(billing.requests[0]!.url).searchParams.get("mid"), DEVICE_ID);
+    assert.equal(billing.requests[0]!.headers.get("X-Device-Mid"), DEVICE_ID);
   } finally {
     cleanup();
   }

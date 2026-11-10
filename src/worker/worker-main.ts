@@ -18,6 +18,8 @@ import type {
   CandidateWorkerResultFrame,
 } from "../sqlite-candidate/wp6c/fake-result-adapter.js";
 
+const MAX_NODE_TIMER_DELAY_MS = 2_147_483_647;
+
 const workerArgs = process.argv.slice(2);
 const bridgeLaunchMarker = workerArgs.at(-1) === BRIDGE_WORKER_LAUNCH_MARKER;
 const interactionMode = workerArgs.includes("--bridge-sqlite-interaction-v1");
@@ -301,6 +303,18 @@ async function runExplicitFakeAdapter(
   return executeFakeResultAdapter(bootstrap as Parameters<typeof executeFakeResultAdapter>[0]);
 }
 
+type PrivateAuthScope = {
+  readonly sessionId: string;
+  readonly turnId: string;
+  readonly providerId: string;
+  readonly modelId: string;
+};
+
+type CachedPrivateAuth = PrivateAuthScope & {
+  readonly apiKey: string;
+  readonly expiresAt: number;
+};
+
 async function runZCodeAdapter(
   bootstrap: { readonly operation_id: string; readonly task_id: string; readonly attempt: number; readonly generation: number; readonly workspace_ref: string; readonly policy_snapshot_digest: string },
   execution: SqliteExecutionEnvelope,
@@ -313,7 +327,8 @@ async function runZCodeAdapter(
   const startedAt = new Date().toISOString();
   let outcome: import("../adapters/run-outcome.js").ZCodeRunOutcome | null = null;
   let failure: { code: string; message: string } | null = null;
-  let cachedAuth: { readonly apiKey: string; readonly expiresAt: number; readonly sessionId: string; readonly turnId: string; readonly providerId: string; readonly modelId: string } | null = null;
+  let cachedAuth: CachedPrivateAuth | null = null;
+  let privateAuthPending: { readonly scope: PrivateAuthScope; readonly promise: Promise<CachedPrivateAuth> } | null = null;
   let privateAuthExpiryTimer: NodeJS.Timeout | undefined;
   let privateAuthStarted = false;
   const secretRedactor = execution.private_auth ? new StartPlanSecretRedactor() : undefined;
@@ -329,10 +344,104 @@ async function runZCodeAdapter(
     }
   });
   const clearCachedAuth = (): void => { cachedAuth = null; if (privateAuthExpiryTimer) { clearTimeout(privateAuthExpiryTimer); privateAuthExpiryTimer = undefined; } };
+  const scheduleCachedAuthExpiry = (): void => {
+    if (privateAuthExpiryTimer) { clearTimeout(privateAuthExpiryTimer); privateAuthExpiryTimer = undefined; }
+    const current = cachedAuth;
+    if (!current) return;
+    const remaining = current.expiresAt - Date.now();
+    if (!Number.isFinite(remaining) || remaining <= 0) { clearCachedAuth(); return; }
+    // Node clamps larger delays to 1 ms. Re-arm long JWT lifetimes in safe
+    // chunks; the parent-lifetime channel remains the task-scope boundary.
+    privateAuthExpiryTimer = setTimeout(() => {
+      if (cachedAuth === current) scheduleCachedAuthExpiry();
+    }, Math.min(remaining, MAX_NODE_TIMER_DELAY_MS));
+    privateAuthExpiryTimer.unref();
+  };
   const revokeParentLease = (): void => { privateAuthParentLive = false; clearCachedAuth(); notifyPrivateAuthConfirmation?.(); };
   privateAuthLifetime?.once("end", revokeParentLease);
   privateAuthLifetime?.once("close", revokeParentLease);
   privateAuthLifetime?.once("error", revokeParentLease);
+  const samePrivateAuthScope = (left: PrivateAuthScope, right: PrivateAuthScope): boolean =>
+    left.sessionId === right.sessionId && left.turnId === right.turnId
+    && left.providerId === right.providerId && left.modelId === right.modelId;
+  const privateAuthView = (current: CachedPrivateAuth, signal: AbortSignal) => ({
+    ...current,
+    isValid: () => privateAuthParentLive && !signal.aborted
+      && cachedAuth === current && current.expiresAt > Date.now(),
+  });
+  const waitForPrivateAuth = (promise: Promise<CachedPrivateAuth>, signal: AbortSignal): Promise<CachedPrivateAuth> =>
+    new Promise((resolve, reject) => {
+      const cleanup = (): void => signal.removeEventListener("abort", abort);
+      const abort = (): void => { cleanup(); reject(new Error("private auth unavailable")); };
+      if (signal.aborted) { abort(); return; }
+      signal.addEventListener("abort", abort, { once: true });
+      void promise.then((value) => {
+        cleanup();
+        if (signal.aborted) reject(new Error("private auth unavailable"));
+        else resolve(value);
+      }, (error) => { cleanup(); reject(error); });
+    });
+  const acquirePrivateAuth = async (scope: PrivateAuthScope, signal: AbortSignal): Promise<CachedPrivateAuth> => {
+    privateAuthStarted = true;
+    const identity = workerIdentity;
+    if (!identity || identity.pid !== process.pid || identity.fingerprint_precision !== "exact" || !identity.fingerprint) {
+      throw new Error("private auth unavailable");
+    }
+    const { receivePrivateCredential } = await import("../runtime/start-plan-private-channel.js");
+    const auth = execution.private_auth!;
+    const request = createWriteStream(process.execPath, { fd: 10 });
+    const acknowledgement = createWriteStream(process.execPath, { fd: 12 });
+    let responseOpened = false;
+    let result: Awaited<ReturnType<typeof receivePrivateCredential>>;
+    writeDiagnostic("[bridge-worker] private auth acquire stage=receive\n");
+    try {
+      result = await receivePrivateCredential({
+        request,
+        response: () => { responseOpened = true; return new Socket({ fd: 11, readable: true, writable: false }); },
+        acknowledgement,
+        binding: { account: auth.account, provider: scope.providerId, model: scope.modelId, task: bootstrap.task_id,
+          attempt: bootstrap.attempt, operation: bootstrap.operation_id, generation: bootstrap.generation, claim: auth.claim,
+          session: scope.sessionId, turn: scope.turnId, pid: identity.pid, creation: identity.fingerprint },
+        signal,
+        timeoutMs: 15_000,
+      });
+    } finally {
+      if (!responseOpened) { try { closeSync(11); } catch { /* not open */ } }
+    }
+    writeDiagnostic("[bridge-worker] private auth acquire stage=received\n");
+    // The Worker has only written an ACK at this point. Wait for the Manager
+    // to confirm it accepted that ACK before using the credential.
+    await new Promise<void>((resolve, reject) => {
+      let timer: NodeJS.Timeout | undefined;
+      const cleanup = (): void => { if (timer) clearTimeout(timer); signal.removeEventListener("abort", check); notifyPrivateAuthConfirmation = undefined; };
+      const check = (): void => {
+        if (signal.aborted || !privateAuthParentLive || result.expiresAt <= Date.now()) {
+          cleanup();
+          reject(new Error("private auth unavailable"));
+        } else if (privateAuthConfirmed) {
+          cleanup();
+          resolve();
+        }
+      };
+      notifyPrivateAuthConfirmation = check;
+      signal.addEventListener("abort", check, { once: true });
+      timer = setTimeout(() => {
+        cleanup();
+        reject(new Error("private auth unavailable"));
+      }, Math.max(0, Math.min(15_000, result.expiresAt - Date.now())));
+      timer.unref();
+      check();
+    });
+    if (signal.aborted || !privateAuthParentLive) throw new Error("private auth unavailable");
+    writeDiagnostic("[bridge-worker] private auth acquire stage=confirmed\n");
+    secretRedactor?.register(result.jwt);
+    const current: CachedPrivateAuth = { apiKey: result.jwt, expiresAt: result.expiresAt, ...scope };
+    cachedAuth = current;
+    scheduleCachedAuthExpiry();
+    writeDiagnostic("[bridge-worker] private auth acquire stage=cached\n");
+    signal.addEventListener("abort", () => { if (cachedAuth === current) clearCachedAuth(); }, { once: true });
+    return current;
+  };
   const adapter = new ZCodeAppServerAdapter({
     host: execution.host_profile,
     // Manager resolved this attempt's effective budget before dispatch.
@@ -375,47 +484,33 @@ async function runZCodeAdapter(
     resolveStartPlanRuntimeAuth: execution.private_auth ? async (scope, signal) => {
       if (signal.aborted || !privateAuthParentLive || !workerIdentity || workerIdentity.pid !== process.pid || workerIdentity.fingerprint_precision !== "exact" || !workerIdentity.fingerprint) throw new Error("private auth unavailable");
       if (cachedAuth) {
-        if (cachedAuth.sessionId !== scope.sessionId || cachedAuth.turnId !== scope.turnId || cachedAuth.providerId !== scope.providerId || cachedAuth.modelId !== scope.modelId || cachedAuth.expiresAt <= Date.now()) throw new Error("private auth unavailable");
+        if (!samePrivateAuthScope(cachedAuth, scope) || cachedAuth.expiresAt <= Date.now()) throw new Error("private auth unavailable");
         const current = cachedAuth;
-        return { ...current, isValid: () => privateAuthParentLive && !signal.aborted && cachedAuth === current && current.expiresAt > Date.now() };
+        return privateAuthView(current, signal);
       }
-      if (privateAuthStarted) throw new Error("private auth unavailable");
-      privateAuthStarted = true;
-      const { receivePrivateCredential } = await import("../runtime/start-plan-private-channel.js");
-      const auth = execution.private_auth!;
-      const request = createWriteStream(process.execPath, { fd: 10 });
-      const acknowledgement = createWriteStream(process.execPath, { fd: 12 });
-      let responseOpened = false;
-      let result: Awaited<ReturnType<typeof receivePrivateCredential>>;
-      try { result = await receivePrivateCredential({ request, response: () => { responseOpened = true; return new Socket({ fd: 11, readable: true, writable: false }); }, acknowledgement,
-        binding: { account: auth.account, provider: scope.providerId, model: scope.modelId, task: bootstrap.task_id,
-          attempt: bootstrap.attempt, operation: bootstrap.operation_id, generation: bootstrap.generation, claim: auth.claim,
-          session: scope.sessionId, turn: scope.turnId, pid: workerIdentity.pid, creation: workerIdentity.fingerprint },
-        signal, timeoutMs: 15_000 }); }
-      finally { if (!responseOpened) { try { closeSync(11); } catch { /* not open */ } } }
-      // The Worker has only written an ACK at this point. Wait for the
-      // Manager to confirm it accepted that ACK before using the credential.
-      await new Promise<void>((resolve, reject) => {
-        let timer: NodeJS.Timeout | undefined;
-        const cleanup = (): void => { if (timer) clearTimeout(timer); signal.removeEventListener("abort", check); notifyPrivateAuthConfirmation = undefined; };
-        const check = (): void => {
-          if (signal.aborted || !privateAuthParentLive || result.expiresAt <= Date.now()) { cleanup(); reject(new Error("private auth unavailable")); }
-          else if (privateAuthConfirmed) { cleanup(); resolve(); }
-        };
-        notifyPrivateAuthConfirmation = check;
-        signal.addEventListener("abort", check, { once: true });
-        timer = setTimeout(() => { cleanup(); reject(new Error("private auth unavailable")); }, Math.max(0, Math.min(15_000, result.expiresAt - Date.now())));
-        timer.unref();
-        check();
-      });
-      if (signal.aborted || !privateAuthParentLive) throw new Error("private auth unavailable");
-      secretRedactor?.register(result.jwt);
-      cachedAuth = { apiKey: result.jwt, expiresAt: result.expiresAt, ...scope };
-      privateAuthExpiryTimer = setTimeout(clearCachedAuth, Math.max(0, result.expiresAt - Date.now()));
-      privateAuthExpiryTimer.unref();
-      signal.addEventListener("abort", clearCachedAuth, { once: true });
-      const current = cachedAuth;
-      return { ...current, isValid: () => privateAuthParentLive && !signal.aborted && cachedAuth === current && current.expiresAt > Date.now() };
+      let pending = privateAuthPending;
+      if (pending) {
+        if (!samePrivateAuthScope(pending.scope, scope)) throw new Error("private auth unavailable");
+      } else {
+        if (privateAuthStarted) throw new Error("private auth unavailable");
+        const scopeSnapshot = Object.freeze({ ...scope });
+        const promise = acquirePrivateAuth(scopeSnapshot, signal).catch((error) => {
+          const errorClass = error instanceof Error && /^[A-Za-z][A-Za-z0-9_]{0,63}$/u.test(error.name)
+            ? error.name : "unknown";
+          writeDiagnostic(`[bridge-worker] private auth acquire rejected class=${errorClass}\n`);
+          throw error;
+        });
+        pending = { scope: scopeSnapshot, promise };
+        privateAuthPending = pending;
+        void promise.then(() => {
+          if (privateAuthPending === pending) privateAuthPending = null;
+        }, () => {
+          if (privateAuthPending === pending) privateAuthPending = null;
+        });
+      }
+      const current = await waitForPrivateAuth(pending.promise, signal);
+      if (!samePrivateAuthScope(current, scope) || current.expiresAt <= Date.now()) throw new Error("private auth unavailable");
+      return privateAuthView(current, signal);
     } : undefined,
     resolveInteraction: interaction ? async (request, signal) => {
       if (signal.aborted) return { action: "decline" };

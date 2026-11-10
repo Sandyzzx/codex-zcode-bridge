@@ -2356,18 +2356,26 @@ var init_start_plan_private_lease = __esm({
     numberFields = ["attempt", "generation", "pid"];
     PrivateCredentialLease = class {
       #binding;
-      #expiresAt;
+      #deliveryDeadline;
+      #credentialExpiresAt;
       #now;
       #credential;
       #state = "active";
-      constructor(binding, credential, expiresAt, now = Date.now) {
+      /**
+       * `credentialExpiresAt` is the credential's actual usability deadline.
+       * `deliveryDeadline` only bounds the one-shot private-channel delivery and
+       * defaults to the old single-deadline behaviour for existing callers.
+       */
+      constructor(binding, credential, credentialExpiresAt, now = Date.now, deliveryDeadline) {
         const createdAt = now();
-        if (!validBinding(binding) || typeof credential !== "string" || !credential || !Number.isFinite(expiresAt) || !Number.isFinite(createdAt) || expiresAt <= createdAt || expiresAt - createdAt > 6e4) {
+        const boundedDeliveryDeadline = deliveryDeadline ?? Math.min(credentialExpiresAt, createdAt + 6e4);
+        if (!validBinding(binding) || typeof credential !== "string" || !credential || !Number.isFinite(credentialExpiresAt) || !Number.isFinite(createdAt) || credentialExpiresAt <= createdAt || !Number.isFinite(boundedDeliveryDeadline) || boundedDeliveryDeadline <= createdAt || boundedDeliveryDeadline - createdAt > 6e4 || boundedDeliveryDeadline > credentialExpiresAt) {
           throw new Error("credential_lease_invalid");
         }
         this.#binding = Object.freeze({ ...binding });
         this.#credential = credential;
-        this.#expiresAt = expiresAt;
+        this.#deliveryDeadline = boundedDeliveryDeadline;
+        this.#credentialExpiresAt = credentialExpiresAt;
         this.#now = now;
       }
       revoke() {
@@ -2383,15 +2391,15 @@ var init_start_plan_private_lease = __esm({
         if (this.#state !== "active") throw new Error("credential_lease_unavailable");
         this.#state = "checking";
         try {
-          if (signal.aborted || !Number.isFinite(this.#now()) || this.#now() >= this.#expiresAt || !sameBinding(this.#binding, requested)) throw new Error("credential_lease_rejected");
+          if (signal.aborted || !Number.isFinite(this.#now()) || this.#now() >= this.#deliveryDeadline || this.#now() >= this.#credentialExpiresAt || !sameBinding(this.#binding, requested)) throw new Error("credential_lease_rejected");
           if (!await verifyWorker(this.#binding)) throw new Error("credential_lease_rejected");
-          if (this.#state !== "checking" || signal.aborted || !Number.isFinite(this.#now()) || this.#now() >= this.#expiresAt || !this.#credential) {
+          if (this.#state !== "checking" || signal.aborted || !Number.isFinite(this.#now()) || this.#now() >= this.#deliveryDeadline || this.#now() >= this.#credentialExpiresAt || !this.#credential) {
             throw new Error("credential_lease_rejected");
           }
           this.#state = "delivering";
           const credential = this.#credential;
           this.#credential = null;
-          await deliver(credential, this.#expiresAt);
+          await deliver(credential, this.#credentialExpiresAt);
           if (signal.aborted || this.#state !== "delivering") throw new Error("credential_delivery_unknown");
           this.#state = "consumed";
         } catch {
@@ -2634,6 +2642,40 @@ function createProductionStartPlanAuth(options) {
   const env = options.env ?? process.env;
   const initial = readOfficialStartPlanCredential(options.zcodeDataRoot, env);
   if (!initial) return null;
+  let entitlementContext = null;
+  let issuedTask = null;
+  const sameEntitlementContext = (context, credential, provider, model, credentialDigest) => context.account === credential.account && context.provider === provider && context.model === model && context.deviceMid === credential.deviceMid && context.credentialDigest === credentialDigest && context.credentialExpiresAt === credential.expiresAt;
+  const rejection2 = (verdict2) => {
+    const providerCode = verdict2.status === "entitled" ? void 0 : verdict2.providerCode;
+    return new Error(`start_plan_entitlement_rejected:${verdict2.status}${providerCode ? `:${providerCode}` : ""}`);
+  };
+  const authoritativeEntitlement = async (credential, provider, model, signal) => {
+    const credentialDigest = cryptoCreateHash("sha256").update(credential.jwt).digest("hex");
+    if (entitlementContext) {
+      if (!sameEntitlementContext(entitlementContext, credential, provider, model, credentialDigest)) {
+        throw new Error("start_plan_entitlement_identity_invalid");
+      }
+      return entitlementContext.verdict;
+    }
+    const verdict2 = await options.entitlement.check({
+      account: credential.account,
+      provider,
+      model,
+      deviceMid: credential.deviceMid,
+      jwt: credential.jwt,
+      signal
+    });
+    entitlementContext = Object.freeze({
+      account: credential.account,
+      provider,
+      model,
+      deviceMid: credential.deviceMid,
+      credentialDigest,
+      credentialExpiresAt: credential.expiresAt,
+      verdict: verdict2
+    });
+    return verdict2;
+  };
   return {
     // Captured from the official credential at construction; issue() re-reads
     // the credential and rejects if the account identity changed mid-run.
@@ -2643,17 +2685,12 @@ function createProductionStartPlanAuth(options) {
       if (provider !== "account:bigmodel-start-plan" || !model || signal.aborted) return false;
       const credential = readOfficialStartPlanCredential(options.zcodeDataRoot, env);
       if (!credential || credential.account !== initial.account || credential.expiresAt !== null && credential.expiresAt <= now()) return false;
-      const verdict2 = await options.entitlement.check({
-        account: credential.account,
-        provider,
-        model,
-        deviceMid: credential.deviceMid,
-        jwt: credential.jwt,
-        signal
-      });
+      const credentialDigest = cryptoCreateHash("sha256").update(credential.jwt).digest("hex");
+      if (entitlementContext && !sameEntitlementContext(entitlementContext, credential, provider, model, credentialDigest)) return false;
+      const verdict2 = await authoritativeEntitlement(credential, provider, model, signal);
       if (signal.aborted) return false;
       if (verdict2.status !== "entitled") {
-        throw new Error(`start_plan_entitlement_rejected:${verdict2.status}${verdict2.providerCode ? `:${verdict2.providerCode}` : ""}`);
+        throw rejection2(verdict2);
       }
       return true;
     },
@@ -2666,20 +2703,17 @@ function createProductionStartPlanAuth(options) {
       if (binding.provider !== "account:bigmodel-start-plan" || !binding.model) {
         throw new Error("start_plan_identity_invalid");
       }
-      const verdict2 = await options.entitlement.check({
-        account: credential.account,
-        provider: binding.provider,
-        model: binding.model,
-        deviceMid: credential.deviceMid,
-        jwt: credential.jwt,
-        signal
-      });
+      if (issuedTask !== null) throw new Error("start_plan_lease_already_issued");
+      if (!entitlementContext) throw new Error("start_plan_entitlement_not_prepared");
+      issuedTask = binding.task;
+      const verdict2 = await authoritativeEntitlement(credential, binding.provider, binding.model, signal);
       if (verdict2.status !== "entitled") {
-        throw new Error(`start_plan_entitlement_rejected:${verdict2.status}${verdict2.providerCode ? `:${verdict2.providerCode}` : ""}`);
+        throw rejection2(verdict2);
       }
       const createdAt = now();
-      const expiresAt = Math.min(credential.expiresAt ?? Number.MAX_SAFE_INTEGER, createdAt + 3e4);
-      return new PrivateCredentialLease(binding, credential.jwt, expiresAt, now);
+      const credentialExpiresAt = credential.expiresAt ?? Number.MAX_SAFE_INTEGER;
+      const deliveryDeadline = Math.min(credentialExpiresAt, createdAt + 3e4);
+      return new PrivateCredentialLease(binding, credential.jwt, credentialExpiresAt, now, deliveryDeadline);
     }
   };
 }

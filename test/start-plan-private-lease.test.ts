@@ -46,3 +46,42 @@ test("lease snapshots identity, rejects expired values, and serializes competing
   await assert.rejects(lease.redeem(binding, async () => true, async () => assert.fail(), new AbortController().signal));
   release(true); await first;
 });
+
+test("one-shot delivery deadline does not truncate the delivered credential lifetime", async () => {
+  let now = 100;
+  let deliveredExpiry: number | undefined;
+  const lease = new PrivateCredentialLease(
+    binding,
+    "synthetic-only",
+    1_000,
+    () => now,
+    130,
+  );
+  await lease.redeem(binding, async () => true, async (_credential, expiresAt) => {
+    deliveredExpiry = expiresAt;
+  }, new AbortController().signal);
+  assert.equal(deliveredExpiry, 1_000);
+
+  now = 100;
+  const late = new PrivateCredentialLease(binding, "synthetic-only", 1_000, () => now, 130);
+  now = 131;
+  await assert.rejects(
+    late.redeem(binding, async () => true, async () => assert.fail(), new AbortController().signal),
+    /credential_lease_unavailable/,
+  );
+});
+
+test("no-exp credential sentinel remains valid beyond a Node timer's maximum delay", async () => {
+  let deliveredExpiry: number | undefined;
+  const lease = new PrivateCredentialLease(
+    binding,
+    "synthetic-only",
+    Number.MAX_SAFE_INTEGER,
+    () => 100,
+    60_100,
+  );
+  await lease.redeem(binding, async () => true, async (_credential, expiresAt) => {
+    deliveredExpiry = expiresAt;
+  }, new AbortController().signal);
+  assert.equal(deliveredExpiry, Number.MAX_SAFE_INTEGER);
+});
