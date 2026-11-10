@@ -71,10 +71,11 @@ async function makeFakeRuntime(
   descendantControl?: { readonly pidPath: string; readonly releasePath: string },
   turnDelayMs = 0,
   runtimeAuth = false,
-): Promise<{ root: string; config: ZCodeRuntimeConfig; requestLog: string }> {
+): Promise<{ root: string; config: ZCodeRuntimeConfig; requestLog: string; launchLog: string }> {
   const root = await mkdtemp(path.join(tmpdir(), "bridge-app-server-test-"));
   const entrypoint = path.join(root, "fake-app-server.cjs");
   const requestLog = path.join(root, "requests.jsonl");
+  const launchLog = path.join(root, "launch.json");
   const descendantScript = descendantControl === undefined ? "" : [
     "const fs = require('node:fs');",
     `const release = ${JSON.stringify(descendantControl.releasePath)};`,
@@ -87,11 +88,17 @@ const fs = require("node:fs");
 const { spawn } = require("node:child_process");
 const sessionId = ${JSON.stringify(SESSION_ID)};
 const requestLog = ${JSON.stringify(requestLog)};
+const launchLog = ${JSON.stringify(launchLog)};
 const descendantControl = ${JSON.stringify(descendantControl ?? null)};
 let selected = ${JSON.stringify(selectedModel)};
 let accountProviders = {};
 let accountStates = {};
 const turnFailure = ${JSON.stringify(turnFailure ?? null)};
+fs.writeFileSync(launchLog, JSON.stringify({
+  argv: process.argv.slice(2),
+  appVersion: process.env.ZCODE_APP_VERSION ?? null,
+  buildCommitId: process.env.ZCODE_BUILD_COMMIT_ID ?? null,
+}));
 if (${keepAliveAfterTurn}) setInterval(() => {}, 1_000);
 if (descendantControl) {
   const descendant = spawn(process.execPath, ["-e", ${JSON.stringify(descendantScript)}], { stdio: "ignore", windowsHide: true, detached: true, cwd: ${JSON.stringify(process.cwd())} });
@@ -175,6 +182,7 @@ input.on("line", (line) => {
   return {
     root,
     requestLog,
+    launchLog,
     config: {
       nodeExecutable: process.execPath,
       zcodeEntrypoint: entrypoint,
@@ -263,6 +271,14 @@ test("runtime auth dispatcher injects a verified Start Plan lease only into the 
     const result = await adapter.getResult(handle);
     assert.equal(result.exitCode, 0);
     assert.equal(authCalls, 1);
+    const launch = JSON.parse(await readFile(runtime.launchLog, "utf8")) as {
+      argv: string[];
+      appVersion: string | null;
+      buildCommitId: string | null;
+    };
+    assert.deepEqual(launch.argv, ["app-server", "--stdio", "--surface", "desktop"]);
+    assert.equal(launch.appVersion, null);
+    assert.equal(launch.buildCommitId, null);
     const messages = (await readFile(runtime.requestLog, "utf8")).trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
     const reply = messages.find((message) => message.id === "auth-rpc");
     assert.deepEqual(reply?.result, {
@@ -309,6 +325,14 @@ test("runtime auth dispatcher preserves Coding Plan API key injection", async ()
     const result = await adapter.getResult(handle);
     assert.equal(result.exitCode, 0);
     assert.equal(startPlanAuthCalls, 0);
+    const launch = JSON.parse(await readFile(runtime.launchLog, "utf8")) as {
+      argv: string[];
+      appVersion: string | null;
+      buildCommitId: string | null;
+    };
+    assert.deepEqual(launch.argv, ["app-server", "--stdio", "--surface", "desktop"]);
+    assert.equal(launch.appVersion, null);
+    assert.equal(launch.buildCommitId, null);
     const messages = (await readFile(runtime.requestLog, "utf8")).trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
     assert.deepEqual(messages.find((message) => message.id === "auth-rpc")?.result, {
       headersApplied: true,

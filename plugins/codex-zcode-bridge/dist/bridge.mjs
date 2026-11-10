@@ -2039,7 +2039,7 @@ var init_process_spawn = __esm({
 // src/runtime/build-provenance.ts
 import { createHash as createHash4 } from "node:crypto";
 import { readFileSync as readFileSync8, realpathSync } from "node:fs";
-import path9 from "node:path";
+import path10 from "node:path";
 function fingerprintRuntimeArtifact(filePath) {
   if (!filePath) return { path: null, sha256: null };
   try {
@@ -2049,7 +2049,7 @@ function fingerprintRuntimeArtifact(filePath) {
       sha256: createHash4("sha256").update(readFileSync8(resolvedPath)).digest("hex").toUpperCase()
     };
   } catch {
-    return { path: path9.resolve(filePath), sha256: null };
+    return { path: path10.resolve(filePath), sha256: null };
   }
 }
 var BRIDGE_WORKER_LAUNCH_MARKER;
@@ -2062,10 +2062,10 @@ var init_build_provenance = __esm({
 
 // src/manager/spawn-worker.ts
 import { spawn as spawn4 } from "node:child_process";
-import path10 from "node:path";
+import path11 from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 function spawnClaimOnlyWorker(workerPath, provenance, options = {}) {
-  if (!path10.isAbsolute(workerPath)) throw new TypeError("claim-only worker path must be absolute");
+  if (!path11.isAbsolute(workerPath)) throw new TypeError("claim-only worker path must be absolute");
   if (options.dropAfterPrepared && !options.interactionChannel) throw new TypeError("interaction channel is required for drop-after-prepared");
   if (options.privateAuthChannel && !options.interactionChannel) throw new TypeError("private auth requires interaction channel allocation");
   const env = {
@@ -2084,7 +2084,7 @@ function spawnClaimOnlyWorker(workerPath, provenance, options = {}) {
     shell: false,
     stdio: options.privateAuthChannel ? ["ignore", "ignore", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe"] : options.interactionChannel ? ["ignore", "ignore", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe"] : ["ignore", "ignore", "pipe", "pipe", "pipe", "pipe", "pipe"],
     windowsHide: true,
-    cwd: path10.dirname(workerPath),
+    cwd: path11.dirname(workerPath),
     env
   });
   const diagnosticSink = options.onWorkerDiagnosticLine;
@@ -2146,7 +2146,7 @@ var init_spawn_worker = __esm({
 // src/sqlite-candidate/wp6b2b1/trusted-local-policy.ts
 import { createHash as createHash5 } from "node:crypto";
 import { realpathSync as realpathSync2, statSync as statSync4 } from "node:fs";
-import path11 from "node:path";
+import path12 from "node:path";
 function createTrustedLocalPolicyProvider(config2) {
   let enabled = false;
   let invalid = false;
@@ -2273,13 +2273,13 @@ function resolveLocalDirectory(input) {
   if (!stat2.isDirectory()) throw new Error("workspace_not_directory");
   const canonical5 = realpathSync2(input);
   if (!isLocalAbsolute(canonical5)) throw new Error("workspace_path_form_denied");
-  return path11.win32.normalize(canonical5);
+  return path12.win32.normalize(canonical5);
 }
 function isLocalAbsolute(value) {
-  return process.platform === "win32" && path11.win32.isAbsolute(value) && /^[A-Za-z]:[\\/]/u.test(value) && !value.startsWith("\\\\");
+  return process.platform === "win32" && path12.win32.isAbsolute(value) && /^[A-Za-z]:[\\/]/u.test(value) && !value.startsWith("\\\\");
 }
 function sameWindowsPath(left, right) {
-  return windowsKey(path11.win32.normalize(left)) === windowsKey(path11.win32.normalize(right));
+  return windowsKey(path12.win32.normalize(left)) === windowsKey(path12.win32.normalize(right));
 }
 function windowsKey(value) {
   return value.replace(/[\\/]+$/u, "").toLocaleLowerCase("en-US");
@@ -2419,7 +2419,7 @@ import {
   createHash as cryptoCreateHash
 } from "node:crypto";
 import { homedir as osHomedir, platform as osPlatform, userInfo as osUserInfo } from "node:os";
-import path13 from "node:path";
+import path14 from "node:path";
 function isRecord5(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
@@ -2563,7 +2563,7 @@ function extractProviderCode(value) {
   return typeof raw === "number" || typeof raw === "string" ? String(raw) : void 0;
 }
 function readOfficialStartPlanCredential(zcodeDataRoot, env = process.env) {
-  const credentialsPath = path13.join(zcodeDataRoot, "v2", "credentials.json");
+  const credentialsPath = path14.join(zcodeDataRoot, "v2", "credentials.json");
   let parsed;
   try {
     parsed = JSON.parse(readFileSync10(credentialsPath, "utf8"));
@@ -2586,7 +2586,7 @@ function readOfficialStartPlanCredential(zcodeDataRoot, env = process.env) {
   const expiresAt = typeof exp === "number" && Number.isFinite(exp) && exp > 0 ? exp * 1e3 : null;
   let deviceMid = "";
   try {
-    const telemetry = JSON.parse(readFileSync10(path13.join(zcodeDataRoot, "v2", "telemetry-state.json"), "utf8"));
+    const telemetry = JSON.parse(readFileSync10(path14.join(zcodeDataRoot, "v2", "telemetry-state.json"), "utf8"));
     if (typeof telemetry.deviceMid === "string" && telemetry.deviceMid.trim()) deviceMid = telemetry.deviceMid.trim();
   } catch {
   }
@@ -2684,7 +2684,7 @@ function createProductionStartPlanAuth(options) {
   };
 }
 async function readOfficialCliVersion(zcodeEntrypoint) {
-  const key = path13.resolve(zcodeEntrypoint);
+  const key = path14.resolve(zcodeEntrypoint);
   const cached2 = officialCliVersionCache.get(key);
   if (cached2) return cached2;
   const version2 = await new Promise((resolve) => {
@@ -3857,8 +3857,8 @@ __export(store_exports, {
 });
 import { DatabaseSync } from "node:sqlite";
 import { createHash as createHash11, randomUUID as randomUUID3 } from "node:crypto";
-import { existsSync as existsSync9, lstatSync as lstatSync2, realpathSync as realpathSync4, readFileSync as readFileSync11, writeFileSync as writeFileSync3, openSync, closeSync, fsyncSync, unlinkSync as unlinkSync2, renameSync as renameSync2, statSync as statSync5, readdirSync } from "node:fs";
-import path14 from "node:path";
+import { existsSync as existsSync9, lstatSync as lstatSync2, realpathSync as realpathSync4, readFileSync as readFileSync11, writeFileSync as writeFileSync3, openSync as openSync2, closeSync as closeSync2, fsyncSync, unlinkSync as unlinkSync2, renameSync as renameSync2, statSync as statSync5, readdirSync } from "node:fs";
+import path15 from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 function canonical4(value) {
   try {
@@ -4170,7 +4170,7 @@ function parseAuthoritySourceManifest(sourceManifestJson, sourceManifestDigest) 
   const parsed = parseHistoricalExceptionManifest(sourceManifestJson, sourceManifestDigest);
   const { manifest } = parsed;
   if (manifest.kind === void 0) return { ...parsed, kind: "historical_projection" };
-  if (manifest.kind !== "raw_json_archive_cutover" || typeof manifest.source_tasks_root !== "string" || !path14.isAbsolute(manifest.source_tasks_root) || typeof manifest.archive_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(manifest.archive_manifest_digest) || typeof manifest.source_files_digest !== "string" || !/^[0-9a-f]{64}$/u.test(manifest.source_files_digest) || manifest.task_count !== 0 || manifest.result_count !== 0 || manifest.event_count !== 0 || !Number.isSafeInteger(manifest.artifact_count) || manifest.artifact_count < 0 || !Number.isSafeInteger(manifest.artifact_bytes) || manifest.artifact_bytes < 0 || !Number.isSafeInteger(manifest.archive_file_count) || manifest.archive_file_count !== manifest.artifact_count || !Number.isSafeInteger(manifest.archive_byte_count) || manifest.archive_byte_count !== manifest.artifact_bytes || parsed.exceptions.length !== 0 || !Array.isArray(manifest.files) || manifest.files.length !== 0)
+  if (manifest.kind !== "raw_json_archive_cutover" || typeof manifest.source_tasks_root !== "string" || !path15.isAbsolute(manifest.source_tasks_root) || typeof manifest.archive_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(manifest.archive_manifest_digest) || typeof manifest.source_files_digest !== "string" || !/^[0-9a-f]{64}$/u.test(manifest.source_files_digest) || manifest.task_count !== 0 || manifest.result_count !== 0 || manifest.event_count !== 0 || !Number.isSafeInteger(manifest.artifact_count) || manifest.artifact_count < 0 || !Number.isSafeInteger(manifest.artifact_bytes) || manifest.artifact_bytes < 0 || !Number.isSafeInteger(manifest.archive_file_count) || manifest.archive_file_count !== manifest.artifact_count || !Number.isSafeInteger(manifest.archive_byte_count) || manifest.archive_byte_count !== manifest.artifact_bytes || parsed.exceptions.length !== 0 || !Array.isArray(manifest.files) || manifest.files.length !== 0)
     fail2("invalid_raw_json_archive_cutover_manifest");
   return { ...parsed, kind: "raw_json_archive_cutover" };
 }
@@ -4188,22 +4188,22 @@ function validateHistoricalExceptionSnapshot(snapshot, sourceManifest) {
   }
 }
 function pathsFor(root, { databaseFileName = "operations.sqlite3", managedDataDirectory = false, allowCutoverPending = false, allowUnpublishedCutover = false, allowFreshBootstrapPending = false } = {}) {
-  if (typeof root !== "string" || !path14.isAbsolute(root) || !existsSync9(root) || !lstatSync2(root).isDirectory() || lstatSync2(root).isSymbolicLink()) fail2("invalid_data_root");
+  if (typeof root !== "string" || !path15.isAbsolute(root) || !existsSync9(root) || !lstatSync2(root).isDirectory() || lstatSync2(root).isSymbolicLink()) fail2("invalid_data_root");
   if (typeof databaseFileName !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/u.test(databaseFileName) || databaseFileName === "." || databaseFileName === "..") fail2("invalid_database_file_name");
   const resolved = realpathSync4.native(root);
   if (!managedDataDirectory) {
-    const relative = path14.relative(HERE, resolved);
-    if (!relative || relative.startsWith("..") || path14.isAbsolute(relative)) fail2("data_root_outside_candidate");
+    const relative = path15.relative(HERE, resolved);
+    if (!relative || relative.startsWith("..") || path15.isAbsolute(relative)) fail2("data_root_outside_candidate");
   }
-  const db = path14.join(resolved, databaseFileName);
+  const db = path15.join(resolved, databaseFileName);
   const files = {
     root: resolved,
     db,
     bootstrapPending: `${db}.bootstrap-pending.json`,
     cutoverPending: `${db}.cutover-pending.json`,
     cutoverPublished: `${db}.cutover-published.json`,
-    poison: path14.join(resolved, "ROOT_POISONED.json"),
-    intent: path14.join(resolved, "WRITER_INTENT.json")
+    poison: path15.join(resolved, "ROOT_POISONED.json"),
+    intent: path15.join(resolved, "WRITER_INTENT.json")
   };
   for (const file of [files.db, `${files.db}-wal`, `${files.db}-shm`, files.bootstrapPending, files.cutoverPending, files.cutoverPublished, files.poison, files.intent]) {
     try {
@@ -4225,7 +4225,7 @@ function readPublishedCutoverReceipt(file) {
   }
   const keys = ["archive", "created_at", "cutover_id", "database_file", "migration_id", "schema_version", "source_manifest_digest", "source_root_digest", "state"];
   const archiveKeys = ["archive_directory", "byte_count", "file_count", "manifest_digest", "source_tasks_root"];
-  if (!value || Object.getPrototypeOf(value) !== Object.prototype || Object.keys(value).sort().join("|") !== keys.join("|") || value.schema_version !== 1 || value.state !== "authority_switch_receipt" || !validText3(value.migration_id, 128) || !validText3(value.cutover_id, 128) || typeof value.source_root_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.source_root_digest) || typeof value.source_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.source_manifest_digest) || !validText3(value.database_file, 96) || !validText3(value.created_at, 64) || Number.isNaN(Date.parse(value.created_at)) || !value.archive || Object.getPrototypeOf(value.archive) !== Object.prototype || Object.keys(value.archive).sort().join("|") !== archiveKeys.join("|") || !validText3(value.archive.archive_directory, 32767) || !path14.isAbsolute(value.archive.archive_directory) || !validText3(value.archive.source_tasks_root, 32767) || !path14.isAbsolute(value.archive.source_tasks_root) || typeof value.archive.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.archive.manifest_digest) || !Number.isSafeInteger(value.archive.file_count) || value.archive.file_count < 0 || !Number.isSafeInteger(value.archive.byte_count) || value.archive.byte_count < 0) fail2("cutover_publication_receipt_invalid");
+  if (!value || Object.getPrototypeOf(value) !== Object.prototype || Object.keys(value).sort().join("|") !== keys.join("|") || value.schema_version !== 1 || value.state !== "authority_switch_receipt" || !validText3(value.migration_id, 128) || !validText3(value.cutover_id, 128) || typeof value.source_root_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.source_root_digest) || typeof value.source_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.source_manifest_digest) || !validText3(value.database_file, 96) || !validText3(value.created_at, 64) || Number.isNaN(Date.parse(value.created_at)) || !value.archive || Object.getPrototypeOf(value.archive) !== Object.prototype || Object.keys(value.archive).sort().join("|") !== archiveKeys.join("|") || !validText3(value.archive.archive_directory, 32767) || !path15.isAbsolute(value.archive.archive_directory) || !validText3(value.archive.source_tasks_root, 32767) || !path15.isAbsolute(value.archive.source_tasks_root) || typeof value.archive.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.archive.manifest_digest) || !Number.isSafeInteger(value.archive.file_count) || value.archive.file_count < 0 || !Number.isSafeInteger(value.archive.byte_count) || value.archive.byte_count < 0) fail2("cutover_publication_receipt_invalid");
   return value;
 }
 function assertCutoverPublicationGate(db, paths) {
@@ -4245,16 +4245,16 @@ function assertCutoverPublicationGate(db, paths) {
   }
   const receipt2 = switched[0];
   const publication = readPublishedCutoverReceipt(paths.cutoverPublished);
-  if (publication.database_file !== path14.basename(paths.db) || publication.migration_id !== receipt2.migration_id || publication.cutover_id !== receipt2.cutover_id || publication.source_root_digest !== receipt2.source_root_digest || publication.source_manifest_digest !== receipt2.source_manifest_digest || publication.archive.archive_directory !== receipt2.archive_directory || publication.archive.manifest_digest !== receipt2.archive_manifest_digest || publication.archive.source_tasks_root !== receipt2.archive_source_tasks_root || publication.archive.file_count !== receipt2.archive_file_count || publication.archive.byte_count !== receipt2.archive_byte_count) fail2("cutover_publication_receipt_mismatch");
+  if (publication.database_file !== path15.basename(paths.db) || publication.migration_id !== receipt2.migration_id || publication.cutover_id !== receipt2.cutover_id || publication.source_root_digest !== receipt2.source_root_digest || publication.source_manifest_digest !== receipt2.source_manifest_digest || publication.archive.archive_directory !== receipt2.archive_directory || publication.archive.manifest_digest !== receipt2.archive_manifest_digest || publication.archive.source_tasks_root !== receipt2.archive_source_tasks_root || publication.archive.file_count !== receipt2.archive_file_count || publication.archive.byte_count !== receipt2.archive_byte_count) fail2("cutover_publication_receipt_mismatch");
 }
 function writePoison(file, value) {
   const tmp = `${file}.${randomUUID3()}.tmp`;
-  const fd = openSync(tmp, "wx", 384);
+  const fd = openSync2(tmp, "wx", 384);
   try {
     writeFileSync3(fd, JSON.stringify(value));
     fsyncSync(fd);
   } finally {
-    closeSync(fd);
+    closeSync2(fd);
   }
   try {
     renameSync2(tmp, file);
@@ -4267,8 +4267,8 @@ function writePoison(file, value) {
   }
 }
 function workspacePathsOverlap(left, right) {
-  const a = path14.win32.resolve(left).toLowerCase();
-  const b = path14.win32.resolve(right).toLowerCase();
+  const a = path15.win32.resolve(left).toLowerCase();
+  const b = path15.win32.resolve(right).toLowerCase();
   const contains = (parent, child) => child === parent || child.startsWith(parent.endsWith("\\") ? parent : `${parent}\\`);
   return contains(a, b) || contains(b, a);
 }
@@ -4499,7 +4499,7 @@ function validateTaskPackage(task) {
 }
 function validateWorkspace(input, validator) {
   if (typeof input !== "string" || !input.trim()) fail2("workspace_missing");
-  if (!path14.isAbsolute(input)) fail2("workspace_not_absolute");
+  if (!path15.isAbsolute(input)) fail2("workspace_not_absolute");
   if (input.replace(/\//g, "\\").startsWith("\\\\")) fail2("workspace_unsupported_path_form");
   let st, canonicalPath;
   try {
@@ -4539,7 +4539,7 @@ var init_store = __esm({
     init_result_contract();
     init_interaction_channel();
     init_json_history_result_exceptions();
-    HERE = path14.dirname(fileURLToPath4(import.meta.url));
+    HERE = path15.dirname(fileURLToPath4(import.meta.url));
     SCHEMA = readFileSync11(new URL("./schema.sql", import.meta.url), "utf8");
     ADMIN_ABANDONMENT_SCHEMA = readFileSync11(new URL("./admin-abandonment.sql", import.meta.url), "utf8");
     CONSTRUCT = /* @__PURE__ */ Symbol("construct");
@@ -4639,10 +4639,10 @@ var init_store = __esm({
         }
       } = {}) {
         if (offline !== true) fail2("offline_upgrade_required");
-        if (!path14.isAbsolute(destinationRoot) || realpathSync4(destinationRoot) !== path14.resolve(destinationRoot) || readdirSync(destinationRoot).length) fail2("upgrade_destination_not_empty");
+        if (!path15.isAbsolute(destinationRoot) || realpathSync4(destinationRoot) !== path15.resolve(destinationRoot) || readdirSync(destinationRoot).length) fail2("upgrade_destination_not_empty");
         const options = { databaseFileName, managedDataDirectory: true };
         const source = pathsFor(sourceRoot, options), destination = pathsFor(destinationRoot, options);
-        if (source.root === destination.root || path14.resolve(sourceRoot) === path14.resolve(destinationRoot)) fail2("upgrade_same_root");
+        if (source.root === destination.root || path15.resolve(sourceRoot) === path15.resolve(destinationRoot)) fail2("upgrade_same_root");
         const blocked = () => {
           for (const file of [source.intent, source.poison, source.bootstrapPending, source.cutoverPending]) if (existsSync9(file)) fail2("upgrade_source_blocked");
         };
@@ -4718,20 +4718,20 @@ var init_store = __esm({
           blocked();
           const receipt2 = {
             contract: "sqlite-v13-v14-copy-upgrade-v1",
-            source: path14.resolve(sourceRoot),
-            destination: path14.resolve(destinationRoot),
+            source: path15.resolve(sourceRoot),
+            destination: path15.resolve(destinationRoot),
             database_file: databaseFileName,
             source_version: 13,
             destination_version: 14,
             verified_at: (/* @__PURE__ */ new Date()).toISOString(),
             tables: verification
           };
-          const fd = openSync(path14.join(destinationRoot, "v14-upgrade-receipt.json"), "wx", 384);
+          const fd = openSync2(path15.join(destinationRoot, "v14-upgrade-receipt.json"), "wx", 384);
           try {
             writeFileSync3(fd, JSON.stringify(receipt2, null, 2));
             fsyncSync(fd);
           } finally {
-            closeSync(fd);
+            closeSync2(fd);
           }
           target.exec("PRAGMA wal_checkpoint(TRUNCATE)");
           unlinkSync2(destination.bootstrapPending);
@@ -4743,7 +4743,7 @@ var init_store = __esm({
             } catch {
             }
           }
-          if (target) writeFileSync3(path14.join(destinationRoot, "ROOT_POISONED.json"), JSON.stringify({ version: 1, reason: "v14_upgrade_failed", detail: String(error2), at: (/* @__PURE__ */ new Date()).toISOString() }), { flag: "wx" });
+          if (target) writeFileSync3(path15.join(destinationRoot, "ROOT_POISONED.json"), JSON.stringify({ version: 1, reason: "v14_upgrade_failed", detail: String(error2), at: (/* @__PURE__ */ new Date()).toISOString() }), { flag: "wx" });
           throw error2;
         } finally {
           target?.close();
@@ -4912,7 +4912,7 @@ var init_store = __esm({
         const sourceKeys = ["manifest_digest", "manifest_json", "root_digest"];
         const archive = snapshot.archive;
         const archiveKeys = ["archive_directory", "byte_count", "file_count", "manifest_digest", "source_tasks_root"];
-        if (Object.keys(snapshot).sort().join("|") !== topKeys.join("|") || !source || Object.getPrototypeOf(source) !== Object.prototype || Object.keys(source).sort().join("|") !== sourceKeys.join("|") || !archive || Object.getPrototypeOf(archive) !== Object.prototype || Object.keys(archive).sort().join("|") !== archiveKeys.join("|") || !validId3(snapshot.migration_id) || !validId3(snapshot.cutover_id) || !validText3(snapshot.verifier_version, 128) || !validText3(snapshot.protocol_version, 128) || typeof snapshot.runtime_roster_digest !== "string" || !/^[0-9a-f]{64}$/u.test(snapshot.runtime_roster_digest) || typeof source.root_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.root_digest) || typeof source.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.manifest_digest) || typeof source.manifest_json !== "string" || digest2(source.manifest_json) !== source.manifest_digest || !validText3(archive.archive_directory, 32767) || !path14.isAbsolute(archive.archive_directory) || !validText3(archive.source_tasks_root, 32767) || !path14.isAbsolute(archive.source_tasks_root) || typeof archive.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(archive.manifest_digest) || !Number.isSafeInteger(archive.file_count) || archive.file_count < 0 || !Number.isSafeInteger(archive.byte_count) || archive.byte_count < 0) fail2("invalid_raw_cutover_snapshot");
+        if (Object.keys(snapshot).sort().join("|") !== topKeys.join("|") || !source || Object.getPrototypeOf(source) !== Object.prototype || Object.keys(source).sort().join("|") !== sourceKeys.join("|") || !archive || Object.getPrototypeOf(archive) !== Object.prototype || Object.keys(archive).sort().join("|") !== archiveKeys.join("|") || !validId3(snapshot.migration_id) || !validId3(snapshot.cutover_id) || !validText3(snapshot.verifier_version, 128) || !validText3(snapshot.protocol_version, 128) || typeof snapshot.runtime_roster_digest !== "string" || !/^[0-9a-f]{64}$/u.test(snapshot.runtime_roster_digest) || typeof source.root_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.root_digest) || typeof source.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.manifest_digest) || typeof source.manifest_json !== "string" || digest2(source.manifest_json) !== source.manifest_digest || !validText3(archive.archive_directory, 32767) || !path15.isAbsolute(archive.archive_directory) || !validText3(archive.source_tasks_root, 32767) || !path15.isAbsolute(archive.source_tasks_root) || typeof archive.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(archive.manifest_digest) || !Number.isSafeInteger(archive.file_count) || archive.file_count < 0 || !Number.isSafeInteger(archive.byte_count) || archive.byte_count < 0) fail2("invalid_raw_cutover_snapshot");
         const policy = parseAuthoritySourceManifest(source.manifest_json, source.manifest_digest);
         if (policy.kind !== "raw_json_archive_cutover" || policy.manifest.source_tasks_root !== archive.source_tasks_root || policy.manifest.archive_manifest_digest !== archive.manifest_digest || policy.manifest.archive_file_count !== archive.file_count || policy.manifest.archive_byte_count !== archive.byte_count) fail2("raw_cutover_archive_identity_mismatch");
         const at = (/* @__PURE__ */ new Date()).toISOString();
@@ -4986,7 +4986,7 @@ var init_store = __esm({
         const sourceKeys = ["artifact_bytes", "artifact_count", "event_count", "historical_exception_count", "historical_exception_digest", "manifest_digest", "manifest_json", "result_count", "root_digest", "task_count"];
         const archive = snapshot.archive;
         const archiveKeys = ["archive_directory", "byte_count", "file_count", "manifest_digest", "source_tasks_root"];
-        if (!source || Object.getPrototypeOf(source) !== Object.prototype || Object.keys(source).sort().join("|") !== sourceKeys.join("|") || !archive || Object.getPrototypeOf(archive) !== Object.prototype || Object.keys(archive).sort().join("|") !== archiveKeys.join("|") || !validId3(snapshot.migration_id) || !validId3(snapshot.cutover_id) || !validText3(snapshot.verifier_version, 128) || !validText3(snapshot.protocol_version, 128) || typeof snapshot.runtime_roster_digest !== "string" || !/^[0-9a-f]{64}$/u.test(snapshot.runtime_roster_digest) || typeof source.root_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.root_digest) || typeof source.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.manifest_digest) || typeof source.manifest_json !== "string" || digest2(source.manifest_json) !== source.manifest_digest || !validText3(archive.archive_directory, 32767) || !path14.isAbsolute(archive.archive_directory) || !validText3(archive.source_tasks_root, 32767) || !path14.isAbsolute(archive.source_tasks_root) || typeof archive.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(archive.manifest_digest) || !Number.isSafeInteger(archive.file_count) || archive.file_count < 0 || !Number.isSafeInteger(archive.byte_count) || archive.byte_count < 0 || archive.file_count !== source.artifact_count || archive.byte_count !== source.artifact_bytes || !Array.isArray(snapshot.tasks) || !Array.isArray(snapshot.artifacts) || !Array.isArray(snapshot.results) || !Array.isArray(snapshot.events) || !Array.isArray(snapshot.historical_exceptions) || ![source.task_count, source.artifact_count, source.artifact_bytes, source.result_count, source.event_count].every((v) => Number.isSafeInteger(v) && v >= 0) || !Number.isSafeInteger(source.historical_exception_count) || source.historical_exception_count < 0 || typeof source.historical_exception_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.historical_exception_digest) || source.historical_exception_count !== snapshot.historical_exceptions.length || source.historical_exception_digest !== historicalResultExceptionSetDigest(snapshot.historical_exceptions) || source.artifact_count !== snapshot.artifacts.length || source.result_count !== snapshot.results.length || source.event_count !== snapshot.events.length) fail2("invalid_migration_snapshot");
+        if (!source || Object.getPrototypeOf(source) !== Object.prototype || Object.keys(source).sort().join("|") !== sourceKeys.join("|") || !archive || Object.getPrototypeOf(archive) !== Object.prototype || Object.keys(archive).sort().join("|") !== archiveKeys.join("|") || !validId3(snapshot.migration_id) || !validId3(snapshot.cutover_id) || !validText3(snapshot.verifier_version, 128) || !validText3(snapshot.protocol_version, 128) || typeof snapshot.runtime_roster_digest !== "string" || !/^[0-9a-f]{64}$/u.test(snapshot.runtime_roster_digest) || typeof source.root_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.root_digest) || typeof source.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.manifest_digest) || typeof source.manifest_json !== "string" || digest2(source.manifest_json) !== source.manifest_digest || !validText3(archive.archive_directory, 32767) || !path15.isAbsolute(archive.archive_directory) || !validText3(archive.source_tasks_root, 32767) || !path15.isAbsolute(archive.source_tasks_root) || typeof archive.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(archive.manifest_digest) || !Number.isSafeInteger(archive.file_count) || archive.file_count < 0 || !Number.isSafeInteger(archive.byte_count) || archive.byte_count < 0 || archive.file_count !== source.artifact_count || archive.byte_count !== source.artifact_bytes || !Array.isArray(snapshot.tasks) || !Array.isArray(snapshot.artifacts) || !Array.isArray(snapshot.results) || !Array.isArray(snapshot.events) || !Array.isArray(snapshot.historical_exceptions) || ![source.task_count, source.artifact_count, source.artifact_bytes, source.result_count, source.event_count].every((v) => Number.isSafeInteger(v) && v >= 0) || !Number.isSafeInteger(source.historical_exception_count) || source.historical_exception_count < 0 || typeof source.historical_exception_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.historical_exception_digest) || source.historical_exception_count !== snapshot.historical_exceptions.length || source.historical_exception_digest !== historicalResultExceptionSetDigest(snapshot.historical_exceptions) || source.artifact_count !== snapshot.artifacts.length || source.result_count !== snapshot.results.length || source.event_count !== snapshot.events.length) fail2("invalid_migration_snapshot");
         const sourceManifest = parseHistoricalExceptionManifest(source.manifest_json, source.manifest_digest);
         if (sourceManifest.manifest.task_count !== source.task_count || sourceManifest.manifest.artifact_count !== source.artifact_count || sourceManifest.manifest.artifact_bytes !== source.artifact_bytes || sourceManifest.manifest.result_count !== source.result_count || sourceManifest.manifest.event_count !== source.event_count || sourceManifest.manifest.historical_exception_count !== source.historical_exception_count || sourceManifest.manifest.historical_exception_digest !== source.historical_exception_digest || canonical4(sourceManifest.exceptions) !== canonical4(snapshot.historical_exceptions)) fail2("invalid_source_manifest");
         validateHistoricalExceptionSnapshot(snapshot, sourceManifest);
@@ -7328,12 +7328,12 @@ var init_store = __esm({
         let began = false, commitStarted = false, settled = false;
         const token = randomUUID3();
         try {
-          const fd = openSync(this.#paths.intent, "wx", 384);
+          const fd = openSync2(this.#paths.intent, "wx", 384);
           try {
             writeFileSync3(fd, JSON.stringify({ version: 1, token, started_at: (/* @__PURE__ */ new Date()).toISOString() }));
             fsyncSync(fd);
           } finally {
-            closeSync(fd);
+            closeSync2(fd);
           }
         } catch (e) {
           if (e?.code === "EEXIST") fail2("root_writer_busy");
@@ -7429,7 +7429,7 @@ var init_store = __esm({
             if (migrationRuns.length || migratedResultsCount || migratedEventsCount || this.#db.prepare("SELECT COUNT(*) AS n FROM json_artifacts").get().n) fail2("fresh_install_contains_legacy_data");
           } else if (authoritySwitches.length) {
             const receipt2 = authoritySwitches[0], migration = migrationRuns[0];
-            if (!migration || migration.state !== "verified" || migration.migration_id !== receipt2.migration_id || migration.source_root_digest !== receipt2.source_root_digest || migration.source_manifest_digest !== receipt2.source_manifest_digest || digest2(migration.source_manifest_json) !== migration.source_manifest_digest || !validText3(migration.archive_directory, 32767) || !path14.isAbsolute(migration.archive_directory) || !validText3(receipt2.archive_directory, 32767) || !path14.isAbsolute(receipt2.archive_directory) || migration.archive_directory !== receipt2.archive_directory || typeof migration.archive_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(migration.archive_manifest_digest) || migration.archive_manifest_digest !== receipt2.archive_manifest_digest || !validText3(migration.archive_source_tasks_root, 32767) || !path14.isAbsolute(migration.archive_source_tasks_root) || migration.archive_source_tasks_root !== receipt2.archive_source_tasks_root || !Number.isSafeInteger(migration.archive_file_count) || migration.archive_file_count < 0 || migration.archive_file_count !== migration.source_artifact_count || migration.archive_file_count !== receipt2.archive_file_count || !Number.isSafeInteger(migration.archive_byte_count) || migration.archive_byte_count < 0 || migration.archive_byte_count !== migration.source_artifact_bytes || migration.archive_byte_count !== receipt2.archive_byte_count || receipt2.schema_version !== this.#schemaVersion || !validText3(receipt2.protocol_version, 128) || typeof receipt2.runtime_roster_digest !== "string" || !/^[0-9a-f]{64}$/u.test(receipt2.runtime_roster_digest) || !validText3(receipt2.verifier_version, 128) || !validText3(migration.verifier_version, 128) || receipt2.verifier_version !== migration.verifier_version || !validText3(receipt2.cutover_id, 128) || !validText3(receipt2.created_at, 64) || Number.isNaN(Date.parse(receipt2.created_at)) || !validText3(migration.created_at, 64) || !validText3(migration.verified_at, 64) || Number.isNaN(Date.parse(migration.created_at)) || Number.isNaN(Date.parse(migration.verified_at))) fail2("authority_switch_invalid");
+            if (!migration || migration.state !== "verified" || migration.migration_id !== receipt2.migration_id || migration.source_root_digest !== receipt2.source_root_digest || migration.source_manifest_digest !== receipt2.source_manifest_digest || digest2(migration.source_manifest_json) !== migration.source_manifest_digest || !validText3(migration.archive_directory, 32767) || !path15.isAbsolute(migration.archive_directory) || !validText3(receipt2.archive_directory, 32767) || !path15.isAbsolute(receipt2.archive_directory) || migration.archive_directory !== receipt2.archive_directory || typeof migration.archive_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(migration.archive_manifest_digest) || migration.archive_manifest_digest !== receipt2.archive_manifest_digest || !validText3(migration.archive_source_tasks_root, 32767) || !path15.isAbsolute(migration.archive_source_tasks_root) || migration.archive_source_tasks_root !== receipt2.archive_source_tasks_root || !Number.isSafeInteger(migration.archive_file_count) || migration.archive_file_count < 0 || migration.archive_file_count !== migration.source_artifact_count || migration.archive_file_count !== receipt2.archive_file_count || !Number.isSafeInteger(migration.archive_byte_count) || migration.archive_byte_count < 0 || migration.archive_byte_count !== migration.source_artifact_bytes || migration.archive_byte_count !== receipt2.archive_byte_count || receipt2.schema_version !== this.#schemaVersion || !validText3(receipt2.protocol_version, 128) || typeof receipt2.runtime_roster_digest !== "string" || !/^[0-9a-f]{64}$/u.test(receipt2.runtime_roster_digest) || !validText3(receipt2.verifier_version, 128) || !validText3(migration.verifier_version, 128) || receipt2.verifier_version !== migration.verifier_version || !validText3(receipt2.cutover_id, 128) || !validText3(receipt2.created_at, 64) || Number.isNaN(Date.parse(receipt2.created_at)) || !validText3(migration.created_at, 64) || !validText3(migration.verified_at, 64) || Number.isNaN(Date.parse(migration.created_at)) || Number.isNaN(Date.parse(migration.verified_at))) fail2("authority_switch_invalid");
             const policy = parseAuthoritySourceManifest(migration.source_manifest_json, migration.source_manifest_digest);
             if (policy.manifest.task_count !== migration.source_task_count || policy.manifest.artifact_count !== migration.source_artifact_count || policy.manifest.artifact_bytes !== migration.source_artifact_bytes || policy.manifest.result_count !== migration.source_result_count || policy.manifest.event_count !== migration.source_event_count) fail2("authority_switch_invalid");
           } else if (migrationRuns.length || migratedResultsCount || migratedEventsCount || this.#db.prepare("SELECT COUNT(*) AS n FROM json_artifacts").get().n) {
@@ -8063,12 +8063,12 @@ __export(lifecycle_gate_exports, {
   readAllLifecycleEventsForRecovery: () => readAllLifecycleEventsForRecovery
 });
 import { createHash as createHash12, randomUUID as randomUUID4 } from "node:crypto";
-import { closeSync as closeSync2, existsSync as existsSync10, fsyncSync as fsyncSync2, linkSync, lstatSync as lstatSync3, openSync as openSync2, readFileSync as readFileSync12, readdirSync as readdirSync2, realpathSync as realpathSync5, unlinkSync as unlinkSync3, writeFileSync as writeFileSync4 } from "node:fs";
+import { closeSync as closeSync3, existsSync as existsSync10, fsyncSync as fsyncSync2, linkSync, lstatSync as lstatSync3, openSync as openSync3, readFileSync as readFileSync12, readdirSync as readdirSync2, realpathSync as realpathSync5, unlinkSync as unlinkSync3, writeFileSync as writeFileSync4 } from "node:fs";
 import { spawn as spawn6 } from "node:child_process";
-import path15 from "node:path";
+import path16 from "node:path";
 import { homedir as homedir4 } from "node:os";
 function recoveryStopKey(dataRoot, databaseFileName, operationId) {
-  return `${path15.resolve(dataRoot)}\0${databaseFileName ?? "operations.sqlite3"}\0${operationId}`;
+  return `${path16.resolve(dataRoot)}\0${databaseFileName ?? "operations.sqlite3"}\0${operationId}`;
 }
 function readAllLifecycleEventsForRecovery(port, operationId) {
   const pageSize = 200;
@@ -8123,7 +8123,7 @@ async function initializeFreshInstallSqliteRoot(root, databaseFileName, version2
     throw new LifecycleGateError("sqlite_bootstrap_database_name_invalid");
   }
   const modules = await loadLifecycleCandidateModules(version2);
-  const key = path15.join(path15.resolve(root), databaseFileName);
+  const key = path16.join(path16.resolve(root), databaseFileName);
   const pending = freshBootstrapPromises.get(key);
   if (pending) return pending;
   const operation = ensureFreshSqliteAuthority(root, databaseFileName, modules, processProbe, options);
@@ -8141,7 +8141,7 @@ async function acquireFreshBootstrapLock(root, databaseFileName, timeoutMs, owne
       "Fresh SQLite bootstrap requires the Windows exclusive-file-handle lock"
     );
   }
-  const lockPath = path15.join(root, `${databaseFileName}.bootstrap.lock`);
+  const lockPath = path16.join(root, `${databaseFileName}.bootstrap.lock`);
   const deadline = Date.now() + timeoutMs;
   for (; ; ) {
     assertFreshBootstrapRootPath(root);
@@ -8185,7 +8185,7 @@ async function tryAcquireWindowsBootstrapLock(root, lockPath, databaseFileName, 
   })}
 `;
   const systemRoot = process.env["SystemRoot"];
-  const absolutePowerShell = systemRoot ? path15.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe") : "powershell.exe";
+  const absolutePowerShell = systemRoot ? path16.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe") : "powershell.exe";
   const executable = existsSync10(absolutePowerShell) ? absolutePowerShell : "powershell.exe";
   const child = spawn6(executable, [
     "-NoLogo",
@@ -8397,9 +8397,9 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 async function ensureFreshSqliteAuthority(root, databaseFileName, modules, processProbe, options) {
-  const resolvedRoot = path15.resolve(root);
+  const resolvedRoot = path16.resolve(root);
   assertFreshBootstrapRootPath(resolvedRoot);
-  const databasePath = path15.join(resolvedRoot, databaseFileName);
+  const databasePath = path16.join(resolvedRoot, databaseFileName);
   const pendingPath = `${databasePath}.bootstrap-pending.json`;
   const markerTempPath = `${databasePath}.bootstrap-marker.tmp`;
   const lockTimeoutMs = options.lockTimeoutMs ?? DEFAULT_FRESH_BOOTSTRAP_LOCK_TIMEOUT_MS;
@@ -8436,7 +8436,7 @@ async function ensureFreshSqliteAuthority(root, databaseFileName, modules, proce
         if (existsSync10(databasePath)) {
           const published = tryReadReadySqliteAuthority(modules, resolvedRoot, databaseFileName, true);
           if (published?.kind === "fresh_install" && published.receipt_id === `fresh-install-${marker2.token}`) {
-            const stagePath2 = path15.join(resolvedRoot, marker2.stage_file);
+            const stagePath2 = path16.join(resolvedRoot, marker2.stage_file);
             removeOwnedBootstrapFile(stagePath2);
             removeOwnedBootstrapFile(`${stagePath2}-wal`);
             removeOwnedBootstrapFile(`${stagePath2}-shm`);
@@ -8449,7 +8449,7 @@ async function ensureFreshSqliteAuthority(root, databaseFileName, modules, proce
           }
           throw new LifecycleGateError("sqlite_bootstrap_published_database_unverified");
         }
-        const stagePath = path15.join(resolvedRoot, marker2.stage_file);
+        const stagePath = path16.join(resolvedRoot, marker2.stage_file);
         removeOwnedBootstrapFile(stagePath);
         removeOwnedBootstrapFile(`${stagePath}-wal`);
         removeOwnedBootstrapFile(`${stagePath}-shm`);
@@ -8511,9 +8511,9 @@ async function ensureFreshSqliteAuthority(root, databaseFileName, modules, proce
   return result;
 }
 async function constructAndPublishFreshSqlite(root, databaseFileName, marker, modules, lock, options) {
-  const databasePath = path15.join(root, databaseFileName);
+  const databasePath = path16.join(root, databaseFileName);
   const pendingPath = `${databasePath}.bootstrap-pending.json`;
-  const stagePath = path15.join(root, marker.stage_file);
+  const stagePath = path16.join(root, marker.stage_file);
   let published = false;
   try {
     lock.assertHeld();
@@ -8603,7 +8603,7 @@ function assertFreshBootstrapRootPath(root) {
   try {
     const stat2 = lstatSync3(root);
     const real = realpathSync5.native(root);
-    const normalize = (value) => process.platform === "win32" ? path15.win32.normalize(value).replace(/[\\/]+$/u, "").toLocaleLowerCase("en-US") : path15.resolve(value);
+    const normalize = (value) => process.platform === "win32" ? path16.win32.normalize(value).replace(/[\\/]+$/u, "").toLocaleLowerCase("en-US") : path16.resolve(value);
     if (!stat2.isDirectory() || stat2.isSymbolicLink() || normalize(real) !== normalize(root)) {
       throw new LifecycleGateError("sqlite_data_root_redirected");
     }
@@ -8631,14 +8631,14 @@ function writeDurableBootstrapMarker(file, marker, options, lock) {
   let tempCreated = false;
   try {
     lock.assertHeld();
-    fd = openSync2(temp, "wx", 384);
+    fd = openSync3(temp, "wx", 384);
     lock.assertHeld();
     tempCreated = true;
     writeFileSync4(fd, `${JSON.stringify(marker)}
 `, "utf8");
     fsyncSync2(fd);
     lock.assertHeld();
-    closeSync2(fd);
+    closeSync3(fd);
     fd = void 0;
     emitFreshBootstrapStage(options, "marker_temp_written");
     lock.assertHeld();
@@ -8650,7 +8650,7 @@ function writeDurableBootstrapMarker(file, marker, options, lock) {
   } catch (error2) {
     if (fd !== void 0) {
       try {
-        closeSync2(fd);
+        closeSync3(fd);
       } catch {
       }
     }
@@ -8715,11 +8715,11 @@ function parsePreviousBootstrapLockRecord(encoded, databaseFileName) {
 function syncRegularFile(file) {
   const stat2 = lstatSync3(file);
   if (!stat2.isFile() || stat2.isSymbolicLink()) throw new LifecycleGateError("sqlite_bootstrap_stage_unsafe");
-  const fd = openSync2(file, "r+");
+  const fd = openSync3(file, "r+");
   try {
     fsyncSync2(fd);
   } finally {
-    closeSync2(fd);
+    closeSync3(fd);
   }
 }
 function removeOwnedBootstrapFile(file) {
@@ -10860,7 +10860,7 @@ __export(sqlite_lifecycle_mcp_authority_exports, {
   SqliteLifecycleMcpAuthority: () => SqliteLifecycleMcpAuthority
 });
 import { createHash as createHash13, randomBytes } from "node:crypto";
-import path16 from "node:path";
+import path17 from "node:path";
 function validateTaskPackage2(task) {
   const worktreePath = task.worktree_path;
   if (!task || typeof task.task_id !== "string" || !task.task_id.trim() || task.task_id.length > 128 || typeof task.workspace !== "string" || !task.workspace.trim() || !pathIsAbsolute(task.workspace) || worktreePath !== void 0 && (typeof worktreePath !== "string" || !worktreePath.trim() || !pathIsAbsolute(worktreePath)) || typeof task.objective !== "string" || !task.objective.trim() || !Array.isArray(task.requirements) || !Array.isArray(task.allowed_paths) || !Array.isArray(task.forbidden_paths) || !Array.isArray(task.acceptance_criteria) || !Array.isArray(task.test_commands)) {
@@ -10919,10 +10919,10 @@ function taskExecutionPath(task) {
 function executionPathsOverlap(left, right) {
   const leftPath = normalizeExecutionPath(left);
   const rightPath = normalizeExecutionPath(right);
-  return leftPath === rightPath || leftPath.startsWith(rightPath + path16.sep) || rightPath.startsWith(leftPath + path16.sep);
+  return leftPath === rightPath || leftPath.startsWith(rightPath + path17.sep) || rightPath.startsWith(leftPath + path17.sep);
 }
 function normalizeExecutionPath(value) {
-  const resolved = path16.resolve(value).replace(/[\\/]+$/u, "");
+  const resolved = path17.resolve(value).replace(/[\\/]+$/u, "");
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 function queueKey(taskId, attempt) {
@@ -11801,7 +11801,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
 
 // src/mcp/main.ts
 import { realpathSync as realpathSync6 } from "node:fs";
-import path18 from "node:path";
+import path19 from "node:path";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
 
 // node_modules/@modelcontextprotocol/server/dist/chunk-Br0eD_fh.mjs
@@ -12097,10 +12097,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path19) {
-  if (!path19)
+function getElementAtPath(obj, path20) {
+  if (!path20)
     return obj;
-  return path19.reduce((acc, key) => acc?.[key], obj);
+  return path20.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -12440,11 +12440,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path19, issues) {
+function prefixIssues(path20, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path19);
+    iss.path.unshift(path20);
     return iss;
   });
 }
@@ -12893,16 +12893,16 @@ function flattenError(error2, mapper = (issue2) => issue2.message) {
 }
 function formatError(error2, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error3, path19 = []) => {
+  const processError = (error3, path20 = []) => {
     for (const issue2 of error3.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path19, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path20, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path19, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path20, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path19, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path20, ...issue2.path]);
       } else {
-        const fullpath = [...path19, ...issue2.path];
+        const fullpath = [...path20, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -22245,9 +22245,9 @@ var rev2026Codec = {
     });
     const parsed = buildSchemas2026().RequestMetaEnvelopeSchema.safeParse(meta2);
     if (!parsed.success) for (const issue2 of parsed.error.issues) {
-      const path19 = issue2.path.map(String);
-      const key = path19.length > 0 ? path19.join(".") : "_meta";
-      if (path19.length === 1 && issues.some((existing) => existing.key === key && existing.problem === "missing")) continue;
+      const path20 = issue2.path.map(String);
+      const key = path20.length > 0 ? path20.join(".") : "_meta";
+      if (path20.length === 1 && issues.some((existing) => existing.key === key && existing.problem === "missing")) continue;
       issues.push({
         key,
         problem: issue2.message
@@ -22568,29 +22568,29 @@ var PERMITTED_X_MCP_HEADER_TYPES = /* @__PURE__ */ new Set([
 function scanXMcpHeaderDeclarations(inputSchema) {
   const declarations = [];
   const seenLower = /* @__PURE__ */ new Map();
-  const visit = (node2, path19, reachable) => {
+  const visit = (node2, path20, reachable) => {
     if (node2 === null || typeof node2 !== "object") return void 0;
     const schema = node2;
     if (X_MCP_HEADER_KEY in schema) {
-      if (!reachable || path19.length === 0) return `${pathName(path19)}: x-mcp-header is only permitted on properties statically reachable via a chain of 'properties' keys (not under items, additionalProperties, oneOf/anyOf/allOf/not, if/then/else, or $ref)`;
+      if (!reachable || path20.length === 0) return `${pathName(path20)}: x-mcp-header is only permitted on properties statically reachable via a chain of 'properties' keys (not under items, additionalProperties, oneOf/anyOf/allOf/not, if/then/else, or $ref)`;
       const raw = schema[X_MCP_HEADER_KEY];
-      if (typeof raw !== "string" || raw.length === 0) return `${pathName(path19)}: x-mcp-header MUST be a non-empty string`;
-      if (!RFC9110_TOKEN.test(raw)) return `${pathName(path19)}: x-mcp-header '${raw}' is not a valid RFC 9110 token (no spaces, control characters or HTTP delimiters)`;
+      if (typeof raw !== "string" || raw.length === 0) return `${pathName(path20)}: x-mcp-header MUST be a non-empty string`;
+      if (!RFC9110_TOKEN.test(raw)) return `${pathName(path20)}: x-mcp-header '${raw}' is not a valid RFC 9110 token (no spaces, control characters or HTTP delimiters)`;
       const type = typeof schema.type === "string" ? schema.type : void 0;
-      if (type === void 0 || !PERMITTED_X_MCP_HEADER_TYPES.has(type)) return `${pathName(path19)}: x-mcp-header is only permitted on primitive-typed properties (string, integer, boolean); got ${type ?? "<none>"}`;
+      if (type === void 0 || !PERMITTED_X_MCP_HEADER_TYPES.has(type)) return `${pathName(path20)}: x-mcp-header is only permitted on primitive-typed properties (string, integer, boolean); got ${type ?? "<none>"}`;
       const lower = raw.toLowerCase();
       const prior = seenLower.get(lower);
       if (prior !== void 0) return `x-mcp-header '${raw}' is not case-insensitively unique (also declared as '${prior}')`;
       seenLower.set(lower, raw);
       declarations.push({
-        path: path19,
+        path: path20,
         headerName: raw,
         type
       });
     }
     const properties = schema.properties;
     if (properties !== null && typeof properties === "object") for (const [key, child] of Object.entries(properties)) {
-      const fault$1 = visit(child, [...path19, key], reachable);
+      const fault$1 = visit(child, [...path20, key], reachable);
       if (fault$1 !== void 0) return fault$1;
     }
     for (const k of NON_REACHABLE_SUBSCHEMA_KEYWORDS) {
@@ -22598,7 +22598,7 @@ function scanXMcpHeaderDeclarations(inputSchema) {
       if (sub === void 0) continue;
       const branches = Array.isArray(sub) ? sub : sub !== null && typeof sub === "object" && OBJECT_VALUED_SUBSCHEMA_KEYWORDS.has(k) ? Object.values(sub) : [sub];
       for (const branch of branches) {
-        const fault$1 = visit(branch, [...path19, `<${k}>`], false);
+        const fault$1 = visit(branch, [...path20, `<${k}>`], false);
         if (fault$1 !== void 0) return fault$1;
       }
     }
@@ -22638,8 +22638,8 @@ var OBJECT_VALUED_SUBSCHEMA_KEYWORDS = /* @__PURE__ */ new Set([
   "$defs",
   "definitions"
 ]);
-function pathName(path19) {
-  return path19.length === 0 ? "<root>" : path19.join(".");
+function pathName(path20) {
+  return path20.length === 0 ? "<root>" : path20.join(".");
 }
 var HEADER_MISMATCH_ERROR_CODE = -32020;
 var INBOUND_VALIDATION_LADDER = [
@@ -22928,7 +22928,7 @@ var PROPERTY_KEYS_BY_TYPE = {
   array: shapeKeys([UntitledMultiSelectEnumSchemaSchema, TitledMultiSelectEnumSchemaSchema])
 };
 var SUPPORTED_STRING_FORMATS = new Set(StringSchemaSchema.shape.format.unwrap().options);
-function walkProperty(node2, path19, vendor, unsupported) {
+function walkProperty(node2, path20, vendor, unsupported) {
   if (!isJsonObject(node2)) return node2;
   const allowedKeys = typeof node2.type === "string" && Object.hasOwn(PROPERTY_KEYS_BY_TYPE, node2.type) ? PROPERTY_KEYS_BY_TYPE[node2.type] : void 0;
   if (allowedKeys === void 0) return node2;
@@ -22936,8 +22936,8 @@ function walkProperty(node2, path19, vendor, unsupported) {
   for (const [key, value] of Object.entries(node2)) if (allowedKeys.has(key) || isAnnotationOnlyJsonSchemaKeyword(key)) pruned[key] = value;
   else if (key === "pattern" && node2.type === "string" && typeof node2.format === "string") {
     if (!SUPPORTED_STRING_FORMATS.has(node2.format)) pruned[key] = value;
-    else if (typeof value !== "string" || !isLibraryFormatPattern(node2.format, value, vendor)) unsupported.push(`${path19}.${key}`);
-  } else unsupported.push(`${path19}.${key}`);
+    else if (typeof value !== "string" || !isLibraryFormatPattern(node2.format, value, vendor)) unsupported.push(`${path20}.${key}`);
+  } else unsupported.push(`${path20}.${key}`);
   return pruned;
 }
 function walkRequestedSchema(converted, vendor) {
@@ -22954,11 +22954,11 @@ function describeUnsupportedProperties(pruned, fallback) {
   const offenders = Object.entries(pruned.properties).filter(([, node2]) => !parseSchema(PrimitiveSchemaDefinitionSchema, node2).success).map(([name]) => `properties.${name}`);
   return offenders.length > 0 ? offenders.join(", ") : fallback;
 }
-function findDroppedConstraintPaths(original, parsed, path19 = "") {
-  if (Array.isArray(original) && Array.isArray(parsed)) return original.flatMap((item, index) => findDroppedConstraintPaths(item, parsed[index], `${path19}[${index}]`));
+function findDroppedConstraintPaths(original, parsed, path20 = "") {
+  if (Array.isArray(original) && Array.isArray(parsed)) return original.flatMap((item, index) => findDroppedConstraintPaths(item, parsed[index], `${path20}[${index}]`));
   if (!isJsonObject(original) || !isJsonObject(parsed)) return [];
   return Object.entries(original).flatMap(([key, value]) => {
-    const childPath = path19 ? `${path19}.${key}` : key;
+    const childPath = path20 ? `${path20}.${key}` : key;
     if (!Object.prototype.hasOwnProperty.call(parsed, key)) return isAnnotationOnlyJsonSchemaKeyword(key) ? [] : [childPath];
     return findDroppedConstraintPaths(value, parsed[key], childPath);
   });
@@ -27037,8 +27037,8 @@ var require_utils = /* @__PURE__ */ __commonJSMin(((exports, module) => {
     for (let i = 0; i < str.length; i++) if (str[i] === token) ind++;
     return ind;
   }
-  function removeDotSegments(path19) {
-    let input = path19;
+  function removeDotSegments(path20) {
+    let input = path20;
     const output = [];
     let nextSlash = -1;
     let len = 0;
@@ -27191,8 +27191,8 @@ var require_schemes = /* @__PURE__ */ __commonJSMin(((exports, module) => {
       wsComponent.secure = void 0;
     }
     if (wsComponent.resourceName) {
-      const [path19, query] = wsComponent.resourceName.split("?");
-      wsComponent.path = path19 && path19 !== "/" ? path19 : void 0;
+      const [path20, query] = wsComponent.resourceName.split("?");
+      wsComponent.path = path20 && path20 !== "/" ? path20 : void 0;
       wsComponent.query = query;
       wsComponent.resourceName = void 0;
     }
@@ -33333,7 +33333,7 @@ function toError(value) {
 // src/host/stdio.ts
 init_resolver();
 import { homedir as homedir5 } from "node:os";
-import path17 from "node:path";
+import path18 from "node:path";
 
 // node_modules/@modelcontextprotocol/server/dist/index.mjs
 var DEFAULT_MAX_REQUEST_BODY_SIZE = 4 * 1024 * 1024;
@@ -35118,7 +35118,143 @@ import { spawn as spawn3 } from "node:child_process";
 import { createHash as createHash3, randomUUID as randomUUID2 } from "node:crypto";
 import { mkdir, readFile as readFile2, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { homedir as homedir3 } from "node:os";
+import path9 from "node:path";
+
+// src/runtime/desktop-host-launch.ts
+init_errors();
+import { closeSync, openSync, readSync } from "node:fs";
 import path8 from "node:path";
+var ZCODE_APP_VERSION_ENV = "ZCODE_APP_VERSION";
+var ZCODE_BUILD_COMMIT_ID_ENV = "ZCODE_BUILD_COMMIT_ID";
+var APP_SERVER_ARGS = ["app-server", "--stdio", "--surface", "desktop"];
+var BUILD_METADATA_PATH = ["out", "metadata", "build-meta.json"];
+var MAX_ASAR_HEADER_BYTES = 32 * 1024 * 1024;
+var MAX_METADATA_BYTES = 64 * 1024;
+var VERSION_PATTERN = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
+var BUILD_COMMIT_PATTERN = /^[0-9a-f]{8}$/u;
+function buildZCodeAppServerLaunch(zcodeEntrypoint, baseEnv) {
+  const metadata = readDesktopMetadata(zcodeEntrypoint);
+  return {
+    args: [...APP_SERVER_ARGS],
+    env: metadata === null ? { ...baseEnv } : {
+      ...baseEnv,
+      [ZCODE_APP_VERSION_ENV]: metadata.appVersion,
+      [ZCODE_BUILD_COMMIT_ID_ENV]: metadata.buildCommitId
+    }
+  };
+}
+function readDesktopMetadata(zcodeEntrypoint) {
+  const archivePath = path8.resolve(path8.dirname(zcodeEntrypoint), "..", "app.asar");
+  let archive;
+  try {
+    archive = readAsarMetadataFiles(archivePath);
+  } catch (error2) {
+    if (isMissingFile(error2)) return null;
+    throw invalidMetadata("could not be read");
+  }
+  if (archive === null) return null;
+  const packageJson = parseObject(archive.packageJson, "package.json");
+  const buildMetadata = parseObject(archive.buildMetadata, "build-meta.json");
+  const packageVersion = packageJson["version"];
+  const appVersion = buildMetadata["appVersion"];
+  const buildCommitId = buildMetadata["buildCommitId"];
+  if (typeof packageVersion !== "string" || typeof appVersion !== "string" || typeof buildCommitId !== "string") {
+    throw invalidMetadata("is missing required fields");
+  }
+  if (!VERSION_PATTERN.test(packageVersion) || !VERSION_PATTERN.test(appVersion) || !BUILD_COMMIT_PATTERN.test(buildCommitId)) {
+    throw invalidMetadata("uses an unsupported version or build commit format");
+  }
+  if (packageVersion !== appVersion) {
+    throw invalidMetadata("contains conflicting application versions");
+  }
+  return { appVersion, buildCommitId };
+}
+function readAsarMetadataFiles(archivePath) {
+  const fd = openSync(archivePath, "r");
+  try {
+    const sizeHeader = Buffer.alloc(16);
+    readExact(fd, sizeHeader, 16, 0);
+    if (sizeHeader.readUInt32LE(0) !== 4) throw new Error("invalid asar header");
+    const headerPayloadBytes = sizeHeader.readUInt32LE(4);
+    const headerBytes = sizeHeader.readUInt32LE(12);
+    if (headerBytes === 0 || headerBytes > MAX_ASAR_HEADER_BYTES || headerPayloadBytes < headerBytes) {
+      throw new Error("invalid asar header size");
+    }
+    const headerBuffer = Buffer.alloc(headerBytes);
+    readExact(fd, headerBuffer, headerBytes, 16);
+    const root = parseObject(headerBuffer, "asar header");
+    if (!root.files) throw new Error("asar header has no file table");
+    const buildEntry = findEntry(root.files, BUILD_METADATA_PATH);
+    if (buildEntry === null) return null;
+    const packageEntry = findEntry(root.files, ["package.json"]);
+    if (packageEntry === null) throw new Error("asar package.json is missing");
+    return {
+      packageJson: readEntry(fd, packageEntry, 8 + headerPayloadBytes),
+      buildMetadata: readEntry(fd, buildEntry, 8 + headerPayloadBytes)
+    };
+  } finally {
+    closeSync(fd);
+  }
+}
+function findEntry(root, parts) {
+  let current;
+  let files = root;
+  for (const part of parts) {
+    current = files[part];
+    if (!current) return null;
+    files = current.files ?? {};
+  }
+  return current ?? null;
+}
+function readEntry(fd, entry, contentOffset) {
+  const offset = asNonNegativeSafeInteger(entry.offset);
+  const size = asNonNegativeSafeInteger(entry.size);
+  if (entry.files || entry.unpacked || entry.link || offset === null || size === null || size > MAX_METADATA_BYTES || !Number.isSafeInteger(contentOffset + offset)) {
+    throw new Error("invalid asar metadata entry");
+  }
+  const output = Buffer.alloc(size);
+  readExact(fd, output, output.length, contentOffset + offset);
+  return output;
+}
+function asNonNegativeSafeInteger(value) {
+  if (typeof value === "number") {
+    return Number.isSafeInteger(value) && value >= 0 ? value : null;
+  }
+  if (typeof value !== "string" || !/^(?:0|[1-9]\d*)$/u.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+function readExact(fd, target, length, position) {
+  let offset = 0;
+  while (offset < length) {
+    const read = readSync(fd, target, offset, length - offset, position + offset);
+    if (read === 0) throw new Error("unexpected end of asar file");
+    offset += read;
+  }
+}
+function parseObject(buffer, label) {
+  let parsed;
+  try {
+    parsed = JSON.parse(buffer.toString("utf8"));
+  } catch {
+    throw invalidMetadata(`${label} is not valid JSON`);
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw invalidMetadata(`${label} is not an object`);
+  }
+  return parsed;
+}
+function invalidMetadata(reason) {
+  return new BridgeError(
+    "provider_config_invalid",
+    `Installed ZCode Desktop metadata ${reason}; refusing to invent a Desktop identity.`
+  );
+}
+function isMissingFile(error2) {
+  return typeof error2 === "object" && error2 !== null && "code" in error2 && error2.code === "ENOENT";
+}
+
+// src/runtime/model-settings.ts
 init_errors();
 
 // src/runtime/model-routing.ts
@@ -35330,7 +35466,7 @@ var ZCodeModelSettings = class {
   }
   async listModels(workspace) {
     const requestedWorkspace = workspace.trim();
-    if (!path8.isAbsolute(requestedWorkspace)) {
+    if (!path9.isAbsolute(requestedWorkspace)) {
       throw new BridgeError("provider_config_invalid", "workspace must be an absolute existing directory");
     }
     let workspacePath;
@@ -35484,8 +35620,8 @@ var ZCodeModelSettings = class {
   #updateConfig(update) {
     const operation = this.#writeQueue.then(async () => {
       await mkdir(this.#host.settingsDirectory, { recursive: true });
-      return withProcessLock(path8.join(this.#host.settingsDirectory, ".settings.lock"), async () => {
-        const configPath = path8.join(this.#host.settingsDirectory, "runtime-config.json");
+      return withProcessLock(path9.join(this.#host.settingsDirectory, ".settings.lock"), async () => {
+        const configPath = path9.join(this.#host.settingsDirectory, "runtime-config.json");
         let config2 = {};
         try {
           const info = await stat(configPath);
@@ -35496,10 +35632,10 @@ var ZCodeModelSettings = class {
           if (!isRecord3(parsed)) throw new BridgeError("provider_config_invalid", "Bridge runtime config must contain a JSON object");
           config2 = parsed;
         } catch (error2) {
-          if (isMissingFile(error2)) {
+          if (isMissingFile2(error2)) {
             config2 = {};
             for (const directory of this.#host.legacySettingsDirectories ?? []) {
-              const legacyPath = path8.join(directory, "runtime-config.json");
+              const legacyPath = path9.join(directory, "runtime-config.json");
               try {
                 if ((await stat(legacyPath)).size > 64 * 1024) throw new Error("legacy settings exceed size limit");
                 const legacy = JSON.parse(await readFile2(legacyPath, "utf8"));
@@ -35508,7 +35644,7 @@ var ZCodeModelSettings = class {
                 config2 = legacy;
                 break;
               } catch (legacyError) {
-                if (!isMissingFile(legacyError)) throw new BridgeError("provider_config_invalid", "Could not migrate host runtime settings", { cause: legacyError });
+                if (!isMissingFile2(legacyError)) throw new BridgeError("provider_config_invalid", "Could not migrate host runtime settings", { cause: legacyError });
               }
             }
           } else if (error2 instanceof BridgeError) throw error2;
@@ -35544,9 +35680,10 @@ function buildRuntimeChildEnv(config2, source) {
   return env;
 }
 function startAppServer(config2, cwd, env) {
-  const child = spawn3(config2.nodeExecutable, [config2.zcodeEntrypoint, "app-server", "--stdio"], {
+  const launch = buildZCodeAppServerLaunch(config2.zcodeEntrypoint, env);
+  const child = spawn3(config2.nodeExecutable, [config2.zcodeEntrypoint, ...launch.args], {
     cwd,
-    env,
+    env: launch.env,
     shell: false,
     windowsHide: true,
     detached: process.platform !== "win32",
@@ -35722,7 +35859,7 @@ function asRecord2(value) {
 function isRecord3(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function isMissingFile(error2) {
+function isMissingFile2(error2) {
   return typeof error2 === "object" && error2 !== null && "code" in error2 && error2.code === "ENOENT";
 }
 function modelCatalogCachePath(workspace, config2, env, settingsDirectory) {
@@ -35735,7 +35872,7 @@ function modelCatalogCachePath(workspace, config2, env, settingsDirectory) {
     zcodeHome: env.ZCODE_HOME ?? ""
   });
   const key = createHash3("sha256").update(identity).digest("hex");
-  return path8.join(settingsDirectory, "model-catalog", `${key}.json`);
+  return path9.join(settingsDirectory, "model-catalog", `${key}.json`);
 }
 async function modelCatalogSourceFingerprint(config2, env, homeDir) {
   const digest3 = createHash3("sha256");
@@ -35793,7 +35930,7 @@ function toCachedCatalogEntry(value) {
   return result;
 }
 async function writeModelCatalogCache(cachePath, cache) {
-  await mkdir(path8.dirname(cachePath), { recursive: true });
+  await mkdir(path9.dirname(cachePath), { recursive: true });
   const tempPath = `${cachePath}.${process.pid}.${randomUUID2()}.tmp`;
   try {
     await writeFile(tempPath, `${JSON.stringify(cache)}
@@ -36068,7 +36205,7 @@ init_resolver();
 init_profile();
 import { existsSync as existsSync8, lstatSync, mkdirSync as mkdirSync3, readFileSync as readFileSync9, realpathSync as realpathSync3 } from "node:fs";
 import os from "node:os";
-import path12 from "node:path";
+import path13 from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 var CONFIG_FILE = "authority.json";
 var CONFIG_LIMIT = 8 * 1024;
@@ -36083,7 +36220,7 @@ var SqliteInstallConfigurationError = class extends Error {
 };
 function loadInstallAuthoritySelection(host) {
   validateHostProfile(host);
-  const configPath = path12.join(host.settingsDirectory, CONFIG_FILE);
+  const configPath = path13.join(host.settingsDirectory, CONFIG_FILE);
   try {
     const stat2 = lstatSync(configPath);
     if (!stat2.isFile() || stat2.isSymbolicLink()) throw new SqliteInstallConfigurationError("authority_config_not_regular_file");
@@ -36114,12 +36251,12 @@ function prepareFreshSqliteStateDirectory(selection, env) {
 }
 function sqliteInstallationRoot(env) {
   const modulePath = fileURLToPath3(import.meta.url);
-  const dist = path12.dirname(modulePath);
-  const entry = path12.basename(modulePath);
+  const dist = path13.dirname(modulePath);
+  const entry = path13.basename(modulePath);
   const pluginEntry = entry === "wait-task.mjs" || entry === "bridge.mjs" && env["ZCODE_BRIDGE_PLUGIN_MODE"] === "1";
-  if (pluginEntry && path12.basename(dist) === "dist") {
-    const pluginRoot = path12.dirname(dist);
-    if (!existsSync8(path12.join(pluginRoot, ".codex-plugin", "plugin.json")) || !existsSync8(path12.join(pluginRoot, "launch-node24.mjs"))) {
+  if (pluginEntry && path13.basename(dist) === "dist") {
+    const pluginRoot = path13.dirname(dist);
+    if (!existsSync8(path13.join(pluginRoot, ".codex-plugin", "plugin.json")) || !existsSync8(path13.join(pluginRoot, "launch-node24.mjs"))) {
       throw new SqliteInstallConfigurationError("sqlite_plugin_layout_invalid");
     }
     return pluginRoot;
@@ -36129,10 +36266,10 @@ function sqliteInstallationRoot(env) {
 function resolveStateDirectory(selection, env, packageRootValue, tempRootValue) {
   const appRoot = selection.configuredDataRoot || defaultDataRoot(env);
   if (!isLocalAbsolutePath(appRoot)) throw new SqliteInstallConfigurationError("sqlite_data_root_not_local_absolute");
-  const normalizedRoot = path12.resolve(appRoot);
-  const stateDirectory = path12.join(normalizedRoot, "state");
-  const packageRoot = path12.resolve(packageRootValue);
-  const tempRoot = path12.resolve(tempRootValue);
+  const normalizedRoot = path13.resolve(appRoot);
+  const stateDirectory = path13.join(normalizedRoot, "state");
+  const packageRoot = path13.resolve(packageRootValue);
+  const tempRoot = path13.resolve(tempRootValue);
   if (within(packageRoot, normalizedRoot) || within(tempRoot, normalizedRoot) || within(packageRoot, stateDirectory) || within(tempRoot, stateDirectory)) {
     throw new SqliteInstallConfigurationError("sqlite_data_root_reserved_location");
   }
@@ -36140,7 +36277,7 @@ function resolveStateDirectory(selection, env, packageRootValue, tempRootValue) 
 }
 function prepareStateDirectory(selection, env, packageRootValue, tempRootValue) {
   const resolved = resolveStateDirectory(selection, env, packageRootValue, tempRootValue);
-  const normalizedRoot = path12.dirname(resolved.dataRoot);
+  const normalizedRoot = path13.dirname(resolved.dataRoot);
   ensurePlainDirectoryTree(normalizedRoot);
   ensurePlainDirectoryTree(resolved.dataRoot);
   const canonicalState = canonicalDirectory(resolved.dataRoot);
@@ -36150,15 +36287,15 @@ function prepareStateDirectory(selection, env, packageRootValue, tempRootValue) 
 function defaultDataRoot(env) {
   const localAppData = env["LOCALAPPDATA"]?.trim();
   if (!localAppData || !isLocalAbsolutePath(localAppData)) throw new SqliteInstallConfigurationError("local_app_data_unavailable");
-  return path12.join(localAppData, "CodexZCodeBridge");
+  return path13.join(localAppData, "CodexZCodeBridge");
 }
 function ensurePlainDirectoryTree(value) {
   if (!isLocalAbsolutePath(value)) throw new SqliteInstallConfigurationError("sqlite_data_path_not_local");
-  const parsed = path12.parse(value);
-  const segments = value.slice(parsed.root.length).split(path12.sep).filter(Boolean);
+  const parsed = path13.parse(value);
+  const segments = value.slice(parsed.root.length).split(path13.sep).filter(Boolean);
   let current = parsed.root;
   for (const segment of segments) {
-    current = path12.join(current, segment);
+    current = path13.join(current, segment);
     try {
       const stat2 = lstatSync(current);
       if (!stat2.isDirectory() || stat2.isSymbolicLink()) throw new SqliteInstallConfigurationError("sqlite_data_path_component_unsafe");
@@ -36188,7 +36325,7 @@ function canonicalDirectory(value) {
   }
 }
 function rejectOrphanedDatabaseState(root) {
-  const expected = path12.join(root, FRESH_SQLITE_DATABASE_FILE);
+  const expected = path13.join(root, FRESH_SQLITE_DATABASE_FILE);
   if (existsSync8(expected)) return;
   for (const name of [
     `${FRESH_SQLITE_DATABASE_FILE}-wal`,
@@ -36199,19 +36336,19 @@ function rejectOrphanedDatabaseState(root) {
     "ROOT_POISONED.json",
     "WRITER_INTENT.json"
   ]) {
-    if (existsSync8(path12.join(root, name))) throw new SqliteInstallConfigurationError("sqlite_existing_state_incomplete");
+    if (existsSync8(path13.join(root, name))) throw new SqliteInstallConfigurationError("sqlite_existing_state_incomplete");
   }
 }
 function isLocalAbsolutePath(value) {
-  if (process.platform === "win32") return /^[A-Za-z]:\\/u.test(value) && path12.win32.isAbsolute(value) && !value.startsWith("\\\\");
-  return path12.isAbsolute(value) && !value.startsWith("/proc/") && !value.startsWith("/sys/") && !value.startsWith("/dev/");
+  if (process.platform === "win32") return /^[A-Za-z]:\\/u.test(value) && path13.win32.isAbsolute(value) && !value.startsWith("\\\\");
+  return path13.isAbsolute(value) && !value.startsWith("/proc/") && !value.startsWith("/sys/") && !value.startsWith("/dev/");
 }
 function within(root, candidate) {
-  const relative = path12.relative(root, candidate);
-  return relative === "" || relative !== ".." && !relative.startsWith(`..${path12.sep}`) && !path12.isAbsolute(relative);
+  const relative = path13.relative(root, candidate);
+  return relative === "" || relative !== ".." && !relative.startsWith(`..${path13.sep}`) && !path13.isAbsolute(relative);
 }
 function samePath2(left, right) {
-  const normalize = (value) => process.platform === "win32" ? path12.win32.normalize(value).replace(/[\\/]+$/u, "").toLocaleLowerCase("en-US") : path12.resolve(value);
+  const normalize = (value) => process.platform === "win32" ? path13.win32.normalize(value).replace(/[\\/]+$/u, "").toLocaleLowerCase("en-US") : path13.resolve(value);
   return normalize(left) === normalize(right);
 }
 function isRecord4(value) {
@@ -36227,13 +36364,13 @@ function createTrustedLocalCandidateContext(host) {
 function resolveDataRoot(env) {
   const override = env["ZCODE_BRIDGE_DATA_DIR"]?.trim();
   if (override) {
-    if (!path17.isAbsolute(override)) {
+    if (!path18.isAbsolute(override)) {
       return {
         dataRoot: findPackageRoot(),
         warning: `ZCODE_BRIDGE_DATA_DIR must be an absolute path; ignoring ${override} and using the Bridge installation directory`
       };
     }
-    return { dataRoot: path17.normalize(override) };
+    return { dataRoot: path18.normalize(override) };
   }
   return { dataRoot: findPackageRoot() };
 }
@@ -36380,7 +36517,7 @@ async function startBridge(host = codexHostProfile(), version2 = SERVER_VERSION,
   const processProbe = createPlatformProbe();
   let manager;
   let lifecycleChecks;
-  const databasePath = path17.join(dataRoot, FRESH_SQLITE_DATABASE_FILE);
+  const databasePath = path18.join(dataRoot, FRESH_SQLITE_DATABASE_FILE);
   let trustedLocalContext;
   try {
     trustedLocalContext = createTrustedLocalCandidateContext(host);
@@ -36454,7 +36591,7 @@ var isEntry = process.argv[1] !== void 0 && sameRealPath(import.meta.url, proces
 function sameRealPath(moduleUrl, argvPath) {
   try {
     const modulePath = realpathSync6(fileURLToPath5(moduleUrl));
-    const entryPath = realpathSync6(path18.resolve(argvPath));
+    const entryPath = realpathSync6(path19.resolve(argvPath));
     return process.platform === "win32" ? modulePath.toLocaleLowerCase("en-US") === entryPath.toLocaleLowerCase("en-US") : modulePath === entryPath;
   } catch {
     return false;

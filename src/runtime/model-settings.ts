@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { createMinimalOsEnv } from "./child-env.js";
+import { buildZCodeAppServerLaunch } from "./desktop-host-launch.js";
 import { buildAccountProviderPayload, zcodeDataBaseDir, runtimeAuthReply } from "./account-provider.js";
 import { BridgeError } from "./errors.js";
 import { readStartPlanRoutingRegistry, startPlanAliasCatalogEntries } from "./model-routing.js";
@@ -321,8 +322,9 @@ function buildRuntimeChildEnv(config: ZCodeRuntimeConfig, source: NodeJS.Process
 }
 
 function startAppServer(config: ZCodeRuntimeConfig, cwd: string, env: NodeJS.ProcessEnv): AppServerProcess {
-  const child = spawn(config.nodeExecutable, [config.zcodeEntrypoint, "app-server", "--stdio"], {
-    cwd, env, shell: false, windowsHide: true, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"],
+  const launch = buildZCodeAppServerLaunch(config.zcodeEntrypoint, env);
+  const child = spawn(config.nodeExecutable, [config.zcodeEntrypoint, ...launch.args], {
+    cwd, env: launch.env, shell: false, windowsHide: true, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"],
   });
   const pending = new Map<string | number, PendingRequest>();
   let stdoutBuffer = "";
