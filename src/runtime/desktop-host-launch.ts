@@ -92,7 +92,7 @@ function readAsarMetadataFiles(archivePath: string): { readonly packageJson: Buf
     const headerBuffer = Buffer.alloc(headerBytes);
     readExact(fd, headerBuffer, headerBytes, 16);
     const root = parseObject(headerBuffer, "asar header") as unknown as { files?: Record<string, AsarEntry> };
-    if (!root.files) throw new Error("asar header has no file table");
+    if (!isRecord(root.files)) throw new Error("asar header file table is not an object");
 
     const buildEntry = findEntry(root.files, BUILD_METADATA_PATH);
     if (buildEntry === null) return null;
@@ -109,14 +109,17 @@ function readAsarMetadataFiles(archivePath: string): { readonly packageJson: Buf
 }
 
 function findEntry(root: Record<string, AsarEntry>, parts: readonly string[]): AsarEntry | null {
-  let current: AsarEntry | undefined;
   let files = root;
-  for (const part of parts) {
-    current = files[part];
-    if (!current) return null;
-    files = current.files ?? {};
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index]!;
+    if (!Object.hasOwn(files, part)) return null;
+    const current = files[part];
+    if (!isRecord(current)) throw new Error(`asar ${part} entry is not an object`);
+    if (index === parts.length - 1) return current as AsarEntry;
+    if (!isRecord(current.files)) throw new Error(`asar ${part} entry is not a directory`);
+    files = current.files as Record<string, AsarEntry>;
   }
-  return current ?? null;
+  return null;
 }
 
 function readEntry(fd: number, entry: AsarEntry, contentOffset: number): Buffer {
@@ -171,4 +174,8 @@ function invalidMetadata(reason: string): BridgeError {
 
 function isMissingFile(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

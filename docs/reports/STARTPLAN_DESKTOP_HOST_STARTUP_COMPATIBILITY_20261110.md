@@ -68,7 +68,7 @@ app-server --stdio --surface desktop
 
 - 从 AppServer 入口旁定位 `resources/app.asar`。
 - 读取 ASAR 根 `package.json` 与 `out/metadata/build-meta.json`。
-- 官方 ASAR 文件表的 `offset`/`size` 为十进制字符串；解析器同时接受安全整数形式并校验范围。
+- 官方 ASAR 文件表的 `offset` 为十进制字符串、`size` 为数字；解析器同时接受两者的安全整数或十进制字符串形式并校验范围。
 - `package.json.version` 与 `build-meta.appVersion` 必须一致。
 - 构建提交必须为 8 位小写十六进制。
 

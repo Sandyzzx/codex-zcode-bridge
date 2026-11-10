@@ -2420,7 +2420,7 @@ import {
 } from "node:crypto";
 import { homedir as osHomedir, platform as osPlatform, userInfo as osUserInfo } from "node:os";
 import path14 from "node:path";
-function isRecord5(value) {
+function isRecord6(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 function officialCredentialSecret(env) {
@@ -2458,13 +2458,13 @@ function readOfficialCredentialString(value, env) {
   return decodeOfficialCredentialString(value, env);
 }
 function readOfficialUserInfo(value, env) {
-  if (isRecord5(value)) return value;
+  if (isRecord6(value)) return value;
   if (typeof value !== "string") return null;
   const decoded = decodeOfficialCredentialString(value, env);
   if (decoded === null) return null;
   try {
     const parsed = JSON.parse(decoded);
-    return isRecord5(parsed) ? parsed : null;
+    return isRecord6(parsed) ? parsed : null;
   } catch {
     return null;
   }
@@ -2478,14 +2478,14 @@ function decodeJwtPayload(jwt) {
     const payload = jwt.split(".")[1];
     const json = Buffer.from(payload, "base64url").toString("utf8");
     const parsed = JSON.parse(json);
-    return isRecord5(parsed) ? parsed : null;
+    return isRecord6(parsed) ? parsed : null;
   } catch {
     return null;
   }
 }
 function asOfficialBillingEnvelope(value) {
-  if (!isRecord5(value)) return null;
-  const data = isRecord5(value.data) ? value.data : void 0;
+  if (!isRecord6(value)) return null;
+  const data = isRecord6(value.data) ? value.data : void 0;
   return {
     success: value.success,
     code: value.code,
@@ -2501,7 +2501,7 @@ function isSuccessfulBusinessEnvelope(envelope) {
   return envelope.success !== false && (envelope.code === void 0 || envelope.code === 0 || envelope.code === 200);
 }
 function stringKeyedArray(value) {
-  return Array.isArray(value) ? value.filter(isRecord5) : [];
+  return Array.isArray(value) ? value.filter(isRecord6) : [];
 }
 function hasActiveStartPlan(envelope) {
   const plans = stringKeyedArray(envelope.data?.plans);
@@ -2552,11 +2552,11 @@ function requestedModelQuotaVerdict(balances, requestedModel) {
 }
 function extractProviderCode(value) {
   if (!value) return void 0;
-  const error2 = isRecord5(value.error) ? value.error : void 0;
+  const error2 = isRecord6(value.error) ? value.error : void 0;
   const candidates = [
     value.providerCode,
     error2?.providerCode,
-    error2 && isRecord5(error2) ? error2.code : void 0,
+    error2 && isRecord6(error2) ? error2.code : void 0,
     value.code
   ];
   const raw = candidates.find((candidate) => typeof candidate === "number" || typeof candidate === "string");
@@ -2570,7 +2570,7 @@ function readOfficialStartPlanCredential(zcodeDataRoot, env = process.env) {
   } catch {
     return null;
   }
-  if (!isRecord5(parsed)) return null;
+  if (!isRecord6(parsed)) return null;
   const jwt = readOfficialCredentialString(parsed.zcodejwttoken, env)?.trim() ?? "";
   if (!jwt || !looksLikeJwt(jwt)) return null;
   const userInfo = readOfficialUserInfo(parsed["oauth:bigmodel:user_info"], env);
@@ -2763,7 +2763,7 @@ var init_start_plan_production_auth = __esm({
           let providerCode2;
           try {
             const parsed = await response.json();
-            if (isRecord5(parsed)) {
+            if (isRecord6(parsed)) {
               body2 = parsed;
               providerCode2 = extractProviderCode(parsed);
             }
@@ -2789,7 +2789,7 @@ var init_start_plan_production_auth = __esm({
         let providerCode;
         try {
           const parsed = await response.json();
-          if (isRecord5(parsed)) {
+          if (isRecord6(parsed)) {
             body = parsed;
             providerCode = extractProviderCode(parsed);
           }
@@ -10737,7 +10737,7 @@ try {
 
 // src/attention/snapshot.ts
 function parseTaskAttentionSnapshot(value, expectedTaskId) {
-  if (!isRecord6(value)) throw new TaskManagerError("TASK_STATE", "SQLite attention projection is invalid");
+  if (!isRecord7(value)) throw new TaskManagerError("TASK_STATE", "SQLite attention projection is invalid");
   const taskId = value.task_id;
   const attempt = value.attempt;
   const status = value.status;
@@ -10755,7 +10755,7 @@ function parseTaskAttentionSnapshot(value, expectedTaskId) {
 function isAttentionTerminalStatus(status) {
   return status === "completed" || status === "failed" || status === "cancelled" || status === "waiting_for_master";
 }
-function isRecord6(value) {
+function isRecord7(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 var TASK_STATUSES;
@@ -35183,7 +35183,7 @@ function readAsarMetadataFiles(archivePath) {
     const headerBuffer = Buffer.alloc(headerBytes);
     readExact(fd, headerBuffer, headerBytes, 16);
     const root = parseObject(headerBuffer, "asar header");
-    if (!root.files) throw new Error("asar header has no file table");
+    if (!isRecord2(root.files)) throw new Error("asar header file table is not an object");
     const buildEntry = findEntry(root.files, BUILD_METADATA_PATH);
     if (buildEntry === null) return null;
     const packageEntry = findEntry(root.files, ["package.json"]);
@@ -35197,14 +35197,17 @@ function readAsarMetadataFiles(archivePath) {
   }
 }
 function findEntry(root, parts) {
-  let current;
   let files = root;
-  for (const part of parts) {
-    current = files[part];
-    if (!current) return null;
-    files = current.files ?? {};
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index];
+    if (!Object.hasOwn(files, part)) return null;
+    const current = files[part];
+    if (!isRecord2(current)) throw new Error(`asar ${part} entry is not an object`);
+    if (index === parts.length - 1) return current;
+    if (!isRecord2(current.files)) throw new Error(`asar ${part} entry is not a directory`);
+    files = current.files;
   }
-  return current ?? null;
+  return null;
 }
 function readEntry(fd, entry, contentOffset) {
   const offset = asNonNegativeSafeInteger(entry.offset);
@@ -35253,6 +35256,9 @@ function invalidMetadata(reason) {
 function isMissingFile(error2) {
   return typeof error2 === "object" && error2 !== null && "code" in error2 && error2.code === "ENOENT";
 }
+function isRecord2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 // src/runtime/model-settings.ts
 init_errors();
@@ -35272,9 +35278,9 @@ function readStartPlanRoutingRegistry(config2) {
   const startPlanModelIds = [];
   const codingPlanProviders = [];
   for (const rule of rules) {
-    if (!isRecord2(rule) || typeof rule.providerId !== "string") continue;
-    const access = isRecord2(rule.config) && isRecord2(rule.config.access) ? rule.config.access : null;
-    const builtin = isRecord2(rule.config) && Array.isArray(rule.config.builtinModelIds) ? rule.config.builtinModelIds.filter((id) => typeof id === "string" && id.trim().length > 0) : [];
+    if (!isRecord3(rule) || typeof rule.providerId !== "string") continue;
+    const access = isRecord3(rule.config) && isRecord3(rule.config.access) ? rule.config.access : null;
+    const builtin = isRecord3(rule.config) && Array.isArray(rule.config.builtinModelIds) ? rule.config.builtinModelIds.filter((id) => typeof id === "string" && id.trim().length > 0) : [];
     if (rule.providerId === START_PLAN_PROVIDER_ID) {
       for (const id of builtin) if (!startPlanModelIds.includes(id)) startPlanModelIds.push(id);
       continue;
@@ -35413,17 +35419,17 @@ function readJson2(filePath) {
   try {
     if (!existsSync7(filePath)) return null;
     const value = JSON.parse(readFileSync7(filePath, "utf8"));
-    return isRecord2(value) ? value : null;
+    return isRecord3(value) ? value : null;
   } catch {
     return null;
   }
 }
 function readProviderRules2(table) {
-  const providerConfigRules = isRecord2(table?.config) ? table.config : {};
-  const rules = isRecord2(providerConfigRules.providerConfigRules) ? providerConfigRules.providerConfigRules.providerRules : void 0;
+  const providerConfigRules = isRecord3(table?.config) ? table.config : {};
+  const rules = isRecord3(providerConfigRules.providerConfigRules) ? providerConfigRules.providerConfigRules.providerRules : void 0;
   return Array.isArray(rules) ? rules : [];
 }
-function isRecord2(value) {
+function isRecord3(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -35629,7 +35635,7 @@ var ZCodeModelSettings = class {
             throw new BridgeError("provider_config_invalid", "Bridge runtime config is not a small regular JSON file");
           }
           const parsed = JSON.parse(await readFile2(configPath, "utf8"));
-          if (!isRecord3(parsed)) throw new BridgeError("provider_config_invalid", "Bridge runtime config must contain a JSON object");
+          if (!isRecord4(parsed)) throw new BridgeError("provider_config_invalid", "Bridge runtime config must contain a JSON object");
           config2 = parsed;
         } catch (error2) {
           if (isMissingFile2(error2)) {
@@ -35639,7 +35645,7 @@ var ZCodeModelSettings = class {
               try {
                 if ((await stat(legacyPath)).size > 64 * 1024) throw new Error("legacy settings exceed size limit");
                 const legacy = JSON.parse(await readFile2(legacyPath, "utf8"));
-                if (!isRecord3(legacy)) throw new Error("invalid legacy settings");
+                if (!isRecord4(legacy)) throw new Error("invalid legacy settings");
                 loadPersistedRuntimeEnvironment(this.#sourceEnv, this.#homeDir, this.#host);
                 config2 = legacy;
                 break;
@@ -35854,9 +35860,9 @@ function nestedString(record4, keys) {
   return typeof value === "string" ? value : null;
 }
 function asRecord2(value) {
-  return isRecord3(value) ? value : {};
+  return isRecord4(value) ? value : {};
 }
-function isRecord3(value) {
+function isRecord4(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function isMissingFile2(error2) {
@@ -35911,7 +35917,7 @@ async function readModelCatalogCache(cachePath) {
     const info = await stat(cachePath);
     if (!info.isFile() || info.size > 2 * 1024 * 1024) return null;
     const value = JSON.parse(await readFile2(cachePath, "utf8"));
-    if (!isRecord3(value) || !Number.isFinite(value.cached_at_ms) || typeof value.source_fingerprint !== "string" || !Array.isArray(value.models)) return null;
+    if (!isRecord4(value) || !Number.isFinite(value.cached_at_ms) || typeof value.source_fingerprint !== "string" || !Array.isArray(value.models)) return null;
     const models = value.models.map(toCachedCatalogEntry).filter((entry) => entry !== null);
     if (models.length !== value.models.length || models.length === 0) return null;
     return { cached_at_ms: value.cached_at_ms, source_fingerprint: value.source_fingerprint, models };
@@ -35920,8 +35926,8 @@ async function readModelCatalogCache(cachePath) {
   }
 }
 function toCachedCatalogEntry(value) {
-  if (!isRecord3(value) || typeof value.provider_id !== "string" || !value.provider_id || typeof value.model_id !== "string" || !value.model_id || typeof value.label !== "string") return null;
-  if (value.reasoning_levels !== void 0 && (!Array.isArray(value.reasoning_levels) || !value.reasoning_levels.every((level) => isRecord3(level) && typeof level.value === "string" && typeof level.label === "string"))) return null;
+  if (!isRecord4(value) || typeof value.provider_id !== "string" || !value.provider_id || typeof value.model_id !== "string" || !value.model_id || typeof value.label !== "string") return null;
+  if (value.reasoning_levels !== void 0 && (!Array.isArray(value.reasoning_levels) || !value.reasoning_levels.every((level) => isRecord4(level) && typeof level.value === "string" && typeof level.label === "string"))) return null;
   for (const key of ["provider_label", "reasoning_default_level", "disabled_reason"]) if (value[key] !== void 0 && typeof value[key] !== "string") return null;
   for (const key of ["context_window", "max_output_tokens"]) if (value[key] !== void 0 && (typeof value[key] !== "number" || !Number.isFinite(value[key]) || value[key] < 0)) return null;
   const result = {};
@@ -36226,7 +36232,7 @@ function loadInstallAuthoritySelection(host) {
     if (!stat2.isFile() || stat2.isSymbolicLink()) throw new SqliteInstallConfigurationError("authority_config_not_regular_file");
     if (stat2.size > CONFIG_LIMIT) throw new SqliteInstallConfigurationError("authority_config_too_large");
     const parsed = JSON.parse(readFileSync9(configPath, "utf8"));
-    if (!isRecord4(parsed)) throw new SqliteInstallConfigurationError("authority_config_invalid_shape");
+    if (!isRecord5(parsed)) throw new SqliteInstallConfigurationError("authority_config_invalid_shape");
     const keys = Object.keys(parsed).sort().join("|");
     if (parsed.schema_version !== 1) throw new SqliteInstallConfigurationError("authority_config_version_unsupported");
     if (parsed.authority === "json" && keys === "authority|schema_version") {
@@ -36351,7 +36357,7 @@ function samePath2(left, right) {
   const normalize = (value) => process.platform === "win32" ? path13.win32.normalize(value).replace(/[\\/]+$/u, "").toLocaleLowerCase("en-US") : path13.resolve(value);
   return normalize(left) === normalize(right);
 }
-function isRecord4(value) {
+function isRecord5(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value) && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
 }
 

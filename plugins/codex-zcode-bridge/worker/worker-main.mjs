@@ -3458,7 +3458,7 @@ function readAsarMetadataFiles(archivePath) {
     const headerBuffer = Buffer.alloc(headerBytes);
     readExact(fd, headerBuffer, headerBytes, 16);
     const root = parseObject(headerBuffer, "asar header");
-    if (!root.files) throw new Error("asar header has no file table");
+    if (!isRecord2(root.files)) throw new Error("asar header file table is not an object");
     const buildEntry = findEntry(root.files, BUILD_METADATA_PATH);
     if (buildEntry === null) return null;
     const packageEntry = findEntry(root.files, ["package.json"]);
@@ -3472,14 +3472,17 @@ function readAsarMetadataFiles(archivePath) {
   }
 }
 function findEntry(root, parts) {
-  let current;
   let files = root;
-  for (const part of parts) {
-    current = files[part];
-    if (!current) return null;
-    files = current.files ?? {};
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index];
+    if (!Object.hasOwn(files, part)) return null;
+    const current = files[part];
+    if (!isRecord2(current)) throw new Error(`asar ${part} entry is not an object`);
+    if (index === parts.length - 1) return current;
+    if (!isRecord2(current.files)) throw new Error(`asar ${part} entry is not a directory`);
+    files = current.files;
   }
-  return current ?? null;
+  return null;
 }
 function readEntry(fd, entry, contentOffset) {
   const offset = asNonNegativeSafeInteger(entry.offset);
@@ -3527,6 +3530,9 @@ function invalidMetadata(reason) {
 }
 function isMissingFile(error62) {
   return typeof error62 === "object" && error62 !== null && "code" in error62 && error62.code === "ENOENT";
+}
+function isRecord2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 var ZCODE_APP_VERSION_ENV, ZCODE_BUILD_COMMIT_ID_ENV, APP_SERVER_ARGS, BUILD_METADATA_PATH, MAX_ASAR_HEADER_BYTES, MAX_METADATA_BYTES, VERSION_PATTERN, BUILD_COMMIT_PATTERN;
 var init_desktop_host_launch = __esm({
@@ -3578,7 +3584,7 @@ function accountProviderRuleFacts(providerId, config2) {
   if (!providerId?.startsWith("account:")) return null;
   const table = readJson(config2.providerBuiltinConfigFile);
   const rule = readProviderRules(table).find(
-    (candidate) => isRecord2(candidate) && candidate.providerId === providerId
+    (candidate) => isRecord3(candidate) && candidate.providerId === providerId
   );
   if (!rule) return null;
   const access = rule.config?.access;
@@ -3594,7 +3600,7 @@ function accountProviderId(providerId, config2) {
   if (providerId.startsWith("account:")) return providerId;
   const rules = [config2.providerBuiltinConfigFile, config2.providerPersonalConfigFile].flatMap((file2) => readProviderRules(readJson(file2)));
   for (const rawRule of rules) {
-    if (!isRecord2(rawRule)) continue;
+    if (!isRecord3(rawRule)) continue;
     const rule = rawRule;
     if (!providerId.startsWith("builtin:") && rule.providerId === `account:${providerId}`) return rule.providerId;
     if (!providerId.startsWith("builtin:") && rule.providerId === providerId && rule.config?.access?.type === "zhipu-account") {
@@ -3645,7 +3651,7 @@ function zcodeV2DataDir(personalProviderConfigFile) {
 }
 function readAccountProviderSource(config2, verifiedSelection, homeDir, taskProviderId) {
   const table = readJson(config2.providerBuiltinConfigFile);
-  const providerRules = readProviderRules(table).filter(isRecord2).map((rule) => rule).filter((rule) => rule.config?.access?.type === "zhipu-account" && typeof rule.providerId === "string").sort((left, right) => left.providerId.localeCompare(right.providerId));
+  const providerRules = readProviderRules(table).filter(isRecord3).map((rule) => rule).filter((rule) => rule.config?.access?.type === "zhipu-account" && typeof rule.providerId === "string").sort((left, right) => left.providerId.localeCompare(right.providerId));
   if (!providerRules.length) return null;
   const officialDataRoot = path6.resolve(config2.zcodeDataRoot);
   const officialV2Dir = zcodeV2Dir(officialDataRoot);
@@ -3660,7 +3666,7 @@ function readAccountProviderSource(config2, verifiedSelection, homeDir, taskProv
   const rawConnectionSelections = settings?.providerFamilyConnectionSelections;
   const connectionSelectionsPresent = settings !== null && Object.prototype.hasOwnProperty.call(settings, "providerFamilyConnectionSelections");
   const connectionSelections = asRecord(rawConnectionSelections);
-  const connectionSelectionsInvalid = connectionSelectionsPresent && !isRecord2(rawConnectionSelections);
+  const connectionSelectionsInvalid = connectionSelectionsPresent && !isRecord3(rawConnectionSelections);
   const taskAccountProviderId = taskProviderId && providerRules.some((rule) => rule.providerId === taskProviderId) ? taskProviderId : null;
   const entries = providerRules.map((rule) => {
     const providerId = rule.providerId;
@@ -3749,15 +3755,15 @@ function readJson(filePath) {
   try {
     if (!existsSync3(filePath)) return null;
     const value = JSON.parse(readFileSync4(filePath, "utf8"));
-    return isRecord2(value) ? value : null;
+    return isRecord3(value) ? value : null;
   } catch {
     return null;
   }
 }
 function asRecord(value) {
-  return isRecord2(value) ? value : {};
+  return isRecord3(value) ? value : {};
 }
-function isRecord2(value) {
+function isRecord3(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 var BIGMODEL_START_PLAN_PROVIDER_ID;
@@ -25365,7 +25371,7 @@ import { homedir as homedir3 } from "node:os";
 import path8 from "node:path";
 import { createHash as createHash6, randomUUID } from "node:crypto";
 function publicUsage(value) {
-  if (!isRecord3(value)) return null;
+  if (!isRecord4(value)) return null;
   const result = {};
   for (const key of ["inputTokens", "outputTokens", "totalTokens", "cachedInputTokens", "reasoningTokens", "input_tokens", "output_tokens", "total_tokens", "cost"]) {
     const item = value[key];
@@ -25508,7 +25514,7 @@ function nestedNumber(record3, path9) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 function asRecord2(value) {
-  return isRecord3(value) ? value : {};
+  return isRecord4(value) ? value : {};
 }
 function extractTurnFailureEvidence(value) {
   if (typeof value === "string") {
@@ -25545,12 +25551,12 @@ function reportDesktopIndexIssue(onEvent, error62) {
     summary: `ZCode Desktop task index could not be updated: ${message.slice(0, 500)}`
   });
 }
-function isRecord3(value) {
+function isRecord4(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function stableSerialize(value) {
   if (Array.isArray(value)) return `[${value.map(stableSerialize).join(",")}]`;
-  if (isRecord3(value)) {
+  if (isRecord4(value)) {
     return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableSerialize(value[key])}`).join(",")}}`;
   }
   return JSON.stringify(value) ?? "undefined";
@@ -26589,7 +26595,7 @@ var init_zcode_app_server_adapter = __esm({
               failProtocol("invalid_frame", frameBytes);
               return;
             }
-            if (!isRecord3(parsed)) {
+            if (!isRecord4(parsed)) {
               failProtocol("invalid_frame", frameBytes, "the top-level frame value must be a JSON object");
               return;
             }
