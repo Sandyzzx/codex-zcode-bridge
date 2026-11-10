@@ -284,7 +284,8 @@ export interface ClaimOnlyDriverOptions {
     readonly account: string;
     /** Aborted when authorization or active account identity is invalidated. */
     readonly signal: AbortSignal;
-    /** One task-scoped live entitlement check before provider registration. */
+    /** The task's authoritative live entitlement check before provider
+     * registration. issue() must reuse this verdict rather than call Billing. */
     prepare(provider: string, model: string, signal: AbortSignal): Promise<boolean>;
     issue(binding: Readonly<PrivateLeaseBinding>, signal: AbortSignal): Promise<PrivateCredentialLease>;
   };

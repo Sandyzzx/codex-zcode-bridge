@@ -3404,10 +3404,156 @@ var init_child_env = __esm({
   }
 });
 
+// src/runtime/desktop-host-launch.ts
+import { closeSync, openSync, readSync } from "node:fs";
+import path5 from "node:path";
+function buildZCodeAppServerLaunch(zcodeEntrypoint, baseEnv) {
+  const metadata = readDesktopMetadata(zcodeEntrypoint);
+  return {
+    args: [...APP_SERVER_ARGS],
+    env: metadata === null ? { ...baseEnv } : {
+      ...baseEnv,
+      [ZCODE_APP_VERSION_ENV]: metadata.appVersion,
+      [ZCODE_BUILD_COMMIT_ID_ENV]: metadata.buildCommitId
+    }
+  };
+}
+function readDesktopMetadata(zcodeEntrypoint) {
+  const archivePath = path5.resolve(path5.dirname(zcodeEntrypoint), "..", "app.asar");
+  let archive;
+  try {
+    archive = readAsarMetadataFiles(archivePath);
+  } catch (error62) {
+    if (isMissingFile(error62)) return null;
+    throw invalidMetadata("could not be read");
+  }
+  if (archive === null) return null;
+  const packageJson = parseObject(archive.packageJson, "package.json");
+  const buildMetadata = parseObject(archive.buildMetadata, "build-meta.json");
+  const packageVersion = packageJson["version"];
+  const appVersion = buildMetadata["appVersion"];
+  const buildCommitId = buildMetadata["buildCommitId"];
+  if (typeof packageVersion !== "string" || typeof appVersion !== "string" || typeof buildCommitId !== "string") {
+    throw invalidMetadata("is missing required fields");
+  }
+  if (!VERSION_PATTERN.test(packageVersion) || !VERSION_PATTERN.test(appVersion) || !BUILD_COMMIT_PATTERN.test(buildCommitId)) {
+    throw invalidMetadata("uses an unsupported version or build commit format");
+  }
+  if (packageVersion !== appVersion) {
+    throw invalidMetadata("contains conflicting application versions");
+  }
+  return { appVersion, buildCommitId };
+}
+function readAsarMetadataFiles(archivePath) {
+  const fd = openSync(archivePath, "r");
+  try {
+    const sizeHeader = Buffer.alloc(16);
+    readExact(fd, sizeHeader, 16, 0);
+    if (sizeHeader.readUInt32LE(0) !== 4) throw new Error("invalid asar header");
+    const headerPayloadBytes = sizeHeader.readUInt32LE(4);
+    const headerBytes = sizeHeader.readUInt32LE(12);
+    if (headerBytes === 0 || headerBytes > MAX_ASAR_HEADER_BYTES || headerPayloadBytes < headerBytes) {
+      throw new Error("invalid asar header size");
+    }
+    const headerBuffer = Buffer.alloc(headerBytes);
+    readExact(fd, headerBuffer, headerBytes, 16);
+    const root = parseObject(headerBuffer, "asar header");
+    if (!isRecord2(root.files)) throw new Error("asar header file table is not an object");
+    const buildEntry = findEntry(root.files, BUILD_METADATA_PATH);
+    if (buildEntry === null) return null;
+    const packageEntry = findEntry(root.files, ["package.json"]);
+    if (packageEntry === null) throw new Error("asar package.json is missing");
+    return {
+      packageJson: readEntry(fd, packageEntry, 8 + headerPayloadBytes),
+      buildMetadata: readEntry(fd, buildEntry, 8 + headerPayloadBytes)
+    };
+  } finally {
+    closeSync(fd);
+  }
+}
+function findEntry(root, parts) {
+  let files = root;
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index];
+    if (!Object.hasOwn(files, part)) return null;
+    const current = files[part];
+    if (!isRecord2(current)) throw new Error(`asar ${part} entry is not an object`);
+    if (index === parts.length - 1) return current;
+    if (!isRecord2(current.files)) throw new Error(`asar ${part} entry is not a directory`);
+    files = current.files;
+  }
+  return null;
+}
+function readEntry(fd, entry, contentOffset) {
+  const offset = asNonNegativeSafeInteger(entry.offset);
+  const size = asNonNegativeSafeInteger(entry.size);
+  if (entry.files || entry.unpacked || entry.link || offset === null || size === null || size > MAX_METADATA_BYTES || !Number.isSafeInteger(contentOffset + offset)) {
+    throw new Error("invalid asar metadata entry");
+  }
+  const output2 = Buffer.alloc(size);
+  readExact(fd, output2, output2.length, contentOffset + offset);
+  return output2;
+}
+function asNonNegativeSafeInteger(value) {
+  if (typeof value === "number") {
+    return Number.isSafeInteger(value) && value >= 0 ? value : null;
+  }
+  if (typeof value !== "string" || !/^(?:0|[1-9]\d*)$/u.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+function readExact(fd, target, length, position) {
+  let offset = 0;
+  while (offset < length) {
+    const read = readSync(fd, target, offset, length - offset, position + offset);
+    if (read === 0) throw new Error("unexpected end of asar file");
+    offset += read;
+  }
+}
+function parseObject(buffer, label) {
+  let parsed;
+  try {
+    parsed = JSON.parse(buffer.toString("utf8"));
+  } catch {
+    throw invalidMetadata(`${label} is not valid JSON`);
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw invalidMetadata(`${label} is not an object`);
+  }
+  return parsed;
+}
+function invalidMetadata(reason) {
+  return new BridgeError(
+    "provider_config_invalid",
+    `Installed ZCode Desktop metadata ${reason}; refusing to invent a Desktop identity.`
+  );
+}
+function isMissingFile(error62) {
+  return typeof error62 === "object" && error62 !== null && "code" in error62 && error62.code === "ENOENT";
+}
+function isRecord2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+var ZCODE_APP_VERSION_ENV, ZCODE_BUILD_COMMIT_ID_ENV, APP_SERVER_ARGS, BUILD_METADATA_PATH, MAX_ASAR_HEADER_BYTES, MAX_METADATA_BYTES, VERSION_PATTERN, BUILD_COMMIT_PATTERN;
+var init_desktop_host_launch = __esm({
+  "src/runtime/desktop-host-launch.ts"() {
+    "use strict";
+    init_errors();
+    ZCODE_APP_VERSION_ENV = "ZCODE_APP_VERSION";
+    ZCODE_BUILD_COMMIT_ID_ENV = "ZCODE_BUILD_COMMIT_ID";
+    APP_SERVER_ARGS = ["app-server", "--stdio", "--surface", "desktop"];
+    BUILD_METADATA_PATH = ["out", "metadata", "build-meta.json"];
+    MAX_ASAR_HEADER_BYTES = 32 * 1024 * 1024;
+    MAX_METADATA_BYTES = 64 * 1024;
+    VERSION_PATTERN = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
+    BUILD_COMMIT_PATTERN = /^[0-9a-f]{8}$/u;
+  }
+});
+
 // src/runtime/account-provider.ts
 import { createHash as createHash5 } from "node:crypto";
 import { existsSync as existsSync3, readFileSync as readFileSync4 } from "node:fs";
-import path5 from "node:path";
+import path6 from "node:path";
 function buildAccountProviderPayload(config2, verifiedSelection, homeDir, taskProviderId) {
   const source = readAccountProviderSource(config2, verifiedSelection, homeDir, taskProviderId);
   if (!source) return null;
@@ -3432,13 +3578,13 @@ function buildAccountProviderPayload(config2, verifiedSelection, homeDir, taskPr
   };
 }
 function accountSettingFile(homeDir) {
-  return path5.join(homeDir, ".zcode", "v2", "setting.json");
+  return path6.join(homeDir, ".zcode", "v2", "setting.json");
 }
 function accountProviderRuleFacts(providerId, config2) {
   if (!providerId?.startsWith("account:")) return null;
   const table = readJson(config2.providerBuiltinConfigFile);
   const rule = readProviderRules(table).find(
-    (candidate) => isRecord2(candidate) && candidate.providerId === providerId
+    (candidate) => isRecord3(candidate) && candidate.providerId === providerId
   );
   if (!rule) return null;
   const access = rule.config?.access;
@@ -3454,7 +3600,7 @@ function accountProviderId(providerId, config2) {
   if (providerId.startsWith("account:")) return providerId;
   const rules = [config2.providerBuiltinConfigFile, config2.providerPersonalConfigFile].flatMap((file2) => readProviderRules(readJson(file2)));
   for (const rawRule of rules) {
-    if (!isRecord2(rawRule)) continue;
+    if (!isRecord3(rawRule)) continue;
     const rule = rawRule;
     if (!providerId.startsWith("builtin:") && rule.providerId === `account:${providerId}`) return rule.providerId;
     if (!providerId.startsWith("builtin:") && rule.providerId === providerId && rule.config?.access?.type === "zhipu-account") {
@@ -3488,39 +3634,39 @@ function runtimeAuthReply(providerId, config2) {
 }
 function zcodeDataBaseDir(personalProviderConfigFile) {
   const dataDir = zcodeV2DataDir(personalProviderConfigFile);
-  return dataDir ? path5.dirname(path5.dirname(dataDir)) : null;
+  return dataDir ? path6.dirname(path6.dirname(dataDir)) : null;
 }
 function zcodeTasksIndexPath(personalProviderConfigFile) {
   const dataDir = zcodeV2DataDir(personalProviderConfigFile);
-  return dataDir ? path5.join(dataDir, "tasks-index.sqlite") : null;
+  return dataDir ? path6.join(dataDir, "tasks-index.sqlite") : null;
 }
 function zcodeV2DataDir(personalProviderConfigFile) {
-  const absolute = path5.resolve(personalProviderConfigFile);
-  if (path5.basename(absolute).toLowerCase() !== "provider_config.json") return null;
-  const v2Dir = path5.dirname(absolute);
-  if (path5.basename(v2Dir).toLowerCase() !== "v2") return null;
-  const zcodeDir = path5.dirname(v2Dir);
-  if (path5.basename(zcodeDir).toLowerCase() !== ".zcode") return null;
+  const absolute = path6.resolve(personalProviderConfigFile);
+  if (path6.basename(absolute).toLowerCase() !== "provider_config.json") return null;
+  const v2Dir = path6.dirname(absolute);
+  if (path6.basename(v2Dir).toLowerCase() !== "v2") return null;
+  const zcodeDir = path6.dirname(v2Dir);
+  if (path6.basename(zcodeDir).toLowerCase() !== ".zcode") return null;
   return v2Dir;
 }
 function readAccountProviderSource(config2, verifiedSelection, homeDir, taskProviderId) {
   const table = readJson(config2.providerBuiltinConfigFile);
-  const providerRules = readProviderRules(table).filter(isRecord2).map((rule) => rule).filter((rule) => rule.config?.access?.type === "zhipu-account" && typeof rule.providerId === "string").sort((left, right) => left.providerId.localeCompare(right.providerId));
+  const providerRules = readProviderRules(table).filter(isRecord3).map((rule) => rule).filter((rule) => rule.config?.access?.type === "zhipu-account" && typeof rule.providerId === "string").sort((left, right) => left.providerId.localeCompare(right.providerId));
   if (!providerRules.length) return null;
-  const officialDataRoot = path5.resolve(config2.zcodeDataRoot);
+  const officialDataRoot = path6.resolve(config2.zcodeDataRoot);
   const officialV2Dir = zcodeV2Dir(officialDataRoot);
   if (!officialV2Dir) return null;
-  const credentials = readJson(path5.join(officialV2Dir, "config.json"));
+  const credentials = readJson(path6.join(officialV2Dir, "config.json"));
   const credentialProviders = asRecord(credentials?.provider);
-  const cache = readJson(path5.join(officialV2Dir, "coding-plan-cache.json"));
+  const cache = readJson(path6.join(officialV2Dir, "coding-plan-cache.json"));
   const cacheItems = asRecord(asRecord(cache?.entryStatus).items);
-  const settingFile = homeDir ? accountSettingFile(homeDir) : path5.join(officialV2Dir, "setting.json");
+  const settingFile = homeDir ? accountSettingFile(homeDir) : path6.join(officialV2Dir, "setting.json");
   const settings = readJson(settingFile);
   const selectedKeys = asRecord(settings?.modelProviderFamilySelectedKeys);
   const rawConnectionSelections = settings?.providerFamilyConnectionSelections;
   const connectionSelectionsPresent = settings !== null && Object.prototype.hasOwnProperty.call(settings, "providerFamilyConnectionSelections");
   const connectionSelections = asRecord(rawConnectionSelections);
-  const connectionSelectionsInvalid = connectionSelectionsPresent && !isRecord2(rawConnectionSelections);
+  const connectionSelectionsInvalid = connectionSelectionsPresent && !isRecord3(rawConnectionSelections);
   const taskAccountProviderId = taskProviderId && providerRules.some((rule) => rule.providerId === taskProviderId) ? taskProviderId : null;
   const entries = providerRules.map((rule) => {
     const providerId = rule.providerId;
@@ -3559,12 +3705,12 @@ function readAccountProviderSource(config2, verifiedSelection, homeDir, taskProv
   return { officialDataRoot, officialV2Dir, settingFile, builtinRevision, entries };
 }
 function zcodeV2Dir(zcodeDataRoot) {
-  if (path5.basename(zcodeDataRoot).toLowerCase() !== ".zcode") return null;
-  return path5.join(zcodeDataRoot, "v2");
+  if (path6.basename(zcodeDataRoot).toLowerCase() !== ".zcode") return null;
+  return path6.join(zcodeDataRoot, "v2");
 }
 function zcodeBuiltinRevision(table, sourceFile) {
   const revision = typeof table?.revision === "number" ? table.revision : 0;
-  const sourceDigest = createHash5("sha256").update(path5.resolve(sourceFile)).digest("hex");
+  const sourceDigest = createHash5("sha256").update(path6.resolve(sourceFile)).digest("hex");
   return `zcode-builtin:${revision}:${sourceDigest}`;
 }
 function accountProviderRevision(builtinRevision, providers, states) {
@@ -3609,15 +3755,15 @@ function readJson(filePath) {
   try {
     if (!existsSync3(filePath)) return null;
     const value = JSON.parse(readFileSync4(filePath, "utf8"));
-    return isRecord2(value) ? value : null;
+    return isRecord3(value) ? value : null;
   } catch {
     return null;
   }
 }
 function asRecord(value) {
-  return isRecord2(value) ? value : {};
+  return isRecord3(value) ? value : {};
 }
-function isRecord2(value) {
+function isRecord3(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 var BIGMODEL_START_PLAN_PROVIDER_ID;
@@ -4089,10 +4235,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path8) {
-  if (!path8)
+function getElementAtPath(obj, path9) {
+  if (!path9)
     return obj;
-  return path8.reduce((acc, key) => acc?.[key], obj);
+  return path9.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -4351,11 +4497,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path8, issues) {
+function prefixIssues(path9, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path8);
+    iss.path.unshift(path9);
     return iss;
   });
 }
@@ -4876,16 +5022,16 @@ function flattenError(error62, mapper = (issue2) => issue2.message) {
 }
 function formatError(error62, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error63, path8 = []) => {
+  const processError = (error63, path9 = []) => {
     for (const issue2 of error63.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path8, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path9, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path8, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path9, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path8, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path9, ...issue2.path]);
       } else {
-        const fullpath = [...path8, ...issue2.path];
+        const fullpath = [...path9, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -4924,17 +5070,17 @@ function formatError(error62, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error62, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error63, path8 = []) => {
+  const processError = (error63, path9 = []) => {
     var _a3;
     for (const issue2 of error63.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path8, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path9, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path8, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path9, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path8, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path9, ...issue2.path]);
       } else {
-        const fullpath = [...path8, ...issue2.path];
+        const fullpath = [...path9, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -4973,8 +5119,8 @@ function treeifyError(error62, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path8 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path8) {
+  const path9 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path9) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -22970,13 +23116,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path8 = ref.slice(1).split("/").filter(Boolean);
-  if (path8.length === 0) {
+  const path9 = ref.slice(1).split("/").filter(Boolean);
+  if (path9.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path8[0] === defsKey) {
-    const key = path8[1] === void 0 ? void 0 : decodeJSONPointerSegment(path8[1]);
+  if (path9[0] === defsKey) {
+    const key = path9[1] === void 0 ? void 0 : decodeJSONPointerSegment(path9[1]);
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -25169,7 +25315,7 @@ var init_host = __esm({
 
 // src/browser/load-backend.ts
 import { existsSync as existsSync5 } from "node:fs";
-import path6 from "node:path";
+import path7 from "node:path";
 import { fileURLToPath as fileURLToPath2, pathToFileURL } from "node:url";
 function devRuntimeSpecifier() {
   return ["./runtime", "js"].join(".");
@@ -25186,8 +25332,8 @@ function asBackendModule(imported, label) {
   throw new Error(`${label} does not export createManagedCdpBrowserRuntime`);
 }
 async function loadBackendModule() {
-  const moduleDir = path6.dirname(fileURLToPath2(import.meta.url));
-  const vendorEntry = path6.join(moduleDir, "vendor", "pkg", "browser-host.cjs");
+  const moduleDir = path7.dirname(fileURLToPath2(import.meta.url));
+  const vendorEntry = path7.join(moduleDir, "vendor", "pkg", "browser-host.cjs");
   if (existsSync5(vendorEntry)) {
     return asBackendModule(
       await import(pathToFileURL(vendorEntry).href),
@@ -25222,10 +25368,10 @@ __export(zcode_app_server_adapter_exports, {
 });
 import { spawn as spawn3 } from "node:child_process";
 import { homedir as homedir3 } from "node:os";
-import path7 from "node:path";
+import path8 from "node:path";
 import { createHash as createHash6, randomUUID } from "node:crypto";
 function publicUsage(value) {
-  if (!isRecord3(value)) return null;
+  if (!isRecord4(value)) return null;
   const result = {};
   for (const key of ["inputTokens", "outputTokens", "totalTokens", "cachedInputTokens", "reasoningTokens", "input_tokens", "output_tokens", "total_tokens", "cost"]) {
     const item = value[key];
@@ -25278,7 +25424,7 @@ function browserHostClosedResult() {
   };
 }
 function sameWorkspacePath(left, right) {
-  const normalize = (value) => path7.normalize(value).replace(/[/\\]+/gu, (match) => match.includes("\\") || process.platform === "win32" ? "\\" : "/");
+  const normalize = (value) => path8.normalize(value).replace(/[/\\]+/gu, (match) => match.includes("\\") || process.platform === "win32" ? "\\" : "/");
   const resolvedLeft = normalize(left);
   const resolvedRight = normalize(right);
   return process.platform === "win32" ? resolvedLeft.toLocaleLowerCase("en-US") === resolvedRight.toLocaleLowerCase("en-US") : resolvedLeft === resolvedRight;
@@ -25357,18 +25503,18 @@ function readEffectiveReasoningLevel(snapshot) {
   const level = thoughtLevel.current;
   return typeof level === "string" && level.trim() ? level.trim() : null;
 }
-function nestedString(record3, path8) {
+function nestedString(record3, path9) {
   let value = record3;
-  for (const part of path8) value = asRecord2(value)[part];
+  for (const part of path9) value = asRecord2(value)[part];
   return typeof value === "string" ? value : null;
 }
-function nestedNumber(record3, path8) {
+function nestedNumber(record3, path9) {
   let value = record3;
-  for (const part of path8) value = asRecord2(value)[part];
+  for (const part of path9) value = asRecord2(value)[part];
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 function asRecord2(value) {
-  return isRecord3(value) ? value : {};
+  return isRecord4(value) ? value : {};
 }
 function extractTurnFailureEvidence(value) {
   if (typeof value === "string") {
@@ -25405,12 +25551,12 @@ function reportDesktopIndexIssue(onEvent, error62) {
     summary: `ZCode Desktop task index could not be updated: ${message.slice(0, 500)}`
   });
 }
-function isRecord3(value) {
+function isRecord4(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function stableSerialize(value) {
   if (Array.isArray(value)) return `[${value.map(stableSerialize).join(",")}]`;
-  if (isRecord3(value)) {
+  if (isRecord4(value)) {
     return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableSerialize(value[key])}`).join(",")}}`;
   }
   return JSON.stringify(value) ?? "undefined";
@@ -25428,6 +25574,7 @@ var init_zcode_app_server_adapter = __esm({
     init_windows_process_cleanup();
     init_failure_facts();
     init_child_env();
+    init_desktop_host_launch();
     init_account_provider();
     init_session_preferences();
     init_task_timeout();
@@ -26348,9 +26495,10 @@ var init_zcode_app_server_adapter = __esm({
         }
       }
       #startAppServer(config2, cwd, env, entry) {
-        const child = spawn3(config2.nodeExecutable, [config2.zcodeEntrypoint, "app-server", "--stdio"], {
+        const launch = buildZCodeAppServerLaunch(config2.zcodeEntrypoint, env);
+        const child = spawn3(config2.nodeExecutable, [config2.zcodeEntrypoint, ...launch.args], {
           cwd,
-          env,
+          env: launch.env,
           shell: false,
           windowsHide: true,
           detached: process.platform !== "win32",
@@ -26447,7 +26595,7 @@ var init_zcode_app_server_adapter = __esm({
               failProtocol("invalid_frame", frameBytes);
               return;
             }
-            if (!isRecord3(parsed)) {
+            if (!isRecord4(parsed)) {
               failProtocol("invalid_frame", frameBytes, "the top-level frame value must be a JSON object");
               return;
             }
@@ -27691,7 +27839,7 @@ var init_start_plan_private_channel = __esm({
 // src/worker/worker-main.ts
 init_result_contract();
 import { createHash as createHash7, randomUUID as randomUUID3 } from "node:crypto";
-import { closeSync, createWriteStream, readFileSync as readFileSync5, writeFileSync, writeSync } from "node:fs";
+import { closeSync as closeSync2, createWriteStream, readFileSync as readFileSync5, writeFileSync, writeSync } from "node:fs";
 import { Socket } from "node:net";
 
 // src/runtime/build-provenance.ts
@@ -27838,6 +27986,7 @@ var StartPlanSecretRedactor = class {
 };
 
 // src/worker/worker-main.ts
+var MAX_NODE_TIMER_DELAY_MS = 2147483647;
 var workerArgs = process.argv.slice(2);
 var bridgeLaunchMarker = workerArgs.at(-1) === BRIDGE_WORKER_LAUNCH_MARKER;
 var interactionMode = workerArgs.includes("--bridge-sqlite-interaction-v1");
@@ -27881,14 +28030,14 @@ ${frames.slice(0, 1200)}
     if (interactionMode && !interactionStreamsCreated) {
       for (const fd of [7, 8, 9]) {
         try {
-          closeSync(fd);
+          closeSync2(fd);
         } catch {
         }
       }
     }
     if (privateAuthMode) for (const fd of [10, 11, 12, 13]) {
       try {
-        closeSync(fd);
+        closeSync2(fd);
       } catch {
       }
     }
@@ -28065,6 +28214,7 @@ async function runZCodeAdapter(bootstrap, execution, interaction, workerIdentity
   let outcome = null;
   let failure2 = null;
   let cachedAuth = null;
+  let privateAuthPending = null;
   let privateAuthExpiryTimer;
   let privateAuthStarted = false;
   const secretRedactor = execution.private_auth ? new StartPlanSecretRedactor() : void 0;
@@ -28092,6 +28242,23 @@ async function runZCodeAdapter(bootstrap, execution, interaction, workerIdentity
       privateAuthExpiryTimer = void 0;
     }
   };
+  const scheduleCachedAuthExpiry = () => {
+    if (privateAuthExpiryTimer) {
+      clearTimeout(privateAuthExpiryTimer);
+      privateAuthExpiryTimer = void 0;
+    }
+    const current = cachedAuth;
+    if (!current) return;
+    const remaining = current.expiresAt - Date.now();
+    if (!Number.isFinite(remaining) || remaining <= 0) {
+      clearCachedAuth();
+      return;
+    }
+    privateAuthExpiryTimer = setTimeout(() => {
+      if (cachedAuth === current) scheduleCachedAuthExpiry();
+    }, Math.min(remaining, MAX_NODE_TIMER_DELAY_MS));
+    privateAuthExpiryTimer.unref();
+  };
   const revokeParentLease = () => {
     privateAuthParentLive = false;
     clearCachedAuth();
@@ -28100,6 +28267,115 @@ async function runZCodeAdapter(bootstrap, execution, interaction, workerIdentity
   privateAuthLifetime?.once("end", revokeParentLease);
   privateAuthLifetime?.once("close", revokeParentLease);
   privateAuthLifetime?.once("error", revokeParentLease);
+  const samePrivateAuthScope = (left, right) => left.sessionId === right.sessionId && left.turnId === right.turnId && left.providerId === right.providerId && left.modelId === right.modelId;
+  const privateAuthView = (current, signal) => ({
+    ...current,
+    isValid: () => privateAuthParentLive && !signal.aborted && cachedAuth === current && current.expiresAt > Date.now()
+  });
+  const waitForPrivateAuth = (promise2, signal) => new Promise((resolve, reject) => {
+    const cleanup = () => signal.removeEventListener("abort", abort);
+    const abort = () => {
+      cleanup();
+      reject(new Error("private auth unavailable"));
+    };
+    if (signal.aborted) {
+      abort();
+      return;
+    }
+    signal.addEventListener("abort", abort, { once: true });
+    void promise2.then((value) => {
+      cleanup();
+      if (signal.aborted) reject(new Error("private auth unavailable"));
+      else resolve(value);
+    }, (error62) => {
+      cleanup();
+      reject(error62);
+    });
+  });
+  const acquirePrivateAuth = async (scope, signal) => {
+    privateAuthStarted = true;
+    const identity = workerIdentity;
+    if (!identity || identity.pid !== process.pid || identity.fingerprint_precision !== "exact" || !identity.fingerprint) {
+      throw new Error("private auth unavailable");
+    }
+    const { receivePrivateCredential: receivePrivateCredential2 } = await Promise.resolve().then(() => (init_start_plan_private_channel(), start_plan_private_channel_exports));
+    const auth = execution.private_auth;
+    const request = createWriteStream(process.execPath, { fd: 10 });
+    const acknowledgement = createWriteStream(process.execPath, { fd: 12 });
+    let responseOpened = false;
+    let result2;
+    writeDiagnostic("[bridge-worker] private auth acquire stage=receive\n");
+    try {
+      result2 = await receivePrivateCredential2({
+        request,
+        response: () => {
+          responseOpened = true;
+          return new Socket({ fd: 11, readable: true, writable: false });
+        },
+        acknowledgement,
+        binding: {
+          account: auth.account,
+          provider: scope.providerId,
+          model: scope.modelId,
+          task: bootstrap.task_id,
+          attempt: bootstrap.attempt,
+          operation: bootstrap.operation_id,
+          generation: bootstrap.generation,
+          claim: auth.claim,
+          session: scope.sessionId,
+          turn: scope.turnId,
+          pid: identity.pid,
+          creation: identity.fingerprint
+        },
+        signal,
+        timeoutMs: 15e3
+      });
+    } finally {
+      if (!responseOpened) {
+        try {
+          closeSync2(11);
+        } catch {
+        }
+      }
+    }
+    writeDiagnostic("[bridge-worker] private auth acquire stage=received\n");
+    await new Promise((resolve, reject) => {
+      let timer;
+      const cleanup = () => {
+        if (timer) clearTimeout(timer);
+        signal.removeEventListener("abort", check2);
+        notifyPrivateAuthConfirmation = void 0;
+      };
+      const check2 = () => {
+        if (signal.aborted || !privateAuthParentLive || result2.expiresAt <= Date.now()) {
+          cleanup();
+          reject(new Error("private auth unavailable"));
+        } else if (privateAuthConfirmed) {
+          cleanup();
+          resolve();
+        }
+      };
+      notifyPrivateAuthConfirmation = check2;
+      signal.addEventListener("abort", check2, { once: true });
+      timer = setTimeout(() => {
+        cleanup();
+        reject(new Error("private auth unavailable"));
+      }, Math.max(0, Math.min(15e3, result2.expiresAt - Date.now())));
+      timer.unref();
+      check2();
+    });
+    if (signal.aborted || !privateAuthParentLive) throw new Error("private auth unavailable");
+    writeDiagnostic("[bridge-worker] private auth acquire stage=confirmed\n");
+    secretRedactor?.register(result2.jwt);
+    const current = { apiKey: result2.jwt, expiresAt: result2.expiresAt, ...scope };
+    cachedAuth = current;
+    scheduleCachedAuthExpiry();
+    writeDiagnostic("[bridge-worker] private auth acquire stage=cached\n");
+    signal.addEventListener("abort", () => {
+      if (cachedAuth === current) clearCachedAuth();
+    }, { once: true });
+    return current;
+  };
   const adapter = new ZCodeAppServerAdapter2({
     host: execution.host_profile,
     // Manager resolved this attempt's effective budget before dispatch.
@@ -28136,84 +28412,33 @@ async function runZCodeAdapter(bootstrap, execution, interaction, workerIdentity
     resolveStartPlanRuntimeAuth: execution.private_auth ? async (scope, signal) => {
       if (signal.aborted || !privateAuthParentLive || !workerIdentity || workerIdentity.pid !== process.pid || workerIdentity.fingerprint_precision !== "exact" || !workerIdentity.fingerprint) throw new Error("private auth unavailable");
       if (cachedAuth) {
-        if (cachedAuth.sessionId !== scope.sessionId || cachedAuth.turnId !== scope.turnId || cachedAuth.providerId !== scope.providerId || cachedAuth.modelId !== scope.modelId || cachedAuth.expiresAt <= Date.now()) throw new Error("private auth unavailable");
+        if (!samePrivateAuthScope(cachedAuth, scope) || cachedAuth.expiresAt <= Date.now()) throw new Error("private auth unavailable");
         const current2 = cachedAuth;
-        return { ...current2, isValid: () => privateAuthParentLive && !signal.aborted && cachedAuth === current2 && current2.expiresAt > Date.now() };
+        return privateAuthView(current2, signal);
       }
-      if (privateAuthStarted) throw new Error("private auth unavailable");
-      privateAuthStarted = true;
-      const { receivePrivateCredential: receivePrivateCredential2 } = await Promise.resolve().then(() => (init_start_plan_private_channel(), start_plan_private_channel_exports));
-      const auth = execution.private_auth;
-      const request = createWriteStream(process.execPath, { fd: 10 });
-      const acknowledgement = createWriteStream(process.execPath, { fd: 12 });
-      let responseOpened = false;
-      let result2;
-      try {
-        result2 = await receivePrivateCredential2({
-          request,
-          response: () => {
-            responseOpened = true;
-            return new Socket({ fd: 11, readable: true, writable: false });
-          },
-          acknowledgement,
-          binding: {
-            account: auth.account,
-            provider: scope.providerId,
-            model: scope.modelId,
-            task: bootstrap.task_id,
-            attempt: bootstrap.attempt,
-            operation: bootstrap.operation_id,
-            generation: bootstrap.generation,
-            claim: auth.claim,
-            session: scope.sessionId,
-            turn: scope.turnId,
-            pid: workerIdentity.pid,
-            creation: workerIdentity.fingerprint
-          },
-          signal,
-          timeoutMs: 15e3
+      let pending = privateAuthPending;
+      if (pending) {
+        if (!samePrivateAuthScope(pending.scope, scope)) throw new Error("private auth unavailable");
+      } else {
+        if (privateAuthStarted) throw new Error("private auth unavailable");
+        const scopeSnapshot = Object.freeze({ ...scope });
+        const promise2 = acquirePrivateAuth(scopeSnapshot, signal).catch((error62) => {
+          const errorClass = error62 instanceof Error && /^[A-Za-z][A-Za-z0-9_]{0,63}$/u.test(error62.name) ? error62.name : "unknown";
+          writeDiagnostic(`[bridge-worker] private auth acquire rejected class=${errorClass}
+`);
+          throw error62;
         });
-      } finally {
-        if (!responseOpened) {
-          try {
-            closeSync(11);
-          } catch {
-          }
-        }
+        pending = { scope: scopeSnapshot, promise: promise2 };
+        privateAuthPending = pending;
+        void promise2.then(() => {
+          if (privateAuthPending === pending) privateAuthPending = null;
+        }, () => {
+          if (privateAuthPending === pending) privateAuthPending = null;
+        });
       }
-      await new Promise((resolve, reject) => {
-        let timer;
-        const cleanup = () => {
-          if (timer) clearTimeout(timer);
-          signal.removeEventListener("abort", check2);
-          notifyPrivateAuthConfirmation = void 0;
-        };
-        const check2 = () => {
-          if (signal.aborted || !privateAuthParentLive || result2.expiresAt <= Date.now()) {
-            cleanup();
-            reject(new Error("private auth unavailable"));
-          } else if (privateAuthConfirmed) {
-            cleanup();
-            resolve();
-          }
-        };
-        notifyPrivateAuthConfirmation = check2;
-        signal.addEventListener("abort", check2, { once: true });
-        timer = setTimeout(() => {
-          cleanup();
-          reject(new Error("private auth unavailable"));
-        }, Math.max(0, Math.min(15e3, result2.expiresAt - Date.now())));
-        timer.unref();
-        check2();
-      });
-      if (signal.aborted || !privateAuthParentLive) throw new Error("private auth unavailable");
-      secretRedactor?.register(result2.jwt);
-      cachedAuth = { apiKey: result2.jwt, expiresAt: result2.expiresAt, ...scope };
-      privateAuthExpiryTimer = setTimeout(clearCachedAuth, Math.max(0, result2.expiresAt - Date.now()));
-      privateAuthExpiryTimer.unref();
-      signal.addEventListener("abort", clearCachedAuth, { once: true });
-      const current = cachedAuth;
-      return { ...current, isValid: () => privateAuthParentLive && !signal.aborted && cachedAuth === current && current.expiresAt > Date.now() };
+      const current = await waitForPrivateAuth(pending.promise, signal);
+      if (!samePrivateAuthScope(current, scope) || current.expiresAt <= Date.now()) throw new Error("private auth unavailable");
+      return privateAuthView(current, signal);
     } : void 0,
     resolveInteraction: interaction ? async (request, signal) => {
       if (signal.aborted) return { action: "decline" };
@@ -28248,7 +28473,7 @@ async function runZCodeAdapter(bootstrap, execution, interaction, workerIdentity
     privateAuthLifetime?.destroy();
     if (execution.private_auth && !privateAuthStarted) for (const fd of [10, 11, 12]) {
       try {
-        closeSync(fd);
+        closeSync2(fd);
       } catch {
       }
     }
@@ -28371,7 +28596,7 @@ function digestProvenance(value) {
 }
 function readPrivateFrame2(fd, maximum2) {
   const frame = readFileSync5(fd);
-  closeSync(fd);
+  closeSync2(fd);
   if (frame.byteLength > maximum2) throw new Error("private frame exceeded limit");
   return frame;
 }
@@ -28386,5 +28611,5 @@ function writePrivateFrame2(fd, value, encoded = JSON.stringify(value)) {
     }
   }
   writeFileSync(fd, "\n", "utf8");
-  closeSync(fd);
+  closeSync2(fd);
 }

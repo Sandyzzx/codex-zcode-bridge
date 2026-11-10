@@ -42,6 +42,7 @@ import {
 } from "../diagnostics/failure-facts.js";
 import { createHash, randomUUID } from "node:crypto";
 import { createMinimalOsEnv } from "../runtime/child-env.js";
+import { buildZCodeAppServerLaunch } from "../runtime/desktop-host-launch.js";
 import {
   accountProviderRuleFacts,
   BIGMODEL_START_PLAN_PROVIDER_ID,
@@ -1323,9 +1324,10 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     env: NodeJS.ProcessEnv,
     entry: RunEntry,
   ): AppServerClient {
-    const child = spawn(config.nodeExecutable, [config.zcodeEntrypoint, "app-server", "--stdio"], {
+    const launch = buildZCodeAppServerLaunch(config.zcodeEntrypoint, env);
+    const child = spawn(config.nodeExecutable, [config.zcodeEntrypoint, ...launch.args], {
       cwd,
-      env,
+      env: launch.env,
       shell: false,
       windowsHide: true,
       detached: process.platform !== "win32",

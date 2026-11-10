@@ -462,6 +462,62 @@ export function createProductionStartPlanAuth(options: ProductionAuthIssuerOptio
   const env = options.env ?? process.env;
   const initial = readOfficialStartPlanCredential(options.zcodeDataRoot, env);
   if (!initial) return null;
+  interface EntitlementContext {
+    readonly account: string;
+    readonly provider: string;
+    readonly model: string;
+    readonly deviceMid: string;
+    readonly credentialDigest: string;
+    readonly credentialExpiresAt: number | null;
+    readonly verdict: EntitlementCheckResult;
+  }
+  let entitlementContext: EntitlementContext | null = null;
+  let issuedTask: string | null = null;
+  const sameEntitlementContext = (
+    context: EntitlementContext,
+    credential: OfficialStartPlanCredential,
+    provider: string,
+    model: string,
+    credentialDigest: string,
+  ): boolean => context.account === credential.account && context.provider === provider
+    && context.model === model && context.deviceMid === credential.deviceMid
+    && context.credentialDigest === credentialDigest && context.credentialExpiresAt === credential.expiresAt;
+  const rejection = (verdict: EntitlementCheckResult): Error => {
+    const providerCode = verdict.status === "entitled" ? undefined : verdict.providerCode;
+    return new Error(`start_plan_entitlement_rejected:${verdict.status}${providerCode ? `:${providerCode}` : ""}`);
+  };
+  const authoritativeEntitlement = async (
+    credential: OfficialStartPlanCredential,
+    provider: string,
+    model: string,
+    signal: AbortSignal,
+  ): Promise<EntitlementCheckResult> => {
+    const credentialDigest = cryptoCreateHash("sha256").update(credential.jwt).digest("hex");
+    if (entitlementContext) {
+      if (!sameEntitlementContext(entitlementContext, credential, provider, model, credentialDigest)) {
+        throw new Error("start_plan_entitlement_identity_invalid");
+      }
+      return entitlementContext.verdict;
+    }
+    const verdict = await options.entitlement.check({
+      account: credential.account,
+      provider,
+      model,
+      deviceMid: credential.deviceMid,
+      jwt: credential.jwt,
+      signal,
+    });
+    entitlementContext = Object.freeze({
+      account: credential.account,
+      provider,
+      model,
+      deviceMid: credential.deviceMid,
+      credentialDigest,
+      credentialExpiresAt: credential.expiresAt,
+      verdict,
+    });
+    return verdict;
+  };
   return {
     // Captured from the official credential at construction; issue() re-reads
     // the credential and rejects if the account identity changed mid-run.
@@ -472,20 +528,15 @@ export function createProductionStartPlanAuth(options: ProductionAuthIssuerOptio
       const credential = readOfficialStartPlanCredential(options.zcodeDataRoot, env);
       if (!credential || credential.account !== initial.account
         || credential.expiresAt !== null && credential.expiresAt <= now()) return false;
-      const verdict = await options.entitlement.check({
-        account: credential.account,
-        provider,
-        model,
-        deviceMid: credential.deviceMid,
-        jwt: credential.jwt,
-        signal,
-      });
+      const credentialDigest = cryptoCreateHash("sha256").update(credential.jwt).digest("hex");
+      if (entitlementContext && !sameEntitlementContext(entitlementContext, credential, provider, model, credentialDigest)) return false;
+      const verdict = await authoritativeEntitlement(credential, provider, model, signal);
       if (signal.aborted) return false;
       if (verdict.status !== "entitled") {
         // Mirror the issue() rejection shape so the lifecycle gate can stage
         // a sanitized classification; the gate treats throw and false the
         // same (fail-closed), this only preserves the diagnosable verdict.
-        throw new Error(`start_plan_entitlement_rejected:${verdict.status}${verdict.providerCode ? `:${verdict.providerCode}` : ""}`);
+        throw rejection(verdict);
       }
       return true;
     },
@@ -498,23 +549,20 @@ export function createProductionStartPlanAuth(options: ProductionAuthIssuerOptio
       if (binding.provider !== "account:bigmodel-start-plan" || !binding.model) {
         throw new Error("start_plan_identity_invalid");
       }
-      const verdict = await options.entitlement.check({
-        account: credential.account,
-        provider: binding.provider,
-        model: binding.model,
-        deviceMid: credential.deviceMid,
-        jwt: credential.jwt,
-        signal,
-      });
+      if (issuedTask !== null) throw new Error("start_plan_lease_already_issued");
+      if (!entitlementContext) throw new Error("start_plan_entitlement_not_prepared");
+      issuedTask = binding.task;
+      const verdict = await authoritativeEntitlement(credential, binding.provider, binding.model, signal);
       if (verdict.status !== "entitled") {
-        throw new Error(`start_plan_entitlement_rejected:${verdict.status}${verdict.providerCode ? `:${verdict.providerCode}` : ""}`);
+        throw rejection(verdict);
       }
       const createdAt = now();
-      // Observed Start Plan JWTs may omit `exp`; without it the lease stays
-      // inside the one-shot delivery window only. The lease constructor caps
-      // any lifetime at 60 seconds.
-      const expiresAt = Math.min(credential.expiresAt ?? Number.MAX_SAFE_INTEGER, createdAt + 30_000);
-      return new PrivateCredentialLease(binding, credential.jwt, expiresAt, now);
+      // Observed Start Plan JWTs may omit `exp`. In that case the Worker cache
+      // is bounded by the task's parent-lifetime channel rather than a local
+      // short TTL. Delivery itself remains one-shot and bounded to 30 seconds.
+      const credentialExpiresAt = credential.expiresAt ?? Number.MAX_SAFE_INTEGER;
+      const deliveryDeadline = Math.min(credentialExpiresAt, createdAt + 30_000);
+      return new PrivateCredentialLease(binding, credential.jwt, credentialExpiresAt, now, deliveryDeadline);
     },
   };
 }

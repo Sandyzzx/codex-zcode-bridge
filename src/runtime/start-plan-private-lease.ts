@@ -29,20 +29,37 @@ function sameBinding(left: PrivateLeaseBinding, right: PrivateLeaseBinding): boo
 
 export class PrivateCredentialLease {
   readonly #binding: Readonly<PrivateLeaseBinding>;
-  readonly #expiresAt: number;
+  readonly #deliveryDeadline: number;
+  readonly #credentialExpiresAt: number;
   readonly #now: () => number;
   #credential: string | null;
   #state: "active" | "checking" | "delivering" | "consumed" | "revoked" = "active";
 
-  constructor(binding: PrivateLeaseBinding, credential: string, expiresAt: number, now: () => number = Date.now) {
+  /**
+   * `credentialExpiresAt` is the credential's actual usability deadline.
+   * `deliveryDeadline` only bounds the one-shot private-channel delivery and
+   * defaults to the old single-deadline behaviour for existing callers.
+   */
+  constructor(
+    binding: PrivateLeaseBinding,
+    credential: string,
+    credentialExpiresAt: number,
+    now: () => number = Date.now,
+    deliveryDeadline?: number,
+  ) {
     const createdAt = now();
+    const boundedDeliveryDeadline = deliveryDeadline
+      ?? Math.min(credentialExpiresAt, createdAt + 60_000);
     if (!validBinding(binding) || typeof credential !== "string" || !credential
-      || !Number.isFinite(expiresAt) || !Number.isFinite(createdAt) || expiresAt <= createdAt || expiresAt - createdAt > 60_000) {
+      || !Number.isFinite(credentialExpiresAt) || !Number.isFinite(createdAt) || credentialExpiresAt <= createdAt
+      || !Number.isFinite(boundedDeliveryDeadline) || boundedDeliveryDeadline <= createdAt
+      || boundedDeliveryDeadline - createdAt > 60_000 || boundedDeliveryDeadline > credentialExpiresAt) {
       throw new Error("credential_lease_invalid");
     }
     this.#binding = Object.freeze({ ...binding });
     this.#credential = credential;
-    this.#expiresAt = expiresAt;
+    this.#deliveryDeadline = boundedDeliveryDeadline;
+    this.#credentialExpiresAt = credentialExpiresAt;
     this.#now = now;
   }
 
@@ -61,17 +78,19 @@ export class PrivateCredentialLease {
     if (this.#state !== "active") throw new Error("credential_lease_unavailable");
     this.#state = "checking";
     try {
-      if (signal.aborted || !Number.isFinite(this.#now()) || this.#now() >= this.#expiresAt
+      if (signal.aborted || !Number.isFinite(this.#now()) || this.#now() >= this.#deliveryDeadline
+        || this.#now() >= this.#credentialExpiresAt
         || !sameBinding(this.#binding, requested)) throw new Error("credential_lease_rejected");
       if (!await verifyWorker(this.#binding)) throw new Error("credential_lease_rejected");
-      if (this.#state !== "checking" || signal.aborted || !Number.isFinite(this.#now()) || this.#now() >= this.#expiresAt || !this.#credential) {
+      if (this.#state !== "checking" || signal.aborted || !Number.isFinite(this.#now())
+        || this.#now() >= this.#deliveryDeadline || this.#now() >= this.#credentialExpiresAt || !this.#credential) {
         throw new Error("credential_lease_rejected");
       }
       this.#state = "delivering";
       const credential = this.#credential;
       this.#credential = null;
       // Any delivery error, timeout or missing ACK is terminal and unknown.
-      await deliver(credential, this.#expiresAt);
+      await deliver(credential, this.#credentialExpiresAt);
       if (signal.aborted || this.#state !== "delivering") throw new Error("credential_delivery_unknown");
       this.#state = "consumed";
     } catch {

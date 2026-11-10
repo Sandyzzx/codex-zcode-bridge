@@ -59,6 +59,7 @@ type RuntimeVariant = "success" | "failure" | "stderr-flood" | "large-result" | 
   | "facts-turn-failure"
   | "private-auth" | "private-auth-echo" | "private-auth-wrong-turn" | "private-auth-wrong-claim"
   | "private-auth-account-switch" | "private-auth-hold" | "private-auth-eof-recheck" | "private-auth-interaction"
+  | "private-auth-multi-iteration" | "private-auth-concurrent"
   | "private-auth-preflight-reject";
 function writeFakeRuntime(name: string, variant: RuntimeVariant): FakeRuntimeFixture {
   const root = path.join(fixtureRoot, name);
@@ -100,6 +101,8 @@ function writeFakeRuntime(name: string, variant: RuntimeVariant): FakeRuntimeFix
     `let turnFinished = false;`,
     `let interactionSent = false;`,
     `let receivedCredential = null;`,
+    `let firstAuthCredential = null;`,
+    `let authResponses = 0;`,
     `function snapshot() {`,
     `  return { session: { sessionId }, settings: { model: { current: selected, available: [selected, { providerId: "provider-123", modelId: "model-x" }].map((ref) => ({ ref, label: "Test Model" })) } }, runtime: { eventSeq: 0 } };`,
     `}`,
@@ -118,7 +121,7 @@ function writeFakeRuntime(name: string, variant: RuntimeVariant): FakeRuntimeFix
     `input.on("close", () => { try { fs.appendFileSync(exitLog, "stdin_close\\n"); } catch {} });`,
     `input.on("line", (line) => {`,
     `  const message = JSON.parse(line);`,
-    `  if (message.id !== "private-auth-rpc" && message.id !== "private-auth-recheck") fs.appendFileSync(requestLog, JSON.stringify(message) + "\\n");`,
+    `  if (!/^private-auth-(rpc|recheck)/.test(String(message.id))) fs.appendFileSync(requestLog, JSON.stringify(message) + "\\n");`,
     `  if (message.method === "provider/updateAccountConfig") {`,
     `    process.stdout.write(JSON.stringify({ id: message.id, result: {} }) + "\\n");`,
     `  } else if (message.method === "session/create" || message.method === "session/resume") {`,
@@ -134,7 +137,7 @@ function writeFakeRuntime(name: string, variant: RuntimeVariant): FakeRuntimeFix
     `    process.stdout.write(JSON.stringify({ id: message.id, result: {} }) + "\\n");`,
     ...(variant.startsWith("private-auth") ? [
       `    process.stdout.write(JSON.stringify({ method: "session/event", params: { sessionId, seq: 1, turnId: "native-fixture-turn", type: "turn.started", payload: { turnId: "native-fixture-turn" } } }) + "\\n");`,
-      `    process.stdout.write(JSON.stringify({ id: "private-auth-rpc", method: "interaction/requestProviderRuntimeHeaders", params: { sessionId, turnId: ${JSON.stringify(variant === "private-auth-wrong-turn" ? "other-turn" : "native-fixture-turn")}, modelSelection: selected } }) + "\\n");`,
+      `    for (const rpcId of ${JSON.stringify(variant === "private-auth-concurrent" ? ["private-auth-rpc", "private-auth-rpc-2"] : ["private-auth-rpc"])}) process.stdout.write(JSON.stringify({ id: rpcId, method: "interaction/requestProviderRuntimeHeaders", params: { sessionId, turnId: ${JSON.stringify(variant === "private-auth-wrong-turn" ? "other-turn" : "native-fixture-turn")}, modelSelection: selected } }) + "\\n");`,
       `    return;`,
     ] : []),
     `    if (${variant === "deadline-hang"}) return;`,
@@ -146,17 +149,33 @@ function writeFakeRuntime(name: string, variant: RuntimeVariant): FakeRuntimeFix
     `      return;`,
     `    }`,
     `    finishTurn();`,
-    `  } else if (message.id === "private-auth-rpc") {`,
+    `  } else if (message.id === "private-auth-rpc" || message.id === "private-auth-rpc-2") {`,
     `    receivedCredential = message.result?.requestAuth?.apiKey;`,
-    `    fs.appendFileSync(requestLog, JSON.stringify({ auth_applied: message.result?.headersApplied === true && typeof receivedCredential === "string" && receivedCredential.length > 0 }) + "\\n");`,
-    `    if (message.result?.headersApplied === true && typeof receivedCredential === "string" && receivedCredential.length > 0) ${variant === "private-auth-hold" || variant === "private-auth-eof-recheck" ? '{}' : variant === "private-auth-interaction" ? '{ process.stdout.write(JSON.stringify({ id: "interaction-rpc-1", method: "interaction/requestPermission", params: { requestId: "permission-1", sessionId, toolCallId: "call-1", toolName: "Bash", reason: "echo " + receivedCredential, input: { command: "echo " + receivedCredential }, options: [{ kind: "allow_once" }, { kind: "deny" }] } }) + "\\n"); }' : 'finishTurn();'}`,
+    `    const applied = message.result?.headersApplied === true && typeof receivedCredential === "string" && receivedCredential.length > 0;`,
+    `    const sameCredential = firstAuthCredential === null || firstAuthCredential === receivedCredential;`,
+    `    if (firstAuthCredential === null) firstAuthCredential = receivedCredential;`,
+    `    authResponses += 1;`,
+    `    fs.appendFileSync(requestLog, JSON.stringify({ auth_applied: applied, same_credential: sameCredential }) + "\\n");`,
+    `    if (applied) {`,
+    `      ${variant === "private-auth-multi-iteration"
+      ? 'if (message.id === "private-auth-rpc") { process.stdout.write(JSON.stringify({ id: "interaction-rpc-1", method: "interaction/requestPermission", params: { requestId: "permission-1", sessionId, toolCallId: "call-1", toolName: "Write", reason: "Synthetic continuation after a tool call", input: { path: "STARTPLAN_E2E.txt" }, options: [{ kind: "allow_once" }, { kind: "deny" }] } }) + "\\n"); return; } finishTurn();'
+      : variant === "private-auth-concurrent"
+        ? "if (authResponses === 2) finishTurn();"
+        : variant === "private-auth-hold" || variant === "private-auth-eof-recheck"
+          ? ""
+          : variant === "private-auth-interaction"
+            ? 'process.stdout.write(JSON.stringify({ id: "interaction-rpc-1", method: "interaction/requestPermission", params: { requestId: "permission-1", sessionId, toolCallId: "call-1", toolName: "Bash", reason: "echo " + receivedCredential, input: { command: "echo " + receivedCredential }, options: [{ kind: "allow_once" }, { kind: "deny" }] } }) + "\\n");'
+            : "finishTurn();"}`,
+    `    }`,
     ...(variant === "private-auth-eof-recheck" ? [`    if (message.result?.headersApplied === true) { const timer = setInterval(() => { if (!fs.existsSync(${JSON.stringify(path.join(root, "recheck-trigger"))})) return; clearInterval(timer); process.stdout.write(JSON.stringify({ id: "private-auth-recheck", method: "interaction/requestProviderRuntimeHeaders", params: { sessionId, turnId: "native-fixture-turn", modelSelection: selected } }) + "\\n"); }, 20); }`] : []),
     `    else process.stdout.write(JSON.stringify({ method: "session/event", params: { sessionId, seq: 2, turnId: "native-fixture-turn", type: "turn.failed", payload: { error: { message: "synthetic private auth rejected" } } } }) + "\\n");`,
     `  } else if (message.id === "private-auth-recheck") {`,
     `    fs.appendFileSync(requestLog, JSON.stringify({ recheck_auth_applied: message.result?.headersApplied === true }) + "\\n");`,
     `    process.stdout.write(JSON.stringify({ method: "session/event", params: { sessionId, seq: 2, turnId: "native-fixture-turn", type: "turn.failed", payload: { error: { message: "synthetic recheck complete" } } } }) + "\\n");`,
     `  } else if (message.id === "interaction-rpc-1" || message.id === "interaction-rpc-2") {`,
-    `    if (message.result && message.result.decision) finishTurn();`,
+    `    if (message.result && message.result.decision) ${variant === "private-auth-multi-iteration"
+      ? 'process.stdout.write(JSON.stringify({ id: "private-auth-rpc-2", method: "interaction/requestProviderRuntimeHeaders", params: { sessionId, turnId: "native-fixture-turn", modelSelection: selected } }) + "\\n");'
+      : "finishTurn();"}`,
     `  } else {`,
     `    process.stdout.write(JSON.stringify({ id: message.id, error: { code: -32601, message: "unsupported" } }) + "\\n");`,
     `  }`,
@@ -581,6 +600,56 @@ for (const variant of ["private-auth", "private-auth-echo"] as const) test(`SQLi
     assert.equal(JSON.stringify({ status, result }).includes(marker.toString()), false);
   }, { runtimeVariant: variant, stderrCollector: stderr, onWorkerSpawn: (child) => { workerArgs = [...child.spawnargs]; }, preserveFixtureOnFailure: true });
 });
+
+for (const variant of ["private-auth-multi-iteration", "private-auth-concurrent"] as const) {
+  test(`SQLite Worker ${variant} reuses one delivered credential for repeated runtime-header requests`, { timeout: 120_000 }, async () => {
+    const issueCount = { count: 0 };
+    const stderr = { lines: [] as string[] };
+    try {
+      await withRealAdapterMcp(async (client, _manager, dataRoot, workspace, runtime) => {
+        const taskId = `auth-repeat-${variant === "private-auth-concurrent" ? "parallel" : "sequential"}-${randomUUID()}`;
+        contentObject(await client.callTool({ name: "zcode_task", arguments: {
+          ...syntheticTask(workspace, taskId),
+          model: { provider_id: "account:bigmodel-start-plan", model_id: "GLM-5.3-Flash" },
+        } }));
+        if (variant === "private-auth-multi-iteration") {
+          const interaction = await waitForInteractionRequest(client, taskId);
+          const details = interaction.details as Record<string, unknown>;
+          const requestId = String(details.request_id ?? (details.payload as Record<string, unknown> | undefined)?.request_id ?? "permission-1");
+          contentObject(await client.callTool({ name: "zcode_interaction_reply", arguments: {
+            task_id: taskId,
+            request_id: requestId,
+            decision: "allow",
+          } }));
+        }
+        assert.equal((await waitForTerminal(client, taskId, 1)).status, "completed");
+        await waitForLifecycleEvent(client, taskId, "released");
+        const requests = readFileSync(runtime.requestLog, "utf8").trim().split("\n")
+          .map((line) => JSON.parse(line) as Record<string, unknown>);
+        const authResults = requests.filter((item) => item.auth_applied === true);
+        assert.equal(authResults.length, 2, "both runtime-header requests must receive the credential");
+        assert.ok(authResults.every((item) => item.same_credential === true), "the second request must reuse the cached credential");
+        assert.equal(issueCount.count, 1, "repeated requests must not create a conflicting private lease");
+        const marker = Buffer.from("SYNTHETIC_GATE2_SECRET_93d9422b");
+        const scan = (directory: string): void => {
+          for (const name of readdirSync(directory)) {
+            const item = path.join(directory, name);
+            const stat = lstatSync(item);
+            if (stat.isSymbolicLink()) continue;
+            if (stat.isDirectory()) scan(item);
+            else if (stat.isFile()) assert.equal(readFileSync(item).includes(marker), false, `secret marker in ${item}`);
+          }
+        };
+        scan(dataRoot);
+        assert.equal(readFileSync(runtime.requestLog).includes(marker), false);
+        assert.equal(Buffer.from(stderr.lines.join("")).includes(marker), false);
+      }, { runtimeVariant: variant, issueCount, stderrCollector: stderr, preserveFixtureOnFailure: true });
+    } catch (error) {
+      console.error("worker stderr:\n" + stderr.lines.join("\n"));
+      throw error;
+    }
+  });
+}
 
 for (const variant of ["private-auth-wrong-turn", "private-auth-wrong-claim", "private-auth-account-switch"] as const) {
   test(`SQLite Worker rejects ${variant} without provider fallback`, { timeout: 120_000 }, async () => {
@@ -1702,7 +1771,6 @@ test("startBridge's host issuer wiring reaches the fake Billing gate and complet
     await waitForLifecycleEvent(client, taskId, "released");
     assert.deepEqual(gate.checks.map(({ account, provider, model, deviceMid }) => ({ account, provider, model, deviceMid })), [
       { account: HOST_ACCOUNT, provider: "account:bigmodel-start-plan", model: "GLM-5.3-Flash", deviceMid: HOST_DEVICE_MID },
-      { account: HOST_ACCOUNT, provider: "account:bigmodel-start-plan", model: "GLM-5.3-Flash", deviceMid: HOST_DEVICE_MID },
     ]);
     const requests = readFileSync(runtime.requestLog, "utf8").trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
     assert.ok(requests.some((message) => message.method === "session/create"), "Billing success must reach Provider registration and session creation");
@@ -1817,8 +1885,6 @@ test("ADR-031 Gate E1: a post-startup login is observed by the next dispatch and
 
     assert.deepEqual(gate.checks.map(({ account, provider, model, deviceMid }) => ({ account, provider, model, deviceMid })), [
       { account: HOST_ACCOUNT, provider: "account:bigmodel-start-plan", model: "GLM-5.3-Flash", deviceMid: HOST_DEVICE_MID },
-      { account: HOST_ACCOUNT, provider: "account:bigmodel-start-plan", model: "GLM-5.3-Flash", deviceMid: HOST_DEVICE_MID },
-      { account: "synthetic-account-b", provider: "account:bigmodel-start-plan", model: "GLM-5.3-Flash", deviceMid: HOST_DEVICE_MID },
       { account: "synthetic-account-b", provider: "account:bigmodel-start-plan", model: "GLM-5.3-Flash", deviceMid: HOST_DEVICE_MID },
     ]);
     assert.equal(journal.latest("GLM-5.3-Flash"), "entitled", "live Billing verdicts must feed the routing journal");
@@ -1842,7 +1908,6 @@ test("ADR-031 Gate E1: an explicit -StartPlan alias executes the raw model id ov
     assert.equal((await waitForTerminal(client, taskId, 1)).status, "completed");
     await waitForLifecycleEvent(client, taskId, "released");
     assert.deepEqual(gate.checks.map(({ account, model }) => ({ account, model })), [
-      { account: HOST_ACCOUNT, model: "GLM-5.3-Flash" },
       { account: HOST_ACCOUNT, model: "GLM-5.3-Flash" },
     ]);
     const requests = readFileSync(runtime.requestLog, "utf8").trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);

@@ -70,6 +70,7 @@
         "src/runtime/paths.ts",
         "src/runtime/resolver.ts",
         "src/runtime/child-env.ts",
+        "src/runtime/desktop-host-launch.ts",
         "src/runtime/doctor.ts",
         "src/runtime/node-runtime.ts"
       ]
@@ -96,6 +97,7 @@
       "description": "ZCode AppServer adapter, transport framing, provider failures, and failure-facts integration.",
       "paths": [
         "src/adapters/zcode-app-server-adapter.ts",
+        "src/runtime/desktop-host-launch.ts",
         "src/runtime/task-timeout.ts",
         "src/runtime/errors.ts",
         "src/diagnostics/failure-facts.ts",
@@ -367,6 +369,15 @@
       "gate": "T1",
       "domains": [
         "feedback-and-token-observability"
+      ]
+    },
+    {
+      "file": "test/desktop-host-launch.test.ts",
+      "type": "Integration",
+      "gate": "T2",
+      "domains": [
+        "appserver-adapter",
+        "zcode-path-discovery"
       ]
     },
     {
