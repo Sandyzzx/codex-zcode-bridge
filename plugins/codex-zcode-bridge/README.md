@@ -4,7 +4,7 @@
 
 ## 使用前
 
-当前 Preview 版本为 `2.0.0-preview.2`，需要 Node.js `>=24.16.0 <25`、Git、已安装并登录的 ZCode，以及支持插件 marketplace 的 Codex。
+当前 Preview 版本为 `2.0.0-preview.3`，需要 Node.js `>=24.16.0 <25`、Git、已安装并登录的 ZCode，以及支持插件 marketplace 的 Codex。
 
 添加 Preview marketplace 并安装 **Zcode Bridge (Preview)**：在桌面应用中先用 CLI 注册 marketplace，再到 **Plugins Directory** 选择并安装；CLI 用户可直接按下方命令安装。之后开启新对话并检查、信任插件的 `SessionStart` hook。Windows 上 hook 会检查本机环境并报告配置问题。Marketplace 安装无需克隆源码或运行 `npm install`；Node.js 和 ZCode 需另行安装。
 
@@ -24,7 +24,7 @@ codex plugin marketplace upgrade codex-zcode-bridge-preview
 固定到已验收的 Preview 快照：
 
 ```sh
-codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-preview-v2.0.0-preview.2
+codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-preview-v2.0.0-preview.3
 ```
 
 `preview` 分支用于持续更新；Tag 是固定快照，不会跟随后续 Preview 提交。

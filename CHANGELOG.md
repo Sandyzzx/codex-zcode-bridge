@@ -4,6 +4,32 @@
 
 当前版本以 `package.json` 和 Release Please manifest 为准。提交推送到 `master` 后，Release Please 会在有待发布变更时创建发布 PR，并同步更新版本文件与本日志；合并发布 PR 后会生成对应 Git tag 和 GitHub Release。
 
+## [2.0.0-preview.3](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-preview-v2.0.0-preview.2...codex-zcode-bridge-preview-v2.0.0-preview.3) (2026-11-11)
+
+Preview 2.0 Start Plan 多轮运行时认证与官方 Desktop Host 启动兼容性修复（EXPERIMENTAL / PREVIEW ONLY，仅面向开发者和测试用户；发布目标为 `preview` 分支，不经过 Release Please）。
+
+### Fixed
+
+* 官方 AppServer 统一使用已验证安装的 Desktop Host 启动身份：`--surface desktop`、`ZCODE_APP_VERSION` 和 `ZCODE_BUILD_COMMIT_ID`。
+* ASAR 元数据结构损坏时 fail-closed，不再把无效 Desktop 安装误判为缺失元数据。
+* Start Plan 私有凭据的一次性交付期限与 JWT 实际有效期分离，支持同一 Turn 内工具调用后的后续模型请求。
+* 每个 Task 复用一次权威 Billing 权益判定，并发 Runtime Header 请求 single-flight，并保留取消、账户切换和 Worker 退出时的 fail-closed 撤销语义。
+* JWT `exp` 继续被严格执行；无 `exp` 凭据仅在活动 Task 生命周期内缓存，并由父通道 EOF、取消和适配器完成撤销。
+
+### Validation
+
+* 真实 Start Plan E2E：`account:bigmodel-start-plan`、`GLM-5.3-Flash`、reasoning `max`，Windows + 官方 AppServer 0.17.1。
+* Billing GET 恰好 1 次，HTTP 200；主 Turn 3 次模型 HTTP 请求均为 200，跨 `Write` / `Read` 工具调用完成并输出合法 AgentReport。
+* Result Commit、Worker Exit、Process Tree Cleanup、Lease Release 全部通过，无 active lifecycle operation、无 Hold。
+* Coding Plan 定向回归、677 项 affected tests、SQLite Stress 3/3、Typecheck、Build、Plugin Validation、Bundle Freshness 通过。
+* Windows、Ubuntu Verify 与 SQLite resource matrix 通过。
+
+### Not verified
+
+* 真实 Start Plan E2E 仅在 Windows 上执行；Ubuntu 和其他部署目标仍为合成/CI 验证。
+* 历史 HTTP 405 根因仍未确认；本轮真实 E2E 未观察到 HTTP 405、Provider code 3012 或 unusual activity。
+* 一次辅助 `session_title` 请求在本地因 `Start Plan runtime identity is not verified.` 失败，`maxRetries=0`，不影响已完成的主动模型 Turn。
+
 ## [2.0.0-preview.2](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-preview-v2.0.0-preview.1...codex-zcode-bridge-preview-v2.0.0-preview.2) (2026-11-10)
 
 Preview 2.0 Account Provider 注册兼容性修复（EXPERIMENTAL / PREVIEW ONLY，仅面向开发者和测试用户；发布目标为 `preview` 分支，不经过 Release Please）。
