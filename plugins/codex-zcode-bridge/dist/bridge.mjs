@@ -34377,7 +34377,7 @@ function formatDuration(durationMs) {
 
 // src/mcp/server.ts
 var SERVER_NAME = "codex-zcode-bridge";
-var SERVER_VERSION = "2.0.0-preview.2"; // x-release-please-version
+var SERVER_VERSION = "2.0.0-preview.3"; // x-release-please-version
 var EXECUTION_NOT_VERDICT = "Results describe Bridge/ZCode execution only: status 'completed' means the invocation and report normalization finished, NOT that the calling host accepted the work. the calling host must independently review the workspace diff and checks before deciding PASS.";
 function okResult2(data) {
   return {
