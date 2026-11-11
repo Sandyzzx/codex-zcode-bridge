@@ -31,8 +31,8 @@
 | 版本 | 文件 | 行数 | 字符 | UTF-8 bytes | 估算 tokens |
 |---|---:|---:|---:|---:|---:|
 | Base | 9 | 321 | 23,965 | 48,437 | 15,562 |
-| New | 8 | 219 | 14,728 | 27,438 | 8,736 |
-| 差异 | -1 | -102 | -9,237 | -20,999 | -6,826 |
+| New | 8 | 230 | 15,481 | 28,939 | 9,220 |
+| 差异 | -1 | -91 | -8,484 | -19,498 | -6,342 |
 
 Token 估算公式：CJK/fullwidth 标点按 1 token，其余字符按 3.5 字符/token 向上取整。这是文本估计，不是 Host/tokenizer 实测；真实节省 **UNMEASURED**。
 
@@ -61,14 +61,24 @@ Token 估算公式：CJK/fullwidth 标点按 1 token，其余字符按 3.5 字�
 
 ## 4. 离线配对评估
 
-机器可读夹具：`test/fixtures/master-skill-evaluation-20261111.json`；测试入口：`test/skill-policy.test.ts`。相同 18 个场景静态作用于 Base 与 New 文本，四项指标（规划责任、边界质量、验收质量、效率）各 0–2 分。
+机器可读夹具：`test/fixtures/master-skill-evaluation-20261111.json`；测试入口：`test/skill-policy.test.ts`。相同 19 个场景由人工静态评审分别作用于 Base 与 New 文本，四项指标（规划责任、边界质量、验收质量、效率）各 0–2 分。自动测试只检查元数据、场景覆盖、评分范围/总分和 forbidden 规则覆盖，不自动推理 Skill 行为。
 
-- 覆盖任务要求的 14 个必选场景，另加未知进程身份、权限请求、模型路由冲突、报告修复。
-- Base：18 场景 120/144；`model-routing-conflict` 4/8，另有多处效率扣分。
-- New：18 场景 144/144；每场景 8/8，四项均无 0。
+- 覆盖任务要求的 14 个必选场景，另加用户指定执行器、未知进程身份、权限请求、模型路由冲突、报告修复。
+- Base：19 场景 127/152；`model-routing-conflict` 4/8，另有多处效率扣分。
+- New：19 场景 152/152；每场景 8/8，四项均无 0。
 - 未出现越权派发、额度耗尽后续作、Worker 报告当验收、`auto` 当 MCP 字段或无意义阶段门。
 
 这是人工静态配对评估；未调用独立模型，未使用相同模型/推理档位执行真实输出 A/B，因此 **真实模型 A/B PASS 不能声称**。
+
+## 4.1 Review 定向修订
+
+根据 PR #78 的独立审查意见，本轮追加修正且不改变报告制度或 Runtime 合同：
+
+- Root 恢复“用户明确选择 ZCode/Bridge 时，不得仅因 Master 自认为更快而擅自自做”的执行器优先规则。
+- `task-dispatch.md` 固化四类 `task_id` 处理：相同内容幂等重放、不同内容 `TASK_ID_CONFLICT`、回执丢失/结果未知先查原 ID、已失败任务按 Result/Cleanup/Hold 决定 Recovery 或 `zcode_continue`。
+- Recovery 授权限定为当前明确操作；禁止同一 Operation 并发终止，失败后保持 Hold，原授权范围内可重试，身份/范围变化重新授权。
+- Ledger 枚举限定为可选 ProjectTask 局部视图，不把它说成 Bridge Task/Attempt 全局发现能力。
+- 补齐 ADR-031 非权威权益缓存对后续新任务的选路影响，以及未知/网络/风控/身份失败不回退的边界。
 
 ## 5. 渐进式加载路由
 
@@ -87,7 +97,7 @@ Token 估算公式：CJK/fullwidth 标点按 1 token，其余字符按 3.5 字�
 
 - `npm run test:affected`：最终 **PASS**；TARGETED 选择 `test/skill-policy.test.ts`，包含 typecheck、build、plugin validation、`git diff --check`；9 tests / 9 pass / 0 fail / 0 skipped；`STRESS_TESTS_NOT_APPLICABLE`。
 - 中间两次测试失败为测试仍匹配旧措辞（root 未含“默认不自动调用”与“额度”字面），已更新断言后通过；一次 build 因新 worktree 缺依赖失败，执行 `npm ci` 后复跑通过。
-- Frontmatter、reference 存在性、删除文件残留引用、P0/授权/Recovery/auto/project-test 断言、18 场景评估断言均由上述测试覆盖。
+- Frontmatter、reference 存在性、删除文件残留引用、P0/授权/Recovery/auto/project-test/task_id 幂等/模型路由/评估元数据断言、19 场景评估断言均由上述测试覆盖。
 - 手工核对 `src/mcp/schemas.ts`、`src/interfaces.ts`、`src/prompts/task-prompt.ts`：生产代码和合同未改；`model.provider_id` 公开可选、持久化前路由为完整选择、五字段 JSON 输出合同仍由 Prompt Builder 注入。
 - 未运行 full CI、压力测试、真实 Provider E2E、真实 Host token 测量或生产 Recovery。
 
@@ -99,4 +109,4 @@ Token 估算公式：CJK/fullwidth 标点按 1 token，其余字符按 3.5 字�
 2. SQLite Hold Recovery 与固定 `yolo` 行为仅静态核对当前合同/源码，未做真实进程恢复验收。
 3. 仓库外是否存在任务所述既有评估体系不确定；本候选使用新增静态夹具。
 4. Skill 精简不更新已安装插件；安装面需要后续发布/安装流程处理。
-5. 无阻塞 Owner 决定；是否接受“root 63 行（略高于建议 55–60 行）”以保留 P0 可读性，可在 review 时决定。
+5. 无阻塞 Owner 决定；是否接受“root 64 行（略高于建议 55–60 行）”以保留 P0 可读性，可在 review 时决定。

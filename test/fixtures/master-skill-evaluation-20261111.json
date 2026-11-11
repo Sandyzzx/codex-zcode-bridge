@@ -1,8 +1,11 @@
 {
   "version": 1,
   "generated_at": "2026-11-11",
-  "comparison": "static offline paired comparison; no independent model was called",
+  "comparison": "manual static paired review matrix; no independent model was called",
   "model": "none",
+  "method": "manual static review",
+  "automated_model_execution": false,
+  "scoring_source": "human reviewer",
   "input_identical": true,
   "scoring_dimensions": ["planning", "boundary", "acceptance", "efficiency"],
   "pass_rule": {
@@ -80,6 +83,13 @@
       "expected": "Do not dispatch; ask when needed; ordinary development authorization is insufficient.",
       "old": {"planning": 2, "boundary": 2, "acceptance": 2, "efficiency": 1, "total": 7, "note": "Correct rule repeated in root, delegation, and dispatch workflow."},
       "new": {"planning": 2, "boundary": 2, "acceptance": 2, "efficiency": 2, "total": 8, "note": "Authorization has one primary root definition."}
+    },
+    {
+      "id": "user-selected-executor",
+      "required": true,
+      "expected": "When the user explicitly selects ZCode/Bridge, Master must not replace it with self-implementation merely because Master appears faster; Master still prepares boundaries and independently accepts.",
+      "old": {"planning": 2, "boundary": 2, "acceptance": 2, "efficiency": 1, "total": 7, "note": "The rule is explicit in root and delegation but duplicated."},
+      "new": {"planning": 2, "boundary": 2, "acceptance": 2, "efficiency": 2, "total": 8, "note": "One root rule preserves executor choice without repeating it in references."}
     },
     {
       "id": "session-level-authorization",

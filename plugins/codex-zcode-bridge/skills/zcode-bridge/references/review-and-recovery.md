@@ -16,8 +16,8 @@
 ## 失败、取消与 Hold
 
 - `failed` 用 `zcode_result.error_code` 判断原因，不用 feedback 标签替代。`cleanup_failed` 或 `cleanup_unverified` 是清理事实，与代码验收分开；后续 `observation.cleanup=verified` 只说明取得退出证据，不改写历史失败。
-- 对已知 `failed + cleanup_unverified` Task，先报告可确认的 workspace、Task、Attempt 和原因。MCP 没有 Task 枚举工具，`zcode_status` 不返回 workspace；缺失写未知，不猜测。
-- `zcode_cancel` 只接受 `{ task_id }`，可能按原 PID/start fingerprint 终止仍存活 Worker，没有 dry-run/authorize 参数。必须先取得用户对可能终止原 Worker 的明确授权；获准后调用一次，再读 `zcode_status`。
-- Recovery 只有原身份、recorded-tree claimant、interaction 状态和 Operation CAS 全部验证成功才释放；失败、未知或响应丢失保持 Hold。不得拼接底层清理命令、重放 Prompt、创建 Attempt 或手工改 SQLite 绕过。
+- 对已知 `failed + cleanup_unverified` Task，先报告可确认的 workspace、Task、Attempt 和原因。核心 MCP 没有 Bridge Task/Attempt 全局枚举工具；可选 Ledger 只能枚举其管理的 ProjectTask，不能发现所有 Bridge 任务。`zcode_status` 不返回 workspace；缺失写未知，不猜测。
+- `zcode_cancel` 只接受 `{ task_id }`，可能按原 PID/start fingerprint 终止仍存活 Worker，没有 dry-run/authorize 参数。用户授权的是当前明确 Recovery 操作，不是无限期终止权限；必须先取得用户的明确授权。获准后同一 Operation 一次只发起一个 cancel，调用后读 `zcode_status`。
+- Recovery 只有原身份、recorded-tree claimant、interaction 状态和 Operation CAS 全部验证成功才释放；失败、未知或响应丢失保持 Hold。停止失败后先重新核对原 Worker 身份和状态，原授权范围内可再次尝试；目标身份或操作范围变化时重新取得用户授权。不得并发重复发出终止信号，也不得拼接底层清理命令、重放 Prompt、创建 Attempt 或手工改 SQLite 绕过。
 - Recovery 成功后先检查原 workspace Git diff/WIP，再讨论是否创建新 Attempt；不自动 reset、clean、覆盖 checkout 或删除用户源码。单路径 Hold 不阻塞其他独立 workspace。
 - 用户取消时调用 `zcode_cancel` 并确认终态。`zcode_usage_exhausted` 表示本次执行中断：停止编辑、派发、续作和自动重试，告知用户并等待确认额度恢复。
