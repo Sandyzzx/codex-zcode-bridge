@@ -2,8 +2,8 @@
 
 > Status: AUTHORITATIVE（仅指本索引）
 > Last updated: 2026-11-11
-> Last verified: 2026-11-11，核对现有 ADR 的适用范围、ADR-029 退役影响、ADR-030 单次任务 Billing verdict 修订及 Desktop Host 启动身份。
-> Verified against: 52015d12f37011f4d389e07941c31491457611ef
+> Last verified: 2026-11-11，既有适用范围沿用 52015d12 核对；本轮新增 ADR-032 Accepted 目标及两项 Proposed 草案路由，不变更生产合同。
+> Verified against: 372e90622772b070357a278f1da3dea58fa42dee
 
 先读当前 [架构](../ARCHITECTURE.md)/[接口](../INTERFACES.md)，只在需要解释取舍时加载对应决策。文件保持原路径和历史正文；Partially superseded 的标注优先于历史段落，不得拿旧 JSON 实现恢复当前合同。
 
@@ -27,6 +27,13 @@
 | 退役/Core | [029](ADR-029-legacy-runtime-retirement.md) | Owner 已批准内部及公共 Core 退役；未来主版本发布 |
 | Start Plan Provider | [030](ADR-030-start-plan-provider-preflight.md) | 每任务一次权威 Billing verdict、Provider 注册门及失败清理边界；不得从旧缓存推断权益 |
 | Model Routing | [031](ADR-031-model-routing-v1.md) | Start Plan 别名、`prefer_startplan` 自动选路与动态凭据发现；路由不替代实时授权 |
+| 下一阶段目标（未实施） | [032](ADR-032-existing-worker-official-host-integration.md) | Accepted：现有 Worker 内官方 Host、内部 Binding、官方 ProcessManager；无独立 Companion/新 IPC/业务库；保留现行并发及生命周期合同 |
+
+## 未决草案 / Proposed only
+
+[官方 Runtime Cleanup Proof 与账户所有权草案](../research/zcode-companion-owner-architecture-convergence-2026-11-11/ADR_PROPOSALS.md) 保持研究目录中的两个 Proposed 草案，不分配正式 Accepted 编号。ADR-032 不批准 Job 证据替代、账户/权益来源切换或删除 ADR-030；正式生产合同继续生效。
+
+[POC-1 进入条件](../research/zcode-official-host-architecture-freeze-2026-11-11/POC_1_ENTRY.md) 是后续计划，需要单独授权。
 
 ## 部分被替代 / Partially superseded
 

@@ -2,10 +2,10 @@
 
 > Status: AUTHORITATIVE
 > Last updated: 2026-11-11
-> Last verified: 2026-11-11，核对 Preview.3 SQLite-only 入口、Desktop Host 启动身份、Start Plan/Coding Plan 路由与 R1–R5 调用链。
-> Verified against: 52015d12f37011f4d389e07941c31491457611ef
+> Last verified: 2026-11-11，既有 Preview.3 实现沿用 52015d12 的核对范围；本轮仅核对 ADR-032 目标架构与当前实现的区分，未构建或运行新路径。
+> Verified against: 372e90622772b070357a278f1da3dea58fa42dee（相对 0b70edbb 仅分支工作流变化）
 
-本文件描述当前实现。公开合同见 [INTERFACES.md](INTERFACES.md)，宿主构建见 [SHARED_CORE.md](SHARED_CORE.md)，配置和升级见 [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md)。决策按主题从 [ADR 索引](decisions/README.md) 加载。
+本文件先描述当前实现，末节单列已接受但未实施的目标。公开合同见 [INTERFACES.md](INTERFACES.md)，宿主构建见 [SHARED_CORE.md](SHARED_CORE.md)，配置和升级见 [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md)。决策按主题从 [ADR 索引](decisions/README.md) 加载。
 
 ## 单一生产链
 
@@ -64,3 +64,11 @@ Attention 与 Thin Waiter 共用 SQLite snapshot 和只读等待谓词。Attenti
 新装和旧 JSON 安装均从 Fresh SQLite Bootstrap 开始；旧 JSON 用户数据保持原样，运行时不读取或迁移它。现有 SQLite receipt、历史 `json_artifacts` 校验及 schema-v13.sql 不退役。v13→v14 只允许显式离线复制升级，工具随插件交付。
 
 构建产物包含 Bridge、Worker、Thin Waiter、v14 升级命令、v13/v14 Schema 与浏览器后端。Core API 破坏按 Owner 已批准的 [ADR-029](decisions/ADR-029-legacy-runtime-retirement.md) 在 Preview 2.0 发布线交付；当前 Preview 为 2.0.0-preview.3。该退役不更改 Marketplace MCP 工具/schema。
+
+## 已接受目标：Worker 内官方 Host（未实施）
+
+[ADR-032](decisions/ADR-032-existing-worker-official-host-integration.md) 已 Accepted：Bridge Host/Core → Existing Worker → 现有 CodingAgentAdapter → 内部 Upstream Binding → 官方 Agent Service/ProcessManager → 官方 AppServer（AgentRuntime）。正常 AppServer 生命周期由官方 ProcessManager 独占；每 Worker 初始一个执行 AppServer，不共享无关 Task。Bridge 保留现有并发、SQLite Authority、Claim、Hold、Recovery、Cleanup 和 Release 合同。
+
+目标排除独立 Companion 服务、新增 Companion IPC/业务数据库、平行 RuntimeAdapter、Shared AppServer Pool 和第二套任务/恢复系统。固定官方源码、匹配 Host/AppServer、Node/native 与资源构建配套制品；长期不依赖 Desktop Main 或用户安装目录。必要时只能凭 ABI、账户共享或性能实证通过新 ADR 重新审查排除项。
+
+上文现行安装发现、Desktop surface/身份、认证和清理路径尚未切换。最小 Host 构建运行、依赖闭包、profile/同 profile 并发、Job 持久证据映射、BOM/许可/回滚及独立真实 Start Plan 均未完成；[账户和 Cleanup 草案](research/zcode-companion-owner-architecture-convergence-2026-11-11/ADR_PROPOSALS.md) 仍 Proposed，ADR-030 的 Preview.3 单次任务 verdict 与 Private Lease/HANDLE/ACK 继续有效。[POC-1](research/zcode-official-host-architecture-freeze-2026-11-11/POC_1_ENTRY.md) 仅为计划，须单独授权。
