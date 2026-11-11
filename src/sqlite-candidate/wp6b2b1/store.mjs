@@ -607,8 +607,18 @@ export class IsolatedAdmissionStore {
     const pending=p.db+'.v13-v14-pending.json';
     const version=()=>{
       if(!existsSync(p.db))return null;
-      const db=new DatabaseSync(p.db,{readOnly:true,timeout:1000});
-      try{return db.prepare('PRAGMA user_version').get().user_version;}finally{db.close();}
+      try {
+        const db=new DatabaseSync(p.db,{readOnly:true,timeout:1000});
+        try{return db.prepare('PRAGMA user_version').get().user_version;}finally{db.close();}
+      } catch(error) {
+        // A corrupt/unrelated file is not an upgrade candidate. Let the normal
+        // production Authority reader return its established, normalized
+        // sqlite_existing_database_unverified error. With a durable upgrade
+        // marker present, however, an unreadable database is ambiguous and
+        // must remain fenced for recovery rather than being ignored.
+        if(existsSync(pending))throw error;
+        return null;
+      }
     };
     const names=token=>({
       stage:path.join(p.root,databaseFileName+'.v14-stage-'+token),
@@ -643,8 +653,9 @@ export class IsolatedAdmissionStore {
       }else if(current!==13||existsSync(backup))fail('upgrade_recovery_ambiguous');
       assertStartupLock();resetPending(stage);
     }
-    if(version()===14)return {state:'already_v14',destination_version:14};
-    if(version()!==13)fail('upgrade_requires_v13');
+    const sourceVersion=version();
+    if(sourceVersion===14)return {state:'already_v14',destination_version:14};
+    if(sourceVersion!==13)return {state:'not_v13',source_version:sourceVersion};
     for(const file of [p.intent,p.poison,p.bootstrapPending,p.cutoverPending])
       if(existsSync(file))fail('upgrade_source_blocked');
 
