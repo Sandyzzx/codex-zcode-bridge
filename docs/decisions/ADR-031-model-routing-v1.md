@@ -1,5 +1,7 @@
 # ADR-031：Model Routing v1 — Start Plan 优先与显式模型选择
 
+> Applicability: ACTIVE — 下文对 ADR-030 的 prepare/issue 实时授权引用，以该 ADR 页首 Preview.3 修订为准：每任务一次权威 Billing verdict；路由本身不增加 Billing 请求。原设计正文保留用于追溯。
+
 > Status: DECISION
 > Date: 2026-11-09
 > Decision: ACCEPTED — Owner 授权 Model Routing v1 合同冻结与最小实施

@@ -38,3 +38,5 @@ AUTHORITATIVE 描述当前事实/合同；DECISION 记录已批准取舍；RESEA
 Preview.3 的 Start Plan 真实证据目前只覆盖 Windows、官方 AppServer `0.17.1` 和 `GLM-5.3-Flash`。其他 Start Plan 模型、其他平台、CAPTCHA 与 unusual-activity 的无人值守处理仍未认证；不要把单模型真实请求成功写成通用能力。
 
 当前事实放 docs 顶层，设计取舍放 decisions，研究放 research，一次性交付放 reports，历史放 archive；草稿放已忽略的 docs/_draft。CHANGELOG 仍由 release-please 维护，不手改。
+
+历史资产的本轮分类与有限清理见 [Legacy & Dead Code Audit v1](reports/LEGACY_DEAD_CODE_AUDIT_V1.md)；该报告是候选证据，不能替代当前合同或各 PR 的验收。

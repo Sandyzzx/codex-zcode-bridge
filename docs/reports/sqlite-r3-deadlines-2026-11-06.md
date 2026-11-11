@@ -68,7 +68,7 @@ Result 通过完整帧、绑定和语义校验后先落库，再等待 Worker cl
 
 共享 task-timeout.ts 现同时属于 Adapter 和 SQLite 影响域；选择器断言验证单文件期限修改会选择三类生产链测试及现行压力门禁。映射修改前后自动执行文件集均为 90 个，没有新增手工 E2E 或 Fixture。
 
-完整 1000 项用例及逐项耗时见 [最终用例清单](../../.run/evidence/r3-windows-full-final-cases.json)，每一条均来自实际 Node 报告；[全部运行汇总](../../.run/evidence/r3-validation-runs.json) 保留了开发反例、失败运行和修正后运行。两项既有跳过分别为 Windows 下的 POSIX mode-bit 检查、原已跳过的 injected ENOTEMPTY fixture case，未新增跳过。
+完整 1000 项用例及逐项耗时见任务私有归档 `r3-windows-full-final-cases.json`，每一条均来自实际 Node 报告；`r3-validation-runs.json` 保留了开发反例、失败运行和修正后运行。这两个证据文件不属于 Git tree，本报告仅保留其文件名和结论。两项既有跳过分别为 Windows 下的 POSIX mode-bit 检查、原已跳过的 injected ENOTEMPTY fixture case，未新增跳过。
 
 ## 变更与兼容
 

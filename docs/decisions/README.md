@@ -1,9 +1,9 @@
 # 决策路由 / Decisions
 
 > Status: AUTHORITATIVE（仅指本索引）
-> Last updated: 2026-11-07
-> Last verified: 2026-11-07，核对现有 ADR 的适用范围及 ADR-029 退役影响；历史实验结论未重新认证。
-> Verified against: a46137fe46b567271a7756be819361132625278c + ADR-029 本地候选
+> Last updated: 2026-11-11
+> Last verified: 2026-11-11，核对现有 ADR 的适用范围、ADR-029 退役影响、ADR-030 单次任务 Billing verdict 修订及 Desktop Host 启动身份。
+> Verified against: 52015d12f37011f4d389e07941c31491457611ef
 
 先读当前 [架构](../ARCHITECTURE.md)/[接口](../INTERFACES.md)，只在需要解释取舍时加载对应决策。文件保持原路径和历史正文；Partially superseded 的标注优先于历史段落，不得拿旧 JSON 实现恢复当前合同。
 
@@ -11,7 +11,7 @@
 
 | 主题 | 决策 | 范围 |
 |---|---|---|
-| 执行链 | [001](ADR-001-appserver-as-production-execution-path.md)、[003](ADR-003-execution-directory-prepared-by-host.md) | app-server 唯一路径；Host 准备执行目录 |
+| 执行链 | [001](ADR-001-appserver-as-production-execution-path.md)、[003](ADR-003-execution-directory-prepared-by-host.md) | app-server 唯一路径（Desktop surface/身份由当前架构文档补充）；Host 准备执行目录 |
 | Authority/观察 | [004](ADR-004-separate-control-state-and-observation.md)、[016 v3](ADR-016-stop-the-world-json-to-sqlite-cutover.md) | SQLite-only Fresh Bootstrap；补充观察不是状态 Authority |
 | Provider/报告 | [006](ADR-006-provider-quota-failure-diagnostics.md) | 明确额度耗尽分类；不自动重试 |
 | Browser | [007](ADR-007-browser-host-rpc.md) | 可选独立 managed CDP；默认关闭 |
@@ -25,7 +25,7 @@
 | 期限 | [027](ADR-027-execution-and-cleanup-deadlines.md) | Owner 已接受 R3；执行/交付/清理分工 |
 | Launch | [028](ADR-028-pre-intent-workspace-refusal.md) | Owner 已接受 R4；Intent 前拒绝与 Intent 后 unknown |
 | 退役/Core | [029](ADR-029-legacy-runtime-retirement.md) | Owner 已批准内部及公共 Core 退役；未来主版本发布 |
-| Start Plan Provider | [030](ADR-030-start-plan-provider-preflight.md) | 任务级实时权益预检、Provider 注册门及失败清理边界；不得从旧缓存推断权益 |
+| Start Plan Provider | [030](ADR-030-start-plan-provider-preflight.md) | 每任务一次权威 Billing verdict、Provider 注册门及失败清理边界；不得从旧缓存推断权益 |
 | Model Routing | [031](ADR-031-model-routing-v1.md) | Start Plan 别名、`prefer_startplan` 自动选路与动态凭据发现；路由不替代实时授权 |
 
 ## 部分被替代 / Partially superseded
