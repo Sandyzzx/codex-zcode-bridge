@@ -7,7 +7,7 @@
 
 ### 策略选择与规划责任
 
-Codex 是 Master，ZCode 是负责完整交付的 Coding Worker。**仅在已授权使用 Bridge 的目标内**，默认采用 `auto` 选择策略：Master 评估完整交付与真实阶段门，最终选用 `whole_task` 或 `staged`；二者仍遵守 ADR-010。`auto` 是 Master 决策偏好，**不是** Bridge 执行模式、MCP 参数、TaskPackage 新字段或运行时状态。用户明确指定某策略时依策略执行，仍不能绕过审批、安全边界与停止门。
+Codex 是 Master，ZCode 是负责完整交付的 Coding Worker。**仅在已授权使用 Bridge 的目标内**，只读代码任务可采用 `auto` 选择策略；涉及写入的任务须明确选择 `whole_task` 或 `staged`：Master 评估完整交付与真实阶段门，最终选用 `whole_task` 或 `staged`；二者仍遵守 ADR-010。`auto` 是 Master 决策偏好，**不是** Bridge 执行模式、MCP 参数、TaskPackage 新字段或运行时状态。用户明确指定某策略时依策略执行，仍不能绕过审批、安全边界与停止门。
 
 **自动档的决策顺序**：先确认本目标 Bridge 调用授权；用户没授权时不提交新任务。授权存在时，确认目标/验收是否可独立闭环，关键合同/权限是否冻结、是否存在必须停下等待的决定、执行预算是否足够。完整闭环优先 `whole_task`；真实审批、架构/安全/持久化合同未决或依赖阶段成果时选择 `staged`。不因文件数、长度、价格或模型名称机械切换。用户已明确指定使用 ZCode 时，不因 Master 认为“自己做更快”而擅自放弃该执行器。
 
