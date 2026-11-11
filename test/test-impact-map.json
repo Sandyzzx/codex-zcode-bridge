@@ -97,6 +97,7 @@
       "description": "ZCode AppServer adapter, transport framing, provider failures, and failure-facts integration.",
       "paths": [
         "src/adapters/zcode-app-server-adapter.ts",
+        "src/adapters/official-host-adapter.ts",
         "src/runtime/desktop-host-launch.ts",
         "src/runtime/task-timeout.ts",
         "src/runtime/errors.ts",
@@ -912,6 +913,17 @@
         "appserver-adapter",
         "process-cleanup-and-locks",
         "provider-catalog"
+      ]
+    },
+    {
+      "file": "test/official-host-adapter.test.ts",
+      "type": "Integration",
+      "gate": "T2",
+      "domains": [
+        "appserver-adapter",
+        "process-cleanup-and-locks",
+        "provider-catalog",
+        "worker-launch"
       ]
     },
     {

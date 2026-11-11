@@ -8778,6 +8778,11 @@ async function openClaimOnlyDriver(options) {
   if (!Number.isSafeInteger(processProbeTimeoutMs) || processProbeTimeoutMs < 1 || processProbeTimeoutMs > DEFAULT_PROCESS_PROBE_TIMEOUT_MS) {
     throw new LifecycleGateError("process_probe_timeout_invalid");
   }
+  const processTreeProbeTimeoutMs = options.testProcessTreeProbeTimeoutMs ?? DEFAULT_PROCESS_TREE_PROBE_TIMEOUT_MS;
+  if (!Number.isSafeInteger(processTreeProbeTimeoutMs) || processTreeProbeTimeoutMs < 1 || processTreeProbeTimeoutMs > DEFAULT_PROCESS_TREE_PROBE_TIMEOUT_MS) {
+    throw new LifecycleGateError("process_tree_probe_timeout_invalid");
+  }
+  const verifyTreeClaimants = options.testVerifyProcessTreeClaimantsClean ?? verifyProcessTreeClaimantsClean;
   const modules = await (options.loadModules?.() ?? loadLifecycleCandidateModules());
   let raw;
   try {
@@ -9029,11 +9034,15 @@ async function openClaimOnlyDriver(options) {
       }
       let treeOutcome;
       if ((phase === "result_committed" || phase === "cleanup_pending" || phase === "cleanup_unverified") && identityState === "exited") {
-        treeOutcome = await processTreeWithDeadline([{ pid: processId, fingerprint }], 3e4);
+        treeOutcome = await processTreeWithDeadline(
+          [{ pid: processId, fingerprint }],
+          processTreeProbeTimeoutMs,
+          verifyTreeClaimants
+        );
       }
       if ((phase === "result_committed" || phase === "cleanup_pending" || phase === "cleanup_unverified") && identityState === "exited") {
-        const completeCleanupClosureAvailable = treeOutcome?.status === "resolved" && treeOutcome.result.clean === true && treeOutcome.result.livePids.length === 0;
-        if (completeCleanupClosureAvailable && treeOutcome?.status === "resolved" && treeOutcome.result.clean === true && treeOutcome.result.livePids.length === 0) {
+        const completeCleanupClosureAvailable = treeOutcome?.status === "resolved" && treeOutcome.result.clean === true && treeOutcome.result.livePids.length === 0 && treeOutcome.result.observedPids.includes(processId);
+        if (completeCleanupClosureAvailable && treeOutcome?.status === "resolved") {
           const currentOperation = asRecord3(port.readOperation(operationId));
           if (currentOperation.task_id !== operation.task_id || Number(currentOperation.attempt) !== Number(operation.attempt) || Number(currentOperation.generation) !== Number(operation.generation) || currentOperation.claim_id !== claimId || currentOperation.claim_worker_identity_digest !== workerDigest) {
             return { state: "held", operation_id: operationId, phase: String(currentOperation.phase), reason: "recovery_identity_fence_changed" };
@@ -9109,6 +9118,7 @@ async function openClaimOnlyDriver(options) {
             throw new LifecycleGateError("recovery_cleanup_pending_not_persisted");
           }
           const cleanupFence = { ...fence, revision: positive3(Number(pending.revision), "recovery_cleanup_revision_missing") };
+          const observedPids = [...new Set(treeOutcome.result.observedPids)].sort((left, right) => left - right);
           const processTreeFacts = {
             contract: "sqlite-candidate-recovery-worker-tree-v1",
             operation_id: operationId,
@@ -9120,8 +9130,10 @@ async function openClaimOnlyDriver(options) {
             root_process_id: processId,
             root_start_fingerprint: fingerprint,
             identity_state: "exited",
+            scan_scope: "worker_root_recorded_tree_and_observed_claimants",
             scan_clean: true,
-            live_pids: []
+            live_pids: [],
+            observed_pids: observedPids
           };
           const resourceFacts = {
             contract: "sqlite-candidate-recovery-operation-resources-v1",
@@ -10021,6 +10033,8 @@ async function openClaimOnlyDriver(options) {
                       claimId,
                       probe,
                       processProbeTimeoutMs,
+                      verifyTreeClaimants,
+                      processTreeProbeTimeoutMs,
                       workerExitCode,
                       executionCleanup,
                       executionCleanup ? "adapter_verified" : "adapter_unverified",
@@ -10156,7 +10170,7 @@ async function openClaimOnlyDriver(options) {
     }
   };
 }
-async function finalizeClaimedWorkerCleanup(port, input, generation, claimId, probe, probeTimeoutMs, workerExitCode, executionCleanup, adapterCleanupState, stage) {
+async function finalizeClaimedWorkerCleanup(port, input, generation, claimId, probe, probeTimeoutMs, verifyTreeClaimants, processTreeProbeTimeoutMs, workerExitCode, executionCleanup, adapterCleanupState, stage) {
   stage("cleanup_prepare_start");
   const current = asRecord3(port.readOperation(input.operationId));
   const claimIdentity = parseEvidence(current.claim_worker_identity_json, "cleanup_worker_identity_missing");
@@ -10183,6 +10197,7 @@ async function finalizeClaimedWorkerCleanup(port, input, generation, claimId, pr
   const cleanupFence = { ...fence, revision: positive3(pending.revision, "cleanup_pending_revision_missing") };
   let probeState = "unknown";
   let cleanupEvidence;
+  let cleanupFailureReason;
   if (workerExitCode === 0 && executionCleanup) {
     try {
       stage("cleanup_identity_probe_start", { pid: rootProcessId });
@@ -10203,47 +10218,72 @@ async function finalizeClaimedWorkerCleanup(port, input, generation, claimId, pr
         { state: verdict2?.state ?? "unknown", reason: verdict2?.reason_code ?? probeOutcome.status }
       );
       if (verdict2?.state === "exited") {
-        const launchReceiptDigest = text(current.launch_receipt_digest, "cleanup_launch_receipt_digest_missing");
-        const resultCommitRef = text(current.result_commit_ref, "cleanup_result_commit_ref_missing");
-        const processTreeFacts = {
-          contract: executionCleanup.source === "zcode_app_server_adapter" ? "real-zcode-claimed-worker-process-tree-v1" : "synthetic-claim-worker-process-tree-v1",
-          process_id: rootProcessId,
-          start_fingerprint: rootFingerprint,
-          worker_exit_code: workerExitCode,
-          probe_state: verdict2.state,
-          descendants: [],
-          execution_cleanup_proof_digest: sha2562(canonicalJson2(executionCleanup))
-        };
-        const resourceFacts = {
-          contract: executionCleanup.source === "zcode_app_server_adapter" ? "real-zcode-adapter-resources-v1" : "synthetic-claimed-worker-resources-v1",
-          adapter_cleanup_state: adapterCleanupState,
-          execution_cleanup_source: executionCleanup.source,
-          execution_cleanup_method: executionCleanup.method,
-          worker_stdio_closed: true,
-          interaction_channels: false,
-          cleanup_scope: "worker_and_adapter_descendant_resources",
-          managed_browser_cleanup_verified: executionCleanup.managed_browser_cleanup_verified,
-          workspace_retained: executionCleanup.workspace_retained
-        };
-        cleanupEvidence = {
-          source: "manager_os_cleanup_verification",
-          fixture: false,
-          operation_id: input.operationId,
-          task_id: input.task.task_id,
-          attempt: input.attempt,
-          generation,
-          claim_id: claimId,
-          worker_identity_digest: claimIdentityDigest,
-          launch_receipt_digest: launchReceiptDigest,
-          result_commit_ref: resultCommitRef,
-          process_tree_digest: sha2562(canonicalJson2(processTreeFacts)),
-          resources_digest: sha2562(canonicalJson2(resourceFacts)),
-          root_process_id: rootProcessId,
-          root_start_fingerprint: rootFingerprint,
-          worker_tree_complete: true,
-          operation_resources_complete: true,
-          workspace_touched: false
-        };
+        stage("cleanup_tree_scan_start", { pid: rootProcessId });
+        const treeOutcome = await processTreeWithDeadline(
+          [{ pid: rootProcessId, fingerprint: rootFingerprint }],
+          processTreeProbeTimeoutMs,
+          verifyTreeClaimants
+        );
+        const treeComplete = treeOutcome.status === "resolved" && treeOutcome.result.clean === true && treeOutcome.result.livePids.length === 0 && treeOutcome.result.observedPids.includes(rootProcessId);
+        stage(
+          treeOutcome.status === "timeout" ? "cleanup_tree_scan_timeout" : treeOutcome.status === "rejected" ? "cleanup_tree_scan_failed" : treeComplete ? "cleanup_tree_scan_clean" : "cleanup_tree_scan_incomplete",
+          treeOutcome.status === "resolved" ? {
+            clean: treeOutcome.result.clean,
+            live_pid_count: treeOutcome.result.livePids.length,
+            observed_pid_count: treeOutcome.result.observedPids.length,
+            execution_cleanup_method: executionCleanup.method
+          } : {}
+        );
+        if (treeComplete && treeOutcome.status === "resolved") {
+          const launchReceiptDigest = text(current.launch_receipt_digest, "cleanup_launch_receipt_digest_missing");
+          const resultCommitRef = text(current.result_commit_ref, "cleanup_result_commit_ref_missing");
+          const observedPids = [...new Set(treeOutcome.result.observedPids)].sort((left, right) => left - right);
+          const processTreeFacts = {
+            contract: executionCleanup.source === "zcode_app_server_adapter" ? "real-zcode-claimed-worker-process-tree-v1" : "synthetic-claim-worker-process-tree-v1",
+            process_id: rootProcessId,
+            start_fingerprint: rootFingerprint,
+            worker_exit_code: workerExitCode,
+            probe_state: verdict2.state,
+            scan_scope: "worker_root_recorded_tree_and_observed_claimants",
+            scan_clean: true,
+            live_pids: [],
+            observed_pids: observedPids,
+            execution_cleanup_proof_digest: sha2562(canonicalJson2(executionCleanup))
+          };
+          const resourceFacts = {
+            contract: executionCleanup.source === "zcode_app_server_adapter" ? "real-zcode-adapter-resources-v1" : "synthetic-claimed-worker-resources-v1",
+            adapter_cleanup_state: adapterCleanupState,
+            execution_cleanup_source: executionCleanup.source,
+            execution_cleanup_method: executionCleanup.method,
+            worker_stdio_closed: true,
+            interaction_channels: false,
+            cleanup_scope: "worker_and_adapter_descendant_resources",
+            managed_browser_cleanup_verified: executionCleanup.managed_browser_cleanup_verified,
+            workspace_retained: executionCleanup.workspace_retained
+          };
+          cleanupEvidence = {
+            source: "manager_os_cleanup_verification",
+            fixture: false,
+            operation_id: input.operationId,
+            task_id: input.task.task_id,
+            attempt: input.attempt,
+            generation,
+            claim_id: claimId,
+            worker_identity_digest: claimIdentityDigest,
+            launch_receipt_digest: launchReceiptDigest,
+            result_commit_ref: resultCommitRef,
+            process_tree_digest: sha2562(canonicalJson2(processTreeFacts)),
+            resources_digest: sha2562(canonicalJson2(resourceFacts)),
+            root_process_id: rootProcessId,
+            root_start_fingerprint: rootFingerprint,
+            worker_tree_complete: true,
+            operation_resources_complete: true,
+            workspace_touched: false
+          };
+        } else {
+          probeState = "incomplete";
+          cleanupFailureReason = treeOutcome.status === "timeout" ? "process_tree_probe_timeout" : treeOutcome.status === "rejected" ? "process_tree_probe_rejected" : treeOutcome.status === "resolved" && treeOutcome.result.livePids.length > 0 ? "process_tree_still_live" : "process_tree_scan_incomplete";
+        }
       } else {
         probeState = verdict2?.state === "alive" ? "alive" : "unknown";
       }
@@ -10259,7 +10299,7 @@ async function finalizeClaimedWorkerCleanup(port, input, generation, claimId, pr
       ...cleanupFence,
       outcome: "unverified",
       probe_state: probeState,
-      reason: !executionCleanup ? "adapter_cleanup_unverified" : workerExitCode === 0 ? "worker_exit_identity_not_proven" : "worker_exit_not_verified"
+      reason: !executionCleanup ? "adapter_cleanup_unverified" : workerExitCode === 0 ? cleanupFailureReason ?? "worker_exit_identity_not_proven" : "worker_exit_not_verified"
     });
     return "unverified";
   }
@@ -10404,9 +10444,9 @@ async function probeWithDeadline(probe, request, timeoutMs) {
     if (timer) clearTimeout(timer);
   }
 }
-async function processTreeWithDeadline(targets, timeoutMs) {
+async function processTreeWithDeadline(targets, timeoutMs, verify = verifyProcessTreeClaimantsClean) {
   let timer;
-  const pending = Promise.resolve().then(() => verifyProcessTreeClaimantsClean(targets)).then(
+  const pending = Promise.resolve().then(() => verify(targets)).then(
     (result) => ({ status: "resolved", result }),
     () => ({ status: "rejected" })
   );
@@ -10659,7 +10699,7 @@ function digestProvenance(value) {
 function interactionKey(taskId, requestId) {
   return `${taskId}\0${requestId}`;
 }
-var DEFAULT_PROCESS_PROBE_TIMEOUT_MS, verifiedRecoveryStops, LifecycleGateError, freshBootstrapPromises, DEFAULT_FRESH_BOOTSTRAP_LOCK_TIMEOUT_MS, FRESH_BOOTSTRAP_LOCK_RETRY_MS, FRESH_BOOTSTRAP_LOCK_HANDSHAKE_TIMEOUT_MS, FRESH_BOOTSTRAP_LOCK_RELEASE_TIMEOUT_MS, WINDOWS_BOOTSTRAP_LOCK_SCRIPT;
+var DEFAULT_PROCESS_PROBE_TIMEOUT_MS, DEFAULT_PROCESS_TREE_PROBE_TIMEOUT_MS, verifiedRecoveryStops, LifecycleGateError, freshBootstrapPromises, DEFAULT_FRESH_BOOTSTRAP_LOCK_TIMEOUT_MS, FRESH_BOOTSTRAP_LOCK_RETRY_MS, FRESH_BOOTSTRAP_LOCK_HANDSHAKE_TIMEOUT_MS, FRESH_BOOTSTRAP_LOCK_RELEASE_TIMEOUT_MS, WINDOWS_BOOTSTRAP_LOCK_SCRIPT;
 var init_lifecycle_gate = __esm({
   "src/store/lifecycle-gate.ts"() {
     "use strict";
@@ -10680,6 +10720,7 @@ var init_lifecycle_gate = __esm({
     init_start_plan_private_channel();
     init_start_plan_handle_gate();
     DEFAULT_PROCESS_PROBE_TIMEOUT_MS = 5e3;
+    DEFAULT_PROCESS_TREE_PROBE_TIMEOUT_MS = 3e4;
     verifiedRecoveryStops = /* @__PURE__ */ new Map();
     LifecycleGateError = class extends Error {
       constructor(code, message = code) {

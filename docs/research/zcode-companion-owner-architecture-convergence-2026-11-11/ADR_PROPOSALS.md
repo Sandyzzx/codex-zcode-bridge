@@ -1,8 +1,8 @@
 # 两项架构决策建议草案
 
-> Applicability (2026-11-11): 本文保留冻结前研究正文；已接受目标架构以 [ADR-032](../../decisions/ADR-032-existing-worker-official-host-integration.md) 为准，独立 Companion 已移出当前目标。本文账户与 Cleanup 草案仍为 Proposed，不因架构冻结成为 Accepted，也不替代现行生产合同。
+> Applicability (2026-11-11): 本文保留冻结前研究正文；已接受目标架构以 [ADR-032](../../decisions/ADR-032-existing-worker-official-host-integration.md) 为准。账户 refresh coordination 已由 [ADR-033](../../decisions/ADR-033-official-account-refresh-coordination.md) 替代，正常 Cleanup 已由 [ADR-034](../../decisions/ADR-034-normal-cleanup-worker-tree-proof.md) 替代。下文的 Broker、持久 Job receipt 和新 verifier 方向只作历史追溯，不指导当前实现。
 
-> Status: RESEARCH — PROPOSED ONLY；不是正式 DECISION，不占用正式 ADR 编号。
+> Status: RESEARCH — HISTORICAL / SUPERSEDED FOR THE CURRENT TARGET；不是当前 DECISION。
 > Date: 2026-11-11。
 > Bridge baseline：`0b70edbbfb1888666d8d3b97f891a0f943fa3a9e`。
 > Observed upstream：`b95ebaffeab641907b38652f45c1502bd762972d` / 3.18.0。

@@ -2,7 +2,7 @@
 
 > Status: AUTHORITATIVE（仅指本索引）
 > Last updated: 2026-11-11
-> Last verified: 2026-11-11，既有适用范围沿用 52015d12 核对；本轮新增 ADR-032 Accepted 目标及两项 Proposed 草案路由，不变更生产合同。
+> Last verified: 2026-11-11，既有适用范围沿用 52015d12 核对；本轮新增 ADR-033/034 Accepted Decisions，并把旧账户/Cleanup 研究草案标为历史方向。
 > Verified against: 372e90622772b070357a278f1da3dea58fa42dee
 
 先读当前 [架构](../ARCHITECTURE.md)/[接口](../INTERFACES.md)，只在需要解释取舍时加载对应决策。文件保持原路径和历史正文；Partially superseded 的标注优先于历史段落，不得拿旧 JSON 实现恢复当前合同。
@@ -28,10 +28,12 @@
 | Start Plan Provider | [030](ADR-030-start-plan-provider-preflight.md) | 每任务一次权威 Billing verdict、Provider 注册门及失败清理边界；不得从旧缓存推断权益 |
 | Model Routing | [031](ADR-031-model-routing-v1.md) | Start Plan 别名、`prefer_startplan` 自动选路与动态凭据发现；路由不替代实时授权 |
 | 下一阶段目标（未实施） | [032](ADR-032-existing-worker-official-host-integration.md) | Accepted：现有 Worker 内官方 Host、内部 Binding、官方 ProcessManager；无独立 Companion/新 IPC/业务库；保留现行并发及生命周期合同 |
+| 账户 Refresh | [033](ADR-033-official-account-refresh-coordination.md) | Accepted：profile-scoped cross-process refresh lock、lock-time reread、一次远端 refresh、atomic CAS；无 Broker 或账户数据库 |
+| 正常 Cleanup | [034](ADR-034-normal-cleanup-worker-tree-proof.md) | Accepted：官方正常 close 后复用 exact Worker identity、recorded-tree scan、resource facts、Cleanup Digest 与 Release CAS；无新 proof schema/service |
 
-## 未决草案 / Proposed only
+## 历史研究草案 / Superseded direction
 
-[官方 Runtime Cleanup Proof 与账户所有权草案](../research/zcode-companion-owner-architecture-convergence-2026-11-11/ADR_PROPOSALS.md) 保持研究目录中的两个 Proposed 草案，不分配正式 Accepted 编号。ADR-032 不批准 Job 证据替代、账户/权益来源切换或删除 ADR-030；正式生产合同继续生效。
+[官方 Runtime Cleanup Proof 与账户所有权草案](../research/zcode-companion-owner-architecture-convergence-2026-11-11/ADR_PROPOSALS.md) 保留为历史研究正文。当前目标分别由 ADR-033 的窄账户 refresh coordination 和 ADR-034 的现有 Worker-tree Cleanup Proof 替代；旧草案中的 Credential Broker、持久 Job receipt、verifier service 与 schema 方向不进入当前实现。ADR-030 继续是 Start Plan 权益权威。
 
 [POC-1 进入条件](../research/zcode-official-host-architecture-freeze-2026-11-11/POC_1_ENTRY.md) 是后续计划，需要单独授权。
 

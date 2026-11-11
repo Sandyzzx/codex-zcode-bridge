@@ -521,6 +521,569 @@ const compiledCandidate = path.join(projectRoot, "dist-test", "src", "sqlite-can
 // WAL/SHM sidecars.
 const integrationRoot = path.join(compiledCandidate, ".wp6i");
 
+test("normal Cleanup independently scans the exact Worker root and binds adapter cleanup evidence", { timeout: 45_000 }, async () => {
+  const taskId = `cleanup-normal-scan-${randomUUID()}`;
+  const operationId = candidateOperationId(taskId, 1);
+  const scans: Array<readonly { readonly pid: number; readonly fingerprint: string | null }[]> = [];
+  const stages: Array<{ stage: string; detail?: Readonly<Record<string, unknown>> }> = [];
+  await withSqliteMcp(async (client, _manager, dataRoot, workspace) => {
+    const created = contentObject(await client.callTool({ name: "zcode_task", arguments: syntheticTask(workspace, taskId) }));
+    assert.equal(created.status, "queued");
+    const terminal = await waitForTerminal(client, taskId, 1);
+    assert.equal(terminal.status, "completed");
+    await waitForLifecycleEvent(client, taskId, "released");
+
+    const modules = await loadLifecycleCandidateModules();
+    const store = modules.Store.openForRecovery(dataRoot);
+    assert.ok(store);
+    try {
+      const port = modules.createPort(store);
+      const operation = port.readOperation(operationId) as Record<string, unknown>;
+      const worker = JSON.parse(String(operation.claim_worker_identity_json)) as Record<string, unknown>;
+      assert.equal(scans.length, 1, "normal Cleanup must perform exactly one exact-root scan");
+      assert.deepEqual(scans[0], [{ pid: worker.process_id, fingerprint: worker.start_fingerprint }]);
+      assert.equal(operation.phase, "released");
+      const events = port.readLifecycleEvents(operationId) as Array<Record<string, unknown>>;
+      assert.deepEqual(events.slice(-3).map((event) => event.event_type), ["cleanup_pending", "cleanup_verified", "released"]);
+      const cleanup = events.find((event) => event.event_type === "cleanup_verified");
+      const evidence = JSON.parse(String(cleanup?.evidence_json)) as Record<string, unknown>;
+      assert.equal(evidence.worker_tree_complete, true);
+      assert.equal(evidence.operation_resources_complete, true);
+      assert.match(String(evidence.cleanup_digest), /^[0-9a-f]{64}$/u);
+      assert.equal(evidence.workspace_touched, false);
+      const snapshot = port.readRecoverySnapshot() as { operations: Array<Record<string, unknown>> };
+      assert.equal(snapshot.operations.find((row) => row.operation_id === operationId)?.capacity_occupied, false);
+    } finally {
+      store.close();
+    }
+  }, {
+    testVerifyProcessTreeClaimantsClean: async (targets) => {
+      scans.push(targets.map((target) => ({ pid: target.pid, fingerprint: target.fingerprint })));
+      return { clean: true, livePids: [], observedPids: targets.map((target) => target.pid) };
+    },
+    onStage: (stage, detail) => stages.push({ stage, detail }),
+  });
+  const cleanStage = stages.find((entry) => entry.stage === "cleanup_tree_scan_clean");
+  assert.equal(cleanStage?.detail?.execution_cleanup_method, "synthetic_fixture",
+    "the adapter close proof must remain separately bound when the Manager scan succeeds");
+});
+
+for (const descendantCase of [
+  { id: "root", name: "Worker exited with a live helper or AppServer descendant" },
+  { id: "parent", name: "a live descendant remained below an already-exited parent" },
+] as const) {
+  test(`${descendantCase.name} keeps normal Cleanup in Hold`, { timeout: 45_000 }, async () => {
+    const taskId = `clean-desc-${descendantCase.id}-${randomUUID()}`;
+    const operationId = candidateOperationId(taskId, 1);
+    let livePid = 0;
+    let observedPids: readonly number[] = [];
+    await withSqliteMcp(async (client, _manager, dataRoot, workspace) => {
+      const created = contentObject(await client.callTool({ name: "zcode_task", arguments: syntheticTask(workspace, taskId) }));
+      assert.equal(created.status, "queued");
+      assert.equal((await waitForTerminal(client, taskId, 1)).status, "completed");
+      await waitForLifecycleEvent(client, taskId, "cleanup_unverified");
+
+      const modules = await loadLifecycleCandidateModules();
+      const store = modules.Store.openForRecovery(dataRoot);
+      assert.ok(store);
+      try {
+        const port = modules.createPort(store);
+        const operation = port.readOperation(operationId) as Record<string, unknown>;
+        assert.equal(operation.phase, "cleanup_unverified");
+        const snapshot = port.readRecoverySnapshot() as { operations: Array<Record<string, unknown>> };
+        assert.equal(snapshot.operations.find((row) => row.operation_id === operationId)?.capacity_occupied, true,
+          "a live descendant must retain Capacity");
+        const events = port.readLifecycleEvents(operationId) as Array<Record<string, unknown>>;
+        assert.equal(events.some((event) => event.event_type === "cleanup_verified"), false);
+        assert.equal(events.some((event) => event.event_type === "released"), false);
+        const failure = events.find((event) => event.event_type === "cleanup_unverified");
+        const evidence = JSON.parse(String(failure?.evidence_json)) as Record<string, unknown>;
+        assert.equal(evidence.reason, "process_tree_still_live");
+        assert.equal(evidence.probe_state, "incomplete");
+      } finally {
+        store.close();
+      }
+    }, {
+      testVerifyProcessTreeClaimantsClean: async (targets) => {
+        const rootPid = targets[0]!.pid;
+        const exitedParentPid = rootPid + 1;
+        livePid = descendantCase.id === "parent" ? rootPid + 2 : rootPid + 100_000;
+        observedPids = descendantCase.id === "parent"
+          ? [rootPid, exitedParentPid, livePid]
+          : [rootPid, livePid];
+        return { clean: false, livePids: [livePid], observedPids };
+      },
+    });
+    assert.ok(livePid > 0);
+    assert.deepEqual(observedPids, descendantCase.id === "parent"
+      ? [livePid - 2, livePid - 1, livePid]
+      : [livePid - 100_000, livePid]);
+  });
+}
+
+test("PID reuse or identity mismatch cannot authorize the normal Cleanup scan", { timeout: 45_000 }, async () => {
+  const taskId = `cleanup-identity-mismatch-${randomUUID()}`;
+  const operationId = candidateOperationId(taskId, 1);
+  const platformProbe = createPlatformProbe();
+  let cleanupPid: number | null = null;
+  let scans = 0;
+  const stages: Array<{ stage: string; detail?: Readonly<Record<string, unknown>> }> = [];
+  const probe: ProcessProbe = {
+    ...platformProbe,
+    probe: async (requests) => {
+      if (cleanupPid !== null && requests.some((request) => request.pid === cleanupPid)) {
+        return requests.map(() => ({
+          state: "unknown" as const,
+          reason_code: "identity_mismatch",
+          observed_at: new Date().toISOString(),
+        }));
+      }
+      return await platformProbe.probe(requests);
+    },
+  };
+  await withSqliteMcp(async (client, _manager, dataRoot, workspace) => {
+    const created = contentObject(await client.callTool({ name: "zcode_task", arguments: syntheticTask(workspace, taskId) }));
+    assert.equal(created.status, "queued");
+    assert.equal((await waitForTerminal(client, taskId, 1)).status, "completed");
+    await waitForLifecycleEvent(client, taskId, "cleanup_unverified");
+
+    const modules = await loadLifecycleCandidateModules();
+    const store = modules.Store.openForRecovery(dataRoot);
+    assert.ok(store);
+    try {
+      const port = modules.createPort(store);
+      assert.equal((port.readOperation(operationId) as Record<string, unknown>).phase, "cleanup_unverified");
+      const events = port.readLifecycleEvents(operationId) as Array<Record<string, unknown>>;
+      const failure = events.find((event) => event.event_type === "cleanup_unverified");
+      const evidence = JSON.parse(String(failure?.evidence_json)) as Record<string, unknown>;
+      assert.equal(evidence.reason, "worker_exit_identity_not_proven");
+      assert.equal(evidence.probe_state, "unknown");
+      assert.equal(events.some((event) => event.event_type === "released"), false);
+    } finally {
+      store.close();
+    }
+  }, {
+    processProbe: probe,
+    onStage: (stage, detail) => {
+      stages.push({ stage, detail });
+      if (stage === "worker_close" && typeof detail?.pid === "number") cleanupPid = detail.pid;
+    },
+    testVerifyProcessTreeClaimantsClean: async (targets) => {
+      scans += 1;
+      return { clean: true, livePids: [], observedPids: targets.map((target) => target.pid) };
+    },
+  });
+  assert.equal(scans, 0, "an uncertain exact identity must fail closed before the claimant scan");
+  const identityStage = stages.find((entry) => entry.stage === "cleanup_identity_probe_complete");
+  assert.equal(identityStage?.detail?.state, "unknown");
+  assert.equal(identityStage?.detail?.reason, "identity_mismatch");
+});
+
+test("missing adapter resource facts keep Cleanup in Hold without scanning or Release", { timeout: 60_000 }, async (t) => {
+  const taskId = `cleanup-resource-${randomUUID()}`;
+  const operationId = candidateOperationId(taskId, 1);
+  const workerEntryPath = await buildWorkerWithMissingResourceFacts();
+  t.after(() => rmSync(workerEntryPath, { force: true }));
+  let scans = 0;
+  await withSqliteMcp(async (client, _manager, dataRoot, workspace) => {
+    const created = contentObject(await client.callTool({ name: "zcode_task", arguments: syntheticTask(workspace, taskId) }));
+    assert.equal(created.status, "queued");
+    assert.equal((await waitForTerminal(client, taskId, 1)).status, "completed");
+    await waitForLifecycleEvent(client, taskId, "cleanup_unverified");
+
+    const modules = await loadLifecycleCandidateModules();
+    const store = modules.Store.openForRecovery(dataRoot);
+    assert.ok(store);
+    try {
+      const port = modules.createPort(store);
+      assert.equal((port.readOperation(operationId) as Record<string, unknown>).phase, "cleanup_unverified");
+      const events = port.readLifecycleEvents(operationId) as Array<Record<string, unknown>>;
+      const failure = events.find((event) => event.event_type === "cleanup_unverified");
+      const evidence = JSON.parse(String(failure?.evidence_json)) as Record<string, unknown>;
+      assert.equal(evidence.reason, "adapter_cleanup_unverified");
+      assert.equal(evidence.probe_state, "incomplete");
+      assert.equal(events.some((event) => event.event_type === "released"), false);
+      const snapshot = port.readRecoverySnapshot() as { operations: Array<Record<string, unknown>> };
+      assert.equal(snapshot.operations.find((row) => row.operation_id === operationId)?.capacity_occupied, true);
+    } finally {
+      store.close();
+    }
+  }, {
+    workerEntryPath,
+    testVerifyProcessTreeClaimantsClean: async (targets) => {
+      scans += 1;
+      return { clean: true, livePids: [], observedPids: targets.map((target) => target.pid) };
+    },
+  });
+  assert.equal(scans, 0, "missing adapter resource facts must block before a process-tree scan");
+});
+
+for (const scanMode of ["reject", "timeout"] as const) {
+  test(`normal Cleanup ${scanMode} keeps an incomplete-evidence Hold`, { timeout: 45_000 }, async () => {
+    const taskId = `cleanup-${scanMode}-${randomUUID()}`;
+    const operationId = candidateOperationId(taskId, 1);
+    let scans = 0;
+    await withSqliteMcp(async (client, _manager, dataRoot, workspace) => {
+      const created = contentObject(await client.callTool({ name: "zcode_task", arguments: syntheticTask(workspace, taskId) }));
+      assert.equal(created.status, "queued");
+      assert.equal((await waitForTerminal(client, taskId, 1)).status, "completed");
+      await waitForLifecycleEvent(client, taskId, "cleanup_unverified");
+
+      const modules = await loadLifecycleCandidateModules();
+      const store = modules.Store.openForRecovery(dataRoot);
+      assert.ok(store);
+      try {
+        const port = modules.createPort(store);
+        const operation = port.readOperation(operationId) as Record<string, unknown>;
+        assert.equal(operation.phase, "cleanup_unverified");
+        assert.equal(scans, 1);
+        const events = port.readLifecycleEvents(operationId) as Array<Record<string, unknown>>;
+        assert.equal(events.some((event) => event.event_type === "released"), false);
+        const failure = events.find((event) => event.event_type === "cleanup_unverified");
+        const evidence = JSON.parse(String(failure?.evidence_json)) as Record<string, unknown>;
+        assert.equal(evidence.reason, scanMode === "reject" ? "process_tree_probe_rejected" : "process_tree_probe_timeout");
+        assert.equal(evidence.probe_state, "incomplete");
+      } finally {
+        store.close();
+      }
+    }, {
+      testProcessTreeProbeTimeoutMs: 50,
+      testVerifyProcessTreeClaimantsClean: async () => {
+        scans += 1;
+        if (scanMode === "reject") throw new Error("synthetic recorded-tree rejection");
+        return await new Promise(() => undefined);
+      },
+    });
+  });
+}
+
+test("a Worker crash after Result commit retains the existing Cleanup Hold", { timeout: 60_000 }, async (t) => {
+  const taskId = `cleanup-worker-crash-${randomUUID()}`;
+  const operationId = candidateOperationId(taskId, 1);
+  const workerEntryPath = await buildPostResultCrashWorker("after-result");
+  t.after(() => rmSync(workerEntryPath, { force: true }));
+  let scans = 0;
+  await withSqliteMcp(async (client, _manager, dataRoot, workspace) => {
+    const created = contentObject(await client.callTool({ name: "zcode_task", arguments: syntheticTask(workspace, taskId) }));
+    assert.equal(created.status, "queued");
+    assert.equal((await waitForTerminal(client, taskId, 1)).status, "completed");
+    await waitForLifecycleEvent(client, taskId, "cleanup_unverified");
+
+    const modules = await loadLifecycleCandidateModules();
+    const store = modules.Store.openForRecovery(dataRoot);
+    assert.ok(store);
+    try {
+      const port = modules.createPort(store);
+      assert.equal((port.readOperation(operationId) as Record<string, unknown>).phase, "cleanup_unverified");
+      const events = port.readLifecycleEvents(operationId) as Array<Record<string, unknown>>;
+      const failure = events.find((event) => event.event_type === "cleanup_unverified");
+      const evidence = JSON.parse(String(failure?.evidence_json)) as Record<string, unknown>;
+      assert.equal(evidence.reason, "worker_exit_not_verified");
+      assert.equal(events.some((event) => event.event_type === "released"), false);
+      assert.equal(scans, 0, "a non-zero Worker exit must not be promoted by a later scan");
+    } finally {
+      store.close();
+    }
+  }, {
+    workerEntryPath,
+    testVerifyProcessTreeClaimantsClean: async (targets) => {
+      scans += 1;
+      return { clean: true, livePids: [], observedPids: targets.map((target) => target.pid) };
+    },
+  });
+});
+
+test("a failed Worker close remains observable and clean restart Recovery releases exactly once", { timeout: 90_000 }, async (t) => {
+  const taskId = `cleanup-close-recovery-${randomUUID()}`;
+  const operationId = candidateOperationId(taskId, 1);
+  const workerEntryPath = await buildPostResultCrashWorker("restart-recovery");
+  t.after(() => rmSync(workerEntryPath, { force: true }));
+  const stages: Array<{ stage: string; detail?: Readonly<Record<string, unknown>> }> = [];
+  await withSqliteMcp(async (client, manager, dataRoot, workspace) => {
+    const created = contentObject(await client.callTool({ name: "zcode_task", arguments: syntheticTask(workspace, taskId) }));
+    assert.equal(created.status, "queued");
+    assert.equal((await waitForTerminal(client, taskId, 1)).status, "completed");
+    await waitForLifecycleEvent(client, taskId, "cleanup_unverified");
+
+    const modules = await loadLifecycleCandidateModules();
+    let originalFailureDigest = "";
+    const before = modules.Store.openForRecovery(dataRoot);
+    assert.ok(before);
+    try {
+      const port = modules.createPort(before);
+      const operation = port.readOperation(operationId) as Record<string, unknown>;
+      const claim = JSON.parse(String(operation.claim_worker_identity_json)) as Record<string, unknown>;
+      const events = port.readLifecycleEvents(operationId) as Array<Record<string, unknown>>;
+      const failure = events.find((event) => event.event_type === "cleanup_unverified");
+      assert.ok(failure);
+      originalFailureDigest = String(failure.evidence_digest);
+      const evidence = JSON.parse(String(failure.evidence_json)) as Record<string, unknown>;
+      assert.equal(evidence.reason, "worker_exit_not_verified");
+      const closeStage = stages.find((entry) => entry.stage === "worker_close");
+      assert.equal(closeStage?.detail?.exitCode, 9, "the failed close outcome must remain observable");
+      assert.equal(claim.process_id, closeStage?.detail?.pid);
+    } finally {
+      before.close();
+    }
+
+    await manager.shutdown();
+    const settingsDirectory = path.join(dataRoot, "restart-clean-settings");
+    mkdirSync(settingsDirectory, { recursive: true });
+    let recoverySpawns = 0;
+    const probeRequests: ProbeRequest[] = [];
+    const scans: Array<readonly { readonly pid: number; readonly fingerprint: string }[]> = [];
+    const platformProbe = createPlatformProbe();
+    const recoveryManager = await SqliteLifecycleMcpAuthority.create({
+      dataRoot,
+      workerEntryPath,
+      bridgeEntryPath: fileURLToPath(import.meta.url),
+      trustedLocalContext: createTrustedLocalCandidateContext({ name: "cleanup-restart-clean", settingsDirectory }),
+      testOnlyFakeAdapter: true,
+      processProbe: {
+        ...platformProbe,
+        probe: async (requests) => {
+          probeRequests.push(...requests);
+          return requests.map(() => ({
+            state: "exited" as const,
+            reason_code: "synthetic_exact_identity_absent",
+            observed_at: new Date().toISOString(),
+          }));
+        },
+      },
+      testProcessProbeTimeoutMs: 500,
+      testProcessTreeProbeTimeoutMs: 50,
+      testVerifyProcessTreeClaimantsClean: async (targets) => {
+        scans.push(targets.map((target) => {
+          assert.ok(target.fingerprint);
+          return { pid: target.pid, fingerprint: target.fingerprint };
+        }));
+        return { clean: true, livePids: [], observedPids: targets.map((target) => target.pid) };
+      },
+      onChildSpawn: () => { recoverySpawns += 1; },
+    });
+    try {
+      assert.equal(recoverySpawns, 0, "Recovery must not replay the committed Worker");
+      assert.equal(probeRequests.length, 1, "restart Recovery must probe the persisted exact Worker identity");
+      assert.equal(scans.length, 1, "restart Recovery must perform one exact recorded-root scan");
+      const recovered = modules.Store.openForRecovery(dataRoot);
+      assert.ok(recovered);
+      try {
+        const port = modules.createPort(recovered);
+        const operation = port.readOperation(operationId) as Record<string, unknown>;
+        const claim = JSON.parse(String(operation.claim_worker_identity_json)) as Record<string, unknown>;
+        assert.equal(probeRequests[0]?.pid, claim.process_id);
+        assert.equal(probeRequests[0]?.identity?.fingerprint, claim.start_fingerprint);
+        assert.deepEqual(scans[0], [{ pid: claim.process_id, fingerprint: claim.start_fingerprint }]);
+        assert.equal(operation.phase, "released");
+        const events = port.readLifecycleEvents(operationId) as Array<Record<string, unknown>>;
+        assert.equal(events.filter((event) => event.event_type === "cleanup_unverified").length, 1);
+        assert.equal(events.find((event) => event.event_type === "cleanup_unverified")?.evidence_digest,
+          originalFailureDigest, "Recovery must preserve the original close-failure evidence");
+        assert.equal(events.filter((event) => event.event_type === "cleanup_reverified").length, 1);
+        const cleanupVerified = events.filter((event) => event.event_type === "cleanup_verified");
+        assert.equal(cleanupVerified.length, 1);
+        assert.equal(events.filter((event) => event.event_type === "released").length, 1);
+        const cleanupEvidence = JSON.parse(String(cleanupVerified[0]?.evidence_json)) as Record<string, unknown>;
+        assert.equal(cleanupEvidence.root_process_id, claim.process_id);
+        assert.equal(cleanupEvidence.root_start_fingerprint, claim.start_fingerprint);
+        assert.equal(cleanupEvidence.worker_tree_complete, true);
+        assert.equal(cleanupEvidence.operation_resources_complete, true);
+        const snapshot = port.readRecoverySnapshot() as { operations: Array<Record<string, unknown>> };
+        assert.equal(snapshot.operations.find((row) => row.operation_id === operationId)?.capacity_occupied, false);
+      } finally {
+        recovered.close();
+      }
+    } finally {
+      await recoveryManager.shutdown();
+    }
+
+    const scanCountAfterRelease = scans.length;
+    const repeatedSettings = path.join(dataRoot, "restart-repeated-settings");
+    mkdirSync(repeatedSettings, { recursive: true });
+    const repeated = await SqliteLifecycleMcpAuthority.create({
+      dataRoot,
+      workerEntryPath,
+      bridgeEntryPath: fileURLToPath(import.meta.url),
+      trustedLocalContext: createTrustedLocalCandidateContext({ name: "cleanup-restart-repeated", settingsDirectory: repeatedSettings }),
+      testOnlyFakeAdapter: true,
+      testVerifyProcessTreeClaimantsClean: async () => {
+        scans.push([]);
+        throw new Error("released Operation must not be scanned again");
+      },
+    });
+    try {
+      assert.equal(scans.length, scanCountAfterRelease, "repeated Recovery must not scan or release a terminal Operation");
+      const repeatedStore = modules.Store.openForRecovery(dataRoot);
+      assert.ok(repeatedStore);
+      try {
+        const events = modules.createPort(repeatedStore).readLifecycleEvents(operationId) as Array<Record<string, unknown>>;
+        assert.equal(events.filter((event) => event.event_type === "cleanup_verified").length, 1);
+        assert.equal(events.filter((event) => event.event_type === "released").length, 1);
+      } finally {
+        repeatedStore.close();
+      }
+    } finally {
+      await repeated.shutdown();
+    }
+  }, {
+    workerEntryPath,
+    onStage: (stage, detail) => stages.push({ stage, detail }),
+  });
+});
+
+test("restart Recovery reuses persisted identity and retains incomplete scan evidence", { timeout: 90_000 }, async (t) => {
+  const taskId = `cleanup-restart-incomplete-${randomUUID()}`;
+  const operationId = candidateOperationId(taskId, 1);
+  const workerEntryPath = await buildPostResultCrashWorker("restart-incomplete");
+  t.after(() => rmSync(workerEntryPath, { force: true }));
+  await withSqliteMcp(async (client, manager, dataRoot, workspace) => {
+    const created = contentObject(await client.callTool({ name: "zcode_task", arguments: syntheticTask(workspace, taskId) }));
+    assert.equal(created.status, "queued");
+    assert.equal((await waitForTerminal(client, taskId, 1)).status, "completed");
+    await waitForLifecycleEvent(client, taskId, "cleanup_unverified");
+
+    const modules = await loadLifecycleCandidateModules();
+    const before = modules.Store.openForRecovery(dataRoot);
+    assert.ok(before);
+    let claim: Record<string, unknown>;
+    try {
+      const operation = modules.createPort(before).readOperation(operationId) as Record<string, unknown>;
+      claim = JSON.parse(String(operation.claim_worker_identity_json)) as Record<string, unknown>;
+    } finally {
+      before.close();
+    }
+
+    await manager.shutdown();
+    const platformProbe = createPlatformProbe();
+    const probeRequests: ProbeRequest[] = [];
+    const scans: Array<readonly { readonly pid: number; readonly fingerprint: string }[]> = [];
+    const settingsDirectory = path.join(dataRoot, "restart-incomplete-settings");
+    mkdirSync(settingsDirectory, { recursive: true });
+    const recoveryManager = await SqliteLifecycleMcpAuthority.create({
+      dataRoot,
+      workerEntryPath,
+      bridgeEntryPath: fileURLToPath(import.meta.url),
+      trustedLocalContext: createTrustedLocalCandidateContext({ name: "cleanup-restart-incomplete", settingsDirectory }),
+      testOnlyFakeAdapter: true,
+      processProbe: {
+        ...platformProbe,
+        probe: async (requests) => {
+          probeRequests.push(...requests);
+          return requests.map(() => ({
+            state: "exited" as const,
+            reason_code: "synthetic_exact_identity_absent",
+            observed_at: new Date().toISOString(),
+          }));
+        },
+      },
+      testProcessProbeTimeoutMs: 500,
+      testProcessTreeProbeTimeoutMs: 50,
+      testVerifyProcessTreeClaimantsClean: async (targets) => {
+        scans.push(targets.map((target) => {
+          assert.ok(target.fingerprint);
+          return { pid: target.pid, fingerprint: target.fingerprint };
+        }));
+        return { clean: true, livePids: [], observedPids: [] };
+      },
+    });
+    try {
+      assert.equal(probeRequests.length, 1, "restart Recovery must probe the persisted exact Worker identity");
+      assert.equal(probeRequests[0]?.pid, claim.process_id);
+      assert.equal(probeRequests[0]?.identity?.fingerprint, claim.start_fingerprint);
+      assert.equal(scans.length, 1);
+      assert.deepEqual(scans[0], [{ pid: claim.process_id, fingerprint: claim.start_fingerprint }]);
+
+      const recovered = modules.Store.openForRecovery(dataRoot);
+      assert.ok(recovered);
+      try {
+        const port = modules.createPort(recovered);
+        const operation = port.readOperation(operationId) as Record<string, unknown>;
+        assert.equal(operation.phase, "cleanup_unverified");
+        const snapshot = port.readRecoverySnapshot() as { operations: Array<Record<string, unknown>> };
+        assert.equal(snapshot.operations.find((row) => row.operation_id === operationId)?.capacity_occupied, true);
+        const events = port.readLifecycleEvents(operationId) as Array<Record<string, unknown>>;
+        assert.equal(events.filter((event) => event.event_type === "cleanup_unverified").length, 1);
+        assert.equal(events.some((event) => event.event_type === "cleanup_verified"), false);
+        assert.equal(events.some((event) => event.event_type === "released"), false);
+        const recoveryHolds = events.filter((event) => event.event_type === "observation_recorded")
+          .map((event) => JSON.parse(String(event.evidence_json)) as Record<string, unknown>)
+          .filter((evidence) => evidence.reason === "recovery_hold");
+        assert.equal(recoveryHolds.length, 1);
+        assert.equal(recoveryHolds[0]?.reason_code, "cleanup_incomplete");
+      } finally {
+        recovered.close();
+      }
+    } finally {
+      await recoveryManager.shutdown();
+    }
+  }, { workerEntryPath });
+});
+
+async function buildPostResultCrashWorker(name: string): Promise<string> {
+  mkdirSync(integrationRoot, { recursive: true });
+  const outfile = path.join(integrationRoot, `cleanup-post-result-crash-${name}-${randomUUID()}.mjs`);
+  await build({
+    entryPoints: [path.join(projectRoot, "src", "worker", "worker-main.ts")],
+    outfile,
+    bundle: true,
+    platform: "node",
+    format: "esm",
+    target: "node22.18",
+    packages: "external",
+    logLevel: "silent",
+    plugins: [{
+      name: "post-result-worker-crash",
+      setup(buildApi) {
+        buildApi.onLoad({ filter: /worker-main\.ts$/ }, async (args) => {
+          const marker = 'options.onStage?.("adapter result frame written");';
+          const source = readFileSync(args.path, "utf8").replaceAll("\r\n", "\n");
+          if (!source.includes(marker)) throw new Error("post-result crash Worker seam missing");
+          return {
+            contents: source.replace(marker, `${marker}\n  process.exit(9);`),
+            loader: "ts",
+            resolveDir: path.dirname(args.path),
+          };
+        });
+      },
+    }],
+  });
+  return outfile;
+}
+
+async function buildWorkerWithMissingResourceFacts(): Promise<string> {
+  mkdirSync(integrationRoot, { recursive: true });
+  const outfile = path.join(integrationRoot, `cleanup-missing-resource-facts-${randomUUID()}.mjs`);
+  await build({
+    entryPoints: [path.join(projectRoot, "src", "worker", "worker-main.ts")],
+    outfile,
+    bundle: true,
+    platform: "node",
+    format: "esm",
+    target: "node22.18",
+    packages: "external",
+    logLevel: "silent",
+    plugins: [{
+      name: "missing-resource-facts-worker",
+      setup(buildApi) {
+        buildApi.onLoad({ filter: /worker-main\.ts$/ }, async (args) => {
+          const marker = "return executeFakeResultAdapter(bootstrap as Parameters<typeof executeFakeResultAdapter>[0]);";
+          const source = readFileSync(args.path, "utf8").replaceAll("\r\n", "\n");
+          if (!source.includes(marker)) throw new Error("missing resource-facts Worker seam missing");
+          return {
+            contents: source.replace(marker, [
+              "const resultFrame = executeFakeResultAdapter(bootstrap as Parameters<typeof executeFakeResultAdapter>[0]);",
+              "return { ...resultFrame, execution_cleanup_verified: false, execution_cleanup: null };",
+            ].join("\n  ")),
+            loader: "ts",
+            resolveDir: path.dirname(args.path),
+          };
+        });
+      },
+    }],
+  });
+  return outfile;
+}
+
 async function buildR5HeldWorker(name: string): Promise<string> {
   mkdirSync(integrationRoot, { recursive: true });
   const outfile = path.join(integrationRoot, `r5-claimed-alive-${name}-${randomUUID()}.mjs`);
@@ -803,7 +1366,7 @@ class RawStdioMcpTestClient {
 
 async function withSqliteMcp(
   run: (client: Client, manager: SqliteLifecycleMcpAuthority, dataRoot: string, workspace: string) => Promise<void>,
-  options: { readonly testBeforeDispatch?: () => Promise<void>; readonly testOnScheduler?: (stage: string, detail: Readonly<Record<string, unknown>>) => void; readonly onStage?: (stage: string, detail?: Readonly<Record<string, unknown>>) => void; readonly onChildSpawn?: (child: { readonly pid?: number; readonly stderr?: NodeJS.ReadableStream | null; readonly resultChannel?: NodeJS.ReadableStream | null }) => void; readonly beforeAuthority?: (dataRoot: string, modules: Awaited<ReturnType<typeof loadLifecycleCandidateModules>>, workspace: string) => void; readonly prepareDataRoot?: (dataRoot: string, fixture: string) => Promise<void>; readonly databaseFileName?: string; readonly enableSyntheticInteractionChannel?: boolean; readonly processProbe?: ProcessProbe; readonly testProcessProbeTimeoutMs?: number; readonly testShutdownWaitMs?: number; readonly testStopWorkerForRecovery?: (pid: number, expectedFingerprint: string) => Promise<void>; readonly testBeforeRecoveryWrite?: (operationId: string, phase: string) => Promise<void>; readonly stdio?: boolean; readonly preserveFixtureOnFailure?: boolean; readonly onStdioHost?: (host: StdioLifecycleHost) => void; readonly onStdioShutdownComplete?: (reason: string) => void; readonly onStdioShutdownFailure?: (reason: string, error: unknown) => void } = {},
+  options: { readonly testBeforeDispatch?: () => Promise<void>; readonly testOnScheduler?: (stage: string, detail: Readonly<Record<string, unknown>>) => void; readonly onStage?: (stage: string, detail?: Readonly<Record<string, unknown>>) => void; readonly onChildSpawn?: (child: { readonly pid?: number; readonly stderr?: NodeJS.ReadableStream | null; readonly resultChannel?: NodeJS.ReadableStream | null }) => void; readonly beforeAuthority?: (dataRoot: string, modules: Awaited<ReturnType<typeof loadLifecycleCandidateModules>>, workspace: string) => void; readonly prepareDataRoot?: (dataRoot: string, fixture: string) => Promise<void>; readonly databaseFileName?: string; readonly workerEntryPath?: string; readonly enableSyntheticInteractionChannel?: boolean; readonly processProbe?: ProcessProbe; readonly testProcessProbeTimeoutMs?: number; readonly testVerifyProcessTreeClaimantsClean?: typeof verifyProcessTreeClaimantsClean; readonly testProcessTreeProbeTimeoutMs?: number; readonly testShutdownWaitMs?: number; readonly testStopWorkerForRecovery?: (pid: number, expectedFingerprint: string) => Promise<void>; readonly testBeforeRecoveryWrite?: (operationId: string, phase: string) => Promise<void>; readonly stdio?: boolean; readonly preserveFixtureOnFailure?: boolean; readonly onStdioHost?: (host: StdioLifecycleHost) => void; readonly onStdioShutdownComplete?: (reason: string) => void; readonly onStdioShutdownFailure?: (reason: string, error: unknown) => void } = {},
 ): Promise<void> {
   const fixture = path.join(integrationRoot, randomUUID());
   const dataRoot = path.join(fixture, "sqlite-root");
@@ -839,11 +1402,13 @@ async function withSqliteMcp(
   const authority = await SqliteLifecycleMcpAuthority.create({
     dataRoot,
     ...(options.databaseFileName ? { databaseFileName: options.databaseFileName, managedDataDirectory: true } : {}),
-    workerEntryPath: path.join(projectRoot, "dist-test", "src", "worker", "worker-main.js"),
+    workerEntryPath: options.workerEntryPath ?? path.join(projectRoot, "dist-test", "src", "worker", "worker-main.js"),
     bridgeEntryPath: fileURLToPath(import.meta.url),
     trustedLocalContext: createTrustedLocalCandidateContext({ name: "sqlite-mcp-test", settingsDirectory }),
     ...(options.processProbe ? { processProbe: options.processProbe } : {}),
     ...(options.testProcessProbeTimeoutMs !== undefined ? { testProcessProbeTimeoutMs: options.testProcessProbeTimeoutMs } : {}),
+    ...(options.testVerifyProcessTreeClaimantsClean ? { testVerifyProcessTreeClaimantsClean: options.testVerifyProcessTreeClaimantsClean } : {}),
+    ...(options.testProcessTreeProbeTimeoutMs !== undefined ? { testProcessTreeProbeTimeoutMs: options.testProcessTreeProbeTimeoutMs } : {}),
     ...(options.testStopWorkerForRecovery ? { testStopWorkerForRecovery: options.testStopWorkerForRecovery } : {}),
     ...(options.testBeforeRecoveryWrite ? { testBeforeRecoveryWrite: options.testBeforeRecoveryWrite } : {}),
     ...(options.testShutdownWaitMs !== undefined ? { testShutdownWaitMs: options.testShutdownWaitMs } : {}),

@@ -1,0 +1,1294 @@
+diff --git a/packages/services/src/credential/credentialService.ts b/packages/services/src/credential/credentialService.ts
+index 476c289d..01485330 100644
+--- a/packages/services/src/credential/credentialService.ts
++++ b/packages/services/src/credential/credentialService.ts
+@@ -114,6 +114,7 @@ interface CredentialServiceDependencies {
+ 
+ /** Host 私有缓存恢复能力，不进入 Renderer 的 ICredentialService 契约。 */
+ export interface LocalCredentialService extends ICredentialService {
++  getCredentialsFilePath(): string;
+   captureRecoveryGuard(): Promise<CredentialFileGuard>;
+   deleteUnreadable(
+     keys: readonly string[],
+@@ -170,6 +171,7 @@ export function createCredentialService(
+   }
+ 
+   return {
++    getCredentialsFilePath: () => getCredentialsFile(),
+     captureRecoveryGuard: () => captureCredentialFileGuard(getCredentialsFile()),
+     async inspectStore() {
+       const file = getCredentialsFile();
+diff --git a/packages/services/src/oauth/oauthService.ts b/packages/services/src/oauth/oauthService.ts
+index d52599f0..38b49b61 100644
+--- a/packages/services/src/oauth/oauthService.ts
++++ b/packages/services/src/oauth/oauthService.ts
+@@ -1,5 +1,7 @@
+ /* eslint-disable max-lines -- OAuthService 集中维护 OAuth 会话生命周期和 provider 切换边界，当前 review 修复只收窄后台迁移写入条件。 */
+-import { randomBytes } from "node:crypto";
++import { createHash, randomBytes } from "node:crypto";
++import { readFile, rm } from "node:fs/promises";
++import { join } from "node:path";
+ import { Emitter } from "@zcode/rpc";
+ import {
+   ApiError,
+@@ -21,9 +23,16 @@ import {
+   type OAuthUserProfile,
+   type UserInfo,
+   resolveJwtExpiration,
++  isZCodeFileLockTimeoutError,
+ } from "@zcode/shared";
+ import type { ICredentialService } from "../credential/credential.js";
+-import type { CredentialFileGuard } from "@zcode/shared/node";
++import type { LocalCredentialService } from "../credential/credentialService.js";
++import {
++  atomicWritePrivateTextFile,
++  withFileLock,
++  type CredentialFileGuard,
++  type SharedFileLockOptions,
++} from "@zcode/shared/node";
+ import { createServiceLogger } from "../logger/serviceLogger.js";
+ import { readApiJson } from "../providers/api/apiJson.js";
+ import type { IOAuthService } from "./oauth.js";
+@@ -50,6 +59,9 @@ import {
+ const OAUTH_TIMEOUT_MS = 5 * 60 * 1000;
+ const OAUTH_PROFILE_TIMEOUT_MS = 10_000;
+ const COMPLETED_POLLING_STATE_GRACE_MS = 30 * 1000;
++const OAUTH_REFRESH_LOCK_MAX_WAIT_MS = 45_000;
++const OAUTH_REFRESH_NETWORK_TIMEOUT_MS = 30_000;
++const OAUTH_REFRESH_DISPATCH_STATE_VERSION = 1;
+ const ZCODE_JWT_TOKEN_KEY = "zcodejwttoken";
+ const log = (...args: unknown[]) =>
+   console.log(formatLogPrefix("oauthService", process.pid), ...args);
+@@ -88,12 +100,95 @@ interface OAuthServiceDependencies {
+   monotonicNow?: () => number;
+   env?: NodeJS.ProcessEnv;
+   onProviderLogout?: (provider: OAuthProviderId, accountIdentity?: string | null) => Promise<void>;
++  refreshLockOptions?: SharedFileLockOptions;
++  refreshNetworkTimeoutMs?: number;
++  /** 本地测试/诊断挂点：等待刷新锁前和取得锁后各调用一次，不参与锁语义。 */
++  onRefreshWaitStarted?: () => void;
++  onRefreshLockAcquired?: () => void | Promise<void>;
++}
++
++interface OAuthRefreshSnapshot {
++  profileId: string;
++  revision: string | null;
++  tokenSet: OAuthTokenSet;
++}
++
++interface OAuthRefreshDispatchState {
++  version: typeof OAUTH_REFRESH_DISPATCH_STATE_VERSION;
++  requestId: string;
++  provider: OAuthProviderId;
++  profileHash: string;
++  sessionRevisionAtDispatch: string | null;
++  accessTokenHash: string;
++  refreshTokenHash: string;
+ }
+ 
+ function readTrimmedString(value: unknown): string | null {
+   return typeof value === "string" && value.trim() ? value.trim() : null;
+ }
+ 
++function fingerprint(value: string): string {
++  return createHash("sha256").update(value).digest("hex");
++}
++
++function resolveOAuthRefreshLockBasePath(
++  credentialsFilePath: string,
++  provider: OAuthProviderId,
++  profileId: string,
++): string {
++  const scope = fingerprint(JSON.stringify([credentialsFilePath, provider, profileId])).slice(
++    0,
++    24,
++  );
++  return join(`${credentialsFilePath}.oauth-refresh-${scope}`);
++}
++
++function resolveOAuthRefreshDispatchStatePath(refreshLockBasePath: string): string {
++  return `${refreshLockBasePath}.dispatch.json`;
++}
++
++function createRefreshCoordinationError(code: string, message: string, cause?: unknown): Error {
++  return Object.assign(new Error(message, cause === undefined ? undefined : { cause }), { code });
++}
++
++function isSameOAuthTokenSet(left: OAuthTokenSet, right: OAuthTokenSet): boolean {
++  return (
++    left.accessToken === right.accessToken &&
++    left.refreshToken === right.refreshToken &&
++    left.expiresAt === right.expiresAt &&
++    left.zcodeJwtToken === right.zcodeJwtToken &&
++    JSON.stringify(left.linkedBigModel ?? null) === JSON.stringify(right.linkedBigModel ?? null)
++  );
++}
++
++function hasRotatedAuthorizationMaterial(left: OAuthTokenSet, right: OAuthTokenSet): boolean {
++  return (
++    left.accessToken !== right.accessToken ||
++    (Boolean(left.refreshToken) && left.refreshToken !== right.refreshToken)
++  );
++}
++
++function isUsableOAuthTokenSet(tokenSet: OAuthTokenSet, now: number): boolean {
++  return (
++    Boolean(tokenSet.accessToken.trim()) &&
++    (tokenSet.expiresAt === undefined || tokenSet.expiresAt > now)
++  );
++}
++
++function dispatchStateMatchesCredentialMaterial(
++  state: OAuthRefreshDispatchState,
++  provider: OAuthProviderId,
++  profileId: string,
++  tokenSet: OAuthTokenSet,
++): boolean {
++  return (
++    state.provider === provider &&
++    state.profileHash === fingerprint(profileId) &&
++    state.accessTokenHash === fingerprint(tokenSet.accessToken) &&
++    state.refreshTokenHash === fingerprint(tokenSet.refreshToken ?? "")
++  );
++}
++
+ function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+   return typeof value === "object" && value !== null;
+ }
+@@ -137,6 +232,10 @@ export class OAuthService implements IOAuthService {
+   ) => Promise<void>;
+   private readonly apiClient?: ApiClient;
+   private readonly env: NodeJS.ProcessEnv;
++  private readonly refreshLockOptions: SharedFileLockOptions;
++  private readonly refreshNetworkTimeoutMs: number;
++  private readonly onRefreshWaitStarted?: () => void;
++  private readonly onRefreshLockAcquired?: () => void | Promise<void>;
+   private readonly profileRefreshes = new Map<string, Promise<OAuthAccountAvailability>>();
+   private pendingState: PendingState | null = null;
+   private oauthFlowStartGeneration = 0;
+@@ -161,6 +260,14 @@ export class OAuthService implements IOAuthService {
+     this.onProviderLogout = dependencies.onProviderLogout;
+     this.apiClient = dependencies.apiClient;
+     this.env = dependencies.env ?? process.env;
++    this.refreshLockOptions = {
++      lockMaxWaitMs: OAUTH_REFRESH_LOCK_MAX_WAIT_MS,
++      ...dependencies.refreshLockOptions,
++    };
++    this.refreshNetworkTimeoutMs =
++      dependencies.refreshNetworkTimeoutMs ?? OAUTH_REFRESH_NETWORK_TIMEOUT_MS;
++    this.onRefreshWaitStarted = dependencies.onRefreshWaitStarted;
++    this.onRefreshLockAcquired = dependencies.onRefreshLockAcquired;
+ 
+     const adapters =
+       dependencies.adapters ??
+@@ -1183,38 +1290,289 @@ export class OAuthService implements IOAuthService {
+       );
+     }
+ 
+-    const snapshot = await this.repo.loadSessionSnapshot();
+-    const activeProvider = snapshot["oauth:active_provider"];
++    const observedSnapshot = await this.repo.loadSessionSnapshot();
++    const activeProvider = observedSnapshot["oauth:active_provider"];
+     if (targetProvider !== activeProvider) {
+       throw new Error("只能刷新当前 App 登录 provider，请重新登录");
+     }
+ 
+-    const tokenSet = this.repo.tokenSetFromSnapshot(snapshot, targetProvider);
+-    if (!tokenSet?.refreshToken) {
++    const observed = this.readRefreshSnapshot(observedSnapshot, targetProvider);
++    if (!observed.tokenSet.refreshToken) {
+       throw new Error("当前账号缺少 refresh_token，请重新登录");
+     }
+ 
+-    const refreshed = await this.runWithAdapterError(adapter, () =>
+-      adapter.refreshToken!(tokenSet, {
+-        providerId: targetProvider,
+-        state: "",
+-        redirectUri: adapter.redirectUri,
+-        now: this.now,
+-      }),
++    const credentialsFilePath = this.getLocalCredentialStore().getCredentialsFilePath();
++    const refreshLockBasePath = resolveOAuthRefreshLockBasePath(
++      credentialsFilePath,
++      targetProvider,
++      observed.profileId,
+     );
++    this.onRefreshWaitStarted?.();
+ 
+-    await this.runSessionMutation(async () => {
+-      if (this.oauthSessionGeneration !== generation) return;
+-      await this.repo.saveTokenSet(
+-        targetProvider,
+-        {
+-          ...tokenSet,
+-          ...refreshed,
+-          zcodeJwtToken: refreshed.zcodeJwtToken ?? tokenSet.zcodeJwtToken,
++    try {
++      await withFileLock(
++        refreshLockBasePath,
++        async () => {
++          await this.onRefreshLockAcquired?.();
++
++          const currentSnapshot = await this.repo.loadSessionSnapshot();
++          const current = this.readRefreshSnapshot(currentSnapshot, targetProvider);
++          if (current.profileId !== observed.profileId) {
++            throw createRefreshCoordinationError(
++              "ZCODE_OAUTH_REFRESH_PROFILE_CHANGED",
++              "OAuth refresh profile changed while waiting for the refresh lock; retry with the current session",
++            );
++          }
++
++          const snapshotChanged =
++            current.revision !== observed.revision ||
++            !isSameOAuthTokenSet(current.tokenSet, observed.tokenSet);
++          const dispatchStatePath = resolveOAuthRefreshDispatchStatePath(refreshLockBasePath);
++          const dispatchState = await this.loadRefreshDispatchState(dispatchStatePath);
++
++          if (snapshotChanged) {
++            if (
++              hasRotatedAuthorizationMaterial(current.tokenSet, observed.tokenSet) &&
++              isUsableOAuthTokenSet(current.tokenSet, this.now())
++            ) {
++              await this.clearRefreshDispatchState(dispatchStatePath);
++              this.oauthSessionGeneration += 1;
++              this.sessionChanges.fire("signed-in");
++              return;
++            }
++            throw createRefreshCoordinationError(
++              "ZCODE_OAUTH_REFRESH_STALE_CREDENTIAL",
++              "OAuth credentials changed while waiting for refresh, but no newer usable token rotation was found",
++            );
++          }
++
++          if (
++            dispatchState &&
++            dispatchStateMatchesCredentialMaterial(
++              dispatchState,
++              targetProvider,
++              current.profileId,
++              current.tokenSet,
++            )
++          ) {
++            throw createRefreshCoordinationError(
++              "ZCODE_OAUTH_REFRESH_DISPATCH_UNCERTAIN",
++              "A previous refresh may have consumed the current one-time refresh token; sign in again before retrying",
++            );
++          }
++          if (dispatchState) {
++            await this.clearRefreshDispatchState(dispatchStatePath);
++          }
++          if (this.oauthSessionGeneration !== generation) {
++            throw createRefreshCoordinationError(
++              "ZCODE_OAUTH_REFRESH_STALE_WRITER",
++              "OAuth session changed before provider refresh",
++            );
++          }
++
++          const requestId = randomBytes(16).toString("hex");
++          const nextDispatchState: OAuthRefreshDispatchState = {
++            version: OAUTH_REFRESH_DISPATCH_STATE_VERSION,
++            requestId,
++            provider: targetProvider,
++            profileHash: fingerprint(current.profileId),
++            sessionRevisionAtDispatch: current.revision,
++            accessTokenHash: fingerprint(current.tokenSet.accessToken),
++            refreshTokenHash: fingerprint(current.tokenSet.refreshToken ?? ""),
++          };
++          // 网络前持久化派发指纹：若 owner 在 provider 可能已消费一次性 token 后崩溃，
++          // 后继进程只能重新登录，不能拿同一 refresh token 再发一次。
++          await atomicWritePrivateTextFile(
++            dispatchStatePath,
++            `${JSON.stringify(nextDispatchState)}\n`,
++          );
++
++          const refreshed = await this.runWithRefreshTimeout((signal) =>
++            this.runWithAdapterError(adapter, () =>
++              adapter.refreshToken!(current.tokenSet, {
++                providerId: targetProvider,
++                state: "",
++                redirectUri: adapter.redirectUri,
++                now: this.now,
++                signal,
++              }),
++            ),
++          );
++          const nextTokenSet: OAuthTokenSet = {
++            ...current.tokenSet,
++            ...refreshed,
++            zcodeJwtToken: refreshed.zcodeJwtToken ?? current.tokenSet.zcodeJwtToken,
++          };
++          if (!nextTokenSet.accessToken.trim()) {
++            throw createRefreshCoordinationError(
++              "ZCODE_OAUTH_REFRESH_INVALID_RESULT",
++              "OAuth provider returned an empty access token",
++            );
++          }
++
++          await this.runSessionMutation(async () => {
++            if (this.oauthSessionGeneration !== generation) {
++              throw createRefreshCoordinationError(
++                "ZCODE_OAUTH_REFRESH_STALE_WRITER",
++                "OAuth session changed while the refresh response was pending",
++              );
++            }
++            const latestSnapshot = await this.repo.loadSessionSnapshot();
++            const latest = this.readRefreshSnapshot(latestSnapshot, targetProvider);
++            if (
++              latest.profileId !== current.profileId ||
++              latest.revision !== current.revision ||
++              !isSameOAuthTokenSet(latest.tokenSet, current.tokenSet)
++            ) {
++              throw createRefreshCoordinationError(
++                "ZCODE_OAUTH_REFRESH_STALE_WRITER",
++                "OAuth credentials changed while the refresh response was pending",
++              );
++            }
++            if (!(await this.repo.saveTokenSet(targetProvider, nextTokenSet, latestSnapshot))) {
++              throw createRefreshCoordinationError(
++                "ZCODE_OAUTH_REFRESH_STALE_WRITER",
++                "OAuth credentials changed before the refreshed token could be committed",
++              );
++            }
++            this.oauthSessionGeneration += 1;
++            this.sessionChanges.fire("signed-in");
++          });
++          await this.clearRefreshDispatchState(dispatchStatePath);
+         },
+-        snapshot,
++        this.refreshLockOptions,
+       );
++    } catch (error) {
++      if (!isZCodeFileLockTimeoutError(error)) {
++        throw error;
++      }
++      const currentSnapshot = await this.repo.loadSessionSnapshot();
++      try {
++        const current = this.readRefreshSnapshot(currentSnapshot, targetProvider);
++        if (
++          current.profileId === observed.profileId &&
++          (current.revision !== observed.revision ||
++            !isSameOAuthTokenSet(current.tokenSet, observed.tokenSet)) &&
++          hasRotatedAuthorizationMaterial(current.tokenSet, observed.tokenSet) &&
++          isUsableOAuthTokenSet(current.tokenSet, this.now())
++        ) {
++          await this.clearRefreshDispatchState(
++            resolveOAuthRefreshDispatchStatePath(refreshLockBasePath),
++          );
++          this.oauthSessionGeneration += 1;
++          this.sessionChanges.fire("signed-in");
++          return;
++        }
++      } catch {
++        // 保留原始等待超时；这里不能用读取失败掩盖锁竞争结果。
++      }
++      throw error;
++    }
++  }
++
++  private getLocalCredentialStore(): LocalCredentialService {
++    const store = this.credentialService as Partial<LocalCredentialService>;
++    if (typeof store.getCredentialsFilePath !== "function") {
++      throw new Error("OAuth refresh coordination requires the local credential store");
++    }
++    return store as LocalCredentialService;
++  }
++
++  private readRefreshSnapshot(
++    snapshot: Readonly<Record<string, string | null>>,
++    provider: OAuthProviderId,
++  ): OAuthRefreshSnapshot {
++    const activeProvider = snapshot["oauth:active_provider"];
++    if (activeProvider !== provider) {
++      throw createRefreshCoordinationError(
++        "ZCODE_OAUTH_REFRESH_PROFILE_CHANGED",
++        "OAuth active provider changed while waiting for refresh",
++      );
++    }
++    const profile = this.repo.profileFromSnapshot(snapshot, provider);
++    const tokenSet = this.repo.tokenSetFromSnapshot(snapshot, provider);
++    if (!profile || !tokenSet) {
++      throw createRefreshCoordinationError(
++        "ZCODE_OAUTH_REFRESH_PROFILE_CHANGED",
++        "OAuth profile or token set is unavailable while waiting for refresh",
++      );
++    }
++    return {
++      profileId: profile.id,
++      revision: snapshot["oauth:session_revision"] ?? null,
++      tokenSet,
++    };
++  }
++
++  private async loadRefreshDispatchState(
++    statePath: string,
++  ): Promise<OAuthRefreshDispatchState | null> {
++    let raw: string;
++    try {
++      raw = await readFile(statePath, "utf8");
++    } catch (error) {
++      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
++      throw error;
++    }
++
++    let parsed: unknown;
++    try {
++      parsed = JSON.parse(raw);
++    } catch (error) {
++      throw createRefreshCoordinationError(
++        "ZCODE_OAUTH_REFRESH_STATE_INVALID",
++        "OAuth refresh dispatch state is corrupt; sign in again before retrying",
++        error,
++      );
++    }
++    if (
++      !isUnknownRecord(parsed) ||
++      parsed.version !== OAUTH_REFRESH_DISPATCH_STATE_VERSION ||
++      typeof parsed.requestId !== "string" ||
++      typeof parsed.provider !== "string" ||
++      typeof parsed.profileHash !== "string" ||
++      (parsed.sessionRevisionAtDispatch !== null &&
++        typeof parsed.sessionRevisionAtDispatch !== "string") ||
++      typeof parsed.accessTokenHash !== "string" ||
++      typeof parsed.refreshTokenHash !== "string"
++    ) {
++      throw createRefreshCoordinationError(
++        "ZCODE_OAUTH_REFRESH_STATE_INVALID",
++        "OAuth refresh dispatch state is invalid; sign in again before retrying",
++      );
++    }
++    return parsed as unknown as OAuthRefreshDispatchState;
++  }
++
++  private async clearRefreshDispatchState(statePath: string): Promise<void> {
++    try {
++      await rm(statePath, { force: true });
++    } catch (error) {
++      serviceLog.warn("OAuth refresh dispatch state cleanup failed", { error });
++    }
++  }
++
++  private async runWithRefreshTimeout<T>(
++    operation: (signal: AbortSignal) => Promise<T>,
++  ): Promise<T> {
++    const controller = new AbortController();
++    let timeout: NodeJS.Timeout | undefined;
++    const deadline = new Promise<never>((_, reject) => {
++      timeout = setTimeout(() => {
++        reject(
++          createRefreshCoordinationError(
++            "ZCODE_OAUTH_REFRESH_NETWORK_TIMEOUT",
++            `OAuth token refresh did not complete within ${this.refreshNetworkTimeoutMs}ms`,
++          ),
++        );
++      }, this.refreshNetworkTimeoutMs);
+     });
++    try {
++      return await Promise.race([operation(controller.signal), deadline]);
++    } finally {
++      if (timeout) clearTimeout(timeout);
++      controller.abort();
++    }
+   }
+ 
+   /** Host 本地 401 提交入口，不扩展 IOAuthService 的跨端契约。 */
+diff --git a/packages/services/src/oauth/providers/providerAdapter.ts b/packages/services/src/oauth/providers/providerAdapter.ts
+index 1d42b988..9ac45cde 100644
+--- a/packages/services/src/oauth/providers/providerAdapter.ts
++++ b/packages/services/src/oauth/providers/providerAdapter.ts
+@@ -13,6 +13,8 @@ export interface OAuthProviderContext {
+   state: string;
+   redirectUri: string;
+   now: () => number;
++  /** 刷新事务的本地预算；实现支持时应将 signal 传到底层 HTTP 请求。 */
++  signal?: AbortSignal;
+ }
+ 
+ /** OAuth provider 适配器：隔离协议差异 */
+diff --git a/scripts/engineering-test-files.json b/scripts/engineering-test-files.json
+index f468610a..671ee8ca 100644
+--- a/scripts/engineering-test-files.json
++++ b/scripts/engineering-test-files.json
+@@ -159,6 +159,7 @@
+   "packages/desktop/test/windowsInstallerNshSmoke.test.ts",
+   "packages/desktop/test/windowsInstallerPreserveFiles.test.ts",
+   "packages/plugin-api/test/version.test.ts",
++  "packages/services/test/oauthRefreshCoordination.test.ts",
+   "packages/server/test/remoteOfficialPluginAssets.test.ts",
+   "packages/server/test/tsupConfig.test.ts",
+   "packages/web/test/viteConfigLoad.test.ts",
+diff --git a/packages/services/test/fixtures/oauth-refresh-coordination-child.ts b/packages/services/test/fixtures/oauth-refresh-coordination-child.ts
+new file mode 100644
+index 00000000..8ce3a179
+--- /dev/null
++++ b/packages/services/test/fixtures/oauth-refresh-coordination-child.ts
+@@ -0,0 +1,127 @@
++import { join } from "node:path";
++import type { ApiClient, OAuthProviderAdapter, OAuthTokenSet } from "@zcode/shared";
++import { createSystemCredentialCipher } from "@zcode/shared/credential-security";
++import { createCredentialService } from "../../src/credential/credentialService.js";
++import { OAuthService } from "../../src/oauth/oauthService.js";
++import { setDataBaseDir } from "../../src/paths.js";
++
++interface ChildConfig {
++  dataBaseDir: string;
++  mode: "refresh" | "hold-lock";
++  refreshLockMaxWaitMs?: number;
++  refreshNetworkTimeoutMs?: number;
++  refreshUrl: string;
++}
++
++const config = JSON.parse(process.argv[2] ?? "null") as ChildConfig | null;
++process.send?.({ type: "ready" });
++if (!config) {
++  process.send?.({ message: "invalid child input", type: "error" });
++} else {
++  void run(config);
++}
++
++async function run(config: ChildConfig): Promise<void> {
++  try {
++    setDataBaseDir(config.dataBaseDir);
++    const credentialsFilePath = join(config.dataBaseDir, ".zcode", "v2", "credentials.json");
++    const credentialService = createCredentialService({
++      cipherProvider: createSystemCredentialCipher({
++        env: { ZCODE_CREDENTIAL_SECRET: "oauth-refresh-coordination-test-secret" },
++        filePath: credentialsFilePath,
++      }),
++    });
++    const adapter: OAuthProviderAdapter = {
++      providerId: "zai",
++      meta: { id: "zai", displayName: "Synthetic", enabled: true, order: 0 },
++      redirectUri: "http://127.0.0.1/callback",
++      apiClient: {} as ApiClient,
++      parseCallbackParams: () => ({ code: "", state: "" }),
++      buildAuthorizeUrl: () => "http://127.0.0.1/authorize",
++      exchangeToken: async () => ({ accessToken: "" }),
++      normalizeError: (error) => (error instanceof Error ? error : new Error(String(error))),
++      refreshToken: async (tokenSet, context) => {
++        const response = await fetch(config.refreshUrl, {
++          method: "POST",
++          headers: { "content-type": "application/json" },
++          body: JSON.stringify({
++            accessToken: tokenSet.accessToken,
++            refreshToken: tokenSet.refreshToken,
++          }),
++          signal: context.signal,
++        });
++        const payload = (await response.json()) as {
++          accessToken?: unknown;
++          error?: unknown;
++          refreshToken?: unknown;
++        };
++        if (!response.ok) {
++          throw new Error(
++            typeof payload.error === "string"
++              ? payload.error
++              : `refresh failed: ${response.status}`,
++          );
++        }
++        if (typeof payload.accessToken !== "string" || typeof payload.refreshToken !== "string") {
++          throw new Error("synthetic provider returned an invalid token set");
++        }
++        return payload as OAuthTokenSet;
++      },
++    };
++    const events: string[] = [];
++    const service = new OAuthService(credentialService, {
++      adapters: [adapter],
++      onRefreshWaitStarted: () => process.send?.({ type: "waiting" }),
++      onRefreshLockAcquired: async () => {
++        process.send?.({ type: "lock-acquired" });
++        if (config.mode === "hold-lock") {
++          process.send?.({ type: "lock-held" });
++          await new Promise(() => {
++            setInterval(() => undefined, 1_000);
++          });
++        }
++      },
++      refreshLockOptions:
++        config.refreshLockMaxWaitMs === undefined
++          ? undefined
++          : {
++              lockMaxWaitMs: config.refreshLockMaxWaitMs,
++              lockOwnerlessGraceMs: 25,
++              lockRetryDelaysMs: [20],
++            },
++      refreshNetworkTimeoutMs: config.refreshNetworkTimeoutMs,
++    });
++    service.onDidChangeSession((state) => events.push(state));
++    await service.refreshToken("zai");
++    const values = await credentialService.loadMany([
++      "oauth:active_provider",
++      "oauth:session_revision",
++      "oauth:zai:access_token",
++      "oauth:zai:refresh_token",
++      "oauth:zai:user_info",
++      "zcodejwttoken",
++    ]);
++    sendFinal({
++      type: "result",
++      result: {
++        accessToken: values["oauth:zai:access_token"],
++        events,
++        refreshToken: values["oauth:zai:refresh_token"],
++        revision: values["oauth:session_revision"],
++      },
++    });
++  } catch (error) {
++    sendFinal({
++      type: "error",
++      code:
++        typeof error === "object" && error !== null && "code" in error
++          ? String((error as { code?: unknown }).code ?? "")
++          : undefined,
++      message: error instanceof Error ? error.message : String(error),
++    });
++  }
++}
++
++function sendFinal(message: unknown): void {
++  process.send?.(message);
++}
+diff --git a/packages/services/test/oauthRefreshCoordination.test.ts b/packages/services/test/oauthRefreshCoordination.test.ts
+new file mode 100644
+index 00000000..d1635eee
+--- /dev/null
++++ b/packages/services/test/oauthRefreshCoordination.test.ts
+@@ -0,0 +1,637 @@
++import { fork, type ChildProcess } from "node:child_process";
++import { mkdir, mkdtemp, rm } from "node:fs/promises";
++import { createServer, type Server } from "node:http";
++import { join } from "node:path";
++import { fileURLToPath } from "node:url";
++import { afterEach, expect, it } from "vitest";
++import { createSystemCredentialCipher } from "@zcode/shared/credential-security";
++import { createCredentialService } from "../src/credential/credentialService.js";
++import { setDataBaseDir } from "../src/paths.js";
++
++const TEST_TMP_ROOT = fileURLToPath(new URL("./.tmp", import.meta.url));
++const CHILD_DRIVER = new URL("./fixtures/oauth-refresh-coordination-child.ts", import.meta.url);
++const REPO_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
++const TEST_SECRET = "oauth-refresh-coordination-test-secret";
++const NETWORK_TIMEOUT_MS = 5_000;
++
++const children = new Set<ChildProcess>();
++const servers = new Set<Server>();
++
++afterEach(async () => {
++  await Promise.all([...children].map((child) => killChild(child)));
++  children.clear();
++  await Promise.all(
++    [...servers].map(
++      (server) =>
++        new Promise<void>((resolve) => {
++          server.close(() => resolve());
++        }),
++    ),
++  );
++  servers.clear();
++  await rm(TEST_TMP_ROOT, { force: true, recursive: true });
++});
++
++interface ChildResult {
++  accessToken: string;
++  events: string[];
++  refreshToken: string;
++  revision: string;
++}
++
++interface ChildConfig {
++  dataBaseDir: string;
++  mode: "refresh" | "hold-lock";
++  refreshLockMaxWaitMs?: number;
++  refreshNetworkTimeoutMs?: number;
++  refreshUrl: string;
++}
++
++interface ChildError {
++  code?: string;
++  message: string;
++  type: "error";
++}
++
++type ChildMessage =
++  | ChildError
++  | { type: "lock-acquired" }
++  | { type: "lock-held" }
++  | { type: "ready" }
++  | { result: ChildResult; type: "result" }
++  | { type: "waiting" };
++
++class ChildHarness {
++  private readonly messages: ChildMessage[] = [];
++  private cursor = 0;
++  private waiters = new Set<() => void>();
++  private stdout = "";
++  private stderr = "";
++  private exited = false;
++  private spawnError: Error | null = null;
++  private exitDescription = "";
++
++  constructor(readonly child: ChildProcess) {
++    child.stdout?.on("data", (chunk: Buffer) => {
++      this.stdout += chunk.toString("utf8");
++    });
++    child.stderr?.on("data", (chunk: Buffer) => {
++      this.stderr += chunk.toString("utf8");
++    });
++    child.once("error", (error) => {
++      this.spawnError = error;
++      this.exited = true;
++      for (const wake of this.waiters) wake();
++    });
++    child.on("message", (message: ChildMessage) => {
++      this.messages.push(message);
++      for (const wake of this.waiters) wake();
++    });
++    child.once("exit", (code, signal) => {
++      this.exited = true;
++      this.exitDescription = `code=${String(code)}, signal=${String(signal)}`;
++      for (const wake of this.waiters) wake();
++    });
++  }
++
++  async start(): Promise<void> {
++    await this.next("ready");
++  }
++
++  async next<T extends ChildMessage["type"]>(type: T): Promise<Extract<ChildMessage, { type: T }>> {
++    const deadline = Date.now() + 20_000;
++    while (true) {
++      while (this.cursor < this.messages.length) {
++        const message = this.messages[this.cursor++]!;
++        if (message.type === "error" && type !== "error") {
++          throw new Error(
++            `child failed with ${message.code ?? "no code"}: ${message.message}; stderr: ${this.stderr}`,
++          );
++        }
++        if (message.type === type) {
++          return message as Extract<ChildMessage, { type: T }>;
++        }
++      }
++      if (this.exited) {
++        throw new Error(
++          `child exited before ${type}; messages: ${JSON.stringify(this.messages)}; stdout: ${this.stdout}; stderr: ${this.stderr}; error: ${this.spawnError?.message ?? "none"}; ${this.exitDescription}`,
++        );
++      }
++      const remaining = deadline - Date.now();
++      if (remaining <= 0) {
++        throw new Error(`timed out waiting for child ${type}; stderr: ${this.stderr}`);
++      }
++      await new Promise<void>((resolve) => {
++        const timer = setTimeout(
++          () => {
++            this.waiters.delete(wake);
++            resolve();
++          },
++          Math.min(remaining, 250),
++        );
++        const wake = () => {
++          clearTimeout(timer);
++          this.waiters.delete(wake);
++          resolve();
++        };
++        this.waiters.add(wake);
++      });
++    }
++  }
++}
++
++interface SyntheticRequest {
++  accessToken: string;
++  refreshToken: string;
++}
++
++class SyntheticRefreshServer {
++  readonly requests: SyntheticRequest[] = [];
++  private readonly consumedRefreshTokens = new Set<string>();
++  private readonly heldResponses: Array<{
++    payload: Record<string, string>;
++    response: import("node:http").ServerResponse;
++  }> = [];
++  private readonly requestWaiters = new Set<() => void>();
++  private failureNext = false;
++  private holdResponses = false;
++  private requestCount = 0;
++  private readonly server: Server;
++  readonly url!: string;
++
++  constructor(private readonly responseDelayMs = 0) {
++    this.server = createServer((request, response) => {
++      void this.handle(request, response);
++    });
++  }
++
++  async start(): Promise<void> {
++    servers.add(this.server);
++    await new Promise<void>((resolve) => this.server.listen(0, "127.0.0.1", resolve));
++    const address = this.server.address();
++    if (!address || typeof address === "string") throw new Error("synthetic server did not bind");
++    this.url = `http://127.0.0.1:${address.port}/refresh`;
++  }
++
++  failNext(): void {
++    this.failureNext = true;
++  }
++
++  holdNextResponses(): void {
++    this.holdResponses = true;
++  }
++
++  releaseHeldResponses(): void {
++    for (const held of this.heldResponses.splice(0)) {
++      held.response.writeHead(200, { "content-type": "application/json" });
++      held.response.end(JSON.stringify(held.payload));
++    }
++  }
++
++  async waitForRequests(count: number): Promise<void> {
++    const deadline = Date.now() + 10_000;
++    while (this.requests.length < count) {
++      if (Date.now() >= deadline) {
++        throw new Error(`timed out waiting for ${count} refresh requests`);
++      }
++      await new Promise<void>((resolve) => {
++        const wake = () => {
++          clearTimeout(timer);
++          this.requestWaiters.delete(wake);
++          resolve();
++        };
++        const timer = setTimeout(() => {
++          this.requestWaiters.delete(wake);
++          resolve();
++        }, 100);
++        this.requestWaiters.add(wake);
++      });
++    }
++  }
++
++  private async handle(
++    request: import("node:http").IncomingMessage,
++    response: import("node:http").ServerResponse,
++  ): Promise<void> {
++    let raw = "";
++    for await (const chunk of request) raw += chunk.toString();
++    const body = JSON.parse(raw) as SyntheticRequest;
++    this.requests.push(body);
++    for (const wake of this.requestWaiters) wake();
++
++    if (this.failureNext) {
++      this.failureNext = false;
++      response.writeHead(503, { "content-type": "application/json" });
++      response.end(JSON.stringify({ error: "synthetic refresh unavailable" }));
++      return;
++    }
++    if (this.consumedRefreshTokens.has(body.refreshToken)) {
++      response.writeHead(400, { "content-type": "application/json" });
++      response.end(JSON.stringify({ error: "invalid_grant" }));
++      return;
++    }
++
++    this.consumedRefreshTokens.add(body.refreshToken);
++    this.requestCount += 1;
++    const payload = {
++      accessToken: `rotated-access-${this.requestCount}`,
++      refreshToken: `rotated-refresh-${this.requestCount}`,
++    };
++    if (this.holdResponses) {
++      this.heldResponses.push({ payload, response });
++      return;
++    }
++    await new Promise((resolve) => setTimeout(resolve, this.responseDelayMs));
++    response.writeHead(200, { "content-type": "application/json" });
++    response.end(JSON.stringify(payload));
++  }
++}
++
++async function createSignedInProfile(input: {
++  baseDirName: string;
++  refreshToken?: string;
++  userId?: string;
++}): Promise<{
++  dataBaseDir: string;
++  credentialService: ReturnType<typeof createCredentialService>;
++}> {
++  await mkdir(TEST_TMP_ROOT, { recursive: true });
++  const dataBaseDir = await mkdtemp(join(TEST_TMP_ROOT, `${input.baseDirName}-`));
++  setDataBaseDir(dataBaseDir);
++  const credentialsFilePath = join(dataBaseDir, ".zcode", "v2", "credentials.json");
++  const credentialService = createCredentialService({
++    cipherProvider: createSystemCredentialCipher({
++      env: { ZCODE_CREDENTIAL_SECRET: TEST_SECRET },
++      filePath: credentialsFilePath,
++    }),
++  });
++  const userId = input.userId ?? "alice";
++  await credentialService.updateMany({
++    "oauth:active_provider": "zai",
++    "oauth:session_revision": `revision-${userId}-seed`,
++    "oauth:zai:access_token": `access-${userId}-seed`,
++    "oauth:zai:refresh_token": input.refreshToken ?? `refresh-${userId}-seed`,
++    "oauth:zai:user_info": JSON.stringify({
++      id: userId,
++      username: userId,
++      displayName: userId,
++    }),
++    zcodejwttoken: `jwt-${userId}`,
++  });
++  return { credentialService, dataBaseDir };
++}
++
++function spawnChild(config: ChildConfig): ChildHarness {
++  const child = fork(CHILD_DRIVER, [JSON.stringify(config)], {
++    cwd: REPO_ROOT,
++    env: { ...process.env, NODE_NO_WARNINGS: "1" },
++    execArgv: ["--import", "tsx"],
++    stdio: ["ignore", "ignore", "pipe", "ipc"],
++  });
++  children.add(child);
++  child.once("exit", () => children.delete(child));
++  return new ChildHarness(child);
++}
++
++async function killChild(child: ChildProcess): Promise<void> {
++  if (child.exitCode !== null || child.signalCode !== null) return;
++  await new Promise<void>((resolve) => {
++    const timer = setTimeout(resolve, 2_000);
++    child.once("exit", () => {
++      clearTimeout(timer);
++      resolve();
++    });
++    child.kill("SIGKILL");
++  });
++}
++
++async function readProfile(
++  credentialService: ReturnType<typeof createCredentialService>,
++): Promise<{ accessToken: string | null; refreshToken: string | null; revision: string | null }> {
++  const values = await credentialService.loadMany([
++    "oauth:session_revision",
++    "oauth:zai:access_token",
++    "oauth:zai:refresh_token",
++  ]);
++  return {
++    accessToken: values["oauth:zai:access_token"],
++    refreshToken: values["oauth:zai:refresh_token"],
++    revision: values["oauth:session_revision"],
++  };
++}
++
++it("uses one cross-process refresh for the same one-time token and both readers observe the new revision", async () => {
++  const server = new SyntheticRefreshServer(250);
++  await server.start();
++  const profile = await createSignedInProfile({ baseDirName: "same-profile" });
++  const config = {
++    dataBaseDir: profile.dataBaseDir,
++    mode: "refresh" as const,
++    refreshUrl: server.url,
++  };
++  const owner = spawnChild({
++    dataBaseDir: profile.dataBaseDir,
++    mode: "hold-lock",
++    refreshLockMaxWaitMs: 2_000,
++    refreshUrl: server.url,
++  });
++  await owner.start();
++  await owner.next("lock-held");
++  const first = spawnChild(config);
++  const second = spawnChild(config);
++  await Promise.all([first.start(), second.start()]);
++  await Promise.all([first.next("waiting"), second.next("waiting")]);
++  await killChild(owner.child);
++  const [firstResult, secondResult] = await Promise.all([
++    first.next("result"),
++    second.next("result"),
++  ]);
++
++  expect(server.requests).toHaveLength(1);
++  expect(server.requests[0]?.refreshToken).toBe("refresh-alice-seed");
++  expect(firstResult.result).toEqual(secondResult.result);
++  expect(firstResult.result.accessToken).toBe("rotated-access-1");
++  expect(firstResult.result.refreshToken).toBe("rotated-refresh-1");
++  expect(firstResult.result.revision).not.toBe("revision-alice-seed");
++  expect(firstResult.result.events.filter((event) => event === "signed-in")).toHaveLength(1);
++  expect(secondResult.result.events.filter((event) => event === "signed-in")).toHaveLength(1);
++}, 30_000);
++
++it("reclaims a crashed lock owner and leaves unrelated task/model credential work unblocked", async () => {
++  const server = new SyntheticRefreshServer();
++  await server.start();
++  const profile = await createSignedInProfile({ baseDirName: "owner-crash" });
++  const owner = spawnChild({
++    dataBaseDir: profile.dataBaseDir,
++    mode: "hold-lock",
++    refreshLockMaxWaitMs: 2_000,
++    refreshUrl: server.url,
++  });
++  await owner.start();
++  await owner.next("lock-held");
++
++  await expect(
++    profile.credentialService.save("task:model:unrelated", "completed"),
++  ).resolves.toBeUndefined();
++  await expect(profile.credentialService.load("task:model:unrelated")).resolves.toBe("completed");
++
++  await killChild(owner.child);
++  const successor = spawnChild({
++    dataBaseDir: profile.dataBaseDir,
++    mode: "refresh",
++    refreshUrl: server.url,
++  });
++  await successor.start();
++  const result = await successor.next("result");
++  expect(server.requests).toHaveLength(1);
++  expect(result.result.refreshToken).toBe("rotated-refresh-1");
++}, 30_000);
++
++it("times out lock acquisition without refreshing or taking the credential file lock", async () => {
++  const server = new SyntheticRefreshServer();
++  await server.start();
++  const profile = await createSignedInProfile({ baseDirName: "lock-timeout" });
++  const owner = spawnChild({
++    dataBaseDir: profile.dataBaseDir,
++    mode: "hold-lock",
++    refreshLockMaxWaitMs: 2_000,
++    refreshUrl: server.url,
++  });
++  await owner.start();
++  await owner.next("lock-held");
++
++  const waiter = spawnChild({
++    dataBaseDir: profile.dataBaseDir,
++    mode: "refresh",
++    refreshLockMaxWaitMs: 150,
++    refreshUrl: server.url,
++  });
++  await waiter.start();
++  const error = await waiter.next("error");
++  expect(error.code).toBe("ZCODE_FILE_LOCK_TIMEOUT");
++  expect(server.requests).toHaveLength(0);
++  await expect(readProfile(profile.credentialService)).resolves.toEqual({
++    accessToken: "access-alice-seed",
++    refreshToken: "refresh-alice-seed",
++    revision: "revision-alice-seed",
++  });
++}, 30_000);
++
++it("bounds a provider network refresh while holding the scoped lock and keeps dispatch fail-closed", async () => {
++  const server = new SyntheticRefreshServer();
++  server.holdNextResponses();
++  await server.start();
++  const profile = await createSignedInProfile({ baseDirName: "network-timeout" });
++  const first = spawnChild({
++    dataBaseDir: profile.dataBaseDir,
++    mode: "refresh",
++    refreshNetworkTimeoutMs: NETWORK_TIMEOUT_MS,
++    refreshUrl: server.url,
++  });
++  await first.start();
++  await server.waitForRequests(1);
++  const startedAt = Date.now();
++  const error = await first.next("error");
++  expect(error.code).toBe("ZCODE_OAUTH_REFRESH_NETWORK_TIMEOUT");
++  expect(Date.now() - startedAt).toBeLessThan(NETWORK_TIMEOUT_MS + 2_000);
++  expect(server.requests).toHaveLength(1);
++  await expect(readProfile(profile.credentialService)).resolves.toEqual({
++    accessToken: "access-alice-seed",
++    refreshToken: "refresh-alice-seed",
++    revision: "revision-alice-seed",
++  });
++
++  const second = spawnChild({
++    dataBaseDir: profile.dataBaseDir,
++    mode: "refresh",
++    refreshNetworkTimeoutMs: NETWORK_TIMEOUT_MS,
++    refreshUrl: server.url,
++  });
++  await second.start();
++  const retryError = await second.next("error");
++  expect(retryError.code).toBe("ZCODE_OAUTH_REFRESH_DISPATCH_UNCERTAIN");
++  expect(server.requests).toHaveLength(1);
++}, 30_000);
++
++it("fails closed after a possibly consumed refresh token and does not retry it", async () => {
++  const server = new SyntheticRefreshServer();
++  server.failNext();
++  await server.start();
++  const profile = await createSignedInProfile({ baseDirName: "refresh-failure" });
++  const first = spawnChild({
++    dataBaseDir: profile.dataBaseDir,
++    mode: "refresh",
++    refreshUrl: server.url,
++  });
++  await first.start();
++  const firstError = await first.next("error");
++  expect(firstError.message).toContain("synthetic refresh unavailable");
++  expect(server.requests).toHaveLength(1);
++  await expect(readProfile(profile.credentialService)).resolves.toEqual({
++    accessToken: "access-alice-seed",
++    refreshToken: "refresh-alice-seed",
++    revision: "revision-alice-seed",
++  });
++
++  const second = spawnChild({
++    dataBaseDir: profile.dataBaseDir,
++    mode: "refresh",
++    refreshUrl: server.url,
++  });
++  await second.start();
++  const secondError = await second.next("error");
++  expect(secondError.code).toBe("ZCODE_OAUTH_REFRESH_DISPATCH_UNCERTAIN");
++  expect(server.requests).toHaveLength(1);
++}, 30_000);
++
++it("keeps dispatch fail-closed when only the session revision changes during refresh", async () => {
++  const server = new SyntheticRefreshServer();
++  server.holdNextResponses();
++  await server.start();
++  const profile = await createSignedInProfile({ baseDirName: "revision-only-change" });
++  const first = spawnChild({
++    dataBaseDir: profile.dataBaseDir,
++    mode: "refresh",
++    refreshUrl: server.url,
++  });
++  await first.start();
++  await server.waitForRequests(1);
++
++  await profile.credentialService.save("oauth:session_revision", "revision-alice-metadata");
++  server.releaseHeldResponses();
++  const firstError = await first.next("error");
++  expect(firstError.code).toBe("ZCODE_OAUTH_REFRESH_STALE_WRITER");
++
++  const second = spawnChild({
++    dataBaseDir: profile.dataBaseDir,
++    mode: "refresh",
++    refreshUrl: server.url,
++  });
++  await second.start();
++  const secondError = await second.next("error");
++  expect(secondError.code).toBe("ZCODE_OAUTH_REFRESH_DISPATCH_UNCERTAIN");
++  expect(server.requests).toHaveLength(1);
++}, 30_000);
++
++it("allows different profiles to refresh in parallel", async () => {
++  const server = new SyntheticRefreshServer();
++  server.holdNextResponses();
++  await server.start();
++  const alice = await createSignedInProfile({
++    baseDirName: "parallel-alice",
++    userId: "alice",
++  });
++  const bob = await createSignedInProfile({
++    baseDirName: "parallel-bob",
++    userId: "bob",
++  });
++  const aliceChild = spawnChild({
++    dataBaseDir: alice.dataBaseDir,
++    mode: "refresh",
++    refreshUrl: server.url,
++  });
++  const bobChild = spawnChild({
++    dataBaseDir: bob.dataBaseDir,
++    mode: "refresh",
++    refreshUrl: server.url,
++  });
++  await Promise.all([aliceChild.start(), bobChild.start()]);
++  await Promise.all([aliceChild.next("lock-acquired"), bobChild.next("lock-acquired")]);
++  await server.waitForRequests(2);
++  expect(server.requests.map((request) => request.refreshToken).sort()).toEqual([
++    "refresh-alice-seed",
++    "refresh-bob-seed",
++  ]);
++  server.releaseHeldResponses();
++  const [aliceResult, bobResult] = await Promise.all([
++    aliceChild.next("result"),
++    bobChild.next("result"),
++  ]);
++  expect(aliceResult.result.refreshToken).toMatch(/^rotated-refresh-[12]$/);
++  expect(bobResult.result.refreshToken).toMatch(/^rotated-refresh-[12]$/);
++  expect(aliceResult.result.refreshToken).not.toBe(bobResult.result.refreshToken);
++}, 30_000);
++
++it("reuses the latest usable A credential after an A to B to A transition", async () => {
++  const server = new SyntheticRefreshServer();
++  await server.start();
++  const profile = await createSignedInProfile({ baseDirName: "aba" });
++  const owner = spawnChild({
++    dataBaseDir: profile.dataBaseDir,
++    mode: "hold-lock",
++    refreshLockMaxWaitMs: 2_000,
++    refreshUrl: server.url,
++  });
++  await owner.start();
++  await owner.next("lock-held");
++
++  const waiter = spawnChild({
++    dataBaseDir: profile.dataBaseDir,
++    mode: "refresh",
++    refreshUrl: server.url,
++  });
++  await waiter.start();
++  await waiter.next("waiting");
++
++  await profile.credentialService.updateMany({
++    "oauth:active_provider": "bigmodel",
++    "oauth:session_revision": "revision-b",
++    "oauth:bigmodel:access_token": "access-b",
++    "oauth:bigmodel:refresh_token": "refresh-b",
++    "oauth:bigmodel:user_info": JSON.stringify({
++      id: "bob",
++      username: "bob",
++      displayName: "bob",
++    }),
++  });
++  await profile.credentialService.updateMany({
++    "oauth:active_provider": "zai",
++    "oauth:session_revision": "revision-a-new",
++    "oauth:zai:access_token": "access-a-new",
++    "oauth:zai:refresh_token": "refresh-a-rotated",
++    "oauth:zai:user_info": JSON.stringify({
++      id: "alice",
++      username: "alice",
++      displayName: "alice",
++    }),
++  });
++  await killChild(owner.child);
++
++  const result = await waiter.next("result");
++  expect(server.requests).toHaveLength(0);
++  expect(result.result).toEqual({
++    accessToken: "access-a-new",
++    events: ["signed-in"],
++    refreshToken: "refresh-a-rotated",
++    revision: "revision-a-new",
++  });
++}, 30_000);
++
++it("rejects a late refresh response without overwriting a newer credential", async () => {
++  const server = new SyntheticRefreshServer();
++  server.holdNextResponses();
++  await server.start();
++  const profile = await createSignedInProfile({ baseDirName: "late-response" });
++  const refresh = spawnChild({
++    dataBaseDir: profile.dataBaseDir,
++    mode: "refresh",
++    refreshUrl: server.url,
++  });
++  await refresh.start();
++  await server.waitForRequests(1);
++
++  await profile.credentialService.updateMany({
++    "oauth:session_revision": "revision-alice-newer",
++    "oauth:zai:access_token": "access-alice-newer",
++    "oauth:zai:refresh_token": "refresh-alice-newer",
++  });
++  server.releaseHeldResponses();
++
++  const error = await refresh.next("error");
++  expect(error.code).toBe("ZCODE_OAUTH_REFRESH_STALE_WRITER");
++  await expect(readProfile(profile.credentialService)).resolves.toEqual({
++    accessToken: "access-alice-newer",
++    refreshToken: "refresh-alice-newer",
++    revision: "revision-alice-newer",
++  });
++}, 30_000);

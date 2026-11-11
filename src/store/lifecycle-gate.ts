@@ -43,6 +43,7 @@ import { WorkerHandleGate } from "../runtime/start-plan-handle-gate.js";
 import type { WindowsTreeTransactionLike } from "../adapters/windows-process-cleanup.js";
 
 const DEFAULT_PROCESS_PROBE_TIMEOUT_MS = 5_000;
+const DEFAULT_PROCESS_TREE_PROBE_TIMEOUT_MS = 30_000;
 // Share a verified process-tree stop across Managers using the same local
 // SQLite Authority. Keep it until Release so an earlier alive probe cannot
 // trigger a second signal from a competing Recovery.
@@ -256,6 +257,10 @@ export interface ClaimOnlyDriverOptions {
   readonly processProbe?: ProcessProbe;
   /** Test-only shortening of the fixed Manager probe deadline; production uses 5 seconds. */
   readonly testProcessProbeTimeoutMs?: number;
+  /** Test-only injection for the existing exact-root recorded-tree verifier. */
+  readonly testVerifyProcessTreeClaimantsClean?: typeof verifyProcessTreeClaimantsClean;
+  /** Test-only shortening of the fixed Manager tree-scan deadline; production uses 30 seconds. */
+  readonly testProcessTreeProbeTimeoutMs?: number;
   /** Internal test seams: only shorten fixed production phase waits. */
   readonly testResultWaitMs?: number;
   readonly testWorkerCloseWaitMs?: number;
@@ -1248,6 +1253,12 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
     || processProbeTimeoutMs > DEFAULT_PROCESS_PROBE_TIMEOUT_MS) {
     throw new LifecycleGateError("process_probe_timeout_invalid");
   }
+  const processTreeProbeTimeoutMs = options.testProcessTreeProbeTimeoutMs ?? DEFAULT_PROCESS_TREE_PROBE_TIMEOUT_MS;
+  if (!Number.isSafeInteger(processTreeProbeTimeoutMs) || processTreeProbeTimeoutMs < 1
+    || processTreeProbeTimeoutMs > DEFAULT_PROCESS_TREE_PROBE_TIMEOUT_MS) {
+    throw new LifecycleGateError("process_tree_probe_timeout_invalid");
+  }
+  const verifyTreeClaimants = options.testVerifyProcessTreeClaimantsClean ?? verifyProcessTreeClaimantsClean;
   const modules = await (options.loadModules?.() ?? loadLifecycleCandidateModules());
   let raw: LifecycleCandidateStore | undefined;
   try {
@@ -1535,7 +1546,11 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
       let treeOutcome: BoundedTreeOutcome | undefined;
       if ((phase === "result_committed" || phase === "cleanup_pending" || phase === "cleanup_unverified")
         && identityState === "exited") {
-        treeOutcome = await processTreeWithDeadline([{ pid: processId, fingerprint }], 30_000);
+        treeOutcome = await processTreeWithDeadline(
+          [{ pid: processId, fingerprint }],
+          processTreeProbeTimeoutMs,
+          verifyTreeClaimants,
+        );
       }
       if ((phase === "result_committed" || phase === "cleanup_pending" || phase === "cleanup_unverified") && identityState === "exited") {
         // For a single-user local Bridge, exact exit identity plus a clean
@@ -1546,9 +1561,9 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
         // remain operation-scoped Holds.
         const completeCleanupClosureAvailable = treeOutcome?.status === "resolved"
           && treeOutcome.result.clean === true
-          && treeOutcome.result.livePids.length === 0;
-        if (completeCleanupClosureAvailable && treeOutcome?.status === "resolved"
-          && treeOutcome.result.clean === true && treeOutcome.result.livePids.length === 0) {
+          && treeOutcome.result.livePids.length === 0
+          && treeOutcome.result.observedPids.includes(processId);
+        if (completeCleanupClosureAvailable && treeOutcome?.status === "resolved") {
           const currentOperation = asRecord(port.readOperation(operationId));
           if (currentOperation.task_id !== operation.task_id || Number(currentOperation.attempt) !== Number(operation.attempt)
             || Number(currentOperation.generation) !== Number(operation.generation) || currentOperation.claim_id !== claimId
@@ -1629,6 +1644,7 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
           // This isolated Driver only launches fake_candidate_adapter. Its
           // Worker has no Workspace write path; Store cleanup APIs separately
           // reject unresolved interaction replies inside the transaction.
+          const observedPids = [...new Set(treeOutcome.result.observedPids)].sort((left, right) => left - right);
           const processTreeFacts = {
             contract: "sqlite-candidate-recovery-worker-tree-v1",
             operation_id: operationId,
@@ -1640,8 +1656,10 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
             root_process_id: processId,
             root_start_fingerprint: fingerprint,
             identity_state: "exited",
+            scan_scope: "worker_root_recorded_tree_and_observed_claimants",
             scan_clean: true,
             live_pids: [],
+            observed_pids: observedPids,
           };
           const resourceFacts = {
             contract: "sqlite-candidate-recovery-operation-resources-v1",
@@ -2449,7 +2467,8 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
                       catch (error) { stage("worker_close_unverified", { reason: errorCode(error) ?? "worker_stop_timeout" }); }
                       if (workerClosed) await closeHandleGate();
                       stage("worker_close", { pid: child.pid ?? null, exitCode: workerExitCode });
-                      cleanupState = await finalizeClaimedWorkerCleanup(port, input, generation, claimId, probe, processProbeTimeoutMs, workerExitCode,
+                      cleanupState = await finalizeClaimedWorkerCleanup(port, input, generation, claimId, probe, processProbeTimeoutMs,
+                        verifyTreeClaimants, processTreeProbeTimeoutMs, workerExitCode,
                         executionCleanup, executionCleanup ? "adapter_verified" : "adapter_unverified",
                         (name, detail) => stage(name, detail));
                       stage("cleanup_complete", { cleanup_state: cleanupState });
@@ -2573,6 +2592,8 @@ async function finalizeClaimedWorkerCleanup(
   claimId: string,
   probe: ProcessProbe,
   probeTimeoutMs: number,
+  verifyTreeClaimants: typeof verifyProcessTreeClaimantsClean,
+  processTreeProbeTimeoutMs: number,
   workerExitCode: number | null,
   executionCleanup: CandidateExecutionCleanupProof | null,
   adapterCleanupState: "adapter_verified" | "adapter_unverified",
@@ -2610,6 +2631,7 @@ async function finalizeClaimedWorkerCleanup(
 
   let probeState: "alive" | "unknown" | "identity_mismatch" | "incomplete" = "unknown";
   let cleanupEvidence: Readonly<Record<string, unknown>> | undefined;
+  let cleanupFailureReason: string | undefined;
   if (workerExitCode === 0 && executionCleanup) {
     try {
       stage("cleanup_identity_probe_start", { pid: rootProcessId });
@@ -2629,51 +2651,82 @@ async function finalizeClaimedWorkerCleanup(
         : probeOutcome.status === "rejected" ? "cleanup_identity_probe_failed" : "cleanup_identity_probe_complete",
       { state: verdict?.state ?? "unknown", reason: verdict?.reason_code ?? probeOutcome.status });
       if (verdict?.state === "exited") {
-        const launchReceiptDigest = text(current.launch_receipt_digest, "cleanup_launch_receipt_digest_missing");
-        const resultCommitRef = text(current.result_commit_ref, "cleanup_result_commit_ref_missing");
-        const processTreeFacts = {
-          contract: executionCleanup.source === "zcode_app_server_adapter"
-            ? "real-zcode-claimed-worker-process-tree-v1"
-            : "synthetic-claim-worker-process-tree-v1",
-          process_id: rootProcessId,
-          start_fingerprint: rootFingerprint,
-          worker_exit_code: workerExitCode,
-          probe_state: verdict.state,
-          descendants: [],
-          execution_cleanup_proof_digest: sha256(canonicalJson(executionCleanup)),
-        };
-        const resourceFacts = {
-          contract: executionCleanup.source === "zcode_app_server_adapter"
-            ? "real-zcode-adapter-resources-v1"
-            : "synthetic-claimed-worker-resources-v1",
-          adapter_cleanup_state: adapterCleanupState,
-          execution_cleanup_source: executionCleanup.source,
+        stage("cleanup_tree_scan_start", { pid: rootProcessId });
+        const treeOutcome = await processTreeWithDeadline(
+          [{ pid: rootProcessId, fingerprint: rootFingerprint }],
+          processTreeProbeTimeoutMs,
+          verifyTreeClaimants,
+        );
+        const treeComplete = treeOutcome.status === "resolved"
+          && treeOutcome.result.clean === true
+          && treeOutcome.result.livePids.length === 0
+          && treeOutcome.result.observedPids.includes(rootProcessId);
+        stage(treeOutcome.status === "timeout" ? "cleanup_tree_scan_timeout"
+          : treeOutcome.status === "rejected" ? "cleanup_tree_scan_failed"
+            : treeComplete ? "cleanup_tree_scan_clean" : "cleanup_tree_scan_incomplete",
+        treeOutcome.status === "resolved" ? {
+          clean: treeOutcome.result.clean,
+          live_pid_count: treeOutcome.result.livePids.length,
+          observed_pid_count: treeOutcome.result.observedPids.length,
           execution_cleanup_method: executionCleanup.method,
-          worker_stdio_closed: true,
-          interaction_channels: false,
-          cleanup_scope: "worker_and_adapter_descendant_resources",
-          managed_browser_cleanup_verified: executionCleanup.managed_browser_cleanup_verified,
-          workspace_retained: executionCleanup.workspace_retained,
-        };
-        cleanupEvidence = {
-          source: "manager_os_cleanup_verification",
-          fixture: false,
-          operation_id: input.operationId,
-          task_id: input.task.task_id,
-          attempt: input.attempt,
-          generation,
-          claim_id: claimId,
-          worker_identity_digest: claimIdentityDigest,
-          launch_receipt_digest: launchReceiptDigest,
-          result_commit_ref: resultCommitRef,
-          process_tree_digest: sha256(canonicalJson(processTreeFacts)),
-          resources_digest: sha256(canonicalJson(resourceFacts)),
-          root_process_id: rootProcessId,
-          root_start_fingerprint: rootFingerprint,
-          worker_tree_complete: true,
-          operation_resources_complete: true,
-          workspace_touched: false,
-        };
+        } : {});
+        if (treeComplete && treeOutcome.status === "resolved") {
+          const launchReceiptDigest = text(current.launch_receipt_digest, "cleanup_launch_receipt_digest_missing");
+          const resultCommitRef = text(current.result_commit_ref, "cleanup_result_commit_ref_missing");
+          const observedPids = [...new Set(treeOutcome.result.observedPids)].sort((left, right) => left - right);
+          const processTreeFacts = {
+            contract: executionCleanup.source === "zcode_app_server_adapter"
+              ? "real-zcode-claimed-worker-process-tree-v1"
+              : "synthetic-claim-worker-process-tree-v1",
+            process_id: rootProcessId,
+            start_fingerprint: rootFingerprint,
+            worker_exit_code: workerExitCode,
+            probe_state: verdict.state,
+            scan_scope: "worker_root_recorded_tree_and_observed_claimants",
+            scan_clean: true,
+            live_pids: [],
+            observed_pids: observedPids,
+            execution_cleanup_proof_digest: sha256(canonicalJson(executionCleanup)),
+          };
+          const resourceFacts = {
+            contract: executionCleanup.source === "zcode_app_server_adapter"
+              ? "real-zcode-adapter-resources-v1"
+              : "synthetic-claimed-worker-resources-v1",
+            adapter_cleanup_state: adapterCleanupState,
+            execution_cleanup_source: executionCleanup.source,
+            execution_cleanup_method: executionCleanup.method,
+            worker_stdio_closed: true,
+            interaction_channels: false,
+            cleanup_scope: "worker_and_adapter_descendant_resources",
+            managed_browser_cleanup_verified: executionCleanup.managed_browser_cleanup_verified,
+            workspace_retained: executionCleanup.workspace_retained,
+          };
+          cleanupEvidence = {
+            source: "manager_os_cleanup_verification",
+            fixture: false,
+            operation_id: input.operationId,
+            task_id: input.task.task_id,
+            attempt: input.attempt,
+            generation,
+            claim_id: claimId,
+            worker_identity_digest: claimIdentityDigest,
+            launch_receipt_digest: launchReceiptDigest,
+            result_commit_ref: resultCommitRef,
+            process_tree_digest: sha256(canonicalJson(processTreeFacts)),
+            resources_digest: sha256(canonicalJson(resourceFacts)),
+            root_process_id: rootProcessId,
+            root_start_fingerprint: rootFingerprint,
+            worker_tree_complete: true,
+            operation_resources_complete: true,
+            workspace_touched: false,
+          };
+        } else {
+          probeState = "incomplete";
+          cleanupFailureReason = treeOutcome.status === "timeout" ? "process_tree_probe_timeout"
+            : treeOutcome.status === "rejected" ? "process_tree_probe_rejected"
+              : treeOutcome.status === "resolved" && treeOutcome.result.livePids.length > 0 ? "process_tree_still_live"
+                : "process_tree_scan_incomplete";
+        }
       } else {
         probeState = verdict?.state === "alive" ? "alive" : "unknown";
       }
@@ -2691,7 +2744,7 @@ async function finalizeClaimedWorkerCleanup(
       outcome: "unverified",
       probe_state: probeState,
       reason: !executionCleanup ? "adapter_cleanup_unverified"
-        : workerExitCode === 0 ? "worker_exit_identity_not_proven" : "worker_exit_not_verified",
+        : workerExitCode === 0 ? cleanupFailureReason ?? "worker_exit_identity_not_proven" : "worker_exit_not_verified",
     });
     return "unverified";
   }
@@ -2846,9 +2899,10 @@ async function probeWithDeadline(
 async function processTreeWithDeadline(
   targets: readonly { readonly pid: number; readonly fingerprint: string }[],
   timeoutMs: number,
+  verify: typeof verifyProcessTreeClaimantsClean = verifyProcessTreeClaimantsClean,
 ): Promise<BoundedTreeOutcome> {
   let timer: NodeJS.Timeout | undefined;
-  const pending = Promise.resolve().then(() => verifyProcessTreeClaimantsClean(targets)).then(
+  const pending = Promise.resolve().then(() => verify(targets)).then(
     (result): BoundedTreeOutcome => ({ status: "resolved", result }),
     (): BoundedTreeOutcome => ({ status: "rejected" }),
   );

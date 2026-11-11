@@ -11,7 +11,12 @@ import { BRIDGE_WORKER_LAUNCH_MARKER, fingerprintRuntimeArtifact, verifyWorkerPr
 import { validateHostProfile, type BridgeHostProfile } from "../host/profile.js";
 import { createPlatformProbe } from "../runtime/process-probe.js";
 import { StartPlanSecretRedactor } from "../runtime/start-plan-secret-redactor.js";
-import type { TaskPackage, WorkspaceRef } from "../interfaces.js";
+import type { TaskPackage, WorkspaceRef, ZCodeRuntimeConfig } from "../interfaces.js";
+import type {
+  OfficialHostRuntimeAuthService,
+  OfficialHostRuntimeAuthServiceFactory,
+} from "../adapters/official-host-adapter.js";
+import { accountProviderRuleFacts, zcodeDataBaseDir } from "../runtime/account-provider.js";
 import type {
   CandidateExecutionCleanupProof,
   CandidateTaskResult,
@@ -322,7 +327,10 @@ async function runZCodeAdapter(
   workerIdentity?: import("../runtime/process-probe.js").ProcessIdentity,
 ): Promise<CandidateWorkerResultFrame> {
   if (execution.adapter_mode !== "zcode_app_server") throw new Error("real ZCode Adapter mode is required");
-  const { ZCodeAppServerAdapter } = await import("../adapters/zcode-app-server-adapter.js");
+  const {
+    OfficialHostAdapter,
+    loadOfficialHostProviderRuntimeAuthFactory,
+  } = await import("../adapters/official-host-adapter.js");
   const { buildTaskResult } = await import("../manager/normalize.js");
   const startedAt = new Date().toISOString();
   let outcome: import("../adapters/run-outcome.js").ZCodeRunOutcome | null = null;
@@ -336,6 +344,13 @@ async function runZCodeAdapter(
   let privateAuthConfirmed = false;
   let notifyPrivateAuthConfirmation: (() => void) | undefined;
   const privateAuthLifetime = execution.private_auth ? new Socket({ fd: 13, readable: true, writable: false }) : undefined;
+  let providerRuntimeAuthFactory:
+    | Promise<OfficialHostRuntimeAuthServiceFactory>
+    | undefined;
+  const providerRuntimeAuthServices = new Map<
+    string,
+    Promise<OfficialHostRuntimeAuthService>
+  >();
   privateAuthLifetime?.on("data", (chunk: Buffer) => {
     for (const byte of chunk) {
       if (!privateAuthParentLive && !privateAuthConfirmed && byte === 1) privateAuthParentLive = true;
@@ -442,7 +457,61 @@ async function runZCodeAdapter(
     signal.addEventListener("abort", () => { if (cachedAuth === current) clearCachedAuth(); }, { once: true });
     return current;
   };
-  const adapter = new ZCodeAppServerAdapter({
+  const resolveProviderRuntimeAuth = async (
+    request: Record<string, unknown>,
+    config: ZCodeRuntimeConfig,
+    signal: AbortSignal,
+  ): Promise<Record<string, unknown>> => {
+    const unavailable = (): Record<string, unknown> => ({
+      headersApplied: false,
+      errorMessage: "Provider runtime authorization is unavailable.",
+    });
+    if (signal.aborted) return unavailable();
+    const providerId =
+      typeof request.providerId === "string" ? request.providerId : "";
+    const facts = accountProviderRuleFacts(providerId, config);
+    const access = asRecord(request.accountAccess);
+    if (
+      !facts?.accountType
+      || facts.planKind !== "individual-coding-plan"
+      || access.type !== "zhipu-account"
+      || access.accountType !== facts.accountType
+      || access.mode !== facts.planKind
+      || access.entitled !== true
+    ) {
+      return unavailable();
+    }
+    const dataBaseDir = zcodeDataBaseDir(config.providerPersonalConfigFile);
+    if (!dataBaseDir) return unavailable();
+    const cacheKey = `${dataBaseDir}\0${providerId}`;
+    let service = providerRuntimeAuthServices.get(cacheKey);
+    if (!service) {
+      providerRuntimeAuthFactory ??= loadOfficialHostProviderRuntimeAuthFactory();
+      service = providerRuntimeAuthFactory.then((factory) =>
+        factory({
+          dataBaseDir,
+          resolveCurrentAccountAccess: async (currentAccess) => {
+            if (
+              currentAccess.type !== "zhipu-account"
+              || currentAccess.accountType !== facts.accountType
+              || currentAccess.mode !== facts.planKind
+              || currentAccess.entitled !== true
+            ) {
+              return null;
+            }
+            return {
+              type: "zhipu-account",
+              family: facts.accountType,
+              planKind: "individual-coding-plan",
+            };
+          },
+        }),
+      );
+      providerRuntimeAuthServices.set(cacheKey, service);
+    }
+    return (await service).resolveProviderRuntimeRequest(request, { signal });
+  };
+  const adapter = new OfficialHostAdapter({
     host: execution.host_profile,
     // Manager resolved this attempt's effective budget before dispatch.
     timeoutMs: execution.task.timeout_ms,
@@ -456,6 +525,7 @@ async function runZCodeAdapter(
     },
     executionProfileId: execution.execution_profile_id,
     ...(execution.private_auth ? { startPlanProviderEntitled: execution.private_auth.entitled } : {}),
+    resolveProviderRuntimeAuth,
     onEvent: (event) => {
       // Bounded lifecycle evidence without request payloads. This distinguishes
       // a Worker that reached adapter cleanup from one killed before cleanup.
@@ -654,6 +724,12 @@ function requiredStringArray(value: unknown, error: string): string[] {
 }
 
 function nullableString(value: unknown): string | null { return typeof value === "string" ? value : null; }
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
 
 function writeDiagnostic(line: string): void {
   try { writeSync(2, line); } catch { /* stderr may already be gone */ }

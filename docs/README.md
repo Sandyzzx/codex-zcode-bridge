@@ -2,8 +2,8 @@
 
 > Status: AUTHORITATIVE（仅指本索引）
 > Last updated: 2026-11-11
-> Last verified: 2026-11-11，产品入口沿用 bfd3406f 核对；本轮核对 ADR-032、隔离 POC 结果与生产未切换边界。
-> Verified against: 9710303397fe2d544c75698f783a8174404b2d51（本轮文档路由；产品实现事实沿用既有核对）
+> Last verified: 2026-11-11，产品入口沿用 bfd3406f 核对；本轮核对 ADR-032–034、隔离证据与实现门禁边界。
+> Verified against: 4932b2fbc0be96090cffef7693646ed351a4d7ab（本轮文档路由；产品实现事实沿用既有核对）
 
 English users start at [README.md](../README.md). 技术文档为中文。先读当前事实，按问题加载合同；研究/历史材料不作为当前实现。
 
@@ -20,7 +20,9 @@ English users start at [README.md](../README.md). 技术文档为中文。先读
 | 问题 | 文档 |
 |---|---|
 | 系统怎样工作、谁持有事实 | [ARCHITECTURE.md](ARCHITECTURE.md) |
-| 下一阶段已接受目标（尚未实施） | [ADR-032：Worker 内官方 Host](decisions/ADR-032-existing-worker-official-host-integration.md) |
+| 下一阶段已接受目标 | [ADR-032：Worker 内官方 Host](decisions/ADR-032-existing-worker-official-host-integration.md) |
+| 账户 refresh 协调 | [ADR-033](decisions/ADR-033-official-account-refresh-coordination.md) |
+| 正常 Cleanup 复用 Worker-tree Proof | [ADR-034](decisions/ADR-034-normal-cleanup-worker-tree-proof.md) |
 | 官方 Host 构建、隔离 POC 与阻断项 | [ZCode Official Host Integration v1](research/zcode-official-host-integration-v1/IMPLEMENTATION_SUMMARY.md) |
 | MCP、Task/Result、Attention、取消合同 | [INTERFACES.md](INTERFACES.md) |
 | Core API、fork、Host/Worker 打包 | [SHARED_CORE.md](SHARED_CORE.md) |
@@ -43,6 +45,6 @@ Preview.3 的 Start Plan 真实证据目前只覆盖 Windows、官方 AppServer 
 
 历史资产的本轮分类与有限清理见 [Legacy & Dead Code Audit v1](reports/LEGACY_DEAD_CODE_AUDIT_V1.md)；该报告是候选证据，不能替代当前合同或各 PR 的验收。
 
-官方 Host 集成的拓扑/职责/制品策略已由 ADR-032 Accepted 冻结，独立 Companion 已移出当前目标。依据为 [Astra 审查](research/zcode-companion-independent-review-2026-11-11/REVIEW.md) 与 [架构收敛报告](research/zcode-companion-owner-architecture-convergence-2026-11-11/OWNER_ARCHITECTURE_DECISION_REVIEW.md)；历史正文保留，新增适用性说明指向正式决定。[账户和 Cleanup 草案](research/zcode-companion-owner-architecture-convergence-2026-11-11/ADR_PROPOSALS.md) 仍 Proposed；[冻结核对报告](reports/2026-11-11-official-host-architecture-freeze.md) 与 [POC-1 计划](research/zcode-official-host-architecture-freeze-2026-11-11/POC_1_ENTRY.md) 明确未决能力和单独授权门槛。
+官方 Host 集成的拓扑/职责/制品策略已由 ADR-032 Accepted 冻结，独立 Companion 已移出当前目标。依据为 [Astra 审查](research/zcode-companion-independent-review-2026-11-11/REVIEW.md) 与 [架构收敛报告](research/zcode-companion-owner-architecture-convergence-2026-11-11/OWNER_ARCHITECTURE_DECISION_REVIEW.md)；历史正文保留，新增适用性说明指向正式决定。账户 refresh 与正常 Cleanup 已分别由 [ADR-033](decisions/ADR-033-official-account-refresh-coordination.md) 和 [ADR-034](decisions/ADR-034-normal-cleanup-worker-tree-proof.md) 固化；[旧合并草案](research/zcode-companion-owner-architecture-convergence-2026-11-11/ADR_PROPOSALS.md) 仅用于历史追溯。
 
-后续隔离 POC 已证明固定 3.18.0 源码制品可在 Windows x64、Node 24.16.0 下完成官方 ProcessManager/AppServer、Mock Read、resume、cancel 和目标进程清理；这仍是组件证据。生产 Worker 未接入，same-profile 双 Worker refresh 合成测试已失败，raw frame guard 与 Cleanup Proof 仍未满足。详见 [实施摘要](research/zcode-official-host-integration-v1/IMPLEMENTATION_SUMMARY.md) 和 [最终验收报告](research/zcode-official-host-integration-v1/FINAL_ACCEPTANCE_REPORT.md)。
+后续隔离 POC 已证明固定 3.18.0 源码制品可在 Windows x64、Node 24.16.0 下完成官方 ProcessManager/AppServer、Mock Read、resume、cancel 和目标进程清理；这仍是组件证据。恢复任务已进入生产实现阶段，但未通过的门禁必须继续标为 `PARTIAL`、`BLOCKED` 或 `NOT_RUN`。详见 [实施摘要](research/zcode-official-host-integration-v1/IMPLEMENTATION_SUMMARY.md) 和当前最终验收报告。

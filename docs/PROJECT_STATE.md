@@ -2,8 +2,8 @@
 
 > Status: AUTHORITATIVE
 > Last updated: 2026-11-11
-> Last verified: 2026-11-11，Preview.3 产品事实沿用 bfd3406f 的核对范围；本轮核对 ADR-032 后的隔离 POC 证据、生产未切换边界和新增阻断项，未重跑产品验收。
-> Verified against: 9710303397fe2d544c75698f783a8174404b2d51（目标架构与研究报告；产品实现事实沿用既有核对）
+> Last verified: 2026-11-11，Preview.3 产品事实沿用 bfd3406f 的核对范围；本轮核对 ADR-032–034 和实现恢复边界，未把未完成门禁写成产品事实。
+> Verified against: 4932b2fbc0be96090cffef7693646ed351a4d7ab（目标架构与恢复基线；产品实现事实沿用既有核对）
 
 当前有两条发布渠道：
 
@@ -34,7 +34,7 @@ Linux/macOS 的 Preview 路径目前只有合成/CI 覆盖。真实 Start Plan �
 
 [ADR-032](decisions/ADR-032-existing-worker-official-host-integration.md) 已接受下一阶段目标：现有 Worker 内装配必要官方 Host，经内部 Binding 和官方 ProcessManager 运行 AppServer。独立 Companion 服务、新 IPC/业务库、平行 RuntimeAdapter 和共享 AppServer Pool 已移出当前目标。隔离 [POC 已完成到组件门禁](research/zcode-official-host-integration-v1/IMPLEMENTATION_SUMMARY.md)：固定 3.18.0 源码构建、自包含 Host module、Windows helper、官方 ProcessManager 与 loopback Mock Read/resume/cancel/目标进程清理均有运行证据；生产 Worker 接入尚未实施。
 
-官方制品的完整 Node/native/资源闭包、一般 Desktop Main 独立性、持久 Job/Cleanup Proof、BOM/许可/数据回滚及真实 Start Plan 独立账户能力仍未验证。固定上游的 same-profile 双 Worker 合成试验已复现 double-refresh，第二个请求返回 `409 rotation_reuse_rejected`；官方 transport 也缺少与现有 Bridge 16 MiB raw stdout frame cap 等价的上游边界。因此账户协调和 framing 兼容须先经最小设计/ADR 裁决，生产执行与清理合同不能切换。[账户与 Cleanup 两项草案](research/zcode-companion-owner-architecture-convergence-2026-11-11/ADR_PROPOSALS.md) 保持 Proposed，不替代 ADR-030 或当前生产合同。Host Portability、公共 Core fork/外部 Host 升级也未因目标冻结获得运行认证。
+官方制品的完整 Node/native/资源闭包、一般 Desktop Main 独立性、BOM/许可/数据回滚及真实 Start Plan 独立账户能力仍未验证。固定上游的 same-profile 双 Worker 合成试验曾复现 double-refresh；Owner 已接受 [ADR-033](decisions/ADR-033-official-account-refresh-coordination.md) 的 profile-scoped refresh lock，并要求以真实 Node 子进程合成测试重新验收。官方 transport 的 16 MiB raw UTF-8 frame 合同及正常 Cleanup 的 Worker-tree Proof 分别由实现门禁和 [ADR-034](decisions/ADR-034-normal-cleanup-worker-tree-proof.md) 固定。实现和定向测试通过前，生产执行与清理合同仍不能切换；真实账户与模型请求保持 `NOT_RUN`。Host Portability、公共 Core fork/外部 Host 升级也未因目标冻结获得运行认证。
 
 ## 当前文档入口
 

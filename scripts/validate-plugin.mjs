@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,6 +13,10 @@ async function readJson(filePath, label) {
   } catch (error) {
     throw new Error(`${label} is missing or invalid JSON: ${error instanceof Error ? error.message : String(error)}`);
   }
+}
+
+async function sha256File(filePath) {
+  return createHash("sha256").update(await readFile(filePath)).digest("hex").toUpperCase();
 }
 
 const pkg = await readJson(path.join(root, "package.json"), "package.json");
@@ -112,6 +117,127 @@ if (!Array.isArray(vendorBrowsers.browsers) || vendorBrowsers.browsers.length ==
 const workerBundle = await readFile(path.join(pluginRoot, "worker", "worker-main.mjs"), "utf8");
 if (!workerBundle.includes("vendor") || !workerBundle.includes("browser-host.cjs")) {
   throw new Error("worker-main.mjs no longer references the vendored browser backend; update the loader or this check");
+}
+
+const officialHostRoot = path.join(
+  pluginRoot,
+  "worker",
+  "vendor",
+  "official-host",
+  "win32-x64-node24.16.0-zcode3.18.0-b95ebaff",
+);
+const officialHostBomPath = path.join(officialHostRoot, "ARTIFACT_BOM.json");
+const officialHostBom = await readJson(officialHostBomPath, "Official Host ARTIFACT_BOM.json");
+if (officialHostBom.schemaVersion !== 1
+  || officialHostBom.scope?.platform !== "win32"
+  || officialHostBom.scope?.architecture !== "x64"
+  || officialHostBom.scope?.node !== "24.16.0"
+  || officialHostBom.scope?.zcodeVersion !== "3.18.0"
+  || officialHostBom.source?.commit !== "b95ebaffeab641907b38652f45c1502bd762972d"
+  || officialHostBom.source?.tree !== "d7ebeb994cb8f46b16761fc9c550ae3f6e039c3d") {
+  throw new Error("Official Host ARTIFACT_BOM.json has an unsupported schema, source, or scope");
+}
+if (!Array.isArray(officialHostBom.patches) || officialHostBom.patches.length === 0) {
+  throw new Error("Official Host ARTIFACT_BOM.json must record the ordered upstream patch set");
+}
+const patchOrders = new Set();
+for (const patch of officialHostBom.patches) {
+  if (!Number.isSafeInteger(patch.order) || patch.order < 1 || patchOrders.has(patch.order)
+    || typeof patch.path !== "string" || !patch.path.startsWith("upstream/zcode-3.18.0/patches/")
+    || path.isAbsolute(patch.path) || !Number.isSafeInteger(patch.bytes) || patch.bytes < 1
+    || typeof patch.sha256 !== "string" || !/^[0-9A-F]{64}$/.test(patch.sha256)) {
+    throw new Error("Official Host ARTIFACT_BOM.json contains an invalid patch entry");
+  }
+  patchOrders.add(patch.order);
+  const patchPath = path.resolve(root, patch.path);
+  const relativePatchPath = path.relative(root, patchPath);
+  if (relativePatchPath.startsWith("..") || path.isAbsolute(relativePatchPath)) {
+    throw new Error(`Official Host patch path escapes the repository: ${patch.path}`);
+  }
+  const bytes = await readFile(patchPath);
+  if (bytes.length !== patch.bytes || createHash("sha256").update(bytes).digest("hex").toUpperCase() !== patch.sha256) {
+    throw new Error(`Official Host patch failed byte or SHA-256 validation: ${patch.path}`);
+  }
+}
+const orderedPatchOrders = [...patchOrders].sort((left, right) => left - right);
+if (orderedPatchOrders.some((order, index) => order !== index + 1)) {
+  throw new Error("Official Host patch order must be contiguous and start at 1");
+}
+if (!Array.isArray(officialHostBom.files) || officialHostBom.files.length === 0) {
+  throw new Error("Official Host ARTIFACT_BOM.json must record its shipped files");
+}
+const requiredOfficialHostFiles = new Set([
+  "app-server/provider/zcode-builtin.json",
+  "app-server/THIRD-PARTY-NOTICES.md",
+  "app-server/zcode.cjs",
+  "LICENSE",
+  "NOTICE.md",
+  "node_modules/@napi-rs/keyring/LICENSE",
+  "node_modules/@napi-rs/keyring/index.js",
+  "node_modules/@napi-rs/keyring/package.json",
+  "node_modules/@napi-rs/keyring-win32-x64-msvc/LICENSE.third-party.md",
+  "node_modules/@napi-rs/keyring-win32-x64-msvc/keyring.win32-x64-msvc.node",
+  "node_modules/@napi-rs/keyring-win32-x64-msvc/package.json",
+  "official-host-runtime.mjs",
+  "zcode-runtime-host.exe",
+]);
+const recordedOfficialHostFiles = new Set();
+for (const entry of officialHostBom.files) {
+  if (typeof entry.path !== "string" || !entry.path || path.isAbsolute(entry.path)
+    || entry.path.includes("\\") || entry.path.split("/").some((part) => !part || part === "." || part === "..")
+    || recordedOfficialHostFiles.has(entry.path)
+    || !Number.isSafeInteger(entry.bytes) || entry.bytes < 0
+    || typeof entry.sha256 !== "string" || !/^[0-9A-F]{64}$/.test(entry.sha256)) {
+    throw new Error("Official Host ARTIFACT_BOM.json contains an invalid shipped-file entry");
+  }
+  recordedOfficialHostFiles.add(entry.path);
+  if (!requiredOfficialHostFiles.has(entry.path)) {
+    throw new Error(`Official Host ARTIFACT_BOM.json contains an unexpected shipped file: ${entry.path}`);
+  }
+  const filePath = path.resolve(officialHostRoot, entry.path);
+  const relativeFilePath = path.relative(officialHostRoot, filePath);
+  if (relativeFilePath.startsWith("..") || path.isAbsolute(relativeFilePath)) {
+    throw new Error(`Official Host shipped-file path escapes the artifact root: ${entry.path}`);
+  }
+  await access(filePath);
+  const bytes = await readFile(filePath);
+  if (bytes.length !== entry.bytes
+    || createHash("sha256").update(bytes).digest("hex").toUpperCase() !== entry.sha256) {
+    throw new Error(`Official Host shipped file failed byte or SHA-256 validation: ${entry.path}`);
+  }
+}
+for (const requiredPath of requiredOfficialHostFiles) {
+  if (!recordedOfficialHostFiles.has(requiredPath)) {
+    throw new Error(`Official Host ARTIFACT_BOM.json is missing required shipped file: ${requiredPath}`);
+  }
+}
+const officialHostProvenance = await readJson(
+  path.join(officialHostRoot, "BUILD_PROVENANCE.json"),
+  "Official Host BUILD_PROVENANCE.json",
+);
+const officialHostBomBytes = await readFile(officialHostBomPath);
+if (officialHostProvenance.source?.commit !== officialHostBom.source.commit
+  || officialHostProvenance.source?.tree !== officialHostBom.source.tree
+  || officialHostProvenance.source?.version !== officialHostBom.source.version
+  || officialHostProvenance.bom?.path !== "ARTIFACT_BOM.json"
+  || officialHostProvenance.bom?.bytes !== officialHostBomBytes.length
+  || officialHostProvenance.bom?.sha256 !== createHash("sha256").update(officialHostBomBytes).digest("hex").toUpperCase()
+  || officialHostProvenance.output?.sha256 !== officialHostBom.files.find(
+    (entry) => entry.path === "official-host-runtime.mjs",
+  )?.sha256) {
+  throw new Error("Official Host BUILD_PROVENANCE.json disagrees with ARTIFACT_BOM.json");
+}
+const officialHostModuleText = await readFile(path.join(officialHostRoot, "official-host-runtime.mjs"), "utf8");
+if (repoRootPattern.test(officialHostModuleText)) {
+  throw new Error("official-host-runtime.mjs embeds the development repository's absolute path");
+}
+if (!officialHostModuleText.includes("createOAuthProviderRuntimeAuthService")) {
+  throw new Error("official-host-runtime.mjs is missing the coordinated provider runtime-auth factory");
+}
+if (!workerBundle.includes("OfficialHostAdapter")
+  || !workerBundle.includes("official-host-runtime.mjs")
+  || !workerBundle.includes("maxFrameBytes")) {
+  throw new Error("worker-main.mjs is missing the shipped Official Host integration");
 }
 
 console.log(`Plugin package is structurally valid (${plugin.name}@${plugin.version}).`);

@@ -65,7 +65,7 @@ Attention 与 Thin Waiter 共用 SQLite snapshot 和只读等待谓词。Attenti
 
 构建产物包含 Bridge、Worker、Thin Waiter、v14 升级命令、v13/v14 Schema 与浏览器后端。Core API 破坏按 Owner 已批准的 [ADR-029](decisions/ADR-029-legacy-runtime-retirement.md) 在 Preview 2.0 发布线交付；当前 Preview 为 2.0.0-preview.3。该退役不更改 Marketplace MCP 工具/schema。
 
-## 已接受目标：Worker 内官方 Host（生产未实施）
+## 已接受目标：Worker 内官方 Host（实施与验收中）
 
 [ADR-032](decisions/ADR-032-existing-worker-official-host-integration.md) 已 Accepted：Bridge Host/Core → Existing Worker → 现有 CodingAgentAdapter → 内部 Upstream Binding → 官方 Agent Service/ProcessManager → 官方 AppServer（AgentRuntime）。正常 AppServer 生命周期由官方 ProcessManager 独占；每 Worker 初始一个执行 AppServer，不共享无关 Task。Bridge 保留现有并发、SQLite Authority、Claim、Hold、Recovery、Cleanup 和 Release 合同。
 
@@ -73,4 +73,4 @@ Attention 与 Thin Waiter 共用 SQLite snapshot 和只读等待谓词。Attenti
 
 隔离 [POC](research/zcode-official-host-integration-v1/IMPLEMENTATION_SUMMARY.md) 已完成到组件门禁：固定 3.18.0 源码制品、自包含 Host module、固定 Windows helper 和官方 ProcessManager 通过 12 项 loopback Mock 断言，覆盖 Read 后二次请求、same-session resume、cancel、两代 PID/helper 观察和最终目标进程清理。此结果不证明通用 Desktop 独立性或真实账户。
 
-上文现行安装发现、Desktop surface/身份、认证和清理路径尚未切换。完整依赖闭包、profile/同 profile 并发、Job 持久证据映射、BOM/许可/回滚及独立真实 Start Plan 仍未完成。same-profile 双 Worker 合成测试已复现 double-refresh；官方 transport 缺少等价 16 MiB raw frame cap；新 Cleanup Proof 仍为 Proposed。因此生产 Adapter/Worker 接线和 Release 切换继续阻断，[账户和 Cleanup 草案](research/zcode-companion-owner-architecture-convergence-2026-11-11/ADR_PROPOSALS.md) 仍 Proposed，ADR-030 的 Preview.3 单次任务 verdict 与 Private Lease/HANDLE/ACK 继续有效。
+上文现行安装发现、Desktop surface/身份、认证和清理路径尚未整体切换。Owner 已接受 [ADR-033](decisions/ADR-033-official-account-refresh-coordination.md) 的 profile-scoped refresh lock，以及 [ADR-034](decisions/ADR-034-normal-cleanup-worker-tree-proof.md) 的正常 Cleanup 复用现有 Worker-root recorded-tree scan、resource facts、Digest 与 Release CAS；旧 Broker/持久 Job Receipt 研究方向已退出当前目标。官方 transport 必须保留 16 MiB raw UTF-8 frame 合同。实现、定向测试、完整回归与独立审查全部通过前，生产 Adapter/Worker 与 Release 切换继续 fail closed；ADR-030 的 Preview.3 单次任务 verdict 与 Private Lease/HANDLE/ACK 继续有效。
