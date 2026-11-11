@@ -35,6 +35,14 @@
 - 写结论时区分"已核实"和"未运行"。不要把 NOT RUN 写成通过，也不要把尝试过的方法写成可行方法。
 - 引用 ZCode 内部结构时标明观测版本，用 Observed 措辞，不要写成官方合同。
 
+## 分支流程
+
+- `master` 和 `preview` 是仅有的长期分支。`master` 保持稳定发布状态；`preview` 是唯一集成分支。
+- 功能开发从最新 `origin/preview` 创建临时 `codex/<topic>-<date>` 分支，在独立 Worktree 中执行，PR Base 必须是 `preview`。
+- 功能 PR 合并后删除对应临时分支和 Worktree；不把功能分支作为长期分支保留。
+- `preview` 完成验收后，通过 `preview` 到 `master` 的 PR 合并到稳定线；随后将 `preview` 快进到 `master`，或在分支保护不允许快进时创建 `master` 到 `preview` 的同步 PR。
+- 稳定线紧急修复可以从 `master` 创建临时分支；修复进入 `master` 后必须同步回 `preview`，避免两条长期分支分叉。
+
 ## 提交与验证
 
 - 日常开发先跑 `npm run test:affected`；它始终包含 typecheck、build、plugin validation 和 `git diff --check`，并按影响映射选择测试。只有结果实际命中压力测试边界才运行该压力测试；报告中必须显式区分已运行压力测试与 `STRESS_TESTS_NOT_APPLICABLE`。
