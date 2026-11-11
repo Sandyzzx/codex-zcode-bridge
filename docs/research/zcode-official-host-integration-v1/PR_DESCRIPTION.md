@@ -2,7 +2,7 @@
 
 > Status: RESEARCH
 > Date: 2026-11-11
-> Evidence candidate: `fd1d7a8c425cbf7177e1f83394b3fd2c98266eb0`
+> Astra-approved evidence candidate: `5da873d1f2632ac67343be692fab121f682f4cef`
 
 ## Problem
 

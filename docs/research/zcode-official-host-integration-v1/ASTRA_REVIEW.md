@@ -3,15 +3,19 @@
 > Status: RESEARCH
 > Date: 2026-11-11，Asia/Shanghai
 > Reviewer: Astra Reviewer
-> Final review: `CHANGES_REQUIRED`
-> Reviewed candidate SHA: `fd1d7a8c425cbf7177e1f83394b3fd2c98266eb0`
-> Reviewed candidate tree: `f1f1c6e0ba27093821a5555bb020f490925d4013`
+> Initial review verdict: `CHANGES_REQUIRED`
+> Final re-review: `APPROVED`
+> Reviewed candidate SHA: `5da873d1f2632ac67343be692fab121f682f4cef`
+> Reviewed candidate tree: `4ab1a4edacc93b62fa49a03b038b43a618005566`
+> Initial reviewed candidate SHA: `fd1d7a8c425cbf7177e1f83394b3fd2c98266eb0`
+> Initial reviewed candidate tree: `f1f1c6e0ba27093821a5555bb020f490925d4013`
 > Base: `origin/preview` = `372e90622772b070357a278f1da3dea58fa42dee`，tree `9a0799b537b9b81af396f2fd45e39a00e7c8f295`
 > Parent commit: `9710303397fe2d544c75698f783a8174404b2d51`
 > Branch: `codex/official-host-integration-v1-20261111`
 > Worktree: `D:\codex-zcode-bridge\.run\official-host-integration-v1-20261111`
+> `FINAL_ACCEPTANCE_REPORT.md` required final status: `APPROVED`
 
-## 1. 审查结论
+## 1. 第一轮审查结论（保留）
 
 ```text
 ASTRA_REVIEW: CHANGES_REQUIRED
@@ -256,3 +260,98 @@ Release。该硬阻塞是真实源码边界，不是完成报告中的猜测。
 本次未修改生产源码、官方源码、SQLite、插件 bundle 或运行配置；未启动真实账户、
 OAuth、Start Plan、Billing、模型或新的 POC；未 push、创建 PR、merge、tag 或
 release。本次本地提交只包含本审查文件，除本文件外没有候选内容修改。
+
+## 8. Final re-review
+
+### 8.1 固定身份与差异边界
+
+复核对象已重新固定为：
+
+```text
+HEAD: 5da873d1f2632ac67343be692fab121f682f4cef
+tree: 4ab1a4edacc93b62fa49a03b038b43a618005566
+base/origin-preview: 372e90622772b070357a278f1da3dea58fa42dee
+merge-base: 372e90622772b070357a278f1da3dea58fa42dee
+changed files: 32
+non-doc files: 0
+diff: 5688 insertions, 10 deletions
+```
+
+`git diff --name-status origin/preview...HEAD` 的结果全部是 `docs/` 下的
+Markdown `A`/`M` 文件；没有源码、插件 bundle、SQLite、运行时配置、测试执行器或
+依赖变更。`git diff --check origin/preview...HEAD` 通过。复核开始时工作区 clean。
+
+修复提交 `5da873d1` 只修改四份文档：ADR-032、`ACCOUNT_OWNERSHIP.md`、
+`FINAL_ACCEPTANCE_REPORT.md` 和 `PR_DESCRIPTION.md`。没有把第一轮发现的文档问题
+通过放宽证据标准、修改生产合同或扩大 diff 范围来“修复”。
+
+### 8.2 第一轮三项关闭核对
+
+1. **CLOSED：MCP OAuth E2E 执行状态一致。**
+   `ACCOUNT_OWNERSHIP.md` 已明确记录两次整文件运行及 `3 passed / 1 failed`；
+   `ACCOUNT_CONCURRENCY.md`、`TEST_COVERAGE.md` 和 `REGRESSION_REPORT.md` 使用相同的
+   `PARTIAL_3_OF_4` 边界。失败项仍是 caller-budget/authorization snapshot 缺少
+   `authorizationUrl`，没有被标成 flaky、整套 PASS 或 general-account 并发证明。
+2. **CLOSED：PR 描述具备文档状态。**
+   `PR_DESCRIPTION.md` 顶部已有 `Status: RESEARCH`、日期和证据候选 SHA，满足仓库
+   文档状态规则；其正文仍明确 `PRODUCTION_CODE_CHANGED: NO` 与 `PR_READY: NO`。
+3. **CLOSED：最终验收的 Astra 占位状态已消除。**
+   `FINAL_ACCEPTANCE_REPORT.md` 已从 `PENDING_FINAL_FILE` 改为
+   `CHANGES_REQUIRED`，且 ADR-032 的后续能力状态也已同步。基于本轮最终复核，该报告
+   下一授权的状态同步值必须为 `APPROVED`；本文件受“只写 `ASTRA_REVIEW.md`”边界
+   限制，不能直接修改最终验收报告。
+
+ADR-032 继续保持 `Accepted + TARGET ARCHITECTURE ONLY`，ADR-030、现有 Claim/Hold/
+Recovery/Cleanup/Release、SQLite Authority 和 `CodingAgentAdapter` 合同未被改写。
+账户与 Cleanup 两份草案继续保持 `Proposed only`。
+
+### 8.3 证据与状态复核
+
+- r9 原始结果为 `status: PASS`、12/12 assertions。3 个 loopback Mock HTTP 请求由
+  2 个主 Turn 模型请求和 1 个辅助请求构成；usage 为 input 200、output 20、total 220，
+  `modelRequestCount=2`，`realModelRequests=0`。
+- r9 两代目标 AppServer/helper PID 集合 `13464, 9580` 和 `11224, 24124` 在对应关闭
+  快照中均为空，`managedProcesses` 最终为空。这是隔离 Mock 的正常关闭观察，不构成
+  Bridge 持久 Cleanup Proof、Release 或生产进程所有权证明。
+- r7/r8/r9 继续被表述为隔离 ProcessManager/Mock 证据，生产 Worker、官方 Host
+  Adapter 和事件/终端/错误映射仍为 `NOT_IMPLEMENTED`。
+- G4 原始 result 仍将 `SAME_ACCOUNT_MULTIWORKER` 和 `TOKEN_REFRESH_RACE` 标为
+  `FAIL`；network ledger 有 2 次请求，第二个复用一次性 refresh token 的 Worker 被
+  `409 rotation_reuse_rejected` 拒绝。CAS、fresh-process read、failure isolation 和
+  crash-lock release 的局部 PASS 没有被合并成 general-account refresh PASS。
+- 当前 `CodingAgentAdapter` 仍是 `startTask`、`continueTask`、`getStatus`、
+  `getResult`、`cancelTask` 五方法；没有生产 `OfficialHostAdapter`。
+- 当前 Bridge `MAX_FRAME_BYTES = 16 * 1024 * 1024` 按 raw UTF-8 frame 字节 fail closed；
+  官方 transport 的等价防护仍为 `BLOCKED`。
+- `buildExecutionCleanupProof()` 仍只接受现有 exact-key 三类 proof；`dispose()` 或
+  close resolved、root/PID exit 未被写成 Bridge cleanup verification。Manager 仍要求
+  exact Worker identity exit、完整 process/resource facts、持久 cleanup digest 和
+  CAS `releaseCapacity`。
+- 真实模型、真实账户、OAuth、Start Plan、Billing 均为 `0 / NOT_RUN` 或相应阻断状态；
+  文档没有把 POC 组件结果写成生产集成。
+
+### 8.4 Final findings
+
+- **P0: NONE**
+- **P1: NONE**
+- **P2:** ADR-032 的“决定时未决能力与后续状态”已列出 8 项，但 Consequences 段落仍写
+  “不解决全部六项未决能力”。这是非阻断的数值残留，应改成“八项”或“全部未决能力”；
+  不改变缺口集合、生产切换判断或本次批准。
+- **P2 / handoff:** `FINAL_ACCEPTANCE_REPORT.md` 当前仍显示第一轮需要的
+  `CHANGES_REQUIRED`。本次最终审查要求的后续值是 `APPROVED`，须由另有写权限的任务
+  同步；本轮严格只修改本审查文件。
+
+### 8.5 Final verdict
+
+第一轮三项问题均已关闭，最终候选仍保持 docs-only，生产切换与 PR-ready 阻断没有
+弱化。两项 P2 是低速文档状态事项，不构成新的 P0/P1 或证据包实质缺陷。
+
+```text
+ASTRA_REVIEW: APPROVED
+PRODUCTION_SWITCH_SAFE: NO
+PR_READY: NO
+FINAL_ACCEPTANCE_REPORT_REQUIRED_STATUS: APPROVED
+```
+
+本轮没有运行构建、POC 或任何真实/Mock runtime，没有修改生产源码或合同，没有
+commit、push、PR、merge、release。除本文件外没有写入候选文件。
