@@ -11226,7 +11226,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
         this.#assertOpen();
         this.#assertAccepting();
         this.#assertRecoveryReady();
-        task = this.#routeTaskModel ? await this.#routeTaskModel(task) : task;
+        task = this.#routeTaskModel ? await this.#routeTaskModel.route(task) : task;
         if (task.model && !task.model.provider_id?.trim()) {
           throw new TaskManagerError("TASK_INVALID", "model.provider_id is required because task model routing is not configured");
         }
@@ -11261,6 +11261,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
             throw new TaskManagerError("TASK_ID_CONFLICT", `task_id already belongs to a different SQLite request: ${task.task_id}`);
           }
           const projection2 = asRecord4(existing.projection);
+          this.#routeTaskModel?.confirmRouting(task.task_id);
           return receipt(task.task_id, projection2.status, projection2.created_at);
         }
         try {
@@ -11275,6 +11276,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
         const snapshot = asRecord4(this.#driver.readTaskLifecycle(task.task_id));
         const projection = asRecord4(snapshot.projection);
         this.#enqueue(task.task_id, Number(projection.current_attempt));
+        this.#routeTaskModel?.confirmRouting(task.task_id);
         return { task_id: task.task_id, status: "queued", created_at: string4(projection.created_at, "task_created_at_missing") };
       }
       async getStatus(taskId) {
@@ -35506,28 +35508,49 @@ var RecordingStartPlanEntitlement = class {
     return verdict2;
   }
 };
+function normalizedRawRequestIdentity(raw) {
+  return JSON.stringify([raw.provider_id ?? null, raw.model_id, raw.reasoning_level ?? null]);
+}
 function createTaskModelRouter(options) {
   const cacheLimit = options.cacheLimit ?? 500;
-  const cache = /* @__PURE__ */ new Map();
-  return async (task) => {
+  const accepted = /* @__PURE__ */ new Map();
+  const pending = /* @__PURE__ */ new Map();
+  const route = async (task) => {
     if (!task.model) return task;
-    const cached2 = cache.get(task.task_id);
-    if (cached2) return { ...task, model: cached2 };
     const raw = {
       model_id: task.model.model_id.trim(),
       ...task.model.provider_id?.trim() ? { provider_id: task.model.provider_id.trim() } : {},
       ...task.model.reasoning_level?.trim() ? { reasoning_level: task.model.reasoning_level.trim() } : {}
     };
     if (!raw.model_id) throw new BridgeError("provider_config_invalid", "model_id must not be blank");
+    const identity = normalizedRawRequestIdentity(raw);
+    const cached2 = accepted.get(task.task_id);
+    if (cached2 && cached2.identity === identity) return { ...task, model: cached2.resolved };
     const settings = options.settings();
     const registry2 = await options.registry();
     const routed = routeTaskModel(raw, settings, registry2, options.journal);
-    cache.set(task.task_id, routed.resolved);
-    if (cache.size > cacheLimit) {
-      const oldest = cache.keys().next().value;
-      if (oldest !== void 0) cache.delete(oldest);
+    const entry = { identity, resolved: routed.resolved };
+    if (!accepted.has(task.task_id)) {
+      pending.set(task.task_id, entry);
+      if (pending.size > cacheLimit) {
+        const oldest = pending.keys().next().value;
+        if (oldest !== void 0) pending.delete(oldest);
+      }
     }
     return { ...task, model: routed.resolved };
+  };
+  return {
+    route,
+    confirmRouting(taskId) {
+      const entry = pending.get(taskId);
+      if (!entry) return;
+      pending.delete(taskId);
+      accepted.set(taskId, entry);
+      if (accepted.size > cacheLimit) {
+        const oldest = accepted.keys().next().value;
+        if (oldest !== void 0) accepted.delete(oldest);
+      }
+    }
   };
 }
 function routeTaskModel(raw, settings, registry2, journal) {

@@ -24,6 +24,7 @@ import { parseTaskAttentionSnapshot } from "../attention/snapshot.js";
 import { createPlatformProbe, PROCESS_IDENTITY_VERSION, type ProcessIdentity, type ProcessProbe } from "../runtime/process-probe.js";
 import { buildSqliteDoctorChecks } from "../runtime/sqlite-doctor.js";
 import type { DoctorCheck } from "../runtime/doctor.js";
+import type { TaskModelRouter } from "../runtime/model-routing.js";
 
 const EXECUTION_OBSERVATION_PROBE_BUDGET_MS = 5_000;
 const DEFAULT_HOST_SHUTDOWN_WAIT_MS = 60_000;
@@ -33,10 +34,12 @@ export type SqliteAuthorityOptions = ClaimOnlyDriverOptions & {
   readonly testBeforeDispatch?: () => Promise<void>;
   readonly testOnScheduler?: (stage: string, detail: Readonly<Record<string, unknown>>) => void;
   readonly testShutdownWaitMs?: number;
-  /** Host-supplied ADR-031 task-creation routing hook. Runs before
+  /** Host-supplied ADR-031 task-creation routing hook. `route` runs before
    * TaskPackage validation and persistence so every stored task carries the
-   * fully resolved provider/model selection. */
-  readonly routeTaskModel?: (task: TaskPackage) => Promise<TaskPackage>;
+   * fully resolved provider/model selection; `confirmRouting` is invoked only
+   * after durable persistence, so a failure before the first persistence
+   * leaves no routing-cache reservation. */
+  readonly routeTaskModel?: TaskModelRouter;
 };
 
 /** SQLite Lifecycle Manager. Owns scheduling; the bound driver owns durable facts. */
@@ -69,12 +72,12 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
   readonly #startPlanAuthInjected: boolean;
   readonly #startPlanPrivateAuthFactory?: () => Promise<NonNullable<ClaimOnlyDriverOptions["startPlanPrivateAuth"]> | null>;
   readonly #testOnlyFakeAdapter: boolean;
-  readonly #routeTaskModel?: (task: TaskPackage) => Promise<TaskPackage>;
+  readonly #routeTaskModel?: TaskModelRouter;
 
   private constructor(driver: Driver, context: NonNullable<ClaimOnlyDriverOptions["trustedLocalContext"]>, processProbe: ProcessProbe,
     testBeforeDispatch?: () => Promise<void>, testOnScheduler?: SqliteAuthorityOptions["testOnScheduler"],
     shutdownWaitMs = DEFAULT_HOST_SHUTDOWN_WAIT_MS, startPlanAuthAvailable = false, testOnlyFakeAdapter = false,
-    routeTaskModel?: (task: TaskPackage) => Promise<TaskPackage>,
+    routeTaskModel?: TaskModelRouter,
     startPlanAuthInjected = false,
     startPlanPrivateAuthFactory?: () => Promise<NonNullable<ClaimOnlyDriverOptions["startPlanPrivateAuth"]> | null>) {
     this.#driver = driver;
@@ -95,8 +98,10 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     this.#assertAccepting();
     this.#assertRecoveryReady();
     // ADR-031: routing runs before validation so a provider-less model input
-    // is resolved to the actual provider/model that will be persisted.
-    task = this.#routeTaskModel ? await this.#routeTaskModel(task) : task;
+    // is resolved to the actual provider/model that will be persisted. The
+    // routing cache is confirmed only after durable persistence below, so a
+    // rejection on any path before that point leaves no cache reservation.
+    task = this.#routeTaskModel ? await this.#routeTaskModel.route(task) : task;
     if (task.model && !task.model.provider_id?.trim()) {
       throw new TaskManagerError("TASK_INVALID", "model.provider_id is required because task model routing is not configured");
     }
@@ -138,6 +143,9 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
         throw new TaskManagerError("TASK_ID_CONFLICT", `task_id already belongs to a different SQLite request: ${task.task_id}`);
       }
       const projection = asRecord(existing.projection);
+      // The persisted TaskPackage equals this routing; accept it so an
+      // identical re-submission replays from the routing cache as well.
+      this.#routeTaskModel?.confirmRouting(task.task_id);
       return receipt(task.task_id, projection.status, projection.created_at);
     }
 
@@ -153,6 +161,9 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     const snapshot = asRecord(this.#driver.readTaskLifecycle(task.task_id));
     const projection = asRecord(snapshot.projection);
     this.#enqueue(task.task_id, Number(projection.current_attempt));
+    // Durable persistence succeeded (fresh or race-verified): only now does
+    // the routing become the accepted decision for identical re-submissions.
+    this.#routeTaskModel?.confirmRouting(task.task_id);
     return { task_id: task.task_id, status: "queued", created_at: string(projection.created_at, "task_created_at_missing") };
   }
 

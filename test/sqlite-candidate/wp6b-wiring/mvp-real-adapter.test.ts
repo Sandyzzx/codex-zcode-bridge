@@ -1960,3 +1960,62 @@ test("ADR-031 Gate E1: billing rejections never trigger a silent fallback", { ti
   }, { runtimeVariant: "private-auth-preflight-reject", startPlanIssuerPerDispatch: routingEnvIssuerFactory(gate, journal, loginState),
     routingHooks: { journal }, preserveFixtureOnFailure: true });
 });
+
+test("ADR-031: the routing cache never masks a changed model selection; identical requests replay the accepted routing", { timeout: 240_000 }, async () => {
+  const gate = fakeHostBillingGate("entitled");
+  const journal = new StartPlanEntitlementJournal();
+  const loginState = { account: null as string | null };
+  await withRealAdapterMcp(async (client, _manager, _dataRoot, workspace, runtime) => {
+    const taskId = `routing-idem-${randomUUID()}`;
+    const submit = (model: Record<string, unknown>) => client.callTool({ name: "zcode_task", arguments: { ...syntheticTask(workspace, taskId), model } });
+    const requestLogLines = () => existsSync(runtime.requestLog) ? readFileSync(runtime.requestLog, "utf8").trim().split("\n").length : 0;
+
+    // 1. Logged out: routing succeeds, but the Start Plan credential preflight
+    //    refuses before persistence. The task_id must keep no cache
+    //    reservation so a re-submission is evaluated from current inputs.
+    const refused = await submit({ model_id: "GLM-5.3-Flash-StartPlan" });
+    assert.equal(refused.isError, true, "a logged-out Start Plan task must be refused at creation");
+    assert.match(JSON.stringify(refused), /official Start Plan credentials are unavailable/u);
+    assert.equal((await client.callTool({ name: "zcode_status", arguments: { task_id: taskId } })).isError, true,
+      "a refused task must not be persisted");
+    assert.equal(gate.checks.length, 0, "the refusal must not consume a Billing request");
+
+    // 2. Login: the same task_id and raw alias input are re-evaluated and
+    //    accepted; the first accepted routing becomes the replay baseline.
+    loginState.account = HOST_ACCOUNT;
+    const accepted = contentObject(await submit({ model_id: "GLM-5.3-Flash-StartPlan" }));
+    assert.equal((await waitForTerminal(client, taskId, 1)).status, "completed");
+    await waitForLifecycleEvent(client, taskId, "released");
+    assert.equal(gate.checks.length, 1, "the accepted task performs exactly one live Billing check");
+    const executions = requestLogLines();
+
+    // 3. A Billing journal change after acceptance must not re-route an
+    //    identical request: the first accepted routing replays its original
+    //    receipt without a second execution.
+    journal.record("GLM-5.3-Flash", "no_entitlement", Date.now());
+    const replay = contentObject(await submit({ model_id: "GLM-5.3-Flash-StartPlan" }));
+    assert.deepEqual(replay, accepted, "an identical request must replay the original receipt");
+    assert.equal(gate.checks.length, 1, "the replay must not consume a Billing request");
+    assert.equal(requestLogLines(), executions, "the replay must not execute the task again");
+
+    // 4. Start Plan boundary: the explicit provider form is a distinct raw
+    //    request identity, resolves to the same persisted TaskPackage, and
+    //    replays through Authority equality instead of a false conflict.
+    const explicit = contentObject(await submit({ provider_id: "account:bigmodel-start-plan", model_id: "GLM-5.3-Flash" }));
+    assert.deepEqual(explicit, accepted, "the alias and the explicit Start Plan provider share one persisted TaskPackage");
+    assert.equal(gate.checks.length, 1);
+    assert.equal(requestLogLines(), executions);
+
+    // 5. A materially changed selection must surface TASK_ID_CONFLICT from the
+    //    SQLite Authority, never a masked replay.
+    const changedProvider = await submit({ provider_id: "builtin:bigmodel-coding-plan", model_id: "GLM-5.3-Flash" });
+    assert.equal(changedProvider.isError, true, "a changed provider_id must conflict");
+    assert.match(JSON.stringify(changedProvider), /TASK_ID_CONFLICT/u);
+    const changedReasoning = await submit({ model_id: "GLM-5.3-Flash-StartPlan", reasoning_level: "high" });
+    assert.equal(changedReasoning.isError, true, "a changed reasoning_level must conflict");
+    assert.match(JSON.stringify(changedReasoning), /TASK_ID_CONFLICT/u);
+    assert.equal(gate.checks.length, 1, "conflicting submissions must not consume Billing requests");
+    assert.equal(requestLogLines(), executions, "conflicting submissions must not execute the task again");
+  }, { runtimeVariant: "private-auth", startPlanIssuerPerDispatch: routingEnvIssuerFactory(gate, journal, loginState),
+    routingHooks: { journal }, preserveFixtureOnFailure: true });
+});
