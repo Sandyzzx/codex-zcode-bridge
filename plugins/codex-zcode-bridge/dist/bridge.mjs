@@ -11261,7 +11261,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
             throw new TaskManagerError("TASK_ID_CONFLICT", `task_id already belongs to a different SQLite request: ${task.task_id}`);
           }
           const projection2 = asRecord4(existing.projection);
-          this.#routeTaskModel?.confirmRouting(task.task_id);
+          this.#routeTaskModel?.confirmRouting(task);
           return receipt(task.task_id, projection2.status, projection2.created_at);
         }
         try {
@@ -11273,10 +11273,10 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
             throw error2;
           }
         }
+        this.#routeTaskModel?.confirmRouting(task);
         const snapshot = asRecord4(this.#driver.readTaskLifecycle(task.task_id));
         const projection = asRecord4(snapshot.projection);
         this.#enqueue(task.task_id, Number(projection.current_attempt));
-        this.#routeTaskModel?.confirmRouting(task.task_id);
         return { task_id: task.task_id, status: "queued", created_at: string4(projection.created_at, "task_created_at_missing") };
       }
       async getStatus(taskId) {
@@ -35514,7 +35514,7 @@ function normalizedRawRequestIdentity(raw) {
 function createTaskModelRouter(options) {
   const cacheLimit = options.cacheLimit ?? 500;
   const accepted = /* @__PURE__ */ new Map();
-  const pending = /* @__PURE__ */ new Map();
+  const pending = /* @__PURE__ */ new WeakMap();
   const route = async (task) => {
     if (!task.model) return task;
     const raw = {
@@ -35530,22 +35530,18 @@ function createTaskModelRouter(options) {
     const registry2 = await options.registry();
     const routed = routeTaskModel(raw, settings, registry2, options.journal);
     const entry = { identity, resolved: routed.resolved };
-    if (!accepted.has(task.task_id)) {
-      pending.set(task.task_id, entry);
-      if (pending.size > cacheLimit) {
-        const oldest = pending.keys().next().value;
-        if (oldest !== void 0) pending.delete(oldest);
-      }
-    }
-    return { ...task, model: routed.resolved };
+    const routedTask = { ...task, model: routed.resolved };
+    if (!accepted.has(task.task_id)) pending.set(routedTask, entry);
+    return routedTask;
   };
   return {
     route,
-    confirmRouting(taskId) {
-      const entry = pending.get(taskId);
+    confirmRouting(routedTask) {
+      const entry = pending.get(routedTask);
       if (!entry) return;
-      pending.delete(taskId);
-      accepted.set(taskId, entry);
+      pending.delete(routedTask);
+      if (accepted.has(routedTask.task_id)) return;
+      accepted.set(routedTask.task_id, entry);
       if (accepted.size > cacheLimit) {
         const oldest = accepted.keys().next().value;
         if (oldest !== void 0) accepted.delete(oldest);

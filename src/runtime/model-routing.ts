@@ -169,7 +169,7 @@ export type RoutingTaskInput = Omit<TaskPackage, "model"> & { readonly model?: R
  * persistence leaves no cache reservation behind. */
 export interface TaskModelRouter {
   route(task: RoutingTaskInput): Promise<TaskPackage>;
-  confirmRouting(taskId: string): void;
+  confirmRouting(routedTask: TaskPackage): void;
 }
 
 interface RoutingCacheEntry {
@@ -191,11 +191,11 @@ function normalizedRawRequestIdentity(raw: RawTaskModelSelection): string {
 export function createTaskModelRouter(options: TaskModelRouterOptions): TaskModelRouter {
   const cacheLimit = options.cacheLimit ?? 500;
   // Accepted entries replay the first persisted decision for an identical
-  // normalized raw request (ADR-031); pending entries hold this call's
-  // routing until the Authority confirms persistence and never satisfy a
-  // cache lookup, so re-routing always evaluates current inputs.
+  // normalized raw request (ADR-031). Pending entries are keyed by the exact
+  // returned TaskPackage rather than task_id, so concurrent submissions cannot
+  // confirm another call's routing after SQLite chooses a different winner.
   const accepted = new Map<string, RoutingCacheEntry>();
-  const pending = new Map<string, RoutingCacheEntry>();
+  const pending = new WeakMap<TaskPackage, RoutingCacheEntry>();
 
   const route = async (task: RoutingTaskInput): Promise<TaskPackage> => {
     if (!task.model) return task as TaskPackage;
@@ -216,23 +216,22 @@ export function createTaskModelRouter(options: TaskModelRouterOptions): TaskMode
     // A content-changed re-submission must not overwrite the first accepted
     // routing: the SQLite Authority compares it against the persisted
     // TaskPackage to decide TASK_ID_CONFLICT or an equality replay.
-    if (!accepted.has(task.task_id)) {
-      pending.set(task.task_id, entry);
-      if (pending.size > cacheLimit) {
-        const oldest = pending.keys().next().value;
-        if (oldest !== undefined) pending.delete(oldest);
-      }
-    }
-    return { ...task, model: routed.resolved! };
+    const routedTask: TaskPackage = { ...task, model: routed.resolved! };
+    if (!accepted.has(task.task_id)) pending.set(routedTask, entry);
+    return routedTask;
   };
 
   return {
     route,
-    confirmRouting(taskId: string): void {
-      const entry = pending.get(taskId);
+    confirmRouting(routedTask: TaskPackage): void {
+      const entry = pending.get(routedTask);
       if (!entry) return;
-      pending.delete(taskId);
-      accepted.set(taskId, entry);
+      pending.delete(routedTask);
+      // A concurrent, surface-equivalent request may also reach durable
+      // equality and confirm late. The first accepted routing remains the
+      // replay baseline; a later confirmation cannot replace it.
+      if (accepted.has(routedTask.task_id)) return;
+      accepted.set(routedTask.task_id, entry);
       if (accepted.size > cacheLimit) {
         const oldest = accepted.keys().next().value;
         if (oldest !== undefined) accepted.delete(oldest);

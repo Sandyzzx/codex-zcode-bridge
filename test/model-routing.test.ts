@@ -182,7 +182,7 @@ test("task router resolves provider-less models and keeps task_id idempotent", a
   const first = await router.route(task({ model: { model_id: "GLM-5.3-Flash" } }));
   assert.equal(first.model!.provider_id, START_PLAN_PROVIDER_ID);
   assert.equal(first.model!.model_id, "GLM-5.3-Flash");
-  router.confirmRouting(first.task_id);
+  router.confirmRouting(first);
   // A later confirmed verdict must not re-route an existing task_id.
   journal.record("GLM-5.3-Flash", "no_entitlement", Date.now());
   const second = await router.route(task({ model: { model_id: "GLM-5.3-Flash" } }));
@@ -204,7 +204,7 @@ test("a changed raw model selection for the same task_id re-routes instead of re
   const journal = new StartPlanEntitlementJournal();
   const router = createTaskModelRouter({ settings: baseSettings, journal, registry: async () => REGISTRY });
   const first = await router.route(task({ task_id: "route_conflict", model: { model_id: "GLM-5.3-Flash" } }));
-  router.confirmRouting(first.task_id);
+  router.confirmRouting(first);
   assert.deepEqual(first.model, { provider_id: START_PLAN_PROVIDER_ID, model_id: "GLM-5.3-Flash" });
   journal.record("GLM-5.3-Flash", "no_entitlement", Date.now());
   // Changed model_id: re-routes from current inputs (Start Plan keeps GLM-5-Air
@@ -233,7 +233,7 @@ test("an accepted routing replays for an identical request even when the routing
     registry: async () => { registryReads.count += 1; return REGISTRY; },
   });
   const first = await router.route(task({ task_id: "route_preference", model: { model_id: "GLM-5.3-Flash" } }));
-  router.confirmRouting(first.task_id);
+  router.confirmRouting(first);
   assert.equal(first.model!.provider_id, START_PLAN_PROVIDER_ID);
   settings.preferStartPlan = false;
   const replay = await router.route(task({ task_id: "route_preference", model: { model_id: "GLM-5.3-Flash" } }));
@@ -253,7 +253,7 @@ test("a routing that was never persisted leaves no cache reservation for its tas
   // replayed or permanently blocked by the abandoned attempt.
   const retried = await router.route(task({ task_id: "route_failed", model: { model_id: "GLM-5.3-Flash" } }));
   assert.deepEqual(retried.model, { provider_id: "builtin:bigmodel-coding-plan", model_id: "GLM-5.3-Flash" });
-  router.confirmRouting("route_failed");
+  router.confirmRouting(retried);
   const accepted = await router.route(task({ task_id: "route_failed", model: { model_id: "GLM-5.3-Flash" } }));
   assert.deepEqual(accepted.model, retried.model, "only an accepted routing may replay");
 });
@@ -267,7 +267,7 @@ test("the -StartPlan alias and the explicit Start Plan provider are distinct raw
     registry: async () => { registryReads.count += 1; return REGISTRY; },
   });
   const alias = await router.route(task({ task_id: "route_alias", model: { model_id: "GLM-5.3-Flash-StartPlan" } }));
-  router.confirmRouting("route_alias");
+  router.confirmRouting(alias);
   assert.deepEqual(alias.model, { provider_id: START_PLAN_PROVIDER_ID, model_id: "GLM-5.3-Flash" });
   const readsAfterAlias = registryReads.count;
   // An identical alias request replays from the cache without re-routing.
@@ -282,4 +282,34 @@ test("the -StartPlan alias and the explicit Start Plan provider are distinct raw
   const explicit = await router.route(task({ task_id: "route_alias", model: { provider_id: START_PLAN_PROVIDER_ID, model_id: "GLM-5.3-Flash" } }));
   assert.deepEqual(explicit.model, alias.model, "both Start Plan request forms share one persisted TaskPackage");
   assert.equal(registryReads.count, readsAfterAlias + 1, "the explicit Start Plan form must re-route as a distinct raw identity");
+});
+
+test("confirming one concurrent routing cannot promote another submission for the same task_id", async () => {
+  const journal = new StartPlanEntitlementJournal();
+  const router = createTaskModelRouter({ settings: baseSettings, journal, registry: async () => REGISTRY });
+  const startPlan = await router.route(task({
+    task_id: "route_concurrent",
+    model: { model_id: "GLM-5.3-Flash" },
+  }));
+  const codingPlan = await router.route(task({
+    task_id: "route_concurrent",
+    model: { provider_id: "builtin:bigmodel-coding-plan", model_id: "GLM-5.3-Flash" },
+  }));
+
+  // SQLite can persist either racing submission. Confirmation must bind to
+  // the exact routed TaskPackage, not merely the shared task_id.
+  router.confirmRouting(startPlan);
+  router.confirmRouting(codingPlan);
+  journal.record("GLM-5.3-Flash", "no_entitlement", Date.now());
+  const startPlanReplay = await router.route(task({
+    task_id: "route_concurrent",
+    model: { model_id: "GLM-5.3-Flash" },
+  }));
+  assert.deepEqual(startPlanReplay.model, startPlan.model, "a late confirmation must not replace the first accepted routing");
+
+  const codingPlanRecheck = await router.route(task({
+    task_id: "route_concurrent",
+    model: { provider_id: "builtin:bigmodel-coding-plan", model_id: "GLM-5.3-Flash" },
+  }));
+  assert.deepEqual(codingPlanRecheck.model, codingPlan.model);
 });

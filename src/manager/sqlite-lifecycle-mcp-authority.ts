@@ -145,7 +145,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       const projection = asRecord(existing.projection);
       // The persisted TaskPackage equals this routing; accept it so an
       // identical re-submission replays from the routing cache as well.
-      this.#routeTaskModel?.confirmRouting(task.task_id);
+      this.#routeTaskModel?.confirmRouting(task);
       return receipt(task.task_id, projection.status, projection.created_at);
     }
 
@@ -158,12 +158,12 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
         throw error;
       }
     }
+    // Durable persistence succeeded (fresh or race-verified). Confirm this
+    // call's exact routing before any later queueing can fail.
+    this.#routeTaskModel?.confirmRouting(task);
     const snapshot = asRecord(this.#driver.readTaskLifecycle(task.task_id));
     const projection = asRecord(snapshot.projection);
     this.#enqueue(task.task_id, Number(projection.current_attempt));
-    // Durable persistence succeeded (fresh or race-verified): only now does
-    // the routing become the accepted decision for identical re-submissions.
-    this.#routeTaskModel?.confirmRouting(task.task_id);
     return { task_id: task.task_id, status: "queued", created_at: string(projection.created_at, "task_created_at_missing") };
   }
 

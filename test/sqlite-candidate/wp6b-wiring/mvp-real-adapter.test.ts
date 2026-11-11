@@ -190,7 +190,7 @@ function writeFakeRuntime(name: string, variant: RuntimeVariant): FakeRuntimeFix
       providers: [],
       providerConfigRules: { providerRules: [{
         providerId: "account:bigmodel-start-plan",
-        config: { builtinModelIds: ["GLM-5.3-Flash"], access: { type: "zhipu-account", mode: "start-plan", accountType: "bigmodel" } },
+        config: { builtinModelIds: ["GLM-5.3-Flash", "GLM-5-Air"], access: { type: "zhipu-account", mode: "start-plan", accountType: "bigmodel" } },
         // ADR-031 fallback target: a coding plan provider advertising the
         // same official model id in the fixture registry.
       }, {
@@ -2008,6 +2008,9 @@ test("ADR-031: the routing cache never masks a changed model selection; identica
 
     // 5. A materially changed selection must surface TASK_ID_CONFLICT from the
     //    SQLite Authority, never a masked replay.
+    const changedModel = await submit({ model_id: "GLM-5-Air-StartPlan" });
+    assert.equal(changedModel.isError, true, "a changed model_id must conflict");
+    assert.match(JSON.stringify(changedModel), /TASK_ID_CONFLICT/u);
     const changedProvider = await submit({ provider_id: "builtin:bigmodel-coding-plan", model_id: "GLM-5.3-Flash" });
     assert.equal(changedProvider.isError, true, "a changed provider_id must conflict");
     assert.match(JSON.stringify(changedProvider), /TASK_ID_CONFLICT/u);
