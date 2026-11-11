@@ -141,8 +141,18 @@ test('v13 historical projections retain BLOB artifacts, legacy Result and event 
 });
 
 test('automatic v13 startup upgrade keeps occupied running Attempts and recovery evidence without clearing a Hold',()=>{
-  const active=fixture('auto-live');const {store,fence}=running(active);
+  const active=fixture('auto-live');const {store,fence}=running(active,'auto-live-task',true);
+  const evidence={source:'manager_cleanup_probe',operation_id:fence.operation_id,task_id:fence.task_id,attempt:1,
+    generation:fence.generation,claim_id:fence.claim_id,worker_identity_digest:fence.claim_worker_identity_digest,probe:'unknown'};
+  const port=createSqliteLifecyclePort(store,{recoveryEvidenceVerifier:({observation})=>({
+    classification:observation.classification,reason_code:observation.reason_code,
+    evidence_source:observation.evidence_source,evidence_digest:observation.evidence_digest})});
+  port.recordRecoveryObservation({operation_id:fence.operation_id,task_id:fence.task_id,attempt:1,generation:fence.generation,
+    expected_revision:fence.revision,claim_id:fence.claim_id,worker_identity_digest:fence.claim_worker_identity_digest,
+    classification:'hold',reason_code:'cleanup_incomplete',evidence_source:'manager_cleanup_probe',
+    evidence_digest:digest(evidence)},evidence);
   const original=store.readOperation(fence.operation_id);
+  const eventDigests=store.readLifecycleEvents(fence.operation_id).map(event=>event.evidence_digest);
   store.close();
   const old=fixture('auto-v13');historicalV13(active,old);
   const opts={databaseFileName:'operations.sqlite3',runtimeRosterDigest:'b'.repeat(64)};
@@ -157,13 +167,14 @@ test('automatic v13 startup upgrade keeps occupied running Attempts and recovery
   try{
     assert.equal(checked.readOperation(fence.operation_id).phase,original.phase);
     assert.equal(checked.readOperation(fence.operation_id).claim_id,original.claim_id);
+    assert.deepEqual(checked.readLifecycleEvents(fence.operation_id).map(event=>event.evidence_digest),eventDigests);
     assert.equal(checked.readTaskLifecycle(fence.task_id).projection.status,'running');
     checked.assertAuthorityReady();
   }finally{checked.close();}
   const recovery=IsolatedAdmissionStore.openForRecovery(old,{managedDataDirectory:true});
   try{
     const snapshot=recovery.readRecoverySnapshot();
-    assert.ok(snapshot.operations.some(x=>x.operation_id===fence.operation_id&&x.capacity_occupied===true));
+    assert.ok(snapshot.operations.some(x=>x.operation_id===fence.operation_id&&x.capacity_occupied===true&&x.recovery_classification==='hold'));
   }finally{recovery.close();}
   assert.equal(IsolatedAdmissionStore.autoUpgradeV13(old,opts).state,'already_v14');
 });
