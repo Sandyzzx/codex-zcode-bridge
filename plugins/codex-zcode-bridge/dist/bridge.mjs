@@ -3891,7 +3891,7 @@ __export(store_exports, {
 });
 import { DatabaseSync } from "node:sqlite";
 import { createHash as createHash11, randomUUID as randomUUID3 } from "node:crypto";
-import { existsSync as existsSync9, lstatSync as lstatSync2, realpathSync as realpathSync4, readFileSync as readFileSync11, writeFileSync as writeFileSync3, openSync as openSync2, closeSync as closeSync2, fsyncSync, unlinkSync as unlinkSync2, renameSync as renameSync2, statSync as statSync5, readdirSync } from "node:fs";
+import { existsSync as existsSync9, lstatSync as lstatSync2, realpathSync as realpathSync4, readFileSync as readFileSync11, writeFileSync as writeFileSync3, openSync as openSync2, closeSync as closeSync2, fsyncSync, unlinkSync as unlinkSync2, renameSync as renameSync2, statSync as statSync5, readdirSync, mkdirSync as mkdirSync4, rmSync } from "node:fs";
 import path15 from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 function canonical4(value) {
@@ -4669,6 +4669,7 @@ var init_store = __esm({
         offline = false,
         expectedV13RuntimeRosterDigest = "",
         runtimeRosterDigest = "",
+        preserveActiveOperations = false,
         onStage = (_stage) => {
         }
       } = {}) {
@@ -4695,7 +4696,7 @@ var init_store = __esm({
           reader.#assertAuthorityReadyContents(expectedV13RuntimeRosterDigest);
           const admins = reader.#adminAbandonments();
           const unfinished = db.prepare("SELECT operation_id FROM manager_operations WHERE operation_kind='attempt_lifecycle' AND phase NOT IN ('released','cancelled_before_launch')").all().filter((row) => !admins.has(row.operation_id));
-          if (unfinished.length) fail2("upgrade_active_operations", "Stop and resolve known lifecycle work before upgrade; unknown Holds are not migrated or cleared");
+          if (unfinished.length && !preserveActiveOperations) fail2("upgrade_active_operations", "Stop and resolve known lifecycle work before upgrade; unknown Holds are not migrated or cleared");
           if (typeof runtimeRosterDigest !== "string" || !/^[0-9a-f]{64}$/u.test(runtimeRosterDigest)) fail2("upgrade_runtime_roster_required");
           onStage?.("source_verified");
           blocked();
@@ -4783,6 +4784,142 @@ var init_store = __esm({
           target?.close();
           if (locked) db.exec("ROLLBACK");
           db.close();
+        }
+      }
+      /**
+       * Automatic v13 -> v14 migration at production startup, under the existing
+       * cross-process bootstrap lock. This is not a live hot migration.
+       * Retains every occupied Operation and all Recovery evidence unchanged.
+       */
+      static autoUpgradeV13(root, { databaseFileName = "bridge.sqlite", runtimeRosterDigest = "", assertStartupLock = () => {
+      } } = {}) {
+        if (typeof runtimeRosterDigest !== "string" || !/^[0-9a-f]{64}$/u.test(runtimeRosterDigest)) fail2("upgrade_runtime_roster_required");
+        const opts = { databaseFileName, managedDataDirectory: true }, p = pathsFor(root, opts);
+        const pending = p.db + ".v13-v14-pending.json";
+        const version2 = () => {
+          if (!existsSync9(p.db)) return null;
+          try {
+            const db = new DatabaseSync(p.db, { readOnly: true, timeout: 1e3 });
+            try {
+              return db.prepare("PRAGMA user_version").get().user_version;
+            } finally {
+              db.close();
+            }
+          } catch (error2) {
+            if (existsSync9(pending)) throw error2;
+            return null;
+          }
+        };
+        const names = (token2) => ({
+          stage: path15.join(p.root, databaseFileName + ".v14-stage-" + token2),
+          backup: path15.join(p.root, databaseFileName + ".v13-backup-" + token2)
+        });
+        const validatePublished = () => {
+          const ready = this.open(p.root, opts);
+          try {
+            ready.assertAuthorityReady(runtimeRosterDigest);
+          } finally {
+            ready.close();
+          }
+        };
+        const resetPending = (stage2) => {
+          rmSync(stage2, { recursive: true, force: true });
+          unlinkSync2(pending);
+        };
+        assertStartupLock();
+        if (existsSync9(pending)) {
+          const st = lstatSync2(pending);
+          if (!st.isFile() || st.isSymbolicLink() || st.size > 4096) fail2("upgrade_marker_invalid");
+          let marker;
+          try {
+            marker = JSON.parse(readFileSync11(pending, "utf8"));
+          } catch {
+            fail2("upgrade_marker_invalid");
+          }
+          if (!marker || Object.keys(marker).sort().join("|") !== "contract|database_file|token" || marker.contract !== "sqlite-v13-v14-auto-upgrade-v1" || marker.database_file !== databaseFileName || typeof marker.token !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(marker.token)) fail2("upgrade_marker_invalid");
+          const { stage: stage2, backup: backup2 } = names(marker.token);
+          const current = version2();
+          if (current === 14) {
+            validatePublished();
+            resetPending(stage2);
+            return { state: "upgraded", source_version: 13, destination_version: 14, backup: backup2 };
+          }
+          if (current === null && existsSync9(backup2)) {
+            assertStartupLock();
+            renameSync2(backup2, p.db);
+          } else if (current !== 13 || existsSync9(backup2)) fail2("upgrade_recovery_ambiguous");
+          assertStartupLock();
+          resetPending(stage2);
+        }
+        const sourceVersion = version2();
+        if (sourceVersion === 14) return { state: "already_v14", destination_version: 14 };
+        if (sourceVersion !== 13) return { state: "not_v13", source_version: sourceVersion };
+        for (const file of [p.intent, p.poison, p.bootstrapPending, p.cutoverPending])
+          if (existsSync9(file)) fail2("upgrade_source_blocked");
+        const token = randomUUID3(), { stage, backup } = names(token);
+        const fd = openSync2(pending, "wx", 384);
+        try {
+          writeFileSync3(fd, JSON.stringify({ contract: "sqlite-v13-v14-auto-upgrade-v1", database_file: databaseFileName, token }));
+          fsyncSync(fd);
+        } finally {
+          closeSync2(fd);
+        }
+        try {
+          assertStartupLock();
+          mkdirSync4(stage);
+          const reader = new DatabaseSync(p.db, { readOnly: true, timeout: 1e3 });
+          let oldRoster = "";
+          try {
+            oldRoster = reader.prepare("SELECT runtime_roster_digest FROM authority_switch").get()?.runtime_roster_digest ?? "";
+          } finally {
+            reader.close();
+          }
+          const receipt2 = this.upgradeV13Copy(p.root, stage, {
+            databaseFileName,
+            offline: true,
+            preserveActiveOperations: true,
+            expectedV13RuntimeRosterDigest: oldRoster,
+            runtimeRosterDigest
+          });
+          assertStartupLock();
+          const old = new DatabaseSync(p.db, { timeout: 1e3 });
+          try {
+            const checkpoint = old.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get();
+            if (checkpoint.busy !== 0) fail2("upgrade_old_database_busy");
+          } finally {
+            old.close();
+          }
+          const stageDb = path15.join(stage, databaseFileName);
+          if (existsSync9(p.db + "-wal") || existsSync9(p.db + "-shm") || existsSync9(stageDb + "-wal") || existsSync9(stageDb + "-shm")) fail2("upgrade_database_still_open");
+          if (version2() !== 13) fail2("upgrade_source_changed");
+          assertStartupLock();
+          renameSync2(p.db, backup);
+          assertStartupLock();
+          renameSync2(stageDb, p.db);
+          validatePublished();
+          assertStartupLock();
+          resetPending(stage);
+          return { ...receipt2, state: "upgraded", backup };
+        } catch (error2) {
+          if (existsSync9(backup)) {
+            if (existsSync9(p.db)) {
+              try {
+                if (version2() === 14) {
+                  assertStartupLock();
+                  renameSync2(p.db, p.db + ".v14-failed-" + token);
+                }
+              } catch {
+              }
+            }
+            if (!existsSync9(p.db)) {
+              try {
+                assertStartupLock();
+                renameSync2(backup, p.db);
+              } catch {
+              }
+            }
+          }
+          throw error2;
         }
       }
       static initialize(root, options = {}) {
@@ -8495,7 +8632,12 @@ async function ensureFreshSqliteAuthority(root, databaseFileName, modules, proce
       if (existsSync10(markerTempPath)) {
         removeOwnedBootstrapFile(markerTempPath);
       }
-      if (existsSync10(databasePath)) {
+      if (existsSync10(databasePath) || existsSync10(databasePath + ".v13-v14-pending.json")) {
+        modules.Store.autoUpgradeV13?.(resolvedRoot, {
+          databaseFileName,
+          runtimeRosterDigest: currentSqliteRuntimeRosterDigest(),
+          assertStartupLock: () => lock.assertHeld()
+        });
         const existing = tryReadReadySqliteAuthority(modules, resolvedRoot, databaseFileName, false);
         if (!existing) throw new LifecycleGateError("sqlite_existing_database_unverified", "existing SQLite database is not a valid production Authority");
         emitFreshBootstrapStage(options, "ready");
@@ -34418,7 +34560,7 @@ function formatDuration(durationMs) {
 
 // src/mcp/server.ts
 var SERVER_NAME = "codex-zcode-bridge";
-var SERVER_VERSION = "2.0.0-preview.3"; // x-release-please-version
+var SERVER_VERSION = "2.0.0-preview.4"; // x-release-please-version
 var EXECUTION_NOT_VERDICT = "Results describe Bridge/ZCode execution only: status 'completed' means the invocation and report normalization finished, NOT that the calling host accepted the work. the calling host must independently review the workspace diff and checks before deciding PASS.";
 function okResult2(data) {
   return {

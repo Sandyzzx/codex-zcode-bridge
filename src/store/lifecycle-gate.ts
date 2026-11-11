@@ -240,6 +240,7 @@ export interface LifecycleCandidateModules {
     initialize(root: string, options?: Readonly<Record<string, unknown>>): LifecycleCandidateStore;
     open(root: string, options?: Readonly<Record<string, unknown>>): LifecycleCandidateStore;
     openForRecovery(root: string, options?: Readonly<Record<string, unknown>>): LifecycleCandidateStore | undefined;
+    autoUpgradeV13?(root: string, options: { databaseFileName: string; runtimeRosterDigest: string; assertStartupLock: () => void }): unknown;
   };
   readonly createPort: (store: object, options?: Readonly<Record<string, unknown>>) => ClaimOnlyPort;
 }
@@ -912,7 +913,14 @@ async function ensureFreshSqliteAuthority(
         removeOwnedBootstrapFile(markerTempPath);
       }
 
-      if (existsSync(databasePath)) {
+      if (existsSync(databasePath) || existsSync(databasePath + '.v13-v14-pending.json')) {
+        // Existing v13 Authorities are upgraded once, while the same Windows
+        // bootstrap lock protects promotion and cross-process startup.
+        modules.Store.autoUpgradeV13?.(resolvedRoot, {
+          databaseFileName,
+          runtimeRosterDigest: currentSqliteRuntimeRosterDigest(),
+          assertStartupLock: () => lock.assertHeld(),
+        });
         const existing = tryReadReadySqliteAuthority(modules, resolvedRoot, databaseFileName, false);
         if (!existing) throw new LifecycleGateError("sqlite_existing_database_unverified", "existing SQLite database is not a valid production Authority");
         emitFreshBootstrapStage(options, "ready");

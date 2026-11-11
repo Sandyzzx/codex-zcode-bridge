@@ -4,6 +4,28 @@
 
 当前版本以 `package.json` 和 Release Please manifest 为准。提交推送到 `master` 后，Release Please 会在有待发布变更时创建发布 PR，并同步更新版本文件与本日志；合并发布 PR 后会生成对应 Git tag 和 GitHub Release。
 
+## [2.0.0-preview.4](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-preview-v2.0.0-preview.3...codex-zcode-bridge-preview-v2.0.0-preview.4) (2026-11-11)
+
+SQLite v13 → v14 seamless startup migration (EXPERIMENTAL / PREVIEW ONLY; migration runs once on first startup after upgrade).
+
+### Fixed
+
+* Existing SQLite v13 Authority is automatically copied and upgraded to v14 during Bridge startup; users no longer need to run the offline upgrade command or edit the Authority path.
+* Preserve unfinished Operations, Attempts, Holds, occupancy, lifecycle events, and Recovery evidence. Migration does not spawn Workers, release Holds, or silently clear active work.
+* Retain the original v13 database as a sibling backup; verify the published v14 Authority before clearing the durable migration marker.
+* Recover/retry interrupted publication on the next startup, and keep corrupt or non-v13 databases on the existing fail-closed validation path.
+
+### Validation
+
+* Windows and Ubuntu Node 24 full Verify jobs passed.
+* Windows and Ubuntu SQLite resource matrix jobs passed.
+* Isolated regression fixtures cover occupied Operations/Holds, v13 backup preservation, interrupted publication recovery, replay/idempotence, and blocked roots.
+
+### Compatibility
+
+* This is a one-way data migration to v14, not a guarantee that older v13 Bridge binaries can write to a v14 database. The retained v13 backup supports explicit rollback.
+* Existing Recovery/Hold state remains intact and must be resolved through the normal Recovery workflow.
+
 ## [2.0.0-preview.3](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-preview-v2.0.0-preview.2...codex-zcode-bridge-preview-v2.0.0-preview.3) (2026-11-11)
 
 Preview 2.0 Start Plan 多轮运行时认证与官方 Desktop Host 启动兼容性修复（EXPERIMENTAL / PREVIEW ONLY，仅面向开发者和测试用户；发布目标为 `preview` 分支，不经过 Release Please）。
