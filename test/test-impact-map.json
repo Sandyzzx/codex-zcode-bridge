@@ -143,7 +143,6 @@
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
-        "src/runtime/durable-file-system.ts",
         "src/store/process-lock.ts",
         "src/store/atomic-rename.ts"
       ]
