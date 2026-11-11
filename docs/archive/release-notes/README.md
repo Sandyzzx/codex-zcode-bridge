@@ -1,8 +1,8 @@
-# Archived 1.3.0 Release Notes
+# 1.3.0 候选发布说明归档
 
 > Status: ARCHIVED
 > Date: 2026-11-11
 
-These notes preserve the 1.3.0 release-candidate history. `rc.1`, `rc.2`, and `rc.3` have annotated tags; GitHub currently publishes releases for `rc.3` and the final `1.3.0`, not for `rc.1` or `rc.2`. `rc.4` was prepared but has no tag or GitHub release. All candidates are superseded by Stable `v1.6.0` and Preview `2.0.0-preview.3`.
+本目录保留 1.3.0 候选发布历史。2026-11-11 核对结果：`rc.1`、`rc.2`、`rc.3` 有 annotated Tag；GitHub 当前 Release 列表包含 `rc.3` 和正式 `1.3.0`，未列出 `rc.1`、`rc.2`。`rc.4` 仅有准备文件，未发现对应 Tag 或 Release。文件中的 Marketplace 安装命令证明当时的发布意图，不能证明实际安装量或过去是否曾存在后被删除的 Release，这些事实仍不确定。
 
-Keep these files for installation and failure-history traceability; do not present them as current installation instructions.
+这些候选已被后续版本取代，保留其原始正文用于安装/故障历史追溯。当前安装从仓库 README 开始，不使用归档中的安装命令。

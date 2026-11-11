@@ -63,4 +63,4 @@ Attention 与 Thin Waiter 共用 SQLite snapshot 和只读等待谓词。Attenti
 
 新装和旧 JSON 安装均从 Fresh SQLite Bootstrap 开始；旧 JSON 用户数据保持原样，运行时不读取或迁移它。现有 SQLite receipt、历史 `json_artifacts` 校验及 schema-v13.sql 不退役。v13→v14 只允许显式离线复制升级，工具随插件交付。
 
-构建产物包含 Bridge、Worker、Thin Waiter、v14 升级命令、v13/v14 Schema 与浏览器后端。Core API 破坏按 Owner 已批准的 [ADR-029](decisions/ADR-029-legacy-runtime-retirement.md) 处理：未来主版本发布，当前仅本地候选，不更改 Marketplace MCP 工具/schema。
+构建产物包含 Bridge、Worker、Thin Waiter、v14 升级命令、v13/v14 Schema 与浏览器后端。Core API 破坏按 Owner 已批准的 [ADR-029](decisions/ADR-029-legacy-runtime-retirement.md) 在 Preview 2.0 发布线交付；当前 Preview 为 2.0.0-preview.3。该退役不更改 Marketplace MCP 工具/schema。

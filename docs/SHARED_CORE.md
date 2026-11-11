@@ -27,7 +27,7 @@ Worker 必须打包 `src/worker/worker-main.ts`，保留同一 SQLite Bootstrap/
 
 ## 主版本兼容性
 
-Owner 批准 [ADR-029](decisions/ADR-029-legacy-runtime-retirement.md)：删除 TaskStore、旧 BridgeTaskManager/TaskManagerOptions、createWorkerSpawner、runWorkerTask/RunWorkerTaskOptions、buildTaskObservation。旧 store/workspaceProvider/spawnWorker 构造参数、自定义 JSON Worker 与这些导出的消费者需要迁移；不存在保留旧运行时的兼容包装。未来发布应采用主版本（建议 2.0.0）；当前版本字段仍为 1.6.0，不是发布制品声明。
+Owner 批准 [ADR-029](decisions/ADR-029-legacy-runtime-retirement.md)：删除 TaskStore、旧 BridgeTaskManager/TaskManagerOptions、createWorkerSpawner、runWorkerTask/RunWorkerTaskOptions、buildTaskObservation。旧 store/workspaceProvider/spawnWorker 构造参数、自定义 JSON Worker 与这些导出的消费者需要迁移；不存在保留旧运行时的兼容包装。当前 Preview 版本为 2.0.0-preview.3，Stable 1.6.0 的合同保持独立。
 
 startBridge、MCP 工具及 schema、TaskPackage/TaskResult、32 MiB/v14、纯 feedback/observation/usage 与进程身份导出继续保留。DirectWorkspaceProvider 是小型独立路径工具，保留其已公开入口；生产 Manager 直接使用 SQLite Admission 的路径验证。
 
