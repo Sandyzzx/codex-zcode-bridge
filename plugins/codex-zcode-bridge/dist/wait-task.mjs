@@ -1162,11 +1162,16 @@ var init_store = __esm({
         const pending = p.db + ".v13-v14-pending.json";
         const version = () => {
           if (!existsSync(p.db)) return null;
-          const db = new DatabaseSync(p.db, { readOnly: true, timeout: 1e3 });
           try {
-            return db.prepare("PRAGMA user_version").get().user_version;
-          } finally {
-            db.close();
+            const db = new DatabaseSync(p.db, { readOnly: true, timeout: 1e3 });
+            try {
+              return db.prepare("PRAGMA user_version").get().user_version;
+            } finally {
+              db.close();
+            }
+          } catch (error) {
+            if (existsSync(pending)) throw error;
+            return null;
           }
         };
         const names = (token2) => ({
@@ -1210,8 +1215,9 @@ var init_store = __esm({
           assertStartupLock();
           resetPending(stage2);
         }
-        if (version() === 14) return { state: "already_v14", destination_version: 14 };
-        if (version() !== 13) fail2("upgrade_requires_v13");
+        const sourceVersion = version();
+        if (sourceVersion === 14) return { state: "already_v14", destination_version: 14 };
+        if (sourceVersion !== 13) return { state: "not_v13", source_version: sourceVersion };
         for (const file of [p.intent, p.poison, p.bootstrapPending, p.cutoverPending])
           if (existsSync(file)) fail2("upgrade_source_blocked");
         const token = randomUUID(), { stage, backup } = names(token);
