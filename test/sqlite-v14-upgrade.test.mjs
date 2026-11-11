@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
-import {existsSync,readFileSync,writeFileSync} from 'node:fs';
+import {existsSync,readFileSync,writeFileSync,renameSync,mkdirSync} from 'node:fs';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
-import {createHash} from 'node:crypto';
+import {createHash,randomUUID} from 'node:crypto';
 import {IsolatedAdmissionStore,digest,canonical} from '../src/sqlite-candidate/wp6b2b1/store.mjs';
 import {createSqliteLifecyclePort} from '../src/sqlite-candidate/wp6b2b1/lifecycle-port.mjs';
 import {historicalResultExceptionSetDigest} from '../src/store/json-history-result-exceptions.mjs';
@@ -138,4 +138,73 @@ test('v13 historical projections retain BLOB artifacts, legacy Result and event 
       assert.equal(db.prepare('SELECT next_event_cursor FROM authority_metadata').get().next_event_cursor,2);
     }finally{db.close();}
   }
+});
+
+test('automatic v13 startup upgrade keeps occupied running Attempts and recovery evidence without clearing a Hold',()=>{
+  const active=fixture('auto-live');const {store,fence}=running(active);
+  const original=store.readOperation(fence.operation_id);
+  store.close();
+  const old=fixture('auto-v13');historicalV13(active,old);
+  const opts={databaseFileName:'operations.sqlite3',runtimeRosterDigest:'b'.repeat(64)};
+  const before=readFileSync(path.join(old,'operations.sqlite3'));
+  const upgraded=IsolatedAdmissionStore.autoUpgradeV13(old,opts);
+  assert.equal(upgraded.state,'upgraded');
+  assert.equal(upgraded.source_version,13);
+  assert.deepEqual(readFileSync(upgraded.backup),before);
+  const sourceBackup=new DatabaseSync(upgraded.backup,{readOnly:true});
+  try{assert.equal(sourceBackup.prepare('PRAGMA user_version').get().user_version,13);}finally{sourceBackup.close();}
+  const checked=IsolatedAdmissionStore.open(old,{managedDataDirectory:true});
+  try{
+    assert.equal(checked.readOperation(fence.operation_id).phase,original.phase);
+    assert.equal(checked.readOperation(fence.operation_id).claim_id,original.claim_id);
+    assert.equal(checked.readTaskLifecycle(fence.task_id).status,'running');
+    const snapshot=checked.readRecoverySnapshot();
+    assert.ok(snapshot.operations.some(x=>x.operation_id===fence.operation_id&&x.capacity_occupied===true));
+    checked.assertAuthorityReady();
+  }finally{checked.close();}
+  assert.equal(IsolatedAdmissionStore.autoUpgradeV13(old,opts).state,'already_v14');
+});
+
+test('automatic upgrade restores a v13 database after interrupted first rename and retries idempotently',()=>{
+  const old=oldRoot(),database='operations.sqlite3',token=randomUUID();
+  const stage=path.join(old,database+'.v14-stage-'+token);
+  const backup=path.join(old,database+'.v13-backup-'+token);
+  const marker=path.join(old,database+'.v13-v14-pending.json');
+  mkdirSync(stage);
+  renameSync(path.join(old,database),backup);
+  writeFileSync(marker,JSON.stringify({contract:'sqlite-v13-v14-auto-upgrade-v1',database_file:database,token}));
+  const upgraded=IsolatedAdmissionStore.autoUpgradeV13(old,{databaseFileName:database,runtimeRosterDigest:'b'.repeat(64)});
+  assert.equal(upgraded.state,'upgraded');
+  assert.ok(existsSync(upgraded.backup));
+  const s=IsolatedAdmissionStore.open(old,{managedDataDirectory:true});
+  try{assert.equal(s.readTaskLifecycle('old-task').result.status,'cancelled');}finally{s.close();}
+  assert.equal(existsSync(marker),false);
+});
+
+test('automatic upgrade recovers successful publication after crash before clearing the marker',()=>{
+  const old=oldRoot(),database='operations.sqlite3',token=randomUUID();
+  const stage=path.join(old,database+'.v14-stage-'+token);
+  const backup=path.join(old,database+'.v13-backup-'+token);
+  const marker=path.join(old,database+'.v13-v14-pending.json');
+  mkdirSync(stage);
+  IsolatedAdmissionStore.upgradeV13Copy(old,stage,options);
+  renameSync(path.join(old,database),backup);
+  renameSync(path.join(stage,database),path.join(old,database));
+  writeFileSync(marker,JSON.stringify({contract:'sqlite-v13-v14-auto-upgrade-v1',database_file:database,token}));
+  const recovered=IsolatedAdmissionStore.autoUpgradeV13(old,{databaseFileName:database,runtimeRosterDigest:'b'.repeat(64)});
+  assert.equal(recovered.state,'upgraded');
+  assert.equal(recovered.backup,backup);
+  assert.ok(existsSync(backup));
+  assert.equal(existsSync(marker),false);
+  assert.equal(IsolatedAdmissionStore.autoUpgradeV13(old,{databaseFileName:database,runtimeRosterDigest:'b'.repeat(64)}).state,'already_v14');
+});
+
+test('automatic upgrade refuses a blocked v13 root without modifying its SQLite bytes or removing its Hold',()=>{
+  const live=fixture('auto-blocked-live');const {store}=running(live);store.close();
+  const old=fixture('auto-blocked-v13');historicalV13(live,old);
+  const db=path.join(old,'operations.sqlite3'),before=readFileSync(db);
+  writeFileSync(path.join(old,'WRITER_INTENT.json'),'unknown');
+  assert.throws(()=>IsolatedAdmissionStore.autoUpgradeV13(old,{databaseFileName:'operations.sqlite3',runtimeRosterDigest:'b'.repeat(64)}),e=>e.code==='upgrade_source_blocked');
+  assert.deepEqual(readFileSync(db),before);
+  assert.equal(existsSync(db+'.v13-v14-pending.json'),false);
 });
