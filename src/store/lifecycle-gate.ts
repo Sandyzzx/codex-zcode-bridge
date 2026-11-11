@@ -908,7 +908,7 @@ async function ensureFreshSqliteAuthority(
         removeOwnedBootstrapFile(markerTempPath);
       }
 
-      if (existsSync(databasePath)) {
+      if (existsSync(databasePath) || existsSync(databasePath + '.v13-v14-pending.json')) {
         // Existing v13 Authorities are upgraded once, while the same Windows
         // bootstrap lock protects promotion and cross-process startup.
         modules.Store.autoUpgradeV13?.(resolvedRoot, {
