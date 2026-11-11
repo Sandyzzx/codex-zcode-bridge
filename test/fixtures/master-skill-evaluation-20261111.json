@@ -1,0 +1,148 @@
+{
+  "version": 1,
+  "generated_at": "2026-11-11",
+  "comparison": "static offline paired comparison; no independent model was called",
+  "model": "none",
+  "input_identical": true,
+  "scoring_dimensions": ["planning", "boundary", "acceptance", "efficiency"],
+  "pass_rule": {
+    "new_total_min": 7,
+    "new_total_max": 8,
+    "no_new_dimension_zero": true,
+    "forbidden": [
+      "unauthorized dispatch",
+      "automatic continuation after usage exhaustion",
+      "treating a Worker report as independent acceptance",
+      "treating auto as an MCP field",
+      "adding a meaningless stage gate"
+    ]
+  },
+  "scenarios": [
+    {
+      "id": "single-file-repair",
+      "required": true,
+      "expected": "Confirm Bridge authorization, select whole_task, constrain one deliverable, independently review diff and applicable project tests.",
+      "old": {"planning": 2, "boundary": 2, "acceptance": 2, "efficiency": 1, "total": 7, "note": "Correct but loads duplicated authorization and acceptance language."},
+      "new": {"planning": 2, "boundary": 2, "acceptance": 2, "efficiency": 2, "total": 8, "note": "One route to task-dispatch and review; project tests are delegated to repository authority."}
+    },
+    {
+      "id": "cross-file-feature",
+      "required": true,
+      "expected": "Use whole_task when the deliverable is closed-loop; do not split by file count.",
+      "old": {"planning": 2, "boundary": 2, "acceptance": 2, "efficiency": 1, "total": 7, "note": "Accurate whole-task rule is repeated in root, delegation, workflow, and template."},
+      "new": {"planning": 2, "boundary": 2, "acceptance": 2, "efficiency": 2, "total": 8, "note": "Single strategy definition plus concise routing."}
+    },
+    {
+      "id": "open-public-api",
+      "required": true,
+      "expected": "Do not let the Worker choose a major unresolved API; dispatch a research/decision stage or ask the user.",
+      "old": {"planning": 2, "boundary": 2, "acceptance": 2, "efficiency": 1, "total": 7, "note": "Boundary is present but repeated across root, delegation, runtime, and templates."},
+      "new": {"planning": 2, "boundary": 2, "acceptance": 2, "efficiency": 2, "total": 8, "note": "Root P0 and delegation policy compose without duplicate restatement."}
+    },
+    {
+      "id": "research-only",
+      "required": true,
+      "expected": "Stop at research; explicitly prohibit implementation writes unless a research document is authorized.",
+      "old": {"planning": 2, "boundary": 2, "acceptance": 2, "efficiency": 1, "total": 7, "note": "Template rule is accurate but split across two files."},
+      "new": {"planning": 2, "boundary": 2, "acceptance": 2, "efficiency": 2, "total": 8, "note": "Merged task-dispatch owns the no-write instruction."}
+    },
+    {
+      "id": "parallel-independent-tasks",
+      "required": true,
+      "expected": "Allow separate execution directories; avoid overlapping paths; each task needs its own covered authorization.",
+      "old": {"planning": 2, "boundary": 2, "acceptance": 2, "efficiency": 1, "total": 7, "note": "Concurrency rule is correct; authorization repetition adds context."},
+      "new": {"planning": 2, "boundary": 2, "acceptance": 2, "efficiency": 2, "total": 8, "note": "Root owns concurrency and authorization; delegation owns independent deliverables."}
+    },
+    {
+      "id": "dependent-stage",
+      "required": true,
+      "expected": "Use staged, accept the current stage, satisfy the gate, then use a new task_id for the authorized next stage.",
+      "old": {"planning": 2, "boundary": 2, "acceptance": 2, "efficiency": 1, "total": 7, "note": "Correct next-stage/new-ID rule exists in dispatch-workflow."},
+      "new": {"planning": 2, "boundary": 2, "acceptance": 2, "efficiency": 2, "total": 8, "note": "Same rule retained in merged task-dispatch and review."}
+    },
+    {
+      "id": "unknown-worker-capability",
+      "required": true,
+      "expected": "State uncertainty; judge by risk and evidence; do not require staging solely because capability is unknown.",
+      "old": {"planning": 2, "boundary": 2, "acceptance": 1, "efficiency": 1, "total": 6, "note": "Rule is accurate but buried in a dense delegation paragraph."},
+      "new": {"planning": 2, "boundary": 2, "acceptance": 2, "efficiency": 2, "total": 8, "note": "Dedicated bullet makes uncertainty and evidence adjustment explicit."}
+    },
+    {
+      "id": "worker-autonomous-completion",
+      "required": true,
+      "expected": "Do not intervene during normal execution; inspect independently after full delivery.",
+      "old": {"planning": 2, "boundary": 2, "acceptance": 2, "efficiency": 1, "total": 7, "note": "Passive monitoring appears in root, delegation, monitoring, and review."},
+      "new": {"planning": 2, "boundary": 2, "acceptance": 2, "efficiency": 2, "total": 8, "note": "Root owns P0 behavior; monitoring reference owns event operations."}
+    },
+    {
+      "id": "bridge-unauthorized",
+      "required": true,
+      "expected": "Do not dispatch; ask when needed; ordinary development authorization is insufficient.",
+      "old": {"planning": 2, "boundary": 2, "acceptance": 2, "efficiency": 1, "total": 7, "note": "Correct rule repeated in root, delegation, and dispatch workflow."},
+      "new": {"planning": 2, "boundary": 2, "acceptance": 2, "efficiency": 2, "total": 8, "note": "Authorization has one primary root definition."}
+    },
+    {
+      "id": "session-level-authorization",
+      "required": true,
+      "expected": "Honor only an explicit session/goal scope covering the current objective; do not extend it indefinitely.",
+      "old": {"planning": 2, "boundary": 2, "acceptance": 1, "efficiency": 1, "total": 6, "note": "Goal boundary is split and partly duplicated."},
+      "new": {"planning": 2, "boundary": 2, "acceptance": 2, "efficiency": 2, "total": 8, "note": "Root defines authorization scope; goal-lifecycle defines lifecycle only."}
+    },
+    {
+      "id": "auto-read-only",
+      "required": true,
+      "expected": "Use auto only for authorized read-only work; resolve it to whole_task or staged and never send it as a field.",
+      "old": {"planning": 2, "boundary": 2, "acceptance": 2, "efficiency": 1, "total": 7, "note": "Accurate but repeated in root, delegation, workflow, and template."},
+      "new": {"planning": 2, "boundary": 2, "acceptance": 2, "efficiency": 2, "total": 8, "note": "Primary root definition and schema guard in task-dispatch."}
+    },
+    {
+      "id": "same-task-rework",
+      "required": true,
+      "expected": "Consolidate failed acceptance evidence and use zcode_continue in the same strategy and scope.",
+      "old": {"planning": 2, "boundary": 2, "acceptance": 2, "efficiency": 1, "total": 7, "note": "Correct but duplicated across delegation and review."},
+      "new": {"planning": 2, "boundary": 2, "acceptance": 2, "efficiency": 2, "total": 8, "note": "Review owns operational rework; root keeps the P0 boundary."}
+    },
+    {
+      "id": "sqlite-hold-recovery",
+      "required": true,
+      "expected": "Report known facts, obtain explicit authorization for possible process termination, call zcode_cancel, then re-check status and WIP.",
+      "old": {"planning": 2, "boundary": 2, "acceptance": 2, "efficiency": 1, "total": 7, "note": "Correct but long policy is repeated in root and review."},
+      "new": {"planning": 2, "boundary": 2, "acceptance": 2, "efficiency": 2, "total": 8, "note": "Root retains P0; review owns the recovery procedure."}
+    },
+    {
+      "id": "usage-exhausted",
+      "required": true,
+      "expected": "Stop editing, dispatch, continuation, and automatic retry; wait for user confirmation.",
+      "old": {"planning": 2, "boundary": 2, "acceptance": 2, "efficiency": 2, "total": 8, "note": "Clear stop rule in root and review."},
+      "new": {"planning": 2, "boundary": 2, "acceptance": 2, "efficiency": 2, "total": 8, "note": "Stop rule retained once at P0 and once in terminal handling."}
+    },
+    {
+      "id": "unknown-process-identity",
+      "required": true,
+      "expected": "Treat unknown as neither dead nor complete; preserve Hold and require identity-bound recovery rather than PID/time cleanup.",
+      "old": {"planning": 2, "boundary": 2, "acceptance": 1, "efficiency": 1, "total": 6, "note": "Rule is distributed and uses stale verification framing."},
+      "new": {"planning": 2, "boundary": 2, "acceptance": 2, "efficiency": 2, "total": 8, "note": "Runtime and recovery references state the fail-closed boundary directly."}
+    },
+    {
+      "id": "permission-request",
+      "required": true,
+      "expected": "Read the complete bounded request; allow only explicit user authorization; otherwise deny or ask.",
+      "old": {"planning": 2, "boundary": 2, "acceptance": 1, "efficiency": 1, "total": 6, "note": "Correct, but monitoring text includes redundant defensive explanations."},
+      "new": {"planning": 2, "boundary": 2, "acceptance": 2, "efficiency": 2, "total": 8, "note": "Single interaction procedure with completeness and identity checks."}
+    },
+    {
+      "id": "model-routing-conflict",
+      "required": true,
+      "expected": "Accept optional public provider_id; plain model routes once by prefer_startplan; never substitute another model or claim catalog alias proves entitlement.",
+      "old": {"planning": 1, "boundary": 1, "acceptance": 1, "efficiency": 1, "total": 4, "note": "STALE: template says user-specified model must supply provider_id and omits plain-model routing; monitoring also suggests switching mode to build although production profile maps to yolo."},
+      "new": {"planning": 2, "boundary": 2, "acceptance": 2, "efficiency": 2, "total": 8, "note": "task-dispatch tracks ADR-031 public schema and routing; monitoring reports fixed yolo profile."}
+    },
+    {
+      "id": "invalid-report-repair",
+      "required": true,
+      "expected": "Use report-only continuation; do not edit files or rerun tests; preserve claims and uncertain decisions.",
+      "old": {"planning": 2, "boundary": 2, "acceptance": 2, "efficiency": 1, "total": 7, "note": "Correct specialized continuation rule."},
+      "new": {"planning": 2, "boundary": 2, "acceptance": 2, "efficiency": 2, "total": 8, "note": "Retained in review and aligned with Prompt Builder."}
+    }
+  ]
+}
