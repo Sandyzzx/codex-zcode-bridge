@@ -3,9 +3,9 @@
 > Status: DECISION
 > Date: 2026-11-11
 > Decision: Accepted — Owner 在 Architecture Decision Freeze 任务中明确批准方案 5 的目标拓扑、职责、制品策略和禁令。
-> Applicability: TARGET ARCHITECTURE ONLY；尚未实施，不切换当前 Preview.3 执行/认证/清理合同，不授权 POC。
+> Applicability: TARGET ARCHITECTURE ONLY；后续隔离 POC 已有组件证据，但生产实现未完成，不切换当前 Preview.3 执行/认证/清理合同；POC 结果不改变本决定。
 > Verified against: Bridge `372e90622772b070357a278f1da3dea58fa42dee`；相对前轮 `0b70edbb` 仅新增分支工作流，生产源码未变。
-> Observed upstream: ZCode source `b95ebaffeab641907b38652f45c1502bd762972d` / tree `d7ebeb994cb8f46b16761fc9c550ae3f6e039c3d`，3.18.0；不是已构建/运行证明。
+> Observed upstream: ZCode source `b95ebaffeab641907b38652f45c1502bd762972d` / tree `d7ebeb994cb8f46b16761fc9c550ae3f6e039c3d`，3.18.0；此元数据本身不是构建/运行证明，后续隔离证据另见本 ADR 末尾链接。
 
 ## Context
 
@@ -91,4 +91,6 @@ Bridge 保留 Worker 管理和有精确身份、有范围的异常清理兜底�
 
 相比原候选少一层额外服务进程、IPC协议和服务恢复，不复制 Task 状态。代价是官方 Host 与 Worker 共用 Node/故障边界，且不能预先享有共享常驻 Host 的资源收益；真实兼容性需验证。
 
-下一步仅可在单独授权后执行 [POC-1 计划](../research/zcode-official-host-architecture-freeze-2026-11-11/POC_1_ENTRY.md)。先证明真正源码制品的最小 Host/Mock 执行与关闭事实，不建设账户 Broker、Pool、额外服务或生产迁移。POC-1 即便通过，也不解决全部六项未决能力，不授权生产接入。
+该决定作出时，下一步仅可在单独授权后执行 [POC-1 计划](../research/zcode-official-host-architecture-freeze-2026-11-11/POC_1_ENTRY.md)。后续独立任务已授权完成隔离源码制品与最小 Host/Mock 执行；这不建设账户 Broker、Pool、额外服务或生产迁移，也不授权生产接入。POC-1 即便通过，也不解决全部六项未决能力。
+
+后续获得的隔离证据见 [Official Host Integration v1 实施摘要](../research/zcode-official-host-integration-v1/IMPLEMENTATION_SUMMARY.md)。固定源码制品和官方 ProcessManager 的 loopback Mock 路径已有运行证据；same-profile 双 Worker refresh 合成测试失败，raw frame guard 与 Bridge Cleanup Proof 也尚未满足。这些结果只更新能力状态，不改变本 ADR 的目标拓扑、最低合同或现有 Proposed 状态。

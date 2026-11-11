@@ -35,6 +35,8 @@
 
 [POC-1 进入条件](../research/zcode-official-host-architecture-freeze-2026-11-11/POC_1_ENTRY.md) 是后续计划，需要单独授权。
 
+后续隔离 POC 已执行到组件门禁，但生产接线未完成；same-profile 双 Worker refresh、raw frame guard 和 Cleanup Proof 仍是阻断项。当前能力状态见 [Official Host Integration v1](../research/zcode-official-host-integration-v1/IMPLEMENTATION_SUMMARY.md)，不能把组件 PASS 当作 ADR-032 实施完成。
+
 ## 部分被替代 / Partially superseded
 
 | 决策 | 仍生效 | 已退役/替代 |
