@@ -104,7 +104,7 @@ general account refresh single-flight。原始证据见
 - `apps/zcode-cli/packages/adapters/src/mcp/oauth-refresh.ts`
 - `apps/zcode-cli/packages/adapters/tests/mcp-oauth-cross-process.e2e.test.ts:357-397`
 
-这些测试定义针对 MCP OAuth 子系统，不能推广成 Start Plan profile 或一般账户 provider 的并发证明。本轮也未执行该 E2E。
+这些测试定义针对 MCP OAuth 子系统，不能推广成 Start Plan profile 或一般账户 provider 的并发证明。本轮已两次执行该测试文件，关键 refresh single-flight、authorization leader 和 lease reclaim 用例通过，但整个文件为 `3 passed / 1 failed`；失败仍为 caller-budget/authorization snapshot 缺少 `authorizationUrl`。因此只能报告 `MCP_OAUTH_CROSS_PROCESS_FULL_FILE: PARTIAL_3_OF_4`，不能写成整套 PASS，也不能扩展为 general account 证明。
 
 ## 6. 当前 Bridge 所有权
 

@@ -1,5 +1,9 @@
 # docs: validate official ZCode host integration and record blockers
 
+> Status: RESEARCH
+> Date: 2026-11-11
+> Evidence candidate: `fd1d7a8c425cbf7177e1f83394b3fd2c98266eb0`
+
 ## Problem
 
 ADR-032 accepts a target topology that runs the official ZCode Host inside the existing Bridge Worker while retaining the current Task/Attempt, SQLite, lifecycle and Cleanup/Release contracts. Before implementation, the project needed reproducible source artifacts, a real official ProcessManager/AppServer Mock path, account-concurrency evidence, lifecycle mapping, and an independent decision on whether the candidate was ready.

@@ -78,14 +78,16 @@ Bridge 保留 Worker 管理和有精确身份、有范围的异常清理兜底�
 
 当前 Claim/Hold/Recovery/Cleanup/Release、并发、MCP/schema 和 SQLite Authority 合同不变。本 ADR Accepted 只冻结目标，不使这两个草案成为 Accepted，也不授权实现或生产切换。
 
-## 未决能力与验证门槛
+## 决定时未决能力与后续状态
 
-1. 官方 3.18.0 最小 Host 的实际构建和运行。
-2. Node/native/helper/动态资源依赖闭包。
-3. 官方 profile 的独立供给、刷新和同 profile 多 Worker 并发。
-4. 官方 Job 事实的可持久观测，以及 Bridge Cleanup Proof/Recovery 映射。
-5. 实际制品 BOM、许可和数据兼容/回滚。
-6. 真实 Start Plan 的独立账户能力；0.17.1 安装版历史成功不构成此证明。
+1. 官方 3.18.0 最小 Host 的实际构建和运行：后续隔离 G1/G2 已有限定环境 PASS；生产 Worker 尚未接入。
+2. Node/native/helper/动态资源依赖闭包：`PARTIAL`；optional native、完整资源和跨 clean-install first-build identity 仍未关闭。
+3. 官方 profile 的独立供给、刷新和同 profile 多 Worker 并发：same-profile 双 Worker 合成 refresh `FAIL`；最小 coordination 仍须 Owner/ADR 决定。
+4. 官方 Job 事实的可持久观测，以及 Bridge Cleanup Proof/Recovery 映射：`BLOCKED`；新 proof 仍 Proposed。
+5. 实际制品 BOM、许可和数据兼容/回滚：`PARTIAL / NOT DONE`。
+6. 真实 Start Plan 的独立账户能力：`NOT_RUN`；0.17.1 安装版历史成功不构成此证明。
+7. 官方 transport 与现有 16 MiB raw stdout frame 防护等价性：`BLOCKED`。
+8. 一般 Desktop Main 独立性：`NOT_RUN`；隔离 POC 只记录没有显式启动 Desktop 和没有在未插桩路径观察到凭据读取。
 
 ## Consequences 与下一步
 
