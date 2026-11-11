@@ -1,30 +1,39 @@
 # Project State
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-07
-> Last verified: 2026-11-07，核对集成基线与 ADR-029 退役候选范围；最终回归数据见交付报告。
-> Verified against: a46137fe46b567271a7756be819361132625278c + ADR-029 本地候选（未发布）
+> Last updated: 2026-11-11
+> Last verified: 2026-11-11，核对 Preview.3 发布基线、SQLite-only 架构、Start Plan/Coding Plan 产品入口和 README 文档。
+> Verified against: bfd3406fe2197a313ff1d34cd57fde79f5f95ff1
 
-已发布基线为 v1.6.0 / aabbb0a959ee234508c62731ed5122f28dfcf5b0。R1–R5 的本地集成为 a46137fe；本轮在独立 Worktree 退役旧运行时，不代表 master、安装插件或生产数据库已经更新。
+当前有两条发布渠道：
 
-## 当前候选
+- Stable `v1.6.0`：Tag `codex-zcode-bridge-v1.6.0`，面向普通用户，不包含 Start Plan 支持。
+- Preview `2.0.0-preview.3`：`preview` 分支与 Tag `codex-zcode-bridge-preview-v2.0.0-preview.3`，用于 SQLite-only 编排、Start Plan 与 Coding Plan 集成验证。
 
-- 一个 SQLite Task Authority（v14）、一个 Lifecycle Manager、一条 Worker→ZCode app-server 生产链。旧 JSON TaskStore/Manager/Worker、CLI Adapter 和 GitWorktreeProvider 已删除。
-- R1 stderr 排水、R2 32 MiB Result 与显式离线升级、R3 阶段期限、R4 pre-Intent 拒绝、R5 重启后的显式取消保持；Claim 永久、Result 与 Cleanup/Release 独立。
-- Attention/Thin Waiter 使用只读 SQLite snapshot；Doctor 绑定同一 Authority。旧 JSON 用户文件不读取、不迁移、不删除。
-- 公共 Core API 退役获 Owner 批准，未来按主版本发布；Marketplace MCP 工具/schema 与 SQLite v14 不变。外部 fork 升级未验证。
-- JSON B3-05 随旧 Store 退役；SQLite 功能回归保留，资源压力单独运行或由实际影响选择。完整 Windows 结果与前后指标以本轮报告为准。
+## 当前生产架构
+
+- 一个 SQLite Task Authority（Schema v14）、一个 Lifecycle Manager、一条 Worker→ZCode AppServer 生产链。
+- 旧 JSON TaskStore/Manager/Worker、CLI Adapter 和 GitWorktreeProvider 已从 Preview 生产执行链退役；旧 JSON 文件不由 Bridge 读取、导入或删除。
+- Result、Cleanup 与 Release 是独立生命周期事实。无法验证 Worker 进程树清理时必须保留显式 Hold，不能伪造 Release。
+- Attention/Thin Waiter 读取同一 SQLite Authority；`zcode_doctor` 也绑定该 Authority。
+- SQLite v13 必须通过离线副本升级到 v14，不在启动时原地迁移。
+
+## 套餐与认证
+
+- **Z.ai Start Plan：** Preview 支持。Bridge 只读发现官方凭据，执行实时模型权益检查，并通过单任务 Private Lease 向官方 Runtime 交付认证。Start Plan 与普通模型目录条目分离，使用 `<ModelId>-StartPlan` 别名。
+- **Z.ai Coding Plan：** 保留既有官方 Coding Plan 账户/API Key 路径；Start Plan 预检不改变 Coding Plan 的既有注册和执行语义。
+- 两条路径最终都由官方 ZCode AppServer 执行；Bridge 不复制 AppServer 的 Provider 请求构造。
+
+Start Plan 的真实证据目前为：Windows、官方 AppServer `0.17.1`、Provider `account:bigmodel-start-plan`、模型 `GLM-5.3-Flash`、3 次主 Turn 模型迭代均 HTTP `200`、Write/Read、有效 AgentReport、Result Commit/Cleanup/Release、每任务 1 次 Billing GET，无 HTTP 405、3012 或 unusual activity。该证据不能推广到所有模型或平台。
 
 ## 明确边界
 
-当前运行支持受信任的单用户 Windows 本地部署。任务使用固定 yolo profile，以当前账户权限执行；路径声明与 worktree 不是 OS 沙箱。公开完成状态表示执行结束，Owner 仍需独立验收。
+当前运行只认证受信任的单用户 Windows 本地部署。任务使用固定 `yolo` profile，以当前账户权限执行；路径声明、任务 Prompt 和 Worktree 不是 OS 安全沙箱。
 
-Host 大 Result 接收限制和 1.1 MB 续作输入限制按 Owner 决定延后；不得重派已完成任务绕过读取问题。不新增 Chunk API、不扩大输入、不开展 R6/R7。
+Linux/macOS 的 Preview 路径目前只有合成/CI 覆盖。真实 Start Plan 模型请求、其他 Start Plan 模型、CAPTCHA 自动处理和跨平台生产认证均未由该单一模型证据证明。
 
-原生 Ubuntu 本轮尚未运行；已知 admin-abandonment 测试的平台错误改为 Windows 保留成功/CAS、其他平台断言拒绝且数据库不变，生产身份限制不变。历史 QEMU MCP 超时原因未定，不能当作原生 Ubuntu 产品缺陷或 PASS。
+Host Portability 与 Companion Service 仍是架构研究，不是 Preview.3 已交付能力。公共 Core fork/外部 Host 升级仍未在当前 Preview 上验证。
 
-## 未认证能力
+## 当前文档入口
 
-真实 Provider 长时/四小时墙钟运行、当前 Native Host 最大 Result 完整接收、外部 dsh/fork 升级、Claude 后台唤醒、跨 Host attach/control、其他平台生产身份生命周期均未由本轮证明。浏览器默认关闭，限定版本的历史证据不推广到所有模型/runtime。
-
-当前设计从 [架构](ARCHITECTURE.md) 与 [接口](INTERFACES.md) 阅读；需要解释取舍时从 [ADR 索引](decisions/README.md) 按主题加载。历史审计和原始失败证据保留，默认不读取 archive/research。
+产品入口与安装方法见 [README](../README.md) 和 [中文说明](../README.zh-CN.md)。运行配置和 v13→v14 升级见 [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md)；生命周期与接口见 [ARCHITECTURE.md](ARCHITECTURE.md) 和 [INTERFACES.md](INTERFACES.md)。
