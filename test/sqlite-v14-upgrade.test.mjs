@@ -157,11 +157,14 @@ test('automatic v13 startup upgrade keeps occupied running Attempts and recovery
   try{
     assert.equal(checked.readOperation(fence.operation_id).phase,original.phase);
     assert.equal(checked.readOperation(fence.operation_id).claim_id,original.claim_id);
-    assert.equal(checked.readTaskLifecycle(fence.task_id).status,'running');
-    const snapshot=checked.readRecoverySnapshot();
-    assert.ok(snapshot.operations.some(x=>x.operation_id===fence.operation_id&&x.capacity_occupied===true));
+    assert.equal(checked.readTaskLifecycle(fence.task_id).projection.status,'running');
     checked.assertAuthorityReady();
   }finally{checked.close();}
+  const recovery=IsolatedAdmissionStore.openForRecovery(old,{managedDataDirectory:true});
+  try{
+    const snapshot=recovery.readRecoverySnapshot();
+    assert.ok(snapshot.operations.some(x=>x.operation_id===fence.operation_id&&x.capacity_occupied===true));
+  }finally{recovery.close();}
   assert.equal(IsolatedAdmissionStore.autoUpgradeV13(old,opts).state,'already_v14');
 });
 
