@@ -1,9 +1,9 @@
 # 文档路由 / Documentation
 
 > Status: AUTHORITATIVE（仅指本索引）
-> Last updated: 2026-11-07
-> Last verified: 2026-11-07，核对当前索引路由和 Preview 2.0 集成报告链接；合并验证仍在进行。
-> Verified against: HEAD `4051aa7b4970ac01941ceeb8297b38bf678e9fce` + MERGE_HEAD `190737e14551ae823c77400c694693ab3d863237`
+> Last updated: 2026-11-11
+> Last verified: 2026-11-11，核对 Preview.3 产品入口、SQLite-only 当前架构、Start Plan/Coding Plan 支持和文档路由。
+> Verified against: bfd3406fe2197a313ff1d34cd57fde79f5f95ff1
 
 English users start at [README.md](../README.md). 技术文档为中文。先读当前事实，按问题加载合同；研究/历史材料不作为当前实现。
 
@@ -33,10 +33,8 @@ AUTHORITATIVE 描述当前事实/合同；DECISION 记录已批准取舍；RESEA
 
 [ADR 索引](decisions/README.md) 区分当前有效、部分被替代、完全被替代。历史文件保持原路径，避免破坏引用。不要默认加载 docs/archive、docs/research、旧审计日志或生成 bundle。
 
-本轮退役决策见 [ADR-029](decisions/ADR-029-legacy-runtime-retirement.md)。R2 宿主限制的历史验收见 [R2 报告](research/r2-final-acceptance-20261106/R2_FINAL_ACCEPTANCE.md)，R3 期限证据见 [R3 报告](reports/sqlite-r3-deadlines-2026-11-06.md)；这些不是当前候选重新执行的结果。
+当前 Preview 基线与套餐入口见 [PROJECT_STATE.md](PROJECT_STATE.md) 和根目录 README。旧 JSON/CLI 生产链退役决策见 [ADR-029](decisions/ADR-029-legacy-runtime-retirement.md)。R2 宿主限制、R3 期限和 Start Plan Gate 2 的历史材料保留用于追溯，不代表 Preview.3 的当前验收。
 
-Start Plan 的凭据与 Gate 2 本机合成验证仍作为历史研究保留：[凭据格式报告](reports/2026-11-07-start-plan-credential-format.md)、[Gate 2 证据索引](research/start-plan-gate2-2026-11-03/GOAL_EVIDENCE_INDEX.md)。这些材料不代表 Preview 2.0 集成后已重新验收，也不代表真实 Billing 或模型 E2E 通过。
-
-本次 SQLite-only + Start Plan 集成的现场、门禁及未验证边界见[集成报告](reports/preview2-sqlite-start-plan-integration-20261107.md)。报告中的历史/继承结果与本次新运行结果分开记录。
+Preview.3 的 Start Plan 真实证据目前只覆盖 Windows、官方 AppServer `0.17.1` 和 `GLM-5.3-Flash`。其他 Start Plan 模型、其他平台、CAPTCHA 与 unusual-activity 的无人值守处理仍未认证；不要把单模型真实请求成功写成通用能力。
 
 当前事实放 docs 顶层，设计取舍放 decisions，研究放 research，一次性交付放 reports，历史放 archive；草稿放已忽略的 docs/_draft。CHANGELOG 仍由 release-please 维护，不手改。
