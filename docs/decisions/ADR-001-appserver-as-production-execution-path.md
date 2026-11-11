@@ -1,5 +1,7 @@
 # ADR-001 — 生产执行路径使用 ZCode app-server
 
+> Applicability: ACTIVE — 2026-11-10 起两个正式启动点都追加 `--surface desktop`，并只读注入官方 Desktop 版本/build 身份。该扩展不改变“app-server 是唯一执行链、不恢复历史 CLI prompt”的本决策。
+
 Status: Accepted
 Date: 2026-10-07（记录日期，决策早于此）
 

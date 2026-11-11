@@ -1,9 +1,9 @@
 # 当前架构
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-07
-> Last verified: 2026-11-07，核对 SQLite-only 入口、Core 退役范围及 R1–R5 调用链；运行验证见本轮报告。
-> Verified against: a46137fe46b567271a7756be819361132625278c + ADR-029 本地候选（未发布）
+> Last updated: 2026-11-11
+> Last verified: 2026-11-11，核对 Preview.3 SQLite-only 入口、Desktop Host 启动身份、Start Plan/Coding Plan 路由与 R1–R5 调用链。
+> Verified against: 52015d12f37011f4d389e07941c31491457611ef
 
 本文件描述当前实现。公开合同见 [INTERFACES.md](INTERFACES.md)，宿主构建见 [SHARED_CORE.md](SHARED_CORE.md)，配置和升级见 [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md)。决策按主题从 [ADR 索引](decisions/README.md) 加载。
 
@@ -20,7 +20,7 @@ MCP tools                                  │ 排队 / 取消 / 只读恢复
                                            │
                                  ZCodeAppServerAdapter
                                            │
-                               ZCode app-server --stdio
+                               ZCode app-server --stdio --surface desktop
                                            │
                                  TaskResult → SQLite v14
                                            │
@@ -48,6 +48,10 @@ Windows 终止继续使用 [ADR-009](decisions/ADR-009-windows-identity-bound-tr
 ## Adapter、观察与宿主
 
 生产执行唯一使用 app-server Adapter；模型目录查询保留独立的短 RPC 生命周期。共享报告解析、输入 prompt、provider 配置、进程身份及浏览器后端，不将目录 RPC 与执行 RPC 强行合并。
+
+任务 Adapter 与模型目录探测共用 `buildZCodeAppServerLaunch()`：启动参数固定为 `app-server --stdio --surface desktop`，并从安装的 Desktop `app.asar` 只读解析 `ZCODE_APP_VERSION` 与 `ZCODE_BUILD_COMMIT_ID`。合法元数据注入子进程环境；元数据缺失仅省略身份变量，损坏、格式非法或版本冲突按 `provider_config_invalid` fail-closed。Bridge 不伪造 Desktop 身份，也不复制官方 HTTP 请求构造。
+
+模型选择在 Task 创建时解析一次并持久化完整 provider/model。显式 `<ModelId>-StartPlan` 或 Start Plan Provider 强制走 Start Plan；普通模型按 `ZCODE_BRIDGE_PREFER_STARTPLAN` 与非权威 Billing verdict 选择 Start Plan 或 Coding Plan，不跨模型替换。Start Plan 每任务只执行一次权威 Billing GET，后续 Private Lease 复用同一 account/provider/model/credential 绑定的 verdict；凭据、Provider 或模型变化必须重新授权。Coding Plan 保持官方账户/API Key 路径，不经过 Start Plan Billing。
 
 可选 browser host 默认关闭，显式启用后使用独立 managed CDP profile；浏览器与 app-server 的清理共同决定 Cleanup proof。生产 bundle 随附 playwright 后端与资源，不依赖开发 checkout。身份/隐私与能力边界见 [ADR-007](decisions/ADR-007-browser-host-rpc.md)、[ADR-009](decisions/ADR-009-windows-identity-bound-tree-termination.md)。
 

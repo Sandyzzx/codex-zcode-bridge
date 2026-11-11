@@ -1,11 +1,13 @@
 # ZCode 运行配置边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-07
-> Last verified: 2026-11-06，仅核对 R3 任务期限解析、阶段预算及 R2 容量保持边界；其余条目沿用历史核对范围，未重新认证。
-> Verified against: 4fc3d91731da38cc022afe80e474e510a70735ac（R3 本地候选，未发布）
+> Last updated: 2026-11-11
+> Last verified: 2026-11-11，核对 Preview.3 Desktop Host 启动身份、R3 任务期限解析及 R2 容量保持边界。
+> Verified against: 52015d12f37011f4d389e07941c31491457611ef
 
-当前生产路径是 `node zcode.cjs app-server --stdio`，不是历史 CLI `--prompt --json`。解析入口为 `NodeRuntimeResolver`，配置项与用户设置方法见仓库 README。
+当前生产路径是 `node zcode.cjs app-server --stdio --surface desktop`，不是历史 CLI `--prompt --json`。任务 Adapter 与模型目录探测共用该启动合同；解析入口为 `NodeRuntimeResolver`，配置项与用户设置方法见仓库 README。
+
+Bridge 从安装的 Desktop `app.asar` 只读解析版本与 build metadata，向 AppServer 注入 `ZCODE_APP_VERSION` 与 `ZCODE_BUILD_COMMIT_ID`。缺失 metadata 时保留 Desktop surface 并省略两个身份变量；损坏 ASAR、非法版本/commit 或版本冲突按 `provider_config_invalid` fail-closed。Bridge 不硬编码 Desktop 版本，不修改 Desktop 安装，也不伪造 HTTP Header。
 
 ## 执行与清理期限（ADR-027）
 

@@ -1,5 +1,7 @@
 # ADR-030：Start Plan Provider 的任务级权益预检
 
+> Applicability: ACTIVE, AMENDED — 2026-11-10 后最终合同为每个 Start Plan Issuer/Task 执行一次权威 Billing GET；`issue()` 复用完全相同的 account/provider/model/credential/model verdict，任何身份变化重新走实时授权。原第 5 条“交付前第二次新鲜 Billing”已被该任务级 verdict 绑定取代；fail-closed、Private Lease/HANDLE/ACK 与不跨任务缓存语义不变。
+
 > Status: DECISION
 > Date: 2026-11-07
 > Decision: ACCEPTED — Owner 授权 Preview 2.0 Start Plan Provider 就绪性收口
