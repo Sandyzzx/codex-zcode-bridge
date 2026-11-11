@@ -250,7 +250,7 @@ __export(store_exports, {
 });
 import { DatabaseSync } from "node:sqlite";
 import { createHash as createHash3, randomUUID } from "node:crypto";
-import { existsSync, lstatSync, realpathSync, readFileSync, writeFileSync, openSync, closeSync, fsyncSync, unlinkSync, renameSync, statSync, readdirSync } from "node:fs";
+import { existsSync, lstatSync, realpathSync, readFileSync, writeFileSync, openSync, closeSync, fsyncSync, unlinkSync, renameSync, statSync, readdirSync, mkdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 function canonical3(value) {
@@ -1028,6 +1028,7 @@ var init_store = __esm({
         offline = false,
         expectedV13RuntimeRosterDigest = "",
         runtimeRosterDigest = "",
+        preserveActiveOperations = false,
         onStage = (_stage) => {
         }
       } = {}) {
@@ -1054,7 +1055,7 @@ var init_store = __esm({
           reader.#assertAuthorityReadyContents(expectedV13RuntimeRosterDigest);
           const admins = reader.#adminAbandonments();
           const unfinished = db.prepare("SELECT operation_id FROM manager_operations WHERE operation_kind='attempt_lifecycle' AND phase NOT IN ('released','cancelled_before_launch')").all().filter((row) => !admins.has(row.operation_id));
-          if (unfinished.length) fail2("upgrade_active_operations", "Stop and resolve known lifecycle work before upgrade; unknown Holds are not migrated or cleared");
+          if (unfinished.length && !preserveActiveOperations) fail2("upgrade_active_operations", "Stop and resolve known lifecycle work before upgrade; unknown Holds are not migrated or cleared");
           if (typeof runtimeRosterDigest !== "string" || !/^[0-9a-f]{64}$/u.test(runtimeRosterDigest)) fail2("upgrade_runtime_roster_required");
           onStage?.("source_verified");
           blocked();
@@ -1142,6 +1143,136 @@ var init_store = __esm({
           target?.close();
           if (locked) db.exec("ROLLBACK");
           db.close();
+        }
+      }
+      /**
+       * Automatic v13 -> v14 migration at production startup, under the existing
+       * cross-process bootstrap lock. This is not a live hot migration.
+       * Retains every occupied Operation and all Recovery evidence unchanged.
+       */
+      static autoUpgradeV13(root, { databaseFileName = "bridge.sqlite", runtimeRosterDigest = "", assertStartupLock = () => {
+      } } = {}) {
+        if (typeof runtimeRosterDigest !== "string" || !/^[0-9a-f]{64}$/u.test(runtimeRosterDigest)) fail2("upgrade_runtime_roster_required");
+        const opts = { databaseFileName, managedDataDirectory: true }, p = pathsFor(root, opts);
+        const pending = p.db + ".v13-v14-pending.json";
+        const version = () => {
+          if (!existsSync(p.db)) return null;
+          const db = new DatabaseSync(p.db, { readOnly: true, timeout: 1e3 });
+          try {
+            return db.prepare("PRAGMA user_version").get().user_version;
+          } finally {
+            db.close();
+          }
+        };
+        const names = (token2) => ({
+          stage: path.join(p.root, databaseFileName + ".v14-stage-" + token2),
+          backup: path.join(p.root, databaseFileName + ".v13-backup-" + token2)
+        });
+        const validatePublished = () => {
+          const ready = this.open(p.root, opts);
+          try {
+            ready.assertAuthorityReady(runtimeRosterDigest);
+          } finally {
+            ready.close();
+          }
+        };
+        const resetPending = (stage2) => {
+          rmSync(stage2, { recursive: true, force: true });
+          unlinkSync(pending);
+        };
+        assertStartupLock();
+        if (existsSync(pending)) {
+          const st = lstatSync(pending);
+          if (!st.isFile() || st.isSymbolicLink() || st.size > 4096) fail2("upgrade_marker_invalid");
+          let marker;
+          try {
+            marker = JSON.parse(readFileSync(pending, "utf8"));
+          } catch {
+            fail2("upgrade_marker_invalid");
+          }
+          if (!marker || Object.keys(marker).sort().join("|") !== "contract|database_file|token" || marker.contract !== "sqlite-v13-v14-auto-upgrade-v1" || marker.database_file !== databaseFileName || typeof marker.token !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(marker.token)) fail2("upgrade_marker_invalid");
+          const { stage: stage2, backup: backup2 } = names(marker.token);
+          const current = version();
+          if (current === 14) {
+            validatePublished();
+            resetPending(stage2);
+            return { state: "upgraded", source_version: 13, destination_version: 14, backup: backup2 };
+          }
+          if (current === null && existsSync(backup2)) {
+            assertStartupLock();
+            renameSync(backup2, p.db);
+          } else if (current !== 13 || existsSync(backup2)) fail2("upgrade_recovery_ambiguous");
+          assertStartupLock();
+          resetPending(stage2);
+        }
+        if (version() === 14) return { state: "already_v14", destination_version: 14 };
+        if (version() !== 13) fail2("upgrade_requires_v13");
+        for (const file of [p.intent, p.poison, p.bootstrapPending, p.cutoverPending])
+          if (existsSync(file)) fail2("upgrade_source_blocked");
+        const token = randomUUID(), { stage, backup } = names(token);
+        const fd = openSync(pending, "wx", 384);
+        try {
+          writeFileSync(fd, JSON.stringify({ contract: "sqlite-v13-v14-auto-upgrade-v1", database_file: databaseFileName, token }));
+          fsyncSync(fd);
+        } finally {
+          closeSync(fd);
+        }
+        try {
+          assertStartupLock();
+          mkdirSync(stage);
+          const reader = new DatabaseSync(p.db, { readOnly: true, timeout: 1e3 });
+          let oldRoster = "";
+          try {
+            oldRoster = reader.prepare("SELECT runtime_roster_digest FROM authority_switch").get()?.runtime_roster_digest ?? "";
+          } finally {
+            reader.close();
+          }
+          const receipt = this.upgradeV13Copy(p.root, stage, {
+            databaseFileName,
+            offline: true,
+            preserveActiveOperations: true,
+            expectedV13RuntimeRosterDigest: oldRoster,
+            runtimeRosterDigest
+          });
+          assertStartupLock();
+          const old = new DatabaseSync(p.db, { timeout: 1e3 });
+          try {
+            const checkpoint = old.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get();
+            if (checkpoint.busy !== 0) fail2("upgrade_old_database_busy");
+          } finally {
+            old.close();
+          }
+          const stageDb = path.join(stage, databaseFileName);
+          if (existsSync(p.db + "-wal") || existsSync(p.db + "-shm") || existsSync(stageDb + "-wal") || existsSync(stageDb + "-shm")) fail2("upgrade_database_still_open");
+          if (version() !== 13) fail2("upgrade_source_changed");
+          assertStartupLock();
+          renameSync(p.db, backup);
+          assertStartupLock();
+          renameSync(stageDb, p.db);
+          validatePublished();
+          assertStartupLock();
+          resetPending(stage);
+          return { ...receipt, state: "upgraded", backup };
+        } catch (error) {
+          if (existsSync(backup)) {
+            if (existsSync(p.db)) {
+              try {
+                if (version() === 14) {
+                  assertStartupLock();
+                  renameSync(p.db, p.db + ".v14-failed-" + token);
+                }
+              } catch {
+              }
+            }
+            if (!existsSync(p.db)) {
+              try {
+                assertStartupLock();
+                renameSync(backup, p.db);
+              } catch {
+              }
+            }
+          }
+          throw error;
         }
       }
       static initialize(root, options = {}) {
