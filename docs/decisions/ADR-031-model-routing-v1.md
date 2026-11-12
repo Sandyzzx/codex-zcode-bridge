@@ -5,6 +5,7 @@
 > Status: DECISION
 > Date: 2026-11-09
 > Decision: ACCEPTED — Owner 授权 Model Routing v1 合同冻结与最小实施
+> Revision: 2026-11-12 — 任务幂等细化（Issue #79）：路由缓存以归一化后的原始模型请求内容为身份，仅重放首次已持久化接受的选择；内容变化按当前输入重新选路并交由 SQLite Authority 判定；持久化前的失败不留缓存占用。
 > Observed runtime: ZCode CLI/AppServer 0.17.1
 
 ## Context
@@ -43,9 +44,15 @@ Private Credential Lease。当前用户必须显式选择 `account:bigmodel-star
       默认），不做自动路由，不覆盖用户已有显式配置。
    自动路由只允许选择同一官方模型 ID，绝不跨模型替换。
 4. **任务幂等**：路由结果在创建时解析并持久化于 TaskPackage.model；重复提交
-   同一 `task_id`（含别名输入）在 Host 生命周期内复用首次解析结果，不因套餐
-   状态变化重新选路。任务开始执行后失败不自动重派 Coding Plan。不新增
-   SQLite 路由表、状态机或 Recovery 机制。
+   同一 `task_id`（含别名输入）在 Host 生命周期内复用首次已接受（已持久化）
+   请求的解析结果，不因套餐状态变化重新选路。路由缓存以归一化后的原始模型
+   请求内容（provider_id/model_id/reasoning_level，不含凭据）为身份：相同
+   内容重放首次选路；内容变化不命中缓存，按当前输入重新选路，由 SQLite
+   Authority 与持久化 TaskPackage 比较产生 `TASK_ID_CONFLICT` 或按相等重放
+   （如 `-StartPlan` 别名与显式 Start Plan provider 可解析到同一
+   TaskPackage）。路由成功但持久化前被拒绝的请求不留任何缓存占用。任务开始
+   执行后失败不自动重派 Coding Plan。不新增 SQLite 路由表、状态机或
+   Recovery 机制。
 5. **凭据行为（CLI-like）**：移除"启动时无 Start Plan 凭据即永久不可用"。
    Host 向 SQLite Authority 提供 `startPlanPrivateAuthFactory`，仅当任务实际
    需要 Start Plan 认证时按需创建 Issuer：每次派发读取当前官方凭据，新登录

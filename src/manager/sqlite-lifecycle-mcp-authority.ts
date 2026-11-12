@@ -24,6 +24,7 @@ import { parseTaskAttentionSnapshot } from "../attention/snapshot.js";
 import { createPlatformProbe, PROCESS_IDENTITY_VERSION, type ProcessIdentity, type ProcessProbe } from "../runtime/process-probe.js";
 import { buildSqliteDoctorChecks } from "../runtime/sqlite-doctor.js";
 import type { DoctorCheck } from "../runtime/doctor.js";
+import type { TaskModelRouter } from "../runtime/model-routing.js";
 
 const EXECUTION_OBSERVATION_PROBE_BUDGET_MS = 5_000;
 const DEFAULT_HOST_SHUTDOWN_WAIT_MS = 60_000;
@@ -33,10 +34,12 @@ export type SqliteAuthorityOptions = ClaimOnlyDriverOptions & {
   readonly testBeforeDispatch?: () => Promise<void>;
   readonly testOnScheduler?: (stage: string, detail: Readonly<Record<string, unknown>>) => void;
   readonly testShutdownWaitMs?: number;
-  /** Host-supplied ADR-031 task-creation routing hook. Runs before
+  /** Host-supplied ADR-031 task-creation routing hook. `route` runs before
    * TaskPackage validation and persistence so every stored task carries the
-   * fully resolved provider/model selection. */
-  readonly routeTaskModel?: (task: TaskPackage) => Promise<TaskPackage>;
+   * fully resolved provider/model selection; `confirmRouting` is invoked only
+   * after durable persistence, so a failure before the first persistence
+   * leaves no routing-cache reservation. */
+  readonly routeTaskModel?: TaskModelRouter;
 };
 
 /** SQLite Lifecycle Manager. Owns scheduling; the bound driver owns durable facts. */
@@ -69,12 +72,12 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
   readonly #startPlanAuthInjected: boolean;
   readonly #startPlanPrivateAuthFactory?: () => Promise<NonNullable<ClaimOnlyDriverOptions["startPlanPrivateAuth"]> | null>;
   readonly #testOnlyFakeAdapter: boolean;
-  readonly #routeTaskModel?: (task: TaskPackage) => Promise<TaskPackage>;
+  readonly #routeTaskModel?: TaskModelRouter;
 
   private constructor(driver: Driver, context: NonNullable<ClaimOnlyDriverOptions["trustedLocalContext"]>, processProbe: ProcessProbe,
     testBeforeDispatch?: () => Promise<void>, testOnScheduler?: SqliteAuthorityOptions["testOnScheduler"],
     shutdownWaitMs = DEFAULT_HOST_SHUTDOWN_WAIT_MS, startPlanAuthAvailable = false, testOnlyFakeAdapter = false,
-    routeTaskModel?: (task: TaskPackage) => Promise<TaskPackage>,
+    routeTaskModel?: TaskModelRouter,
     startPlanAuthInjected = false,
     startPlanPrivateAuthFactory?: () => Promise<NonNullable<ClaimOnlyDriverOptions["startPlanPrivateAuth"]> | null>) {
     this.#driver = driver;
@@ -95,26 +98,14 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     this.#assertAccepting();
     this.#assertRecoveryReady();
     // ADR-031: routing runs before validation so a provider-less model input
-    // is resolved to the actual provider/model that will be persisted.
-    task = this.#routeTaskModel ? await this.#routeTaskModel(task) : task;
+    // is resolved to the actual provider/model that will be persisted. The
+    // routing cache is confirmed only after durable persistence below, so a
+    // rejection on any path before that point leaves no cache reservation.
+    task = this.#routeTaskModel ? await this.#routeTaskModel.route(task) : task;
     if (task.model && !task.model.provider_id?.trim()) {
       throw new TaskManagerError("TASK_INVALID", "model.provider_id is required because task model routing is not configured");
     }
     validateTaskPackage(task);
-    // ADR-031: Start Plan credential discovery is on-demand. With an injected
-    // issuer the availability fact is fixed; with the host factory this
-    // pre-intent refusal reads the current official credential state, so a
-    // logout rejects the new task at creation instead of stranding an
-    // Operation in launch-outcome-unknown. Dispatch re-resolves the factory,
-    // keeping the window between creation and spawn covered by the frozen
-    // launch-unknown recovery semantics.
-    if (task.model?.provider_id === "account:bigmodel-start-plan" && !this.#testOnlyFakeAdapter) {
-      if (!this.#startPlanAuthAvailable) throw new TaskManagerError("TASK_INVALID", "official Start Plan credentials are unavailable");
-      if (!this.#startPlanAuthInjected) {
-        const issuer = await this.#startPlanPrivateAuthFactory?.().catch(() => null) ?? null;
-        if (!issuer) throw new TaskManagerError("TASK_INVALID", "official Start Plan credentials are unavailable");
-      }
-    }
     const policy = this.#driverTrustedPolicy();
     const sourceDecision = policy.validateWorkspace({ requestedPath: task.workspace, canonicalPath: task.workspace });
     if (sourceDecision.state !== "allow") throw new TaskManagerError("TASK_INVALID", `SQLite admission rejected: ${sourceDecision.reason}`);
@@ -138,7 +129,23 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
         throw new TaskManagerError("TASK_ID_CONFLICT", `task_id already belongs to a different SQLite request: ${task.task_id}`);
       }
       const projection = asRecord(existing.projection);
+      // The persisted TaskPackage equals this routing; accept it so an
+      // identical re-submission replays from the routing cache as well.
+      this.#routeTaskModel?.confirmRouting(task);
       return receipt(task.task_id, projection.status, projection.created_at);
+    }
+
+    // ADR-031: Start Plan credential discovery is on-demand for genuinely new
+    // tasks. Existing tasks are resolved against SQLite first so logout cannot
+    // replace an equality replay or TASK_ID_CONFLICT with a credential error.
+    // This pre-intent refusal still precedes Operation/Launch Intent creation,
+    // so a logged-out new task is rejected before launch-outcome-unknown.
+    if (task.model?.provider_id === "account:bigmodel-start-plan" && !this.#testOnlyFakeAdapter) {
+      if (!this.#startPlanAuthAvailable) throw new TaskManagerError("TASK_INVALID", "official Start Plan credentials are unavailable");
+      if (!this.#startPlanAuthInjected) {
+        const issuer = await this.#startPlanPrivateAuthFactory?.().catch(() => null) ?? null;
+        if (!issuer) throw new TaskManagerError("TASK_INVALID", "official Start Plan credentials are unavailable");
+      }
     }
 
     try {
@@ -150,6 +157,9 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
         throw error;
       }
     }
+    // Durable persistence succeeded (fresh or race-verified). Confirm this
+    // call's exact routing before any later queueing can fail.
+    this.#routeTaskModel?.confirmRouting(task);
     const snapshot = asRecord(this.#driver.readTaskLifecycle(task.task_id));
     const projection = asRecord(snapshot.projection);
     this.#enqueue(task.task_id, Number(projection.current_attempt));

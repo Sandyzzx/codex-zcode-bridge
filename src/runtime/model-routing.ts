@@ -157,43 +157,86 @@ export class RecordingStartPlanEntitlement implements StartPlanLiveEntitlement {
   }
 }
 
-/**
- * Creates the task-creation routing hook wired into the SQLite Authority.
- * Routing runs before TaskPackage validation/persistence, so every stored
- * task carries the fully resolved provider/model. Re-submissions of the same
- * `task_id` reuse the first decision (ADR-031 idempotency), bounded by an
- * insertion-order cache.
- */
 /** Task as accepted from the public schema: `model.provider_id` may be absent
  * and is resolved before persistence. */
 export type RoutingTaskInput = Omit<TaskPackage, "model"> & { readonly model?: RawTaskModelSelection };
 
-export function createTaskModelRouter(options: TaskModelRouterOptions): (task: RoutingTaskInput) => Promise<TaskPackage> {
+/** Task-creation routing hook wired into the SQLite Authority (ADR-031).
+ * `route` runs before TaskPackage validation/persistence; `confirmRouting`
+ * promotes the pending routing to the accepted idempotency cache only after
+ * the Authority has durably persisted the TaskPackage, so a routing,
+ * validation, Admission, or Start Plan preflight failure before the first
+ * persistence leaves no cache reservation behind. */
+export interface TaskModelRouter {
+  route(task: RoutingTaskInput): Promise<TaskPackage>;
+  confirmRouting(routedTask: TaskPackage): void;
+}
+
+interface RoutingCacheEntry {
+  /** Stable, credential-free identity of the normalized raw model request. */
+  readonly identity: string;
+  readonly resolved: ZCodeModelSelection;
+}
+
+/** Stable, credential-free identity of one normalized raw model request.
+ * Distinct raw identities — e.g. the provider-less `<ModelId>-StartPlan` alias
+ * versus the explicit Start Plan provider with the raw official model id —
+ * never share a cache slot even when they resolve to the same persisted
+ * TaskPackage; the SQLite Authority then replays through TaskPackage equality.
+ * Resolved-result equality alone is never a cache identity. */
+function normalizedRawRequestIdentity(raw: RawTaskModelSelection): string {
+  return JSON.stringify([raw.provider_id ?? null, raw.model_id, raw.reasoning_level ?? null]);
+}
+
+export function createTaskModelRouter(options: TaskModelRouterOptions): TaskModelRouter {
   const cacheLimit = options.cacheLimit ?? 500;
-  const cache = new Map<string, ZCodeModelSelection>();
+  // Accepted entries replay the first persisted decision for an identical
+  // normalized raw request (ADR-031). Pending entries are keyed by the exact
+  // returned TaskPackage rather than task_id, so concurrent submissions cannot
+  // confirm another call's routing after SQLite chooses a different winner.
+  const accepted = new Map<string, RoutingCacheEntry>();
+  const pending = new WeakMap<TaskPackage, RoutingCacheEntry>();
 
-  return async (task: RoutingTaskInput): Promise<TaskPackage> => {
+  const route = async (task: RoutingTaskInput): Promise<TaskPackage> => {
     if (!task.model) return task as TaskPackage;
-    const cached = cache.get(task.task_id);
-    if (cached) return { ...task, model: cached };
-
     const raw: RawTaskModelSelection = {
       model_id: task.model.model_id.trim(),
       ...(task.model.provider_id?.trim() ? { provider_id: task.model.provider_id.trim() } : {}),
       ...(task.model.reasoning_level?.trim() ? { reasoning_level: task.model.reasoning_level.trim() } : {}),
     };
     if (!raw.model_id) throw new BridgeError("provider_config_invalid", "model_id must not be blank");
+    const identity = normalizedRawRequestIdentity(raw);
+    const cached = accepted.get(task.task_id);
+    if (cached && cached.identity === identity) return { ...task, model: cached.resolved };
 
     const settings = options.settings();
     const registry = await options.registry();
     const routed = routeTaskModel(raw, settings, registry, options.journal);
+    const entry: RoutingCacheEntry = { identity, resolved: routed.resolved! };
+    // A content-changed re-submission must not overwrite the first accepted
+    // routing: the SQLite Authority compares it against the persisted
+    // TaskPackage to decide TASK_ID_CONFLICT or an equality replay.
+    const routedTask: TaskPackage = { ...task, model: routed.resolved! };
+    if (!accepted.has(task.task_id)) pending.set(routedTask, entry);
+    return routedTask;
+  };
 
-    cache.set(task.task_id, routed.resolved!);
-    if (cache.size > cacheLimit) {
-      const oldest = cache.keys().next().value;
-      if (oldest !== undefined) cache.delete(oldest);
-    }
-    return { ...task, model: routed.resolved! };
+  return {
+    route,
+    confirmRouting(routedTask: TaskPackage): void {
+      const entry = pending.get(routedTask);
+      if (!entry) return;
+      pending.delete(routedTask);
+      // A concurrent, surface-equivalent request may also reach durable
+      // equality and confirm late. The first accepted routing remains the
+      // replay baseline; a later confirmation cannot replace it.
+      if (accepted.has(routedTask.task_id)) return;
+      accepted.set(routedTask.task_id, entry);
+      if (accepted.size > cacheLimit) {
+        const oldest = accepted.keys().next().value;
+        if (oldest !== undefined) accepted.delete(oldest);
+      }
+    },
   };
 }
 
