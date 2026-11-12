@@ -74,6 +74,8 @@ ${LOCALAPPDATA}\CodexZCodeBridge\state\bridge.sqlite
 
 Schema v13 必须通过文档规定的离线副本升级到 v14；不要在启动时原地迁移，也不要通过清除 Hold 强制启动。完整说明见仓库的 [Runtime 指南](../../docs/ZCODE_RUNTIME.md) 和 [中文主 README](../../README.zh-CN.md)。
 
+ADR-018 的管理性放弃命令随插件交付为 `dist/admin-abandon-held-operation.mjs`，并与同一包的 v14 schema/Store 构建绑定。它只用于经单独授权且满足全部停机、重启、身份和 claimant 条件的一个 `cleanup_incomplete` Hold；不要改用手工构造的旧开发 `dist`。执行前按 Master Skill 的恢复参考完成只读核对。
+
 ## 可选后台等待器
 
 支持后台命令完成通知的 Host 可运行插件包内的只读 `dist/wait-task.mjs`。它观察同一 SQLite Attention Core，不批准、取消或修改任务状态；通知仍取决于 Host 的生命周期。

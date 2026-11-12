@@ -11,7 +11,7 @@ import { createSqliteLifecyclePort } from '../../../src/sqlite-candidate/wp6b2b1
 import { createTrustedLocalCandidateContext } from '../../../dist-test/src/host/stdio.js';
 import { SqliteLifecycleMcpAuthority } from '../../../dist-test/src/manager/sqlite-lifecycle-mcp-authority.js';
 import { createPlatformProbe } from '../../../dist-test/src/runtime/process-probe.js';
-import { parseArgs } from '../../../dist-test/src/cli/admin-abandon-held-operation.js';
+import { parseArgs } from '../../../plugins/codex-zcode-bridge/dist/admin-abandon-held-operation.mjs';
 
 const HERE=path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT=path.resolve(HERE,'../../..');
@@ -314,7 +314,7 @@ test('the compiled operator CLI performs Windows CAS or refuses unsupported plat
     const invalidArgv=argv.slice();invalidArgv[2]='WRONG';
     assert.throws(()=>parseArgs(invalidArgv),/confirmation_mismatch/u);
     f.store.close();
-    const cliModuleUrl=pathToFileURL(path.join(PROJECT_ROOT,'dist-test/src/cli/admin-abandon-held-operation.js')).href;
+    const cliModuleUrl=pathToFileURL(path.join(PROJECT_ROOT,'plugins/codex-zcode-bridge/dist/admin-abandon-held-operation.mjs')).href;
     const childScript=path.join(TEST_ROOT,`cli-success-${process.pid}.mjs`);
     writeFileSync(childScript,`
 import { executeCli } from ${JSON.stringify(cliModuleUrl)};
