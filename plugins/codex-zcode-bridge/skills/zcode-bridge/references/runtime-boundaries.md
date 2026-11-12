@@ -2,7 +2,7 @@
 
 > Status: AUTHORITATIVE
 > Last updated: 2026-11-11
-> Last verified: 2026-11-11，核对 Preview.3 SQLite-only 架构、当前接口/项目状态、固定本机 profile 与模型路由；跨平台真实运行 NOT RUN。
+> Last verified: 2026-11-12，核对 Stable 1.7.0 SQLite-only 架构、当前接口/项目状态、固定本机 profile 与模型路由幂等；跨平台真实运行 NOT RUN。
 > Verified against: 372e90622772b070357a278f1da3dea58fa42dee（基线；本候选离线证据见 docs/research/master-skill-simplification-20261111.md）
 
 - 生产只有 SQLite v14 Task Authority、一个 Lifecycle Manager 和 Worker→官方 app-server 链。旧 JSON TaskStore/Manager/Worker、CLI Adapter、GitWorktreeProvider 和恢复 roster 已退役；旧 `.tasks`/JSON 锁不是恢复源，不扫描、导入或手工删除。

@@ -1,9 +1,9 @@
 # 共享核心与宿主适配
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-11
-> Last verified: 2026-11-11，核对 Preview.3 src/core.ts、Host/Worker 入口及构建布局；外部 fork 实际升级 NOT RUN。
-> Verified against: 52015d12f37011f4d389e07941c31491457611ef
+> Last updated: 2026-11-12
+> Last verified: 2026-11-12，核对 Stable 1.7.0 src/core.ts、Host/Worker 入口及构建布局；外部 fork 实际升级 NOT RUN。
+> Verified against: e444ad0d3ce5df342a7f4d104b19816f1af1dda5 + 1.7.0 版本收口
 
 公共入口为 `codex-zcode-bridge/core`（`src/core.ts`），无服务器启动副作用，构建同时输出类型声明。项目为 private，尚未发布独立 npm 包；本地 npm pack/fork 消费仍是公共兼容边界。
 
@@ -27,11 +27,11 @@ Worker 必须打包 `src/worker/worker-main.ts`，保留同一 SQLite Bootstrap/
 
 ## 主版本兼容性
 
-Owner 批准 [ADR-029](decisions/ADR-029-legacy-runtime-retirement.md)：删除 TaskStore、旧 BridgeTaskManager/TaskManagerOptions、createWorkerSpawner、runWorkerTask/RunWorkerTaskOptions、buildTaskObservation。旧 store/workspaceProvider/spawnWorker 构造参数、自定义 JSON Worker 与这些导出的消费者需要迁移；不存在保留旧运行时的兼容包装。当前 Preview 版本为 2.0.0-preview.3，Stable 1.6.0 的合同保持独立。
+Owner 批准 [ADR-029](decisions/ADR-029-legacy-runtime-retirement.md)：删除 TaskStore、旧 BridgeTaskManager/TaskManagerOptions、createWorkerSpawner、runWorkerTask/RunWorkerTaskOptions、buildTaskObservation。旧 store/workspaceProvider/spawnWorker 构造参数、自定义 JSON Worker 与这些导出的消费者需要迁移；不存在保留旧运行时的兼容包装。当前 Stable 版本为 1.7.0。
 
 startBridge、MCP 工具及 schema、TaskPackage/TaskResult、32 MiB/v14、纯 feedback/observation/usage 与进程身份导出继续保留。DirectWorkspaceProvider 是小型独立路径工具，保留其已公开入口；生产 Manager 直接使用 SQLite Admission 的路径验证。
 
-ADR-029 的破坏性迁移已在 Preview 2.0 发布线落地；Stable 1.6.0 仍是独立发布渠道。外部 fork 若仍消费旧 Core 导出，应锁定 1.x 制品，迁到 `startBridge` 或 `SqliteLifecycleMcpAuthority.create()` 后再升级 Preview 2.x。
+ADR-029 的破坏性迁移已随 Stable 1.7.0 交付。外部 fork 若仍消费旧 Core 导出，必须先迁到 `startBridge` 或 `SqliteLifecycleMcpAuthority.create()`，完成构建与行为验证后再升级；1.7.0 不提供旧 Core 导出的兼容包装。
 
 外部 dsh/fork 代码及部署没有在本轮修改或认证。它们可以锁定旧核心制品，准备好后迁移到 SQLite Host；不能宣称外部 API 已无消费者。
 

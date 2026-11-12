@@ -4,7 +4,7 @@
 
 [English](README.md) · [项目仓库](https://github.com/Sandyzzx/codex-zcode-bridge) · [版本发布](https://github.com/Sandyzzx/codex-zcode-bridge/releases)
 
-> **发布状态。** 稳定版为 `v1.6.0`，不包含 Start Plan 支持。预览版为 `2.0.0-preview.3`，位于 `preview` 分支，是当前 SQLite-only 任务编排、Start Plan 与 Coding Plan 集成渠道。
+> **发布状态。** 本分支将 Preview `2.0.0-preview.4` 提升为 Stable `v1.7.0` 版本线。`preview` 分支继续作为后续工作的集成分支。
 
 ## 这是什么
 
@@ -23,14 +23,14 @@ Codex 不会自动接管所有开发请求。只有用户明确要求使用 ZCod
 
 | 套餐 | 可用渠道 | 认证与运行路径 |
 | --- | --- | --- |
-| **Z.ai Start Plan** | Preview `2.0.0-preview.3` | 只读发现官方已登录账户凭据，对所选模型执行实时权益检查，并通过单任务私有凭据 Lease 向官方 Runtime 交付认证。 |
-| **Z.ai Coding Plan** | Stable `v1.6.0` 与 Preview | 使用既有的官方 Coding Plan 账户/API Key 路径，通过 ZCode Runtime 执行。 |
+| **Z.ai Start Plan** | Stable `v1.7.0` 与 Preview | 只读发现官方已登录账户凭据，对所选模型执行实时权益检查，并通过单任务私有凭据 Lease 向官方 Runtime 交付认证。 |
+| **Z.ai Coding Plan** | Stable `v1.7.0` 与 Preview | 使用既有的官方 Coding Plan 账户/API Key 路径，通过 ZCode Runtime 执行。 |
 
 Start Plan 与 Coding Plan 是两条不同的账户和认证路径。Bridge 根据任务中的 Provider、模型和套餐选择对应路径；两者最终都通过官方 ZCode AppServer 执行。
 
 ### 已验证的 Start Plan 路径
 
-Preview.3 包含一次 Windows 真实验收，实际事实如下：
+`v1.7.0` 版本线包含一次 Windows 真实验收，实际事实如下：
 
 - 官方 ZCode AppServer `0.17.1`。
 - Provider `account:bigmodel-start-plan`。
@@ -67,7 +67,7 @@ Preview.3 包含一次 Windows 真实验收，实际事实如下：
 ## 环境要求
 
 - **Windows** 是当前生产 SQLite 路径与真实 Start Plan 验收的已验证本地环境；Linux/macOS 目前只有合成/CI 覆盖。
-- **Preview 2.0.0-preview.3：** Node.js `>=24.16.0` 且 `<25`。
+- **Stable 1.7.0：** Node.js `>=24.16.0` 且 `<25`。
 - Git、支持插件/Marketplace 的 Codex，以及可正常工作的本机 ZCode 安装。
 - 官方 ZCode 账户已登录，并具备所选任务需要的套餐和模型权益。
 - 仅面向**单用户、可信本地**环境；不提供多用户隔离或远程沙箱。
@@ -80,16 +80,16 @@ Marketplace 插件不会代替你安装 Node.js 或 ZCode。
 
 ### 稳定版
 
-Stable `v1.6.0` 不包含 Start Plan：
+Stable `v1.7.0` 包含 SQLite-only 编排以及 Start Plan 与 Coding Plan 集成：
 
 ```sh
-codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-v1.6.0
+codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-v1.7.0
 codex plugin add codex-zcode-bridge@codex-zcode-bridge
 ```
 
 ### 预览版
 
-预览版用于 SQLite-only 编排、Start Plan 与 Coding Plan 集成。Marketplace ID：`codex-zcode-bridge-preview`。
+预览版继续用于 `1.7.0` 之后的集成工作。Marketplace ID：`codex-zcode-bridge-preview`。
 
 ```sh
 codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref preview
@@ -105,7 +105,7 @@ codex plugin marketplace upgrade codex-zcode-bridge-preview
 如需固定到已验收的 Preview 快照：
 
 ```sh
-codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-preview-v2.0.0-preview.3
+codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-preview-v2.0.0-preview.4
 ```
 
 在已有 Marketplace 上切换分支或 Tag 时，使用目标 `--ref` 重新执行 `marketplace add`，或先移除再添加。不同 Codex 版本的实际参数以 `codex plugin marketplace add --help` 为准。
@@ -145,21 +145,17 @@ ${LOCALAPPDATA}\CodexZCodeBridge\state\bridge.sqlite
 
 数据库必须通过完整性和生命周期检查后，MCP 才会接受请求。Bridge 不会回退到 JSON 存储。
 
-Schema v13 必须通过**离线副本升级**到 v14。先停止所有 Bridge Host、Manager 和 Worker，再从 Preview 插件根目录运行安装包内的升级工具：
+启动时发现有效的 Schema v13 Authority 后，Bridge 会在既有跨进程 bootstrap 锁内执行受控副本升级到 v14。原数据库保留为同目录 v13 备份；只有已发布 v14 Authority 验证通过后才清除持久升级 marker，现有 Operation、Hold 与 Recovery 证据保持不变：
 
 ```powershell
-node ./dist/upgrade-sqlite-v14.mjs `
-  --source "D:/BridgeOld/state" `
-  --destination "D:/BridgeV14/state" `
-  --database bridge.sqlite `
-  --offline
+node ./dist/upgrade-sqlite-v14.mjs --help
 ```
 
-源数据库会保留。副本验证成功后，将 Host 的 `authority.json.data_root` 改为 `D:/BridgeV14`。不要原地迁移、手工修改生命周期表，或为了绕过升级而清除 Hold。生产升级必须获得明确 Owner 授权；完整合同见 [ZCODE_RUNTIME.md](docs/ZCODE_RUNTIME.md)。
+离线升级工具继续保留给显式运维流程。损坏或非 v13 数据库仍走既有 fail-closed 校验路径。不要手工修改生命周期表，或为了绕过升级而清除 Hold。完整合同见 [ZCODE_RUNTIME.md](docs/ZCODE_RUNTIME.md)。
 
 ## 安全边界
 
-Preview 使用固定的单用户可信本地 `yolo` 执行档案，以当前 Windows 账户权限运行。工作区内的普通读取、编辑、构建、测试和任务范围内清理可以自动执行；Push、Merge、Tag、Release、生产 Authority 切换、任务范围外删除、凭据修改和真实生产任务数据访问仍需用户明确授权。
+`v1.7.0` 版本线使用固定的单用户可信本地 `yolo` 执行档案，以当前 Windows 账户权限运行。工作区内的普通读取、编辑、构建、测试和任务范围内清理可以自动执行；Push、Merge、Tag、Release、生产 Authority 切换、任务范围外删除、凭据修改和真实生产任务数据访问仍需用户明确授权。
 
 任务 Prompt、Skill、路径列表和 Worktree 选择不会自行产生这些权限。不要在任务 Prompt 中放入凭据、JWT、私钥或敏感账户数据。`allowed_paths` 和 `forbidden_paths` 是任务指令，不是 OS 强制沙箱。
 
@@ -167,9 +163,9 @@ Preview 使用固定的单用户可信本地 `yolo` 执行档案，以当前 Win
 
 - **Start Plan 真实 E2E：** 仅 Windows；目前只有一个模型 `GLM-5.3-Flash` 的公开证据。
 - **其他 Start Plan 模型：** 取决于官方 Registry 和实时账户权益，本版本未逐模型认证。
-- **Linux/macOS：** Preview 路径目前只有合成/CI 覆盖，没有真实 Start Plan 认证。
+- **Linux/macOS：** 目前只有合成/CI 覆盖，没有真实 Start Plan 认证。
 - **CAPTCHA 与 unusual activity：** Bridge 不解决 CAPTCHA，也不绕过账户控制；权益失败会 fail-closed，可能需要用户在官方 ZCode 客户端中处理。
-- **Host Portability 与 Companion Service：** 仍属于架构研究，不是 Preview.3 已交付功能。
+- **Host Portability 与 Companion Service：** 仍属于架构研究，不是 `v1.7.0` 已交付功能。
 - **JSON 存储与旧 CLI 执行链：** 不是当前生产路径；旧 JSON 任务历史不会导入 SQLite。
 - **Worker 可能未提交 Result 就退出。** Bridge 会保留清理证据和 Hold，而不是假定资源已释放。
 
@@ -180,7 +176,7 @@ Preview 使用固定的单用户可信本地 `yolo` 执行档案，以当前 Win
 - [Runtime 与 SQLite 升级细节](docs/ZCODE_RUNTIME.md)
 - [插件安全说明](plugins/codex-zcode-bridge/SECURITY.md)
 - [Master Skill](plugins/codex-zcode-bridge/skills/zcode-bridge/SKILL.md)
-- [Preview.3 Release](https://github.com/Sandyzzx/codex-zcode-bridge/releases/tag/codex-zcode-bridge-preview-v2.0.0-preview.3)
+- [`v1.7.0` Release](https://github.com/Sandyzzx/codex-zcode-bridge/releases/tag/codex-zcode-bridge-v1.7.0)
 
 ## 许可证
 

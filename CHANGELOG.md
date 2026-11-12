@@ -4,6 +4,28 @@
 
 当前版本以 `package.json` 和 Release Please manifest 为准。提交推送到 `master` 后，Release Please 会在有待发布变更时创建发布 PR，并同步更新版本文件与本日志；合并发布 PR 后会生成对应 Git tag 和 GitHub Release。
 
+## [1.7.0](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.6.0...codex-zcode-bridge-v1.7.0) (2026-11-12)
+
+将 Preview `2.0.0-preview.4` 的功能集提升到稳定版本线。
+
+### Features
+
+* 统一 SQLite-only 生产架构：使用单一 SQLite Authority、Lifecycle Manager 和 Worker→ZCode AppServer 执行链。
+* 集成 Z.ai Start Plan：只读发现官方凭据、实时 Billing 权益检查、Provider 注册前置校验和单任务私有凭据 Lease。
+* 使用官方 Desktop Host 启动身份，兼容 Start Plan 多轮运行时认证和工具调用后的后续模型请求。
+* 引入 ADR-031 Model Routing v1，并保留任务级 Provider、Model 与 Reasoning Level 选择边界。
+* 首次启动自动完成 SQLite v13→v14 副本迁移；保留原库作为显式回滚备份。
+
+### Bug Fixes
+
+* 修复 Task Model Routing 幂等缺陷：同一 `task_id` 的冲突模型、Provider 或 Reasoning Level 不再被首次解析缓存掩盖。
+* 损坏或非 v13 数据库继续走既有 fail-closed 校验路径；不伪造 Release 或清除 Hold。
+
+### Compatibility
+
+* 旧 JSON TaskStore、CLI Adapter 与 GitWorktreeProvider 不在当前生产执行链中。
+* Start Plan 真实验收仍仅覆盖 Windows、官方 AppServer `0.17.1` 和 `GLM-5.3-Flash`；其他平台与模型未被该证据推广为已认证。
+
 ## [2.0.0-preview.4](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-preview-v2.0.0-preview.3...codex-zcode-bridge-preview-v2.0.0-preview.4) (2026-11-11)
 
 SQLite v13 → v14 seamless startup migration (EXPERIMENTAL / PREVIEW ONLY; migration runs once on first startup after upgrade).

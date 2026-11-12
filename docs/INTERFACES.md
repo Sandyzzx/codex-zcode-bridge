@@ -1,9 +1,9 @@
 # 当前接口与兼容边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-07
-> Last verified: 2026-11-07，核对 SQLite Manager、MCP schema、Result、Attention、R1–R5 与 Core 退役边界；宿主与平台未运行项见报告。
-> Verified against: a46137fe46b567271a7756be819361132625278c + ADR-029 本地候选（未发布）
+> Last updated: 2026-11-12
+> Last verified: 2026-11-12，核对 SQLite Manager、MCP schema、Result、Attention、R1–R5、Model Routing 幂等与 Core 退役边界；宿主与平台未运行项见报告。
+> Verified against: e444ad0d3ce5df342a7f4d104b19816f1af1dda5 + 1.7.0 版本收口
 
 准确字段以 `src/interfaces.ts`、`src/mcp/schemas.ts` 与共享 `src/result-contract.mjs` 为准。[ARCHITECTURE.md](ARCHITECTURE.md) 描述实现，[SHARED_CORE.md](SHARED_CORE.md) 列出 Core API 主版本兼容策略。本轮不改变 MCP 工具/schema、v14、32 MiB 或 R1–R5 状态语义。
 
@@ -19,7 +19,7 @@ TaskPackage 的 requirements、allowed_paths、forbidden_paths、acceptance_crit
 
 ## Authority 与 Recovery
 
-生产只有 SQLite Authority。新装与旧 JSON 安装从相同 Fresh SQLite Bootstrap 开始；旧 `.tasks` 不参与选择、恢复或新任务。损坏/不完整 SQLite 明确拒绝，不回退 JSON，不重置数据库。已有 v13 必须显式离线升级；已有历史 SQLite 的 json_artifacts、Result digest 与 receipt 保留校验。
+生产只有 SQLite Authority。新装与旧 JSON 安装从相同 Fresh SQLite Bootstrap 开始；旧 `.tasks` 不参与选择、恢复或新任务。损坏/不完整 SQLite 明确拒绝，不回退 JSON，不重置数据库。有效 v13 在启动时经既有跨进程 bootstrap 锁执行受控副本升级到 v14，保留 v13 备份与全部运行事实；显式离线升级工具继续保留。已有历史 SQLite 的 json_artifacts、Result digest 与 receipt 保留校验。
 
 Admission 在事务中检查 Capacity 及执行路径重叠，覆盖跨 Manager 竞争。Worker 精确身份、Launch token/receipt、Claim、Attempt/generation/revision CAS 保持绑定。最终 workspace use 校验先于 Launch Intent；拒绝只留下 untouched reserved，显式 queued Cancel 经原 CAS 终结并释放。Intent 后即可能已 Spawn，缺 Receipt/句柄、timeout 或 Manager 崩溃都不授权重新派发。
 

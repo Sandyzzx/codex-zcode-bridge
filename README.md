@@ -4,7 +4,7 @@
 
 [简体中文](README.zh-CN.md) · [Repository](https://github.com/Sandyzzx/codex-zcode-bridge) · [Releases](https://github.com/Sandyzzx/codex-zcode-bridge/releases)
 
-> **Release status.** Stable is `v1.6.0` and does not include Start Plan support. Preview is `2.0.0-preview.3` on the `preview` branch and is the current development channel for SQLite-only task orchestration, Start Plan, and Coding Plan integration.
+> **Release status.** This branch promotes Preview `2.0.0-preview.4` to the Stable `v1.7.0` line. The `preview` channel remains the integration branch for subsequent work.
 
 ## What this is
 
@@ -23,14 +23,14 @@ Codex does not automatically hand every coding request to ZCode. Delegation happ
 
 | Plan | Availability | Authentication and runtime path |
 | --- | --- | --- |
-| **Z.ai Start Plan** | Preview `2.0.0-preview.3` | Discovers the official logged-in account credential, performs the required entitlement check for the selected model, and supplies the official runtime through a per-task private credential lease. |
-| **Z.ai Coding Plan** | Stable `v1.6.0` and Preview | Uses the existing official Coding Plan account/API-key path through the ZCode Runtime. |
+| **Z.ai Start Plan** | Stable `v1.7.0` and Preview | Discovers the official logged-in account credential, performs the required entitlement check for the selected model, and supplies the official runtime through a per-task private credential lease. |
+| **Z.ai Coding Plan** | Stable `v1.7.0` and Preview | Uses the existing official Coding Plan account/API-key path through the ZCode Runtime. |
 
 Start Plan and Coding Plan are different account and authentication paths. Bridge selects the path from the task's provider, model, and plan selection; both paths ultimately execute through the official ZCode AppServer.
 
 ### Verified Start Plan path
 
-Preview.3 includes one real Windows acceptance run with these facts:
+The `v1.7.0` line includes one real Windows acceptance run with these facts:
 
 - Official ZCode AppServer `0.17.1`.
 - Provider `account:bigmodel-start-plan`.
@@ -67,7 +67,7 @@ This evidence covers **only `GLM-5.3-Flash` on Windows**. It does not prove ever
 ## Requirements
 
 - **Windows** is the currently validated local deployment target for the production SQLite path and the real Start Plan acceptance run. Linux and macOS have synthetic/CI coverage only.
-- **Preview 2.0.0-preview.3:** Node.js `>=24.16.0` and `<25`.
+- **Stable 1.7.0:** Node.js `>=24.16.0` and `<25`.
 - Git, Codex with plugin/marketplace support, and a working local ZCode installation.
 - A signed-in official ZCode account with the plan and model entitlement required by the selected task.
 - A **single-user, trusted-local** environment. This is not a multi-user isolation boundary or a remote sandbox.
@@ -80,16 +80,16 @@ Use one release channel per Codex installation. Branch refs move with later comm
 
 ### Stable
 
-Stable `v1.6.0` does not include Start Plan support:
+Stable `v1.7.0` includes SQLite-only orchestration plus Start Plan and Coding Plan integration:
 
 ```sh
-codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-v1.6.0
+codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-v1.7.0
 codex plugin add codex-zcode-bridge@codex-zcode-bridge
 ```
 
 ### Preview
 
-Preview is the channel for SQLite-only orchestration, Start Plan, and Coding Plan integration. Marketplace ID: `codex-zcode-bridge-preview`.
+Preview remains the integration channel for post-1.7 work. Marketplace ID: `codex-zcode-bridge-preview`.
 
 ```sh
 codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref preview
@@ -105,7 +105,7 @@ codex plugin marketplace upgrade codex-zcode-bridge-preview
 To pin the accepted Preview snapshot instead of following the branch:
 
 ```sh
-codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-preview-v2.0.0-preview.3
+codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-preview-v2.0.0-preview.4
 ```
 
 To switch an existing marketplace between branch and tag refs, re-run `marketplace add` with the desired `--ref` or remove and add the marketplace. Verify the command with `codex plugin marketplace add --help` if your Codex version differs.
@@ -138,7 +138,7 @@ The calling host chooses the project workspace and, if needed, creates and prepa
 
 ## SQLite startup and upgrades
 
-New Preview installations create and validate:
+New installations create and validate:
 
 ```text
 ${LOCALAPPDATA}\CodexZCodeBridge\state\bridge.sqlite
@@ -146,21 +146,17 @@ ${LOCALAPPDATA}\CodexZCodeBridge\state\bridge.sqlite
 
 The database must pass integrity and lifecycle checks before MCP requests are accepted. Bridge does not fall back to JSON storage.
 
-Schema v13 databases require an **offline copy upgrade** to v14. Stop every Bridge host, Manager, and Worker first, then run the installed upgrade tool from the Preview plugin root:
+When startup finds a valid Schema v13 Authority, Bridge performs a guarded copy upgrade to v14 under the existing cross-process bootstrap lock. The original database is retained as a sibling v13 backup, the published v14 Authority is verified before the durable upgrade marker is cleared, and occupied Operations, Holds, and Recovery evidence remain intact:
 
 ```powershell
-node ./dist/upgrade-sqlite-v14.mjs `
-  --source "D:/BridgeOld/state" `
-  --destination "D:/BridgeV14/state" `
-  --database bridge.sqlite `
-  --offline
+node ./dist/upgrade-sqlite-v14.mjs --help
 ```
 
-The source database is retained. After the copy is verified, change the host's `authority.json` `data_root` to `D:/BridgeV14`. Do not migrate in place, edit lifecycle tables, or clear a Hold to force an upgrade. Production upgrades require explicit owner authorization. See [ZCODE_RUNTIME.md](docs/ZCODE_RUNTIME.md) for the full contract.
+The offline upgrade tool remains available for explicit operator workflows. Corrupt or non-v13 databases stay on the existing fail-closed validation path. Do not edit lifecycle tables or clear a Hold to force an upgrade. See [ZCODE_RUNTIME.md](docs/ZCODE_RUNTIME.md) for the full contract.
 
 ## Security boundary
 
-Preview runs on the current Windows account with the fixed trusted-local `yolo` profile. Ordinary reads, edits, builds, tests, and task-scoped cleanup can run without per-step approval. Push, merge, tag, release, production Authority changes, deletion outside the task scope, credential changes, and production task-data access still require explicit user authorization.
+The `v1.7.0` line runs on the current Windows account with the fixed trusted-local `yolo` profile. Ordinary reads, edits, builds, tests, and task-scoped cleanup can run without per-step approval. Push, merge, tag, release, production Authority changes, deletion outside the task scope, credential changes, and production task-data access still require explicit user authorization.
 
 Prompts, Skills, path lists, and worktree selection do not create those permissions. Do not put credentials, JWTs, private keys, or sensitive account data into a task prompt. A task's `allowed_paths` and `forbidden_paths` are instructions, not an OS-enforced sandbox.
 
@@ -168,9 +164,9 @@ Prompts, Skills, path lists, and worktree selection do not create those permissi
 
 - **Start Plan real E2E:** Windows only; one model (`GLM-5.3-Flash`) has published evidence.
 - **Other Start Plan models:** dependent on the official registry and live account entitlement; not individually certified here.
-- **Linux/macOS:** synthetic/CI coverage only for the Preview path; no real Start Plan certification.
+- **Linux/macOS:** synthetic/CI coverage only; no real Start Plan certification.
 - **CAPTCHA and unusual activity:** Bridge does not solve CAPTCHA or bypass account controls. Entitlement failures fail closed and may require the user to resolve the condition in the official ZCode client.
-- **Host Portability and Companion Service:** architecture research only; they are not delivered features in Preview.3.
+- **Host Portability and Companion Service:** architecture research only; they are not delivered features in `v1.7.0`.
 - **JSON storage and the retired CLI execution chain:** not current production paths. Old JSON task histories are not imported into SQLite.
 - **A worker can exit without committing a Result.** Bridge intentionally retains cleanup evidence and a Hold rather than guessing that resources were released.
 
@@ -181,7 +177,7 @@ Prompts, Skills, path lists, and worktree selection do not create those permissi
 - [Runtime and SQLite upgrade details](docs/ZCODE_RUNTIME.md)
 - [Plugin safety notes](plugins/codex-zcode-bridge/SECURITY.md)
 - [Master skill](plugins/codex-zcode-bridge/skills/zcode-bridge/SKILL.md)
-- [Preview.3 release](https://github.com/Sandyzzx/codex-zcode-bridge/releases/tag/codex-zcode-bridge-preview-v2.0.0-preview.3)
+- [`v1.7.0` release](https://github.com/Sandyzzx/codex-zcode-bridge/releases/tag/codex-zcode-bridge-v1.7.0)
 
 ## License
 

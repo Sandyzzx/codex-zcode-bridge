@@ -1,9 +1,9 @@
 # 文档路由 / Documentation
 
 > Status: AUTHORITATIVE（仅指本索引）
-> Last updated: 2026-11-11
-> Last verified: 2026-11-11，核对 Preview.3 产品入口、SQLite-only 当前架构、Start Plan/Coding Plan 支持和文档路由。
-> Verified against: bfd3406fe2197a313ff1d34cd57fde79f5f95ff1
+> Last updated: 2026-11-12
+> Last verified: 2026-11-12，核对 Stable 1.7.0 产品入口、SQLite-only 当前架构、Start Plan/Coding Plan 支持和文档路由。
+> Verified against: e444ad0d3ce5df342a7f4d104b19816f1af1dda5 + 1.7.0 版本收口
 
 English users start at [README.md](../README.md). 技术文档为中文。先读当前事实，按问题加载合同；研究/历史材料不作为当前实现。
 
@@ -22,7 +22,7 @@ English users start at [README.md](../README.md). 技术文档为中文。先读
 | 系统怎样工作、谁持有事实 | [ARCHITECTURE.md](ARCHITECTURE.md) |
 | MCP、Task/Result、Attention、取消合同 | [INTERFACES.md](INTERFACES.md) |
 | Core API、fork、Host/Worker 打包 | [SHARED_CORE.md](SHARED_CORE.md) |
-| Node/ZCode 配置、SQLite 离线升级 | [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md) |
+| Node/ZCode 配置、SQLite v13→v14 启动升级 | [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md) |
 | 测试入口、压力触发和退役边界 | [testing/README.md](testing/README.md) |
 | 公开产品入口 | [README.md](../README.md)、[中文说明](../README.zh-CN.md) |
 | 插件安装/安全 | [插件说明](../plugins/codex-zcode-bridge/README.md)、[SECURITY](../plugins/codex-zcode-bridge/SECURITY.md) |
@@ -33,9 +33,9 @@ AUTHORITATIVE 描述当前事实/合同；DECISION 记录已批准取舍；RESEA
 
 [ADR 索引](decisions/README.md) 区分当前有效、部分被替代、完全被替代。历史文件保持原路径，避免破坏引用。不要默认加载 docs/archive、docs/research、旧审计日志或生成 bundle。
 
-当前 Preview 基线与套餐入口见 [PROJECT_STATE.md](PROJECT_STATE.md) 和根目录 README。旧 JSON/CLI 生产链退役决策见 [ADR-029](decisions/ADR-029-legacy-runtime-retirement.md)。R2 宿主限制、R3 期限和 Start Plan Gate 2 的历史材料保留用于追溯，不代表 Preview.3 的当前验收。
+当前 Stable `1.7.0` 基线与套餐入口见 [PROJECT_STATE.md](PROJECT_STATE.md) 和根目录 README。旧 JSON/CLI 生产链退役决策见 [ADR-029](decisions/ADR-029-legacy-runtime-retirement.md)。R2 宿主限制、R3 期限和 Start Plan Gate 2 的历史材料保留用于追溯，不代表当前稳定版本线的验收。
 
-Preview.3 的 Start Plan 真实证据目前只覆盖 Windows、官方 AppServer `0.17.1` 和 `GLM-5.3-Flash`。其他 Start Plan 模型、其他平台、CAPTCHA 与 unusual-activity 的无人值守处理仍未认证；不要把单模型真实请求成功写成通用能力。
+当前 Start Plan 真实证据只覆盖 Windows、官方 AppServer `0.17.1` 和 `GLM-5.3-Flash`。其他 Start Plan 模型、其他平台、CAPTCHA 与 unusual-activity 的无人值守处理仍未认证；不要把单模型真实请求成功写成通用能力。
 
 当前事实放 docs 顶层，设计取舍放 decisions，研究放 research，一次性交付放 reports，历史放 archive；草稿放已忽略的 docs/_draft。CHANGELOG 仍由 release-please 维护，不手改。
 

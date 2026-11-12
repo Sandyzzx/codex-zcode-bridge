@@ -1,9 +1,9 @@
 # 当前架构
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-11
-> Last verified: 2026-11-11，核对 Preview.3 SQLite-only 入口、Desktop Host 启动身份、Start Plan/Coding Plan 路由与 R1–R5 调用链。
-> Verified against: 52015d12f37011f4d389e07941c31491457611ef
+> Last updated: 2026-11-12
+> Last verified: 2026-11-12，核对 Stable 1.7.0 SQLite-only 入口、Desktop Host 启动身份、Start Plan/Coding Plan 路由、Model Routing 幂等边界与 R1–R5 调用链。
+> Verified against: e444ad0d3ce5df342a7f4d104b19816f1af1dda5 + 1.7.0 版本收口
 
 本文件描述当前实现。公开合同见 [INTERFACES.md](INTERFACES.md)，宿主构建见 [SHARED_CORE.md](SHARED_CORE.md)，配置和升级见 [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md)。决策按主题从 [ADR 索引](decisions/README.md) 加载。
 
@@ -61,6 +61,6 @@ Attention 与 Thin Waiter 共用 SQLite snapshot 和只读等待谓词。Attenti
 
 ## 安装与构建
 
-新装和旧 JSON 安装均从 Fresh SQLite Bootstrap 开始；旧 JSON 用户数据保持原样，运行时不读取或迁移它。现有 SQLite receipt、历史 `json_artifacts` 校验及 schema-v13.sql 不退役。v13→v14 只允许显式离线复制升级，工具随插件交付。
+新装和旧 JSON 安装均从 Fresh SQLite Bootstrap 开始；旧 JSON 用户数据保持原样，运行时不读取或迁移它。现有 SQLite receipt、历史 `json_artifacts` 校验、schema-v13.sql 与显式离线升级工具不退役。启动时发现有效 v13 Authority 后，Bridge 在既有 bootstrap 锁内执行同一副本升级，保留 v13 备份、验证已发布 v14 后清除升级 marker；不启动 Worker、不释放 Hold，损坏或非 v13 数据库继续 fail-closed。
 
-构建产物包含 Bridge、Worker、Thin Waiter、v14 升级命令、v13/v14 Schema 与浏览器后端。Core API 破坏按 Owner 已批准的 [ADR-029](decisions/ADR-029-legacy-runtime-retirement.md) 在 Preview 2.0 发布线交付；当前 Preview 为 2.0.0-preview.3。该退役不更改 Marketplace MCP 工具/schema。
+构建产物包含 Bridge、Worker、Thin Waiter、v14 升级命令、v13/v14 Schema 与浏览器后端。Core API 破坏按 Owner 已批准的 [ADR-029](decisions/ADR-029-legacy-runtime-retirement.md) 随当前稳定版本线交付；当前 Stable 为 1.7.0。该退役不更改 Marketplace MCP 工具/schema。

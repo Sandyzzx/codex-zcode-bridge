@@ -1,26 +1,26 @@
 # Project State
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-11
-> Last verified: 2026-11-11，核对 Preview.3 发布基线、SQLite-only 架构、Start Plan/Coding Plan 产品入口和 README 文档。
-> Verified against: bfd3406fe2197a313ff1d34cd57fde79f5f95ff1
+> Last updated: 2026-11-12
+> Last verified: 2026-11-12，核对 Preview.4 到 Stable 1.7.0 的合并基线、SQLite v14 启动升级、Start Plan/Coding Plan 产品入口、Model Routing 幂等修复和 README/插件元数据。
+> Verified against: e444ad0d3ce5df342a7f4d104b19816f1af1dda5 + 1.7.0 版本收口
 
 当前有两条发布渠道：
 
-- Stable `v1.6.0`：Tag `codex-zcode-bridge-v1.6.0`，面向普通用户，不包含 Start Plan 支持。
-- Preview `2.0.0-preview.3`：`preview` 分支与 Tag `codex-zcode-bridge-preview-v2.0.0-preview.3`，用于 SQLite-only 编排、Start Plan 与 Coding Plan 集成验证。
+- Stable `v1.7.0`：由 Preview `2.0.0-preview.4` 提升，包含 SQLite-only 编排、Start Plan 与 Coding Plan 集成。
+- Preview `2.0.0-preview.4`：已验收快照；`preview` 分支继续作为后续集成渠道。
 
 ## 当前生产架构
 
 - 一个 SQLite Task Authority（Schema v14）、一个 Lifecycle Manager、一条 Worker→ZCode AppServer 生产链。
-- 旧 JSON TaskStore/Manager/Worker、CLI Adapter 和 GitWorktreeProvider 已从 Preview 生产执行链退役；旧 JSON 文件不由 Bridge 读取、导入或删除。
+- 旧 JSON TaskStore/Manager/Worker、CLI Adapter 和 GitWorktreeProvider 已从生产执行链退役；旧 JSON 文件不由 Bridge 读取、导入或删除。
 - Result、Cleanup 与 Release 是独立生命周期事实。无法验证 Worker 进程树清理时必须保留显式 Hold，不能伪造 Release。
 - Attention/Thin Waiter 读取同一 SQLite Authority；`zcode_doctor` 也绑定该 Authority。
-- SQLite v13 必须通过离线副本升级到 v14，不在启动时原地迁移。
+- 启动时发现有效 v13 Authority 后，Bridge 在既有跨进程 bootstrap 锁内执行受控副本升级到 v14，并保留原库为同目录 v13 备份；损坏或非 v13 数据库继续 fail-closed。
 
 ## 套餐与认证
 
-- **Z.ai Start Plan：** Preview 支持。Bridge 只读发现官方凭据，执行实时模型权益检查，并通过单任务 Private Lease 向官方 Runtime 交付认证。Start Plan 与普通模型目录条目分离，使用 `<ModelId>-StartPlan` 别名。
+- **Z.ai Start Plan：** Stable `1.7.0` 支持。Bridge 只读发现官方凭据，执行实时模型权益检查，并通过单任务 Private Lease 向官方 Runtime 交付认证。Start Plan 与普通模型目录条目分离，使用 `<ModelId>-StartPlan` 别名。
 - **Z.ai Coding Plan：** 保留既有官方 Coding Plan 账户/API Key 路径；Start Plan 预检不改变 Coding Plan 的既有注册和执行语义。
 - 两条路径最终都由官方 ZCode AppServer 执行；Bridge 不复制 AppServer 的 Provider 请求构造。
 
@@ -30,9 +30,9 @@ Start Plan 的真实证据目前为：Windows、官方 AppServer `0.17.1`、Prov
 
 当前运行只认证受信任的单用户 Windows 本地部署。任务使用固定 `yolo` profile，以当前账户权限执行；路径声明、任务 Prompt 和 Worktree 不是 OS 安全沙箱。
 
-Linux/macOS 的 Preview 路径目前只有合成/CI 覆盖。真实 Start Plan 模型请求、其他 Start Plan 模型、CAPTCHA 自动处理和跨平台生产认证均未由该单一模型证据证明。
+Linux/macOS 路径目前只有合成/CI 覆盖。真实 Start Plan 模型请求、其他 Start Plan 模型、CAPTCHA 自动处理和跨平台生产认证均未由该单一模型证据证明。
 
-Host Portability 与 Companion Service 仍是架构研究，不是 Preview.3 已交付能力。公共 Core fork/外部 Host 升级仍未在当前 Preview 上验证。
+Host Portability 与 Companion Service 仍是架构研究，不是 `v1.7.0` 已交付能力。公共 Core fork/外部 Host 升级仍未在当前稳定版本线上验证。
 
 ## 当前文档入口
 

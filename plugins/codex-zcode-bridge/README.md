@@ -1,39 +1,39 @@
-# Zcode Bridge (Preview)
+# Zcode Bridge
 
 把有明确边界的开发任务从 Codex 交给本机官方 ZCode Agent Runtime，在 Codex 中跟进进度，并独立审查实际改动后再决定是否接受。
 
-当前 Preview 版本为 `2.0.0-preview.3`。Stable `v1.6.0` 是独立发布渠道，不包含 Start Plan 支持。
+当前稳定版本为 `1.7.0`，包含 SQLite-only 编排以及 Start Plan 与 Coding Plan 集成。
 
 ## 支持范围
 
 | 套餐 | 当前支持 |
 | --- | --- |
-| Z.ai Start Plan | Preview 支持。只读发现官方账户凭据，执行实时模型权益检查，并通过单任务私有凭据 Lease 向官方 Runtime 交付认证。 |
+| Z.ai Start Plan | 只读发现官方账户凭据，执行实时模型权益检查，并通过单任务私有凭据 Lease 向官方 Runtime 交付认证。 |
 | Z.ai Coding Plan | 使用既有的官方 Coding Plan 账户/API Key 路径。 |
 
 两条路径都通过官方 ZCode AppServer 执行。Start Plan 的真实证据目前仅覆盖 Windows、官方 AppServer `0.17.1` 和 `GLM-5.3-Flash`；其他模型与平台仍取决于官方 Registry、账户权益和实际环境，不能从单一模型的成功推广为全部 Start Plan 模型已验证。
 
 ## 使用前
 
-Preview 需要 Node.js `>=24.16.0 <25`、Git、已安装并登录的 ZCode，以及支持插件 Marketplace 的 Codex。
+Stable `1.7.0` 需要 Node.js `>=24.16.0 <25`、Git、已安装并登录的 ZCode，以及支持插件 Marketplace 的 Codex。
 
-添加 Preview Marketplace 并安装 **Zcode Bridge (Preview)**。桌面应用中可先在 CLI 注册 Marketplace，再到 **Plugins Directory** 安装；之后开启新对话并检查、信任插件的 `SessionStart` Hook。
+添加 Stable Marketplace 并安装 **Zcode Bridge**。桌面应用中可先在 CLI 注册 Marketplace，再到 **Plugins Directory** 安装；之后开启新对话并检查、信任插件的 `SessionStart` Hook。
 
 ```sh
-codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref preview
-codex plugin add codex-zcode-bridge@codex-zcode-bridge-preview
+codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-v1.7.0
+codex plugin add codex-zcode-bridge@codex-zcode-bridge
 ```
 
-更新持续跟随 `preview` 分支的 Marketplace：
+更新 Stable Marketplace：
 
 ```sh
-codex plugin marketplace upgrade codex-zcode-bridge-preview
+codex plugin marketplace upgrade codex-zcode-bridge
 ```
 
-固定到已验收的 Preview 快照：
+固定到当前 Stable 快照：
 
 ```sh
-codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-preview-v2.0.0-preview.3
+codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-v1.7.0
 ```
 
 Marketplace 安装不需要克隆源码或运行 `npm install`；Node.js 和 ZCode 需另行安装。
@@ -72,7 +72,7 @@ Bridge 的任务权威存储是 SQLite。首次启动会创建并验证：
 ${LOCALAPPDATA}\CodexZCodeBridge\state\bridge.sqlite
 ```
 
-Schema v13 必须通过文档规定的离线副本升级到 v14；不要在启动时原地迁移，也不要通过清除 Hold 强制启动。完整说明见仓库的 [Runtime 指南](../../docs/ZCODE_RUNTIME.md) 和 [中文主 README](../../README.zh-CN.md)。
+启动时发现有效的 Schema v13 Authority 后，Bridge 会在既有跨进程 bootstrap 锁内执行受控副本升级到 v14，并保留原库作为同目录 v13 备份。损坏或非 v13 数据库继续 fail-closed；不要通过清除 Hold 强制启动。完整说明见仓库的 [Runtime 指南](../../docs/ZCODE_RUNTIME.md) 和 [中文主 README](../../README.zh-CN.md)。
 
 ## 可选后台等待器
 

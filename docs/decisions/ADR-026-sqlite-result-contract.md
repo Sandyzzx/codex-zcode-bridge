@@ -3,6 +3,7 @@
 > Status: DECISION
 > Decision: APPROVED — Owner 于 2026-11-05 授权 R2 本地实现与隔离副本验证；不授权生产 Migration
 > Date: 2026-11-05
+> Amendment: 2026-11-12 — Owner 要求将 Preview.4 合并到 Stable 1.7.0。有效 v13 根现可在启动 bootstrap 锁内自动调用本 ADR 的副本升级；保留 v13 备份、验证发布后清除 marker、失败 fail-closed，显式离线工具继续保留。该修订不授权清除 Hold、改写运行事实或以旧备份覆盖 v14 新事实。
 > Proposal evidence baseline: `aabbb0a959ee234508c62731ed5122f28dfcf5b0`，Node 24.16.0 / Windows；下文 Context 为批准前 v13 的历史证据，R2 实施与验收另记。
 
 ## Context — 问题与实测
