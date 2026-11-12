@@ -1,5 +1,7 @@
 # ADR-019: Local trust mode and recovery ownership fences
 
+> Applicability: PARTIALLY SUPERSEDED — ADR-029，2026-11-07。本机信任/yolo 原则保留；Recovery 围栏由 ADR-024/R5 取代，JSON 双链由 ADR-029 退役。历史正文保留用于追溯。
+
 > Status: DECISION
 > Decision: ACCEPTED — OWNER DIRECTIVE 2026-11-02
 > Date: 2026-11-02

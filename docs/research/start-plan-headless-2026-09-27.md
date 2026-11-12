@@ -1,8 +1,8 @@
 # 已知问题：Start Plan 在 headless app-server 中无法完成认证
 
-> Status: RESEARCH
+> Status: ARCHIVED
 > Date: 2026-09-27
-> 已知问题的观测记录，结论仍成立：headless 路径不伪造验证码。当前可用路径为 Coding Plan。
+> 2026-09-27 的历史观测；下文“当前”均指当时版本。Preview.3 已支持 Start Plan，当前支持范围以 [PROJECT_STATE](../PROJECT_STATE.md) 为准；不自动登录或处理验证码的边界仍保留。
 
 记录日期：2026-09-27
 

@@ -35,7 +35,7 @@ export async function runtimeFixture(options: { interaction?: boolean; replay?: 
       else out({id:m.id,result:{}});
     });`;
   await writeFile(entrypoint, script);
-  const config: ZCodeRuntimeConfig = { nodeExecutable: process.execPath, zcodeEntrypoint: entrypoint, providerBuiltinConfigFile: builtin, providerPersonalConfigFile: personal, dataRoot: root };
+  const config: ZCodeRuntimeConfig = { nodeExecutable: process.execPath, zcodeEntrypoint: entrypoint, providerBuiltinConfigFile: builtin, providerPersonalConfigFile: personal, zcodeDataRoot: path.join(home, ".zcode"), dataRoot: root };
   const env = { ...process.env, HOME: home, USERPROFILE: home };
   for (const key of Object.keys(env)) if (key.startsWith("ZCODE_")) delete env[key as keyof typeof env];
   Object.assign(env, { ZCODE_BRIDGE_NODE: process.execPath, ZCODE_BRIDGE_ZCODE_CJS: entrypoint, ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: builtin, ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: personal, ZCODE_HOME: path.join(home, ".zcode"), ZCODE_BRIDGE_DATA_DIR: root, ZCODE_BRIDGE_MODE: "build" });

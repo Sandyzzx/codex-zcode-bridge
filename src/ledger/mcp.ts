@@ -6,7 +6,7 @@
 import { createHash } from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
-import type { BridgeTaskManager } from "../manager/task-manager.js";
+import type { ProgressTaskManager } from "../interfaces.js";
 import { TaskManagerError } from "../manager/errors.js";
 import { LedgerBridgeLink } from "./bridge.js";
 import { LedgerError } from "./types.js";
@@ -14,7 +14,7 @@ import type { LedgerStore } from "./store.js";
 
 export interface LedgerToolOptions {
   readonly store: LedgerStore;
-  readonly taskManager: BridgeTaskManager;
+  readonly taskManager: ProgressTaskManager;
   /** The controlled authorization identity for review/complete/exempt. */
   readonly hostActorId?: string;
 }

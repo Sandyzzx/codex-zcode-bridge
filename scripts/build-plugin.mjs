@@ -18,6 +18,7 @@ await Promise.all([
     path.join(distDir, "admin-abandonment.sql"),
   ),
 ]);
+await copyFile(path.join(repoRoot,'src/sqlite-candidate/wp6b2b1/schema-v13.sql'),path.join(distDir,'schema-v13.sql'));
 await mkdir(skillScriptsDir, { recursive: true });
 
 const shared = {
@@ -36,6 +37,7 @@ const waiterAttribution = [
 ].join("\n");
 
 await Promise.all([
+  build({ ...shared, format: "esm", entryPoints: [path.join(repoRoot, "src", "cli", "upgrade-sqlite-v14.ts")], outfile: path.join(distDir, "upgrade-sqlite-v14.mjs") }),
   build({ ...shared, format: "esm", entryPoints: [path.join(repoRoot, "src", "mcp", "main.ts")], outfile: path.join(distDir, "bridge.mjs") }),
   build({
     ...shared,

@@ -9,17 +9,51 @@ import path from "node:path";
 import { LedgerStore } from "../src/ledger/store.js";
 import { LedgerBridgeLink, executorTaskIdFor } from "../src/ledger/bridge.js";
 import { LedgerError } from "../src/ledger/types.js";
-import { BridgeTaskManager } from "../src/manager/task-manager.js";
-import { DirectWorkspaceProvider } from "../src/workspace/direct-provider.js";
-import { TaskStore } from "../src/store/task-store.js";
-import { makeManagerFixture } from "./manager-helpers.js";
+import { existsSync } from "node:fs";
+import { validReport } from "./helpers.js";
+import type { ProgressTaskManager, TaskStatusRecord, TaskResult, TaskProgressEvent } from "../src/interfaces.js";
 import type { TaskPackage } from "../src/interfaces.js";
+
+// Ledger tests exercise only the public executor port. SQLite lifecycle coverage
+// lives in composition.test.ts; this fixture does not emulate persistence or processes.
+function makeExecutorFixture() {
+  const tasks=new Map<string,TaskPackage>();
+  const statuses=new Map<string,TaskStatusRecord>();
+  const results=new Map<string,TaskResult>();
+  const events=new Map<string,TaskProgressEvent[]>();
+  const submissions:string[]=[];
+  const now=()=>new Date().toISOString();
+  const appendEvent=(id:string,type:string,summary:string,details?:Record<string,unknown>)=>{
+    const list=events.get(id)!; list.push({seq:list.length+1,at:now(),type,summary,...(details?{details}:{})});
+  };
+  const manager:ProgressTaskManager={
+    async createTask(task) {
+      if(!existsSync(task.workspace))throw new Error("workspace missing");
+      if(!tasks.has(task.task_id)){
+        tasks.set(task.task_id,task); submissions.push(task.task_id); events.set(task.task_id,[]);
+        statuses.set(task.task_id,{task_id:task.task_id,status:"running",attempt:1,created_at:now(),updated_at:now(),started_at:now(),finished_at:null,worker_pid:null,zcode_session_id:null,exit_code:null});
+      }
+      const status=statuses.get(task.task_id)!;
+      return {task_id:task.task_id,status:"running" as const,created_at:status.created_at};
+    },
+    async getStatus(id){return statuses.get(id)!;},
+    async getResult(id){return results.get(id)!;},
+    async getEvents(input){const list=(events.get(input.task_id)??[]).filter(e=>e.seq>(input.after_seq??0));return {task_id:input.task_id,status:statuses.get(input.task_id)!.status,events:list,next_seq:list.at(-1)?.seq??input.after_seq??0,has_more:false};},
+    async continueTask(){throw new Error("unused");},async cancelTask(){throw new Error("unused");},async replyToInteraction(){throw new Error("unused");}
+  };
+  const finish=(id:string,failed=false)=>{
+    const status=statuses.get(id)!;status.status=failed?"failed":"completed";status.finished_at=now();
+    results.set(id,{...validReport(),task_id:id,attempt:1,status:status.status,zcode_output:"",exit_code:failed?1:0,session_id:null,started_at:status.started_at,finished_at:status.finished_at});
+    appendEvent(id,"report_ready","report ready");
+  };
+  return {manager,appendEvent,finish,submissions};
+}
 
 const AC = [{ id: "AC1", text: "实现完成" }, { id: "AC2", text: "测试覆盖" }];
 const HOST = { source: "host" as const, id: "master-entry" };
 
 interface Ctx {
-  fx: Awaited<ReturnType<typeof makeManagerFixture>>;
+  fx: ReturnType<typeof makeExecutorFixture>;
   ledger: LedgerStore;
   link: LedgerBridgeLink;
   workspace: string;
@@ -28,7 +62,7 @@ interface Ctx {
 }
 
 async function makeCtx(): Promise<Ctx> {
-  const fx = await makeManagerFixture();
+  const fx = makeExecutorFixture();
   const ledgerRoot = mkdtempSync(path.join(tmpdir(), "zcode-bridge-c23-"));
   const workspace = path.join(ledgerRoot, "ws");
   mkdirSync(workspace, { recursive: true });
@@ -42,7 +76,6 @@ async function makeCtx(): Promise<Ctx> {
     workspace,
     projectId: project.project_id,
     cleanup: async () => {
-      await fx.cleanup();
       rmSync(ledgerRoot, { recursive: true, force: true });
     },
   };
@@ -75,7 +108,7 @@ test("C2-01: intent crash and lost receipts recover the same executor task; at m
     });
     assert.equal(first.executor_task_id, expectedExecutor);
     assert.equal(first.status, "accepted");
-    assert.equal(ctx.fx.spawned.length, 1, "one Bridge task created");
+    assert.equal(ctx.fx.submissions.length, 1, "one Bridge task created");
     // (b) Receipt lost: retrying the same operation must not create anything.
     const retry = await ctx.link.dispatchTask(ctx.fx.manager, {
       project_task_id: task.task_id,
@@ -84,7 +117,7 @@ test("C2-01: intent crash and lost receipts recover the same executor task; at m
     });
     assert.equal(retry.run_id, first.run_id, "the same run is reused");
     assert.equal(retry.executor_task_id, expectedExecutor, "the same executor task id is reused");
-    assert.equal(ctx.fx.spawned.length, 1, "the Bridge submission stays deduplicated to one attempt");
+    assert.equal(ctx.fx.submissions.length, 1, "the Bridge submission stays deduplicated to one attempt");
     // The run and the bridge task are related by the executor ref only.
     const run = ctx.ledger.listRuns({ task_id: task.task_id })[0]!;
     assert.equal(run.executor_ref, expectedExecutor);
@@ -130,8 +163,8 @@ test("C2-02: projection is idempotent under replay and late events never overwri
     });
     const executor = dispatch.executor_task_id;
     // The worker writes events; projection maps them onto the run.
-    ctx.fx.store.appendEvent(executor, "worker_started", "Bridge worker started");
-    ctx.fx.store.appendEvent(executor, "model_selected", "model confirmed", { provider_id: "glm", model_id: "glm-4.7", model_source: "task" });
+    ctx.fx.appendEvent(executor, "worker_started", "Bridge worker started");
+    ctx.fx.appendEvent(executor, "model_selected", "model confirmed", { provider_id: "glm", model_id: "glm-4.7", model_source: "task" });
     const first = await ctx.link.syncRunFromBridge(ctx.fx.manager, dispatch.run_id);
     assert.ok(first.projected >= 2);
     const runAfterFirst = ctx.ledger.listRuns({ task_id: task.task_id })[0]!;
@@ -155,8 +188,7 @@ test("C2-03: a completed Bridge run never closes the project task; DONE requires
       buildTaskPackage: (id) => taskPackageFor(ctx.workspace, id),
     });
     // The worker completes the Bridge task with a perfect report.
-    await ctx.fx.runWorker(dispatch.executor_task_id, new (await import("./manager-helpers.js")).FakeAdapter());
-    await ctx.fx.manager.recoverTasks();
+    ctx.fx.finish(dispatch.executor_task_id);
     const sync = await ctx.link.syncRunFromBridge(ctx.fx.manager, dispatch.run_id);
     assert.ok(sync.projected >= 1);
     const run = ctx.ledger.listRuns({ task_id: task.task_id })[0]!;
@@ -180,11 +212,7 @@ test("C2-04: a failed run is traceable next to its retry with a different model;
       buildTaskPackage: (id) => taskPackageFor(ctx.workspace, id),
     });
     // The first Bridge task fails (adapter failure).
-    const { FakeAdapter } = await import("./manager-helpers.js");
-    const failing = new FakeAdapter();
-    failing.behavior = "adapterFailed";
-    await ctx.fx.runWorker(first.executor_task_id, failing);
-    await ctx.fx.manager.recoverTasks();
+    ctx.fx.finish(first.executor_task_id, true);
     await ctx.link.syncRunFromBridge(ctx.fx.manager, first.run_id);
     assert.equal(ctx.ledger.listRuns({ task_id: task.task_id })[0]!.status, "failed");
     const business: string = ctx.ledger.getTask(task.task_id).status;
@@ -221,7 +249,7 @@ test("C2-05: manual and Bridge runs coexist with visible evidence sources; a pro
     void manual;
     // A projection failure (unknown run) never re-dispatches anything.
     await assert.rejects(ctx.link.syncRunFromBridge(ctx.fx.manager, "run-missing"), /unknown run/);
-    assert.equal(ctx.fx.spawned.length, 1);
+    assert.equal(ctx.fx.submissions.length, 1);
   } finally { await ctx.cleanup(); }
 });
 
@@ -368,9 +396,7 @@ test("C3-05: the full drill — fail run → new-model run → IMPLEMENTED → R
       operation_id: "drill-1",
       buildTaskPackage: (id) => taskPackageFor(ctx.workspace, id),
     });
-    const { FakeAdapter } = await import("./manager-helpers.js");
-    await ctx.fx.runWorker(first.executor_task_id, Object.assign(new FakeAdapter(), { behavior: "adapterFailed" }));
-    await ctx.fx.manager.recoverTasks();
+    ctx.fx.finish(first.executor_task_id, true);
     await ctx.link.syncRunFromBridge(ctx.fx.manager, first.run_id);
     // Second run on a different model.
     const second = await ctx.link.dispatchTask(ctx.fx.manager, {
@@ -378,9 +404,8 @@ test("C3-05: the full drill — fail run → new-model run → IMPLEMENTED → R
       operation_id: "drill-2",
       buildTaskPackage: (id) => taskPackageFor(ctx.workspace, id),
     });
-    ctx.fx.store.appendEvent(second.executor_task_id, "model_selected", "model confirmed", { provider_id: "glm", model_id: "glm-4.7-flash", model_source: "task" });
-    await ctx.fx.runWorker(second.executor_task_id, new FakeAdapter());
-    await ctx.fx.manager.recoverTasks();
+    ctx.fx.appendEvent(second.executor_task_id, "model_selected", "model confirmed", { provider_id: "glm", model_id: "glm-4.7-flash", model_source: "task" });
+    ctx.fx.finish(second.executor_task_id);
     await ctx.link.syncRunFromBridge(ctx.fx.manager, second.run_id);
     const runs = ctx.ledger.listRuns({ task_id: task.task_id });
     assert.equal(runs[0]!.status, "failed");

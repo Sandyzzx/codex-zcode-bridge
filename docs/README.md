@@ -1,144 +1,42 @@
-# 文档索引 / Documentation
+# 文档路由 / Documentation
 
 > Status: AUTHORITATIVE（仅指本索引）
-> Last updated: 2026-11-04
+> Last updated: 2026-11-12
+> Last verified: 2026-11-12，核对 Stable 1.7.0 产品入口、SQLite-only 当前架构、Start Plan/Coding Plan 支持和文档路由。
+> Verified against: e444ad0d3ce5df342a7f4d104b19816f1af1dda5 + 1.7.0 版本收口
 
-英文使用者从 [README.md](../README.md) 开始。技术文档为中文。本文是文档路由：先看状态等级，再按读者路径选文档。
+English users start at [README.md](../README.md). 技术文档为中文。先读当前事实，按问题加载合同；研究/历史材料不作为当前实现。
 
-English readers start at [README.md](../README.md). This index is bilingual; the technical documents themselves are written in Chinese.
+## Master 默认路径 / Default reading
 
-## 状态等级 / Status levels
+1. [PROJECT_STATE.md](PROJECT_STATE.md)：当前候选、已发布版本和未认证边界。
+2. 执行/排队/恢复问题读 [ARCHITECTURE.md](ARCHITECTURE.md)；字段/结果/交互问题读 [INTERFACES.md](INTERFACES.md)。不要求每次读完两份。
+3. 只有解释取舍时读 [decisions/README.md](decisions/README.md) 对应主题的 ADR；不通读全部 ADR。
 
-每份文档顶部标注四种状态之一。这是本仓库最重要的一条约定：没有状态标注的文档不能被当成事实依据。
+普通 Bridge 委派按 [Master Skill](../plugins/codex-zcode-bridge/skills/zcode-bridge/SKILL.md) 的动作路由加载 references，不要求预读仓库架构或历史报告。
 
-| 状态 | 含义 | 使用方式 |
-|---|---|---|
-| `AUTHORITATIVE` | 当前事实或合同 | 可以据此开发和判断 |
-| `DECISION` | 已批准的架构决策 | 引用它回答"为什么不那样做" |
-| `RESEARCH` | 研究结论 | 只作参考，不代表当前实现 |
-| `ARCHIVED` | 历史材料 | 默认不读，只用于追溯 |
+## 当前文档 / Current references
 
-每份文档必须在顶部自带状态标注；本索引只做汇总，不能代替标注。跳过本索引直接打开权威文档时，也应能从文件顶部看到状态与核对情况。
-
-## For Master Agents
-
-按顺序读，不要通读全仓库文档：
-
-1. `docs/PROJECT_STATE.md` —— 当前状态快照（稳定 / 实验 / 不支持 / 调查中）
-2. `docs/ARCHITECTURE.md` —— 系统现在怎么工作
-3. `docs/INTERFACES.md` —— 合同与兼容边界
-4. `docs/decisions/README.md` —— 已批准决策索引
-5. 只在需要证据时读 `docs/research/`
-
-不要默认读 `docs/archive/`。
-
-## For Coding Agents
-
-1. 本任务涉及的合同文档（`INTERFACES.md` / `ZCODE_RUNTIME.md` / `SHARED_CORE.md`）
-2. 对应组件的架构（`ARCHITECTURE.md`）
-3. `AGENTS.md` 里的硬规则
-
-实现不能自行改写合同。需要改合同先提 `DECISION`。
-
-## 索引 / Index
-
-### 权威文档 AUTHORITATIVE
-
-| 文档 | 语言 | 最后更新 | 最后核对 |
-|---|---|---|---|
-| [README.md](../README.md) | en | 2026-10-05 | 未记录 |
-| [README.zh-CN.md](../README.zh-CN.md) | zh | 2026-10-03 | 未记录 |
-| [PROJECT_STATE.md](PROJECT_STATE.md) | zh | 2026-10-18 | 部分核对；详见文档顶部 |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | zh | 2026-10-18 | 部分核对；详见文档顶部 |
-| [INTERFACES.md](INTERFACES.md) | zh | 2026-10-14 | 部分核对；详见文档顶部 |
-| [SHARED_CORE.md](SHARED_CORE.md) | zh | 2026-10-06 | 未记录 |
-| [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md) | zh | 2026-10-14 | 2026-10-08，本地配置/假运行时 |
-| [plugins/codex-zcode-bridge/README.md](../plugins/codex-zcode-bridge/README.md) | zh | 2026-10-03 | 未记录 |
-| [plugins/codex-zcode-bridge/SECURITY.md](../plugins/codex-zcode-bridge/SECURITY.md) | zh + en | 2026-10-03 | 未记录 |
-| [plugins/codex-zcode-bridge/skills/zcode-bridge/SKILL.md](../plugins/codex-zcode-bridge/skills/zcode-bridge/SKILL.md) | zh | 2026-10-08 | 2026-10-08，本地源码/合同 |
-| [testing/README.md](testing/README.md) | zh | 2026-11-03 | 2026-11-03，测试命令/选择器/映射与 B3-05 触发合同 |
-
-`最后核对` 表示上一次有人把文档内容与代码对照的日期及范围；标记为未记录的条目仍缺少核对证据。新建和修改文档时必须填写，否则该文档只能算"最后更新"，不能算"已验证"。本地回归不代表真实 provider 或长期运行通过。
-
-### 决策 DECISION
-
-| 文档 | 日期 | 说明 |
-|---|---|---|
-| [decisions/README.md](decisions/README.md) | 2026-10-08 | 决策索引 |
-| [ADR-001](decisions/ADR-001-appserver-as-production-execution-path.md) | 2026-10-07 | Accepted：生产执行路径使用 app-server |
-| [ADR-002](decisions/ADR-002-manager-owns-task-lifecycle.md) | 2026-10-07 | Accepted：Manager 独占生命周期，worker 通过 attempt claim 入场 |
-| [ADR-003](decisions/ADR-003-execution-directory-prepared-by-host.md) | 2026-10-07 | Accepted：执行目录由调用宿主准备 |
-| [ADR-004](decisions/ADR-004-separate-control-state-and-observation.md) | 2026-10-07 | Accepted：分离运行时控制、权威状态与补充观察 |
-| [ADR-005](decisions/ADR-005-long-session-reliability.md) | 2026-10-08 | Accepted：长会话清理、锁释放、报告修复与 provider 兼容 |
-| [ADR-006](decisions/ADR-006-provider-quota-failure-diagnostics.md) | 2026-10-14 | Accepted：安全识别并明确提示 provider 用量额度耗尽 |
-| [ADR-009](decisions/ADR-009-windows-identity-bound-tree-termination.md) | 2026-10-18 | DECISION：Windows 进程树身份绑定归属与终止（含 PR #47 返修语义） |
-| [ADR-016](decisions/ADR-016-stop-the-world-json-to-sqlite-cutover.md) | 2026-11-02 | DECISION：SQLite Fresh Bootstrap；旧 JSON 不迁移、不参与运行 |
-| [ADR-017](decisions/ADR-017-single-user-trusted-local-workspace-admission.md) | 2026-11-01 | DECISION：单用户可信本地 Workspace Admission 边界 |
-| [ADR-018](decisions/ADR-018-administrative-abandonment-of-cleanup-incomplete-hold.md) | 2026-11-01 | DECISION：证据绑定的一次性 `admin_abandoned` Hold 恢复 |
-| [ADR-019](decisions/ADR-019-local-trust-and-recovery-fence.md) | 2026-11-02 | DECISION：单用户本机 `yolo` 执行档案与 Recovery Manager 所有权围栏 |
-| [ADR-024](decisions/ADR-024-scoped-sqlite-hold-and-local-cleanup-recovery.md) | 2026-11-04 | 候选分支决策：SQLite Hold 限制到 Operation/执行路径；本机 evidence-only Recovery |
-| [decisions/roadmap-decisions-2026-09-27.md](decisions/roadmap-decisions-2026-09-27.md) | 2026-09-27 | 路线图与决策讨论 |
-| [decisions/reliability-repair-plan-v2-2026-10-03.md](decisions/reliability-repair-plan-v2-2026-10-03.md) | 2026-10-03 | 可靠性修复计划，含未完成项 |
-
-### 研究 RESEARCH
-
-| 文档 | 日期 | 说明 |
-|---|---|---|
-| [research/phase1-codex-zcode-2026-09-26.md](research/phase1-codex-zcode-2026-09-26.md) | 2026-09-26 | Phase 1 参考项目调研与 V0.1 架构建议 |
-| [research/desktop-task-refresh-2026-09-28.md](research/desktop-task-refresh-2026-09-28.md) | 2026-09-28 | ZCode Desktop 任务列表刷新机制 |
-| [research/start-plan-headless-2026-09-27.md](research/start-plan-headless-2026-09-27.md) | 2026-09-27 | Start Plan headless 认证阻塞与 Coding Plan 回归 |
-| [research/native-cli-vs-appserver-2026-10-05/README.md](research/native-cli-vs-appserver-2026-10-05/README.md) | 2026-10-05 | Native CLI vs app-server 研究：结论、6 篇文档、实验脚本与证据索引 |
-| [research/task-feedback-v0-1-2026-10-05/README.md](research/task-feedback-v0-1-2026-10-05/README.md) | 2026-10-05 | Task Feedback v0.1 的输入：app-server 事件能力探针与两份建议 |
-
-带日期的研究目录可以自带 README 作为该主题的文档地图；逐篇条目写在那份 README 里，不重复列在本索引。
-
-### 归档 ARCHIVED
-
-| 文档 | 日期 | 说明 |
-|---|---|---|
-| [archive/appserver-capability-matrix-2026-09-27.md](archive/appserver-capability-matrix-2026-09-27.md) | 2026-09-27 | app-server 能力普查，已被 2026-10-05 的能力探针取代 |
-| [archive/mvp-v0.3-2026-09-27.md](archive/mvp-v0.3-2026-09-27.md) | 2026-09-27 | MVP 0.3 版本说明 |
-| [archive/mcp-sdk-v2-migration-2026-09-27.md](archive/mcp-sdk-v2-migration-2026-09-27.md) | 2026-09-27 | MCP SDK v2 迁移记录 |
-| [archive/phase7-live-progress.md](archive/phase7-live-progress.md) | 2026-10-03 | Phase 7 兼容说明；有效内容已提炼进 `ARCHITECTURE.md` / `INTERFACES.md` |
-
-### 报告 REPORT
-
-| 文档 | 说明 |
+| 问题 | 文档 |
 |---|---|
-| [reports/task-feedback-v0-1-implementation-2026-10-06.md](reports/task-feedback-v0-1-implementation-2026-10-06.md) | Task Feedback v0.1 的交付报告，一次性材料 |
-| [reports/2026-10-08-long-session-reliability.md](reports/2026-10-08-long-session-reliability.md) | 长会话故障证据、本地修复、验证与未运行边界 |
-| [reports/2026-10-17-filesystem-root-guards.md](reports/2026-10-17-filesystem-root-guards.md) | Windows 锁时序重试、teardown 容错与文件系统根守卫的证据、修复与边界 |
-| [reports/2026-10-18-pr47-claimant-repair.md](reports/2026-10-18-pr47-claimant-repair.md) | PR #47 claimant 扫描 P1 返修、逐边持有证明、hold 校验与预算语义的证据与边界 |
-| [reports/sqlite-hold-simplification-2026-11-04.md](reports/sqlite-hold-simplification-2026-11-04.md) | JSON/SQLite 生命周期差异、Operation scoped Recovery、Provider retry 候选与本轮验收边界 |
+| 系统怎样工作、谁持有事实 | [ARCHITECTURE.md](ARCHITECTURE.md) |
+| MCP、Task/Result、Attention、取消合同 | [INTERFACES.md](INTERFACES.md) |
+| Core API、fork、Host/Worker 打包 | [SHARED_CORE.md](SHARED_CORE.md) |
+| Node/ZCode 配置、SQLite v13→v14 启动升级 | [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md) |
+| 测试入口、压力触发和退役边界 | [testing/README.md](testing/README.md) |
+| 公开产品入口 | [README.md](../README.md)、[中文说明](../README.zh-CN.md) |
+| 插件安装/安全 | [插件说明](../plugins/codex-zcode-bridge/README.md)、[SECURITY](../plugins/codex-zcode-bridge/SECURITY.md) |
 
-### 自动生成 Generated
+## 状态与追溯 / Status and history
 
-| 文档 | 说明 |
-|---|---|
-| [CHANGELOG.md](../CHANGELOG.md) | 由 release-please 维护，不要手改 |
+AUTHORITATIVE 描述当前事实/合同；DECISION 记录已批准取舍；RESEARCH 是证据和研究；ARCHIVED 仅供历史追溯。每份文档自带日期/核对范围，更新不等于已验证；以文档本身标注为准。
 
-## 新文档放哪里
+[ADR 索引](decisions/README.md) 区分当前有效、部分被替代、完全被替代。历史文件保持原路径，避免破坏引用。不要默认加载 docs/archive、docs/research、旧审计日志或生成 bundle。
 
-| 内容 | 位置 |
-|---|---|
-| 当前事实、合同 | `docs/` 顶层，数量控制在 10 份以内 |
-| 已批准决策 | `docs/decisions/ADR-NNN-<slug>.md` |
-| 研究结论与证据 | `docs/research/<topic>-<YYYY-MM-DD>/` |
-| 一次性交付报告 | `docs/reports/` |
-| 已被取代的材料 | `docs/archive/<phase-or-topic>/` |
-| 未定稿草稿 | `docs/_draft/`（已 gitignore，不进仓库） |
+当前 Stable `1.7.0` 基线与套餐入口见 [PROJECT_STATE.md](PROJECT_STATE.md) 和根目录 README。旧 JSON/CLI 生产链退役决策见 [ADR-029](decisions/ADR-029-legacy-runtime-retirement.md)。R2 宿主限制、R3 期限和 Start Plan Gate 2 的历史材料保留用于追溯，不代表当前稳定版本线的验收。
 
-## 仓库外的材料
+当前 Start Plan 真实证据只覆盖 Windows、官方 AppServer `0.17.1` 和 `GLM-5.3-Flash`。其他 Start Plan 模型、其他平台、CAPTCHA 与 unusual-activity 的无人值守处理仍未认证；不要把单模型真实请求成功写成通用能力。
 
-以下内容有意不放进仓库，追溯时按下表位置查找：
+当前事实放 docs 顶层，设计取舍放 decisions，研究放 research，一次性交付放 reports，历史放 archive；草稿放已忽略的 docs/_draft。CHANGELOG 仍由 release-please 维护，不手改。
 
-| 位置 | 内容 |
-|---|---|
-| `C:\Users\Sandy\.codex\archived_docs\codex-zcode-bridge\` | 全库审计报告、生命周期可观测性方案、ccteam 对比、整改报告、验收证据 JSON |
-| `<repo>\.tasks\notes\` | 会话期笔记；属于桥接运行数据根，不是版本化文档 |
-
-桥接运行数据根 `.tasks/` 只放任务记录，不要在那里存放研究用的外部仓库克隆。
-
-## 浏览器与传输修复审查分支
-
-[公开审查说明](reports/2026-10-15-browser-and-transport-fixes.md)汇总修改、来源、历史实测与当前分支验证；决策为[ADR-007](decisions/ADR-007-browser-host-rpc.md)和[ADR-008](decisions/ADR-008-session-frames-and-large-interactions.md)。私人任务状态索引、日志和快照不进入本分支。
+历史资产的本轮分类与有限清理见 [Legacy & Dead Code Audit v1](reports/LEGACY_DEAD_CODE_AUDIT_V1.md)；该报告是候选证据，不能替代当前合同或各 PR 的验收。

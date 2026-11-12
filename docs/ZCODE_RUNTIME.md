@@ -1,11 +1,31 @@
 # ZCode 运行配置边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-04
-> Last verified: 2026-11-04，核对了 Windows 进程身份探针、PowerShell 启动路径及 Worker 环境预检；其余条目沿用 2026-11-03 核对范围（路径发现合同与 PowerShell `-PrintPathDiscovery` 一致性测试），Fresh Bootstrap 条款仍为静态复核。
-> Verified against: 879568c211bac6233817acc90923e23d7861ca79 + 21ffa7581aac7f3cc6cc9ef1234b1d896864df96
+> Last updated: 2026-11-12
+> Last verified: 2026-11-12，核对 Stable 1.7.0 Desktop Host 启动身份、v13→v14 启动升级、R3 任务期限解析及 R2 容量保持边界。
+> Verified against: e444ad0d3ce5df342a7f4d104b19816f1af1dda5 + 1.7.0 版本收口
 
-当前生产路径是 `node zcode.cjs app-server --stdio`，不是历史 CLI `--prompt --json`。解析入口为 `NodeRuntimeResolver`，配置项与用户设置方法见仓库 README。
+当前生产路径是 `node zcode.cjs app-server --stdio --surface desktop`，不是历史 CLI `--prompt --json`。任务 Adapter 与模型目录探测共用该启动合同；解析入口为 `NodeRuntimeResolver`，配置项与用户设置方法见仓库 README。
+
+Bridge 从安装的 Desktop `app.asar` 只读解析版本与 build metadata，向 AppServer 注入 `ZCODE_APP_VERSION` 与 `ZCODE_BUILD_COMMIT_ID`。缺失 metadata 时保留 Desktop surface 并省略两个身份变量；损坏 ASAR、非法版本/commit 或版本冲突按 `provider_config_invalid` fail-closed。Bridge 不硬编码 Desktop 版本，不修改 Desktop 安装，也不伪造 HTTP Header。
+
+## 执行与清理期限（ADR-027）
+
+SQLite Manager 在派发每个 Attempt 前读取该 Host 的持久 runtime environment；`timeout_ms` 显式值优先，其次 `ZCODE_BRIDGE_TIMEOUT_MS`，无有效默认值时用 3,600,000 ms。范围保持 60,000–14,400,000 ms。有效值只写私有 Task 副本，不改公开持久 Task。Worker Adapter 使用同一快照，不因环境变化重新选期限。
+
+执行计时包含 runtime resolver、app-server 启动和 turn，到终结/错误/取消即停止。Adapter 清理总预算固定 300,000 ms；已有 Windows helper/身份验证期限不放宽，不增加用户配置。Manager 的私有执行写入限 15,000 ms；Result 等待为 execution + 330,000 ms；提交后的 close 与 interaction drain 共用 15,000 ms，再用现有 5,000 ms 身份探针。Host shutdown 继续独立使用原 60,000 ms 等待上限；不能证明原活跃任务 Cleanup/Release 时显式失败并保留所有权，不将它复用为任务执行期限。JS 定时器是协作式期限，不是 OS 硬实时保证。
+
+Cleanup 超时只发布 unverified；迟到确认不会自动改写 Result 或释放 Workspace。执行 timeout 可形成 failed/timeout Result；清理未证实则仍保留占用。Result 已提交时可显式调用 zcode_cancel 仅清理原世代；Result 未到的超时保留 running 和诊断，禁止假定未执行并重派。Manager 退出/重启不放宽这些证据要求。R2 的 32 MiB/v14 不变，Host 大 Result 读取限制按 Owner 决定延后。
+
+## SQLite v13 → v14 启动升级（ADR-026）
+
+本节依据 ADR-026 的 Result/容量合同与 2026-11-12 的 Stable 1.7.0 集成边界。v14 不读取 v13 继续写入。启动时发现有效 v13 Authority 后，Bridge 在既有跨进程 bootstrap 锁内调用同一副本升级路径：写持久 pending marker，在 stage 目录复制并验证 v14，把原数据库改名为同目录 v13 备份，发布 v14 Authority，重新验证后才清除 marker。升级不启动 Worker、不释放 Hold，也不改写既有 Operation、Attempt、Claim、Result、事件或 Recovery 证据。损坏或非 v13 数据库继续走既有 fail-closed 校验路径。
+
+源库按冻结 v13 Schema 和现有生命周期/摘要规则验证。复制保留全部行、PK/FK、永久 Claim、Result digest、事件顺序、sqlite_sequence 和行政 append-only 记录；仅 authority_metadata/authority_switch 的 Schema 版本及 authority_switch 的运行时 roster 摘要重新绑定。WRITER_INTENT、ROOT_POISONED、bootstrap/cutover pending 或来源现场阻塞均拒绝升级。若进程在改名或发布之间退出，下一次启动从 marker 恢复；无法证明状态时保留 marker 和现场，不自动清除 Hold。
+
+显式离线工具继续随插件提供：`dist/upgrade-sqlite-v14.mjs`，源码构建也可运行 `node dist/src/cli/upgrade-sqlite-v14.js`。需要由操作者控制停机窗口时，仍可关闭所有 Host/Manager 后使用 `--source <旧 state> --destination <新 state> --database bridge.sqlite --offline`。工具不会替用户关闭进程、恢复 Hold 或切换配置；`--offline` 是操作者的停机声明，不能当作自动检测所有空闲 Manager 的证明。
+
+原库作为 v13 备份保留。v14 尚未写入新工作且已独立核对时，可以恢复到旧备份；一旦有新事实，禁止用旧备份覆盖，需另行核对数据并采用 forward fix 或获批的数据回退方案。`v14-upgrade-receipt.json` 是迁移核验记录，不是 Result Authority。
 
 ## 路径发现合同（ADR-021）
 
@@ -33,12 +53,12 @@ Bridge 只读取官方 builtin/personal provider 配置，不复制、不改写�
 
 请求模型时优先保留 catalog 中的精确 provider/model。无前缀旧 provider 只有在 catalog 存在同 model 的 account 前缀项，或官方规则确立了对应 account 映射时才解析；不按模型显示名切换其他 provider，catalog 缺席仍由 session/setModel 验证配置标识与模型。account: 标识不重复加前缀。请求值与 runtime 确认值分别保留，不持久化为工作区默认。见 ADR-005。
 
-persisted runtime-config 中已知字段只能是字符串或 null；缺文件允许环境/发现回退，存在但损坏、非 object 或超过 64 KiB 会报配置错误。历史 JSON 路径默认 mode 为已披露的 yolo，也可通过 `ZCODE_BRIDGE_MODE` 配置；当前生产 Bridge 使用 SQLite 唯一 Authority，不保留 JSON 生产路径或故障回退。不能把坏配置当成首次未设置而回退到默认模式。ADR-019 后，单用户本机 SQLite 的固定受信任档案使用 `yolo`，policy revision 为 `single-user-local-v3`；兼容身份 `local-build-v1` 保留为持久化 profile ID，不再表示强制 `build`。该模式使用当前 Windows 用户权限，workspace/worktree 和路径清单不是 OS 沙箱。
+persisted runtime-config 中已知字段只能是字符串或 null；缺文件允许环境/发现回退，存在但损坏、非 object 或超过 64 KiB 会报配置错误。当前生产 Bridge 使用 SQLite 唯一 Authority，不保留 JSON 生产路径或故障回退。不能把坏配置当成首次未设置而回退到默认模式。ADR-019 后，单用户本机 SQLite 的固定受信任档案使用 `yolo`，policy revision 为 `single-user-local-v3`；兼容身份 `local-build-v1` 保留为持久化 profile ID，不再表示强制 `build`。该模式使用当前 Windows 用户权限，workspace/worktree 和路径清单不是 OS 沙箱。
 
 浏览器宿主配置（ADR-007）：`ZCODE_BRIDGE_BROWSER_USE` 取 `off`（默认，含空值/未设置/非法值回退为 off）或 `headless`；`ZCODE_BRIDGE_BROWSER_EXECUTABLE` 可选，须为已存在文件的绝对路径，缺省按官方实现解析已安装 Chromium/Edge（不下载浏览器）。两项均为普通字符串配置键，遵循配置优先于环境变量的既有规则；非法 USE 值不阻断任务，仅保持关闭并由 doctor 给出 warning。detached worker 进程按显式键清单转发这两项非秘密设置（2026-10-16 修复：此前 env-only 配置在真实 spawn 边界丢失），其余任意父进程环境与秘密仍不透传。Windows worker 环境保留 `ProgramFiles` / `ProgramFiles(x86)`（接受常见大小写）等非敏感系统目录变量供自动发现使用，发现解析同样不区分大小写键；显式 `ZCODE_BRIDGE_BROWSER_EXECUTABLE` 优先级不变。不向 app-server 传递任何 headless CLI 参数；浏览器由 worker 内的 managed CDP runtime 以独立临时 profile 启动，生命周期见 ARCHITECTURE.md。
 
 执行和模型目录 RPC 客户端都是私有集成实现，当前假运行时测试覆盖调用选择、事件、交互和清理。真实协议随安装版本变化；本次已新建真实会话验证记录版本的浏览器链路，不能将这次 smoke 扩展为全协议或其他版本认证。
 
-stdout 协议帧与审批持久化边界（ADR-008）：换行分隔的完整 JSON-RPC 帧单帧上限 16 MiB 原始未 trim UTF-8 字节，帧顶层必须是对象，致命帧错误锁存原因并终止当次 attempt 的协议流；turn 可见文本另有 2,000,000 字符捕获上限。审批 params 以 `JSON.stringify(params)` 紧凑序列化完整保存至 1 MiB，单事件行仍守 64,000 bytes，超限走显式预览加完整引用。这些上限是 Bridge 侧守卫，不依赖也不约束 app-server 的内部实现；真实 resume 帧（观测 2,139,927 UTF-8 bytes）在限内正常通过。
+stdout 协议帧与审批持久化边界（ADR-008）：换行分隔的完整 JSON-RPC 帧单帧上限 16 MiB 原始未 trim UTF-8 字节，帧顶层必须是对象，致命帧错误锁存原因并终止当次 attempt 的协议流；turn 可见文本另有 2,000,000 字符捕获上限。SQLite request 与私有交互帧使用现有 1 MiB 边界；旧 JSON 事件文件与 full_request 文件引用已随 ADR-029 退役。这些上限是 Bridge 侧守卫，不依赖也不约束 app-server 的内部实现；真实 resume 帧（观测 2,139,927 UTF-8 bytes）在限内正常通过。
 
 2026-10-14 独立验证补充：已用本机 ZCode Desktop 3.15.1.8093 / Agent 0.16.9、GLM-5.3 / max、build 模式完成原生 browser-client 单次提交与截图、关闭验收。这次小范围 smoke 不等于全协议或跨版本认证。详情见 [独立验收](reports/2026-10-15-browser-and-transport-fixes.md)。

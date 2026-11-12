@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { selectAffectedTests } from "./test-impact-selector.mjs";
+import { compiledTestPath } from "./lib/test-files.mjs";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const isWindows = process.platform === "win32";
@@ -72,13 +73,6 @@ function commandLine(argv) {
   return options;
 }
 
-function compiledTestPath(file) {
-  if (file.endsWith(".ts") || file.endsWith(".mts")) {
-    return `dist-test/test/${file.slice("test/".length).replace(/\.(?:ts|mts)$/u, ".js")}`;
-  }
-  return file;
-}
-
 const options = commandLine(process.argv.slice(2));
 const map = JSON.parse(readFileSync(path.join(repositoryRoot, "test/test-impact-map.json"), "utf8"));
 const files = changedFiles(options.base);
@@ -106,13 +100,13 @@ if (selection.mode === "NO_TESTS_APPLICABLE") {
   process.exit(0);
 }
 
-run("npm", ["run", "build:test"]);
 if (selection.mode === "FULL_SUITE") {
   run("npm", ["test"]);
   console.log("FULL_REGRESSION_PASS");
   process.exit(0);
 }
 
+run("npm", ["run", "build:test"]);
 const testPaths = selection.selected_tests.map((entry) => compiledTestPath(entry.file));
 run(process.execPath, ["scripts/test-isolated.mjs", ...testPaths]);
 console.log(selection.stress_mode === "STRESS_TEST_REQUIRED" ? "STRESS_TEST_REQUIRED_AND_PASS" : "TARGETED_TESTS_PASS");

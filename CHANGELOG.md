@@ -4,6 +4,117 @@
 
 当前版本以 `package.json` 和 Release Please manifest 为准。提交推送到 `master` 后，Release Please 会在有待发布变更时创建发布 PR，并同步更新版本文件与本日志；合并发布 PR 后会生成对应 Git tag 和 GitHub Release。
 
+## [1.7.0](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.6.0...codex-zcode-bridge-v1.7.0) (2026-11-12)
+
+将 Preview `2.0.0-preview.4` 的功能集提升到稳定版本线。
+
+### Features
+
+* 统一 SQLite-only 生产架构：使用单一 SQLite Authority、Lifecycle Manager 和 Worker→ZCode AppServer 执行链。
+* 集成 Z.ai Start Plan：只读发现官方凭据、实时 Billing 权益检查、Provider 注册前置校验和单任务私有凭据 Lease。
+* 使用官方 Desktop Host 启动身份，兼容 Start Plan 多轮运行时认证和工具调用后的后续模型请求。
+* 引入 ADR-031 Model Routing v1，并保留任务级 Provider、Model 与 Reasoning Level 选择边界。
+* 首次启动自动完成 SQLite v13→v14 副本迁移；保留原库作为显式回滚备份。
+
+### Bug Fixes
+
+* 修复 Task Model Routing 幂等缺陷：同一 `task_id` 的冲突模型、Provider 或 Reasoning Level 不再被首次解析缓存掩盖。
+* 损坏或非 v13 数据库继续走既有 fail-closed 校验路径；不伪造 Release 或清除 Hold。
+
+### Compatibility
+
+* 旧 JSON TaskStore、CLI Adapter 与 GitWorktreeProvider 不在当前生产执行链中。
+* Start Plan 真实验收仍仅覆盖 Windows、官方 AppServer `0.17.1` 和 `GLM-5.3-Flash`；其他平台与模型未被该证据推广为已认证。
+
+## [2.0.0-preview.4](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-preview-v2.0.0-preview.3...codex-zcode-bridge-preview-v2.0.0-preview.4) (2026-11-11)
+
+SQLite v13 → v14 seamless startup migration (EXPERIMENTAL / PREVIEW ONLY; migration runs once on first startup after upgrade).
+
+### Fixed
+
+* Existing SQLite v13 Authority is automatically copied and upgraded to v14 during Bridge startup; users no longer need to run the offline upgrade command or edit the Authority path.
+* Preserve unfinished Operations, Attempts, Holds, occupancy, lifecycle events, and Recovery evidence. Migration does not spawn Workers, release Holds, or silently clear active work.
+* Retain the original v13 database as a sibling backup; verify the published v14 Authority before clearing the durable migration marker.
+* Recover/retry interrupted publication on the next startup, and keep corrupt or non-v13 databases on the existing fail-closed validation path.
+
+### Validation
+
+* Windows and Ubuntu Node 24 full Verify jobs passed.
+* Windows and Ubuntu SQLite resource matrix jobs passed.
+* Isolated regression fixtures cover occupied Operations/Holds, v13 backup preservation, interrupted publication recovery, replay/idempotence, and blocked roots.
+
+### Compatibility
+
+* This is a one-way data migration to v14, not a guarantee that older v13 Bridge binaries can write to a v14 database. The retained v13 backup supports explicit rollback.
+* Existing Recovery/Hold state remains intact and must be resolved through the normal Recovery workflow.
+
+## [2.0.0-preview.3](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-preview-v2.0.0-preview.2...codex-zcode-bridge-preview-v2.0.0-preview.3) (2026-11-11)
+
+Preview 2.0 Start Plan 多轮运行时认证与官方 Desktop Host 启动兼容性修复（EXPERIMENTAL / PREVIEW ONLY，仅面向开发者和测试用户；发布目标为 `preview` 分支，不经过 Release Please）。
+
+### Fixed
+
+* 官方 AppServer 统一使用已验证安装的 Desktop Host 启动身份：`--surface desktop`、`ZCODE_APP_VERSION` 和 `ZCODE_BUILD_COMMIT_ID`。
+* ASAR 元数据结构损坏时 fail-closed，不再把无效 Desktop 安装误判为缺失元数据。
+* Start Plan 私有凭据的一次性交付期限与 JWT 实际有效期分离，支持同一 Turn 内工具调用后的后续模型请求。
+* 每个 Task 复用一次权威 Billing 权益判定，并发 Runtime Header 请求 single-flight，并保留取消、账户切换和 Worker 退出时的 fail-closed 撤销语义。
+* JWT `exp` 继续被严格执行；无 `exp` 凭据仅在活动 Task 生命周期内缓存，并由父通道 EOF、取消和适配器完成撤销。
+
+### Validation
+
+* 真实 Start Plan E2E：`account:bigmodel-start-plan`、`GLM-5.3-Flash`、reasoning `max`，Windows + 官方 AppServer 0.17.1。
+* Billing GET 恰好 1 次，HTTP 200；主 Turn 3 次模型 HTTP 请求均为 200，跨 `Write` / `Read` 工具调用完成并输出合法 AgentReport。
+* Result Commit、Worker Exit、Process Tree Cleanup、Lease Release 全部通过，无 active lifecycle operation、无 Hold。
+* Coding Plan 定向回归、677 项 affected tests、SQLite Stress 3/3、Typecheck、Build、Plugin Validation、Bundle Freshness 通过。
+* Windows、Ubuntu Verify 与 SQLite resource matrix 通过。
+
+### Not verified
+
+* 真实 Start Plan E2E 仅在 Windows 上执行；Ubuntu 和其他部署目标仍为合成/CI 验证。
+* 历史 HTTP 405 根因仍未确认；本轮真实 E2E 未观察到 HTTP 405、Provider code 3012 或 unusual activity。
+* 一次辅助 `session_title` 请求在本地因 `Start Plan runtime identity is not verified.` 失败，`maxRetries=0`，不影响已完成的主动模型 Turn。
+
+## [2.0.0-preview.2](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-preview-v2.0.0-preview.1...codex-zcode-bridge-preview-v2.0.0-preview.2) (2026-11-10)
+
+Preview 2.0 Account Provider 注册兼容性修复（EXPERIMENTAL / PREVIEW ONLY，仅面向开发者和测试用户；发布目标为 `preview` 分支，不经过 Release Please）。
+
+### Fixed
+
+* AppServer 0.17.1 任务级 Account Provider Snapshot 现在为每个 Provider 发布明确的布尔 `current`，并仅将任务选中的 Provider 标记为当前。
+* Start Plan Provider 注册失败继续阻止 Session 创建和模型 Turn，同时通过 ADR-011 保留经过白名单过滤的 RPC 诊断。
+* 超时或请求前通道关闭不再被错误归类为已观察到 JSON-RPC Error Frame 的拒绝。
+
+### Validation
+
+* 官方 AppServer 0.17.1 原生合成注册测试。
+* Start Plan 三模型目录与 `GLM-5.3-Flash` 模型选择测试。
+* Built-in Revision 来源一致性验证。
+* Coding Plan 兼容性回归。
+* Windows、Ubuntu Verify 与 SQLite resource matrix 通过。
+
+### Not verified
+
+* 本版本发布时尚未完成真实 Start Plan 模型请求验收。
+* 原始 HTTP 405 根因仍未确认。
+* 3012 未在本轮历史证据中观察到。
+
+## [2.0.0-preview.1](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-preview-v1.6.0-preview.3...codex-zcode-bridge-preview-v2.0.0-preview.1) (2026-11-08)
+
+Preview 2.0 集成版本（EXPERIMENTAL / PREREVIEW ONLY，仅面向开发者和测试用户；发布目标为 `preview` 分支，不经过 Release Please）。
+
+### Features
+
+* SQLite-only 统一生产架构：单一 SQLite Authority 与单一 Lifecycle Manager，JSON TaskStore/Manager 与旧 CLI 执行链退役（PR #67）。
+* Start Plan 实验性集成：官方加密凭据发现（`enc:v1:` AES-256-GCM）、实时模型级 Billing 权益门、Provider 注册前置校验、私有凭据一次性租约与 HANDLE 身份门禁（PR #62、#65、#67）。
+* Windows 清理加速与锁发布重试预算修复：失败清理路径预启动 ADR-009 辅助进程；`state.lock` 发布 rename 重试与撤回路径对齐到 5 秒有界预算（PR #67）。
+
+### BREAKING CHANGES
+
+* 公共 Core 计划在下一主版本进行破坏性调整；Preview 渠道不承诺 Core API 兼容性。
+* SQLite-only 架构退役 JSON/CLI 生产执行链：旧 JSON 任务历史不会被迁移或读取。
+* SQLite v13 数据库不自动迁移：升级要求先停所有 Bridge host/Manager，再用 `dist/upgrade-sqlite-v14.mjs` 执行显式离线复制升级，然后切换 `authority.json` 的 `data_root`（见 README 与 `docs/ZCODE_RUNTIME.md`）。
+* SQLite 模式要求 Node.js `>=24.16.0 <25`；旧 JSON 运行时的 Node `>=22.18` 要求不再适用。
+
 ## [1.6.0](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.5.0...codex-zcode-bridge-v1.6.0) (2026-11-05)
 
 

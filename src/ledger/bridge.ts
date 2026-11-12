@@ -6,7 +6,7 @@
 // projection is durable. The ledger never inspects PIDs, never kills
 // processes, and never changes Bridge status — cancellation always goes
 // through the executor API with the request and confirmation recorded.
-import type { BridgeTaskManager } from "../manager/task-manager.js";
+import type { ProgressTaskManager } from "../interfaces.js";
 import type { TaskPackage, TaskReceipt, TaskResult, TaskStatusRecord } from "../interfaces.js";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -50,7 +50,7 @@ export class LedgerBridgeLink {
 
   /** Persists the run intent, then dispatches; every retry of the same
    * operation keeps the same run and the same executor task id (C2-01). */
-  async dispatchTask(manager: BridgeTaskManager, plan: DispatchPlan): Promise<DispatchOutcome> {
+  async dispatchTask(manager: ProgressTaskManager, plan: DispatchPlan): Promise<DispatchOutcome> {
     const task = this.#ledger.getTask(plan.project_task_id);
     if (task.status === "done" || task.status === "cancelled") {
       throw new LedgerError("LEDGER_STATE", `cannot dispatch a ${task.status} project task`);
@@ -85,7 +85,7 @@ export class LedgerBridgeLink {
   }
 
   /** Cancels through the executor API and records request + confirmation. */
-  async cancelRun(manager: BridgeTaskManager, runId: string, operationId: string): Promise<TaskStatusRecord> {
+  async cancelRun(manager: ProgressTaskManager, runId: string, operationId: string): Promise<TaskStatusRecord> {
     const run = this.#requireRun(runId);
     if (run.executor.kind !== "zcode-bridge" || !run.executor_ref) {
       throw new LedgerError("LEDGER_STATE", "only Bridge runs can be cancelled through the executor API");
@@ -99,7 +99,7 @@ export class LedgerBridgeLink {
 
   /** Projects Bridge evidence onto the run. Idempotent: replaying the same
    * Bridge events appends nothing (journal operation dedupe by run+attempt+seq). */
-  async syncRunFromBridge(manager: BridgeTaskManager, runId: string): Promise<{ projected: number; cursor: number }> {
+  async syncRunFromBridge(manager: ProgressTaskManager, runId: string): Promise<{ projected: number; cursor: number }> {
     const run = this.#requireRun(runId);
     if (run.executor.kind !== "zcode-bridge" || !run.executor_ref) {
       throw new LedgerError("LEDGER_STATE", "projection requires a Bridge run");

@@ -18,14 +18,20 @@ const exceptionSource = path.join(repoRoot, "src", "store", "json-history-result
 const exceptionDestination = path.join(repoRoot, "dist-test", "src", "store", "json-history-result-exceptions.mjs");
 const impactMapSource = path.join(repoRoot, "test", "test-impact-map.json");
 const impactMapDestination = path.join(repoRoot, "dist-test", "test", "test-impact-map.json");
+const envProbeSource = path.join(repoRoot, "test", "sqlite-candidate", "wp6b-wiring", "worker-env-probe.ps1");
+const envProbeDestination = path.join(repoRoot, "dist-test", "test", "sqlite-candidate", "wp6b-wiring", "worker-env-probe.ps1");
 
 await mkdir(path.dirname(destination), { recursive: true });
 await mkdir(path.dirname(exceptionDestination), { recursive: true });
 await mkdir(path.dirname(impactMapDestination), { recursive: true });
+await mkdir(path.dirname(envProbeDestination), { recursive: true });
 await Promise.all([
   copyFile(source, destination),
   copyFile(administrativeSource, administrativeDestination),
   copyFile(exceptionSource, exceptionDestination),
   copyFile(impactMapSource, impactMapDestination),
+  copyFile(envProbeSource, envProbeDestination),
 ]);
 console.log("Copied SQLite schemas and the test impact map into the compiled test layout.");
+
+await copyFile(path.join(repoRoot,'src/sqlite-candidate/wp6b2b1/schema-v13.sql'),path.join(repoRoot,'dist-test/src/sqlite-candidate/wp6b2b1/schema-v13.sql'));

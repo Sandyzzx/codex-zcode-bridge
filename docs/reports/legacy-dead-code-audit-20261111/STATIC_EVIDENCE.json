@@ -1,0 +1,260 @@
+{
+  "baseline": "52015d12f37011f4d389e07941c31491457611ef",
+  "counts": {
+    "root/config": 22,
+    "documentation": 133,
+    "plugin": 40,
+    "tooling": 21,
+    "source": 108,
+    "test": 93
+  },
+  "tracked_files": 417,
+  "test_files": 85,
+  "test_manifest_entries": 88,
+  "entry_points": [
+    "src/core.ts",
+    "src/mcp/main.ts",
+    "src/worker/worker-main.ts",
+    "src/cli/wait-task.ts",
+    "src/cli/upgrade-sqlite-v14.ts",
+    "src/cli/admin-abandon-held-operation.ts",
+    "src/observability/codex-master-token-cli.ts",
+    "src/browser/backend-entry.ts"
+  ],
+  "runtime_source_inputs": [
+    "src/adapters/agent-report.ts",
+    "src/adapters/process-spawn.ts",
+    "src/adapters/task-index-sync.ts",
+    "src/adapters/windows-process-cleanup.ts",
+    "src/adapters/zcode-app-server-adapter.ts",
+    "src/attention/read-only.ts",
+    "src/attention/snapshot.ts",
+    "src/attention/wait.ts",
+    "src/browser/backend-entry.ts",
+    "src/browser/backend.ts",
+    "src/browser/command-metadata.ts",
+    "src/browser/commands.ts",
+    "src/browser/descriptor.ts",
+    "src/browser/executable.ts",
+    "src/browser/host.ts",
+    "src/browser/load-backend.ts",
+    "src/browser/page-command.ts",
+    "src/browser/params.ts",
+    "src/browser/playwright-command.ts",
+    "src/browser/request.ts",
+    "src/browser/runtime.ts",
+    "src/browser/session.ts",
+    "src/browser/snapshot-capture.ts",
+    "src/cli/admin-abandon-held-operation.ts",
+    "src/cli/upgrade-sqlite-v14.ts",
+    "src/cli/wait-task.ts",
+    "src/core.ts",
+    "src/diagnostics/failure-facts.ts",
+    "src/feedback/codex-master-token.ts",
+    "src/feedback/renderer.ts",
+    "src/feedback/task-feedback.ts",
+    "src/feedback/template.ts",
+    "src/host/profile.ts",
+    "src/host/stdio.ts",
+    "src/interfaces.ts",
+    "src/ledger/bridge.ts",
+    "src/ledger/mcp.ts",
+    "src/ledger/types.ts",
+    "src/manager/errors.ts",
+    "src/manager/normalize.ts",
+    "src/manager/spawn-worker.ts",
+    "src/manager/sqlite-lifecycle-mcp-authority.ts",
+    "src/mcp/main.ts",
+    "src/mcp/schemas.ts",
+    "src/mcp/server.ts",
+    "src/observability/codex-master-token-cli.ts",
+    "src/observability/codex-master-token-usage.ts",
+    "src/observability/codex-rollout-token-source.ts",
+    "src/observation/diagnostics.ts",
+    "src/observation/judge.ts",
+    "src/observation/types.ts",
+    "src/prompts/task-prompt.ts",
+    "src/result-contract.mjs",
+    "src/runtime/account-provider.ts",
+    "src/runtime/build-provenance.ts",
+    "src/runtime/child-env.ts",
+    "src/runtime/desktop-host-launch.ts",
+    "src/runtime/doctor.ts",
+    "src/runtime/errors.ts",
+    "src/runtime/model-routing.ts",
+    "src/runtime/model-settings.ts",
+    "src/runtime/node-runtime.ts",
+    "src/runtime/paths.ts",
+    "src/runtime/process-probe.ts",
+    "src/runtime/resolver.ts",
+    "src/runtime/session-preferences.ts",
+    "src/runtime/sqlite-doctor.ts",
+    "src/runtime/sqlite-install-config.ts",
+    "src/runtime/sqlite-runtime-roster.ts",
+    "src/runtime/start-plan-handle-gate.ts",
+    "src/runtime/start-plan-private-channel.ts",
+    "src/runtime/start-plan-private-frame.ts",
+    "src/runtime/start-plan-private-lease.ts",
+    "src/runtime/start-plan-production-auth.ts",
+    "src/runtime/start-plan-secret-redactor.ts",
+    "src/runtime/task-timeout.ts",
+    "src/runtime/trusted-local-deployment.ts",
+    "src/runtime/trusted-local-policy-config.ts",
+    "src/runtime/trusted-local-profile.ts",
+    "src/sqlite-candidate/wp6b2b1/interaction-channel.mjs",
+    "src/sqlite-candidate/wp6b2b1/launch-bootstrap.ts",
+    "src/sqlite-candidate/wp6b2b1/launch-identity.ts",
+    "src/sqlite-candidate/wp6b2b1/lifecycle-port.mjs",
+    "src/sqlite-candidate/wp6b2b1/store.mjs",
+    "src/sqlite-candidate/wp6b2b1/trusted-local-policy.ts",
+    "src/sqlite-candidate/wp6b2b1/worker-handshake.ts",
+    "src/sqlite-candidate/wp6c/fake-result-adapter.ts",
+    "src/store/atomic-rename.ts",
+    "src/store/json-history-result-exceptions.mjs",
+    "src/store/lifecycle-gate.ts",
+    "src/store/process-lock.ts",
+    "src/usage/normalize.ts",
+    "src/worker/worker-main.ts",
+    "src/workspace/direct-provider.ts"
+  ],
+  "generated_artifacts": [
+    {
+      "path": "plugins/codex-zcode-bridge/dist/admin-abandonment.sql",
+      "before_bytes": 1912,
+      "after_bytes": 1912,
+      "unchanged": true,
+      "git_blob": "e40af5522123a4a8f7ec5ad578567bf579cf4fba",
+      "sha256": "ee0c4789d43cae364f09c3d759e1b01338ab959c8bc52725651c84fd0ac1f443"
+    },
+    {
+      "path": "plugins/codex-zcode-bridge/dist/bridge.mjs",
+      "before_bytes": 1676078,
+      "after_bytes": 1676078,
+      "unchanged": true,
+      "git_blob": "43e8c6a3a45a91b0047cf9ad857fede82aa9be82",
+      "sha256": "0d8abc13fb233df6b6482668288aefa7a9e72ade20e1b464f4dca541c93aa1af"
+    },
+    {
+      "path": "plugins/codex-zcode-bridge/dist/schema-v13.sql",
+      "before_bytes": 36176,
+      "after_bytes": 36176,
+      "unchanged": true,
+      "git_blob": "0e5e451507abc12d69eae79693d58caa94998d83",
+      "sha256": "f62f9cff6929a30d1dc8ac03c844d89e40258ecff88fbe0013cef79f2baf1371"
+    },
+    {
+      "path": "plugins/codex-zcode-bridge/dist/schema.sql",
+      "before_bytes": 36182,
+      "after_bytes": 36182,
+      "unchanged": true,
+      "git_blob": "dfc07cdcd5b14e19a9774b4a37e14a8c667391f0",
+      "sha256": "469db1d33ce169a226862ec8b6dc58580a5592afc3352b64aac55940d3371ec7"
+    },
+    {
+      "path": "plugins/codex-zcode-bridge/dist/upgrade-sqlite-v14.mjs",
+      "before_bytes": 339339,
+      "after_bytes": 339339,
+      "unchanged": true,
+      "git_blob": "3c27878960a4f06301974b5728dc6fa3a0c5b3a0",
+      "sha256": "54bb667b8776256c14f3386365166c6506a5998868c0a8abd87f54410c2af54d"
+    },
+    {
+      "path": "plugins/codex-zcode-bridge/dist/wait-task.mjs",
+      "before_bytes": 354752,
+      "after_bytes": 354752,
+      "unchanged": true,
+      "git_blob": "d9156e17d358081b6df73a3ce3d670a1db043206",
+      "sha256": "34948f258eb6c0ff0c28f6a877ec4f1a340745351ab4bd5e51998d374308b4be"
+    },
+    {
+      "path": "plugins/codex-zcode-bridge/skills/zcode-bridge/scripts/codex-master-token-usage.mjs",
+      "before_bytes": 28729,
+      "after_bytes": 28729,
+      "unchanged": true,
+      "git_blob": "9440bc1b211a1e7131ac5f833e842c5d9e75932c",
+      "sha256": "abd38d09f901ddceca9b77e072275d9363a4b81c430e0ba1e77eae3abd99f88c"
+    },
+    {
+      "path": "plugins/codex-zcode-bridge/worker/vendor/browsers.json",
+      "before_bytes": 1135,
+      "after_bytes": 1135,
+      "unchanged": true,
+      "git_blob": "6352eed69ace538834662cfc68e353bf8d874e0f",
+      "sha256": "2cfd419f71ac6475d81e1301fa86c34cf2a2a6bae2a0da4b5a2b18310216b6bf"
+    },
+    {
+      "path": "plugins/codex-zcode-bridge/worker/vendor/package.json",
+      "before_bytes": 876,
+      "after_bytes": 876,
+      "unchanged": true,
+      "git_blob": "e512e8e4aee5b948d094029d15d1cb8dfdc47da2",
+      "sha256": "1d6b6f80ffb0c52865af0f9fe01abf2140df019e49ae6ac134605e462d583f3a"
+    },
+    {
+      "path": "plugins/codex-zcode-bridge/worker/vendor/pkg/browser-host.cjs",
+      "before_bytes": 7335238,
+      "after_bytes": 7335238,
+      "unchanged": true,
+      "git_blob": "f1fde7c25d352dcbed10d7614f3c6c5c968ddadb",
+      "sha256": "b750aeff5cae48d6cdb71e068b0b8d96592cba52b57a514fedad515615c55b4e"
+    },
+    {
+      "path": "plugins/codex-zcode-bridge/worker/worker-main.mjs",
+      "before_bytes": 1200140,
+      "after_bytes": 1200140,
+      "unchanged": true,
+      "git_blob": "b2d7629127de35056c99a4773f60088edb6eee64",
+      "sha256": "176d187dba9827e130b0f9fb95ad606d24751d4a6e7240691b611f94bcf92e56"
+    }
+  ],
+  "deleted_test_files": [],
+  "removed_dependencies": [],
+  "protected_contracts_unchanged": [
+    {
+      "path": "src/runtime/start-plan-production-auth.ts",
+      "unchanged": true
+    },
+    {
+      "path": "src/store/lifecycle-gate.ts",
+      "unchanged": true
+    },
+    {
+      "path": "src/worker/worker-main.ts",
+      "unchanged": true
+    },
+    {
+      "path": "src/sqlite-candidate/wp6b2b1/store.mjs",
+      "unchanged": true
+    },
+    {
+      "path": "src/sqlite-candidate/wp6b2b1/schema.sql",
+      "unchanged": true
+    },
+    {
+      "path": "src/result-contract.mjs",
+      "unchanged": true
+    },
+    {
+      "path": "src/mcp/schemas.ts",
+      "unchanged": true
+    }
+  ],
+  "validation": {
+    "windows_full": {
+      "tests": 889,
+      "pass": 888,
+      "skip": 1,
+      "fail": 0,
+      "duration_ms": 1242739.5647,
+      "evidence": "test:affected tool session 75356, final chunk 223228"
+    },
+    "sqlite_stress": {
+      "tests": 3,
+      "pass": 3,
+      "skip": 0,
+      "fail": 0,
+      "duration_ms": 11721.5884,
+      "evidence": "test:stress tool session 43866, final chunk e12358"
+    }
+  }
+}

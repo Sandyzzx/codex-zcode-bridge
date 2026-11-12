@@ -54,7 +54,7 @@ Native [prompt-command.ts L212–243](https://github.com/zai-org/ZCode/blob/2962
 
 协议 [server-operations.ts L3279](https://github.com/zai-org/ZCode/blob/29628c9acdb81b703bbd4080c207a0e7ce5e276e/apps/zcode-cli/packages/bootstrap/src/zcode-protocol/server-operations.ts#L3279) 的 materialize/createRecord 在 L3345+ 应用 startup preferences、session allow/disallowlist、Memory enabled override、协议 permission/browser broker、automation / subagent 端口。请求 `session/requestRuntimePreferences` 是 Host 往返；未回答或 answered preferences 不同，会改变 materialization。
 
-**CONFIRMED — SOURCE：** Bridge 基线 [model-settings.ts](../../src/runtime/model-settings.ts) L339 固定关闭 Memory、native search enhancements、自动回答 AskUserQuestion。实际执行适配器也有同样回调，见本仓库 [zcode-app-server-adapter.ts](../../src/adapters/zcode-app-server-adapter.ts) L759 一带。权威是上述本机固定 HEAD 源码。
+**CONFIRMED — SOURCE：** Bridge 基线 [model-settings.ts](../../../src/runtime/model-settings.ts) L339 固定关闭 Memory、native search enhancements、自动回答 AskUserQuestion。实际执行适配器也有同样回调，见本仓库 [zcode-app-server-adapter.ts](../../../src/adapters/zcode-app-server-adapter.ts) L759 一带。权威是上述本机固定 HEAD 源码。
 
 两边的 Provider Registry 启动来源共享；account access 还依赖 credential identity、snapshot revision、runtime headers。Browser、MCP、permissions 是能力端口，不是仅由注册工具名字决定的能力。
 

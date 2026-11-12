@@ -28,6 +28,7 @@ const PERSISTED_RUNTIME_KEYS = [
   "ZCODE_BRIDGE_DEFAULT_PROVIDER_ID",
   "ZCODE_BRIDGE_DEFAULT_MODEL_ID",
   "ZCODE_BRIDGE_DEFAULT_REASONING_LEVEL",
+  "ZCODE_BRIDGE_PREFER_STARTPLAN",
   "ZCODE_BRIDGE_MODE",
   "ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS",
   "ZCODE_BRIDGE_TIMEOUT_MS",
@@ -267,6 +268,7 @@ export class NodeRuntimeResolver implements RuntimeResolver {
       zcodeEntrypoint,
       providerBuiltinConfigFile: builtinConfigFile,
       providerPersonalConfigFile: personalConfigFile,
+      zcodeDataRoot: data.zcodeDataDir,
       dataRoot,
     };
   }
