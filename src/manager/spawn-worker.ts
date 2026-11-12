@@ -45,7 +45,8 @@ export function spawnClaimOnlyWorker(
   };
   const args = [workerPath, ...(options.interactionChannel ? ["--bridge-sqlite-interaction-v1"] : []),
     ...(options.privateAuthChannel ? ["--bridge-sqlite-private-auth-v1"] : []),
-    ...(options.dropAfterPrepared ? ["--bridge-sqlite-interaction-drop-after-prepared-v1"] : []), BRIDGE_WORKER_LAUNCH_MARKER];
+    ...(options.dropAfterPrepared ? ["--bridge-sqlite-interaction-drop-after-prepared-v1"] : []),
+    BRIDGE_WORKER_LAUNCH_MARKER];
   const child = spawn(process.execPath, args, {
     detached: true,
     shell: false,

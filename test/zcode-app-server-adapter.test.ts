@@ -71,6 +71,7 @@ async function makeFakeRuntime(
   descendantControl?: { readonly pidPath: string; readonly releasePath: string },
   turnDelayMs = 0,
   runtimeAuth = false,
+  runtimeAuthModel?: { readonly providerId: string; readonly modelId: string },
 ): Promise<{ root: string; config: ZCodeRuntimeConfig; requestLog: string; launchLog: string }> {
   const root = await mkdtemp(path.join(tmpdir(), "bridge-app-server-test-"));
   const entrypoint = path.join(root, "fake-app-server.cjs");
@@ -91,6 +92,7 @@ const requestLog = ${JSON.stringify(requestLog)};
 const launchLog = ${JSON.stringify(launchLog)};
 const descendantControl = ${JSON.stringify(descendantControl ?? null)};
 let selected = ${JSON.stringify(selectedModel)};
+  const runtimeAuthSelection = ${JSON.stringify(runtimeAuthModel ?? selectedModel)};
 let accountProviders = {};
 let accountStates = {};
 const turnFailure = ${JSON.stringify(turnFailure ?? null)};
@@ -156,8 +158,8 @@ input.on("line", (line) => {
         sessionId,
         turnId: "turn-fixture",
         workspace: { workspacePath: process.cwd(), workspaceKey: "fixture-workspace" },
-        modelSelection: selected,
-        providerId: selected.providerId,
+        modelSelection: runtimeAuthSelection,
+        providerId: runtimeAuthSelection.providerId,
         accountAccess: {
           type: "zhipu-account",
           accountType: "bigmodel",
@@ -449,6 +451,98 @@ test("runtime auth dispatcher forwards eligible account requests to the async pr
   }
 });
 
+test("runtime auth rejects an account request whose model differs from the selected task model", async () => {
+  const selected = { providerId: "account:bigmodel-individual-coding-plan", modelId: "GLM-5.2" };
+  const runtime = await makeFakeRuntime(
+    selected,
+    true,
+    false,
+    undefined,
+    true,
+    null,
+    undefined,
+    0,
+    true,
+    { providerId: selected.providerId, modelId: "different-model" },
+  );
+  try {
+    const zcodeDataRoot = path.join(runtime.root, ".zcode");
+    const personalConfig = path.join(zcodeDataRoot, "v2", "provider_config.json");
+    await mkdir(path.dirname(personalConfig), { recursive: true });
+    await writeFile(runtime.config.providerBuiltinConfigFile, JSON.stringify({
+      config: { providerConfigRules: { providerRules: [{
+        providerId: selected.providerId,
+        config: {
+          builtinModelIds: [selected.modelId],
+          access: {
+            type: "zhipu-account",
+            mode: "individual-coding-plan",
+            accountType: "bigmodel",
+          },
+        },
+      }] } },
+    }));
+    await writeFile(personalConfig, JSON.stringify({
+      config: { providerConfigRules: { providerRules: [] } },
+    }));
+    await writeFile(path.join(zcodeDataRoot, "v2", "config.json"), JSON.stringify({
+      provider: {
+        "builtin:bigmodel-coding-plan": {
+          enabled: true,
+          options: { apiKey: "synthetic-coding-plan-api-key" },
+        },
+      },
+    }));
+    await writeFile(path.join(zcodeDataRoot, "v2", "coding-plan-cache.json"), JSON.stringify({
+      entryStatus: { items: { "builtin:bigmodel-coding-plan": { status: "available" } } },
+    }));
+    let providerAuthCalls = 0;
+    const adapter = new ZCodeAppServerAdapter({
+      resolver: {
+        resolve: async () => ({
+          ...runtime.config,
+          providerPersonalConfigFile: personalConfig,
+          zcodeDataRoot,
+        }),
+      },
+      timeoutMs: 10_000,
+      childEnvBase: { PATH: process.env.PATH },
+      homeDir: runtime.root,
+      resolveProviderRuntimeAuth: async () => {
+        providerAuthCalls += 1;
+        return {
+          headersApplied: true,
+          requestAuth: { apiKey: "must-not-be-used" },
+        };
+      },
+    });
+    const handle = await adapter.startTask({
+      task: {
+        ...task,
+        model: {
+          provider_id: selected.providerId,
+          model_id: selected.modelId,
+        },
+      },
+      workspace: makeWorkspace(runtime.root),
+      attempt: 1,
+    });
+    const result = await adapter.getResult(handle);
+    assert.equal(result.exitCode, 0);
+    assert.equal(providerAuthCalls, 0);
+    const messages = (await readFile(runtime.requestLog, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    assert.deepEqual(messages.find((message) => message.id === "auth-rpc")?.result, {
+      headersApplied: false,
+      errorMessage: "Provider runtime identity is not verified.",
+    });
+  } finally {
+    await rm(runtime.root, { recursive: true, force: true });
+  }
+});
+
 test("verified Start Plan receives task-scoped current while Desktop selects Coding Plan", async () => {
   const runtime = await makeFakeRuntime(
     { providerId: "account:bigmodel-individual-coding-plan", modelId: "GLM-5.3-Flash" },
@@ -525,6 +619,7 @@ test("explicit Coding Plan receives task-scoped current when Desktop selects Sta
     undefined,
     0,
     true,
+    { providerId: "account:bigmodel-individual-coding-plan", modelId: "GLM-5.3-Flash" },
   );
   try {
     const zcodeDataRoot = path.join(runtime.root, ".zcode");

@@ -300,11 +300,18 @@ function validateEvidence(eventType, value) {
   } else if (eventType === "reserved") {
     const fields = Object.keys(value).sort().join("|");
     if (fields !== ["capacity_slot", "reservation_id"].join("|") && fields !== ["authorization_source", "capacity_slot", "execution_profile_id", "policy_digest", "policy_revision", "reservation_id"].join("|")) fail2("invalid_evidence");
-  } else if (keys && Object.keys(value).sort().join("|") !== keys.join("|")) fail2("invalid_evidence");
+  } else if (keys) {
+    const expectedKeys = ["cleanup_verified", "cleanup_reverified"].includes(eventType) && value.adapter_cleanup === void 0 ? keys.filter((key) => key !== "adapter_cleanup") : keys;
+    if (Object.keys(value).sort().join("|") !== expectedKeys.join("|")) fail2("invalid_evidence");
+  }
+  if (["cleanup_verified", "cleanup_reverified"].includes(eventType) && value.adapter_cleanup !== void 0 && !validAdapterCleanupEvidence(value.adapter_cleanup)) fail2("invalid_adapter_cleanup_evidence");
   if (FUTURE_EVENT_TYPES.has(eventType)) {
     const ownKeys = Object.keys(value);
     if (!ownKeys.length || ownKeys.some((k) => !FUTURE_EVIDENCE_KEYS.has(k))) fail2("invalid_evidence");
     for (const [k, v] of Object.entries(value)) {
+      if (k === "adapter_cleanup") {
+        continue;
+      }
       if (k.endsWith("_digest") || k === "token_digest") {
         if (typeof v !== "string" || !/^[0-9a-f]{64}$/u.test(v)) fail2("invalid_evidence");
       } else if (k === "launch_epoch") {
@@ -324,7 +331,8 @@ function validateEvidence(eventType, value) {
   for (const key of ["launch_id", "claim_id"]) if (key in value && !validText2(value[key], 128)) fail2("invalid_evidence");
   if ("launch_epoch" in value && (!Number.isInteger(value.launch_epoch) || value.launch_epoch < 1)) fail2("invalid_evidence");
   const json = canonical3(value);
-  if (Buffer.byteLength(json, "utf8") > (eventType === "cleanup_reverified" ? 2048 : 1024)) fail2("invalid_evidence");
+  const maxBytes = ["cleanup_verified", "cleanup_reverified"].includes(eventType) ? 2048 : 1024;
+  if (Buffer.byteLength(json, "utf8") > maxBytes) fail2("invalid_evidence");
   return value;
 }
 function validateInteractionEvidence(eventType, value) {
@@ -477,9 +485,24 @@ function validCleanupRequest(x) {
 function validCancellationFence(x) {
   return !!x && Object.getPrototypeOf(x) === Object.prototype && Object.keys(x).sort().join("|") === "attempt|claim_id|claim_worker_identity_digest|generation|operation_id|revision|task_id|worker_identity" && validId(x.operation_id) && validId(x.task_id) && Number.isSafeInteger(x.attempt) && x.attempt > 0 && Number.isSafeInteger(x.generation) && x.generation > 0 && Number.isSafeInteger(x.revision) && x.revision > 0 && validId(x.claim_id) && typeof x.claim_worker_identity_digest === "string" && /^[0-9a-f]{64}$/u.test(x.claim_worker_identity_digest);
 }
+function validAdapterCleanupEvidence(value) {
+  const scanStatuses = /* @__PURE__ */ new Set(["verified", "live", "incomplete", "not_applicable"]);
+  const stages = /* @__PURE__ */ new Set(["not_started", "direct_close", "official_manager_dispose", "official_manager_dispose_all", "official_manager_workspace_dispose"]);
+  if (!value || Object.getPrototypeOf(value) !== Object.prototype) return false;
+  const close = value.close;
+  if (!close || Object.getPrototypeOf(close) !== Object.prototype) return false;
+  const evidenceKeys = ["close", "contract", "treeScanStatus"];
+  const closeKeys = ["stage", "status", "treeScanStatus"];
+  if (close.errorCode !== void 0) closeKeys.push("errorCode");
+  if (close.errorName !== void 0) closeKeys.push("errorName");
+  if (close.managerProcessCountAfter !== void 0) closeKeys.push("managerProcessCountAfter");
+  return Object.keys(value).sort().join("|") === evidenceKeys.sort().join("|") && Object.keys(close).sort().join("|") === closeKeys.sort().join("|") && value.contract === "adapter-cleanup-v1" && ["resolved", "rejected"].includes(close.status) && typeof close.stage === "string" && stages.has(close.stage) && scanStatuses.has(close.treeScanStatus) && scanStatuses.has(value.treeScanStatus) && (close.errorName === void 0 || /^[A-Za-z][A-Za-z0-9_.:-]{0,119}$/u.test(close.errorName)) && (close.errorCode === void 0 || /^[A-Za-z][A-Za-z0-9_.:-]{0,119}$/u.test(close.errorCode)) && (close.managerProcessCountAfter === void 0 || Number.isSafeInteger(close.managerProcessCountAfter) && close.managerProcessCountAfter >= 0) && (!close.stage.startsWith("official_") || Number.isSafeInteger(close.managerProcessCountAfter));
+}
 function normalizeCleanupEvidence(value, input) {
   const keys = ["attempt", "claim_id", "fixture", "generation", "launch_receipt_digest", "operation_id", "operation_resources_complete", "process_tree_digest", "resources_digest", "result_commit_ref", "root_process_id", "root_start_fingerprint", "source", "task_id", "worker_identity_digest", "worker_tree_complete", "workspace_touched"];
-  if (!value || Object.getPrototypeOf(value) !== Object.prototype || Object.keys(value).sort().join("|") !== keys.join("|")) fail2("invalid_cleanup_evidence");
+  const expectedKeys = value?.adapter_cleanup === void 0 ? keys : [...keys, "adapter_cleanup"].sort();
+  if (!value || Object.getPrototypeOf(value) !== Object.prototype || Object.keys(value).sort().join("|") !== expectedKeys.join("|")) fail2("invalid_cleanup_evidence");
+  if (value.adapter_cleanup !== void 0 && !validAdapterCleanupEvidence(value.adapter_cleanup)) fail2("invalid_adapter_cleanup_evidence");
   if (!["manager_os_cleanup_verification", "synthetic_fixture"].includes(value.source) || typeof value.fixture !== "boolean" || value.source === "synthetic_fixture" !== value.fixture || value.operation_id !== input.operation_id || value.task_id !== input.task_id || value.attempt !== input.attempt || value.generation !== input.generation || value.claim_id !== input.claim_id || value.worker_identity_digest !== input.claim_worker_identity_digest || !/^([0-9a-f]{64})$/u.test(value.launch_receipt_digest) || !/^([0-9a-f]{64})$/u.test(value.process_tree_digest) || !/^([0-9a-f]{64})$/u.test(value.resources_digest) || !validId(value.result_commit_ref) || !Number.isSafeInteger(value.root_process_id) || value.root_process_id < 1 || !validText2(value.root_start_fingerprint, 256) || value.worker_tree_complete !== true || value.operation_resources_complete !== true || value.workspace_touched !== false) fail2("invalid_cleanup_evidence");
   if (Buffer.byteLength(canonical3(value), "utf8") > 4096) fail2("cleanup_evidence_too_large");
   return value;
@@ -963,9 +986,9 @@ var init_store = __esm({
       claim_committed: ["claim_id", "launch_epoch", "launch_id", "token_digest", "worker_identity_digest"],
       result_committed: ["claim_id", "outcome", "result_commit_ref", "result_digest", "worker_identity_digest"],
       cleanup_pending: ["claim_id", "result_commit_ref", "worker_identity_digest"],
-      cleanup_verified: ["claim_id", "cleanup_digest", "evidence_source", "launch_receipt_digest", "operation_resources_complete", "process_tree_digest", "resources_digest", "result_commit_ref", "root_process_id", "root_start_fingerprint", "worker_identity_digest", "worker_tree_complete", "workspace_touched"],
+      cleanup_verified: ["adapter_cleanup", "claim_id", "cleanup_digest", "evidence_source", "launch_receipt_digest", "operation_resources_complete", "process_tree_digest", "resources_digest", "result_commit_ref", "root_process_id", "root_start_fingerprint", "worker_identity_digest", "worker_tree_complete", "workspace_touched"],
       cleanup_unverified: ["claim_id", "probe_state", "reason", "worker_identity_digest"],
-      cleanup_reverified: ["attempt", "claim_id", "cleanup_digest", "evidence_source", "generation", "launch_receipt_digest", "operation_id", "operation_resources_complete", "prior_cleanup_event_digest", "process_tree_digest", "resolved_recovery_event_digests", "resources_digest", "result_commit_ref", "root_process_id", "root_start_fingerprint", "task_id", "worker_identity_digest", "worker_tree_complete", "workspace_touched"],
+      cleanup_reverified: ["adapter_cleanup", "attempt", "claim_id", "cleanup_digest", "evidence_source", "generation", "launch_receipt_digest", "operation_id", "operation_resources_complete", "prior_cleanup_event_digest", "process_tree_digest", "resolved_recovery_event_digests", "resources_digest", "result_commit_ref", "root_process_id", "root_start_fingerprint", "task_id", "worker_identity_digest", "worker_tree_complete", "workspace_touched"],
       released: ["claim_id", "cleanup_digest", "result_commit_ref", "worker_identity_digest"],
       interaction_requested: ["claim_id", "request_digest", "request_id", "request_method", "worker_identity_digest"],
       interaction_reply_intent: ["answer_digest", "claim_id", "reply_id", "request_id", "worker_identity_digest"],
@@ -974,7 +997,7 @@ var init_store = __esm({
       interaction_reply_accepted: ["ack_digest", "answer_digest", "claim_id", "commit_digest", "reply_id", "request_id", "worker_identity_digest"]
     });
     FUTURE_EVENT_TYPES = /* @__PURE__ */ new Set(["launch_intent", "launch_receipt", "launch_unknown", "claim_committed", "result_committed", "cleanup_pending", "cleanup_verified", "cleanup_unverified", "quarantined", "released", "launch_failed"]);
-    FUTURE_EVIDENCE_KEYS = /* @__PURE__ */ new Set(["cancel_verification_digest", "claim_id", "cleanup_digest", "evidence_digest", "evidence_source", "launch_epoch", "launch_id", "launch_receipt_digest", "operation_resources_complete", "outcome", "probe_state", "process_tree_digest", "reason", "resources_digest", "result_commit_ref", "root_process_id", "root_start_fingerprint", "receipt_digest", "result_digest", "token_digest", "worker_identity_digest", "worker_tree_complete", "workspace_touched"]);
+    FUTURE_EVIDENCE_KEYS = /* @__PURE__ */ new Set(["adapter_cleanup", "cancel_verification_digest", "claim_id", "cleanup_digest", "evidence_digest", "evidence_source", "launch_epoch", "launch_id", "launch_receipt_digest", "operation_resources_complete", "outcome", "probe_state", "process_tree_digest", "reason", "resources_digest", "result_commit_ref", "root_process_id", "root_start_fingerprint", "receipt_digest", "result_digest", "token_digest", "worker_identity_digest", "worker_tree_complete", "workspace_touched"]);
     EVENT_PHASE = Object.freeze({
       capacity_policy_committed: "policy_change_committed",
       reserved: "reserved",
@@ -3587,7 +3610,8 @@ var init_store = __esm({
               root_start_fingerprint: normalized.root_start_fingerprint,
               worker_identity_digest: input.claim_worker_identity_digest,
               worker_tree_complete: normalized.worker_tree_complete,
-              workspace_touched: normalized.workspace_touched
+              workspace_touched: normalized.workspace_touched,
+              ...normalized.adapter_cleanup !== void 0 ? { adapter_cleanup: normalized.adapter_cleanup } : {}
             };
             this.#event(input.operation_id, input.revision + 1, "cleanup_verified", "cleanup_pending", "cleanup_verified", input.generation, eventEvidence, at);
           } else {
@@ -3669,7 +3693,8 @@ var init_store = __esm({
             root_start_fingerprint: normalized.root_start_fingerprint,
             worker_identity_digest: o.claim_worker_identity_digest,
             worker_tree_complete: true,
-            workspace_touched: false
+            workspace_touched: false,
+            ...normalized.adapter_cleanup !== void 0 ? { adapter_cleanup: normalized.adapter_cleanup } : {}
           };
           const reverifiedEvidence = {
             ...baseEvidence,
@@ -4317,12 +4342,14 @@ var init_store = __esm({
                     operation_resources_complete: ve.operation_resources_complete,
                     workspace_touched: ve.workspace_touched,
                     source: ve.evidence_source,
-                    fixture: ve.evidence_source === "synthetic_fixture"
+                    fixture: ve.evidence_source === "synthetic_fixture",
+                    ...ve.adapter_cleanup !== void 0 ? { adapter_cleanup: ve.adapter_cleanup } : {}
                   };
                   if (ve.cleanup_digest !== digest({ cleanup_contract_version: 1, evidence: normalized })) fail2("cleanup_digest_mismatch");
                   if (reverified.length) {
                     const rve = reverified[0].evidence;
                     const paired = [
+                      "adapter_cleanup",
                       "claim_id",
                       "cleanup_digest",
                       "evidence_source",

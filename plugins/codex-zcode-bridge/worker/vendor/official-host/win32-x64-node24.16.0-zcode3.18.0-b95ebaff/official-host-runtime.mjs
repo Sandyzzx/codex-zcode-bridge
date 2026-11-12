@@ -5,7 +5,7 @@ var __export = (target2, all) => {
     __defProp(target2, name, { get: all[name], enumerable: true });
 };
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/windows-runtime-host/index.ts
+// ../account-patch-baseline-20261112/packages/services/src/windows-runtime-host/index.ts
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { access } from "node:fs/promises";
@@ -35313,7 +35313,7 @@ function readData(raw) {
   return value2.data.data;
 }
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/zcode-agent/localRuntimeNetworkCapture.ts
+// ../account-patch-baseline-20261112/packages/services/src/zcode-agent/localRuntimeNetworkCapture.ts
 var LocalRuntimeNetworkCapture = class {
   clients = /* @__PURE__ */ new Map();
   captureId = null;
@@ -35360,7 +35360,7 @@ var LocalRuntimeNetworkCapture = class {
 };
 var localRuntimeNetworkCapture = new LocalRuntimeNetworkCapture();
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/zcode-agent/zcodeAgentSpawnCwd.ts
+// ../account-patch-baseline-20261112/packages/services/src/zcode-agent/zcodeAgentSpawnCwd.ts
 import { stat } from "node:fs/promises";
 async function resolveZCodeAgentSpawnCwd(options2, probe = stat) {
   const usable = async (path) => {
@@ -35377,7 +35377,7 @@ async function resolveZCodeAgentSpawnCwd(options2, probe = stat) {
   return { cwd: options2.requestedCwd, usedFallback: false, cwdExists };
 }
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/zcode-agent/zcodeAgentProcessManager.ts
+// ../account-patch-baseline-20261112/packages/services/src/zcode-agent/zcodeAgentProcessManager.ts
 import { spawn as spawn2 } from "node:child_process";
 import { randomUUID as randomUUID3 } from "node:crypto";
 import { existsSync as existsSync3, mkdirSync as mkdirSync2, writeFileSync as writeFileSync2 } from "node:fs";
@@ -36033,7 +36033,7 @@ async function backupCorruptFile(filePath) {
   return backupPath;
 }
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/paths.ts
+// ../account-patch-baseline-20261112/packages/services/src/paths.ts
 import { basename as basename2, join as join4, win32 } from "node:path";
 import { homedir } from "node:os";
 var _dataBaseDir = null;
@@ -36074,15 +36074,15 @@ function redactAgentDiagnosticSecrets(value2) {
   }).replace(AGENT_CRASH_API_KEY_PATTERN, "$1<redacted>");
 }
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/runtime-tools/providerRuntimeResolver.ts
+// ../account-patch-baseline-20261112/packages/services/src/runtime-tools/providerRuntimeResolver.ts
 import { existsSync } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 import { dirname as dirname2, resolve as resolvePath } from "node:path";
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/runtime-tools/runtimeLoginShellEnvCapture.ts
+// ../account-patch-baseline-20261112/packages/services/src/runtime-tools/runtimeLoginShellEnvCapture.ts
 var DEFAULT_POSIX_BOOTSTRAP_PATH = process.platform === "darwin" ? "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" : "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/runtime-tools/providerRuntimeResolver.ts
+// ../account-patch-baseline-20261112/packages/services/src/runtime-tools/providerRuntimeResolver.ts
 var packagedResourcesPath = typeof process.resourcesPath === "string" ? process.resourcesPath : null;
 function resolveExistingPath(candidates) {
   for (const candidate of candidates) {
@@ -36153,7 +36153,7 @@ function findZCodeAgentRuntimeNodeBundle() {
   return resolveExistingPath(candidates);
 }
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/runtime-tools/nodeEnv.ts
+// ../account-patch-baseline-20261112/packages/services/src/runtime-tools/nodeEnv.ts
 function resolveEffectiveNodeEnv(env = process.env) {
   const runtimeEnv = resolveZCodeRuntimeEnv(env);
   return runtimeEnv === "development" ? "development" : "production";
@@ -36162,7 +36162,7 @@ function isEffectiveDevelopmentNodeEnv(env = process.env) {
   return resolveEffectiveNodeEnv(env) === "development";
 }
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/logger/serviceLogger.ts
+// ../account-patch-baseline-20261112/packages/services/src/logger/serviceLogger.ts
 function createServiceLogger(scope, options2) {
   const pid = options2?.pid ?? process.pid;
   const sink = options2?.sink ?? console;
@@ -36184,7 +36184,7 @@ function createServiceLogger(scope, options2) {
   };
 }
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/zcode-agent/zcodeStorageStartupGate.ts
+// ../account-patch-baseline-20261112/packages/services/src/zcode-agent/zcodeStorageStartupGate.ts
 import { randomUUID as randomUUID2 } from "node:crypto";
 var FIRST_STATUS_TIMEOUT_MS = 3e4;
 var ZCodeStorageStartupGate = class {
@@ -36274,7 +36274,7 @@ var ZCodeStorageStartupGate = class {
   }
 };
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/zcode-agent/zcodeProtocolClient.ts
+// ../account-patch-baseline-20261112/packages/services/src/zcode-agent/zcodeProtocolClient.ts
 var DEFAULT_ZCODE_PROTOCOL_REQUEST_TIMEOUT_MS = 3 * 6e4;
 var ZCodeProtocolClientError = class extends Error {
   constructor(message, code, data) {
@@ -36642,7 +36642,7 @@ var ZCodeProtocolClient = class {
   }
 };
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/process/processTreeSnapshot.ts
+// ../account-patch-baseline-20261112/packages/services/src/process/processTreeSnapshot.ts
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 var PROCESS_LOOKUP_TIMEOUT_MS = 1e3;
@@ -36897,7 +36897,7 @@ function captureExitedRootDescendantsSnapshot(rootPid, options2 = {}) {
   };
 }
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/process/windowsProcessListAsync.ts
+// ../account-patch-baseline-20261112/packages/services/src/process/windowsProcessListAsync.ts
 import { execFile as execFile2 } from "node:child_process";
 var WINDOWS_PROCESS_LOOKUP_TIMEOUT_MS = 2500;
 var DOTNET_UNIX_EPOCH_TICKS2 = 621355968000000000n;
@@ -37050,7 +37050,7 @@ async function readWindowsProcessListAsync(options2) {
   return await awaitWindowsProcessListWithinDeadline(request, options2);
 }
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/process/processTreeSnapshotAsync.ts
+// ../account-patch-baseline-20261112/packages/services/src/process/processTreeSnapshotAsync.ts
 var WINDOWS_START_TIME_PREFIX2 = "windows-utc-us:";
 function parseWindowsCreationTimeMs2(startTime) {
   if (!startTime.startsWith(WINDOWS_START_TIME_PREFIX2)) return void 0;
@@ -37148,7 +37148,7 @@ async function captureExitedRootDescendantsSnapshotAsync(rootPid, options2 = {})
   };
 }
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/process/processTreeOwnership.ts
+// ../account-patch-baseline-20261112/packages/services/src/process/processTreeOwnership.ts
 function hasChildExited(child) {
   return child.exitCode !== null || child.signalCode !== null;
 }
@@ -37281,7 +37281,7 @@ async function resolveCurrentOwnedIdentitiesAsync(child, knownIdentities, option
   };
 }
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/process/processTreeWaiter.ts
+// ../account-patch-baseline-20261112/packages/services/src/process/processTreeWaiter.ts
 var DEFAULT_FORCE_AFTER_MS = 2e3;
 var DEFAULT_WAIT_AFTER_FORCE_MS = 250;
 var DEFAULT_WINDOWS_TASKKILL_TIMEOUT_MS = 2e3;
@@ -37446,7 +37446,7 @@ async function waitForProcessTreeTermination(child, options2, initialOwnership, 
   });
 }
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/process/windowsTaskkillRunner.ts
+// ../account-patch-baseline-20261112/packages/services/src/process/windowsTaskkillRunner.ts
 import { execFile as execFile3 } from "node:child_process";
 var defaultWindowsTaskkillRunner = ({ force, pid, timeoutMs }) => new Promise((resolve3) => {
   execFile3(
@@ -37459,7 +37459,7 @@ var defaultWindowsTaskkillRunner = ({ force, pid, timeoutMs }) => new Promise((r
   );
 });
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/process/processTreeTerminator.ts
+// ../account-patch-baseline-20261112/packages/services/src/process/processTreeTerminator.ts
 var POSIX_TERMINATION_SIGNAL = "SIGTERM";
 var POSIX_FORCE_SIGNAL = "SIGKILL";
 var WINDOWS_TASKKILL_TIMEOUT_MS = 2e3;
@@ -37722,7 +37722,7 @@ async function terminateProcessTreeAndWait(child, options2 = {}) {
   );
 }
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/zcode-agent/agentStderrCollector.ts
+// ../account-patch-baseline-20261112/packages/services/src/zcode-agent/agentStderrCollector.ts
 import { createInterface } from "node:readline";
 var EXIT_STDERR_DRAIN_MS = 250;
 var AgentStderrCollector = class {
@@ -37762,7 +37762,7 @@ var AgentStderrCollector = class {
   };
 };
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/zcode-agent/zcodeStdioTransport.ts
+// ../account-patch-baseline-20261112/packages/services/src/zcode-agent/zcodeStdioTransport.ts
 var STDIO_EOF_EXIT_WAIT_MS = 1800;
 var DISPOSE_STDERR_DRAIN_MS = 3250;
 var E2E_COVERAGE_STDIO_EOF_EXIT_WAIT_MS = 5e3;
@@ -38064,7 +38064,7 @@ var ZCodeStdioTransport = class {
   }
 };
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/zcode-agent/zcodeStdioTapDevConfig.ts
+// ../account-patch-baseline-20261112/packages/services/src/zcode-agent/zcodeStdioTapDevConfig.ts
 import { existsSync as existsSync2, mkdirSync, readFileSync as readFileSync2, writeFileSync } from "node:fs";
 import { join as join5 } from "node:path";
 function isZCodeStdioTapDevVisible() {
@@ -38102,13 +38102,13 @@ function readZCodeStdioTapDevState() {
   };
 }
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/runtime-tools/agentProxyEnv.ts
+// ../account-patch-baseline-20261112/packages/services/src/runtime-tools/agentProxyEnv.ts
 function buildAgentWorkspaceIdentityEnv(workspaceIdentity) {
   const trimmed = workspaceIdentity?.trim();
   return trimmed ? { [ZCODE_WORKSPACE_IDENTITY_ENV]: trimmed } : {};
 }
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/zcode-agent/zcodeAgentProcessManager.ts
+// ../account-patch-baseline-20261112/packages/services/src/zcode-agent/zcodeAgentProcessManager.ts
 var SHARED_TASK_RUNTIME_KEY = "shared-local-tasks";
 var E2E_COVERAGE_PRELOAD_SOURCE = `
 const { takeCoverage } = require("node:v8");
@@ -39599,7 +39599,7 @@ async function migrateCredentialRecord(record2, cipher) {
   return changed ? next : null;
 }
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/credential/credentialService.ts
+// ../account-patch-baseline-20261112/packages/services/src/credential/credentialService.ts
 import { readFile as readFile4, writeFile as writeFile4 } from "node:fs/promises";
 import { createHash as createHash3, randomUUID as randomUUID4 } from "node:crypto";
 import { join as join8 } from "node:path";
@@ -39937,12 +39937,12 @@ function createCredentialService(dependencies = {}) {
   };
 }
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/oauth/oauthService.ts
+// ../account-patch-baseline-20261112/packages/services/src/oauth/oauthService.ts
 import { createHash as createHash4, randomBytes as randomBytes2 } from "node:crypto";
 import { readFile as readFile5, rm as rm4 } from "node:fs/promises";
 import { join as join9 } from "node:path";
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/providers/api/apiJson.ts
+// ../account-patch-baseline-20261112/packages/services/src/providers/api/apiJson.ts
 var DIAGNOSTIC_RESPONSE_HEADER_NAMES = [
   "x-request-id",
   "x-trace-id",
@@ -40011,7 +40011,7 @@ async function readApiJson(apiClient, input2, init) {
   }
 }
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/oauth/providers/configUtils.ts
+// ../account-patch-baseline-20261112/packages/services/src/oauth/providers/configUtils.ts
 var DESKTOP_OAUTH_CALLBACK_URI = "zcode://oauth/callback";
 function readEnv(env, key) {
   const value2 = env[key];
@@ -40038,7 +40038,7 @@ function buildDesktopOAuthRedirectUriFromEnv(env) {
   return url4.toString();
 }
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/oauth/providers/bigmodelProviderConfig.ts
+// ../account-patch-baseline-20261112/packages/services/src/oauth/providers/bigmodelProviderConfig.ts
 var BIGMODEL_USERINFO_PATH = "/api/biz/customer/getCustomerInfo";
 var BIGMODEL_AUTHORIZE_PATH = "/login";
 var BIGMODEL_OAUTH_PROVIDER_CONFIG = {
@@ -40071,7 +40071,7 @@ function resolveBigModelUserinfoUrl(env) {
   return readEnv(env, "BIGMODEL_OAUTH_USERINFO_URL") ?? buildBigModelApiUrl(env, BIGMODEL_USERINFO_PATH);
 }
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/oauth/providers/zaiProviderConfig.ts
+// ../account-patch-baseline-20261112/packages/services/src/oauth/providers/zaiProviderConfig.ts
 var ZAI_OAUTH_PROVIDER_CONFIG = {
   id: ZAI_PROVIDER_ID,
   displayName: "Z.ai",
@@ -40114,7 +40114,7 @@ function createZaiCnProviderRuntimeConfig(env) {
   };
 }
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/oauth/repo/oauthCredentialRepo.ts
+// ../account-patch-baseline-20261112/packages/services/src/oauth/repo/oauthCredentialRepo.ts
 import { Buffer as Buffer2 } from "node:buffer";
 import { randomUUID as randomUUID5 } from "node:crypto";
 var ACTIVE_PROVIDER_KEY = "oauth:active_provider";
@@ -40600,7 +40600,7 @@ var OAuthCredentialRepo = class {
   }
 };
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/oauth/oauthUnauthorizedRequest.ts
+// ../account-patch-baseline-20261112/packages/services/src/oauth/oauthUnauthorizedRequest.ts
 function tryResolveHttpUrl(resolve3) {
   try {
     const url4 = new URL(resolve3());
@@ -40645,7 +40645,7 @@ async function isCurrentOAuthCredentialRequest(options2) {
   return isCurrentBusinessOAuthCredentialRequest(options2);
 }
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/oauth/callbackAttribution.ts
+// ../account-patch-baseline-20261112/packages/services/src/oauth/callbackAttribution.ts
 var ATTRIBUTION_PARAM_KEYS = ["channel_id", "utm_source", "utm_campaign"];
 function parseOAuthLoginAttribution(searchParams) {
   const attribution = {};
@@ -40661,7 +40661,7 @@ function hasOAuthAuthorizationCode(searchParams) {
   return Boolean(searchParams.get("code") || searchParams.get("authCode"));
 }
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/oauth/oauthProfileSchema.ts
+// ../account-patch-baseline-20261112/packages/services/src/oauth/oauthProfileSchema.ts
 var BIGMODEL_PROFILE_SCHEMA_VERSION = 2;
 var BIGMODEL_PROFILE_MIGRATION_RETRY_DELAY_MS = 60 * 60 * 1e3;
 function getCachedProfileSchemaVersion(profile) {
@@ -40767,7 +40767,7 @@ async function refreshLegacyBigModelCachedProfile(options2) {
   }
 }
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/oauth/providers/bigmodelProviderAdapter.ts
+// ../account-patch-baseline-20261112/packages/services/src/oauth/providers/bigmodelProviderAdapter.ts
 var OAUTH_USERINFO_TIMEOUT_MS = 6e4;
 var log3 = createServiceLogger("bigmodelOAuth");
 function maskOAuthCode(code) {
@@ -40966,10 +40966,10 @@ function resolveBigModelBusinessAccessToken(payload) {
   return payload.data?.bigmodel?.access_token?.trim() ?? payload.data?.bigmodel?.accessToken?.trim() ?? payload.data?.access_token?.trim() ?? payload.data?.accessToken?.trim() ?? "";
 }
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/oauth/providers/zaiProviderAdapter.ts
+// ../account-patch-baseline-20261112/packages/services/src/oauth/providers/zaiProviderAdapter.ts
 import { Buffer as Buffer3 } from "node:buffer";
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/providers/zaiBusinessTokenResolver.ts
+// ../account-patch-baseline-20261112/packages/services/src/providers/zaiBusinessTokenResolver.ts
 var ZAI_BUSINESS_TOKEN_REFRESH_SKEW_MS = 5 * 60 * 1e3;
 var ZaiBusinessTokenResolver = class {
   apiClient;
@@ -41045,7 +41045,7 @@ function isSuccessfulZaiBusinessCode(code) {
   return false;
 }
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/oauth/providers/zaiProviderAdapter.ts
+// ../account-patch-baseline-20261112/packages/services/src/oauth/providers/zaiProviderAdapter.ts
 var OAUTH_USERINFO_TIMEOUT_MS2 = 6e4;
 var ZAI_BUSINESS_TOKEN_TIMEOUT_MS = 1e4;
 var log4 = createServiceLogger("zaiOAuth");
@@ -41337,7 +41337,7 @@ function readLinkedBigModel(value2) {
   return { customerId, accessToken };
 }
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/oauth/providers/index.ts
+// ../account-patch-baseline-20261112/packages/services/src/oauth/providers/index.ts
 function createOAuthProviderAdapters(config2, options2 = {}) {
   const adapters = [];
   const apiClient = options2.apiClient;
@@ -41362,7 +41362,7 @@ function createOAuthProviderAdapters(config2, options2 = {}) {
   return adapters;
 }
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/oauth/runtimeConfig.ts
+// ../account-patch-baseline-20261112/packages/services/src/oauth/runtimeConfig.ts
 function createOAuthRuntimeConfig(env = process.env) {
   return {
     providers: [
@@ -41373,12 +41373,13 @@ function createOAuthRuntimeConfig(env = process.env) {
   };
 }
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/oauth/oauthService.ts
+// ../account-patch-baseline-20261112/packages/services/src/oauth/oauthService.ts
 var OAUTH_TIMEOUT_MS = 5 * 60 * 1e3;
 var OAUTH_PROFILE_TIMEOUT_MS = 1e4;
 var COMPLETED_POLLING_STATE_GRACE_MS = 30 * 1e3;
 var OAUTH_REFRESH_LOCK_MAX_WAIT_MS = 45e3;
 var OAUTH_REFRESH_NETWORK_TIMEOUT_MS = 3e4;
+var OAUTH_REFRESH_LOCK_SCHEMA_VERSION = 1;
 var OAUTH_REFRESH_DISPATCH_STATE_VERSION = 1;
 var ZCODE_JWT_TOKEN_KEY2 = "zcodejwttoken";
 var log5 = (...args) => console.log(formatLogPrefix("oauthService", process.pid), ...args);
@@ -41390,7 +41391,9 @@ function fingerprint2(value2) {
   return createHash4("sha256").update(value2).digest("hex");
 }
 function resolveOAuthRefreshLockBasePath(credentialsFilePath, provider, profileId) {
-  const scope = fingerprint2(JSON.stringify([credentialsFilePath, provider, profileId])).slice(
+  const scope = fingerprint2(
+    JSON.stringify([OAUTH_REFRESH_LOCK_SCHEMA_VERSION, credentialsFilePath, provider, profileId])
+  ).slice(
     0,
     24
   );
@@ -42616,7 +42619,7 @@ function createOAuthService(credentialService, dependencies = {}) {
   });
 }
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/providers/sourceHeaders.ts
+// ../account-patch-baseline-20261112/packages/services/src/providers/sourceHeaders.ts
 import { readFileSync as readFileSync3 } from "node:fs";
 import { version as readOsVersion } from "node:os";
 import { join as join10 } from "node:path";
@@ -42672,7 +42675,7 @@ function buildZCodeSourceHeaders(options2 = {}) {
   });
 }
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/providers/api/requestIdHeaders.ts
+// ../account-patch-baseline-20261112/packages/services/src/providers/api/requestIdHeaders.ts
 var REQUEST_ID_HEADER_NAME = "x-request-id";
 function withRequestIdHeader(headers) {
   const next = new Headers(headers);
@@ -42682,7 +42685,7 @@ function withRequestIdHeader(headers) {
   return next;
 }
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/providers/api/nodeApiClient.ts
+// ../account-patch-baseline-20261112/packages/services/src/providers/api/nodeApiClient.ts
 var log6 = createServiceLogger("node-api-client");
 var DEFAULT_BUSINESS_UNAUTHORIZED_OBSERVATION_TIMEOUT_MS = 1e3;
 var MAX_BUSINESS_UNAUTHORIZED_OBSERVATION_BYTES = 64 * 1024;
@@ -43006,7 +43009,7 @@ function createNodeApiClient(options2 = {}) {
   return new NodeApiClient(options2);
 }
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/model-provider/accountProviderApiClient.ts
+// ../account-patch-baseline-20261112/packages/services/src/model-provider/accountProviderApiClient.ts
 function isSuccessfulRemoteCode(code) {
   if (code === null || code === void 0) {
     return true;
@@ -43033,14 +43036,14 @@ var AccountProviderApiClient = class {
   }
 };
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/providers/api/apiEndpoints.ts
+// ../account-patch-baseline-20261112/packages/services/src/providers/api/apiEndpoints.ts
 var ZCODE_CLIENT_SCENES_URL = buildRuntimeZCodeApiUrl(
   process.env,
   "/api/v1/client/scenes"
 );
 var ZAI_API_HOST = resolveZaiBusinessBaseUrl(process.env);
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/model-provider/accountProviderApiKeyResolver.ts
+// ../account-patch-baseline-20261112/packages/services/src/model-provider/accountProviderApiKeyResolver.ts
 var log7 = createServiceLogger("account-project-token-resolver");
 var AccountProviderApiKeyResolver = class {
   tokenClient;
@@ -43069,7 +43072,7 @@ var AccountProviderApiKeyResolver = class {
   }
 };
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/model-provider/accountProviderCredentialService.ts
+// ../account-patch-baseline-20261112/packages/services/src/model-provider/accountProviderCredentialService.ts
 var log8 = createServiceLogger("account-project-token");
 function createAccountProviderCredentialService(options2) {
   const pending = /* @__PURE__ */ new Map();
@@ -43108,7 +43111,7 @@ function createAccountProviderCredentialService(options2) {
   };
 }
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/model-provider/accountProviderRequestAuthService.ts
+// ../account-patch-baseline-20261112/packages/services/src/model-provider/accountProviderRequestAuthService.ts
 import { createHash as createHash5 } from "node:crypto";
 var AccountRequestCredentialUnavailableError = class extends Error {
   constructor(providerId) {
@@ -43199,7 +43202,7 @@ function createAccountProviderRequestAuthService(options2) {
   return new AccountProviderRequestAuthService(options2);
 }
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/model-provider/accountProjectTokenClient.ts
+// ../account-patch-baseline-20261112/packages/services/src/model-provider/accountProjectTokenClient.ts
 var PROJECT_TOKEN_REQUEST_TIMEOUT_MS = 15e3;
 var log9 = createServiceLogger("project-access-token");
 function createAccountProjectTokenClient(apiClient, credentialService) {
@@ -43244,7 +43247,7 @@ function createAccountProjectTokenClient(apiClient, credentialService) {
   });
 }
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/model-provider/accountProviderTeamPlanRequestKey.ts
+// ../account-patch-baseline-20261112/packages/services/src/model-provider/accountProviderTeamPlanRequestKey.ts
 var log10 = createServiceLogger("account-provider-team-plan-request-key");
 var TEAM_PLAN_RUNTIME_KEY_REQUEST_TIMEOUT_MS = 15e3;
 async function resolveAccountTeamPlanRuntimeMaterial(params) {
@@ -43290,7 +43293,7 @@ async function resolveAccountTeamPlanRuntimeMaterial(params) {
   return result;
 }
 
-// ../companion-runtime-validation-20261111/source/packages/services/src/model-provider/oauthProviderRuntimeAuthService.ts
+// ../account-patch-baseline-20261112/packages/services/src/model-provider/oauthProviderRuntimeAuthService.ts
 var BIGMODEL_PROVIDER_ID3 = "bigmodel";
 var ZAI_PROVIDER_ID3 = "zai";
 function createOAuthProviderRuntimeAuthService(options2) {

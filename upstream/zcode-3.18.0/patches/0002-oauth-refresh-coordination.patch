@@ -19,7 +19,7 @@ index 476c289d..01485330 100644
      async inspectStore() {
        const file = getCredentialsFile();
 diff --git a/packages/services/src/oauth/oauthService.ts b/packages/services/src/oauth/oauthService.ts
-index d52599f0..38b49b61 100644
+index d52599f0..747d2c52 100644
 --- a/packages/services/src/oauth/oauthService.ts
 +++ b/packages/services/src/oauth/oauthService.ts
 @@ -1,5 +1,7 @@
@@ -49,17 +49,18 @@ index d52599f0..38b49b61 100644
  import { createServiceLogger } from "../logger/serviceLogger.js";
  import { readApiJson } from "../providers/api/apiJson.js";
  import type { IOAuthService } from "./oauth.js";
-@@ -50,6 +59,9 @@ import {
+@@ -50,6 +59,10 @@ import {
  const OAUTH_TIMEOUT_MS = 5 * 60 * 1000;
  const OAUTH_PROFILE_TIMEOUT_MS = 10_000;
  const COMPLETED_POLLING_STATE_GRACE_MS = 30 * 1000;
 +const OAUTH_REFRESH_LOCK_MAX_WAIT_MS = 45_000;
 +const OAUTH_REFRESH_NETWORK_TIMEOUT_MS = 30_000;
++const OAUTH_REFRESH_LOCK_SCHEMA_VERSION = 1;
 +const OAUTH_REFRESH_DISPATCH_STATE_VERSION = 1;
  const ZCODE_JWT_TOKEN_KEY = "zcodejwttoken";
  const log = (...args: unknown[]) =>
    console.log(formatLogPrefix("oauthService", process.pid), ...args);
-@@ -88,12 +100,95 @@ interface OAuthServiceDependencies {
+@@ -88,12 +101,97 @@ interface OAuthServiceDependencies {
    monotonicNow?: () => number;
    env?: NodeJS.ProcessEnv;
    onProviderLogout?: (provider: OAuthProviderId, accountIdentity?: string | null) => Promise<void>;
@@ -99,7 +100,9 @@ index d52599f0..38b49b61 100644
 +  provider: OAuthProviderId,
 +  profileId: string,
 +): string {
-+  const scope = fingerprint(JSON.stringify([credentialsFilePath, provider, profileId])).slice(
++  const scope = fingerprint(
++    JSON.stringify([OAUTH_REFRESH_LOCK_SCHEMA_VERSION, credentialsFilePath, provider, profileId]),
++  ).slice(
 +    0,
 +    24,
 +  );
@@ -155,7 +158,7 @@ index d52599f0..38b49b61 100644
  function isUnknownRecord(value: unknown): value is Record<string, unknown> {
    return typeof value === "object" && value !== null;
  }
-@@ -137,6 +232,10 @@ export class OAuthService implements IOAuthService {
+@@ -137,6 +235,10 @@ export class OAuthService implements IOAuthService {
    ) => Promise<void>;
    private readonly apiClient?: ApiClient;
    private readonly env: NodeJS.ProcessEnv;
@@ -166,7 +169,7 @@ index d52599f0..38b49b61 100644
    private readonly profileRefreshes = new Map<string, Promise<OAuthAccountAvailability>>();
    private pendingState: PendingState | null = null;
    private oauthFlowStartGeneration = 0;
-@@ -161,6 +260,14 @@ export class OAuthService implements IOAuthService {
+@@ -161,6 +263,14 @@ export class OAuthService implements IOAuthService {
      this.onProviderLogout = dependencies.onProviderLogout;
      this.apiClient = dependencies.apiClient;
      this.env = dependencies.env ?? process.env;
@@ -181,7 +184,7 @@ index d52599f0..38b49b61 100644
  
      const adapters =
        dependencies.adapters ??
-@@ -1183,38 +1290,289 @@ export class OAuthService implements IOAuthService {
+@@ -1183,38 +1293,289 @@ export class OAuthService implements IOAuthService {
        );
      }
  
@@ -504,25 +507,14 @@ index 1d42b988..9ac45cde 100644
  }
  
  /** OAuth provider 适配器：隔离协议差异 */
-diff --git a/scripts/engineering-test-files.json b/scripts/engineering-test-files.json
-index f468610a..671ee8ca 100644
---- a/scripts/engineering-test-files.json
-+++ b/scripts/engineering-test-files.json
-@@ -159,6 +159,7 @@
-   "packages/desktop/test/windowsInstallerNshSmoke.test.ts",
-   "packages/desktop/test/windowsInstallerPreserveFiles.test.ts",
-   "packages/plugin-api/test/version.test.ts",
-+  "packages/services/test/oauthRefreshCoordination.test.ts",
-   "packages/server/test/remoteOfficialPluginAssets.test.ts",
-   "packages/server/test/tsupConfig.test.ts",
-   "packages/web/test/viteConfigLoad.test.ts",
 diff --git a/packages/services/test/fixtures/oauth-refresh-coordination-child.ts b/packages/services/test/fixtures/oauth-refresh-coordination-child.ts
 new file mode 100644
-index 00000000..8ce3a179
+index 00000000..c2aaedf4
 --- /dev/null
 +++ b/packages/services/test/fixtures/oauth-refresh-coordination-child.ts
-@@ -0,0 +1,127 @@
-+import { join } from "node:path";
+@@ -0,0 +1,130 @@
++import { readdirSync } from "node:fs";
++import { dirname, join } from "node:path";
 +import type { ApiClient, OAuthProviderAdapter, OAuthTokenSet } from "@zcode/shared";
 +import { createSystemCredentialCipher } from "@zcode/shared/credential-security";
 +import { createCredentialService } from "../../src/credential/credentialService.js";
@@ -597,7 +589,9 @@ index 00000000..8ce3a179
 +      adapters: [adapter],
 +      onRefreshWaitStarted: () => process.send?.({ type: "waiting" }),
 +      onRefreshLockAcquired: async () => {
-+        process.send?.({ type: "lock-acquired" });
++        const lockName = readdirSync(dirname(credentialsFilePath)).find((name) =>
++          name.startsWith("credentials.json.oauth-refresh-"));
++        process.send?.({ type: "lock-acquired", lockName });
 +        if (config.mode === "hold-lock") {
 +          process.send?.({ type: "lock-held" });
 +          await new Promise(() => {
@@ -651,11 +645,12 @@ index 00000000..8ce3a179
 +}
 diff --git a/packages/services/test/oauthRefreshCoordination.test.ts b/packages/services/test/oauthRefreshCoordination.test.ts
 new file mode 100644
-index 00000000..d1635eee
+index 00000000..79238dc6
 --- /dev/null
 +++ b/packages/services/test/oauthRefreshCoordination.test.ts
-@@ -0,0 +1,637 @@
+@@ -0,0 +1,669 @@
 +import { fork, type ChildProcess } from "node:child_process";
++import { createHash } from "node:crypto";
 +import { mkdir, mkdtemp, rm } from "node:fs/promises";
 +import { createServer, type Server } from "node:http";
 +import { join } from "node:path";
@@ -712,7 +707,7 @@ index 00000000..d1635eee
 +
 +type ChildMessage =
 +  | ChildError
-+  | { type: "lock-acquired" }
++  | { type: "lock-acquired"; lockName?: string }
 +  | { type: "lock-held" }
 +  | { type: "ready" }
 +  | { result: ChildResult; type: "result" }
@@ -937,6 +932,37 @@ index 00000000..d1635eee
 +  });
 +  return { credentialService, dataBaseDir };
 +}
++
++it("binds the refresh lock scope to the lock schema version", async () => {
++  const server = new SyntheticRefreshServer();
++  await server.start();
++  const profile = await createSignedInProfile({ baseDirName: "versioned-lock" });
++  const owner = spawnChild({
++    dataBaseDir: profile.dataBaseDir,
++    mode: "hold-lock",
++    refreshLockMaxWaitMs: 2_000,
++    refreshUrl: server.url,
++  });
++  await owner.start();
++  const acquired = await owner.next("lock-acquired");
++  const credentialsFilePath = join(
++    profile.dataBaseDir,
++    ".zcode",
++    "v2",
++    "credentials.json",
++  );
++  const scope = createHash("sha256")
++    .update(JSON.stringify([1, credentialsFilePath, "zai", "alice"]))
++    .digest("hex")
++    .slice(0, 24);
++  expect(acquired.lockName).toContain(`credentials.json.oauth-refresh-${scope}`);
++  expect(acquired.lockName).not.toContain(
++    createHash("sha256")
++      .update(JSON.stringify([credentialsFilePath, "zai", "alice"]))
++      .digest("hex")
++      .slice(0, 24),
++  );
++}, 30_000);
 +
 +function spawnChild(config: ChildConfig): ChildHarness {
 +  const child = fork(CHILD_DRIVER, [JSON.stringify(config)], {
@@ -1292,3 +1318,15 @@ index 00000000..d1635eee
 +    revision: "revision-alice-newer",
 +  });
 +}, 30_000);
+diff --git a/scripts/engineering-test-files.json b/scripts/engineering-test-files.json
+index f468610a..671ee8ca 100644
+--- a/scripts/engineering-test-files.json
++++ b/scripts/engineering-test-files.json
+@@ -159,6 +159,7 @@
+   "packages/desktop/test/windowsInstallerNshSmoke.test.ts",
+   "packages/desktop/test/windowsInstallerPreserveFiles.test.ts",
+   "packages/plugin-api/test/version.test.ts",
++  "packages/services/test/oauthRefreshCoordination.test.ts",
+   "packages/server/test/remoteOfficialPluginAssets.test.ts",
+   "packages/server/test/tsupConfig.test.ts",
+   "packages/web/test/viteConfigLoad.test.ts",

@@ -26,8 +26,8 @@
     {
       "order": 2,
       "path": "upstream/zcode-3.18.0/patches/0002-oauth-refresh-coordination.patch",
-      "bytes": 48063,
-      "sha256": "8407272ECC70A03DCB527A24CEDAD96020BC436F28625A07CD3F0A541944130C",
+      "bytes": 49456,
+      "sha256": "7AD85F0403CFA6AE55DAFDACE79FBB26C8970E758CEBE2496C4344A2108C651F",
       "purpose": "Coordinate official OAuth token refresh across processes with a profile-scoped lock, lock-time reread, single network dispatch, atomic publish, and expected-snapshot CAS."
     },
     {
@@ -153,8 +153,8 @@
     {
       "path": "official-host-runtime.mjs",
       "role": "self-contained official ProcessManager, protocol client, and StdioTransport module",
-      "bytes": 1821758,
-      "sha256": "B74F6AF1F7D41BE8ECAB87D1841C259E66239B517A464D8DE24B200199D22343",
+      "bytes": 1821168,
+      "sha256": "3F481AAE16EFF9912DAF17178B49491BD64E67C4419BFFDB59EB4B78E85EB537",
       "license": "ZCode project and third-party terms"
     },
     {

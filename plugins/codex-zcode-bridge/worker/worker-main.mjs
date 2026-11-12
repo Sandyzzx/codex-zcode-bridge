@@ -4235,10 +4235,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path10) {
-  if (!path10)
+function getElementAtPath(obj, path11) {
+  if (!path11)
     return obj;
-  return path10.reduce((acc, key) => acc?.[key], obj);
+  return path11.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -4497,11 +4497,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path10, issues) {
+function prefixIssues(path11, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path10);
+    iss.path.unshift(path11);
     return iss;
   });
 }
@@ -5022,16 +5022,16 @@ function flattenError(error62, mapper = (issue2) => issue2.message) {
 }
 function formatError(error62, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error63, path10 = []) => {
+  const processError = (error63, path11 = []) => {
     for (const issue2 of error63.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path10, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path11, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path10, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path11, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path10, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path11, ...issue2.path]);
       } else {
-        const fullpath = [...path10, ...issue2.path];
+        const fullpath = [...path11, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -5070,17 +5070,17 @@ function formatError(error62, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error62, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error63, path10 = []) => {
+  const processError = (error63, path11 = []) => {
     var _a3;
     for (const issue2 of error63.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path10, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path11, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path10, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path11, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path10, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path11, ...issue2.path]);
       } else {
-        const fullpath = [...path10, ...issue2.path];
+        const fullpath = [...path11, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -5119,8 +5119,8 @@ function treeifyError(error62, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path10 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path10) {
+  const path11 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path11) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -23116,13 +23116,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path10 = ref.slice(1).split("/").filter(Boolean);
-  if (path10.length === 0) {
+  const path11 = ref.slice(1).split("/").filter(Boolean);
+  if (path11.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path10[0] === defsKey) {
-    const key = path10[1] === void 0 ? void 0 : decodeJSONPointerSegment(path10[1]);
+  if (path11[0] === defsKey) {
+    const key = path11[1] === void 0 ? void 0 : decodeJSONPointerSegment(path11[1]);
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -25362,6 +25362,10 @@ var init_load_backend = __esm({
 });
 
 // src/adapters/zcode-app-server-adapter.ts
+var zcode_app_server_adapter_exports = {};
+__export(zcode_app_server_adapter_exports, {
+  ZCodeAppServerAdapter: () => ZCodeAppServerAdapter
+});
 import { spawn as spawn3 } from "node:child_process";
 import { homedir as homedir3 } from "node:os";
 import path8 from "node:path";
@@ -25522,14 +25526,14 @@ function readEffectiveReasoningLevel(snapshot) {
   const level = thoughtLevel.current;
   return typeof level === "string" && level.trim() ? level.trim() : null;
 }
-function nestedString(record3, path10) {
+function nestedString(record3, path11) {
   let value = record3;
-  for (const part of path10) value = asRecord2(value)[part];
+  for (const part of path11) value = asRecord2(value)[part];
   return typeof value === "string" ? value : null;
 }
-function nestedNumber(record3, path10) {
+function nestedNumber(record3, path11) {
   let value = record3;
-  for (const part of path10) value = asRecord2(value)[part];
+  for (const part of path11) value = asRecord2(value)[part];
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 function asRecord2(value) {
@@ -27058,7 +27062,9 @@ var init_zcode_app_server_adapter = __esm({
               };
               const sessionId = typeof params.sessionId === "string" ? params.sessionId : "";
               const turnId = typeof params.turnId === "string" ? params.turnId : null;
-              if (!entry.acceptingTurn || !entry.sessionId || sessionId !== entry.sessionId || turnId !== null && (!entry.turnId || turnId !== entry.turnId) || entry.abort.signal.aborted) {
+              const modelId = typeof selection.modelId === "string" ? selection.modelId : "";
+              const selected = entry.selectedModelSelection;
+              if (!entry.acceptingTurn || !entry.sessionId || sessionId !== entry.sessionId || turnId !== null && (!entry.turnId || turnId !== entry.turnId) || typeof selection.providerId === "string" && selection.providerId !== providerId || typeof params.providerId === "string" && params.providerId !== providerId || !modelId || !selected || selected.providerId !== providerId || selected.modelId !== modelId || entry.abort.signal.aborted) {
                 replySafely({ headersApplied: false, errorMessage: "Provider runtime identity is not verified." });
                 return;
               }
@@ -28068,8 +28074,8 @@ async function verifyOfficialHostAssets(workerModuleUrl = import.meta.url) {
     manifestDigest
   };
 }
-async function loadOfficialHostModule(modulePath) {
-  return resolveOfficialHostModule(await import(pathToFileURL2(modulePath).href));
+async function loadOfficialHostModule(modulePath2) {
+  return resolveOfficialHostModule(await import(pathToFileURL2(modulePath2).href));
 }
 async function resolveOfficialHostModule(source) {
   const value = typeof source === "function" ? await source() : source;
@@ -28136,8 +28142,8 @@ var init_official_host_adapter = __esm({
     OFFICIAL_HOST_ASSETS = {
       hostModule: {
         relativePath: "official-host-runtime.mjs",
-        bytes: 1821758,
-        sha256: "B74F6AF1F7D41BE8ECAB87D1841C259E66239B517A464D8DE24B200199D22343"
+        bytes: 1821168,
+        sha256: "3F481AAE16EFF9912DAF17178B49491BD64E67C4419BFFDB59EB4B78E85EB537"
       },
       appServerEntry: {
         relativePath: "app-server/zcode.cjs",
@@ -28524,6 +28530,8 @@ init_result_contract();
 import { createHash as createHash8, randomUUID as randomUUID3 } from "node:crypto";
 import { closeSync as closeSync2, createWriteStream, readFileSync as readFileSync5, writeFileSync, writeSync } from "node:fs";
 import { Socket } from "node:net";
+import path10 from "node:path";
+import { fileURLToPath as fileURLToPath4 } from "node:url";
 
 // src/runtime/build-provenance.ts
 import { createHash } from "node:crypto";
@@ -28531,8 +28539,8 @@ import { readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 var BRIDGE_WORKER_LAUNCH_MARKER = "--zcode-bridge-launch-v1";
 function verifyWorkerProvenance(input2) {
-  const { bridgeLaunchMarker: bridgeLaunchMarker2, rawEnvelope, actualWorker } = input2;
-  if (rawEnvelope === void 0 && !bridgeLaunchMarker2) {
+  const { bridgeLaunchMarker, rawEnvelope, actualWorker } = input2;
+  if (rawEnvelope === void 0 && !bridgeLaunchMarker) {
     return {
       status: "unverified",
       expected: null,
@@ -28670,70 +28678,93 @@ var StartPlanSecretRedactor = class {
 
 // src/worker/worker-main.ts
 init_account_provider();
+
+// src/worker/production-adapter-selection.ts
+function selectProductionAdapter(platform = process.platform, architecture = process.arch) {
+  if (platform === "win32" && architecture === "x64") return "official_host";
+  if ((platform === "linux" || platform === "darwin") && (architecture === "x64" || architecture === "arm64")) {
+    return "direct_app_server";
+  }
+  const error62 = new Error(
+    `The Bridge Worker does not support ${platform}/${architecture}.`
+  );
+  error62.code = "unsupported_worker_platform";
+  throw error62;
+}
+
+// src/worker/worker-main.ts
 var MAX_NODE_TIMER_DELAY_MS = 2147483647;
-var workerArgs = process.argv.slice(2);
-var bridgeLaunchMarker = workerArgs.at(-1) === BRIDGE_WORKER_LAUNCH_MARKER;
-var interactionMode = workerArgs.includes("--bridge-sqlite-interaction-v1");
-var privateAuthMode = workerArgs.includes("--bridge-sqlite-private-auth-v1");
-var dropAfterPrepared = workerArgs.includes("--bridge-sqlite-interaction-drop-after-prepared-v1");
-var positionalArgs = bridgeLaunchMarker ? workerArgs.slice(0, -1).filter((argument) => argument !== "--bridge-sqlite-interaction-v1" && argument !== "--bridge-sqlite-interaction-drop-after-prepared-v1" && argument !== "--bridge-sqlite-private-auth-v1") : workerArgs;
-if (bridgeLaunchMarker && positionalArgs.length === 0) {
-  let claimOnlyStage = "start";
-  let interactionStreamsCreated = false;
-  const writeFatalDiagnostic = (origin, error62) => {
-    const message = error62 instanceof Error ? `${error62.name}: ${error62.message}` : String(error62);
-    const frames = error62 instanceof Error && typeof error62.stack === "string" ? error62.stack.split("\n").slice(1, 6).join("\n") : "";
-    writeDiagnostic(`[bridge-worker] fatal ${origin} at ${claimOnlyStage}: ${message.slice(0, 300)}
+async function runWorkerMain(dependencies = {}, workerArgs = process.argv.slice(2)) {
+  const bridgeLaunchMarker = workerArgs.at(-1) === BRIDGE_WORKER_LAUNCH_MARKER;
+  const interactionMode = workerArgs.includes("--bridge-sqlite-interaction-v1");
+  const privateAuthMode = workerArgs.includes("--bridge-sqlite-private-auth-v1");
+  const dropAfterPrepared = workerArgs.includes("--bridge-sqlite-interaction-drop-after-prepared-v1");
+  const positionalArgs = bridgeLaunchMarker ? workerArgs.slice(0, -1).filter((argument) => argument !== "--bridge-sqlite-interaction-v1" && argument !== "--bridge-sqlite-interaction-drop-after-prepared-v1" && argument !== "--bridge-sqlite-private-auth-v1") : workerArgs;
+  if (bridgeLaunchMarker && positionalArgs.length === 0) {
+    let claimOnlyStage = "start";
+    let interactionStreamsCreated = false;
+    const writeFatalDiagnostic = (origin, error62) => {
+      const message = error62 instanceof Error ? `${error62.name}: ${error62.message}` : String(error62);
+      const frames = error62 instanceof Error && typeof error62.stack === "string" ? error62.stack.split("\n").slice(1, 6).join("\n") : "";
+      writeDiagnostic(`[bridge-worker] fatal ${origin} at ${claimOnlyStage}: ${message.slice(0, 300)}
 ${frames.slice(0, 1200)}
 `);
-  };
-  const reallyExit = process.reallyExit.bind(process);
-  process.on("exit", (code) => {
-    writeDiagnostic(`[bridge-worker] exit code=${String(code)}
+    };
+    const reallyExit = process.reallyExit.bind(process);
+    process.on("exit", (code) => {
+      writeDiagnostic(`[bridge-worker] exit code=${String(code)}
 `);
-  });
-  process.on("uncaughtException", (error62) => {
-    writeFatalDiagnostic("uncaught_exception", error62);
-    reallyExit(1);
-  });
-  process.on("unhandledRejection", (reason) => {
-    writeFatalDiagnostic("unhandled_rejection", reason);
-    reallyExit(1);
-  });
-  try {
-    if (dropAfterPrepared && !interactionMode) throw new Error("interaction test mode required");
-    await runClaimOnlyHandshake({ interactionMode, privateAuthMode, dropAfterPrepared, onStage: (stage) => {
-      claimOnlyStage = stage;
-      if (interactionMode) writeDiagnostic(`[bridge-worker] claim-only stage=${stage}
+    });
+    process.on("uncaughtException", (error62) => {
+      writeFatalDiagnostic("uncaught_exception", error62);
+      reallyExit(1);
+    });
+    process.on("unhandledRejection", (reason) => {
+      writeFatalDiagnostic("unhandled_rejection", reason);
+      reallyExit(1);
+    });
+    try {
+      if (dropAfterPrepared && !interactionMode) throw new Error("interaction test mode required");
+      await runClaimOnlyHandshake({
+        interactionMode,
+        privateAuthMode,
+        dropAfterPrepared,
+        dependencies,
+        onStage: (stage) => {
+          claimOnlyStage = stage;
+          if (interactionMode) writeDiagnostic(`[bridge-worker] claim-only stage=${stage}
 `);
-    }, onInteractionStreamsCreated: () => {
-      interactionStreamsCreated = true;
-    } });
-    process.exitCode = 0;
-  } catch (error62) {
-    if (interactionMode && !interactionStreamsCreated) {
-      for (const fd of [7, 8, 9]) {
+        },
+        onInteractionStreamsCreated: () => {
+          interactionStreamsCreated = true;
+        }
+      });
+      process.exitCode = 0;
+    } catch (error62) {
+      if (interactionMode && !interactionStreamsCreated) {
+        for (const fd of [7, 8, 9]) {
+          try {
+            closeSync2(fd);
+          } catch {
+          }
+        }
+      }
+      if (privateAuthMode) for (const fd of [10, 11, 12, 13]) {
         try {
           closeSync2(fd);
         } catch {
         }
       }
-    }
-    if (privateAuthMode) for (const fd of [10, 11, 12, 13]) {
-      try {
-        closeSync2(fd);
-      } catch {
-      }
-    }
-    const failureCode = error62 && typeof error62 === "object" && "code" in error62 && typeof error62.code === "string" ? error62.code : "unclassified";
-    writeDiagnostic(`[bridge-worker] claim-only handshake rejected${interactionMode ? ` at ${claimOnlyStage} code=${failureCode}` : ""}
+      const failureCode = error62 && typeof error62 === "object" && "code" in error62 && typeof error62.code === "string" ? error62.code : "unclassified";
+      writeDiagnostic(`[bridge-worker] claim-only handshake rejected${interactionMode ? ` at ${claimOnlyStage} code=${failureCode}` : ""}
 `);
-    process.exitCode = 3;
+      process.exitCode = 3;
+    }
+    process.exit(process.exitCode ?? 0);
+  } else {
+    console.error("usage: Worker requires the SQLite private lifecycle channels");
+    process.exit(2);
   }
-  process.exit(process.exitCode ?? 0);
-} else {
-  console.error("usage: Worker requires the SQLite private lifecycle channels");
-  process.exit(2);
 }
 async function runClaimOnlyHandshake(options) {
   options.onStage?.("provenance verification");
@@ -28850,7 +28881,13 @@ async function runClaimOnlyHandshake(options) {
   }
   try {
     options.onStage?.(execution.adapter_mode === "test_fake" ? "test adapter start" : "zcode adapter start");
-    const resultFrame = execution.adapter_mode === "test_fake" ? await runExplicitFakeAdapter(bootstrap, execution, candidateInteraction) : await runZCodeAdapter(bootstrap, execution, candidateInteraction, options.privateAuthMode ? identity : void 0);
+    const resultFrame = execution.adapter_mode === "test_fake" ? await runExplicitFakeAdapter(bootstrap, execution, candidateInteraction) : await runZCodeAdapter(
+      bootstrap,
+      execution,
+      candidateInteraction,
+      options.privateAuthMode ? identity : void 0,
+      options.dependencies
+    );
     options.onStage?.("adapter result frame prepared");
     writePrivateFrame2(6, resultFrame, prepareWorkerResultFrameParts(resultFrame));
     options.onStage?.("adapter result frame written");
@@ -28890,12 +28927,13 @@ async function runExplicitFakeAdapter(bootstrap, execution, interaction) {
   const { executeFakeResultAdapter: executeFakeResultAdapter2 } = await Promise.resolve().then(() => (init_fake_result_adapter(), fake_result_adapter_exports));
   return executeFakeResultAdapter2(bootstrap);
 }
-async function runZCodeAdapter(bootstrap, execution, interaction, workerIdentity) {
+async function runZCodeAdapter(bootstrap, execution, interaction, workerIdentity, dependencies = {}) {
   if (execution.adapter_mode !== "zcode_app_server") throw new Error("real ZCode Adapter mode is required");
   const {
     OfficialHostAdapter: OfficialHostAdapter2,
     loadOfficialHostProviderRuntimeAuthFactory: loadOfficialHostProviderRuntimeAuthFactory2
   } = await Promise.resolve().then(() => (init_official_host_adapter(), official_host_adapter_exports));
+  const { ZCodeAppServerAdapter: ZCodeAppServerAdapter2 } = await Promise.resolve().then(() => (init_zcode_app_server_adapter(), zcode_app_server_adapter_exports));
   const { buildTaskResult: buildTaskResult2 } = await Promise.resolve().then(() => (init_normalize(), normalize_exports));
   const startedAt = (/* @__PURE__ */ new Date()).toISOString();
   let outcome = null;
@@ -29072,6 +29110,11 @@ async function runZCodeAdapter(bootstrap, execution, interaction, workerIdentity
     });
     if (signal.aborted) return unavailable();
     const providerId = typeof request.providerId === "string" ? request.providerId : "";
+    const modelSelection = asRecord4(request.modelSelection);
+    const modelId = typeof modelSelection.modelId === "string" ? modelSelection.modelId : "";
+    if (!providerId || !modelId || typeof modelSelection.providerId === "string" && modelSelection.providerId !== providerId || execution.task.model?.provider_id !== providerId || execution.task.model.model_id !== modelId) {
+      return unavailable();
+    }
     const facts = accountProviderRuleFacts(providerId, config2);
     const access = asRecord4(request.accountAccess);
     if (!facts?.accountType || facts.planKind !== "individual-coding-plan" || access.type !== "zhipu-account" || access.accountType !== facts.accountType || access.mode !== facts.planKind || access.entitled !== true) {
@@ -29102,7 +29145,7 @@ async function runZCodeAdapter(bootstrap, execution, interaction, workerIdentity
     }
     return (await service).resolveProviderRuntimeRequest(request, { signal });
   };
-  const adapter = new OfficialHostAdapter2({
+  const adapterOptions = {
     host: execution.host_profile,
     // Manager resolved this attempt's effective budget before dispatch.
     timeoutMs: execution.task.timeout_ms,
@@ -29118,10 +29161,12 @@ async function runZCodeAdapter(bootstrap, execution, interaction, workerIdentity
 `);
     },
     executionProfileId: execution.execution_profile_id,
+    ...dependencies.testOnlyProbe ? { probe: dependencies.testOnlyProbe } : {},
+    ...dependencies.testOnlyVerifyTreeClean ? { verifyTreeClean: dependencies.testOnlyVerifyTreeClean } : {},
     ...execution.private_auth ? { startPlanProviderEntitled: execution.private_auth.entitled } : {},
     resolveProviderRuntimeAuth,
     onEvent: (event) => {
-      if (!interactionMode) return;
+      if (!interaction) return;
       if (event.type === "cleanup_unverified") {
         const summary = event.summary;
         const reason = summary.startsWith("Managed browser cleanup") ? "browser_cleanup" : summary.includes("process_tree_root_exited") ? "root_exited_scan_unverified" : summary.includes("Identity-bound Windows process-tree cleanup receipt") ? "receipt_unavailable" : "unclassified";
@@ -29173,6 +29218,12 @@ async function runZCodeAdapter(bootstrap, execution, interaction, workerIdentity
       if (signal.aborted) return { action: "decline" };
       return (await interaction.acceptCommittedReply()).answer;
     } : void 0
+  };
+  const selectedAdapter = dependencies.testOnlyLegacyDirectAdapter ? "direct_app_server" : selectProductionAdapter();
+  const adapter = selectedAdapter === "direct_app_server" ? new ZCodeAppServerAdapter2(adapterOptions) : new OfficialHostAdapter2({
+    ...adapterOptions,
+    ...dependencies.testOnlyOfficialHostModule ? { testOnlyOfficialHostModule: dependencies.testOnlyOfficialHostModule } : {},
+    ...dependencies.testOnlyWorkerModuleUrl ? { testOnlyWorkerModuleUrl: dependencies.testOnlyWorkerModuleUrl } : {}
   });
   try {
     const workspace = {
@@ -29256,6 +29307,8 @@ function buildExecutionCleanupProof(outcome) {
     };
   }
   if (outcome?.cleanupVerified !== true || outcome.cleanupError) return null;
+  const adapterCleanup = buildAdapterCleanupEvidence(outcome.adapterCleanup);
+  if (!adapterCleanup) return null;
   if (!receipt) {
     const scan = outcome.cleanupTreeScan;
     if (!scan || !Number.isSafeInteger(scan.rootPid) || scan.rootPid < 1 || !scan.rootFingerprint || !/^[0-9a-f]{64}$/u.test(scan.evidenceDigest) || !Number.isSafeInteger(scan.observedMemberCount) || scan.observedMemberCount < 1) return null;
@@ -29269,7 +29322,8 @@ function buildExecutionCleanupProof(outcome) {
       adapter_start_fingerprint: scan.rootFingerprint,
       process_tree_scan_digest: scan.evidenceDigest,
       process_tree_member_count: scan.observedMemberCount,
-      managed_browser_cleanup_verified: true
+      managed_browser_cleanup_verified: true,
+      adapter_cleanup: adapterCleanup
     };
   }
   const root = receipt.members.find((member) => member.pid === receipt.rootPid);
@@ -29284,7 +29338,35 @@ function buildExecutionCleanupProof(outcome) {
     adapter_start_fingerprint: root.fingerprint,
     process_tree_receipt_digest: createHash8("sha256").update(JSON.stringify(receipt), "utf8").digest("hex"),
     process_tree_member_count: receipt.members.length,
-    managed_browser_cleanup_verified: true
+    managed_browser_cleanup_verified: true,
+    adapter_cleanup: adapterCleanup
+  };
+}
+function buildAdapterCleanupEvidence(value) {
+  if (!value || value.contract !== "adapter-cleanup-v1" || !value.close) return null;
+  const scanStatuses = /* @__PURE__ */ new Set(["verified", "live", "incomplete", "not_applicable"]);
+  const stages = /* @__PURE__ */ new Set([
+    "not_started",
+    "direct_close",
+    "official_manager_dispose",
+    "official_manager_dispose_all",
+    "official_manager_workspace_dispose"
+  ]);
+  const boundedToken = (item) => typeof item === "string" && item.length > 0 && item.length <= 120 && /^[A-Za-z][A-Za-z0-9_.:-]*$/u.test(item);
+  if (!["resolved", "rejected"].includes(value.close.status) || !stages.has(value.close.stage) || !value.close.treeScanStatus || !scanStatuses.has(value.close.treeScanStatus) || !value.treeScanStatus || !scanStatuses.has(value.treeScanStatus) || value.close.errorName !== void 0 && !boundedToken(value.close.errorName) || value.close.errorCode !== void 0 && !boundedToken(value.close.errorCode) || value.close.managerProcessCountAfter !== void 0 && (!Number.isSafeInteger(value.close.managerProcessCountAfter) || value.close.managerProcessCountAfter < 0) || value.close.stage.startsWith("official_") && !Number.isSafeInteger(value.close.managerProcessCountAfter)) {
+    return null;
+  }
+  return {
+    contract: "adapter-cleanup-v1",
+    close: {
+      status: value.close.status,
+      stage: value.close.stage,
+      ...value.close.errorName ? { errorName: value.close.errorName } : {},
+      ...value.close.errorCode ? { errorCode: value.close.errorCode } : {},
+      ...value.close.managerProcessCountAfter !== void 0 ? { managerProcessCountAfter: value.close.managerProcessCountAfter } : {},
+      treeScanStatus: value.close.treeScanStatus
+    },
+    treeScanStatus: value.treeScanStatus
   };
 }
 function requiredString(value, error62) {
@@ -29343,3 +29425,9 @@ function writePrivateFrame2(fd, value, encoded = JSON.stringify(value)) {
   writeFileSync(fd, "\n", "utf8");
   closeSync2(fd);
 }
+var invokedWorkerPath = process.argv[1] ? path10.resolve(process.argv[1]) : null;
+var modulePath = path10.resolve(fileURLToPath4(import.meta.url));
+if (invokedWorkerPath === modulePath) await runWorkerMain();
+export {
+  runWorkerMain
+};

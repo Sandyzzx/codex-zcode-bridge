@@ -2727,6 +2727,8 @@ async function finalizeClaimedWorkerCleanup(
             worker_tree_complete: true,
             operation_resources_complete: true,
             workspace_touched: false,
+            ...("adapter_cleanup" in executionCleanup
+              ? { adapter_cleanup: executionCleanup.adapter_cleanup } : {}),
           };
         } else {
           probeState = "incomplete";
@@ -2986,11 +2988,14 @@ function validateExecutionCleanupProof(value: unknown): CandidateExecutionCleanu
   }
   if (proof.source === "zcode_app_server_adapter" && proof.method === "verified_recorded_tree_scan") {
     if (Object.keys(proof).sort().join("|")
-      !== "adapter_process_id|adapter_start_fingerprint|complete|contract|managed_browser_cleanup_verified|method|process_tree_member_count|process_tree_scan_digest|source|workspace_retained"
+      !== "adapter_cleanup|adapter_process_id|adapter_start_fingerprint|complete|contract|managed_browser_cleanup_verified|method|process_tree_member_count|process_tree_scan_digest|source|workspace_retained"
       || !Number.isSafeInteger(proof.adapter_process_id) || Number(proof.adapter_process_id) < 1
       || typeof proof.adapter_start_fingerprint !== "string" || proof.adapter_start_fingerprint.length === 0
       || typeof proof.process_tree_scan_digest !== "string" || !/^[0-9a-f]{64}$/u.test(proof.process_tree_scan_digest)
-      || !Number.isSafeInteger(proof.process_tree_member_count) || Number(proof.process_tree_member_count) < 1) {
+      || !Number.isSafeInteger(proof.process_tree_member_count) || Number(proof.process_tree_member_count) < 1
+      || !validAdapterCleanupEvidence(proof.adapter_cleanup)
+      || proof.adapter_cleanup.treeScanStatus !== "verified"
+      || proof.adapter_cleanup.close.treeScanStatus !== "verified") {
       throw new LifecycleGateError("worker_cleanup_proof_invalid");
     }
     return proof as unknown as CandidateExecutionCleanupProof;
@@ -3005,13 +3010,14 @@ function validateExecutionCleanupProof(value: unknown): CandidateExecutionCleanu
       return proof as unknown as CandidateExecutionCleanupProof;
     }
     if (Object.keys(proof).sort().join("|")
-      !== "adapter_process_id|adapter_start_fingerprint|complete|contract|managed_browser_cleanup_verified|method|process_tree_member_count|process_tree_receipt_digest|source|workspace_retained"
+      !== "adapter_cleanup|adapter_process_id|adapter_start_fingerprint|complete|contract|managed_browser_cleanup_verified|method|process_tree_member_count|process_tree_receipt_digest|source|workspace_retained"
       || proof.method !== "identity_bound_windows_tree_cleanup"
       || !Number.isSafeInteger(proof.adapter_process_id) || Number(proof.adapter_process_id) < 1
       || typeof proof.adapter_start_fingerprint !== "string" || proof.adapter_start_fingerprint.length === 0
       || typeof proof.process_tree_receipt_digest !== "string"
       || !/^[0-9a-f]{64}$/u.test(proof.process_tree_receipt_digest)
-      || !Number.isSafeInteger(proof.process_tree_member_count) || Number(proof.process_tree_member_count) < 1) {
+      || !Number.isSafeInteger(proof.process_tree_member_count) || Number(proof.process_tree_member_count) < 1
+      || !validAdapterCleanupEvidence(proof.adapter_cleanup)) {
       throw new LifecycleGateError("worker_cleanup_proof_invalid");
     }
     return proof as unknown as CandidateExecutionCleanupProof;
@@ -3025,6 +3031,55 @@ function validateExecutionCleanupProof(value: unknown): CandidateExecutionCleanu
     return proof as unknown as CandidateExecutionCleanupProof;
   }
   throw new LifecycleGateError("worker_cleanup_proof_invalid");
+}
+
+function validAdapterCleanupEvidence(value: unknown): value is Readonly<{
+  readonly contract: "adapter-cleanup-v1";
+  readonly close: Readonly<{
+    readonly status: "resolved" | "rejected";
+    readonly stage: string;
+    readonly errorName?: string;
+    readonly errorCode?: string;
+    readonly managerProcessCountAfter?: number;
+    readonly treeScanStatus: "verified" | "live" | "incomplete" | "not_applicable";
+  }>;
+  readonly treeScanStatus: "verified" | "live" | "incomplete" | "not_applicable";
+}> {
+  const evidence = asRecord(value);
+  const close = asRecord(evidence.close);
+  const scanStatuses = new Set(["verified", "live", "incomplete", "not_applicable"]);
+  const stages = new Set([
+    "not_started",
+    "direct_close",
+    "official_manager_dispose",
+    "official_manager_dispose_all",
+    "official_manager_workspace_dispose",
+  ]);
+  const boundedToken = (item: unknown): item is string =>
+    typeof item === "string"
+    && item.length > 0
+    && item.length <= 120
+    && /^[A-Za-z][A-Za-z0-9_.:-]*$/u.test(item);
+  const evidenceKeys = ["contract", "close", "treeScanStatus"];
+  const closeKeys = ["status", "stage", "treeScanStatus"];
+  if (close.errorName !== undefined) closeKeys.push("errorName");
+  if (close.errorCode !== undefined) closeKeys.push("errorCode");
+  if (close.managerProcessCountAfter !== undefined) closeKeys.push("managerProcessCountAfter");
+  return Object.keys(evidence).sort().join("|") === evidenceKeys.sort().join("|")
+    && Object.keys(close).sort().join("|") === closeKeys.sort().join("|")
+    && evidence.contract === "adapter-cleanup-v1"
+    && ["resolved", "rejected"].includes(String(close.status))
+    && typeof close.stage === "string"
+    && stages.has(close.stage)
+    && scanStatuses.has(String(close.treeScanStatus))
+    && scanStatuses.has(String(evidence.treeScanStatus))
+    && (close.errorName === undefined || boundedToken(close.errorName))
+    && (close.errorCode === undefined || boundedToken(close.errorCode))
+    && (close.managerProcessCountAfter === undefined
+      || Number.isSafeInteger(close.managerProcessCountAfter)
+        && Number(close.managerProcessCountAfter) >= 0)
+    && (!close.stage.startsWith("official_")
+      || Number.isSafeInteger(close.managerProcessCountAfter));
 }
 
 function trustedExecutionCleanupProof(

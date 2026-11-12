@@ -2014,8 +2014,13 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
           };
           const sessionId = typeof params.sessionId === "string" ? params.sessionId : "";
           const turnId = typeof params.turnId === "string" ? params.turnId : null;
+          const modelId = typeof selection.modelId === "string" ? selection.modelId : "";
+          const selected = entry.selectedModelSelection;
           if (!entry.acceptingTurn || !entry.sessionId || sessionId !== entry.sessionId
             || (turnId !== null && (!entry.turnId || turnId !== entry.turnId))
+            || (typeof selection.providerId === "string" && selection.providerId !== providerId)
+            || (typeof params.providerId === "string" && params.providerId !== providerId)
+            || !modelId || !selected || selected.providerId !== providerId || selected.modelId !== modelId
             || entry.abort.signal.aborted) {
             replySafely({ headersApplied: false, errorMessage: "Provider runtime identity is not verified." });
             return;

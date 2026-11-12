@@ -130,6 +130,7 @@
         "src/runtime/build-provenance.ts",
         "src/runtime/child-env.ts",
         "src/runtime/node-runtime.ts",
+        "src/worker/production-adapter-selection.ts",
         "src/worker/worker-main.ts",
         "src/runtime/start-plan-private-channel.ts",
         "src/runtime/start-plan-private-frame.ts",
@@ -923,6 +924,14 @@
         "appserver-adapter",
         "process-cleanup-and-locks",
         "provider-catalog",
+        "worker-launch"
+      ]
+    },
+    {
+      "file": "test/production-adapter-selection.test.ts",
+      "type": "Unit",
+      "gate": "T1",
+      "domains": [
         "worker-launch"
       ]
     },

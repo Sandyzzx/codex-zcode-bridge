@@ -31,8 +31,8 @@ interface OfficialHostAssetDefinition {
 const OFFICIAL_HOST_ASSETS = {
   hostModule: {
     relativePath: "official-host-runtime.mjs",
-    bytes: 1_821_758,
-    sha256: "B74F6AF1F7D41BE8ECAB87D1841C259E66239B517A464D8DE24B200199D22343",
+    bytes: 1_821_168,
+    sha256: "3F481AAE16EFF9912DAF17178B49491BD64E67C4419BFFDB59EB4B78E85EB537",
   },
   appServerEntry: {
     relativePath: "app-server/zcode.cjs",

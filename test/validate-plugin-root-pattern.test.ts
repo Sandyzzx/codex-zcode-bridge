@@ -7,6 +7,7 @@
 // still be rejected.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -331,8 +332,79 @@ test("the real validator rejects injected development-path references and keeps 
     ].join("\n");
     const bundlePath = path.join(pluginRoot, "dist", "bridge.mjs");
     const waiterPath = path.join(pluginRoot, "dist", "wait-task.mjs");
+    const officialHostRoot = path.join(
+      pluginRoot,
+      "worker",
+      "vendor",
+      "official-host",
+      "win32-x64-node24.16.0-zcode3.18.0-b95ebaff",
+    );
+    const patchPath = "upstream/zcode-3.18.0/patches/0001-fixture.patch";
+    const patchBytes = Buffer.from("diff --git a/fixture.ts b/fixture.ts\n");
+    mkdirSync(path.dirname(path.join(root, patchPath)), { recursive: true });
+    mkdirSync(path.join(officialHostRoot, "app-server", "provider"), { recursive: true });
+    mkdirSync(path.join(officialHostRoot, "node_modules", "@napi-rs", "keyring"), { recursive: true });
+    mkdirSync(path.join(officialHostRoot, "node_modules", "@napi-rs", "keyring-win32-x64-msvc"), { recursive: true });
+    writeFileSync(path.join(root, patchPath), patchBytes);
+    const officialHostFiles = new Map<string, Buffer>([
+      ["app-server/provider/zcode-builtin.json", Buffer.from("{}\n")],
+      ["app-server/THIRD-PARTY-NOTICES.md", Buffer.from("fixture notices\n")],
+      ["app-server/zcode.cjs", Buffer.from("// app server\n")],
+      ["LICENSE", Buffer.from("fixture license\n")],
+      ["NOTICE.md", Buffer.from("fixture notice\n")],
+      ["node_modules/@napi-rs/keyring/LICENSE", Buffer.from("MIT\n")],
+      ["node_modules/@napi-rs/keyring/index.js", Buffer.from("module.exports = {};\n")],
+      ["node_modules/@napi-rs/keyring/package.json", Buffer.from('{"name":"@napi-rs/keyring"}\n')],
+      ["node_modules/@napi-rs/keyring-win32-x64-msvc/LICENSE.third-party.md", Buffer.from("MIT third party\n")],
+      ["node_modules/@napi-rs/keyring-win32-x64-msvc/keyring.win32-x64-msvc.node", Buffer.from("fixture native bytes")],
+      ["node_modules/@napi-rs/keyring-win32-x64-msvc/package.json", Buffer.from('{"name":"@napi-rs/keyring-win32-x64-msvc"}\n')],
+      ["official-host-runtime.mjs", Buffer.from("export const createOAuthProviderRuntimeAuthService = () => undefined;\n")],
+      ["zcode-runtime-host.exe", Buffer.from("fixture helper")],
+    ]);
+    for (const [relativePath, bytes] of officialHostFiles) {
+      writeFileSync(path.join(officialHostRoot, relativePath), bytes);
+    }
+    const sha256 = (bytes: Buffer): string => createHash("sha256").update(bytes).digest("hex").toUpperCase();
+    const officialHostBom = {
+      schemaVersion: 1,
+      scope: {
+        platform: "win32",
+        architecture: "x64",
+        node: "24.16.0",
+        zcodeVersion: "3.18.0",
+      },
+      source: {
+        version: "3.18.0",
+        commit: "b95ebaffeab641907b38652f45c1502bd762972d",
+        tree: "d7ebeb994cb8f46b16761fc9c550ae3f6e039c3d",
+      },
+      patches: [{
+        order: 1,
+        path: patchPath,
+        bytes: patchBytes.length,
+        sha256: sha256(patchBytes),
+      }],
+      files: [...officialHostFiles].map(([relativePath, bytes]) => ({
+        path: relativePath,
+        bytes: bytes.length,
+        sha256: sha256(bytes),
+      })),
+    };
+    const officialHostBomBytes = Buffer.from(`${JSON.stringify(officialHostBom, null, 2)}\n`);
+    writeFileSync(path.join(officialHostRoot, "ARTIFACT_BOM.json"), officialHostBomBytes);
+    writeFileSync(path.join(officialHostRoot, "BUILD_PROVENANCE.json"), `${JSON.stringify({
+      source: officialHostBom.source,
+      bom: {
+        path: "ARTIFACT_BOM.json",
+        bytes: officialHostBomBytes.length,
+        sha256: sha256(officialHostBomBytes),
+      },
+      output: {
+        sha256: sha256(officialHostFiles.get("official-host-runtime.mjs")!),
+      },
+    }, null, 2)}\n`);
     writeFileSync(waiterPath, "// PR #49 of codex-zcode-bridge 13ab83626a7fa7f35319a21244215c2915ecb112\n");
-    writeFileSync(path.join(pluginRoot, "worker", "worker-main.mjs"), `${baseline}\n`, "utf8");
+    writeFileSync(path.join(pluginRoot, "worker", "worker-main.mjs"), `${baseline}\nOfficialHostAdapter official-host-runtime.mjs maxFrameBytes\n`, "utf8");
     writeFileSync(path.join(pluginRoot, "worker", "vendor", "pkg", "browser-host.cjs"), `${baseline}\n`, "utf8");
 
     const variants: Array<[name: string, injection: string, expectLeakDiagnostic: boolean]> = [
