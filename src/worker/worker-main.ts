@@ -50,10 +50,11 @@ export async function runWorkerMain(
   const bridgeLaunchMarker = workerArgs.at(-1) === BRIDGE_WORKER_LAUNCH_MARKER;
   const interactionMode = workerArgs.includes("--bridge-sqlite-interaction-v1");
   const privateAuthMode = workerArgs.includes("--bridge-sqlite-private-auth-v1");
+  const runtimeEventMode = workerArgs.includes("--bridge-sqlite-runtime-events-v1");
   const dropAfterPrepared = workerArgs.includes("--bridge-sqlite-interaction-drop-after-prepared-v1");
   const positionalArgs = bridgeLaunchMarker ? workerArgs.slice(0, -1).filter(argument =>
     argument !== "--bridge-sqlite-interaction-v1" && argument !== "--bridge-sqlite-interaction-drop-after-prepared-v1"
-      && argument !== "--bridge-sqlite-private-auth-v1") : workerArgs;
+      && argument !== "--bridge-sqlite-private-auth-v1" && argument !== "--bridge-sqlite-runtime-events-v1") : workerArgs;
   if (bridgeLaunchMarker && positionalArgs.length === 0) {
     let claimOnlyStage = "start";
     let interactionStreamsCreated = false;
@@ -78,9 +79,11 @@ export async function runWorkerMain(
     process.on("unhandledRejection", (reason) => { writeFatalDiagnostic("unhandled_rejection", reason); reallyExit(1); });
     try {
       if (dropAfterPrepared && !interactionMode) throw new Error("interaction test mode required");
+      if (runtimeEventMode && !interactionMode) throw new Error("runtime events require interaction mode");
       await runClaimOnlyHandshake({
         interactionMode,
         privateAuthMode,
+        runtimeEventMode,
         dropAfterPrepared,
         dependencies,
         onStage: (stage) => {
@@ -104,6 +107,7 @@ export async function runWorkerMain(
         }
       }
       if (privateAuthMode) for (const fd of [10, 11, 12, 13]) { try { closeSync(fd); } catch { /* already closed */ } }
+      if (runtimeEventMode) try { closeSync(14); } catch { /* already closed */ }
       const failureCode = error && typeof error === "object" && "code" in error
         && typeof (error as { readonly code?: unknown }).code === "string"
         ? (error as { readonly code: string }).code : "unclassified";
@@ -122,7 +126,8 @@ export async function runWorkerMain(
   }
 }
 
-async function runClaimOnlyHandshake(options: { readonly interactionMode: boolean; readonly privateAuthMode: boolean; readonly dropAfterPrepared: boolean;
+async function runClaimOnlyHandshake(options: { readonly interactionMode: boolean; readonly privateAuthMode: boolean;
+  readonly runtimeEventMode: boolean; readonly dropAfterPrepared: boolean;
   readonly dependencies: WorkerMainDependencies;
   readonly onStage?: (stage: string) => void; readonly onInteractionStreamsCreated?: () => void }): Promise<void> {
   options.onStage?.("provenance verification");
@@ -200,6 +205,19 @@ async function runClaimOnlyHandshake(options: { readonly interactionMode: boolea
   if (options.privateAuthMode !== Boolean(execution.private_auth)) throw new Error("private auth mode mismatch");
 
   let closeInteraction: (() => Promise<void>) | undefined;
+  let runtimeEvents: CandidateRuntimeEventPublisher | undefined;
+  if (options.runtimeEventMode) {
+    options.onStage?.("runtime event channel setup");
+    const { createCandidateWorkerRuntimeEventChannel } = await import("../sqlite-candidate/wp6b2b1/runtime-event-channel.mjs");
+    const stream = createWriteStream(process.execPath, { fd: 14 });
+    try {
+      const sender = await createCandidateWorkerRuntimeEventChannel({ writeStream: stream });
+      runtimeEvents = createBoundedRuntimeEventPublisher(sender);
+    } catch (error) {
+      stream.destroy();
+      throw error;
+    }
+  }
   let candidateInteraction: Awaited<ReturnType<typeof import("../sqlite-candidate/wp6b2b1/interaction-channel.mjs").createCandidateWorkerInteractionChannel>> | undefined;
   if (options.interactionMode) {
     options.onStage?.("interaction channel setup");
@@ -256,11 +274,18 @@ async function runClaimOnlyHandshake(options: { readonly interactionMode: boolea
           candidateInteraction,
           options.privateAuthMode ? identity : undefined,
           options.dependencies,
+          runtimeEvents,
         );
     options.onStage?.("adapter result frame prepared");
+    // A close failure means at least one queued event may not be durable. Do
+    // not emit a success-looking Result frame; the Manager must leave the
+    // existing Operation in its Recovery/Hold path.
+    await runtimeEvents?.close();
+    options.onStage?.("runtime event channel closed");
     writePrivateFrame(6, resultFrame, prepareWorkerResultFrameParts(resultFrame));
     options.onStage?.("adapter result frame written");
   } finally {
+    await closeRuntimeEvents(runtimeEvents);
     // The Manager closes its interaction endpoints after observing the result.
     // Emit the result first so Worker shutdown does not wait on its own peer.
     options.onStage?.("worker interaction close start");
@@ -357,12 +382,24 @@ type CachedPrivateAuth = PrivateAuthScope & {
   readonly expiresAt: number;
 };
 
+type CandidateRuntimeObservedEvent = Readonly<{
+  type: string;
+  summary: string;
+  details?: Record<string, unknown>;
+}>;
+type CandidateRuntimeEventPublisher = Readonly<{
+  publish(event: CandidateRuntimeObservedEvent): void;
+  setOutputSanitizer(sanitize: (value: string, options?: { readonly final?: boolean }) => string): void;
+  close(): Promise<void>;
+}>;
+
 async function runZCodeAdapter(
   bootstrap: { readonly operation_id: string; readonly task_id: string; readonly attempt: number; readonly generation: number; readonly workspace_ref: string; readonly policy_snapshot_digest: string },
   execution: SqliteExecutionEnvelope,
   interaction: Awaited<ReturnType<typeof import("../sqlite-candidate/wp6b2b1/interaction-channel.mjs").createCandidateWorkerInteractionChannel>> | undefined,
   workerIdentity?: import("../runtime/process-probe.js").ProcessIdentity,
   dependencies: WorkerMainDependencies = {},
+  runtimeEvents?: CandidateRuntimeEventPublisher,
 ): Promise<CandidateWorkerResultFrame> {
   if (execution.adapter_mode !== "zcode_app_server") throw new Error("real ZCode Adapter mode is required");
   const {
@@ -371,14 +408,36 @@ async function runZCodeAdapter(
   } = await import("../adapters/official-host-adapter.js");
   const { ZCodeAppServerAdapter } = await import("../adapters/zcode-app-server-adapter.js");
   const { buildTaskResult } = await import("../manager/normalize.js");
+  const { normalizeUsage, phaseDuration } = await import("../usage/normalize.js");
   const startedAt = new Date().toISOString();
   let outcome: import("../adapters/run-outcome.js").ZCodeRunOutcome | null = null;
   let failure: { code: string; message: string } | null = null;
+  const modelProfile: import("../interfaces.js").ExecutionProfile = {
+    executor: "zcode",
+    provider_id: null,
+    model_id: null,
+    requested_model: execution.task.model
+      ? `${execution.task.model.provider_id}/${execution.task.model.model_id}`
+      : null,
+    requested_reasoning_level: execution.task.model?.reasoning_level ?? null,
+    effective_reasoning_level: null,
+    effective_reasoning_level_source: "not_reported",
+    selection_source: null,
+    effective_at: null,
+    session_id: null,
+    turn_id: null,
+  };
+  let turnStartedAt: string | null = null;
+  let turnCompletedAt: string | null = null;
+  let rpcAcceptedAt: string | null = null;
   let cachedAuth: CachedPrivateAuth | null = null;
   let privateAuthPending: { readonly scope: PrivateAuthScope; readonly promise: Promise<CachedPrivateAuth> } | null = null;
   let privateAuthExpiryTimer: NodeJS.Timeout | undefined;
   let privateAuthStarted = false;
   const secretRedactor = execution.private_auth ? new StartPlanSecretRedactor() : undefined;
+  if (secretRedactor && runtimeEvents) {
+    runtimeEvents.setOutputSanitizer((value, options) => secretRedactor.streamText(value, options));
+  }
   let privateAuthParentLive = false;
   let privateAuthConfirmed = false;
   let notifyPrivateAuthConfirmation: (() => void) | undefined;
@@ -579,9 +638,36 @@ async function runZCodeAdapter(
     ...(execution.private_auth ? { startPlanProviderEntitled: execution.private_auth.entitled } : {}),
     resolveProviderRuntimeAuth,
     onEvent: (event) => {
+      runtimeEvents?.publish(event);
+      if (event.type === "session_ready" && typeof event.details?.["session_id"] === "string") {
+        modelProfile.session_id = event.details["session_id"];
+      } else if (event.type === "model_selected") {
+        if (typeof event.details?.["provider_id"] === "string") modelProfile.provider_id = event.details["provider_id"];
+        if (typeof event.details?.["model_id"] === "string") modelProfile.model_id = event.details["model_id"];
+        if (typeof event.details?.["selected_model"] === "string" && modelProfile.model_id === null) {
+          modelProfile.model_id = event.details["selected_model"];
+        }
+        if (typeof event.details?.["reasoning_level"] === "string") {
+          modelProfile.effective_reasoning_level = event.details["reasoning_level"];
+          modelProfile.effective_reasoning_level_source = "runtime";
+        } else {
+          modelProfile.effective_reasoning_level = null;
+          modelProfile.effective_reasoning_level_source = "not_reported";
+        }
+        if (typeof event.details?.["model_source"] === "string") {
+          modelProfile.selection_source = event.details["model_source"];
+        }
+        modelProfile.effective_at = new Date().toISOString();
+      } else if (event.type === "turn_started") {
+        rpcAcceptedAt ??= new Date().toISOString();
+        turnStartedAt = new Date().toISOString();
+        if (typeof event.details?.["turn_id"] === "string") modelProfile.turn_id = event.details["turn_id"];
+      } else if (event.type === "turn_completed") {
+        turnCompletedAt = new Date().toISOString();
+        if (typeof event.details?.["turn_id"] === "string") modelProfile.turn_id = event.details["turn_id"];
+      }
       // Bounded lifecycle evidence without request payloads. This distinguishes
       // a Worker that reached adapter cleanup from one killed before cleanup.
-      if (!interaction) return;
       if (event.type === "cleanup_unverified") {
         const summary = event.summary;
         const reason = summary.startsWith("Managed browser cleanup")
@@ -683,7 +769,39 @@ async function runZCodeAdapter(
     if (execution.private_auth && !privateAuthStarted) for (const fd of [10, 11, 12]) { try { closeSync(fd); } catch { /* not open */ } }
   }
   const finishedAt = new Date().toISOString();
-  const taskResult = buildTaskResult({ task: execution.task, attempt: bootstrap.attempt, startedAt, finishedAt, outcome, failure });
+  if (modelProfile.model_id === null && outcome?.modelProfile?.model_id) {
+    Object.assign(modelProfile, outcome.modelProfile);
+  }
+  rpcAcceptedAt ??= outcome?.phaseTimestamps?.rpc_accepted_at ?? null;
+  turnStartedAt ??= outcome?.phaseTimestamps?.turn_started_at ?? null;
+  turnCompletedAt ??= outcome?.phaseTimestamps?.turn_completed_at ?? null;
+  modelProfile.session_id ??= outcome?.sessionId ?? null;
+  const timingNotes: string[] = [];
+  const timing: import("../interfaces.js").AttemptTiming = {
+    queued_ms: null,
+    execution_ms: phaseDuration(startedAt, finishedAt, timingNotes),
+    turn_ms: phaseDuration(turnStartedAt, turnCompletedAt, timingNotes),
+    finalize_ms: phaseDuration(turnCompletedAt, finishedAt, timingNotes),
+    wall_ms: phaseDuration(startedAt, finishedAt, timingNotes),
+    derived: false,
+    notes: timingNotes,
+  };
+  const usage = normalizeUsage(outcome?.usage ?? null, {
+    source: "zcode_runtime_turn",
+    scope: outcome?.sessionId ? `session:${outcome.sessionId}` : null,
+    observedAt: finishedAt,
+  });
+  const taskResult = buildTaskResult({
+    task: execution.task,
+    attempt: bootstrap.attempt,
+    startedAt,
+    finishedAt,
+    outcome,
+    failure,
+    usage,
+    model: modelProfile,
+    timing,
+  });
   const result: CandidateTaskResult = {
     task_id: taskResult.task_id,
     attempt: taskResult.attempt,
@@ -705,7 +823,11 @@ async function runZCodeAdapter(
     ...(taskResult.report_candidate ? { report_candidate: taskResult.report_candidate as Record<string, unknown> } : {}),
   };
   const executionCleanup = buildExecutionCleanupProof(outcome);
-  secretRedactor?.close();
+  try {
+    await runtimeEvents?.close();
+  } finally {
+    secretRedactor?.close();
+  }
   return {
     protocol: "bridge-sqlite-candidate-result-v1",
     operation_id: bootstrap.operation_id,
@@ -842,6 +964,120 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
+}
+
+function splitUtf8Text(value: string, maximumBytes: number): string[] {
+  const chunks: string[] = [];
+  let chunkStart = 0;
+  let chunkBytes = 0;
+  for (let index = 0; index < value.length;) {
+    const codePoint = value.codePointAt(index)!;
+    const character = String.fromCodePoint(codePoint);
+    const characterBytes = Buffer.byteLength(character, "utf8");
+    if (chunkBytes > 0 && chunkBytes + characterBytes > maximumBytes) {
+      chunks.push(value.slice(chunkStart, index));
+      chunkStart = index;
+      chunkBytes = 0;
+    }
+    chunkBytes += characterBytes;
+    index += character.length;
+  }
+  if (chunkStart < value.length) chunks.push(value.slice(chunkStart));
+  return chunks;
+}
+
+export function createBoundedRuntimeEventPublisher(
+  sender: Readonly<{ send(event: CandidateRuntimeObservedEvent): number; close(): Promise<void> }>,
+): CandidateRuntimeEventPublisher {
+  const allowed = new Set([
+    "session_ready", "model_selected", "turn_started", "model_tool_call",
+    "tool_status", "model_output", "turn_completed", "turn_failed", "report_ready",
+  ]);
+  let pendingOutput = "";
+  let outputTimer: NodeJS.Timeout | undefined;
+  let closePromise: Promise<void> | undefined;
+  let outputSanitizer: ((value: string, options?: { readonly final?: boolean }) => string) | undefined;
+  let firstError: unknown;
+  const flush = (final = false): void => {
+    if (outputTimer) {
+      clearTimeout(outputTimer);
+      outputTimer = undefined;
+    }
+    if (!pendingOutput) {
+      if (final && outputSanitizer) {
+        const visible = outputSanitizer("", { final: true });
+        for (const chunk of splitUtf8Text(visible, 2_000)) sender.send({ type: "model_output", summary: chunk });
+      }
+      return;
+    }
+    const output = pendingOutput;
+    pendingOutput = "";
+    const visible = outputSanitizer ? outputSanitizer(output, { final }) : output;
+    for (const chunk of splitUtf8Text(visible, 2_000)) sender.send({ type: "model_output", summary: chunk });
+  };
+  return Object.freeze({
+    publish(event) {
+      try {
+        if (event.type === "model_output") {
+          pendingOutput += event.summary;
+          if (Buffer.byteLength(pendingOutput, "utf8") >= 4_000) flush(false);
+          else if (!outputTimer) {
+            outputTimer = setTimeout(() => {
+              outputTimer = undefined;
+              try {
+                flush(false);
+              } catch (error) {
+                firstError ??= error;
+              }
+            }, 500);
+            outputTimer.unref();
+          }
+          return;
+        }
+        // A non-output event does not end the visible text stream. Keep the
+        // redactor's overlap so a credential can never be reconstructed by
+        // filtering these events out and joining model_output chunks.
+        flush(false);
+        if (allowed.has(event.type)) sender.send(event);
+      } catch (error) {
+        firstError ??= error;
+      }
+    },
+    setOutputSanitizer(sanitize) {
+      if (typeof sanitize !== "function" || outputSanitizer) throw new Error("runtime_event_output_sanitizer_invalid");
+      outputSanitizer = sanitize;
+    },
+    close() {
+      closePromise ??= (async () => {
+        try {
+          flush(true);
+        } catch (error) {
+          firstError ??= error;
+        }
+        try {
+          await sender.close();
+        } catch (error) {
+          firstError ??= error;
+        }
+        if (firstError) {
+          throw Object.assign(new Error("runtime event publication failed"), {
+            code: "runtime_event_publish_failed",
+            cause: firstError,
+          });
+        }
+      })();
+      return closePromise;
+    },
+  });
+}
+
+async function closeRuntimeEvents(publisher: CandidateRuntimeEventPublisher | undefined): Promise<void> {
+  if (!publisher) return;
+  try {
+    await publisher.close();
+  } catch {
+    writeDiagnostic("[bridge-worker] runtime event channel close failed\n");
+  }
 }
 
 function writeDiagnostic(line: string): void {

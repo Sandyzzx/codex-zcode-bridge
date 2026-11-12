@@ -1237,8 +1237,8 @@ async function terminateWindowsProcessTree(pid, expectedRootTicks, killWaitMs, d
         }
       }
       const unconfirmedMembers = members2.filter((m) => {
-        const record4 = killed.get(m.pid);
-        return record4 === void 0 || record4.exitFileTime === null;
+        const record5 = killed.get(m.pid);
+        return record5 === void 0 || record5.exitFileTime === null;
       });
       if (now() >= deadline && unconfirmedMembers.length > 0) {
         throw new WindowsTreeCleanupError(
@@ -2068,6 +2068,7 @@ function spawnClaimOnlyWorker(workerPath, provenance, options = {}) {
   if (!path11.isAbsolute(workerPath)) throw new TypeError("claim-only worker path must be absolute");
   if (options.dropAfterPrepared && !options.interactionChannel) throw new TypeError("interaction channel is required for drop-after-prepared");
   if (options.privateAuthChannel && !options.interactionChannel) throw new TypeError("private auth requires interaction channel allocation");
+  if (options.runtimeEventChannel && !options.interactionChannel) throw new TypeError("runtime events require interaction channel allocation");
   const env = {
     ...createWorkerEnv(process.env),
     ZCODE_BRIDGE_RUNTIME_PROVENANCE: JSON.stringify(provenance)
@@ -2076,13 +2077,20 @@ function spawnClaimOnlyWorker(workerPath, provenance, options = {}) {
     workerPath,
     ...options.interactionChannel ? ["--bridge-sqlite-interaction-v1"] : [],
     ...options.privateAuthChannel ? ["--bridge-sqlite-private-auth-v1"] : [],
+    ...options.runtimeEventChannel ? ["--bridge-sqlite-runtime-events-v1"] : [],
     ...options.dropAfterPrepared ? ["--bridge-sqlite-interaction-drop-after-prepared-v1"] : [],
     BRIDGE_WORKER_LAUNCH_MARKER
   ];
+  const stdioLength = options.runtimeEventChannel ? 15 : options.privateAuthChannel ? 14 : options.interactionChannel ? 10 : 7;
+  const stdio = Array(stdioLength).fill("ignore");
+  for (let fd = 2; fd <= 6; fd += 1) stdio[fd] = "pipe";
+  if (options.interactionChannel) for (let fd = 7; fd <= 9; fd += 1) stdio[fd] = "pipe";
+  if (options.privateAuthChannel) for (let fd = 10; fd <= 13; fd += 1) stdio[fd] = "pipe";
+  if (options.runtimeEventChannel) stdio[14] = "pipe";
   const child = spawn4(process.execPath, args, {
     detached: true,
     shell: false,
-    stdio: options.privateAuthChannel ? ["ignore", "ignore", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe"] : options.interactionChannel ? ["ignore", "ignore", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe", "pipe"] : ["ignore", "ignore", "pipe", "pipe", "pipe", "pipe", "pipe"],
+    stdio,
     windowsHide: true,
     cwd: path11.dirname(workerPath),
     env
@@ -2122,6 +2130,7 @@ function spawnClaimOnlyWorker(workerPath, provenance, options = {}) {
     privateAuthResponseChannel: { enumerable: false, get: () => pipes[11] },
     privateAuthAcknowledgementChannel: { enumerable: false, get: () => pipes[12] },
     privateAuthLifetimeChannel: { enumerable: false, get: () => pipes[13] },
+    runtimeEventChannel: { enumerable: false, get: () => pipes[14] },
     exitSeen: { enumerable: false, get: () => exitSeen }
   });
   child.once("exit", () => {
@@ -3042,8 +3051,8 @@ async function spawnAndBootstrapOnce(spawnChild, source) {
 }
 function validate2(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError("invalid launch bootstrap");
-  const record4 = value;
-  if (Object.keys(record4).sort().join("\0") !== [...KEYS].sort().join("\0") || record4.protocol !== "bridge-launch-bootstrap-v1" || !validId(record4.operation_id) || !validId(record4.task_id) || !validId(record4.launch_id) || !validToken(record4.launch_token) || !positive(record4.attempt) || !positive(record4.generation) || !positive(record4.launch_epoch) || record4.authorization_source !== "trusted_local_policy" || !validWorkspace(record4.workspace_ref) || !validId(record4.policy_revision) || !validDigest(record4.policy_digest) || !validId(record4.execution_profile_id) || !validDigest(record4.policy_snapshot_digest) || record4.policy_snapshot_digest !== deriveAdmissionPolicySnapshotDigest(record4)) {
+  const record5 = value;
+  if (Object.keys(record5).sort().join("\0") !== [...KEYS].sort().join("\0") || record5.protocol !== "bridge-launch-bootstrap-v1" || !validId(record5.operation_id) || !validId(record5.task_id) || !validId(record5.launch_id) || !validToken(record5.launch_token) || !positive(record5.attempt) || !positive(record5.generation) || !positive(record5.launch_epoch) || record5.authorization_source !== "trusted_local_policy" || !validWorkspace(record5.workspace_ref) || !validId(record5.policy_revision) || !validDigest(record5.policy_digest) || !validId(record5.execution_profile_id) || !validDigest(record5.policy_snapshot_digest) || record5.policy_snapshot_digest !== deriveAdmissionPolicySnapshotDigest(record5)) {
     throw new TypeError("invalid launch bootstrap fields");
   }
 }
@@ -3880,6 +3889,94 @@ var init_json_history_result_exceptions = __esm({
   }
 });
 
+// src/feedback/task-feedback-projection.mjs
+function record3(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
+}
+function safeRuntimeText(value) {
+  if (typeof value !== "string") return null;
+  const text2 = value.replace(/[\u0000-\u001f\u007f]/gu, " ").trim();
+  return text2 ? text2.slice(0, 160) : null;
+}
+function safeToolName(value) {
+  if (typeof value !== "string") return "tool";
+  const name = value.replace(/[^A-Za-z0-9_.-]/gu, "").slice(0, 80);
+  return name || "tool";
+}
+function durationMs(startedAt, finishedAt) {
+  if (!startedAt || !finishedAt) return null;
+  const start = Date.parse(startedAt);
+  const finish = Date.parse(finishedAt);
+  if (!Number.isFinite(start) || !Number.isFinite(finish) || finish < start) return null;
+  return finish - start;
+}
+function buildTaskFeedbackSnapshotV01(input) {
+  let model = null;
+  let activity = null;
+  let agentReportReady = false;
+  for (const event of input.events) {
+    const details = record3(event.details);
+    if (event.type === "model_selected" && details) {
+      const providerId = safeRuntimeText(details.provider_id);
+      const modelId = safeRuntimeText(details.model_id);
+      if (providerId && modelId) {
+        model = {
+          provider_id: providerId,
+          model_id: modelId,
+          reasoning_level: details.reasoning_level_source === "runtime" ? safeRuntimeText(details.reasoning_level) : null,
+          source: "runtime"
+        };
+      }
+    } else if (event.type === "model_tool_call" && details) {
+      activity = {
+        kind: "tool_call",
+        summary: `Tool request \xB7 ${safeToolName(details.tool_name)}`,
+        observed_at: event.at,
+        currentness: "last_observed"
+      };
+    } else if (event.type === "tool_status" && details) {
+      activity = {
+        kind: "tool_update",
+        summary: `Tool update \xB7 ${safeToolName(details.tool_name)}`,
+        observed_at: event.at,
+        currentness: "last_observed"
+      };
+    } else if (event.type === "report_ready") {
+      agentReportReady = true;
+    }
+  }
+  const finalResult = input.result;
+  const result = agentReportReady && finalResult && finalResult.attempt === input.status.attempt && finalResult.status === input.status.status && (finalResult.status === "completed" || finalResult.status === "waiting_for_master") ? {
+    source: "agent_report",
+    summary: finalResult.summary,
+    issues: [...finalResult.issues],
+    files_changed: [...finalResult.files_changed],
+    tests: finalResult.tests.map((test) => ({ ...test })),
+    started_at: input.status.started_at,
+    finished_at: input.status.finished_at,
+    duration_ms: durationMs(input.status.started_at, input.status.finished_at)
+  } : null;
+  return {
+    schema_version: "0.1",
+    task_id: input.status.task_id,
+    attempt: input.status.attempt,
+    status: input.status.status,
+    model,
+    phase: null,
+    progress: null,
+    activity,
+    interaction: { ...EMPTY_INTERACTION },
+    result
+  };
+}
+var EMPTY_INTERACTION;
+var init_task_feedback_projection = __esm({
+  "src/feedback/task-feedback-projection.mjs"() {
+    "use strict";
+    EMPTY_INTERACTION = Object.freeze({ state: "not_observed", kind: null });
+  }
+});
+
 // src/sqlite-candidate/wp6b2b1/store.mjs
 var store_exports = {};
 __export(store_exports, {
@@ -3909,25 +4006,55 @@ function schemaObjects(db) {
     row.sql === null ? null : row.sql.trim().replace(/\r\n?/gu, "\n")
   ]);
 }
-function assertCandidateSchema(db, version2 = SCHEMA_VERSION) {
-  if (!expectedSchemas.has(version2)) {
+function assertCandidateSchema(db, version2 = SCHEMA_VERSION, { allowRuntimeEventExtensionAbsent = false } = {}) {
+  const key = `${version2}:${allowRuntimeEventExtensionAbsent ? "recovery" : "strict"}`;
+  if (!expectedSchemas.has(key)) {
     const base = new DatabaseSync(":memory:"), admin = new DatabaseSync(":memory:");
     try {
       const schema = version2 === 13 ? readFileSync11(new URL("./schema-v13.sql", import.meta.url), "utf8") : SCHEMA;
       base.exec(schema);
       admin.exec(schema + "\n" + ADMIN_ABANDONMENT_SCHEMA);
-      expectedSchemas.set(version2, [JSON.stringify(schemaObjects(base)), JSON.stringify(schemaObjects(admin))]);
+      const baseObjects = schemaObjects(base);
+      const adminObjects = schemaObjects(admin);
+      const variants = [JSON.stringify(baseObjects), JSON.stringify(adminObjects)];
+      if (version2 === 14 && allowRuntimeEventExtensionAbsent) {
+        variants.push(JSON.stringify(baseObjects.filter((row) => !RUNTIME_EVENT_SCHEMA_OBJECTS.has(row[1]))));
+        variants.push(JSON.stringify(adminObjects.filter((row) => !RUNTIME_EVENT_SCHEMA_OBJECTS.has(row[1]))));
+      }
+      expectedSchemas.set(key, variants);
     } finally {
       base.close();
       admin.close();
     }
   }
-  if (!expectedSchemas.get(version2).includes(JSON.stringify(schemaObjects(db)))) fail2("candidate_schema_mismatch");
+  if (!expectedSchemas.get(key).includes(JSON.stringify(schemaObjects(db)))) fail2("candidate_schema_mismatch");
 }
 function assertSchemaVersion(db) {
   const version2 = db.prepare("PRAGMA user_version").get().user_version;
   if (version2 === 13) fail2("schema_upgrade_required", "SQLite v13 requires explicit offline upgrade: node dist/upgrade-sqlite-v14.mjs --source <state-root> --destination <new-state-root> --database bridge.sqlite --offline");
   if (version2 !== SCHEMA_VERSION) fail2("schema_version_unknown");
+}
+function ensureRuntimeEventsSchema(db) {
+  if (db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='runtime_task_events'").get()) return;
+  let began = false;
+  try {
+    db.exec("BEGIN IMMEDIATE");
+    began = true;
+    if (db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='runtime_task_events'").get()) {
+      db.exec("COMMIT");
+      began = false;
+      return;
+    }
+    db.exec(RUNTIME_EVENTS_SCHEMA);
+    db.exec("COMMIT");
+    began = false;
+  } catch (error2) {
+    if (began) try {
+      db.exec("ROLLBACK");
+    } catch {
+    }
+    throw error2;
+  }
 }
 function validateEvidence(eventType, value) {
   const keys = EVIDENCE_KEYS[eventType];
@@ -4589,19 +4716,28 @@ function callDecision(fn, workspace, input) {
     return { state: "unknown" };
   }
 }
-var HERE, SCHEMA, ADMIN_ABANDONMENT_SCHEMA, CONSTRUCT, SCHEMA_VERSION, SCHEMA_OBJECT_QUERY, expectedSchemas, RESULT_CONTRACT_VERSION, RESULT_STATUSES2, RECOVERY_PHASES, RECOVERY_SOURCES, RECOVERY_REASON_CODES, RECOVERY_QUARANTINE_CODES, RECOVERY_EVIDENCE_KEYS, RECOVERY_LIMIT, digest2, rawDigest, upgradeRowJson, EVIDENCE_KEYS, FUTURE_EVENT_TYPES, FUTURE_EVIDENCE_KEYS, EVENT_PHASE, RECOVERY_INPUT_KEYS, ADMIN_ABANDONMENT_INPUT_KEYS, ADMIN_ABANDONMENT_EVIDENCE_KEYS, AdmissionError, fail2, IsolatedAdmissionStore;
+var HERE, SCHEMA, RUNTIME_EVENTS_SCHEMA, ADMIN_ABANDONMENT_SCHEMA, CONSTRUCT, SCHEMA_VERSION, SCHEMA_OBJECT_QUERY, RUNTIME_EVENT_SCHEMA_OBJECTS, expectedSchemas, RESULT_CONTRACT_VERSION, RESULT_STATUSES2, RECOVERY_PHASES, RECOVERY_SOURCES, RECOVERY_REASON_CODES, RECOVERY_QUARANTINE_CODES, RECOVERY_EVIDENCE_KEYS, RECOVERY_LIMIT, digest2, rawDigest, upgradeRowJson, EVIDENCE_KEYS, FUTURE_EVENT_TYPES, FUTURE_EVIDENCE_KEYS, EVENT_PHASE, RECOVERY_INPUT_KEYS, ADMIN_ABANDONMENT_INPUT_KEYS, ADMIN_ABANDONMENT_EVIDENCE_KEYS, AdmissionError, fail2, IsolatedAdmissionStore;
 var init_store = __esm({
   "src/sqlite-candidate/wp6b2b1/store.mjs"() {
     "use strict";
     init_result_contract();
     init_interaction_channel();
     init_json_history_result_exceptions();
+    init_task_feedback_projection();
     HERE = path15.dirname(fileURLToPath4(import.meta.url));
     SCHEMA = readFileSync11(new URL("./schema.sql", import.meta.url), "utf8");
+    RUNTIME_EVENTS_SCHEMA = readFileSync11(new URL("./runtime-events.sql", import.meta.url), "utf8");
     ADMIN_ABANDONMENT_SCHEMA = readFileSync11(new URL("./admin-abandonment.sql", import.meta.url), "utf8");
     CONSTRUCT = /* @__PURE__ */ Symbol("construct");
     SCHEMA_VERSION = 14;
     SCHEMA_OBJECT_QUERY = "SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE type IN ('table','view','index','trigger') AND substr(lower(name),1,7)<>'sqlite_' ORDER BY type COLLATE BINARY,name COLLATE BINARY";
+    RUNTIME_EVENT_SCHEMA_OBJECTS = /* @__PURE__ */ new Set([
+      "runtime_task_events",
+      "runtime_task_events_task_cursor",
+      "runtime_task_events_no_update",
+      "runtime_task_events_no_delete",
+      "runtime_task_events_identity_guard"
+    ]);
     expectedSchemas = /* @__PURE__ */ new Map();
     RESULT_CONTRACT_VERSION = 1;
     RESULT_STATUSES2 = /* @__PURE__ */ new Set(["completed", "failed", "cancelled", "waiting_for_master"]);
@@ -4994,6 +5130,9 @@ var init_store = __esm({
         const s = new _IsolatedAdmissionStore(CONSTRUCT, db, p, fault);
         try {
           assertSchemaVersion(db);
+          assertCandidateSchema(db, SCHEMA_VERSION, { allowRuntimeEventExtensionAbsent: true });
+          ensureRuntimeEventsSchema(db);
+          assertCandidateSchema(db);
           const columns = new Set(db.prepare("PRAGMA table_info(manager_operations)").all().map((x) => x.name));
           if (!["result_status", "result_generation", "result_digest", "result_json", "result_commit_ref"].every((x) => columns.has(x))) fail2("candidate_schema_mismatch");
           if (!db.prepare("SELECT 1 FROM pragma_table_info('manager_operation_events') WHERE name='event_cursor'").get()) fail2("candidate_schema_mismatch");
@@ -5489,26 +5628,58 @@ var init_store = __esm({
           return { task, projection: { task_id: taskRow.task_id, status: taskRow.status, current_attempt: taskRow.current_attempt, created_at: taskRow.created_at }, attempt, operation, result, continuation, ...result_submission_error ? { result_submission_error } : {} };
         });
       }
-      /** Conservative Candidate feedback projection. No runtime observation or
-       * report_ready event is currently persisted by the SQLite lifecycle path. */
+      /** Project Feedback only from this Attempt's persisted runtime observations
+       * and a committed Result. */
       readTaskFeedback(taskId) {
         const snapshot = this.readTaskLifecycle(taskId);
         if (!snapshot) return null;
         if (snapshot.projection.status !== snapshot.attempt.status) fail2("task_attempt_projection_mismatch");
-        return {
-          schema_version: "0.1",
-          task_id: snapshot.projection.task_id,
-          attempt: snapshot.attempt.attempt,
-          status: snapshot.projection.status,
-          model: null,
-          phase: null,
-          progress: null,
-          activity: null,
-          interaction: { state: "not_observed", kind: null },
-          // Candidate results do not yet carry the distinct report_ready runtime
-          // fact required by the frozen feedback contract.
-          result: null
-        };
+        const runtimeTable = this.#db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='runtime_task_events'").get();
+        const runtimeRows = runtimeTable ? this.#db.prepare(`SELECT event_cursor,event_type,at,summary,details_json
+      FROM runtime_task_events WHERE task_id=? AND attempt=? ORDER BY event_cursor`).all(taskId, snapshot.attempt.attempt) : [];
+        let workerPid = null;
+        if (snapshot.operation?.claim_worker_identity_json) {
+          try {
+            const identity = JSON.parse(snapshot.operation.claim_worker_identity_json);
+            if (Number.isSafeInteger(identity.process_id)) workerPid = identity.process_id;
+          } catch {
+            fail2("feedback_worker_identity_invalid");
+          }
+        }
+        const result = snapshot.result;
+        const events = runtimeRows.map((row) => {
+          let details;
+          if (row.details_json !== null) {
+            try {
+              details = JSON.parse(row.details_json);
+            } catch {
+              fail2("feedback_event_projection_invalid");
+            }
+          }
+          return {
+            seq: row.event_cursor,
+            at: row.at,
+            type: row.event_type,
+            summary: row.summary,
+            ...details === void 0 ? {} : { details }
+          };
+        });
+        return buildTaskFeedbackSnapshotV01({
+          status: {
+            task_id: snapshot.projection.task_id,
+            status: snapshot.projection.status,
+            attempt: snapshot.attempt.attempt,
+            created_at: snapshot.projection.created_at,
+            updated_at: events.at(-1)?.at ?? result?.finished_at ?? snapshot.projection.created_at,
+            started_at: result?.started_at ?? (snapshot.projection.status === "running" ? snapshot.operation?.created_at ?? null : null),
+            finished_at: result?.finished_at ?? null,
+            worker_pid: snapshot.projection.status === "running" ? workerPid : null,
+            zcode_session_id: typeof result?.session_id === "string" ? result.session_id : null,
+            exit_code: Number.isSafeInteger(result?.exit_code) ? result.exit_code : null
+          },
+          events,
+          result: result ?? null
+        });
       }
       /** Persist a request received from the currently claimed Worker channel. */
       recordInteractionRequest(input) {
@@ -6092,10 +6263,88 @@ var init_store = __esm({
           NULL AS operation_id,event_type,NULL AS from_phase,NULL AS to_phase,NULL AS generation,
           COALESCE(details_json,'{}') AS evidence_json,COALESCE(details_digest,?) AS evidence_digest,at,task_id,attempt AS operation_attempt
         FROM migrated_task_events WHERE task_id=? AND event_cursor>? ORDER BY event_cursor LIMIT ?`).all(digest2("{}"), taskId, afterCursor, limit + 1);
-          const rows = [...operationRows.map((row) => row.event_type === "cancelled_before_launch" ? { ...row, event_type: "cancelled", from_phase: null, to_phase: "cancelled" } : row), ...taskCancelRows, ...migratedRows].sort((a, b) => a.cursor - b.cursor).slice(0, limit + 1);
+          const hasRuntimeEvents = Boolean(this.#db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='runtime_task_events'").get());
+          const runtimeRows = hasRuntimeEvents ? this.#db.prepare(`SELECT event_cursor AS cursor,event_cursor AS sequence,NULL AS operation_sequence,
+          operation_id,event_type,NULL AS from_phase,NULL AS to_phase,generation,
+          COALESCE(details_json,'{}') AS evidence_json,COALESCE(details_digest,?) AS evidence_digest,at,task_id,
+          attempt AS operation_attempt,summary
+        FROM runtime_task_events WHERE task_id=? AND event_cursor>? ORDER BY event_cursor LIMIT ?`).all(digest2("{}"), taskId, afterCursor, limit + 1) : [];
+          const rows = [...operationRows.map((row) => row.event_type === "cancelled_before_launch" ? { ...row, event_type: "cancelled", from_phase: null, to_phase: "cancelled" } : row), ...taskCancelRows, ...migratedRows, ...runtimeRows].sort((a, b) => a.cursor - b.cursor).slice(0, limit + 1);
           const hasMore = rows.length > limit;
           const events = hasMore ? rows.slice(0, limit) : rows;
           return { events, nextCursor: events.at(-1)?.cursor ?? afterCursor, hasMore };
+        });
+      }
+      /** Persist one already-sanitized Adapter observation under the Manager's
+       * permanent Claim binding. Worker sequence is idempotent within an Operation. */
+      appendRuntimeTaskEvent(input) {
+        this.#assertWritable();
+        const eventTypes = /* @__PURE__ */ new Set(["session_ready", "model_selected", "turn_started", "model_tool_call", "tool_status", "model_output", "turn_completed", "turn_failed", "report_ready"]);
+        if (!input || Object.getPrototypeOf(input) !== Object.prototype || !validId3(input.operation_id) || !validId3(input.task_id) || !Number.isSafeInteger(input.attempt) || input.attempt < 1 || !Number.isSafeInteger(input.generation) || input.generation < 1 || typeof input.claim_id !== "string" || !validId3(input.claim_id) || !Number.isSafeInteger(input.worker_sequence) || input.worker_sequence < 1 || !eventTypes.has(input.event_type) || typeof input.at !== "string" || input.at.length > 64 || Number.isNaN(Date.parse(input.at)) || typeof input.summary !== "string" || !input.summary.length || Buffer.byteLength(input.summary, "utf8") > 8192 || input.summary.includes("\0") || input.details !== void 0 && (input.details === null || Object.getPrototypeOf(input.details) !== Object.prototype)) fail2("invalid_runtime_task_event");
+        const detailsJson = input.details === void 0 ? null : canonical4(input.details);
+        if (detailsJson !== null && Buffer.byteLength(detailsJson, "utf8") > 8192) fail2("runtime_task_event_too_large");
+        return this.#transaction(() => {
+          const o = this.#attemptOperation(input);
+          this.#assertRecoveryNotLatched(o.operation_id);
+          if (o.phase !== "running" || o.claim_id !== input.claim_id || o.claim_generation !== o.generation) fail2("runtime_task_event_stale_claim");
+          const projection = this.#db.prepare("SELECT t.current_attempt,t.status AS task_status,a.status AS attempt_status,a.generation FROM tasks t JOIN attempts a ON a.task_id=t.task_id AND a.attempt=? WHERE t.task_id=?").get(o.attempt, o.task_id);
+          if (!projection || projection.current_attempt !== o.attempt || projection.task_status !== "running" || projection.attempt_status !== "running" || projection.generation !== o.generation) fail2("runtime_task_event_stale_attempt");
+          const eventDigest = digest2({
+            contract: "runtime-task-event-v1",
+            operation_id: input.operation_id,
+            task_id: input.task_id,
+            attempt: input.attempt,
+            generation: input.generation,
+            claim_id: input.claim_id,
+            worker_sequence: input.worker_sequence,
+            event_type: input.event_type,
+            at: input.at,
+            summary: input.summary,
+            details: input.details ?? null
+          });
+          const existing = this.#db.prepare("SELECT * FROM runtime_task_events WHERE operation_id=? AND worker_sequence=?").get(input.operation_id, input.worker_sequence);
+          if (existing) {
+            const existingDigest = digest2({
+              contract: "runtime-task-event-v1",
+              operation_id: existing.operation_id,
+              task_id: existing.task_id,
+              attempt: existing.attempt,
+              generation: existing.generation,
+              claim_id: existing.claim_id,
+              worker_sequence: existing.worker_sequence,
+              event_type: existing.event_type,
+              at: existing.at,
+              summary: existing.summary,
+              details: existing.details_json === null ? null : JSON.parse(existing.details_json)
+            });
+            if (existingDigest !== eventDigest) fail2("runtime_task_event_conflict");
+            return {
+              duplicate: true,
+              event_cursor: existing.event_cursor,
+              worker_sequence: existing.worker_sequence,
+              event_type: existing.event_type
+            };
+          }
+          const count = this.#db.prepare("SELECT COUNT(*) AS n FROM runtime_task_events WHERE operation_id=?").get(o.operation_id).n;
+          if (count >= 2e4) fail2("runtime_task_event_limit");
+          const eventCursor = this.#nextEventCursor();
+          this.#db.prepare(`INSERT INTO runtime_task_events(event_cursor,operation_id,task_id,attempt,generation,claim_id,
+        worker_sequence,event_type,at,summary,details_json,details_digest) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+            eventCursor,
+            o.operation_id,
+            o.task_id,
+            o.attempt,
+            o.generation,
+            o.claim_id,
+            input.worker_sequence,
+            input.event_type,
+            input.at,
+            input.summary,
+            detailsJson,
+            detailsJson === null ? null : digest2(detailsJson)
+          );
+          this.#faultPoint("after_runtime_event_insert");
+          return { duplicate: false, event_cursor: eventCursor, worker_sequence: input.worker_sequence, event_type: input.event_type };
         });
       }
       /** Read only the imported historical Event rows for one Task. */
@@ -7610,7 +7859,7 @@ var init_store = __esm({
         try {
           if (this.#db.prepare("PRAGMA foreign_keys").get().foreign_keys !== 1) fail2("foreign_keys_disabled");
           if (this.#db.prepare("PRAGMA user_version").get().user_version !== this.#schemaVersion) fail2("schema_version_unknown");
-          assertCandidateSchema(this.#db, this.#schemaVersion);
+          assertCandidateSchema(this.#db, this.#schemaVersion, { allowRuntimeEventExtensionAbsent: this.#recoveryOnly });
           if (this.#db.prepare("PRAGMA quick_check").get().quick_check !== "ok") fail2("database_corrupt");
           if (this.#db.prepare("PRAGMA foreign_key_check").all().length) fail2("database_inconsistent");
           const m = this.#db.prepare("SELECT * FROM authority_metadata").all();
@@ -7713,10 +7962,12 @@ var init_store = __esm({
           if (typeof eventSchema !== "string" || !/event_cursor\s+INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT/iu.test(eventSchema)) fail2("event_cursor_schema_mismatch");
           const sequenceRows = this.#db.prepare("SELECT name,seq FROM sqlite_sequence").all();
           const unlinkedCancelCursorState = this.#db.prepare("SELECT COUNT(*) AS n,MIN(queued_cancel_event_cursor) AS min_cursor,MAX(queued_cancel_event_cursor) AS max_cursor FROM attempts WHERE queued_cancel_id IS NOT NULL AND queued_cancel_operation_id IS NULL").get();
+          const hasRuntimeEvents = Boolean(this.#db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='runtime_task_events'").get());
           const logicalCursorState = this.#db.prepare(`SELECT COUNT(*) AS n,MIN(cursor) AS min_cursor,MAX(cursor) AS max_cursor FROM (
         SELECT event_cursor AS cursor FROM manager_operation_events
         UNION ALL SELECT queued_cancel_event_cursor AS cursor FROM attempts WHERE queued_cancel_id IS NOT NULL AND queued_cancel_operation_id IS NULL
-        UNION ALL SELECT event_cursor AS cursor FROM migrated_task_events)`).get();
+        UNION ALL SELECT event_cursor AS cursor FROM migrated_task_events
+        ${hasRuntimeEvents ? "UNION ALL SELECT event_cursor AS cursor FROM runtime_task_events" : ""})`).get();
           if (unlinkedCancelCursorState.n && (!Number.isSafeInteger(unlinkedCancelCursorState.min_cursor) || unlinkedCancelCursorState.min_cursor < 1 || !Number.isSafeInteger(unlinkedCancelCursorState.max_cursor) || unlinkedCancelCursorState.max_cursor < 1) || logicalCursorState.n !== m[0].next_event_cursor || m[0].next_event_cursor === 0 && (logicalCursorState.min_cursor !== null || logicalCursorState.max_cursor !== null) || m[0].next_event_cursor > 0 && (logicalCursorState.min_cursor !== 1 || logicalCursorState.max_cursor !== m[0].next_event_cursor)) fail2("event_cursor_invalid");
           if (sequenceRows.some((row) => row.name !== "manager_operation_events") || logicalCursorState.n === 0 && sequenceRows.length !== 0 || logicalCursorState.n > 0 && (sequenceRows.length !== 1 || sequenceRows[0].seq !== logicalCursorState.max_cursor || !Number.isSafeInteger(sequenceRows[0].seq) || sequenceRows[0].seq < 1)) fail2("event_cursor_invalid");
           if (this.#db.prepare(`SELECT a.task_id FROM attempts a JOIN manager_operation_events e ON e.event_cursor=a.queued_cancel_event_cursor
@@ -8070,6 +8321,232 @@ var init_store = __esm({
   }
 });
 
+// src/sqlite-candidate/wp6b2b1/runtime-event-channel.mjs
+import { createHash as createHash12 } from "node:crypto";
+async function createCandidateRuntimeEventChannel(child, operation, verifyProcessIdentity) {
+  if (!child || !Number.isSafeInteger(child.pid) || !Array.isArray(child.stdio) || child.stdio.length < 15 || !operation || operation.operation_kind !== "attempt_lifecycle" || operation.phase !== "running" || !Number.isSafeInteger(operation.generation) || operation.generation < 1 || !operation.claim_id || operation.claim_generation !== operation.generation || !operation.claim_worker_identity_json || !operation.launch_identity_json || !operation.claim_worker_identity_digest || typeof verifyProcessIdentity !== "function") {
+    throw coded2("runtime_event_channel_unavailable");
+  }
+  let worker;
+  let launch;
+  try {
+    worker = JSON.parse(operation.claim_worker_identity_json);
+    launch = JSON.parse(operation.launch_identity_json);
+  } catch {
+    throw coded2("runtime_event_channel_identity_invalid");
+  }
+  if (worker.process_id !== child.pid || worker.process_id !== launch.process_id || worker.start_fingerprint !== launch.start_fingerprint || sha2562(stableJson2(worker)) !== operation.claim_worker_identity_digest) {
+    throw coded2("runtime_event_channel_identity_mismatch");
+  }
+  const stream = child.stdio[14];
+  if (!stream || typeof stream[Symbol.asyncIterator] !== "function") {
+    throw coded2("runtime_event_channel_unavailable");
+  }
+  const binding = Object.freeze({
+    operation_id: operation.operation_id,
+    task_id: operation.task_id,
+    attempt: operation.attempt,
+    generation: operation.generation,
+    claim_id: operation.claim_id,
+    worker_identity_digest: operation.claim_worker_identity_digest,
+    process_id: worker.process_id,
+    start_fingerprint: worker.start_fingerprint
+  });
+  const reader = new JsonLineReader2(stream);
+  const channel = {
+    binding,
+    async receiveEvent() {
+      const frame = await reader.read();
+      const keys = ["at", "details", "event_type", "protocol", "summary", "worker_sequence"];
+      const actualKeys = Object.keys(frame).sort();
+      const expectedKeys = Object.hasOwn(frame, "details") ? keys : keys.filter((key) => key !== "details");
+      if (!validFrame(frame) || actualKeys.join("|") !== expectedKeys.join("|")) {
+        throw coded2("runtime_event_frame_identity_mismatch");
+      }
+      return Object.freeze({ binding, event: Object.freeze({
+        worker_sequence: frame.worker_sequence,
+        event_type: frame.event_type,
+        at: frame.at,
+        summary: frame.summary,
+        ...frame.details === void 0 ? {} : { details: frame.details }
+      }) });
+    }
+  };
+  if (child.exitCode !== null || child.signalCode !== null) throw coded2("runtime_event_worker_not_live");
+  let observed;
+  try {
+    observed = await verifyProcessIdentity({ child, expected: binding });
+  } catch {
+    throw coded2("runtime_event_channel_identity_unknown");
+  }
+  if (!observed || observed.state !== "verified" || observed.process_id !== binding.process_id || observed.start_fingerprint !== binding.start_fingerprint) {
+    throw coded2("runtime_event_channel_identity_mismatch");
+  }
+  CHANNELS2.add(channel);
+  return Object.freeze(channel);
+}
+function isCandidateRuntimeEventChannel(value) {
+  return !!value && CHANNELS2.has(value);
+}
+function validFrame(value) {
+  if (!value || Object.getPrototypeOf(value) !== Object.prototype || value.protocol !== PROTOCOL || !Number.isSafeInteger(value.worker_sequence) || value.worker_sequence < 1 || !EVENT_TYPES.has(value.event_type) || typeof value.at !== "string" || value.at.length > 64 || Number.isNaN(Date.parse(value.at)) || typeof value.summary !== "string" || Buffer.byteLength(value.summary, "utf8") < 1 || Buffer.byteLength(value.summary, "utf8") > 8192 || value.summary.includes("\0")) return false;
+  if (value.details !== void 0) {
+    if (!value.details || Object.getPrototypeOf(value.details) !== Object.prototype) return false;
+    try {
+      if (Buffer.byteLength(stableJson2(value.details), "utf8") > 8192) return false;
+    } catch {
+      return false;
+    }
+    if (!validDetails(value.event_type, value.details)) return false;
+  }
+  return true;
+}
+function validDetails(type, value) {
+  const allowed = DETAIL_KEYS.get(type);
+  const entries = Object.entries(value);
+  if (!allowed || !entries.length) return false;
+  for (const [key, item] of entries) {
+    if (!allowed.has(key)) return false;
+    if (key === "usage") {
+      if (!validUsage(item)) return false;
+    } else if (!(item === null || typeof item === "string" || typeof item === "boolean" || typeof item === "number" && Number.isFinite(item) && Number.isSafeInteger(item))) {
+      return false;
+    }
+  }
+  return true;
+}
+function validUsage(value) {
+  if (!value || Object.getPrototypeOf(value) !== Object.prototype) return false;
+  const keys = Object.keys(value);
+  if (!keys.length) return false;
+  for (const key of keys) {
+    if (![
+      "inputTokens",
+      "outputTokens",
+      "totalTokens",
+      "cachedInputTokens",
+      "reasoningTokens",
+      "input_tokens",
+      "output_tokens",
+      "total_tokens",
+      "cached_input_tokens",
+      "reasoning_tokens"
+    ].includes(key)) return false;
+    const item = value[key];
+    if (typeof item !== "number" || !Number.isFinite(item) || !Number.isSafeInteger(item) || item < 0) return false;
+  }
+  return true;
+}
+function stableJson2(value, depth = 0) {
+  if (depth > 24) throw coded2("runtime_event_json_too_deep");
+  if (value === null || typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
+  if (typeof value === "number" && Number.isFinite(value) && Number.isSafeInteger(value)) return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    if (value.length > 256) throw coded2("runtime_event_json_too_large");
+    return `[${value.map((item) => stableJson2(item, depth + 1)).join(",")}]`;
+  }
+  if (value && Object.getPrototypeOf(value) === Object.prototype) {
+    const keys = Object.keys(value);
+    if (keys.length > 128 || keys.some((key) => key !== key.normalize("NFC"))) {
+      throw coded2("runtime_event_json_too_large");
+    }
+    return `{${keys.sort().map((key) => `${JSON.stringify(key)}:${stableJson2(value[key], depth + 1)}`).join(",")}}`;
+  }
+  throw coded2("runtime_event_json_invalid");
+}
+function sha2562(value) {
+  return createHash12("sha256").update(value).digest("hex");
+}
+function coded2(code) {
+  return Object.assign(new Error(code), { code });
+}
+var CHANNELS2, MAX_FRAME_BYTES3, PROTOCOL, EVENT_TYPES, DETAIL_KEYS, JsonLineReader2;
+var init_runtime_event_channel = __esm({
+  "src/sqlite-candidate/wp6b2b1/runtime-event-channel.mjs"() {
+    "use strict";
+    CHANNELS2 = /* @__PURE__ */ new WeakSet();
+    MAX_FRAME_BYTES3 = 24576;
+    PROTOCOL = "bridge-sqlite-runtime-event-v1";
+    EVENT_TYPES = /* @__PURE__ */ new Set([
+      "session_ready",
+      "model_selected",
+      "turn_started",
+      "model_tool_call",
+      "tool_status",
+      "model_output",
+      "turn_completed",
+      "turn_failed",
+      "report_ready"
+    ]);
+    DETAIL_KEYS = /* @__PURE__ */ new Map([
+      ["session_ready", /* @__PURE__ */ new Set([
+        "session_id",
+        "project_path",
+        "execution_path",
+        "worktree_path",
+        "execution_mode",
+        "model_source",
+        "selected_model",
+        "reasoning_level",
+        "reasoning_level_source"
+      ])],
+      ["model_selected", /* @__PURE__ */ new Set([
+        "selected_model",
+        "model_source",
+        "provider_id",
+        "model_id",
+        "reasoning_level",
+        "reasoning_level_source"
+      ])],
+      ["turn_started", /* @__PURE__ */ new Set(["rpc_accepted", "turn_id", "event_seq"])],
+      ["model_tool_call", /* @__PURE__ */ new Set(["tool_name", "tool_call_id"])],
+      ["tool_status", /* @__PURE__ */ new Set(["tool_name", "state", "tool_call_id"])],
+      ["model_output", /* @__PURE__ */ new Set()],
+      ["turn_completed", /* @__PURE__ */ new Set([
+        "token_count",
+        "tool_call_count",
+        "event_seq",
+        "turn_id",
+        "usage"
+      ])],
+      ["turn_failed", /* @__PURE__ */ new Set(["error_code"])],
+      ["report_ready", /* @__PURE__ */ new Set(["needs_master_decision"])]
+    ]);
+    JsonLineReader2 = class {
+      #iterator;
+      #buffer = Buffer.alloc(0);
+      constructor(stream) {
+        this.#iterator = stream[Symbol.asyncIterator]();
+      }
+      async read() {
+        for (; ; ) {
+          const end = this.#buffer.indexOf(10);
+          if (end >= 0) {
+            const frame = this.#buffer.subarray(0, end);
+            this.#buffer = this.#buffer.subarray(end + 1);
+            if (!frame.length || frame.length > MAX_FRAME_BYTES3) throw coded2("runtime_event_frame_invalid");
+            let value;
+            try {
+              value = JSON.parse(frame.toString("utf8"));
+            } catch {
+              throw coded2("runtime_event_frame_invalid");
+            }
+            if (!value || Object.getPrototypeOf(value) !== Object.prototype) {
+              throw coded2("runtime_event_frame_invalid");
+            }
+            return value;
+          }
+          if (this.#buffer.length > MAX_FRAME_BYTES3) throw coded2("runtime_event_frame_too_large");
+          const next = await this.#iterator.next();
+          if (next.done) throw coded2(this.#buffer.length ? "runtime_event_frame_truncated" : "runtime_event_channel_closed");
+          const chunk = Buffer.isBuffer(next.value) ? next.value : Buffer.from(next.value);
+          this.#buffer = Buffer.concat([this.#buffer, chunk]);
+        }
+      }
+    };
+  }
+});
+
 // src/sqlite-candidate/wp6b2b1/lifecycle-port.mjs
 var lifecycle_port_exports = {};
 __export(lifecycle_port_exports, {
@@ -8097,6 +8574,9 @@ function createSqliteLifecyclePort(store, { recoveryEvidenceVerifier, workerIden
     if (typeof store[method] !== "function") throw new TypeError(`candidate SQLite Store missing ${method}`);
   }
   for (const method of INTERACTION_METHODS) {
+    if (typeof store[method] !== "function") throw new TypeError(`candidate SQLite Store missing ${method}`);
+  }
+  for (const method of RUNTIME_EVENT_METHODS) {
     if (typeof store[method] !== "function") throw new TypeError(`candidate SQLite Store missing ${method}`);
   }
   if (typeof store.compareAndSwapRecoveryObservation !== "function") throw new TypeError("candidate SQLite Store missing compareAndSwapRecoveryObservation");
@@ -8181,6 +8661,19 @@ function createSqliteLifecyclePort(store, { recoveryEvidenceVerifier, workerIden
       return store.completeInteractionReply(accepted);
     }
   });
+  Object.defineProperty(port, "openRuntimeEventChannel", {
+    enumerable: true,
+    value: (child, operation, verifyProcessIdentity) => createCandidateRuntimeEventChannel(child, operation, verifyProcessIdentity)
+  });
+  Object.defineProperty(port, "receiveRuntimeTaskEvent", {
+    enumerable: true,
+    value: async (channel) => {
+      if (!isCandidateRuntimeEventChannel(channel)) throw Object.assign(new Error("runtime event channel required"), { code: "runtime_event_channel_unavailable" });
+      const received = await channel.receiveEvent();
+      const { operation_id, task_id, attempt, generation, claim_id } = received.binding;
+      return store.appendRuntimeTaskEvent({ operation_id, task_id, attempt, generation, claim_id, ...received.event });
+    }
+  });
   Object.defineProperty(port, "recordRecoveryObservation", {
     enumerable: true,
     value: (input, evidence) => {
@@ -8208,12 +8701,13 @@ function createSqliteLifecyclePort(store, { recoveryEvidenceVerifier, workerIden
   });
   return Object.freeze(port);
 }
-var UnsupportedLifecycleOperationError, B1_METHODS, C1_METHODS, C2_METHODS, C3_READ_METHODS, CANCEL_METHODS, QUEUED_CANCEL_METHODS, INTERACTION_METHODS;
+var UnsupportedLifecycleOperationError, B1_METHODS, C1_METHODS, C2_METHODS, C3_READ_METHODS, CANCEL_METHODS, QUEUED_CANCEL_METHODS, INTERACTION_METHODS, RUNTIME_EVENT_METHODS;
 var init_lifecycle_port = __esm({
   "src/sqlite-candidate/wp6b2b1/lifecycle-port.mjs"() {
     "use strict";
     init_store();
     init_interaction_channel();
+    init_runtime_event_channel();
     UnsupportedLifecycleOperationError = class extends Error {
       constructor(operation) {
         super(`lifecycle operation is not implemented in the candidate: ${operation}`);
@@ -8246,6 +8740,7 @@ var init_lifecycle_port = __esm({
     CANCEL_METHODS = Object.freeze(["requestCancellation", "recordCancellationVerification"]);
     QUEUED_CANCEL_METHODS = Object.freeze(["cancelQueuedAttempt"]);
     INTERACTION_METHODS = Object.freeze(["recordInteractionRequest", "readInteractionRequest", "beginInteractionReply", "commitInteractionReply", "completeInteractionReply"]);
+    RUNTIME_EVENT_METHODS = Object.freeze(["appendRuntimeTaskEvent"]);
   }
 });
 
@@ -8260,7 +8755,7 @@ __export(lifecycle_gate_exports, {
   openClaimOnlyDriver: () => openClaimOnlyDriver,
   readAllLifecycleEventsForRecovery: () => readAllLifecycleEventsForRecovery
 });
-import { createHash as createHash12, randomUUID as randomUUID4 } from "node:crypto";
+import { createHash as createHash13, randomUUID as randomUUID4 } from "node:crypto";
 import { closeSync as closeSync3, existsSync as existsSync10, fsyncSync as fsyncSync2, linkSync, lstatSync as lstatSync3, openSync as openSync3, readFileSync as readFileSync12, readdirSync as readdirSync2, realpathSync as realpathSync5, unlinkSync as unlinkSync3, writeFileSync as writeFileSync4 } from "node:fs";
 import { spawn as spawn6 } from "node:child_process";
 import path16 from "node:path";
@@ -8366,7 +8861,7 @@ function assertBootstrapLockPath(lockPath) {
   }
 }
 async function tryAcquireWindowsBootstrapLock(root, lockPath, databaseFileName, ownerIdentity, processProbe) {
-  const record4 = `${JSON.stringify({
+  const record5 = `${JSON.stringify({
     schema_version: 1,
     state: "held",
     database_file: databaseFileName,
@@ -8396,7 +8891,7 @@ async function tryAcquireWindowsBootstrapLock(root, lockPath, databaseFileName, 
     env: {
       ...process.env,
       ZCODE_BOOTSTRAP_LOCK_FILE: lockPath,
-      ZCODE_BOOTSTRAP_LOCK_RECORD_B64: Buffer.from(record4, "utf8").toString("base64"),
+      ZCODE_BOOTSTRAP_LOCK_RECORD_B64: Buffer.from(record5, "utf8").toString("base64"),
       ZCODE_BOOTSTRAP_LOCK_RELEASE_RECORD_B64: Buffer.from(releaseRecord, "utf8").toString("base64")
     },
     stdio: ["pipe", "pipe", "pipe"],
@@ -8896,24 +9391,24 @@ function parsePreviousBootstrapLockRecord(encoded, databaseFileName) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new LifecycleGateError("sqlite_bootstrap_lock_record_invalid");
   }
-  const record4 = value;
-  if (record4["schema_version"] !== 1 || record4["database_file"] !== databaseFileName) {
+  const record5 = value;
+  if (record5["schema_version"] !== 1 || record5["database_file"] !== databaseFileName) {
     throw new LifecycleGateError("sqlite_bootstrap_lock_record_invalid");
   }
-  if (record4["state"] === "released") {
-    if (typeof record4["released_at"] !== "string" || Number.isNaN(Date.parse(record4["released_at"]))) {
+  if (record5["state"] === "released") {
+    if (typeof record5["released_at"] !== "string" || Number.isNaN(Date.parse(record5["released_at"]))) {
       throw new LifecycleGateError("sqlite_bootstrap_lock_record_invalid");
     }
-    return record4;
+    return record5;
   }
-  if (record4["state"] !== "held" || typeof record4["acquired_at"] !== "string" || Number.isNaN(Date.parse(record4["acquired_at"])) || typeof record4["token"] !== "string" || !record4["owner_identity"] || typeof record4["owner_identity"] !== "object") {
+  if (record5["state"] !== "held" || typeof record5["acquired_at"] !== "string" || Number.isNaN(Date.parse(record5["acquired_at"])) || typeof record5["token"] !== "string" || !record5["owner_identity"] || typeof record5["owner_identity"] !== "object") {
     throw new LifecycleGateError("sqlite_bootstrap_lock_record_invalid");
   }
-  const identity = record4["owner_identity"];
+  const identity = record5["owner_identity"];
   if (identity["fingerprint_precision"] !== "exact" || typeof identity["fingerprint"] !== "string" || identity["fingerprint"].length === 0 || identity["identity_version"] !== PROCESS_IDENTITY_VERSION || !Number.isSafeInteger(identity["pid"]) || Number(identity["pid"]) < 1 || typeof identity["platform"] !== "string" || typeof identity["captured_at"] !== "string" || Number.isNaN(Date.parse(identity["captured_at"]))) {
     throw new LifecycleGateError("sqlite_bootstrap_lock_record_invalid");
   }
-  return record4;
+  return record5;
 }
 function syncRegularFile(file) {
   const stat2 = lstatSync3(file);
@@ -8976,7 +9471,7 @@ async function openClaimOnlyDriver(options) {
     const fingerprint = text(worker_identity.start_fingerprint, "cancellation_worker_fingerprint_missing");
     const state = evidence.identity_state;
     if (worker_identity.source !== "manager_verified_process_probe" || worker_identity.fixture !== false || evidence.source !== "manager_process_probe" || evidence.worker_identity_digest !== operationDigest || evidence.process_id !== processId || evidence.start_fingerprint !== fingerprint || state !== "alive" && state !== "exited" || typeof evidence.probe_reason !== "string" || typeof evidence.observed_at !== "string") return false;
-    return { state, worker_identity_digest: operationDigest, evidence_digest: sha2562(canonicalJson2(evidence)) };
+    return { state, worker_identity_digest: operationDigest, evidence_digest: sha2563(canonicalJson2(evidence)) };
   };
   const cancellationVerifier = ({ operation, cancel_intent, worker_identity, evidence }) => {
     const operationDigest = text(operation.claim_worker_identity_digest, "cancellation_claim_identity_missing");
@@ -8992,7 +9487,7 @@ async function openClaimOnlyDriver(options) {
       root_process_id: processId,
       root_start_fingerprint: fingerprint,
       worker_tree_complete: true,
-      evidence_digest: sha2562(canonicalJson2(evidence))
+      evidence_digest: sha2563(canonicalJson2(evidence))
     };
   };
   const recoveryEvidenceBindings = /* @__PURE__ */ new Map();
@@ -9328,8 +9823,8 @@ async function openClaimOnlyDriver(options) {
             worker_identity_digest: workerDigest,
             launch_receipt_digest: text(operation.launch_receipt_digest, "recovery_receipt_digest_missing"),
             result_commit_ref: text(committedResult.result_commit_ref, "recovery_result_ref_missing"),
-            process_tree_digest: sha2562(canonicalJson2(processTreeFacts)),
-            resources_digest: sha2562(canonicalJson2(resourceFacts)),
+            process_tree_digest: sha2563(canonicalJson2(processTreeFacts)),
+            resources_digest: sha2563(canonicalJson2(resourceFacts)),
             root_process_id: processId,
             root_start_fingerprint: fingerprint,
             worker_tree_complete: true,
@@ -9381,7 +9876,7 @@ async function openClaimOnlyDriver(options) {
         complete_cleanup_closure: false,
         observed_at: typeof verdict2?.observed_at === "string" ? verdict2.observed_at : (/* @__PURE__ */ new Date()).toISOString()
       };
-      const evidenceDigest = sha2562(canonicalJson2(evidence));
+      const evidenceDigest = sha2563(canonicalJson2(evidence));
       const input = {
         operation_id: operationId,
         task_id: text(operation.task_id, "recovery_task_id_missing"),
@@ -9584,7 +10079,7 @@ async function openClaimOnlyDriver(options) {
         termination_signal: terminationSignal,
         live_pids: [],
         termination_state: terminationState,
-        process_tree_digest: sha2562(canonicalJson2(processTreeFacts))
+        process_tree_digest: sha2563(canonicalJson2(processTreeFacts))
       };
       const current = asRecord3(port.readOperation(operationId));
       const verification = asRecord3(port.recordCancellationVerification({ ...fence, revision: Number(current.revision) }, treeEvidence));
@@ -9685,7 +10180,7 @@ async function openClaimOnlyDriver(options) {
         launch_receipt_digest: text(operation.launch_receipt_digest, "cancellation_receipt_digest_missing"),
         result_commit_ref: text(operation.result_commit_ref, "cancellation_result_ref_missing"),
         process_tree_digest: proof.processTreeDigest,
-        resources_digest: sha2562(canonicalJson2(resourceFacts)),
+        resources_digest: sha2563(canonicalJson2(resourceFacts)),
         root_process_id: Number(worker.process_id),
         root_start_fingerprint: String(worker.start_fingerprint),
         worker_tree_complete: true,
@@ -9827,6 +10322,7 @@ async function openClaimOnlyDriver(options) {
           child = spawnClaimOnlyWorker(options.workerEntryPath, provenance, {
             ...options.enableSyntheticInteractionChannel || !options.testOnlyFakeAdapter ? { interactionChannel: true } : {},
             ...usePrivateAuth ? { privateAuthChannel: true } : {},
+            ...options.enableSyntheticInteractionChannel || !options.testOnlyFakeAdapter ? { runtimeEventChannel: true } : {},
             ...options.onWorkerDiagnosticLine ? { onWorkerDiagnosticLine: options.onWorkerDiagnosticLine } : {}
           });
           options.onChildSpawn?.(child);
@@ -9966,6 +10462,26 @@ async function openClaimOnlyDriver(options) {
               }
             }
           });
+          const runtimeEventsEnabled = options.enableSyntheticInteractionChannel || !options.testOnlyFakeAdapter;
+          const claimedOperation = asRecord3(port.readOperation(input.operationId));
+          const verifyClaimedWorkerIdentity = async ({ child: observedChild, expected }) => {
+            if (observedChild.pid !== expected.process_id || observedChild.exitCode !== null || observedChild.signalCode !== null) return false;
+            const workerIdentity = parseEvidence(String(claimedOperation.claim_worker_identity_json), "interaction_worker_identity_invalid");
+            if (workerIdentity.identity_version !== PROCESS_IDENTITY_VERSION || workerIdentity.platform !== probe.platform || workerIdentity.fingerprint_precision !== "exact") return false;
+            const probeOutcome = await probeWithDeadline(probe, {
+              pid: Number(expected.process_id),
+              identity: {
+                pid: Number(expected.process_id),
+                fingerprint: String(expected.start_fingerprint),
+                fingerprint_precision: "exact",
+                identity_version: PROCESS_IDENTITY_VERSION,
+                platform: probe.platform,
+                captured_at: String(workerIdentity.captured_at)
+              }
+            }, processProbeTimeoutMs);
+            return probeOutcome.status === "resolved" && probeOutcome.verdict?.state === "alive" ? { state: "verified", process_id: expected.process_id, start_fingerprint: expected.start_fingerprint } : false;
+          };
+          const runtimeEventChannel = runtimeEventsEnabled ? await port.openRuntimeEventChannel(child, claimedOperation, verifyClaimedWorkerIdentity) : void 0;
           try {
             await sendDecision(child, "claim_committed", {
               protocol: "bridge-sqlite-execution-envelope-v1",
@@ -9996,6 +10512,9 @@ async function openClaimOnlyDriver(options) {
           }
           stage("claim_continue_sent", { claim_id: claimId, execution_timeout_ms: executionTimeoutMs, result_wait_ms: resultWaitMs });
           let interactionPump;
+          let runtimeEventPump;
+          let runtimeEventFailure;
+          let reportReadyPersisted = false;
           let privateAuthPump;
           if (usePrivateAuth) {
             const owner = child;
@@ -10062,25 +10581,8 @@ async function openClaimOnlyDriver(options) {
               privateAuthAbort.abort();
             });
           }
-          if (options.enableSyntheticInteractionChannel || !options.testOnlyFakeAdapter) {
-            const claimedOperation = asRecord3(port.readOperation(input.operationId));
-            const channel = await port.openInteractionChannel(child, claimedOperation, async ({ child: observedChild, expected }) => {
-              if (observedChild.pid !== expected.process_id || observedChild.exitCode !== null || observedChild.signalCode !== null) return false;
-              const workerIdentity = parseEvidence(String(claimedOperation.claim_worker_identity_json), "interaction_worker_identity_invalid");
-              if (workerIdentity.identity_version !== PROCESS_IDENTITY_VERSION || workerIdentity.platform !== probe.platform || workerIdentity.fingerprint_precision !== "exact") return false;
-              const probeOutcome = await probeWithDeadline(probe, {
-                pid: Number(expected.process_id),
-                identity: {
-                  pid: Number(expected.process_id),
-                  fingerprint: String(expected.start_fingerprint),
-                  fingerprint_precision: "exact",
-                  identity_version: PROCESS_IDENTITY_VERSION,
-                  platform: probe.platform,
-                  captured_at: String(workerIdentity.captured_at)
-                }
-              }, processProbeTimeoutMs);
-              return probeOutcome.status === "resolved" && probeOutcome.verdict?.state === "alive" ? { state: "verified", process_id: expected.process_id, start_fingerprint: expected.start_fingerprint } : false;
-            });
+          if (runtimeEventsEnabled) {
+            const channel = await port.openInteractionChannel(child, claimedOperation, verifyClaimedWorkerIdentity);
             stage("interaction_channel_bound", { pid: child.pid, claim_id: claimId });
             interactionPump = (async () => {
               while (child.exitCode === null && child.signalCode === null) {
@@ -10095,6 +10597,33 @@ async function openClaimOnlyDriver(options) {
               }
             })().catch((error2) => {
               stage("interaction_channel_closed", { reason: errorCode(error2) ?? "interaction_channel_unavailable" });
+            });
+            const runtimeChannel = runtimeEventChannel;
+            stage("runtime_event_channel_bound", { pid: child.pid, claim_id: claimId });
+            const pump = (async () => {
+              for (; ; ) {
+                try {
+                  const persisted2 = await port.receiveRuntimeTaskEvent(runtimeChannel);
+                  stage("runtime_task_event_persisted", {
+                    event_cursor: persisted2.event_cursor,
+                    worker_sequence: persisted2.worker_sequence,
+                    duplicate: persisted2.duplicate
+                  });
+                  if (persisted2.event_type === "report_ready") reportReadyPersisted = true;
+                } catch (error2) {
+                  const reason2 = errorCode(error2) ?? "runtime_event_channel_unavailable";
+                  if (reason2 === "runtime_event_channel_closed") return;
+                  if (reason2.startsWith("runtime_event_frame_") || reason2.startsWith("runtime_event_channel_identity") || reason2 === "runtime_event_worker_not_live" || reason2 !== "runtime_event_channel_unavailable") {
+                    const runtimeStream = child?.stdio?.[14];
+                    runtimeStream?.resume?.();
+                    throw error2;
+                  }
+                  throw error2;
+                }
+              }
+            })();
+            runtimeEventPump = pump.catch((error2) => {
+              runtimeEventFailure = error2;
             });
           }
           let rawResult;
@@ -10115,6 +10644,16 @@ async function openClaimOnlyDriver(options) {
           }
           privateAuthAbort.abort();
           await privateAuthPump;
+          try {
+            await raceWithTimeout(runtimeEventPump ?? Promise.resolve(), workerCloseWaitMs, "runtime_event_drain_timeout");
+            if (runtimeEventFailure !== void 0) throw runtimeEventFailure;
+            stage("runtime_event_channel_drained");
+          } catch (error2) {
+            const drainReason = errorCode(error2) ?? "runtime_event_drain_timeout";
+            state = "result_rejected";
+            reason = drainReason;
+            stage("runtime_event_channel_drain_failed", { reason: drainReason });
+          }
           const releaseResultFinalization = await takeResultFinalization();
           try {
             if (state !== "result_rejected") {
@@ -10134,6 +10673,9 @@ async function openClaimOnlyDriver(options) {
                   resultFrame.execution_cleanup,
                   options.testOnlyFakeAdapter === true
                 );
+                if (!options.testOnlyFakeAdapter && (resultFrame.result.status === "completed" || resultFrame.result.status === "waiting_for_master") && !reportReadyPersisted) {
+                  throw new LifecycleGateError("runtime_report_ready_missing");
+                }
                 try {
                   canonicalTaskResult(resultFrame.result, { task_id: input.task.task_id, attempt: input.attempt, result_status: resultFrame.result.status });
                 } catch (error2) {
@@ -10417,7 +10959,7 @@ async function finalizeClaimedWorkerCleanup(port, input, generation, claimId, pr
             scan_clean: true,
             live_pids: [],
             observed_pids: observedPids,
-            execution_cleanup_proof_digest: sha2562(canonicalJson2(executionCleanup))
+            execution_cleanup_proof_digest: sha2563(canonicalJson2(executionCleanup))
           };
           const resourceFacts = {
             contract: executionCleanup.source === "zcode_app_server_adapter" ? "real-zcode-adapter-resources-v1" : "synthetic-claimed-worker-resources-v1",
@@ -10441,8 +10983,8 @@ async function finalizeClaimedWorkerCleanup(port, input, generation, claimId, pr
             worker_identity_digest: claimIdentityDigest,
             launch_receipt_digest: launchReceiptDigest,
             result_commit_ref: resultCommitRef,
-            process_tree_digest: sha2562(canonicalJson2(processTreeFacts)),
-            resources_digest: sha2562(canonicalJson2(resourceFacts)),
+            process_tree_digest: sha2563(canonicalJson2(processTreeFacts)),
+            resources_digest: sha2563(canonicalJson2(resourceFacts)),
             root_process_id: rootProcessId,
             root_start_fingerprint: rootFingerprint,
             worker_tree_complete: true,
@@ -10578,6 +11120,19 @@ async function readJsonLine(stream, limit, timeoutMs) {
     stream.once("error", onError);
   });
 }
+async function raceWithTimeout(promise, timeoutMs, code) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new LifecycleGateError(code)), timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 async function waitForClose(child, timeoutMs, drain) {
   let timer;
   let onClose;
@@ -10633,8 +11188,8 @@ function asRecord3(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new LifecycleGateError("candidate_projection_invalid");
   return value;
 }
-function sha2562(value) {
-  return createHash12("sha256").update(value, "utf8").digest("hex");
+function sha2563(value) {
+  return createHash13("sha256").update(value, "utf8").digest("hex");
 }
 function positive3(value, code) {
   if (!Number.isSafeInteger(value) || Number(value) < 1) throw new LifecycleGateError(code);
@@ -10820,7 +11375,7 @@ function taskExecutionWorkspace(task) {
   return task.worktree_path ?? task.workspace;
 }
 function verifyPersistedLaunchEvidence(port, input, operation, snapshot, request, intentRevision, receiptRevision) {
-  if (operation.operation_id !== snapshot.operation_id || operation.task_id !== snapshot.task_id || operation.attempt !== snapshot.attempt || operation.generation !== snapshot.generation || operation.workspace_ref !== snapshot.workspace_ref || operation.revision !== receiptRevision || operation.phase !== "launch_intent" || operation.claim_id !== null || operation.launch_id !== request.launch_id || operation.launch_epoch !== request.launch_epoch || operation.launch_receipt_id === null || operation.launch_receipt_digest === null || operation.launch_token_digest !== sha2562(request.launch_token)) {
+  if (operation.operation_id !== snapshot.operation_id || operation.task_id !== snapshot.task_id || operation.attempt !== snapshot.attempt || operation.generation !== snapshot.generation || operation.workspace_ref !== snapshot.workspace_ref || operation.revision !== receiptRevision || operation.phase !== "launch_intent" || operation.claim_id !== null || operation.launch_id !== request.launch_id || operation.launch_epoch !== request.launch_epoch || operation.launch_receipt_id === null || operation.launch_receipt_digest === null || operation.launch_token_digest !== sha2563(request.launch_token)) {
     throw new LifecycleGateError("persisted_launch_preflight_mismatch");
   }
   const events = port.readLifecycleEvents(input.operationId);
@@ -10829,7 +11384,7 @@ function verifyPersistedLaunchEvidence(port, input, operation, snapshot, request
   if (!reserved || !intent || !receipt2 || reserved.event_type !== "reserved" || reserved.sequence !== 1 || intent.event_type !== "launch_intent" || intent.sequence !== intentRevision || receipt2.event_type !== "launch_receipt" || receipt2.sequence !== receiptRevision || [reserved, intent, receipt2].some((event) => event.operation_id !== snapshot.operation_id || event.generation !== snapshot.generation)) throw new LifecycleGateError("persisted_launch_event_chain_mismatch");
   const intentEvidence = parseEvidence(intent.evidence_json, "persisted_launch_intent_invalid");
   const receiptEvidence = parseEvidence(receipt2.evidence_json, "persisted_launch_receipt_invalid");
-  if (intentEvidence.launch_id !== request.launch_id || intentEvidence.launch_epoch !== request.launch_epoch || intentEvidence.token_digest !== sha2562(request.launch_token) || receiptEvidence.launch_id !== request.launch_id || receiptEvidence.launch_epoch !== request.launch_epoch || receiptEvidence.token_digest !== sha2562(request.launch_token) || receiptEvidence.receipt_digest !== operation.launch_receipt_digest) {
+  if (intentEvidence.launch_id !== request.launch_id || intentEvidence.launch_epoch !== request.launch_epoch || intentEvidence.token_digest !== sha2563(request.launch_token) || receiptEvidence.launch_id !== request.launch_id || receiptEvidence.launch_epoch !== request.launch_epoch || receiptEvidence.token_digest !== sha2563(request.launch_token) || receiptEvidence.receipt_digest !== operation.launch_receipt_digest) {
     throw new LifecycleGateError("persisted_launch_binding_mismatch");
   }
   const reservedEvidence = parseEvidence(reserved.evidence_json, "reserved_event_invalid");
@@ -10873,8 +11428,8 @@ function canonicalJson2(value) {
   if (typeof value === "number" && Number.isSafeInteger(value)) return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(canonicalJson2).join(",")}]`;
   if (value && Object.getPrototypeOf(value) === Object.prototype) {
-    const record4 = value;
-    return `{${Object.keys(record4).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson2(record4[key])}`).join(",")}}`;
+    const record5 = value;
+    return `{${Object.keys(record5).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson2(record5[key])}`).join(",")}}`;
   }
   throw new LifecycleGateError("cleanup_evidence_not_canonicalizable");
 }
@@ -10883,7 +11438,7 @@ function digestProvenance(value) {
     bridge: { path: value.bridge.path, sha256: value.bridge.sha256 },
     worker: { path: value.worker.path, sha256: value.worker.sha256 }
   });
-  return sha2562(canonical5);
+  return sha2563(canonical5);
 }
 function interactionKey(taskId, requestId) {
   return `${taskId}\0${requestId}`;
@@ -11073,15 +11628,15 @@ var init_wait = __esm({
 
 // src/runtime/sqlite-doctor.ts
 function buildSqliteDoctorChecks(value, managerFence) {
-  const snapshot = record3(value);
+  const snapshot = record4(value);
   if (snapshot.root_status !== "consistent_read_only" || snapshot.verified_event_projection_consistency !== true || snapshot.writes_allowed !== false || snapshot.cleanup_performed !== false || snapshot.claim_release_performed !== false || snapshot.operation_release_performed !== false || !Array.isArray(snapshot.operations) || !Array.isArray(snapshot.task_projections)) {
     return [
       { name: "active_tasks", status: "unknown", summary: "SQLite lifecycle snapshot is unavailable or inconsistent; task occupancy is unknown" },
       { name: "recovery_lock", status: "error", summary: bounded(`SQLite Recovery snapshot is not verified: ${String(snapshot.root_status ?? "unavailable")}; ${Array.isArray(snapshot.root_blockers) ? snapshot.root_blockers.join(", ") : "snapshot_invalid"}`) }
     ];
   }
-  const operations = snapshot.operations.map(record3);
-  const tasks = snapshot.task_projections.map(record3);
+  const operations = snapshot.operations.map(record4);
+  const tasks = snapshot.task_projections.map(record4);
   const occupied = operations.filter((operation) => operation.capacity_occupied === true);
   const durableHolds = occupied.filter((operation) => operation.recovery_classification === "hold" || operation.recovery_classification === "quarantine");
   const queued = tasks.filter((task) => task.status === "queued");
@@ -11105,7 +11660,7 @@ function buildSqliteDoctorChecks(value, managerFence) {
     recovery
   ];
 }
-function record3(value) {
+function record4(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("SQLite diagnostic record is invalid");
   return value;
 }
@@ -11123,7 +11678,7 @@ var sqlite_lifecycle_mcp_authority_exports = {};
 __export(sqlite_lifecycle_mcp_authority_exports, {
   SqliteLifecycleMcpAuthority: () => SqliteLifecycleMcpAuthority
 });
-import { createHash as createHash13, randomBytes } from "node:crypto";
+import { createHash as createHash14, randomBytes } from "node:crypto";
 import path17 from "node:path";
 function validateTaskPackage2(task) {
   const worktreePath = task.worktree_path;
@@ -11155,7 +11710,7 @@ function toProgressEvent(value) {
     seq: Number(value.cursor ?? value.sequence),
     at: string4(value.at, "event_time_missing"),
     type: string4(value.event_type, "event_type_missing"),
-    summary: `SQLite lifecycle: ${string4(value.event_type, "event_type_missing")}`,
+    summary: typeof value.summary === "string" ? value.summary : `SQLite lifecycle: ${string4(value.event_type, "event_type_missing")}`,
     ...details ? { details } : {}
   };
 }
@@ -11174,7 +11729,7 @@ function encodeCursor(taskId, cursor) {
   return Buffer.from(JSON.stringify({ v: 1, task_id: taskId, cursor }), "utf8").toString("base64url");
 }
 function operationIdFor(taskId, attempt) {
-  const digest3 = createHash13("sha256").update(`${taskId}\0${attempt}`, "utf8").digest("hex").slice(0, 32);
+  const digest3 = createHash14("sha256").update(`${taskId}\0${attempt}`, "utf8").digest("hex").slice(0, 32);
   return `sqlite-${digest3}`;
 }
 function taskExecutionPath(task) {
@@ -11230,8 +11785,8 @@ async function boundedObservationProbe(probe, pid, identity) {
 function canonicalJson3(value) {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(canonicalJson3).join(",")}]`;
-  const record4 = value;
-  return `{${Object.keys(record4).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson3(record4[key])}`).join(",")}}`;
+  const record5 = value;
+  return `{${Object.keys(record5).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson3(record5[key])}`).join(",")}}`;
 }
 function asRecord4(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new TaskManagerError("TASK_STATE", "invalid SQLite lifecycle projection");
@@ -11809,7 +12364,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
       }
       #makeExecutionObservation(state, taskId, snapshot, reason, observedAt) {
         const operation = snapshot.operation;
-        const reference = createHash13("sha256").update(canonicalJson3({
+        const reference = createHash14("sha256").update(canonicalJson3({
           task_id: taskId,
           attempt: Number(snapshot.projection.current_attempt),
           operation_id: operation?.operation_id ?? null,
@@ -17532,8 +18087,8 @@ function rewriteKeyNames(ctx) {
       bySchema.set(entry.schema, entry);
   }
   const rewrites = /* @__PURE__ */ new Map();
-  for (const record4 of pendingRecords.get(ctx) ?? []) {
-    const seen = ctx.seen.get(record4);
+  for (const record5 of pendingRecords.get(ctx) ?? []) {
+    const seen = ctx.seen.get(record5);
     const names = (seen?.def ?? seen?.schema)?.propertyNames;
     if (!names || names === true || rewrites.has(names))
       continue;
@@ -34600,8 +35155,8 @@ function renderTaskFeedback(snapshot) {
   }
   return lines.join("\n");
 }
-function formatDuration(durationMs) {
-  const seconds = Math.floor(durationMs / 1e3);
+function formatDuration(durationMs2) {
+  const seconds = Math.floor(durationMs2 / 1e3);
   const minutes = Math.floor(seconds / 60);
   const remainingSeconds = seconds % 60;
   return minutes > 0 ? `${minutes}m ${remainingSeconds}s` : `${remainingSeconds}s`;
@@ -36137,8 +36692,8 @@ function toModelRef(value) {
   const ref = asRecord2(value);
   return typeof ref.providerId === "string" && typeof ref.modelId === "string" ? { provider_id: ref.providerId, model_id: ref.modelId } : null;
 }
-function nestedString(record4, keys) {
-  let value = record4;
+function nestedString(record5, keys) {
+  let value = record5;
   for (const key of keys) value = asRecord2(value)[key];
   return typeof value === "string" ? value : null;
 }
@@ -36412,37 +36967,37 @@ function validateFailureFacts(value) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error("failure facts must be a JSON object");
   }
-  const record4 = value;
-  for (const key of Object.keys(record4)) {
+  const record5 = value;
+  for (const key of Object.keys(record5)) {
     if (!FACTS_KEYS.has(key)) throw new Error("failure facts has an unknown field");
   }
   for (const key of FACTS_KEYS) {
-    if (!(key in record4)) throw new Error(`failure facts is missing the field: ${key}`);
+    if (!(key in record5)) throw new Error(`failure facts is missing the field: ${key}`);
   }
-  if (record4["schema_version"] !== "1") throw new Error('failure facts schema_version must be "1"');
-  if (!FAILURE_SOURCES.includes(record4["source"])) {
+  if (record5["schema_version"] !== "1") throw new Error('failure facts schema_version must be "1"');
+  if (!FAILURE_SOURCES.includes(record5["source"])) {
     throw new Error("failure facts source is not in the frozen registry");
   }
-  if (!FAILURE_PHASE_SET.has(record4["phase"])) {
+  if (!FAILURE_PHASE_SET.has(record5["phase"])) {
     throw new Error("failure facts phase is not in the frozen registry");
   }
-  if (!ACCEPTED_STATES.includes(record4["accepted_before_error"])) {
+  if (!ACCEPTED_STATES.includes(record5["accepted_before_error"])) {
     throw new Error("failure facts accepted_before_error must be yes, no, or unknown");
   }
-  if (!FAILURE_CATEGORIES.includes(record4["category"])) {
+  if (!FAILURE_CATEGORIES.includes(record5["category"])) {
     throw new Error("failure facts category is not in the frozen registry");
   }
-  if (!CONFIDENCE_LEVELS.includes(record4["confidence"])) {
+  if (!CONFIDENCE_LEVELS.includes(record5["confidence"])) {
     throw new Error("failure facts confidence is not in the frozen registry");
   }
-  if (!EVIDENCE_BASES.includes(record4["evidence_basis"])) {
+  if (!EVIDENCE_BASES.includes(record5["evidence_basis"])) {
     throw new Error("failure facts evidence_basis is not in the frozen registry");
   }
-  if (typeof record4["evidence_conflict"] !== "boolean") {
+  if (typeof record5["evidence_conflict"] !== "boolean") {
     throw new Error("failure facts evidence_conflict must be a boolean");
   }
-  const retryable2 = record4["runtime_retryable"];
-  const retryableBasis = record4["runtime_retryable_basis"];
+  const retryable2 = record5["runtime_retryable"];
+  const retryableBasis = record5["runtime_retryable_basis"];
   if (retryable2 !== null && typeof retryable2 !== "boolean") {
     throw new Error("failure facts runtime_retryable must be a boolean or null");
   }
@@ -36464,7 +37019,7 @@ function validateFailureFacts(value) {
     ["result_type", RESULT_TYPE_REGISTRY]
   ];
   for (const [key, registry2] of codeFields) {
-    const item = record4[key];
+    const item = record5[key];
     if (item === null) continue;
     if (key !== "rpc_method" && (typeof item !== "string" || !CODE_PATTERN.test(item))) {
       throw new Error(`failure facts field ${key} is not a bounded code value`);
@@ -36473,16 +37028,16 @@ function validateFailureFacts(value) {
       throw new Error(`failure facts field ${key} is not a registered value`);
     }
   }
-  if (record4["rpc_code"] !== null && safeIntegerOrNull(record4["rpc_code"]) === null) {
+  if (record5["rpc_code"] !== null && safeIntegerOrNull(record5["rpc_code"]) === null) {
     throw new Error("failure facts rpc_code must be a safe integer or null");
   }
-  if (record4["http_status"] !== null && httpStatusOrNull(record4["http_status"]) === null) {
+  if (record5["http_status"] !== null && httpStatusOrNull(record5["http_status"]) === null) {
     throw new Error("failure facts http_status must be an integer in 100..599 or null");
   }
-  if (record4["process_errno"] !== null && !PROCESS_ERRNOS.includes(record4["process_errno"])) {
+  if (record5["process_errno"] !== null && !PROCESS_ERRNOS.includes(record5["process_errno"])) {
     throw new Error("failure facts process_errno must be ENOENT, EACCES, EPERM, or null");
   }
-  const bytes = Buffer.byteLength(JSON.stringify(record4), "utf8");
+  const bytes = Buffer.byteLength(JSON.stringify(record5), "utf8");
   if (bytes > MAX_FAILURE_FACTS_BYTES) {
     throw new Error(`failure facts snapshot exceeds the ${MAX_FAILURE_FACTS_BYTES}-byte limit (${bytes} bytes)`);
   }

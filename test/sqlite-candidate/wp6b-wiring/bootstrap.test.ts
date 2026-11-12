@@ -4,10 +4,13 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { once } from "node:events";
+import { Readable } from "node:stream";
 import { createLaunchBootstrap, decodeLaunchBootstrap, deriveAdmissionPolicySnapshotDigest, encodeLaunchBootstrap } from "../../../src/sqlite-candidate/wp6b2b1/launch-bootstrap.js";
 import { spawnClaimOnlyWorker } from "../../../src/manager/spawn-worker.js";
 import { BRIDGE_WORKER_LAUNCH_MARKER, fingerprintRuntimeArtifact } from "../../../src/runtime/build-provenance.js";
 import { createWorkerEnv } from "../../../src/runtime/child-env.js";
+import { createCandidateRuntimeEventChannel } from "../../../src/sqlite-candidate/wp6b2b1/runtime-event-channel.mjs";
+import { digest } from "../../../src/sqlite-candidate/wp6b2b1/store.mjs";
 
 const request = {
   operation_id: "op-bootstrap",
@@ -60,8 +63,48 @@ test("formal SQLite Host selects only the real Adapter unless a test-only driver
   const worker = readFileSync(path.join(process.cwd(), "src", "worker", "worker-main.ts"), "utf8");
   assert.doesNotMatch(host, /testOnlyFakeAdapter|fake-result-adapter/u);
   assert.match(gate, /adapter_mode:\s*options\.testOnlyFakeAdapter\s*\?\s*"test_fake"\s*:\s*"zcode_app_server"/u);
-  assert.match(worker, /execution\.adapter_mode === "test_fake"\s*\?\s*await runExplicitFakeAdapter\(bootstrap, execution, candidateInteraction\)\s*:\s*await runZCodeAdapter\(\s*bootstrap,\s*execution,\s*candidateInteraction,\s*options\.privateAuthMode \? identity : undefined,\s*options\.dependencies,?\s*\)/u);
+  assert.match(worker, /execution\.adapter_mode === "test_fake"\s*\?\s*await runExplicitFakeAdapter\(bootstrap, execution, candidateInteraction\)\s*:\s*await runZCodeAdapter\(\s*bootstrap,\s*execution,\s*candidateInteraction,\s*options\.privateAuthMode \? identity : undefined,\s*options\.dependencies,\s*runtimeEvents,?\s*\)/u);
   assert.match(worker, /if \(execution\.adapter_mode !== "test_fake"\) throw new Error\("fake Adapter is restricted to explicit test mode"\)/u);
+});
+
+test("Manager rejects synthetic Runtime Event frames outside the per-event details whitelist", async () => {
+  const workerIdentity = { process_id: 47_321, start_fingerprint: "synthetic-runtime-event-identity" };
+  const operation = {
+    operation_kind: "attempt_lifecycle",
+    phase: "running",
+    operation_id: "runtime-channel-op",
+    task_id: "runtime-channel-task",
+    attempt: 1,
+    generation: 3,
+    claim_id: "runtime-channel-claim",
+    claim_generation: 3,
+    claim_worker_identity_json: JSON.stringify(workerIdentity),
+    launch_identity_json: JSON.stringify(workerIdentity),
+    claim_worker_identity_digest: digest(workerIdentity),
+  };
+  for (const details of [{ authorization: "must-not-persist" }, { hidden_reasoning: "must-not-persist" }]) {
+    const frame = {
+      protocol: "bridge-sqlite-runtime-event-v1",
+      worker_sequence: 1,
+      event_type: "session_ready",
+      at: "2026-11-13T00:00:00.000Z",
+      summary: "synthetic malformed runtime event",
+      details,
+    };
+    const stdio: Array<Readable | null> = Array.from({ length: 15 }, () => null);
+    stdio[14] = Readable.from([Buffer.from(`${JSON.stringify(frame)}\n`)]);
+    const child = { pid: workerIdentity.process_id, stdio, exitCode: null, signalCode: null };
+    const channel = await createCandidateRuntimeEventChannel(child, operation, async () => ({
+      state: "verified",
+      process_id: workerIdentity.process_id,
+      start_fingerprint: workerIdentity.start_fingerprint,
+    }));
+    await assert.rejects(channel.receiveEvent(), (error: unknown) => {
+      assert.ok(error && typeof error === "object" && "code" in error);
+      assert.match(String((error as { readonly code?: unknown }).code), /^runtime_event_frame_/u);
+      return true;
+    });
+  }
 });
 
 test("claim-only Worker rejects a mismatched artifact provenance before handshake", { timeout: 20_000 }, async () => {

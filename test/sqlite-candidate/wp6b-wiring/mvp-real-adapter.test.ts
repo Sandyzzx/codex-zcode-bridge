@@ -21,6 +21,7 @@ import {
   readStartPlanRoutingRegistry,
   StartPlanEntitlementJournal,
 } from "../../../src/runtime/model-routing.js";
+import { createBoundedRuntimeEventPublisher } from "../../../src/worker/worker-main.js";
 
 const projectRoot = process.cwd();
 const compiledCandidate = path.join(projectRoot, "dist-test", "src", "sqlite-candidate", "wp6b2b1");
@@ -67,6 +68,21 @@ test.after(() => {
   try { rmSync(fixtureRoot, { recursive: true, force: true }); } catch { /* fixture retained */ }
 });
 
+test("Runtime Event publisher latches synchronous send failures and rejects close", async () => {
+  let senderClosed = false;
+  const publisher = createBoundedRuntimeEventPublisher({
+    send() { throw new Error("synthetic synchronous validation failure"); },
+    async close() { senderClosed = true; },
+  });
+  publisher.publish({ type: "session_ready", summary: "synthetic session ready" });
+  await assert.rejects(publisher.close(), (error: unknown) => {
+    assert.ok(error && typeof error === "object" && "code" in error);
+    assert.equal((error as { readonly code?: unknown }).code, "runtime_event_publish_failed");
+    return true;
+  });
+  assert.equal(senderClosed, true);
+});
+
 interface FakeRuntimeFixture {
   readonly entrypoint: string;
   readonly runtimeRoot: string;
@@ -80,7 +96,8 @@ interface FakeRuntimeFixture {
 
 type RuntimeVariant = "success" | "failure" | "stderr-flood" | "large-result" | "deadline-success" | "deadline-hang"
   | "facts-turn-failure"
-  | "private-auth" | "private-auth-echo" | "private-auth-wrong-turn" | "private-auth-wrong-claim"
+  | "private-auth" | "private-auth-echo" | "private-auth-split-echo"
+  | "private-auth-wrong-turn" | "private-auth-wrong-claim"
   | "private-auth-account-switch" | "private-auth-hold" | "private-auth-eof-recheck" | "private-auth-interaction"
   | "private-auth-multi-iteration" | "private-auth-concurrent"
   | "private-auth-preflight-reject";
@@ -106,13 +123,23 @@ function writeFakeRuntime(name: string, variant: RuntimeVariant): FakeRuntimeFix
     ? `process.stdout.write(JSON.stringify({ method: "session/event", params: { seq: 1, type: "turn.failed", payload: { error: { message: "synthetic adapter failure" } } } }) + "\\n");`
     : variant === "facts-turn-failure"
     ? `process.stdout.write(JSON.stringify({ method: "session/event", params: { seq: 1, type: "turn.failed", payload: { error: { code: "model_request_failed", type: "model_error", message: "SENTINEL_FF_MESSAGE provider rejected the turn", attribution: { providerErrorCode: "3007", statusCode: 429, retryable: false } } } } }) + "\\n");`
+    : variant === "private-auth-split-echo"
+    ? [
+      `const splitAt = Math.max(1, Math.floor(receivedCredential.length / 2));`,
+      `process.stdout.write(JSON.stringify({ method: "session/event", params: { sessionId, seq: 2, turnId: "native-fixture-turn", type: "model.streaming", payload: { kind: "text_start" } } }) + "\\n");`,
+      `process.stdout.write(JSON.stringify({ method: "session/event", params: { sessionId, seq: 3, turnId: "native-fixture-turn", type: "model.streaming", payload: { kind: "text_delta", delta: "before " + receivedCredential.slice(0, splitAt) } } }) + "\\n");`,
+      `process.stdout.write(JSON.stringify({ method: "session/event", params: { sessionId, seq: 4, turnId: "native-fixture-turn", type: "model.streaming", payload: { kind: "tool_call", toolName: "Bash", toolCallId: "call-split" } } }) + "\\n");`,
+      `process.stdout.write(JSON.stringify({ method: "session/event", params: { sessionId, seq: 5, turnId: "native-fixture-turn", type: "tool.updated", payload: { kind: "completed", toolName: "Bash", toolCallId: "call-split" } } }) + "\\n");`,
+      `process.stdout.write(JSON.stringify({ method: "session/event", params: { sessionId, seq: 6, turnId: "native-fixture-turn", type: "model.streaming", payload: { kind: "text_delta", delta: receivedCredential.slice(splitAt) + " after" } } }) + "\\n");`,
+      `process.stdout.write(JSON.stringify({ method: "session/event", params: { sessionId, seq: 7, turnId: "native-fixture-turn", type: "turn.completed", payload: { response: ${JSON.stringify(report)}, usage: { totalTokens: 4 }, resultType: "success" } } }) + "\\n");`,
+    ].join("\n")
     : [
       `const task = JSON.parse(fs.readFileSync(${JSON.stringify(taskInput)}, "utf8"));`,
       `const report = ${JSON.stringify(report)}.replace("TASK_ID", task.task_id)${variant === "private-auth-echo" ? '.replace("synthetic MVP real-adapter report", "echo " + receivedCredential)' : ''};`,
       ...(variant === "stderr-flood" ? [
-        `for (let seq = 1; seq <= 32000; seq++) process.stdout.write(JSON.stringify({ method: "session/event", params: { seq, type: "model.streaming", payload: { kind: "text_delta", delta: "x" } } }) + "\\n");`,
+        `for (let seq = 5; seq <= 32004; seq++) process.stdout.write(JSON.stringify({ method: "session/event", params: { seq, type: "model.streaming", payload: { kind: "text_delta", delta: "x" } } }) + "\\n");`,
       ] : []),
-      `process.stdout.write(JSON.stringify({ method: "session/event", params: { seq: ${variant.startsWith("private-auth") ? 2 : variant === "stderr-flood" ? 32001 : 1}, ${variant.startsWith("private-auth") ? 'sessionId, turnId: "native-fixture-turn",' : ''} type: "turn.completed", payload: { response: report, usage: { totalTokens: 4 }, resultType: "success" } } }) + "\\n");`,
+      `process.stdout.write(JSON.stringify({ method: "session/event", params: { seq: ${variant.startsWith("private-auth") ? 2 : variant === "stderr-flood" ? 32005 : 5}, ${variant.startsWith("private-auth") ? 'sessionId, turnId: "native-fixture-turn",' : ''} type: "turn.completed", payload: { response: report, usage: { totalTokens: 4 }, resultType: "success" } } }) + "\\n");`,
     ].join("\n");
   const script = [
     `const readline = require("node:readline");`,
@@ -166,6 +193,10 @@ function writeFakeRuntime(name: string, variant: RuntimeVariant): FakeRuntimeFix
     `    if (${variant === "deadline-hang"}) return;`,
     `    if (${variant !== "failure" && variant !== "facts-turn-failure" && !variant.startsWith("deadline-")} && !interactionSent) {`,
     `      interactionSent = true;`,
+    `      process.stdout.write(JSON.stringify({ method: "session/event", params: { sessionId, seq: 1, turnId: "native-fixture-turn", type: "model.streaming", payload: { kind: "text_start" } } }) + "\\n");`,
+    `      process.stdout.write(JSON.stringify({ method: "session/event", params: { sessionId, seq: 2, turnId: "native-fixture-turn", type: "model.streaming", payload: { kind: "text_delta", delta: "a" + "🙂".repeat(1001) + " Synthetic visible output before tool use." } } }) + "\\n");`,
+    `      process.stdout.write(JSON.stringify({ method: "session/event", params: { sessionId, seq: 3, turnId: "native-fixture-turn", type: "model.streaming", payload: { kind: "tool_call", toolName: "Bash", toolCallId: "call-1" } } }) + "\\n");`,
+    `      process.stdout.write(JSON.stringify({ method: "session/event", params: { sessionId, seq: 4, turnId: "native-fixture-turn", type: "tool.updated", payload: { kind: "completed", toolName: "Bash", toolCallId: "call-1" } } }) + "\\n");`,
     `      for (const rpcId of ["interaction-rpc-1", "interaction-rpc-2"]) {`,
     `        process.stdout.write(JSON.stringify({ id: rpcId, method: "interaction/requestPermission", params: { requestId: "permission-1", sessionId, toolCallId: "call-1", toolName: "Bash", reason: "Run the synthetic build command", input: { command: "npm run build" }, options: [{ kind: "allow_once" }, { kind: "deny" }] } }) + "\\n");`,
     `      }`,
@@ -590,6 +621,17 @@ test("SQLite production Worker survives streaming stderr backpressure without a 
     assert.match(String(result.summary), /synthetic MVP real-adapter report/u);
     const requests = readFileSync(runtime.requestLog, "utf8").trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
     assert.equal(requests.filter((message) => message.method === "session/send").length, 1);
+    const page = contentObject(await client.callTool({ name: "zcode_events", arguments: {
+      task_id: taskId, after_seq: 0, limit: 200,
+    } }));
+    const output = (page.events as Array<Record<string, unknown>>)
+      .filter((event) => event.type === "model_output")
+      .map((event) => String(event.summary));
+    const visible = output.join("");
+    assert.ok(visible.endsWith("x".repeat(32_000)), "all 32,000 streamed characters must remain ordered and durable");
+    assert.ok(visible.includes("a" + "🙂".repeat(1001)), "UTF-8 event chunking must not split or replace non-BMP text");
+    assert.ok(visible.includes("Synthetic visible output before tool use."));
+    assert.ok(output.every((chunk) => Buffer.byteLength(chunk, "utf8") <= 8_000));
   }, { runtimeVariant: "stderr-flood" });
 });
 
@@ -617,6 +659,41 @@ test("formal MCP lifecycle runs a real ZCodeAppServerAdapter against a controlle
     const result = contentObject(await client.callTool({ name: "zcode_result", arguments: { task_id: taskId } }));
     assert.equal(result.status, "completed");
     assert.ok(String(result.summary).includes("synthetic MVP real-adapter report"), `Result must come from the real Adapter response: ${JSON.stringify(result)}`);
+    assert.equal((result.usage as Record<string, unknown>).total_tokens, 4);
+    assert.equal((result.model as Record<string, unknown>).provider_id, "provider-default");
+    assert.equal((result.model as Record<string, unknown>).model_id, "model-default");
+    assert.ok(Number.isSafeInteger((result.timing as Record<string, unknown>).wall_ms));
+
+    const runtimeEvents = contentObject(await client.callTool({
+      name: "zcode_events",
+      arguments: { task_id: taskId, after_seq: 0, limit: 200 },
+    })).events as Array<Record<string, unknown>>;
+    const runtimeTypes = runtimeEvents
+      .filter((event) => [
+        "session_ready", "model_selected", "turn_started", "model_tool_call",
+        "tool_status", "model_output", "turn_completed", "report_ready",
+      ].includes(String(event.type)))
+      .map((event) => String(event.type));
+    for (const type of ["session_ready", "model_selected", "turn_started",
+      "model_output", "model_tool_call", "tool_status", "turn_completed", "report_ready"]) {
+      assert.ok(runtimeTypes.includes(type), `missing persisted runtime event ${type}`);
+    }
+    assert.ok(runtimeEvents.some((event) => event.type === "model_output"
+      && String(event.summary).includes("Synthetic visible output before tool use.")));
+
+    const feedback = contentObject(await client.callTool({
+      name: "zcode_feedback",
+      arguments: { task_id: taskId },
+    }));
+    assert.deepEqual(feedback.model, {
+      provider_id: "provider-default",
+      model_id: "model-default",
+      reasoning_level: null,
+      source: "runtime",
+    });
+    assert.equal((feedback.activity as Record<string, unknown>).kind, "tool_update");
+    assert.ok(String((feedback.activity as Record<string, unknown>).summary).includes("Bash"));
+    assert.equal((feedback.result as Record<string, unknown>).source, "agent_report");
 
     const requests = readFileSync(runtime.requestLog, "utf8").trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
     assert.ok(requests.some((message) => message.method === "session/create"), "the real Adapter must start an app-server session");
@@ -633,6 +710,9 @@ test("formal MCP lifecycle runs a real ZCodeAppServerAdapter against a controlle
       assert.equal(lifecycle.filter((event) => event.event_type === "result_committed").length, 1);
       assert.equal(lifecycle.filter((event) => event.event_type === "claim_committed").length, 1);
       assert.equal(lifecycle.filter((event) => event.event_type === "launch_intent").length, 1, "the real Adapter path must Spawn exactly once");
+      const persistedRuntime = eventsRoot.readTaskEvents(taskId, { afterCursor: 0, limit: 200 }).events;
+      assert.ok(persistedRuntime.some((event) => event.event_type === "report_ready"),
+        "report_ready must be drained before Result commit and remain readable after Worker exit");
     } finally {
       eventsRoot.close();
     }
@@ -663,7 +743,7 @@ test("Start Plan without official auth is rejected before task persistence or Pr
   }, { preserveFixtureOnFailure: true });
 });
 
-for (const variant of ["private-auth", "private-auth-echo"] as const) test(`SQLite Worker private auth ${variant} keeps synthetic credential out of persisted output`, { timeout: 120_000 }, async () => {
+for (const variant of ["private-auth", "private-auth-echo", "private-auth-split-echo"] as const) test(`SQLite Worker private auth ${variant} keeps synthetic credential out of persisted output`, { timeout: 120_000 }, async () => {
   const stderr = { lines: [] as string[] };
   let workerArgs: readonly string[] | undefined;
   await withRealAdapterMcp(async (client, manager, dataRoot, workspace, runtime) => {
@@ -678,6 +758,16 @@ for (const variant of ["private-auth", "private-auth-echo"] as const) test(`SQLi
     await waitForLifecycleEvent(client, taskId, "released");
     const result = contentObject(await client.callTool({ name: "zcode_result", arguments: { task_id: taskId } }));
     assert.equal(result.status, "completed");
+    if (variant === "private-auth-split-echo") {
+      const events = contentObject(await client.callTool({
+        name: "zcode_events",
+        arguments: { task_id: taskId, after_seq: 0, limit: 200 },
+      })).events as Array<Record<string, unknown>>;
+      const visibleOutput = events.filter((event) => event.type === "model_output")
+        .map((event) => String(event.summary)).join("");
+      assert.match(visibleOutput, /before \[REDACTED\] after/u,
+        "credential fragments must be redacted after consecutive deltas are joined");
+    }
     const requests = readFileSync(runtime.requestLog, "utf8").trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
     assert.equal(requests.filter((item) => item.auth_applied === true).length, 1);
     const marker = Buffer.from("SYNTHETIC_GATE2_SECRET_93d9422b");

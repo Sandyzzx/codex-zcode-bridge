@@ -306,6 +306,8 @@ test("the real validator rejects injected development-path references and keeps 
     const adminSchema = "SELECT 2;\n";
     writeFileSync(path.join(root, "src", "sqlite-candidate", "wp6b2b1", "schema.sql"), schema);
     writeFileSync(path.join(pluginRoot, "dist", "schema.sql"), schema);
+    writeFileSync(path.join(root, "src", "sqlite-candidate", "wp6b2b1", "runtime-events.sql"), schema);
+    writeFileSync(path.join(pluginRoot, "dist", "runtime-events.sql"), schema);
     writeFileSync(path.join(root, "src", "sqlite-candidate", "wp6b2b1", "schema-v13.sql"), schema);
     writeFileSync(path.join(pluginRoot, "dist", "schema-v13.sql"), schema);
     writeFileSync(path.join(pluginRoot, "dist", "upgrade-sqlite-v14.mjs"), "");

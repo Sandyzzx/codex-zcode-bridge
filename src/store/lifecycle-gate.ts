@@ -171,6 +171,8 @@ interface ClaimOnlyPort {
   openInteractionChannel(child: ClaimOnlyWorkerProcess, operation: Readonly<Record<string, unknown>>, verifyProcessIdentity: (input: CandidateInteractionIdentityCheck) => Promise<unknown>): Promise<CandidateInteractionChannel>;
   receiveInteractionRequest(channel: CandidateInteractionChannel): Promise<Readonly<Record<string, unknown>>>;
   replyToInteractionRequest(input: unknown, channel: CandidateInteractionChannel): Promise<Readonly<Record<string, unknown>>>;
+  openRuntimeEventChannel(child: ClaimOnlyWorkerProcess, operation: Readonly<Record<string, unknown>>, verifyProcessIdentity: (input: CandidateInteractionIdentityCheck) => Promise<unknown>): Promise<CandidateRuntimeEventChannel>;
+  receiveRuntimeTaskEvent(channel: CandidateRuntimeEventChannel): Promise<Readonly<Record<string, unknown>>>;
 }
 
 /** Read every Operation event through the Store's bounded cursor API. */
@@ -204,6 +206,11 @@ interface CandidateInteractionChannel {
 interface CandidateInteractionIdentityCheck {
   readonly child: ClaimOnlyWorkerProcess;
   readonly expected: Readonly<{ process_id: number; start_fingerprint: string }>;
+}
+
+interface CandidateRuntimeEventChannel {
+  readonly binding: Readonly<Record<string, unknown>>;
+  receiveEvent(): Promise<Readonly<Record<string, unknown>>>;
 }
 
 export class LifecycleGateError extends Error {
@@ -2096,6 +2103,7 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
           child = spawnClaimOnlyWorker(options.workerEntryPath, provenance, {
             ...(options.enableSyntheticInteractionChannel || !options.testOnlyFakeAdapter ? { interactionChannel: true } : {}),
             ...(usePrivateAuth ? { privateAuthChannel: true } : {}),
+            ...(options.enableSyntheticInteractionChannel || !options.testOnlyFakeAdapter ? { runtimeEventChannel: true } : {}),
             ...(options.onWorkerDiagnosticLine ? { onWorkerDiagnosticLine: options.onWorkerDiagnosticLine } : {}),
           });
           options.onChildSpawn?.(child);
@@ -2231,6 +2239,35 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
               }
             }
           });
+          const runtimeEventsEnabled = options.enableSyntheticInteractionChannel || !options.testOnlyFakeAdapter;
+          const claimedOperation = asRecord(port.readOperation(input.operationId));
+          const verifyClaimedWorkerIdentity = async ({ child: observedChild, expected }: CandidateInteractionIdentityCheck) => {
+            if (observedChild.pid !== expected.process_id || observedChild.exitCode !== null || observedChild.signalCode !== null) return false;
+            const workerIdentity = parseEvidence(String(claimedOperation.claim_worker_identity_json), "interaction_worker_identity_invalid");
+            if (workerIdentity.identity_version !== PROCESS_IDENTITY_VERSION || workerIdentity.platform !== probe.platform
+              || workerIdentity.fingerprint_precision !== "exact") return false;
+            const probeOutcome = await probeWithDeadline(probe, {
+              pid: Number(expected.process_id),
+              identity: {
+                pid: Number(expected.process_id),
+                fingerprint: String(expected.start_fingerprint),
+                fingerprint_precision: "exact",
+                identity_version: PROCESS_IDENTITY_VERSION,
+                platform: probe.platform,
+                captured_at: String(workerIdentity.captured_at),
+              },
+            }, processProbeTimeoutMs);
+            return probeOutcome.status === "resolved" && probeOutcome.verdict?.state === "alive"
+              ? { state: "verified", process_id: expected.process_id, start_fingerprint: expected.start_fingerprint }
+              : false;
+          };
+          // Bind the one-way event reader before handing execution to the
+          // Worker. Preflight/no-op Tasks can produce a terminal Result before
+          // a post-decision bind, which would otherwise turn a valid quick
+          // execution into an outcome-unknown Hold.
+          const runtimeEventChannel = runtimeEventsEnabled
+            ? await port.openRuntimeEventChannel(child, claimedOperation, verifyClaimedWorkerIdentity)
+            : undefined;
           // Task and execution configuration are sent only after the durable
           // Claim. Production always selects the real ZCode Adapter. The fake
           // path requires this internal test-only capability and is never
@@ -2264,6 +2301,9 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
           stage("claim_continue_sent", { claim_id: claimId, execution_timeout_ms: executionTimeoutMs, result_wait_ms: resultWaitMs });
 
           let interactionPump: Promise<void> | undefined;
+          let runtimeEventPump: Promise<void> | undefined;
+          let runtimeEventFailure: unknown;
+          let reportReadyPersisted = false;
           let privateAuthPump: Promise<unknown> | undefined;
           if (usePrivateAuth) {
             const owner = child;
@@ -2338,28 +2378,8 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
               privateAuthAbort.abort();
             });
           }
-          if (options.enableSyntheticInteractionChannel || !options.testOnlyFakeAdapter) {
-            const claimedOperation = asRecord(port.readOperation(input.operationId));
-            const channel = await port.openInteractionChannel(child, claimedOperation, async ({ child: observedChild, expected }) => {
-              if (observedChild.pid !== expected.process_id || observedChild.exitCode !== null || observedChild.signalCode !== null) return false;
-              const workerIdentity = parseEvidence(String(claimedOperation.claim_worker_identity_json), "interaction_worker_identity_invalid");
-              if (workerIdentity.identity_version !== PROCESS_IDENTITY_VERSION || workerIdentity.platform !== probe.platform
-                || workerIdentity.fingerprint_precision !== "exact") return false;
-              const probeOutcome = await probeWithDeadline(probe, {
-                pid: Number(expected.process_id),
-                identity: {
-                  pid: Number(expected.process_id),
-                  fingerprint: String(expected.start_fingerprint),
-                  fingerprint_precision: "exact",
-                  identity_version: PROCESS_IDENTITY_VERSION,
-                  platform: probe.platform,
-                  captured_at: String(workerIdentity.captured_at),
-                },
-              }, processProbeTimeoutMs);
-              return probeOutcome.status === "resolved" && probeOutcome.verdict?.state === "alive"
-                ? { state: "verified", process_id: expected.process_id, start_fingerprint: expected.start_fingerprint }
-                : false;
-            });
+          if (runtimeEventsEnabled) {
+            const channel = await port.openInteractionChannel(child, claimedOperation, verifyClaimedWorkerIdentity);
             stage("interaction_channel_bound", { pid: child.pid, claim_id: claimId });
             interactionPump = (async () => {
               while (child!.exitCode === null && child!.signalCode === null) {
@@ -2374,6 +2394,41 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
               }
             })().catch((error: unknown) => {
               stage("interaction_channel_closed", { reason: errorCode(error) ?? "interaction_channel_unavailable" });
+            });
+            const runtimeChannel = runtimeEventChannel!;
+            stage("runtime_event_channel_bound", { pid: child.pid, claim_id: claimId });
+            const pump = (async () => {
+              for (;;) {
+                try {
+                  const persisted = await port.receiveRuntimeTaskEvent(runtimeChannel);
+                  stage("runtime_task_event_persisted", {
+                    event_cursor: persisted.event_cursor,
+                    worker_sequence: persisted.worker_sequence,
+                    duplicate: persisted.duplicate,
+                  });
+                  if (persisted.event_type === "report_ready") reportReadyPersisted = true;
+                } catch (error) {
+                  const reason = errorCode(error) ?? "runtime_event_channel_unavailable";
+                  if (reason === "runtime_event_channel_closed") return;
+                  if (reason.startsWith("runtime_event_frame_")
+                    || reason.startsWith("runtime_event_channel_identity")
+                    || reason === "runtime_event_worker_not_live"
+                    || reason !== "runtime_event_channel_unavailable") {
+                    const runtimeStream = (child?.stdio as unknown as
+                      ReadonlyArray<{ resume?(): unknown } | null> | undefined)?.[14];
+                    runtimeStream?.resume?.();
+                    throw error;
+                  }
+                  throw error;
+                }
+              }
+            })();
+            // Attach the rejection handler immediately. A malformed first frame
+            // can fail before Result read or drain begins, and an unhandled
+            // rejection would terminate the Manager before it can retain the
+            // existing Hold/Recovery path. The drain below still rethrows it.
+            runtimeEventPump = pump.catch((error: unknown) => {
+              runtimeEventFailure = error;
             });
           }
 
@@ -2395,6 +2450,16 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
           // wait for process close or an interaction pump that drains on EOF.
           privateAuthAbort.abort();
           await privateAuthPump;
+          try {
+            await raceWithTimeout(runtimeEventPump ?? Promise.resolve(), workerCloseWaitMs, "runtime_event_drain_timeout");
+            if (runtimeEventFailure !== undefined) throw runtimeEventFailure;
+            stage("runtime_event_channel_drained");
+          } catch (error) {
+            const drainReason = errorCode(error) ?? "runtime_event_drain_timeout";
+            state = "result_rejected";
+            reason = drainReason;
+            stage("runtime_event_channel_drain_failed", { reason: drainReason });
+          }
 
 
           const releaseResultFinalization = await takeResultFinalization();
@@ -2416,6 +2481,11 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
                     resultFrame.execution_cleanup,
                     options.testOnlyFakeAdapter === true,
                   );
+                  if (!options.testOnlyFakeAdapter
+                    && (resultFrame.result.status === "completed" || resultFrame.result.status === "waiting_for_master")
+                    && !reportReadyPersisted) {
+                    throw new LifecycleGateError("runtime_report_ready_missing");
+                  }
                   try { canonicalTaskResult(resultFrame.result, {task_id:input.task.task_id, attempt:input.attempt, result_status:resultFrame.result.status}); }
                   catch(error) {
                     // Identity and cleanup proof were checked before replacing an invalid report.
@@ -2864,6 +2934,20 @@ async function readJsonLine(stream: Readable | null, limit: number, timeoutMs: n
     stream.once("end", onEnd);
     stream.once("error", onError);
   });
+}
+
+async function raceWithTimeout<T>(promise: Promise<T>, timeoutMs: number, code: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new LifecycleGateError(code)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 async function waitForClose(child: ClaimOnlyWorkerProcess, timeoutMs: number, drain?: Promise<void>): Promise<number | null> {
