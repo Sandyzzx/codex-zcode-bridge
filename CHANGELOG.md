@@ -4,6 +4,14 @@
 
 当前版本以 `package.json` 和 Release Please manifest 为准。提交推送到 `master` 后，Release Please 会在有待发布变更时创建发布 PR，并同步更新版本文件与本日志；合并发布 PR 后会生成对应 Git tag 和 GitHub Release。
 
+## [1.7.1](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.7.0...codex-zcode-bridge-v1.7.1) (2026-11-12)
+
+
+### Bug Fixes
+
+* **plugin:** ship v14 administrative recovery CLI ([b716ceb](https://github.com/Sandyzzx/codex-zcode-bridge/commit/b716cebefbe867c7ef9b21a52a94a451316838ea))
+* **plugin:** ship v14 administrative recovery CLI ([e153a61](https://github.com/Sandyzzx/codex-zcode-bridge/commit/e153a61d6f9773bb1d14d8a7f03622e477d5996c))
+
 ## [1.7.0](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.6.0...codex-zcode-bridge-v1.7.0) (2026-11-12)
 
 将 Preview `2.0.0-preview.4` 的功能集提升到稳定版本线。
