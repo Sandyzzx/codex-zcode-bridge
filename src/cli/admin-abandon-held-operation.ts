@@ -142,8 +142,8 @@ export function parseArgs(argv: readonly string[]): CliOptions {
 function help(): string {
   return [
     "Usage:",
-    "  node dist/src/cli/admin-abandon-held-operation.js --preflight --data-root <path> --operation-id <id> --task-id <id> --attempt <n> --generation <n> --revision <n> --claim-id <id> --worker-identity-digest <sha256>",
-    "  node dist/src/cli/admin-abandon-held-operation.js --execute --confirmation ADMIN-ABANDON:<operation-id> --data-root <path> --operation-id <id> --task-id <id> --attempt <n> --generation <n> --revision <n> --claim-id <id> --worker-identity-digest <sha256>",
+    "  node dist/admin-abandon-held-operation.mjs --preflight --data-root <path> --operation-id <id> --task-id <id> --attempt <n> --generation <n> --revision <n> --claim-id <id> --worker-identity-digest <sha256>",
+    "  node dist/admin-abandon-held-operation.mjs --execute --confirmation ADMIN-ABANDON:<operation-id> --data-root <path> --operation-id <id> --task-id <id> --attempt <n> --generation <n> --revision <n> --claim-id <id> --worker-identity-digest <sha256>",
     "",
     "This command is intentionally bound to one cleanup_incomplete Hold. It never terminates",
     "processes, creates a Result, or marks Cleanup Verified. Run it only while Codex and all",
