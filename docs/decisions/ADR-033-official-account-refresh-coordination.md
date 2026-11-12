@@ -4,7 +4,7 @@
 > Date: 2026-11-11
 > Decision: Accepted — Owner 在 Official Host Integration v1 恢复任务中批准 Profile-scoped Cross-process Refresh Lock。
 > Applicability: 仅协调官方 OAuth credential refresh 事务；不改变 ADR-030 的 Start Plan entitlement verdict、Private Lease/HANDLE/ACK，也不改变 Worker/Task/Session 并发合同。
-> Verified against: Bridge `4932b2fbc0be96090cffef7693646ed351a4d7ab`；Observed upstream `b95ebaffeab641907b38652f45c1502bd762972d` / tree `d7ebeb994cb8f46b16761fc9c550ae3f6e039c3d`。
+> Verified against: Bridge candidate `8e8966d5ec7539a2d8575fc748871a9641fe0a2d` and current fixed-upstream patch; Observed upstream `b95ebaffeab641907b38652f45c1502bd762972d` / tree `d7ebeb994cb8f46b16761fc9c550ae3f6e039c3d`。
 
 ## Context
 
@@ -132,4 +132,3 @@ failure、late response、旧写入不能覆盖新 token，以及同 profile ref
 该决定只增加一个短账户事务锁和进程内 revision 发布点。它保持不同 profile 的并发，不增加常驻
 服务、数据库或 Task 状态机。代价是 refresh 调用持有 lock，必须正确实现 timeout 和 stale owner
 回收；无法安全传播 revision 的 live Worker 必须 fail closed。
-

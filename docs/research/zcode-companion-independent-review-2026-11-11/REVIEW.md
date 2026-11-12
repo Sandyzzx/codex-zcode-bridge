@@ -1,9 +1,9 @@
 # ZCode Companion 与 Bridge 集成：独立架构审查
 
-> Applicability (2026-11-11): 本文保留冻结前研究正文；已接受目标架构以 [ADR-032](../../decisions/ADR-032-existing-worker-official-host-integration.md) 为准，独立 Companion 已移出当前目标。本文账户与 Cleanup 草案仍为 Proposed，不因架构冻结成为 Accepted，也不替代现行生产合同。
+> Applicability (2026-11-12): HISTORICAL / SUPERSEDED FOR THE CURRENT TARGET. 独立 Companion 方向已由 [ADR-032](../../decisions/ADR-032-existing-worker-official-host-integration.md) 排除，当前源码候选改为在现有 Worker 内装配官方 Host。正文保留为冻结前研究；其中关于“尚未实现/未构建/未验证”的旧状态只适用于该研究时点，不能覆盖 [当前架构](../../ARCHITECTURE.md)、ADR-033/034 或本仓库的当前证据。
 
 > Status: RESEARCH — 独立建议，未批准的设计合同，不修改现行 ADR。
-> Date / Last verified: 2026-11-11，Asia/Shanghai。
+> Date / Last verified: 2026-11-12（历史研究截止 2026-11-11），Asia/Shanghai。
 > 审查范围：固定 Preview 源码、固定公开 ZCode 源码、前轮报告和运行证据；本轮未构建、未启动 Runtime、未访问真实账户。
 > Bridge: `52015d12f37011f4d389e07941c31491457611ef` / tree `6a6d8db0731f21817996f3078910ed96091e2d6b`。
 > Observed ZCode source: `b95ebaffeab641907b38652f45c1502bd762972d` / tree `d7ebeb994cb8f46b16761fc9c550ae3f6e039c3d`，3.18.0。

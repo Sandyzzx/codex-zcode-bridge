@@ -66,7 +66,7 @@ Preview.3 包含一次 Windows 真实验收，实际事实如下：
 
 ## 环境要求
 
-- **Windows** 是当前生产 SQLite 路径与真实 Start Plan 验收的已验证本地环境；Linux/macOS 目前只有合成/CI 覆盖。
+- 固定 Official Host 生产制品只支持 **Windows x64**；Windows 非 x64 与其他未知目标 fail closed。Linux/macOS 仅保留 direct AppServer 的合成/CI 覆盖，不认证真实 ZCode、OAuth、Start Plan 或模型服务流量。
 - **Preview 2.0.0-preview.3：** Node.js `>=24.16.0` 且 `<25`。
 - Git、支持插件/Marketplace 的 Codex，以及可正常工作的本机 ZCode 安装。
 - 官方 ZCode 账户已登录，并具备所选任务需要的套餐和模型权益。

@@ -1,43 +1,47 @@
 # ZCode Official Host Integration v1 研究变更记录
 
 > Status: RESEARCH
-> Date: 2026-11-11
-> Scope: 本目录研究文档与本地候选分支；不是根目录 release-please CHANGELOG。
+> Last updated: 2026-11-12
+> Last verified: 2026-11-12，核对实现提交、固定制品、完整回归与 Windows x64 证据
+> Verified against: Bridge candidate `8e8966d5`；upstream `b95ebaff` / ZCode 3.18.0
 
-## 新增
+## 更新
 
-- 增加 ADR-032 目标架构核验和 POC 证据台账。
-- 增加固定 ZCode `3.18.0` 源码、CLI/AppServer、自包含 Host module 与 Windows helper 的构建和 BOM 记录。
-- 增加官方 ProcessManager/AppServer 的 localhost Mock 运行记录，包括官方 Read、双主 Turn 请求、same-session resume、cancel、usage 和目标 PID 清理。
-- 增加 same-profile 双 Worker 合成账户竞争、rotation/CAS、失败隔离和 crash-lock release 记录。
-- 增加 Bridge auth/lifecycle 定向回归、性能边界、升级/回滚和最终验收报告。
-- 增加 raw-frame、Cleanup Proof、账户协调、Desktop 独立性、native/resource 和 redistribution 的未决项。
+- 从“生产未接线”的研究状态更新到 `2.0.0-preview.4` 源码候选状态。
+- `OfficialHostAdapter`、官方 ProcessManager、exact runtime identity、Worker-tree cleanup proof 和 Release CAS 已进入现有 Worker 路径。
+- 固定上游 patch 覆盖 16 MiB raw frame、OAuth refresh coordination 和 runtime-header coordination。
+- Preview.4 的生产 Lifecycle Gate 自动执行 SQLite v13→v14 升级，并保留 occupied Attempt、Hold 和中断恢复语义。
+- Windows x64 / Node 24.16.0 固定制品可以从固定官方源码重复构建。
+- 六个 `@napi-rs/keyring` native closure、license 和 metadata 文件已经进入 Git，不再是未跟踪 WIP。
+- 旧 Companion 研究和旧 `ASTRA_REVIEW.md` 已被标记为历史材料；当前候选使用新的独立审查记录。
 
-## 修正
+## 当前验证
 
-- 区分 `dispose()` 成功、AppServer/helper 退出、Worker 退出、Bridge Cleanup 和 Release。
-- 区分 loopback Mock 的 3 次 HTTP 记录、2 次主 Turn Provider 请求和 `220` Mock usage tokens。
-- 保留 independent Companion、新 IPC/业务数据库、平行 RuntimeAdapter、Shared AppServer Pool 和第二套 Recovery 的排除。
-- 保留 ADR-030 的 Task-scoped entitlement verdict 与 Private Lease/HANDLE/ACK。
-- 账户和 Cleanup 两项草案继续保持 Proposed。
+- `npm run test:affected -- --base origin/preview`：最终候选 936 项，935 pass、0 fail、1 skip，结束标记为 `FULL_REGRESSION_PASS`。
+- 较早的 `npm run test:full`：935 项，934 pass、0 fail、1 skip；该基线早于最后新增的 native/Host closure 测试。
+- Adapter/Worker 当前定向集合：32/32 pass。
+- 路由、SQLite 与完整影响选择定向集合：64/64 pass。
+- SQLite real-adapter 重跑：47/47 pass。
+- upstream frame：7/7 pass。
+- upstream account：12/12 pass。
+- SQLite stress：3/3 pass。
+- 固定制品同源两次构建：byte-identical。
+- Host module：1,821,168 bytes，`3F481AAE16EFF9912DAF17178B49491BD64E67C4419BFFDB59EB4B78E85EB537`。
+- BOM：7,260 bytes，`B9A7104DAB3B10250CA93899324C0B33966E64C0BE02F279A1353BABBA8F129C`。
 
 ## 未改变
 
-- 生产 Bridge Host/Core、Worker、Manager、SQLite Authority、插件 bundle 和运行配置。
-- 公共 MCP 工具/schema。
-- 现有 Capacity、Claim、Hold、Recovery、Cleanup 和 Release 合同。
-- 官方源码工作区、Desktop 安装和真实生产数据。
+- ADR-030 的每任务一次权威 entitlement / Billing verdict。
+- Private Lease、HANDLE、ACK、fail-closed 与真实账户请求边界。
+- SQLite Task Authority、Claim、Hold、Recovery、Cleanup Digest 与 Release CAS。
+- 公共 MCP 工具名与 schema。
+- Worker 并发合同。
 
-## 验证
+## 未验证
 
-```text
-SOURCE_BUILD: PASS
-ISOLATED_PROCESS_MANAGER_R7_R8_R9: EACH_12_OF_12_PASS
-BRIDGE_START_PLAN_PRIVATE_AUTH: 33_OF_33_PASS_HISTORICAL
-BRIDGE_LIFECYCLE_CLEANUP: 139_OF_139_PASS_HISTORICAL
-SAME_ACCOUNT_MULTIWORKER: FAIL
-FULL_REGRESSION: NOT_RUN
-REAL_MODEL_REQUESTS: 0
-REAL_ACCOUNT_REQUESTS: 0
-BILLING_REQUESTS: 0
-```
+- 真实 OAuth、账户轮换、模型、Start Plan 和 Billing 请求。
+- Official Host 升级到新的上游版本及生产回滚演练。
+- 完整第三方资源与逐项再分发法律批准。
+- 长时 soak、产品性能和跨平台矩阵。
+
+SQLite v13→v14 自动升级测试只证明 Bridge Authority 的 schema 迁移，不能替代 Official Host 制品升级或回滚。

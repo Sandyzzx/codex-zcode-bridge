@@ -1,5 +1,7 @@
 # Astra 独立最终审查：ZCode Official Host Integration v1
 
+> Applicability (2026-11-12): HISTORICAL / SUPERSEDED. 本文审查的是一个更早的候选快照，正文为保留的历史证据。文中 `APPROVED`、`PRODUCTION_SWITCH_SAFE`、`PR_READY` 或“未实现”等结论只适用于该快照，不适用于当前 Preview.4 源码和 post-HEAD WIP；当前候选仍缺少完整回归与新的独立审查。
+
 > Status: RESEARCH
 > Date: 2026-11-11，Asia/Shanghai
 > Reviewer: Astra Reviewer

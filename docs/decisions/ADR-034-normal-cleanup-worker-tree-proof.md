@@ -4,7 +4,7 @@
 > Date: 2026-11-11
 > Decision: Accepted — Owner 在 Official Host Integration v1 恢复任务中批准 Existing Bridge Worker-root Recorded-tree Proof。
 > Applicability: 正常官方 Host 关闭后的 Bridge Cleanup/Release；异常 Recovery 继续使用既有精确身份与 claimant scan。
-> Verified against: Bridge `4932b2fbc0be96090cffef7693646ed351a4d7ab`；Observed upstream `b95ebaffeab641907b38652f45c1502bd762972d` / tree `d7ebeb994cb8f46b16761fc9c550ae3f6e039c3d`。
+> Verified against: Bridge candidate `8e8966d5ec7539a2d8575fc748871a9641fe0a2d` and current fixed-upstream patch; Observed upstream `b95ebaffeab641907b38652f45c1502bd762972d` / tree `d7ebeb994cb8f46b16761fc9c550ae3f6e039c3d`。
 
 ## Context
 
@@ -106,4 +106,3 @@ cleanup incomplete。活动后代必须保持 Hold；证据不完整时禁止 Re
 正常官方 Host Cleanup 复用现有进程树和 SQLite 证明，不新增持久 artifact 或组件。代价是 Manager
 必须可靠保存 close failure，且只能把 recorded-tree/resource facts 当作独立证据；官方 close
 成功本身始终不是 Release 授权。
-

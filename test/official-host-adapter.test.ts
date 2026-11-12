@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { pathToFileURL } from "node:url";
@@ -1025,4 +1026,38 @@ test("the shipped host module applies the exact 16 MiB transport frame limit and
     stderr.end();
     stdin.end();
   }
+});
+
+test("the shipped Host exports and native keyring closure load outside the build workspace", {
+  skip: process.platform !== "win32" || process.arch !== "x64",
+}, async () => {
+  const workerUrl = pathToFileURL(path.join(
+    process.cwd(),
+    "plugins",
+    "codex-zcode-bridge",
+    "worker",
+    "worker-main.mjs",
+  ));
+  const assets = await verifyOfficialHostAssets(workerUrl);
+  const module = await import(pathToFileURL(assets.hostModulePath).href) as unknown as Record<string, unknown>;
+  for (const name of [
+    "ZCodeAgentProcessManager",
+    "ZCodeProtocolClient",
+    "ZCodeStdioTransport",
+    "createOAuthProviderRuntimeAuthService",
+  ]) {
+    assert.equal(typeof module[name], "function", `${name} must be exported`);
+  }
+
+  const artifactRequire = createRequire(path.join(assets.root, "app-server", "zcode.cjs"));
+  const keyring = artifactRequire(path.join(assets.root, "node_modules", "@napi-rs", "keyring")) as {
+    readonly Entry?: unknown;
+  };
+  assert.equal(typeof keyring.Entry, "function");
+  const keyringPackage = JSON.parse(await readFile(
+    path.join(assets.root, "node_modules", "@napi-rs", "keyring", "package.json"),
+    "utf8",
+  )) as { readonly version?: unknown; readonly license?: unknown };
+  assert.equal(keyringPackage.version, "2.1.2");
+  assert.equal(keyringPackage.license, "MIT");
 });

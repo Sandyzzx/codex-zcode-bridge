@@ -1,9 +1,9 @@
 # Owner 架构收敛裁决建议
 
-> Applicability (2026-11-11): 本文保留冻结前研究正文；已接受目标架构以 [ADR-032](../../decisions/ADR-032-existing-worker-official-host-integration.md) 为准，独立 Companion 已移出当前目标。本文账户与 Cleanup 草案仍为 Proposed，不因架构冻结成为 Accepted，也不替代现行生产合同。
+> Applicability (2026-11-12): HISTORICAL / SUPERSEDED FOR THE CURRENT TARGET. 独立 Companion 方向已由 [ADR-032](../../decisions/ADR-032-existing-worker-official-host-integration.md) 排除，当前源码候选改为在现有 Worker 内装配官方 Host。正文保留为冻结前研究；其中关于“尚未实现/未构建/未验证”的旧状态只适用于该研究时点，不能覆盖 [当前架构](../../ARCHITECTURE.md)、ADR-033/034 或本仓库的当前证据。
 
 > Status: RESEARCH — APPROVED_CANDIDATE 表示建议批准的候选，不代表 Owner 已正式批准或生产就绪。
-> Date / Last verified: 2026-11-11，Asia/Shanghai。
+> Date / Last verified: 2026-11-12（历史研究截止 2026-11-11），Asia/Shanghai。
 > 项目根：D:/codex-zcode-bridge。当前 master 工作区，既有 WIP 保留。
 > 本轮指定 Bridge 基线：`0b70edbbfb1888666d8d3b97f891a0f943fa3a9e` / tree `1976267addff37bbec61d6a94120a61f8996906b`。
 > Observed 官方源码：`b95ebaffeab641907b38652f45c1502bd762972d` / tree `d7ebeb994cb8f46b16761fc9c550ae3f6e039c3d`，3.18.0。

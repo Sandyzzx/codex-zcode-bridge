@@ -1,139 +1,76 @@
-# 官方源码执行制品 BOM
+# 官方 Host 制品 BOM 与来源
 
-> Status: RESEARCH
-> Date: 2026-11-11
-> 范围：G1 CLI 与最小 host module artifact、G2 Windows runtime-host helper 与隔离 Mock；不是完整 Desktop 发行 BOM
+> Status: RESEARCH — FIXED WINDOWS X64 ARTIFACT / LICENSE REVIEW PARTIAL
+> Last updated: 2026-11-12
+> Last verified: 2026-11-12，核对 `BUILD_PROVENANCE.json`、`ARTIFACT_BOM.json` 和当前两次构建产物
+> Verified against: Bridge candidate `8e8966d5` + documentation changes；upstream ZCode `3.18.0`
 
-## 固定输入
+## 固定来源
 
-| 类别 | 输入 | 身份 |
-|---|---|---|
-| Source | ZCode public source | commit `b95ebaffeab641907b38652f45c1502bd762972d` |
-| Source tree | Git tree | `d7ebeb994cb8f46b16761fc9c550ae3f6e039c3d` |
-| Product version | root `package.json` | `3.18.0` |
-| AppServer CLI | `zcode.cjs --version` | `0.17.1` |
-| Lockfile | `pnpm-lock.yaml` | SHA256 `392355F908297AFD0B7B169B603335F0543FCB752D5110B6016AEF51067C8F85` |
-| Package manifest | `package.json` | SHA256 `9DAC0201C599D58C92713C6440DEC3FB7BA33093D07B1CBD4D60BDD32BD4AF1C` |
-| Toolchain pin | `mise.toml` | SHA256 `515397FBFC021BDF347178B20FE2B776777F52DB06E8CBF933181E10CF8F231C` |
-| Node | actual builder | `v24.16.0`, modules ABI 137 |
-| pnpm | actual builder | `10.33.2` |
-| Platform | tested artifact | Windows x64; Windows 11 `10.0.26100` |
-| Helper source digest | `SHA256(main.cpp bytes || CMakeLists.txt bytes)` | `1E40EC438E4C37FFBEF09408574501130B52BEDD62409B61D4EF9F517672B93F` |
-| Official helper build script | `scripts/build-windows-runtime-host.mjs` | SHA256 `0155D06E8D7DA4EBF725469A04BC9FC15138A734C13DAA33B3CF094FE69DCCC7`；`usedDirectly=false` |
-| Helper compiler | CMake / MSVC | CMake `3.31.6-msvc6`；MSVC `19.44.35229 for x64` |
-| Windows SDK packages | NuGet CPP + x64 | version `10.0.26100.4948` |
-| Host module build script | local esbuild driver | `.run/official-host-poc/build-host-runtime-bundle.mjs` |
-| Host module entries | fixed upstream exports | `ZCodeAgentProcessManager`, `ZCodeProtocolClient`, `ZCodeStdioTransport` |
-
-SDK package hashes recorded by provenance:
-
-| Package | SHA256 |
+| 项目 | 值 |
 |---|---|
-| `Microsoft.Windows.SDK.CPP` | `8C17F5BEB7616CBFB665F76F2E1AD74ECEAF7B97C8EF1D0BBC4CA2EB9E525413` |
-| `Microsoft.Windows.SDK.CPP.x64` | `8150A2F0DC69FD2B2A3AFD6D66B38E3DBAB2B901CC5DC65DE42BE4836C3953F3` |
+| ZCode version | `3.18.0` |
+| Commit | `b95ebaffeab641907b38652f45c1502bd762972d` |
+| Tree | `d7ebeb994cb8f46b16761fc9c550ae3f6e039c3d` |
+| AppServer | `0.17.1` |
+| Platform | Windows x64 |
+| Node | `24.16.0` |
+| user Desktop install as input | `NO` |
+| tracked source modified by build | `NO` |
 
-## 执行制品
+构建使用有序 patch；`ARTIFACT_BOM.json` 与运行时 validator 均要求顺序和哈希一致。
 
-| 文件 | 必需性 | Bytes | SHA256 |
-|---|---|---:|---|
-| `cli/zcode.cjs` | REQUIRED | 30,999,438 | `DF4637F2E31AEDE37DB15B3E4E8D8BE35F59BF756E4EECFFC0A6A6B1EEDB4F2E` |
-| `cli/provider/zcode-builtin.json` | REQUIRED for provider registry | 265,884 | `BC760A3B0C6D096EA07EE4E963471F135AE75AB207DB6ED4C372E1B183C856CD` |
-| `cli/THIRD-PARTY-NOTICES.md` | REQUIRED for review | 3,465,209 | `C4CC6DC747EB6026E41D2CEFC6679392C33E1192629EA96DC0DC702BCFE7C51C` |
-| `cli/zcode.cjs.map` | DEVELOPMENT/DIAGNOSTIC | 57,001,458 | `205404F621D86A0D2B5A30C0A8F1392C4679133917CFC907F9D17D3F627FE29B` |
-| `runtime-host-artifact/win32-x64-node24.16.0-zcode3.18.0-b95ebaff/zcode-runtime-host.exe` | REQUIRED on Windows for official ProcessManager | 167,424 | `04E1794F8325B3C46D4159420CDD04041E9AFC58516E03FC3DC8E78576EEFC24` |
-| `runtime-host-artifact/win32-x64-node24.16.0-zcode3.18.0-b95ebaff/zcode-runtime-host-acceptance.exe` | ACCEPTANCE HARNESS | 190,976 | `33E70B20A430393081920225E6A2848A2F28CB68881B03E97EBF88ADEB8E70A3` |
-| `runtime-host-module-artifact/win32-x64-node24.16.0-zcode3.18.0-b95ebaff/official-host-runtime.mjs` | REQUIRED for self-contained r8/r9 host path | 1,611,888 | `0DE82EB939F48F8D97E697BEFB7F937BA13723E965C27960DA2A4C5BCB8092DC` |
-| `g2-process-manager-probe.compiled.mjs` | TEST PROBE for current r9 | 27,694 | `A00C35093E1A8421FD22C2B64A791E1F96AF561A0D95C51A2473B4C49B66EDE3` |
+## Patch
 
-上面的 helper 和 acceptance harness 都位于项目 worktree 的 ignored `.run` 目录。r7 实际通过
-`.run/official-host-poc/runtime-host-build-nuget-r5/zcode-runtime-host.exe` 启动 helper；该文件与
-canonical artifact 的 SHA256 相同，均为 `04E1...FC24`。
+| Order | Patch | Bytes | SHA-256 |
+|---:|---|---:|---|
+| 1 | `0001-stdio-max-frame-bytes.patch` | 16,290 | `80E77CA5D322141B93D6B035BDB8A7903F575BF78012FABA5B701B0541B29844` |
+| 2 | `0002-oauth-refresh-coordination.patch` | 49,456 | `7AD85F0403CFA6AE55DAFDACE79FBB26C8970E758CEBE2496C4344A2108C651F` |
+| 3 | `0003-account-runtime-header-coordination.patch` | 21,461 | `BD0A891EC19AD98571CEE053930BA9A45DFE879204436B377C5D56D66F5EC35D` |
 
-## 自包含 host module artifact
-
-路径：
+Aggregate patch diff SHA-256：
 
 ```text
-.run/official-host-poc/runtime-host-module-artifact/win32-x64-node24.16.0-zcode3.18.0-b95ebaff/official-host-runtime.mjs
+39D980C47C553B39D91F73748B63B794FAB18360B008728233B4C5BA70D7495F
 ```
+
+## 主要 shipped files
+
+| Path | Bytes | SHA-256 |
+|---|---:|---|
+| `app-server/zcode.cjs` | 30,999,438 | `DF4637F2E31AEDE37DB15B3E4E8D8BE35F59BF756E4EECFFC0A6A6B1EEDB4F2E` |
+| `app-server/provider/zcode-builtin.json` | 265,884 | `BC760A3B0C6D096EA07EE4E963471F135AE75AB207DB6ED4C372E1B183C856CD` |
+| `app-server/THIRD-PARTY-NOTICES.md` | 3,465,209 | `C4CC6DC747EB6026E41D2CEFC6679392C33E1192629EA96DC0DC702BCFE7C51C` |
+| `official-host-runtime.mjs` | 1,821,168 | `3F481AAE16EFF9912DAF17178B49491BD64E67C4419BFFDB59EB4B78E85EB537` |
+| `zcode-runtime-host.exe` | 167,424 | `04E1794F8325B3C46D4159420CDD04041E9AFC58516E03FC3DC8E78576EEFC24` |
+| `ARTIFACT_BOM.json` | 7,260 | `B9A7104DAB3B10250CA93899324C0B33966E64C0BE02F279A1353BABBA8F129C` |
+
+完整 inventory 还包括 ZCode LICENSE、Node-API keyring binding 及其 package/license metadata，以及 BOM 中逐文件记录的其它依赖。pre-review 发现顶层 `node_modules/` ignore 会让 6 个 BOM 文件缺席 Git；根工作区已加入精确例外，以下文件已纳入本地候选提交：
 
 ```text
-source commit/tree: b95ebaffeab641907b38652f45c1502bd762972d / d7ebeb994cb8f46b16761fc9c550ae3f6e039c3d
-source version: 3.18.0
-bytes: 1611888
-sha256: 0DE82EB939F48F8D97E697BEFB7F937BA13723E965C27960DA2A4C5BCB8092DC
-external imports: Node builtins only; no external package import
-repeat bundle identity: PASS
+node_modules/@napi-rs/keyring/LICENSE
+node_modules/@napi-rs/keyring/index.js
+node_modules/@napi-rs/keyring/package.json
+node_modules/@napi-rs/keyring-win32-x64-msvc/LICENSE.third-party.md
+node_modules/@napi-rs/keyring-win32-x64-msvc/keyring.win32-x64-msvc.node
+node_modules/@napi-rs/keyring-win32-x64-msvc/package.json
 ```
 
-provenance：
+提交后的 clean-checkout 中的路径解析、native 加载、BOM hash 与安装包内容验证仍待执行；在结果出现前不能把完整 native closure 或 license 审查标为 `PASS`。权威机器文件位于：
 
 ```text
-.run/official-host-poc/runtime-host-module-artifact/win32-x64-node24.16.0-zcode3.18.0-b95ebaff/BUILD_PROVENANCE.json
+plugins/codex-zcode-bridge/worker/vendor/official-host/
+  win32-x64-node24.16.0-zcode3.18.0-b95ebaff/ARTIFACT_BOM.json
 ```
 
-该 provenance 固定 source commit/tree/version、三个 entry exports、对应 upstream source files，以及输出路径、bytes 和 SHA256。构建入口是 `.run/official-host-poc/build-host-runtime-bundle.mjs`。以同一输入重复 bundle 得到相同字节；这不是跨 clean install 的 CLI byte identity 证明。
+## 验证结果
 
-r9 用当前保留的自包含 probe：
+- 当前两次同固定 source-tree 构建成功，输出、BOM 和 provenance 哈希一致。
+- `official-host-runtime.mjs` 两次各 1,821,168 bytes，byte-identical。
+- runtime/plugin validator 校验 manifest、patch 顺序、shipped files、哈希和 Worker bundle 的官方 Host 标记。
+- 当前工作树中的 6 个 keyring BOM 条目均存在，bytes 和 SHA-256 与 `ARTIFACT_BOM.json` 一致；提交后的 clean checkout 尚未执行。
+- `userDesktopInstallationUsedAsInput` 为 false；本次证据未启动 Desktop Main 作为输入。
 
-```text
-.run/official-host-poc/g2-process-manager-probe.compiled.mjs
-bytes: 27694
-sha256: A00C35093E1A8421FD22C2B64A791E1F96AF561A0D95C51A2473B4C49B66EDE3
-```
+## 不能推导
 
-以普通 Node 加载上述 host bundle 和 compiled probe，不经过 tsx 或 source `node_modules`。`process-manager-r9` 的 12/12 断言通过，并用新的 AppServer/helper 两代 PID 完成任务，证明该最小 module artifact 的子路径可执行。r8 在先前的同一路径上也曾 12/12 PASS，其 evidence 记录当时的 probe SHA256 为 `0B6728397DE8830C712308ED49E0DA8EC0F06466F169609330DC2B243C9D40B4`；当前同名文件已被 r9 覆盖。
-
-## 已证实的最小运行闭包
-
-将 CLI 制品前两项及 notice 复制到无源码 `node_modules` 的独立目录后，AppServer 完成了本地 Mock 的 session、官方 Read、工具后续推理、usage、resume、cancel 和关闭。随后官方 `ZCodeAgentProcessManager`、CLI 制品、固定 helper 和 localhost Mock 联合完成 r7 的 12 个结构化断言。r8/r9 又使用自包含 host module artifact、compiled probe、固定 CLI/helper 和 localhost Mock 各完成 12/12。
-
-这只证明基础执行路径可在该隔离制品上运行。以下能力仍需要各自触发验证：
-
-- Playwright/Browser
-- terminal / node-pty
-- keyring/真实账户
-- koffi/Windows Job API
-- MCP、插件、技能和文档工具
-- macOS/Linux 制品
-
-## 排除项
-
-- 没有把 Desktop `app.asar`、Electron Main、Renderer、updater 或安装版 AppServer 计入源码制品 BOM。
-- 没有把用户 Desktop 数据、凭据、日志或设备身份计入。
-- 没有把实验用本地 Mock 服务打包。
-- 没有因为源码 pnpm store 中存在某 native 包就宣称运行时一定需要或已经验证。
-- 自包含 host module 的 builtins-only import 边界不等于完整 Desktop native/resource closure。
-- 本 BOM 不构成正式发行许可或对外分发批准。
-
-## Helper provenance 与 acceptance
-
-固定 provenance：
-
-```text
-.run/official-host-poc/runtime-host-artifact/win32-x64-node24.16.0-zcode3.18.0-b95ebaff/BUILD_PROVENANCE.json
-```
-
-该记录包含 upstream commit/tree、helper source digest、toolchain、SDK packages、构建命令、输出 hash、PE architecture 和 acceptance 结果。它明确记录官方 `build-windows-runtime-host.mjs` 未直接执行，原因是没有脚本要求的 Visual Studio 17 2022 generator 和可发现的独立 Windows SDK。实际构建使用官方同版本 `CMakeLists.txt`、MSVC 和 `Microsoft.Windows.SDK.CPP` NuGet packages。
-
-acceptance：
-
-```text
-command: zcode-runtime-host-acceptance.exe zcode-runtime-host.exe
-status: PASS
-scenarios: graceful, tree, root-exit, control-loss, helper-loss, cancel,
-           ownership failure rejects CLI execution
-result: .run/official-host-poc/runs/runtime-host-acceptance-r1/acceptance-result.json
-log: .run/official-host-poc/runs/runtime-host-acceptance-r1/acceptance.log
-```
-
-这只证明该固定二进制通过 helper acceptance harness，并在 r7/r8/r9 的隔离 Mock 路径中运行。它不证明官方构建脚本可被当前机器直接执行，也不建立对外再分发许可结论。
-
-## 未完成证据
-
-- 完整 production dependency graph 的逐包许可清单与产物映射
-- 官方 helper build script 在标准 CI prerequisites 下的可重复构建
-- 跨 clean-install 的 CLI first-build byte identity
-- 完整 native/WASM/resource closure
-- 对外压缩包、签名、更新和回滚清单
-- 最终发行材料清单、许可映射和法务/Owner 批准
+same-source-tree repeatability 不等于从全新环境下载依赖仍可复现，也不证明所有 native/resource 文件、许可证义务和安装机器上的可选依赖都已闭合。跨 clean install reproducibility、完整 native/resource closure 和逐项 redistribution review 仍为 `PARTIAL`。
