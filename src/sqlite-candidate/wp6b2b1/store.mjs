@@ -1,6 +1,11 @@
+import {canonical as canonicalJson,canonicalTaskResult as encodeTaskResult} from '../../result-contract.mjs';
+// Preserve this ESM API's error type while sharing the serialization algorithm.
+export function canonical(value) {
+  try{return canonicalJson(value);}catch(error){throw new AdmissionError(error.code??'invalid_json_value',error.message);}
+}
 import { DatabaseSync } from 'node:sqlite';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, lstatSync, realpathSync, readFileSync, writeFileSync, openSync, closeSync, fsyncSync, unlinkSync, renameSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, realpathSync, readFileSync, writeFileSync, openSync, closeSync, fsyncSync, unlinkSync, renameSync, statSync, readdirSync, mkdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isCandidateInteractionAcknowledgement, isCandidateInteractionPreparedAcknowledgement } from './interaction-channel.mjs';
@@ -10,12 +15,11 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SCHEMA = readFileSync(new URL('./schema.sql', import.meta.url), 'utf8');
 const ADMIN_ABANDONMENT_SCHEMA = readFileSync(new URL('./admin-abandonment.sql', import.meta.url), 'utf8');
 const CONSTRUCT = Symbol('construct');
-const SCHEMA_VERSION = 13;
+const SCHEMA_VERSION = 14;
 // Derive the expected objects from the shipped schema, never from the database
 // being checked. SQLite's own autoindexes and sqlite_sequence are excluded.
 const SCHEMA_OBJECT_QUERY = "SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE type IN ('table','view','index','trigger') AND substr(lower(name),1,7)<>'sqlite_' ORDER BY type COLLATE BINARY,name COLLATE BINARY";
-let expectedBaseSchemaObjects;
-let expectedAdminSchemaObjects;
+const expectedSchemas = new Map();
 function schemaObjects(db) {
   return db.prepare(SCHEMA_OBJECT_QUERY).all().map(row=>[
     row.type,
@@ -24,22 +28,21 @@ function schemaObjects(db) {
     row.sql===null?null:row.sql.trim().replace(/\r\n?/gu,'\n'),
   ]);
 }
-function assertCandidateSchema(db) {
-  if(expectedBaseSchemaObjects===undefined){
-    const base=new DatabaseSync(':memory:');
-    const admin=new DatabaseSync(':memory:');
-    try {
-      base.exec(SCHEMA);
-      expectedBaseSchemaObjects=schemaObjects(base);
-      admin.exec(`${SCHEMA}\n${ADMIN_ABANDONMENT_SCHEMA}`);
-      expectedAdminSchemaObjects=schemaObjects(admin);
-    } finally {
-      base.close();
-      admin.close();
-    }
+function assertCandidateSchema(db,version=SCHEMA_VERSION) {
+  if(!expectedSchemas.has(version)){
+    const base=new DatabaseSync(':memory:'),admin=new DatabaseSync(':memory:');
+    try{
+      const schema=version===13?readFileSync(new URL('./schema-v13.sql', import.meta.url),'utf8'):SCHEMA;
+      base.exec(schema);admin.exec(schema+'\n'+ADMIN_ABANDONMENT_SCHEMA);
+      expectedSchemas.set(version,[JSON.stringify(schemaObjects(base)),JSON.stringify(schemaObjects(admin))]);
+    }finally{base.close();admin.close();}
   }
-  const actual=JSON.stringify(schemaObjects(db));
-  if(actual!==JSON.stringify(expectedBaseSchemaObjects)&&actual!==JSON.stringify(expectedAdminSchemaObjects))fail('candidate_schema_mismatch');
+  if(!expectedSchemas.get(version).includes(JSON.stringify(schemaObjects(db))))fail('candidate_schema_mismatch');
+}
+function assertSchemaVersion(db) {
+  const version=db.prepare('PRAGMA user_version').get().user_version;
+  if(version===13)fail('schema_upgrade_required','SQLite v13 requires explicit offline upgrade: node dist/upgrade-sqlite-v14.mjs --source <state-root> --destination <new-state-root> --database bridge.sqlite --offline');
+  if(version!==SCHEMA_VERSION)fail('schema_version_unknown');
 }
 const RESULT_CONTRACT_VERSION = 1;
 const RESULT_STATUSES = new Set(['completed','failed','cancelled','waiting_for_master']);
@@ -49,10 +52,13 @@ const RECOVERY_REASON_CODES = new Set(['worker_identity_unknown','launch_outcome
 const RECOVERY_QUARANTINE_CODES = new Set(['claim_identity_conflict','operation_projection_conflict']);
 const RECOVERY_EVIDENCE_KEYS = Object.freeze(['attempt','claim_id','classification','envelope_digest','evidence_digest','evidence_source','expected_revision','reason','reason_code','task_id','worker_identity_digest']);
 const RECOVERY_LIMIT = 8;
-const RESULT_FIELDS = new Set(['task_id','attempt','status','summary','files_changed','tests','issues','needs_master_decision','zcode_output','exit_code','session_id','started_at','finished_at','error_code','report_candidate','usage','model','timing']);
-const REQUIRED_RESULT_FIELDS = ['task_id','attempt','status','summary','files_changed','tests','issues','needs_master_decision','zcode_output','exit_code','session_id','started_at','finished_at'];
 export const digest = value => createHash('sha256').update(typeof value === 'string' ? value : canonical(value)).digest('hex');
 const rawDigest = value => createHash('sha256').update(Buffer.from(value)).digest('hex');
+// SQLite rows may contain BLOBs. Hash their native bytes without converting
+// historical artifacts into JSON text or allocating a base64 copy.
+const upgradeRowJson = row => canonical(Object.fromEntries(Object.entries(row).map(([key,value])=>[
+  key,value instanceof Uint8Array?{sqlite_type:'blob',bytes:value.byteLength,sha256:createHash('sha256').update(value).digest('hex')}:value,
+])));
 const EVIDENCE_KEYS = Object.freeze({
   capacity_policy_committed: ['capacity_limit','generation'],
   reserved: ['capacity_slot','reservation_id'],
@@ -240,60 +246,8 @@ function foldedRecoveryClassification(operation,events){
   return level===2?'quarantine':level===1?'hold':'normal';
 }
 function validText(value,max){return typeof value==='string'&&value.length>0&&value.length<=max&&!/[\x00-\x1f]/u.test(value);}
-function isNullableText(value,max=4096){return value===null||(typeof value==='string'&&value.length<=max&&!/[\x00-\x1f]/u.test(value));}
-function validateStringArray(value,maxItems=256){if(!Array.isArray(value)||value.length>maxItems||value.some(x=>typeof x!=='string'||x.length>4096||/[\x00-\x1f]/u.test(x)))fail('invalid_result_payload');}
-function validateResultObject(value,keys,required=[]){
-  if(!value||Object.getPrototypeOf(value)!==Object.prototype)fail('invalid_result_payload');
-  const own=Object.keys(value);if(own.some(k=>!keys.has(k))||required.some(k=>!Object.hasOwn(value,k)))fail('invalid_result_payload');
-}
-function validateTestReports(value){
-  if(!Array.isArray(value)||value.length>256)fail('invalid_result_payload');
-  for(const report of value){validateResultObject(report,new Set(['command','status','details']),['command','status']);
-    if(typeof report.command!=='string'||report.command.length>4096||!['passed','failed','not_run'].includes(report.status)
-      ||(Object.hasOwn(report,'details')&&typeof report.details!=='string'))fail('invalid_result_payload');}
-}
-function validateAgentReport(value){
-  validateResultObject(value,new Set(['summary','files_changed','tests','issues','needs_master_decision']));
-  if(Object.hasOwn(value,'summary')&&typeof value.summary!=='string')fail('invalid_result_payload');
-  if(Object.hasOwn(value,'files_changed'))validateStringArray(value.files_changed);
-  if(Object.hasOwn(value,'tests'))validateTestReports(value.tests);
-  if(Object.hasOwn(value,'issues'))validateStringArray(value.issues);
-  if(Object.hasOwn(value,'needs_master_decision')&&typeof value.needs_master_decision!=='boolean')fail('invalid_result_payload');
-}
-function validateUsage(value){
-  validateResultObject(value,new Set(['source','scope','observed_at','finality','input_tokens','output_tokens','total_tokens','cached_input_tokens','reasoning_tokens','conflicts','dropped_unknown_keys']),
-    ['source','scope','observed_at','finality','input_tokens','output_tokens','total_tokens','cached_input_tokens','reasoning_tokens','conflicts','dropped_unknown_keys']);
-  if(!isNullableText(value.source)||!isNullableText(value.scope)||!isNullableText(value.observed_at)
-    ||!['reported','derived','partial'].includes(value.finality)
-    ||['input_tokens','output_tokens','total_tokens','cached_input_tokens','reasoning_tokens'].some(k=>value[k]!==null&&(!Number.isSafeInteger(value[k])||value[k]<0))
-    ||!Number.isSafeInteger(value.dropped_unknown_keys)||value.dropped_unknown_keys<0)fail('invalid_result_payload');
-  validateStringArray(value.conflicts,64);
-}
-function validateModel(value){
-  validateResultObject(value,new Set(['executor','provider_id','model_id','requested_model','requested_reasoning_level','effective_reasoning_level','effective_reasoning_level_source','selection_source','effective_at','session_id','turn_id']),
-    ['executor','provider_id','model_id','requested_model','requested_reasoning_level','effective_reasoning_level','effective_reasoning_level_source','selection_source','effective_at','session_id','turn_id']);
-  if(typeof value.executor!=='string'||!['runtime','not_reported'].includes(value.effective_reasoning_level_source)
-    ||['provider_id','model_id','requested_model','requested_reasoning_level','effective_reasoning_level','selection_source','effective_at','session_id','turn_id'].some(k=>!isNullableText(value[k])))fail('invalid_result_payload');
-}
-function validateTiming(value){
-  validateResultObject(value,new Set(['queued_ms','execution_ms','turn_ms','finalize_ms','wall_ms','derived','notes']),['queued_ms','execution_ms','turn_ms','finalize_ms','wall_ms','derived','notes']);
-  if(['queued_ms','execution_ms','turn_ms','finalize_ms','wall_ms'].some(k=>value[k]!==null&&(!Number.isSafeInteger(value[k])||value[k]<0))
-    ||typeof value.derived!=='boolean')fail('invalid_result_payload');
-  validateStringArray(value.notes,64);
-}
 function canonicalTaskResult(result,input){
-  validateResultObject(result,RESULT_FIELDS,REQUIRED_RESULT_FIELDS);
-  if(result.task_id!==input.task_id||result.attempt!==input.attempt||result.status!==input.result_status||!RESULT_STATUSES.has(result.status)
-    ||typeof result.summary!=='string'||typeof result.zcode_output!=='string'||typeof result.needs_master_decision!=='boolean'
-    ||(result.exit_code!==null&&!Number.isSafeInteger(result.exit_code))||!isNullableText(result.session_id)
-    ||!isNullableText(result.started_at,64)||!isNullableText(result.finished_at,64))fail('invalid_result_payload');
-  validateStringArray(result.files_changed);validateStringArray(result.issues);validateTestReports(result.tests);
-  if(Object.hasOwn(result,'error_code')&&!validText(result.error_code,128))fail('invalid_result_payload');
-  if(Object.hasOwn(result,'report_candidate'))validateAgentReport(result.report_candidate);
-  if(Object.hasOwn(result,'usage')&&result.usage!==null)validateUsage(result.usage);
-  if(Object.hasOwn(result,'model')&&result.model!==null)validateModel(result.model);
-  if(Object.hasOwn(result,'timing')&&result.timing!==null)validateTiming(result.timing);
-  return canonical(result);
+  try{return encodeTaskResult(result,input);}catch(error){fail(error.code??'invalid_result_payload',error.message);}
 }
 function fixtureLaunchIdentity(value){
   if(value?.source==='manager_os_spawn_observation'){
@@ -391,13 +345,6 @@ function validateAdminAbandonmentInput(input){
   return input;
 }
 function isBusy(error){return [5,6].includes(error?.errcode)||/SQLITE_(BUSY|LOCKED)/u.test(String(error?.code??''))||/database is (busy|locked)/iu.test(String(error?.message??''));}
-export function canonical(value) {
-  if (value === null || typeof value === 'string' || typeof value === 'boolean') return JSON.stringify(value);
-  if (typeof value === 'number' && Number.isSafeInteger(value)) return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
-  if (value && Object.getPrototypeOf(value) === Object.prototype) return `{${Object.keys(value).sort().map(k => `${JSON.stringify(k)}:${canonical(value[k])}`).join(',')}}`;
-  throw new AdmissionError('invalid_json_value');
-}
 function containsNonNfcString(value,depth=0){
   if(depth>32)return true;
   if(typeof value==='string')return value!==value.normalize('NFC');
@@ -555,8 +502,215 @@ function writePoison(file, value) {
 }
 
 export class IsolatedAdmissionStore {
-  #db; #paths; #closed=false; #poisoned=false; #fault; #recoveryOnly=false;
-  constructor(key, db, paths, fault, recoveryOnly=false) { if (key !== CONSTRUCT) fail('private_constructor'); this.#db=db; this.#paths=paths; this.#fault=fault; this.#recoveryOnly=recoveryOnly; }
+  #db; #paths; #closed=false; #poisoned=false; #fault; #recoveryOnly=false; #schemaVersion=SCHEMA_VERSION;
+  #validatedSnapshot=null;
+  constructor(key, db, paths, fault, recoveryOnly=false, schemaVersion=SCHEMA_VERSION) { if (key !== CONSTRUCT) fail('private_constructor'); this.#db=db; this.#paths=paths; this.#fault=fault; this.#recoveryOnly=recoveryOnly; this.#schemaVersion=schemaVersion; }
+  /** Explicit offline copy upgrade. Never called by startup, never edits source rows.
+   * The source writer lock spans verification/copy. The operator must stop Managers
+   * before running this command and switch configuration only after success. */
+  static upgradeV13Copy(sourceRoot, destinationRoot, {databaseFileName='operations.sqlite3', offline=false,
+    expectedV13RuntimeRosterDigest='', runtimeRosterDigest='', preserveActiveOperations=false, onStage=(_stage)=>{}}={}) {
+    if(offline!==true)fail('offline_upgrade_required');
+    if(!path.isAbsolute(destinationRoot)||realpathSync(destinationRoot)!==path.resolve(destinationRoot)
+      ||readdirSync(destinationRoot).length)fail('upgrade_destination_not_empty');
+    const options={databaseFileName,managedDataDirectory:true};
+    const source=pathsFor(sourceRoot,options),destination=pathsFor(destinationRoot,options);
+    if(source.root===destination.root||path.resolve(sourceRoot)===path.resolve(destinationRoot))fail('upgrade_same_root');
+    const blocked=()=>{
+      for(const file of [source.intent,source.poison,source.bootstrapPending,source.cutoverPending])if(existsSync(file))fail('upgrade_source_blocked');
+    };
+    blocked();
+    if(!existsSync(source.db))fail('database_missing');
+    // BEGIN IMMEDIATE excludes all SQLite writers, including a writer which has
+    // passed its filesystem marker check but has not started its transaction.
+    const db=new DatabaseSync(source.db,{timeout:1000});
+    let target,locked=false;
+    try{
+      db.exec('PRAGMA foreign_keys=ON; BEGIN IMMEDIATE');locked=true;blocked();
+      if(db.prepare('PRAGMA user_version').get().user_version!==13)fail('upgrade_requires_v13');
+      const reader=new IsolatedAdmissionStore(CONSTRUCT,db,source,undefined,true,13);
+      reader.#validateContents();assertCutoverPublicationGate(db,source);
+      reader.#assertAuthorityReadyContents(expectedV13RuntimeRosterDigest);
+      // Admin abandonment is an explicit terminal overlay, not a released row.
+      const admins=reader.#adminAbandonments();
+      const unfinished=db.prepare("SELECT operation_id FROM manager_operations WHERE operation_kind='attempt_lifecycle' AND phase NOT IN ('released','cancelled_before_launch')").all().filter(row=>!admins.has(row.operation_id));
+      if(unfinished.length&&!preserveActiveOperations)fail('upgrade_active_operations','Stop and resolve known lifecycle work before upgrade; unknown Holds are not migrated or cleared');
+      if(typeof runtimeRosterDigest!=='string'||!/^[0-9a-f]{64}$/u.test(runtimeRosterDigest))fail('upgrade_runtime_roster_required');
+      onStage?.('source_verified');blocked();
+      writeFileSync(destination.bootstrapPending,JSON.stringify({contract:'v14-offline-upgrade-in-progress'}),{flag:'wx',mode:0o600});
+      target=new DatabaseSync(destination.db,{timeout:1000});
+      target.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=OFF; BEGIN IMMEDIATE');
+      target.exec(SCHEMA);
+      if(admins.size||db.prepare("SELECT 1 FROM sqlite_schema WHERE name='manager_admin_abandonments'").get())target.exec(ADMIN_ABANDONMENT_SCHEMA);
+      const triggers=target.prepare("SELECT name,sql FROM sqlite_schema WHERE type='trigger'").all();
+      const q=name=>'"'+name.replaceAll('"','""')+'"';
+      for(const row of triggers)target.exec('DROP TRIGGER '+q(row.name));
+      const tables=db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND substr(name,1,7)<>'sqlite_' ORDER BY name").all();
+      const verification=[];
+      for(const {name} of tables){
+        const columns=db.prepare('PRAGMA table_info('+q(name)+')').all();
+        const names=columns.map(c=>c.name);
+        const keys=columns.filter(c=>c.pk).sort((a,b)=>a.pk-b.pk).map(c=>q(c.name));
+        const select='SELECT * FROM '+q(name)+' ORDER BY '+(keys.length?keys.join(','):'rowid');
+        const insert=target.prepare('INSERT INTO '+q(name)+'('+names.map(q).join(',')+') VALUES('+names.map(()=>'?').join(',')+')');
+        const before=createHash('sha256'),expected=createHash('sha256');let count=0;
+        for(const raw of db.prepare(select).iterate()){
+          const row={...raw};before.update(upgradeRowJson(row)+'\n');
+          if(name==='authority_metadata'||name==='authority_switch')row.schema_version=14;
+          if(name==='authority_switch')row.runtime_roster_digest=runtimeRosterDigest;
+          expected.update(upgradeRowJson(row)+'\n');insert.run(...names.map(key=>row[key]));count++;
+        }
+        const after=createHash('sha256');let copied=0;
+        for(const raw of target.prepare(select).iterate()){after.update(upgradeRowJson(raw)+'\n');copied++;}
+        const expectedDigest=expected.digest('hex'),afterDigest=after.digest('hex');
+        if(count!==copied||expectedDigest!==afterDigest)fail('upgrade_row_parity_failed');
+        verification.push({table:name,rows:count,source_digest:before.digest('hex'),destination_digest:afterDigest});
+      }
+      for(const row of db.prepare('SELECT name,seq FROM sqlite_sequence').all()){
+        target.prepare('DELETE FROM sqlite_sequence WHERE name=?').run(row.name);
+        target.prepare('INSERT INTO sqlite_sequence(name,seq) VALUES(?,?)').run(row.name,row.seq);
+      }
+      for(const row of triggers)target.exec(row.sql);
+      target.exec('PRAGMA user_version=14; COMMIT; PRAGMA foreign_keys=ON');
+      if(target.prepare('PRAGMA integrity_check').get().integrity_check!=='ok'||target.prepare('PRAGMA foreign_key_check').all().length)fail('upgrade_integrity_failed');
+      if(existsSync(source.cutoverPublished))writeFileSync(destination.cutoverPublished,readFileSync(source.cutoverPublished),{flag:'wx',mode:0o600});
+      const upgraded=new IsolatedAdmissionStore(CONSTRUCT,target,destination);
+      upgraded.#validateContents();upgraded.assertAuthorityReady(runtimeRosterDigest);
+      assertCutoverPublicationGate(target,destination);
+      onStage?.('destination_verified');blocked();
+      const receipt={contract:'sqlite-v13-v14-copy-upgrade-v1',source:path.resolve(sourceRoot),destination:path.resolve(destinationRoot),
+        database_file:databaseFileName,source_version:13,destination_version:14,verified_at:new Date().toISOString(),tables:verification};
+      const fd=openSync(path.join(destinationRoot,'v14-upgrade-receipt.json'),'wx',0o600);
+      try{writeFileSync(fd,JSON.stringify(receipt,null,2));fsyncSync(fd);}finally{closeSync(fd);}
+      target.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+      unlinkSync(destination.bootstrapPending);
+      return receipt;
+    }catch(error){
+      if(target){try{target.exec('ROLLBACK');}catch{} }
+      // Failed destination is retained for inspection and is never auto-published.
+      if(target)writeFileSync(path.join(destinationRoot,'ROOT_POISONED.json'),JSON.stringify({version:1,reason:'v14_upgrade_failed',detail:String(error),at:new Date().toISOString()}),{flag:'wx'});
+      throw error;
+    }finally{
+      target?.close();if(locked)db.exec('ROLLBACK');db.close();
+    }
+  }
+
+
+  /**
+   * Automatic v13 -> v14 migration at production startup, under the existing
+   * cross-process bootstrap lock. This is not a live hot migration.
+   * Retains every occupied Operation and all Recovery evidence unchanged.
+   */
+  static autoUpgradeV13(root, {databaseFileName='bridge.sqlite', runtimeRosterDigest='', assertStartupLock=()=>{}}={}) {
+    if(typeof runtimeRosterDigest!=='string'||!/^[0-9a-f]{64}$/u.test(runtimeRosterDigest))fail('upgrade_runtime_roster_required');
+    const opts={databaseFileName,managedDataDirectory:true}, p=pathsFor(root,opts);
+    const pending=p.db+'.v13-v14-pending.json';
+    const version=()=>{
+      if(!existsSync(p.db))return null;
+      try {
+        const db=new DatabaseSync(p.db,{readOnly:true,timeout:1000});
+        try{return db.prepare('PRAGMA user_version').get().user_version;}finally{db.close();}
+      } catch(error) {
+        // A corrupt/unrelated file is not an upgrade candidate. Let the normal
+        // production Authority reader return its established, normalized
+        // sqlite_existing_database_unverified error. With a durable upgrade
+        // marker present, however, an unreadable database is ambiguous and
+        // must remain fenced for recovery rather than being ignored.
+        if(existsSync(pending))throw error;
+        return null;
+      }
+    };
+    const names=token=>({
+      stage:path.join(p.root,databaseFileName+'.v14-stage-'+token),
+      backup:path.join(p.root,databaseFileName+'.v13-backup-'+token),
+    });
+    const validatePublished=()=>{
+      const ready=this.open(p.root,opts);
+      try{ready.assertAuthorityReady(runtimeRosterDigest);}finally{ready.close();}
+    };
+    const resetPending=stage=>{
+      rmSync(stage,{recursive:true,force:true});
+      unlinkSync(pending);
+    };
+    assertStartupLock();
+    if(existsSync(pending)){
+      const st=lstatSync(pending);
+      if(!st.isFile()||st.isSymbolicLink()||st.size>4096)fail('upgrade_marker_invalid');
+      let marker;try{marker=JSON.parse(readFileSync(pending,'utf8'));}catch{fail('upgrade_marker_invalid');}
+      if(!marker||Object.keys(marker).sort().join('|')!=='contract|database_file|token'
+        ||marker.contract!=='sqlite-v13-v14-auto-upgrade-v1'||marker.database_file!==databaseFileName
+        ||typeof marker.token!=='string'
+        ||!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(marker.token))fail('upgrade_marker_invalid');
+      const {stage,backup}=names(marker.token);
+      const current=version();
+      if(current===14){
+        validatePublished();
+        resetPending(stage);
+        return {state:'upgraded',source_version:13,destination_version:14,backup};
+      }
+      if(current===null&&existsSync(backup)){
+        assertStartupLock();renameSync(backup,p.db);
+      }else if(current!==13||existsSync(backup))fail('upgrade_recovery_ambiguous');
+      assertStartupLock();resetPending(stage);
+    }
+    const sourceVersion=version();
+    if(sourceVersion===14)return {state:'already_v14',destination_version:14};
+    if(sourceVersion!==13)return {state:'not_v13',source_version:sourceVersion};
+    for(const file of [p.intent,p.poison,p.bootstrapPending,p.cutoverPending])
+      if(existsSync(file))fail('upgrade_source_blocked');
+
+    const token=randomUUID(),{stage,backup}=names(token);
+    const fd=openSync(pending,'wx',0o600);
+    try{
+      writeFileSync(fd,JSON.stringify({contract:'sqlite-v13-v14-auto-upgrade-v1',database_file:databaseFileName,token}));
+      fsyncSync(fd);
+    }finally{closeSync(fd);}
+    try{
+      assertStartupLock();mkdirSync(stage);
+      // A historic cutover may bind an older Node/SQLite runtime. Preserve the
+      // authenticated source digest before rebinding the new runtime roster.
+      const reader=new DatabaseSync(p.db,{readOnly:true,timeout:1000});
+      let oldRoster='';
+      try{oldRoster=reader.prepare('SELECT runtime_roster_digest FROM authority_switch').get()?.runtime_roster_digest??'';}
+      finally{reader.close();}
+      const receipt=this.upgradeV13Copy(p.root,stage,{
+        databaseFileName,offline:true,preserveActiveOperations:true,
+        expectedV13RuntimeRosterDigest:oldRoster,runtimeRosterDigest,
+      });
+      assertStartupLock();
+      const old=new DatabaseSync(p.db,{timeout:1000});
+      try{
+        const checkpoint=old.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();
+        if(checkpoint.busy!==0)fail('upgrade_old_database_busy');
+      }finally{old.close();}
+      const stageDb=path.join(stage,databaseFileName);
+      if(existsSync(p.db+'-wal')||existsSync(p.db+'-shm')
+        ||existsSync(stageDb+'-wal')||existsSync(stageDb+'-shm'))fail('upgrade_database_still_open');
+      if(version()!==13)fail('upgrade_source_changed');
+      assertStartupLock();renameSync(p.db,backup);
+      assertStartupLock();renameSync(stageDb,p.db);
+      validatePublished();
+      assertStartupLock();resetPending(stage);
+      return {...receipt,state:'upgraded',backup};
+    }catch(error){
+      // Preserve the old Authority on failure. A process crash is recovered
+      // from this same marker at the next startup; never auto-release Holds.
+      if(existsSync(backup)){
+        if(existsSync(p.db)){
+          try{
+            if(version()===14){
+              assertStartupLock();renameSync(p.db,p.db+'.v14-failed-'+token);
+            }
+          }catch{ /* preserve marker for operator-assisted recovery */ }
+        }
+        if(!existsSync(p.db)){
+          try{assertStartupLock();renameSync(backup,p.db);}catch{ /* marker fences startup */ }
+        }
+      }
+      throw error;
+    }
+  }
+
   static initialize(root, options = {}) {
     const p=pathsFor(root, options);
     if (existsSync(p.db) || existsSync(p.cutoverPending) || existsSync(p.cutoverPublished) || existsSync(p.poison) || existsSync(p.intent)) fail('root_not_empty');
@@ -604,6 +758,7 @@ export class IsolatedAdmissionStore {
     db.exec('PRAGMA foreign_keys=ON');
     const s=new IsolatedAdmissionStore(CONSTRUCT,db,p,fault);
     try {
+      assertSchemaVersion(db);
       const columns=new Set(db.prepare('PRAGMA table_info(manager_operations)').all().map(x=>x.name));
       if(!['result_status','result_generation','result_digest','result_json','result_commit_ref'].every(x=>columns.has(x)))fail('candidate_schema_mismatch');
       if(!db.prepare("SELECT 1 FROM pragma_table_info('manager_operation_events') WHERE name='event_cursor'").get())fail('candidate_schema_mismatch');
@@ -622,7 +777,7 @@ export class IsolatedAdmissionStore {
     try {
       db.exec('PRAGMA foreign_keys=ON');
       db.exec('PRAGMA query_only=ON');
-      if(db.prepare('PRAGMA user_version').get().user_version!==SCHEMA_VERSION)fail('schema_version_unknown');
+      assertSchemaVersion(db);
       const columns=new Set(db.prepare('PRAGMA table_info(manager_operations)').all().map(x=>x.name));
       if(!['result_status','result_generation','result_digest','result_json','result_commit_ref'].every(x=>columns.has(x)))fail('candidate_schema_mismatch');
       if(!db.prepare("SELECT 1 FROM pragma_table_info('manager_operation_events') WHERE name='event_cursor'").get())fail('candidate_schema_mismatch');
@@ -643,7 +798,9 @@ export class IsolatedAdmissionStore {
   }
   /** Production startup requires exactly one durable reason for this root. */
   assertAuthorityReady(expectedRuntimeRosterDigest) {
-    return this.#readConsistent(()=>{
+    return this.#readConsistent(()=>this.#assertAuthorityReadyContents(expectedRuntimeRosterDigest));
+  }
+  #assertAuthorityReadyContents(expectedRuntimeRosterDigest) {
       const integrity=this.#db.prepare('PRAGMA integrity_check').all();
       if(integrity.length!==1||integrity[0].integrity_check!=='ok')fail('database_corrupt');
       const fresh=this.#db.prepare('SELECT * FROM fresh_install_receipt').all();
@@ -675,7 +832,6 @@ export class IsolatedAdmissionStore {
         historical_exception_digest:policy.manifest.historical_exception_digest,
         source_kind:policy.kind,
         verifier_version:receipt.verifier_version};
-    });
   }
   /**
    * Record a stop-the-world cutover to a new empty SQLite Task Authority.
@@ -1029,7 +1185,9 @@ export class IsolatedAdmissionStore {
         if(migrated){try{result=JSON.parse(migrated.result_json);}catch{fail('result_projection_invalid');}}
       }
       const continuation=attemptRow.continuation_json===null?null:JSON.parse(attemptRow.continuation_json);
-      return {task,projection:{task_id:taskRow.task_id,status:taskRow.status,current_attempt:taskRow.current_attempt,created_at:taskRow.created_at},attempt,operation,result,continuation};
+      const rejected=operationRow?this.#db.prepare("SELECT evidence_json FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded' AND json_extract(evidence_json,'$.reason') LIKE 'result_submission_failed:%' ORDER BY sequence DESC LIMIT 1").get(operationRow.operation_id):null;
+      const result_submission_error=rejected?JSON.parse(rejected.evidence_json).reason.slice('result_submission_failed:'.length):null;
+      return {task,projection:{task_id:taskRow.task_id,status:taskRow.status,current_attempt:taskRow.current_attempt,created_at:taskRow.created_at},attempt,operation,result,continuation,...(result_submission_error?{result_submission_error}:{})};
     });
   }
   /** Conservative Candidate feedback projection. No runtime observation or
@@ -1894,6 +2052,19 @@ export class IsolatedAdmissionStore {
       return {revision:revision+1,phase:'reserved'};
     });
   }
+  /** Diagnostic only: no Result, phase transition, cleanup proof or Release. */
+  recordResultSubmissionFailure(input,reason) {
+    if(!validText(reason,128))fail('invalid_result_failure_reason');
+    return this.#transaction(()=>{
+      const o=this.#db.prepare('SELECT * FROM manager_operations WHERE operation_id=?').get(input.operation_id);
+      if(!o||o.phase!=='running'||o.generation!==input.generation||o.revision!==input.revision
+        ||o.claim_id!==input.claim_id||o.claim_worker_identity_digest!==input.claim_worker_identity_digest)fail('stale_operation_cas');
+      const evidence={reason:`result_submission_failed:${reason}`,evidence_digest:digest({operation_id:o.operation_id,claim_id:o.claim_id,reason})};
+      this.#db.prepare('UPDATE manager_operations SET revision=revision+1 WHERE operation_id=?').run(o.operation_id);
+      this.#event(o.operation_id,o.revision+1,'observation_recorded','running','running',o.generation,evidence,new Date().toISOString());
+      return {revision:o.revision+1,phase:'running'};
+    });
+  }
   /** Persist only a verified, operation-scoped Recovery classification; no external action is performed. */
   compareAndSwapRecoveryObservation(input,evidence,verifyEvidence) {
     this.#assertWritable();
@@ -2050,7 +2221,7 @@ export class IsolatedAdmissionStore {
       ?(typeof input.cancel_verification_digest!=='string'||!/^[0-9a-f]{64}$/u.test(input.cancel_verification_digest))
       :Object.hasOwn(input,'cancel_verification_digest'))fail('invalid_result_commit');
     const resultJson=canonicalTaskResult(input.result,input);
-    if(Buffer.byteLength(resultJson,'utf8')>65536)fail('result_too_large');
+
     const resultDigest=digest({result_contract_version:RESULT_CONTRACT_VERSION,result_status:input.result_status,result:JSON.parse(resultJson)});
     const commitRef=`result-${resultDigest}`;
     return this.#transaction(()=>{
@@ -2357,7 +2528,18 @@ export class IsolatedAdmissionStore {
   }
   #readConsistent(read){
     this.#assertOpen();this.#db.exec('BEGIN');
-    try{this.#validateContents();const result=read();this.#db.exec('COMMIT');return result;}
+    try{
+      // Establish the read snapshot before observing its change counters.
+      // data_version detects other connections; total_changes detects this
+      // connection's own writes (including rolled back writes). Cache only
+      // validation of an unchanged snapshot, never Results or authority facts.
+      this.#db.prepare('SELECT name FROM sqlite_schema LIMIT 1').get();
+      const external=this.#db.prepare('PRAGMA data_version').get().data_version;
+      const local=this.#db.prepare('SELECT total_changes() AS n').get().n;
+      const snapshot=`${external}:${local}`;
+      if(this.#validatedSnapshot!==snapshot){this.#validateContents();this.#validatedSnapshot=snapshot;}
+      const result=read();this.#db.exec('COMMIT');return result;
+    }
     catch(e){try{this.#db.exec('ROLLBACK');}catch{}throw e;}
   }
   #nextEventCursor(){
@@ -2398,7 +2580,15 @@ export class IsolatedAdmissionStore {
       if(settled&&!this.#poisoned&&!existsSync(this.#paths.poison)){try{const intent=JSON.parse(readFileSync(this.#paths.intent,'utf8'));if(intent.token!==token)fail('writer_intent_identity_mismatch');unlinkSync(this.#paths.intent);}catch(e){this.#poison('writer_intent_release_unknown',String(e));fail('transaction_outcome_unknown',String(e));}}
     }
   }
-  #poison(reason,detail){this.#poisoned=true;writePoison(this.#paths.poison,{version:1,reason,detail,at:new Date().toISOString()});}
+  #poison(reason,detail){
+    this.#poisoned=true;
+    try{writePoison(this.#paths.poison,{version:1,reason,detail,at:new Date().toISOString()});}
+    catch(error){
+      // A disk failure cannot turn an uncertain COMMIT into a known rejection.
+      // The original durable WRITER_INTENT is retained as the recovery fence.
+      process.stderr.write(`SQLITE_POISON_RECORD_FAILED ${JSON.stringify({reason,error:error.code??'io_error'})}\n`);
+    }
+  }
   #validate(integrity=true){
     if(!integrity){
       if(this.#db.prepare('PRAGMA foreign_keys').get().foreign_keys!==1)fail('foreign_keys_disabled');
@@ -2410,11 +2600,11 @@ export class IsolatedAdmissionStore {
   #validateContents(){
     try {
       if(this.#db.prepare('PRAGMA foreign_keys').get().foreign_keys!==1)fail('foreign_keys_disabled');
-      if(this.#db.prepare('PRAGMA user_version').get().user_version!==SCHEMA_VERSION)fail('schema_version_unknown');
-      assertCandidateSchema(this.#db);
+      if(this.#db.prepare('PRAGMA user_version').get().user_version!==this.#schemaVersion)fail('schema_version_unknown');
+      assertCandidateSchema(this.#db,this.#schemaVersion);
       if(this.#db.prepare('PRAGMA quick_check').get().quick_check!=='ok')fail('database_corrupt');
       if(this.#db.prepare('PRAGMA foreign_key_check').all().length)fail('database_inconsistent');
-      const m=this.#db.prepare('SELECT * FROM authority_metadata').all();if(m.length!==1||m[0].schema_version!==SCHEMA_VERSION)fail('policy_or_schema_mismatch');
+      const m=this.#db.prepare('SELECT * FROM authority_metadata').all();if(m.length!==1||m[0].schema_version!==this.#schemaVersion)fail('policy_or_schema_mismatch');
       const freshReceipts=this.#db.prepare('SELECT * FROM fresh_install_receipt').all();
       const authoritySwitches=this.#db.prepare('SELECT * FROM authority_switch').all();
       const migrationRuns=this.#db.prepare('SELECT * FROM migration_runs').all();
@@ -2444,7 +2634,7 @@ export class IsolatedAdmissionStore {
           ||!Number.isSafeInteger(migration.archive_byte_count)||migration.archive_byte_count<0
           ||migration.archive_byte_count!==migration.source_artifact_bytes
           ||migration.archive_byte_count!==receipt.archive_byte_count
-          ||receipt.schema_version!==SCHEMA_VERSION||!validText(receipt.protocol_version,128)
+          ||receipt.schema_version!==this.#schemaVersion||!validText(receipt.protocol_version,128)
           ||typeof receipt.runtime_roster_digest!=='string'||!/^[0-9a-f]{64}$/u.test(receipt.runtime_roster_digest)
           ||!validText(receipt.verifier_version,128)
           ||!validText(migration.verifier_version,128)||receipt.verifier_version!==migration.verifier_version

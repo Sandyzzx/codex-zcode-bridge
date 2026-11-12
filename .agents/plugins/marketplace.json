@@ -1,7 +1,7 @@
 {
-  "name": "codex-zcode-bridge",
+  "name": "codex-zcode-bridge-preview",
   "interface": {
-    "displayName": "Codex ZCode Bridge"
+    "displayName": "Codex ZCode Bridge (Preview)"
   },
   "plugins": [
     {

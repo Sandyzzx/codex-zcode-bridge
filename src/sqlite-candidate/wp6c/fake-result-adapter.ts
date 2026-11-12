@@ -27,12 +27,33 @@ export type CandidateExecutionCleanupProof =
   | {
       readonly contract: "candidate-execution-cleanup-proof-v1";
       readonly source: "zcode_app_server_adapter";
+      readonly method: "adapter_not_started";
+      readonly reason: "start_plan_preflight_rejected";
+      readonly complete: true;
+      readonly workspace_retained: true;
+      readonly managed_browser_cleanup_verified: true;
+    }
+  | {
+      readonly contract: "candidate-execution-cleanup-proof-v1";
+      readonly source: "zcode_app_server_adapter";
       readonly method: "identity_bound_windows_tree_cleanup";
       readonly complete: true;
       readonly workspace_retained: true;
       readonly adapter_process_id: number;
       readonly adapter_start_fingerprint: string;
       readonly process_tree_receipt_digest: string;
+      readonly process_tree_member_count: number;
+      readonly managed_browser_cleanup_verified: true;
+    }
+  | {
+      readonly contract: "candidate-execution-cleanup-proof-v1";
+      readonly source: "zcode_app_server_adapter";
+      readonly method: "verified_recorded_tree_scan";
+      readonly complete: true;
+      readonly workspace_retained: true;
+      readonly adapter_process_id: number;
+      readonly adapter_start_fingerprint: string;
+      readonly process_tree_scan_digest: string;
       readonly process_tree_member_count: number;
       readonly managed_browser_cleanup_verified: true;
     }

@@ -261,7 +261,7 @@ test('Result rejects status projection mismatches, unknown fields, and payloads 
   capture(()=>store.commitResult({...request,result_status:'cancelled',cancel_verification_digest:'f'.repeat(64)}),'invalid_result_payload');
   capture(()=>store.commitResult({...request,result:{...request.result,status:'failed'}}),'invalid_result_payload');
   capture(()=>store.commitResult({...request,result:{...request.result,unexpected:'field'}}),'invalid_result_payload');
-  capture(()=>store.commitResult({...request,result:{...request.result,zcode_output:'x'.repeat(66000)}}),'result_too_large');
+  capture(()=>store.commitResult({...request,result:{...request.result,zcode_output:'x'.repeat(32*1024*1024)}}),'result_too_large');
   assert.equal(store.readOperation(request.operation_id).phase,'running');
   assert.equal(readRows(r).events.filter(x=>x.event_type==='result_committed').length,0);
   store.close();
@@ -578,8 +578,9 @@ test('C3B known rollback preserves projection and Unknown Commit poisons the roo
   }finally{unknown.close();}
 });
 
-test('C3B same-Workspace Operations remain independent after one Operation is latched',()=>{
-  const {root:r,store}=makeRunning('c3b-workspace-isolation'),workspace=path.join(TEMP,'workspace');
+test('C3B different-Workspace Operations remain independent after one Operation is latched',()=>{
+  const {root:r,store}=makeRunning('c3b-workspace-isolation'),workspace=path.join(TEMP,'workspace-other');
+  mkdirSync(workspace,{recursive:true});
   const otherTask={task_id:'task-other',workspace,objective:'synthetic second operation',requirements:[],allowed_paths:[],forbidden_paths:[],acceptance_criteria:[],test_commands:[]};
   store.createTask(otherTask,'2026-10-23T00:00:00.000Z');const allow=()=>({state:'allow',fixture:true});
   const admitted=store.admitOperation({operation_id:'operation-other',task_id:'task-other',attempt:1,workspace_ref:workspace},{workspaceValidator:allow,executionPermissionCheck:allow});

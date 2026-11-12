@@ -5,8 +5,10 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { createMinimalOsEnv } from "./child-env.js";
+import { buildZCodeAppServerLaunch } from "./desktop-host-launch.js";
 import { buildAccountProviderPayload, zcodeDataBaseDir, runtimeAuthReply } from "./account-provider.js";
 import { BridgeError } from "./errors.js";
+import { readStartPlanRoutingRegistry, startPlanAliasCatalogEntries } from "./model-routing.js";
 import { loadPersistedRuntimeEnvironment, NodeRuntimeResolver } from "./resolver.js";
 import { ZCODE_SESSION_MODES, type ZCodeSessionMode } from "./session-preferences.js";
 import type { ZCodeRuntimeConfig } from "../interfaces.js";
@@ -113,13 +115,16 @@ export class ZCodeModelSettings {
     const cacheAge = cached ? Date.now() - cached.cached_at_ms : null;
     if (cached && cached.source_fingerprint === source.fingerprint && cacheAge !== null &&
         cacheAge >= 0 && cacheAge < MODEL_CATALOG_TTL_MS) {
+      const cachedModels = withStartPlanAliasEntries(cached.models, source.config);
+      const warning = startPlanCatalogWarning(buildAccountProviderPayload(source.config, undefined, this.#homeDir), cachedModels);
       return {
         workspace: workspacePath,
         current_model: null,
-        models: cached.models,
+        models: cachedModels,
         account_provider_sync: "not_needed",
         cache_status: "fresh",
         cached_at: new Date(cached.cached_at_ms).toISOString(),
+        ...(warning ? { warning } : {}),
       };
     }
     let lastError: unknown;
@@ -142,7 +147,7 @@ export class ZCodeModelSettings {
     const runtimeEnv = loadPersistedRuntimeEnvironment(this.#sourceEnv, this.#homeDir, this.#host);
     const config = await new NodeRuntimeResolver({ env: runtimeEnv, homeDir: this.#homeDir, host: this.#host }).resolve();
     const cachePath = modelCatalogCachePath(workspacePath, config, runtimeEnv, this.#host.settingsDirectory);
-    const fingerprint = await modelCatalogSourceFingerprint(config, runtimeEnv);
+    const fingerprint = await modelCatalogSourceFingerprint(config, runtimeEnv, this.#homeDir);
     return { config, runtimeEnv, cachePath, fingerprint };
   }
 
@@ -154,7 +159,7 @@ export class ZCodeModelSettings {
     let accountSync: ZCodeModelCatalog["account_provider_sync"] = "not_needed";
     let warning: string | undefined;
     try {
-      const accountPayload = buildAccountProviderPayload(config);
+      const accountPayload = buildAccountProviderPayload(config, undefined, this.#homeDir);
       if (accountPayload) {
         try {
           await client.request("provider/updateAccountConfig", accountPayload as unknown as JsonRecord);
@@ -179,11 +184,14 @@ export class ZCodeModelSettings {
       const settings = asRecord(snapshot.settings);
       const modelSettings = asRecord(settings.model);
       const rawAvailable = Array.isArray(modelSettings.available) ? modelSettings.available : [];
-      const models = rawAvailable.map(toCatalogEntry).filter((entry): entry is ZCodeModelCatalogEntry => entry !== null);
+      // ADR-031: expose the Start Plan aliases next to the runtime catalog so
+      // Masters can select `<ModelId>-StartPlan` without knowing provider ids.
+      const models = withStartPlanAliasEntries(rawAvailable.map(toCatalogEntry).filter((entry): entry is ZCodeModelCatalogEntry => entry !== null), config);
       const current = toModelRef(modelSettings.current);
       if (models.length === 0) throw new BridgeError("zcode_nonzero_exit", "ZCode app-server returned an empty model catalog for this workspace");
       const cachedAt = Date.now();
       await writeModelCatalogCache(cachePath, { cached_at_ms: cachedAt, source_fingerprint: fingerprint, models }).catch(() => undefined);
+      warning = startPlanCatalogWarning(accountPayload, models);
       return {
         workspace: workspacePath,
         current_model: current,
@@ -314,8 +322,9 @@ function buildRuntimeChildEnv(config: ZCodeRuntimeConfig, source: NodeJS.Process
 }
 
 function startAppServer(config: ZCodeRuntimeConfig, cwd: string, env: NodeJS.ProcessEnv): AppServerProcess {
-  const child = spawn(config.nodeExecutable, [config.zcodeEntrypoint, "app-server", "--stdio"], {
-    cwd, env, shell: false, windowsHide: true, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"],
+  const launch = buildZCodeAppServerLaunch(config.zcodeEntrypoint, env);
+  const child = spawn(config.nodeExecutable, [config.zcodeEntrypoint, ...launch.args], {
+    cwd, env: launch.env, shell: false, windowsHide: true, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"],
   });
   const pending = new Map<string | number, PendingRequest>();
   let stdoutBuffer = "";
@@ -501,8 +510,13 @@ function modelCatalogCachePath(workspace: string, config: ZCodeRuntimeConfig, en
   return path.join(settingsDirectory, "model-catalog", `${key}.json`);
 }
 
-async function modelCatalogSourceFingerprint(config: ZCodeRuntimeConfig, env: NodeJS.ProcessEnv): Promise<string> {
+async function modelCatalogSourceFingerprint(
+  config: ZCodeRuntimeConfig,
+  env: NodeJS.ProcessEnv,
+  homeDir: string,
+): Promise<string> {
   const digest = createHash("sha256");
+  digest.update("start-plan-task-scoped-live-billing-v1");
   // Hash only: provider contents and credentials are never written to cache.
   for (const file of [config.providerBuiltinConfigFile, config.providerPersonalConfigFile]) {
     digest.update(file);
@@ -510,9 +524,37 @@ async function modelCatalogSourceFingerprint(config: ZCodeRuntimeConfig, env: No
   }
   const entry = await stat(config.zcodeEntrypoint);
   digest.update(JSON.stringify({ entrypoint: config.zcodeEntrypoint, size: entry.size, mtimeMs: entry.mtimeMs, mode: env.ZCODE_BRIDGE_MODE ?? "build" }));
-  const account = buildAccountProviderPayload(config);
+  const account = buildAccountProviderPayload(config, undefined, homeDir);
   if (account) digest.update(JSON.stringify({ providers: account.providers, states: account.states, builtinRevision: account.basedOnZCodeBuiltinRevision }));
   return digest.digest("hex");
+}
+
+function startPlanCatalogWarning(
+  account: ReturnType<typeof buildAccountProviderPayload>,
+  models: readonly ZCodeModelCatalogEntry[],
+): string | undefined {
+  const providerId = "account:bigmodel-start-plan";
+  if (!account?.providers[providerId] || account.states[providerId]?.entitled === true
+    || models.some((model) => model.provider_id === providerId)) return undefined;
+  return "Start Plan models are checked for a selected task; this catalog read does not send Billing requests.";
+}
+
+/** Appends `<ModelId>-StartPlan` catalog entries derived from the official
+ * provider registry. Presentation only: alias entries carry no entitlement
+ * claim and never replace a runtime-advertised entry. */
+function withStartPlanAliasEntries(models: ZCodeModelCatalogEntry[], config: ZCodeRuntimeConfig): ZCodeModelCatalogEntry[] {
+  let aliases: ReturnType<typeof startPlanAliasCatalogEntries>;
+  try {
+    aliases = startPlanAliasCatalogEntries(readStartPlanRoutingRegistry(config));
+  } catch {
+    return models;
+  }
+  if (!aliases.length) return models;
+  const seen = new Set(models.map((model) => `${model.provider_id}\n${model.model_id}`));
+  const additions = aliases
+    .filter((alias) => !seen.has(`${alias.provider_id}\n${alias.model_id}`))
+    .map((alias) => ({ ...alias }));
+  return [...models, ...additions];
 }
 
 async function readModelCatalogCache(cachePath: string): Promise<CachedModelCatalog | null> {

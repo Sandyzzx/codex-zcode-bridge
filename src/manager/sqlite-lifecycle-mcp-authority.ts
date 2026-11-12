@@ -19,28 +19,30 @@ import type {
 import type { ClaimOnlyDriverOptions, CandidateTaskPackage, ClaimOnlyRunResult } from "../store/lifecycle-gate.js";
 import { openClaimOnlyDriver } from "../store/lifecycle-gate.js";
 import { TaskManagerError } from "./errors.js";
+import { waitForAttentionSnapshot } from "../attention/wait.js";
 import { parseTaskAttentionSnapshot } from "../attention/snapshot.js";
 import { createPlatformProbe, PROCESS_IDENTITY_VERSION, type ProcessIdentity, type ProcessProbe } from "../runtime/process-probe.js";
 import { buildSqliteDoctorChecks } from "../runtime/sqlite-doctor.js";
 import type { DoctorCheck } from "../runtime/doctor.js";
+import type { TaskModelRouter } from "../runtime/model-routing.js";
 
 const EXECUTION_OBSERVATION_PROBE_BUDGET_MS = 5_000;
 const DEFAULT_HOST_SHUTDOWN_WAIT_MS = 60_000;
 
 type Driver = Awaited<ReturnType<typeof openClaimOnlyDriver>>;
-type SqliteAuthorityOptions = ClaimOnlyDriverOptions & {
+export type SqliteAuthorityOptions = ClaimOnlyDriverOptions & {
   readonly testBeforeDispatch?: () => Promise<void>;
   readonly testOnScheduler?: (stage: string, detail: Readonly<Record<string, unknown>>) => void;
   readonly testShutdownWaitMs?: number;
+  /** Host-supplied ADR-031 task-creation routing hook. `route` runs before
+   * TaskPackage validation and persistence so every stored task carries the
+   * fully resolved provider/model selection; `confirmRouting` is invoked only
+   * after durable persistence, so a failure before the first persistence
+   * leaves no routing-cache reservation. */
+  readonly routeTaskModel?: TaskModelRouter;
 };
 
-/**
- * MCP-facing adapter for the existing SQLite Lifecycle Port. It owns no
- * persistence facts: Task, Attempt, Operation, Result, Event and Claim reads
- * all come from the bound SQLite driver. The outer BridgeTaskManager remains
- * the single public Manager contract and delegates to this binding only when
- * explicitly constructed for an isolated SQLite composition.
- */
+/** SQLite Lifecycle Manager. Owns scheduling; the bound driver owns durable facts. */
 export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
   readonly #driver: Driver;
   readonly #queue: Array<{ taskId: string; attempt: number }> = [];
@@ -66,22 +68,43 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
   readonly #shutdownWaitMs: number;
   readonly #context: NonNullable<ClaimOnlyDriverOptions["trustedLocalContext"]>;
   readonly #processProbe: ProcessProbe;
+  readonly #startPlanAuthAvailable: boolean;
+  readonly #startPlanAuthInjected: boolean;
+  readonly #startPlanPrivateAuthFactory?: () => Promise<NonNullable<ClaimOnlyDriverOptions["startPlanPrivateAuth"]> | null>;
+  readonly #testOnlyFakeAdapter: boolean;
+  readonly #routeTaskModel?: TaskModelRouter;
 
   private constructor(driver: Driver, context: NonNullable<ClaimOnlyDriverOptions["trustedLocalContext"]>, processProbe: ProcessProbe,
     testBeforeDispatch?: () => Promise<void>, testOnScheduler?: SqliteAuthorityOptions["testOnScheduler"],
-    shutdownWaitMs = DEFAULT_HOST_SHUTDOWN_WAIT_MS) {
+    shutdownWaitMs = DEFAULT_HOST_SHUTDOWN_WAIT_MS, startPlanAuthAvailable = false, testOnlyFakeAdapter = false,
+    routeTaskModel?: TaskModelRouter,
+    startPlanAuthInjected = false,
+    startPlanPrivateAuthFactory?: () => Promise<NonNullable<ClaimOnlyDriverOptions["startPlanPrivateAuth"]> | null>) {
     this.#driver = driver;
     this.#context = context;
     this.#processProbe = processProbe;
     this.#testBeforeDispatch = testBeforeDispatch;
     this.#testOnScheduler = testOnScheduler;
     this.#shutdownWaitMs = shutdownWaitMs;
+    this.#startPlanAuthAvailable = startPlanAuthAvailable;
+    this.#startPlanAuthInjected = startPlanAuthInjected;
+    this.#startPlanPrivateAuthFactory = startPlanPrivateAuthFactory;
+    this.#testOnlyFakeAdapter = testOnlyFakeAdapter;
+    this.#routeTaskModel = routeTaskModel;
   }
 
   async createTask(task: TaskPackage): Promise<TaskReceipt> {
     this.#assertOpen();
     this.#assertAccepting();
     this.#assertRecoveryReady();
+    // ADR-031: routing runs before validation so a provider-less model input
+    // is resolved to the actual provider/model that will be persisted. The
+    // routing cache is confirmed only after durable persistence below, so a
+    // rejection on any path before that point leaves no cache reservation.
+    task = this.#routeTaskModel ? await this.#routeTaskModel.route(task) : task;
+    if (task.model && !task.model.provider_id?.trim()) {
+      throw new TaskManagerError("TASK_INVALID", "model.provider_id is required because task model routing is not configured");
+    }
     validateTaskPackage(task);
     const policy = this.#driverTrustedPolicy();
     const sourceDecision = policy.validateWorkspace({ requestedPath: task.workspace, canonicalPath: task.workspace });
@@ -106,7 +129,23 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
         throw new TaskManagerError("TASK_ID_CONFLICT", `task_id already belongs to a different SQLite request: ${task.task_id}`);
       }
       const projection = asRecord(existing.projection);
+      // The persisted TaskPackage equals this routing; accept it so an
+      // identical re-submission replays from the routing cache as well.
+      this.#routeTaskModel?.confirmRouting(task);
       return receipt(task.task_id, projection.status, projection.created_at);
+    }
+
+    // ADR-031: Start Plan credential discovery is on-demand for genuinely new
+    // tasks. Existing tasks are resolved against SQLite first so logout cannot
+    // replace an equality replay or TASK_ID_CONFLICT with a credential error.
+    // This pre-intent refusal still precedes Operation/Launch Intent creation,
+    // so a logged-out new task is rejected before launch-outcome-unknown.
+    if (task.model?.provider_id === "account:bigmodel-start-plan" && !this.#testOnlyFakeAdapter) {
+      if (!this.#startPlanAuthAvailable) throw new TaskManagerError("TASK_INVALID", "official Start Plan credentials are unavailable");
+      if (!this.#startPlanAuthInjected) {
+        const issuer = await this.#startPlanPrivateAuthFactory?.().catch(() => null) ?? null;
+        if (!issuer) throw new TaskManagerError("TASK_INVALID", "official Start Plan credentials are unavailable");
+      }
     }
 
     try {
@@ -118,6 +157,9 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
         throw error;
       }
     }
+    // Durable persistence succeeded (fresh or race-verified). Confirm this
+    // call's exact routing before any later queueing can fail.
+    this.#routeTaskModel?.confirmRouting(task);
     const snapshot = asRecord(this.#driver.readTaskLifecycle(task.task_id));
     const projection = asRecord(snapshot.projection);
     this.#enqueue(task.task_id, Number(projection.current_attempt));
@@ -156,6 +198,10 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       exit_code: typeof result?.exit_code === "number" ? result.exit_code : null,
       ...(typeof result?.error_code === "string" ? { error_code: result.error_code } : {}),
       ...(typeof result?.summary === "string" && status === "failed" ? { error: result.summary } : {}),
+      ...(!result && typeof snapshot.result_submission_error === "string" ? {
+        error_code: snapshot.result_submission_error,
+        error: `Worker Result not committed: ${snapshot.result_submission_error}; execution is not retried and resources remain held pending identity-bound Recovery`,
+      } : {}),
       ...(executionObservation ? { execution_observation: executionObservation } : {}),
       ...(Number(attempt.attempt) > 0 ? {} : {}),
     };
@@ -182,12 +228,15 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
 
   async getResult(taskId: string): Promise<TaskResult> {
     const snapshot = this.#readSnapshot(taskId);
-    if (!snapshot.result) throw new TaskManagerError("TASK_NOT_FINISHED", `task ${taskId} has no committed SQLite Result`);
+    if (!snapshot.result) throw new TaskManagerError("TASK_NOT_FINISHED", `task ${taskId} has no committed SQLite Result${snapshot.result_submission_error ? `: ${String(snapshot.result_submission_error)}; Recovery required; no automatic retry` : ""}`);
     return snapshot.result as unknown as TaskResult;
   }
 
   async getEvents(input: GetEventsInput): Promise<TaskProgressPage> {
     this.#assertOpen();
+    if (input.wait_for !== undefined && input.wait_for !== "attention") throw new TaskManagerError("TASK_INVALID", "wait_for must be attention when provided");
+    if (input.view !== undefined && input.view !== "raw" && input.view !== "summary") throw new TaskManagerError("TASK_INVALID", "view must be raw or summary");
+    if (input.max_bytes !== undefined && (!Number.isInteger(input.max_bytes) || input.max_bytes < 1024 || input.max_bytes > 32 * 1024 * 1024)) throw new TaskManagerError("TASK_INVALID", "max_bytes must be between 1024 and 33554432");
     const afterSeq = input.after_seq ?? 0;
     const limit = input.limit ?? 100;
     const waitMs = input.wait_ms ?? 0;
@@ -200,6 +249,12 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       const decoded = decodeCursor(input.scan_cursor, input.task_id);
       if (input.after_seq !== undefined && input.after_seq !== decoded) throw new TaskManagerError("TASK_INVALID", "after_seq conflicts with scan_cursor");
       cursor = decoded;
+    }
+    if (input.wait_for === "attention") {
+      await waitForAttentionSnapshot({ read: () => this.getAttention(input.task_id), timeoutMs: waitMs });
+      const page = await this.getEvents({ ...input, wait_for: undefined, wait_ms: 0 });
+      const attention = await this.getAttention(input.task_id);
+      return { ...page, status: attention.status, attention };
     }
     const deadline = Date.now() + waitMs;
     while (true) {
@@ -218,9 +273,6 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       let nextCursor = page.nextCursor;
       let scanIncomplete = false;
       if (input.max_bytes !== undefined) {
-        if (!Number.isInteger(input.max_bytes) || input.max_bytes < 1024 || input.max_bytes > 32 * 1024 * 1024) {
-          throw new TaskManagerError("TASK_INVALID", "max_bytes must be between 1024 and 33554432");
-        }
         let bytes = 0;
         let kept = 0;
         for (const event of events) {
@@ -333,12 +385,14 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       return this.getStatus(taskId);
     }
     const operation = snapshot.operation ? asRecord(snapshot.operation) : null;
-    if (projection.status === "failed" && operation?.phase === "released") {
+    if (isTerminal(projection.status as TaskStatus) && operation?.phase === "released") {
       // A repeated recovery request is a read-only no-op after the durable
       // Release; do not append another lifecycle event or stop a new PID.
       return this.getStatus(taskId);
     }
-    if (projection.status === "failed" && operation && operation.phase === "cleanup_unverified") {
+    if (isTerminal(projection.status as TaskStatus) && operation && operation.phase === "cleanup_unverified") {
+      // Recovery verifies the committed Result binding in the Driver before
+      // CAS/Release; do not duplicate it with a snapshot truthiness check.
       const recoveryKey = queueKey(taskId, Number(attempt.attempt));
       const existingRecovery = this.#recoveryRuns.get(recoveryKey);
       if (existingRecovery) return existingRecovery;
@@ -347,7 +401,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
           const latest = this.#readSnapshot(taskId);
           const latestProjection = asRecord(latest.projection);
           const latestOperation = latest.operation ? asRecord(latest.operation) : null;
-          return latestProjection.status === "failed" && latestOperation?.phase === "released"
+          return isTerminal(latestProjection.status as TaskStatus) && latestOperation?.phase === "released"
             ? this.getStatus(taskId)
             : null;
         };
@@ -635,14 +689,17 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
 
   static async create(options: SqliteAuthorityOptions): Promise<SqliteLifecycleMcpAuthority> {
     if (!options.trustedLocalContext) throw new TaskManagerError("TASK_STATE", "trusted local context is required");
-    const { testBeforeDispatch, testOnScheduler, testShutdownWaitMs, ...driverOptions } = options;
+    const { testBeforeDispatch, testOnScheduler, testShutdownWaitMs, routeTaskModel, ...driverOptions } = options;
     const shutdownWaitMs = testShutdownWaitMs ?? DEFAULT_HOST_SHUTDOWN_WAIT_MS;
     if (!Number.isSafeInteger(shutdownWaitMs) || shutdownWaitMs < 1 || shutdownWaitMs > DEFAULT_HOST_SHUTDOWN_WAIT_MS) {
       throw new TaskManagerError("TASK_STATE", "invalid Host shutdown wait budget");
     }
     const processProbe = options.processProbe ?? createPlatformProbe();
     const authority = new SqliteLifecycleMcpAuthority(await openClaimOnlyDriver({ ...driverOptions, processProbe }), options.trustedLocalContext,
-      processProbe, testBeforeDispatch, testOnScheduler, shutdownWaitMs);
+      processProbe, testBeforeDispatch, testOnScheduler, shutdownWaitMs,
+      options.startPlanPrivateAuth !== undefined || options.startPlanPrivateAuthFactory !== undefined,
+      options.testOnlyFakeAdapter === true, routeTaskModel,
+      options.startPlanPrivateAuth !== undefined, options.startPlanPrivateAuthFactory);
     try {
       await authority.recoverTasks();
       return authority;
@@ -652,7 +709,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     }
   }
 
-  #readSnapshot(taskId: string): { task: TaskPackage; projection: Record<string, unknown>; attempt: Record<string, unknown>; operation: Record<string, unknown> | null; result: TaskResult | null; continuation: Record<string, unknown> | null } {
+  #readSnapshot(taskId: string): { task: TaskPackage; projection: Record<string, unknown>; attempt: Record<string, unknown>; operation: Record<string, unknown> | null; result: TaskResult | null; continuation: Record<string, unknown> | null; result_submission_error: string | null } {
     this.#assertOpen();
     const value = this.#driver.readTaskLifecycle(taskId);
     if (!value) throw new TaskManagerError("TASK_NOT_FOUND", `unknown SQLite task: ${taskId}`);
@@ -664,6 +721,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       operation: snapshot.operation ? asRecord(snapshot.operation) : null,
       result: snapshot.result as TaskResult | null,
       continuation: snapshot.continuation ? asRecord(snapshot.continuation) : null,
+      result_submission_error: typeof snapshot.result_submission_error === "string" ? snapshot.result_submission_error : null,
     };
   }
 

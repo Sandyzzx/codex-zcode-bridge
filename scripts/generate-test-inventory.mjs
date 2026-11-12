@@ -143,7 +143,7 @@ for (const file of collectTestFiles(path.join(repositoryRoot, "test"))) {
 
 const inventory = {
   schema_version: 1,
-  generated_at: "2026-11-03",
+  generated_at: new Date().toISOString().slice(0, 10),
   generator: "npm run test:inventory",
   summary: {
     executable_or_manual_files: map.tests.length,
@@ -157,7 +157,7 @@ const inventory = {
       return counts;
     }, {}),
     stress_tests: map.stress_tests.length,
-    runtime_measurement_coverage: "Only historical B3-05 setup evidence is attached; current per-test runtime is NOT MEASURED.",
+    runtime_measurement_coverage: "Static declarations only; measured runs are recorded separately in the acceptance report.",
   },
   tests: inventoryTests,
 };

@@ -1,5 +1,7 @@
 # ADR-002 — Manager 独占任务生命周期，worker 通过 attempt claim 入场
 
+> Applicability: PARTIALLY SUPERSEDED — ADR-029，2026-11-07。Manager 所有权与 Claim 原则仍生效；旧 JSON Manager/Store/Worker 具体实现由 ADR-016/024/029 取代。历史正文保留用于追溯。
+
 Status: Accepted
 Date: 2026-10-07（记录日期，决策早于此）
 

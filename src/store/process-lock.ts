@@ -33,9 +33,12 @@ const TRANSIENT_LOCK_FS_CODES = new Set(["EEXIST", "EPERM", "EACCES", "EBUSY", "
  * publication retries (2026-10-17 matrix review). */
 const DESTINATION_PRESENT_CONTENTION_CODES = new Set(["EEXIST", "ENOTEMPTY"]);
 /** Bounded budgets for the transient retries; exhaustion keeps the original
- * error visible instead of spinning. */
-const PUBLICATION_RETRY_ATTEMPTS = 5;
+ * error visible instead of spinning. Publication matches the withdrawal
+ * budget because the same CI contention produced EPERM on both renames:
+ * five fixed attempts (≈250ms) escaped while the withdrawal path converged
+ * within its five-second deadline (PR #67 round-3 Windows evidence). */
 const PUBLICATION_RETRY_PAUSE_MS = 50;
+const PUBLICATION_RETRY_MS = 5_000;
 const WITHDRAW_RETRY_MS = 5_000;
 const SHARED_GUARD_RETRY_MS = 2_000;
 const PRIVATE_CLEANUP_RETRY_MS = 1_000;
@@ -84,10 +87,10 @@ function describeLockOwner(directory: string): string | null {
 
 /** Shared by short synchronous store transactions and asynchronous managers. */
 export function tryAcquireProcessLock(directory: string): (() => void) | null {
-  return tryAcquireProcessLockWithRetry(directory, 0);
+  return tryAcquireProcessLockWithRetry(directory, Date.now() + PUBLICATION_RETRY_MS);
 }
 
-function tryAcquireProcessLockWithRetry(directory: string, retries: number): (() => void) | null {
+function tryAcquireProcessLockWithRetry(directory: string, deadline: number): (() => void) | null {
   const token = randomUUID();
   // Publishing must never overwrite an existing lock path, whatever it holds.
   // POSIX rename silently REPLACES an existing empty directory (observed in
@@ -136,9 +139,9 @@ function tryAcquireProcessLockWithRetry(directory: string, retries: number): (()
       if (DESTINATION_PRESENT_CONTENTION_CODES.has(code ?? "") || existsSync(directory)) {
         return acquireExistingLock(directory);
       }
-      if (retries < PUBLICATION_RETRY_ATTEMPTS) {
+      if (Date.now() < deadline) {
         pauseBriefly(PUBLICATION_RETRY_PAUSE_MS);
-        return tryAcquireProcessLockWithRetry(directory, retries + 1);
+        return tryAcquireProcessLockWithRetry(directory, deadline);
       }
       throw error;
     }

@@ -21,6 +21,12 @@ import type {
   ZCodeInteractionReplyInput,
 } from "../interfaces.js";
 import { TaskManagerError } from "../manager/errors.js";
+
+/** Public zcode_task input (ADR-031): model.provider_id is optional and is
+ * resolved by the Authority's routing hook before persistence. */
+type ZcodeTaskInput = Omit<TaskPackage, "model"> & {
+  model?: { provider_id?: string; model_id: string; reasoning_level?: string };
+};
 import {
   taskReceiptSchema,
   taskResultSchema,
@@ -46,7 +52,7 @@ import { registerLedgerTools } from "../ledger/mcp.js";
 import { renderTaskFeedback } from "../feedback/renderer.js";
 
 export const SERVER_NAME = "codex-zcode-bridge";
-export const SERVER_VERSION = "1.6.0"; // x-release-please-version
+export const SERVER_VERSION = "2.0.0-preview.4"; // x-release-please-version
 
 export interface BridgeServerOptions {
   taskManager: TaskManager & Partial<Pick<ProgressTaskManager, "getEvents" | "getFeedback" | "getAttention" | "replyToInteraction">>;
@@ -121,7 +127,7 @@ export function createBridgeServer(options: BridgeServerOptions): McpServer {
     "zcode_model_catalog",
     {
       title: "Read available ZCode models",
-      description: "Read models and reasoning levels for this workspace. The Bridge caches the catalog for 24 hours, refreshes when provider settings change or the cache expires, and re-reads provider config before retrying a failed refresh. A cache response has current_model=null; use provider_id/model_id from models in zcode_task.model.",
+      description: "Read models and reasoning levels for this workspace. The Bridge caches the catalog for 24 hours, refreshes when provider settings change or the cache expires, and re-reads provider config before retrying a failed refresh. A cache response has current_model=null; use provider_id/model_id from models in zcode_task.model. Start Plan entries appear as <ModelId>-StartPlan aliases and are entitlement-checked live when such a task runs.",
       inputSchema: zcodeModelCatalogInputSchema,
       outputSchema: modelCatalogSchema,
     },
@@ -177,11 +183,11 @@ export function createBridgeServer(options: BridgeServerOptions): McpServer {
     "zcode_task",
     {
       title: "Submit one ZCode coding task",
-      description: `Create one complete, independently acceptable coding task for the local ZCode Coding Worker. Delegate a deliverable with clear constraints and acceptance criteria; the Worker owns implementation, tests, and repair end to end. workspace is the calling host project root and determines the ZCode Desktop project identity. The calling host decides whether to create a worktree; if it does, pass its existing absolute directory as optional worktree_path. The Bridge never creates, selects, or removes a worktree. Without worktree_path, ZCode runs directly in workspace. Optional model selects a ZCode provider_id/model_id for this session without changing the project default. Returns a TaskReceipt; the task runs asynchronously in a detached worker. ${EXECUTION_NOT_VERDICT}`,
+      description: `Create one complete, independently acceptable coding task for the local ZCode Coding Worker. Delegate a deliverable with clear constraints and acceptance criteria; the Worker owns implementation, tests, and repair end to end. workspace is the calling host project root and determines the ZCode Desktop project identity. The calling host decides whether to create a worktree; if it does, pass its existing absolute directory as optional worktree_path. The Bridge never creates, selects, or removes a worktree. Without worktree_path, ZCode runs directly in workspace. Optional model: pass provider_id+model_id to force that provider, or omit provider_id with a plain model id or a <ModelId>-StartPlan alias to route once per task (prefer_startplan, default true, prefers Start Plan for plain models). Returns a TaskReceipt; the task runs asynchronously in a detached worker. ${EXECUTION_NOT_VERDICT}`,
       inputSchema: zcodeTaskInputSchema,
       outputSchema: taskReceiptSchema,
     },
-    async (args: TaskPackage) => runTool(() => manager.createTask(args)),
+    async (args: ZcodeTaskInput) => runTool(() => manager.createTask(args as TaskPackage)),
   );
 
   server.registerTool(

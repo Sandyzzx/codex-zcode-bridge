@@ -1,6 +1,5 @@
 // Shared test fixtures: fake spawn infrastructure, disposable directories, and
 // sample payloads. Unit tests never invoke the real ZCode CLI or any model.
-import { EventEmitter } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -11,7 +10,6 @@ import type {
   WorkspaceRef,
   ZCodeRuntimeConfig,
 } from "../src/interfaces.js";
-import type { SpawnedProcess, SpawnFunction, SpawnOptionsLike } from "../src/adapters/process-spawn.js";
 
 export const SESSION_ID = "sess_11111111-aaaa-4bbb-8ccc-cccccccccccc";
 
@@ -30,122 +28,13 @@ function fixtureTempRoot(): string {
   return tmpdir();
 }
 
-export class FakeStream {
-  readonly #emitter = new EventEmitter();
-
-  setEncoding(_encoding: "utf8"): void {
-    // encoding is irrelevant for fakes
-  }
-
-  on(event: "data", listener: (chunk: string) => void): void {
-    this.#emitter.on(event, listener);
-  }
-
-  emitData(chunk: string): void {
-    this.#emitter.emit("data", chunk);
-  }
-}
-
-export class FakeChild implements SpawnedProcess {
-  readonly stdout: FakeStream = new FakeStream();
-  readonly stderr: FakeStream = new FakeStream();
-  readonly pid: number;
-  /** Mirrors a real ChildProcess: null until the exit event is delivered
-   * (which happens before stdio close). ADR-009 continuity reads these. */
-  exitCode: number | null = null;
-  signalCode: string | null = null;
-  killCallCount = 0;
-  readonly #events = new EventEmitter();
-
-  constructor(pid: number) {
-    this.pid = pid;
-  }
-
-  on(event: string, listener: (...args: any[]) => void): this {
-    this.#events.on(event, listener);
-    return this;
-  }
-
-  kill(_signal?: NodeJS.Signals | number): boolean {
-    this.killCallCount += 1;
-    return true;
-  }
-
-  emitStdout(text: string): void {
-    this.stdout.emitData(text);
-  }
-
-  emitStderr(text: string): void {
-    this.stderr.emitData(text);
-  }
-
-  /** Marks the child exited: exit state first, then the event — mirroring
-   * Node's exit-before-close ordering (ADR-009). */
-  emitExit(code: number | null, signal: string | null): void {
-    if (code !== null) this.exitCode = code;
-    if (signal !== null) this.signalCode = signal;
-    setImmediate(() => this.#events.emit("exit", code, signal));
-  }
-
-  /** Deferred so the adapter's listeners (attached synchronously) are ready.
-   * The exit state is set before the close event fires, like a real child. */
-  emitClose(code: number | null, signal: string | null): void {
-    setImmediate(() => {
-      if (code !== null) this.exitCode = code;
-      if (signal !== null) this.signalCode = signal;
-      this.#events.emit("close", code, signal);
-    });
-  }
-
-  emitError(error: Error): void {
-    setImmediate(() => this.#events.emit("error", error));
-  }
-}
-
-export interface SpawnRecord {
-  readonly file: string;
-  readonly args: string[];
-  readonly options: SpawnOptionsLike;
-  readonly child: FakeChild;
-  promptContent: string | null;
-}
-
-/**
- * Scriptable fake spawn. Each queued script hook runs after listeners are
- * attached; hooks typically capture the prompt file content and emit
- * stdout/stderr/close.
- */
-export class FakeSpawn {
-  readonly records: SpawnRecord[] = [];
-  readonly script: Array<(child: FakeChild, record: SpawnRecord, index: number) => void> = [];
-  /** When set, spawn itself throws synchronously (ENOENT-style failures). */
-  spawnThrows: Error | null = null;
-
-  spawnFn: SpawnFunction = (file, args, options) => {
-    if (this.spawnThrows) {
-      throw this.spawnThrows;
-    }
-    const child = new FakeChild(30_000 + this.records.length);
-    const record: SpawnRecord = { file, args, options, child, promptContent: null };
-    this.records.push(record);
-    const hook = this.script.shift();
-    if (hook) {
-      queueMicrotask(() => hook(child, record, this.records.length - 1));
-    }
-    return child;
-  };
-
-  recordForPid(pid: number): SpawnRecord | undefined {
-    return this.records.find((record) => record.child.pid === pid);
-  }
-}
-
 export function fakeConfig(overrides: Partial<ZCodeRuntimeConfig> = {}): ZCodeRuntimeConfig {
   return {
     nodeExecutable: "node-fake",
     zcodeEntrypoint: "C:\\fake\\zcode.cjs",
     providerBuiltinConfigFile: "C:\\fake\\zcode-builtin.json",
     providerPersonalConfigFile: "C:\\fake\\provider_config.json",
+    zcodeDataRoot: "C:\\fake\\zcode-data",
     dataRoot: "C:\\fake\\data",
     ...overrides,
   };
@@ -166,21 +55,6 @@ export function validReport(overrides: Partial<AgentReport> = {}): AgentReport {
     needs_master_decision: false,
     ...overrides,
   };
-}
-
-export function successEnvelope(
-  report: AgentReport | object,
-  sessionId: string = SESSION_ID,
-): string {
-  return JSON.stringify({
-    sessionId,
-    traceId: "trace-1",
-    turnId: "turn-1",
-    response: JSON.stringify(report),
-    usage: { source: "provider", totalTokens: 100 },
-    eventCount: 1,
-    projection: { status: "idle" },
-  });
 }
 
 export function makeTask(overrides: Partial<TaskPackage> = {}): TaskPackage {
@@ -297,5 +171,3 @@ export async function cleanupOwnedProcessFixture(cleanup: OwnedProcessFixtureCle
     console.error(message);
   }
 }
-
-export const TRANSIENT_STDERR = "Error: Bundled 与 Active ZCode Built-in Release 均不可用";

@@ -1,5 +1,7 @@
 # ADR-005：长会话清理与报告修复
 
+> Applicability: PARTIALLY SUPERSEDED — ADR-029，2026-11-07。严格报告/显式修复/模型解析保留；旧 JSON pump、heartbeat、checkpoint 和 Task 调度锁已退役；Windows 清理以 ADR-009、期限以 ADR-027 为准。历史正文保留用于追溯。
+
 > Status: DECISION
 > Decision: Accepted（用户于 2026-10-08 授权执行本次修复）
 > Date: 2026-10-08

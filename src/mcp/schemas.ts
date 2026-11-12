@@ -20,7 +20,11 @@ export const zcodeTaskInputSchema = z
     workspace: z.string().min(1),
     worktree_path: z.string().min(1).optional(),
     model: z.strictObject({
-      provider_id: z.string().trim().min(1),
+      // ADR-031: provider_id is optional so a plain model (or a
+      // `<ModelId>-StartPlan` alias) is routed once at task creation via
+      // ZCODE_BRIDGE_PREFER_STARTPLAN; an explicit provider stays mandatory
+      // when supplied.
+      provider_id: z.string().trim().min(1).optional(),
       model_id: z.string().trim().min(1),
       reasoning_level: z.string().trim().min(1).optional(),
     }).optional(),

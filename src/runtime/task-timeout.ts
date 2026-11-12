@@ -2,6 +2,14 @@ import type { TaskPackage } from "../interfaces.js";
 
 export const DEFAULT_TASK_TIMEOUT_MS = 60 * 60 * 1000;
 export const MAX_TASK_TIMEOUT_MS = 4 * 60 * 60 * 1000;
+// ADR-027: independent phase budgets, shared by the Worker and Manager.
+export const ADAPTER_CLEANUP_TIMEOUT_MS = 300_000;
+export const RESULT_DELIVERY_GRACE_MS = 30_000;
+export const WORKER_CLOSE_TIMEOUT_MS = 15_000;
+export const EXECUTION_DELIVERY_TIMEOUT_MS = 15_000;
+export function resultWaitBudgetMs(executionTimeoutMs: number): number {
+  return executionTimeoutMs + ADAPTER_CLEANUP_TIMEOUT_MS + RESULT_DELIVERY_GRACE_MS;
+}
 const MIN_TASK_TIMEOUT_MS = 60 * 1000;
 
 /** A task override wins; otherwise use the user's bounded Bridge default. */

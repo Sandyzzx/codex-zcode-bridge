@@ -1,6 +1,6 @@
 # Bridge 可靠性修复计划 V2
 
-> Status: DECISION
+> Status: ARCHIVED — 历史规划，当前合同请从 decisions/README.md 路由。
 > Date: 2026-10-03
 > 计划与决策记录，其中仍有未完成项（见文首状态行）。已实现的部分以 `ARCHITECTURE.md` 为准。
 

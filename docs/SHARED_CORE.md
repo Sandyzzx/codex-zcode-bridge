@@ -1,40 +1,44 @@
 # 共享核心与宿主适配
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-10-16
-> Last verified: 2026-10-16，仅核对本次新增的浏览器后端打包分层说明；其余条目仍未逐条核对
-> Verified against: 183611e9c9bfc619b543933c7ad7204b2f646ea2（加载与构建源码，本次未改动）
+> Last updated: 2026-11-11
+> Last verified: 2026-11-11，核对 Preview.3 src/core.ts、Host/Worker 入口及构建布局；外部 fork 实际升级 NOT RUN。
+> Verified against: 52015d12f37011f4d389e07941c31491457611ef
 
-Codex 与 dsh 连接同一个 ZCode 执行端，因此任务调度、存储、续跑、取消、结果归一化、ZCode 协议和 Desktop 索引属于共享核心。`src/adapters/` 适配 ZCode，不是调用宿主。
+公共入口为 `codex-zcode-bridge/core`（`src/core.ts`），无服务器启动副作用，构建同时输出类型声明。项目为 private，尚未发布独立 npm 包；本地 npm pack/fork 消费仍是公共兼容边界。
 
-公共入口是 `codex-zcode-bridge/core`（源码 `src/core.ts`）。入口没有启动副作用，提供类型声明，并导出 `buildTaskFeedbackSnapshotV01` 与 `renderTaskFeedback`。`npm run build:core` 构建核心；当前仓库仍为 private，未发布独立 npm 包。可在本地构建后用 `npm pack` 生成版本化制品供 fork 锁定；发布渠道和独立核心版本策略尚未确定。
+## 当前入口
 
-宿主入口显式提供 `BridgeHostProfile`：
+Host 使用 `startBridge(profile, version)`。它负责绑定唯一 SQLite Manager、Fresh Bootstrap、MCP 及 shutdown。Host profile 显式指定 name、settingsDirectory、workerEntryPath 和 instructions；所有路径必须为绝对路径。任务 prompt 与 MCP 工具不硬编码调用宿主。
 
 ```ts
-import { homedir } from "node:os";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { startBridge } from "codex-zcode-bridge/core";
-
-const settingsDirectory = path.join(homedir(), ".dsh", "zcode-bridge");
 await startBridge({
-  name: "dsh-zcode-bridge",
-  settingsDirectory,
-  defaultDataRoot: settingsDirectory,
-  workerEntryPath: fileURLToPath(new URL("./worker-main.mjs", import.meta.url)),
-  instructions: "Host-specific delegation instructions go here.",
-}, "YOUR_HOST_VERSION");
+  name: "calling-host",
+  settingsDirectory: absoluteSettingsDirectory,
+  workerEntryPath: absoluteBundledWorker,
+  instructions: hostInstructions,
+}, hostVersion);
 ```
 
-宿主独立维护 manifest、hook、安装配置、打包和发布版本。worker 可以把共享 `src/worker/worker-main.ts` 打进自己的制品，也可以调用公共 `runWorkerTask`；启动参数为 `dataRoot taskId attempt`，默认 spawner 同时传递校验后的宿主 profile。自定义 worker 入口必须接收并传给 `runWorkerTask`，不能重新猜测宿主。路径必须是绝对路径；设置、模型缓存和默认模型写入都使用该 profile，worker 使用同一配置。
+嵌入式消费者可使用公开 `SqliteLifecycleMcpAuthority.create(options)` 创建同一生产 Manager，再交给 `createBridgeServer({taskManager})`。创建需要现有受信任本地 Host context、合适的 SQLite 根、Worker/Bridge provenance 和 receipt；普通 MCP/TaskPackage 不能自行产生这些能力。准确参数类型由导出的 `SqliteAuthorityOptions` 提供。多数 fork 应使用 startBridge。
 
-Codex 默认配置目录保持 `~/.codex/codex-zcode-bridge`。运行配置仍优先于环境变量。`legacySettingsDirectories` 仅在宿主明确配置时启用；缺文件才回退，存在但损坏的文件会报错。首次写入默认模型会复制完整 legacy 设置到宿主 canonical 文件，并保留未知字段；不会修改 legacy 文件。不要默认共享两个宿主的可变任务目录。
+Worker 必须打包 `src/worker/worker-main.ts`，保留同一 SQLite Bootstrap/Claim 私有管道协议。不能使用旧的 `dataRoot taskId attempt` 参数启动；不能从 prompt 或自定义 runner 绕过 Claim。Host manifest、安装 hook、版本、settings 和打包由 fork 独立维护。
 
-公共 MCP 工具名称、schema 和业务语义由核心维护，宿主可传服务身份与 instructions。描述与 task prompt 使用调用宿主的中性措辞。Task Attention 不作为独立公共工具发布，而是 `zcode_events` 的 SQLite-only 可选等待模式；默认事件契约保持兼容。宿主内 MCP 调用与插件包内 `dist/wait-task.mjs` 复用同一 snapshot validator 和等待谓词。`zcode_feedback` 是向后兼容的只读 snapshot 与文本 renderer；原有 `zcode_events`、`zcode_status` 和 `zcode_result` 保持原契约。`zcode_progress_probe` 是实验工具，默认关闭；只有直接调用 `createBridgeServer({ enableExperiments: true, ... })` 才启用。
+## 主版本兼容性
 
-fork 接入顺序：构建并锁定本项目制品 → 用宿主入口替换公共模块中的路径/身份修改 → 将共享 worker 打入宿主制品 → 验证 stdio、任务执行、续跑、审批、模型缓存和自包含安装 → 独立发布。共享修复先进入本项目，fork 通过升级核心制品接收，避免长期各自修改任务核心。本轮只改造本项目，未修改 dsh，也未创建发布。
+Owner 批准 [ADR-029](decisions/ADR-029-legacy-runtime-retirement.md)：删除 TaskStore、旧 BridgeTaskManager/TaskManagerOptions、createWorkerSpawner、runWorkerTask/RunWorkerTaskOptions、buildTaskObservation。旧 store/workspaceProvider/spawnWorker 构造参数、自定义 JSON Worker 与这些导出的消费者需要迁移；不存在保留旧运行时的兼容包装。当前 Preview 版本为 2.0.0-preview.3，Stable 1.6.0 的合同保持独立。
 
-浏览器后端（ADR-007）的打包分层：标准插件随 `worker/vendor/` 携带自包含的 managed CDP CommonJS bundle（固定 playwright-core 1.64.0 及 browsers.json/package.json registry 数据），安装环境不需要另行安装该依赖。`build:core` 产物不含 vendor；core/fork 使用编译模块、缺少 vendor 时，loader（`src/browser/load-backend.ts`）回退到相邻的编译后 managed CDP runtime，再按 Node 模块解析规则加载 `package.json` 已声明的 playwright-core。宿主需确保这些模块及依赖可用；若重新打包 worker，需自行保留正确的 vendor 布局或提供等价的模块与资源布局，并遵守核心声明的依赖版本约束。打包责任在宿主，不能将标准插件的自包含性直接套用于自定义宿主。
+startBridge、MCP 工具及 schema、TaskPackage/TaskResult、32 MiB/v14、纯 feedback/observation/usage 与进程身份导出继续保留。DirectWorkspaceProvider 是小型独立路径工具，保留其已公开入口；生产 Manager 直接使用 SQLite Admission 的路径验证。
 
-回归覆盖两个宿主设置隔离、显式 migration、MCP 身份/instructions、worker profile 往返以及 bundled core 无启动副作用。真实 dsh 安装/权限往返和两个宿主共同运行的 Desktop UI 尚未验证。
+ADR-029 的破坏性迁移已在 Preview 2.0 发布线落地；Stable 1.6.0 仍是独立发布渠道。外部 fork 若仍消费旧 Core 导出，应锁定 1.x 制品，迁到 `startBridge` 或 `SqliteLifecycleMcpAuthority.create()` 后再升级 Preview 2.x。
+
+外部 dsh/fork 代码及部署没有在本轮修改或认证。它们可以锁定旧核心制品，准备好后迁移到 SQLite Host；不能宣称外部 API 已无消费者。
+
+## 设置与打包
+
+Codex 默认设置目录为 `~/.codex/codex-zcode-bridge`。runtime-config 优先于环境；显式 `legacySettingsDirectories` 仍支持模型设置升级，缺文件才回退，损坏文件报错，写入只发生在 canonical 目录并保留未知字段。这是用户安装兼容，不是旧 Task Authority。
+
+标准插件自包含 Bridge、Worker、Thin Waiter、离线升级命令及 Schema。浏览器 backend 位于 `worker/vendor/`，固定 playwright-core 1.64.0。build:core 不含 vendor，未重新打包的 fork 需要保留编译后 browser runtime 与声明依赖；自定义打包必须保留等价模块/资源布局。
+
+Core 无启动副作用、宿主 settings 隔离、MCP 身份/instructions、Worker 环境与无 production dist 的干净安装由本轮回归核对。真实外部 Host、跨 Host 控制、真实 Provider 容量与 Desktop UI 仍须独立验收。
