@@ -34,6 +34,7 @@ const TURN_ID = "turn_official_1";
 const ROOT_PID = 42_424;
 const ROOT_FINGERPRINT = "official-root-exact-fingerprint";
 const WORKSPACE = path.join(process.cwd(), ".run", "official-host-workspace");
+const OFFICIAL_HOST_SUPPORTED = process.platform === "win32" && process.arch === "x64";
 
 type EventSink = Array<{ type: string; summary: string; details?: Record<string, unknown> }>;
 type Reply = Record<string, unknown>;
@@ -819,7 +820,9 @@ function factoryContext(config: ZCodeRuntimeConfig, assets: OfficialHostAssets):
   };
 }
 
-test("official factory scopes the fixed helper path, pins transport options, maps exitCode, and verifies the close scan", async () => {
+test("official factory scopes the fixed helper path, pins transport options, maps exitCode, and verifies the close scan", {
+  skip: !OFFICIAL_HOST_SUPPORTED,
+}, async () => {
   exitState = { code: null, signal: null };
   FakeProcessManager.lastOptions = null;
   FakeProcessManager.helperPathSeen = undefined;
@@ -872,7 +875,9 @@ test("official factory scopes the fixed helper path, pins transport options, map
   }
 });
 
-test("official factory rejects a foreign app-server entrypoint before constructing the manager", async () => {
+test("official factory rejects a foreign app-server entrypoint before constructing the manager", {
+  skip: !OFFICIAL_HOST_SUPPORTED,
+}, async () => {
   let managerConstructed = 0;
   class CountingManager extends FakeProcessManager {
     constructor(options: Record<string, unknown>) {
@@ -901,6 +906,36 @@ test("official factory rejects a foreign app-server entrypoint before constructi
     (error: unknown) => error instanceof BridgeError && error.code === "provider_config_invalid",
   );
   assert.equal(managerConstructed, 0);
+});
+
+test("official factory fails closed outside Windows x64", {
+  skip: OFFICIAL_HOST_SUPPORTED,
+}, async () => {
+  const root = path.join(process.cwd(), ".run", "official-host-assets");
+  const assets: OfficialHostAssets = {
+    root,
+    hostModulePath: path.join(root, "official-host-runtime.mjs"),
+    appServerEntryPath: path.join(root, "app-server", "zcode.cjs"),
+    builtinProviderConfigPath: path.join(root, "app-server", "provider", "zcode-builtin.json"),
+    runtimeHostPath: path.join(root, "zcode-runtime-host.exe"),
+    manifestDigest: "d".repeat(64),
+  };
+  const config = fakeConfig({
+    zcodeEntrypoint: assets.appServerEntryPath,
+    providerBuiltinConfigFile: assets.builtinProviderConfigPath,
+  });
+  const factory = createOfficialHostClientFactory({
+    assets: async () => assets,
+    moduleSource: {
+      ZCodeAgentProcessManager: FakeProcessManager as never,
+      ZCodeProtocolClient: FakeOfficialProtocolClient as never,
+    },
+  });
+
+  await assert.rejects(
+    Promise.resolve(factory(factoryContext(config, assets))),
+    (error: unknown) => error instanceof BridgeError && error.code === "runtime_not_found",
+  );
 });
 
 test("production asset verification fails closed for absent and invalid shipped trees", async () => {
@@ -1029,7 +1064,7 @@ test("the shipped host module applies the exact 16 MiB transport frame limit and
 });
 
 test("the shipped Host exports and native keyring closure load outside the build workspace", {
-  skip: process.platform !== "win32" || process.arch !== "x64",
+  skip: !OFFICIAL_HOST_SUPPORTED,
 }, async () => {
   const workerUrl = pathToFileURL(path.join(
     process.cwd(),
