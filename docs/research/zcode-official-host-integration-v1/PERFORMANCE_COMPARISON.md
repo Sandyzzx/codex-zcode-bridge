@@ -3,7 +3,7 @@
 > Status: RESEARCH — LIMITED SYNTHETIC BENCHMARK / PRODUCT PERFORMANCE UNKNOWN
 > Last updated: 2026-11-12
 > Last verified: 2026-11-12，读取 `.run/performance-benchmark-20261112/evidence/summary.json`
-> Verified against: Bridge candidate `8e8966d5` + documentation changes；earlier fixed official artifact benchmark；loopback Mock provider only
+> Verified against: Bridge candidate `ba25f837` + documentation changes；earlier fixed official artifact benchmark；loopback Mock provider only
 
 ## 环境
 

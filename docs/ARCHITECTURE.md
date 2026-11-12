@@ -2,8 +2,8 @@
 
 > Status: AUTHORITATIVE
 > Last updated: 2026-11-12
-> Last verified: 2026-11-12，核对了同步最新 `origin/preview` 后的候选源码、固定上游制品、Preview.4 自动 SQLite 升级路径、936 项完整隔离回归和 stress gate；真实账户、真实模型和官方制品升级/回滚演练未运行。
-> Verified against: `8e8966d5ec7539a2d8575fc748871a9641fe0a2d`（tree `4e9b0a005e4802cb4247582dbf1b7369498cb966`）+ documentation changes；固定上游为 ZCode `3.18.0` / `b95ebaffeab641907b38652f45c1502bd762972d`，AppServer `0.17.1`。
+> Last verified: 2026-11-12，核对了同步最新 `origin/preview` 后的候选源码、固定上游制品、Preview.4 自动 SQLite 升级路径、936 项完整隔离回归、stress gate、提交后 clean checkout 和当前候选独立 Astra 审查；真实账户、真实模型和官方制品升级/回滚演练未运行。
+> Verified against: `ba25f83722094ef3428a04202749377cc9b6e643`（tree `b4573bb6f1143ce6a3081a56ce2fbf968a243e35`）+ documentation changes；固定上游为 ZCode `3.18.0` / `b95ebaffeab641907b38652f45c1502bd762972d`，AppServer `0.17.1`。
 
 本文件描述当前源码候选。候选实现已默认切换到官方 Host 路径，但尚未发布；已发布渠道仍是 `2.0.0-preview.3`，候选版本号为 `2.0.0-preview.4`。公开合同继续以 [INTERFACES.md](INTERFACES.md) 为准，宿主和运行配置分别见 [SHARED_CORE.md](SHARED_CORE.md) 与 [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md)。
 
@@ -65,10 +65,10 @@ Fresh root 继续通过 stage SQLite、pending marker 和原子 publication 初�
 
 自动升级属于生产 Lifecycle 启动路径。直接调用 Store 打开 v13 时仍返回带离线升级指引的 `schema_upgrade_required`；不能据此声称所有 Store API 都会自动迁移。未知 schema、损坏库、未解释现场和 writer 活跃状态仍 fail closed。
 
-候选包包含 Bridge、Worker、Thin Waiter、离线 v14 升级命令、v13/v14 Schema、浏览器后端，以及固定官方 Host 制品。运行时会校验 `ARTIFACT_BOM.json` 与 shipped files；构建来源、patch 顺序和哈希见研究目录的 [制品 BOM](research/zcode-official-host-integration-v1/SOURCE_ARTIFACT_BOM.md)。`@napi-rs/keyring` 与 `keyring-win32-x64-msvc` 的 6 个 native closure/license/metadata 文件已通过精确 `.gitignore` 例外纳入候选；提交后的 detached clean checkout 必须验证存在性、模块解析、native 加载和 BOM hash。
+候选包包含 Bridge、Worker、Thin Waiter、离线 v14 升级命令、v13/v14 Schema、浏览器后端，以及固定官方 Host 制品。运行时会校验 `ARTIFACT_BOM.json` 与 shipped files；构建来源、patch 顺序和哈希见研究目录的 [制品 BOM](research/zcode-official-host-integration-v1/SOURCE_ARTIFACT_BOM.md)。`@napi-rs/keyring` 与 `keyring-win32-x64-msvc` 的 6 个 native closure/license/metadata 文件已通过精确 `.gitignore` 例外纳入候选；detached clean checkout 已验证存在性、Host exports、native 加载和 BOM hash。
 
 ## 发布边界
 
 `2.0.0-preview.4` 当前是源码候选：`package.json`、`package-lock.json`、插件 manifest 和 MCP server version 已统一为 preview.4，但没有发布 Tag。实现和定向测试通过不等于完整回归或生产发布通过。
 
-固定制品在 Windows x64、Node `24.16.0` 的固定源码树重建和 same-source-tree repeatability 为 `PASS`；跨 clean install 的完整可复现构建、完整 Node/native/resource 闭包、再分发许可审查和官方 Host 制品升级/回滚演练仍为 `PARTIAL` 或 `NOT_RUN`。真实账户、真实模型、Start Plan、Billing、一般 Desktop Main 独立性和当前候选独立 Astra 审查均未建立。
+固定制品在 Windows x64、Node `24.16.0` 的固定源码树重建、same-source-tree repeatability 和提交后 clean checkout 为 `PASS`；跨机器/空缓存复现、完整动态资源闭包、再分发许可审查和官方 Host 制品升级/回滚演练仍为 `PARTIAL` 或 `NOT_RUN`。真实账户、真实模型、Start Plan、Billing 和一般 Desktop Main 独立性未建立；当前候选独立 Astra 审查为 `APPROVED`，不改变这些 `NOT_RUN` 边界。

@@ -3,7 +3,7 @@
 > Status: RESEARCH — ADR-034 IMPLEMENTED IN CANDIDATE / FULL RESOURCE MATRIX PARTIAL
 > Last updated: 2026-11-12
 > Last verified: 2026-11-12，核对 `OfficialHostAdapter`、Worker/lifecycle cleanup proof、Windows tree tests 和当前完整回归
-> Verified against: Bridge candidate `8e8966d5` + documentation changes；upstream `b95ebaff` / 3.18.0
+> Verified against: Bridge candidate `ba25f837` + documentation changes；upstream `b95ebaff` / 3.18.0
 
 ## 结论
 
@@ -54,7 +54,7 @@ Manager restart 和无 Result Recovery 继续读持久事实并保留占用。�
 
 ## 缺口
 
-6 个 BOM keyring 文件已纳入候选；提交后的 clean-checkout 加载和资源闭包验证仍待执行。完整 native helper/后代/第三方工具/Browser 组合的资源闭包、所有 crash timing、长时间 soak 和全部 Windows Terminal/Job 边界仍为 `PARTIAL`。没有执行真实任务的 Cleanup 性能/容量验证。
+6 个 BOM keyring 文件已在提交后的 clean checkout 解析并加载。完整 native helper/后代/第三方工具/Browser 组合的资源闭包、所有 crash timing、长时间 soak 和全部 Windows Terminal/Job 边界仍为 `PARTIAL`。没有执行真实任务的 Cleanup 性能/容量验证。
 
 Official Host 制品升级与回滚演练为 `NOT_RUN`，不能借 SQLite v13→v14 测试替代。
 

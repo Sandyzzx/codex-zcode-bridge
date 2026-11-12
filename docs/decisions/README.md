@@ -3,7 +3,7 @@
 > Status: AUTHORITATIVE（仅指本索引）
 > Last updated: 2026-11-12
 > Last verified: 2026-11-12，核对 ADR-032–035 的候选实现状态、ADR-030 保持不变，以及同步最新 `origin/preview` 后的完整回归。
-> Verified against: `8e8966d5ec7539a2d8575fc748871a9641fe0a2d`（tree `4e9b0a005e4802cb4247582dbf1b7369498cb966`）+ documentation changes
+> Verified against: `ba25f83722094ef3428a04202749377cc9b6e643`（tree `b4573bb6f1143ce6a3081a56ce2fbf968a243e35`）+ documentation changes
 
 先读当前 [架构](../ARCHITECTURE.md)/[接口](../INTERFACES.md)，只在需要解释取舍时加载对应决策。文件保持原路径和历史正文；Partially superseded 的标注优先于历史段落。
 
@@ -32,7 +32,7 @@
 | 正常 Cleanup | [034](ADR-034-normal-cleanup-worker-tree-proof.md) | Accepted；官方 close 后复用 exact Worker identity、recorded-tree、resource facts、Digest 与 Release CAS |
 | 平台启用 | [035](ADR-035-worker-platform-adapter-selection.md) | Accepted；Windows x64 启用 Official Host，Linux/macOS direct 仅 CI/合成覆盖，其余 fail closed |
 
-ADR-032、ADR-033、ADR-034 和 ADR-035 的正文记录决定作出时的状态，其中 ADR-032 的“生产实现未完成”等表述没有在本次回写。当前实现状态以 [ARCHITECTURE](../ARCHITECTURE.md) 和 [Implementation Summary](../research/zcode-official-host-integration-v1/IMPLEMENTATION_SUMMARY.md) 为准：候选 Windows x64 Worker 默认使用 `OfficialHostAdapter`；Linux/macOS direct 仅保留 CI/合成覆盖；同步最新 Preview 后完整回归通过。缺少真实账户、官方制品升级/回滚和当前候选独立审查时，不能升级为已发布或真实服务事实。
+ADR-032、ADR-033、ADR-034 和 ADR-035 的正文记录决定作出时的状态，其中 ADR-032 的“生产实现未完成”等表述没有在本次回写。当前实现状态以 [ARCHITECTURE](../ARCHITECTURE.md) 和 [Implementation Summary](../research/zcode-official-host-integration-v1/IMPLEMENTATION_SUMMARY.md) 为准：候选 Windows x64 Worker 默认使用 `OfficialHostAdapter`；Linux/macOS direct 仅保留 CI/合成覆盖；同步最新 Preview 后完整回归、提交后 clean checkout 和当前候选 Astra review 通过。真实账户、官方制品升级/回滚和发布仍未完成。
 
 Preview.4 生产 Lifecycle Gate 会在持有 bootstrap lock 时自动升级已有 SQLite v13→v14。ADR-026 正文中的“生产 Migration 不自动授权”仍是其历史决策背景；候选已实现受限的启动升级，直接 Store API 仍对不同 Schema 或未知现场 fail closed。
 

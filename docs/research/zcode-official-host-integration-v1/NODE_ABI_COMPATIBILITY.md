@@ -3,7 +3,7 @@
 > Status: RESEARCH — WINDOWS X64 CANDIDATE PASS / CLOSURE PARTIAL
 > Last updated: 2026-11-12
 > Last verified: 2026-11-12，核对 fixed artifact build、helper smoke、BOM、当前 Worker gate 与完整回归
-> Verified against: Bridge candidate `8e8966d5` + documentation changes
+> Verified against: Bridge candidate `ba25f837` + documentation changes
 
 ## 已确认
 
@@ -29,13 +29,13 @@ Adapter 在非 Windows x64 上 fail closed，且 Worker bundle 从自身位置�
 - AppServer `0.17.1` 启动
 - Runtime-host helper 启动与正常关闭
 - loopback Mock 请求、Read、resume、cancel 与目标进程清理
-- 当前工作树中的 6 个 Node-API keyring 文件均存在，bytes 与 SHA-256 和 BOM 一致
+- 提交后的 clean checkout 中 6 个 Node-API keyring 文件均存在，bytes 与 SHA-256 和 BOM 一致，且 binding 可加载
 - 固定源码两次构建和 same-tree repeatability
 
 ## 仍为 PARTIAL
 
 - 完整 optional native dependency closure
-- clean checkout 后 keyring 文件存在性、模块解析、native 加载、BOM hash 和安装包内容验证
+- 不同机器、空 dependency cache 与完整动态资源的 native/resource closure
 - 官方 release/CI prerequisites 下的 helper rebuild
 - 不同 patch-level Node 24.x 的 binary/module 行为
 - 安装机器缺少 VC runtime 或 Windows component 的明确失败矩阵
@@ -51,4 +51,4 @@ Adapter 在非 Windows x64 上 fail closed，且 Worker bundle 从自身位置�
 
 ## 结论
 
-共同 Node 24.16.0 路径在固定 Windows x64 合成范围内为 `PASS`。keyring 文件已纳入候选，且当前工作树 bytes/hash 与 BOM 一致；提交后的 clean-checkout 验证仍待执行，因此对“完整 ABI 与资源闭包已认证”只能给 `PARTIAL`。
+共同 Node 24.16.0 路径在固定 Windows x64 合成范围内为 `PASS`。六个 keyring 文件已在提交后的 clean checkout 解析、加载，且 bytes/hash 与 BOM 一致；不同机器、空 dependency cache 与完整动态资源闭包仍未认证，因此整体只能给 `PARTIAL`。

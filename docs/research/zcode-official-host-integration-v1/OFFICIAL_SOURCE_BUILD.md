@@ -3,7 +3,7 @@
 > Status: RESEARCH — FIXED SOURCE BUILD PASS / CLEAN-INSTALL REPRODUCIBILITY PARTIAL
 > Last updated: 2026-11-12
 > Last verified: 2026-11-12，核对当前两次 fixed-source build、`official-host-repeatability-current.json` 和 artifact manifest
-> Verified against: ZCode `b95ebaff` / tree `d7ebeb99`；Bridge candidate `8e8966d5` + documentation changes
+> Verified against: ZCode `b95ebaff` / tree `d7ebeb99`；Bridge candidate `ba25f837` + documentation changes
 
 ## 结论
 
@@ -44,7 +44,7 @@ Patch 必须按序应用；字节数和 SHA-256 见 [制品 BOM](SOURCE_ARTIFACT
 - `zcode-runtime-host.exe`
 - `ARTIFACT_BOM.json`
 
-BOM 还记录 LICENSE、Node-API keyring binding 和依赖 metadata。runtime 与 plugin validator 会校验 required files、hash、patch 顺序和 fixed entrypoint。pre-review 发现 6 个 BOM 文件被顶层 `node_modules/` ignore 排除；根工作区已加入精确例外，并将它们纳入候选，仍需在提交后的 clean checkout 验证。
+BOM 还记录 LICENSE、Node-API keyring binding 和依赖 metadata。runtime 与 plugin validator 会校验 required files、hash、patch 顺序和 fixed entrypoint。pre-review 发现 6 个 BOM 文件被顶层 `node_modules/` ignore 排除；根工作区已加入精确例外并将它们纳入候选，提交后的 clean checkout 已证明文件复原、解析和 native 加载通过。
 
 ## 失败历史
 
@@ -53,7 +53,7 @@ BOM 还记录 LICENSE、Node-API keyring binding 和依赖 metadata。runtime �
 ## 未完成
 
 - fresh clean checkout + empty dependency cache 的可复现构建
-- clean checkout 中 keyring 文件存在性、native 加载、BOM hash 与安装包内容
+- 不同机器与空 dependency cache 的 keyring/native/resource closure
 - 其他 Windows patch/architecture/SDK 组合
 - Linux/macOS helper/Host build
 - 完整 optional native/resource 闭包

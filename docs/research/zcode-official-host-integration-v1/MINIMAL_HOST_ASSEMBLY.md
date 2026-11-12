@@ -3,7 +3,7 @@
 > Status: RESEARCH — FIXED HOST ASSEMBLY IMPLEMENTED / MOCK SCOPE
 > Last updated: 2026-11-12
 > Last verified: 2026-11-12，核对 fixed host entry、官方 ProcessManager wrapper、资产验证、当前测试和完整回归
-> Verified against: Bridge candidate `8e8966d5` + documentation changes；upstream `b95ebaff` / 3.18.0
+> Verified against: Bridge candidate `ba25f837` + documentation changes；upstream `b95ebaff` / 3.18.0
 
 ## 结论
 
@@ -65,3 +65,5 @@ Adapter 从 official manager 读取 runtime PID/generation/identity，再从 Bri
 ## 边界
 
 `G2_MOCK_ASSEMBLY_AS_PRODUCTION_E2E: NO`。这不再是“未实现”，也不是“真实生产官方账户已通过”；当前准确状态是候选实现有定向合成证据，发布验收未完成。
+
+当前候选已通过最终完整回归、detached clean checkout 和独立 Astra review。上述边界仍是发布或后续版本门禁，不改变本次固定 Windows x64 工程候选的 PR-ready 结论。

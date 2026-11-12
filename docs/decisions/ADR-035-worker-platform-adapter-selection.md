@@ -4,7 +4,7 @@
 > Decision: Accepted — Owner 的 Official Host Integration v1 恢复授权批准在本候选启用现有 Worker 生产接线，并冻结平台支持边界。
 > Last updated: 2026-11-12
 > Applicability: 适用于 Preview.4 候选的 `zcode_app_server` Worker 装配。不得改写 ADR-030、ADR-032、ADR-033 或 ADR-034 的既有决定。
-> Verified against: `8e8966d5ec7539a2d8575fc748871a9641fe0a2d` + documentation changes
+> Verified against: `ba25f83722094ef3428a04202749377cc9b6e643`（tree `b4573bb6f1143ce6a3081a56ce2fbf968a243e35`）；后续仅有文档证据刷新
 
 ## 背景
 
@@ -80,5 +80,5 @@ BOM、Node ABI 和许可审查若扩展到其他平台，必须另立 ADR，不�
   Result、Cleanup 与 Release。
 - direct Adapter 回归必须通过测试自有 Worker wrapper，生产 Worker 不得再次暴露
   持久或序列化的 Adapter-mode 选择。
-- 完整回归、干净检出 BOM 加载和当前候选独立审查完成前，本 ADR 只能表示为源码
-  候选决定，不能表示为已发布或真实服务 E2E 事实。
+- 完整回归、干净检出 BOM 加载与当前候选独立审查已经通过；本 ADR 已满足源码
+  PR-ready 候选的验证要求，仍不能表示为已发布或真实服务 E2E 事实。

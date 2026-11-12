@@ -3,7 +3,7 @@
 > Status: RESEARCH — FIXED WINDOWS X64 ARTIFACT / LICENSE REVIEW PARTIAL
 > Last updated: 2026-11-12
 > Last verified: 2026-11-12，核对 `BUILD_PROVENANCE.json`、`ARTIFACT_BOM.json` 和当前两次构建产物
-> Verified against: Bridge candidate `8e8966d5` + documentation changes；upstream ZCode `3.18.0`
+> Verified against: Bridge candidate `ba25f837` + documentation changes；upstream ZCode `3.18.0`
 
 ## 固定来源
 
@@ -56,7 +56,7 @@ node_modules/@napi-rs/keyring-win32-x64-msvc/keyring.win32-x64-msvc.node
 node_modules/@napi-rs/keyring-win32-x64-msvc/package.json
 ```
 
-提交后的 clean-checkout 中的路径解析、native 加载、BOM hash 与安装包内容验证仍待执行；在结果出现前不能把完整 native closure 或 license 审查标为 `PASS`。权威机器文件位于：
+提交后的 clean checkout 已通过路径解析、native 加载、BOM hash 与安装包结构验证；完整动态资源闭包与逐项 license 审查仍不能据此标为 `PASS`。权威机器文件位于：
 
 ```text
 plugins/codex-zcode-bridge/worker/vendor/official-host/
@@ -68,7 +68,7 @@ plugins/codex-zcode-bridge/worker/vendor/official-host/
 - 当前两次同固定 source-tree 构建成功，输出、BOM 和 provenance 哈希一致。
 - `official-host-runtime.mjs` 两次各 1,821,168 bytes，byte-identical。
 - runtime/plugin validator 校验 manifest、patch 顺序、shipped files、哈希和 Worker bundle 的官方 Host 标记。
-- 当前工作树中的 6 个 keyring BOM 条目均存在，bytes 和 SHA-256 与 `ARTIFACT_BOM.json` 一致；提交后的 clean checkout 尚未执行。
+- 提交后的 clean checkout 中 6 个 keyring BOM 条目均存在，bytes 和 SHA-256 与 `ARTIFACT_BOM.json` 一致，native binding 可加载。
 - `userDesktopInstallationUsedAsInput` 为 false；本次证据未启动 Desktop Main 作为输入。
 
 ## 不能推导

@@ -3,7 +3,7 @@
 > Status: RESEARCH — SYNTHETIC COORDINATION PASS / REAL ACCOUNT E2E NOT RUN
 > Last updated: 2026-11-12
 > Last verified: 2026-11-12，核对 patch `0002`/`0003`、ADR-033、12 项固定上游合成测试和当前 Bridge 完整回归
-> Verified against: Bridge candidate `8e8966d5` + documentation changes；upstream `b95ebaff` / 3.18.0
+> Verified against: Bridge candidate `ba25f837` + documentation changes；upstream `b95ebaff` / 3.18.0
 
 ## 结论
 

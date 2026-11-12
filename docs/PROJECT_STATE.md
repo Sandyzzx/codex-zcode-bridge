@@ -2,8 +2,8 @@
 
 > Status: AUTHORITATIVE
 > Last updated: 2026-11-12
-> Last verified: 2026-11-12，核对了同步最新 `origin/preview` 后的 Preview.4 源码候选、固定官方 Host 制品、自动 SQLite v13→v14 升级、936 项完整隔离回归和 stress gate；真实账户、产品性能与官方制品升级/回滚演练未运行。
-> Verified against: `8e8966d5ec7539a2d8575fc748871a9641fe0a2d`（tree `4e9b0a005e4802cb4247582dbf1b7369498cb966`）+ documentation changes
+> Last verified: 2026-11-12，核对了同步最新 `origin/preview` 后的 Preview.4 源码候选、固定官方 Host 制品、自动 SQLite v13→v14 升级、936 项完整隔离回归、stress gate、clean checkout 和当前候选独立 Astra 审查；真实账户、产品性能与官方制品升级/回滚演练未运行。
+> Verified against: `ba25f83722094ef3428a04202749377cc9b6e643`（tree `b4573bb6f1143ce6a3081a56ce2fbf968a243e35`）+ documentation changes
 
 当前有已发布基线和源码候选两种状态：
 
@@ -41,14 +41,14 @@ Preview.3 的历史真实证据仍只覆盖 Windows、官方 AppServer `0.17.1`�
 | 账户 refresh coordination | `PASS` | 固定上游 12/12 合成测试；真实账户与网络轮换 `NOT_RUN` |
 | `OfficialHostAdapter` 定向行为 | `PASS` | 当前 official-host/plugin/platform 套件 32/32；focused contract 复跑 64/64 |
 | SQLite 自动 v13→v14 升级与恢复 | `PASS` | 测试范围；含 occupied Attempt/Hold、rename/publication 中断 |
-| 完整 Node/native/resource 闭包 | `PARTIAL` | 6 个 keyring 文件已纳入候选，工作树 bytes/hash 与 BOM 一致；提交后的 clean-checkout 验证仍待执行，完整资源闭包仍未认证 |
+| 完整 Node/native/resource 闭包 | `PARTIAL` | 6 个 keyring 文件已在 clean checkout 解析、native load 并与 BOM bytes/hash 一致；完整动态资源闭包仍未认证 |
 | 正常 cleanup 的 native/resource 闭包 | `PARTIAL` | exact identity、tree scan 与 CAS 有定向证据；一般外部资源和 crash 矩阵未完成 |
 | 再分发/许可审查 | `PARTIAL` | 文件与 NOTICE 已纳入 BOM，逐项发布许可结论未完成 |
 | Official Host 制品升级/回滚演练 | `NOT_RUN` | 与 SQLite v13→v14 测试不是同一项 |
 | 真实 OAuth/account/model/Start Plan/Billing | `NOT_RUN` | 本候选未执行真实服务请求 |
 | 一般 Desktop Main 独立性 | `NOT_RUN` | 合成路径不证明完整资源与身份闭包 |
 | 当前候选完整回归 | `PASS` | 最终 `test:affected` 选择 `FULL_SUITE`：936 项，935 pass、0 fail、1 skip；stress 3/3 |
-| 当前候选独立 Astra review | `NOT_RUN` | 旧 ASTRA_REVIEW 仅作历史材料 |
+| 当前候选独立 Astra review | `APPROVED` | 审查实际 diff、BOM、原始 Git bytes、Host/native 加载与 936 项回归；未发现本候选引入的 P0/P1/P2 |
 
 ## 明确边界
 
@@ -56,7 +56,9 @@ Preview.3 的历史真实证据仍只覆盖 Windows、官方 AppServer `0.17.1`�
 
 真实 Start Plan 模型请求、其他 Start Plan 模型、CAPTCHA 自动处理、unusual-activity 处理和跨平台生产认证没有被 Preview.4 候选验证。Linux/macOS 仅有其他 Bridge 路径的合成或 CI 历史覆盖；固定官方 Host 制品在非 Windows x64 上 fail closed。
 
-固定制品构建成功、same-source-tree repeatability 与 loopback Mock 通过不能升级为产品性能或完整运行等价。性能比较只有 3 个顺序样本，路径语义不同，产品总体性能为 `UNKNOWN`。`@napi-rs/keyring` 的 6 个文件已纳入候选提交；在 clean-checkout 验证结果出现前，仍不能把 native/resource/license closure 标为 `PASS`。
+固定制品构建成功、same-source-tree repeatability 与 loopback Mock 通过不能升级为产品性能或完整运行等价。性能比较只有 3 个顺序样本，路径语义不同，产品总体性能为 `UNKNOWN`。`@napi-rs/keyring` 的 6 个文件已通过 clean-checkout 打包闭包验证；完整动态资源与逐项再分发许可审查仍不能据此标为 `PASS`。
+
+`npm audit --omit=dev` 仍报告 `@modelcontextprotocol/server@2.1.0` 与 `zod@4.6.5` 的既有 high advisories。依赖树与 `origin/preview` 相同，本候选没有引入或修复这些 advisory；它们必须由独立的安全发布流程处理。
 
 ## 当前文档入口
 

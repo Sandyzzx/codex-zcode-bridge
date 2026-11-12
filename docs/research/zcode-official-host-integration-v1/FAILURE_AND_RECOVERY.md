@@ -3,7 +3,7 @@
 > Status: RESEARCH — CANDIDATE FAILURE PATHS / SYNTHETIC EVIDENCE
 > Last updated: 2026-11-12
 > Last verified: 2026-11-12，核对 Adapter close states、lifecycle hold、自动 v13→v14 与完整回归
-> Verified against: Bridge candidate `8e8966d5` + documentation changes；upstream `b95ebaff` / 3.18.0
+> Verified against: Bridge candidate `ba25f837` + documentation changes；upstream `b95ebaff` / 3.18.0
 
 ## 结论
 

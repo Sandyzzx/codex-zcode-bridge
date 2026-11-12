@@ -3,7 +3,7 @@
 > Status: RESEARCH — CURRENT DIRECTED, INTEGRATION AND FULL REGRESSION PASS
 > Last updated: 2026-11-12
 > Last verified: 2026-11-12，从 `.run/final-evidence-20261112` 逐项核对
-> Verified against: Bridge candidate `8e8966d5` + final documentation/artifact completion
+> Verified against: Bridge candidate `ba25f837` + final documentation/artifact completion
 
 ## 范围
 
@@ -22,7 +22,9 @@
 | 较早完整隔离回归（full） | 934 pass / 0 fail / 1 skip（935） | `test-full-after-origin-sync-20261112.log` | 早于最终 native/Host closure 测试 |
 | SQLite stress | 3/3 `PASS` | `test-stress-after-origin-sync-20261112.log` | history growth、CAS、admission |
 | 固定制品同源双建 | byte-identical | `official-host-repeatability-current.json` | 1,821,168-byte Host module 与 BOM/provenance metadata |
-| clean checkout | `PENDING_FINAL_COMMIT` | final clean-checkout logs | 必须从本次提交后的全新 checkout 执行 `npm ci`、typecheck、build、plugin validation、Host export import、keyring native load |
+| clean checkout | `PASS` | `clean-*-20261112.log`、`clean-artifact-host-native-load-20261112.log` | 从候选提交新建 detached checkout；`npm ci`、typecheck、build、plugin validation、Host export import、keyring native load |
+| 当前候选独立 Astra review | `APPROVED` | [ASTRA_REVIEW_CURRENT.md](ASTRA_REVIEW_CURRENT.md) | 实际 diff、BOM、原始 Git bytes、Host/native 加载与回归；P0/P1/P2 为 0 |
+| 最终 docs-only 影响选择 | `NO_TESTS_APPLICABLE` | `test-affected-final-docs-20261112.log` | typecheck、build、plugin validation、`git diff --check` 已执行；不作业务测试 PASS |
 
 ## 合同覆盖
 
@@ -64,7 +66,8 @@
 - 自动选择或支持多个 upstream runtime 版本。
 - 生产数据迁移和安装级回滚。
 - 长时间 soak、持续资源峰值与产品性能。
+- 依赖基线既有 high advisory 的升级和重新审计。
 
 ## 结论
 
-当前证据足以支持 Windows x64 / Node 24.16.0 固定 Official Host 制品的工程候选验收；真实服务行为仍是单独的 `NOT_RUN` 运营验证项，不能从合成 PASS 推导。
+当前证据足以支持 Windows x64 / Node 24.16.0 固定 Official Host 制品的 PR-ready 工程候选验收；独立 Astra review 已 `APPROVED`。真实服务行为、生产迁移、安装级回滚、完整动态资源与许可审批仍是单独的 `NOT_RUN`/`PARTIAL` 发布门禁，不能从合成 PASS 推导。

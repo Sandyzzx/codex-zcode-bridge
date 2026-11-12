@@ -3,7 +3,7 @@
 > Status: RESEARCH — IMPLEMENTED IN PREVIEW.4 CANDIDATE / RELEASE NOT APPROVED
 > Last updated: 2026-11-12
 > Last verified: 2026-11-12，核对 `OfficialHostAdapter`、Worker factory、fixed host module exports、当前测试和完整回归
-> Verified against: Bridge candidate `8e8966d5` + documentation changes；upstream `b95ebaff` / 3.18.0
+> Verified against: Bridge candidate `ba25f837` + documentation changes；upstream `b95ebaff` / 3.18.0
 
 ## 结论
 
@@ -53,7 +53,7 @@ post-HEAD WIP 允许既有测试直接构造 AppServer Adapter，用于回退 sm
 
 ## 验证与缺口
 
-current official-host/plugin/platform suite 32/32、focused contract 64/64、direct rollback smoke 1/1、frame 7/7、account 12/12 通过；最终完整隔离回归为 936 项、935 pass、0 fail、1 skip，stress 3/3。真实账户/模型、提交后 clean-checkout 全链路、完整 native/resource 闭包、官方制品升级/回滚和当前候选独立审查未完成。
+current official-host/plugin/platform suite 32/32、focused contract 64/64、direct rollback smoke 1/1、frame 7/7、account 12/12 通过；最终完整隔离回归为 936 项、935 pass、0 fail、1 skip，stress 3/3，提交后 clean checkout 的 build/Host/native 加载和当前候选独立审查也通过。真实账户/模型、不同机器与空缓存的完整 native/resource 闭包、官方制品升级/回滚仍为 `NOT_RUN`/`PARTIAL`。
 
 ## 不接受的方案
 

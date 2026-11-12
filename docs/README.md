@@ -2,8 +2,8 @@
 
 > Status: AUTHORITATIVE（仅指本索引）
 > Last updated: 2026-11-12
-> Last verified: 2026-11-12，核对同步最新 `origin/preview` 后的 Preview.4 源码候选、ADR-032–035、固定官方制品、936 项完整回归与发布边界；当前候选 Astra review 和提交后 clean-checkout 验证未完成。
-> Verified against: `8e8966d5ec7539a2d8575fc748871a9641fe0a2d`（tree `4e9b0a005e4802cb4247582dbf1b7369498cb966`）+ documentation changes
+> Last verified: 2026-11-12，核对同步最新 `origin/preview` 后的 Preview.4 源码候选、ADR-032–035、固定官方制品、936 项完整回归、clean checkout、当前候选 Astra review 与发布边界。
+> Verified against: `ba25f83722094ef3428a04202749377cc9b6e643`（tree `b4573bb6f1143ce6a3081a56ce2fbf968a243e35`）+ documentation changes
 
 English users start at [README.md](../README.md). 技术文档为中文。先读当前事实，按问题加载合同；研究或历史材料不作为当前实现或发布证明。
 
@@ -43,8 +43,8 @@ AUTHORITATIVE 描述当前事实或合同；DECISION 记录已批准取舍；RES
 
 ADR-032 已接受“现有 Worker 内官方 Host”目标并已在候选源码中接线；ADR-033 的账户 refresh 协调、ADR-034 的正常 Cleanup 复用和 ADR-035 的平台选择已由固定上游 patch 与候选 Worker 实现。这些是实现证据，不表示真实账户验收、平台认证或发布审批已完成。
 
-固定上游为 ZCode `3.18.0` / `b95ebaffeab641907b38652f45c1502bd762972d` 与 AppServer `0.17.1`。Windows x64、Node `24.16.0` 的 fixed-source build、same-source-tree repeatability、frame、account、Adapter、936 项完整隔离回归和 stress gate 已有 synthetic `PASS`。六个 `@napi-rs/keyring` native closure/license/metadata 文件已纳入候选；提交后的 clean-checkout 解析和加载验证仍待执行，native/resource/license 闭包仍为 `PARTIAL`。clean-install 全链路可复现、官方制品升级/回滚演练、真实 OAuth/model/Start Plan/Billing、一般 Desktop Main 独立性和当前候选独立审查仍未完成。
+固定上游为 ZCode `3.18.0` / `b95ebaffeab641907b38652f45c1502bd762972d` 与 AppServer `0.17.1`。Windows x64、Node `24.16.0` 的 fixed-source build、same-source-tree repeatability、frame、account、Adapter、936 项完整隔离回归、stress gate 和提交后 clean checkout 已有 synthetic `PASS`。六个 `@napi-rs/keyring` native closure/license/metadata 文件已在 clean checkout 解析并加载；完整动态资源闭包与逐项再分发审查仍为 `PARTIAL`。跨机器/空缓存可复现、官方制品升级/回滚演练、真实 OAuth/model/Start Plan/Billing 和一般 Desktop Main 独立性仍未完成。当前候选独立 Astra review 已 `APPROVED`。
 
-历史 Companion 研究保留原正文，但顶部“历史/被 ADR-032 替代”的适用性说明优先。旧官方 Host `ASTRA_REVIEW.md` 的对某个更早候选的 `APPROVED` 结论不适用于当前 Preview.4 实现，也不能作为 `PR_READY: YES` 的依据。
+历史 Companion 研究保留原正文，但顶部“历史/被 ADR-032 替代”的适用性说明优先。旧官方 Host `ASTRA_REVIEW.md` 正文只覆盖更早候选；当前 Preview.4 的 `APPROVED / PR_READY: YES` 结论来自 [ASTRA_REVIEW_CURRENT.md](research/zcode-official-host-integration-v1/ASTRA_REVIEW_CURRENT.md)。
 
 当前事实放 `docs` 顶层，设计取舍放 `decisions`，研究放 `research`，一次性交付放 `reports`，历史放 `archive`；草稿放已忽略的 `docs/_draft`。CHANGELOG 由 release-please 维护，不手改。

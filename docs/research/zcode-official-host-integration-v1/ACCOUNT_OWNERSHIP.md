@@ -3,7 +3,7 @@
 > Status: RESEARCH — ACCOUNT PATH IMPLEMENTED / REAL ACCOUNT E2E NOT RUN
 > Last updated: 2026-11-12
 > Last verified: 2026-11-12，核对 ADR-030、Worker issuer、private pipe、fixed OAuth patches 和当前完整回归
-> Verified against: Bridge candidate `8e8966d5` + documentation changes；upstream `b95ebaff` / 3.18.0
+> Verified against: Bridge candidate `ba25f837` + documentation changes；upstream `b95ebaff` / 3.18.0
 
 ## 所有权分层
 

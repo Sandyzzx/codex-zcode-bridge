@@ -3,7 +3,7 @@
 > Status: RESEARCH — SQLITE UPGRADE PASS / FIXED HOST DEPLOYMENT SAFETY PASS / NEXT-VERSION TRANSITION DEFERRED
 > Last updated: 2026-11-12
 > Last verified: 2026-11-12，核对固定制品选择、runtime generation fence、direct rollback smoke 与 SQLite 完整回归
-> Verified against: Bridge candidate `8e8966d5`；upstream `b95ebaff` / ZCode 3.18.0
+> Verified against: Bridge candidate `ba25f837`；upstream `b95ebaff` / ZCode 3.18.0
 
 ## 三个不同对象
 

@@ -4,7 +4,7 @@
 > Date: 2026-11-11
 > Decision: Accepted — Owner 在 Official Host Integration v1 恢复任务中批准 Profile-scoped Cross-process Refresh Lock。
 > Applicability: 仅协调官方 OAuth credential refresh 事务；不改变 ADR-030 的 Start Plan entitlement verdict、Private Lease/HANDLE/ACK，也不改变 Worker/Task/Session 并发合同。
-> Verified against: Bridge candidate `8e8966d5ec7539a2d8575fc748871a9641fe0a2d` and current fixed-upstream patch; Observed upstream `b95ebaffeab641907b38652f45c1502bd762972d` / tree `d7ebeb994cb8f46b16761fc9c550ae3f6e039c3d`。
+> Verified against: Bridge candidate `ba25f83722094ef3428a04202749377cc9b6e643` and current fixed-upstream patch; Observed upstream `b95ebaffeab641907b38652f45c1502bd762972d` / tree `d7ebeb994cb8f46b16761fc9c550ae3f6e039c3d`。
 
 ## Context
 

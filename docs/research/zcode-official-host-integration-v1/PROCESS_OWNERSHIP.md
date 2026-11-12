@@ -3,7 +3,7 @@
 > Status: RESEARCH — OFFICIAL PROCESS MANAGER OWNERSHIP IMPLEMENTED / RESOURCE CLOSURE PARTIAL
 > Last updated: 2026-11-12
 > Last verified: 2026-11-12，核对 `OfficialHostAdapter`、ProcessManager wrapper、Worker cleanup、完整回归和性能证据
-> Verified against: Bridge candidate `8e8966d5` + documentation changes；upstream `b95ebaff` / 3.18.0
+> Verified against: Bridge candidate `ba25f837` + documentation changes；upstream `b95ebaff` / 3.18.0
 
 ## 所有权表
 

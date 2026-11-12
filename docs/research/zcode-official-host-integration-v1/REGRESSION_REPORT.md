@@ -3,7 +3,7 @@
 > Status: RESEARCH — FULL ISOLATED REGRESSION PASS
 > Last updated: 2026-11-12
 > Last verified: 2026-11-12，核对 `.run/final-evidence-20261112` 的当前日志
-> Verified against: Bridge candidate `8e8966d5`（tree `4e9b0a00`）+ final candidate worktree changes
+> Verified against: Bridge candidate `ba25f837`（tree `b4573bb6`）；后续仅有文档证据刷新
 
 ## 当前结果
 
@@ -18,7 +18,9 @@
 | upstream frame | 7/7 pass | `upstream-frame-after-origin-sync-20261112.log` |
 | upstream account | 12/12 pass | `upstream-account-after-origin-sync-20261112.log` |
 | typecheck / build / build:test / validate:plugin | PASS | `typecheck-after-origin-sync.log` 等 |
+| 最终 docs-only `test:affected --base HEAD` | `NO_TESTS_APPLICABLE` | `test-affected-final-docs-20261112.log`；typecheck、build、plugin validation 与 `git diff --check` 执行成功，但不称为测试 PASS |
 | 固定制品同源双建 | byte-identical | `official-host-repeatability-current.json` |
+| 当前候选独立 Astra review | `APPROVED` | [ASTRA_REVIEW_CURRENT.md](ASTRA_REVIEW_CURRENT.md)；P0/P1/P2 为 0 |
 
 唯一 skip 为现有平台条件跳过项；没有 fail、cancel 或 todo。完整回归执行的是隔离测试入口，没有真实账户、真实 Provider 或生产 SQLite。
 
@@ -55,6 +57,8 @@ INTEGRATION_TESTS: PASS
 WINDOWS_LIFECYCLE: PASS
 STRESS_TESTS: PASS
 FULL_REGRESSION: PASS
+ASTRA_REVIEW: APPROVED
+PR_READY: YES
 REAL_SERVICE_E2E: NOT_RUN
 PRODUCTION_DATA_MIGRATION: NOT_RUN
 ```
