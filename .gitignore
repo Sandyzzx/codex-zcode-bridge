@@ -18,6 +18,7 @@ dist-test/
 plugins/codex-zcode-bridge/dist/*
 !plugins/codex-zcode-bridge/dist/admin-abandonment.sql
 !plugins/codex-zcode-bridge/dist/runtime-events.sql
+!plugins/codex-zcode-bridge/dist/admin-abandon-held-operation.mjs
 !test/
 !test/**
 coverage/

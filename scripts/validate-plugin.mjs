@@ -53,6 +53,7 @@ for (const relativePath of [
   "dist/runtime-events.sql",
   "dist/schema-v13.sql",
   "dist/upgrade-sqlite-v14.mjs",
+  "dist/admin-abandon-held-operation.mjs",
   "dist/admin-abandonment.sql",
   "worker/worker-main.mjs",
   "worker/vendor/pkg/browser-host.cjs",
@@ -79,6 +80,13 @@ if (!packagedV13.equals(sourceV13)) throw new Error("bundled v13 upgrade schema 
 const packagedAdminSchema = await readFile(path.join(pluginRoot, "dist", "admin-abandonment.sql"));
 const sourceAdminSchema = await readFile(path.join(root, "src", "sqlite-candidate", "wp6b2b1", "admin-abandonment.sql"));
 if (!packagedAdminSchema.equals(sourceAdminSchema)) throw new Error("bundled administrative SQLite schema does not match source");
+const sourceStore = await readFile(path.join(root, "src", "sqlite-candidate", "wp6b2b1", "store.mjs"), "utf8");
+const sourceSchemaVersion = sourceStore.match(/const SCHEMA_VERSION = (\d+);/u)?.[1];
+if (!sourceSchemaVersion) throw new Error("SQLite Store schema version is missing from source");
+const adminBundle = await readFile(path.join(pluginRoot, "dist", "admin-abandon-held-operation.mjs"), "utf8");
+if (!adminBundle.includes(`SCHEMA_VERSION = ${sourceSchemaVersion};`)) {
+  throw new Error(`bundled administrative recovery CLI does not embed SQLite schema v${sourceSchemaVersion}`);
+}
 
 const pluginNotice = await readFile(path.join(pluginRoot, "NOTICE"), "utf8");
 if (!pluginNotice.includes("PR #49 of")
@@ -98,7 +106,7 @@ if (!waiterBundle.includes("PR #49 of codex-zcode-bridge") || !waiterBundle.incl
 // its own directory (module-label comments inside the bundle legitimately
 // mention the packaging path and are not an external dependency).
 const repoRootPattern = buildRepoRootLeakPattern(root);
-for (const relativePath of ["dist/bridge.mjs", "dist/wait-task.mjs", "dist/upgrade-sqlite-v14.mjs", "worker/worker-main.mjs", "worker/vendor/pkg/browser-host.cjs", "skills/zcode-bridge/scripts/codex-master-token-usage.mjs"]) {
+for (const relativePath of ["dist/bridge.mjs", "dist/wait-task.mjs", "dist/upgrade-sqlite-v14.mjs", "dist/admin-abandon-held-operation.mjs", "worker/worker-main.mjs", "worker/vendor/pkg/browser-host.cjs", "skills/zcode-bridge/scripts/codex-master-token-usage.mjs"]) {
   const bundle = await readFile(path.join(pluginRoot, relativePath), "utf8");
   if (repoRootPattern.test(bundle)) {
     throw new Error(`${relativePath} embeds the development repository's absolute path`);

@@ -313,6 +313,8 @@ test("the real validator rejects injected development-path references and keeps 
     writeFileSync(path.join(pluginRoot, "dist", "upgrade-sqlite-v14.mjs"), "");
     writeFileSync(path.join(root, "src", "sqlite-candidate", "wp6b2b1", "admin-abandonment.sql"), adminSchema);
     writeFileSync(path.join(pluginRoot, "dist", "admin-abandonment.sql"), adminSchema);
+    writeFileSync(path.join(root, "src", "sqlite-candidate", "wp6b2b1", "store.mjs"), "const SCHEMA_VERSION = 14;\n");
+    writeFileSync(path.join(pluginRoot, "dist", "admin-abandon-held-operation.mjs"), "const SCHEMA_VERSION = 14;\n");
     for (const file of [
       "hooks/hooks.json",
       "hooks/session-start.mjs",
@@ -434,6 +436,18 @@ test("the real validator rejects injected development-path references and keeps 
         assert.equal(hasLeakDiagnostic, false, `${name}: benign content must not trip the leak check`);
       }
     }
+
+    writeFileSync(path.join(pluginRoot, "dist", "admin-abandon-held-operation.mjs"), "const SCHEMA_VERSION = 13;\n");
+    const schemaMismatchRun = spawnSync(process.execPath, [path.join(root, "scripts", "validate-plugin.mjs")], {
+      encoding: "utf8",
+      timeout: 60_000,
+      windowsHide: true,
+    });
+    assert.notEqual(schemaMismatchRun.status, 0, "a stale administrative CLI schema must be rejected");
+    assert.match(
+      `${schemaMismatchRun.stdout ?? ""}${schemaMismatchRun.stderr ?? ""}`,
+      /bundled administrative recovery CLI does not embed SQLite schema v14/u,
+    );
   } finally {
     rmSync(tempBase, { recursive: true, force: true });
   }

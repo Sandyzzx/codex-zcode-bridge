@@ -11,7 +11,7 @@ import { createSqliteLifecyclePort } from '../../../src/sqlite-candidate/wp6b2b1
 import { createTrustedLocalCandidateContext } from '../../../dist-test/src/host/stdio.js';
 import { SqliteLifecycleMcpAuthority } from '../../../dist-test/src/manager/sqlite-lifecycle-mcp-authority.js';
 import { createPlatformProbe } from '../../../dist-test/src/runtime/process-probe.js';
-import { parseArgs } from '../../../dist-test/src/cli/admin-abandon-held-operation.js';
+import { parseArgs } from '../../../plugins/codex-zcode-bridge/dist/admin-abandon-held-operation.mjs';
 
 const HERE=path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT=path.resolve(HERE,'../../..');
@@ -97,6 +97,7 @@ function rows(f){
       attempt:db.prepare('SELECT * FROM attempts WHERE task_id=? AND attempt=1').get(f.taskId),
       events:db.prepare('SELECT * FROM manager_operation_events WHERE operation_id=? ORDER BY sequence').all(f.operationId),
       admin:hasAdminTable?db.prepare('SELECT * FROM manager_admin_abandonments WHERE operation_id=?').get(f.operationId):null,
+      adminTable:hasAdminTable,
       active:db.prepare("SELECT COUNT(*) AS n FROM manager_operations WHERE operation_kind='attempt_lifecycle' AND phase NOT IN ('released','cancelled_before_launch')").get().n,
       integrity:db.prepare('PRAGMA integrity_check').get().integrity_check,
       foreignKeys:db.prepare('PRAGMA foreign_key_check').all(),
@@ -314,7 +315,7 @@ test('the compiled operator CLI performs Windows CAS or refuses unsupported plat
     const invalidArgv=argv.slice();invalidArgv[2]='WRONG';
     assert.throws(()=>parseArgs(invalidArgv),/confirmation_mismatch/u);
     f.store.close();
-    const cliModuleUrl=pathToFileURL(path.join(PROJECT_ROOT,'dist-test/src/cli/admin-abandon-held-operation.js')).href;
+    const cliModuleUrl=pathToFileURL(path.join(PROJECT_ROOT,'plugins/codex-zcode-bridge/dist/admin-abandon-held-operation.mjs')).href;
     const childScript=path.join(TEST_ROOT,`cli-success-${process.pid}.mjs`);
     writeFileSync(childScript,`
 import { executeCli } from ${JSON.stringify(cliModuleUrl)};
@@ -350,5 +351,46 @@ process.stdout.write(JSON.stringify(result));
       assert.equal(reopened.readTaskProjection(f.taskId).status,'failed');
       assert.equal(reopened.readAttempt(f.taskId,1).status,'failed');
     }finally{reopened.close();}
+  }finally{try{f.store.close();}catch{}}
+});
+
+test('the compiled operator CLI preflight validates without mutating the isolated Hold',async()=>{
+  const f=fixture('cli-preflight');
+  try{
+    const operation=f.store.readOperation(f.operationId);
+    const argv=[
+      '--preflight',
+      '--data-root',f.root,'--database','operations.sqlite3','--operation-id',f.operationId,'--task-id',f.taskId,
+      '--attempt','1','--generation',String(operation.generation),'--revision',String(operation.revision),
+      '--claim-id',operation.claim_id,'--worker-identity-digest',operation.claim_worker_identity_digest,
+    ];
+    f.store.close();
+    const before=JSON.stringify(rows(f));
+    const cliModuleUrl=pathToFileURL(path.join(PROJECT_ROOT,'plugins/codex-zcode-bridge/dist/admin-abandon-held-operation.mjs')).href;
+    const childScript=path.join(TEST_ROOT,`cli-preflight-${process.pid}.mjs`);
+    writeFileSync(childScript,`
+import { executeCli } from ${JSON.stringify(cliModuleUrl)};
+const result=await executeCli(${JSON.stringify(argv)},{
+  windowsBootTime:async()=>${JSON.stringify(new Date(Date.parse(f.hold.at)+1).toISOString())},
+  processInventory:async()=>[],
+  probeWorkerExit:async()=>({count:1,state:'exited',reason:null}),
+  claimantScan:async()=>({clean:true,livePids:[],observedPids:[]}),
+});
+process.stdout.write(JSON.stringify(result));
+`,'utf8');
+    const env={...process.env};delete env.NODE_TEST_CONTEXT;
+    if(process.platform!=='win32'){
+      await assert.rejects(execFileAsync(process.execPath,[childScript],{cwd:PROJECT_ROOT,env,windowsHide:true,maxBuffer:1_000_000}),error=>/windows_required/u.test(error.stderr));
+    }else{
+      const execution=await execFileAsync(process.execPath,[childScript],{cwd:PROJECT_ROOT,env,windowsHide:true,maxBuffer:1_000_000});
+      assert.equal(execution.stderr,'');
+      const result=JSON.parse(execution.stdout);
+      assert.equal(result.status,'preflight_ok');
+      assert.equal(result.operation_id,f.operationId);
+      assert.match(String(result.process_inventory_digest),/^[0-9a-f]{64}$/u);
+      assert.match(String(result.platform_probe_digest),/^[0-9a-f]{64}$/u);
+      assert.match(String(result.claimant_scan_digest),/^[0-9a-f]{64}$/u);
+    }
+    assert.equal(JSON.stringify(rows(f)),before,'preflight must not mutate the isolated database');
   }finally{try{f.store.close();}catch{}}
 });

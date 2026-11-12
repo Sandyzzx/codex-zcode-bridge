@@ -40,6 +40,7 @@ const waiterAttribution = [
 await Promise.all([
   build({ ...shared, format: "esm", entryPoints: [path.join(repoRoot, "src", "cli", "upgrade-sqlite-v14.ts")], outfile: path.join(distDir, "upgrade-sqlite-v14.mjs") }),
   build({ ...shared, format: "esm", entryPoints: [path.join(repoRoot, "src", "mcp", "main.ts")], outfile: path.join(distDir, "bridge.mjs") }),
+  build({ ...shared, format: "esm", entryPoints: [path.join(repoRoot, "src", "cli", "admin-abandon-held-operation.ts")], outfile: path.join(distDir, "admin-abandon-held-operation.mjs") }),
   build({
     ...shared,
     format: "esm",
@@ -90,4 +91,4 @@ await writeFile(
   "utf8",
 );
 
-console.log("Built the self-contained Codex marketplace plugin server, worker, and vendored browser backend.");
+console.log("Built the self-contained Codex marketplace plugin server, operator recovery CLI, worker, and vendored browser backend.");
