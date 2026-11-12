@@ -1730,6 +1730,11 @@ function writeHostCredentials(runtime: FakeRuntimeFixture, account: string = HOS
   writeFileSync(path.join(runtime.zcodeHomeV2, "telemetry-state.json"), JSON.stringify({ deviceMid: HOST_DEVICE_MID }));
 }
 
+function clearHostCredentials(runtime: FakeRuntimeFixture): void {
+  rmSync(path.join(runtime.zcodeHomeV2, "credentials.json"), { force: true });
+  rmSync(path.join(runtime.zcodeHomeV2, "telemetry-state.json"), { force: true });
+}
+
 function fakeHostBillingGate(outcome: "entitled" | "billing_parameter_error") {
   const checks: Array<{ account: string; provider: string; model: string; deviceMid: string }> = [];
   const entitlement: StartPlanLiveEntitlement = {
@@ -1836,6 +1841,7 @@ function routingEnvIssuerFactory(gate: { entitlement: StartPlanLiveEntitlement }
   loginState: { account: string | null }) {
   return async (runtime: FakeRuntimeFixture, host: BridgeHostProfile): Promise<ProductionAuthIssuer | null> => {
     if (loginState.account) writeHostCredentials(runtime, loginState.account);
+    else clearHostCredentials(runtime);
     return createHostStartPlanIssuer({
       env: { ...process.env, HOME: runtime.runtimeRoot, USERPROFILE: runtime.runtimeRoot, ZCODE_CREDENTIAL_SECRET: HOST_CREDENTIAL_SECRET },
       homeDir: runtime.runtimeRoot,
@@ -1892,6 +1898,93 @@ test("ADR-031 Gate E1: a post-startup login is observed by the next dispatch and
     assert.ok(log.includes("GLM-5.3-Flash"), "the AppServer must receive the raw official model id");
     assert.equal(log.includes("-StartPlan"), false, "the user-visible alias must never reach the AppServer");
     assert.equal(log.includes("synthetic-signature"), false, "the official credential must never appear in app-server traffic");
+  }, { runtimeVariant: "private-auth", startPlanIssuerPerDispatch: routingEnvIssuerFactory(gate, journal, loginState),
+    routingHooks: { journal }, preserveFixtureOnFailure: true });
+});
+
+test("ADR-031: a persisted Start Plan task replays after logout without Billing or execution", { timeout: 180_000 }, async () => {
+  const gate = fakeHostBillingGate("entitled");
+  const journal = new StartPlanEntitlementJournal();
+  const loginState = { account: HOST_ACCOUNT as string | null };
+  await withRealAdapterMcp(async (client, _manager, _dataRoot, workspace, runtime) => {
+    const taskId = `routing-logout-replay-${randomUUID()}`;
+    const submit = () => client.callTool({ name: "zcode_task", arguments: {
+      ...syntheticTask(workspace, taskId), model: { model_id: "GLM-5.3-Flash-StartPlan" },
+    } });
+    const requestLogLines = () => existsSync(runtime.requestLog) ? readFileSync(runtime.requestLog, "utf8").trim().split("\n").length : 0;
+
+    const accepted = contentObject(await submit());
+    assert.equal((await waitForTerminal(client, taskId, 1)).status, "completed");
+    await waitForLifecycleEvent(client, taskId, "released");
+    const billingChecks = gate.checks.length;
+    const executions = requestLogLines();
+
+    loginState.account = null;
+    clearHostCredentials(runtime);
+    const replay = contentObject(await submit());
+    assert.deepEqual(replay, accepted, "logout must not hide the persisted task's original receipt");
+    assert.equal(gate.checks.length, billingChecks, "an equality replay must not consume a Billing request");
+    assert.equal(requestLogLines(), executions, "an equality replay must not execute the task again");
+  }, { runtimeVariant: "private-auth", startPlanIssuerPerDispatch: routingEnvIssuerFactory(gate, journal, loginState),
+    routingHooks: { journal }, preserveFixtureOnFailure: true });
+});
+
+test("ADR-031: a persisted Start Plan task conflicts on a changed model after logout", { timeout: 180_000 }, async () => {
+  const gate = fakeHostBillingGate("entitled");
+  const journal = new StartPlanEntitlementJournal();
+  const loginState = { account: HOST_ACCOUNT as string | null };
+  await withRealAdapterMcp(async (client, _manager, _dataRoot, workspace, runtime) => {
+    const taskId = `routing-logout-conflict-${randomUUID()}`;
+    contentObject(await client.callTool({ name: "zcode_task", arguments: {
+      ...syntheticTask(workspace, taskId), model: { model_id: "GLM-5.3-Flash-StartPlan" },
+    } }));
+    assert.equal((await waitForTerminal(client, taskId, 1)).status, "completed");
+    await waitForLifecycleEvent(client, taskId, "released");
+    const billingChecks = gate.checks.length;
+    const executions = existsSync(runtime.requestLog) ? readFileSync(runtime.requestLog, "utf8").trim().split("\n").length : 0;
+
+    loginState.account = null;
+    clearHostCredentials(runtime);
+    const changed = await client.callTool({ name: "zcode_task", arguments: {
+      ...syntheticTask(workspace, taskId), model: { model_id: "GLM-5-Air-StartPlan" },
+    } });
+    assert.equal(changed.isError, true, "a changed model must conflict before credential discovery");
+    assert.match(JSON.stringify(changed), /TASK_ID_CONFLICT/u);
+    assert.doesNotMatch(JSON.stringify(changed), /official Start Plan credentials are unavailable/u);
+    assert.equal(gate.checks.length, billingChecks, "a conflict must not consume a Billing request");
+    assert.equal(existsSync(runtime.requestLog) ? readFileSync(runtime.requestLog, "utf8").trim().split("\n").length : 0,
+      executions, "a conflict must not execute the task again");
+  }, { runtimeVariant: "private-auth", startPlanIssuerPerDispatch: routingEnvIssuerFactory(gate, journal, loginState),
+    routingHooks: { journal }, preserveFixtureOnFailure: true });
+});
+
+test("ADR-031: a new Start Plan task is refused after logout and remains unpersisted", { timeout: 180_000 }, async () => {
+  const gate = fakeHostBillingGate("entitled");
+  const journal = new StartPlanEntitlementJournal();
+  const loginState = { account: HOST_ACCOUNT as string | null };
+  await withRealAdapterMcp(async (client, _manager, _dataRoot, workspace, runtime) => {
+    const acceptedTaskId = `routing-logout-baseline-${randomUUID()}`;
+    contentObject(await client.callTool({ name: "zcode_task", arguments: {
+      ...syntheticTask(workspace, acceptedTaskId), model: { model_id: "GLM-5.3-Flash-StartPlan" },
+    } }));
+    assert.equal((await waitForTerminal(client, acceptedTaskId, 1)).status, "completed");
+    await waitForLifecycleEvent(client, acceptedTaskId, "released");
+    const billingChecks = gate.checks.length;
+    const executions = existsSync(runtime.requestLog) ? readFileSync(runtime.requestLog, "utf8").trim().split("\n").length : 0;
+
+    loginState.account = null;
+    clearHostCredentials(runtime);
+    const newTaskId = `routing-logout-new-${randomUUID()}`;
+    const refused = await client.callTool({ name: "zcode_task", arguments: {
+      ...syntheticTask(workspace, newTaskId), model: { model_id: "GLM-5.3-Flash-StartPlan" },
+    } });
+    assert.equal(refused.isError, true, "a genuinely new Start Plan task must still require credentials");
+    assert.match(JSON.stringify(refused), /official Start Plan credentials are unavailable/u);
+    assert.equal((await client.callTool({ name: "zcode_status", arguments: { task_id: newTaskId } })).isError, true,
+      "the refused new task must not be persisted");
+    assert.equal(gate.checks.length, billingChecks, "the credential refusal must not consume a Billing request");
+    assert.equal(existsSync(runtime.requestLog) ? readFileSync(runtime.requestLog, "utf8").trim().split("\n").length : 0,
+      executions, "the credential refusal must not execute the task");
   }, { runtimeVariant: "private-auth", startPlanIssuerPerDispatch: routingEnvIssuerFactory(gate, journal, loginState),
     routingHooks: { journal }, preserveFixtureOnFailure: true });
 });

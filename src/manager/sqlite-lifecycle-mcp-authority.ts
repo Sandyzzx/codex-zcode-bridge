@@ -106,20 +106,6 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       throw new TaskManagerError("TASK_INVALID", "model.provider_id is required because task model routing is not configured");
     }
     validateTaskPackage(task);
-    // ADR-031: Start Plan credential discovery is on-demand. With an injected
-    // issuer the availability fact is fixed; with the host factory this
-    // pre-intent refusal reads the current official credential state, so a
-    // logout rejects the new task at creation instead of stranding an
-    // Operation in launch-outcome-unknown. Dispatch re-resolves the factory,
-    // keeping the window between creation and spawn covered by the frozen
-    // launch-unknown recovery semantics.
-    if (task.model?.provider_id === "account:bigmodel-start-plan" && !this.#testOnlyFakeAdapter) {
-      if (!this.#startPlanAuthAvailable) throw new TaskManagerError("TASK_INVALID", "official Start Plan credentials are unavailable");
-      if (!this.#startPlanAuthInjected) {
-        const issuer = await this.#startPlanPrivateAuthFactory?.().catch(() => null) ?? null;
-        if (!issuer) throw new TaskManagerError("TASK_INVALID", "official Start Plan credentials are unavailable");
-      }
-    }
     const policy = this.#driverTrustedPolicy();
     const sourceDecision = policy.validateWorkspace({ requestedPath: task.workspace, canonicalPath: task.workspace });
     if (sourceDecision.state !== "allow") throw new TaskManagerError("TASK_INVALID", `SQLite admission rejected: ${sourceDecision.reason}`);
@@ -147,6 +133,19 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       // identical re-submission replays from the routing cache as well.
       this.#routeTaskModel?.confirmRouting(task);
       return receipt(task.task_id, projection.status, projection.created_at);
+    }
+
+    // ADR-031: Start Plan credential discovery is on-demand for genuinely new
+    // tasks. Existing tasks are resolved against SQLite first so logout cannot
+    // replace an equality replay or TASK_ID_CONFLICT with a credential error.
+    // This pre-intent refusal still precedes Operation/Launch Intent creation,
+    // so a logged-out new task is rejected before launch-outcome-unknown.
+    if (task.model?.provider_id === "account:bigmodel-start-plan" && !this.#testOnlyFakeAdapter) {
+      if (!this.#startPlanAuthAvailable) throw new TaskManagerError("TASK_INVALID", "official Start Plan credentials are unavailable");
+      if (!this.#startPlanAuthInjected) {
+        const issuer = await this.#startPlanPrivateAuthFactory?.().catch(() => null) ?? null;
+        if (!issuer) throw new TaskManagerError("TASK_INVALID", "official Start Plan credentials are unavailable");
+      }
     }
 
     try {

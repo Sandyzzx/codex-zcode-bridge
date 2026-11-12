@@ -11231,13 +11231,6 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
           throw new TaskManagerError("TASK_INVALID", "model.provider_id is required because task model routing is not configured");
         }
         validateTaskPackage2(task);
-        if (task.model?.provider_id === "account:bigmodel-start-plan" && !this.#testOnlyFakeAdapter) {
-          if (!this.#startPlanAuthAvailable) throw new TaskManagerError("TASK_INVALID", "official Start Plan credentials are unavailable");
-          if (!this.#startPlanAuthInjected) {
-            const issuer = await this.#startPlanPrivateAuthFactory?.().catch(() => null) ?? null;
-            if (!issuer) throw new TaskManagerError("TASK_INVALID", "official Start Plan credentials are unavailable");
-          }
-        }
         const policy = this.#driverTrustedPolicy();
         const sourceDecision = policy.validateWorkspace({ requestedPath: task.workspace, canonicalPath: task.workspace });
         if (sourceDecision.state !== "allow") throw new TaskManagerError("TASK_INVALID", `SQLite admission rejected: ${sourceDecision.reason}`);
@@ -11263,6 +11256,13 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
           const projection2 = asRecord4(existing.projection);
           this.#routeTaskModel?.confirmRouting(task);
           return receipt(task.task_id, projection2.status, projection2.created_at);
+        }
+        if (task.model?.provider_id === "account:bigmodel-start-plan" && !this.#testOnlyFakeAdapter) {
+          if (!this.#startPlanAuthAvailable) throw new TaskManagerError("TASK_INVALID", "official Start Plan credentials are unavailable");
+          if (!this.#startPlanAuthInjected) {
+            const issuer = await this.#startPlanPrivateAuthFactory?.().catch(() => null) ?? null;
+            if (!issuer) throw new TaskManagerError("TASK_INVALID", "official Start Plan credentials are unavailable");
+          }
         }
         try {
           this.#driver.createTask(normalizedTask);
