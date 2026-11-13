@@ -4307,6 +4307,9 @@ function validAdapterCleanupEvidence(value) {
   if (close.managerProcessCountAfter !== void 0) closeKeys.push("managerProcessCountAfter");
   return Object.keys(value).sort().join("|") === evidenceKeys.sort().join("|") && Object.keys(close).sort().join("|") === closeKeys.sort().join("|") && value.contract === "adapter-cleanup-v1" && ["resolved", "rejected"].includes(close.status) && typeof close.stage === "string" && stages.has(close.stage) && scanStatuses.has(close.treeScanStatus) && scanStatuses.has(value.treeScanStatus) && (close.errorName === void 0 || /^[A-Za-z][A-Za-z0-9_.:-]{0,119}$/u.test(close.errorName)) && (close.errorCode === void 0 || /^[A-Za-z][A-Za-z0-9_.:-]{0,119}$/u.test(close.errorCode)) && (close.managerProcessCountAfter === void 0 || Number.isSafeInteger(close.managerProcessCountAfter) && close.managerProcessCountAfter >= 0) && (!close.stage.startsWith("official_") || Number.isSafeInteger(close.managerProcessCountAfter));
 }
+function validVerifiedAdapterCleanupEvidence(value) {
+  return validAdapterCleanupEvidence(value) && value.close.status === "resolved" && value.close.treeScanStatus === "verified" && value.treeScanStatus === "verified";
+}
 function normalizeCleanupEvidence(value, input) {
   const keys = ["attempt", "claim_id", "fixture", "generation", "launch_receipt_digest", "operation_id", "operation_resources_complete", "process_tree_digest", "resources_digest", "result_commit_ref", "root_process_id", "root_start_fingerprint", "source", "task_id", "worker_identity_digest", "worker_tree_complete", "workspace_touched"];
   const expectedKeys = value?.adapter_cleanup === void 0 ? keys : [...keys, "adapter_cleanup"].sort();
@@ -6213,7 +6216,7 @@ var init_store = __esm({
           "task_id"
         ];
         const interruptions = /* @__PURE__ */ new Set(["interrupted_by_upgrade", "worker_exited_without_result", "worker_terminated_without_result"]);
-        if (!input || Object.getPrototypeOf(input) !== Object.prototype || Object.keys(input).some((key) => !keys.includes(key)) || !validId3(input.operation_id) || !validId3(input.task_id) || !Number.isSafeInteger(input.attempt) || input.attempt < 1 || !Number.isSafeInteger(input.generation) || input.generation < 1 || !Number.isSafeInteger(input.revision) || input.revision < 1 || !validId3(input.claim_id) || typeof input.claim_worker_identity_digest !== "string" || !/^[0-9a-f]{64}$/u.test(input.claim_worker_identity_digest) || !validId3(input.continuation_operation_id) || !interruptions.has(input.reason) || !input.interruption_evidence || Object.getPrototypeOf(input.interruption_evidence) !== Object.prototype || input.interruption_evidence.reason !== input.reason || typeof input.process_tree_digest !== "string" || !/^[0-9a-f]{64}$/u.test(input.process_tree_digest) || typeof input.resources_digest !== "string" || !/^[0-9a-f]{64}$/u.test(input.resources_digest)) fail2("invalid_interruption_request");
+        if (!input || Object.getPrototypeOf(input) !== Object.prototype || Object.keys(input).some((key) => !keys.includes(key)) || !validId3(input.operation_id) || !validId3(input.task_id) || !Number.isSafeInteger(input.attempt) || input.attempt < 1 || !Number.isSafeInteger(input.generation) || input.generation < 1 || !Number.isSafeInteger(input.revision) || input.revision < 1 || !validId3(input.claim_id) || typeof input.claim_worker_identity_digest !== "string" || !/^[0-9a-f]{64}$/u.test(input.claim_worker_identity_digest) || !validId3(input.continuation_operation_id) || !interruptions.has(input.reason) || !input.interruption_evidence || Object.getPrototypeOf(input.interruption_evidence) !== Object.prototype || input.interruption_evidence.reason !== input.reason || !validVerifiedAdapterCleanupEvidence(input.adapter_cleanup) || typeof input.process_tree_digest !== "string" || !/^[0-9a-f]{64}$/u.test(input.process_tree_digest) || typeof input.resources_digest !== "string" || !/^[0-9a-f]{64}$/u.test(input.resources_digest)) fail2("invalid_interruption_request");
         const interruptionJson = canonical4(input.interruption_evidence);
         if (Buffer.byteLength(interruptionJson, "utf8") > 4096) fail2("invalid_interruption_evidence");
         const interruptionDigest = digest2(interruptionJson);
@@ -6294,7 +6297,7 @@ var init_store = __esm({
             } catch {
               fail2("interruption_requeue_conflict");
             }
-            if (cleanupEvidence2?.claim_id !== input.claim_id || cleanupEvidence2?.worker_identity_digest !== input.claim_worker_identity_digest || typeof cleanupEvidence2?.cleanup_digest !== "string" || !/^[0-9a-f]{64}$/u.test(cleanupEvidence2.cleanup_digest))
+            if (cleanupEvidence2?.claim_id !== input.claim_id || cleanupEvidence2?.worker_identity_digest !== input.claim_worker_identity_digest || !validVerifiedAdapterCleanupEvidence(cleanupEvidence2?.adapter_cleanup) || canonical4(cleanupEvidence2.adapter_cleanup) !== canonical4(input.adapter_cleanup) || typeof cleanupEvidence2?.cleanup_digest !== "string" || !/^[0-9a-f]{64}$/u.test(cleanupEvidence2.cleanup_digest))
               fail2("interruption_requeue_conflict");
             return {
               duplicate: true,
@@ -6346,7 +6349,7 @@ var init_store = __esm({
             worker_tree_complete: true,
             operation_resources_complete: true,
             workspace_touched: false,
-            ...input.adapter_cleanup === void 0 ? {} : { adapter_cleanup: input.adapter_cleanup }
+            adapter_cleanup: input.adapter_cleanup
           };
           const normalized = normalizeCleanupEvidence(cleanupEvidence, {
             operation_id: input.operation_id,
@@ -6416,7 +6419,7 @@ var init_store = __esm({
             worker_identity_digest: input.claim_worker_identity_digest,
             worker_tree_complete: true,
             workspace_touched: false,
-            ...normalized.adapter_cleanup !== void 0 ? { adapter_cleanup: normalized.adapter_cleanup } : {}
+            adapter_cleanup: normalized.adapter_cleanup
           };
           this.#event(
             input.operation_id,
@@ -9130,6 +9133,37 @@ function readAllLifecycleEventsForRecovery(port, operationId) {
     afterSequence = lastSequence;
   }
 }
+function taskExecutionEvidenceObserved(port, operation, lifecycleEvents) {
+  if (lifecycleEvents.some((event) => String(event.event_type).startsWith("interaction_"))) return true;
+  const runtimeExecutionEventTypes = /* @__PURE__ */ new Set([
+    "session_ready",
+    "model_selected",
+    "turn_started",
+    "model_tool_call",
+    "tool_status",
+    "model_output",
+    "turn_completed",
+    "turn_failed",
+    "report_ready"
+  ]);
+  const taskId = text(operation.task_id, "recovery_task_id_missing");
+  const operationId = text(operation.operation_id, "recovery_operation_id_missing");
+  const attempt = positive3(Number(operation.attempt), "recovery_attempt_invalid");
+  const generation = positive3(Number(operation.generation), "recovery_generation_invalid");
+  const pageSize = 200;
+  let afterCursor = 0;
+  while (true) {
+    const page = port.readTaskEvents(taskId, { afterCursor, limit: pageSize });
+    if (page.events.length > pageSize) throw new LifecycleGateError("recovery_task_event_page_oversized");
+    if (page.events.some((event) => runtimeExecutionEventTypes.has(String(event.event_type)) && event.operation_id === operationId && Number(event.operation_attempt ?? event.attempt) === attempt && Number(event.generation) === generation)) return true;
+    if (!page.hasMore) return false;
+    const nextCursor = Number(page.nextCursor);
+    if (!Number.isSafeInteger(nextCursor) || nextCursor <= afterCursor) {
+      throw new LifecycleGateError("recovery_task_event_cursor_invalid");
+    }
+    afterCursor = nextCursor;
+  }
+}
 function assertSqliteRuntimeVersion(version2) {
   if (!isSupportedNodeVersion(version2)) {
     throw new LifecycleGateError("sqlite_runtime_unsupported", "SQLite candidate requires Node >=24.16.0 <25");
@@ -10026,6 +10060,26 @@ async function openClaimOnlyDriver(options) {
             probe_reason: probeReason
           };
         }
+        if (taskExecutionEvidenceObserved(port, operation, lifecycleEvents)) {
+          return {
+            state: "held",
+            operation_id: operationId,
+            phase,
+            reason: "execution_side_effect_unverified",
+            identity_state: identityState,
+            probe_reason: probeReason
+          };
+        }
+        if (options.testOnlyFakeAdapter !== true) {
+          return {
+            state: "held",
+            operation_id: operationId,
+            phase,
+            reason: "adapter_cleanup_unverified",
+            identity_state: identityState,
+            probe_reason: probeReason
+          };
+        }
         const initialIdentityState = identityState;
         const activeEntry = [...activeWorkers.entries()].find(([candidateOperationId]) => candidateOperationId === operationId);
         const active = activeEntry?.[1];
@@ -10163,7 +10217,13 @@ async function openClaimOnlyDriver(options) {
           worker_tree_complete: true,
           worker_stdio_closed: true,
           interaction_channels_closed: true,
-          workspace_touched: false
+          workspace_touched: false,
+          execution_events_observed: false
+        };
+        const adapterCleanup = {
+          contract: "adapter-cleanup-v1",
+          close: { stage: "direct_close", status: "resolved", treeScanStatus: "verified" },
+          treeScanStatus: "verified"
         };
         const processTreeDigest = sha2563(canonicalJson2(processTreeFacts));
         const resourcesDigest = sha2563(canonicalJson2(resourceFacts));
@@ -10183,7 +10243,8 @@ async function openClaimOnlyDriver(options) {
           process_tree_digest: processTreeDigest,
           resources_digest: resourcesDigest,
           host_worker_handle_present: active !== void 0,
-          worker_stdio_closed: true
+          worker_stdio_closed: true,
+          execution_evidence_state: "none_observed"
         };
         const nextAttempt = Number(operation.attempt) + 1;
         const outcome = asRecord3(port.interruptAndRequeue({
@@ -10198,6 +10259,7 @@ async function openClaimOnlyDriver(options) {
           interruption_evidence: interruptionEvidence,
           process_tree_digest: processTreeDigest,
           resources_digest: resourcesDigest,
+          adapter_cleanup: adapterCleanup,
           continuation_operation_id: `sqlite-${sha2563(`${String(operation.task_id)}\0${nextAttempt}`).slice(0, 32)}`
         }, {
           workspaceValidator: localPolicy.validateWorkspace,
