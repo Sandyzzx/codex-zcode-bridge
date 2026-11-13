@@ -1,9 +1,9 @@
 # 当前架构
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-13
-> Last verified: 2026-11-13，核对 PR #85 合并后的 Official Host + R7 Runtime Events/Usage 生产链、固定上游制品、952 项完整隔离回归、四个 CI 平台 job、提交后 clean checkout 与 Preview.5 发布边界；在合并后的候选上补核 ADR-036 的 Host 内中断重派发、Adapter Cleanup/执行副作用 Hold 与定向回归。安装预览制品后的真实 Start Plan E2E 尚待单独验收。
-> Verified against: `3a95e47b2688d06e29f3bca441d1c9bcaaca2e4f` + ADR-036 candidate changes after merging `origin/preview`；固定上游为 ZCode `3.18.0` / `b95ebaffeab641907b38652f45c1502bd762972d`，AppServer `0.17.1`。
+> Last updated: 2026-11-14
+> Last verified: 2026-11-14，核对最新 `origin/preview` 的 Official Host + R7 Runtime Events/Usage 生产链、Host 内中断恢复，以及 ADR-037 官方认证复用的目标和未决边界；官方认证复用生产实现、3.18.x 兼容矩阵和安装制品后的真实 Start Plan E2E 尚待单独验收。
+> Verified against: `9bec5a27d` + ADR-037 acceptance documentation；当前固定上游仍为 ZCode `3.18.0` / `b95ebaffeab641907b38652f45c1502bd762972d`，目标上游为 `3.18.2` / `fec975905a2abd4c07e35c40d51fa097a2258ec9`，AppServer `0.17.1`。
 
 本文件描述 Preview.5 的生产架构。Windows x64 已默认切换到官方 Host 路径，R7 Runtime Events/Usage 复用同一 SQLite Authority。公开合同继续以 [INTERFACES.md](INTERFACES.md) 为准，宿主和运行配置分别见 [SHARED_CORE.md](SHARED_CORE.md) 与 [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md)。
 
@@ -58,6 +58,8 @@ Recovery 由 SQLite 持久事实和当前 Host 共同协调，并可在 Host 存
 官方 transport 显式使用 16 MiB raw UTF-8 stdout frame 上限。超限立即结束 pending RPC 和 turn，清理缓冲并 fail closed；LF 不计入预算、CR 计入预算、多字节 UTF-8 跨越 chunk 时按 raw bytes 计算。
 
 Start Plan 每任务只执行一次权威 Billing GET，后续 Private Lease 复用同一 account/provider/model/credential 绑定的 verdict；凭据、Provider 或模型变化必须重新授权。Coding Plan 保持官方账户/API Key 路径，不经过 Start Plan Billing。ADR-030 的 Private Lease/HANDLE/ACK、fail-closed 和不跨任务缓存继续有效。
+
+[ADR-037](decisions/ADR-037-official-zcode-authentication-reuse.md) 已接受下一阶段的认证所有权：官方 Host 应统一拥有 credential format、keyring、OAuth refresh、登录主体、BigModel/Z.ai/`zai_cn` 映射和请求认证；Bridge 只消费一次任务所需的短期 Start Plan 认证材料，并继续拥有 Billing verdict、Private Lease 和全部任务生命周期。当前 Preview.5 尚未完成该接线：Start Plan 仍由 Bridge 读取官方凭据，固定 Host 仍是 ZCode `3.18.0`，没有 3.18.2 的 `loadStartPlanMaterial` 或 `zai_cn` 映射。研究另确认普通官方读取会迁移 `enc:v1`，因此目标实现还必须提供无迁移、无 keyring 写入的官方 Host 兼容入口；该能力当前为 `NOT_AVAILABLE / NOT_IMPLEMENTED`。
 
 [ADR-033](decisions/ADR-033-official-account-refresh-coordination.md) 的账户 refresh 协调已进入固定上游 patch：independent profile-scoped lock、获取锁后重读、网络请求前 dispatch marker、单次网络刷新、expected-snapshot/CAS 发布、timeout 与 stale-lock 恢复、不重试可能已消费的一次性 token、live runtime-header 更新，以及 A→B→A 和迟到响应隔离。该行为在合成矩阵中通过；真实 OAuth/account/model/Start Plan/Billing 仍为 `NOT_RUN`。
 

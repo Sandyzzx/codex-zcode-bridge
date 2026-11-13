@@ -1,9 +1,9 @@
 # Project State
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-13
-> Last verified: 2026-11-13，核对 PR #85 合并后的 Preview.5 源码与固定制品、Official Host、R7 Runtime Events/Usage、952 项完整隔离回归、stress gate、clean checkout 与四个 CI 平台 job；安装 Preview.5 后的真实 Start Plan E2E 尚待单独验收。
-> Verified against: `3a95e47b2688d06e29f3bca441d1c9bcaaca2e4f` + Preview.5 version/documentation changes
+> Last updated: 2026-11-14
+> Last verified: 2026-11-14，核对最新 `origin/preview` 的 Preview.5 源码与固定制品、ADR-037 官方认证源码边界、R7 Runtime Events/Usage、完整隔离回归与 CI；官方认证复用实现、3.18.x 兼容矩阵和安装 Preview.5 后的真实 Start Plan E2E 尚待单独验收。
+> Verified against: `9bec5a27d` + ADR-037 acceptance documentation
 
 当前发布状态：
 
@@ -28,6 +28,7 @@
 - **Z.ai Coding Plan：** 保留官方 Coding Plan 账户/API Key 路径；Start Plan 预检不改变 Coding Plan 的既有注册和执行语义。
 - 两条路径最终都由官方 ZCode AppServer 执行；Bridge 不复制 AppServer 的 Provider 请求构造。
 - 账户 refresh 使用固定上游 patch 的 profile-scoped lock、lock-time reread、一次远端刷新和 CAS 发布。该协调已由合成竞争矩阵验证，但没有执行真实 OAuth、账户轮换、Start Plan 或 Billing 请求。
+- [ADR-037](decisions/ADR-037-official-zcode-authentication-reuse.md) 已接受下一阶段目标：官方 Host 统一拥有凭据解密、keyring、OAuth、账户身份和请求认证，Bridge 不再维护第二套认证。当前实现尚未迁移；Start Plan 仍由 Bridge 读取凭据，固定 Host 仍为 3.18.0，3.18.x 兼容矩阵尚未完成。
 
 Preview.3 的 Start Plan 历史证据覆盖 Windows、官方 AppServer `0.17.1`、Provider `account:bigmodel-start-plan`、模型 `GLM-5.3-Flash`：3 次主 Turn 模型迭代均 HTTP `200`，Write/Read、有效 AgentReport、Result Commit/Cleanup/Release 和每任务 1 次 Billing GET 均被记录。一个此前 R7 候选另通过了真实 Coding Plan Task，证明 Official Host、Runtime Events/Usage、工具调用、Result、Cleanup 与 Release。两者不能替代安装 Preview.5 后的 Start Plan E2E。
 
@@ -48,6 +49,8 @@ Preview.3 的 Start Plan 历史证据覆盖 Windows、官方 AppServer `0.17.1`�
 | Official Host 制品升级/回滚演练 | `NOT_RUN` | 与 SQLite v13→v14 测试不是同一项 |
 | 真实 Coding Plan + Official Host | `PASS` | 此前 R7 候选完成一次真实 Task：模型、工具、Events、Usage、Result、Cleanup、Release 均通过；不替代 Preview.5 安装后验收 |
 | 真实 Start Plan + Billing（Preview.5） | `NOT_RUN` | Preview.5 发布后单独授权、安装后执行；不得用 Preview.3 或 Coding Plan 替代 |
+| 官方 Start Plan 认证复用 | `NOT_IMPLEMENTED` | ADR-037 目标已接受；当前 Bridge 仍私有读取 v1/v2、keyring、账户身份与 device |
+| Desktop 3.18.0 / 3.18.1 / 3.18.2 兼容矩阵 | `NOT_VERIFIED` | 源码观察不能替代隔离运行与真实账户组合 |
 | 一般 Desktop Main 独立性 | `NOT_RUN` | 合成路径不证明完整资源与身份闭包 |
 | 当前合并回归 | `PASS` | PR #85 最终 `test:affected` 选择 `FULL_SUITE`：952 项，950 pass、0 fail、2 skip；Administrative Recovery focused 14/14 |
 | 当前合并 CI | `PASS` | Windows/Ubuntu Verify 与 SQLite resource matrix 四个 job 全部成功 |

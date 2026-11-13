@@ -1,9 +1,9 @@
 # 决策路由 / Decisions
 
 > Status: AUTHORITATIVE（仅指本索引）
-> Last updated: 2026-11-13
-> Last verified: 2026-11-13，核对 ADR-032–035 的 Preview.5 实现状态、ADR-030 保持不变、R7 集成及完整回归；在合并后的候选上新增并核对 ADR-036。
-> Verified against: `3a95e47b2688d06e29f3bca441d1c9bcaaca2e4f` + Preview.5 and ADR-036 candidate changes after merging `origin/preview`
+> Last updated: 2026-11-14
+> Last verified: 2026-11-14，核对 ADR-032–037 的 Preview.5 实现与目标状态、ADR-030 保持不变、R7 集成、Host 内中断恢复及官方 3.18.x 认证边界。
+> Verified against: `9bec5a27d` + ADR-037 acceptance documentation
 
 先读当前 [架构](../ARCHITECTURE.md)/[接口](../INTERFACES.md)，只在需要解释取舍时加载对应决策。文件保持原路径和历史正文；Partially superseded 的标注优先于历史段落。
 
@@ -31,8 +31,11 @@
 | 账户 Refresh | [033](ADR-033-official-account-refresh-coordination.md) | Accepted；profile-scoped lock、lock-time reread、一次远端 refresh、CAS；无 Broker |
 | 正常 Cleanup | [034](ADR-034-normal-cleanup-worker-tree-proof.md) | Accepted；官方 close 后复用 exact Worker identity、recorded-tree、resource facts、Digest 与 Release CAS |
 | 平台启用 | [035](ADR-035-worker-platform-adapter-selection.md) | Accepted；Windows x64 启用 Official Host，Linux/macOS direct 仅 CI/合成覆盖，其余 fail closed |
+| 官方认证复用 | [037](ADR-037-official-zcode-authentication-reuse.md) | Accepted target；Official Host 拥有凭据、OAuth、账户身份和请求认证；Bridge 不维护第二套认证；生产实现与 3.18.x 矩阵待完成 |
 
 ADR-032、ADR-033、ADR-034 和 ADR-035 的正文记录决定作出时的状态；顶部 Applicability 标注当前适用性。当前实现状态以 [ARCHITECTURE](../ARCHITECTURE.md) 和 [Implementation Summary](../research/zcode-official-host-integration-v1/IMPLEMENTATION_SUMMARY.md) 为准：Preview.5 Windows x64 Worker 默认使用 `OfficialHostAdapter`；Linux/macOS direct 仅保留 CI/合成覆盖；PR #85 合并后的完整回归与四个 CI job 通过。真实 Coding Plan 已在此前 R7 候选通过；安装 Preview.5 后的 Start Plan 和官方制品升级/回滚仍为独立证据项。
+
+ADR-037 仅冻结“官方 Host 持有认证、Bridge 保留任务生命周期”的目标。当前 Preview.5 的 Start Plan 仍由 Bridge 读取官方凭据；固定 Host 仍是 ZCode 3.18.0，尚不包含 3.18.2 的 `loadStartPlanMaterial`。不得把该 ADR 当作 3.18.0/3.18.1/3.18.2 兼容或真实 Start Plan 已通过。
 
 Preview.5 生产 Lifecycle Gate 会在持有 bootstrap lock 时自动升级已有 SQLite v13→v14。ADR-026 正文中的“生产 Migration 不自动授权”仍是其历史决策背景；实现只开放受限的启动升级，直接 Store API 仍对不同 Schema 或未知现场 fail closed。R7 Runtime Events 作为同一 v14 Authority 的 additive 扩展，不构成第二套任务状态机。
 
