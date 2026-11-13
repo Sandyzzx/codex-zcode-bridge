@@ -50,6 +50,7 @@ for (const relativePath of [
   "dist/bridge.mjs",
   "dist/wait-task.mjs",
   "dist/schema.sql",
+  "dist/runtime-events.sql",
   "dist/schema-v13.sql",
   "dist/upgrade-sqlite-v14.mjs",
   "dist/admin-abandon-held-operation.mjs",
@@ -70,6 +71,9 @@ for (const relativePath of [
 const packagedSchema = await readFile(path.join(pluginRoot, "dist", "schema.sql"));
 const sourceSchema = await readFile(path.join(root, "src", "sqlite-candidate", "wp6b2b1", "schema.sql"));
 if (!packagedSchema.equals(sourceSchema)) throw new Error("bundled SQLite schema does not match source");
+const packagedRuntimeEvents = await readFile(path.join(pluginRoot, "dist", "runtime-events.sql"));
+const sourceRuntimeEvents = await readFile(path.join(root, "src", "sqlite-candidate", "wp6b2b1", "runtime-events.sql"));
+if (!packagedRuntimeEvents.equals(sourceRuntimeEvents)) throw new Error("bundled runtime event schema does not match source");
 const packagedV13 = await readFile(path.join(pluginRoot, "dist", "schema-v13.sql"));
 const sourceV13 = await readFile(path.join(root, "src", "sqlite-candidate", "wp6b2b1", "schema-v13.sql"));
 if (!packagedV13.equals(sourceV13)) throw new Error("bundled v13 upgrade schema does not match source");

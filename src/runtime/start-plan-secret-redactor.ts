@@ -2,11 +2,13 @@ import { createHash } from "node:crypto";
 
 /** In-memory fingerprint permits output redaction after the credential lease
  * has been revoked without retaining the complete credential string. It does
- * not promise physical erasure, and only recognizes the complete credential. */
+ * not promise physical erasure; streaming uses a bounded prefix overlap so a
+ * credential split across frames is never emitted in pieces. */
 export class StartPlanSecretRedactor {
   #length = 0;
   #prefix = "";
   #digest = "";
+  #streamPending = "";
 
   register(secret: string): void {
     if (typeof secret !== "string" || secret.length < 2) throw new Error("private_auth_invalid");
@@ -33,6 +35,42 @@ export class StartPlanSecretRedactor {
     }
   }
 
+  /**
+   * Redact content delivered in consecutive stream fragments. A bounded suffix
+   * is retained so a credential split across fragments is never emitted as
+   * two individually harmless prefixes. Call with final=true at a public-event
+   * boundary to release the retained suffix.
+   */
+  streamText(input: string, { final = false }: { readonly final?: boolean } = {}): string {
+    if (typeof input !== "string" || typeof final !== "boolean") throw new Error("private_auth_stream_invalid");
+    if (!this.#length) return input;
+    this.#streamPending += input;
+    if (!this.#streamPending) return "";
+    const retainedCharacters = final ? 0 : Math.max(0, this.#length - 1);
+    let visibleLength = Math.max(0, this.#streamPending.length - retainedCharacters);
+    if (!final && visibleLength > 0) {
+      for (let index = this.#streamPending.indexOf(this.#prefix); index >= 0 && index < visibleLength;
+        index = this.#streamPending.indexOf(this.#prefix, index + 1)) {
+        if (index + this.#length > visibleLength) {
+          visibleLength = index;
+          break;
+        }
+      }
+      const maximumOverlap = Math.min(this.#prefix.length - 1, visibleLength);
+      for (let overlap = maximumOverlap; overlap > 0; overlap -= 1) {
+        if (this.#streamPending.slice(visibleLength - overlap, visibleLength)
+          === this.#prefix.slice(0, overlap)) {
+          visibleLength -= overlap;
+          break;
+        }
+      }
+    }
+    if (visibleLength === 0) return "";
+    const visible = this.#streamPending.slice(0, visibleLength);
+    this.#streamPending = this.#streamPending.slice(visibleLength);
+    return this.text(visible);
+  }
+
   value(value: unknown): unknown {
     if (typeof value === "string") return this.text(value);
     if (Array.isArray(value)) return value.map((item) => this.value(item));
@@ -42,5 +80,5 @@ export class StartPlanSecretRedactor {
     return value;
   }
 
-  close(): void { this.#length = 0; this.#prefix = ""; this.#digest = ""; }
+  close(): void { this.#length = 0; this.#prefix = ""; this.#digest = ""; this.#streamPending = ""; }
 }

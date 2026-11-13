@@ -41,6 +41,27 @@ try {
     path.join(staging, "src", "sqlite-candidate", "wp6b2b1", "schema.sql"),
   );
   copyFileSync(
+    path.join(root, "src", "sqlite-candidate", "wp6b2b1", "runtime-events.sql"),
+    path.join(staging, "src", "sqlite-candidate", "wp6b2b1", "runtime-events.sql"),
+  );
+  copyFileSync(
+    path.join(root, "src", "sqlite-candidate", "wp6b2b1", "runtime-event-channel.mjs"),
+    path.join(staging, "src", "sqlite-candidate", "wp6b2b1", "runtime-event-channel.mjs"),
+  );
+  copyFileSync(
+    path.join(root, "src", "sqlite-candidate", "wp6b2b1", "runtime-event-channel.d.mts"),
+    path.join(staging, "src", "sqlite-candidate", "wp6b2b1", "runtime-event-channel.d.mts"),
+  );
+  mkdirSync(path.join(staging, "src", "feedback"), { recursive: true });
+  copyFileSync(
+    path.join(root, "src", "feedback", "task-feedback-projection.mjs"),
+    path.join(staging, "src", "feedback", "task-feedback-projection.mjs"),
+  );
+  copyFileSync(
+    path.join(root, "src", "feedback", "task-feedback-projection.d.mts"),
+    path.join(staging, "src", "feedback", "task-feedback-projection.d.mts"),
+  );
+  copyFileSync(
     path.join(root, "src", "sqlite-candidate", "wp6b2b1", "admin-abandonment.sql"),
     path.join(staging, "src", "sqlite-candidate", "wp6b2b1", "admin-abandonment.sql"),
   );

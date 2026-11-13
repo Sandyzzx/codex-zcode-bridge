@@ -11,12 +11,25 @@ import { createSqliteLifecyclePort } from '../../../src/sqlite-candidate/wp6b2b1
 import { createTrustedLocalCandidateContext } from '../../../dist-test/src/host/stdio.js';
 import { SqliteLifecycleMcpAuthority } from '../../../dist-test/src/manager/sqlite-lifecycle-mcp-authority.js';
 import { createPlatformProbe } from '../../../dist-test/src/runtime/process-probe.js';
-import { parseArgs } from '../../../plugins/codex-zcode-bridge/dist/admin-abandon-held-operation.mjs';
+import { executeCli, parseArgs, sqliteErrorDiagnostic } from '../../../plugins/codex-zcode-bridge/dist/admin-abandon-held-operation.mjs';
 
 const HERE=path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT=path.resolve(HERE,'../../..');
 const execFileAsync=promisify(execFile);
-const ADMIN_SCHEMA_SQL=readFileSync(path.join(PROJECT_ROOT,'src/sqlite-candidate/wp6b2b1/admin-abandonment.sql'),'utf8');
+const ADMIN_SCHEMA_SQL=readFileSync(path.join(PROJECT_ROOT,'src/sqlite-candidate/wp6b2b1/admin-abandonment.sql'),'utf8')
+  .replace(/\r\n?/gu,'\n');
+const LEGACY_ADMIN_SCHEMA_SQL=ADMIN_SCHEMA_SQL
+  .replace(
+    'event_sequence INTEGER NOT NULL CHECK(event_sequence=original_revision+1)',
+    'event_sequence INTEGER NOT NULL UNIQUE CHECK(event_sequence=original_revision+1)',
+  );
+function tableStatement(schema){
+  const start=schema.indexOf('CREATE TABLE manager_admin_abandonments'),end=schema.indexOf(';',start);
+  if(start<0||end<0)throw new Error('administrative table statement missing');
+  return schema.slice(start,end+1).trim();
+}
+const LEGACY_ADMIN_TABLE_SQL=tableStatement(LEGACY_ADMIN_SCHEMA_SQL);
+const LEGACY_ADMIN_TRIGGERS_SQL=LEGACY_ADMIN_SCHEMA_SQL.slice(LEGACY_ADMIN_SCHEMA_SQL.indexOf('CREATE TRIGGER')).trim();
 const TEST_ROOT=process.env.WP6C_TEST_TEMP_ROOT
   ?path.resolve(process.env.WP6C_TEST_TEMP_ROOT,`admin-abandonment-${process.pid}`)
   :path.resolve(HERE,'../../../src/sqlite-candidate/wp6b2b1',`test-temp-admin-abandonment-${process.pid}`);
@@ -27,20 +40,17 @@ function task(taskId,workspace){
   return {task_id:taskId,workspace,objective:'synthetic administrative abandonment fixture',requirements:[],allowed_paths:[],
     forbidden_paths:[],acceptance_criteria:[],test_commands:[]};
 }
-function trustedIdentity(kind,suffix,processId,fingerprint){
+function trustedIdentity(kind,suffix,processId,fingerprint,generation=1){
   const base={source:kind==='launch'?'manager_os_spawn_observation':'manager_verified_process_probe',fixture:false,
-    ...(kind==='launch'?{launch_id:`launch-${suffix}`,generation:1}:{worker_id:`worker-${suffix}`}),
+    ...(kind==='launch'?{launch_id:`launch-${suffix}`,generation}:{worker_id:`worker-${suffix}`}),
     process_id:processId,start_fingerprint:fingerprint,fingerprint_precision:'exact',identity_version:1,
     platform:'win32',captured_at:'2026-11-01T00:00:00.000Z'};
   return {...base,evidence_digest:digest(base)};
 }
-function makeClaimedStore(label,{capacity=1}={}){
-  const root=path.join(TEST_ROOT,label),workspace=path.join(root,'workspace');
-  mkdirSync(workspace,{recursive:true});
-  const store=IsolatedAdmissionStore.initialize(root);
-  store.provisionCapacity({operation_id:`policy-${label}`,capacity_limit:capacity,expected_generation:0,
-    maintenance:{dispatch_blocked:true,writers_drained:true}});
-  const taskId=`task-${label}`,operationId=`operation-${label}`,processId=52000+label.length,fingerprint=`fingerprint-${label}`;
+function addClaimedOperation(store,label,workspace){
+  const taskId=`task-${label}`,operationId=`operation-${label}`;
+  const processId=52000+[...label].reduce((sum,value)=>sum+value.codePointAt(0),0)%10000;
+  const fingerprint=`fingerprint-${label}`;
   store.createTask(task(taskId,workspace),'2026-11-01T00:00:00.000Z');
   const allow=()=>({state:'allow',fixture:true});
   const admitted=store.admitOperation({operation_id:operationId,task_id:taskId,attempt:1,workspace_ref:workspace},
@@ -49,11 +59,19 @@ function makeClaimedStore(label,{capacity=1}={}){
     launch_id:`launch-${label}`,launch_epoch:1,launch_token:`synthetic-admin-token-${label}-012345`};
   const intent=store.createLaunchIntent(launch);
   const receipt=store.recordLaunchReceipt({...launch,revision:intent.revision,receipt_id:`receipt-${label}`,
-    launch_identity:trustedIdentity('launch',label,processId,fingerprint)});
+    launch_identity:trustedIdentity('launch',label,processId,fingerprint,admitted.generation)});
   store.commitPermanentClaim({...launch,revision:receipt.revision,claim_id:`claim-${label}`,
     worker_identity:trustedIdentity('worker',label,processId,fingerprint)});
   const operation=store.readOperation(operationId);
-  return {root,workspace,store,taskId,operationId,processId,fingerprint,operation};
+  return {workspace,taskId,operationId,processId,fingerprint,operation};
+}
+function makeClaimedStore(label,{capacity=1}={}){
+  const root=path.join(TEST_ROOT,label),workspace=path.join(root,'workspace');
+  mkdirSync(workspace,{recursive:true});
+  const store=IsolatedAdmissionStore.initialize(root);
+  store.provisionCapacity({operation_id:`policy-${label}`,capacity_limit:capacity,expected_generation:0,
+    maintenance:{dispatch_blocked:true,writers_drained:true}});
+  return {root,workspace,store,...addClaimedOperation(store,label,workspace)};
 }
 function persistCleanupIncomplete(store,operationId){
   const o=store.readOperation(operationId);
@@ -97,6 +115,7 @@ function rows(f){
       attempt:db.prepare('SELECT * FROM attempts WHERE task_id=? AND attempt=1').get(f.taskId),
       events:db.prepare('SELECT * FROM manager_operation_events WHERE operation_id=? ORDER BY sequence').all(f.operationId),
       admin:hasAdminTable?db.prepare('SELECT * FROM manager_admin_abandonments WHERE operation_id=?').get(f.operationId):null,
+      adminTable:hasAdminTable,
       active:db.prepare("SELECT COUNT(*) AS n FROM manager_operations WHERE operation_kind='attempt_lifecycle' AND phase NOT IN ('released','cancelled_before_launch')").get().n,
       integrity:db.prepare('PRAGMA integrity_check').get().integrity_check,
       foreignKeys:db.prepare('PRAGMA foreign_key_check').all(),
@@ -113,6 +132,48 @@ function mutateAdminRow(root,sql,value){
     if(start<0||end<0)throw new Error('administrative update trigger missing from schema');
     db.exec(ADMIN_SCHEMA_SQL.slice(start,end).trim().replace(/;\s*$/u,''));
   }finally{db.close();}
+}
+function rewriteAdminTableAsLegacy(root){
+  const db=new DatabaseSync(path.join(root,'operations.sqlite3'));
+  try{
+    db.exec('BEGIN IMMEDIATE');
+    db.exec('DROP TRIGGER manager_admin_abandonments_no_update');
+    db.exec('DROP TRIGGER manager_admin_abandonments_no_delete');
+    db.exec('ALTER TABLE manager_admin_abandonments RENAME TO manager_admin_abandonments_current');
+    db.exec(LEGACY_ADMIN_TABLE_SQL);
+    const columns=db.prepare("PRAGMA table_info('manager_admin_abandonments_current')").all().map(row=>row.name);
+    const names=columns.map(column=>'"'+column.replaceAll('"','""')+'"');
+    db.prepare(`INSERT INTO manager_admin_abandonments(${names.join(',')}) SELECT ${names.join(',')} FROM manager_admin_abandonments_current`).run();
+    db.exec('DROP TABLE manager_admin_abandonments_current');
+    db.exec(LEGACY_ADMIN_TRIGGERS_SQL);
+    db.exec('COMMIT');
+  }catch(error){
+    try{db.exec('ROLLBACK');}catch{}
+    throw error;
+  }finally{db.close();}
+}
+function adminTableSnapshot(root){
+  const db=new DatabaseSync(path.join(root,'operations.sqlite3'),{readOnly:true});
+  try{
+    const table=db.prepare("SELECT sql FROM sqlite_schema WHERE type='table' AND name='manager_admin_abandonments'").get();
+    if(!table)return {exists:false,sql:null,rows:[],triggers:[],digest:null};
+    const adminRows=db.prepare('SELECT * FROM manager_admin_abandonments ORDER BY operation_id').all();
+    const normalizedRows=adminRows.map(row=>Object.fromEntries(Object.entries(row).map(([key,value])=>[
+      key,value instanceof Uint8Array?{sqlite_type:'blob',bytes:value.byteLength,sha256:digest(value)}:value,
+    ])));
+    return {
+      exists:true,
+      sql:String(table.sql).trim().replace(/\r\n?/gu,'\n'),
+      rows:adminRows,
+      triggers:db.prepare("SELECT name,sql FROM sqlite_schema WHERE type='trigger' AND tbl_name='manager_admin_abandonments' ORDER BY name").all()
+        .map(row=>({name:row.name,sql:String(row.sql).trim().replace(/\r\n?/gu,'\n')})),
+      digest:digest(normalizedRows),
+    };
+  }finally{db.close();}
+}
+function alterAdminSchema(root,sql){
+  const db=new DatabaseSync(path.join(root,'operations.sqlite3'));
+  try{db.exec(sql);}finally{db.close();}
 }
 function fixture(label,capacity=1){
   const value=makeClaimedStore(label,{capacity});
@@ -164,6 +225,185 @@ test('administrative abandonment is target-bound, CAS-fenced, auditable, and ide
       claim_id:abandonedOperation.claim_id,claim_worker_identity_digest:abandonedOperation.claim_worker_identity_digest},gates),
     'continue_status_not_eligible');
   }finally{f.store.close();}
+});
+
+test('different Operations may reuse the same operation-local event sequence',()=>{
+  const f=makeClaimedStore('local-event-sequence',{capacity:2});
+  const otherWorkspace=path.join(f.root,'workspace-other');mkdirSync(otherWorkspace,{recursive:true});
+  const other=addClaimedOperation(f.store,'local-event-sequence-other',otherWorkspace);
+  try{
+    const firstHold=persistCleanupIncomplete(f.store,f.operationId);
+    const secondHold=persistCleanupIncomplete(f.store,other.operationId);
+    const first=f.store.adminAbandonHeldOperation(abandonmentInput(f,firstHold));
+    const secondInput=abandonmentInput({...f,...other,operationId:other.operationId},secondHold);
+    const second=f.store.adminAbandonHeldOperation(secondInput);
+    assert.equal(first.event_sequence,second.event_sequence);
+    const db=new DatabaseSync(path.join(f.root,'operations.sqlite3'),{readOnly:true});
+    try{
+      const rows=db.prepare('SELECT operation_id,event_sequence,audit_digest FROM manager_admin_abandonments ORDER BY operation_id').all();
+      assert.equal(rows.length,2);
+      assert.deepEqual(rows.map(row=>row.event_sequence),[first.event_sequence,second.event_sequence]);
+      assert.notEqual(rows[0].operation_id,rows[1].operation_id);
+      assert.equal(db.prepare('PRAGMA integrity_check').get().integrity_check,'ok');
+      assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(),[]);
+    }finally{db.close();}
+  }finally{f.store.close();}
+});
+
+test('legacy global event-sequence uniqueness migrates without changing existing audit rows',async()=>{
+  const f=makeClaimedStore('legacy-admin-migration',{capacity:2});
+  const otherWorkspace=path.join(f.root,'workspace-other');mkdirSync(otherWorkspace,{recursive:true});
+  const other=addClaimedOperation(f.store,'legacy-admin-migration-other',otherWorkspace);
+  let reopened=null;
+  try{
+    const firstHold=persistCleanupIncomplete(f.store,f.operationId);
+    const secondHold=persistCleanupIncomplete(f.store,other.operationId);
+    const firstResult=f.store.adminAbandonHeldOperation(abandonmentInput(f,firstHold));
+    const before=adminTableSnapshot(f.root);
+    assert.equal(before.rows.length,1);
+    f.store.close();
+
+    rewriteAdminTableAsLegacy(f.root);
+    const legacySnapshot=adminTableSnapshot(f.root);
+    assert.notEqual(legacySnapshot.sql,before.sql);
+    assert.deepEqual(legacySnapshot.rows,before.rows);
+    assert.equal(legacySnapshot.digest,before.digest);
+    const legacy=new DatabaseSync(path.join(f.root,'operations.sqlite3'),{readOnly:true});
+    try{
+      const indexes=legacy.prepare("PRAGMA index_list('manager_admin_abandonments')").all().filter(index=>index.unique===1)
+        .map(index=>({name:index.name,columns:legacy.prepare(`PRAGMA index_info('${index.name.replaceAll("'","''")}')`).all().map(row=>row.name)}));
+      assert.equal(indexes.some(index=>index.columns.length===1&&index.columns[0]==='event_sequence'),true);
+    }finally{legacy.close();}
+
+    const preflightStore=IsolatedAdmissionStore.open(f.root);
+    let preflightOperation;
+    try{preflightOperation=preflightStore.readOperation(other.operationId);}
+    finally{preflightStore.close();}
+    const preflightArgv=[
+      '--preflight',
+      '--data-root',f.root,'--database','operations.sqlite3','--operation-id',other.operationId,'--task-id',other.taskId,
+      '--attempt','1','--generation',String(preflightOperation.generation),'--revision',String(preflightOperation.revision),
+      '--claim-id',preflightOperation.claim_id,'--worker-identity-digest',preflightOperation.claim_worker_identity_digest,
+    ];
+    const preflightDependencies={
+      windowsBootTime:async()=>new Date(Date.parse(secondHold.at)+1).toISOString(),
+      processInventory:async()=>[],
+      probeWorkerExit:async()=>({count:1,state:'exited',reason:null}),
+      claimantScan:async()=>({clean:true,livePids:[],observedPids:[]}),
+    };
+    const beforePreflight=adminTableSnapshot(f.root);
+    if(process.platform==='win32'){
+      const preflightResult=await executeCli(preflightArgv,preflightDependencies);
+      assert.equal(preflightResult.status,'preflight_ok');
+    }else{
+      await assert.rejects(()=>executeCli(preflightArgv,preflightDependencies),/windows_required/u);
+    }
+    assert.deepEqual(adminTableSnapshot(f.root),beforePreflight,'legacy-schema preflight must remain read-only');
+
+    reopened=IsolatedAdmissionStore.open(f.root);
+    const secondInput=abandonmentInput({...f,...other,store:reopened,operationId:other.operationId},secondHold);
+    const secondResult=reopened.adminAbandonHeldOperation(secondInput);
+    const after=adminTableSnapshot(f.root);
+    const db=new DatabaseSync(path.join(f.root,'operations.sqlite3'),{readOnly:true});
+    try{
+      const adminRows=db.prepare('SELECT operation_id,event_sequence,request_digest,audit_digest FROM manager_admin_abandonments ORDER BY operation_id').all();
+      assert.equal(adminRows.length,2);
+      assert.deepEqual(after.rows.find(row=>row.operation_id===f.operationId),before.rows[0]);
+      assert.equal(secondResult.event_sequence,firstResult.event_sequence);
+      const indexes=db.prepare("PRAGMA index_list('manager_admin_abandonments')").all().filter(index=>index.unique===1)
+        .map(index=>({name:index.name,columns:db.prepare(`PRAGMA index_info('${index.name.replaceAll("'","''")}')`).all().map(row=>row.name)}));
+      assert.equal(indexes.some(index=>index.columns.length===1&&index.columns[0]==='event_sequence'),false);
+      assert.equal(indexes.some(index=>index.columns.join('|')==='operation_id|event_sequence'),false);
+      assert.equal(db.prepare('PRAGMA integrity_check').get().integrity_check,'ok');
+      assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(),[]);
+    }finally{db.close();}
+    reopened.close();
+    reopened=IsolatedAdmissionStore.open(f.root);
+    assert.equal(reopened.readOperation(f.operationId).phase,'admin_abandoned');
+    assert.equal(reopened.readOperation(other.operationId).phase,'admin_abandoned');
+  }finally{
+    try{f.store.close();}catch{}
+    try{reopened?.close();}catch{}
+  }
+});
+
+test('failure after the migrated schema write rolls back migration and lifecycle changes',()=>{
+  const f=makeClaimedStore('legacy-admin-rollback',{capacity:2});
+  const otherWorkspace=path.join(f.root,'workspace-other');mkdirSync(otherWorkspace,{recursive:true});
+  const other=addClaimedOperation(f.store,'legacy-admin-rollback-other',otherWorkspace);
+  let failing=null;
+  try{
+    const firstHold=persistCleanupIncomplete(f.store,f.operationId);
+    const secondHold=persistCleanupIncomplete(f.store,other.operationId);
+    f.store.adminAbandonHeldOperation(abandonmentInput(f,firstHold));
+    f.store.close();
+    rewriteAdminTableAsLegacy(f.root);
+    const before=adminTableSnapshot(f.root);
+
+    failing=IsolatedAdmissionStore.open(f.root,{fault:'after_event_insert'});
+    failure(()=>failing.adminAbandonHeldOperation(abandonmentInput({...f,...other,store:failing,operationId:other.operationId},secondHold)),
+      'injected_failure');
+    failing.close();
+    failing=null;
+
+    assert.deepEqual(adminTableSnapshot(f.root),before,'failed ADMIN-ABANDON must restore the legacy schema and audit rows');
+    const db=new DatabaseSync(path.join(f.root,'operations.sqlite3'),{readOnly:true});
+    try{
+      const operation=db.prepare('SELECT phase,revision FROM manager_operations WHERE operation_id=?').get(other.operationId);
+      assert.equal(operation.phase,'running');
+      assert.equal(operation.revision,secondHold.sequence);
+      assert.equal(db.prepare('SELECT COUNT(*) AS n FROM manager_admin_abandonments').get().n,1);
+      assert.equal(db.prepare('SELECT COUNT(*) AS n FROM manager_operation_events WHERE operation_id=? AND evidence_json LIKE ?')
+        .get(other.operationId,'%admin_abandoned%').n,0);
+      assert.equal(db.prepare('PRAGMA integrity_check').get().integrity_check,'ok');
+      assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(),[]);
+    }finally{db.close();}
+
+    const reopened=IsolatedAdmissionStore.open(f.root);
+    try{assert.equal(reopened.readOperation(other.operationId).phase,'running');}
+    finally{reopened.close();}
+  }finally{
+    try{failing?.close();}catch{}
+    try{f.store.close();}catch{}
+  }
+});
+
+test('unknown administrative abandonment schema fails closed',()=>{
+  const f=fixture('unknown-admin-schema');
+  try{
+    f.store.adminAbandonHeldOperation(abandonmentInput(f,f.hold));
+    f.store.close();
+    alterAdminSchema(f.root,'ALTER TABLE manager_admin_abandonments ADD COLUMN unexpected TEXT');
+    assert.throws(()=>IsolatedAdmissionStore.open(f.root),error=>error.code==='candidate_schema_mismatch');
+    const recovery=IsolatedAdmissionStore.openForRecovery(f.root);
+    try{
+      const snapshot=recovery.readRecoverySnapshot();
+      assert.equal(snapshot.root_status,'quarantined_read_only');
+      assert.ok(snapshot.root_blockers.includes('candidate_schema_mismatch'));
+    }finally{recovery.close();}
+  }finally{try{f.store.close();}catch{}}
+});
+
+test('administrative schema and compiled Store copies stay aligned',()=>{
+  const source=readFileSync(path.join(PROJECT_ROOT,'src/sqlite-candidate/wp6b2b1/admin-abandonment.sql'));
+  const bundled=readFileSync(path.join(PROJECT_ROOT,'plugins/codex-zcode-bridge/dist/admin-abandonment.sql'));
+  assert.deepEqual(bundled,source);
+  const text=source.toString('utf8');
+  assert.doesNotMatch(text,/UNIQUE\s*\(\s*operation_id\s*,\s*event_sequence\s*\)/iu);
+  const cliBundle=readFileSync(path.join(PROJECT_ROOT,'plugins/codex-zcode-bridge/dist/admin-abandon-held-operation.mjs'),'utf8');
+  assert.match(cliBundle,/new URL\("\.\/admin-abandonment\.sql", import\.meta\.url\)/u);
+  assert.match(cliBundle,/SCHEMA_VERSION = 14;/u);
+});
+
+test('compiled CLI SQLite diagnostics are bounded and sanitized',()=>{
+  assert.deepEqual(sqliteErrorDiagnostic({
+    code:'ERR_SQLITE_ERROR',
+    errcode:2067,
+    errstr:'constraint failed',
+    message:'C:\\private\\bridge.sqlite',
+  }),{sqlite_errcode:2067,sqlite_errstr:'constraint failed'});
+  assert.deepEqual(sqliteErrorDiagnostic({code:'ERR_SQLITE_ERROR',errcode:1.5,errstr:'C:\\private'}),{});
+  assert.deepEqual(sqliteErrorDiagnostic({code:'different_error',errcode:2067,errstr:'constraint failed'}),{});
 });
 
 for(const [label,column,value,expectedBlocker] of [
@@ -350,5 +590,46 @@ process.stdout.write(JSON.stringify(result));
       assert.equal(reopened.readTaskProjection(f.taskId).status,'failed');
       assert.equal(reopened.readAttempt(f.taskId,1).status,'failed');
     }finally{reopened.close();}
+  }finally{try{f.store.close();}catch{}}
+});
+
+test('the compiled operator CLI preflight validates without mutating the isolated Hold',async()=>{
+  const f=fixture('cli-preflight');
+  try{
+    const operation=f.store.readOperation(f.operationId);
+    const argv=[
+      '--preflight',
+      '--data-root',f.root,'--database','operations.sqlite3','--operation-id',f.operationId,'--task-id',f.taskId,
+      '--attempt','1','--generation',String(operation.generation),'--revision',String(operation.revision),
+      '--claim-id',operation.claim_id,'--worker-identity-digest',operation.claim_worker_identity_digest,
+    ];
+    f.store.close();
+    const before=JSON.stringify(rows(f));
+    const cliModuleUrl=pathToFileURL(path.join(PROJECT_ROOT,'plugins/codex-zcode-bridge/dist/admin-abandon-held-operation.mjs')).href;
+    const childScript=path.join(TEST_ROOT,`cli-preflight-${process.pid}.mjs`);
+    writeFileSync(childScript,`
+import { executeCli } from ${JSON.stringify(cliModuleUrl)};
+const result=await executeCli(${JSON.stringify(argv)},{
+  windowsBootTime:async()=>${JSON.stringify(new Date(Date.parse(f.hold.at)+1).toISOString())},
+  processInventory:async()=>[],
+  probeWorkerExit:async()=>({count:1,state:'exited',reason:null}),
+  claimantScan:async()=>({clean:true,livePids:[],observedPids:[]}),
+});
+process.stdout.write(JSON.stringify(result));
+`,'utf8');
+    const env={...process.env};delete env.NODE_TEST_CONTEXT;
+    if(process.platform!=='win32'){
+      await assert.rejects(execFileAsync(process.execPath,[childScript],{cwd:PROJECT_ROOT,env,windowsHide:true,maxBuffer:1_000_000}),error=>/windows_required/u.test(error.stderr));
+    }else{
+      const execution=await execFileAsync(process.execPath,[childScript],{cwd:PROJECT_ROOT,env,windowsHide:true,maxBuffer:1_000_000});
+      assert.equal(execution.stderr,'');
+      const result=JSON.parse(execution.stdout);
+      assert.equal(result.status,'preflight_ok');
+      assert.equal(result.operation_id,f.operationId);
+      assert.match(String(result.process_inventory_digest),/^[0-9a-f]{64}$/u);
+      assert.match(String(result.platform_probe_digest),/^[0-9a-f]{64}$/u);
+      assert.match(String(result.claimant_scan_digest),/^[0-9a-f]{64}$/u);
+    }
+    assert.equal(JSON.stringify(rows(f)),before,'preflight must not mutate the isolated database');
   }finally{try{f.store.close();}catch{}}
 });

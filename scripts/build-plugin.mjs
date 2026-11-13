@@ -13,6 +13,7 @@ await Promise.all([mkdir(distDir, { recursive: true }), mkdir(vendorDir, { recur
 // The bundled SQLite Store resolves its schemas relative to bridge.mjs.
 await Promise.all([
   copyFile(path.join(repoRoot, "src", "sqlite-candidate", "wp6b2b1", "schema.sql"), path.join(distDir, "schema.sql")),
+  copyFile(path.join(repoRoot, "src", "sqlite-candidate", "wp6b2b1", "runtime-events.sql"), path.join(distDir, "runtime-events.sql")),
   copyFile(
     path.join(repoRoot, "src", "sqlite-candidate", "wp6b2b1", "admin-abandonment.sql"),
     path.join(distDir, "admin-abandonment.sql"),

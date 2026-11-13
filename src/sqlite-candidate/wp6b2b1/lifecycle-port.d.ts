@@ -105,6 +105,29 @@ export interface CandidateTaskLifecycleEventsPage {
   readonly hasMore: boolean;
 }
 
+export interface CandidateRuntimeTaskEvent {
+  readonly worker_sequence: number;
+  readonly event_type: 'session_ready' | 'model_selected' | 'turn_started' | 'model_tool_call'
+    | 'tool_status' | 'model_output' | 'turn_completed' | 'turn_failed' | 'report_ready';
+  readonly at: string;
+  readonly summary: string;
+  readonly details?: Readonly<Record<string, unknown>>;
+}
+
+export interface CandidateRuntimeEventChannel {
+  readonly binding: Readonly<{
+    readonly operation_id: string;
+    readonly task_id: string;
+    readonly attempt: number;
+    readonly generation: number;
+    readonly claim_id: string;
+    readonly worker_identity_digest: string;
+    readonly process_id: number;
+    readonly start_fingerprint: string;
+  }>;
+  receiveEvent(): Promise<Readonly<{ binding: CandidateRuntimeEventChannel["binding"]; event: CandidateRuntimeTaskEvent }>>;
+}
+
 export interface CandidateTaskLifecycleSnapshot {
   readonly task: CandidateTaskPackage;
   readonly projection: Readonly<{ task_id: string; status: string; current_attempt: number; created_at: string }>;
@@ -407,6 +430,8 @@ export interface SqliteLifecyclePort {
   openInteractionChannel(child: object, operation: Readonly<Record<string, unknown>>, verifyProcessIdentity: (context: unknown) => Promise<unknown>): Promise<CandidateInteractionChannel>;
   receiveInteractionRequest(channel: CandidateInteractionChannel): Promise<Readonly<Record<string, unknown>>>;
   replyToInteractionRequest(input: CandidateInteractionReplyInput, channel: CandidateInteractionChannel): Promise<Readonly<Record<string, unknown>>>;
+  openRuntimeEventChannel(child: object, operation: Readonly<Record<string, unknown>>, verifyProcessIdentity: (context: unknown) => Promise<unknown>): Promise<CandidateRuntimeEventChannel>;
+  receiveRuntimeTaskEvent(channel: CandidateRuntimeEventChannel): Promise<Readonly<Record<string, unknown>>>;
   readInteractionRequest(taskId: string, requestId: string): Readonly<Record<string, unknown>> | null;
   readRecoverySnapshot(): CandidateRecoverySnapshot;
   recordRecoveryObservation(input: CandidateRecoveryObservationInput, evidence: Readonly<Record<string, unknown>>): unknown;

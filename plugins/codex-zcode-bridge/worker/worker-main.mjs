@@ -837,32 +837,33 @@ var init_process_probe = __esm({
   }
 });
 
-// src/sqlite-candidate/wp6b2b1/interaction-channel.mjs
-var interaction_channel_exports = {};
-__export(interaction_channel_exports, {
-  createCandidateInteractionChannel: () => createCandidateInteractionChannel,
-  createCandidateWorkerInteractionChannel: () => createCandidateWorkerInteractionChannel,
-  isCandidateInteractionAcknowledgement: () => isCandidateInteractionAcknowledgement,
-  isCandidateInteractionChannel: () => isCandidateInteractionChannel,
-  isCandidateInteractionPreparedAcknowledgement: () => isCandidateInteractionPreparedAcknowledgement
+// src/sqlite-candidate/wp6b2b1/runtime-event-channel.mjs
+var runtime_event_channel_exports = {};
+__export(runtime_event_channel_exports, {
+  createCandidateRuntimeEventChannel: () => createCandidateRuntimeEventChannel,
+  createCandidateWorkerRuntimeEventChannel: () => createCandidateWorkerRuntimeEventChannel,
+  isCandidateRuntimeEventChannel: () => isCandidateRuntimeEventChannel
 });
 import { createHash as createHash5 } from "node:crypto";
-async function createCandidateInteractionChannel(child, operation, verifyProcessIdentity) {
-  if (!child || !Number.isSafeInteger(child.pid) || !Array.isArray(child.stdio) || child.stdio.length < 10 || !operation || operation.operation_kind !== "attempt_lifecycle" || operation.phase !== "running" || !Number.isSafeInteger(operation.generation) || operation.generation < 1 || !operation.claim_id || operation.claim_generation !== operation.generation || !operation.claim_worker_identity_json || !operation.launch_identity_json || !operation.claim_worker_identity_digest || typeof verifyProcessIdentity !== "function") throw coded("interaction_channel_unavailable");
+async function createCandidateRuntimeEventChannel(child, operation, verifyProcessIdentity) {
+  if (!child || !Number.isSafeInteger(child.pid) || !Array.isArray(child.stdio) || child.stdio.length < 15 || !operation || operation.operation_kind !== "attempt_lifecycle" || operation.phase !== "running" || !Number.isSafeInteger(operation.generation) || operation.generation < 1 || !operation.claim_id || operation.claim_generation !== operation.generation || !operation.claim_worker_identity_json || !operation.launch_identity_json || !operation.claim_worker_identity_digest || typeof verifyProcessIdentity !== "function") {
+    throw coded("runtime_event_channel_unavailable");
+  }
   let worker;
   let launch;
   try {
     worker = JSON.parse(operation.claim_worker_identity_json);
     launch = JSON.parse(operation.launch_identity_json);
   } catch {
-    throw coded("interaction_channel_identity_invalid");
+    throw coded("runtime_event_channel_identity_invalid");
   }
-  if (worker.process_id !== child.pid || worker.process_id !== launch.process_id || worker.start_fingerprint !== launch.start_fingerprint || sha256(stableJson(worker)) !== operation.claim_worker_identity_digest)
-    throw coded("interaction_channel_identity_mismatch");
-  const requestStream = child.stdio[7];
-  const replyStream = child.stdio[8];
-  const ackStream = child.stdio[9];
-  if (!requestStream || typeof requestStream[Symbol.asyncIterator] !== "function" || !replyStream || typeof replyStream.write !== "function" || !ackStream || typeof ackStream[Symbol.asyncIterator] !== "function") throw coded("interaction_channel_unavailable");
+  if (worker.process_id !== child.pid || worker.process_id !== launch.process_id || worker.start_fingerprint !== launch.start_fingerprint || sha256(stableJson(worker)) !== operation.claim_worker_identity_digest) {
+    throw coded("runtime_event_channel_identity_mismatch");
+  }
+  const stream = child.stdio[14];
+  if (!stream || typeof stream[Symbol.asyncIterator] !== "function") {
+    throw coded("runtime_event_channel_unavailable");
+  }
   const binding = Object.freeze({
     operation_id: operation.operation_id,
     task_id: operation.task_id,
@@ -873,18 +874,369 @@ async function createCandidateInteractionChannel(child, operation, verifyProcess
     process_id: worker.process_id,
     start_fingerprint: worker.start_fingerprint
   });
-  const requestReader = new JsonLineReader(requestStream);
-  const ackReader = new JsonLineReader(ackStream);
+  const reader = new JsonLineReader(stream);
+  const channel = {
+    binding,
+    async receiveEvent() {
+      const frame = await reader.read();
+      const keys = ["at", "details", "event_type", "protocol", "summary", "worker_sequence"];
+      const actualKeys = Object.keys(frame).sort();
+      const expectedKeys = Object.hasOwn(frame, "details") ? keys : keys.filter((key) => key !== "details");
+      if (!validFrame(frame) || actualKeys.join("|") !== expectedKeys.join("|")) {
+        throw coded("runtime_event_frame_identity_mismatch");
+      }
+      return Object.freeze({ binding, event: Object.freeze({
+        worker_sequence: frame.worker_sequence,
+        event_type: frame.event_type,
+        at: frame.at,
+        summary: frame.summary,
+        ...frame.details === void 0 ? {} : { details: frame.details }
+      }) });
+    }
+  };
+  if (child.exitCode !== null || child.signalCode !== null) throw coded("runtime_event_worker_not_live");
+  let observed;
+  try {
+    observed = await verifyProcessIdentity({ child, expected: binding });
+  } catch {
+    throw coded("runtime_event_channel_identity_unknown");
+  }
+  if (!observed || observed.state !== "verified" || observed.process_id !== binding.process_id || observed.start_fingerprint !== binding.start_fingerprint) {
+    throw coded("runtime_event_channel_identity_mismatch");
+  }
+  CHANNELS.add(channel);
+  return Object.freeze(channel);
+}
+function isCandidateRuntimeEventChannel(value) {
+  return !!value && CHANNELS.has(value);
+}
+async function createCandidateWorkerRuntimeEventChannel({
+  writeStream,
+  now = () => (/* @__PURE__ */ new Date()).toISOString()
+} = {}) {
+  if (!writeStream || typeof writeStream.write !== "function" || typeof writeStream.end !== "function" || typeof now !== "function") throw new TypeError("runtime event write stream required");
+  let sequence = 0;
+  let queue = Promise.resolve();
+  let firstError;
+  let closed = false;
+  const send = (event) => {
+    if (closed) throw coded("runtime_event_channel_closed");
+    if (!event || Object.getPrototypeOf(event) !== Object.prototype || !EVENT_TYPES.has(event.type)) {
+      throw coded("runtime_event_type_invalid");
+    }
+    const summary = boundedText(event.summary, 8192, { allowNewlines: true });
+    if (!summary) throw coded("runtime_event_summary_invalid");
+    const details = sanitizeDetails(event.type, event.details);
+    const frame = {
+      protocol: PROTOCOL,
+      worker_sequence: ++sequence,
+      event_type: event.type,
+      at: now(),
+      summary,
+      ...details === void 0 ? {} : { details }
+    };
+    const encoded = `${JSON.stringify(frame)}
+`;
+    if (Buffer.byteLength(encoded, "utf8") > MAX_FRAME_BYTES2) throw coded("runtime_event_frame_too_large");
+    queue = queue.then(() => writeFrame(writeStream, encoded)).catch((error62) => {
+      firstError ??= error62;
+    });
+    return frame.worker_sequence;
+  };
+  const close = async () => {
+    if (closed) {
+      await queue;
+      if (firstError) throw coded("runtime_event_write_failed");
+      return;
+    }
+    closed = true;
+    await queue;
+    await endStream(writeStream);
+    if (firstError) throw coded("runtime_event_write_failed");
+  };
+  return Object.freeze({ send, close });
+}
+function validFrame(value) {
+  if (!value || Object.getPrototypeOf(value) !== Object.prototype || value.protocol !== PROTOCOL || !Number.isSafeInteger(value.worker_sequence) || value.worker_sequence < 1 || !EVENT_TYPES.has(value.event_type) || typeof value.at !== "string" || value.at.length > 64 || Number.isNaN(Date.parse(value.at)) || typeof value.summary !== "string" || Buffer.byteLength(value.summary, "utf8") < 1 || Buffer.byteLength(value.summary, "utf8") > 8192 || value.summary.includes("\0")) return false;
+  if (value.details !== void 0) {
+    if (!value.details || Object.getPrototypeOf(value.details) !== Object.prototype) return false;
+    try {
+      if (Buffer.byteLength(stableJson(value.details), "utf8") > 8192) return false;
+    } catch {
+      return false;
+    }
+    if (!validDetails(value.event_type, value.details)) return false;
+  }
+  return true;
+}
+function validDetails(type, value) {
+  const allowed = DETAIL_KEYS.get(type);
+  const entries = Object.entries(value);
+  if (!allowed || !entries.length) return false;
+  for (const [key, item] of entries) {
+    if (!allowed.has(key)) return false;
+    if (key === "usage") {
+      if (!validUsage(item)) return false;
+    } else if (!(item === null || typeof item === "string" || typeof item === "boolean" || typeof item === "number" && Number.isFinite(item) && Number.isSafeInteger(item))) {
+      return false;
+    }
+  }
+  return true;
+}
+function validUsage(value) {
+  if (!value || Object.getPrototypeOf(value) !== Object.prototype) return false;
+  const keys = Object.keys(value);
+  if (!keys.length) return false;
+  for (const key of keys) {
+    if (![
+      "inputTokens",
+      "outputTokens",
+      "totalTokens",
+      "cachedInputTokens",
+      "reasoningTokens",
+      "input_tokens",
+      "output_tokens",
+      "total_tokens",
+      "cached_input_tokens",
+      "reasoning_tokens"
+    ].includes(key)) return false;
+    const item = value[key];
+    if (typeof item !== "number" || !Number.isFinite(item) || !Number.isSafeInteger(item) || item < 0) return false;
+  }
+  return true;
+}
+function sanitizeDetails(type, value) {
+  if (value === void 0) return void 0;
+  if (!value || Object.getPrototypeOf(value) !== Object.prototype) throw coded("runtime_event_details_invalid");
+  const allowed = DETAIL_KEYS.get(type);
+  const details = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (!allowed.has(key)) continue;
+    if (key === "usage") {
+      const usage = sanitizeUsage(item);
+      if (usage !== void 0) details[key] = usage;
+    } else if (item === null || typeof item === "string" || typeof item === "boolean" || typeof item === "number" && Number.isFinite(item) && Number.isSafeInteger(item)) {
+      details[key] = item;
+    }
+  }
+  if (!Object.keys(details).length) return void 0;
+  if (Buffer.byteLength(stableJson(details), "utf8") > 8192) throw coded("runtime_event_details_too_large");
+  return details;
+}
+function sanitizeUsage(value) {
+  if (!value || Object.getPrototypeOf(value) !== Object.prototype) return void 0;
+  const usage = {};
+  for (const key of [
+    "inputTokens",
+    "outputTokens",
+    "totalTokens",
+    "cachedInputTokens",
+    "reasoningTokens",
+    "input_tokens",
+    "output_tokens",
+    "total_tokens",
+    "cached_input_tokens",
+    "reasoning_tokens"
+  ]) {
+    const item = value[key];
+    if (item === void 0) continue;
+    if (typeof item !== "number" || !Number.isFinite(item) || !Number.isSafeInteger(item) || item < 0) continue;
+    usage[key] = item;
+  }
+  return Object.keys(usage).length ? usage : void 0;
+}
+function boundedText(value, maximumBytes, { allowNewlines = false } = {}) {
+  if (typeof value !== "string") return null;
+  const normalized = allowNewlines ? value.replace(/[\u0000\u0001-\u0009\u000b\u000c\u000e-\u001f\u007f]/gu, " ") : value.replace(/[\u0000-\u001f\u007f]/gu, " ").trim();
+  if (!normalized) return null;
+  if (Buffer.byteLength(normalized, "utf8") <= maximumBytes) return normalized;
+  const bytes = Buffer.from(normalized, "utf8").subarray(0, maximumBytes);
+  let end = bytes.length;
+  while (end > 0 && (bytes[end - 1] & 192) === 128) end -= 1;
+  if (end > 0 && (bytes[end - 1] & 192) === 192) end -= 1;
+  return bytes.subarray(0, end).toString("utf8");
+}
+function writeFrame(stream, frame) {
+  return new Promise((resolve, reject) => {
+    stream.write(frame, "utf8", (error62) => error62 ? reject(error62) : resolve());
+  });
+}
+function endStream(stream) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+    stream.once("finish", finish);
+    stream.once("close", finish);
+    stream.once("error", finish);
+    try {
+      stream.end();
+    } catch {
+      finish();
+    }
+  });
+}
+function stableJson(value, depth = 0) {
+  if (depth > 24) throw coded("runtime_event_json_too_deep");
+  if (value === null || typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
+  if (typeof value === "number" && Number.isFinite(value) && Number.isSafeInteger(value)) return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    if (value.length > 256) throw coded("runtime_event_json_too_large");
+    return `[${value.map((item) => stableJson(item, depth + 1)).join(",")}]`;
+  }
+  if (value && Object.getPrototypeOf(value) === Object.prototype) {
+    const keys = Object.keys(value);
+    if (keys.length > 128 || keys.some((key) => key !== key.normalize("NFC"))) {
+      throw coded("runtime_event_json_too_large");
+    }
+    return `{${keys.sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key], depth + 1)}`).join(",")}}`;
+  }
+  throw coded("runtime_event_json_invalid");
+}
+function sha256(value) {
+  return createHash5("sha256").update(value).digest("hex");
+}
+function coded(code) {
+  return Object.assign(new Error(code), { code });
+}
+var CHANNELS, MAX_FRAME_BYTES2, PROTOCOL, EVENT_TYPES, DETAIL_KEYS, JsonLineReader;
+var init_runtime_event_channel = __esm({
+  "src/sqlite-candidate/wp6b2b1/runtime-event-channel.mjs"() {
+    "use strict";
+    CHANNELS = /* @__PURE__ */ new WeakSet();
+    MAX_FRAME_BYTES2 = 24576;
+    PROTOCOL = "bridge-sqlite-runtime-event-v1";
+    EVENT_TYPES = /* @__PURE__ */ new Set([
+      "session_ready",
+      "model_selected",
+      "turn_started",
+      "model_tool_call",
+      "tool_status",
+      "model_output",
+      "turn_completed",
+      "turn_failed",
+      "report_ready"
+    ]);
+    DETAIL_KEYS = /* @__PURE__ */ new Map([
+      ["session_ready", /* @__PURE__ */ new Set([
+        "session_id",
+        "project_path",
+        "execution_path",
+        "worktree_path",
+        "execution_mode",
+        "model_source",
+        "selected_model",
+        "reasoning_level",
+        "reasoning_level_source"
+      ])],
+      ["model_selected", /* @__PURE__ */ new Set([
+        "selected_model",
+        "model_source",
+        "provider_id",
+        "model_id",
+        "reasoning_level",
+        "reasoning_level_source"
+      ])],
+      ["turn_started", /* @__PURE__ */ new Set(["rpc_accepted", "turn_id", "event_seq"])],
+      ["model_tool_call", /* @__PURE__ */ new Set(["tool_name", "tool_call_id"])],
+      ["tool_status", /* @__PURE__ */ new Set(["tool_name", "state", "tool_call_id"])],
+      ["model_output", /* @__PURE__ */ new Set()],
+      ["turn_completed", /* @__PURE__ */ new Set([
+        "token_count",
+        "tool_call_count",
+        "event_seq",
+        "turn_id",
+        "usage"
+      ])],
+      ["turn_failed", /* @__PURE__ */ new Set(["error_code"])],
+      ["report_ready", /* @__PURE__ */ new Set(["needs_master_decision"])]
+    ]);
+    JsonLineReader = class {
+      #iterator;
+      #buffer = Buffer.alloc(0);
+      constructor(stream) {
+        this.#iterator = stream[Symbol.asyncIterator]();
+      }
+      async read() {
+        for (; ; ) {
+          const end = this.#buffer.indexOf(10);
+          if (end >= 0) {
+            const frame = this.#buffer.subarray(0, end);
+            this.#buffer = this.#buffer.subarray(end + 1);
+            if (!frame.length || frame.length > MAX_FRAME_BYTES2) throw coded("runtime_event_frame_invalid");
+            let value;
+            try {
+              value = JSON.parse(frame.toString("utf8"));
+            } catch {
+              throw coded("runtime_event_frame_invalid");
+            }
+            if (!value || Object.getPrototypeOf(value) !== Object.prototype) {
+              throw coded("runtime_event_frame_invalid");
+            }
+            return value;
+          }
+          if (this.#buffer.length > MAX_FRAME_BYTES2) throw coded("runtime_event_frame_too_large");
+          const next = await this.#iterator.next();
+          if (next.done) throw coded(this.#buffer.length ? "runtime_event_frame_truncated" : "runtime_event_channel_closed");
+          const chunk = Buffer.isBuffer(next.value) ? next.value : Buffer.from(next.value);
+          this.#buffer = Buffer.concat([this.#buffer, chunk]);
+        }
+      }
+    };
+  }
+});
+
+// src/sqlite-candidate/wp6b2b1/interaction-channel.mjs
+var interaction_channel_exports = {};
+__export(interaction_channel_exports, {
+  createCandidateInteractionChannel: () => createCandidateInteractionChannel,
+  createCandidateWorkerInteractionChannel: () => createCandidateWorkerInteractionChannel,
+  isCandidateInteractionAcknowledgement: () => isCandidateInteractionAcknowledgement,
+  isCandidateInteractionChannel: () => isCandidateInteractionChannel,
+  isCandidateInteractionPreparedAcknowledgement: () => isCandidateInteractionPreparedAcknowledgement
+});
+import { createHash as createHash6 } from "node:crypto";
+async function createCandidateInteractionChannel(child, operation, verifyProcessIdentity) {
+  if (!child || !Number.isSafeInteger(child.pid) || !Array.isArray(child.stdio) || child.stdio.length < 10 || !operation || operation.operation_kind !== "attempt_lifecycle" || operation.phase !== "running" || !Number.isSafeInteger(operation.generation) || operation.generation < 1 || !operation.claim_id || operation.claim_generation !== operation.generation || !operation.claim_worker_identity_json || !operation.launch_identity_json || !operation.claim_worker_identity_digest || typeof verifyProcessIdentity !== "function") throw coded2("interaction_channel_unavailable");
+  let worker;
+  let launch;
+  try {
+    worker = JSON.parse(operation.claim_worker_identity_json);
+    launch = JSON.parse(operation.launch_identity_json);
+  } catch {
+    throw coded2("interaction_channel_identity_invalid");
+  }
+  if (worker.process_id !== child.pid || worker.process_id !== launch.process_id || worker.start_fingerprint !== launch.start_fingerprint || sha2562(stableJson2(worker)) !== operation.claim_worker_identity_digest)
+    throw coded2("interaction_channel_identity_mismatch");
+  const requestStream = child.stdio[7];
+  const replyStream = child.stdio[8];
+  const ackStream = child.stdio[9];
+  if (!requestStream || typeof requestStream[Symbol.asyncIterator] !== "function" || !replyStream || typeof replyStream.write !== "function" || !ackStream || typeof ackStream[Symbol.asyncIterator] !== "function") throw coded2("interaction_channel_unavailable");
+  const binding = Object.freeze({
+    operation_id: operation.operation_id,
+    task_id: operation.task_id,
+    attempt: operation.attempt,
+    generation: operation.generation,
+    claim_id: operation.claim_id,
+    worker_identity_digest: operation.claim_worker_identity_digest,
+    process_id: worker.process_id,
+    start_fingerprint: worker.start_fingerprint
+  });
+  const requestReader = new JsonLineReader2(requestStream);
+  const ackReader = new JsonLineReader2(ackStream);
   let sendPending = false;
   const verifyLive = async () => {
-    if (child.exitCode !== null || child.signalCode !== null) throw coded("interaction_worker_not_live");
+    if (child.exitCode !== null || child.signalCode !== null) throw coded2("interaction_worker_not_live");
     let observed;
     try {
       observed = await verifyProcessIdentity({ child, expected: binding });
     } catch {
-      throw coded("interaction_channel_identity_unknown");
+      throw coded2("interaction_channel_identity_unknown");
     }
-    if (!observed || observed.state !== "verified" || observed.process_id !== binding.process_id || observed.start_fingerprint !== binding.start_fingerprint) throw coded("interaction_channel_identity_mismatch");
+    if (!observed || observed.state !== "verified" || observed.process_id !== binding.process_id || observed.start_fingerprint !== binding.start_fingerprint) throw coded2("interaction_channel_identity_mismatch");
   };
   const channel = {
     binding,
@@ -892,15 +1244,15 @@ async function createCandidateInteractionChannel(child, operation, verifyProcess
       await verifyLive();
       const frame = await requestReader.read();
       const expected = ["attempt", "claim_id", "generation", "operation_id", "process_id", "protocol", "request", "start_fingerprint", "task_id", "worker_identity_digest"];
-      if (Object.keys(frame).sort().join("|") !== expected.join("|") || frame.protocol !== "bridge-sqlite-interaction-request-v1" || !sameBinding(frame, binding) || !validRequest(frame.request)) throw coded("interaction_frame_identity_mismatch");
+      if (Object.keys(frame).sort().join("|") !== expected.join("|") || frame.protocol !== "bridge-sqlite-interaction-request-v1" || !sameBinding(frame, binding) || !validRequest(frame.request)) throw coded2("interaction_frame_identity_mismatch");
       return Object.freeze({ binding, request: Object.freeze(frame.request) });
     },
     async prepareReply(reply) {
-      if (sendPending) throw coded("interaction_channel_busy");
+      if (sendPending) throw coded2("interaction_channel_busy");
       sendPending = true;
       try {
         await verifyLive();
-        if (!sameBinding(reply, binding) || !validId2(reply.request_id) || !validId2(reply.reply_id) || !Number.isSafeInteger(reply.revision) || reply.revision < 1 || !/^[0-9a-f]{64}$/u.test(reply.answer_digest) || !reply.answer || Object.getPrototypeOf(reply.answer) !== Object.prototype) throw coded("interaction_reply_binding_mismatch");
+        if (!sameBinding(reply, binding) || !validId2(reply.request_id) || !validId2(reply.reply_id) || !Number.isSafeInteger(reply.revision) || reply.revision < 1 || !/^[0-9a-f]{64}$/u.test(reply.answer_digest) || !reply.answer || Object.getPrototypeOf(reply.answer) !== Object.prototype) throw coded2("interaction_reply_binding_mismatch");
         const frame = {
           protocol: "bridge-sqlite-interaction-prepare-v1",
           ...binding,
@@ -910,7 +1262,7 @@ async function createCandidateInteractionChannel(child, operation, verifyProcess
           answer: reply.answer,
           answer_digest: reply.answer_digest
         };
-        await writeFrame(replyStream, frame);
+        await writeFrame2(replyStream, frame);
         await verifyLive();
         const ack = await ackReader.read(8192);
         validateAck(ack, "prepared", binding, reply);
@@ -920,7 +1272,7 @@ async function createCandidateInteractionChannel(child, operation, verifyProcess
           reply_id: reply.reply_id,
           revision: reply.revision,
           answer_digest: reply.answer_digest,
-          ack_digest: sha256(stableJson(ack))
+          ack_digest: sha2562(stableJson2(ack))
         });
         PREPARED_ACKNOWLEDGEMENTS.add(proof);
         return proof;
@@ -929,8 +1281,8 @@ async function createCandidateInteractionChannel(child, operation, verifyProcess
       }
     },
     async commitReply(reply, commit) {
-      if (sendPending) throw coded("interaction_channel_busy");
-      if (!commit || commit.state !== "committed" || !sameBinding(commit, binding) || commit.request_id !== reply.request_id || commit.reply_id !== reply.reply_id || commit.answer_digest !== reply.answer_digest || !Number.isSafeInteger(commit.revision) || !/^[0-9a-f]{64}$/u.test(commit.prepared_digest) || !/^[0-9a-f]{64}$/u.test(commit.commit_digest)) throw coded("interaction_commit_binding_mismatch");
+      if (sendPending) throw coded2("interaction_channel_busy");
+      if (!commit || commit.state !== "committed" || !sameBinding(commit, binding) || commit.request_id !== reply.request_id || commit.reply_id !== reply.reply_id || commit.answer_digest !== reply.answer_digest || !Number.isSafeInteger(commit.revision) || !/^[0-9a-f]{64}$/u.test(commit.prepared_digest) || !/^[0-9a-f]{64}$/u.test(commit.commit_digest)) throw coded2("interaction_commit_binding_mismatch");
       sendPending = true;
       try {
         await verifyLive();
@@ -944,7 +1296,7 @@ async function createCandidateInteractionChannel(child, operation, verifyProcess
           prepared_digest: commit.prepared_digest,
           commit_digest: commit.commit_digest
         };
-        await writeFrame(replyStream, frame);
+        await writeFrame2(replyStream, frame);
         const ack = await ackReader.read(8192);
         validateAck(ack, "accepted", binding, { ...reply, revision: commit.revision });
         const proof = Object.freeze({
@@ -954,7 +1306,7 @@ async function createCandidateInteractionChannel(child, operation, verifyProcess
           revision: commit.revision,
           answer_digest: reply.answer_digest,
           commit_digest: commit.commit_digest,
-          ack_digest: sha256(stableJson(ack))
+          ack_digest: sha2562(stableJson2(ack))
         });
         ACKNOWLEDGEMENTS.add(proof);
         return proof;
@@ -964,8 +1316,8 @@ async function createCandidateInteractionChannel(child, operation, verifyProcess
     }
   };
   await verifyLive();
-  await writeFrame(replyStream, { protocol: "bridge-sqlite-interaction-bind-v1", ...binding });
-  CHANNELS.add(channel);
+  await writeFrame2(replyStream, { protocol: "bridge-sqlite-interaction-bind-v1", ...binding });
+  CHANNELS2.add(channel);
   return Object.freeze(channel);
 }
 async function createCandidateWorkerInteractionChannel({
@@ -980,21 +1332,21 @@ async function createCandidateWorkerInteractionChannel({
     })
   )
 }) {
-  if (!Number.isSafeInteger(processId) || processId < 1 || typeof verifySelfIdentity !== "function" || !requestStream || typeof requestStream.write !== "function" || !replyStream || typeof replyStream[Symbol.asyncIterator] !== "function" || !ackStream || typeof ackStream.write !== "function") throw coded("interaction_channel_unavailable");
-  const replyReader = new JsonLineReader(replyStream);
+  if (!Number.isSafeInteger(processId) || processId < 1 || typeof verifySelfIdentity !== "function" || !requestStream || typeof requestStream.write !== "function" || !replyStream || typeof replyStream[Symbol.asyncIterator] !== "function" || !ackStream || typeof ackStream.write !== "function") throw coded2("interaction_channel_unavailable");
+  const replyReader = new JsonLineReader2(replyStream);
   onStage("worker bind read");
   const bind = await replyReader.read(8192);
   onStage("worker bind received");
   const bindKeys = ["attempt", "claim_id", "generation", "operation_id", "process_id", "protocol", "start_fingerprint", "task_id", "worker_identity_digest"];
-  if (Object.keys(bind).sort().join("|") !== bindKeys.join("|") || bind.protocol !== "bridge-sqlite-interaction-bind-v1" || !validBinding(bind) || bind.process_id !== processId) throw coded("interaction_bind_invalid");
+  if (Object.keys(bind).sort().join("|") !== bindKeys.join("|") || bind.protocol !== "bridge-sqlite-interaction-bind-v1" || !validBinding(bind) || bind.process_id !== processId) throw coded2("interaction_bind_invalid");
   let observed;
   onStage("worker identity verification");
   try {
     observed = await verifySelfIdentity({ processId, expected: bind });
   } catch {
-    throw coded("interaction_channel_identity_unknown");
+    throw coded2("interaction_channel_identity_unknown");
   }
-  if (!observed || observed.state !== "verified" || observed.process_id !== processId || observed.start_fingerprint !== bind.start_fingerprint) throw coded("interaction_bind_identity_mismatch");
+  if (!observed || observed.state !== "verified" || observed.process_id !== processId || observed.start_fingerprint !== bind.start_fingerprint) throw coded2("interaction_bind_identity_mismatch");
   onStage("worker identity verified");
   let pendingReply = null;
   let closed = false;
@@ -1012,17 +1364,17 @@ async function createCandidateWorkerInteractionChannel({
     },
     binding: Object.freeze({ ...bind, protocol: void 0 }),
     async sendRequest(request) {
-      if (closed) throw coded("interaction_channel_closed");
-      if (pendingReply) throw coded("interaction_channel_busy");
-      if (!validRequest(request)) throw coded("interaction_frame_invalid");
+      if (closed) throw coded2("interaction_channel_closed");
+      if (pendingReply) throw coded2("interaction_channel_busy");
+      if (!validRequest(request)) throw coded2("interaction_frame_invalid");
       onStage("worker request write");
-      await writeFrame(requestStream, { ...bindingWithoutProtocol(bind), protocol: "bridge-sqlite-interaction-request-v1", request });
+      await writeFrame2(requestStream, { ...bindingWithoutProtocol(bind), protocol: "bridge-sqlite-interaction-request-v1", request });
       onStage("worker request written");
       onStage("worker prepare reply read");
       const frame = await replyReader.read();
       onStage("worker prepare reply received");
       const keys = ["answer", "answer_digest", "attempt", "claim_id", "generation", "operation_id", "process_id", "protocol", "reply_id", "request_id", "revision", "start_fingerprint", "task_id", "worker_identity_digest"];
-      if (Object.keys(frame).sort().join("|") !== keys.join("|") || frame.protocol !== "bridge-sqlite-interaction-prepare-v1" || !sameBinding(frame, bind) || frame.request_id !== request.request_id || !validId2(frame.reply_id) || !Number.isSafeInteger(frame.revision) || frame.revision < 1 || !/^[0-9a-f]{64}$/u.test(frame.answer_digest) || !validPersistedInteractionAnswer(request, frame.answer) || interactionReplyDigest(bind, request.request_id, frame.answer) !== frame.answer_digest) throw coded("interaction_prepare_invalid");
+      if (Object.keys(frame).sort().join("|") !== keys.join("|") || frame.protocol !== "bridge-sqlite-interaction-prepare-v1" || !sameBinding(frame, bind) || frame.request_id !== request.request_id || !validId2(frame.reply_id) || !Number.isSafeInteger(frame.revision) || frame.revision < 1 || !/^[0-9a-f]{64}$/u.test(frame.answer_digest) || !validPersistedInteractionAnswer(request, frame.answer) || interactionReplyDigest(bind, request.request_id, frame.answer) !== frame.answer_digest) throw coded2("interaction_prepare_invalid");
       const preparedAck = {
         protocol: "bridge-sqlite-interaction-ack-v1",
         state: "prepared",
@@ -1032,19 +1384,19 @@ async function createCandidateWorkerInteractionChannel({
         revision: frame.revision,
         answer_digest: frame.answer_digest
       };
-      await writeFrame(ackStream, preparedAck);
+      await writeFrame2(ackStream, preparedAck);
       pendingReply = { request, frame, preparedAck };
       return Object.freeze({ state: "prepared", request_id: request.request_id, reply_id: frame.reply_id });
     },
     async acceptCommittedReply() {
-      if (closed) throw coded("interaction_channel_closed");
-      if (!pendingReply) throw coded("interaction_reply_not_prepared");
+      if (closed) throw coded2("interaction_channel_closed");
+      if (!pendingReply) throw coded2("interaction_reply_not_prepared");
       onStage("worker committed reply frame read");
       const { request, frame, preparedAck } = pendingReply;
       const commit = await replyReader.read(8192);
       onStage("worker committed reply frame received");
       const commitKeys = ["answer_digest", "attempt", "claim_id", "commit_digest", "generation", "operation_id", "prepared_digest", "process_id", "protocol", "reply_id", "request_id", "revision", "start_fingerprint", "task_id", "worker_identity_digest"];
-      if (Object.keys(commit).sort().join("|") !== commitKeys.join("|") || commit.protocol !== "bridge-sqlite-interaction-commit-v1" || !sameBinding(commit, bind) || commit.request_id !== request.request_id || commit.reply_id !== frame.reply_id || commit.answer_digest !== frame.answer_digest || commit.revision <= frame.revision || commit.prepared_digest !== sha256(stableJson(preparedAck)) || commit.commit_digest !== interactionCommitDigest(bind, commit)) throw coded("interaction_commit_invalid");
+      if (Object.keys(commit).sort().join("|") !== commitKeys.join("|") || commit.protocol !== "bridge-sqlite-interaction-commit-v1" || !sameBinding(commit, bind) || commit.request_id !== request.request_id || commit.reply_id !== frame.reply_id || commit.answer_digest !== frame.answer_digest || commit.revision <= frame.revision || commit.prepared_digest !== sha2562(stableJson2(preparedAck)) || commit.commit_digest !== interactionCommitDigest(bind, commit)) throw coded2("interaction_commit_invalid");
       const ack = {
         protocol: "bridge-sqlite-interaction-ack-v1",
         state: "accepted",
@@ -1055,7 +1407,7 @@ async function createCandidateWorkerInteractionChannel({
         answer_digest: frame.answer_digest
       };
       onStage("worker accepted acknowledgement write start");
-      await writeFrame(ackStream, ack);
+      await writeFrame2(ackStream, ack);
       onStage("worker accepted acknowledgement write complete");
       pendingReply = null;
       return Object.freeze({ answer: frame.answer, reply_id: frame.reply_id, answer_digest: frame.answer_digest });
@@ -1070,12 +1422,12 @@ function isCandidateInteractionAcknowledgement(value) {
   return !!value && ACKNOWLEDGEMENTS.has(value);
 }
 function isCandidateInteractionChannel(value) {
-  return !!value && CHANNELS.has(value);
+  return !!value && CHANNELS2.has(value);
 }
-async function writeFrame(stream, frame) {
-  const bytes = Buffer.from(`${stableJson(frame)}
+async function writeFrame2(stream, frame) {
+  const bytes = Buffer.from(`${stableJson2(frame)}
 `, "utf8");
-  if (bytes.length > MAX_FRAME_BYTES2) throw coded("interaction_frame_too_large");
+  if (bytes.length > MAX_FRAME_BYTES3) throw coded2("interaction_frame_too_large");
   await new Promise((resolve, reject) => {
     try {
       stream.write(bytes, (error62) => error62 ? reject(error62) : resolve());
@@ -1087,7 +1439,7 @@ async function writeFrame(stream, frame) {
 function validateAck(ack, state, binding, reply) {
   const keys = ["answer_digest", "attempt", "claim_id", "generation", "operation_id", "process_id", "protocol", "reply_id", "request_id", "revision", "start_fingerprint", "state", "task_id", "worker_identity_digest"];
   if (Object.keys(ack).sort().join("|") !== keys.join("|") || ack.protocol !== "bridge-sqlite-interaction-ack-v1" || ack.state !== state || !sameBinding(ack, binding) || ack.request_id !== reply.request_id || ack.reply_id !== reply.reply_id || ack.revision !== reply.revision || ack.answer_digest !== reply.answer_digest)
-    throw coded("interaction_ack_mismatch");
+    throw coded2("interaction_ack_mismatch");
 }
 function validBinding(value) {
   return value.protocol === "bridge-sqlite-interaction-bind-v1" && validId2(value.operation_id) && validId2(value.task_id) && Number.isSafeInteger(value.attempt) && value.attempt > 0 && Number.isSafeInteger(value.generation) && value.generation > 0 && validId2(value.claim_id) && /^[0-9a-f]{64}$/u.test(value.worker_identity_digest) && Number.isSafeInteger(value.process_id) && value.process_id > 0 && typeof value.start_fingerprint === "string" && !!value.start_fingerprint;
@@ -1097,7 +1449,7 @@ function bindingWithoutProtocol(value) {
   return binding;
 }
 function interactionReplyDigest(binding, requestId, answer) {
-  return sha256(stableJson({
+  return sha2562(stableJson2({
     interaction_reply_contract_version: 1,
     operation_id: binding.operation_id,
     task_id: binding.task_id,
@@ -1110,7 +1462,7 @@ function interactionReplyDigest(binding, requestId, answer) {
   }));
 }
 function interactionCommitDigest(binding, commit) {
-  return sha256(stableJson({
+  return sha2562(stableJson2({
     interaction_commit_contract_version: 1,
     operation_id: binding.operation_id,
     task_id: binding.task_id,
@@ -1140,7 +1492,7 @@ function validPersistedInteractionAnswer(request, answer) {
   const raw = Array.isArray(request.params.questions) ? request.params.questions : Array.isArray(nested.questions) ? nested.questions : [];
   const questions = raw.filter((question) => question && Object.getPrototypeOf(question) === Object.prototype && typeof question.question === "string").map((question) => question.question);
   const entries = Object.entries(answer.content.answers);
-  return entries.length > 0 && entries.every(([key, value]) => questions.includes(key) && typeof value === "string" && !!value.trim() && value.length <= 4e3) && Buffer.byteLength(stableJson(answer.content.answers), "utf8") <= 16e3;
+  return entries.length > 0 && entries.every(([key, value]) => questions.includes(key) && typeof value === "string" && !!value.trim() && value.length <= 4e3) && Buffer.byteLength(stableJson2(answer.content.answers), "utf8") <= 16e3;
 }
 function sameBinding(value, binding) {
   return value.operation_id === binding.operation_id && value.task_id === binding.task_id && value.attempt === binding.attempt && value.generation === binding.generation && value.claim_id === binding.claim_id && value.worker_identity_digest === binding.worker_identity_digest && value.process_id === binding.process_id && value.start_fingerprint === binding.start_fingerprint;
@@ -1148,7 +1500,7 @@ function sameBinding(value, binding) {
 function validRequest(value) {
   if (!value || Object.getPrototypeOf(value) !== Object.prototype || Object.keys(value).sort().join("|") !== "method|params|request_id" || !validId2(value.request_id) || value.request_id.length > 512 || !["interaction/requestPermission", "interaction/requestUserInput"].includes(value.method) || !value.params || Object.getPrototypeOf(value.params) !== Object.prototype) return false;
   try {
-    return Buffer.byteLength(stableJson(value), "utf8") <= MAX_REQUEST_BYTES;
+    return Buffer.byteLength(stableJson2(value), "utf8") <= MAX_REQUEST_BYTES;
   } catch {
     return false;
   }
@@ -1156,25 +1508,25 @@ function validRequest(value) {
 function validId2(value) {
   return typeof value === "string" && value.length > 0 && value.length <= 512 && !/[\x00-\x1f]/u.test(value);
 }
-function stableJson(value, depth = 0) {
-  if (depth > 32) throw coded("interaction_json_too_deep");
+function stableJson2(value, depth = 0) {
+  if (depth > 32) throw coded2("interaction_json_too_deep");
   if (value === null || typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
   if (typeof value === "number" && Number.isFinite(value)) return JSON.stringify(value);
   if (Array.isArray(value)) {
-    if (value.length > 256) throw coded("interaction_json_too_large");
-    return `[${value.map((item) => stableJson(item, depth + 1)).join(",")}]`;
+    if (value.length > 256) throw coded2("interaction_json_too_large");
+    return `[${value.map((item) => stableJson2(item, depth + 1)).join(",")}]`;
   }
   if (value && Object.getPrototypeOf(value) === Object.prototype) {
     const keys = Object.keys(value);
-    if (keys.length > 256 || keys.some((key) => key !== key.normalize("NFC"))) throw coded("interaction_json_invalid");
-    return `{${keys.sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key], depth + 1)}`).join(",")}}`;
+    if (keys.length > 256 || keys.some((key) => key !== key.normalize("NFC"))) throw coded2("interaction_json_invalid");
+    return `{${keys.sort().map((key) => `${JSON.stringify(key)}:${stableJson2(value[key], depth + 1)}`).join(",")}}`;
   }
-  throw coded("interaction_json_invalid");
+  throw coded2("interaction_json_invalid");
 }
-function sha256(value) {
-  return createHash5("sha256").update(value).digest("hex");
+function sha2562(value) {
+  return createHash6("sha256").update(value).digest("hex");
 }
-function coded(code) {
+function coded2(code) {
   return Object.assign(new Error(code), { code });
 }
 function closeWritable(stream) {
@@ -1193,40 +1545,40 @@ async function closeReadable(stream) {
   else if (!stream.destroyed) stream.destroy();
   await closed;
 }
-var CHANNELS, ACKNOWLEDGEMENTS, PREPARED_ACKNOWLEDGEMENTS, MAX_REQUEST_BYTES, MAX_FRAME_BYTES2, JsonLineReader;
+var CHANNELS2, ACKNOWLEDGEMENTS, PREPARED_ACKNOWLEDGEMENTS, MAX_REQUEST_BYTES, MAX_FRAME_BYTES3, JsonLineReader2;
 var init_interaction_channel = __esm({
   "src/sqlite-candidate/wp6b2b1/interaction-channel.mjs"() {
     "use strict";
-    CHANNELS = /* @__PURE__ */ new WeakSet();
+    CHANNELS2 = /* @__PURE__ */ new WeakSet();
     ACKNOWLEDGEMENTS = /* @__PURE__ */ new WeakSet();
     PREPARED_ACKNOWLEDGEMENTS = /* @__PURE__ */ new WeakSet();
     MAX_REQUEST_BYTES = 1048576;
-    MAX_FRAME_BYTES2 = MAX_REQUEST_BYTES + 8192;
-    JsonLineReader = class {
+    MAX_FRAME_BYTES3 = MAX_REQUEST_BYTES + 8192;
+    JsonLineReader2 = class {
       #iterator;
       #buffer = Buffer.alloc(0);
       constructor(stream) {
         this.#iterator = stream[Symbol.asyncIterator]();
       }
-      async read(maximum2 = MAX_FRAME_BYTES2) {
+      async read(maximum2 = MAX_FRAME_BYTES3) {
         for (; ; ) {
           const end = this.#buffer.indexOf(10);
           if (end >= 0) {
             const frame = this.#buffer.subarray(0, end);
             this.#buffer = this.#buffer.subarray(end + 1);
-            if (!frame.length || frame.length > maximum2) throw coded("interaction_frame_invalid");
+            if (!frame.length || frame.length > maximum2) throw coded2("interaction_frame_invalid");
             let value;
             try {
               value = JSON.parse(frame.toString("utf8"));
             } catch {
-              throw coded("interaction_frame_invalid");
+              throw coded2("interaction_frame_invalid");
             }
-            if (!value || typeof value !== "object" || Array.isArray(value)) throw coded("interaction_frame_invalid");
+            if (!value || typeof value !== "object" || Array.isArray(value)) throw coded2("interaction_frame_invalid");
             return value;
           }
-          if (this.#buffer.length > maximum2) throw coded("interaction_frame_too_large");
+          if (this.#buffer.length > maximum2) throw coded2("interaction_frame_too_large");
           const next = await this.#iterator.next();
-          if (next.done) throw coded(this.#buffer.length ? "interaction_frame_truncated" : "interaction_channel_closed");
+          if (next.done) throw coded2(this.#buffer.length ? "interaction_frame_truncated" : "interaction_channel_closed");
           const chunk = Buffer.isBuffer(next.value) ? next.value : Buffer.from(next.value);
           this.#buffer = Buffer.concat([this.#buffer, chunk]);
         }
@@ -25369,7 +25721,7 @@ __export(zcode_app_server_adapter_exports, {
 import { spawn as spawn3 } from "node:child_process";
 import { homedir as homedir3 } from "node:os";
 import path8 from "node:path";
-import { createHash as createHash6, randomUUID } from "node:crypto";
+import { createHash as createHash7, randomUUID } from "node:crypto";
 function publicUsage(value) {
   if (!isRecord4(value)) return null;
   const result = {};
@@ -25584,7 +25936,7 @@ function stableSerialize(value) {
   }
   return JSON.stringify(value) ?? "undefined";
 }
-var FACTS_CANDIDATE, PROVIDER_RETRY_LIMIT, MAX_PROVIDER_RETRY_AFTER_MS, RPC_TIMEOUT_MS, MAX_CAPTURE_CHARS, MAX_FRAME_BYTES3, ZCodeAppServerAdapter;
+var FACTS_CANDIDATE, PROVIDER_RETRY_LIMIT, MAX_PROVIDER_RETRY_AFTER_MS, RPC_TIMEOUT_MS, MAX_CAPTURE_CHARS, MAX_FRAME_BYTES4, ZCodeAppServerAdapter;
 var init_zcode_app_server_adapter = __esm({
   "src/adapters/zcode-app-server-adapter.ts"() {
     "use strict";
@@ -25611,7 +25963,7 @@ var init_zcode_app_server_adapter = __esm({
     MAX_PROVIDER_RETRY_AFTER_MS = 6e4;
     RPC_TIMEOUT_MS = 3e4;
     MAX_CAPTURE_CHARS = 2e6;
-    MAX_FRAME_BYTES3 = 16 * 1024 * 1024;
+    MAX_FRAME_BYTES4 = 16 * 1024 * 1024;
     ZCodeAppServerAdapter = class {
       #resolveStartPlanRuntimeAuth;
       #resolveProviderRuntimeAuth;
@@ -26479,7 +26831,7 @@ var init_zcode_app_server_adapter = __esm({
           const cleanupTreeScan = officialTreeScan ?? (scan?.clean && cleanupVerified && scanRootPid && scanRootFingerprint ? {
             rootPid: scanRootPid,
             rootFingerprint: scanRootFingerprint,
-            evidenceDigest: createHash6("sha256").update(JSON.stringify({
+            evidenceDigest: createHash7("sha256").update(JSON.stringify({
               rootPid: scanRootPid,
               rootFingerprint: scanRootFingerprint,
               memberPids: [...scan.memberPids].sort((left, right) => left - right)
@@ -26719,7 +27071,7 @@ var init_zcode_app_server_adapter = __esm({
         let protocolFatal = null;
         const failProtocol = (code, frameBytes, detail) => {
           if (protocolFatal) return;
-          const message = code === "frame_over_limit" ? `ZCode app-server protocol frame exceeded the 16 MiB UTF-8 limit (observed ${frameBytes} bytes, limit ${MAX_FRAME_BYTES3} bytes)` : `ZCode app-server protocol stream delivered an invalid JSON frame (${frameBytes} bytes)${detail ? `: ${detail}` : ""}`;
+          const message = code === "frame_over_limit" ? `ZCode app-server protocol frame exceeded the 16 MiB UTF-8 limit (observed ${frameBytes} bytes, limit ${MAX_FRAME_BYTES4} bytes)` : `ZCode app-server protocol stream delivered an invalid JSON frame (${frameBytes} bytes)${detail ? `: ${detail}` : ""}`;
           protocolFatal = withFactsCandidate(new Error(message), { kind: "protocol" });
           stdoutBuffer = "";
           for (const call of pending.values()) {
@@ -26730,7 +27082,7 @@ var init_zcode_app_server_adapter = __esm({
           entry.onEvent({
             type: "protocol_error",
             summary: message,
-            details: { error_code: code, frame_bytes: frameBytes, limit_bytes: MAX_FRAME_BYTES3 }
+            details: { error_code: code, frame_bytes: frameBytes, limit_bytes: MAX_FRAME_BYTES4 }
           });
           entry.rejectTurn(protocolFatal);
         };
@@ -26754,7 +27106,7 @@ var init_zcode_app_server_adapter = __esm({
             const rawLine = stdoutBuffer.slice(0, newline);
             stdoutBuffer = stdoutBuffer.slice(newline + 1);
             const frameBytes = Buffer.byteLength(rawLine, "utf8");
-            if (frameBytes > MAX_FRAME_BYTES3) {
+            if (frameBytes > MAX_FRAME_BYTES4) {
               failProtocol("frame_over_limit", frameBytes);
               return;
             }
@@ -26783,7 +27135,7 @@ var init_zcode_app_server_adapter = __esm({
           }
           if (!protocolFatal) {
             const bufferedBytes = Buffer.byteLength(stdoutBuffer, "utf8");
-            if (bufferedBytes > MAX_FRAME_BYTES3) failProtocol("frame_over_limit", bufferedBytes);
+            if (bufferedBytes > MAX_FRAME_BYTES4) failProtocol("frame_over_limit", bufferedBytes);
           }
         });
         child.stderr.on("data", (chunk) => {
@@ -27758,7 +28110,7 @@ __export(official_host_adapter_exports, {
   loadOfficialHostProviderRuntimeAuthFactory: () => loadOfficialHostProviderRuntimeAuthFactory,
   verifyOfficialHostAssets: () => verifyOfficialHostAssets
 });
-import { createHash as createHash7 } from "node:crypto";
+import { createHash as createHash8 } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { lstat, realpath } from "node:fs/promises";
 import path9 from "node:path";
@@ -27896,7 +28248,7 @@ function createOfficialHostClientFactory(input2) {
                 recordedTreeScan = {
                   rootPid: root.pid,
                   rootFingerprint: root.fingerprint,
-                  evidenceDigest: createHash7("sha256").update(JSON.stringify({
+                  evidenceDigest: createHash8("sha256").update(JSON.stringify({
                     rootPid: root.pid,
                     rootFingerprint: root.fingerprint,
                     memberPids
@@ -28048,8 +28400,8 @@ async function verifyOfficialHostAssets(workerModuleUrl = import.meta.url) {
       const candidateReal = await realpath(candidate);
       if (!isPathInside(rootReal, candidateReal)) throw new Error("resolved outside the shipped asset root");
       if (candidateStat.size !== definition.bytes) throw new Error("byte length mismatch");
-      const sha2562 = await sha256File(candidateReal);
-      if (sha2562.toUpperCase() !== definition.sha256) throw new Error("SHA-256 mismatch");
+      const sha2563 = await sha256File(candidateReal);
+      if (sha2563.toUpperCase() !== definition.sha256) throw new Error("SHA-256 mismatch");
       verified.set(name, candidateReal);
     } catch (error62) {
       throw new BridgeError("provider_config_invalid", "A shipped Official Host asset failed presence or integrity validation.", {
@@ -28057,7 +28409,7 @@ async function verifyOfficialHostAssets(workerModuleUrl = import.meta.url) {
       });
     }
   }
-  const manifestDigest = createHash7("sha256").update(JSON.stringify(
+  const manifestDigest = createHash8("sha256").update(JSON.stringify(
     Object.entries(OFFICIAL_HOST_ASSETS).sort(([left], [right]) => left.localeCompare(right)).map(([name, definition]) => ({
       name,
       relativePath: definition.relativePath,
@@ -28121,7 +28473,7 @@ function isPathInside(root, candidate) {
   return relative !== "" && !relative.startsWith(`..${path9.sep}`) && relative !== ".." && !path9.isAbsolute(relative);
 }
 async function sha256File(filePath) {
-  const hash2 = createHash7("sha256");
+  const hash2 = createHash8("sha256");
   await new Promise((resolve, reject) => {
     const stream = createReadStream(filePath);
     stream.on("data", (chunk) => hash2.update(chunk));
@@ -28306,6 +28658,128 @@ function truncate(text, maxChars) {
 var init_normalize = __esm({
   "src/manager/normalize.ts"() {
     "use strict";
+  }
+});
+
+// src/usage/normalize.ts
+var normalize_exports2 = {};
+__export(normalize_exports2, {
+  addNonOverlappingUsage: () => addNonOverlappingUsage,
+  normalizeUsage: () => normalizeUsage,
+  phaseDuration: () => phaseDuration
+});
+function acceptNumber(value) {
+  if (value === void 0 || value === null) return { value: null, conflict: null };
+  if (typeof value !== "number") return { value: null, conflict: "non_numeric_rejected" };
+  if (Number.isNaN(value)) return { value: null, conflict: "nan_rejected" };
+  if (!Number.isFinite(value)) return { value: null, conflict: "non_finite_rejected" };
+  if (!Number.isSafeInteger(value)) return { value: null, conflict: "unsafe_integer_rejected" };
+  if (value < 0) return { value: null, conflict: "negative_rejected" };
+  return { value, conflict: null };
+}
+function normalizeUsage(raw, options = {}) {
+  if (raw === null || raw === void 0) return null;
+  if (typeof raw !== "object" || Array.isArray(raw)) return null;
+  const record3 = raw;
+  const conflicts = /* @__PURE__ */ new Set();
+  const result = {
+    source: null,
+    scope: null,
+    observed_at: null,
+    finality: "reported",
+    input_tokens: null,
+    output_tokens: null,
+    total_tokens: null,
+    cached_input_tokens: null,
+    reasoning_tokens: null,
+    conflicts: [],
+    dropped_unknown_keys: 0
+  };
+  let knownKeys = 0;
+  for (const [canonical2, alias] of KNOWN_NUMERIC_FIELDS) {
+    const snake = record3[canonical2];
+    const camel = record3[alias];
+    const hasSnake = snake !== void 0;
+    const hasCamel = camel !== void 0;
+    if (!hasSnake && !hasCamel) continue;
+    knownKeys += 1;
+    if (hasSnake && hasCamel && snake !== camel) conflicts.add("duplicate_synonyms");
+    const accepted = acceptNumber(hasSnake ? snake : camel);
+    if (accepted.conflict) {
+      conflicts.add(accepted.conflict);
+      continue;
+    }
+    result[canonical2] = accepted.value;
+  }
+  for (const key of Object.keys(record3)) {
+    const known = KNOWN_NUMERIC_FIELDS.some(([canonical2, alias]) => key === canonical2 || key === alias);
+    const source = SOURCE_FIELDS.some((candidate) => key === candidate);
+    if (!known && !source) result.dropped_unknown_keys += 1;
+  }
+  for (const sourceField of SOURCE_FIELDS) {
+    const value = record3[sourceField];
+    if (typeof value === "string" && value.trim()) {
+      result.source = options.source ?? value.trim();
+      break;
+    }
+  }
+  if (result.source === null) result.source = options.source ?? null;
+  result.scope = options.scope ?? null;
+  result.observed_at = options.observedAt ?? null;
+  const { input_tokens: input2, output_tokens: output2, total_tokens: total } = result;
+  if (total !== null && input2 !== null && output2 !== null && total !== input2 + output2) {
+    conflicts.add("total_mismatch");
+  }
+  if (options.source?.includes("session_delta")) result.finality = "derived";
+  if (conflicts.size > 0) result.finality = result.finality === "derived" ? "derived" : "partial";
+  result.conflicts = [...conflicts];
+  if (knownKeys === 0 && result.dropped_unknown_keys === 0) return null;
+  return result;
+}
+function addNonOverlappingUsage(a, b, source) {
+  if (!a && !b) return null;
+  const conflicts = /* @__PURE__ */ new Set([...a?.conflicts ?? [], ...b?.conflicts ?? []]);
+  const add = (x, y) => x === null || y === null ? null : x + y;
+  return {
+    source,
+    scope: null,
+    observed_at: null,
+    finality: a?.finality === "derived" || b?.finality === "derived" ? "derived" : "partial",
+    input_tokens: add(a?.input_tokens ?? null, b?.input_tokens ?? null),
+    output_tokens: add(a?.output_tokens ?? null, b?.output_tokens ?? null),
+    total_tokens: add(a?.total_tokens ?? null, b?.total_tokens ?? null),
+    cached_input_tokens: add(a?.cached_input_tokens ?? null, b?.cached_input_tokens ?? null),
+    reasoning_tokens: add(a?.reasoning_tokens ?? null, b?.reasoning_tokens ?? null),
+    conflicts: [...conflicts],
+    dropped_unknown_keys: (a?.dropped_unknown_keys ?? 0) + (b?.dropped_unknown_keys ?? 0)
+  };
+}
+function phaseDuration(startIso, endIso, notes) {
+  if (!startIso || !endIso) return null;
+  const start = Date.parse(startIso);
+  const end = Date.parse(endIso);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    notes.push("unparsable_timestamp");
+    return null;
+  }
+  if (end < start) {
+    notes.push("clock_regression_dropped");
+    return null;
+  }
+  return end - start;
+}
+var KNOWN_NUMERIC_FIELDS, SOURCE_FIELDS;
+var init_normalize2 = __esm({
+  "src/usage/normalize.ts"() {
+    "use strict";
+    KNOWN_NUMERIC_FIELDS = [
+      ["input_tokens", "inputTokens"],
+      ["output_tokens", "outputTokens"],
+      ["total_tokens", "totalTokens"],
+      ["cached_input_tokens", "cachedInputTokens"],
+      ["reasoning_tokens", "reasoningTokens"]
+    ];
+    SOURCE_FIELDS = ["source", "usage_source"];
   }
 });
 
@@ -28527,7 +29001,7 @@ var init_start_plan_private_channel = __esm({
 
 // src/worker/worker-main.ts
 init_result_contract();
-import { createHash as createHash8, randomUUID as randomUUID3 } from "node:crypto";
+import { createHash as createHash9, randomUUID as randomUUID3 } from "node:crypto";
 import { closeSync as closeSync2, createWriteStream, readFileSync as readFileSync5, writeFileSync, writeSync } from "node:fs";
 import { Socket } from "node:net";
 import path10 from "node:path";
@@ -28596,15 +29070,15 @@ function rejected(errorCode, reason, actualWorker, expected = null) {
 function parseFingerprint(value, requireComplete) {
   if (!isRecord(value) || !hasExactKeys(value, ["path", "sha256"])) return null;
   const artifactPath = value["path"];
-  const sha2562 = value["sha256"];
+  const sha2563 = value["sha256"];
   if (requireComplete) {
     if (typeof artifactPath !== "string" || !path.isAbsolute(artifactPath)) return null;
-    if (typeof sha2562 !== "string" || !/^[a-f0-9]{64}$/iu.test(sha2562)) return null;
-    return { path: artifactPath, sha256: sha2562 };
+    if (typeof sha2563 !== "string" || !/^[a-f0-9]{64}$/iu.test(sha2563)) return null;
+    return { path: artifactPath, sha256: sha2563 };
   }
   if (artifactPath !== null && (typeof artifactPath !== "string" || !path.isAbsolute(artifactPath))) return null;
-  if (sha2562 !== null && (typeof sha2562 !== "string" || !/^[a-f0-9]{64}$/iu.test(sha2562))) return null;
-  return { path: artifactPath, sha256: sha2562 };
+  if (sha2563 !== null && (typeof sha2563 !== "string" || !/^[a-f0-9]{64}$/iu.test(sha2563))) return null;
+  return { path: artifactPath, sha256: sha2563 };
 }
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -28638,6 +29112,7 @@ var StartPlanSecretRedactor = class {
   #length = 0;
   #prefix = "";
   #digest = "";
+  #streamPending = "";
   register(secret) {
     if (typeof secret !== "string" || secret.length < 2) throw new Error("private_auth_invalid");
     this.#length = secret.length;
@@ -28661,6 +29136,39 @@ var StartPlanSecretRedactor = class {
       }
     }
   }
+  /**
+   * Redact content delivered in consecutive stream fragments. A bounded suffix
+   * is retained so a credential split across fragments is never emitted as
+   * two individually harmless prefixes. Call with final=true at a public-event
+   * boundary to release the retained suffix.
+   */
+  streamText(input2, { final = false } = {}) {
+    if (typeof input2 !== "string" || typeof final !== "boolean") throw new Error("private_auth_stream_invalid");
+    if (!this.#length) return input2;
+    this.#streamPending += input2;
+    if (!this.#streamPending) return "";
+    const retainedCharacters = final ? 0 : Math.max(0, this.#length - 1);
+    let visibleLength = Math.max(0, this.#streamPending.length - retainedCharacters);
+    if (!final && visibleLength > 0) {
+      for (let index = this.#streamPending.indexOf(this.#prefix); index >= 0 && index < visibleLength; index = this.#streamPending.indexOf(this.#prefix, index + 1)) {
+        if (index + this.#length > visibleLength) {
+          visibleLength = index;
+          break;
+        }
+      }
+      const maximumOverlap = Math.min(this.#prefix.length - 1, visibleLength);
+      for (let overlap = maximumOverlap; overlap > 0; overlap -= 1) {
+        if (this.#streamPending.slice(visibleLength - overlap, visibleLength) === this.#prefix.slice(0, overlap)) {
+          visibleLength -= overlap;
+          break;
+        }
+      }
+    }
+    if (visibleLength === 0) return "";
+    const visible = this.#streamPending.slice(0, visibleLength);
+    this.#streamPending = this.#streamPending.slice(visibleLength);
+    return this.text(visible);
+  }
   value(value) {
     if (typeof value === "string") return this.text(value);
     if (Array.isArray(value)) return value.map((item) => this.value(item));
@@ -28673,6 +29181,7 @@ var StartPlanSecretRedactor = class {
     this.#length = 0;
     this.#prefix = "";
     this.#digest = "";
+    this.#streamPending = "";
   }
 };
 
@@ -28698,8 +29207,9 @@ async function runWorkerMain(dependencies = {}, workerArgs = process.argv.slice(
   const bridgeLaunchMarker = workerArgs.at(-1) === BRIDGE_WORKER_LAUNCH_MARKER;
   const interactionMode = workerArgs.includes("--bridge-sqlite-interaction-v1");
   const privateAuthMode = workerArgs.includes("--bridge-sqlite-private-auth-v1");
+  const runtimeEventMode = workerArgs.includes("--bridge-sqlite-runtime-events-v1");
   const dropAfterPrepared = workerArgs.includes("--bridge-sqlite-interaction-drop-after-prepared-v1");
-  const positionalArgs = bridgeLaunchMarker ? workerArgs.slice(0, -1).filter((argument) => argument !== "--bridge-sqlite-interaction-v1" && argument !== "--bridge-sqlite-interaction-drop-after-prepared-v1" && argument !== "--bridge-sqlite-private-auth-v1") : workerArgs;
+  const positionalArgs = bridgeLaunchMarker ? workerArgs.slice(0, -1).filter((argument) => argument !== "--bridge-sqlite-interaction-v1" && argument !== "--bridge-sqlite-interaction-drop-after-prepared-v1" && argument !== "--bridge-sqlite-private-auth-v1" && argument !== "--bridge-sqlite-runtime-events-v1") : workerArgs;
   if (bridgeLaunchMarker && positionalArgs.length === 0) {
     let claimOnlyStage = "start";
     let interactionStreamsCreated = false;
@@ -28725,9 +29235,11 @@ ${frames.slice(0, 1200)}
     });
     try {
       if (dropAfterPrepared && !interactionMode) throw new Error("interaction test mode required");
+      if (runtimeEventMode && !interactionMode) throw new Error("runtime events require interaction mode");
       await runClaimOnlyHandshake({
         interactionMode,
         privateAuthMode,
+        runtimeEventMode,
         dropAfterPrepared,
         dependencies,
         onStage: (stage) => {
@@ -28754,6 +29266,10 @@ ${frames.slice(0, 1200)}
           closeSync2(fd);
         } catch {
         }
+      }
+      if (runtimeEventMode) try {
+        closeSync2(14);
+      } catch {
       }
       const failureCode = error62 && typeof error62 === "object" && "code" in error62 && typeof error62.code === "string" ? error62.code : "unclassified";
       writeDiagnostic(`[bridge-worker] claim-only handshake rejected${interactionMode ? ` at ${claimOnlyStage} code=${failureCode}` : ""}
@@ -28838,6 +29354,19 @@ async function runClaimOnlyHandshake(options) {
   const execution = validateExecutionEnvelope(decisionRecord.execution, bootstrap, profile);
   if (options.privateAuthMode !== Boolean(execution.private_auth)) throw new Error("private auth mode mismatch");
   let closeInteraction;
+  let runtimeEvents;
+  if (options.runtimeEventMode) {
+    options.onStage?.("runtime event channel setup");
+    const { createCandidateWorkerRuntimeEventChannel: createCandidateWorkerRuntimeEventChannel2 } = await Promise.resolve().then(() => (init_runtime_event_channel(), runtime_event_channel_exports));
+    const stream = createWriteStream(process.execPath, { fd: 14 });
+    try {
+      const sender = await createCandidateWorkerRuntimeEventChannel2({ writeStream: stream });
+      runtimeEvents = createBoundedRuntimeEventPublisher(sender);
+    } catch (error62) {
+      stream.destroy();
+      throw error62;
+    }
+  }
   let candidateInteraction;
   if (options.interactionMode) {
     options.onStage?.("interaction channel setup");
@@ -28886,12 +29415,16 @@ async function runClaimOnlyHandshake(options) {
       execution,
       candidateInteraction,
       options.privateAuthMode ? identity : void 0,
-      options.dependencies
+      options.dependencies,
+      runtimeEvents
     );
     options.onStage?.("adapter result frame prepared");
+    await runtimeEvents?.close();
+    options.onStage?.("runtime event channel closed");
     writePrivateFrame2(6, resultFrame, prepareWorkerResultFrameParts(resultFrame));
     options.onStage?.("adapter result frame written");
   } finally {
+    await closeRuntimeEvents(runtimeEvents);
     options.onStage?.("worker interaction close start");
     await closeInteraction?.();
     options.onStage?.("worker interaction close complete");
@@ -28927,7 +29460,7 @@ async function runExplicitFakeAdapter(bootstrap, execution, interaction) {
   const { executeFakeResultAdapter: executeFakeResultAdapter2 } = await Promise.resolve().then(() => (init_fake_result_adapter(), fake_result_adapter_exports));
   return executeFakeResultAdapter2(bootstrap);
 }
-async function runZCodeAdapter(bootstrap, execution, interaction, workerIdentity, dependencies = {}) {
+async function runZCodeAdapter(bootstrap, execution, interaction, workerIdentity, dependencies = {}, runtimeEvents) {
   if (execution.adapter_mode !== "zcode_app_server") throw new Error("real ZCode Adapter mode is required");
   const {
     OfficialHostAdapter: OfficialHostAdapter2,
@@ -28935,14 +29468,34 @@ async function runZCodeAdapter(bootstrap, execution, interaction, workerIdentity
   } = await Promise.resolve().then(() => (init_official_host_adapter(), official_host_adapter_exports));
   const { ZCodeAppServerAdapter: ZCodeAppServerAdapter2 } = await Promise.resolve().then(() => (init_zcode_app_server_adapter(), zcode_app_server_adapter_exports));
   const { buildTaskResult: buildTaskResult2 } = await Promise.resolve().then(() => (init_normalize(), normalize_exports));
+  const { normalizeUsage: normalizeUsage2, phaseDuration: phaseDuration2 } = await Promise.resolve().then(() => (init_normalize2(), normalize_exports2));
   const startedAt = (/* @__PURE__ */ new Date()).toISOString();
   let outcome = null;
   let failure2 = null;
+  const modelProfile = {
+    executor: "zcode",
+    provider_id: null,
+    model_id: null,
+    requested_model: execution.task.model ? `${execution.task.model.provider_id}/${execution.task.model.model_id}` : null,
+    requested_reasoning_level: execution.task.model?.reasoning_level ?? null,
+    effective_reasoning_level: null,
+    effective_reasoning_level_source: "not_reported",
+    selection_source: null,
+    effective_at: null,
+    session_id: null,
+    turn_id: null
+  };
+  let turnStartedAt = null;
+  let turnCompletedAt = null;
+  let rpcAcceptedAt = null;
   let cachedAuth = null;
   let privateAuthPending = null;
   let privateAuthExpiryTimer;
   let privateAuthStarted = false;
   const secretRedactor = execution.private_auth ? new StartPlanSecretRedactor() : void 0;
+  if (secretRedactor && runtimeEvents) {
+    runtimeEvents.setOutputSanitizer((value, options) => secretRedactor.streamText(value, options));
+  }
   let privateAuthParentLive = false;
   let privateAuthConfirmed = false;
   let notifyPrivateAuthConfirmation;
@@ -29166,7 +29719,34 @@ async function runZCodeAdapter(bootstrap, execution, interaction, workerIdentity
     ...execution.private_auth ? { startPlanProviderEntitled: execution.private_auth.entitled } : {},
     resolveProviderRuntimeAuth,
     onEvent: (event) => {
-      if (!interaction) return;
+      runtimeEvents?.publish(event);
+      if (event.type === "session_ready" && typeof event.details?.["session_id"] === "string") {
+        modelProfile.session_id = event.details["session_id"];
+      } else if (event.type === "model_selected") {
+        if (typeof event.details?.["provider_id"] === "string") modelProfile.provider_id = event.details["provider_id"];
+        if (typeof event.details?.["model_id"] === "string") modelProfile.model_id = event.details["model_id"];
+        if (typeof event.details?.["selected_model"] === "string" && modelProfile.model_id === null) {
+          modelProfile.model_id = event.details["selected_model"];
+        }
+        if (typeof event.details?.["reasoning_level"] === "string") {
+          modelProfile.effective_reasoning_level = event.details["reasoning_level"];
+          modelProfile.effective_reasoning_level_source = "runtime";
+        } else {
+          modelProfile.effective_reasoning_level = null;
+          modelProfile.effective_reasoning_level_source = "not_reported";
+        }
+        if (typeof event.details?.["model_source"] === "string") {
+          modelProfile.selection_source = event.details["model_source"];
+        }
+        modelProfile.effective_at = (/* @__PURE__ */ new Date()).toISOString();
+      } else if (event.type === "turn_started") {
+        rpcAcceptedAt ??= (/* @__PURE__ */ new Date()).toISOString();
+        turnStartedAt = (/* @__PURE__ */ new Date()).toISOString();
+        if (typeof event.details?.["turn_id"] === "string") modelProfile.turn_id = event.details["turn_id"];
+      } else if (event.type === "turn_completed") {
+        turnCompletedAt = (/* @__PURE__ */ new Date()).toISOString();
+        if (typeof event.details?.["turn_id"] === "string") modelProfile.turn_id = event.details["turn_id"];
+      }
       if (event.type === "cleanup_unverified") {
         const summary = event.summary;
         const reason = summary.startsWith("Managed browser cleanup") ? "browser_cleanup" : summary.includes("process_tree_root_exited") ? "root_exited_scan_unverified" : summary.includes("Identity-bound Windows process-tree cleanup receipt") ? "receipt_unavailable" : "unclassified";
@@ -29257,7 +29837,39 @@ async function runZCodeAdapter(bootstrap, execution, interaction, workerIdentity
     }
   }
   const finishedAt = (/* @__PURE__ */ new Date()).toISOString();
-  const taskResult = buildTaskResult2({ task: execution.task, attempt: bootstrap.attempt, startedAt, finishedAt, outcome, failure: failure2 });
+  if (modelProfile.model_id === null && outcome?.modelProfile?.model_id) {
+    Object.assign(modelProfile, outcome.modelProfile);
+  }
+  rpcAcceptedAt ??= outcome?.phaseTimestamps?.rpc_accepted_at ?? null;
+  turnStartedAt ??= outcome?.phaseTimestamps?.turn_started_at ?? null;
+  turnCompletedAt ??= outcome?.phaseTimestamps?.turn_completed_at ?? null;
+  modelProfile.session_id ??= outcome?.sessionId ?? null;
+  const timingNotes = [];
+  const timing = {
+    queued_ms: null,
+    execution_ms: phaseDuration2(startedAt, finishedAt, timingNotes),
+    turn_ms: phaseDuration2(turnStartedAt, turnCompletedAt, timingNotes),
+    finalize_ms: phaseDuration2(turnCompletedAt, finishedAt, timingNotes),
+    wall_ms: phaseDuration2(startedAt, finishedAt, timingNotes),
+    derived: false,
+    notes: timingNotes
+  };
+  const usage = normalizeUsage2(outcome?.usage ?? null, {
+    source: "zcode_runtime_turn",
+    scope: outcome?.sessionId ? `session:${outcome.sessionId}` : null,
+    observedAt: finishedAt
+  });
+  const taskResult = buildTaskResult2({
+    task: execution.task,
+    attempt: bootstrap.attempt,
+    startedAt,
+    finishedAt,
+    outcome,
+    failure: failure2,
+    usage,
+    model: modelProfile,
+    timing
+  });
   const result = {
     task_id: taskResult.task_id,
     attempt: taskResult.attempt,
@@ -29279,7 +29891,11 @@ async function runZCodeAdapter(bootstrap, execution, interaction, workerIdentity
     ...taskResult.report_candidate ? { report_candidate: taskResult.report_candidate } : {}
   };
   const executionCleanup = buildExecutionCleanupProof(outcome);
-  secretRedactor?.close();
+  try {
+    await runtimeEvents?.close();
+  } finally {
+    secretRedactor?.close();
+  }
   return {
     protocol: "bridge-sqlite-candidate-result-v1",
     operation_id: bootstrap.operation_id,
@@ -29336,7 +29952,7 @@ function buildExecutionCleanupProof(outcome) {
     workspace_retained: true,
     adapter_process_id: receipt.rootPid,
     adapter_start_fingerprint: root.fingerprint,
-    process_tree_receipt_digest: createHash8("sha256").update(JSON.stringify(receipt), "utf8").digest("hex"),
+    process_tree_receipt_digest: createHash9("sha256").update(JSON.stringify(receipt), "utf8").digest("hex"),
     process_tree_member_count: receipt.members.length,
     managed_browser_cleanup_verified: true,
     adapter_cleanup: adapterCleanup
@@ -29383,6 +29999,119 @@ function nullableString(value) {
 function asRecord4(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
+function splitUtf8Text(value, maximumBytes) {
+  const chunks = [];
+  let chunkStart = 0;
+  let chunkBytes = 0;
+  for (let index = 0; index < value.length; ) {
+    const codePoint = value.codePointAt(index);
+    const character = String.fromCodePoint(codePoint);
+    const characterBytes = Buffer.byteLength(character, "utf8");
+    if (chunkBytes > 0 && chunkBytes + characterBytes > maximumBytes) {
+      chunks.push(value.slice(chunkStart, index));
+      chunkStart = index;
+      chunkBytes = 0;
+    }
+    chunkBytes += characterBytes;
+    index += character.length;
+  }
+  if (chunkStart < value.length) chunks.push(value.slice(chunkStart));
+  return chunks;
+}
+function createBoundedRuntimeEventPublisher(sender) {
+  const allowed = /* @__PURE__ */ new Set([
+    "session_ready",
+    "model_selected",
+    "turn_started",
+    "model_tool_call",
+    "tool_status",
+    "model_output",
+    "turn_completed",
+    "turn_failed",
+    "report_ready"
+  ]);
+  let pendingOutput = "";
+  let outputTimer;
+  let closePromise;
+  let outputSanitizer;
+  let firstError;
+  const flush = (final = false) => {
+    if (outputTimer) {
+      clearTimeout(outputTimer);
+      outputTimer = void 0;
+    }
+    if (!pendingOutput) {
+      if (final && outputSanitizer) {
+        const visible2 = outputSanitizer("", { final: true });
+        for (const chunk of splitUtf8Text(visible2, 2e3)) sender.send({ type: "model_output", summary: chunk });
+      }
+      return;
+    }
+    const output2 = pendingOutput;
+    pendingOutput = "";
+    const visible = outputSanitizer ? outputSanitizer(output2, { final }) : output2;
+    for (const chunk of splitUtf8Text(visible, 2e3)) sender.send({ type: "model_output", summary: chunk });
+  };
+  return Object.freeze({
+    publish(event) {
+      try {
+        if (event.type === "model_output") {
+          pendingOutput += event.summary;
+          if (Buffer.byteLength(pendingOutput, "utf8") >= 4e3) flush(false);
+          else if (!outputTimer) {
+            outputTimer = setTimeout(() => {
+              outputTimer = void 0;
+              try {
+                flush(false);
+              } catch (error62) {
+                firstError ??= error62;
+              }
+            }, 500);
+            outputTimer.unref();
+          }
+          return;
+        }
+        flush(false);
+        if (allowed.has(event.type)) sender.send(event);
+      } catch (error62) {
+        firstError ??= error62;
+      }
+    },
+    setOutputSanitizer(sanitize) {
+      if (typeof sanitize !== "function" || outputSanitizer) throw new Error("runtime_event_output_sanitizer_invalid");
+      outputSanitizer = sanitize;
+    },
+    close() {
+      closePromise ??= (async () => {
+        try {
+          flush(true);
+        } catch (error62) {
+          firstError ??= error62;
+        }
+        try {
+          await sender.close();
+        } catch (error62) {
+          firstError ??= error62;
+        }
+        if (firstError) {
+          throw Object.assign(new Error("runtime event publication failed"), {
+            code: "runtime_event_publish_failed",
+            cause: firstError
+          });
+        }
+      })();
+      return closePromise;
+    }
+  });
+}
+async function closeRuntimeEvents(publisher) {
+  if (!publisher) return;
+  try {
+    await publisher.close();
+  } catch {
+    writeDiagnostic("[bridge-worker] runtime event channel close failed\n");
+  }
+}
 function writeDiagnostic(line) {
   try {
     writeSync(2, line);
@@ -29404,7 +30133,7 @@ function digestProvenance(value) {
     bridge: { path: value.bridge.path, sha256: value.bridge.sha256 },
     worker: { path: value.worker.path, sha256: value.worker.sha256 }
   });
-  return createHash8("sha256").update(canonical2, "utf8").digest("hex");
+  return createHash9("sha256").update(canonical2, "utf8").digest("hex");
 }
 function readPrivateFrame2(fd, maximum2) {
   const frame = readFileSync5(fd);
@@ -29429,5 +30158,6 @@ var invokedWorkerPath = process.argv[1] ? path10.resolve(process.argv[1]) : null
 var modulePath = path10.resolve(fileURLToPath4(import.meta.url));
 if (invokedWorkerPath === modulePath) await runWorkerMain();
 export {
+  createBoundedRuntimeEventPublisher,
   runWorkerMain
 };

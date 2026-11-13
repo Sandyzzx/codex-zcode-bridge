@@ -961,7 +961,9 @@ function toProgressEvent(value: Record<string, unknown>): TaskProgressEvent {
     seq: Number(value.cursor ?? value.sequence),
     at: string(value.at, "event_time_missing"),
     type: string(value.event_type, "event_type_missing"),
-    summary: `SQLite lifecycle: ${string(value.event_type, "event_type_missing")}`,
+    summary: typeof value.summary === "string"
+      ? value.summary
+      : `SQLite lifecycle: ${string(value.event_type, "event_type_missing")}`,
     ...(details ? { details } : {}),
   };
 }

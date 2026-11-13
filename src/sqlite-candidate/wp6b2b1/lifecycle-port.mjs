@@ -5,6 +5,7 @@
  */
 import { IsolatedAdmissionStore } from './store.mjs';
 import { createCandidateInteractionChannel, isCandidateInteractionChannel } from './interaction-channel.mjs';
+import { createCandidateRuntimeEventChannel, isCandidateRuntimeEventChannel } from './runtime-event-channel.mjs';
 
 export class UnsupportedLifecycleOperationError extends Error {
   constructor(operation) {
@@ -26,6 +27,7 @@ const C3_READ_METHODS = Object.freeze(['readRecoverySnapshot']);
 const CANCEL_METHODS = Object.freeze(['requestCancellation','recordCancellationVerification']);
 const QUEUED_CANCEL_METHODS = Object.freeze(['cancelQueuedAttempt']);
 const INTERACTION_METHODS = Object.freeze(['recordInteractionRequest','readInteractionRequest','beginInteractionReply','commitInteractionReply','completeInteractionReply']);
+const RUNTIME_EVENT_METHODS = Object.freeze(['appendRuntimeTaskEvent']);
 
 export function createSqliteLifecyclePort(store,{recoveryEvidenceVerifier,workerIdentityVerifier,cancellationVerifier}={}) {
   if (!(store instanceof IsolatedAdmissionStore)) throw new TypeError('IsolatedAdmissionStore required');
@@ -48,6 +50,9 @@ export function createSqliteLifecyclePort(store,{recoveryEvidenceVerifier,worker
     if (typeof store[method] !== 'function') throw new TypeError(`candidate SQLite Store missing ${method}`);
   }
   for (const method of INTERACTION_METHODS) {
+    if (typeof store[method] !== 'function') throw new TypeError(`candidate SQLite Store missing ${method}`);
+  }
+  for (const method of RUNTIME_EVENT_METHODS) {
     if (typeof store[method] !== 'function') throw new TypeError(`candidate SQLite Store missing ${method}`);
   }
   if(typeof store.compareAndSwapRecoveryObservation!=='function')throw new TypeError('candidate SQLite Store missing compareAndSwapRecoveryObservation');
@@ -128,6 +133,19 @@ export function createSqliteLifecyclePort(store,{recoveryEvidenceVerifier,worker
       const commit=store.commitInteractionReply(prepared);
       const accepted=await channel.commitReply(reply,commit);
       return store.completeInteractionReply(accepted);
+    },
+  });
+  Object.defineProperty(port,'openRuntimeEventChannel',{
+    enumerable:true,
+    value:(child,operation,verifyProcessIdentity)=>createCandidateRuntimeEventChannel(child,operation,verifyProcessIdentity),
+  });
+  Object.defineProperty(port,'receiveRuntimeTaskEvent',{
+    enumerable:true,
+    value:async(channel)=>{
+      if(!isCandidateRuntimeEventChannel(channel))throw Object.assign(new Error('runtime event channel required'),{code:'runtime_event_channel_unavailable'});
+      const received=await channel.receiveEvent();
+      const {operation_id,task_id,attempt,generation,claim_id}=received.binding;
+      return store.appendRuntimeTaskEvent({operation_id,task_id,attempt,generation,claim_id,...received.event});
     },
   });
   Object.defineProperty(port,'recordRecoveryObservation',{

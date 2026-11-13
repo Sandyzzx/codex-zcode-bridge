@@ -176,8 +176,8 @@ function makeCandidateStore(label, capacity = 2) {
   return { r, workspace, store, port: createSqliteLifecyclePort(store) };
 }
 
-function makeRunningAttentionTask(label) {
-  const fixture = makeCandidateStore(label, 1);
+function makeRunningAttentionTask(label, capacity = 1) {
+  const fixture = makeCandidateStore(label, capacity);
   const taskId = `attention-task-${label}`;
   const operationId = `attention-operation-${label}`;
   fixture.store.createTask(task(taskId, fixture.workspace));
@@ -223,6 +223,14 @@ function makeRunningAttentionTask(label) {
     },
   });
   return { ...fixture, taskId, operationId };
+}
+
+function removeRuntimeEventExtension(db) {
+  db.exec(`DROP TRIGGER runtime_task_events_no_update;
+    DROP TRIGGER runtime_task_events_no_delete;
+    DROP TRIGGER runtime_task_events_identity_guard;
+    DROP INDEX runtime_task_events_task_cursor;
+    DROP TABLE runtime_task_events;`);
 }
 
 async function makeRunningInteraction(label, mode = 'normal') {
@@ -328,7 +336,7 @@ test('runtime Schema is self-contained and persists a Task with its initial Atte
       assert.deepEqual(db.prepare("SELECT name FROM sqlite_schema WHERE type='table' ORDER BY name").all().map(row => row.name), [
         'attempts', 'authority_metadata', 'authority_switch', 'fresh_install_receipt', 'json_artifacts',
         'manager_interaction_payloads', 'manager_operation_events', 'manager_operations', 'migrated_task_events',
-        'migrated_task_results', 'migration_runs', 'sqlite_sequence', 'tasks',
+        'migrated_task_results', 'migration_runs', 'runtime_task_events', 'sqlite_sequence', 'tasks',
       ]);
     } finally { db.close(); }
     assert.throws(() => store.createTask(task('task-projection', workspace)), error => error.code === 'task_already_exists');
@@ -603,6 +611,293 @@ test('Candidate feedback does not relabel a committed result as an Agent report 
     assert.equal(snapshot.activity, null);
     assert.deepEqual(snapshot.interaction, { state: 'not_observed', kind: null });
   } finally { f.store.close(); }
+});
+
+test('Runtime events bind to the exact running Claim, share the public cursor, and drive Feedback/Result projection', () => {
+  const f = makeRunningAttentionTask('runtime-feedback');
+  try {
+    const operation = f.store.readOperation(f.operationId);
+    const fence = {
+      operation_id: operation.operation_id,
+      task_id: operation.task_id,
+      attempt: operation.attempt,
+      generation: operation.generation,
+      claim_id: operation.claim_id,
+    };
+    const at = '2026-11-13T00:00:00.000Z';
+    const model = f.store.appendRuntimeTaskEvent({ ...fence, worker_sequence: 1, event_type: 'model_selected',
+      at, summary: 'runtime selected model', details: { provider_id: 'provider-runtime', model_id: 'model-runtime',
+        reasoning_level: 'high', reasoning_level_source: 'runtime' } });
+    assert.deepEqual(f.store.appendRuntimeTaskEvent({ ...fence, worker_sequence: 1, event_type: 'model_selected',
+      at, summary: 'runtime selected model', details: { provider_id: 'provider-runtime', model_id: 'model-runtime',
+        reasoning_level: 'high', reasoning_level_source: 'runtime' } }), { ...model, event_type: 'model_selected', duplicate: true });
+    assert.throws(() => f.store.appendRuntimeTaskEvent({ ...fence, worker_sequence: 1, event_type: 'turn_started',
+      at, summary: 'conflicting replay' }), error => error.code === 'runtime_task_event_conflict');
+    assert.throws(() => f.store.appendRuntimeTaskEvent({ ...fence, claim_id: 'wrong-claim',
+      worker_sequence: 2, event_type: 'turn_started', at, summary: 'stale Worker' }),
+    error => error.code === 'runtime_task_event_stale_claim');
+
+    f.store.appendRuntimeTaskEvent({ ...fence, worker_sequence: 2, event_type: 'turn_started',
+      at, summary: 'turn started' });
+    f.store.appendRuntimeTaskEvent({ ...fence, worker_sequence: 3, event_type: 'model_tool_call',
+      at, summary: 'model requested tool', details: { tool_name: 'Bash', tool_call_id: 'call-1' } });
+    f.store.appendRuntimeTaskEvent({ ...fence, worker_sequence: 4, event_type: 'tool_status',
+      at, summary: 'tool completed', details: { tool_name: 'Bash', tool_call_id: 'call-1', state: 'completed' } });
+    f.store.appendRuntimeTaskEvent({ ...fence, worker_sequence: 5, event_type: 'report_ready',
+      at, summary: 'report ready', details: { needs_master_decision: false } });
+    const beforeResult = f.port.readTaskFeedback(f.taskId);
+    assert.equal(beforeResult.result, null);
+    assert.deepEqual(beforeResult.model, {
+      provider_id: 'provider-runtime', model_id: 'model-runtime', reasoning_level: 'high', source: 'runtime',
+    });
+    assert.equal(beforeResult.activity.kind, 'tool_update');
+
+    const committed = f.store.commitResult({
+      operation_id: f.operationId,
+      task_id: f.taskId,
+      attempt: 1,
+      generation: operation.generation,
+      revision: f.store.readOperation(f.operationId).revision,
+      claim_id: operation.claim_id,
+      claim_worker_identity_digest: operation.claim_worker_identity_digest,
+      result_status: 'completed',
+      result: {
+        task_id: f.taskId, attempt: 1, status: 'completed', summary: 'runtime event result',
+        files_changed: [], tests: [], issues: [], needs_master_decision: false, zcode_output: 'visible output',
+        exit_code: 0, session_id: 'session-runtime', started_at: at, finished_at: '2026-11-13T00:00:01.000Z',
+        usage: null, model: null, timing: null,
+      },
+    });
+    assert.equal(committed.conflict, false);
+    assert.throws(() => f.store.appendRuntimeTaskEvent({ ...fence, worker_sequence: 6,
+      event_type: 'turn_completed', at, summary: 'late event' }),
+    error => error.code === 'runtime_task_event_stale_claim' || error.code === 'runtime_task_event_stale_attempt');
+
+    const page = f.port.readTaskEvents(f.taskId, { afterCursor: 0, limit: 200 });
+    const runtime = page.events.filter(event => event.operation_id === f.operationId
+      && event.event_type !== 'reserved' && event.event_type !== 'launch_intent'
+      && event.event_type !== 'launch_receipt' && event.event_type !== 'claim_committed'
+      && event.event_type !== 'result_committed');
+    assert.deepEqual(runtime.map(event => [event.sequence, event.event_type]),
+      [[model.event_cursor, 'model_selected'], [model.event_cursor + 1, 'turn_started'],
+        [model.event_cursor + 2, 'model_tool_call'], [model.event_cursor + 3, 'tool_status'],
+        [model.event_cursor + 4, 'report_ready']]);
+    assert.ok(runtime.every(event => event.sequence === event.cursor));
+    const after = f.port.readTaskFeedback(f.taskId);
+    assert.equal(after.result.summary, 'runtime event result');
+    assert.equal(after.result.source, 'agent_report');
+
+    f.store.close();
+    const reopened = IsolatedAdmissionStore.open(f.r);
+    try {
+      const persisted = reopened.readTaskEvents(f.taskId, { afterCursor: 0, limit: 200 }).events;
+      assert.equal(persisted.filter(event => event.event_type === 'model_output').length, 0);
+      assert.equal(persisted.filter(event => event.event_type === 'report_ready').length, 1);
+      assert.equal(createSqliteLifecyclePort(reopened).readTaskFeedback(f.taskId).model.model_id, 'model-runtime');
+    } finally { reopened.close(); }
+  } finally {
+    if (!f.store.poisoned) {
+      try { f.store.close(); } catch { /* already closed after reopen */ }
+    }
+  }
+});
+
+test('old v14 Authority adds the Runtime Event extension without changing Task, Hold, Result or cursor facts', () => {
+  const f = makeRunningAttentionTask('runtime-old-v14', 2);
+  let closed = false;
+  try {
+    const completedTaskId = 'old-v14-completed-task';
+    const completedWorkspace = path.join(TEMP, 'old-v14-completed-workspace');
+    mkdirSync(completedWorkspace);
+    const completed = makePriorAttempt(f.store, completedTaskId, completedWorkspace, 'completed', true);
+    const operation = f.store.readOperation(f.operationId);
+    const lifecycleBefore = f.store.readTaskLifecycle(f.taskId);
+    const eventsBefore = f.port.readTaskEvents(f.taskId, { afterCursor: 0, limit: 200 });
+    const completedTaskBefore = f.store.readTask(completedTaskId);
+    const completedLifecycleBefore = f.store.readTaskLifecycle(completedTaskId);
+    const completedEventsBefore = f.port.readTaskEvents(completedTaskId, { afterCursor: 0, limit: 200 });
+    const completedResultBefore = f.port.readCommittedResult(completed.operation_id);
+    const authorityBefore = f.store.readSnapshot().capacity;
+    assert.equal(operation.phase, 'running');
+    assert.equal(operation.result_digest, null);
+    assert.equal(completedResultBefore.result.status, 'completed');
+    assert.ok(authorityBefore.next_event_cursor > 0);
+
+    f.store.close();
+    closed = true;
+    const pathToDatabase = path.join(f.r, 'operations.sqlite3');
+    let db = new DatabaseSync(pathToDatabase);
+    try {
+      removeRuntimeEventExtension(db);
+      assert.equal(db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='runtime_task_events'").get(), undefined);
+      assert.equal(db.prepare('PRAGMA user_version').get().user_version, 14);
+    } finally {
+      db.close();
+    }
+
+    // Recovery remains read-only and can inspect the pre-R7 v14 schema.
+    const recovery = IsolatedAdmissionStore.openForRecovery(f.r);
+    try {
+      const snapshot = recovery.readRecoverySnapshot();
+      assert.equal(snapshot.root_status, 'consistent_read_only');
+      assert.equal(snapshot.verified_event_projection_consistency, true);
+      assert.deepEqual(createSqliteLifecyclePort(recovery).readTaskEvents(completedTaskId, {
+        afterCursor: 0,
+        limit: 200,
+      }), completedEventsBefore, 'Recovery must read lifecycle events from an old v14 database without a Runtime Event table');
+    } finally {
+      recovery.close();
+    }
+    db = new DatabaseSync(pathToDatabase, { readOnly: true });
+    try {
+      assert.equal(db.prepare("SELECT 1 FROM sqlite_schema WHERE name='runtime_task_events'").get(), undefined,
+        'read-only Recovery must not mutate the old v14 schema');
+    } finally {
+      db.close();
+    }
+
+    const upgraded = IsolatedAdmissionStore.open(f.r);
+    try {
+      assert.deepEqual(upgraded.readTask(completedTaskId), completedTaskBefore);
+      assert.deepEqual(upgraded.readTaskLifecycle(completedTaskId), completedLifecycleBefore);
+      assert.deepEqual(createSqliteLifecyclePort(upgraded).readTaskEvents(completedTaskId, {
+        afterCursor: 0,
+        limit: 200,
+      }), completedEventsBefore);
+      assert.deepEqual(createSqliteLifecyclePort(upgraded).readCommittedResult(completed.operation_id), completedResultBefore);
+      assert.deepEqual(upgraded.readTaskLifecycle(f.taskId), lifecycleBefore);
+      assert.deepEqual(createSqliteLifecyclePort(upgraded).readTaskEvents(f.taskId, {
+        afterCursor: 0,
+        limit: 200,
+      }), eventsBefore);
+      assert.deepEqual(upgraded.readSnapshot().capacity, authorityBefore);
+      const current = upgraded.readOperation(f.operationId);
+      const appended = upgraded.appendRuntimeTaskEvent({
+        operation_id: current.operation_id,
+        task_id: current.task_id,
+        attempt: current.attempt,
+        generation: current.generation,
+        claim_id: current.claim_id,
+        worker_sequence: 1,
+        event_type: 'session_ready',
+        at: '2026-11-13T00:00:00.000Z',
+        summary: 'session ready after compatibility extension',
+        details: { session_id: 'session-old-v14' },
+      });
+      assert.equal(appended.event_cursor, authorityBefore.next_event_cursor + 1);
+    } finally {
+      upgraded.close();
+    }
+    db = new DatabaseSync(pathToDatabase, { readOnly: true });
+    try {
+      assert.deepEqual(db.prepare(`SELECT type,name FROM sqlite_schema
+        WHERE name IN ('runtime_task_events','runtime_task_events_task_cursor',
+          'runtime_task_events_no_update','runtime_task_events_no_delete',
+          'runtime_task_events_identity_guard') ORDER BY type,name`).all().map(row => ({ ...row })),
+      [
+        { type: 'index', name: 'runtime_task_events_task_cursor' },
+        { type: 'table', name: 'runtime_task_events' },
+        { type: 'trigger', name: 'runtime_task_events_identity_guard' },
+        { type: 'trigger', name: 'runtime_task_events_no_delete' },
+        { type: 'trigger', name: 'runtime_task_events_no_update' },
+      ]);
+    } finally {
+      db.close();
+    }
+  } finally {
+    if (!closed) try { f.store.close(); } catch {}
+  }
+});
+
+test('old v14 schema validation fails before Runtime Event extension mutates an unrelated schema', () => {
+  const f = makeCandidateStore('runtime-old-v14-invalid', 1);
+  const pathToDatabase = path.join(f.r, 'operations.sqlite3');
+  try {
+    f.store.close();
+    let db = new DatabaseSync(pathToDatabase);
+    try {
+      removeRuntimeEventExtension(db);
+      db.exec('ALTER TABLE tasks ADD COLUMN unexpected_extension TEXT');
+    } finally {
+      db.close();
+    }
+    assert.throws(() => IsolatedAdmissionStore.open(f.r), error => error.code === 'candidate_schema_mismatch');
+    db = new DatabaseSync(pathToDatabase, { readOnly: true });
+    try {
+      assert.equal(db.prepare("SELECT 1 FROM sqlite_schema WHERE name='runtime_task_events'").get(), undefined,
+        'failed prevalidation must not mutate the unrelated v14 schema');
+    } finally {
+      db.close();
+    }
+  } finally {
+    if (!f.store.poisoned) try { f.store.close(); } catch {}
+  }
+});
+
+test('concurrent independent processes serialize Runtime Event writes or fail with the existing writer fence', async () => {
+  const f = makeRunningAttentionTask('runtime-concurrent-writers');
+  const operation = f.store.readOperation(f.operationId);
+  const childCode = `
+    import { IsolatedAdmissionStore } from './src/sqlite-candidate/wp6b2b1/store.mjs';
+    const [root, encoded] = process.argv.slice(1);
+    const input = JSON.parse(encoded);
+    let store;
+    try {
+      store = IsolatedAdmissionStore.open(root);
+      const result = store.appendRuntimeTaskEvent(input);
+      process.stdout.write(JSON.stringify({ ok: true, result }));
+    } catch (error) {
+      process.stdout.write(JSON.stringify({ ok: false, code: error?.code ?? 'unknown' }));
+    } finally {
+      store?.close();
+    }`;
+  const run = (workerSequence) => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['--input-type=module', '-e', childCode, f.r, JSON.stringify({
+      operation_id: operation.operation_id,
+      task_id: operation.task_id,
+      attempt: operation.attempt,
+      generation: operation.generation,
+      claim_id: operation.claim_id,
+      worker_sequence: workerSequence,
+      event_type: 'model_output',
+      at: '2026-11-13T00:00:00.000Z',
+      summary: `concurrent output ${workerSequence}`,
+    })], { cwd: process.cwd(), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', chunk => { stdout += chunk; });
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    child.once('error', reject);
+    child.once('close', code => {
+      try {
+        assert.equal(code, 0, stderr);
+        resolve(JSON.parse(stdout));
+      } catch (error) {
+        reject(error);
+      }
+    });
+  });
+  try {
+    const results = await Promise.all([run(1), run(2)]);
+    assert.ok(results.every(result => result.ok || result.code === 'root_writer_busy'), JSON.stringify(results));
+    for (const result of results) {
+      if (result.ok) continue;
+      const sequence = result === results[0] ? 1 : 2;
+      let retry;
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        retry = await run(sequence);
+        if (retry.ok || retry.code !== 'root_writer_busy') break;
+        await new Promise(resolve => setTimeout(resolve, 15));
+      }
+      assert.equal(retry.ok, true, JSON.stringify(retry));
+    }
+    const runtime = f.port.readTaskEvents(f.taskId, { afterCursor: 0, limit: 200 }).events
+      .filter(event => event.event_type === 'model_output');
+    assert.deepEqual(runtime.map(event => event.summary).sort(), ['concurrent output 1', 'concurrent output 2']);
+    assert.ok(runtime[0].cursor < runtime[1].cursor);
+  } finally {
+    f.store.close();
+  }
 });
 
 test('Continue creates a fenced next Attempt only after a released eligible result and is idempotent after reopen', async () => {

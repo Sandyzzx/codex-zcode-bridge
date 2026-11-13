@@ -15,3 +15,15 @@ test("many false prefix matches fail closed instead of unbounded hashing", () =>
   assert.equal(redactor.text("aaaaaaaaX".repeat(140)), "[REDACTED]");
   redactor.close();
 });
+
+test("streamed text holds a bounded overlap until a split credential is complete", () => {
+  const redactor = new StartPlanSecretRedactor();
+  const secret = "synthetic-marker-only-split-71f32";
+  redactor.register(secret);
+  const split = 11;
+  const first = redactor.streamText(`before ${secret.slice(0, split)}`);
+  const second = redactor.streamText(`${secret.slice(split)} after`);
+  const final = redactor.streamText("", { final: true });
+  assert.equal(`${first}${second}${final}`, "before [REDACTED] after");
+  redactor.close();
+});
