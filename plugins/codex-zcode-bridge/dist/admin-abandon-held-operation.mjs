@@ -1145,6 +1145,14 @@ var HERE = path.dirname(fileURLToPath(import.meta.url));
 var SCHEMA = readFileSync(new URL("./schema.sql", import.meta.url), "utf8");
 var RUNTIME_EVENTS_SCHEMA = readFileSync(new URL("./runtime-events.sql", import.meta.url), "utf8");
 var ADMIN_ABANDONMENT_SCHEMA = readFileSync(new URL("./admin-abandonment.sql", import.meta.url), "utf8");
+var NORMALIZED_ADMIN_ABANDONMENT_SCHEMA = ADMIN_ABANDONMENT_SCHEMA.replace(/\r\n?/gu, "\n");
+var LEGACY_ADMIN_ABANDONMENT_SCHEMA = NORMALIZED_ADMIN_ABANDONMENT_SCHEMA.replace(
+  "event_sequence INTEGER NOT NULL CHECK(event_sequence=original_revision+1)",
+  "event_sequence INTEGER NOT NULL UNIQUE CHECK(event_sequence=original_revision+1)"
+);
+if (LEGACY_ADMIN_ABANDONMENT_SCHEMA === NORMALIZED_ADMIN_ABANDONMENT_SCHEMA) {
+  throw new Error("administrative abandonment schema compatibility marker is missing");
+}
 var CONSTRUCT = /* @__PURE__ */ Symbol("construct");
 var SCHEMA_VERSION = 14;
 var SCHEMA_OBJECT_QUERY = "SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE type IN ('table','view','index','trigger') AND substr(lower(name),1,7)<>'sqlite_' ORDER BY type COLLATE BINARY,name COLLATE BINARY";
@@ -1164,28 +1172,73 @@ function schemaObjects(db) {
     row.sql === null ? null : row.sql.trim().replace(/\r\n?/gu, "\n")
   ]);
 }
+function adminAbandonmentTableStatement(schema) {
+  const start = schema.indexOf("CREATE TABLE manager_admin_abandonments");
+  const end = schema.indexOf(";", start);
+  if (start < 0 || end < 0) throw new Error("administrative abandonment table statement is missing");
+  return schema.slice(start, end + 1).trim().replace(/\r\n?/gu, "\n");
+}
+function normalizeAdminAbandonmentTableSql(sql) {
+  const normalized = String(sql).trim().replace(/\r\n?/gu, "\n");
+  return normalized.endsWith(";") ? normalized.slice(0, -1) : normalized;
+}
+var ADMIN_ABANDONMENT_TABLE_SQL = adminAbandonmentTableStatement(ADMIN_ABANDONMENT_SCHEMA);
+var LEGACY_ADMIN_ABANDONMENT_TABLE_SQL = adminAbandonmentTableStatement(LEGACY_ADMIN_ABANDONMENT_SCHEMA);
+var NORMALIZED_ADMIN_ABANDONMENT_TABLE_SQL = normalizeAdminAbandonmentTableSql(ADMIN_ABANDONMENT_TABLE_SQL);
+var NORMALIZED_LEGACY_ADMIN_ABANDONMENT_TABLE_SQL = normalizeAdminAbandonmentTableSql(LEGACY_ADMIN_ABANDONMENT_TABLE_SQL);
+function adminAbandonmentRowsDigest(rows) {
+  return createHash2("sha256").update(rows.map(upgradeRowJson).join("\n")).digest("hex");
+}
 function assertCandidateSchema(db, version = SCHEMA_VERSION, { allowRuntimeEventExtensionAbsent = false } = {}) {
   const key = `${version}:${allowRuntimeEventExtensionAbsent ? "recovery" : "strict"}`;
   if (!expectedSchemas.has(key)) {
-    const base = new DatabaseSync(":memory:"), admin = new DatabaseSync(":memory:");
+    const base = new DatabaseSync(":memory:"), admin = new DatabaseSync(":memory:"), legacyAdmin = new DatabaseSync(":memory:");
     try {
       const schema = version === 13 ? readFileSync(new URL("./schema-v13.sql", import.meta.url), "utf8") : SCHEMA;
       base.exec(schema);
       admin.exec(schema + "\n" + ADMIN_ABANDONMENT_SCHEMA);
+      legacyAdmin.exec(schema + "\n" + LEGACY_ADMIN_ABANDONMENT_SCHEMA);
       const baseObjects = schemaObjects(base);
       const adminObjects = schemaObjects(admin);
-      const variants = [JSON.stringify(baseObjects), JSON.stringify(adminObjects)];
+      const legacyAdminObjects = schemaObjects(legacyAdmin);
+      const variants = [JSON.stringify(baseObjects), JSON.stringify(adminObjects), JSON.stringify(legacyAdminObjects)];
       if (version === 14 && allowRuntimeEventExtensionAbsent) {
         variants.push(JSON.stringify(baseObjects.filter((row) => !RUNTIME_EVENT_SCHEMA_OBJECTS.has(row[1]))));
         variants.push(JSON.stringify(adminObjects.filter((row) => !RUNTIME_EVENT_SCHEMA_OBJECTS.has(row[1]))));
+        variants.push(JSON.stringify(legacyAdminObjects.filter((row) => !RUNTIME_EVENT_SCHEMA_OBJECTS.has(row[1]))));
       }
       expectedSchemas.set(key, variants);
     } finally {
       base.close();
       admin.close();
+      legacyAdmin.close();
     }
   }
   if (!expectedSchemas.get(key).includes(JSON.stringify(schemaObjects(db)))) fail2("candidate_schema_mismatch");
+}
+function upgradeLegacyAdminAbandonmentSchema(db) {
+  const table = db.prepare("SELECT sql FROM sqlite_schema WHERE type='table' AND name='manager_admin_abandonments'").get();
+  if (!table) return false;
+  const tableSql = normalizeAdminAbandonmentTableSql(table.sql);
+  if (tableSql === NORMALIZED_ADMIN_ABANDONMENT_TABLE_SQL) return false;
+  if (tableSql !== NORMALIZED_LEGACY_ADMIN_ABANDONMENT_TABLE_SQL) fail2("candidate_schema_mismatch");
+  const legacyTable = "manager_admin_abandonments_v14_legacy";
+  if (db.prepare("SELECT 1 FROM sqlite_schema WHERE name=?").get(legacyTable)) fail2("admin_abandonment_schema_migration_collision");
+  const columns = db.prepare("PRAGMA table_info('manager_admin_abandonments')").all().map((row) => row.name);
+  const names = columns.map((column) => '"' + column.replaceAll('"', '""') + '"');
+  const beforeRows = db.prepare("SELECT * FROM manager_admin_abandonments ORDER BY operation_id").all();
+  const beforeDigest = adminAbandonmentRowsDigest(beforeRows);
+  db.exec("DROP TRIGGER manager_admin_abandonments_no_update");
+  db.exec("DROP TRIGGER manager_admin_abandonments_no_delete");
+  db.exec("ALTER TABLE manager_admin_abandonments RENAME TO " + legacyTable);
+  db.exec(ADMIN_ABANDONMENT_TABLE_SQL);
+  db.prepare(`INSERT INTO manager_admin_abandonments(${names.join(",")}) SELECT ${names.join(",")} FROM ${legacyTable}`).run();
+  const afterRows = db.prepare("SELECT * FROM manager_admin_abandonments ORDER BY operation_id").all();
+  if (beforeRows.length !== afterRows.length || adminAbandonmentRowsDigest(afterRows) !== beforeDigest) fail2("admin_abandonment_schema_migration_mismatch");
+  db.exec("DROP TABLE " + legacyTable);
+  db.exec(ADMIN_ABANDONMENT_SCHEMA.slice(ADMIN_ABANDONMENT_SCHEMA.indexOf("CREATE TRIGGER")).trim());
+  assertCandidateSchema(db);
+  return true;
 }
 function assertSchemaVersion(db) {
   const version = db.prepare("PRAGMA user_version").get().user_version;
@@ -3585,11 +3638,10 @@ var IsolatedAdmissionStore = class _IsolatedAdmissionStore {
     this.#assertWritable();
     validateAdminAbandonmentInput(input);
     return this.#transaction(() => {
-      if (!this.#db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='manager_admin_abandonments'").get())
-        this.#db.exec(ADMIN_ABANDONMENT_SCHEMA);
+      const hasAdminTable = Boolean(this.#db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='manager_admin_abandonments'").get());
       const operation = this.#db.prepare("SELECT * FROM manager_operations WHERE operation_id=? AND operation_kind='attempt_lifecycle'").get(input.operation_id);
       if (!operation) fail2("operation_not_found");
-      const existing = this.#db.prepare("SELECT * FROM manager_admin_abandonments WHERE operation_id=?").get(input.operation_id);
+      const existing = hasAdminTable ? this.#db.prepare("SELECT * FROM manager_admin_abandonments WHERE operation_id=?").get(input.operation_id) : void 0;
       if (operation.task_id !== input.task_id || operation.attempt !== input.attempt || operation.generation !== input.generation || operation.claim_id !== input.claim_id || operation.claim_worker_identity_digest !== input.claim_worker_identity_digest)
         fail2("admin_abandonment_identity_mismatch");
       let worker, launch;
@@ -3667,6 +3719,12 @@ var IsolatedAdmissionStore = class _IsolatedAdmissionStore {
       if (input.evidence.failed_at !== latestHold.event.at) fail2("admin_abandonment_failure_time_mismatch");
       this.#assertNoUnknownInteraction(input.operation_id);
       this.#assertNoCancellationIntent(input.operation_id);
+      if (hasAdminTable) {
+        upgradeLegacyAdminAbandonmentSchema(this.#db);
+      } else {
+        this.#db.exec(ADMIN_ABANDONMENT_SCHEMA);
+        assertCandidateSchema(this.#db);
+      }
       const changedOperation = this.#db.prepare(`UPDATE manager_operations
         SET phase='released',revision=revision+1
         WHERE operation_id=? AND task_id=? AND attempt=? AND generation=? AND phase='running' AND revision=?
@@ -5577,6 +5635,19 @@ function powershell(script, timeoutMs) {
 function digestJson(value) {
   return createHash3("sha256").update(JSON.stringify(value)).digest("hex");
 }
+function sqliteErrorDiagnostic(error) {
+  if (!error || typeof error !== "object") return {};
+  const candidate = error;
+  if (candidate.code !== "ERR_SQLITE_ERROR") return {};
+  const diagnostic = {};
+  if (Number.isSafeInteger(candidate.errcode) && Number(candidate.errcode) >= 0 && Number(candidate.errcode) <= 2147483647) {
+    diagnostic.sqlite_errcode = Number(candidate.errcode);
+  }
+  if (typeof candidate.errstr === "string" && /^[A-Za-z0-9 _().,:-]{1,160}$/u.test(candidate.errstr)) {
+    diagnostic.sqlite_errstr = candidate.errstr;
+  }
+  return diagnostic;
+}
 async function readWindowsBootTime() {
   const output = await powershell(
     "$ErrorActionPreference='Stop'; $value=(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime(); $value.ToString('o')",
@@ -5829,7 +5900,7 @@ var isEntry = process.argv[1] !== void 0 && path2.resolve(process.argv[1]) === p
 if (isEntry) {
   main().catch((error) => {
     const code = error && typeof error === "object" && "code" in error ? String(error.code) : "admin_recovery_failed";
-    process.stderr.write(`${JSON.stringify({ status: "blocked", error_code: code })}
+    process.stderr.write(`${JSON.stringify({ status: "blocked", error_code: code, ...sqliteErrorDiagnostic(error) })}
 `);
     process.exitCode = 1;
   });
@@ -5837,5 +5908,6 @@ if (isEntry) {
 export {
   executeCli,
   parseArgs,
-  run
+  run,
+  sqliteErrorDiagnostic
 };

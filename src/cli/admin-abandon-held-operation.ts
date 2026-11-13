@@ -169,6 +169,21 @@ function digestJson(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
+export function sqliteErrorDiagnostic(error: unknown): Readonly<Record<string, number | string>> {
+  if (!error || typeof error !== "object") return {};
+  const candidate = error as { readonly code?: unknown; readonly errcode?: unknown; readonly errstr?: unknown };
+  if (candidate.code !== "ERR_SQLITE_ERROR") return {};
+  const diagnostic: Record<string, number | string> = {};
+  if (Number.isSafeInteger(candidate.errcode) && Number(candidate.errcode) >= 0
+    && Number(candidate.errcode) <= 0x7fffffff) {
+    diagnostic.sqlite_errcode = Number(candidate.errcode);
+  }
+  if (typeof candidate.errstr === "string" && /^[A-Za-z0-9 _().,:-]{1,160}$/u.test(candidate.errstr)) {
+    diagnostic.sqlite_errstr = candidate.errstr;
+  }
+  return diagnostic;
+}
+
 async function readWindowsBootTime(): Promise<string> {
   const output = await powershell(
     "$ErrorActionPreference='Stop'; $value=(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime(); $value.ToString('o')",
@@ -445,7 +460,7 @@ const isEntry = process.argv[1] !== undefined
 if (isEntry) {
   main().catch((error: unknown) => {
     const code = error && typeof error === "object" && "code" in error ? String(error.code) : "admin_recovery_failed";
-    process.stderr.write(`${JSON.stringify({ status: "blocked", error_code: code })}\n`);
+    process.stderr.write(`${JSON.stringify({ status: "blocked", error_code: code, ...sqliteErrorDiagnostic(error) })}\n`);
     process.exitCode = 1;
   });
 }
