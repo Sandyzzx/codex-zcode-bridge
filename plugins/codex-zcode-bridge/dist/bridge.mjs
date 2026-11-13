@@ -53554,6 +53554,7 @@ function toError(value) {
 init_resolver();
 import { homedir as homedir6 } from "node:os";
 import path21 from "node:path";
+import { pathToFileURL as pathToFileURL3 } from "node:url";
 
 // node_modules/@modelcontextprotocol/server/dist/index.mjs
 var DEFAULT_MAX_REQUEST_BODY_SIZE = 4 * 1024 * 1024;
@@ -56015,7 +56016,9 @@ async function createHostStartPlanIssuer(options) {
     let authentication = options.authentication;
     if (!authentication) {
       const { loadOfficialStartPlanAuthenticationResolverFactory: loadOfficialStartPlanAuthenticationResolverFactory2 } = await Promise.resolve().then(() => (init_official_host_adapter(), official_host_adapter_exports));
-      const factory = await loadOfficialStartPlanAuthenticationResolverFactory2();
+      const factory = await loadOfficialStartPlanAuthenticationResolverFactory2(
+        pathToFileURL3(workerEntryPath())
+      );
       authentication = factory({ dataBaseDir });
     }
     return await createProductionStartPlanAuth2({

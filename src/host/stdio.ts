@@ -10,6 +10,7 @@ import { serveStdio, StdioServerTransport, type StdioServerHandle } from "@model
 import type { Readable, Writable } from "node:stream";
 import { homedir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { findPackageRoot, loadPersistedRuntimeEnvironment, NodeRuntimeResolver } from "../runtime/resolver.js";
 import type { SqliteLifecycleMcpAuthority } from "../manager/sqlite-lifecycle-mcp-authority.js";
 import { createBridgeServer } from "../mcp/server.js";
@@ -108,7 +109,13 @@ export async function createHostStartPlanIssuer(options: HostStartPlanIssuerOpti
     let authentication = options.authentication;
     if (!authentication) {
       const { loadOfficialStartPlanAuthenticationResolverFactory } = await import("../adapters/official-host-adapter.js");
-      const factory = await loadOfficialStartPlanAuthenticationResolverFactory();
+      // The bundled Bridge lives under dist/, while the verified Official Host
+      // assets ship under worker/. Resolve against the Worker-shaped URL rather
+      // than bridge.mjs so Start Plan uses the same verified artifact as the
+      // Coding Plan execution path.
+      const factory = await loadOfficialStartPlanAuthenticationResolverFactory(
+        pathToFileURL(workerEntryPath()),
+      );
       authentication = factory({ dataBaseDir });
     }
     return await createProductionStartPlanAuth({
