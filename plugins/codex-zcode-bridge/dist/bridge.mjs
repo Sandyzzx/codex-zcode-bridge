@@ -4307,6 +4307,9 @@ function validAdapterCleanupEvidence(value) {
   if (close.managerProcessCountAfter !== void 0) closeKeys.push("managerProcessCountAfter");
   return Object.keys(value).sort().join("|") === evidenceKeys.sort().join("|") && Object.keys(close).sort().join("|") === closeKeys.sort().join("|") && value.contract === "adapter-cleanup-v1" && ["resolved", "rejected"].includes(close.status) && typeof close.stage === "string" && stages.has(close.stage) && scanStatuses.has(close.treeScanStatus) && scanStatuses.has(value.treeScanStatus) && (close.errorName === void 0 || /^[A-Za-z][A-Za-z0-9_.:-]{0,119}$/u.test(close.errorName)) && (close.errorCode === void 0 || /^[A-Za-z][A-Za-z0-9_.:-]{0,119}$/u.test(close.errorCode)) && (close.managerProcessCountAfter === void 0 || Number.isSafeInteger(close.managerProcessCountAfter) && close.managerProcessCountAfter >= 0) && (!close.stage.startsWith("official_") || Number.isSafeInteger(close.managerProcessCountAfter));
 }
+function validVerifiedAdapterCleanupEvidence(value) {
+  return validAdapterCleanupEvidence(value) && value.close.status === "resolved" && value.close.treeScanStatus === "verified" && value.treeScanStatus === "verified";
+}
 function normalizeCleanupEvidence(value, input) {
   const keys = ["attempt", "claim_id", "fixture", "generation", "launch_receipt_digest", "operation_id", "operation_resources_complete", "process_tree_digest", "resources_digest", "result_commit_ref", "root_process_id", "root_start_fingerprint", "source", "task_id", "worker_identity_digest", "worker_tree_complete", "workspace_touched"];
   const expectedKeys = value?.adapter_cleanup === void 0 ? keys : [...keys, "adapter_cleanup"].sort();
@@ -6189,6 +6192,284 @@ var init_store = __esm({
           return { duplicate: false, operation_id: operationId, task_id: input.task_id, attempt: nextAttempt, status: "queued", created_at: createdAt };
         });
       }
+      /**
+       * Atomically turn a claimed, Result-less Attempt into preserved interruption
+       * history, release its occupancy after externally verified Worker cleanup,
+       * and create exactly one queued next Attempt. The caller supplies process
+       * tree/resource digests only after exact identity exit and claimant closure.
+       */
+      interruptAndRequeue(input, { workspaceValidator, executionPermissionCheck } = {}) {
+        this.#assertWritable();
+        const keys = [
+          "adapter_cleanup",
+          "attempt",
+          "claim_id",
+          "claim_worker_identity_digest",
+          "continuation_operation_id",
+          "generation",
+          "interruption_evidence",
+          "operation_id",
+          "process_tree_digest",
+          "reason",
+          "resources_digest",
+          "revision",
+          "task_id"
+        ];
+        const interruptions = /* @__PURE__ */ new Set(["interrupted_by_upgrade", "worker_exited_without_result", "worker_terminated_without_result"]);
+        if (!input || Object.getPrototypeOf(input) !== Object.prototype || Object.keys(input).some((key) => !keys.includes(key)) || !validId3(input.operation_id) || !validId3(input.task_id) || !Number.isSafeInteger(input.attempt) || input.attempt < 1 || !Number.isSafeInteger(input.generation) || input.generation < 1 || !Number.isSafeInteger(input.revision) || input.revision < 1 || !validId3(input.claim_id) || typeof input.claim_worker_identity_digest !== "string" || !/^[0-9a-f]{64}$/u.test(input.claim_worker_identity_digest) || !validId3(input.continuation_operation_id) || !interruptions.has(input.reason) || !input.interruption_evidence || Object.getPrototypeOf(input.interruption_evidence) !== Object.prototype || input.interruption_evidence.reason !== input.reason || !validVerifiedAdapterCleanupEvidence(input.adapter_cleanup) || typeof input.process_tree_digest !== "string" || !/^[0-9a-f]{64}$/u.test(input.process_tree_digest) || typeof input.resources_digest !== "string" || !/^[0-9a-f]{64}$/u.test(input.resources_digest)) fail2("invalid_interruption_request");
+        const interruptionJson = canonical4(input.interruption_evidence);
+        if (Buffer.byteLength(interruptionJson, "utf8") > 4096) fail2("invalid_interruption_evidence");
+        const interruptionDigest = digest2(interruptionJson);
+        const nextAttemptNumber = input.attempt + 1;
+        const createdAt = (/* @__PURE__ */ new Date()).toISOString();
+        const result = {
+          task_id: input.task_id,
+          attempt: input.attempt,
+          status: "failed",
+          summary: `Worker execution was interrupted (${input.reason}); the previous Attempt is retained and a new Attempt is queued.`,
+          files_changed: [],
+          tests: [],
+          issues: [`interruption_evidence:${interruptionDigest}`],
+          needs_master_decision: false,
+          zcode_output: "",
+          exit_code: null,
+          session_id: null,
+          started_at: null,
+          finished_at: createdAt,
+          error_code: input.reason
+        };
+        const resultJson = canonicalTaskResult2(result, { task_id: input.task_id, attempt: input.attempt, result_status: "failed" });
+        const resultDigest = digest2({ result_contract_version: RESULT_CONTRACT_VERSION, result_status: "failed", result });
+        const resultCommitRef = `result-${resultDigest}`;
+        const previousReleasedRevision = input.revision + 5;
+        const continuation = {
+          contract: "wp6b2b-continue-v1",
+          operation_id: input.continuation_operation_id,
+          task_id: input.task_id,
+          feedback: `Automatic recovery after ${input.reason}.`,
+          additional_requirements: [],
+          previous_attempt: input.attempt,
+          previous_operation_id: input.operation_id,
+          previous_generation: input.generation,
+          previous_revision: previousReleasedRevision,
+          previous_claim_id: input.claim_id,
+          previous_worker_identity_digest: input.claim_worker_identity_digest
+        };
+        const continuationJson = canonical4(continuation);
+        const continuationDigest = digest2(continuationJson);
+        const priorOperation = this.readOperation(input.operation_id);
+        if (!priorOperation) fail2("operation_not_found");
+        if (priorOperation.task_id !== input.task_id || priorOperation.attempt !== input.attempt || priorOperation.generation !== input.generation || priorOperation.claim_id !== input.claim_id || priorOperation.claim_worker_identity_digest !== input.claim_worker_identity_digest) fail2("interruption_identity_mismatch");
+        const workspace = validateWorkspace(priorOperation.workspace_ref, workspaceValidator);
+        if (workspace !== priorOperation.workspace_ref) fail2("interruption_workspace_mismatch");
+        const task = this.readTask(input.task_id);
+        if (!task) fail2("task_not_found");
+        const permission = callDecision(executionPermissionCheck, workspace, {
+          operation_id: input.continuation_operation_id,
+          task_id: input.task_id,
+          attempt: nextAttemptNumber,
+          task
+        });
+        if (permission.state !== "allow") fail2(permission.state === "deny" ? "execution_permission_denied" : "execution_permission_unknown");
+        return this.#transaction(() => {
+          const existing = this.#db.prepare("SELECT * FROM attempts WHERE continuation_operation_id=?").get(input.continuation_operation_id);
+          if (existing) {
+            let stored;
+            try {
+              stored = JSON.parse(existing.continuation_json);
+            } catch {
+              fail2("continue_history_mismatch");
+            }
+            const prior = this.#db.prepare("SELECT * FROM manager_operations WHERE operation_id=? AND operation_kind='attempt_lifecycle'").get(input.operation_id);
+            let priorResult;
+            try {
+              priorResult = prior?.result_json === null ? null : JSON.parse(prior?.result_json);
+            } catch {
+              fail2("interruption_requeue_conflict");
+            }
+            const issue2 = Array.isArray(priorResult?.issues) ? priorResult.issues.find((value) => typeof value === "string" && value.startsWith("interruption_evidence:")) : null;
+            const storedEvidenceDigest = issue2?.slice("interruption_evidence:".length);
+            if (existing.task_id !== input.task_id || existing.attempt !== nextAttemptNumber || existing.continuation_digest !== digest2(existing.continuation_json) || stored?.operation_id !== input.continuation_operation_id || stored?.previous_operation_id !== input.operation_id || stored?.previous_attempt !== input.attempt || stored?.previous_generation !== input.generation || stored?.previous_claim_id !== input.claim_id || stored?.previous_worker_identity_digest !== input.claim_worker_identity_digest || !prior || prior.phase !== "released" || prior.result_status !== "failed" || prior.result_digest === null || prior.result_json === null || priorResult?.error_code !== input.reason || typeof storedEvidenceDigest !== "string" || !/^[0-9a-f]{64}$/u.test(storedEvidenceDigest) || !this.#db.prepare("SELECT 1 FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded' AND json_extract(evidence_json,'$.reason')=? AND json_extract(evidence_json,'$.evidence_digest')=?").get(input.operation_id, input.reason, storedEvidenceDigest) || stored?.previous_revision !== prior.revision) fail2("interruption_requeue_conflict");
+            const cleanupEvent = this.#db.prepare("SELECT evidence_json FROM manager_operation_events WHERE operation_id=? AND event_type='cleanup_verified'").get(input.operation_id);
+            let cleanupEvidence2;
+            try {
+              cleanupEvidence2 = JSON.parse(cleanupEvent?.evidence_json);
+            } catch {
+              fail2("interruption_requeue_conflict");
+            }
+            if (cleanupEvidence2?.claim_id !== input.claim_id || cleanupEvidence2?.worker_identity_digest !== input.claim_worker_identity_digest || !validVerifiedAdapterCleanupEvidence(cleanupEvidence2?.adapter_cleanup) || canonical4(cleanupEvidence2.adapter_cleanup) !== canonical4(input.adapter_cleanup) || typeof cleanupEvidence2?.cleanup_digest !== "string" || !/^[0-9a-f]{64}$/u.test(cleanupEvidence2.cleanup_digest))
+              fail2("interruption_requeue_conflict");
+            return {
+              duplicate: true,
+              operation_id: input.operation_id,
+              task_id: input.task_id,
+              previous_attempt: input.attempt,
+              attempt: existing.attempt,
+              next_operation_id: input.continuation_operation_id,
+              status: "queued",
+              created_at: existing.created_at,
+              result_digest: prior.result_digest,
+              cleanup_digest: cleanupEvidence2.cleanup_digest,
+              interruption_reason: input.reason,
+              evidence_digest: storedEvidenceDigest
+            };
+          }
+          const previous = this.#db.prepare("SELECT * FROM manager_operations WHERE operation_id=? AND operation_kind='attempt_lifecycle'").get(input.operation_id);
+          const taskRow = this.#db.prepare("SELECT task_id,status,current_attempt FROM tasks WHERE task_id=?").get(input.task_id);
+          const previousAttempt = this.#db.prepare("SELECT task_id,attempt,generation,status FROM attempts WHERE task_id=? AND attempt=?").get(input.task_id, input.attempt);
+          if (!previous || !taskRow || !previousAttempt || previous.task_id !== input.task_id || previous.attempt !== input.attempt || previous.generation !== input.generation || previous.revision !== input.revision || previous.claim_id !== input.claim_id || previous.claim_generation !== input.generation || previous.claim_worker_identity_digest !== input.claim_worker_identity_digest || previous.phase !== "running" || previous.result_digest !== null || previous.result_json !== null || previous.result_status !== null || previousAttempt.generation !== input.generation || previousAttempt.status !== "running" || taskRow.current_attempt !== input.attempt || taskRow.status !== "running") fail2("stale_interruption_cas");
+          this.#assertNoUnansweredInteraction(input.operation_id);
+          this.#assertNoCancellationIntent(input.operation_id);
+          let worker, launch;
+          try {
+            worker = JSON.parse(previous.claim_worker_identity_json);
+            launch = JSON.parse(previous.launch_identity_json);
+          } catch {
+            fail2("interruption_worker_identity_invalid");
+          }
+          fixtureWorkerIdentity(worker);
+          fixtureLaunchIdentity(launch);
+          if (worker.source !== "manager_verified_process_probe" || worker.fixture !== false || launch.source !== "manager_os_spawn_observation" || launch.fixture !== false || worker.platform !== "win32" || launch.platform !== "win32" || worker.fingerprint_precision !== "exact" || launch.fingerprint_precision !== "exact" || worker.process_id !== launch.process_id || worker.start_fingerprint !== launch.start_fingerprint || digest2(canonical4(worker)) !== input.claim_worker_identity_digest) fail2("interruption_worker_identity_mismatch");
+          if (previous.launch_receipt_digest === null) fail2("interruption_launch_receipt_missing");
+          const cleanupEvidence = {
+            source: "manager_os_cleanup_verification",
+            fixture: false,
+            operation_id: input.operation_id,
+            task_id: input.task_id,
+            attempt: input.attempt,
+            generation: input.generation,
+            claim_id: input.claim_id,
+            worker_identity_digest: input.claim_worker_identity_digest,
+            launch_receipt_digest: previous.launch_receipt_digest,
+            result_commit_ref: resultCommitRef,
+            process_tree_digest: input.process_tree_digest,
+            resources_digest: input.resources_digest,
+            root_process_id: worker.process_id,
+            root_start_fingerprint: worker.start_fingerprint,
+            worker_tree_complete: true,
+            operation_resources_complete: true,
+            workspace_touched: false,
+            adapter_cleanup: input.adapter_cleanup
+          };
+          const normalized = normalizeCleanupEvidence(cleanupEvidence, {
+            operation_id: input.operation_id,
+            task_id: input.task_id,
+            attempt: input.attempt,
+            generation: input.generation,
+            claim_id: input.claim_id,
+            claim_worker_identity_digest: input.claim_worker_identity_digest
+          });
+          const cleanupDigest = digest2({ cleanup_contract_version: 1, evidence: normalized });
+          const at = createdAt;
+          const observation = { reason: input.reason, evidence_digest: interruptionDigest };
+          let revision = input.revision;
+          let changed = this.#db.prepare("UPDATE manager_operations SET revision=revision+1 WHERE operation_id=? AND task_id=? AND attempt=? AND generation=? AND phase='running' AND revision=? AND claim_id=? AND claim_generation=? AND claim_worker_identity_digest=? AND result_digest IS NULL").run(input.operation_id, input.task_id, input.attempt, input.generation, revision, input.claim_id, input.generation, input.claim_worker_identity_digest);
+          if (changed.changes !== 1) fail2("stale_interruption_cas");
+          this.#faultPoint("after_projection");
+          this.#event(input.operation_id, revision + 1, "observation_recorded", "running", "running", input.generation, observation, at);
+          revision += 1;
+          changed = this.#db.prepare("UPDATE manager_operations SET phase='result_committed',revision=revision+1,result_status='failed',result_generation=?,result_digest=?,result_json=?,result_commit_ref=? WHERE operation_id=? AND task_id=? AND attempt=? AND generation=? AND phase='running' AND revision=? AND claim_id=? AND claim_generation=? AND claim_worker_identity_digest=? AND result_digest IS NULL").run(input.generation, resultDigest, resultJson, resultCommitRef, input.operation_id, input.task_id, input.attempt, input.generation, revision, input.claim_id, input.generation, input.claim_worker_identity_digest);
+          if (changed.changes !== 1) fail2("stale_interruption_cas");
+          const attemptChanged = this.#db.prepare("UPDATE attempts SET status='failed' WHERE task_id=? AND attempt=? AND generation=? AND status='running'").run(input.task_id, input.attempt, input.generation);
+          const taskChanged = this.#db.prepare("UPDATE tasks SET status='failed' WHERE task_id=? AND current_attempt=? AND status='running'").run(input.task_id, input.attempt);
+          if (attemptChanged.changes !== 1 || taskChanged.changes !== 1) fail2("interruption_projection_cas");
+          this.#event(
+            input.operation_id,
+            revision + 1,
+            "result_committed",
+            "running",
+            "result_committed",
+            input.generation,
+            {
+              claim_id: input.claim_id,
+              outcome: "failed",
+              result_commit_ref: resultCommitRef,
+              result_digest: resultDigest,
+              worker_identity_digest: input.claim_worker_identity_digest
+            },
+            at
+          );
+          revision += 1;
+          changed = this.#db.prepare("UPDATE manager_operations SET phase='cleanup_pending',revision=revision+1 WHERE operation_id=? AND phase='result_committed' AND revision=? AND result_commit_ref=?").run(input.operation_id, revision, resultCommitRef);
+          if (changed.changes !== 1) fail2("stale_interruption_cas");
+          this.#event(
+            input.operation_id,
+            revision + 1,
+            "cleanup_pending",
+            "result_committed",
+            "cleanup_pending",
+            input.generation,
+            { claim_id: input.claim_id, result_commit_ref: resultCommitRef, worker_identity_digest: input.claim_worker_identity_digest },
+            at
+          );
+          revision += 1;
+          changed = this.#db.prepare("UPDATE manager_operations SET phase='cleanup_verified',revision=revision+1 WHERE operation_id=? AND phase='cleanup_pending' AND revision=? AND result_commit_ref=?").run(input.operation_id, revision, resultCommitRef);
+          if (changed.changes !== 1) fail2("stale_interruption_cas");
+          const cleanupEventEvidence = {
+            claim_id: input.claim_id,
+            cleanup_digest: cleanupDigest,
+            evidence_source: normalized.source,
+            launch_receipt_digest: normalized.launch_receipt_digest,
+            operation_resources_complete: true,
+            process_tree_digest: normalized.process_tree_digest,
+            resources_digest: normalized.resources_digest,
+            result_commit_ref: resultCommitRef,
+            root_process_id: normalized.root_process_id,
+            root_start_fingerprint: normalized.root_start_fingerprint,
+            worker_identity_digest: input.claim_worker_identity_digest,
+            worker_tree_complete: true,
+            workspace_touched: false,
+            adapter_cleanup: normalized.adapter_cleanup
+          };
+          this.#event(
+            input.operation_id,
+            revision + 1,
+            "cleanup_verified",
+            "cleanup_pending",
+            "cleanup_verified",
+            input.generation,
+            cleanupEventEvidence,
+            at
+          );
+          revision += 1;
+          changed = this.#db.prepare("UPDATE manager_operations SET phase='released',revision=revision+1 WHERE operation_id=? AND phase='cleanup_verified' AND revision=? AND result_commit_ref=?").run(input.operation_id, revision, resultCommitRef);
+          if (changed.changes !== 1) fail2("stale_interruption_cas");
+          this.#event(
+            input.operation_id,
+            revision + 1,
+            "released",
+            "cleanup_verified",
+            "released",
+            input.generation,
+            {
+              claim_id: input.claim_id,
+              cleanup_digest: cleanupDigest,
+              result_commit_ref: resultCommitRef,
+              worker_identity_digest: input.claim_worker_identity_digest
+            },
+            at
+          );
+          revision += 1;
+          const queued = this.#db.prepare("UPDATE tasks SET status='queued',current_attempt=? WHERE task_id=? AND current_attempt=? AND status='failed'").run(nextAttemptNumber, input.task_id, input.attempt);
+          if (queued.changes !== 1) fail2("interruption_requeue_cas");
+          const inserted = this.#db.prepare("INSERT INTO attempts(task_id,attempt,generation,status,created_at,continuation_operation_id,continuation_json,continuation_digest) VALUES(?,?,NULL,'queued',?,?,?,?)").run(input.task_id, nextAttemptNumber, createdAt, input.continuation_operation_id, continuationJson, continuationDigest);
+          if (inserted.changes !== 1) fail2("interruption_requeue_conflict");
+          return {
+            duplicate: false,
+            operation_id: input.operation_id,
+            task_id: input.task_id,
+            previous_attempt: input.attempt,
+            attempt: nextAttemptNumber,
+            next_operation_id: input.continuation_operation_id,
+            status: "queued",
+            created_at: createdAt,
+            result_digest: resultDigest,
+            cleanup_digest: cleanupDigest,
+            interruption_reason: input.reason,
+            evidence_digest: interruptionDigest
+          };
+        });
+      }
       provisionCapacity({ operation_id, capacity_limit, expected_generation = 0, maintenance }) {
         this.#assertWritable();
         if (!validId3(operation_id) || !Number.isInteger(capacity_limit) || capacity_limit < 1 || capacity_limit > 8 || maintenance?.dispatch_blocked !== true || maintenance?.writers_drained !== true) fail2("invalid_maintenance_request");
@@ -7764,6 +8045,16 @@ var init_store = __esm({
         }
         if (pending.size) fail2("interaction_reply_outcome_unknown");
       }
+      #assertNoUnansweredInteraction(operationId) {
+        const rows = this.#db.prepare("SELECT event_type,evidence_json FROM manager_operation_events WHERE operation_id=? AND event_type IN ('interaction_requested','interaction_reply_accepted') ORDER BY sequence").all(operationId);
+        const pending = /* @__PURE__ */ new Set();
+        for (const row of rows) {
+          const requestId = JSON.parse(row.evidence_json).request_id;
+          if (row.event_type === "interaction_requested") pending.add(requestId);
+          else pending.delete(requestId);
+        }
+        if (pending.size) fail2("interaction_reply_outcome_unknown");
+      }
       #assertNoCancellationIntent(operationId) {
         const rows = this.#db.prepare("SELECT evidence_json FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded'").all(operationId);
         if (rows.some((row) => {
@@ -8757,6 +9048,11 @@ function createSqliteLifecyclePort(store, { recoveryEvidenceVerifier, workerIden
     enumerable: true,
     value: (input, gates) => store.createNextAttempt(input, gates)
   });
+  if (typeof store.interruptAndRequeue !== "function") throw new TypeError("candidate SQLite Store missing interruptAndRequeue");
+  Object.defineProperty(port, "interruptAndRequeue", {
+    enumerable: true,
+    value: (input, gates) => store.interruptAndRequeue(input, gates)
+  });
   return Object.freeze(port);
 }
 var UnsupportedLifecycleOperationError, B1_METHODS, C1_METHODS, C2_METHODS, C3_READ_METHODS, CANCEL_METHODS, QUEUED_CANCEL_METHODS, INTERACTION_METHODS, RUNTIME_EVENT_METHODS;
@@ -8835,6 +9131,37 @@ function readAllLifecycleEventsForRecovery(port, operationId) {
       throw new LifecycleGateError("recovery_event_cursor_invalid");
     }
     afterSequence = lastSequence;
+  }
+}
+function taskExecutionEvidenceObserved(port, operation, lifecycleEvents) {
+  if (lifecycleEvents.some((event) => String(event.event_type).startsWith("interaction_"))) return true;
+  const runtimeExecutionEventTypes = /* @__PURE__ */ new Set([
+    "session_ready",
+    "model_selected",
+    "turn_started",
+    "model_tool_call",
+    "tool_status",
+    "model_output",
+    "turn_completed",
+    "turn_failed",
+    "report_ready"
+  ]);
+  const taskId = text(operation.task_id, "recovery_task_id_missing");
+  const operationId = text(operation.operation_id, "recovery_operation_id_missing");
+  const attempt = positive3(Number(operation.attempt), "recovery_attempt_invalid");
+  const generation = positive3(Number(operation.generation), "recovery_generation_invalid");
+  const pageSize = 200;
+  let afterCursor = 0;
+  while (true) {
+    const page = port.readTaskEvents(taskId, { afterCursor, limit: pageSize });
+    if (page.events.length > pageSize) throw new LifecycleGateError("recovery_task_event_page_oversized");
+    if (page.events.some((event) => runtimeExecutionEventTypes.has(String(event.event_type)) && event.operation_id === operationId && Number(event.operation_attempt ?? event.attempt) === attempt && Number(event.generation) === generation)) return true;
+    if (!page.hasMore) return false;
+    const nextCursor = Number(page.nextCursor);
+    if (!Number.isSafeInteger(nextCursor) || nextCursor <= afterCursor) {
+      throw new LifecycleGateError("recovery_task_event_cursor_invalid");
+    }
+    afterCursor = nextCursor;
   }
 }
 function assertSqliteRuntimeVersion(version2) {
@@ -9213,7 +9540,7 @@ async function ensureFreshSqliteAuthority(root, databaseFileName, modules, proce
         removeOwnedBootstrapFile(markerTempPath);
       }
       if (existsSync10(databasePath) || existsSync10(databasePath + ".v13-v14-pending.json")) {
-        modules.Store.autoUpgradeV13?.(resolvedRoot, {
+        const upgrade = modules.Store.autoUpgradeV13?.(resolvedRoot, {
           databaseFileName,
           runtimeRosterDigest: currentSqliteRuntimeRosterDigest(),
           assertStartupLock: () => lock.assertHeld()
@@ -9221,7 +9548,10 @@ async function ensureFreshSqliteAuthority(root, databaseFileName, modules, proce
         const existing = tryReadReadySqliteAuthority(modules, resolvedRoot, databaseFileName, false);
         if (!existing) throw new LifecycleGateError("sqlite_existing_database_unverified", "existing SQLite database is not a valid production Authority");
         emitFreshBootstrapStage(options, "ready");
-        result = normalizeReadySqliteAuthority(existing);
+        result = {
+          ...normalizeReadySqliteAuthority(existing),
+          ...upgrade && typeof upgrade === "object" && "state" in upgrade && upgrade.state === "upgraded" ? { upgradeState: "upgraded" } : {}
+        };
         break;
       }
       assertFreshBootstrapRootEmpty(resolvedRoot, databaseFileName);
@@ -9709,7 +10039,7 @@ async function openClaimOnlyDriver(options) {
           throw new LifecycleGateError("recovery_event_evidence_invalid");
         }
       });
-      if (phase === "running") {
+      if (phase === "running" && recoveryOptions.allowInterruptRequeue !== true) {
         return {
           state: "held",
           operation_id: operationId,
@@ -9718,6 +10048,267 @@ async function openClaimOnlyDriver(options) {
           identity_state: identityState,
           probe_reason: probeReason
         };
+      }
+      if (phase === "running") {
+        if (cancellationRequested) {
+          return {
+            state: "held",
+            operation_id: operationId,
+            phase,
+            reason: "cancellation_in_progress",
+            identity_state: identityState,
+            probe_reason: probeReason
+          };
+        }
+        if (taskExecutionEvidenceObserved(port, operation, lifecycleEvents)) {
+          return {
+            state: "held",
+            operation_id: operationId,
+            phase,
+            reason: "execution_side_effect_unverified",
+            identity_state: identityState,
+            probe_reason: probeReason
+          };
+        }
+        if (options.testOnlyFakeAdapter !== true) {
+          return {
+            state: "held",
+            operation_id: operationId,
+            phase,
+            reason: "adapter_cleanup_unverified",
+            identity_state: identityState,
+            probe_reason: probeReason
+          };
+        }
+        const initialIdentityState = identityState;
+        const activeEntry = [...activeWorkers.entries()].find(([candidateOperationId]) => candidateOperationId === operationId);
+        const active = activeEntry?.[1];
+        if (active && active.child.pid !== processId) {
+          return {
+            state: "held",
+            operation_id: operationId,
+            phase,
+            reason: "recovery_host_worker_identity_mismatch",
+            identity_state: identityState,
+            probe_reason: probeReason
+          };
+        }
+        if (identityState === "alive" && recoveryOptions.stopAliveWorker === true && !active) {
+          return {
+            state: "held",
+            operation_id: operationId,
+            phase,
+            reason: "worker_still_alive_managed_elsewhere",
+            identity_state: identityState,
+            probe_reason: probeReason
+          };
+        }
+        if (identityState === "alive" && recoveryOptions.stopAliveWorker === true) {
+          try {
+            let stop = verifiedRecoveryStops.get(stopKey);
+            if (!stop) {
+              stop = (async () => {
+                if (options.testStopWorkerForRecovery) {
+                  await options.testStopWorkerForRecovery(processId, fingerprint);
+                } else {
+                  const stopped = await terminateProcessTree(processId, {
+                    graceMs: 500,
+                    killWaitMs: 5e3,
+                    expectedRootFingerprint: fingerprint
+                  });
+                  if (stopped.verified !== true) throw new LifecycleGateError("recovery_worker_stop_unverified");
+                }
+              })();
+              verifiedRecoveryStops.set(stopKey, stop);
+            }
+            await stop;
+            const afterStop = await probeWithDeadline(probe, { pid: processId, identity }, processProbeTimeoutMs);
+            identityState = afterStop.status === "resolved" && afterStop.verdict?.state === "exited" ? "exited" : afterStop.status === "resolved" && afterStop.verdict?.state === "alive" ? "alive" : "unknown";
+            probeReason = afterStop.status === "resolved" ? afterStop.verdict?.reason_code ?? probeReason : afterStop.status === "timeout" ? "probe_timeout" : "probe_rejected";
+          } catch (error2) {
+            verifiedRecoveryStops.delete(stopKey);
+            identityState = "unknown";
+            probeReason = errorCode(error2) ?? "worker_stop_unverified";
+          }
+        }
+        if (identityState !== "exited") {
+          return {
+            state: "held",
+            operation_id: operationId,
+            phase,
+            reason: identityState === "alive" ? "worker_still_alive" : "worker_exit_unverified",
+            identity_state: identityState,
+            probe_reason: probeReason
+          };
+        }
+        const interruptionTree = await processTreeWithDeadline(
+          [{ pid: processId, fingerprint }],
+          processTreeProbeTimeoutMs,
+          verifyTreeClaimants
+        );
+        const treeResult = interruptionTree.status === "resolved" ? interruptionTree.result : void 0;
+        const treeClosed = treeResult?.clean === true && treeResult.livePids.length === 0 && treeResult.observedPids.includes(processId);
+        if (!treeClosed || !treeResult) {
+          return {
+            state: "held",
+            operation_id: operationId,
+            phase,
+            reason: interruptionTree.status === "timeout" ? "process_tree_probe_timeout" : interruptionTree.status === "rejected" ? "process_tree_probe_rejected" : treeResult !== void 0 && treeResult.livePids.length > 0 ? "process_tree_still_live" : "process_tree_not_verified",
+            identity_state: identityState,
+            probe_reason: probeReason
+          };
+        }
+        if (active) {
+          try {
+            const exitCode = await waitForClose(active.child, 15e3);
+            if (exitCode === null && !active.child.signalCode) throw new LifecycleGateError("worker_exit_unverified");
+            active.privateAuthAbort?.abort();
+            active.releasePrivateAuth?.();
+            await active.closeHandleGate?.();
+            for (const stream of active.child.stdio) stream?.destroy();
+          } catch (error2) {
+            return {
+              state: "held",
+              operation_id: operationId,
+              phase,
+              reason: errorCode(error2) ?? "worker_resources_not_closed",
+              identity_state: "unknown",
+              probe_reason: probeReason
+            };
+          }
+        }
+        const streams = active?.child.stdio;
+        const workerStdioClosed = streams === void 0 || streams.every((stream) => stream === null || stream.destroyed === true || stream.closed === true);
+        if (!workerStdioClosed) {
+          return {
+            state: "held",
+            operation_id: operationId,
+            phase,
+            reason: "worker_resources_not_closed",
+            identity_state: "exited",
+            probe_reason: probeReason
+          };
+        }
+        const observedPids = [...new Set(treeResult.observedPids)].sort((left, right) => left - right);
+        const processTreeFacts = {
+          contract: "sqlite-candidate-recovery-interruption-tree-v1",
+          operation_id: operationId,
+          task_id: String(operation.task_id),
+          attempt: Number(operation.attempt),
+          generation: Number(operation.generation),
+          claim_id: claimId,
+          worker_identity_digest: workerDigest,
+          root_process_id: processId,
+          root_start_fingerprint: fingerprint,
+          identity_state: "exited",
+          scan_scope: "worker_root_recorded_tree_and_observed_claimants",
+          scan_clean: true,
+          live_pids: [],
+          observed_pids: observedPids
+        };
+        const resourceFacts = {
+          contract: "sqlite-candidate-recovery-interruption-resources-v1",
+          adapter: options.testOnlyFakeAdapter ? "fake_candidate_adapter" : "zcode_app_server",
+          operation_id: operationId,
+          generation: Number(operation.generation),
+          claim_id: claimId,
+          worker_identity_digest: workerDigest,
+          worker_process_exited: true,
+          worker_tree_complete: true,
+          worker_stdio_closed: true,
+          interaction_channels_closed: true,
+          workspace_touched: false,
+          execution_events_observed: false
+        };
+        const adapterCleanup = {
+          contract: "adapter-cleanup-v1",
+          close: { stage: "direct_close", status: "resolved", treeScanStatus: "verified" },
+          treeScanStatus: "verified"
+        };
+        const processTreeDigest = sha2563(canonicalJson2(processTreeFacts));
+        const resourcesDigest = sha2563(canonicalJson2(resourceFacts));
+        const interruptionReason = recoveryOptions.interruptionReason ?? (initialIdentityState === "alive" ? "worker_terminated_without_result" : "worker_exited_without_result");
+        const interruptionEvidence = {
+          contract: "sqlite-candidate-recovery-interruption-v1",
+          reason: interruptionReason,
+          operation_id: operationId,
+          task_id: String(operation.task_id),
+          attempt: Number(operation.attempt),
+          generation: Number(operation.generation),
+          claim_id: claimId,
+          worker_identity_digest: workerDigest,
+          initial_identity_state: initialIdentityState,
+          final_identity_state: "exited",
+          probe_reason: probeReason,
+          process_tree_digest: processTreeDigest,
+          resources_digest: resourcesDigest,
+          host_worker_handle_present: active !== void 0,
+          worker_stdio_closed: true,
+          execution_evidence_state: "none_observed"
+        };
+        const nextAttempt = Number(operation.attempt) + 1;
+        const outcome = asRecord3(port.interruptAndRequeue({
+          operation_id: operationId,
+          task_id: text(operation.task_id, "recovery_task_id_missing"),
+          attempt: positive3(Number(operation.attempt), "recovery_attempt_invalid"),
+          generation: positive3(Number(operation.generation), "recovery_generation_invalid"),
+          revision: positive3(Number(operation.revision), "recovery_revision_invalid"),
+          claim_id: text(claimId, "recovery_claim_id_missing"),
+          claim_worker_identity_digest: text(workerDigest, "recovery_claim_identity_missing"),
+          reason: interruptionReason,
+          interruption_evidence: interruptionEvidence,
+          process_tree_digest: processTreeDigest,
+          resources_digest: resourcesDigest,
+          adapter_cleanup: adapterCleanup,
+          continuation_operation_id: `sqlite-${sha2563(`${String(operation.task_id)}\0${nextAttempt}`).slice(0, 32)}`
+        }, {
+          workspaceValidator: localPolicy.validateWorkspace,
+          executionPermissionCheck: localPolicy.checkPermission
+        }));
+        if (outcome.status !== "queued" || Number(outcome.attempt) !== nextAttempt) {
+          throw new LifecycleGateError("recovery_interruption_not_persisted");
+        }
+        if (activeEntry) activeWorkers.delete(activeEntry[0]);
+        cancellationProofs.delete(operationId);
+        verifiedRecoveryStops.delete(stopKey);
+        return {
+          state: "requeued",
+          operation_id: operationId,
+          task_id: outcome.task_id,
+          previous_attempt: outcome.previous_attempt,
+          attempt: outcome.attempt,
+          next_operation_id: outcome.next_operation_id,
+          phase: "queued",
+          reason: interruptionReason,
+          result_digest: outcome.result_digest,
+          cleanup_digest: outcome.cleanup_digest
+        };
+      }
+      if (phase === "cleanup_unverified") {
+        const failureEvent = [...lifecycleEvents].reverse().find((event) => event.event_type === "cleanup_unverified");
+        let failureReason = null;
+        try {
+          failureReason = failureEvent ? JSON.parse(String(failureEvent.evidence_json)).reason : null;
+        } catch {
+          return {
+            state: "held",
+            operation_id: operationId,
+            phase,
+            reason: "cleanup_failure_evidence_invalid",
+            identity_state: identityState,
+            probe_reason: probeReason
+          };
+        }
+        if (failureReason === "adapter_cleanup_unverified") {
+          return {
+            state: "held",
+            operation_id: operationId,
+            phase,
+            reason: "adapter_cleanup_unverified",
+            identity_state: identityState,
+            probe_reason: probeReason
+          };
+        }
       }
       if (phase === "cleanup_unverified" && recoveryOptions.stopAliveWorker === true && identityState === "alive") {
         try {
@@ -9976,6 +10567,10 @@ async function openClaimOnlyDriver(options) {
     readCommittedResult: (operationId) => port.readCommittedResult(operationId),
     readTaskFeedback: (taskId) => port.readTaskFeedback(taskId),
     createNextAttempt: (input) => port.createNextAttempt(input, {
+      workspaceValidator: localPolicy.validateWorkspace,
+      executionPermissionCheck: localPolicy.checkPermission
+    }),
+    interruptAndRequeue: (input) => port.interruptAndRequeue(input, {
       workspaceValidator: localPolicy.validateWorkspace,
       executionPermissionCheck: localPolicy.checkPermission
     }),
@@ -11893,6 +12488,8 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
       #shutdownPromise = null;
       #pumpPromises = /* @__PURE__ */ new Set();
       #recoveryComplete = false;
+      #startupInterruptionReason;
+      #recoveryPromise = null;
       #pumpPending = false;
       #awaitingDispatchPrerequisite = false;
       #pumpRetryTimer = null;
@@ -11910,7 +12507,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
       #startPlanPrivateAuthFactory;
       #testOnlyFakeAdapter;
       #routeTaskModel;
-      constructor(driver, context, processProbe, testBeforeDispatch, testOnScheduler, shutdownWaitMs = DEFAULT_HOST_SHUTDOWN_WAIT_MS, startPlanAuthAvailable = false, testOnlyFakeAdapter = false, routeTaskModel2, startPlanAuthInjected = false, startPlanPrivateAuthFactory) {
+      constructor(driver, context, processProbe, testBeforeDispatch, testOnScheduler, shutdownWaitMs = DEFAULT_HOST_SHUTDOWN_WAIT_MS, startPlanAuthAvailable = false, testOnlyFakeAdapter = false, routeTaskModel2, startPlanAuthInjected = false, startPlanPrivateAuthFactory, startupInterruptionReason) {
         this.#driver = driver;
         this.#context = context;
         this.#processProbe = processProbe;
@@ -11922,6 +12519,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
         this.#startPlanPrivateAuthFactory = startPlanPrivateAuthFactory;
         this.#testOnlyFakeAdapter = testOnlyFakeAdapter;
         this.#routeTaskModel = routeTaskModel2;
+        this.#startupInterruptionReason = startupInterruptionReason;
       }
       async createTask(task) {
         this.#assertOpen();
@@ -12331,9 +12929,17 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
       }
       async recoverTasks() {
         this.#assertOpen();
-        if (this.#recoveryComplete) {
-          throw new TaskManagerError("TASK_STATE", "SQLite Recovery is startup-only; restart the Manager to refresh persisted Recovery facts");
+        if (this.#recoveryPromise) return this.#recoveryPromise;
+        const recovery = this.#recoverTasksOnce();
+        this.#recoveryPromise = recovery;
+        try {
+          await recovery;
+        } finally {
+          if (this.#recoveryPromise === recovery) this.#recoveryPromise = null;
         }
+      }
+      async #recoverTasksOnce() {
+        this.#recoveryComplete = false;
         try {
           let snapshot = this.#validateRecoverySnapshot(this.#driver.readRecoverySnapshot());
           this.#recoveryBlocked = null;
@@ -12346,13 +12952,40 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
             const operation = asRecord4(value);
             const operationId = operation.operation_id;
             if (typeof operationId !== "string") throw new TaskManagerError("TASK_STATE", "Recovery snapshot contains an Operation without identity");
-            const outcome = asRecord4(await this.#driver.recoverOperation(operationId));
+            const taskId = typeof operation.task_id === "string" ? operation.task_id : null;
+            const attempt = Number(operation.attempt);
+            if (String(operation.phase) === "running" && operation.result_digest === null && taskId !== null && this.#activeRuns.has(queueKey(taskId, attempt))) {
+              this.#schedulerStage("operation_recovery_deferred_active_host", {
+                operation_id: operationId,
+                task_id: taskId,
+                attempt,
+                reason: "host_run_is_active"
+              });
+              continue;
+            }
+            if (String(operation.phase) === "running" && operation.result_digest === null && taskId !== null && this.#isAutomaticRecoveryAttempt(taskId, attempt)) {
+              this.#schedulerStage("operation_recovery_requeue_budget_exhausted", {
+                operation_id: operationId,
+                task_id: taskId,
+                attempt,
+                reason: "automatic_recovery_attempt_interrupted"
+              });
+              continue;
+            }
+            const outcome = asRecord4(await this.#driver.recoverOperation(operationId, {
+              stopAliveWorker: true,
+              allowInterruptRequeue: true,
+              ...this.#startupInterruptionReason ? { interruptionReason: this.#startupInterruptionReason } : {}
+            }));
             this.#schedulerStage("operation_recovery_classified", {
               operation_id: operationId,
               phase: operation.phase,
               state: outcome.state ?? "unknown",
               reason: outcome.reason ?? null
             });
+            if (outcome.state === "requeued" && typeof outcome.task_id === "string" && Number.isSafeInteger(outcome.attempt) && Number(outcome.attempt) > 0) {
+              this.#enqueue(outcome.task_id, Number(outcome.attempt));
+            }
             if (outcome.state === "held") {
               this.#schedulerStage("recovery_workspace_scoped", {
                 operation_id: operationId,
@@ -12377,6 +13010,8 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
             }
           }
           this.#recoveryComplete = true;
+          this.#startupInterruptionReason = void 0;
+          this.#pumpFailure = null;
           this.#schedulerStage("recovery_complete", {
             recoverable_queued_attempts: queued.filter((value) => value.dispatchable === true).length,
             root_read_only: false
@@ -12451,7 +13086,14 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
       }
       static async create(options) {
         if (!options.trustedLocalContext) throw new TaskManagerError("TASK_STATE", "trusted local context is required");
-        const { testBeforeDispatch, testOnScheduler, testShutdownWaitMs, routeTaskModel: routeTaskModel2, ...driverOptions } = options;
+        const {
+          testBeforeDispatch,
+          testOnScheduler,
+          testShutdownWaitMs,
+          routeTaskModel: routeTaskModel2,
+          startupInterruptionReason,
+          ...driverOptions
+        } = options;
         const shutdownWaitMs = testShutdownWaitMs ?? DEFAULT_HOST_SHUTDOWN_WAIT_MS;
         if (!Number.isSafeInteger(shutdownWaitMs) || shutdownWaitMs < 1 || shutdownWaitMs > DEFAULT_HOST_SHUTDOWN_WAIT_MS) {
           throw new TaskManagerError("TASK_STATE", "invalid Host shutdown wait budget");
@@ -12468,7 +13110,8 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
           options.testOnlyFakeAdapter === true,
           routeTaskModel2,
           options.startPlanPrivateAuth !== void 0,
-          options.startPlanPrivateAuthFactory
+          options.startPlanPrivateAuthFactory,
+          startupInterruptionReason
         );
         try {
           await authority.recoverTasks();
@@ -12492,6 +13135,20 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
           continuation: snapshot.continuation ? asRecord4(snapshot.continuation) : null,
           result_submission_error: typeof snapshot.result_submission_error === "string" ? snapshot.result_submission_error : null
         };
+      }
+      #isAutomaticRecoveryAttempt(taskId, attempt) {
+        try {
+          const snapshot = this.#readSnapshot(taskId);
+          if (Number(snapshot.attempt.attempt) !== attempt || typeof snapshot.continuation?.previous_operation_id !== "string") return false;
+          const previous = this.#driver.readCommittedResult(snapshot.continuation.previous_operation_id);
+          const result = previous?.result;
+          if (!result || result.status !== "failed" || !["interrupted_by_upgrade", "worker_exited_without_result", "worker_terminated_without_result"].includes(result.error_code ?? "")) {
+            return false;
+          }
+          return result.issues.some((issue2) => /^interruption_evidence:[0-9a-f]{64}$/u.test(issue2));
+        } catch {
+          return true;
+        }
       }
       #enqueue(taskId, attempt) {
         if (this.#pumpFailure) {
@@ -12621,6 +13278,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
             }
             this.#schedulerStage("driver_run_returned", { task_id: next.taskId, attempt: next.attempt, state: run.state, queue_depth: this.#queue.length });
             this.#acceptRunOutcome(run);
+            await this.#recoverAfterRun(next, run);
             const after = this.#readSnapshot(next.taskId);
             if (after.projection.status === "queued" && after.operation === null && run.reason === "capacity_exhausted") {
               this.#queue.unshift(next);
@@ -12661,6 +13319,63 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
         }
       }
       #acceptRunOutcome(_run) {
+      }
+      async #recoverAfterRun(item, run) {
+        let snapshot;
+        try {
+          snapshot = this.#readSnapshot(item.taskId);
+        } catch {
+          return;
+        }
+        if (Number(snapshot.attempt.attempt) !== item.attempt || !snapshot.operation) return;
+        const operation = snapshot.operation;
+        const phase = String(operation.phase);
+        const operationId = String(operation.operation_id);
+        const workerCanBeRecoveredWithoutResult = run.state === "result_rejected" || run.state === "result_outcome_unknown" && run.workerExitCode !== null;
+        const interruptible = snapshot.projection.status === "running" && phase === "running" && operation.result_digest === null && workerCanBeRecoveredWithoutResult && !this.#isAutomaticRecoveryAttempt(item.taskId, item.attempt);
+        const cleanupRecoverable = ["result_committed", "cleanup_pending", "cleanup_unverified", "cleanup_verified"].includes(phase);
+        if (!interruptible && !cleanupRecoverable) {
+          if (phase === "running" && operation.result_digest === null && workerCanBeRecoveredWithoutResult) {
+            this.#schedulerStage("post_run_recovery_held", {
+              task_id: item.taskId,
+              attempt: item.attempt,
+              operation_id: operationId,
+              reason: "automatic_recovery_requeue_budget_exhausted"
+            });
+          }
+          return;
+        }
+        try {
+          const outcome = asRecord4(await this.#driver.recoverOperation(operationId, {
+            stopAliveWorker: false,
+            allowInterruptRequeue: interruptible,
+            ...interruptible ? { interruptionReason: "worker_exited_without_result" } : {}
+          }));
+          this.#schedulerStage("post_run_recovery_classified", {
+            task_id: item.taskId,
+            attempt: item.attempt,
+            operation_id: operationId,
+            state: outcome.state ?? "unknown",
+            reason: outcome.reason ?? null
+          });
+          if (outcome.state === "requeued" && typeof outcome.task_id === "string" && Number.isSafeInteger(outcome.attempt) && Number(outcome.attempt) > 0) {
+            this.#enqueue(outcome.task_id, Number(outcome.attempt));
+          } else if (outcome.state !== "complete" && outcome.state !== "released") {
+            this.#schedulerStage("post_run_recovery_workspace_scoped", {
+              task_id: item.taskId,
+              attempt: item.attempt,
+              operation_id: operationId,
+              reason: outcome.reason ?? "recovery_evidence_unknown"
+            });
+          }
+        } catch (error2) {
+          this.#schedulerStage("post_run_recovery_failed", {
+            task_id: item.taskId,
+            attempt: item.attempt,
+            operation_id: operationId,
+            reason: errorCode2(error2) ?? "post_run_recovery_failed"
+          });
+        }
       }
       #assertOpen() {
         if (this.#closed) throw new TaskManagerError("TASK_STATE", "SQLite lifecycle authority is closed");
@@ -37427,7 +38142,12 @@ async function startBridge(host = codexHostProfile(), version2 = SERVER_VERSION,
       throw new Error(`SQLite Authority startup refused: Trusted Local policy is ${trustedLocalContext.status}`);
     }
     const lifecycleGate = await Promise.resolve().then(() => (init_lifecycle_gate(), lifecycle_gate_exports));
-    await lifecycleGate.initializeFreshInstallSqliteRoot(dataRoot, FRESH_SQLITE_DATABASE_FILE, process.versions.node, processProbe);
+    const initialization = await lifecycleGate.initializeFreshInstallSqliteRoot(
+      dataRoot,
+      FRESH_SQLITE_DATABASE_FILE,
+      process.versions.node,
+      processProbe
+    );
     const { SqliteLifecycleMcpAuthority: SqliteLifecycleMcpAuthority2 } = await Promise.resolve().then(() => (init_sqlite_lifecycle_mcp_authority(), sqlite_lifecycle_mcp_authority_exports));
     const authority = await SqliteLifecycleMcpAuthority2.create({
       dataRoot,
@@ -37447,6 +38167,7 @@ async function startBridge(host = codexHostProfile(), version2 = SERVER_VERSION,
         journal: modelRoutingJournal
       }),
       routeTaskModel: routeTaskModel2,
+      ...initialization["upgradeState"] === "upgraded" ? { startupInterruptionReason: "interrupted_by_upgrade" } : {},
       onWorkerDiagnosticLine: (line) => {
         const facts = formatWorkerFailureFactsLine(line);
         if (facts) console.error(`[bridge] worker failure-facts ${facts}`);

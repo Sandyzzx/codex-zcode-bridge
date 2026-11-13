@@ -34,6 +34,8 @@ export type SqliteAuthorityOptions = ClaimOnlyDriverOptions & {
   readonly testBeforeDispatch?: () => Promise<void>;
   readonly testOnScheduler?: (stage: string, detail: Readonly<Record<string, unknown>>) => void;
   readonly testShutdownWaitMs?: number;
+  /** Set only when this Host process actually completed v13 -> v14 upgrade. */
+  readonly startupInterruptionReason?: "interrupted_by_upgrade";
   /** Host-supplied ADR-031 task-creation routing hook. `route` runs before
    * TaskPackage validation and persistence so every stored task carries the
    * fully resolved provider/model selection; `confirmRouting` is invoked only
@@ -56,6 +58,8 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
   #shutdownPromise: Promise<void> | null = null;
   readonly #pumpPromises = new Set<Promise<void>>();
   #recoveryComplete = false;
+  #startupInterruptionReason: "interrupted_by_upgrade" | undefined;
+  #recoveryPromise: Promise<void> | null = null;
   #pumpPending = false;
   #awaitingDispatchPrerequisite = false;
   #pumpRetryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -79,7 +83,8 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     shutdownWaitMs = DEFAULT_HOST_SHUTDOWN_WAIT_MS, startPlanAuthAvailable = false, testOnlyFakeAdapter = false,
     routeTaskModel?: TaskModelRouter,
     startPlanAuthInjected = false,
-    startPlanPrivateAuthFactory?: () => Promise<NonNullable<ClaimOnlyDriverOptions["startPlanPrivateAuth"]> | null>) {
+    startPlanPrivateAuthFactory?: () => Promise<NonNullable<ClaimOnlyDriverOptions["startPlanPrivateAuth"]> | null>,
+    startupInterruptionReason?: "interrupted_by_upgrade") {
     this.#driver = driver;
     this.#context = context;
     this.#processProbe = processProbe;
@@ -91,6 +96,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     this.#startPlanPrivateAuthFactory = startPlanPrivateAuthFactory;
     this.#testOnlyFakeAdapter = testOnlyFakeAdapter;
     this.#routeTaskModel = routeTaskModel;
+    this.#startupInterruptionReason = startupInterruptionReason;
   }
 
   async createTask(task: TaskPackage): Promise<TaskReceipt> {
@@ -558,9 +564,15 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
 
   async recoverTasks(): Promise<void> {
     this.#assertOpen();
-    if (this.#recoveryComplete) {
-      throw new TaskManagerError("TASK_STATE", "SQLite Recovery is startup-only; restart the Manager to refresh persisted Recovery facts");
-    }
+    if (this.#recoveryPromise) return this.#recoveryPromise;
+    const recovery = this.#recoverTasksOnce();
+    this.#recoveryPromise = recovery;
+    try { await recovery; }
+    finally { if (this.#recoveryPromise === recovery) this.#recoveryPromise = null; }
+  }
+
+  async #recoverTasksOnce(): Promise<void> {
+    this.#recoveryComplete = false;
     try {
       let snapshot = this.#validateRecoverySnapshot(this.#driver.readRecoverySnapshot());
       this.#recoveryBlocked = null;
@@ -573,10 +585,35 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
         const operation = asRecord(value);
         const operationId = operation.operation_id;
         if (typeof operationId !== "string") throw new TaskManagerError("TASK_STATE", "Recovery snapshot contains an Operation without identity");
-        const outcome = asRecord(await this.#driver.recoverOperation(operationId));
+        const taskId = typeof operation.task_id === "string" ? operation.task_id : null;
+        const attempt = Number(operation.attempt);
+        if (String(operation.phase) === "running" && operation.result_digest === null
+          && taskId !== null && this.#activeRuns.has(queueKey(taskId, attempt))) {
+          this.#schedulerStage("operation_recovery_deferred_active_host", {
+            operation_id: operationId, task_id: taskId, attempt, reason: "host_run_is_active",
+          });
+          continue;
+        }
+        if (String(operation.phase) === "running" && operation.result_digest === null
+          && taskId !== null && this.#isAutomaticRecoveryAttempt(taskId, attempt)) {
+          this.#schedulerStage("operation_recovery_requeue_budget_exhausted", {
+            operation_id: operationId, task_id: taskId, attempt,
+            reason: "automatic_recovery_attempt_interrupted",
+          });
+          continue;
+        }
+        const outcome = asRecord(await this.#driver.recoverOperation(operationId, {
+          stopAliveWorker: true,
+          allowInterruptRequeue: true,
+          ...(this.#startupInterruptionReason ? { interruptionReason: this.#startupInterruptionReason } : {}),
+        }));
         this.#schedulerStage("operation_recovery_classified", {
           operation_id: operationId, phase: operation.phase, state: outcome.state ?? "unknown", reason: outcome.reason ?? null,
         });
+        if (outcome.state === "requeued" && typeof outcome.task_id === "string"
+          && Number.isSafeInteger(outcome.attempt) && Number(outcome.attempt) > 0) {
+          this.#enqueue(outcome.task_id, Number(outcome.attempt));
+        }
         if (outcome.state === "held") {
           // An unresolved executor or cleanup failure holds only its own
           // Operation/workspace. The dispatch gate prevents another Worker
@@ -603,6 +640,8 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
         }
       }
       this.#recoveryComplete = true;
+      this.#startupInterruptionReason = undefined;
+      this.#pumpFailure = null;
       this.#schedulerStage("recovery_complete", { recoverable_queued_attempts: queued.filter((value) => value.dispatchable === true).length,
         root_read_only: false });
       this.#schedulePump();
@@ -689,7 +728,9 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
 
   static async create(options: SqliteAuthorityOptions): Promise<SqliteLifecycleMcpAuthority> {
     if (!options.trustedLocalContext) throw new TaskManagerError("TASK_STATE", "trusted local context is required");
-    const { testBeforeDispatch, testOnScheduler, testShutdownWaitMs, routeTaskModel, ...driverOptions } = options;
+    const {
+      testBeforeDispatch, testOnScheduler, testShutdownWaitMs, routeTaskModel, startupInterruptionReason, ...driverOptions
+    } = options;
     const shutdownWaitMs = testShutdownWaitMs ?? DEFAULT_HOST_SHUTDOWN_WAIT_MS;
     if (!Number.isSafeInteger(shutdownWaitMs) || shutdownWaitMs < 1 || shutdownWaitMs > DEFAULT_HOST_SHUTDOWN_WAIT_MS) {
       throw new TaskManagerError("TASK_STATE", "invalid Host shutdown wait budget");
@@ -699,7 +740,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       processProbe, testBeforeDispatch, testOnScheduler, shutdownWaitMs,
       options.startPlanPrivateAuth !== undefined || options.startPlanPrivateAuthFactory !== undefined,
       options.testOnlyFakeAdapter === true, routeTaskModel,
-      options.startPlanPrivateAuth !== undefined, options.startPlanPrivateAuthFactory);
+      options.startPlanPrivateAuth !== undefined, options.startPlanPrivateAuthFactory, startupInterruptionReason);
     try {
       await authority.recoverTasks();
       return authority;
@@ -723,6 +764,25 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       continuation: snapshot.continuation ? asRecord(snapshot.continuation) : null,
       result_submission_error: typeof snapshot.result_submission_error === "string" ? snapshot.result_submission_error : null,
     };
+  }
+
+  #isAutomaticRecoveryAttempt(taskId: string, attempt: number): boolean {
+    try {
+      const snapshot = this.#readSnapshot(taskId);
+      if (Number(snapshot.attempt.attempt) !== attempt
+        || typeof snapshot.continuation?.previous_operation_id !== "string") return false;
+      const previous = this.#driver.readCommittedResult(snapshot.continuation.previous_operation_id);
+      const result = previous?.result;
+      if (!result || result.status !== "failed"
+        || !["interrupted_by_upgrade", "worker_exited_without_result", "worker_terminated_without_result"].includes(result.error_code ?? "")) {
+        return false;
+      }
+      return result.issues.some((issue) => /^interruption_evidence:[0-9a-f]{64}$/u.test(issue));
+    } catch {
+      // If continuation identity cannot be read, retain occupancy rather than
+      // creating an unbounded retry chain.
+      return true;
+    }
   }
 
   #enqueue(taskId: string, attempt: number): void {
@@ -848,6 +908,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
         }
         this.#schedulerStage("driver_run_returned", { task_id: next.taskId, attempt: next.attempt, state: run.state, queue_depth: this.#queue.length });
         this.#acceptRunOutcome(run);
+        await this.#recoverAfterRun(next, run);
         const after = this.#readSnapshot(next.taskId);
         if (after.projection.status === "queued" && after.operation === null && run.reason === "capacity_exhausted") {
           // Capacity failure occurs before Operation creation or Spawn. Keep
@@ -895,6 +956,62 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
   #acceptRunOutcome(_run: ClaimOnlyRunResult): void {
     // Authority facts are read from the SQLite projection on every MCP call.
     // The in-memory return value is never used to claim a Result commit.
+  }
+
+  async #recoverAfterRun(item: { readonly taskId: string; readonly attempt: number }, run: ClaimOnlyRunResult): Promise<void> {
+    let snapshot: TaskSnapshot;
+    try { snapshot = this.#readSnapshot(item.taskId); }
+    catch { return; }
+    if (Number(snapshot.attempt.attempt) !== item.attempt || !snapshot.operation) return;
+    const operation = snapshot.operation;
+    const phase = String(operation.phase);
+    const operationId = String(operation.operation_id);
+    // `result_rejected` means this run produced no committed Result. The
+    // Recovery Driver still has to prove the exact Worker exited and that the
+    // recorded tree is clean, so a missing close code cannot authorize a
+    // second Writer by itself. `result_outcome_unknown` is different: a commit
+    // acknowledgement may have been lost, so it is never retried automatically.
+    const workerCanBeRecoveredWithoutResult = run.state === "result_rejected"
+      || (run.state === "result_outcome_unknown" && run.workerExitCode !== null);
+    const interruptible = snapshot.projection.status === "running"
+      && phase === "running" && operation.result_digest === null
+      && workerCanBeRecoveredWithoutResult
+      && !this.#isAutomaticRecoveryAttempt(item.taskId, item.attempt);
+    const cleanupRecoverable = ["result_committed", "cleanup_pending", "cleanup_unverified", "cleanup_verified"].includes(phase);
+    if (!interruptible && !cleanupRecoverable) {
+      if (phase === "running" && operation.result_digest === null && workerCanBeRecoveredWithoutResult) {
+        this.#schedulerStage("post_run_recovery_held", {
+          task_id: item.taskId, attempt: item.attempt, operation_id: operationId,
+          reason: "automatic_recovery_requeue_budget_exhausted",
+        });
+      }
+      return;
+    }
+    try {
+      const outcome = asRecord(await this.#driver.recoverOperation(operationId, {
+        stopAliveWorker: false,
+        allowInterruptRequeue: interruptible,
+        ...(interruptible ? { interruptionReason: "worker_exited_without_result" as const } : {}),
+      }));
+      this.#schedulerStage("post_run_recovery_classified", {
+        task_id: item.taskId, attempt: item.attempt, operation_id: operationId,
+        state: outcome.state ?? "unknown", reason: outcome.reason ?? null,
+      });
+      if (outcome.state === "requeued" && typeof outcome.task_id === "string"
+        && Number.isSafeInteger(outcome.attempt) && Number(outcome.attempt) > 0) {
+        this.#enqueue(outcome.task_id, Number(outcome.attempt));
+      } else if (outcome.state !== "complete" && outcome.state !== "released") {
+        this.#schedulerStage("post_run_recovery_workspace_scoped", {
+          task_id: item.taskId, attempt: item.attempt, operation_id: operationId,
+          reason: outcome.reason ?? "recovery_evidence_unknown",
+        });
+      }
+    } catch (error) {
+      this.#schedulerStage("post_run_recovery_failed", {
+        task_id: item.taskId, attempt: item.attempt, operation_id: operationId,
+        reason: errorCode(error) ?? "post_run_recovery_failed",
+      });
+    }
   }
 
   #assertOpen(): void {

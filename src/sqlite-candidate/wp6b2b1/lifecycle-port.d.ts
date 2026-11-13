@@ -387,6 +387,37 @@ export type CandidateRecoveryEvidenceVerifier = (context: CandidateRecoveryEvide
   readonly evidence_digest: string;
 }> | false;
 
+export interface CandidateInterruptAndRequeueInput {
+  readonly operation_id: string;
+  readonly task_id: string;
+  readonly attempt: number;
+  readonly generation: number;
+  readonly revision: number;
+  readonly claim_id: string;
+  readonly claim_worker_identity_digest: string;
+  readonly reason: 'interrupted_by_upgrade' | 'worker_exited_without_result' | 'worker_terminated_without_result';
+  readonly interruption_evidence: Readonly<Record<string, unknown> & { readonly reason: CandidateInterruptAndRequeueInput['reason'] }>;
+  readonly process_tree_digest: string;
+  readonly resources_digest: string;
+  readonly continuation_operation_id: string;
+  readonly adapter_cleanup: Readonly<Record<string, unknown>>;
+}
+
+export interface CandidateInterruptAndRequeueOutcome {
+  readonly duplicate: boolean;
+  readonly operation_id: string;
+  readonly task_id: string;
+  readonly previous_attempt: number;
+  readonly attempt: number;
+  readonly next_operation_id: string;
+  readonly status: 'queued';
+  readonly created_at: string;
+  readonly result_digest: string;
+  readonly cleanup_digest: string | null;
+  readonly interruption_reason: CandidateInterruptAndRequeueInput['reason'];
+  readonly evidence_digest: string;
+}
+
 export interface SqliteLifecyclePort {
   createTask(task: CandidateTaskPackage, createdAt?: string): { task_id: string; current_attempt: 1; status: 'queued'; created_at: string };
   readTask(taskId: string): CandidateTaskPackage | null;
@@ -414,6 +445,7 @@ export interface SqliteLifecyclePort {
   recordLaunchReceipt(input: CandidateOperationIdentity & { readonly receipt_id: string; readonly launch_identity: unknown }): unknown;
   commitPermanentClaim(input: CandidateOperationIdentity & { readonly claim_id: string; readonly worker_identity: unknown }): unknown;
   createNextAttempt(input: CandidateContinueAttemptInput, gates: { readonly workspaceValidator: (input: { readonly requestedPath: string; readonly canonicalPath: string }) => unknown; readonly executionPermissionCheck: (context: { readonly workspace: string; readonly task: CandidateContinueAttemptInput & { readonly task: CandidateTaskPackage } }) => unknown }): CandidateContinueAttemptOutcome;
+  interruptAndRequeue(input: CandidateInterruptAndRequeueInput, gates: { readonly workspaceValidator: (input: { readonly requestedPath: string; readonly canonicalPath: string }) => unknown; readonly executionPermissionCheck: (context: { readonly workspace: string; readonly task: CandidateTaskPackage }) => unknown }): CandidateInterruptAndRequeueOutcome;
   readLifecycleEvents(operationId: string, options?: { readonly afterSequence?: number; readonly limit?: number }): CandidateLifecycleEvent[];
   appendLifecycleEvent(...args: never[]): never;
   readLifecycleStatus(...args: never[]): never;

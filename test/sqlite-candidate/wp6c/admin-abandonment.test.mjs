@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import test, { after } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -171,6 +172,36 @@ function adminTableSnapshot(root){
     };
   }finally{db.close();}
 }
+function databaseArtifactSnapshot(root){
+  const databasePath=path.join(root,'operations.sqlite3');
+  const db=new DatabaseSync(databasePath,{readOnly:true});
+  try{
+    const schema=db.prepare("SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE substr(name,1,7)<>'sqlite_' ORDER BY type,name").all()
+      .map(row=>({...row}));
+    const tables=db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all()
+      .map(row=>row.name);
+    const rows=Object.fromEntries(tables.map(table=>{
+      const quoted='"'+table.replaceAll('"','""')+'"';
+      return [table,db.prepare(`SELECT * FROM ${quoted} ORDER BY rowid`).all().map(row=>({...row}))];
+    }));
+    return {
+      file_sha256:createHash('sha256').update(readFileSync(databasePath)).digest('hex'),
+      schema,
+      rows_digest:digest(rows),
+      runtime_events_table:Boolean(db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='runtime_task_events'").get()),
+    };
+  }finally{db.close();}
+}
+function removeRuntimeEventExtension(root){
+  const db=new DatabaseSync(path.join(root,'operations.sqlite3'));
+  try{
+    db.exec(`DROP TRIGGER runtime_task_events_no_update;
+      DROP TRIGGER runtime_task_events_no_delete;
+      DROP TRIGGER runtime_task_events_identity_guard;
+      DROP INDEX runtime_task_events_task_cursor;
+      DROP TABLE runtime_task_events;`);
+  }finally{db.close();}
+}
 function alterAdminSchema(root,sql){
   const db=new DatabaseSync(path.join(root,'operations.sqlite3'));
   try{db.exec(sql);}finally{db.close();}
@@ -325,6 +356,38 @@ test('legacy global event-sequence uniqueness migrates without changing existing
     try{f.store.close();}catch{}
     try{reopened?.close();}catch{}
   }
+});
+
+test('preflight is byte-for-byte read-only on old v14 without Runtime Events',async()=>{
+  const f=fixture('old-v14-preflight-readonly');
+  try{
+    const operation=f.store.readOperation(f.operationId);
+    f.store.checkpoint();
+    f.store.close();
+    removeRuntimeEventExtension(f.root);
+    const before=databaseArtifactSnapshot(f.root);
+    assert.equal(before.runtime_events_table,false);
+    const argv=[
+      '--preflight',
+      '--data-root',f.root,'--database','operations.sqlite3','--operation-id',f.operationId,'--task-id',f.taskId,
+      '--attempt','1','--generation',String(operation.generation),'--revision',String(operation.revision),
+      '--claim-id',operation.claim_id,'--worker-identity-digest',operation.claim_worker_identity_digest,
+    ];
+    const dependencies={
+      windowsBootTime:async()=>new Date(Date.parse(f.hold.at)+1).toISOString(),
+      processInventory:async()=>[],
+      probeWorkerExit:async()=>({count:1,state:'exited',reason:null}),
+      claimantScan:async()=>({clean:true,livePids:[],observedPids:[]}),
+    };
+    if(process.platform==='win32'){
+      const result=await executeCli(argv,dependencies);
+      assert.equal(result.status,'preflight_ok');
+    }else{
+      await assert.rejects(()=>executeCli(argv,dependencies),/windows_required/u);
+    }
+    assert.deepEqual(databaseArtifactSnapshot(f.root),before,
+      'preflight must not add Runtime Events, migrate the admin sidecar, or change any persisted row');
+  }finally{try{f.store.close();}catch{}}
 });
 
 test('failure after the migrated schema write rolls back migration and lifecycle changes',()=>{

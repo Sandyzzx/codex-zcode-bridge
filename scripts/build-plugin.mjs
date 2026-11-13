@@ -28,6 +28,8 @@ const shared = {
   target: "node22.18",
   sourcemap: false,
   packages: "bundle",
+  // Keep generated path comments stable when a Worktree shares node_modules.
+  preserveSymlinks: true,
   logLevel: "info",
 };
 const waiterAttribution = [
