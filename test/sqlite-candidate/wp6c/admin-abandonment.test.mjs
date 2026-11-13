@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import test, { after } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -11,7 +12,7 @@ import { createSqliteLifecyclePort } from '../../../src/sqlite-candidate/wp6b2b1
 import { createTrustedLocalCandidateContext } from '../../../dist-test/src/host/stdio.js';
 import { SqliteLifecycleMcpAuthority } from '../../../dist-test/src/manager/sqlite-lifecycle-mcp-authority.js';
 import { createPlatformProbe } from '../../../dist-test/src/runtime/process-probe.js';
-import { parseArgs } from '../../../plugins/codex-zcode-bridge/dist/admin-abandon-held-operation.mjs';
+import { executeCli, parseArgs } from '../../../plugins/codex-zcode-bridge/dist/admin-abandon-held-operation.mjs';
 
 const HERE=path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT=path.resolve(HERE,'../../..');
@@ -100,6 +101,25 @@ function rows(f){
       active:db.prepare("SELECT COUNT(*) AS n FROM manager_operations WHERE operation_kind='attempt_lifecycle' AND phase NOT IN ('released','cancelled_before_launch')").get().n,
       integrity:db.prepare('PRAGMA integrity_check').get().integrity_check,
       foreignKeys:db.prepare('PRAGMA foreign_key_check').all(),
+    };
+  }finally{db.close();}
+}
+function databaseArtifactSnapshot(root){
+  const databasePath=path.join(root,'operations.sqlite3');
+  const db=new DatabaseSync(databasePath,{readOnly:true});
+  try{
+    const schema=db.prepare("SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE substr(name,1,7)<>'sqlite_' ORDER BY type,name").all()
+      .map(row=>({...row}));
+    const tables=db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all()
+      .map(row=>row.name);
+    const rows=Object.fromEntries(tables.map(table=>{
+      const quoted='"'+table.replaceAll('"','""')+'"';
+      return [table,db.prepare(`SELECT * FROM ${quoted} ORDER BY rowid`).all().map(row=>({...row}))];
+    }));
+    return {
+      file_sha256:createHash('sha256').update(readFileSync(databasePath)).digest('hex'),
+      schema,
+      rows_digest:digest(rows),
     };
   }finally{db.close();}
 }
@@ -299,6 +319,36 @@ test('restarted Manager skips the abandoned Task and dispatches a new Task',{tim
     await manager?.shutdown().catch(()=>undefined);
     try{f.store.close();}catch{}
   }
+});
+
+test('preflight is byte-for-byte read-only on old v14',async()=>{
+  const f=fixture('legacy-v14-preflight-readonly');
+  try{
+    const operation=f.store.readOperation(f.operationId);
+    f.store.checkpoint();
+    f.store.close();
+    const before=databaseArtifactSnapshot(f.root);
+    const argv=[
+      '--preflight',
+      '--data-root',f.root,'--database','operations.sqlite3','--operation-id',f.operationId,'--task-id',f.taskId,
+      '--attempt','1','--generation',String(operation.generation),'--revision',String(operation.revision),
+      '--claim-id',operation.claim_id,'--worker-identity-digest',operation.claim_worker_identity_digest,
+    ];
+    const dependencies={
+      windowsBootTime:async()=>new Date(Date.parse(f.hold.at)+1).toISOString(),
+      processInventory:async()=>[],
+      probeWorkerExit:async()=>({count:1,state:'exited',reason:null}),
+      claimantScan:async()=>({clean:true,livePids:[],observedPids:[]}),
+    };
+    if(process.platform==='win32'){
+      const result=await executeCli(argv,dependencies);
+      assert.equal(result.status,'preflight_ok');
+    }else{
+      await assert.rejects(()=>executeCli(argv,dependencies),/windows_required/u);
+    }
+    assert.deepEqual(databaseArtifactSnapshot(f.root),before,
+      'preflight must not extend the admin schema or change any persisted row');
+  }finally{try{f.store.close();}catch{}}
 });
 
 test('the compiled operator CLI performs Windows CAS or refuses unsupported platforms without mutation',async()=>{

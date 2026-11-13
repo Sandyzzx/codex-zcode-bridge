@@ -1,20 +1,22 @@
 # Project State
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-12
-> Last verified: 2026-11-12，核对 Preview.4 到 Stable 1.7.0 的合并基线、SQLite v14 启动升级、Start Plan/Coding Plan 产品入口、Model Routing 幂等修复和 README/插件元数据。
-> Verified against: e444ad0d3ce5df342a7f4d104b19816f1af1dda5 + 1.7.0 版本收口
+> Last updated: 2026-11-13
+> Last verified: 2026-11-13，核对 Stable 1.7.1 发布基线、SQLite v14 启动升级、Start Plan/Coding Plan 产品入口，以及尚未合并发布的 Host Recovery hotfix candidate。
+> Verified against: 295727320cab86b071c23ddddd6e29306fa29e7f + ADR-037 hotfix candidate
 
 当前有两条发布渠道：
 
-- Stable `v1.7.0`：由 Preview `2.0.0-preview.4` 提升，包含 SQLite-only 编排、Start Plan 与 Coding Plan 集成。
+- Stable `v1.7.1`：当前发布基线，包含 SQLite-only 编排、Start Plan 与 Coding Plan 集成。
 - Preview `2.0.0-preview.4`：已验收快照；`preview` 分支继续作为后续集成渠道。
+- `codex/master-sqlite-recovery-hotfix-20261113`：面向 `master` 的 Stable Host Recovery hotfix candidate；未合并、未 tag、未发布、未安装。
 
 ## 当前生产架构
 
 - 一个 SQLite Task Authority（Schema v14）、一个 Lifecycle Manager、一条 Worker→ZCode AppServer 生产链。
 - 旧 JSON TaskStore/Manager/Worker、CLI Adapter 和 GitWorktreeProvider 已从生产执行链退役；旧 JSON 文件不由 Bridge 读取、导入或删除。
-- Result、Cleanup 与 Release 是独立生命周期事实。无法验证 Worker 进程树清理时必须保留显式 Hold，不能伪造 Release。
+- Result、Cleanup 与 Release 是独立生命周期事实。Worker 精确退出和进程树 clean 不能替代 Adapter Cleanup Proof；证据不足时必须保留 Operation-scoped Hold，不能伪造 Release。
+- Manager 可在 Host 存活期间重复执行只读 Recovery 快照协调。Result-less 的 Stable 生产任务不自动重派；隔离 fake-Adapter 才能测试一次 atomic interruption/requeue。
 - Attention/Thin Waiter 读取同一 SQLite Authority；`zcode_doctor` 也绑定该 Authority。
 - 启动时发现有效 v13 Authority 后，Bridge 在既有跨进程 bootstrap 锁内执行受控副本升级到 v14，并保留原库为同目录 v13 备份；损坏或非 v13 数据库继续 fail-closed。
 

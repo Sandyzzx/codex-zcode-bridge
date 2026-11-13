@@ -162,6 +162,10 @@ interface ClaimOnlyPort {
     readonly workspaceValidator: (input: { readonly requestedPath: string; readonly canonicalPath: string }) => unknown;
     readonly executionPermissionCheck: (context: Parameters<TrustedLocalStdioContext["policy"]["checkPermission"]>[0]) => unknown;
   }): unknown;
+  interruptAndRequeue(input: Readonly<Record<string, unknown>>, gates: {
+    readonly workspaceValidator: (input: { readonly requestedPath: string; readonly canonicalPath: string }) => unknown;
+    readonly executionPermissionCheck: (context: Parameters<TrustedLocalStdioContext["policy"]["checkPermission"]>[0]) => unknown;
+  }): Readonly<Record<string, unknown>>;
   cancelQueuedAttempt(input: { readonly task_id: string; readonly expected_attempt: number }): unknown;
   requestCancellation(input: Readonly<Record<string, unknown>>, evidence: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>>;
   recordCancellationVerification(input: Readonly<Record<string, unknown>>, evidence: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>>;
@@ -191,6 +195,18 @@ export function readAllLifecycleEventsForRecovery(
     }
     afterSequence = lastSequence;
   }
+}
+
+function isAutomaticRecoveryContinuation(
+  port: Pick<ClaimOnlyPort, "readTaskLifecycle" | "readCommittedResult">,
+  operation: Readonly<Record<string, unknown>>,
+): boolean {
+  const lifecycle = asRecord(port.readTaskLifecycle(text(operation.task_id, "recovery_task_id_missing")));
+  const continuation = lifecycle.continuation ? asRecord(lifecycle.continuation) : null;
+  const previousOperationId = continuation?.previous_operation_id;
+  if (typeof previousOperationId !== "string") return false;
+  const previous = port.readCommittedResult(previousOperationId);
+  return previous?.result.issues.some((issue) => issue.startsWith("interruption_evidence:")) === true;
 }
 
 interface CandidateInteractionChannel {
@@ -1229,8 +1245,12 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
   readTaskFeedback(taskId: string): unknown;
   readRecoverySnapshot(): unknown;
   readRecoverableQueuedAttempts(): readonly Readonly<Record<string, unknown>>[];
-  recoverOperation(operationId: string, options?: { readonly stopAliveWorker?: boolean }): Promise<Readonly<Record<string, unknown>>>;
+  recoverOperation(operationId: string, options?: {
+    readonly stopAliveWorker?: boolean;
+    readonly allowInterruptRequeue?: boolean;
+  }): Promise<Readonly<Record<string, unknown>>>;
   createNextAttempt(input: Readonly<Record<string, unknown>>): unknown;
+  interruptAndRequeue(input: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>>;
   cancelQueuedAttempt(input: { readonly task_id: string; readonly expected_attempt: number }): unknown;
   requestCancellation(input: Readonly<Record<string, unknown>>, evidence: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>>;
   recordCancellationVerification(input: Readonly<Record<string, unknown>>, evidence: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>>;
@@ -1372,7 +1392,10 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
       finally { recoveryStore.close(); }
     },
     readRecoverableQueuedAttempts: () => port.readRecoverableQueuedAttempts(),
-    async recoverOperation(operationId: string, recoveryOptions: { readonly stopAliveWorker?: boolean } = {}) {
+    async recoverOperation(operationId: string, recoveryOptions: {
+      readonly stopAliveWorker?: boolean;
+      readonly allowInterruptRequeue?: boolean;
+    } = {}) {
       const stopKey = recoveryStopKey(options.dataRoot, options.databaseFileName, operationId);
       const operationValue = port.readOperation(operationId);
       if (!operationValue) throw new LifecycleGateError("recovery_operation_missing");
@@ -1481,21 +1504,227 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
         catch { throw new LifecycleGateError("recovery_event_evidence_invalid"); }
       });
 
-      // A running Operation with no Result remains occupied regardless of the
-      // fresh identity verdict. A second Manager must not turn that observation
-      // into a durable Recovery Hold: the original Worker may still be owned
-      // elsewhere, and explicit zcode_cancel must remain able to verify the
-      // persisted Claim and close the existing cancellation/CAS path.
+      // A Result-less running Attempt is never automatically replayed for the
+      // production Adapter. Stable has no complete runtime-effect ledger, so
+      // a missing Result cannot prove that model/tool/workspace effects did
+      // not already occur. Only the explicit in-process test Adapter may use
+      // the scoped interruption path.
       if (phase === "running") {
-        return {
-          state: "held",
+        if (recoveryOptions.allowInterruptRequeue !== true) {
+          return {
+            state: "held",
+            operation_id: operationId,
+            phase,
+            reason: identityState === "alive" ? "worker_still_alive_managed_elsewhere"
+              : identityState === "exited" ? "worker_exited_without_committed_result"
+                : "worker_identity_unknown_managed_elsewhere",
+            identity_state: identityState,
+            probe_reason: probeReason,
+          };
+        }
+        if (options.testOnlyFakeAdapter !== true) {
+          return { state: "held", operation_id: operationId, phase, reason: "execution_side_effect_unverified",
+            identity_state: identityState, probe_reason: probeReason };
+        }
+        if (cancellationRequested) {
+          return { state: "held", operation_id: operationId, phase, reason: "cancellation_in_progress",
+            identity_state: identityState, probe_reason: probeReason };
+        }
+        if (lifecycleEvents.some((event) => String(event.event_type).startsWith("interaction_"))) {
+          return { state: "held", operation_id: operationId, phase, reason: "interaction_effect_unverified",
+            identity_state: identityState, probe_reason: probeReason };
+        }
+        if (isAutomaticRecoveryContinuation(port, operation)) {
+          return { state: "held", operation_id: operationId, phase, reason: "automatic_recovery_requeue_budget_exhausted",
+            identity_state: identityState, probe_reason: probeReason };
+        }
+        const initialIdentityState = identityState;
+        const activeEntry = [...activeWorkers.entries()]
+          .find(([candidateOperationId]) => candidateOperationId === operationId);
+        const active = activeEntry?.[1];
+        if (active && active.child.pid !== processId) {
+          return { state: "held", operation_id: operationId, phase, reason: "recovery_host_worker_identity_mismatch",
+            identity_state: identityState, probe_reason: probeReason };
+        }
+        if (identityState === "alive" && !active) {
+          return { state: "held", operation_id: operationId, phase, reason: "worker_still_alive_managed_elsewhere",
+            identity_state: identityState, probe_reason: probeReason };
+        }
+        if (identityState === "alive" && active) {
+          try {
+            let stop = verifiedRecoveryStops.get(stopKey);
+            if (!stop) {
+              stop = (async () => {
+                if (options.testStopWorkerForRecovery) {
+                  await options.testStopWorkerForRecovery(processId, fingerprint);
+                } else {
+                  const stopped = await terminateProcessTree(processId, {
+                    graceMs: 500,
+                    killWaitMs: 5_000,
+                    expectedRootFingerprint: fingerprint,
+                  });
+                  if (stopped.verified !== true) throw new LifecycleGateError("recovery_worker_stop_unverified");
+                }
+              })();
+              verifiedRecoveryStops.set(stopKey, stop);
+            }
+            await stop;
+            const afterStop = await probeWithDeadline(probe, { pid: processId, identity }, processProbeTimeoutMs);
+            const afterStopVerdict = afterStop.status === "resolved" ? afterStop.verdict : undefined;
+            identityState = afterStopVerdict?.state === "exited" ? "exited"
+              : afterStopVerdict?.state === "alive" ? "alive" : "unknown";
+            probeReason = afterStopVerdict?.reason_code
+              ?? (identityState === "exited" ? "worker_stopped_and_exit_verified" : "worker_stop_exit_unverified");
+          } catch (error) {
+            verifiedRecoveryStops.delete(stopKey);
+            identityState = "unknown";
+            probeReason = errorCode(error) ?? "worker_stop_unverified";
+          }
+        }
+        if (identityState !== "exited") {
+          return {
+            state: "held",
+            operation_id: operationId,
+            phase,
+            reason: identityState === "alive" ? "worker_still_alive" : "worker_exit_unverified",
+            identity_state: identityState,
+            probe_reason: probeReason,
+          };
+        }
+        const interruptionTree = await processTreeWithDeadline([{ pid: processId, fingerprint }], 30_000);
+        const treeResult = interruptionTree.status === "resolved" ? interruptionTree.result : undefined;
+        if (!treeResult || treeResult.clean !== true || treeResult.livePids.length > 0) {
+          return {
+            state: "held",
+            operation_id: operationId,
+            phase,
+            reason: interruptionTree.status === "timeout" ? "process_tree_probe_timeout"
+              : interruptionTree.status === "rejected" ? "process_tree_probe_rejected"
+                : treeResult && treeResult.livePids.length > 0 ? "process_tree_still_live" : "process_tree_not_verified",
+            identity_state: identityState,
+            probe_reason: probeReason,
+          };
+        }
+        if (active) {
+          try {
+            const exitCode = await waitForClose(active.child, 15_000);
+            if (exitCode === null && !active.child.signalCode) throw new LifecycleGateError("worker_exit_unverified");
+            active.privateAuthAbort?.abort();
+            active.releasePrivateAuth?.();
+            await active.closeHandleGate?.();
+            for (const stream of active.child.stdio) stream?.destroy();
+          } catch (error) {
+            return {
+              state: "held",
+              operation_id: operationId,
+              phase,
+              reason: errorCode(error) ?? "worker_resources_not_closed",
+              identity_state: "unknown",
+              probe_reason: probeReason,
+            };
+          }
+        }
+        const streams = active?.child.stdio as ReadonlyArray<{ destroyed?: boolean; closed?: boolean } | null> | undefined;
+        const workerStdioClosed = streams === undefined
+          || streams.every((stream) => stream === null || stream.destroyed === true || stream.closed === true);
+        if (!workerStdioClosed) {
+          return { state: "held", operation_id: operationId, phase, reason: "worker_resources_not_closed",
+            identity_state: "exited", probe_reason: probeReason };
+        }
+        const observedPids = [...new Set(treeResult.observedPids)].sort((left, right) => left - right);
+        const processTreeFacts = {
+          contract: "sqlite-candidate-recovery-interruption-tree-v1",
           operation_id: operationId,
-          phase,
-          reason: identityState === "alive" ? "worker_still_alive_managed_elsewhere"
-            : identityState === "exited" ? "worker_exited_without_committed_result"
-              : "worker_identity_unknown_managed_elsewhere",
-          identity_state: identityState,
+          task_id: text(operation.task_id, "recovery_task_id_missing"),
+          attempt: positive(Number(operation.attempt), "recovery_attempt_invalid"),
+          generation: positive(Number(operation.generation), "recovery_generation_invalid"),
+          claim_id: claimId,
+          worker_identity_digest: workerDigest,
+          root_process_id: processId,
+          root_start_fingerprint: fingerprint,
+          identity_state: "exited",
+          scan_scope: "worker_root_recorded_tree_and_observed_claimants",
+          scan_clean: true,
+          live_pids: [],
+          observed_pids: observedPids,
+        };
+        const resourceFacts = {
+          contract: "sqlite-candidate-recovery-interruption-resources-v1",
+          adapter: "explicit_test_fake",
+          operation_id: operationId,
+          generation: positive(Number(operation.generation), "recovery_generation_invalid"),
+          claim_id: claimId,
+          worker_identity_digest: workerDigest,
+          worker_process_exited: true,
+          worker_tree_complete: true,
+          worker_stdio_closed: true,
+          interaction_channels_closed: true,
+          workspace_touched: false,
+          execution_events_observed: false,
+        };
+        const adapterCleanup = {
+          contract: "adapter-cleanup-v1",
+          close: { stage: "direct_close", status: "resolved", treeScanStatus: "verified" },
+          treeScanStatus: "verified",
+        } as const;
+        const processTreeDigest = sha256(canonicalJson(processTreeFacts));
+        const resourcesDigest = sha256(canonicalJson(resourceFacts));
+        const interruptionReason = initialIdentityState === "alive"
+          ? "worker_terminated_without_result" as const : "worker_exited_without_result" as const;
+        const interruptionEvidence = {
+          contract: "sqlite-candidate-recovery-interruption-v1",
+          reason: interruptionReason,
+          operation_id: operationId,
+          task_id: text(operation.task_id, "recovery_task_id_missing"),
+          attempt: positive(Number(operation.attempt), "recovery_attempt_invalid"),
+          generation: positive(Number(operation.generation), "recovery_generation_invalid"),
+          claim_id: claimId,
+          worker_identity_digest: workerDigest,
+          initial_identity_state: initialIdentityState,
+          final_identity_state: "exited",
           probe_reason: probeReason,
+          process_tree_digest: processTreeDigest,
+          resources_digest: resourcesDigest,
+          host_worker_handle_present: active !== undefined,
+          worker_stdio_closed: true,
+          execution_evidence_state: "none_observed",
+        };
+        const nextAttempt = positive(Number(operation.attempt), "recovery_attempt_invalid") + 1;
+        const outcome = asRecord(port.interruptAndRequeue({
+          operation_id: operationId,
+          task_id: text(operation.task_id, "recovery_task_id_missing"),
+          attempt: nextAttempt - 1,
+          generation: positive(Number(operation.generation), "recovery_generation_invalid"),
+          revision: positive(Number(operation.revision), "recovery_revision_invalid"),
+          claim_id: claimId,
+          claim_worker_identity_digest: workerDigest,
+          reason: interruptionReason,
+          interruption_evidence: interruptionEvidence,
+          process_tree_digest: processTreeDigest,
+          resources_digest: resourcesDigest,
+          adapter_cleanup: adapterCleanup,
+          continuation_operation_id: `sqlite-${sha256(`${String(operation.task_id)}\0${nextAttempt}`).slice(0, 32)}`,
+        }, {
+          workspaceValidator: localPolicy.validateWorkspace,
+          executionPermissionCheck: localPolicy.checkPermission,
+        }));
+        if (outcome.status !== "queued" || Number(outcome.attempt) !== nextAttempt) {
+          throw new LifecycleGateError("recovery_interruption_not_persisted");
+        }
+        if (activeEntry) activeWorkers.delete(activeEntry[0]);
+        cancellationProofs.delete(operationId);
+        verifiedRecoveryStops.delete(stopKey);
+        return {
+          state: "requeued",
+          operation_id: operationId,
+          task_id: outcome.task_id,
+          previous_attempt: outcome.previous_attempt,
+          attempt: outcome.attempt,
+          next_operation_id: outcome.next_operation_id,
+          phase: "queued",
+          reason: interruptionReason,
+          result_digest: outcome.result_digest,
+          cleanup_digest: outcome.cleanup_digest,
         };
       }
 
@@ -1552,7 +1781,13 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
         // residual risk is retained in the DECISION rather than hidden by PID
         // absence alone. Unknown, alive, conflicting, or failed scans below
         // remain operation-scoped Holds.
-        const completeCleanupClosureAvailable = treeOutcome?.status === "resolved"
+        // Stable does not persist the Adapter's execution-cleanup proof in a
+        // Result or generic hold. Worker exit plus an OS claimant scan can
+        // prove the Worker tree is gone, but cannot prove Adapter-owned
+        // resources are closed. Only the explicit test Adapter may synthesize
+        // that missing proof in this isolated driver.
+        const completeCleanupClosureAvailable = options.testOnlyFakeAdapter === true
+          && treeOutcome?.status === "resolved"
           && treeOutcome.result.clean === true
           && treeOutcome.result.livePids.length === 0;
         if (completeCleanupClosureAvailable && treeOutcome?.status === "resolved"
@@ -1682,6 +1917,11 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
             worker_tree_complete: true,
             operation_resources_complete: true,
             workspace_touched: false,
+            adapter_cleanup: {
+              contract: "adapter-cleanup-v1",
+              close: { stage: "direct_close", status: "resolved", treeScanStatus: "verified" },
+              treeScanStatus: "verified",
+            },
           };
           const recorded = asRecord(currentPhase === "cleanup_unverified"
             ? port.reverifyCleanup({ ...cleanupFence, cleanup_evidence: cleanupEvidence })
@@ -1705,7 +1945,9 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
         : treeOutcome?.status === "rejected" ? "process_tree_probe_rejected"
           : treeOutcome?.status === "resolved" && treeOutcome.result.livePids.length > 0 ? "process_tree_still_live"
             : treeOutcome?.status === "resolved" && treeOutcome.result.clean !== true ? "process_tree_not_verified"
-              : treeOutcome?.status === "resolved" && treeOutcome.result.clean === true ? "complete_cleanup_closure_unavailable" : undefined;
+              : treeOutcome?.status === "resolved" && treeOutcome.result.clean === true
+                ? options.testOnlyFakeAdapter === true ? "complete_cleanup_closure_unavailable" : "adapter_cleanup_unverified"
+                : undefined;
       const disposition = phase === "running" && identityState === "exited"
         ? cancellationRequested ? "cancel_interrupted_without_committed_result" : "worker_exited_without_committed_result"
         : phase === "cleanup_unverified"
@@ -1740,12 +1982,20 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
       recoveryEvidenceBindings.set(evidenceDigest, { ...input, evidence_json: canonicalJson(evidence) });
       try {
         const recorded = asRecord(port.recordRecoveryObservation(input, evidence));
-        return { state: "held", operation_id: operationId, phase, reason: reasonCode, revision: recorded.revision,
+        const outcomeReason = cleanupPhase && options.testOnlyFakeAdapter !== true ? "adapter_cleanup_unverified" : reasonCode;
+        return { state: "held", operation_id: operationId, phase, reason: outcomeReason, revision: recorded.revision,
           identity_state: identityState, probe_reason: probeReason, evidence_digest: evidenceDigest };
       } catch (error) {
         recoveryEvidenceBindings.delete(evidenceDigest);
         if (errorCode(error) === "recovery_observation_conflict" || errorCode(error) === "stale_recovery_cas") {
-          return { state: "held", operation_id: operationId, phase, reason: errorCode(error) };
+          return {
+            state: "held",
+            operation_id: operationId,
+            phase,
+            reason: cleanupPhase && options.testOnlyFakeAdapter !== true
+              ? "adapter_cleanup_unverified"
+              : errorCode(error),
+          };
         }
         throw error;
       }
@@ -1757,6 +2007,10 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
     readCommittedResult: (operationId) => port.readCommittedResult(operationId),
     readTaskFeedback: (taskId) => port.readTaskFeedback(taskId),
     createNextAttempt: (input) => port.createNextAttempt(input, {
+      workspaceValidator: localPolicy.validateWorkspace,
+      executionPermissionCheck: localPolicy.checkPermission,
+    }),
+    interruptAndRequeue: (input) => port.interruptAndRequeue(input, {
       workspaceValidator: localPolicy.validateWorkspace,
       executionPermissionCheck: localPolicy.checkPermission,
     }),

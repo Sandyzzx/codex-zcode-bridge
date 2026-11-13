@@ -71,7 +71,7 @@ test("claim-only lifecycle composition has no JSON TaskStore or real Adapter dep
   assert.match(gate, /verifyHandshakeAndCommitClaim/u);
 });
 
-test("SQLite Manager startup runs read-only Recovery and retains unknown active Operation occupancy", { timeout: 30_000 }, async () => {
+test("SQLite Manager startup and live Recovery are re-entrant, read-only, and retain unknown active Operation occupancy", { timeout: 30_000 }, async () => {
   const taskId = `recovery-held-${randomUUID()}`;
   const queuedTaskId = `recovery-root-queued-${randomUUID()}`;
   let spawnCount = 0;
@@ -90,8 +90,10 @@ test("SQLite Manager startup runs read-only Recovery and retains unknown active 
       const queuedStatus = contentObject(await _client.callTool({ name: "zcode_status", arguments: { task_id: queuedTaskId } }));
       assert.equal(queuedStatus.status, "queued", "a held Operation must not cause a different queued Task to dispatch");
       const beforeRetry = JSON.stringify(port.readRecoverySnapshot());
-      await assert.rejects(manager.recoverTasks(), /startup-only/u, "Recovery must not be re-entered while the Manager is live");
-      assert.equal(JSON.stringify(port.readRecoverySnapshot()), beforeRetry, "rejected Recovery re-entry must not alter lifecycle state");
+      await Promise.all([manager.recoverTasks(), manager.recoverTasks()]);
+      await manager.recoverTasks();
+      assert.equal(JSON.stringify(port.readRecoverySnapshot()), beforeRetry,
+        "live Recovery must be idempotent and must not alter an unresolved Operation");
       const sameWorkspace = await manager.createTask(syntheticTask(workspace, `same-path-${randomUUID()}`) as unknown as Parameters<SqliteLifecycleMcpAuthority["createTask"]>[0]);
       assert.equal(sameWorkspace.status, "queued", "new work may queue behind the occupied execution path");
       const independentWorkspace = path.join(dataRoot, "independent-workspace");
@@ -552,6 +554,131 @@ async function buildR5HeldWorker(name: string): Promise<string> {
   return outfile;
 }
 
+async function buildExitedAfterClaimWorker(name: string): Promise<string> {
+  mkdirSync(integrationRoot, { recursive: true });
+  const outfile = path.join(integrationRoot, `recovery-exited-after-claim-${name}-${randomUUID()}.mjs`);
+  await build({
+    entryPoints: [path.join(projectRoot, "src", "worker", "worker-main.ts")],
+    outfile,
+    bundle: true,
+    platform: "node",
+    format: "esm",
+    target: "node22.18",
+    packages: "external",
+    logLevel: "silent",
+    plugins: [{
+      name: "recovery-exited-after-claim",
+      setup(buildApi) {
+        buildApi.onLoad({ filter: /worker-main\.ts$/ }, async (args) => {
+          const marker = 'options.onStage?.(execution.adapter_mode === "test_fake" ? "test adapter start" : "zcode adapter start");';
+          const source = readFileSync(args.path, "utf8").replaceAll("\r\n", "\n");
+          if (!source.includes(marker)) throw new Error("Recovery controlled Worker seam missing");
+          return {
+            contents: source.replace(marker, `${marker}\n    process.exit(42);`),
+            loader: "ts",
+            resolveDir: path.dirname(args.path),
+          };
+        });
+      },
+    }],
+  });
+  return outfile;
+}
+
+test("same-Host Recovery preserves a Result-less Attempt and requeues at most once", {
+  timeout: 90_000,
+  skip: process.platform !== "win32",
+}, async () => {
+  const fixture = path.join(integrationRoot, `same-host-requeue-${randomUUID()}`);
+  const dataRoot = path.join(fixture, "sqlite-root");
+  const workspace = path.join(fixture, "workspace");
+  const settingsDirectory = path.join(fixture, "settings");
+  const taskId = `same-host-requeue-${randomUUID()}`;
+  const worker = await buildExitedAfterClaimWorker("once");
+  mkdirSync(workspace, { recursive: true });
+  mkdirSync(settingsDirectory, { recursive: true });
+  mkdirSync(dataRoot, { recursive: true });
+  await initializeIsolatedCandidateRoot(dataRoot);
+
+  const setupModules = await loadLifecycleCandidateModules();
+  const setupStore = setupModules.Store.open(dataRoot);
+  try {
+    setupModules.createPort(setupStore).provisionCapacity({
+      operation_id: `capacity-${randomUUID()}`,
+      capacity_limit: 1,
+      expected_generation: 0,
+      maintenance: { dispatch_blocked: true, writers_drained: true },
+    });
+  } finally {
+    setupStore.close();
+  }
+
+  const stages: Array<{ stage: string; detail?: Readonly<Record<string, unknown>> }> = [];
+  let spawnCount = 0;
+  let manager: SqliteLifecycleMcpAuthority | undefined;
+  try {
+    manager = await SqliteLifecycleMcpAuthority.create({
+      dataRoot,
+      workerEntryPath: worker,
+      bridgeEntryPath: fileURLToPath(import.meta.url),
+      trustedLocalContext: createTrustedLocalCandidateContext({ name: "same-host-requeue", settingsDirectory }),
+      testOnlyFakeAdapter: true,
+      testOnlyAutomaticRecoveryRequeue: true,
+      onChildSpawn: () => { spawnCount += 1; },
+      testOnScheduler: (stage, detail) => stages.push({ stage, detail }),
+    });
+    await manager.createTask(syntheticTask(workspace, taskId) as unknown as Parameters<SqliteLifecycleMcpAuthority["createTask"]>[0]);
+
+    const deadline = Date.now() + 45_000;
+    let status = await manager.getStatus(taskId);
+    while (Date.now() < deadline) {
+      status = await manager.getStatus(taskId);
+      const requeued = stages.some((entry) => entry.stage === "post_run_recovery_classified"
+        && entry.detail?.state === "requeued");
+      const budgetHeld = stages.some((entry) => entry.stage === "post_run_recovery_classified"
+        && entry.detail?.state === "held"
+        && entry.detail?.reason === "automatic_recovery_requeue_budget_exhausted");
+      if (spawnCount === 2 && status.attempt === 2 && requeued && budgetHeld) break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.equal(spawnCount, 2, "the same Host must create one replacement Attempt and stop after its second interruption");
+    assert.equal(status.attempt, 2);
+    assert.equal(status.status, "running");
+
+    await Promise.all([manager.recoverTasks(), manager.recoverTasks()]);
+    await manager.recoverTasks();
+    const afterRecovery = await manager.getStatus(taskId);
+    assert.equal(spawnCount, 2, "repeated live Recovery must not create a third Writer");
+    assert.equal(afterRecovery.attempt, 2);
+    assert.equal(afterRecovery.status, "running");
+
+    const recovery = setupModules.Store.openForRecovery(dataRoot);
+    assert.ok(recovery);
+    try {
+      const port = setupModules.createPort(recovery);
+      const first = port.readOperation(candidateOperationId(taskId, 1)) as Record<string, unknown>;
+      const second = port.readOperation(candidateOperationId(taskId, 2)) as Record<string, unknown>;
+      assert.equal(first.phase, "released");
+      assert.equal(first.result_status, "failed");
+      assert.equal(second.phase, "running");
+      assert.equal(second.result_digest, null);
+      const firstResult = JSON.parse(String(first.result_json)) as { issues?: string[] };
+      assert.ok(firstResult.issues?.some((issue) => issue.startsWith("interruption_evidence:")));
+      const firstEvents = port.readLifecycleEvents(candidateOperationId(taskId, 1));
+      assert.equal(firstEvents.filter((event) => event.event_type === "result_committed").length, 1);
+      assert.equal(firstEvents.filter((event) => event.event_type === "cleanup_verified").length, 1);
+      assert.equal(firstEvents.filter((event) => event.event_type === "released").length, 1);
+      assert.equal(port.readLifecycleEvents(candidateOperationId(taskId, 2))
+        .filter((event) => event.event_type === "claim_committed").length, 1);
+    } finally {
+      recovery.close();
+    }
+  } finally {
+    await manager?.shutdown().catch(() => undefined);
+    try { rmSync(fixture, { recursive: true, force: true }); } catch { /* retain a process-held fixture */ }
+  }
+});
+
 test("Recovery reads lifecycle evidence across the Store's bounded 200-event pages", () => {
   const firstPage = Array.from({ length: 200 }, (_, index) => ({ sequence: index + 1, event_type: "interaction_requested" }));
   const secondPage = [
@@ -967,9 +1094,13 @@ const recoveryModes = [
     recoveryProbe: async (requests: readonly ProbeRequest[]): Promise<ProbeVerdict[]> => requests.map(() => ({
       state: "exited", reason_code: "synthetic_exact_identity_absent", observed_at: new Date().toISOString(),
     })), expectedReason: "cleanup_incomplete" },
-  { name: "cleanup_unverified_exact_exit", maximumRecoveryMs: 30_000, releaseWhenClean: true, recoveryProbe: async (requests: readonly ProbeRequest[]): Promise<ProbeVerdict[]> => requests.map(() => ({
+  { name: "cleanup_unverified_exact_exit", maximumRecoveryMs: 30_000, recoveryProbe: async (requests: readonly ProbeRequest[]): Promise<ProbeVerdict[]> => requests.map(() => ({
     state: "exited", reason_code: "synthetic_exact_identity_absent", observed_at: new Date().toISOString(),
   })), expectedReason: "cleanup_incomplete" },
+  { name: "cleanup_unverified_exact_exit_test_adapter", maximumRecoveryMs: 30_000, releaseWhenClean: true,
+    testOnlyFakeAdapter: true, recoveryProbe: async (requests: readonly ProbeRequest[]): Promise<ProbeVerdict[]> => requests.map(() => ({
+      state: "exited", reason_code: "synthetic_exact_identity_absent", observed_at: new Date().toISOString(),
+    })), expectedReason: "cleanup_incomplete" },
   { name: "cleanup_unverified_explicit_stop_alive", explicitStopAliveRecovery: true, expectedReason: "cleanup_incomplete" },
   { name: "cleanup_unverified_explicit_stop_failure", explicitStopAliveRecovery: true, failRecoveryStop: true, expectedReason: "cleanup_incomplete" },
 ] as const;
@@ -1177,6 +1308,7 @@ async function runRecoveryBoundedMode(
       trustedLocalContext,
       processProbe: recoveryProbe,
       testProcessProbeTimeoutMs: 100,
+      ...("testOnlyFakeAdapter" in mode && mode.testOnlyFakeAdapter ? { testOnlyFakeAdapter: true as const } : {}),
       onChildSpawn: () => { recoverySpawnCount += 1; },
     });
     recoveryManager = recoveryAuthority;
@@ -1368,6 +1500,7 @@ test("Manager Recovery after restart releases exact exited Workers only after a 
           trustedLocalContext,
           processProbe: recoveryProbe,
           testProcessProbeTimeoutMs: 5_000,
+          testOnlyFakeAdapter: true,
           onChildSpawn: () => { recoverySpawns += 1; },
         } as const;
         const concurrent = await Promise.allSettled([
@@ -1384,6 +1517,7 @@ test("Manager Recovery after restart releases exact exited Workers only after a 
           trustedLocalContext,
           processProbe: platformProbe,
           testProcessProbeTimeoutMs: 5_000,
+          testOnlyFakeAdapter: true,
           onChildSpawn: () => { recoverySpawns += 1; },
         });
         authorities.push(authority);
@@ -1422,6 +1556,7 @@ test("Manager Recovery after restart releases exact exited Workers only after a 
         trustedLocalContext,
         processProbe: platformProbe,
         testProcessProbeTimeoutMs: 5_000,
+        testOnlyFakeAdapter: true,
       });
       authorities.push(repeated);
       const afterRepeat = modules.Store.openForRecovery(dataRoot);
@@ -1440,7 +1575,7 @@ test("Manager Recovery after restart releases exact exited Workers only after a 
   }
 });
 
-test("ADR-024 six lifecycle crash boundaries use hard Manager-process exits and restart Recovery", { timeout: 180_000, skip: process.platform !== "win32" }, async () => {
+test("ADR-024 six lifecycle crash boundaries use hard Manager-process exits and restart Recovery", { timeout: 180_000, skip: process.platform !== "win32" }, async (scenarioTest) => {
   const cases = [
     { name: "Admission persisted before Launch", interruptAt: "admission_complete", phase: "reserved", claimed: false, terminalAfterRestart: true },
     { name: "Launch intent persisted before process creation", interruptAt: "intent_complete", phase: "launch_intent", claimed: false, terminalAfterRestart: false },
@@ -1604,7 +1739,13 @@ test("ADR-024 six lifecycle crash boundaries use hard Manager-process exits and 
             expectedRootFingerprint: identity.fingerprint }).catch(() => undefined);
         }
       }
-      rmSync(fixture, { recursive: true, force: true });
+      try {
+        rmSync(fixture, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+      } catch (error) {
+        // A deliberately retained Root keeps the SQLite handle alive until this
+        // test process exits. Cleanup failure is not a functional assertion.
+        scenarioTest.diagnostic(`retained isolated fixture after fail-closed shutdown: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
   }
 });
@@ -1771,7 +1912,7 @@ test("R5 explicit cancel closes claimed Result-absent Workers after Manager hard
         dataRoot, workerEntryPath: scenario.workerEntryPath, bridgeEntryPath: fileURLToPath(import.meta.url),
         trustedLocalContext: createTrustedLocalCandidateContext({ name: `r5-restart-${scenario.interruptAt}`, settingsDirectory }),
         processProbe: authorityProbe, testProcessProbeTimeoutMs: 5_000,
-        testOnlyFakeAdapter: true, onChildSpawn: () => { recoverySpawns += 1; },
+        onChildSpawn: () => { recoverySpawns += 1; },
       });
       manager = authority;
       server = createBridgeServer({ taskManager: manager });

@@ -1,9 +1,9 @@
 # ZCode 运行配置边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-12
-> Last verified: 2026-11-12，核对 Stable 1.7.0 Desktop Host 启动身份、v13→v14 启动升级、R3 任务期限解析及 R2 容量保持边界。
-> Verified against: e444ad0d3ce5df342a7f4d104b19816f1af1dda5 + 1.7.0 版本收口
+> Last updated: 2026-11-13
+> Last verified: 2026-11-13，核对 Stable 1.7.1 Desktop Host 启动身份、v13→v14 启动升级、Host 内 Recovery、R3 任务期限解析及 R2 容量保持边界。
+> Verified against: 295727320cab86b071c23ddddd6e29306fa29e7f + ADR-037 hotfix candidate
 
 当前生产路径是 `node zcode.cjs app-server --stdio --surface desktop`，不是历史 CLI `--prompt --json`。任务 Adapter 与模型目录探测共用该启动合同；解析入口为 `NodeRuntimeResolver`，配置项与用户设置方法见仓库 README。
 
@@ -15,7 +15,7 @@ SQLite Manager 在派发每个 Attempt 前读取该 Host 的持久 runtime envir
 
 执行计时包含 runtime resolver、app-server 启动和 turn，到终结/错误/取消即停止。Adapter 清理总预算固定 300,000 ms；已有 Windows helper/身份验证期限不放宽，不增加用户配置。Manager 的私有执行写入限 15,000 ms；Result 等待为 execution + 330,000 ms；提交后的 close 与 interaction drain 共用 15,000 ms，再用现有 5,000 ms 身份探针。Host shutdown 继续独立使用原 60,000 ms 等待上限；不能证明原活跃任务 Cleanup/Release 时显式失败并保留所有权，不将它复用为任务执行期限。JS 定时器是协作式期限，不是 OS 硬实时保证。
 
-Cleanup 超时只发布 unverified；迟到确认不会自动改写 Result 或释放 Workspace。执行 timeout 可形成 failed/timeout Result；清理未证实则仍保留占用。Result 已提交时可显式调用 zcode_cancel 仅清理原世代；Result 未到的超时保留 running 和诊断，禁止假定未执行并重派。Manager 退出/重启不放宽这些证据要求。R2 的 32 MiB/v14 不变，Host 大 Result 读取限制按 Owner 决定延后。
+Cleanup 超时只发布 unverified；迟到确认不会自动改写 Result 或释放 Workspace。执行 timeout 可形成 failed/timeout Result；清理未证实则仍保留占用。Result 已提交时可在 `result_committed`、`cleanup_pending`、`cleanup_verified` 或 `cleanup_unverified` 显式调用 zcode_cancel 仅清理原世代；缺少 Adapter Cleanup Proof 时仍保持 Hold，不能仅凭 Worker 退出/进程树 clean 伪造 Release。Result 未到的超时保留 running 和诊断，禁止假定未执行并重派。Manager 退出/重启不放宽这些证据要求。R2 的 32 MiB/v14 不变，Host 大 Result 读取限制按 Owner 决定延后。
 
 ## SQLite v13 → v14 启动升级（ADR-026）
 

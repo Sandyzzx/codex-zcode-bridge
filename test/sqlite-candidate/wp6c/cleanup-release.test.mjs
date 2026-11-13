@@ -113,6 +113,20 @@ test('verified cleanup is operation-scoped and release frees only its own slot',
   assert.equal(f.store.readOperation(a.operation_id).claim_status,'permanent_claim_recorded');f.store.close();
 });
 
+test('Cleanup evidence rejects an incomplete Adapter proof without changing the pending Operation',()=>{
+  const f=makeStore('adapter-proof-required',{capacity:1}),a=addResult(f,'adapter-proof-required');
+  const pending=begin(f,a),before=rows(f,a);
+  for(const adapterCleanup of [
+    {contract:'adapter-cleanup-v1',close:{stage:'direct_close',status:'rejected',treeScanStatus:'incomplete'},treeScanStatus:'incomplete'},
+    {contract:'adapter-cleanup-v1',close:{stage:'direct_close',status:'resolved',treeScanStatus:'live'},treeScanStatus:'live'},
+  ]){
+    failWith(()=>f.store.recordCleanupEvidence({...a,revision:pending.revision,outcome:'verified',
+      cleanup_evidence:verifiedEvidence(a,{adapter_cleanup:adapterCleanup})}),'invalid_adapter_cleanup_evidence');
+    assert.deepEqual(rows(f,a),before);
+  }
+  f.store.close();
+});
+
 test('Recovery distinguishes verified cleanup awaiting Release from unknown cleanup for a shared Workspace',()=>{
   const f=makeStore('recovery-independent'),a=addResult(f,'recovery-a'),b=addResult(f,'recovery-b',{workspace:path.join(TEMP,'other-workspace-recovery')});
   verified(f,a);

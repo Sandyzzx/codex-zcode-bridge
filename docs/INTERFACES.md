@@ -1,9 +1,9 @@
 # 当前接口与兼容边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-12
-> Last verified: 2026-11-12，核对 SQLite Manager、MCP schema、Result、Attention、R1–R5、Model Routing 幂等与 Core 退役边界；宿主与平台未运行项见报告。
-> Verified against: e444ad0d3ce5df342a7f4d104b19816f1af1dda5 + 1.7.0 版本收口
+> Last updated: 2026-11-13
+> Last verified: 2026-11-13，核对 Stable 1.7.1 MCP schema、Host 内重复 Recovery、cleanup-only cancel、Result/Attention 与 R1–R5 边界。
+> Verified against: 295727320cab86b071c23ddddd6e29306fa29e7f + ADR-037 hotfix candidate
 
 准确字段以 `src/interfaces.ts`、`src/mcp/schemas.ts` 与共享 `src/result-contract.mjs` 为准。[ARCHITECTURE.md](ARCHITECTURE.md) 描述实现，[SHARED_CORE.md](SHARED_CORE.md) 列出 Core API 主版本兼容策略。本轮不改变 MCP 工具/schema、v14、32 MiB 或 R1–R5 状态语义。
 
@@ -23,9 +23,11 @@ TaskPackage 的 requirements、allowed_paths、forbidden_paths、acceptance_crit
 
 Admission 在事务中检查 Capacity 及执行路径重叠，覆盖跨 Manager 竞争。Worker 精确身份、Launch token/receipt、Claim、Attempt/generation/revision CAS 保持绑定。最终 workspace use 校验先于 Launch Intent；拒绝只留下 untouched reserved，显式 queued Cancel 经原 CAS 终结并释放。Intent 后即可能已 Spawn，缺 Receipt/句柄、timeout 或 Manager 崩溃都不授权重新派发。
 
-Manager 启动只读核对 running Operation，不因 alive/exited/unknown 的启动观察写持久 Recovery Hold；Claim/Capacity/路径仍占用。Result 缺失不等于未执行。显式 zcode_cancel 可以复用持久 Claim 恢复取消：精确原身份已退出、recorded-tree clean、无未决交互且 CAS 成功后提交 cancelled、Cleanup/Release。unknown、脏树、未解决交互或已有非清理 Hold 都保守拒绝。
+Manager 可在 Host 存活期间重复调用 `recoverTasks()`；同一 Manager 的并发调用共享进行中的恢复，active run 延后，完成后重新读取 SQLite。启动和无 Result 的 running Operation 都不因 alive/exited/unknown 观察自动重派；Claim/Capacity/路径继续占用。Stable 生产路径不把缺少 R7 Runtime Events 解释为没有执行副作用。显式 zcode_cancel 仍可复用持久 Claim 恢复取消：精确原身份已退出、recorded-tree clean、无未决交互且 CAS 成功后提交 cancelled、Cleanup/Release。unknown、脏树、未解决交互或已有非清理 Hold 都保守拒绝。
 
-已有终态 Result 的 cleanup_unverified 可通过 zcode_cancel 仅清理恢复，不创建 Attempt 或覆盖 Result。存活的原精确世代可由显式取消触发身份绑定终止；退出仍需 claimant scan。Result 与取消竞争由 SQLite CAS 仲裁；重复取消/恢复不重复 Spawn 或 Release。数据库根损坏或一致性无法解释时继续 fail closed。未知 Hold 不自动清除。
+已有终态 Result 的 `result_committed`、`cleanup_pending`、`cleanup_verified` 或 `cleanup_unverified` 可通过 zcode_cancel 仅清理恢复，不创建 Attempt 或覆盖 Result；public schema 不变。普通 Cleanup 仅凭 root PID 退出或 claimant scan clean 不构成 Adapter Cleanup Proof；证据不足时返回 cleanup Hold，不伪造 Release。存活的原精确世代可由显式取消触发身份绑定终止；退出仍需 claimant scan。Result 与取消竞争由 SQLite CAS 仲裁；重复取消/恢复不重复 Spawn 或 Release。数据库根损坏或一致性无法解释时继续 fail closed。未知 Hold 不自动清除。
+
+原子 interruption/requeue 只存在于隔离 fake-Adapter 测试能力中，并同时要求 `testOnlyFakeAdapter` 与 `testOnlyAutomaticRecoveryRequeue`。公共 MCP 参数、TaskPackage、Host 配置和环境变量不能启用它；最多创建一个续 Attempt，重复调用不产生第二个。
 
 ## Result 与期限
 

@@ -178,6 +178,37 @@ export interface CandidateContinueAttemptOutcome {
   readonly created_at: string;
 }
 
+export interface CandidateInterruptionRequeueInput {
+  readonly operation_id: string;
+  readonly task_id: string;
+  readonly attempt: number;
+  readonly generation: number;
+  readonly revision: number;
+  readonly claim_id: string;
+  readonly claim_worker_identity_digest: string;
+  readonly reason: 'worker_exited_without_result' | 'worker_terminated_without_result';
+  readonly interruption_evidence: Readonly<Record<string, unknown>>;
+  readonly process_tree_digest: string;
+  readonly resources_digest: string;
+  readonly adapter_cleanup: CandidateAdapterCleanupEvidence;
+  readonly continuation_operation_id: string;
+}
+
+export interface CandidateInterruptionRequeueOutcome {
+  readonly duplicate: boolean;
+  readonly operation_id: string;
+  readonly task_id: string;
+  readonly previous_attempt: number;
+  readonly attempt: number;
+  readonly next_operation_id: string;
+  readonly status: 'queued';
+  readonly created_at: string;
+  readonly result_digest: string;
+  readonly cleanup_digest: string;
+  readonly interruption_reason: CandidateInterruptionRequeueInput['reason'];
+  readonly evidence_digest: string;
+}
+
 export interface CandidateInteractionRequestInput {
   readonly method: 'interaction/requestPermission' | 'interaction/requestUserInput';
   readonly params: Readonly<Record<string, unknown>>;
@@ -327,10 +358,23 @@ export type CandidateCleanupEvidence = Readonly<{
   readonly worker_tree_complete: true;
   readonly operation_resources_complete: true;
   readonly workspace_touched: false;
+  readonly adapter_cleanup?: CandidateAdapterCleanupEvidence;
 }> & (
   | Readonly<{ readonly source: 'synthetic_fixture'; readonly fixture: true }>
   | Readonly<{ readonly source: 'manager_os_cleanup_verification'; readonly fixture: false }>
 );
+
+export interface CandidateAdapterCleanupEvidence {
+  readonly contract: 'adapter-cleanup-v1';
+  readonly close: Readonly<{
+    readonly stage: 'direct_close' | 'not_started';
+    readonly status: 'resolved' | 'rejected';
+    readonly treeScanStatus: 'verified' | 'live' | 'incomplete' | 'not_applicable';
+    readonly errorName?: string;
+    readonly errorCode?: string;
+  }>;
+  readonly treeScanStatus: 'verified' | 'live' | 'incomplete' | 'not_applicable';
+}
 
 export type CandidateCleanupOutcome =
   | Readonly<{ readonly outcome: 'verified'; readonly cleanup_evidence: CandidateCleanupEvidence }>
@@ -391,6 +435,7 @@ export interface SqliteLifecyclePort {
   recordLaunchReceipt(input: CandidateOperationIdentity & { readonly receipt_id: string; readonly launch_identity: unknown }): unknown;
   commitPermanentClaim(input: CandidateOperationIdentity & { readonly claim_id: string; readonly worker_identity: unknown }): unknown;
   createNextAttempt(input: CandidateContinueAttemptInput, gates: { readonly workspaceValidator: (input: { readonly requestedPath: string; readonly canonicalPath: string }) => unknown; readonly executionPermissionCheck: (context: { readonly workspace: string; readonly task: CandidateContinueAttemptInput & { readonly task: CandidateTaskPackage } }) => unknown }): CandidateContinueAttemptOutcome;
+  interruptAndRequeue(input: CandidateInterruptionRequeueInput, gates: { readonly workspaceValidator: (input: { readonly requestedPath: string; readonly canonicalPath: string }) => unknown; readonly executionPermissionCheck: (context: Readonly<Record<string, unknown>>) => unknown }): CandidateInterruptionRequeueOutcome;
   readLifecycleEvents(operationId: string, options?: { readonly afterSequence?: number; readonly limit?: number }): CandidateLifecycleEvent[];
   appendLifecycleEvent(...args: never[]): never;
   readLifecycleStatus(...args: never[]): never;
