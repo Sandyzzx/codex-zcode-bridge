@@ -34,14 +34,7 @@
 - 核心权威文档控制在 10 份以内。单份超过约 15 KB，或同一主题被三个以上独立读者分读，才拆成多份。
 - 写结论时区分"已核实"和"未运行"。不要把 NOT RUN 写成通过，也不要把尝试过的方法写成可行方法。
 - 引用 ZCode 内部结构时标明观测版本，用 Observed 措辞，不要写成官方合同。
-
-## 分支流程
-
-- `master` 和 `preview` 是仅有的长期分支。`master` 保持稳定发布状态；`preview` 是唯一集成分支。
-- 功能开发从最新 `origin/preview` 创建临时 `codex/<topic>-<date>` 分支，在独立 Worktree 中执行，PR Base 必须是 `preview`。
-- 功能 PR 合并后删除对应临时分支和 Worktree；不把功能分支作为长期分支保留。
-- `preview` 完成验收后，通过 `preview` 到 `master` 的 PR 合并到稳定线；随后将 `preview` 快进到 `master`，或在分支保护不允许快进时创建 `master` 到 `preview` 的同步 PR。
-- 稳定线紧急修复可以从 `master` 创建临时分支；修复进入 `master` 后必须同步回 `preview`，避免两条长期分支分叉。
+- 不在 `AGENTS.md` 中固化分支、合并或发布流程；这些规则由仓库治理配置和当次授权决定，避免多套流程漂移。
 
 ## 提交与验证
 
@@ -49,4 +42,4 @@
 - R4、发布候选冻结、SQLite/生产架构切换或测试执行器重大变更跑 `npm run test:full`。CI 保留完整 `npm test`。不得为缩短时间删除测试、增加 SKIP、修改断言或降低预算。
 - `npm test` 仍是完整隔离回归入口。文档-only 变更至少跑 `npm run test:affected` 的 T0 部分；其 `NO_TESTS_APPLICABLE` 不是测试 PASS。
 - `plugins/codex-zcode-bridge/dist/bridge.mjs` 与 `worker/worker-main.mjs` 是提交物，必须与源码同步；CI 会校验它们没有落后。
-- 不默认提交、推送或发布。发布走 release-please，合并到 `master` 之后由它生成版本 PR。
+- 不默认提交、推送或发布。
