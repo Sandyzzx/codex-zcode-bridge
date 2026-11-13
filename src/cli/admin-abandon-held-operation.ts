@@ -290,10 +290,14 @@ export async function run(
   dependencies: AdminRecoveryDependencies = defaultAdminRecoveryDependencies,
 ): Promise<Readonly<Record<string, unknown>>> {
   if (process.platform !== "win32") throw new AdminRecoveryBlockedError("windows_required");
-  const store = IsolatedAdmissionStore.open(options.dataRoot, {
+  // Operator-safety checks, including --preflight, use a strictly read-only
+  // connection. A writable Store can compatibly extend the schema, so opening
+  // it before these checks would make preflight mutate the database.
+  let store = IsolatedAdmissionStore.openForRecovery(options.dataRoot, {
     databaseFileName: options.databaseFileName,
     managedDataDirectory: true,
   });
+  if (!store) throw new AdminRecoveryBlockedError("database_unreadable");
   try {
     const operation = store.readOperation(options.operationId);
     if (!operation) throw new AdminRecoveryBlockedError("operation_not_found");
@@ -404,6 +408,13 @@ export async function run(
         process_inventory_digest: processInventoryDigest,
       };
     }
+    // All operator-safety facts are established. Reopen writable only for the
+    // final CAS; the Store revalidates the Operation and revision atomically.
+    store.close();
+    store = IsolatedAdmissionStore.open(options.dataRoot, {
+      databaseFileName: options.databaseFileName,
+      managedDataDirectory: true,
+    });
     const result = store.adminAbandonHeldOperation({
       operation_id: options.operationId,
       task_id: options.taskId,
