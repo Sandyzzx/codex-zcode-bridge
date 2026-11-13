@@ -28,6 +28,7 @@
     "build:test": "tsc --project tsconfig.test.json && node scripts/copy-test-assets.mjs",
     "build:core": "node scripts/build-core.mjs",
     "build:plugin": "node scripts/build-plugin.mjs",
+    "build:official-host": "node scripts/build-official-host-runtime.mjs",
     "typecheck": "tsc --noEmit",
     "test": "npm run build:test && node scripts/test-isolated.mjs",
     "test:affected": "node scripts/run-affected-tests.mjs",

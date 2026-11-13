@@ -26,7 +26,30 @@ const projectRoot = process.cwd();
 const compiledCandidate = path.join(projectRoot, "dist-test", "src", "sqlite-candidate", "wp6b2b1");
 const sourceSchema = path.join(projectRoot, "src", "sqlite-candidate", "wp6b2b1", "schema.sql");
 const candidateSchema = path.join(compiledCandidate, "schema.sql");
-const workerEntryPath = path.join(projectRoot, "dist-test", "src", "worker", "worker-main.js");
+const workerEntryPath = path.join(
+  projectRoot,
+  "dist-test",
+  "test",
+  "sqlite-candidate",
+  "wp6b-wiring",
+  "legacy-direct-worker.js",
+);
+const officialHostWorkerEntryPath = path.join(
+  projectRoot,
+  "dist-test",
+  "test",
+  "sqlite-candidate",
+  "wp6b-wiring",
+  "official-host-loopback-worker.js",
+);
+const officialHostCloseFailureWorkerEntryPath = path.join(
+  projectRoot,
+  "dist-test",
+  "test",
+  "sqlite-candidate",
+  "wp6b-wiring",
+  "official-host-close-failure-worker.js",
+);
 
 // The isolated candidate Store only accepts data roots inside the candidate
 // tree, matching the established WP6 composition fixture layout.
@@ -478,6 +501,80 @@ function copyFileSync(source: string): void {
   writeFileSync(candidateSchema, readFileSync(source, "utf8"), "utf8");
 }
 
+test("Worker default path reaches OfficialHostAdapter, SQLite Result, Cleanup, and Release", {
+  timeout: 120_000,
+  skip: process.platform !== "win32" || process.arch !== "x64",
+}, async () => {
+  await withRealAdapterMcp(async (client, manager, _dataRoot, workspace) => {
+    const taskId = `official-host-worker-${randomUUID()}`;
+    const created = contentObject(await client.callTool({
+      name: "zcode_task",
+      arguments: syntheticTask(workspace, taskId),
+    }));
+    assert.equal(created.status, "queued");
+    assert.equal((await waitForTerminal(client, taskId, 1)).status, "completed");
+    await waitForLifecycleEvent(client, taskId, "released");
+    const result = contentObject(await client.callTool({
+      name: "zcode_result",
+      arguments: { task_id: taskId },
+    }));
+    assert.equal(result.status, "completed");
+    assert.equal(result.summary, "Official Host loopback completed the Worker task");
+    assert.match(String(result.session_id), /^sess_worker_loopback_/u);
+
+    const cleanup = await waitForEvent(
+      client,
+      taskId,
+      (event) => event.type === "cleanup_verified",
+      "verified Cleanup",
+    );
+    const details = cleanup.details as Record<string, unknown>;
+    const adapterCleanup = details.adapter_cleanup as Record<string, unknown>;
+    assert.equal(adapterCleanup.contract, "adapter-cleanup-v1");
+    assert.deepEqual(adapterCleanup.close, {
+      status: "resolved",
+      stage: "official_manager_dispose",
+      managerProcessCountAfter: 0,
+      treeScanStatus: "verified",
+    });
+    assert.equal(adapterCleanup.treeScanStatus, "verified");
+    await manager.shutdown();
+  }, { workerOverride: officialHostWorkerEntryPath });
+});
+
+test("Worker Cleanup keeps a rejected official close visible when its independent scan is clean", {
+  timeout: 120_000,
+  skip: process.platform !== "win32" || process.arch !== "x64",
+}, async () => {
+  await withRealAdapterMcp(async (client, _manager, _dataRoot, workspace) => {
+    const taskId = `official-host-close-failure-${randomUUID()}`;
+    contentObject(await client.callTool({
+      name: "zcode_task",
+      arguments: syntheticTask(workspace, taskId),
+    }));
+    assert.equal((await waitForTerminal(client, taskId, 1)).status, "completed");
+    await waitForLifecycleEvent(client, taskId, "released");
+    const cleanup = await waitForEvent(
+      client,
+      taskId,
+      (event) => event.type === "cleanup_verified",
+      "Cleanup despite close rejection",
+    );
+    const adapterCleanup = (cleanup.details as Record<string, unknown>).adapter_cleanup as Record<string, unknown>;
+    assert.deepEqual(adapterCleanup.close, {
+      status: "rejected",
+      stage: "official_manager_workspace_dispose",
+      errorName: "Error",
+      errorCode: "E_SYNTHETIC_CLOSE",
+      managerProcessCountAfter: 0,
+      treeScanStatus: "verified",
+    });
+    assert.equal(adapterCleanup.treeScanStatus, "verified");
+    assert.equal(JSON.stringify(cleanup).includes("synthetic official manager close failure"), false,
+      "arbitrary close error text must not be persisted");
+  }, { workerOverride: officialHostCloseFailureWorkerEntryPath });
+});
+
 test("SQLite production Worker survives streaming stderr backpressure without a diagnostic recorder", { timeout: 120_000 }, async () => {
   await withRealAdapterMcp(async (client, _manager, _dataRoot, workspace, runtime) => {
     const taskId = `mvp-stderr-${randomUUID()}`;
@@ -887,6 +984,8 @@ test("SQLite Worker exit while issuer is pending revokes a late lease", { timeou
       dataRoot, workerEntryPath, bridgeEntryPath: fileURLToPath(import.meta.url),
       hostProfile: { name: "mvp-real-adapter-test", settingsDirectory },
       trustedLocalContext: createTrustedLocalCandidateContext({ name: "mvp-real-adapter-test", settingsDirectory }),
+      // The replacement probe still uses the suite's controlled fake
+      // AppServer, so it must remain on the retained direct rollback path.
       testOnScheduler: (stage, detail) => { recoveryStages.push({ stage, detail }); },
     });
     try {
@@ -1550,6 +1649,10 @@ async function deadlineWorker(name: string, mode: 'budget'|'execution-timeout'|'
   await build({entryPoints:[path.join(projectRoot,'src/worker/worker-main.ts')],outfile,bundle:true,platform:'node',format:'esm',target:'node24',packages:'external',logLevel:'silent',plugins:[{name:'r3-controlled-lifecycle',setup(b){
     b.onLoad({filter:/worker-main\.ts$/},async args=>{
       let source=readFileSync(args.path,'utf8').replaceAll('\r\n','\n');
+      source=source.replace(
+        'if (invokedWorkerPath === modulePath) await runWorkerMain();',
+        'if (invokedWorkerPath === modulePath) await runWorkerMain({ testOnlyLegacyDirectAdapter: true });',
+      );
       if(mode==='budget')source=source.replace('return executeFakeResultAdapter(bootstrap as Parameters<typeof executeFakeResultAdapter>[0]);',`const frame=executeFakeResultAdapter(bootstrap as Parameters<typeof executeFakeResultAdapter>[0]);frame.result.summary='effective_timeout_ms='+String(execution.task.timeout_ms);return frame;`);
       if(mode==='execution-timeout')source=source.replace('timeoutMs: execution.task.timeout_ms,','timeoutMs: 5000,');
       if(mode==='late-cleanup'){

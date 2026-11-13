@@ -7,12 +7,23 @@ import { prepareWorkerResultFrameParts } from "../result-contract.mjs";
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, createWriteStream, readFileSync, writeFileSync, writeSync } from "node:fs";
 import { Socket } from "node:net";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { BRIDGE_WORKER_LAUNCH_MARKER, fingerprintRuntimeArtifact, verifyWorkerProvenance } from "../runtime/build-provenance.js";
 import { validateHostProfile, type BridgeHostProfile } from "../host/profile.js";
 import { createPlatformProbe } from "../runtime/process-probe.js";
 import { StartPlanSecretRedactor } from "../runtime/start-plan-secret-redactor.js";
-import type { TaskPackage, WorkspaceRef } from "../interfaces.js";
+import type { TaskPackage, WorkspaceRef, ZCodeRuntimeConfig } from "../interfaces.js";
 import type {
+  OfficialHostModuleSource,
+  OfficialHostRuntimeAuthService,
+  OfficialHostRuntimeAuthServiceFactory,
+} from "../adapters/official-host-adapter.js";
+import type { ZCodeAppServerAdapterOptions } from "../adapters/zcode-app-server-adapter.js";
+import { accountProviderRuleFacts, zcodeDataBaseDir } from "../runtime/account-provider.js";
+import { selectProductionAdapter } from "./production-adapter-selection.js";
+import type {
+  CandidateAdapterCleanupEvidence,
   CandidateExecutionCleanupProof,
   CandidateTaskResult,
   CandidateWorkerResultFrame,
@@ -20,74 +31,99 @@ import type {
 
 const MAX_NODE_TIMER_DELAY_MS = 2_147_483_647;
 
-const workerArgs = process.argv.slice(2);
-const bridgeLaunchMarker = workerArgs.at(-1) === BRIDGE_WORKER_LAUNCH_MARKER;
-const interactionMode = workerArgs.includes("--bridge-sqlite-interaction-v1");
-const privateAuthMode = workerArgs.includes("--bridge-sqlite-private-auth-v1");
-const dropAfterPrepared = workerArgs.includes("--bridge-sqlite-interaction-drop-after-prepared-v1");
-const positionalArgs = bridgeLaunchMarker ? workerArgs.slice(0, -1).filter(argument =>
-  argument !== "--bridge-sqlite-interaction-v1" && argument !== "--bridge-sqlite-interaction-drop-after-prepared-v1" && argument !== "--bridge-sqlite-private-auth-v1") : workerArgs;
-if (bridgeLaunchMarker && positionalArgs.length === 0) {
-  let claimOnlyStage = "start";
-  let interactionStreamsCreated = false;
-  // CI evidence: the Worker once died silently with exit code 1 after the
-  // Result frame was written. Worker stderr is a pipe here, so the default
-  // fatal report is an async write that can be truncated by the immediate
-  // exit. Flush a bounded, sanitized reason synchronously and keep the same
-  // exit-code semantics the Manager verifies.
-  const writeFatalDiagnostic = (origin: string, error: unknown): void => {
-    const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-    const frames = error instanceof Error && typeof error.stack === "string"
-      ? error.stack.split("\n").slice(1, 6).join("\n") : "";
-    writeDiagnostic(`[bridge-worker] fatal ${origin} at ${claimOnlyStage}: ${message.slice(0, 300)}\n${frames.slice(0, 1_200)}\n`);
-  };
-  const reallyExit = (process as NodeJS.Process & { reallyExit(code?: number): void }).reallyExit.bind(process);
-  process.on("exit", (code) => {
-    // Keep the final lifecycle marker synchronous: Manager-side result and
-    // close decisions depend on the process exit code, not on async stderr.
-    writeDiagnostic(`[bridge-worker] exit code=${String(code)}\n`);
-  });
-  process.on("uncaughtException", (error) => { writeFatalDiagnostic("uncaught_exception", error); reallyExit(1); });
-  process.on("unhandledRejection", (reason) => { writeFatalDiagnostic("unhandled_rejection", reason); reallyExit(1); });
-  try {
-    if (dropAfterPrepared && !interactionMode) throw new Error("interaction test mode required");
-    await runClaimOnlyHandshake({ interactionMode, privateAuthMode, dropAfterPrepared, onStage: (stage) => {
-      claimOnlyStage = stage;
-      // The interaction harness uses only fixed diagnostic stage labels; it
-      // never writes Bootstrap, identity, request, or token values to stderr.
-      if (interactionMode) writeDiagnostic(`[bridge-worker] claim-only stage=${stage}\n`);
-    }, onInteractionStreamsCreated: () => { interactionStreamsCreated = true; } });
-    process.exitCode = 0;
-  } catch (error) {
-    // Do not print a Bootstrap or token-derived value. A Claim-only Worker has
-    // no Adapter/TaskStore path and exits closed on every invalid handshake.
-    if (interactionMode && !interactionStreamsCreated) {
-      // Inherited interaction pipes are owned by this test-only harness. Close
-      // them on every failure so setting exitCode cannot leave a detached
-      // Worker alive solely because its unused descriptors remain open.
-      for (const fd of [7, 8, 9]) {
-        try { closeSync(fd); } catch { /* descriptor may already be closed */ }
+export interface WorkerMainDependencies {
+  /** Test-owned import boundary; production invokes the fixed Host module. */
+  readonly testOnlyOfficialHostModule?: OfficialHostModuleSource;
+  /** Test-owned asset root used by the test Worker wrapper. */
+  readonly testOnlyWorkerModuleUrl?: string | URL;
+  /** Test-owned direct Adapter wrapper for the retained synthetic rollback suite. */
+  readonly testOnlyLegacyDirectAdapter?: true;
+  /** Test-owned probes used only by the loopback Host wrapper. */
+  readonly testOnlyProbe?: ZCodeAppServerAdapterOptions["probe"];
+  readonly testOnlyVerifyTreeClean?: ZCodeAppServerAdapterOptions["verifyTreeClean"];
+}
+
+export async function runWorkerMain(
+  dependencies: WorkerMainDependencies = {},
+  workerArgs: readonly string[] = process.argv.slice(2),
+): Promise<void> {
+  const bridgeLaunchMarker = workerArgs.at(-1) === BRIDGE_WORKER_LAUNCH_MARKER;
+  const interactionMode = workerArgs.includes("--bridge-sqlite-interaction-v1");
+  const privateAuthMode = workerArgs.includes("--bridge-sqlite-private-auth-v1");
+  const dropAfterPrepared = workerArgs.includes("--bridge-sqlite-interaction-drop-after-prepared-v1");
+  const positionalArgs = bridgeLaunchMarker ? workerArgs.slice(0, -1).filter(argument =>
+    argument !== "--bridge-sqlite-interaction-v1" && argument !== "--bridge-sqlite-interaction-drop-after-prepared-v1"
+      && argument !== "--bridge-sqlite-private-auth-v1") : workerArgs;
+  if (bridgeLaunchMarker && positionalArgs.length === 0) {
+    let claimOnlyStage = "start";
+    let interactionStreamsCreated = false;
+    // CI evidence: the Worker once died silently with exit code 1 after the
+    // Result frame was written. Worker stderr is a pipe here, so the default
+    // fatal report is an async write that can be truncated by the immediate
+    // exit. Flush a bounded, sanitized reason synchronously and keep the same
+    // exit-code semantics the Manager verifies.
+    const writeFatalDiagnostic = (origin: string, error: unknown): void => {
+      const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+      const frames = error instanceof Error && typeof error.stack === "string"
+        ? error.stack.split("\n").slice(1, 6).join("\n") : "";
+      writeDiagnostic(`[bridge-worker] fatal ${origin} at ${claimOnlyStage}: ${message.slice(0, 300)}\n${frames.slice(0, 1_200)}\n`);
+    };
+    const reallyExit = (process as NodeJS.Process & { reallyExit(code?: number): void }).reallyExit.bind(process);
+    process.on("exit", (code) => {
+      // Keep the final lifecycle marker synchronous: Manager-side result and
+      // close decisions depend on the process exit code, not on async stderr.
+      writeDiagnostic(`[bridge-worker] exit code=${String(code)}\n`);
+    });
+    process.on("uncaughtException", (error) => { writeFatalDiagnostic("uncaught_exception", error); reallyExit(1); });
+    process.on("unhandledRejection", (reason) => { writeFatalDiagnostic("unhandled_rejection", reason); reallyExit(1); });
+    try {
+      if (dropAfterPrepared && !interactionMode) throw new Error("interaction test mode required");
+      await runClaimOnlyHandshake({
+        interactionMode,
+        privateAuthMode,
+        dropAfterPrepared,
+        dependencies,
+        onStage: (stage) => {
+          claimOnlyStage = stage;
+          // The interaction harness uses only fixed diagnostic stage labels; it
+          // never writes Bootstrap, identity, request, or token values to stderr.
+          if (interactionMode) writeDiagnostic(`[bridge-worker] claim-only stage=${stage}\n`);
+        },
+        onInteractionStreamsCreated: () => { interactionStreamsCreated = true; },
+      });
+      process.exitCode = 0;
+    } catch (error) {
+      // Do not print a Bootstrap or token-derived value. A Claim-only Worker has
+      // no Adapter/TaskStore path and exits closed on every invalid handshake.
+      if (interactionMode && !interactionStreamsCreated) {
+        // Inherited interaction pipes are owned by this test-only harness. Close
+        // them on every failure so setting exitCode cannot leave a detached
+        // Worker alive solely because its unused descriptors remain open.
+        for (const fd of [7, 8, 9]) {
+          try { closeSync(fd); } catch { /* descriptor may already be closed */ }
+        }
       }
+      if (privateAuthMode) for (const fd of [10, 11, 12, 13]) { try { closeSync(fd); } catch { /* already closed */ } }
+      const failureCode = error && typeof error === "object" && "code" in error
+        && typeof (error as { readonly code?: unknown }).code === "string"
+        ? (error as { readonly code: string }).code : "unclassified";
+      writeDiagnostic(`[bridge-worker] claim-only handshake rejected${interactionMode ? ` at ${claimOnlyStage} code=${failureCode}` : ""}\n`);
+      process.exitCode = 3;
     }
-    if (privateAuthMode) for (const fd of [10, 11, 12, 13]) { try { closeSync(fd); } catch { /* already closed */ } }
-    const failureCode = error && typeof error === "object" && "code" in error
-      && typeof (error as { readonly code?: unknown }).code === "string"
-      ? (error as { readonly code: string }).code : "unclassified";
-    writeDiagnostic(`[bridge-worker] claim-only handshake rejected${interactionMode ? ` at ${claimOnlyStage} code=${failureCode}` : ""}\n`);
-    process.exitCode = 3;
+    // At this point the Result frame has been written synchronously and owned
+    // interaction streams are closed. CI repeatedly showed that relying on the
+    // event loop to drain can leave teardown handles alive (or expose the idle
+    // Worker to a cleanup race), so exit deterministically with the same code
+    // the Manager already verifies.
+    process.exit(process.exitCode ?? 0);
+  } else {
+    console.error("usage: Worker requires the SQLite private lifecycle channels");
+    process.exit(2);
   }
-  // At this point the Result frame has been written synchronously and owned
-  // interaction streams are closed. CI repeatedly showed that relying on the
-  // event loop to drain can leave teardown handles alive (or expose the idle
-  // Worker to a cleanup race), so exit deterministically with the same code
-  // the Manager already verifies.
-  process.exit(process.exitCode ?? 0);
-} else {
-  console.error("usage: Worker requires the SQLite private lifecycle channels");
-  process.exit(2);
 }
 
 async function runClaimOnlyHandshake(options: { readonly interactionMode: boolean; readonly privateAuthMode: boolean; readonly dropAfterPrepared: boolean;
+  readonly dependencies: WorkerMainDependencies;
   readonly onStage?: (stage: string) => void; readonly onInteractionStreamsCreated?: () => void }): Promise<void> {
   options.onStage?.("provenance verification");
   if (process.argv.at(-1) !== BRIDGE_WORKER_LAUNCH_MARKER) throw new Error("launch marker required");
@@ -214,7 +250,13 @@ async function runClaimOnlyHandshake(options: { readonly interactionMode: boolea
     options.onStage?.(execution.adapter_mode === "test_fake" ? "test adapter start" : "zcode adapter start");
     const resultFrame = execution.adapter_mode === "test_fake"
       ? await runExplicitFakeAdapter(bootstrap, execution, candidateInteraction)
-      : await runZCodeAdapter(bootstrap, execution, candidateInteraction, options.privateAuthMode ? identity : undefined);
+      : await runZCodeAdapter(
+          bootstrap,
+          execution,
+          candidateInteraction,
+          options.privateAuthMode ? identity : undefined,
+          options.dependencies,
+        );
     options.onStage?.("adapter result frame prepared");
     writePrivateFrame(6, resultFrame, prepareWorkerResultFrameParts(resultFrame));
     options.onStage?.("adapter result frame written");
@@ -320,8 +362,13 @@ async function runZCodeAdapter(
   execution: SqliteExecutionEnvelope,
   interaction: Awaited<ReturnType<typeof import("../sqlite-candidate/wp6b2b1/interaction-channel.mjs").createCandidateWorkerInteractionChannel>> | undefined,
   workerIdentity?: import("../runtime/process-probe.js").ProcessIdentity,
+  dependencies: WorkerMainDependencies = {},
 ): Promise<CandidateWorkerResultFrame> {
   if (execution.adapter_mode !== "zcode_app_server") throw new Error("real ZCode Adapter mode is required");
+  const {
+    OfficialHostAdapter,
+    loadOfficialHostProviderRuntimeAuthFactory,
+  } = await import("../adapters/official-host-adapter.js");
   const { ZCodeAppServerAdapter } = await import("../adapters/zcode-app-server-adapter.js");
   const { buildTaskResult } = await import("../manager/normalize.js");
   const startedAt = new Date().toISOString();
@@ -336,6 +383,13 @@ async function runZCodeAdapter(
   let privateAuthConfirmed = false;
   let notifyPrivateAuthConfirmation: (() => void) | undefined;
   const privateAuthLifetime = execution.private_auth ? new Socket({ fd: 13, readable: true, writable: false }) : undefined;
+  let providerRuntimeAuthFactory:
+    | Promise<OfficialHostRuntimeAuthServiceFactory>
+    | undefined;
+  const providerRuntimeAuthServices = new Map<
+    string,
+    Promise<OfficialHostRuntimeAuthService>
+  >();
   privateAuthLifetime?.on("data", (chunk: Buffer) => {
     for (const byte of chunk) {
       if (!privateAuthParentLive && !privateAuthConfirmed && byte === 1) privateAuthParentLive = true;
@@ -442,7 +496,72 @@ async function runZCodeAdapter(
     signal.addEventListener("abort", () => { if (cachedAuth === current) clearCachedAuth(); }, { once: true });
     return current;
   };
-  const adapter = new ZCodeAppServerAdapter({
+  const resolveProviderRuntimeAuth = async (
+    request: Record<string, unknown>,
+    config: ZCodeRuntimeConfig,
+    signal: AbortSignal,
+  ): Promise<Record<string, unknown>> => {
+    const unavailable = (): Record<string, unknown> => ({
+      headersApplied: false,
+      errorMessage: "Provider runtime authorization is unavailable.",
+    });
+    if (signal.aborted) return unavailable();
+    const providerId =
+      typeof request.providerId === "string" ? request.providerId : "";
+    const modelSelection = asRecord(request.modelSelection);
+    const modelId = typeof modelSelection.modelId === "string" ? modelSelection.modelId : "";
+    if (
+      !providerId
+      || !modelId
+      || (typeof modelSelection.providerId === "string" && modelSelection.providerId !== providerId)
+      || execution.task.model?.provider_id !== providerId
+      || execution.task.model.model_id !== modelId
+    ) {
+      return unavailable();
+    }
+    const facts = accountProviderRuleFacts(providerId, config);
+    const access = asRecord(request.accountAccess);
+    if (
+      !facts?.accountType
+      || facts.planKind !== "individual-coding-plan"
+      || access.type !== "zhipu-account"
+      || access.accountType !== facts.accountType
+      || access.mode !== facts.planKind
+      || access.entitled !== true
+    ) {
+      return unavailable();
+    }
+    const dataBaseDir = zcodeDataBaseDir(config.providerPersonalConfigFile);
+    if (!dataBaseDir) return unavailable();
+    const cacheKey = `${dataBaseDir}\0${providerId}`;
+    let service = providerRuntimeAuthServices.get(cacheKey);
+    if (!service) {
+      providerRuntimeAuthFactory ??= loadOfficialHostProviderRuntimeAuthFactory();
+      service = providerRuntimeAuthFactory.then((factory) =>
+        factory({
+          dataBaseDir,
+          resolveCurrentAccountAccess: async (currentAccess) => {
+            if (
+              currentAccess.type !== "zhipu-account"
+              || currentAccess.accountType !== facts.accountType
+              || currentAccess.mode !== facts.planKind
+              || currentAccess.entitled !== true
+            ) {
+              return null;
+            }
+            return {
+              type: "zhipu-account",
+              family: facts.accountType,
+              planKind: "individual-coding-plan",
+            };
+          },
+        }),
+      );
+      providerRuntimeAuthServices.set(cacheKey, service);
+    }
+    return (await service).resolveProviderRuntimeRequest(request, { signal });
+  };
+  const adapterOptions: ZCodeAppServerAdapterOptions = {
     host: execution.host_profile,
     // Manager resolved this attempt's effective budget before dispatch.
     timeoutMs: execution.task.timeout_ms,
@@ -455,11 +574,14 @@ async function runZCodeAdapter(
       writeDiagnostic(`[bridge-worker] failure-facts ${JSON.stringify(facts)}\n`);
     },
     executionProfileId: execution.execution_profile_id,
+    ...(dependencies.testOnlyProbe ? { probe: dependencies.testOnlyProbe } : {}),
+    ...(dependencies.testOnlyVerifyTreeClean ? { verifyTreeClean: dependencies.testOnlyVerifyTreeClean } : {}),
     ...(execution.private_auth ? { startPlanProviderEntitled: execution.private_auth.entitled } : {}),
+    resolveProviderRuntimeAuth,
     onEvent: (event) => {
       // Bounded lifecycle evidence without request payloads. This distinguishes
       // a Worker that reached adapter cleanup from one killed before cleanup.
-      if (!interactionMode) return;
+      if (!interaction) return;
       if (event.type === "cleanup_unverified") {
         const summary = event.summary;
         const reason = summary.startsWith("Managed browser cleanup")
@@ -518,7 +640,19 @@ async function runZCodeAdapter(
       if (signal.aborted) return { action: "decline" };
       return (await interaction.acceptCommittedReply()).answer;
     } : undefined,
-  });
+  };
+  const selectedAdapter = dependencies.testOnlyLegacyDirectAdapter
+    ? "direct_app_server" as const
+    : selectProductionAdapter();
+  const adapter = selectedAdapter === "direct_app_server"
+    ? new ZCodeAppServerAdapter(adapterOptions)
+    : new OfficialHostAdapter({
+        ...adapterOptions,
+        ...(dependencies.testOnlyOfficialHostModule
+          ? { testOnlyOfficialHostModule: dependencies.testOnlyOfficialHostModule } : {}),
+        ...(dependencies.testOnlyWorkerModuleUrl
+          ? { testOnlyWorkerModuleUrl: dependencies.testOnlyWorkerModuleUrl } : {}),
+      });
   try {
     const workspace: WorkspaceRef = {
       requestedPath: execution.task.workspace,
@@ -604,6 +738,8 @@ function buildExecutionCleanupProof(
     };
   }
   if (outcome?.cleanupVerified !== true || outcome.cleanupError) return null;
+  const adapterCleanup = buildAdapterCleanupEvidence(outcome.adapterCleanup);
+  if (!adapterCleanup) return null;
   if (!receipt) {
     const scan = outcome.cleanupTreeScan;
     if (!scan || !Number.isSafeInteger(scan.rootPid) || scan.rootPid < 1 || !scan.rootFingerprint
@@ -620,6 +756,7 @@ function buildExecutionCleanupProof(
       process_tree_scan_digest: scan.evidenceDigest,
       process_tree_member_count: scan.observedMemberCount,
       managed_browser_cleanup_verified: true,
+      adapter_cleanup: adapterCleanup,
     };
   }
   const root = receipt.members.find((member) => member.pid === receipt.rootPid);
@@ -636,6 +773,52 @@ function buildExecutionCleanupProof(
     process_tree_receipt_digest: createHash("sha256").update(JSON.stringify(receipt), "utf8").digest("hex"),
     process_tree_member_count: receipt.members.length,
     managed_browser_cleanup_verified: true,
+    adapter_cleanup: adapterCleanup,
+  };
+}
+
+function buildAdapterCleanupEvidence(
+  value: import("../adapters/run-outcome.js").ZCodeRunOutcome["adapterCleanup"],
+): CandidateAdapterCleanupEvidence | null {
+  if (!value || value.contract !== "adapter-cleanup-v1" || !value.close) return null;
+  const scanStatuses = new Set(["verified", "live", "incomplete", "not_applicable"]);
+  const stages = new Set([
+    "not_started",
+    "direct_close",
+    "official_manager_dispose",
+    "official_manager_dispose_all",
+    "official_manager_workspace_dispose",
+  ]);
+  const boundedToken = (item: unknown): item is string =>
+    typeof item === "string"
+    && item.length > 0
+    && item.length <= 120
+    && /^[A-Za-z][A-Za-z0-9_.:-]*$/u.test(item);
+  if (!["resolved", "rejected"].includes(value.close.status)
+    || !stages.has(value.close.stage)
+    || !value.close.treeScanStatus || !scanStatuses.has(value.close.treeScanStatus)
+    || !value.treeScanStatus || !scanStatuses.has(value.treeScanStatus)
+    || (value.close.errorName !== undefined && !boundedToken(value.close.errorName))
+    || (value.close.errorCode !== undefined && !boundedToken(value.close.errorCode))
+    || (value.close.managerProcessCountAfter !== undefined
+      && (!Number.isSafeInteger(value.close.managerProcessCountAfter)
+        || value.close.managerProcessCountAfter < 0))
+    || (value.close.stage.startsWith("official_")
+      && !Number.isSafeInteger(value.close.managerProcessCountAfter))) {
+    return null;
+  }
+  return {
+    contract: "adapter-cleanup-v1",
+    close: {
+      status: value.close.status,
+      stage: value.close.stage,
+      ...(value.close.errorName ? { errorName: value.close.errorName } : {}),
+      ...(value.close.errorCode ? { errorCode: value.close.errorCode } : {}),
+      ...(value.close.managerProcessCountAfter !== undefined
+        ? { managerProcessCountAfter: value.close.managerProcessCountAfter } : {}),
+      treeScanStatus: value.close.treeScanStatus,
+    },
+    treeScanStatus: value.treeScanStatus,
   };
 }
 
@@ -654,6 +837,12 @@ function requiredStringArray(value: unknown, error: string): string[] {
 }
 
 function nullableString(value: unknown): string | null { return typeof value === "string" ? value : null; }
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
 
 function writeDiagnostic(line: string): void {
   try { writeSync(2, line); } catch { /* stderr may already be gone */ }
@@ -697,3 +886,7 @@ function writePrivateFrame(fd: number, value: unknown, encoded: string | readonl
   writeFileSync(fd, "\n", "utf8");
   closeSync(fd);
 }
+
+const invokedWorkerPath = process.argv[1] ? path.resolve(process.argv[1]) : null;
+const modulePath = path.resolve(fileURLToPath(import.meta.url));
+if (invokedWorkerPath === modulePath) await runWorkerMain();

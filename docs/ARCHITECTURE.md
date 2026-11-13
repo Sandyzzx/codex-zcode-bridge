@@ -1,66 +1,74 @@
 # 当前架构
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-11
-> Last verified: 2026-11-11，核对 Preview.3 SQLite-only 入口、Desktop Host 启动身份、Start Plan/Coding Plan 路由与 R1–R5 调用链。
-> Verified against: 52015d12f37011f4d389e07941c31491457611ef
+> Last updated: 2026-11-12
+> Last verified: 2026-11-12，核对了同步最新 `origin/preview` 后的候选源码、固定上游制品、Preview.4 自动 SQLite 升级路径、936 项完整隔离回归、stress gate、提交后 clean checkout 和当前候选独立 Astra 审查；真实账户、真实模型和官方制品升级/回滚演练未运行。
+> Verified against: `ba25f83722094ef3428a04202749377cc9b6e643`（tree `b4573bb6f1143ce6a3081a56ce2fbf968a243e35`）+ documentation changes；固定上游为 ZCode `3.18.0` / `b95ebaffeab641907b38652f45c1502bd762972d`，AppServer `0.17.1`。
 
-本文件描述当前实现。公开合同见 [INTERFACES.md](INTERFACES.md)，宿主构建见 [SHARED_CORE.md](SHARED_CORE.md)，配置和升级见 [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md)。决策按主题从 [ADR 索引](decisions/README.md) 加载。
+本文件描述当前源码候选。候选实现已默认切换到官方 Host 路径，但尚未发布；已发布渠道仍是 `2.0.0-preview.3`，候选版本号为 `2.0.0-preview.4`。公开合同继续以 [INTERFACES.md](INTERFACES.md) 为准，宿主和运行配置分别见 [SHARED_CORE.md](SHARED_CORE.md) 与 [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md)。
 
 ## 单一生产链
 
 ```text
-Host startBridge → Fresh SQLite Bootstrap → SqliteLifecycleMcpAuthority
-MCP tools                                  │ 排队 / 取消 / 只读恢复
-                                           ▼
-                               lifecycle-gate + SQLite Lifecycle Port
-                                           │ Admission / Intent / CAS / 永久 Claim
-                                           ▼
-                           spawnClaimOnlyWorker → worker-main 私有管道
-                                           │
-                                 ZCodeAppServerAdapter
-                                           │
-                               ZCode app-server --stdio --surface desktop
-                                           │
-                                 TaskResult → SQLite v14
-                                           │
-                                Cleanup proof → Release
+Host startBridge -> Fresh SQLite Bootstrap -> SqliteLifecycleMcpAuthority
+MCP tools                                      │ queue / cancel / read-only recovery
+                                               ▼
+                                 lifecycle-gate + SQLite Lifecycle Port
+                                               │ Admission / Intent / CAS / permanent Claim
+                                               ▼
+                         spawnClaimOnlyWorker -> worker-main private pipes
+                                               │
+                                        OfficialHostAdapter
+                                               │
+               fixed official-host-runtime.mjs -> ZCodeAgentProcessManager
+                                               │
+                         Windows runtime-host helper + official AppServer
+                                               │
+                                TaskResult -> SQLite v14
+                                               │
+                              independent Cleanup proof -> Release
 ```
 
-`SqliteLifecycleMcpAuthority` 是唯一生产 Lifecycle Manager。它调度已有 SQLite driver；Host/MCP 直接持有该对象，没有外层 JSON Manager 转发。`lifecycle-gate.ts` 负责 Bootstrap、进程身份、私有 Claim/Result/Interaction 管道与清理证明；SQLite Store 负责事务、Schema、Task/Attempt/Operation、Result digest、Capacity 和不可覆盖事件。
+`SqliteLifecycleMcpAuthority` 仍是唯一生产 Lifecycle Manager。`lifecycle-gate.ts` 负责 Bootstrap、进程身份、私有 Claim/Result/Interaction 管道、自动 Schema 升级和清理证明；SQLite Store 负责事务、Task/Attempt/Operation、Result digest、Capacity 和不可覆盖事件。
 
-旧 JSON TaskStore、JSON Manager/Worker、调度/恢复 roster、JSON 迁移/归档执行器、CLI Adapter/envelope/loader、GitWorktreeProvider 已退役。canonical JSON、JSON-RPC、AgentReport、SQLite 的 `json_artifacts` 与历史 receipt 验证继续存在。模型设置、可选 Ledger 和日志的 JSON 文件各有独立职责，不是 Task Authority。
+生产 Worker 的 `zcode_app_server` 模式按 [ADR-035](decisions/ADR-035-worker-platform-adapter-selection.md) 选择 Adapter。`win32/x64` 实例化 `OfficialHostAdapter`；Linux/macOS x64、arm64 的 direct Adapter 只保留 CI/合成覆盖；Windows 非 x64 与其他组合在构造 Adapter 前 fail closed。选择只读取 platform/arch，环境变量、TaskPackage、MCP 参数、持久配置和测试参数都不能改变正式 Worker 的 Adapter 类型。该 Adapter 继承现有 `ZCodeAppServerAdapter`，沿用 `CodingAgentAdapter` 的完成、取消、交互、结果、期限和 Cleanup 合同，没有新增公开 Adapter Mode、持久配置或平行 RuntimeAdapter。
 
 ## 生命周期与身份
 
-TaskPackage 经 SQLite Manager 校验后创建 queued Attempt。Admission 事务绑定执行路径与 Capacity；同路径/重叠路径不会并行入场。派发前最终校验 source workspace 和 execution worktree，再持久化 Launch Intent。确定性 pre-Intent 拒绝仍可通过 queued Cancel CAS 终结 untouched reservation；Intent 后视为可能已 Spawn，不因缺 Receipt、句柄、timeout 或回调异常重派。
+TaskPackage 经 SQLite Manager 校验后创建 queued Attempt。Admission 事务绑定执行路径与 Capacity；同路径或重叠路径不会并行入场。派发前最终校验 source workspace 与 execution worktree，再持久化 Launch Intent。确定性 pre-Intent 拒绝可通过 queued Cancel CAS 终结 untouched reservation；Intent 后视为可能已 Spawn，不因缺 Receipt、句柄、timeout 或回调异常重派。
 
-Worker 接收私有 Bootstrap，经精确进程身份、Launch/Claim 绑定后进入一次执行。永久 Claim 不重放。Spawner 持续消费 stderr，不在内存累积无人订阅的日志。Worker 只有私有 SQLite 握手入口；旧 `dataRoot taskId attempt` JSON 执行入口已删除。
+Worker 接收私有 Bootstrap，经精确 OS 进程身份、Launch/Claim 绑定后进入一次执行。永久 Claim 不重放。Spawner 持续消费 stderr，不在内存累积无人订阅的日志。Worker 只有私有 SQLite 握手入口；旧 `dataRoot taskId attempt` JSON 执行入口已删除。
 
-合法 Result 经完整帧和绑定验证后先提交 SQLite；随后才验证 Worker 退出、Adapter proof、进程树和资源。Result、进程退出、Cleanup 和 Release 是独立事实。32 MiB canonical Result 和 v14 保持 [ADR-026](decisions/ADR-026-sqlite-result-contract.md)；COMMIT 不确定继续保留 poison/WRITER_INTENT，禁止猜测替代 Result 或重派。
+合法 Result 经完整帧和绑定验证后先提交 SQLite，随后才验证 Worker 退出、Adapter proof、进程树和资源。Result、进程退出、Cleanup 与 Release 是独立事实。32 MiB canonical Result 和 v14 保持 [ADR-026](decisions/ADR-026-sqlite-result-contract.md)；COMMIT 不确定继续保留 poison/WRITER_INTENT，禁止猜测替代 Result 或重派。
 
 执行、交付与清理期限保持 [ADR-027](decisions/ADR-027-execution-and-cleanup-deadlines.md)。Manager 一次解析 Task/Host 默认执行预算，Worker/Adapter 使用相同快照；执行结束即停止执行 timer，Adapter 清理使用独立预算。迟到或缺失 Cleanup proof 不自动释放路径。
 
-启动 Recovery 只读核对事实。无 Result 的 running Operation 无论 alive/exited/unknown 都保留 Claim/路径/Capacity，不因启动观察写持久 Recovery Hold。显式 `zcode_cancel` 可读取持久 Claim 恢复取消：原身份已退出且 claimant scan clean、无未解决交互时，使用现有取消 intent、verification 与 CAS 提交 cancelled Result，再 Cleanup/Release。身份不明或树不干净时保留占用；重复恢复不 Spawn、不重复 Release。已有 Result 的取消仅恢复清理，不覆盖 Result。
+启动 Recovery 只读核对事实。无 Result 的 running Operation 无论 alive、exited 或 unknown 都保留 Claim、路径和 Capacity，不因启动观察写持久 Recovery Hold。显式 `zcode_cancel` 可读取持久 Claim 恢复取消：原身份已退出且 claimant scan clean、无未解决交互时，使用现有取消 intent、verification 与 CAS 提交 cancelled Result，再 Cleanup/Release。身份不明或树不干净时保留占用；重复恢复不 Spawn、不重复 Release。已有 Result 的取消仅恢复清理，不覆盖 Result。
 
-Windows 终止继续使用 [ADR-009](decisions/ADR-009-windows-identity-bound-tree-termination.md)：同一原生句柄内验证世代并终止；已退出根仍需 recorded-tree claimant scan。PID 单独不能授权信号或 Release。未知 Hold 不自动清除；行政兜底保持 [ADR-018](decisions/ADR-018-administrative-abandonment-of-cleanup-incomplete-hold.md)。
+## 官方 Host、账户与清理
 
-## Adapter、观察与宿主
+固定制品入口、`official-host-runtime.mjs`、AppServer、builtin provider 配置和 Windows helper 均来自候选包内目录，不能由环境变量或持久设置重定向到用户 Desktop 安装。Adapter 在启动前验证文件身份并拒绝外来 AppServer 入口。当前固定制品只支持 Windows x64、Node `24.16.x`；其他平台在构造官方 Host 路径时 fail closed。
 
-生产执行唯一使用 app-server Adapter；模型目录查询保留独立的短 RPC 生命周期。共享报告解析、输入 prompt、provider 配置、进程身份及浏览器后端，不将目录 RPC 与执行 RPC 强行合并。
+官方 `ZCodeAgentProcessManager` 独占正常 Runtime/AppServer/helper 生命周期。Bridge 单独捕获官方 Runtime root PID 和精确 fingerprint，并在 close 后独立验证原 Worker identity 与 recorded process tree。官方 close status/stage、错误 code/name、manager residual process count、tree-scan status 与 Bridge Cleanup outcome 分开保存；有界 close 诊断进入 execution proof 和 SQLite `cleanup_verified` 事件，任意错误 message 不持久化。`dispose()` 或带错误的 `close()` resolved 不能单独生成 `cleanup_verified`。
 
-任务 Adapter 与模型目录探测共用 `buildZCodeAppServerLaunch()`：启动参数固定为 `app-server --stdio --surface desktop`，并从安装的 Desktop `app.asar` 只读解析 `ZCODE_APP_VERSION` 与 `ZCODE_BUILD_COMMIT_ID`。合法元数据注入子进程环境；元数据缺失仅省略身份变量，损坏、格式非法或版本冲突按 `provider_config_invalid` fail-closed。Bridge 不伪造 Desktop 身份，也不复制官方 HTTP 请求构造。
+正常 Cleanup 遵守 [ADR-034](decisions/ADR-034-normal-cleanup-worker-tree-proof.md)：关闭后复用 exact Worker identity、Worker-root recorded-tree scan、resource facts、Cleanup Digest 与 Release CAS。可接受证明包括“Adapter 未启动”和“原根已退出且 recorded-tree claimant scan clean”；任一证明都绑定 Operation/Attempt/generation/Claim，且最终仍需现有 Release CAS。Windows 异常终止继续遵守 [ADR-009](decisions/ADR-009-windows-identity-bound-tree-termination.md)。
 
-模型选择在 Task 创建时解析一次并持久化完整 provider/model。显式 `<ModelId>-StartPlan` 或 Start Plan Provider 强制走 Start Plan；普通模型按 `ZCODE_BRIDGE_PREFER_STARTPLAN` 与非权威 Billing verdict 选择 Start Plan 或 Coding Plan，不跨模型替换。Start Plan 每任务只执行一次权威 Billing GET，后续 Private Lease 复用同一 account/provider/model/credential 绑定的 verdict；凭据、Provider 或模型变化必须重新授权。Coding Plan 保持官方账户/API Key 路径，不经过 Start Plan Billing。
+官方 transport 显式使用 16 MiB raw UTF-8 stdout frame 上限。超限立即结束 pending RPC 和 turn，清理缓冲并 fail closed；LF 不计入预算、CR 计入预算、多字节 UTF-8 跨越 chunk 时按 raw bytes 计算。
 
-可选 browser host 默认关闭，显式启用后使用独立 managed CDP profile；浏览器与 app-server 的清理共同决定 Cleanup proof。生产 bundle 随附 playwright 后端与资源，不依赖开发 checkout。身份/隐私与能力边界见 [ADR-007](decisions/ADR-007-browser-host-rpc.md)、[ADR-009](decisions/ADR-009-windows-identity-bound-tree-termination.md)。
+Start Plan 每任务只执行一次权威 Billing GET，后续 Private Lease 复用同一 account/provider/model/credential 绑定的 verdict；凭据、Provider 或模型变化必须重新授权。Coding Plan 保持官方账户/API Key 路径，不经过 Start Plan Billing。ADR-030 的 Private Lease/HANDLE/ACK、fail-closed 和不跨任务缓存继续有效。
 
-Attention 与 Thin Waiter 共用 SQLite snapshot 和只读等待谓词。Attention 等待已并入唯一 Manager；普通事件不提前唤醒。Doctor 只使用绑定 SQLite Authority 诊断，不再扫描 JSON `.tasks`/恢复锁。默认 Events/Feedback 的既有生产投影保持，完整 Adapter event/usage 持久化改造属于延后的 R7，不能用旧 JSON 用例宣称当前 SQLite 已具备它。
+[ADR-033](decisions/ADR-033-official-account-refresh-coordination.md) 的账户 refresh 协调已进入固定上游 patch：independent profile-scoped lock、获取锁后重读、网络请求前 dispatch marker、单次网络刷新、expected-snapshot/CAS 发布、timeout 与 stale-lock 恢复、不重试可能已消费的一次性 token、live runtime-header 更新，以及 A→B→A 和迟到响应隔离。该行为在合成矩阵中通过；真实 OAuth/account/model/Start Plan/Billing 仍为 `NOT_RUN`。
 
-`process-lock.ts` 与 `atomic-rename.ts` 仍用于模型设置和可选 Ledger；它们已不承担 Task 调度锁。公开的纯 observation/feedback/usage 函数及小型 DirectWorkspaceProvider 保留作为 Core 工具；它们不构成第二个执行运行时。
+## 安装、构建与升级
 
-## 安装与构建
+Fresh root 继续通过 stage SQLite、pending marker 和原子 publication 初始化。生产 Lifecycle Gate 在持有同一 bootstrap lock 时，对已有 v13 Authority 自动执行一次 v13→v14 升级：复制到 stage、校验 v14、持久化 pending marker、将原 v13 改为 backup，再发布 v14 并清理 marker。中断的首次 rename 或发布后清理可由下一次启动恢复；occupied running Attempt、Recovery Hold 和既有事件保持不变。随插件提供的 `upgrade-sqlite-v14` 离线副本工具继续保留。
 
-新装和旧 JSON 安装均从 Fresh SQLite Bootstrap 开始；旧 JSON 用户数据保持原样，运行时不读取或迁移它。现有 SQLite receipt、历史 `json_artifacts` 校验及 schema-v13.sql 不退役。v13→v14 只允许显式离线复制升级，工具随插件交付。
+自动升级属于生产 Lifecycle 启动路径。直接调用 Store 打开 v13 时仍返回带离线升级指引的 `schema_upgrade_required`；不能据此声称所有 Store API 都会自动迁移。未知 schema、损坏库、未解释现场和 writer 活跃状态仍 fail closed。
 
-构建产物包含 Bridge、Worker、Thin Waiter、v14 升级命令、v13/v14 Schema 与浏览器后端。Core API 破坏按 Owner 已批准的 [ADR-029](decisions/ADR-029-legacy-runtime-retirement.md) 在 Preview 2.0 发布线交付；当前 Preview 为 2.0.0-preview.3。该退役不更改 Marketplace MCP 工具/schema。
+候选包包含 Bridge、Worker、Thin Waiter、离线 v14 升级命令、v13/v14 Schema、浏览器后端，以及固定官方 Host 制品。运行时会校验 `ARTIFACT_BOM.json` 与 shipped files；构建来源、patch 顺序和哈希见研究目录的 [制品 BOM](research/zcode-official-host-integration-v1/SOURCE_ARTIFACT_BOM.md)。`@napi-rs/keyring` 与 `keyring-win32-x64-msvc` 的 6 个 native closure/license/metadata 文件已通过精确 `.gitignore` 例外纳入候选；detached clean checkout 已验证存在性、Host exports、native 加载和 BOM hash。
+
+## 发布边界
+
+`2.0.0-preview.4` 当前是源码候选：`package.json`、`package-lock.json`、插件 manifest 和 MCP server version 已统一为 preview.4，但没有发布 Tag。实现和定向测试通过不等于完整回归或生产发布通过。
+
+固定制品在 Windows x64、Node `24.16.0` 的固定源码树重建、same-source-tree repeatability 和提交后 clean checkout 为 `PASS`；跨机器/空缓存复现、完整动态资源闭包、再分发许可审查和官方 Host 制品升级/回滚演练仍为 `PARTIAL` 或 `NOT_RUN`。真实账户、真实模型、Start Plan、Billing 和一般 Desktop Main 独立性未建立；当前候选独立 Astra 审查为 `APPROVED`，不改变这些 `NOT_RUN` 边界。

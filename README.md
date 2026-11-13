@@ -66,7 +66,7 @@ This evidence covers **only `GLM-5.3-Flash` on Windows**. It does not prove ever
 
 ## Requirements
 
-- **Windows** is the currently validated local deployment target for the production SQLite path and the real Start Plan acceptance run. Linux and macOS have synthetic/CI coverage only.
+- The fixed Official Host production bundle is supported on **Windows x64**; Windows non-x64 and other unknown targets fail closed. Linux and macOS retain direct-AppServer synthetic/CI coverage only and are not certified for real ZCode, OAuth, Start Plan, or model service traffic.
 - **Preview 2.0.0-preview.3:** Node.js `>=24.16.0` and `<25`.
 - Git, Codex with plugin/marketplace support, and a working local ZCode installation.
 - A signed-in official ZCode account with the plan and model entitlement required by the selected task.

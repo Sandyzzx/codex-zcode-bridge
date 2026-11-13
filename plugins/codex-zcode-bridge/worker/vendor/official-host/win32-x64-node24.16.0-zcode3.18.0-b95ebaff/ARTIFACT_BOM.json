@@ -1,0 +1,185 @@
+{
+  "schemaVersion": 1,
+  "scope": {
+    "platform": "win32",
+    "architecture": "x64",
+    "node": "24.16.0",
+    "zcodeVersion": "3.18.0",
+    "appServerVersion": "0.17.1",
+    "sourceOnly": false,
+    "crossPlatformCertified": false
+  },
+  "source": {
+    "repository": "ZCode",
+    "version": "3.18.0",
+    "commit": "b95ebaffeab641907b38652f45c1502bd762972d",
+    "tree": "d7ebeb994cb8f46b16761fc9c550ae3f6e039c3d"
+  },
+  "patches": [
+    {
+      "order": 1,
+      "path": "upstream/zcode-3.18.0/patches/0001-stdio-max-frame-bytes.patch",
+      "bytes": 16290,
+      "sha256": "80E77CA5D322141B93D6B035BDB8A7903F575BF78012FABA5B701B0541B29844",
+      "purpose": "Pass a fixed 16 MiB raw stdout frame limit through the official ProcessManager and StdioTransport."
+    },
+    {
+      "order": 2,
+      "path": "upstream/zcode-3.18.0/patches/0002-oauth-refresh-coordination.patch",
+      "bytes": 49456,
+      "sha256": "7AD85F0403CFA6AE55DAFDACE79FBB26C8970E758CEBE2496C4344A2108C651F",
+      "purpose": "Coordinate official OAuth token refresh across processes with a profile-scoped lock, lock-time reread, single network dispatch, atomic publish, and expected-snapshot CAS."
+    },
+    {
+      "order": 3,
+      "path": "upstream/zcode-3.18.0/patches/0003-account-runtime-header-coordination.patch",
+      "bytes": 21461,
+      "sha256": "BD0A891EC19AD98571CEE053930BA9A45DFE879204436B377C5D56D66F5EC35D",
+      "purpose": "Compose the official OAuth refresh coordination service for provider runtime-header requests and expose the minimal host factory."
+    }
+  ],
+  "toolchain": {
+    "buildNode": "24.16.0",
+    "officialMiseNodePin": "24.14.0",
+    "officialPnpm": "10.33.2",
+    "validationPnpm": "11.25.0",
+    "hostModuleBundler": "esbuild 0.28.2",
+    "runtimeHostCompiler": "MSVC 19.44.35229 for x64",
+    "runtimeHostGenerator": "NMake Makefiles",
+    "runtimeHostBuildType": "Release",
+    "windowsSdkCpp": "10.0.26100.4948"
+  },
+  "build": {
+    "appServerCommand": "pnpm --filter \"@zcode/cli...\" build",
+    "appServerInputs": [
+      "apps/zcode-cli/packages/cli",
+      "workspace dependency graph"
+    ],
+    "hostModuleCommand": "npm run build:official-host -- --source <fixed-upstream-worktree>",
+    "hostModuleInputs": [
+      "packages/services/src/official-host/runtimeHostEntry.ts",
+      "packages/services/src/zcode-agent/zcodeAgentProcessManager.ts",
+      "packages/services/src/zcode-agent/zcodeProtocolClient.ts",
+      "packages/services/src/zcode-agent/zcodeStdioTransport.ts",
+      "packages/services/src/model-provider/oauthProviderRuntimeAuthService.ts",
+      "packages/services/src/oauth/oauthService.ts"
+    ],
+    "runtimeHostCommand": "cmake configure and build targets zcode-runtime-host and zcode-runtime-host-acceptance with the recorded Windows SDK and MSVC toolchain",
+    "runtimeHostInputs": [
+      "scripts/windows-runtime-host/CMakeLists.txt",
+      "scripts/windows-runtime-host/main.cpp"
+    ],
+    "orderedPatchApplicationRequired": true,
+    "userDesktopInstallationUsedAsInput": false
+  },
+  "files": [
+    {
+      "path": "app-server/provider/zcode-builtin.json",
+      "role": "builtin provider configuration",
+      "bytes": 265884,
+      "sha256": "BC760A3B0C6D096EA07EE4E963471F135AE75AB207DB6ED4C372E1B183C856CD",
+      "license": "ZCode project and third-party terms"
+    },
+    {
+      "path": "app-server/THIRD-PARTY-NOTICES.md",
+      "role": "third-party notices",
+      "bytes": 3465209,
+      "sha256": "C4CC6DC747EB6026E41D2CEFC6679392C33E1192629EA96DC0DC702BCFE7C51C",
+      "license": "third-party terms"
+    },
+    {
+      "path": "app-server/zcode.cjs",
+      "role": "official AppServer entrypoint",
+      "bytes": 30999438,
+      "sha256": "DF4637F2E31AEDE37DB15B3E4E8D8BE35F59BF756E4EECFFC0A6A6B1EEDB4F2E",
+      "license": "ZCode project and third-party terms"
+    },
+    {
+      "path": "LICENSE",
+      "role": "ZCode license",
+      "bytes": 11546,
+      "sha256": "FA36DC312BC4946B1C22DBA3C726AD8D3052B353F81424E7B997DBB3D9B40A49",
+      "license": "ZCode project terms"
+    },
+    {
+      "path": "node_modules/@napi-rs/keyring-win32-x64-msvc/keyring.win32-x64-msvc.node",
+      "role": "Windows x64 Node-API keyring binding",
+      "bytes": 1912832,
+      "sha256": "52B16658275B7848F8081A6542FEE3448F1B1C5D3A36487107AE0E7CEC95AC6F",
+      "license": "MIT"
+    },
+    {
+      "path": "node_modules/@napi-rs/keyring-win32-x64-msvc/LICENSE.third-party.md",
+      "role": "Windows x64 keyring binary license and third-party notices",
+      "bytes": 99518,
+      "sha256": "7BA6D9C1629DFC7CD6312EA17713214D7A7147F2CB673F6A937588C7D1EC2D93",
+      "license": "MIT and bundled third-party terms"
+    },
+    {
+      "path": "node_modules/@napi-rs/keyring-win32-x64-msvc/package.json",
+      "role": "Windows x64 keyring package metadata",
+      "bytes": 641,
+      "sha256": "1552C08589EEAEBC3680642883A8CAFEA8C72F80ED62908DE814177498562121",
+      "license": "MIT"
+    },
+    {
+      "path": "node_modules/@napi-rs/keyring/index.js",
+      "role": "Node-API keyring loader",
+      "bytes": 29176,
+      "sha256": "8A89DB37F981D05B484EB063ADAE3399660AE7734AD38797463E5691382F5036",
+      "license": "MIT"
+    },
+    {
+      "path": "node_modules/@napi-rs/keyring/LICENSE",
+      "role": "keyring package license",
+      "bytes": 1071,
+      "sha256": "02965ED67E29F871A53F7A7AFA593A0DDC8020F86CCCE0FAAF1AA59215B5269E",
+      "license": "MIT"
+    },
+    {
+      "path": "node_modules/@napi-rs/keyring/package.json",
+      "role": "Node-API keyring package metadata",
+      "bytes": 3325,
+      "sha256": "4BA8C90AC72BE27FCB3337ED7BC0159C68747E0824294DF5F2AAAEB03130CD4F",
+      "license": "MIT"
+    },
+    {
+      "path": "NOTICE.md",
+      "role": "ZCode notices and risk disclosure",
+      "bytes": 29012,
+      "sha256": "9225442463AD06327B4149E1FA740981E4E2AB8855B237AF8BE44765CCD08DBC",
+      "license": "ZCode project terms"
+    },
+    {
+      "path": "official-host-runtime.mjs",
+      "role": "self-contained official ProcessManager, protocol client, and StdioTransport module",
+      "bytes": 1821168,
+      "sha256": "3F481AAE16EFF9912DAF17178B49491BD64E67C4419BFFDB59EB4B78E85EB537",
+      "license": "ZCode project and third-party terms"
+    },
+    {
+      "path": "zcode-runtime-host.exe",
+      "role": "Windows process-ownership helper",
+      "bytes": 167424,
+      "sha256": "04E1794F8325B3C46D4159420CDD04041E9AFC58516E03FC3DC8E78576EEFC24",
+      "license": "ZCode project terms"
+    }
+  ],
+  "closure": {
+    "hostModuleExternalRuntimeImports": [
+      "@napi-rs/keyring",
+      "node:*"
+    ],
+    "appServerSelfContainedForCoveredMockScope": true,
+    "nativeDependencyClosure": "WIN32_X64_KEYRING_INCLUDED",
+    "resourceClosure": "PARTIAL",
+    "redistributionReview": "PARTIAL",
+    "artifactReproducibility": "PARTIAL",
+    "knownGaps": [
+      "Cross-install first-build byte identity is not stable.",
+      "The official Windows runtime-host build script could not run directly on this machine; an equivalent CMake and MSVC recipe was used.",
+      "Optional native packages and the full ZCode resource graph are outside the certified Mock scope.",
+      "This BOM is an engineering inventory and is not a legal redistribution opinion."
+    ]
+  }
+}

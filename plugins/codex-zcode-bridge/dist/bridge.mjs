@@ -3941,11 +3941,18 @@ function validateEvidence(eventType, value) {
   } else if (eventType === "reserved") {
     const fields = Object.keys(value).sort().join("|");
     if (fields !== ["capacity_slot", "reservation_id"].join("|") && fields !== ["authorization_source", "capacity_slot", "execution_profile_id", "policy_digest", "policy_revision", "reservation_id"].join("|")) fail2("invalid_evidence");
-  } else if (keys && Object.keys(value).sort().join("|") !== keys.join("|")) fail2("invalid_evidence");
+  } else if (keys) {
+    const expectedKeys = ["cleanup_verified", "cleanup_reverified"].includes(eventType) && value.adapter_cleanup === void 0 ? keys.filter((key) => key !== "adapter_cleanup") : keys;
+    if (Object.keys(value).sort().join("|") !== expectedKeys.join("|")) fail2("invalid_evidence");
+  }
+  if (["cleanup_verified", "cleanup_reverified"].includes(eventType) && value.adapter_cleanup !== void 0 && !validAdapterCleanupEvidence(value.adapter_cleanup)) fail2("invalid_adapter_cleanup_evidence");
   if (FUTURE_EVENT_TYPES.has(eventType)) {
     const ownKeys = Object.keys(value);
     if (!ownKeys.length || ownKeys.some((k) => !FUTURE_EVIDENCE_KEYS.has(k))) fail2("invalid_evidence");
     for (const [k, v] of Object.entries(value)) {
+      if (k === "adapter_cleanup") {
+        continue;
+      }
       if (k.endsWith("_digest") || k === "token_digest") {
         if (typeof v !== "string" || !/^[0-9a-f]{64}$/u.test(v)) fail2("invalid_evidence");
       } else if (k === "launch_epoch") {
@@ -3965,7 +3972,8 @@ function validateEvidence(eventType, value) {
   for (const key of ["launch_id", "claim_id"]) if (key in value && !validText3(value[key], 128)) fail2("invalid_evidence");
   if ("launch_epoch" in value && (!Number.isInteger(value.launch_epoch) || value.launch_epoch < 1)) fail2("invalid_evidence");
   const json = canonical4(value);
-  if (Buffer.byteLength(json, "utf8") > (eventType === "cleanup_reverified" ? 2048 : 1024)) fail2("invalid_evidence");
+  const maxBytes = ["cleanup_verified", "cleanup_reverified"].includes(eventType) ? 2048 : 1024;
+  if (Buffer.byteLength(json, "utf8") > maxBytes) fail2("invalid_evidence");
   return value;
 }
 function validateInteractionEvidence(eventType, value) {
@@ -4118,9 +4126,24 @@ function validCleanupRequest(x) {
 function validCancellationFence(x) {
   return !!x && Object.getPrototypeOf(x) === Object.prototype && Object.keys(x).sort().join("|") === "attempt|claim_id|claim_worker_identity_digest|generation|operation_id|revision|task_id|worker_identity" && validId3(x.operation_id) && validId3(x.task_id) && Number.isSafeInteger(x.attempt) && x.attempt > 0 && Number.isSafeInteger(x.generation) && x.generation > 0 && Number.isSafeInteger(x.revision) && x.revision > 0 && validId3(x.claim_id) && typeof x.claim_worker_identity_digest === "string" && /^[0-9a-f]{64}$/u.test(x.claim_worker_identity_digest);
 }
+function validAdapterCleanupEvidence(value) {
+  const scanStatuses = /* @__PURE__ */ new Set(["verified", "live", "incomplete", "not_applicable"]);
+  const stages = /* @__PURE__ */ new Set(["not_started", "direct_close", "official_manager_dispose", "official_manager_dispose_all", "official_manager_workspace_dispose"]);
+  if (!value || Object.getPrototypeOf(value) !== Object.prototype) return false;
+  const close = value.close;
+  if (!close || Object.getPrototypeOf(close) !== Object.prototype) return false;
+  const evidenceKeys = ["close", "contract", "treeScanStatus"];
+  const closeKeys = ["stage", "status", "treeScanStatus"];
+  if (close.errorCode !== void 0) closeKeys.push("errorCode");
+  if (close.errorName !== void 0) closeKeys.push("errorName");
+  if (close.managerProcessCountAfter !== void 0) closeKeys.push("managerProcessCountAfter");
+  return Object.keys(value).sort().join("|") === evidenceKeys.sort().join("|") && Object.keys(close).sort().join("|") === closeKeys.sort().join("|") && value.contract === "adapter-cleanup-v1" && ["resolved", "rejected"].includes(close.status) && typeof close.stage === "string" && stages.has(close.stage) && scanStatuses.has(close.treeScanStatus) && scanStatuses.has(value.treeScanStatus) && (close.errorName === void 0 || /^[A-Za-z][A-Za-z0-9_.:-]{0,119}$/u.test(close.errorName)) && (close.errorCode === void 0 || /^[A-Za-z][A-Za-z0-9_.:-]{0,119}$/u.test(close.errorCode)) && (close.managerProcessCountAfter === void 0 || Number.isSafeInteger(close.managerProcessCountAfter) && close.managerProcessCountAfter >= 0) && (!close.stage.startsWith("official_") || Number.isSafeInteger(close.managerProcessCountAfter));
+}
 function normalizeCleanupEvidence(value, input) {
   const keys = ["attempt", "claim_id", "fixture", "generation", "launch_receipt_digest", "operation_id", "operation_resources_complete", "process_tree_digest", "resources_digest", "result_commit_ref", "root_process_id", "root_start_fingerprint", "source", "task_id", "worker_identity_digest", "worker_tree_complete", "workspace_touched"];
-  if (!value || Object.getPrototypeOf(value) !== Object.prototype || Object.keys(value).sort().join("|") !== keys.join("|")) fail2("invalid_cleanup_evidence");
+  const expectedKeys = value?.adapter_cleanup === void 0 ? keys : [...keys, "adapter_cleanup"].sort();
+  if (!value || Object.getPrototypeOf(value) !== Object.prototype || Object.keys(value).sort().join("|") !== expectedKeys.join("|")) fail2("invalid_cleanup_evidence");
+  if (value.adapter_cleanup !== void 0 && !validAdapterCleanupEvidence(value.adapter_cleanup)) fail2("invalid_adapter_cleanup_evidence");
   if (!["manager_os_cleanup_verification", "synthetic_fixture"].includes(value.source) || typeof value.fixture !== "boolean" || value.source === "synthetic_fixture" !== value.fixture || value.operation_id !== input.operation_id || value.task_id !== input.task_id || value.attempt !== input.attempt || value.generation !== input.generation || value.claim_id !== input.claim_id || value.worker_identity_digest !== input.claim_worker_identity_digest || !/^([0-9a-f]{64})$/u.test(value.launch_receipt_digest) || !/^([0-9a-f]{64})$/u.test(value.process_tree_digest) || !/^([0-9a-f]{64})$/u.test(value.resources_digest) || !validId3(value.result_commit_ref) || !Number.isSafeInteger(value.root_process_id) || value.root_process_id < 1 || !validText3(value.root_start_fingerprint, 256) || value.worker_tree_complete !== true || value.operation_resources_complete !== true || value.workspace_touched !== false) fail2("invalid_cleanup_evidence");
   if (Buffer.byteLength(canonical4(value), "utf8") > 4096) fail2("cleanup_evidence_too_large");
   return value;
@@ -4604,9 +4627,9 @@ var init_store = __esm({
       claim_committed: ["claim_id", "launch_epoch", "launch_id", "token_digest", "worker_identity_digest"],
       result_committed: ["claim_id", "outcome", "result_commit_ref", "result_digest", "worker_identity_digest"],
       cleanup_pending: ["claim_id", "result_commit_ref", "worker_identity_digest"],
-      cleanup_verified: ["claim_id", "cleanup_digest", "evidence_source", "launch_receipt_digest", "operation_resources_complete", "process_tree_digest", "resources_digest", "result_commit_ref", "root_process_id", "root_start_fingerprint", "worker_identity_digest", "worker_tree_complete", "workspace_touched"],
+      cleanup_verified: ["adapter_cleanup", "claim_id", "cleanup_digest", "evidence_source", "launch_receipt_digest", "operation_resources_complete", "process_tree_digest", "resources_digest", "result_commit_ref", "root_process_id", "root_start_fingerprint", "worker_identity_digest", "worker_tree_complete", "workspace_touched"],
       cleanup_unverified: ["claim_id", "probe_state", "reason", "worker_identity_digest"],
-      cleanup_reverified: ["attempt", "claim_id", "cleanup_digest", "evidence_source", "generation", "launch_receipt_digest", "operation_id", "operation_resources_complete", "prior_cleanup_event_digest", "process_tree_digest", "resolved_recovery_event_digests", "resources_digest", "result_commit_ref", "root_process_id", "root_start_fingerprint", "task_id", "worker_identity_digest", "worker_tree_complete", "workspace_touched"],
+      cleanup_reverified: ["adapter_cleanup", "attempt", "claim_id", "cleanup_digest", "evidence_source", "generation", "launch_receipt_digest", "operation_id", "operation_resources_complete", "prior_cleanup_event_digest", "process_tree_digest", "resolved_recovery_event_digests", "resources_digest", "result_commit_ref", "root_process_id", "root_start_fingerprint", "task_id", "worker_identity_digest", "worker_tree_complete", "workspace_touched"],
       released: ["claim_id", "cleanup_digest", "result_commit_ref", "worker_identity_digest"],
       interaction_requested: ["claim_id", "request_digest", "request_id", "request_method", "worker_identity_digest"],
       interaction_reply_intent: ["answer_digest", "claim_id", "reply_id", "request_id", "worker_identity_digest"],
@@ -4615,7 +4638,7 @@ var init_store = __esm({
       interaction_reply_accepted: ["ack_digest", "answer_digest", "claim_id", "commit_digest", "reply_id", "request_id", "worker_identity_digest"]
     });
     FUTURE_EVENT_TYPES = /* @__PURE__ */ new Set(["launch_intent", "launch_receipt", "launch_unknown", "claim_committed", "result_committed", "cleanup_pending", "cleanup_verified", "cleanup_unverified", "quarantined", "released", "launch_failed"]);
-    FUTURE_EVIDENCE_KEYS = /* @__PURE__ */ new Set(["cancel_verification_digest", "claim_id", "cleanup_digest", "evidence_digest", "evidence_source", "launch_epoch", "launch_id", "launch_receipt_digest", "operation_resources_complete", "outcome", "probe_state", "process_tree_digest", "reason", "resources_digest", "result_commit_ref", "root_process_id", "root_start_fingerprint", "receipt_digest", "result_digest", "token_digest", "worker_identity_digest", "worker_tree_complete", "workspace_touched"]);
+    FUTURE_EVIDENCE_KEYS = /* @__PURE__ */ new Set(["adapter_cleanup", "cancel_verification_digest", "claim_id", "cleanup_digest", "evidence_digest", "evidence_source", "launch_epoch", "launch_id", "launch_receipt_digest", "operation_resources_complete", "outcome", "probe_state", "process_tree_digest", "reason", "resources_digest", "result_commit_ref", "root_process_id", "root_start_fingerprint", "receipt_digest", "result_digest", "token_digest", "worker_identity_digest", "worker_tree_complete", "workspace_touched"]);
     EVENT_PHASE = Object.freeze({
       capacity_policy_committed: "policy_change_committed",
       reserved: "reserved",
@@ -7228,7 +7251,8 @@ var init_store = __esm({
               root_start_fingerprint: normalized.root_start_fingerprint,
               worker_identity_digest: input.claim_worker_identity_digest,
               worker_tree_complete: normalized.worker_tree_complete,
-              workspace_touched: normalized.workspace_touched
+              workspace_touched: normalized.workspace_touched,
+              ...normalized.adapter_cleanup !== void 0 ? { adapter_cleanup: normalized.adapter_cleanup } : {}
             };
             this.#event(input.operation_id, input.revision + 1, "cleanup_verified", "cleanup_pending", "cleanup_verified", input.generation, eventEvidence, at);
           } else {
@@ -7310,7 +7334,8 @@ var init_store = __esm({
             root_start_fingerprint: normalized.root_start_fingerprint,
             worker_identity_digest: o.claim_worker_identity_digest,
             worker_tree_complete: true,
-            workspace_touched: false
+            workspace_touched: false,
+            ...normalized.adapter_cleanup !== void 0 ? { adapter_cleanup: normalized.adapter_cleanup } : {}
           };
           const reverifiedEvidence = {
             ...baseEvidence,
@@ -7958,12 +7983,14 @@ var init_store = __esm({
                     operation_resources_complete: ve.operation_resources_complete,
                     workspace_touched: ve.workspace_touched,
                     source: ve.evidence_source,
-                    fixture: ve.evidence_source === "synthetic_fixture"
+                    fixture: ve.evidence_source === "synthetic_fixture",
+                    ...ve.adapter_cleanup !== void 0 ? { adapter_cleanup: ve.adapter_cleanup } : {}
                   };
                   if (ve.cleanup_digest !== digest2({ cleanup_contract_version: 1, evidence: normalized })) fail2("cleanup_digest_mismatch");
                   if (reverified.length) {
                     const rve = reverified[0].evidence;
                     const paired = [
+                      "adapter_cleanup",
                       "claim_id",
                       "cleanup_digest",
                       "evidence_source",
@@ -8920,6 +8947,11 @@ async function openClaimOnlyDriver(options) {
   if (!Number.isSafeInteger(processProbeTimeoutMs) || processProbeTimeoutMs < 1 || processProbeTimeoutMs > DEFAULT_PROCESS_PROBE_TIMEOUT_MS) {
     throw new LifecycleGateError("process_probe_timeout_invalid");
   }
+  const processTreeProbeTimeoutMs = options.testProcessTreeProbeTimeoutMs ?? DEFAULT_PROCESS_TREE_PROBE_TIMEOUT_MS;
+  if (!Number.isSafeInteger(processTreeProbeTimeoutMs) || processTreeProbeTimeoutMs < 1 || processTreeProbeTimeoutMs > DEFAULT_PROCESS_TREE_PROBE_TIMEOUT_MS) {
+    throw new LifecycleGateError("process_tree_probe_timeout_invalid");
+  }
+  const verifyTreeClaimants = options.testVerifyProcessTreeClaimantsClean ?? verifyProcessTreeClaimantsClean;
   const modules = await (options.loadModules?.() ?? loadLifecycleCandidateModules());
   let raw;
   try {
@@ -9171,11 +9203,15 @@ async function openClaimOnlyDriver(options) {
       }
       let treeOutcome;
       if ((phase === "result_committed" || phase === "cleanup_pending" || phase === "cleanup_unverified") && identityState === "exited") {
-        treeOutcome = await processTreeWithDeadline([{ pid: processId, fingerprint }], 3e4);
+        treeOutcome = await processTreeWithDeadline(
+          [{ pid: processId, fingerprint }],
+          processTreeProbeTimeoutMs,
+          verifyTreeClaimants
+        );
       }
       if ((phase === "result_committed" || phase === "cleanup_pending" || phase === "cleanup_unverified") && identityState === "exited") {
-        const completeCleanupClosureAvailable = treeOutcome?.status === "resolved" && treeOutcome.result.clean === true && treeOutcome.result.livePids.length === 0;
-        if (completeCleanupClosureAvailable && treeOutcome?.status === "resolved" && treeOutcome.result.clean === true && treeOutcome.result.livePids.length === 0) {
+        const completeCleanupClosureAvailable = treeOutcome?.status === "resolved" && treeOutcome.result.clean === true && treeOutcome.result.livePids.length === 0 && treeOutcome.result.observedPids.includes(processId);
+        if (completeCleanupClosureAvailable && treeOutcome?.status === "resolved") {
           const currentOperation = asRecord3(port.readOperation(operationId));
           if (currentOperation.task_id !== operation.task_id || Number(currentOperation.attempt) !== Number(operation.attempt) || Number(currentOperation.generation) !== Number(operation.generation) || currentOperation.claim_id !== claimId || currentOperation.claim_worker_identity_digest !== workerDigest) {
             return { state: "held", operation_id: operationId, phase: String(currentOperation.phase), reason: "recovery_identity_fence_changed" };
@@ -9251,6 +9287,7 @@ async function openClaimOnlyDriver(options) {
             throw new LifecycleGateError("recovery_cleanup_pending_not_persisted");
           }
           const cleanupFence = { ...fence, revision: positive3(Number(pending.revision), "recovery_cleanup_revision_missing") };
+          const observedPids = [...new Set(treeOutcome.result.observedPids)].sort((left, right) => left - right);
           const processTreeFacts = {
             contract: "sqlite-candidate-recovery-worker-tree-v1",
             operation_id: operationId,
@@ -9262,8 +9299,10 @@ async function openClaimOnlyDriver(options) {
             root_process_id: processId,
             root_start_fingerprint: fingerprint,
             identity_state: "exited",
+            scan_scope: "worker_root_recorded_tree_and_observed_claimants",
             scan_clean: true,
-            live_pids: []
+            live_pids: [],
+            observed_pids: observedPids
           };
           const resourceFacts = {
             contract: "sqlite-candidate-recovery-operation-resources-v1",
@@ -10163,6 +10202,8 @@ async function openClaimOnlyDriver(options) {
                       claimId,
                       probe,
                       processProbeTimeoutMs,
+                      verifyTreeClaimants,
+                      processTreeProbeTimeoutMs,
                       workerExitCode,
                       executionCleanup,
                       executionCleanup ? "adapter_verified" : "adapter_unverified",
@@ -10298,7 +10339,7 @@ async function openClaimOnlyDriver(options) {
     }
   };
 }
-async function finalizeClaimedWorkerCleanup(port, input, generation, claimId, probe, probeTimeoutMs, workerExitCode, executionCleanup, adapterCleanupState, stage) {
+async function finalizeClaimedWorkerCleanup(port, input, generation, claimId, probe, probeTimeoutMs, verifyTreeClaimants, processTreeProbeTimeoutMs, workerExitCode, executionCleanup, adapterCleanupState, stage) {
   stage("cleanup_prepare_start");
   const current = asRecord3(port.readOperation(input.operationId));
   const claimIdentity = parseEvidence(current.claim_worker_identity_json, "cleanup_worker_identity_missing");
@@ -10325,6 +10366,7 @@ async function finalizeClaimedWorkerCleanup(port, input, generation, claimId, pr
   const cleanupFence = { ...fence, revision: positive3(pending.revision, "cleanup_pending_revision_missing") };
   let probeState = "unknown";
   let cleanupEvidence;
+  let cleanupFailureReason;
   if (workerExitCode === 0 && executionCleanup) {
     try {
       stage("cleanup_identity_probe_start", { pid: rootProcessId });
@@ -10345,47 +10387,73 @@ async function finalizeClaimedWorkerCleanup(port, input, generation, claimId, pr
         { state: verdict2?.state ?? "unknown", reason: verdict2?.reason_code ?? probeOutcome.status }
       );
       if (verdict2?.state === "exited") {
-        const launchReceiptDigest = text(current.launch_receipt_digest, "cleanup_launch_receipt_digest_missing");
-        const resultCommitRef = text(current.result_commit_ref, "cleanup_result_commit_ref_missing");
-        const processTreeFacts = {
-          contract: executionCleanup.source === "zcode_app_server_adapter" ? "real-zcode-claimed-worker-process-tree-v1" : "synthetic-claim-worker-process-tree-v1",
-          process_id: rootProcessId,
-          start_fingerprint: rootFingerprint,
-          worker_exit_code: workerExitCode,
-          probe_state: verdict2.state,
-          descendants: [],
-          execution_cleanup_proof_digest: sha2562(canonicalJson2(executionCleanup))
-        };
-        const resourceFacts = {
-          contract: executionCleanup.source === "zcode_app_server_adapter" ? "real-zcode-adapter-resources-v1" : "synthetic-claimed-worker-resources-v1",
-          adapter_cleanup_state: adapterCleanupState,
-          execution_cleanup_source: executionCleanup.source,
-          execution_cleanup_method: executionCleanup.method,
-          worker_stdio_closed: true,
-          interaction_channels: false,
-          cleanup_scope: "worker_and_adapter_descendant_resources",
-          managed_browser_cleanup_verified: executionCleanup.managed_browser_cleanup_verified,
-          workspace_retained: executionCleanup.workspace_retained
-        };
-        cleanupEvidence = {
-          source: "manager_os_cleanup_verification",
-          fixture: false,
-          operation_id: input.operationId,
-          task_id: input.task.task_id,
-          attempt: input.attempt,
-          generation,
-          claim_id: claimId,
-          worker_identity_digest: claimIdentityDigest,
-          launch_receipt_digest: launchReceiptDigest,
-          result_commit_ref: resultCommitRef,
-          process_tree_digest: sha2562(canonicalJson2(processTreeFacts)),
-          resources_digest: sha2562(canonicalJson2(resourceFacts)),
-          root_process_id: rootProcessId,
-          root_start_fingerprint: rootFingerprint,
-          worker_tree_complete: true,
-          operation_resources_complete: true,
-          workspace_touched: false
-        };
+        stage("cleanup_tree_scan_start", { pid: rootProcessId });
+        const treeOutcome = await processTreeWithDeadline(
+          [{ pid: rootProcessId, fingerprint: rootFingerprint }],
+          processTreeProbeTimeoutMs,
+          verifyTreeClaimants
+        );
+        const treeComplete = treeOutcome.status === "resolved" && treeOutcome.result.clean === true && treeOutcome.result.livePids.length === 0 && treeOutcome.result.observedPids.includes(rootProcessId);
+        stage(
+          treeOutcome.status === "timeout" ? "cleanup_tree_scan_timeout" : treeOutcome.status === "rejected" ? "cleanup_tree_scan_failed" : treeComplete ? "cleanup_tree_scan_clean" : "cleanup_tree_scan_incomplete",
+          treeOutcome.status === "resolved" ? {
+            clean: treeOutcome.result.clean,
+            live_pid_count: treeOutcome.result.livePids.length,
+            observed_pid_count: treeOutcome.result.observedPids.length,
+            execution_cleanup_method: executionCleanup.method
+          } : {}
+        );
+        if (treeComplete && treeOutcome.status === "resolved") {
+          const launchReceiptDigest = text(current.launch_receipt_digest, "cleanup_launch_receipt_digest_missing");
+          const resultCommitRef = text(current.result_commit_ref, "cleanup_result_commit_ref_missing");
+          const observedPids = [...new Set(treeOutcome.result.observedPids)].sort((left, right) => left - right);
+          const processTreeFacts = {
+            contract: executionCleanup.source === "zcode_app_server_adapter" ? "real-zcode-claimed-worker-process-tree-v1" : "synthetic-claim-worker-process-tree-v1",
+            process_id: rootProcessId,
+            start_fingerprint: rootFingerprint,
+            worker_exit_code: workerExitCode,
+            probe_state: verdict2.state,
+            scan_scope: "worker_root_recorded_tree_and_observed_claimants",
+            scan_clean: true,
+            live_pids: [],
+            observed_pids: observedPids,
+            execution_cleanup_proof_digest: sha2562(canonicalJson2(executionCleanup))
+          };
+          const resourceFacts = {
+            contract: executionCleanup.source === "zcode_app_server_adapter" ? "real-zcode-adapter-resources-v1" : "synthetic-claimed-worker-resources-v1",
+            adapter_cleanup_state: adapterCleanupState,
+            execution_cleanup_source: executionCleanup.source,
+            execution_cleanup_method: executionCleanup.method,
+            worker_stdio_closed: true,
+            interaction_channels: false,
+            cleanup_scope: "worker_and_adapter_descendant_resources",
+            managed_browser_cleanup_verified: executionCleanup.managed_browser_cleanup_verified,
+            workspace_retained: executionCleanup.workspace_retained
+          };
+          cleanupEvidence = {
+            source: "manager_os_cleanup_verification",
+            fixture: false,
+            operation_id: input.operationId,
+            task_id: input.task.task_id,
+            attempt: input.attempt,
+            generation,
+            claim_id: claimId,
+            worker_identity_digest: claimIdentityDigest,
+            launch_receipt_digest: launchReceiptDigest,
+            result_commit_ref: resultCommitRef,
+            process_tree_digest: sha2562(canonicalJson2(processTreeFacts)),
+            resources_digest: sha2562(canonicalJson2(resourceFacts)),
+            root_process_id: rootProcessId,
+            root_start_fingerprint: rootFingerprint,
+            worker_tree_complete: true,
+            operation_resources_complete: true,
+            workspace_touched: false,
+            ..."adapter_cleanup" in executionCleanup ? { adapter_cleanup: executionCleanup.adapter_cleanup } : {}
+          };
+        } else {
+          probeState = "incomplete";
+          cleanupFailureReason = treeOutcome.status === "timeout" ? "process_tree_probe_timeout" : treeOutcome.status === "rejected" ? "process_tree_probe_rejected" : treeOutcome.status === "resolved" && treeOutcome.result.livePids.length > 0 ? "process_tree_still_live" : "process_tree_scan_incomplete";
+        }
       } else {
         probeState = verdict2?.state === "alive" ? "alive" : "unknown";
       }
@@ -10401,7 +10469,7 @@ async function finalizeClaimedWorkerCleanup(port, input, generation, claimId, pr
       ...cleanupFence,
       outcome: "unverified",
       probe_state: probeState,
-      reason: !executionCleanup ? "adapter_cleanup_unverified" : workerExitCode === 0 ? "worker_exit_identity_not_proven" : "worker_exit_not_verified"
+      reason: !executionCleanup ? "adapter_cleanup_unverified" : workerExitCode === 0 ? cleanupFailureReason ?? "worker_exit_identity_not_proven" : "worker_exit_not_verified"
     });
     return "unverified";
   }
@@ -10546,9 +10614,9 @@ async function probeWithDeadline(probe, request, timeoutMs) {
     if (timer) clearTimeout(timer);
   }
 }
-async function processTreeWithDeadline(targets, timeoutMs) {
+async function processTreeWithDeadline(targets, timeoutMs, verify = verifyProcessTreeClaimantsClean) {
   let timer;
-  const pending = Promise.resolve().then(() => verifyProcessTreeClaimantsClean(targets)).then(
+  const pending = Promise.resolve().then(() => verify(targets)).then(
     (result) => ({ status: "resolved", result }),
     () => ({ status: "rejected" })
   );
@@ -10606,7 +10674,7 @@ function validateExecutionCleanupProof(value) {
     throw new LifecycleGateError("worker_cleanup_proof_invalid");
   }
   if (proof.source === "zcode_app_server_adapter" && proof.method === "verified_recorded_tree_scan") {
-    if (Object.keys(proof).sort().join("|") !== "adapter_process_id|adapter_start_fingerprint|complete|contract|managed_browser_cleanup_verified|method|process_tree_member_count|process_tree_scan_digest|source|workspace_retained" || !Number.isSafeInteger(proof.adapter_process_id) || Number(proof.adapter_process_id) < 1 || typeof proof.adapter_start_fingerprint !== "string" || proof.adapter_start_fingerprint.length === 0 || typeof proof.process_tree_scan_digest !== "string" || !/^[0-9a-f]{64}$/u.test(proof.process_tree_scan_digest) || !Number.isSafeInteger(proof.process_tree_member_count) || Number(proof.process_tree_member_count) < 1) {
+    if (Object.keys(proof).sort().join("|") !== "adapter_cleanup|adapter_process_id|adapter_start_fingerprint|complete|contract|managed_browser_cleanup_verified|method|process_tree_member_count|process_tree_scan_digest|source|workspace_retained" || !Number.isSafeInteger(proof.adapter_process_id) || Number(proof.adapter_process_id) < 1 || typeof proof.adapter_start_fingerprint !== "string" || proof.adapter_start_fingerprint.length === 0 || typeof proof.process_tree_scan_digest !== "string" || !/^[0-9a-f]{64}$/u.test(proof.process_tree_scan_digest) || !Number.isSafeInteger(proof.process_tree_member_count) || Number(proof.process_tree_member_count) < 1 || !validAdapterCleanupEvidence2(proof.adapter_cleanup) || proof.adapter_cleanup.treeScanStatus !== "verified" || proof.adapter_cleanup.close.treeScanStatus !== "verified") {
       throw new LifecycleGateError("worker_cleanup_proof_invalid");
     }
     return proof;
@@ -10618,7 +10686,7 @@ function validateExecutionCleanupProof(value) {
       }
       return proof;
     }
-    if (Object.keys(proof).sort().join("|") !== "adapter_process_id|adapter_start_fingerprint|complete|contract|managed_browser_cleanup_verified|method|process_tree_member_count|process_tree_receipt_digest|source|workspace_retained" || proof.method !== "identity_bound_windows_tree_cleanup" || !Number.isSafeInteger(proof.adapter_process_id) || Number(proof.adapter_process_id) < 1 || typeof proof.adapter_start_fingerprint !== "string" || proof.adapter_start_fingerprint.length === 0 || typeof proof.process_tree_receipt_digest !== "string" || !/^[0-9a-f]{64}$/u.test(proof.process_tree_receipt_digest) || !Number.isSafeInteger(proof.process_tree_member_count) || Number(proof.process_tree_member_count) < 1) {
+    if (Object.keys(proof).sort().join("|") !== "adapter_cleanup|adapter_process_id|adapter_start_fingerprint|complete|contract|managed_browser_cleanup_verified|method|process_tree_member_count|process_tree_receipt_digest|source|workspace_retained" || proof.method !== "identity_bound_windows_tree_cleanup" || !Number.isSafeInteger(proof.adapter_process_id) || Number(proof.adapter_process_id) < 1 || typeof proof.adapter_start_fingerprint !== "string" || proof.adapter_start_fingerprint.length === 0 || typeof proof.process_tree_receipt_digest !== "string" || !/^[0-9a-f]{64}$/u.test(proof.process_tree_receipt_digest) || !Number.isSafeInteger(proof.process_tree_member_count) || Number(proof.process_tree_member_count) < 1 || !validAdapterCleanupEvidence2(proof.adapter_cleanup)) {
       throw new LifecycleGateError("worker_cleanup_proof_invalid");
     }
     return proof;
@@ -10630,6 +10698,25 @@ function validateExecutionCleanupProof(value) {
     return proof;
   }
   throw new LifecycleGateError("worker_cleanup_proof_invalid");
+}
+function validAdapterCleanupEvidence2(value) {
+  const evidence = asRecord3(value);
+  const close = asRecord3(evidence.close);
+  const scanStatuses = /* @__PURE__ */ new Set(["verified", "live", "incomplete", "not_applicable"]);
+  const stages = /* @__PURE__ */ new Set([
+    "not_started",
+    "direct_close",
+    "official_manager_dispose",
+    "official_manager_dispose_all",
+    "official_manager_workspace_dispose"
+  ]);
+  const boundedToken = (item) => typeof item === "string" && item.length > 0 && item.length <= 120 && /^[A-Za-z][A-Za-z0-9_.:-]*$/u.test(item);
+  const evidenceKeys = ["contract", "close", "treeScanStatus"];
+  const closeKeys = ["status", "stage", "treeScanStatus"];
+  if (close.errorName !== void 0) closeKeys.push("errorName");
+  if (close.errorCode !== void 0) closeKeys.push("errorCode");
+  if (close.managerProcessCountAfter !== void 0) closeKeys.push("managerProcessCountAfter");
+  return Object.keys(evidence).sort().join("|") === evidenceKeys.sort().join("|") && Object.keys(close).sort().join("|") === closeKeys.sort().join("|") && evidence.contract === "adapter-cleanup-v1" && ["resolved", "rejected"].includes(String(close.status)) && typeof close.stage === "string" && stages.has(close.stage) && scanStatuses.has(String(close.treeScanStatus)) && scanStatuses.has(String(evidence.treeScanStatus)) && (close.errorName === void 0 || boundedToken(close.errorName)) && (close.errorCode === void 0 || boundedToken(close.errorCode)) && (close.managerProcessCountAfter === void 0 || Number.isSafeInteger(close.managerProcessCountAfter) && Number(close.managerProcessCountAfter) >= 0) && (!close.stage.startsWith("official_") || Number.isSafeInteger(close.managerProcessCountAfter));
 }
 function trustedExecutionCleanupProof(proof, testOnlyFakeAdapter) {
   if (!proof) return null;
@@ -10801,7 +10888,7 @@ function digestProvenance(value) {
 function interactionKey(taskId, requestId) {
   return `${taskId}\0${requestId}`;
 }
-var DEFAULT_PROCESS_PROBE_TIMEOUT_MS, verifiedRecoveryStops, LifecycleGateError, freshBootstrapPromises, DEFAULT_FRESH_BOOTSTRAP_LOCK_TIMEOUT_MS, FRESH_BOOTSTRAP_LOCK_RETRY_MS, FRESH_BOOTSTRAP_LOCK_HANDSHAKE_TIMEOUT_MS, FRESH_BOOTSTRAP_LOCK_RELEASE_TIMEOUT_MS, WINDOWS_BOOTSTRAP_LOCK_SCRIPT;
+var DEFAULT_PROCESS_PROBE_TIMEOUT_MS, DEFAULT_PROCESS_TREE_PROBE_TIMEOUT_MS, verifiedRecoveryStops, LifecycleGateError, freshBootstrapPromises, DEFAULT_FRESH_BOOTSTRAP_LOCK_TIMEOUT_MS, FRESH_BOOTSTRAP_LOCK_RETRY_MS, FRESH_BOOTSTRAP_LOCK_HANDSHAKE_TIMEOUT_MS, FRESH_BOOTSTRAP_LOCK_RELEASE_TIMEOUT_MS, WINDOWS_BOOTSTRAP_LOCK_SCRIPT;
 var init_lifecycle_gate = __esm({
   "src/store/lifecycle-gate.ts"() {
     "use strict";
@@ -10822,6 +10909,7 @@ var init_lifecycle_gate = __esm({
     init_start_plan_private_channel();
     init_start_plan_handle_gate();
     DEFAULT_PROCESS_PROBE_TIMEOUT_MS = 5e3;
+    DEFAULT_PROCESS_TREE_PROBE_TIMEOUT_MS = 3e4;
     verifiedRecoveryStops = /* @__PURE__ */ new Map();
     LifecycleGateError = class extends Error {
       constructor(code, message = code) {

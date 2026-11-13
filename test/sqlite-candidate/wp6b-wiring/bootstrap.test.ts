@@ -60,7 +60,7 @@ test("formal SQLite Host selects only the real Adapter unless a test-only driver
   const worker = readFileSync(path.join(process.cwd(), "src", "worker", "worker-main.ts"), "utf8");
   assert.doesNotMatch(host, /testOnlyFakeAdapter|fake-result-adapter/u);
   assert.match(gate, /adapter_mode:\s*options\.testOnlyFakeAdapter\s*\?\s*"test_fake"\s*:\s*"zcode_app_server"/u);
-  assert.match(worker, /execution\.adapter_mode === "test_fake"\s*\?\s*await runExplicitFakeAdapter\(bootstrap, execution, candidateInteraction\)\s*:\s*await runZCodeAdapter\(bootstrap, execution, candidateInteraction, options\.privateAuthMode \? identity : undefined\)/u);
+  assert.match(worker, /execution\.adapter_mode === "test_fake"\s*\?\s*await runExplicitFakeAdapter\(bootstrap, execution, candidateInteraction\)\s*:\s*await runZCodeAdapter\(\s*bootstrap,\s*execution,\s*candidateInteraction,\s*options\.privateAuthMode \? identity : undefined,\s*options\.dependencies,?\s*\)/u);
   assert.match(worker, /if \(execution\.adapter_mode !== "test_fake"\) throw new Error\("fake Adapter is restricted to explicit test mode"\)/u);
 });
 

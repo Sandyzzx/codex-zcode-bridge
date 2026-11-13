@@ -1,3 +1,11 @@
 # Generated vendor code includes significant trailing spaces in upstream
 # template literals. Preserve those bytes; keep ordinary source checks strict.
 plugins/codex-zcode-bridge/worker/vendor/pkg/browser-host.cjs linguist-generated=true whitespace=-blank-at-eol
+# Vendored ZCode artifacts preserve upstream bytes and may contain license text
+# that resembles a conflict marker or templates with significant whitespace.
+# Never rewrite those bytes for Bridge whitespace checks.
+plugins/codex-zcode-bridge/worker/vendor/official-host/** -diff -text -whitespace
+# Fixed-upstream patches and their sidecars must retain exact bytes so their
+# published SHA-256 values survive checkout and artifact verification.
+upstream/zcode-3.18.0/patches/*.patch -text -whitespace
+upstream/zcode-3.18.0/patches/*.sha256 -text -whitespace

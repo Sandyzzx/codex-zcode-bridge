@@ -1,0 +1,531 @@
+diff --git a/packages/services/src/model-provider/oauthProviderRuntimeAuthService.ts b/packages/services/src/model-provider/oauthProviderRuntimeAuthService.ts
+new file mode 100644
+index 00000000..fc7cd944
+--- /dev/null
++++ b/packages/services/src/model-provider/oauthProviderRuntimeAuthService.ts
+@@ -0,0 +1,223 @@
++import type {
++  ApiClient,
++  OAuthProviderId,
++  ProviderFamilyDomain,
++  ZCodeAccountAccess,
++  ZCodeProviderAccountAccess,
++  ZCodeProviderRuntimeHeadersRequestParams,
++  ZCodeProviderRuntimeHeadersResponse,
++} from "@zcode/shared";
++import type { SharedFileLockOptions } from "@zcode/shared/node";
++import { resolveJwtExpiration } from "@zcode/shared";
++import {
++  createCredentialService,
++  type LocalCredentialService,
++} from "../credential/credentialService.js";
++import { createOAuthService } from "../oauth/oauthService.js";
++import {
++  OAuthCredentialRepo,
++  type OAuthAccountMaterial,
++} from "../oauth/repo/oauthCredentialRepo.js";
++import { setDataBaseDir } from "../paths.js";
++import { createNodeApiClient } from "../providers/api/nodeApiClient.js";
++import { AccountProviderApiClient } from "./accountProviderApiClient.js";
++import { AccountProviderApiKeyResolver } from "./accountProviderApiKeyResolver.js";
++import { createAccountProviderCredentialService } from "./accountProviderCredentialService.js";
++import { createAccountProviderRequestAuthService } from "./accountProviderRequestAuthService.js";
++import { createAccountProjectTokenClient } from "./accountProjectTokenClient.js";
++import { resolveAccountTeamPlanRuntimeMaterial } from "./accountProviderTeamPlanRequestKey.js";
++
++const BIGMODEL_PROVIDER_ID = "bigmodel" as const;
++const ZAI_PROVIDER_ID = "zai" as const;
++
++export interface OAuthProviderRuntimeAuthServiceOptions {
++  readonly dataBaseDir: string;
++  readonly credentialService?: LocalCredentialService;
++  readonly apiClient?: ApiClient;
++  readonly oauthService?: Pick<ReturnType<typeof createOAuthService>, "refreshToken">;
++  readonly resolveCurrentAccountAccess: (
++    access: ZCodeProviderAccountAccess,
++  ) => Promise<ZCodeAccountAccess | null>;
++  readonly onProviderLogout?: (
++    provider: OAuthProviderId,
++    accountIdentity?: string | null,
++  ) => Promise<void>;
++  readonly refreshLockOptions?: SharedFileLockOptions;
++  readonly refreshNetworkTimeoutMs?: number;
++}
++
++export interface ResolveProviderRuntimeAuthOptions {
++  readonly signal?: AbortSignal;
++}
++
++export interface OAuthProviderRuntimeAuthService {
++  resolveProviderRuntimeRequest(
++    request: ZCodeProviderRuntimeHeadersRequestParams,
++    options?: ResolveProviderRuntimeAuthOptions,
++  ): Promise<ZCodeProviderRuntimeHeadersResponse>;
++  clearProjectTokenCache(): void;
++}
++
++/**
++ * Minimal host-side composition for `interaction/requestProviderRuntimeHeaders`.
++ *
++ * The factory only composes existing account/OAuth services. It deliberately
++ * does not start Desktop services, create any process or database, or bypass
++ * the credential store selected by `dataBaseDir`.
++ */
++export function createOAuthProviderRuntimeAuthService(
++  options: OAuthProviderRuntimeAuthServiceOptions,
++): OAuthProviderRuntimeAuthService {
++  let credentialService: LocalCredentialService;
++  if (options.credentialService) {
++    credentialService = options.credentialService;
++  } else {
++    setDataBaseDir(options.dataBaseDir);
++    credentialService = createCredentialService();
++  }
++
++  const oauthCredentialRepo = new OAuthCredentialRepo(credentialService);
++  const apiClient = options.apiClient ?? createNodeApiClient();
++  const oauthService =
++    options.oauthService ??
++    createOAuthService(credentialService, {
++      captureCredentialGuard: () => credentialService.captureRecoveryGuard(),
++      apiClient,
++      onProviderLogout: options.onProviderLogout,
++      refreshLockOptions: options.refreshLockOptions,
++      refreshNetworkTimeoutMs: options.refreshNetworkTimeoutMs,
++    });
++
++  const loadOAuthAccountMaterial = (family: ProviderFamilyDomain) =>
++    oauthCredentialRepo.loadFamilyMaterial(family);
++  const loadOAuthFamilyTokenSet = async (providerId: string) => {
++    if (providerId !== ZAI_PROVIDER_ID && providerId !== BIGMODEL_PROVIDER_ID) {
++      return null;
++    }
++    const account = await loadOAuthAccountMaterial(providerId);
++    return account
++      ? {
++          accessToken: account.accessToken,
++          zcodeJwtToken: account.zcodeJwtToken,
++          sessionRevision: account.sessionRevision,
++          accountIdentity: account.accountIdentity,
++          zcodeUserId: account.zcodeUserId,
++        }
++      : null;
++  };
++
++  const projectTokenClient = createAccountProjectTokenClient(apiClient, credentialService);
++  const accountProviderApiClient = new AccountProviderApiClient(apiClient);
++  const accountProviderApiKeyResolver = new AccountProviderApiKeyResolver(
++    accountProviderApiClient.fetchRemoteData.bind(accountProviderApiClient),
++    projectTokenClient,
++  );
++  const accountProviderCredentialService = createAccountProviderCredentialService({
++    loadOAuthAccountMaterial,
++    resolveProviderMaterial: (
++      family,
++      accessToken,
++      accountIdentity,
++      rejectedProjectTokenFingerprint,
++    ) =>
++      accountProviderApiKeyResolver.resolveProviderMaterial(
++        family === "zai" ? ZAI_PROVIDER_ID : BIGMODEL_PROVIDER_ID,
++        accessToken,
++        accountIdentity,
++        rejectedProjectTokenFingerprint,
++      ),
++  });
++
++  const accountRequestAuthService = createAccountProviderRequestAuthService({
++    resolveCurrentAccountAccess: options.resolveCurrentAccountAccess,
++    loadOAuthTokenSet: loadOAuthFamilyTokenSet,
++    async loadIndividualPlanMaterial(providerId, family, rejectedProjectTokenFingerprint) {
++      const accountIdentity = (await loadOAuthAccountMaterial(family))?.accountIdentity;
++      if (!accountIdentity) return null;
++      return accountProviderCredentialService.loadCodingPlanMaterial({
++        providerId,
++        family,
++        accountIdentity,
++        rejectedProjectTokenFingerprint,
++      });
++    },
++    async resolveTeamPlanMaterial(access, rejectedProjectTokenFingerprint) {
++      const accountIdentity = (await loadOAuthAccountMaterial(access.family))?.accountIdentity;
++      if (!accountIdentity) return null;
++      return resolveAccountTeamPlanRuntimeMaterial({
++        apiClient,
++        loadOAuthAccountMaterial,
++        access,
++        accountIdentity,
++        tokenClient: projectTokenClient,
++        rejectedProjectTokenFingerprint,
++      });
++    },
++  });
++
++  return {
++    async resolveProviderRuntimeRequest(request, resolveOptions = {}) {
++      if (resolveOptions.signal?.aborted) {
++        return unavailable();
++      }
++      const accountAccess = request.accountAccess;
++      if (!accountAccess) {
++        return unavailable();
++      }
++      try {
++        if (await needsOAuthRefresh(accountAccess, loadOAuthAccountMaterial)) {
++          const family = accountAccessFamily(accountAccess);
++          const account = await oauthCredentialRepo.loadFamilyMaterial(family);
++          if (!account) return unavailable();
++          await oauthService.refreshToken(account.loginProvider);
++          projectTokenClient.clear();
++        }
++        if (resolveOptions.signal?.aborted) {
++          return unavailable();
++        }
++        const requestAuth = await accountRequestAuthService.resolveCurrent({
++          providerId: request.providerId,
++          modelId: request.modelSelection.modelId,
++          accountAccess,
++          expectedAccountScope: request.expectedAccountScope,
++          rejectedProjectTokenFingerprint: request.rejectedProjectTokenFingerprint,
++          reason: request.reason,
++        });
++        return { headersApplied: true, requestAuth };
++      } catch {
++        return unavailable();
++      }
++    },
++
++    clearProjectTokenCache() {
++      projectTokenClient.clear();
++    },
++  };
++}
++
++function accountAccessFamily(
++  access: ZCodeProviderAccountAccess | ZCodeAccountAccess,
++): ProviderFamilyDomain {
++  return "family" in access ? access.family : access.accountType;
++}
++
++async function needsOAuthRefresh(
++  access: ZCodeProviderAccountAccess | ZCodeAccountAccess,
++  loadOAuthAccountMaterial: (family: ProviderFamilyDomain) => Promise<OAuthAccountMaterial | null>,
++): Promise<boolean> {
++  const account = await loadOAuthAccountMaterial(accountAccessFamily(access));
++  if (!account) return false;
++  const mode = "mode" in access ? access.mode : access.planKind;
++  // Start Plan requests use the main ZCode JWT. Coding/Team Plan requests use
++  // the OAuth access token to obtain a project token. Opaque tokens remain
++  // usable; only a standards-compliant JWT whose exp is due rotates here.
++  const token = mode === "start-plan" ? account.zcodeJwtToken : account.accessToken;
++  return Boolean(token) && resolveJwtExpiration(token).kind === "expired";
++}
++
++function unavailable(): ZCodeProviderRuntimeHeadersResponse {
++  return {
++    headersApplied: false,
++    errorMessage: "Provider request auth is unavailable.",
++  };
++}
+diff --git a/packages/services/src/node.ts b/packages/services/src/node.ts
+index 7de23b0f..2e55474c 100644
+--- a/packages/services/src/node.ts
++++ b/packages/services/src/node.ts
+@@ -284,6 +284,12 @@ export {
+ export { createAccountRequestAuthService } from "./model-provider/accountRequestAuthService.js";
+ export type { IAccountRequestAuthService } from "./model-provider/accountRequestAuthService.js";
+ export { createAccountProviderRequestAuthService } from "./model-provider/accountProviderRequestAuthService.js";
++export { createOAuthProviderRuntimeAuthService } from "./model-provider/oauthProviderRuntimeAuthService.js";
++export type {
++  OAuthProviderRuntimeAuthService,
++  OAuthProviderRuntimeAuthServiceOptions,
++  ResolveProviderRuntimeAuthOptions,
++} from "./model-provider/oauthProviderRuntimeAuthService.js";
+ export {
+   resolveAccountTeamPlanRuntimeApiKey,
+   resolveAccountTeamPlanRuntimeMaterial,
+diff --git a/packages/services/src/official-host/runtimeHostEntry.ts b/packages/services/src/official-host/runtimeHostEntry.ts
+new file mode 100644
+index 00000000..8c3395df
+--- /dev/null
++++ b/packages/services/src/official-host/runtimeHostEntry.ts
+@@ -0,0 +1,12 @@
++export {
++  ZCodeAgentProcessManager,
++  type ZCodeAgentProcessManagerOptions,
++} from "../zcode-agent/zcodeAgentProcessManager.js";
++export { ZCodeProtocolClient } from "../zcode-agent/zcodeProtocolClient.js";
++export { ZCodeStdioTransport } from "../zcode-agent/zcodeStdioTransport.js";
++export {
++  createOAuthProviderRuntimeAuthService,
++  type OAuthProviderRuntimeAuthService,
++  type OAuthProviderRuntimeAuthServiceOptions,
++  type ResolveProviderRuntimeAuthOptions,
++} from "../model-provider/oauthProviderRuntimeAuthService.js";
+diff --git a/packages/services/test/fixtures/oauth-refresh-coordination-child.ts b/packages/services/test/fixtures/oauth-refresh-coordination-child.ts
+index 8ce3a179..3a353331 100644
+--- a/packages/services/test/fixtures/oauth-refresh-coordination-child.ts
++++ b/packages/services/test/fixtures/oauth-refresh-coordination-child.ts
+@@ -1,13 +1,19 @@
+ import { join } from "node:path";
+-import type { ApiClient, OAuthProviderAdapter, OAuthTokenSet } from "@zcode/shared";
++import {
++  zcodeProviderRuntimeHeadersRequestParamsSchema,
++  type ApiClient,
++  type OAuthProviderAdapter,
++  type OAuthTokenSet,
++} from "@zcode/shared";
+ import { createSystemCredentialCipher } from "@zcode/shared/credential-security";
+ import { createCredentialService } from "../../src/credential/credentialService.js";
++import { createOAuthProviderRuntimeAuthService } from "../../src/model-provider/oauthProviderRuntimeAuthService.js";
+ import { OAuthService } from "../../src/oauth/oauthService.js";
+ import { setDataBaseDir } from "../../src/paths.js";
+ 
+ interface ChildConfig {
+   dataBaseDir: string;
+-  mode: "refresh" | "hold-lock";
++  mode: "refresh" | "hold-lock" | "runtime-auth";
+   refreshLockMaxWaitMs?: number;
+   refreshNetworkTimeoutMs?: number;
+   refreshUrl: string;
+@@ -92,7 +98,47 @@ async function run(config: ChildConfig): Promise<void> {
+       refreshNetworkTimeoutMs: config.refreshNetworkTimeoutMs,
+     });
+     service.onDidChangeSession((state) => events.push(state));
+-    await service.refreshToken("zai");
++    let runtimeAuth: unknown;
++    if (config.mode === "runtime-auth") {
++      const runtimeAuthService = createOAuthProviderRuntimeAuthService({
++        dataBaseDir: config.dataBaseDir,
++        credentialService,
++        apiClient: {} as ApiClient,
++        oauthService: service,
++        resolveCurrentAccountAccess: async (access) =>
++          access.type === "zhipu-account" && access.mode === "start-plan" && access.entitled
++            ? {
++                type: "zhipu-account",
++                family: access.accountType,
++                planKind: "start-plan",
++              }
++            : null,
++      });
++      const request = zcodeProviderRuntimeHeadersRequestParamsSchema.parse({
++        requestId: "runtime-auth-fixture",
++        sessionId: "runtime-auth-session",
++        workspace: {
++          workspacePath: config.dataBaseDir,
++          workspaceKey: "runtime-auth-workspace",
++        },
++        modelSelection: {
++          providerId: "zai",
++          modelId: "glm-5.3-flash",
++        },
++        providerId: "zai",
++        accountAccess: {
++          type: "zhipu-account",
++          accountType: "zai",
++          mode: "start-plan",
++          entitled: true,
++        },
++        rejectedProjectTokenFingerprint: "a".repeat(64),
++        reason: "model-request",
++      });
++      runtimeAuth = await runtimeAuthService.resolveProviderRuntimeRequest(request);
++    } else {
++      await service.refreshToken("zai");
++    }
+     const values = await credentialService.loadMany([
+       "oauth:active_provider",
+       "oauth:session_revision",
+@@ -106,8 +152,10 @@ async function run(config: ChildConfig): Promise<void> {
+       result: {
+         accessToken: values["oauth:zai:access_token"],
+         events,
++        jwt: values["zcodejwttoken"],
+         refreshToken: values["oauth:zai:refresh_token"],
+         revision: values["oauth:session_revision"],
++        runtimeAuth,
+       },
+     });
+   } catch (error) {
+diff --git a/packages/services/test/oauthRefreshCoordination.test.ts b/packages/services/test/oauthRefreshCoordination.test.ts
+index d1635eee..3e82c39e 100644
+--- a/packages/services/test/oauthRefreshCoordination.test.ts
++++ b/packages/services/test/oauthRefreshCoordination.test.ts
+@@ -4,6 +4,7 @@ import { createServer, type Server } from "node:http";
+ import { join } from "node:path";
+ import { fileURLToPath } from "node:url";
+ import { afterEach, expect, it } from "vitest";
++import { zcodeProviderRuntimeHeadersResponseSchema } from "@zcode/shared";
+ import { createSystemCredentialCipher } from "@zcode/shared/credential-security";
+ import { createCredentialService } from "../src/credential/credentialService.js";
+ import { setDataBaseDir } from "../src/paths.js";
+@@ -33,15 +34,17 @@ afterEach(async () => {
+ });
+ 
+ interface ChildResult {
+-  accessToken: string;
++  accessToken: string | null;
+   events: string[];
+-  refreshToken: string;
+-  revision: string;
++  jwt: string | null;
++  refreshToken: string | null;
++  revision: string | null;
++  runtimeAuth?: unknown;
+ }
+ 
+ interface ChildConfig {
+   dataBaseDir: string;
+-  mode: "refresh" | "hold-lock";
++  mode: "refresh" | "hold-lock" | "runtime-auth";
+   refreshLockMaxWaitMs?: number;
+   refreshNetworkTimeoutMs?: number;
+   refreshUrl: string;
+@@ -157,6 +160,7 @@ class SyntheticRefreshServer {
+   private holdResponses = false;
+   private requestCount = 0;
+   private readonly server: Server;
++  readonly issuedJwts: string[] = [];
+   readonly url!: string;
+ 
+   constructor(private readonly responseDelayMs = 0) {
+@@ -233,9 +237,12 @@ class SyntheticRefreshServer {
+ 
+     this.consumedRefreshTokens.add(body.refreshToken);
+     this.requestCount += 1;
++    const jwt = createSyntheticJwt(`rotated-jwt-${this.requestCount}`, Date.now() + 60_000);
++    this.issuedJwts.push(jwt);
+     const payload = {
+       accessToken: `rotated-access-${this.requestCount}`,
+       refreshToken: `rotated-refresh-${this.requestCount}`,
++      zcodeJwtToken: jwt,
+     };
+     if (this.holdResponses) {
+       this.heldResponses.push({ payload, response });
+@@ -249,6 +256,7 @@ class SyntheticRefreshServer {
+ 
+ async function createSignedInProfile(input: {
+   baseDirName: string;
++  jwt?: string;
+   refreshToken?: string;
+   userId?: string;
+ }): Promise<{
+@@ -276,11 +284,20 @@ async function createSignedInProfile(input: {
+       username: userId,
+       displayName: userId,
+     }),
+-    zcodejwttoken: `jwt-${userId}`,
++    zcodejwttoken: input.jwt ?? `jwt-${userId}`,
+   });
+   return { credentialService, dataBaseDir };
+ }
+ 
++function createSyntheticJwt(subject: string, expiresAt: number): string {
++  const encode = (value: unknown): string =>
++    Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
++  return `${encode({ alg: "none", typ: "JWT" })}.${encode({
++    exp: Math.floor(expiresAt / 1_000),
++    sub: subject,
++  })}.synthetic`;
++}
++
+ function spawnChild(config: ChildConfig): ChildHarness {
+   const child = fork(CHILD_DRIVER, [JSON.stringify(config)], {
+     cwd: REPO_ROOT,
+@@ -352,11 +369,87 @@ it("uses one cross-process refresh for the same one-time token and both readers
+   expect(firstResult.result).toEqual(secondResult.result);
+   expect(firstResult.result.accessToken).toBe("rotated-access-1");
+   expect(firstResult.result.refreshToken).toBe("rotated-refresh-1");
++  expect(firstResult.result.jwt).toBe(server.issuedJwts[0]);
+   expect(firstResult.result.revision).not.toBe("revision-alice-seed");
+   expect(firstResult.result.events.filter((event) => event === "signed-in")).toHaveLength(1);
+   expect(secondResult.result.events.filter((event) => event === "signed-in")).toHaveLength(1);
+ }, 30_000);
+ 
++it("serves concurrent runtime-header requests from a fresh JWT without refreshing", async () => {
++  const server = new SyntheticRefreshServer();
++  await server.start();
++  const freshJwt = createSyntheticJwt("fresh", Date.now() + 60_000);
++  const profile = await createSignedInProfile({
++    baseDirName: "runtime-auth-fresh",
++    jwt: freshJwt,
++  });
++  const config = {
++    dataBaseDir: profile.dataBaseDir,
++    mode: "runtime-auth" as const,
++    refreshUrl: server.url,
++  };
++  const first = spawnChild(config);
++  const second = spawnChild(config);
++  await Promise.all([first.start(), second.start()]);
++  const [firstResult, secondResult] = await Promise.all([
++    first.next("result"),
++    second.next("result"),
++  ]);
++
++  expect(server.requests).toHaveLength(0);
++  const firstAuth = zcodeProviderRuntimeHeadersResponseSchema.parse(firstResult.result.runtimeAuth);
++  const secondAuth = zcodeProviderRuntimeHeadersResponseSchema.parse(
++    secondResult.result.runtimeAuth,
++  );
++  expect(firstAuth).toEqual({
++    headersApplied: true,
++    requestAuth: { apiKey: freshJwt },
++  });
++  expect(secondAuth).toEqual(firstAuth);
++  expect(firstResult.result.jwt).toBe(freshJwt);
++  expect(secondResult.result.jwt).toBe(freshJwt);
++  expect(firstResult.result.revision).toBe("revision-alice-seed");
++  expect(secondResult.result.revision).toBe(firstResult.result.revision);
++}, 30_000);
++
++it("serves concurrent runtime-header requests with one refresh when the JWT is due", async () => {
++  const server = new SyntheticRefreshServer();
++  await server.start();
++  const expiredJwt = createSyntheticJwt("expired", Date.now() - 60_000);
++  const profile = await createSignedInProfile({
++    baseDirName: "runtime-auth-refresh",
++    jwt: expiredJwt,
++  });
++  const config = {
++    dataBaseDir: profile.dataBaseDir,
++    mode: "runtime-auth" as const,
++    refreshUrl: server.url,
++  };
++  const first = spawnChild(config);
++  const second = spawnChild(config);
++  await Promise.all([first.start(), second.start()]);
++  await Promise.all([first.next("waiting"), second.next("waiting")]);
++  const [firstResult, secondResult] = await Promise.all([
++    first.next("result"),
++    second.next("result"),
++  ]);
++
++  expect(server.requests).toHaveLength(1);
++  const firstAuth = zcodeProviderRuntimeHeadersResponseSchema.parse(firstResult.result.runtimeAuth);
++  const secondAuth = zcodeProviderRuntimeHeadersResponseSchema.parse(
++    secondResult.result.runtimeAuth,
++  );
++  expect(firstAuth).toEqual({
++    headersApplied: true,
++    requestAuth: { apiKey: server.issuedJwts[0] },
++  });
++  expect(secondAuth).toEqual(firstAuth);
++  expect(firstResult.result.jwt).toBe(server.issuedJwts[0]);
++  expect(secondResult.result.jwt).toBe(server.issuedJwts[0]);
++  expect(firstResult.result.revision).not.toBe("revision-alice-seed");
++  expect(secondResult.result.revision).toBe(firstResult.result.revision);
++}, 30_000);
++
+ it("reclaims a crashed lock owner and leaves unrelated task/model credential work unblocked", async () => {
+   const server = new SyntheticRefreshServer();
+   await server.start();
+@@ -602,6 +695,7 @@ it("reuses the latest usable A credential after an A to B to A transition", asyn
+   expect(result.result).toEqual({
+     accessToken: "access-a-new",
+     events: ["signed-in"],
++    jwt: "jwt-alice",
+     refreshToken: "refresh-a-rotated",
+     revision: "revision-a-new",
+   });

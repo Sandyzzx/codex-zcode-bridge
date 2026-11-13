@@ -1,0 +1,388 @@
+diff --git a/packages/services/src/zcode-agent/zcodeAgentProcessManager.ts b/packages/services/src/zcode-agent/zcodeAgentProcessManager.ts
+index 36f48bcb..e897af22 100644
+--- a/packages/services/src/zcode-agent/zcodeAgentProcessManager.ts
++++ b/packages/services/src/zcode-agent/zcodeAgentProcessManager.ts
+@@ -81,6 +81,8 @@ export interface ZCodeAgentProcessManagerOptions {
+   commandResolver?: ZCodeAgentCommandResolver;
+   presentationSurface?: ZCodeAgentPresentationSurface;
+   requestTimeoutMs?: number;
++  /** 自 Agent stdout 读取的单条 LF 分隔协议帧最大 UTF-8 字节数（不含 LF）。 */
++  maxFrameBytes?: number;
+   processLifecycleReporter?: RuntimeProcessLifecycleReporter;
+   /**
+    * 进程泳道标识。同一 workspace 的不同泳道各走独立 manager 实例；lane 会写入
+@@ -602,6 +604,7 @@ export class ZCodeAgentProcessManager {
+   private readonly commandResolver: ZCodeAgentCommandResolver;
+   private readonly presentationSurface: ZCodeAgentProcessManagerOptions["presentationSurface"];
+   private readonly requestTimeoutMs: number | undefined;
++  private readonly maxFrameBytes: number | undefined;
+   private readonly processLifecycleReporter: RuntimeProcessLifecycleReporter | undefined;
+   private readonly resolveSpawnEnv: ZCodeAgentProcessManagerOptions["resolveSpawnEnv"];
+   private readonly waitForSpawnAdmission: ZCodeAgentProcessManagerOptions["waitForSpawnAdmission"];
+@@ -626,6 +629,7 @@ export class ZCodeAgentProcessManager {
+     this.commandResolver = options?.commandResolver ?? resolveDefaultZCodeAgentCommand;
+     this.presentationSurface = options?.presentationSurface;
+     this.requestTimeoutMs = options?.requestTimeoutMs;
++    this.maxFrameBytes = options?.maxFrameBytes;
+     this.processLifecycleReporter = options?.processLifecycleReporter;
+     this.resolveSpawnEnv = options?.resolveSpawnEnv;
+     this.waitForSpawnAdmission = options?.waitForSpawnAdmission;
+@@ -1293,6 +1297,7 @@ export class ZCodeAgentProcessManager {
+     const stderrTail = createAgentStderrTail();
+     const transport = new ZCodeStdioTransport(child, {
+       windowsRuntime,
++      maxFrameBytes: this.maxFrameBytes,
+       onStderrLine: (line) => {
+         const diagnostic = parseZCodeProcessDiagnostic(line);
+         if (diagnostic && typeof runtimePid === "number") {
+diff --git a/packages/services/src/zcode-agent/zcodeStdioTransport.ts b/packages/services/src/zcode-agent/zcodeStdioTransport.ts
+index 5c5073ea..0fb54ca5 100644
+--- a/packages/services/src/zcode-agent/zcodeStdioTransport.ts
++++ b/packages/services/src/zcode-agent/zcodeStdioTransport.ts
+@@ -1,6 +1,5 @@
+ import type { WindowsRuntimeHost } from "#src/windows-runtime-host/contract.js";
+ import type { ChildProcessWithoutNullStreams } from "node:child_process";
+-import { StringDecoder } from "node:string_decoder";
+ import { Emitter } from "@zcode/rpc";
+ import type { ZCodeProtocolMessage } from "@zcode/shared";
+ import { zcodeProtocolMessageSchema } from "@zcode/shared";
+@@ -24,6 +23,8 @@ interface ZCodeStdioTransportOptions {
+   onStderrLine?: (line: string) => void;
+   ownedProcessGroupId?: number;
+   ownedProcessStartedAtMs?: number;
++  /** stdout 单条 LF 分隔帧最大原始 UTF-8 字节数；LF 不计入，未设置时保持原行为。 */
++  maxFrameBytes?: number;
+ }
+ 
+ const STDIO_EOF_EXIT_WAIT_MS = 1_800;
+@@ -38,9 +39,9 @@ export class ZCodeStdioTransport implements ZCodeProtocolTransport {
+   private readonly messageEmitter = new Emitter<ZCodeProtocolMessage>();
+   private readonly closeEmitter = new Emitter<ZCodeProtocolTransportClosedEvent>();
+   private readonly stderrCollector: AgentStderrCollector;
+-  private readonly stdoutDecoder = new StringDecoder("utf8");
+-  // 当前未完成行的分片；只在遇到 LF 时 join 一次，见 handleStdoutData 注释。
+-  private stdoutPendingChunks: string[] = [];
++  // 当前未完成行的原始 UTF-8 字节；只在遇到 LF 时合并一次，见 handleStdoutData 注释。
++  private stdoutPendingChunks: Buffer[] = [];
++  private stdoutPendingBytes = 0;
+   private stdoutFlushed = false;
+   private readersDisposed = false;
+   private disposed = false;
+@@ -209,8 +210,8 @@ export class ZCodeStdioTransport implements ZCodeProtocolTransport {
+     // task index resync 的 session/read 会回一行约 15MB 的完整快照，实测 30s 内
+     // 真实 stdout 95MB 却拍平分配 9.4GB，Host CPU 100%、RSS 冲到 1.5–1.9GB。
+     // 修复：只在新 chunk 内找 LF，未完成的部分存分片数组，成帧时 join 一次，线性开销。
+-    const text = typeof chunk === "string" ? chunk : this.stdoutDecoder.write(chunk);
+-    this.consumeStdoutText(text);
++    const bytes = typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk;
++    this.consumeStdoutBytes(bytes);
+   };
+ 
+   private readonly handleStdoutEnd = (): void => {
+@@ -218,32 +219,61 @@ export class ZCodeStdioTransport implements ZCodeProtocolTransport {
+       return;
+     }
+     this.stdoutFlushed = true;
+-    this.stdoutPendingChunks.push(this.stdoutDecoder.end());
+-    const trailing = this.stdoutPendingChunks.join("");
+-    this.stdoutPendingChunks = [];
+-    if (trailing.length > 0 && !this.closed) {
+-      this.handleStdoutFrame(trailing);
++    if (this.stdoutPendingBytes > 0) {
++      this.clearStdoutPending();
++      if (!this.closed) {
++        this.fireClose({ reason: "stdout_partial_frame" });
++      }
+     }
+     this.fireClose({ reason: "stdout_closed" });
+   };
+ 
+-  private consumeStdoutText(text: string): void {
++  private consumeStdoutBytes(bytes: Buffer): void {
+     let start = 0;
+-    let newlineIndex = text.indexOf("\n", start);
++    let newlineIndex = bytes.indexOf(0x0a, start);
+     while (newlineIndex >= 0) {
+-      this.stdoutPendingChunks.push(text.slice(start, newlineIndex));
+-      const frame = this.stdoutPendingChunks.join("");
+-      this.stdoutPendingChunks = [];
++      if (!this.appendStdoutFragment(bytes.subarray(start, newlineIndex))) {
++        return;
++      }
++      this.handleStdoutFrame(this.takeStdoutFrame());
+       start = newlineIndex + 1;
+-      this.handleStdoutFrame(frame);
+       if (this.closed) {
+         return;
+       }
+-      newlineIndex = text.indexOf("\n", start);
++      newlineIndex = bytes.indexOf(0x0a, start);
++    }
++    if (start < bytes.length) {
++      // 复制尾段，避免已处理的大 chunk 因 subarray 引用而继续驻留。
++      this.appendStdoutFragment(Buffer.from(bytes.subarray(start)));
++    }
++  }
++
++  private appendStdoutFragment(fragment: Buffer): boolean {
++    if (!this.closed) {
++      const nextBytes = this.stdoutPendingBytes + fragment.length;
++      const maxFrameBytes = this.options?.maxFrameBytes;
++      if (maxFrameBytes !== undefined && nextBytes > maxFrameBytes) {
++        this.clearStdoutPending();
++        this.fireClose({ reason: `stdout_frame_too_large: max=${maxFrameBytes} bytes` });
++        return false;
++      }
+     }
+-    if (start < text.length) {
+-      this.stdoutPendingChunks.push(text.slice(start));
++    if (fragment.length > 0) {
++      this.stdoutPendingChunks.push(fragment);
++      this.stdoutPendingBytes += fragment.length;
+     }
++    return true;
++  }
++
++  private takeStdoutFrame(): string {
++    const frame = Buffer.concat(this.stdoutPendingChunks, this.stdoutPendingBytes).toString("utf8");
++    this.clearStdoutPending();
++    return frame;
++  }
++
++  private clearStdoutPending(): void {
++    this.stdoutPendingChunks = [];
++    this.stdoutPendingBytes = 0;
+   }
+ 
+   private handleStdoutFrame(frame: string): void {
+diff --git a/packages/desktop/test/zcodeStdioTransportFrameLimit.node.test.ts b/packages/desktop/test/zcodeStdioTransportFrameLimit.node.test.ts
+new file mode 100644
+index 00000000..3e75bf37
+--- /dev/null
++++ b/packages/desktop/test/zcodeStdioTransportFrameLimit.node.test.ts
+@@ -0,0 +1,225 @@
++// ZCode stdio 帧上限属于进程协议的防资源耗尽边界，不恢复已退役的 App 业务单测。
++// 使用仓库已有的 node:test + tsx 入口，以原始 stdout 字节验证 framing 行为。
++import assert from "node:assert/strict";
++import type { ChildProcessWithoutNullStreams } from "node:child_process";
++import { EventEmitter, once } from "node:events";
++import { PassThrough } from "node:stream";
++import { test } from "node:test";
++import type { ZCodeProtocolTransportClosedEvent } from "../../services/src/zcode-agent/zcodeProtocolTransport.js";
++import { ZCodeProtocolClient } from "../../services/src/zcode-agent/zcodeProtocolClient.js";
++import { ZCodeStdioTransport } from "../../services/src/zcode-agent/zcodeStdioTransport.js";
++
++const MIB_16 = 16 * 1024 * 1024;
++
++function createHarness(maxFrameBytes?: number) {
++  const stdin = new PassThrough();
++  const stdout = new PassThrough();
++  const stderr = new PassThrough();
++  const child = new EventEmitter() as ChildProcessWithoutNullStreams;
++  Object.assign(child, {
++    stdin,
++    stdout,
++    stderr,
++    exitCode: null,
++    killed: false,
++    pid: 42,
++    signalCode: null,
++  });
++  const transport = new ZCodeStdioTransport(child, { maxFrameBytes });
++  const messages: unknown[] = [];
++  const closes: ZCodeProtocolTransportClosedEvent[] = [];
++  transport.onMessage((message) => messages.push(message));
++  transport.onClose((event) => closes.push(event));
++  return { closes, messages, stderr, stdout, transport };
++}
++
++function frameWithPadding(byteLength: number): string {
++  const json = JSON.stringify({ id: 1, result: "ok" });
++  const paddingBytes = byteLength - Buffer.byteLength(json, "utf8");
++  assert.ok(paddingBytes >= 0);
++  return `${json}${" ".repeat(paddingBytes)}`;
++}
++
++function pendingByteCount(transport: ZCodeStdioTransport): number {
++  return (transport as unknown as { stdoutPendingBytes: number }).stdoutPendingBytes;
++}
++
++function pendingChunkCount(transport: ZCodeStdioTransport): number {
++  return (transport as unknown as { stdoutPendingChunks: Buffer[] }).stdoutPendingChunks.length;
++}
++
++function finish(streams: PassThrough[]): void {
++  for (const stream of streams) stream.end();
++}
++
++async function finishStdout(stdout: PassThrough, trailing?: string | Buffer): Promise<void> {
++  const ended = once(stdout, "end");
++  stdout.end(trailing);
++  await ended;
++}
++
++test("accepts an exact 16 MiB frame with whitespace padding and rejects +1 byte", () => {
++  const exact = createHarness(MIB_16);
++  try {
++    exact.stdout.write(`${frameWithPadding(MIB_16)}\n`);
++    assert.deepEqual(exact.messages, [{ id: 1, result: "ok" }]);
++    assert.deepEqual(exact.closes, []);
++    assert.equal(pendingByteCount(exact.transport), 0);
++  } finally {
++    finish([exact.stdout, exact.stderr]);
++  }
++
++  const overflow = createHarness(MIB_16);
++  try {
++    overflow.stdout.write(`${frameWithPadding(MIB_16)} \n`);
++    assert.deepEqual(overflow.messages, []);
++    assert.equal(overflow.closes.length, 1);
++    assert.match(overflow.closes[0]!.reason ?? "", /stdout_frame_too_large/);
++    assert.equal(pendingByteCount(overflow.transport), 0);
++  } finally {
++    finish([overflow.stdout, overflow.stderr]);
++  }
++});
++
++test("fails immediately for an oversized partial frame and clears the buffer", () => {
++  const harness = createHarness(MIB_16);
++  try {
++    harness.stdout.write(Buffer.alloc(MIB_16, 0x20));
++    assert.deepEqual(harness.closes, []);
++    assert.equal(pendingByteCount(harness.transport), MIB_16);
++
++    harness.stdout.write(" ");
++    assert.equal(harness.closes.length, 1);
++    assert.match(harness.closes[0]!.reason ?? "", /stdout_frame_too_large/);
++    assert.equal(pendingByteCount(harness.transport), 0);
++    assert.equal(pendingChunkCount(harness.transport), 0);
++
++    harness.stdout.write('{"id":2,"result":"ignored"}\n');
++    harness.stdout.end();
++    assert.deepEqual(harness.messages, []);
++    assert.equal(harness.closes.length, 1);
++  } finally {
++    finish([harness.stderr]);
++  }
++});
++
++test("counts raw UTF-8 bytes across chunk boundaries without splitting multibyte text", () => {
++  const json = JSON.stringify({ id: 1, result: "中" });
++  const bytes = Buffer.from(`${json}\n`, "utf8");
++  const charOffset = bytes.indexOf(Buffer.from("中", "utf8"));
++  assert.ok(charOffset > 0);
++  const harness = createHarness(Buffer.byteLength(json, "utf8"));
++  try {
++    harness.stdout.write(bytes.subarray(0, charOffset + 1));
++    harness.stdout.write(bytes.subarray(charOffset + 1, charOffset + 2));
++    harness.stdout.write(bytes.subarray(charOffset + 2));
++    assert.deepEqual(harness.messages, [{ id: 1, result: "中" }]);
++    assert.deepEqual(harness.closes, []);
++  } finally {
++    finish([harness.stdout, harness.stderr]);
++  }
++});
++
++test("excludes LF from the byte budget and includes CR", () => {
++  const json = JSON.stringify({ id: 1, result: "ok" });
++  const jsonBytes = Buffer.byteLength(json, "utf8");
++  const lf = createHarness(jsonBytes);
++  try {
++    lf.stdout.write(`${json}\n`);
++    assert.deepEqual(lf.messages, [{ id: 1, result: "ok" }]);
++    assert.deepEqual(lf.closes, []);
++  } finally {
++    finish([lf.stdout, lf.stderr]);
++  }
++
++  const crlfWithinLimit = createHarness(jsonBytes + 1);
++  try {
++    crlfWithinLimit.stdout.write(`${json}\r\n`);
++    assert.deepEqual(crlfWithinLimit.messages, [{ id: 1, result: "ok" }]);
++    assert.deepEqual(crlfWithinLimit.closes, []);
++  } finally {
++    finish([crlfWithinLimit.stdout, crlfWithinLimit.stderr]);
++  }
++
++  const crOverflow = createHarness(jsonBytes);
++  try {
++    crOverflow.stdout.write(`${json}\r\n`);
++    assert.deepEqual(crOverflow.messages, []);
++    assert.equal(crOverflow.closes.length, 1);
++    assert.match(crOverflow.closes[0]!.reason ?? "", /stdout_frame_too_large/);
++  } finally {
++    finish([crOverflow.stdout, crOverflow.stderr]);
++  }
++});
++
++test("fails closed on a partial frame at EOF", async () => {
++  const harness = createHarness(128);
++  try {
++    await finishStdout(harness.stdout, JSON.stringify({ id: 1, result: "unterminated" }));
++    assert.deepEqual(harness.messages, []);
++    assert.equal(harness.closes.length, 1);
++    assert.equal(harness.closes[0]!.reason, "stdout_partial_frame");
++    assert.equal(pendingByteCount(harness.transport), 0);
++    assert.equal(pendingChunkCount(harness.transport), 0);
++  } finally {
++    finish([harness.stderr]);
++  }
++});
++
++test("dispatches multiple LF/CRLF frames and closes normally at EOF", async () => {
++  const harness = createHarness(128);
++  try {
++    harness.stdout.write(
++      [
++        JSON.stringify({ id: 1, result: "one" }),
++        JSON.stringify({ id: 2, result: "two" }),
++        JSON.stringify({ id: 3, result: "three" }),
++        "",
++      ].join("\n").replace("\n", "\r\n"),
++    );
++    assert.deepEqual(harness.messages, [
++      { id: 1, result: "one" },
++      { id: 2, result: "two" },
++      { id: 3, result: "three" },
++    ]);
++    assert.deepEqual(harness.closes, []);
++
++    await finishStdout(harness.stdout);
++    assert.deepEqual(harness.closes, [{ reason: "stdout_closed" }]);
++    assert.equal(pendingByteCount(harness.transport), 0);
++  } finally {
++    finish([harness.stderr]);
++  }
++});
++
++test("rejects every pending RPC and emits close exactly once on frame overflow", async () => {
++  const harness = createHarness(64);
++  const client = new ZCodeProtocolClient(harness.transport);
++  let closeCount = 0;
++  client.onClose(() => {
++    closeCount += 1;
++  });
++  const requests = [
++    client.request("runtime/capabilities"),
++    client.request("runtime/capabilities"),
++    client.request("runtime/capabilities"),
++  ];
++  try {
++    harness.stdout.write(Buffer.alloc(65, 0x20));
++    const settled = await Promise.allSettled(requests);
++    assert.equal(settled.length, 3);
++    for (const result of settled) {
++      assert.equal(result.status, "rejected");
++      assert.match(String(result.reason), /ZCode agent transport closed: stdout_frame_too_large/);
++    }
++    assert.equal(client.pendingRequestCount, 0);
++    assert.equal(closeCount, 1);
++
++    harness.stdout.write(`${JSON.stringify({ id: 9, result: "ignored" })}\n`);
++    harness.stdout.end();
++    assert.equal(closeCount, 1);
++    assert.equal(pendingByteCount(harness.transport), 0);
++  } finally {
++    finish([harness.stderr]);
++  }
++});

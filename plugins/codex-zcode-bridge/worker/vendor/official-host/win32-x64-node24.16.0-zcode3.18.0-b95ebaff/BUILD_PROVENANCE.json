@@ -1,0 +1,99 @@
+{
+  "schemaVersion": 2,
+  "generatedOn": "2026-11-12",
+  "scope": {
+    "platform": "win32",
+    "architecture": "x64",
+    "node": "24.16.0",
+    "zcodeVersion": "3.18.0",
+    "appServerVersion": "0.17.1"
+  },
+  "source": {
+    "version": "3.18.0",
+    "commit": "b95ebaffeab641907b38652f45c1502bd762972d",
+    "tree": "d7ebeb994cb8f46b16761fc9c550ae3f6e039c3d",
+    "trackedSourceModifiedByBuild": false,
+    "userDesktopInstallationUsedAsInput": false,
+    "aggregateDiffSha256": "39D980C47C553B39D91F73748B63B794FAB18360B008728233B4C5BA70D7495F"
+  },
+  "patches": [
+    {
+      "order": 1,
+      "path": "upstream/zcode-3.18.0/patches/0001-stdio-max-frame-bytes.patch",
+      "bytes": 16290,
+      "sha256": "80E77CA5D322141B93D6B035BDB8A7903F575BF78012FABA5B701B0541B29844"
+    },
+    {
+      "order": 2,
+      "path": "upstream/zcode-3.18.0/patches/0002-oauth-refresh-coordination.patch",
+      "bytes": 49456,
+      "sha256": "7AD85F0403CFA6AE55DAFDACE79FBB26C8970E758CEBE2496C4344A2108C651F"
+    },
+    {
+      "order": 3,
+      "path": "upstream/zcode-3.18.0/patches/0003-account-runtime-header-coordination.patch",
+      "bytes": 21461,
+      "sha256": "BD0A891EC19AD98571CEE053930BA9A45DFE879204436B377C5D56D66F5EC35D"
+    }
+  ],
+  "toolchain": {
+    "buildNode": "24.16.0",
+    "officialMiseNodePin": "24.14.0",
+    "officialPnpm": "10.33.2",
+    "validationPnpm": "11.25.0",
+    "hostModuleBundler": "esbuild 0.28.2",
+    "runtimeHostCompiler": "MSVC 19.44.35229 for x64",
+    "runtimeHostGenerator": "NMake Makefiles",
+    "runtimeHostBuildType": "Release",
+    "windowsSdkCpp": "10.0.26100.4948"
+  },
+  "build": {
+    "appServer": {
+      "command": "pnpm --filter \"@zcode/cli...\" build",
+      "output": "app-server/zcode.cjs"
+    },
+    "hostModule": {
+      "command": "npm run build:official-host -- --source <fixed-upstream-worktree>",
+      "output": "official-host-runtime.mjs",
+      "entry": {
+        "exports": [
+          "ZCodeAgentProcessManager",
+          "ZCodeProtocolClient",
+          "ZCodeStdioTransport",
+          "createOAuthProviderRuntimeAuthService"
+        ],
+        "sourceFiles": [
+          "packages/services/src/official-host/runtimeHostEntry.ts",
+          "packages/services/src/zcode-agent/zcodeAgentProcessManager.ts",
+          "packages/services/src/zcode-agent/zcodeProtocolClient.ts",
+          "packages/services/src/zcode-agent/zcodeStdioTransport.ts",
+          "packages/services/src/model-provider/oauthProviderRuntimeAuthService.ts",
+          "packages/services/src/oauth/oauthService.ts"
+        ]
+      }
+    },
+    "runtimeHost": {
+      "command": "CMake configure and build with the recorded MSVC and Windows SDK",
+      "output": "zcode-runtime-host.exe"
+    },
+    "orderedPatchApplicationRequired": true
+  },
+  "bom": {
+    "path": "ARTIFACT_BOM.json",
+    "bytes": 7260,
+    "sha256": "B9A7104DAB3B10250CA93899324C0B33966E64C0BE02F279A1353BABBA8F129C"
+  },
+  "output": {
+    "path": "official-host-runtime.mjs",
+    "bytes": 1821168,
+    "sha256": "3F481AAE16EFF9912DAF17178B49491BD64E67C4419BFFDB59EB4B78E85EB537"
+  },
+  "verification": {
+    "artifactInventory": "ARTIFACT_BOM.json",
+    "validator": "npm run validate:plugin",
+    "nativeDependencyClosure": "PARTIAL",
+    "resourceClosure": "PARTIAL",
+    "redistributionReview": "PARTIAL",
+    "artifactReproducibility": "DETERMINISTIC_SAME_SOURCE_TREE"
+  }
+}

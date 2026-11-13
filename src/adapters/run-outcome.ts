@@ -45,6 +45,20 @@ export interface ZCodeRunOutcome extends AgentRunOutcome {
     readonly evidenceDigest: string;
     readonly observedMemberCount: number;
   }>;
+  /** Internal adapter close evidence. It never substitutes for Worker-tree cleanup. */
+  readonly adapterCleanup?: Readonly<{
+    readonly contract: "adapter-cleanup-v1";
+    readonly close: Readonly<{
+      readonly status: "resolved" | "rejected";
+      readonly stage: string;
+      readonly errorName?: string;
+      readonly errorCode?: string;
+      readonly errorMessage?: string;
+      readonly managerProcessCountAfter?: number;
+      readonly treeScanStatus?: "verified" | "live" | "incomplete" | "not_applicable";
+    }>;
+    readonly treeScanStatus: "verified" | "live" | "incomplete" | "not_applicable";
+  }>;
   /** B2 additive: persisted correlation timestamps (RPC accept / turn start / turn end). */
   readonly phaseTimestamps?: {
     readonly rpc_accepted_at?: string | null;
