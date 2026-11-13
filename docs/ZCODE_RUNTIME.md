@@ -1,9 +1,9 @@
 # ZCode 运行配置边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-11
-> Last verified: 2026-11-11，核对 Preview.3 Desktop Host 启动身份、R3 任务期限解析及 R2 容量保持边界。
-> Verified against: 52015d12f37011f4d389e07941c31491457611ef
+> Last updated: 2026-11-13
+> Last verified: 2026-11-13，核对 Preview.5 的 SQLite v14 Runtime Events additive migration、Desktop/Official Host 制品选择、任务期限与容量保持边界；安装制品真实 Start Plan E2E 待单独验收。
+> Verified against: 3a95e47b2688d06e29f3bca441d1c9bcaaca2e4f + Preview.5 version/documentation changes
 
 当前生产路径是 `node zcode.cjs app-server --stdio --surface desktop`，不是历史 CLI `--prompt --json`。任务 Adapter 与模型目录探测共用该启动合同；解析入口为 `NodeRuntimeResolver`，配置项与用户设置方法见仓库 README。
 

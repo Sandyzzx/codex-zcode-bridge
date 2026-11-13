@@ -3,7 +3,7 @@
 > Status: DECISION
 > Decision: Accepted — Owner 的 Official Host Integration v1 恢复授权批准在本候选启用现有 Worker 生产接线，并冻结平台支持边界。
 > Last updated: 2026-11-12
-> Applicability: 适用于 Preview.4 候选的 `zcode_app_server` Worker 装配。不得改写 ADR-030、ADR-032、ADR-033 或 ADR-034 的既有决定。
+> Applicability: 适用于 Preview.5 的 `zcode_app_server` Worker 装配。不得改写 ADR-030、ADR-032、ADR-033 或 ADR-034 的既有决定。
 > Verified against: `ba25f83722094ef3428a04202749377cc9b6e643`（tree `b4573bb6f1143ce6a3081a56ce2fbf968a243e35`）；后续仅有文档证据刷新
 
 ## 背景
@@ -32,7 +32,7 @@ Windows x64、Node `24.16.x`、ZCode `3.18.0` 与 AppServer `0.17.1`
    的每任务权威 entitlement verdict、Private Lease/HANDLE/ACK，也不改变现有
    Claim、Result、Cleanup、Hold、Recovery 与 Release CAS。
 2. 在 `linux/x64`、`linux/arm64`、`darwin/x64` 和 `darwin/arm64` 上，保留
-   `ZCodeAppServerAdapter` 作为 CI 与合成测试覆盖路径。它不是 Preview.4
+   `ZCodeAppServerAdapter` 作为 CI 与合成测试覆盖路径。它不是 Preview.5
    已认证的 ZCode、OAuth、Start Plan 或模型生产支持面。
 3. `win32/arm64`、`win32/ia32`、其他 OS/架构组合在 Adapter 构造前以稳定错误
    fail closed。不得自动回退到 direct Adapter。
@@ -48,7 +48,7 @@ Windows x64、Node `24.16.x`、ZCode `3.18.0` 与 AppServer `0.17.1`
 
 | Platform | Architecture | Adapter | 证据边界 |
 |---|---|---|---|
-| Windows | x64 | `OfficialHostAdapter` | Preview.4 候选生产路径；仅 Windows x64 固定制品 |
+| Windows | x64 | `OfficialHostAdapter` | Preview.5 生产路径；仅 Windows x64 固定制品 |
 | Linux | x64, arm64 | `ZCodeAppServerAdapter` | CI/合成覆盖，未认证真实 ZCode 服务 |
 | macOS | x64, arm64 | `ZCodeAppServerAdapter` | CI/合成覆盖，未认证真实 ZCode 服务 |
 | Windows | arm64, ia32 | fail closed | 无匹配 fixed helper/native closure |

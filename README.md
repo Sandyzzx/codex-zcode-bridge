@@ -4,7 +4,7 @@
 
 [简体中文](README.zh-CN.md) · [Repository](https://github.com/Sandyzzx/codex-zcode-bridge) · [Releases](https://github.com/Sandyzzx/codex-zcode-bridge/releases)
 
-> **Release status.** Stable is `v1.6.0` and does not include Start Plan support. Preview is `2.0.0-preview.3` on the `preview` branch and is the current development channel for SQLite-only task orchestration, Start Plan, and Coding Plan integration.
+> **Release status.** Stable is `v1.7.1`. Preview `2.0.0-preview.5` is the fixed snapshot for the Official Host, SQLite runtime Events/Usage, Start Plan, and Coding Plan integration. Preview.5 is a prerelease; this release does not promote a new Stable version.
 
 ## What this is
 
@@ -23,14 +23,14 @@ Codex does not automatically hand every coding request to ZCode. Delegation happ
 
 | Plan | Availability | Authentication and runtime path |
 | --- | --- | --- |
-| **Z.ai Start Plan** | Preview `2.0.0-preview.3` | Discovers the official logged-in account credential, performs the required entitlement check for the selected model, and supplies the official runtime through a per-task private credential lease. |
-| **Z.ai Coding Plan** | Stable `v1.6.0` and Preview | Uses the existing official Coding Plan account/API-key path through the ZCode Runtime. |
+| **Z.ai Start Plan** | Stable `v1.7.1` and Preview | Discovers the official logged-in account credential, performs the required entitlement check for the selected model, and supplies the official runtime through a per-task private credential lease. |
+| **Z.ai Coding Plan** | Stable `v1.7.1` and Preview | Uses the existing official Coding Plan account/API-key path through the ZCode Runtime. |
 
 Start Plan and Coding Plan are different account and authentication paths. Bridge selects the path from the task's provider, model, and plan selection; both paths ultimately execute through the official ZCode AppServer.
 
 ### Verified Start Plan path
 
-Preview.3 includes one real Windows acceptance run with these facts:
+Preview.3 established the Start Plan path with one real Windows acceptance run. The prior R7 candidate separately completed a real Coding Plan E2E with the Official Host path and persisted Runtime Events, Usage, Result, Cleanup, and Release. Preview.5 is the fixed artifact for both paths. Its installed-artifact Start Plan E2E is the remaining acceptance step and must not be inferred from the earlier Preview.3 path.
 
 - Official ZCode AppServer `0.17.1`.
 - Provider `account:bigmodel-start-plan`.
@@ -67,7 +67,7 @@ This evidence covers **only `GLM-5.3-Flash` on Windows**. It does not prove ever
 ## Requirements
 
 - The fixed Official Host production bundle is supported on **Windows x64**; Windows non-x64 and other unknown targets fail closed. Linux and macOS retain direct-AppServer synthetic/CI coverage only and are not certified for real ZCode, OAuth, Start Plan, or model service traffic.
-- **Preview 2.0.0-preview.3:** Node.js `>=24.16.0` and `<25`.
+- **Preview 2.0.0-preview.5:** Node.js `>=24.16.0` and `<25`.
 - Git, Codex with plugin/marketplace support, and a working local ZCode installation.
 - A signed-in official ZCode account with the plan and model entitlement required by the selected task.
 - A **single-user, trusted-local** environment. This is not a multi-user isolation boundary or a remote sandbox.
@@ -80,10 +80,10 @@ Use one release channel per Codex installation. Branch refs move with later comm
 
 ### Stable
 
-Stable `v1.6.0` does not include Start Plan support:
+Stable `v1.7.1` is the last Stable release. Preview.5 adds Official Host and R7 Runtime Events/Usage on top of it:
 
 ```sh
-codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-v1.6.0
+codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-v1.7.1
 codex plugin add codex-zcode-bridge@codex-zcode-bridge
 ```
 
@@ -105,7 +105,7 @@ codex plugin marketplace upgrade codex-zcode-bridge-preview
 To pin the accepted Preview snapshot instead of following the branch:
 
 ```sh
-codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-preview-v2.0.0-preview.3
+codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-preview-v2.0.0-preview.5
 ```
 
 To switch an existing marketplace between branch and tag refs, re-run `marketplace add` with the desired `--ref` or remove and add the marketplace. Verify the command with `codex plugin marketplace add --help` if your Codex version differs.
@@ -170,7 +170,7 @@ Prompts, Skills, path lists, and worktree selection do not create those permissi
 - **Other Start Plan models:** dependent on the official registry and live account entitlement; not individually certified here.
 - **Linux/macOS:** synthetic/CI coverage only for the Preview path; no real Start Plan certification.
 - **CAPTCHA and unusual activity:** Bridge does not solve CAPTCHA or bypass account controls. Entitlement failures fail closed and may require the user to resolve the condition in the official ZCode client.
-- **Host Portability and Companion Service:** architecture research only; they are not delivered features in Preview.3.
+- **Host Portability and Companion Service:** architecture research only; they are not delivered features in Preview.5.
 - **JSON storage and the retired CLI execution chain:** not current production paths. Old JSON task histories are not imported into SQLite.
 - **A worker can exit without committing a Result.** Bridge intentionally retains cleanup evidence and a Hold rather than guessing that resources were released.
 
@@ -181,7 +181,7 @@ Prompts, Skills, path lists, and worktree selection do not create those permissi
 - [Runtime and SQLite upgrade details](docs/ZCODE_RUNTIME.md)
 - [Plugin safety notes](plugins/codex-zcode-bridge/SECURITY.md)
 - [Master skill](plugins/codex-zcode-bridge/skills/zcode-bridge/SKILL.md)
-- [Preview.3 release](https://github.com/Sandyzzx/codex-zcode-bridge/releases/tag/codex-zcode-bridge-preview-v2.0.0-preview.3)
+- [Preview.5 release](https://github.com/Sandyzzx/codex-zcode-bridge/releases/tag/codex-zcode-bridge-preview-v2.0.0-preview.5)
 
 ## License
 

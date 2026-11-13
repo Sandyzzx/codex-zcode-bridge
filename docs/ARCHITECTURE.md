@@ -2,10 +2,10 @@
 
 > Status: AUTHORITATIVE
 > Last updated: 2026-11-13
-> Last verified: 2026-11-13，核对了 ADR-036 的 Host 内中断重派发、v13→v14 升级后重派发、在线 Worker 退出恢复及 Cleanup/Interaction Hold 定向回归；真实账户、真实模型、生产数据库迁移与发布未运行。
-> Verified against: `77990f3a840e7b1f3a75afc151c58ca2cef5f28a` + ADR-036 candidate changes；固定上游版本记录沿用本文件后续说明。
+> Last verified: 2026-11-13，核对 PR #85 合并后的 Official Host + R7 Runtime Events/Usage 生产链、固定上游制品、952 项完整隔离回归、四个 CI 平台 job、提交后 clean checkout 与 Preview.5 发布边界；在合并后的候选上补核 ADR-036 的 Host 内中断重派发、Adapter Cleanup/执行副作用 Hold 与定向回归。安装预览制品后的真实 Start Plan E2E 尚待单独验收。
+> Verified against: `3a95e47b2688d06e29f3bca441d1c9bcaaca2e4f` + ADR-036 candidate changes after merging `origin/preview`；固定上游为 ZCode `3.18.0` / `b95ebaffeab641907b38652f45c1502bd762972d`，AppServer `0.17.1`。
 
-本文件描述当前源码候选。候选实现已默认切换到官方 Host 路径，但尚未发布；已发布渠道仍是 `2.0.0-preview.3`，候选版本号为 `2.0.0-preview.4`。公开合同继续以 [INTERFACES.md](INTERFACES.md) 为准，宿主和运行配置分别见 [SHARED_CORE.md](SHARED_CORE.md) 与 [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md)。
+本文件描述 Preview.5 的生产架构。Windows x64 已默认切换到官方 Host 路径，R7 Runtime Events/Usage 复用同一 SQLite Authority。公开合同继续以 [INTERFACES.md](INTERFACES.md) 为准，宿主和运行配置分别见 [SHARED_CORE.md](SHARED_CORE.md) 与 [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md)。
 
 ## 单一生产链
 
@@ -30,6 +30,8 @@ MCP tools                                      │ queue / cancel / read-only re
 ```
 
 `SqliteLifecycleMcpAuthority` 仍是唯一生产 Lifecycle Manager。`lifecycle-gate.ts` 负责 Bootstrap、进程身份、私有 Claim/Result/Interaction 管道、自动 Schema 升级和清理证明；SQLite Store 负责事务、Task/Attempt/Operation、Result digest、Capacity 和不可覆盖事件。
+
+R7 在同一 Authority 内增加 additive `runtime_task_events`，不新增 Event Broker、第二状态机或 Companion IPC。Worker 通过一次性 fd14 发送规范化 Runtime observation；Manager 只从持久 Task/Attempt/Generation/Claim 派生身份绑定，Worker 不能自报权威身份。Store 以 Worker sequence 幂等、拒绝 stale Attempt，并把 Runtime row 映射到既有单调 public cursor。`zcode_events`、`zcode_feedback` 和 `buildTaskResult()` 从同一持久事实读取 Usage、Model Profile、Timing、Tool Activity 与 Feedback；Lifecycle Event 与 Runtime Event 仍分属不同表。
 
 生产 Worker 的 `zcode_app_server` 模式按 [ADR-035](decisions/ADR-035-worker-platform-adapter-selection.md) 选择 Adapter。`win32/x64` 实例化 `OfficialHostAdapter`；Linux/macOS x64、arm64 的 direct Adapter 只保留 CI/合成覆盖；Windows 非 x64 与其他组合在构造 Adapter 前 fail closed。选择只读取 platform/arch，环境变量、TaskPackage、MCP 参数、持久配置和测试参数都不能改变正式 Worker 的 Adapter 类型。该 Adapter 继承现有 `ZCodeAppServerAdapter`，沿用 `CodingAgentAdapter` 的完成、取消、交互、结果、期限和 Cleanup 合同，没有新增公开 Adapter Mode、持久配置或平行 RuntimeAdapter。
 
@@ -65,10 +67,10 @@ Fresh root 继续通过 stage SQLite、pending marker 和原子 publication 初�
 
 自动升级属于生产 Lifecycle 启动路径。直接调用 Store 打开 v13 时仍返回带离线升级指引的 `schema_upgrade_required`；不能据此声称所有 Store API 都会自动迁移。未知 schema、损坏库、未解释现场和 writer 活跃状态仍 fail closed。
 
-候选包包含 Bridge、Worker、Thin Waiter、离线 v14 升级命令、v13/v14 Schema、浏览器后端，以及固定官方 Host 制品。运行时会校验 `ARTIFACT_BOM.json` 与 shipped files；构建来源、patch 顺序和哈希见研究目录的 [制品 BOM](research/zcode-official-host-integration-v1/SOURCE_ARTIFACT_BOM.md)。`@napi-rs/keyring` 与 `keyring-win32-x64-msvc` 的 6 个 native closure/license/metadata 文件已通过精确 `.gitignore` 例外纳入候选；detached clean checkout 已验证存在性、Host exports、native 加载和 BOM hash。
+发布包包含 Bridge、Worker、Thin Waiter、离线 v14 升级命令、v13/v14 Schema、Administrative Recovery CLI、浏览器后端，以及固定官方 Host 制品。运行时会校验 `ARTIFACT_BOM.json` 与 shipped files；构建来源、patch 顺序和哈希见研究目录的 [制品 BOM](research/zcode-official-host-integration-v1/SOURCE_ARTIFACT_BOM.md)。`@napi-rs/keyring` 与 `keyring-win32-x64-msvc` 的 6 个 native closure/license/metadata 文件已通过精确 `.gitignore` 例外纳入包；detached clean checkout 已验证存在性、Host exports、native 加载和 BOM hash。
 
 ## 发布边界
 
-`2.0.0-preview.4` 当前是源码候选：`package.json`、`package-lock.json`、插件 manifest 和 MCP server version 已统一为 preview.4，但没有发布 Tag。实现和定向测试通过不等于完整回归或生产发布通过。
+`2.0.0-preview.5` 的 `package.json`、`package-lock.json`、插件 manifest、MCP server version、固定官方 Host、BOM、Runtime Events Schema 与 Administrative Recovery CLI 必须由同一 Tag 和 Release asset 提供。实现、完整回归和发布制品身份通过，不证明其他平台或所有真实账户组合。
 
-固定制品在 Windows x64、Node `24.16.0` 的固定源码树重建、same-source-tree repeatability 和提交后 clean checkout 为 `PASS`；跨机器/空缓存复现、完整动态资源闭包、再分发许可审查和官方 Host 制品升级/回滚演练仍为 `PARTIAL` 或 `NOT_RUN`。真实账户、真实模型、Start Plan、Billing 和一般 Desktop Main 独立性未建立；当前候选独立 Astra 审查为 `APPROVED`，不改变这些 `NOT_RUN` 边界。
+固定制品在 Windows x64、Node `24.16.0` 的固定源码树重建、same-source-tree repeatability 和提交后 clean checkout 为 `PASS`；跨机器/空缓存复现、完整动态资源闭包、再分发许可审查和官方 Host 制品升级/回滚演练仍为 `PARTIAL` 或 `NOT_RUN`。此前 R7 候选已有真实 Coding Plan E2E；安装 Preview.5 后的真实 Start Plan、Billing 与一般 Desktop Main 独立性仍是独立证据项。

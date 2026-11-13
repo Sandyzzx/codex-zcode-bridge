@@ -1,9 +1,9 @@
 # 文档路由 / Documentation
 
 > Status: AUTHORITATIVE（仅指本索引）
-> Last updated: 2026-11-12
-> Last verified: 2026-11-12，核对同步最新 `origin/preview` 后的 Preview.4 源码候选、ADR-032–035、固定官方制品、936 项完整回归、clean checkout、当前候选 Astra review 与发布边界。
-> Verified against: `ba25f83722094ef3428a04202749377cc9b6e643`（tree `b4573bb6f1143ce6a3081a56ce2fbf968a243e35`）+ documentation changes
+> Last updated: 2026-11-13
+> Last verified: 2026-11-13，核对 PR #85 合并后的 Official Host + SQLite Runtime Events/Usage 生产链、952 项完整回归、四个 CI 平台 job、固定官方制品、ADR-032–035 与 Preview.5 发布边界；安装 Preview.5 后的真实 Start Plan E2E 尚待单独验收。
+> Verified against: `3a95e47b2688d06e29f3bca441d1c9bcaaca2e4f` + Preview.5 version/documentation changes
 
 English users start at [README.md](../README.md). 技术文档为中文。先读当前事实，按问题加载合同；研究或历史材料不作为当前实现或发布证明。
 
@@ -39,12 +39,12 @@ AUTHORITATIVE 描述当前事实或合同；DECISION 记录已批准取舍；RES
 
 [ADR 索引](decisions/README.md) 区分当前有效、部分被替代和完全被替代。历史文件保持原路径，避免破坏引用。不要默认加载 `docs/archive`、`docs/research`、旧审计日志或生成 bundle。
 
-当前已发布 Preview 为 `2.0.0-preview.3`。候选源码版本为 `2.0.0-preview.4`，尚未发布；`package.json`、`package-lock.json`、插件 manifest 和 MCP server version 已统一为 preview.4，但不能把候选版本号当成 release 事实。旧 JSON/CLI 生产链退役决策见 [ADR-029](decisions/ADR-029-legacy-runtime-retirement.md)。
+当前 Preview 发布制品为 `2.0.0-preview.5`。`package.json`、`package-lock.json`、插件 manifest、MCP server version、固定官方 Host/BOM 和 R7 Runtime Events/Usage 均来自同一版本提交与 Tag。旧 JSON/CLI 生产链退役决策见 [ADR-029](decisions/ADR-029-legacy-runtime-retirement.md)。
 
-ADR-032 已接受“现有 Worker 内官方 Host”目标并已在候选源码中接线；ADR-033 的账户 refresh 协调、ADR-034 的正常 Cleanup 复用和 ADR-035 的平台选择已由固定上游 patch 与候选 Worker 实现。这些是实现证据，不表示真实账户验收、平台认证或发布审批已完成。
+ADR-032 已接受且已在 Preview.5 实现“现有 Worker 内官方 Host”。ADR-033 的账户 refresh 协调、ADR-034 的正常 Cleanup 复用和 ADR-035 的平台选择由固定上游 patch 与同一 Worker 实现。一个此前 R7 候选已通过真实 Coding Plan E2E；Preview.5 固定制品安装后的真实 Start Plan E2E 仍是独立发布后验收项。
 
-固定上游为 ZCode `3.18.0` / `b95ebaffeab641907b38652f45c1502bd762972d` 与 AppServer `0.17.1`。Windows x64、Node `24.16.0` 的 fixed-source build、same-source-tree repeatability、frame、account、Adapter、936 项完整隔离回归、stress gate 和提交后 clean checkout 已有 synthetic `PASS`。六个 `@napi-rs/keyring` native closure/license/metadata 文件已在 clean checkout 解析并加载；完整动态资源闭包与逐项再分发审查仍为 `PARTIAL`。跨机器/空缓存可复现、官方制品升级/回滚演练、真实 OAuth/model/Start Plan/Billing 和一般 Desktop Main 独立性仍未完成。当前候选独立 Astra review 已 `APPROVED`。
+固定上游为 ZCode `3.18.0` / `b95ebaffeab641907b38652f45c1502bd762972d` 与 AppServer `0.17.1`。Windows x64、Node `24.16.0` 的 fixed-source build、same-source-tree repeatability、frame、account、Adapter、R7 Runtime Events/Usage、952 项完整隔离回归、stress gate、提交后 clean checkout 与四个 CI job 已通过。六个 `@napi-rs/keyring` native closure/license/metadata 文件已在 clean checkout 解析并加载；完整动态资源闭包与逐项再分发审查仍为 `PARTIAL`。跨机器/空缓存可复现、官方制品升级/回滚演练和一般 Desktop Main 独立性仍未完成。
 
-历史 Companion 研究保留原正文，但顶部“历史/被 ADR-032 替代”的适用性说明优先。旧官方 Host `ASTRA_REVIEW.md` 正文只覆盖更早候选；当前 Preview.4 的 `APPROVED / PR_READY: YES` 结论来自 [ASTRA_REVIEW_CURRENT.md](research/zcode-official-host-integration-v1/ASTRA_REVIEW_CURRENT.md)。
+历史 Companion 研究保留原正文，但顶部“历史/被 ADR-032 替代”的适用性说明优先。旧官方 Host `ASTRA_REVIEW.md` 正文只覆盖更早候选；Preview.4 的 `APPROVED / PR_READY: YES` 结论来自 [ASTRA_REVIEW_CURRENT.md](research/zcode-official-host-integration-v1/ASTRA_REVIEW_CURRENT.md)。Preview.5 增加 PR #85 的 R7 集成、v14 兼容迁移与 Administrative Recovery 修复。
 
 当前事实放 `docs` 顶层，设计取舍放 `decisions`，研究放 `research`，一次性交付放 `reports`，历史放 `archive`；草稿放已忽略的 `docs/_draft`。CHANGELOG 由 release-please 维护，不手改。
