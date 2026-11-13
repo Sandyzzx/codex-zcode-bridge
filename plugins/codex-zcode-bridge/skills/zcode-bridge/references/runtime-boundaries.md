@@ -1,9 +1,9 @@
 # Bridge 运行时事实与边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-11
-> Last verified: 2026-11-11，核对 Preview.3 SQLite-only 架构、当前接口/项目状态、固定本机 profile 与模型路由；跨平台真实运行 NOT RUN。
-> Verified against: 372e90622772b070357a278f1da3dea58fa42dee（基线；本候选离线证据见 docs/research/master-skill-simplification-20261111.md）
+> Last updated: 2026-11-13
+> Last verified: 2026-11-13，核对 Preview.5 SQLite-only 架构、Official Host、R7 Runtime Events、当前接口/项目状态、固定本机 profile 与模型路由；跨平台真实运行 NOT RUN。
+> Verified against: 3a95e47b2688d06e29f3bca441d1c9bcaaca2e4f + Preview.5 version/documentation changes
 
 - 生产只有 SQLite v14 Task Authority、一个 Lifecycle Manager 和 Worker→官方 app-server 链。旧 JSON TaskStore/Manager/Worker、CLI Adapter、GitWorktreeProvider 和恢复 roster 已退役；旧 `.tasks`/JSON 锁不是恢复源，不扫描、导入或手工删除。
 - Capacity、永久 Claim 和路径互斥以 SQLite 为准；Result、进程退出、树 Cleanup 和 Release 是独立事实。无 Result 的 running 在重启后仍占用；缺 Receipt、句柄、超时或回调异常都不授权重派。

@@ -3,8 +3,8 @@
 > Status: DECISION
 > Date: 2026-11-11
 > Decision: Accepted — Owner 在 Architecture Decision Freeze 任务中明确批准方案 5 的目标拓扑、职责、制品策略和禁令。
-> Applicability: TARGET ARCHITECTURE ONLY；后续隔离 POC 已有组件证据，但生产实现未完成，不切换当前 Preview.3 执行/认证/清理合同；POC 结果不改变本决定。
-> Verified against: Bridge `372e90622772b070357a278f1da3dea58fa42dee`；相对前轮 `0b70edbb` 仅新增分支工作流，生产源码未变。
+> Applicability: ACTIVE — 已在 Preview.5 实现；Windows x64 现有 Worker 默认装配 Official Host，其他平台保持 ADR-035 的 fail-closed/CI-only 边界。
+> Verified against: Bridge `3a95e47b2688d06e29f3bca441d1c9bcaaca2e4f`（PR #84/#85 合并后的生产接线与 R7 兼容）。
 > Observed upstream: ZCode source `b95ebaffeab641907b38652f45c1502bd762972d` / tree `d7ebeb994cb8f46b16761fc9c550ae3f6e039c3d`，3.18.0；此元数据本身不是构建/运行证明，后续隔离证据另见本 ADR 末尾链接。
 
 ## Context

@@ -4,7 +4,7 @@
 
 [English](README.md) · [项目仓库](https://github.com/Sandyzzx/codex-zcode-bridge) · [版本发布](https://github.com/Sandyzzx/codex-zcode-bridge/releases)
 
-> **发布状态。** 稳定版为 `v1.6.0`，不包含 Start Plan 支持。预览版为 `2.0.0-preview.3`，位于 `preview` 分支，是当前 SQLite-only 任务编排、Start Plan 与 Coding Plan 集成渠道。
+> **发布状态。** 稳定版为 `v1.7.1`。预览版 `2.0.0-preview.5` 是包含 Official Host、SQLite Runtime Events/Usage、Start Plan 与 Coding Plan 集成修复的固定预发布快照；本次不提升新的 Stable 版本。
 
 ## 这是什么
 
@@ -23,14 +23,14 @@ Codex 不会自动接管所有开发请求。只有用户明确要求使用 ZCod
 
 | 套餐 | 可用渠道 | 认证与运行路径 |
 | --- | --- | --- |
-| **Z.ai Start Plan** | Preview `2.0.0-preview.3` | 只读发现官方已登录账户凭据，对所选模型执行实时权益检查，并通过单任务私有凭据 Lease 向官方 Runtime 交付认证。 |
-| **Z.ai Coding Plan** | Stable `v1.6.0` 与 Preview | 使用既有的官方 Coding Plan 账户/API Key 路径，通过 ZCode Runtime 执行。 |
+| **Z.ai Start Plan** | Stable `v1.7.1` 与 Preview | 只读发现官方已登录账户凭据，对所选模型执行实时权益检查，并通过单任务私有凭据 Lease 向官方 Runtime 交付认证。 |
+| **Z.ai Coding Plan** | Stable `v1.7.1` 与 Preview | 使用既有的官方 Coding Plan 账户/API Key 路径，通过 ZCode Runtime 执行。 |
 
 Start Plan 与 Coding Plan 是两条不同的账户和认证路径。Bridge 根据任务中的 Provider、模型和套餐选择对应路径；两者最终都通过官方 ZCode AppServer 执行。
 
 ### 已验证的 Start Plan 路径
 
-Preview.3 包含一次 Windows 真实验收，实际事实如下：
+Preview.3 已通过一次 Windows 真实 Start Plan 验收。此前的 R7 候选另通过一次 Coding Plan 真实 E2E，证明 Official Host、Runtime Events、Usage、Result、Cleanup 与 Release 链。Preview.5 是该实现与修复的固定制品；安装 Preview.5 后的 Start Plan E2E 仍是独立验收项，不能用 Preview.3 的历史结果替代。
 
 - 官方 ZCode AppServer `0.17.1`。
 - Provider `account:bigmodel-start-plan`。
@@ -67,7 +67,7 @@ Preview.3 包含一次 Windows 真实验收，实际事实如下：
 ## 环境要求
 
 - 固定 Official Host 生产制品只支持 **Windows x64**；Windows 非 x64 与其他未知目标 fail closed。Linux/macOS 仅保留 direct AppServer 的合成/CI 覆盖，不认证真实 ZCode、OAuth、Start Plan 或模型服务流量。
-- **Preview 2.0.0-preview.3：** Node.js `>=24.16.0` 且 `<25`。
+- **Preview 2.0.0-preview.5：** Node.js `>=24.16.0` 且 `<25`。
 - Git、支持插件/Marketplace 的 Codex，以及可正常工作的本机 ZCode 安装。
 - 官方 ZCode 账户已登录，并具备所选任务需要的套餐和模型权益。
 - 仅面向**单用户、可信本地**环境；不提供多用户隔离或远程沙箱。
@@ -80,10 +80,10 @@ Marketplace 插件不会代替你安装 Node.js 或 ZCode。
 
 ### 稳定版
 
-Stable `v1.6.0` 不包含 Start Plan：
+Stable `v1.7.1` 是当前稳定版；Preview.5 在其基础上增加 Official Host 与 R7 Runtime Events/Usage：
 
 ```sh
-codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-v1.6.0
+codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-v1.7.1
 codex plugin add codex-zcode-bridge@codex-zcode-bridge
 ```
 
@@ -105,7 +105,7 @@ codex plugin marketplace upgrade codex-zcode-bridge-preview
 如需固定到已验收的 Preview 快照：
 
 ```sh
-codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-preview-v2.0.0-preview.3
+codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-preview-v2.0.0-preview.5
 ```
 
 在已有 Marketplace 上切换分支或 Tag 时，使用目标 `--ref` 重新执行 `marketplace add`，或先移除再添加。不同 Codex 版本的实际参数以 `codex plugin marketplace add --help` 为准。
@@ -169,7 +169,7 @@ Preview 使用固定的单用户可信本地 `yolo` 执行档案，以当前 Win
 - **其他 Start Plan 模型：** 取决于官方 Registry 和实时账户权益，本版本未逐模型认证。
 - **Linux/macOS：** Preview 路径目前只有合成/CI 覆盖，没有真实 Start Plan 认证。
 - **CAPTCHA 与 unusual activity：** Bridge 不解决 CAPTCHA，也不绕过账户控制；权益失败会 fail-closed，可能需要用户在官方 ZCode 客户端中处理。
-- **Host Portability 与 Companion Service：** 仍属于架构研究，不是 Preview.3 已交付功能。
+- **Host Portability 与 Companion Service：** 仍属于架构研究，不是 Preview.5 已交付功能。
 - **JSON 存储与旧 CLI 执行链：** 不是当前生产路径；旧 JSON 任务历史不会导入 SQLite。
 - **Worker 可能未提交 Result 就退出。** Bridge 会保留清理证据和 Hold，而不是假定资源已释放。
 
@@ -180,7 +180,7 @@ Preview 使用固定的单用户可信本地 `yolo` 执行档案，以当前 Win
 - [Runtime 与 SQLite 升级细节](docs/ZCODE_RUNTIME.md)
 - [插件安全说明](plugins/codex-zcode-bridge/SECURITY.md)
 - [Master Skill](plugins/codex-zcode-bridge/skills/zcode-bridge/SKILL.md)
-- [Preview.3 Release](https://github.com/Sandyzzx/codex-zcode-bridge/releases/tag/codex-zcode-bridge-preview-v2.0.0-preview.3)
+- [Preview.5 Release](https://github.com/Sandyzzx/codex-zcode-bridge/releases/tag/codex-zcode-bridge-preview-v2.0.0-preview.5)
 
 ## 许可证
 

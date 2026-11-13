@@ -2,7 +2,7 @@
 
 把有明确边界的开发任务从 Codex 交给本机官方 ZCode Agent Runtime，在 Codex 中跟进进度，并独立审查实际改动后再决定是否接受。
 
-当前 Preview 版本为 `2.0.0-preview.3`。Stable `v1.6.0` 是独立发布渠道，不包含 Start Plan 支持。
+当前 Preview 版本为 `2.0.0-preview.5`。Stable `v1.7.1` 是独立发布渠道；Preview.5 是追加 Official Host、Runtime Events/Usage 与 R7 修复的固定预发布快照。
 
 ## 支持范围
 
@@ -33,7 +33,7 @@ codex plugin marketplace upgrade codex-zcode-bridge-preview
 固定到已验收的 Preview 快照：
 
 ```sh
-codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-preview-v2.0.0-preview.3
+codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-preview-v2.0.0-preview.5
 ```
 
 Marketplace 安装不需要克隆源码或运行 `npm install`；Node.js 和 ZCode 需另行安装。
