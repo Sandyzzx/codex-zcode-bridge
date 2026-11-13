@@ -774,6 +774,16 @@
       ]
     },
     {
+      "file": "test/sqlite-candidate/wp6c/interrupt-requeue.test.mjs",
+      "type": "Integration",
+      "gate": "T2",
+      "domains": [
+        "sqlite-persistence",
+        "manager-lifecycle",
+        "process-cleanup-and-locks"
+      ]
+    },
+    {
       "file": "test/sqlite-candidate/wp6c/result-recovery.test.mjs",
       "type": "Integration",
       "gate": "T2",

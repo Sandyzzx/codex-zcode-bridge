@@ -1,9 +1,9 @@
 # 当前架构
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-12
-> Last verified: 2026-11-12，核对 Stable 1.7.0 SQLite-only 入口、Desktop Host 启动身份、Start Plan/Coding Plan 路由、Model Routing 幂等边界与 R1–R5 调用链。
-> Verified against: e444ad0d3ce5df342a7f4d104b19816f1af1dda5 + 1.7.0 版本收口
+> Last updated: 2026-11-13
+> Last verified: 2026-11-13，核对 Stable 1.7.1 SQLite-only 入口、Host 内重复 Recovery、Adapter Cleanup 证据边界与 R1–R5 调用链。
+> Verified against: 295727320cab86b071c23ddddd6e29306fa29e7f + ADR-037 hotfix candidate
 
 本文件描述当前实现。公开合同见 [INTERFACES.md](INTERFACES.md)，宿主构建见 [SHARED_CORE.md](SHARED_CORE.md)，配置和升级见 [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md)。决策按主题从 [ADR 索引](decisions/README.md) 加载。
 
@@ -37,11 +37,15 @@ TaskPackage 经 SQLite Manager 校验后创建 queued Attempt。Admission 事务
 
 Worker 接收私有 Bootstrap，经精确进程身份、Launch/Claim 绑定后进入一次执行。永久 Claim 不重放。Spawner 持续消费 stderr，不在内存累积无人订阅的日志。Worker 只有私有 SQLite 握手入口；旧 `dataRoot taskId attempt` JSON 执行入口已删除。
 
-合法 Result 经完整帧和绑定验证后先提交 SQLite；随后才验证 Worker 退出、Adapter proof、进程树和资源。Result、进程退出、Cleanup 和 Release 是独立事实。32 MiB canonical Result 和 v14 保持 [ADR-026](decisions/ADR-026-sqlite-result-contract.md)；COMMIT 不确定继续保留 poison/WRITER_INTENT，禁止猜测替代 Result 或重派。
+合法 Result 经完整帧和绑定验证后先提交 SQLite；随后才验证 Worker 退出、Adapter proof、进程树和资源。Result、进程退出、Cleanup 和 Release 是独立事实。普通 Cleanup 不能仅凭 root PID 退出或进程树 clean 合成 `cleanup_verified`；缺少可信 Adapter Cleanup Proof 时保留显式 Hold。32 MiB canonical Result 和 v14 保持 [ADR-026](decisions/ADR-026-sqlite-result-contract.md)；COMMIT 不确定继续保留 poison/WRITER_INTENT，禁止猜测替代 Result 或重派。
 
 执行、交付与清理期限保持 [ADR-027](decisions/ADR-027-execution-and-cleanup-deadlines.md)。Manager 一次解析 Task/Host 默认执行预算，Worker/Adapter 使用相同快照；执行结束即停止执行 timer，Adapter 清理使用独立预算。迟到或缺失 Cleanup proof 不自动释放路径。
 
-启动 Recovery 只读核对事实。无 Result 的 running Operation 无论 alive/exited/unknown 都保留 Claim/路径/Capacity，不因启动观察写持久 Recovery Hold。显式 `zcode_cancel` 可读取持久 Claim 恢复取消：原身份已退出且 claimant scan clean、无未解决交互时，使用现有取消 intent、verification 与 CAS 提交 cancelled Result，再 Cleanup/Release。身份不明或树不干净时保留占用；重复恢复不 Spawn、不重复 Release。已有 Result 的取消仅恢复清理，不覆盖 Result。
+`recoverTasks()` 在 Host 生命周期内可重复调用；同一 Manager 的并发恢复共享一个进行中的操作，active run 延后处理，完成后下一次调用重新读取 SQLite。Recovery 本身只读核对事实，继续复用现有 Scheduler 与 Workspace Occupancy；一个 Operation 的 Hold 不阻塞无关执行路径。无 Result 的 running Operation 无论 alive/exited/unknown 都保留 Claim/路径/Capacity，Stable 生产路径不因缺少 R7 Runtime Events 自动重派。
+
+Result 已提交时，Host 内 Recovery 只恢复 Cleanup/Release，不改写 Result 或创建 Attempt。生产路径只有在 Cleanup evidence 已验证或完整 Adapter Cleanup Proof 可验证时才 Release；OS 退出/claimant scan 只用于 Worker 树验证，不能替代 Adapter 资源事实。显式 `zcode_cancel` 可对终态 Result 的 `result_committed`、`cleanup_pending`、`cleanup_verified` 或 `cleanup_unverified` 发起 cleanup-only Recovery，经 SQLite CAS 后处理，证据不足时保持 Hold。Result-less 的取消仍按精确 Claim、身份终止、无未解决交互和 CAS 路径执行；重复调用不 Spawn、不重复 Release。
+
+隔离 fake-Adapter 测试可通过原子 `interruptAndRequeue()` 验证一次自动续 Attempt：旧 Attempt、Result 中断事实、Cleanup/Release 与新 queued Attempt 同事务提交，且必须显式启用测试专用能力。该路径不由公共 MCP、TaskPackage 或 Host 配置暴露，也不构成生产副作用安全证明；无法证明可安全重试的生产任务标为 `MASTER_DECISION_REQUIRED`。
 
 Windows 终止继续使用 [ADR-009](decisions/ADR-009-windows-identity-bound-tree-termination.md)：同一原生句柄内验证世代并终止；已退出根仍需 recorded-tree claimant scan。PID 单独不能授权信号或 Release。未知 Hold 不自动清除；行政兜底保持 [ADR-018](decisions/ADR-018-administrative-abandonment-of-cleanup-incomplete-hold.md)。
 
@@ -63,4 +67,4 @@ Attention 与 Thin Waiter 共用 SQLite snapshot 和只读等待谓词。Attenti
 
 新装和旧 JSON 安装均从 Fresh SQLite Bootstrap 开始；旧 JSON 用户数据保持原样，运行时不读取或迁移它。现有 SQLite receipt、历史 `json_artifacts` 校验、schema-v13.sql 与显式离线升级工具不退役。启动时发现有效 v13 Authority 后，Bridge 在既有 bootstrap 锁内执行同一副本升级，保留 v13 备份、验证已发布 v14 后清除升级 marker；不启动 Worker、不释放 Hold，损坏或非 v13 数据库继续 fail-closed。
 
-构建产物包含 Bridge、Worker、Thin Waiter、v14 升级命令、v13/v14 Schema 与浏览器后端。Core API 破坏按 Owner 已批准的 [ADR-029](decisions/ADR-029-legacy-runtime-retirement.md) 随当前稳定版本线交付；当前 Stable 为 1.7.0。该退役不更改 Marketplace MCP 工具/schema。
+构建产物包含 Bridge、Worker、Thin Waiter、v14 升级命令、v13/v14 Schema 与浏览器后端。Core API 破坏按 Owner 已批准的 [ADR-029](decisions/ADR-029-legacy-runtime-retirement.md) 随当前稳定版本线交付；当前 Stable 基线为 1.7.1，Host Recovery hotfix 仍需独立合并/发布授权。该退役不更改 Marketplace MCP 工具/schema。

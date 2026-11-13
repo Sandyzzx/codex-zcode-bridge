@@ -3,6 +3,8 @@
 > Status: DECISION
 > Date: 2026-11-04
 > Decision: Accepted for this worktree; production integration remains a separate authorization
+> Partially superseded: ADR-037 replaces the startup-only Recovery assumption and
+> narrows the OS-scan-only Cleanup closure for the Stable 1.7.1 Host hotfix.
 
 ## Context
 

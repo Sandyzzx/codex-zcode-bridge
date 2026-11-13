@@ -1,9 +1,9 @@
 # 决策路由 / Decisions
 
 > Status: AUTHORITATIVE（仅指本索引）
-> Last updated: 2026-11-11
-> Last verified: 2026-11-11，核对现有 ADR 的适用范围、ADR-029 退役影响、ADR-030 单次任务 Billing verdict 修订及 Desktop Host 启动身份。
-> Verified against: 52015d12f37011f4d389e07941c31491457611ef
+> Last updated: 2026-11-13
+> Last verified: 2026-11-13，核对 Stable Host-native Recovery、Adapter Cleanup 证据边界与 ADR-024 的部分替代关系。
+> Verified against: 295727320cab86b071c23ddddd6e29306fa29e7f + ADR-037 hotfix candidate
 
 先读当前 [架构](../ARCHITECTURE.md)/[接口](../INTERFACES.md)，只在需要解释取舍时加载对应决策。文件保持原路径和历史正文；Partially superseded 的标注优先于历史段落，不得拿旧 JSON 实现恢复当前合同。
 
@@ -18,7 +18,7 @@
 | Windows 身份 | [009](ADR-009-windows-identity-bound-tree-termination.md)、[023](ADR-023-completion-window-cleanup-prewarm.md) | 原生句柄/claimant proof；空 helper 预热 |
 | Master 委派 | [010](ADR-010-whole-task-delegation.md)、[015](ADR-015-master-skill-authorization-and-progressive-loading.md) | whole_task 默认、授权和按需加载 |
 | Workspace | [017](ADR-017-single-user-trusted-local-workspace-admission.md) | 单用户本机 Admission；无需项目白名单 |
-| Recovery | [018](ADR-018-administrative-abandonment-of-cleanup-incomplete-hold.md)、[024](ADR-024-scoped-sqlite-hold-and-local-cleanup-recovery.md) | 行政兜底与 Operation scoped Hold/清理恢复；R5 补足显式取消 |
+| Recovery | [018](ADR-018-administrative-abandonment-of-cleanup-incomplete-hold.md)、[024](ADR-024-scoped-sqlite-hold-and-local-cleanup-recovery.md)、[037](ADR-037-stable-host-native-recovery.md) | 行政兜底、Operation scoped Hold、Host 内重复 Recovery、Adapter Cleanup 证据边界与 R5 显式取消 |
 | 配置/诊断 | [021](ADR-021-zcode-path-discovery.md)、[022](ADR-022-authority-bound-doctor.md) | ZCode 路径发现；诊断绑定 SQLite |
 | Attention | [025](ADR-025-sqlite-attention-unified-waiting.md) | SQLite snapshot、被动等待与 Thin Waiter |
 | Result | [026](ADR-026-sqlite-result-contract.md) | 32 MiB、256 KiB envelope、v14 与显式离线升级 |
@@ -37,6 +37,7 @@
 | [008](ADR-008-session-frames-and-large-interactions.md) | app-server 帧边界、输入资源有界原则 | JSON full_request 文件/64KB 事件预览协议退役；SQLite request/reply/ACK 以当前接口为准 |
 | ADR-011（历史编号；原文未纳入当前仓库） | Adapter 受理事实/根因/隐私边界 | JSON failure-facts 文件与 state.lock 所有权不再是生产机制；未扩展到 R7 |
 | [019](ADR-019-local-trust-and-recovery-fence.md) | 单用户本机信任及 yolo profile | Recovery 围栏由 024/R5 替代；JSON 双链描述由 029 替代 |
+| [024](ADR-024-scoped-sqlite-hold-and-local-cleanup-recovery.md) | Operation scoped Hold、显式取消和本地身份验证 | startup-only Recovery 与仅 OS scan 的普通 Cleanup 闭合由 ADR-037 收窄；历史阶段矩阵继续用于追溯 |
 
 016 的 v1/v2 归档/导入方案已被同文件 v3 取代；保留旧 receipt/schema 读取不等于保留迁移执行器。
 

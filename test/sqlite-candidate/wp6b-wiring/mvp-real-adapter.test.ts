@@ -1610,7 +1610,7 @@ test('ADR-027 actual Worker execution timeout commits a timeout Result and relea
   }
 });
 
-test('ADR-027 cleanup expiry persists a failed Result and late cleanup cannot silently release its Workspace', {timeout:90000},async()=>{
+test('ADR-027 cleanup expiry persists a failed Result and missing Adapter proof keeps its Workspace held', {timeout:90000},async()=>{
   const worker=await deadlineWorker('cleanup','late-cleanup');
   await withRealAdapterMcp(async(client,_manager,dataRoot,workspace)=>{
     const taskId=`r3-cleanup-${randomUUID()}`;
@@ -1620,10 +1620,13 @@ test('ADR-027 cleanup expiry persists a failed Result and late cleanup cannot si
     const result=contentObject(await client.callTool({name:'zcode_result',arguments:{task_id:taskId}}));
     assert.equal(result.error_code,'cleanup_failed');
     const operation=await operationFor(dataRoot,taskId);assert.equal(operation.phase,'cleanup_unverified');
-    // Explicit evidence-only recovery can stop the exact live generation or
-    // prove that the delayed cleanup already finished; neither path re-executes.
-    contentObject(await client.callTool({name:'zcode_cancel',arguments:{task_id:taskId}}));
-    await waitForLifecycleEvent(client,taskId,'released');
+    // The Adapter reported cleanup failure, so Worker-tree termination alone
+    // cannot prove Adapter-owned resources are closed or authorize Release.
+    const cancel=await client.callTool({name:'zcode_cancel',arguments:{task_id:taskId}});
+    assert.equal(cancel.isError,true);
+    const cancelText=(cancel.content??[]).map(item=>item.type==='text'?item.text:'').join(' ');
+    assert.match(cancelText,/adapter_cleanup_unverified/u);
+    const heldOperation=await operationFor(dataRoot,taskId);assert.equal(heldOperation.phase,'cleanup_unverified');
     assert.deepEqual(contentObject(await client.callTool({name:'zcode_result',arguments:{task_id:taskId}})),result);
   },{workerOverride:worker,runtimeVariant:'deadline-success',workerCloseWaitMs:100});
 });
