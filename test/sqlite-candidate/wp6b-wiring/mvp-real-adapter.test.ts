@@ -1100,7 +1100,7 @@ test("SQLite Worker exit while issuer is pending revokes a late lease", { timeou
   } });
 });
 
-test("SQLite Worker crash without cancellation creates one continuation and refuses an uncertain replay", { timeout: 120_000 }, async () => {
+test("SQLite Worker crash after execution evidence stays held instead of replaying side effects", { timeout: 120_000 }, async () => {
   let child: ChildProcess | undefined;
   let release!: (lease: PrivateCredentialLease) => void;
   let issued!: (value: { lease: PrivateCredentialLease; binding: import("../../../src/runtime/start-plan-private-lease.js").PrivateLeaseBinding }) => void;
@@ -1137,17 +1137,19 @@ test("SQLite Worker crash without cancellation creates one continuation and refu
       },
     });
     try {
-      assert.ok(recoveryStages.some((entry) => entry.stage === "driver_run_returned"
-        && entry.detail.task_id === taskId && entry.detail.attempt === 2 && entry.detail.state === "launch_outcome_unknown"),
-      "the restarted Host must refuse to spawn a continuation whose persisted Launch outcome is already uncertain");
-      const continuation = await restarted.getStatus(taskId) as unknown as Record<string, unknown>;
-      assert.equal(continuation.status, "queued", "the continuation remains the only queued Attempt");
-      assert.equal(continuation.attempt, 2, "online Recovery preserved Task identity and created exactly one next Attempt");
-      assert.equal((await operationFor(dataRoot, taskId)).phase, "launch_intent",
-        "the exact post-crash continuation is persisted and must not be duplicated");
-      // The uncertain continuation occupies the same execution path. A
-      // different Task on that path may queue, but it must not acquire a
-      // parallel Worker slot.
+      assert.ok(recoveryStages.some((entry) => entry.stage === "recovery_workspace_scoped"
+        && entry.detail.reason === "execution_side_effect_unverified"),
+      "the restarted Host must retain a Worker that reached Runtime execution as a scoped Hold");
+      assert.equal(recoveryStages.some((entry) => entry.stage === "driver_run_returned"
+        && entry.detail.task_id === taskId && entry.detail.attempt === 2), false,
+      "Recovery must not create or dispatch a continuation after execution evidence");
+      const held = await restarted.getStatus(taskId) as unknown as Record<string, unknown>;
+      assert.equal(held.status, "running", "the interrupted Attempt remains the current held execution");
+      assert.equal(held.attempt, 1, "Recovery must not advance to a second Attempt");
+      assert.equal((await operationFor(dataRoot, taskId)).phase, "running",
+        "the interrupted Operation remains occupied for management review");
+      // The held Operation occupies the same execution path. A different Task
+      // on that path may queue, but it must not acquire a parallel Worker slot.
       const probeTaskId = `recovery-probe-${randomUUID()}`;
       const probeReceipt = await restarted.createTask(syntheticTask(workspace, probeTaskId) as unknown as import("../../../src/interfaces.js").TaskPackage);
       assert.equal(probeReceipt.status, "queued");
@@ -1160,7 +1162,7 @@ test("SQLite Worker crash without cancellation creates one continuation and refu
       assert.equal(admissionStages[0]?.detail.occupied_path, workspace);
       assert.equal(admissionStages[0]?.detail.execution_path, workspace);
       assert.equal((await restarted.getStatus(probeTaskId)).status, "queued");
-      console.error("[gate2] crashed Attempt without cancellation is requeued once; uncertain continuation stays fenced after restart");
+      console.error("[gate2] crashed Attempt with execution evidence remains held; same-path admission stays fenced");
     } finally { await restarted.shutdown(); }
   }, { runtimeVariant: "private-auth-hold", preserveFixtureOnFailure: true, onWorkerSpawn: (value) => { child = value; }, onDriverRunReturned: (detail) => driverReturned?.(detail), issueOverride: (binding) => {
     const lease = new PrivateCredentialLease(binding, "SYNTHETIC_CRASH_HOLD", Date.now() + 30_000);
