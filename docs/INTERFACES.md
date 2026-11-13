@@ -1,9 +1,9 @@
 # 当前接口与兼容边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-07
-> Last verified: 2026-11-07，核对 SQLite Manager、MCP schema、Result、Attention、R1–R5 与 Core 退役边界；宿主与平台未运行项见报告。
-> Verified against: a46137fe46b567271a7756be819361132625278c + ADR-029 本地候选（未发布）
+> Last updated: 2026-11-13
+> Last verified: 2026-11-13，核对 ADR-036 的 Recovery 行为；本轮不改变 MCP Tool/schema、公共 Task 状态、v14 或 Core 合同。
+> Verified against: `77990f3a840e7b1f3a75afc151c58ca2cef5f28a` + ADR-036 candidate changes
 
 准确字段以 `src/interfaces.ts`、`src/mcp/schemas.ts` 与共享 `src/result-contract.mjs` 为准。[ARCHITECTURE.md](ARCHITECTURE.md) 描述实现，[SHARED_CORE.md](SHARED_CORE.md) 列出 Core API 主版本兼容策略。本轮不改变 MCP 工具/schema、v14、32 MiB 或 R1–R5 状态语义。
 
@@ -23,7 +23,7 @@ TaskPackage 的 requirements、allowed_paths、forbidden_paths、acceptance_crit
 
 Admission 在事务中检查 Capacity 及执行路径重叠，覆盖跨 Manager 竞争。Worker 精确身份、Launch token/receipt、Claim、Attempt/generation/revision CAS 保持绑定。最终 workspace use 校验先于 Launch Intent；拒绝只留下 untouched reserved，显式 queued Cancel 经原 CAS 终结并释放。Intent 后即可能已 Spawn，缺 Receipt/句柄、timeout 或 Manager 崩溃都不授权重新派发。
 
-Manager 启动只读核对 running Operation，不因 alive/exited/unknown 的启动观察写持久 Recovery Hold；Claim/Capacity/路径仍占用。Result 缺失不等于未执行。显式 zcode_cancel 可以复用持久 Claim 恢复取消：精确原身份已退出、recorded-tree clean、无未决交互且 CAS 成功后提交 cancelled、Cleanup/Release。unknown、脏树、未解决交互或已有非清理 Hold 都保守拒绝。
+Manager 可在启动和 Host 存活期间重复核对 running Operation。根据 ADR-036，Result-less Attempt 只有在精确原身份已退出、recorded-tree clean、无未回答交互且没有另一个 Host 的存活句柄时，才可由内部原子操作中断并创建一个新 Attempt；Task ID 不变，旧 Result/事件保留，自动链最多一次。unknown、alive、脏树、未解决交互或缺少 Adapter resource facts 都保留 Operation/Workspace Hold。显式 zcode_cancel 仍复用持久 Claim、取消 intent 与 CAS；已有 Result 时只恢复 Cleanup，不覆盖 Result。
 
 已有终态 Result 的 cleanup_unverified 可通过 zcode_cancel 仅清理恢复，不创建 Attempt 或覆盖 Result。存活的原精确世代可由显式取消触发身份绑定终止；退出仍需 claimant scan。Result 与取消竞争由 SQLite CAS 仲裁；重复取消/恢复不重复 Spawn 或 Release。数据库根损坏或一致性无法解释时继续 fail closed。未知 Hold 不自动清除。
 

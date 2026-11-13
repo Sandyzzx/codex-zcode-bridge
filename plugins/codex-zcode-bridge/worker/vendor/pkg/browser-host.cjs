@@ -42,9 +42,9 @@ var __toESM2 = (mod, isNodeMode, target) => (target = mod != null ? __create2(__
 ));
 var __toCommonJS2 = (mod) => __copyProps2(__defProp2({}, "__esModule", { value: true }), mod);
 
-// node_modules/playwright-core/lib/bootstrap.js
+// ../../node_modules/playwright-core/lib/bootstrap.js
 var require_bootstrap = __commonJS2({
-  "node_modules/playwright-core/lib/bootstrap.js"(exports2, module3) {
+  "../../node_modules/playwright-core/lib/bootstrap.js"(exports2, module3) {
     "use strict";
     var __defProp3 = Object.defineProperty;
     var __getOwnPropDesc3 = Object.getOwnPropertyDescriptor;
@@ -193,9 +193,9 @@ Please update your version of Node.js.`
   }
 });
 
-// node_modules/playwright-core/lib/utilsBundle.js
+// ../../node_modules/playwright-core/lib/utilsBundle.js
 var require_utilsBundle = __commonJS2({
-  "node_modules/playwright-core/lib/utilsBundle.js"(exports2, module3) {
+  "../../node_modules/playwright-core/lib/utilsBundle.js"(exports2, module3) {
     "use strict";
     var __create3 = Object.create;
     var __defProp3 = Object.defineProperty;
@@ -84942,9 +84942,9 @@ data:
   }
 });
 
-// node_modules/playwright-core/lib/coreBundle.js
+// ../../node_modules/playwright-core/lib/coreBundle.js
 var require_coreBundle = __commonJS2({
-  "node_modules/playwright-core/lib/coreBundle.js"(exports, module) {
+  "../../node_modules/playwright-core/lib/coreBundle.js"(exports, module) {
     "use strict";
     var __create = Object.create;
     var __defProp = Object.defineProperty;
@@ -163128,15 +163128,15 @@ ${c.title}:`);
   }
 });
 
-// node_modules/playwright-core/index.js
+// ../../node_modules/playwright-core/index.js
 var require_playwright_core = __commonJS2({
-  "node_modules/playwright-core/index.js"(exports2, module3) {
+  "../../node_modules/playwright-core/index.js"(exports2, module3) {
     require_bootstrap();
     module3.exports = require_coreBundle().inprocess.playwright;
   }
 });
 
-// node_modules/playwright-core/index.mjs
+// ../../node_modules/playwright-core/index.mjs
 var playwright_core_exports = {};
 __export2(playwright_core_exports, {
   _android: () => _android,
@@ -163152,7 +163152,7 @@ __export2(playwright_core_exports, {
 });
 var import_index, chromium, firefox, webkit, selectors, devices, errors, request2, _electron, _android, playwright_core_default;
 var init_playwright_core = __esm2({
-  "node_modules/playwright-core/index.mjs"() {
+  "../../node_modules/playwright-core/index.mjs"() {
     import_index = __toESM2(require_playwright_core(), 1);
     chromium = import_index.default.chromium;
     firefox = import_index.default.firefox;

@@ -170,5 +170,10 @@ export function createSqliteLifecyclePort(store,{recoveryEvidenceVerifier,worker
     enumerable:true,
     value:(input,gates)=>store.createNextAttempt(input,gates),
   });
+  if(typeof store.interruptAndRequeue!=='function')throw new TypeError('candidate SQLite Store missing interruptAndRequeue');
+  Object.defineProperty(port,'interruptAndRequeue',{
+    enumerable:true,
+    value:(input,gates)=>store.interruptAndRequeue(input,gates),
+  });
   return Object.freeze(port);
 }

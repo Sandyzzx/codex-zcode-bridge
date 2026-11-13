@@ -1100,7 +1100,7 @@ test("SQLite Worker exit while issuer is pending revokes a late lease", { timeou
   } });
 });
 
-test("SQLite Worker crash without cancellation holds recovery and fences dispatch", { timeout: 120_000 }, async () => {
+test("SQLite Worker crash without cancellation creates one continuation and refuses an uncertain replay", { timeout: 120_000 }, async () => {
   let child: ChildProcess | undefined;
   let release!: (lease: PrivateCredentialLease) => void;
   let issued!: (value: { lease: PrivateCredentialLease; binding: import("../../../src/runtime/start-plan-private-lease.js").PrivateLeaseBinding }) => void;
@@ -1137,12 +1137,17 @@ test("SQLite Worker crash without cancellation holds recovery and fences dispatc
       },
     });
     try {
-      assert.ok(recoveryStages.some((entry) => entry.stage === "operation_recovery_classified" && entry.detail.state === "held"), "restart must hold the unverified crashed Attempt");
-      // ADR-024 keeps a crashed Attempt scoped to its execution path instead
-      // of installing a workspace-global Recovery Hold.
-      assert.ok(recoveryStages.some((entry) => entry.stage === "recovery_workspace_scoped"), "held recovery must scope its fence to the occupied execution path");
-      // Admission keeps a same-path Task queued; it must not create or spawn
-      // a second Worker on the path occupied by the crashed Attempt.
+      assert.ok(recoveryStages.some((entry) => entry.stage === "driver_run_returned"
+        && entry.detail.task_id === taskId && entry.detail.attempt === 2 && entry.detail.state === "launch_outcome_unknown"),
+      "the restarted Host must refuse to spawn a continuation whose persisted Launch outcome is already uncertain");
+      const continuation = await restarted.getStatus(taskId) as unknown as Record<string, unknown>;
+      assert.equal(continuation.status, "queued", "the continuation remains the only queued Attempt");
+      assert.equal(continuation.attempt, 2, "online Recovery preserved Task identity and created exactly one next Attempt");
+      assert.equal((await operationFor(dataRoot, taskId)).phase, "launch_intent",
+        "the exact post-crash continuation is persisted and must not be duplicated");
+      // The uncertain continuation occupies the same execution path. A
+      // different Task on that path may queue, but it must not acquire a
+      // parallel Worker slot.
       const probeTaskId = `recovery-probe-${randomUUID()}`;
       const probeReceipt = await restarted.createTask(syntheticTask(workspace, probeTaskId) as unknown as import("../../../src/interfaces.js").TaskPackage);
       assert.equal(probeReceipt.status, "queued");
@@ -1155,7 +1160,7 @@ test("SQLite Worker crash without cancellation holds recovery and fences dispatc
       assert.equal(admissionStages[0]?.detail.occupied_path, workspace);
       assert.equal(admissionStages[0]?.detail.execution_path, workspace);
       assert.equal((await restarted.getStatus(probeTaskId)).status, "queued");
-      console.error("[gate2] crashed Attempt without cancellation stays held; restart fences new dispatch");
+      console.error("[gate2] crashed Attempt without cancellation is requeued once; uncertain continuation stays fenced after restart");
     } finally { await restarted.shutdown(); }
   }, { runtimeVariant: "private-auth-hold", preserveFixtureOnFailure: true, onWorkerSpawn: (value) => { child = value; }, onDriverRunReturned: (detail) => driverReturned?.(detail), issueOverride: (binding) => {
     const lease = new PrivateCredentialLease(binding, "SYNTHETIC_CRASH_HOLD", Date.now() + 30_000);
@@ -1803,7 +1808,7 @@ test('ADR-027 actual Worker execution timeout commits a timeout Result and relea
   }
 });
 
-test('ADR-027 cleanup expiry persists a failed Result and late cleanup cannot silently release its Workspace', {timeout:90000},async()=>{
+test('ADR-027 cleanup expiry persists a failed Result and missing adapter cleanup facts keep the Workspace held', {timeout:90000},async()=>{
   const worker=await deadlineWorker('cleanup','late-cleanup');
   await withRealAdapterMcp(async(client,_manager,dataRoot,workspace)=>{
     const taskId=`r3-cleanup-${randomUUID()}`;
@@ -1813,11 +1818,17 @@ test('ADR-027 cleanup expiry persists a failed Result and late cleanup cannot si
     const result=contentObject(await client.callTool({name:'zcode_result',arguments:{task_id:taskId}}));
     assert.equal(result.error_code,'cleanup_failed');
     const operation=await operationFor(dataRoot,taskId);assert.equal(operation.phase,'cleanup_unverified');
-    // Explicit evidence-only recovery can stop the exact live generation or
-    // prove that the delayed cleanup already finished; neither path re-executes.
-    contentObject(await client.callTool({name:'zcode_cancel',arguments:{task_id:taskId}}));
-    await waitForLifecycleEvent(client,taskId,'released');
+    // The adapter did not provide resource facts. Recovery must not invent a
+    // process-tree scan or release from the late close alone.
+    const cancel=await client.callTool({name:'zcode_cancel',arguments:{task_id:taskId}});
+    assert.equal(cancel.isError,true);
+    assert.equal((cancel.structuredContent as {error?:{code?:unknown}} | undefined)?.error?.code,'CANCEL_FAILED');
+    assert.match(String((cancel.structuredContent as {error?:{message?:unknown}} | undefined)?.error?.message),/adapter_cleanup_unverified/u);
+    assert.equal((await operationFor(dataRoot,taskId)).phase,'cleanup_unverified');
     assert.deepEqual(contentObject(await client.callTool({name:'zcode_result',arguments:{task_id:taskId}})),result);
+    const events=contentObject(await client.callTool({name:'zcode_events',arguments:{task_id:taskId,after_seq:0,limit:200}}));
+    const lifecycle=events.events as Array<Record<string,unknown>>;
+    assert.equal(lifecycle.some((event)=>event.type==='released'),false);
   },{workerOverride:worker,runtimeVariant:'deadline-success',workerCloseWaitMs:100});
 });
 

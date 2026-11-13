@@ -288,7 +288,9 @@ export async function startBridge(
       throw new Error(`SQLite Authority startup refused: Trusted Local policy is ${trustedLocalContext.status}`);
     }
     const lifecycleGate = await import("../store/lifecycle-gate.js");
-    await lifecycleGate.initializeFreshInstallSqliteRoot(dataRoot, FRESH_SQLITE_DATABASE_FILE, process.versions.node, processProbe);
+    const initialization = await lifecycleGate.initializeFreshInstallSqliteRoot(
+      dataRoot, FRESH_SQLITE_DATABASE_FILE, process.versions.node, processProbe,
+    );
     const { SqliteLifecycleMcpAuthority } = await import("../manager/sqlite-lifecycle-mcp-authority.js");
     const authority = await SqliteLifecycleMcpAuthority.create({
       dataRoot,
@@ -308,6 +310,9 @@ export async function startBridge(
         journal: modelRoutingJournal,
       }),
       routeTaskModel,
+      ...(initialization["upgradeState"] === "upgraded"
+        ? { startupInterruptionReason: "interrupted_by_upgrade" as const }
+        : {}),
       onWorkerDiagnosticLine: (line) => {
         const facts = formatWorkerFailureFactsLine(line);
         // Diagnostic stderr only: this line never enters MCP results, events,

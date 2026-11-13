@@ -1,9 +1,9 @@
 # 决策路由 / Decisions
 
 > Status: AUTHORITATIVE（仅指本索引）
-> Last updated: 2026-11-12
-> Last verified: 2026-11-12，核对 ADR-032–035 的候选实现状态、ADR-030 保持不变，以及同步最新 `origin/preview` 后的完整回归。
-> Verified against: `ba25f83722094ef3428a04202749377cc9b6e643`（tree `b4573bb6f1143ce6a3081a56ce2fbf968a243e35`）+ documentation changes
+> Last updated: 2026-11-13
+> Last verified: 2026-11-13，新增并核对 ADR-036；ADR-032–035 与 ADR-030 的既有状态不在本轮改写。
+> Verified against: `77990f3a840e7b1f3a75afc151c58ca2cef5f28a` + ADR-036 candidate changes
 
 先读当前 [架构](../ARCHITECTURE.md)/[接口](../INTERFACES.md)，只在需要解释取舍时加载对应决策。文件保持原路径和历史正文；Partially superseded 的标注优先于历史段落。
 
@@ -18,7 +18,7 @@
 | Windows 身份 | [009](ADR-009-windows-identity-bound-tree-termination.md)、[023](ADR-023-completion-window-cleanup-prewarm.md) | 原生句柄与 claimant proof；空 helper 预热 |
 | Master 委派 | [010](ADR-010-whole-task-delegation.md)、[015](ADR-015-master-skill-authorization-and-progressive-loading.md) | whole_task 默认、授权和按需加载 |
 | Workspace | [017](ADR-017-single-user-trusted-local-workspace-admission.md) | 单用户本机 Admission；无需项目白名单 |
-| Recovery | [018](ADR-018-administrative-abandonment-of-cleanup-incomplete-hold.md)、[024](ADR-024-scoped-sqlite-hold-and-local-cleanup-recovery.md) | 行政兜底与 Operation-scoped Hold/清理恢复 |
+| Recovery | [018](ADR-018-administrative-abandonment-of-cleanup-incomplete-hold.md)、[024](ADR-024-scoped-sqlite-hold-and-local-cleanup-recovery.md)、[036](ADR-036-host-native-interruption-requeue.md) | 行政兜底、Operation-scoped Hold/清理恢复，以及 Host 内单次中断重派发 |
 | 配置/诊断 | [021](ADR-021-zcode-path-discovery.md)、[022](ADR-022-authority-bound-doctor.md) | ZCode 路径发现；诊断绑定 SQLite |
 | Attention | [025](ADR-025-sqlite-attention-unified-waiting.md) | SQLite snapshot、被动等待与 Thin Waiter |
 | Result | [026](ADR-026-sqlite-result-contract.md) | 32 MiB Result、256 KiB envelope、v14；正文早于 Preview.4 自动升级实现并保持原文 |

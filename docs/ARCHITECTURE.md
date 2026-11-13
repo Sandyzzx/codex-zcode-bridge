@@ -1,9 +1,9 @@
 # 当前架构
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-12
-> Last verified: 2026-11-12，核对了同步最新 `origin/preview` 后的候选源码、固定上游制品、Preview.4 自动 SQLite 升级路径、936 项完整隔离回归、stress gate、提交后 clean checkout 和当前候选独立 Astra 审查；真实账户、真实模型和官方制品升级/回滚演练未运行。
-> Verified against: `ba25f83722094ef3428a04202749377cc9b6e643`（tree `b4573bb6f1143ce6a3081a56ce2fbf968a243e35`）+ documentation changes；固定上游为 ZCode `3.18.0` / `b95ebaffeab641907b38652f45c1502bd762972d`，AppServer `0.17.1`。
+> Last updated: 2026-11-13
+> Last verified: 2026-11-13，核对了 ADR-036 的 Host 内中断重派发、v13→v14 升级后重派发、在线 Worker 退出恢复及 Cleanup/Interaction Hold 定向回归；真实账户、真实模型、生产数据库迁移与发布未运行。
+> Verified against: `77990f3a840e7b1f3a75afc151c58ca2cef5f28a` + ADR-036 candidate changes；固定上游版本记录沿用本文件后续说明。
 
 本文件描述当前源码候选。候选实现已默认切换到官方 Host 路径，但尚未发布；已发布渠道仍是 `2.0.0-preview.3`，候选版本号为 `2.0.0-preview.4`。公开合同继续以 [INTERFACES.md](INTERFACES.md) 为准，宿主和运行配置分别见 [SHARED_CORE.md](SHARED_CORE.md) 与 [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md)。
 
@@ -43,7 +43,7 @@ Worker 接收私有 Bootstrap，经精确 OS 进程身份、Launch/Claim 绑定�
 
 执行、交付与清理期限保持 [ADR-027](decisions/ADR-027-execution-and-cleanup-deadlines.md)。Manager 一次解析 Task/Host 默认执行预算，Worker/Adapter 使用相同快照；执行结束即停止执行 timer，Adapter 清理使用独立预算。迟到或缺失 Cleanup proof 不自动释放路径。
 
-启动 Recovery 只读核对事实。无 Result 的 running Operation 无论 alive、exited 或 unknown 都保留 Claim、路径和 Capacity，不因启动观察写持久 Recovery Hold。显式 `zcode_cancel` 可读取持久 Claim 恢复取消：原身份已退出且 claimant scan clean、无未解决交互时，使用现有取消 intent、verification 与 CAS 提交 cancelled Result，再 Cleanup/Release。身份不明或树不干净时保留占用；重复恢复不 Spawn、不重复 Release。已有 Result 的取消仅恢复清理，不覆盖 Result。
+Recovery 由 SQLite 持久事实和当前 Host 共同协调，并可在 Host 存活期间重复执行。[ADR-036](decisions/ADR-036-host-native-interruption-requeue.md) 允许对没有 Result 的 running Attempt 做一次自动中断重派发：只有持久 Claim 的精确 Worker 已退出、recorded-tree claimant scan clean、无未回答交互且当前 Host 不需要触碰另一个 Host 的存活进程时，Store 才在同一事务中保留旧 Attempt 历史、写入中断审计/Result/Cleanup/Release，并创建一个同 Task ID 的新 queued Attempt。自动链最多一次；alive、unknown、脏树、缺少 Adapter resource facts 或存在未解决交互都保留 Operation/Workspace Hold。显式 `zcode_cancel` 继续使用持久 Claim、取消 intent、verification 与 CAS；身份不明或树不干净时保留占用，重复恢复不 Spawn、不重复 Release。已有 Result 的取消或在线 Recovery 只恢复清理，不覆盖 Result。
 
 ## 官方 Host、账户与清理
 
