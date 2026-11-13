@@ -23,7 +23,7 @@ TaskPackage 的 requirements、allowed_paths、forbidden_paths、acceptance_crit
 
 Admission 在事务中检查 Capacity 及执行路径重叠，覆盖跨 Manager 竞争。Worker 精确身份、Launch token/receipt、Claim、Attempt/generation/revision CAS 保持绑定。最终 workspace use 校验先于 Launch Intent；拒绝只留下 untouched reserved，显式 queued Cancel 经原 CAS 终结并释放。Intent 后即可能已 Spawn，缺 Receipt/句柄、timeout 或 Manager 崩溃都不授权重新派发。
 
-Manager 可在启动和 Host 存活期间重复核对 running Operation。根据 ADR-036，Result-less Attempt 只有在精确原身份已退出、recorded-tree clean、无未回答交互且没有另一个 Host 的存活句柄时，才可由内部原子操作中断并创建一个新 Attempt；Task ID 不变，旧 Result/事件保留，自动链最多一次。unknown、alive、脏树、未解决交互或缺少 Adapter resource facts 都保留 Operation/Workspace Hold。显式 zcode_cancel 仍复用持久 Claim、取消 intent 与 CAS；已有 Result 时只恢复 Cleanup，不覆盖 Result。
+Manager 可在启动和 Host 存活期间重复核对 running Operation。根据 ADR-036，Result-less Attempt 只有在精确原身份已退出、recorded-tree clean、Adapter Cleanup 证明完整、没有 Runtime 执行事件、无未回答交互且没有另一个 Host 的存活句柄时，才可由内部原子操作中断并创建一个新 Attempt；Task ID 不变，旧 Result/事件保留，自动链最多一次。Runtime 执行事件表示 Workspace、Git、迁移或外部调用副作用已不可由 SQLite 重建，必须保留 Hold 交由 Master 决定。unknown、alive、脏树、未解决交互、缺少 Adapter resource facts 或缺少执行副作用边界也保留 Operation/Workspace Hold。显式 zcode_cancel 仍复用持久 Claim、取消 intent 与 CAS；已有 Result 时只恢复 Cleanup，不覆盖 Result。
 
 已有终态 Result 的 cleanup_unverified 可通过 zcode_cancel 仅清理恢复，不创建 Attempt 或覆盖 Result。存活的原精确世代可由显式取消触发身份绑定终止；退出仍需 claimant scan。Result 与取消竞争由 SQLite CAS 仲裁；重复取消/恢复不重复 Spawn 或 Release。数据库根损坏或一致性无法解释时继续 fail closed。未知 Hold 不自动清除。
 

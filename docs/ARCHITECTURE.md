@@ -43,7 +43,7 @@ Worker 接收私有 Bootstrap，经精确 OS 进程身份、Launch/Claim 绑定�
 
 执行、交付与清理期限保持 [ADR-027](decisions/ADR-027-execution-and-cleanup-deadlines.md)。Manager 一次解析 Task/Host 默认执行预算，Worker/Adapter 使用相同快照；执行结束即停止执行 timer，Adapter 清理使用独立预算。迟到或缺失 Cleanup proof 不自动释放路径。
 
-Recovery 由 SQLite 持久事实和当前 Host 共同协调，并可在 Host 存活期间重复执行。[ADR-036](decisions/ADR-036-host-native-interruption-requeue.md) 允许对没有 Result 的 running Attempt 做一次自动中断重派发：只有持久 Claim 的精确 Worker 已退出、recorded-tree claimant scan clean、无未回答交互且当前 Host 不需要触碰另一个 Host 的存活进程时，Store 才在同一事务中保留旧 Attempt 历史、写入中断审计/Result/Cleanup/Release，并创建一个同 Task ID 的新 queued Attempt。自动链最多一次；alive、unknown、脏树、缺少 Adapter resource facts 或存在未解决交互都保留 Operation/Workspace Hold。显式 `zcode_cancel` 继续使用持久 Claim、取消 intent、verification 与 CAS；身份不明或树不干净时保留占用，重复恢复不 Spawn、不重复 Release。已有 Result 的取消或在线 Recovery 只恢复清理，不覆盖 Result。
+Recovery 由 SQLite 持久事实和当前 Host 共同协调，并可在 Host 存活期间重复执行。[ADR-036](decisions/ADR-036-host-native-interruption-requeue.md) 允许对没有 Result 的 running Attempt 做一次自动中断重派发：只有持久 Claim 的精确 Worker 已退出、recorded-tree claimant scan clean、Adapter Cleanup 证明完整、当前 Operation 没有 Runtime 执行事件、无未回答交互且当前 Host 不需要触碰另一个 Host 的存活进程时，Store 才在同一事务中保留旧 Attempt 历史、写入中断审计/Result/Cleanup/Release，并创建一个同 Task ID 的新 queued Attempt。自动链最多一次；alive、unknown、脏树、缺少 Adapter resource facts、已出现执行事件或存在未解决交互都保留 Operation/Workspace Hold，避免猜测 Workspace、Git、迁移或外部调用副作用能否安全重复。显式 `zcode_cancel` 继续使用持久 Claim、取消 intent、verification 与 CAS；身份不明或树不干净时保留占用，重复恢复不 Spawn、不重复 Release。已有 Result 的取消或在线 Recovery 只恢复清理，不覆盖 Result。
 
 ## 官方 Host、账户与清理
 

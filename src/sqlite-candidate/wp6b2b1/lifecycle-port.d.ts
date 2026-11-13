@@ -400,7 +400,7 @@ export interface CandidateInterruptAndRequeueInput {
   readonly process_tree_digest: string;
   readonly resources_digest: string;
   readonly continuation_operation_id: string;
-  readonly adapter_cleanup?: Readonly<Record<string, unknown>>;
+  readonly adapter_cleanup: Readonly<Record<string, unknown>>;
 }
 
 export interface CandidateInterruptAndRequeueOutcome {

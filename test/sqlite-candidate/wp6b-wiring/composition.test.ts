@@ -59,6 +59,99 @@ function trustedIdentityEvidence(
   return { ...evidence, evidence_digest: candidateEvidenceDigest(evidence) };
 }
 
+function seedRunningClaim(
+  dataRoot: string,
+  modules: Awaited<ReturnType<typeof loadLifecycleCandidateModules>>,
+  workspace: string,
+  taskId: string,
+  operationId: string,
+  processId: number,
+  fingerprint: string,
+  runtimeEvent?: string,
+): void {
+  const store = modules.Store.open(dataRoot);
+  try {
+    const port = modules.createPort(store);
+    port.createTask(syntheticTask(workspace, taskId) as unknown as Parameters<typeof port.createTask>[0]);
+    const allow = () => ({ state: "allow", fixture: true });
+    const admitted = port.admitOperation({
+      operation_id: operationId,
+      task_id: taskId,
+      attempt: 1,
+      workspace_ref: workspace,
+    }, {
+      workspaceValidator: allow,
+      executionPermissionCheck: allow,
+    }) as Record<string, unknown>;
+    const launch = {
+      operation_id: operationId,
+      task_id: taskId,
+      attempt: 1,
+      generation: Number(admitted.generation),
+      revision: Number(admitted.revision),
+      launch_id: `launch-${taskId}`,
+      launch_epoch: 1,
+      launch_token: `interruption-recovery-${taskId}-0123456789`,
+    };
+    const intent = port.createLaunchIntent(launch) as Record<string, unknown>;
+    const receipt = port.recordLaunchReceipt({
+      ...launch,
+      revision: Number(intent.revision),
+      receipt_id: `receipt-${taskId}`,
+      launch_identity: trustedIdentityEvidence("launch", taskId, processId, fingerprint, Number(admitted.generation)),
+    }) as Record<string, unknown>;
+    port.commitPermanentClaim({
+      ...launch,
+      revision: Number(receipt.revision),
+      claim_id: `claim-${taskId}`,
+      worker_identity: trustedIdentityEvidence("worker", taskId, processId, fingerprint),
+    } as unknown as Parameters<typeof port.commitPermanentClaim>[0]);
+    if (runtimeEvent) {
+      const operation = port.readOperation(operationId) as Record<string, unknown>;
+      const runtimeStore = store as typeof store & {
+        appendRuntimeTaskEvent(input: Readonly<Record<string, unknown>>): unknown;
+      };
+      runtimeStore.appendRuntimeTaskEvent({
+        operation_id: operationId,
+        task_id: taskId,
+        attempt: 1,
+        generation: Number(operation.generation),
+        claim_id: String(operation.claim_id),
+        worker_sequence: 1,
+        event_type: runtimeEvent,
+        at: new Date().toISOString(),
+        summary: `synthetic ${runtimeEvent} evidence`,
+      });
+    }
+  } finally {
+    store.close();
+  }
+}
+
+async function exitedProcessIdentity(probe: ProcessProbe): Promise<{ readonly processId: number; readonly fingerprint: string }> {
+  const child = spawn(process.execPath, ["-e", "setInterval(() => undefined, 1000)"], {
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      child.once("spawn", () => resolve());
+      child.once("error", reject);
+    });
+    const processId = child.pid;
+    assert.ok(processId);
+    const identity = await probe.identityOf(processId);
+    assert.equal(identity.fingerprint_precision, "exact");
+    assert.ok(identity.fingerprint);
+    const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
+    child.kill();
+    await closed;
+    return { processId, fingerprint: identity.fingerprint };
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill();
+  }
+}
+
 function redactTestDiagnostic(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(redactTestDiagnostic);
   if (typeof value === "string") {
@@ -300,6 +393,98 @@ test("startup Recovery requeues a Result-less Attempt only after exact exited Wo
   } finally {
     if (exitedWorker.exitCode === null && exitedWorker.signalCode === null) exitedWorker.kill();
   }
+});
+
+test("startup Recovery keeps an official Adapter Attempt held without Adapter cleanup proof", {
+  timeout: 60_000,
+  skip: process.platform !== "win32",
+}, async () => {
+  const taskId = `official-adapter-proof-required-${randomUUID()}`;
+  const operationId = candidateOperationId(taskId, 1);
+  const probe = createPlatformProbe();
+  const identity = await exitedProcessIdentity(probe);
+  let spawnCount = 0;
+  const stages: Array<{ readonly stage: string; readonly detail?: Readonly<Record<string, unknown>> }> = [];
+
+  await withSqliteMcp(async (_client, _manager, dataRoot) => {
+    const modules = await loadLifecycleCandidateModules();
+    const store = modules.Store.openForRecovery(dataRoot);
+    assert.ok(store);
+    try {
+      const port = modules.createPort(store);
+      const lifecycle = port.readTaskLifecycle(taskId) as Record<string, unknown>;
+      const projection = lifecycle.projection as Record<string, unknown>;
+      const operation = lifecycle.operation as Record<string, unknown>;
+      assert.equal(projection.current_attempt, 1);
+      assert.equal(projection.status, "running");
+      assert.equal(operation.phase, "running");
+      assert.equal(operation.result_digest, null);
+      const events = port.readLifecycleEvents(operationId) as Array<Record<string, unknown>>;
+      assert.equal(events.some((event) => event.event_type === "cleanup_verified"), false);
+      assert.equal(events.some((event) => event.event_type === "released"), false);
+    } finally {
+      store.close();
+    }
+    assert.equal(spawnCount, 0, "missing Adapter cleanup proof must not dispatch another Worker");
+  }, {
+    processProbe: probe,
+    testOnlyFakeAdapter: false,
+    testVerifyProcessTreeClaimantsClean: async () => {
+      throw new Error("missing Adapter cleanup proof must be classified before a tree scan can release it");
+    },
+    beforeAuthority: (dataRoot, modules, workspace) => {
+      seedRunningClaim(dataRoot, modules, workspace, taskId, operationId, identity.processId, identity.fingerprint);
+    },
+    onChildSpawn: () => { spawnCount += 1; },
+    onStage: (stage, detail) => stages.push({ stage, detail }),
+    testOnScheduler: (stage, detail) => stages.push({ stage, detail }),
+  });
+  assert.ok(stages.some((entry) => entry.stage === "recovery_workspace_scoped"
+    && entry.detail?.reason === "adapter_cleanup_unverified"));
+});
+
+test("startup Recovery holds an Attempt after Runtime execution evidence even when its Worker exited", {
+  timeout: 60_000,
+  skip: process.platform !== "win32",
+}, async () => {
+  const taskId = `execution-side-effect-hold-${randomUUID()}`;
+  const operationId = candidateOperationId(taskId, 1);
+  const probe = createPlatformProbe();
+  const identity = await exitedProcessIdentity(probe);
+  let spawnCount = 0;
+  const stages: Array<{ readonly stage: string; readonly detail?: Readonly<Record<string, unknown>> }> = [];
+
+  await withSqliteMcp(async (_client, _manager, dataRoot) => {
+    const modules = await loadLifecycleCandidateModules();
+    const store = modules.Store.openForRecovery(dataRoot);
+    assert.ok(store);
+    try {
+      const port = modules.createPort(store);
+      const lifecycle = port.readTaskLifecycle(taskId) as Record<string, unknown>;
+      const projection = lifecycle.projection as Record<string, unknown>;
+      const operation = lifecycle.operation as Record<string, unknown>;
+      assert.equal(projection.current_attempt, 1);
+      assert.equal(projection.status, "running");
+      assert.equal(operation.phase, "running");
+      const runtimeEvents = port.readTaskEvents(taskId, { afterCursor: 0, limit: 200 }).events
+        .filter((event) => event.event_type === "turn_started");
+      assert.equal(runtimeEvents.length, 1, "the synthetic Worker reached turn execution before interruption");
+    } finally {
+      store.close();
+    }
+    assert.equal(spawnCount, 0, "execution evidence must retain the old Attempt instead of replaying it");
+  }, {
+    processProbe: probe,
+    beforeAuthority: (dataRoot, modules, workspace) => {
+      seedRunningClaim(dataRoot, modules, workspace, taskId, operationId, identity.processId, identity.fingerprint,
+        "turn_started");
+    },
+    onChildSpawn: () => { spawnCount += 1; },
+    onStage: (stage, detail) => stages.push({ stage, detail }),
+    testOnScheduler: (stage, detail) => stages.push({ stage, detail }),
+  });
+  assert.ok(stages.some((entry) => entry.stage === "recovery_workspace_scoped"
+    && entry.detail?.reason === "execution_side_effect_unverified"));
 });
 
 test("v13 startup upgrade preserves the interrupted Attempt and dispatches one new Attempt", {
@@ -1775,7 +1960,7 @@ class RawStdioMcpTestClient {
 
 async function withSqliteMcp(
   run: (client: Client, manager: SqliteLifecycleMcpAuthority, dataRoot: string, workspace: string) => Promise<void>,
-  options: { readonly testBeforeDispatch?: () => Promise<void>; readonly testOnScheduler?: (stage: string, detail: Readonly<Record<string, unknown>>) => void; readonly onStage?: (stage: string, detail?: Readonly<Record<string, unknown>>) => void; readonly onChildSpawn?: (child: { readonly pid?: number; readonly stderr?: NodeJS.ReadableStream | null; readonly resultChannel?: NodeJS.ReadableStream | null }) => void; readonly beforeAuthority?: (dataRoot: string, modules: Awaited<ReturnType<typeof loadLifecycleCandidateModules>>, workspace: string) => void; readonly prepareDataRoot?: (dataRoot: string, fixture: string) => Promise<void>; readonly databaseFileName?: string; readonly workerEntryPath?: string; readonly enableSyntheticInteractionChannel?: boolean; readonly processProbe?: ProcessProbe; readonly testProcessProbeTimeoutMs?: number; readonly testVerifyProcessTreeClaimantsClean?: typeof verifyProcessTreeClaimantsClean; readonly testProcessTreeProbeTimeoutMs?: number; readonly testShutdownWaitMs?: number; readonly testStopWorkerForRecovery?: (pid: number, expectedFingerprint: string) => Promise<void>; readonly testBeforeRecoveryWrite?: (operationId: string, phase: string) => Promise<void>; readonly startupInterruptionReason?: "interrupted_by_upgrade"; readonly stdio?: boolean; readonly preserveFixtureOnFailure?: boolean; readonly onStdioHost?: (host: StdioLifecycleHost) => void; readonly onStdioShutdownComplete?: (reason: string) => void; readonly onStdioShutdownFailure?: (reason: string, error: unknown) => void } = {},
+  options: { readonly testBeforeDispatch?: () => Promise<void>; readonly testOnScheduler?: (stage: string, detail: Readonly<Record<string, unknown>>) => void; readonly onStage?: (stage: string, detail?: Readonly<Record<string, unknown>>) => void; readonly onChildSpawn?: (child: { readonly pid?: number; readonly stderr?: NodeJS.ReadableStream | null; readonly resultChannel?: NodeJS.ReadableStream | null }) => void; readonly beforeAuthority?: (dataRoot: string, modules: Awaited<ReturnType<typeof loadLifecycleCandidateModules>>, workspace: string) => void; readonly prepareDataRoot?: (dataRoot: string, fixture: string) => Promise<void>; readonly databaseFileName?: string; readonly workerEntryPath?: string; readonly enableSyntheticInteractionChannel?: boolean; readonly processProbe?: ProcessProbe; readonly testProcessProbeTimeoutMs?: number; readonly testVerifyProcessTreeClaimantsClean?: typeof verifyProcessTreeClaimantsClean; readonly testProcessTreeProbeTimeoutMs?: number; readonly testShutdownWaitMs?: number; readonly testStopWorkerForRecovery?: (pid: number, expectedFingerprint: string) => Promise<void>; readonly testBeforeRecoveryWrite?: (operationId: string, phase: string) => Promise<void>; readonly startupInterruptionReason?: "interrupted_by_upgrade"; readonly testOnlyFakeAdapter?: boolean; readonly stdio?: boolean; readonly preserveFixtureOnFailure?: boolean; readonly onStdioHost?: (host: StdioLifecycleHost) => void; readonly onStdioShutdownComplete?: (reason: string) => void; readonly onStdioShutdownFailure?: (reason: string, error: unknown) => void } = {},
 ): Promise<void> {
   const fixture = path.join(integrationRoot, randomUUID());
   const dataRoot = path.join(fixture, "sqlite-root");
@@ -1827,7 +2012,7 @@ async function withSqliteMcp(
     ...(options.onStage ? { onStage: options.onStage } : {}),
     ...(options.onChildSpawn ? { onChildSpawn: options.onChildSpawn } : {}),
     ...(options.enableSyntheticInteractionChannel ? { enableSyntheticInteractionChannel: true } : {}),
-    testOnlyFakeAdapter: true,
+    ...(options.testOnlyFakeAdapter === false ? {} : { testOnlyFakeAdapter: true }),
   });
   const manager = authority;
   const server = createBridgeServer({ taskManager: manager,

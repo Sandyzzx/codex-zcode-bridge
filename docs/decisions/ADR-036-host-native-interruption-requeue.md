@@ -35,6 +35,11 @@ SQLite 继续是唯一持久事实来源。Manager/Host 负责 Worker 生命周�
 3. Worker-root recorded-tree claimant scan 为 clean，且没有 live PID；
 4. 没有未回答的 interaction request，也没有 cancellation intent；
 5. Host 没有发现相同 Operation 仍有不同 PID 的本地活动句柄。
+6. 当前 Operation 没有持久化任何 Runtime 执行事件；一旦出现
+   `session_ready`、`turn_started`、工具/输出或交互事件，就视为可能已经产生
+   Workspace 或外部副作用，停止自动重派发；
+7. 实际 Adapter Cleanup 证明完整。仅有 OS Worker exit 与 tree-clean 不能生成
+   `cleanup_verified`；官方 Adapter 缺少该证明时保留 Operation-scoped Hold。
 
 Worker 存活但不由当前 Host 管理时返回 Operation-scoped Hold，不终止可能属于另一个
 Host 的进程。只有当前 Host 持有同一 Operation、同一精确 PID 的句柄时，才允许既有
@@ -76,6 +81,8 @@ Provider/HTTP/业务失败仍产生普通 failed Result，不因本决策自动�
   必须保留 Hold。
 - 无法证明 Worker 退出、进程树 clean、交互已解决或资源已关闭时，只保留相关工作区
   的 Hold，不影响其他工作区。
+- Runtime 执行事件存在时，旧 Attempt 保留为历史并保留占用；Host 不猜测 Workspace
+  或外部操作是否可重复，由 Master 决定后续管理动作。
 
 ### 6. 不扩张合同
 
@@ -90,9 +97,10 @@ Recovery Store 或跨 Host termination mutex。`ADMIN-ABANDON` 继续只处理�
 | completed + Result committed | 保留 Result 与历史 |
 | failed / cancelled 终态 | 保持原终态 |
 | queued 且未启动 | 保持 queued，由 Scheduler 恢复派发 |
-| running，无 Result，精确 Worker 已退出且 tree clean | 旧 Attempt 中断归档，创建一个新 Attempt |
+| running，无 Result，完整安全证据成立且无 Runtime 执行事件 | 旧 Attempt 中断归档，创建一个新 Attempt |
 | running，无 Result，Worker alive/unknown 或 tree 不 clean | 保留当前 Operation/Workspace Hold |
 | running，无 Result，存在未回答 interaction | 保持 Hold，不创建新 Attempt |
+| running，无 Result，已经出现 Runtime 执行事件 | 保持 Hold；不盲目重复可能有副作用的执行 |
 | Worker 仍存活且由另一个 Host 管理 | 不终止，保持 Operation-scoped Hold |
 | Result committed，Cleanup pending/unverified | 保留 Result，只恢复 Cleanup |
 | Cleanup 缺 Adapter resource facts | 保持 Hold，不以 OS tree proof 代替 |
@@ -100,9 +108,12 @@ Recovery Store 或跨 Host termination mutex。`ADMIN-ABANDON` 继续只处理�
 
 ## Consequences
 
-普通 Result-less Worker 退出不再要求重启 Codex/Windows 或手工 `ADMIN-ABANDON`。
+仅在实际 Cleanup 证明完整、且没有任何 Runtime 执行事件的 Result-less 中断中，
+Host 才会自动重派发。普通执行过程中断仍保留历史与占用，避免重复 Git、迁移或外部
+调用等不可逆副作用。
 新旧 Worker 的 Workspace 单 Writer 保证由精确身份、tree proof、Cleanup/Release CAS、
 路径占用和原子重派发共同维持。
 
-无法确认 OS 身份、进程树、交互状态、Adapter 资源或 Cleanup 的场景仍不能自动恢复。
+无法确认 OS 身份、进程树、交互状态、Adapter 资源、执行副作用或 Cleanup 的场景
+仍不能自动恢复。
 这些边界是数据安全取舍，不用更激进的清理换自动恢复率。

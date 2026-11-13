@@ -115,6 +115,11 @@ function interruptionInput(fixture, overrides = {}) {
     operation_id: operation.operation_id,
     worker_exited: true,
   });
+  const adapterCleanup = overrides.adapter_cleanup ?? {
+    contract: 'adapter-cleanup-v1',
+    close: { stage: 'direct_close', status: 'resolved', treeScanStatus: 'verified' },
+    treeScanStatus: 'verified',
+  };
   const interruptionEvidence = overrides.interruption_evidence ?? {
     contract: 'sqlite-candidate-recovery-interruption-v1',
     reason: 'worker_exited_without_result',
@@ -144,6 +149,7 @@ function interruptionInput(fixture, overrides = {}) {
     interruption_evidence: interruptionEvidence,
     process_tree_digest: processTreeDigest,
     resources_digest: resourcesDigest,
+    adapter_cleanup: adapterCleanup,
     continuation_operation_id: fixture.continuationOperationId,
     ...overrides,
   };
@@ -258,6 +264,36 @@ test('interruptAndRequeue preserves the old Attempt and atomically creates exact
     }
   } finally {
     try { fixture.store.close(); } catch {}
+  }
+});
+
+test('interruptAndRequeue refuses to manufacture Cleanup without verified Adapter proof', () => {
+  const fixture = makeRunning('adapter-proof-required');
+  try {
+    const before = lifecycleRows(fixture.root, fixture);
+    failure(
+      () => fixture.store.interruptAndRequeue({
+        ...interruptionInput(fixture),
+        adapter_cleanup: undefined,
+      }, gates()),
+      'invalid_interruption_request',
+    );
+    failure(
+      () => fixture.store.interruptAndRequeue(interruptionInput(fixture, {
+        adapter_cleanup: {
+          contract: 'adapter-cleanup-v1',
+          close: { stage: 'direct_close', status: 'resolved', treeScanStatus: 'incomplete' },
+          treeScanStatus: 'incomplete',
+        },
+      }), gates()),
+      'invalid_interruption_request',
+    );
+    const after = lifecycleRows(fixture.root, fixture);
+    assert.deepEqual(after.operation, before.operation);
+    assert.deepEqual(after.attempts, before.attempts);
+    assert.deepEqual(after.events, before.events);
+  } finally {
+    fixture.store.close();
   }
 });
 

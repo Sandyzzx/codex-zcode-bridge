@@ -200,6 +200,44 @@ export function readAllLifecycleEventsForRecovery(
   }
 }
 
+/**
+ * Any persisted Runtime event means the Adapter reached an execution boundary
+ * whose external effects cannot be reconstructed from SQLite. Absence of such
+ * an event is only used to classify the explicitly controlled test Adapter;
+ * production Adapter recovery also requires its own cleanup proof.
+ */
+function taskExecutionEvidenceObserved(
+  port: Pick<ClaimOnlyPort, "readTaskEvents">,
+  operation: Readonly<Record<string, unknown>>,
+  lifecycleEvents: readonly Readonly<Record<string, unknown>>[],
+): boolean {
+  if (lifecycleEvents.some((event) => String(event.event_type).startsWith("interaction_"))) return true;
+  const runtimeExecutionEventTypes = new Set([
+    "session_ready", "model_selected", "turn_started", "model_tool_call",
+    "tool_status", "model_output", "turn_completed", "turn_failed", "report_ready",
+  ]);
+  const taskId = text(operation.task_id, "recovery_task_id_missing");
+  const operationId = text(operation.operation_id, "recovery_operation_id_missing");
+  const attempt = positive(Number(operation.attempt), "recovery_attempt_invalid");
+  const generation = positive(Number(operation.generation), "recovery_generation_invalid");
+  const pageSize = 200;
+  let afterCursor = 0;
+  while (true) {
+    const page = port.readTaskEvents(taskId, { afterCursor, limit: pageSize });
+    if (page.events.length > pageSize) throw new LifecycleGateError("recovery_task_event_page_oversized");
+    if (page.events.some((event) => runtimeExecutionEventTypes.has(String(event.event_type))
+      && event.operation_id === operationId
+      && Number(event.operation_attempt ?? event.attempt) === attempt
+      && Number(event.generation) === generation)) return true;
+    if (!page.hasMore) return false;
+    const nextCursor = Number(page.nextCursor);
+    if (!Number.isSafeInteger(nextCursor) || nextCursor <= afterCursor) {
+      throw new LifecycleGateError("recovery_task_event_cursor_invalid");
+    }
+    afterCursor = nextCursor;
+  }
+}
+
 interface CandidateInteractionChannel {
   readonly binding: Readonly<Record<string, unknown>>;
   receiveRequest(): Promise<Readonly<Record<string, unknown>>>;
@@ -1539,6 +1577,29 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
           return { state: "held", operation_id: operationId, phase, reason: "cancellation_in_progress",
             identity_state: identityState, probe_reason: probeReason };
         }
+        if (taskExecutionEvidenceObserved(port, operation, lifecycleEvents)) {
+          return {
+            state: "held",
+            operation_id: operationId,
+            phase,
+            reason: "execution_side_effect_unverified",
+            identity_state: identityState,
+            probe_reason: probeReason,
+          };
+        }
+        // OS exit/tree facts prove process closure, not completion of every
+        // Adapter-owned resource. The production Adapter therefore needs its
+        // existing cleanup contract before this path can write cleanup_verified.
+        if (options.testOnlyFakeAdapter !== true) {
+          return {
+            state: "held",
+            operation_id: operationId,
+            phase,
+            reason: "adapter_cleanup_unverified",
+            identity_state: identityState,
+            probe_reason: probeReason,
+          };
+        }
         const initialIdentityState = identityState;
         const activeEntry = [...activeWorkers.entries()]
           .find(([candidateOperationId]) => candidateOperationId === operationId);
@@ -1675,7 +1736,13 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
           worker_stdio_closed: true,
           interaction_channels_closed: true,
           workspace_touched: false,
+          execution_events_observed: false,
         };
+        const adapterCleanup = {
+          contract: "adapter-cleanup-v1",
+          close: { stage: "direct_close", status: "resolved", treeScanStatus: "verified" },
+          treeScanStatus: "verified",
+        } as const;
         const processTreeDigest = sha256(canonicalJson(processTreeFacts));
         const resourcesDigest = sha256(canonicalJson(resourceFacts));
         const interruptionReason = recoveryOptions.interruptionReason
@@ -1696,6 +1763,7 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
           resources_digest: resourcesDigest,
           host_worker_handle_present: active !== undefined,
           worker_stdio_closed: true,
+          execution_evidence_state: "none_observed",
         };
         const nextAttempt = Number(operation.attempt) + 1;
         const outcome = asRecord(port.interruptAndRequeue({
@@ -1710,6 +1778,7 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
           interruption_evidence: interruptionEvidence,
           process_tree_digest: processTreeDigest,
           resources_digest: resourcesDigest,
+          adapter_cleanup: adapterCleanup,
           continuation_operation_id: `sqlite-${sha256(`${String(operation.task_id)}\0${nextAttempt}`).slice(0, 32)}`,
         }, {
           workspaceValidator: localPolicy.validateWorkspace,

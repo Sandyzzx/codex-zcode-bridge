@@ -414,6 +414,12 @@ function validAdapterCleanupEvidence(value){
       ||Number.isSafeInteger(close.managerProcessCountAfter)&&close.managerProcessCountAfter>=0)
     &&(!close.stage.startsWith('official_')||Number.isSafeInteger(close.managerProcessCountAfter));
 }
+function validVerifiedAdapterCleanupEvidence(value){
+  return validAdapterCleanupEvidence(value)
+    &&value.close.status==='resolved'
+    &&value.close.treeScanStatus==='verified'
+    &&value.treeScanStatus==='verified';
+}
 function normalizeCleanupEvidence(value,input){
   const keys=['attempt','claim_id','fixture','generation','launch_receipt_digest','operation_id','operation_resources_complete','process_tree_digest','resources_digest','result_commit_ref','root_process_id','root_start_fingerprint','source','task_id','worker_identity_digest','worker_tree_complete','workspace_touched'];
   const expectedKeys=value?.adapter_cleanup===undefined?keys:[...keys,'adapter_cleanup'].sort();
@@ -1698,7 +1704,7 @@ export class IsolatedAdmissionStore {
       ||!validId(input.claim_id)||typeof input.claim_worker_identity_digest!=='string'
       ||!/^[0-9a-f]{64}$/u.test(input.claim_worker_identity_digest)||!validId(input.continuation_operation_id)
       ||!interruptions.has(input.reason)||!input.interruption_evidence||Object.getPrototypeOf(input.interruption_evidence)!==Object.prototype
-      ||input.interruption_evidence.reason!==input.reason
+      ||input.interruption_evidence.reason!==input.reason||!validVerifiedAdapterCleanupEvidence(input.adapter_cleanup)
       ||typeof input.process_tree_digest!=='string'||!/^[0-9a-f]{64}$/u.test(input.process_tree_digest)
       ||typeof input.resources_digest!=='string'||!/^[0-9a-f]{64}$/u.test(input.resources_digest))fail('invalid_interruption_request');
     const interruptionJson=canonical(input.interruption_evidence);
@@ -1768,6 +1774,8 @@ export class IsolatedAdmissionStore {
         try{cleanupEvidence=JSON.parse(cleanupEvent?.evidence_json);}catch{fail('interruption_requeue_conflict');}
         if(cleanupEvidence?.claim_id!==input.claim_id
           ||cleanupEvidence?.worker_identity_digest!==input.claim_worker_identity_digest
+          ||!validVerifiedAdapterCleanupEvidence(cleanupEvidence?.adapter_cleanup)
+          ||canonical(cleanupEvidence.adapter_cleanup)!==canonical(input.adapter_cleanup)
           ||typeof cleanupEvidence?.cleanup_digest!=='string'||!/^[0-9a-f]{64}$/u.test(cleanupEvidence.cleanup_digest))
           fail('interruption_requeue_conflict');
         return {duplicate:true,operation_id:input.operation_id,task_id:input.task_id,previous_attempt:input.attempt,
@@ -1803,7 +1811,7 @@ export class IsolatedAdmissionStore {
         process_tree_digest:input.process_tree_digest,resources_digest:input.resources_digest,
         root_process_id:worker.process_id,root_start_fingerprint:worker.start_fingerprint,
         worker_tree_complete:true,operation_resources_complete:true,workspace_touched:false,
-        ...(input.adapter_cleanup===undefined?{}:{adapter_cleanup:input.adapter_cleanup}),
+        adapter_cleanup:input.adapter_cleanup,
       };
       const normalized=normalizeCleanupEvidence(cleanupEvidence,{operation_id:input.operation_id,task_id:input.task_id,
         attempt:input.attempt,generation:input.generation,claim_id:input.claim_id,
@@ -1845,7 +1853,7 @@ export class IsolatedAdmissionStore {
         result_commit_ref:resultCommitRef,root_process_id:normalized.root_process_id,
         root_start_fingerprint:normalized.root_start_fingerprint,worker_identity_digest:input.claim_worker_identity_digest,
         worker_tree_complete:true,workspace_touched:false,
-        ...(normalized.adapter_cleanup!==undefined?{adapter_cleanup:normalized.adapter_cleanup}:{})};
+        adapter_cleanup:normalized.adapter_cleanup};
       this.#event(input.operation_id,revision+1,'cleanup_verified','cleanup_pending','cleanup_verified',input.generation,
         cleanupEventEvidence,at);
       revision+=1;
