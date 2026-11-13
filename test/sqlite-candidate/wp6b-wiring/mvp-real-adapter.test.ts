@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { randomUUID, createHash, createCipheriv, randomBytes } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, lstatSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,7 +12,11 @@ import { SqliteLifecycleMcpAuthority } from "../../../src/manager/sqlite-lifecyc
 import { createBridgeServer } from "../../../src/mcp/server.js";
 import { createTrustedLocalCandidateContext, createHostStartPlanIssuer } from "../../../src/host/stdio.js";
 import type { BridgeHostProfile } from "../../../src/host/profile.js";
-import type { ProductionAuthIssuer, StartPlanLiveEntitlement } from "../../../src/runtime/start-plan-production-auth.js";
+import type {
+  OfficialStartPlanAuthenticationResolver,
+  ProductionAuthIssuer,
+  StartPlanLiveEntitlement,
+} from "../../../src/runtime/start-plan-production-auth.js";
 import { initializeIsolatedCandidateRoot, loadLifecycleCandidateModules } from "../../../src/store/lifecycle-gate.js";
 import { PrivateCredentialLease } from "../../../src/runtime/start-plan-private-lease.js";
 import { createPlatformProbe } from "../../../src/runtime/process-probe.js";
@@ -1894,51 +1898,37 @@ test('ADR-027 blocked execution-envelope pipe expires visibly and retains the ex
 // Host composition layer: these tests build the Start Plan issuer exactly
 // the way the production stdio host does (createHostStartPlanIssuer) and
 // prove the wiring reaches the SQLite gate with a controlled fake Billing
-// gate. Synthetic credentials only; no network and no real account.
-const HOST_CREDENTIAL_SECRET = "synthetic-host-credential-secret";
+// gate. A test-only Host resolver supplies synthetic authentication; no
+// network, keyring access, credential-file parsing or real account is used.
 const HOST_ACCOUNT = "synthetic-account";
 const HOST_DEVICE_MID = "synthetic-host-device-mid";
-const HOST_JWT = [
-  Buffer.from(JSON.stringify({ alg: "synthetic" }), "utf8").toString("base64url"),
-  Buffer.from(JSON.stringify({ account: HOST_ACCOUNT, exp: Math.floor(Date.now() / 1000) + 3_600 }), "utf8").toString("base64url"),
-  "synthetic-signature",
-].join(".");
-
-function encryptHostCredential(value: string, secret: string): string {
-  const iv = randomBytes(12);
-  const key = createHash("sha256").update(secret).digest();
-  const cipher = createCipheriv("aes-256-gcm", key, iv);
-  const encrypted = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
-  return `enc:v1:${iv.toString("base64url")}.${cipher.getAuthTag().toString("base64url")}.${encrypted.toString("base64url")}`;
-}
-
-function writeHostCredentials(runtime: FakeRuntimeFixture, account: string = HOST_ACCOUNT): void {
-  const jwt = [
+const HOST_CREDENTIAL_EXPIRES_AT = (Math.floor(Date.now() / 1000) + 3_600) * 1_000;
+function syntheticHostJwt(account: string): string {
+  return [
     Buffer.from(JSON.stringify({ alg: "synthetic" }), "utf8").toString("base64url"),
-    Buffer.from(JSON.stringify({ account, exp: Math.floor(Date.now() / 1000) + 3_600 }), "utf8").toString("base64url"),
+    Buffer.from(JSON.stringify({ account, exp: HOST_CREDENTIAL_EXPIRES_AT / 1_000 }), "utf8").toString("base64url"),
     "synthetic-signature",
   ].join(".");
-  writeFileSync(path.join(runtime.zcodeHomeV2, "credentials.json"), JSON.stringify({
-    zcodejwttoken: encryptHostCredential(jwt, HOST_CREDENTIAL_SECRET),
-    "oauth:bigmodel:user_info": encryptHostCredential(JSON.stringify({
-      id: account,
-      username: "synthetic-host-user",
-      displayName: "Synthetic Host User",
-      rawProfile: {
-        user_id: account,
-        name: "Synthetic Host User",
-        email: "synthetic-host@example.invalid",
-        avatar: "",
-        zcodeProfileSchemaVersion: 1,
-      },
-    }), HOST_CREDENTIAL_SECRET),
-  }));
-  writeFileSync(path.join(runtime.zcodeHomeV2, "telemetry-state.json"), JSON.stringify({ deviceMid: HOST_DEVICE_MID }));
 }
 
-function clearHostCredentials(runtime: FakeRuntimeFixture): void {
-  rmSync(path.join(runtime.zcodeHomeV2, "credentials.json"), { force: true });
-  rmSync(path.join(runtime.zcodeHomeV2, "telemetry-state.json"), { force: true });
+const HOST_JWT = syntheticHostJwt(HOST_ACCOUNT);
+
+function hostAuthenticationResolver(
+  readAccount: () => string | null,
+): OfficialStartPlanAuthenticationResolver {
+  return {
+    resolveStartPlanAuthentication: async () => {
+      const account = readAccount();
+      if (!account) return null;
+      return {
+        accountIdentity: account,
+        sessionRevision: `synthetic-session-${account}`,
+        requestCredential: syntheticHostJwt(account),
+        credentialExpiresAt: HOST_CREDENTIAL_EXPIRES_AT,
+        deviceMid: HOST_DEVICE_MID,
+      };
+    },
+  };
 }
 
 function fakeHostBillingGate(outcome: "entitled" | "billing_parameter_error") {
@@ -1956,15 +1946,13 @@ function fakeHostBillingGate(outcome: "entitled" | "billing_parameter_error") {
 
 function hostIssuerFactory(entitlement: StartPlanLiveEntitlement, options: { writeCredentials?: boolean } = {}) {
   return async (runtime: FakeRuntimeFixture, host: BridgeHostProfile): Promise<ProductionAuthIssuer | null> => {
-    if (options.writeCredentials !== false) writeHostCredentials(runtime);
     return createHostStartPlanIssuer({
-      // Redirect the Windows user home so official credential discovery can
-      // only ever see this fixture's .zcode tree, never the real account.
-      env: { ...process.env, HOME: runtime.runtimeRoot, USERPROFILE: runtime.runtimeRoot, ZCODE_CREDENTIAL_SECRET: HOST_CREDENTIAL_SECRET },
+      env: { ...process.env, HOME: runtime.runtimeRoot, USERPROFILE: runtime.runtimeRoot },
       homeDir: runtime.runtimeRoot,
       host,
       signal: new AbortController().signal,
       entitlement,
+      authentication: hostAuthenticationResolver(() => options.writeCredentials === false ? null : HOST_ACCOUNT),
     });
   };
 }
@@ -2046,15 +2034,14 @@ test("missing Start Plan credentials keep the host issuer unavailable without af
 function routingEnvIssuerFactory(gate: { entitlement: StartPlanLiveEntitlement }, journal: StartPlanEntitlementJournal,
   loginState: { account: string | null }) {
   return async (runtime: FakeRuntimeFixture, host: BridgeHostProfile): Promise<ProductionAuthIssuer | null> => {
-    if (loginState.account) writeHostCredentials(runtime, loginState.account);
-    else clearHostCredentials(runtime);
     return createHostStartPlanIssuer({
-      env: { ...process.env, HOME: runtime.runtimeRoot, USERPROFILE: runtime.runtimeRoot, ZCODE_CREDENTIAL_SECRET: HOST_CREDENTIAL_SECRET },
+      env: { ...process.env, HOME: runtime.runtimeRoot, USERPROFILE: runtime.runtimeRoot },
       homeDir: runtime.runtimeRoot,
       host,
       signal: new AbortController().signal,
       entitlement: gate.entitlement,
       journal,
+      authentication: hostAuthenticationResolver(() => loginState.account),
     });
   };
 }
@@ -2126,7 +2113,6 @@ test("ADR-031: a persisted Start Plan task replays after logout without Billing 
     const executions = requestLogLines();
 
     loginState.account = null;
-    clearHostCredentials(runtime);
     const replay = contentObject(await submit());
     assert.deepEqual(replay, accepted, "logout must not hide the persisted task's original receipt");
     assert.equal(gate.checks.length, billingChecks, "an equality replay must not consume a Billing request");
@@ -2150,7 +2136,6 @@ test("ADR-031: a persisted Start Plan task conflicts on a changed model after lo
     const executions = existsSync(runtime.requestLog) ? readFileSync(runtime.requestLog, "utf8").trim().split("\n").length : 0;
 
     loginState.account = null;
-    clearHostCredentials(runtime);
     const changed = await client.callTool({ name: "zcode_task", arguments: {
       ...syntheticTask(workspace, taskId), model: { model_id: "GLM-5-Air-StartPlan" },
     } });
@@ -2179,7 +2164,6 @@ test("ADR-031: a new Start Plan task is refused after logout and remains unpersi
     const executions = existsSync(runtime.requestLog) ? readFileSync(runtime.requestLog, "utf8").trim().split("\n").length : 0;
 
     loginState.account = null;
-    clearHostCredentials(runtime);
     const newTaskId = `routing-logout-new-${randomUUID()}`;
     const refused = await client.callTool({ name: "zcode_task", arguments: {
       ...syntheticTask(workspace, newTaskId), model: { model_id: "GLM-5.3-Flash-StartPlan" },

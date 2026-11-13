@@ -6,6 +6,8 @@ import { buildRepoRootLeakPattern } from "./lib/repo-root-pattern.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const pluginRoot = path.join(root, "plugins", "codex-zcode-bridge");
+const EXPECTED_OFFICIAL_HOST_SOURCE_DIFF_SHA256 =
+  "A3F5B7BD7A653403B8362ADC121323404FB4F334B1CFFA0DF3C3E617F9F09AB2";
 
 async function readJson(filePath, label) {
   try {
@@ -136,7 +138,7 @@ const officialHostRoot = path.join(
   "worker",
   "vendor",
   "official-host",
-  "win32-x64-node24.16.0-zcode3.18.0-b95ebaff",
+  "win32-x64-node24.16.0-zcode3.18.2-fec97590",
 );
 const officialHostBomPath = path.join(officialHostRoot, "ARTIFACT_BOM.json");
 const officialHostBom = await readJson(officialHostBomPath, "Official Host ARTIFACT_BOM.json");
@@ -144,9 +146,9 @@ if (officialHostBom.schemaVersion !== 1
   || officialHostBom.scope?.platform !== "win32"
   || officialHostBom.scope?.architecture !== "x64"
   || officialHostBom.scope?.node !== "24.16.0"
-  || officialHostBom.scope?.zcodeVersion !== "3.18.0"
-  || officialHostBom.source?.commit !== "b95ebaffeab641907b38652f45c1502bd762972d"
-  || officialHostBom.source?.tree !== "d7ebeb994cb8f46b16761fc9c550ae3f6e039c3d") {
+  || officialHostBom.scope?.zcodeVersion !== "3.18.2"
+  || officialHostBom.source?.commit !== "fec975905a2abd4c07e35c40d51fa097a2258ec9"
+  || officialHostBom.source?.tree !== "5e90fec80706b8381f94e4eef48cf821b9868916") {
   throw new Error("Official Host ARTIFACT_BOM.json has an unsupported schema, source, or scope");
 }
 if (!Array.isArray(officialHostBom.patches) || officialHostBom.patches.length === 0) {
@@ -155,7 +157,7 @@ if (!Array.isArray(officialHostBom.patches) || officialHostBom.patches.length ==
 const patchOrders = new Set();
 for (const patch of officialHostBom.patches) {
   if (!Number.isSafeInteger(patch.order) || patch.order < 1 || patchOrders.has(patch.order)
-    || typeof patch.path !== "string" || !patch.path.startsWith("upstream/zcode-3.18.0/patches/")
+    || typeof patch.path !== "string" || !patch.path.startsWith("upstream/zcode-3.18.2/patches/")
     || path.isAbsolute(patch.path) || !Number.isSafeInteger(patch.bytes) || patch.bytes < 1
     || typeof patch.sha256 !== "string" || !/^[0-9A-F]{64}$/.test(patch.sha256)) {
     throw new Error("Official Host ARTIFACT_BOM.json contains an invalid patch entry");
@@ -169,6 +171,13 @@ for (const patch of officialHostBom.patches) {
   const bytes = await readFile(patchPath);
   if (bytes.length !== patch.bytes || createHash("sha256").update(bytes).digest("hex").toUpperCase() !== patch.sha256) {
     throw new Error(`Official Host patch failed byte or SHA-256 validation: ${patch.path}`);
+  }
+  const sidecar = await readFile(`${patchPath}.sha256`, "utf8");
+  const sidecarMatch = /^([0-9A-F]{64})  ([^\r\n]+)\r?\n?$/.exec(sidecar);
+  if (!sidecarMatch
+    || sidecarMatch[1] !== patch.sha256
+    || sidecarMatch[2] !== path.basename(patch.path)) {
+    throw new Error(`Official Host patch sidecar disagrees with its BOM: ${patch.path}`);
   }
 }
 const orderedPatchOrders = [...patchOrders].sort((left, right) => left - right);
@@ -231,6 +240,8 @@ const officialHostBomBytes = await readFile(officialHostBomPath);
 if (officialHostProvenance.source?.commit !== officialHostBom.source.commit
   || officialHostProvenance.source?.tree !== officialHostBom.source.tree
   || officialHostProvenance.source?.version !== officialHostBom.source.version
+  || officialHostBom.build?.sourceAggregateDiffSha256 !== EXPECTED_OFFICIAL_HOST_SOURCE_DIFF_SHA256
+  || officialHostProvenance.source?.aggregateDiffSha256 !== EXPECTED_OFFICIAL_HOST_SOURCE_DIFF_SHA256
   || officialHostProvenance.bom?.path !== "ARTIFACT_BOM.json"
   || officialHostProvenance.bom?.bytes !== officialHostBomBytes.length
   || officialHostProvenance.bom?.sha256 !== createHash("sha256").update(officialHostBomBytes).digest("hex").toUpperCase()
@@ -243,8 +254,9 @@ const officialHostModuleText = await readFile(path.join(officialHostRoot, "offic
 if (repoRootPattern.test(officialHostModuleText)) {
   throw new Error("official-host-runtime.mjs embeds the development repository's absolute path");
 }
-if (!officialHostModuleText.includes("createOAuthProviderRuntimeAuthService")) {
-  throw new Error("official-host-runtime.mjs is missing the coordinated provider runtime-auth factory");
+if (!officialHostModuleText.includes("createOAuthProviderRuntimeAuthService")
+  || !officialHostModuleText.includes("createOfficialStartPlanAuthenticationResolver")) {
+  throw new Error("official-host-runtime.mjs is missing an official authentication factory");
 }
 if (!workerBundle.includes("OfficialHostAdapter")
   || !workerBundle.includes("official-host-runtime.mjs")

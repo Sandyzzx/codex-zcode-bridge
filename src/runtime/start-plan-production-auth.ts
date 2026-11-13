@@ -1,10 +1,5 @@
-import { readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
-import {
-  createDecipheriv as cryptoCreateDecipheriv,
-  createHash as cryptoCreateHash,
-} from "node:crypto";
-import { homedir as osHomedir, platform as osPlatform, userInfo as osUserInfo } from "node:os";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { PrivateCredentialLease, type PrivateLeaseBinding } from "./start-plan-private-lease.js";
 
@@ -42,26 +37,23 @@ export interface StartPlanLiveEntitlement {
   check(input: EntitlementCheckInput): Promise<EntitlementCheckResult>;
 }
 
-export interface OfficialStartPlanCredential {
-  /** OAuth JWT from the official credentials store. Model requests use it as
-   * the X-Coding-Plan-Api-Key value through the private delivery channel. */
-  readonly jwt: string;
-  /** Authenticated account identity parsed from the official OAuth record. */
-  readonly account: string;
-  /** Absolute epoch ms when the JWT expires, or null when it carries no exp. */
-  readonly expiresAt: number | null;
-  /** Official persistent device identity from the production data root. */
+/** Narrow result projected by the fixed Official Host. No access token,
+ * refresh token, cookie, ciphertext, key or credential path crosses this
+ * boundary. */
+export interface OfficialStartPlanAuthentication {
+  readonly accountIdentity: string;
+  readonly sessionRevision: string | null;
+  readonly requestCredential: string;
+  readonly credentialExpiresAt: number | null;
   readonly deviceMid: string;
 }
 
-interface OfficialCredentialRecord {
-  readonly zcodejwttoken?: unknown;
-  readonly "oauth:bigmodel:user_info"?: unknown;
+export interface OfficialStartPlanAuthenticationResolver {
+  resolveStartPlanAuthentication(input: {
+    readonly family: "bigmodel";
+    readonly signal: AbortSignal;
+  }): Promise<OfficialStartPlanAuthentication | null>;
 }
-
-const OFFICIAL_CREDENTIAL_ENCRYPTION_PREFIX = "enc:v1:";
-const OFFICIAL_CREDENTIAL_IV_BYTES = 12;
-const OFFICIAL_CREDENTIAL_AUTH_TAG_BYTES = 16;
 
 /** Observed official billing envelope. Only field presence is interpreted;
  * message text is never echoed into Bridge diagnostics. */
@@ -80,75 +72,38 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
-function officialCredentialSecret(env: NodeJS.ProcessEnv): string {
-  const explicit = env["ZCODE_CREDENTIAL_SECRET"]?.trim();
-  if (explicit) return explicit;
-  let username = "unknown";
-  try {
-    username = osUserInfo().username;
-  } catch {
-    // Match the official fallback when the OS user cannot be resolved.
-  }
-  return `zcode-credential-fallback:${osPlatform()}:${osHomedir()}:${username}`;
-}
-
-/** Decodes the official credential store's per-value AES-256-GCM envelope.
- * Legacy plaintext values are returned unchanged, matching the official
- * credential store behavior. */
-function decodeOfficialCredentialString(value: string, env: NodeJS.ProcessEnv): string | null {
-  if (!value.startsWith(OFFICIAL_CREDENTIAL_ENCRYPTION_PREFIX)) return value;
-  try {
-    const segments = value.slice(OFFICIAL_CREDENTIAL_ENCRYPTION_PREFIX.length).split(".");
-    if (segments.length !== 3 || segments.some((segment) => segment.length === 0)) return null;
-    const [ivSegment, authTagSegment, encryptedSegment] = segments as [string, string, string];
-    const iv = Buffer.from(ivSegment, "base64url");
-    const authTag = Buffer.from(authTagSegment, "base64url");
-    const encrypted = Buffer.from(encryptedSegment, "base64url");
-    if (iv.length !== OFFICIAL_CREDENTIAL_IV_BYTES || authTag.length !== OFFICIAL_CREDENTIAL_AUTH_TAG_BYTES) {
-      return null;
-    }
-    const key = cryptoCreateHash("sha256").update(officialCredentialSecret(env)).digest();
-    const decipher = cryptoCreateDecipheriv("aes-256-gcm", key, iv);
-    decipher.setAuthTag(authTag);
-    return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString("utf8");
-  } catch {
-    return null;
-  }
-}
-
-function readOfficialCredentialString(value: unknown, env: NodeJS.ProcessEnv): string | null {
-  if (typeof value !== "string") return null;
-  return decodeOfficialCredentialString(value, env);
-}
-
-function readOfficialUserInfo(value: unknown, env: NodeJS.ProcessEnv): Record<string, unknown> | null {
-  // Preserve the previously accepted synthetic/legacy object shape.
-  if (isRecord(value)) return value;
-  if (typeof value !== "string") return null;
-  const decoded = decodeOfficialCredentialString(value, env);
-  if (decoded === null) return null;
-  try {
-    const parsed: unknown = JSON.parse(decoded);
-    return isRecord(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-function looksLikeJwt(value: string): boolean {
-  const parts = value.split(".");
-  return parts.length === 3 && parts.every((part) => part.length > 0);
-}
-
-function decodeJwtPayload(jwt: string): Record<string, unknown> | null {
-  try {
-    const payload = jwt.split(".")[1]!;
-    const json = Buffer.from(payload, "base64url").toString("utf8");
-    const parsed: unknown = JSON.parse(json);
-    return isRecord(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
+export function normalizeOfficialStartPlanAuthentication(
+  value: unknown,
+): OfficialStartPlanAuthentication | null {
+  if (!isRecord(value)) return null;
+  const accountIdentity = typeof value.accountIdentity === "string"
+    ? value.accountIdentity.trim()
+    : "";
+  const requestCredential = typeof value.requestCredential === "string"
+    ? value.requestCredential.trim()
+    : "";
+  const deviceMid = typeof value.deviceMid === "string" ? value.deviceMid.trim() : "";
+  const sessionRevision = value.sessionRevision === null
+    ? null
+    : typeof value.sessionRevision === "string" && value.sessionRevision.trim()
+      ? value.sessionRevision
+      : undefined;
+  const credentialExpiresAt = value.credentialExpiresAt === null
+    ? null
+    : typeof value.credentialExpiresAt === "number"
+        && Number.isFinite(value.credentialExpiresAt)
+        && value.credentialExpiresAt > 0
+      ? value.credentialExpiresAt
+      : undefined;
+  if (!accountIdentity || !requestCredential || !deviceMid
+    || sessionRevision === undefined || credentialExpiresAt === undefined) return null;
+  return Object.freeze({
+    accountIdentity,
+    sessionRevision,
+    requestCredential,
+    credentialExpiresAt,
+    deviceMid,
+  });
 }
 
 function asOfficialBillingEnvelope(value: unknown): OfficialBillingEnvelope | null {
@@ -167,7 +122,7 @@ function asOfficialBillingEnvelope(value: unknown): OfficialBillingEnvelope | nu
 }
 
 function isSuccessfulBusinessEnvelope(envelope: OfficialBillingEnvelope): boolean {
-  return envelope.success !== false
+  return envelope.success === true
     && (envelope.code === undefined || envelope.code === 0 || envelope.code === 200);
 }
 
@@ -248,43 +203,6 @@ function extractProviderCode(value: Record<string, unknown> | undefined): string
   ];
   const raw = candidates.find((candidate) => typeof candidate === "number" || typeof candidate === "string");
   return typeof raw === "number" || typeof raw === "string" ? String(raw) : undefined;
-}
-
-/** Reads the official Start Plan credential from the official ZCode data
- * root, never the Bridge SQLite data root. The value exists in memory only;
- * callers must never persist it. */
-export function readOfficialStartPlanCredential(
-  zcodeDataRoot: string,
-  env: NodeJS.ProcessEnv = process.env,
-): OfficialStartPlanCredential | null {
-  const credentialsPath = path.join(zcodeDataRoot, "v2", "credentials.json");
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(readFileSync(credentialsPath, "utf8"));
-  } catch {
-    return null;
-  }
-  if (!isRecord(parsed)) return null;
-  const jwt = readOfficialCredentialString(parsed.zcodejwttoken, env)?.trim() ?? "";
-  if (!jwt || !looksLikeJwt(jwt)) return null;
-  const userInfo = readOfficialUserInfo(parsed["oauth:bigmodel:user_info"], env);
-  if (!userInfo) return null;
-  const accountCandidates = [userInfo?.id, userInfo?.user_id, userInfo?.account_id, userInfo?.email];
-  const account = accountCandidates.find((candidate): candidate is string =>
-    typeof candidate === "string" && candidate.trim().length > 0
-  )?.trim();
-  if (!account) return null;
-  const payload = decodeJwtPayload(jwt);
-  if (!payload) return null;
-  const exp = payload?.exp;
-  const expiresAt = typeof exp === "number" && Number.isFinite(exp) && exp > 0 ? exp * 1_000 : null;
-  let deviceMid = "";
-  try {
-    const telemetry = JSON.parse(readFileSync(path.join(zcodeDataRoot, "v2", "telemetry-state.json"), "utf8")) as { deviceMid?: unknown };
-    if (typeof telemetry.deviceMid === "string" && telemetry.deviceMid.trim()) deviceMid = telemetry.deviceMid.trim();
-  } catch { /* deviceMid stays empty; entitlement check treats it as required */ }
-  if (!deviceMid) return null;
-  return { jwt, account, expiresAt, deviceMid };
 }
 
 /** Maps one billing/entitlement HTTP exchange onto a discriminated verdict.
@@ -442,10 +360,8 @@ export class StartPlanBillingEntitlement implements StartPlanLiveEntitlement {
 }
 
 export interface ProductionAuthIssuerOptions {
-  /** Official ZCode data root (`<data base>/.zcode`). */
-  readonly zcodeDataRoot: string;
-  /** Credential key environment, injectable for isolated tests. */
-  readonly env?: NodeJS.ProcessEnv;
+  /** Fixed Official Host projection used for every task-scoped read. */
+  readonly authentication: OfficialStartPlanAuthenticationResolver;
   /** Aborted when the Host shuts down or the account is invalidated. */
   readonly signal: AbortSignal;
   readonly entitlement: StartPlanLiveEntitlement;
@@ -457,16 +373,32 @@ export type ProductionAuthIssuer = NonNullable<import("../store/lifecycle-gate.j
 /** Builds the production `startPlanPrivateAuth` issuer for the SQLite
  * lifecycle driver. The caller constructs it only after the official
  * credential read succeeded; Coding Plan providers never enter this path. */
-export function createProductionStartPlanAuth(options: ProductionAuthIssuerOptions): ProductionAuthIssuer | null {
+export async function createProductionStartPlanAuth(
+  options: ProductionAuthIssuerOptions,
+): Promise<ProductionAuthIssuer | null> {
   const now = options.now ?? Date.now;
-  const env = options.env ?? process.env;
-  const initial = readOfficialStartPlanCredential(options.zcodeDataRoot, env);
+  const resolveAuthentication = async (
+    signal: AbortSignal,
+  ): Promise<OfficialStartPlanAuthentication | null> => {
+    try {
+      return normalizeOfficialStartPlanAuthentication(
+        await options.authentication.resolveStartPlanAuthentication({
+          family: "bigmodel",
+          signal,
+        }),
+      );
+    } catch {
+      return null;
+    }
+  };
+  const initial = await resolveAuthentication(options.signal);
   if (!initial) return null;
   interface EntitlementContext {
     readonly account: string;
     readonly provider: string;
     readonly model: string;
     readonly deviceMid: string;
+    readonly sessionRevision: string | null;
     readonly credentialDigest: string;
     readonly credentialExpiresAt: number | null;
     readonly verdict: EntitlementCheckResult;
@@ -475,24 +407,26 @@ export function createProductionStartPlanAuth(options: ProductionAuthIssuerOptio
   let issuedTask: string | null = null;
   const sameEntitlementContext = (
     context: EntitlementContext,
-    credential: OfficialStartPlanCredential,
+    credential: OfficialStartPlanAuthentication,
     provider: string,
     model: string,
     credentialDigest: string,
-  ): boolean => context.account === credential.account && context.provider === provider
+  ): boolean => context.account === credential.accountIdentity && context.provider === provider
     && context.model === model && context.deviceMid === credential.deviceMid
-    && context.credentialDigest === credentialDigest && context.credentialExpiresAt === credential.expiresAt;
+    && context.sessionRevision === credential.sessionRevision
+    && context.credentialDigest === credentialDigest
+    && context.credentialExpiresAt === credential.credentialExpiresAt;
   const rejection = (verdict: EntitlementCheckResult): Error => {
     const providerCode = verdict.status === "entitled" ? undefined : verdict.providerCode;
     return new Error(`start_plan_entitlement_rejected:${verdict.status}${providerCode ? `:${providerCode}` : ""}`);
   };
   const authoritativeEntitlement = async (
-    credential: OfficialStartPlanCredential,
+    credential: OfficialStartPlanAuthentication,
     provider: string,
     model: string,
     signal: AbortSignal,
   ): Promise<EntitlementCheckResult> => {
-    const credentialDigest = cryptoCreateHash("sha256").update(credential.jwt).digest("hex");
+    const credentialDigest = createHash("sha256").update(credential.requestCredential).digest("hex");
     if (entitlementContext) {
       if (!sameEntitlementContext(entitlementContext, credential, provider, model, credentialDigest)) {
         throw new Error("start_plan_entitlement_identity_invalid");
@@ -500,20 +434,21 @@ export function createProductionStartPlanAuth(options: ProductionAuthIssuerOptio
       return entitlementContext.verdict;
     }
     const verdict = await options.entitlement.check({
-      account: credential.account,
+      account: credential.accountIdentity,
       provider,
       model,
       deviceMid: credential.deviceMid,
-      jwt: credential.jwt,
+      jwt: credential.requestCredential,
       signal,
     });
     entitlementContext = Object.freeze({
-      account: credential.account,
+      account: credential.accountIdentity,
       provider,
       model,
       deviceMid: credential.deviceMid,
+      sessionRevision: credential.sessionRevision,
       credentialDigest,
-      credentialExpiresAt: credential.expiresAt,
+      credentialExpiresAt: credential.credentialExpiresAt,
       verdict,
     });
     return verdict;
@@ -521,14 +456,15 @@ export function createProductionStartPlanAuth(options: ProductionAuthIssuerOptio
   return {
     // Captured from the official credential at construction; issue() re-reads
     // the credential and rejects if the account identity changed mid-run.
-    account: initial.account,
+    account: initial.accountIdentity,
     signal: options.signal,
     async prepare(provider, model, signal) {
       if (provider !== "account:bigmodel-start-plan" || !model || signal.aborted) return false;
-      const credential = readOfficialStartPlanCredential(options.zcodeDataRoot, env);
-      if (!credential || credential.account !== initial.account
-        || credential.expiresAt !== null && credential.expiresAt <= now()) return false;
-      const credentialDigest = cryptoCreateHash("sha256").update(credential.jwt).digest("hex");
+      const credential = await resolveAuthentication(signal);
+      if (!credential || credential.accountIdentity !== initial.accountIdentity
+        || credential.sessionRevision !== initial.sessionRevision
+        || credential.credentialExpiresAt !== null && credential.credentialExpiresAt <= now()) return false;
+      const credentialDigest = createHash("sha256").update(credential.requestCredential).digest("hex");
       if (entitlementContext && !sameEntitlementContext(entitlementContext, credential, provider, model, credentialDigest)) return false;
       const verdict = await authoritativeEntitlement(credential, provider, model, signal);
       if (signal.aborted) return false;
@@ -541,10 +477,15 @@ export function createProductionStartPlanAuth(options: ProductionAuthIssuerOptio
       return true;
     },
     async issue(binding, signal) {
-      const credential = readOfficialStartPlanCredential(options.zcodeDataRoot, env);
+      const credential = await resolveAuthentication(signal);
       if (!credential) throw new Error("start_plan_credential_unavailable");
-      if (binding.account !== credential.account) throw new Error("start_plan_account_identity_invalid");
-      if (credential.expiresAt !== null && credential.expiresAt <= now()) throw new Error("start_plan_credential_expired");
+      if (binding.account !== credential.accountIdentity) throw new Error("start_plan_account_identity_invalid");
+      if (credential.sessionRevision !== initial.sessionRevision) {
+        throw new Error("start_plan_account_identity_invalid");
+      }
+      if (credential.credentialExpiresAt !== null && credential.credentialExpiresAt <= now()) {
+        throw new Error("start_plan_credential_expired");
+      }
       if (signal.aborted) throw new Error("start_plan_issuer_cancelled");
       if (binding.provider !== "account:bigmodel-start-plan" || !binding.model) {
         throw new Error("start_plan_identity_invalid");
@@ -560,9 +501,15 @@ export function createProductionStartPlanAuth(options: ProductionAuthIssuerOptio
       // Observed Start Plan JWTs may omit `exp`. In that case the Worker cache
       // is bounded by the task's parent-lifetime channel rather than a local
       // short TTL. Delivery itself remains one-shot and bounded to 30 seconds.
-      const credentialExpiresAt = credential.expiresAt ?? Number.MAX_SAFE_INTEGER;
+      const credentialExpiresAt = credential.credentialExpiresAt ?? Number.MAX_SAFE_INTEGER;
       const deliveryDeadline = Math.min(credentialExpiresAt, createdAt + 30_000);
-      return new PrivateCredentialLease(binding, credential.jwt, credentialExpiresAt, now, deliveryDeadline);
+      return new PrivateCredentialLease(
+        binding,
+        credential.requestCredential,
+        credentialExpiresAt,
+        now,
+        deliveryDeadline,
+      );
     },
   };
 }

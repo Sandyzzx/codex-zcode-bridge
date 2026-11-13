@@ -28,7 +28,11 @@ import {
   prepareFreshSqliteStateDirectory,
   FRESH_SQLITE_DATABASE_FILE,
 } from "../runtime/sqlite-install-config.js";
-import type { ProductionAuthIssuer, StartPlanLiveEntitlement } from "../runtime/start-plan-production-auth.js";
+import type {
+  OfficialStartPlanAuthenticationResolver,
+  ProductionAuthIssuer,
+  StartPlanLiveEntitlement,
+} from "../runtime/start-plan-production-auth.js";
 import {
   createTaskModelRouter,
   readStartPlanRoutingRegistry,
@@ -37,6 +41,7 @@ import {
   StartPlanEntitlementJournal,
 } from "../runtime/model-routing.js";
 import { BridgeError } from "../runtime/errors.js";
+import { zcodeDataBaseDir } from "../runtime/account-provider.js";
 
 export interface DataRootResolution {
   readonly dataRoot: string;
@@ -77,6 +82,8 @@ export interface HostStartPlanIssuerOptions {
   readonly signal: AbortSignal;
   /** Test-only override; production always uses the official Billing endpoint. */
   readonly entitlement?: StartPlanLiveEntitlement;
+  /** Test-only Host resolver; production loads it from the verified artifact. */
+  readonly authentication?: OfficialStartPlanAuthenticationResolver;
   /** ADR-031 routing journal fed by every live Billing verdict; advisory
    * execution-routing facts only, never an authorization cache. */
   readonly journal?: StartPlanEntitlementJournal;
@@ -91,14 +98,21 @@ export async function createHostStartPlanIssuer(options: HostStartPlanIssuerOpti
     const { NodeRuntimeResolver } = await import("../runtime/resolver.js");
     const config = await new NodeRuntimeResolver({ env: options.env, homeDir: options.homeDir, host: options.host }).resolve();
     if (!config.zcodeEntrypoint || !config.zcodeDataRoot) return null;
+    const dataBaseDir = zcodeDataBaseDir(config.providerPersonalConfigFile);
+    if (!dataBaseDir) return null;
     const { createProductionStartPlanAuth, StartPlanBillingEntitlement, readOfficialCliVersion } = await import("../runtime/start-plan-production-auth.js");
     const entrypoint = config.zcodeEntrypoint;
     const billingEntitlement = options.entitlement ?? new StartPlanBillingEntitlement({
       getAppVersion: () => readOfficialCliVersion(entrypoint),
     });
-    return createProductionStartPlanAuth({
-      zcodeDataRoot: config.zcodeDataRoot,
-      env: options.env,
+    let authentication = options.authentication;
+    if (!authentication) {
+      const { loadOfficialStartPlanAuthenticationResolverFactory } = await import("../adapters/official-host-adapter.js");
+      const factory = await loadOfficialStartPlanAuthenticationResolverFactory();
+      authentication = factory({ dataBaseDir });
+    }
+    return await createProductionStartPlanAuth({
+      authentication,
       signal: options.signal,
       entitlement: options.journal ? new RecordingStartPlanEntitlement(billingEntitlement, options.journal) : billingEntitlement,
     });

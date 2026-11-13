@@ -24717,11 +24717,18 @@ var init_external = __esm({
   }
 });
 
-// node_modules/zod/index.js
-var init_zod = __esm({
-  "node_modules/zod/index.js"() {
+// node_modules/zod/v4/classic/index.js
+var init_classic = __esm({
+  "node_modules/zod/v4/classic/index.js"() {
     init_external();
     init_external();
+  }
+});
+
+// node_modules/zod/v4/index.js
+var init_v4 = __esm({
+  "node_modules/zod/v4/index.js"() {
+    init_classic();
   }
 });
 
@@ -24730,7 +24737,7 @@ var BROWSER_VIEWPORT_LIMITS, browserViewportSizeSchema, browserViewportInputSche
 var init_command_metadata = __esm({
   "src/browser/command-metadata.ts"() {
     "use strict";
-    init_zod();
+    init_v4();
     BROWSER_VIEWPORT_LIMITS = {
       minWidth: 320,
       maxWidth: 3840,
@@ -24850,7 +24857,7 @@ var browserMouseButtonSchema, browserKeyModifierSchema, browserPointSchema, brow
 var init_commands = __esm({
   "src/browser/commands.ts"() {
     "use strict";
-    init_zod();
+    init_v4();
     init_command_metadata();
     init_command_metadata();
     browserMouseButtonSchema = external_exports.enum(["left", "right", "middle"]);
@@ -25283,7 +25290,7 @@ var browserBackendTypeSchema, browserCapabilityDescriptorSchema, browserBackendD
 var init_backend = __esm({
   "src/browser/backend.ts"() {
     "use strict";
-    init_zod();
+    init_v4();
     init_commands();
     browserBackendTypeSchema = external_exports.enum(["iab", "extension", "cdp"]);
     browserCapabilityDescriptorSchema = external_exports.object({
@@ -25329,7 +25336,7 @@ var browserListParamsSchema, browserExecuteParamsSchema;
 var init_params = __esm({
   "src/browser/params.ts"() {
     "use strict";
-    init_zod();
+    init_v4();
     init_command_metadata();
     init_backend();
     init_commands();
@@ -28108,6 +28115,7 @@ __export(official_host_adapter_exports, {
   createOfficialHostClientFactory: () => createOfficialHostClientFactory,
   lazyOfficialHostAssets: () => lazyOfficialHostAssets,
   loadOfficialHostProviderRuntimeAuthFactory: () => loadOfficialHostProviderRuntimeAuthFactory,
+  loadOfficialStartPlanAuthenticationResolverFactory: () => loadOfficialStartPlanAuthenticationResolverFactory,
   verifyOfficialHostAssets: () => verifyOfficialHostAssets
 });
 import { createHash as createHash8 } from "node:crypto";
@@ -28373,6 +28381,17 @@ async function loadOfficialHostProviderRuntimeAuthFactory(workerModuleUrl = impo
   }
   return module.createOAuthProviderRuntimeAuthService;
 }
+async function loadOfficialStartPlanAuthenticationResolverFactory(workerModuleUrl = import.meta.url) {
+  const assets = await verifyOfficialHostAssets(workerModuleUrl);
+  const module = await loadOfficialHostModule(assets.hostModulePath);
+  if (typeof module.createOfficialStartPlanAuthenticationResolver !== "function") {
+    throw new BridgeError(
+      "provider_config_invalid",
+      "The Official Host module is missing the Start Plan authentication resolver."
+    );
+  }
+  return module.createOfficialStartPlanAuthenticationResolver;
+}
 function lazyOfficialHostAssets(workerModuleUrl = import.meta.url) {
   let pending;
   return () => {
@@ -28490,17 +28509,17 @@ var init_official_host_adapter = __esm({
     init_resolver();
     init_zcode_app_server_adapter();
     OFFICIAL_HOST_TRANSPORT_MAX_FRAME_BYTES = 16 * 1024 * 1024;
-    OFFICIAL_HOST_ASSET_RELATIVE_ROOT = "./vendor/official-host/win32-x64-node24.16.0-zcode3.18.0-b95ebaff";
+    OFFICIAL_HOST_ASSET_RELATIVE_ROOT = "./vendor/official-host/win32-x64-node24.16.0-zcode3.18.2-fec97590";
     OFFICIAL_HOST_ASSETS = {
       hostModule: {
         relativePath: "official-host-runtime.mjs",
-        bytes: 1821168,
-        sha256: "3F481AAE16EFF9912DAF17178B49491BD64E67C4419BFFDB59EB4B78E85EB537"
+        bytes: 1829875,
+        sha256: "EBB262FE6364E3F982381F6554812EC2FC308030842711A916AE4F4357F99FEC"
       },
       appServerEntry: {
         relativePath: "app-server/zcode.cjs",
-        bytes: 30999438,
-        sha256: "DF4637F2E31AEDE37DB15B3E4E8D8BE35F59BF756E4EECFFC0A6A6B1EEDB4F2E"
+        bytes: 31009692,
+        sha256: "B55BA68C3B7939AFAFFB4D373D15594817AD3319FDECFBE26640CE4B218CF639"
       },
       builtinProviderConfig: {
         relativePath: "app-server/provider/zcode-builtin.json",

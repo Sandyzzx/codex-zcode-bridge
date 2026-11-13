@@ -20,7 +20,7 @@ import {
 export const OFFICIAL_HOST_TRANSPORT_MAX_FRAME_BYTES = 16 * 1024 * 1024;
 
 const OFFICIAL_HOST_ASSET_RELATIVE_ROOT =
-  "./vendor/official-host/win32-x64-node24.16.0-zcode3.18.0-b95ebaff";
+  "./vendor/official-host/win32-x64-node24.16.0-zcode3.18.2-fec97590";
 
 interface OfficialHostAssetDefinition {
   readonly relativePath: string;
@@ -31,13 +31,13 @@ interface OfficialHostAssetDefinition {
 const OFFICIAL_HOST_ASSETS = {
   hostModule: {
     relativePath: "official-host-runtime.mjs",
-    bytes: 1_821_168,
-    sha256: "3F481AAE16EFF9912DAF17178B49491BD64E67C4419BFFDB59EB4B78E85EB537",
+    bytes: 1_829_875,
+    sha256: "EBB262FE6364E3F982381F6554812EC2FC308030842711A916AE4F4357F99FEC",
   },
   appServerEntry: {
     relativePath: "app-server/zcode.cjs",
-    bytes: 30_999_438,
-    sha256: "DF4637F2E31AEDE37DB15B3E4E8D8BE35F59BF756E4EECFFC0A6A6B1EEDB4F2E",
+    bytes: 31_009_692,
+    sha256: "B55BA68C3B7939AFAFFB4D373D15594817AD3319FDECFBE26640CE4B218CF639",
   },
   builtinProviderConfig: {
     relativePath: "app-server/provider/zcode-builtin.json",
@@ -84,6 +84,7 @@ export interface OfficialHostModule {
   readonly ZCodeAgentProcessManager: new (options: Record<string, unknown>) => OfficialHostProcessManager;
   readonly ZCodeProtocolClient: new (...args: never[]) => OfficialHostProtocolClient;
   readonly createOAuthProviderRuntimeAuthService?: OfficialHostRuntimeAuthServiceFactory;
+  readonly createOfficialStartPlanAuthenticationResolver?: OfficialStartPlanAuthenticationResolverFactory;
 }
 
 export type OfficialHostModuleSource =
@@ -103,6 +104,25 @@ export type OfficialHostRuntimeAuthServiceFactory = (options: {
     access: Record<string, unknown>,
   ) => Promise<Record<string, unknown> | null>;
 }) => OfficialHostRuntimeAuthService;
+
+export interface OfficialStartPlanAuthentication {
+  readonly accountIdentity: string;
+  readonly sessionRevision: string | null;
+  readonly requestCredential: string;
+  readonly credentialExpiresAt: number | null;
+  readonly deviceMid: string;
+}
+
+export interface OfficialStartPlanAuthenticationResolver {
+  resolveStartPlanAuthentication(input: {
+    readonly family: "bigmodel";
+    readonly signal: AbortSignal;
+  }): Promise<OfficialStartPlanAuthentication | null>;
+}
+
+export type OfficialStartPlanAuthenticationResolverFactory = (options: {
+  readonly dataBaseDir: string;
+}) => OfficialStartPlanAuthenticationResolver;
 
 interface OfficialHostProtocolClient {
   readonly isDisposed: boolean;
@@ -468,6 +488,20 @@ export async function loadOfficialHostProviderRuntimeAuthFactory(
     );
   }
   return module.createOAuthProviderRuntimeAuthService;
+}
+
+export async function loadOfficialStartPlanAuthenticationResolverFactory(
+  workerModuleUrl: string | URL = import.meta.url,
+): Promise<OfficialStartPlanAuthenticationResolverFactory> {
+  const assets = await verifyOfficialHostAssets(workerModuleUrl);
+  const module = await loadOfficialHostModule(assets.hostModulePath);
+  if (typeof module.createOfficialStartPlanAuthenticationResolver !== "function") {
+    throw new BridgeError(
+      "provider_config_invalid",
+      "The Official Host module is missing the Start Plan authentication resolver.",
+    );
+  }
+  return module.createOfficialStartPlanAuthenticationResolver;
 }
 
 export function lazyOfficialHostAssets(

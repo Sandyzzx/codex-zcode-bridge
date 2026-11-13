@@ -1,0 +1,111 @@
+{
+  "schemaVersion": 2,
+  "generatedOn": "2026-11-13",
+  "scope": {
+    "platform": "win32",
+    "architecture": "x64",
+    "node": "24.16.0",
+    "zcodeVersion": "3.18.2",
+    "appServerVersion": "0.17.1",
+    "sourceOnly": false,
+    "crossPlatformCertified": false
+  },
+  "source": {
+    "version": "3.18.2",
+    "commit": "fec975905a2abd4c07e35c40d51fa097a2258ec9",
+    "tree": "5e90fec80706b8381f94e4eef48cf821b9868916",
+    "trackedSourceModifiedByBuild": false,
+    "userDesktopInstallationUsedAsInput": false,
+    "aggregateDiffSha256": "A3F5B7BD7A653403B8362ADC121323404FB4F334B1CFFA0DF3C3E617F9F09AB2"
+  },
+  "patches": [
+    {
+      "order": 1,
+      "path": "upstream/zcode-3.18.2/patches/0001-stdio-max-frame-bytes.patch",
+      "bytes": 16482,
+      "sha256": "860CE5CEA55A1C64878663526B194BA93F40EC0DFD31E6BF2242326E3058510F"
+    },
+    {
+      "order": 2,
+      "path": "upstream/zcode-3.18.2/patches/0002-oauth-refresh-coordination.patch",
+      "bytes": 60872,
+      "sha256": "19F7B6BB673F488EC0BDA385B232CB0213A4BDE8333B7AE87ECB3DD49B6180F7"
+    },
+    {
+      "order": 3,
+      "path": "upstream/zcode-3.18.2/patches/0003-read-only-official-start-plan-auth.patch",
+      "bytes": 51480,
+      "sha256": "7C00349F636F99E92662C4E5A0E09493AFFEA22FEB77642994E4DC013BFEB1D9"
+    }
+  ],
+  "toolchain": {
+    "buildNode": "24.16.0",
+    "officialMiseNodePin": "24.14.0",
+    "officialPnpm": "10.33.2",
+    "validationPnpm": "11.25.0",
+    "appServerBundler": "esbuild 0.25.12",
+    "hostModuleBundler": "esbuild 0.28.2",
+    "runtimeHostCompiler": "MSVC 19.44.35229 for x64",
+    "runtimeHostGenerator": "NMake Makefiles",
+    "runtimeHostBuildType": "Release",
+    "windowsSdkCpp": "10.0.26100.4948"
+  },
+  "build": {
+    "appServer": {
+      "command": "node ../../node_modules/turbo/bin/turbo run build --filter=@zcode/cli... with pnpm 10.33.2 shim",
+      "output": "app-server/zcode.cjs"
+    },
+    "hostModule": {
+      "command": "npm run build:official-host -- --source <fixed-upstream-worktree>",
+      "output": "official-host-runtime.mjs",
+      "entry": {
+        "exports": [
+          "ZCodeAgentProcessManager",
+          "ZCodeProtocolClient",
+          "ZCodeStdioTransport",
+          "createOAuthProviderRuntimeAuthService",
+          "createOfficialStartPlanAuthenticationResolver"
+        ],
+        "sourceFiles": [
+          "packages/shared/src/credential-security/contract.ts",
+          "packages/shared/src/credential-security/systemCredentialCipher.ts",
+          "packages/services/src/credential/credentialService.ts",
+          "packages/services/src/oauth/repo/oauthCredentialRepo.ts",
+          "packages/services/src/official-host/runtimeHostEntry.ts",
+          "packages/services/src/official-host/startPlanAuthentication.ts",
+          "packages/services/src/zcode-agent/zcodeAgentProcessManager.ts",
+          "packages/services/src/zcode-agent/zcodeProtocolClient.ts",
+          "packages/services/src/zcode-agent/zcodeStdioTransport.ts",
+          "packages/services/src/model-provider/oauthProviderRuntimeAuthService.ts",
+          "packages/services/src/oauth/oauthService.ts",
+          "packages/services/src/oauth/providers/providerAdapter.ts",
+          "packages/services/src/telemetry/telemetryCore.ts"
+        ]
+      }
+    },
+    "runtimeHost": {
+      "command": "Reuse zcode-runtime-host.exe from win32-x64-node24.16.0-zcode3.18.0-b95ebaff after source-rule comparison",
+      "output": "zcode-runtime-host.exe",
+      "reuseProof": "main.cpp is byte-identical from 3.18.0 to 3.18.2 and the zcode-runtime-host target rule is unchanged; fresh rebuild was blocked by absent Windows SDK mt.exe"
+    },
+    "orderedPatchApplicationRequired": true
+  },
+  "bom": {
+    "path": "ARTIFACT_BOM.json",
+    "bytes": 8305,
+    "sha256": "B0971DE674940F9DAF78C9826D8FC35707EE06D12B4CE9041C07132FDE5C8D6B"
+  },
+  "output": {
+    "path": "official-host-runtime.mjs",
+    "bytes": 1829875,
+    "sha256": "EBB262FE6364E3F982381F6554812EC2FC308030842711A916AE4F4357F99FEC"
+  },
+  "verification": {
+    "artifactInventory": "ARTIFACT_BOM.json",
+    "validator": "npm run validate:plugin",
+    "nativeDependencyClosure": "PARTIAL",
+    "resourceClosure": "PARTIAL",
+    "redistributionReview": "PARTIAL",
+    "artifactReproducibility": "DETERMINISTIC_SAME_SOURCE_TREE"
+  }
+}

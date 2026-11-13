@@ -952,7 +952,7 @@ test("production asset verification fails closed for absent and invalid shipped 
       root,
       "vendor",
       "official-host",
-      "win32-x64-node24.16.0-zcode3.18.0-b95ebaff",
+      "win32-x64-node24.16.0-zcode3.18.2-fec97590",
     );
     await mkdir(path.join(vendor, "app-server", "provider"), { recursive: true });
     await writeFile(invalidWorker, "", "utf8");
@@ -1080,6 +1080,7 @@ test("the shipped Host exports and native keyring closure load outside the build
     "ZCodeProtocolClient",
     "ZCodeStdioTransport",
     "createOAuthProviderRuntimeAuthService",
+    "createOfficialStartPlanAuthenticationResolver",
   ]) {
     assert.equal(typeof module[name], "function", `${name} must be exported`);
   }
