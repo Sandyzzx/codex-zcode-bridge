@@ -2,10 +2,10 @@
 
 > Status: AUTHORITATIVE
 > Last updated: 2026-11-14
-> Last verified: 2026-11-14，核对最新 `origin/preview` 的 Official Host + R7 Runtime Events/Usage 生产链、Host 内中断恢复，以及 ADR-037 官方认证复用的目标和未决边界；官方认证复用生产实现、3.18.x 兼容矩阵和安装制品后的真实 Start Plan E2E 尚待单独验收。
-> Verified against: `9bec5a27d` + ADR-037 acceptance documentation；当前固定上游仍为 ZCode `3.18.0` / `b95ebaffeab641907b38652f45c1502bd762972d`，目标上游为 `3.18.2` / `fec975905a2abd4c07e35c40d51fa097a2258ec9`，AppServer `0.17.1`。
+> Last verified: 2026-11-14，核对 `origin/preview` 的 Official Host + R7 生产链、Host 内中断恢复，以及当前本地 ADR-037 候选的 ZCode 3.18.2 只读认证接线；3.18.x 安装矩阵和真实 Start Plan E2E 仍未验证。
+> Verified against: `9bec5a27d` + `2d83aeef` ADR-037 acceptance documentation；已发布 Preview.5 固定 ZCode `3.18.0` / `b95ebaffeab641907b38652f45c1502bd762972d`，当前本地候选固定 `3.18.2` / `fec975905a2abd4c07e35c40d51fa097a2258ec9`，AppServer `0.17.1`。
 
-本文件描述 Preview.5 的生产架构。Windows x64 已默认切换到官方 Host 路径，R7 Runtime Events/Usage 复用同一 SQLite Authority。公开合同继续以 [INTERFACES.md](INTERFACES.md) 为准，宿主和运行配置分别见 [SHARED_CORE.md](SHARED_CORE.md) 与 [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md)。
+本文件描述已发布 Preview.5 的生产架构和当前认证复用候选的增量。Windows x64 已默认切换到官方 Host 路径，R7 Runtime Events/Usage 复用同一 SQLite Authority；当前候选只替换 Start Plan 认证来源并升级固定 Host，不改变任务生命周期。公开合同继续以 [INTERFACES.md](INTERFACES.md) 为准，宿主和运行配置分别见 [SHARED_CORE.md](SHARED_CORE.md) 与 [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md)。
 
 ## 单一生产链
 
@@ -49,7 +49,7 @@ Recovery 由 SQLite 持久事实和当前 Host 共同协调，并可在 Host 存
 
 ## 官方 Host、账户与清理
 
-固定制品入口、`official-host-runtime.mjs`、AppServer、builtin provider 配置和 Windows helper 均来自候选包内目录，不能由环境变量或持久设置重定向到用户 Desktop 安装。Adapter 在启动前验证文件身份并拒绝外来 AppServer 入口。当前固定制品只支持 Windows x64、Node `24.16.x`；其他平台在构造官方 Host 路径时 fail closed。
+固定制品入口、`official-host-runtime.mjs`、AppServer、builtin provider 配置和 Windows helper 均来自候选包内目录，不能由环境变量或持久设置重定向到用户 Desktop 安装。Adapter 在启动前验证文件身份并拒绝外来 AppServer 入口。当前固定制品只在 Windows x64、Node `24.16.0` 上完成构建、加载与回归；其他 Node 24 patch level、平台和 Desktop 安装组合保持 `NOT_VERIFIED`，非 Windows x64 在构造官方 Host 路径时 fail closed。
 
 官方 `ZCodeAgentProcessManager` 独占正常 Runtime/AppServer/helper 生命周期。Bridge 单独捕获官方 Runtime root PID 和精确 fingerprint，并在 close 后独立验证原 Worker identity 与 recorded process tree。官方 close status/stage、错误 code/name、manager residual process count、tree-scan status 与 Bridge Cleanup outcome 分开保存；有界 close 诊断进入 execution proof 和 SQLite `cleanup_verified` 事件，任意错误 message 不持久化。`dispose()` 或带错误的 `close()` resolved 不能单独生成 `cleanup_verified`。
 
@@ -59,7 +59,7 @@ Recovery 由 SQLite 持久事实和当前 Host 共同协调，并可在 Host 存
 
 Start Plan 每任务只执行一次权威 Billing GET，后续 Private Lease 复用同一 account/provider/model/credential 绑定的 verdict；凭据、Provider 或模型变化必须重新授权。Coding Plan 保持官方账户/API Key 路径，不经过 Start Plan Billing。ADR-030 的 Private Lease/HANDLE/ACK、fail-closed 和不跨任务缓存继续有效。
 
-[ADR-037](decisions/ADR-037-official-zcode-authentication-reuse.md) 已接受下一阶段的认证所有权：官方 Host 应统一拥有 credential format、keyring、OAuth refresh、登录主体、BigModel/Z.ai/`zai_cn` 映射和请求认证；Bridge 只消费一次任务所需的短期 Start Plan 认证材料，并继续拥有 Billing verdict、Private Lease 和全部任务生命周期。当前 Preview.5 尚未完成该接线：Start Plan 仍由 Bridge 读取官方凭据，固定 Host 仍是 ZCode `3.18.0`，没有 3.18.2 的 `loadStartPlanMaterial` 或 `zai_cn` 映射。研究另确认普通官方读取会迁移 `enc:v1`，因此目标实现还必须提供无迁移、无 keyring 写入的官方 Host 兼容入口；该能力当前为 `NOT_AVAILABLE / NOT_IMPLEMENTED`。
+[ADR-037](decisions/ADR-037-official-zcode-authentication-reuse.md) 已接受且当前本地候选已实现认证所有权：固定 ZCode 3.18.2 Host 统一拥有 credential format、keyring、OAuth refresh、登录主体、BigModel/Z.ai/`zai_cn` 映射和请求认证；Bridge 只消费一次任务所需的 Start Plan 投影，并继续拥有 Billing verdict、Private Lease 和全部任务生命周期。该 Host 的只读路径使用官方 cipher/repo，禁止 v1→v2 migration、credentials 写回、source marker 变更和新 key 创建；过期 JWT 的 refresh 才经过 ADR-033 事务。v1、v2:env、v2:os、损坏容器、未知格式和冷进程字节不变已有合成证据；真实 Windows Keyring、真实 OAuth/账户和真实 Start Plan 仍未验证。
 
 [ADR-033](decisions/ADR-033-official-account-refresh-coordination.md) 的账户 refresh 协调已进入固定上游 patch：independent profile-scoped lock、获取锁后重读、网络请求前 dispatch marker、单次网络刷新、expected-snapshot/CAS 发布、timeout 与 stale-lock 恢复、不重试可能已消费的一次性 token、live runtime-header 更新，以及 A→B→A 和迟到响应隔离。该行为在合成矩阵中通过；真实 OAuth/account/model/Start Plan/Billing 仍为 `NOT_RUN`。
 
@@ -69,10 +69,10 @@ Fresh root 继续通过 stage SQLite、pending marker 和原子 publication 初�
 
 自动升级属于生产 Lifecycle 启动路径。直接调用 Store 打开 v13 时仍返回带离线升级指引的 `schema_upgrade_required`；不能据此声称所有 Store API 都会自动迁移。未知 schema、损坏库、未解释现场和 writer 活跃状态仍 fail closed。
 
-发布包包含 Bridge、Worker、Thin Waiter、离线 v14 升级命令、v13/v14 Schema、Administrative Recovery CLI、浏览器后端，以及固定官方 Host 制品。运行时会校验 `ARTIFACT_BOM.json` 与 shipped files；构建来源、patch 顺序和哈希见研究目录的 [制品 BOM](research/zcode-official-host-integration-v1/SOURCE_ARTIFACT_BOM.md)。`@napi-rs/keyring` 与 `keyring-win32-x64-msvc` 的 6 个 native closure/license/metadata 文件已通过精确 `.gitignore` 例外纳入包；detached clean checkout 已验证存在性、Host exports、native 加载和 BOM hash。
+发布包包含 Bridge、Worker、Thin Waiter、离线 v14 升级命令、v13/v14 Schema、Administrative Recovery CLI、浏览器后端，以及固定官方 Host 制品。运行时会校验 `ARTIFACT_BOM.json` 与 shipped files；当前 3.18.2 候选构建还会把三项有序 patch 重放到固定源码 HEAD，并要求生成的树与实际源码树完全相同，随后记录 aggregate diff。`@napi-rs/keyring` 与 `keyring-win32-x64-msvc` 的 6 个 native closure/license/metadata 文件继续通过精确 `.gitignore` 例外纳入包；当前机器完成 Node 24.16.0 native load 与 BOM hash 验证。
 
 ## 发布边界
 
-`2.0.0-preview.5` 的 `package.json`、`package-lock.json`、插件 manifest、MCP server version、固定官方 Host、BOM、Runtime Events Schema 与 Administrative Recovery CLI 必须由同一 Tag 和 Release asset 提供。实现、完整回归和发布制品身份通过，不证明其他平台或所有真实账户组合。
+已发布 `2.0.0-preview.5` 的 `package.json`、`package-lock.json`、插件 manifest、MCP server version、固定官方 Host、BOM、Runtime Events Schema 与 Administrative Recovery CLI 由同一 Tag 和 Release asset 提供。当前 ADR-037 分支仍是本地候选，未 Push、Merge、Tag 或 Release；其完整回归和 BOM 通过不证明 Desktop 3.18.0/3.18.1 安装组合、其他平台或真实账户。
 
-固定制品在 Windows x64、Node `24.16.0` 的固定源码树重建、same-source-tree repeatability 和提交后 clean checkout 为 `PASS`；跨机器/空缓存复现、完整动态资源闭包、再分发许可审查和官方 Host 制品升级/回滚演练仍为 `PARTIAL` 或 `NOT_RUN`。此前 R7 候选已有真实 Coding Plan E2E；安装 Preview.5 后的真实 Start Plan、Billing 与一般 Desktop Main 独立性仍是独立证据项。
+当前 3.18.2 候选在 Windows x64、Node `24.16.0` 的固定源码树重建、ordered-patch replay、same-source-tree repeatability 和 BOM 校验为 `PASS`；跨机器/空缓存复现、fresh 3.18.2 Windows helper rebuild、完整动态资源闭包、再分发许可审查和正式升级/回滚演练仍为 `PARTIAL` 或 `BLOCKED`。真实 Coding Plan 历史证据不能替代当前认证候选的 Start Plan、Billing、OAuth、模型与一般 Desktop Main 独立性验收。
