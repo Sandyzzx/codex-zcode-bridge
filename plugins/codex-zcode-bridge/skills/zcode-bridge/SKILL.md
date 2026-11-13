@@ -6,9 +6,9 @@ description: 用户明确要求使用 ZCode/Codex ZCode Bridge、查询或继续
 # ZCode Bridge — Master Skill
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-11
-> Last verified: 2026-11-11，核对 Preview.3 SQLite-only 架构、MCP schema、模型路由、Prompt Builder、授权/恢复边界与渐进加载路由；真实 Host/生产恢复未由本轮认证。
-> Verified against: 372e90622772b070357a278f1da3dea58fa42dee（基线；本候选离线证据见 docs/research/master-skill-simplification-20261111.md）
+> Last updated: 2026-11-13
+> Last verified: 2026-11-13，核对 Preview.5 SQLite-only 架构、Official Host、R7 Runtime Events/Usage、MCP schema、模型路由、授权/恢复边界与渐进加载路由；安装制品真实 Start Plan 待单独验收。
+> Verified against: 3a95e47b2688d06e29f3bca441d1c9bcaaca2e4f + Preview.5 version/documentation changes
 > Scope: Master 授权、派发、监控、独立验收与恢复；不修改 Bridge TaskPackage Schema 或 MCP 工具 API。
 
 ## 职责与授权

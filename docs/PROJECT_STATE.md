@@ -1,17 +1,16 @@
 # Project State
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-12
-> Last verified: 2026-11-12，核对了同步最新 `origin/preview` 后的 Preview.4 源码候选、固定官方 Host 制品、自动 SQLite v13→v14 升级、936 项完整隔离回归、stress gate、clean checkout 和当前候选独立 Astra 审查；真实账户、产品性能与官方制品升级/回滚演练未运行。
-> Verified against: `ba25f83722094ef3428a04202749377cc9b6e643`（tree `b4573bb6f1143ce6a3081a56ce2fbf968a243e35`）+ documentation changes
+> Last updated: 2026-11-13
+> Last verified: 2026-11-13，核对 PR #85 合并后的 Preview.5 源码与固定制品、Official Host、R7 Runtime Events/Usage、952 项完整隔离回归、stress gate、clean checkout 与四个 CI 平台 job；安装 Preview.5 后的真实 Start Plan E2E 尚待单独验收。
+> Verified against: `3a95e47b2688d06e29f3bca441d1c9bcaaca2e4f` + Preview.5 version/documentation changes
 
-当前有已发布基线和源码候选两种状态：
+当前发布状态：
 
-- Stable `v1.6.0`：Tag `codex-zcode-bridge-v1.6.0`，面向普通用户，不包含 Start Plan 支持。
-- Preview `2.0.0-preview.3`：已发布预览基线，Tag `codex-zcode-bridge-preview-v2.0.0-preview.3`。
-- Preview `2.0.0-preview.4`：当前源码候选。`package.json`、`package-lock.json`、插件 manifest 和 MCP server version 已更新，但没有发布 Tag。本文件不把候选称为已发布版本。
+- Stable `v1.7.1`：Tag `codex-zcode-bridge-v1.7.1`。
+- Preview `2.0.0-preview.5`：Tag `codex-zcode-bridge-preview-v2.0.0-preview.5`；追加 Official Host、R7 Runtime Events/Usage、v14 兼容迁移与 Administrative Recovery 修复。
 
-## 当前候选生产架构
+## 当前生产架构
 
 - 一个 SQLite Task Authority（Schema v14）、一个 Lifecycle Manager、一条 Worker → 官方 Host 生产链。
 - Windows x64 生产 Worker 默认使用 `OfficialHostAdapter`。固定官方 Host module 调用 `ZCodeAgentProcessManager`，后者启动 Windows helper 与 AppServer；Bridge 不复制 AgentRuntime、Prompt、Tools 或 Provider。Linux/macOS direct Adapter 只保留 CI/合成覆盖，其他平台 fail closed（ADR-035）。
@@ -19,6 +18,7 @@
 - Result、进程退出、Cleanup 与 Release 是不同事实。官方 close resolved 不能单独授权 Release；exact Worker identity、recorded-tree scan、resource facts、Cleanup Digest 和现有 CAS 仍然必需。
 - Attention/Thin Waiter 读取同一 SQLite Authority；`zcode_doctor` 也绑定该 Authority。
 - 生产 Lifecycle Gate 在 bootstrap lock 内自动升级已有 v13 Authority 到 v14。离线副本升级工具继续保留；直接 Store 打开 v13 仍要求显式离线升级。
+- R7 在同一 v14 Authority 内增加 `runtime_task_events`。Worker 只通过一次性 fd14 提交 Runtime observation；Manager 从持久 Task/Attempt/Generation/Claim 派生绑定，SQLite 负责 sequence 幂等、stale-Attempt 拒绝和统一 public cursor。`zcode_events`、`zcode_feedback` 与 Result 共用这些事实，但 Lifecycle Event 与 Runtime Event 仍分开。
 
 固定官方输入为 ZCode `3.18.0`、commit `b95ebaffeab641907b38652f45c1502bd762972d`、tree `d7ebeb994cb8f46b16761fc9c550ae3f6e039c3d` 和 AppServer `0.17.1`。当前随包制品只提供 Windows x64、Node `24.16.0` 组合。
 
@@ -29,7 +29,7 @@
 - 两条路径最终都由官方 ZCode AppServer 执行；Bridge 不复制 AppServer 的 Provider 请求构造。
 - 账户 refresh 使用固定上游 patch 的 profile-scoped lock、lock-time reread、一次远端刷新和 CAS 发布。该协调已由合成竞争矩阵验证，但没有执行真实 OAuth、账户轮换、Start Plan 或 Billing 请求。
 
-Preview.3 的历史真实证据仍只覆盖 Windows、官方 AppServer `0.17.1`、Provider `account:bigmodel-start-plan`、模型 `GLM-5.3-Flash`：3 次主 Turn 模型迭代均 HTTP `200`，Write/Read、有效 AgentReport、Result Commit/Cleanup/Release 和每任务 1 次 Billing GET 均被记录。它属于既有安装版路径，不是 Preview.4 固定官方制品或真实账户 E2E 证据。
+Preview.3 的 Start Plan 历史证据覆盖 Windows、官方 AppServer `0.17.1`、Provider `account:bigmodel-start-plan`、模型 `GLM-5.3-Flash`：3 次主 Turn 模型迭代均 HTTP `200`，Write/Read、有效 AgentReport、Result Commit/Cleanup/Release 和每任务 1 次 Billing GET 均被记录。一个此前 R7 候选另通过了真实 Coding Plan Task，证明 Official Host、Runtime Events/Usage、工具调用、Result、Cleanup 与 Release。两者不能替代安装 Preview.5 后的 Start Plan E2E。
 
 ## 验证状态
 
@@ -40,21 +40,23 @@ Preview.3 的历史真实证据仍只覆盖 Windows、官方 AppServer `0.17.1`�
 | 16 MiB raw frame | `PASS` | 固定上游 7/7 合成测试，覆盖 exact/+1、partial、UTF-8 与 pending RPC |
 | 账户 refresh coordination | `PASS` | 固定上游 12/12 合成测试；真实账户与网络轮换 `NOT_RUN` |
 | `OfficialHostAdapter` 定向行为 | `PASS` | 当前 official-host/plugin/platform 套件 32/32；focused contract 复跑 64/64 |
+| R7 Runtime Events/Usage | `PASS` | fd14 单向通道、v14 additive schema、sequence/cursor、stale Attempt、Feedback/Result 合成与旧 v14 兼容测试通过 |
 | SQLite 自动 v13→v14 升级与恢复 | `PASS` | 测试范围；含 occupied Attempt/Hold、rename/publication 中断 |
 | 完整 Node/native/resource 闭包 | `PARTIAL` | 6 个 keyring 文件已在 clean checkout 解析、native load 并与 BOM bytes/hash 一致；完整动态资源闭包仍未认证 |
 | 正常 cleanup 的 native/resource 闭包 | `PARTIAL` | exact identity、tree scan 与 CAS 有定向证据；一般外部资源和 crash 矩阵未完成 |
 | 再分发/许可审查 | `PARTIAL` | 文件与 NOTICE 已纳入 BOM，逐项发布许可结论未完成 |
 | Official Host 制品升级/回滚演练 | `NOT_RUN` | 与 SQLite v13→v14 测试不是同一项 |
-| 真实 OAuth/account/model/Start Plan/Billing | `NOT_RUN` | 本候选未执行真实服务请求 |
+| 真实 Coding Plan + Official Host | `PASS` | 此前 R7 候选完成一次真实 Task：模型、工具、Events、Usage、Result、Cleanup、Release 均通过；不替代 Preview.5 安装后验收 |
+| 真实 Start Plan + Billing（Preview.5） | `NOT_RUN` | Preview.5 发布后单独授权、安装后执行；不得用 Preview.3 或 Coding Plan 替代 |
 | 一般 Desktop Main 独立性 | `NOT_RUN` | 合成路径不证明完整资源与身份闭包 |
-| 当前候选完整回归 | `PASS` | 最终 `test:affected` 选择 `FULL_SUITE`：936 项，935 pass、0 fail、1 skip；stress 3/3 |
-| 当前候选独立 Astra review | `APPROVED` | 审查实际 diff、BOM、原始 Git bytes、Host/native 加载与 936 项回归；未发现本候选引入的 P0/P1/P2 |
+| 当前合并回归 | `PASS` | PR #85 最终 `test:affected` 选择 `FULL_SUITE`：952 项，950 pass、0 fail、2 skip；Administrative Recovery focused 14/14 |
+| 当前合并 CI | `PASS` | Windows/Ubuntu Verify 与 SQLite resource matrix 四个 job 全部成功 |
 
 ## 明确边界
 
 当前运行仍按受信任的单用户 Windows 本地部署设计。任务使用固定 `yolo` profile，以当前账户权限执行；路径声明、任务 Prompt 和 Worktree 不是 OS 安全沙箱。
 
-真实 Start Plan 模型请求、其他 Start Plan 模型、CAPTCHA 自动处理、unusual-activity 处理和跨平台生产认证没有被 Preview.4 候选验证。Linux/macOS 仅有其他 Bridge 路径的合成或 CI 历史覆盖；固定官方 Host 制品在非 Windows x64 上 fail closed。
+安装 Preview.5 后的真实 Start Plan 模型请求仍在发布后独立验收；其他 Start Plan 模型、CAPTCHA 自动处理、unusual-activity 处理和跨平台生产认证没有被该单一证据证明。Linux/macOS 仅有其他 Bridge 路径的合成或 CI 历史覆盖；固定官方 Host 制品在非 Windows x64 上 fail closed。
 
 固定制品构建成功、same-source-tree repeatability 与 loopback Mock 通过不能升级为产品性能或完整运行等价。性能比较只有 3 个顺序样本，路径语义不同，产品总体性能为 `UNKNOWN`。`@napi-rs/keyring` 的 6 个文件已通过 clean-checkout 打包闭包验证；完整动态资源与逐项再分发许可审查仍不能据此标为 `PASS`。
 

@@ -1,9 +1,9 @@
 # 决策路由 / Decisions
 
 > Status: AUTHORITATIVE（仅指本索引）
-> Last updated: 2026-11-12
-> Last verified: 2026-11-12，核对 ADR-032–035 的候选实现状态、ADR-030 保持不变，以及同步最新 `origin/preview` 后的完整回归。
-> Verified against: `ba25f83722094ef3428a04202749377cc9b6e643`（tree `b4573bb6f1143ce6a3081a56ce2fbf968a243e35`）+ documentation changes
+> Last updated: 2026-11-13
+> Last verified: 2026-11-13，核对 ADR-032–035 的 Preview.5 实现状态、ADR-030 保持不变、R7 集成及完整回归。
+> Verified against: `3a95e47b2688d06e29f3bca441d1c9bcaaca2e4f` + Preview.5 version/documentation changes
 
 先读当前 [架构](../ARCHITECTURE.md)/[接口](../INTERFACES.md)，只在需要解释取舍时加载对应决策。文件保持原路径和历史正文；Partially superseded 的标注优先于历史段落。
 
@@ -21,20 +21,20 @@
 | Recovery | [018](ADR-018-administrative-abandonment-of-cleanup-incomplete-hold.md)、[024](ADR-024-scoped-sqlite-hold-and-local-cleanup-recovery.md) | 行政兜底与 Operation-scoped Hold/清理恢复 |
 | 配置/诊断 | [021](ADR-021-zcode-path-discovery.md)、[022](ADR-022-authority-bound-doctor.md) | ZCode 路径发现；诊断绑定 SQLite |
 | Attention | [025](ADR-025-sqlite-attention-unified-waiting.md) | SQLite snapshot、被动等待与 Thin Waiter |
-| Result | [026](ADR-026-sqlite-result-contract.md) | 32 MiB Result、256 KiB envelope、v14；正文早于 Preview.4 自动升级实现并保持原文 |
+| Result | [026](ADR-026-sqlite-result-contract.md) | 32 MiB Result、256 KiB envelope、v14；正文早于自动升级实现并保持原文 |
 | 期限 | [027](ADR-027-execution-and-cleanup-deadlines.md) | 执行、交付、清理分工 |
 | Launch | [028](ADR-028-pre-intent-workspace-refusal.md) | Intent 前拒绝与 Intent 后 unknown |
 | 退役/Core | [029](ADR-029-legacy-runtime-retirement.md) | 内部及公共 Core 退役；未来主版本发布 |
 | Start Plan Provider | [030](ADR-030-start-plan-provider-preflight.md) | 每任务一次权威 Billing verdict、Provider 注册门及失败清理边界；正文保持不变 |
 | Model Routing | [031](ADR-031-model-routing-v1.md) | Start Plan 别名、`prefer_startplan` 自动选路与动态凭据发现 |
-| 官方 Host | [032](ADR-032-existing-worker-official-host-integration.md) | Accepted 目标；已接线到 Preview.4 源码候选，尚未发布或完成完整验收 |
+| 官方 Host | [032](ADR-032-existing-worker-official-host-integration.md) | Accepted 且已进入 Preview.5；Windows x64 现有 Worker 内装配 Official Host |
 | 账户 Refresh | [033](ADR-033-official-account-refresh-coordination.md) | Accepted；profile-scoped lock、lock-time reread、一次远端 refresh、CAS；无 Broker |
 | 正常 Cleanup | [034](ADR-034-normal-cleanup-worker-tree-proof.md) | Accepted；官方 close 后复用 exact Worker identity、recorded-tree、resource facts、Digest 与 Release CAS |
 | 平台启用 | [035](ADR-035-worker-platform-adapter-selection.md) | Accepted；Windows x64 启用 Official Host，Linux/macOS direct 仅 CI/合成覆盖，其余 fail closed |
 
-ADR-032、ADR-033、ADR-034 和 ADR-035 的正文记录决定作出时的状态，其中 ADR-032 的“生产实现未完成”等表述没有在本次回写。当前实现状态以 [ARCHITECTURE](../ARCHITECTURE.md) 和 [Implementation Summary](../research/zcode-official-host-integration-v1/IMPLEMENTATION_SUMMARY.md) 为准：候选 Windows x64 Worker 默认使用 `OfficialHostAdapter`；Linux/macOS direct 仅保留 CI/合成覆盖；同步最新 Preview 后完整回归、提交后 clean checkout 和当前候选 Astra review 通过。真实账户、官方制品升级/回滚和发布仍未完成。
+ADR-032、ADR-033、ADR-034 和 ADR-035 的正文记录决定作出时的状态；顶部 Applicability 标注当前适用性。当前实现状态以 [ARCHITECTURE](../ARCHITECTURE.md) 和 [Implementation Summary](../research/zcode-official-host-integration-v1/IMPLEMENTATION_SUMMARY.md) 为准：Preview.5 Windows x64 Worker 默认使用 `OfficialHostAdapter`；Linux/macOS direct 仅保留 CI/合成覆盖；PR #85 合并后的完整回归与四个 CI job 通过。真实 Coding Plan 已在此前 R7 候选通过；安装 Preview.5 后的 Start Plan 和官方制品升级/回滚仍为独立证据项。
 
-Preview.4 生产 Lifecycle Gate 会在持有 bootstrap lock 时自动升级已有 SQLite v13→v14。ADR-026 正文中的“生产 Migration 不自动授权”仍是其历史决策背景；候选已实现受限的启动升级，直接 Store API 仍对不同 Schema 或未知现场 fail closed。
+Preview.5 生产 Lifecycle Gate 会在持有 bootstrap lock 时自动升级已有 SQLite v13→v14。ADR-026 正文中的“生产 Migration 不自动授权”仍是其历史决策背景；实现只开放受限的启动升级，直接 Store API 仍对不同 Schema 或未知现场 fail closed。R7 Runtime Events 作为同一 v14 Authority 的 additive 扩展，不构成第二套任务状态机。
 
 ## 历史研究草案 / Superseded direction
 
