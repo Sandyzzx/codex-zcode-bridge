@@ -1,13 +1,13 @@
 # ZCode 运行配置边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-13
-> Last verified: 2026-11-13，核对 Preview.5 的 SQLite v14 Runtime Events additive migration、Desktop/Official Host 制品选择、任务期限与容量保持边界；安装制品真实 Start Plan E2E 待单独验收。
-> Verified against: 3a95e47b2688d06e29f3bca441d1c9bcaaca2e4f + Preview.5 version/documentation changes
+> Last updated: 2026-11-14
+> Last verified: 2026-11-14，核对 ADR-037 候选的 Desktop/Official Host 版本来源、启动参数、Build ID 缺失行为、Windows x64 子进程、Start Plan 核心真实 E2E 与 Workspace 边界处置；3.18.0/3.18.1 实机安装组合仍待验收。
+> Verified against: `a754545eb83d8e314c727c3ca0df0a2d3f47325d`
 
 当前生产路径是 `node zcode.cjs app-server --stdio --surface desktop`，不是历史 CLI `--prompt --json`。任务 Adapter 与模型目录探测共用该启动合同；解析入口为 `NodeRuntimeResolver`，配置项与用户设置方法见仓库 README。
 
-Bridge 从安装的 Desktop `app.asar` 只读解析版本与 build metadata，向 AppServer 注入 `ZCODE_APP_VERSION` 与 `ZCODE_BUILD_COMMIT_ID`。缺失 metadata 时保留 Desktop surface 并省略两个身份变量；损坏 ASAR、非法版本/commit 或版本冲突按 `provider_config_invalid` fail-closed。Bridge 不硬编码 Desktop 版本，不修改 Desktop 安装，也不伪造 HTTP Header。
+若固定 AppServer 源旁存在安装版 Desktop `app.asar`，Bridge 只读解析其版本与 build metadata，并以这一对 `ZCODE_APP_VERSION` / `ZCODE_BUILD_COMMIT_ID` 为最高优先级。独立 Host 没有相邻 `app.asar` 时，`ZCODE_APP_VERSION` 取自校验后的 Official Host `ZCODE_PRODUCT_VERSION`；`ZCODE_BUILD_COMMIT_ID` 保持缺失，不从源码提交号或 AppServer CLI 版本推导。损坏 ASAR、非法或不完整身份、非法产品版本按 `provider_config_invalid` fail-closed。Bridge 不硬编码 Desktop 版本，不修改 Desktop 安装，也不伪造 HTTP Header。
 
 ## 执行与清理期限（ADR-027）
 

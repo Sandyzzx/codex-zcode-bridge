@@ -4,6 +4,9 @@ import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { RuntimeResolver, ZCodeRuntimeConfig } from "../interfaces.js";
+import {
+  withOfficialHostLaunchIdentity,
+} from "../runtime/desktop-host-launch.js";
 import { BridgeError } from "../runtime/errors.js";
 import { NodeRuntimeResolver } from "../runtime/resolver.js";
 import {
@@ -20,7 +23,7 @@ import {
 export const OFFICIAL_HOST_TRANSPORT_MAX_FRAME_BYTES = 16 * 1024 * 1024;
 
 const OFFICIAL_HOST_ASSET_RELATIVE_ROOT =
-  "./vendor/official-host/win32-x64-node24.16.0-zcode3.18.0-b95ebaff";
+  "./vendor/official-host/win32-x64-node24.16.0-zcode3.18.2-fec97590";
 
 interface OfficialHostAssetDefinition {
   readonly relativePath: string;
@@ -31,13 +34,13 @@ interface OfficialHostAssetDefinition {
 const OFFICIAL_HOST_ASSETS = {
   hostModule: {
     relativePath: "official-host-runtime.mjs",
-    bytes: 1_821_168,
-    sha256: "3F481AAE16EFF9912DAF17178B49491BD64E67C4419BFFDB59EB4B78E85EB537",
+    bytes: 1_829_872,
+    sha256: "7E2B8B772F1DD83135903B64D569D634C7E7FC6F303460E08C98E27D311B6A91",
   },
   appServerEntry: {
     relativePath: "app-server/zcode.cjs",
-    bytes: 30_999_438,
-    sha256: "DF4637F2E31AEDE37DB15B3E4E8D8BE35F59BF756E4EECFFC0A6A6B1EEDB4F2E",
+    bytes: 31_009_692,
+    sha256: "B55BA68C3B7939AFAFFB4D373D15594817AD3319FDECFBE26640CE4B218CF639",
   },
   builtinProviderConfig: {
     relativePath: "app-server/provider/zcode-builtin.json",
@@ -81,9 +84,11 @@ export interface OfficialHostAssets {
 }
 
 export interface OfficialHostModule {
+  readonly ZCODE_PRODUCT_VERSION?: string;
   readonly ZCodeAgentProcessManager: new (options: Record<string, unknown>) => OfficialHostProcessManager;
   readonly ZCodeProtocolClient: new (...args: never[]) => OfficialHostProtocolClient;
   readonly createOAuthProviderRuntimeAuthService?: OfficialHostRuntimeAuthServiceFactory;
+  readonly createOfficialStartPlanAuthenticationResolver?: OfficialStartPlanAuthenticationResolverFactory;
 }
 
 export type OfficialHostModuleSource =
@@ -103,6 +108,25 @@ export type OfficialHostRuntimeAuthServiceFactory = (options: {
     access: Record<string, unknown>,
   ) => Promise<Record<string, unknown> | null>;
 }) => OfficialHostRuntimeAuthService;
+
+export interface OfficialStartPlanAuthentication {
+  readonly accountIdentity: string;
+  readonly sessionRevision: string | null;
+  readonly requestCredential: string;
+  readonly credentialExpiresAt: number | null;
+  readonly deviceMid: string;
+}
+
+export interface OfficialStartPlanAuthenticationResolver {
+  resolveStartPlanAuthentication(input: {
+    readonly family: "bigmodel";
+    readonly signal: AbortSignal;
+  }): Promise<OfficialStartPlanAuthentication | null>;
+}
+
+export type OfficialStartPlanAuthenticationResolverFactory = (options: {
+  readonly dataBaseDir: string;
+}) => OfficialStartPlanAuthenticationResolver;
 
 interface OfficialHostProtocolClient {
   readonly isDisposed: boolean;
@@ -223,6 +247,8 @@ export function createOfficialHostClientFactory(input: {
       throw new BridgeError("provider_config_invalid", "Official Host runtime entrypoint must be the shipped bundle.");
     }
     const module = await resolveOfficialHostModule(input.moduleSource);
+    const productVersion = normalizeOfficialHostProductVersion(module.ZCODE_PRODUCT_VERSION);
+    const launchEnv = withOfficialHostLaunchIdentity(context.launch.env, { productVersion });
     const manager = new module.ZCodeAgentProcessManager({
       useSharedTaskRuntime: () => false,
       maxFrameBytes: OFFICIAL_HOST_TRANSPORT_MAX_FRAME_BYTES,
@@ -238,7 +264,7 @@ export function createOfficialHostClientFactory(input: {
         args: [assets.appServerEntryPath, ...context.launch.args],
         cwd: workspacePath,
         env: {
-          ...context.launch.env,
+          ...launchEnv,
           ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: assets.builtinProviderConfigPath,
           ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: context.config.providerPersonalConfigFile,
           ZCODE_RUNTIME_HOST_PATH: assets.runtimeHostPath,
@@ -470,6 +496,28 @@ export async function loadOfficialHostProviderRuntimeAuthFactory(
   return module.createOAuthProviderRuntimeAuthService;
 }
 
+export async function loadOfficialStartPlanAuthenticationResolverFactory(
+  workerModuleUrl: string | URL = import.meta.url,
+): Promise<OfficialStartPlanAuthenticationResolverFactory> {
+  const assets = await verifyOfficialHostAssets(workerModuleUrl);
+  const module = await loadOfficialHostModule(assets.hostModulePath);
+  if (typeof module.createOfficialStartPlanAuthenticationResolver !== "function") {
+    throw new BridgeError(
+      "provider_config_invalid",
+      "The Official Host module is missing the Start Plan authentication resolver.",
+    );
+  }
+  return module.createOfficialStartPlanAuthenticationResolver;
+}
+
+export async function loadOfficialHostProductVersion(
+  workerModuleUrl: string | URL = import.meta.url,
+): Promise<string> {
+  const assets = await verifyOfficialHostAssets(workerModuleUrl);
+  const module = await loadOfficialHostModule(assets.hostModulePath);
+  return normalizeOfficialHostProductVersion(module.ZCODE_PRODUCT_VERSION);
+}
+
 export function lazyOfficialHostAssets(
   workerModuleUrl: string | URL = import.meta.url,
 ): () => Promise<OfficialHostAssets> {
@@ -559,6 +607,17 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
+}
+
+function normalizeOfficialHostProductVersion(value: unknown): string {
+  const version = typeof value === "string" ? value.trim() : "";
+  if (!/^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$/u.test(version)) {
+    throw new BridgeError(
+      "provider_config_invalid",
+      "The Official Host module is missing a valid product version.",
+    );
+  }
+  return version;
 }
 
 function sameWorkspace(left: string, right: string): boolean {

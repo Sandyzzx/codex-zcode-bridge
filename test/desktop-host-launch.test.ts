@@ -7,6 +7,7 @@ import test from "node:test";
 import { BridgeError } from "../src/runtime/errors.js";
 import {
   buildZCodeAppServerLaunch,
+  withOfficialHostLaunchIdentity,
   ZCODE_APP_VERSION_ENV,
   ZCODE_BUILD_COMMIT_ID_ENV,
 } from "../src/runtime/desktop-host-launch.js";
@@ -68,6 +69,56 @@ test("keeps Desktop surface but omits identity variables when installed metadata
   } finally {
     await rm(fixture.root, { recursive: true, force: true });
   }
+});
+
+test("uses the trusted Official Host product version without inventing a build ID", async () => {
+  for (const productVersion of ["3.18.0", "3.18.1", "3.18.2"]) {
+    const fixture = await makeLaunchFixture(null);
+    try {
+      const base = buildZCodeAppServerLaunch(fixture.entrypoint, {
+        PATH: process.env.PATH,
+        KEEP_ME: "preserved",
+      });
+      const env = withOfficialHostLaunchIdentity(base.env, { productVersion });
+      const record = await runChild(fixture, base.args, env);
+      assert.deepEqual(record.argv, ["app-server", "--stdio", "--surface", "desktop"]);
+      assert.equal(record.env.appVersion, productVersion);
+      assert.equal(record.env.buildCommitId, null);
+      assert.equal(record.env.keepMe, "preserved");
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  }
+});
+
+test("preserves verified installed Desktop identity over the Official Host fallback", async () => {
+  const fixture = await makeLaunchFixture({ appVersion: "3.18.1", buildCommitId: "deadbeef" });
+  try {
+    const base = buildZCodeAppServerLaunch(fixture.entrypoint, { PATH: process.env.PATH });
+    const env = withOfficialHostLaunchIdentity(base.env, { productVersion: "3.18.2" });
+    const record = await runChild(fixture, base.args, env);
+    assert.equal(record.env.appVersion, "3.18.1");
+    assert.equal(record.env.buildCommitId, "deadbeef");
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("fails closed instead of mixing a partial installed identity with the Host fallback", () => {
+  assert.throws(
+    () => withOfficialHostLaunchIdentity(
+      { [ZCODE_APP_VERSION_ENV]: "3.18.2" },
+      { productVersion: "3.18.2" },
+    ),
+    providerConfigInvalid,
+  );
+});
+
+test("fails closed for an invalid Official Host product-version fallback", () => {
+  assert.throws(
+    () => withOfficialHostLaunchIdentity({}, { productVersion: "cli-0.17.1" }),
+    providerConfigInvalid,
+  );
 });
 
 test("fails closed for malformed installed metadata", async () => {
@@ -156,16 +207,16 @@ test("fails closed for structurally invalid ASAR file tables", async () => {
   }
 });
 
-test("treats a valid ASAR without build metadata as missing metadata", async () => {
+test("fails closed when an installed ASAR lacks build metadata", async () => {
   const fixture = await makeLaunchFixture(
     { appVersion: "3.17.2", buildCommitId: "a2d1ba73" },
     { omitBuildMetadata: true },
   );
   try {
-    const launch = buildZCodeAppServerLaunch(fixture.entrypoint, { PATH: process.env.PATH });
-    const record = await runChild(fixture, launch.args, launch.env);
-    assert.equal(record.env.appVersion, null);
-    assert.equal(record.env.buildCommitId, null);
+    assert.throws(
+      () => buildZCodeAppServerLaunch(fixture.entrypoint, { PATH: process.env.PATH }),
+      providerConfigInvalid,
+    );
   } finally {
     await rm(fixture.root, { recursive: true, force: true });
   }

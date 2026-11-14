@@ -7,7 +7,7 @@
 // unknown keys are stripped, so a modest field drift between the installed
 // app-server and the observed commit degrades to absent advisory data instead
 // of a hard protocol failure.
-import { z } from "zod";
+import { z } from "zod/v4";
 import { browserClientModeSchema } from "./command-metadata.js";
 import { browserSessionContextKindSchema } from "./backend.js";
 import { browserCommandSchema } from "./commands.js";

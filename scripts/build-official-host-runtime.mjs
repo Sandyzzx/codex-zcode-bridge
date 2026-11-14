@@ -14,25 +14,36 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 
-const SOURCE_COMMIT = "b95ebaffeab641907b38652f45c1502bd762972d";
-const SOURCE_TREE = "d7ebeb994cb8f46b16761fc9c550ae3f6e039c3d";
-const SOURCE_VERSION = "3.18.0";
+const SOURCE_COMMIT = "fec975905a2abd4c07e35c40d51fa097a2258ec9";
+const SOURCE_TREE = "5e90fec80706b8381f94e4eef48cf821b9868916";
+const SOURCE_VERSION = "3.18.2";
 const BUILD_NODE = "24.16.0";
 const HOST_BUNDLER = "0.28.2";
-const SCOPE = "win32-x64-node24.16.0-zcode3.18.0-b95ebaff";
+const SCOPE = "win32-x64-node24.16.0-zcode3.18.2-fec97590";
+const PATCH_ROOT = "upstream/zcode-3.18.2/patches/";
 const HOST_SOURCE_FILES = [
+  "packages/shared/src/credential-security/contract.ts",
+  "packages/shared/src/credential-security/systemCredentialCipher.ts",
+  "packages/shared/src/version.ts",
+  "packages/services/src/credential/credentialService.ts",
+  "packages/services/src/oauth/repo/oauthCredentialRepo.ts",
   "packages/services/src/official-host/runtimeHostEntry.ts",
+  "packages/services/src/official-host/startPlanAuthentication.ts",
   "packages/services/src/zcode-agent/zcodeAgentProcessManager.ts",
   "packages/services/src/zcode-agent/zcodeProtocolClient.ts",
   "packages/services/src/zcode-agent/zcodeStdioTransport.ts",
   "packages/services/src/model-provider/oauthProviderRuntimeAuthService.ts",
   "packages/services/src/oauth/oauthService.ts",
+  "packages/services/src/oauth/providers/providerAdapter.ts",
+  "packages/services/src/telemetry/telemetryCore.ts",
 ];
 const HOST_EXPORTS = [
+  "ZCODE_PRODUCT_VERSION",
   "ZCodeAgentProcessManager",
   "ZCodeProtocolClient",
   "ZCodeStdioTransport",
   "createOAuthProviderRuntimeAuthService",
+  "createOfficialStartPlanAuthenticationResolver",
 ];
 const NATIVE_VENDOR_FILES = [
   {
@@ -92,16 +103,19 @@ if (!sourceArg) {
   throw new Error("usage: node scripts/build-official-host-runtime.mjs --source <fixed-upstream-worktree>");
 }
 const sourceRoot = path.resolve(sourceArg);
+const sourcePackage = JSON.parse(await readFile(path.join(sourceRoot, "package.json"), "utf8"));
+const sourceProductVersion = sourcePackage?.version;
 
 assertEqual(process.version, `v${BUILD_NODE}`, "build Node version");
 assertEqual((await import("esbuild/package.json", { with: { type: "json" } })).default.version, HOST_BUNDLER, "esbuild version");
-assertEqual(JSON.parse(await readFile(path.join(sourceRoot, "package.json"), "utf8")).version, SOURCE_VERSION, "source version");
+assertEqual(sourceProductVersion, SOURCE_VERSION, "source version");
 assertEqual(await git(sourceRoot, ["rev-parse", "HEAD"]), SOURCE_COMMIT, "source commit");
 assertEqual(await git(sourceRoot, ["rev-parse", "HEAD^{tree}"]), SOURCE_TREE, "source tree");
 
 const bom = JSON.parse(await readFile(artifactBomPath, "utf8"));
+assertEqual(bom.scope?.zcodeVersion, sourceProductVersion, "BOM product version");
 const patches = await validateArtifactBomPatches(bom);
-await validateSourceState(sourceRoot, patches);
+const sourceState = await validateSourceState(sourceRoot, patches);
 const nativeFiles = await installNativeClosure(sourceRoot);
 
 const stagingRoot = await mkdtemp(path.join(repoRoot, ".run", "official-host-build-"));
@@ -111,10 +125,11 @@ try {
   await build({
     stdin: {
       contents: [
+        'export { ZCODE_VERSION as ZCODE_PRODUCT_VERSION } from "./packages/shared/src/version.ts";',
         'export { ZCodeAgentProcessManager } from "./packages/services/src/zcode-agent/zcodeAgentProcessManager.ts";',
         'export { ZCodeProtocolClient } from "./packages/services/src/zcode-agent/zcodeProtocolClient.ts";',
         'export { ZCodeStdioTransport } from "./packages/services/src/zcode-agent/zcodeStdioTransport.ts";',
-        'export { createOAuthProviderRuntimeAuthService } from "./packages/services/src/official-host/runtimeHostEntry.ts";',
+        'export { createOAuthProviderRuntimeAuthService, createOfficialStartPlanAuthenticationResolver } from "./packages/services/src/official-host/runtimeHostEntry.ts";',
       ].join("\n"),
       resolveDir: sourceRoot,
       sourcefile: "official-host-runtime-entry.ts",
@@ -127,6 +142,9 @@ try {
     target: "node24",
     sourcemap: false,
     legalComments: "eof",
+    define: {
+      __ZCODE_VERSION__: JSON.stringify(sourceProductVersion),
+    },
     logLevel: "info",
     external: ["@napi-rs/keyring"],
     banner: {
@@ -139,8 +157,14 @@ try {
   await rename(stagedOutput, outputPath);
   replaced = true;
 
-  const sourceAggregateDiffSha256 = await aggregateSourceDiffSha256(sourceRoot);
-  updateBomOutput(bom, outputBytes.length, outputSha256, nativeFiles);
+  const sourceAggregateDiffSha256 = sourceState.aggregateDiffSha256;
+  updateBomOutput(
+    bom,
+    outputBytes.length,
+    outputSha256,
+    nativeFiles,
+    sourceAggregateDiffSha256,
+  );
   await writeJson(artifactBomPath, bom);
   const bomBytes = await readFile(artifactBomPath);
 
@@ -218,7 +242,7 @@ async function validateArtifactBomPatches(value) {
     const patch = ordered[index];
     if (patch.order !== index + 1
       || typeof patch.path !== "string"
-      || !patch.path.startsWith("upstream/zcode-3.18.0/patches/")
+      || !patch.path.startsWith(PATCH_ROOT)
       || path.isAbsolute(patch.path)
       || !Number.isSafeInteger(patch.bytes)
       || patch.bytes < 1
@@ -235,7 +259,15 @@ async function validateArtifactBomPatches(value) {
     if (bytes.length !== patch.bytes || sha256(bytes) !== patch.sha256) {
       throw new Error(`Official Host patch failed byte or SHA-256 validation: ${patch.path}`);
     }
-    ordered[index] = { ...patch, absolutePath: patchPath };
+    const sidecarPath = `${patchPath}.sha256`;
+    const sidecar = await readFile(sidecarPath, "utf8");
+    const sidecarMatch = /^([0-9A-F]{64})  ([^\r\n]+)\r?\n?$/u.exec(sidecar);
+    if (!sidecarMatch
+      || sidecarMatch[1] !== patch.sha256
+      || sidecarMatch[2] !== path.basename(patch.path)) {
+      throw new Error(`Official Host patch sidecar disagrees with its BOM: ${patch.path}`);
+    }
+    ordered[index] = { ...patch, absolutePath: patchPath, sidecarPath };
   }
   return ordered;
 }
@@ -274,20 +306,47 @@ async function validateSourceState(sourceRootPath, patchEntries) {
       `fixed source tree does not contain exactly the ordered patch set; missing=${JSON.stringify(missing)} unexpected=${JSON.stringify(unexpected)}`,
     );
   }
-}
 
-async function aggregateSourceDiffSha256(sourceRootPath) {
   const proofRoot = await mkdtemp(path.join(repoRoot, ".run", "official-host-source-proof-"));
-  const indexPath = path.join(proofRoot, "index");
+  const expectedIndexPath = path.join(proofRoot, "expected-index");
+  const actualIndexPath = path.join(proofRoot, "actual-index");
   try {
-    await git(sourceRootPath, ["read-tree", "HEAD"], { GIT_INDEX_FILE: indexPath });
-    await git(sourceRootPath, ["add", "-A"], { GIT_INDEX_FILE: indexPath });
+    await git(sourceRootPath, ["read-tree", "HEAD"], { GIT_INDEX_FILE: expectedIndexPath });
+    for (const patch of patchEntries) {
+      await git(
+        sourceRootPath,
+        ["apply", "--cached", "--whitespace=nowarn", patch.absolutePath],
+        { GIT_INDEX_FILE: expectedIndexPath },
+      );
+    }
+    const expectedTree = await git(
+      sourceRootPath,
+      ["write-tree"],
+      { GIT_INDEX_FILE: expectedIndexPath },
+    );
+
+    await git(sourceRootPath, ["read-tree", "HEAD"], { GIT_INDEX_FILE: actualIndexPath });
+    await git(sourceRootPath, ["add", "-A"], { GIT_INDEX_FILE: actualIndexPath });
+    const actualTree = await git(
+      sourceRootPath,
+      ["write-tree"],
+      { GIT_INDEX_FILE: actualIndexPath },
+    );
+    if (actualTree !== expectedTree) {
+      throw new Error(
+        `fixed source tree content does not match the ordered patch set; expected-tree=${expectedTree} actual-tree=${actualTree}`,
+      );
+    }
     const diff = await git(
       sourceRootPath,
       ["diff", "--cached", "--no-ext-diff", "--binary", "--full-index", "HEAD"],
-      { GIT_INDEX_FILE: indexPath },
+      { GIT_INDEX_FILE: actualIndexPath },
     );
-    return sha256(Buffer.from(diff));
+    return {
+      aggregateDiffSha256: sha256(Buffer.from(diff)),
+      expectedTree,
+      actualTree,
+    };
   } finally {
     await rm(proofRoot, { recursive: true, force: true });
   }
@@ -312,7 +371,7 @@ async function installNativeClosure(sourceRootPath) {
   return entries;
 }
 
-function updateBomOutput(bomValue, bytes, hash, nativeEntries) {
+function updateBomOutput(bomValue, bytes, hash, nativeEntries, sourceAggregateDiffSha256) {
   const hostModulePath = "official-host-runtime.mjs";
   if (!Array.isArray(bomValue.files)) throw new Error("ARTIFACT_BOM.json is missing its file inventory");
   const entry = bomValue.files.find((file) => file.path === hostModulePath);
@@ -321,6 +380,7 @@ function updateBomOutput(bomValue, bytes, hash, nativeEntries) {
   entry.sha256 = hash;
   bomValue.build.hostModuleCommand = "npm run build:official-host -- --source <fixed-upstream-worktree>";
   bomValue.build.hostModuleInputs = HOST_SOURCE_FILES;
+  bomValue.build.sourceAggregateDiffSha256 = sourceAggregateDiffSha256;
   for (const nativeEntry of nativeEntries) {
     const existing = bomValue.files.find((file) => file.path === nativeEntry.path);
     if (existing) Object.assign(existing, nativeEntry);
