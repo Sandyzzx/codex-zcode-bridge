@@ -2,8 +2,8 @@
 
 > Status: AUTHORITATIVE（仅指本索引）
 > Last updated: 2026-11-14
-> Last verified: 2026-11-14，核对 `origin/preview` 的生产链、ADR-032–037，以及当前本地候选中的 ZCode 3.18.2 只读认证复用、有序 patch replay、BOM 和合成回归；实际 Desktop 组合与真实 Start Plan E2E 仍未验收。
-> Verified against: `9bec5a27d` + `2d83aeef` ADR-037 acceptance documentation
+> Last verified: 2026-11-14，核对 `origin/preview` 的生产链、ADR-032–037，以及当前本地候选的 Coding Plan/Start Plan 核心真实 E2E、Workspace 边界处置、ZCode 3.18.2 只读认证复用、隔离升级回滚、BOM 和完整回归；3.18.0/3.18.1 实机安装组合仍未验收。
+> Verified against: `a754545eb83d8e314c727c3ca0df0a2d3f47325d`；base `origin/preview` = `9bec5a27d6182a83620c32105e80210f8731f514`
 
 English users start at [README.md](../README.md). 技术文档为中文。先读当前事实，按问题加载合同；研究或历史材料不作为当前实现或发布证明。
 
@@ -40,9 +40,9 @@ AUTHORITATIVE 描述当前事实或合同；DECISION 记录已批准取舍；RES
 
 当前 Preview 发布制品为 `2.0.0-preview.5`。`package.json`、`package-lock.json`、插件 manifest、MCP server version、固定官方 Host/BOM 和 R7 Runtime Events/Usage 均来自同一版本提交与 Tag。旧 JSON/CLI 生产链退役决策见 [ADR-029](decisions/ADR-029-legacy-runtime-retirement.md)。
 
-ADR-032 已接受且已在 Preview.5 实现“现有 Worker 内官方 Host”。ADR-033 的账户 refresh 协调、ADR-034 的正常 Cleanup 复用和 ADR-035 的平台选择由固定上游 patch 与同一 Worker 实现。ADR-037 已接受“官方 Host 拥有认证、Bridge 不维护第二套凭据/身份系统”的目标；当前本地候选已实现该接线，但尚未提交到远程或发布。实际 Desktop 3.18.0/3.18.1/3.18.2 组合、真实 Start Plan、OAuth、Billing 和模型请求仍必须单独验收。
+ADR-032 已接受且已在 Preview.5 实现“现有 Worker 内官方 Host”。ADR-033 的账户 refresh 协调、ADR-034 的正常 Cleanup 复用和 ADR-035 的平台选择由固定上游 patch 与同一 Worker 实现。ADR-037 已接受“官方 Host 拥有认证、Bridge 不维护第二套凭据/身份系统”的目标；当前本地候选已实现该接线。真实 Coding Plan 完整 E2E 和 Start Plan 核心功能 E2E 已通过；历史 Start Plan 完整 E2E 因 Workspace 内 PowerShell cache 保持 FAIL。当前候选尚未提交到远程或发布，实际 Desktop 3.18.0/3.18.1/3.18.2 安装组合仍必须分别验收。
 
-已发布的 Preview.5 固定 ZCode `3.18.0` / `b95ebaffeab641907b38652f45c1502bd762972d`。当前本地认证复用候选固定 ZCode `3.18.2` / `fec975905a2abd4c07e35c40d51fa097a2258ec9` 与 AppServer `0.17.1`，有序 patch 集可从固定源码 HEAD 重放并生成同一源码树。Windows x64、Node `24.16.0` 的认证测试、Host 加载和完整隔离回归是候选证据，不证明该候选已经发布。六个 `@napi-rs/keyring` native closure/license/metadata 文件仍受 BOM/hash 校验；完整动态资源闭包与逐项再分发审查保持 `PARTIAL`。跨机器/空缓存可复现、fresh Windows helper rebuild、Desktop 3.18.x 安装矩阵和一般 Desktop Main 独立性仍未完成。
+已发布的 Preview.5 固定 ZCode `3.18.0` / `b95ebaffeab641907b38652f45c1502bd762972d`。当前本地认证复用候选固定 ZCode `3.18.2` / `fec975905a2abd4c07e35c40d51fa097a2258ec9` 与 AppServer `0.17.1`，有序 patch 集可从固定源码 HEAD 重放并生成同一源码树。Windows x64、Node `24.16.0` 的认证测试、Host/native 加载、完整隔离回归以及 Preview.5 → 候选 → Preview.5 隔离升级回滚已经通过。六个 `@napi-rs/keyring` native closure/license/metadata 文件仍受 BOM/hash 校验；完整动态资源闭包与逐项再分发审查保持 `PARTIAL`。跨机器/空缓存可复现、fresh Windows helper rebuild、Desktop 3.18.0/3.18.1 实机矩阵和一般 Desktop Main 独立性仍未完成。
 
 历史 Companion 研究保留原正文，但顶部“历史/被 ADR-032 替代”的适用性说明优先。旧官方 Host `ASTRA_REVIEW.md` 正文只覆盖更早候选；Preview.4 的 `APPROVED / PR_READY: YES` 结论来自 [ASTRA_REVIEW_CURRENT.md](research/zcode-official-host-integration-v1/ASTRA_REVIEW_CURRENT.md)。Preview.5 增加 PR #85 的 R7 集成、v14 兼容迁移与 Administrative Recovery 修复。
 

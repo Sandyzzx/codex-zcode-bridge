@@ -2,8 +2,8 @@
 
 > Status: AUTHORITATIVE
 > Last updated: 2026-11-14
-> Last verified: 2026-11-14，核对 ADR-037 候选的 Desktop/Official Host 版本来源、启动参数、Build ID 缺失行为及 Windows x64 子进程合成测试；真实 Desktop/Bridge A/B 与 Start Plan E2E 待单独验收。
-> Verified against: `843066ec437f0f7776e682c5893f807b2aed90a4` + Official Host context repair candidate
+> Last verified: 2026-11-14，核对 ADR-037 候选的 Desktop/Official Host 版本来源、启动参数、Build ID 缺失行为、Windows x64 子进程、Start Plan 核心真实 E2E 与 Workspace 边界处置；3.18.0/3.18.1 实机安装组合仍待验收。
+> Verified against: `a754545eb83d8e314c727c3ca0df0a2d3f47325d`
 
 当前生产路径是 `node zcode.cjs app-server --stdio --surface desktop`，不是历史 CLI `--prompt --json`。任务 Adapter 与模型目录探测共用该启动合同；解析入口为 `NodeRuntimeResolver`，配置项与用户设置方法见仓库 README。
 
