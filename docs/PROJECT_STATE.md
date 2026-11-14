@@ -2,8 +2,8 @@
 
 > Status: AUTHORITATIVE
 > Last updated: 2026-11-14
-> Last verified: 2026-11-14，核对 `origin/preview` 的 Preview.5 源码、ADR-037 当前本地候选实现、Coding Plan 完整真实 E2E、Start Plan 核心功能真实 E2E、Workspace 边界处置、Official Host 版本上下文、有序 patch replay、BOM/native load、隔离安装升级回滚与完整回归；3.18.0/3.18.1 实机安装组合仍为 `NOT_VERIFIED`。
-> Verified against: `a754545eb83d8e314c727c3ca0df0a2d3f47325d`；base `origin/preview` = `9bec5a27d6182a83620c32105e80210f8731f514`
+> Last verified: 2026-11-14，核对 `origin/preview` 的 Preview.5 源码、ADR-037 当前候选实现、Coding Plan 完整真实 E2E、Start Plan 核心功能真实 E2E、Workspace 边界处置、Official Host 版本上下文、有序 patch replay、BOM/native load、隔离安装升级回滚、完整回归与 Draft PR #94 的 Ubuntu/Windows CI；3.18.0/3.18.1 实机安装组合仍为 `NOT_VERIFIED`。
+> Verified against: `cd3b74fec2992cce1f6340236265a6f87801298b`；base `origin/preview` = `9bec5a27d6182a83620c32105e80210f8731f514`
 
 当前发布状态：
 
@@ -13,22 +13,22 @@
 ## 当前生产架构
 
 - 一个 SQLite Task Authority（Schema v14）、一个 Lifecycle Manager、一条 Worker → 官方 Host 生产链。
-- Windows x64 生产 Worker 默认使用 `OfficialHostAdapter`。已发布 Preview.5 固定 ZCode 3.18.0；当前本地 ADR-037 候选固定 ZCode 3.18.2，并增加只读 Start Plan 认证投影。固定官方 Host module 调用 `ZCodeAgentProcessManager`，后者启动 Windows helper 与 AppServer；Bridge 不复制 AgentRuntime、Prompt、Tools 或 Provider。Linux/macOS direct Adapter 只保留 CI/合成覆盖，其他平台 fail closed（ADR-035）。
+- Windows x64 生产 Worker 默认使用 `OfficialHostAdapter`。已发布 Preview.5 固定 ZCode 3.18.0；当前 ADR-037 候选固定 ZCode 3.18.2，并增加只读 Start Plan 认证投影。固定官方 Host module 调用 `ZCodeAgentProcessManager`，后者启动 Windows helper 与 AppServer；Bridge 不复制 AgentRuntime、Prompt、Tools 或 Provider。Linux/macOS direct Adapter 只保留 CI/合成覆盖，其他平台 fail closed（ADR-035）。
 - 旧 JSON TaskStore/Manager/Worker、CLI Adapter 和 GitWorktreeProvider 已从 Preview 生产执行链退役；旧 JSON 文件不由 Bridge 读取、导入或删除。
 - Result、进程退出、Cleanup 与 Release 是不同事实。官方 close resolved 不能单独授权 Release；exact Worker identity、recorded-tree scan、resource facts、Cleanup Digest 和现有 CAS 仍然必需。
 - Attention/Thin Waiter 读取同一 SQLite Authority；`zcode_doctor` 也绑定该 Authority。
 - 生产 Lifecycle Gate 在 bootstrap lock 内自动升级已有 v13 Authority 到 v14。离线副本升级工具继续保留；直接 Store 打开 v13 仍要求显式离线升级。
 - R7 在同一 v14 Authority 内增加 `runtime_task_events`。Worker 只通过一次性 fd14 提交 Runtime observation；Manager 从持久 Task/Attempt/Generation/Claim 派生绑定，SQLite 负责 sequence 幂等、stale-Attempt 拒绝和统一 public cursor。`zcode_events`、`zcode_feedback` 与 Result 共用这些事实，但 Lifecycle Event 与 Runtime Event 仍分开。
 
-已发布 Preview.5 固定官方输入为 ZCode `3.18.0`、commit `b95ebaffeab641907b38652f45c1502bd762972d`、tree `d7ebeb994cb8f46b16761fc9c550ae3f6e039c3d`。当前本地候选固定 ZCode `3.18.2`、commit `fec975905a2abd4c07e35c40d51fa097a2258ec9`、tree `5e90fec80706b8381f94e4eef48cf821b9868916` 和 AppServer `0.17.1`。候选制品只在 Windows x64、Node `24.16.0` 上完成构建与加载验证；其他 Node 24 patch level 仍是 `NOT_VERIFIED`。
+已发布 Preview.5 固定官方输入为 ZCode `3.18.0`、commit `b95ebaffeab641907b38652f45c1502bd762972d`、tree `d7ebeb994cb8f46b16761fc9c550ae3f6e039c3d`。当前候选固定 ZCode `3.18.2`、commit `fec975905a2abd4c07e35c40d51fa097a2258ec9`、tree `5e90fec80706b8381f94e4eef48cf821b9868916` 和 AppServer `0.17.1`。候选制品只在 Windows x64、Node `24.16.0` 上完成构建与加载验证；其他 Node 24 patch level 仍是 `NOT_VERIFIED`。
 
 ## 套餐与认证
 
-- **Z.ai Start Plan：** 已发布 Preview.5 使用 Bridge 的旧只读凭据发现；当前本地候选改为消费固定 Official Host 的窄认证投影，再执行实时模型权益检查，并通过单任务 Private Lease 向官方 Runtime 交付认证。Start Plan 与普通模型目录条目分离，使用 `<ModelId>-StartPlan` 别名。
+- **Z.ai Start Plan：** 已发布 Preview.5 使用 Bridge 的旧只读凭据发现；当前候选改为消费固定 Official Host 的窄认证投影，再执行实时模型权益检查，并通过单任务 Private Lease 向官方 Runtime 交付认证。Start Plan 与普通模型目录条目分离，使用 `<ModelId>-StartPlan` 别名。
 - **Z.ai Coding Plan：** 保留官方 Coding Plan 账户/API Key 路径；Start Plan 预检不改变 Coding Plan 的既有注册和执行语义。
 - 两条路径最终都由官方 ZCode AppServer 执行；Bridge 不复制 AppServer 的 Provider 请求构造。
 - 账户 refresh 使用固定上游 patch 的 profile-scoped lock、lock-time reread、一次远端刷新和 CAS 发布。该协调已由合成竞争矩阵验证；真实 Coding Plan 与 Start Plan 任务已经通过官方认证路径执行，但真实 OAuth refresh/账户轮换仍未单独验收。
-- [ADR-037](decisions/ADR-037-official-zcode-authentication-reuse.md) 已接受且当前本地候选已实现：官方 Host 统一拥有凭据解密、keyring、OAuth、账户身份和请求认证，Bridge 只消费当前任务所需的认证投影。生产源码不再包含旧的 v1/v2 AES、Keyring、账户资料、JWT payload 或 telemetry device 解析。真实 Coding Plan 完整 E2E 与 Start Plan 核心功能路径已通过，但历史完整 E2E 因 Workspace 边界保持 `FAIL`；该实现尚未发布，3.18.0/3.18.1 实机安装矩阵仍待验收。
+- [ADR-037](decisions/ADR-037-official-zcode-authentication-reuse.md) 已接受且当前候选已实现：官方 Host 统一拥有凭据解密、keyring、OAuth、账户身份和请求认证，Bridge 只消费当前任务所需的认证投影。生产源码不再包含旧的 v1/v2 AES、Keyring、账户资料、JWT payload 或 telemetry device 解析。真实 Coding Plan 完整 E2E 与 Start Plan 核心功能路径已通过，但历史完整 E2E 因 Workspace 边界保持 `FAIL`；该实现尚未发布，3.18.0/3.18.1 实机安装矩阵仍待验收。
 
 Preview.3 的 Start Plan 历史证据覆盖 Windows、官方 AppServer `0.17.1`、Provider `account:bigmodel-start-plan`、模型 `GLM-5.3-Flash`：3 次主 Turn 模型迭代均 HTTP `200`，Write/Read、有效 AgentReport、Result Commit/Cleanup/Release 和每任务 1 次 Billing GET 均被记录。ADR-037 候选在此后另通过了真实 Coding Plan 任务，以及一次真实 Start Plan 核心功能任务：官方 Auth、Billing 门禁、Private Lease、Session/Turn、真实模型、工具、AgentReport、R7 Usage、Result、Cleanup Verified 与 Release CAS 均成功。该 Start Plan 运行因 Workspace 内额外生成 PowerShell module-analysis cache 而保留 `HISTORICAL_FULL_E2E: FAIL`；Harness-only 修复和 Workspace/Cleanup 离线回归已通过，不能把历史 FAIL 改写为 PASS。
 
@@ -55,7 +55,8 @@ Preview.3 的 Start Plan 历史证据覆盖 Windows、官方 AppServer `0.17.1`�
 | 一般 Desktop Main 独立性 | `NOT_RUN` | 合成路径不证明完整资源与身份闭包 |
 | 当前认证候选回归 | `PASS — CANDIDATE` | `test:affected` 选择 `FULL_SUITE`：972 项，970 pass、0 fail、2 skip；只覆盖 Windows x64、Node 24.16.0 |
 | Official Host 启动版本上下文 | `PASS — CANDIDATE` | 有效 Desktop metadata 优先；独立 Host 使用校验后的 `3.18.2` 产品版本且不伪造 Build ID；模型请求仍使用 `--surface desktop`；受控 A/B 两边 `main_turn` 均获真实响应，A/B task contract 因测试 Prompt 保持 `FAIL`，后续正常 Prompt 核心路径通过 |
-| 当前认证候选 CI | `NOT_RUN` | 本地候选未 Push；不得沿用 Preview.5 的 CI 结果 |
+| Windows runtime-host helper | `PARTIAL — PROVENANCE DECISION PENDING` | `zcode-runtime-host.exe` 是 `ZCodeAgentProcessManager` 的真实运行时依赖；候选内 3.18.0 构建与 3.18.2 的 `main.cpp`、runtime-host target 及 TS adapter 源码一致。官方 3.18.2 安装包 helper 具有有效 Authenticode 签名；是否改用该签名产物或正式接受现有来源仍需 Owner 决定。安装器专用 `zcode-installer-process-helper.exe` 不进入 Bridge BOM |
+| 当前认证候选 CI | `PASS` | Draft PR #94 的 [run 43599440845](https://github.com/Sandyzzx/codex-zcode-bridge/actions/runs/43599440845) 在 Ubuntu/Windows `Verify` 与 SQLite resource matrix 四项全部通过；不等同 Preview.6 发布验收 |
 
 ## 明确边界
 

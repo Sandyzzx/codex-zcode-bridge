@@ -3,7 +3,7 @@
 > Status: DECISION
 > Date: 2026-11-13
 > Decision: Accepted — Owner 在“GOAL REVISION — Reuse Official ZCode Authentication”中明确冻结该架构要求。
-> Applicability: ACTIVE IMPLEMENTATION。拓扑、职责和认证所有权已接受并冻结；当前本地候选已完成固定 Host 3.18.2 接线与合成验证，并通过真实 Coding Plan 完整 E2E 和真实 Start Plan 核心功能路径，尚未 Push、Merge 或 Release。历史 Start Plan 完整 E2E 因 Workspace 内额外 PowerShell cache 保持 `FAIL`。Desktop 3.18.0/3.18.1 实机安装组合、真实 OAuth refresh/账户轮换与其他未实测边界仍为 `NOT_VERIFIED`。
+> Applicability: ACTIVE IMPLEMENTATION。拓扑、职责和认证所有权已接受并冻结；当前候选已完成固定 Host 3.18.2 接线与合成验证，并通过真实 Coding Plan 完整 E2E 和真实 Start Plan 核心功能路径。候选已推送为 Draft PR #94，远端 Ubuntu/Windows CI 已通过；尚未 Merge、Tag 或 Release。历史 Start Plan 完整 E2E 因 Workspace 内额外 PowerShell cache 保持 `FAIL`。Desktop 3.18.0/3.18.1 实机安装组合、真实 OAuth refresh/账户轮换与其他未实测边界仍为 `NOT_VERIFIED`。
 > Renumbering: 原接受包曾将该决定标为 ADR-036；迁移到最新 `origin/preview` 时，仓库已有独立的 [ADR-036](ADR-036-host-native-interruption-requeue.md)，为避免重复编号，本决定按顺序改为 ADR-037，内容与 Owner 授权不变。
 > Verified against: Bridge research branch `d5c9cfedade9bc4bad69a7a3e873886e72843806`；官方 ZCode `b95ebaffeab641907b38652f45c1502bd762972d`（3.18.0）、`c5904686ea8341826b3affe5d993d06a134fa779`（3.18.1）、`fec975905a2abd4c07e35c40d51fa097a2258ec9`（3.18.2）。
 

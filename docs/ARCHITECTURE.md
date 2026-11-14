@@ -73,6 +73,6 @@ Fresh root 继续通过 stage SQLite、pending marker 和原子 publication 初�
 
 ## 发布边界
 
-已发布 `2.0.0-preview.5` 的 `package.json`、`package-lock.json`、插件 manifest、MCP server version、固定官方 Host、BOM、Runtime Events Schema 与 Administrative Recovery CLI 由同一 Tag 和 Release asset 提供。当前 ADR-037 分支仍是本地候选，未 Push、Merge、Tag 或 Release；其完整回归和 BOM 通过不证明 Desktop 3.18.0/3.18.1 安装组合、其他平台或真实账户。
+已发布 `2.0.0-preview.5` 的 `package.json`、`package-lock.json`、插件 manifest、MCP server version、固定官方 Host、BOM、Runtime Events Schema 与 Administrative Recovery CLI 由同一 Tag 和 Release asset 提供。当前 ADR-037 分支已推送为 Draft PR #94，Ubuntu/Windows CI 已通过；尚未 Merge、Tag 或 Release。其完整回归和 BOM 通过不证明 Desktop 3.18.0/3.18.1 安装组合、其他平台或真实账户。
 
-当前 3.18.2 候选在 Windows x64、Node `24.16.0` 的固定源码树重建、ordered-patch replay、same-source-tree repeatability、BOM/native load 和 Preview.5 → 候选 → Preview.5 隔离升级回滚为 `PASS`；跨机器/空缓存复现、fresh 3.18.2 Windows helper rebuild、完整动态资源闭包与逐项再分发许可审查仍为 `PARTIAL` 或 `BLOCKED`。真实 Coding Plan 完整 E2E 和 Start Plan 核心功能路径已通过；历史 Start Plan 完整 E2E 因 Workspace 边界保持 `FAIL`，一般 Desktop Main 独立性与 3.18.0/3.18.1 实机安装组合仍未验证。
+当前 3.18.2 候选在 Windows x64、Node `24.16.0` 的固定源码树重建、ordered-patch replay、same-source-tree repeatability、BOM/native load 和 Preview.5 → 候选 → Preview.5 隔离升级回滚为 `PASS`；跨机器/空缓存复现、完整动态资源闭包与逐项再分发许可审查仍为 `PARTIAL`。Windows `zcode-runtime-host.exe` 是真实进程所有权依赖；官方 3.18.0 与 3.18.2 的 runtime host 源码和调用 adapter 一致，是否正式接收来源一致的候选 helper 或改用官方的签名 3.18.2 helper 仍待 Owner 决定，因此不再把“必须 fresh rebuild”视为唯一工程路径。真实 Coding Plan 完整 E2E 和 Start Plan 核心功能路径已通过；历史 Start Plan 完整 E2E 因 Workspace 边界保持 `FAIL`，一般 Desktop Main 独立性与 3.18.0/3.18.1 实机安装组合仍未验证。
