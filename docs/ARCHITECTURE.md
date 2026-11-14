@@ -3,7 +3,7 @@
 > Status: AUTHORITATIVE
 > Last updated: 2026-11-14
 > Last verified: 2026-11-14，核对 `origin/preview` 的 Official Host + R7 生产链、Host 内中断恢复，以及当前本地 ADR-037 候选的 ZCode 3.18.2 只读认证、真实 Coding Plan/Start Plan 核心路径、Workspace 边界处置和隔离升级回滚；3.18.0/3.18.1 实机安装矩阵仍未验证。
-> Verified against: `a754545eb83d8e314c727c3ca0df0a2d3f47325d`；base `origin/preview` = `9bec5a27d`；已发布 Preview.5 固定 ZCode `3.18.0` / `b95ebaffeab641907b38652f45c1502bd762972d`，当前本地候选固定 `3.18.2` / `fec975905a2abd4c07e35c40d51fa097a2258ec9`，AppServer `0.17.1`。
+> Verified against: `cd3b74fec2992cce1f6340236265a6f87801298b`；base `origin/preview` = `9bec5a27d`；已发布 Preview.5 固定 ZCode `3.18.0` / `b95ebaffeab641907b38652f45c1502bd762972d`，当前候选固定 `3.18.2` / `fec975905a2abd4c07e35c40d51fa097a2258ec9`，AppServer `0.17.1`。
 
 本文件描述已发布 Preview.5 的生产架构和当前认证复用候选的增量。Windows x64 已默认切换到官方 Host 路径，R7 Runtime Events/Usage 复用同一 SQLite Authority；当前候选只替换 Start Plan 认证来源并升级固定 Host，不改变任务生命周期。公开合同继续以 [INTERFACES.md](INTERFACES.md) 为准，宿主和运行配置分别见 [SHARED_CORE.md](SHARED_CORE.md) 与 [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md)。
 
@@ -59,7 +59,7 @@ Recovery 由 SQLite 持久事实和当前 Host 共同协调，并可在 Host 存
 
 Start Plan 每任务只执行一次权威 Billing GET，后续 Private Lease 复用同一 account/provider/model/credential 绑定的 verdict；凭据、Provider 或模型变化必须重新授权。Coding Plan 保持官方账户/API Key 路径，不经过 Start Plan Billing。ADR-030 的 Private Lease/HANDLE/ACK、fail-closed 和不跨任务缓存继续有效。
 
-[ADR-037](decisions/ADR-037-official-zcode-authentication-reuse.md) 已接受且当前本地候选已实现认证所有权：固定 ZCode 3.18.2 Host 统一拥有 credential format、keyring、OAuth refresh、登录主体、BigModel/Z.ai/`zai_cn` 映射和请求认证；Bridge 只消费一次任务所需的 Start Plan 投影，并继续拥有 Billing verdict、Private Lease 和全部任务生命周期。该 Host 的只读路径使用官方 cipher/repo，禁止 v1→v2 migration、credentials 写回、source marker 变更和新 key 创建；过期 JWT 的 refresh 才经过 ADR-033 事务。v1、v2:env、v2:os、损坏容器、未知格式和冷进程字节不变已有合成证据；Windows native keyring 隔离只读、真实 Coding Plan 和真实 Start Plan 核心功能路径已通过。真实 OAuth refresh/账户轮换仍未单独验收；历史 Start Plan 完整 E2E 因 Workspace 边界保持 `FAIL`。
+[ADR-037](decisions/ADR-037-official-zcode-authentication-reuse.md) 已接受且当前候选已实现认证所有权：固定 ZCode 3.18.2 Host 统一拥有 credential format、keyring、OAuth refresh、登录主体、BigModel/Z.ai/`zai_cn` 映射和请求认证；Bridge 只消费一次任务所需的 Start Plan 投影，并继续拥有 Billing verdict、Private Lease 和全部任务生命周期。该 Host 的只读路径使用官方 cipher/repo，禁止 v1→v2 migration、credentials 写回、source marker 变更和新 key 创建；过期 JWT 的 refresh 才经过 ADR-033 事务。v1、v2:env、v2:os、损坏容器、未知格式和冷进程字节不变已有合成证据；Windows native keyring 隔离只读、真实 Coding Plan 和真实 Start Plan 核心功能路径已通过。真实 OAuth refresh/账户轮换仍未单独验收；历史 Start Plan 完整 E2E 因 Workspace 边界保持 `FAIL`。
 
 [ADR-033](decisions/ADR-033-official-account-refresh-coordination.md) 的账户 refresh 协调已进入固定上游 patch：independent profile-scoped lock、获取锁后重读、网络请求前 dispatch marker、单次网络刷新、expected-snapshot/CAS 发布、timeout 与 stale-lock 恢复、不重试可能已消费的一次性 token、live runtime-header 更新，以及 A→B→A 和迟到响应隔离。该行为在合成矩阵中通过；真实 Coding Plan/Start Plan 模型请求已经执行，但真实 OAuth refresh/账户轮换与生产凭据 mutation 仍为 `NOT_RUN`。
 

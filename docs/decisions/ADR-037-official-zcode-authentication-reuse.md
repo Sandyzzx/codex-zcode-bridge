@@ -89,7 +89,7 @@ Bridge 可以消费该结果完成 ADR-030 的实时 Billing 检查，并通过�
 - 损坏、缺密钥、格式未知或无法证明无写入时 fail closed；
 - 只有当前请求确实需要过期凭据时，才可经过 ADR-033 的官方 refresh 事务提交正常 token rotation；格式迁移和请求期 refresh 是两件不同的事。
 
-决定作出时，官方 3.18.2 没有公开的“无迁移 credential snapshot”接口。实现时优先推动一个可复用的官方读接口；若固定源码仍无该入口，可以在 Official Host patch 中加入窄适配层，但适配层也只能组合官方 cipher 与官方 repo，不得把 AES、keyring 或身份解析移入 Bridge。当前本地候选采用后一种方式：固定 Host patch 增加只读 credential snapshot 和窄 Start Plan resolver；它仍组合官方 cipher/repo，未在 Bridge 复制认证实现。
+决定作出时，官方 3.18.2 没有公开的“无迁移 credential snapshot”接口。实现时优先推动一个可复用的官方读接口；若固定源码仍无该入口，可以在 Official Host patch 中加入窄适配层，但适配层也只能组合官方 cipher 与官方 repo，不得把 AES、keyring 或身份解析移入 Bridge。当前候选采用后一种方式：固定 Host patch 增加只读 credential snapshot 和窄 Start Plan resolver；它仍组合官方 cipher/repo，未在 Bridge 复制认证实现。
 
 ### 4. 固定 Host 版本策略
 
@@ -157,7 +157,7 @@ Coding Plan 的 Worker 路径调用 `loadOfficialHostProviderRuntimeAuthFactory(
 
 决定作出时，Start Plan 没有走该路径。旧 `createProductionStartPlanAuth()` 直接读取官方数据根并构造 Billing issuer；AppServer 的 Start request auth 由 Bridge 的 Private Lease 供给。当时固定 3.18.0 Host 中的协调工厂通过 `loadFamilyMaterial()` 读取 Start JWT，无法表达 3.18.2 的 `loadStartPlanMaterial` 和 `zai_cn` fallback。
 
-当前本地候选已把 Start Plan 改为消费固定 3.18.2 Host 的窄认证投影；Billing verdict、Private Lease/HANDLE/ACK 和任务生命周期仍由 Bridge 持有。该差异来自旧接线与固定版本，不是 Coding Plan 与 Start Plan 本质需要两套凭据系统。
+当前候选已把 Start Plan 改为消费固定 3.18.2 Host 的窄认证投影；Billing verdict、Private Lease/HANDLE/ACK 和任务生命周期仍由 Bridge 持有。该差异来自旧接线与固定版本，不是 Coding Plan 与 Start Plan 本质需要两套凭据系统。
 
 ## Consequences
 
