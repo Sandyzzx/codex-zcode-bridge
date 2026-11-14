@@ -1026,7 +1026,9 @@ test("production asset verification fails closed for absent and invalid shipped 
   }
 });
 
-test("OfficialHostAdapter is lazy before execution and resolves the test source tree through the Worker-shaped URL", async () => {
+test("OfficialHostAdapter is lazy before execution and resolves the test source tree through the Worker-shaped URL", {
+  skip: !OFFICIAL_HOST_SUPPORTED,
+}, async () => {
   let moduleCalls = 0;
   const workerUrl = pathToFileURL(path.join(
     process.cwd(),
@@ -1059,7 +1061,9 @@ test("OfficialHostAdapter is lazy before execution and resolves the test source 
   assert.equal(await readOfficialCliVersion(assets.appServerEntryPath), "0.17.1");
 });
 
-test("the shipped host module applies the exact 16 MiB transport frame limit and fails closed above it", async () => {
+test("the shipped host module applies the exact 16 MiB transport frame limit and fails closed above it", {
+  skip: !OFFICIAL_HOST_SUPPORTED,
+}, async () => {
   const workerUrl = pathToFileURL(path.join(
     process.cwd(),
     "plugins",
