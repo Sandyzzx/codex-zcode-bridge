@@ -23666,14 +23666,19 @@ var init_start_plan_private_lease = __esm({
 // src/runtime/start-plan-production-auth.ts
 var start_plan_production_auth_exports = {};
 __export(start_plan_production_auth_exports, {
+  STARTPLAN_ENTITLEMENT_FACTS_ISSUE_PREFIX: () => STARTPLAN_ENTITLEMENT_FACTS_ISSUE_PREFIX,
   StartPlanBillingEntitlement: () => StartPlanBillingEntitlement,
+  StartPlanEntitlementRejectionError: () => StartPlanEntitlementRejectionError,
   classifyEntitlementFailure: () => classifyEntitlementFailure,
   createProductionStartPlanAuth: () => createProductionStartPlanAuth,
+  formatStartPlanEntitlementFailureFactsIssue: () => formatStartPlanEntitlementFailureFactsIssue,
   normalizeOfficialStartPlanAuthentication: () => normalizeOfficialStartPlanAuthentication,
-  readOfficialCliVersion: () => readOfficialCliVersion
+  readOfficialCliVersion: () => readOfficialCliVersion,
+  readStartPlanEntitlementFailureFacts: () => readStartPlanEntitlementFailureFacts
 });
 import { spawn as spawn5 } from "node:child_process";
 import { createHash as createHash6 } from "node:crypto";
+import { version as readOsVersion } from "node:os";
 import path14 from "node:path";
 function isRecord6(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -23709,20 +23714,23 @@ function asOfficialBillingEnvelope(value) {
   };
 }
 function isSuccessfulBusinessEnvelope(envelope) {
-  return envelope.success === true && (envelope.code === void 0 || envelope.code === 0 || envelope.code === 200);
+  return envelope.success !== false && (envelope.code === void 0 || envelope.code === 0 || envelope.code === 200);
 }
 function stringKeyedArray(value) {
   return Array.isArray(value) ? value.filter(isRecord6) : [];
 }
+function isActiveStartPlan(plan) {
+  const status = typeof plan.status === "string" ? plan.status.trim().toLowerCase() : "";
+  const planId = typeof plan.plan_id === "string" ? plan.plan_id.trim().toLowerCase() : "";
+  const name = typeof plan.name === "string" ? plan.name.trim().toLowerCase() : "";
+  const startPlanIdentity = planId.includes("start-plan") || planId.includes("start plan") || name.includes("start-plan") || name.includes("start plan");
+  return status === "active" && startPlanIdentity;
+}
+function activeStartPlans(envelope) {
+  return stringKeyedArray(envelope.data?.plans).filter(isActiveStartPlan);
+}
 function hasActiveStartPlan(envelope) {
-  const plans = stringKeyedArray(envelope.data?.plans);
-  return plans.some((plan) => {
-    const status = typeof plan.status === "string" ? plan.status.trim().toLowerCase() : "";
-    const planId = typeof plan.plan_id === "string" ? plan.plan_id.trim().toLowerCase() : "";
-    const name = typeof plan.name === "string" ? plan.name.trim().toLowerCase() : "";
-    const startPlanIdentity = planId.includes("start-plan") || planId.includes("start plan") || name.includes("start-plan") || name.includes("start plan");
-    return status === "active" && startPlanIdentity;
-  });
+  return activeStartPlans(envelope).length > 0;
 }
 function startPlanBalanceModelIds(balances) {
   const seen = /* @__PURE__ */ new Set();
@@ -23742,24 +23750,74 @@ function startPlanBalanceModelIds(balances) {
   }
   return models;
 }
+function readIdentifier(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+function balanceBelongsToPlan(balance, plan) {
+  const balanceUserPlanId = readIdentifier(balance.user_plan_id);
+  const planUserPlanId = readIdentifier(plan.user_plan_id);
+  if (balanceUserPlanId && planUserPlanId) return balanceUserPlanId === planUserPlanId;
+  const balancePlanId = readIdentifier(balance.plan_id);
+  const planId = readIdentifier(plan.plan_id);
+  return Boolean(balancePlanId && planId && balancePlanId === planId);
+}
+function requestedModelBalances(balances, requestedModel) {
+  return balances.filter((balance) => {
+    const capabilities = Array.isArray(balance.capabilities) ? balance.capabilities : [];
+    const capabilityModels = capabilities.flatMap((capability) => {
+      const raw = typeof capability === "string" ? capability.trim().toLowerCase() : "";
+      return raw.startsWith("model:") ? [raw.slice(6).trim()] : [];
+    }).filter(Boolean);
+    const candidates = capabilityModels.length > 0 ? capabilityModels : typeof balance.show_name === "string" ? [balance.show_name.trim().toLowerCase()] : [];
+    return candidates.includes(requestedModel);
+  });
+}
 function numericUnit(value) {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string" && value.trim() && Number.isFinite(Number(value))) return Number(value);
   return null;
 }
-function requestedModelQuotaVerdict(balances, requestedModel) {
-  const relevant = balances.filter((balance) => {
-    const capabilities = Array.isArray(balance.capabilities) ? balance.capabilities : [];
-    const models = capabilities.flatMap((capability) => {
-      const raw = typeof capability === "string" ? capability.trim().toLowerCase() : "";
-      return raw.startsWith("model:") ? [raw.slice(6).trim()] : [];
-    }).filter(Boolean);
-    return models.length > 0 ? models.includes(requestedModel) : typeof balance.show_name === "string" && balance.show_name.trim().toLowerCase() === requestedModel;
+function finiteEpochSeconds(value) {
+  const number4 = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : NaN;
+  return Number.isFinite(number4) && number4 >= 0 ? number4 : void 0;
+}
+function normalizeBillingAvailabilityEnvelope(envelope, responseTimeSeconds2) {
+  const data = envelope.data;
+  if (!data) return envelope;
+  const nowSeconds = responseTimeSeconds2 ?? (typeof data.server_time === "number" && Number.isFinite(data.server_time) && data.server_time >= 0 ? data.server_time : void 0) ?? Date.now() / 1e3;
+  const plans = stringKeyedArray(data.plans).map((plan) => {
+    const status = typeof plan.status === "string" ? plan.status.trim().toLowerCase() : "";
+    const end = finiteEpochSeconds(plan.ends_at);
+    return status === "active" && end !== void 0 && end > 0 && end <= nowSeconds ? { ...plan, status: "expired" } : plan;
   });
-  if (relevant.length === 0) return "unproven";
-  const units = relevant.map((balance) => numericUnit(balance.remaining_units));
-  if (units.some((unit) => unit === null || unit < 0)) return "unproven";
-  return units.every((unit) => unit === 0) ? "exhausted" : "available";
+  const balances = stringKeyedArray(data.balances).filter((balance) => {
+    const userPlanId = typeof balance.user_plan_id === "string" ? balance.user_plan_id : "";
+    const planId = typeof balance.plan_id === "string" ? balance.plan_id : "";
+    const owners = plans.filter((plan) => {
+      const ownerUserPlanId = typeof plan.user_plan_id === "string" ? plan.user_plan_id : "";
+      const ownerPlanId = typeof plan.plan_id === "string" ? plan.plan_id : "";
+      return userPlanId && ownerUserPlanId ? userPlanId === ownerUserPlanId : planId === ownerPlanId;
+    });
+    return owners.length === 0 || owners.some((plan) => typeof plan.status === "string" && plan.status.trim().toLowerCase() !== "expired");
+  });
+  return {
+    ...envelope,
+    data: {
+      ...data,
+      plans,
+      balances
+    }
+  };
+}
+function hasPendingActivation(envelope) {
+  const data = envelope.data;
+  if (!data) return false;
+  const nowSeconds = typeof data.server_time === "number" && Number.isFinite(data.server_time) && data.server_time >= 0 ? data.server_time : Date.now() / 1e3;
+  const effectiveTimes = activeStartPlans(envelope).flatMap((plan) => {
+    const entitlements = stringKeyedArray(plan.entitlements);
+    return entitlements.length > 0 ? entitlements.map((entry) => entry.effective_at) : [plan.starts_at];
+  }).map((value) => value === null || value === void 0 || value === "" ? void 0 : Number(value));
+  return effectiveTimes.length > 0 && effectiveTimes.every((value) => value !== void 0 && Number.isFinite(value) && value > nowSeconds);
 }
 function extractProviderCode(value) {
   if (!value) return void 0;
@@ -23771,43 +23829,148 @@ function extractProviderCode(value) {
     value.code
   ];
   const raw = candidates.find((candidate) => typeof candidate === "number" || typeof candidate === "string");
-  return typeof raw === "number" || typeof raw === "string" ? String(raw) : void 0;
+  const code = typeof raw === "number" || typeof raw === "string" ? String(raw).trim() : "";
+  return /^[0-9A-Za-z_.-]{1,32}$/u.test(code) ? code : void 0;
 }
 function classifyEntitlementFailure(input2) {
   const code = input2.providerCode?.trim();
   const providerCode = code ? code : void 0;
-  if (code === "3007") return { status: "captcha_required", reason: "provider requested captcha verification", providerCode };
-  if (code === "3012") return { status: "unusual_activity", reason: "provider blocked this identity due to unusual activity", providerCode };
-  if (code === "3001") return { status: "billing_parameter_error", reason: "billing request parameters were rejected", providerCode };
-  if (input2.statusCode === 401) return { status: "unauthorized", reason: "credential was rejected as unauthenticated" };
-  if (input2.statusCode === 403) return { status: "forbidden", reason: "credential is authenticated but forbidden from this plan or model" };
-  const envelope = input2.statusCode === 200 ? asOfficialBillingEnvelope(input2.body) : void 0;
-  if (envelope && isSuccessfulBusinessEnvelope(envelope) && hasActiveStartPlan(envelope)) {
+  if (code === "3007") return { status: "captcha_required", reason: "provider requested captcha verification", providerCode, failureClass: "captcha_required" };
+  if (code === "3012") return { status: "unusual_activity", reason: "provider blocked this identity due to unusual activity", providerCode, failureClass: "unusual_activity" };
+  if (code === "3001") return { status: "billing_parameter_error", reason: "billing request parameters were rejected", providerCode, failureClass: "billing_parameter_error" };
+  if (input2.statusCode === 401) return { status: "unauthorized", reason: "credential was rejected as unauthenticated", failureClass: "unauthorized" };
+  if (input2.statusCode === 403) return { status: "forbidden", reason: "credential is authenticated but forbidden from this plan or model", failureClass: "forbidden" };
+  const rawEnvelope = input2.statusCode === 200 ? asOfficialBillingEnvelope(input2.body) : void 0;
+  const envelope = rawEnvelope ? normalizeBillingAvailabilityEnvelope(rawEnvelope, input2.responseTimeSeconds) : void 0;
+  const activePlans = envelope ? activeStartPlans(envelope) : [];
+  if (envelope && isSuccessfulBusinessEnvelope(envelope) && activePlans.length > 0) {
     const balances = stringKeyedArray(envelope.data?.balances);
-    const models = startPlanBalanceModelIds(balances);
-    if (models.length === 0) {
-      return { status: "unavailable", reason: "billing response proved the plan but not the requested model" };
-    }
+    const attributedBalances = balances.filter((balance) => activePlans.some((plan) => balanceBelongsToPlan(balance, plan)));
+    const models = startPlanBalanceModelIds(attributedBalances);
     const requested = input2.model?.trim().toLowerCase();
-    if (!requested) return { status: "unavailable", reason: "billing response had no requested model identity to authorize" };
+    if (!requested) {
+      return { status: "unavailable", reason: "billing response had no requested model identity to authorize", failureClass: "response_malformed" };
+    }
+    if (hasPendingActivation(envelope)) {
+      return {
+        status: "unavailable",
+        reason: "active Start Plan has not taken effect",
+        failureClass: "activation_pending"
+      };
+    }
+    if (models.length === 0) {
+      return {
+        status: "unavailable",
+        reason: "billing response did not prove available model quota for this Start Plan",
+        failureClass: "model_quota_unproven"
+      };
+    }
     if (!models.includes(requested)) {
-      return { status: "model_unavailable", reason: "active Start Plan does not list the requested model" };
+      return { status: "model_unavailable", reason: "active Start Plan does not list the requested model", failureClass: "requested_model_absent" };
     }
-    const quota = requestedModelQuotaVerdict(balances, requested);
-    if (quota === "unproven") {
-      return { status: "unavailable", reason: "billing response did not prove available quota for the requested model" };
+    const relevant = requestedModelBalances(attributedBalances, requested);
+    const units = relevant.map((balance) => numericUnit(balance.remaining_units));
+    if (relevant.length === 0 || units.some((unit) => unit === null || unit < 0)) {
+      return {
+        status: "unavailable",
+        reason: "billing response did not prove positive remaining quota for the requested model",
+        failureClass: "model_quota_unproven"
+      };
     }
-    if (quota === "exhausted") {
-      return { status: "quota_exhausted", reason: "plan quota is exhausted for the requested model" };
+    if (units.every((unit) => unit === 0)) {
+      return {
+        status: "quota_exhausted",
+        reason: "Start Plan quota is exhausted for the requested model",
+        failureClass: "quota_exhausted"
+      };
     }
-    return { status: "entitled", reason: "active Start Plan lists the requested model" };
+    return { status: "entitled", reason: "active Start Plan has positive quota for the requested model", failureClass: "unknown" };
   } else if (envelope && isSuccessfulBusinessEnvelope(envelope) && !hasActiveStartPlan(envelope)) {
-    return { status: "no_entitlement", reason: "no active Start Plan was present in the billing response" };
+    return { status: "no_entitlement", reason: "no active Start Plan was present in the billing response", failureClass: "active_plan_absent" };
   }
-  if (input2.statusCode === 429) return { status: "rate_limited", reason: "rate limited; quota state unknown from status alone" };
-  if (input2.statusCode >= 500) return { status: "unavailable", reason: "entitlement service error" };
-  if (input2.statusCode >= 400) return { status: "unavailable", reason: "entitlement query rejected without a recognized provider code" };
-  return { status: "unavailable", reason: "entitlement response could not be interpreted" };
+  if (input2.statusCode === 429) return { status: "rate_limited", reason: "rate limited; quota state unknown from status alone", failureClass: "rate_limited" };
+  if (input2.statusCode >= 500) return { status: "unavailable", reason: "entitlement service error", failureClass: "service_error" };
+  if (input2.statusCode >= 400) return { status: "unavailable", reason: "entitlement query rejected without a recognized provider code", failureClass: "http_rejected" };
+  if (envelope) return { status: "unavailable", reason: "billing response reported an unsuccessful business outcome", failureClass: "business_rejected" };
+  return { status: "unavailable", reason: "entitlement response could not be interpreted", failureClass: "response_malformed" };
+}
+function sanitizeHeaderValue(value) {
+  const trimmed = value?.trim();
+  return trimmed && /^[\x20-\x7e]+$/u.test(trimmed) ? trimmed : void 0;
+}
+function clientLanguage() {
+  try {
+    return sanitizeHeaderValue(process.env.ZCODE_CLIENT_LANGUAGE) ?? sanitizeHeaderValue(Intl.DateTimeFormat().resolvedOptions().locale) ?? "unknown";
+  } catch {
+    return sanitizeHeaderValue(process.env.ZCODE_CLIENT_LANGUAGE) ?? "unknown";
+  }
+}
+function clientTimezone() {
+  try {
+    return sanitizeHeaderValue(Intl.DateTimeFormat().resolvedOptions().timeZone) ?? "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+function osCategory() {
+  if (process.platform === "darwin") return "macos";
+  if (process.platform === "win32") return "windows";
+  return "linux";
+}
+function officialBillingHeaders(input2) {
+  return {
+    Authorization: `Bearer ${input2.jwt}`,
+    "X-Device-Mid": input2.deviceMid,
+    "User-Agent": `ZCode/${input2.appVersion}`,
+    "HTTP-Referer": input2.origin,
+    "X-Title": "Z Code@electron",
+    "X-ZCode-App-Version": input2.appVersion,
+    "X-Release-Channel": process.env.ZCODE_ENV?.trim().toLowerCase() === "test" ? "test" : "production",
+    "X-Platform": `${process.platform}-${process.arch}`,
+    "X-Client-Language": clientLanguage(),
+    "X-Client-Timezone": clientTimezone(),
+    "X-Os-Category": osCategory(),
+    "X-Os-Version": sanitizeHeaderValue(readOsVersion()) ?? "unknown"
+  };
+}
+function failureVerdict(status) {
+  return status === "no_entitlement" || status === "model_unavailable" || status === "quota_exhausted" ? "not_entitled" : "unavailable";
+}
+function withFailureFacts(verdict2, input2) {
+  const providerCode = verdict2.providerCode ?? null;
+  return {
+    status: verdict2.status,
+    reason: verdict2.reason,
+    ...providerCode ? { providerCode } : {},
+    observedAt: input2.observedAt,
+    failureFacts: Object.freeze({
+      request_attempted: input2.requestAttempted,
+      http_status: input2.httpStatus,
+      provider_code: providerCode,
+      failure_class: verdict2.failureClass,
+      entitlement_verdict: failureVerdict(verdict2.status)
+    })
+  };
+}
+function responseTimeSeconds(response) {
+  try {
+    const parsed = Date.parse(response.headers.get("date") ?? "");
+    return Number.isFinite(parsed) ? parsed / 1e3 : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function readStartPlanEntitlementFailureFacts(error62) {
+  return error62 instanceof StartPlanEntitlementRejectionError ? error62.failureFacts : null;
+}
+function formatStartPlanEntitlementFailureFactsIssue(facts) {
+  return `${STARTPLAN_ENTITLEMENT_FACTS_ISSUE_PREFIX}${JSON.stringify({
+    request_attempted: facts.request_attempted,
+    http_status: facts.http_status,
+    provider_code: facts.provider_code,
+    failure_class: facts.failure_class,
+    entitlement_verdict: facts.entitlement_verdict
+  })}`;
 }
 async function createProductionStartPlanAuth(options) {
   const now = options.now ?? Date.now;
@@ -23830,7 +23993,15 @@ async function createProductionStartPlanAuth(options) {
   const sameEntitlementContext = (context, credential, provider, model, credentialDigest) => context.account === credential.accountIdentity && context.provider === provider && context.model === model && context.deviceMid === credential.deviceMid && context.sessionRevision === credential.sessionRevision && context.credentialDigest === credentialDigest && context.credentialExpiresAt === credential.credentialExpiresAt;
   const rejection2 = (verdict2) => {
     const providerCode = verdict2.status === "entitled" ? void 0 : verdict2.providerCode;
-    return new Error(`start_plan_entitlement_rejected:${verdict2.status}${providerCode ? `:${providerCode}` : ""}`);
+    if (verdict2.status === "entitled") throw new Error("start_plan_entitlement_rejection_invalid");
+    const failureFacts = verdict2.failureFacts ?? Object.freeze({
+      request_attempted: null,
+      http_status: null,
+      provider_code: providerCode ?? null,
+      failure_class: "unknown",
+      entitlement_verdict: failureVerdict(verdict2.status)
+    });
+    return new StartPlanEntitlementRejectionError(verdict2.status, failureFacts, providerCode);
   };
   const authoritativeEntitlement = async (credential, provider, model, signal) => {
     const credentialDigest = createHash6("sha256").update(credential.requestCredential).digest("hex");
@@ -23940,11 +24111,12 @@ async function readOfficialCliVersion(zcodeEntrypoint) {
   if (version2) officialCliVersionCache.set(key, version2);
   return version2;
 }
-var OFFICIAL_START_PLAN_ORIGIN, BILLING_REQUEST_TIMEOUT_MS, StartPlanBillingEntitlement, officialCliVersionCache;
+var STARTPLAN_ENTITLEMENT_FACTS_ISSUE_PREFIX, OFFICIAL_START_PLAN_ORIGIN, BILLING_REQUEST_TIMEOUT_MS, StartPlanBillingEntitlement, StartPlanEntitlementRejectionError, officialCliVersionCache;
 var init_start_plan_production_auth = __esm({
   "src/runtime/start-plan-production-auth.ts"() {
     "use strict";
     init_start_plan_private_lease();
+    STARTPLAN_ENTITLEMENT_FACTS_ISSUE_PREFIX = "start_plan_entitlement_failure_facts:";
     OFFICIAL_START_PLAN_ORIGIN = "https://zcode.z.ai";
     BILLING_REQUEST_TIMEOUT_MS = 15e3;
     StartPlanBillingEntitlement = class {
@@ -23961,28 +24133,41 @@ var init_start_plan_production_auth = __esm({
       async check(input2) {
         const observedAt = this.#now();
         const appVersion = await this.#getAppVersion();
-        if (!appVersion) return { status: "unavailable", reason: "official cli version unavailable; refusing to guess", observedAt };
-        if (!input2.deviceMid.trim()) return { status: "unavailable", reason: "official device identity unavailable; refusing to guess", observedAt };
-        const url2 = `${this.#origin}/api/v1/zcode-plan/billing/balance?app_version=${encodeURIComponent(appVersion)}&mid=${encodeURIComponent(input2.deviceMid)}`;
+        if (!appVersion || !/^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$/u.test(appVersion)) {
+          return withFailureFacts({
+            status: "unavailable",
+            reason: "official cli version unavailable; refusing to guess",
+            failureClass: "not_attempted"
+          }, { observedAt, requestAttempted: false, httpStatus: null });
+        }
+        const deviceMid = sanitizeHeaderValue(input2.deviceMid);
+        if (!deviceMid) {
+          return withFailureFacts({
+            status: "unavailable",
+            reason: "official device identity unavailable; refusing to guess",
+            failureClass: "not_attempted"
+          }, { observedAt, requestAttempted: false, httpStatus: null });
+        }
+        const url2 = `${this.#origin}/api/v1/zcode-plan/billing/balance?app_version=${encodeURIComponent(appVersion)}`;
         let response;
         try {
           response = await this.#fetchImpl(url2, {
             method: "GET",
-            headers: {
-              // Observed official balance requests carry the persistent device
-              // identity in both the `mid` query and the `X-Device-Mid` header
-              // (2026-11-06 native request audit); omitting them is rejected
-              // with provider code 3001. This is a read-only billing query,
-              // never a model request; app version comes from the official
-              // runtime and identity remains in memory.
-              Authorization: `Bearer ${input2.jwt}`,
-              "X-Device-Mid": input2.deviceMid
-            },
+            headers: officialBillingHeaders({
+              origin: this.#origin,
+              appVersion,
+              deviceMid,
+              jwt: input2.jwt
+            }),
             signal: AbortSignal.any([input2.signal, AbortSignal.timeout(BILLING_REQUEST_TIMEOUT_MS)])
           });
         } catch (error62) {
           if (input2.signal.aborted) throw error62;
-          return { status: "unavailable", reason: "entitlement transport failed", observedAt };
+          return withFailureFacts({
+            status: "unavailable",
+            reason: "entitlement transport failed",
+            failureClass: "transport"
+          }, { observedAt: this.#now(), requestAttempted: true, httpStatus: null });
         }
         if (response.status === 200) {
           let body2;
@@ -23999,7 +24184,8 @@ var init_start_plan_production_auth = __esm({
             statusCode: response.status,
             providerCode: providerCode2,
             body: body2,
-            model: input2.model
+            model: input2.model,
+            responseTimeSeconds: responseTimeSeconds(response)
           });
           if (classified.status === "entitled") {
             let requestId = "";
@@ -24009,7 +24195,11 @@ var init_start_plan_production_auth = __esm({
             }
             return { status: "entitled", observedAt: this.#now(), requestId };
           }
-          return { ...classified, observedAt: this.#now() };
+          return withFailureFacts(classified, {
+            observedAt: this.#now(),
+            requestAttempted: true,
+            httpStatus: response.status
+          });
         }
         let body;
         let providerCode;
@@ -24021,11 +24211,27 @@ var init_start_plan_production_auth = __esm({
           }
         } catch {
         }
-        return { ...this.#interpretBillingBody({ statusCode: response.status, providerCode, body, model: input2.model }), observedAt };
+        return withFailureFacts(this.#interpretBillingBody({
+          statusCode: response.status,
+          providerCode,
+          body,
+          model: input2.model,
+          responseTimeSeconds: responseTimeSeconds(response)
+        }), { observedAt, requestAttempted: true, httpStatus: response.status });
       }
       #interpretBillingBody(input2) {
         return classifyEntitlementFailure(input2);
       }
+    };
+    StartPlanEntitlementRejectionError = class extends Error {
+      constructor(entitlementStatus, failureFacts, providerCode) {
+        super(`start_plan_entitlement_rejected:${entitlementStatus}${providerCode ? `:${providerCode}` : ""}`);
+        this.entitlementStatus = entitlementStatus;
+        this.failureFacts = failureFacts;
+        this.name = "StartPlanEntitlementRejectionError";
+      }
+      entitlementStatus;
+      failureFacts;
     };
     officialCliVersionCache = /* @__PURE__ */ new Map();
   }
@@ -34536,6 +34742,7 @@ var init_lifecycle_port = __esm({
 var lifecycle_gate_exports = {};
 __export(lifecycle_gate_exports, {
   LifecycleGateError: () => LifecycleGateError,
+  appendStartPlanEntitlementFailureFacts: () => appendStartPlanEntitlementFailureFacts,
   assertSqliteRuntimeVersion: () => assertSqliteRuntimeVersion,
   initializeFreshInstallSqliteRoot: () => initializeFreshInstallSqliteRoot,
   initializeIsolatedCandidateRoot: () => initializeIsolatedCandidateRoot,
@@ -36497,6 +36704,7 @@ async function openClaimOnlyDriver(options) {
           accountSignal?.addEventListener("abort", revokeOnAccountChange, { once: true });
           if (accountSignal?.aborted) privateAuthAbort.abort();
           let startPlanEntitled = false;
+          let startPlanEntitlementFailureFacts = null;
           let handleGate;
           const closeHandleGate = async () => {
             const gate = handleGate;
@@ -36524,11 +36732,22 @@ async function openClaimOnlyDriver(options) {
               );
             } catch (error62) {
               startPlanEntitled = false;
+              startPlanEntitlementFailureFacts = readStartPlanEntitlementFailureFacts(error62) ?? fallbackStartPlanEntitlementFailureFacts(error62);
               stage("start_plan_entitlement_preflight_rejected", {
-                ...classifyStartPlanEntitlementRejection(error62)
+                ...classifyStartPlanEntitlementRejection(error62),
+                failure_facts: startPlanEntitlementFailureFacts
               });
             }
             if (privateAuthAbort.signal.aborted) startPlanEntitled = false;
+            if (!startPlanEntitled && !startPlanEntitlementFailureFacts) {
+              startPlanEntitlementFailureFacts = Object.freeze({
+                request_attempted: null,
+                http_status: null,
+                provider_code: null,
+                failure_class: "unknown",
+                entitlement_verdict: "unavailable"
+              });
+            }
             stage("start_plan_entitlement_preflight", { entitled: startPlanEntitled });
           }
           child.once("close", () => {
@@ -36767,6 +36986,20 @@ async function openClaimOnlyDriver(options) {
                   canonicalTaskResult(resultFrame.result, { task_id: input2.task.task_id, attempt: input2.attempt, result_status: resultFrame.result.status });
                 } catch (error62) {
                   resultFrame.result = submissionFailure({ task_id: input2.task.task_id, attempt: input2.attempt }, error62);
+                }
+                if (startPlanEntitlementFailureFacts && resultFrame.result.status === "failed" && resultFrame.result.session_id === null) {
+                  const appended = appendStartPlanEntitlementFailureFacts(
+                    resultFrame.result,
+                    startPlanEntitlementFailureFacts,
+                    input2.task.task_id,
+                    input2.attempt
+                  );
+                  resultFrame.result = appended.result;
+                  if (!appended.persisted) {
+                    stage("start_plan_entitlement_failure_facts_not_persisted", {
+                      reason: "result_capacity"
+                    });
+                  }
                 }
                 stage("worker_result_verified", { status: resultFrame.result.status });
                 const current = asRecord5(port.readOperation(input2.operationId));
@@ -37504,6 +37737,61 @@ function classifyStartPlanEntitlementRejection(error62) {
   if (match && match[1]) return { classification: match[1], ...match[2] ? { provider_code: match[2] } : {} };
   return { classification: "transport_unavailable" };
 }
+function fallbackStartPlanEntitlementFailureFacts(error62) {
+  const rejection2 = classifyStartPlanEntitlementRejection(error62);
+  const failureClass = startPlanFailureClass(rejection2.classification);
+  return Object.freeze({
+    request_attempted: null,
+    http_status: null,
+    provider_code: rejection2.provider_code ?? null,
+    failure_class: failureClass,
+    entitlement_verdict: failureClass === "active_plan_absent" || failureClass === "requested_model_absent" ? "not_entitled" : "unavailable"
+  });
+}
+function appendStartPlanEntitlementFailureFacts(result, facts, taskId, attempt) {
+  const issue2 = formatStartPlanEntitlementFailureFactsIssue(facts);
+  const issues = result.issues.filter((value) => !value.startsWith(STARTPLAN_ENTITLEMENT_FACTS_ISSUE_PREFIX)).slice(-255);
+  const withFacts = {
+    ...result,
+    issues: [...issues, issue2]
+  };
+  try {
+    canonicalTaskResult(withFacts, {
+      task_id: taskId,
+      attempt,
+      result_status: result.status
+    });
+    return { result: withFacts, persisted: true };
+  } catch (error62) {
+    if (errorCode(error62) !== "result_too_large") throw error62;
+    return { result, persisted: false };
+  }
+}
+function startPlanFailureClass(value) {
+  switch (value) {
+    case "not_attempted":
+    case "transport":
+    case "unauthorized":
+    case "forbidden":
+    case "captcha_required":
+    case "unusual_activity":
+    case "billing_parameter_error":
+    case "rate_limited":
+    case "service_error":
+    case "http_rejected":
+    case "business_rejected":
+    case "response_malformed":
+    case "active_plan_absent":
+    case "activation_pending":
+    case "requested_model_absent":
+    case "model_quota_unproven":
+    case "quota_exhausted":
+    case "unknown":
+      return value;
+    default:
+      return "unknown";
+  }
+}
 function validSnapshotText(value) {
   return typeof value === "string" && value.length > 0 && value.length <= 128 && !/[\x00-\x1f]/u.test(value);
 }
@@ -37549,6 +37837,7 @@ var init_lifecycle_gate = __esm({
     init_sqlite_runtime_roster();
     init_node_runtime();
     init_start_plan_private_channel();
+    init_start_plan_production_auth();
     init_start_plan_handle_gate();
     DEFAULT_PROCESS_PROBE_TIMEOUT_MS = 5e3;
     DEFAULT_PROCESS_TREE_PROBE_TIMEOUT_MS = 3e4;

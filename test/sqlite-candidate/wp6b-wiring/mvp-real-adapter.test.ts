@@ -1938,7 +1938,19 @@ function fakeHostBillingGate(outcome: "entitled" | "billing_parameter_error") {
       checks.push({ account: input.account, provider: input.provider, model: input.model, deviceMid: input.deviceMid });
       return outcome === "entitled"
         ? { status: "entitled", observedAt: checks.length, requestId: `synthetic-${checks.length}` }
-        : { status: "billing_parameter_error", reason: "synthetic billing parameter rejection", providerCode: "3001", observedAt: checks.length };
+        : {
+            status: "billing_parameter_error",
+            reason: "synthetic billing parameter rejection",
+            providerCode: "3001",
+            observedAt: checks.length,
+            failureFacts: {
+              request_attempted: true,
+              http_status: 200,
+              provider_code: "3001",
+              failure_class: "billing_parameter_error",
+              entitlement_verdict: "unavailable",
+            },
+          };
     },
   };
   return { checks, entitlement };
@@ -1989,6 +2001,21 @@ test("host-wired issuer surfaces a sanitized Billing rejection and never starts 
     } }));
     assert.equal((await waitForTerminal(client, taskId, 1)).status, "failed");
     await waitForLifecycleEvent(client, taskId, "released");
+    const result = contentObject(await client.callTool({ name: "zcode_result", arguments: { task_id: taskId } }));
+    const factIssue = (result.issues as unknown[]).find((issue) =>
+      typeof issue === "string" && issue.startsWith("start_plan_entitlement_failure_facts:"));
+    assert.ok(factIssue, "the failed Result must persist the sanitized entitlement failure facts");
+    assert.deepEqual(JSON.parse(String(factIssue).slice("start_plan_entitlement_failure_facts:".length)), {
+      request_attempted: true,
+      http_status: 200,
+      provider_code: "3001",
+      failure_class: "billing_parameter_error",
+      entitlement_verdict: "unavailable",
+    });
+    const publicResult = JSON.stringify(result);
+    assert.equal(publicResult.includes(HOST_JWT), false, "failed Result must not contain the synthetic JWT");
+    assert.equal(publicResult.includes(HOST_ACCOUNT), false, "failed Result must not contain the account identity");
+    assert.equal(publicResult.includes(HOST_DEVICE_MID), false, "failed Result must not contain the device identity");
     assert.equal(gate.checks.length, 1, "a Billing rejection must stop before lease delivery");
     assert.equal(existsSync(runtime.requestLog), false, "a Billing rejection must not start the AppServer or send session requests");
     const rejection = lifecycle.lines.find((line) => line.includes("start_plan_entitlement_preflight_rejected"));
@@ -1996,7 +2023,11 @@ test("host-wired issuer surfaces a sanitized Billing rejection and never starts 
     const detail = JSON.parse(rejection.slice(rejection.indexOf("{"))) as Record<string, unknown>;
     assert.equal(detail.classification, "billing_parameter_error");
     assert.equal(detail.provider_code, "3001");
-    assert.equal(JSON.stringify(detail).includes("3001:") || JSON.stringify(detail).toLowerCase().includes("synthetic"), false,
+    const stagedDiagnostic = JSON.stringify(detail);
+    assert.equal(stagedDiagnostic.includes(HOST_JWT), false, "staged diagnostic must not contain the synthetic JWT");
+    assert.equal(stagedDiagnostic.includes(HOST_ACCOUNT), false, "staged diagnostic must not contain the account identity");
+    assert.equal(stagedDiagnostic.includes(HOST_DEVICE_MID), false, "staged diagnostic must not contain the device identity");
+    assert.equal(stagedDiagnostic.includes("3001:") || stagedDiagnostic.toLowerCase().includes("synthetic"), false,
       "the staged diagnostic must stay within the sanitized classification shape");
   }, { runtimeVariant: "private-auth-preflight-reject", issuerFactory: hostIssuerFactory(gate.entitlement), lifecycleCollector: lifecycle, preserveFixtureOnFailure: true });
 });

@@ -13,6 +13,7 @@ import test from "node:test";
 import {
   classifyEntitlementFailure,
   createProductionStartPlanAuth,
+  readStartPlanEntitlementFailureFacts,
   readOfficialCliVersion,
   StartPlanBillingEntitlement,
   type OfficialStartPlanAuthentication,
@@ -25,6 +26,8 @@ import { makeWorkspace, validReport, TEMP_TREE_REMOVE_OPTIONS } from "./helpers.
 import type { PrivateLeaseBinding } from "../src/runtime/start-plan-private-lease.js";
 import type { ZCodeRuntimeConfig } from "../src/interfaces.js";
 import type { FailureFactsV1 } from "../src/diagnostics/failure-facts.js";
+import { appendStartPlanEntitlementFailureFacts } from "../src/store/lifecycle-gate.js";
+import type { CandidateTaskResult } from "../src/sqlite-candidate/wp6c/fake-result-adapter.js";
 
 const DEVICE_ID = "synthetic-device-mid-fixed";
 const ACCOUNT_A = "synthetic-account-a";
@@ -95,9 +98,10 @@ function billingBody(overrides: {
   code?: unknown;
   plans?: unknown;
   balances?: unknown;
+  serverTime?: unknown;
 } = {}): Record<string, unknown> {
   return {
-    success: overrides.success ?? true,
+    ...(overrides.success === undefined ? {} : { success: overrides.success }),
     ...(overrides.code === undefined ? {} : { code: overrides.code }),
     data: {
       plans: overrides.plans ?? [{
@@ -106,9 +110,11 @@ function billingBody(overrides: {
         name: "Synthetic Start Plan",
       }],
       balances: overrides.balances ?? [{
+        plan_id: "synthetic-start-plan",
         capabilities: [`model:${MODEL}`],
         remaining_units: 7,
       }],
+      ...(overrides.serverTime === undefined ? {} : { server_time: overrides.serverTime }),
     },
   };
 }
@@ -186,43 +192,18 @@ test("HTTP 200 alone is not entitlement evidence", async () => {
     expected: string;
   }> = [
     { name: "empty plans", body: billingBody({ plans: [], balances: [] }), expected: "no_entitlement" },
-    { name: "unknown active plan", body: billingBody({ plans: [{ status: "active" }] }), expected: "no_entitlement" },
-    { name: "business rejection", body: billingBody({ success: false, code: 4001 }), expected: "unavailable" },
-    { name: "string success", body: billingBody({ success: "false" }), expected: "unavailable" },
-    { name: "null success", body: { ...billingBody(), success: null }, expected: "unavailable" },
     {
-      name: "missing success",
-      body: (() => {
-        const { success: _success, ...envelope } = billingBody();
-        return envelope;
-      })(),
-      expected: "unavailable",
+      name: "unknown active plan",
+      body: billingBody({ plans: [{ status: "active", plan_id: "other-plan", name: "Other Plan" }] }),
+      expected: "no_entitlement",
     },
-    { name: "missing model proof", body: billingBody({ balances: [] }), expected: "unavailable" },
+    { name: "business rejection", body: billingBody({ success: false, code: 4001 }), expected: "unavailable" },
     {
       name: "model not authorized",
-      body: billingBody({ balances: [{ capabilities: ["model:another-synthetic-model"], remaining_units: 7 }] }),
+      body: billingBody({
+        balances: [{ plan_id: "synthetic-start-plan", capabilities: ["model:another-synthetic-model"], remaining_units: 7 }],
+      }),
       expected: "model_unavailable",
-    },
-    {
-      name: "exhausted authorized model",
-      body: billingBody({ balances: [{ capabilities: [`model:${MODEL}`], remaining_units: 0 }] }),
-      expected: "quota_exhausted",
-    },
-    {
-      name: "missing remaining_units",
-      body: billingBody({ balances: [{ capabilities: [`model:${MODEL}`] }] }),
-      expected: "unavailable",
-    },
-    {
-      name: "non-numeric remaining_units",
-      body: billingBody({ balances: [{ capabilities: [`model:${MODEL}`], remaining_units: "many" }] }),
-      expected: "unavailable",
-    },
-    {
-      name: "negative remaining_units",
-      body: billingBody({ balances: [{ capabilities: [`model:${MODEL}`], remaining_units: -1 }] }),
-      expected: "unavailable",
     },
     { name: "invalid JSON", body: "{not-json", expected: "unavailable" },
   ];
@@ -240,9 +221,172 @@ test("HTTP 200 alone is not entitlement evidence", async () => {
     assert.equal(verdict.status, item.expected, item.name);
     assert.notEqual(verdict.status, "entitled");
     assert.equal(requests.length, 1);
-    assert.equal(requests[0]!.url, "https://zcode.z.ai/api/v1/zcode-plan/billing/balance?app_version=3.17.4&mid=synthetic-device-mid-fixed");
+    assert.equal(requests[0]!.url, "https://zcode.z.ai/api/v1/zcode-plan/billing/balance?app_version=3.17.4");
     assert.equal(requests[0]!.headers.get("x-device-mid"), DEVICE_ID);
     assert.match(requests[0]!.headers.get("authorization") ?? "", /^Bearer /u);
+  }
+});
+
+test("official 3.18.2 success envelope variants still require ADR-030 quota proof", async () => {
+  const cases: Array<{ name: string; body: unknown }> = [
+    {
+      name: "missing success",
+      body: (() => {
+        const { success: _success, ...envelope } = billingBody();
+        return envelope;
+      })(),
+    },
+    {
+      name: "code 200",
+      body: billingBody({ code: 200 }),
+    },
+    {
+      name: "null legacy success",
+      body: billingBody({ success: null }),
+    },
+    {
+      name: "non-boolean legacy success",
+      body: billingBody({ success: "legacy" }),
+    },
+  ];
+  for (const item of cases) {
+    const { fetch: fetchImpl, requests } = fakeBillingFetch(item.body);
+    const entitlement = new StartPlanBillingEntitlement({ getAppVersion: async () => "3.17.4", fetchImpl });
+    const verdict = await entitlement.check({
+      account: ACCOUNT_A,
+      provider: "account:bigmodel-start-plan",
+      model: MODEL,
+      deviceMid: DEVICE_ID,
+      jwt: syntheticJwt(),
+      signal: new AbortController().signal,
+    });
+    assert.equal(verdict.status, "entitled", item.name);
+    assert.equal(requests.length, 1, item.name);
+  }
+});
+
+test("task-level entitlement fails closed without attributable positive model quota", async () => {
+  const cases: Array<{
+    name: string;
+    body: Record<string, unknown>;
+    expectedStatus: string;
+    expectedClass: string;
+  }> = [
+    {
+      name: "active plan without identity fields",
+      body: billingBody({ plans: [{ status: "active" }], balances: [] }),
+      expectedStatus: "no_entitlement",
+      expectedClass: "active_plan_absent",
+    },
+    {
+      name: "no balance list",
+      body: billingBody({ balances: [] }),
+      expectedStatus: "unavailable",
+      expectedClass: "model_quota_unproven",
+    },
+    {
+      name: "zero remaining units",
+      body: billingBody({
+        balances: [{ plan_id: "synthetic-start-plan", capabilities: [`model:${MODEL}`], remaining_units: 0 }],
+      }),
+      expectedStatus: "quota_exhausted",
+      expectedClass: "quota_exhausted",
+    },
+    {
+      name: "missing remaining units",
+      body: billingBody({
+        balances: [{ plan_id: "synthetic-start-plan", capabilities: [`model:${MODEL}`] }],
+      }),
+      expectedStatus: "unavailable",
+      expectedClass: "model_quota_unproven",
+    },
+    {
+      name: "non-numeric remaining units",
+      body: billingBody({
+        balances: [{ plan_id: "synthetic-start-plan", capabilities: [`model:${MODEL}`], remaining_units: "many" }],
+      }),
+      expectedStatus: "unavailable",
+      expectedClass: "model_quota_unproven",
+    },
+    {
+      name: "negative remaining units",
+      body: billingBody({
+        balances: [{ plan_id: "synthetic-start-plan", capabilities: [`model:${MODEL}`], remaining_units: -1 }],
+      }),
+      expectedStatus: "unavailable",
+      expectedClass: "model_quota_unproven",
+    },
+    {
+      name: "balance belongs to another plan",
+      body: billingBody({
+        balances: [{ plan_id: "another-plan", capabilities: [`model:${MODEL}`], remaining_units: 7 }],
+      }),
+      expectedStatus: "unavailable",
+      expectedClass: "model_quota_unproven",
+    },
+  ];
+  for (const item of cases) {
+    const { fetch: fetchImpl, requests } = fakeBillingFetch(item.body);
+    const entitlement = new StartPlanBillingEntitlement({ getAppVersion: async () => "3.17.4", fetchImpl });
+    const verdict = await entitlement.check({
+      account: ACCOUNT_A,
+      provider: "account:bigmodel-start-plan",
+      model: MODEL,
+      deviceMid: DEVICE_ID,
+      jwt: syntheticJwt(),
+      signal: new AbortController().signal,
+    });
+    assert.notEqual(verdict.status, "entitled", item.name);
+    assert.equal(verdict.status, item.expectedStatus, item.name);
+    if (verdict.status === "entitled") throw new Error("unreachable");
+    assert.equal(verdict.failureFacts?.failure_class, item.expectedClass, item.name);
+    assert.equal(requests.length, 1, item.name);
+  }
+});
+
+test("official expiry and activation timing fail closed without model evidence", async () => {
+  const cases: Array<{
+    name: string;
+    body: Record<string, unknown>;
+    expectedStatus: string;
+    expectedClass: string;
+  }> = [
+    {
+      name: "expired active plan",
+      body: billingBody({
+        plans: [{ status: "active", plan_id: "synthetic-start-plan", ends_at: 999 }],
+        balances: [{ plan_id: "synthetic-start-plan", capabilities: [`model:${MODEL}`], remaining_units: 7 }],
+        serverTime: 1_000,
+      }),
+      expectedStatus: "no_entitlement",
+      expectedClass: "active_plan_absent",
+    },
+    {
+      name: "future activation without model evidence",
+      body: billingBody({
+        plans: [{ status: "active", plan_id: "synthetic-start-plan", starts_at: 1_001 }],
+        balances: [],
+        serverTime: 1_000,
+      }),
+      expectedStatus: "unavailable",
+      expectedClass: "activation_pending",
+    },
+  ];
+  for (const item of cases) {
+    const { fetch: fetchImpl } = fakeBillingFetch(item.body);
+    const entitlement = new StartPlanBillingEntitlement({ getAppVersion: async () => "3.17.4", fetchImpl });
+    const verdict = await entitlement.check({
+      account: ACCOUNT_A,
+      provider: "account:bigmodel-start-plan",
+      model: MODEL,
+      deviceMid: DEVICE_ID,
+      jwt: syntheticJwt(),
+      signal: new AbortController().signal,
+    });
+    assert.equal(verdict.status, item.expectedStatus, item.name);
+    if (verdict.status === "entitled") throw new Error("unreachable");
+    assert.equal(verdict.failureFacts?.failure_class, item.expectedClass, item.name);
+    assert.equal(verdict.failureFacts?.http_status, 200, item.name);
   }
 });
 
@@ -258,6 +402,13 @@ test("billing checks fail closed without an official device identity", async () 
     signal: new AbortController().signal,
   });
   assert.equal(verdict.status, "unavailable");
+  assert.deepEqual(verdict.failureFacts, {
+    request_attempted: false,
+    http_status: null,
+    provider_code: null,
+    failure_class: "not_attempted",
+    entitlement_verdict: "unavailable",
+  });
   assert.equal(requests.length, 0, "a missing device identity must not produce a Billing request");
 });
 
@@ -276,10 +427,19 @@ test("authorized model proof returns entitled with the response request ID", asy
   if (!("requestId" in verdict)) throw new Error("authorized verdict omitted request ID");
   assert.equal(verdict.requestId, "synthetic-request-id");
   assert.equal(requests.length, 1);
+  assert.equal(requests[0]!.headers.get("user-agent"), "ZCode/3.17.4");
+  assert.equal(requests[0]!.headers.get("http-referer"), "https://zcode.z.ai");
+  assert.equal(requests[0]!.headers.get("x-title"), "Z Code@electron");
+  assert.equal(requests[0]!.headers.get("x-zcode-app-version"), "3.17.4");
+  assert.equal(requests[0]!.headers.get("x-release-channel"), "production");
+  assert.equal(requests[0]!.headers.get("x-platform"), `${process.platform}-${process.arch}`);
+  assert.ok(requests[0]!.headers.get("x-client-language"));
+  assert.ok(requests[0]!.headers.get("x-client-timezone"));
+  assert.ok(requests[0]!.headers.get("x-os-category"));
 });
 
 test("non-200 billing responses never prove entitlement from the body", async () => {
-  for (const statusCode of [429, 500, 503, 405]) {
+  for (const statusCode of [401, 403, 405, 429, 500, 503]) {
     const { fetch: fetchImpl } = fakeBillingFetch(billingBody(), statusCode);
     const entitlement = new StartPlanBillingEntitlement({ getAppVersion: async () => "3.17.4", fetchImpl });
     const verdict = await entitlement.check({
@@ -291,6 +451,18 @@ test("non-200 billing responses never prove entitlement from the body", async ()
       signal: new AbortController().signal,
     });
     assert.notEqual(verdict.status, "entitled", `HTTP ${statusCode} must not prove entitlement`);
+    if (verdict.status === "entitled") throw new Error("unreachable");
+    assert.deepEqual(verdict.failureFacts, {
+      request_attempted: true,
+      http_status: statusCode,
+      provider_code: null,
+      failure_class: statusCode === 401 ? "unauthorized"
+        : statusCode === 403 ? "forbidden"
+          : statusCode === 429 ? "rate_limited"
+            : statusCode >= 500 ? "service_error"
+              : "http_rejected",
+      entitlement_verdict: "unavailable",
+    });
   }
   assert.equal(classifyEntitlementFailure({ statusCode: 429, body: billingBody(), model: MODEL }).status, "rate_limited");
   assert.equal(classifyEntitlementFailure({ statusCode: 500, body: billingBody(), model: MODEL }).status, "unavailable");
@@ -307,6 +479,127 @@ test("failure classes and provider codes stay independent", async () => {
   const captcha = classifyEntitlementFailure({ statusCode: 405, providerCode: "3007" });
   assert.ok(captcha);
   assert.equal(captcha.providerCode, "3007");
+});
+
+test("Billing provider rejection facts preserve status and sanitized code", async () => {
+  const cases = [
+    { status: 200, code: "3001", expected: "billing_parameter_error" },
+    { status: 405, code: "3012", expected: "unusual_activity" },
+  ] as const;
+  for (const item of cases) {
+    const { fetch: fetchImpl } = fakeBillingFetch({ success: false, code: item.code }, item.status);
+    const entitlement = new StartPlanBillingEntitlement({ getAppVersion: async () => "3.17.4", fetchImpl });
+    const verdict = await entitlement.check({
+      account: ACCOUNT_A,
+      provider: "account:bigmodel-start-plan",
+      model: MODEL,
+      deviceMid: DEVICE_ID,
+      jwt: syntheticJwt(),
+      signal: new AbortController().signal,
+    });
+    assert.equal(verdict.status, item.expected);
+    const failureFacts = "failureFacts" in verdict ? verdict.failureFacts : undefined;
+    assert.deepEqual(failureFacts, {
+      request_attempted: true,
+      http_status: item.status,
+      provider_code: item.code,
+      failure_class: item.expected,
+      entitlement_verdict: "unavailable",
+    });
+  }
+});
+
+test("missing official app version records Billing as not attempted", async () => {
+  let requests = 0;
+  const entitlement = new StartPlanBillingEntitlement({
+    getAppVersion: async () => undefined,
+    fetchImpl: async () => {
+      requests += 1;
+      return new Response("{}");
+    },
+  });
+  const verdict = await entitlement.check({
+    account: ACCOUNT_A,
+    provider: "account:bigmodel-start-plan",
+    model: MODEL,
+    deviceMid: DEVICE_ID,
+    jwt: syntheticJwt(),
+    signal: new AbortController().signal,
+  });
+  assert.equal(verdict.status, "unavailable");
+  assert.deepEqual(verdict.failureFacts, {
+    request_attempted: false,
+    http_status: null,
+    provider_code: null,
+    failure_class: "not_attempted",
+    entitlement_verdict: "unavailable",
+  });
+  assert.equal(requests, 0);
+});
+
+test("network failures retain only a sanitized transport fact", async () => {
+  const sentinel = "SENTINEL_NETWORK_FAILURE";
+  const entitlement = new StartPlanBillingEntitlement({
+    getAppVersion: async () => "3.17.4",
+    fetchImpl: async () => { throw new Error(sentinel); },
+  });
+  const verdict = await entitlement.check({
+    account: ACCOUNT_A,
+    provider: "account:bigmodel-start-plan",
+    model: MODEL,
+    deviceMid: DEVICE_ID,
+    jwt: syntheticJwt(),
+    signal: new AbortController().signal,
+  });
+  assert.equal(verdict.status, "unavailable");
+  assert.deepEqual(verdict.failureFacts, {
+    request_attempted: true,
+    http_status: null,
+    provider_code: null,
+    failure_class: "transport",
+    entitlement_verdict: "unavailable",
+  });
+  assert.equal(JSON.stringify(verdict).includes(sentinel), false);
+});
+
+test("failure fact persistence never invalidates a Result at the 32 MiB boundary", async () => {
+  const contract = await import("../src/result-contract.mjs") as {
+    canonical(value: unknown): string;
+    MAX_TASK_RESULT_BYTES: number;
+  };
+  const baseResult: CandidateTaskResult = {
+    task_id: "synthetic-boundary-report",
+    attempt: 1,
+    status: "failed",
+    summary: "synthetic boundary report",
+    files_changed: [],
+    tests: [],
+    issues: [],
+    needs_master_decision: true,
+    zcode_output: "",
+    exit_code: 1,
+    session_id: null,
+    started_at: "2026-11-14T00:00:00.000Z",
+    finished_at: "2026-11-14T00:00:01.000Z",
+  };
+  const emptyBytes = Buffer.byteLength(contract.canonical(baseResult), "utf8");
+  const result: CandidateTaskResult = {
+    ...baseResult,
+    zcode_output: "x".repeat(contract.MAX_TASK_RESULT_BYTES - emptyBytes),
+  };
+  assert.equal(Buffer.byteLength(contract.canonical(result), "utf8"), contract.MAX_TASK_RESULT_BYTES);
+
+  const appended = appendStartPlanEntitlementFailureFacts(result, {
+    request_attempted: true,
+    http_status: 200,
+    provider_code: null,
+    failure_class: "model_quota_unproven",
+    entitlement_verdict: "unavailable",
+  }, result.task_id, result.attempt);
+
+  assert.equal(appended.persisted, false);
+  assert.equal(appended.result, result);
+  assert.equal(Buffer.byteLength(contract.canonical(appended.result), "utf8"), contract.MAX_TASK_RESULT_BYTES);
 });
 
 test("issuer fails closed for missing JWT, expired JWT, and account switch without contacting entitlement", async () => {
@@ -681,7 +974,7 @@ test("prepare and lease issuance produce exactly one Billing GET per task", asyn
     assert.equal(await issuer.prepare("account:bigmodel-start-plan", MODEL, new AbortController().signal), true);
     await issuer.issue(binding(), new AbortController().signal);
     assert.equal(billing.requests.length, 1);
-    assert.equal(new URL(billing.requests[0]!.url).searchParams.get("mid"), DEVICE_ID);
+    assert.equal(new URL(billing.requests[0]!.url).searchParams.has("mid"), false);
     assert.equal(billing.requests[0]!.headers.get("X-Device-Mid"), DEVICE_ID);
   } finally {
     cleanup();
@@ -700,14 +993,36 @@ test("billing rejections surface a sanitized provider classification through pre
       entitlement: {
         check: async () => {
           prepareCalls += 1;
-          return { status: "billing_parameter_error", reason: "synthetic parameter rejection", providerCode: "3001", observedAt: 1 };
+          return {
+            status: "billing_parameter_error",
+            reason: "synthetic parameter rejection",
+            providerCode: "3001",
+            observedAt: 1,
+            failureFacts: {
+              request_attempted: true,
+              http_status: 200,
+              provider_code: "3001",
+              failure_class: "billing_parameter_error",
+              entitlement_verdict: "unavailable",
+            },
+          };
         },
       },
     });
     assert.ok(issuer);
     await assert.rejects(
       issuer.prepare("account:bigmodel-start-plan", MODEL, new AbortController().signal),
-      /start_plan_entitlement_rejected:billing_parameter_error:3001/u,
+      (error: unknown) => {
+        assert.match(error instanceof Error ? error.message : "", /start_plan_entitlement_rejected:billing_parameter_error:3001/u);
+        assert.deepEqual(readStartPlanEntitlementFailureFacts(error), {
+          request_attempted: true,
+          http_status: 200,
+          provider_code: "3001",
+          failure_class: "billing_parameter_error",
+          entitlement_verdict: "unavailable",
+        });
+        return true;
+      },
     );
     assert.equal(prepareCalls, 1);
   } finally {

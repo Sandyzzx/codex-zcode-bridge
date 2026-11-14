@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { version as readOsVersion } from "node:os";
 import path from "node:path";
 import { PrivateCredentialLease, type PrivateLeaseBinding } from "./start-plan-private-lease.js";
 
@@ -19,6 +20,41 @@ export type EntitlementStatus =
   | "billing_parameter_error"
   | "unavailable";
 
+export type EntitlementVerdict = "entitled" | "not_entitled" | "unavailable";
+
+export type EntitlementFailureClass =
+  | "not_attempted"
+  | "transport"
+  | "unauthorized"
+  | "forbidden"
+  | "captcha_required"
+  | "unusual_activity"
+  | "billing_parameter_error"
+  | "rate_limited"
+  | "service_error"
+  | "http_rejected"
+  | "business_rejected"
+  | "response_malformed"
+  | "active_plan_absent"
+  | "activation_pending"
+  | "requested_model_absent"
+  | "model_quota_unproven"
+  | "quota_exhausted"
+  | "unknown";
+
+/** One sanitized ADR-030 decision record. This deliberately excludes response
+ * bodies, credentials, authorization headers, account identities and device
+ * identities. */
+export interface StartPlanEntitlementFailureFacts {
+  readonly request_attempted: boolean | null;
+  readonly http_status: number | null;
+  readonly provider_code: string | null;
+  readonly failure_class: EntitlementFailureClass;
+  readonly entitlement_verdict: EntitlementVerdict;
+}
+
+export const STARTPLAN_ENTITLEMENT_FACTS_ISSUE_PREFIX = "start_plan_entitlement_failure_facts:";
+
 export interface EntitlementCheckInput {
   readonly account: string;
   readonly provider: string;
@@ -31,7 +67,13 @@ export interface EntitlementCheckInput {
 
 export type EntitlementCheckResult =
   | { readonly status: "entitled"; readonly observedAt: number; readonly requestId: string }
-  | { readonly status: EntitlementStatus; readonly reason: string; readonly providerCode?: string; readonly observedAt: number };
+  | {
+      readonly status: EntitlementStatus;
+      readonly reason: string;
+      readonly providerCode?: string;
+      readonly observedAt: number;
+      readonly failureFacts?: StartPlanEntitlementFailureFacts;
+    };
 
 export interface StartPlanLiveEntitlement {
   check(input: EntitlementCheckInput): Promise<EntitlementCheckResult>;
@@ -122,7 +164,9 @@ function asOfficialBillingEnvelope(value: unknown): OfficialBillingEnvelope | nu
 }
 
 function isSuccessfulBusinessEnvelope(envelope: OfficialBillingEnvelope): boolean {
-  return envelope.success === true
+  // Observed official 3.18.2 accepts a missing legacy field and uses
+  // `success !== false`; the active-plan evidence below remains mandatory.
+  return envelope.success !== false
     && (envelope.code === undefined || envelope.code === 0 || envelope.code === 200);
 }
 
@@ -132,16 +176,24 @@ function stringKeyedArray(value: unknown): Array<Record<string, unknown>> {
     : [];
 }
 
+function isActiveStartPlan(plan: Record<string, unknown>): boolean {
+  const status = typeof plan.status === "string" ? plan.status.trim().toLowerCase() : "";
+  const planId = typeof plan.plan_id === "string" ? plan.plan_id.trim().toLowerCase() : "";
+  const name = typeof plan.name === "string" ? plan.name.trim().toLowerCase() : "";
+  const startPlanIdentity = planId.includes("start-plan") || planId.includes("start plan")
+    || name.includes("start-plan") || name.includes("start plan");
+  // Provider catalog availability may accept an active plan with no identity,
+  // but ADR-030's task-level credential authorization requires explicit Start
+  // Plan identity. A missing identity is not enough to authorize a model.
+  return status === "active" && startPlanIdentity;
+}
+
+function activeStartPlans(envelope: OfficialBillingEnvelope): Array<Record<string, unknown>> {
+  return stringKeyedArray(envelope.data?.plans).filter(isActiveStartPlan);
+}
+
 function hasActiveStartPlan(envelope: OfficialBillingEnvelope): boolean {
-  const plans = stringKeyedArray(envelope.data?.plans);
-  return plans.some((plan) => {
-    const status = typeof plan.status === "string" ? plan.status.trim().toLowerCase() : "";
-    const planId = typeof plan.plan_id === "string" ? plan.plan_id.trim().toLowerCase() : "";
-    const name = typeof plan.name === "string" ? plan.name.trim().toLowerCase() : "";
-    const startPlanIdentity = planId.includes("start-plan") || planId.includes("start plan")
-      || name.includes("start-plan") || name.includes("start plan");
-    return status === "active" && startPlanIdentity;
-  });
+  return activeStartPlans(envelope).length > 0;
 }
 
 function startPlanBalanceModelIds(balances: Array<Record<string, unknown>>): string[] {
@@ -165,31 +217,122 @@ function startPlanBalanceModelIds(balances: Array<Record<string, unknown>>): str
   return models;
 }
 
+function readIdentifier(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function balanceBelongsToPlan(
+  balance: Record<string, unknown>,
+  plan: Record<string, unknown>,
+): boolean {
+  const balanceUserPlanId = readIdentifier(balance.user_plan_id);
+  const planUserPlanId = readIdentifier(plan.user_plan_id);
+  if (balanceUserPlanId && planUserPlanId) return balanceUserPlanId === planUserPlanId;
+  const balancePlanId = readIdentifier(balance.plan_id);
+  const planId = readIdentifier(plan.plan_id);
+  return Boolean(balancePlanId && planId && balancePlanId === planId);
+}
+
+function requestedModelBalances(
+  balances: Array<Record<string, unknown>>,
+  requestedModel: string,
+): Array<Record<string, unknown>> {
+  return balances.filter((balance) => {
+    const capabilities = Array.isArray(balance.capabilities) ? balance.capabilities : [];
+    const capabilityModels = capabilities.flatMap((capability) => {
+      const raw = typeof capability === "string" ? capability.trim().toLowerCase() : "";
+      return raw.startsWith("model:") ? [raw.slice(6).trim()] : [];
+    }).filter(Boolean);
+    const candidates = capabilityModels.length > 0
+      ? capabilityModels
+      : typeof balance.show_name === "string" ? [balance.show_name.trim().toLowerCase()] : [];
+    return candidates.includes(requestedModel);
+  });
+}
+
 function numericUnit(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string" && value.trim() && Number.isFinite(Number(value))) return Number(value);
   return null;
 }
 
-function requestedModelQuotaVerdict(
-  balances: Array<Record<string, unknown>>,
-  requestedModel: string,
-): "exhausted" | "unproven" | "available" {
-  const relevant = balances.filter((balance) => {
-    const capabilities = Array.isArray(balance.capabilities) ? balance.capabilities : [];
-    const models = capabilities.flatMap((capability) => {
-      const raw = typeof capability === "string" ? capability.trim().toLowerCase() : "";
-      return raw.startsWith("model:") ? [raw.slice(6).trim()] : [];
-    }).filter(Boolean);
-    return models.length > 0 ? models.includes(requestedModel)
-      : typeof balance.show_name === "string" && balance.show_name.trim().toLowerCase() === requestedModel;
+function finiteEpochSeconds(value: unknown): number | undefined {
+  const number = typeof value === "number"
+    ? value
+    : typeof value === "string" && value.trim() ? Number(value) : NaN;
+  return Number.isFinite(number) && number >= 0 ? number : undefined;
+}
+
+/** Applies the same expiry normalization observed in official 3.18.2 before
+ * active-plan and balance evidence is interpreted. HTTP Date wins; a numeric
+ * `data.server_time` is the fallback. */
+function normalizeBillingAvailabilityEnvelope(
+  envelope: OfficialBillingEnvelope,
+  responseTimeSeconds: number | undefined,
+): OfficialBillingEnvelope {
+  const data = envelope.data;
+  if (!data) return envelope;
+  const nowSeconds = responseTimeSeconds
+    ?? (typeof data.server_time === "number"
+      && Number.isFinite(data.server_time)
+      && data.server_time >= 0
+      ? data.server_time
+      : undefined)
+    ?? Date.now() / 1000;
+  const plans = stringKeyedArray(data.plans).map((plan) => {
+    const status = typeof plan.status === "string" ? plan.status.trim().toLowerCase() : "";
+    const end = finiteEpochSeconds(plan.ends_at);
+    return status === "active" && end !== undefined && end > 0 && end <= nowSeconds
+      ? { ...plan, status: "expired" }
+      : plan;
   });
-  if (relevant.length === 0) return "unproven";
-  const units = relevant.map((balance) => numericUnit(balance.remaining_units));
-  // A missing, non-numeric, or negative remaining_units value is not quota
-  // evidence; entitlement must fail closed instead of being presumed.
-  if (units.some((unit) => unit === null || unit < 0)) return "unproven";
-  return units.every((unit) => unit === 0) ? "exhausted" : "available";
+  const balances = stringKeyedArray(data.balances).filter((balance) => {
+    const userPlanId = typeof balance.user_plan_id === "string" ? balance.user_plan_id : "";
+    const planId = typeof balance.plan_id === "string" ? balance.plan_id : "";
+    const owners = plans.filter((plan) => {
+      const ownerUserPlanId = typeof plan.user_plan_id === "string" ? plan.user_plan_id : "";
+      const ownerPlanId = typeof plan.plan_id === "string" ? plan.plan_id : "";
+      return userPlanId && ownerUserPlanId
+        ? userPlanId === ownerUserPlanId
+        : planId === ownerPlanId;
+    });
+    return owners.length === 0 || owners.some((plan) => (
+      typeof plan.status === "string" && plan.status.trim().toLowerCase() !== "expired"
+    ));
+  });
+  return {
+    ...envelope,
+    data: {
+      ...data,
+      plans,
+      balances,
+    },
+  };
+}
+
+/** Official 3.18.2 reports activation as pending only when no model
+ * whitelist exists and every supplied effective time is still in the future.
+ * Missing or malformed effective times are never converted into a date. */
+function hasPendingActivation(envelope: OfficialBillingEnvelope): boolean {
+  const data = envelope.data;
+  if (!data) return false;
+  const nowSeconds = typeof data.server_time === "number"
+    && Number.isFinite(data.server_time)
+    && data.server_time >= 0
+    ? data.server_time
+    : Date.now() / 1000;
+  const effectiveTimes = activeStartPlans(envelope)
+    .flatMap((plan) => {
+      const entitlements = stringKeyedArray(plan.entitlements);
+      return entitlements.length > 0
+        ? entitlements.map((entry) => entry.effective_at)
+        : [plan.starts_at];
+    })
+    .map((value) => value === null || value === undefined || value === ""
+      ? undefined
+      : Number(value));
+  return effectiveTimes.length > 0
+    && effectiveTimes.every((value) => value !== undefined && Number.isFinite(value) && value > nowSeconds);
 }
 
 function extractProviderCode(value: Record<string, unknown> | undefined): string | undefined {
@@ -202,7 +345,8 @@ function extractProviderCode(value: Record<string, unknown> | undefined): string
     value.code,
   ];
   const raw = candidates.find((candidate) => typeof candidate === "number" || typeof candidate === "string");
-  return typeof raw === "number" || typeof raw === "string" ? String(raw) : undefined;
+  const code = typeof raw === "number" || typeof raw === "string" ? String(raw).trim() : "";
+  return /^[0-9A-Za-z_.-]{1,32}$/u.test(code) ? code : undefined;
 }
 
 /** Maps one billing/entitlement HTTP exchange onto a discriminated verdict.
@@ -215,44 +359,165 @@ export function classifyEntitlementFailure(input: {
   providerCode?: string;
   body?: Record<string, unknown>;
   model?: string;
-}): { status: EntitlementStatus; reason: string; providerCode?: string } {
+  responseTimeSeconds?: number;
+}): {
+  status: EntitlementStatus;
+  reason: string;
+  providerCode?: string;
+  failureClass: EntitlementFailureClass;
+} {
   const code = input.providerCode?.trim();
   const providerCode = code ? code : undefined;
-  if (code === "3007") return { status: "captcha_required", reason: "provider requested captcha verification", providerCode };
-  if (code === "3012") return { status: "unusual_activity", reason: "provider blocked this identity due to unusual activity", providerCode };
-  if (code === "3001") return { status: "billing_parameter_error", reason: "billing request parameters were rejected", providerCode };
-  if (input.statusCode === 401) return { status: "unauthorized", reason: "credential was rejected as unauthenticated" };
-  if (input.statusCode === 403) return { status: "forbidden", reason: "credential is authenticated but forbidden from this plan or model" };
+  if (code === "3007") return { status: "captcha_required", reason: "provider requested captcha verification", providerCode, failureClass: "captcha_required" };
+  if (code === "3012") return { status: "unusual_activity", reason: "provider blocked this identity due to unusual activity", providerCode, failureClass: "unusual_activity" };
+  if (code === "3001") return { status: "billing_parameter_error", reason: "billing request parameters were rejected", providerCode, failureClass: "billing_parameter_error" };
+  if (input.statusCode === 401) return { status: "unauthorized", reason: "credential was rejected as unauthenticated", failureClass: "unauthorized" };
+  if (input.statusCode === 403) return { status: "forbidden", reason: "credential is authenticated but forbidden from this plan or model", failureClass: "forbidden" };
   // Body-derived entitlement facts are only provable on a 200 exchange;
   // 429/5xx responses must keep their status-based classification even when
   // the body carries an entitled-looking envelope.
-  const envelope = input.statusCode === 200 ? asOfficialBillingEnvelope(input.body) : undefined;
-  if (envelope && isSuccessfulBusinessEnvelope(envelope) && hasActiveStartPlan(envelope)) {
+  const rawEnvelope = input.statusCode === 200 ? asOfficialBillingEnvelope(input.body) : undefined;
+  const envelope = rawEnvelope
+    ? normalizeBillingAvailabilityEnvelope(rawEnvelope, input.responseTimeSeconds)
+    : undefined;
+  const activePlans = envelope ? activeStartPlans(envelope) : [];
+  if (envelope && isSuccessfulBusinessEnvelope(envelope) && activePlans.length > 0) {
     const balances = stringKeyedArray(envelope.data?.balances);
-    const models = startPlanBalanceModelIds(balances);
-    if (models.length === 0) {
-      return { status: "unavailable", reason: "billing response proved the plan but not the requested model" };
-    }
+    const attributedBalances = balances.filter((balance) =>
+      activePlans.some((plan) => balanceBelongsToPlan(balance, plan)));
+    const models = startPlanBalanceModelIds(attributedBalances);
     const requested = input.model?.trim().toLowerCase();
-    if (!requested) return { status: "unavailable", reason: "billing response had no requested model identity to authorize" };
+    if (!requested) {
+      return { status: "unavailable", reason: "billing response had no requested model identity to authorize", failureClass: "response_malformed" };
+    }
+    if (hasPendingActivation(envelope)) {
+      return {
+        status: "unavailable",
+        reason: "active Start Plan has not taken effect",
+        failureClass: "activation_pending",
+      };
+    }
+    if (models.length === 0) {
+      return {
+        status: "unavailable",
+        reason: "billing response did not prove available model quota for this Start Plan",
+        failureClass: "model_quota_unproven",
+      };
+    }
     if (!models.includes(requested)) {
-      return { status: "model_unavailable", reason: "active Start Plan does not list the requested model" };
+      return { status: "model_unavailable", reason: "active Start Plan does not list the requested model", failureClass: "requested_model_absent" };
     }
-    const quota = requestedModelQuotaVerdict(balances, requested);
-    if (quota === "unproven") {
-      return { status: "unavailable", reason: "billing response did not prove available quota for the requested model" };
+    const relevant = requestedModelBalances(attributedBalances, requested);
+    const units = relevant.map((balance) => numericUnit(balance.remaining_units));
+    if (relevant.length === 0 || units.some((unit) => unit === null || unit < 0)) {
+      return {
+        status: "unavailable",
+        reason: "billing response did not prove positive remaining quota for the requested model",
+        failureClass: "model_quota_unproven",
+      };
     }
-    if (quota === "exhausted") {
-      return { status: "quota_exhausted", reason: "plan quota is exhausted for the requested model" };
+    if (units.every((unit) => unit === 0)) {
+      return {
+        status: "quota_exhausted",
+        reason: "Start Plan quota is exhausted for the requested model",
+        failureClass: "quota_exhausted",
+      };
     }
-    return { status: "entitled", reason: "active Start Plan lists the requested model" };
+    return { status: "entitled", reason: "active Start Plan has positive quota for the requested model", failureClass: "unknown" };
   } else if (envelope && isSuccessfulBusinessEnvelope(envelope) && !hasActiveStartPlan(envelope)) {
-    return { status: "no_entitlement", reason: "no active Start Plan was present in the billing response" };
+    return { status: "no_entitlement", reason: "no active Start Plan was present in the billing response", failureClass: "active_plan_absent" };
   }
-  if (input.statusCode === 429) return { status: "rate_limited", reason: "rate limited; quota state unknown from status alone" };
-  if (input.statusCode >= 500) return { status: "unavailable", reason: "entitlement service error" };
-  if (input.statusCode >= 400) return { status: "unavailable", reason: "entitlement query rejected without a recognized provider code" };
-  return { status: "unavailable", reason: "entitlement response could not be interpreted" };
+  if (input.statusCode === 429) return { status: "rate_limited", reason: "rate limited; quota state unknown from status alone", failureClass: "rate_limited" };
+  if (input.statusCode >= 500) return { status: "unavailable", reason: "entitlement service error", failureClass: "service_error" };
+  if (input.statusCode >= 400) return { status: "unavailable", reason: "entitlement query rejected without a recognized provider code", failureClass: "http_rejected" };
+  if (envelope) return { status: "unavailable", reason: "billing response reported an unsuccessful business outcome", failureClass: "business_rejected" };
+  return { status: "unavailable", reason: "entitlement response could not be interpreted", failureClass: "response_malformed" };
+}
+
+function sanitizeHeaderValue(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed && /^[\x20-\x7e]+$/u.test(trimmed) ? trimmed : undefined;
+}
+
+function clientLanguage(): string {
+  try {
+    return sanitizeHeaderValue(process.env.ZCODE_CLIENT_LANGUAGE)
+      ?? sanitizeHeaderValue(Intl.DateTimeFormat().resolvedOptions().locale)
+      ?? "unknown";
+  } catch {
+    return sanitizeHeaderValue(process.env.ZCODE_CLIENT_LANGUAGE) ?? "unknown";
+  }
+}
+
+function clientTimezone(): string {
+  try {
+    return sanitizeHeaderValue(Intl.DateTimeFormat().resolvedOptions().timeZone) ?? "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+function osCategory(): string {
+  if (process.platform === "darwin") return "macos";
+  if (process.platform === "win32") return "windows";
+  return "linux";
+}
+
+function officialBillingHeaders(input: {
+  readonly origin: string;
+  readonly appVersion: string;
+  readonly deviceMid: string;
+  readonly jwt: string;
+}): HeadersInit {
+  return {
+    Authorization: `Bearer ${input.jwt}`,
+    "X-Device-Mid": input.deviceMid,
+    "User-Agent": `ZCode/${input.appVersion}`,
+    "HTTP-Referer": input.origin,
+    "X-Title": "Z Code@electron",
+    "X-ZCode-App-Version": input.appVersion,
+    "X-Release-Channel": process.env.ZCODE_ENV?.trim().toLowerCase() === "test" ? "test" : "production",
+    "X-Platform": `${process.platform}-${process.arch}`,
+    "X-Client-Language": clientLanguage(),
+    "X-Client-Timezone": clientTimezone(),
+    "X-Os-Category": osCategory(),
+    "X-Os-Version": sanitizeHeaderValue(readOsVersion()) ?? "unknown",
+  };
+}
+
+function failureVerdict(status: EntitlementStatus): EntitlementVerdict {
+  return status === "no_entitlement" || status === "model_unavailable" || status === "quota_exhausted"
+    ? "not_entitled"
+    : "unavailable";
+}
+
+function withFailureFacts(
+  verdict: {
+    readonly status: EntitlementStatus;
+    readonly reason: string;
+    readonly providerCode?: string;
+    readonly failureClass: EntitlementFailureClass;
+  },
+  input: {
+    readonly observedAt: number;
+    readonly requestAttempted: boolean | null;
+    readonly httpStatus: number | null;
+  },
+): EntitlementCheckResult {
+  const providerCode = verdict.providerCode ?? null;
+  return {
+    status: verdict.status,
+    reason: verdict.reason,
+    ...(providerCode ? { providerCode } : {}),
+    observedAt: input.observedAt,
+    failureFacts: Object.freeze({
+      request_attempted: input.requestAttempted,
+      http_status: input.httpStatus,
+      provider_code: providerCode,
+      failure_class: verdict.failureClass,
+      entitlement_verdict: failureVerdict(verdict.status),
+    }),
+  };
 }
 
 export interface BillingEntitlementOptions {
@@ -290,28 +555,43 @@ export class StartPlanBillingEntitlement implements StartPlanLiveEntitlement {
   async check(input: EntitlementCheckInput): Promise<EntitlementCheckResult> {
     const observedAt = this.#now();
     const appVersion = await this.#getAppVersion();
-    if (!appVersion) return { status: "unavailable", reason: "official cli version unavailable; refusing to guess", observedAt };
-    if (!input.deviceMid.trim()) return { status: "unavailable", reason: "official device identity unavailable; refusing to guess", observedAt };
-    const url = `${this.#origin}/api/v1/zcode-plan/billing/balance?app_version=${encodeURIComponent(appVersion)}&mid=${encodeURIComponent(input.deviceMid)}`;
+    if (!appVersion || !/^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$/u.test(appVersion)) {
+      return withFailureFacts({
+        status: "unavailable",
+        reason: "official cli version unavailable; refusing to guess",
+        failureClass: "not_attempted",
+      }, { observedAt, requestAttempted: false, httpStatus: null });
+    }
+    const deviceMid = sanitizeHeaderValue(input.deviceMid);
+    if (!deviceMid) {
+      return withFailureFacts({
+        status: "unavailable",
+        reason: "official device identity unavailable; refusing to guess",
+        failureClass: "not_attempted",
+      }, { observedAt, requestAttempted: false, httpStatus: null });
+    }
+    // Official 3.18.2 sends device identity only in X-Device-Mid for this
+    // endpoint. Do not add a private `mid` query parameter.
+    const url = `${this.#origin}/api/v1/zcode-plan/billing/balance?app_version=${encodeURIComponent(appVersion)}`;
     let response: Response;
     try {
       response = await this.#fetchImpl(url, {
         method: "GET",
-        headers: {
-          // Observed official balance requests carry the persistent device
-          // identity in both the `mid` query and the `X-Device-Mid` header
-          // (2026-11-06 native request audit); omitting them is rejected
-          // with provider code 3001. This is a read-only billing query,
-          // never a model request; app version comes from the official
-          // runtime and identity remains in memory.
-          Authorization: `Bearer ${input.jwt}`,
-          "X-Device-Mid": input.deviceMid,
-        },
+        headers: officialBillingHeaders({
+          origin: this.#origin,
+          appVersion,
+          deviceMid,
+          jwt: input.jwt,
+        }),
         signal: AbortSignal.any([input.signal, AbortSignal.timeout(BILLING_REQUEST_TIMEOUT_MS)]),
       });
     } catch (error) {
       if (input.signal.aborted) throw error;
-      return { status: "unavailable", reason: "entitlement transport failed", observedAt };
+      return withFailureFacts({
+        status: "unavailable",
+        reason: "entitlement transport failed",
+        failureClass: "transport",
+      }, { observedAt: this.#now(), requestAttempted: true, httpStatus: null });
     }
     if (response.status === 200) {
       let body: Record<string, unknown> | undefined;
@@ -328,13 +608,18 @@ export class StartPlanBillingEntitlement implements StartPlanLiveEntitlement {
         providerCode,
         body,
         model: input.model,
+        responseTimeSeconds: responseTimeSeconds(response),
       });
       if (classified.status === "entitled") {
         let requestId = "";
         try { requestId = (response.headers.get("x-request-id") ?? "").trim(); } catch { /* header access is safe, keep empty */ }
         return { status: "entitled", observedAt: this.#now(), requestId };
       }
-      return { ...classified, observedAt: this.#now() };
+      return withFailureFacts(classified, {
+        observedAt: this.#now(),
+        requestAttempted: true,
+        httpStatus: response.status,
+      });
     }
     let body: Record<string, unknown> | undefined;
     let providerCode: string | undefined;
@@ -345,7 +630,13 @@ export class StartPlanBillingEntitlement implements StartPlanLiveEntitlement {
         providerCode = extractProviderCode(parsed);
       }
     } catch { /* body unreadable; classification falls back to status */ }
-    return { ...this.#interpretBillingBody({ statusCode: response.status, providerCode, body, model: input.model }), observedAt };
+    return withFailureFacts(this.#interpretBillingBody({
+      statusCode: response.status,
+      providerCode,
+      body,
+      model: input.model,
+      responseTimeSeconds: responseTimeSeconds(response),
+    }), { observedAt, requestAttempted: true, httpStatus: response.status });
   }
 
   #interpretBillingBody(input: {
@@ -353,10 +644,25 @@ export class StartPlanBillingEntitlement implements StartPlanLiveEntitlement {
     providerCode?: string;
     body?: Record<string, unknown>;
     model: string;
-  }): { status: EntitlementStatus; reason: string } {
+    responseTimeSeconds?: number;
+  }): {
+    status: EntitlementStatus;
+    reason: string;
+    providerCode?: string;
+    failureClass: EntitlementFailureClass;
+  } {
     return classifyEntitlementFailure(input);
   }
 
+}
+
+function responseTimeSeconds(response: Response): number | undefined {
+  try {
+    const parsed = Date.parse(response.headers.get("date") ?? "");
+    return Number.isFinite(parsed) ? parsed / 1000 : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export interface ProductionAuthIssuerOptions {
@@ -369,6 +675,37 @@ export interface ProductionAuthIssuerOptions {
 }
 
 export type ProductionAuthIssuer = NonNullable<import("../store/lifecycle-gate.js").ClaimOnlyDriverOptions["startPlanPrivateAuth"]>;
+
+export class StartPlanEntitlementRejectionError extends Error {
+  constructor(
+    readonly entitlementStatus: EntitlementStatus,
+    readonly failureFacts: StartPlanEntitlementFailureFacts,
+    providerCode?: string,
+  ) {
+    super(`start_plan_entitlement_rejected:${entitlementStatus}${providerCode ? `:${providerCode}` : ""}`);
+    this.name = "StartPlanEntitlementRejectionError";
+  }
+}
+
+export function readStartPlanEntitlementFailureFacts(
+  error: unknown,
+): StartPlanEntitlementFailureFacts | null {
+  return error instanceof StartPlanEntitlementRejectionError
+    ? error.failureFacts
+    : null;
+}
+
+export function formatStartPlanEntitlementFailureFactsIssue(
+  facts: StartPlanEntitlementFailureFacts,
+): string {
+  return `${STARTPLAN_ENTITLEMENT_FACTS_ISSUE_PREFIX}${JSON.stringify({
+    request_attempted: facts.request_attempted,
+    http_status: facts.http_status,
+    provider_code: facts.provider_code,
+    failure_class: facts.failure_class,
+    entitlement_verdict: facts.entitlement_verdict,
+  })}`;
+}
 
 /** Builds the production `startPlanPrivateAuth` issuer for the SQLite
  * lifecycle driver. The caller constructs it only after the official
@@ -418,7 +755,15 @@ export async function createProductionStartPlanAuth(
     && context.credentialExpiresAt === credential.credentialExpiresAt;
   const rejection = (verdict: EntitlementCheckResult): Error => {
     const providerCode = verdict.status === "entitled" ? undefined : verdict.providerCode;
-    return new Error(`start_plan_entitlement_rejected:${verdict.status}${providerCode ? `:${providerCode}` : ""}`);
+    if (verdict.status === "entitled") throw new Error("start_plan_entitlement_rejection_invalid");
+    const failureFacts = verdict.failureFacts ?? Object.freeze({
+      request_attempted: null,
+      http_status: null,
+      provider_code: providerCode ?? null,
+      failure_class: "unknown" as const,
+      entitlement_verdict: failureVerdict(verdict.status),
+    });
+    return new StartPlanEntitlementRejectionError(verdict.status, failureFacts, providerCode);
   };
   const authoritativeEntitlement = async (
     credential: OfficialStartPlanAuthentication,
