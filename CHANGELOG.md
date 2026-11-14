@@ -4,6 +4,15 @@
 
 当前版本以 `package.json` 和 Release Please manifest 为准。提交推送到 `master` 后，Release Please 会在有待发布变更时创建发布 PR，并同步更新版本文件与本日志；合并发布 PR 后会生成对应 Git tag 和 GitHub Release。
 
+## [1.7.2](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.7.1...codex-zcode-bridge-v1.7.2) (2026-11-13)
+
+
+### Bug Fixes
+
+* **sqlite:** add Host-native Recovery hotfix for Stable 1.7.1 ([0c54a51](https://github.com/Sandyzzx/codex-zcode-bridge/commit/0c54a510e346cf57ac32fe70da21ccd856c62987))
+* **sqlite:** make admin abandon preflight read-only ([26f7173](https://github.com/Sandyzzx/codex-zcode-bridge/commit/26f71732fae591c16c1235a6824ccde078932afe))
+* **sqlite:** recover safe lifecycle facts while host is live ([d9e24a0](https://github.com/Sandyzzx/codex-zcode-bridge/commit/d9e24a0f242a4ca80be601c6727b053704c5109a))
+
 ## [1.7.1](https://github.com/Sandyzzx/codex-zcode-bridge/compare/codex-zcode-bridge-v1.7.0...codex-zcode-bridge-v1.7.1) (2026-11-12)
 
 
