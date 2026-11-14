@@ -24,6 +24,7 @@ const PATCH_ROOT = "upstream/zcode-3.18.2/patches/";
 const HOST_SOURCE_FILES = [
   "packages/shared/src/credential-security/contract.ts",
   "packages/shared/src/credential-security/systemCredentialCipher.ts",
+  "packages/shared/src/version.ts",
   "packages/services/src/credential/credentialService.ts",
   "packages/services/src/oauth/repo/oauthCredentialRepo.ts",
   "packages/services/src/official-host/runtimeHostEntry.ts",
@@ -37,6 +38,7 @@ const HOST_SOURCE_FILES = [
   "packages/services/src/telemetry/telemetryCore.ts",
 ];
 const HOST_EXPORTS = [
+  "ZCODE_PRODUCT_VERSION",
   "ZCodeAgentProcessManager",
   "ZCodeProtocolClient",
   "ZCodeStdioTransport",
@@ -101,14 +103,17 @@ if (!sourceArg) {
   throw new Error("usage: node scripts/build-official-host-runtime.mjs --source <fixed-upstream-worktree>");
 }
 const sourceRoot = path.resolve(sourceArg);
+const sourcePackage = JSON.parse(await readFile(path.join(sourceRoot, "package.json"), "utf8"));
+const sourceProductVersion = sourcePackage?.version;
 
 assertEqual(process.version, `v${BUILD_NODE}`, "build Node version");
 assertEqual((await import("esbuild/package.json", { with: { type: "json" } })).default.version, HOST_BUNDLER, "esbuild version");
-assertEqual(JSON.parse(await readFile(path.join(sourceRoot, "package.json"), "utf8")).version, SOURCE_VERSION, "source version");
+assertEqual(sourceProductVersion, SOURCE_VERSION, "source version");
 assertEqual(await git(sourceRoot, ["rev-parse", "HEAD"]), SOURCE_COMMIT, "source commit");
 assertEqual(await git(sourceRoot, ["rev-parse", "HEAD^{tree}"]), SOURCE_TREE, "source tree");
 
 const bom = JSON.parse(await readFile(artifactBomPath, "utf8"));
+assertEqual(bom.scope?.zcodeVersion, sourceProductVersion, "BOM product version");
 const patches = await validateArtifactBomPatches(bom);
 const sourceState = await validateSourceState(sourceRoot, patches);
 const nativeFiles = await installNativeClosure(sourceRoot);
@@ -120,6 +125,7 @@ try {
   await build({
     stdin: {
       contents: [
+        'export { ZCODE_VERSION as ZCODE_PRODUCT_VERSION } from "./packages/shared/src/version.ts";',
         'export { ZCodeAgentProcessManager } from "./packages/services/src/zcode-agent/zcodeAgentProcessManager.ts";',
         'export { ZCodeProtocolClient } from "./packages/services/src/zcode-agent/zcodeProtocolClient.ts";',
         'export { ZCodeStdioTransport } from "./packages/services/src/zcode-agent/zcodeStdioTransport.ts";',
@@ -136,6 +142,9 @@ try {
     target: "node24",
     sourcemap: false,
     legalComments: "eof",
+    define: {
+      __ZCODE_VERSION__: JSON.stringify(sourceProductVersion),
+    },
     logLevel: "info",
     external: ["@napi-rs/keyring"],
     banner: {

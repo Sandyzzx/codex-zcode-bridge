@@ -28114,6 +28114,7 @@ __export(official_host_adapter_exports, {
   OfficialHostAdapter: () => OfficialHostAdapter,
   createOfficialHostClientFactory: () => createOfficialHostClientFactory,
   lazyOfficialHostAssets: () => lazyOfficialHostAssets,
+  loadOfficialHostProductVersion: () => loadOfficialHostProductVersion,
   loadOfficialHostProviderRuntimeAuthFactory: () => loadOfficialHostProviderRuntimeAuthFactory,
   loadOfficialStartPlanAuthenticationResolverFactory: () => loadOfficialStartPlanAuthenticationResolverFactory,
   verifyOfficialHostAssets: () => verifyOfficialHostAssets
@@ -28392,6 +28393,11 @@ async function loadOfficialStartPlanAuthenticationResolverFactory(workerModuleUr
   }
   return module.createOfficialStartPlanAuthenticationResolver;
 }
+async function loadOfficialHostProductVersion(workerModuleUrl = import.meta.url) {
+  const assets = await verifyOfficialHostAssets(workerModuleUrl);
+  const module = await loadOfficialHostModule(assets.hostModulePath);
+  return normalizeOfficialHostProductVersion(module.ZCODE_PRODUCT_VERSION);
+}
 function lazyOfficialHostAssets(workerModuleUrl = import.meta.url) {
   let pending;
   return () => {
@@ -28465,6 +28471,16 @@ function fixedOfficialRuntimeConfig(configured, assets) {
 function asRecord3(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
+function normalizeOfficialHostProductVersion(value) {
+  const version2 = typeof value === "string" ? value.trim() : "";
+  if (!/^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$/u.test(version2)) {
+    throw new BridgeError(
+      "provider_config_invalid",
+      "The Official Host module is missing a valid product version."
+    );
+  }
+  return version2;
+}
 function sameWorkspace(left, right) {
   const normalize = (value) => path9.normalize(path9.resolve(value));
   return process.platform === "win32" ? normalize(left).toLocaleLowerCase("en-US") === normalize(right).toLocaleLowerCase("en-US") : normalize(left) === normalize(right);
@@ -28513,8 +28529,8 @@ var init_official_host_adapter = __esm({
     OFFICIAL_HOST_ASSETS = {
       hostModule: {
         relativePath: "official-host-runtime.mjs",
-        bytes: 1829875,
-        sha256: "EBB262FE6364E3F982381F6554812EC2FC308030842711A916AE4F4357F99FEC"
+        bytes: 1829872,
+        sha256: "7E2B8B772F1DD83135903B64D569D634C7E7FC6F303460E08C98E27D311B6A91"
       },
       appServerEntry: {
         relativePath: "app-server/zcode.cjs",

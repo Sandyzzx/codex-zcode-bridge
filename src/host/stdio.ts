@@ -101,20 +101,29 @@ export async function createHostStartPlanIssuer(options: HostStartPlanIssuerOpti
     if (!config.zcodeEntrypoint || !config.zcodeDataRoot) return null;
     const dataBaseDir = zcodeDataBaseDir(config.providerPersonalConfigFile);
     if (!dataBaseDir) return null;
-    const { createProductionStartPlanAuth, StartPlanBillingEntitlement, readOfficialCliVersion } = await import("../runtime/start-plan-production-auth.js");
-    const entrypoint = config.zcodeEntrypoint;
+    const { createProductionStartPlanAuth, StartPlanBillingEntitlement } = await import("../runtime/start-plan-production-auth.js");
+    const workerModuleUrl = pathToFileURL(workerEntryPath());
+    const {
+      loadOfficialHostProductVersion,
+      loadOfficialStartPlanAuthenticationResolverFactory,
+    } = await import("../adapters/official-host-adapter.js");
+    // Billing's app_version is the official product version embedded by the
+    // fixed Host build. It is not the installed Desktop version or the
+    // independently versioned AppServer CLI (`zcode.cjs --version`).
+    const officialProductVersion = options.entitlement
+      ? undefined
+      : await loadOfficialHostProductVersion(workerModuleUrl);
     const billingEntitlement = options.entitlement ?? new StartPlanBillingEntitlement({
-      getAppVersion: () => readOfficialCliVersion(entrypoint),
+      getAppVersion: async () => officialProductVersion,
     });
     let authentication = options.authentication;
     if (!authentication) {
-      const { loadOfficialStartPlanAuthenticationResolverFactory } = await import("../adapters/official-host-adapter.js");
       // The bundled Bridge lives under dist/, while the verified Official Host
       // assets ship under worker/. Resolve against the Worker-shaped URL rather
       // than bridge.mjs so Start Plan uses the same verified artifact as the
       // Coding Plan execution path.
       const factory = await loadOfficialStartPlanAuthenticationResolverFactory(
-        pathToFileURL(workerEntryPath()),
+        workerModuleUrl,
       );
       authentication = factory({ dataBaseDir });
     }

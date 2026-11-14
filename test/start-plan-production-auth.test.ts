@@ -317,6 +317,31 @@ test("task-level entitlement fails closed without attributable positive model qu
       expectedClass: "model_quota_unproven",
     },
     {
+      name: "available units cannot replace missing remaining units",
+      body: billingBody({
+        balances: [{
+          plan_id: "synthetic-start-plan",
+          capabilities: [`model:${MODEL}`],
+          available_units: 9,
+        }],
+      }),
+      expectedStatus: "unavailable",
+      expectedClass: "model_quota_unproven",
+    },
+    {
+      name: "invalid remaining units cannot be replaced by available units",
+      body: billingBody({
+        balances: [{
+          plan_id: "synthetic-start-plan",
+          capabilities: [`model:${MODEL}`],
+          remaining_units: "invalid",
+          available_units: 9,
+        }],
+      }),
+      expectedStatus: "unavailable",
+      expectedClass: "model_quota_unproven",
+    },
+    {
       name: "balance belongs to another plan",
       body: billingBody({
         balances: [{ plan_id: "another-plan", capabilities: [`model:${MODEL}`], remaining_units: 7 }],
@@ -342,6 +367,70 @@ test("task-level entitlement fails closed without attributable positive model qu
     assert.equal(verdict.failureFacts?.failure_class, item.expectedClass, item.name);
     assert.equal(requests.length, 1, item.name);
   }
+});
+
+test("remaining_units is authoritative while available_units reflects reservations", async () => {
+  const cases: Array<{ name: string; balance: Record<string, unknown>; status: string }> = [
+    {
+      name: "zero remaining with positive available is exhausted",
+      balance: {
+        plan_id: "synthetic-start-plan",
+        capabilities: [`model:${MODEL}`],
+        remaining_units: 0,
+        available_units: 9,
+      },
+      status: "quota_exhausted",
+    },
+    {
+      name: "positive remaining with zero available remains authorized",
+      balance: {
+        plan_id: "synthetic-start-plan",
+        capabilities: [`model:${MODEL}`],
+        remaining_units: 9,
+        available_units: 0,
+      },
+      status: "entitled",
+    },
+  ];
+  for (const item of cases) {
+    const { fetch: fetchImpl } = fakeBillingFetch(billingBody({ balances: [item.balance] }));
+    const entitlement = new StartPlanBillingEntitlement({
+      getAppVersion: async () => "3.18.2",
+      fetchImpl,
+    });
+    const verdict = await entitlement.check({
+      account: ACCOUNT_A,
+      provider: "account:bigmodel-start-plan",
+      model: MODEL,
+      deviceMid: DEVICE_ID,
+      jwt: syntheticJwt(),
+      signal: new AbortController().signal,
+    });
+    assert.equal(verdict.status, item.status, item.name);
+  }
+});
+
+test("Billing uses the official product version rather than the AppServer CLI version", async () => {
+  const { fetch: fetchImpl, requests } = fakeBillingFetch(billingBody());
+  const entitlement = new StartPlanBillingEntitlement({
+    getAppVersion: async () => "3.18.2",
+    fetchImpl,
+  });
+  const verdict = await entitlement.check({
+    account: ACCOUNT_A,
+    provider: "account:bigmodel-start-plan",
+    model: MODEL,
+    deviceMid: DEVICE_ID,
+    jwt: syntheticJwt(),
+    signal: new AbortController().signal,
+  });
+  assert.equal(verdict.status, "entitled");
+  assert.equal(
+    new URL(requests[0]!.url).searchParams.get("app_version"),
+    "3.18.2",
+  );
+  assert.equal(requests[0]!.headers.get("x-zcode-app-version"), "3.18.2");
+  assert.equal(requests[0]!.headers.get("user-agent"), "ZCode/3.18.2");
 });
 
 test("official expiry and activation timing fail closed without model evidence", async () => {

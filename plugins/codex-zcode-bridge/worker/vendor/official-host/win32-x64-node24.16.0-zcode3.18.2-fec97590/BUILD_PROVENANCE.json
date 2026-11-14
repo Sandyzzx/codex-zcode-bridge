@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedOn": "2026-11-13",
+  "generatedOn": "2026-11-14",
   "scope": {
     "platform": "win32",
     "architecture": "x64",
@@ -60,6 +60,7 @@
       "output": "official-host-runtime.mjs",
       "entry": {
         "exports": [
+          "ZCODE_PRODUCT_VERSION",
           "ZCodeAgentProcessManager",
           "ZCodeProtocolClient",
           "ZCodeStdioTransport",
@@ -69,6 +70,7 @@
         "sourceFiles": [
           "packages/shared/src/credential-security/contract.ts",
           "packages/shared/src/credential-security/systemCredentialCipher.ts",
+          "packages/shared/src/version.ts",
           "packages/services/src/credential/credentialService.ts",
           "packages/services/src/oauth/repo/oauthCredentialRepo.ts",
           "packages/services/src/official-host/runtimeHostEntry.ts",
@@ -92,13 +94,13 @@
   },
   "bom": {
     "path": "ARTIFACT_BOM.json",
-    "bytes": 8305,
-    "sha256": "B0971DE674940F9DAF78C9826D8FC35707EE06D12B4CE9041C07132FDE5C8D6B"
+    "bytes": 8345,
+    "sha256": "D6A8546D99EC6C20BB8392C0902DEEA20F034B7643A0E283E45BA42E267B0240"
   },
   "output": {
     "path": "official-host-runtime.mjs",
-    "bytes": 1829875,
-    "sha256": "EBB262FE6364E3F982381F6554812EC2FC308030842711A916AE4F4357F99FEC"
+    "bytes": 1829872,
+    "sha256": "7E2B8B772F1DD83135903B64D569D634C7E7FC6F303460E08C98E27D311B6A91"
   },
   "verification": {
     "artifactInventory": "ARTIFACT_BOM.json",

@@ -17,6 +17,7 @@ import {
   OFFICIAL_HOST_TRANSPORT_MAX_FRAME_BYTES,
   OfficialHostAdapter,
   createOfficialHostClientFactory,
+  loadOfficialHostProductVersion,
   verifyOfficialHostAssets,
   type OfficialHostAssets,
   type OfficialHostModule,
@@ -27,6 +28,7 @@ import type { BrowserCommandResult } from "../src/browser/result.js";
 import type { AgentHandle, TaskPackage, WorkspaceRef, ZCodeRuntimeConfig } from "../src/interfaces.js";
 import { BridgeError } from "../src/runtime/errors.js";
 import type { ProcessProbe } from "../src/runtime/process-probe.js";
+import { readOfficialCliVersion } from "../src/runtime/start-plan-production-auth.js";
 import { fakeConfig, makeTask, makeTempDir, removeTempDir, validReport } from "./helpers.js";
 
 const SESSION_ID = "sess_official_11111111-aaaa-4bbb-8ccc-cccccccccccc";
@@ -1000,6 +1002,8 @@ test("OfficialHostAdapter is lazy before execution and resolves the test source 
   const assets = await verifyOfficialHostAssets(workerUrl);
   assert.equal(path.basename(assets.hostModulePath), "official-host-runtime.mjs");
   assert.equal(assets.manifestDigest.length, 64);
+  assert.equal(await loadOfficialHostProductVersion(workerUrl), "3.18.2");
+  assert.equal(await readOfficialCliVersion(assets.appServerEntryPath), "0.17.1");
 });
 
 test("the shipped host module applies the exact 16 MiB transport frame limit and fails closed above it", async () => {
@@ -1076,13 +1080,15 @@ test("the shipped Host exports and native keyring closure load outside the build
   const assets = await verifyOfficialHostAssets(workerUrl);
   const module = await import(pathToFileURL(assets.hostModulePath).href) as unknown as Record<string, unknown>;
   for (const name of [
+    "ZCODE_PRODUCT_VERSION",
     "ZCodeAgentProcessManager",
     "ZCodeProtocolClient",
     "ZCodeStdioTransport",
     "createOAuthProviderRuntimeAuthService",
     "createOfficialStartPlanAuthenticationResolver",
   ]) {
-    assert.equal(typeof module[name], "function", `${name} must be exported`);
+    if (name === "ZCODE_PRODUCT_VERSION") assert.equal(module[name], "3.18.2");
+    else assert.equal(typeof module[name], "function", `${name} must be exported`);
   }
 
   const artifactRequire = createRequire(path.join(assets.root, "app-server", "zcode.cjs"));

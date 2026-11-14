@@ -60,6 +60,7 @@
     "hostModuleInputs": [
       "packages/shared/src/credential-security/contract.ts",
       "packages/shared/src/credential-security/systemCredentialCipher.ts",
+      "packages/shared/src/version.ts",
       "packages/services/src/credential/credentialService.ts",
       "packages/services/src/oauth/repo/oauthCredentialRepo.ts",
       "packages/services/src/official-host/runtimeHostEntry.ts",
@@ -163,8 +164,8 @@
     {
       "path": "official-host-runtime.mjs",
       "role": "self-contained official ProcessManager, protocol client, StdioTransport and narrow Start Plan authentication resolver",
-      "bytes": 1829875,
-      "sha256": "EBB262FE6364E3F982381F6554812EC2FC308030842711A916AE4F4357F99FEC",
+      "bytes": 1829872,
+      "sha256": "7E2B8B772F1DD83135903B64D569D634C7E7FC6F303460E08C98E27D311B6A91",
       "license": "ZCode project and third-party terms"
     },
     {

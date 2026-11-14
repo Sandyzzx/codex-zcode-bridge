@@ -133,7 +133,11 @@ if (!workerBundle.includes("vendor") || !workerBundle.includes("browser-host.cjs
   throw new Error("worker-main.mjs no longer references the vendored browser backend; update the loader or this check");
 }
 const bridgeBundle = await readFile(path.join(pluginRoot, "dist", "bridge.mjs"), "utf8");
-if (!/loadOfficialStartPlanAuthenticationResolverFactory\d*\(\s*pathToFileURL\d*\(workerEntryPath\(\)\)/u.test(
+if (!/const\s+workerModuleUrl\s*=\s*pathToFileURL\d*\(\s*workerEntryPath\(\)\s*\)/u.test(
+  bridgeBundle,
+) || !/loadOfficialStartPlanAuthenticationResolverFactory\d*\(\s*workerModuleUrl\s*\)/u.test(
+  bridgeBundle,
+) || !/loadOfficialHostProductVersion\d*\(\s*workerModuleUrl\s*\)/u.test(
   bridgeBundle,
 )) {
   throw new Error("bridge.mjs must resolve Start Plan Official Host assets through the Worker-shaped module URL");

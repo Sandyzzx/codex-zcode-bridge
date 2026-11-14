@@ -31,8 +31,8 @@ interface OfficialHostAssetDefinition {
 const OFFICIAL_HOST_ASSETS = {
   hostModule: {
     relativePath: "official-host-runtime.mjs",
-    bytes: 1_829_875,
-    sha256: "EBB262FE6364E3F982381F6554812EC2FC308030842711A916AE4F4357F99FEC",
+    bytes: 1_829_872,
+    sha256: "7E2B8B772F1DD83135903B64D569D634C7E7FC6F303460E08C98E27D311B6A91",
   },
   appServerEntry: {
     relativePath: "app-server/zcode.cjs",
@@ -81,6 +81,7 @@ export interface OfficialHostAssets {
 }
 
 export interface OfficialHostModule {
+  readonly ZCODE_PRODUCT_VERSION?: string;
   readonly ZCodeAgentProcessManager: new (options: Record<string, unknown>) => OfficialHostProcessManager;
   readonly ZCodeProtocolClient: new (...args: never[]) => OfficialHostProtocolClient;
   readonly createOAuthProviderRuntimeAuthService?: OfficialHostRuntimeAuthServiceFactory;
@@ -504,6 +505,14 @@ export async function loadOfficialStartPlanAuthenticationResolverFactory(
   return module.createOfficialStartPlanAuthenticationResolver;
 }
 
+export async function loadOfficialHostProductVersion(
+  workerModuleUrl: string | URL = import.meta.url,
+): Promise<string> {
+  const assets = await verifyOfficialHostAssets(workerModuleUrl);
+  const module = await loadOfficialHostModule(assets.hostModulePath);
+  return normalizeOfficialHostProductVersion(module.ZCODE_PRODUCT_VERSION);
+}
+
 export function lazyOfficialHostAssets(
   workerModuleUrl: string | URL = import.meta.url,
 ): () => Promise<OfficialHostAssets> {
@@ -593,6 +602,17 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
+}
+
+function normalizeOfficialHostProductVersion(value: unknown): string {
+  const version = typeof value === "string" ? value.trim() : "";
+  if (!/^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$/u.test(version)) {
+    throw new BridgeError(
+      "provider_config_invalid",
+      "The Official Host module is missing a valid product version.",
+    );
+  }
+  return version;
 }
 
 function sameWorkspace(left: string, right: string): boolean {

@@ -28147,6 +28147,7 @@ __export(official_host_adapter_exports, {
   OfficialHostAdapter: () => OfficialHostAdapter,
   createOfficialHostClientFactory: () => createOfficialHostClientFactory,
   lazyOfficialHostAssets: () => lazyOfficialHostAssets,
+  loadOfficialHostProductVersion: () => loadOfficialHostProductVersion,
   loadOfficialHostProviderRuntimeAuthFactory: () => loadOfficialHostProviderRuntimeAuthFactory,
   loadOfficialStartPlanAuthenticationResolverFactory: () => loadOfficialStartPlanAuthenticationResolverFactory,
   verifyOfficialHostAssets: () => verifyOfficialHostAssets
@@ -28425,6 +28426,11 @@ async function loadOfficialStartPlanAuthenticationResolverFactory(workerModuleUr
   }
   return module.createOfficialStartPlanAuthenticationResolver;
 }
+async function loadOfficialHostProductVersion(workerModuleUrl = import.meta.url) {
+  const assets = await verifyOfficialHostAssets(workerModuleUrl);
+  const module = await loadOfficialHostModule(assets.hostModulePath);
+  return normalizeOfficialHostProductVersion(module.ZCODE_PRODUCT_VERSION);
+}
 function lazyOfficialHostAssets(workerModuleUrl = import.meta.url) {
   let pending;
   return () => {
@@ -28498,6 +28504,16 @@ function fixedOfficialRuntimeConfig(configured, assets) {
 function asRecord4(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
+function normalizeOfficialHostProductVersion(value) {
+  const version2 = typeof value === "string" ? value.trim() : "";
+  if (!/^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$/u.test(version2)) {
+    throw new BridgeError(
+      "provider_config_invalid",
+      "The Official Host module is missing a valid product version."
+    );
+  }
+  return version2;
+}
 function sameWorkspace(left, right) {
   const normalize = (value) => path17.normalize(path17.resolve(value));
   return process.platform === "win32" ? normalize(left).toLocaleLowerCase("en-US") === normalize(right).toLocaleLowerCase("en-US") : normalize(left) === normalize(right);
@@ -28546,8 +28562,8 @@ var init_official_host_adapter = __esm({
     OFFICIAL_HOST_ASSETS = {
       hostModule: {
         relativePath: "official-host-runtime.mjs",
-        bytes: 1829875,
-        sha256: "EBB262FE6364E3F982381F6554812EC2FC308030842711A916AE4F4357F99FEC"
+        bytes: 1829872,
+        sha256: "7E2B8B772F1DD83135903B64D569D634C7E7FC6F303460E08C98E27D311B6A91"
       },
       appServerEntry: {
         relativePath: "app-server/zcode.cjs",
@@ -56297,16 +56313,20 @@ async function createHostStartPlanIssuer(options) {
     if (!config2.zcodeEntrypoint || !config2.zcodeDataRoot) return null;
     const dataBaseDir = zcodeDataBaseDir(config2.providerPersonalConfigFile);
     if (!dataBaseDir) return null;
-    const { createProductionStartPlanAuth: createProductionStartPlanAuth2, StartPlanBillingEntitlement: StartPlanBillingEntitlement2, readOfficialCliVersion: readOfficialCliVersion2 } = await Promise.resolve().then(() => (init_start_plan_production_auth(), start_plan_production_auth_exports));
-    const entrypoint = config2.zcodeEntrypoint;
+    const { createProductionStartPlanAuth: createProductionStartPlanAuth2, StartPlanBillingEntitlement: StartPlanBillingEntitlement2 } = await Promise.resolve().then(() => (init_start_plan_production_auth(), start_plan_production_auth_exports));
+    const workerModuleUrl = pathToFileURL3(workerEntryPath());
+    const {
+      loadOfficialHostProductVersion: loadOfficialHostProductVersion2,
+      loadOfficialStartPlanAuthenticationResolverFactory: loadOfficialStartPlanAuthenticationResolverFactory2
+    } = await Promise.resolve().then(() => (init_official_host_adapter(), official_host_adapter_exports));
+    const officialProductVersion = options.entitlement ? void 0 : await loadOfficialHostProductVersion2(workerModuleUrl);
     const billingEntitlement = options.entitlement ?? new StartPlanBillingEntitlement2({
-      getAppVersion: () => readOfficialCliVersion2(entrypoint)
+      getAppVersion: async () => officialProductVersion
     });
     let authentication = options.authentication;
     if (!authentication) {
-      const { loadOfficialStartPlanAuthenticationResolverFactory: loadOfficialStartPlanAuthenticationResolverFactory2 } = await Promise.resolve().then(() => (init_official_host_adapter(), official_host_adapter_exports));
       const factory = await loadOfficialStartPlanAuthenticationResolverFactory2(
-        pathToFileURL3(workerEntryPath())
+        workerModuleUrl
       );
       authentication = factory({ dataBaseDir });
     }

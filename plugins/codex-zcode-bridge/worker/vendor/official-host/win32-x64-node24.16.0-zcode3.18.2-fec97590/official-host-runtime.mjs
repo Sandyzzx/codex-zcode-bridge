@@ -5,6 +5,9 @@ var __export = (target2, all) => {
     __defProp(target2, name, { get: all[name], enumerable: true });
 };
 
+// .run/upstream-zcode-3.18.2/packages/shared/src/version.ts
+var ZCODE_VERSION = true ? "3.18.2" : "0.0.0-dev";
+
 // .run/upstream-zcode-3.18.2/packages/services/src/windows-runtime-host/index.ts
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -20050,9 +20053,6 @@ function resolvePersistedUiLocalePreference(raw) {
   }
   return localePreference;
 }
-
-// .run/upstream-zcode-3.18.2/packages/shared/src/version.ts
-var ZCODE_VERSION = typeof __ZCODE_VERSION__ !== "undefined" ? __ZCODE_VERSION__ : "0.0.0-dev";
 
 // .run/upstream-zcode-3.18.2/packages/shared/src/shortcutCommands.ts
 var NAMED_KEYS = /* @__PURE__ */ new Set([
@@ -43762,6 +43762,7 @@ function createOfficialStartPlanAuthenticationResolver(options2) {
   };
 }
 export {
+  ZCODE_VERSION as ZCODE_PRODUCT_VERSION,
   ZCodeAgentProcessManager,
   ZCodeProtocolClient,
   ZCodeStdioTransport,
