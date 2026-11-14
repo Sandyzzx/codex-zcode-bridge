@@ -2,8 +2,8 @@
 
 > Status: AUTHORITATIVE
 > Last updated: 2026-11-14
-> Last verified: 2026-11-14，核对 `origin/preview` 的 Preview.5 源码、ADR-037 当前本地候选实现、ZCode 3.18.2 只读认证、有序 patch replay、BOM 与合成回归；3.18.x 安装矩阵和真实 Start Plan E2E 未验收。
-> Verified against: `9bec5a27d` + `2d83aeef` ADR-037 acceptance documentation
+> Last verified: 2026-11-14，核对 `origin/preview` 的 Preview.5 源码、ADR-037 当前本地候选实现、ZCode 3.18.2 只读认证、Official Host 版本上下文修复、有序 patch replay、BOM 与合成回归；3.18.x 安装矩阵、Desktop/Bridge A/B 和真实 Start Plan E2E 未验收。
+> Verified against: `9bec5a27d` + `2d83aeef` ADR-037 acceptance documentation + `843066ec` Host context repair candidate
 
 当前发布状态：
 
@@ -52,7 +52,8 @@ Preview.3 的 Start Plan 历史证据覆盖 Windows、官方 AppServer `0.17.1`�
 | 官方 Start Plan 认证复用 | `IMPLEMENTED — CANDIDATE` | v1、v2:env、v2:os 只读字节不变，BigModel/linked Z.AI/`zai_cn`、冷进程、Billing 单 verdict 与 Lease 合成测试通过；未发布、无真实 E2E |
 | Desktop 3.18.0 / 3.18.1 / 3.18.2 兼容矩阵 | `NOT_VERIFIED` | 本机仅观察到 Desktop `3.18.2.10443`；3.18.0/3.18.1 未安装，源码观察不能替代隔离运行与真实账户组合 |
 | 一般 Desktop Main 独立性 | `NOT_RUN` | 合成路径不证明完整资源与身份闭包 |
-| 当前认证候选回归 | `PASS — CANDIDATE` | `test:affected` 选择 `FULL_SUITE`：958 项，956 pass、0 fail、2 skip；只覆盖 Windows x64、Node 24.16.0 |
+| 当前认证候选回归 | `PASS — CANDIDATE` | `test:affected` 选择 `FULL_SUITE`：972 项，970 pass、0 fail、2 skip；只覆盖 Windows x64、Node 24.16.0 |
+| Official Host 启动版本上下文 | `PASS — CANDIDATE` | 有效 Desktop metadata 优先；独立 Host 使用校验后的 `3.18.2` 产品版本且不伪造 Build ID；模型请求仍使用 `--surface desktop`；Desktop/Bridge A/B 未运行 |
 | 当前认证候选 CI | `NOT_RUN` | 本地候选未 Push；不得沿用 Preview.5 的 CI 结果 |
 
 ## 明确边界

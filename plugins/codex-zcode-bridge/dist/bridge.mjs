@@ -21400,6 +21400,22 @@ function buildZCodeAppServerLaunch(zcodeEntrypoint, baseEnv) {
     }
   };
 }
+function withOfficialHostLaunchIdentity(baseEnv, identity) {
+  const installedVersion = baseEnv[ZCODE_APP_VERSION_ENV];
+  const installedBuildCommitId = baseEnv[ZCODE_BUILD_COMMIT_ID_ENV];
+  if (installedVersion !== void 0 || installedBuildCommitId !== void 0) {
+    if (typeof installedVersion !== "string" || !VERSION_PATTERN.test(installedVersion) || typeof installedBuildCommitId !== "string" || !BUILD_COMMIT_PATTERN.test(installedBuildCommitId)) {
+      throw invalidLaunchIdentity();
+    }
+    return { ...baseEnv };
+  }
+  const productVersion = identity.productVersion.trim();
+  if (!VERSION_PATTERN.test(productVersion)) throw invalidLaunchIdentity();
+  return {
+    ...baseEnv,
+    [ZCODE_APP_VERSION_ENV]: productVersion
+  };
+}
 function readDesktopMetadata(zcodeEntrypoint) {
   const archivePath = path8.resolve(path8.dirname(zcodeEntrypoint), "..", "app.asar");
   let archive;
@@ -21409,7 +21425,6 @@ function readDesktopMetadata(zcodeEntrypoint) {
     if (isMissingFile(error62)) return null;
     throw invalidMetadata("could not be read");
   }
-  if (archive === null) return null;
   const packageJson = parseObject(archive.packageJson, "package.json");
   const buildMetadata = parseObject(archive.buildMetadata, "build-meta.json");
   const packageVersion = packageJson["version"];
@@ -21442,7 +21457,7 @@ function readAsarMetadataFiles(archivePath) {
     const root = parseObject(headerBuffer, "asar header");
     if (!isRecord2(root.files)) throw new Error("asar header file table is not an object");
     const buildEntry = findEntry(root.files, BUILD_METADATA_PATH);
-    if (buildEntry === null) return null;
+    if (buildEntry === null) throw new Error("asar build metadata is missing");
     const packageEntry = findEntry(root.files, ["package.json"]);
     if (packageEntry === null) throw new Error("asar package.json is missing");
     return {
@@ -21508,6 +21523,12 @@ function invalidMetadata(reason) {
   return new BridgeError(
     "provider_config_invalid",
     `Installed ZCode Desktop metadata ${reason}; refusing to invent a Desktop identity.`
+  );
+}
+function invalidLaunchIdentity() {
+  return new BridgeError(
+    "provider_config_invalid",
+    "Official Host launch identity is invalid; refusing to mix Desktop, Host, or CLI versions."
   );
 }
 function isMissingFile(error62) {
@@ -28167,6 +28188,8 @@ function createOfficialHostClientFactory(input2) {
       throw new BridgeError("provider_config_invalid", "Official Host runtime entrypoint must be the shipped bundle.");
     }
     const module = await resolveOfficialHostModule(input2.moduleSource);
+    const productVersion = normalizeOfficialHostProductVersion(module.ZCODE_PRODUCT_VERSION);
+    const launchEnv = withOfficialHostLaunchIdentity(context.launch.env, { productVersion });
     const manager = new module.ZCodeAgentProcessManager({
       useSharedTaskRuntime: () => false,
       maxFrameBytes: OFFICIAL_HOST_TRANSPORT_MAX_FRAME_BYTES,
@@ -28182,7 +28205,7 @@ function createOfficialHostClientFactory(input2) {
         args: [assets.appServerEntryPath, ...context.launch.args],
         cwd: workspacePath,
         env: {
-          ...context.launch.env,
+          ...launchEnv,
           ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: assets.builtinProviderConfigPath,
           ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: context.config.providerPersonalConfigFile,
           ZCODE_RUNTIME_HOST_PATH: assets.runtimeHostPath
@@ -28554,6 +28577,7 @@ var OFFICIAL_HOST_TRANSPORT_MAX_FRAME_BYTES, OFFICIAL_HOST_ASSET_RELATIVE_ROOT, 
 var init_official_host_adapter = __esm({
   "src/adapters/official-host-adapter.ts"() {
     "use strict";
+    init_desktop_host_launch();
     init_errors3();
     init_resolver();
     init_zcode_app_server_adapter();

@@ -25,9 +25,14 @@ interface DesktopMetadata {
   readonly buildCommitId: string;
 }
 
+export interface OfficialHostLaunchIdentity {
+  readonly productVersion: string;
+}
+
 /**
  * Build the exact child launch used by both the task adapter and model-catalog
- * probe. Missing Desktop metadata leaves the two identity variables absent;
+ * probe. Installed Desktop metadata is authoritative when present. The
+ * Official Host supplies its verified product-version fallback separately;
  * malformed, unsupported, or conflicting installed metadata fails closed.
  */
 export function buildZCodeAppServerLaunch(
@@ -47,16 +52,45 @@ export function buildZCodeAppServerLaunch(
   };
 }
 
+/**
+ * Use the fixed Official Host's compiled product version only when no verified
+ * Desktop identity is already present. A build commit ID is never synthesized
+ * from an upstream source commit; it remains available only from valid
+ * adjacent Desktop build metadata.
+ */
+export function withOfficialHostLaunchIdentity(
+  baseEnv: NodeJS.ProcessEnv,
+  identity: OfficialHostLaunchIdentity,
+): NodeJS.ProcessEnv {
+  const installedVersion = baseEnv[ZCODE_APP_VERSION_ENV];
+  const installedBuildCommitId = baseEnv[ZCODE_BUILD_COMMIT_ID_ENV];
+  if (installedVersion !== undefined || installedBuildCommitId !== undefined) {
+    if (typeof installedVersion !== "string"
+      || !VERSION_PATTERN.test(installedVersion)
+      || typeof installedBuildCommitId !== "string"
+      || !BUILD_COMMIT_PATTERN.test(installedBuildCommitId)) {
+      throw invalidLaunchIdentity();
+    }
+    return { ...baseEnv };
+  }
+
+  const productVersion = identity.productVersion.trim();
+  if (!VERSION_PATTERN.test(productVersion)) throw invalidLaunchIdentity();
+  return {
+    ...baseEnv,
+    [ZCODE_APP_VERSION_ENV]: productVersion,
+  };
+}
+
 function readDesktopMetadata(zcodeEntrypoint: string): DesktopMetadata | null {
   const archivePath = path.resolve(path.dirname(zcodeEntrypoint), "..", "app.asar");
-  let archive: { readonly packageJson: Buffer; readonly buildMetadata: Buffer } | null;
+  let archive: { readonly packageJson: Buffer; readonly buildMetadata: Buffer };
   try {
     archive = readAsarMetadataFiles(archivePath);
   } catch (error) {
     if (isMissingFile(error)) return null;
     throw invalidMetadata("could not be read");
   }
-  if (archive === null) return null;
 
   const packageJson = parseObject(archive.packageJson, "package.json");
   const buildMetadata = parseObject(archive.buildMetadata, "build-meta.json");
@@ -76,7 +110,7 @@ function readDesktopMetadata(zcodeEntrypoint: string): DesktopMetadata | null {
   return { appVersion, buildCommitId };
 }
 
-function readAsarMetadataFiles(archivePath: string): { readonly packageJson: Buffer; readonly buildMetadata: Buffer } | null {
+function readAsarMetadataFiles(archivePath: string): { readonly packageJson: Buffer; readonly buildMetadata: Buffer } {
   const fd = openSync(archivePath, "r");
   try {
     const sizeHeader = Buffer.alloc(16);
@@ -95,7 +129,7 @@ function readAsarMetadataFiles(archivePath: string): { readonly packageJson: Buf
     if (!isRecord(root.files)) throw new Error("asar header file table is not an object");
 
     const buildEntry = findEntry(root.files, BUILD_METADATA_PATH);
-    if (buildEntry === null) return null;
+    if (buildEntry === null) throw new Error("asar build metadata is missing");
     const packageEntry = findEntry(root.files, ["package.json"]);
     if (packageEntry === null) throw new Error("asar package.json is missing");
 
@@ -169,6 +203,13 @@ function invalidMetadata(reason: string): BridgeError {
   return new BridgeError(
     "provider_config_invalid",
     `Installed ZCode Desktop metadata ${reason}; refusing to invent a Desktop identity.`,
+  );
+}
+
+function invalidLaunchIdentity(): BridgeError {
+  return new BridgeError(
+    "provider_config_invalid",
+    "Official Host launch identity is invalid; refusing to mix Desktop, Host, or CLI versions.",
   );
 }
 

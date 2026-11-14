@@ -108,6 +108,14 @@ Official Host / AppServer artifact version
 Runtime-reported Billing app version
 ```
 
+模型请求的启动上下文遵循同一“制品来源与用途分离”原则：
+
+- 若固定 AppServer 源旁存在有效安装版 Desktop `app.asar` metadata，则该 metadata 的应用版本与 build commit 优先；
+- 独立 Host 没有相邻 `app.asar` 时，模型请求的应用版本取自 Official Host module 编译导出的 `ZCODE_PRODUCT_VERSION`；
+- `ZCODE_BUILD_COMMIT_ID` 只能来自可验证的 Desktop build metadata；缺失时保持缺失，不得用 Official Host 源码提交号、AppServer `0.17.1` 或其他版本冒充；
+- 不得把 Desktop 版本、Official Host 产品版本和 AppServer CLI 版本拼成同一个身份的字段；
+- Start Plan 与 Coding Plan 使用同一官方 AppServer 启动上下文，不按 Provider 分叉请求版本。
+
 保留 `3.18.0` Host patch 并手工回移身份逻辑只可作为明确标注的临时兼容研究。它需要维护一套非上游认证回移，不能成为默认长期方案。若 `3.18.2` 升级在实践中被证明不兼容，必须先形成新的 Host 升级 ADR，说明 exact patch、BOM、回滚和版本矩阵，再替代本决定。
 
 ### 5. Desktop 3.18.x 兼容是矩阵，不是版本猜测

@@ -4,6 +4,9 @@ import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { RuntimeResolver, ZCodeRuntimeConfig } from "../interfaces.js";
+import {
+  withOfficialHostLaunchIdentity,
+} from "../runtime/desktop-host-launch.js";
 import { BridgeError } from "../runtime/errors.js";
 import { NodeRuntimeResolver } from "../runtime/resolver.js";
 import {
@@ -244,6 +247,8 @@ export function createOfficialHostClientFactory(input: {
       throw new BridgeError("provider_config_invalid", "Official Host runtime entrypoint must be the shipped bundle.");
     }
     const module = await resolveOfficialHostModule(input.moduleSource);
+    const productVersion = normalizeOfficialHostProductVersion(module.ZCODE_PRODUCT_VERSION);
+    const launchEnv = withOfficialHostLaunchIdentity(context.launch.env, { productVersion });
     const manager = new module.ZCodeAgentProcessManager({
       useSharedTaskRuntime: () => false,
       maxFrameBytes: OFFICIAL_HOST_TRANSPORT_MAX_FRAME_BYTES,
@@ -259,7 +264,7 @@ export function createOfficialHostClientFactory(input: {
         args: [assets.appServerEntryPath, ...context.launch.args],
         cwd: workspacePath,
         env: {
-          ...context.launch.env,
+          ...launchEnv,
           ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: assets.builtinProviderConfigPath,
           ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: context.config.providerPersonalConfigFile,
           ZCODE_RUNTIME_HOST_PATH: assets.runtimeHostPath,
