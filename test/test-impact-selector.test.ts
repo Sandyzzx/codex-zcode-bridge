@@ -201,7 +201,7 @@ test("CI impact gate shadow-compares targeted and full selections with the execu
 test("CI impact CLI fails safe for dispatch, initial-push and invalid base revisions", () => {
   const validBase = spawnSync(
     process.execPath,
-    ["scripts/ci-select-impact.mjs", "--base", "HEAD~1", "--head", "HEAD"],
+    ["scripts/ci-select-impact.mjs", "--base", "HEAD", "--head", "HEAD"],
     { encoding: "utf8" },
   );
   assert.equal(validBase.status, 0, validBase.stderr);
