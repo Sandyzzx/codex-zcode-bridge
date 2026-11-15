@@ -4,7 +4,7 @@
 
 [简体中文](README.zh-CN.md) · [Repository](https://github.com/Sandyzzx/codex-zcode-bridge) · [Releases](https://github.com/Sandyzzx/codex-zcode-bridge/releases)
 
-> **Release status.** Stable is `v1.7.1`. Preview `2.0.0-preview.6` is the fixed snapshot for official ZCode 3.18.2 authentication reuse, the signed Windows runtime host, SQLite v14 Events/Usage, Start Plan, and Coding Plan integration. Preview.6 is a prerelease for Windows x64 with ZCode Desktop `3.18.2.10443`; it does not promote a new Stable version.
+> **Release status.** Stable is `v1.7.1`. Preview `2.0.0-preview.7` is the post-audit remediation snapshot. It keeps the Preview.6 official ZCode 3.18.2 authentication reuse, signed Windows runtime host, SQLite v14 Events/Usage, Start Plan, and Coding Plan contracts, and adds the ADR-038 minimum architecture reduction, correctness, legacy retirement, CI dispatch, and Events pagination fixes. It is a prerelease for Windows x64 with ZCode Desktop `3.18.2.10443`; it does not promote a new Stable version.
 
 ## What this is
 
@@ -30,7 +30,7 @@ Start Plan and Coding Plan are different account and authentication paths. Bridg
 
 ### Verified Start Plan path
 
-Preview.3 established the Start Plan path with one real Windows acceptance run. Preview.6 separately completed a real Coding Plan E2E and a real Start Plan core functional E2E through the Official Host path, including Runtime Events, Usage, tools, Result, Cleanup, and Release. The historical full Start Plan Workspace acceptance remains `FAIL` because of a PowerShell cache written outside the declared task files; that failure is retained and not rewritten as a pass.
+Preview.3 established the Start Plan path with one real Windows acceptance run. Preview.6 separately completed a real Coding Plan E2E and a real Start Plan core functional E2E through the Official Host path, including Runtime Events, Usage, tools, Result, Cleanup, and Release. Preview.7 preserves that runtime and auth path without repeating real model traffic. The historical full Start Plan Workspace acceptance remains `FAIL` because of a PowerShell cache written outside the declared task files; that failure is retained and not rewritten as a pass.
 
 - Official ZCode AppServer `0.17.1`.
 - Provider `account:bigmodel-start-plan`.
@@ -67,14 +67,14 @@ This evidence covers **only `GLM-5.3-Flash` on Windows**. It does not prove ever
 ## Requirements
 
 - The fixed Official Host production bundle is supported on **Windows x64**. Production Worker adapter selection fails closed with `unsupported_worker_platform` on Linux, macOS, and Windows non-x64; CI exercises that rejection without claiming a production execution path.
-- **Preview 2.0.0-preview.6:** Windows x64, Node.js `24.16.0`, and an installed official ZCode Desktop `3.18.2.10443`.
+- **Preview 2.0.0-preview.7:** Windows x64, Node.js `24.16.0`, and an installed official ZCode Desktop `3.18.2.10443`.
 - Git, Codex with plugin/marketplace support, and a working local ZCode installation.
 - A signed-in official ZCode account with the plan and model entitlement required by the selected task.
 - A **single-user, trusted-local** environment. This is not a multi-user isolation boundary or a remote sandbox.
 
 Node.js and ZCode are not installed by the marketplace plugin.
 
-Desktop ZCode `3.18.0` and `3.18.1` remain `NOT_VERIFIED` for Preview.6; they are not declared incompatible. Real OAuth refresh/account rotation and cross-machine artifact reproduction also remain `NOT_VERIFIED`. These are accepted Preview-only risks and are not extended to Stable.
+Desktop ZCode `3.18.0` and `3.18.1` remain `NOT_VERIFIED` for Preview.7; they are not declared incompatible. Real OAuth refresh/account rotation and cross-machine artifact reproduction also remain `NOT_VERIFIED`. These are accepted Preview-only risks and are not extended to Stable.
 
 ## Installation
 
@@ -82,7 +82,7 @@ Use one release channel per Codex installation. Branch refs move with later comm
 
 ### Stable
 
-Stable `v1.7.1` is the last Stable release. Preview.5 adds Official Host and R7 Runtime Events/Usage on top of it:
+Stable `v1.7.1` is the last Stable release. Preview.7 is the current fixed preview snapshot; Preview.6 added Official Host, official authentication reuse, and R7 Runtime Events/Usage:
 
 ```sh
 codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-v1.7.1
@@ -172,7 +172,7 @@ Prompts, Skills, path lists, and worktree selection do not create those permissi
 - **Other Start Plan models:** dependent on the official registry and live account entitlement; not individually certified here.
 - **Linux/macOS:** unsupported for production execution and rejected before Adapter construction; no real Start Plan or model traffic.
 - **CAPTCHA and unusual activity:** Bridge does not solve CAPTCHA or bypass account controls. Entitlement failures fail closed and may require the user to resolve the condition in the official ZCode client.
-- **Host Portability and Companion Service:** architecture research only; they are not delivered features in Preview.6.
+- **Host Portability and Companion Service:** architecture research only; they are not delivered features in Preview.7.
 - **JSON storage and the retired CLI execution chain:** not current production paths. Old JSON task histories are not imported into SQLite.
 - **A worker can exit without committing a Result.** Bridge intentionally retains cleanup evidence and a Hold rather than guessing that resources were released.
 
@@ -183,7 +183,7 @@ Prompts, Skills, path lists, and worktree selection do not create those permissi
 - [Runtime and SQLite upgrade details](docs/ZCODE_RUNTIME.md)
 - [Plugin safety notes](plugins/codex-zcode-bridge/SECURITY.md)
 - [Master skill](plugins/codex-zcode-bridge/skills/zcode-bridge/SKILL.md)
-- [Preview.6 release](https://github.com/Sandyzzx/codex-zcode-bridge/releases/tag/codex-zcode-bridge-preview-v2.0.0-preview.6)
+- [Preview.7 release](https://github.com/Sandyzzx/codex-zcode-bridge/releases/tag/codex-zcode-bridge-preview-v2.0.0-preview.7)
 
 ## License
 
