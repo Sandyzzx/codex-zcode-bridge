@@ -72,6 +72,7 @@ async function makeFakeRuntime(
   turnDelayMs = 0,
   runtimeAuth = false,
   runtimeAuthModel?: { readonly providerId: string; readonly modelId: string },
+  turnUsage: Record<string, unknown> = { totalTokens: 4 },
 ): Promise<{ root: string; config: ZCodeRuntimeConfig; requestLog: string; launchLog: string }> {
   const root = await mkdtemp(path.join(tmpdir(), "bridge-app-server-test-"));
   const entrypoint = path.join(root, "fake-app-server.cjs");
@@ -109,12 +110,13 @@ if (descendantControl) {
 }
 const available = [selected, ${includeRequestedModel ? '{ providerId: "provider-123", modelId: "model-x" }, { providerId: "provider-123", modelId: "reasoning-model" }' : ""}];
 const report = ${JSON.stringify(validReport())};
+const turnUsage = ${JSON.stringify(turnUsage)};
 let turnFinished = false;
 function finishTurn() {
   if (turnFinished) return;
   turnFinished = true;
   const params = turnFailure === null
-    ? { seq: 1, type: "turn.completed", payload: { response: JSON.stringify(report), usage: { totalTokens: 4 }, resultType: "success" } }
+    ? { seq: 1, type: "turn.completed", payload: { response: JSON.stringify(report), usage: turnUsage, resultType: "success" } }
     : { seq: 1, type: "turn.failed", payload: { error: turnFailure } };
   process.stdout.write(JSON.stringify({ method: "session/event", params: ${runtimeAuth} ? { ...params, seq: 2, sessionId, turnId: "turn-fixture" } : params }) + "\n");
 }
@@ -1394,6 +1396,57 @@ test("lets the app-server resolve a requested model omitted from the initial cat
       .trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
     assert.equal(requests.some((request) => request.method === "session/setModel"), true);
     assert.equal(requests.some((request) => request.method === "session/send"), true);
+  } finally {
+    await rm(runtime.root, { recursive: true, force: true });
+  }
+});
+
+test("preserves official cache read/write usage and safe provenance metadata from a turn", async () => {
+  const runtime = await makeFakeRuntime(
+    undefined,
+    true,
+    false,
+    undefined,
+    false,
+    null,
+    undefined,
+    0,
+    false,
+    undefined,
+    {
+      inputTokens: 100,
+      outputTokens: 20,
+      totalTokens: 120,
+      cacheReadTokens: 40,
+      cacheWriteTokens: 0,
+      source: "official_runtime",
+      scope: "session:" + SESSION_ID,
+      observed_at: "2026-11-15T10:00:00.000Z",
+      finality: "reported",
+      conflicts: ["safe_conflict"],
+    },
+  );
+  try {
+    const adapter = new ZCodeAppServerAdapter({
+      resolver: { resolve: async () => runtime.config },
+      timeoutMs: 10_000,
+      childEnvBase: { PATH: process.env.PATH },
+      homeDir: runtime.root,
+    });
+    const handle = await adapter.startTask({ task, workspace: makeWorkspace(runtime.root), attempt: 1 });
+    const outcome = await adapter.getResult(handle);
+    assert.deepEqual(outcome.usage, {
+      inputTokens: 100,
+      outputTokens: 20,
+      totalTokens: 120,
+      cacheReadTokens: 40,
+      cacheWriteTokens: 0,
+      source: "official_runtime",
+      scope: "session:" + SESSION_ID,
+      observed_at: "2026-11-15T10:00:00.000Z",
+      finality: "reported",
+      conflicts: ["safe_conflict"],
+    });
   } finally {
     await rm(runtime.root, { recursive: true, force: true });
   }

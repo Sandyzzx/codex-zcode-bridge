@@ -3,7 +3,7 @@
 > Status: DECISION
 > Decision: Accepted — Owner 的 Official Host Integration v1 恢复授权批准在本候选启用现有 Worker 生产接线，并冻结平台支持边界。
 > Last updated: 2026-11-12
-> Applicability: 适用于 Preview.5 的 `zcode_app_server` Worker 装配。不得改写 ADR-030、ADR-032、ADR-033 或 ADR-034 的既有决定。
+> Applicability: Preview.6 retains Windows x64 Official Host as the sole supported production adapter path. ADR-038 supersedes only the historical Linux/macOS direct production distinction: those platforms now fail closed before Adapter construction, while test-only direct-adapter coverage remains. This does not change ADR-030, ADR-032, ADR-033 or ADR-034.
 > Verified against: `ba25f83722094ef3428a04202749377cc9b6e643`（tree `b4573bb6f1143ce6a3081a56ce2fbf968a243e35`）；后续仅有文档证据刷新
 
 ## 背景

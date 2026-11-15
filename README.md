@@ -66,7 +66,7 @@ This evidence covers **only `GLM-5.3-Flash` on Windows**. It does not prove ever
 
 ## Requirements
 
-- The fixed Official Host production bundle is supported on **Windows x64**; Windows non-x64 and other unknown targets fail closed. Linux and macOS retain direct-AppServer synthetic/CI coverage only and are not certified for real ZCode, OAuth, Start Plan, or model service traffic.
+- The fixed Official Host production bundle is supported on **Windows x64**. Production Worker adapter selection fails closed with `unsupported_worker_platform` on Linux, macOS, and Windows non-x64; CI exercises that rejection without claiming a production execution path.
 - **Preview 2.0.0-preview.6:** Windows x64, Node.js `24.16.0`, and an installed official ZCode Desktop `3.18.2.10443`.
 - Git, Codex with plugin/marketplace support, and a working local ZCode installation.
 - A signed-in official ZCode account with the plan and model entitlement required by the selected task.
@@ -148,7 +148,7 @@ ${LOCALAPPDATA}\CodexZCodeBridge\state\bridge.sqlite
 
 The database must pass integrity and lifecycle checks before MCP requests are accepted. Bridge does not fall back to JSON storage.
 
-Schema v13 databases require an **offline copy upgrade** to v14. Stop every Bridge host, Manager, and Worker first, then run the installed upgrade tool from the Preview plugin root:
+The production Lifecycle Gate upgrades an existing Schema v13 Authority to v14 while holding the bootstrap lock. A conservative offline copy upgrade remains available for recovery and controlled deployment when every Bridge Host, Manager, and Worker is stopped:
 
 ```powershell
 node ./dist/upgrade-sqlite-v14.mjs `
@@ -158,7 +158,7 @@ node ./dist/upgrade-sqlite-v14.mjs `
   --offline
 ```
 
-The source database is retained. After the copy is verified, change the host's `authority.json` `data_root` to `D:/BridgeV14`. Do not migrate in place, edit lifecycle tables, or clear a Hold to force an upgrade. Production upgrades require explicit owner authorization. See [ZCODE_RUNTIME.md](docs/ZCODE_RUNTIME.md) for the full contract.
+The source database is retained in the offline workflow. After the copy is verified, change the host's `authority.json` `data_root` to `D:/BridgeV14`. Unknown schemas, corrupt databases, active writers, and unexplained lifecycle state still fail closed. Do not edit lifecycle tables or clear a Hold to force an upgrade. See [ZCODE_RUNTIME.md](docs/ZCODE_RUNTIME.md) for the full contract.
 
 ## Security boundary
 
@@ -170,9 +170,9 @@ Prompts, Skills, path lists, and worktree selection do not create those permissi
 
 - **Start Plan real E2E:** Windows only; one model (`GLM-5.3-Flash`) has published evidence.
 - **Other Start Plan models:** dependent on the official registry and live account entitlement; not individually certified here.
-- **Linux/macOS:** synthetic/CI coverage only for the Preview path; no real Start Plan certification.
+- **Linux/macOS:** unsupported for production execution and rejected before Adapter construction; no real Start Plan or model traffic.
 - **CAPTCHA and unusual activity:** Bridge does not solve CAPTCHA or bypass account controls. Entitlement failures fail closed and may require the user to resolve the condition in the official ZCode client.
-- **Host Portability and Companion Service:** architecture research only; they are not delivered features in Preview.5.
+- **Host Portability and Companion Service:** architecture research only; they are not delivered features in Preview.6.
 - **JSON storage and the retired CLI execution chain:** not current production paths. Old JSON task histories are not imported into SQLite.
 - **A worker can exit without committing a Result.** Bridge intentionally retains cleanup evidence and a Hold rather than guessing that resources were released.
 

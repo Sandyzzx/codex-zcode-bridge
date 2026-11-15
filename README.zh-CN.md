@@ -66,7 +66,7 @@ Preview.3 已通过一次 Windows 真实 Start Plan 验收。Preview.6 另行通
 
 ## 环境要求
 
-- 固定 Official Host 生产制品只支持 **Windows x64**；Windows 非 x64 与其他未知目标 fail closed。Linux/macOS 仅保留 direct AppServer 的合成/CI 覆盖，不认证真实 ZCode、OAuth、Start Plan 或模型服务流量。
+- 固定 Official Host 生产制品只支持 **Windows x64**。生产 Worker 在 Linux、macOS 与 Windows 非 x64 上以 `unsupported_worker_platform` fail closed；CI 只验证该拒绝边界，不声称存在生产执行路径。
 - **Preview 2.0.0-preview.6：** Windows x64、Node.js `24.16.0`，并已安装官方 ZCode Desktop `3.18.2.10443`。
 - Git、支持插件/Marketplace 的 Codex，以及可正常工作的本机 ZCode 安装。
 - 官方 ZCode 账户已登录，并具备所选任务需要的套餐和模型权益。
@@ -82,7 +82,7 @@ Desktop ZCode `3.18.0` 与 `3.18.1` 在 Preview.6 中保持 `NOT_VERIFIED`，不
 
 ### 稳定版
 
-Stable `v1.7.1` 是当前稳定版；Preview.5 在其基础上增加 Official Host 与 R7 Runtime Events/Usage：
+Stable `v1.7.1` 是当前稳定版；Preview.6 在其基础上增加 Official Host、官方认证复用与 R7 Runtime Events/Usage：
 
 ```sh
 codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-v1.7.1
@@ -147,7 +147,7 @@ ${LOCALAPPDATA}\CodexZCodeBridge\state\bridge.sqlite
 
 数据库必须通过完整性和生命周期检查后，MCP 才会接受请求。Bridge 不会回退到 JSON 存储。
 
-Schema v13 必须通过**离线副本升级**到 v14。先停止所有 Bridge Host、Manager 和 Worker，再从 Preview 插件根目录运行安装包内的升级工具：
+生产 Lifecycle Gate 会在持有 bootstrap lock 时自动将已有 Schema v13 Authority 升级到 v14。需要严格停机切换时，仍可先停止所有 Bridge Host、Manager 和 Worker，再从 Preview 插件根目录运行安装包内的离线副本升级工具：
 
 ```powershell
 node ./dist/upgrade-sqlite-v14.mjs `
@@ -157,7 +157,7 @@ node ./dist/upgrade-sqlite-v14.mjs `
   --offline
 ```
 
-源数据库会保留。副本验证成功后，将 Host 的 `authority.json.data_root` 改为 `D:/BridgeV14`。不要原地迁移、手工修改生命周期表，或为了绕过升级而清除 Hold。生产升级必须获得明确 Owner 授权；完整合同见 [ZCODE_RUNTIME.md](docs/ZCODE_RUNTIME.md)。
+离线流程会保留源数据库。副本验证成功后，将 Host 的 `authority.json.data_root` 改为 `D:/BridgeV14`。未知 Schema、损坏数据库、活跃 Writer 和无法解释的生命周期现场仍然 fail closed。不要手工修改生命周期表，或为了绕过升级而清除 Hold；完整合同见 [ZCODE_RUNTIME.md](docs/ZCODE_RUNTIME.md)。
 
 ## 安全边界
 
@@ -169,9 +169,9 @@ Preview 使用固定的单用户可信本地 `yolo` 执行档案，以当前 Win
 
 - **Start Plan 真实 E2E：** 仅 Windows；目前只有一个模型 `GLM-5.3-Flash` 的公开证据。
 - **其他 Start Plan 模型：** 取决于官方 Registry 和实时账户权益，本版本未逐模型认证。
-- **Linux/macOS：** Preview 路径目前只有合成/CI 覆盖，没有真实 Start Plan 认证。
+- **Linux/macOS：** 不支持生产执行，会在 Adapter 构造前拒绝；没有真实 Start Plan 或模型流量。
 - **CAPTCHA 与 unusual activity：** Bridge 不解决 CAPTCHA，也不绕过账户控制；权益失败会 fail-closed，可能需要用户在官方 ZCode 客户端中处理。
-- **Host Portability 与 Companion Service：** 仍属于架构研究，不是 Preview.5 已交付功能。
+- **Host Portability 与 Companion Service：** 仍属于架构研究，不是 Preview.6 已交付功能。
 - **JSON 存储与旧 CLI 执行链：** 不是当前生产路径；旧 JSON 任务历史不会导入 SQLite。
 - **Worker 可能未提交 Result 就退出。** Bridge 会保留清理证据和 Hold，而不是假定资源已释放。
 

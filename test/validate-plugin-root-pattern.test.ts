@@ -321,7 +321,6 @@ test("the real validator rejects injected development-path references and keeps 
       "hooks/session-start.mjs",
       "hooks/configure-runtime.ps1",
       "skills/zcode-bridge/SKILL.md",
-      "skills/zcode-bridge/scripts/codex-master-token-usage.mjs",
     ]) {
       writeFileSync(path.join(pluginRoot, file), "");
     }

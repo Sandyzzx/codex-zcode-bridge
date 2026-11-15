@@ -50,6 +50,8 @@ export interface NormalizedUsage {
   output_tokens: number | null;
   total_tokens: number | null;
   cached_input_tokens: number | null;
+  /** Cache-write tokens are distinct from cache-read/`cached_input_tokens`. */
+  cached_write_input_tokens?: number | null;
   reasoning_tokens: number | null;
   /** Controlled conflict markers (e.g. total_mismatch, duplicate_synonyms). */
   conflicts: string[];

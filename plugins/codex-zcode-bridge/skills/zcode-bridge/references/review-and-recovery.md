@@ -16,6 +16,7 @@
 ## 失败、取消与 Hold
 
 - `failed` 用 `zcode_result.error_code` 判断原因，不用 feedback 标签替代。`cleanup_failed` 或 `cleanup_unverified` 是清理事实，与代码验收分开；后续 `observation.cleanup=verified` 只说明取得退出证据，不改写历史失败。
+- `zcode_status.execution_observation.state=interrupted_without_result` 只表示持久 Worker 身份已退出；当前生产 Adapter 缺少独立 Cleanup Proof 时 Recovery 仍以 `adapter_cleanup_unverified` 保持 Hold。Fake Adapter 的合成重派分支不是当前生产能力，不得据此承诺自动重派。
 - 对已知 `failed + cleanup_unverified` Task，先报告可确认的 workspace、Task、Attempt 和原因。核心 MCP 没有 Bridge Task/Attempt 全局枚举工具；可选 Ledger 只能枚举其管理的 ProjectTask，不能发现所有 Bridge 任务。`zcode_status` 不返回 workspace；缺失写未知，不猜测。
 - `zcode_cancel` 只接受 `{ task_id }`，可能按原 PID/start fingerprint 终止仍存活 Worker，没有 dry-run/authorize 参数。用户授权的是当前明确 Recovery 操作，不是无限期终止权限；必须先取得用户的明确授权。获准后同一 Operation 一次只发起一个 cancel，调用后读 `zcode_status`。
 - Recovery 只有原身份、recorded-tree claimant、interaction 状态和 Operation CAS 全部验证成功才释放；失败、未知或响应丢失保持 Hold。停止失败后先重新核对原 Worker 身份和状态，原授权范围内可再次尝试；目标身份或操作范围变化时重新取得用户授权。不得并发重复发出终止信号，也不得拼接底层清理命令、重放 Prompt、创建 Attempt 或手工改 SQLite 绕过。

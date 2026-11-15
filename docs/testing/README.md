@@ -1,9 +1,9 @@
 # 测试入口与成本边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-07
-> Last verified: 2026-11-07，核对 ADR-029 自动/压力清单、selector 与退役范围；实际结果见本轮报告。
-> Verified against: a46137fe46b567271a7756be819361132625278c + ADR-029 本地候选
+> Last updated: 2026-11-15
+> Last verified: 2026-11-15，核对 ADR-038 的唯一 impact map、Fast/Integration/Release 分层、生成物 freshness、selector 影子对照、SQLite v14 与关键生命周期保留范围；完整候选结果见本轮整改报告。
+> Verified against: Preview.6 post-audit remediation branch based on `545c02f745a4e2ab38a1fa3c31880ac80b84a310`
 
 `test/test-impact-map.json` 为可执行清单唯一来源。共享资格规则禁止 MANUAL_E2E、Fixture 自动执行，显式误传同样拒绝；源 .test.ts/.test.mjs、map 与实际 --list 由回归对账。生成的 test-inventory.json 是静态声明/历史证据索引，不决定执行。
 
@@ -17,6 +17,18 @@
 | node scripts/test-isolated.mjs --list | 本平台实际默认执行集合 |
 
 FULL_SUITE 表示完整功能回归，压力状态为 SEPARATE_STRESS_GATE。SQLite 边界的 targeted selection 标记 STRESS_TEST_REQUIRED；显式 test:stress 或受影响文件入口可执行压力项。文档-only 是 NO_TESTS_APPLICABLE，dry-run 是 DRY_RUN_ONLY，都不能称测试 PASS。
+
+## CI 三层
+
+`impact` 先用同一 impact map 做 Windows 全量选择与可执行清单的影子对照，再输出 Fast、Integration、Release 和 Stress 需求。无效或零 Base SHA 强制 FULL，未知源码、测试基础设施、执行器、CI 与核心合同变化也自动 FULL。
+
+| Gate | 运行内容 | 成本边界 |
+|---|---|---|
+| Fast | Ubuntu 上的 T0、受影响单元/合成测试；FULL 变更只运行 T0，完整回归交给 Release | 不为普通 PR 支付 Windows 全量成本 |
+| Integration | Windows 上的进程身份探针，以及所选 Worker、Runtime、SQLite、Result、Cleanup/Release 集成测试 | 只在非 FULL 变更需要 Integration 时运行 |
+| Release | Windows + Ubuntu 的 typecheck/build、Windows 身份探针、完整 `npm test`、Plugin Validation、完整生成物 Freshness 与 diff check | FULL PR、push、`workflow_dispatch` 保留完整保护 |
+
+SQLite Stress 是独立矩阵：FULL 或影响 SQLite 资源边界时在 Windows/Ubuntu 显式运行。Fast 和 Release 的职责不重叠；`npm run test:affected -- --t0-only` 只用于把 FULL 的快速不变量与 Release 的完整回归分开。
 
 Windows 进程/身份套件按文件串行；其他平台保留既有 Windows-only 限制并打印排除清单，不通过新增 SKIP 获得绿色。现有 admin-abandonment CLI 测试在 Windows 验证成功/CAS，在其他平台验证 windows_required 且数据库逻辑事实不变；生产 guard 不变。
 

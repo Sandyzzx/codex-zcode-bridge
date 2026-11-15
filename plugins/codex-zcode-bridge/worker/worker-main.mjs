@@ -117,10 +117,10 @@ function validateResultObject(value, keys, required2 = []) {
 function validateUsage(value) {
   validateResultObject(
     value,
-    /* @__PURE__ */ new Set(["source", "scope", "observed_at", "finality", "input_tokens", "output_tokens", "total_tokens", "cached_input_tokens", "reasoning_tokens", "conflicts", "dropped_unknown_keys"]),
+    /* @__PURE__ */ new Set(["source", "scope", "observed_at", "finality", "input_tokens", "output_tokens", "total_tokens", "cached_input_tokens", "cached_write_input_tokens", "reasoning_tokens", "conflicts", "dropped_unknown_keys"]),
     ["source", "scope", "observed_at", "finality", "input_tokens", "output_tokens", "total_tokens", "cached_input_tokens", "reasoning_tokens", "conflicts", "dropped_unknown_keys"]
   );
-  if (!isNullableText(value.source) || !isNullableText(value.scope) || !isNullableText(value.observed_at) || !["reported", "derived", "partial"].includes(value.finality) || ["input_tokens", "output_tokens", "total_tokens", "cached_input_tokens", "reasoning_tokens"].some((k) => value[k] !== null && (!Number.isSafeInteger(value[k]) || value[k] < 0)) || !Number.isSafeInteger(value.dropped_unknown_keys) || value.dropped_unknown_keys < 0) fail("invalid_result_payload");
+  if (!isNullableText(value.source) || !isNullableText(value.scope) || !isNullableText(value.observed_at) || !["reported", "derived", "partial"].includes(value.finality) || ["input_tokens", "output_tokens", "total_tokens", "cached_input_tokens", "cached_write_input_tokens", "reasoning_tokens"].some((k) => Object.hasOwn(value, k) && value[k] !== null && (!Number.isSafeInteger(value[k]) || value[k] < 0)) || !Number.isSafeInteger(value.dropped_unknown_keys) || value.dropped_unknown_keys < 0) fail("invalid_result_payload");
   validateStringArray(value.conflicts, 64);
 }
 function validateModel(value) {
@@ -280,10 +280,6 @@ function runtimeAuthReply(providerId, config2) {
 function zcodeDataBaseDir(personalProviderConfigFile) {
   const dataDir = zcodeV2DataDir(personalProviderConfigFile);
   return dataDir ? path3.dirname(path3.dirname(dataDir)) : null;
-}
-function zcodeTasksIndexPath(personalProviderConfigFile) {
-  const dataDir = zcodeV2DataDir(personalProviderConfigFile);
-  return dataDir ? path3.join(dataDir, "tasks-index.sqlite") : null;
 }
 function zcodeV2DataDir(personalProviderConfigFile) {
   const absolute = path3.resolve(personalProviderConfigFile);
@@ -988,18 +984,15 @@ function validUsage(value) {
   const keys = Object.keys(value);
   if (!keys.length) return false;
   for (const key of keys) {
-    if (![
-      "inputTokens",
-      "outputTokens",
-      "totalTokens",
-      "cachedInputTokens",
-      "reasoningTokens",
-      "input_tokens",
-      "output_tokens",
-      "total_tokens",
-      "cached_input_tokens",
-      "reasoning_tokens"
-    ].includes(key)) return false;
+    if (!USAGE_NUMERIC_KEYS.includes(key) && !["source", "usage_source", "scope", "observed_at", "finality"].includes(key) && key !== "conflicts") return false;
+    if (key === "conflicts") {
+      if (!Array.isArray(value[key]) || value[key].length > 32 || value[key].some((item2) => typeof item2 !== "string" || !/^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/u.test(item2))) return false;
+      continue;
+    }
+    if (["source", "usage_source", "scope", "observed_at", "finality"].includes(key)) {
+      if (typeof value[key] !== "string" || value[key].length > 128) return false;
+      continue;
+    }
     const item = value[key];
     if (typeof item !== "number" || !Number.isFinite(item) || !Number.isSafeInteger(item) || item < 0) return false;
   }
@@ -1026,22 +1019,19 @@ function sanitizeDetails(type, value) {
 function sanitizeUsage(value) {
   if (!value || Object.getPrototypeOf(value) !== Object.prototype) return void 0;
   const usage = {};
-  for (const key of [
-    "inputTokens",
-    "outputTokens",
-    "totalTokens",
-    "cachedInputTokens",
-    "reasoningTokens",
-    "input_tokens",
-    "output_tokens",
-    "total_tokens",
-    "cached_input_tokens",
-    "reasoning_tokens"
-  ]) {
+  for (const key of USAGE_NUMERIC_KEYS) {
     const item = value[key];
     if (item === void 0) continue;
     if (typeof item !== "number" || !Number.isFinite(item) || !Number.isSafeInteger(item) || item < 0) continue;
     usage[key] = item;
+  }
+  for (const key of ["source", "usage_source", "scope", "observed_at", "finality"]) {
+    const item = value[key];
+    if (typeof item === "string" && item.length <= 128) usage[key] = item;
+  }
+  if (Array.isArray(value.conflicts)) {
+    const conflicts = value.conflicts.filter((item) => typeof item === "string" && /^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/u.test(item)).slice(0, 32);
+    if (conflicts.length) usage.conflicts = conflicts;
   }
   return Object.keys(usage).length ? usage : void 0;
 }
@@ -1102,7 +1092,7 @@ function sha256(value) {
 function coded(code) {
   return Object.assign(new Error(code), { code });
 }
-var CHANNELS, MAX_FRAME_BYTES2, PROTOCOL, EVENT_TYPES, DETAIL_KEYS, JsonLineReader;
+var CHANNELS, MAX_FRAME_BYTES2, PROTOCOL, EVENT_TYPES, DETAIL_KEYS, JsonLineReader, USAGE_NUMERIC_KEYS;
 var init_runtime_event_channel = __esm({
   "src/sqlite-candidate/wp6b2b1/runtime-event-channel.mjs"() {
     "use strict";
@@ -1186,6 +1176,25 @@ var init_runtime_event_channel = __esm({
         }
       }
     };
+    USAGE_NUMERIC_KEYS = [
+      "inputTokens",
+      "outputTokens",
+      "totalTokens",
+      "cachedInputTokens",
+      "cacheReadTokens",
+      "cachedWriteInputTokens",
+      "cacheWriteInputTokens",
+      "cacheWriteTokens",
+      "reasoningTokens",
+      "input_tokens",
+      "output_tokens",
+      "total_tokens",
+      "cached_input_tokens",
+      "cache_read_tokens",
+      "cached_write_input_tokens",
+      "cache_write_input_tokens",
+      "cache_write_tokens"
+    ];
   }
 });
 
@@ -2469,7 +2478,7 @@ ${task.objective}`,
   ];
   if (task.context && task.context.trim().length > 0) {
     sections.push(`CONTEXT
-${bounded(task.context, MAX_CONTEXT_CHARS)}`);
+${task.context}`);
   }
   return joinBoundedPreservingTail([...sections, OUTPUT_CONTRACT], OUTPUT_CONTRACT);
 }
@@ -2546,15 +2555,25 @@ function joinBoundedPreservingTail(sections, requiredTail) {
   const joined = sections.join("\n\n");
   if (joined.length <= MAX_PROMPT_CHARS) return joined;
   void requiredTail;
-  throw new Error(`task prompt exceeds ${MAX_PROMPT_CHARS} characters; shorten the task package without dropping constraints`);
+  throw new TaskPromptCapacityError(joined.length);
 }
-var MAX_PROMPT_CHARS, MAX_SECTION_CHARS, MAX_CONTEXT_CHARS, OUTPUT_CONTRACT, DECISION_RULE, DELIVERY_OWNERSHIP;
+var MAX_PROMPT_CHARS, MAX_SECTION_CHARS, TaskPromptCapacityError, OUTPUT_CONTRACT, DECISION_RULE, DELIVERY_OWNERSHIP;
 var init_task_prompt = __esm({
   "src/prompts/task-prompt.ts"() {
     "use strict";
     MAX_PROMPT_CHARS = 6e4;
     MAX_SECTION_CHARS = 4e3;
-    MAX_CONTEXT_CHARS = 2e3;
+    TaskPromptCapacityError = class extends Error {
+      code = "task_prompt_exceeds_capacity";
+      actualChars;
+      maxChars;
+      constructor(actualChars) {
+        super(`task prompt exceeds ${MAX_PROMPT_CHARS} characters (actual ${actualChars}); shorten the task package without dropping constraints`);
+        this.name = "TaskPromptCapacityError";
+        this.actualChars = actualChars;
+        this.maxChars = MAX_PROMPT_CHARS;
+      }
+    };
     OUTPUT_CONTRACT = [
       "OUTPUT CONTRACT (mandatory)",
       "Your final response must be exactly one JSON object with no markdown fences and no text before or after it.",
@@ -4232,158 +4251,6 @@ var init_task_timeout = __esm({
     MAX_TASK_TIMEOUT_MS = 4 * 60 * 60 * 1e3;
     ADAPTER_CLEANUP_TIMEOUT_MS = 3e5;
     MIN_TASK_TIMEOUT_MS = 60 * 1e3;
-  }
-});
-
-// src/adapters/task-index-sync.ts
-import { existsSync as existsSync4 } from "node:fs";
-async function loadDatabaseSync() {
-  databaseSyncPromise ??= import("node:sqlite").then((module) => module.DatabaseSync).catch(() => null);
-  return databaseSyncPromise;
-}
-async function registerDesktopTask(entry) {
-  await withDatabase(entry.databasePath, (database) => {
-    requireTaskTable(database);
-    const now = Date.now();
-    const title = entry.title.trim().slice(0, 80) || entry.bridgeTaskId;
-    const metaJson = JSON.stringify({
-      taskId: entry.sessionId,
-      traceId: entry.bridgeTaskId,
-      title,
-      titleOverridden: false,
-      workspaceKey: entry.workspaceKey,
-      workspacePath: entry.workspacePath,
-      createdAt: now,
-      updatedAt: now,
-      mode: entry.mode,
-      model: entry.model,
-      provider: entry.provider,
-      status: "running",
-      target: null
-    });
-    database.prepare(
-      "INSERT OR IGNORE INTO tasks (workspace_key, workspace_path, workspace_identity, task_id, title, task_status, provider, mode, model, created_at, updated_at, unread_at, pinned, archived, deleted, title_overridden, meta_json, searchable_text) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, 0, 0, 0, ?, ?)"
-    ).run(
-      entry.workspaceKey,
-      entry.workspacePath,
-      entry.sessionId,
-      title,
-      "running",
-      entry.provider,
-      entry.mode,
-      entry.model,
-      now,
-      now,
-      metaJson,
-      entry.bridgeTaskId
-    );
-    if (!updateOwnedStatus(database, entry, "running")) {
-      throw new Error("Desktop task row already exists and is not owned by this Bridge task");
-    }
-  });
-}
-async function updateDesktopTaskStatus(entry, status) {
-  await withDatabase(entry.databasePath, (database) => {
-    requireTaskTable(database);
-    if (!updateOwnedStatus(database, entry, status)) {
-      throw new Error("Desktop task row is missing or is not owned by this Bridge task");
-    }
-  });
-}
-function updateOwnedStatus(database, entry, status) {
-  const row = database.prepare(
-    "SELECT meta_json FROM tasks WHERE workspace_key = ? AND task_id = ?"
-  ).get(entry.workspaceKey, entry.sessionId);
-  if (!row || typeof row.meta_json !== "string") return false;
-  let meta3;
-  try {
-    const parsed = JSON.parse(row.meta_json);
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return false;
-    meta3 = parsed;
-  } catch {
-    return false;
-  }
-  if (meta3["traceId"] !== entry.bridgeTaskId || meta3["taskId"] !== entry.sessionId) return false;
-  const now = Date.now();
-  meta3["updatedAt"] = now;
-  if (status === null) delete meta3["status"];
-  else meta3["status"] = status;
-  database.prepare(
-    "UPDATE tasks SET task_status = ?, updated_at = ?, meta_json = ? WHERE workspace_key = ? AND task_id = ?"
-  ).run(status, now, JSON.stringify(meta3), entry.workspaceKey, entry.sessionId);
-  return true;
-}
-function requireTaskTable(database) {
-  const columns = new Set(
-    database.prepare("PRAGMA table_info(tasks)").all().map((column) => column.name).filter((name) => typeof name === "string")
-  );
-  const required2 = [
-    "workspace_key",
-    "workspace_path",
-    "workspace_identity",
-    "task_id",
-    "title",
-    "task_status",
-    "provider",
-    "mode",
-    "model",
-    "created_at",
-    "updated_at",
-    "unread_at",
-    "pinned",
-    "archived",
-    "deleted",
-    "title_overridden",
-    "meta_json",
-    "searchable_text"
-  ];
-  const missing = required2.filter((name) => !columns.has(name));
-  if (missing.length > 0) {
-    throw new Error(`ZCode tasks-index schema is missing columns: ${missing.join(", ")}`);
-  }
-}
-async function withDatabase(databasePath, operation) {
-  if (!existsSync4(databasePath)) {
-    throw new Error("ZCode Desktop tasks-index database does not exist");
-  }
-  const DatabaseSync = await loadDatabaseSync();
-  if (!DatabaseSync) throw new Error("node:sqlite is unavailable in the Bridge runtime");
-  let lastError;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    let database = null;
-    try {
-      database = new DatabaseSync(databasePath, { timeout: 1e3 });
-      database.exec("BEGIN IMMEDIATE");
-      try {
-        const result = operation(database);
-        database.exec("COMMIT");
-        return result;
-      } catch (error62) {
-        database.exec("ROLLBACK");
-        throw error62;
-      }
-    } catch (error62) {
-      lastError = error62;
-      if (attempt < 2 && isDatabaseBusy(error62)) {
-        await new Promise((resolve) => setTimeout(resolve, 200 * (attempt + 1)));
-        continue;
-      }
-      throw error62;
-    } finally {
-      database?.close();
-    }
-  }
-  throw lastError instanceof Error ? lastError : new Error("ZCode tasks-index write failed");
-}
-function isDatabaseBusy(error62) {
-  const message = error62 instanceof Error ? error62.message : String(error62);
-  return /database is (busy|locked)/i.test(message);
-}
-var databaseSyncPromise;
-var init_task_index_sync = __esm({
-  "src/adapters/task-index-sync.ts"() {
-    "use strict";
-    databaseSyncPromise = null;
   }
 });
 
@@ -25694,7 +25561,7 @@ var init_host = __esm({
 });
 
 // src/browser/load-backend.ts
-import { existsSync as existsSync5 } from "node:fs";
+import { existsSync as existsSync4 } from "node:fs";
 import path7 from "node:path";
 import { fileURLToPath as fileURLToPath2, pathToFileURL } from "node:url";
 function devRuntimeSpecifier() {
@@ -25714,7 +25581,7 @@ function asBackendModule(imported, label) {
 async function loadBackendModule() {
   const moduleDir = path7.dirname(fileURLToPath2(import.meta.url));
   const vendorEntry = path7.join(moduleDir, "vendor", "pkg", "browser-host.cjs");
-  if (existsSync5(vendorEntry)) {
+  if (existsSync4(vendorEntry)) {
     return asBackendModule(
       await import(pathToFileURL(vendorEntry).href),
       "Vendor browser backend bundle"
@@ -25753,9 +25620,35 @@ import { createHash as createHash7, randomUUID } from "node:crypto";
 function publicUsage(value) {
   if (!isRecord4(value)) return null;
   const result = {};
-  for (const key of ["inputTokens", "outputTokens", "totalTokens", "cachedInputTokens", "reasoningTokens", "input_tokens", "output_tokens", "total_tokens", "cost"]) {
+  for (const key of [
+    "inputTokens",
+    "outputTokens",
+    "totalTokens",
+    "cachedInputTokens",
+    "cacheReadTokens",
+    "cachedWriteInputTokens",
+    "cacheWriteInputTokens",
+    "cacheWriteTokens",
+    "reasoningTokens",
+    "input_tokens",
+    "output_tokens",
+    "total_tokens",
+    "cached_input_tokens",
+    "cache_read_tokens",
+    "cached_write_input_tokens",
+    "cache_write_input_tokens",
+    "cache_write_tokens"
+  ]) {
     const item = value[key];
     if (typeof item === "number" && Number.isFinite(item) && item >= 0) result[key] = item;
+  }
+  for (const key of ["source", "usage_source", "scope", "observed_at", "finality"]) {
+    const item = value[key];
+    if (typeof item === "string" && item.trim()) result[key] = item.trim();
+  }
+  if (Array.isArray(value.conflicts)) {
+    const conflicts = value.conflicts.filter((item) => typeof item === "string" && /^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/u.test(item)).slice(0, 32);
+    if (conflicts.length) result.conflicts = conflicts;
   }
   return Object.keys(result).length ? result : null;
 }
@@ -25939,21 +25832,6 @@ function extractTurnFailureEvidence(value) {
     quotaText: matchesExplicitQuotaText(error62)
   };
 }
-async function syncDesktopStatus(entry, status, onEvent) {
-  if (!entry) return;
-  try {
-    await updateDesktopTaskStatus(entry, status);
-  } catch (error62) {
-    reportDesktopIndexIssue(onEvent, error62);
-  }
-}
-function reportDesktopIndexIssue(onEvent, error62) {
-  const message = error62 instanceof Error ? error62.message : String(error62);
-  onEvent({
-    type: "desktop_task_index_warning",
-    summary: `ZCode Desktop task index could not be updated: ${message.slice(0, 500)}`
-  });
-}
 function isRecord4(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -25981,7 +25859,6 @@ var init_zcode_app_server_adapter = __esm({
     init_account_provider();
     init_session_preferences();
     init_task_timeout();
-    init_task_index_sync();
     init_profile();
     init_params();
     init_host();
@@ -26204,7 +26081,6 @@ var init_zcode_app_server_adapter = __esm({
         const projectPath = workspace.sourcePath ?? workspace.canonicalPath;
         let timer;
         let warningTimer;
-        let desktopTask = null;
         try {
           const runtimeEnv = loadPersistedRuntimeEnvironment(this.#childEnvBase, this.#homeDir, this.#host);
           const timeoutMs = this.#timeoutMs ?? resolveTaskTimeout(task, runtimeEnv);
@@ -26456,32 +26332,6 @@ var init_zcode_app_server_adapter = __esm({
               ...selectedReasoningLevel ? { reasoning_level: selectedReasoningLevel, reasoning_level_source: "runtime" } : {}
             }
           });
-          const indexPath = zcodeTasksIndexPath(config2.providerPersonalConfigFile);
-          if (indexPath) {
-            const selected = readSelectedModelSelection(snapshot);
-            desktopTask = {
-              databasePath: indexPath,
-              workspaceKey: projectPath,
-              workspacePath: workspace.canonicalPath,
-              sessionId,
-              bridgeTaskId: task.task_id,
-              title: task.task_id,
-              model: selected ? `${selected.providerId}/${selected.modelId}` : null,
-              provider: "glm",
-              mode: preferences.mode
-            };
-            try {
-              await registerDesktopTask(desktopTask);
-              entry.onEvent({
-                type: "desktop_task_registered",
-                summary: "ZCode session registered in Desktop task index; refresh the task list to see it",
-                details: { session_id: sessionId, project_path: projectPath, execution_path: workspace.canonicalPath }
-              });
-            } catch (error62) {
-              reportDesktopIndexIssue(entry.onEvent, error62);
-              desktopTask = null;
-            }
-          }
           const runtimeSeq = nestedNumber(snapshot, ["runtime", "eventSeq"]) ?? 0;
           entry.lastEventSeq = runtimeSeq;
           entry.awaitingTurnStart = runtimeSeq > 0;
@@ -26563,7 +26413,6 @@ var init_zcode_app_server_adapter = __esm({
             warningTimer = void 0;
           }
           entry.turnCompletedAt = turnResult.completedAt;
-          const desktopStatus = turnResult.resultType === "cancelled" ? null : turnResult.resultType && turnResult.resultType !== "success" ? "error" : "completed";
           let outcome;
           if (turnResult.resultType && turnResult.resultType !== "success") {
             if (turnResult.resultType !== "cancelled" && !entry.terminalFactsSubmitted) {
@@ -26690,11 +26539,6 @@ var init_zcode_app_server_adapter = __esm({
           } catch (error62) {
             entry.onEvent({ type: "outcome_checkpoint_failed", summary: error62 instanceof Error ? error62.message : String(error62) });
           }
-          try {
-            await syncDesktopStatus(desktopTask, desktopStatus, entry.onEvent);
-          } catch (error62) {
-            entry.onEvent({ type: "desktop_status_sync_failed", summary: error62 instanceof Error ? error62.message : String(error62) });
-          }
           return await this.#completeCleanup(entry, outcome);
         } catch (error62) {
           if (timer) {
@@ -26706,7 +26550,6 @@ var init_zcode_app_server_adapter = __esm({
             warningTimer = void 0;
           }
           if (process.platform === "win32") entry.client?.prewarmCleanup();
-          await syncDesktopStatus(desktopTask, entry.cancelRequested ? null : "error", entry.onEvent);
           entry.abort.abort();
           const spawnRecovery = entry.spawnFailure && !entry.timedOut && !entry.cancelRequested ? entry.spawnFailure : null;
           if (!entry.terminalFactsSubmitted && !entry.timedOut && !entry.cancelRequested) {
@@ -28727,6 +28570,9 @@ __export(normalize_exports2, {
   normalizeUsage: () => normalizeUsage,
   phaseDuration: () => phaseDuration
 });
+function isKnownNumericKey(key) {
+  return KNOWN_NUMERIC_FIELDS.some(([canonical2, ...aliases]) => key === canonical2 || aliases.some((candidate) => candidate === key));
+}
 function acceptNumber(value) {
   if (value === void 0 || value === null) return { value: null, conflict: null };
   if (typeof value !== "number") return { value: null, conflict: "non_numeric_rejected" };
@@ -28750,20 +28596,18 @@ function normalizeUsage(raw, options = {}) {
     output_tokens: null,
     total_tokens: null,
     cached_input_tokens: null,
+    cached_write_input_tokens: null,
     reasoning_tokens: null,
     conflicts: [],
     dropped_unknown_keys: 0
   };
   let knownKeys = 0;
-  for (const [canonical2, alias] of KNOWN_NUMERIC_FIELDS) {
-    const snake = record3[canonical2];
-    const camel = record3[alias];
-    const hasSnake = snake !== void 0;
-    const hasCamel = camel !== void 0;
-    if (!hasSnake && !hasCamel) continue;
+  for (const [canonical2, ...aliases] of KNOWN_NUMERIC_FIELDS) {
+    const present = [canonical2, ...aliases].filter((key) => record3[key] !== void 0).map((key) => record3[key]);
+    if (present.length === 0) continue;
     knownKeys += 1;
-    if (hasSnake && hasCamel && snake !== camel) conflicts.add("duplicate_synonyms");
-    const accepted = acceptNumber(hasSnake ? snake : camel);
+    if (present.some((value) => value !== present[0])) conflicts.add("duplicate_synonyms");
+    const accepted = acceptNumber(present[0]);
     if (accepted.conflict) {
       conflicts.add(accepted.conflict);
       continue;
@@ -28771,9 +28615,9 @@ function normalizeUsage(raw, options = {}) {
     result[canonical2] = accepted.value;
   }
   for (const key of Object.keys(record3)) {
-    const known = KNOWN_NUMERIC_FIELDS.some(([canonical2, alias]) => key === canonical2 || key === alias);
-    const source = SOURCE_FIELDS.some((candidate) => key === candidate);
-    if (!known && !source) result.dropped_unknown_keys += 1;
+    const known = isKnownNumericKey(key);
+    const metadata = SOURCE_FIELDS.some((candidate) => key === candidate) || key === "scope" || key === "observed_at" || key === "finality" || key === "conflicts";
+    if (!known && !metadata) result.dropped_unknown_keys += 1;
   }
   for (const sourceField of SOURCE_FIELDS) {
     const value = record3[sourceField];
@@ -28783,8 +28627,16 @@ function normalizeUsage(raw, options = {}) {
     }
   }
   if (result.source === null) result.source = options.source ?? null;
-  result.scope = options.scope ?? null;
-  result.observed_at = options.observedAt ?? null;
+  result.scope = options.scope ?? (typeof record3.scope === "string" && SAFE_USAGE_TOKEN.test(record3.scope) ? record3.scope : null);
+  result.observed_at = options.observedAt ?? (typeof record3.observed_at === "string" && !Number.isNaN(Date.parse(record3.observed_at)) ? record3.observed_at : null);
+  if (record3.finality === "reported" || record3.finality === "derived" || record3.finality === "partial") {
+    result.finality = record3.finality;
+  }
+  if (Array.isArray(record3.conflicts)) {
+    for (const conflict of record3.conflicts) {
+      if (typeof conflict === "string" && SAFE_USAGE_TOKEN.test(conflict)) conflicts.add(conflict);
+    }
+  }
   const { input_tokens: input2, output_tokens: output2, total_tokens: total } = result;
   if (total !== null && input2 !== null && output2 !== null && total !== input2 + output2) {
     conflicts.add("total_mismatch");
@@ -28808,6 +28660,7 @@ function addNonOverlappingUsage(a, b, source) {
     output_tokens: add(a?.output_tokens ?? null, b?.output_tokens ?? null),
     total_tokens: add(a?.total_tokens ?? null, b?.total_tokens ?? null),
     cached_input_tokens: add(a?.cached_input_tokens ?? null, b?.cached_input_tokens ?? null),
+    cached_write_input_tokens: add(a?.cached_write_input_tokens ?? null, b?.cached_write_input_tokens ?? null),
     reasoning_tokens: add(a?.reasoning_tokens ?? null, b?.reasoning_tokens ?? null),
     conflicts: [...conflicts],
     dropped_unknown_keys: (a?.dropped_unknown_keys ?? 0) + (b?.dropped_unknown_keys ?? 0)
@@ -28827,7 +28680,7 @@ function phaseDuration(startIso, endIso, notes) {
   }
   return end - start;
 }
-var KNOWN_NUMERIC_FIELDS, SOURCE_FIELDS;
+var KNOWN_NUMERIC_FIELDS, SOURCE_FIELDS, SAFE_USAGE_TOKEN;
 var init_normalize2 = __esm({
   "src/usage/normalize.ts"() {
     "use strict";
@@ -28835,10 +28688,12 @@ var init_normalize2 = __esm({
       ["input_tokens", "inputTokens"],
       ["output_tokens", "outputTokens"],
       ["total_tokens", "totalTokens"],
-      ["cached_input_tokens", "cachedInputTokens"],
+      ["cached_input_tokens", "cachedInputTokens", "cacheReadTokens", "cache_read_tokens"],
+      ["cached_write_input_tokens", "cachedWriteInputTokens", "cacheWriteInputTokens", "cacheWriteTokens", "cache_write_tokens"],
       ["reasoning_tokens", "reasoningTokens"]
     ];
     SOURCE_FIELDS = ["source", "usage_source"];
+    SAFE_USAGE_TOKEN = /^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/u;
   }
 });
 
@@ -29250,9 +29105,6 @@ init_account_provider();
 // src/worker/production-adapter-selection.ts
 function selectProductionAdapter(platform = process.platform, architecture = process.arch) {
   if (platform === "win32" && architecture === "x64") return "official_host";
-  if ((platform === "linux" || platform === "darwin") && (architecture === "x64" || architecture === "arm64")) {
-    return "direct_app_server";
-  }
   const error62 = new Error(
     `The Bridge Worker does not support ${platform}/${architecture}.`
   );

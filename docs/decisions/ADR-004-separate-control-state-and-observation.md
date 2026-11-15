@@ -5,6 +5,8 @@ Separate Runtime Control, Authoritative State, and Supplemental Observation
 Status: Accepted
 Date: 2026-10-07
 
+> Preview.6 applicability: the authority/observation split remains active. The Desktop `tasks-index.sqlite` integration side effect was retired by ADR-038 and must not be reintroduced from the historical decision text below.
+
 ## Context
 
 ZCode 在本机留下多种材料：app-server 事件、CLI 的 metadata / output / model-io / rollout 文件、日志，以及 Desktop 的 `tasks-index.sqlite`。其中一部分在研究阶段被观测过，但它们都是未公开、随版本变化的内部结构。

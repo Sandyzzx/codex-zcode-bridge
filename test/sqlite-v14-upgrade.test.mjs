@@ -4,7 +4,8 @@ import {DatabaseSync} from 'node:sqlite';
 import {existsSync,readFileSync,writeFileSync,renameSync,mkdirSync} from 'node:fs';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
-import {createHash,randomUUID} from 'node:crypto';
+import {createHash} from 'node:crypto';
+import {randomUUID} from 'node:crypto';
 import {IsolatedAdmissionStore,digest,canonical} from '../src/sqlite-candidate/wp6b2b1/store.mjs';
 import {createSqliteLifecyclePort} from '../src/sqlite-candidate/wp6b2b1/lifecycle-port.mjs';
 import {historicalResultExceptionSetDigest} from '../src/store/json-history-result-exceptions.mjs';
@@ -15,6 +16,94 @@ function oldRoot(){
   s.createTask({task_id:'old-task',workspace:fresh,objective:'old queued task',requirements:[],allowed_paths:[],forbidden_paths:[],acceptance_criteria:[],test_commands:[]},'2026-11-05T00:00:00Z');
   s.cancelQueuedAttempt({task_id:'old-task',expected_attempt:1});s.close();
   const source=fixture('v13');historicalV13(fresh,source);return source;
+}
+function mixedHistoricalV13(){
+  const root=fixture('mixed-v13'),database=path.join(root,'operations.sqlite3');
+  const nativeId='native-after-switch',historicalId='legacy-before-switch';
+  const value={...result(historicalId),summary:'legacy Unicode 中文😀'};
+  const event={artifact_id:'legacy-events',task_id:historicalId,attempt:1,source_sequence:1,
+    event_type:'legacy_completed',at:'2026-11-05T00:00:00Z',summary:'legacy event',details:{retained:true}};
+  const artifacts=[
+    {artifact_id:'legacy-result',relative_path:`${historicalId}/result.json`,task_id:historicalId,attempt:null,
+      kind:'task_result',content:Buffer.from(canonical(value))},
+    {artifact_id:'legacy-events',relative_path:`${historicalId}/events.jsonl`,task_id:historicalId,attempt:null,
+      kind:'events',content:Buffer.from(JSON.stringify(event)+'\n')},
+  ].map(a=>({...a,byte_length:a.content.length,
+    sha256:createHash('sha256').update(a.content).digest('hex')}));
+  const artifactBytes=artifacts.reduce((total,a)=>total+a.byte_length,0);
+  const manifest={files:artifacts.map(({relative_path,sha256,byte_length})=>({relative_path,sha256,byte_length})),
+    task_count:1,result_count:1,event_count:1,artifact_count:artifacts.length,artifact_bytes:artifactBytes,
+    historical_exceptions:[],historical_exception_count:0,
+    historical_exception_digest:historicalResultExceptionSetDigest([])};
+  const archiveDirectory=path.join(root,'legacy-archive');
+  const sourceTasksRoot=path.join(root,'legacy-source');
+  const sourceManifest=canonical(manifest),sourceManifestDigest=digest(sourceManifest);
+  const task=taskId=>({task_id:taskId,workspace:root,objective:'mixed authority fixture',
+    requirements:[],allowed_paths:[],forbidden_paths:[],acceptance_criteria:[],test_commands:[]});
+  const db=new DatabaseSync(database);
+  try{
+    db.exec(readFileSync(new URL('../src/sqlite-candidate/wp6b2b1/schema-v13.sql',import.meta.url),'utf8'));
+    db.exec('BEGIN');
+    db.prepare(`INSERT INTO authority_metadata(singleton,schema_version,next_event_cursor,policy_version,
+      policy_generation,capacity_limit,policy_operation_id) VALUES(1,13,2,1,1,8,'mixed-capacity-policy')`).run();
+    db.prepare(`INSERT INTO manager_operations(operation_id,operation_kind,request_digest,revision,phase,
+      policy_generation,capacity_limit,created_at) VALUES('mixed-capacity-policy','capacity_policy_change',?,
+      1,'policy_change_committed',1,8,'2026-11-05T00:00:00Z')`).run(
+      digest({operation_id:'mixed-capacity-policy',capacity_limit:8,expected_generation:0}));
+    const policyEvidence=canonical({generation:1,capacity_limit:8});
+    db.prepare(`INSERT INTO manager_operation_events(event_cursor,operation_id,sequence,event_type,
+      from_phase,to_phase,generation,evidence_json,evidence_digest,at) VALUES(1,'mixed-capacity-policy',
+      1,'capacity_policy_committed',NULL,'policy_change_committed',NULL,?,?,'2026-11-05T00:00:00Z')`).run(
+      policyEvidence,digest(policyEvidence));
+    for(const [taskId,status] of [[nativeId,'queued'],[historicalId,'completed']]){
+      db.prepare('INSERT INTO tasks(task_id,task_json,status,current_attempt,created_at) VALUES(?,?,?,?,?)')
+        .run(taskId,canonical(task(taskId)),status,1,'2026-11-05T00:00:00Z');
+      db.prepare('INSERT INTO attempts(task_id,attempt,generation,status,created_at) VALUES(?,?,NULL,?,?)')
+        .run(taskId,1,status,'2026-11-05T00:00:00Z');
+    }
+    db.prepare(`INSERT INTO migration_runs(migration_id,state,source_root_digest,source_manifest_json,
+      source_manifest_digest,source_task_count,source_artifact_count,source_artifact_bytes,source_result_count,
+      source_event_count,archive_directory,archive_manifest_digest,archive_source_tasks_root,archive_file_count,
+      archive_byte_count,verifier_version,created_at,verified_at)
+      VALUES('mixed-migration','verified',?,?,?,1,?,?,1,1,?,?,?,?,?,'wp6-json-cutover-v1',?,?)`).run(
+      'd'.repeat(64),sourceManifest,sourceManifestDigest,artifacts.length,artifactBytes,archiveDirectory,
+      'c'.repeat(64),sourceTasksRoot,artifacts.length,artifactBytes,
+      '2026-11-05T00:00:00Z','2026-11-05T00:00:00Z');
+    db.prepare(`INSERT INTO authority_switch(singleton,authority_generation,cutover_id,migration_id,
+      source_root_digest,source_manifest_digest,archive_directory,archive_manifest_digest,
+      archive_source_tasks_root,archive_file_count,archive_byte_count,schema_version,protocol_version,
+      runtime_roster_digest,verifier_version,created_at)
+      VALUES(1,1,'mixed-cutover','mixed-migration',?,?,?,?,?,?,?,13,'wp6-stop-world-json-sqlite-v1',?,
+      'wp6-json-cutover-v1','2026-11-05T00:00:00Z')`).run(
+      'd'.repeat(64),sourceManifestDigest,archiveDirectory,'c'.repeat(64),sourceTasksRoot,artifacts.length,
+      artifactBytes,'a'.repeat(64));
+    for(const artifact of artifacts){
+      db.prepare(`INSERT INTO json_artifacts(artifact_id,migration_id,relative_path,task_id,attempt,kind,
+        byte_length,sha256,content,created_at) VALUES(?,'mixed-migration',?,?,?,?,?,?,?,?)`).run(
+        artifact.artifact_id,artifact.relative_path,artifact.task_id,artifact.attempt,artifact.kind,
+        artifact.byte_length,artifact.sha256,artifact.content,'2026-11-05T00:00:00Z');
+    }
+    db.prepare('INSERT INTO migrated_task_results(task_id,attempt,result_json,result_digest,artifact_id) VALUES(?,?,?,?,?)')
+      .run(historicalId,1,canonical(value),digest(canonical(value)),'legacy-result');
+    const details=canonical(event.details);
+    db.prepare(`INSERT INTO migrated_task_events(event_cursor,task_id,attempt,source_sequence,event_type,at,
+      summary,details_json,details_digest,artifact_id) VALUES(2,?,?,?,?,?,?,?,?,?)`).run(
+      historicalId,1,event.source_sequence,event.event_type,event.at,event.summary,details,digest(details),
+      'legacy-events');
+    db.prepare("UPDATE sqlite_sequence SET seq=2 WHERE name='manager_operation_events'").run();
+    db.exec('PRAGMA user_version=13; COMMIT');
+  }catch(error){
+    try{db.exec('ROLLBACK');}catch{}
+    throw error;
+  }finally{db.close();}
+  writeFileSync(path.join(root,'operations.sqlite3.cutover-published.json'),JSON.stringify({
+    schema_version:1,state:'authority_switch_receipt',cutover_id:'mixed-cutover',migration_id:'mixed-migration',
+    source_root_digest:'d'.repeat(64),source_manifest_digest:sourceManifestDigest,database_file:'operations.sqlite3',
+    archive:{archive_directory:archiveDirectory,source_tasks_root:sourceTasksRoot,manifest_digest:'c'.repeat(64),
+      file_count:artifacts.length,byte_count:artifactBytes},
+    created_at:'2026-11-05T00:00:00Z',
+  }));
+  return {root,nativeId,historicalId};
 }
 test('explicit offline v13 copy upgrade preserves every row/event/digest and source bytes; v14 opens, v13 requires actionable upgrade',()=>{
   const source=oldRoot(),destination=fixture('v14');const before=readFileSync(path.join(source,'operations.sqlite3'));
@@ -49,27 +138,41 @@ test('failed destination is fenced, source is intact and the CLI can be retried 
   IsolatedAdmissionStore.upgradeV13Copy(source,fixture('retry-destination'),options);
 });
 
-test('v13 published raw-cutover receipt and archive identity survive upgrade; runtime roster is explicitly rebound',()=>{
-  const seed=fixture('cutover-seed');const s=IsolatedAdmissionStore.initialize(seed,{managedDataDirectory:true});
-  const archive={archive_directory:fixture('archive'),source_tasks_root:fixture('legacy-archive-source'),manifest_digest:'c'.repeat(64),file_count:0,byte_count:0};
-  const manifest={kind:'raw_json_archive_cutover',files:[],task_count:0,result_count:0,event_count:0,artifact_count:0,artifact_bytes:0,
-    source_tasks_root:archive.source_tasks_root,source_files_digest:digest([]),archive_manifest_digest:archive.manifest_digest,archive_file_count:0,archive_byte_count:0,
-    historical_exceptions:[],historical_exception_count:0,historical_exception_digest:historicalResultExceptionSetDigest([])};
-  const source={root_digest:'d'.repeat(64),manifest_json:canonical(manifest),manifest_digest:digest(canonical(manifest))};
-  const receipt={schema_version:1,state:'authority_switch_receipt',cutover_id:'r2-cutover',migration_id:'r2-migration',source_root_digest:source.root_digest,
-    source_manifest_digest:source.manifest_digest,database_file:'operations.sqlite3',archive,created_at:'2026-11-05T00:00:00Z'};
+test('fresh native v14 Task, Result and Runtime Event facts survive reopen',()=>{
+  const root=fixture('native-v14-contract'),{store,fence}=running(root,'native-v14-contract',true);
   try{
-    s.recordRawJsonArchiveCutover({schema_version:1,cutover_id:receipt.cutover_id,migration_id:receipt.migration_id,source,archive,protocol_version:'wp6-stop-world-json-sqlite-v1',runtime_roster_digest:'b'.repeat(64),verifier_version:'wp6-json-cutover-v1'});
-    writeFileSync(path.join(seed,'operations.sqlite3.cutover-published.json'),JSON.stringify(receipt));
-    s.provisionCapacity({operation_id:'r2-policy',capacity_limit:8,expected_generation:0,maintenance:{dispatch_blocked:true,writers_drained:true}});
-  }finally{s.close();}
-  const old=fixture('cutover-v13');historicalV13(seed,old,{oldRoster:'a'.repeat(64)});
-  writeFileSync(path.join(old,'operations.sqlite3.cutover-published.json'),JSON.stringify(receipt));
-  const target=fixture('cutover-v14');const upgraded=IsolatedAdmissionStore.upgradeV13Copy(old,target,options);
-  const check=IsolatedAdmissionStore.open(target,{managedDataDirectory:true});try{assert.equal(check.assertAuthorityReady('b'.repeat(64)).cutover_id,receipt.cutover_id);}finally{check.close();}
-  assert.equal(readFileSync(path.join(target,'operations.sqlite3.cutover-published.json'),'utf8'),JSON.stringify(receipt));
-  assert.ok(upgraded.tables.find(x=>x.table==='authority_switch').source_digest!==upgraded.tables.find(x=>x.table==='authority_switch').destination_digest);
-  assert.throws(()=>IsolatedAdmissionStore.upgradeV13Copy(old,fixture('wrong-roster'),{...options,expectedV13RuntimeRosterDigest:'e'.repeat(64)}),e=>e.code==='authority_runtime_roster_mismatch');
+    store.appendRuntimeTaskEvent({...fence,worker_sequence:1,event_type:'turn_started',
+      at:'2026-11-15T00:00:00.000Z',summary:'native turn started'});
+    store.commitResult({...fence,result_status:'completed',result:result('native-v14-contract')});
+  }finally{store.close();}
+  const reopened=IsolatedAdmissionStore.open(root,{managedDataDirectory:true});
+  try{
+    const lifecycle=reopened.readTaskLifecycle('native-v14-contract');
+    assert.equal(lifecycle.projection.task_id,'native-v14-contract');
+    assert.equal(lifecycle.result.summary,'R2 result');
+    assert.equal(reopened.readTaskEvents('native-v14-contract').events.some(event=>event.event_type==='turn_started'),true);
+  }finally{reopened.close();}
+});
+
+test('mixed migrated and native v14 authority preserves native Tasks and keeps retired history non-queryable',()=>{
+  const {root,nativeId,historicalId}=mixedHistoricalV13(),target=fixture('mixed-v14');
+  IsolatedAdmissionStore.upgradeV13Copy(root,target,options);
+  const store=IsolatedAdmissionStore.open(target,{managedDataDirectory:true});
+  try{
+    assert.equal(store.readTaskLifecycle(nativeId).projection.status,'queued');
+    assert.deepEqual(store.readTaskEvents(nativeId),{events:[],nextCursor:0,hasMore:false});
+    assert.equal(store.readTaskLifecycle(historicalId),null);
+    assert.throws(()=>store.readTaskEvents(historicalId),error=>error.code==='task_not_found');
+    assert.equal(typeof store.readMigratedResult,'undefined');
+    assert.equal(typeof store.readMigratedEvents,'undefined');
+    assert.equal(typeof store.readMigratedArtifact,'undefined');
+  }finally{store.close();}
+  const db=new DatabaseSync(path.join(target,'operations.sqlite3'),{readOnly:true});
+  try{
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM tasks').get().n,2);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM migrated_task_results').get().n,1);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM migrated_task_events').get().n,1);
+  }finally{db.close();}
 });
 
 test('previously authorized administrative abandonment migrates unchanged and is not converted to a Result or Cleanup Verified',()=>{
@@ -97,47 +200,6 @@ test('shipped standalone upgrade command validates an isolated copy and leaves t
   assert.equal(JSON.parse(output).destination_version,14);
   const source=new DatabaseSync(path.join(old,'operations.sqlite3'),{readOnly:true}),destination=new DatabaseSync(path.join(target,'operations.sqlite3'),{readOnly:true});
   try{assert.equal(source.prepare('PRAGMA user_version').get().user_version,13);assert.equal(destination.prepare('PRAGMA user_version').get().user_version,14);}finally{source.close();destination.close();}
-});
-
-test('v13 historical projections retain BLOB artifacts, legacy Result and event bytes through copy and shipped CLI',()=>{
-  const seed=fixture('projection-seed'),taskId='legacy-projection';
-  const value={...result(taskId),summary:'legacy Unicode 中文😀'};
-  const event={artifact_id:'legacy-events',task_id:taskId,attempt:1,source_sequence:1,event_type:'legacy_completed',at:'2026-11-05T00:00:00Z',summary:'legacy event',details:{retained:true}};
-  const artifacts=[
-    {artifact_id:'legacy-result',relative_path:`${taskId}/result.json`,task_id:taskId,attempt:null,kind:'task_result',content:Buffer.from(canonical(value))},
-    {artifact_id:'legacy-binary',relative_path:`${taskId}/attempts/1/output.bin`,task_id:taskId,attempt:1,kind:'attempt_file',content:Buffer.from([0,255,128,10,13,42])},
-    {artifact_id:'legacy-events',relative_path:`${taskId}/events.jsonl`,task_id:taskId,attempt:null,kind:'events',content:Buffer.from(JSON.stringify(event)+'\n')},
-  ].map(a=>({...a,byte_length:a.content.length,sha256:createHash('sha256').update(a.content).digest('hex')}));
-  const byteCount=artifacts.reduce((n,a)=>n+a.byte_length,0);
-  const manifest={files:artifacts.map(a=>({relative_path:a.relative_path,sha256:a.sha256,byte_length:a.byte_length})),task_count:1,result_count:1,event_count:1,artifact_count:artifacts.length,artifact_bytes:byteCount,
-    historical_exceptions:[],historical_exception_count:0,historical_exception_digest:historicalResultExceptionSetDigest([])};
-  const archive={archive_directory:fixture('projection-archive'),source_tasks_root:fixture('projection-legacy-source'),manifest_digest:'c'.repeat(64),file_count:artifacts.length,byte_count:byteCount};
-  const source={task_count:1,result_count:1,event_count:1,artifact_count:artifacts.length,artifact_bytes:byteCount,historical_exception_count:0,historical_exception_digest:historicalResultExceptionSetDigest([]),root_digest:'d'.repeat(64),manifest_json:canonical(manifest),manifest_digest:digest(canonical(manifest))};
-  const roster=version=>digest(JSON.stringify({node:process.versions.node,sqlite:process.versions.sqlite??'unavailable',platform:process.platform,architecture:process.arch,schema_version:version,cutover_protocol_version:'wp6-stop-world-json-sqlite-v1'}));
-  const s=IsolatedAdmissionStore.initialize(seed,{managedDataDirectory:true});
-  const receipt={schema_version:1,state:'authority_switch_receipt',cutover_id:'projection-cutover',migration_id:'projection-migration',source_root_digest:source.root_digest,source_manifest_digest:source.manifest_digest,database_file:'operations.sqlite3',archive,created_at:'2026-11-05T00:00:00Z'};
-  try{
-    s.importJsonAuthoritySnapshot({schema_version:1,cutover_id:receipt.cutover_id,migration_id:receipt.migration_id,source,archive,tasks:[{task_id:taskId,task:{task_id:taskId,workspace:seed,objective:'historical fixture',requirements:[],allowed_paths:[],forbidden_paths:[],acceptance_criteria:[],test_commands:[]},status:'completed',current_attempt:1,created_at:'2026-11-05T00:00:00Z',attempts:[{attempt:1,status:'completed',created_at:'2026-11-05T00:00:00Z'}]}],
-      artifacts,results:[{task_id:taskId,attempt:1,result:value,artifact_id:'legacy-result'}],events:[event],historical_exceptions:[],protocol_version:'wp6-stop-world-json-sqlite-v1',runtime_roster_digest:roster(14),verifier_version:'wp6-json-cutover-v1'});
-    writeFileSync(path.join(seed,'operations.sqlite3.cutover-published.json'),JSON.stringify(receipt));
-    s.provisionCapacity({operation_id:'legacy-policy',capacity_limit:8,expected_generation:0,maintenance:{dispatch_blocked:true,writers_drained:true}});
-  }finally{s.close();}
-  const old=fixture('projection-v13');historicalV13(seed,old,{oldRoster:roster(13)});
-  writeFileSync(path.join(old,'operations.sqlite3.cutover-published.json'),JSON.stringify(receipt));
-  for(const mode of ['library','cli']){
-    const target=fixture(`projection-v14-${mode}`);
-    const output=mode==='library'?IsolatedAdmissionStore.upgradeV13Copy(old,target,{...options,expectedV13RuntimeRosterDigest:roster(13),runtimeRosterDigest:roster(14)}):JSON.parse(execFileSync(process.execPath,[path.resolve('plugins/codex-zcode-bridge/dist/upgrade-sqlite-v14.mjs'),'--source',old,'--destination',target,'--database','operations.sqlite3','--offline'],{encoding:'utf8',timeout:30000}));
-    for(const table of output.tables)if(!['authority_metadata','authority_switch'].includes(table.table))assert.equal(table.source_digest,table.destination_digest,table.table);
-    const check=IsolatedAdmissionStore.open(target,{managedDataDirectory:true});
-    try{assert.deepEqual(check.readTaskLifecycle(taskId).result,value);assert.equal(check.assertAuthorityReady(roster(14)).kind,'authority_switch');}finally{check.close();}
-    const db=new DatabaseSync(path.join(target,'operations.sqlite3'),{readOnly:true});
-    try{
-      for(const original of artifacts)assert.deepEqual(Buffer.from(db.prepare('SELECT content FROM json_artifacts WHERE artifact_id=?').get(original.artifact_id).content),original.content);
-      assert.equal(db.prepare('SELECT result_digest FROM migrated_task_results WHERE task_id=?').get(taskId).result_digest,digest(canonical(value)));
-      assert.equal(db.prepare('SELECT event_cursor FROM migrated_task_events').get().event_cursor,1);
-      assert.equal(db.prepare('SELECT next_event_cursor FROM authority_metadata').get().next_event_cursor,2);
-    }finally{db.close();}
-  }
 });
 
 test('automatic v13 startup upgrade keeps occupied running Attempts and recovery evidence without clearing a Hold',()=>{

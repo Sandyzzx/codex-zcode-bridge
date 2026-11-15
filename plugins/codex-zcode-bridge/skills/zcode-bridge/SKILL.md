@@ -6,9 +6,9 @@ description: 用户明确要求使用 ZCode/Codex ZCode Bridge、查询或继续
 # ZCode Bridge — Master Skill
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-13
-> Last verified: 2026-11-13，核对 Preview.5 SQLite-only 架构、Official Host、R7 Runtime Events/Usage、MCP schema、模型路由、授权/恢复边界与渐进加载路由；安装制品真实 Start Plan 待单独验收。
-> Verified against: 3a95e47b2688d06e29f3bca441d1c9bcaaca2e4f + Preview.5 version/documentation changes
+> Last updated: 2026-11-15
+> Last verified: 2026-11-15，核对 Preview.6 post-audit 的 SQLite-only 架构、Official Host、R7 Runtime Events/Usage、默认 13 工具面、机器反馈、平台 fail-closed、授权/恢复边界与渐进加载路由；真实 Host 文案消费未做 A/B。
+> Verified against: `7e717621c1de0fb56b3ac19e22e242d856445db4` + Preview.6 post-audit candidate
 > Scope: Master 授权、派发、监控、独立验收与恢复；不修改 Bridge TaskPackage Schema 或 MCP 工具 API。
 
 ## 职责与授权
@@ -52,7 +52,7 @@ description: 用户明确要求使用 ZCode/Codex ZCode Bridge、查询或继续
 | 状态、事件、Attention、权限交互 | [monitoring-and-approval.md](references/monitoring-and-approval.md) |
 | 终态、独立验收、返工、接收、Hold Recovery | [review-and-recovery.md](references/review-and-recovery.md) |
 | 锁、清理、路径、配置、运行时事实 | [runtime-boundaries.md](references/runtime-boundaries.md) |
-| 最终用户报告与 token/模型证据 | [reporting.md](references/reporting.md) |
+| 机器观测、Usage、模型证据与宿主报告边界 | [reporting.md](references/reporting.md) |
 
 普通 Bridge 委派不预读仓库架构、ADR、研究日志或生成 bundle。涉及 Bridge 实现/合同诊断时，先读仓库 `docs/PROJECT_STATE.md`，再按问题选择 `ARCHITECTURE.md`、`INTERFACES.md` 或 `docs/decisions/README.md` 的主题入口。
 

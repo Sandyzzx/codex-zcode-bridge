@@ -82,11 +82,11 @@ function validateResultObject(value,keys,required=[]){
   const own=Object.keys(value);if(own.some(k=>!keys.has(k))||required.some(k=>!Object.hasOwn(value,k)))fail('invalid_result_payload');
 }
 function validateUsage(value){
-  validateResultObject(value,new Set(['source','scope','observed_at','finality','input_tokens','output_tokens','total_tokens','cached_input_tokens','reasoning_tokens','conflicts','dropped_unknown_keys']),
+  validateResultObject(value,new Set(['source','scope','observed_at','finality','input_tokens','output_tokens','total_tokens','cached_input_tokens','cached_write_input_tokens','reasoning_tokens','conflicts','dropped_unknown_keys']),
     ['source','scope','observed_at','finality','input_tokens','output_tokens','total_tokens','cached_input_tokens','reasoning_tokens','conflicts','dropped_unknown_keys']);
   if(!isNullableText(value.source)||!isNullableText(value.scope)||!isNullableText(value.observed_at)
     ||!['reported','derived','partial'].includes(value.finality)
-    ||['input_tokens','output_tokens','total_tokens','cached_input_tokens','reasoning_tokens'].some(k=>value[k]!==null&&(!Number.isSafeInteger(value[k])||value[k]<0))
+    ||['input_tokens','output_tokens','total_tokens','cached_input_tokens','cached_write_input_tokens','reasoning_tokens'].some(k=>Object.hasOwn(value,k)&&value[k]!==null&&(!Number.isSafeInteger(value[k])||value[k]<0))
     ||!Number.isSafeInteger(value.dropped_unknown_keys)||value.dropped_unknown_keys<0)fail('invalid_result_payload');
   validateStringArray(value.conflicts,64);
 }

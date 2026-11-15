@@ -1,0 +1,31 @@
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import test from "node:test";
+import { GENERATED_ARTIFACTS } from "../scripts/lib/generated-artifacts.mjs";
+
+test("generated artifact inventory covers every committed plugin build output", () => {
+  const expected = new Set([
+    "plugins/codex-zcode-bridge/dist/admin-abandon-held-operation.mjs",
+    "plugins/codex-zcode-bridge/dist/admin-abandonment.sql",
+    "plugins/codex-zcode-bridge/dist/bridge.mjs",
+    "plugins/codex-zcode-bridge/dist/runtime-events.sql",
+    "plugins/codex-zcode-bridge/dist/schema-v13.sql",
+    "plugins/codex-zcode-bridge/dist/schema.sql",
+    "plugins/codex-zcode-bridge/dist/upgrade-sqlite-v14.mjs",
+    "plugins/codex-zcode-bridge/dist/wait-task.mjs",
+    "plugins/codex-zcode-bridge/worker/vendor/browsers.json",
+    "plugins/codex-zcode-bridge/worker/vendor/package.json",
+    "plugins/codex-zcode-bridge/worker/vendor/pkg/browser-host.cjs",
+    "plugins/codex-zcode-bridge/worker/worker-main.mjs",
+  ]);
+  assert.deepEqual(new Set(GENERATED_ARTIFACTS), expected);
+  assert.equal(new Set(GENERATED_ARTIFACTS).size, GENERATED_ARTIFACTS.length);
+});
+
+test("the freshness command exposes the same inventory", () => {
+  const result = spawnSync(process.execPath, ["scripts/check-generated-artifacts.mjs", "--list"], {
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(new Set(JSON.parse(result.stdout) as string[]), new Set(GENERATED_ARTIFACTS));
+});

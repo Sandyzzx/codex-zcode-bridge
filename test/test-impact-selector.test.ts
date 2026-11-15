@@ -4,6 +4,7 @@ import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { selectCiImpact } from "../scripts/ci-select-impact.mjs";
 import { selectAffectedTests } from "../scripts/test-impact-selector.mjs";
 import { automaticTestEntries, compiledTestPath } from "../scripts/lib/test-files.mjs";
 
@@ -171,4 +172,43 @@ test("manifest covers all executable sources and full selection matches the actu
     assert.notEqual(rejected.status, 0, file);
     assert.match(rejected.stderr, /Not an automatic test/u);
   }
+});
+
+test("CI impact gate shadow-compares targeted and full selections with the executable manifest", () => {
+  const docs = selectCiImpact({ files: ["docs/report.md"], map });
+  assert.equal(docs.affected_mode, "NO_TESTS_APPLICABLE");
+  assert.equal(docs.integration_required, false);
+  assert.equal(docs.full_required, false);
+
+  const worker = selectCiImpact({ files: ["src/worker/worker-main.ts"], map });
+  assert.equal(worker.affected_mode, "TARGETED");
+  assert.equal(worker.integration_required, true);
+  assert.equal(worker.full_required, false);
+  assert.ok(worker.selected_test_files.includes("test/spawn-worker-stderr.test.ts"));
+  assert.ok(worker.selected_test_files.includes("test/sqlite-candidate/wp6b-wiring/composition.test.ts"));
+
+  const full = selectCiImpact({ files: ["package.json"], map });
+  assert.equal(full.affected_mode, "FULL_SUITE");
+  assert.equal(full.force_full, false);
+  assert.equal(full.full_required, true);
+  assert.equal(full.integration_required, true);
+
+  const forced = selectCiImpact({ files: [], map, forceFull: true });
+  assert.equal(forced.force_full, true);
+  assert.equal(forced.full_required, true);
+});
+
+test("FULL-impact Fast gate delegates the full regression to Release", () => {
+  const workflow = readFileSync(path.resolve(".github/workflows/ci.yml"), "utf8");
+  assert.match(
+    workflow,
+    /Full-impact T0 only; Release owns full regression[\s\S]*?--t0-only/u,
+    "the Fast gate must request only T0 when impact policy requires the full suite",
+  );
+  assert.doesNotMatch(workflow, /npm run test:full/u);
+  assert.equal(
+    [...workflow.matchAll(/^\s*-\s+run:\s+npm test\s*$/gmu)].length,
+    1,
+    "the complete npm test run belongs to the Release gate",
+  );
 });

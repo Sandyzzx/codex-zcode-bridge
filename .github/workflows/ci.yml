@@ -6,13 +6,86 @@ on:
     branches:
       - master
       - preview
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+env:
+  NODE_VERSION: 24.16.0
+
 jobs:
-  verify:
-    name: Verify (${{ matrix.os }})
+  impact:
+    name: Select impact gates
+    runs-on: ubuntu-latest
+    outputs:
+      force_full: ${{ steps.select.outputs.force_full }}
+      full_required: ${{ steps.select.outputs.full_required }}
+      integration_required: ${{ steps.select.outputs.integration_required }}
+      stress_required: ${{ steps.select.outputs.stress_required }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - id: select
+        name: Shadow-compare impact selection
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [[ -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]]; then
+            node scripts/ci-select-impact.mjs --head "$HEAD_SHA" --force-full --github-output
+          else
+            node scripts/ci-select-impact.mjs --base "$BASE_SHA" --head "$HEAD_SHA" --github-output
+          fi
+
+  fast:
+    name: Fast PR gate
+    needs: impact
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Full-impact T0 only; Release owns full regression
+        if: needs.impact.outputs.full_required == 'true'
+        run: npm run test:affected -- --base "${{ github.event.pull_request.base.sha || github.event.before }}" --t0-only
+      - name: Impacted T0 and selected tests
+        if: needs.impact.outputs.full_required != 'true'
+        run: npm run test:affected -- --base "${{ github.event.pull_request.base.sha || github.event.before }}"
+
+  integration:
+    name: Integration gate (Windows)
+    needs: impact
+    if: needs.impact.outputs.integration_required == 'true' && needs.impact.outputs.full_required != 'true'
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Verify Windows worker process identity
+        run: node scripts/verify-windows-worker-identity.mjs
+      - name: Impacted integration and task-lifecycle tests
+        run: npm run test:affected -- --base "${{ github.event.pull_request.base.sha || github.event.before }}"
+
+  release:
+    name: Release gate (${{ matrix.os }})
+    needs: impact
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push' || needs.impact.outputs.full_required == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -24,7 +97,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 24.16.0
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - run: npm ci
       - run: npm run typecheck
@@ -34,13 +107,15 @@ jobs:
         run: node scripts/verify-windows-worker-identity.mjs
       - run: npm test
       - run: npm run validate:plugin
-      - name: Check plugin schemas are tracked
-        run: git ls-files --error-unmatch plugins/codex-zcode-bridge/dist/schema.sql plugins/codex-zcode-bridge/dist/schema-v13.sql plugins/codex-zcode-bridge/dist/admin-abandonment.sql plugins/codex-zcode-bridge/dist/upgrade-sqlite-v14.mjs
-      - name: Check generated plugin bundles are committed
-        run: git diff --exit-code -- plugins/codex-zcode-bridge/dist/bridge.mjs plugins/codex-zcode-bridge/dist/wait-task.mjs plugins/codex-zcode-bridge/dist/schema.sql plugins/codex-zcode-bridge/dist/schema-v13.sql plugins/codex-zcode-bridge/dist/admin-abandonment.sql plugins/codex-zcode-bridge/dist/upgrade-sqlite-v14.mjs plugins/codex-zcode-bridge/worker/worker-main.mjs
+      - name: Verify complete generated-artifact freshness
+        run: npm run check:generated
+      - name: Check patch whitespace
+        run: git diff --check
 
   sqlite-stress:
     name: SQLite resource matrix (${{ matrix.os }})
+    needs: impact
+    if: needs.impact.outputs.force_full == 'true' || needs.impact.outputs.stress_required == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -48,18 +123,9 @@ jobs:
         os: [windows-2022, ubuntu-latest]
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          fetch-depth: 0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 24.16.0
-      - id: impact
-        name: Select SQLite resource boundary
-        env:
-          STRESS_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
-          STRESS_HEAD: ${{ github.sha }}
-        run: node scripts/select-sqlite-stress.mjs "${{ env.STRESS_BASE }}" "${{ env.STRESS_HEAD }}"
-      - if: steps.impact.outputs.required == 'true'
-        run: npm ci
-      - if: steps.impact.outputs.required == 'true'
-        run: npm run test:stress
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run test:stress

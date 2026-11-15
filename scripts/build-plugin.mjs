@@ -8,7 +8,6 @@ const pluginRoot = path.join(repoRoot, "plugins", "codex-zcode-bridge");
 const distDir = path.join(pluginRoot, "dist");
 const workerDir = path.join(pluginRoot, "worker");
 const vendorDir = path.join(workerDir, "vendor");
-const skillScriptsDir = path.join(pluginRoot, "skills", "zcode-bridge", "scripts");
 await Promise.all([mkdir(distDir, { recursive: true }), mkdir(vendorDir, { recursive: true })]);
 // The bundled SQLite Store resolves its schemas relative to bridge.mjs.
 await Promise.all([
@@ -20,8 +19,6 @@ await Promise.all([
   ),
 ]);
 await copyFile(path.join(repoRoot,'src/sqlite-candidate/wp6b2b1/schema-v13.sql'),path.join(distDir,'schema-v13.sql'));
-await mkdir(skillScriptsDir, { recursive: true });
-
 const shared = {
   bundle: true,
   platform: "node",
@@ -51,7 +48,6 @@ await Promise.all([
     outfile: path.join(distDir, "wait-task.mjs"),
   }),
   build({ ...shared, format: "esm", entryPoints: [path.join(repoRoot, "src", "worker", "worker-main.ts")], outfile: path.join(workerDir, "worker-main.mjs") }),
-  build({ ...shared, format: "esm", entryPoints: [path.join(repoRoot, "src", "observability", "codex-master-token-cli.ts")], outfile: path.join(skillScriptsDir, "codex-master-token-usage.mjs") }),
 ]);
 
 // The managed CDP browser backend ships as a CommonJS bundle next to the ESM

@@ -64,10 +64,10 @@ function validateResultObject(value, keys, required = []) {
 function validateUsage(value) {
   validateResultObject(
     value,
-    /* @__PURE__ */ new Set(["source", "scope", "observed_at", "finality", "input_tokens", "output_tokens", "total_tokens", "cached_input_tokens", "reasoning_tokens", "conflicts", "dropped_unknown_keys"]),
+    /* @__PURE__ */ new Set(["source", "scope", "observed_at", "finality", "input_tokens", "output_tokens", "total_tokens", "cached_input_tokens", "cached_write_input_tokens", "reasoning_tokens", "conflicts", "dropped_unknown_keys"]),
     ["source", "scope", "observed_at", "finality", "input_tokens", "output_tokens", "total_tokens", "cached_input_tokens", "reasoning_tokens", "conflicts", "dropped_unknown_keys"]
   );
-  if (!isNullableText(value.source) || !isNullableText(value.scope) || !isNullableText(value.observed_at) || !["reported", "derived", "partial"].includes(value.finality) || ["input_tokens", "output_tokens", "total_tokens", "cached_input_tokens", "reasoning_tokens"].some((k) => value[k] !== null && (!Number.isSafeInteger(value[k]) || value[k] < 0)) || !Number.isSafeInteger(value.dropped_unknown_keys) || value.dropped_unknown_keys < 0) fail("invalid_result_payload");
+  if (!isNullableText(value.source) || !isNullableText(value.scope) || !isNullableText(value.observed_at) || !["reported", "derived", "partial"].includes(value.finality) || ["input_tokens", "output_tokens", "total_tokens", "cached_input_tokens", "cached_write_input_tokens", "reasoning_tokens"].some((k) => Object.hasOwn(value, k) && value[k] !== null && (!Number.isSafeInteger(value[k]) || value[k] < 0)) || !Number.isSafeInteger(value.dropped_unknown_keys) || value.dropped_unknown_keys < 0) fail("invalid_result_payload");
   validateStringArray(value.conflicts, 64);
 }
 function validateModel(value) {
@@ -751,19 +751,6 @@ function parseAuthoritySourceManifest(sourceManifestJson, sourceManifestDigest) 
   if (manifest.kind !== "raw_json_archive_cutover" || typeof manifest.source_tasks_root !== "string" || !path.isAbsolute(manifest.source_tasks_root) || typeof manifest.archive_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(manifest.archive_manifest_digest) || typeof manifest.source_files_digest !== "string" || !/^[0-9a-f]{64}$/u.test(manifest.source_files_digest) || manifest.task_count !== 0 || manifest.result_count !== 0 || manifest.event_count !== 0 || !Number.isSafeInteger(manifest.artifact_count) || manifest.artifact_count < 0 || !Number.isSafeInteger(manifest.artifact_bytes) || manifest.artifact_bytes < 0 || !Number.isSafeInteger(manifest.archive_file_count) || manifest.archive_file_count !== manifest.artifact_count || !Number.isSafeInteger(manifest.archive_byte_count) || manifest.archive_byte_count !== manifest.artifact_bytes || parsed.exceptions.length !== 0 || !Array.isArray(manifest.files) || manifest.files.length !== 0)
     fail2("invalid_raw_json_archive_cutover_manifest");
   return { ...parsed, kind: "raw_json_archive_cutover" };
-}
-function validateHistoricalExceptionSnapshot(snapshot, sourceManifest) {
-  const { manifest, exceptions, exceptionTaskIds } = sourceManifest;
-  const expectedTaskCount = snapshot.tasks.length + exceptionTaskIds.length;
-  const artifactBytes = snapshot.artifacts.reduce((total, artifact) => total + artifact.byte_length, 0);
-  if (manifest.task_count !== expectedTaskCount || manifest.artifact_count !== snapshot.artifacts.length || manifest.artifact_bytes !== artifactBytes || manifest.result_count !== snapshot.results.length || manifest.event_count !== snapshot.events.length || manifest.historical_exception_count !== exceptions.length || manifest.historical_exception_digest !== historicalResultExceptionSetDigest(exceptions)) fail2("invalid_source_manifest");
-  for (const taskId of exceptionTaskIds) {
-    if (snapshot.tasks.some((task) => task.task_id === taskId) || snapshot.results.some((result) => result.task_id === taskId) || snapshot.events.some((event) => event.task_id === taskId) || snapshot.artifacts.some((artifact) => artifact.relative_path.startsWith(`${taskId}/`) && (artifact.task_id !== null || artifact.attempt !== null))) fail2("historical_exception_promoted_to_online_authority");
-  }
-  for (const exception of exceptions) {
-    const artifact = snapshot.artifacts.find((candidate) => candidate.relative_path === exception.relative_path);
-    if (!artifact || artifact.artifact_id !== exception.artifact_id || artifact.sha256 !== exception.sha256 || artifact.byte_length !== exception.byte_length || artifact.task_id !== null || artifact.attempt !== null || snapshot.results.some((result) => result.artifact_id === exception.artifact_id)) fail2("invalid_historical_exception_artifact");
-  }
 }
 function pathsFor(root, { databaseFileName = "operations.sqlite3", managedDataDirectory = false, allowCutoverPending = false, allowUnpublishedCutover = false, allowFreshBootstrapPending = false } = {}) {
   if (typeof root !== "string" || !path.isAbsolute(root) || !existsSync(root) || !lstatSync(root).isDirectory() || lstatSync(root).isSymbolicLink()) fail2("invalid_data_root");
@@ -1640,236 +1627,6 @@ var init_store = __esm({
         };
       }
       /**
-       * Record a stop-the-world cutover to a new empty SQLite Task Authority.
-       * Legacy history remains solely in the separately verified raw archive.
-       */
-      recordRawJsonArchiveCutover(snapshot) {
-        this.#assertWritable();
-        if (!snapshot || Object.getPrototypeOf(snapshot) !== Object.prototype || snapshot.schema_version !== 1) fail2("invalid_raw_cutover_snapshot");
-        const topKeys = ["archive", "cutover_id", "migration_id", "protocol_version", "runtime_roster_digest", "schema_version", "source", "verifier_version"];
-        const source = snapshot.source;
-        const sourceKeys = ["manifest_digest", "manifest_json", "root_digest"];
-        const archive = snapshot.archive;
-        const archiveKeys = ["archive_directory", "byte_count", "file_count", "manifest_digest", "source_tasks_root"];
-        if (Object.keys(snapshot).sort().join("|") !== topKeys.join("|") || !source || Object.getPrototypeOf(source) !== Object.prototype || Object.keys(source).sort().join("|") !== sourceKeys.join("|") || !archive || Object.getPrototypeOf(archive) !== Object.prototype || Object.keys(archive).sort().join("|") !== archiveKeys.join("|") || !validId(snapshot.migration_id) || !validId(snapshot.cutover_id) || !validText2(snapshot.verifier_version, 128) || !validText2(snapshot.protocol_version, 128) || typeof snapshot.runtime_roster_digest !== "string" || !/^[0-9a-f]{64}$/u.test(snapshot.runtime_roster_digest) || typeof source.root_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.root_digest) || typeof source.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.manifest_digest) || typeof source.manifest_json !== "string" || digest(source.manifest_json) !== source.manifest_digest || !validText2(archive.archive_directory, 32767) || !path.isAbsolute(archive.archive_directory) || !validText2(archive.source_tasks_root, 32767) || !path.isAbsolute(archive.source_tasks_root) || typeof archive.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(archive.manifest_digest) || !Number.isSafeInteger(archive.file_count) || archive.file_count < 0 || !Number.isSafeInteger(archive.byte_count) || archive.byte_count < 0) fail2("invalid_raw_cutover_snapshot");
-        const policy = parseAuthoritySourceManifest(source.manifest_json, source.manifest_digest);
-        if (policy.kind !== "raw_json_archive_cutover" || policy.manifest.source_tasks_root !== archive.source_tasks_root || policy.manifest.archive_manifest_digest !== archive.manifest_digest || policy.manifest.archive_file_count !== archive.file_count || policy.manifest.archive_byte_count !== archive.byte_count) fail2("raw_cutover_archive_identity_mismatch");
-        const at = (/* @__PURE__ */ new Date()).toISOString();
-        return this.#transaction(() => {
-          if (this.#db.prepare("SELECT COUNT(*) AS n FROM tasks").get().n !== 0 || this.#db.prepare("SELECT COUNT(*) AS n FROM migration_runs").get().n !== 0 || this.#db.prepare("SELECT COUNT(*) AS n FROM fresh_install_receipt").get().n !== 0 || this.#db.prepare("SELECT COUNT(*) AS n FROM authority_switch").get().n !== 0 || this.#db.prepare("SELECT COUNT(*) AS n FROM manager_operations").get().n !== 0 || this.#db.prepare("SELECT COUNT(*) AS n FROM json_artifacts").get().n !== 0) fail2("migration_target_not_empty");
-          this.#db.prepare(`INSERT INTO migration_runs(migration_id,state,source_root_digest,source_manifest_json,source_manifest_digest,
-        source_task_count,source_artifact_count,source_artifact_bytes,source_result_count,source_event_count,
-        archive_directory,archive_manifest_digest,archive_source_tasks_root,archive_file_count,archive_byte_count,
-        verifier_version,created_at,verified_at)
-        VALUES(?,'verified',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-            snapshot.migration_id,
-            source.root_digest,
-            source.manifest_json,
-            source.manifest_digest,
-            0,
-            archive.file_count,
-            archive.byte_count,
-            0,
-            0,
-            archive.archive_directory,
-            archive.manifest_digest,
-            archive.source_tasks_root,
-            archive.file_count,
-            archive.byte_count,
-            snapshot.verifier_version,
-            at,
-            at
-          );
-          const inserted = this.#db.prepare(`INSERT INTO authority_switch(singleton,authority_generation,cutover_id,migration_id,source_root_digest,
-        source_manifest_digest,archive_directory,archive_manifest_digest,archive_source_tasks_root,archive_file_count,
-        archive_byte_count,schema_version,protocol_version,runtime_roster_digest,verifier_version,created_at)
-        VALUES(1,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-            snapshot.cutover_id,
-            snapshot.migration_id,
-            source.root_digest,
-            source.manifest_digest,
-            archive.archive_directory,
-            archive.manifest_digest,
-            archive.source_tasks_root,
-            archive.file_count,
-            archive.byte_count,
-            SCHEMA_VERSION,
-            snapshot.protocol_version,
-            snapshot.runtime_roster_digest,
-            snapshot.verifier_version,
-            at
-          );
-          if (inserted.changes !== 1) fail2("authority_switch_insert_failed");
-          return {
-            migration_id: snapshot.migration_id,
-            cutover_id: snapshot.cutover_id,
-            event_cursor: 0,
-            task_count: 0,
-            artifact_count: 0,
-            result_count: 0,
-            historical_exception_count: 0
-          };
-        });
-      }
-      /**
-       * Import one already parsed and path-validated sealed JSON snapshot.
-       * This method never scans the source. The caller must reverify source and
-       * independently read the staging database before publishing the file.
-       */
-      importJsonAuthoritySnapshot(snapshot) {
-        this.#assertWritable();
-        if (!snapshot || Object.getPrototypeOf(snapshot) !== Object.prototype || snapshot.schema_version !== 1) fail2("invalid_migration_snapshot");
-        const topKeys = ["archive", "artifacts", "cutover_id", "events", "historical_exceptions", "migration_id", "protocol_version", "results", "runtime_roster_digest", "schema_version", "source", "tasks", "verifier_version"];
-        if (Object.keys(snapshot).sort().join("|") !== topKeys.join("|")) fail2("invalid_migration_snapshot");
-        const source = snapshot.source;
-        const sourceKeys = ["artifact_bytes", "artifact_count", "event_count", "historical_exception_count", "historical_exception_digest", "manifest_digest", "manifest_json", "result_count", "root_digest", "task_count"];
-        const archive = snapshot.archive;
-        const archiveKeys = ["archive_directory", "byte_count", "file_count", "manifest_digest", "source_tasks_root"];
-        if (!source || Object.getPrototypeOf(source) !== Object.prototype || Object.keys(source).sort().join("|") !== sourceKeys.join("|") || !archive || Object.getPrototypeOf(archive) !== Object.prototype || Object.keys(archive).sort().join("|") !== archiveKeys.join("|") || !validId(snapshot.migration_id) || !validId(snapshot.cutover_id) || !validText2(snapshot.verifier_version, 128) || !validText2(snapshot.protocol_version, 128) || typeof snapshot.runtime_roster_digest !== "string" || !/^[0-9a-f]{64}$/u.test(snapshot.runtime_roster_digest) || typeof source.root_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.root_digest) || typeof source.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.manifest_digest) || typeof source.manifest_json !== "string" || digest(source.manifest_json) !== source.manifest_digest || !validText2(archive.archive_directory, 32767) || !path.isAbsolute(archive.archive_directory) || !validText2(archive.source_tasks_root, 32767) || !path.isAbsolute(archive.source_tasks_root) || typeof archive.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(archive.manifest_digest) || !Number.isSafeInteger(archive.file_count) || archive.file_count < 0 || !Number.isSafeInteger(archive.byte_count) || archive.byte_count < 0 || archive.file_count !== source.artifact_count || archive.byte_count !== source.artifact_bytes || !Array.isArray(snapshot.tasks) || !Array.isArray(snapshot.artifacts) || !Array.isArray(snapshot.results) || !Array.isArray(snapshot.events) || !Array.isArray(snapshot.historical_exceptions) || ![source.task_count, source.artifact_count, source.artifact_bytes, source.result_count, source.event_count].every((v) => Number.isSafeInteger(v) && v >= 0) || !Number.isSafeInteger(source.historical_exception_count) || source.historical_exception_count < 0 || typeof source.historical_exception_digest !== "string" || !/^[0-9a-f]{64}$/u.test(source.historical_exception_digest) || source.historical_exception_count !== snapshot.historical_exceptions.length || source.historical_exception_digest !== historicalResultExceptionSetDigest(snapshot.historical_exceptions) || source.artifact_count !== snapshot.artifacts.length || source.result_count !== snapshot.results.length || source.event_count !== snapshot.events.length) fail2("invalid_migration_snapshot");
-        const sourceManifest = parseHistoricalExceptionManifest(source.manifest_json, source.manifest_digest);
-        if (sourceManifest.manifest.task_count !== source.task_count || sourceManifest.manifest.artifact_count !== source.artifact_count || sourceManifest.manifest.artifact_bytes !== source.artifact_bytes || sourceManifest.manifest.result_count !== source.result_count || sourceManifest.manifest.event_count !== source.event_count || sourceManifest.manifest.historical_exception_count !== source.historical_exception_count || sourceManifest.manifest.historical_exception_digest !== source.historical_exception_digest || canonical3(sourceManifest.exceptions) !== canonical3(snapshot.historical_exceptions)) fail2("invalid_source_manifest");
-        validateHistoricalExceptionSnapshot(snapshot, sourceManifest);
-        const at = (/* @__PURE__ */ new Date()).toISOString();
-        return this.#transaction(() => {
-          if (this.#db.prepare("SELECT COUNT(*) AS n FROM tasks").get().n !== 0 || this.#db.prepare("SELECT COUNT(*) AS n FROM migration_runs").get().n !== 0 || this.#db.prepare("SELECT COUNT(*) AS n FROM fresh_install_receipt").get().n !== 0 || this.#db.prepare("SELECT COUNT(*) AS n FROM authority_switch").get().n !== 0 || this.#db.prepare("SELECT COUNT(*) AS n FROM manager_operations").get().n !== 0) fail2("migration_target_not_empty");
-          const tasksById = /* @__PURE__ */ new Map();
-          for (const task of snapshot.tasks) {
-            const taskKeys = ["attempts", "created_at", "current_attempt", "status", "task", "task_id"];
-            if (!task || Object.getPrototypeOf(task) !== Object.prototype || Object.keys(task).sort().join("|") !== taskKeys.join("|") || !validId(task.task_id) || !task.task || Object.getPrototypeOf(task.task) !== Object.prototype || task.task.task_id !== task.task_id || !validText2(task.created_at, 64) || Number.isNaN(Date.parse(task.created_at)) || !Number.isSafeInteger(task.current_attempt) || task.current_attempt < 1 || !["queued", "running", "completed", "failed", "cancelled", "waiting_for_master"].includes(task.status) || !Array.isArray(task.attempts) || tasksById.has(task.task_id)) fail2("invalid_migrated_task");
-            try {
-              validateTaskPackage(task.task);
-            } catch {
-              fail2("invalid_migrated_task");
-            }
-            if (task.status === "running") fail2("running_task_not_migratable");
-            this.#db.prepare("INSERT INTO tasks(task_id,task_json,status,current_attempt,created_at) VALUES(?,?,?,?,?)").run(task.task_id, canonical3(task.task), task.status, task.current_attempt, task.created_at);
-            const seen = /* @__PURE__ */ new Set();
-            for (const attempt of task.attempts) {
-              const attemptKeys = ["attempt", "created_at", "status"];
-              if (!attempt || Object.getPrototypeOf(attempt) !== Object.prototype || Object.keys(attempt).sort().join("|") !== attemptKeys.join("|") || !Number.isSafeInteger(attempt.attempt) || attempt.attempt < 1 || seen.has(attempt.attempt) || !validText2(attempt.created_at, 64) || Number.isNaN(Date.parse(attempt.created_at)) || !["queued", "completed", "failed", "cancelled", "waiting_for_master"].includes(attempt.status)) fail2("invalid_migrated_attempt");
-              seen.add(attempt.attempt);
-              this.#db.prepare("INSERT INTO attempts(task_id,attempt,generation,status,created_at) VALUES(?,?,NULL,?,?)").run(task.task_id, attempt.attempt, attempt.status, attempt.created_at);
-            }
-            const current = [...task.attempts].find((a) => a.attempt === task.current_attempt);
-            if (!current || current.status !== task.status) fail2("migrated_task_attempt_mismatch");
-            for (let n = 1; n <= task.current_attempt; n++) if (!seen.has(n)) fail2("migrated_attempt_gap");
-            tasksById.set(task.task_id, task);
-          }
-          this.#db.prepare(`INSERT INTO migration_runs(migration_id,state,source_root_digest,source_manifest_json,source_manifest_digest,
-        source_task_count,source_artifact_count,source_artifact_bytes,source_result_count,source_event_count,
-        archive_directory,archive_manifest_digest,archive_source_tasks_root,archive_file_count,archive_byte_count,
-        verifier_version,created_at,verified_at)
-        VALUES(?,'verified',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-            snapshot.migration_id,
-            source.root_digest,
-            source.manifest_json,
-            source.manifest_digest,
-            source.task_count,
-            source.artifact_count,
-            source.artifact_bytes,
-            source.result_count,
-            source.event_count,
-            archive.archive_directory,
-            archive.manifest_digest,
-            archive.source_tasks_root,
-            archive.file_count,
-            archive.byte_count,
-            snapshot.verifier_version,
-            at,
-            at
-          );
-          let artifactBytes = 0;
-          const artifactsById = /* @__PURE__ */ new Map();
-          for (const artifact of snapshot.artifacts) {
-            const keys = ["artifact_id", "attempt", "byte_length", "content", "kind", "relative_path", "sha256", "task_id"];
-            if (!artifact || Object.getPrototypeOf(artifact) !== Object.prototype || Object.keys(artifact).sort().join("|") !== keys.join("|") || !validId(artifact.artifact_id) || !validText2(artifact.relative_path, 1024) || artifact.relative_path.includes("\\") || artifact.relative_path.startsWith("/") || artifact.relative_path.split("/").some((v) => !v || v === "." || v === "..") || !validText2(artifact.kind, 64) || !Number.isSafeInteger(artifact.byte_length) || artifact.byte_length < 0 || artifact.byte_length > 67108864 || typeof artifact.sha256 !== "string" || !/^[0-9a-f]{64}$/u.test(artifact.sha256) || !(artifact.content instanceof Uint8Array) || artifact.content.byteLength !== artifact.byte_length || rawDigest(artifact.content) !== artifact.sha256 || artifact.task_id !== null && !tasksById.has(artifact.task_id) || artifact.attempt !== null && (!Number.isSafeInteger(artifact.attempt) || artifact.attempt < 1) || artifact.attempt !== null && artifact.task_id === null || artifactsById.has(artifact.artifact_id) || [...artifactsById.values()].some((existing) => existing.relative_path === artifact.relative_path)) fail2("invalid_migrated_artifact");
-            if (artifact.attempt !== null && !this.#db.prepare("SELECT 1 FROM attempts WHERE task_id=? AND attempt=?").get(artifact.task_id, artifact.attempt))
-              fail2("invalid_migrated_artifact_attempt");
-            const content = Buffer.from(artifact.content);
-            this.#db.prepare("INSERT INTO json_artifacts(artifact_id,migration_id,relative_path,task_id,attempt,kind,byte_length,sha256,content,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)").run(artifact.artifact_id, snapshot.migration_id, artifact.relative_path, artifact.task_id, artifact.attempt, artifact.kind, artifact.byte_length, artifact.sha256, content, at);
-            artifactsById.set(artifact.artifact_id, artifact);
-            artifactBytes += artifact.byte_length;
-          }
-          if (artifactBytes !== source.artifact_bytes) fail2("migration_artifact_bytes_mismatch");
-          for (const result of snapshot.results) {
-            const keys = ["artifact_id", "attempt", "result", "task_id"];
-            if (!result || Object.getPrototypeOf(result) !== Object.prototype || Object.keys(result).sort().join("|") !== keys.join("|") || !tasksById.has(result.task_id) || !Number.isSafeInteger(result.attempt) || result.attempt < 1 || !validId(result.artifact_id)) fail2("invalid_migrated_result");
-            const task = tasksById.get(result.task_id);
-            const artifact = artifactsById.get(result.artifact_id);
-            const expectedPath = result.attempt === task.current_attempt ? `${result.task_id}/result.json` : `${result.task_id}/attempts/${result.attempt}/result.json`;
-            const currentResultArtifact = artifact?.attempt === null && artifact?.kind === "task_result" && expectedPath === `${result.task_id}/result.json`;
-            if (!task.attempts.some((value) => value.attempt === result.attempt) || !artifact || artifact.task_id !== result.task_id || artifact.attempt !== result.attempt && !currentResultArtifact || artifact.relative_path !== expectedPath)
-              fail2("migrated_result_artifact_mismatch");
-            let canonicalResult;
-            try {
-              canonicalResult = canonicalTaskResult2(result.result, { task_id: result.task_id, attempt: result.attempt, result_status: result.result?.status });
-            } catch {
-              fail2("invalid_migrated_result");
-            }
-            this.#db.prepare("INSERT INTO migrated_task_results(task_id,attempt,result_json,result_digest,artifact_id) VALUES(?,?,?,?,?)").run(result.task_id, result.attempt, canonicalResult, digest(canonicalResult), result.artifact_id);
-          }
-          let cursor = 0;
-          for (const event of snapshot.events) {
-            const keys = ["artifact_id", "at", "attempt", "details", "event_type", "source_sequence", "summary", "task_id"];
-            if (!event || Object.getPrototypeOf(event) !== Object.prototype || Object.keys(event).sort().join("|") !== keys.join("|") || !tasksById.has(event.task_id) || !Number.isSafeInteger(event.source_sequence) || event.source_sequence < 1 || !validText2(event.event_type, 128) || !validText2(event.at, 64) || Number.isNaN(Date.parse(event.at)) || !validText2(event.summary, 4096) || !validId(event.artifact_id) || event.attempt !== null && (!Number.isSafeInteger(event.attempt) || event.attempt < 1) || event.details !== null && Object.getPrototypeOf(event.details) !== Object.prototype) fail2("invalid_migrated_event");
-            const artifact = artifactsById.get(event.artifact_id);
-            if (!artifact || artifact.task_id !== event.task_id || artifact.attempt !== null || artifact.relative_path !== `${event.task_id}/events.jsonl`)
-              fail2("migrated_event_artifact_mismatch");
-            const detailsJson = event.details === null ? null : canonical3(event.details);
-            if (detailsJson !== null && Buffer.byteLength(detailsJson, "utf8") > 1048576) fail2("invalid_migrated_event");
-            cursor += 1;
-            this.#db.prepare(`INSERT INTO migrated_task_events(event_cursor,task_id,attempt,source_sequence,event_type,at,summary,details_json,details_digest,artifact_id)
-          VALUES(?,?,?,?,?,?,?,?,?,?)`).run(
-              cursor,
-              event.task_id,
-              event.attempt,
-              event.source_sequence,
-              event.event_type,
-              event.at,
-              event.summary,
-              detailsJson,
-              detailsJson === null ? null : digest(detailsJson),
-              event.artifact_id
-            );
-          }
-          const changed = this.#db.prepare("UPDATE authority_metadata SET next_event_cursor=? WHERE singleton=1 AND next_event_cursor=0").run(cursor);
-          if (changed.changes !== 1) fail2("event_cursor_authority_not_initial");
-          if (cursor > 0) {
-            const sequence = this.#db.prepare("SELECT seq FROM sqlite_sequence WHERE name='manager_operation_events'").get();
-            if (sequence) this.#db.prepare("UPDATE sqlite_sequence SET seq=? WHERE name='manager_operation_events'").run(cursor);
-            else this.#db.prepare("INSERT INTO sqlite_sequence(name,seq) VALUES('manager_operation_events',?)").run(cursor);
-          }
-          const inserted = this.#db.prepare(`INSERT INTO authority_switch(singleton,authority_generation,cutover_id,migration_id,source_root_digest,
-        source_manifest_digest,archive_directory,archive_manifest_digest,archive_source_tasks_root,archive_file_count,
-        archive_byte_count,schema_version,protocol_version,runtime_roster_digest,verifier_version,created_at)
-        VALUES(1,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-            snapshot.cutover_id,
-            snapshot.migration_id,
-            source.root_digest,
-            source.manifest_digest,
-            archive.archive_directory,
-            archive.manifest_digest,
-            archive.source_tasks_root,
-            archive.file_count,
-            archive.byte_count,
-            SCHEMA_VERSION,
-            snapshot.protocol_version,
-            snapshot.runtime_roster_digest,
-            snapshot.verifier_version,
-            at
-          );
-          if (inserted.changes !== 1) fail2("authority_switch_insert_failed");
-          return {
-            migration_id: snapshot.migration_id,
-            cutover_id: snapshot.cutover_id,
-            event_cursor: cursor,
-            task_count: snapshot.tasks.length,
-            artifact_count: snapshot.artifacts.length,
-            result_count: snapshot.results.length,
-            historical_exception_count: snapshot.historical_exceptions.length
-          };
-        });
-      }
       /** Persist a TaskPackage and its initial queued Attempt in this candidate authority. */
       createTask(task, createdAt = (/* @__PURE__ */ new Date()).toISOString()) {
         this.#assertWritable();
@@ -1961,36 +1718,12 @@ var init_store = __esm({
         if (!validId(taskId) || !Number.isSafeInteger(attempt) || attempt < 1) fail2("invalid_attempt_identity");
         return this.#readConsistent(() => this.#db.prepare("SELECT task_id,attempt,generation,status,created_at FROM attempts WHERE task_id=? AND attempt=?").get(taskId, attempt) ?? null);
       }
-      /** Read one imported historical Result without treating JSON as online authority. */
-      readMigratedResult(taskId, attempt) {
-        if (!validId(taskId) || !Number.isSafeInteger(attempt) || attempt < 1) fail2("invalid_result_identity");
-        return this.#readConsistent(() => {
-          const row = this.#db.prepare("SELECT task_id,attempt,result_json,result_digest,artifact_id FROM migrated_task_results WHERE task_id=? AND attempt=?").get(taskId, attempt);
-          if (!row) return null;
-          let result;
-          try {
-            result = JSON.parse(row.result_json);
-          } catch {
-            fail2("migrated_result_projection_invalid");
-          }
-          if (digest(row.result_json) !== row.result_digest) fail2("migrated_result_digest_mismatch");
-          return { task_id: row.task_id, attempt: row.attempt, result, artifact_id: row.artifact_id };
-        });
-      }
-      /** Read the immutable, archive-only Result exceptions bound into the source Manifest. */
-      readMigratedHistoryExceptions() {
-        return this.#readConsistent(() => {
-          const migration = this.#db.prepare("SELECT source_manifest_json,source_manifest_digest FROM migration_runs").get();
-          if (!migration) return [];
-          return parseHistoricalExceptionManifest(migration.source_manifest_json, migration.source_manifest_digest).exceptions;
-        });
-      }
       /** Read the Task, current Attempt, bound Operation and verified Result in one snapshot. */
       readTaskLifecycle(taskId) {
         if (!validId(taskId)) fail2("invalid_task_id");
         return this.#readConsistent(() => {
           const taskRow = this.#db.prepare("SELECT task_id,status,current_attempt,created_at,task_json FROM tasks WHERE task_id=?").get(taskId);
-          if (!taskRow) return null;
+          if (!taskRow || this.#isRetiredHistoricalTask(taskId)) return null;
           let task;
           try {
             task = JSON.parse(taskRow.task_json);
@@ -2017,15 +1750,6 @@ var init_store = __esm({
               result = JSON.parse(attemptRow.queued_cancel_result_json);
             } catch {
               fail2("result_projection_invalid");
-            }
-          } else {
-            const migrated = this.#db.prepare("SELECT result_json FROM migrated_task_results WHERE task_id=? AND attempt=?").get(taskId, taskRow.current_attempt);
-            if (migrated) {
-              try {
-                result = JSON.parse(migrated.result_json);
-              } catch {
-                fail2("result_projection_invalid");
-              }
             }
           }
           const continuation = attemptRow.continuation_json === null ? null : JSON.parse(attemptRow.continuation_json);
@@ -2928,7 +2652,7 @@ var init_store = __esm({
         this.#assertOpen();
         if (!validId(taskId) || !Number.isSafeInteger(afterCursor) || afterCursor < 0 || !Number.isInteger(limit) || limit < 1 || limit > 200) fail2("invalid_event_read");
         return this.#readConsistent(() => {
-          if (!this.#db.prepare("SELECT task_id FROM tasks WHERE task_id=?").get(taskId)) fail2("task_not_found");
+          if (!this.#db.prepare("SELECT task_id FROM tasks WHERE task_id=?").get(taskId) || this.#isRetiredHistoricalTask(taskId)) fail2("task_not_found");
           const operationRows = this.#db.prepare(`SELECT e.event_cursor AS cursor,e.event_cursor AS sequence,e.sequence AS operation_sequence,
           e.operation_id,e.event_type,e.from_phase,e.to_phase,e.generation,
           e.evidence_json,e.evidence_digest,e.at,o.task_id,o.attempt AS operation_attempt
@@ -2943,17 +2667,13 @@ var init_store = __esm({
             const { queued_cancel_id, queued_cancel_request_digest, ...event } = row;
             return { ...event, evidence_json, evidence_digest: digest(evidence_json) };
           });
-          const migratedRows = this.#db.prepare(`SELECT event_cursor AS cursor,event_cursor AS sequence,NULL AS operation_sequence,
-          NULL AS operation_id,event_type,NULL AS from_phase,NULL AS to_phase,NULL AS generation,
-          COALESCE(details_json,'{}') AS evidence_json,COALESCE(details_digest,?) AS evidence_digest,at,task_id,attempt AS operation_attempt
-        FROM migrated_task_events WHERE task_id=? AND event_cursor>? ORDER BY event_cursor LIMIT ?`).all(digest("{}"), taskId, afterCursor, limit + 1);
           const hasRuntimeEvents = Boolean(this.#db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='runtime_task_events'").get());
           const runtimeRows = hasRuntimeEvents ? this.#db.prepare(`SELECT event_cursor AS cursor,event_cursor AS sequence,NULL AS operation_sequence,
           operation_id,event_type,NULL AS from_phase,NULL AS to_phase,generation,
           COALESCE(details_json,'{}') AS evidence_json,COALESCE(details_digest,?) AS evidence_digest,at,task_id,
           attempt AS operation_attempt,summary
         FROM runtime_task_events WHERE task_id=? AND event_cursor>? ORDER BY event_cursor LIMIT ?`).all(digest("{}"), taskId, afterCursor, limit + 1) : [];
-          const rows = [...operationRows.map((row) => row.event_type === "cancelled_before_launch" ? { ...row, event_type: "cancelled", from_phase: null, to_phase: "cancelled" } : row), ...taskCancelRows, ...migratedRows, ...runtimeRows].sort((a, b) => a.cursor - b.cursor).slice(0, limit + 1);
+          const rows = [...operationRows.map((row) => row.event_type === "cancelled_before_launch" ? { ...row, event_type: "cancelled", from_phase: null, to_phase: "cancelled" } : row), ...taskCancelRows, ...runtimeRows].sort((a, b) => a.cursor - b.cursor).slice(0, limit + 1);
           const hasMore = rows.length > limit;
           const events = hasMore ? rows.slice(0, limit) : rows;
           return { events, nextCursor: events.at(-1)?.cursor ?? afterCursor, hasMore };
@@ -3032,23 +2752,6 @@ var init_store = __esm({
         });
       }
       /** Read only the imported historical Event rows for one Task. */
-      readMigratedEvents(taskId) {
-        if (!validId(taskId)) fail2("invalid_task_id");
-        return this.#readConsistent(() => {
-          if (!this.#db.prepare("SELECT task_id FROM tasks WHERE task_id=?").get(taskId)) fail2("task_not_found");
-          return this.#db.prepare(`SELECT event_cursor,task_id,attempt,source_sequence,event_type,at,summary,
-        details_json,details_digest,artifact_id FROM migrated_task_events WHERE task_id=? ORDER BY event_cursor`).all(taskId);
-        });
-      }
-      /** Read imported source bytes by their source-relative path. */
-      readMigratedArtifact(relativePath) {
-        this.#assertOpen();
-        if (!validText2(relativePath, 1024) || relativePath.includes("\\") || relativePath.startsWith("/") || relativePath.split("/").some((part) => !part || part === "." || part === "..")) fail2("invalid_artifact_path");
-        return this.#readConsistent(() => {
-          const row = this.#db.prepare("SELECT artifact_id,relative_path,task_id,attempt,kind,byte_length,sha256,content FROM json_artifacts WHERE relative_path=?").get(relativePath);
-          return row ? { ...row, content: Buffer.from(row.content) } : null;
-        });
-      }
       /** Persist cancellation of the current queued Attempt without inventing an Operation or Worker. */
       cancelQueuedAttempt({ task_id, expected_attempt } = {}) {
         this.#assertWritable();
@@ -4448,6 +4151,16 @@ var init_store = __esm({
         if (changed.changes === 0) this.#db.prepare("INSERT INTO sqlite_sequence(name,seq) VALUES('manager_operation_events',?)").run(row.next_event_cursor);
         else if (changed.changes !== 1) fail2("event_cursor_invalid");
         return row.next_event_cursor;
+      }
+      // Historical JSON projections remain immutable and validated, but they are
+      // no longer public business objects. Task-scoped import artifacts are the
+      // stable provenance marker for a migrated-only Task; native Tasks created
+      // after the authority switch never gain this marker.
+      #isRetiredHistoricalTask(taskId) {
+        return Boolean(this.#db.prepare(`SELECT 1 WHERE
+      EXISTS(SELECT 1 FROM migrated_task_results WHERE task_id=?)
+      OR EXISTS(SELECT 1 FROM migrated_task_events WHERE task_id=?)
+      OR EXISTS(SELECT 1 FROM json_artifacts WHERE task_id=?)`).get(taskId, taskId, taskId));
       }
       #event(id, seq, type, from, to, generation, evidence, at, cursor) {
         const eventCursor = cursor ?? this.#nextEventCursor(), j = canonical3(validateEvidence(type, evidence));

@@ -2,8 +2,8 @@
 
 > Status: AUTHORITATIVE
 > Last updated: 2026-11-15
-> Last verified: 2026-11-15，核对 Preview.6 src/core.ts、Host/Worker 入口、Official Host 布局、版本身份及 R7 Runtime Events 导出边界；外部 fork 实际升级 NOT RUN。
-> Verified against: stacked on Draft PR #94 HEAD `95da75b02f240858091f1ecdbbafd512f9903c6b`
+> Last verified: 2026-11-15，核对 ADR-038 的 `src/core.ts` 导出收缩、Host/Worker 入口、Official Host 布局、版本身份及 R7 Runtime Events 边界；外部 fork 实际升级仍为 NOT RUN。
+> Verified against: Preview.6 post-audit remediation branch based on `545c02f745a4e2ab38a1fa3c31880ac80b84a310`
 
 公共入口为 `codex-zcode-bridge/core`（`src/core.ts`），无服务器启动副作用，构建同时输出类型声明。项目为 private，尚未发布独立 npm 包；本地 npm pack/fork 消费仍是公共兼容边界。
 
@@ -24,6 +24,8 @@ await startBridge({
 嵌入式消费者可使用公开 `SqliteLifecycleMcpAuthority.create(options)` 创建同一生产 Manager，再交给 `createBridgeServer({taskManager})`。创建需要现有受信任本地 Host context、合适的 SQLite 根、Worker/Bridge provenance 和 receipt；普通 MCP/TaskPackage 不能自行产生这些能力。准确参数类型由导出的 `SqliteAuthorityOptions` 提供。多数 fork 应使用 startBridge。
 
 Worker 必须打包 `src/worker/worker-main.ts`，保留同一 SQLite Bootstrap/Claim 私有管道协议。不能使用旧的 `dataRoot taskId attempt` 参数启动；不能从 prompt 或自定义 runner 绕过 Claim。Host manifest、安装 hook、版本、settings 和打包由 fork 独立维护。
+
+ADR-038 收紧了公共 Core 导出：`renderTaskFeedback`、A4 `renderFeedback`/格式化函数、Codex Master/Rollout Token source，以及 Ledger 类型与入口不再导出。`buildTaskFeedbackSnapshotV01`、`normalizeUsage`、Host/Worker 启动入口、SQLite Manager、MCP server 与任务 Result/Observation 类型继续保留。仓库内调用者和生成的插件 bundle 已迁移；外部 fork 是否仍导入这些旧导出为 `NOT RUN`，升级前必须用自身构建与测试确认。
 
 ## 主版本兼容性
 

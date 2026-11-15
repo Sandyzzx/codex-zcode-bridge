@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { changedFiles } from "./lib/changed-files.mjs";
 import { selectAffectedTests } from "./test-impact-selector.mjs";
 import { compiledTestPath } from "./lib/test-files.mjs";
 
@@ -19,53 +20,16 @@ function run(command, args, { shell = command === "npm" && isWindows } = {}) {
   }
 }
 
-function git(args, { allowMissingUpstream = false } = {}) {
-  const result = spawnSync("git", args, { cwd: repositoryRoot, encoding: "utf8" });
-  if (result.status === 0) return result.stdout;
-  if (allowMissingUpstream) return "";
-  throw new Error(`git ${args.join(" ")} failed: ${result.stderr.trim() || `exit ${String(result.status)}`}`);
-}
-
-function addNameStatus(output, files) {
-  for (const line of output.split(/\r?\n/u)) {
-    if (!line.trim()) continue;
-    const columns = line.split("\t");
-    const status = columns[0];
-    if (status.startsWith("R") || status.startsWith("C")) {
-      if (columns[1]) files.add(columns[1]);
-      if (columns[2]) files.add(columns[2]);
-    } else {
-      if (columns[1]) files.add(columns[1]);
-    }
-  }
-}
-
-function changedFiles(explicitBase) {
-  const files = new Set();
-  if (explicitBase) {
-    addNameStatus(git(["diff", "--name-status", "--find-renames", `${explicitBase}...HEAD`]), files);
-  } else {
-    const upstream = git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], { allowMissingUpstream: true }).trim();
-    if (upstream) {
-      const mergeBase = git(["merge-base", "HEAD", upstream]).trim();
-      addNameStatus(git(["diff", "--name-status", "--find-renames", `${mergeBase}...HEAD`]), files);
-    }
-  }
-  addNameStatus(git(["diff", "--name-status", "--find-renames", "HEAD"]), files);
-  for (const file of git(["ls-files", "--others", "--exclude-standard"]).split(/\r?\n/u)) {
-    if (file.trim()) files.add(file.trim());
-  }
-  return [...files].sort((left, right) => left.localeCompare(right, "en"));
-}
-
 function commandLine(argv) {
-  const options = { base: undefined, dryRun: false };
+  const options = { base: undefined, dryRun: false, t0Only: false };
   for (let index = 0; index < argv.length; index += 1) {
     if (argv[index] === "--base") {
       options.base = argv[++index];
       if (!options.base) throw new Error("--base requires a Git revision");
     } else if (argv[index] === "--dry-run") {
       options.dryRun = true;
+    } else if (argv[index] === "--t0-only") {
+      options.t0Only = true;
     } else {
       throw new Error(`unknown option: ${argv[index]}`);
     }
@@ -75,12 +39,17 @@ function commandLine(argv) {
 
 const options = commandLine(process.argv.slice(2));
 const map = JSON.parse(readFileSync(path.join(repositoryRoot, "test/test-impact-map.json"), "utf8"));
-const files = changedFiles(options.base);
+const files = changedFiles({
+  root: repositoryRoot,
+  base: options.base,
+  includeWorktree: true,
+});
 const selection = selectAffectedTests({ changedFiles: files, map });
 
 console.log(JSON.stringify({
   command: "npm run test:affected",
   baseline: options.base ?? "merge-base-with-upstream-plus-worktree",
+  t0_only: options.t0Only,
   ...selection,
 }, null, 2));
 
@@ -89,10 +58,15 @@ console.log(JSON.stringify({
 run("npm", ["run", "typecheck"]);
 run("npm", ["run", "build"]);
 run("npm", ["run", "validate:plugin"]);
+run("npm", ["run", "check:generated"]);
 run("git", ["diff", "--check"]);
 
 if (options.dryRun) {
   console.log("DRY_RUN_ONLY");
+  process.exit(0);
+}
+if (options.t0Only) {
+  console.log("T0_ONLY_PASS");
   process.exit(0);
 }
 if (selection.mode === "NO_TESTS_APPLICABLE") {

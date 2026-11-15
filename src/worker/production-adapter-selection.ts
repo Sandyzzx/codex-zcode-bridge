@@ -1,4 +1,4 @@
-export type ProductionAdapterKind = "official_host" | "direct_app_server";
+export type ProductionAdapterKind = "official_host";
 
 /**
  * Production adapter selection is intentionally limited to immutable runtime
@@ -10,10 +10,6 @@ export function selectProductionAdapter(
   architecture: string = process.arch,
 ): ProductionAdapterKind {
   if (platform === "win32" && architecture === "x64") return "official_host";
-  if ((platform === "linux" || platform === "darwin")
-    && (architecture === "x64" || architecture === "arm64")) {
-    return "direct_app_server";
-  }
   const error = new Error(
     `The Bridge Worker does not support ${platform}/${architecture}.`,
   ) as Error & { code: string };

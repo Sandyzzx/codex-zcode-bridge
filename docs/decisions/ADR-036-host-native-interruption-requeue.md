@@ -6,6 +6,14 @@
 > Applicability: SQLite v14 Host Recovery for claimed Attempts without a committed Result
 > Verified against: `77990f3a840e7b1f3a75afc151c58ca2cef5f28a` plus this candidate diff
 
+> Post-Preview.6 applicability (2026-11-15): the Store transaction and fake-adapter
+> synthetic path are implemented and tested. The current production Adapter does
+> not expose the independent cleanup proof needed by the automatic requeue gate,
+> so a Result-less running Attempt normally remains held with
+> `adapter_cleanup_unverified`. This limitation must not be relaxed by treating
+> OS exit or tree cleanliness as Adapter Cleanup; a future production auto-requeue
+> capability needs a separate accepted decision and proof.
+
 ## Context
 
 现有 SQLite Authority 已保存 Task、Attempt、Result、Operation 事件、永久 Claim、

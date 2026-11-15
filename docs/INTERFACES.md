@@ -1,15 +1,15 @@
 # 当前接口与兼容边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-13
-> Last verified: 2026-11-13，核对 ADR-036 的 Recovery 行为；本轮不改变 MCP Tool/schema、公共 Task 状态、v14 或 Core 合同。
-> Verified against: `77990f3a840e7b1f3a75afc151c58ca2cef5f28a` + ADR-036 candidate changes
+> Last updated: 2026-11-15
+> Last verified: 2026-11-15，核对 ADR-038 的 13 个 MCP 工具、机器 feedback 投影、Usage 增补字段、Events summary 语义、Recovery Hold 原因、32 MiB Result 与 SQLite v14 边界。
+> Verified against: Preview.6 post-audit remediation branch based on `545c02f745a4e2ab38a1fa3c31880ac80b84a310`
 
-准确字段以 `src/interfaces.ts`、`src/mcp/schemas.ts` 与共享 `src/result-contract.mjs` 为准。[ARCHITECTURE.md](ARCHITECTURE.md) 描述实现，[SHARED_CORE.md](SHARED_CORE.md) 列出 Core API 主版本兼容策略。本轮不改变 MCP 工具/schema、v14、32 MiB 或 R1–R5 状态语义。
+准确字段以 `src/interfaces.ts`、`src/mcp/schemas.ts` 与共享 `src/result-contract.mjs` 为准。[ARCHITECTURE.md](ARCHITECTURE.md) 描述实现，[SHARED_CORE.md](SHARED_CORE.md) 列出 Core API 主版本兼容策略。ADR-038 保留 13 个默认 MCP 工具、SQLite v14、32 MiB Result 与现有 Task 状态语义。
 
 ## MCP 与任务
 
-默认工具：zcode_task、zcode_status、zcode_feedback、zcode_result、zcode_continue、zcode_cancel、zcode_events、zcode_interaction_reply、zcode_doctor、zcode_model_catalog、zcode_default_model、zcode_set_default_model、zcode_clear_default_model。实验 progress probe 需显式启用。
+默认工具：zcode_task、zcode_status、zcode_feedback、zcode_result、zcode_continue、zcode_cancel、zcode_events、zcode_interaction_reply、zcode_doctor、zcode_model_catalog、zcode_default_model、zcode_set_default_model、zcode_clear_default_model。实验 progress probe 已退役；生产 Worker 只提供上述冻结工具面。
 
 TaskPackage 的 requirements、allowed_paths、forbidden_paths、acceptance_criteria、test_commands 必须存在，可为空。workspace 为绝对项目路径；可选 worktree_path 为 Host 已准备的执行目录，Bridge 不创建/删除 worktree。task_id 最长 64 字符，仅字母数字、下划线和连字符。输入约束和路径列表是 Worker 指令，不是 OS 沙箱。
 
@@ -19,11 +19,11 @@ TaskPackage 的 requirements、allowed_paths、forbidden_paths、acceptance_crit
 
 ## Authority 与 Recovery
 
-生产只有 SQLite Authority。新装与旧 JSON 安装从相同 Fresh SQLite Bootstrap 开始；旧 `.tasks` 不参与选择、恢复或新任务。损坏/不完整 SQLite 明确拒绝，不回退 JSON，不重置数据库。已有 v13 必须显式离线升级；已有历史 SQLite 的 json_artifacts、Result digest 与 receipt 保留校验。
+生产只有 SQLite Authority。新装与旧 JSON 安装从相同 Fresh SQLite Bootstrap 开始；旧 `.tasks` 不参与选择、恢复或新任务。损坏/不完整 SQLite 明确拒绝，不回退 JSON，不重置数据库。已有 v13 必须显式离线升级；已有 v14 的 `json_artifacts`、迁移 Result/Event 行、digest 与 receipt 继续按 Schema 校验并保留原始字节，但旧 JSON 迁移 Task 不再是 Bridge 支持的查询业务对象。
 
 Admission 在事务中检查 Capacity 及执行路径重叠，覆盖跨 Manager 竞争。Worker 精确身份、Launch token/receipt、Claim、Attempt/generation/revision CAS 保持绑定。最终 workspace use 校验先于 Launch Intent；拒绝只留下 untouched reserved，显式 queued Cancel 经原 CAS 终结并释放。Intent 后即可能已 Spawn，缺 Receipt/句柄、timeout 或 Manager 崩溃都不授权重新派发。
 
-Manager 可在启动和 Host 存活期间重复核对 running Operation。根据 ADR-036，Result-less Attempt 只有在精确原身份已退出、recorded-tree clean、Adapter Cleanup 证明完整、没有 Runtime 执行事件、无未回答交互且没有另一个 Host 的存活句柄时，才可由内部原子操作中断并创建一个新 Attempt；Task ID 不变，旧 Result/事件保留，自动链最多一次。Runtime 执行事件表示 Workspace、Git、迁移或外部调用副作用已不可由 SQLite 重建，必须保留 Hold 交由 Master 决定。unknown、alive、脏树、未解决交互、缺少 Adapter resource facts 或缺少执行副作用边界也保留 Operation/Workspace Hold。显式 zcode_cancel 仍复用持久 Claim、取消 intent 与 CAS；已有 Result 时只恢复 Cleanup，不覆盖 Result。
+Manager 可在启动和 Host 存活期间重复核对 running Operation。ADR-036 的原子 Store 操作只在精确原身份已退出、recorded-tree clean、Adapter Cleanup 证明完整、没有 Runtime 执行事件、无未回答交互且没有另一个 Host 的存活句柄时创建一个同 Task ID 的新 Attempt。该成功链当前只有 `testOnlyFakeAdapter` 合成覆盖；生产 Adapter 没有可消费的独立 Cleanup Proof，因此真实 Result-less Running Attempt 默认保留 Operation/Workspace Hold，`zcode_status.execution_observation.state=interrupted_without_result` 且审计原因为 `adapter_cleanup_unverified`。Runtime 执行事件表示 Workspace、Git、迁移或外部调用副作用不可由 SQLite 重建；unknown、alive、脏树、未解决交互或缺少执行副作用边界同样保留 Hold。显式 zcode_cancel 仍复用持久 Claim、取消 intent 与 CAS；已有 Result 时只恢复 Cleanup，不覆盖 Result。
 
 已有终态 Result 的 cleanup_unverified 可通过 zcode_cancel 仅清理恢复，不创建 Attempt 或覆盖 Result。存活的原精确世代可由显式取消触发身份绑定终止；退出仍需 claimant scan。Result 与取消竞争由 SQLite CAS 仲裁；重复取消/恢复不重复 Spawn 或 Release。数据库根损坏或一致性无法解释时继续 fail closed。未知 Hold 不自动清除。
 
@@ -41,7 +41,7 @@ Claim 后执行 envelope 写入 15s；Result 等待 execution + 330s；提交后
 
 ## Events、Attention 与反馈
 
-zcode_events 接受单调 cursor、limit 1–200、wait_ms 0–25,000、raw/summary 与既有 scan_cursor/max_bytes。默认行为沿用当前 SQLite 实现。本轮不补齐 R7 的普通 Adapter event/usage 持久化；不能把旧 JSON heartbeat/checkpoint/日志回归作为这些生产能力的证据。
+zcode_events 接受单调 cursor、limit 1–200、wait_ms 0–25,000、raw/summary 与既有 scan_cursor/max_bytes。summary 只合并同 Attempt、同 Operation、无 evidence 的相邻 `model_output` 文本行；Permission、Interaction、错误、终态、其他事件类型和 Attempt 都是边界。`next_seq` 指向最后扫描到的合并行所在的 neutral public cursor，`omitted_events` 给出合并数量；`max_bytes` 在 summary 合并后仍由 canonical JSON 字节数约束，超限时返回 `scan_incomplete` 和可继续的 cursor。raw 保持逐行读取，attention 等待后仍按普通 cursor 读取一次。
 
 可选 wait_for="attention" 用 SQLite 单事务 snapshot 等待当前 Pending、终态或 Attempt 变化。普通事件不提前唤醒，等待中不推进事件 cursor；返回时按原 cursor 读取一次事件页，顶层 status 镜像 attention.status。无效 cursor 先拒绝；读取失败、Task 不存在或 reply ACK 不确定时明确失败，不能合成空 Pending。
 
@@ -53,7 +53,7 @@ node dist/wait-task.mjs --task <task_id> [--timeout-s S] [--poll-ms MS] [--data-
 
 它与 Manager 共用 validator/等待谓词，使用正常只读 SQLite 连接而非 immutable，可观察 WAL 新提交，不变更业务数据库/WAL。SQLite 自身所需的 SHM/空 sidecar 变化不算业务写入。输出 zcode-bridge/wait-task-v2；退出 0 为 Pending/终态/Attempt 变化，3 超时，2 参数/配置/读取错误。
 
-zcode_feedback 保持 v0.1 snapshot + 文本 renderer；字段来源分 Bridge、runtime-observed、Agent report。只投影当前 Attempt 已持久化事件；缺 runtime model 为 null，不从请求/catalog 合成。Agent 声明不是 Bridge 独立验收；未知 usage 不估算，phase/progress 保持 null。Doctor 只诊断绑定的 SQLite Authority，未绑定时报告 unknown，不扫描旧 JSON。
+zcode_feedback 保持默认工具名与 v0.1 snapshot，但只返回机器可读的简洁投影，不再生成固定人类 Markdown transcript。字段来源分 Bridge、runtime-observed、Agent report；只投影当前 Attempt 已持久化事件。缺 runtime model 为 null，不从请求/catalog 合成；Agent 声明不是 Bridge 独立验收；未知 usage 不估算，phase/progress 保持 null。`NormalizedUsage.cached_input_tokens` 映射官方 Cache Read；可选 `cached_write_input_tokens` 单独映射 Cache Write，缺失保持 null，真实 0 保持 0。source/scope/finality/conflicts 随 Result 保留。Doctor 只诊断绑定的 SQLite Authority，未绑定时报告 unknown，不扫描旧 JSON。
 
 ## Adapter、交互与隐私
 
@@ -67,4 +67,4 @@ Provider 的 retryable/statusCode 不足以证明未接受请求；429、5xx、�
 
 单用户 Windows 受信任 profile 使用 yolo。普通任务范围内读取/编辑/构建/测试可以自动执行；Push/Merge/Tag/Release、生产 Authority 切换、范围外删除、凭据或真实生产数据操作仍需相应授权。
 
-公开事件和诊断不转发原始 RPC error、未知 metadata 或隐藏 reasoning。Task prompt、审批输入与可见回答可能含敏感内容，按本地策略管理。Desktop task index 是 best-effort 例外，不是 Task Authority。浏览器默认关闭；独立 CDP profile 和 app-server 的清理共同决定 proof，身份/隐私合同见 [ADR-007](decisions/ADR-007-browser-host-rpc.md) 与 [ADR-009](decisions/ADR-009-windows-identity-bound-tree-termination.md)。
+公开事件和诊断不转发原始 RPC error、未知 metadata 或隐藏 reasoning。Task prompt、审批输入与可见回答可能含敏感内容，按本地策略管理。Bridge 不再写入或镜像官方 Desktop 私有 task index；Task Authority 始终是 Bridge SQLite，Desktop 独立任务列表可见性不是 Bridge 合同。浏览器默认关闭；独立 CDP profile 和 app-server 的清理共同决定 proof，身份/隐私合同见 [ADR-007](decisions/ADR-007-browser-host-rpc.md) 与 [ADR-009](decisions/ADR-009-windows-identity-bound-tree-termination.md)。

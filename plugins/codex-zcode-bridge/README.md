@@ -2,7 +2,7 @@
 
 把有明确边界的开发任务从 Codex 交给本机官方 ZCode Agent Runtime，在 Codex 中跟进进度，并独立审查实际改动后再决定是否接受。
 
-当前已发布 Preview 版本为 `2.0.0-preview.5`；本源码树准备 `2.0.0-preview.6` 发布工程候选。Stable `v1.7.1` 是独立发布渠道。Preview.6 在通过 Draft PR、CI 与 Owner 发布裁决前不得视为已发布。
+当前已发布 Preview 版本为 `2.0.0-preview.6`；本源码树是该发布基线上的 Post-Audit 架构减法与正确性整改候选。Stable `v1.7.1` 是独立发布渠道；后续改动在完成 PR、CI 与 Owner 裁决前不得视为已发布。
 
 ## 支持范围
 
@@ -33,7 +33,7 @@ codex plugin marketplace upgrade codex-zcode-bridge-preview
 固定到已验收的 Preview 快照：
 
 ```sh
-codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-preview-v2.0.0-preview.5
+codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-preview-v2.0.0-preview.6
 ```
 
 Marketplace 安装不需要克隆源码或运行 `npm install`；Node.js 和 ZCode 需另行安装。
@@ -72,7 +72,7 @@ Bridge 的任务权威存储是 SQLite。首次启动会创建并验证：
 ${LOCALAPPDATA}\CodexZCodeBridge\state\bridge.sqlite
 ```
 
-Schema v13 必须通过文档规定的离线副本升级到 v14；不要在启动时原地迁移，也不要通过清除 Hold 强制启动。完整说明见仓库的 [Runtime 指南](../../docs/ZCODE_RUNTIME.md) 和 [中文主 README](../../README.zh-CN.md)。
+生产 Lifecycle Gate 在持有 bootstrap lock 时会自动把已有 Schema v13 Authority 升级到 v14；`dist/upgrade-sqlite-v14.mjs` 保留为停机副本升级与恢复工具。未知 Schema、损坏数据库、Writer 冲突和无法解释的现场仍然 fail closed；不要通过清除 Hold 强制启动。完整说明见仓库的 [Runtime 指南](../../docs/ZCODE_RUNTIME.md) 和 [中文主 README](../../README.zh-CN.md)。
 
 ADR-018 的管理性放弃命令随插件交付为 `dist/admin-abandon-held-operation.mjs`，并与同一包的 v14 schema/Store 构建绑定。它只用于经单独授权且满足全部停机、重启、身份和 claimant 条件的一个 `cleanup_incomplete` Hold；不要改用手工构造的旧开发 `dist`。执行前按 Master Skill 的恢复参考完成只读核对。
 
