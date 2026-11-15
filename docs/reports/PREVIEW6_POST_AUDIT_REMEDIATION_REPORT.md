@@ -2,7 +2,7 @@
 
 > Status: RESEARCH
 > Last updated: 2026-11-15
-> Verified against: `60aa49ab9d83fc3b22d2f3d591720145c3a791db`
+> Verified against: `265b705b4572a8352e7a955099054289a3f0dcfd`
 
 本报告记录 ADR-038 的一次性实施证据。历史审计、E2E 失败与发布结论保持原样；本分支只创建 Draft PR，不合并、不打 Tag、不发布。
 
@@ -14,9 +14,9 @@
 - Base commit：`545c02f745a4e2ab38a1fa3c31880ac80b84a310`
 - Worktree：`D:\codex-zcode-bridge\.run\preview6-post-audit-remediation-20261115`
 - Branch：`codex/preview6-post-audit-remediation-20261115`
-- Implementation HEAD：`60aa49ab9d83fc3b22d2f3d591720145c3a791db`
-- Implementation tree：`375f1ebf14adaeda416d15e201953878cb98fb44`
-- 相对 `origin/preview`：ahead `3` / behind `0`
+- 验证候选 HEAD：`265b705b4572a8352e7a955099054289a3f0dcfd`
+- 验证候选 tree：`5af528d8f56d113146886f4cd09c46994cd9f3c3`
+- 相对 `origin/preview`：ahead `6` / behind `0`
 - 平台：Windows x64、Node.js `24.16.0`
 - Draft PR：[#96](https://github.com/Sandyzzx/codex-zcode-bridge/pull/96)
 
@@ -25,6 +25,9 @@
 1. `f39011a46` `docs: accept preview6 minimum architecture remediation`
 2. `7e717621c` `chore: remove obsolete official runtime assets`
 3. `60aa49ab9` `refactor: complete preview6 post-audit remediation`
+4. `10ee84d42` `test: paginate lifecycle release observation`
+5. `19fd1d1be` `fix: stabilize generated artifact line endings`
+6. `265b705b4` `fix: normalize generated SQL inputs`
 
 主工作区中既有的 `AGENTS.md` 修改和未跟踪 `$null` 未触碰；所有整改写入独立 Worktree。
 
@@ -35,7 +38,7 @@
 | Stage 1：Official Runtime 资源减法 | PASS | 删除 3.18.0 固定 Runtime 目录；3.18.2 Host、BOM、Provenance、NOTICE 与官方签名 Helper 保留 |
 | Stage 2：正确性与观测修复 | PASS | 补齐 Cache Write Usage；Context 超限显式失败；Events summary 真正合并；Recovery 文档改为生产实际能力 |
 | Stage 3：Legacy JSON 与外围功能退役 | PASS | 旧 JSON import/read API、Ledger、人类 Markdown renderer、Rollout Token 采集与 Desktop task-index 镜像退役 |
-| Stage 4：CI 与执行效率 | PASS — CANDIDATE | Fast/Integration/Release 分层、12 文件生成物清单、T0-only 与 shadow comparison 已实现 |
+| Stage 4：CI 与执行效率 | PASS | Fast/Integration/Release 分层、12 文件生成物清单、T0-only、shadow comparison 与跨 Windows checkout 的确定性生成物字节已实现 |
 
 ## 3. 实际删除的文件与模块
 
@@ -68,14 +71,14 @@ Linux、macOS 与 Windows 非 x64 不再选择实验性直接 Adapter；它们�
 
 ## 4. 新增与删除代码行数
 
-截至 Implementation HEAD，相对 Base：
+截至验证候选 HEAD，相对 Base：
 
-- Git 全量文本差分：`111` 个文件，`+16,438 / -19,111`。
+- Git 全量文本差分：`114` 个文件，`+16,746 / -19,116`。
 - 不含 binary 删除中的不可计行内容。
 - 全量差分包含 4 个大型生成 bundle、测试 inventory 与历史表测试，不等于生产 TypeScript LOC。
-- 生产源码、测试、脚本、生成 bundle 与插件入口合计：`77` 个文本文件，`+2,144 / -11,240`，净减少 `9,096` 行。
+- 生产源码、测试、脚本、生成 bundle 与插件入口合计：`78` 个文本文件，`+2,191 / -11,243`，净减少 `9,052` 行。
 - `src/`：`27` 个文件，`+216 / -4,104`，净减少 `3,888` 行。
-- `test/`：`23` 个文件，`+578 / -2,211`，净减少 `1,633` 行。
+- `test/`：`24` 个文件，`+625 / -2,214`，净减少 `1,589` 行。
 - `scripts/`：`14` 个文件，`+253 / -1,142`，净减少 `889` 行。
 
 GitHub 对二进制删除可能显示更大的 deletion 计数；报告采用 `git diff --numstat` 与文本分组结果，不把二进制字节数当 LOC。
@@ -182,6 +185,18 @@ Schema 保持 v14；本轮没有新 migration、DDL 清理或生产 SQLite 写�
 
 首次 Windows 失败发生在 Release 观察之外的精确生产根因仍为 `UNCONFIRMED`；现有证据不能区分远端资源压力造成的迟发与测试只读首页造成的 false negative。最终 CI 状态以 PR #96 修复后最新 check 为准，不能把 running、absent 或 skipped 解释为成功。
 
+第二次 run [43702985715](https://github.com/Sandyzzx/codex-zcode-bridge/actions/runs/43702985715) 中，分页修复后的完整 Windows 测试已达到 `904` 项、`902 PASS`、`0 FAIL`、`2 SKIP`，Plugin Validation 也 PASS；失败转移为 `check:generated` 报告的 8 个 `.mjs`/vendor 文件。干净 Windows checkout 的隔离复现确认，`core.autocrlf=true` 使生成文件先以 CRLF 落地，而 esbuild 与 npm vendor 输入固定输出 LF。提交 `19fd1d1b` 随后把 12 个生成物声明为 `text eol=lf`。
+
+第三次 run [43704755481](https://github.com/Sandyzzx/codex-zcode-bridge/actions/runs/43704755481) 中，Windows 测试为 `905` 项、`903 PASS`、`0 FAIL`、`2 SKIP`；剩余失败缩小为 4 个 SQL。原因是生成 SQL 的 CRLF 源文件仍被 `copyFile()` 原样复制到 LF 目标。提交 `265b705b` 把同一复制链的 4 个源 SQL 也固定为 LF，并增加生成物和源 SQL 的属性回归测试。
+
+最终候选 run [43706143312](https://github.com/Sandyzzx/codex-zcode-bridge/actions/runs/43706143312)：
+
+- Select impact、Fast PR gate、Ubuntu Release gate：PASS。
+- Windows Release gate：PASS。
+- Windows full suite：`906` tests，`904 PASS`、`0 FAIL`、`2 SKIP`，`duration_ms=634780.8143`。
+- Windows Worker identity、Plugin Validation、12-file generated freshness、`git diff --check`：PASS。
+- Integration 与 SQLite resource matrix：按 `FULL` impact policy 正确 SKIP；完整覆盖由 Release full suite 承担。
+
 ## 11. MCP/Prompt 优化中未验证的假设
 
 - 未通过当前 Codex Host 的大型 `zcode_result` A/B 证明 Text JSON 是否只用于兼容还是仍被实际读取；因此保留 Text 与 `structuredContent`，32 MiB Result 合同不变。
@@ -214,13 +229,16 @@ Schema 保持 v14；本轮没有新 migration、DDL 清理或生产 SQLite 写�
 
 - Draft PR：<https://github.com/Sandyzzx/codex-zcode-bridge/pull/96>
 - PR base：`preview`
-- Implementation HEAD：`60aa49ab9d83fc3b22d2f3d591720145c3a791db`
-- 本地 Windows 完整回归：`904` tests，`902 PASS`、`0 FAIL`、`2 SKIP`，`duration_ms=1196817.4362`。
+- 验证候选 HEAD：`265b705b4572a8352e7a955099054289a3f0dcfd`
+- 验证候选 tree：`5af528d8f56d113146886f4cd09c46994cd9f3c3`
+- 修复提交前的本地 Windows 完整回归：`904` tests，`902 PASS`、`0 FAIL`、`2 SKIP`，`duration_ms=1196817.4362`。
+- 修复提交后的定向门禁：`23/23 PASS`；模拟 `core.autocrlf=true` 的干净 Windows checkout 构建后 12/12 generated artifacts fresh。
 - `test:clean-entrypoints`：`4/4 PASS`。
 - 提交后 typecheck、build、plugin validation、生成物 Freshness 与 `git diff --check`：PASS。
 - 生成物 Freshness：`12` 个 tracked files。
 - Test inventory：`845` declarations，覆盖 `86` 个 mapped files。
-- 远程 CI：Implementation HEAD `60aa49ab9` 的 Ubuntu Release 与 Fast gate PASS；Windows Release 因首版 Event 等待器只读首页而失败。修复后的最终状态以 PR #96 最新 check 为准，不得先于完成写成 PASS。
+- 远程 CI：验证候选 HEAD `265b705b` 的 Select impact、Fast、Ubuntu Release 与 Windows Release 全部 PASS；Windows 完整回归为 `906/904 PASS/0 FAIL/2 SKIP`。
+- 第一次 Windows lifecycle 失败的历史结论保持 `UNCONFIRMED`；后续三次运行未复现，不能把 rerun 成功写成已确认的远端根因。
 
 ```text
 RUNTIME_ASSET_REDUCTION: PASS
@@ -235,7 +253,7 @@ CI_SIMPLIFICATION: PASS
 ARTIFACT_FRESHNESS: PASS
 CORE_LIFECYCLE_REGRESSION: PASS
 FINAL_PR: CREATED
-READY_FOR_OWNER_REVIEW: NO
+READY_FOR_OWNER_REVIEW: YES
 ```
 
-`READY_FOR_OWNER_REVIEW` 在修复后的 Windows Release gate 完成并通过前保持 `NO`。最终更新必须依据 PR #96 的真实 check 结论，不以本地 GREEN 代替远端 CI。
+`READY_FOR_OWNER_REVIEW` 仅表示 PR #96 的本地与远程 PR gate 已通过，等待 Owner 审查。本轮没有 Merge、Tag 或 Release；该状态也不等于 Preview.6 已完成发布裁决。
