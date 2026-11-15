@@ -21,7 +21,7 @@ function run(command, args, { shell = command === "npm" && isWindows } = {}) {
 }
 
 function commandLine(argv) {
-  const options = { base: undefined, dryRun: false, t0Only: false };
+  const options = { base: undefined, dryRun: false, t0Only: false, forceFull: false };
   for (let index = 0; index < argv.length; index += 1) {
     if (argv[index] === "--base") {
       options.base = argv[++index];
@@ -30,6 +30,8 @@ function commandLine(argv) {
       options.dryRun = true;
     } else if (argv[index] === "--t0-only") {
       options.t0Only = true;
+    } else if (argv[index] === "--force-full") {
+      options.forceFull = true;
     } else {
       throw new Error(`unknown option: ${argv[index]}`);
     }
@@ -44,12 +46,13 @@ const files = changedFiles({
   base: options.base,
   includeWorktree: true,
 });
-const selection = selectAffectedTests({ changedFiles: files, map });
+const selection = selectAffectedTests({ changedFiles: files, map, forceFull: options.forceFull });
 
 console.log(JSON.stringify({
   command: "npm run test:affected",
   baseline: options.base ?? "merge-base-with-upstream-plus-worktree",
   t0_only: options.t0Only,
+  force_full: options.forceFull,
   ...selection,
 }, null, 2));
 

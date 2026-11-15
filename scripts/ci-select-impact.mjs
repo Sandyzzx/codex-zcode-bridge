@@ -9,9 +9,7 @@ import { selectAffectedTests } from "./test-impact-selector.mjs";
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 export function selectCiImpact({ files, map, forceFull = false }) {
-  const selection = forceFull
-    ? selectAffectedTests({ changedFiles: ["package.json"], map, platform: "win32" })
-    : selectAffectedTests({ changedFiles: files, map, platform: "win32" });
+  const selection = selectAffectedTests({ changedFiles: files, map, platform: "win32", forceFull });
 
   const fullTests = new Set(
     automaticTestEntries(map, "win32", { includeStress: true }).map((entry) => entry.file),

@@ -70,7 +70,7 @@ jobs:
             exit 1
           fi
           if [[ "$FULL_REQUIRED" == "true" ]]; then
-            args+=(--t0-only)
+            args+=(--force-full --t0-only)
           fi
           npm run test:affected -- "${args[@]}"
 

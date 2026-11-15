@@ -196,6 +196,10 @@ test("CI impact gate shadow-compares targeted and full selections with the execu
   const forced = selectCiImpact({ files: [], map, forceFull: true });
   assert.equal(forced.force_full, true);
   assert.equal(forced.full_required, true);
+
+  const forcedRunner = selectAffectedTests({ changedFiles: [], map, forceFull: true });
+  assert.equal(forcedRunner.mode, "FULL_SUITE");
+  assert.deepEqual(forcedRunner.full_suite_reasons, ["forced-full"]);
 });
 
 test("CI impact CLI fails safe for dispatch, initial-push and invalid base revisions", () => {
@@ -234,7 +238,7 @@ test("FULL-impact Fast gate delegates the full regression to Release", () => {
   const workflow = readFileSync(path.resolve(".github/workflows/ci.yml"), "utf8");
   assert.match(
     workflow,
-    /Fast selection \(FULL delegates regression to Release\)[\s\S]*?args\+=\(--t0-only\)[\s\S]*?npm run test:affected/u,
+    /Fast selection \(FULL delegates regression to Release\)[\s\S]*?args\+=\(--force-full --t0-only\)[\s\S]*?npm run test:affected/u,
     "the Fast gate must request only T0 when impact policy requires the full suite",
   );
   assert.match(workflow, /BASE_SHA: \$\{\{ github\.event\.pull_request\.base\.sha \|\| github\.event\.before \}\}/u);
