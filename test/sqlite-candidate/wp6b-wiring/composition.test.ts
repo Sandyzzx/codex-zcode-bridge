@@ -2096,13 +2096,32 @@ async function waitForTerminal(client: Client, taskId: string, expectedAttempt: 
 
 async function waitForLifecycleEvent(client: Client, taskId: string, eventType: string): Promise<void> {
   const deadline = Date.now() + 30_000;
+  let observed: { readonly count: number; readonly types: readonly string[]; readonly hasMore: unknown; readonly nextSeq: unknown } | undefined;
   while (Date.now() < deadline) {
-    const page = contentObject(await client.callTool({ name: "zcode_events", arguments: { task_id: taskId, after_seq: 0, limit: 200 } }));
-    const events = Array.isArray(page.events) ? page.events as Array<Record<string, unknown>> : [];
+    const events: Array<Record<string, unknown>> = [];
+    let afterSeq = 0;
+    let page: Record<string, unknown>;
+    do {
+      page = contentObject(await client.callTool({ name: "zcode_events", arguments: { task_id: taskId, after_seq: afterSeq, limit: 200 } }));
+      const pageEvents = Array.isArray(page.events) ? page.events as Array<Record<string, unknown>> : [];
+      events.push(...pageEvents);
+      if (!page.has_more) break;
+      const nextSeq = Number(page.next_seq);
+      if (!Number.isSafeInteger(nextSeq) || nextSeq <= afterSeq) {
+        throw new Error(`SQLite lifecycle event pagination did not advance for ${taskId}: ${JSON.stringify({ after_seq: afterSeq, next_seq: page.next_seq })}`);
+      }
+      afterSeq = nextSeq;
+    } while (true);
     if (events.some((event) => event.type === eventType)) return;
+    observed = {
+      count: events.length,
+      types: [...new Set(events.map((event) => String(event.type)))],
+      hasMore: page.has_more ?? false,
+      nextSeq: page.next_seq,
+    };
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
-  throw new Error(`SQLite lifecycle event ${eventType} was not observed for ${taskId}`);
+  throw new Error(`SQLite lifecycle event ${eventType} was not observed for ${taskId}: ${JSON.stringify(observed)}`);
 }
 
 async function waitForCandidateOperationPhase(dataRoot: string, operationId: string, expectedPhase: string): Promise<void> {

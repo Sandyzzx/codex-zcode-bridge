@@ -56,7 +56,7 @@ Preview.3 的 Start Plan 历史证据覆盖 Windows、官方 AppServer `0.17.1`�
 | 官方 Start Plan 认证复用 | `PASS — PREVIEW.6` | v1、v2:env、v2:os 只读字节不变，BigModel/linked Z.AI/`zai_cn`、冷进程、Billing 单 verdict 与 Lease 合成测试通过；真实 Start Plan 核心功能路径通过；真实 OAuth refresh 未单独执行 |
 | Desktop 3.18.0 / 3.18.1 / 3.18.2 兼容矩阵 | `NOT_VERIFIED / 3.18.2 PARTIAL` | 合成版本上下文覆盖三个版本；本机仅观察到 Desktop `3.18.2.10443`，3.18.0/3.18.1 未安装，不能由源码或合成用例推断实机 PASS |
 | 一般 Desktop Main 独立性 | `NOT_RUN` | 合成路径不证明完整资源与身份闭包 |
-| 当前认证候选回归 | `PASS — CANDIDATE` | `test:affected` 选择 `FULL_SUITE`：972 项，970 pass、0 fail、2 skip；只覆盖 Windows x64、Node 24.16.0 |
+| Preview.6 Post-Audit 完整回归 | `PASS — CANDIDATE` | Windows 完整回归 904 项：902 pass、0 fail、2 skip；`test:clean-entrypoints` 4/4，typecheck、build、plugin validation、生成物 Freshness 与 `git diff --check` 通过。只覆盖 Windows x64、Node 24.16.0 |
 | Official Host 启动版本上下文 | `PASS — CANDIDATE` | 有效 Desktop metadata 优先；独立 Host 使用校验后的 `3.18.2` 产品版本且不伪造 Build ID；模型请求仍使用 `--surface desktop`；受控 A/B 两边 `main_turn` 均获真实响应，A/B task contract 因测试 Prompt 保持 `FAIL`，后续正常 Prompt 核心路径通过 |
 | Windows runtime-host helper | `PASS — OFFICIAL_SIGNED_3.18.2` | 从本机 ZCode Desktop `3.18.2.10443` 复制 `zcode-runtime-host.exe`：179,608 bytes、SHA-256 `C2C8FF5FF28CBDDC4F177C094AA67C322830889612251BD173BAAABC89379AB4`、PE `0x8664`、Authenticode Valid、签名主体北京智谱华章科技股份有限公司；现有 Official ProcessManager smoke 通过。Fresh Rebuild 不再是门槛；安装器 helper/fixture 不进入 Bridge BOM |
 | 当前认证候选 CI | `PASS` | Draft PR #94 的 [run 43599440845](https://github.com/Sandyzzx/codex-zcode-bridge/actions/runs/43599440845) 在 Ubuntu/Windows `Verify` 与 SQLite resource matrix 四项全部通过；不等同 Preview.6 发布验收 |
