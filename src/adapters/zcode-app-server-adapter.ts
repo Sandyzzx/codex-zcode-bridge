@@ -50,11 +50,9 @@ import {
   catalogProviderId,
   runtimeAuthReply,
   zcodeDataBaseDir,
-  zcodeTasksIndexPath,
 } from "../runtime/account-provider.js";
 import { resolveSessionPreferences } from "../runtime/session-preferences.js";
 import { ADAPTER_CLEANUP_TIMEOUT_MS, resolveTaskTimeout } from "../runtime/task-timeout.js";
-import { registerDesktopTask, updateDesktopTaskStatus, type DesktopTaskIndexEntry, type DesktopTaskStatus } from "./task-index-sync.js";
 import { codexHostProfile, validateHostProfile, type BridgeHostProfile } from "../host/profile.js";
 import { browserListParamsSchema, browserExecuteParamsSchema, type BrowserListParams, type BrowserExecuteParams } from "../browser/params.js";
 import { createBrowserHost, type BrowserHost, type BrowserHostMode, type BrowserHostOptions } from "../browser/host.js";
@@ -77,9 +75,25 @@ type JsonRecord = Record<string, unknown>;
 function publicUsage(value: unknown): Record<string, unknown> | null {
   if (!isRecord(value)) return null;
   const result: Record<string, unknown> = {};
-  for (const key of ["inputTokens", "outputTokens", "totalTokens", "cachedInputTokens", "reasoningTokens", "input_tokens", "output_tokens", "total_tokens", "cost"]) {
+  for (const key of [
+    "inputTokens", "outputTokens", "totalTokens", "cachedInputTokens",
+    "cacheReadTokens", "cachedWriteInputTokens", "cacheWriteInputTokens",
+    "cacheWriteTokens", "reasoningTokens", "input_tokens", "output_tokens",
+    "total_tokens", "cached_input_tokens", "cache_read_tokens",
+    "cached_write_input_tokens", "cache_write_input_tokens", "cache_write_tokens",
+  ]) {
     const item = value[key];
     if (typeof item === "number" && Number.isFinite(item) && item >= 0) result[key] = item;
+  }
+  for (const key of ["source", "usage_source", "scope", "observed_at", "finality"]) {
+    const item = value[key];
+    if (typeof item === "string" && item.trim()) result[key] = item.trim();
+  }
+  if (Array.isArray(value.conflicts)) {
+    const conflicts = value.conflicts
+      .filter((item): item is string => typeof item === "string" && /^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/u.test(item))
+      .slice(0, 32);
+    if (conflicts.length) result.conflicts = conflicts;
   }
   return Object.keys(result).length ? result : null;
 }
@@ -670,7 +684,6 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     const projectPath = workspace.sourcePath ?? workspace.canonicalPath;
     let timer: NodeJS.Timeout | undefined;
     let warningTimer: NodeJS.Timeout | undefined;
-    let desktopTask: DesktopTaskIndexEntry | null = null;
     try {
       const runtimeEnv = loadPersistedRuntimeEnvironment(this.#childEnvBase, this.#homeDir, this.#host);
       const timeoutMs = this.#timeoutMs ?? resolveTaskTimeout(task, runtimeEnv);
@@ -959,32 +972,6 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
           ...(selectedReasoningLevel ? { reasoning_level: selectedReasoningLevel, reasoning_level_source: "runtime" } : {}),
         },
       });
-      const indexPath = zcodeTasksIndexPath(config.providerPersonalConfigFile);
-      if (indexPath) {
-        const selected = readSelectedModelSelection(snapshot);
-        desktopTask = {
-          databasePath: indexPath,
-          workspaceKey: projectPath,
-          workspacePath: workspace.canonicalPath,
-          sessionId,
-          bridgeTaskId: task.task_id,
-          title: task.task_id,
-          model: selected ? `${selected.providerId}/${selected.modelId}` : null,
-          provider: "glm",
-          mode: preferences.mode,
-        };
-        try {
-          await registerDesktopTask(desktopTask);
-          entry.onEvent({
-            type: "desktop_task_registered",
-            summary: "ZCode session registered in Desktop task index; refresh the task list to see it",
-            details: { session_id: sessionId, project_path: projectPath, execution_path: workspace.canonicalPath },
-          });
-        } catch (error) {
-          reportDesktopIndexIssue(entry.onEvent, error);
-          desktopTask = null;
-        }
-      }
       const runtimeSeq = nestedNumber(snapshot, ["runtime", "eventSeq"]) ?? 0;
       entry.lastEventSeq = runtimeSeq;
       entry.awaitingTurnStart = runtimeSeq > 0;
@@ -1061,9 +1048,6 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       if (timer) { clearTimeout(timer); timer = undefined; }
       if (warningTimer) { clearTimeout(warningTimer); warningTimer = undefined; }
       entry.turnCompletedAt = turnResult.completedAt;
-      const desktopStatus: DesktopTaskStatus = turnResult.resultType === "cancelled"
-        ? null
-        : turnResult.resultType && turnResult.resultType !== "success" ? "error" : "completed";
       let outcome: ZCodeRunOutcome;
       if (turnResult.resultType && turnResult.resultType !== "success") {
         // R1: an execution-terminal resultType is an established root cause;
@@ -1194,11 +1178,6 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       catch (error) {
         entry.onEvent({ type: "outcome_checkpoint_failed", summary: error instanceof Error ? error.message : String(error) });
       }
-      try {
-        await syncDesktopStatus(desktopTask, desktopStatus, entry.onEvent);
-      } catch (error) {
-        entry.onEvent({ type: "desktop_status_sync_failed", summary: error instanceof Error ? error.message : String(error) });
-      }
       return await this.#completeCleanup(entry, outcome);
     } catch (error) {
       // Runtime timeout bounds an active ZCode turn. Once the turn has failed
@@ -1211,7 +1190,6 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
       // whose 60s bound dwarfs the completion-path budget and delays the
       // Result frame (PR #67 CI evidence: r3-timeout kept running past 45s).
       if (process.platform === "win32") entry.client?.prewarmCleanup();
-      await syncDesktopStatus(desktopTask, entry.cancelRequested ? null : "error", entry.onEvent);
       entry.abort.abort();
       // ADR-011 M1: the root-cause slot is filled only here, after this error
       // is established as the attempt's termination (never on timeout,
@@ -2988,27 +2966,6 @@ function extractTurnFailureEvidence(value: unknown): {
     retryableBooleans,
     quotaText: matchesExplicitQuotaText(error),
   };
-}
-
-async function syncDesktopStatus(
-  entry: DesktopTaskIndexEntry | null,
-  status: DesktopTaskStatus,
-  onEvent: ProgressSink,
-): Promise<void> {
-  if (!entry) return;
-  try {
-    await updateDesktopTaskStatus(entry, status);
-  } catch (error) {
-    reportDesktopIndexIssue(onEvent, error);
-  }
-}
-
-function reportDesktopIndexIssue(onEvent: ProgressSink, error: unknown): void {
-  const message = error instanceof Error ? error.message : String(error);
-  onEvent({
-    type: "desktop_task_index_warning",
-    summary: `ZCode Desktop task index could not be updated: ${message.slice(0, 500)}`,
-  });
 }
 
 function isRecord(value: unknown): value is JsonRecord {

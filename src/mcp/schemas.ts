@@ -175,6 +175,7 @@ const normalizedUsageSchema = z.object({
   output_tokens: z.number().int().nullable(),
   total_tokens: z.number().int().nullable(),
   cached_input_tokens: z.number().int().nullable(),
+  cached_write_input_tokens: z.number().int().nullable().optional(),
   reasoning_tokens: z.number().int().nullable(),
   conflicts: z.array(z.string()),
   dropped_unknown_keys: z.number().int(),

@@ -59,10 +59,17 @@ function affectedDomains(changedFiles, map) {
   return { domains: [...domains].sort(), reasonsByDomain };
 }
 
-export function selectAffectedTests({ changedFiles, map, includeStress = true, platform = process.platform }) {
+export function selectAffectedTests({
+  changedFiles,
+  map,
+  includeStress = true,
+  platform = process.platform,
+  forceFull = false,
+}) {
   const normalizedFiles = [...new Set(changedFiles.map(toPosixPath))].sort((left, right) => left.localeCompare(right, "en"));
   const { domains, reasonsByDomain } = affectedDomains(normalizedFiles, map);
   const fullSuiteReasons = [];
+  if (forceFull) fullSuiteReasons.push("forced-full");
   for (const file of normalizedFiles) {
     if (pathMatchesAny(file, map.full_suite_paths)) fullSuiteReasons.push(`full-suite-path:${file}`);
   }

@@ -31,7 +31,6 @@ test("doctor validates local setup without starting a ZCode session", async () =
     writeFileSync(runtime, "// fake ZCode runtime");
     writeFileSync(builtin, JSON.stringify({ config: {} }));
     writeFileSync(personal, JSON.stringify({ config: { providerConfigRules: { providerRules: { test: {} } } } }));
-    writeFileSync(path.join(root, ".zcode", "v2", "tasks-index.sqlite"), "");
 
     const env = {
       ZCODE_BRIDGE_NODE: process.execPath,
@@ -49,7 +48,7 @@ test("doctor validates local setup without starting a ZCode session", async () =
     assert.equal(report.execution_mode, "build");
     assert.equal(checks.get("zcode_runtime")?.status, "ok");
     assert.equal(checks.get("provider_config")?.status, "ok");
-    assert.equal(checks.get("desktop_index")?.status, "ok");
+    assert.equal(checks.has("desktop_index"), false);
     assert.equal(checks.get("app_server")?.status, "unknown");
     assert.equal(checks.get("start_plan")?.status, "warning");
     assert.equal(checks.get("permission_roundtrip")?.status, "unknown");

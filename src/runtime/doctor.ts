@@ -1,7 +1,6 @@
 import { accessSync, constants, existsSync, readFileSync, statSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
-import { zcodeTasksIndexPath } from "./account-provider.js";
 import { BridgeError } from "./errors.js";
 import { createWorkerEnv } from "./child-env.js";
 import { discoverZCodeData, discoverZCodeInstall, isAbsolutePathForPlatform, isPermissionDeniedCode, resolveUserHome, sameFileSystemPath } from "./paths.js";
@@ -317,19 +316,10 @@ export async function runBridgeDoctor(options: BridgeDoctorOptions = {}): Promis
     } else {
       checks.push({ name: "task_data", status: "unknown", summary: "Task data directory is not configured or has not been created yet" });
     }
-    const indexPath = zcodeTasksIndexPath(config.providerPersonalConfigFile);
-    checks.push({
-      name: "desktop_index",
-      status: indexPath && existsSync(indexPath) ? "ok" : "warning",
-      summary: indexPath && existsSync(indexPath)
-        ? "ZCode Desktop task index file exists; Desktop refresh timing is not tested"
-        : "ZCode Desktop task index file was not found at the configured data location",
-    });
   } else {
     checks.push({ name: "runtime_node", status: "unknown", summary: "Not checked because runtime validation did not complete" });
     checks.push({ name: "model", status: "unknown", summary: "Not checked because runtime/provider validation did not complete" });
     checks.push({ name: "task_data", status: "unknown", summary: "Not checked because runtime validation did not complete" });
-    checks.push({ name: "desktop_index", status: "unknown", summary: "Not checked because the active ZCode data location is unknown" });
   }
 
   checks.push({ name: "app_server", status: "unknown", summary: "Not probed; doctor does not start an app-server session" });

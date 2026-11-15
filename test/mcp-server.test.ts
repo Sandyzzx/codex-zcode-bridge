@@ -410,8 +410,16 @@ test("zcode_feedback returns the additive v0.1 snapshot", async () => {
     assert.equal(result.isError, undefined);
     assert.deepEqual(result.structuredContent, manager.feedback);
     const rendered = result.content[0]!.type === "text" ? result.content[0]!.text : "";
-    assert.match(rendered, /ZCode · task_1/);
-    assert.match(rendered, /→ Running/);
+    const projection = JSON.parse(rendered) as {
+      task_id: string;
+      attempt: number;
+      status: string;
+      result: unknown;
+    };
+    assert.equal(projection.task_id, "task_1");
+    assert.equal(projection.attempt, 1);
+    assert.equal(projection.status, "running");
+    assert.equal(projection.result, null);
     assert.equal(manager.calls[0]!.method, "getFeedback");
     assert.equal(manager.calls[0]!.args, "task_1");
   });
@@ -529,6 +537,25 @@ test("calling an unregistered tool is rejected by the MCP protocol", async () =>
       client.callTool({ name: "unrelated_tool", arguments: {} }),
       /Tool unrelated_tool not found/i,
     );
+  });
+});
+
+test("large zcode_result payloads retain both the compatible text and structured representation", async () => {
+  await withServer(async (client, manager) => {
+    const output = `official-output:${"x".repeat(64 * 1024)}`;
+    manager.result = { ...manager.result, zcode_output: output };
+    const result = (await client.callTool({
+      name: "zcode_result",
+      arguments: { task_id: "task_1" },
+    })) as CallToolResult;
+    assert.equal(result.isError, undefined);
+    const structured = result.structuredContent as unknown as TaskResult;
+    assert.equal(structured.zcode_output.length, output.length);
+    assert.equal(result.content.length, 1);
+    const content = result.content[0];
+    assert.equal(content?.type, "text");
+    const textResult = JSON.parse((content as { type: "text"; text: string }).text) as TaskResult;
+    assert.equal(textResult.zcode_output, output);
   });
 });
 

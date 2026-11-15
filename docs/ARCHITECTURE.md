@@ -2,8 +2,8 @@
 
 > Status: AUTHORITATIVE
 > Last updated: 2026-11-15
-> Last verified: 2026-11-15，核对 Preview.6 的官方 Host + R7 生产链、官方签名 3.18.2 runtime host、BOM/native load、clean install、带数据升级回滚和 ProcessManager smoke；3.18.0/3.18.1 实机安装矩阵与真实 OAuth refresh 仍未验证。
-> Verified against: PR #95 on PR #94 HEAD `95da75b02f240858091f1ecdbbafd512f9903c6b`；base `origin/preview` = `9bec5a27d`；已发布 Preview.5 固定 ZCode `3.18.0` / `b95ebaffeab641907b38652f45c1502bd762972d`，Preview.6 固定 `3.18.2` / `fec975905a2abd4c07e35c40d51fa097a2258ec9`，AppServer `0.17.1`。
+> Last verified: 2026-11-15，核对 ADR-038 的平台收敛、Recovery 生产能力说明、旧 JSON/Ledger/人类报告/主会话 Token/Desktop task-index 退役及生成物与 CI 合同；完整候选回归结果见本轮报告。
+> Verified against: Preview.6 post-audit remediation branch based on `545c02f745a4e2ab38a1fa3c31880ac80b84a310`
 
 本文件描述 Preview.6 的生产架构。Windows x64 已默认切换到官方 Host 路径，R7 Runtime Events/Usage 复用同一 SQLite Authority；Preview.6 固定 ZCode 3.18.2 Host、替换 Start Plan 认证来源并使用官方签名 runtime host，不改变任务生命周期。公开合同继续以 [INTERFACES.md](INTERFACES.md) 为准，宿主和运行配置分别见 [SHARED_CORE.md](SHARED_CORE.md) 与 [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md)。
 
@@ -33,7 +33,7 @@ MCP tools                                      │ queue / cancel / read-only re
 
 R7 在同一 Authority 内增加 additive `runtime_task_events`，不新增 Event Broker、第二状态机或 Companion IPC。Worker 通过一次性 fd14 发送规范化 Runtime observation；Manager 只从持久 Task/Attempt/Generation/Claim 派生身份绑定，Worker 不能自报权威身份。Store 以 Worker sequence 幂等、拒绝 stale Attempt，并把 Runtime row 映射到既有单调 public cursor。`zcode_events`、`zcode_feedback` 和 `buildTaskResult()` 从同一持久事实读取 Usage、Model Profile、Timing、Tool Activity 与 Feedback；Lifecycle Event 与 Runtime Event 仍分属不同表。
 
-生产 Worker 的 `zcode_app_server` 模式按 [ADR-035](decisions/ADR-035-worker-platform-adapter-selection.md) 选择 Adapter。`win32/x64` 实例化 `OfficialHostAdapter`；Linux/macOS x64、arm64 的 direct Adapter 只保留 CI/合成覆盖；Windows 非 x64 与其他组合在构造 Adapter 前 fail closed。选择只读取 platform/arch，环境变量、TaskPackage、MCP 参数、持久配置和测试参数都不能改变正式 Worker 的 Adapter 类型。该 Adapter 继承现有 `ZCodeAppServerAdapter`，沿用 `CodingAgentAdapter` 的完成、取消、交互、结果、期限和 Cleanup 合同，没有新增公开 Adapter Mode、持久配置或平行 RuntimeAdapter。
+生产 Worker 的 `zcode_app_server` 模式按 [ADR-035](decisions/ADR-035-worker-platform-adapter-selection.md) 选择 Adapter。只有 `win32/x64` 实例化 `OfficialHostAdapter`；Linux、macOS、Windows 非 x64 与其他组合都在构造 Adapter 前以 `unsupported_worker_platform` fail closed。direct Adapter 类与 `testOnlyLegacyDirectAdapter` 只服务旧行为的合成回归，不是受支持平台的生产备用路径。选择只读取 platform/arch，环境变量、TaskPackage、MCP 参数、持久配置和测试参数都不能改变正式 Worker 的 Adapter 类型。`OfficialHostAdapter` 继承现有 `ZCodeAppServerAdapter`，沿用 `CodingAgentAdapter` 的完成、取消、交互、结果、期限和 Cleanup 合同，没有新增公开 Adapter Mode、持久配置或平行 RuntimeAdapter。
 
 ## 生命周期与身份
 
@@ -45,7 +45,7 @@ Worker 接收私有 Bootstrap，经精确 OS 进程身份、Launch/Claim 绑定�
 
 执行、交付与清理期限保持 [ADR-027](decisions/ADR-027-execution-and-cleanup-deadlines.md)。Manager 一次解析 Task/Host 默认执行预算，Worker/Adapter 使用相同快照；执行结束即停止执行 timer，Adapter 清理使用独立预算。迟到或缺失 Cleanup proof 不自动释放路径。
 
-Recovery 由 SQLite 持久事实和当前 Host 共同协调，并可在 Host 存活期间重复执行。[ADR-036](decisions/ADR-036-host-native-interruption-requeue.md) 允许对没有 Result 的 running Attempt 做一次自动中断重派发：只有持久 Claim 的精确 Worker 已退出、recorded-tree claimant scan clean、Adapter Cleanup 证明完整、当前 Operation 没有 Runtime 执行事件、无未回答交互且当前 Host 不需要触碰另一个 Host 的存活进程时，Store 才在同一事务中保留旧 Attempt 历史、写入中断审计/Result/Cleanup/Release，并创建一个同 Task ID 的新 queued Attempt。自动链最多一次；alive、unknown、脏树、缺少 Adapter resource facts、已出现执行事件或存在未解决交互都保留 Operation/Workspace Hold，避免猜测 Workspace、Git、迁移或外部调用副作用能否安全重复。显式 `zcode_cancel` 继续使用持久 Claim、取消 intent、verification 与 CAS；身份不明或树不干净时保留占用，重复恢复不 Spawn、不重复 Release。已有 Result 的取消或在线 Recovery 只恢复清理，不覆盖 Result。
+Recovery 由 SQLite 持久事实和当前 Host 共同协调，并可在 Host 存活期间重复执行。[ADR-036](decisions/ADR-036-host-native-interruption-requeue.md) 定义了没有 Result 的 running Attempt 的原子中断/重派门槛与合成实现：持久 Claim 的精确 Worker 已退出、recorded-tree claimant scan clean、Adapter Cleanup 证明完整、没有 Runtime 执行事件、无未回答交互，并且当前 Host 不触碰另一个 Host 的存活进程。当前生产 Adapter 不提供满足该门槛的独立 Cleanup Proof，因此真实 Result-less Attempt 默认停在 Operation/Workspace Hold，`zcode_status.execution_observation.state` 为 `interrupted_without_result`，恢复审计原因为 `adapter_cleanup_unverified`；只有 `testOnlyFakeAdapter` 合成测试能走到成功重派分支。不得用 OS PID/tree 扫描替代 Adapter resource facts，也不得把该合成分支宣传为已具备生产能力。显式 `zcode_cancel` 继续使用持久 Claim、取消 intent、verification 与 CAS；身份不明或树不干净时保留占用，重复恢复不 Spawn、不重复 Release。已有 Result 的取消或在线 Recovery 只恢复清理，不覆盖 Result。
 
 ## 官方 Host、账户与清理
 

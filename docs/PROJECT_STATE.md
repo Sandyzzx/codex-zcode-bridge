@@ -2,8 +2,8 @@
 
 > Status: AUTHORITATIVE
 > Last updated: 2026-11-15
-> Last verified: 2026-11-15，核对 Preview.6 的版本身份、官方签名 runtime host 来源与 BOM、隔离 clean install、带 Task/Attempt/Runtime Events/Usage/Hold/Result 数据的 Preview.5 → Preview.6 → Preview.5 升级回滚、签名 helper ProcessManager smoke、定向官方 Host/Worker 回归与 Owner 发布支持范围；3.18.0/3.18.1 实机安装组合和真实 OAuth refresh 仍为 `NOT_VERIFIED`。
-> Verified against: stacked on Draft PR #94 HEAD `95da75b02f240858091f1ecdbbafd512f9903c6b`；base `origin/preview` = `9bec5a27d6182a83620c32105e80210f8731f514`
+> Last verified: 2026-11-15，核对已发布 Preview.6 基线与 ADR-038 本地整改候选的旧 Runtime 删除、平台 fail-closed、旧 JSON 历史查询退役、非核心功能删除、Usage/Context/Events/Recovery 修复、v14 历史字节保留和 CI/生成物门禁；3.18.0/3.18.1 实机安装组合和真实 OAuth refresh 仍为 `NOT_VERIFIED`。
+> Verified against: released Preview.6 `545c02f745a4e2ab38a1fa3c31880ac80b84a310` + post-audit remediation branch
 
 当前发布状态：
 
@@ -14,12 +14,13 @@
 ## 当前生产架构
 
 - 一个 SQLite Task Authority（Schema v14）、一个 Lifecycle Manager、一条 Worker → 官方 Host 生产链。
-- Windows x64 生产 Worker 默认使用 `OfficialHostAdapter`。Preview.6 固定 ZCode 3.18.2，并增加只读 Start Plan 认证投影。固定官方 Host module 调用 `ZCodeAgentProcessManager`，后者启动官方签名 Windows helper 与 AppServer；Bridge 不复制 AgentRuntime、Prompt、Tools 或 Provider。Linux/macOS direct Adapter 只保留 CI/合成覆盖，其他平台 fail closed（ADR-035）。
-- 旧 JSON TaskStore/Manager/Worker、CLI Adapter 和 GitWorktreeProvider 已从 Preview 生产执行链退役；旧 JSON 文件不由 Bridge 读取、导入或删除。
+- Windows x64 生产 Worker 使用 `OfficialHostAdapter`。Preview.6 固定 ZCode 3.18.2，并由固定 Official Host 提供只读 Start Plan 认证投影。固定官方 Host module 调用 `ZCodeAgentProcessManager`，后者启动官方签名 Windows helper 与 AppServer；Bridge 不复制 AgentRuntime、Prompt、Tools 或 Provider。Linux、macOS 与 Windows 非 x64 在 Adapter 构造前以 `unsupported_worker_platform` fail closed；direct Adapter 只保留隔离测试注入。
+- 旧 JSON TaskStore/Manager/Worker、CLI Adapter 和 GitWorktreeProvider 已从 Preview 生产执行链退役；ADR-038 进一步删除旧 JSON 导入 Writer、迁移 Result/Event Reader 与不完整迁移收据专用执行方法。旧 JSON 文件不由 Bridge 读取、导入或删除，旧迁移 Task 不再作为当前查询对象。
+- Project Ledger、固定人类 Markdown 报告、每任务 Codex Rollout Token 采集和 Desktop task-index 私有写镜像已退役。用户已有 `.agent-ledger` 文件不由 Bridge 修改或删除；SQLite Task Authority 保持不变。
 - Result、进程退出、Cleanup 与 Release 是不同事实。官方 close resolved 不能单独授权 Release；exact Worker identity、recorded-tree scan、resource facts、Cleanup Digest 和现有 CAS 仍然必需。
 - Attention/Thin Waiter 读取同一 SQLite Authority；`zcode_doctor` 也绑定该 Authority。
 - 生产 Lifecycle Gate 在 bootstrap lock 内自动升级已有 v13 Authority 到 v14。离线副本升级工具继续保留；直接 Store 打开 v13 仍要求显式离线升级。
-- R7 在同一 v14 Authority 内增加 `runtime_task_events`。Worker 只通过一次性 fd14 提交 Runtime observation；Manager 从持久 Task/Attempt/Generation/Claim 派生绑定，SQLite 负责 sequence 幂等、stale-Attempt 拒绝和统一 public cursor。`zcode_events`、`zcode_feedback` 与 Result 共用这些事实，但 Lifecycle Event 与 Runtime Event 仍分开。
+- R7 在同一 v14 Authority 内使用 `runtime_task_events`。Worker 只通过一次性 fd14 提交 Runtime observation；Manager 从持久 Task/Attempt/Generation/Claim 派生绑定，SQLite 负责 sequence 幂等、stale-Attempt 拒绝和统一 public cursor。`zcode_events(view="summary")` 可合并相邻安全模型文本，`zcode_feedback` 只提供机器投影，缓存 Usage 与 Result 共用同一持久事实；Lifecycle Event 与 Runtime Event 仍分开。
 
 Preview.6 固定 ZCode `3.18.2`、commit `fec975905a2abd4c07e35c40d51fa097a2258ec9`、tree `5e90fec80706b8381f94e4eef48cf821b9868916` 和 AppServer `0.17.1`。制品只在 Windows x64、Node `24.16.0` 上完成构建、签名、加载与本地 clean-install 验证；其他 Node 24 patch level 和跨机器复现仍是 `NOT_VERIFIED`。已发布 Preview.5 的 3.18.0 输入作为历史回滚基线保留。
 
@@ -55,7 +56,7 @@ Preview.3 的 Start Plan 历史证据覆盖 Windows、官方 AppServer `0.17.1`�
 | 官方 Start Plan 认证复用 | `PASS — PREVIEW.6` | v1、v2:env、v2:os 只读字节不变，BigModel/linked Z.AI/`zai_cn`、冷进程、Billing 单 verdict 与 Lease 合成测试通过；真实 Start Plan 核心功能路径通过；真实 OAuth refresh 未单独执行 |
 | Desktop 3.18.0 / 3.18.1 / 3.18.2 兼容矩阵 | `NOT_VERIFIED / 3.18.2 PARTIAL` | 合成版本上下文覆盖三个版本；本机仅观察到 Desktop `3.18.2.10443`，3.18.0/3.18.1 未安装，不能由源码或合成用例推断实机 PASS |
 | 一般 Desktop Main 独立性 | `NOT_RUN` | 合成路径不证明完整资源与身份闭包 |
-| 当前认证候选回归 | `PASS — CANDIDATE` | `test:affected` 选择 `FULL_SUITE`：972 项，970 pass、0 fail、2 skip；只覆盖 Windows x64、Node 24.16.0 |
+| Preview.6 Post-Audit 完整回归 | `PASS — CANDIDATE` | Windows 完整回归 904 项：902 pass、0 fail、2 skip；`test:clean-entrypoints` 4/4，typecheck、build、plugin validation、生成物 Freshness 与 `git diff --check` 通过。只覆盖 Windows x64、Node 24.16.0 |
 | Official Host 启动版本上下文 | `PASS — CANDIDATE` | 有效 Desktop metadata 优先；独立 Host 使用校验后的 `3.18.2` 产品版本且不伪造 Build ID；模型请求仍使用 `--surface desktop`；受控 A/B 两边 `main_turn` 均获真实响应，A/B task contract 因测试 Prompt 保持 `FAIL`，后续正常 Prompt 核心路径通过 |
 | Windows runtime-host helper | `PASS — OFFICIAL_SIGNED_3.18.2` | 从本机 ZCode Desktop `3.18.2.10443` 复制 `zcode-runtime-host.exe`：179,608 bytes、SHA-256 `C2C8FF5FF28CBDDC4F177C094AA67C322830889612251BD173BAAABC89379AB4`、PE `0x8664`、Authenticode Valid、签名主体北京智谱华章科技股份有限公司；现有 Official ProcessManager smoke 通过。Fresh Rebuild 不再是门槛；安装器 helper/fixture 不进入 Bridge BOM |
 | 当前认证候选 CI | `PASS` | Draft PR #94 的 [run 43599440845](https://github.com/Sandyzzx/codex-zcode-bridge/actions/runs/43599440845) 在 Ubuntu/Windows `Verify` 与 SQLite resource matrix 四项全部通过；不等同 Preview.6 发布验收 |
@@ -66,7 +67,7 @@ Preview.3 的 Start Plan 历史证据覆盖 Windows、官方 AppServer `0.17.1`�
 
 真实 Start Plan 核心功能路径已经通过，但历史完整 E2E 仍因 Workspace 边界失败。其他 Start Plan 模型、CAPTCHA 自动处理、unusual-activity 处理、真实 OAuth refresh/账户轮换和跨平台生产认证没有被单一路径证明。Linux/macOS 仅有其他 Bridge 路径的合成或 CI 历史覆盖；固定官方 Host 制品在非 Windows x64 上 fail closed。
 
-固定制品构建成功、same-source-tree repeatability 与 loopback Mock 通过不能升级为产品性能或完整运行等价。性能比较只有 3 个顺序样本，路径语义不同，产品总体性能为 `UNKNOWN`。`@napi-rs/keyring` 的 6 个文件已通过 clean-checkout 打包闭包验证；完整动态资源与逐项再分发许可审查仍不能据此标为 `PASS`。
+旧 3.18.0 Runtime 目录已从整改候选删除，只有当前固定 3.18.2 集合与官方签名 Helper 进入新制品；Preview.5 的回滚继续使用其历史发布包。固定制品构建成功、same-source-tree repeatability 与 loopback Mock 通过不能升级为产品性能或完整运行等价。产品总体 Provider/缓存性能仍为 `UNKNOWN`。`@napi-rs/keyring` 的 6 个文件已通过 clean-checkout 打包闭包验证；完整动态资源与逐项再分发许可审查仍不能据此标为 `PASS`。
 
 `npm audit --omit=dev` 仍报告 `@modelcontextprotocol/server@2.1.0` 与 `zod@4.6.5` 的既有 high advisories。依赖树与 `origin/preview` 相同，本候选没有引入或修复这些 advisory；它们必须由独立的安全发布流程处理。
 

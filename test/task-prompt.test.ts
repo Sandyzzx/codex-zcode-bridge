@@ -1,7 +1,7 @@
 // Prompt builder tests: required sections, output contract, bounds.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildContinuePrompt, buildTaskPrompt } from "../src/prompts/task-prompt.js";
+import { buildContinuePrompt, buildTaskPrompt, MAX_PROMPT_CHARS, TaskPromptCapacityError } from "../src/prompts/task-prompt.js";
 import { makeTask } from "./helpers.js";
 import { parseAgentReport } from "../src/adapters/agent-report.js";
 import type { TaskResult } from "../src/interfaces.js";
@@ -67,10 +67,29 @@ test("an explicitly selected ZCode model is recorded in the bounded prompt", () 
   assert.match(prompt, /REQUESTED ZCODE MODEL: provider-1\/model-x \(reasoning level: high\)/);
 });
 
-test("oversized context is bounded with a truncation marker", () => {
-  const prompt = buildTaskPrompt(makeTask({ context: "c".repeat(100_000) }));
-  assert.ok(prompt.length < 20_000);
-  assert.match(prompt, /\[truncated\]/);
+test("accepted task context is preserved without a hidden character cap", () => {
+  const context = `普通上下文 ${"界".repeat(2_500)} Unicode e\u0301 emoji 😀`;
+  const prompt = buildTaskPrompt(makeTask({ context }));
+  assert.ok(prompt.includes(context));
+  assert.ok(Buffer.byteLength(prompt, "utf8") > Buffer.byteLength("界".repeat(2_000), "utf8"));
+});
+
+test("task context boundary is enforced by the total prompt capacity", () => {
+  const task = makeTask();
+  const oneCharacterPromptLength = buildTaskPrompt({ ...task, context: "x" }).length;
+  const context = "x".repeat(MAX_PROMPT_CHARS - oneCharacterPromptLength + 1);
+  assert.equal(buildTaskPrompt({ ...task, context }).length, MAX_PROMPT_CHARS);
+  assert.throws(
+    () => buildTaskPrompt({ ...task, context: `${context}x` }),
+    (error: unknown) => error instanceof TaskPromptCapacityError
+      && error.code === "task_prompt_exceeds_capacity"
+      && error.maxChars === MAX_PROMPT_CHARS,
+  );
+});
+
+test("over-capacity Chinese and Unicode context fails instead of truncating", () => {
+  const context = `中文任务约束 😀 ${"界".repeat(MAX_PROMPT_CHARS)}`;
+  assert.throws(() => buildTaskPrompt(makeTask({ context })), TaskPromptCapacityError);
 });
 
 test("continue prompt carries feedback, additional requirements, and prior result", () => {

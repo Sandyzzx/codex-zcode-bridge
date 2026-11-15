@@ -218,9 +218,19 @@ function validUsage(value) {
   const keys = Object.keys(value);
   if (!keys.length) return false;
   for (const key of keys) {
-    if (!['inputTokens', 'outputTokens', 'totalTokens', 'cachedInputTokens',
-      'reasoningTokens', 'input_tokens', 'output_tokens', 'total_tokens',
-      'cached_input_tokens', 'reasoning_tokens'].includes(key)) return false;
+    if (!USAGE_NUMERIC_KEYS.includes(key)
+      && !['source', 'usage_source', 'scope', 'observed_at', 'finality'].includes(key)
+      && key !== 'conflicts') return false;
+    if (key === 'conflicts') {
+      if (!Array.isArray(value[key]) || value[key].length > 32
+        || value[key].some((item) => typeof item !== 'string'
+          || !/^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/u.test(item))) return false;
+      continue;
+    }
+    if (['source', 'usage_source', 'scope', 'observed_at', 'finality'].includes(key)) {
+      if (typeof value[key] !== 'string' || value[key].length > 128) return false;
+      continue;
+    }
     const item = value[key];
     if (typeof item !== 'number' || !Number.isFinite(item)
       || !Number.isSafeInteger(item) || item < 0) return false;
@@ -251,16 +261,31 @@ function sanitizeDetails(type, value) {
 function sanitizeUsage(value) {
   if (!value || Object.getPrototypeOf(value) !== Object.prototype) return undefined;
   const usage = {};
-  for (const key of ['inputTokens', 'outputTokens', 'totalTokens', 'cachedInputTokens',
-    'reasoningTokens', 'input_tokens', 'output_tokens', 'total_tokens',
-    'cached_input_tokens', 'reasoning_tokens']) {
+  for (const key of USAGE_NUMERIC_KEYS) {
     const item = value[key];
     if (item === undefined) continue;
     if (typeof item !== 'number' || !Number.isFinite(item) || !Number.isSafeInteger(item) || item < 0) continue;
     usage[key] = item;
   }
+  for (const key of ['source', 'usage_source', 'scope', 'observed_at', 'finality']) {
+    const item = value[key];
+    if (typeof item === 'string' && item.length <= 128) usage[key] = item;
+  }
+  if (Array.isArray(value.conflicts)) {
+    const conflicts = value.conflicts.filter((item) => typeof item === 'string'
+      && /^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/u.test(item)).slice(0, 32);
+    if (conflicts.length) usage.conflicts = conflicts;
+  }
   return Object.keys(usage).length ? usage : undefined;
 }
+
+const USAGE_NUMERIC_KEYS = [
+  'inputTokens', 'outputTokens', 'totalTokens', 'cachedInputTokens',
+  'cacheReadTokens', 'cachedWriteInputTokens', 'cacheWriteInputTokens',
+  'cacheWriteTokens', 'reasoningTokens', 'input_tokens', 'output_tokens',
+  'total_tokens', 'cached_input_tokens', 'cache_read_tokens',
+  'cached_write_input_tokens', 'cache_write_input_tokens', 'cache_write_tokens',
+];
 
 function boundedText(value, maximumBytes, { allowNewlines = false } = {}) {
   if (typeof value !== 'string') return null;

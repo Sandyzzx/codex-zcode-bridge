@@ -268,7 +268,10 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       const page = this.#driver.readTaskEvents(input.task_id, { afterCursor: cursor, limit }) as {
         events: readonly Record<string, unknown>[]; nextCursor: number; hasMore: boolean;
       };
-      let events = page.events.map((value) => {
+      const visiblePage = input.view === "summary"
+        ? mergeAdjacentModelOutputRows(page.events, input.max_bytes)
+        : { rows: page.events, omittedEvents: 0, omittedEventsByRow: page.events.map(() => 0) };
+      const projectedEvents = visiblePage.rows.map((value) => {
         const event = toProgressEvent(value);
         if (event.type !== "interaction_requested" || !event.details || typeof event.details.request_id !== "string") return event;
         const persisted = this.#driver.readInteractionRequest(input.task_id, event.details.request_id);
@@ -276,24 +279,11 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
         const request = asRecord(persisted.request);
         return { ...event, details: { ...event.details, method: request.method, params: request.params } };
       });
-      let nextCursor = page.nextCursor;
-      let scanIncomplete = false;
-      if (input.max_bytes !== undefined) {
-        let bytes = 0;
-        let kept = 0;
-        for (const event of events) {
-          const size = Buffer.byteLength(canonicalJson(event), "utf8");
-          if (kept > 0 && bytes + size > input.max_bytes) break;
-          if (kept === 0 && size > input.max_bytes) { scanIncomplete = true; break; }
-          bytes += size;
-          kept += 1;
-        }
-        if (kept < events.length) {
-          events = events.slice(0, kept);
-          nextCursor = events.at(-1)?.seq ?? cursor;
-          scanIncomplete = true;
-        }
-      }
+      const bounded = applyEventByteBudget(projectedEvents, page.nextCursor, input.max_bytes, cursor);
+      const { events, nextCursor, scanIncomplete } = bounded;
+      const omittedEvents = visiblePage.omittedEventsByRow
+        .slice(0, events.length)
+        .reduce((total, count) => total + count, 0);
       const status = taskStatus(asRecord(snapshot.projection).status);
       if (events.length || isTerminal(status) || Date.now() >= deadline) {
         return {
@@ -302,6 +292,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
           events,
           next_seq: nextCursor,
           has_more: page.hasMore || scanIncomplete,
+          ...(omittedEvents > 0 ? { omitted_events: omittedEvents } : {}),
           ...(scanIncomplete ? { scan_incomplete: true, scan_cursor: encodeCursor(input.task_id, nextCursor) } : {}),
         };
       }
@@ -1083,6 +1074,96 @@ function toProgressEvent(value: Record<string, unknown>): TaskProgressEvent {
       : `SQLite lifecycle: ${string(value.event_type, "event_type_missing")}`,
     ...(details ? { details } : {}),
   };
+}
+
+/** Merge only adjacent, sanitized model-text rows from the same Operation and
+ * Attempt. Every other row is a boundary; page and raw cursor semantics remain
+ * owned by the Store. */
+export function mergeAdjacentModelOutputRows(
+  rows: readonly Record<string, unknown>[],
+  maxBytes?: number,
+): {
+  readonly rows: readonly Record<string, unknown>[];
+  readonly omittedEvents: number;
+  readonly omittedEventsByRow: readonly number[];
+} {
+  const merged: Record<string, unknown>[] = [];
+  const omittedEventsByRow: number[] = [];
+  let omittedEvents = 0;
+  for (const row of rows) {
+    const safeText = row.event_type === "model_output"
+      && typeof row.operation_id === "string"
+      && Number.isSafeInteger(row.operation_attempt)
+      && typeof row.summary === "string"
+      && row.summary.length > 0
+      && emptyEvidence(row.evidence_json);
+    const previous = merged.at(-1);
+    const previousText = previous?.event_type === "model_output"
+      && previous.operation_id === row.operation_id
+      && previous.operation_attempt === row.operation_attempt
+      && emptyEvidence(previous.evidence_json);
+    const candidate = safeText && previous && previousText
+      ? {
+          ...previous,
+          summary: `${String(previous.summary)}${row.summary}`,
+          cursor: row.cursor,
+          sequence: row.sequence,
+          at: row.at,
+        }
+      : null;
+    const mergeFits = candidate !== null
+      && (maxBytes === undefined
+        || Buffer.byteLength(canonicalJson(toProgressEvent(candidate)), "utf8") <= maxBytes);
+    if (candidate && mergeFits) {
+      merged[merged.length - 1] = candidate;
+      omittedEventsByRow[omittedEventsByRow.length - 1] = Number(omittedEventsByRow.at(-1)) + 1;
+      omittedEvents += 1;
+    } else {
+      merged.push({ ...row });
+      omittedEventsByRow.push(0);
+    }
+  }
+  return { rows: merged, omittedEvents, omittedEventsByRow };
+}
+
+export function applyEventByteBudget(
+  events: readonly TaskProgressEvent[],
+  pageNextCursor: number,
+  maxBytes: number | undefined,
+  previousCursor = 0,
+): { events: TaskProgressEvent[]; nextCursor: number; scanIncomplete: boolean } {
+  if (maxBytes === undefined) {
+    return { events: [...events], nextCursor: pageNextCursor, scanIncomplete: false };
+  }
+  let bytes = 0;
+  let kept = 0;
+  for (const event of events) {
+    const size = Buffer.byteLength(canonicalJson(event), "utf8");
+    if (kept > 0 && bytes + size > maxBytes) break;
+    if (kept === 0 && size > maxBytes) return { events: [], nextCursor: previousCursor, scanIncomplete: true };
+    bytes += size;
+    kept += 1;
+  }
+  if (kept === events.length) {
+    return { events: [...events], nextCursor: pageNextCursor, scanIncomplete: false };
+  }
+  const visible = events.slice(0, kept);
+  return {
+    events: visible,
+    nextCursor: visible.at(-1)?.seq ?? previousCursor,
+    scanIncomplete: true,
+  };
+}
+
+function emptyEvidence(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+      && Object.keys(parsed as Record<string, unknown>).length === 0;
+  } catch {
+    return false;
+  }
 }
 
 function decodeCursor(value: string, taskId: string): number {

@@ -5,6 +5,7 @@
 > Date: 2026-10-30（2026-11-01、2026-11-02 修订）
 > Version: 3
 > Scope: Task Authority only；Settings 与 Ledger 保持各自既有权威边界
+> Preview.6 applicability: SQLite-only authority and byte-preservation rules remain active. ADR-038 retires the remaining JSON import/read APIs; v14 historical tables stay present and validated, but migrated JSON Tasks are no longer queryable business objects. The Ledger exception is retired.
 
 ## Version History
 

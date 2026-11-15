@@ -4,6 +4,7 @@ import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { selectCiImpact } from "../scripts/ci-select-impact.mjs";
 import { selectAffectedTests } from "../scripts/test-impact-selector.mjs";
 import { automaticTestEntries, compiledTestPath } from "../scripts/lib/test-files.mjs";
 
@@ -171,4 +172,86 @@ test("manifest covers all executable sources and full selection matches the actu
     assert.notEqual(rejected.status, 0, file);
     assert.match(rejected.stderr, /Not an automatic test/u);
   }
+});
+
+test("CI impact gate shadow-compares targeted and full selections with the executable manifest", () => {
+  const docs = selectCiImpact({ files: ["docs/report.md"], map });
+  assert.equal(docs.affected_mode, "NO_TESTS_APPLICABLE");
+  assert.equal(docs.integration_required, false);
+  assert.equal(docs.full_required, false);
+
+  const worker = selectCiImpact({ files: ["src/worker/worker-main.ts"], map });
+  assert.equal(worker.affected_mode, "TARGETED");
+  assert.equal(worker.integration_required, true);
+  assert.equal(worker.full_required, false);
+  assert.ok(worker.selected_test_files.includes("test/spawn-worker-stderr.test.ts"));
+  assert.ok(worker.selected_test_files.includes("test/sqlite-candidate/wp6b-wiring/composition.test.ts"));
+
+  const full = selectCiImpact({ files: ["package.json"], map });
+  assert.equal(full.affected_mode, "FULL_SUITE");
+  assert.equal(full.force_full, false);
+  assert.equal(full.full_required, true);
+  assert.equal(full.integration_required, true);
+
+  const forced = selectCiImpact({ files: [], map, forceFull: true });
+  assert.equal(forced.force_full, true);
+  assert.equal(forced.full_required, true);
+
+  const forcedRunner = selectAffectedTests({ changedFiles: [], map, forceFull: true });
+  assert.equal(forcedRunner.mode, "FULL_SUITE");
+  assert.deepEqual(forcedRunner.full_suite_reasons, ["forced-full"]);
+});
+
+test("CI impact CLI fails safe for dispatch, initial-push and invalid base revisions", () => {
+  const validBase = spawnSync(
+    process.execPath,
+    ["scripts/ci-select-impact.mjs", "--base", "HEAD", "--head", "HEAD"],
+    { encoding: "utf8" },
+  );
+  assert.equal(validBase.status, 0, validBase.stderr);
+  assert.equal(JSON.parse(validBase.stdout).force_full, false);
+
+  for (const args of [
+    ["--head", "HEAD", "--force-full"],
+    ["--base", "0".repeat(40), "--head", "HEAD"],
+  ]) {
+    const full = spawnSync(
+      process.execPath,
+      ["scripts/ci-select-impact.mjs", ...args],
+      { encoding: "utf8" },
+    );
+    assert.equal(full.status, 0, full.stderr);
+    assert.equal(JSON.parse(full.stdout).force_full, true);
+    assert.equal(JSON.parse(full.stdout).full_required, true);
+  }
+
+  const invalid = spawnSync(
+    process.execPath,
+    ["scripts/ci-select-impact.mjs", "--base", "not-a-revision", "--head", "HEAD"],
+    { encoding: "utf8" },
+  );
+  assert.notEqual(invalid.status, 0, "an invalid non-zero base must fail rather than skip validation");
+  assert.match(invalid.stderr, /git diff .* failed/u);
+});
+
+test("FULL-impact Fast gate delegates the full regression to Release", () => {
+  const workflow = readFileSync(path.resolve(".github/workflows/ci.yml"), "utf8");
+  assert.match(
+    workflow,
+    /Fast selection \(FULL delegates regression to Release\)[\s\S]*?args\+=\(--force-full --t0-only\)[\s\S]*?npm run test:affected/u,
+    "the Fast gate must request only T0 when impact policy requires the full suite",
+  );
+  assert.match(workflow, /BASE_SHA: \$\{\{ github\.event\.pull_request\.base\.sha \|\| github\.event\.before \}\}/u);
+  assert.match(workflow, /A non-full Fast gate requires a valid base SHA/u);
+  assert.doesNotMatch(
+    workflow,
+    /run:\s+npm run test:affected -- --base "\$\{\{ github\.event\.pull_request\.base\.sha \|\| github\.event\.before \}\}"/u,
+    "CI must never pass an empty workflow expression directly to --base",
+  );
+  assert.doesNotMatch(workflow, /npm run test:full/u);
+  assert.equal(
+    [...workflow.matchAll(/^\s*-\s+run:\s+npm test\s*$/gmu)].length,
+    1,
+    "the complete npm test run belongs to the Release gate",
+  );
 });

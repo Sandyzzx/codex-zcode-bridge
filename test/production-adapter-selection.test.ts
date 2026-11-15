@@ -6,7 +6,12 @@ test("production adapter selection follows the frozen platform matrix", () => {
   assert.equal(selectProductionAdapter("win32", "x64"), "official_host");
   for (const platform of ["linux", "darwin"] as const) {
     for (const architecture of ["x64", "arm64"]) {
-      assert.equal(selectProductionAdapter(platform, architecture), "direct_app_server");
+      assert.throws(
+        () => selectProductionAdapter(platform, architecture),
+        (error: unknown) => error instanceof Error
+          && "code" in error
+          && error.code === "unsupported_worker_platform",
+      );
     }
   }
   for (const [platform, architecture] of [
@@ -30,7 +35,12 @@ test("environment variables cannot redirect production adapter selection", () =>
     for (const value of ["official_host", "direct_app_server", "test_fake"]) {
       process.env.ZCODE_BRIDGE_ADAPTER = value;
       assert.equal(selectProductionAdapter("win32", "x64"), "official_host");
-      assert.equal(selectProductionAdapter("linux", "x64"), "direct_app_server");
+      assert.throws(
+        () => selectProductionAdapter("linux", "x64"),
+        (error: unknown) => error instanceof Error
+          && "code" in error
+          && error.code === "unsupported_worker_platform",
+      );
     }
   } finally {
     if (previous === undefined) delete process.env.ZCODE_BRIDGE_ADAPTER;

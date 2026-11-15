@@ -48,8 +48,6 @@ import {
 import type { DoctorReport } from "../runtime/doctor.js";
 import { BridgeError } from "../runtime/errors.js";
 import type { ZCodeModelSettings } from "../runtime/model-settings.js";
-import { registerLedgerTools } from "../ledger/mcp.js";
-import { renderTaskFeedback } from "../feedback/renderer.js";
 
 export const SERVER_NAME = "codex-zcode-bridge";
 export const SERVER_VERSION = "2.0.0-preview.6"; // x-release-please-version
@@ -60,10 +58,6 @@ export interface BridgeServerOptions {
   modelSettings?: Pick<ZCodeModelSettings, "listModels" | "getDefaultModel" | "setDefaultModel" | "clearDefaultModel">;
   serverInfo?: { name: string; version: string };
   instructions?: string;
-  enableExperiments?: boolean;
-  /** Opt-in project task ledger (C1-C3). Absent = disabled: the frozen core
-   * tools behave exactly as before and no ledger data is ever created. */
-  ledger?: import("../ledger/mcp.js").LedgerToolOptions;
 }
 
 const EXECUTION_NOT_VERDICT =
@@ -85,8 +79,21 @@ function errorResult(code: string, message: string): CallToolResult {
 }
 
 function feedbackResult(snapshot: TaskFeedbackSnapshotV01): CallToolResult {
+  const text = JSON.stringify({
+    task_id: snapshot.task_id,
+    attempt: snapshot.attempt,
+    status: snapshot.status,
+    activity: snapshot.activity,
+    interaction: snapshot.interaction,
+    result: snapshot.result ? {
+      summary: snapshot.result.summary,
+      files_changed: snapshot.result.files_changed.length,
+      tests: snapshot.result.tests.length,
+      issues: snapshot.result.issues.length,
+    } : null,
+  });
   return {
-    content: [{ type: "text", text: renderTaskFeedback(snapshot) }],
+    content: [{ type: "text", text }],
     structuredContent: snapshot as unknown as Record<string, unknown>,
   };
 }
@@ -113,7 +120,7 @@ export function createBridgeServer(options: BridgeServerOptions): McpServer {
     "zcode_doctor",
     {
       title: "Check ZCode Bridge setup",
-      description: "Run read-only checks for Bridge prerequisites, ZCode runtime/provider configuration, execution mode, task storage, and Desktop task-index availability. It does not start a ZCode session. App-server model availability and real permission approval are reported as unverified until a task runs.",
+      description: "Run read-only checks for Bridge prerequisites, ZCode runtime/provider configuration, execution mode, and task storage. It does not start a ZCode session. App-server model availability and real permission approval are reported as unverified until a task runs.",
       inputSchema: {},
       outputSchema: doctorReportSchema,
     },
@@ -281,52 +288,6 @@ export function createBridgeServer(options: BridgeServerOptions): McpServer {
       outputSchema: taskStatusRecordSchema,
     },
     async (args: { task_id: string }) => runTool(() => manager.cancelTask(args.task_id)),
-  );
-
-  // Opt-in project task ledger tools (C1-C3); never registered by default.
-  if (options.ledger) {
-    registerLedgerTools(server, options.ledger);
-  }
-
-  // Temporary experiment tool: verify whether the calling host surfaces MCP progress notifications.
-  if (options.enableExperiments) server.registerTool(
-    "zcode_progress_probe",
-    {
-      title: "[Experiment] Check MCP progress display",
-      description: "Temporary read-only experiment. Sends three MCP progress notifications over three seconds to test whether the calling host displays server progress while this tool runs. Does not start or modify a ZCode task.",
-    },
-    async (ctx) => {
-      const progressToken = ctx.mcpReq._meta?.progressToken;
-      let notificationsSent = 0;
-
-      if (progressToken !== undefined) {
-        for (let progress = 1; progress <= 3; progress += 1) {
-          await new Promise((resolve) => setTimeout(resolve, 1_000));
-          await ctx.mcpReq.notify({
-            method: "notifications/progress",
-            params: {
-              progressToken,
-              progress,
-              total: 3,
-              message: `Experiment progress ${progress}/3`,
-            },
-          });
-          notificationsSent += 1;
-        }
-      }
-
-      return {
-        content: [{
-          type: "text",
-          text: JSON.stringify({
-            experiment: "mcp-progress-display",
-            progress_token_received: progressToken !== undefined,
-            notifications_sent: notificationsSent,
-            note: "The tool result confirms server delivery only; check whether the calling host displayed progress while it was running.",
-          }, null, 2),
-        }],
-      };
-    },
   );
 
   return server;

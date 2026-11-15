@@ -21,6 +21,8 @@
         "plugins/codex-zcode-bridge/worker/**",
         "scripts/build-core.mjs",
         "scripts/build-plugin.mjs",
+        "scripts/check-generated-artifacts.mjs",
+        "scripts/lib/generated-artifacts.mjs",
         "scripts/validate-plugin.mjs"
       ]
     },
@@ -32,6 +34,8 @@
         "scripts/test-clean-entrypoints.mjs",
         "scripts/test-impact-selector.mjs",
         "scripts/lib/test-files.mjs",
+        "scripts/lib/changed-files.mjs",
+        "scripts/ci-select-impact.mjs",
         "scripts/run-affected-tests.mjs",
         "scripts/run-stress-tests.mjs",
         "test/test-impact-map.json",
@@ -39,8 +43,7 @@
         "test/runtime-fixture.ts",
         "test/runtime/bootstrap-lock-worker.mjs",
         "test/sqlite-candidate/wp6b2b1/lifecycle-process.mjs",
-        "test/sqlite-candidate/wp6b2b1/worker-process.mjs",
-        "scripts/select-sqlite-stress.mjs"
+        "test/sqlite-candidate/wp6b2b1/worker-process.mjs"
       ]
     },
     {
@@ -191,28 +194,21 @@
     },
     {
       "id": "mcp-host",
-      "description": "MCP server, stdio entry, task index synchronization, and Host-facing schemas.",
+      "description": "MCP server, stdio entry, and Host-facing schemas.",
       "paths": [
         "src/mcp/main.ts",
         "src/mcp/server.ts",
         "src/mcp/schemas.ts",
-        "src/adapters/task-index-sync.ts",
         "src/host/stdio.ts"
       ]
     },
     {
-      "id": "feedback-and-token-observability",
-      "description": "Task feedback rendering, Codex master/rollout token sources, and thread token aggregation.",
+      "id": "task-feedback",
+      "description": "Structured machine-readable Task feedback projection.",
       "paths": [
-        "src/feedback/**",
-        "src/observability/**"
-      ]
-    },
-    {
-      "id": "ledger",
-      "description": "Ledger core, Bridge integration, and MCP projection.",
-      "paths": [
-        "src/ledger/**"
+        "src/feedback/task-feedback.ts",
+        "src/feedback/task-feedback-projection.mjs",
+        "src/feedback/task-feedback-projection.d.mts"
       ]
     },
     {
@@ -288,6 +284,27 @@
       ]
     },
     {
+      "file": "test/usage-contract-chain.test.ts",
+      "type": "Integration",
+      "gate": "T2",
+      "domains": [
+        "interface-contract",
+        "sqlite-persistence",
+        "appserver-adapter",
+        "mcp-host"
+      ]
+    },
+    {
+      "file": "test/events-summary.test.ts",
+      "type": "Unit",
+      "gate": "T1",
+      "domains": [
+        "manager-lifecycle",
+        "interface-contract",
+        "mcp-host"
+      ]
+    },
+    {
       "file": "test/batch2-evidence.test.ts",
       "type": "Integration",
       "gate": "T2",
@@ -295,7 +312,7 @@
         "manager-lifecycle",
         "worker-launch",
         "workspace-provider",
-        "feedback-and-token-observability"
+        "task-feedback"
       ]
     },
     {
@@ -349,30 +366,6 @@
       ]
     },
     {
-      "file": "test/codex-master-token-usage.test.ts",
-      "type": "Unit",
-      "gate": "T1",
-      "domains": [
-        "feedback-and-token-observability"
-      ]
-    },
-    {
-      "file": "test/codex-rollout-token-source.test.ts",
-      "type": "Unit",
-      "gate": "T1",
-      "domains": [
-        "feedback-and-token-observability"
-      ]
-    },
-    {
-      "file": "test/codex-rollout-token-tail.test.ts",
-      "type": "Unit",
-      "gate": "T1",
-      "domains": [
-        "feedback-and-token-observability"
-      ]
-    },
-    {
       "file": "test/desktop-host-launch.test.ts",
       "type": "Integration",
       "gate": "T2",
@@ -400,15 +393,7 @@
       ]
     },
     {
-      "file": "test/feedback-template.test.ts",
-      "type": "Unit",
-      "gate": "T1",
-      "domains": [
-        "feedback-and-token-observability"
-      ]
-    },
-    {
-      "file": "test/host-and-index.test.ts",
+      "file": "test/host-contract.test.ts",
       "type": "Integration",
       "gate": "T2",
       "domains": [
@@ -423,33 +408,6 @@
       "gate": "T1",
       "domains": [
         "sqlite-persistence"
-      ]
-    },
-    {
-      "file": "test/ledger-bridge-review.test.ts",
-      "type": "Integration",
-      "gate": "T2",
-      "domains": [
-        "ledger",
-        "manager-lifecycle"
-      ]
-    },
-    {
-      "file": "test/ledger-core.test.ts",
-      "type": "Unit",
-      "gate": "T1",
-      "domains": [
-        "ledger"
-      ]
-    },
-    {
-      "file": "test/ledger-mcp.test.ts",
-      "type": "Integration",
-      "gate": "T2",
-      "domains": [
-        "ledger",
-        "mcp-host",
-        "manager-lifecycle"
       ]
     },
     {
@@ -831,7 +789,7 @@
       "type": "Unit",
       "gate": "T1",
       "domains": [
-        "feedback-and-token-observability",
+        "task-feedback",
         "mcp-host"
       ]
     },
@@ -869,15 +827,15 @@
       ]
     },
     {
-      "file": "test/thread-token-usage.test.ts",
+      "file": "test/validate-plugin-root-pattern.test.ts",
       "type": "Unit",
       "gate": "T1",
       "domains": [
-        "feedback-and-token-observability"
+        "ci-release-contract"
       ]
     },
     {
-      "file": "test/validate-plugin-root-pattern.test.ts",
+      "file": "test/generated-artifacts.test.ts",
       "type": "Unit",
       "gate": "T1",
       "domains": [
@@ -987,7 +945,7 @@
       "gate": "T2",
       "domains": [
         "process-cleanup-and-locks",
-        "feedback-and-token-observability"
+        "task-feedback"
       ]
     },
     {
@@ -996,7 +954,7 @@
       "gate": "T1",
       "domains": [
         "task-prompt-and-report",
-        "feedback-and-token-observability"
+        "task-feedback"
       ]
     },
     {
@@ -1066,6 +1024,8 @@
     "scripts/test-clean-entrypoints.mjs",
     "scripts/test-impact-selector.mjs",
     "scripts/lib/test-files.mjs",
+    "scripts/lib/changed-files.mjs",
+    "scripts/ci-select-impact.mjs",
     "scripts/run-affected-tests.mjs",
     "scripts/run-stress-tests.mjs",
     "test/test-impact-map.json",
@@ -1081,7 +1041,8 @@
     ".github/workflows/**",
     "scripts/build-core.mjs",
     "scripts/build-plugin.mjs",
-    "scripts/validate-plugin.mjs",
-    "scripts/select-sqlite-stress.mjs"
+    "scripts/check-generated-artifacts.mjs",
+    "scripts/lib/generated-artifacts.mjs",
+    "scripts/validate-plugin.mjs"
   ]
 }

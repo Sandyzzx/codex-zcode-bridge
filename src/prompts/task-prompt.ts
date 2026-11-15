@@ -3,9 +3,21 @@
 // JSON AgentReport embedded in the ZCode `response`. Pure functions; no I/O.
 import type { TaskPackage, TaskResult } from "../interfaces.js";
 
-const MAX_PROMPT_CHARS = 60_000;
+export const MAX_PROMPT_CHARS = 60_000;
 const MAX_SECTION_CHARS = 4_000;
-const MAX_CONTEXT_CHARS = 2_000;
+
+export class TaskPromptCapacityError extends Error {
+  readonly code = "task_prompt_exceeds_capacity";
+  readonly actualChars: number;
+  readonly maxChars: number;
+
+  constructor(actualChars: number) {
+    super(`task prompt exceeds ${MAX_PROMPT_CHARS} characters (actual ${actualChars}); shorten the task package without dropping constraints`);
+    this.name = "TaskPromptCapacityError";
+    this.actualChars = actualChars;
+    this.maxChars = MAX_PROMPT_CHARS;
+  }
+}
 
 export interface ContinuePromptInput {
   readonly task: TaskPackage;
@@ -39,7 +51,7 @@ export function buildTaskPrompt(task: TaskPackage): string {
     DECISION_RULE,
   ];
   if (task.context && task.context.trim().length > 0) {
-    sections.push(`CONTEXT\n${bounded(task.context, MAX_CONTEXT_CHARS)}`);
+    sections.push(`CONTEXT\n${task.context}`);
   }
   return joinBoundedPreservingTail([...sections, OUTPUT_CONTRACT], OUTPUT_CONTRACT);
 }
@@ -135,5 +147,5 @@ function joinBoundedPreservingTail(sections: readonly string[], requiredTail: st
   const joined = sections.join("\n\n");
   if (joined.length <= MAX_PROMPT_CHARS) return joined;
   void requiredTail;
-  throw new Error(`task prompt exceeds ${MAX_PROMPT_CHARS} characters; shorten the task package without dropping constraints`);
+  throw new TaskPromptCapacityError(joined.length);
 }
