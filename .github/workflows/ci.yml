@@ -134,7 +134,7 @@ jobs:
   sqlite-stress:
     name: SQLite resource matrix (${{ matrix.os }})
     needs: impact
-    if: needs.impact.outputs.force_full == 'true' || needs.impact.outputs.stress_required == 'true'
+    if: needs.impact.outputs.force_full == 'true' || needs.impact.outputs.full_required == 'true' || needs.impact.outputs.stress_required == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
