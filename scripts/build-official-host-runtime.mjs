@@ -21,6 +21,36 @@ const BUILD_NODE = "24.16.0";
 const HOST_BUNDLER = "0.28.2";
 const SCOPE = "win32-x64-node24.16.0-zcode3.18.2-fec97590";
 const PATCH_ROOT = "upstream/zcode-3.18.2/patches/";
+const RUNTIME_HOST = Object.freeze({
+  path: "zcode-runtime-host.exe",
+  role: "official Authenticode-signed Windows process-ownership helper from ZCode Desktop 3.18.2.10443",
+  bytes: 179608,
+  sha256: "C2C8FF5FF28CBDDC4F177C094AA67C322830889612251BD173BAAABC89379AB4",
+  license: "ZCode project terms; redistribution approved by the repository owner; LICENSE and NOTICE.md included",
+  verification: Object.freeze({
+    architecture: "win32-x64",
+    peMachine: "0x8664",
+    authenticode: "Valid",
+    signerCommonName: "北京智谱华章科技股份有限公司",
+    signerOrganization: "北京智谱华章科技股份有限公司",
+    reportedVersion: "zcode-runtime-host 1",
+    verifiedOn: "2026-11-15",
+  }),
+});
+const RUNTIME_HOST_BUILD = Object.freeze({
+  sourceKind: "OFFICIAL_INSTALLED_DISTRIBUTION",
+  desktopProductVersion: "3.18.2.10443",
+  zcodeVersion: SOURCE_VERSION,
+  zcodeSourceCommit: SOURCE_COMMIT,
+  bytes: RUNTIME_HOST.bytes,
+  sha256: RUNTIME_HOST.sha256,
+  architecture: RUNTIME_HOST.verification.architecture,
+  peMachine: RUNTIME_HOST.verification.peMachine,
+  authenticode: RUNTIME_HOST.verification.authenticode,
+  signerCommonName: RUNTIME_HOST.verification.signerCommonName,
+  signerOrganization: RUNTIME_HOST.verification.signerOrganization,
+  reportedVersion: RUNTIME_HOST.verification.reportedVersion,
+});
 const HOST_SOURCE_FILES = [
   "packages/shared/src/credential-security/contract.ts",
   "packages/shared/src/credential-security/systemCredentialCipher.ts",
@@ -114,6 +144,7 @@ assertEqual(await git(sourceRoot, ["rev-parse", "HEAD^{tree}"]), SOURCE_TREE, "s
 
 const bom = JSON.parse(await readFile(artifactBomPath, "utf8"));
 assertEqual(bom.scope?.zcodeVersion, sourceProductVersion, "BOM product version");
+await validateRuntimeHost(bom);
 const patches = await validateArtifactBomPatches(bom);
 const sourceState = await validateSourceState(sourceRoot, patches);
 const nativeFiles = await installNativeClosure(sourceRoot);
@@ -171,6 +202,7 @@ try {
   const provenance = JSON.parse(await readFile(provenancePath, "utf8"));
   provenance.generatedOn = new Date().toISOString().slice(0, 10);
   provenance.source.trackedSourceModifiedByBuild = false;
+  provenance.source.userDesktopInstallationUsedAsInput = true;
   provenance.source.aggregateDiffSha256 = sourceAggregateDiffSha256;
   provenance.patches = patches.map(({ order, path: patchPath, bytes, sha256: patchSha256 }) => ({
     order,
@@ -185,6 +217,12 @@ try {
       exports: HOST_EXPORTS,
       sourceFiles: HOST_SOURCE_FILES,
     },
+  };
+  provenance.build.runtimeHost = {
+    command: "Adopt the Authenticode-signed zcode-runtime-host.exe from the official ZCode Desktop 3.18.2.10443 distribution",
+    output: RUNTIME_HOST.path,
+    ...RUNTIME_HOST_BUILD,
+    redistribution: "APPROVED_BY_REPOSITORY_OWNER",
   };
   provenance.bom = {
     path: "ARTIFACT_BOM.json",
@@ -231,6 +269,47 @@ function parseArgs(args) {
     }
   }
   return null;
+}
+
+async function validateRuntimeHost(bomValue) {
+  if (bomValue.build?.userDesktopInstallationUsedAsInput !== true
+    || bomValue.build?.runtimeHostCommand
+      !== "Adopt the Authenticode-signed zcode-runtime-host.exe from the official ZCode Desktop 3.18.2.10443 distribution"
+    || JSON.stringify(bomValue.build?.runtimeHostInputs)
+      !== JSON.stringify(["resources/tools/runtime-host/zcode-runtime-host.exe"])
+    || JSON.stringify(bomValue.build?.runtimeHostProvenance) !== JSON.stringify(RUNTIME_HOST_BUILD)
+    || bomValue.toolchain?.runtimeHostToolchain !== "UPSTREAM_SIGNED_RELEASE_BINARY") {
+    throw new Error("ARTIFACT_BOM.json does not record the adopted official signed runtime host");
+  }
+
+  const hostFile = bomValue.files?.find((entry) => entry.path === RUNTIME_HOST.path);
+  if (!hostFile
+    || hostFile.bytes !== RUNTIME_HOST.bytes
+    || hostFile.sha256 !== RUNTIME_HOST.sha256
+    || hostFile.role !== RUNTIME_HOST.role
+    || hostFile.license !== RUNTIME_HOST.license
+    || JSON.stringify(hostFile.verification) !== JSON.stringify(RUNTIME_HOST.verification)) {
+    throw new Error("ARTIFACT_BOM.json contains stale or incomplete runtime-host provenance");
+  }
+
+  const bytes = await readFile(path.join(artifactRoot, RUNTIME_HOST.path));
+  if (bytes.length !== RUNTIME_HOST.bytes || sha256(bytes) !== RUNTIME_HOST.sha256) {
+    throw new Error("zcode-runtime-host.exe failed its pinned byte or SHA-256 validation");
+  }
+  validatePeX64(bytes);
+}
+
+function validatePeX64(bytes) {
+  if (bytes.length < 64 || bytes[0] !== 0x4d || bytes[1] !== 0x5a) {
+    throw new Error("zcode-runtime-host.exe is not a PE executable");
+  }
+  const peOffset = bytes.readInt32LE(0x3c);
+  if (peOffset < 0
+    || peOffset + 6 > bytes.length
+    || bytes.readUInt32LE(peOffset) !== 0x00004550
+    || bytes.readUInt16LE(peOffset + 4) !== 0x8664) {
+    throw new Error("zcode-runtime-host.exe is not a Windows x64 PE executable");
+  }
 }
 
 async function validateArtifactBomPatches(value) {
@@ -381,6 +460,21 @@ function updateBomOutput(bomValue, bytes, hash, nativeEntries, sourceAggregateDi
   bomValue.build.hostModuleCommand = "npm run build:official-host -- --source <fixed-upstream-worktree>";
   bomValue.build.hostModuleInputs = HOST_SOURCE_FILES;
   bomValue.build.sourceAggregateDiffSha256 = sourceAggregateDiffSha256;
+  bomValue.toolchain.runtimeHostToolchain = "UPSTREAM_SIGNED_RELEASE_BINARY";
+  bomValue.build.runtimeHostCommand =
+    "Adopt the Authenticode-signed zcode-runtime-host.exe from the official ZCode Desktop 3.18.2.10443 distribution";
+  bomValue.build.runtimeHostInputs = ["resources/tools/runtime-host/zcode-runtime-host.exe"];
+  bomValue.build.runtimeHostProvenance = { ...RUNTIME_HOST_BUILD };
+  bomValue.build.userDesktopInstallationUsedAsInput = true;
+  const runtimeHostEntry = bomValue.files.find((file) => file.path === RUNTIME_HOST.path);
+  if (!runtimeHostEntry) throw new Error(`ARTIFACT_BOM.json is missing ${RUNTIME_HOST.path}`);
+  Object.assign(runtimeHostEntry, {
+    role: RUNTIME_HOST.role,
+    bytes: RUNTIME_HOST.bytes,
+    sha256: RUNTIME_HOST.sha256,
+    license: RUNTIME_HOST.license,
+    verification: { ...RUNTIME_HOST.verification },
+  });
   for (const nativeEntry of nativeEntries) {
     const existing = bomValue.files.find((file) => file.path === nativeEntry.path);
     if (existing) Object.assign(existing, nativeEntry);

@@ -45,10 +45,7 @@
     "validationPnpm": "11.25.0",
     "appServerBundler": "esbuild 0.25.12",
     "hostModuleBundler": "esbuild 0.28.2",
-    "runtimeHostCompiler": "MSVC 19.44.35229 for x64",
-    "runtimeHostGenerator": "NMake Makefiles",
-    "runtimeHostBuildType": "Release",
-    "windowsSdkCpp": "10.0.26100.4948"
+    "runtimeHostToolchain": "UPSTREAM_SIGNED_RELEASE_BINARY"
   },
   "build": {
     "appServerCommand": "node ../../node_modules/turbo/bin/turbo run build --filter=@zcode/cli... with pnpm 10.33.2 shim",
@@ -73,14 +70,26 @@
       "packages/services/src/oauth/providers/providerAdapter.ts",
       "packages/services/src/telemetry/telemetryCore.ts"
     ],
-    "runtimeHostCommand": "Reuse zcode-runtime-host.exe from win32-x64-node24.16.0-zcode3.18.0-b95ebaff after source-rule comparison",
+    "runtimeHostCommand": "Adopt the Authenticode-signed zcode-runtime-host.exe from the official ZCode Desktop 3.18.2.10443 distribution",
     "runtimeHostInputs": [
-      "scripts/windows-runtime-host/CMakeLists.txt",
-      "scripts/windows-runtime-host/main.cpp"
+      "resources/tools/runtime-host/zcode-runtime-host.exe"
     ],
-    "runtimeHostReuseProof": "main.cpp is byte-identical from 3.18.0 to 3.18.2 and the zcode-runtime-host target rule is unchanged; fresh rebuild was blocked by absent Windows SDK mt.exe",
+    "runtimeHostProvenance": {
+      "sourceKind": "OFFICIAL_INSTALLED_DISTRIBUTION",
+      "desktopProductVersion": "3.18.2.10443",
+      "zcodeVersion": "3.18.2",
+      "zcodeSourceCommit": "fec975905a2abd4c07e35c40d51fa097a2258ec9",
+      "bytes": 179608,
+      "sha256": "C2C8FF5FF28CBDDC4F177C094AA67C322830889612251BD173BAAABC89379AB4",
+      "architecture": "win32-x64",
+      "peMachine": "0x8664",
+      "authenticode": "Valid",
+      "signerCommonName": "北京智谱华章科技股份有限公司",
+      "signerOrganization": "北京智谱华章科技股份有限公司",
+      "reportedVersion": "zcode-runtime-host 1"
+    },
     "orderedPatchApplicationRequired": true,
-    "userDesktopInstallationUsedAsInput": false,
+    "userDesktopInstallationUsedAsInput": true,
     "sourceAggregateDiffSha256": "A3F5B7BD7A653403B8362ADC121323404FB4F334B1CFFA0DF3C3E617F9F09AB2"
   },
   "files": [
@@ -170,10 +179,19 @@
     },
     {
       "path": "zcode-runtime-host.exe",
-      "role": "Windows process-ownership helper reused from the 3.18.0 artifact after verifying main.cpp and the runtime-host target rule are unchanged",
-      "bytes": 167424,
-      "sha256": "04E1794F8325B3C46D4159420CDD04041E9AFC58516E03FC3DC8E78576EEFC24",
-      "license": "ZCode project terms"
+      "role": "official Authenticode-signed Windows process-ownership helper from ZCode Desktop 3.18.2.10443",
+      "bytes": 179608,
+      "sha256": "C2C8FF5FF28CBDDC4F177C094AA67C322830889612251BD173BAAABC89379AB4",
+      "license": "ZCode project terms; redistribution approved by the repository owner; LICENSE and NOTICE.md included",
+      "verification": {
+        "architecture": "win32-x64",
+        "peMachine": "0x8664",
+        "authenticode": "Valid",
+        "signerCommonName": "北京智谱华章科技股份有限公司",
+        "signerOrganization": "北京智谱华章科技股份有限公司",
+        "reportedVersion": "zcode-runtime-host 1",
+        "verifiedOn": "2026-11-15"
+      }
     }
   ],
   "closure": {
@@ -184,13 +202,11 @@
     "appServerSelfContainedForCoveredMockScope": true,
     "nativeDependencyClosure": "WIN32_X64_KEYRING_INCLUDED",
     "resourceClosure": "PARTIAL",
-    "redistributionReview": "PARTIAL",
+    "redistributionReview": "OWNER_APPROVED_APACHE_2_0_NOTICES_INCLUDED",
     "artifactReproducibility": "PARTIAL",
     "knownGaps": [
-      "The fixed runtime-host executable is reused from the source-identical 3.18.0 target because a fresh 3.18.2 helper build was blocked by the absence of the Windows SDK mt.exe component.",
       "AppServer optional external packages and the full ZCode resource graph are outside the certified synthetic scope.",
-      "Cross-machine and empty-cache rebuild reproducibility is not established.",
-      "This BOM is an engineering inventory and is not a legal redistribution opinion."
+      "Cross-machine and empty-cache rebuild reproducibility is not established."
     ]
   }
 }

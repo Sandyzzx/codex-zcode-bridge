@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,6 +9,13 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const pluginRoot = path.join(root, "plugins", "codex-zcode-bridge");
 const EXPECTED_OFFICIAL_HOST_SOURCE_DIFF_SHA256 =
   "A3F5B7BD7A653403B8362ADC121323404FB4F334B1CFFA0DF3C3E617F9F09AB2";
+const EXPECTED_RUNTIME_HOST = Object.freeze({
+  bytes: 179608,
+  sha256: "C2C8FF5FF28CBDDC4F177C094AA67C322830889612251BD173BAAABC89379AB4",
+  peMachine: "0x8664",
+  signerCommonName: "北京智谱华章科技股份有限公司",
+  signerOrganization: "北京智谱华章科技股份有限公司",
+});
 
 async function readJson(filePath, label) {
   try {
@@ -19,6 +27,64 @@ async function readJson(filePath, label) {
 
 async function sha256File(filePath) {
   return createHash("sha256").update(await readFile(filePath)).digest("hex").toUpperCase();
+}
+
+function validatePeX64(bytes, label) {
+  if (bytes.length < 64 || bytes[0] !== 0x4d || bytes[1] !== 0x5a) {
+    throw new Error(`${label} is not a PE executable`);
+  }
+  const peOffset = bytes.readInt32LE(0x3c);
+  if (peOffset < 0
+    || peOffset + 6 > bytes.length
+    || bytes.readUInt32LE(peOffset) !== 0x00004550
+    || bytes.readUInt16LE(peOffset + 4) !== 0x8664) {
+    throw new Error(`${label} is not a Windows x64 PE executable`);
+  }
+}
+
+function verifyWindowsAuthenticode(filePath) {
+  if (process.platform !== "win32") return;
+  const command = [
+    "$signature = Get-AuthenticodeSignature -LiteralPath $env:ZCODE_BRIDGE_RUNTIME_HOST_PATH;",
+    "[pscustomobject]@{",
+    "Status = [string]$signature.Status;",
+    "SubjectUtf8Base64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$signature.SignerCertificate.Subject))",
+    "} | ConvertTo-Json -Compress",
+  ].join(" ");
+  const result = spawnSync(
+    "powershell.exe",
+    ["-NoProfile", "-NonInteractive", "-Command", command],
+    {
+      encoding: "utf8",
+      timeout: 30_000,
+      windowsHide: true,
+      env: {
+        ...process.env,
+        ZCODE_BRIDGE_RUNTIME_HOST_PATH: filePath,
+        PSModulePath: [
+          path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "Modules"),
+          process.env.PSModulePath,
+        ].filter(Boolean).join(path.delimiter),
+      },
+    },
+  );
+  if (result.error || result.status !== 0) {
+    throw new Error(
+      `Official Host runtime-host Authenticode validation could not run: ${result.error?.message ?? result.stderr}`,
+    );
+  }
+  let signature;
+  try {
+    signature = JSON.parse(result.stdout);
+  } catch {
+    throw new Error("Official Host runtime-host Authenticode validation returned invalid JSON");
+  }
+  const subject = Buffer.from(signature.SubjectUtf8Base64 ?? "", "base64").toString("utf8");
+  if (signature.Status !== "Valid"
+    || !subject.includes(`CN=${EXPECTED_RUNTIME_HOST.signerCommonName}`)
+    || !subject.includes(`O=${EXPECTED_RUNTIME_HOST.signerOrganization}`)) {
+    throw new Error("Official Host runtime-host Authenticode signature or signer identity is invalid");
+  }
 }
 
 const pkg = await readJson(path.join(root, "package.json"), "package.json");
@@ -242,6 +308,34 @@ for (const requiredPath of requiredOfficialHostFiles) {
     throw new Error(`Official Host ARTIFACT_BOM.json is missing required shipped file: ${requiredPath}`);
   }
 }
+const runtimeHostEntry = officialHostBom.files.find(
+  (entry) => entry.path === "zcode-runtime-host.exe",
+);
+if (!runtimeHostEntry
+  || runtimeHostEntry.bytes !== EXPECTED_RUNTIME_HOST.bytes
+  || runtimeHostEntry.sha256 !== EXPECTED_RUNTIME_HOST.sha256
+  || runtimeHostEntry.verification?.architecture !== "win32-x64"
+  || runtimeHostEntry.verification?.peMachine !== EXPECTED_RUNTIME_HOST.peMachine
+  || runtimeHostEntry.verification?.authenticode !== "Valid"
+  || runtimeHostEntry.verification?.signerCommonName !== EXPECTED_RUNTIME_HOST.signerCommonName
+  || runtimeHostEntry.verification?.signerOrganization !== EXPECTED_RUNTIME_HOST.signerOrganization
+  || runtimeHostEntry.verification?.reportedVersion !== "zcode-runtime-host 1") {
+  throw new Error("Official Host runtime-host entry is missing its pinned signed-binary provenance");
+}
+if (officialHostBom.build?.userDesktopInstallationUsedAsInput !== true
+  || officialHostBom.build?.runtimeHostProvenance?.sourceKind !== "OFFICIAL_INSTALLED_DISTRIBUTION"
+  || officialHostBom.build?.runtimeHostProvenance?.desktopProductVersion !== "3.18.2.10443"
+  || officialHostBom.build?.runtimeHostProvenance?.zcodeSourceCommit !== officialHostBom.source.commit
+  || officialHostBom.build?.runtimeHostProvenance?.bytes !== EXPECTED_RUNTIME_HOST.bytes
+  || officialHostBom.build?.runtimeHostProvenance?.sha256 !== EXPECTED_RUNTIME_HOST.sha256
+  || officialHostBom.build?.runtimeHostProvenance?.peMachine !== EXPECTED_RUNTIME_HOST.peMachine
+  || officialHostBom.build?.runtimeHostProvenance?.authenticode !== "Valid") {
+  throw new Error("Official Host BUILD_PROVENANCE declaration disagrees with its BOM helper entry");
+}
+const runtimeHostPath = path.join(officialHostRoot, "zcode-runtime-host.exe");
+const runtimeHostBytes = await readFile(runtimeHostPath);
+validatePeX64(runtimeHostBytes, "Official Host zcode-runtime-host.exe");
+verifyWindowsAuthenticode(runtimeHostPath);
 const officialHostProvenance = await readJson(
   path.join(officialHostRoot, "BUILD_PROVENANCE.json"),
   "Official Host BUILD_PROVENANCE.json",
@@ -250,6 +344,7 @@ const officialHostBomBytes = await readFile(officialHostBomPath);
 if (officialHostProvenance.source?.commit !== officialHostBom.source.commit
   || officialHostProvenance.source?.tree !== officialHostBom.source.tree
   || officialHostProvenance.source?.version !== officialHostBom.source.version
+  || officialHostProvenance.source?.userDesktopInstallationUsedAsInput !== true
   || officialHostBom.build?.sourceAggregateDiffSha256 !== EXPECTED_OFFICIAL_HOST_SOURCE_DIFF_SHA256
   || officialHostProvenance.source?.aggregateDiffSha256 !== EXPECTED_OFFICIAL_HOST_SOURCE_DIFF_SHA256
   || officialHostProvenance.bom?.path !== "ARTIFACT_BOM.json"
@@ -257,7 +352,10 @@ if (officialHostProvenance.source?.commit !== officialHostBom.source.commit
   || officialHostProvenance.bom?.sha256 !== createHash("sha256").update(officialHostBomBytes).digest("hex").toUpperCase()
   || officialHostProvenance.output?.sha256 !== officialHostBom.files.find(
     (entry) => entry.path === "official-host-runtime.mjs",
-  )?.sha256) {
+  )?.sha256
+  || officialHostProvenance.build?.runtimeHost?.sha256 !== EXPECTED_RUNTIME_HOST.sha256
+  || officialHostProvenance.build?.runtimeHost?.authenticode !== "Valid"
+  || officialHostProvenance.build?.runtimeHost?.redistribution !== "APPROVED_BY_REPOSITORY_OWNER") {
   throw new Error("Official Host BUILD_PROVENANCE.json disagrees with ARTIFACT_BOM.json");
 }
 const officialHostModuleText = await readFile(path.join(officialHostRoot, "official-host-runtime.mjs"), "utf8");

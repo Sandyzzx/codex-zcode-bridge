@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedOn": "2026-11-14",
+  "generatedOn": "2026-11-15",
   "scope": {
     "platform": "win32",
     "architecture": "x64",
@@ -15,7 +15,7 @@
     "commit": "fec975905a2abd4c07e35c40d51fa097a2258ec9",
     "tree": "5e90fec80706b8381f94e4eef48cf821b9868916",
     "trackedSourceModifiedByBuild": false,
-    "userDesktopInstallationUsedAsInput": false,
+    "userDesktopInstallationUsedAsInput": true,
     "aggregateDiffSha256": "A3F5B7BD7A653403B8362ADC121323404FB4F334B1CFFA0DF3C3E617F9F09AB2"
   },
   "patches": [
@@ -45,10 +45,7 @@
     "validationPnpm": "11.25.0",
     "appServerBundler": "esbuild 0.25.12",
     "hostModuleBundler": "esbuild 0.28.2",
-    "runtimeHostCompiler": "MSVC 19.44.35229 for x64",
-    "runtimeHostGenerator": "NMake Makefiles",
-    "runtimeHostBuildType": "Release",
-    "windowsSdkCpp": "10.0.26100.4948"
+    "runtimeHostToolchain": "UPSTREAM_SIGNED_RELEASE_BINARY"
   },
   "build": {
     "appServer": {
@@ -86,16 +83,28 @@
       }
     },
     "runtimeHost": {
-      "command": "Reuse zcode-runtime-host.exe from win32-x64-node24.16.0-zcode3.18.0-b95ebaff after source-rule comparison",
+      "command": "Adopt the Authenticode-signed zcode-runtime-host.exe from the official ZCode Desktop 3.18.2.10443 distribution",
       "output": "zcode-runtime-host.exe",
-      "reuseProof": "main.cpp is byte-identical from 3.18.0 to 3.18.2 and the zcode-runtime-host target rule is unchanged; fresh rebuild was blocked by absent Windows SDK mt.exe"
+      "sourceKind": "OFFICIAL_INSTALLED_DISTRIBUTION",
+      "sourceProductVersion": "3.18.2.10443",
+      "zcodeVersion": "3.18.2",
+      "zcodeSourceCommit": "fec975905a2abd4c07e35c40d51fa097a2258ec9",
+      "bytes": 179608,
+      "sha256": "C2C8FF5FF28CBDDC4F177C094AA67C322830889612251BD173BAAABC89379AB4",
+      "architecture": "win32-x64",
+      "peMachine": "0x8664",
+      "authenticode": "Valid",
+      "signerCommonName": "北京智谱华章科技股份有限公司",
+      "signerOrganization": "北京智谱华章科技股份有限公司",
+      "reportedVersion": "zcode-runtime-host 1",
+      "redistribution": "APPROVED_BY_REPOSITORY_OWNER"
     },
     "orderedPatchApplicationRequired": true
   },
   "bom": {
     "path": "ARTIFACT_BOM.json",
-    "bytes": 8345,
-    "sha256": "D6A8546D99EC6C20BB8392C0902DEEA20F034B7643A0E283E45BA42E267B0240"
+    "bytes": 8802,
+    "sha256": "F60BA0081BBBBDD4A7D000F51C6EA534E49DAF424944B1E0233969478CD58539"
   },
   "output": {
     "path": "official-host-runtime.mjs",
@@ -107,7 +116,7 @@
     "validator": "npm run validate:plugin",
     "nativeDependencyClosure": "PARTIAL",
     "resourceClosure": "PARTIAL",
-    "redistributionReview": "PARTIAL",
+    "redistributionReview": "OWNER_APPROVED_APACHE_2_0_NOTICES_INCLUDED",
     "artifactReproducibility": "DETERMINISTIC_SAME_SOURCE_TREE"
   }
 }

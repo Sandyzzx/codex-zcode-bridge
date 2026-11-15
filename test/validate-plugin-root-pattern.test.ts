@@ -8,7 +8,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -263,6 +263,7 @@ test("an HTTP URL whose host equals a short root is not a development-path leak 
  */
 test("the real validator rejects injected development-path references and keeps the baseline clean", { timeout: 120_000 }, () => {
   const scriptsDir = fileURLToPath(new URL("../../scripts/", import.meta.url));
+  const repositoryRoot = path.resolve(scriptsDir, "..");
   const tempRoot = path.resolve(tmpdir());
   const tempBase = mkdtempSync(path.join(tempRoot, "bridge-validate-plugin-cli-"));
   const root = path.join(tempBase, `bridge 修订 (v2)[x]`);
@@ -357,6 +358,16 @@ test("the real validator rejects injected development-path references and keeps 
     const patchSidecarPath = path.join(root, `${patchPath}.sha256`);
     const patchSidecar = `${sha256(patchBytes)}  ${path.basename(patchPath)}\n`;
     writeFileSync(patchSidecarPath, patchSidecar);
+    const signedRuntimeHost = readFileSync(path.join(
+      repositoryRoot,
+      "plugins",
+      "codex-zcode-bridge",
+      "worker",
+      "vendor",
+      "official-host",
+      "win32-x64-node24.16.0-zcode3.18.2-fec97590",
+      "zcode-runtime-host.exe",
+    ));
     const officialHostFiles = new Map<string, Buffer>([
       ["app-server/provider/zcode-builtin.json", Buffer.from("{}\n")],
       ["app-server/THIRD-PARTY-NOTICES.md", Buffer.from("fixture notices\n")],
@@ -370,7 +381,7 @@ test("the real validator rejects injected development-path references and keeps 
       ["node_modules/@napi-rs/keyring-win32-x64-msvc/keyring.win32-x64-msvc.node", Buffer.from("fixture native bytes")],
       ["node_modules/@napi-rs/keyring-win32-x64-msvc/package.json", Buffer.from('{"name":"@napi-rs/keyring-win32-x64-msvc"}\n')],
       ["official-host-runtime.mjs", Buffer.from("export const createOAuthProviderRuntimeAuthService = () => undefined;\nexport const createOfficialStartPlanAuthenticationResolver = () => undefined;\n")],
-      ["zcode-runtime-host.exe", Buffer.from("fixture helper")],
+      ["zcode-runtime-host.exe", signedRuntimeHost],
     ]);
     for (const [relativePath, bytes] of officialHostFiles) {
       writeFileSync(path.join(officialHostRoot, relativePath), bytes);
@@ -396,11 +407,40 @@ test("the real validator rejects injected development-path references and keeps 
         bytes: patchBytes.length,
         sha256: sha256(patchBytes),
       }],
-      build: { sourceAggregateDiffSha256 },
+      build: {
+        sourceAggregateDiffSha256,
+        userDesktopInstallationUsedAsInput: true,
+        runtimeHostProvenance: {
+          sourceKind: "OFFICIAL_INSTALLED_DISTRIBUTION",
+          desktopProductVersion: "3.18.2.10443",
+          zcodeVersion: "3.18.2",
+          zcodeSourceCommit: "fec975905a2abd4c07e35c40d51fa097a2258ec9",
+          bytes: signedRuntimeHost.length,
+          sha256: sha256(signedRuntimeHost),
+          architecture: "win32-x64",
+          peMachine: "0x8664",
+          authenticode: "Valid",
+          signerCommonName: "北京智谱华章科技股份有限公司",
+          signerOrganization: "北京智谱华章科技股份有限公司",
+          reportedVersion: "zcode-runtime-host 1",
+        },
+      },
       files: [...officialHostFiles].map(([relativePath, bytes]) => ({
         path: relativePath,
         bytes: bytes.length,
         sha256: sha256(bytes),
+        ...(relativePath === "zcode-runtime-host.exe"
+          ? {
+              verification: {
+                architecture: "win32-x64",
+                peMachine: "0x8664",
+                authenticode: "Valid",
+                signerCommonName: "北京智谱华章科技股份有限公司",
+                signerOrganization: "北京智谱华章科技股份有限公司",
+                reportedVersion: "zcode-runtime-host 1",
+              },
+            }
+          : {}),
       })),
     };
     const officialHostBomBytes = Buffer.from(`${JSON.stringify(officialHostBom, null, 2)}\n`);
@@ -408,6 +448,7 @@ test("the real validator rejects injected development-path references and keeps 
     writeFileSync(path.join(officialHostRoot, "BUILD_PROVENANCE.json"), `${JSON.stringify({
       source: {
         ...officialHostBom.source,
+        userDesktopInstallationUsedAsInput: true,
         aggregateDiffSha256: sourceAggregateDiffSha256,
       },
       bom: {
@@ -417,6 +458,13 @@ test("the real validator rejects injected development-path references and keeps 
       },
       output: {
         sha256: sha256(officialHostFiles.get("official-host-runtime.mjs")!),
+      },
+      build: {
+        runtimeHost: {
+          sha256: sha256(signedRuntimeHost),
+          authenticode: "Valid",
+          redistribution: "APPROVED_BY_REPOSITORY_OWNER",
+        },
       },
     }, null, 2)}\n`);
     writeFileSync(waiterPath, "// PR #49 of codex-zcode-bridge 13ab83626a7fa7f35319a21244215c2915ecb112\n");

@@ -28568,8 +28568,8 @@ var init_official_host_adapter = __esm({
       },
       runtimeHost: {
         relativePath: "zcode-runtime-host.exe",
-        bytes: 167424,
-        sha256: "04E1794F8325B3C46D4159420CDD04041E9AFC58516E03FC3DC8E78576EEFC24"
+        bytes: 179608,
+        sha256: "C2C8FF5FF28CBDDC4F177C094AA67C322830889612251BD173BAAABC89379AB4"
       },
       keyringLoader: {
         relativePath: "node_modules/@napi-rs/keyring/index.js",
