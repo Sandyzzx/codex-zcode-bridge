@@ -3,6 +3,23 @@ import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { GENERATED_ARTIFACTS } from "../scripts/lib/generated-artifacts.mjs";
 
+const BYTE_COPIED_GENERATED_SQL_INPUTS = [
+  "src/sqlite-candidate/wp6b2b1/admin-abandonment.sql",
+  "src/sqlite-candidate/wp6b2b1/runtime-events.sql",
+  "src/sqlite-candidate/wp6b2b1/schema-v13.sql",
+  "src/sqlite-candidate/wp6b2b1/schema.sql",
+];
+
+function assertLfCheckout(paths: readonly string[]) {
+  const result = spawnSync("git", ["check-attr", "eol", "--", ...paths], {
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const attributes = result.stdout.trim().split(/\r?\n/);
+  assert.equal(attributes.length, paths.length);
+  for (const attribute of attributes) assert.match(attribute, /: eol: lf$/);
+}
+
 test("generated artifact inventory covers every committed plugin build output", () => {
   const expected = new Set([
     "plugins/codex-zcode-bridge/dist/admin-abandon-held-operation.mjs",
@@ -31,11 +48,9 @@ test("the freshness command exposes the same inventory", () => {
 });
 
 test("generated artifacts always check out with the generators' LF bytes", () => {
-  const result = spawnSync("git", ["check-attr", "eol", "--", ...GENERATED_ARTIFACTS], {
-    encoding: "utf8",
-  });
-  assert.equal(result.status, 0, result.stderr);
-  const attributes = result.stdout.trim().split(/\r?\n/);
-  assert.equal(attributes.length, GENERATED_ARTIFACTS.length);
-  for (const attribute of attributes) assert.match(attribute, /: eol: lf$/);
+  assertLfCheckout(GENERATED_ARTIFACTS);
+});
+
+test("byte-copied SQL inputs always check out with the generated LF bytes", () => {
+  assertLfCheckout(BYTE_COPIED_GENERATED_SQL_INPUTS);
 });
