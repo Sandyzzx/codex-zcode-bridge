@@ -37691,24 +37691,32 @@ function toProgressEvent(value) {
     ...details ? { details } : {}
   };
 }
-function mergeAdjacentModelOutputRows(rows) {
+function mergeAdjacentModelOutputRows(rows, maxBytes) {
   const merged = [];
+  const omittedEventsByRow = [];
   let omittedEvents = 0;
   for (const row of rows) {
     const safeText = row.event_type === "model_output" && typeof row.operation_id === "string" && Number.isSafeInteger(row.operation_attempt) && typeof row.summary === "string" && row.summary.length > 0 && emptyEvidence(row.evidence_json);
     const previous = merged.at(-1);
     const previousText = previous?.event_type === "model_output" && previous.operation_id === row.operation_id && previous.operation_attempt === row.operation_attempt && emptyEvidence(previous.evidence_json);
-    if (safeText && previous && previousText) {
-      previous.summary = `${String(previous.summary)}${row.summary}`;
-      previous.cursor = row.cursor;
-      previous.sequence = row.sequence;
-      previous.at = row.at;
+    const candidate = safeText && previous && previousText ? {
+      ...previous,
+      summary: `${String(previous.summary)}${row.summary}`,
+      cursor: row.cursor,
+      sequence: row.sequence,
+      at: row.at
+    } : null;
+    const mergeFits = candidate !== null && (maxBytes === void 0 || Buffer.byteLength(canonicalJson3(toProgressEvent(candidate)), "utf8") <= maxBytes);
+    if (candidate && mergeFits) {
+      merged[merged.length - 1] = candidate;
+      omittedEventsByRow[omittedEventsByRow.length - 1] = Number(omittedEventsByRow.at(-1)) + 1;
       omittedEvents += 1;
     } else {
       merged.push({ ...row });
+      omittedEventsByRow.push(0);
     }
   }
-  return { rows: merged, omittedEvents };
+  return { rows: merged, omittedEvents, omittedEventsByRow };
 }
 function applyEventByteBudget(events, pageNextCursor, maxBytes, previousCursor = 0) {
   if (maxBytes === void 0) {
@@ -38041,7 +38049,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
         while (true) {
           const snapshot = this.#readSnapshot(input2.task_id);
           const page = this.#driver.readTaskEvents(input2.task_id, { afterCursor: cursor, limit });
-          const visiblePage = input2.view === "summary" ? mergeAdjacentModelOutputRows(page.events) : { rows: page.events, omittedEvents: 0 };
+          const visiblePage = input2.view === "summary" ? mergeAdjacentModelOutputRows(page.events, input2.max_bytes) : { rows: page.events, omittedEvents: 0, omittedEventsByRow: page.events.map(() => 0) };
           const projectedEvents = visiblePage.rows.map((value) => {
             const event = toProgressEvent(value);
             if (event.type !== "interaction_requested" || !event.details || typeof event.details.request_id !== "string") return event;
@@ -38052,6 +38060,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
           });
           const bounded3 = applyEventByteBudget(projectedEvents, page.nextCursor, input2.max_bytes, cursor);
           const { events, nextCursor, scanIncomplete } = bounded3;
+          const omittedEvents = visiblePage.omittedEventsByRow.slice(0, events.length).reduce((total, count) => total + count, 0);
           const status = taskStatus(asRecord6(snapshot.projection).status);
           if (events.length || isTerminal(status) || Date.now() >= deadline) {
             return {
@@ -38060,7 +38069,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
               events,
               next_seq: nextCursor,
               has_more: page.hasMore || scanIncomplete,
-              ...visiblePage.omittedEvents > 0 ? { omitted_events: visiblePage.omittedEvents } : {},
+              ...omittedEvents > 0 ? { omitted_events: omittedEvents } : {},
               ...scanIncomplete ? { scan_incomplete: true, scan_cursor: encodeCursor(input2.task_id, nextCursor) } : {}
             };
           }

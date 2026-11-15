@@ -56,12 +56,23 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - run: npm ci
-      - name: Full-impact T0 only; Release owns full regression
-        if: needs.impact.outputs.full_required == 'true'
-        run: npm run test:affected -- --base "${{ github.event.pull_request.base.sha || github.event.before }}" --t0-only
-      - name: Impacted T0 and selected tests
-        if: needs.impact.outputs.full_required != 'true'
-        run: npm run test:affected -- --base "${{ github.event.pull_request.base.sha || github.event.before }}"
+      - name: Fast selection (FULL delegates regression to Release)
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          FULL_REQUIRED: ${{ needs.impact.outputs.full_required }}
+        run: |
+          args=()
+          if [[ -n "$BASE_SHA" && ! "$BASE_SHA" =~ ^0+$ ]]; then
+            args+=(--base "$BASE_SHA")
+          elif [[ "$FULL_REQUIRED" != "true" ]]; then
+            echo "::error::A non-full Fast gate requires a valid base SHA"
+            exit 1
+          fi
+          if [[ "$FULL_REQUIRED" == "true" ]]; then
+            args+=(--t0-only)
+          fi
+          npm run test:affected -- "${args[@]}"
 
   integration:
     name: Integration gate (Windows)
@@ -80,7 +91,15 @@ jobs:
       - name: Verify Windows worker process identity
         run: node scripts/verify-windows-worker-identity.mjs
       - name: Impacted integration and task-lifecycle tests
-        run: npm run test:affected -- --base "${{ github.event.pull_request.base.sha || github.event.before }}"
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [[ -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]]; then
+            echo "::error::Integration selection requires a valid base SHA"
+            exit 1
+          fi
+          npm run test:affected -- --base "$BASE_SHA"
 
   release:
     name: Release gate (${{ matrix.os }})

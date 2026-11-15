@@ -57,29 +57,31 @@ export function selectCiImpact({ files, map, forceFull = false }) {
 function parseArgs(argv) {
   const options = { base: undefined, head: "HEAD", forceFull: false, githubOutput: false };
   for (let index = 0; index < argv.length; index += 1) {
-    if (argv[index] === "--base") options.base = argv[++index];
+    if (argv[index] === "--base") {
+      options.base = argv[++index];
+      if (!options.base) throw new Error("--base requires a Git revision");
+    }
     else if (argv[index] === "--head") options.head = argv[++index];
     else if (argv[index] === "--force-full") options.forceFull = true;
     else if (argv[index] === "--github-output") options.githubOutput = true;
     else throw new Error(`unknown option: ${argv[index]}`);
   }
-  if (options.base === "") throw new Error("--base requires a Git revision");
   return options;
 }
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
-  const files = options.base
-    ? changedFiles({
+  const forceFull = options.forceFull
+    || !options.base
+    || /^0+$/u.test(options.base);
+  const files = forceFull
+    ? []
+    : changedFiles({
         root: repositoryRoot,
         base: options.base,
         head: options.head,
         includeWorktree: false,
-      })
-    : [];
-  const forceFull = options.forceFull
-    || !options.base
-    || /^0+$/u.test(options.base);
+      });
   const map = JSON.parse(readFileSync(path.join(repositoryRoot, "test/test-impact-map.json"), "utf8"));
   const impact = selectCiImpact({ files, map, forceFull });
   const text = JSON.stringify(impact, null, 2);

@@ -269,8 +269,8 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
         events: readonly Record<string, unknown>[]; nextCursor: number; hasMore: boolean;
       };
       const visiblePage = input.view === "summary"
-        ? mergeAdjacentModelOutputRows(page.events)
-        : { rows: page.events, omittedEvents: 0 };
+        ? mergeAdjacentModelOutputRows(page.events, input.max_bytes)
+        : { rows: page.events, omittedEvents: 0, omittedEventsByRow: page.events.map(() => 0) };
       const projectedEvents = visiblePage.rows.map((value) => {
         const event = toProgressEvent(value);
         if (event.type !== "interaction_requested" || !event.details || typeof event.details.request_id !== "string") return event;
@@ -281,6 +281,9 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       });
       const bounded = applyEventByteBudget(projectedEvents, page.nextCursor, input.max_bytes, cursor);
       const { events, nextCursor, scanIncomplete } = bounded;
+      const omittedEvents = visiblePage.omittedEventsByRow
+        .slice(0, events.length)
+        .reduce((total, count) => total + count, 0);
       const status = taskStatus(asRecord(snapshot.projection).status);
       if (events.length || isTerminal(status) || Date.now() >= deadline) {
         return {
@@ -289,7 +292,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
           events,
           next_seq: nextCursor,
           has_more: page.hasMore || scanIncomplete,
-          ...(visiblePage.omittedEvents > 0 ? { omitted_events: visiblePage.omittedEvents } : {}),
+          ...(omittedEvents > 0 ? { omitted_events: omittedEvents } : {}),
           ...(scanIncomplete ? { scan_incomplete: true, scan_cursor: encodeCursor(input.task_id, nextCursor) } : {}),
         };
       }
@@ -1078,8 +1081,14 @@ function toProgressEvent(value: Record<string, unknown>): TaskProgressEvent {
  * owned by the Store. */
 export function mergeAdjacentModelOutputRows(
   rows: readonly Record<string, unknown>[],
-): { readonly rows: readonly Record<string, unknown>[]; readonly omittedEvents: number } {
+  maxBytes?: number,
+): {
+  readonly rows: readonly Record<string, unknown>[];
+  readonly omittedEvents: number;
+  readonly omittedEventsByRow: readonly number[];
+} {
   const merged: Record<string, unknown>[] = [];
+  const omittedEventsByRow: number[] = [];
   let omittedEvents = 0;
   for (const row of rows) {
     const safeText = row.event_type === "model_output"
@@ -1093,17 +1102,28 @@ export function mergeAdjacentModelOutputRows(
       && previous.operation_id === row.operation_id
       && previous.operation_attempt === row.operation_attempt
       && emptyEvidence(previous.evidence_json);
-    if (safeText && previous && previousText) {
-      previous.summary = `${String(previous.summary)}${row.summary}`;
-      previous.cursor = row.cursor;
-      previous.sequence = row.sequence;
-      previous.at = row.at;
+    const candidate = safeText && previous && previousText
+      ? {
+          ...previous,
+          summary: `${String(previous.summary)}${row.summary}`,
+          cursor: row.cursor,
+          sequence: row.sequence,
+          at: row.at,
+        }
+      : null;
+    const mergeFits = candidate !== null
+      && (maxBytes === undefined
+        || Buffer.byteLength(canonicalJson(toProgressEvent(candidate)), "utf8") <= maxBytes);
+    if (candidate && mergeFits) {
+      merged[merged.length - 1] = candidate;
+      omittedEventsByRow[omittedEventsByRow.length - 1] = Number(omittedEventsByRow.at(-1)) + 1;
       omittedEvents += 1;
     } else {
       merged.push({ ...row });
+      omittedEventsByRow.push(0);
     }
   }
-  return { rows: merged, omittedEvents };
+  return { rows: merged, omittedEvents, omittedEventsByRow };
 }
 
 export function applyEventByteBudget(

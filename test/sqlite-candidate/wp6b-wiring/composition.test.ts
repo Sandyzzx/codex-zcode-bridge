@@ -128,6 +128,166 @@ function seedRunningClaim(
   }
 }
 
+function seedReleasedTaskWithRuntimeEvents(
+  dataRoot: string,
+  modules: Awaited<ReturnType<typeof loadLifecycleCandidateModules>>,
+  workspace: string,
+  taskId: string,
+  operationId: string,
+): {
+  readonly tinyCursors: readonly number[];
+  readonly largeCursors: readonly number[];
+  readonly boundaryCursor: number;
+} {
+  const store = modules.Store.open(dataRoot);
+  if (!store) throw new Error("isolated SQLite Store did not open");
+  try {
+    const port = modules.createPort(store);
+    port.createTask(syntheticTask(workspace, taskId) as unknown as Parameters<typeof port.createTask>[0]);
+    const allow = () => ({ state: "allow", fixture: true });
+    const admitted = port.admitOperation({
+      operation_id: operationId,
+      task_id: taskId,
+      attempt: 1,
+      workspace_ref: workspace,
+    }, {
+      workspaceValidator: allow,
+      executionPermissionCheck: allow,
+    }) as Record<string, unknown>;
+    const launch = {
+      operation_id: operationId,
+      task_id: taskId,
+      attempt: 1,
+      generation: Number(admitted.generation),
+      revision: Number(admitted.revision),
+      launch_id: `launch-${taskId}`,
+      launch_epoch: 1,
+      launch_token: `event-pagination-${taskId}-0123456789`,
+    };
+    const intent = port.createLaunchIntent(launch) as Record<string, unknown>;
+    const processId = 47101;
+    const fingerprint = `event-pagination-${taskId}`;
+    const receipt = port.recordLaunchReceipt({
+      ...launch,
+      revision: Number(intent.revision),
+      receipt_id: `receipt-${taskId}`,
+      launch_identity: trustedIdentityEvidence("launch", taskId, processId, fingerprint, Number(admitted.generation)),
+    }) as Record<string, unknown>;
+    const claim = port.commitPermanentClaim({
+      ...launch,
+      revision: Number(receipt.revision),
+      claim_id: `claim-${taskId}`,
+      worker_identity: trustedIdentityEvidence("worker", taskId, processId, fingerprint),
+    } as unknown as Parameters<typeof port.commitPermanentClaim>[0]) as Record<string, unknown>;
+    const operationAfterClaim = port.readOperation(operationId) as Record<string, unknown>;
+    const runtimeStore = store as typeof store & {
+      appendRuntimeTaskEvent(input: Readonly<Record<string, unknown>>): { readonly event_cursor: number };
+    };
+    const fence = {
+      operation_id: operationId,
+      task_id: taskId,
+      attempt: 1,
+      generation: Number(operationAfterClaim.generation),
+      claim_id: String(claim.claim_id),
+    };
+    const append = (
+      workerSequence: number,
+      eventType: string,
+      summary: string,
+      details?: Readonly<Record<string, unknown>>,
+    ): number => runtimeStore.appendRuntimeTaskEvent({
+      ...fence,
+      worker_sequence: workerSequence,
+      event_type: eventType,
+      at: `2026-11-15T00:00:${String(workerSequence).padStart(2, "0")}.000Z`,
+      summary,
+      ...(details ? { details } : {}),
+    }).event_cursor;
+    const tinyCursors = [
+      append(1, "model_output", "a".repeat(300)),
+      append(2, "model_output", "b".repeat(300)),
+      append(3, "model_output", "c".repeat(300)),
+    ];
+    const largeCursors = [
+      append(4, "model_output", `L1 ${"x".repeat(800)}`),
+      append(5, "model_output", `L2 ${"y".repeat(800)}`),
+      append(6, "model_output", `L3 ${"z".repeat(800)}`),
+    ];
+    const boundaryCursor = append(7, "model_tool_call", "tool boundary", {
+      tool_name: "Read",
+      tool_call_id: "event-pagination-tool",
+    });
+    const result = {
+      task_id: taskId,
+      attempt: 1,
+      status: "completed" as const,
+      summary: "event pagination fixture",
+      files_changed: [],
+      tests: [],
+      issues: [],
+      needs_master_decision: false,
+      zcode_output: "",
+      exit_code: 0,
+      session_id: null,
+      started_at: "2026-11-15T00:00:00.000Z",
+      finished_at: "2026-11-15T00:00:08.000Z",
+    };
+    port.commitResult({
+      operation_id: operationId,
+      task_id: taskId,
+      attempt: 1,
+      generation: Number(admitted.generation),
+      revision: Number(operationAfterClaim.revision),
+      claim_id: String(claim.claim_id),
+      claim_worker_identity_digest: String(operationAfterClaim.claim_worker_identity_digest),
+      result_status: "completed",
+      result,
+    });
+    const committed = port.readOperation(operationId) as Record<string, unknown>;
+    const cleanupFence = {
+      operation_id: operationId,
+      task_id: taskId,
+      attempt: 1,
+      generation: Number(committed.generation),
+      revision: Number(committed.revision),
+      claim_id: String(committed.claim_id),
+      claim_worker_identity_digest: String(committed.claim_worker_identity_digest),
+      launch_receipt_digest: String(committed.launch_receipt_digest),
+      result_commit_ref: String(committed.result_commit_ref),
+      process_id: processId,
+      start_fingerprint: fingerprint,
+    };
+    const pending = port.beginCleanup(cleanupFence);
+    port.recordCleanupEvidence({
+      ...cleanupFence,
+      revision: Number(pending.revision),
+      outcome: "verified",
+      cleanup_evidence: {
+        source: "synthetic_fixture",
+        fixture: true,
+        operation_id: operationId,
+        task_id: taskId,
+        attempt: 1,
+        generation: Number(committed.generation),
+        claim_id: String(committed.claim_id),
+        worker_identity_digest: String(committed.claim_worker_identity_digest),
+        launch_receipt_digest: String(committed.launch_receipt_digest),
+        result_commit_ref: String(committed.result_commit_ref),
+        process_tree_digest: "c".repeat(64),
+        resources_digest: "d".repeat(64),
+        root_process_id: processId,
+        root_start_fingerprint: fingerprint,
+        worker_tree_complete: true,
+        operation_resources_complete: true,
+        workspace_touched: false,
+      },
+    });
+    return { tinyCursors, largeCursors, boundaryCursor };
+  } finally {
+    store.close();
+  }
+}
+
 async function exitedProcessIdentity(probe: ProcessProbe): Promise<{ readonly processId: number; readonly fingerprint: string }> {
   const child = spawn(process.execPath, ["-e", "setInterval(() => undefined, 1000)"], {
     stdio: "ignore",
@@ -3270,6 +3430,89 @@ test("formal MCP Manager routes SQLite Create/Worker/Result/Continue/Events/Feed
     assert.ok((nextEvents.events as Array<Record<string, unknown>>).every((event) => Number(event.seq) > firstCursor));
     assert.equal(existsSync(path.join(dataRoot, ".tasks")), false, "SQLite lifecycle must not write JSON TaskStore state");
   }, { onStage: (stage, detail) => stages.push({ stage, detail }), testOnScheduler: (stage, detail) => stages.push({ stage: `manager_${stage}`, detail }) });
+});
+
+test("formal MCP Events summary advances across byte-bounded merge groups without losing raw events", { skip: process.platform !== "win32", timeout: 45_000 }, async () => {
+  const taskId = `mcp-event-pagination-${randomUUID()}`;
+  const operationId = candidateOperationId(taskId, 1);
+  let seeded: ReturnType<typeof seedReleasedTaskWithRuntimeEvents> | undefined;
+  await withSqliteMcp(async (_client, manager) => {
+    assert.ok(seeded);
+    const summary = await manager.getEvents({
+      task_id: taskId,
+      view: "summary",
+      after_seq: seeded.tinyCursors[0]! - 1,
+      limit: 200,
+      max_bytes: 1_024,
+    });
+    assert.equal(summary.events.length, 1);
+    assert.equal(summary.events[0]?.summary, `${"a".repeat(300)}${"b".repeat(300)}${"c".repeat(300)}`);
+    assert.equal(summary.events[0]?.seq, seeded.tinyCursors[2]);
+    assert.equal(summary.next_seq, seeded.tinyCursors[2]);
+    assert.equal(summary.omitted_events, 2);
+
+    const rawEvents: Array<{ readonly seq: number; readonly summary: string }> = [];
+    let rawCursor: number | undefined;
+    let rawScanCursor: string | undefined;
+    while ((rawCursor ?? seeded.tinyCursors[0]! - 1) < seeded.tinyCursors[2]!) {
+      const page = await manager.getEvents({
+        task_id: taskId,
+        view: "raw",
+        ...(rawScanCursor ? { scan_cursor: rawScanCursor } : { after_seq: rawCursor ?? seeded.tinyCursors[0]! - 1 }),
+        limit: 200,
+        max_bytes: 1_024,
+      });
+      rawEvents.push(...page.events.map((event) => ({ seq: event.seq, summary: event.summary })));
+      rawCursor = page.next_seq;
+      rawScanCursor = page.scan_cursor;
+      assert.equal(page.omitted_events, undefined);
+    }
+    assert.deepEqual(
+      rawEvents
+        .filter((event) => Number(event.seq) <= seeded!.tinyCursors[2]!)
+        .map((event) => [event.seq, event.summary]),
+      [
+        [seeded.tinyCursors[0], "a".repeat(300)],
+        [seeded.tinyCursors[1], "b".repeat(300)],
+        [seeded.tinyCursors[2], "c".repeat(300)],
+      ],
+    );
+
+    const returnedLarge: Array<{ readonly seq: number; readonly summary: string }> = [];
+    let scanCursor: string | undefined;
+    let cursor = seeded.largeCursors[0]! - 1;
+    while (cursor < seeded.largeCursors[2]!) {
+      const page = await manager.getEvents({
+        task_id: taskId,
+        view: "summary",
+        ...(scanCursor ? { scan_cursor: scanCursor } : { after_seq: cursor }),
+        limit: 200,
+        max_bytes: 1_024,
+      });
+      assert.ok(page.events.length > 0, "a merge group rejection must not produce a permanently empty page");
+      assert.ok(page.next_seq > cursor, "every returned event page must advance its public cursor");
+      assert.equal(page.scan_incomplete, true);
+      returnedLarge.push(...page.events
+        .map((event) => ({ seq: event.seq, summary: event.summary }))
+        .filter((event) => event.seq >= seeded!.largeCursors[0]!
+          && event.seq <= seeded!.largeCursors[2]!));
+      cursor = page.next_seq;
+      scanCursor = page.scan_cursor;
+    }
+    assert.deepEqual(
+      returnedLarge.map((event) => [event.seq, String(event.summary).slice(0, 2)]),
+      [
+        [seeded.largeCursors[0], "L1"],
+        [seeded.largeCursors[1], "L2"],
+        [seeded.largeCursors[2], "L3"],
+      ],
+    );
+    assert.equal(new Set(returnedLarge.map((event) => event.seq)).size, 3);
+  }, {
+    beforeAuthority: (dataRoot, modules, workspace) => {
+      seeded = seedReleasedTaskWithRuntimeEvents(dataRoot, modules, workspace, taskId, operationId);
+    },
+  });
 });
 
 test("SQLite preserves JSON workspace semantics and the Host-selected execution worktree", { timeout: 90_000 }, async () => {

@@ -198,12 +198,51 @@ test("CI impact gate shadow-compares targeted and full selections with the execu
   assert.equal(forced.full_required, true);
 });
 
+test("CI impact CLI fails safe for dispatch, initial-push and invalid base revisions", () => {
+  const validBase = spawnSync(
+    process.execPath,
+    ["scripts/ci-select-impact.mjs", "--base", "HEAD~1", "--head", "HEAD"],
+    { encoding: "utf8" },
+  );
+  assert.equal(validBase.status, 0, validBase.stderr);
+  assert.equal(JSON.parse(validBase.stdout).force_full, false);
+
+  for (const args of [
+    ["--head", "HEAD", "--force-full"],
+    ["--base", "0".repeat(40), "--head", "HEAD"],
+  ]) {
+    const full = spawnSync(
+      process.execPath,
+      ["scripts/ci-select-impact.mjs", ...args],
+      { encoding: "utf8" },
+    );
+    assert.equal(full.status, 0, full.stderr);
+    assert.equal(JSON.parse(full.stdout).force_full, true);
+    assert.equal(JSON.parse(full.stdout).full_required, true);
+  }
+
+  const invalid = spawnSync(
+    process.execPath,
+    ["scripts/ci-select-impact.mjs", "--base", "not-a-revision", "--head", "HEAD"],
+    { encoding: "utf8" },
+  );
+  assert.notEqual(invalid.status, 0, "an invalid non-zero base must fail rather than skip validation");
+  assert.match(invalid.stderr, /git diff .* failed/u);
+});
+
 test("FULL-impact Fast gate delegates the full regression to Release", () => {
   const workflow = readFileSync(path.resolve(".github/workflows/ci.yml"), "utf8");
   assert.match(
     workflow,
-    /Full-impact T0 only; Release owns full regression[\s\S]*?--t0-only/u,
+    /Fast selection \(FULL delegates regression to Release\)[\s\S]*?args\+=\(--t0-only\)[\s\S]*?npm run test:affected/u,
     "the Fast gate must request only T0 when impact policy requires the full suite",
+  );
+  assert.match(workflow, /BASE_SHA: \$\{\{ github\.event\.pull_request\.base\.sha \|\| github\.event\.before \}\}/u);
+  assert.match(workflow, /A non-full Fast gate requires a valid base SHA/u);
+  assert.doesNotMatch(
+    workflow,
+    /run:\s+npm run test:affected -- --base "\$\{\{ github\.event\.pull_request\.base\.sha \|\| github\.event\.before \}\}"/u,
+    "CI must never pass an empty workflow expression directly to --base",
   );
   assert.doesNotMatch(workflow, /npm run test:full/u);
   assert.equal(
