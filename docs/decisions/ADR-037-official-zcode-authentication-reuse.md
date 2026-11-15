@@ -3,7 +3,7 @@
 > Status: DECISION
 > Date: 2026-11-13
 > Decision: Accepted — Owner 在“GOAL REVISION — Reuse Official ZCode Authentication”中明确冻结该架构要求。
-> Applicability: ACTIVE IMPLEMENTATION。拓扑、职责和认证所有权已接受并冻结；当前候选已完成固定 Host 3.18.2 接线与合成验证，并通过真实 Coding Plan 完整 E2E 和真实 Start Plan 核心功能路径。候选已推送为 Draft PR #94，远端 Ubuntu/Windows CI 已通过；尚未 Merge、Tag 或 Release。历史 Start Plan 完整 E2E 因 Workspace 内额外 PowerShell cache 保持 `FAIL`。Desktop 3.18.0/3.18.1 实机安装组合、真实 OAuth refresh/账户轮换与其他未实测边界仍为 `NOT_VERIFIED`。
+> Applicability: ACTIVE IMPLEMENTATION。拓扑、职责和认证所有权已接受并冻结；Preview.6 候选已完成固定 Host 3.18.2 接线、官方签名 runtime host、构建/加载/clean-install 与带数据升级回滚验证，并通过真实 Coding Plan 完整 E2E 和真实 Start Plan 核心功能路径。候选尚未 Merge、Tag 或 Release。历史 Start Plan 完整 E2E 因 Workspace 内额外 PowerShell cache 保持 `FAIL`。Desktop 3.18.0/3.18.1 实机安装组合、真实 OAuth refresh/账户轮换与其他未实测边界仍为 `NOT_VERIFIED`，其中 OAuth refresh 属于 Owner 已接受的 Preview 阶段有限风险。
 > Renumbering: 原接受包曾将该决定标为 ADR-036；迁移到最新 `origin/preview` 时，仓库已有独立的 [ADR-036](ADR-036-host-native-interruption-requeue.md)，为避免重复编号，本决定按顺序改为 ADR-037，内容与 Owner 授权不变。
 > Verified against: Bridge research branch `d5c9cfedade9bc4bad69a7a3e873886e72843806`；官方 ZCode `b95ebaffeab641907b38652f45c1502bd762972d`（3.18.0）、`c5904686ea8341826b3affe5d993d06a134fa779`（3.18.1）、`fec975905a2abd4c07e35c40d51fa097a2258ec9`（3.18.2）。
 
@@ -172,8 +172,10 @@ Coding Plan 的 Worker 路径调用 `loadOfficialHostProviderRuntimeAuthFactory(
 
 - 必须重建并重新验证固定 Official Host/AppServer/BOM；
 - 官方 3.18.2 没有现成的无迁移读取入口，需要在固定 Host patch 中维护窄适配层；
-- 3.18.0/3.18.1/3.18.2 和 v1/v2 兼容矩阵仍需隔离验证；
+- 3.18.0/3.18.1/3.18.2 和 v1/v2 兼容矩阵仍需隔离或实机验证；当前只有 3.18.2 部分实机证据；
 - 固定 Host 升级本身不等于 Desktop 兼容或真实 Start Plan 成功。
+
+Windows `zcode-runtime-host.exe` 不是 Bridge 自维护的原生实现。Preview.6 固定采用官方 Desktop `3.18.2.10443` 的 Authenticode 签名产物，并以来源、大小、SHA-256、PE 架构和签名主体约束；Owner 已确认再分发权利。Fresh Rebuild 不是发布门槛。后续升级必须从合格的本机官方安装或经过校验的官方发行包提取同一类制品，并同步更新 BOM、Provenance、运行时校验和测试，不得静默接受未知版本或新增用户侧下载/安装机制。
 
 ## POC-1 Entry Conditions
 

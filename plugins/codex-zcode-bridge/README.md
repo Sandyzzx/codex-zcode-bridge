@@ -2,16 +2,16 @@
 
 把有明确边界的开发任务从 Codex 交给本机官方 ZCode Agent Runtime，在 Codex 中跟进进度，并独立审查实际改动后再决定是否接受。
 
-当前 Preview 版本为 `2.0.0-preview.5`。Stable `v1.7.1` 是独立发布渠道；Preview.5 是追加 Official Host、Runtime Events/Usage 与 R7 修复的固定预发布快照。
+当前已发布 Preview 版本为 `2.0.0-preview.5`；本源码树准备 `2.0.0-preview.6` 发布工程候选。Stable `v1.7.1` 是独立发布渠道。Preview.6 在通过 Draft PR、CI 与 Owner 发布裁决前不得视为已发布。
 
 ## 支持范围
 
 | 套餐 | 当前支持 |
 | --- | --- |
-| Z.ai Start Plan | Preview 支持。只读发现官方账户凭据，执行实时模型权益检查，并通过单任务私有凭据 Lease 向官方 Runtime 交付认证。 |
+| Z.ai Start Plan | Preview 支持。通过固定 Official Host 的官方认证投影读取当前账户材料，执行实时模型权益检查，并通过单任务私有凭据 Lease 向官方 Runtime 交付认证。 |
 | Z.ai Coding Plan | 使用既有的官方 Coding Plan 账户/API Key 路径。 |
 
-两条路径都通过官方 ZCode AppServer 执行。Start Plan 的真实证据目前仅覆盖 Windows、官方 AppServer `0.17.1` 和 `GLM-5.3-Flash`；其他模型与平台仍取决于官方 Registry、账户权益和实际环境，不能从单一模型的成功推广为全部 Start Plan 模型已验证。
+两条路径都通过官方 ZCode AppServer 执行。Start Plan 的真实证据目前仅覆盖 Windows、官方 AppServer `0.17.1` 和 `GLM-5.3-Flash`；其他模型与平台仍取决于官方 Registry、账户权益和实际环境，不能从单一模型的成功推广为全部 Start Plan 模型已验证。Windows runtime host 是随 Bridge 固定分发的官方签名产物，Bridge 不在用户机器上发现、下载或安装 helper。
 
 ## 使用前
 
