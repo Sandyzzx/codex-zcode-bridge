@@ -28601,8 +28601,8 @@ var init_official_host_adapter = __esm({
       },
       runtimeHost: {
         relativePath: "zcode-runtime-host.exe",
-        bytes: 167424,
-        sha256: "04E1794F8325B3C46D4159420CDD04041E9AFC58516E03FC3DC8E78576EEFC24"
+        bytes: 179608,
+        sha256: "C2C8FF5FF28CBDDC4F177C094AA67C322830889612251BD173BAAABC89379AB4"
       },
       keyringLoader: {
         relativePath: "node_modules/@napi-rs/keyring/index.js",
@@ -54895,7 +54895,7 @@ function formatDuration(durationMs2) {
 
 // src/mcp/server.ts
 var SERVER_NAME = "codex-zcode-bridge";
-var SERVER_VERSION = "2.0.0-preview.5"; // x-release-please-version
+var SERVER_VERSION = "2.0.0-preview.6"; // x-release-please-version
 var EXECUTION_NOT_VERDICT = "Results describe Bridge/ZCode execution only: status 'completed' means the invocation and report normalization finished, NOT that the calling host accepted the work. the calling host must independently review the workspace diff and checks before deciding PASS.";
 function okResult2(data) {
   return {

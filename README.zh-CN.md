@@ -4,7 +4,7 @@
 
 [English](README.md) · [项目仓库](https://github.com/Sandyzzx/codex-zcode-bridge) · [版本发布](https://github.com/Sandyzzx/codex-zcode-bridge/releases)
 
-> **发布状态。** 稳定版为 `v1.7.1`。预览版 `2.0.0-preview.5` 是包含 Official Host、SQLite Runtime Events/Usage、Start Plan 与 Coding Plan 集成修复的固定预发布快照；本次不提升新的 Stable 版本。
+> **发布状态。** 稳定版为 `v1.7.1`。预览版 `2.0.0-preview.6` 是包含官方 ZCode 3.18.2 认证复用、官方签名 Windows Runtime Host、SQLite v14 Events/Usage、Start Plan 与 Coding Plan 集成的固定预发布快照；Preview.6 面向 Windows x64 与 ZCode Desktop `3.18.2.10443`，本次不提升新的 Stable 版本。
 
 ## 这是什么
 
@@ -30,7 +30,7 @@ Start Plan 与 Coding Plan 是两条不同的账户和认证路径。Bridge 根�
 
 ### 已验证的 Start Plan 路径
 
-Preview.3 已通过一次 Windows 真实 Start Plan 验收。此前的 R7 候选另通过一次 Coding Plan 真实 E2E，证明 Official Host、Runtime Events、Usage、Result、Cleanup 与 Release 链。Preview.5 是该实现与修复的固定制品；安装 Preview.5 后的 Start Plan E2E 仍是独立验收项，不能用 Preview.3 的历史结果替代。
+Preview.3 已通过一次 Windows 真实 Start Plan 验收。Preview.6 另行通过真实 Coding Plan E2E 与真实 Start Plan 核心功能 E2E，覆盖 Official Host、Runtime Events、Usage、工具调用、Result、Cleanup 与 Release。历史 Start Plan 完整 Workspace 验收因 PowerShell 缓存写入了未声明文件，继续保持 `FAIL`，不能改写为通过。
 
 - 官方 ZCode AppServer `0.17.1`。
 - Provider `account:bigmodel-start-plan`。
@@ -67,12 +67,14 @@ Preview.3 已通过一次 Windows 真实 Start Plan 验收。此前的 R7 候选
 ## 环境要求
 
 - 固定 Official Host 生产制品只支持 **Windows x64**；Windows 非 x64 与其他未知目标 fail closed。Linux/macOS 仅保留 direct AppServer 的合成/CI 覆盖，不认证真实 ZCode、OAuth、Start Plan 或模型服务流量。
-- **Preview 2.0.0-preview.5：** Node.js `>=24.16.0` 且 `<25`。
+- **Preview 2.0.0-preview.6：** Windows x64、Node.js `24.16.0`，并已安装官方 ZCode Desktop `3.18.2.10443`。
 - Git、支持插件/Marketplace 的 Codex，以及可正常工作的本机 ZCode 安装。
 - 官方 ZCode 账户已登录，并具备所选任务需要的套餐和模型权益。
 - 仅面向**单用户、可信本地**环境；不提供多用户隔离或远程沙箱。
 
 Marketplace 插件不会代替你安装 Node.js 或 ZCode。
+
+Desktop ZCode `3.18.0` 与 `3.18.1` 在 Preview.6 中保持 `NOT_VERIFIED`，不代表已经证明不兼容。真实 OAuth refresh/账户轮换与跨机器制品复现同样保持 `NOT_VERIFIED`；这些是 Preview 阶段的风险接受，不延伸到 Stable。
 
 ## 安装
 
@@ -105,7 +107,7 @@ codex plugin marketplace upgrade codex-zcode-bridge-preview
 如需固定到已验收的 Preview 快照：
 
 ```sh
-codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-preview-v2.0.0-preview.5
+codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-preview-v2.0.0-preview.6
 ```
 
 在已有 Marketplace 上切换分支或 Tag 时，使用目标 `--ref` 重新执行 `marketplace add`，或先移除再添加。不同 Codex 版本的实际参数以 `codex plugin marketplace add --help` 为准。
@@ -180,7 +182,7 @@ Preview 使用固定的单用户可信本地 `yolo` 执行档案，以当前 Win
 - [Runtime 与 SQLite 升级细节](docs/ZCODE_RUNTIME.md)
 - [插件安全说明](plugins/codex-zcode-bridge/SECURITY.md)
 - [Master Skill](plugins/codex-zcode-bridge/skills/zcode-bridge/SKILL.md)
-- [Preview.5 Release](https://github.com/Sandyzzx/codex-zcode-bridge/releases/tag/codex-zcode-bridge-preview-v2.0.0-preview.5)
+- [Preview.6 Release](https://github.com/Sandyzzx/codex-zcode-bridge/releases/tag/codex-zcode-bridge-preview-v2.0.0-preview.6)
 
 ## 许可证
 
