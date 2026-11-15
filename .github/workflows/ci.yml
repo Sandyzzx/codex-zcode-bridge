@@ -102,7 +102,7 @@ jobs:
           npm run test:affected -- --base "$BASE_SHA"
 
   release:
-    name: Release gate (${{ matrix.os }})
+    name: Verify (${{ matrix.os }})
     needs: impact
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'push' || needs.impact.outputs.full_required == 'true'
     runs-on: ${{ matrix.os }}
