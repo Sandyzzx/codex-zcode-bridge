@@ -17,7 +17,11 @@ const workerModuleUrl = pathToFileURL(path.join(
 ));
 
 await runWorkerMain({
-  testOnlyOfficialHostModule: { ZCodeAgentProcessManager, ZCodeProtocolClient },
+  testOnlyOfficialHostModule: {
+    ZCODE_PRODUCT_VERSION: "3.18.2",
+    ZCodeAgentProcessManager,
+    ZCodeProtocolClient,
+  },
   testOnlyWorkerModuleUrl: workerModuleUrl,
   testOnlyProbe: createPlatformProbe({ timeoutMs: 10_000 }),
   testOnlyVerifyTreeClean: async (targets) => ({

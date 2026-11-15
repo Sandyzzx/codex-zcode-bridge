@@ -5,7 +5,7 @@
 // the installed ZCode app-server. Bridge modifications are limited to module
 // boundaries (local imports instead of the shared package) and are annotated
 // in place.
-import { z } from "zod";
+import { z } from "zod/v4";
 
 /** 内置自由尺寸与 Agent viewport API 共用同一组 CSS px 安全边界。 */
 export const BROWSER_VIEWPORT_LIMITS = {

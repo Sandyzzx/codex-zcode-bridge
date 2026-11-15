@@ -5,7 +5,7 @@
 // the installed ZCode app-server. Bridge modifications are limited to module
 // boundaries (local imports instead of the shared package) and are annotated
 // in place.
-import { z } from "zod";
+import { z } from "zod/v4";
 
 export const browserElementRectSchema = z
   .object({

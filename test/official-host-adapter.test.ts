@@ -17,6 +17,7 @@ import {
   OFFICIAL_HOST_TRANSPORT_MAX_FRAME_BYTES,
   OfficialHostAdapter,
   createOfficialHostClientFactory,
+  loadOfficialHostProductVersion,
   verifyOfficialHostAssets,
   type OfficialHostAssets,
   type OfficialHostModule,
@@ -27,6 +28,7 @@ import type { BrowserCommandResult } from "../src/browser/result.js";
 import type { AgentHandle, TaskPackage, WorkspaceRef, ZCodeRuntimeConfig } from "../src/interfaces.js";
 import { BridgeError } from "../src/runtime/errors.js";
 import type { ProcessProbe } from "../src/runtime/process-probe.js";
+import { readOfficialCliVersion } from "../src/runtime/start-plan-production-auth.js";
 import { fakeConfig, makeTask, makeTempDir, removeTempDir, validReport } from "./helpers.js";
 
 const SESSION_ID = "sess_official_11111111-aaaa-4bbb-8ccc-cccccccccccc";
@@ -809,7 +811,10 @@ function factoryContext(config: ZCodeRuntimeConfig, assets: OfficialHostAssets):
     workspace: { requestedPath: WORKSPACE, canonicalPath: WORKSPACE, mode: "direct" },
     cwd: WORKSPACE,
     env: {},
-    launch: { args: ["app-server", "--stdio"], env: { PATH: process.env.PATH ?? "" } },
+    launch: {
+      args: ["app-server", "--stdio", "--surface", "desktop"],
+      env: { PATH: process.env.PATH ?? "" },
+    },
     requestTimeoutMs: 1_000,
     probe,
     verifyTreeClean: async (targets) => ({
@@ -845,6 +850,7 @@ test("official factory scopes the fixed helper path, pins transport options, map
   const factory = createOfficialHostClientFactory({
     assets: async () => assets,
     moduleSource: {
+      ZCODE_PRODUCT_VERSION: "3.18.2",
       ZCodeAgentProcessManager: FakeProcessManager as never,
       ZCodeProtocolClient: FakeOfficialProtocolClient as never,
     },
@@ -859,7 +865,15 @@ test("official factory scopes the fixed helper path, pins transport options, map
     const commandResolver = managerOptions.commandResolver;
     const command = await commandResolver({ workspacePath: WORKSPACE });
     assert.equal(command.command, config.nodeExecutable);
-    assert.deepEqual(command.args, [assets.appServerEntryPath, "app-server", "--stdio"]);
+    assert.deepEqual(command.args, [
+      assets.appServerEntryPath,
+      "app-server",
+      "--stdio",
+      "--surface",
+      "desktop",
+    ]);
+    assert.equal(command.env.ZCODE_APP_VERSION, "3.18.2");
+    assert.equal(command.env.ZCODE_BUILD_COMMIT_ID, undefined);
     assert.equal(command.env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE, assets.builtinProviderConfigPath);
     assert.equal(command.env.ZCODE_RUNTIME_HOST_PATH, assets.runtimeHostPath);
     FakeProcessManager.exitListener?.({ exitCode: 17, signal: "SIGTERM" });
@@ -908,6 +922,47 @@ test("official factory rejects a foreign app-server entrypoint before constructi
   assert.equal(managerConstructed, 0);
 });
 
+test("official factory rejects missing or malformed product versions before constructing the manager", {
+  skip: !OFFICIAL_HOST_SUPPORTED,
+}, async () => {
+  const root = path.join(process.cwd(), ".run", "official-host-assets");
+  const assets: OfficialHostAssets = {
+    root,
+    hostModulePath: path.join(root, "official-host-runtime.mjs"),
+    appServerEntryPath: path.join(root, "app-server", "zcode.cjs"),
+    builtinProviderConfigPath: path.join(root, "app-server", "provider", "zcode-builtin.json"),
+    runtimeHostPath: path.join(root, "zcode-runtime-host.exe"),
+    manifestDigest: "c".repeat(64),
+  };
+  const config = fakeConfig({
+    zcodeEntrypoint: assets.appServerEntryPath,
+    providerBuiltinConfigFile: assets.builtinProviderConfigPath,
+  });
+
+  for (const productVersion of [undefined, "cli-0.17.1"]) {
+    let managerConstructed = 0;
+    class CountingManager extends FakeProcessManager {
+      constructor(options: Record<string, unknown>) {
+        managerConstructed += 1;
+        super(options);
+      }
+    }
+    const factory = createOfficialHostClientFactory({
+      assets: async () => assets,
+      moduleSource: {
+        ZCODE_PRODUCT_VERSION: productVersion,
+        ZCodeAgentProcessManager: CountingManager as never,
+        ZCodeProtocolClient: FakeOfficialProtocolClient as never,
+      },
+    });
+    await assert.rejects(
+      Promise.resolve(factory(factoryContext(config, assets))),
+      (error: unknown) => error instanceof BridgeError && error.code === "provider_config_invalid",
+    );
+    assert.equal(managerConstructed, 0);
+  }
+});
+
 test("official factory fails closed outside Windows x64", {
   skip: OFFICIAL_HOST_SUPPORTED,
 }, async () => {
@@ -952,7 +1007,7 @@ test("production asset verification fails closed for absent and invalid shipped 
       root,
       "vendor",
       "official-host",
-      "win32-x64-node24.16.0-zcode3.18.0-b95ebaff",
+      "win32-x64-node24.16.0-zcode3.18.2-fec97590",
     );
     await mkdir(path.join(vendor, "app-server", "provider"), { recursive: true });
     await writeFile(invalidWorker, "", "utf8");
@@ -971,7 +1026,9 @@ test("production asset verification fails closed for absent and invalid shipped 
   }
 });
 
-test("OfficialHostAdapter is lazy before execution and resolves the test source tree through the Worker-shaped URL", async () => {
+test("OfficialHostAdapter is lazy before execution and resolves the test source tree through the Worker-shaped URL", {
+  skip: !OFFICIAL_HOST_SUPPORTED,
+}, async () => {
   let moduleCalls = 0;
   const workerUrl = pathToFileURL(path.join(
     process.cwd(),
@@ -1000,9 +1057,13 @@ test("OfficialHostAdapter is lazy before execution and resolves the test source 
   const assets = await verifyOfficialHostAssets(workerUrl);
   assert.equal(path.basename(assets.hostModulePath), "official-host-runtime.mjs");
   assert.equal(assets.manifestDigest.length, 64);
+  assert.equal(await loadOfficialHostProductVersion(workerUrl), "3.18.2");
+  assert.equal(await readOfficialCliVersion(assets.appServerEntryPath), "0.17.1");
 });
 
-test("the shipped host module applies the exact 16 MiB transport frame limit and fails closed above it", async () => {
+test("the shipped host module applies the exact 16 MiB transport frame limit and fails closed above it", {
+  skip: !OFFICIAL_HOST_SUPPORTED,
+}, async () => {
   const workerUrl = pathToFileURL(path.join(
     process.cwd(),
     "plugins",
@@ -1076,12 +1137,15 @@ test("the shipped Host exports and native keyring closure load outside the build
   const assets = await verifyOfficialHostAssets(workerUrl);
   const module = await import(pathToFileURL(assets.hostModulePath).href) as unknown as Record<string, unknown>;
   for (const name of [
+    "ZCODE_PRODUCT_VERSION",
     "ZCodeAgentProcessManager",
     "ZCodeProtocolClient",
     "ZCodeStdioTransport",
     "createOAuthProviderRuntimeAuthService",
+    "createOfficialStartPlanAuthenticationResolver",
   ]) {
-    assert.equal(typeof module[name], "function", `${name} must be exported`);
+    if (name === "ZCODE_PRODUCT_VERSION") assert.equal(module[name], "3.18.2");
+    else assert.equal(typeof module[name], "function", `${name} must be exported`);
   }
 
   const artifactRequire = createRequire(path.join(assets.root, "app-server", "zcode.cjs"));

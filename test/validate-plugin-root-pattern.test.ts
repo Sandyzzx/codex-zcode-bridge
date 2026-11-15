@@ -333,6 +333,9 @@ test("the real validator rejects injected development-path references and keeps 
       `const sibling = ${JSON.stringify(`${root} Backup${path.sep}src${path.sep}main.ts`)};`,
       `const encodedSibling = ${JSON.stringify(pathToFileURL(path.join(`${root} Backup`, "src", "main.ts")).href)};`,
       "// vendor loader keeps worker/vendor/pkg/browser-host.cjs self-contained",
+      "const workerModuleUrl = pathToFileURL3(workerEntryPath());",
+      "loadOfficialHostProductVersion2(workerModuleUrl);",
+      "loadOfficialStartPlanAuthenticationResolverFactory2(workerModuleUrl);",
     ].join("\n");
     const bundlePath = path.join(pluginRoot, "dist", "bridge.mjs");
     const waiterPath = path.join(pluginRoot, "dist", "wait-task.mjs");
@@ -341,15 +344,19 @@ test("the real validator rejects injected development-path references and keeps 
       "worker",
       "vendor",
       "official-host",
-      "win32-x64-node24.16.0-zcode3.18.0-b95ebaff",
+      "win32-x64-node24.16.0-zcode3.18.2-fec97590",
     );
-    const patchPath = "upstream/zcode-3.18.0/patches/0001-fixture.patch";
+    const patchPath = "upstream/zcode-3.18.2/patches/0001-fixture.patch";
     const patchBytes = Buffer.from("diff --git a/fixture.ts b/fixture.ts\n");
     mkdirSync(path.dirname(path.join(root, patchPath)), { recursive: true });
     mkdirSync(path.join(officialHostRoot, "app-server", "provider"), { recursive: true });
     mkdirSync(path.join(officialHostRoot, "node_modules", "@napi-rs", "keyring"), { recursive: true });
     mkdirSync(path.join(officialHostRoot, "node_modules", "@napi-rs", "keyring-win32-x64-msvc"), { recursive: true });
     writeFileSync(path.join(root, patchPath), patchBytes);
+    const sha256 = (bytes: Buffer): string => createHash("sha256").update(bytes).digest("hex").toUpperCase();
+    const patchSidecarPath = path.join(root, `${patchPath}.sha256`);
+    const patchSidecar = `${sha256(patchBytes)}  ${path.basename(patchPath)}\n`;
+    writeFileSync(patchSidecarPath, patchSidecar);
     const officialHostFiles = new Map<string, Buffer>([
       ["app-server/provider/zcode-builtin.json", Buffer.from("{}\n")],
       ["app-server/THIRD-PARTY-NOTICES.md", Buffer.from("fixture notices\n")],
@@ -362,25 +369,26 @@ test("the real validator rejects injected development-path references and keeps 
       ["node_modules/@napi-rs/keyring-win32-x64-msvc/LICENSE.third-party.md", Buffer.from("MIT third party\n")],
       ["node_modules/@napi-rs/keyring-win32-x64-msvc/keyring.win32-x64-msvc.node", Buffer.from("fixture native bytes")],
       ["node_modules/@napi-rs/keyring-win32-x64-msvc/package.json", Buffer.from('{"name":"@napi-rs/keyring-win32-x64-msvc"}\n')],
-      ["official-host-runtime.mjs", Buffer.from("export const createOAuthProviderRuntimeAuthService = () => undefined;\n")],
+      ["official-host-runtime.mjs", Buffer.from("export const createOAuthProviderRuntimeAuthService = () => undefined;\nexport const createOfficialStartPlanAuthenticationResolver = () => undefined;\n")],
       ["zcode-runtime-host.exe", Buffer.from("fixture helper")],
     ]);
     for (const [relativePath, bytes] of officialHostFiles) {
       writeFileSync(path.join(officialHostRoot, relativePath), bytes);
     }
-    const sha256 = (bytes: Buffer): string => createHash("sha256").update(bytes).digest("hex").toUpperCase();
+    const sourceAggregateDiffSha256 =
+      "A3F5B7BD7A653403B8362ADC121323404FB4F334B1CFFA0DF3C3E617F9F09AB2";
     const officialHostBom = {
       schemaVersion: 1,
       scope: {
         platform: "win32",
         architecture: "x64",
         node: "24.16.0",
-        zcodeVersion: "3.18.0",
+        zcodeVersion: "3.18.2",
       },
       source: {
-        version: "3.18.0",
-        commit: "b95ebaffeab641907b38652f45c1502bd762972d",
-        tree: "d7ebeb994cb8f46b16761fc9c550ae3f6e039c3d",
+        version: "3.18.2",
+        commit: "fec975905a2abd4c07e35c40d51fa097a2258ec9",
+        tree: "5e90fec80706b8381f94e4eef48cf821b9868916",
       },
       patches: [{
         order: 1,
@@ -388,6 +396,7 @@ test("the real validator rejects injected development-path references and keeps 
         bytes: patchBytes.length,
         sha256: sha256(patchBytes),
       }],
+      build: { sourceAggregateDiffSha256 },
       files: [...officialHostFiles].map(([relativePath, bytes]) => ({
         path: relativePath,
         bytes: bytes.length,
@@ -397,7 +406,10 @@ test("the real validator rejects injected development-path references and keeps 
     const officialHostBomBytes = Buffer.from(`${JSON.stringify(officialHostBom, null, 2)}\n`);
     writeFileSync(path.join(officialHostRoot, "ARTIFACT_BOM.json"), officialHostBomBytes);
     writeFileSync(path.join(officialHostRoot, "BUILD_PROVENANCE.json"), `${JSON.stringify({
-      source: officialHostBom.source,
+      source: {
+        ...officialHostBom.source,
+        aggregateDiffSha256: sourceAggregateDiffSha256,
+      },
       bom: {
         path: "ARTIFACT_BOM.json",
         bytes: officialHostBomBytes.length,
@@ -436,6 +448,23 @@ test("the real validator rejects injected development-path references and keeps 
         assert.equal(hasLeakDiagnostic, false, `${name}: benign content must not trip the leak check`);
       }
     }
+
+    writeFileSync(bundlePath, `${baseline}\n`, "utf8");
+    writeFileSync(
+      patchSidecarPath,
+      `${"0".repeat(64)}  ${path.basename(patchPath)}\n`,
+    );
+    const sidecarMismatchRun = spawnSync(process.execPath, [path.join(root, "scripts", "validate-plugin.mjs")], {
+      encoding: "utf8",
+      timeout: 60_000,
+      windowsHide: true,
+    });
+    assert.notEqual(sidecarMismatchRun.status, 0, "a stale patch sidecar must be rejected");
+    assert.match(
+      `${sidecarMismatchRun.stdout ?? ""}${sidecarMismatchRun.stderr ?? ""}`,
+      /Official Host patch sidecar disagrees with its BOM/u,
+    );
+    writeFileSync(patchSidecarPath, patchSidecar);
 
     writeFileSync(path.join(pluginRoot, "dist", "admin-abandon-held-operation.mjs"), "const SCHEMA_VERSION = 13;\n");
     const schemaMismatchRun = spawnSync(process.execPath, [path.join(root, "scripts", "validate-plugin.mjs")], {

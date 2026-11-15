@@ -1652,12 +1652,179 @@ var init_errors = __esm({
   }
 });
 
+// src/runtime/desktop-host-launch.ts
+import { closeSync, openSync, readSync } from "node:fs";
+import path4 from "node:path";
+function buildZCodeAppServerLaunch(zcodeEntrypoint, baseEnv) {
+  const metadata = readDesktopMetadata(zcodeEntrypoint);
+  return {
+    args: [...APP_SERVER_ARGS],
+    env: metadata === null ? { ...baseEnv } : {
+      ...baseEnv,
+      [ZCODE_APP_VERSION_ENV]: metadata.appVersion,
+      [ZCODE_BUILD_COMMIT_ID_ENV]: metadata.buildCommitId
+    }
+  };
+}
+function withOfficialHostLaunchIdentity(baseEnv, identity) {
+  const installedVersion = baseEnv[ZCODE_APP_VERSION_ENV];
+  const installedBuildCommitId = baseEnv[ZCODE_BUILD_COMMIT_ID_ENV];
+  if (installedVersion !== void 0 || installedBuildCommitId !== void 0) {
+    if (typeof installedVersion !== "string" || !VERSION_PATTERN.test(installedVersion) || typeof installedBuildCommitId !== "string" || !BUILD_COMMIT_PATTERN.test(installedBuildCommitId)) {
+      throw invalidLaunchIdentity();
+    }
+    return { ...baseEnv };
+  }
+  const productVersion = identity.productVersion.trim();
+  if (!VERSION_PATTERN.test(productVersion)) throw invalidLaunchIdentity();
+  return {
+    ...baseEnv,
+    [ZCODE_APP_VERSION_ENV]: productVersion
+  };
+}
+function readDesktopMetadata(zcodeEntrypoint) {
+  const archivePath = path4.resolve(path4.dirname(zcodeEntrypoint), "..", "app.asar");
+  let archive;
+  try {
+    archive = readAsarMetadataFiles(archivePath);
+  } catch (error62) {
+    if (isMissingFile(error62)) return null;
+    throw invalidMetadata("could not be read");
+  }
+  const packageJson = parseObject(archive.packageJson, "package.json");
+  const buildMetadata = parseObject(archive.buildMetadata, "build-meta.json");
+  const packageVersion = packageJson["version"];
+  const appVersion = buildMetadata["appVersion"];
+  const buildCommitId = buildMetadata["buildCommitId"];
+  if (typeof packageVersion !== "string" || typeof appVersion !== "string" || typeof buildCommitId !== "string") {
+    throw invalidMetadata("is missing required fields");
+  }
+  if (!VERSION_PATTERN.test(packageVersion) || !VERSION_PATTERN.test(appVersion) || !BUILD_COMMIT_PATTERN.test(buildCommitId)) {
+    throw invalidMetadata("uses an unsupported version or build commit format");
+  }
+  if (packageVersion !== appVersion) {
+    throw invalidMetadata("contains conflicting application versions");
+  }
+  return { appVersion, buildCommitId };
+}
+function readAsarMetadataFiles(archivePath) {
+  const fd = openSync(archivePath, "r");
+  try {
+    const sizeHeader = Buffer.alloc(16);
+    readExact(fd, sizeHeader, 16, 0);
+    if (sizeHeader.readUInt32LE(0) !== 4) throw new Error("invalid asar header");
+    const headerPayloadBytes = sizeHeader.readUInt32LE(4);
+    const headerBytes = sizeHeader.readUInt32LE(12);
+    if (headerBytes === 0 || headerBytes > MAX_ASAR_HEADER_BYTES || headerPayloadBytes < headerBytes) {
+      throw new Error("invalid asar header size");
+    }
+    const headerBuffer = Buffer.alloc(headerBytes);
+    readExact(fd, headerBuffer, headerBytes, 16);
+    const root = parseObject(headerBuffer, "asar header");
+    if (!isRecord3(root.files)) throw new Error("asar header file table is not an object");
+    const buildEntry = findEntry(root.files, BUILD_METADATA_PATH);
+    if (buildEntry === null) throw new Error("asar build metadata is missing");
+    const packageEntry = findEntry(root.files, ["package.json"]);
+    if (packageEntry === null) throw new Error("asar package.json is missing");
+    return {
+      packageJson: readEntry(fd, packageEntry, 8 + headerPayloadBytes),
+      buildMetadata: readEntry(fd, buildEntry, 8 + headerPayloadBytes)
+    };
+  } finally {
+    closeSync(fd);
+  }
+}
+function findEntry(root, parts) {
+  let files = root;
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index];
+    if (!Object.hasOwn(files, part)) return null;
+    const current = files[part];
+    if (!isRecord3(current)) throw new Error(`asar ${part} entry is not an object`);
+    if (index === parts.length - 1) return current;
+    if (!isRecord3(current.files)) throw new Error(`asar ${part} entry is not a directory`);
+    files = current.files;
+  }
+  return null;
+}
+function readEntry(fd, entry, contentOffset) {
+  const offset = asNonNegativeSafeInteger(entry.offset);
+  const size = asNonNegativeSafeInteger(entry.size);
+  if (entry.files || entry.unpacked || entry.link || offset === null || size === null || size > MAX_METADATA_BYTES || !Number.isSafeInteger(contentOffset + offset)) {
+    throw new Error("invalid asar metadata entry");
+  }
+  const output2 = Buffer.alloc(size);
+  readExact(fd, output2, output2.length, contentOffset + offset);
+  return output2;
+}
+function asNonNegativeSafeInteger(value) {
+  if (typeof value === "number") {
+    return Number.isSafeInteger(value) && value >= 0 ? value : null;
+  }
+  if (typeof value !== "string" || !/^(?:0|[1-9]\d*)$/u.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+function readExact(fd, target, length, position) {
+  let offset = 0;
+  while (offset < length) {
+    const read = readSync(fd, target, offset, length - offset, position + offset);
+    if (read === 0) throw new Error("unexpected end of asar file");
+    offset += read;
+  }
+}
+function parseObject(buffer, label) {
+  let parsed;
+  try {
+    parsed = JSON.parse(buffer.toString("utf8"));
+  } catch {
+    throw invalidMetadata(`${label} is not valid JSON`);
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw invalidMetadata(`${label} is not an object`);
+  }
+  return parsed;
+}
+function invalidMetadata(reason) {
+  return new BridgeError(
+    "provider_config_invalid",
+    `Installed ZCode Desktop metadata ${reason}; refusing to invent a Desktop identity.`
+  );
+}
+function invalidLaunchIdentity() {
+  return new BridgeError(
+    "provider_config_invalid",
+    "Official Host launch identity is invalid; refusing to mix Desktop, Host, or CLI versions."
+  );
+}
+function isMissingFile(error62) {
+  return typeof error62 === "object" && error62 !== null && "code" in error62 && error62.code === "ENOENT";
+}
+function isRecord3(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+var ZCODE_APP_VERSION_ENV, ZCODE_BUILD_COMMIT_ID_ENV, APP_SERVER_ARGS, BUILD_METADATA_PATH, MAX_ASAR_HEADER_BYTES, MAX_METADATA_BYTES, VERSION_PATTERN, BUILD_COMMIT_PATTERN;
+var init_desktop_host_launch = __esm({
+  "src/runtime/desktop-host-launch.ts"() {
+    "use strict";
+    init_errors();
+    ZCODE_APP_VERSION_ENV = "ZCODE_APP_VERSION";
+    ZCODE_BUILD_COMMIT_ID_ENV = "ZCODE_BUILD_COMMIT_ID";
+    APP_SERVER_ARGS = ["app-server", "--stdio", "--surface", "desktop"];
+    BUILD_METADATA_PATH = ["out", "metadata", "build-meta.json"];
+    MAX_ASAR_HEADER_BYTES = 32 * 1024 * 1024;
+    MAX_METADATA_BYTES = 64 * 1024;
+    VERSION_PATTERN = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
+    BUILD_COMMIT_PATTERN = /^[0-9a-f]{8}$/u;
+  }
+});
+
 // src/runtime/paths.ts
 import { existsSync as existsSync2, readFileSync as readFileSync3 } from "node:fs";
-import path4 from "node:path";
+import path5 from "node:path";
 function resolveUserHome(env, options = {}) {
   const platform = options.platform ?? process.platform;
-  const pathImpl = platform === "win32" ? path4.win32 : path4.posix;
+  const pathImpl = platform === "win32" ? path5.win32 : path5.posix;
   const homeRaw = env["HOME"]?.trim() || null;
   const userProfileRaw = env["USERPROFILE"]?.trim() || null;
   if (platform !== "win32") {
@@ -1697,7 +1864,7 @@ function resolveUserHome(env, options = {}) {
 }
 function discoverZCodeData(env, options = {}) {
   const platform = options.platform ?? process.platform;
-  const pathImpl = platform === "win32" ? path4.win32 : path4.posix;
+  const pathImpl = platform === "win32" ? path5.win32 : path5.posix;
   const readFile2 = options.readFile ?? ((filePath) => readFileSync3(filePath, "utf8"));
   const fileExists = options.fileExists ?? existsSync2;
   const home = resolveUserHome(env, options);
@@ -1764,7 +1931,7 @@ function isWindowsAbsolutePath(value) {
   return /^[A-Za-z]:[\\/]/u.test(value) || /^\/\/[^\\/]+[\\/][^\\/]+(?:[\\/].*)?$/u.test(value) || /^\\\\[^\\/]+[\\/][^\\/]+(?:[\\/].*)?$/u.test(value);
 }
 function isAbsolutePathForPlatform(value, platform = process.platform) {
-  return platform === "win32" ? isWindowsAbsolutePath(value) : path4.isAbsolute(value);
+  return platform === "win32" ? isWindowsAbsolutePath(value) : path5.isAbsolute(value);
 }
 function isPermissionDeniedCode(error62) {
   const code = error62?.code;
@@ -1772,7 +1939,7 @@ function isPermissionDeniedCode(error62) {
 }
 function discoverZCodeInstall(env, options = {}) {
   const platform = options.platform ?? process.platform;
-  const pathImpl = platform === "win32" ? path4.win32 : path4.posix;
+  const pathImpl = platform === "win32" ? path5.win32 : path5.posix;
   const fileExists = options.fileExists ?? existsSync2;
   const requireBuiltin = options.requireBuiltin ?? true;
   const roots = [];
@@ -1802,12 +1969,12 @@ function discoverZCodeInstall(env, options = {}) {
   return { installDir: null, source: null, zcodeEntrypoint: null, builtinConfigFile: null, candidates };
 }
 function builtinConfigForRuntime(zcodeEntrypoint, platform = process.platform) {
-  const pathImpl = platform === "win32" ? path4.win32 : path4.posix;
+  const pathImpl = platform === "win32" ? path5.win32 : path5.posix;
   const resourcesDir = pathImpl.dirname(pathImpl.dirname(zcodeEntrypoint));
   return pathImpl.join(resourcesDir, "config", "provider", "zcode-builtin.json");
 }
 function sameFileSystemPath(left, right, platform = process.platform) {
-  const pathImpl = platform === "win32" ? path4.win32 : path4.posix;
+  const pathImpl = platform === "win32" ? path5.win32 : path5.posix;
   return sameCleanPath(left, right, pathImpl, platform === "win32");
 }
 function sameCleanPath(left, right, pathImpl, caseInsensitive) {
@@ -1824,19 +1991,19 @@ var init_paths = __esm({
 // src/runtime/resolver.ts
 import { accessSync, existsSync as existsSync3, readFileSync as readFileSync4, statSync } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import path5 from "node:path";
+import path6 from "node:path";
 import { fileURLToPath } from "node:url";
 function loadPersistedRuntimeEnvironment(source, homeDir = homedir2(), host = codexHostProfile(homeDir)) {
   validateHostProfile(host);
-  const settingsPaths = [host.settingsDirectory, ...host.legacySettingsDirectories ?? []].map((directory) => path5.join(directory, "runtime-config.json"));
+  const settingsPaths = [host.settingsDirectory, ...host.legacySettingsDirectories ?? []].map((directory) => path6.join(directory, "runtime-config.json"));
   const legacyDataRoot = source["ZCODE_BRIDGE_DATA_DIR"]?.trim();
-  if (legacyDataRoot && path5.isAbsolute(legacyDataRoot)) {
-    settingsPaths.push(path5.join(legacyDataRoot, "runtime-config.json"));
+  if (legacyDataRoot && path6.isAbsolute(legacyDataRoot)) {
+    settingsPaths.push(path6.join(legacyDataRoot, "runtime-config.json"));
   }
   let parsed = null;
   const seenPaths = /* @__PURE__ */ new Set();
   for (const settingsPath of settingsPaths) {
-    const normalized = path5.resolve(settingsPath);
+    const normalized = path6.resolve(settingsPath);
     const identity = process.platform === "win32" ? normalized.toLocaleLowerCase("en-US") : normalized;
     if (seenPaths.has(identity)) continue;
     seenPaths.add(identity);
@@ -1870,8 +2037,8 @@ function resolveZcodeHome(env) {
   if (!isAbsolutePathForPlatform(configured)) {
     throw new BridgeError("provider_config_invalid", "ZCODE_HOME must be an absolute path");
   }
-  const resolved = path5.normalize(configured);
-  if (path5.basename(resolved).toLowerCase() !== ".zcode") {
+  const resolved = path6.normalize(configured);
+  if (path6.basename(resolved).toLowerCase() !== ".zcode") {
     throw new BridgeError(
       "provider_config_invalid",
       "ZCODE_HOME must name a .zcode directory so app-server can use the same data root"
@@ -1888,8 +2055,8 @@ function resolveZcodeHome(env) {
   return resolved;
 }
 function samePath(left, right) {
-  const resolvedLeft = path5.resolve(left);
-  const resolvedRight = path5.resolve(right);
+  const resolvedLeft = path6.resolve(left);
+  const resolvedRight = path6.resolve(right);
   return process.platform === "win32" ? resolvedLeft.toLowerCase() === resolvedRight.toLowerCase() : resolvedLeft === resolvedRight;
 }
 function isReadableFile(filePath) {
@@ -1902,12 +2069,12 @@ function isReadableFile(filePath) {
   }
 }
 function findPackageRoot(startDir) {
-  let current = startDir ?? path5.dirname(fileURLToPath(import.meta.url));
+  let current = startDir ?? path6.dirname(fileURLToPath(import.meta.url));
   for (let depth = 0; depth < 10; depth++) {
-    if (existsSync3(path5.join(current, "package.json"))) {
+    if (existsSync3(path6.join(current, "package.json"))) {
       return current;
     }
-    const parent = path5.dirname(current);
+    const parent = path6.dirname(current);
     if (parent === current) break;
     current = parent;
   }
@@ -1972,7 +2139,7 @@ var init_resolver = __esm({
         if (explicitDataBaseDir && !isAbsolutePathForPlatform(explicitDataBaseDir)) {
           throw new BridgeError("provider_config_invalid", "ZCODE_DATA_BASE_DIR must be an absolute path");
         }
-        if (zcodeHome && explicitDataBaseDir && !sameFileSystemPath(path5.dirname(zcodeHome), explicitDataBaseDir)) {
+        if (zcodeHome && explicitDataBaseDir && !sameFileSystemPath(path6.dirname(zcodeHome), explicitDataBaseDir)) {
           throw new BridgeError(
             "provider_config_invalid",
             `ZCODE_HOME (${zcodeHome}) and ZCODE_DATA_BASE_DIR (${explicitDataBaseDir}) conflict; ZCODE_HOME must name <ZCODE_DATA_BASE_DIR>/.zcode. Fix one of them instead of relying on silent selection.`
@@ -2045,11 +2212,11 @@ var init_resolver = __esm({
             this.#validatePersonalConfig(personalEnv);
             personalConfigFile = personalEnv;
           } else {
-            const candidates = zcodeHome ? [path5.join(zcodeHome, "v2", "provider_config.json")] : [
+            const candidates = zcodeHome ? [path6.join(zcodeHome, "v2", "provider_config.json")] : [
               explicitDataBaseDir,
               data.configuredDataBaseDir,
               data.userHome
-            ].filter((base) => Boolean(base)).filter((base, index, values) => values.indexOf(base) === index).map((base) => path5.join(base, ".zcode", "v2", "provider_config.json"));
+            ].filter((base) => Boolean(base)).filter((base, index, values) => values.indexOf(base) === index).map((base) => path6.join(base, ".zcode", "v2", "provider_config.json"));
             const existing = candidates.filter((candidate) => existsSync3(candidate));
             if (existing.length === 0) {
               throw new BridgeError(
@@ -2077,7 +2244,7 @@ var init_resolver = __esm({
             personalConfigFile = accepted;
           }
         }
-        if (zcodeHome && !samePath(personalConfigFile, path5.join(zcodeHome, "v2", "provider_config.json"))) {
+        if (zcodeHome && !samePath(personalConfigFile, path6.join(zcodeHome, "v2", "provider_config.json"))) {
           throw new BridgeError(
             "provider_config_invalid",
             `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE must be ZCODE_HOME/v2/provider_config.json (${zcodeHome})`
@@ -2086,12 +2253,12 @@ var init_resolver = __esm({
         const dataOverride = env["ZCODE_BRIDGE_DATA_DIR"]?.trim();
         let dataRoot;
         if (dataOverride) {
-          if (!path5.isAbsolute(dataOverride)) {
+          if (!path6.isAbsolute(dataOverride)) {
             throw new Error(
               `ZCODE_BRIDGE_DATA_DIR must be an absolute path when set, got: ${dataOverride}`
             );
           }
-          dataRoot = path5.normalize(dataOverride);
+          dataRoot = path6.normalize(dataOverride);
         } else {
           dataRoot = this.#packageRoot ?? findPackageRoot();
         }
@@ -3977,152 +4144,6 @@ var init_child_env = __esm({
       "XDG_DATA_HOME",
       "XDG_CACHE_HOME"
     ]);
-  }
-});
-
-// src/runtime/desktop-host-launch.ts
-import { closeSync, openSync, readSync } from "node:fs";
-import path6 from "node:path";
-function buildZCodeAppServerLaunch(zcodeEntrypoint, baseEnv) {
-  const metadata = readDesktopMetadata(zcodeEntrypoint);
-  return {
-    args: [...APP_SERVER_ARGS],
-    env: metadata === null ? { ...baseEnv } : {
-      ...baseEnv,
-      [ZCODE_APP_VERSION_ENV]: metadata.appVersion,
-      [ZCODE_BUILD_COMMIT_ID_ENV]: metadata.buildCommitId
-    }
-  };
-}
-function readDesktopMetadata(zcodeEntrypoint) {
-  const archivePath = path6.resolve(path6.dirname(zcodeEntrypoint), "..", "app.asar");
-  let archive;
-  try {
-    archive = readAsarMetadataFiles(archivePath);
-  } catch (error62) {
-    if (isMissingFile(error62)) return null;
-    throw invalidMetadata("could not be read");
-  }
-  if (archive === null) return null;
-  const packageJson = parseObject(archive.packageJson, "package.json");
-  const buildMetadata = parseObject(archive.buildMetadata, "build-meta.json");
-  const packageVersion = packageJson["version"];
-  const appVersion = buildMetadata["appVersion"];
-  const buildCommitId = buildMetadata["buildCommitId"];
-  if (typeof packageVersion !== "string" || typeof appVersion !== "string" || typeof buildCommitId !== "string") {
-    throw invalidMetadata("is missing required fields");
-  }
-  if (!VERSION_PATTERN.test(packageVersion) || !VERSION_PATTERN.test(appVersion) || !BUILD_COMMIT_PATTERN.test(buildCommitId)) {
-    throw invalidMetadata("uses an unsupported version or build commit format");
-  }
-  if (packageVersion !== appVersion) {
-    throw invalidMetadata("contains conflicting application versions");
-  }
-  return { appVersion, buildCommitId };
-}
-function readAsarMetadataFiles(archivePath) {
-  const fd = openSync(archivePath, "r");
-  try {
-    const sizeHeader = Buffer.alloc(16);
-    readExact(fd, sizeHeader, 16, 0);
-    if (sizeHeader.readUInt32LE(0) !== 4) throw new Error("invalid asar header");
-    const headerPayloadBytes = sizeHeader.readUInt32LE(4);
-    const headerBytes = sizeHeader.readUInt32LE(12);
-    if (headerBytes === 0 || headerBytes > MAX_ASAR_HEADER_BYTES || headerPayloadBytes < headerBytes) {
-      throw new Error("invalid asar header size");
-    }
-    const headerBuffer = Buffer.alloc(headerBytes);
-    readExact(fd, headerBuffer, headerBytes, 16);
-    const root = parseObject(headerBuffer, "asar header");
-    if (!isRecord3(root.files)) throw new Error("asar header file table is not an object");
-    const buildEntry = findEntry(root.files, BUILD_METADATA_PATH);
-    if (buildEntry === null) return null;
-    const packageEntry = findEntry(root.files, ["package.json"]);
-    if (packageEntry === null) throw new Error("asar package.json is missing");
-    return {
-      packageJson: readEntry(fd, packageEntry, 8 + headerPayloadBytes),
-      buildMetadata: readEntry(fd, buildEntry, 8 + headerPayloadBytes)
-    };
-  } finally {
-    closeSync(fd);
-  }
-}
-function findEntry(root, parts) {
-  let files = root;
-  for (let index = 0; index < parts.length; index += 1) {
-    const part = parts[index];
-    if (!Object.hasOwn(files, part)) return null;
-    const current = files[part];
-    if (!isRecord3(current)) throw new Error(`asar ${part} entry is not an object`);
-    if (index === parts.length - 1) return current;
-    if (!isRecord3(current.files)) throw new Error(`asar ${part} entry is not a directory`);
-    files = current.files;
-  }
-  return null;
-}
-function readEntry(fd, entry, contentOffset) {
-  const offset = asNonNegativeSafeInteger(entry.offset);
-  const size = asNonNegativeSafeInteger(entry.size);
-  if (entry.files || entry.unpacked || entry.link || offset === null || size === null || size > MAX_METADATA_BYTES || !Number.isSafeInteger(contentOffset + offset)) {
-    throw new Error("invalid asar metadata entry");
-  }
-  const output2 = Buffer.alloc(size);
-  readExact(fd, output2, output2.length, contentOffset + offset);
-  return output2;
-}
-function asNonNegativeSafeInteger(value) {
-  if (typeof value === "number") {
-    return Number.isSafeInteger(value) && value >= 0 ? value : null;
-  }
-  if (typeof value !== "string" || !/^(?:0|[1-9]\d*)$/u.test(value)) return null;
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) ? parsed : null;
-}
-function readExact(fd, target, length, position) {
-  let offset = 0;
-  while (offset < length) {
-    const read = readSync(fd, target, offset, length - offset, position + offset);
-    if (read === 0) throw new Error("unexpected end of asar file");
-    offset += read;
-  }
-}
-function parseObject(buffer, label) {
-  let parsed;
-  try {
-    parsed = JSON.parse(buffer.toString("utf8"));
-  } catch {
-    throw invalidMetadata(`${label} is not valid JSON`);
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw invalidMetadata(`${label} is not an object`);
-  }
-  return parsed;
-}
-function invalidMetadata(reason) {
-  return new BridgeError(
-    "provider_config_invalid",
-    `Installed ZCode Desktop metadata ${reason}; refusing to invent a Desktop identity.`
-  );
-}
-function isMissingFile(error62) {
-  return typeof error62 === "object" && error62 !== null && "code" in error62 && error62.code === "ENOENT";
-}
-function isRecord3(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-var ZCODE_APP_VERSION_ENV, ZCODE_BUILD_COMMIT_ID_ENV, APP_SERVER_ARGS, BUILD_METADATA_PATH, MAX_ASAR_HEADER_BYTES, MAX_METADATA_BYTES, VERSION_PATTERN, BUILD_COMMIT_PATTERN;
-var init_desktop_host_launch = __esm({
-  "src/runtime/desktop-host-launch.ts"() {
-    "use strict";
-    init_errors();
-    ZCODE_APP_VERSION_ENV = "ZCODE_APP_VERSION";
-    ZCODE_BUILD_COMMIT_ID_ENV = "ZCODE_BUILD_COMMIT_ID";
-    APP_SERVER_ARGS = ["app-server", "--stdio", "--surface", "desktop"];
-    BUILD_METADATA_PATH = ["out", "metadata", "build-meta.json"];
-    MAX_ASAR_HEADER_BYTES = 32 * 1024 * 1024;
-    MAX_METADATA_BYTES = 64 * 1024;
-    VERSION_PATTERN = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
-    BUILD_COMMIT_PATTERN = /^[0-9a-f]{8}$/u;
   }
 });
 
@@ -24717,11 +24738,18 @@ var init_external = __esm({
   }
 });
 
-// node_modules/zod/index.js
-var init_zod = __esm({
-  "node_modules/zod/index.js"() {
+// node_modules/zod/v4/classic/index.js
+var init_classic = __esm({
+  "node_modules/zod/v4/classic/index.js"() {
     init_external();
     init_external();
+  }
+});
+
+// node_modules/zod/v4/index.js
+var init_v4 = __esm({
+  "node_modules/zod/v4/index.js"() {
+    init_classic();
   }
 });
 
@@ -24730,7 +24758,7 @@ var BROWSER_VIEWPORT_LIMITS, browserViewportSizeSchema, browserViewportInputSche
 var init_command_metadata = __esm({
   "src/browser/command-metadata.ts"() {
     "use strict";
-    init_zod();
+    init_v4();
     BROWSER_VIEWPORT_LIMITS = {
       minWidth: 320,
       maxWidth: 3840,
@@ -24850,7 +24878,7 @@ var browserMouseButtonSchema, browserKeyModifierSchema, browserPointSchema, brow
 var init_commands = __esm({
   "src/browser/commands.ts"() {
     "use strict";
-    init_zod();
+    init_v4();
     init_command_metadata();
     init_command_metadata();
     browserMouseButtonSchema = external_exports.enum(["left", "right", "middle"]);
@@ -25283,7 +25311,7 @@ var browserBackendTypeSchema, browserCapabilityDescriptorSchema, browserBackendD
 var init_backend = __esm({
   "src/browser/backend.ts"() {
     "use strict";
-    init_zod();
+    init_v4();
     init_commands();
     browserBackendTypeSchema = external_exports.enum(["iab", "extension", "cdp"]);
     browserCapabilityDescriptorSchema = external_exports.object({
@@ -25329,7 +25357,7 @@ var browserListParamsSchema, browserExecuteParamsSchema;
 var init_params = __esm({
   "src/browser/params.ts"() {
     "use strict";
-    init_zod();
+    init_v4();
     init_command_metadata();
     init_backend();
     init_commands();
@@ -28107,7 +28135,9 @@ __export(official_host_adapter_exports, {
   OfficialHostAdapter: () => OfficialHostAdapter,
   createOfficialHostClientFactory: () => createOfficialHostClientFactory,
   lazyOfficialHostAssets: () => lazyOfficialHostAssets,
+  loadOfficialHostProductVersion: () => loadOfficialHostProductVersion,
   loadOfficialHostProviderRuntimeAuthFactory: () => loadOfficialHostProviderRuntimeAuthFactory,
+  loadOfficialStartPlanAuthenticationResolverFactory: () => loadOfficialStartPlanAuthenticationResolverFactory,
   verifyOfficialHostAssets: () => verifyOfficialHostAssets
 });
 import { createHash as createHash8 } from "node:crypto";
@@ -28125,6 +28155,8 @@ function createOfficialHostClientFactory(input2) {
       throw new BridgeError("provider_config_invalid", "Official Host runtime entrypoint must be the shipped bundle.");
     }
     const module = await resolveOfficialHostModule(input2.moduleSource);
+    const productVersion = normalizeOfficialHostProductVersion(module.ZCODE_PRODUCT_VERSION);
+    const launchEnv = withOfficialHostLaunchIdentity(context.launch.env, { productVersion });
     const manager = new module.ZCodeAgentProcessManager({
       useSharedTaskRuntime: () => false,
       maxFrameBytes: OFFICIAL_HOST_TRANSPORT_MAX_FRAME_BYTES,
@@ -28140,7 +28172,7 @@ function createOfficialHostClientFactory(input2) {
         args: [assets.appServerEntryPath, ...context.launch.args],
         cwd: workspacePath,
         env: {
-          ...context.launch.env,
+          ...launchEnv,
           ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: assets.builtinProviderConfigPath,
           ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: context.config.providerPersonalConfigFile,
           ZCODE_RUNTIME_HOST_PATH: assets.runtimeHostPath
@@ -28373,6 +28405,22 @@ async function loadOfficialHostProviderRuntimeAuthFactory(workerModuleUrl = impo
   }
   return module.createOAuthProviderRuntimeAuthService;
 }
+async function loadOfficialStartPlanAuthenticationResolverFactory(workerModuleUrl = import.meta.url) {
+  const assets = await verifyOfficialHostAssets(workerModuleUrl);
+  const module = await loadOfficialHostModule(assets.hostModulePath);
+  if (typeof module.createOfficialStartPlanAuthenticationResolver !== "function") {
+    throw new BridgeError(
+      "provider_config_invalid",
+      "The Official Host module is missing the Start Plan authentication resolver."
+    );
+  }
+  return module.createOfficialStartPlanAuthenticationResolver;
+}
+async function loadOfficialHostProductVersion(workerModuleUrl = import.meta.url) {
+  const assets = await verifyOfficialHostAssets(workerModuleUrl);
+  const module = await loadOfficialHostModule(assets.hostModulePath);
+  return normalizeOfficialHostProductVersion(module.ZCODE_PRODUCT_VERSION);
+}
 function lazyOfficialHostAssets(workerModuleUrl = import.meta.url) {
   let pending;
   return () => {
@@ -28446,6 +28494,16 @@ function fixedOfficialRuntimeConfig(configured, assets) {
 function asRecord3(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
+function normalizeOfficialHostProductVersion(value) {
+  const version2 = typeof value === "string" ? value.trim() : "";
+  if (!/^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$/u.test(version2)) {
+    throw new BridgeError(
+      "provider_config_invalid",
+      "The Official Host module is missing a valid product version."
+    );
+  }
+  return version2;
+}
 function sameWorkspace(left, right) {
   const normalize = (value) => path9.normalize(path9.resolve(value));
   return process.platform === "win32" ? normalize(left).toLocaleLowerCase("en-US") === normalize(right).toLocaleLowerCase("en-US") : normalize(left) === normalize(right);
@@ -28486,21 +28544,22 @@ var OFFICIAL_HOST_TRANSPORT_MAX_FRAME_BYTES, OFFICIAL_HOST_ASSET_RELATIVE_ROOT, 
 var init_official_host_adapter = __esm({
   "src/adapters/official-host-adapter.ts"() {
     "use strict";
+    init_desktop_host_launch();
     init_errors();
     init_resolver();
     init_zcode_app_server_adapter();
     OFFICIAL_HOST_TRANSPORT_MAX_FRAME_BYTES = 16 * 1024 * 1024;
-    OFFICIAL_HOST_ASSET_RELATIVE_ROOT = "./vendor/official-host/win32-x64-node24.16.0-zcode3.18.0-b95ebaff";
+    OFFICIAL_HOST_ASSET_RELATIVE_ROOT = "./vendor/official-host/win32-x64-node24.16.0-zcode3.18.2-fec97590";
     OFFICIAL_HOST_ASSETS = {
       hostModule: {
         relativePath: "official-host-runtime.mjs",
-        bytes: 1821168,
-        sha256: "3F481AAE16EFF9912DAF17178B49491BD64E67C4419BFFDB59EB4B78E85EB537"
+        bytes: 1829872,
+        sha256: "7E2B8B772F1DD83135903B64D569D634C7E7FC6F303460E08C98E27D311B6A91"
       },
       appServerEntry: {
         relativePath: "app-server/zcode.cjs",
-        bytes: 30999438,
-        sha256: "DF4637F2E31AEDE37DB15B3E4E8D8BE35F59BF756E4EECFFC0A6A6B1EEDB4F2E"
+        bytes: 31009692,
+        sha256: "B55BA68C3B7939AFAFFB4D373D15594817AD3319FDECFBE26640CE4B218CF639"
       },
       builtinProviderConfig: {
         relativePath: "app-server/provider/zcode-builtin.json",

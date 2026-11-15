@@ -11,6 +11,16 @@ node_modules/
 !plugins/codex-zcode-bridge/worker/vendor/official-host/win32-x64-node24.16.0-zcode3.18.0-b95ebaff/node_modules/@napi-rs/keyring-win32-x64-msvc/LICENSE.third-party.md
 !plugins/codex-zcode-bridge/worker/vendor/official-host/win32-x64-node24.16.0-zcode3.18.0-b95ebaff/node_modules/@napi-rs/keyring-win32-x64-msvc/keyring.win32-x64-msvc.node
 !plugins/codex-zcode-bridge/worker/vendor/official-host/win32-x64-node24.16.0-zcode3.18.0-b95ebaff/node_modules/@napi-rs/keyring-win32-x64-msvc/package.json
+!plugins/codex-zcode-bridge/worker/vendor/official-host/win32-x64-node24.16.0-zcode3.18.2-fec97590/node_modules/
+!plugins/codex-zcode-bridge/worker/vendor/official-host/win32-x64-node24.16.0-zcode3.18.2-fec97590/node_modules/@napi-rs/
+!plugins/codex-zcode-bridge/worker/vendor/official-host/win32-x64-node24.16.0-zcode3.18.2-fec97590/node_modules/@napi-rs/keyring/
+!plugins/codex-zcode-bridge/worker/vendor/official-host/win32-x64-node24.16.0-zcode3.18.2-fec97590/node_modules/@napi-rs/keyring/LICENSE
+!plugins/codex-zcode-bridge/worker/vendor/official-host/win32-x64-node24.16.0-zcode3.18.2-fec97590/node_modules/@napi-rs/keyring/index.js
+!plugins/codex-zcode-bridge/worker/vendor/official-host/win32-x64-node24.16.0-zcode3.18.2-fec97590/node_modules/@napi-rs/keyring/package.json
+!plugins/codex-zcode-bridge/worker/vendor/official-host/win32-x64-node24.16.0-zcode3.18.2-fec97590/node_modules/@napi-rs/keyring-win32-x64-msvc/
+!plugins/codex-zcode-bridge/worker/vendor/official-host/win32-x64-node24.16.0-zcode3.18.2-fec97590/node_modules/@napi-rs/keyring-win32-x64-msvc/LICENSE.third-party.md
+!plugins/codex-zcode-bridge/worker/vendor/official-host/win32-x64-node24.16.0-zcode3.18.2-fec97590/node_modules/@napi-rs/keyring-win32-x64-msvc/keyring.win32-x64-msvc.node
+!plugins/codex-zcode-bridge/worker/vendor/official-host/win32-x64-node24.16.0-zcode3.18.2-fec97590/node_modules/@napi-rs/keyring-win32-x64-msvc/package.json
 dist/
 dist-test/
 .build-core-*/

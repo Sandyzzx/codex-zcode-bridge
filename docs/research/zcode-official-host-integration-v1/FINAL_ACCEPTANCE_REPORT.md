@@ -4,6 +4,7 @@
 > Last updated: 2026-11-12
 > Last verified: 2026-11-12，最终完整隔离回归、提交后 clean checkout 和当前快照独立 Astra 审查均已通过
 > Verified against: `ba25f83722094ef3428a04202749377cc9b6e643`（tree `b4573bb6f1143ce6a3081a56ce2fbf968a243e35`）；后续仅有文档证据刷新
+> Applicability: HISTORICAL — `CURRENT CANDIDATE` and `PR_READY` below apply only to the Preview.4 / ZCode 3.18.0 snapshot identified above. They do not describe or approve the current ADR-037 ZCode 3.18.2 local candidate.
 
 ## 裁决
 

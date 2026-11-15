@@ -9,3 +9,5 @@ plugins/codex-zcode-bridge/worker/vendor/official-host/** -diff -text -whitespac
 # published SHA-256 values survive checkout and artifact verification.
 upstream/zcode-3.18.0/patches/*.patch -text -whitespace
 upstream/zcode-3.18.0/patches/*.sha256 -text -whitespace
+upstream/zcode-3.18.2/patches/*.patch -text -whitespace
+upstream/zcode-3.18.2/patches/*.sha256 -text -whitespace

@@ -4,6 +4,7 @@
 > Last updated: 2026-11-12
 > Last verified: 2026-11-12，核对候选 Worker、固定上游制品、最终完整隔离回归、提交后 clean checkout 与当前候选 Astra review
 > Verified against: Bridge candidate `ba25f837` + final documentation/artifact completion
+> Applicability: HISTORICAL — Preview.4 / ZCode 3.18.0 candidate evidence. This report does not describe the current ADR-037 ZCode 3.18.2 local candidate, its fixed Host/BOM, or its acceptance state.
 
 ## 当前结论
 

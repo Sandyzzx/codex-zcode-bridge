@@ -39,6 +39,13 @@ import {
 import { isSupportedNodeVersion } from "../runtime/node-runtime.js";
 import { servePrivateCredential } from "../runtime/start-plan-private-channel.js";
 import type { PrivateCredentialLease, PrivateLeaseBinding } from "../runtime/start-plan-private-lease.js";
+import {
+  formatStartPlanEntitlementFailureFactsIssue,
+  readStartPlanEntitlementFailureFacts,
+  STARTPLAN_ENTITLEMENT_FACTS_ISSUE_PREFIX,
+  type EntitlementFailureClass,
+  type StartPlanEntitlementFailureFacts,
+} from "../runtime/start-plan-production-auth.js";
 import { WorkerHandleGate } from "../runtime/start-plan-handle-gate.js";
 import type { WindowsTreeTransactionLike } from "../adapters/windows-process-cleanup.js";
 
@@ -2504,6 +2511,7 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
           accountSignal?.addEventListener("abort", revokeOnAccountChange, { once: true });
           if (accountSignal?.aborted) privateAuthAbort.abort();
           let startPlanEntitled = false;
+          let startPlanEntitlementFailureFacts: StartPlanEntitlementFailureFacts | null = null;
           let handleGate: WorkerHandleGate | undefined;
           const closeHandleGate = async (): Promise<void> => {
             const gate = handleGate;
@@ -2529,11 +2537,23 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
               );
             } catch (error) {
               startPlanEntitled = false;
+              startPlanEntitlementFailureFacts = readStartPlanEntitlementFailureFacts(error)
+                ?? fallbackStartPlanEntitlementFailureFacts(error);
               stage("start_plan_entitlement_preflight_rejected", {
                 ...classifyStartPlanEntitlementRejection(error),
+                failure_facts: startPlanEntitlementFailureFacts,
               });
             }
             if (privateAuthAbort.signal.aborted) startPlanEntitled = false;
+            if (!startPlanEntitled && !startPlanEntitlementFailureFacts) {
+              startPlanEntitlementFailureFacts = Object.freeze({
+                request_attempted: null,
+                http_status: null,
+                provider_code: null,
+                failure_class: "unknown" as const,
+                entitlement_verdict: "unavailable" as const,
+              });
+            }
             stage("start_plan_entitlement_preflight", { entitled: startPlanEntitled });
           }
           child.once("close", () => {
@@ -2802,6 +2822,22 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
                   catch(error) {
                     // Identity and cleanup proof were checked before replacing an invalid report.
                     resultFrame.result = submissionFailure({task_id:input.task.task_id,attempt:input.attempt},error) as CandidateTaskResult;
+                  }
+                  if (startPlanEntitlementFailureFacts
+                    && resultFrame.result.status === "failed"
+                    && resultFrame.result.session_id === null) {
+                    const appended = appendStartPlanEntitlementFailureFacts(
+                      resultFrame.result,
+                      startPlanEntitlementFailureFacts,
+                      input.task.task_id,
+                      input.attempt,
+                    );
+                    resultFrame.result = appended.result;
+                    if (!appended.persisted) {
+                      stage("start_plan_entitlement_failure_facts_not_persisted", {
+                        reason: "result_capacity",
+                      });
+                    }
                   }
                   stage("worker_result_verified", { status: resultFrame.result.status });
                   const current = asRecord(port.readOperation(input.operationId));
@@ -3721,6 +3757,78 @@ function classifyStartPlanEntitlementRejection(error: unknown): { classification
   const match = /^start_plan_entitlement_rejected:([a-z_]+)(?::([0-9A-Za-z_.-]{1,32}))?$/u.exec(message);
   if (match && match[1]) return { classification: match[1], ...(match[2] ? { provider_code: match[2] } : {}) };
   return { classification: "transport_unavailable" };
+}
+
+function fallbackStartPlanEntitlementFailureFacts(error: unknown): StartPlanEntitlementFailureFacts {
+  const rejection = classifyStartPlanEntitlementRejection(error);
+  const failureClass = startPlanFailureClass(rejection.classification);
+  return Object.freeze({
+    request_attempted: null,
+    http_status: null,
+    provider_code: rejection.provider_code ?? null,
+    failure_class: failureClass,
+    entitlement_verdict: failureClass === "active_plan_absent" || failureClass === "requested_model_absent"
+      ? "not_entitled" as const
+      : "unavailable" as const,
+  });
+}
+
+/** Adds one fixed-shape fact record without invalidating an otherwise legal
+ * Result at the 32 MiB boundary. */
+export function appendStartPlanEntitlementFailureFacts(
+  result: CandidateTaskResult,
+  facts: StartPlanEntitlementFailureFacts,
+  taskId: string,
+  attempt: number,
+): { readonly result: CandidateTaskResult; readonly persisted: boolean } {
+  const issue = formatStartPlanEntitlementFailureFactsIssue(facts);
+  const issues = result.issues
+    .filter((value) => !value.startsWith(STARTPLAN_ENTITLEMENT_FACTS_ISSUE_PREFIX))
+    .slice(-255);
+  const withFacts: CandidateTaskResult = {
+    ...result,
+    issues: [...issues, issue],
+  };
+  try {
+    canonicalTaskResult(withFacts, {
+      task_id: taskId,
+      attempt,
+      result_status: result.status,
+    });
+    return { result: withFacts, persisted: true };
+  } catch (error) {
+    if (errorCode(error) !== "result_too_large") throw error;
+    // Preserve a fully valid Report at the contract boundary instead of
+    // replacing it with an infrastructure failure. The preflight stage still
+    // carries the sanitized facts for diagnosis.
+    return { result, persisted: false };
+  }
+}
+
+function startPlanFailureClass(value: string): EntitlementFailureClass {
+  switch (value) {
+    case "not_attempted":
+    case "transport":
+    case "unauthorized":
+    case "forbidden":
+    case "captcha_required":
+    case "unusual_activity":
+    case "billing_parameter_error":
+    case "rate_limited":
+    case "service_error":
+    case "http_rejected":
+    case "business_rejected":
+    case "response_malformed":
+    case "active_plan_absent":
+    case "activation_pending":
+    case "requested_model_absent":
+    case "model_quota_unproven":
+    case "quota_exhausted":
+    case "unknown":
+      return value;
+    default:
+      return "unknown";
+  }
 }
 
 function validSnapshotText(value: unknown): value is string {
