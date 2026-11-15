@@ -3,7 +3,7 @@
 > Status: DECISION
 > Date: 2026-11-13
 > Decision: Accepted — Owner 在“GOAL REVISION — Reuse Official ZCode Authentication”中明确冻结该架构要求。
-> Applicability: ACTIVE IMPLEMENTATION。拓扑、职责和认证所有权已接受并冻结；Preview.6 候选已完成固定 Host 3.18.2 接线、官方签名 runtime host、构建/加载/clean-install 与带数据升级回滚验证，并通过真实 Coding Plan 完整 E2E 和真实 Start Plan 核心功能路径。候选尚未 Merge、Tag 或 Release。历史 Start Plan 完整 E2E 因 Workspace 内额外 PowerShell cache 保持 `FAIL`。Desktop 3.18.0/3.18.1 实机安装组合、真实 OAuth refresh/账户轮换与其他未实测边界仍为 `NOT_VERIFIED`，其中 OAuth refresh 属于 Owner 已接受的 Preview 阶段有限风险。
+> Applicability: ACTIVE IMPLEMENTATION。拓扑、职责和认证所有权已接受并冻结；Preview.6 已完成固定 Host 3.18.2 接线、官方签名 runtime host、构建/加载/clean-install 与带数据升级回滚验证，并通过真实 Coding Plan 完整 E2E 和真实 Start Plan 核心功能路径。Owner 已批准按 §5.1 的 Windows x64 + ZCode Desktop `3.18.2.10443` 范围发布 Preview.6。历史 Start Plan 完整 E2E 因 Workspace 内额外 PowerShell cache 保持 `FAIL`。Desktop 3.18.0/3.18.1 实机安装组合、真实 OAuth refresh/账户轮换与其他未实测边界仍为 `NOT_VERIFIED`，其中 OAuth refresh 属于 Owner 已接受的 Preview 阶段有限风险。
 > Renumbering: 原接受包曾将该决定标为 ADR-036；迁移到最新 `origin/preview` 时，仓库已有独立的 [ADR-036](ADR-036-host-native-interruption-requeue.md)，为避免重复编号，本决定按顺序改为 ADR-037，内容与 Owner 授权不变。
 > Verified against: Bridge research branch `d5c9cfedade9bc4bad69a7a3e873886e72843806`；官方 ZCode `b95ebaffeab641907b38652f45c1502bd762972d`（3.18.0）、`c5904686ea8341826b3affe5d993d06a134fa779`（3.18.1）、`fec975905a2abd4c07e35c40d51fa097a2258ec9`（3.18.2）。
 
@@ -89,7 +89,7 @@ Bridge 可以消费该结果完成 ADR-030 的实时 Billing 检查，并通过�
 - 损坏、缺密钥、格式未知或无法证明无写入时 fail closed；
 - 只有当前请求确实需要过期凭据时，才可经过 ADR-033 的官方 refresh 事务提交正常 token rotation；格式迁移和请求期 refresh 是两件不同的事。
 
-决定作出时，官方 3.18.2 没有公开的“无迁移 credential snapshot”接口。实现时优先推动一个可复用的官方读接口；若固定源码仍无该入口，可以在 Official Host patch 中加入窄适配层，但适配层也只能组合官方 cipher 与官方 repo，不得把 AES、keyring 或身份解析移入 Bridge。当前候选采用后一种方式：固定 Host patch 增加只读 credential snapshot 和窄 Start Plan resolver；它仍组合官方 cipher/repo，未在 Bridge 复制认证实现。
+决定作出时，官方 3.18.2 没有公开的“无迁移 credential snapshot”接口。实现时优先推动一个可复用的官方读接口；若固定源码仍无该入口，可以在 Official Host patch 中加入窄适配层，但适配层也只能组合官方 cipher 与官方 repo，不得把 AES、keyring 或身份解析移入 Bridge。Preview.6 采用后一种方式：固定 Host patch 增加只读 credential snapshot 和窄 Start Plan resolver；它仍组合官方 cipher/repo，未在 Bridge 复制认证实现。
 
 ### 4. 固定 Host 版本策略
 
@@ -122,7 +122,19 @@ Runtime-reported Billing app version
 
 Bridge 的固定 Host 不按 Desktop 版本选择认证算法，也不通过读取 Desktop 版本号猜测凭据格式。凭据由格式、source marker、ciphertext fingerprint 和官方解密结果决定。
 
-发布验收至少覆盖 Desktop `3.18.0`、`3.18.1`、`3.18.2`。没有实际样本或隔离等价证据的组合必须标为 `NOT_VERIFIED`，不得由相邻版本推断为 PASS。不得要求所有用户先升级到 `3.18.2`。
+完整发布验收目标覆盖 Desktop `3.18.0`、`3.18.1`、`3.18.2`。没有实际样本或隔离等价证据的组合必须标为 `NOT_VERIFIED`，不得由相邻版本推断为 PASS。Preview.6 的实际支持范围由下方 Owner 裁决限定，不把未实测组合声明为不兼容。
+
+#### 5.1 Preview.6 Owner 发布范围
+
+Owner 于 2026-11-15 批准 Preview.6 只在以下已验证范围内声明支持：
+
+- Windows x64、Node.js `24.16.0` 与用户已安装的官方 ZCode Desktop `3.18.2.10443`。
+- Bridge 继续使用固定、经过校验的 Official Host 3.18.2、AppServer `0.17.1` 和官方签名 Windows runtime host；用户必须预先安装官方 ZCode Desktop。
+- Desktop `3.18.0` 与 `3.18.1` 保持 `NOT_VERIFIED`。该状态不代表已证明不兼容，完整矩阵仍需后续实机证据。
+- 真实 OAuth refresh/账户轮换保持 `NOT_VERIFIED`；Owner 仅接受 Preview 阶段有限风险，不将风险接受延伸到 Stable。
+- 跨机器制品复现保持 `NOT_VERIFIED`；Windows CI、clean checkout、空缓存隔离安装和 BOM 闭包继续作为现有证据，不把第二台实机测试写成 PASS。
+- 不实现用户侧动态 runtime 资源发现、下载或自动更新。后续版本升级必须从合格的本机官方安装或经过校验的官方发行包提取，并更新 BOM、Provenance、哈希常量和测试。
+- 历史 Start Plan 完整 E2E 的 Workspace 边界问题保持 `FAIL`；已通过的 Start Plan 核心功能路径及 Harness-only 离线修复不重写历史结论。
 
 ### 6. 保留 Bridge 生命周期保护
 
@@ -157,7 +169,7 @@ Coding Plan 的 Worker 路径调用 `loadOfficialHostProviderRuntimeAuthFactory(
 
 决定作出时，Start Plan 没有走该路径。旧 `createProductionStartPlanAuth()` 直接读取官方数据根并构造 Billing issuer；AppServer 的 Start request auth 由 Bridge 的 Private Lease 供给。当时固定 3.18.0 Host 中的协调工厂通过 `loadFamilyMaterial()` 读取 Start JWT，无法表达 3.18.2 的 `loadStartPlanMaterial` 和 `zai_cn` fallback。
 
-当前候选已把 Start Plan 改为消费固定 3.18.2 Host 的窄认证投影；Billing verdict、Private Lease/HANDLE/ACK 和任务生命周期仍由 Bridge 持有。该差异来自旧接线与固定版本，不是 Coding Plan 与 Start Plan 本质需要两套凭据系统。
+Preview.6 已把 Start Plan 改为消费固定 3.18.2 Host 的窄认证投影；Billing verdict、Private Lease/HANDLE/ACK 和任务生命周期仍由 Bridge 持有。该差异来自旧接线与固定版本，不是 Coding Plan 与 Start Plan 本质需要两套凭据系统。
 
 ## Consequences
 

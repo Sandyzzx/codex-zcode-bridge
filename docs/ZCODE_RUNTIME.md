@@ -2,7 +2,7 @@
 
 > Status: AUTHORITATIVE
 > Last updated: 2026-11-15
-> Last verified: 2026-11-15，核对 Preview.6 候选的 Desktop/Official Host 版本来源、启动参数、Build ID 缺失行为、官方签名 Windows x64 runtime host、BOM 完整性、ProcessManager smoke、Start Plan 核心真实 E2E 与 Workspace 边界处置；3.18.0/3.18.1 实机安装组合仍待验收。
+> Last verified: 2026-11-15，核对 Preview.6 的 Desktop/Official Host 版本来源、启动参数、Build ID 缺失行为、官方签名 Windows x64 runtime host、BOM 完整性、ProcessManager smoke、Start Plan 核心真实 E2E 与 Workspace 边界处置；3.18.0/3.18.1 实机安装组合仍待验收。
 > Verified against: stacked on Draft PR #94 HEAD `95da75b02f240858091f1ecdbbafd512f9903c6b`
 
 当前生产路径是 `node zcode.cjs app-server --stdio --surface desktop`，不是历史 CLI `--prompt --json`。任务 Adapter 与模型目录探测共用该启动合同；解析入口为 `NodeRuntimeResolver`，配置项与用户设置方法见仓库 README。
@@ -10,6 +10,8 @@
 若固定 AppServer 源旁存在安装版 Desktop `app.asar`，Bridge 只读解析其版本与 build metadata，并以这一对 `ZCODE_APP_VERSION` / `ZCODE_BUILD_COMMIT_ID` 为最高优先级。独立 Host 没有相邻 `app.asar` 时，`ZCODE_APP_VERSION` 取自校验后的 Official Host `ZCODE_PRODUCT_VERSION`；`ZCODE_BUILD_COMMIT_ID` 保持缺失，不从源码提交号或 AppServer CLI 版本推导。损坏 ASAR、非法或不完整身份、非法产品版本按 `provider_config_invalid` fail-closed。Bridge 不硬编码 Desktop 版本，不修改 Desktop 安装，也不伪造 HTTP Header。
 
 Windows x64 的 `zcode-runtime-host.exe` 采用随 Bridge 固定分发的官方签名产物，不在用户机器上动态发现、下载、安装或重新构建。Preview.6 固定来源为本机官方 Desktop `3.18.2.10443` 的 `resources/tools/runtime-host/zcode-runtime-host.exe`：179,608 bytes、SHA-256 `C2C8FF5FF28CBDDC4F177C094AA67C322830889612251BD173BAAABC89379AB4`、PE x64、Authenticode Valid，签名主体为北京智谱华章科技股份有限公司。后续版本升级必须从合格的本机官方安装或经过校验的官方发行包取得，并同步更新 BOM、Build Provenance、运行时资源常量和测试；不得静默接受未知版本。安装器专用 helper 与 fixture 不属于 Bridge 运行闭包。
+
+Preview.6 的支持声明限定为 Windows x64、Node.js `24.16.0` 和用户已安装的官方 ZCode Desktop `3.18.2.10443`。Desktop `3.18.0`/`3.18.1` 保持 `NOT_VERIFIED`，不代表不兼容。真实 OAuth refresh/账户轮换与跨机器制品复现同样保持 `NOT_VERIFIED`，其风险仅在 Preview 渠道接受。
 
 ## 执行与清理期限（ADR-027）
 

@@ -4,7 +4,7 @@
 
 [简体中文](README.zh-CN.md) · [Repository](https://github.com/Sandyzzx/codex-zcode-bridge) · [Releases](https://github.com/Sandyzzx/codex-zcode-bridge/releases)
 
-> **Release status.** Stable is `v1.7.1`. Preview `2.0.0-preview.5` is the fixed snapshot for the Official Host, SQLite runtime Events/Usage, Start Plan, and Coding Plan integration. Preview.5 is a prerelease; this release does not promote a new Stable version.
+> **Release status.** Stable is `v1.7.1`. Preview `2.0.0-preview.6` is the fixed snapshot for official ZCode 3.18.2 authentication reuse, the signed Windows runtime host, SQLite v14 Events/Usage, Start Plan, and Coding Plan integration. Preview.6 is a prerelease for Windows x64 with ZCode Desktop `3.18.2.10443`; it does not promote a new Stable version.
 
 ## What this is
 
@@ -30,7 +30,7 @@ Start Plan and Coding Plan are different account and authentication paths. Bridg
 
 ### Verified Start Plan path
 
-Preview.3 established the Start Plan path with one real Windows acceptance run. The prior R7 candidate separately completed a real Coding Plan E2E with the Official Host path and persisted Runtime Events, Usage, Result, Cleanup, and Release. Preview.5 is the fixed artifact for both paths. Its installed-artifact Start Plan E2E is the remaining acceptance step and must not be inferred from the earlier Preview.3 path.
+Preview.3 established the Start Plan path with one real Windows acceptance run. Preview.6 separately completed a real Coding Plan E2E and a real Start Plan core functional E2E through the Official Host path, including Runtime Events, Usage, tools, Result, Cleanup, and Release. The historical full Start Plan Workspace acceptance remains `FAIL` because of a PowerShell cache written outside the declared task files; that failure is retained and not rewritten as a pass.
 
 - Official ZCode AppServer `0.17.1`.
 - Provider `account:bigmodel-start-plan`.
@@ -67,12 +67,14 @@ This evidence covers **only `GLM-5.3-Flash` on Windows**. It does not prove ever
 ## Requirements
 
 - The fixed Official Host production bundle is supported on **Windows x64**; Windows non-x64 and other unknown targets fail closed. Linux and macOS retain direct-AppServer synthetic/CI coverage only and are not certified for real ZCode, OAuth, Start Plan, or model service traffic.
-- **Preview 2.0.0-preview.5:** Node.js `>=24.16.0` and `<25`.
+- **Preview 2.0.0-preview.6:** Windows x64, Node.js `24.16.0`, and an installed official ZCode Desktop `3.18.2.10443`.
 - Git, Codex with plugin/marketplace support, and a working local ZCode installation.
 - A signed-in official ZCode account with the plan and model entitlement required by the selected task.
 - A **single-user, trusted-local** environment. This is not a multi-user isolation boundary or a remote sandbox.
 
 Node.js and ZCode are not installed by the marketplace plugin.
+
+Desktop ZCode `3.18.0` and `3.18.1` remain `NOT_VERIFIED` for Preview.6; they are not declared incompatible. Real OAuth refresh/account rotation and cross-machine artifact reproduction also remain `NOT_VERIFIED`. These are accepted Preview-only risks and are not extended to Stable.
 
 ## Installation
 
@@ -105,7 +107,7 @@ codex plugin marketplace upgrade codex-zcode-bridge-preview
 To pin the accepted Preview snapshot instead of following the branch:
 
 ```sh
-codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-preview-v2.0.0-preview.5
+codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-preview-v2.0.0-preview.6
 ```
 
 To switch an existing marketplace between branch and tag refs, re-run `marketplace add` with the desired `--ref` or remove and add the marketplace. Verify the command with `codex plugin marketplace add --help` if your Codex version differs.
@@ -181,7 +183,7 @@ Prompts, Skills, path lists, and worktree selection do not create those permissi
 - [Runtime and SQLite upgrade details](docs/ZCODE_RUNTIME.md)
 - [Plugin safety notes](plugins/codex-zcode-bridge/SECURITY.md)
 - [Master skill](plugins/codex-zcode-bridge/skills/zcode-bridge/SKILL.md)
-- [Preview.5 release](https://github.com/Sandyzzx/codex-zcode-bridge/releases/tag/codex-zcode-bridge-preview-v2.0.0-preview.5)
+- [Preview.6 release](https://github.com/Sandyzzx/codex-zcode-bridge/releases/tag/codex-zcode-bridge-preview-v2.0.0-preview.6)
 
 ## License
 

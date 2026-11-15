@@ -2,7 +2,7 @@
 
 > Status: AUTHORITATIVE（仅指本索引）
 > Last updated: 2026-11-15
-> Last verified: 2026-11-15，核对 ADR-032–037 的 Preview.5 基线、Preview.6 候选、真实 Coding Plan/Start Plan 核心路径、Workspace 边界处置、官方签名 3.18.2 runtime host、带数据升级回滚、ADR-030 保持不变、R7 集成及官方 3.18.x 认证边界。
+> Last verified: 2026-11-15，核对 ADR-032–037 的 Preview.5 基线、Preview.6 Owner 发布范围、真实 Coding Plan/Start Plan 核心路径、Workspace 边界处置、官方签名 3.18.2 runtime host、带数据升级回滚、ADR-030 保持不变、R7 集成及官方 3.18.x 认证边界。
 > Verified against: stacked on Draft PR #94 HEAD `95da75b02`；base `origin/preview` = `9bec5a27d`
 
 先读当前 [架构](../ARCHITECTURE.md)/[接口](../INTERFACES.md)，只在需要解释取舍时加载对应决策。文件保持原路径和历史正文；Partially superseded 的标注优先于历史段落。
@@ -31,11 +31,11 @@
 | 账户 Refresh | [033](ADR-033-official-account-refresh-coordination.md) | Accepted；profile-scoped lock、lock-time reread、一次远端 refresh、CAS；无 Broker |
 | 正常 Cleanup | [034](ADR-034-normal-cleanup-worker-tree-proof.md) | Accepted；官方 close 后复用 exact Worker identity、recorded-tree、resource facts、Digest 与 Release CAS |
 | 平台启用 | [035](ADR-035-worker-platform-adapter-selection.md) | Accepted；Windows x64 启用 Official Host，Linux/macOS direct 仅 CI/合成覆盖，其余 fail closed |
-| 官方认证复用 | [037](ADR-037-official-zcode-authentication-reuse.md) | Accepted；Official Host 拥有凭据、OAuth、账户身份和请求认证；Bridge 不维护第二套认证；Preview.6 候选已实现 3.18.2 接线，Desktop 矩阵仍待实测 |
+| 官方认证复用 | [037](ADR-037-official-zcode-authentication-reuse.md) | Accepted；Official Host 拥有凭据、OAuth、账户身份和请求认证；Bridge 不维护第二套认证；Preview.6 仅声明 Windows x64 + Desktop 3.18.2.10443，旧版本保持 NOT_VERIFIED |
 
-ADR-032、ADR-033、ADR-034 和 ADR-035 的正文记录决定作出时的状态；顶部 Applicability 标注当前适用性。当前实现状态以 [ARCHITECTURE](../ARCHITECTURE.md) 和 [PROJECT_STATE](../PROJECT_STATE.md) 为准：已发布 Preview.5 的 Windows x64 Worker 默认使用 `OfficialHostAdapter`；Preview.6 候选把固定 Host 升级到 ZCode 3.18.2、接入官方只读 Start Plan 认证，并采用官方签名 runtime host。Linux/macOS direct 仅保留 CI/合成覆盖。`research/zcode-official-host-integration-v1/` 的 [Implementation Summary](../research/zcode-official-host-integration-v1/IMPLEMENTATION_SUMMARY.md) 与 [Final Acceptance](../research/zcode-official-host-integration-v1/FINAL_ACCEPTANCE_REPORT.md) 是 Preview.4/3.18.0 历史证据，不能作为 Preview.6 候选的 `PR_READY` 或兼容通过证明。
+ADR-032、ADR-033、ADR-034 和 ADR-035 的正文记录决定作出时的状态；顶部 Applicability 标注当前适用性。当前实现状态以 [ARCHITECTURE](../ARCHITECTURE.md) 和 [PROJECT_STATE](../PROJECT_STATE.md) 为准：Preview.6 的 Windows x64 Worker 使用 `OfficialHostAdapter`、固定 ZCode 3.18.2、官方只读 Start Plan 认证与官方签名 runtime host。Linux/macOS direct 仅保留 CI/合成覆盖。`research/zcode-official-host-integration-v1/` 的 [Implementation Summary](../research/zcode-official-host-integration-v1/IMPLEMENTATION_SUMMARY.md) 与 [Final Acceptance](../research/zcode-official-host-integration-v1/FINAL_ACCEPTANCE_REPORT.md) 是 Preview.4/3.18.0 历史证据，不能作为 Preview.6 的兼容通过证明。
 
-ADR-037 冻结“官方 Host 持有认证、Bridge 保留任务生命周期”的所有权。Preview.6 候选的 Start Plan issuer 通过固定 ZCode 3.18.2 Host 的 `resolveStartPlanAuthentication` 窄投影取得账户、session、请求凭据与 device identity；Bridge 不再读取凭据容器或解析账户身份。真实 Coding Plan 完整 E2E 与真实 Start Plan 核心功能路径已通过；历史 Start Plan 完整 E2E 因 Workspace 边界保持 `FAIL`。Desktop 3.18.0/3.18.1 实机安装组合、真实 OAuth refresh/账户轮换和一般 Desktop Main 独立性仍未验证。
+ADR-037 冻结“官方 Host 持有认证、Bridge 保留任务生命周期”的所有权。Preview.6 的 Start Plan issuer 通过固定 ZCode 3.18.2 Host 的 `resolveStartPlanAuthentication` 窄投影取得账户、session、请求凭据与 device identity；Bridge 不再读取凭据容器或解析账户身份。真实 Coding Plan 完整 E2E 与真实 Start Plan 核心功能路径已通过；历史 Start Plan 完整 E2E 因 Workspace 边界保持 `FAIL`。Desktop 3.18.0/3.18.1、真实 OAuth refresh/账户轮换和一般 Desktop Main 独立性保持 `NOT_VERIFIED`。
 
 Preview.5 生产 Lifecycle Gate 会在持有 bootstrap lock 时自动升级已有 SQLite v13→v14。ADR-026 正文中的“生产 Migration 不自动授权”仍是其历史决策背景；实现只开放受限的启动升级，直接 Store API 仍对不同 Schema 或未知现场 fail closed。R7 Runtime Events 作为同一 v14 Authority 的 additive 扩展，不构成第二套任务状态机。
 
