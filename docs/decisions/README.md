@@ -2,7 +2,7 @@
 
 > Status: AUTHORITATIVE（仅指本索引）
 > Last updated: 2026-11-15
-> Last verified: 2026-11-15，核对 ADR-032–037 的 Preview.5 基线、Preview.6 Owner 发布范围、真实 Coding Plan/Start Plan 核心路径、Workspace 边界处置、官方签名 3.18.2 runtime host、带数据升级回滚、ADR-030 保持不变、R7 集成及官方 3.18.x 认证边界。
+> Last verified: 2026-11-15，核对 ADR-032–038 的 Preview.5 基线、Preview.6 Owner 发布范围、真实 Coding Plan/Start Plan 核心路径、Workspace 边界处置、官方签名 3.18.2 runtime host、带数据升级回滚、ADR-030 保持不变、R7 集成、官方 3.18.x 认证边界与 Post-Audit 最小架构整改。
 > Verified against: stacked on Draft PR #94 HEAD `95da75b02`；base `origin/preview` = `9bec5a27d`
 
 先读当前 [架构](../ARCHITECTURE.md)/[接口](../INTERFACES.md)，只在需要解释取舍时加载对应决策。文件保持原路径和历史正文；Partially superseded 的标注优先于历史段落。
@@ -32,6 +32,7 @@
 | 正常 Cleanup | [034](ADR-034-normal-cleanup-worker-tree-proof.md) | Accepted；官方 close 后复用 exact Worker identity、recorded-tree、resource facts、Digest 与 Release CAS |
 | 平台启用 | [035](ADR-035-worker-platform-adapter-selection.md) | Accepted；Windows x64 启用 Official Host，Linux/macOS direct 仅 CI/合成覆盖，其余 fail closed |
 | 官方认证复用 | [037](ADR-037-official-zcode-authentication-reuse.md) | Accepted；Official Host 拥有凭据、OAuth、账户身份和请求认证；Bridge 不维护第二套认证；Preview.6 仅声明 Windows x64 + Desktop 3.18.2.10443，旧版本保持 NOT_VERIFIED |
+| 最小架构整改 | [038](ADR-038-preview6-minimum-architecture-remediation.md) | Accepted；保留 SQLite/Worker/官方 Runtime 核心，退役旧 JSON 查询、Ledger、人类报告/主会话 Token 链、Desktop task-index 镜像；修正 Usage/Context/Events/Recovery 与 CI/生成物合同 |
 
 ADR-032、ADR-033、ADR-034 和 ADR-035 的正文记录决定作出时的状态；顶部 Applicability 标注当前适用性。当前实现状态以 [ARCHITECTURE](../ARCHITECTURE.md) 和 [PROJECT_STATE](../PROJECT_STATE.md) 为准：Preview.6 的 Windows x64 Worker 使用 `OfficialHostAdapter`、固定 ZCode 3.18.2、官方只读 Start Plan 认证与官方签名 runtime host。Linux/macOS direct 仅保留 CI/合成覆盖。`research/zcode-official-host-integration-v1/` 的 [Implementation Summary](../research/zcode-official-host-integration-v1/IMPLEMENTATION_SUMMARY.md) 与 [Final Acceptance](../research/zcode-official-host-integration-v1/FINAL_ACCEPTANCE_REPORT.md) 是 Preview.4/3.18.0 历史证据，不能作为 Preview.6 的兼容通过证明。
 
