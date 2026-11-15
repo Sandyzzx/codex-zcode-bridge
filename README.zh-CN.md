@@ -4,7 +4,7 @@
 
 [English](README.md) · [项目仓库](https://github.com/Sandyzzx/codex-zcode-bridge) · [版本发布](https://github.com/Sandyzzx/codex-zcode-bridge/releases)
 
-> **发布状态。** 稳定版为 `v1.7.1`。预览版 `2.0.0-preview.6` 是包含官方 ZCode 3.18.2 认证复用、官方签名 Windows Runtime Host、SQLite v14 Events/Usage、Start Plan 与 Coding Plan 集成的固定预发布快照；Preview.6 面向 Windows x64 与 ZCode Desktop `3.18.2.10443`，本次不提升新的 Stable 版本。
+> **发布状态。** 稳定版为 `v1.7.1`。预览版 `2.0.0-preview.7` 是 Post-Audit 整改后的固定快照；它保留 Preview.6 的官方 ZCode 3.18.2 认证复用、官方签名 Windows Runtime Host、SQLite v14 Events/Usage、Start Plan 与 Coding Plan 合同，并增加 ADR-038 最小架构减法、正确性修复、Legacy 退役、CI 分派与 Events 分页修复。它面向 Windows x64 与 ZCode Desktop `3.18.2.10443`，本次不提升新的 Stable 版本。
 
 ## 这是什么
 
@@ -30,7 +30,7 @@ Start Plan 与 Coding Plan 是两条不同的账户和认证路径。Bridge 根�
 
 ### 已验证的 Start Plan 路径
 
-Preview.3 已通过一次 Windows 真实 Start Plan 验收。Preview.6 另行通过真实 Coding Plan E2E 与真实 Start Plan 核心功能 E2E，覆盖 Official Host、Runtime Events、Usage、工具调用、Result、Cleanup 与 Release。历史 Start Plan 完整 Workspace 验收因 PowerShell 缓存写入了未声明文件，继续保持 `FAIL`，不能改写为通过。
+Preview.3 已通过一次 Windows 真实 Start Plan 验收。Preview.6 另行通过真实 Coding Plan E2E 与真实 Start Plan 核心功能 E2E，覆盖 Official Host、Runtime Events、Usage、工具调用、Result、Cleanup 与 Release。Preview.7 保留该运行时与认证路径，不重复消耗真实模型请求。历史 Start Plan 完整 Workspace 验收因 PowerShell 缓存写入了未声明文件，继续保持 `FAIL`，不能改写为通过。
 
 - 官方 ZCode AppServer `0.17.1`。
 - Provider `account:bigmodel-start-plan`。
@@ -67,14 +67,14 @@ Preview.3 已通过一次 Windows 真实 Start Plan 验收。Preview.6 另行通
 ## 环境要求
 
 - 固定 Official Host 生产制品只支持 **Windows x64**。生产 Worker 在 Linux、macOS 与 Windows 非 x64 上以 `unsupported_worker_platform` fail closed；CI 只验证该拒绝边界，不声称存在生产执行路径。
-- **Preview 2.0.0-preview.6：** Windows x64、Node.js `24.16.0`，并已安装官方 ZCode Desktop `3.18.2.10443`。
+- **Preview 2.0.0-preview.7：** Windows x64、Node.js `24.16.0`，并已安装官方 ZCode Desktop `3.18.2.10443`。
 - Git、支持插件/Marketplace 的 Codex，以及可正常工作的本机 ZCode 安装。
 - 官方 ZCode 账户已登录，并具备所选任务需要的套餐和模型权益。
 - 仅面向**单用户、可信本地**环境；不提供多用户隔离或远程沙箱。
 
 Marketplace 插件不会代替你安装 Node.js 或 ZCode。
 
-Desktop ZCode `3.18.0` 与 `3.18.1` 在 Preview.6 中保持 `NOT_VERIFIED`，不代表已经证明不兼容。真实 OAuth refresh/账户轮换与跨机器制品复现同样保持 `NOT_VERIFIED`；这些是 Preview 阶段的风险接受，不延伸到 Stable。
+Desktop ZCode `3.18.0` 与 `3.18.1` 在 Preview.7 中保持 `NOT_VERIFIED`，不代表已经证明不兼容。真实 OAuth refresh/账户轮换与跨机器制品复现同样保持 `NOT_VERIFIED`；这些是 Preview 阶段的风险接受，不延伸到 Stable。
 
 ## 安装
 
@@ -82,7 +82,7 @@ Desktop ZCode `3.18.0` 与 `3.18.1` 在 Preview.6 中保持 `NOT_VERIFIED`，不
 
 ### 稳定版
 
-Stable `v1.7.1` 是当前稳定版；Preview.6 在其基础上增加 Official Host、官方认证复用与 R7 Runtime Events/Usage：
+Stable `v1.7.1` 是当前稳定版；Preview.7 是当前固定预发布快照，Preview.6 在其基础上增加 Official Host、官方认证复用与 R7 Runtime Events/Usage：
 
 ```sh
 codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-v1.7.1
@@ -171,7 +171,7 @@ Preview 使用固定的单用户可信本地 `yolo` 执行档案，以当前 Win
 - **其他 Start Plan 模型：** 取决于官方 Registry 和实时账户权益，本版本未逐模型认证。
 - **Linux/macOS：** 不支持生产执行，会在 Adapter 构造前拒绝；没有真实 Start Plan 或模型流量。
 - **CAPTCHA 与 unusual activity：** Bridge 不解决 CAPTCHA，也不绕过账户控制；权益失败会 fail-closed，可能需要用户在官方 ZCode 客户端中处理。
-- **Host Portability 与 Companion Service：** 仍属于架构研究，不是 Preview.6 已交付功能。
+- **Host Portability 与 Companion Service：** 仍属于架构研究，不是 Preview.7 已交付功能。
 - **JSON 存储与旧 CLI 执行链：** 不是当前生产路径；旧 JSON 任务历史不会导入 SQLite。
 - **Worker 可能未提交 Result 就退出。** Bridge 会保留清理证据和 Hold，而不是假定资源已释放。
 
@@ -182,7 +182,7 @@ Preview 使用固定的单用户可信本地 `yolo` 执行档案，以当前 Win
 - [Runtime 与 SQLite 升级细节](docs/ZCODE_RUNTIME.md)
 - [插件安全说明](plugins/codex-zcode-bridge/SECURITY.md)
 - [Master Skill](plugins/codex-zcode-bridge/skills/zcode-bridge/SKILL.md)
-- [Preview.6 Release](https://github.com/Sandyzzx/codex-zcode-bridge/releases/tag/codex-zcode-bridge-preview-v2.0.0-preview.6)
+- [Preview.7 Release](https://github.com/Sandyzzx/codex-zcode-bridge/releases/tag/codex-zcode-bridge-preview-v2.0.0-preview.7)
 
 ## 许可证
 
