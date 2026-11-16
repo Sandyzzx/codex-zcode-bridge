@@ -349,14 +349,30 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
   }
 
   async cancelTask(taskId: string): Promise<TaskStatusRecord> {
+    const existing = this.#recoveryRuns.get(taskId);
+    if (existing) return existing;
+    const cancellation = Promise.resolve().then(() => this.#cancelTaskOnce(taskId));
+    this.#recoveryRuns.set(taskId, cancellation);
+    try { return await cancellation; }
+    finally { if (this.#recoveryRuns.get(taskId) === cancellation) this.#recoveryRuns.delete(taskId); }
+  }
+
+  async #cancelTaskOnce(taskId: string, reconcileClaimRace = true): Promise<TaskStatusRecord> {
     this.#assertOpen();
     this.#assertRecoveryReady();
     const snapshot = this.#readSnapshot(taskId);
     const projection = asRecord(snapshot.projection);
     const attempt = asRecord(snapshot.attempt);
     if (projection.status === "queued") {
-      this.#driver.cancelQueuedAttempt({ task_id: taskId, expected_attempt: Number(attempt.attempt) });
+      try { this.#driver.cancelQueuedAttempt({ task_id: taskId, expected_attempt: Number(attempt.attempt) }); }
+      catch (error) {
+        const current = this.#readSnapshot(taskId);
+        if (reconcileClaimRace && current.projection.status === "running"
+          && Number(current.attempt.attempt) === Number(attempt.attempt)) return this.#cancelTaskOnce(taskId, false);
+        throw error;
+      }
       this.#queued.delete(queueKey(taskId, Number(attempt.attempt)));
+      this.#schedulePump();
       return this.getStatus(taskId);
     }
     if (projection.status === "running") {
@@ -382,17 +398,17 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       return this.getStatus(taskId);
     }
     const operation = snapshot.operation ? asRecord(snapshot.operation) : null;
+    if (projection.status === "cancelled" && (!operation || operation.phase === "cancelled_before_launch"
+      || operation.phase === "launch_intent" && operation.claim_id === null)) return this.getStatus(taskId);
     if (isTerminal(projection.status as TaskStatus) && operation?.phase === "released") {
       // A repeated recovery request is a read-only no-op after the durable
       // Release; do not append another lifecycle event or stop a new PID.
       return this.getStatus(taskId);
     }
-    if (isTerminal(projection.status as TaskStatus) && operation && operation.phase === "cleanup_unverified") {
+    if (isTerminal(projection.status as TaskStatus) && operation
+      && ["result_committed", "cleanup_pending", "cleanup_unverified", "cleanup_verified"].includes(String(operation.phase))) {
       // Recovery verifies the committed Result binding in the Driver before
       // CAS/Release; do not duplicate it with a snapshot truthiness check.
-      const recoveryKey = queueKey(taskId, Number(attempt.attempt));
-      const existingRecovery = this.#recoveryRuns.get(recoveryKey);
-      if (existingRecovery) return existingRecovery;
       const recovery = Promise.resolve().then(async () => {
         const readReleased = async (): Promise<TaskStatusRecord | null> => {
           const latest = this.#readSnapshot(taskId);
@@ -426,11 +442,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
         this.#schedulePump();
         return this.getStatus(taskId);
       });
-      this.#recoveryRuns.set(recoveryKey, recovery);
-      try { return await recovery; }
-      finally {
-        if (this.#recoveryRuns.get(recoveryKey) === recovery) this.#recoveryRuns.delete(recoveryKey);
-      }
+      return recovery;
     }
     throw new TaskManagerError("TASK_STATE", `zcode_cancel is not allowed from SQLite status ${String(projection.status)}`);
   }
@@ -646,6 +658,9 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
 
   async #executionObservation(taskId: string, snapshot: TaskSnapshot, status: TaskStatus): Promise<ExecutionObservation | undefined> {
     const operation = snapshot.operation;
+    if (status === "cancelled" && operation?.phase === "launch_intent" && operation.claim_id === null) {
+      return this.#makeExecutionObservation("cleanup_held", taskId, snapshot, "cancelled_before_claim_cleanup_unverified", new Date().toISOString());
+    }
     if (operation && ["cleanup_pending", "cleanup_unverified", "cleanup_reverified", "cleanup_incomplete"].includes(String(operation.phase))) {
       return this.#makeExecutionObservation("cleanup_held", taskId, snapshot, "cleanup_phase_held", new Date().toISOString());
     }

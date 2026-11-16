@@ -525,7 +525,7 @@ test('Queued Cancel atomically terminates a reserved Operation and fences Launch
   } finally { fixture.store.close(); }
 });
 
-test('Queued Cancel refuses after Launch Intent wins and preserves Unknown launch state', () => {
+test('Queued Cancel after Launch Intent persists cancellation and preserves Unknown launch occupancy', () => {
   const fixture = makeCandidateStore('queued-cancel-launch-intent-wins', 1);
   const taskId = 'queued-cancel-launch-wins';
   try {
@@ -535,12 +535,45 @@ test('Queued Cancel refuses after Launch Intent wins and preserves Unknown launc
     fixture.port.createLaunchIntent({ operation_id: admitted.operation_id, task_id: taskId, attempt: 1,
       generation: admitted.generation, revision: admitted.revision, launch_id: 'queued-cancel-launch-wins-id',
       launch_epoch: 1, launch_token: 'queued-cancel-launch-token-0123456789' });
-    assert.throws(() => fixture.port.cancelQueuedAttempt({ task_id: taskId, expected_attempt: 1 }),
-      error => error.code === 'queued_cancel_launch_already_intended');
-    assert.equal(fixture.port.readTaskProjection(taskId).status, 'queued');
+    const outcome=fixture.port.cancelQueuedAttempt({ task_id: taskId, expected_attempt: 1 });
+    assert.equal(fixture.port.readTaskProjection(taskId).status, 'cancelled');
     assert.equal(fixture.port.readOperation(admitted.operation_id).phase, 'launch_intent');
-    assert.equal(fixture.port.readTaskEvents(taskId).events.some(event => event.event_type === 'cancelled'), false);
+    assert.equal(fixture.port.readTaskLifecycle(taskId).result.status,'cancelled');
+    assert.equal(fixture.port.readTaskEvents(taskId).events.filter(event => event.event_type === 'cancelled').length,1);
+    assert.equal(fixture.port.cancelQueuedAttempt({ task_id: taskId, expected_attempt: 1 }).cancel_id,outcome.cancel_id);
+    const op=fixture.port.readOperation(admitted.operation_id);
+    assert.equal(op.claim_id,null);
+    assert.throws(()=>fixture.port.recordLaunchReceipt({operation_id:op.operation_id,task_id:taskId,attempt:1,
+      generation:op.generation,revision:op.revision,launch_id:op.launch_id,launch_epoch:op.launch_epoch,
+      launch_token:'queued-cancel-launch-token-0123456789',receipt_id:'late-receipt',
+      launch_identity:{source:'synthetic_fixture',fixture:true,process_id:42111,start_fingerprint:'late-start'}}),
+      error=>error.code==='launch_cancelled_before_claim');
+    const reopened=IsolatedAdmissionStore.openForRecovery(fixture.r);
+    try{
+      assert.equal(reopened.readTaskLifecycle(taskId).result.status,'cancelled');
+      const row=reopened.readRecoverySnapshot().operations.find(row=>row.operation_id===op.operation_id);
+      assert.equal(row.capacity_occupied,true,'cancellation is not process cleanup');
+    }finally{reopened.close();}
   } finally { fixture.store.close(); }
+});
+
+test('Queued Cancel after Receipt fences a late Claim even with the updated revision',()=>{
+  const fixture=makeCandidateStore('queued-cancel-receipt',1),taskId='cancel-receipt-task';
+  try{
+    fixture.port.createTask(task(taskId,fixture.workspace));
+    const admitted=fixture.port.admitOperation({operation_id:'cancel-receipt-op',task_id:taskId,attempt:1,workspace_ref:fixture.workspace},gates);
+    const launch={operation_id:admitted.operation_id,task_id:taskId,attempt:1,generation:admitted.generation,revision:admitted.revision,
+      launch_id:'cancel-receipt-launch',launch_epoch:1,launch_token:'cancel-receipt-token-0123456789'};
+    const intent=fixture.port.createLaunchIntent(launch);
+    const identity={source:'synthetic_fixture',fixture:true,process_id:42111,start_fingerprint:'cancel-start'};
+    fixture.port.recordLaunchReceipt({...launch,revision:intent.revision,receipt_id:'cancel-receipt',launch_identity:identity});
+    fixture.port.cancelQueuedAttempt({task_id:taskId,expected_attempt:1});
+    const op=fixture.port.readOperation(admitted.operation_id);
+    assert.throws(()=>fixture.port.commitPermanentClaim({...launch,revision:op.revision,claim_id:'late-claim',
+      worker_identity:{...identity,worker_id:'late-worker',incarnation:'late-incarnation'}}),error=>error.code==='claim_attempt_not_current');
+    assert.equal(fixture.port.readTaskLifecycle(taskId).result.status,'cancelled');
+    assert.equal(fixture.port.readOperation(op.operation_id).claim_id,null);
+  }finally{fixture.store.close();}
 });
 
 test('Queued Cancel uses attempt CAS against Continue and Admission outcomes', () => {

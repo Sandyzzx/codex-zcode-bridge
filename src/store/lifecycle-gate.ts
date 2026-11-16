@@ -1476,6 +1476,13 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
           throw new LifecycleGateError("recovery_cleanup_resolution_invalid");
         }
       }
+      for (const event of lifecycleEvents) {
+        if (event.event_type !== "observation_recorded") continue;
+        const evidence = parseEvidence(event.evidence_json, "recovery_event_evidence_invalid");
+        if (evidence.reason === "cancel_recovery_resolved") {
+          for (const hash of evidence.resolved_recovery_event_digests as string[]) resolvedRecoveryDigests.add(hash);
+        }
+      }
       const activeRecovery = lifecycleEvents.filter((event) => {
         if (event.event_type !== "observation_recorded") return false;
         try {
@@ -2159,12 +2166,23 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
       }
       await active?.closeHandleGate?.();
       const cancelId = text(intent.cancel_id, "cancellation_intent_missing");
-      const persistedVerification = readAllLifecycleEventsForRecovery(port, operationId).find((event) => {
+      const cancellationHistory = readAllLifecycleEventsForRecovery(port, operationId);
+      const persistedVerification = [...cancellationHistory].reverse().find((event) => {
         if (event.event_type !== "observation_recorded") return false;
         try { return parseEvidence(event.evidence_json, "cancellation_verification_invalid").reason === "cancel_tree_verified"; }
         catch { throw new LifecycleGateError("cancellation_verification_invalid"); }
       });
-      if (persistedVerification) {
+      // A persisted proof may predate a later cleanup Hold. Re-probe and scan
+      // rather than reusing that proof to resolve a newly observed obstruction.
+      const resolvedHolds = new Set(cancellationHistory.flatMap((event) => {
+        if (event.event_type !== "observation_recorded") return [];
+        const evidence = parseEvidence(event.evidence_json, "cancellation_recovery_invalid");
+        return evidence.reason === "cancel_recovery_resolved" ? evidence.resolved_recovery_event_digests as string[] : [];
+      }));
+      const hasRecoveryHold = cancellationHistory.some((event) => event.event_type === "observation_recorded"
+        && !resolvedHolds.has(String(event.evidence_digest))
+        && ["recovery_hold", "recovery_quarantine"].includes(parseEvidence(event.evidence_json, "cancellation_recovery_invalid").reason as string));
+      if (persistedVerification && !hasRecoveryHold) {
         if (identityVerdict.state !== "exited") throw new LifecycleGateError("cancellation_verification_conflict");
         const persistedEvidence = parseEvidence(persistedVerification.evidence_json, "cancellation_verification_invalid");
         if (persistedEvidence.cancel_id !== cancelId || persistedEvidence.claim_id !== fence.claim_id
@@ -2198,8 +2216,12 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
         }
       }
       const terminationSignal = workerExitCode === null && active?.child ? active.child.signalCode ?? null : null;
-      const scan = await verifyProcessTreeClaimantsClean([{ pid: processIdentity.pid, fingerprint: processIdentity.fingerprint }]);
-      if (!scan.clean || scan.livePids.length > 0) throw new LifecycleGateError("cancellation_tree_not_clean");
+      const treeProbe = await processTreeWithDeadline([{ pid: processIdentity.pid, fingerprint: processIdentity.fingerprint }],
+        processTreeProbeTimeoutMs, verifyTreeClaimants);
+      const scan = treeProbe.status === "resolved" ? treeProbe.result : undefined;
+      if (!scan?.clean || scan.livePids.length > 0 || !scan.observedPids.includes(processIdentity.pid)) {
+        throw new LifecycleGateError("cancellation_tree_not_clean");
+      }
       const processTreeFacts = { contract: "sqlite-candidate-cancelled-worker-tree-v1", operation_id: operationId,
         task_id: taskId, attempt, generation: Number(operation.generation), claim_id: fence.claim_id, cancel_id: cancelId,
         worker_identity_digest: fence.claim_worker_identity_digest, root_process_id: processIdentity.pid,

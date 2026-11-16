@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { IsolatedAdmissionStore, AdmissionError, digest } from '../../../src/sqlite-candidate/wp6b2b1/store.mjs';
+import { IsolatedAdmissionStore, AdmissionError, canonical, digest } from '../../../src/sqlite-candidate/wp6b2b1/store.mjs';
 import { createSqliteLifecyclePort } from '../../../src/sqlite-candidate/wp6b2b1/lifecycle-port.mjs';
 
 const HERE=path.dirname(fileURLToPath(import.meta.url));
@@ -115,6 +115,96 @@ function verifiedRecoveryPort(store){return createSqliteLifecyclePort(store,{rec
     &&(observation.classification==='hold'?observation.reason_code!=='operation_projection_conflict':observation.reason_code==='operation_projection_conflict');
   return valid?{classification:observation.classification,reason_code:observation.reason_code,evidence_source:observation.evidence_source,evidence_digest:observation.evidence_digest}:false;
 }});}
+for(const priorProof of [false,true])test(`explicit cancellation resolves cleanup-only Hold with fresh tree proof (prior proof ${priorProof})`,()=>{
+  const {root:r,store,request}=makeRunning(`cancel-held-${priorProof}`),cancel=cancellationFixture(store);
+  const intent=cancel.port.requestCancellation(cancel.fence(),cancel.identityEvidence);
+  const tree={...cancel.cancellationEvidence,cancel_id:intent.cancel_id};
+  let original;
+  if(priorProof)original=cancel.port.recordCancellationVerification(cancel.fence(),tree);
+  const held=recoveryInput(store,{reason_code:'cleanup_incomplete'});
+  verifiedRecoveryPort(store).recordRecoveryObservation(held.input,held.evidence);
+  const before=readRows(r);
+  capture(()=>store.commitResult({...request,revision:store.readOperation(request.operation_id).revision,
+    result_status:'cancelled',result:resultPayload('cancelled'),cancel_verification_digest:original?.cancellation_verification_digest??'0'.repeat(64)}),'operation_recovery_latched');
+  const fresh={...tree,probe_round:2};
+  const reject=createSqliteLifecyclePort(store,{cancellationVerifier:()=>false});
+  capture(()=>reject.recordCancellationVerification(cancel.fence(),fresh),'cancellation_verification_unverified');
+  assert.deepEqual(readRows(r),before,'rejected evidence cannot clear the Hold');
+  const verified=cancel.port.recordCancellationVerification(cancel.fence(),fresh);
+  const afterProof=readRows(r),proofEvents=afterProof.events.filter(event=>JSON.parse(event.evidence_json).reason==='cancel_tree_verified');
+  const resolution=afterProof.events.find(event=>JSON.parse(event.evidence_json).reason==='cancel_recovery_resolved');
+  assert.ok(resolution);
+  assert.equal(proofEvents.length,priorProof?2:1,'fresh proof is durably represented by a new verification event');
+  const resolvedEvidence=JSON.parse(resolution.evidence_json);
+  const freshProofEvent=proofEvents.at(-1);
+  assert.ok(freshProofEvent.sequence>held.input.expected_revision,'fresh proof follows the Hold');
+  assert.equal(resolvedEvidence.cancellation_verification_digest,freshProofEvent.evidence_digest);
+  assert.equal(resolvedEvidence.proof_digest,JSON.parse(freshProofEvent.evidence_json).proof_digest);
+  assert.equal(readRows(r).events.filter(event=>JSON.parse(event.evidence_json).reason==='recovery_hold').length,1,'history is preserved');
+  if(priorProof)assert.notEqual(verified.cancellation_verification_digest,original.cancellation_verification_digest,
+    'resolution and Result must use the fresh proof rather than the historical proof');
+  const committed=store.commitResult({...request,revision:verified.revision,result_status:'cancelled',result:resultPayload('cancelled'),
+    cancel_verification_digest:verified.cancellation_verification_digest});
+  const pending=store.beginCleanup(cleanupFence(store,request));
+  const cleanup=store.recordCleanupEvidence({...cleanupFence(store,request),revision:pending.revision,outcome:'verified',
+    cleanup_evidence:verifiedCleanupEvidence(store,request)});
+  const released=store.releaseCapacity({...cleanupFence(store,request),cleanup_digest:cleanup.cleanup_digest});
+  assert.equal(committed.result_status,'cancelled');assert.equal(released.phase,'released');
+  const reopened=IsolatedAdmissionStore.openForRecovery(r);
+  try{
+    const op=reopened.readRecoverySnapshot().operations.find(op=>op.operation_id===request.operation_id);
+    assert.equal(op.capacity_occupied,false);assert.equal(op.recovery_classification,'normal');
+    assert.equal(reopened.readTaskLifecycle(request.task_id).result.status,'cancelled');
+  }finally{reopened.close();}
+});
+
+test('reopen rejects a resolution that mixes the historical verification with the fresh proof',()=>{
+  const {root:r,store,request}=makeRunning('cancel-resolution-proof-binding'),cancel=cancellationFixture(store);
+  const intent=cancel.port.requestCancellation(cancel.fence(),cancel.identityEvidence);
+  const tree={...cancel.cancellationEvidence,cancel_id:intent.cancel_id};
+  const historical=cancel.port.recordCancellationVerification(cancel.fence(),tree);
+  const held=recoveryInput(store,{reason_code:'cleanup_incomplete'});
+  verifiedRecoveryPort(store).recordRecoveryObservation(held.input,held.evidence);
+  const fresh=cancel.port.recordCancellationVerification(cancel.fence(),{...tree,probe_round:2});
+  assert.notEqual(fresh.cancellation_verification_digest,historical.cancellation_verification_digest);
+  const before=readRows(r);
+  capture(()=>store.commitResult({...request,revision:fresh.revision,result_status:'cancelled',result:resultPayload('cancelled'),
+    cancel_verification_digest:historical.cancellation_verification_digest}),'cancel_verification_required');
+  assert.deepEqual(readRows(r),before,'a Result cannot fall back to the historical proof');
+  store.close();
+  const db=new DatabaseSync(path.join(r,'operations.sqlite3'));
+  try{
+    const row=db.prepare("SELECT sequence,evidence_json FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded'").all(request.operation_id)
+      .map(value=>({...value,evidence:JSON.parse(value.evidence_json)})).find(value=>value.evidence.reason==='cancel_recovery_resolved');
+    const tampered={...row.evidence,cancellation_verification_digest:historical.cancellation_verification_digest};
+    tampered.evidence_digest=digest(canonical(Object.fromEntries(Object.entries(tampered).filter(([key])=>key!=='evidence_digest'))));
+    const trigger=db.prepare("SELECT sql FROM sqlite_schema WHERE type='trigger' AND name='events_no_update'").get().sql;
+    db.exec('DROP TRIGGER events_no_update');
+    db.prepare('UPDATE manager_operation_events SET evidence_json=?,evidence_digest=? WHERE operation_id=? AND sequence=?')
+      .run(canonical(tampered),digest(canonical(tampered)),request.operation_id,row.sequence);
+    db.exec(trigger);
+  }finally{db.close();}
+  const reopened=IsolatedAdmissionStore.openForRecovery(r);
+  try{
+    const snapshot=reopened.readRecoverySnapshot();
+    assert.equal(snapshot.root_status,'unavailable_read_only',JSON.stringify(snapshot));
+    assert.ok(snapshot.root_blockers.includes('cancellation_resolution_binding_mismatch'));
+    assert.equal(snapshot.writes_allowed,false);
+  }finally{reopened.close();}
+});
+
+test('explicit cancellation cannot resolve quarantine or unknown Hold reasons',()=>{
+  for(const details of [{classification:'quarantine',reason_code:'operation_projection_conflict'},
+    {classification:'hold',reason_code:'worker_identity_unknown'}]){
+    const {root:r,store}=makeRunning(`cancel-reject-${details.reason_code}`),cancel=cancellationFixture(store);
+    const intent=cancel.port.requestCancellation(cancel.fence(),cancel.identityEvidence);
+    const held=recoveryInput(store,details);verifiedRecoveryPort(store).recordRecoveryObservation(held.input,held.evidence);
+    const before=readRows(r);
+    capture(()=>cancel.port.recordCancellationVerification(cancel.fence(),{...cancel.cancellationEvidence,cancel_id:intent.cancel_id}),'operation_recovery_latched');
+    assert.deepEqual(readRows(r),before);
+  }
+});
+
 async function retryBusyResult(r,request){
   let latest;
   for(let i=0;i<8;i++){

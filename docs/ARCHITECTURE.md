@@ -1,9 +1,12 @@
 # 当前架构
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-15
+
+> 2026-11-16 本地候选修订：[ADR-039](decisions/ADR-039-host-authorized-cancellation.md) 将取消授权与清理事实分离。queued + Launch Intent 无 Claim 时允许原子持久化取消并禁止迟到 Claim，未证明的进程/资源占用保留；Running 的 cleanup-only Hold 可经新鲜取消树证明追加消解记录，再继续原 CAS。此修复不增加 MCP 工具、Schema、重派或第二套恢复引擎。
+> Last updated: 2026-11-16（ADR-039 本地取消修复；未发布）
 > Last verified: 2026-11-15，核对 Preview.7 的 ADR-038 平台收敛、Recovery 生产能力说明、旧 JSON/Ledger/人类报告/主会话 Token/Desktop task-index 退役、Events summary 分页及生成物与 CI 合同。
 > Verified against: Preview.7 release branch based on `397f41e16b7072fb8ddfae5bf346807f3d539535`
+> ADR-039 Last verified: 2026-11-16，仅取消接线及定向隔离测试；基线 `ec5f3e83d737df469f9ed54361d2aec46b4a15a8` + 本地候选。生产取消未重试。
 
 本文件描述 Preview.7 的生产架构。Windows x64 已默认切换到官方 Host 路径，R7 Runtime Events/Usage 复用同一 SQLite Authority；Preview.7 保留 ZCode 3.18.2 Host、官方 Start Plan 认证投影与官方签名 runtime host，并应用 ADR-038 的最小整改。公开合同继续以 [INTERFACES.md](INTERFACES.md) 为准，宿主和运行配置分别见 [SHARED_CORE.md](SHARED_CORE.md) 与 [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md)。
 
