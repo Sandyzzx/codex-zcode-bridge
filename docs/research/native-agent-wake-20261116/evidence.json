@@ -1,0 +1,356 @@
+{
+  "schema": "codex-zcode-bridge/native-agent-wake-evidence-v1",
+  "status": "RESEARCH",
+  "generated_at": "2026-11-16T15:17:27Z",
+  "real_windows_host_e2e_executed": true,
+  "task_scope": "Codex native spawn_agent + wake_on_agent_messages",
+  "not_substituted_for": [
+    "ordinary codex queue wake",
+    "MCP Attention active wait",
+    "Thin Waiter"
+  ],
+  "repository": {
+    "base_commit": "295727320cab86b071c23ddddd6e29306fa29e7f",
+    "worktree": "D:\\codex-zcode-bridge\\.run\\native-agent-wake-20261116",
+    "branch": "codex/native-agent-wake-20261116",
+    "master_state_preserved": [
+      "M AGENTS.md",
+      "?? $null"
+    ],
+    "production_code_modified": false,
+    "production_sqlite_modified": false,
+    "codex_install_modified": false,
+    "push_merge_tag_release_executed": false
+  },
+  "environment": {
+    "os": "Windows local desktop",
+    "timezone": "Asia/Shanghai",
+    "codex_cli": "0.169.0-alpha.11.1",
+    "codex_desktop": "26.1111.2228.0",
+    "node": "24.16.0",
+    "npm": "11.13.0",
+    "bridge_preview": "2.0.0-preview.8",
+    "upstream_source_commit": "662a634e88fcc809d77da393d75572c3d814cb27",
+    "probe_model": "opencode-go/deepseek-v4.1-flash",
+    "reasoning_effort": "high"
+  },
+  "feature_availability": {
+    "feature": "wake_on_agent_messages",
+    "stage": "under development",
+    "default_enabled": false,
+    "enabled_by_process_flag": true,
+    "flag": "--enable wake_on_agent_messages",
+    "multi_agent": {
+      "stage": "deprecated",
+      "default_enabled": true
+    },
+    "multi_agent_v2": {
+      "stage": "stable",
+      "default_enabled": false,
+      "required_for_native_spawn": false
+    },
+    "native_spawn_agent_observed": true,
+    "observation": "OBSERVED",
+    "result": "FEATURE_AVAILABLE"
+  },
+  "cases": {
+    "A_FEATURE_OFF": {
+      "surface": "CLI/TUI-like independent Codex session",
+      "feature_enabled": false,
+      "parent_thread_id": "01a1e4bd-0694-7c32-b9e1-9ee5cc884de0",
+      "child_thread_id": "01a1e4bd-7f09-7152-8648-6b0155f42dad",
+      "parent_turn_id": "01a1e4bd-090e-7ae1-b38e-f7276dc622ab",
+      "child_turn_id": "01a1e4bd-7f8b-76a0-93c3-629910be9f5f",
+      "parent_final_text": "PARENT_FINAL_NATIVE_WAKE_A_OFF3",
+      "parent_final_complete_utc": "2026-11-16T14:23:10.490Z",
+      "child_sleep_started_utc": "2026-11-16T14:23:12.391Z",
+      "child_final_text": "NATIVE_WAKE_ACK_20261116_A_OFF3",
+      "child_final_complete_utc": "2026-11-16T14:23:45.247Z",
+      "new_parent_turn_id": null,
+      "manual_message_submitted": false,
+      "codex_queue_used": false,
+      "observation_window_seconds_at_least": 120,
+      "classification": "NO_WAKE_CONTROL",
+      "evidence_level": "OBSERVED"
+    },
+    "B_FEATURE_ON": {
+      "surface": "CLI/TUI-like independent Codex session",
+      "feature_enabled": true,
+      "parent_thread_id": "01a1e4c1-0dac-7c20-8d0d-00d556d93c39",
+      "child_thread_id": "01a1e4c1-352a-7250-b30f-43eb48bcf8c7",
+      "parent_initial_turn_id": "01a1e4c1-0fa0-75d2-b93e-5c230ec0cbb7",
+      "child_turn_id": "01a1e4c1-35a4-7af1-aaa1-ff0e7d52bf49",
+      "parent_final_text": "PARENT_FINAL_NATIVE_WAKE_B",
+      "parent_final_complete_utc": "2026-11-16T14:27:16.492Z",
+      "child_sleep_started_utc": "2026-11-16T14:27:24.416Z",
+      "child_final_text": "NATIVE_WAKE_ACK_20261116_B",
+      "child_final_complete_utc": "2026-11-16T14:28:01.116Z",
+      "agent_message": {
+        "author": "/root/native_wake_child_b",
+        "recipient": "/root",
+        "type": "FINAL_ANSWER",
+        "observed_utc": "2026-11-16T14:28:01.220Z",
+        "trigger_turn": false
+      },
+      "automatic_parent_turn_id": "01a1e4c1-fdfc-79d0-8ccd-b210ef03aefa",
+      "automatic_parent_turn_started_utc": "2026-11-16T14:28:01.162Z",
+      "child_complete_to_parent_start_ms": 46,
+      "parent_ack_text": "NATIVE_WAKE_ON_ACK_CONSUMED_20261116_B",
+      "parent_ack_complete_utc": "2026-11-16T14:28:07.045Z",
+      "manual_message_submitted": false,
+      "codex_queue_used": false,
+      "classification": "NATIVE_WAKE_CONFIRMED",
+      "evidence_level": "OBSERVED",
+      "result": "PASS"
+    },
+    "LONG_IDLE": {
+      "surface": "CLI/TUI-like independent Codex session",
+      "feature_enabled": true,
+      "parent_thread_id": "01a1e4d2-4574-7202-8ecc-9818db713f37",
+      "child_thread_id": "01a1e4d2-e3a7-7c32-be62-25eb30a67bfc",
+      "parent_initial_turn_id": "01a1e4d2-a77a-7982-aa03-a7c75f06c959",
+      "child_turn_id": "01a1e4d2-e457-7f02-a77c-14a028db99d7",
+      "parent_final_text": "PARENT_FINAL_LONG_WAKE_20261116",
+      "parent_final_complete_utc": "2026-11-16T14:46:38.892Z",
+      "child_sleep_started_utc": "2026-11-16T14:46:33.980Z",
+      "child_final_text": "NATIVE_WAKE_ACK_20261116_LONG",
+      "child_final_complete_utc": "2026-11-16T14:48:41.621Z",
+      "automatic_parent_turn_id": "01a1e4d4-ebb1-7d52-b24e-e570d6ced3ff",
+      "automatic_parent_turn_started_utc": "2026-11-16T14:48:41.671Z",
+      "parent_idle_seconds": 122.779,
+      "parent_ack_text": "NATIVE_WAKE_LONG_CONSUMED_20261116",
+      "parent_ack_complete_utc": "2026-11-16T14:48:49.623Z",
+      "manual_message_submitted": false,
+      "codex_queue_used": false,
+      "classification": "LONG_IDLE_WAKE_CONFIRMED",
+      "evidence_level": "OBSERVED",
+      "result": "PASS"
+    },
+    "DESKTOP_ORDINARY_DEFAULT": {
+      "surface": "Codex Desktop ordinary thread",
+      "feature_enabled": "default/unknown, not enabled by CLI flag",
+      "parent_thread_id": "01a1e4c7-7b2c-73c2-a8cc-ea2010f0f752",
+      "child_thread_id": "01a1e4c7-acb0-7002-a830-4e74a282e54c",
+      "parent_turn_id": "01a1e4c7-7e42-7d82-bd2a-0af9c7e7d299",
+      "parent_final_text": "PARENT_FINAL_DESKTOP_WAKE_20261116",
+      "parent_final_complete_utc": "2026-11-16T14:34:21.346Z",
+      "child_timer": {
+        "tool": "node_repl.js",
+        "started_utc": "2026-11-16T14:35:09.233Z",
+        "duration_seconds": 30,
+        "clock_sleep_available": false
+      },
+      "child_final_text": "NATIVE_WAKE_DESKTOP_CHILD_ACK_20261116",
+      "child_final_complete_utc": "2026-11-16T14:35:50.639Z",
+      "new_parent_turn_id": null,
+      "last_check_utc": "2026-11-16T15:07:00Z",
+      "classification": "NOT_CONFIRMED",
+      "evidence_level": "OBSERVED",
+      "result": "FAIL"
+    },
+    "DESKTOP_GOAL_DEFAULT": {
+      "surface": "Codex Desktop /goal",
+      "feature_enabled": "default/unknown, not enabled by CLI flag",
+      "parent_thread_id": "01a1e4d4-9b8c-7941-9d01-a8aa6d3ac4ad",
+      "child_thread_id": "01a1e4d4-d7a2-7161-a2b1-a59abed22544",
+      "parent_turn_id": "01a1e4d4-9f5b-75a0-ac9c-11c00778fd3e",
+      "goal": {
+        "create_tool": "create_goal",
+        "update_tool": "update_goal",
+        "status": "complete",
+        "tokens_used": 978,
+        "time_used_seconds": 11,
+        "thread_id": "01a1e4d4-9b8c-7941-9d01-a8aa6d3ac4ad"
+      },
+      "parent_final_text": "GOAL_PARENT_FINAL_DESKTOP_WAKE_20261116",
+      "parent_final_complete_utc": "2026-11-16T14:48:47.693Z",
+      "child_timer": {
+        "tool": "node_repl.js",
+        "started_utc": "2026-11-16T14:49:00.330Z",
+        "duration_seconds": 30,
+        "clock_sleep_available": false
+      },
+      "child_final_text": "NATIVE_WAKE_DESKTOP_GOAL_CHILD_ACK_20261116",
+      "child_final_complete_utc": "2026-11-16T14:49:37.096Z",
+      "new_parent_turn_id": null,
+      "last_check_utc": "2026-11-16T15:07:00Z",
+      "classification": "NOT_CONFIRMED",
+      "evidence_level": "OBSERVED",
+      "result": "FAIL"
+    }
+  },
+  "runtime_token_usage": {
+    "note": "rollout turn_token_usage totals; not billing attribution and not a savings percentage",
+    "A_FEATURE_OFF": {
+      "parent_initial_total": 36887,
+      "child_total": 36809,
+      "automatic_parent_total": null
+    },
+    "B_FEATURE_ON": {
+      "parent_initial_total": 36764,
+      "child_total": 36758,
+      "automatic_parent_total": 18501
+    },
+    "LONG_IDLE": {
+      "parent_initial_total": 40035,
+      "child_total": 39956,
+      "automatic_parent_total": 20114
+    },
+    "DESKTOP_ORDINARY_DEFAULT": {
+      "parent_initial_total": 40357,
+      "child_total": 174227,
+      "automatic_parent_total": null
+    },
+    "DESKTOP_GOAL_DEFAULT": {
+      "parent_initial_total": 84583,
+      "child_total": 88548,
+      "automatic_parent_total": null
+    }
+  },
+  "static_analysis": {
+    "source_checkout": "D:\\codex-zcode-bridge\\.run\\native-agent-wake-20261116\\.native-wake-workspace\\source\\openai-codex-662a634e",
+    "wake_gate": {
+      "file": "codex-rs/core/src/session/turn_input.rs",
+      "line": 911,
+      "requires": [
+        "feature wake_on_agent_messages enabled",
+        "session not interrupted",
+        "root agent",
+        "automatic turn mode is not Plan"
+      ],
+      "evidence_level": "DOCUMENTED"
+    },
+    "interrupt_persistence": {
+      "file": "codex-rs/core/src/session/mod.rs",
+      "line": 1805,
+      "behavior": "interrupted status restored from rollout on resume",
+      "evidence_level": "DOCUMENTED"
+    },
+    "public_app_server_methods": {
+      "file": "codex-rs/app-server-protocol/src/protocol/common.rs",
+      "methods": [
+        "thread/start",
+        "thread/resume",
+        "thread/inject_items",
+        "turn/start",
+        "turn/steer"
+      ],
+      "mailbox_injection_rpc_found": false,
+      "thread_inject_items_starts_turn": false,
+      "evidence_level": "DOCUMENTED"
+    },
+    "native_message_path": {
+      "file": "codex-rs/agent-message-board-host/src/lib.rs",
+      "line": 244,
+      "constructs": "InterAgentCommunication",
+      "trigger_turn": false,
+      "scope": "registered Codex native thread tree",
+      "evidence_level": "DOCUMENTED"
+    },
+    "official_test": {
+      "file": "codex-rs/core/tests/suite/agent_control_tests.rs",
+      "line": 1049,
+      "name": "agent_mail_wakes_completed_root_when_enabled",
+      "evidence_level": "DOCUMENTED"
+    }
+  },
+  "compatibility": {
+    "question_1_internal_agent_message_only": {
+      "answer": true,
+      "evidence_level": "DOCUMENTED + OBSERVED"
+    },
+    "question_2_mcp_worker_public_mailbox_ingress": {
+      "answer": false,
+      "reason": "no public Agent Mailbox injection RPC; thread/inject_items does not start a turn",
+      "evidence_level": "DOCUMENTED + INFERRED"
+    },
+    "question_3_native_subagent_wrapper_required": {
+      "answer": true,
+      "reason": "native InterAgentCommunication is only exposed through the Codex native agent tree in the inspected source",
+      "evidence_level": "INFERRED"
+    },
+    "question_4_child_survives_parent_final": {
+      "answer": true,
+      "observed_delays_seconds": [
+        30,
+        120
+      ],
+      "evidence_level": "OBSERVED"
+    },
+    "question_5_wrapper_cost": {
+      "extra_model_calls": true,
+      "extra_tokens": true,
+      "agent_slot_occupancy": true,
+      "evidence_level": "OBSERVED + INFERRED"
+    },
+    "question_6_sidebar_lifecycle": {
+      "native_child_lifecycle_reused": true,
+      "user_sidebar_reuse_confirmed": false,
+      "evidence_level": "INFERRED"
+    }
+  },
+  "final_verdicts": {
+    "FEATURE_AVAILABLE": true,
+    "NATIVE_WAKE_CLI": true,
+    "NATIVE_WAKE_DESKTOP": false,
+    "NATIVE_WAKE_DESKTOP_scope": "tested default Desktop; enabled variant BLOCKED by global config isolation",
+    "NATIVE_WAKE_GOAL": false,
+    "NATIVE_WAKE_GOAL_scope": "tested default Desktop; enabled variant BLOCKED by global config isolation",
+    "CHILD_SURVIVES_PARENT_FINAL": true,
+    "LONG_IDLE_WAKE": true,
+    "LONG_IDLE_WAKE_scope": "observed at approximately 123 seconds; no 1h/4h stress",
+    "EXTERNAL_BRIDGE_COMPATIBLE": false,
+    "TOKEN_SAVINGS_MEASURABLE": false,
+    "TOKEN_SAVINGS_MEASURABLE_scope": "no matched active-wait versus idle-wake trials"
+  },
+  "recommendation": {
+    "thin_waiter_notify_codex": "NO_GO",
+    "long_term_candidate": "C_NATIVE_SUBAGENT_WAKE",
+    "implemented_in_this_round": false,
+    "host_wake_adapter": "DO_NOT_BUILD_DIRECT_EXTERNAL_INGRESS",
+    "next_prototype_requires_separate_authorization": true
+  },
+  "blocked_or_not_tested": [
+    "Desktop wake with feature enabled in an isolated Desktop process",
+    "Desktop Goal wake with feature enabled",
+    "Interrupt suppression at runtime",
+    "Plan Mode suppression at runtime",
+    "duplicate, cancelled, late, and re-finalized agent messages",
+    "1-hour and 4-hour child survival"
+  ],
+  "privacy": {
+    "credentials_read_or_recorded": false,
+    "oauth_state_recorded": false,
+    "hidden_reasoning_recorded": false,
+    "raw_rollout_copied": false,
+    "worker_free_text_in_notification": false
+  },
+  "verification": {
+    "evidence_json_parse": "PASS",
+    "extractor_powershell_parse": "PASS",
+    "extractor_rollout_smoke": {
+      "result": "PASS",
+      "case_count": 5,
+      "rollout_count": 10
+    },
+    "test_affected": {
+      "exit_code": 0,
+      "mode": "NO_TESTS_APPLICABLE",
+      "typecheck": "PASS",
+      "build": "PASS",
+      "plugin_validation": "PASS",
+      "git_diff_check": "PASS",
+      "stress_tests": "STRESS_TESTS_NOT_APPLICABLE",
+      "generated_outputs_restored": true,
+      "temporary_node_modules_junction_removed": true
+    },
+    "global_config_restoration": {
+      "temporary_trust_entry_removed": true,
+      "final_sha256": "EA93A91E720DFDAEB24278DCE9F41C19AE3E5236536A4986AE2A2DACA7ABA37E"
+    },
+    "master_state": [
+      "M AGENTS.md",
+      "?? $null"
+    ]
+  }
+}
