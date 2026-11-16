@@ -115,6 +115,53 @@ function verifiedRecoveryPort(store){return createSqliteLifecyclePort(store,{rec
     &&(observation.classification==='hold'?observation.reason_code!=='operation_projection_conflict':observation.reason_code==='operation_projection_conflict');
   return valid?{classification:observation.classification,reason_code:observation.reason_code,evidence_source:observation.evidence_source,evidence_digest:observation.evidence_digest}:false;
 }});}
+for(const priorProof of [false,true])test(`explicit cancellation resolves cleanup-only Hold with fresh tree proof (prior proof ${priorProof})`,()=>{
+  const {root:r,store,request}=makeRunning(`cancel-held-${priorProof}`),cancel=cancellationFixture(store);
+  const intent=cancel.port.requestCancellation(cancel.fence(),cancel.identityEvidence);
+  const tree={...cancel.cancellationEvidence,cancel_id:intent.cancel_id};
+  let original;
+  if(priorProof)original=cancel.port.recordCancellationVerification(cancel.fence(),tree);
+  const held=recoveryInput(store,{reason_code:'cleanup_incomplete'});
+  verifiedRecoveryPort(store).recordRecoveryObservation(held.input,held.evidence);
+  const before=readRows(r);
+  capture(()=>store.commitResult({...request,revision:store.readOperation(request.operation_id).revision,
+    result_status:'cancelled',result:resultPayload('cancelled'),cancel_verification_digest:original?.cancellation_verification_digest??'0'.repeat(64)}),'operation_recovery_latched');
+  const fresh={...tree,probe_round:2};
+  const reject=createSqliteLifecyclePort(store,{cancellationVerifier:()=>false});
+  capture(()=>reject.recordCancellationVerification(cancel.fence(),fresh),'cancellation_verification_unverified');
+  assert.deepEqual(readRows(r),before,'rejected evidence cannot clear the Hold');
+  const verified=cancel.port.recordCancellationVerification(cancel.fence(),fresh);
+  const resolution=readRows(r).events.find(event=>JSON.parse(event.evidence_json).reason==='cancel_recovery_resolved');
+  assert.ok(resolution);
+  assert.equal(readRows(r).events.filter(event=>JSON.parse(event.evidence_json).reason==='recovery_hold').length,1,'history is preserved');
+  if(priorProof)assert.equal(verified.cancellation_verification_digest,original.cancellation_verification_digest);
+  const committed=store.commitResult({...request,revision:verified.revision,result_status:'cancelled',result:resultPayload('cancelled'),
+    cancel_verification_digest:verified.cancellation_verification_digest});
+  const pending=store.beginCleanup(cleanupFence(store,request));
+  const cleanup=store.recordCleanupEvidence({...cleanupFence(store,request),revision:pending.revision,outcome:'verified',
+    cleanup_evidence:verifiedCleanupEvidence(store,request)});
+  const released=store.releaseCapacity({...cleanupFence(store,request),cleanup_digest:cleanup.cleanup_digest});
+  assert.equal(committed.result_status,'cancelled');assert.equal(released.phase,'released');
+  const reopened=IsolatedAdmissionStore.openForRecovery(r);
+  try{
+    const op=reopened.readRecoverySnapshot().operations.find(op=>op.operation_id===request.operation_id);
+    assert.equal(op.capacity_occupied,false);assert.equal(op.recovery_classification,'normal');
+    assert.equal(reopened.readTaskLifecycle(request.task_id).result.status,'cancelled');
+  }finally{reopened.close();}
+});
+
+test('explicit cancellation cannot resolve quarantine or unknown Hold reasons',()=>{
+  for(const details of [{classification:'quarantine',reason_code:'operation_projection_conflict'},
+    {classification:'hold',reason_code:'worker_identity_unknown'}]){
+    const {root:r,store}=makeRunning(`cancel-reject-${details.reason_code}`),cancel=cancellationFixture(store);
+    const intent=cancel.port.requestCancellation(cancel.fence(),cancel.identityEvidence);
+    const held=recoveryInput(store,details);verifiedRecoveryPort(store).recordRecoveryObservation(held.input,held.evidence);
+    const before=readRows(r);
+    capture(()=>cancel.port.recordCancellationVerification(cancel.fence(),{...cancel.cancellationEvidence,cancel_id:intent.cancel_id}),'operation_recovery_latched');
+    assert.deepEqual(readRows(r),before);
+  }
+});
+
 async function retryBusyResult(r,request){
   let latest;
   for(let i=0;i<8;i++){

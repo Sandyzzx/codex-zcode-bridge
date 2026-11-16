@@ -1,9 +1,10 @@
 # 当前接口与兼容边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-15
+> Last updated: 2026-11-16（ADR-039 本地取消修复；未发布）
 > Last verified: 2026-11-15，核对 ADR-038 的 13 个 MCP 工具、机器 feedback 投影、Usage 增补字段、Events summary 语义、Recovery Hold 原因、32 MiB Result 与 SQLite v14 边界。
 > Verified against: Preview.6 post-audit remediation branch based on `545c02f745a4e2ab38a1fa3c31880ac80b84a310`
+> ADR-039 Last verified: 2026-11-16，仅取消投影、CAS、清理 Hold 与并发取消定向隔离测试；基线 `ec5f3e83d737df469f9ed54361d2aec46b4a15a8` + 本地候选。生产取消未重试。
 
 准确字段以 `src/interfaces.ts`、`src/mcp/schemas.ts` 与共享 `src/result-contract.mjs` 为准。[ARCHITECTURE.md](ARCHITECTURE.md) 描述实现，[SHARED_CORE.md](SHARED_CORE.md) 列出 Core API 主版本兼容策略。ADR-038 保留 13 个默认 MCP 工具、SQLite v14、32 MiB Result 与现有 Task 状态语义。
 
@@ -23,9 +24,13 @@ TaskPackage 的 requirements、allowed_paths、forbidden_paths、acceptance_crit
 
 Admission 在事务中检查 Capacity 及执行路径重叠，覆盖跨 Manager 竞争。Worker 精确身份、Launch token/receipt、Claim、Attempt/generation/revision CAS 保持绑定。最终 workspace use 校验先于 Launch Intent；拒绝只留下 untouched reserved，显式 queued Cancel 经原 CAS 终结并释放。Intent 后即可能已 Spawn，缺 Receipt/句柄、timeout 或 Manager 崩溃都不授权重新派发。
 
+[ADR-039](decisions/ADR-039-host-authorized-cancellation.md)：Host 已授权的 queued Cancel 也覆盖尚无 Claim 的 Launch Intent。取消 Result、投影与 `cancelled_before_claim` 事件原子持久化，后续 Receipt/Claim 被拒绝；原启动证据、Operation phase 和占用保留。返回 `cancelled` 与 `execution_observation.state=cleanup_held`，原因 `cancelled_before_claim_cleanup_unverified`，不伪造 Cleanup 或 Release。重复取消重放原状态，不启动新 Attempt。
+
 Manager 可在启动和 Host 存活期间重复核对 running Operation。ADR-036 的原子 Store 操作只在精确原身份已退出、recorded-tree clean、Adapter Cleanup 证明完整、没有 Runtime 执行事件、无未回答交互且没有另一个 Host 的存活句柄时创建一个同 Task ID 的新 Attempt。该成功链当前只有 `testOnlyFakeAdapter` 合成覆盖；生产 Adapter 没有可消费的独立 Cleanup Proof，因此真实 Result-less Running Attempt 默认保留 Operation/Workspace Hold，`zcode_status.execution_observation.state=interrupted_without_result` 且审计原因为 `adapter_cleanup_unverified`。Runtime 执行事件表示 Workspace、Git、迁移或外部调用副作用不可由 SQLite 重建；unknown、alive、脏树、未解决交互或缺少执行副作用边界同样保留 Hold。显式 zcode_cancel 仍复用持久 Claim、取消 intent 与 CAS；已有 Result 时只恢复 Cleanup，不覆盖 Result。
 
 已有终态 Result 的 cleanup_unverified 可通过 zcode_cancel 仅清理恢复，不创建 Attempt 或覆盖 Result。存活的原精确世代可由显式取消触发身份绑定终止；退出仍需 claimant scan。Result 与取消竞争由 SQLite CAS 仲裁；重复取消/恢复不重复 Spawn 或 Release。数据库根损坏或一致性无法解释时继续 fail closed。未知 Hold 不自动清除。
+
+Running 取消遇到 `cleanup_identity_unknown` / `cleanup_incomplete` Hold 时，可由新鲜的精确身份和进程树证明追加 `cancel_recovery_resolved`，绑定原取消核验及所消解的全部 Hold event digests，再继续原 Result/Cleanup/Release CAS。历史 Hold 不删除；quarantine、其他原因和未知 reply outcome 仍拒绝。同一 Host 同任务的并发取消合并执行；跨 Host 保持原 CAS。终态 Result 后中断的 cleanup 可由再次取消继续，不能覆盖已提交 Result。
 
 ## Result 与期限
 

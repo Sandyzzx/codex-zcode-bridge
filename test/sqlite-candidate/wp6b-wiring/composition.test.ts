@@ -3852,6 +3852,98 @@ test("formal MCP queued Cancel is persisted before SQLite dispatch and does not 
   }, { testBeforeDispatch: async () => { announce(); await dispatchGate; } }).finally(() => unblock());
 });
 
+test("formal MCP cancels orphaned Launch Intent durably without claiming Cleanup or releasing occupancy", { timeout: 30_000 }, async () => {
+  const taskId=`cancel-orphan-${randomUUID()}`,operationId=`op-${taskId}`;
+  let spawned=0;
+  await withSqliteMcp(async(client,manager,dataRoot)=>{
+    const results=await Promise.all([1,2].map(()=>client.callTool({name:'zcode_cancel',arguments:{task_id:taskId}})));
+    for(const response of results){
+      const result=contentObject(response);
+      assert.equal(result.status,'cancelled');
+      assert.equal((result.execution_observation as Record<string,unknown>).state,'cleanup_held');
+    }
+    assert.equal((await manager.getResult(taskId)).status,'cancelled');
+    const modules=await loadLifecycleCandidateModules(),reader=modules.Store.openForRecovery(dataRoot);
+    assert.ok(reader);
+    try{
+      const snapshot=modules.createPort(reader).readRecoverySnapshot() as Record<string,unknown>;
+      const operation=(snapshot.operations as Array<Record<string,unknown>>).find(row=>row.operation_id===operationId);
+      assert.equal(operation?.capacity_occupied,true);
+      const events=await manager.getEvents({task_id:taskId,after_seq:0,limit:20});
+      assert.equal(events.events.filter(event=>event.type==='cancelled').length,1);
+    }finally{reader.close();}
+    assert.equal(spawned,0);
+  },{beforeAuthority:(dataRoot,modules,workspace)=>{
+    const store=modules.Store.open(dataRoot);
+    try{
+      const port=modules.createPort(store),allow=()=>({state:'allow',fixture:true});
+      port.createTask(syntheticTask(workspace,taskId) as unknown as Parameters<typeof port.createTask>[0]);
+      const admitted=port.admitOperation({operation_id:operationId,task_id:taskId,attempt:1,workspace_ref:workspace},
+        {workspaceValidator:allow,executionPermissionCheck:allow}) as Record<string,unknown>;
+      port.createLaunchIntent({operation_id:operationId,task_id:taskId,attempt:1,generation:Number(admitted.generation),
+        revision:Number(admitted.revision),launch_id:`launch-${taskId}`,launch_epoch:1,launch_token:'orphan-cancel-token-0123456789'});
+    }finally{store.close();}
+  },onChildSpawn:()=>{spawned++;}});
+});
+
+for(const priorProof of [false,true])for(const scanClean of [false,true])test(`formal MCP cancels a running cleanup Hold only after fresh identity/tree proof (prior ${priorProof}, clean ${scanClean})`,{timeout:30_000},async()=>{
+  const taskId=`cancel-held-${randomUUID()}`,operationId=`op-${taskId}`,pid=41001,fingerprint='639294127611585937';
+  let scans=0,spawned=0;
+  const probe:ProcessProbe={...createPlatformProbe(),platform:'win32',async probe(requests){return requests.map(()=>({state:'exited',
+    reason_code:'synthetic_exited',observed_at:new Date().toISOString()}));}};
+  await withSqliteMcp(async(client,manager,dataRoot)=>{
+    const responses=await Promise.all([1,2].map(()=>client.callTool({name:'zcode_cancel',arguments:{task_id:taskId}})));
+    for(const response of responses){
+      if(scanClean)assert.equal(contentObject(response).status,'cancelled');
+      else assert.equal(response.isError,true);
+    }
+    assert.equal(scans,1,'one Authority must coalesce concurrent cancellation scans');
+    assert.equal(spawned,0,'cancel must not start a new Worker or model turn');
+    const modules=await loadLifecycleCandidateModules(),reader=modules.Store.openForRecovery(dataRoot);
+    assert.ok(reader);
+    try{
+      const port=modules.createPort(reader),state=port.readRecoverySnapshot() as Record<string,unknown>;
+      const operation=(state.operations as Array<Record<string,unknown>>).find(row=>row.operation_id===operationId);
+      assert.equal(operation?.capacity_occupied,!scanClean);
+      assert.equal(operation?.phase,scanClean?'released':'running');
+      const events=port.readLifecycleEvents(operationId);
+      assert.equal(events.filter(event=>JSON.parse(String(event.evidence_json)).reason==='recovery_hold').length,1);
+      assert.equal(events.filter(event=>JSON.parse(String(event.evidence_json)).reason==='cancel_recovery_resolved').length,scanClean?1:0);
+      assert.equal((await manager.getStatus(taskId)).status,scanClean?'cancelled':'running');
+    }finally{reader.close();}
+  },{processProbe:probe,testVerifyProcessTreeClaimantsClean:async()=>{
+    scans++;await new Promise(resolve=>setTimeout(resolve,10));
+    return {clean:scanClean,livePids:scanClean?[]:[pid],observedPids:[pid]};
+  },beforeAuthority:(dataRoot,modules,workspace)=>{
+    seedRunningClaim(dataRoot,modules,workspace,taskId,operationId,pid,fingerprint,'turn_started');
+    const store=modules.Store.open(dataRoot);
+    try{
+      const port=modules.createPort(store,{
+        workerIdentityVerifier:({operation,evidence}:{operation:Record<string,unknown>;evidence:Record<string,unknown>})=>({state:'exited',
+          worker_identity_digest:operation.claim_worker_identity_digest,evidence_digest:candidateEvidenceDigest(evidence)}),
+        cancellationVerifier:({operation,evidence}:{operation:Record<string,unknown>;evidence:Record<string,unknown>})=>({state:'verified',
+          worker_identity_digest:operation.claim_worker_identity_digest,process_tree_digest:candidateEvidenceDigest(evidence),
+          root_process_id:pid,root_start_fingerprint:fingerprint,worker_tree_complete:true,evidence_digest:candidateEvidenceDigest(evidence)}),
+        recoveryEvidenceVerifier:({observation}:{observation:Record<string,unknown>})=>({classification:observation.classification,
+        reason_code:observation.reason_code,evidence_source:observation.evidence_source,evidence_digest:observation.evidence_digest})});
+      let op=port.readOperation(operationId) as Record<string,unknown>;
+      if(priorProof){
+        const fence={operation_id:operationId,task_id:taskId,attempt:1,generation:Number(op.generation),revision:Number(op.revision),
+          claim_id:String(op.claim_id),claim_worker_identity_digest:String(op.claim_worker_identity_digest),
+          worker_identity:JSON.parse(String(op.claim_worker_identity_json))};
+        const intent=port.requestCancellation(fence,{synthetic:'historical_identity_probe'}) as Record<string,unknown>;
+        port.recordCancellationVerification({...fence,revision:Number(intent.revision)},{synthetic:'historical_tree_probe',cancel_id:intent.cancel_id});
+        op=port.readOperation(operationId) as Record<string,unknown>;
+      }
+      const evidence={source:'manager_process_probe',outcome:'unknown'};
+      port.recordRecoveryObservation({operation_id:operationId,task_id:taskId,attempt:1,generation:Number(op.generation),
+        expected_revision:Number(op.revision),claim_id:String(op.claim_id),worker_identity_digest:String(op.claim_worker_identity_digest),
+        classification:'hold',reason_code:'cleanup_incomplete',evidence_source:'manager_process_probe',
+        evidence_digest:candidateEvidenceDigest(evidence)},evidence);
+    }finally{store.close();}
+  },onChildSpawn:()=>{spawned++;}});
+});
+
 test("formal MCP running Cancel persists intent, verifies the Worker tree, and releases only after Cleanup", { timeout: 60_000 }, async () => {
   const tracePath = process.env["WP6_RUNNING_CANCEL_TRACE_PATH"];
   const trace = (name: string, detail?: unknown): void => {

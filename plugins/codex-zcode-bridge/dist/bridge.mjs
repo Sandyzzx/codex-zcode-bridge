@@ -29665,6 +29665,16 @@ function validateInteractionEvidence(eventType, value) {
 }
 function validateObservationEventEvidence(value) {
   const own2 = Object.keys(value).sort().join("|");
+  if (own2 === "cancel_id|evidence_digest|launch_id|reason|request_digest|token_digest") {
+    const { evidence_digest, ...unsigned } = value;
+    if (value.reason !== "cancelled_before_claim" || ![value.cancel_id, value.launch_id].every(validId3) || ![value.request_digest, value.token_digest].every((v) => typeof v === "string" && /^[0-9a-f]{64}$/u.test(v)) || evidence_digest !== digest2(unsigned)) fail2("invalid_queued_cancel");
+    return;
+  }
+  if (own2 === "cancel_id|cancellation_verification_digest|evidence_digest|proof_digest|reason|resolved_recovery_event_digests") {
+    const { evidence_digest, ...unsigned } = value;
+    if (value.reason !== "cancel_recovery_resolved" || !validId3(value.cancel_id) || ![value.cancellation_verification_digest, value.proof_digest].every((v) => typeof v === "string" && /^[0-9a-f]{64}$/u.test(v)) || !Array.isArray(value.resolved_recovery_event_digests) || value.resolved_recovery_event_digests.length < 1 || value.resolved_recovery_event_digests.length > RECOVERY_LIMIT || value.resolved_recovery_event_digests.some((v) => typeof v !== "string" || !/^[0-9a-f]{64}$/u.test(v)) || [...new Set(value.resolved_recovery_event_digests)].sort().join("|") !== value.resolved_recovery_event_digests.join("|") || evidence_digest !== digest2(unsigned)) fail2("invalid_cancellation_resolution");
+    return;
+  }
   if (own2 === "evidence_digest|reason") return;
   if (own2 === "cancel_id|claim_id|evidence_digest|identity_evidence_digest|identity_state|reason|worker_identity_digest") {
     if (value.reason !== "cancel_requested" || !validId3(value.cancel_id) || !validId3(value.claim_id) || !["alive", "exited"].includes(value.identity_state) || ![value.evidence_digest, value.identity_evidence_digest, value.worker_identity_digest].every((v) => typeof v === "string" && /^[0-9a-f]{64}$/u.test(v)))
@@ -29738,6 +29748,18 @@ function recoveryEventsFor(events, operationId) {
   }
   const resolved = /* @__PURE__ */ new Set();
   for (const event of operationEvents) {
+    if (event.event_type !== "observation_recorded") continue;
+    const evidence = event.evidence ?? JSON.parse(event.evidence_json);
+    if (evidence.reason !== "cancel_recovery_resolved") continue;
+    validateObservationEventEvidence(evidence);
+    const verification = operationEvents.find((e) => e.evidence_digest === evidence.cancellation_verification_digest);
+    const verified = verification && (verification.evidence ?? JSON.parse(verification.evidence_json));
+    if (!operation || event.from_phase !== "running" || event.to_phase !== "running" || event.generation !== operation.generation || !verification || verification.sequence >= event.sequence || verified.reason !== "cancel_tree_verified" || verified.cancel_id !== evidence.cancel_id || verified.claim_id !== operation.claim_id || verified.worker_identity_digest !== operation.claim_worker_identity_digest) fail2("cancellation_resolution_binding_mismatch");
+    const eligible = recovery.filter((item) => item.event.sequence < event.sequence && !resolved.has(item.event.evidence_digest));
+    if (eligible.some((item) => item.evidence.classification !== "hold" || !["cleanup_identity_unknown", "cleanup_incomplete"].includes(item.evidence.reason_code)) || eligible.map((item) => item.event.evidence_digest).sort().join("|") !== evidence.resolved_recovery_event_digests.join("|")) fail2("cancellation_resolution_hold_mismatch");
+    for (const hash2 of evidence.resolved_recovery_event_digests) resolved.add(hash2);
+  }
+  for (const event of operationEvents) {
     if (event.event_type !== "cleanup_reverified") continue;
     let evidence;
     try {
@@ -29766,6 +29788,11 @@ function foldedRecoveryClassification(operation, events) {
   let level = operation.phase === "quarantined" ? 2 : 0;
   for (const { evidence, active } of recoveryEventsFor(events, operation)) if (active) level = Math.max(level, evidence.classification === "quarantine" ? 2 : 1);
   return level === 2 ? "quarantine" : level === 1 ? "hold" : "normal";
+}
+function cancellableRecoveryHolds(operation, events) {
+  const active = recoveryEventsFor(events, operation).filter((item) => item.active);
+  if (operation.phase === "quarantined" || active.some((item) => item.evidence.classification !== "hold" || !["cleanup_identity_unknown", "cleanup_incomplete"].includes(item.evidence.reason_code))) fail2("operation_recovery_latched");
+  return active;
 }
 function validText3(value, max) {
   return typeof value === "string" && value.length > 0 && value.length <= max && !/[\x00-\x1f]/u.test(value);
@@ -31833,7 +31860,7 @@ var init_store = __esm({
           COALESCE(details_json,'{}') AS evidence_json,COALESCE(details_digest,?) AS evidence_digest,at,task_id,
           attempt AS operation_attempt,summary
         FROM runtime_task_events WHERE task_id=? AND event_cursor>? ORDER BY event_cursor LIMIT ?`).all(digest2("{}"), taskId, afterCursor, limit + 1) : [];
-          const rows = [...operationRows.map((row) => row.event_type === "cancelled_before_launch" ? { ...row, event_type: "cancelled", from_phase: null, to_phase: "cancelled" } : row), ...taskCancelRows, ...runtimeRows].sort((a, b) => a.cursor - b.cursor).slice(0, limit + 1);
+          const rows = [...operationRows.map((row) => row.event_type === "cancelled_before_launch" || row.event_type === "observation_recorded" && JSON.parse(row.evidence_json).reason === "cancelled_before_claim" ? { ...row, event_type: "cancelled", from_phase: null, to_phase: "cancelled" } : row), ...taskCancelRows, ...runtimeRows].sort((a, b) => a.cursor - b.cursor).slice(0, limit + 1);
           const hasMore = rows.length > limit;
           const events = hasMore ? rows.slice(0, limit) : rows;
           return { events, nextCursor: events.at(-1)?.cursor ?? afterCursor, hasMore };
@@ -31936,8 +31963,8 @@ var init_store = __esm({
           }
           if (task.current_attempt !== expected_attempt || task.status !== "queued" || attempt.status !== "queued") fail2("queued_cancel_not_admissible");
           const operation = this.#db.prepare("SELECT * FROM manager_operations WHERE operation_kind='attempt_lifecycle' AND task_id=? AND attempt=?").get(task_id, expected_attempt);
-          if (operation && operation.phase !== "reserved") fail2(operation.launch_id !== null ? "queued_cancel_launch_already_intended" : "queued_cancel_operation_not_cancellable");
-          if (operation && (operation.generation !== attempt.generation || operation.launch_id !== null || operation.claim_id !== null || operation.result_digest !== null))
+          if (operation && !["reserved", "launch_intent"].includes(operation.phase)) fail2("queued_cancel_operation_not_cancellable");
+          if (operation && (operation.generation !== attempt.generation || operation.claim_id !== null || operation.result_digest !== null))
             fail2("queued_cancel_operation_mismatch");
           if (!operation && attempt.generation !== null) fail2("queued_cancel_generation_without_operation");
           const cancelId = randomUUID4(), at = (/* @__PURE__ */ new Date()).toISOString(), next = this.#nextEventCursor();
@@ -31962,19 +31989,36 @@ var init_store = __esm({
           const changedTask = this.#db.prepare("UPDATE tasks SET status='cancelled' WHERE task_id=? AND current_attempt=? AND status='queued'").run(task_id, expected_attempt);
           if (changedAttempt.changes !== 1 || changedTask.changes !== 1) fail2("queued_cancel_cas_conflict");
           if (operation) {
-            const changedOperation = this.#db.prepare("UPDATE manager_operations SET phase='cancelled_before_launch',revision=revision+1 WHERE operation_id=? AND task_id=? AND attempt=? AND generation=? AND phase='reserved' AND revision=? AND launch_id IS NULL AND claim_id IS NULL AND result_digest IS NULL").run(operation.operation_id, task_id, expected_attempt, attempt.generation, operation.revision);
-            if (changedOperation.changes !== 1) fail2("queued_cancel_operation_cas_conflict");
-            this.#event(
-              operation.operation_id,
-              operation.revision + 1,
-              "cancelled_before_launch",
-              "reserved",
-              "cancelled_before_launch",
-              operation.generation,
-              { cancel_id: cancelId, request_digest: requestDigest },
-              at,
-              next
-            );
+            if (operation.phase === "launch_intent") {
+              const changed = this.#db.prepare("UPDATE manager_operations SET revision=revision+1 WHERE operation_id=? AND task_id=? AND attempt=? AND generation=? AND phase='launch_intent' AND revision=? AND claim_id IS NULL AND result_digest IS NULL").run(operation.operation_id, task_id, expected_attempt, attempt.generation, operation.revision);
+              if (changed.changes !== 1) fail2("queued_cancel_operation_cas_conflict");
+              const evidence = { reason: "cancelled_before_claim", cancel_id: cancelId, request_digest: requestDigest, launch_id: operation.launch_id, token_digest: operation.launch_token_digest };
+              this.#event(
+                operation.operation_id,
+                operation.revision + 1,
+                "observation_recorded",
+                "launch_intent",
+                "launch_intent",
+                operation.generation,
+                { ...evidence, evidence_digest: digest2(evidence) },
+                at,
+                next
+              );
+            } else {
+              const changedOperation = this.#db.prepare("UPDATE manager_operations SET phase='cancelled_before_launch',revision=revision+1 WHERE operation_id=? AND task_id=? AND attempt=? AND generation=? AND phase='reserved' AND revision=? AND launch_id IS NULL AND claim_id IS NULL AND result_digest IS NULL").run(operation.operation_id, task_id, expected_attempt, attempt.generation, operation.revision);
+              if (changedOperation.changes !== 1) fail2("queued_cancel_operation_cas_conflict");
+              this.#event(
+                operation.operation_id,
+                operation.revision + 1,
+                "cancelled_before_launch",
+                "reserved",
+                "cancelled_before_launch",
+                operation.generation,
+                { cancel_id: cancelId, request_digest: requestDigest },
+                at,
+                next
+              );
+            }
           }
           this.#faultPoint("after_projection");
           return {
@@ -32094,7 +32138,7 @@ var init_store = __esm({
             cancel_id: raced.evidence.cancel_id
           };
           if (current.phase !== "running" || current.revision !== input2.revision) fail2("stale_cancellation_cas");
-          this.#assertRecoveryNotLatched(input2.operation_id);
+          cancellableRecoveryHolds(current, this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? ORDER BY sequence").all(input2.operation_id));
           this.#assertNoUnknownInteraction(input2.operation_id);
           const intent = {
             contract: "wp6c-cancel-intent-v1",
@@ -32145,7 +32189,8 @@ var init_store = __esm({
           if (!operation) fail2("operation_not_found");
           this.#assertNoUnknownInteraction(input2.operation_id);
           const observations = this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded'").all(input2.operation_id).map((event) => ({ ...event, evidence: JSON.parse(event.evidence_json) }));
-          return { operation, observations };
+          const events = this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? ORDER BY sequence").all(input2.operation_id);
+          return { operation, observations, holds: cancellableRecoveryHolds(operation, events) };
         });
         if (snapshot.operation.task_id !== input2.task_id || snapshot.operation.attempt !== input2.attempt || snapshot.operation.generation !== input2.generation)
           fail2("operation_identity_mismatch");
@@ -32173,7 +32218,7 @@ var init_store = __esm({
             result_status: snapshot.operation.result_status
           };
         }
-        if (prior && prior.evidence.proof_digest === digest2(treeEvidence)) return {
+        if (prior && snapshot.holds.length === 0 && prior.evidence.proof_digest === digest2(treeEvidence)) return {
           duplicate: true,
           result_won: false,
           operation_id: input2.operation_id,
@@ -32208,7 +32253,8 @@ var init_store = __esm({
           const persistedIntent = this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded'").all(input2.operation_id).map((event2) => ({ ...event2, evidence: JSON.parse(event2.evidence_json) })).find((event2) => event2.evidence.reason === "cancel_requested");
           if (!persistedIntent || persistedIntent.evidence.cancel_id !== intent.evidence.cancel_id) fail2("cancel_intent_mismatch");
           const existing = this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded'").all(input2.operation_id).map((event2) => ({ ...event2, evidence: JSON.parse(event2.evidence_json) })).find((event2) => event2.evidence.reason === "cancel_tree_verified");
-          if (existing) {
+          const holds = cancellableRecoveryHolds(current, this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? ORDER BY sequence").all(input2.operation_id));
+          if (existing && holds.length === 0) {
             if (existing.evidence.proof_digest === verdict2.evidence_digest) return {
               duplicate: true,
               result_won: false,
@@ -32220,7 +32266,6 @@ var init_store = __esm({
             };
             fail2("cancellation_verification_conflict");
           }
-          this.#assertRecoveryNotLatched(input2.operation_id);
           this.#assertNoUnknownInteraction(input2.operation_id);
           const unsigned = {
             reason: "cancel_tree_verified",
@@ -32235,18 +32280,42 @@ var init_store = __esm({
             worker_tree_complete: true
           };
           const evidence = { ...unsigned, evidence_digest: digest2({ cancel_verification_contract_version: 1, ...unsigned }) };
+          const count = (existing ? 0 : 1) + (holds.length ? 1 : 0);
           const changed = this.#db.prepare("UPDATE manager_operations SET revision=revision+1 WHERE operation_id=? AND task_id=? AND attempt=? AND generation=? AND phase='running' AND revision=? AND claim_id=? AND claim_generation=? AND claim_worker_identity_digest=?").run(input2.operation_id, input2.task_id, input2.attempt, input2.generation, input2.revision, input2.claim_id, input2.generation, input2.claim_worker_identity_digest);
           if (changed.changes !== 1) fail2("stale_cancellation_cas");
           this.#faultPoint("after_projection");
           const at = (/* @__PURE__ */ new Date()).toISOString();
-          this.#event(input2.operation_id, input2.revision + 1, "observation_recorded", "running", "running", input2.generation, evidence, at);
-          const event = this.#db.prepare("SELECT evidence_digest FROM manager_operation_events WHERE operation_id=? AND sequence=?").get(input2.operation_id, input2.revision + 1);
+          if (!existing) this.#event(input2.operation_id, input2.revision + 1, "observation_recorded", "running", "running", input2.generation, evidence, at);
+          const event = existing ?? this.#db.prepare("SELECT evidence_digest FROM manager_operation_events WHERE operation_id=? AND sequence=?").get(input2.operation_id, input2.revision + 1);
+          if (holds.length) {
+            if (!existing) {
+              const next = this.#db.prepare("UPDATE manager_operations SET revision=revision+1 WHERE operation_id=? AND revision=?").run(input2.operation_id, input2.revision + 1);
+              if (next.changes !== 1) fail2("stale_cancellation_cas");
+            }
+            const resolution = {
+              reason: "cancel_recovery_resolved",
+              cancel_id: intent.evidence.cancel_id,
+              cancellation_verification_digest: event.evidence_digest,
+              proof_digest: verdict2.evidence_digest,
+              resolved_recovery_event_digests: holds.map((item) => item.event.evidence_digest).sort()
+            };
+            this.#event(
+              input2.operation_id,
+              input2.revision + count,
+              "observation_recorded",
+              "running",
+              "running",
+              input2.generation,
+              { ...resolution, evidence_digest: digest2(resolution) },
+              at
+            );
+          }
           return {
             duplicate: false,
             result_won: false,
             operation_id: input2.operation_id,
             generation: input2.generation,
-            revision: input2.revision + 1,
+            revision: input2.revision + count,
             phase: "running",
             cancel_id: intent.evidence.cancel_id,
             cancellation_verification_digest: event.evidence_digest
@@ -32455,8 +32524,10 @@ var init_store = __esm({
             const operationEvents = events.filter((e) => e.operation_id === row.operation_id);
             const recoveryEvents = recoveryEventsFor(operationEvents, row);
             const recoveryClassification = foldedRecoveryClassification(row, operationEvents);
-            const cleanupState = adminAbandonment ? "not_applicable" : row.phase === "cleanup_verified" || row.phase === "released" ? "verified" : row.phase === "cleanup_unverified" ? "unverified" : row.phase === "result_committed" || row.phase === "cleanup_pending" || row.phase === "quarantined" || active && row.claim_id !== null ? "unknown" : "not_applicable";
+            const preclaimCancelled = row.phase === "launch_intent" && row.claim_id === null && operationEvents.some((event) => event.event_type === "observation_recorded" && JSON.parse(event.evidence_json).reason === "cancelled_before_claim");
+            const cleanupState = preclaimCancelled ? "unverified" : adminAbandonment ? "not_applicable" : row.phase === "cleanup_verified" || row.phase === "released" ? "verified" : row.phase === "cleanup_unverified" ? "unverified" : row.phase === "result_committed" || row.phase === "cleanup_pending" || row.phase === "quarantined" || active && row.claim_id !== null ? "unknown" : "not_applicable";
             const blockers = [];
+            if (preclaimCancelled) blockers.push("cancelled_before_claim_cleanup_unverified");
             if (integrityError) blockers.push(integrityError);
             if (row.operation_kind === "attempt_lifecycle" && !adminAbandonment) {
               if (row.launch_id !== null && row.launch_receipt_digest === null) blockers.push("launch_outcome_unknown_receipt_missing");
@@ -32525,7 +32596,7 @@ var init_store = __esm({
         validateEvidence("observation_recorded", evidence);
         return this.#transaction(() => {
           if (evidence.reason === "recovery_hold" || evidence.reason === "recovery_quarantine") fail2("reserved_recovery_reason");
-          if (evidence.reason === "cancel_requested" || evidence.reason === "cancel_tree_verified") fail2("reserved_cancellation_reason");
+          if (["cancel_requested", "cancel_tree_verified", "cancelled_before_claim", "cancel_recovery_resolved"].includes(evidence.reason)) fail2("reserved_cancellation_reason");
           const o = this.#db.prepare("SELECT * FROM manager_operations WHERE operation_id=? AND operation_kind='attempt_lifecycle'").get(operation_id);
           if (!o || o.generation !== generation || o.revision !== revision || o.phase !== "reserved") fail2("stale_operation_cas");
           const at = (/* @__PURE__ */ new Date()).toISOString();
@@ -32705,6 +32776,8 @@ var init_store = __esm({
         return this.#transaction(() => {
           const o = this.#attemptOperation(input2);
           if (!o.launch_id) fail2("launch_intent_missing");
+          const cancelled = this.#db.prepare("SELECT queued_cancel_id FROM attempts WHERE task_id=? AND attempt=?").get(o.task_id, o.attempt);
+          if (cancelled?.queued_cancel_id !== null) fail2("launch_cancelled_before_claim");
           if (o.launch_id !== input2.launch_id || o.launch_epoch !== input2.launch_epoch || o.launch_token_digest !== tokenDigest) fail2("launch_receipt_intent_mismatch");
           if (o.launch_receipt_digest !== null) {
             if (o.launch_receipt_digest !== receiptDigest || o.launch_identity_json !== identityJson) fail2("launch_receipt_conflict");
@@ -33544,7 +33617,8 @@ var init_store = __esm({
           if (sequenceRows.some((row) => row.name !== "manager_operation_events") || logicalCursorState.n === 0 && sequenceRows.length !== 0 || logicalCursorState.n > 0 && (sequenceRows.length !== 1 || sequenceRows[0].seq !== logicalCursorState.max_cursor || !Number.isSafeInteger(sequenceRows[0].seq) || sequenceRows[0].seq < 1)) fail2("event_cursor_invalid");
           if (this.#db.prepare(`SELECT a.task_id FROM attempts a JOIN manager_operation_events e ON e.event_cursor=a.queued_cancel_event_cursor
         WHERE a.queued_cancel_id IS NOT NULL AND (a.queued_cancel_operation_id IS NULL OR e.operation_id<>a.queued_cancel_operation_id
-          OR e.event_type<>'cancelled_before_launch') LIMIT 1`).get()) fail2("queued_cancel_event_mismatch");
+          OR NOT (e.event_type='cancelled_before_launch' OR e.event_type='observation_recorded'
+            AND json_extract(e.evidence_json,'$.reason')='cancelled_before_claim')) LIMIT 1`).get()) fail2("queued_cancel_event_mismatch");
           const queuedCancels = this.#db.prepare("SELECT * FROM attempts WHERE queued_cancel_id IS NOT NULL ORDER BY task_id,attempt").all();
           for (const a of queuedCancels) {
             const task = this.#db.prepare("SELECT current_attempt,status FROM tasks WHERE task_id=?").get(a.task_id);
@@ -33561,14 +33635,15 @@ var init_store = __esm({
               if (this.#db.prepare("SELECT operation_id FROM manager_operations WHERE operation_kind='attempt_lifecycle' AND task_id=? AND attempt=?").get(a.task_id, a.attempt)) fail2("queued_cancel_operation_missing");
             } else {
               const o = this.#db.prepare("SELECT * FROM manager_operations WHERE operation_id=? AND operation_kind='attempt_lifecycle'").get(a.queued_cancel_operation_id);
-              const e = this.#db.prepare("SELECT * FROM manager_operation_events WHERE event_cursor=? AND operation_id=? AND event_type='cancelled_before_launch'").get(a.queued_cancel_event_cursor, a.queued_cancel_operation_id);
+              const e = this.#db.prepare("SELECT * FROM manager_operation_events WHERE event_cursor=? AND operation_id=?").get(a.queued_cancel_event_cursor, a.queued_cancel_operation_id);
               let evidence;
               try {
                 evidence = e ? JSON.parse(e.evidence_json) : null;
               } catch {
                 fail2("queued_cancel_event_mismatch");
               }
-              if (!o || o.task_id !== a.task_id || o.attempt !== a.attempt || o.generation !== a.generation || o.phase !== "cancelled_before_launch" || o.launch_id !== null || o.claim_id !== null || o.result_digest !== null || !e || e.sequence !== o.revision || evidence.cancel_id !== a.queued_cancel_id || evidence.request_digest !== requestDigest) fail2("queued_cancel_operation_mismatch");
+              const preclaim = e?.event_type === "observation_recorded" && evidence?.reason === "cancelled_before_claim";
+              if (!o || o.task_id !== a.task_id || o.attempt !== a.attempt || o.generation !== a.generation || (preclaim ? o.phase !== "launch_intent" || e.from_phase !== "launch_intent" || e.to_phase !== "launch_intent" || evidence.launch_id !== o.launch_id || evidence.token_digest !== o.launch_token_digest : o.phase !== "cancelled_before_launch" || o.launch_id !== null || e?.event_type !== "cancelled_before_launch") || o.claim_id !== null || o.result_digest !== null || !e || e.sequence !== o.revision || evidence.cancel_id !== a.queued_cancel_id || evidence.request_digest !== requestDigest) fail2("queued_cancel_operation_mismatch");
             }
           }
           if (this.#db.prepare("SELECT t.task_id FROM tasks t LEFT JOIN attempts a ON a.task_id=t.task_id AND a.attempt=t.current_attempt WHERE a.task_id IS NULL").all().length) fail2("task_attempt_projection_mismatch");
@@ -33726,6 +33801,7 @@ var init_store = __esm({
                 if (level < recoveryLevel) fail2("recovery_classification_downgrade");
                 recoveryLevel = level;
               }
+              recoveryEventsFor(es, o);
               if (intents.length > 1 || receipts.length > 1 || claims.length > 1) fail2("launch_claim_history_mismatch");
               if (intents.length === 0 !== (o.launch_id === null)) fail2("launch_claim_history_mismatch");
               if (intents.length) {
@@ -35191,6 +35267,13 @@ async function openClaimOnlyDriver(options) {
           throw new LifecycleGateError("recovery_cleanup_resolution_invalid");
         }
       }
+      for (const event of lifecycleEvents) {
+        if (event.event_type !== "observation_recorded") continue;
+        const evidence2 = parseEvidence(event.evidence_json, "recovery_event_evidence_invalid");
+        if (evidence2.reason === "cancel_recovery_resolved") {
+          for (const hash2 of evidence2.resolved_recovery_event_digests) resolvedRecoveryDigests.add(hash2);
+        }
+      }
       const activeRecovery = lifecycleEvents.filter((event) => {
         if (event.event_type !== "observation_recorded") return false;
         try {
@@ -35882,7 +35965,8 @@ async function openClaimOnlyDriver(options) {
       }
       await active?.closeHandleGate?.();
       const cancelId = text(intent.cancel_id, "cancellation_intent_missing");
-      const persistedVerification = readAllLifecycleEventsForRecovery(port, operationId).find((event) => {
+      const cancellationHistory = readAllLifecycleEventsForRecovery(port, operationId);
+      const persistedVerification = cancellationHistory.find((event) => {
         if (event.event_type !== "observation_recorded") return false;
         try {
           return parseEvidence(event.evidence_json, "cancellation_verification_invalid").reason === "cancel_tree_verified";
@@ -35890,7 +35974,13 @@ async function openClaimOnlyDriver(options) {
           throw new LifecycleGateError("cancellation_verification_invalid");
         }
       });
-      if (persistedVerification) {
+      const resolvedHolds = new Set(cancellationHistory.flatMap((event) => {
+        if (event.event_type !== "observation_recorded") return [];
+        const evidence = parseEvidence(event.evidence_json, "cancellation_recovery_invalid");
+        return evidence.reason === "cancel_recovery_resolved" ? evidence.resolved_recovery_event_digests : [];
+      }));
+      const hasRecoveryHold = cancellationHistory.some((event) => event.event_type === "observation_recorded" && !resolvedHolds.has(String(event.evidence_digest)) && ["recovery_hold", "recovery_quarantine"].includes(parseEvidence(event.evidence_json, "cancellation_recovery_invalid").reason));
+      if (persistedVerification && !hasRecoveryHold) {
         if (identityVerdict.state !== "exited") throw new LifecycleGateError("cancellation_verification_conflict");
         const persistedEvidence = parseEvidence(persistedVerification.evidence_json, "cancellation_verification_invalid");
         if (persistedEvidence.cancel_id !== cancelId || persistedEvidence.claim_id !== fence.claim_id || persistedEvidence.worker_identity_digest !== fence.claim_worker_identity_digest || persistedEvidence.root_process_id !== processIdentity.pid || persistedEvidence.root_start_fingerprint !== processIdentity.fingerprint || persistedEvidence.worker_tree_complete !== true) {
@@ -35934,8 +36024,15 @@ async function openClaimOnlyDriver(options) {
         }
       }
       const terminationSignal = workerExitCode === null && active?.child ? active.child.signalCode ?? null : null;
-      const scan = await verifyProcessTreeClaimantsClean([{ pid: processIdentity.pid, fingerprint: processIdentity.fingerprint }]);
-      if (!scan.clean || scan.livePids.length > 0) throw new LifecycleGateError("cancellation_tree_not_clean");
+      const treeProbe = await processTreeWithDeadline(
+        [{ pid: processIdentity.pid, fingerprint: processIdentity.fingerprint }],
+        processTreeProbeTimeoutMs,
+        verifyTreeClaimants
+      );
+      const scan = treeProbe.status === "resolved" ? treeProbe.result : void 0;
+      if (!scan?.clean || scan.livePids.length > 0 || !scan.observedPids.includes(processIdentity.pid)) {
+        throw new LifecycleGateError("cancellation_tree_not_clean");
+      }
       const processTreeFacts = {
         contract: "sqlite-candidate-cancelled-worker-tree-v1",
         operation_id: operationId,
@@ -38118,14 +38215,32 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
         return { task_id: input2.task_id, status: "queued", created_at: string4(outcome.created_at, "continue_created_at_missing") };
       }
       async cancelTask(taskId) {
+        const existing = this.#recoveryRuns.get(taskId);
+        if (existing) return existing;
+        const cancellation = Promise.resolve().then(() => this.#cancelTaskOnce(taskId));
+        this.#recoveryRuns.set(taskId, cancellation);
+        try {
+          return await cancellation;
+        } finally {
+          if (this.#recoveryRuns.get(taskId) === cancellation) this.#recoveryRuns.delete(taskId);
+        }
+      }
+      async #cancelTaskOnce(taskId, reconcileClaimRace = true) {
         this.#assertOpen();
         this.#assertRecoveryReady();
         const snapshot = this.#readSnapshot(taskId);
         const projection = asRecord6(snapshot.projection);
         const attempt = asRecord6(snapshot.attempt);
         if (projection.status === "queued") {
-          this.#driver.cancelQueuedAttempt({ task_id: taskId, expected_attempt: Number(attempt.attempt) });
+          try {
+            this.#driver.cancelQueuedAttempt({ task_id: taskId, expected_attempt: Number(attempt.attempt) });
+          } catch (error62) {
+            const current = this.#readSnapshot(taskId);
+            if (reconcileClaimRace && current.projection.status === "running" && Number(current.attempt.attempt) === Number(attempt.attempt)) return this.#cancelTaskOnce(taskId, false);
+            throw error62;
+          }
           this.#queued.delete(queueKey(taskId, Number(attempt.attempt)));
+          this.#schedulePump();
           return this.getStatus(taskId);
         }
         if (projection.status === "running") {
@@ -38153,13 +38268,11 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
           return this.getStatus(taskId);
         }
         const operation = snapshot.operation ? asRecord6(snapshot.operation) : null;
+        if (projection.status === "cancelled" && (!operation || operation.phase === "cancelled_before_launch" || operation.phase === "launch_intent" && operation.claim_id === null)) return this.getStatus(taskId);
         if (isTerminal(projection.status) && operation?.phase === "released") {
           return this.getStatus(taskId);
         }
-        if (isTerminal(projection.status) && operation && operation.phase === "cleanup_unverified") {
-          const recoveryKey = queueKey(taskId, Number(attempt.attempt));
-          const existingRecovery = this.#recoveryRuns.get(recoveryKey);
-          if (existingRecovery) return existingRecovery;
+        if (isTerminal(projection.status) && operation && ["result_committed", "cleanup_pending", "cleanup_unverified", "cleanup_verified"].includes(String(operation.phase))) {
           const recovery = Promise.resolve().then(async () => {
             const readReleased = async () => {
               const latest = this.#readSnapshot(taskId);
@@ -38187,12 +38300,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
             this.#schedulePump();
             return this.getStatus(taskId);
           });
-          this.#recoveryRuns.set(recoveryKey, recovery);
-          try {
-            return await recovery;
-          } finally {
-            if (this.#recoveryRuns.get(recoveryKey) === recovery) this.#recoveryRuns.delete(recoveryKey);
-          }
+          return recovery;
         }
         throw new TaskManagerError("TASK_STATE", `zcode_cancel is not allowed from SQLite status ${String(projection.status)}`);
       }
@@ -38393,6 +38501,9 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
       }
       async #executionObservation(taskId, snapshot, status) {
         const operation = snapshot.operation;
+        if (status === "cancelled" && operation?.phase === "launch_intent" && operation.claim_id === null) {
+          return this.#makeExecutionObservation("cleanup_held", taskId, snapshot, "cancelled_before_claim_cleanup_unverified", (/* @__PURE__ */ new Date()).toISOString());
+        }
         if (operation && ["cleanup_pending", "cleanup_unverified", "cleanup_reverified", "cleanup_incomplete"].includes(String(operation.phase))) {
           return this.#makeExecutionObservation("cleanup_held", taskId, snapshot, "cleanup_phase_held", (/* @__PURE__ */ new Date()).toISOString());
         }

@@ -1,7 +1,7 @@
 # 独立验收、返工与恢复
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-11
+> Last updated: 2026-11-16（ADR-039 本地取消/清理分离说明）
 > Last verified: 2026-11-11，核对当前 Result/Continue/Cancel schema、SQLite Hold 合同与报告修复 Prompt；真实生产恢复 NOT RUN。
 > Verified against: 372e90622772b070357a278f1da3dea58fa42dee（基线；本候选离线证据见 docs/research/master-skill-simplification-20261111.md）
 
@@ -22,3 +22,5 @@
 - Recovery 只有原身份、recorded-tree claimant、interaction 状态和 Operation CAS 全部验证成功才释放；失败、未知或响应丢失保持 Hold。停止失败后先重新核对原 Worker 身份和状态，原授权范围内可再次尝试；目标身份或操作范围变化时重新取得用户授权。不得并发重复发出终止信号，也不得拼接底层清理命令、重放 Prompt、创建 Attempt 或手工改 SQLite 绕过。
 - Recovery 成功后先检查原 workspace Git diff/WIP，再讨论是否创建新 Attempt；不自动 reset、clean、覆盖 checkout 或删除用户源码。单路径 Hold 不阻塞其他独立 workspace。
 - 用户取消时调用 `zcode_cancel` 并确认终态。`zcode_usage_exhausted` 表示本次执行中断：停止编辑、派发、续作和自动重试，告知用户并等待确认额度恢复。
+
+- Host 对指定任务的明确取消授权应直接用于该次 `zcode_cancel`，不重复申请。候选 ADR-039 支持取消无 Claim 的 Launch Intent；若返回 `cancelled + cleanup_held`，只表示后续执行已被禁止，不能声称资源已释放或立即派发重叠路径。Running 的 cleanup-only Hold 通过原取消入口重新核验和追加消解；未知身份、quarantine 或不完整树证明仍保持占用，不手工解锁。
