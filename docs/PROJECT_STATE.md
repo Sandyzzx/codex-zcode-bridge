@@ -1,16 +1,17 @@
 # Project State
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-15
-> Last verified: 2026-11-15，核对 Preview.7 发布候选的 ADR-038 整改、CI 分派边界、Events summary 分页、Windows/Ubuntu 完整回归、SQLite 矩阵、生成物 Freshness 与版本身份；3.18.0/3.18.1 实机安装组合、真实 OAuth refresh 和跨机器制品复现仍为 `NOT_VERIFIED`。
-> Verified against: released Preview.6 `545c02f745a4e2ab38a1fa3c31880ac80b84a310` + post-audit remediation HEAD `53d93df94f0984b3fe5518b6573e19c29674be05`
+> Last updated: 2026-11-16
+> Last verified: 2026-11-16，核对 ADR-039 Host 授权取消、新鲜取消证明持久化绑定、Preview.8 版本元数据及本地 test:full、插件验证和生成物构建；旧 Desktop 实机矩阵、真实 OAuth refresh 与跨机器制品复现仍为 `NOT_VERIFIED`。
+> Verified against: `a1dae175f736b0e1124614701d959d79dc76b8bc` + Preview.8 release candidate
 
 当前发布状态：
 
 - Stable `v1.7.1`：Tag `codex-zcode-bridge-v1.7.1`。
 - 已发布 Preview `2.0.0-preview.5`：Tag `codex-zcode-bridge-preview-v2.0.0-preview.5`；追加 Official Host、R7 Runtime Events/Usage、v14 兼容迁移与 Administrative Recovery 修复。
 - Preview `2.0.0-preview.6`：Owner 已批准发布。支持声明限定为 Windows x64、Node.js `24.16.0` 与已安装的官方 ZCode Desktop `3.18.2.10443`。
-- Preview `2.0.0-preview.7`：Owner 已授权发布。在 Preview.6 上应用 ADR-038 整改，并统一修复 CI dispatch 边界与 Events summary 分页；支持范围不变。
+- Preview `2.0.0-preview.7`：在 Preview.6 上应用 ADR-038 整改，并修复 CI dispatch 边界与 Events summary 分页。
+- Preview `2.0.0-preview.8`：包含 ADR-039 Host 授权取消与新鲜 Cleanup Proof 绑定；支持范围限定为 Windows x64、Node.js `24.16.0` 与已安装的官方 ZCode Desktop `3.18.2.10443`。
 
 ## 当前生产架构
 

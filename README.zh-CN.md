@@ -4,7 +4,7 @@
 
 [English](README.md) · [项目仓库](https://github.com/Sandyzzx/codex-zcode-bridge) · [版本发布](https://github.com/Sandyzzx/codex-zcode-bridge/releases)
 
-> **发布状态。** 稳定版为 `v1.7.1`。预览版 `2.0.0-preview.7` 是 Post-Audit 整改后的固定快照；它保留 Preview.6 的官方 ZCode 3.18.2 认证复用、官方签名 Windows Runtime Host、SQLite v14 Events/Usage、Start Plan 与 Coding Plan 合同，并增加 ADR-038 最小架构减法、正确性修复、Legacy 退役、CI 分派与 Events 分页修复。它面向 Windows x64 与 ZCode Desktop `3.18.2.10443`，本次不提升新的 Stable 版本。
+> **发布状态。** 稳定版为 `v1.7.1`。预览版 `2.0.0-preview.8` 增加 Host 授权取消排队中 Launch Intent 及符合条件的 Cleanup Hold，并将新鲜进程树证明绑定到持久化恢复证据。它保留 Preview.7 的认证、Runtime 与 SQLite 合同，面向 Windows x64 和已安装的官方 ZCode Desktop `3.18.2.10443`；不提升 Stable 版本。
 
 ## 这是什么
 
@@ -67,7 +67,7 @@ Preview.3 已通过一次 Windows 真实 Start Plan 验收。Preview.6 另行通
 ## 环境要求
 
 - 固定 Official Host 生产制品只支持 **Windows x64**。生产 Worker 在 Linux、macOS 与 Windows 非 x64 上以 `unsupported_worker_platform` fail closed；CI 只验证该拒绝边界，不声称存在生产执行路径。
-- **Preview 2.0.0-preview.7：** Windows x64、Node.js `24.16.0`，并已安装官方 ZCode Desktop `3.18.2.10443`。
+- **Preview 2.0.0-preview.8：** Windows x64、Node.js `24.16.0`，并已安装官方 ZCode Desktop `3.18.2.10443`。
 - Git、支持插件/Marketplace 的 Codex，以及可正常工作的本机 ZCode 安装。
 - 官方 ZCode 账户已登录，并具备所选任务需要的套餐和模型权益。
 - 仅面向**单用户、可信本地**环境；不提供多用户隔离或远程沙箱。
@@ -182,7 +182,7 @@ Preview 使用固定的单用户可信本地 `yolo` 执行档案，以当前 Win
 - [Runtime 与 SQLite 升级细节](docs/ZCODE_RUNTIME.md)
 - [插件安全说明](plugins/codex-zcode-bridge/SECURITY.md)
 - [Master Skill](plugins/codex-zcode-bridge/skills/zcode-bridge/SKILL.md)
-- [Preview.7 Release](https://github.com/Sandyzzx/codex-zcode-bridge/releases/tag/codex-zcode-bridge-preview-v2.0.0-preview.7)
+- [Preview.8 Release](https://github.com/Sandyzzx/codex-zcode-bridge/releases/tag/codex-zcode-bridge-preview-v2.0.0-preview.8)
 
 ## 许可证
 

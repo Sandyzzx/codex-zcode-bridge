@@ -4,7 +4,7 @@
 
 [简体中文](README.zh-CN.md) · [Repository](https://github.com/Sandyzzx/codex-zcode-bridge) · [Releases](https://github.com/Sandyzzx/codex-zcode-bridge/releases)
 
-> **Release status.** Stable is `v1.7.1`. Preview `2.0.0-preview.7` is the post-audit remediation snapshot. It keeps the Preview.6 official ZCode 3.18.2 authentication reuse, signed Windows runtime host, SQLite v14 Events/Usage, Start Plan, and Coding Plan contracts, and adds the ADR-038 minimum architecture reduction, correctness, legacy retirement, CI dispatch, and Events pagination fixes. It is a prerelease for Windows x64 with ZCode Desktop `3.18.2.10443`; it does not promote a new Stable version.
+> **Release status.** Stable is `v1.7.1`. Preview `2.0.0-preview.8` adds host-authorized cancellation for queued Launch Intent and supported cleanup Holds, with fresh process-tree proof bound to durable recovery evidence. It retains the Preview.7 authentication, runtime and SQLite contracts. It is a prerelease for Windows x64 with ZCode Desktop `3.18.2.10443`; it does not promote a new Stable version.
 
 ## What this is
 
@@ -67,7 +67,7 @@ This evidence covers **only `GLM-5.3-Flash` on Windows**. It does not prove ever
 ## Requirements
 
 - The fixed Official Host production bundle is supported on **Windows x64**. Production Worker adapter selection fails closed with `unsupported_worker_platform` on Linux, macOS, and Windows non-x64; CI exercises that rejection without claiming a production execution path.
-- **Preview 2.0.0-preview.7:** Windows x64, Node.js `24.16.0`, and an installed official ZCode Desktop `3.18.2.10443`.
+- **Preview 2.0.0-preview.8:** Windows x64, Node.js `24.16.0`, and an installed official ZCode Desktop `3.18.2.10443`.
 - Git, Codex with plugin/marketplace support, and a working local ZCode installation.
 - A signed-in official ZCode account with the plan and model entitlement required by the selected task.
 - A **single-user, trusted-local** environment. This is not a multi-user isolation boundary or a remote sandbox.
@@ -183,7 +183,7 @@ Prompts, Skills, path lists, and worktree selection do not create those permissi
 - [Runtime and SQLite upgrade details](docs/ZCODE_RUNTIME.md)
 - [Plugin safety notes](plugins/codex-zcode-bridge/SECURITY.md)
 - [Master skill](plugins/codex-zcode-bridge/skills/zcode-bridge/SKILL.md)
-- [Preview.7 release](https://github.com/Sandyzzx/codex-zcode-bridge/releases/tag/codex-zcode-bridge-preview-v2.0.0-preview.7)
+- [Preview.8 release](https://github.com/Sandyzzx/codex-zcode-bridge/releases/tag/codex-zcode-bridge-preview-v2.0.0-preview.8)
 
 ## License
 
