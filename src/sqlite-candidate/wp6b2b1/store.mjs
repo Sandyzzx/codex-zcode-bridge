@@ -336,10 +336,12 @@ function recoveryEventsFor(events,operationId){
     if(!operation||event.from_phase!=='running'||event.to_phase!=='running'||event.generation!==operation.generation
       ||!verification||verification.sequence>=event.sequence||verified.reason!=='cancel_tree_verified'
       ||verified.cancel_id!==evidence.cancel_id||verified.claim_id!==operation.claim_id
-      ||verified.worker_identity_digest!==operation.claim_worker_identity_digest)fail('cancellation_resolution_binding_mismatch');
+      ||verified.worker_identity_digest!==operation.claim_worker_identity_digest||verified.proof_digest!==evidence.proof_digest)
+      fail('cancellation_resolution_binding_mismatch');
     const eligible=recovery.filter(item=>item.event.sequence<event.sequence&&!resolved.has(item.event.evidence_digest));
     if(eligible.some(item=>item.evidence.classification!=='hold'
-      ||!['cleanup_identity_unknown','cleanup_incomplete'].includes(item.evidence.reason_code))
+      ||!['cleanup_identity_unknown','cleanup_incomplete'].includes(item.evidence.reason_code)
+      ||item.event.sequence>=verification.sequence)
       ||eligible.map(item=>item.event.evidence_digest).sort().join('|')!==evidence.resolved_recovery_event_digests.join('|'))fail('cancellation_resolution_hold_mismatch');
     for(const hash of evidence.resolved_recovery_event_digests)resolved.add(hash);
   }
@@ -1980,7 +1982,7 @@ export class IsolatedAdmissionStore {
     const worker=this.#cancellationWorker(input,snapshot.operation);
     const intent=snapshot.observations.find(event=>event.evidence.reason==='cancel_requested');
     if(!intent)fail('cancel_intent_required');
-    const prior=snapshot.observations.find(event=>event.evidence.reason==='cancel_tree_verified');
+    const prior=[...snapshot.observations].reverse().find(event=>event.evidence.reason==='cancel_tree_verified');
     if(snapshot.operation.result_digest!==null||snapshot.operation.phase!=='running'){
       if(prior&&prior.evidence.proof_digest===digest(treeEvidence)&&snapshot.operation.result_status==='cancelled')return {duplicate:true,result_won:false,
         operation_id:input.operation_id,generation:input.generation,revision:snapshot.operation.revision,phase:snapshot.operation.phase,
@@ -2011,8 +2013,9 @@ export class IsolatedAdmissionStore {
       const persistedIntent=this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded'").all(input.operation_id)
         .map(event=>({...event,evidence:JSON.parse(event.evidence_json)})).find(event=>event.evidence.reason==='cancel_requested');
       if(!persistedIntent||persistedIntent.evidence.cancel_id!==intent.evidence.cancel_id)fail('cancel_intent_mismatch');
-      const existing=this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded'").all(input.operation_id)
-        .map(event=>({...event,evidence:JSON.parse(event.evidence_json)})).find(event=>event.evidence.reason==='cancel_tree_verified');
+      const existingRows=this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded' ORDER BY sequence").all(input.operation_id)
+        .map(event=>({...event,evidence:JSON.parse(event.evidence_json)})).filter(event=>event.evidence.reason==='cancel_tree_verified');
+      const existing=existingRows.at(-1);
       const holds=cancellableRecoveryHolds(current,this.#db.prepare('SELECT * FROM manager_operation_events WHERE operation_id=? ORDER BY sequence').all(input.operation_id));
       if(existing&&holds.length===0){if(existing.evidence.proof_digest===verdict.evidence_digest)return {duplicate:true,result_won:false,operation_id:input.operation_id,
           generation:input.generation,revision:current.revision,phase:current.phase,cancellation_verification_digest:existing.evidence_digest};
@@ -2023,19 +2026,17 @@ export class IsolatedAdmissionStore {
         process_tree_digest:verdict.process_tree_digest,proof_digest:verdict.evidence_digest,root_process_id:verdict.root_process_id,
         root_start_fingerprint:verdict.root_start_fingerprint,worker_tree_complete:true};
       const evidence={...unsigned,evidence_digest:digest({cancel_verification_contract_version:1,...unsigned})};
-      const count=(existing?0:1)+(holds.length?1:0);
+      const count=1+(holds.length?1:0);
       const changed=this.#db.prepare("UPDATE manager_operations SET revision=revision+1 WHERE operation_id=? AND task_id=? AND attempt=? AND generation=? AND phase='running' AND revision=? AND claim_id=? AND claim_generation=? AND claim_worker_identity_digest=?")
         .run(input.operation_id,input.task_id,input.attempt,input.generation,input.revision,input.claim_id,input.generation,input.claim_worker_identity_digest);
       if(changed.changes!==1)fail('stale_cancellation_cas');
       this.#faultPoint('after_projection');
       const at=new Date().toISOString();
-      if(!existing)this.#event(input.operation_id,input.revision+1,'observation_recorded','running','running',input.generation,evidence,at);
-      const event=existing??this.#db.prepare("SELECT evidence_digest FROM manager_operation_events WHERE operation_id=? AND sequence=?").get(input.operation_id,input.revision+1);
+      this.#event(input.operation_id,input.revision+1,'observation_recorded','running','running',input.generation,evidence,at);
+      const event=this.#db.prepare("SELECT evidence_digest FROM manager_operation_events WHERE operation_id=? AND sequence=?").get(input.operation_id,input.revision+1);
       if(holds.length){
-        if(!existing){
-          const next=this.#db.prepare("UPDATE manager_operations SET revision=revision+1 WHERE operation_id=? AND revision=?").run(input.operation_id,input.revision+1);
-          if(next.changes!==1)fail('stale_cancellation_cas');
-        }
+        const next=this.#db.prepare("UPDATE manager_operations SET revision=revision+1 WHERE operation_id=? AND revision=?").run(input.operation_id,input.revision+1);
+        if(next.changes!==1)fail('stale_cancellation_cas');
         const resolution={reason:'cancel_recovery_resolved',cancel_id:intent.evidence.cancel_id,cancellation_verification_digest:event.evidence_digest,
           proof_digest:verdict.evidence_digest,resolved_recovery_event_digests:holds.map(item=>item.event.evidence_digest).sort()};
         this.#event(input.operation_id,input.revision+count,'observation_recorded','running','running',input.generation,
@@ -2476,14 +2477,18 @@ export class IsolatedAdmissionStore {
       }
       if(o.phase!=='running'||o.revision!==input.revision)fail('stale_result_cas');
       if(input.result_status==='cancelled'){
-        const observations=this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded'").all(input.operation_id)
+        const observations=this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded' ORDER BY sequence").all(input.operation_id)
           .map(event=>({...event,evidence:JSON.parse(event.evidence_json)}));
         const intent=observations.find(event=>event.evidence.reason==='cancel_requested');
-        const verification=observations.find(event=>event.evidence.reason==='cancel_tree_verified');
+        const verification=observations.find(event=>event.evidence.reason==='cancel_tree_verified'
+          &&event.evidence_digest===input.cancel_verification_digest);
         if(!intent||!verification||verification.sequence<=intent.sequence
           ||verification.evidence.cancel_id!==intent.evidence.cancel_id||verification.evidence.claim_id!==input.claim_id
           ||verification.evidence.worker_identity_digest!==input.claim_worker_identity_digest
           ||verification.evidence_digest!==input.cancel_verification_digest)fail('cancel_verification_required');
+        const resolutions=observations.filter(event=>event.evidence.reason==='cancel_recovery_resolved');
+        if(resolutions.length&&resolutions.at(-1).evidence.cancellation_verification_digest!==input.cancel_verification_digest)
+          fail('cancel_verification_required');
       }
       const current=this.#db.prepare('SELECT t.status AS task_status,t.current_attempt,a.status AS attempt_status FROM tasks t JOIN attempts a ON a.task_id=t.task_id WHERE t.task_id=? AND a.attempt=? AND a.generation=?').get(input.task_id,input.attempt,input.generation);
       if(!current||current.current_attempt!==input.attempt||current.task_status!=='running'||current.attempt_status!=='running')fail('result_attempt_not_running');
@@ -3113,7 +3118,7 @@ export class IsolatedAdmissionStore {
         }
         if(o.operation_kind==='attempt_lifecycle'){
           const intents=launchEvents.launch_intent,receipts=launchEvents.launch_receipt,claims=launchEvents.claim_committed;
-          if(cancellationIntents.length>1||cancellationVerifications.length>1
+          if(cancellationIntents.length>1||cancellationVerifications.length>RECOVERY_LIMIT+1
             ||cancellationVerifications.length>0&&cancellationIntents.length!==1)fail('cancellation_history_unbounded');
           if(cancellationIntents.length||cancellationVerifications.length){
             if(claims.length!==1||!o.claim_id||o.claim_generation!==o.generation||!o.claim_worker_identity_json||!o.launch_identity_json)fail('cancellation_claim_missing');
@@ -3131,17 +3136,24 @@ export class IsolatedAdmissionStore {
                 ||worker.start_fingerprint!==launchIdentity.start_fingerprint)fail('cancellation_identity_history_mismatch');
             }
             if(cancellationVerifications.length){
-              const {event,evidence}=cancellationVerifications[0],intent=cancellationIntents[0];
-              const unsigned={reason:'cancel_tree_verified',cancel_id:intent.evidence.cancel_id,claim_id:o.claim_id,
-                worker_identity_digest:o.claim_worker_identity_digest,intent_event_digest:intent.event.evidence_digest,
-                process_tree_digest:evidence.process_tree_digest,proof_digest:evidence.proof_digest,root_process_id:evidence.root_process_id,
-                root_start_fingerprint:evidence.root_start_fingerprint,worker_tree_complete:true};
-              if(event.sequence<=intent.event.sequence||event.from_phase!=='running'||event.to_phase!=='running'
-                ||evidence.cancel_id!==intent.evidence.cancel_id||evidence.claim_id!==o.claim_id
-                ||evidence.worker_identity_digest!==o.claim_worker_identity_digest||evidence.intent_event_digest!==intent.event.evidence_digest
-                ||evidence.evidence_digest!==digest({cancel_verification_contract_version:1,...unsigned})
-                ||evidence.root_process_id!==worker.process_id||evidence.root_process_id!==launchIdentity.process_id
-                ||evidence.root_start_fingerprint!==worker.start_fingerprint||evidence.root_start_fingerprint!==launchIdentity.start_fingerprint)
+              const intent=cancellationIntents[0];
+              for(const {event,evidence} of cancellationVerifications){
+                const unsigned={reason:'cancel_tree_verified',cancel_id:intent.evidence.cancel_id,claim_id:o.claim_id,
+                  worker_identity_digest:o.claim_worker_identity_digest,intent_event_digest:intent.event.evidence_digest,
+                  process_tree_digest:evidence.process_tree_digest,proof_digest:evidence.proof_digest,root_process_id:evidence.root_process_id,
+                  root_start_fingerprint:evidence.root_start_fingerprint,worker_tree_complete:true};
+                if(event.sequence<=intent.event.sequence||event.from_phase!=='running'||event.to_phase!=='running'
+                  ||evidence.cancel_id!==intent.evidence.cancel_id||evidence.claim_id!==o.claim_id
+                  ||evidence.worker_identity_digest!==o.claim_worker_identity_digest||evidence.intent_event_digest!==intent.event.evidence_digest
+                  ||evidence.evidence_digest!==digest({cancel_verification_contract_version:1,...unsigned})
+                  ||evidence.root_process_id!==worker.process_id||evidence.root_process_id!==launchIdentity.process_id
+                  ||evidence.root_start_fingerprint!==worker.start_fingerprint||evidence.root_start_fingerprint!==launchIdentity.start_fingerprint)
+                  fail('cancellation_verification_history_mismatch');
+              }
+              const linkedProofs=new Set(es.filter(event=>event.event_type==='observation_recorded')
+                .map(event=>JSON.parse(event.evidence_json)).filter(evidence=>evidence.reason==='cancel_recovery_resolved')
+                .map(evidence=>evidence.cancellation_verification_digest));
+              if(cancellationVerifications.slice(1).some(({event})=>!linkedProofs.has(event.evidence_digest)))
                 fail('cancellation_verification_history_mismatch');
             }
           }

@@ -2167,7 +2167,7 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
       await active?.closeHandleGate?.();
       const cancelId = text(intent.cancel_id, "cancellation_intent_missing");
       const cancellationHistory = readAllLifecycleEventsForRecovery(port, operationId);
-      const persistedVerification = cancellationHistory.find((event) => {
+      const persistedVerification = [...cancellationHistory].reverse().find((event) => {
         if (event.event_type !== "observation_recorded") return false;
         try { return parseEvidence(event.evidence_json, "cancellation_verification_invalid").reason === "cancel_tree_verified"; }
         catch { throw new LifecycleGateError("cancellation_verification_invalid"); }

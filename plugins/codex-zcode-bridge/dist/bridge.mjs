@@ -29754,9 +29754,10 @@ function recoveryEventsFor(events, operationId) {
     validateObservationEventEvidence(evidence);
     const verification = operationEvents.find((e) => e.evidence_digest === evidence.cancellation_verification_digest);
     const verified = verification && (verification.evidence ?? JSON.parse(verification.evidence_json));
-    if (!operation || event.from_phase !== "running" || event.to_phase !== "running" || event.generation !== operation.generation || !verification || verification.sequence >= event.sequence || verified.reason !== "cancel_tree_verified" || verified.cancel_id !== evidence.cancel_id || verified.claim_id !== operation.claim_id || verified.worker_identity_digest !== operation.claim_worker_identity_digest) fail2("cancellation_resolution_binding_mismatch");
+    if (!operation || event.from_phase !== "running" || event.to_phase !== "running" || event.generation !== operation.generation || !verification || verification.sequence >= event.sequence || verified.reason !== "cancel_tree_verified" || verified.cancel_id !== evidence.cancel_id || verified.claim_id !== operation.claim_id || verified.worker_identity_digest !== operation.claim_worker_identity_digest || verified.proof_digest !== evidence.proof_digest)
+      fail2("cancellation_resolution_binding_mismatch");
     const eligible = recovery.filter((item) => item.event.sequence < event.sequence && !resolved.has(item.event.evidence_digest));
-    if (eligible.some((item) => item.evidence.classification !== "hold" || !["cleanup_identity_unknown", "cleanup_incomplete"].includes(item.evidence.reason_code)) || eligible.map((item) => item.event.evidence_digest).sort().join("|") !== evidence.resolved_recovery_event_digests.join("|")) fail2("cancellation_resolution_hold_mismatch");
+    if (eligible.some((item) => item.evidence.classification !== "hold" || !["cleanup_identity_unknown", "cleanup_incomplete"].includes(item.evidence.reason_code) || item.event.sequence >= verification.sequence) || eligible.map((item) => item.event.evidence_digest).sort().join("|") !== evidence.resolved_recovery_event_digests.join("|")) fail2("cancellation_resolution_hold_mismatch");
     for (const hash2 of evidence.resolved_recovery_event_digests) resolved.add(hash2);
   }
   for (const event of operationEvents) {
@@ -32197,7 +32198,7 @@ var init_store = __esm({
         const worker = this.#cancellationWorker(input2, snapshot.operation);
         const intent = snapshot.observations.find((event) => event.evidence.reason === "cancel_requested");
         if (!intent) fail2("cancel_intent_required");
-        const prior = snapshot.observations.find((event) => event.evidence.reason === "cancel_tree_verified");
+        const prior = [...snapshot.observations].reverse().find((event) => event.evidence.reason === "cancel_tree_verified");
         if (snapshot.operation.result_digest !== null || snapshot.operation.phase !== "running") {
           if (prior && prior.evidence.proof_digest === digest2(treeEvidence) && snapshot.operation.result_status === "cancelled") return {
             duplicate: true,
@@ -32252,7 +32253,8 @@ var init_store = __esm({
           this.#cancellationWorker(input2, current);
           const persistedIntent = this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded'").all(input2.operation_id).map((event2) => ({ ...event2, evidence: JSON.parse(event2.evidence_json) })).find((event2) => event2.evidence.reason === "cancel_requested");
           if (!persistedIntent || persistedIntent.evidence.cancel_id !== intent.evidence.cancel_id) fail2("cancel_intent_mismatch");
-          const existing = this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded'").all(input2.operation_id).map((event2) => ({ ...event2, evidence: JSON.parse(event2.evidence_json) })).find((event2) => event2.evidence.reason === "cancel_tree_verified");
+          const existingRows = this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded' ORDER BY sequence").all(input2.operation_id).map((event2) => ({ ...event2, evidence: JSON.parse(event2.evidence_json) })).filter((event2) => event2.evidence.reason === "cancel_tree_verified");
+          const existing = existingRows.at(-1);
           const holds = cancellableRecoveryHolds(current, this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? ORDER BY sequence").all(input2.operation_id));
           if (existing && holds.length === 0) {
             if (existing.evidence.proof_digest === verdict2.evidence_digest) return {
@@ -32280,18 +32282,16 @@ var init_store = __esm({
             worker_tree_complete: true
           };
           const evidence = { ...unsigned, evidence_digest: digest2({ cancel_verification_contract_version: 1, ...unsigned }) };
-          const count = (existing ? 0 : 1) + (holds.length ? 1 : 0);
+          const count = 1 + (holds.length ? 1 : 0);
           const changed = this.#db.prepare("UPDATE manager_operations SET revision=revision+1 WHERE operation_id=? AND task_id=? AND attempt=? AND generation=? AND phase='running' AND revision=? AND claim_id=? AND claim_generation=? AND claim_worker_identity_digest=?").run(input2.operation_id, input2.task_id, input2.attempt, input2.generation, input2.revision, input2.claim_id, input2.generation, input2.claim_worker_identity_digest);
           if (changed.changes !== 1) fail2("stale_cancellation_cas");
           this.#faultPoint("after_projection");
           const at = (/* @__PURE__ */ new Date()).toISOString();
-          if (!existing) this.#event(input2.operation_id, input2.revision + 1, "observation_recorded", "running", "running", input2.generation, evidence, at);
-          const event = existing ?? this.#db.prepare("SELECT evidence_digest FROM manager_operation_events WHERE operation_id=? AND sequence=?").get(input2.operation_id, input2.revision + 1);
+          this.#event(input2.operation_id, input2.revision + 1, "observation_recorded", "running", "running", input2.generation, evidence, at);
+          const event = this.#db.prepare("SELECT evidence_digest FROM manager_operation_events WHERE operation_id=? AND sequence=?").get(input2.operation_id, input2.revision + 1);
           if (holds.length) {
-            if (!existing) {
-              const next = this.#db.prepare("UPDATE manager_operations SET revision=revision+1 WHERE operation_id=? AND revision=?").run(input2.operation_id, input2.revision + 1);
-              if (next.changes !== 1) fail2("stale_cancellation_cas");
-            }
+            const next = this.#db.prepare("UPDATE manager_operations SET revision=revision+1 WHERE operation_id=? AND revision=?").run(input2.operation_id, input2.revision + 1);
+            if (next.changes !== 1) fail2("stale_cancellation_cas");
             const resolution = {
               reason: "cancel_recovery_resolved",
               cancel_id: intent.evidence.cancel_id,
@@ -32983,10 +32983,13 @@ var init_store = __esm({
           }
           if (o.phase !== "running" || o.revision !== input2.revision) fail2("stale_result_cas");
           if (input2.result_status === "cancelled") {
-            const observations = this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded'").all(input2.operation_id).map((event) => ({ ...event, evidence: JSON.parse(event.evidence_json) }));
+            const observations = this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded' ORDER BY sequence").all(input2.operation_id).map((event) => ({ ...event, evidence: JSON.parse(event.evidence_json) }));
             const intent = observations.find((event) => event.evidence.reason === "cancel_requested");
-            const verification = observations.find((event) => event.evidence.reason === "cancel_tree_verified");
+            const verification = observations.find((event) => event.evidence.reason === "cancel_tree_verified" && event.evidence_digest === input2.cancel_verification_digest);
             if (!intent || !verification || verification.sequence <= intent.sequence || verification.evidence.cancel_id !== intent.evidence.cancel_id || verification.evidence.claim_id !== input2.claim_id || verification.evidence.worker_identity_digest !== input2.claim_worker_identity_digest || verification.evidence_digest !== input2.cancel_verification_digest) fail2("cancel_verification_required");
+            const resolutions = observations.filter((event) => event.evidence.reason === "cancel_recovery_resolved");
+            if (resolutions.length && resolutions.at(-1).evidence.cancellation_verification_digest !== input2.cancel_verification_digest)
+              fail2("cancel_verification_required");
           }
           const current = this.#db.prepare("SELECT t.status AS task_status,t.current_attempt,a.status AS attempt_status FROM tasks t JOIN attempts a ON a.task_id=t.task_id WHERE t.task_id=? AND a.attempt=? AND a.generation=?").get(input2.task_id, input2.attempt, input2.generation);
           if (!current || current.current_attempt !== input2.attempt || current.task_status !== "running" || current.attempt_status !== "running") fail2("result_attempt_not_running");
@@ -33749,7 +33752,7 @@ var init_store = __esm({
             }
             if (o.operation_kind === "attempt_lifecycle") {
               const intents = launchEvents.launch_intent, receipts = launchEvents.launch_receipt, claims = launchEvents.claim_committed;
-              if (cancellationIntents.length > 1 || cancellationVerifications.length > 1 || cancellationVerifications.length > 0 && cancellationIntents.length !== 1) fail2("cancellation_history_unbounded");
+              if (cancellationIntents.length > 1 || cancellationVerifications.length > RECOVERY_LIMIT + 1 || cancellationVerifications.length > 0 && cancellationIntents.length !== 1) fail2("cancellation_history_unbounded");
               if (cancellationIntents.length || cancellationVerifications.length) {
                 if (claims.length !== 1 || !o.claim_id || o.claim_generation !== o.generation || !o.claim_worker_identity_json || !o.launch_identity_json) fail2("cancellation_claim_missing");
                 const worker = JSON.parse(o.claim_worker_identity_json), launchIdentity = JSON.parse(o.launch_identity_json);
@@ -33772,20 +33775,25 @@ var init_store = __esm({
                   if (digest2(identityJson) !== o.claim_worker_identity_digest || worker.process_id !== launchIdentity.process_id || worker.start_fingerprint !== launchIdentity.start_fingerprint) fail2("cancellation_identity_history_mismatch");
                 }
                 if (cancellationVerifications.length) {
-                  const { event, evidence } = cancellationVerifications[0], intent = cancellationIntents[0];
-                  const unsigned = {
-                    reason: "cancel_tree_verified",
-                    cancel_id: intent.evidence.cancel_id,
-                    claim_id: o.claim_id,
-                    worker_identity_digest: o.claim_worker_identity_digest,
-                    intent_event_digest: intent.event.evidence_digest,
-                    process_tree_digest: evidence.process_tree_digest,
-                    proof_digest: evidence.proof_digest,
-                    root_process_id: evidence.root_process_id,
-                    root_start_fingerprint: evidence.root_start_fingerprint,
-                    worker_tree_complete: true
-                  };
-                  if (event.sequence <= intent.event.sequence || event.from_phase !== "running" || event.to_phase !== "running" || evidence.cancel_id !== intent.evidence.cancel_id || evidence.claim_id !== o.claim_id || evidence.worker_identity_digest !== o.claim_worker_identity_digest || evidence.intent_event_digest !== intent.event.evidence_digest || evidence.evidence_digest !== digest2({ cancel_verification_contract_version: 1, ...unsigned }) || evidence.root_process_id !== worker.process_id || evidence.root_process_id !== launchIdentity.process_id || evidence.root_start_fingerprint !== worker.start_fingerprint || evidence.root_start_fingerprint !== launchIdentity.start_fingerprint)
+                  const intent = cancellationIntents[0];
+                  for (const { event, evidence } of cancellationVerifications) {
+                    const unsigned = {
+                      reason: "cancel_tree_verified",
+                      cancel_id: intent.evidence.cancel_id,
+                      claim_id: o.claim_id,
+                      worker_identity_digest: o.claim_worker_identity_digest,
+                      intent_event_digest: intent.event.evidence_digest,
+                      process_tree_digest: evidence.process_tree_digest,
+                      proof_digest: evidence.proof_digest,
+                      root_process_id: evidence.root_process_id,
+                      root_start_fingerprint: evidence.root_start_fingerprint,
+                      worker_tree_complete: true
+                    };
+                    if (event.sequence <= intent.event.sequence || event.from_phase !== "running" || event.to_phase !== "running" || evidence.cancel_id !== intent.evidence.cancel_id || evidence.claim_id !== o.claim_id || evidence.worker_identity_digest !== o.claim_worker_identity_digest || evidence.intent_event_digest !== intent.event.evidence_digest || evidence.evidence_digest !== digest2({ cancel_verification_contract_version: 1, ...unsigned }) || evidence.root_process_id !== worker.process_id || evidence.root_process_id !== launchIdentity.process_id || evidence.root_start_fingerprint !== worker.start_fingerprint || evidence.root_start_fingerprint !== launchIdentity.start_fingerprint)
+                      fail2("cancellation_verification_history_mismatch");
+                  }
+                  const linkedProofs = new Set(es.filter((event) => event.event_type === "observation_recorded").map((event) => JSON.parse(event.evidence_json)).filter((evidence) => evidence.reason === "cancel_recovery_resolved").map((evidence) => evidence.cancellation_verification_digest));
+                  if (cancellationVerifications.slice(1).some(({ event }) => !linkedProofs.has(event.evidence_digest)))
                     fail2("cancellation_verification_history_mismatch");
                 }
               }
@@ -35966,7 +35974,7 @@ async function openClaimOnlyDriver(options) {
       await active?.closeHandleGate?.();
       const cancelId = text(intent.cancel_id, "cancellation_intent_missing");
       const cancellationHistory = readAllLifecycleEventsForRecovery(port, operationId);
-      const persistedVerification = cancellationHistory.find((event) => {
+      const persistedVerification = [...cancellationHistory].reverse().find((event) => {
         if (event.event_type !== "observation_recorded") return false;
         try {
           return parseEvidence(event.evidence_json, "cancellation_verification_invalid").reason === "cancel_tree_verified";
