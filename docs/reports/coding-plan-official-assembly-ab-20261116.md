@@ -6,7 +6,7 @@
 > Base: `02cf2fa92c8235370fe7a883d4c5b30d93a8ab33` (`origin/preview`)
 > Official source: ZCode `3.18.2`, commit `fec975905a2abd4c07e35c40d51fa097a2258ec9`,
 > tree `5e90fec80706b8381f94e4eef48cf821b9868916`
-> Evidence class: 固定官方源码、Bridge 源码、离线 Harness、既有 A/N 计费证据
+> Evidence class: 固定官方源码、Bridge 源码、离线 Harness、隔离初始化 smoke、既有 A/N 计费证据
 > Security boundary: 未读取、输出或哈希比较 Access Token、Project Token、API Key、Refresh Token、
 > Cookie 或 JWT 原文
 
@@ -14,18 +14,19 @@
 
 | 项目 | 结论 | 证据边界 |
 |---|---|---|
-| 离线 A/B 装配证据工具 | `PASS` | 9 项测试通过；固定源码校验、脱敏、比较、输出边界和 fail-closed gate 均有断言 |
-| 官方装配安全复用 | `BLOCKED` | Settings、CA、credential migration 和 Project Token location 存在持久化副作用；未证明可安全隔离 |
+| 离线 A/B 装配证据工具 | `PASS` | 离线探针 9 项测试通过；固定源码校验、脱敏、比较、输出边界和 fail-closed gate 均有断言 |
+| 隔离 live probe 工具 | `PASS` | 9 项测试通过；共享状态元数据监控、凭据锁预检、小时窗口和一次性 B 门禁均有断言 |
+| 官方装配安全复用 | `BLOCKED` | 官方只读凭据解密仍会在共享 `.zcode/v2` 下创建瞬时 `.keyring.lock`；未进入解密或 AppServer 启动 |
 | A — Bridge 当前实现 | `FAIL` | 既有 16:00、18:00 两个 Bridge 样本均未应用 `0.67`；本轮未重跑 |
 | N — 原生 ZCode | `PASS` | 既有 11:00、19:00 两个原生窗口均与 `0.5 x 0.67` 吻合；本轮未重跑 |
-| B — 扩展官方装配实验 | `INCONCLUSIVE` | 未初始化、未发起模型请求、没有 B 的官方前后账单 |
+| B — 扩展官方装配实验 | `BLOCKED` | 隔离门禁在凭据读取前 fail closed；未发起模型请求，没有 B 的官方前后账单 |
 | 最终认证材料结构差异 | `NONE`（合成 Fixture） | Provider、Model、Account、Request Auth、Usage Scene 相同；只证明 Fixture 归一化结果 |
 | Runtime/Transport 装配差异 | `CONFIRMED` | Settings-aware access、Host transport、OAuth 恢复钩子和 cipher 生命周期不同 |
 | Project 身份一致性 | `UNKNOWN` | 没有比较真实 Project Token scope、`apiKeyId` 或服务端计费身份 |
 | `0.67` 的服务端触发条件 | `UNKNOWN` | 没有发现它进入最终请求 Auth；不能从本地结构反推服务端权益规则 |
 | Root cause confidence | `LOW` | 已确认 Runtime 结构差异，但不能证明它就是计费差异原因 |
 
-本轮结论不是“官方装配复用没有效果”，而是“在满足无写入、可释放和可对账门禁前，不应执行 B”。
+本轮结论不是“官方装配复用没有效果”，而是“官方只读凭据入口仍未满足共享状态不变门禁，因此不能执行 B”。
 本轮也没有把既有 A/N 证据重新包装成新的受控 A/B 结果。
 
 ## 2. A / N / B 实验定义与控制变量
@@ -34,7 +35,7 @@
 |---|---|---|---|
 | A | Bridge Worker -> simplified account access -> Bridge minimal official factory -> official Request Auth -> official Project Token Client -> official AppServer | 既有证据 | 不重跑；16:00 和 18:00 计费样本已存在 |
 | N | Desktop full Local Services -> settings-aware access -> official Request Auth -> official Project Token Client -> official AppServer | 既有证据 | 不重跑；11:00 和 19:00 原生计费样本已存在 |
-| B | 在同账号、同 Provider、同 Model、同 Usage Scene 下，用受控实验装配替换 Runtime 组件，最后仍进入官方 Request Auth、Project Token 和 AppServer | 未执行 | 隔离门禁未通过；不能把静态分析称为 B 结果 |
+| B | 在同账号、同 Provider、同 Model、同 Usage Scene 下，用受控实验装配替换 Runtime 组件，最后仍进入官方 Request Auth、Project Token 和 AppServer | 未执行 | 隔离预检在共享凭据锁处 fail closed；不能把静态分析称为 B 结果 |
 
 目标控制变量：
 
@@ -184,48 +185,167 @@ project_identity_parity: FIXTURE_EQUAL
 
 ## 5. B 初始化与隔离验证
 
-### 5.1 结果
+### 5.1 隔离实现
 
-```text
-B_INITIALIZATION: NOT_RUN
-B_MODEL_REQUESTS: 0
-B_HTTP_REQUESTS: 0
-B_OFFICIAL_BEFORE_AFTER: NOT_CAPTURED
-LIVE_PROBE_GATE: LIVE_PROBE_BLOCKED
+本轮沿用 `codex/coding-plan-assembly-ab-20261116` Worktree，只新增实验探针及其测试。探针执行
+以下 preflight：
+
+1. 验证固定官方 3.18.2 源码版本、commit、tree 和 clean 状态。
+2. 验证固定 Official Host Module、AppServer、builtin Provider 配置和 Runtime Host 的
+   bytes / SHA-256。
+3. 只允许写任务 `.run` 目录；HOME、`USERPROFILE`、ZCode data root、TEMP/TMP 均重定向到隔离
+   root。
+4. 在凭据解密和 AppServer 启动前静态检查官方 read-only credential path。
+5. 仅以文件大小和 mtime 监控共享 `.zcode/v2` 的非秘密元数据，不读凭据内容。
+6. 对 Host Wake 进程只比较 PID、parent PID、creation time、exe name 和粗粒度 command kind。
+
+官方 smoke 命令如下，不发起模型请求：
+
+```powershell
+node tools/cost-lab/official-assembly-live-probe.mjs --smoke
 ```
 
-当前 Harness 没有 live mode；`--live` 会直接 fail closed。没有把离线的官方源码导入错误描述为
-“官方服务组件已初始化”。
+### 5.2 阻断点
 
-### 5.2 阻断原因
+固定 Official Host Runtime 的只读凭据解密仍执行：
 
-1. **Settings 可能写入**
-   `packages/services/src/setting/settingService.ts:343` 的 `get()` 路径可执行
-   `writeSettings(...)`，因此不能声明初始化只读。
-2. **完整 Local Services 有 CA 副作用**
-   `packages/services/src/node.ts:1414` 调用 `ensureAppCaCert()`，首次或修复路径可能生成文件。
-3. **Credential Service 可能迁移写盘**
-   `packages/services/src/credential/credentialService.ts:159` 到 `:160` 会在读取旧格式值时
-   `writeAll(...)`。
-4. **Project Token Client 可能持久化 location**
-   `packages/shared/src/project-access-token-client.ts:201` 等路径可保存
-   `project_token_location`，不能宣称非变更。
-5. **没有批准的官方账单直读器**
-   当前 Cost Lab 只有人工快照导入能力；B 无法取得同一请求窗口的官方 before/after。
-6. **无法证明独占计费窗口**
-   官方账单是小时聚合，当前没有 request-level join，也没有隔离其他同账号请求的机制。
-7. **没有 live Harness 的资源释放证据**
-   官方服务、AppServer、网络、凭据和设置生命周期尚未做过带清理证明的隔离运行。
+```js
+withFileLock(`${filePath}.keyring`, ...)
+```
 
-在这些条件满足前执行一次 B 请求，既不能得到可靠账单归属，又可能改动共享认证/设置状态，违反
-本 Goal 的 P0 隔离要求。
+当读取真实 OAuth session 时，`filePath` 指向共享生产数据根中的
+`D:\Program Files\.zcode\v2\credentials.json`。即使调用方设置 `readOnly: true`、
+`migrateOnRead: false` 和 `readOnlyKeyMaterial: true`，官方实现仍会在该路径旁创建瞬时：
 
-### 5.3 离线输出边界
+```text
+D:\Program Files\.zcode\v2\credentials.json.keyring.lock
+```
 
-Harness 只写入：
+Owner 明确禁止修改共享 ZCode 数据根。因此探针在当前官方实现下无法证明“只读凭据读取不会写入
+共享状态”。本轮没有采用复制凭据、伪造身份、重写 Token、改变 keyring 或修改官方安装的替代方案。
+阻断发生在以下动作之前：
+
+- 凭据解密
+- Official AppServer 启动
+- Provider / Model 选择
+- 模型请求
+- 官方 before/after 账单采集
+
+### 5.3 Smoke 结果
+
+```text
+ISOLATED_INIT: BLOCKED
+SHARED_STATE_UNCHANGED: PASS
+OFFICIAL_BILLING_ACCESS: PARTIAL
+B_MODEL_REQUESTS: 0
+B_REAL_REQUESTS: 0
+B_OFFICIAL_BEFORE_AFTER: NOT_CAPTURED
+RESOURCE_CLEANUP: PASS（未启动本实验拥有的服务或进程）
+HOST_WAKE_CONFLICT: NONE
+```
+
+脱敏 smoke 证据：
+
+```text
+.run/coding-plan-assembly-ab-20261116/live-probe/smoke-evidence.json
+```
+
+关键结果：
+
+```yaml
+status: BLOCKED
+reason: official_credential_read_requires_shared_transient_lock
+official_source:
+  version: 3.18.2
+  commit: fec975905a2abd4c07e35c40d51fa097a2258ec9
+  tree: 5e90fec80706b8381f94e4eef48cf821b9868916
+  clean: true
+official_services:
+  initialized: false
+  app_server_initialized: false
+  credential_read_attempted: false
+shared_state:
+  unchanged: true
+  changed_paths: []
+  monitored_files: 14
+cleanup:
+  status: PASS
+  not_required_reason: blocked_before_resource_initialization
+  managed_processes_after: 0
+  owned_pids: []
+host_wake:
+  status: PASS
+  before: []
+  after: []
+model_requests: 0
+network_requests: 0
+```
+
+共享状态监控覆盖 credential store、credential source、provider/settings/config、Coding Plan cache、
+CA 文件、锁文件及可用 SQLite sidecar。smoke 前后元数据一致。
+
+### 5.4 隔离写入与资源生命周期
+
+允许的隔离写入仅包括：
+
+```text
+home/.zcode/v2/coding-plan-cache.json
+home/.zcode/v2/config.json
+home/.zcode/v2/provider_config.json
+smoke-evidence.json
+workspace/fixture.txt
+```
+
+这些文件全部位于任务忽略目录；没有复制凭据。由于 preflight 在官方服务初始化前阻断：
+
+- 没有 AppServer 子进程
+- 没有 Runtime Host 子进程
+- 没有本实验拥有的 PID
+- 没有需要释放的文件句柄或监听端口
+- smoke 进程正常退出
+
+因此本轮的 `RESOURCE_CLEANUP: PASS` 表示“没有启动需要清理的受管资源”，不是对完整 AppServer
+生命周期的通过证明。完整生命周期仍未运行。
+
+### 5.5 只读账单访问复核
+
+通过当前 ZCode DevTools 窗口确认以下对象仍存在：
+
+```text
+window.__costLabServices.usageStatsService
+window.__costLabAccess
+```
+
+仅调用只读：
+
+```js
+getCodingPlanUsageSnapshot({
+  range: "today",
+  preferredProviderId: "account:bigmodel-individual-coding-plan",
+  accountAccess: window.__costLabAccess,
+  timeZone: "Asia/Shanghai"
+})
+```
+
+调用超过 12 秒仍返回 `Promise {<pending>}`，本轮没有生成新的官方快照。未重试该调用，也未将其
+包装为新的认证或计费接口。因此当前状态记为 `OFFICIAL_BILLING_ACCESS: PARTIAL`：
+
+- 既有机器可读快照和历史 accessor 成功记录仍然存在；
+- 本轮无法重新确认当前窗口的 fresh before snapshot；
+- B 不能进入请求阶段。
+
+### 5.6 实验输出边界
+
+离线 Harness 只写：
 
 ```text
 .run/coding-plan-assembly-ab-20261116/offline-evidence.json
+```
+
+live smoke 只写：
+
+```text
+.run/coding-plan-assembly-ab-20261116/live-probe/
 ```
 
 输出写入检查要求目标位于任务的 `.run` 根内，并使用临时文件加 rename。实验路径没有被
@@ -241,7 +361,7 @@ Harness 只写入：
 | 16:00 | Bridge 四请求聚合 | 88,924 | 12.9707 | 高峰 `1.0`，无 `0.67` |
 | 18:00 | Bridge 单主请求 | 23,412 | 2.7397 | 非高峰 `0.5`，无 `0.67` |
 | 19:00 | 原生主请求 + memory extraction | 55,624 | 4.2902 | `0.5 x 0.67` |
-| B | 未执行 | 无 | 无 | `INCONCLUSIVE` |
+| B | 未执行（隔离门禁阻断） | 无 | 无 | `BLOCKED` |
 
 计算公式：
 
@@ -285,9 +405,12 @@ ZCode 路径上具备优惠效果”，但不证明优惠绑定在哪个服务�
 
 ```text
 B_DISCOUNT: INCONCLUSIVE
+B_REAL_REQUESTS: 0
+B_ACTUAL_CREDITS: NOT_APPLICABLE
 ```
 
-没有 B 请求、没有 B Usage、没有 B 官方 before/after 差分，因此不能给出 B 的积分结论。
+没有 B 请求、没有 B Usage、没有 B 官方 before/after 差分；实验在凭据读取前被共享锁写入风险阻断，
+因此不能给出 B 的积分结论。
 
 ### 优惠机制
 
@@ -347,7 +470,14 @@ A/B/E remain possible contributing classes
 
 ## 10. 正式修复判断与最小边界
 
-`MINIMAL_REPAIR_CANDIDATE: NONE APPROVED`。
+```text
+MINIMAL_REPAIR_CANDIDATE:
+官方 read-only credential API 接受调用方提供的隔离 lock root，
+或提供不写共享 `.zcode/v2` 的只读解密入口。
+```
+
+本轮不实现该候选修复，因为任务要求是完成一次可信实验，而不是为实验工具开发通用隔离框架；并且
+修改官方凭据实现会越过本 Goal 的生产认证边界。
 
 当前不应实现以下改动：
 
@@ -356,27 +486,27 @@ A/B/E remain possible contributing classes
 - 复制 Token、切换身份或反复重签 Project Token。
 - 为了测试优惠把完整 Desktop `createLocalServices` 直接接入生产 Worker。
 
-如果 Owner 决定继续，下一步必须先建立安全证据通道：
+此前识别的其他门禁仍需保留：
 
-1. 官方 Settings 初始化可证明只读，或使用不会执行 migration 的官方只读 adapter。
-2. Credential migration 与 Project Token location 写入被隔离，或可证明为非变更。
-3. 官方账单能提供同一小时窗口的 before/after，最好有非秘密 request/turn join。
-4. 能证明实验窗口没有其他同账号、同模型请求。
-5. 实验服务、AppServer、网络和凭据资源有确定性释放路径。
-6. 实验代码有显式开关，默认禁用，不进入生产 Bundle。
+1. 官方 read-only credential path 不在共享数据根创建 transient lock。
+2. Official AppServer smoke 能完成、退出并证明没有遗留 PID/句柄。
+3. 官方账单 accessor 能在当前窗口稳定返回 fresh snapshot。
+4. before/after 属于同一 Asia/Shanghai 小时，且目标模型小时桶在请求前为空。
+5. 实验代码保持显式开关、默认禁用，不进入生产 Bundle。
 
-满足这些门禁后，最多执行一次最小 B 请求。B 若仍得不到 `0.67`，应报告 `FAIL`，并把调查收窄到
-真实 Project identity/Token scope 和官方服务端权益；若无法可靠对账，应保持 `INCONCLUSIVE`，
-不能通过增加请求次数寻找期望结果。
+满足这些门禁后，最多执行一次最小 B 请求。B 若仍得不到 `0.67`，应报告 `FAIL`；若无法可靠对账，
+应保持 `INCONCLUSIVE`，不能通过增加请求次数寻找期望结果。
 
 ## 11. 验证与工程结果
 
 | 命令 | 结果 |
 |---|---|
 | `node --test tools/cost-lab/test/official-assembly-probe.test.mjs` | PASS，9 pass / 0 fail / 0 skip |
+| `node --test tools/cost-lab/test/official-assembly-live-probe.test.mjs` | PASS，9 pass / 0 fail / 0 skip |
+| `node --check tools/cost-lab/official-assembly-live-probe.mjs` | PASS |
 | `node tools/cost-lab/official-assembly-probe.mjs` | PASS；`0` model requests，`0` network requests，`LIVE_PROBE_BLOCKED` |
-| `npm run test:affected`（实现阶段，生成的 Bundle 变更触发相关域） | PASS，`TARGETED_TESTS_PASS`；23 pass / 0 fail / 0 skip |
-| `npm run test:affected`（最终文件集） | `NO_TESTS_APPLICABLE`；T0 typecheck/build/plugin validation/generated freshness/diff check 均通过，不能称为 targeted-test PASS |
+| `node tools/cost-lab/official-assembly-live-probe.mjs --smoke` | 预期 `BLOCKED`；共享状态不变、cleanup PASS、Host Wake PASS、`0` model requests |
+| `npm run test:affected` | `NO_TESTS_APPLICABLE`；T0 typecheck/build/plugin validation/generated freshness/diff check 均通过，不能称为 targeted-test PASS |
 | Typecheck | PASS，由 `test:affected` 执行 |
 | Build | PASS，由 `test:affected` 执行 |
 | Plugin validation | PASS，由 `test:affected` 执行 |
@@ -384,9 +514,10 @@ A/B/E remain possible contributing classes
 | `git diff --check` | PASS |
 | Stress gate | `STRESS_TESTS_NOT_APPLICABLE` |
 
-受影响验证的首次尝试因隔离 Worktree 没有 `node_modules/playwright-core` 在插件 build 阶段失败；
-该次失败没有运行测试或修改源码结论。随后在 Worktree 内建立仅指向现有依赖的 `node_modules`
-Junction 并重跑，上表记录重跑后的有效结果。
+`test:affected` 将当前未跟踪的 Cost Lab 文件归类为未命中测试选择器，因此只执行 T0。两个针对性
+测试文件另外显式运行并全部通过；它们的结果不是 `test:affected` 自动选择的 targeted-test 结果。
+为执行 T0，曾在 Worktree 内建立仅指向主仓库现有依赖的 `node_modules` Junction，并在验证后按
+link identity 检查后移除。
 
 离线证据：
 
@@ -397,7 +528,7 @@ Junction 并重跑，上表记录重跑后的有效结果。
 当前生成结果的 SHA-256 为：
 
 ```text
-5faeea4f534a0a47e436f3af7ea7081e94633a2d49a17c6bae1a0e88bf82e57b
+279ae646aa4f879fec5b0062628cf51ed6088aee98ebcf51f415f41d12883a8a
 ```
 
 该文件位于忽略目录，不提交；因包含生成时间，重新运行会得到不同哈希。
@@ -405,11 +536,14 @@ Junction 并重跑，上表记录重跑后的有效结果。
 ## 12. 剩余不确定性
 
 - B 未执行，因此不能回答“扩展官方装配能否恢复优惠”。
+- 当前 live billing accessor 调用未在 12 秒内返回；无法确认这是短暂网络/服务状态问题，还是当前
+  accessor 生命周期问题。
+- 官方 read-only credential API 是否会执行除 transient keyring lock 以外的共享写入，本轮没有
+  继续触发探测，因此保持未知。
+- Official AppServer 的完整初始化、退出和句柄释放路径仍为 `NOT RUN`。
 - 真实原生/Bridge Project Token 的 scope、Project/Organization 绑定和 `apiKeyId` 实例未比较。
 - 没有 request-level 官方积分流水；小时聚合不能排除 Token 分类完全相同的未知并行请求。
 - 客户端没有把 `discount`/`campaign` 字段送入最终模型 Auth，但服务端隐藏资格仍是 `UNKNOWN`。
-- Settings、CA、credential migration 和 Project Token location 的实际写入范围没有通过 live
-  probe 验证；安全路线尚未建立。
 - 先前失败的嵌套官方源码检出不属于注册 Worktree，也没有提交；本轮执行策略拒绝了递归删除，
   因此它仍留在任务忽略目录中。它未被 Harness 使用，不影响源码固定或计费结论。
 
@@ -420,22 +554,28 @@ GOAL: CODING_PLAN_OFFICIAL_ASSEMBLY_AB_PROBE
 
 IMPLEMENTATION: PASS
 OFFICIAL_ASSEMBLY_REUSE: BLOCKED
+ISOLATED_INIT: BLOCKED
+SHARED_STATE_UNCHANGED: PASS
+OFFICIAL_BILLING_ACCESS: PARTIAL
 A_BASELINE_DISCOUNT: FAIL
 N_NATIVE_DISCOUNT: PASS
+B_REAL_REQUESTS: 0
+B_ACTUAL_CREDITS: NOT_APPLICABLE
 B_DISCOUNT: INCONCLUSIVE
 AUTH_CONTEXT_DELTA: CONFIRMED runtime-only structural difference; no discount/campaign field observed at final request-auth boundary; live billing effect UNKNOWN
 PROJECT_IDENTITY_PARITY: UNKNOWN
 RUNTIME_ASSEMBLY_DELTA: CONFIRMED
 REAL_MODEL_TASKS: 0
-REAL_HTTP_REQUESTS: 0
-ACTUAL_CREDITS: NONE
+REAL_BILLING_READ_ATTEMPTS: 1 (pending; no fresh snapshot)
+RESOURCE_CLEANUP: PASS (no owned service or process was started)
+HOST_WAKE_CONFLICT: NONE
+ACTUAL_CREDITS: NOT_APPLICABLE
 EXPECTED_WITHOUT_0_67: NOT_COMPUTED
 EXPECTED_WITH_0_67: NOT_COMPUTED
-BILLING_RECONCILIATION: BLOCKED
+BILLING_RECONCILIATION: INCONCLUSIVE
 ROOT_CAUSE_CONFIDENCE: LOW
 PRODUCTION_CODE_CHANGED: NO
-HOST_WAKE_CONFLICT: NONE
 START_PLAN_CHANGED: NO
-MINIMAL_REPAIR_CANDIDATE: NONE APPROVED; require safe read-only official composition and non-mutating credential/billing access first
-NEXT_ACTION: Owner decides whether to provide an approved read-only official assembly and billing access path before any single B request
+MINIMAL_REPAIR_CANDIDATE: official read-only credential API must accept a caller-provided isolated lock root, or provide a shared-state-neutral read-only decrypt path
+NEXT_ACTION: do not run B; obtain a fixed official read-only credential path and a fresh billing accessor result before reconsidering the single authorized request
 ```
