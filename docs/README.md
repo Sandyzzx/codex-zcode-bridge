@@ -1,9 +1,9 @@
 # 文档路由 / Documentation
 
 > Status: AUTHORITATIVE（仅指本索引）
-> Last updated: 2026-11-15
-> Last verified: 2026-11-15，核对 Preview.7 发布候选、官方签名 3.18.2 runtime host、BOM/来源/哈希、`2.0.0-preview.7` 版本身份，以及 ADR-038 的架构减法、正确性修复、v14 历史字节保留、CI/生成物合同和 Events summary 分页；3.18.0/3.18.1 实机安装组合、真实 OAuth refresh 与跨机器复现仍未验证。
-> Verified against: released Preview.6 `545c02f745a4e2ab38a1fa3c31880ac80b84a310` + post-audit remediation HEAD `53d93df94f0984b3fe5518b6573e19c29674be05`
+> Last updated: 2026-11-16
+> Last verified: 2026-11-16，核对 Preview.8 版本身份、本地 test:full、插件验证和生成物构建，以及 ADR-039 合并后的 Windows/Ubuntu CI 与 SQLite 矩阵；3.18.0/3.18.1 实机安装组合、真实 OAuth refresh 与跨机器复现仍未验证。
+> Verified against: `a1dae175f736b0e1124614701d959d79dc76b8bc` + Preview.8 release candidate
 
 English users start at [README.md](../README.md). 技术文档为中文。先读当前事实，按问题加载合同；研究或历史材料不作为当前实现或发布证明。
 
@@ -39,7 +39,7 @@ AUTHORITATIVE 描述当前事实或合同；DECISION 记录已批准取舍；RES
 
 [ADR 索引](decisions/README.md) 区分当前有效、部分被替代和完全被替代。历史文件保持原路径，避免破坏引用。不要默认加载 `docs/archive`、`docs/research`、旧审计日志或生成 bundle。
 
-当前 Preview 发布身份为 `2.0.0-preview.7`。`package.json`、`package-lock.json`、插件 manifest、MCP server version、官方签名 Runtime Host 与固定官方 Host/BOM 必须来自同一提交、Tag 和 Release。Owner 将 Preview.7 支持范围限定为 Windows x64、Node.js `24.16.0` 与 ZCode Desktop `3.18.2.10443`。旧 JSON/CLI 生产链退役决策见 [ADR-029](decisions/ADR-029-legacy-runtime-retirement.md)。
+当前 Preview 发布候选身份为 `2.0.0-preview.8`。`package.json`、`package-lock.json`、插件 manifest、MCP server version、官方签名 Runtime Host 与固定官方 Host/BOM 必须来自同一提交、Tag 和 Release。Preview.8 支持范围限定为 Windows x64、Node.js `24.16.0` 与 ZCode Desktop `3.18.2.10443`。旧 JSON/CLI 生产链退役决策见 [ADR-029](decisions/ADR-029-legacy-runtime-retirement.md)。
 
 ADR-032 已接受且已在 Preview.5 实现“现有 Worker 内官方 Host”。ADR-033 的账户 refresh 协调、ADR-034 的正常 Cleanup 复用和 ADR-035 的平台选择由固定上游 patch 与同一 Worker 实现。ADR-037 已接受“官方 Host 拥有认证、Bridge 不维护第二套凭据/身份系统”的目标；Preview.6 已实现该接线。真实 Coding Plan 完整 E2E 和 Start Plan 核心功能 E2E 已通过；历史 Start Plan 完整 E2E 因 Workspace 内 PowerShell cache 保持 FAIL。Desktop 3.18.0/3.18.1 保持 `NOT_VERIFIED`，不得写成 PASS 或不兼容。
 
