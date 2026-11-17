@@ -85,6 +85,42 @@ zero-model protocol smoke:
 Evidence:
 `.run/v5-installed-bundle-node-billing-20261118/live-probe/smoke-evidence.json`
 
+### Full official AppServer assembly
+
+The successful path did not substitute only a model adapter. The unchanged
+installed bundle executed its full AppServer protocol stack:
+
+- `runZCodeProtocolAgent`
+- process-level `startProcessProviderRegistryRuntime`
+- `createZCodeApp`
+- isolated session store and plugin preparation
+- runtime preferences and Provider Registry account configuration
+- the installed model request-security edition
+
+The billing evidence records the complete RPC sequence:
+
+- `provider/updateAccountConfig`: PASS
+- `session/create`: PASS
+- `session/requestRuntimePreferences`: PASS
+- `session/subscribe`: PASS
+- `session/send`: PASS
+- `interaction/requestProviderRuntimeHeaders`: two PASS calls
+- `interaction/requestOfficialMcpAuthHeaders`: non-secret unavailability response
+
+The harness still supplied the account request headers through the existing
+official auth service. In the minimal run, the official credential store was
+read-only, Project Location state was in-memory, and the Device MID was
+fixture-generated. The shared keyring lock was observed and released normally.
+
+This verifies a full official AppServer assembly, not merely an Account Resolver
+or model-client substitution.
+
+The separate Desktop Shell `createLocalServices` graph was not started. It is
+not present as a direct entry point in the installed AppServer bundle, and the
+installed `ZCode.exe` run-as-Node attempt failed before a model request. The
+successful supported boundary used by this research is therefore the installed
+AppServer process, not the Desktop Shell host graph.
+
 ## Real Billing Experiments
 
 All experiments used `GLM-5.3-Flash`, personal Coding Plan, reasoning `low`,
