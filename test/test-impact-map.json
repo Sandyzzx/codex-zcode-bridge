@@ -222,6 +222,13 @@
       ]
     },
     {
+      "id": "cost-lab-tools",
+      "description": "Internal Cost Lab billing reader, native request probe, reconciliation, and evidence tooling.",
+      "paths": [
+        "tools/cost-lab/**"
+      ]
+    },
+    {
       "id": "documentation-only",
       "description": "Technical docs and reports that require T0 but normally select no executable test.",
       "paths": [
@@ -996,6 +1003,38 @@
       "gate": "T1",
       "domains": [
         "appserver-adapter"
+      ]
+    },
+    {
+      "file": "tools/cost-lab/test/coding-plan-billing.test.mjs",
+      "type": "Unit",
+      "gate": "T1",
+      "domains": [
+        "cost-lab-tools"
+      ]
+    },
+    {
+      "file": "tools/cost-lab/test/native-request-probe.test.mjs",
+      "type": "Unit",
+      "gate": "T1",
+      "domains": [
+        "cost-lab-tools"
+      ]
+    },
+    {
+      "file": "tools/cost-lab/test/path-discovery.test.mjs",
+      "type": "Unit",
+      "gate": "T1",
+      "domains": [
+        "cost-lab-tools"
+      ]
+    },
+    {
+      "file": "tools/cost-lab/test/vendor-loader.test.mjs",
+      "type": "Unit",
+      "gate": "T1",
+      "domains": [
+        "cost-lab-tools"
       ]
     }
   ],

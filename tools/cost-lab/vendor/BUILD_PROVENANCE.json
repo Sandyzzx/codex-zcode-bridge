@@ -1,0 +1,59 @@
+{
+  "format_version": 1,
+  "artifact": "tools/cost-lab/vendor/official-billing-runtime.mjs",
+  "official_version": "3.18.2",
+  "official_commit": "fec975905a2abd4c07e35c40d51fa097a2258ec9",
+  "official_tree": "5e90fec80706b8381f94e4eef48cf821b9868916",
+  "source_tree_dirty": true,
+  "source_note": "Built from the existing ignored .run/official-source-build experiment tree. The experiment tree contains local transport, OAuth, credential, and test patches from earlier experiments. The committed bundle also contains the Cost Lab exact-origin and redirect-error guard patch; clean-source reproducibility remains PARTIAL.",
+  "entry": "packages/services/src/official-host/runtimeHostEntry.ts",
+  "entry_sha256": "9962190AFC02EEF0E4094A2F769D233086523DC489EFED6410DA2C6F4FC7585A",
+  "facade": "packages/services/src/official-host/costLabBillingRuntime.ts",
+  "facade_sha256": "E8300FA8C903752C2C002541D4F5962DF75846E48EFCC986616B63F602840F62",
+  "builder": {
+    "name": "esbuild",
+    "version": "0.28.2",
+    "node": "24.16.0",
+    "target": "node24",
+    "format": "esm",
+    "platform": "node"
+  },
+  "external_dependencies": [
+    {
+      "name": "@napi-rs/keyring",
+      "version": "2.1.2",
+      "native_package": "@napi-rs/keyring-win32-x64-msvc@2.1.2"
+    }
+  ],
+  "bundle_sha256": "519E8CCBAE36AC5651359B6301425E92B02D2BE88A1F9C31DCB669D346E6E0B2",
+  "integration_patch": {
+    "name": "cost-lab-exact-origin-read-only-guard",
+    "allowed_origins": [
+      "https://bigmodel.cn",
+      "https://zcode.z.ai",
+      "https://api.z.ai"
+    ],
+    "redirect_policy": "error",
+    "write_exception": "POST /api/biz/v1/organization/:org/projects/:project/api_keys/:key/access_tokens"
+  },
+  "native_files": [
+    {
+      "path": "tools/cost-lab/vendor/node_modules/@napi-rs/keyring/index.js",
+      "sha256": "8A89DB37F981D05B484EB063ADAE3399660AE7734AD38797463E5691382F5036"
+    },
+    {
+      "path": "tools/cost-lab/vendor/node_modules/@napi-rs/keyring/package.json",
+      "sha256": "4BA8C90AC72BE27FCB3337ED7BC0159C68747E0824294DF5F2AAAEB03130CD4F"
+    },
+    {
+      "path": "tools/cost-lab/vendor/node_modules/@napi-rs/keyring/LICENSE",
+      "sha256": "02965ED67E29F871A53F7A7AFA593A0DDC8020F86CCCE0FAAF1AA59215B5269E"
+    }
+  ],
+  "native_reuse": {
+    "package": "@napi-rs/keyring-win32-x64-msvc@2.1.2",
+    "source": "plugins/codex-zcode-bridge/worker/vendor/official-host/win32-x64-node24.16.0-zcode3.18.2-fec97590/node_modules/@napi-rs/keyring-win32-x64-msvc/keyring.win32-x64-msvc.node",
+    "sha256": "52B16658275B7848F8081A6542FEE3448F1B1C5D3A36487107AE0E7CEC95AC6F",
+    "loader": "NAPI_RS_NATIVE_LIBRARY_PATH"
+  }
+}

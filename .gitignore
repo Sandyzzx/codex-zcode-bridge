@@ -1,4 +1,11 @@
 node_modules/
+!tools/cost-lab/vendor/node_modules/
+!tools/cost-lab/vendor/node_modules/@napi-rs/
+!tools/cost-lab/vendor/node_modules/@napi-rs/keyring/
+!tools/cost-lab/vendor/node_modules/@napi-rs/keyring/LICENSE
+!tools/cost-lab/vendor/node_modules/@napi-rs/keyring/index.js
+!tools/cost-lab/vendor/node_modules/@napi-rs/keyring/package.json
+tools/cost-lab/vendor/node_modules/@napi-rs/keyring-win32-x64-msvc/
 # The fixed Windows Official Host artifact carries this exact native closure
 # inside its node_modules layout; the runtime resolves it by package name.
 !plugins/codex-zcode-bridge/worker/vendor/official-host/win32-x64-node24.16.0-zcode3.18.0-b95ebaff/node_modules/
