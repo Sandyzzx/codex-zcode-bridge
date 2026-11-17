@@ -42,6 +42,12 @@ export const OFFICIAL_HOST_ROOT = path.join(
   "win32-x64-node24.16.0-zcode3.18.2-fec97590",
 );
 
+const INSTALLED_ZCODE_ROOT = path.join(
+  process.env.LOCALAPPDATA ?? path.join(process.env.USERPROFILE ?? "", "AppData", "Local"),
+  "Programs",
+  "ZCode",
+);
+
 const HOST_ASSETS = Object.freeze({
   hostModule: {
     relativePath: "official-host-runtime.mjs",
@@ -60,6 +66,29 @@ const HOST_ASSETS = Object.freeze({
   },
   runtimeHost: {
     relativePath: "zcode-runtime-host.exe",
+    bytes: 179_608,
+    sha256: "c2c8ff5ff28cbddc4f177c094aa67c322830889612251bd173baaabc89379ab4",
+  },
+});
+
+const INSTALLED_OFFICIAL_ASSETS = Object.freeze({
+  zcodeExecutable: {
+    relativePath: "ZCode.exe",
+    bytes: 246_332_312,
+    sha256: "e853398ea2023e3e472fd2799389ad02445df5c2bfd36b2ed1f1e3dfe3dc958e",
+  },
+  appServerEntry: {
+    relativePath: path.join("resources", "glm", "zcode.cjs"),
+    bytes: 15_675_386,
+    sha256: "08726b5ef69e1e9072828baa4656713cb3aac93bb096938681278c5600312b2c",
+  },
+  builtinProviderConfig: {
+    relativePath: path.join("resources", "config", "provider", "zcode-builtin.json"),
+    bytes: 261_659,
+    sha256: "ef3d64656cb5281cce292b77ef12e96b5251582cfb00cdf9eb08e3d4565abb69",
+  },
+  runtimeHost: {
+    relativePath: path.join("resources", "tools", "runtime-host", "zcode-runtime-host.exe"),
     bytes: 179_608,
     sha256: "c2c8ff5ff28cbddc4f177c094aa67c322830889612251bd173baaabc89379ab4",
   },
@@ -84,6 +113,24 @@ const BILLING_VARIANTS = Object.freeze({
     experimentId: "bridge-b-v4-official-device-mid",
     projectLocationMode: "in-memory",
     deviceIdentityMode: "official-reused",
+  }),
+  "v5-installed-official-app-server": Object.freeze({
+    experimentId: "bridge-b-v5-installed-official-app-server",
+    projectLocationMode: "official-read-only",
+    deviceIdentityMode: "official-reused",
+    runtimeSource: "installed-official",
+  }),
+  "v5-installed-official-bundle-node": Object.freeze({
+    experimentId: "bridge-b-v5-installed-official-bundle-node",
+    projectLocationMode: "official-read-only",
+    deviceIdentityMode: "official-reused",
+    runtimeSource: "installed-bundle-node",
+  }),
+  "v5-installed-official-bundle-node-isolated-context": Object.freeze({
+    experimentId: "bridge-b-v5-installed-official-bundle-node-isolated-context",
+    projectLocationMode: "in-memory",
+    deviceIdentityMode: "fixture-generated",
+    runtimeSource: "installed-bundle-node",
   }),
 });
 const APPROVED_TRANSIENT_LOCK = "credentials.json.keyring.lock";
@@ -182,21 +229,59 @@ async function sha256File(filePath) {
 }
 
 export async function verifyLiveHostAssets(root = OFFICIAL_HOST_ROOT) {
+  return verifyAssetDefinition(root, HOST_ASSETS, "official host");
+}
+
+async function verifyAssetDefinition(root, definitions, label) {
   const verified = {};
-  for (const [name, definition] of Object.entries(HOST_ASSETS)) {
+  for (const [name, definition] of Object.entries(definitions)) {
     const fullPath = path.resolve(root, definition.relativePath);
     assertInside(root, fullPath);
     const facts = await stat(fullPath);
     if (!facts.isFile() || facts.size !== definition.bytes) {
-      throw new Error(`official host asset size mismatch: ${name}`);
+      throw new Error(`${label} asset size mismatch: ${name}`);
     }
-    const digest = await sha256File(fullPath);
-    if (digest !== definition.sha256) {
-      throw new Error(`official host asset digest mismatch: ${name}`);
+    if (definition.sha256 !== "UNVERIFIED_BY_MANIFEST") {
+      const digest = await sha256File(fullPath);
+      if (digest !== definition.sha256) {
+        throw new Error(`${label} asset digest mismatch: ${name}`);
+      }
     }
     verified[name] = fullPath;
   }
   return verified;
+}
+
+export async function verifyInstalledOfficialAssets(
+  root = INSTALLED_ZCODE_ROOT,
+) {
+  return verifyAssetDefinition(root, INSTALLED_OFFICIAL_ASSETS, "installed official");
+}
+
+async function resolveVariantAssets(variantConfig) {
+  const hostAssets = await verifyLiveHostAssets();
+  if (!["installed-official", "installed-bundle-node"].includes(
+    variantConfig.runtimeSource,
+  )) {
+    return {
+      ...hostAssets,
+      runtimeSource: "vendored-official",
+      command: process.execPath,
+      useElectronAsNode: false,
+    };
+  }
+  const installed = await verifyInstalledOfficialAssets();
+  return {
+    ...hostAssets,
+    appServerEntry: installed.appServerEntry,
+    builtinProviderConfig: installed.builtinProviderConfig,
+    runtimeHost: installed.runtimeHost,
+    runtimeSource: variantConfig.runtimeSource,
+    command: variantConfig.runtimeSource === "installed-official"
+      ? installed.zcodeExecutable
+      : process.execPath,
+    useElectronAsNode: variantConfig.runtimeSource === "installed-official",
+  };
 }
 
 export function patchReadOnlyRuntimeExports(source) {
@@ -653,10 +738,11 @@ async function prepareIsolatedFixture(
     experimentId = "isolated-smoke",
     officialDataBase = DEFAULT_OFFICIAL_DATA_BASE,
     deviceIdentityMode = "fixture-generated",
+    assets = null,
   } = {},
 ) {
   const paths = isolatedPaths(runRoot);
-  const assets = await verifyLiveHostAssets();
+  assets ??= await verifyLiveHostAssets();
   await mkdir(paths.v2, { recursive: true });
   await mkdir(paths.workspace, { recursive: true });
   await mkdir(paths.runtimeDirectory, { recursive: true });
@@ -1096,9 +1182,10 @@ function createManager(module, assets, env, paths) {
         ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: assets.builtinProviderConfig,
         ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: paths.providerConfig,
         ZCODE_RUNTIME_HOST_PATH: assets.runtimeHost,
+        ...(assets.useElectronAsNode ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
       };
       return {
-        command: process.execPath,
+        command: assets.command,
         args: [
           assets.appServerEntry,
           "app-server",
@@ -1217,6 +1304,10 @@ function bindProtocolHandlers(client, state) {
         memoryEnabled: false,
         askUserQuestionAutoResolutionEnabled: false,
       });
+      return;
+    }
+    if (method === "interaction/requestOfficialMcpAuthHeaders") {
+      await reply({ ok: false, reason: "official_auth_unavailable" });
       return;
     }
     if (method === "interaction/requestProviderRuntimeHeaders") {
@@ -1469,12 +1560,13 @@ export async function runIsolatedSmoke({
     assertInside(root, candidate);
   }
   const sourceAudit = await auditOfficialAssemblySources({ officialSourceRoot });
-  const assets = await verifyLiveHostAssets();
+  const assets = await resolveVariantAssets(variantConfig);
   const experimentId = protocolDiagnostic ? "official-protocol-smoke" : "official-network-smoke";
   const { paths, env, deviceIdentity } = await prepareIsolatedFixture(runRoot, {
     experimentId,
     officialDataBase,
     deviceIdentityMode: variantConfig.deviceIdentityMode,
+    assets,
   });
   const sharedBefore = await captureSharedState(officialDataBase);
   const processesBefore = listProcesses();
@@ -1515,6 +1607,7 @@ export async function runIsolatedSmoke({
       official_services: {
         initialized: false,
         app_server_initialized: false,
+        app_server_source: assets.runtimeSource,
         credential_read_attempted: false,
         shared_lock_path: auth.shared_lock_root ?? null,
         keyring_lock_lifecycle: auth.lock_lifecycle ?? null,
@@ -1697,6 +1790,9 @@ export async function runIsolatedSmoke({
     },
     official_services: {
       app_server_initialized: typeof sessionId === "string",
+      app_server_source: assets.runtimeSource,
+      app_server_entry: projectRelative(assets.appServerEntry),
+      app_server_command: path.basename(assets.command),
       session_created: typeof sessionId === "string",
       app_server_pid: runtimePid,
       credential_service: auth.credential_store,
@@ -2006,11 +2102,10 @@ export function billingSnapshotView(snapshot) {
   throw new Error("official billing snapshot shape is unsupported");
 }
 
-function modelHourBucket(snapshot, modelId, hour) {
+function modelHourBucket(snapshot, modelId, hour, { missingAsZero = false } = {}) {
   const rows = snapshot?.model_usage?.modelDataList;
   if (!Array.isArray(rows)) throw new Error("official snapshot model rows are missing");
   const row = rows.find((entry) => entry?.modelName === modelId);
-  if (!row) throw new Error(`official model row is missing: ${modelId}`);
   const keys = [
     "tokensUsage",
     "creditsUsage",
@@ -2021,6 +2116,10 @@ function modelHourBucket(snapshot, modelId, hour) {
     "uncachedInputCreditsUsage",
     "outputCreditsUsage",
   ];
+  if (!row && missingAsZero) {
+    return Object.fromEntries(keys.map((key) => [key, 0]));
+  }
+  if (!row) throw new Error(`official model row is missing: ${modelId}`);
   const bucket = {};
   for (const key of keys) {
     if (!Array.isArray(row[key]) || row[key].length !== 24) {
@@ -2056,7 +2155,12 @@ export function validateBeforeBillingSnapshot(snapshot, now = new Date()) {
     throw new Error("official before snapshot is stale or from the future");
   }
 
-  const target = modelHourBucket(snapshot, TARGET_MODEL_ID, current.hour);
+  const target = modelHourBucket(
+    snapshot,
+    TARGET_MODEL_ID,
+    current.hour,
+    { missingAsZero: true },
+  );
   const activeModelBuckets = [];
   for (const row of snapshot.model_usage.modelDataList) {
     if (typeof row?.modelName !== "string" || row.modelName === TARGET_MODEL_ID) continue;
@@ -2122,11 +2226,12 @@ export async function runBillingProbe({
   }
   const beforeWindow = validateBeforeBillingSnapshot(beforeSnapshot);
   const sourceAudit = await auditOfficialAssemblySources({ officialSourceRoot });
-  const assets = await verifyLiveHostAssets();
+  const assets = await resolveVariantAssets(variantConfig);
   const { env, deviceIdentity } = await prepareIsolatedFixture(runRoot, {
     experimentId,
     officialDataBase,
     deviceIdentityMode: variantConfig.deviceIdentityMode,
+    assets,
   });
   const sharedBefore = await captureSharedState(officialDataBase);
   const processesBefore = listProcesses();
@@ -2304,6 +2409,9 @@ export async function runBillingProbe({
       device_identity_mode: variantConfig.deviceIdentityMode,
       reasoning_level: conversation?.reasoning_level ?? null,
       prompt_kind: "exact_marker_json",
+      app_server_source: assets.runtimeSource,
+      app_server_entry: projectRelative(assets.appServerEntry),
+      app_server_command: path.basename(assets.command),
       real_model_requests: 1,
       automatic_retries: 0,
       before_window: beforeWindow,
@@ -2484,10 +2592,9 @@ export function analyzeBillingSnapshots(before, after, run) {
   if (!Array.isArray(beforeRows) || !Array.isArray(afterRows)) {
     throw new Error("official model rows are missing from before/after snapshots");
   }
-  const beforeModel = beforeRows.find((entry) => entry?.modelName === TARGET_MODEL_ID);
   const afterModel = afterRows.find((entry) => entry?.modelName === TARGET_MODEL_ID);
-  if (!beforeModel || !afterModel) {
-    throw new Error("target official model row is missing from before/after snapshots");
+  if (!afterModel) {
+    throw new Error("target official model row is missing from after snapshot");
   }
   const sourceKeys = [
     "tokensUsage",
@@ -2499,9 +2606,15 @@ export function analyzeBillingSnapshots(before, after, run) {
     "uncachedInputCreditsUsage",
     "outputCreditsUsage",
   ];
+  const beforeModelBucket = modelHourBucket(
+    before,
+    TARGET_MODEL_ID,
+    hour,
+    { missingAsZero: true },
+  );
   const delta = {};
   for (const key of sourceKeys) {
-    const left = finiteNumber(beforeModel[key]?.[hour]);
+    const left = finiteNumber(beforeModelBucket[key]);
     const right = finiteNumber(afterModel[key]?.[hour]);
     delta[key] = left !== null && right !== null ? right - left : null;
   }
@@ -2561,7 +2674,7 @@ export function analyzeBillingSnapshots(before, after, run) {
     delta.tokensUsage !== null &&
     Math.abs(requestTokenTotal - delta.tokensUsage) < 1e-6;
 
-  const targetBucketBefore = modelHourBucket(before, TARGET_MODEL_ID, hour);
+  const targetBucketBefore = beforeModelBucket;
   const contaminatingModelBuckets = [];
   const modelNames = new Set([
     ...beforeRows.map((entry) => entry?.modelName).filter((name) => typeof name === "string"),
@@ -2569,8 +2682,18 @@ export function analyzeBillingSnapshots(before, after, run) {
   ]);
   for (const modelName of modelNames) {
     if (modelName === TARGET_MODEL_ID) continue;
-    const beforeBucket = modelHourBucket(before, modelName, hour);
-    const afterBucket = modelHourBucket(after, modelName, hour);
+    const beforeBucket = modelHourBucket(
+      before,
+      modelName,
+      hour,
+      { missingAsZero: true },
+    );
+    const afterBucket = modelHourBucket(
+      after,
+      modelName,
+      hour,
+      { missingAsZero: true },
+    );
     if (beforeBucket.tokensUsage !== afterBucket.tokensUsage ||
         beforeBucket.creditsUsage !== afterBucket.creditsUsage) {
       contaminatingModelBuckets.push({

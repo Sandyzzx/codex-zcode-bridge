@@ -415,6 +415,30 @@ test("protocol smoke honors its isolated run root argument", () => {
     parseArgs(["--billing", "--variant", "v4-official-device-mid"]).variant,
     "v4-official-device-mid",
   );
+  assert.equal(
+    parseArgs([
+      "--billing",
+      "--variant",
+      "v5-installed-official-app-server",
+    ]).variant,
+    "v5-installed-official-app-server",
+  );
+  assert.equal(
+    parseArgs([
+      "--billing",
+      "--variant",
+      "v5-installed-official-bundle-node",
+    ]).variant,
+    "v5-installed-official-bundle-node",
+  );
+  assert.equal(
+    parseArgs([
+      "--billing",
+      "--variant",
+      "v5-installed-official-bundle-node-isolated-context",
+    ]).variant,
+    "v5-installed-official-bundle-node-isolated-context",
+  );
   assert.throws(
     () => parseArgs(["--billing", "--variant", "unknown"]),
     /unknown variant/u,
@@ -503,6 +527,19 @@ test("before-snapshot gate permits differential attribution from a nonempty hour
   const differential = validateBeforeBillingSnapshot(before, now);
   assert.equal(differential.status, "PASS");
   assert.equal(differential.target_bucket_before.tokensUsage, 1);
+});
+
+test("before-snapshot gate treats an absent model row as an empty bucket", () => {
+  const now = new Date("2026-11-18T00:05:00.000Z");
+  const before = snapshot("2026-11-18T00:04:00.000Z", []);
+  before.range_start_date = "2026-11-18";
+  before.range_end_date = "2026-11-18";
+
+  const result = validateBeforeBillingSnapshot(before, now);
+  assert.equal(result.status, "PASS");
+  assert.equal(result.hour, 8);
+  assert.equal(result.target_bucket_before.tokensUsage, 0);
+  assert.equal(result.target_bucket_before.creditsUsage, 0);
 });
 
 test("normalized billing snapshots retain official hour and identity evidence", () => {
@@ -635,6 +672,48 @@ test("billing analysis uses the official aggregate when an auxiliary usage is mi
   assert.equal(result.token_match, "PASS");
   assert.equal(result.discount, "FAIL");
   assert.ok(Math.abs(result.effective_extra_discount_ratio - 1.0000087108772726) < 1e-12);
+});
+
+test("billing analysis treats an absent before model row as zero", () => {
+  const before = snapshot("2026-11-18T00:04:00.000Z", []);
+  before.range_start_date = "2026-11-18";
+  before.range_end_date = "2026-11-18";
+  const after = snapshot("2026-11-18T00:12:00.000Z", [
+    modelRow("GLM-5.3-Flash", {
+      tokensUsage: atHour(8, 95),
+      creditsUsage: atHour(8, 0.0215),
+      cachedInputTokensUsage: atHour(8, 0),
+      uncachedInputTokensUsage: atHour(8, 21),
+      outputTokensUsage: atHour(8, 74),
+      cachedInputCreditsUsage: atHour(8, 0),
+      uncachedInputCreditsUsage: atHour(8, 0.0016),
+      outputCreditsUsage: atHour(8, 0.0198),
+    }),
+  ]);
+  after.range_start_date = "2026-11-18";
+  after.range_end_date = "2026-11-18";
+  const run = {
+    status: "PASS",
+    experiment: {
+      started_at: "2026-11-18T00:05:00.000Z",
+      finished_at: "2026-11-18T00:06:00.000Z",
+    },
+    runtime: {
+      usage_numeric: {
+        cachedInputTokens: 0,
+        uncachedInputTokens: 21,
+        outputTokens: 74,
+        totalTokens: 95,
+      },
+    },
+  };
+
+  const result = analyzeBillingSnapshots(before, after, run);
+  assert.deepEqual(result.window.reasons, []);
+  assert.equal(result.status, "PASS");
+  assert.equal(result.window.target_bucket_before.tokensUsage, 0);
+  assert.equal(result.token_match, "PASS");
+  assert.equal(result.discount, "PASS");
 });
 
 test("billing identity comparison uses only local fingerprints", () => {

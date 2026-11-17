@@ -1,8 +1,10 @@
-# Cost Lab Discount Causal Probe V4 Hypothesis Ledger
+# Cost Lab Discount Autonomous Research Ledger
 
 > Status: RESEARCH
-> Last updated: 2026-11-17
-> Scope: Evidence available through `c13c4ac941a661d04b92d4acf23818a578f2dbac` plus the V4 isolated harness changes.
+> Last updated: 2026-11-18
+> Scope: Evidence available through
+> `06ef9e0cb3371cffd9181fb6b4a993a71d1c5eb0` plus the V5 official
+> execution-path research.
 
 This ledger orders source-supported explanations for why Native Coding Plan requests received the observed additional `0.67` credit factor while the unchanged Bridge B baseline received `1.0`. The official credits, not request shape or header similarity, decide each experiment.
 
@@ -16,6 +18,27 @@ This ledger orders source-supported explanations for why Native Coding Plan requ
 | Billing scene | `CODING_PLAN` | `CODING_PLAN` |
 | Actual / expected-normal credits | `0.6699917497` | `1.0000277588` |
 | Evidence strength | aggregate hourly billing | clean-window request plus hourly billing |
+
+Fresh V5 Native control:
+
+- Run: `.run/native-v5/native-v5-20261117-02`
+- Three model HTTP requests: main turn, `session_title`, and
+  `project_memory_extract`.
+- Request-level observed usage: uncached input `29,088`, output `22`.
+- The `project_memory_extract` request usage is `USAGE_MISSING`.
+- Official `23:00` bucket before: uncached `13,743`, cached `0`, output `55`,
+  credits `1.6024`.
+- Official `23:00` bucket after settlement: uncached `72,858`, cached `320`,
+  output `105`, credits `6.1767`.
+- Delta: uncached `59,115`, cached `320`, output `50`, total `59,485`,
+  credits `4.5743`.
+- Expected normal at off-peak `0.5`: `6.827185`.
+- Effective extra ratio: `0.6700126040`.
+
+This reproduces the Native `0.67` entitlement on the current account and model.
+The missing auxiliary usage prevents assigning every residual token to one HTTP
+request, but does not prevent task-level billing attribution because only this
+control task ran in the differential window.
 
 Official source baseline:
 
@@ -161,12 +184,56 @@ therefore does not restore `0.67`.
 | Risk | High. It is confounded with context size, token counts, and prompt assembly, and cannot independently prove a discount rule. |
 | Confidence | Low. |
 
+### H6: Installed Official AppServer Request-Signing Edition
+
+| Field | Evidence |
+|---|---|
+| Description | The official installed Desktop AppServer bundle contains the full `request-security-edition` client-signing implementation. The vendored AppServer bundle used by earlier Bridge experiments contains an open-source fallback that returns the identity transport unchanged. |
+| Installed file | `C:\Users\Sandy\AppData\Local\Programs\ZCode\resources\glm\zcode.cjs` |
+| Installed identity | size `15,675,386`, SHA-256 `08726b5ef69e1e9072828baa4656713cb3aac93bb096938681278c5600312b2c` |
+| Vendored file | `plugins/codex-zcode-bridge/worker/vendor/official-host/win32-x64-node24.16.0-zcode3.18.2-fec97590/app-server/zcode.cjs` |
+| Vendored identity | size `31,009,692`, SHA-256 `b55ba68c3b7939afaffb4d373d15594817ad3319fdecfbe26640ce4b218cf639` |
+| Installed behavior | `createModelRequestSecurityState` creates `OfficialRequestSecurity`; individual Coding Plan providers are classified as requiring client request signing; the signer performs `get_sign_key` handshake, proof-of-work, and signed request headers. |
+| Vendored behavior | `createModelRequestSecurityState` returns `protectTransport: ({ transport }) => transport`; no signer, handshake, observations, or signed request path exists in this build. |
+| Expected billing effect | If the campaign entitlement is enforced by the official client-signing path, the installed AppServer could recover `0.67` while the vendored bundle cannot. |
+| Test method | V5 runs the unchanged installed AppServer bundle through the existing protocol harness under the system Node runtime, with isolated data root and the same official auth service. Protocol smoke is zero-model; real Coding Plan requests follow only after billing and lifecycle gates pass. |
+| Safety boundary | No signing implementation is copied, reconstructed, or bypassed. The experiment invokes the existing official signed installation as a normal local AppServer. |
+| Current status | `BILLING_PASS_REPRODUCED`; the isolated-context minimal variant also receives `0.67`. |
+
+Real H6 evidence:
+
+| Run | Project location | Device identity | Official tokens | Actual credits | Expected normal | Effective extra ratio |
+|---|---|---|---:|---:|---:|---:|
+| `.run/v5-installed-bundle-node-billing-20261118` | official read-only | official reused | 22,650 | 1.7574 | 2.622990 | 0.6699987419 |
+| `.run/v5-installed-bundle-node-repro-20261118` | official read-only | official reused | 22,657 | 1.7469 | 2.607376 | 0.6699839225 |
+| `.run/v5-installed-bundle-node-isolated-context-20261118` | in-memory | fixture generated | 22,658 | 1.7397 | 2.596508 | 0.6700152667 |
+
+All three differential windows had no other model activity, matched official
+token categories, retained local billing identity parity, and passed cleanup,
+shared-state, and Host Wake gates.
+
+The installed bundle's captured request sequence was:
+
+1. `GET https://zcode.z.ai/api/v1/agent/configs`
+2. `POST https://open.bigmodel.cn/api/paas/c1f3a7e2/v2/client` with the
+   official signing handshake body shape and HTTP `200`
+3. `POST https://zcode.z.ai/api/v1/ultra/anthropic/v1/messages`
+
+The previously successful vendored-bundle controls had no signing handshake
+and billed at approximately `1.0`. The installed bundle's request-security
+implementation is therefore the strongest associated cause. Exact causal
+necessity remains `SUPPORTED`, not proven by an isolated negative control that
+disables only signing inside the installed bundle.
+
 ## Experiment Rules
 
-1. Sixteen minutes are required after using a billing hour to avoid overlapping the next V4 variant.
+1. A before/after differential may reuse a nonempty billing hour only after the
+   prior request has settled and when no other model bucket activity overlaps.
 2. A fresh before snapshot must be less than ten minutes old and the target hour bucket must have no other `GLM-5.3-Flash` activity.
 3. Each variant gets at most one real task. Any automatic retry is part of that task budget.
 4. H1 is considered exercised only if its persisted location metrics record a load and cache hit.
 5. About `0.67` is `PASS`; about `1.0` is `FAIL`; a mixed or contaminated hour is `INCONCLUSIVE`.
-6. A first successful variant must be reproduced once in a new clean hour before `DISCOUNT_TRIGGER_REPRODUCED: PASS`.
+6. A first successful variant must be reproduced before
+   `DISCOUNT_TRIGGER_REPRODUCED: PASS`; a distinct differential window in the
+   same settled hour is acceptable.
 7. No production Bridge authentication, routing, Worker, Manager, SQLite Authority, Magpie, Host Wake, Start Plan, Desktop installation, login state, or credential contents are changed.
