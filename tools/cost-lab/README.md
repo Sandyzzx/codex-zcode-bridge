@@ -149,6 +149,111 @@ RPC 仅保存事件类型和 started/completed/failed 计数，不保存 payload
 - HTTP method 在现有日志中通常不可见，仍标记为 `UNKNOWN`。
 - 缺失 Usage 必须保留 `USAGE_MISSING`，不能记成零。
 
+以上边界适用于历史 Native 被动重放。实时 Bridge 实验使用下一节的网络探针，
+不会再依赖 `model_io` 或日志推断辅助 HTTP。
+
+## Live Network And Identity Probe
+
+`official-assembly-live-probe.mjs` 在独立目录中启动固定官方 Host/AppServer，
+并通过 `NODE_OPTIONS --require` 和 Harness 自重启同时观测：
+
+- Bridge/Harness 主进程及官方 AppServer。
+- `global fetch`、bundled Undici、`node:http`、`node:https`。
+- SSE、失败、超时、重定向、请求状态和响应 Metadata。
+- 官方 `process/networkCapture` 的独立请求清单。
+- AppServer 双向 RPC、`session/send` 与模型 HTTP 的时间关联。
+
+零计费协议门禁：
+
+```powershell
+node tools/cost-lab/official-assembly-live-probe.mjs `
+  --protocol-smoke `
+  --run-root .run/protocol-smoke
+```
+
+该模式创建 Session 和订阅，但不发送模型 Prompt。输出
+`.run/protocol-smoke/live-probe/smoke-evidence.json` 以及
+`network-evidence.json`。
+
+身份证据只保存本地 SHA-256 指纹和长度：
+
+- Host `requestAuth.apiKey` 与实际模型请求 `Authorization` / `x-api-key` 对照。
+- Project Token 获取路径中的 Organization、Project、API Key ID 会被替换为
+  `{organization_id}`、`{project_id}`、`{api_key_id}`，参数原件不落盘。
+- `apiKeyId` 属于官方路由 Metadata，不是模型请求 Header；因此
+  `api_key_id_transport: PROJECT_PATH` 表示已核对 Host 值与 Project Token
+  请求路径指纹，而不是声称它是模型 Header。
+- `accountScope` 只记录本地指纹，不保存 JWT、OAuth、Project Token 或 API Key。
+
+Coverage 采用 fail-closed：
+
+- Harness 与官方 AppServer 都必须初始化 preload。
+- 官方 Capture Control 必须生效，完成态 AppServer 请求必须与官方 Capture
+  交叉匹配。仅在 Capture 停止后终止的失败请求可以保留为 preload-only，
+  但必须有完整 Header、请求体、终态和结束时间，且至少一个完成态请求已由官方
+  Capture 独立确认；未解释的 preload-only 记录仍会降为 `PARTIAL`。
+- 所有记录必须有已知 process role、HTTP method、Header Matrix、终态和状态。
+- POST/PUT/PATCH 必须有请求结构摘要。
+- 所有 RPC 必须有 request/response shape，模型 HTTP 必须能关联到
+  `session/send`。
+- 模型端点同时识别官方直接 `/anthropic` 路径和 Ultra Gateway
+  `/api/v1/ultra/anthropic/v1/messages`；后者不能因路径不含 `/api/anthropic`
+  被误记为 `other`。
+- Host API Key、Wire API Key 和 Project API Key ID 指纹必须一致，且必须观察到
+  `accountScope`，`IDENTITY_OBSERVABILITY` 才为 `COMPLETE`。
+
+浏览器、语音 WebSocket 和未执行的 MCP 路径不属于隔离 B 任务的实际请求集；
+它们被列入静态入口清单并标记为 `NOT_APPLICABLE`，不能据此宣称已运行时覆盖。
+
+静态入口与绕过扫描：
+
+```powershell
+node tools/cost-lab/official-assembly-probe.mjs
+```
+
+输出 `network_entrypoints` 和 `network_bypass_scan`，覆盖 Undici Fetch、
+Node HTTP(S)、官方 Capture Channel、Bridge fd IPC，并检查目标源码是否存在
+直接 HTTP/2、`tls.connect` 或 `net.connect/createConnection`。
+
+## Isolated Billing Probe
+
+先取得 fresh before Snapshot：
+
+```powershell
+node tools/cost-lab/coding-plan-billing.mjs snapshot `
+  --data-root "D:\Program Files" `
+  --json > .run/fresh-before.json
+```
+
+在同一个新 Run Root 完成协议门禁后执行：
+
+```powershell
+node tools/cost-lab/official-assembly-live-probe.mjs `
+  --protocol-smoke `
+  --run-root .run/official-b-v2
+
+node tools/cost-lab/official-assembly-live-probe.mjs `
+  --billing `
+  --run-root .run/official-b-v2 `
+  --before-snapshot .run/fresh-before.json
+```
+
+`billing-started.json` 一旦存在，代码会拒绝第二次真实请求。Billing 模式只有在
+协议 smoke、共享状态不变、Cleanup、Host Wake、同一账单小时和完整 Coverage
+全部通过时，`billing-evidence.json.status` 才为 `PASS`。
+
+取得 after Snapshot 后：
+
+```powershell
+node tools/cost-lab/official-assembly-live-probe.mjs `
+  --analyze `
+  --before-snapshot .run/fresh-before.json `
+  --after-snapshot .run/fresh-after.json `
+  --billing-evidence .run/official-b-v2/live-probe/billing-evidence.json
+```
+
+缺少其他账户活动证据时，小时桶差分仍保持 `INCONCLUSIVE`。
+
 ## 积分公式
 
 ```text

@@ -1022,6 +1022,30 @@
       ]
     },
     {
+      "file": "tools/cost-lab/test/network-observer.test.mjs",
+      "type": "Unit",
+      "gate": "T1",
+      "domains": [
+        "cost-lab-tools"
+      ]
+    },
+    {
+      "file": "tools/cost-lab/test/official-assembly-live-probe.test.mjs",
+      "type": "Unit",
+      "gate": "T1",
+      "domains": [
+        "cost-lab-tools"
+      ]
+    },
+    {
+      "file": "tools/cost-lab/test/official-assembly-probe.test.mjs",
+      "type": "Unit",
+      "gate": "T1",
+      "domains": [
+        "cost-lab-tools"
+      ]
+    },
+    {
       "file": "tools/cost-lab/test/path-discovery.test.mjs",
       "type": "Unit",
       "gate": "T1",
