@@ -215,6 +215,35 @@ node tools/cost-lab/official-assembly-probe.mjs
 Node HTTP(S)、官方 Capture Channel、Bridge fd IPC，并检查目标源码是否存在
 直接 HTTP/2、`tls.connect` 或 `net.connect/createConnection`。
 
+## Native Control Boundary
+
+`native-control-evidence.mjs` 固化 ZCode Desktop `3.18.2.10443` 的 Native 实时观测边界：
+
+```powershell
+node tools/cost-lab/native-control-evidence.mjs preflight --json
+node tools/cost-lab/native-control-evidence.mjs processes `
+  --manifest .run/v3-process-manifest.json --json
+```
+
+`preflight` 不启动 Desktop、不读取凭据，也不发送模型请求。当前安装版支持边界如下：
+
+- 官方 Resource Manager Capture 可以启停并记录 method、sanitized URL、process type 和 pid，
+  但没有 Header、body、SSE、Usage、身份链或 RPC payload。
+- 官方 Model I/O 诊断包含模型生命周期、安全 Header 名称和 SSE Usage，但将
+  Authorization、API Key、Cookie、Token 和 Secret 强制写成 `[redacted]`。
+- 官方 Agent stdio tap 只对 development Node 环境可见，且对凭据相关 RPC payload 脱敏；
+  它不捕获模型 HTTP。
+- 官方 debug MITM proxy 依赖本地 CA 和代理拦截，实验策略明确禁止。
+
+因此完整 Native Wire/RPC/Identity 门禁必须 fail closed。预检结果为
+`NATIVE_HTTP_CAPTURE: BLOCKED`、`NATIVE_IDENTITY_CAPTURE: BLOCKED` 和
+`REAL_NATIVE_TASK_ALLOWED: false` 时，不得使用隔离 AppServer、MITM 或伪造身份替代
+Native Desktop 测试。
+
+`processes` 只用于离线整理已有非秘密进程清单。它会把
+`runtime-host -> ZCode.exe` 子进程标记为 `app-server`，并拒绝输出输入中的
+`command_line`、`commandLine`、`environment` 或 `env` 字段。
+
 ## Isolated Billing Probe
 
 先取得 fresh before Snapshot：
