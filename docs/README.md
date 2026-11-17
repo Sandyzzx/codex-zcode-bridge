@@ -1,9 +1,9 @@
 # 文档路由 / Documentation
 
 > Status: AUTHORITATIVE（仅指本索引）
-> Last updated: 2026-11-16
-> Last verified: 2026-11-16，核对 Preview.8 版本身份、本地 test:full、插件验证和生成物构建，以及 ADR-039 合并后的 Windows/Ubuntu CI 与 SQLite 矩阵；3.18.0/3.18.1 实机安装组合、真实 OAuth refresh 与跨机器复现仍未验证。
-> Verified against: `a1dae175f736b0e1124614701d959d79dc76b8bc` + Preview.8 release candidate
+> Last updated: 2026-11-18
+> Last verified: 2026-11-18，核对安装版官方 AppServer Resolver/Adapter 定向测试、Cost Lab Web/零模型 Smoke、Start Plan 离线审计、V5 正式证据，以及构建后 MCP/Worker/SQLite 的生产 Coding Plan E2E 与同小时官方账单对账。
+> Verified against: `02cf2fa92c8235370fe7a883d4c5b30d93a8ab33` + candidate integration branch
 
 English users start at [README.md](../README.md). 技术文档为中文。先读当前事实，按问题加载合同；研究或历史材料不作为当前实现或发布证明。
 
@@ -24,7 +24,10 @@ English users start at [README.md](../README.md). 技术文档为中文。先读
 | 账户 refresh 协调 | [ADR-033](decisions/ADR-033-official-account-refresh-coordination.md) |
 | 正常 Cleanup 复用 Worker-tree Proof | [ADR-034](decisions/ADR-034-normal-cleanup-worker-tree-proof.md) |
 | 官方 ZCode 认证复用合同与 Preview.6/Preview.7 实现 | [ADR-037](decisions/ADR-037-official-zcode-authentication-reuse.md)、[ARCHITECTURE.md](ARCHITECTURE.md) |
+| 已安装官方 AppServer 作为 Coding Plan 优惠兼容 Runtime | [ADR-040](decisions/ADR-040-installed-official-appserver-runtime.md)、[正式证据](evidence/coding-plan-official-discount-verification-20261118.md) |
 | Preview.7 Post-Audit 最小架构、正确性、Legacy JSON 与 CI 整改 | [ADR-038](decisions/ADR-038-preview6-minimum-architecture-remediation.md)、[PROJECT_STATE.md](PROJECT_STATE.md) |
+| Start Plan 与安装版 AppServer 离线兼容性 | [研究](research/start-plan-official-appserver-compatibility-20261118.md) |
+| 本次 Runtime、Cost Lab Web 与 Start Plan 集成交付 | [验收报告](reports/official-runtime-integration-costlab-web-startplan-20261118.md) |
 | Preview.4 / ZCode 3.18.0 历史 Official Host 证据 | [历史 Implementation Summary](research/zcode-official-host-integration-v1/IMPLEMENTATION_SUMMARY.md)、[历史 Final Acceptance](research/zcode-official-host-integration-v1/FINAL_ACCEPTANCE_REPORT.md)（仅供历史追溯，不是 3.18.2 认证候选的验收证据） |
 | MCP、Task/Result、Attention、取消合同 | [INTERFACES.md](INTERFACES.md) |
 | Core API、fork、Host/Worker 打包 | [SHARED_CORE.md](SHARED_CORE.md) |

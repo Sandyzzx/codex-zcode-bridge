@@ -1,0 +1,733 @@
+import { randomUUID } from "node:crypto";
+import { lstatSync, readFileSync, statSync } from "node:fs";
+import { access, lstat, mkdir, rm, stat, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { PassThrough } from "node:stream";
+import { fileURLToPath } from "node:url";
+
+import { resolveBillingDataBaseDir } from "./path-discovery.mjs";
+import { inspectOfficialRuntimeAssets } from "./official-runtime-manifest.mjs";
+import { shanghaiHourForTimestamp } from "./coding-plan-billing.mjs";
+
+const SCRIPT_ROOT = path.dirname(fileURLToPath(import.meta.url));
+export const PROJECT_ROOT = path.resolve(SCRIPT_ROOT, "..", "..");
+export const VERIFIED_PROVIDER = "account:bigmodel-individual-coding-plan";
+export const VERIFIED_MODEL = "GLM-5.3-Flash";
+export const RESPONSE_MARKER = "COSTLAB_PRODUCTION_VERIFICATION_OK";
+const CONFIG_KEYS = Object.freeze([
+  "ZCODE_BRIDGE_ZCODE_CJS",
+  "ZCODE_BRIDGE_DATA_DIR",
+  "ZCODE_BRIDGE_TIMEOUT_MS",
+  "ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS",
+  "ZCODE_BRIDGE_MODE",
+  "ZCODE_BRIDGE_PREFER_STARTPLAN",
+  "ZCODE_WINDOWS_APP_INSTALL_DIR",
+  "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE",
+  "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE",
+  "ZCODE_HOME",
+  "ZCODE_DATA_BASE_DIR",
+]);
+const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled", "waiting_for_master"]);
+const MODEL_EVENT_TYPES = new Set([
+  "model_output_started",
+  "model_output",
+  "model_tool_call",
+  "turn_started",
+  "turn_completed",
+  "turn_failed",
+  "provider_retry_scheduled",
+  "provider_retry_send_accepted",
+]);
+
+export async function runProductionCodingPlanVerification(input, options = {}) {
+  return createProductionCodingPlanVerificationRunner(options)(input);
+}
+
+export function createProductionCodingPlanVerificationRunner(options = {}) {
+  const projectRoot = path.resolve(options.projectRoot ?? PROJECT_ROOT);
+  const bridgeEntryPath = path.resolve(
+    options.bridgeEntryPath ?? path.join(projectRoot, "dist", "src", "mcp", "main.js"),
+  );
+  const now = options.now ?? (() => new Date());
+  const createId = options.createId ?? randomUUID;
+  const connectClient = options.connectClient ?? connectBridgeMcpClient;
+  const inspectRuntime = options.inspectRuntime ?? inspectOfficialRuntimeAssets;
+  const pollIntervalMs = options.pollIntervalMs ?? 2_000;
+  const taskTimeoutMs = options.taskTimeoutMs ?? 900_000;
+  const bridgeShutdownTimeoutMs = options.bridgeShutdownTimeoutMs ?? 60_000;
+
+  return async function runVerification(input) {
+    validateVerificationInput(input);
+    const id = createId();
+    if (!/^[0-9a-f-]{36}$/u.test(id)) throw new Error("verification_id_invalid");
+    const startedAt = now().toISOString();
+    const roots = verificationRoots(projectRoot, id, options.stateRootParent);
+    await assertPathAbsent(roots.runRoot);
+    await assertPathAbsent(roots.stateRoot);
+    const layout = verificationLayout(roots.runRoot, roots.stateRoot);
+    let phase = "isolated_layout";
+    try {
+      await createIsolatedLayout(layout);
+
+      phase = "account_discovery";
+      const account = resolveBillingDataBaseDir(null, {
+        env: options.env ?? process.env,
+        platform: options.platform ?? process.platform,
+        fallbackHomeDir: options.fallbackHomeDir,
+      });
+      phase = "runtime_discovery";
+      const install = discoverOfficialInstallation(
+        options.env ?? process.env,
+        options.platform ?? process.platform,
+      );
+      if (!install.installRoot) throw new Error("installed_official_zcode_not_found");
+      const runtime = await inspectRuntime(install.installRoot);
+      if (runtime.runtime_status !== "OFFICIAL_RUNTIME_VERIFIED") {
+        throw new Error("installed_official_runtime_unverified");
+      }
+      const official = {
+        installRoot: install.installRoot,
+        dataBaseDir: account.dataBaseDir,
+        bundle: path.join(install.installRoot, "resources", "glm", "zcode.cjs"),
+        runtimeHost: path.join(install.installRoot, "resources", "tools", "runtime-host", "zcode-runtime-host.exe"),
+        builtinProviderConfig: path.join(install.installRoot, "resources", "config", "provider", "zcode-builtin.json"),
+        personalProviderConfig: path.join(account.dataBaseDir, ".zcode", "v2", "provider_config.json"),
+        zcodeHome: path.join(account.dataBaseDir, ".zcode"),
+      };
+      for (const filePath of [
+        official.bundle,
+        official.runtimeHost,
+        official.builtinProviderConfig,
+        official.personalProviderConfig,
+      ]) {
+        await access(filePath);
+      }
+      await assertFile(bridgeEntryPath, "bridge_build_missing");
+
+      phase = "bridge_config";
+      const config = buildRuntimeConfig(layout, official, taskTimeoutMs);
+      await writeRuntimeConfig(layout, config);
+      const env = buildIsolatedMcpEnvironment(layout, process.env);
+      const stderr = createBoundedStderrCollector();
+      let connected;
+      let taskId = null;
+      let cancellationAttempted = false;
+      try {
+        phase = "bridge_connect";
+        connected = await connectClient({
+          command: options.nodeExecutable ?? process.execPath,
+          args: [bridgeEntryPath],
+          cwd: projectRoot,
+          env,
+          stderr,
+          maxBufferSize: 16 * 1024 * 1024,
+          clientName: "cost-lab-production-verification",
+          clientVersion: "1.0.0",
+        });
+        const client = connected.client;
+        taskId = `costlab-${id}`;
+        phase = "task_dispatch";
+        const task = buildTask(taskId, layout.workspace);
+        const receipt = await callBridgeTool(client, "zcode_task", task);
+        if (receipt.task_id !== taskId) throw new Error("bridge_task_receipt_mismatch");
+
+        phase = "task_poll";
+        const status = await waitForTerminalStatus(client, taskId, {
+          signal: input.signal,
+          timeoutMs: taskTimeoutMs,
+          pollIntervalMs,
+        });
+        phase = "result_read";
+        const result = await callBridgeTool(client, "zcode_result", { task_id: taskId });
+        phase = "events_read";
+        const events = await collectTaskEvents(client, taskId);
+        const usageEvidence = extractUsageEvidence(result, events);
+        const modelEvents = events.filter((event) => MODEL_EVENT_TYPES.has(event.type));
+        const runtimeEvidence = {
+          status: "PASS",
+          bridge_path: "BUILT_MCP_STDIO_PRODUCTION",
+          isolated_host_profile: true,
+          task_id: taskId,
+          attempt: status.attempt,
+          terminal_status: status.status,
+          exit_code: result.exit_code ?? status.exit_code ?? null,
+          session_id: result.session_id ?? status.zcode_session_id ?? null,
+          provider: result.model?.provider_id ?? VERIFIED_PROVIDER,
+          model: result.model?.model_id ?? VERIFIED_MODEL,
+          requested_reasoning: "low",
+          effective_reasoning: result.model?.effective_reasoning_level ?? null,
+          runtime: {
+            status: runtime.runtime_status,
+            version: runtime.manifest?.version ?? null,
+            bundle_sha256: runtime.assets?.bundle?.sha256 ?? null,
+            bundle_bytes: runtime.assets?.bundle?.bytes ?? null,
+            runtime_host_sha256: runtime.assets?.runtime_host?.sha256 ?? null,
+            request_security_capability: runtime.manifest?.request_security_capability ?? null,
+          },
+          request_security: {
+            expected: "OfficialRequestSecurity",
+            installed_bundle_verified: true,
+            signing_handshake_observation: "NOT_EXPOSED_BY_MCP",
+          },
+          event_coverage: {
+            event_count: events.length,
+            model_related_event_count: modelEvents.length,
+            auxiliary_usage_coverage: usageEvidence.auxiliary_usage_coverage,
+          },
+          events: modelEvents.map(publicEvidenceEvent),
+          stderr_markers: stderr.markers(),
+        };
+        if (result.status === "failed" || result.status === "cancelled" || status.status !== "completed") {
+          throw new Error(`bridge_task_terminal_${String(result.status ?? status.status)}`);
+        }
+        if (!usageEvidence.usage) {
+          return {
+            model_requests: countLogicalModelAttempts(modelEvents),
+            usage: null,
+            hour: verificationHour(null, startedAt),
+            runtime_evidence: runtimeEvidence,
+          };
+        }
+        return {
+          model_requests: countLogicalModelAttempts(modelEvents),
+          usage: usageEvidence.usage,
+          hour: verificationHour(usageEvidence.usage, startedAt),
+          runtime_evidence: {
+            ...runtimeEvidence,
+            usage_sources: usageEvidence.sources,
+          },
+        };
+      } catch (error) {
+        if (input.signal?.aborted && taskId && connected?.client && !cancellationAttempted) {
+          cancellationAttempted = true;
+          await withTimeout(
+            callBridgeTool(connected.client, "zcode_cancel", { task_id: taskId }).catch(() => undefined),
+            10_000,
+            "bridge_cancel_timeout",
+          ).catch(() => undefined);
+        }
+        const markerCode = bridgeMarkerCode(stderr.markers());
+        if (markerCode && error && typeof error === "object") error.code = markerCode;
+        throw error;
+      } finally {
+        if (connected) {
+          await withTimeout(
+            connected.close(),
+            bridgeShutdownTimeoutMs,
+            "bridge_mcp_shutdown_timeout",
+          ).catch(() => undefined);
+        }
+      }
+    } catch (error) {
+      decorateVerificationError(error, phase);
+      throw error;
+    } finally {
+      await cleanupVerificationRoots(roots);
+    }
+  };
+}
+
+function countLogicalModelAttempts(events) {
+  const terminal = events.filter((event) =>
+    event.type === "turn_completed" ||
+    event.type === "turn_failed" ||
+    event.type === "provider_retry_send_accepted",
+  ).length;
+  return Math.max(1, terminal);
+}
+
+function verificationHour(usage, fallbackTimestamp) {
+  const observedAt = usage?.observed_at;
+  const timestamp = typeof observedAt === "string" && !Number.isNaN(new Date(observedAt).getTime())
+    ? observedAt
+    : fallbackTimestamp;
+  return shanghaiHourForTimestamp(timestamp);
+}
+
+function validateVerificationInput(input) {
+  if (!input || typeof input !== "object") throw new Error("verification_input_required");
+  if (input.provider !== VERIFIED_PROVIDER) throw new Error("verification_provider_not_allowed");
+  if (input.model !== VERIFIED_MODEL) throw new Error("verification_model_not_allowed");
+  if (input.reasoning !== "low") throw new Error("verification_reasoning_not_allowed");
+  if (!input.beforeSnapshot || input.beforeSnapshot.provider?.id !== VERIFIED_PROVIDER) {
+    throw new Error("verification_before_snapshot_invalid");
+  }
+}
+
+function verificationRoots(projectRoot, id, configuredStateRootParent) {
+  const runRoot = path.join(projectRoot, ".run", "cost-lab-web", "verifications", id);
+  assertInside(path.join(projectRoot, ".run"), runRoot);
+  const stateRootParent = configuredStateRootParent
+    ? path.resolve(configuredStateRootParent)
+    : defaultVerificationStateRootParent(projectRoot);
+  const stateRoot = path.join(stateRootParent, "cost-lab-web", "verification-state", id);
+  if (isWithin(projectRoot, stateRoot)) {
+    throw new Error("cost_lab_verification_state_inside_package_root");
+  }
+  return Object.freeze({ runRoot, stateRoot });
+}
+
+function defaultVerificationStateRootParent(projectRoot) {
+  const commonProjectRoot = resolveCommonProjectRoot(projectRoot);
+  if (commonProjectRoot) {
+    const candidate = path.join(commonProjectRoot, ".run");
+    if (!isWithin(projectRoot, candidate) && !isWithin(os.tmpdir(), candidate)) return candidate;
+  }
+  const localAppData = process.env.LOCALAPPDATA?.trim();
+  if (!localAppData || !path.isAbsolute(localAppData)) {
+    throw new Error("cost_lab_verification_state_parent_unavailable");
+  }
+  const candidate = path.join(localAppData, "CodexZCodeBridge-CostLab");
+  if (isWithin(projectRoot, candidate) || isWithin(os.tmpdir(), candidate)) {
+    throw new Error("cost_lab_verification_state_parent_reserved");
+  }
+  return candidate;
+}
+
+function resolveCommonProjectRoot(projectRoot) {
+  try {
+    const dotGit = path.join(projectRoot, ".git");
+    const metadata = lstatSync(dotGit);
+    if (!metadata.isFile() || metadata.isSymbolicLink()) return null;
+    const marker = "gitdir:";
+    const text = readFileSync(dotGit, "utf8").trim();
+    if (!text.startsWith(marker)) return null;
+    const configured = text.slice(marker.length).trim();
+    if (!configured) return null;
+    const gitDir = path.resolve(projectRoot, configured);
+    if (path.basename(gitDir) === ".git") return path.dirname(gitDir);
+    const worktreesDir = path.dirname(gitDir);
+    if (path.basename(worktreesDir) !== "worktrees" || path.basename(path.dirname(worktreesDir)) !== ".git") {
+      return null;
+    }
+    return path.dirname(path.dirname(worktreesDir));
+  } catch {
+    return null;
+  }
+}
+
+function verificationLayout(root, stateRoot) {
+  return Object.freeze({
+    root,
+    home: path.join(root, "home"),
+    appData: path.join(root, "app-data"),
+    localAppData: path.join(stateRoot, "local-app-data"),
+    temp: path.join(root, "temp"),
+    bridgeData: path.join(stateRoot, "bridge-data"),
+    settings: path.join(root, "home", ".codex", "codex-zcode-bridge"),
+    workspace: path.join(root, "workspace"),
+  });
+}
+
+async function assertPathAbsent(target) {
+  try {
+    await lstat(target);
+    throw new Error("cost_lab_verification_root_already_exists");
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+}
+
+async function cleanupVerificationRoots(roots) {
+  for (const target of [roots.stateRoot, roots.runRoot]) {
+    await rm(target, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 200,
+    }).catch(() => undefined);
+  }
+}
+
+async function createIsolatedLayout(layout) {
+  for (const directory of [
+    layout.home,
+    layout.appData,
+    layout.localAppData,
+    layout.temp,
+    layout.bridgeData,
+    layout.settings,
+    layout.workspace,
+  ]) {
+    await mkdir(directory, { recursive: true });
+  }
+  await writeFile(path.join(layout.workspace, "VERIFICATION_TASK.txt"), [
+    "This is an isolated Cost Lab billing verification workspace.",
+    `Return exactly ${RESPONSE_MARKER}.`,
+    "Do not modify, create, or delete files.",
+    "",
+  ].join("\n"), { encoding: "utf8", flag: "wx" });
+}
+
+function buildRuntimeConfig(layout, official, timeoutMs) {
+  return Object.freeze({
+    ZCODE_BRIDGE_ZCODE_CJS: official.bundle,
+    ZCODE_BRIDGE_DATA_DIR: layout.bridgeData,
+    ZCODE_BRIDGE_TIMEOUT_MS: String(timeoutMs),
+    ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS: "1",
+    ZCODE_BRIDGE_MODE: "yolo",
+    ZCODE_BRIDGE_PREFER_STARTPLAN: "false",
+    ZCODE_WINDOWS_APP_INSTALL_DIR: official.installRoot,
+    ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: official.builtinProviderConfig,
+    ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: official.personalProviderConfig,
+    ZCODE_HOME: official.zcodeHome,
+    ZCODE_DATA_BASE_DIR: official.dataBaseDir,
+  });
+}
+
+async function writeRuntimeConfig(layout, config) {
+  const pathValue = path.join(layout.settings, "runtime-config.json");
+  await writeFile(pathValue, `${JSON.stringify(config, null, 2)}\n`, {
+    encoding: "utf8",
+    flag: "wx",
+  });
+}
+
+function buildIsolatedMcpEnvironment(layout, source) {
+  const homeDrive = path.parse(layout.home).root.replace(/[\\/]+$/u, "");
+  const homePath = layout.home.slice(path.parse(layout.home).root.length - 1);
+  const env = {};
+  for (const key of [
+    "PATH",
+    "SystemRoot",
+    "WINDIR",
+    "COMSPEC",
+    "PATHEXT",
+    "OS",
+    "PROCESSOR_ARCHITECTURE",
+    "NUMBER_OF_PROCESSORS",
+    "PROGRAMDATA",
+    "ProgramFiles",
+    "ProgramFiles(x86)",
+  ]) {
+    const value = source[key];
+    if (value !== undefined) env[key] = value;
+  }
+  return {
+    ...env,
+    HOME: layout.home,
+    USERPROFILE: layout.home,
+    HOMEDRIVE: homeDrive,
+    HOMEPATH: homePath,
+    APPDATA: layout.appData,
+    LOCALAPPDATA: layout.localAppData,
+    TEMP: layout.temp,
+    TMP: layout.temp,
+    TMPDIR: layout.temp,
+  };
+}
+
+function buildTask(taskId, workspace) {
+  return {
+    task_id: taskId,
+    workspace,
+    model: {
+      provider_id: VERIFIED_PROVIDER,
+      model_id: VERIFIED_MODEL,
+      reasoning_level: "low",
+    },
+    objective: `Return exactly ${RESPONSE_MARKER}. Do not modify, create, or delete files.`,
+    requirements: [
+      "Use the already selected Coding Plan provider and model.",
+      "Do not run shell commands or edit the workspace.",
+      `Return ${RESPONSE_MARKER} as the final response.`,
+    ],
+    allowed_paths: [],
+    forbidden_paths: ["**/*"],
+    acceptance_criteria: [
+      `The final response contains ${RESPONSE_MARKER}.`,
+      "No workspace files are changed.",
+    ],
+    test_commands: [],
+    context: "This is an owner-authorized Cost Lab billing verification. Keep the task minimal.",
+  };
+}
+
+async function connectBridgeMcpClient(options) {
+  const [{ Client }, { StdioClientTransport }] = await Promise.all([
+    import("@modelcontextprotocol/client"),
+    import("@modelcontextprotocol/client/stdio"),
+  ]);
+  const stderr = options.stderr?.stream();
+  const transport = new StdioClientTransport({
+    command: options.command,
+    args: options.args,
+    cwd: options.cwd,
+    env: options.env,
+    stderr: "pipe",
+    maxBufferSize: options.maxBufferSize,
+  });
+  if (stderr) transport.stderr?.on("data", (chunk) => options.stderr.capture(chunk));
+  const client = new Client({
+    name: options.clientName,
+    version: options.clientVersion,
+  });
+  await client.connect(transport);
+  return {
+    client,
+    transport,
+    close: async () => {
+      let clientError;
+      let transportError;
+      try {
+        await client.close();
+      } catch (error) {
+        clientError = error;
+      }
+      try {
+        await transport.close();
+      } catch (error) {
+        transportError = error;
+      }
+      if (clientError ?? transportError) {
+        throw clientError ?? transportError;
+      }
+    },
+  };
+}
+
+async function callBridgeTool(client, name, args) {
+  const result = await client.callTool({ name, arguments: args });
+  const structured = result?.structuredContent;
+  if (result?.isError) {
+    const structuredError = structured && typeof structured === "object" && !Array.isArray(structured)
+      ? structured.error
+      : null;
+    if (structuredError && typeof structuredError === "object" && typeof structuredError.code === "string") {
+      const error = new Error(`${name}_rejected:${structuredError.code}`);
+      error.code = structuredError.code;
+      throw error;
+    }
+    const message = Array.isArray(result.content)
+      ? result.content.map((item) => item?.type === "text" ? item.text : "").join("\n")
+      : "Bridge MCP tool failed";
+    throw new Error(`${name}_failed:${message.slice(0, 500)}`);
+  }
+  if (structured && typeof structured === "object" && !Array.isArray(structured)) {
+    return structured;
+  }
+  const text = Array.isArray(result?.content)
+    ? result.content.find((item) => item?.type === "text")?.text
+    : null;
+  if (typeof text !== "string") throw new Error(`${name}_structured_result_missing`);
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`${name}_structured_result_invalid`);
+  }
+}
+
+async function waitForTerminalStatus(client, taskId, options) {
+  const deadline = Date.now() + options.timeoutMs;
+  let lastStatus = null;
+  while (Date.now() < deadline) {
+    assertNotAborted(options.signal);
+    const status = await callBridgeTool(client, "zcode_status", { task_id: taskId });
+    lastStatus = status;
+    if (TERMINAL_STATUSES.has(status.status)) return status;
+    await delay(options.pollIntervalMs, options.signal);
+  }
+  throw new Error(`bridge_task_timeout:${String(lastStatus?.status ?? "unknown")}`);
+}
+
+async function collectTaskEvents(client, taskId) {
+  const events = [];
+  let afterSeq = 0;
+  for (let page = 0; page < 20; page += 1) {
+    const result = await callBridgeTool(client, "zcode_events", {
+      task_id: taskId,
+      after_seq: afterSeq,
+      limit: 200,
+      wait_ms: 0,
+      view: "raw",
+      max_bytes: 16 * 1024 * 1024,
+    });
+    const batch = Array.isArray(result.events) ? result.events : [];
+    events.push(...batch);
+    const next = Number(result.next_seq);
+    if (!Number.isSafeInteger(next) || next <= afterSeq || result.has_more !== true) break;
+    afterSeq = next;
+  }
+  return events;
+}
+
+function extractUsageEvidence(result, events) {
+  const sources = [];
+  const candidates = [];
+  if (result?.usage && hasTokenUsage(result.usage)) {
+    sources.push("task_result.usage");
+    candidates.push(result.usage);
+  }
+  for (const event of events) {
+    const usage = event?.details?.usage;
+    if (hasTokenUsage(usage)) {
+      sources.push(`event.${event.seq}.turn_completed.usage`);
+      candidates.push(usage);
+    }
+  }
+  const selected = candidates.at(-1) ?? null;
+  const observedAt = candidates
+    .map((candidate) => candidate?.observed_at)
+    .find((value) => typeof value === "string" && !Number.isNaN(new Date(value).getTime()));
+  const usage = selected && observedAt && selected.observed_at === undefined
+    ? { ...selected, observed_at: observedAt }
+    : selected;
+  return {
+    usage,
+    sources,
+    auxiliary_usage_coverage: usage
+      ? sources.length > 1 ? "PARTIAL_OR_AGGREGATE" : "MAIN_OR_AGGREGATE_ONLY"
+      : "USAGE_MISSING",
+  };
+}
+
+function hasTokenUsage(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  return [
+    "input_tokens",
+    "output_tokens",
+    "total_tokens",
+    "cached_input_tokens",
+  ].some((key) => Number.isSafeInteger(value[key]));
+}
+
+function publicEvidenceEvent(event) {
+  return {
+    seq: event.seq,
+    at: event.at,
+    type: event.type,
+    summary: typeof event.summary === "string" ? event.summary.slice(0, 500) : "",
+    details: event.details && typeof event.details === "object" ? event.details : undefined,
+  };
+}
+
+function createBoundedStderrCollector() {
+  const lines = [];
+  let pending = "";
+  const stream = new PassThrough();
+  return {
+    stream: () => stream,
+    capture(chunk) {
+      pending += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
+      if (pending.length > 65_536) pending = pending.slice(-32_768);
+      for (;;) {
+        const index = pending.indexOf("\n");
+        if (index < 0) break;
+        const line = pending.slice(0, index).trim();
+        pending = pending.slice(index + 1);
+        if (isSafeBridgeMarker(line)) {
+          lines.push(line.slice(0, 500));
+          if (lines.length > 80) lines.shift();
+        }
+      }
+    },
+    markers() {
+      return [...lines];
+    },
+  };
+}
+
+function isSafeBridgeMarker(line) {
+  return /^\[bridge\] (SQLITE_|runtime provenance|data root|max concurrent workers|received |[A-Za-z0-9_.+-]+ stdio MCP server ready)/u.test(line);
+}
+
+function bridgeMarkerCode(markers) {
+  for (const marker of [...markers].reverse()) {
+    const match = /^\[bridge\] (SQLITE_[A-Z0-9_]+):/u.exec(marker);
+    if (match) return match[1];
+  }
+  return null;
+}
+
+function decorateVerificationError(error, phase) {
+  if (!error || typeof error !== "object") return;
+  if (error.code === "ERR_INVALID_ARG_VALUE") {
+    error.code = `COST_LAB_${phase.toUpperCase()}_INVALID_ARGUMENT`;
+  } else if (typeof error.code !== "string" || error.code.length === 0) {
+    error.code = `COST_LAB_${phase.toUpperCase()}_FAILED`;
+  }
+}
+
+function discoverOfficialInstallation(env, platform) {
+  const pathImpl = platform === "win32" ? path.win32 : path.posix;
+  const candidates = [];
+  const explicit = env.ZCODE_WINDOWS_APP_INSTALL_DIR?.trim();
+  if (explicit) candidates.push(explicit);
+  const localAppData = env.LOCALAPPDATA?.trim();
+  if (localAppData) candidates.push(pathImpl.join(localAppData, "Programs", "ZCode"));
+  const programFiles = env.ProgramFiles?.trim() ?? env.PROGRAMFILES?.trim();
+  if (programFiles) candidates.push(pathImpl.join(programFiles, "ZCode"));
+  const installRoot = candidates.find((root) =>
+    fileExists(pathImpl.join(root, "resources", "glm", "zcode.cjs")) &&
+    fileExists(pathImpl.join(root, "resources", "tools", "runtime-host", "zcode-runtime-host.exe")),
+  ) ?? null;
+  return { installRoot };
+}
+
+function fileExists(filePath) {
+  try {
+    return statSync(filePath).isFile();
+  } catch {
+    return false;
+  }
+}
+
+async function assertFile(filePath, code) {
+  try {
+    const metadata = await stat(filePath);
+    if (!metadata.isFile()) throw new Error(code);
+  } catch {
+    throw new Error(code);
+  }
+}
+
+function assertInside(root, candidate) {
+  const relative = path.relative(path.resolve(root), path.resolve(candidate));
+  if (relative === "" || relative.startsWith(`..${path.sep}`) || relative === ".." || path.isAbsolute(relative)) {
+    throw new Error("cost_lab_verification_path_outside_run_root");
+  }
+}
+
+function isWithin(root, candidate) {
+  const relative = path.relative(path.resolve(root), path.resolve(candidate));
+  return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
+}
+
+function assertNotAborted(signal) {
+  if (signal?.aborted) throw signal.reason ?? new Error("verification_aborted");
+}
+
+function delay(milliseconds, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason ?? new Error("verification_aborted"));
+      return;
+    }
+    const timer = setTimeout(resolve, milliseconds);
+    signal?.addEventListener("abort", () => {
+      clearTimeout(timer);
+      reject(signal.reason ?? new Error("verification_aborted"));
+    }, { once: true });
+  });
+}
+
+function withTimeout(promise, milliseconds, code) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(code)), milliseconds);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+export const PRODUCTION_VERIFICATION_CONTRACT = Object.freeze({
+  provider: VERIFIED_PROVIDER,
+  model: VERIFIED_MODEL,
+  reasoning: "low",
+  bridge_entry_relative: "dist/src/mcp/main.js",
+  host_profile: "isolated HOME + isolated ZCODE_BRIDGE_DATA_DIR",
+  billing: "owned by coding-plan-billing.mjs, never this runner",
+  model_call: "only after explicit web confirmation",
+});

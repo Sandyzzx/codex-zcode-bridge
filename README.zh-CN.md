@@ -28,6 +28,57 @@ Codex 不会自动接管所有开发请求。只有用户明确要求使用 ZCod
 
 Start Plan 与 Coding Plan 是两条不同的账户和认证路径。Bridge 根据任务中的 Provider、模型和套餐选择对应路径；两者最终都通过官方 ZCode AppServer 执行。
 
+## 官方 ZCode 计费与套餐支持
+
+本集成分支在 Windows x64 上把已安装的官方 ZCode AppServer 作为 Coding Plan
+的已验证执行 Runtime。Bridge 不复制第二套签名实现，而是按版本、大小和
+SHA-256 精确校验安装版 Bundle、同根 Provider 配置与 runtime host，再复用
+现有 Official Host 认证和进程生命周期。
+
+```yaml
+已验证模型: GLM-5.3-Flash
+已验证套餐: PERSONAL_CODING_PLAN
+已验证 ZCode: 3.18.2.10443
+已验证 Runtime: INSTALLED_OFFICIAL_APPSERVER
+Bundle SHA-256: 08726b5ef69e1e9072828baa4656713cb3aac93bb096938681278c5600312b2c
+有效额外倍率: 约 0.67
+```
+
+V5 正式证据包含一次原生对照和三次 Bridge 实验。官方账单一致显示约 `0.67`
+的额外积分倍率；对已测配置而言，相当于约 `1.5x` 模型使用量。这是**扣分
+倍率**证据，不等于已证明所有账户都获得统一的套餐额度 `1.5x` 加成。
+
+本生产集成分支又通过构建后的 Bridge MCP、Manager、SQLite Worker 和安装版
+官方 AppServer 独立复现：`22,735` Token 的官方积分为 `1.7666`，正常预期为
+`2.636755`，有效额外倍率 `0.6699901963`。官方小时账本在前几次读取后才结算，
+因此使用同一小时的后续快照完成对账，没有发起第二次模型请求。
+
+峰谷时段倍率与活动额外倍率是两个独立因素。例如非高峰 `0.5` 再乘额外
+`0.67`，相对基础公式约为 `0.335`。任务成功或 Token 对上本身不能证明额外
+优惠，最终裁决仍是官方 before/after 账单差分。
+
+兼容性采用 fail-closed。安装版 Desktop 版本、Bundle、同根 builtin Provider
+配置、runtime host、Node 范围或平台任一不匹配时，Coding Plan 报告
+`OFFICIAL_RUNTIME_UNVERIFIED`，不会宣称 `0.67`。
+
+### Cost Lab
+
+Cost Lab 是本地运行环境、Token 与官方积分验证网页：
+
+```powershell
+npm run build
+npm run cost-lab:web
+```
+
+服务只绑定 `127.0.0.1`，页面加载不会发起模型请求。环境检查覆盖安装身份、
+文件哈希、Node 兼容性、凭据文件元数据、Billing Reader 以及零模型 AppServer
+协议 Smoke。真实 Coding Plan 验证必须由用户明确确认，并通过构建后的生产
+MCP/Worker 路径执行一次固定的 `GLM-5.3-Flash`、reasoning low 任务，再以新
+官方账单快照进行 before/after 对账。历史与导出均脱敏。
+
+详见 [Cost Lab 使用说明](tools/cost-lab/README.md) 与
+[V5 正式证据](docs/evidence/coding-plan-official-discount-verification-20261118.md)。
+
 ### 已验证的 Start Plan 路径
 
 Preview.3 已通过一次 Windows 真实 Start Plan 验收。Preview.6 另行通过真实 Coding Plan E2E 与真实 Start Plan 核心功能 E2E，覆盖 Official Host、Runtime Events、Usage、工具调用、Result、Cleanup 与 Release。Preview.7 保留该运行时与认证路径，不重复消耗真实模型请求。历史 Start Plan 完整 Workspace 验收因 PowerShell 缓存写入了未声明文件，继续保持 `FAIL`，不能改写为通过。
@@ -43,6 +94,13 @@ Preview.3 已通过一次 Windows 真实 Start Plan 验收。Preview.6 另行通
 - 未观察到 HTTP `405`、Provider code `3012` 或 unusual activity。
 
 该证据**只覆盖 Windows 上的 `GLM-5.3-Flash`**，不能证明所有 Start Plan 模型、所有 ZCode Runtime 版本或所有平台均可用。其他模型仍取决于官方 Provider Registry 和当前登录账户的实际权益。
+
+本集成分支另完成了针对同一安装版 AppServer 的 Start Plan 离线审计。
+Start Plan 仍使用独立的 unsigned Provider 路径、不同凭据、Runtime Auth、
+Runtime Headers 和 `zcode-plan/anthropic` Gateway。真实 Start Plan E2E、
+CAPTCHA 行为及任何 Start Plan 优惠均为 `NOT_VERIFIED`；不能把 Coding Plan
+的 `0.67` 结果推广到 Start Plan。详见
+[离线兼容性报告](docs/research/start-plan-official-appserver-compatibility-20261118.md)。
 
 ## 核心能力
 

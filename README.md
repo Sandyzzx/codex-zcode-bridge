@@ -28,6 +28,65 @@ Codex does not automatically hand every coding request to ZCode. Delegation happ
 
 Start Plan and Coding Plan are different account and authentication paths. Bridge selects the path from the task's provider, model, and plan selection; both paths ultimately execute through the official ZCode AppServer.
 
+## Official ZCode Billing & Plan Support
+
+This integration branch makes the installed official ZCode AppServer the verified
+Coding Plan execution runtime on Windows x64. It does not vendor a second signing
+implementation: Bridge validates the installed bundle, provider configuration and
+runtime host against an exact version/size/SHA-256 manifest, then reuses the
+existing Official Host authentication and process lifecycle.
+
+```yaml
+VERIFIED_MODEL: GLM-5.3-Flash
+VERIFIED_PLAN: PERSONAL_CODING_PLAN
+VERIFIED_ZCODE: 3.18.2.10443
+VERIFIED_RUNTIME: INSTALLED_OFFICIAL_APPSERVER
+VERIFIED_BUNDLE_SHA256: 08726b5ef69e1e9072828baa4656713cb3aac93bb096938681278c5600312b2c
+VERIFIED_EFFECTIVE_EXTRA_RATIO: approximately 0.67
+```
+
+The published V5 evidence contains a native control and three Bridge runs. The
+official ledger consistently showed an extra `0.67` credit multiplier, equivalent
+to roughly `1.5x` model usage for the tested profile. This is a **credit
+multiplier**, not proof of a universal package-quota `1.5x` grant.
+
+The production integration branch independently reproduced the result through
+the built Bridge MCP, Manager, SQLite Worker and installed Official AppServer:
+`22,735` Tokens settled at `1.7666` credits versus `2.636755` normal, an effective
+extra ratio of `0.6699901963`. The official hourly ledger settled after the first
+few reads, so the reconciliation used a later same-hour snapshot without a second
+model request.
+
+The time-of-day multiplier is separate from the campaign multiplier. For example,
+off-peak `0.5` multiplied by the extra `0.67` is an effective `0.335` of the base
+credit formula; a successful task and matching Tokens alone do not prove the extra
+discount. The final authority is the official before/after ledger delta.
+
+Compatibility is fail-closed. If the installed Desktop version, bundle,
+same-root builtin provider configuration, runtime host, Node range, or platform
+does not match the manifest, Coding Plan reports `OFFICIAL_RUNTIME_UNVERIFIED`
+and does not claim `0.67`.
+
+### Cost Lab
+
+Cost Lab is the local runtime, Token and official-credit verification UI:
+
+```powershell
+npm run build
+npm run cost-lab:web
+```
+
+The server binds only to `127.0.0.1`. Page load makes no model request. Environment
+checks inspect installation identity, hashes, Node compatibility, credential-file
+metadata, billing-reader availability and a zero-model AppServer protocol smoke.
+A real Coding Plan verification requires an explicit browser confirmation, makes
+one fixed `GLM-5.3-Flash` / reasoning-low task through the built production MCP
+and Worker path, and reconciles fresh official before/after ledger snapshots.
+History and exports are redacted.
+
+See [Cost Lab usage](tools/cost-lab/README.md) and the
+[formal V5 evidence](docs/evidence/coding-plan-official-discount-verification-20261118.md).
+
 ### Verified Start Plan path
 
 Preview.3 established the Start Plan path with one real Windows acceptance run. Preview.6 separately completed a real Coding Plan E2E and a real Start Plan core functional E2E through the Official Host path, including Runtime Events, Usage, tools, Result, Cleanup, and Release. Preview.7 preserves that runtime and auth path without repeating real model traffic. The historical full Start Plan Workspace acceptance remains `FAIL` because of a PowerShell cache written outside the declared task files; that failure is retained and not rewritten as a pass.
@@ -43,6 +102,14 @@ Preview.3 established the Start Plan path with one real Windows acceptance run. 
 - No HTTP `405`, provider code `3012`, or unusual-activity response was observed.
 
 This evidence covers **only `GLM-5.3-Flash` on Windows**. It does not prove every Start Plan model, every ZCode runtime version, or every platform. Other models remain subject to the official provider registry and the live entitlement of the signed-in account.
+
+The current integration branch also completed an offline Start Plan audit against
+the same installed AppServer bundle. Start Plan remains an independent unsigned
+provider path with different credentials, Runtime Auth, Runtime Headers and
+`zcode-plan/anthropic` gateway. Live Start Plan E2E, CAPTCHA behavior and any Start
+Plan discount are `NOT_VERIFIED`; the Coding Plan `0.67` result must not be
+promoted to Start Plan. See the
+[offline compatibility report](docs/research/start-plan-official-appserver-compatibility-20261118.md).
 
 ## Core capabilities
 

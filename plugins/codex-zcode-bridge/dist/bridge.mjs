@@ -21428,9 +21428,9 @@ function readAccountProviderSource(config2, verifiedSelection, homeDir, taskProv
   const table = readJson(config2.providerBuiltinConfigFile);
   const providerRules = readProviderRules(table).filter(isRecord2).map((rule) => rule).filter((rule) => rule.config?.access?.type === "zhipu-account" && typeof rule.providerId === "string").sort((left, right) => left.providerId.localeCompare(right.providerId));
   if (!providerRules.length) return null;
-  const officialDataRoot = path6.resolve(config2.zcodeDataRoot);
-  const officialV2Dir = zcodeV2Dir(officialDataRoot);
+  const officialV2Dir = zcodeV2DataDir(config2.providerPersonalConfigFile);
   if (!officialV2Dir) return null;
+  const officialDataRoot = path6.dirname(officialV2Dir);
   const credentials = readJson(path6.join(officialV2Dir, "config.json"));
   const credentialProviders = asRecord(credentials?.provider);
   const cache = readJson(path6.join(officialV2Dir, "coding-plan-cache.json"));
@@ -21478,10 +21478,6 @@ function readAccountProviderSource(config2, verifiedSelection, homeDir, taskProv
   });
   const builtinRevision = zcodeBuiltinRevision(table, config2.providerBuiltinConfigFile);
   return { officialDataRoot, officialV2Dir, settingFile, builtinRevision, entries };
-}
-function zcodeV2Dir(zcodeDataRoot) {
-  if (path6.basename(zcodeDataRoot).toLowerCase() !== ".zcode") return null;
-  return path6.join(zcodeDataRoot, "v2");
 }
 function zcodeBuiltinRevision(table, sourceFile) {
   const revision = typeof table?.revision === "number" ? table.revision : 0;

@@ -1,9 +1,9 @@
 # Project State
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-16
-> Last verified: 2026-11-16，核对 ADR-039 Host 授权取消、新鲜取消证明持久化绑定、Preview.8 版本元数据及本地 test:full、插件验证和生成物构建；旧 Desktop 实机矩阵、真实 OAuth refresh 与跨机器制品复现仍为 `NOT_VERIFIED`。
-> Verified against: `a1dae175f736b0e1124614701d959d79dc76b8bc` + Preview.8 release candidate
+> Last updated: 2026-11-18（ADR-040、Cost Lab Web 与 Start Plan 离线兼容候选）
+> Last verified: 2026-11-18，核对安装版官方 AppServer Coding Plan 生产 E2E、同小时官方积分 `0.67` 对账、Cost Lab 43/43、定向 64/64、typecheck/build/plugin validation；完整 CI 与发布验收仍暂缓。
+> Verified against: `02cf2fa92c8235370fe7a883d4c5b30d93a8ab33` + candidate integration branch
 
 当前发布状态：
 
@@ -12,6 +12,7 @@
 - Preview `2.0.0-preview.6`：Owner 已批准发布。支持声明限定为 Windows x64、Node.js `24.16.0` 与已安装的官方 ZCode Desktop `3.18.2.10443`。
 - Preview `2.0.0-preview.7`：在 Preview.6 上应用 ADR-038 整改，并修复 CI dispatch 边界与 Events summary 分页。
 - Preview `2.0.0-preview.8`：包含 ADR-039 Host 授权取消与新鲜 Cleanup Proof 绑定；支持范围限定为 Windows x64、Node.js `24.16.0` 与已安装的官方 ZCode Desktop `3.18.2.10443`。
+- 集成候选分支 `codex/official-runtime-integration-20261118`：在 Preview.8 基线上增加 ADR-040 安装版 Coding Plan Runtime、Cost Lab Web、Start Plan 离线审计和正式证据；未 merge、未发布。
 
 ## 当前生产架构
 
@@ -29,7 +30,7 @@ Preview.7 继承 Preview.6 固定的 ZCode `3.18.2`、commit `fec975905a2abd4c07
 ## 套餐与认证
 
 - **Z.ai Start Plan：** Preview.6 消费固定 Official Host 的窄认证投影，再执行实时模型权益检查，并通过单任务 Private Lease 向官方 Runtime 交付认证。Start Plan 与普通模型目录条目分离，使用 `<ModelId>-StartPlan` 别名。
-- **Z.ai Coding Plan：** 保留官方 Coding Plan 账户/API Key 路径；Start Plan 预检不改变 Coding Plan 的既有注册和执行语义。
+- **Z.ai Coding Plan：** 保留官方 Coding Plan 账户/API Key 路径；Start Plan 预检不改变 Coding Plan 的既有注册和执行语义。ADR-040 候选只在 Windows x64 对个人 Coding Plan 使用通过精确 Manifest 校验的已安装官方 AppServer，未知版本 fail closed 且不声明优惠兼容。
 - 两条路径最终都由官方 ZCode AppServer 执行；Bridge 不复制 AppServer 的 Provider 请求构造。
 - 账户 refresh 使用固定上游 patch 的 profile-scoped lock、lock-time reread、一次远端刷新和 CAS 发布。该协调已由合成竞争矩阵验证；真实 Coding Plan 与 Start Plan 任务已经通过官方认证路径执行。真实 OAuth refresh/账户轮换仍未单独验收；Preview 阶段接受该有限风险，失败路径不得损坏现有凭据或意外切换账户。
 - [ADR-037](decisions/ADR-037-official-zcode-authentication-reuse.md) 已接受且 Preview.6 已实现：官方 Host 统一拥有凭据解密、keyring、OAuth、账户身份和请求认证，Bridge 只消费当前任务所需的认证投影。生产源码不再包含旧的 v1/v2 AES、Keyring、账户资料、JWT payload 或 telemetry device 解析。真实 Coding Plan 完整 E2E 与 Start Plan 核心功能路径已通过，但历史完整 E2E 因 Workspace 边界保持 `FAIL`；3.18.0/3.18.1 实机安装矩阵仍为 `NOT_VERIFIED`。
@@ -53,6 +54,9 @@ Preview.3 的 Start Plan 历史证据覆盖 Windows、官方 AppServer `0.17.1`�
 | Official Host 制品升级/回滚演练 | `PASS — ISOLATED_WITH_DATA` | Preview.5 SQLite 预置 Task、Attempt、7 条 Operation Events、5 条 Runtime Events、Usage、Hold 与 Result；升级到 Preview.6 再回滚后逻辑行、状态、digest 与 Usage 完全一致，`integrity_check=ok`，外键违规 0 |
 | Clean install / supported runtime closure | `PASS — LOCAL_WINDOWS` | 隔离 npm cache 的 clean install 完成 MCP 初始化、13 个工具与 SQLite 启动；BOM 文件与实际包一致；仍不声明跨机器或完整 ZCode 产品资源图 |
 | 真实 Coding Plan + Official Host | `PASS` | 此前 R7 候选完成一次真实 Task：模型、工具、Events、Usage、Result、Cleanup、Release 均通过；不替代 Preview.5 安装后验收 |
+| 真实 Coding Plan + 安装版 AppServer | `PASS — CANDIDATE` | 构建后 MCP/Worker/SQLite 完成一次真实 Task；22,735 Token、官方 1.7666 credits、正常预期 2.636755、有效额外倍率 0.6699901963。官方账单延迟结算后以同小时 fresh snapshot 对账，无第二次模型请求 |
+| Start Plan + 安装版 AppServer | `OFFLINE_VERIFIED / LIVE NOT_RUN` | 同一 Bundle 的 Provider、unsigned transport、Gateway 和 Runtime Headers 差异已审计；真实 Start Plan E2E、CAPTCHA、权益与优惠均未验证 |
+| Cost Lab Web/API | `PASS — CANDIDATE` | 本地 loopback、显式真实请求确认、官方账单、同小时延迟结算重试、历史和脱敏导出通过 43/43 定向测试；真实请求 1 次 |
 | 真实 Start Plan 核心功能 | `PASS — CORE FUNCTIONAL` | 官方 Auth、Billing 门禁、Lease、Session/Turn、模型、工具、AgentReport、R7 Usage、输出、Result、Cleanup/Release 通过 |
 | 历史 Start Plan 完整 E2E | `FAIL — WORKSPACE BOUNDARY` | 测试 Workspace 额外出现 PowerShell module-analysis cache；历史结论保持不变，不重新消耗真实任务改写证据 |
 | 官方 Start Plan 认证复用 | `PASS — PREVIEW.6` | v1、v2:env、v2:os 只读字节不变，BigModel/linked Z.AI/`zai_cn`、冷进程、Billing 单 verdict 与 Lease 合成测试通过；真实 Start Plan 核心功能路径通过；真实 OAuth refresh 未单独执行 |

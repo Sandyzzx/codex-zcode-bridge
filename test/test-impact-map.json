@@ -75,7 +75,8 @@
         "src/runtime/child-env.ts",
         "src/runtime/desktop-host-launch.ts",
         "src/runtime/doctor.ts",
-        "src/runtime/node-runtime.ts"
+        "src/runtime/node-runtime.ts",
+        "src/runtime/official-app-server-runtime.ts"
       ]
     },
     {
@@ -101,6 +102,7 @@
       "paths": [
         "src/adapters/zcode-app-server-adapter.ts",
         "src/adapters/official-host-adapter.ts",
+        "src/adapters/official-app-server-adapter.ts",
         "src/runtime/desktop-host-launch.ts",
         "src/runtime/task-timeout.ts",
         "src/runtime/errors.ts",
@@ -894,6 +896,34 @@
         "process-cleanup-and-locks",
         "provider-catalog",
         "worker-launch"
+      ]
+    },
+    {
+      "file": "test/official-app-server-runtime.test.ts",
+      "type": "Integration",
+      "gate": "T1",
+      "domains": [
+        "zcode-path-discovery",
+        "worker-launch"
+      ]
+    },
+    {
+      "file": "test/official-app-server-adapter.test.ts",
+      "type": "Integration",
+      "gate": "T2",
+      "domains": [
+        "appserver-adapter",
+        "process-cleanup-and-locks",
+        "provider-catalog",
+        "worker-launch"
+      ]
+    },
+    {
+      "file": "test/start-plan-official-appserver-offline.test.ts",
+      "type": "Unit",
+      "gate": "T1",
+      "domains": [
+        "provider-catalog"
       ]
     },
     {

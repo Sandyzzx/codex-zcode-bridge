@@ -38,6 +38,8 @@
     "test:clean-entrypoints": "npm run build:test && node scripts/test-clean-entrypoints.mjs",
     "validate:plugin": "node scripts/validate-plugin.mjs",
     "check:generated": "node scripts/check-generated-artifacts.mjs",
+    "cost-lab:web": "node tools/cost-lab/web-server.mjs",
+    "cost-lab:test": "node --test tools/cost-lab/test/*.test.mjs",
     "admin:abandon-held-operation": "node plugins/codex-zcode-bridge/dist/admin-abandon-held-operation.mjs",
     "bridge:mcp": "node dist/src/mcp/main.js"
   },

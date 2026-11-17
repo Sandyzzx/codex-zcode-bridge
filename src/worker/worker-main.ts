@@ -406,6 +406,8 @@ async function runZCodeAdapter(
     OfficialHostAdapter,
     loadOfficialHostProviderRuntimeAuthFactory,
   } = await import("../adapters/official-host-adapter.js");
+  const { OfficialAppServerWorkerAdapter } = await import("../adapters/official-app-server-adapter.js");
+  const { OFFICIAL_CODING_PLAN_PROVIDER_ID } = await import("../runtime/official-app-server-runtime.js");
   const { ZCodeAppServerAdapter } = await import("../adapters/zcode-app-server-adapter.js");
   const { buildTaskResult } = await import("../manager/normalize.js");
   const { normalizeUsage, phaseDuration } = await import("../usage/normalize.js");
@@ -732,13 +734,21 @@ async function runZCodeAdapter(
     : selectProductionAdapter();
   const adapter = selectedAdapter === "direct_app_server"
     ? new ZCodeAppServerAdapter(adapterOptions)
-    : new OfficialHostAdapter({
-        ...adapterOptions,
-        ...(dependencies.testOnlyOfficialHostModule
-          ? { testOnlyOfficialHostModule: dependencies.testOnlyOfficialHostModule } : {}),
-        ...(dependencies.testOnlyWorkerModuleUrl
-          ? { testOnlyWorkerModuleUrl: dependencies.testOnlyWorkerModuleUrl } : {}),
-      });
+    : execution.task.model?.provider_id === OFFICIAL_CODING_PLAN_PROVIDER_ID
+      ? new OfficialAppServerWorkerAdapter({
+          ...adapterOptions,
+          ...(dependencies.testOnlyOfficialHostModule
+            ? { testOnlyOfficialHostModule: dependencies.testOnlyOfficialHostModule } : {}),
+          ...(dependencies.testOnlyWorkerModuleUrl
+            ? { testOnlyWorkerModuleUrl: dependencies.testOnlyWorkerModuleUrl } : {}),
+        })
+      : new OfficialHostAdapter({
+          ...adapterOptions,
+          ...(dependencies.testOnlyOfficialHostModule
+            ? { testOnlyOfficialHostModule: dependencies.testOnlyOfficialHostModule } : {}),
+          ...(dependencies.testOnlyWorkerModuleUrl
+            ? { testOnlyWorkerModuleUrl: dependencies.testOnlyWorkerModuleUrl } : {}),
+        });
   try {
     const workspace: WorkspaceRef = {
       requestedPath: execution.task.workspace,

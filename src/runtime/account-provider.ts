@@ -214,9 +214,12 @@ function readAccountProviderSource(
     .sort((left, right) => left.providerId!.localeCompare(right.providerId!));
   if (!providerRules.length) return null;
 
-  const officialDataRoot = path.resolve(config.zcodeDataRoot);
-  const officialV2Dir = zcodeV2Dir(officialDataRoot);
+  // Account credentials and Coding Plan cache must be read from the same data
+  // root as the personal provider config. In isolated Workers HOME may point at
+  // a temporary directory while these official files are explicitly inherited.
+  const officialV2Dir = zcodeV2DataDir(config.providerPersonalConfigFile);
   if (!officialV2Dir) return null;
+  const officialDataRoot = path.dirname(officialV2Dir);
   const credentials = readJson(path.join(officialV2Dir, "config.json"));
   const credentialProviders = asRecord(credentials?.provider);
   const cache = readJson(path.join(officialV2Dir, "coding-plan-cache.json"));
@@ -282,11 +285,6 @@ function readAccountProviderSource(
 
   const builtinRevision = zcodeBuiltinRevision(table, config.providerBuiltinConfigFile);
   return { officialDataRoot, officialV2Dir, settingFile, builtinRevision, entries };
-}
-
-function zcodeV2Dir(zcodeDataRoot: string): string | null {
-  if (path.basename(zcodeDataRoot).toLowerCase() !== ".zcode") return null;
-  return path.join(zcodeDataRoot, "v2");
 }
 
 function zcodeBuiltinRevision(table: JsonRecord | null, sourceFile: string): string {
