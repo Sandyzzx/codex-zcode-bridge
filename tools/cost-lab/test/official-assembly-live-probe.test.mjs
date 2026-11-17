@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 
@@ -13,11 +14,14 @@ import {
   buildAccountConfigRevision,
   billingHourForTimestamp,
   calculateCreditBreakdown,
+  cleanupPreparedDeviceIdentity,
   compareBillingIdentitySurfaces,
   compareSharedState,
+  createProjectLocationCredentialService,
   isOffPeakBillingTime,
   parseArgs,
   patchReadOnlyRuntimeExports,
+  prepareDeviceIdentity,
   rpcParamShape,
   runProbeConversation,
   safeProtocolError,
@@ -149,6 +153,137 @@ test("official credential read admits only the pinned shared keyring lock", () =
   assert.equal(unknown.reason, "official_credential_read_isolation_unproven");
 });
 
+test("project location policy isolates baseline writes and reuses official cache read-only", async () => {
+  const locationKey = "project-key-location:v1:test";
+  const writes = [];
+  const base = {
+    async load(key) {
+      return key === locationKey ? '{"cached":true}' : "credential";
+    },
+    async loadMany(keys) {
+      return Object.fromEntries(keys.map((key) => [key, key === locationKey ? "cached" : "credential"]));
+    },
+    async save(key, value) { writes.push(["save", key, value]); },
+    async saveIfAbsent(key, value) { writes.push(["saveIfAbsent", key, value]); },
+    async delete(key) { writes.push(["delete", key]); },
+    async deleteIfEquals(key) { writes.push(["deleteIfEquals", key]); },
+    async updateMany() { writes.push(["updateMany"]); return true; },
+    async recoverUnreadable() { writes.push(["recoverUnreadable"]); return null; },
+  };
+
+  const isolated = createProjectLocationCredentialService(base, "in-memory");
+  assert.equal(await isolated.service.load(locationKey), null);
+  await isolated.service.save(locationKey, "isolated");
+  assert.equal(await isolated.service.load(locationKey), "isolated");
+  assert.equal(writes.length, 0);
+  assert.deepEqual(isolated.metrics, {
+    mode: "in-memory",
+    load_calls: 2,
+    cache_hits: 1,
+    cache_misses: 1,
+    write_attempts: 1,
+    writes_blocked: 0,
+  });
+
+  const readOnly = createProjectLocationCredentialService(base, "official-read-only");
+  assert.equal(await readOnly.service.load(locationKey), '{"cached":true}');
+  await assert.rejects(
+    () => readOnly.service.save(locationKey, "replacement"),
+    /write_blocked/u,
+  );
+  await assert.rejects(
+    () => readOnly.service.delete(locationKey),
+    /write_blocked/u,
+  );
+  assert.equal(writes.length, 0);
+  assert.deepEqual(readOnly.metrics, {
+    mode: "official-read-only",
+    load_calls: 1,
+    cache_hits: 1,
+    cache_misses: 0,
+    write_attempts: 2,
+    writes_blocked: 2,
+  });
+  assert.throws(
+    () => createProjectLocationCredentialService(base, "unknown"),
+    /unsupported project location mode/u,
+  );
+});
+
+test("official device identity is reused without exposing the raw device id", async () => {
+  const root = await mkdtemp(path.join(PROJECT_ROOT, ".run", "device-identity-test-"));
+  const officialDataBase = path.join(root, "official");
+  const fixtureHome = path.join(root, "fixture-home");
+  const source = path.join(officialDataBase, ".zcode", "v2", "telemetry-state.json");
+  const target = path.join(fixtureHome, ".zcode", "v2", "telemetry-state.json");
+  const deviceMid = "fixture-device-mid-123";
+  try {
+    await mkdir(path.dirname(source), { recursive: true });
+    await writeFile(source, JSON.stringify({
+      deviceMid,
+      lastDailyActiveDate: "2026-11-17",
+    }));
+
+    const isolated = await prepareDeviceIdentity({
+      officialDataBase,
+      fixtureHome,
+      mode: "fixture-generated",
+    });
+    assert.deepEqual(isolated, {
+      mode: "FIXTURE_GENERATED_IF_MISSING",
+      device_mid_fingerprint: null,
+    });
+    await assert.rejects(() => readFile(target), /ENOENT/u);
+
+    const reused = await prepareDeviceIdentity({
+      officialDataBase,
+      fixtureHome,
+      mode: "official-reused",
+    });
+    assert.equal(reused.mode, "OFFICIAL_DEVICE_MID_REUSED");
+    assert.equal(reused.source_relative, ".zcode/v2/telemetry-state.json");
+    assert.equal(
+      reused.device_mid_fingerprint,
+      createHash("sha256").update(deviceMid).digest("hex"),
+    );
+    assert.equal(JSON.stringify(reused).includes(deviceMid), false);
+    assert.deepEqual(JSON.parse(await readFile(target, "utf8")), { deviceMid });
+    assert.deepEqual(JSON.parse(await readFile(source, "utf8")), {
+      deviceMid,
+      lastDailyActiveDate: "2026-11-17",
+    });
+    assert.deepEqual(
+      await cleanupPreparedDeviceIdentity({ fixtureHome }),
+      {
+        status: "PASS",
+        raw_fixture_removed: true,
+      },
+    );
+    await assert.rejects(() => readFile(target), /ENOENT/u);
+    assert.deepEqual(
+      await cleanupPreparedDeviceIdentity({ fixtureHome }),
+      {
+        status: "PASS",
+        raw_fixture_removed: false,
+      },
+    );
+    assert.deepEqual(JSON.parse(await readFile(source, "utf8")), {
+      deviceMid,
+      lastDailyActiveDate: "2026-11-17",
+    });
+    await assert.rejects(
+      () => prepareDeviceIdentity({
+        officialDataBase,
+        fixtureHome,
+        mode: "unknown",
+      }),
+      /unsupported device identity mode/u,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("protocol trace records the first failed RPC without exposing credentials", async () => {
   const state = { rpc_trace: [], rpc_last_success: null, rpc_first_failure: null };
   const client = {
@@ -276,6 +411,14 @@ test("protocol smoke honors its isolated run root argument", () => {
   ]);
   assert.equal(options.mode, "protocol-smoke");
   assert.equal(options.runRoot, path.join(PROJECT_ROOT, ".run", "protocol-smoke-fixture"));
+  assert.equal(
+    parseArgs(["--billing", "--variant", "v4-official-device-mid"]).variant,
+    "v4-official-device-mid",
+  );
+  assert.throws(
+    () => parseArgs(["--billing", "--variant", "unknown"]),
+    /unknown variant/u,
+  );
 });
 
 test("credit breakdown reconciles the recovered native 0.67 evidence", () => {

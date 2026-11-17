@@ -6,6 +6,7 @@ import {
   readFile,
   readdir,
   rename,
+  rm,
   stat,
   symlink,
   writeFile,
@@ -67,6 +68,24 @@ const HOST_ASSETS = Object.freeze({
 const TARGET_PROVIDER_ID = "account:bigmodel-individual-coding-plan";
 const TARGET_MODEL_ID = "GLM-5.3-Flash";
 const PROJECT_LOCATION_PREFIX = "project-key-location:v1:";
+const OFFICIAL_TELEMETRY_STATE_RELATIVE = path.join(".zcode", "v2", "telemetry-state.json");
+const BILLING_VARIANTS = Object.freeze({
+  baseline: Object.freeze({
+    experimentId: "bridge-b-official-assembly-v2",
+    projectLocationMode: "in-memory",
+    deviceIdentityMode: "fixture-generated",
+  }),
+  "v4-project-location-cache": Object.freeze({
+    experimentId: "bridge-b-v4-project-location-cache",
+    projectLocationMode: "official-read-only",
+    deviceIdentityMode: "fixture-generated",
+  }),
+  "v4-official-device-mid": Object.freeze({
+    experimentId: "bridge-b-v4-official-device-mid",
+    projectLocationMode: "in-memory",
+    deviceIdentityMode: "official-reused",
+  }),
+});
 const APPROVED_TRANSIENT_LOCK = "credentials.json.keyring.lock";
 const DEFAULT_OFFICIAL_DATA_BASE = "D:\\Program Files";
 const RPC_TIMEOUT_MS = 30_000;
@@ -86,6 +105,7 @@ const SHARED_STATE_FILES = [
   "credentials.json.lock",
   "setting.json",
   "settings.json",
+  "telemetry-state.json",
   "provider_config.json",
   "config.json",
   "coding-plan-cache.json",
@@ -103,8 +123,19 @@ function appendNodeOption(existing, required) {
   return [options, required].filter(Boolean).join(" ");
 }
 
-function liveExperimentId(mode) {
-  if (mode === "billing") return "bridge-b-official-assembly-v2";
+function variantFromArgs(args) {
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] !== "--variant") continue;
+    const value = args[index + 1];
+    return value && BILLING_VARIANTS[value] ? value : "baseline";
+  }
+  return "baseline";
+}
+
+function liveExperimentId(mode, args = []) {
+  if (mode === "billing") {
+    return BILLING_VARIANTS[variantFromArgs(args)].experimentId;
+  }
   if (mode === "protocol-smoke") return "official-protocol-smoke";
   return "official-network-smoke";
 }
@@ -126,7 +157,7 @@ export function ensureHarnessNetworkObserver({ runRoot, mode, args }) {
         ...process.env,
         COST_LAB_HARNESS_REEXEC: "1",
         COST_LAB_NETWORK_DIR: networkDirectory,
-        COST_LAB_EXPERIMENT_ID: liveExperimentId(mode),
+        COST_LAB_EXPERIMENT_ID: liveExperimentId(mode, args),
         COST_LAB_PROCESS_ROLE: "bridge_main_or_experiment_harness",
         NODE_OPTIONS: appendNodeOption(process.env.NODE_OPTIONS, requiredOption),
       },
@@ -246,6 +277,210 @@ export function calculateCreditBreakdown({
     effective_extra_discount_ratio:
       actual !== null && expectedWithoutDiscount > 0 ? actual / expectedWithoutDiscount : null,
   };
+}
+
+export function createProjectLocationCredentialService(
+  credentialService,
+  mode = "in-memory",
+) {
+  if (mode !== "in-memory" && mode !== "official-read-only") {
+    throw new Error(`unsupported project location mode: ${mode}`);
+  }
+  const isolatedLocations = new Map();
+  const metrics = {
+    mode,
+    load_calls: 0,
+    cache_hits: 0,
+    cache_misses: 0,
+    write_attempts: 0,
+    writes_blocked: 0,
+  };
+  const isLocationKey = (key) =>
+    typeof key === "string" && key.startsWith(PROJECT_LOCATION_PREFIX);
+  const allLocationKeys = (keys) => keys.every(isLocationKey);
+  const blockWrite = async (key) => {
+    if (!isLocationKey(key)) return false;
+    metrics.write_attempts += 1;
+    metrics.writes_blocked += 1;
+    throw new Error("cost_lab_project_location_write_blocked");
+  };
+  const observeLoadedLocation = (key, value) => {
+    if (!isLocationKey(key)) return value;
+    metrics.load_calls += 1;
+    if (value === null || value === undefined || value === "") {
+      metrics.cache_misses += 1;
+    } else {
+      metrics.cache_hits += 1;
+    }
+    return value;
+  };
+  const service = new Proxy(credentialService, {
+    get(target, property) {
+      if (property === "load") {
+        return async (key) => {
+          if (!isLocationKey(key)) return target.load(key);
+          const value = mode === "official-read-only"
+            ? await target.load(key)
+            : isolatedLocations.get(key) ?? null;
+          return observeLoadedLocation(key, value);
+        };
+      }
+      if (property === "loadMany") {
+        return async (keys) => Object.fromEntries(await Promise.all(keys.map(async (key) => [
+          key,
+          isLocationKey(key)
+            ? mode === "official-read-only"
+              ? observeLoadedLocation(key, await target.load(key))
+              : observeLoadedLocation(key, isolatedLocations.get(key) ?? null)
+            : await target.load(key),
+        ])));
+      }
+      if (property === "save") {
+        return async (key, value, assertCurrent) => {
+          if (mode === "official-read-only" && isLocationKey(key)) {
+            await blockWrite(key);
+          }
+          if (!isLocationKey(key)) return target.save(key, value, assertCurrent);
+          metrics.write_attempts += 1;
+          assertCurrent?.();
+          isolatedLocations.set(key, value);
+        };
+      }
+      if (property === "saveIfAbsent") {
+        return async (key, value) => {
+          if (mode === "official-read-only" && isLocationKey(key)) {
+            await blockWrite(key);
+          }
+          if (!isLocationKey(key)) return target.saveIfAbsent(key, value);
+          metrics.write_attempts += 1;
+          if (isolatedLocations.has(key)) return isolatedLocations.get(key);
+          isolatedLocations.set(key, value);
+          return value;
+        };
+      }
+      if (property === "delete") {
+        return async (key, assertCurrent) => {
+          if (mode === "official-read-only" && isLocationKey(key)) {
+            await blockWrite(key);
+          }
+          if (!isLocationKey(key)) return target.delete(key, assertCurrent);
+          metrics.write_attempts += 1;
+          assertCurrent?.();
+          isolatedLocations.delete(key);
+        };
+      }
+      if (property === "deleteIfEquals") {
+        return async (key, expected) => {
+          if (mode === "official-read-only" && isLocationKey(key)) {
+            await blockWrite(key);
+          }
+          if (!isLocationKey(key)) return target.deleteIfEquals(key, expected);
+          metrics.write_attempts += 1;
+          if (isolatedLocations.get(key) === expected) isolatedLocations.delete(key);
+        };
+      }
+      if (property === "updateMany") {
+        return async (changes, options) => {
+          const keys = Object.keys(changes);
+          if (mode === "official-read-only" && keys.some(isLocationKey)) {
+            metrics.write_attempts += 1;
+            metrics.writes_blocked += 1;
+            throw new Error("cost_lab_project_location_write_blocked");
+          }
+          if (!allLocationKeys(keys)) return target.updateMany(changes, options);
+          metrics.write_attempts += 1;
+          options?.assertCurrent?.();
+          for (const [key, value] of Object.entries(changes)) {
+            if (value === null) isolatedLocations.delete(key);
+            else isolatedLocations.set(key, value);
+          }
+          return true;
+        };
+      }
+      if (property === "recoverUnreadable") {
+        return async (key, assertCurrent) => {
+          if (mode === "official-read-only" && isLocationKey(key)) {
+            await blockWrite(key);
+          }
+          if (!isLocationKey(key)) return target.recoverUnreadable(key, assertCurrent);
+          metrics.write_attempts += 1;
+          assertCurrent?.();
+          const value = isolatedLocations.get(key) ?? null;
+          isolatedLocations.delete(key);
+          return value;
+        };
+      }
+      const value = Reflect.get(target, property);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  return { service, metrics };
+}
+
+export async function prepareDeviceIdentity({
+  officialDataBase,
+  fixtureHome,
+  mode = "fixture-generated",
+}) {
+  if (mode !== "fixture-generated" && mode !== "official-reused") {
+    throw new Error(`unsupported device identity mode: ${mode}`);
+  }
+  if (mode === "fixture-generated") {
+    return {
+      mode: "FIXTURE_GENERATED_IF_MISSING",
+      device_mid_fingerprint: null,
+    };
+  }
+
+  const source = path.join(officialDataBase, OFFICIAL_TELEMETRY_STATE_RELATIVE);
+  const target = path.join(fixtureHome, OFFICIAL_TELEMETRY_STATE_RELATIVE);
+  assertInside(fixtureHome, target);
+  let parsed;
+  try {
+    parsed = JSON.parse(await readFile(source, "utf8"));
+  } catch {
+    throw new Error("official_device_identity_unavailable");
+  }
+  const deviceMid = typeof parsed?.deviceMid === "string" ? parsed.deviceMid.trim() : "";
+  if (!deviceMid || !/^[\x20-\x7e]+$/u.test(deviceMid)) {
+    throw new Error("official_device_identity_invalid");
+  }
+  await mkdir(path.dirname(target), { recursive: true });
+  await writeFile(
+    target,
+    JSON.stringify({ deviceMid }, null, 2),
+    { encoding: "utf8", flag: "w", mode: 0o600 },
+  );
+  return {
+    mode: "OFFICIAL_DEVICE_MID_REUSED",
+    source_relative: OFFICIAL_TELEMETRY_STATE_RELATIVE.replaceAll(path.sep, "/"),
+    device_mid_fingerprint: createHash("sha256").update(deviceMid).digest("hex"),
+  };
+}
+
+export async function cleanupPreparedDeviceIdentity({ fixtureHome }) {
+  const target = path.join(fixtureHome, OFFICIAL_TELEMETRY_STATE_RELATIVE);
+  assertInside(fixtureHome, target);
+  let existed = false;
+  try {
+    existed = (await stat(target)).isFile();
+    await rm(target, { force: true });
+    return {
+      status: "PASS",
+      raw_fixture_removed: existed,
+    };
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return {
+        status: "PASS",
+        raw_fixture_removed: false,
+      };
+    }
+    return {
+      status: "FAIL",
+      raw_fixture_removed: false,
+    };
+  }
 }
 
 function getWindowsPowerShellPath() {
@@ -412,7 +647,14 @@ function syntheticCodingPlanCache() {
   };
 }
 
-async function prepareIsolatedFixture(runRoot, { experimentId = "isolated-smoke" } = {}) {
+async function prepareIsolatedFixture(
+  runRoot,
+  {
+    experimentId = "isolated-smoke",
+    officialDataBase = DEFAULT_OFFICIAL_DATA_BASE,
+    deviceIdentityMode = "fixture-generated",
+  } = {},
+) {
   const paths = isolatedPaths(runRoot);
   const assets = await verifyLiveHostAssets();
   await mkdir(paths.v2, { recursive: true });
@@ -427,6 +669,11 @@ async function prepareIsolatedFixture(runRoot, { experimentId = "isolated-smoke"
     "Isolated official assembly probe workspace.\n",
     { encoding: "utf8", flag: "w" },
   );
+  const deviceIdentity = await prepareDeviceIdentity({
+    officialDataBase,
+    fixtureHome: paths.home,
+    mode: deviceIdentityMode,
+  });
 
   const nodeOptions = appendNodeOption(
     process.env.NODE_OPTIONS,
@@ -453,7 +700,7 @@ async function prepareIsolatedFixture(runRoot, { experimentId = "isolated-smoke"
     TMP: path.join(paths.root, "tmp"),
   };
   await mkdir(env.TEMP, { recursive: true });
-  return { paths, env };
+  return { paths, env, deviceIdentity };
 }
 
 async function captureSharedState(officialDataBase) {
@@ -673,6 +920,7 @@ async function createReadOnlyAuthService({
   officialDataBase,
   assets,
   events,
+  projectLocationMode = "in-memory",
 }) {
   const runtimeSource = await readFile(assets.hostModule, "utf8");
   const isolation = assessCredentialReadIsolation(runtimeSource, officialDataBase);
@@ -770,76 +1018,11 @@ async function createReadOnlyAuthService({
     };
   }
 
-  const isolatedLocations = new Map();
-  const locationKeys = (keys) => keys.every((key) =>
-    typeof key === "string" && key.startsWith(PROJECT_LOCATION_PREFIX));
-  const credentialService = new Proxy(realReadOnly, {
-    get(target, property) {
-      if (property === "load") {
-        return async (key) => key.startsWith(PROJECT_LOCATION_PREFIX)
-          ? isolatedLocations.get(key) ?? null
-          : target.load(key);
-      }
-      if (property === "loadMany") {
-        return async (keys) => Object.fromEntries(await Promise.all(keys.map(async (key) => [
-          key,
-          key.startsWith(PROJECT_LOCATION_PREFIX)
-            ? isolatedLocations.get(key) ?? null
-            : await target.load(key),
-        ])));
-      }
-      if (property === "save") {
-        return async (key, value, assertCurrent) => {
-          if (!key.startsWith(PROJECT_LOCATION_PREFIX)) return target.save(key, value, assertCurrent);
-          assertCurrent?.();
-          isolatedLocations.set(key, value);
-        };
-      }
-      if (property === "saveIfAbsent") {
-        return async (key, value) => {
-          if (!key.startsWith(PROJECT_LOCATION_PREFIX)) return target.saveIfAbsent(key, value);
-          if (isolatedLocations.has(key)) return isolatedLocations.get(key);
-          isolatedLocations.set(key, value);
-          return value;
-        };
-      }
-      if (property === "delete") {
-        return async (key, assertCurrent) => {
-          if (!key.startsWith(PROJECT_LOCATION_PREFIX)) return target.delete(key, assertCurrent);
-          assertCurrent?.();
-          isolatedLocations.delete(key);
-        };
-      }
-      if (property === "deleteIfEquals") {
-        return async (key, expected) => {
-          if (!key.startsWith(PROJECT_LOCATION_PREFIX)) return target.deleteIfEquals(key, expected);
-          if (isolatedLocations.get(key) === expected) isolatedLocations.delete(key);
-        };
-      }
-      if (property === "updateMany") {
-        return async (changes, options) => {
-          if (!locationKeys(Object.keys(changes))) return target.updateMany(changes, options);
-          options?.assertCurrent?.();
-          for (const [key, value] of Object.entries(changes)) {
-            if (value === null) isolatedLocations.delete(key);
-            else isolatedLocations.set(key, value);
-          }
-          return true;
-        };
-      }
-      if (property === "recoverUnreadable") {
-        return async (key, assertCurrent) => {
-          if (!key.startsWith(PROJECT_LOCATION_PREFIX)) return target.recoverUnreadable(key, assertCurrent);
-          assertCurrent?.();
-          const value = isolatedLocations.get(key) ?? null;
-          isolatedLocations.delete(key);
-          return value;
-        };
-      }
-      const value = Reflect.get(target, property);
-      return typeof value === "function" ? value.bind(target) : value;
-    },
-  });
+  const projectLocations = createProjectLocationCredentialService(
+    realReadOnly,
+    projectLocationMode,
+  );
+  const credentialService = projectLocations.service;
 
   const service = runtime.createOAuthProviderRuntimeAuthService({
     credentialService,
@@ -865,7 +1048,10 @@ async function createReadOnlyAuthService({
     service,
     store_status: credentialRead.value.store_status,
     lock_lifecycle: credentialRead.lock_lifecycle,
-    project_token_locations: "IN_MEMORY_ONLY",
+    project_token_locations: projectLocationMode === "official-read-only"
+      ? "OFFICIAL_READ_ONLY_CACHE"
+      : "IN_MEMORY_ONLY",
+    project_location_metrics: projectLocations.metrics,
     credential_store: "OFFICIAL_READ_ONLY",
   };
 }
@@ -1271,8 +1457,11 @@ export async function runIsolatedSmoke({
   runRoot = DEFAULT_RUN_ROOT,
   officialDataBase = DEFAULT_OFFICIAL_DATA_BASE,
   officialSourceRoot = DEFAULT_OFFICIAL_SOURCE,
+  variant = "baseline",
   protocolDiagnostic = false,
 } = {}) {
+  const variantConfig = BILLING_VARIANTS[variant];
+  if (!variantConfig) throw new Error(`unknown billing variant: ${variant}`);
   for (const [root, candidate] of [
     [PROJECT_ROOT, runRoot],
     [runRoot, isolatedPaths(runRoot).root],
@@ -1282,7 +1471,11 @@ export async function runIsolatedSmoke({
   const sourceAudit = await auditOfficialAssemblySources({ officialSourceRoot });
   const assets = await verifyLiveHostAssets();
   const experimentId = protocolDiagnostic ? "official-protocol-smoke" : "official-network-smoke";
-  const { paths, env } = await prepareIsolatedFixture(runRoot, { experimentId });
+  const { paths, env, deviceIdentity } = await prepareIsolatedFixture(runRoot, {
+    experimentId,
+    officialDataBase,
+    deviceIdentityMode: variantConfig.deviceIdentityMode,
+  });
   const sharedBefore = await captureSharedState(officialDataBase);
   const processesBefore = listProcesses();
   const hostWakeBefore = processesBefore
@@ -1295,6 +1488,7 @@ export async function runIsolatedSmoke({
     officialDataBase,
     assets,
     events,
+    projectLocationMode: variantConfig.projectLocationMode,
   });
   if (auth.status !== "PASS") {
     const processesAfter = listProcesses();
@@ -1312,6 +1506,7 @@ export async function runIsolatedSmoke({
       reason: auth.reason,
       credential_store_status: auth.store_status,
       official_source: sourceAudit.official_source,
+      device_identity: deviceIdentity,
       isolated_paths: {
         root: projectRelative(paths.root),
         home: projectRelative(paths.home),
@@ -1472,6 +1667,9 @@ export async function runIsolatedSmoke({
     harnessPreloadInitialized &&
     network.preload_injected_in_app_server &&
     network.official_capture.control_sent;
+  const deviceIdentityCleanup = await cleanupPreparedDeviceIdentity({
+    fixtureHome: paths.home,
+  });
   const passed =
     events.every((event) => event.type !== "smoke_error") &&
     (!protocolDiagnostic || state.rpc_trace.every((entry) => entry.status === "PASS")) &&
@@ -1481,13 +1679,17 @@ export async function runIsolatedSmoke({
     sharedComparison.unchanged &&
     cleanupPassed &&
     hostWakeUnchanged &&
-    networkProbeReady;
+    networkProbeReady &&
+    deviceIdentityCleanup.status === "PASS";
   const evidence = {
     schema_version: 1,
     kind: "coding_plan_official_assembly_isolated_smoke",
     generated_at: new Date().toISOString(),
+    variant,
     status: passed ? "PASS" : "FAIL",
     official_source: sourceAudit.official_source,
+    device_identity: deviceIdentity,
+    device_identity_cleanup: deviceIdentityCleanup,
     isolated_paths: {
       root: projectRelative(paths.root),
       home: projectRelative(paths.home),
@@ -1501,6 +1703,7 @@ export async function runIsolatedSmoke({
       credential_store_status: auth.store_status,
       keyring_lock_lifecycle: auth.lock_lifecycle,
       project_token_locations: auth.project_token_locations,
+      project_location_metrics: auth.project_location_metrics ?? null,
       runtime_auth_service_initialized: auth.status === "PASS",
     },
     writes: {
@@ -1886,7 +2089,11 @@ export async function runBillingProbe({
   officialDataBase = DEFAULT_OFFICIAL_DATA_BASE,
   officialSourceRoot = DEFAULT_OFFICIAL_SOURCE,
   beforeSnapshotPath,
+  variant = "baseline",
 } = {}) {
+  const variantConfig = BILLING_VARIANTS[variant];
+  if (!variantConfig) throw new Error(`unknown billing variant: ${variant}`);
+  const experimentId = variantConfig.experimentId;
   const paths = isolatedPaths(runRoot);
   assertInside(PROJECT_ROOT, runRoot);
   assertInside(runRoot, paths.root);
@@ -1898,6 +2105,9 @@ export async function runBillingProbe({
       smoke.cleanup?.status !== "PASS" ||
       smoke.network_probe?.ready !== true) {
     throw new Error("isolated smoke gate is not PASS");
+  }
+  if (smoke.variant !== undefined && smoke.variant !== variant) {
+    throw new Error("isolated smoke variant does not match billing variant");
   }
   if (existsSync(paths.billingStarted)) {
     throw new Error("B billing probe was already attempted; refusing a second real request");
@@ -1913,8 +2123,10 @@ export async function runBillingProbe({
   const beforeWindow = validateBeforeBillingSnapshot(beforeSnapshot);
   const sourceAudit = await auditOfficialAssemblySources({ officialSourceRoot });
   const assets = await verifyLiveHostAssets();
-  const { env } = await prepareIsolatedFixture(runRoot, {
-    experimentId: "bridge-b-official-assembly-v2",
+  const { env, deviceIdentity } = await prepareIsolatedFixture(runRoot, {
+    experimentId,
+    officialDataBase,
+    deviceIdentityMode: variantConfig.deviceIdentityMode,
   });
   const sharedBefore = await captureSharedState(officialDataBase);
   const processesBefore = listProcesses();
@@ -1928,6 +2140,7 @@ export async function runBillingProbe({
     officialDataBase,
     assets,
     events,
+    projectLocationMode: variantConfig.projectLocationMode,
   });
   if (auth.status !== "PASS") {
     return {
@@ -1994,7 +2207,7 @@ export async function runBillingProbe({
     await beginOfficialNetworkCapture(
       client,
       state,
-      "bridge-b-official-assembly-v2",
+      experimentId,
     );
     const builtinSource = await readFile(assets.builtinProviderConfig, "utf8");
     const accountProviderPayload = buildAccountProviderPayload(
@@ -2040,7 +2253,7 @@ export async function runBillingProbe({
   const network = await collectNetworkEvidence({
     paths,
     state,
-    experimentId: "bridge-b-official-assembly-v2",
+    experimentId,
     runtimePid,
     rpcTrace: state.rpc_trace,
   });
@@ -2051,6 +2264,9 @@ export async function runBillingProbe({
     network.preload_injected_in_app_server &&
     network.official_capture.control_sent &&
     network.coverage.PROBE_COVERAGE === "COMPLETE";
+  const deviceIdentityCleanup = await cleanupPreparedDeviceIdentity({
+    fixtureHome: paths.home,
+  });
   const completed = !primaryError && !state.timeout &&
     state.terminal_type === "turn.completed" &&
     state.result_type === "success" &&
@@ -2060,11 +2276,13 @@ export async function runBillingProbe({
     sameBillingHour &&
     sharedComparison.unchanged &&
     cleanupPassed &&
-    hostWakeUnchanged;
+    hostWakeUnchanged &&
+    deviceIdentityCleanup.status === "PASS";
   const evidence = {
     schema_version: 1,
     kind: "coding_plan_official_assembly_b_billing",
     generated_at: finishedAt,
+    variant,
     status: completed && safetyGatePassed && networkGatePassed
       ? "PASS"
       : "FAIL",
@@ -2081,6 +2299,9 @@ export async function runBillingProbe({
       same_billing_hour: sameBillingHour,
       provider_id: TARGET_PROVIDER_ID,
       model_id: TARGET_MODEL_ID,
+      variant,
+      project_location_mode: variantConfig.projectLocationMode,
+      device_identity_mode: variantConfig.deviceIdentityMode,
       reasoning_level: conversation?.reasoning_level ?? null,
       prompt_kind: "exact_marker_json",
       real_model_requests: 1,
@@ -2142,7 +2363,10 @@ export async function runBillingProbe({
       credential_store_status: auth.store_status,
       keyring_lock_lifecycle: auth.lock_lifecycle,
       project_token_locations: auth.project_token_locations,
+      project_location_metrics: auth.project_location_metrics ?? null,
     },
+    device_identity: deviceIdentity,
+    device_identity_cleanup: deviceIdentityCleanup,
   };
   await writeJsonAtomic(paths.billingEvidence, evidence);
   return evidence;
@@ -2445,6 +2669,7 @@ export function parseArgs(argv) {
     runRoot: DEFAULT_RUN_ROOT,
     officialSourceRoot: DEFAULT_OFFICIAL_SOURCE,
     officialDataBase: DEFAULT_OFFICIAL_DATA_BASE,
+    variant: "baseline",
     beforeSnapshotPath: null,
     afterSnapshotPath: null,
     billingEvidencePath: path.join(isolatedPaths(DEFAULT_RUN_ROOT).root, "billing-evidence.json"),
@@ -2455,13 +2680,17 @@ export function parseArgs(argv) {
     else if (argument === "--protocol-smoke") options.mode = "protocol-smoke";
     else if (argument === "--billing") options.mode = "billing";
     else if (argument === "--analyze") options.mode = "analyze";
-    else if (["--run-root", "--official-source", "--official-data-base",
+    else if (["--run-root", "--official-source", "--official-data-base", "--variant",
       "--before-snapshot", "--after-snapshot", "--billing-evidence"].includes(argument)) {
       const value = argv[++index];
       if (!value) throw new Error(`${argument} requires a value`);
       if (argument === "--run-root") options.runRoot = path.resolve(value);
       if (argument === "--official-source") options.officialSourceRoot = path.resolve(value);
       if (argument === "--official-data-base") options.officialDataBase = path.resolve(value);
+      if (argument === "--variant") {
+        if (!BILLING_VARIANTS[value]) throw new Error(`unknown variant: ${value}`);
+        options.variant = value;
+      }
       if (argument === "--before-snapshot") options.beforeSnapshotPath = path.resolve(value);
       if (argument === "--after-snapshot") options.afterSnapshotPath = path.resolve(value);
       if (argument === "--billing-evidence") options.billingEvidencePath = path.resolve(value);
@@ -2542,6 +2771,7 @@ async function main() {
     "  node tools/cost-lab/official-assembly-live-probe.mjs --smoke",
     "  node tools/cost-lab/official-assembly-live-probe.mjs --protocol-smoke",
     "  node tools/cost-lab/official-assembly-live-probe.mjs --billing --before-snapshot <json>",
+    "  node tools/cost-lab/official-assembly-live-probe.mjs --billing --variant v4-project-location-cache --before-snapshot <json>",
     "  node tools/cost-lab/official-assembly-live-probe.mjs --analyze --before-snapshot <json> --after-snapshot <json>",
     "",
     "Live modes write only under the task .run directory. No mode is enabled by default.",

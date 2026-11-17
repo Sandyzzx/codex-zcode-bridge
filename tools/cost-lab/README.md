@@ -262,13 +262,22 @@ node tools/cost-lab/coding-plan-billing.mjs snapshot `
 ```powershell
 node tools/cost-lab/official-assembly-live-probe.mjs `
   --protocol-smoke `
+  --variant v4-official-device-mid `
   --run-root .run/official-b-v2
 
 node tools/cost-lab/official-assembly-live-probe.mjs `
   --billing `
+  --variant v4-official-device-mid `
   --run-root .run/official-b-v2 `
   --before-snapshot .run/fresh-before.json
 ```
+
+`baseline` generates a fixture-local Device MID. `v4-project-location-cache`
+reuses the official Project location cache read-only. `v4-official-device-mid`
+copies only the existing `deviceMid` from the official telemetry state into the
+isolated official schema; evidence retains only its SHA-256 fingerprint and
+never the raw value. Every variant still requires unchanged shared-file
+metadata, transient-lock release, Cleanup PASS and Host Wake PASS.
 
 `billing-started.json` 一旦存在，代码会拒绝第二次真实请求。Billing 模式只有在
 协议 smoke、共享状态不变、Cleanup、Host Wake、同一账单小时和完整 Coverage
