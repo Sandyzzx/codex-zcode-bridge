@@ -11,7 +11,7 @@ export const OFFICIAL_RUNTIME_PATH = path.join(
   "official-billing-runtime.mjs",
 );
 export const OFFICIAL_RUNTIME_SHA256 =
-  "519e8ccbae36ac5651359b6301425e92b02d2be88a1f9c31dcb669d346e6e0b2";
+  "4414b2436d26f7d6d0467c69ffa182c25496a4e3453ff8afe8f9d8d7d9129e62";
 export const OFFICIAL_KEYRING_NATIVE_SHA256 =
   "52b16658275b7848f8081a6542fee3448f1b1c5d3a36487107ae0e7cec95ac6f";
 export const OFFICIAL_KEYRING_NATIVE_PATH = path.join(

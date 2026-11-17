@@ -28,6 +28,33 @@ const SAFE_HEADER_VALUES = Object.freeze([
   "x-client-timezone",
   "x-client-language",
 ]);
+const SAFE_RESPONSE_HEADER_VALUES = Object.freeze([
+  "content-type",
+  "date",
+  "ga-traceid",
+  "server",
+  "x-log-id",
+  "x-request-id",
+  "x-site-cache-status",
+]);
+const MODEL_LIFECYCLE_EVENTS = new Set([
+  "ttft.model.request_started",
+  "ttft.model.response_headers",
+  "model.network.failed",
+  "model.request.failed",
+  "model.network.completed",
+  "model.request.completed",
+  "model.sdk.generate.completed",
+  "model.sdk.stream.completed",
+]);
+const TERMINAL_MODEL_EVENTS = new Set([
+  "model.network.failed",
+  "model.request.failed",
+  "model.network.completed",
+  "model.request.completed",
+  "model.sdk.generate.completed",
+  "model.sdk.stream.completed",
+]);
 const MODEL_USAGE_FIELDS = Object.freeze([
   "id",
   "logical_request_id",
@@ -285,13 +312,13 @@ export function projectModelUsageRow(row, context = {}) {
   };
 }
 
-function safeHeaderProjection(headers) {
+function safeHeaderProjection(headers, allowedNames = SAFE_HEADER_VALUES) {
   const source = headers && typeof headers === "object" ? headers : {};
   const normalized = new Map(
     Object.entries(source).map(([key, value]) => [key.toLowerCase(), value]),
   );
   const values = {};
-  for (const name of SAFE_HEADER_VALUES) {
+  for (const name of allowedNames) {
     if (normalized.has(name)) values[name] = String(normalized.get(name));
   }
   return {
@@ -323,6 +350,10 @@ export function projectModelIoRecord(row, context = {}) {
   const response = row?.response ?? {};
   const usage = responseUsage(row);
   const headers = safeHeaderProjection(request.headers);
+  const responseHeaders = safeHeaderProjection(
+    response.headers,
+    SAFE_RESPONSE_HEADER_VALUES,
+  );
   return {
     schema_version: NATIVE_PROBE_SCHEMA_VERSION,
     source_client: "native-zcode",
@@ -345,10 +376,13 @@ export function projectModelIoRecord(row, context = {}) {
     model_id: model.modelId ?? response.modelId ?? null,
     reasoning_level: null,
     transport_kind: "official_native_model_io",
+    model_transport: null,
+    provider_kind: null,
     http_method: "UNKNOWN",
     endpoint_host: null,
     endpoint_path: null,
     http_status: "UNKNOWN",
+    response_headers_at: null,
     organization_id: null,
     project_id: null,
     api_key_id: null,
@@ -370,6 +404,9 @@ export function projectModelIoRecord(row, context = {}) {
     evidence_source: "official_native_model_io",
     header_names: headers.header_names,
     safe_header_values: headers.safe_header_values,
+    response_header_names: responseHeaders.header_names,
+    safe_response_header_values: responseHeaders.safe_header_values,
+    provider_response_id: response.responseId ?? null,
     message_count: numeric(request.messageCount),
     message_offset: numeric(request.messageOffset),
     messages_kind: request.messagesKind ?? null,
@@ -407,84 +444,194 @@ function endpointParts(baseUrl) {
   }
 }
 
-export function projectModelLogRecord(event, context = {}) {
-  const details = event?.context ?? {};
-  const completedAt = event?.timestamp ?? null;
-  const durationMs = numeric(details.durationMs ?? event?.durationMs);
+function finiteOrNull(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function latestValue(events, read) {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const value = read(events[index]);
+    if (value !== undefined && value !== null && value !== "") return value;
+  }
+  return null;
+}
+
+function lifecycleStatus(events) {
+  const status = latestValue(events, (event) => event.status);
+  if (status) return String(status);
+  return events.some((event) =>
+    event.event === "model.network.failed" || event.event === "model.request.failed")
+    ? "failed"
+    : "UNKNOWN";
+}
+
+export function projectModelLifecycleRecord(events, context = {}) {
+  const ordered = [...events].sort((left, right) =>
+    String(left.timestamp).localeCompare(String(right.timestamp)));
+  const first = ordered[0];
+  const details = (event) => event?.context ?? {};
+  const terminal = [...ordered].reverse().find((event) =>
+    TERMINAL_MODEL_EVENTS.has(event.event));
+  const requestStarted = ordered.find((event) =>
+    event.event === "ttft.model.request_started");
+  const responseHeaders = ordered.find((event) =>
+    event.event === "ttft.model.response_headers");
+  const completedAt = terminal?.timestamp ?? null;
+  const durationMs = finiteOrNull(
+    latestValue(ordered, (event) => event.durationMs ?? details(event).durationMs),
+  );
   const completedMs = Date.parse(completedAt);
-  const startedAt = Number.isFinite(completedMs) && durationMs >= 0
+  const inferredStartedAt = Number.isFinite(completedMs)
+    && durationMs !== null
+    && durationMs >= 0
     ? new Date(completedMs - durationMs).toISOString()
     : null;
-  const endpoint = endpointParts(details.baseURL);
+  const startedAt = requestStarted?.timestamp ?? inferredStartedAt;
+  const endpoint = endpointParts(
+    latestValue(ordered, (event) => details(event).baseURL),
+  );
+  const httpStatus = finiteOrNull(
+    latestValue(ordered, (event) => details(event).statusCode),
+  );
+  const providerId = latestValue(ordered, (event) => details(event).providerId);
+  const lifecycleEvents = [...new Set(ordered.map((event) => event.event))]
+    .filter(Boolean)
+    .sort();
   return {
     schema_version: NATIVE_PROBE_SCHEMA_VERSION,
     source_client: "native-zcode",
     client_version: context.clientVersion ?? null,
     runtime_version: context.runtimeVersion ?? null,
     experiment_id: context.experimentId ?? null,
-    session_id: event?.sessionId ?? null,
-    turn_id: event?.turnId ?? null,
-    trace_id: event?.traceId ?? null,
+    session_id: latestValue(ordered, (event) => event.sessionId),
+    turn_id: latestValue(ordered, (event) => event.turnId),
+    trace_id: latestValue(ordered, (event) => event.traceId),
     logical_request_id: null,
-    network_request_id: details.requestId ?? null,
+    network_request_id: latestValue(ordered, (event) => details(event).requestId),
     parent_request_id: null,
-    request_kind: requestKind(details.querySource),
-    query_source: details.querySource ?? null,
-    attempt: numeric(details.attempt),
+    request_kind: requestKind(
+      latestValue(ordered, (event) => details(event).querySource),
+    ),
+    query_source: latestValue(ordered, (event) => details(event).querySource),
+    attempt: numeric(latestValue(ordered, (event) => details(event).attempt)),
     started_at: startedAt,
     completed_at: completedAt,
     duration_ms: durationMs,
-    provider_id: details.providerId ?? null,
-    model_id: details.modelId ?? null,
+    provider_id: providerId,
+    model_id: latestValue(ordered, (event) => details(event).modelId),
     reasoning_level: null,
     transport_kind: "official_native_log",
-    http_method: "UNKNOWN",
+    model_transport: latestValue(ordered, (event) => details(event).transport),
+    provider_kind: latestValue(ordered, (event) => details(event).providerKind),
+    http_method: String(latestValue(ordered, (event) => details(event).method) ?? "UNKNOWN"),
     endpoint_host: endpoint.host,
     endpoint_path: endpoint.path,
-    http_status: "UNKNOWN",
+    http_status: httpStatus ?? "UNKNOWN",
+    response_headers_at: responseHeaders?.timestamp ?? null,
+    lifecycle_events: lifecycleEvents,
+    lifecycle_event_count: ordered.length,
+    request_status: lifecycleStatus(ordered),
     organization_id: null,
     project_id: null,
     api_key_id: null,
-    account_scope: providerUsesCodingPlan(details.providerId) ? "personal" : "UNKNOWN",
-    usage_scene: providerUsesCodingPlan(details.providerId) ? "CODING_PLAN" : "UNKNOWN",
+    account_scope: providerUsesCodingPlan(providerId) ? "personal" : "UNKNOWN",
+    usage_scene: providerUsesCodingPlan(providerId) ? "CODING_PLAN" : "UNKNOWN",
     input_tokens: null,
     cached_input_tokens: null,
     uncached_input_tokens: null,
     output_tokens: null,
     reasoning_tokens: null,
     total_tokens: null,
-    finish_reason: details.finishReason ?? null,
-    error_code: null,
-    error_type: null,
+    finish_reason: latestValue(ordered, (event) => details(event).finishReason),
+    error_code: latestValue(ordered, (event) => details(event).errorCode),
+    error_type:
+      latestValue(ordered, (event) => details(event).errorType)
+      ?? (lifecycleStatus(ordered) === "failed" ? "model_request_failed" : null),
     retryable: null,
     usage_status: "USAGE_MISSING",
-    evidence_source: "official_native_log:model_request_completed",
-    usage_missing_reason: "native_log_redacts_usage_and_model_usage_row_absent",
-    query_id: details.queryId ?? null,
-    provider_kind: details.providerKind ?? null,
-    tool_call_count: details.toolCallCount === undefined ? null : numeric(details.toolCallCount),
-    retry_count: numeric(details.attempt) > 1 ? numeric(details.attempt) - 1 : 0,
+    evidence_source: "official_native_log:model_lifecycle",
+    usage_missing_reason: terminal
+      ? "native_log_redacts_usage_and_model_usage_row_absent"
+      : "native_log_lifecycle_has_no_usage_and_no_terminal_event",
+    query_id: latestValue(ordered, (event) => details(event).queryId),
+    tool_call_count: finiteOrNull(
+      latestValue(ordered, (event) => details(event).toolCallCount),
+    ),
+    retry_count: numeric(latestValue(ordered, (event) => details(event).attempt)) > 1
+      ? numeric(latestValue(ordered, (event) => details(event).attempt)) - 1
+      : 0,
+    base_url: latestValue(ordered, (event) => details(event).baseURL),
   };
 }
 
-export function parseModelRequestLogJsonl(text, context = {}) {
-  const records = [];
+export function parseModelLifecycleLogJsonl(text, context = {}) {
   let invalidLines = 0;
+  const eventsByRequestId = new Map();
   for (const line of text.split(/\r?\n/u)) {
     if (!line.trim()) continue;
     try {
       const event = JSON.parse(line);
       if (
-        event?.event === "model.request.completed"
-        && event?.context?.requestId
+        MODEL_LIFECYCLE_EVENTS.has(event?.event)
+        && typeof event?.context?.requestId === "string"
       ) {
-        records.push(projectModelLogRecord(event, context));
+        const events = eventsByRequestId.get(event.context.requestId) ?? [];
+        events.push(event);
+        eventsByRequestId.set(event.context.requestId, events);
       }
     } catch {
       invalidLines += 1;
     }
   }
-  return { records, invalidLines };
+  return {
+    records: [...eventsByRequestId.values()].map((events) =>
+      projectModelLifecycleRecord(events, context)),
+    invalidLines,
+  };
+}
+
+export function parseModelRequestLogJsonl(text, context = {}) {
+  const parsed = parseModelLifecycleLogJsonl(text, context);
+  return {
+    records: parsed.records.filter((record) =>
+      record.lifecycle_events.some((event) => TERMINAL_MODEL_EVENTS.has(event))),
+    invalidLines: parsed.invalidLines,
+  };
+}
+
+export function summarizeNativeProtocolLog(text, startedAt, completedAt) {
+  const events = new Set();
+  let started = 0;
+  let completed = 0;
+  let failed = 0;
+  for (const line of text.split(/\r?\n/u)) {
+    if (!line.trim()) continue;
+    try {
+      const event = JSON.parse(line);
+      const name = typeof event?.event === "string" ? event.event : "";
+      if (!/^zcode_protocol\./u.test(name)) continue;
+      const timestamp = Date.parse(event.timestamp);
+      if (!Number.isFinite(timestamp) || timestamp < startedAt || timestamp > completedAt) {
+        continue;
+      }
+      events.add(name);
+      if (name.endsWith(".started")) started += 1;
+      if (name.endsWith(".completed") || name === "zcode_protocol.provider_registry.ready") {
+        completed += 1;
+      }
+      if (name.endsWith(".failed")) failed += 1;
+    } catch {
+      // Model lifecycle parsing reports malformed JSON once for the same files.
+    }
+  }
+  return {
+    rpc_event_types: [...events].sort(),
+    rpc_started_events: started,
+    rpc_completed_events: completed,
+    rpc_failed_events: failed,
+  };
 }
 
 function sameTimestamp(a, b, windowMs) {
@@ -494,10 +641,75 @@ function sameTimestamp(a, b, windowMs) {
     && Math.abs(left - right) <= windowMs;
 }
 
+function mergeHttpLogEvidence(http, logged) {
+  if (!logged) return http;
+  return {
+    ...http,
+    endpoint_host: logged.endpoint_host ?? http.endpoint_host,
+    endpoint_path: logged.endpoint_path ?? http.endpoint_path,
+    http_status: logged.http_status === "UNKNOWN"
+      ? http.http_status
+      : logged.http_status,
+    http_method: logged.http_method === "UNKNOWN"
+      ? http.http_method
+      : logged.http_method,
+    model_transport: logged.model_transport ?? http.model_transport ?? null,
+    provider_kind: logged.provider_kind ?? http.provider_kind ?? null,
+    response_headers_at: logged.response_headers_at ?? http.response_headers_at ?? null,
+    request_status: logged.request_status ?? http.request_status ?? "UNKNOWN",
+    lifecycle_events: logged.lifecycle_events ?? [],
+    lifecycle_event_count: logged.lifecycle_event_count ?? 0,
+    error_code: logged.error_code ?? http.error_code ?? null,
+    error_type: logged.error_type ?? http.error_type ?? null,
+    base_url: logged.base_url ?? null,
+    evidence_source:
+      `${http.evidence_source}+official_native_log:model_lifecycle`,
+  };
+}
+
+function evidenceWithNativeLog(record) {
+  return record.evidence_source.includes("official_native_log:model_lifecycle")
+    ? record.evidence_source
+    : `${record.evidence_source}+official_native_log:model_lifecycle`;
+}
+
+function mergeLogEvidence(record, logged) {
+  return {
+    ...record,
+    network_request_id: record.network_request_id ?? logged.network_request_id,
+    endpoint_host: logged.endpoint_host ?? record.endpoint_host,
+    endpoint_path: logged.endpoint_path ?? record.endpoint_path,
+    http_status: logged.http_status === "UNKNOWN"
+      ? record.http_status
+      : logged.http_status,
+    http_method: logged.http_method === "UNKNOWN"
+      ? record.http_method
+      : logged.http_method,
+    model_transport: logged.model_transport ?? record.model_transport ?? null,
+    provider_kind: logged.provider_kind ?? record.provider_kind ?? null,
+    response_headers_at: logged.response_headers_at ?? record.response_headers_at ?? null,
+    lifecycle_events: logged.lifecycle_events ?? [],
+    lifecycle_event_count: logged.lifecycle_event_count ?? 0,
+    request_status: logged.request_status ?? record.request_status ?? "UNKNOWN",
+    error_code: logged.error_code ?? record.error_code ?? null,
+    error_type: logged.error_type ?? record.error_type ?? null,
+    query_id: logged.query_id ?? record.query_id ?? null,
+    base_url: logged.base_url ?? record.base_url ?? null,
+    evidence_source: evidenceWithNativeLog(record),
+  };
+}
+
 export function mergeNativeEvidence(usageRecords, modelIoRecords, logRecords = []) {
+  const logByRequestId = new Map(
+    logRecords
+      .filter((record) => record.network_request_id)
+      .map((record) => [record.network_request_id, record]),
+  );
+  const enrichedHttp = modelIoRecords.map((record) =>
+    mergeHttpLogEvidence(record, logByRequestId.get(record.network_request_id)));
   const usage = usageRecords.map((record) => ({ ...record }));
   const unlinkedHttp = [];
-  for (const http of modelIoRecords) {
+  for (const http of enrichedHttp) {
     const candidates = usage
       .map((record, index) => ({ record, index }))
       .filter(({ record }) =>
@@ -515,12 +727,26 @@ export function mergeNativeEvidence(usageRecords, modelIoRecords, logRecords = [
     usage[index] = {
       ...usage[index],
       network_request_id: http.network_request_id,
-      transport_kind: "official_native_sqlite+model_io",
+      transport_kind: http.evidence_source.includes("official_native_log")
+        ? "official_native_sqlite+model_io+log"
+        : "official_native_sqlite+model_io",
       http_method: http.http_method,
       http_status: http.http_status,
-      evidence_source: "official_native_sqlite:model_usage+official_native_model_io",
+      evidence_source: `official_native_sqlite:model_usage+${http.evidence_source}`,
       header_names: http.header_names,
       safe_header_values: http.safe_header_values,
+      response_header_names: http.response_header_names,
+      safe_response_header_values: http.safe_response_header_values,
+      provider_response_id: http.provider_response_id,
+      endpoint_host: http.endpoint_host,
+      endpoint_path: http.endpoint_path,
+      model_transport: http.model_transport,
+      provider_kind: http.provider_kind,
+      response_headers_at: http.response_headers_at,
+      lifecycle_events: http.lifecycle_events,
+      lifecycle_event_count: http.lifecycle_event_count,
+      request_status: http.request_status,
+      base_url: http.base_url,
       message_count: http.message_count,
       message_offset: http.message_offset,
       messages_kind: http.messages_kind,
@@ -533,7 +759,12 @@ export function mergeNativeEvidence(usageRecords, modelIoRecords, logRecords = [
     records.map((record) => record.network_request_id).filter(Boolean),
   );
   for (const logged of logRecords) {
-    if (knownRequestIds.has(logged.network_request_id)) continue;
+    if (knownRequestIds.has(logged.network_request_id)) {
+      const index = records.findIndex((record) =>
+        record.network_request_id === logged.network_request_id);
+      if (index >= 0) records[index] = mergeLogEvidence(records[index], logged);
+      continue;
+    }
     const candidates = records
       .map((record, index) => ({ record, index }))
       .filter(({ record }) =>
@@ -551,10 +782,17 @@ export function mergeNativeEvidence(usageRecords, modelIoRecords, logRecords = [
         transport_kind: "official_native_sqlite+official_native_log",
         endpoint_host: logged.endpoint_host,
         endpoint_path: logged.endpoint_path,
-        evidence_source:
-          `${records[index].evidence_source}+official_native_log:model_request_completed`,
-        query_id: logged.query_id,
+        evidence_source: evidenceWithNativeLog(records[index]),
+        http_status: logged.http_status,
+        http_method: logged.http_method,
+        model_transport: logged.model_transport,
         provider_kind: logged.provider_kind,
+        response_headers_at: logged.response_headers_at,
+        lifecycle_events: logged.lifecycle_events,
+        lifecycle_event_count: logged.lifecycle_event_count,
+        request_status: logged.request_status,
+        query_id: logged.query_id,
+        base_url: logged.base_url,
         link_confidence: "SUPPORTED_SESSION_TURN_QUERY_SOURCE_TIME",
       };
     } else {
@@ -598,12 +836,25 @@ export function aggregateRequestUsage(records) {
   };
 }
 
-export function deriveProbeCoverage({ usageRecords, modelIoRecords, logRecords = [], records }) {
+export function deriveProbeCoverage({
+  usageRecords,
+  modelIoRecords,
+  logRecords = [],
+  records,
+  protocolCoverage = null,
+}) {
   const linked = records.filter((record) => record.link_confidence).length;
+  const networkRecords = records.filter((record) => record.network_request_id);
+  const endpointObserved = networkRecords.filter((record) =>
+    record.endpoint_host && record.endpoint_path).length;
+  const statusObserved = networkRecords.filter((record) =>
+    record.http_status !== null && record.http_status !== "UNKNOWN").length;
   const logOnly = records.some((record) =>
     record.evidence_source.includes("official_native_log")
-    && !record.evidence_source.includes("model_io"));
+    && !record.evidence_source.includes("model_io")
+    && !record.evidence_source.includes("model_usage"));
   const usageMissing = records.some((record) => record.usage_status === "USAGE_MISSING");
+  const rpcObserved = (protocolCoverage?.rpc_event_types?.length ?? 0) > 0;
   return {
     PROBE_COVERAGE: usageRecords.length > 0 && modelIoRecords.length > 0 ? "PARTIAL" : "INCOMPLETE",
     MODEL_REQUEST_COVERAGE: usageRecords.length > 0
@@ -614,6 +865,20 @@ export function deriveProbeCoverage({ usageRecords, modelIoRecords, logRecords =
           : "SQLITE_WITH_PARTIAL_MODEL_IO"
       : "NOT_OBSERVED",
     AUTH_METADATA_COVERAGE: "NOT_OBSERVED",
+    NON_MODEL_HTTP_COVERAGE: "NOT_OBSERVED",
+    RPC_COVERAGE: rpcObserved ? "LIFECYCLE_PARTIAL" : "NOT_OBSERVED",
+    HTTP_ENDPOINT_COVERAGE: networkRecords.length > 0
+      && endpointObserved === networkRecords.length
+      ? "OBSERVED"
+      : endpointObserved > 0
+        ? "PARTIAL"
+        : "NOT_OBSERVED",
+    HTTP_STATUS_COVERAGE: networkRecords.length > 0
+      && statusObserved === networkRecords.length
+      ? "OBSERVED"
+      : statusObserved > 0
+        ? "PARTIAL"
+        : "NOT_OBSERVED",
     AUXILIARY_REQUEST_COVERAGE: records.some((record) =>
       record.request_kind !== "model_main_turn")
       ? logOnly
@@ -622,8 +887,8 @@ export function deriveProbeCoverage({ usageRecords, modelIoRecords, logRecords =
       : "NOT_OBSERVED",
     UNOBSERVED_BOUNDARIES: [
       "non_model_account_oauth_project_and_token_http",
-      "native_rpc_lifecycle",
-      "model_io_endpoint_url_and_http_status",
+      ...(rpcObserved ? ["native_rpc_request_payloads"] : ["native_rpc_lifecycle"]),
+      "model_http_method",
       ...(usageMissing ? ["auxiliary_model_usage_redacted_or_absent"] : []),
     ],
   };
@@ -672,6 +937,10 @@ async function readModelIoDirectories(directories, startedAt, completedAt, conte
 
 async function readModelRequestLogDirectories(directories, startedAt, completedAt, context) {
   const recordsByRequestId = new Map();
+  const rpcEventTypes = new Set();
+  let rpcStartedEvents = 0;
+  let rpcCompletedEvents = 0;
+  let rpcFailedEvents = 0;
   let invalidLines = 0;
   const files = [];
   for (const directory of directories) {
@@ -681,9 +950,15 @@ async function readModelRequestLogDirectories(directories, startedAt, completedA
       const filePath = path.join(directory, entry.name);
       const metadata = await stat(filePath).catch(() => null);
       if (!metadata?.isFile() || metadata.mtimeMs < startedAt - 3_600_000) continue;
-      const parsed = parseModelRequestLogJsonl(await readFile(filePath, "utf8"), context);
+      const text = await readFile(filePath, "utf8");
+      const parsed = parseModelLifecycleLogJsonl(text, context);
+      const rpc = summarizeNativeProtocolLog(text, startedAt, completedAt);
       invalidLines += parsed.invalidLines;
       files.push(filePath);
+      for (const eventType of rpc.rpc_event_types) rpcEventTypes.add(eventType);
+      rpcStartedEvents += rpc.rpc_started_events;
+      rpcCompletedEvents += rpc.rpc_completed_events;
+      rpcFailedEvents += rpc.rpc_failed_events;
       for (const record of parsed.records) {
         const timestamp = Date.parse(record.completed_at);
         if (!Number.isFinite(timestamp) || timestamp < startedAt || timestamp > completedAt) continue;
@@ -693,7 +968,17 @@ async function readModelRequestLogDirectories(directories, startedAt, completedA
       }
     }
   }
-  return { records: [...recordsByRequestId.values()], files, invalidLines };
+  return {
+    records: [...recordsByRequestId.values()],
+    files,
+    invalidLines,
+    rpc: {
+      rpc_event_types: [...rpcEventTypes].sort(),
+      rpc_started_events: rpcStartedEvents,
+      rpc_completed_events: rpcCompletedEvents,
+      rpc_failed_events: rpcFailedEvents,
+    },
+  };
 }
 
 async function collectProbeResult(options, completedAt) {
@@ -724,6 +1009,7 @@ async function collectProbeResult(options, completedAt) {
     modelIoRecords: modelIo.records,
     logRecords: logEvents.records,
     records,
+    protocolCoverage: logEvents.rpc,
   });
   const networkRecords = records.filter((record) => record.network_request_id);
   return {
@@ -738,6 +1024,7 @@ async function collectProbeResult(options, completedAt) {
     log_files: logEvents.files,
     log_invalid_lines: logEvents.invalidLines,
     log_model_request_records: logEvents.records.length,
+    protocol_coverage: logEvents.rpc,
     model_http_attempts: networkRecords.length,
     main_http_attempts: networkRecords.filter((record) =>
       record.request_kind === "model_main_turn").length,

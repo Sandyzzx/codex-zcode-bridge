@@ -234,7 +234,11 @@ test("snapshot sanitization redacts credential-shaped fields without hiding iden
 
 test("Shanghai timezone and peak windows use Asia/Shanghai", () => {
   assert.equal(shanghaiHourForTimestamp("2026-11-16T19:00:00.000Z"), 3);
+  assert.equal(isOffPeakShanghai(new Date("2026-11-17T05:59:59.999Z")), true);
+  assert.equal(isOffPeakShanghai(new Date("2026-11-17T06:00:00.000Z")), false);
   assert.equal(isOffPeakShanghai(new Date("2026-11-17T07:00:00.000Z")), false);
+  assert.equal(isOffPeakShanghai(new Date("2026-11-17T09:59:59.999Z")), false);
+  assert.equal(isOffPeakShanghai(new Date("2026-11-17T10:00:00.000Z")), true);
   assert.equal(isOffPeakShanghai(new Date("2026-11-17T02:00:00.000Z")), true);
   assert.equal(isOffPeakShanghai(new Date("2026-11-21T07:00:00.000Z")), true);
 });

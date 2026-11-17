@@ -1,239 +1,15 @@
+// Built from ZCode fec975905a2abd4c07e35c40d51fa097a2258ec9 (3.18.2) with the Cost Lab billing patch.
 var __defProp = Object.defineProperty;
 var __export = (target2, all) => {
   for (var name in all)
     __defProp(target2, name, { get: all[name], enumerable: true });
 };
 
-// packages/services/src/windows-runtime-host/index.ts
-import { execFile, spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { access } from "node:fs/promises";
-import { createServer } from "node:net";
-import { join } from "node:path";
-async function resolveHelper() {
-  const resources = process.resourcesPath;
-  const candidates = process.env.ZCODE_RUNTIME_HOST_PATH ? [process.env.ZCODE_RUNTIME_HOST_PATH] : [
-    ...resources ? [join(resources, "tools/runtime-host/zcode-runtime-host.exe")] : [],
-    ...process.env.ZCODE_SERVER_RUNTIME_ROOT ? [
-      join(
-        process.env.ZCODE_SERVER_RUNTIME_ROOT,
-        "tools/runtime-host/zcode-runtime-host.exe"
-      )
-    ] : [],
-    join(
-      process.cwd(),
-      "bundled-tools",
-      `win32-${process.arch}`,
-      "runtime-host/zcode-runtime-host.exe"
-    ),
-    join(
-      process.cwd(),
-      "packages/desktop/bundled-tools",
-      `win32-${process.arch}`,
-      "runtime-host/zcode-runtime-host.exe"
-    ),
-    join(
-      process.cwd(),
-      "../desktop/bundled-tools",
-      `win32-${process.arch}`,
-      "runtime-host/zcode-runtime-host.exe"
-    )
-  ];
-  for (const candidate of candidates) {
-    try {
-      await access(candidate);
-      return candidate;
-    } catch {
-    }
-  }
-  throw new Error(
-    "Windows runtime host is missing. Prepare the runtime assets before starting CLI."
-  );
-}
-function until(promise2, deadlineAtMs, stage) {
-  return new Promise((resolve3, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error(`Windows runtime ${stage} timed out`)),
-      Math.max(0, deadlineAtMs - Date.now())
-    );
-    promise2.then(resolve3, reject).finally(() => clearTimeout(timer));
-  });
-}
-async function spawnWindowsRuntimeHost(options2) {
-  const helper = await resolveHelper();
-  options2.signal.throwIfAborted();
-  const jobName = `Local\\zcode-runtime-${randomUUID()}`;
-  const pipeName = `\\\\.\\pipe\\zcode-runtime-${randomUUID()}`;
-  const ready = Promise.withResolvers();
-  const started = Promise.withResolvers();
-  const empty = Promise.withResolvers();
-  const exited = Promise.withResolvers();
-  for (const promise2 of [ready.promise, started.promise, empty.promise])
-    void promise2.catch(() => void 0);
-  let runtimePid;
-  let socket;
-  let isEmpty = false;
-  let rootExit;
-  let startedConfirmed = false;
-  let closeSent = false;
-  let startSent = false;
-  const listeners = [];
-  const publishExit = (code) => {
-    if (rootExit !== void 0) return;
-    rootExit = code;
-    for (const listener of listeners) listener(code, null);
-  };
-  const fail = (error62) => {
-    ready.reject(error62);
-    started.reject(error62);
-    if (!isEmpty) empty.reject(error62);
-  };
-  const server = createServer((connection) => {
-    if (socket) {
-      connection.destroy();
-      return;
-    }
-    socket = connection;
-    server.close();
-    connection.setEncoding("utf8");
-    let pending = "";
-    connection.on("data", (chunk) => {
-      pending += chunk;
-      if (pending.length > 4096) {
-        fail(new Error("Invalid runtime control frame"));
-        connection.destroy();
-        return;
-      }
-      let newline;
-      while ((newline = pending.indexOf("\n")) !== -1) {
-        const line = pending.slice(0, newline);
-        pending = pending.slice(newline + 1);
-        const readyMatch = /^ready ([1-9][0-9]*)$/.exec(line);
-        const rootMatch = /^root ([0-9]+)$/.exec(line);
-        if (readyMatch && !startSent && !closeSent) {
-          runtimePid = Number(readyMatch[1]);
-          ready.resolve(runtimePid);
-        } else if (line === "started" && startSent && !startedConfirmed) {
-          startedConfirmed = true;
-          started.resolve();
-        } else if (rootMatch && rootExit === void 0) publishExit(Number(rootMatch[1]));
-        else if (line === "empty" && rootExit !== void 0) {
-          isEmpty = true;
-          empty.resolve();
-        } else {
-          fail(new Error(`Invalid runtime control event: ${line}`));
-          connection.destroy();
-        }
-      }
-    });
-    connection.on("error", () => void 0);
-    connection.once("close", () => {
-      if (!isEmpty)
-        fail(new Error("Windows runtime control closed before Job was confirmed empty"));
-      publishExit(null);
-    });
-  });
-  await new Promise((resolve3, reject) => {
-    server.once("error", reject);
-    server.listen(pipeName, resolve3);
-  });
-  server.on("error", fail);
-  if (options2.signal.aborted) {
-    server.close();
-    options2.signal.throwIfAborted();
-  }
-  const child = spawn(
-    helper,
-    [pipeName, String(process.pid), jobName, options2.command, ...options2.args],
-    {
-      cwd: options2.cwd,
-      env: options2.env,
-      stdio: ["pipe", "pipe", "pipe"],
-      windowsHide: true
-    }
-  );
-  const abort = () => {
-    fail(new Error("Windows runtime start was cancelled"));
-    socket?.destroy();
-    server.close();
-    child.kill();
-  };
-  options2.signal.addEventListener("abort", abort, { once: true });
-  child.once("error", (error62) => {
-    fail(error62);
-    server.close();
-    socket?.destroy();
-  });
-  child.once("exit", () => {
-    exited.resolve();
-    server.close();
-    if (!socket) fail(new Error("Windows runtime host exited before control handshake"));
-  });
-  child.once("close", () => {
-    exited.resolve();
-    if (child.pid === void 0) {
-      isEmpty = true;
-      empty.resolve();
-    }
-    if (!socket) publishExit(null);
-    options2.signal.removeEventListener("abort", abort);
-  });
-  if (options2.signal.aborted) abort();
-  const startupDeadline = Date.now() + 1e4;
-  return {
-    child,
-    get runtimePid() {
-      return runtimePid;
-    },
-    ready() {
-      return until(ready.promise, startupDeadline, "startup");
-    },
-    onRootExit(listener) {
-      listeners.push(listener);
-      if (rootExit !== void 0) listener(rootExit, null);
-    },
-    async start() {
-      await until(ready.promise, startupDeadline, "startup");
-      options2.signal.throwIfAborted();
-      if (closeSent || isEmpty) throw new Error("Windows runtime is closing");
-      if (!startSent) {
-        startSent = true;
-        socket.write("start\n");
-      }
-      await until(started.promise, Date.now() + 1e4, "resume");
-      options2.signal.removeEventListener("abort", abort);
-    },
-    async close(deadlineAtMs) {
-      if (!closeSent && !isEmpty && rootExit === void 0) {
-        closeSent = true;
-        child.stdin.once("error", () => void 0);
-        child.stdin.end();
-        if (socket) socket.write("close\n");
-        else abort();
-      }
-      if (!isEmpty) {
-        try {
-          await until(empty.promise, deadlineAtMs, "Job cleanup");
-        } catch (error62) {
-          await until(exited.promise, deadlineAtMs, "host exit");
-          const remaining = deadlineAtMs - Date.now();
-          if (remaining <= 0) throw error62;
-          await new Promise((resolveProbe, rejectProbe) => {
-            execFile(
-              helper,
-              ["--check-empty", jobName],
-              { timeout: remaining, windowsHide: true },
-              (probeError) => probeError ? rejectProbe(probeError) : resolveProbe()
-            );
-          });
-          isEmpty = true;
-        }
-      }
-      await until(exited.promise, deadlineAtMs, "host exit");
-      socket?.destroy();
-    }
-  };
-}
+// packages/shared/src/credential-security/systemCredentialCipher.ts
+import { createCipheriv, createDecipheriv, createHash as createHash2, randomBytes } from "node:crypto";
+import { homedir, platform, userInfo } from "node:os";
+import { link, lstat, readFile as readFile3, rm as rm3, stat as stat2, writeFile as writeFile3 } from "node:fs/promises";
+import { dirname as dirname2, join as join3, resolve } from "node:path";
 
 // ../../../../node_modules/zod/v4/classic/external.js
 var external_exports = {};
@@ -5261,7 +5037,7 @@ var recursive = /* @__PURE__ */ new WeakMap();
 var NONE = 0;
 var ASSUMED = 1;
 var PROVEN = 2;
-function isRecursive(inst, stack, resolve3) {
+function isRecursive(inst, stack, resolve2) {
   const cached2 = recursive.get(inst);
   if (cached2 !== void 0)
     return cached2 ? PROVEN : NONE;
@@ -5271,7 +5047,7 @@ function isRecursive(inst, stack, resolve3) {
   let result = NONE;
   const check2 = (child) => {
     if (result !== PROVEN && child?._zod) {
-      const answer = isRecursive(child, stack, resolve3);
+      const answer = isRecursive(child, stack, resolve2);
       if (answer > result)
         result = answer;
     }
@@ -5282,7 +5058,7 @@ function isRecursive(inst, stack, resolve3) {
       const desc = Object.getOwnPropertyDescriptor(sh, key);
       if (spread && !desc.enumerable)
         continue;
-      const child = desc.get ? ASSUMED : desc.value?._zod ? isRecursive(desc.value, stack, resolve3) : NONE;
+      const child = desc.get ? ASSUMED : desc.value?._zod ? isRecursive(desc.value, stack, resolve2) : NONE;
       if (child > answer)
         answer = child;
     }
@@ -5346,7 +5122,7 @@ function isRecursive(inst, stack, resolve3) {
       break;
     // `$ZodLazy` caches its inner on the def, so a resolved edge is followed exactly
     case "lazy": {
-      const inner = def._cachedInner ?? (resolve3 ? inst._zod.innerType : void 0);
+      const inner = def._cachedInner ?? (resolve2 ? inst._zod.innerType : void 0);
       merge2(inner ? isRecursive(inner, stack, false) : ASSUMED);
       break;
     }
@@ -20051,7 +19827,7 @@ function resolvePersistedUiLocalePreference(raw) {
 }
 
 // packages/shared/src/version.ts
-var ZCODE_VERSION = typeof __ZCODE_VERSION__ !== "undefined" ? __ZCODE_VERSION__ : "0.0.0-dev";
+var ZCODE_VERSION = true ? "3.18.2" : "0.0.0-dev";
 
 // packages/shared/src/shortcutCommands.ts
 var NAMED_KEYS = /* @__PURE__ */ new Set([
@@ -20090,73 +19866,7 @@ var ZCODE_PRODUCT_FLAVOR = normalizeZCodeProductFlavor(
 var RUNTIME_ZCODE_DEBUG = typeof process !== "undefined" ? process.env.ZCODE_DEBUG : void 0;
 
 // packages/shared/src/errors.ts
-function isRecord(value2) {
-  return typeof value2 === "object" && value2 !== null;
-}
-function normalizeErrorCode(value2) {
-  if (typeof value2 === "string" || typeof value2 === "number" || typeof value2 === "bigint") {
-    return String(value2);
-  }
-  return void 0;
-}
-function getErrorCandidate(error62) {
-  if (!isRecord(error62) || !("error" in error62) || !isRecord(error62.error)) {
-    return error62;
-  }
-  if ("message" in error62.error || "code" in error62.error) {
-    return error62.error;
-  }
-  return error62;
-}
 var ZCODE_FILE_LOCK_TIMEOUT_ERROR_CODE = "ZCODE_FILE_LOCK_TIMEOUT";
-function stringifyUnknownValue(value2) {
-  if (typeof value2 === "string") {
-    return value2;
-  }
-  if (value2 === null) {
-    return "null";
-  }
-  if (value2 === void 0) {
-    return "undefined";
-  }
-  if (typeof value2 === "number" || typeof value2 === "boolean" || typeof value2 === "bigint") {
-    return String(value2);
-  }
-  try {
-    const serialized = JSON.stringify(value2);
-    if (serialized !== void 0) {
-      return serialized;
-    }
-  } catch {
-  }
-  return String(value2);
-}
-function normalizeUnknownError(error62) {
-  const candidate = getErrorCandidate(error62);
-  if (candidate instanceof Error) {
-    const errorWithCode = candidate;
-    return {
-      // 有些运行时 Error.message 可能为空字符串。
-      // 这里按 message -> name -> String 的顺序兜底，确保前端始终能拿到可展示的文本。
-      message: candidate.message || candidate.name || String(candidate),
-      code: normalizeErrorCode(errorWithCode.code)
-    };
-  }
-  if (isRecord(candidate)) {
-    const code = "code" in candidate ? normalizeErrorCode(candidate.code) : void 0;
-    const message = "message" in candidate ? stringifyUnknownValue(candidate.message) : stringifyUnknownValue(candidate);
-    return {
-      message: message !== "undefined" && message.length > 0 ? message : stringifyUnknownValue(candidate),
-      code
-    };
-  }
-  return {
-    message: stringifyUnknownValue(candidate)
-  };
-}
-function isZCodeFileLockTimeoutError(error62) {
-  return normalizeUnknownError(error62).code === ZCODE_FILE_LOCK_TIMEOUT_ERROR_CODE;
-}
 
 // packages/shared/src/userInstructions.ts
 var USER_INSTRUCTIONS_MAX_BYTES = 100 * 1024;
@@ -21273,12 +20983,8 @@ var DEFAULT_ZCODE_ENDPOINT_ORIGIN = "https://zcode.z.ai";
 var TEST_ZCODE_ENDPOINT_ORIGIN = "https://zcode.z.ai";
 var DEFAULT_BIGMODEL_API_ORIGIN = "https://bigmodel.cn";
 var TEST_BIGMODEL_API_ORIGIN = "https://bigmodel.cn";
-var DEFAULT_ZAI_OAUTH_ORIGIN = "https://chat.z.ai";
-var TEST_ZAI_OAUTH_ORIGIN = "https://chat.z.ai";
 var DEFAULT_ZAI_BUSINESS_BASE_URL = "https://api.z.ai";
 var TEST_ZAI_BUSINESS_BASE_URL = "https://api.z.ai";
-var DEFAULT_ZAI_OAUTH_CLIENT_ID = "client_P8X5CMWmlaRO9gyO-KSqtg";
-var TEST_ZAI_OAUTH_CLIENT_ID = "client_P8X5CMWmlaRO9gyO-KSqtg";
 var WEB_REMOTE_CONTROL_V4_MIN_APP_VERSION = "3.4.0";
 function isWebRemoteControlV4AppVersion(appVersion) {
   if (!appVersion) {
@@ -21373,19 +21079,6 @@ function buildBigModelApiUrl(env = {}, path) {
 function buildBigModelCodingPlanTeamManageUrl(env = {}) {
   return buildBigModelApiUrl(env, "/coding-plan/team/plans");
 }
-function resolveZaiOAuthOrigin(env = {}) {
-  const zcodeEnv = resolveRuntimeZCodeEnv(env);
-  const scopedOrigin = readRuntimeZCodeEnvScopedValue(
-    env,
-    zcodeEnv,
-    "ZAI_TEST_OAUTH_ORIGIN",
-    "ZAI_PRODUCTION_OAUTH_ORIGIN"
-  );
-  const fallbackOrigin = zcodeEnv === "production" ? DEFAULT_ZAI_OAUTH_ORIGIN : TEST_ZAI_OAUTH_ORIGIN;
-  return normalizeZCodeEndpointOrigin(
-    readRuntimeEnvValue(env, "ZAI_OAUTH_ORIGIN") ?? scopedOrigin ?? fallbackOrigin
-  );
-}
 function resolveZaiBusinessBaseUrl(env = {}) {
   const zcodeEnv = resolveRuntimeZCodeEnv(env);
   const scopedOrigin = readRuntimeZCodeEnvScopedValue(
@@ -21398,24 +21091,6 @@ function resolveZaiBusinessBaseUrl(env = {}) {
   return normalizeZCodeEndpointOrigin(
     readRuntimeEnvValue(env, "ZAI_BUSINESS_BASE_URL") ?? scopedOrigin ?? fallbackOrigin
   );
-}
-function resolveZaiOAuthClientId(env = {}) {
-  const zcodeEnv = resolveRuntimeZCodeEnv(env);
-  const scopedClientId = readRuntimeZCodeEnvScopedValue(
-    env,
-    zcodeEnv,
-    "ZAI_TEST_OAUTH_CLIENT_ID",
-    "ZAI_PRODUCTION_OAUTH_CLIENT_ID"
-  );
-  const fallbackClientId = zcodeEnv === "production" ? DEFAULT_ZAI_OAUTH_CLIENT_ID : TEST_ZAI_OAUTH_CLIENT_ID;
-  return readRuntimeEnvValue(env, "ZAI_OAUTH_CLIENT_ID") ?? scopedClientId ?? readRuntimeEnvValue(env, "ZAI_OAUTH_APP_ID") ?? fallbackClientId;
-}
-function buildZaiOAuthUrl(origin, path) {
-  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-  return `${normalizeZCodeEndpointOrigin(origin)}${normalizedPath}`;
-}
-function buildRuntimeZaiOAuthUrl(env = {}, path) {
-  return buildZaiOAuthUrl(resolveZaiOAuthOrigin(env), path);
 }
 function buildRuntimeZaiBusinessUrl(env = {}, path) {
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
@@ -22451,12 +22126,10 @@ var appSettingsPatchSchema = external_exports.object({
 });
 
 // packages/shared/src/process-diagnostic.ts
-var ZCODE_PROCESS_DIAGNOSTIC_PREFIX = "[zcode-process-exception] ";
 var ZCODE_PROCESS_DIAGNOSTIC_NAME_MAX_CHARS = 128;
 var ZCODE_PROCESS_DIAGNOSTIC_MESSAGE_MAX_CHARS = 4e3;
 var ZCODE_PROCESS_DIAGNOSTIC_STACK_MAX_CHARS = 16e3;
 var ZCODE_PROCESS_DIAGNOSTIC_MAX_LINE_CHARS = 128 * 1024;
-var ZCODE_AGENT_LIFECYCLE_LOG_MARKER = "[zcode-agent-lifecycle-reported]";
 var processErrorKindSchema = external_exports.enum(["uncaughtException", "unhandledRejection"]);
 var zcodeProcessDiagnosticSchema = external_exports.object({
   version: external_exports.literal(1),
@@ -22468,19 +22141,6 @@ var zcodeProcessDiagnosticSchema = external_exports.object({
   stack: external_exports.string().max(ZCODE_PROCESS_DIAGNOSTIC_STACK_MAX_CHARS).optional(),
   occurredAt: external_exports.number().int().nonnegative()
 }).strict();
-function parseZCodeProcessDiagnostic(line) {
-  if (!line.startsWith(ZCODE_PROCESS_DIAGNOSTIC_PREFIX) || line.length > ZCODE_PROCESS_DIAGNOSTIC_MAX_LINE_CHARS) {
-    return void 0;
-  }
-  try {
-    const result = zcodeProcessDiagnosticSchema.safeParse(
-      JSON.parse(line.slice(ZCODE_PROCESS_DIAGNOSTIC_PREFIX.length))
-    );
-    return result.success ? result.data : void 0;
-  } catch {
-    return void 0;
-  }
-}
 
 // packages/shared/src/processResourceTelemetry.ts
 var PROCESS_RESOURCE_CLI_LANES = ["chat", "plugin", "mcp-status"];
@@ -28595,7 +28255,6 @@ var OFFICIAL_MCP_AUTH_PORT_FAILURE_REASONS = [
   "official_mcp_origin_untrusted"
 ];
 var OFFICIAL_AUTH_CONSUMER_KINDS = ["mcp-server", "plugin-command"];
-var ZCODE_WORKSPACE_IDENTITY_ENV = "ZCODE_WORKSPACE_IDENTITY";
 
 // packages/shared/src/local-ttft/contract.ts
 var LOCAL_TTFT_STAGES = [
@@ -29117,17 +28776,6 @@ var zcodeProtocolMessageSchema = external_exports.union([
   zcodeProtocolResponseSchema,
   zcodeProtocolErrorSchema
 ]);
-var zcodeProtocolNotifications = {
-  pluginStartupDegraded: "startup/pluginsDegraded",
-  storageStartup: "startup/storageState",
-  providerRuntimeHeadersCancelled: "interaction/providerRuntimeHeadersCancelled",
-  mcpTelemetry: "process/mcpTelemetry",
-  mcpResourceSamples: "process/mcpResourceSamples",
-  toolExecResource: "process/toolExecResource",
-  pluginOperationProgress: "plugins/operationProgress",
-  processResourceSample: "process/resourceSample",
-  processNetworkRequests: "process/networkRequests"
-};
 var zcodePluginStartupDegradedSchema = external_exports.object({ reason: external_exports.literal("timeout") }).strict();
 var zcodeStorageStartupStateSchema = external_exports.object({
   schemaVersion: external_exports.literal(1),
@@ -34077,91 +33725,8 @@ function normalizeOsCategory(platform2) {
   }
 }
 
-// packages/shared/src/zcode-agent-runtime.ts
-function resolvePlatformBinaryName(binaryName, platform2) {
-  return platform2 === "win32" ? `${binaryName}.exe` : binaryName;
-}
-var ZCODE_AGENT_RUNTIME = {
-  binaryKind: "native-binary",
-  binaryEnvVar: "GLM_BINARY_PATH",
-  bundledResourceDir: "glm",
-  version: "0.13.3",
-  spawnArgs: ["app-server", "--stdio"],
-  nativeConfigDir: ".zcode/cli",
-  nativeConfigFileName: "config.json",
-  missingBinaryMessage: "[ZCode Agent] glm binary \u672A\u627E\u5230\uFF0C\u8BF7\u8BBE\u7F6E ZCODE_AGENT_WORKDIR\u3001GLM_BINARY_PATH \u6216\u5148\u51C6\u5907 GLM \u8FD0\u884C\u65F6\u8D44\u6E90",
-  resolveEntrySegments: (platform2) => [resolvePlatformBinaryName("zcode-agent", platform2)],
-  nodeBundleEntryFile: "zcode.cjs",
-  resolveNodeBundleSegments() {
-    return [this.nodeBundleEntryFile];
-  }
-};
-
 // packages/shared/src/runtimeEnv.ts
 var ZCODE_RUNTIME_ENV_KEY = "ZCODE_RUNTIME_ENV";
-var ZCODE_REMOTE_RUNTIME_NETWORK_AUTHORITY_ENV_KEY = "ZCODE_REMOTE_RUNTIME_NETWORK_AUTHORITY";
-var ZCODE_REMOTE_HTTP_PROXY_ENV_KEY = "ZCODE_REMOTE_HTTP_PROXY";
-var ZCODE_REMOTE_NO_PROXY_ENV_KEY = "ZCODE_REMOTE_NO_PROXY";
-var ZCODE_CUA_BROKER_SOCKET_ENV_KEY = "ZCODE_CUA_PERMISSION_BROKER_SOCKET";
-var ZCODE_OFFICIAL_ENDPOINT_ENV_KEY = "ZCODE_OFFICIAL_ENDPOINT";
-var ZCODE_OFFICIAL_ENDPOINT_TOKEN_ENV_KEY = "ZCODE_OFFICIAL_ENDPOINT_TOKEN";
-var SANITIZED_RUNTIME_ENV_KEYS = [
-  "NODE_ENV",
-  "ELECTRON_RUN_AS_NODE",
-  "NODE_NO_WARNINGS",
-  "HTTP_PROXY",
-  "HTTPS_PROXY",
-  "ALL_PROXY",
-  "NO_PROXY",
-  "NODE_EXTRA_CA_CERTS",
-  "SSL_CERT_FILE",
-  "SSL_CERT_DIR",
-  "REQUESTS_CA_BUNDLE",
-  "CURL_CA_BUNDLE",
-  "GIT_SSL_CAINFO",
-  ZCODE_REMOTE_RUNTIME_NETWORK_AUTHORITY_ENV_KEY,
-  ZCODE_REMOTE_HTTP_PROXY_ENV_KEY,
-  ZCODE_REMOTE_NO_PROXY_ENV_KEY,
-  // CUA broker socket 是只该给目标 zcode-cua MCP server 的连接材料（由 desktop/CLI 在
-  // 解析该 server 时定向注入其 env）。绝不能随 agent 全局 env 泄漏给其它 MCP server / Bash / tool
-  // 子进程 —— 否则同 agent 内的恶意 MCP 或被 prompt-injection 触发的命令能直接驱动
-  // 已授权 Helper（confused-deputy）。这里统一从所有子进程 env 剔除；zcode-cua server 的定向
-  // env 注入在 buildMcpStdioEnv 之后 spread，因此仍能拿到（见 adapters/mcp StdioClientTransport）。
-  ZCODE_CUA_BROKER_SOCKET_ENV_KEY,
-  // 遗留 bearer token：当前 broker 是 identity 模式（socket + authority，无口令，见
-  // captureZCodeCuaBrokerCredentials），本进程不再产生也不再消费它。仍然剔除，因为用户机上
-  // 可能装着旧版 Helper —— 那些版本认 bearer token，一旦这个变量随 agent 全局 env 漏给别的
-  // MCP server / Bash 子进程，同一个 confused-deputy 又成立。剔除一个已不用的键是零成本的。
-  "ZCODE_CUA_PERMISSION_BROKER_TOKEN",
-  "ZCODE_CUA_PERMISSION_BROKER_REFRESH_MARKER",
-  "ZCODE_CUA_PLUGIN_AUTHORITY",
-  // 官方命令端点的地址与 token 属于某一个 session，由 agent 定向注入；从父进程继承来的
-  // 值（例如嵌套运行的 agent）一律剔除，避免一个 session 拿着另一个 session 的 token。
-  ZCODE_OFFICIAL_ENDPOINT_ENV_KEY,
-  ZCODE_OFFICIAL_ENDPOINT_TOKEN_ENV_KEY,
-  // Agent OTLP Endpoint/Auth/Identity 只属于 CLI telemetry bootstrap，不能继续泄漏给
-  // Bash、MCP 或模型工具子进程。sanitize 前会捕获到本进程私有 Map，供 Agent 启动边界读取。
-  "OTEL_EXPORTER_OTLP_ENDPOINT",
-  "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
-  "OTEL_EXPORTER_OTLP_HEADERS",
-  "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
-  "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
-  "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
-  "OTEL_SERVICE_NAME",
-  "OTEL_RESOURCE_ATTRIBUTES",
-  "OTEL_EXPORTER_OTLP_COMPRESSION",
-  "ZCODE_MODEL_TELEMETRY_ENABLED",
-  "ZCODE_TELEMETRY_DEVICE_MID",
-  // 历史身份变量不再受支持，但仍须从所有子进程环境剔除，避免旧配置把原始账号
-  // 或可伪造 hash 泄漏给 Host、Bash 与 MCP。
-  "ZCODE_TELEMETRY_USER_ID",
-  "ZCODE_TELEMETRY_USER_ID_HASH",
-  "ZCODE_TELEMETRY_USER_SUBJECT_ID",
-  "ZCODE_TELEMETRY_IDENTITY_STATE",
-  "ZCODE_TELEMETRY_RUNTIME_SURFACE",
-  "ZCODE_TELEMETRY_RUNTIME_DISTRIBUTION"
-];
-var SANITIZED_PACKAGE_MANAGER_ENV_PATTERN = /^(npm_config|yarn|pnpm)_(http_proxy|https_proxy|proxy|all_proxy|no_proxy|cafile|ca)$/i;
 function normalizeZCodeRuntimeEnv(value2) {
   const normalized = value2?.trim().toLowerCase();
   if (normalized === "development" || normalized === "production" || normalized === "test") {
@@ -34171,56 +33736,6 @@ function normalizeZCodeRuntimeEnv(value2) {
 }
 function resolveZCodeRuntimeEnv(env, fallback = "production") {
   return normalizeZCodeRuntimeEnv(env[ZCODE_RUNTIME_ENV_KEY]) ?? fallback;
-}
-var ZCODE_CUA_PLUGIN_AUTHORITY_ENV_KEY = "ZCODE_CUA_PLUGIN_AUTHORITY";
-var capturedCuaBrokerCredentials;
-var capturedZCodeAgentTelemetryEnv = {};
-function captureZCodeCuaBrokerCredentials(env) {
-  const socket = env[ZCODE_CUA_BROKER_SOCKET_ENV_KEY]?.trim();
-  const pluginAuthority = env[ZCODE_CUA_PLUGIN_AUTHORITY_ENV_KEY]?.trim();
-  const refreshMarker = env["ZCODE_CUA_PERMISSION_BROKER_REFRESH_MARKER"]?.trim();
-  if (socket && pluginAuthority) {
-    capturedCuaBrokerCredentials = Object.freeze({
-      socket,
-      pluginAuthority,
-      ...refreshMarker ? { refreshMarker } : {}
-    });
-    return;
-  }
-  if (socket || pluginAuthority) {
-    capturedCuaBrokerCredentials = void 0;
-  }
-}
-function captureZCodeAgentTelemetryEnv(env) {
-  Object.assign(capturedZCodeAgentTelemetryEnv, readZCodeAgentTelemetryEnv(env));
-}
-function readZCodeAgentTelemetryEnv(env) {
-  const telemetryEnv = {};
-  for (const key of SANITIZED_RUNTIME_ENV_KEYS) {
-    if (!isZCodeAgentTelemetryEnvKey(key)) continue;
-    const value2 = env[key]?.trim();
-    if (value2) telemetryEnv[key] = value2;
-  }
-  return telemetryEnv;
-}
-function sanitizeZCodeRuntimeEnv(env) {
-  captureZCodeCuaBrokerCredentials(env);
-  captureZCodeAgentTelemetryEnv(env);
-  const sanitized = {};
-  for (const [key, value2] of Object.entries(env)) {
-    if (value2 === void 0 || shouldSanitizeZCodeRuntimeEnvKey(key)) {
-      continue;
-    }
-    sanitized[key] = value2;
-  }
-  return sanitized;
-}
-function isZCodeAgentTelemetryEnvKey(key) {
-  return key.startsWith("OTEL_") || key.startsWith("ZCODE_TELEMETRY_") || key === "ZCODE_MODEL_TELEMETRY_ENABLED";
-}
-function shouldSanitizeZCodeRuntimeEnvKey(key) {
-  const upperKey = key.toUpperCase();
-  return SANITIZED_RUNTIME_ENV_KEYS.some((candidate) => candidate === upperKey) || SANITIZED_PACKAGE_MANAGER_ENV_PATTERN.test(key);
 }
 
 // packages/shared/src/channels.ts
@@ -34267,26 +33782,6 @@ function readCredentialErrorMessage(error62) {
     return String(error62.message ?? "");
   }
   return "";
-}
-function resolveJwtExpiration(token2, now = Date.now(), clockSkewMs = 3e4) {
-  try {
-    const payloadSegment = token2.split(".")[1];
-    if (!payloadSegment) {
-      return { kind: "unknown" };
-    }
-    const normalized = payloadSegment.replace(/-/g, "+").replace(/_/g, "/");
-    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
-    const decoded = globalThis.atob(padded);
-    const bytes = Uint8Array.from(decoded, (character) => character.charCodeAt(0));
-    const payload = JSON.parse(new TextDecoder().decode(bytes));
-    if (typeof payload.exp !== "number" || !Number.isFinite(payload.exp) || payload.exp <= 0) {
-      return { kind: "unknown" };
-    }
-    const expiresAt = payload.exp * 1e3;
-    return now + Math.max(0, clockSkewMs) >= expiresAt ? { kind: "expired", expiresAt } : { kind: "valid", expiresAt };
-  } catch {
-    return { kind: "unknown" };
-  }
 }
 
 // packages/shared/src/feedback.ts
@@ -34475,24 +33970,24 @@ var SKILL_DATA_SYNC_MAX_ITEM_BYTES = 20 * 1024 * 1024;
 var PLUGIN_DATA_SYNC_MAX_ITEM_BYTES = 50 * 1024 * 1024;
 
 // packages/shared/src/runtime-tool-runtime.ts
-function resolvePlatformBinaryName2(binaryName, platform2) {
+function resolvePlatformBinaryName(binaryName, platform2) {
   return platform2 === "win32" ? `${binaryName}.exe` : binaryName;
 }
 var RUNTIME_TOOL_RUNTIME = {
   bfs: {
     binaryEnvVar: "ZCODE_BFS_BINARY",
     bundledResourceDir: "bfs",
-    resolveEntrySegments: (platform2) => [resolvePlatformBinaryName2("bfs", platform2)]
+    resolveEntrySegments: (platform2) => [resolvePlatformBinaryName("bfs", platform2)]
   },
   ripgrep: {
     binaryEnvVar: "ZCODE_RG_BINARY",
     bundledResourceDir: "ripgrep",
-    resolveEntrySegments: (platform2) => [resolvePlatformBinaryName2("rg", platform2)]
+    resolveEntrySegments: (platform2) => [resolvePlatformBinaryName("rg", platform2)]
   },
   ugrep: {
     binaryEnvVar: "ZCODE_UGREP_BINARY",
     bundledResourceDir: "ugrep",
-    resolveEntrySegments: (platform2) => [resolvePlatformBinaryName2("ugrep", platform2)]
+    resolveEntrySegments: (platform2) => [resolvePlatformBinaryName("ugrep", platform2)]
   }
 };
 var REMOTE_RUNTIME_TOOL_RUNTIME = {
@@ -35014,10 +34509,10 @@ var ProjectAccessTokenCache = class {
         throw new ProjectAccessTokenError("project_token_invalid_response");
       }
       const jitter = Math.max(0, Math.min(1, this.#random())) * REFRESH_JITTER_MS;
-      const fingerprint3 = await projectAccessTokenFingerprint(data.accessToken);
+      const fingerprint2 = await projectAccessTokenFingerprint(data.accessToken);
       if (this.#entries.get(key) !== current)
         throw new ProjectAccessTokenError("project_token_scope_invalidated");
-      current.fingerprint = fingerprint3;
+      current.fingerprint = fingerprint2;
       current.value = Object.freeze({
         enabled: true,
         token: data.accessToken,
@@ -35242,7 +34737,7 @@ var ProjectAccessTokenClient = class {
                 );
                 const random = Math.max(0, Math.min(1, (this.options.random ?? Math.random)()));
                 const delay = minimumDelay + Math.floor((MAX_RATE_LIMIT_RETRY_DELAY_MS - minimumDelay) * random);
-                await new Promise((resolve3) => setTimeout(resolve3, delay));
+                await new Promise((resolve2) => setTimeout(resolve2, delay));
                 assertCurrent();
               }
               this.options.observe?.({
@@ -35355,365 +34850,16 @@ function readData(raw) {
   return value2.data.data;
 }
 
-// packages/services/src/zcode-agent/localRuntimeNetworkCapture.ts
-var LocalRuntimeNetworkCapture = class {
-  clients = /* @__PURE__ */ new Map();
-  captureId = null;
-  sink;
-  register(client, pid) {
-    this.clients.set(client, { pid });
-    if (this.captureId) this.configure(client);
-    return () => {
-      this.clients.get(client)?.subscription?.dispose();
-      this.clients.delete(client);
-    };
-  }
-  setCaptureId(captureId, sink) {
-    this.captureId = captureId;
-    this.sink = sink;
-    for (const client of this.clients.keys()) this.configure(client);
-  }
-  configure(client) {
-    const entry = this.clients.get(client);
-    entry.subscription?.dispose();
-    entry.subscription = void 0;
-    if (client.isDisposed) {
-      this.clients.delete(client);
-      return;
-    }
-    if (this.captureId) {
-      entry.subscription = client.onNotification((message) => {
-        if (message.method !== zcodeProtocolNotifications.processNetworkRequests) return;
-        const result = networkCaptureBatchSchema.safeParse(message.params);
-        if (!result.success || result.data.captureId !== this.captureId) return;
-        this.sink?.({
-          ...result.data,
-          records: result.data.records.map((record2) => ({
-            ...record2,
-            pid: entry.pid,
-            processType: "cli"
-          }))
-        });
-      });
-    }
-    void client.notify(zcodeProtocolMethods.processNetworkCapture, { captureId: this.captureId }).catch(() => {
-    });
-  }
-};
-var localRuntimeNetworkCapture = new LocalRuntimeNetworkCapture();
-
-// packages/services/src/zcode-agent/zcodeAgentSpawnCwd.ts
-import { stat } from "node:fs/promises";
-async function resolveZCodeAgentSpawnCwd(options2, probe = stat) {
-  const usable = async (path) => {
-    if (!path) return false;
-    try {
-      return (await probe(path)).isDirectory();
-    } catch {
-      return false;
-    }
-  };
-  const cwdExists = await usable(options2.requestedCwd);
-  if (options2.requestedCwd === options2.workspacePath && !cwdExists && await usable(options2.spawnFallbackCwd))
-    return { cwd: options2.spawnFallbackCwd, usedFallback: true, cwdExists: true };
-  return { cwd: options2.requestedCwd, usedFallback: false, cwdExists };
-}
-
-// packages/services/src/zcode-agent/zcodeAgentProcessManager.ts
-import { spawn as spawn2 } from "node:child_process";
-import { randomUUID as randomUUID3 } from "node:crypto";
-import { existsSync as existsSync3, mkdirSync as mkdirSync2, writeFileSync as writeFileSync2 } from "node:fs";
-import { dirname as dirname3, isAbsolute, join as join6, resolve } from "node:path";
-
-// packages/rpc/src/foundation.ts
-function toDisposable(fn) {
-  return { dispose: once(fn) };
-}
-function once(fn) {
-  let called = false;
-  return () => {
-    if (!called) {
-      called = true;
-      fn();
-    }
-  };
-}
-var Event;
-((Event5) => {
-  Event5.None = () => ({ dispose() {
-  } });
-  function once2(event) {
-    return (listener) => {
-      let fired = false;
-      const disposable = event((e) => {
-        if (!fired) {
-          fired = true;
-          disposable.dispose();
-          listener(e);
-        }
-      });
-      return disposable;
-    };
-  }
-  Event5.once = once2;
-  function toPromise(event) {
-    return new Promise((resolve3) => once2(event)(resolve3));
-  }
-  Event5.toPromise = toPromise;
-  function filter(event, fn) {
-    return (listener) => event((e) => {
-      if (fn(e)) {
-        listener(e);
-      }
-    });
-  }
-  Event5.filter = filter;
-  function map2(event, fn) {
-    return (listener) => event((e) => listener(fn(e)));
-  }
-  Event5.map = map2;
-})(Event || (Event = {}));
-var Emitter = class {
-  listeners = /* @__PURE__ */ new Set();
-  disposed = false;
-  options;
-  constructor(options2) {
-    this.options = options2;
-  }
-  get event() {
-    return (listener) => {
-      if (this.disposed) {
-        return { dispose() {
-        } };
-      }
-      const isFirst = this.listeners.size === 0;
-      this.listeners.add(listener);
-      if (isFirst) {
-        this.options?.onWillAddFirstListener?.();
-      }
-      return toDisposable(() => {
-        this.listeners.delete(listener);
-        if (this.listeners.size === 0) {
-          this.options?.onDidRemoveLastListener?.();
-        }
-      });
-    };
-  }
-  fire(event) {
-    if (this.disposed) {
-      return;
-    }
-    for (const listener of [...this.listeners]) {
-      listener(event);
-    }
-  }
-  dispose() {
-    this.disposed = true;
-    this.listeners.clear();
-  }
-};
-var CancellationToken;
-((CancellationToken3) => {
-  CancellationToken3.None = {
-    isCancellationRequested: false,
-    onCancellationRequested: Event.None
-  };
-})(CancellationToken || (CancellationToken = {}));
-
-// packages/rpc/src/buffer.ts
-var VSBuffer = class _VSBuffer {
-  buffer;
-  byteLength;
-  constructor(buffer) {
-    this.buffer = buffer;
-    this.byteLength = buffer.byteLength;
-  }
-  /** 分配指定大小的空 buffer */
-  static alloc(byteLength) {
-    return new _VSBuffer(new Uint8Array(byteLength));
-  }
-  /** 包装已有的 Uint8Array */
-  static wrap(buffer) {
-    return new _VSBuffer(buffer);
-  }
-  /** 从字符串创建 buffer (UTF-8) */
-  static fromString(str) {
-    const encoder2 = new TextEncoder();
-    return new _VSBuffer(encoder2.encode(str));
-  }
-  /** 拼接多个 buffer */
-  static concat(buffers, totalLength) {
-    const len = totalLength ?? buffers.reduce((sum, b) => sum + b.byteLength, 0);
-    const result = _VSBuffer.alloc(len);
-    let offset = 0;
-    for (const buf of buffers) {
-      result.set(buf, offset);
-      offset += buf.byteLength;
-    }
-    return result;
-  }
-  /** 转为 UTF-8 字符串 */
-  toString() {
-    const decoder = new TextDecoder();
-    return decoder.decode(this.buffer);
-  }
-  /** 切片 */
-  slice(start, end) {
-    return new _VSBuffer(this.buffer.slice(start, end));
-  }
-  /** 拷贝数据到 this buffer 的指定位置 */
-  set(source, offset = 0) {
-    const raw = source instanceof _VSBuffer ? source.buffer : source;
-    this.buffer.set(raw, offset);
-  }
-  readUInt8(offset) {
-    return this.buffer[offset];
-  }
-  writeUInt8(value2, offset) {
-    this.buffer[offset] = value2;
-  }
-  readUInt32BE(offset) {
-    return (this.buffer[offset] << 24 | this.buffer[offset + 1] << 16 | this.buffer[offset + 2] << 8 | this.buffer[offset + 3]) >>> 0;
-  }
-  writeUInt32BE(value2, offset) {
-    this.buffer[offset] = value2 >>> 24 & 255;
-    this.buffer[offset + 1] = value2 >>> 16 & 255;
-    this.buffer[offset + 2] = value2 >>> 8 & 255;
-    this.buffer[offset + 3] = value2 & 255;
-  }
-};
-
-// packages/rpc/src/serialization.ts
-var vqlZero = createOneByteBuffer(0);
-function createOneByteBuffer(value2) {
-  const result = VSBuffer.alloc(1);
-  result.writeUInt8(value2, 0);
-  return result;
-}
-var BufferPresets = {
-  Undefined: createOneByteBuffer(0 /* Undefined */),
-  String: createOneByteBuffer(1 /* String */),
-  Buffer: createOneByteBuffer(2 /* Buffer */),
-  VSBuffer: createOneByteBuffer(3 /* VSBuffer */),
-  Array: createOneByteBuffer(4 /* Array */),
-  Object: createOneByteBuffer(5 /* Object */),
-  Int: createOneByteBuffer(6 /* Int */)
-};
-
-// packages/rpc/src/proxy-channel.ts
-var ProxyChannel;
-((ProxyChannel2) => {
-  function fromService(service, disposables) {
-    const handler = service;
-    const eventMap = /* @__PURE__ */ new Map();
-    for (const key in handler) {
-      if (isEvent(key) && !isDynamicEvent(key) && typeof handler[key] === "function") {
-        eventMap.set(key, bufferEvent(handler[key]));
-      }
-    }
-    return {
-      listen(_ctx, event, arg) {
-        const cached2 = eventMap.get(event);
-        if (cached2) {
-          return cached2;
-        }
-        const target2 = handler[event];
-        if (typeof target2 === "function") {
-          if (isDynamicEvent(event)) {
-            return target2.call(handler, arg);
-          }
-          if (isEvent(event)) {
-            eventMap.set(event, bufferEvent(handler[event]));
-            return eventMap.get(event);
-          }
-        }
-        throw new Error(`Event not found: ${event}`);
-      },
-      call(_ctx, command, args) {
-        const target2 = handler[command];
-        if (typeof target2 === "function") {
-          let result = target2.apply(handler, args || []);
-          if (!(result instanceof Promise)) {
-            result = Promise.resolve(result);
-          }
-          return result;
-        }
-        throw new Error(`Method not found: ${command}`);
-      }
-    };
-  }
-  ProxyChannel2.fromService = fromService;
-  function toService(channel, options2) {
-    return new Proxy({}, {
-      get(target2, propKey, receiver) {
-        if (typeof propKey === "symbol") {
-          return Reflect.get(target2, propKey, receiver);
-        }
-        if (typeof propKey === "string") {
-          if (propKey === "then") {
-            return void 0;
-          }
-          if (isDynamicEvent(propKey)) {
-            return (arg) => channel.listen(propKey, arg);
-          }
-          if (isEvent(propKey)) {
-            return channel.listen(propKey);
-          }
-          return async (...args) => {
-            const methodArgs = options2?.context !== void 0 ? [options2.context, ...args] : args;
-            return channel.call(propKey, methodArgs);
-          };
-        }
-        return Reflect.get(target2, propKey, receiver);
-      }
-    });
-  }
-  ProxyChannel2.toService = toService;
-})(ProxyChannel || (ProxyChannel = {}));
-function isEvent(name) {
-  return name.length >= 3 && name[0] === "o" && name[1] === "n" && name.charCodeAt(2) >= 65 && // A
-  name.charCodeAt(2) <= 90;
-}
-function isDynamicEvent(name) {
-  return name.length >= 10 && name.startsWith("onDynamic") && name.charCodeAt(9) >= 65 && name.charCodeAt(9) <= 90;
-}
-function bufferEvent(event) {
-  let buffer = [];
-  let flushing = false;
-  let listener;
-  const emitter = new Emitter({
-    onWillAddFirstListener: () => {
-      listener = event((e) => {
-        if (flushing) {
-          emitter.fire(e);
-        } else {
-          buffer.push(e);
-        }
-      });
-    },
-    onDidRemoveLastListener: () => {
-      listener?.dispose();
-      listener = void 0;
-      buffer = [];
-    }
-  });
-  const originalEvent = emitter.event;
-  return (listener_fn) => {
-    const disposable = originalEvent(listener_fn);
-    if (!flushing) {
-      flushing = true;
-      for (const item2 of buffer) {
-        emitter.fire(item2);
-      }
-      buffer = [];
-    }
-    return disposable;
-  };
-}
+// packages/shared/src/node/privateFilePersistence.ts
+import { createHash } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { chmod, mkdir as mkdir2, readFile as readFile2, rename, rm as rm2, writeFile as writeFile2 } from "node:fs/promises";
+import { basename, dirname, join as join2 } from "node:path";
+import { setTimeout as sleep2 } from "node:timers/promises";
 
 // packages/shared/src/node/atomicFileLock.ts
-import { mkdir, readFile, readdir, rmdir, rm, stat as stat2, writeFile } from "node:fs/promises";
-import { join as join2 } from "node:path";
+import { mkdir, readFile, readdir, rmdir, rm, stat, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
 // packages/shared/src/node/lockInstanceObserver.ts
@@ -35774,7 +34920,7 @@ async function isOwnerFileReclaimable(ownerFile, ownerlessGraceMs, observeLockIn
   const metadata = parseLockMetadata(raw, observedAt);
   let createdAt = metadata.createdAt;
   if (createdAt === null) {
-    const ownerStat = await stat2(ownerFile);
+    const ownerStat = await stat(ownerFile);
     createdAt = parseLockTimestamp(ownerStat.mtimeMs, observedAt) ?? observeLockInstance(ownerFile, ownerStat, observedAt);
   }
   const ownerExited = metadata.pid !== null && !isProcessAlive(metadata.pid);
@@ -35783,14 +34929,14 @@ async function isOwnerFileReclaimable(ownerFile, ownerlessGraceMs, observeLockIn
 }
 async function removeAbandonedLock(lockFile, ownerlessGraceMs, observeLockInstance) {
   try {
-    const lockStat = await stat2(lockFile);
+    const lockStat = await stat(lockFile);
     if (lockStat.isDirectory()) {
       const entries = await readdir(lockFile);
       const owners = entries.filter(
         (entry) => entry.startsWith("owner-") && entry.endsWith(".json")
       );
       if (owners.length === 1) {
-        const ownerFile = join2(lockFile, owners[0]);
+        const ownerFile = join(lockFile, owners[0]);
         if (!await isOwnerFileReclaimable(ownerFile, ownerlessGraceMs, observeLockInstance)) {
           return { removed: false };
         }
@@ -35805,14 +34951,14 @@ async function removeAbandonedLock(lockFile, ownerlessGraceMs, observeLockInstan
       }
       for (const owner of owners) {
         if (!await isOwnerFileReclaimable(
-          join2(lockFile, owner),
+          join(lockFile, owner),
           ownerlessGraceMs,
           observeLockInstance
         )) {
           return { removed: false };
         }
       }
-      await Promise.all(entries.map((entry) => rm(join2(lockFile, entry), { force: true })));
+      await Promise.all(entries.map((entry) => rm(join(lockFile, entry), { force: true })));
       await rmdir(lockFile);
       return { removed: true };
     }
@@ -35845,7 +34991,7 @@ function createFileLockTimeoutError(filePath, lockFile, waitedMs, cause) {
 async function acquireFileLock(filePath, retryDelaysMs, ownerlessGraceMs, maxWaitMs) {
   const lockFile = `${filePath}.lock`;
   const token2 = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  const ownerFile = join2(lockFile, `owner-${token2}.json`);
+  const ownerFile = join(lockFile, `owner-${token2}.json`);
   const payload = `${JSON.stringify({
     pid: process.pid,
     createdAt: Date.now(),
@@ -35864,9 +35010,9 @@ async function acquireFileLock(filePath, retryDelaysMs, ownerlessGraceMs, maxWai
     try {
       await mkdir(lockFile);
       createdLock = true;
-      const createdLockStat = await stat2(lockFile);
+      const createdLockStat = await stat(lockFile);
       await writeFile(ownerFile, payload, { encoding: "utf-8", flag: "wx" });
-      const currentLockStat = await stat2(lockFile);
+      const currentLockStat = await stat(lockFile);
       const currentOwners = (await readdir(lockFile)).filter(
         (entry) => entry.startsWith("owner-") && entry.endsWith(".json")
       );
@@ -35925,26 +35071,13 @@ async function acquireFileLock(filePath, retryDelaysMs, ownerlessGraceMs, maxWai
   }
 }
 
-// packages/shared/src/node/networkCapture.ts
-import { AsyncLocalStorage } from "node:async_hooks";
-var excluded = new AsyncLocalStorage();
-
-// packages/shared/src/node/genUiPaths.ts
-var GEN_UI_OUTPUT_ROOT_ENV = "ZCODE_GEN_UI_OUTPUT_ROOT";
-var GEN_UI_OUTPUT_DIRECTORY = "visualizations";
-
 // packages/shared/src/node/privateFilePersistence.ts
-import { createHash } from "node:crypto";
-import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
-import { chmod, mkdir as mkdir2, readFile as readFile2, rename, rm as rm2, writeFile as writeFile2 } from "node:fs/promises";
-import { basename, dirname, join as join3 } from "node:path";
-import { setTimeout as sleep2 } from "node:timers/promises";
 var DEFAULT_LOCK_RETRY_DELAYS_MS = [25, 50, 100, 200, 400];
 var DEFAULT_LOCK_OWNERLESS_GRACE_MS = 100;
 var DEFAULT_LOCK_MAX_WAIT_MS = 8e3;
 var DEFAULT_RENAME_RETRY_DELAYS_MS = [50, 100, 200, 400, 800];
 var processFileLockTails = /* @__PURE__ */ new Map();
-var credentialOperationScope = new AsyncLocalStorage2();
+var credentialOperationScope = new AsyncLocalStorage();
 async function captureCredentialFileGuard(filePath) {
   const generation = credentialOperationScope.getStore()?.get(filePath) ?? await credentialGeneration(filePath);
   const scope = new Map(credentialOperationScope.getStore());
@@ -36021,8 +35154,8 @@ async function renameWithRetry(tempFile, filePath, retryDelaysMs) {
 async function withFileLock(filePath, operation, options2 = {}) {
   const previousTail = processFileLockTails.get(filePath) ?? Promise.resolve();
   let releaseProcessQueue;
-  const currentTail = new Promise((resolve3) => {
-    releaseProcessQueue = resolve3;
+  const currentTail = new Promise((resolve2) => {
+    releaseProcessQueue = resolve2;
   });
   processFileLockTails.set(filePath, currentTail);
   await previousTail;
@@ -36049,7 +35182,7 @@ async function withFileLock(filePath, operation, options2 = {}) {
 }
 async function atomicWritePrivateTextFile(filePath, content, renameRetryDelaysMs = DEFAULT_RENAME_RETRY_DELAYS_MS) {
   const directory = dirname(filePath);
-  const tempPath = join3(
+  const tempPath = join2(
     directory,
     `.${basename(filePath)}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`
   );
@@ -36075,3322 +35208,7 @@ async function backupCorruptFile(filePath) {
   return backupPath;
 }
 
-// packages/services/src/paths.ts
-import { basename as basename2, join as join4, win32 } from "node:path";
-import { homedir } from "node:os";
-var _dataBaseDir = null;
-var envDataBaseDir = process.env.ZCODE_DATA_BASE_DIR?.trim() || null;
-var defaultDataBaseDir = process.env.HOME?.trim() || homedir();
-function setDataBaseDir(dir) {
-  _dataBaseDir = dir?.trim() || null;
-}
-function getDataBaseDir() {
-  if (_dataBaseDir) return _dataBaseDir;
-  if (envDataBaseDir) return envDataBaseDir;
-  return defaultDataBaseDir;
-}
-function getZCodeDataRootDir() {
-  return join4(getDataBaseDir(), ".zcode");
-}
-function getAppConfigDir() {
-  return join4(getZCodeDataRootDir(), "v2");
-}
-
-// packages/shared/src/agent-crash-diagnostic/agentCrashDiagnostic.ts
-var WINDOWS_NATIVE_OUT_OF_MEMORY_EXIT_CODE = 3758096392;
-function classifyAgentProcessExitCause(exitCode) {
-  if (typeof exitCode !== "number" || !Number.isFinite(exitCode)) return void 0;
-  return exitCode >>> 0 === WINDOWS_NATIVE_OUT_OF_MEMORY_EXIT_CODE ? "native_out_of_memory" : void 0;
-}
-var AGENT_CRASH_SENSITIVE_ASSIGNMENT_PATTERN = /(["']?(?:api[-_]?key|authorization|cookie|credential|password|secret|token)["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;}]+)/gi;
-var AGENT_CRASH_AUTH_SCHEME_PATTERN = /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi;
-var AGENT_CRASH_COOKIE_PATTERN = /(["']?(?:set-)?cookie["']?\s*[:=]\s*)(?:(["'])(?:\\.|(?!\2)[^\\])*\2|[^\r\n]*)/gi;
-var AGENT_CRASH_API_KEY_PATTERN = /\b(sk-)[A-Za-z0-9_-]{16,}\b/gi;
-function redactAgentDiagnosticSecrets(value2) {
-  return value2.replace(AGENT_CRASH_AUTH_SCHEME_PATTERN, "$1 <redacted>").replace(
-    AGENT_CRASH_COOKIE_PATTERN,
-    (_match, prefix, quote) => quote ? `${prefix}${quote}<redacted>${quote}` : `${prefix}<redacted>`
-  ).replace(AGENT_CRASH_SENSITIVE_ASSIGNMENT_PATTERN, (match, prefix) => {
-    const quote = match.charAt(prefix.length);
-    return quote === '"' || quote === "'" ? `${prefix}${quote}<redacted>${quote}` : `${prefix}<redacted>`;
-  }).replace(AGENT_CRASH_API_KEY_PATTERN, "$1<redacted>");
-}
-
-// packages/services/src/runtime-tools/providerRuntimeResolver.ts
-import { existsSync } from "node:fs";
-import { homedir as homedir2 } from "node:os";
-import { dirname as dirname2, resolve as resolvePath } from "node:path";
-
-// packages/services/src/runtime-tools/runtimeLoginShellEnvCapture.ts
-var DEFAULT_POSIX_BOOTSTRAP_PATH = process.platform === "darwin" ? "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" : "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
-
-// packages/services/src/runtime-tools/providerRuntimeResolver.ts
-var packagedResourcesPath = typeof process.resourcesPath === "string" ? process.resourcesPath : null;
-function resolveExistingPath(candidates) {
-  for (const candidate of candidates) {
-    if (candidate && existsSync(candidate)) {
-      return candidate;
-    }
-  }
-  return null;
-}
-function resolvePlatformScopedBundledAgentRoots(moduleDir) {
-  const platformKey = `${process.platform}-${process.arch}`;
-  return [
-    resolvePath(process.cwd(), "bundled-agents", platformKey),
-    resolvePath(process.cwd(), "packages", "desktop", "bundled-agents", platformKey),
-    // dev:web 会用 pnpm --filter @zcode/server dev 启动，cwd 落在 packages/server。
-    // ZCode Agent 资源可能位于桌面包或仓库根的 bundled-agents/<platform>。
-    // 这里统一补齐仓库内所有平台化目录候选，desktop/web/server 共享一套解析链路。
-    resolvePath(process.cwd(), "..", "desktop", "bundled-agents", platformKey),
-    moduleDir ? resolvePath(moduleDir, "..", "..", "desktop", "bundled-agents", platformKey) : null,
-    moduleDir ? resolvePath(moduleDir, "..", "..", "bundled-agents", platformKey) : null
-  ];
-}
-function resolveLegacyBundledResourceRoots(moduleDir) {
-  return [
-    resolvePath(process.cwd(), "bundled-resources"),
-    resolvePath(process.cwd(), "packages", "desktop", "bundled-resources"),
-    resolvePath(process.cwd(), "..", "desktop", "bundled-resources"),
-    moduleDir ? resolvePath(moduleDir, "..", "..", "desktop", "bundled-resources") : null,
-    moduleDir ? resolvePath(moduleDir, "..", "..", "bundled-resources") : null
-  ];
-}
-function findZCodeAgentRuntimeBinary() {
-  const runtime = ZCODE_AGENT_RUNTIME;
-  const entrySegments = runtime.resolveEntrySegments(process.platform);
-  const resourceSegments = [runtime.bundledResourceDir, ...entrySegments];
-  const envPath = process.env[runtime.binaryEnvVar];
-  if (envPath && existsSync(envPath)) {
-    return envPath;
-  }
-  const moduleDir = import.meta.dirname;
-  const platformScopedRoots = resolvePlatformScopedBundledAgentRoots(moduleDir);
-  const legacyRoots = resolveLegacyBundledResourceRoots(moduleDir);
-  const candidates = [
-    packagedResourcesPath ? resolvePath(packagedResourcesPath, ...resourceSegments) : null,
-    resolvePath(homedir2(), ".zcode", "server", "agents", ...resourceSegments),
-    ...platformScopedRoots.map(
-      (root) => root ? resolvePath(root, runtime.bundledResourceDir, ...entrySegments) : null
-    ),
-    ...legacyRoots.map((root) => root ? resolvePath(root, ...resourceSegments) : null)
-  ];
-  return resolveExistingPath(candidates);
-}
-function findZCodeAgentRuntimeNodeBundle() {
-  const runtime = ZCODE_AGENT_RUNTIME;
-  const entrySegments = runtime.resolveNodeBundleSegments();
-  const resourceSegments = [runtime.bundledResourceDir, ...entrySegments];
-  const moduleDir = import.meta.dirname;
-  const platformScopedRoots = resolvePlatformScopedBundledAgentRoots(moduleDir);
-  const legacyRoots = resolveLegacyBundledResourceRoots(moduleDir);
-  const candidates = [
-    packagedResourcesPath ? resolvePath(packagedResourcesPath, ...resourceSegments) : null,
-    resolvePath(homedir2(), ".zcode", "server", "agents", ...resourceSegments),
-    ...platformScopedRoots.map(
-      (root) => root ? resolvePath(root, runtime.bundledResourceDir, ...entrySegments) : null
-    ),
-    ...legacyRoots.map((root) => root ? resolvePath(root, ...resourceSegments) : null)
-  ];
-  return resolveExistingPath(candidates);
-}
-
-// packages/services/src/runtime-tools/nodeEnv.ts
-function resolveEffectiveNodeEnv(env = process.env) {
-  const runtimeEnv = resolveZCodeRuntimeEnv(env);
-  return runtimeEnv === "development" ? "development" : "production";
-}
-function isEffectiveDevelopmentNodeEnv(env = process.env) {
-  return resolveEffectiveNodeEnv(env) === "development";
-}
-
-// packages/services/src/logger/serviceLogger.ts
-function createServiceLogger(scope, options2) {
-  const pid = options2?.pid ?? process.pid;
-  const sink = options2?.sink ?? console;
-  const debugOption = options2?.isDebugEnabled;
-  const resolveDebugEnabled = typeof debugOption === "function" ? debugOption : typeof debugOption === "boolean" ? () => debugOption : () => isEffectiveDevelopmentNodeEnv();
-  function write(level, traceId, ...args) {
-    if (level === "debug" && !resolveDebugEnabled()) {
-      return;
-    }
-    const source = traceId ? `${scope}][trace:${traceId}` : scope;
-    const consoleFn = level === "error" ? sink.error : level === "warn" ? sink.warn : level === "debug" ? sink.debug ?? sink.log : sink.log;
-    consoleFn(formatLogPrefix(source, pid), ...args);
-  }
-  return {
-    debug: (traceId, ...args) => write("debug", traceId, ...args),
-    info: (traceId, ...args) => write("info", traceId, ...args),
-    warn: (traceId, ...args) => write("warn", traceId, ...args),
-    error: (traceId, ...args) => write("error", traceId, ...args)
-  };
-}
-
-// packages/services/src/zcode-agent/zcodeStorageStartupGate.ts
-import { randomUUID as randomUUID2 } from "node:crypto";
-var FIRST_STATUS_TIMEOUT_MS = 3e4;
-var ZCodeStorageStartupGate = class {
-  current;
-  terminalError;
-  pending;
-  resolve;
-  reject;
-  timer;
-  changed = new Emitter();
-  onDidChange = this.changed.event;
-  constructor(required2, firstStatusTimeoutMs = FIRST_STATUS_TIMEOUT_MS) {
-    if (required2) {
-      this.ensurePending();
-      this.timer = setTimeout(() => this.fail("startup_status_timeout"), firstStatusTimeoutMs);
-      this.timer.unref?.();
-    }
-  }
-  get isWaiting() {
-    return Boolean(this.terminalError || this.pending && this.current?.phase !== "ready");
-  }
-  get snapshot() {
-    return this.current;
-  }
-  accept(input2) {
-    const parsed = zcodeStorageStartupStateSchema.safeParse(input2);
-    if (!parsed.success || this.terminalError) return false;
-    const next = parsed.data;
-    if (this.current && (next.attemptId !== this.current.attemptId || next.databaseId !== this.current.databaseId || next.sequence <= this.current.sequence || this.current.phase === "ready" || this.current.phase === "failed"))
-      return false;
-    clearTimeout(this.timer);
-    this.current = next;
-    if (next.phase === "ready") this.resolve?.();
-    else if (next.phase === "failed") this.fail(next.errorCode ?? "sql_failed");
-    else this.ensurePending();
-    this.changed.fire(next);
-    return true;
-  }
-  async wait(signal) {
-    signal?.throwIfAborted();
-    if (this.terminalError) throw this.terminalError;
-    if (!this.pending || this.current?.phase === "ready") return;
-    if (!signal) return this.pending;
-    let abort;
-    try {
-      await Promise.race([
-        this.pending,
-        new Promise((_, reject) => {
-          abort = () => reject(signal.reason);
-          signal.addEventListener("abort", abort, { once: true });
-        })
-      ]);
-    } finally {
-      signal.removeEventListener("abort", abort);
-    }
-  }
-  dispose() {
-    clearTimeout(this.timer);
-    if (this.pending && this.current?.phase !== "ready" && !this.terminalError)
-      this.fail("transport_closed");
-    this.changed.dispose();
-  }
-  ensurePending() {
-    if (this.pending) return;
-    this.pending = new Promise((resolve3, reject) => {
-      this.resolve = resolve3;
-      this.reject = reject;
-    });
-    void this.pending.catch(() => void 0);
-  }
-  fail(code) {
-    if (this.current?.phase !== "failed") {
-      this.current = this.current ? { ...this.current, phase: "failed", errorCode: code, sequence: this.current.sequence + 1 } : {
-        schemaVersion: 1,
-        attemptId: randomUUID2(),
-        databaseId: `unresolved:${randomUUID2()}`,
-        databaseKind: "session",
-        sequence: 1,
-        phase: "failed",
-        elapsedMs: 0,
-        errorCode: code
-      };
-      this.changed.fire(this.current);
-    }
-    this.terminalError = new Error(`SQLite startup failed: ${code}`);
-    this.reject?.(this.terminalError);
-  }
-};
-
-// packages/services/src/zcode-agent/zcodeProtocolClient.ts
-var DEFAULT_ZCODE_PROTOCOL_REQUEST_TIMEOUT_MS = 3 * 6e4;
-var ZCodeProtocolClientError = class extends Error {
-  constructor(message, code, data) {
-    super(message);
-    this.code = code;
-    this.data = data;
-    this.name = "ZCodeProtocolClientError";
-  }
-  code;
-  data;
-};
-var ZCodeProtocolRequestTimeoutError = class extends Error {
-  constructor(method2, requestId, timeoutMs) {
-    super(`ZCode Protocol request timed out: ${method2}`);
-    this.method = method2;
-    this.requestId = requestId;
-    this.timeoutMs = timeoutMs;
-    this.name = "ZCodeProtocolRequestTimeoutError";
-  }
-  method;
-  requestId;
-  timeoutMs;
-};
-var ZCodeProtocolClient = class {
-  constructor(transport, options2) {
-    this.transport = transport;
-    this.storageStartup = new ZCodeStorageStartupGate(options2?.requireStorageStartup ?? false);
-    this.requestTimeoutMs = options2?.requestTimeoutMs ?? DEFAULT_ZCODE_PROTOCOL_REQUEST_TIMEOUT_MS;
-    this.disposables.push(
-      transport.onMessage((message) => this.handleMessage(message)),
-      transport.onClose((event) => {
-        this.storageStartup.dispose();
-        const suffix = event.reason ? `: ${event.reason}` : "";
-        this.rejectAll(new Error(`ZCode agent transport closed${suffix}`));
-        this.closeEmitter.fire();
-      })
-    );
-  }
-  transport;
-  /** 与已连接 workspace 的 CLI 生命周期 owner 通信；此入口不拉起或重启整个进程。 */
-  sessionLifecycle = {
-    getState: (sessionId) => this.request(
-      zcodeProtocolMethods.sessionLifecycleGetState,
-      sessionLifecycleParamsSchema.parse({ sessionId }),
-      sessionLifecycleSnapshotSchema,
-      { lifecycle: "observation" }
-    ),
-    ensureReady: (sessionId, workspace) => this.requestSessionActivation(
-      zcodeProtocolMethods.sessionLifecycleEnsureReady,
-      sessionId,
-      workspace
-    ),
-    stop: async (sessionId) => {
-      await this.request(
-        zcodeProtocolMethods.sessionLifecycleStop,
-        sessionLifecycleParamsSchema.parse({ sessionId }),
-        sessionLifecycleResultSchema,
-        { invalidateConnectionOnTimeout: false }
-      );
-    },
-    restart: (sessionId, workspace) => this.requestSessionActivation(
-      zcodeProtocolMethods.sessionLifecycleRestart,
-      sessionId,
-      workspace
-    )
-  };
-  async requestSessionActivation(method2, sessionId, workspace) {
-    if (workspace) {
-      const capabilities = await this.request(
-        zcodeProtocolMethods.runtimeCapabilities,
-        {},
-        zcodeRuntimeCapabilitiesSchema,
-        // 能力查询是观察请求，等待超时不能淘汰共享 CLI 连接。
-        { lifecycle: "observation" }
-      );
-      if (!capabilities.sessionLifecycleWorkspace)
-        throw new Error("fault.sessionLifecycle.unsupported");
-    }
-    return this.request(
-      method2,
-      sessionLifecycleActivationParamsSchema.parse({ sessionId, workspace }),
-      sessionLifecycleResultSchema,
-      { invalidateConnectionOnTimeout: false }
-    );
-  }
-  storageStartup;
-  pending = /* @__PURE__ */ new Map();
-  notificationEmitter = new Emitter();
-  requestEmitter = new Emitter();
-  requestTimeoutEmitter = new Emitter();
-  // 业务请求归零时触发；观测完成不能给被观察进程续命。
-  pendingDrainedEmitter = new Emitter();
-  closeEmitter = new Emitter();
-  disposables = [];
-  nextRequestId = 1;
-  disposed = false;
-  requestTimeoutMs;
-  /**
-   * client 是否已 dispose（进程被回收/transport 关闭后为 true）。
-   * 调用方（如 getClient 复用 active entry）必须在复用前检查此标记，
-   * 避免对一个已被 processManager 回收但尚未触发 onClose 的 client 发请求，
-   * 否则会立即抛 "ZCode Protocol client is disposed"。
-   */
-  get isDisposed() {
-    return this.disposed;
-  }
-  onNotification = this.notificationEmitter.event;
-  /** 当前连接的降级投影；新进程的新连接自然重置，不跨进程保存。 */
-  pluginStartupDegraded = false;
-  onRequest = this.requestEmitter.event;
-  onRequestTimeout = this.requestTimeoutEmitter.event;
-  onPendingRequestsDrained = this.pendingDrainedEmitter.event;
-  onClose = this.closeEmitter.event;
-  /** 当前尚未收到响应的请求数。 */
-  get pendingRequestCount() {
-    return this.pending.size;
-  }
-  get pendingOperationRequestCount() {
-    let count3 = 0;
-    for (const pending of this.pending.values()) if (!pending.observation) count3 += 1;
-    return count3;
-  }
-  get transportKind() {
-    return this.transport.kind;
-  }
-  /**
-   * 非 async 包装（CR 意见）：调用方持有的是本方法返回的 Promise，而 async 实现内部的
-   * resultPromise 经 return 传播拒绝时，外层 Promise 独立参与 unhandledRejection 判定。
-   * no-op catch 必须挂在最终返回对象创建点，才能覆盖 dispose/transport close 的批量拒绝
-   * 与调用方挂靠 .catch() 之间的时序窗口。该 handler 只影响 unhandled 判定，不改变
-   * rejection 向真实 awaiter 的传播；代价是调用方 fire-and-forget 忘挂 catch 时不再有
-   * unhandled 噪声暴露，属可接受取舍（仓库内 void 调用点均自带 catch）。
-   */
-  request(method2, params, resultSchema, options2) {
-    const requestPromise = this.requestImpl(method2, params, resultSchema, options2);
-    void requestPromise.catch(() => void 0);
-    return requestPromise;
-  }
-  async requestImpl(method2, params, resultSchema, options2) {
-    this.assertNotDisposed();
-    if (this.storageStartup.isWaiting) await this.storageStartup.wait(options2?.signal);
-    this.assertNotDisposed();
-    options2?.signal?.throwIfAborted();
-    const id3 = this.nextRequestId++;
-    const requestKey = String(id3);
-    const requestTimeoutMs = options2?.timeoutMs ?? this.requestTimeoutMs;
-    const observation = options2?.lifecycle === "observation";
-    const resultPromise = new Promise((resolve3, reject) => {
-      const expire = () => {
-        const pending2 = this.pending.get(requestKey);
-        pending2?.cleanupAbort?.();
-        this.deletePending(requestKey);
-        const error62 = new ZCodeProtocolRequestTimeoutError(method2, id3, requestTimeoutMs);
-        if (!observation && options2?.invalidateConnectionOnTimeout !== false) {
-          this.requestTimeoutEmitter.fire({ method: method2, requestId: id3, timeoutMs: requestTimeoutMs });
-        }
-        reject(error62);
-      };
-      const timeout = setTimeout(expire, requestTimeoutMs);
-      const abortHandler = () => {
-        const pending2 = this.pending.get(requestKey);
-        if (!pending2) return;
-        clearTimeout(pending2.timeout);
-        pending2.cleanupAbort?.();
-        this.deletePending(requestKey);
-        const reason = options2?.signal?.reason;
-        reject(
-          reason instanceof Error ? reason : new DOMException("Request aborted", "AbortError")
-        );
-      };
-      const pending = {
-        method: method2,
-        observation,
-        timeout,
-        resumeTimeout: () => {
-          pending.timeout = setTimeout(expire, requestTimeoutMs);
-        },
-        resolve: resolve3,
-        reject,
-        // Bug 复盘：这里曾在 executor 内直接引用外层 resultPromise，触发 TDZ
-        // ReferenceError（executor 同步运行于 const 赋值完成之前），每次 request 即抛。
-        // promise 绑定延后到 new Promise 返回之后完成。
-        resultSchema,
-        cleanupAbort: () => options2?.signal?.removeEventListener("abort", abortHandler)
-      };
-      this.pending.set(requestKey, pending);
-      if (options2?.signal?.aborted) {
-        abortHandler();
-      } else {
-        options2?.signal?.addEventListener("abort", abortHandler, { once: true });
-      }
-    });
-    const registeredPending = this.pending.get(requestKey);
-    if (registeredPending) {
-      registeredPending.promise = resultPromise;
-    }
-    if (!this.pending.has(requestKey)) {
-      return resultPromise;
-    }
-    try {
-      await this.transport.send({
-        id: id3,
-        method: method2,
-        params,
-        ...options2?.trace ? { trace: options2.trace } : {}
-      });
-    } catch (error62) {
-      const pending = this.pending.get(requestKey);
-      if (pending) {
-        clearTimeout(pending.timeout);
-        pending.cleanupAbort?.();
-        this.deletePending(requestKey);
-      }
-      throw error62;
-    }
-    return resultPromise;
-  }
-  async notify(method2, params) {
-    this.assertNotDisposed();
-    await this.transport.send({ method: method2, params });
-  }
-  async respond(id3, result) {
-    this.assertNotDisposed();
-    await this.transport.send({ id: id3, result });
-  }
-  async respondError(id3, error62) {
-    this.assertNotDisposed();
-    await this.transport.send({ id: id3, error: error62 });
-  }
-  dispose() {
-    if (this.disposed) {
-      return;
-    }
-    this.disposed = true;
-    this.disposeLocalResources();
-    this.transport.dispose();
-  }
-  async disposeAndWait(options2) {
-    const wasDisposed = this.disposed;
-    if (!wasDisposed) {
-      this.disposed = true;
-      this.disposeLocalResources();
-    }
-    if (this.transport.disposeAndWait) {
-      await this.transport.disposeAndWait(options2);
-      return;
-    }
-    if (!wasDisposed) {
-      this.transport.dispose();
-    }
-  }
-  handleMessage(message) {
-    if (!message || typeof message !== "object") {
-      return;
-    }
-    if ("result" in message && "id" in message) {
-      this.resolveResponse(
-        message.id,
-        message.result
-      );
-      return;
-    }
-    if ("error" in message && "id" in message) {
-      const errorMessage = message;
-      this.rejectResponse(
-        errorMessage.id,
-        new ZCodeProtocolClientError(
-          errorMessage.error.message,
-          errorMessage.error.code,
-          errorMessage.error.data
-        )
-      );
-      return;
-    }
-    if ("method" in message && "id" in message) {
-      this.requestEmitter.fire(message);
-      return;
-    }
-    if ("method" in message) {
-      if (message.method === zcodeProtocolNotifications.pluginStartupDegraded && zcodePluginStartupDegradedSchema.safeParse(message.params).success) {
-        this.pluginStartupDegraded = true;
-      }
-      if (message.method === "startup/storageState" && this.storageStartup.accept(message.params)) {
-        for (const pending of this.pending.values()) {
-          clearTimeout(pending.timeout);
-          if (this.storageStartup.snapshot?.phase === "ready") pending.resumeTimeout();
-        }
-        if (this.storageStartup.snapshot?.phase === "failed") {
-          this.rejectAll(
-            new Error(`SQLite startup failed: ${this.storageStartup.snapshot.errorCode}`)
-          );
-        }
-      }
-      this.notificationEmitter.fire(message);
-    }
-  }
-  resolveResponse(id3, result) {
-    const requestKey = String(id3);
-    const pending = this.pending.get(requestKey);
-    if (!pending) {
-      return;
-    }
-    clearTimeout(pending.timeout);
-    pending.cleanupAbort?.();
-    this.deletePending(requestKey);
-    try {
-      const parsed = pending.resultSchema ? pending.resultSchema.parse(result) : result;
-      pending.resolve(parsed);
-    } catch (error62) {
-      pending.reject(
-        error62 instanceof Error ? error62 : new Error(`ZCode Protocol response parse failed: ${pending.method}`)
-      );
-    }
-  }
-  rejectResponse(id3, error62) {
-    const requestKey = String(id3);
-    const pending = this.pending.get(requestKey);
-    if (!pending) {
-      return;
-    }
-    clearTimeout(pending.timeout);
-    pending.cleanupAbort?.();
-    this.deletePending(requestKey);
-    pending.reject(error62);
-  }
-  rejectAll(error62) {
-    const hadPending = this.pendingOperationRequestCount > 0;
-    for (const pending of this.pending.values()) {
-      clearTimeout(pending.timeout);
-      pending.cleanupAbort?.();
-      void pending.promise?.catch(() => void 0);
-      pending.reject(error62);
-    }
-    this.pending.clear();
-    if (hadPending && !this.disposed) {
-      this.pendingDrainedEmitter.fire();
-    }
-  }
-  deletePending(requestKey) {
-    const pending = this.pending.get(requestKey);
-    if (!this.pending.delete(requestKey)) {
-      return;
-    }
-    if (!pending?.observation && this.pendingOperationRequestCount === 0 && !this.disposed) {
-      this.pendingDrainedEmitter.fire();
-    }
-  }
-  disposeLocalResources() {
-    this.rejectAll(new Error("ZCode Protocol client disposed"));
-    for (const disposable of this.disposables) {
-      disposable.dispose();
-    }
-    this.disposables.length = 0;
-    this.storageStartup.dispose();
-    this.notificationEmitter.dispose();
-    this.requestEmitter.dispose();
-    this.requestTimeoutEmitter.dispose();
-    this.pendingDrainedEmitter.dispose();
-    this.closeEmitter.dispose();
-  }
-  assertNotDisposed() {
-    if (this.disposed) {
-      throw new Error("ZCode Protocol client is disposed");
-    }
-  }
-};
-
-// packages/services/src/process/processTreeSnapshot.ts
-import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-var PROCESS_LOOKUP_TIMEOUT_MS = 1e3;
-var DOTNET_UNIX_EPOCH_TICKS = 621355968000000000n;
-var TICKS_PER_MILLISECOND = 10000n;
-var windowsProcessListCache;
-function warn(options2, message, ...args) {
-  options2.log?.warn(options2.traceId, message, ...args);
-}
-function parsePositiveInteger(value2) {
-  const parsed = Number(value2);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : void 0;
-}
-function parseNonNegativeInteger(value2) {
-  const parsed = Number(value2);
-  return Number.isInteger(parsed) && parsed >= 0 ? parsed : void 0;
-}
-function parsePosixProcessList(stdout, includeCommand) {
-  const identities = [];
-  for (const line of stdout.split(/\r?\n/)) {
-    const fields = line.trim().split(/\s+/);
-    const [pidText, parentPidText, processGroupIdText] = fields;
-    const pid = parsePositiveInteger(pidText);
-    const parentPid = parseNonNegativeInteger(parentPidText);
-    const processGroupId = parsePositiveInteger(processGroupIdText);
-    const lstart = fields.slice(3, 8).join(" ");
-    const command = includeCommand ? fields.slice(8).join(" ") : "";
-    const startTime = includeCommand ? `${lstart}|command:${command}` : lstart;
-    if (pid === void 0 || parentPid === void 0 || !processGroupId || !startTime) {
-      continue;
-    }
-    identities.push({ parentPid, pid, processGroupId, startTime });
-  }
-  return identities;
-}
-function parseWindowsProcessList(stdout) {
-  const identities = [];
-  for (const line of stdout.split(/\r?\n/)) {
-    const [pidText, parentPidText, startTime] = line.trim().split(/\s+/);
-    const pid = parsePositiveInteger(pidText);
-    const parentPid = parseNonNegativeInteger(parentPidText);
-    if (pid === void 0 || parentPid === void 0 || !startTime) {
-      continue;
-    }
-    identities.push({ parentPid, pid, startTime });
-  }
-  return identities;
-}
-function parseWindowsCreationTimeMs(startTime) {
-  try {
-    const unixTicks = BigInt(startTime) - DOTNET_UNIX_EPOCH_TICKS;
-    const timestamp = Number(unixTicks / TICKS_PER_MILLISECOND);
-    return Number.isSafeInteger(timestamp) ? timestamp : void 0;
-  } catch {
-    return void 0;
-  }
-}
-function readPosixProcessList(options2) {
-  const includeCommand = process.platform === "darwin";
-  const result = spawnSync(
-    "ps",
-    includeCommand ? ["-axo", "pid=,ppid=,pgid=,lstart=,command="] : ["-eo", "pid=,ppid=,pgid=,lstart="],
-    {
-      encoding: "utf8",
-      timeout: PROCESS_LOOKUP_TIMEOUT_MS
-    }
-  );
-  if (result.error) {
-    warn(options2, "\u67E5\u8BE2 runtime \u540E\u4EE3\u8FDB\u7A0B\u5931\u8D25\uFF08\u8FDB\u7A0B\u8868\u67E5\u8BE2\uFF09:", result.error);
-    return [];
-  }
-  if (result.signal === "SIGTERM" || result.signal === "SIGKILL") {
-    warn(options2, `\u67E5\u8BE2 runtime \u540E\u4EE3\u8FDB\u7A0B\u5931\u8D25\uFF08\u8FDB\u7A0B\u8868\u8D85\u65F6\uFF09 signal=${result.signal}`);
-    return [];
-  }
-  if (result.status !== 0 || !result.stdout) {
-    warn(options2, `\u67E5\u8BE2 runtime \u540E\u4EE3\u8FDB\u7A0B\u5931\u8D25\uFF08\u8FDB\u7A0B\u8868\u67E5\u8BE2\uFF09 status=${result.status ?? "unknown"}`);
-    return [];
-  }
-  return parsePosixProcessList(result.stdout, includeCommand);
-}
-function readWindowsProcessList(options2) {
-  if (windowsProcessListCache) {
-    return windowsProcessListCache;
-  }
-  const result = spawnSync(
-    "powershell.exe",
-    [
-      "-NoLogo",
-      "-NoProfile",
-      "-NonInteractive",
-      "-Command",
-      "Get-CimInstance Win32_Process | ForEach-Object { '{0} {1} {2}' -f $_.ProcessId, $_.ParentProcessId, $_.CreationDate.ToUniversalTime().Ticks }"
-    ],
-    {
-      encoding: "utf8",
-      timeout: PROCESS_LOOKUP_TIMEOUT_MS,
-      windowsHide: true
-    }
-  );
-  if (result.error || result.status !== 0 || !result.stdout) {
-    warn(
-      options2,
-      `\u67E5\u8BE2 Windows runtime \u8FDB\u7A0B\u8868\u5931\u8D25 status=${result.status ?? "unknown"}:`,
-      result.error ?? result.stderr
-    );
-    return [];
-  }
-  const identities = parseWindowsProcessList(result.stdout);
-  windowsProcessListCache = identities;
-  queueMicrotask(() => {
-    if (windowsProcessListCache === identities) {
-      windowsProcessListCache = void 0;
-    }
-  });
-  return identities;
-}
-function readProcessList(options2) {
-  return process.platform === "win32" ? readWindowsProcessList(options2) : readPosixProcessList(options2);
-}
-function refineLinuxProcessIdentity(identity2) {
-  if (process.platform !== "linux") {
-    return identity2;
-  }
-  try {
-    const stat5 = readFileSync(`/proc/${identity2.pid}/stat`, "utf8");
-    const commandEnd = stat5.lastIndexOf(")");
-    if (commandEnd < 0) {
-      return void 0;
-    }
-    const fieldsAfterCommand = stat5.slice(commandEnd + 2).trim().split(/\s+/);
-    const parentPid = parseNonNegativeInteger(fieldsAfterCommand[1]);
-    const processGroupId = parsePositiveInteger(fieldsAfterCommand[2]);
-    const startTimeTicks = fieldsAfterCommand[19];
-    if (parentPid === void 0 || !processGroupId || !startTimeTicks || parentPid !== identity2.parentPid || processGroupId !== identity2.processGroupId) {
-      return void 0;
-    }
-    return {
-      ...identity2,
-      parentPid,
-      processGroupId,
-      startTime: `linux-ticks:${startTimeTicks}`
-    };
-  } catch {
-    return void 0;
-  }
-}
-function refineProcessIdentities(identities) {
-  if (process.platform !== "linux") {
-    return [...identities];
-  }
-  return identities.map((identity2) => refineLinuxProcessIdentity(identity2)).filter((identity2) => identity2 !== void 0);
-}
-function collectDescendantIdentitiesFromProcessList(rootPid, identities) {
-  const childrenByParentPid = /* @__PURE__ */ new Map();
-  for (const identity2 of identities) {
-    const children = childrenByParentPid.get(identity2.parentPid) ?? [];
-    children.push(identity2);
-    childrenByParentPid.set(identity2.parentPid, children);
-  }
-  const descendants = [];
-  const seen = /* @__PURE__ */ new Set([rootPid]);
-  const visit2 = (pid) => {
-    for (const child of childrenByParentPid.get(pid) ?? []) {
-      if (seen.has(child.pid)) {
-        continue;
-      }
-      seen.add(child.pid);
-      descendants.push(child);
-      visit2(child.pid);
-    }
-  };
-  visit2(rootPid);
-  return descendants;
-}
-function filterCurrentProcessIdentities(identities, options2) {
-  if (identities.length === 0) {
-    return [];
-  }
-  const trackedPids = new Set(identities.map((identity2) => identity2.pid));
-  const currentByPid = new Map(
-    refineProcessIdentities(
-      readProcessList(options2).filter((identity2) => trackedPids.has(identity2.pid))
-    ).map((identity2) => [identity2.pid, identity2])
-  );
-  return identities.filter((identity2) => {
-    const current = currentByPid.get(identity2.pid);
-    return current?.startTime === identity2.startTime && (identity2.processGroupId === void 0 || current.processGroupId === identity2.processGroupId);
-  });
-}
-function captureProcessTreeSnapshot(child, options2 = {}) {
-  if (child.pid == null) {
-    return void 0;
-  }
-  const processList = readProcessList(options2);
-  const rootIdentity = processList.find((identity2) => identity2.pid === child.pid);
-  if (!rootIdentity) {
-    return void 0;
-  }
-  const descendantIdentities = collectDescendantIdentitiesFromProcessList(child.pid, processList);
-  const ownedProcessGroupIdentities = process.platform !== "win32" && rootIdentity.processGroupId === child.pid ? processList.filter((identity2) => identity2.processGroupId === child.pid) : [];
-  const snapshotCandidates = new Map(
-    [rootIdentity, ...descendantIdentities, ...ownedProcessGroupIdentities].map((identity2) => [
-      identity2.pid,
-      identity2
-    ])
-  );
-  const identities = refineProcessIdentities([...snapshotCandidates.values()]);
-  if (!identities.some((identity2) => identity2.pid === child.pid)) {
-    return void 0;
-  }
-  return {
-    rootPid: child.pid,
-    descendantPids: identities.filter((identity2) => identity2.pid !== child.pid).map((identity2) => identity2.pid),
-    identities
-  };
-}
-function captureProcessGroupSnapshot(processGroupId, options2 = {}) {
-  if (process.platform === "win32" || !Number.isInteger(processGroupId) || processGroupId <= 0) {
-    return void 0;
-  }
-  const identities = refineProcessIdentities(
-    readProcessList(options2).filter((identity2) => identity2.processGroupId === processGroupId)
-  );
-  if (identities.length === 0) {
-    return void 0;
-  }
-  return {
-    rootPid: processGroupId,
-    descendantPids: identities.filter((identity2) => identity2.pid !== processGroupId).map((identity2) => identity2.pid),
-    identities
-  };
-}
-function captureExitedRootDescendantsSnapshot(rootPid, options2 = {}) {
-  const startedAtMs = options2.ownedProcessStartedAtMs;
-  const exitedAtMs = options2.ownedProcessExitedAtMs;
-  if (process.platform !== "win32" || !Number.isInteger(rootPid) || rootPid <= 0 || typeof startedAtMs !== "number" || !Number.isFinite(startedAtMs) || typeof exitedAtMs !== "number" || !Number.isFinite(exitedAtMs)) {
-    return void 0;
-  }
-  const processList = readProcessList(options2).filter((identity2) => {
-    const createdAtMs = parseWindowsCreationTimeMs(identity2.startTime);
-    return createdAtMs !== void 0 && createdAtMs >= startedAtMs && createdAtMs <= exitedAtMs;
-  });
-  const identities = collectDescendantIdentitiesFromProcessList(rootPid, processList);
-  if (identities.length === 0) {
-    return void 0;
-  }
-  return {
-    rootPid,
-    descendantPids: identities.map((identity2) => identity2.pid),
-    identities
-  };
-}
-
-// packages/services/src/process/windowsProcessListAsync.ts
-import { execFile as execFile2 } from "node:child_process";
-var WINDOWS_PROCESS_LOOKUP_TIMEOUT_MS = 2500;
-var DOTNET_UNIX_EPOCH_TICKS2 = 621355968000000000n;
-var TICKS_PER_MICROSECOND = 10n;
-var WINDOWS_START_TIME_PREFIX = "windows-utc-us:";
-var windowsProcessListInFlight;
-var windowsCimCapability;
-function isHardCimUnavailable(error62) {
-  const code = error62?.code;
-  return code === "ENOENT" || code === "EACCES" || code === "EPERM";
-}
-function remainingWindowsCleanupMs(options2) {
-  return options2.windowsCleanupDeadlineAtMs === void 0 ? void 0 : Math.max(options2.windowsCleanupDeadlineAtMs - Date.now(), 0);
-}
-function boundedWindowsLookupTimeoutMs(defaultTimeoutMs, options2) {
-  const remainingMs = remainingWindowsCleanupMs(options2);
-  return remainingMs === void 0 ? defaultTimeoutMs : Math.max(Math.min(defaultTimeoutMs, remainingMs), 0);
-}
-async function awaitWindowsProcessListWithinDeadline(request, options2) {
-  const remainingMs = remainingWindowsCleanupMs(options2);
-  if (remainingMs === void 0) return await request;
-  if (remainingMs <= 0) return [];
-  let deadlineTimer;
-  try {
-    return await Promise.race([
-      request,
-      new Promise((resolve3) => {
-        deadlineTimer = setTimeout(() => resolve3([]), remainingMs);
-      })
-    ]);
-  } finally {
-    if (deadlineTimer) clearTimeout(deadlineTimer);
-  }
-}
-function warn2(options2, message, ...args) {
-  options2.log?.warn(options2.traceId, message, ...args);
-}
-function parsePositiveInteger2(value2) {
-  const parsed = Number(value2);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : void 0;
-}
-function parseNonNegativeInteger2(value2) {
-  const parsed = Number(value2);
-  return Number.isInteger(parsed) && parsed >= 0 ? parsed : void 0;
-}
-function parseWindowsProcessList2(stdout) {
-  const identities = [];
-  for (const line of stdout.split(/\r?\n/)) {
-    const [pidText, parentPidText, rawStartTime] = line.trim().split(/\s+/);
-    const pid = parsePositiveInteger2(pidText);
-    const parentPid = parseNonNegativeInteger2(parentPidText);
-    const startTime = normalizePowerShellStartTime(rawStartTime);
-    if (pid === void 0 || parentPid === void 0 || !startTime) continue;
-    identities.push({ parentPid, pid, startTime });
-  }
-  return identities;
-}
-function normalizePowerShellStartTime(rawStartTime) {
-  if (!rawStartTime) return void 0;
-  try {
-    const unixMicroseconds = (BigInt(rawStartTime) - DOTNET_UNIX_EPOCH_TICKS2) / TICKS_PER_MICROSECOND;
-    return `${WINDOWS_START_TIME_PREFIX}${unixMicroseconds}`;
-  } catch {
-    return void 0;
-  }
-}
-async function verifyWindowsProcessIdentityAsync(identity2, timeoutMs, options2 = {}) {
-  if (process.platform !== "win32" || timeoutMs <= 0) return false;
-  if (windowsCimCapability === "identity-unavailable") return false;
-  return await new Promise((resolve3) => {
-    execFile2(
-      "powershell.exe",
-      [
-        "-NoLogo",
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        `Get-CimInstance Win32_Process -Filter "ProcessId = ${identity2.pid}" | ForEach-Object { '{0} {1} {2}' -f $_.ProcessId, $_.ParentProcessId, $_.CreationDate.ToUniversalTime().Ticks }`
-      ],
-      {
-        encoding: "utf8",
-        timeout: timeoutMs,
-        windowsHide: true
-      },
-      (error62, stdout, stderr) => {
-        if (error62 || !stdout) {
-          if (isHardCimUnavailable(error62)) windowsCimCapability = "identity-unavailable";
-          warn2(
-            options2,
-            `Windows root \u8EAB\u4EFD PowerShell \u590D\u6838\u5931\u8D25 pid=${identity2.pid}:`,
-            error62 ?? stderr
-          );
-          resolve3(false);
-          return;
-        }
-        const current = parseWindowsProcessList2(stdout).find(
-          (processIdentity) => processIdentity.pid === identity2.pid
-        );
-        windowsCimCapability = "cim";
-        resolve3(current?.startTime === identity2.startTime);
-      }
-    );
-  });
-}
-async function readWindowsProcessListAsync(options2) {
-  if (windowsCimCapability === "identity-unavailable") return [];
-  const ownedProcessStartedAtMs = options2.ownedProcessStartedAtMs;
-  if (windowsProcessListInFlight && (ownedProcessStartedAtMs === void 0 || ownedProcessStartedAtMs < windowsProcessListInFlight.startedAtMs)) {
-    return await awaitWindowsProcessListWithinDeadline(windowsProcessListInFlight.promise, options2);
-  }
-  const startedAtMs = Date.now();
-  const request = new Promise((resolve3) => {
-    const timeoutMs = boundedWindowsLookupTimeoutMs(WINDOWS_PROCESS_LOOKUP_TIMEOUT_MS, options2);
-    if (timeoutMs <= 0) {
-      resolve3([]);
-      return;
-    }
-    execFile2(
-      "powershell.exe",
-      [
-        "-NoLogo",
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        "Get-CimInstance Win32_Process | ForEach-Object { '{0} {1} {2}' -f $_.ProcessId, $_.ParentProcessId, $_.CreationDate.ToUniversalTime().Ticks }"
-      ],
-      {
-        encoding: "utf8",
-        timeout: timeoutMs,
-        windowsHide: true
-      },
-      (error62, stdout, stderr) => {
-        if (error62 || !stdout) {
-          if (isHardCimUnavailable(error62)) windowsCimCapability = "identity-unavailable";
-          warn2(options2, "\u67E5\u8BE2 Windows runtime \u8FDB\u7A0B\u8868\u5931\u8D25\uFF08\u5F02\u6B65\uFF09:", error62 ?? stderr);
-          resolve3([]);
-          return;
-        }
-        const identities = parseWindowsProcessList2(stdout);
-        if (identities.length === 0)
-          warn2(options2, "PowerShell \u672A\u8FD4\u56DE\u53EF\u89E3\u6790\u7684 Windows runtime \u8FDB\u7A0B\u8868");
-        if (identities.length > 0) windowsCimCapability = "cim";
-        resolve3(identities);
-      }
-    );
-  }).finally(() => {
-    if (windowsProcessListInFlight?.promise === request) windowsProcessListInFlight = void 0;
-  });
-  windowsProcessListInFlight = { promise: request, startedAtMs };
-  return await awaitWindowsProcessListWithinDeadline(request, options2);
-}
-
-// packages/services/src/process/processTreeSnapshotAsync.ts
-var WINDOWS_START_TIME_PREFIX2 = "windows-utc-us:";
-function parseWindowsCreationTimeMs2(startTime) {
-  if (!startTime.startsWith(WINDOWS_START_TIME_PREFIX2)) return void 0;
-  try {
-    const microseconds = BigInt(startTime.slice(WINDOWS_START_TIME_PREFIX2.length));
-    const timestamp = Number(microseconds / 1000n);
-    return Number.isSafeInteger(timestamp) ? timestamp : void 0;
-  } catch {
-    return void 0;
-  }
-}
-function collectDescendants(rootPid, identities) {
-  const childrenByParentPid = /* @__PURE__ */ new Map();
-  for (const identity2 of identities) {
-    const children = childrenByParentPid.get(identity2.parentPid) ?? [];
-    children.push(identity2);
-    childrenByParentPid.set(identity2.parentPid, children);
-  }
-  const descendants = [];
-  const seen = /* @__PURE__ */ new Set([rootPid]);
-  const visit2 = (pid) => {
-    for (const child of childrenByParentPid.get(pid) ?? []) {
-      if (seen.has(child.pid)) continue;
-      seen.add(child.pid);
-      descendants.push(child);
-      visit2(child.pid);
-    }
-  };
-  visit2(rootPid);
-  return descendants;
-}
-async function filterCurrentProcessIdentitiesAsync(identities, options2) {
-  if (process.platform !== "win32") {
-    return filterCurrentProcessIdentities(identities, options2);
-  }
-  if (identities.length === 0) return [];
-  const trackedPids = new Set(identities.map((identity2) => identity2.pid));
-  const currentByPid = new Map(
-    (await readWindowsProcessListAsync(options2)).filter((identity2) => trackedPids.has(identity2.pid)).map((identity2) => [identity2.pid, identity2])
-  );
-  return identities.filter((identity2) => {
-    const current = currentByPid.get(identity2.pid);
-    return current?.startTime === identity2.startTime;
-  });
-}
-async function captureProcessTreeSnapshotAsync(child, options2 = {}) {
-  if (process.platform !== "win32") return captureProcessTreeSnapshot(child, options2);
-  if (child.pid == null) return void 0;
-  const processList = await readWindowsProcessListAsync(options2);
-  const childExitedDuringQuery = child.exitCode !== null || child.signalCode !== null;
-  const ownedProcessExitedAtMs = options2.ownedProcessExitedAtMs ?? options2.resolveOwnedProcessExitedAtMs?.();
-  const rootIdentity = processList.find((identity2) => identity2.pid === child.pid);
-  const identities = rootIdentity && !childExitedDuringQuery ? [rootIdentity, ...collectDescendants(child.pid, processList)] : collectExitedRootDescendants(
-    child.pid,
-    processList,
-    options2.ownedProcessStartedAtMs,
-    ownedProcessExitedAtMs
-  );
-  if (identities.length === 0) return void 0;
-  return {
-    rootPid: child.pid,
-    descendantPids: identities.filter((identity2) => identity2.pid !== child.pid).map((identity2) => identity2.pid),
-    identities
-  };
-}
-function collectExitedRootDescendants(rootPid, processList, startedAtMs, exitedAtMs) {
-  if (typeof startedAtMs !== "number" || !Number.isFinite(startedAtMs) || typeof exitedAtMs !== "number" || !Number.isFinite(exitedAtMs)) {
-    return [];
-  }
-  const lifecycleCandidates = processList.filter((identity2) => {
-    const createdAtMs = parseWindowsCreationTimeMs2(identity2.startTime);
-    return createdAtMs !== void 0 && createdAtMs >= startedAtMs && createdAtMs < exitedAtMs;
-  });
-  return collectDescendants(rootPid, lifecycleCandidates);
-}
-async function captureExitedRootDescendantsSnapshotAsync(rootPid, options2 = {}) {
-  if (process.platform !== "win32") {
-    return captureExitedRootDescendantsSnapshot(rootPid, options2);
-  }
-  const startedAtMs = options2.ownedProcessStartedAtMs;
-  const exitedAtMs = options2.ownedProcessExitedAtMs;
-  if (!Number.isInteger(rootPid) || rootPid <= 0 || typeof startedAtMs !== "number" || !Number.isFinite(startedAtMs) || typeof exitedAtMs !== "number" || !Number.isFinite(exitedAtMs)) {
-    return void 0;
-  }
-  const identities = collectExitedRootDescendants(
-    rootPid,
-    await readWindowsProcessListAsync(options2),
-    startedAtMs,
-    exitedAtMs
-  );
-  return identities.length === 0 ? void 0 : {
-    rootPid,
-    descendantPids: identities.map((identity2) => identity2.pid),
-    identities
-  };
-}
-
-// packages/services/src/process/processTreeOwnership.ts
-function hasChildExited(child) {
-  return child.exitCode !== null || child.signalCode !== null;
-}
-function isPidAlive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-function mergeIdentities(...groups) {
-  const identitiesByPid = /* @__PURE__ */ new Map();
-  for (const identities of groups) {
-    for (const identity2 of identities) {
-      identitiesByPid.set(identity2.pid, identity2);
-    }
-  }
-  return [...identitiesByPid.values()];
-}
-function captureLiveIdentities(child, options2) {
-  if (hasChildExited(child)) {
-    return [];
-  }
-  return [...captureProcessTreeSnapshot(child, options2)?.identities ?? []];
-}
-function isSameProcessIdentity(left, right) {
-  return left.pid === right.pid && left.startTime === right.startTime && left.processGroupId === right.processGroupId;
-}
-function resolveCurrentOwnedIdentities(child, knownIdentities, options2, allowRootDiscovery = true) {
-  const rootPid = child.pid;
-  const knownRootIdentity = knownIdentities.find((identity2) => identity2.pid === rootPid);
-  const childHasNotExited = !hasChildExited(child);
-  if (!childHasNotExited) {
-    return {
-      childStillOwned: false,
-      currentIdentities: filterCurrentProcessIdentities(knownIdentities, options2),
-      knownIdentities: [...knownIdentities]
-    };
-  }
-  if (knownRootIdentity) {
-    const rootIdentityStillCurrent = filterCurrentProcessIdentities([knownRootIdentity], options2).length === 1;
-    if (!rootIdentityStillCurrent) {
-      return {
-        childStillOwned: false,
-        currentIdentities: filterCurrentProcessIdentities(knownIdentities, options2),
-        knownIdentities: [...knownIdentities]
-      };
-    }
-  }
-  if (!knownRootIdentity && !allowRootDiscovery) {
-    return {
-      childStillOwned: false,
-      currentIdentities: [],
-      knownIdentities: []
-    };
-  }
-  const freshIdentities = captureLiveIdentities(child, options2);
-  const freshRootIdentity = freshIdentities.find((identity2) => identity2.pid === rootPid);
-  if (!knownRootIdentity && !freshRootIdentity) {
-    return {
-      childStillOwned: false,
-      currentIdentities: [],
-      knownIdentities: []
-    };
-  }
-  if (knownRootIdentity && freshRootIdentity && !isSameProcessIdentity(knownRootIdentity, freshRootIdentity)) {
-    return {
-      childStillOwned: false,
-      currentIdentities: filterCurrentProcessIdentities(knownIdentities, options2),
-      knownIdentities: [...knownIdentities]
-    };
-  }
-  const mergedIdentities = mergeIdentities(
-    knownIdentities,
-    freshRootIdentity ? freshIdentities : []
-  );
-  const currentIdentities = filterCurrentProcessIdentities(mergedIdentities, options2);
-  return {
-    // root 可能在前一次身份核对与 fresh capture 之间退出；只有最终
-    // 复核集合仍包含 root，才能向 root PID/PGID 发信号，禁止信任过期布尔状态。
-    childStillOwned: currentIdentities.some((identity2) => identity2.pid === rootPid),
-    currentIdentities,
-    knownIdentities: mergedIdentities
-  };
-}
-async function resolveCurrentOwnedIdentitiesAsync(child, knownIdentities, options2, allowRootDiscovery = true) {
-  if (process.platform !== "win32") {
-    return resolveCurrentOwnedIdentities(child, knownIdentities, options2, allowRootDiscovery);
-  }
-  const rootPid = child.pid;
-  const knownRootIdentity = knownIdentities.find((identity2) => identity2.pid === rootPid);
-  if (hasChildExited(child)) {
-    if (!knownIdentities.some((identity2) => isPidAlive(identity2.pid))) {
-      return {
-        childStillOwned: false,
-        currentIdentities: [],
-        knownIdentities: [...knownIdentities]
-      };
-    }
-    return {
-      childStillOwned: false,
-      currentIdentities: await filterCurrentProcessIdentitiesAsync(knownIdentities, options2),
-      knownIdentities: [...knownIdentities]
-    };
-  }
-  if (knownRootIdentity) {
-    const currentIdentities = await filterCurrentProcessIdentitiesAsync(knownIdentities, options2);
-    return {
-      childStillOwned: currentIdentities.some((identity2) => identity2.pid === rootPid),
-      currentIdentities,
-      knownIdentities: [...knownIdentities]
-    };
-  }
-  if (!allowRootDiscovery) {
-    return {
-      childStillOwned: false,
-      currentIdentities: [],
-      knownIdentities: []
-    };
-  }
-  const freshIdentities = [
-    ...(await captureProcessTreeSnapshotAsync(child, options2))?.identities ?? []
-  ];
-  const freshRootIdentity = freshIdentities.find((identity2) => identity2.pid === rootPid);
-  return {
-    childStillOwned: Boolean(freshRootIdentity),
-    currentIdentities: freshRootIdentity ? freshIdentities : [],
-    knownIdentities: freshRootIdentity ? freshIdentities : []
-  };
-}
-
-// packages/services/src/process/processTreeWaiter.ts
-var DEFAULT_FORCE_AFTER_MS = 2e3;
-var DEFAULT_WAIT_AFTER_FORCE_MS = 250;
-var DEFAULT_WINDOWS_TASKKILL_TIMEOUT_MS = 2e3;
-var WINDOWS_LATE_EXIT_OBSERVATION_MS = 750;
-function warn3(options2, message) {
-  options2.log?.warn(options2.traceId, message);
-}
-function debug(options2, message, context) {
-  options2.log?.debug?.(options2.traceId, message, context);
-}
-function hasChildExited2(child) {
-  return child.exitCode !== null || child.signalCode !== null;
-}
-function isPidAlive2(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-async function waitForProcessTreeTermination(child, options2, initialOwnership, hasWindowsTaskkillTargets, terminateProcessTree2) {
-  if (child.pid == null) {
-    return { remainingPids: [] };
-  }
-  const waiterStartedAtMs = Date.now();
-  const forceAfterMs = Math.max(options2.forceAfterMs ?? DEFAULT_FORCE_AFTER_MS, 0);
-  const waitAfterForceMs = Math.max(options2.waitAfterForceMs ?? DEFAULT_WAIT_AFTER_FORCE_MS, 0);
-  const isWindows = process.platform === "win32";
-  const windowsTaskkillBudgetMs = hasWindowsTaskkillTargets ? Math.max(options2.windowsTaskkillTimeoutMs ?? DEFAULT_WINDOWS_TASKKILL_TIMEOUT_MS, 1) : 0;
-  const windowsRelativeDeadlineMs = forceAfterMs + windowsTaskkillBudgetMs + waitAfterForceMs;
-  const windowsTransportDeadlineRemainingMs = options2.windowsCleanupDeadlineAtMs === void 0 ? windowsRelativeDeadlineMs : Math.max(options2.windowsCleanupDeadlineAtMs - waiterStartedAtMs, 0);
-  const windowsObservationDeadlineMs = Math.max(
-    windowsRelativeDeadlineMs,
-    WINDOWS_LATE_EXIT_OBSERVATION_MS
-  );
-  const windowsCleanupDeadlineMs = !hasWindowsTaskkillTargets && options2.windowsCleanupDeadlineAtMs !== void 0 ? Math.min(windowsObservationDeadlineMs, windowsTransportDeadlineRemainingMs) : Math.min(windowsRelativeDeadlineMs, windowsTransportDeadlineRemainingMs);
-  const knownIdentities = initialOwnership.knownIdentities;
-  return await new Promise((resolve3) => {
-    let settled = false;
-    let trackedIdentities = initialOwnership.currentIdentities;
-    let unverifiedRootPid = initialOwnership.childStillOwned && !trackedIdentities.some((identity2) => identity2.pid === child.pid) ? child.pid : void 0;
-    let forceTimer;
-    let forceWaitTimer;
-    let cleanupDeadlineTimer;
-    let treePollTimer;
-    const cleanup = () => {
-      child.off?.("exit", onExit);
-      if (forceTimer) clearTimeout(forceTimer);
-      if (forceWaitTimer) clearTimeout(forceWaitTimer);
-      if (cleanupDeadlineTimer) clearTimeout(cleanupDeadlineTimer);
-      if (treePollTimer) clearInterval(treePollTimer);
-      forceTimer = void 0;
-      forceWaitTimer = void 0;
-      cleanupDeadlineTimer = void 0;
-      treePollTimer = void 0;
-    };
-    const settle2 = (remainingPids = []) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      resolve3({ remainingPids });
-    };
-    const settleIfTreeExited = () => {
-      const hasRunningVerifiedProcess = trackedIdentities.some(
-        (identity2) => isPidAlive2(identity2.pid)
-      );
-      const hasRunningUnverifiedRoot = unverifiedRootPid !== void 0 && !hasChildExited2(child) && isPidAlive2(unverifiedRootPid);
-      if (!hasRunningVerifiedProcess && !hasRunningUnverifiedRoot) {
-        if (isWindows && !hasChildExited2(child)) return;
-        settle2();
-      }
-    };
-    const startTreePolling = () => {
-      if (!treePollTimer && !settled) {
-        treePollTimer = setInterval(settleIfTreeExited, 25);
-      }
-    };
-    const collectRemainingPids = () => {
-      const remainingPids = trackedIdentities.filter((identity2) => isPidAlive2(identity2.pid)).map((identity2) => identity2.pid);
-      if (unverifiedRootPid !== void 0 && !hasChildExited2(child) && isPidAlive2(unverifiedRootPid)) {
-        remainingPids.push(unverifiedRootPid);
-      }
-      return remainingPids;
-    };
-    const onExit = () => {
-      unverifiedRootPid = void 0;
-      settleIfTreeExited();
-      if (!settled) startTreePolling();
-    };
-    const scheduleForceWait = () => {
-      if (forceWaitTimer || settled) return;
-      if (waitAfterForceMs === 0) {
-        settle2(collectRemainingPids());
-        return;
-      }
-      forceWaitTimer = setTimeout(() => {
-        const remainingPids = collectRemainingPids();
-        if (remainingPids.length > 0) {
-          warn3(options2, `runtime \u8FDB\u7A0B\u6811\u5F3A\u5236\u56DE\u6536\u540E\u4ECD\u6709\u6B8B\u7559 pid=${remainingPids.join(",")}`);
-        }
-        settle2(remainingPids);
-      }, waitAfterForceMs);
-    };
-    const scheduleWindowsCleanupDeadline = () => {
-      if (!isWindows || cleanupDeadlineTimer || settled) return;
-      debug(options2, "Windows runtime \u8FDB\u7A0B\u6811 cleanup deadline scheduled", {
-        forceAfterMs,
-        hasWindowsTaskkillTargets,
-        waitAfterForceMs,
-        windowsRelativeDeadlineMs,
-        windowsTaskkillBudgetMs,
-        windowsCleanupDeadlineMs,
-        windowsCleanupDeadlineAtMs: options2.windowsCleanupDeadlineAtMs
-      });
-      cleanupDeadlineTimer = setTimeout(() => {
-        const remainingPids = collectRemainingPids();
-        if (remainingPids.length > 0) {
-          warn3(options2, `runtime \u8FDB\u7A0B\u6811\u7EDD\u5BF9 deadline \u540E\u4ECD\u6709\u6B8B\u7559 pid=${remainingPids.join(",")}`);
-        }
-        settle2(remainingPids);
-      }, windowsCleanupDeadlineMs);
-    };
-    const onForceCleanup = (result) => {
-      debug(options2, "Windows runtime \u8FDB\u7A0B\u6811 force cleanup completed", {
-        trackedPids: result.identities.map((identity2) => identity2.pid),
-        unverifiedRootPid: result.unverifiedRootPid
-      });
-      trackedIdentities = result.identities;
-      unverifiedRootPid = result.unverifiedRootPid;
-      settleIfTreeExited();
-      if (!settled) {
-        startTreePolling();
-        if (!isWindows) scheduleForceWait();
-      }
-    };
-    child.once("exit", onExit);
-    const waitOptions = {
-      ...options2,
-      forceAfterMs,
-      keepForceTimerRef: true,
-      knownIdentities,
-      resolvedOwnership: initialOwnership,
-      onForceCleanup,
-      onForceTimerScheduled: (timer) => {
-        forceTimer = timer;
-      },
-      onGracefulCleanupScheduled: (flight) => {
-        void flight.then(() => {
-          debug(options2, "Windows runtime \u8FDB\u7A0B\u6811 graceful cleanup flight settled");
-          settleIfTreeExited();
-          if (!settled) startTreePolling();
-        });
-      }
-    };
-    scheduleWindowsCleanupDeadline();
-    terminateProcessTree2(child, waitOptions);
-    settleIfTreeExited();
-    if (!settled && hasChildExited2(child)) {
-      startTreePolling();
-    }
-  });
-}
-
-// packages/services/src/process/windowsTaskkillRunner.ts
-import { execFile as execFile3 } from "node:child_process";
-var defaultWindowsTaskkillRunner = ({ force, pid, timeoutMs }) => new Promise((resolve3) => {
-  execFile3(
-    "taskkill",
-    ["/PID", String(pid), "/T", ...force ? ["/F"] : []],
-    { encoding: "utf8", timeout: timeoutMs, windowsHide: true },
-    (error62, _stdout, stderr) => {
-      resolve3({ ...error62 ? { error: error62 } : {}, ...stderr ? { stderr } : {} });
-    }
-  );
-});
-
-// packages/services/src/process/processTreeTerminator.ts
-var POSIX_TERMINATION_SIGNAL = "SIGTERM";
-var POSIX_FORCE_SIGNAL = "SIGKILL";
-var WINDOWS_TASKKILL_TIMEOUT_MS = 2e3;
-var WINDOWS_FORCE_IDENTITY_RECHECK_BUDGET_MS = 750;
-var DEFAULT_FORCE_AFTER_MS2 = 2e3;
-function shouldSpawnInDetachedProcessGroup() {
-  return process.platform !== "win32";
-}
-function warn4(options2, message, ...args) {
-  options2.log?.warn(options2.traceId, message, ...args);
-}
-function debug2(options2, message, ...args) {
-  options2.log?.debug?.(options2.traceId, message, ...args);
-}
-function getErrorCode3(error62) {
-  return typeof error62 === "object" && error62 !== null && "code" in error62 ? String(error62.code) : void 0;
-}
-function isMissingProcessError(error62) {
-  return getErrorCode3(error62) === "ESRCH";
-}
-function isPidAlive3(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-function scheduleForceCleanup(callback, timeoutMs, keepTimerRef) {
-  const timer = setTimeout(callback, Math.max(timeoutMs, 0));
-  if (!keepTimerRef) {
-    timer.unref();
-  }
-  return timer;
-}
-function killPid(pid, signal, options2) {
-  try {
-    process.kill(pid, signal);
-    return true;
-  } catch (error62) {
-    if (!isMissingProcessError(error62)) {
-      warn4(options2, `\u53D1\u9001 runtime \u8FDB\u7A0B\u7EC8\u6B62\u4FE1\u53F7\u5931\u8D25 pid=${pid} signal=${signal}:`, error62);
-    }
-    return false;
-  }
-}
-function killPosixProcessGroup(pid, signal, options2) {
-  try {
-    process.kill(-pid, signal);
-    return true;
-  } catch (error62) {
-    if (!isMissingProcessError(error62)) {
-      warn4(options2, `\u53D1\u9001 runtime \u8FDB\u7A0B\u7EC4\u7EC8\u6B62\u4FE1\u53F7\u5931\u8D25 pgid=${pid} signal=${signal}:`, error62);
-    }
-    return false;
-  }
-}
-async function runWindowsTaskkill(pid, force, options2) {
-  const timeoutMs = Math.max(options2.windowsTaskkillTimeoutMs ?? WINDOWS_TASKKILL_TIMEOUT_MS, 1);
-  const runner = options2.windowsTaskkillRunner ?? defaultWindowsTaskkillRunner;
-  const startedAt = Date.now();
-  debug2(options2, "Windows runtime \u8FDB\u7A0B\u6811 taskkill started", { force, pid, timeoutMs });
-  let result;
-  try {
-    result = await runner({ force, pid, timeoutMs });
-  } catch (error62) {
-    result = { error: error62 };
-  }
-  debug2(options2, "Windows runtime \u8FDB\u7A0B\u6811 taskkill completed", {
-    durationMs: Date.now() - startedAt,
-    force,
-    pid,
-    success: !result.error
-  });
-  if (result.error && isPidAlive3(pid)) {
-    warn4(
-      options2,
-      `${force ? "\u5F3A\u5236\u6E05\u7406" : "\u8BF7\u6C42"} runtime \u8FDB\u7A0B\u6811\u9000\u51FA\u5931\u8D25 pid=${pid} status=${String(
-        typeof result.error === "object" && result.error !== null && "code" in result.error ? result.error.code ?? "unknown" : "unknown"
-      )}:`,
-      result.error,
-      result.stderr
-    );
-  }
-}
-async function forceTerminateWindowsProcessTree(child, knownIdentities, options2, verifiedOwnership, deadlineSnapshotOnly = false, deadlineVerifiedIdentities = []) {
-  const { childStillOwned, currentIdentities } = verifiedOwnership ?? await resolveCurrentOwnedIdentitiesAsync(child, knownIdentities, options2, false);
-  const targets = new Set(
-    deadlineSnapshotOnly ? deadlineVerifiedIdentities.map((identity2) => identity2.pid) : currentIdentities.map((identity2) => identity2.pid)
-  );
-  const unverifiedRootOnly = options2.unverifiedRootOnly;
-  if (childStillOwned && child.pid != null && !unverifiedRootOnly && !deadlineSnapshotOnly) {
-    targets.add(child.pid);
-  }
-  if (deadlineSnapshotOnly && !unverifiedRootOnly && child.pid != null && typeof child.kill === "function" && child.exitCode === null && child.signalCode === null && isPidAlive3(child.pid)) {
-    targets.add(child.pid);
-  }
-  await Promise.all([...targets].map((targetPid) => runWindowsTaskkill(targetPid, true, options2)));
-  const hasVerifiedRoot = currentIdentities.some((identity2) => identity2.pid === child.pid);
-  return {
-    identities: currentIdentities,
-    ...childStillOwned && !hasVerifiedRoot ? { unverifiedRootPid: child.pid } : {}
-  };
-}
-function terminateWindowsProcessTreeWithOwnership(child, options2, ownership, startedAtMs) {
-  const pid = child.pid;
-  const internalOptions = options2;
-  const childHandleOwnsLiveRoot = !internalOptions.unverifiedRootOnly && typeof child.kill === "function" && child.exitCode === null && child.signalCode === null && isPidAlive3(pid);
-  const gracefulTargets = ownership.childStillOwned && !internalOptions.unverifiedRootOnly ? [pid] : ownership.currentIdentities.map((identity2) => identity2.pid);
-  if (gracefulTargets.length === 0 && childHandleOwnsLiveRoot) gracefulTargets.push(pid);
-  const gracefulFlight = Promise.all(
-    [...new Set(gracefulTargets)].map((targetPid) => runWindowsTaskkill(targetPid, false, options2))
-  ).then(() => void 0);
-  internalOptions.onGracefulCleanupScheduled?.(gracefulFlight);
-  void gracefulFlight;
-  const forceDelayMs = Math.max(
-    (options2.forceAfterMs ?? DEFAULT_FORCE_AFTER_MS2) - (Date.now() - startedAtMs),
-    0
-  );
-  const identitiesToRecheck = ownership.currentIdentities.filter(
-    (identity2) => !internalOptions.unverifiedRootOnly || identity2.pid !== pid
-  );
-  const canRecheckIdentitiesWithinDeadline = identitiesToRecheck.length > 0 && forceDelayMs >= WINDOWS_FORCE_IDENTITY_RECHECK_BUDGET_MS;
-  const forceTimer = scheduleForceCleanup(
-    () => {
-      void (async () => {
-        const deadlineVerifiedIdentities = canRecheckIdentitiesWithinDeadline ? (await Promise.all(
-          identitiesToRecheck.map(
-            async (identity2) => await verifyWindowsProcessIdentityAsync(
-              identity2,
-              WINDOWS_FORCE_IDENTITY_RECHECK_BUDGET_MS,
-              options2
-            ) ? identity2 : void 0
-          )
-        )).filter((identity2) => identity2 !== void 0) : [];
-        return await forceTerminateWindowsProcessTree(
-          child,
-          ownership.knownIdentities,
-          options2,
-          ownership,
-          true,
-          deadlineVerifiedIdentities
-        );
-      })().then((result) => internalOptions.onForceCleanup?.(result));
-    },
-    canRecheckIdentitiesWithinDeadline ? forceDelayMs - WINDOWS_FORCE_IDENTITY_RECHECK_BUDGET_MS : forceDelayMs,
-    Boolean(options2.keepForceTimerRef)
-  );
-  internalOptions.onForceTimerScheduled?.(forceTimer);
-}
-function terminateWindowsProcessTree(child, options2) {
-  const internalOptions = options2;
-  const startedAtMs = Date.now();
-  if (internalOptions.resolvedOwnership) {
-    terminateWindowsProcessTreeWithOwnership(
-      child,
-      options2,
-      internalOptions.resolvedOwnership,
-      startedAtMs
-    );
-    return;
-  }
-  void resolveCurrentOwnedIdentitiesAsync(
-    child,
-    internalOptions.knownIdentities ?? [],
-    options2
-  ).then((ownership) => {
-    terminateWindowsProcessTreeWithOwnership(child, options2, ownership, startedAtMs);
-  });
-}
-function forceTerminatePosixProcessTree(child, knownIdentities, options2) {
-  const pid = child.pid;
-  const { childStillOwned, currentIdentities } = resolveCurrentOwnedIdentities(
-    child,
-    knownIdentities,
-    options2,
-    false
-  );
-  const canSignalOwnedGroup = childStillOwned || currentIdentities.some((identity2) => identity2.processGroupId === pid);
-  if (canSignalOwnedGroup) {
-    killPosixProcessGroup(pid, POSIX_FORCE_SIGNAL, options2);
-  }
-  for (const identity2 of currentIdentities.toReversed()) {
-    if (identity2.pid !== pid) {
-      killPid(identity2.pid, POSIX_FORCE_SIGNAL, options2);
-    }
-  }
-  if (!canSignalOwnedGroup) {
-    const rootIdentity = currentIdentities.find((identity2) => identity2.pid === pid);
-    if (rootIdentity) {
-      killPid(rootIdentity.pid, POSIX_FORCE_SIGNAL, options2);
-    }
-  }
-  const hasVerifiedRoot = currentIdentities.some((identity2) => identity2.pid === pid);
-  return {
-    identities: currentIdentities,
-    ...childStillOwned && !hasVerifiedRoot ? { unverifiedRootPid: pid } : {}
-  };
-}
-function terminatePosixProcessTree(child, options2) {
-  const pid = child.pid;
-  const internalOptions = options2;
-  const ownership = internalOptions.resolvedOwnership ?? resolveCurrentOwnedIdentities(child, internalOptions.knownIdentities ?? [], options2);
-  const canSignalOwnedGroup = ownership.childStillOwned || ownership.currentIdentities.some((identity2) => identity2.processGroupId === pid);
-  const signaledProcessGroup = canSignalOwnedGroup ? killPosixProcessGroup(pid, POSIX_TERMINATION_SIGNAL, options2) : false;
-  for (const identity2 of ownership.currentIdentities) {
-    if (identity2.pid !== pid) {
-      killPid(identity2.pid, POSIX_TERMINATION_SIGNAL, options2);
-    }
-  }
-  if (!signaledProcessGroup && ownership.childStillOwned) {
-    killPid(pid, POSIX_TERMINATION_SIGNAL, options2);
-  }
-  const forceTimer = scheduleForceCleanup(
-    () => {
-      const result = forceTerminatePosixProcessTree(child, ownership.knownIdentities, options2);
-      internalOptions.onForceCleanup?.(result);
-    },
-    options2.forceAfterMs ?? DEFAULT_FORCE_AFTER_MS2,
-    Boolean(options2.keepForceTimerRef)
-  );
-  internalOptions.onForceTimerScheduled?.(forceTimer);
-}
-function terminateProcessTree(child, options2 = {}) {
-  if (child.pid == null) {
-    try {
-      child.kill(POSIX_TERMINATION_SIGNAL);
-    } catch (error62) {
-      warn4(options2, "\u53D1\u9001 runtime \u8FDB\u7A0B\u7EC8\u6B62\u4FE1\u53F7\u5931\u8D25 pid=unknown:", error62);
-    }
-    return;
-  }
-  if (process.platform === "win32") {
-    terminateWindowsProcessTree(child, options2);
-    return;
-  }
-  terminatePosixProcessTree(child, options2);
-}
-async function terminateProcessTreeAndWait(child, options2 = {}) {
-  if (child.pid == null) return { remainingPids: [] };
-  const cleanupSnapshot = options2.snapshot?.rootPid === child.pid ? options2.snapshot : options2.ownedProcessGroupId === child.pid ? captureProcessGroupSnapshot(options2.ownedProcessGroupId, options2) : process.platform === "win32" ? await captureExitedRootDescendantsSnapshotAsync(child.pid, options2) : captureExitedRootDescendantsSnapshot(child.pid, options2);
-  const snapshotIdentities = cleanupSnapshot?.identities ?? [];
-  const identityVerificationUnavailable = cleanupSnapshot?.identityVerification === "unavailable";
-  const initialOwnership = process.platform === "win32" && cleanupSnapshot && child.exitCode === null && child.signalCode === null ? {
-    // 查询失败不等于进程不存在。保留未验证 root 让 waiter 在整个
-    // 有界预算内观察 ChildProcess，并在仍存活时通过 remainingPids 报告失败。
-    childStillOwned: identityVerificationUnavailable || snapshotIdentities.some((identity2) => identity2.pid === child.pid),
-    currentIdentities: [...snapshotIdentities],
-    knownIdentities: [...snapshotIdentities]
-  } : await resolveCurrentOwnedIdentitiesAsync(child, snapshotIdentities, options2);
-  return await waitForProcessTreeTermination(
-    child,
-    identityVerificationUnavailable ? { ...options2, unverifiedRootOnly: true } : options2,
-    initialOwnership,
-    // 身份查询失败且没有已验证 identity 时，terminator 的 graceful/force
-    // targets 都为空。只有存在真实信号目标才为 taskkill flight 预留命令超时；其余
-    // 情况保持完整预算，禁止按 Promise 的瞬时 settle 状态激进缩短边界。
-    initialOwnership.currentIdentities.length > 0 || !identityVerificationUnavailable && initialOwnership.childStillOwned,
-    terminateProcessTree
-  );
-}
-
-// packages/services/src/zcode-agent/agentStderrCollector.ts
-import { createInterface } from "node:readline";
-var EXIT_STDERR_DRAIN_MS = 250;
-var AgentStderrCollector = class {
-  reader;
-  drained;
-  resolveDrained;
-  done = false;
-  deadlineAt = Infinity;
-  timer;
-  constructor(input2, onLine) {
-    this.drained = new Promise((resolve3) => {
-      this.resolveDrained = resolve3;
-    });
-    this.reader = createInterface({ input: input2 });
-    this.reader.on("line", (line) => onLine?.(line));
-    this.reader.once("close", this.finish);
-    this.reader.on("error", this.finish);
-    input2.on("error", this.finish);
-    input2.once("close", this.finish);
-    if (input2.destroyed || input2.readableEnded) this.finish();
-  }
-  waitForDrain(timeoutMs = EXIT_STDERR_DRAIN_MS) {
-    const deadline = Date.now() + timeoutMs;
-    if (!this.done && deadline < this.deadlineAt) {
-      this.deadlineAt = deadline;
-      if (this.timer) clearTimeout(this.timer);
-      this.timer = setTimeout(this.finish, Math.max(0, timeoutMs));
-    }
-    return this.drained;
-  }
-  finish = () => {
-    if (this.done) return;
-    this.done = true;
-    if (this.timer) clearTimeout(this.timer);
-    this.reader.close();
-    this.resolveDrained();
-  };
-};
-
-// packages/services/src/zcode-agent/zcodeStdioTransport.ts
-var STDIO_EOF_EXIT_WAIT_MS = 1800;
-var DISPOSE_STDERR_DRAIN_MS = 3250;
-var E2E_COVERAGE_STDIO_EOF_EXIT_WAIT_MS = 5e3;
-var PROCESS_TREE_FORCE_AFTER_MS = 2e3;
-var processTreeLogger = createServiceLogger("zcode-agent-process-tree");
-var ZCodeStdioTransport = class {
-  constructor(child, options2) {
-    this.child = child;
-    this.options = options2;
-    this.stderrCollector = new AgentStderrCollector(child.stderr, options2?.onStderrLine);
-    child.stdout.on("data", this.handleStdoutData);
-    child.stdout.once("end", this.handleStdoutEnd);
-    child.stdout.once("close", this.handleStdoutEnd);
-    child.stdin.on("error", (error62) => this.handleStreamError("stdin", error62));
-    child.stdout.on("error", (error62) => this.handleStreamError("stdout", error62));
-    const onRootExit = (code, signal) => {
-      this.childExitedAtMs = Date.now();
-      this.fireClose({ code, signal });
-      this.disposeReaders();
-      void this.waitForStderrDrain();
-    };
-    if (options2?.windowsRuntime) options2.windowsRuntime.onRootExit(onRootExit);
-    else child.once("exit", onRootExit);
-    child.once("error", (error62) => {
-      this.fireClose({ reason: error62.message });
-      this.disposeReaders();
-      void this.waitForStderrDrain();
-    });
-  }
-  child;
-  options;
-  kind = "stdio";
-  messageEmitter = new Emitter();
-  closeEmitter = new Emitter();
-  stderrCollector;
-  // 当前未完成行的原始 UTF-8 字节；只在遇到 LF 时合并一次，见 handleStdoutData 注释。
-  stdoutPendingChunks = [];
-  stdoutPendingBytes = 0;
-  stdoutFlushed = false;
-  readersDisposed = false;
-  disposed = false;
-  closed = false;
-  disposeAndWaitPromise;
-  cleanupProcessTreeSnapshot;
-  cleanupAttemptCount = 0;
-  childExitedAtMs;
-  onMessage = this.messageEmitter.event;
-  onClose = this.closeEmitter.event;
-  async send(message) {
-    if (this.disposed || this.closed || this.child.killed || !this.child.stdin.writable) {
-      throw new Error("ZCode agent stdio transport is closed");
-    }
-    const frame = `${JSON.stringify(message)}
-`;
-    await new Promise((resolve3, reject) => {
-      this.child.stdin.write(frame, (error62) => {
-        if (error62) {
-          reject(error62);
-          return;
-        }
-        resolve3();
-      });
-    });
-  }
-  dispose() {
-    if (this.options?.windowsRuntime || process.platform === "win32") {
-      void this.disposeAndWait().catch(
-        (error62) => processTreeLogger.warn("runtime Job cleanup incomplete", { error: String(error62) })
-      );
-      return;
-    }
-    if (this.disposed) {
-      return;
-    }
-    this.disposed = true;
-    this.disposeLocalResources();
-    void this.stderrCollector.waitForDrain(DISPOSE_STDERR_DRAIN_MS);
-    if (!this.hasChildExited()) {
-      const ownedProcessGroupId = this.options?.ownedProcessGroupId;
-      terminateProcessTree(this.child, ownedProcessGroupId ? { ownedProcessGroupId } : {});
-    }
-  }
-  disposeAndWait(options2) {
-    if (!this.disposeAndWaitPromise) {
-      const inFlight = this.disposeAndWaitOnce(options2?.deadlineAtMs).finally(() => {
-        if (this.disposeAndWaitPromise === inFlight) {
-          this.disposeAndWaitPromise = void 0;
-        }
-      });
-      this.disposeAndWaitPromise = inFlight;
-    }
-    return this.disposeAndWaitPromise;
-  }
-  waitForStderrDrain() {
-    return this.stderrCollector.waitForDrain();
-  }
-  async disposeAndWaitOnce(deadlineAtMs) {
-    if (!this.disposed) {
-      this.disposed = true;
-      this.disposeLocalResources();
-    }
-    if (this.options?.windowsRuntime) {
-      const deadline = deadlineAtMs ?? Date.now() + DISPOSE_STDERR_DRAIN_MS;
-      await this.options.windowsRuntime.close(deadline);
-      await this.stderrCollector.waitForDrain(
-        Math.max(0, Math.min(EXIT_STDERR_DRAIN_MS, deadline - Date.now()))
-      );
-      return;
-    }
-    this.cleanupAttemptCount += 1;
-    const cleanupStartedAtMs = Date.now();
-    const forceBudgetMs = this.cleanupAttemptCount > 1 ? 0 : PROCESS_TREE_FORCE_AFTER_MS;
-    if (process.platform === "win32")
-      throw new Error("Windows CLI cleanup requires a runtime Job owner");
-    this.cleanupProcessTreeSnapshot ??= await this.captureCleanupSnapshot();
-    const processTreeSnapshot = this.cleanupProcessTreeSnapshot;
-    if (!this.hasChildExited()) {
-      this.requestStdioClose();
-      const configuredEofWaitMs = process.env.ZCODE_E2E_COVERAGE === "1" ? E2E_COVERAGE_STDIO_EOF_EXIT_WAIT_MS : STDIO_EOF_EXIT_WAIT_MS;
-      await this.waitForChildExit(configuredEofWaitMs);
-    }
-    const terminationResult = await terminateProcessTreeAndWait(this.child, {
-      ...this.options?.ownedProcessGroupId ? { ownedProcessGroupId: this.options.ownedProcessGroupId } : {},
-      ...this.options?.ownedProcessStartedAtMs ? {
-        ownedProcessStartedAtMs: this.options.ownedProcessStartedAtMs,
-        ownedProcessExitedAtMs: this.childExitedAtMs ?? Date.now()
-      } : {},
-      ...processTreeSnapshot ? { snapshot: processTreeSnapshot } : {},
-      log: processTreeLogger,
-      // 前一次 cleanup 若报告残留，app quit 的最终重试不能再等待完整
-      // graceful 窗口；直接进入 force，确保仍落在 main 给 Host 的退出预算内。
-      forceAfterMs: Math.max(forceBudgetMs - (Date.now() - cleanupStartedAtMs), 0)
-    });
-    const remainingPids = terminationResult.remainingPids;
-    await this.stderrCollector.waitForDrain();
-    if (remainingPids.length > 0) {
-      processTreeLogger.warn("runtime process tree cleanup incomplete", {
-        pid: this.child.pid,
-        durationMs: Date.now() - cleanupStartedAtMs,
-        remainingPids
-      });
-      throw new Error(
-        `runtime process tree cleanup incomplete; remaining pid=${[...new Set(remainingPids)].join(",")}`
-      );
-    }
-  }
-  handleStdoutData = (chunk) => {
-    if (this.closed) {
-      return;
-    }
-    const bytes = typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk;
-    this.consumeStdoutBytes(bytes);
-  };
-  handleStdoutEnd = () => {
-    if (this.stdoutFlushed) {
-      return;
-    }
-    this.stdoutFlushed = true;
-    if (this.stdoutPendingBytes > 0) {
-      this.clearStdoutPending();
-      if (!this.closed) {
-        this.fireClose({ reason: "stdout_partial_frame" });
-      }
-    }
-    this.fireClose({ reason: "stdout_closed" });
-  };
-  consumeStdoutBytes(bytes) {
-    let start = 0;
-    let newlineIndex = bytes.indexOf(10, start);
-    while (newlineIndex >= 0) {
-      if (!this.appendStdoutFragment(bytes.subarray(start, newlineIndex))) {
-        return;
-      }
-      this.handleStdoutFrame(this.takeStdoutFrame());
-      start = newlineIndex + 1;
-      if (this.closed) {
-        return;
-      }
-      newlineIndex = bytes.indexOf(10, start);
-    }
-    if (start < bytes.length) {
-      this.appendStdoutFragment(Buffer.from(bytes.subarray(start)));
-    }
-  }
-  appendStdoutFragment(fragment) {
-    if (!this.closed) {
-      const nextBytes = this.stdoutPendingBytes + fragment.length;
-      const maxFrameBytes = this.options?.maxFrameBytes;
-      if (maxFrameBytes !== void 0 && nextBytes > maxFrameBytes) {
-        this.clearStdoutPending();
-        this.fireClose({ reason: `stdout_frame_too_large: max=${maxFrameBytes} bytes` });
-        return false;
-      }
-    }
-    if (fragment.length > 0) {
-      this.stdoutPendingChunks.push(fragment);
-      this.stdoutPendingBytes += fragment.length;
-    }
-    return true;
-  }
-  takeStdoutFrame() {
-    const frame = Buffer.concat(this.stdoutPendingChunks, this.stdoutPendingBytes).toString("utf8");
-    this.clearStdoutPending();
-    return frame;
-  }
-  clearStdoutPending() {
-    this.stdoutPendingChunks = [];
-    this.stdoutPendingBytes = 0;
-  }
-  handleStdoutFrame(frame) {
-    const line = frame.endsWith("\r") ? frame.slice(0, -1) : frame;
-    if (line.trim().length === 0) {
-      return;
-    }
-    try {
-      const parsed = zcodeProtocolMessageSchema.parse(JSON.parse(line));
-      this.messageEmitter.fire(parsed);
-    } catch (error62) {
-      const reason = error62 instanceof Error ? error62.message : String(error62);
-      this.fireClose({ reason: `protocol_parse_error: ${reason}` });
-    }
-  }
-  handleStreamError(stream, error62) {
-    this.fireClose({ reason: `${stream}_error: ${error62.message}` });
-  }
-  fireClose(event) {
-    if (this.closed) {
-      return;
-    }
-    this.closed = true;
-    this.closeEmitter.fire(event);
-  }
-  disposeReaders() {
-    if (this.readersDisposed) {
-      return;
-    }
-    this.readersDisposed = true;
-    this.child.stdout.off("data", this.handleStdoutData);
-    this.child.stdout.off("end", this.handleStdoutEnd);
-    this.child.stdout.off("close", this.handleStdoutEnd);
-    this.child.stdout.resume();
-  }
-  disposeLocalResources() {
-    this.disposeReaders();
-    this.messageEmitter.dispose();
-    this.closeEmitter.dispose();
-  }
-  requestStdioClose() {
-    if (this.child.stdin.destroyed || !this.child.stdin.writable) {
-      return;
-    }
-    try {
-      this.child.stdin.once("error", () => void 0);
-      this.child.stdin.end();
-    } catch {
-    }
-  }
-  waitForChildExit(timeoutMs) {
-    if (this.hasChildExited()) {
-      return Promise.resolve();
-    }
-    return new Promise((resolve3) => {
-      let settled = false;
-      let timer;
-      const settle2 = () => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        if (timer) {
-          clearTimeout(timer);
-          timer = void 0;
-        }
-        this.child.off?.("exit", settle2);
-        resolve3();
-      };
-      this.child.once("exit", settle2);
-      timer = setTimeout(settle2, timeoutMs);
-      timer.unref?.();
-    });
-  }
-  hasChildExited() {
-    return this.child.exitCode !== null || this.child.signalCode !== null;
-  }
-  async captureCleanupSnapshot() {
-    if (!this.hasChildExited()) {
-      const liveTree = await captureProcessTreeSnapshotAsync(this.child, {
-        log: processTreeLogger
-      });
-      if (liveTree) return liveTree;
-    }
-    const processGroupId = this.options?.ownedProcessGroupId;
-    if (processGroupId) return captureProcessGroupSnapshot(processGroupId);
-    return await captureExitedRootDescendantsSnapshotAsync(this.child.pid ?? 0, {
-      log: processTreeLogger,
-      ownedProcessStartedAtMs: this.options?.ownedProcessStartedAtMs,
-      ownedProcessExitedAtMs: this.childExitedAtMs ?? Date.now()
-    });
-  }
-};
-
-// packages/services/src/zcode-agent/zcodeStdioTapDevConfig.ts
-import { existsSync as existsSync2, mkdirSync, readFileSync as readFileSync2, writeFileSync } from "node:fs";
-import { join as join5 } from "node:path";
-function isZCodeStdioTapDevVisible() {
-  return isEffectiveDevelopmentNodeEnv();
-}
-function getZCodeStdioTapDevDir() {
-  return join5(getAppConfigDir(), "dev");
-}
-function getZCodeStdioTapDevLogDir() {
-  return join5(getZCodeStdioTapDevDir(), "stdio-traffic");
-}
-function getZCodeStdioTapDevStatePath() {
-  return join5(getZCodeStdioTapDevDir(), "zcode-stdio-tap.json");
-}
-function readStateFile(path) {
-  if (!existsSync2(path)) {
-    return {};
-  }
-  try {
-    const parsed = JSON.parse(readFileSync2(path, "utf-8"));
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-function readZCodeStdioTapDevState() {
-  const visible = isZCodeStdioTapDevVisible();
-  const statePath = getZCodeStdioTapDevStatePath();
-  const fileState = readStateFile(statePath);
-  return {
-    enabled: visible && fileState.enabled === true,
-    visible,
-    logDir: getZCodeStdioTapDevLogDir(),
-    statePath
-  };
-}
-
-// packages/services/src/runtime-tools/agentProxyEnv.ts
-function buildAgentWorkspaceIdentityEnv(workspaceIdentity) {
-  const trimmed = workspaceIdentity?.trim();
-  return trimmed ? { [ZCODE_WORKSPACE_IDENTITY_ENV]: trimmed } : {};
-}
-
-// packages/services/src/zcode-agent/zcodeAgentProcessManager.ts
-var SHARED_TASK_RUNTIME_KEY = "shared-local-tasks";
-var E2E_COVERAGE_PRELOAD_SOURCE = `
-const { takeCoverage } = require("node:v8");
-const { writeFileSync } = require("node:fs");
-const { resolve } = require("node:path");
-const coverageDirectory = process.env.NODE_V8_COVERAGE;
-let coverageFlushStarted = false;
-for (const signal of process.platform === "win32"
-  ? ["SIGINT", "SIGTERM"]
-  : ["SIGINT", "SIGTERM", "SIGHUP"]) {
-  const flushCoverage = () => {
-    if (coverageFlushStarted) return;
-    coverageFlushStarted = true;
-    if (coverageDirectory) {
-      writeFileSync(
-        resolve(coverageDirectory, \`coverage-signal-\${process.pid}.marker\`),
-        signal,
-      );
-    }
-    try {
-      takeCoverage();
-    } catch (error) {
-      if (coverageDirectory) {
-        writeFileSync(
-          resolve(coverageDirectory, \`coverage-signal-error-\${process.pid}.txt\`),
-          error instanceof Error ? error.stack || error.message : String(error),
-        );
-      }
-    }
-    if (process.listenerCount(signal) !== 1) return;
-    setTimeout(() => {
-      process.exit(signal === "SIGINT" ? 130 : signal === "SIGTERM" ? 143 : 129);
-    }, 1000);
-  };
-  process.prependListener(signal, flushCoverage);
-}
-if (coverageDirectory) {
-  writeFileSync(resolve(coverageDirectory, \`coverage-ready-\${process.pid}.marker\`), "");
-}
-`;
-function buildE2EAgentCoverageEnv(env = process.env) {
-  const artifactDir = env.ZCODE_E2E_ARTIFACT_DIR?.trim();
-  if (env.ZCODE_E2E_COVERAGE !== "1" || !artifactDir) {
-    return {};
-  }
-  const directory = resolve(artifactDir, "coverage", "raw", "cli");
-  mkdirSync2(directory, { recursive: true });
-  const preloadPath = resolve(directory, "zcode-e2e-coverage-preload.cjs");
-  writeFileSync2(preloadPath, E2E_COVERAGE_PRELOAD_SOURCE, "utf8");
-  const requireOption = `--require=${JSON.stringify(preloadPath)}`;
-  return {
-    NODE_OPTIONS: [env.NODE_OPTIONS?.trim(), requireOption].filter(Boolean).join(" "),
-    NODE_V8_COVERAGE: directory
-  };
-}
-var serviceLog = createServiceLogger("zcode-agent");
-var log = (...args) => serviceLog.info(void 0, ...args);
-var warnLog = (...args) => serviceLog.warn(void 0, ...args);
-var errorLog = (...args) => serviceLog.error(void 0, ...args);
-var AGENT_STDERR_TAIL_MAX_LINES = 20;
-var AGENT_STDERR_LINE_MAX_CHARS = 1e3;
-function redactAgentDiagnostic(value2) {
-  return redactAgentDiagnosticSecrets(value2);
-}
-var debugLog = (...args) => {
-  if (!isEffectiveDevelopmentNodeEnv()) {
-    return;
-  }
-  serviceLog.debug(void 0, ...args);
-};
-function createAgentStderrTail() {
-  const tail = [];
-  let lineCount = 0;
-  return {
-    append(line) {
-      lineCount += 1;
-      const redacted = redactAgentDiagnostic(line);
-      const bounded = redacted.length > AGENT_STDERR_LINE_MAX_CHARS ? `${redacted.slice(0, AGENT_STDERR_LINE_MAX_CHARS)}\u2026[truncated]` : redacted;
-      tail.push(bounded);
-      if (tail.length > AGENT_STDERR_TAIL_MAX_LINES) {
-        tail.shift();
-      }
-    },
-    snapshot() {
-      return { lineCount, tail: [...tail] };
-    }
-  };
-}
-function parseArgsJson(raw) {
-  const trimmed = raw?.trim();
-  if (!trimmed) {
-    return void 0;
-  }
-  const parsed = JSON.parse(trimmed);
-  if (!Array.isArray(parsed) || parsed.some((item2) => typeof item2 !== "string")) {
-    throw new Error("ZCODE_AGENT_SERVER_ARGS_JSON must be a JSON string array");
-  }
-  return parsed;
-}
-function findUpward(relativePath) {
-  let current = process.cwd();
-  while (true) {
-    const candidate = join6(current, relativePath);
-    if (existsSync3(candidate)) {
-      return candidate;
-    }
-    const parent = dirname3(current);
-    if (parent === current) {
-      return null;
-    }
-    current = parent;
-  }
-}
-async function buildZCodeAgentSpawnPreflight(command, workspacePath, spawnFallbackCwd) {
-  const commandPathKind = isAbsolute(command.command) ? "absolute" : "path-search";
-  const requestedCwd = command.cwd ?? workspacePath;
-  const {
-    cwd,
-    usedFallback: shouldUseWorkspaceFallback,
-    cwdExists
-  } = await resolveZCodeAgentSpawnCwd({ requestedCwd, workspacePath, spawnFallbackCwd });
-  return {
-    command: command.command,
-    args: command.args ?? [],
-    requestedCwd,
-    cwd,
-    cwdSource: shouldUseWorkspaceFallback ? "workspace-fallback" : command.cwd === void 0 ? "workspace" : "command",
-    commandPathKind,
-    // Node spawn 的 ENOENT 既可能来自 command 缺失，也可能来自 cwd 缺失。
-    // 生产日志在 spawn 前同时记录两者可见性，避免把工作区路径丢失误判成自动更新丢 binary。
-    commandExists: commandPathKind === "absolute" ? existsSync3(command.command) : null,
-    cwdExists
-  };
-}
-function resolveBundledWorkspaceZCodeAgentCommand(context) {
-  const distEntrypoint = findUpward("apps/zcode-cli/packages/cli/dist/zcode.cjs");
-  if (distEntrypoint) {
-    const useBytecode = process.versions.electron && process.env.ZCODE_DESKTOP_AGENT_BYTECODE === "1";
-    const entrypoint = useBytecode ? join6(dirname3(distEntrypoint), "zcode.bytecode.cjs") : distEntrypoint;
-    if (useBytecode && !existsSync3(entrypoint)) {
-      throw new Error("\u684C\u9762 Agent \u5B57\u8282\u7801\u5165\u53E3\u7F3A\u5931\uFF0C\u8BF7\u8FD0\u884C pnpm build:desktop-agent:bytecode");
-    }
-    return {
-      command: process.execPath,
-      args: [entrypoint, "app-server", "--stdio"],
-      // Worker 与 Electron Node 子进程的 V8 snapshot 可不同；临时存储准备继续用 JS。
-      storagePreparationEntry: distEntrypoint,
-      cwd: context.workspacePath,
-      // 桌面端 host 运行在 Electron utility process 中，process.execPath 指向 Electron Helper。
-      // 这里显式启用 Node 运行模式，避免内置 zcode-agent 被当成 Electron/Chromium 子进程启动并卡在 GPU 初始化。
-      env: { ELECTRON_RUN_AS_NODE: "1" }
-    };
-  }
-  const sourceEntrypoint = findUpward("apps/zcode-cli/packages/cli/src/main.ts");
-  const tsxEntrypoint = findUpward("node_modules/.bin/tsx");
-  if (!sourceEntrypoint || !tsxEntrypoint) {
-    return null;
-  }
-  return {
-    command: tsxEntrypoint,
-    args: [sourceEntrypoint, "app-server", "--stdio"],
-    cwd: context.workspacePath
-  };
-}
-function resolveDeployedZCodeAgentBinaryCommand(context) {
-  const binaryPath = findZCodeAgentRuntimeBinary();
-  if (!binaryPath) {
-    return null;
-  }
-  return {
-    command: binaryPath,
-    args: ZCODE_AGENT_RUNTIME.spawnArgs,
-    cwd: context.workspacePath
-  };
-}
-function resolveElectronRuntimeZCodeAgentCommand(context) {
-  if (!process.versions.electron) {
-    return null;
-  }
-  const bundlePath = findZCodeAgentRuntimeNodeBundle();
-  if (!bundlePath) {
-    return null;
-  }
-  return {
-    command: process.execPath,
-    args: [bundlePath, ...ZCODE_AGENT_RUNTIME.spawnArgs],
-    storagePreparationEntry: bundlePath,
-    cwd: context.workspacePath,
-    // 关键：必须以纯 Node 模式启动，否则子进程会被当成 Electron/Chromium 子进程卡在 GPU 初始化。
-    env: { ELECTRON_RUN_AS_NODE: "1" }
-  };
-}
-function resolveDefaultZCodeAgentCommand(context) {
-  const command = process.env.ZCODE_AGENT_SERVER_COMMAND?.trim();
-  if (command) {
-    return applyPresentationSurfaceToCommand(
-      {
-        command,
-        args: parseArgsJson(process.env.ZCODE_AGENT_SERVER_ARGS_JSON) ?? ["app-server", "--stdio"],
-        cwd: process.env.ZCODE_AGENT_SERVER_CWD?.trim() || context.workspacePath
-      },
-      context.presentationSurface
-    );
-  }
-  const bundled = resolveBundledWorkspaceZCodeAgentCommand(context) ?? resolveElectronRuntimeZCodeAgentCommand(context);
-  return applyPresentationSurfaceToCommand(
-    bundled ? { ...bundled, supportsStorageStartup: true } : resolveDeployedZCodeAgentBinaryCommand(context),
-    context.presentationSurface
-  );
-}
-function applyPresentationSurfaceToCommand(command, presentationSurface) {
-  if (!command || presentationSurface !== "desktop") {
-    return command;
-  }
-  const commandArgs = command.args ?? [];
-  const args = [];
-  for (let index = 0; index < commandArgs.length; index += 1) {
-    const arg = commandArgs[index];
-    if (arg === "--surface") {
-      const nextArg = commandArgs[index + 1];
-      if (nextArg !== void 0 && !nextArg.startsWith("-")) {
-        index += 1;
-      }
-      continue;
-    }
-    if (arg.startsWith("--surface=")) {
-      continue;
-    }
-    args.push(arg);
-  }
-  return {
-    ...command,
-    args: [...args, "--surface", "desktop"]
-  };
-}
-function wrapZCodeAgentCommandWithStdioTapDevProxy(command, workspaceKey) {
-  const tapState = readZCodeStdioTapDevState();
-  if (!tapState.enabled) {
-    return command;
-  }
-  const tapScript = findUpward("scripts/dev/zcode-stdio-tap.mjs");
-  if (!tapScript) {
-    debugLog("ZCode stdio tap proxy enabled but script not found");
-    return command;
-  }
-  return {
-    supportsStorageStartup: command.supportsStorageStartup,
-    command: process.execPath,
-    args: [
-      tapScript,
-      "--workspace-key",
-      workspaceKey,
-      "--log-dir",
-      tapState.logDir,
-      "--",
-      command.command,
-      ...command.args ?? []
-    ],
-    cwd: command.cwd,
-    env: {
-      ...command.env,
-      ELECTRON_RUN_AS_NODE: "1"
-    }
-  };
-}
-var ZCodeAgentProcessManager = class {
-  bindings = /* @__PURE__ */ new Map();
-  bindingFlights = /* @__PURE__ */ new Map();
-  closing = /* @__PURE__ */ new Map();
-  useSharedTaskRuntime;
-  processesByWorkspaceKey = /* @__PURE__ */ new Map();
-  ownedProcesses = /* @__PURE__ */ new Set();
-  startingByWorkspaceKey = /* @__PURE__ */ new Map();
-  restartGenerationByWorkspaceKey = /* @__PURE__ */ new Map();
-  runtimeGenerationByWorkspaceKey = /* @__PURE__ */ new Map();
-  availableRuntimeIdentityByWorkspaceKey = /* @__PURE__ */ new Map();
-  startAdmissionAbortControllersByWorkspaceKey = /* @__PURE__ */ new Map();
-  storageStartupEmitter = new Emitter();
-  onStorageStartupChanged = this.storageStartupEmitter.event;
-  getStorageStartupState(params) {
-    const managed = this.processesByWorkspaceKey.get(this.processKey(params));
-    return managed ? {
-      generation: managed.runtimeIdentity.generation,
-      state: managed.client.storageStartup.snapshot ?? null
-    } : null;
-  }
-  commandResolver;
-  presentationSurface;
-  requestTimeoutMs;
-  maxFrameBytes;
-  processLifecycleReporter;
-  resolveSpawnEnv;
-  waitForSpawnAdmission;
-  spawnFallbackCwd;
-  lane;
-  idleTimeoutMs;
-  runtimeRestartedEmitter = new Emitter();
-  runtimeLifecycleEmitter = new Emitter();
-  runtimeExitedEmitter = new Emitter();
-  disposeAllInFlight;
-  disposed = false;
-  /** 进程换代通知（generation>1 时触发）；v4 订阅方据此重订，见 ZCodeAgentRuntimeRestartedEvent。 */
-  onRuntimeRestarted = this.runtimeRestartedEmitter.event;
-  /** 进程真实 spawn 后 available，当前 protocol client 关闭后 unavailable。 */
-  onRuntimeLifecycle = this.runtimeLifecycleEmitter.event;
-  /** 主泳道 runtime 意外退出；只在 terminationKind=unexpected 时发布。 */
-  onRuntimeExited = this.runtimeExitedEmitter.event;
-  constructor(options2) {
-    this.useSharedTaskRuntime = options2?.useSharedTaskRuntime;
-    this.commandResolver = options2?.commandResolver ?? resolveDefaultZCodeAgentCommand;
-    this.presentationSurface = options2?.presentationSurface;
-    this.requestTimeoutMs = options2?.requestTimeoutMs;
-    this.maxFrameBytes = options2?.maxFrameBytes;
-    this.processLifecycleReporter = options2?.processLifecycleReporter;
-    this.resolveSpawnEnv = options2?.resolveSpawnEnv;
-    this.waitForSpawnAdmission = options2?.waitForSpawnAdmission;
-    this.spawnFallbackCwd = options2?.spawnFallbackCwd;
-    this.lane = options2?.lane?.trim() || void 0;
-    this.idleTimeoutMs = options2?.idleTimeoutMs && options2.idleTimeoutMs > 0 ? options2.idleTimeoutMs : void 0;
-  }
-  processKey(params) {
-    return this.bindings.get(resolveWorkspaceKey(params))?.processKey ?? resolveWorkspaceKey(params);
-  }
-  async bind(params) {
-    const key = resolveWorkspaceKey(params);
-    const existing = this.bindings.get(key);
-    if (existing) {
-      const closing = this.recoverRetiredProcess(existing.processKey);
-      if (closing) {
-        await closing;
-        return this.bind(params);
-      }
-      return existing;
-    }
-    const pending = this.bindingFlights.get(key);
-    if (pending) return pending;
-    const flight = Promise.resolve().then(async () => {
-      const shared = await (!params.workspaceIdentity ? this.useSharedTaskRuntime?.(params) : false);
-      if (this.disposed) throw new Error("ZCode agent process manager is disposed.");
-      if (this.bindingFlights.get(key) !== flight)
-        throw new Error("ZCode agent workspace allocation was cancelled.");
-      const binding2 = {
-        workspace: {
-          workspacePath: params.workspacePath,
-          ...params.workspaceIdentity ? { workspaceIdentity: params.workspaceIdentity } : {}
-        },
-        processKey: shared ? SHARED_TASK_RUNTIME_KEY : key
-      };
-      const closing = this.recoverRetiredProcess(binding2.processKey);
-      if (closing) {
-        await closing;
-        return binding2;
-      }
-      this.bindings.set(key, binding2);
-      return binding2;
-    });
-    this.bindingFlights.set(key, flight);
-    let binding;
-    try {
-      binding = await flight;
-    } finally {
-      if (this.bindingFlights.get(key) === flight) this.bindingFlights.delete(key);
-    }
-    return this.bindings.has(key) ? binding : this.bind(params);
-  }
-  isSharedRuntime(params) {
-    return this.processKey(params) === SHARED_TASK_RUNTIME_KEY;
-  }
-  getRuntimeWorkspaces(params) {
-    const key = this.processKey(params);
-    return [...this.bindings.values()].filter((entry) => entry.processKey === key).map((entry) => entry.workspace);
-  }
-  publishAvailable(managed, binding) {
-    if (!managed.spawned || managed.exited || managed.client.isDisposed) return;
-    const workspaceKey = resolveWorkspaceKey(binding.workspace);
-    if (this.availableRuntimeIdentityByWorkspaceKey.get(workspaceKey) === managed.runtimeIdentity.identity)
-      return;
-    this.availableRuntimeIdentityByWorkspaceKey.set(workspaceKey, managed.runtimeIdentity.identity);
-    const runtimeIdentity = { ...managed.runtimeIdentity, workspaceKey };
-    this.runtimeLifecycleEmitter.fire({
-      ...binding.workspace,
-      workspaceKey,
-      runtimeIdentity,
-      state: "available"
-    });
-    if (runtimeIdentity.generation > 1)
-      this.runtimeRestartedEmitter.fire({ workspaceKey, runtimeIdentity });
-  }
-  reportProcessLifecycle(callback) {
-    const reporter = this.processLifecycleReporter;
-    if (!reporter) {
-      return;
-    }
-    try {
-      callback(reporter);
-    } catch (error62) {
-      warnLog("ZCode agent process lifecycle reporter failed", error62);
-    }
-  }
-  clearIdleTimer(managed) {
-    if (managed.idleTimer) {
-      clearTimeout(managed.idleTimer);
-      delete managed.idleTimer;
-    }
-  }
-  /**
-   * 空闲回收：每次在飞请求归零就重置计时；到点时若仍无请求在飞且该进程仍是当前活跃实例，
-   * 主动回收整棵进程树（含挂在其下的 MCP 子进程）。归因为 expected/idle-timeout，
-   * 不会被监控当作崩溃。到点时有新请求在飞则什么都不做，等下一次归零重新计时。
-   */
-  scheduleIdleReclaim(workspaceKey, managed) {
-    if (!this.idleTimeoutMs || this.disposed || managed.exited) {
-      return;
-    }
-    this.clearIdleTimer(managed);
-    const timer = setTimeout(() => {
-      delete managed.idleTimer;
-      if (this.disposed || managed.exited) {
-        return;
-      }
-      if (this.processesByWorkspaceKey.get(workspaceKey) !== managed) {
-        return;
-      }
-      if (managed.client.pendingOperationRequestCount > 0 || managed.client.storageStartup.isWaiting) {
-        return;
-      }
-      log("ZCode agent process idle timeout; reclaiming", {
-        workspaceKey,
-        pid: managed.runtimePid,
-        runtimeIdentity: managed.runtimeIdentity.identity,
-        idleTimeoutMs: this.idleTimeoutMs
-      });
-      this.processesByWorkspaceKey.delete(workspaceKey);
-      this.reportRuntimeUnavailable(managed);
-      void this.cleanupManagedProcessWithRetry(
-        managed,
-        "idle-timeout",
-        "idle-timeout-retry",
-        "idle timeout"
-      ).catch(() => void 0);
-    }, this.idleTimeoutMs);
-    timer.unref?.();
-    managed.idleTimer = timer;
-  }
-  recordTerminationIntent(managed, reason) {
-    if (managed.firstCleanupReason) {
-      return;
-    }
-    managed.firstCleanupReason = reason;
-    if (reason === "protocol-close") {
-      return;
-    }
-    managed.terminationIntent = {
-      kind: reason === "request-timeout" ? "watchdog_recycle" : "expected",
-      reason,
-      requestedAt: Date.now()
-    };
-  }
-  reportRuntimeUnavailable(managed) {
-    for (const binding of this.bindings.values()) {
-      if (binding.processKey !== managed.runtimeIdentity.workspaceKey) continue;
-      const workspaceKey = resolveWorkspaceKey(binding.workspace);
-      if (this.availableRuntimeIdentityByWorkspaceKey.get(workspaceKey) !== managed.runtimeIdentity.identity)
-        continue;
-      this.availableRuntimeIdentityByWorkspaceKey.delete(workspaceKey);
-      this.runtimeLifecycleEmitter.fire({
-        ...binding.workspace,
-        workspaceKey,
-        runtimeIdentity: { ...managed.runtimeIdentity, workspaceKey },
-        state: "unavailable"
-      });
-    }
-  }
-  reportRuntimeExited(managed, exit) {
-    const cause = classifyAgentProcessExitCause(exit.code);
-    for (const binding of this.bindings.values()) {
-      if (binding.processKey !== managed.runtimeIdentity.workspaceKey) continue;
-      const workspaceKey = resolveWorkspaceKey(binding.workspace);
-      this.runtimeExitedEmitter.fire({
-        ...binding.workspace,
-        workspaceKey,
-        runtimeIdentity: { ...managed.runtimeIdentity, workspaceKey },
-        exitCode: exit.code,
-        signal: exit.signal,
-        ...cause ? { cause } : {},
-        exitedAt: exit.endedAt
-      });
-    }
-  }
-  reportRuntimeReady(managed) {
-    if (!managed.spawned || managed.exited || managed.readyReported || managed.readyAt == null || typeof managed.runtimePid !== "number") {
-      return;
-    }
-    managed.readyReported = true;
-    this.reportProcessLifecycle(
-      (reporter) => reporter.onReady?.({
-        pid: managed.runtimePid,
-        provider: ZCODE_AGENT_PROVIDER,
-        ...this.lane ? { lane: this.lane } : {},
-        workspacePath: managed.workspace.workspacePath,
-        readyAt: managed.readyAt,
-        startupDurationMs: Math.max(0, managed.readyAt - managed.startedAt),
-        runtimeGeneration: managed.runtimeIdentity.generation,
-        runtimeInstanceId: managed.runtimeInstanceId
-      })
-    );
-  }
-  cleanupManagedProcess(managed, reason, options2 = {}) {
-    this.recordTerminationIntent(managed, reason);
-    this.clearIdleTimer(managed);
-    if (managed.cleanupPromise) {
-      return managed.cleanupPromise;
-    }
-    let cleanupCompleted = false;
-    const cleanupPromise = managed.client.disposeAndWait({ deadlineAtMs: options2.deadlineAtMs }).then(async () => {
-      let exitDeadlineTimer;
-      try {
-        await (options2.deadlineAtMs === void 0 ? managed.exitDiagnosticsCompleted : Promise.race([
-          managed.exitDiagnosticsCompleted,
-          new Promise((_, reject) => {
-            exitDeadlineTimer = setTimeout(
-              () => reject(new Error("runtime process exit diagnostics incomplete")),
-              Math.max(options2.deadlineAtMs - Date.now(), 0)
-            );
-          })
-        ]));
-      } finally {
-        if (exitDeadlineTimer) clearTimeout(exitDeadlineTimer);
-      }
-      cleanupCompleted = true;
-      log("ZCode agent process cleanup completed", {
-        workspaceKey: managed.runtimeIdentity.workspaceKey,
-        pid: managed.runtimePid,
-        runtimeIdentity: managed.runtimeIdentity.identity,
-        reason
-      });
-    }).finally(() => {
-      if (managed.cleanupPromise === cleanupPromise) {
-        delete managed.cleanupPromise;
-      }
-      if (cleanupCompleted) {
-        this.ownedProcesses.delete(managed);
-      }
-    });
-    managed.cleanupPromise = cleanupPromise;
-    void cleanupPromise.catch((error62) => {
-      if (options2.reportError === false) {
-        return;
-      }
-      errorLog("ZCode agent process cleanup failed", {
-        workspaceKey: managed.runtimeIdentity.workspaceKey,
-        pid: managed.runtimePid,
-        runtimeIdentity: managed.runtimeIdentity.identity,
-        reason,
-        error: error62
-      });
-    });
-    return cleanupPromise;
-  }
-  async cleanupManagedProcessForShutdown(managed) {
-    await this.cleanupManagedProcessWithRetry(
-      managed,
-      "manager-dispose",
-      "manager-dispose-retry",
-      "manager dispose"
-    );
-  }
-  cleanupManagedProcessWithRetry(managed, reason, retryReason, retryScope) {
-    const processKey = managed.runtimeIdentity.workspaceKey;
-    const existing = this.closing.get(processKey);
-    if (existing) return existing;
-    const flight = Promise.resolve().then(
-      () => this.performCleanupManagedProcessWithRetry(managed, reason, retryReason, retryScope)
-    ).then(() => {
-      if (this.closing.get(processKey) !== flight) return;
-      for (const [key, binding] of this.bindings) {
-        if (binding.processKey === processKey) this.bindings.delete(key);
-      }
-    }).finally(() => {
-      if (this.closing.get(processKey) === flight) this.closing.delete(processKey);
-    });
-    this.closing.set(processKey, flight);
-    return flight;
-  }
-  recoverRetiredProcess(processKey) {
-    const closing = this.closing.get(processKey);
-    if (closing) return closing;
-    const active = this.processesByWorkspaceKey.get(processKey);
-    const retired = [...this.ownedProcesses].find(
-      (managed) => managed.runtimeIdentity.workspaceKey === processKey && (managed !== active || managed.client.isDisposed || managed.exited)
-    );
-    return retired ? this.cleanupManagedProcessWithRetry(
-      retired,
-      "protocol-close",
-      "protocol-close",
-      "connection recovery"
-    ) : void 0;
-  }
-  async performCleanupManagedProcessWithRetry(managed, reason, retryReason, retryScope) {
-    const deadlineAtMs = process.platform === "win32" ? Date.now() + 3250 : void 0;
-    try {
-      await this.cleanupManagedProcess(managed, reason, { reportError: false, deadlineAtMs });
-    } catch (firstError) {
-      const cleanupError = firstError;
-      warnLog(`ZCode agent process cleanup retrying during ${retryScope}`, {
-        workspaceKey: managed.runtimeIdentity.workspaceKey,
-        pid: managed.runtimePid,
-        runtimeIdentity: managed.runtimeIdentity.identity,
-        cleanupStage: reason,
-        errorName: firstError instanceof Error ? firstError.name || "Error" : "UnknownError",
-        ...typeof cleanupError.code === "string" ? { errorCode: cleanupError.code } : {},
-        error: firstError
-      });
-      try {
-        await this.cleanupManagedProcess(managed, retryReason, {
-          reportError: false,
-          deadlineAtMs
-        });
-      } catch (finalError) {
-        errorLog("ZCode agent process cleanup failed", {
-          workspaceKey: managed.runtimeIdentity.workspaceKey,
-          pid: managed.runtimePid,
-          runtimeIdentity: managed.runtimeIdentity.identity,
-          reason: retryReason,
-          retryScope,
-          error: finalError
-        });
-        throw finalError;
-      }
-    }
-  }
-  async getClient(params) {
-    if (this.disposed) {
-      throw new Error("ZCode agent process manager is disposed.");
-    }
-    const binding = await this.bind(params);
-    const workspaceKey = binding.processKey;
-    const closing = this.recoverRetiredProcess(workspaceKey);
-    if (closing) {
-      await closing;
-      return this.getClient(params);
-    }
-    if (this.bindings.get(resolveWorkspaceKey(params)) !== binding) return this.getClient(params);
-    const existing = this.processesByWorkspaceKey.get(workspaceKey);
-    if (existing && !existing.child.killed && !existing.client.isDisposed) {
-      this.publishAvailable(existing, binding);
-      return existing.client;
-    }
-    const starting = this.startingByWorkspaceKey.get(workspaceKey);
-    if (starting) {
-      const waitStartedAt = Date.now();
-      log("ZCode agent process start already in progress", {
-        workspaceKey
-      });
-      const client = await starting;
-      log("ZCode agent process start wait completed", {
-        workspaceKey,
-        durationMs: Date.now() - waitStartedAt
-      });
-      const managed = this.processesByWorkspaceKey.get(workspaceKey);
-      if (managed) this.publishAvailable(managed, binding);
-      return client;
-    }
-    const startGeneration = this.restartGenerationByWorkspaceKey.get(workspaceKey) ?? 0;
-    const admissionAbortController = new AbortController();
-    let controllers = this.startAdmissionAbortControllersByWorkspaceKey.get(workspaceKey);
-    if (!controllers) {
-      controllers = /* @__PURE__ */ new Set();
-      this.startAdmissionAbortControllersByWorkspaceKey.set(workspaceKey, controllers);
-    }
-    controllers.add(admissionAbortController);
-    const startPromise = this.startClient(
-      workspaceKey === SHARED_TASK_RUNTIME_KEY ? { workspacePath: getZCodeDataRootDir() } : params,
-      workspaceKey,
-      startGeneration,
-      admissionAbortController.signal
-    );
-    this.startingByWorkspaceKey.set(workspaceKey, startPromise);
-    try {
-      return await startPromise;
-    } catch (error62) {
-      if (!this.processesByWorkspaceKey.has(workspaceKey) && ![...this.ownedProcesses].some(
-        (managed) => managed.runtimeIdentity.workspaceKey === workspaceKey
-      )) {
-        for (const [key, route] of this.bindings)
-          if (route.processKey === workspaceKey) this.bindings.delete(key);
-      }
-      throw error62;
-    } finally {
-      controllers.delete(admissionAbortController);
-      if (controllers.size === 0) {
-        this.startAdmissionAbortControllersByWorkspaceKey.delete(workspaceKey);
-      }
-      if (this.startingByWorkspaceKey.get(workspaceKey) === startPromise) {
-        this.startingByWorkspaceKey.delete(workspaceKey);
-      }
-    }
-  }
-  /**
-   * 只读取已经登记的 runtime client；被动 observer 使用本入口避免 getClient 的隐式 spawn。
-   */
-  getExistingClient(params) {
-    const managed = this.processesByWorkspaceKey.get(this.processKey(params));
-    return managed && !managed.child.killed && !managed.client.isDisposed ? managed.client : void 0;
-  }
-  /** 资源管理器：当前仍存活的受管 runtime（pid + workspace + client） */
-  listManagedProcesses() {
-    const result = [];
-    for (const managed of this.processesByWorkspaceKey.values()) {
-      if (managed.exited || managed.child.killed || typeof managed.runtimePid !== "number")
-        continue;
-      result.push({
-        pid: managed.runtimePid,
-        workspacePath: managed.workspace.workspacePath,
-        ...managed.workspace.workspaceIdentity ? { workspaceIdentity: managed.workspace.workspaceIdentity } : {},
-        ...this.lane ? { lane: this.lane } : {},
-        client: managed.client
-      });
-    }
-    return result;
-  }
-  /** Agent service 首次通过 provider/model 门禁后调用；同一 runtime 只上报一次。 */
-  markReady(params, client) {
-    const managed = this.processesByWorkspaceKey.get(this.processKey(params));
-    if (!managed || managed.client !== client || managed.readyAt != null || managed.exited) {
-      return;
-    }
-    managed.readyAt = Date.now();
-    this.reportRuntimeReady(managed);
-  }
-  async startClient(params, workspaceKey, startGeneration, admissionSignal) {
-    const startStartedAt = Date.now();
-    const resolveCommandStartedAt = Date.now();
-    const command = await this.commandResolver({
-      ...params,
-      ...this.presentationSurface ? { presentationSurface: this.presentationSurface } : {},
-      workspaceKey
-    });
-    const resolveCommandDurationMs = Date.now() - resolveCommandStartedAt;
-    if (!command) {
-      throw new Error(
-        "ZCode agent server command is not configured. Set ZCODE_AGENT_SERVER_COMMAND before integration."
-      );
-    }
-    if (admissionSignal.aborted) {
-      throw admissionSignal.reason ?? new Error("ZCode agent process start was cancelled.");
-    }
-    const effectiveCommand = wrapZCodeAgentCommandWithStdioTapDevProxy(command, workspaceKey);
-    log("ZCode agent command resolved", {
-      workspaceKey,
-      command: command.command,
-      effectiveCommand: effectiveCommand.command,
-      resolveCommandDurationMs
-    });
-    await this.waitForSpawnAdmission?.({ ...params, workspaceKey, signal: admissionSignal });
-    const spawnEnv = await this.resolveSpawnEnv?.({ ...params, workspaceKey }) ?? {};
-    if (this.disposed) {
-      throw new Error("ZCode agent process manager is disposed.");
-    }
-    if ((this.restartGenerationByWorkspaceKey.get(workspaceKey) ?? 0) !== startGeneration) {
-      throw new Error("ZCode agent process start was cancelled.");
-    }
-    const spawnPreflight = await buildZCodeAgentSpawnPreflight(
-      effectiveCommand,
-      params.workspacePath,
-      this.spawnFallbackCwd
-    );
-    admissionSignal.throwIfAborted();
-    await this.waitForSpawnAdmission?.({ ...params, workspaceKey, signal: admissionSignal });
-    if (this.disposed) {
-      throw new Error("ZCode agent process manager is disposed.");
-    }
-    if ((this.restartGenerationByWorkspaceKey.get(workspaceKey) ?? 0) !== startGeneration) {
-      throw new Error("ZCode agent process start was cancelled.");
-    }
-    const runtimeEnv = resolveZCodeRuntimeEnv(process.env);
-    log("ZCode agent spawn preflight", {
-      workspaceKey,
-      spawnPreflight
-    });
-    const spawnRequestedAt = Date.now();
-    const childEnv = {
-      ...sanitizeZCodeRuntimeEnv(process.env),
-      [ZCODE_RUNTIME_ENV_KEY]: runtimeEnv,
-      ...spawnEnv,
-      ...effectiveCommand.env,
-      // 生成文件根目录由执行端 Host 唯一决定，保证 Agent 写入与 Host 读取授权一致。
-      [GEN_UI_OUTPUT_ROOT_ENV]: join6(getAppConfigDir(), GEN_UI_OUTPUT_DIRECTORY),
-      // 身份/隔离语义使用 workspaceIdentity；cwd 继续使用 workspacePath。
-      ...buildAgentWorkspaceIdentityEnv(params.workspaceIdentity),
-      ...buildE2EAgentCoverageEnv()
-    };
-    const windowsRuntime = process.platform === "win32" ? await spawnWindowsRuntimeHost({
-      command: effectiveCommand.command,
-      args: spawnPreflight.args,
-      cwd: spawnPreflight.cwd,
-      env: childEnv,
-      signal: admissionSignal
-    }) : void 0;
-    const child = windowsRuntime?.child ?? spawn2(effectiveCommand.command, spawnPreflight.args, {
-      cwd: spawnPreflight.cwd,
-      detached: shouldSpawnInDetachedProcessGroup(),
-      env: childEnv,
-      stdio: ["pipe", "pipe", "pipe"]
-    });
-    let runtimePid = windowsRuntime ? void 0 : child.pid;
-    const startedAt = Date.now();
-    const stderrTail = createAgentStderrTail();
-    const transport = new ZCodeStdioTransport(child, {
-      windowsRuntime,
-      maxFrameBytes: this.maxFrameBytes,
-      onStderrLine: (line) => {
-        const diagnostic = parseZCodeProcessDiagnostic(line);
-        if (diagnostic && typeof runtimePid === "number") {
-          this.reportProcessLifecycle(
-            (reporter) => reporter.onException?.({
-              pid: runtimePid,
-              provider: ZCODE_AGENT_PROVIDER,
-              ...this.lane ? { lane: this.lane } : {},
-              workspacePath: params.workspacePath,
-              runtimeGeneration,
-              runtimeInstanceId,
-              diagnostic: {
-                ...diagnostic,
-                // 脱敏占位符可能比原文长，必须再次限长，避免 IPC schema 拒绝合法异常。
-                name: redactAgentDiagnostic(diagnostic.name).slice(
-                  0,
-                  ZCODE_PROCESS_DIAGNOSTIC_NAME_MAX_CHARS
-                ),
-                message: redactAgentDiagnostic(diagnostic.message).slice(
-                  0,
-                  ZCODE_PROCESS_DIAGNOSTIC_MESSAGE_MAX_CHARS
-                ),
-                ...diagnostic.stack !== void 0 ? {
-                  stack: redactAgentDiagnostic(diagnostic.stack).slice(
-                    0,
-                    ZCODE_PROCESS_DIAGNOSTIC_STACK_MAX_CHARS
-                  )
-                } : {}
-              }
-            })
-          );
-          return;
-        }
-        stderrTail.append(line);
-        debugLog(line);
-      },
-      ownedProcessStartedAtMs: spawnRequestedAt,
-      // POSIX 下 child 由本 manager 以 detached=true 启动，pid 同时就是 Host
-      // 拥有的独立 PGID；异常 root exit 后 cleanup 仍可按组回收同组后代。
-      ...process.platform !== "win32" && runtimePid ? { ownedProcessGroupId: runtimePid } : {}
-    });
-    const client = new ZCodeProtocolClient(transport, {
-      requireStorageStartup: effectiveCommand.supportsStorageStartup,
-      requestTimeoutMs: this.requestTimeoutMs
-    });
-    const registerNetworkCapture = () => {
-      if (runtimePid) {
-        const unregister = localRuntimeNetworkCapture.register(client, runtimePid);
-        child.once("close", unregister);
-      }
-    };
-    if (!windowsRuntime) registerNetworkCapture();
-    const runtimeGeneration = (this.runtimeGenerationByWorkspaceKey.get(workspaceKey) ?? 0) + 1;
-    this.runtimeGenerationByWorkspaceKey.set(workspaceKey, runtimeGeneration);
-    const runtimeInstanceId = `agent-${randomUUID3()}`;
-    const runtimeIdentity = {
-      generation: runtimeGeneration,
-      identity: this.lane ? `${workspaceKey}:${runtimeGeneration}:${runtimePid ?? "unknown"}:${this.lane}` : `${workspaceKey}:${runtimeGeneration}:${runtimePid ?? "unknown"}`,
-      ...typeof runtimePid === "number" ? { processId: runtimePid } : {},
-      ...this.lane ? { lane: this.lane } : {},
-      workspaceKey
-    };
-    const exitDiagnostics = Promise.withResolvers();
-    const managed = {
-      child,
-      runtimePid,
-      client,
-      exited: false,
-      exitDiagnosticsCompleted: exitDiagnostics.promise,
-      readyReported: false,
-      runtimeIdentity,
-      runtimeInstanceId,
-      spawned: false,
-      startedAt,
-      workspace: {
-        workspacePath: params.workspacePath,
-        ...params.workspaceIdentity ? { workspaceIdentity: params.workspaceIdentity } : {}
-      }
-    };
-    this.processesByWorkspaceKey.set(workspaceKey, managed);
-    this.ownedProcesses.add(managed);
-    const publishStorage = () => {
-      if (this.processesByWorkspaceKey.get(workspaceKey) !== managed) return;
-      if (client.storageStartup.isWaiting) this.clearIdleTimer(managed);
-      else if (client.storageStartup.snapshot?.phase === "ready" && client.pendingOperationRequestCount === 0) {
-        this.scheduleIdleReclaim(workspaceKey, managed);
-      }
-      for (const binding of this.bindings.values()) {
-        if (binding.processKey !== workspaceKey) continue;
-        this.storageStartupEmitter.fire({
-          workspaceKey: resolveWorkspaceKey(binding.workspace),
-          snapshot: {
-            generation: runtimeGeneration,
-            state: client.storageStartup.snapshot ?? null
-          }
-        });
-      }
-    };
-    client.storageStartup.onDidChange(publishStorage);
-    publishStorage();
-    if (this.idleTimeoutMs) {
-      client.onPendingRequestsDrained(() => this.scheduleIdleReclaim(workspaceKey, managed));
-    }
-    const onSpawn = () => {
-      if (managed.exited) return;
-      managed.spawned = true;
-      if (this.processesByWorkspaceKey.get(workspaceKey) === managed) {
-        for (const binding of this.bindings.values()) {
-          if (binding.processKey === workspaceKey) this.publishAvailable(managed, binding);
-        }
-      }
-      if (typeof runtimePid === "number") {
-        this.reportProcessLifecycle(
-          (reporter) => reporter.onSpawn({
-            pid: runtimePid,
-            provider: ZCODE_AGENT_PROVIDER,
-            ...this.lane ? { lane: this.lane } : {},
-            workspacePath: params.workspacePath,
-            command: effectiveCommand.command,
-            args: effectiveCommand.args ?? [],
-            startedAt,
-            runtimeGeneration,
-            runtimeInstanceId
-          })
-        );
-      }
-      this.reportRuntimeReady(managed);
-      log("ZCode agent process started", {
-        workspaceKey,
-        command: effectiveCommand.command,
-        cwd: spawnPreflight.cwd,
-        pid: runtimePid,
-        runtimeHostPid: windowsRuntime?.child.pid,
-        durationMs: Date.now() - startStartedAt
-      });
-    };
-    if (!windowsRuntime) child.once("spawn", onSpawn);
-    child.once("error", (error62) => {
-      errorLog(
-        `ZCode agent process error${this.processLifecycleReporter?.onError ? ` ${ZCODE_AGENT_LIFECYCLE_LOG_MARKER}` : ""}`,
-        {
-          workspaceKey,
-          pid: runtimePid,
-          runtimeHostPid: windowsRuntime?.child.pid,
-          runtimeIdentity: runtimeIdentity.identity,
-          errorName: error62.name,
-          errorMessage: error62.message,
-          errorStack: error62.stack,
-          spawnPreflight
-        }
-      );
-      const errno = error62;
-      this.reportProcessLifecycle(
-        (reporter) => reporter.onError?.({
-          pid: typeof runtimePid === "number" ? runtimePid : null,
-          provider: ZCODE_AGENT_PROVIDER,
-          ...this.lane ? { lane: this.lane } : {},
-          workspacePath: params.workspacePath,
-          command: effectiveCommand.command,
-          args: effectiveCommand.args ?? [],
-          errorName: error62.name || "Error",
-          ...typeof errno.code === "string" ? { errorCode: errno.code } : {},
-          errorMessage: error62.message,
-          ...error62.stack ? { errorStack: error62.stack } : {},
-          runtimeGeneration,
-          runtimeInstanceId,
-          occurredAt: Date.now()
-        })
-      );
-      if (child.pid == null) {
-        exitDiagnostics.resolve();
-        this.ownedProcesses.delete(managed);
-      }
-    });
-    const onExit = async (code, signal) => {
-      try {
-        managed.exited = true;
-        this.clearIdleTimer(managed);
-        const endedAt = Date.now();
-        const terminationKind = managed.terminationIntent?.kind ?? "unexpected";
-        const terminationReason = managed.terminationIntent?.reason ?? managed.firstCleanupReason;
-        await transport.waitForStderrDrain();
-        const stderr = stderrTail.snapshot();
-        const exitContext = {
-          workspaceKey,
-          pid: runtimePid,
-          runtimeHostPid: windowsRuntime?.child.pid,
-          runtimeIdentity: runtimeIdentity.identity,
-          code,
-          signal,
-          terminationKind,
-          terminationReason
-        };
-        log("ZCode agent process exited", exitContext);
-        if (terminationKind === "unexpected") {
-          errorLog(
-            `ZCode agent process exited unexpectedly${this.processLifecycleReporter ? ` ${ZCODE_AGENT_LIFECYCLE_LOG_MARKER}` : ""}`,
-            {
-              ...exitContext,
-              stderr
-            }
-          );
-        }
-        if (terminationKind === "unexpected" && !this.lane) {
-          this.reportRuntimeExited(managed, { code, signal, endedAt });
-        }
-        if (typeof runtimePid === "number") {
-          this.reportProcessLifecycle(
-            (reporter) => reporter.onExit({
-              pid: runtimePid,
-              provider: ZCODE_AGENT_PROVIDER,
-              ...this.lane ? { lane: this.lane } : {},
-              workspacePath: params.workspacePath,
-              exitCode: code,
-              signal,
-              endedAt,
-              terminationKind,
-              runtimeReady: managed.readyAt != null,
-              ...terminationReason ? { terminationReason } : {},
-              runtimeGeneration,
-              runtimeInstanceId,
-              uptimeMs: Math.max(0, endedAt - startedAt),
-              stderrLineCount: stderr.lineCount,
-              ...terminationKind === "unexpected" && stderr.tail.length > 0 ? { stderrTail: stderr.tail } : {}
-            })
-          );
-        }
-      } finally {
-        exitDiagnostics.resolve();
-      }
-    };
-    if (windowsRuntime) windowsRuntime.onRootExit(onExit);
-    else child.once("exit", onExit);
-    client.onRequestTimeout((event) => {
-      if (this.processesByWorkspaceKey.get(workspaceKey) !== managed) {
-        return;
-      }
-      if (event.method === "workspace/cancelGenerateText") {
-        warnLog(
-          "ZCode agent cancel notification timed out; keeping client (best-effort control plane)",
-          {
-            workspaceKey,
-            method: event.method,
-            requestId: event.requestId,
-            timeoutMs: event.timeoutMs,
-            pid: runtimePid
-          }
-        );
-        return;
-      }
-      warnLog("ZCode agent request timed out; disposing stale protocol client", {
-        workspaceKey,
-        method: event.method,
-        requestId: event.requestId,
-        timeoutMs: event.timeoutMs,
-        pid: runtimePid
-      });
-      this.processesByWorkspaceKey.delete(workspaceKey);
-      this.reportRuntimeUnavailable(managed);
-      void this.cleanupManagedProcessWithRetry(
-        managed,
-        "request-timeout",
-        "request-timeout",
-        "request timeout"
-      ).catch(() => void 0);
-    });
-    client.onClose(() => {
-      const wasActiveClient = this.processesByWorkspaceKey.get(workspaceKey) === managed;
-      log("ZCode agent protocol client closed", {
-        workspaceKey,
-        pid: runtimePid,
-        runtimeIdentity: runtimeIdentity.identity,
-        wasActiveClient
-      });
-      if (wasActiveClient) {
-        this.processesByWorkspaceKey.delete(workspaceKey);
-      }
-      this.reportRuntimeUnavailable(managed);
-      if (this.ownedProcesses.has(managed)) {
-        void this.cleanupManagedProcessWithRetry(
-          managed,
-          "protocol-close",
-          "protocol-close",
-          "protocol close"
-        ).catch(() => void 0);
-      }
-    });
-    if (windowsRuntime) {
-      const assertAdmission = () => {
-        admissionSignal.throwIfAborted();
-        if (this.disposed || (this.restartGenerationByWorkspaceKey.get(workspaceKey) ?? 0) !== startGeneration) {
-          throw new Error("ZCode agent process start was cancelled.");
-        }
-      };
-      try {
-        assertAdmission();
-        runtimePid = await windowsRuntime.ready();
-        managed.runtimePid = runtimePid;
-        runtimeIdentity.processId = runtimePid;
-        runtimeIdentity.identity = this.lane ? `${workspaceKey}:${runtimeGeneration}:${runtimePid}:${this.lane}` : `${workspaceKey}:${runtimeGeneration}:${runtimePid}`;
-        assertAdmission();
-        registerNetworkCapture();
-        await windowsRuntime.start();
-        onSpawn();
-      } catch (error62) {
-        if (this.processesByWorkspaceKey.get(workspaceKey) === managed)
-          this.processesByWorkspaceKey.delete(workspaceKey);
-        await this.cleanupManagedProcessWithRetry(
-          managed,
-          "protocol-close",
-          "protocol-close",
-          "start cancellation"
-        ).catch(() => void 0);
-        throw error62;
-      }
-    }
-    return client;
-  }
-  async getRuntimeIdentity(params) {
-    const workspaceKey = this.processKey(params);
-    const managed = this.processesByWorkspaceKey.get(workspaceKey);
-    if (!managed || managed.exited || managed.child.killed) {
-      throw new Error("ZCode agent runtime identity is unavailable.");
-    }
-    return { ...managed.runtimeIdentity, workspaceKey: resolveWorkspaceKey(params) };
-  }
-  async canStart(params) {
-    const workspaceKey = resolveWorkspaceKey(params);
-    try {
-      const command = await this.commandResolver({
-        ...params,
-        ...this.presentationSurface ? { presentationSurface: this.presentationSurface } : {},
-        workspaceKey
-      });
-      return command ? { available: true, workspaceKey } : {
-        available: false,
-        workspaceKey,
-        reason: "ZCODE_AGENT_SERVER_COMMAND is not configured"
-      };
-    } catch (error62) {
-      return {
-        available: false,
-        workspaceKey,
-        reason: error62 instanceof Error ? error62.message : String(error62)
-      };
-    }
-  }
-  async disposeWorkspace(params) {
-    this.bindingFlights.delete(resolveWorkspaceKey(params));
-    const workspaceKey = this.processKey(params);
-    const closing = this.closing.get(workspaceKey);
-    if (closing) {
-      await closing;
-      return;
-    }
-    this.restartGenerationByWorkspaceKey.set(
-      workspaceKey,
-      (this.restartGenerationByWorkspaceKey.get(workspaceKey) ?? 0) + 1
-    );
-    this.abortPendingStarts(workspaceKey);
-    const managed = this.processesByWorkspaceKey.get(workspaceKey) ?? [...this.ownedProcesses].find(
-      (candidate) => candidate.runtimeIdentity.workspaceKey === workspaceKey
-    );
-    this.processesByWorkspaceKey.delete(workspaceKey);
-    if (managed) {
-      this.reportRuntimeUnavailable(managed);
-      await this.cleanupManagedProcessWithRetry(
-        managed,
-        "workspace-dispose",
-        "workspace-dispose-retry",
-        "workspace dispose"
-      );
-    }
-  }
-  abortPendingStarts(workspaceKey, reason = new Error("ZCode agent process start was cancelled.")) {
-    const controllers = this.startAdmissionAbortControllersByWorkspaceKey.get(workspaceKey);
-    if (!controllers) {
-      return;
-    }
-    for (const controller of controllers) {
-      controller.abort(reason);
-    }
-  }
-  abortAllPendingStarts(reason = new Error("ZCode agent process manager is disposed.")) {
-    for (const workspaceKey of this.startAdmissionAbortControllersByWorkspaceKey.keys()) {
-      this.abortPendingStarts(workspaceKey, reason);
-    }
-  }
-  disposeAll() {
-    this.disposed = true;
-    this.storageStartupEmitter.dispose();
-    this.abortAllPendingStarts();
-    for (const managed of this.ownedProcesses) {
-      this.recordTerminationIntent(managed, "manager-dispose");
-      this.reportRuntimeUnavailable(managed);
-      managed.client.dispose();
-    }
-    this.processesByWorkspaceKey.clear();
-    this.startingByWorkspaceKey.clear();
-  }
-  async disposeAllAndWait() {
-    if (this.disposeAllInFlight) {
-      return this.disposeAllInFlight;
-    }
-    this.disposed = true;
-    this.storageStartupEmitter.dispose();
-    this.abortAllPendingStarts();
-    const managedProcesses = [...this.ownedProcesses];
-    for (const managed of managedProcesses) {
-      this.reportRuntimeUnavailable(managed);
-    }
-    this.processesByWorkspaceKey.clear();
-    this.startingByWorkspaceKey.clear();
-    this.disposeAllInFlight = Promise.all(
-      managedProcesses.map((managed) => this.cleanupManagedProcessForShutdown(managed))
-    ).then(() => void 0);
-    try {
-      await this.disposeAllInFlight;
-    } finally {
-      this.disposeAllInFlight = void 0;
-    }
-  }
-};
-
 // packages/shared/src/credential-security/systemCredentialCipher.ts
-import { createCipheriv, createDecipheriv, createHash as createHash2, randomBytes } from "node:crypto";
-import { homedir as homedir3, platform, userInfo } from "node:os";
-import { link, lstat, readFile as readFile3, rm as rm3, stat as stat3, writeFile as writeFile3 } from "node:fs/promises";
-import { dirname as dirname4, join as join7, resolve as resolve2 } from "node:path";
 var LEGACY_PREFIX = "enc:v1:";
 var SYSTEM_PREFIX = "enc:v2:";
 var ALGORITHM = "aes-256-gcm";
@@ -39456,7 +35274,7 @@ function legacyKeyCandidates(env) {
     username = userInfo().username;
   } catch {
   }
-  const fallback = `zcode-credential-fallback:${platform()}:${homedir3()}:${username}`;
+  const fallback = `zcode-credential-fallback:${platform()}:${homedir()}:${username}`;
   const secret = env.ZCODE_CREDENTIAL_SECRET;
   const keys = [.../* @__PURE__ */ new Set([secret || fallback, secret?.trim() || fallback, fallback])].map(digest);
   return keys;
@@ -39488,8 +35306,8 @@ async function resolveManagedSecret(options2, discoverDefault = false) {
   if (env.ZCODE_CREDENTIAL_SECRET) return env.ZCODE_CREDENTIAL_SECRET;
   const explicit = env.ZCODE_CREDENTIAL_SECRET_FILE;
   if (!explicit && !discoverDefault) return void 0;
-  const path = explicit || join7(dirname4(resolve2(options2.filePath)), "credential-secret");
-  const metadata = await stat3(path).catch((error62) => {
+  const path = explicit || join3(dirname2(resolve(options2.filePath)), "credential-secret");
+  const metadata = await stat2(path).catch((error62) => {
     if (!explicit && error62.code === "ENOENT") return null;
     throw unavailable();
   });
@@ -39507,7 +35325,7 @@ function systemKeyStore(filePath) {
   let entry;
   const getEntry = () => {
     entry ??= import("@napi-rs/keyring").then(
-      ({ AsyncEntry }) => new AsyncEntry(SYSTEM_SERVICE, digest(resolve2(filePath)).toString("hex"), {
+      ({ AsyncEntry }) => new AsyncEntry(SYSTEM_SERVICE, digest(resolve(filePath)).toString("hex"), {
         linux: { store: "secret-service" }
       })
     ).catch(() => {
@@ -39557,13 +35375,13 @@ async function readOsKeyFingerprints(filePath) {
   if (!record2 || typeof record2 !== "object") return fingerprints;
   for (const value2 of Object.values(record2)) {
     if (typeof value2 !== "string" || !value2.startsWith(OS_CIPHERTEXT_PREFIX)) continue;
-    const fingerprint3 = value2.slice(OS_CIPHERTEXT_PREFIX.length).split(":")[0];
-    if (fingerprint3 && KEY_FINGERPRINT_PATTERN.test(fingerprint3)) fingerprints.add(fingerprint3);
+    const fingerprint2 = value2.slice(OS_CIPHERTEXT_PREFIX.length).split(":")[0];
+    if (fingerprint2 && KEY_FINGERPRINT_PATTERN.test(fingerprint2)) fingerprints.add(fingerprint2);
   }
   return fingerprints;
 }
 async function isOsSourcePinned(filePath) {
-  const marker = await readFile3(join7(dirname4(filePath), CREDENTIAL_SOURCE_FILE), "utf8").catch(
+  const marker = await readFile3(join3(dirname2(filePath), CREDENTIAL_SOURCE_FILE), "utf8").catch(
     (error62) => {
       if (error62.code === "ENOENT") return null;
       throw error62;
@@ -39577,7 +35395,7 @@ function createSystemCredentialCipher(options2) {
   const readOnlyKeyMaterial = readOnly || options2.readOnlyKeyMaterial === true;
   let managedSecret;
   const getManagedSecret = () => managedSecret ??= resolveManagedSecret(options2);
-  const filePath = resolve2(options2.filePath);
+  const filePath = resolve(options2.filePath);
   const store = options2.keyStore ?? systemKeyStore(filePath);
   const cache = keyCacheFor(options2.keyStore);
   const getKey = async (create) => {
@@ -39589,7 +35407,7 @@ function createSystemCredentialCipher(options2) {
     const pendingKey = withFileLock(`${filePath}.keyring`, async () => {
       lockAcquired = true;
       try {
-        const sourcePath = join7(dirname4(filePath), CREDENTIAL_SOURCE_FILE);
+        const sourcePath = join3(dirname2(filePath), CREDENTIAL_SOURCE_FILE);
         const pinnedSource = await readFile3(sourcePath, "utf8").catch((error62) => {
           if (error62.code === "ENOENT") return null;
           throw error62;
@@ -39618,7 +35436,7 @@ function createSystemCredentialCipher(options2) {
           if (!encoded || !ENCODED_KEY_PATTERN.test(encoded)) throw unavailable();
         } catch (error62) {
           if (!privateFileKeyFallback || !unbound) throw error62;
-          await publishPrivateSecretFile(join7(dirname4(filePath), "credential-secret"));
+          await publishPrivateSecretFile(join3(dirname2(filePath), "credential-secret"));
           const value2 = await resolveManagedSecret({ filePath, env: {} }, true);
           if (!value2) throw unavailable();
           privateFileKeyFallback.onFallback?.();
@@ -39646,7 +35464,7 @@ function createSystemCredentialCipher(options2) {
     },
     needsMigration: (value2) => !value2.startsWith(SYSTEM_PREFIX),
     async shareKeyWithCopiedCredentials(targetFilePath, targetKeyStore) {
-      const target2 = resolve2(targetFilePath);
+      const target2 = resolve(targetFilePath);
       if (target2 === filePath) return;
       const [sourcePrints, targetPrints, sourcePinned, targetPinned] = await Promise.all([
         readOsKeyFingerprints(filePath),
@@ -39656,9 +35474,9 @@ function createSystemCredentialCipher(options2) {
       ]);
       let requiredFingerprint;
       if (targetPrints.size === 1) {
-        const [fingerprint3] = targetPrints;
-        if (!fingerprint3 || !sourcePrints.has(fingerprint3)) return;
-        requiredFingerprint = fingerprint3;
+        const [fingerprint2] = targetPrints;
+        if (!fingerprint2 || !sourcePrints.has(fingerprint2)) return;
+        requiredFingerprint = fingerprint2;
       } else if (targetPrints.size === 0 && targetPinned && sourcePinned) {
         requiredFingerprint = null;
       } else {
@@ -39690,8 +35508,8 @@ function createSystemCredentialCipher(options2) {
     async encrypt(value2) {
       if (readOnly) throw unavailable();
       const { key, source } = await getKey(true);
-      const fingerprint3 = keyFingerprint(key);
-      return `${SYSTEM_PREFIX}${source}:${fingerprint3}:${seal(value2, key)}`;
+      const fingerprint2 = keyFingerprint(key);
+      return `${SYSTEM_PREFIX}${source}:${fingerprint2}:${seal(value2, key)}`;
     },
     async decrypt(value2) {
       if (!value2.startsWith(SYSTEM_PREFIX)) {
@@ -39768,16 +35586,74 @@ async function migrateCredentialRecord(record2, cipher) {
 
 // packages/services/src/credential/credentialService.ts
 import { readFile as readFile4, writeFile as writeFile4 } from "node:fs/promises";
-import { createHash as createHash3, randomUUID as randomUUID4 } from "node:crypto";
-import { join as join8 } from "node:path";
+import { createHash as createHash3, randomUUID } from "node:crypto";
+import { join as join5 } from "node:path";
+
+// packages/shared/src/node/networkCapture.ts
+import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
+var excluded = new AsyncLocalStorage2();
+
+// packages/services/src/runtime-tools/nodeEnv.ts
+function resolveEffectiveNodeEnv(env = process.env) {
+  const runtimeEnv = resolveZCodeRuntimeEnv(env);
+  return runtimeEnv === "development" ? "development" : "production";
+}
+function isEffectiveDevelopmentNodeEnv(env = process.env) {
+  return resolveEffectiveNodeEnv(env) === "development";
+}
+
+// packages/services/src/logger/serviceLogger.ts
+function createServiceLogger(scope, options2) {
+  const pid = options2?.pid ?? process.pid;
+  const sink = options2?.sink ?? console;
+  const debugOption = options2?.isDebugEnabled;
+  const resolveDebugEnabled = typeof debugOption === "function" ? debugOption : typeof debugOption === "boolean" ? () => debugOption : () => isEffectiveDevelopmentNodeEnv();
+  function write(level, traceId, ...args) {
+    if (level === "debug" && !resolveDebugEnabled()) {
+      return;
+    }
+    const source = traceId ? `${scope}][trace:${traceId}` : scope;
+    const consoleFn = level === "error" ? sink.error : level === "warn" ? sink.warn : level === "debug" ? sink.debug ?? sink.log : sink.log;
+    consoleFn(formatLogPrefix(source, pid), ...args);
+  }
+  return {
+    debug: (traceId, ...args) => write("debug", traceId, ...args),
+    info: (traceId, ...args) => write("info", traceId, ...args),
+    warn: (traceId, ...args) => write("warn", traceId, ...args),
+    error: (traceId, ...args) => write("error", traceId, ...args)
+  };
+}
+
+// packages/services/src/paths.ts
+import { basename as basename2, join as join4, win32 } from "node:path";
+import { homedir as homedir2 } from "node:os";
+var _dataBaseDir = null;
+var envDataBaseDir = process.env.ZCODE_DATA_BASE_DIR?.trim() || null;
+var defaultDataBaseDir = process.env.HOME?.trim() || homedir2();
+function setDataBaseDir(dir) {
+  _dataBaseDir = dir?.trim() || null;
+}
+function getDataBaseDir() {
+  if (_dataBaseDir) return _dataBaseDir;
+  if (envDataBaseDir) return envDataBaseDir;
+  return defaultDataBaseDir;
+}
+function getZCodeDataRootDir() {
+  return join4(getDataBaseDir(), ".zcode");
+}
+function getAppConfigDir() {
+  return join4(getZCodeDataRootDir(), "v2");
+}
+
+// packages/services/src/credential/credentialService.ts
 var logger = createServiceLogger("credentialService");
 function getCredentialsDir() {
   return getAppConfigDir();
 }
 function getCredentialsFile() {
-  return join8(getCredentialsDir(), "credentials.json");
+  return join5(getCredentialsDir(), "credentials.json");
 }
-function getErrorCode4(error62) {
+function getErrorCode3(error62) {
   if (typeof error62 !== "object" || error62 === null || !("code" in error62)) {
     return void 0;
   }
@@ -39812,7 +35688,7 @@ async function readAllUnchecked(credentialsFile, preserveCorrupt) {
   try {
     raw = await readFile4(credentialsFile);
   } catch (error62) {
-    if (getErrorCode4(error62) === "ENOENT") {
+    if (getErrorCode3(error62) === "ENOENT") {
       return {};
     }
     throw new Error(`Unable to read ZCode credentials: ${credentialsFile}`, { cause: error62 });
@@ -39874,7 +35750,6 @@ function createCredentialService(dependencies = {}) {
     });
   };
   return {
-    getCredentialsFilePath: () => getCredentialsFile(),
     captureRecoveryGuard: () => captureCredentialFileGuard(getCredentialsFile()),
     async inspectStore() {
       const file2 = getCredentialsFile();
@@ -39883,7 +35758,7 @@ function createCredentialService(dependencies = {}) {
         try {
           raw = await readFile4(file2);
         } catch (error62) {
-          if (getErrorCode4(error62) === "ENOENT") return { status: "healthy" };
+          if (getErrorCode3(error62) === "ENOENT") return { status: "healthy" };
           throw error62;
         }
         return isCorruptRecord(raw) ? { status: "corrupt", fingerprint: fingerprint(raw) } : { status: "healthy" };
@@ -39899,19 +35774,19 @@ function createCredentialService(dependencies = {}) {
         try {
           raw = await readFile4(file2);
         } catch (error62) {
-          if (getErrorCode4(error62) === "ENOENT") return { status: "changed" };
+          if (getErrorCode3(error62) === "ENOENT") return { status: "changed" };
           throw error62;
         }
         if (fingerprint(raw) !== expected || !isCorruptRecord(raw))
           return { status: "changed" };
         let backupPath = await backupCorruptFile(file2);
         if (!(await readFile4(backupPath)).equals(raw)) {
-          backupPath = `${file2}.corrupt-${fingerprint(raw).slice(0, 24)}.${randomUUID4()}.bak`;
+          backupPath = `${file2}.corrupt-${fingerprint(raw).slice(0, 24)}.${randomUUID()}.bak`;
           await writeFile4(backupPath, raw, { flag: "wx", mode: 384 });
           if (!(await readFile4(backupPath)).equals(raw))
             throw new Error("Credential backup verification failed");
         }
-        await atomicWritePrivateTextFile(`${file2}.recovery-generation`, randomUUID4());
+        await atomicWritePrivateTextFile(`${file2}.recovery-generation`, randomUUID());
         await atomicWritePrivateTextFile(file2, "{}\n");
         logger.info(void 0, "corrupt credential store recovered after confirmation", {
           backupPath
@@ -40133,9 +36008,141 @@ function createCredentialService(dependencies = {}) {
   };
 }
 
+// packages/services/src/providers/api/apiJson.ts
+var DIAGNOSTIC_RESPONSE_HEADER_NAMES = [
+  "x-request-id",
+  "x-trace-id",
+  "x-span-id",
+  "retry-after"
+];
+function resolveMethod(init) {
+  return (init?.method ?? "GET").toUpperCase();
+}
+function resolveUrl(input2) {
+  return typeof input2 === "string" ? input2 : input2.toString();
+}
+function readDiagnosticResponseHeaders(headers) {
+  const responseHeaders = {};
+  for (const name of DIAGNOSTIC_RESPONSE_HEADER_NAMES) {
+    const value2 = headers.get(name)?.trim();
+    if (value2) {
+      responseHeaders[name] = value2;
+    }
+  }
+  return Object.keys(responseHeaders).length > 0 ? responseHeaders : void 0;
+}
+async function readResponseMessage(response2) {
+  try {
+    const body = await response2.text();
+    const trimmed = body.trim();
+    if (!trimmed) {
+      return `HTTP ${response2.status}`;
+    }
+    try {
+      const parsed = JSON.parse(trimmed);
+      const message = typeof parsed.error === "string" ? parsed.error : typeof parsed.message === "string" ? parsed.message : typeof parsed.msg === "string" ? parsed.msg : typeof parsed.detail === "string" ? parsed.detail : "";
+      return message.trim() || `HTTP ${response2.status}`;
+    } catch {
+      return trimmed;
+    }
+  } catch {
+    return `HTTP ${response2.status}`;
+  }
+}
+async function readApiJson(apiClient, input2, init) {
+  const url4 = resolveUrl(input2);
+  const method2 = resolveMethod(init);
+  const response2 = await apiClient.request(input2, init);
+  if (!response2.ok) {
+    const message = await readResponseMessage(response2);
+    throw new ApiError({
+      message,
+      url: url4,
+      method: method2,
+      status: response2.status,
+      responseHeaders: readDiagnosticResponseHeaders(response2.headers)
+    });
+  }
+  try {
+    return await response2.json();
+  } catch (error62) {
+    throw new ApiError({
+      message: error62 instanceof Error ? error62.message : "Invalid JSON response",
+      url: url4,
+      method: method2,
+      status: response2.status,
+      responseHeaders: readDiagnosticResponseHeaders(response2.headers),
+      cause: error62
+    });
+  }
+}
+
+// packages/services/src/model-provider/accountProviderApiClient.ts
+function isSuccessfulRemoteCode(code) {
+  if (code === null || code === void 0) {
+    return true;
+  }
+  if (typeof code === "number") {
+    return code === 0 || code === 200;
+  }
+  if (typeof code === "string") {
+    return code === "0" || code === "200";
+  }
+  return false;
+}
+var AccountProviderApiClient = class {
+  constructor(apiClient) {
+    this.apiClient = apiClient;
+  }
+  apiClient;
+  async fetchRemoteData(url4, init) {
+    const payload = await readApiJson(this.apiClient, url4, init);
+    if (!isSuccessfulRemoteCode(payload.code)) {
+      return null;
+    }
+    return payload.data ?? null;
+  }
+};
+
+// packages/services/src/providers/api/apiEndpoints.ts
+var ZCODE_CLIENT_SCENES_URL = buildRuntimeZCodeApiUrl(
+  process.env,
+  "/api/v1/client/scenes"
+);
+var ZAI_API_HOST = resolveZaiBusinessBaseUrl(process.env);
+
+// packages/services/src/model-provider/accountProviderApiKeyResolver.ts
+var log = createServiceLogger("account-project-token-resolver");
+var AccountProviderApiKeyResolver = class {
+  tokenClient;
+  constructor(fetchRemoteData, tokenClient) {
+    this.tokenClient = tokenClient ?? new ProjectAccessTokenClient({
+      request: async (url4, init) => ({
+        code: 200,
+        data: await fetchRemoteData(url4, init)
+      }),
+      observe: (event) => log.warn(void 0, "\u9879\u76EE Token \u83B7\u53D6\u5931\u8D25", event)
+    });
+  }
+  async resolveProviderApiKey(...args) {
+    return (await this.resolveProviderMaterial(...args)).token;
+  }
+  async resolveProviderMaterial(provider, accessToken, accountIdentity = provider, rejectedProjectTokenFingerprint) {
+    const family = provider === ZAI_PROVIDER_ID ? "zai" : "bigmodel";
+    const result = await this.tokenClient.resolve({
+      origin: family === "zai" ? ZAI_API_HOST : resolveBigModelApiOrigin(process.env),
+      family,
+      loginToken: accessToken,
+      accountId: accountIdentity,
+      rejectedProjectTokenFingerprint
+    });
+    return result;
+  }
+};
+
 // packages/services/src/oauth/repo/oauthCredentialRepo.ts
 import { Buffer as Buffer2 } from "node:buffer";
-import { randomUUID as randomUUID5 } from "node:crypto";
+import { randomUUID as randomUUID2 } from "node:crypto";
 var ACTIVE_PROVIDER_KEY = "oauth:active_provider";
 var LOGIN_ATTRIBUTION_KEY = "oauth:login_attribution";
 var ZCODE_JWT_TOKEN_KEY = "zcodejwttoken";
@@ -40286,7 +36293,7 @@ var OAuthCredentialRepo = class {
             await this.localStore.deleteUnreadable([OAUTH_LINKED_BIGMODEL_KEY], {
               expected: snapshot,
               removeKeys: [OAUTH_LINKED_BIGMODEL_KEY],
-              replacements: { [SESSION_REVISION_KEY]: randomUUID5() }
+              replacements: { [SESSION_REVISION_KEY]: randomUUID2() }
             });
           }
         }
@@ -40418,7 +36425,7 @@ var OAuthCredentialRepo = class {
     );
     Object.assign(changes, {
       [ACTIVE_PROVIDER_KEY]: provider,
-      [SESSION_REVISION_KEY]: randomUUID5(),
+      [SESSION_REVISION_KEY]: randomUUID2(),
       [ZCODE_JWT_TOKEN_KEY]: tokenSet.zcodeJwtToken ?? null,
       [OAUTH_LINKED_BIGMODEL_KEY]: tokenSet.linkedBigModel ? JSON.stringify({ userId: profile.id, ...tokenSet.linkedBigModel }) : null,
       [accessTokenKey(provider)]: tokenSet.accessToken,
@@ -40433,7 +36440,7 @@ var OAuthCredentialRepo = class {
     return this.localStore.updateMany(
       {
         ...Object.fromEntries(this.sessionKeys().map((key) => [key, null])),
-        [SESSION_REVISION_KEY]: randomUUID5()
+        [SESSION_REVISION_KEY]: randomUUID2()
       },
       { expected }
     );
@@ -40465,7 +36472,7 @@ var OAuthCredentialRepo = class {
     if (!await this.localStore.updateMany(
       {
         [ACTIVE_PROVIDER_KEY]: provider,
-        [SESSION_REVISION_KEY]: randomUUID5()
+        [SESSION_REVISION_KEY]: randomUUID2()
       },
       { expected: snapshot }
     ))
@@ -40558,7 +36565,7 @@ var OAuthCredentialRepo = class {
         [accessTokenKey(provider)]: tokenSet.accessToken,
         [refreshTokenKey(provider)]: tokenSet.refreshToken ?? null,
         [ZCODE_JWT_TOKEN_KEY]: tokenSet.zcodeJwtToken ?? null,
-        [SESSION_REVISION_KEY]: randomUUID5()
+        [SESSION_REVISION_KEY]: randomUUID2()
       },
       { expected: expected ?? await this.loadSessionSnapshot() }
     );
@@ -40598,7 +36605,7 @@ var OAuthCredentialRepo = class {
     return this.localStore.updateMany(
       {
         [userInfoKey(provider)]: JSON.stringify(persistProfile),
-        [SESSION_REVISION_KEY]: randomUUID5()
+        [SESSION_REVISION_KEY]: randomUUID2()
       },
       { expected: expected ?? await this.loadSessionSnapshot() }
     );
@@ -40608,7 +36615,7 @@ var OAuthCredentialRepo = class {
     if (!await this.localStore.updateMany(
       {
         [userInfoKey(provider)]: null,
-        [SESSION_REVISION_KEY]: randomUUID5()
+        [SESSION_REVISION_KEY]: randomUUID2()
       },
       { expected: snapshot }
     ))
@@ -40625,7 +36632,7 @@ var OAuthCredentialRepo = class {
         [accessTokenKey(provider)]: null,
         [refreshTokenKey(provider)]: null,
         [userInfoKey(provider)]: null,
-        [SESSION_REVISION_KEY]: randomUUID5()
+        [SESSION_REVISION_KEY]: randomUUID2()
       },
       { expected: snapshot }
     );
@@ -40638,7 +36645,7 @@ var OAuthCredentialRepo = class {
     const deleted = await this.localStore.deleteUnreadable(keys, {
       expected,
       removeKeys: this.sessionKeys(),
-      replacements: { [SESSION_REVISION_KEY]: randomUUID5() }
+      replacements: { [SESSION_REVISION_KEY]: randomUUID2() }
     });
     if (!deleted) return;
     try {
@@ -40649,77 +36656,573 @@ var OAuthCredentialRepo = class {
   }
 };
 
-// packages/services/src/providers/api/apiJson.ts
-var DIAGNOSTIC_RESPONSE_HEADER_NAMES = [
-  "x-request-id",
-  "x-trace-id",
-  "x-span-id",
-  "retry-after"
-];
-function resolveMethod(init) {
+// packages/services/src/model-provider/accountProviderCredentialService.ts
+var log3 = createServiceLogger("account-project-token");
+function createAccountProviderCredentialService(options2) {
+  const pending = /* @__PURE__ */ new Map();
+  return {
+    async loadCodingPlanApiKey(input2) {
+      return (await this.loadCodingPlanMaterial(input2))?.token ?? null;
+    },
+    async loadCodingPlanMaterial(input2) {
+      const account = await options2.loadOAuthAccountMaterial(input2.family);
+      if (!account || account.accountIdentity !== input2.accountIdentity) return null;
+      const key = JSON.stringify([input2.family, account, input2.rejectedProjectTokenFingerprint]);
+      const existing = pending.get(key);
+      if (existing) return existing;
+      const operation = (async () => {
+        const token2 = await options2.resolveProviderMaterial(
+          input2.family,
+          account.accessToken,
+          account.accountIdentity,
+          input2.rejectedProjectTokenFingerprint
+        );
+        if (!isSameOAuthAccountMaterial(account, await options2.loadOAuthAccountMaterial(input2.family))) {
+          log3.warn(void 0, "\u9879\u76EE Token \u7B7E\u53D1\u671F\u95F4\u767B\u5F55\u6001\u53D8\u5316\uFF0C\u4E22\u5F03\u7ED3\u679C", {
+            family: input2.family
+          });
+          throw new Error("project_token_scope_invalidated");
+        }
+        return token2 ?? null;
+      })();
+      pending.set(key, operation);
+      try {
+        return await operation;
+      } finally {
+        if (pending.get(key) === operation) pending.delete(key);
+      }
+    }
+  };
+}
+
+// packages/services/src/model-provider/accountProviderRequestAuthService.ts
+import { createHash as createHash4 } from "node:crypto";
+var AccountRequestCredentialUnavailableError = class extends Error {
+  constructor(providerId) {
+    super(`Account request credential is unavailable: ${providerId}`);
+    this.providerId = providerId;
+    this.name = "AccountRequestCredentialUnavailableError";
+  }
+  providerId;
+};
+var AccountProviderRequestAuthService = class {
+  #options;
+  constructor(options2) {
+    this.#options = options2;
+  }
+  resolveAccessCurrent(access) {
+    return this.#options.resolveCurrentAccountAccess(access);
+  }
+  async resolveCurrent(input2) {
+    const providerId = input2.providerId.trim();
+    const access = await this.#resolveAccess(input2.accountAccess);
+    if (!access) throw new AccountRequestCredentialUnavailableError(providerId);
+    if (access.planKind === "start-plan") {
+      return {
+        apiKey: requireApiKey(await this.#options.loadStartPlanZcodeJwt(access.family), providerId)
+      };
+    }
+    const scoped = input2.reason !== "usage" || input2.expectedAccountScope !== void 0;
+    if (input2.rejectedProjectTokenFingerprint && !input2.expectedAccountScope)
+      throw new Error("project_token_scope_invalidated");
+    const accountScope = scoped ? await this.#scope(access) : void 0;
+    if (input2.expectedAccountScope !== void 0 && input2.expectedAccountScope !== accountScope)
+      throw new Error("project_token_scope_invalidated");
+    const material = access.planKind === "individual-coding-plan" ? await this.#options.loadIndividualPlanMaterial(
+      providerId,
+      access.family,
+      input2.rejectedProjectTokenFingerprint
+    ) : await this.#options.resolveTeamPlanMaterial(
+      access,
+      input2.rejectedProjectTokenFingerprint
+    );
+    if (scoped) {
+      const latest = await this.#resolveAccess(input2.accountAccess);
+      if (!latest || accountScope !== await this.#scope(latest))
+        throw new Error("project_token_scope_invalidated");
+    }
+    return {
+      apiKey: requireApiKey(material?.token, providerId),
+      apiKeyId: material?.apiKeyId,
+      ...accountScope ? { accountScope } : {}
+    };
+  }
+  async #scope(access) {
+    const login = await this.#options.loadOAuthTokenSet(resolveOAuthProviderId(access.family));
+    if (!login?.accessToken?.trim())
+      throw new AccountRequestCredentialUnavailableError(access.family);
+    return createHash4("sha256").update(
+      JSON.stringify([
+        access.family,
+        access.planKind,
+        access.planKind === "team-coding-plan" ? [access.organizationId, access.projectId, access.productId] : null,
+        login.accessToken.trim(),
+        login.zcodeJwtToken?.trim() ?? null,
+        login.sessionRevision ?? null,
+        login.accountIdentity ?? null,
+        login.zcodeUserId ?? null
+      ])
+    ).digest("hex");
+  }
+  async assertCurrent(input2) {
+    if (!await this.#resolveAccess(input2.accountAccess)) {
+      throw new AccountRequestCredentialUnavailableError(input2.providerId);
+    }
+  }
+  #resolveAccess(access) {
+    return "mode" in access ? this.#options.resolveCurrentAccountAccess(access) : Promise.resolve(access);
+  }
+};
+function resolveOAuthProviderId(family) {
+  return family === "zai" ? ZAI_PROVIDER_ID : BIGMODEL_PROVIDER_ID;
+}
+function requireApiKey(value2, providerId) {
+  const normalized = value2?.trim() ?? "";
+  if (!normalized) {
+    throw new AccountRequestCredentialUnavailableError(providerId);
+  }
+  return normalized;
+}
+function createAccountProviderRequestAuthService(options2) {
+  return new AccountProviderRequestAuthService(options2);
+}
+
+// packages/services/src/model-provider/accountProjectTokenClient.ts
+var PROJECT_TOKEN_REQUEST_TIMEOUT_MS = 15e3;
+var log4 = createServiceLogger("project-access-token");
+function createAccountProjectTokenClient(apiClient, credentialService) {
+  return new ProjectAccessTokenClient({
+    request: async (url4, init) => {
+      try {
+        return await readApiJson(apiClient, url4, {
+          ...init,
+          timeoutMs: PROJECT_TOKEN_REQUEST_TIMEOUT_MS
+        });
+      } catch (error62) {
+        if (error62 instanceof ApiError && error62.status === 404) return { code: 404 };
+        if (error62 instanceof ApiError) {
+          const status = error62.status;
+          if (status === 429 || status !== void 0 && status >= 500 && status < 600)
+            throw new ProjectAccessTokenTransientError({
+              kind: "http",
+              status,
+              ...status === 429 ? {
+                retryAfterMs: projectAccessTokenRetryAfterMs(
+                  error62.responseHeaders?.["retry-after"]
+                )
+              } : {}
+            });
+          if (status === void 0 && error62.cause instanceof TypeError)
+            throw new ProjectAccessTokenTransientError({ kind: "network" });
+          if (status === void 0 && error62.cause instanceof DOMException && ["AbortError", "TimeoutError"].includes(error62.cause.name))
+            throw new ProjectAccessTokenTransientError({ kind: "timeout" });
+          if (status !== void 0 && status >= 200 && status < 300)
+            throw new ProjectAccessTokenError("project_token_invalid_response");
+          if (status !== void 0) throw new ProjectAccessTokenHttpStatusError(status);
+        }
+        throw error62;
+      }
+    },
+    locationStore: credentialService,
+    observe: (event) => log4.warn(
+      void 0,
+      event.code === "project_token_request_retry" ? "\u9879\u76EE Token \u7B7E\u53D1\u4E34\u65F6\u5931\u8D25\uFF0C\u51C6\u5907\u91CD\u8BD5" : event.code === "project_token_refresh_deferred" ? "\u9879\u76EE Token \u63D0\u524D\u5237\u65B0\u6682\u7F13" : event.code === "project_token_location_unreadable" ? "\u9879\u76EE\u5B9A\u4F4D\u7F13\u5B58\u65E0\u6CD5\u89E3\u5BC6\uFF0C\u51C6\u5907\u5C40\u90E8\u6062\u590D" : event.code === "project_token_location_recovery" ? "\u9879\u76EE\u5B9A\u4F4D\u7F13\u5B58\u590D\u6838\u5B8C\u6210" : "\u9879\u76EE Token \u83B7\u53D6\u5931\u8D25",
+      event
+    )
+  });
+}
+
+// packages/services/src/providers/sourceHeaders.ts
+import { readFileSync } from "node:fs";
+import { version as readOsVersion } from "node:os";
+import { join as join6 } from "node:path";
+var cachedDeviceMid = null;
+function normalizePrintableHeaderValue(value2) {
+  return normalizeZCodeSourceHeaderValue(value2);
+}
+function resolveClientLanguage() {
+  return normalizePrintableHeaderValue(Intl.DateTimeFormat().resolvedOptions().locale) ?? "unknown";
+}
+function resolveClientTimezone() {
+  return normalizePrintableHeaderValue(Intl.DateTimeFormat().resolvedOptions().timeZone) ?? "unknown";
+}
+function readExistingDeviceMid() {
+  const stateFile = join6(getAppConfigDir(), "telemetry-state.json");
+  if (cachedDeviceMid?.stateFile === stateFile) {
+    return cachedDeviceMid.value;
+  }
+  try {
+    const raw = readFileSync(stateFile, "utf-8");
+    const parsed = JSON.parse(raw);
+    const deviceMid = normalizePrintableHeaderValue(
+      typeof parsed.deviceMid === "string" ? parsed.deviceMid : void 0
+    );
+    if (!deviceMid) {
+      return void 0;
+    }
+    cachedDeviceMid = { stateFile, value: deviceMid };
+    return deviceMid;
+  } catch {
+    return void 0;
+  }
+}
+function buildZCodeSourceHeaders(options2 = {}) {
+  const platform2 = options2.platform ?? process.platform;
+  const arch = options2.arch ?? process.arch;
+  const appVersion = normalizePrintableHeaderValue(options2.appVersion ?? ZCODE_VERSION);
+  const releaseChannel = normalizePrintableHeaderValue(options2.releaseChannel ?? ZCODE_ENV);
+  const clientLanguage = normalizePrintableHeaderValue(options2.clientLanguage) ?? resolveClientLanguage();
+  const clientTimezone = normalizePrintableHeaderValue(options2.clientTimezone) ?? resolveClientTimezone();
+  const osVersion = normalizePrintableHeaderValue(options2.osVersion ?? readOsVersion());
+  const deviceMid = readExistingDeviceMid();
+  return buildZCodeSourceHeadersFromContext({
+    appVersion,
+    arch,
+    clientLanguage,
+    clientTimezone,
+    deviceMid,
+    osVersion,
+    platform: platform2,
+    releaseChannel,
+    sourceTitle: "electron"
+  });
+}
+
+// packages/services/src/providers/api/requestIdHeaders.ts
+var REQUEST_ID_HEADER_NAME = "x-request-id";
+function withRequestIdHeader(headers) {
+  const next = new Headers(headers);
+  if (!next.has(REQUEST_ID_HEADER_NAME)) {
+    next.set(REQUEST_ID_HEADER_NAME, createUuid());
+  }
+  return next;
+}
+
+// packages/services/src/providers/api/nodeApiClient.ts
+var log5 = createServiceLogger("node-api-client");
+var DEFAULT_BUSINESS_UNAUTHORIZED_OBSERVATION_TIMEOUT_MS = 1e3;
+var MAX_BUSINESS_UNAUTHORIZED_OBSERVATION_BYTES = 64 * 1024;
+function waitWithAbort(promise2, signal) {
+  if (!signal) return promise2;
+  return new Promise((resolve2, reject) => {
+    const abort = () => reject(new DOMException("The operation was aborted.", "AbortError"));
+    const cleanup = () => signal.removeEventListener("abort", abort);
+    signal.addEventListener("abort", abort, { once: true });
+    promise2.then(
+      (value2) => {
+        cleanup();
+        resolve2(value2);
+      },
+      (error62) => {
+        cleanup();
+        reject(error62);
+      }
+    );
+    if (signal.aborted) {
+      cleanup();
+      abort();
+    }
+  });
+}
+function readChunkWithinTimeout(reader, timeoutMs, signal) {
+  let timer;
+  const timeout = new Promise((resolve2) => {
+    timer = setTimeout(() => resolve2(null), timeoutMs);
+  });
+  return waitWithAbort(Promise.race([reader.read(), timeout]), signal).catch(() => null).finally(() => clearTimeout(timer));
+}
+function resolveMethod2(init) {
   return (init?.method ?? "GET").toUpperCase();
 }
-function resolveUrl(input2) {
+function resolveUrl2(input2) {
   return typeof input2 === "string" ? input2 : input2.toString();
 }
-function readDiagnosticResponseHeaders(headers) {
-  const responseHeaders = {};
-  for (const name of DIAGNOSTIC_RESPONSE_HEADER_NAMES) {
-    const value2 = headers.get(name)?.trim();
-    if (value2) {
-      responseHeaders[name] = value2;
-    }
-  }
-  return Object.keys(responseHeaders).length > 0 ? responseHeaders : void 0;
-}
-async function readResponseMessage(response2) {
+async function readBusinessAuthenticationResponse(response2, timeoutMs, signal) {
+  if (response2.headers.get("content-type")?.toLowerCase().startsWith("text/event-stream"))
+    return null;
+  let reader;
   try {
-    const body = await response2.text();
-    const trimmed = body.trim();
-    if (!trimmed) {
-      return `HTTP ${response2.status}`;
+    if (signal?.aborted) return null;
+    const body = response2.clone().body;
+    if (!body) return "empty";
+    reader = body.getReader();
+    const decoder = new TextDecoder();
+    const deadline = Date.now() + timeoutMs;
+    let bytes = 0;
+    let text3 = "";
+    while (true) {
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) return null;
+      const result = await readChunkWithinTimeout(reader, remainingMs, signal);
+      if (!result) return null;
+      if (result.done) break;
+      if (!result.value) return null;
+      bytes += result.value.byteLength;
+      if (bytes > MAX_BUSINESS_UNAUTHORIZED_OBSERVATION_BYTES) return null;
+      text3 += decoder.decode(result.value, { stream: true });
     }
-    try {
-      const parsed = JSON.parse(trimmed);
-      const message = typeof parsed.error === "string" ? parsed.error : typeof parsed.message === "string" ? parsed.message : typeof parsed.msg === "string" ? parsed.msg : typeof parsed.detail === "string" ? parsed.detail : "";
-      return message.trim() || `HTTP ${response2.status}`;
-    } catch {
-      return trimmed;
-    }
+    text3 += decoder.decode();
+    if (bytes === 0) return "empty";
+    const payload = JSON.parse(text3);
+    return typeof payload === "object" && payload !== null && "code" in payload && payload.code === 401 ? "unauthorized" : null;
   } catch {
-    return `HTTP ${response2.status}`;
+    return null;
+  } finally {
+    if (reader) void reader.cancel().catch(() => void 0);
   }
 }
-async function readApiJson(apiClient, input2, init) {
-  const url4 = resolveUrl(input2);
-  const method2 = resolveMethod(init);
-  const response2 = await apiClient.request(input2, init);
-  if (!response2.ok) {
-    const message = await readResponseMessage(response2);
-    throw new ApiError({
-      message,
-      url: url4,
-      method: method2,
-      status: response2.status,
-      responseHeaders: readDiagnosticResponseHeaders(response2.headers)
-    });
+function readHeaderKeys(headers) {
+  if (!headers) {
+    return [];
   }
+  return [...new Headers(headers).keys()].sort();
+}
+function isRequestForEndpoint(input2, endpointOrigin) {
   try {
-    return await response2.json();
-  } catch (error62) {
-    throw new ApiError({
-      message: error62 instanceof Error ? error62.message : "Invalid JSON response",
-      url: url4,
-      method: method2,
-      status: response2.status,
-      responseHeaders: readDiagnosticResponseHeaders(response2.headers),
-      cause: error62
+    return new URL(resolveUrl2(input2)).origin === normalizeZCodeEndpointOrigin(endpointOrigin);
+  } catch {
+    return false;
+  }
+}
+function withZCodeEndpointHeaders(headers, endpointOrigin, clientLanguage) {
+  const next = new Headers(buildZCodeSourceHeaders({ clientLanguage }));
+  if (headers) {
+    new Headers(headers).forEach((value2, key) => {
+      next.set(key, value2);
     });
   }
+  if (next.get("HTTP-Referer") === DEFAULT_ZCODE_ENDPOINT_ORIGIN) {
+    next.set("HTTP-Referer", endpointOrigin);
+  }
+  return next;
+}
+function resolveRequestHeaders(requestInput, headers, endpointOrigin, clientLanguage) {
+  if (!isRequestForEndpoint(requestInput, endpointOrigin)) {
+    return headers;
+  }
+  return withZCodeEndpointHeaders(headers, endpointOrigin, clientLanguage);
+}
+var NodeApiClient = class {
+  fetchImpl;
+  resolveAssociatedCredentialRefresh;
+  resolveZCodeEndpointOrigin;
+  resolveClientLanguage;
+  onZcodeJwtInvalid;
+  isZcodeJwtRequest;
+  isBusinessUnauthorizedRequest;
+  businessUnauthorizedObservationTimeoutMs;
+  resolveBusinessCredentialValidationRequest;
+  businessValidations = /* @__PURE__ */ new Map();
+  constructor(options2 = {}) {
+    this.fetchImpl = options2.fetchImpl;
+    this.resolveAssociatedCredentialRefresh = options2.resolveAssociatedCredentialRefresh;
+    this.onZcodeJwtInvalid = options2.onZcodeJwtInvalid;
+    this.isZcodeJwtRequest = options2.isZcodeJwtRequest;
+    this.isBusinessUnauthorizedRequest = options2.isBusinessUnauthorizedRequest;
+    this.resolveBusinessCredentialValidationRequest = options2.resolveBusinessCredentialValidationRequest;
+    this.businessUnauthorizedObservationTimeoutMs = options2.businessUnauthorizedObservationTimeoutMs ?? DEFAULT_BUSINESS_UNAUTHORIZED_OBSERVATION_TIMEOUT_MS;
+    this.resolveZCodeEndpointOrigin = options2.resolveZCodeEndpointOrigin;
+    this.resolveClientLanguage = options2.resolveClientLanguage;
+  }
+  async confirmBusinessCredentialInvalid(input2, headers, response2, evidence, signal) {
+    if (signal?.aborted) return false;
+    const check2 = await this.resolveBusinessCredentialValidationRequest?.(input2, headers);
+    if (!check2 || signal?.aborted) return false;
+    const requestUrl = new URL(input2), identityUrl = new URL(check2.url);
+    if (requestUrl.origin === identityUrl.origin && requestUrl.pathname === identityUrl.pathname)
+      return response2.status === 200 && evidence === "empty" && check2.emptyBodyMeansInvalid;
+    const key = JSON.stringify([check2.url, check2.authorization]);
+    let entry = this.businessValidations.get(key);
+    if (!entry) {
+      const controller = new AbortController();
+      const validationSignal = AbortSignal.any([
+        controller.signal,
+        AbortSignal.timeout(this.businessUnauthorizedObservationTimeoutMs)
+      ]);
+      const validation = Promise.resolve().then(async () => {
+        try {
+          const identity2 = await waitWithAbort(
+            (this.fetchImpl ?? globalThis.fetch)(check2.url, {
+              method: "GET",
+              redirect: "error",
+              headers: withRequestIdHeader({
+                Authorization: check2.authorization,
+                "Content-Type": "application/json"
+              }),
+              signal: validationSignal
+            }),
+            validationSignal
+          );
+          if (identity2.status === 401) return true;
+          if (identity2.status !== 200 && identity2.status !== 403) return false;
+          const result = await readBusinessAuthenticationResponse(
+            identity2,
+            this.businessUnauthorizedObservationTimeoutMs,
+            validationSignal
+          );
+          return result === "unauthorized" || identity2.status === 200 && result === "empty" && check2.emptyBodyMeansInvalid;
+        } catch {
+          return false;
+        }
+      }).finally(() => {
+        if (this.businessValidations.get(key)?.promise === validation)
+          this.businessValidations.delete(key);
+      });
+      entry = { promise: validation, controller, subscribers: 0 };
+      this.businessValidations.set(key, entry);
+    }
+    entry.subscribers += 1;
+    try {
+      return await waitWithAbort(entry.promise, signal);
+    } finally {
+      entry.subscribers -= 1;
+      if (entry.subscribers === 0) {
+        entry.controller.abort();
+        if (this.businessValidations.get(key) === entry) this.businessValidations.delete(key);
+      }
+    }
+  }
+  async request(input2, init) {
+    const endpointOrigin = this.resolveZCodeEndpointOrigin ? await this.resolveZCodeEndpointOrigin() : void 0;
+    const activeEndpointOrigin = endpointOrigin ?? DEFAULT_ZCODE_ENDPOINT_ORIGIN;
+    const requestInput = rewriteZCodeEndpointUrl(input2, activeEndpointOrigin);
+    const url4 = resolveUrl2(requestInput);
+    const method2 = resolveMethod2(init);
+    const timeoutMs = init?.timeoutMs;
+    const controller = timeoutMs && timeoutMs > 0 ? new AbortController() : null;
+    let didTimeout = false;
+    const timer = controller && timeoutMs ? setTimeout(() => {
+      didTimeout = true;
+      controller.abort();
+    }, timeoutMs) : null;
+    try {
+      const signal = controller ? init?.signal ? AbortSignal.any([init.signal, controller.signal]) : controller.signal : init?.signal;
+      if (signal?.aborted) {
+        throw new DOMException("The operation was aborted.", "AbortError");
+      }
+      const fetchImpl = this.fetchImpl ?? globalThis.fetch;
+      const requestHeaders = withRequestIdHeader(
+        resolveRequestHeaders(
+          requestInput,
+          init?.headers,
+          activeEndpointOrigin,
+          this.resolveClientLanguage?.()
+        )
+      );
+      if (isRequestForEndpoint(requestInput, activeEndpointOrigin)) {
+        log5.debug(void 0, "zcode endpoint request headers prepared", {
+          headerKeys: readHeaderKeys(requestHeaders),
+          method: method2,
+          url: url4
+        });
+      }
+      const { authFailurePolicy, ...fetchInit } = init ?? {};
+      let refreshAssociatedCredential = null;
+      if (authFailurePolicy !== "caller-handled" && this.resolveAssociatedCredentialRefresh) {
+        try {
+          refreshAssociatedCredential = await waitWithAbort(
+            this.resolveAssociatedCredentialRefresh(requestInput, new Headers(requestHeaders)),
+            signal
+          );
+        } catch {
+          if (signal?.aborted) throw new DOMException("The operation was aborted.", "AbortError");
+          log5.debug(void 0, "associated OAuth request classification did not complete");
+        }
+      }
+      const response2 = await fetchImpl(requestInput, {
+        ...fetchInit,
+        headers: requestHeaders,
+        ...signal ? { signal } : {}
+      });
+      if (refreshAssociatedCredential && [200, 401, 403].includes(response2.status)) {
+        const evidence = response2.status === 401 ? Promise.resolve("unauthorized") : readBusinessAuthenticationResponse(
+          response2,
+          this.businessUnauthorizedObservationTimeoutMs,
+          signal
+        );
+        void evidence.then(async (result) => {
+          if (result === "unauthorized" && !signal?.aborted) {
+            await refreshAssociatedCredential();
+            log5.info(void 0, "associated OAuth rejection recovery completed");
+          }
+        }).catch(() => {
+          log5.debug(void 0, "associated OAuth profile refresh did not complete");
+        });
+      }
+      if (authFailurePolicy !== "caller-handled" && [200, 401, 403].includes(response2.status) && this.onZcodeJwtInvalid) {
+        try {
+          await waitWithAbort(
+            (async () => {
+              const requestHeadersForObservation = new Headers(requestHeaders);
+              const isCurrentZCodeJwtRequest = await this.isZcodeJwtRequest?.(
+                requestInput,
+                requestHeadersForObservation
+              );
+              if (isCurrentZCodeJwtRequest) {
+                let invalid = response2.status === 401;
+                if (!invalid && await this.isBusinessUnauthorizedRequest?.(
+                  requestInput,
+                  requestHeadersForObservation
+                )) {
+                  const evidence = await readBusinessAuthenticationResponse(
+                    response2,
+                    this.businessUnauthorizedObservationTimeoutMs,
+                    signal
+                  );
+                  invalid = evidence === "unauthorized";
+                  if (!invalid && (response2.status === 403 || response2.status === 200 && evidence === "empty"))
+                    invalid = await this.confirmBusinessCredentialInvalid(
+                      requestInput,
+                      requestHeadersForObservation,
+                      response2,
+                      evidence,
+                      signal
+                    );
+                }
+                if (invalid && !signal?.aborted)
+                  this.onZcodeJwtInvalid?.(requestInput, requestHeadersForObservation);
+              }
+            })(),
+            signal
+          );
+        } catch (error62) {
+          if (signal?.aborted) throw new DOMException("The operation was aborted.", "AbortError");
+          log5.warn("zcode jwt invalid response observation failed", { error: error62 });
+        }
+      }
+      if (signal?.aborted) throw new DOMException("The operation was aborted.", "AbortError");
+      return response2;
+    } catch (error62) {
+      if (error62 instanceof ApiError) {
+        throw error62;
+      }
+      if (error62 instanceof DOMException && error62.name === "AbortError") {
+        throw new ApiError({
+          message: didTimeout && timeoutMs ? `Request timed out after ${timeoutMs}ms` : error62.message,
+          url: url4,
+          method: method2,
+          cause: error62
+        });
+      }
+      const message = error62 instanceof Error ? error62.message : String(error62);
+      throw new ApiError({
+        message,
+        url: url4,
+        method: method2,
+        cause: error62
+      });
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
+  }
+};
+function createNodeApiClient(options2 = {}) {
+  return new NodeApiClient(options2);
 }
 
 // packages/services/src/oauth/providers/configUtils.ts
-var DESKTOP_OAUTH_CALLBACK_URI = "zcode://oauth/callback";
 function readEnv(env, key) {
   const value2 = env[key];
   if (!value2) {
@@ -40727,22 +37230,6 @@ function readEnv(env, key) {
   }
   const trimmed = value2.trim();
   return trimmed === "" ? void 0 : trimmed;
-}
-function readBoolean(env, key, fallback) {
-  const raw = readEnv(env, key);
-  if (raw == null) {
-    return fallback;
-  }
-  return raw !== "0" && raw.toLowerCase() !== "false";
-}
-function buildZCodeApiUrlFromEnv(env, path) {
-  return buildRuntimeZCodeApiUrl(env, path);
-}
-function buildDesktopOAuthRedirectUriFromEnv(env) {
-  const url4 = new URL("/app/oauth/login", buildRuntimeZCodeEndpointUrls(env).origin);
-  url4.searchParams.set("redirect", DESKTOP_OAUTH_CALLBACK_URI);
-  url4.searchParams.set("app_version", ZCODE_VERSION);
-  return url4.toString();
 }
 
 // packages/services/src/model-provider/zaiStartPlanBilling.ts
@@ -41670,7 +38157,7 @@ async function fetchBigModelSubscriptionSummary(params) {
 }
 
 // packages/services/src/official-mcp/officialMcpCredentials.ts
-var log3 = createServiceLogger("official-mcp");
+var log6 = createServiceLogger("official-mcp");
 function buildOfficialMcpAuthHeaders(snapshot) {
   const headers = {
     [OFFICIAL_MCP_AUTH_HEADER_NAMES.authorization]: `Bearer ${snapshot.jwt}`
@@ -41692,7 +38179,7 @@ function buildOfficialMcpAuthHeaders(snapshot) {
 // packages/services/src/usage-stats/providers/zcodeMcpQuotaProvider.ts
 var MCP_USAGE_PATH = "/api/v1/mcp/usage";
 var REQUEST_TIMEOUT_MS2 = 15e3;
-var log4 = createServiceLogger("usage-stats");
+var log7 = createServiceLogger("usage-stats");
 var mcpUsageTotalSchema = external_exports.object({
   used: external_exports.number().finite(),
   limit: external_exports.number().finite(),
@@ -41773,24 +38260,24 @@ async function fetchMcpQuotaSnapshot(params) {
   try {
     outcome = await params.credentialSource.resolve();
   } catch (error62) {
-    log4.warn(void 0, "\u8BFB\u53D6\u5B98\u65B9 MCP \u989D\u5EA6\u51ED\u8BC1\u5931\u8D25\uFF0C\u8DF3\u8FC7\u8BE5\u989D\u5EA6", {
+    log7.warn(void 0, "\u8BFB\u53D6\u5B98\u65B9 MCP \u989D\u5EA6\u51ED\u8BC1\u5931\u8D25\uFF0C\u8DF3\u8FC7\u8BE5\u989D\u5EA6", {
       error: error62 instanceof Error ? error62.message : String(error62)
     });
     return null;
   }
   if (!outcome.ok) {
-    log4.info(void 0, "\u5B98\u65B9 MCP \u989D\u5EA6\u4E0D\u53EF\u7528\uFF0C\u8DF3\u8FC7\u8BF7\u6C42", { reason: outcome.reason });
+    log7.info(void 0, "\u5B98\u65B9 MCP \u989D\u5EA6\u4E0D\u53EF\u7528\uFF0C\u8DF3\u8FC7\u8BF7\u6C42", { reason: outcome.reason });
     return null;
   }
   const scope = readScopeFromCredentialSnapshot(outcome.snapshot);
   if (!scope) {
-    log4.info(void 0, "\u5B98\u65B9 MCP \u989D\u5EA6\u7F3A\u5C11\u53EF\u7CBE\u786E\u5F52\u5C5E\u7684\u5957\u9910 scope\uFF0C\u8DF3\u8FC7\u8BF7\u6C42", {
+    log7.info(void 0, "\u5B98\u65B9 MCP \u989D\u5EA6\u7F3A\u5C11\u53EF\u7CBE\u786E\u5F52\u5C5E\u7684\u5957\u9910 scope\uFF0C\u8DF3\u8FC7\u8BF7\u6C42", {
       credentialFamily: outcome.snapshot.providerFamily
     });
     return null;
   }
   if (!matchesMcpQuotaScope(scope, params.requestScope)) {
-    log4.info(void 0, "\u5B98\u65B9 MCP \u989D\u5EA6\u5F52\u5C5E\u4E0E\u672C\u6B21\u67E5\u8BE2\u4E0D\u4E00\u81F4\uFF0C\u8DF3\u8FC7\u8BF7\u6C42", {
+    log7.info(void 0, "\u5B98\u65B9 MCP \u989D\u5EA6\u5F52\u5C5E\u4E0E\u672C\u6B21\u67E5\u8BE2\u4E0D\u4E00\u81F4\uFF0C\u8DF3\u8FC7\u8BF7\u6C42", {
       credentialFamily: scope.providerFamily,
       credentialTargetType: scope.targetType ?? null,
       requestFamily: params.requestScope.providerFamily,
@@ -41804,7 +38291,7 @@ async function fetchMcpQuotaSnapshot(params) {
   let payload;
   let requestId = null;
   let body = "";
-  log4.info(void 0, "\u5B98\u65B9 MCP \u989D\u5EA6\u8BF7\u6C42", {
+  log7.info(void 0, "\u5B98\u65B9 MCP \u989D\u5EA6\u8BF7\u6C42", {
     credentialFamily: scope.providerFamily,
     credentialTargetType: scope.targetType ?? null,
     headerNames: Object.keys(headers).sort(),
@@ -41823,7 +38310,7 @@ async function fetchMcpQuotaSnapshot(params) {
     requestId = readRequestId(response2.headers);
     const text3 = await response2.text();
     body = truncateForLog(text3);
-    log4.info(void 0, "\u5B98\u65B9 MCP \u989D\u5EA6\u54CD\u5E94", {
+    log7.info(void 0, "\u5B98\u65B9 MCP \u989D\u5EA6\u54CD\u5E94", {
       body,
       durationMs: Date.now() - startedAt,
       status: response2.status,
@@ -41831,7 +38318,7 @@ async function fetchMcpQuotaSnapshot(params) {
       "x-request-id": requestId
     });
     if (!response2.ok) {
-      log4.warn(void 0, "\u5B98\u65B9 MCP \u989D\u5EA6\u8BF7\u6C42\u5931\u8D25", {
+      log7.warn(void 0, "\u5B98\u65B9 MCP \u989D\u5EA6\u8BF7\u6C42\u5931\u8D25", {
         body,
         status: response2.status,
         url: url4,
@@ -41841,7 +38328,7 @@ async function fetchMcpQuotaSnapshot(params) {
     }
     payload = JSON.parse(text3);
   } catch (error62) {
-    log4.warn(void 0, "\u5B98\u65B9 MCP \u989D\u5EA6\u8BF7\u6C42\u5F02\u5E38", {
+    log7.warn(void 0, "\u5B98\u65B9 MCP \u989D\u5EA6\u8BF7\u6C42\u5F02\u5E38", {
       body,
       durationMs: Date.now() - startedAt,
       error: error62 instanceof Error ? error62.message : String(error62),
@@ -41852,7 +38339,7 @@ async function fetchMcpQuotaSnapshot(params) {
   }
   const envelope2 = mcpUsageEnvelopeSchema.safeParse(payload);
   if (!envelope2.success) {
-    log4.warn(void 0, "\u5B98\u65B9 MCP \u989D\u5EA6\u54CD\u5E94\u7ED3\u6784\u4E0D\u7B26\u5408\u9884\u671F", {
+    log7.warn(void 0, "\u5B98\u65B9 MCP \u989D\u5EA6\u54CD\u5E94\u7ED3\u6784\u4E0D\u7B26\u5408\u9884\u671F", {
       body,
       issues: envelope2.error.issues.map(
         (issue2) => `${issue2.path.join(".") || "(root)"}: ${issue2.code}`
@@ -41863,7 +38350,7 @@ async function fetchMcpQuotaSnapshot(params) {
     return null;
   }
   if (envelope2.data.code !== 0 || !envelope2.data.data) {
-    log4.warn(void 0, "\u5B98\u65B9 MCP \u989D\u5EA6\u4E1A\u52A1\u5931\u8D25", {
+    log7.warn(void 0, "\u5B98\u65B9 MCP \u989D\u5EA6\u4E1A\u52A1\u5931\u8D25", {
       code: envelope2.data.code,
       msg: envelope2.data.msg ?? null,
       "x-request-id": requestId
@@ -41872,7 +38359,7 @@ async function fetchMcpQuotaSnapshot(params) {
   }
   const data = envelope2.data.data;
   if (!data.total_usage) {
-    log4.warn(void 0, "\u5B98\u65B9 MCP \u989D\u5EA6\u54CD\u5E94\u7F3A\u5C11 total_usage", {
+    log7.warn(void 0, "\u5B98\u65B9 MCP \u989D\u5EA6\u54CD\u5E94\u7F3A\u5C11 total_usage", {
       body,
       url: url4,
       "x-request-id": requestId
@@ -41899,7 +38386,7 @@ async function fetchMcpQuotaSnapshot(params) {
 var BIGMODEL_QUOTA_PATH = "/api/monitor/usage/quota/limit";
 var CODING_PLAN_RESET_BASE_PATH = "/api/v1/coding-plan/reset";
 var REQUEST_TIMEOUT_MS3 = 15e3;
-var log5 = createServiceLogger("usage-stats");
+var log8 = createServiceLogger("usage-stats");
 var EMPTY_MODEL_USAGE_PAYLOAD = {};
 var EMPTY_TOOL_USAGE_PAYLOAD = {};
 var EMPTY_CREDIT_ACTIVITY_PAYLOAD = {};
@@ -41986,7 +38473,7 @@ var BigModelUsageQuotaProvider = class {
         allowEnvApiKey: request.allowEnvApiKey
       });
     } catch (error62) {
-      log5.warn(void 0, "\u8BFB\u53D6\u7528\u91CF\u51ED\u636E\u5931\u8D25\uFF0C\u4FDD\u7559\u72EC\u7ACB\u8BA2\u9605\u5224\u5B9A", {
+      log8.warn(void 0, "\u8BFB\u53D6\u7528\u91CF\u51ED\u636E\u5931\u8D25\uFF0C\u4FDD\u7559\u72EC\u7ACB\u8BA2\u9605\u5224\u5B9A", {
         error: error62 instanceof Error ? error62.message : String(error62),
         preferredProviderId: providerId
       });
@@ -42041,10 +38528,10 @@ var BigModelUsageQuotaProvider = class {
   async assertUnchangedRequestAccess(requested, expected) {
     if (!requested || !("mode" in requested)) return;
     const current = await this.resolveRequestAccountAccess(requested);
-    const scope = (access2) => access2 ? [
-      access2.family,
-      access2.planKind,
-      access2.planKind === "team-coding-plan" ? [access2.organizationId, access2.projectId, access2.productId] : null
+    const scope = (access) => access ? [
+      access.family,
+      access.planKind,
+      access.planKind === "team-coding-plan" ? [access.organizationId, access.projectId, access.productId] : null
     ] : null;
     if (JSON.stringify(scope(current)) !== JSON.stringify(scope(expected)))
       throw new Error("coding_plan_account_changed");
@@ -42095,7 +38582,7 @@ var BigModelUsageQuotaProvider = class {
         resolved.authorization,
         invalidateBalanceCache
       );
-      log5.info(void 0, "billing/balance \u8BF7\u6C42\u5B8C\u6210", {
+      log8.info(void 0, "billing/balance \u8BF7\u6C42\u5B8C\u6210", {
         balanceCount: balancePayload.data?.balances?.length ?? 0,
         balances: summarizeStartPlanBalances(balancePayload.data?.balances),
         code: balancePayload.code ?? null,
@@ -42109,7 +38596,7 @@ var BigModelUsageQuotaProvider = class {
         url: balanceUrl
       });
     } catch (error62) {
-      log5.warn(void 0, "billing/balance \u8BF7\u6C42\u5931\u8D25", {
+      log8.warn(void 0, "billing/balance \u8BF7\u6C42\u5931\u8D25", {
         error: error62 instanceof Error ? error62.message : String(error62),
         providerId,
         responseHeaders: error62 instanceof ApiError ? error62.responseHeaders ?? null : null,
@@ -42457,7 +38944,7 @@ var BigModelUsageQuotaProvider = class {
       );
       return data.proMaxDecodeSpeed?.findLast((value2) => Number.isFinite(value2) && value2 > 0);
     } catch (error62) {
-      log5.warn(void 0, "Highspeed \u666E\u901A TPS \u5065\u5EB7\u68C0\u67E5\u5931\u8D25", {
+      log8.warn(void 0, "Highspeed \u666E\u901A TPS \u5065\u5EB7\u68C0\u67E5\u5931\u8D25", {
         error: error62 instanceof Error ? error62.message : String(error62),
         providerId: request.preferredProviderId,
         durationMs: Date.now() - startedAt,
@@ -42742,7 +39229,7 @@ async function readBestEffortBigModelMonitorData(request, fallbackMessage, empty
   try {
     payload = await request;
   } catch (error62) {
-    log5.warn(void 0, `${fallbackMessage}\uFF0C\u8BE5\u533A\u57DF\u964D\u7EA7\u4E3A\u7A7A\u7EDF\u8BA1`, {
+    log8.warn(void 0, `${fallbackMessage}\uFF0C\u8BE5\u533A\u57DF\u964D\u7EA7\u4E3A\u7A7A\u7EDF\u8BA1`, {
       error: error62 instanceof Error ? error62.message : String(error62),
       status: error62 instanceof ApiError ? error62.status : null
     });
@@ -42820,7 +39307,7 @@ function warnOnUnattributedStartPlanBuckets(plans, balances) {
   if (orphanBuckets.length === 0) {
     return;
   }
-  log5.warn(void 0, "billing/balance \u8FD4\u56DE\u65E0\u6CD5\u5F52\u5C5E\u5230 active \u5957\u9910\u7684\u989D\u5EA6\u6876", {
+  log8.warn(void 0, "billing/balance \u8FD4\u56DE\u65E0\u6CD5\u5F52\u5C5E\u5230 active \u5957\u9910\u7684\u989D\u5EA6\u6876", {
     orphanCount: orphanBuckets.length,
     orphanPlanIds: orphanBuckets.map((balance) => balance.plan_id ?? null),
     activePlanIds: [...activePlanIds]
@@ -43147,638 +39634,9 @@ function createUsageStatsService(dependencies) {
   };
 }
 
-// packages/services/src/model-provider/accountProviderApiClient.ts
-function isSuccessfulRemoteCode(code) {
-  if (code === null || code === void 0) {
-    return true;
-  }
-  if (typeof code === "number") {
-    return code === 0 || code === 200;
-  }
-  if (typeof code === "string") {
-    return code === "0" || code === "200";
-  }
-  return false;
-}
-var AccountProviderApiClient = class {
-  constructor(apiClient) {
-    this.apiClient = apiClient;
-  }
-  apiClient;
-  async fetchRemoteData(url4, init) {
-    const payload = await readApiJson(this.apiClient, url4, init);
-    if (!isSuccessfulRemoteCode(payload.code)) {
-      return null;
-    }
-    return payload.data ?? null;
-  }
-};
-
-// packages/services/src/providers/api/apiEndpoints.ts
-var ZCODE_CLIENT_SCENES_URL = buildRuntimeZCodeApiUrl(
-  process.env,
-  "/api/v1/client/scenes"
-);
-var ZAI_API_HOST = resolveZaiBusinessBaseUrl(process.env);
-
-// packages/services/src/model-provider/accountProviderApiKeyResolver.ts
-var log6 = createServiceLogger("account-project-token-resolver");
-var AccountProviderApiKeyResolver = class {
-  tokenClient;
-  constructor(fetchRemoteData, tokenClient) {
-    this.tokenClient = tokenClient ?? new ProjectAccessTokenClient({
-      request: async (url4, init) => ({
-        code: 200,
-        data: await fetchRemoteData(url4, init)
-      }),
-      observe: (event) => log6.warn(void 0, "\u9879\u76EE Token \u83B7\u53D6\u5931\u8D25", event)
-    });
-  }
-  async resolveProviderApiKey(...args) {
-    return (await this.resolveProviderMaterial(...args)).token;
-  }
-  async resolveProviderMaterial(provider, accessToken, accountIdentity = provider, rejectedProjectTokenFingerprint) {
-    const family = provider === ZAI_PROVIDER_ID ? "zai" : "bigmodel";
-    const result = await this.tokenClient.resolve({
-      origin: family === "zai" ? ZAI_API_HOST : resolveBigModelApiOrigin(process.env),
-      family,
-      loginToken: accessToken,
-      accountId: accountIdentity,
-      rejectedProjectTokenFingerprint
-    });
-    return result;
-  }
-};
-
-// packages/services/src/model-provider/accountProviderCredentialService.ts
-var log7 = createServiceLogger("account-project-token");
-function createAccountProviderCredentialService(options2) {
-  const pending = /* @__PURE__ */ new Map();
-  return {
-    async loadCodingPlanApiKey(input2) {
-      return (await this.loadCodingPlanMaterial(input2))?.token ?? null;
-    },
-    async loadCodingPlanMaterial(input2) {
-      const account = await options2.loadOAuthAccountMaterial(input2.family);
-      if (!account || account.accountIdentity !== input2.accountIdentity) return null;
-      const key = JSON.stringify([input2.family, account, input2.rejectedProjectTokenFingerprint]);
-      const existing = pending.get(key);
-      if (existing) return existing;
-      const operation = (async () => {
-        const token2 = await options2.resolveProviderMaterial(
-          input2.family,
-          account.accessToken,
-          account.accountIdentity,
-          input2.rejectedProjectTokenFingerprint
-        );
-        if (!isSameOAuthAccountMaterial(account, await options2.loadOAuthAccountMaterial(input2.family))) {
-          log7.warn(void 0, "\u9879\u76EE Token \u7B7E\u53D1\u671F\u95F4\u767B\u5F55\u6001\u53D8\u5316\uFF0C\u4E22\u5F03\u7ED3\u679C", {
-            family: input2.family
-          });
-          throw new Error("project_token_scope_invalidated");
-        }
-        return token2 ?? null;
-      })();
-      pending.set(key, operation);
-      try {
-        return await operation;
-      } finally {
-        if (pending.get(key) === operation) pending.delete(key);
-      }
-    }
-  };
-}
-
-// packages/services/src/model-provider/accountProviderRequestAuthService.ts
-import { createHash as createHash4 } from "node:crypto";
-var AccountRequestCredentialUnavailableError = class extends Error {
-  constructor(providerId) {
-    super(`Account request credential is unavailable: ${providerId}`);
-    this.providerId = providerId;
-    this.name = "AccountRequestCredentialUnavailableError";
-  }
-  providerId;
-};
-var AccountProviderRequestAuthService = class {
-  #options;
-  constructor(options2) {
-    this.#options = options2;
-  }
-  resolveAccessCurrent(access2) {
-    return this.#options.resolveCurrentAccountAccess(access2);
-  }
-  async resolveCurrent(input2) {
-    const providerId = input2.providerId.trim();
-    const access2 = await this.#resolveAccess(input2.accountAccess);
-    if (!access2) throw new AccountRequestCredentialUnavailableError(providerId);
-    if (access2.planKind === "start-plan") {
-      return {
-        apiKey: requireApiKey(await this.#options.loadStartPlanZcodeJwt(access2.family), providerId)
-      };
-    }
-    const scoped = input2.reason !== "usage" || input2.expectedAccountScope !== void 0;
-    if (input2.rejectedProjectTokenFingerprint && !input2.expectedAccountScope)
-      throw new Error("project_token_scope_invalidated");
-    const accountScope = scoped ? await this.#scope(access2) : void 0;
-    if (input2.expectedAccountScope !== void 0 && input2.expectedAccountScope !== accountScope)
-      throw new Error("project_token_scope_invalidated");
-    const material = access2.planKind === "individual-coding-plan" ? await this.#options.loadIndividualPlanMaterial(
-      providerId,
-      access2.family,
-      input2.rejectedProjectTokenFingerprint
-    ) : await this.#options.resolveTeamPlanMaterial(
-      access2,
-      input2.rejectedProjectTokenFingerprint
-    );
-    if (scoped) {
-      const latest = await this.#resolveAccess(input2.accountAccess);
-      if (!latest || accountScope !== await this.#scope(latest))
-        throw new Error("project_token_scope_invalidated");
-    }
-    return {
-      apiKey: requireApiKey(material?.token, providerId),
-      apiKeyId: material?.apiKeyId,
-      ...accountScope ? { accountScope } : {}
-    };
-  }
-  async #scope(access2) {
-    const login = await this.#options.loadOAuthTokenSet(resolveOAuthProviderId(access2.family));
-    if (!login?.accessToken?.trim())
-      throw new AccountRequestCredentialUnavailableError(access2.family);
-    return createHash4("sha256").update(
-      JSON.stringify([
-        access2.family,
-        access2.planKind,
-        access2.planKind === "team-coding-plan" ? [access2.organizationId, access2.projectId, access2.productId] : null,
-        login.accessToken.trim(),
-        login.zcodeJwtToken?.trim() ?? null,
-        login.sessionRevision ?? null,
-        login.accountIdentity ?? null,
-        login.zcodeUserId ?? null
-      ])
-    ).digest("hex");
-  }
-  async assertCurrent(input2) {
-    if (!await this.#resolveAccess(input2.accountAccess)) {
-      throw new AccountRequestCredentialUnavailableError(input2.providerId);
-    }
-  }
-  #resolveAccess(access2) {
-    return "mode" in access2 ? this.#options.resolveCurrentAccountAccess(access2) : Promise.resolve(access2);
-  }
-};
-function resolveOAuthProviderId(family) {
-  return family === "zai" ? ZAI_PROVIDER_ID : BIGMODEL_PROVIDER_ID;
-}
-function requireApiKey(value2, providerId) {
-  const normalized = value2?.trim() ?? "";
-  if (!normalized) {
-    throw new AccountRequestCredentialUnavailableError(providerId);
-  }
-  return normalized;
-}
-function createAccountProviderRequestAuthService(options2) {
-  return new AccountProviderRequestAuthService(options2);
-}
-
-// packages/services/src/model-provider/accountProjectTokenClient.ts
-var PROJECT_TOKEN_REQUEST_TIMEOUT_MS = 15e3;
-var log8 = createServiceLogger("project-access-token");
-function createAccountProjectTokenClient(apiClient, credentialService) {
-  return new ProjectAccessTokenClient({
-    request: async (url4, init) => {
-      try {
-        return await readApiJson(apiClient, url4, {
-          ...init,
-          timeoutMs: PROJECT_TOKEN_REQUEST_TIMEOUT_MS
-        });
-      } catch (error62) {
-        if (error62 instanceof ApiError && error62.status === 404) return { code: 404 };
-        if (error62 instanceof ApiError) {
-          const status = error62.status;
-          if (status === 429 || status !== void 0 && status >= 500 && status < 600)
-            throw new ProjectAccessTokenTransientError({
-              kind: "http",
-              status,
-              ...status === 429 ? {
-                retryAfterMs: projectAccessTokenRetryAfterMs(
-                  error62.responseHeaders?.["retry-after"]
-                )
-              } : {}
-            });
-          if (status === void 0 && error62.cause instanceof TypeError)
-            throw new ProjectAccessTokenTransientError({ kind: "network" });
-          if (status === void 0 && error62.cause instanceof DOMException && ["AbortError", "TimeoutError"].includes(error62.cause.name))
-            throw new ProjectAccessTokenTransientError({ kind: "timeout" });
-          if (status !== void 0 && status >= 200 && status < 300)
-            throw new ProjectAccessTokenError("project_token_invalid_response");
-          if (status !== void 0) throw new ProjectAccessTokenHttpStatusError(status);
-        }
-        throw error62;
-      }
-    },
-    locationStore: credentialService,
-    observe: (event) => log8.warn(
-      void 0,
-      event.code === "project_token_request_retry" ? "\u9879\u76EE Token \u7B7E\u53D1\u4E34\u65F6\u5931\u8D25\uFF0C\u51C6\u5907\u91CD\u8BD5" : event.code === "project_token_refresh_deferred" ? "\u9879\u76EE Token \u63D0\u524D\u5237\u65B0\u6682\u7F13" : event.code === "project_token_location_unreadable" ? "\u9879\u76EE\u5B9A\u4F4D\u7F13\u5B58\u65E0\u6CD5\u89E3\u5BC6\uFF0C\u51C6\u5907\u5C40\u90E8\u6062\u590D" : event.code === "project_token_location_recovery" ? "\u9879\u76EE\u5B9A\u4F4D\u7F13\u5B58\u590D\u6838\u5B8C\u6210" : "\u9879\u76EE Token \u83B7\u53D6\u5931\u8D25",
-      event
-    )
-  });
-}
-
-// packages/services/src/providers/sourceHeaders.ts
-import { readFileSync as readFileSync3 } from "node:fs";
-import { version as readOsVersion } from "node:os";
-import { join as join9 } from "node:path";
-var cachedDeviceMid = null;
-function normalizePrintableHeaderValue(value2) {
-  return normalizeZCodeSourceHeaderValue(value2);
-}
-function resolveClientLanguage() {
-  return normalizePrintableHeaderValue(Intl.DateTimeFormat().resolvedOptions().locale) ?? "unknown";
-}
-function resolveClientTimezone() {
-  return normalizePrintableHeaderValue(Intl.DateTimeFormat().resolvedOptions().timeZone) ?? "unknown";
-}
-function readExistingDeviceMid() {
-  const stateFile = join9(getAppConfigDir(), "telemetry-state.json");
-  if (cachedDeviceMid?.stateFile === stateFile) {
-    return cachedDeviceMid.value;
-  }
-  try {
-    const raw = readFileSync3(stateFile, "utf-8");
-    const parsed = JSON.parse(raw);
-    const deviceMid = normalizePrintableHeaderValue(
-      typeof parsed.deviceMid === "string" ? parsed.deviceMid : void 0
-    );
-    if (!deviceMid) {
-      return void 0;
-    }
-    cachedDeviceMid = { stateFile, value: deviceMid };
-    return deviceMid;
-  } catch {
-    return void 0;
-  }
-}
-function buildZCodeSourceHeaders(options2 = {}) {
-  const platform2 = options2.platform ?? process.platform;
-  const arch = options2.arch ?? process.arch;
-  const appVersion = normalizePrintableHeaderValue(options2.appVersion ?? ZCODE_VERSION);
-  const releaseChannel = normalizePrintableHeaderValue(options2.releaseChannel ?? ZCODE_ENV);
-  const clientLanguage = normalizePrintableHeaderValue(options2.clientLanguage) ?? resolveClientLanguage();
-  const clientTimezone = normalizePrintableHeaderValue(options2.clientTimezone) ?? resolveClientTimezone();
-  const osVersion = normalizePrintableHeaderValue(options2.osVersion ?? readOsVersion());
-  const deviceMid = readExistingDeviceMid();
-  return buildZCodeSourceHeadersFromContext({
-    appVersion,
-    arch,
-    clientLanguage,
-    clientTimezone,
-    deviceMid,
-    osVersion,
-    platform: platform2,
-    releaseChannel,
-    sourceTitle: "electron"
-  });
-}
-
-// packages/services/src/providers/api/requestIdHeaders.ts
-var REQUEST_ID_HEADER_NAME = "x-request-id";
-function withRequestIdHeader(headers) {
-  const next = new Headers(headers);
-  if (!next.has(REQUEST_ID_HEADER_NAME)) {
-    next.set(REQUEST_ID_HEADER_NAME, createUuid());
-  }
-  return next;
-}
-
-// packages/services/src/providers/api/nodeApiClient.ts
-var log9 = createServiceLogger("node-api-client");
-var DEFAULT_BUSINESS_UNAUTHORIZED_OBSERVATION_TIMEOUT_MS = 1e3;
-var MAX_BUSINESS_UNAUTHORIZED_OBSERVATION_BYTES = 64 * 1024;
-function waitWithAbort(promise2, signal) {
-  if (!signal) return promise2;
-  return new Promise((resolve3, reject) => {
-    const abort = () => reject(new DOMException("The operation was aborted.", "AbortError"));
-    const cleanup = () => signal.removeEventListener("abort", abort);
-    signal.addEventListener("abort", abort, { once: true });
-    promise2.then(
-      (value2) => {
-        cleanup();
-        resolve3(value2);
-      },
-      (error62) => {
-        cleanup();
-        reject(error62);
-      }
-    );
-    if (signal.aborted) {
-      cleanup();
-      abort();
-    }
-  });
-}
-function readChunkWithinTimeout(reader, timeoutMs, signal) {
-  let timer;
-  const timeout = new Promise((resolve3) => {
-    timer = setTimeout(() => resolve3(null), timeoutMs);
-  });
-  return waitWithAbort(Promise.race([reader.read(), timeout]), signal).catch(() => null).finally(() => clearTimeout(timer));
-}
-function resolveMethod2(init) {
-  return (init?.method ?? "GET").toUpperCase();
-}
-function resolveUrl2(input2) {
-  return typeof input2 === "string" ? input2 : input2.toString();
-}
-async function readBusinessAuthenticationResponse(response2, timeoutMs, signal) {
-  if (response2.headers.get("content-type")?.toLowerCase().startsWith("text/event-stream"))
-    return null;
-  let reader;
-  try {
-    if (signal?.aborted) return null;
-    const body = response2.clone().body;
-    if (!body) return "empty";
-    reader = body.getReader();
-    const decoder = new TextDecoder();
-    const deadline = Date.now() + timeoutMs;
-    let bytes = 0;
-    let text3 = "";
-    while (true) {
-      const remainingMs = deadline - Date.now();
-      if (remainingMs <= 0) return null;
-      const result = await readChunkWithinTimeout(reader, remainingMs, signal);
-      if (!result) return null;
-      if (result.done) break;
-      if (!result.value) return null;
-      bytes += result.value.byteLength;
-      if (bytes > MAX_BUSINESS_UNAUTHORIZED_OBSERVATION_BYTES) return null;
-      text3 += decoder.decode(result.value, { stream: true });
-    }
-    text3 += decoder.decode();
-    if (bytes === 0) return "empty";
-    const payload = JSON.parse(text3);
-    return typeof payload === "object" && payload !== null && "code" in payload && payload.code === 401 ? "unauthorized" : null;
-  } catch {
-    return null;
-  } finally {
-    if (reader) void reader.cancel().catch(() => void 0);
-  }
-}
-function readHeaderKeys(headers) {
-  if (!headers) {
-    return [];
-  }
-  return [...new Headers(headers).keys()].sort();
-}
-function isRequestForEndpoint(input2, endpointOrigin) {
-  try {
-    return new URL(resolveUrl2(input2)).origin === normalizeZCodeEndpointOrigin(endpointOrigin);
-  } catch {
-    return false;
-  }
-}
-function withZCodeEndpointHeaders(headers, endpointOrigin, clientLanguage) {
-  const next = new Headers(buildZCodeSourceHeaders({ clientLanguage }));
-  if (headers) {
-    new Headers(headers).forEach((value2, key) => {
-      next.set(key, value2);
-    });
-  }
-  if (next.get("HTTP-Referer") === DEFAULT_ZCODE_ENDPOINT_ORIGIN) {
-    next.set("HTTP-Referer", endpointOrigin);
-  }
-  return next;
-}
-function resolveRequestHeaders(requestInput, headers, endpointOrigin, clientLanguage) {
-  if (!isRequestForEndpoint(requestInput, endpointOrigin)) {
-    return headers;
-  }
-  return withZCodeEndpointHeaders(headers, endpointOrigin, clientLanguage);
-}
-var NodeApiClient = class {
-  fetchImpl;
-  resolveAssociatedCredentialRefresh;
-  resolveZCodeEndpointOrigin;
-  resolveClientLanguage;
-  onZcodeJwtInvalid;
-  isZcodeJwtRequest;
-  isBusinessUnauthorizedRequest;
-  businessUnauthorizedObservationTimeoutMs;
-  resolveBusinessCredentialValidationRequest;
-  businessValidations = /* @__PURE__ */ new Map();
-  constructor(options2 = {}) {
-    this.fetchImpl = options2.fetchImpl;
-    this.resolveAssociatedCredentialRefresh = options2.resolveAssociatedCredentialRefresh;
-    this.onZcodeJwtInvalid = options2.onZcodeJwtInvalid;
-    this.isZcodeJwtRequest = options2.isZcodeJwtRequest;
-    this.isBusinessUnauthorizedRequest = options2.isBusinessUnauthorizedRequest;
-    this.resolveBusinessCredentialValidationRequest = options2.resolveBusinessCredentialValidationRequest;
-    this.businessUnauthorizedObservationTimeoutMs = options2.businessUnauthorizedObservationTimeoutMs ?? DEFAULT_BUSINESS_UNAUTHORIZED_OBSERVATION_TIMEOUT_MS;
-    this.resolveZCodeEndpointOrigin = options2.resolveZCodeEndpointOrigin;
-    this.resolveClientLanguage = options2.resolveClientLanguage;
-  }
-  async confirmBusinessCredentialInvalid(input2, headers, response2, evidence, signal) {
-    if (signal?.aborted) return false;
-    const check2 = await this.resolveBusinessCredentialValidationRequest?.(input2, headers);
-    if (!check2 || signal?.aborted) return false;
-    const requestUrl = new URL(input2), identityUrl = new URL(check2.url);
-    if (requestUrl.origin === identityUrl.origin && requestUrl.pathname === identityUrl.pathname)
-      return response2.status === 200 && evidence === "empty" && check2.emptyBodyMeansInvalid;
-    const key = JSON.stringify([check2.url, check2.authorization]);
-    let entry = this.businessValidations.get(key);
-    if (!entry) {
-      const controller = new AbortController();
-      const validationSignal = AbortSignal.any([
-        controller.signal,
-        AbortSignal.timeout(this.businessUnauthorizedObservationTimeoutMs)
-      ]);
-      const validation = Promise.resolve().then(async () => {
-        try {
-          const identity2 = await waitWithAbort(
-            (this.fetchImpl ?? globalThis.fetch)(check2.url, {
-              method: "GET",
-              redirect: "error",
-              headers: withRequestIdHeader({
-                Authorization: check2.authorization,
-                "Content-Type": "application/json"
-              }),
-              signal: validationSignal
-            }),
-            validationSignal
-          );
-          if (identity2.status === 401) return true;
-          if (identity2.status !== 200 && identity2.status !== 403) return false;
-          const result = await readBusinessAuthenticationResponse(
-            identity2,
-            this.businessUnauthorizedObservationTimeoutMs,
-            validationSignal
-          );
-          return result === "unauthorized" || identity2.status === 200 && result === "empty" && check2.emptyBodyMeansInvalid;
-        } catch {
-          return false;
-        }
-      }).finally(() => {
-        if (this.businessValidations.get(key)?.promise === validation)
-          this.businessValidations.delete(key);
-      });
-      entry = { promise: validation, controller, subscribers: 0 };
-      this.businessValidations.set(key, entry);
-    }
-    entry.subscribers += 1;
-    try {
-      return await waitWithAbort(entry.promise, signal);
-    } finally {
-      entry.subscribers -= 1;
-      if (entry.subscribers === 0) {
-        entry.controller.abort();
-        if (this.businessValidations.get(key) === entry) this.businessValidations.delete(key);
-      }
-    }
-  }
-  async request(input2, init) {
-    const endpointOrigin = this.resolveZCodeEndpointOrigin ? await this.resolveZCodeEndpointOrigin() : void 0;
-    const activeEndpointOrigin = endpointOrigin ?? DEFAULT_ZCODE_ENDPOINT_ORIGIN;
-    const requestInput = rewriteZCodeEndpointUrl(input2, activeEndpointOrigin);
-    const url4 = resolveUrl2(requestInput);
-    const method2 = resolveMethod2(init);
-    const timeoutMs = init?.timeoutMs;
-    const controller = timeoutMs && timeoutMs > 0 ? new AbortController() : null;
-    let didTimeout = false;
-    const timer = controller && timeoutMs ? setTimeout(() => {
-      didTimeout = true;
-      controller.abort();
-    }, timeoutMs) : null;
-    try {
-      const signal = controller ? init?.signal ? AbortSignal.any([init.signal, controller.signal]) : controller.signal : init?.signal;
-      if (signal?.aborted) {
-        throw new DOMException("The operation was aborted.", "AbortError");
-      }
-      const fetchImpl = this.fetchImpl ?? globalThis.fetch;
-      const requestHeaders = withRequestIdHeader(
-        resolveRequestHeaders(
-          requestInput,
-          init?.headers,
-          activeEndpointOrigin,
-          this.resolveClientLanguage?.()
-        )
-      );
-      if (isRequestForEndpoint(requestInput, activeEndpointOrigin)) {
-        log9.debug(void 0, "zcode endpoint request headers prepared", {
-          headerKeys: readHeaderKeys(requestHeaders),
-          method: method2,
-          url: url4
-        });
-      }
-      const { authFailurePolicy, ...fetchInit } = init ?? {};
-      let refreshAssociatedCredential = null;
-      if (authFailurePolicy !== "caller-handled" && this.resolveAssociatedCredentialRefresh) {
-        try {
-          refreshAssociatedCredential = await waitWithAbort(
-            this.resolveAssociatedCredentialRefresh(requestInput, new Headers(requestHeaders)),
-            signal
-          );
-        } catch {
-          if (signal?.aborted) throw new DOMException("The operation was aborted.", "AbortError");
-          log9.debug(void 0, "associated OAuth request classification did not complete");
-        }
-      }
-      const response2 = await fetchImpl(requestInput, {
-        ...fetchInit,
-        headers: requestHeaders,
-        ...signal ? { signal } : {}
-      });
-      if (refreshAssociatedCredential && [200, 401, 403].includes(response2.status)) {
-        const evidence = response2.status === 401 ? Promise.resolve("unauthorized") : readBusinessAuthenticationResponse(
-          response2,
-          this.businessUnauthorizedObservationTimeoutMs,
-          signal
-        );
-        void evidence.then(async (result) => {
-          if (result === "unauthorized" && !signal?.aborted) {
-            await refreshAssociatedCredential();
-            log9.info(void 0, "associated OAuth rejection recovery completed");
-          }
-        }).catch(() => {
-          log9.debug(void 0, "associated OAuth profile refresh did not complete");
-        });
-      }
-      if (authFailurePolicy !== "caller-handled" && [200, 401, 403].includes(response2.status) && this.onZcodeJwtInvalid) {
-        try {
-          await waitWithAbort(
-            (async () => {
-              const requestHeadersForObservation = new Headers(requestHeaders);
-              const isCurrentZCodeJwtRequest = await this.isZcodeJwtRequest?.(
-                requestInput,
-                requestHeadersForObservation
-              );
-              if (isCurrentZCodeJwtRequest) {
-                let invalid = response2.status === 401;
-                if (!invalid && await this.isBusinessUnauthorizedRequest?.(
-                  requestInput,
-                  requestHeadersForObservation
-                )) {
-                  const evidence = await readBusinessAuthenticationResponse(
-                    response2,
-                    this.businessUnauthorizedObservationTimeoutMs,
-                    signal
-                  );
-                  invalid = evidence === "unauthorized";
-                  if (!invalid && (response2.status === 403 || response2.status === 200 && evidence === "empty"))
-                    invalid = await this.confirmBusinessCredentialInvalid(
-                      requestInput,
-                      requestHeadersForObservation,
-                      response2,
-                      evidence,
-                      signal
-                    );
-                }
-                if (invalid && !signal?.aborted)
-                  this.onZcodeJwtInvalid?.(requestInput, requestHeadersForObservation);
-              }
-            })(),
-            signal
-          );
-        } catch (error62) {
-          if (signal?.aborted) throw new DOMException("The operation was aborted.", "AbortError");
-          log9.warn("zcode jwt invalid response observation failed", { error: error62 });
-        }
-      }
-      if (signal?.aborted) throw new DOMException("The operation was aborted.", "AbortError");
-      return response2;
-    } catch (error62) {
-      if (error62 instanceof ApiError) {
-        throw error62;
-      }
-      if (error62 instanceof DOMException && error62.name === "AbortError") {
-        throw new ApiError({
-          message: didTimeout && timeoutMs ? `Request timed out after ${timeoutMs}ms` : error62.message,
-          url: url4,
-          method: method2,
-          cause: error62
-        });
-      }
-      const message = error62 instanceof Error ? error62.message : String(error62);
-      throw new ApiError({
-        message,
-        url: url4,
-        method: method2,
-        cause: error62
-      });
-    } finally {
-      if (timer) {
-        clearTimeout(timer);
-      }
-    }
-  }
-};
-function createNodeApiClient(options2 = {}) {
-  return new NodeApiClient(options2);
-}
-
 // packages/services/src/official-host/costLabBillingRuntime.ts
 var ACCESS_TOKEN_PATH = /^\/api\/biz\/v1\/organization\/[^/]+\/projects\/[^/]+\/api_keys\/[^/]+\/access_tokens$/;
-var COST_LAB_OFFICIAL_API_ORIGINS = /* @__PURE__ */ new Set([
+var ALLOWED_ORIGINS = /* @__PURE__ */ new Set([
   "https://bigmodel.cn",
   "https://zcode.z.ai",
   "https://api.z.ai"
@@ -43797,9 +39655,8 @@ function createCostLabReadOnlyLocationStore(locationStore) {
 function createCostLabReadOnlyApiClient(apiClient, signal) {
   return {
     async request(input2, init) {
-      const inputUrl = typeof input2 === "string" ? input2 : input2?.url ?? input2.toString();
-      const url4 = new URL(inputUrl);
-      if (!COST_LAB_OFFICIAL_API_ORIGINS.has(url4.origin)) {
+      const url4 = new URL(typeof input2 === "string" ? input2 : input2.toString());
+      if (!ALLOWED_ORIGINS.has(url4.origin)) {
         throw new Error("cost_lab_read_only_api_blocked_origin");
       }
       const method2 = (init?.method ?? "GET").toUpperCase();
@@ -43928,2416 +39785,8 @@ function createCostLabBillingRuntime(options2) {
     }
   };
 }
-
-// packages/services/src/oauth/oauthService.ts
-import { createHash as createHash5, randomBytes as randomBytes2 } from "node:crypto";
-import { readFile as readFile5, rm as rm4 } from "node:fs/promises";
-import { join as join10 } from "node:path";
-
-// packages/services/src/oauth/providers/bigmodelProviderConfig.ts
-var BIGMODEL_USERINFO_PATH = "/api/biz/customer/getCustomerInfo";
-var BIGMODEL_AUTHORIZE_PATH = "/login";
-var BIGMODEL_OAUTH_PROVIDER_CONFIG = {
-  id: BIGMODEL_PROVIDER_ID,
-  displayName: "BigModel",
-  enabled: true,
-  order: 0,
-  authorizeUrl: "https://bigmodel.cn/login",
-  tokenUrl: "https://zcode.z.ai/api/v1/oauth/token",
-  userinfoUrl: buildBigModelApiUrl({ ZCODE_ENV: "production" }, BIGMODEL_USERINFO_PATH),
-  appId: "zcode",
-  redirectUri: "zcode://oauth/callback"
-};
-function createBigModelProviderRuntimeConfig(env) {
-  return {
-    ...BIGMODEL_OAUTH_PROVIDER_CONFIG,
-    enabled: readBoolean(env, "BIGMODEL_OAUTH_ENABLED", BIGMODEL_OAUTH_PROVIDER_CONFIG.enabled),
-    authorizeUrl: readEnv(env, "BIGMODEL_OAUTH_AUTHORIZE_URL") ?? buildBigModelApiUrl(env, BIGMODEL_AUTHORIZE_PATH),
-    tokenUrl: readEnv(env, "BIGMODEL_OAUTH_TOKEN_URL") ?? buildZCodeApiUrlFromEnv(env, "/api/v1/oauth/token"),
-    userinfoUrl: resolveBigModelUserinfoUrl(env),
-    appId: readEnv(env, "BIGMODEL_OAUTH_APP_ID") ?? BIGMODEL_OAUTH_PROVIDER_CONFIG.appId,
-    redirectUri: buildDesktopOAuthRedirectUriFromEnv(env),
-    // 历史 fallback secret 已废弃，不能再把内置密钥打进运行时配置。
-    // 当前 BigModel callback 只消费 zcode OAuth token 路由，显式 appSecret 仅保留给
-    // 旧接口兼容场景，缺失时必须保持 undefined。
-    appSecret: readEnv(env, "BIGMODEL_OAUTH_APP_SECRET")
-  };
-}
-function resolveBigModelUserinfoUrl(env) {
-  return readEnv(env, "BIGMODEL_OAUTH_USERINFO_URL") ?? buildBigModelApiUrl(env, BIGMODEL_USERINFO_PATH);
-}
-
-// packages/services/src/oauth/providers/zaiProviderConfig.ts
-var ZAI_OAUTH_PROVIDER_CONFIG = {
-  id: ZAI_PROVIDER_ID,
-  displayName: "Z.ai",
-  enabled: true,
-  order: 1,
-  // ZAI 当前 OAuth 授权入口使用 /api/oauth 前缀，继续走 /auth/oauth 会打开旧入口。
-  authorizeUrl: "https://chat.z.ai/api/oauth/authorize",
-  tokenUrl: "https://zcode.z.ai/api/v1/oauth/token",
-  userinfoUrl: "https://chat.z.ai/api/oauth/userinfo",
-  businessLoginUrl: "https://api.z.ai/api/auth/z/login",
-  // 生产 client_id 不是 secret，但保留 fallback 可以避免未配置 env 的旧构建直接无法登录。
-  appId: "client_P8X5CMWmlaRO9gyO-KSqtg",
-  redirectUri: "zcode://oauth/callback"
-};
-function createZaiProviderRuntimeConfig(env) {
-  return {
-    ...ZAI_OAUTH_PROVIDER_CONFIG,
-    enabled: readBoolean(env, "ZAI_OAUTH_ENABLED", ZAI_OAUTH_PROVIDER_CONFIG.enabled),
-    authorizeUrl: readEnv(env, "ZAI_OAUTH_AUTHORIZE_URL") ?? buildRuntimeZaiOAuthUrl(env, "/api/oauth/authorize"),
-    tokenUrl: readEnv(env, "ZAI_OAUTH_TOKEN_URL") ?? buildZCodeApiUrlFromEnv(env, "/api/v1/oauth/token"),
-    userinfoUrl: resolveZaiUserinfoUrl(env),
-    businessLoginUrl: readEnv(env, "ZAI_BUSINESS_LOGIN_URL") ?? buildRuntimeZaiBusinessUrl(env, "/api/auth/z/login"),
-    appId: (
-      // client_id 是公开 OAuth app 标识，按环境覆盖，避免测试/生产 OAuth 应用混用。
-      resolveZaiOAuthClientId(env)
-    ),
-    redirectUri: buildDesktopOAuthRedirectUriFromEnv(env)
-  };
-}
-function resolveZaiUserinfoUrl(env) {
-  return readEnv(env, "ZAI_OAUTH_USERINFO_URL") ?? buildRuntimeZaiOAuthUrl(env, "/api/oauth/userinfo");
-}
-function createZaiCnProviderRuntimeConfig(env) {
-  return {
-    ...createZaiProviderRuntimeConfig(env),
-    id: ZAI_CN_PROVIDER_ID,
-    displayName: "Z.ai (CN)",
-    order: 2,
-    userinfoUrl: buildZCodeApiUrlFromEnv(env, "/api/v1/oauth/profile")
-  };
-}
-
-// packages/services/src/oauth/oauthUnauthorizedRequest.ts
-function tryResolveHttpUrl(resolve3) {
-  try {
-    const url4 = new URL(resolve3());
-    return url4.protocol === "http:" || url4.protocol === "https:" ? url4 : null;
-  } catch {
-    return null;
-  }
-}
-var OAUTH_BUSINESS_PREFIXES = ["/api/biz/", "/api/pay/"];
-async function isCurrentBusinessOAuthCredentialRequest(options2) {
-  const authorization = options2.headers.get("authorization")?.trim() ?? "";
-  if (!authorization) return false;
-  const provider = await options2.credentialService.load("oauth:active_provider");
-  if (!await isOAuthBusinessRequest({ ...options2, provider })) return false;
-  const accessToken = (await options2.credentialService.load(`oauth:${provider}:access_token`))?.trim();
-  if (!accessToken || authorization !== accessToken && authorization !== `Bearer ${accessToken}`)
-    return false;
-  return await options2.credentialService.load("oauth:active_provider") === provider;
-}
-async function isOAuthBusinessRequest(options2) {
-  const provider = options2.provider ?? await options2.credentialService?.load("oauth:active_provider");
-  if (provider !== BIGMODEL_PROVIDER_ID && provider !== ZAI_PROVIDER_ID) return false;
-  const env = options2.env ?? process.env;
-  const requestUrl = tryResolveHttpUrl(() => options2.input);
-  if (!requestUrl) return false;
-  const buildBusinessUrl = (path) => provider === BIGMODEL_PROVIDER_ID ? buildBigModelApiUrl(env, path) : buildRuntimeZaiBusinessUrl(env, path);
-  if (OAUTH_BUSINESS_PREFIXES.some((path) => {
-    const expected = tryResolveHttpUrl(() => buildBusinessUrl(path));
-    return expected !== null && requestUrl.origin === expected.origin && requestUrl.pathname.startsWith(expected.pathname);
-  }))
-    return true;
-  const userinfo = tryResolveHttpUrl(
-    () => provider === BIGMODEL_PROVIDER_ID ? resolveBigModelUserinfoUrl(env) : resolveZaiUserinfoUrl(env)
-  );
-  return userinfo !== null && requestUrl.origin === userinfo.origin && requestUrl.pathname === userinfo.pathname;
-}
-async function isCurrentOAuthCredentialRequest(options2) {
-  const authorization = options2.headers.get("authorization")?.trim() ?? "";
-  if (!authorization) return false;
-  const currentJwt = (await options2.credentialService.load("zcodejwttoken"))?.trim() ?? "";
-  if (currentJwt && authorization === `Bearer ${currentJwt}`) return true;
-  return isCurrentBusinessOAuthCredentialRequest(options2);
-}
-
-// packages/services/src/oauth/callbackAttribution.ts
-var ATTRIBUTION_PARAM_KEYS = ["channel_id", "utm_source", "utm_campaign"];
-function parseOAuthLoginAttribution(searchParams) {
-  const attribution = {};
-  for (const key of ATTRIBUTION_PARAM_KEYS) {
-    const value2 = searchParams.get(key)?.trim();
-    if (value2) {
-      attribution[key] = value2;
-    }
-  }
-  return Object.keys(attribution).length > 0 ? attribution : void 0;
-}
-function hasOAuthAuthorizationCode(searchParams) {
-  return Boolean(searchParams.get("code") || searchParams.get("authCode"));
-}
-
-// packages/services/src/oauth/oauthProfileSchema.ts
-var BIGMODEL_PROFILE_SCHEMA_VERSION = 2;
-var BIGMODEL_PROFILE_MIGRATION_RETRY_DELAY_MS = 60 * 60 * 1e3;
-function getCachedProfileSchemaVersion(profile) {
-  const rawProfile = profile.rawProfile;
-  if (!rawProfile || typeof rawProfile !== "object") {
-    return null;
-  }
-  const version2 = rawProfile.zcodeProfileSchemaVersion;
-  return typeof version2 === "number" ? version2 : null;
-}
-function getCachedProfileMigrationRetryAfter(profile) {
-  const rawProfile = profile.rawProfile;
-  if (!rawProfile || typeof rawProfile !== "object") {
-    return null;
-  }
-  const retryAfter = rawProfile.zcodeProfileMigrationRetryAfter;
-  return typeof retryAfter === "number" ? retryAfter : null;
-}
-function isBigModelUserInfoFallback(profile) {
-  return profile.id === "unknown" && profile.username === "user" && profile.displayName === "User";
-}
-function mergeOAuthDisplayProfile(cachedProfile, businessProfile) {
-  if (isBigModelUserInfoFallback(businessProfile)) return cachedProfile;
-  return {
-    ...cachedProfile,
-    username: businessProfile.username,
-    displayName: businessProfile.displayName,
-    ...businessProfile.avatarUrl ? { avatarUrl: businessProfile.avatarUrl } : {}
-  };
-}
-function getErrorStatus(error62) {
-  if (!error62 || typeof error62 !== "object") {
-    return null;
-  }
-  const status = error62.status;
-  return typeof status === "number" ? status : null;
-}
-function shouldCompleteMigrationAfterError(error62) {
-  const status = getErrorStatus(error62);
-  return status === 401 || status === 403;
-}
-function withProviderProfileSchema(provider, profile) {
-  if (provider !== BIGMODEL_PROVIDER_ID) {
-    return profile;
-  }
-  const rawProfile = profile.rawProfile && typeof profile.rawProfile === "object" ? profile.rawProfile : {};
-  const nextRawProfile = { ...rawProfile };
-  delete nextRawProfile.zcodeProfileMigrationRetryAfter;
-  return {
-    ...profile,
-    rawProfile: {
-      ...nextRawProfile,
-      zcodeProfileSchemaVersion: BIGMODEL_PROFILE_SCHEMA_VERSION
-    }
-  };
-}
-function withBigModelProfileMigrationRetryAfter(profile, now) {
-  const rawProfile = profile.rawProfile && typeof profile.rawProfile === "object" ? profile.rawProfile : {};
-  return {
-    ...profile,
-    rawProfile: {
-      ...rawProfile,
-      zcodeProfileMigrationRetryAfter: now + BIGMODEL_PROFILE_MIGRATION_RETRY_DELAY_MS
-    }
-  };
-}
-async function refreshLegacyBigModelCachedProfile(options2) {
-  const { adapter, cachedProfile, loadTokenSet, now, runWithAdapterError, saveProfile } = options2;
-  if ((getCachedProfileSchemaVersion(cachedProfile) ?? 0) >= BIGMODEL_PROFILE_SCHEMA_VERSION || (getCachedProfileMigrationRetryAfter(cachedProfile) ?? 0) > now() || !adapter.fetchUserInfo) {
-    return cachedProfile;
-  }
-  const tokenSet = await loadTokenSet();
-  if (!tokenSet) {
-    await saveProfile(withProviderProfileSchema(BIGMODEL_PROVIDER_ID, cachedProfile));
-    return cachedProfile;
-  }
-  try {
-    const refreshedProfile = await runWithAdapterError(
-      () => adapter.fetchUserInfo(tokenSet, {
-        providerId: BIGMODEL_PROVIDER_ID,
-        state: "",
-        redirectUri: adapter.redirectUri,
-        now
-      })
-    );
-    if (isBigModelUserInfoFallback(refreshedProfile)) {
-      await saveProfile(withProviderProfileSchema(BIGMODEL_PROVIDER_ID, cachedProfile));
-      return cachedProfile;
-    }
-    const migratedProfile = withProviderProfileSchema(
-      BIGMODEL_PROVIDER_ID,
-      mergeOAuthDisplayProfile(cachedProfile, refreshedProfile)
-    );
-    await saveProfile(migratedProfile);
-    return migratedProfile;
-  } catch (error62) {
-    if (shouldCompleteMigrationAfterError(error62)) {
-      await saveProfile(withProviderProfileSchema(BIGMODEL_PROVIDER_ID, cachedProfile));
-      return cachedProfile;
-    }
-    await saveProfile(withBigModelProfileMigrationRetryAfter(cachedProfile, now()));
-    return cachedProfile;
-  }
-}
-
-// packages/services/src/oauth/providers/bigmodelProviderAdapter.ts
-var OAUTH_USERINFO_TIMEOUT_MS = 6e4;
-var log10 = createServiceLogger("bigmodelOAuth");
-function maskOAuthCode(code) {
-  if (code.length <= 8) {
-    return "*".repeat(code.length);
-  }
-  return `${code.slice(0, 4)}...${code.slice(-4)}`;
-}
-function readOptionalString(value2) {
-  return typeof value2 === "string" ? value2 : void 0;
-}
-function readTrimmedString(value2) {
-  return readOptionalString(value2)?.trim() || "";
-}
-function resolveBigModelDisplayName(customer) {
-  const customerName = readTrimmedString(customer.customerName);
-  const nickName = readTrimmedString(customer.nickName);
-  return customerName || nickName || "user";
-}
-var BigModelProviderAdapter = class {
-  constructor(config2, apiClient) {
-    this.config = config2;
-    this.meta = {
-      id: config2.id,
-      displayName: config2.displayName,
-      enabled: config2.enabled,
-      order: config2.order
-    };
-    this.redirectUri = config2.redirectUri;
-    this.apiClient = apiClient;
-  }
-  config;
-  providerId = BIGMODEL_PROVIDER_ID;
-  meta;
-  redirectUri;
-  apiClient;
-  async normalizePolledTokenSet(tokenSet) {
-    return tokenSet;
-  }
-  parseCallbackParams(url4) {
-    const parsed = new URL(url4);
-    const code = parsed.searchParams.get("authCode") ?? parsed.searchParams.get("code");
-    const state = parsed.searchParams.get("state");
-    if (!code || !state) {
-      throw new Error("OAuth \u56DE\u8C03\u7F3A\u5C11 authCode/code \u6216 state \u53C2\u6570");
-    }
-    const attribution = parseOAuthLoginAttribution(parsed.searchParams);
-    return { code, state, ...attribution ? { attribution } : {} };
-  }
-  buildAuthorizeUrl(context) {
-    const query = new URLSearchParams({
-      redirect: context.redirectUri,
-      appId: this.config.appId,
-      state: context.state
-    });
-    return `${this.config.authorizeUrl}?${query.toString()}`;
-  }
-  async exchangeToken(params, _context) {
-    const tokenSet = await this.exchangeZcodeJwtToken(params, _context);
-    return {
-      ...tokenSet
-    };
-  }
-  async exchangeZcodeJwtToken(params, context) {
-    log10.info(void 0, "zcode token request", {
-      method: "POST",
-      url: this.config.tokenUrl,
-      headers: { "Content-Type": "application/json" },
-      body: {
-        provider: BIGMODEL_PROVIDER_ID,
-        code: maskOAuthCode(params.code),
-        codeLength: params.code.length,
-        redirect_uri: context.redirectUri,
-        state: context.state
-      }
-    });
-    try {
-      const payload = await readApiJson(
-        this.apiClient,
-        this.config.tokenUrl,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          // zcode JWT 的后端 token 路由按 OAuth callback 授权码语义解析。
-          // BigModel Start Plan 不能在后续 balance 查询阶段用 access_token 二次兑换，
-          // 否则 body 与 Z.ai 登录链路不一致并触发 HTTP 400。provider 用 shared
-          // 中的 OAuth provider 枚举值，避免前后端新增多 provider 后只靠 redirect_uri 猜身份。
-          body: JSON.stringify({
-            provider: BIGMODEL_PROVIDER_ID,
-            code: params.code,
-            redirect_uri: context.redirectUri,
-            state: context.state
-          })
-        }
-      );
-      if (payload.code !== void 0 && payload.code !== 0) {
-        log10.warn(void 0, "zcode token business response rejected", {
-          code: payload.code,
-          msg: payload.msg
-        });
-        throw new Error(
-          payload.msg?.trim() || `BigModel zcode token \u4EA4\u6362\u5931\u8D25\uFF08code: ${payload.code}\uFF09`
-        );
-      }
-      const zcodeJwtToken = payload.data?.token?.trim() || "";
-      if (!zcodeJwtToken) {
-        log10.warn(void 0, "zcode token response missing data.token", {
-          code: payload.code,
-          msg: payload.msg
-        });
-        throw new Error("BigModel zcode token \u4EA4\u6362\u5931\u8D25\uFF1A\u54CD\u5E94\u7F3A\u5C11 data.token");
-      }
-      const accessToken = resolveBigModelBusinessAccessToken(payload);
-      if (!accessToken) {
-        log10.warn(void 0, "zcode token response missing bigmodel access token", {
-          code: payload.code,
-          msg: payload.msg
-        });
-        throw new Error("BigModel zcode token \u4EA4\u6362\u5931\u8D25\uFF1A\u54CD\u5E94\u7F3A\u5C11 data.bigmodel.access_token");
-      }
-      const refreshToken = payload.data?.bigmodel?.refresh_token?.trim() ?? payload.data?.bigmodel?.refreshToken?.trim() ?? "";
-      return {
-        accessToken,
-        ...refreshToken ? { refreshToken } : {},
-        zcodeJwtToken
-      };
-    } catch (error62) {
-      log10.warn(void 0, "zcode token request failed", {
-        message: error62 instanceof Error ? error62.message : String(error62),
-        ...error62 instanceof ApiError ? {
-          method: error62.method,
-          status: error62.status,
-          url: error62.url,
-          responseHeaders: error62.responseHeaders ?? {}
-        } : {}
-      });
-      throw error62;
-    }
-  }
-  async fetchUserInfo(tokenSet, _context) {
-    if (tokenSet.zcodeJwtToken && tokenSet.accessToken === tokenSet.zcodeJwtToken) {
-      return {
-        id: "unknown",
-        username: "user",
-        displayName: "User"
-      };
-    }
-    const userinfoPayload = await readApiJson(this.apiClient, this.config.userinfoUrl, {
-      method: "GET",
-      // 启动恢复登录态依赖这条 userinfo 校验链路。
-      // 没有超时时网络层可能长期 pending，导致 UI 一直显示“恢复中”。
-      // 这里固定 1 分钟超时，保证失败路径可及时落定，避免无限 loading。
-      timeoutMs: OAUTH_USERINFO_TIMEOUT_MS,
-      headers: {
-        // BigModel customer 信息接口要求 Authorization 直接传 token，
-        // 不能使用 Bearer 前缀，否则稳定返回鉴权失败。
-        Authorization: tokenSet.accessToken,
-        "Content-Type": "application/json"
-      }
-    });
-    const customer = userinfoPayload.data;
-    if (!customer) {
-      return {
-        id: "unknown",
-        username: "user",
-        displayName: "User"
-      };
-    }
-    const username = resolveBigModelDisplayName(customer);
-    return {
-      id: readOptionalString(customer.customerNumber) ?? "unknown",
-      username,
-      displayName: username,
-      avatarUrl: readOptionalString(customer.avatar)
-    };
-  }
-  async loadLegacyTokenSet(loadCredential) {
-    const accessToken = await loadCredential("auth_token");
-    if (!accessToken) {
-      return null;
-    }
-    const refreshToken = await loadCredential("refresh_token");
-    return {
-      accessToken,
-      ...refreshToken ? { refreshToken } : {}
-    };
-  }
-  normalizeError(error62) {
-    if (error62 instanceof Error) {
-      return error62;
-    }
-    return new Error(`BigModel OAuth \u5F02\u5E38: ${String(error62)}`);
-  }
-};
-function resolveBigModelBusinessAccessToken(payload) {
-  return payload.data?.bigmodel?.access_token?.trim() ?? payload.data?.bigmodel?.accessToken?.trim() ?? payload.data?.access_token?.trim() ?? payload.data?.accessToken?.trim() ?? "";
-}
-
-// packages/services/src/oauth/providers/zaiProviderAdapter.ts
-import { Buffer as Buffer3 } from "node:buffer";
-
-// packages/services/src/providers/zaiBusinessTokenResolver.ts
-var ZAI_BUSINESS_TOKEN_REFRESH_SKEW_MS = 5 * 60 * 1e3;
-var ZaiBusinessTokenResolver = class {
-  apiClient;
-  loginUrl;
-  timeoutMs;
-  now;
-  cachedToken = null;
-  constructor(options2) {
-    this.apiClient = options2.apiClient;
-    this.loginUrl = options2.loginUrl;
-    this.timeoutMs = options2.timeoutMs;
-    this.now = options2.now ?? Date.now;
-  }
-  async resolve(oauthAccessToken) {
-    const normalizedToken = oauthAccessToken.trim();
-    if (!normalizedToken) {
-      throw new Error("zai_oauth_required");
-    }
-    const cachedToken = this.cachedToken;
-    if (this.isCachedTokenValid(cachedToken, normalizedToken)) {
-      return cachedToken.accessToken;
-    }
-    this.cachedToken = null;
-    return this.exchangeBusinessToken(normalizedToken);
-  }
-  isCachedTokenValid(cachedToken, oauthAccessToken) {
-    return Boolean(
-      cachedToken && cachedToken.oauthAccessToken === oauthAccessToken && cachedToken.expiresAt - ZAI_BUSINESS_TOKEN_REFRESH_SKEW_MS > this.now()
-    );
-  }
-  async exchangeBusinessToken(oauthAccessToken) {
-    let payload;
-    try {
-      payload = await readApiJson(this.apiClient, this.loginUrl, {
-        method: "POST",
-        timeoutMs: this.timeoutMs,
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ token: oauthAccessToken })
-      });
-    } catch {
-      throw new Error("zai_oauth_required");
-    }
-    if (!isSuccessfulZaiBusinessCode(payload.code) || payload.success === false) {
-      throw new Error("zai_oauth_required");
-    }
-    const accessToken = payload.data?.access_token?.trim() ?? payload.data?.accessToken?.trim() ?? "";
-    if (!accessToken) {
-      throw new Error("zai_oauth_required");
-    }
-    const expiresIn = payload.data?.expires_in;
-    if (expiresIn && Number.isFinite(expiresIn)) {
-      this.cachedToken = {
-        oauthAccessToken,
-        accessToken,
-        expiresAt: this.now() + expiresIn * 1e3
-      };
-    }
-    return accessToken;
-  }
-};
-function isSuccessfulZaiBusinessCode(code) {
-  if (code === null || code === void 0) {
-    return true;
-  }
-  if (typeof code === "number") {
-    return code === 0 || code === 200;
-  }
-  if (typeof code === "string") {
-    return code === "0" || code === "200";
-  }
-  return false;
-}
-
-// packages/services/src/oauth/providers/zaiProviderAdapter.ts
-var OAUTH_USERINFO_TIMEOUT_MS2 = 6e4;
-var ZAI_BUSINESS_TOKEN_TIMEOUT_MS = 1e4;
-var log11 = createServiceLogger("zaiOAuth");
-function normalizeExpiresIn(raw, now) {
-  if (!raw || !Number.isFinite(raw)) {
-    return void 0;
-  }
-  return now() + raw * 1e3;
-}
-function inferBase64ImageMimeType2(decoded) {
-  if (decoded.length >= 8 && decoded[0] === 137 && decoded[1] === 80 && decoded[2] === 78 && decoded[3] === 71) {
-    return "image/png";
-  }
-  if (decoded.length >= 3 && decoded[0] === 255 && decoded[1] === 216 && decoded[2] === 255) {
-    return "image/jpeg";
-  }
-  if (decoded.length >= 6 && decoded.toString("ascii", 0, 3) === "GIF") {
-    return "image/gif";
-  }
-  if (decoded.length >= 12 && decoded.toString("ascii", 0, 4) === "RIFF" && decoded.toString("ascii", 8, 12) === "WEBP") {
-    return "image/webp";
-  }
-  return "image/png";
-}
-function toBase64ImageDataUrl2(raw) {
-  const normalized = raw.replace(/\s/g, "");
-  if (normalized.length < 16 || !/^[A-Za-z0-9+/]+={0,2}$/.test(normalized)) {
-    return null;
-  }
-  const decoded = Buffer3.from(normalized, "base64");
-  if (decoded.length === 0) {
-    return null;
-  }
-  const encoded = decoded.toString("base64").replace(/=+$/, "");
-  if (encoded !== normalized.replace(/=+$/, "")) {
-    return null;
-  }
-  return `data:${inferBase64ImageMimeType2(decoded)};base64,${normalized}`;
-}
-function normalizeBackendAvatarUrl(avatar) {
-  const trimmed = avatar?.trim();
-  if (!trimmed) {
-    return void 0;
-  }
-  if (/^data:image\/[^;]+;base64,/i.test(trimmed) || /^https?:\/\//i.test(trimmed)) {
-    return trimmed;
-  }
-  const dataUrl = toBase64ImageDataUrl2(trimmed);
-  if (dataUrl) {
-    return dataUrl;
-  }
-  return trimmed;
-}
-function toBackendUserProfile(user) {
-  if (!user) {
-    return {
-      id: "unknown",
-      username: "user",
-      displayName: "User"
-    };
-  }
-  const id3 = user.user_id ?? "unknown";
-  const username = user.name?.trim() || user.email || id3;
-  const avatarUrl = normalizeBackendAvatarUrl(user.avatar);
-  return {
-    id: id3,
-    username,
-    displayName: username,
-    ...avatarUrl ? { avatarUrl } : {},
-    rawProfile: user
-  };
-}
-function hasMeaningfulBackendUser(user) {
-  if (!user) {
-    return false;
-  }
-  return Boolean(
-    user.user_id?.trim() || user.email?.trim() || user.name?.trim() || user.avatar?.trim()
-  );
-}
-function maskOAuthCode2(code) {
-  if (code.length <= 8) {
-    return "*".repeat(code.length);
-  }
-  return `${code.slice(0, 4)}...${code.slice(-4)}`;
-}
-function sanitizeTokenPayloadForLog(tokenPayload) {
-  const data = tokenPayload.data;
-  return {
-    code: typeof tokenPayload.code === "number" ? tokenPayload.code : void 0,
-    hasData: Boolean(data),
-    hasZcodeToken: typeof data?.token === "string" && data.token.length > 0,
-    hasZaiToken: typeof data?.zai?.access_token === "string" && data.zai.access_token.length > 0,
-    hasUser: Boolean(data?.user)
-  };
-}
-function logTokenResponseError(error62) {
-  if (!(error62 instanceof ApiError)) {
-    return;
-  }
-  log11.warn(void 0, "token response error", {
-    method: error62.method,
-    url: error62.url,
-    status: error62.status,
-    responseHeaders: error62.responseHeaders ?? {}
-  });
-}
-var ZaiProviderAdapter = class {
-  constructor(config2, apiClient) {
-    this.config = config2;
-    this.providerId = config2.id;
-    this.meta = {
-      id: config2.id,
-      displayName: config2.displayName,
-      enabled: config2.enabled,
-      order: config2.order
-    };
-    this.redirectUri = config2.redirectUri;
-    this.apiClient = apiClient;
-    this.businessTokenResolver = new ZaiBusinessTokenResolver({
-      apiClient,
-      // 测试 OAuth app 返回的 ZAI access_token 需要打到测试业务域换业务 token；
-      // 如果继续硬编码生产 api.z.ai，本地测试登录会在 OAuth token 成功后失败。
-      loginUrl: config2.businessLoginUrl ?? "https://api.z.ai/api/auth/z/login",
-      timeoutMs: ZAI_BUSINESS_TOKEN_TIMEOUT_MS
-    });
-  }
-  config;
-  providerId;
-  meta;
-  redirectUri;
-  apiClient;
-  businessTokenResolver;
-  lastBackendUserProfile = null;
-  parseCallbackParams(url4) {
-    const parsed = new URL(url4);
-    const code = parsed.searchParams.get("code") ?? parsed.searchParams.get("authCode");
-    const state = parsed.searchParams.get("state");
-    if (!code || !state) {
-      throw new Error("OAuth \u56DE\u8C03\u7F3A\u5C11 code/authCode \u6216 state \u53C2\u6570");
-    }
-    const attribution = parseOAuthLoginAttribution(parsed.searchParams);
-    return { code, state, ...attribution ? { attribution } : {} };
-  }
-  buildAuthorizeUrl(context) {
-    if (this.providerId === ZAI_CN_PROVIDER_ID)
-      throw new Error("\u4E2D\u56FD\u533A\u6388\u6743\u5FC5\u987B\u4F7F\u7528\u670D\u52A1\u7AEF init \u8FD4\u56DE\u7684 URL");
-    const query = new URLSearchParams({
-      redirect_uri: context.redirectUri,
-      response_type: "code",
-      client_id: this.config.appId,
-      state: context.state
-    });
-    return `${this.config.authorizeUrl}?${query.toString()}`;
-  }
-  async normalizePolledTokenSet(tokenSet) {
-    return {
-      ...tokenSet,
-      accessToken: this.providerId === ZAI_CN_PROVIDER_ID ? tokenSet.accessToken : await this.businessTokenResolver.resolve(tokenSet.accessToken)
-    };
-  }
-  async exchangeToken(params, context) {
-    log11.info(void 0, "token request", {
-      method: "POST",
-      url: this.config.tokenUrl,
-      headers: { "Content-Type": "application/json" },
-      body: {
-        provider: this.providerId,
-        code: maskOAuthCode2(params.code),
-        codeLength: params.code.length,
-        redirect_uri: context.redirectUri,
-        state: context.state
-      }
-    });
-    let tokenPayload;
-    try {
-      tokenPayload = await readApiJson(
-        this.apiClient,
-        this.config.tokenUrl,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          // zcode OAuth token 后端现在同时服务 Z.ai 和 BigModel。
-          // 显式传 provider 枚举值，避免只依赖 redirect_uri 推断登录域导致兑换错路由。
-          body: JSON.stringify({
-            provider: this.providerId,
-            code: params.code,
-            redirect_uri: context.redirectUri,
-            state: context.state
-          })
-        }
-      );
-    } catch (error62) {
-      logTokenResponseError(error62);
-      throw error62;
-    }
-    log11.info(void 0, "token final response summary", sanitizeTokenPayloadForLog(tokenPayload));
-    if (tokenPayload.code !== 0) {
-      throw new Error(tokenPayload.msg?.trim() || "ZAI \u540E\u7AEF token \u4EA4\u6362\u5931\u8D25");
-    }
-    const zcodeJwtToken = tokenPayload.data?.token;
-    if (!zcodeJwtToken) {
-      throw new Error("Token \u4EA4\u6362\u5931\u8D25\uFF1A\u54CD\u5E94\u7F3A\u5C11 data.token");
-    }
-    const accessToken = tokenPayload.data?.zai?.access_token;
-    if (!accessToken) {
-      throw new Error("Token \u4EA4\u6362\u5931\u8D25\uFF1A\u54CD\u5E94\u7F3A\u5C11 data.zai.access_token");
-    }
-    const businessAccessToken = this.providerId === ZAI_CN_PROVIDER_ID ? accessToken : await this.businessTokenResolver.resolve(accessToken);
-    const backendUser = tokenPayload.data?.user ?? void 0;
-    if (!backendUser?.user_id?.trim())
-      throw new Error("Token \u4EA4\u6362\u5931\u8D25\uFF1A\u54CD\u5E94\u7F3A\u5C11 data.user.user_id");
-    if (hasMeaningfulBackendUser(backendUser)) {
-      this.lastBackendUserProfile = {
-        state: context.state,
-        profile: toBackendUserProfile(backendUser)
-      };
-    } else {
-      this.lastBackendUserProfile = null;
-    }
-    const expiresAt = normalizeExpiresIn(tokenPayload.data?.expires_in, context.now);
-    return {
-      accessToken: businessAccessToken,
-      zcodeJwtToken,
-      linkedBigModel: readLinkedBigModel(tokenPayload.data?.bigmodel),
-      ...expiresAt ? { expiresAt } : {}
-    };
-  }
-  async fetchUserInfo(tokenSet, _context) {
-    if (this.lastBackendUserProfile?.state === _context.state) {
-      const profile = this.lastBackendUserProfile.profile;
-      this.lastBackendUserProfile = null;
-      return profile;
-    }
-    if (this.providerId === ZAI_CN_PROVIDER_ID) {
-      if (!tokenSet.zcodeJwtToken) throw new Error("\u4E2D\u56FD\u533A profile \u7F3A\u5C11 ZCode JWT");
-      const payload = await readApiJson(
-        this.apiClient,
-        this.config.userinfoUrl,
-        {
-          headers: { Authorization: `Bearer ${tokenSet.zcodeJwtToken}` },
-          authFailurePolicy: "caller-handled",
-          timeoutMs: OAUTH_USERINFO_TIMEOUT_MS2
-        }
-      );
-      if (payload.code !== 0 || !payload.data?.user?.user_id?.trim())
-        throw new Error("\u4E2D\u56FD\u533A profile \u54CD\u5E94\u65E0\u6548");
-      return toBackendUserProfile(payload.data.user);
-    }
-    const userinfoPayload = await readApiJson(
-      this.apiClient,
-      this.config.userinfoUrl,
-      {
-        method: "GET",
-        // 启动恢复登录态会阻塞 UI 的“恢复中”落定。
-        // 如果这里没有超时兜底，弱网下请求可能长期挂起，界面会一直停在 loading。
-        // 这里统一限制为 1 分钟，超时后按失败路径收敛状态，避免无限等待。
-        timeoutMs: OAUTH_USERINFO_TIMEOUT_MS2,
-        headers: {
-          Authorization: `Bearer ${tokenSet.accessToken}`,
-          "Content-Type": "application/json"
-        }
-      }
-    );
-    const user = userinfoPayload.data ?? userinfoPayload;
-    const id3 = user.sub ?? user.id ?? "unknown";
-    const username = user.name ?? user.preferred_username ?? user.email ?? id3;
-    return {
-      id: id3,
-      username,
-      displayName: username,
-      avatarUrl: user.picture
-    };
-  }
-  normalizeError(error62) {
-    if (error62 instanceof Error) {
-      return error62;
-    }
-    return new Error(`ZAI OAuth \u5F02\u5E38: ${String(error62)}`);
-  }
-};
-function readLinkedBigModel(value2) {
-  if (value2 === void 0 || value2 === null) return void 0;
-  if (typeof value2 !== "object") throw new Error("BigModel \u5173\u8054\u54CD\u5E94\u65E0\u6548");
-  const raw = value2;
-  const customerId = typeof raw.customer_id === "string" ? raw.customer_id.trim() : "";
-  const accessToken = typeof raw.access_token === "string" ? raw.access_token.trim() : "";
-  if (!customerId || !accessToken) throw new Error("BigModel \u5173\u8054\u54CD\u5E94\u7F3A\u5C11\u8EAB\u4EFD\u6216\u51ED\u636E");
-  return { customerId, accessToken };
-}
-
-// packages/services/src/oauth/providers/index.ts
-function createOAuthProviderAdapters(config2, options2 = {}) {
-  const adapters = [];
-  const apiClient = options2.apiClient;
-  if (!apiClient) {
-    throw new Error(
-      "ApiClient \u6CE8\u5165\u7F3A\u5931\uFF1AOAuth provider adapters \u5FC5\u987B\u901A\u8FC7 Providers \u4F20\u5165 apiClient"
-    );
-  }
-  for (const providerConfig of config2.providers) {
-    switch (providerConfig.id) {
-      case BIGMODEL_PROVIDER_ID:
-        adapters.push(new BigModelProviderAdapter(providerConfig, apiClient));
-        break;
-      case ZAI_PROVIDER_ID:
-      case ZAI_CN_PROVIDER_ID:
-        adapters.push(new ZaiProviderAdapter(providerConfig, apiClient));
-        break;
-      default:
-        break;
-    }
-  }
-  return adapters;
-}
-
-// packages/services/src/oauth/runtimeConfig.ts
-function createOAuthRuntimeConfig(env = process.env) {
-  return {
-    providers: [
-      createBigModelProviderRuntimeConfig(env),
-      createZaiProviderRuntimeConfig(env),
-      createZaiCnProviderRuntimeConfig(env)
-    ]
-  };
-}
-
-// packages/services/src/oauth/oauthService.ts
-var OAUTH_TIMEOUT_MS = 5 * 60 * 1e3;
-var OAUTH_PROFILE_TIMEOUT_MS = 1e4;
-var COMPLETED_POLLING_STATE_GRACE_MS = 30 * 1e3;
-var OAUTH_REFRESH_LOCK_MAX_WAIT_MS = 45e3;
-var OAUTH_REFRESH_NETWORK_TIMEOUT_MS = 3e4;
-var OAUTH_REFRESH_LOCK_SCHEMA_VERSION = 1;
-var OAUTH_REFRESH_DISPATCH_STATE_VERSION = 1;
-var ZCODE_JWT_TOKEN_KEY2 = "zcodejwttoken";
-var log12 = (...args) => console.log(formatLogPrefix("oauthService", process.pid), ...args);
-var serviceLog2 = createServiceLogger("oauthService");
-function readTrimmedString2(value2) {
-  return typeof value2 === "string" && value2.trim() ? value2.trim() : null;
-}
-function fingerprint2(value2) {
-  return createHash5("sha256").update(value2).digest("hex");
-}
-function resolveOAuthRefreshLockBasePath(credentialsFilePath, provider, profileId) {
-  const scope = fingerprint2(
-    JSON.stringify([OAUTH_REFRESH_LOCK_SCHEMA_VERSION, credentialsFilePath, provider, profileId])
-  ).slice(
-    0,
-    24
-  );
-  return join10(`${credentialsFilePath}.oauth-refresh-${scope}`);
-}
-function resolveOAuthRefreshDispatchStatePath(refreshLockBasePath) {
-  return `${refreshLockBasePath}.dispatch.json`;
-}
-function createRefreshCoordinationError(code, message, cause) {
-  return Object.assign(new Error(message, cause === void 0 ? void 0 : { cause }), { code });
-}
-function isSameOAuthTokenSet(left, right) {
-  return left.accessToken === right.accessToken && left.refreshToken === right.refreshToken && left.expiresAt === right.expiresAt && left.zcodeJwtToken === right.zcodeJwtToken && JSON.stringify(left.linkedBigModel ?? null) === JSON.stringify(right.linkedBigModel ?? null);
-}
-function hasRotatedAuthorizationMaterial(left, right) {
-  return left.accessToken !== right.accessToken || Boolean(left.refreshToken) && left.refreshToken !== right.refreshToken;
-}
-function isUsableOAuthTokenSet(tokenSet, now) {
-  return Boolean(tokenSet.accessToken.trim()) && (tokenSet.expiresAt === void 0 || tokenSet.expiresAt > now);
-}
-function dispatchStateMatchesCredentialMaterial(state, provider, profileId, tokenSet) {
-  return state.provider === provider && state.profileHash === fingerprint2(profileId) && state.accessTokenHash === fingerprint2(tokenSet.accessToken) && state.refreshTokenHash === fingerprint2(tokenSet.refreshToken ?? "");
-}
-function isUnknownRecord(value2) {
-  return typeof value2 === "object" && value2 !== null;
-}
-function toUserInfo(profile) {
-  return {
-    id: profile.id,
-    username: profile.username,
-    displayName: profile.displayName,
-    ...profile.avatarUrl ? { avatarUrl: profile.avatarUrl } : {}
-  };
-}
-function isSameOAuthProfile(left, right) {
-  return left.id === right.id && left.username === right.username && left.displayName === right.displayName && left.avatarUrl === right.avatarUrl && JSON.stringify(left.rawProfile ?? null) === JSON.stringify(right.rawProfile ?? null);
-}
-var OAuthService = class {
-  sessionChanges = new Emitter();
-  onDidChangeSession = this.sessionChanges.event;
-  credentialService;
-  captureCredentialGuard;
-  repo;
-  adapters = /* @__PURE__ */ new Map();
-  now;
-  monotonicNow;
-  onProviderLogout;
-  apiClient;
-  env;
-  refreshLockOptions;
-  refreshNetworkTimeoutMs;
-  onRefreshWaitStarted;
-  onRefreshLockAcquired;
-  profileRefreshes = /* @__PURE__ */ new Map();
-  pendingState = null;
-  oauthFlowStartGeneration = 0;
-  oauthFlowStartProvider = null;
-  oauthSessionGeneration = 0;
-  sessionMutationQueue = Promise.resolve();
-  recentlyCompletedPollingState = null;
-  /** Host 定时器清除的 polling flow 的发起代次；新登录或取消推进代次后自然失效。 */
-  expiredPollingGeneration = null;
-  constructor(credentialService, dependencies = {}) {
-    this.credentialService = credentialService;
-    this.captureCredentialGuard = dependencies.captureCredentialGuard;
-    this.now = dependencies.now ?? Date.now;
-    this.monotonicNow = dependencies.monotonicNow ?? (() => performance.now());
-    this.onProviderLogout = dependencies.onProviderLogout;
-    this.apiClient = dependencies.apiClient;
-    this.env = dependencies.env ?? process.env;
-    this.refreshLockOptions = {
-      lockMaxWaitMs: OAUTH_REFRESH_LOCK_MAX_WAIT_MS,
-      ...dependencies.refreshLockOptions
-    };
-    this.refreshNetworkTimeoutMs = dependencies.refreshNetworkTimeoutMs ?? OAUTH_REFRESH_NETWORK_TIMEOUT_MS;
-    this.onRefreshWaitStarted = dependencies.onRefreshWaitStarted;
-    this.onRefreshLockAcquired = dependencies.onRefreshLockAcquired;
-    const adapters = dependencies.adapters ?? createOAuthProviderAdapters(createOAuthRuntimeConfig(dependencies.env), {
-      apiClient: dependencies.apiClient
-    });
-    for (const adapter of adapters) {
-      this.adapters.set(adapter.providerId, adapter);
-    }
-    this.repo = new OAuthCredentialRepo(credentialService, {
-      providerIds: adapters.map((adapter) => adapter.providerId),
-      onCorruptOAuthSessionCleared: async (providers) => {
-        this.sessionChanges.fire("signed-out");
-        await this.notifyProvidersLogout(providers);
-      }
-    });
-  }
-  async getProviders() {
-    return [...this.adapters.values()].map((adapter) => adapter.meta).filter((meta4) => meta4.enabled).sort((a, b) => a.order - b.order);
-  }
-  async getActiveProvider() {
-    return this.repo.getActiveProvider();
-  }
-  async getAccountAvailability() {
-    return this.repo.loadAccountAvailability();
-  }
-  getWebsiteSession() {
-    return this.repo.loadWebsiteSession();
-  }
-  async refreshAccountProfile(expected) {
-    const snapshot = await this.repo.loadSessionSnapshot();
-    const provider = snapshot["oauth:active_provider"];
-    const profile = provider ? this.repo.profileFromSnapshot(snapshot, provider) : null;
-    const tokens = provider ? this.repo.tokenSetFromSnapshot(snapshot, provider) : null;
-    const jwt2 = tokens?.zcodeJwtToken;
-    if (expected && (expected.loginProvider !== provider || expected.userId !== profile?.id || expected.sessionRevision !== (snapshot["oauth:session_revision"] ?? null))) {
-      return this.getAccountAvailability();
-    }
-    if (!provider || !profile || !tokens || !jwt2 || !this.apiClient)
-      return this.getAccountAvailability();
-    const key = JSON.stringify([provider, profile.id, snapshot["oauth:session_revision"], jwt2]);
-    const existing = this.profileRefreshes.get(key);
-    if (existing) return existing;
-    const refresh = (async () => {
-      const response2 = await readApiJson(
-        this.apiClient,
-        buildZCodeApiUrlFromEnv(this.env, "/api/v1/oauth/profile"),
-        {
-          headers: { Authorization: `Bearer ${jwt2}` },
-          authFailurePolicy: "caller-handled",
-          timeoutMs: OAUTH_PROFILE_TIMEOUT_MS
-        }
-      );
-      const data = response2.data;
-      if (response2.code !== 0 || !isUnknownRecord(data) || !isUnknownRecord(data.user) || readTrimmedString2(data.user.user_id) !== profile.id) {
-        throw new Error("\u8D26\u53F7\u5173\u8054\u54CD\u5E94\u65E0\u6548\u6216\u4E3B\u4F53\u4E0D\u4E00\u81F4");
-      }
-      const linkedBigModel = readLinkedBigModel(data.bigmodel);
-      if (linkedBigModel && JSON.stringify(linkedBigModel) !== JSON.stringify(tokens.linkedBigModel)) {
-        await this.runSessionMutation(async () => {
-          if (this.pendingState || this.oauthFlowStartProvider) return;
-          if (await this.repo.commitSession(
-            snapshot,
-            provider,
-            { ...tokens, linkedBigModel },
-            profile
-          ))
-            this.oauthSessionGeneration += 1;
-        });
-      }
-      return this.getAccountAvailability();
-    })();
-    this.profileRefreshes.set(key, refresh);
-    try {
-      return await refresh;
-    } finally {
-      if (this.profileRefreshes.get(key) === refresh) this.profileRefreshes.delete(key);
-    }
-  }
-  async restoreCachedSession() {
-    const result = await this.restoreCachedSessionState();
-    return result.status === "authenticated" ? result.userInfo : null;
-  }
-  async restoreCachedSessionState() {
-    return this.withCurrentCredentialStore(() => this.restoreCachedSessionStateInternal());
-  }
-  async withCurrentCredentialStore(operation) {
-    const guard = await this.captureCredentialGuard?.();
-    return guard ? guard(operation) : operation();
-  }
-  async restoreCachedSessionStateInternal() {
-    const restoreGeneration = this.oauthSessionGeneration;
-    const snapshot = await this.repo.loadSessionSnapshot();
-    const activeProvider = snapshot["oauth:active_provider"];
-    if (!activeProvider) {
-      log12("restoreCachedSession skipped: no active provider");
-      return { status: "signed-out" };
-    }
-    const adapter = this.adapters.get(activeProvider);
-    if (!adapter || !adapter.meta.enabled) {
-      log12(
-        "restoreCachedSession aborted: provider unavailable, clearing active provider:",
-        activeProvider
-      );
-      if (!await this.repo.clearActiveSession(snapshot)) return this.restoreCachedSessionState();
-      return { status: "signed-out" };
-    }
-    const profile = this.repo.profileFromSnapshot(snapshot, activeProvider);
-    if (!profile) {
-      log12("restoreCachedSession skipped: missing cached user profile:", activeProvider);
-      return { status: "signed-out" };
-    }
-    const tokens = [
-      ZCODE_JWT_TOKEN_KEY2,
-      ...activeProvider === ZAI_CN_PROVIDER_ID ? [] : [`oauth:${activeProvider}:access_token`]
-    ].map((key) => ({
-      key,
-      value: snapshot[key]?.trim() ?? ""
-    }));
-    const expired = tokens.find(
-      ({ value: value2 }) => value2 && resolveJwtExpiration(value2, this.now()).kind === "expired"
-    );
-    const zcodeJwtToken = tokens[0]?.value ?? "";
-    if (expired) {
-      serviceLog2.info("cached session invalidated because login JWT expired", {
-        provider: activeProvider,
-        credentialKey: expired.key
-      });
-      const invalidated = await this.invalidateExpiredCachedSession(
-        restoreGeneration,
-        activeProvider,
-        profile,
-        expired.value,
-        snapshot,
-        expired.key
-      );
-      if (!invalidated) {
-        return this.restoreCachedSessionState();
-      }
-      return { status: "reauthentication-required", reason: "jwt-expired" };
-    }
-    if (activeProvider === BIGMODEL_PROVIDER_ID) {
-      const migrationGeneration = this.oauthSessionGeneration;
-      void refreshLegacyBigModelCachedProfile({
-        adapter,
-        cachedProfile: profile,
-        loadTokenSet: () => this.loadBigModelCachedProfileMigrationTokenSet(migrationGeneration, profile),
-        now: this.now,
-        runWithAdapterError: (run) => this.runWithAdapterError(adapter, run),
-        saveProfile: (nextProfile) => this.saveBigModelCachedProfileMigration(
-          migrationGeneration,
-          profile,
-          nextProfile,
-          snapshot
-        )
-      }).then((migratedProfile) => {
-        if (migratedProfile !== profile) {
-          log12(
-            "restoreCachedSession migrated cached profile:",
-            activeProvider,
-            migratedProfile.id
-          );
-        }
-      }).catch((error62) => {
-        log12(
-          "restoreCachedSession background profile migration failed:",
-          activeProvider,
-          error62 instanceof Error ? error62.message : String(error62)
-        );
-      });
-    }
-    if (isZaiOAuthProvider(activeProvider)) {
-      if (!zcodeJwtToken) {
-        log12("restoreCachedSession skipped: missing zcodejwttoken:", activeProvider);
-        return { status: "signed-out" };
-      }
-    }
-    log12("restoreCachedSession restored:", activeProvider, profile.id);
-    return { status: "authenticated", userInfo: toUserInfo(profile) };
-  }
-  async invalidateExpiredCachedSession(expectedGeneration, expectedProvider, expectedProfile, expectedJwt, expectedSnapshot, credentialKey = ZCODE_JWT_TOKEN_KEY2) {
-    const invalidated = await this.runSessionMutation(async () => {
-      const snapshot = await this.repo.loadSessionSnapshot();
-      const currentProvider = snapshot["oauth:active_provider"];
-      const currentProfile = this.repo.profileFromSnapshot(snapshot, expectedProvider);
-      const currentJwt = snapshot[credentialKey]?.trim() ?? "";
-      if (this.oauthSessionGeneration !== expectedGeneration || currentProvider !== expectedProvider || !currentProfile || !isSameOAuthProfile(currentProfile, expectedProfile) || currentJwt !== expectedJwt) {
-        serviceLog2.info("skipped stale expired JWT session invalidation", {
-          provider: expectedProvider
-        });
-        return false;
-      }
-      if (!await this.repo.clearActiveSession(expectedSnapshot)) return false;
-      this.oauthSessionGeneration += 1;
-      this.sessionChanges.fire("signed-out");
-      return true;
-    });
-    if (!invalidated) {
-      return false;
-    }
-    await this.cancelPending(expectedProvider);
-    try {
-      await this.notifyProviderLogout(expectedProvider, expectedProfile.id);
-    } catch (error62) {
-      serviceLog2.warn("expired JWT derived provider cleanup failed", {
-        provider: expectedProvider,
-        error: error62
-      });
-    }
-    return true;
-  }
-  async loadBigModelCachedProfileMigrationTokenSet(expectedGeneration, expectedCachedProfile) {
-    return this.runSessionMutation(async () => {
-      if (this.oauthSessionGeneration !== expectedGeneration) {
-        log12("restoreCachedSession skipped stale BigModel token migration");
-        return null;
-      }
-      const activeProvider = await this.repo.getActiveProvider();
-      const currentProfile = await this.repo.loadUserProfile(BIGMODEL_PROVIDER_ID);
-      if (activeProvider !== BIGMODEL_PROVIDER_ID || !currentProfile || !isSameOAuthProfile(currentProfile, expectedCachedProfile)) {
-        log12("restoreCachedSession skipped stale BigModel token migration:", activeProvider);
-        return null;
-      }
-      return this.repo.loadTokenSet(BIGMODEL_PROVIDER_ID);
-    });
-  }
-  async saveBigModelCachedProfileMigration(expectedGeneration, expectedCachedProfile, nextProfile, expectedSnapshot) {
-    await this.runSessionMutation(async () => {
-      if (this.oauthSessionGeneration !== expectedGeneration) {
-        log12("restoreCachedSession skipped stale BigModel profile migration");
-        return;
-      }
-      const activeProvider = await this.repo.getActiveProvider();
-      if (activeProvider !== BIGMODEL_PROVIDER_ID) {
-        log12("restoreCachedSession skipped stale BigModel profile migration:", activeProvider);
-        return;
-      }
-      const currentProfile = await this.repo.loadUserProfile(BIGMODEL_PROVIDER_ID);
-      if (!currentProfile || !isSameOAuthProfile(currentProfile, expectedCachedProfile)) {
-        log12("restoreCachedSession skipped outdated BigModel profile migration");
-        return;
-      }
-      if (!await this.repo.saveUserProfile(BIGMODEL_PROVIDER_ID, nextProfile, expectedSnapshot))
-        throw new Error("OAuth session changed during cached profile migration");
-    });
-  }
-  runSessionMutation(run) {
-    const next = this.sessionMutationQueue.catch(() => void 0).then(run);
-    this.sessionMutationQueue = next.catch(() => void 0);
-    return next;
-  }
-  async persistOAuthSession(provider, tokenSet, profile, expected, isStillCurrent) {
-    const committed = await this.repo.commitSession(
-      expected,
-      provider,
-      tokenSet,
-      withProviderProfileSchema(provider, profile),
-      () => {
-        if (!isStillCurrent()) throw new Error("OAuth flow \u5DF2\u53D6\u6D88");
-      }
-    );
-    if (!committed) throw new Error("OAuth \u4F1A\u8BDD\u5DF2\u53D8\u5316\uFF0C\u8BF7\u91CD\u65B0\u53D1\u8D77\u767B\u5F55");
-    this.oauthSessionGeneration += 1;
-    this.sessionChanges.fire("signed-in");
-  }
-  async runPendingSessionCompletion(pending, complete, preserveAttribution) {
-    const guarded = (operation) => pending.credentialGuard ? pending.credentialGuard(operation) : operation();
-    const completion = (async () => {
-      const admitted = await this.runSessionMutation(
-        () => guarded(async () => {
-          if (this.pendingState !== pending) {
-            if (!this.pendingState && this.recentlyCompletedPollingState?.state === pending.state && this.recentlyCompletedPollingState.generation === this.oauthFlowStartGeneration)
-              await preserveAttribution?.();
-            return false;
-          }
-          await preserveAttribution?.();
-          return true;
-        })
-      );
-      if (!admitted) {
-        return !this.pendingState && this.recentlyCompletedPollingState?.state === pending.state && this.recentlyCompletedPollingState.generation === this.oauthFlowStartGeneration ? { kind: "duplicate", provider: pending.provider } : null;
-      }
-      const { tokenSet, profile } = await complete();
-      return this.runSessionMutation(
-        () => guarded(async () => {
-          if (this.pendingState !== pending) {
-            return !this.pendingState && this.recentlyCompletedPollingState?.state === pending.state && this.recentlyCompletedPollingState.generation === this.oauthFlowStartGeneration ? { kind: "duplicate", provider: pending.provider } : null;
-          }
-          await this.persistOAuthSession(
-            pending.provider,
-            tokenSet,
-            profile,
-            pending.expectedSession,
-            () => this.pendingState === pending
-          );
-          this.clearPendingState();
-          this.recentlyCompletedPollingState = {
-            credentialGuard: pending.credentialGuard,
-            generation: this.oauthFlowStartGeneration,
-            expiresAt: this.now() + COMPLETED_POLLING_STATE_GRACE_MS,
-            provider: pending.provider,
-            state: pending.state
-          };
-          return { kind: "session", provider: pending.provider, userInfo: toUserInfo(profile) };
-        })
-      );
-    })();
-    const completions = pending.completions ??= /* @__PURE__ */ new Set();
-    completions.add(completion);
-    void completion.then(
-      () => completions.delete(completion),
-      () => completions.delete(completion)
-    );
-    try {
-      return await completion;
-    } catch (error62) {
-      if (!this.pendingState && this.recentlyCompletedPollingState?.state === pending.state && this.recentlyCompletedPollingState.generation === this.oauthFlowStartGeneration)
-        return { kind: "duplicate", provider: pending.provider };
-      if (this.pendingState !== pending) return null;
-      serviceLog2.warn(void 0, "OAuth completion candidate failed", {
-        provider: pending.provider
-      });
-      while (completions.size > 0 && this.pendingState === pending) {
-        await Promise.allSettled(completions);
-        if (!this.pendingState && this.recentlyCompletedPollingState?.state === pending.state && this.recentlyCompletedPollingState.generation === this.oauthFlowStartGeneration) {
-          return { kind: "duplicate", provider: pending.provider };
-        }
-        if (this.pendingState !== pending) return null;
-      }
-      throw error62;
-    }
-  }
-  async restoreSession() {
-    return this.withCurrentCredentialStore(() => this.restoreSessionInternal());
-  }
-  async restoreSessionInternal() {
-    const snapshot = await this.repo.loadSessionSnapshot();
-    const activeProvider = snapshot["oauth:active_provider"];
-    if (!activeProvider) {
-      log12("restoreSession skipped: no active provider");
-      return null;
-    }
-    log12("restoreSession started:", activeProvider);
-    const adapter = this.adapters.get(activeProvider);
-    if (!adapter || !adapter.meta.enabled) {
-      log12(
-        "restoreSession aborted: provider unavailable, clearing active provider:",
-        activeProvider
-      );
-      await this.repo.clearActiveSession(snapshot);
-      return null;
-    }
-    let tokenSet = this.repo.tokenSetFromSnapshot(snapshot, activeProvider);
-    if (!tokenSet && adapter.loadLegacyTokenSet) {
-      log12("restoreSession fallback: trying provider legacy token set:", activeProvider);
-      tokenSet = await adapter.loadLegacyTokenSet((key) => this.credentialService.load(key));
-    }
-    if (!tokenSet || !adapter.fetchUserInfo) {
-      log12(
-        "restoreSession failed: missing token or user-info capability, logging out:",
-        activeProvider
-      );
-      await this.logoutActiveSession(
-        async () => JSON.stringify(await this.repo.loadSessionSnapshot()) === JSON.stringify(snapshot)
-      );
-      return null;
-    }
-    try {
-      log12("restoreSession validating token with provider userinfo endpoint:", activeProvider);
-      const fetchedProfile = await this.runWithAdapterError(
-        adapter,
-        () => adapter.fetchUserInfo(tokenSet, {
-          providerId: activeProvider,
-          state: "",
-          redirectUri: adapter.redirectUri,
-          now: this.now
-        })
-      );
-      const cachedProfile = this.repo.profileFromSnapshot(snapshot, activeProvider);
-      if ((activeProvider === BIGMODEL_PROVIDER_ID || activeProvider === ZAI_PROVIDER_ID) && (!cachedProfile || cachedProfile.id === "unknown"))
-        return null;
-      const profile = activeProvider === BIGMODEL_PROVIDER_ID || activeProvider === ZAI_PROVIDER_ID ? mergeOAuthDisplayProfile(cachedProfile, fetchedProfile) : fetchedProfile;
-      if (activeProvider === ZAI_CN_PROVIDER_ID && profile.id !== this.repo.profileFromSnapshot(snapshot, activeProvider)?.id) {
-        throw new Error("profile \u8FD4\u56DE\u7684\u8D26\u53F7\u4E0E\u5F53\u524D\u4F1A\u8BDD\u4E0D\u4E00\u81F4");
-      }
-      if (!await this.repo.commitSession(
-        snapshot,
-        activeProvider,
-        {
-          ...tokenSet,
-          zcodeJwtToken: tokenSet.zcodeJwtToken ?? snapshot[ZCODE_JWT_TOKEN_KEY2] ?? void 0
-        },
-        withProviderProfileSchema(activeProvider, profile)
-      ))
-        return null;
-      log12("restoreSession validated:", activeProvider, profile.id);
-      return toUserInfo(profile);
-    } catch (error62) {
-      const normalized = adapter.normalizeError(error62);
-      if (activeProvider !== ZAI_CN_PROVIDER_ID && this.isUnauthorizedError(normalized)) {
-        log12("restoreSession unauthorized, logging out:", activeProvider, normalized.message);
-        await this.logoutActiveSession(
-          async () => JSON.stringify(await this.repo.loadSessionSnapshot()) === JSON.stringify(snapshot)
-        );
-        return null;
-      }
-      log12("restoreSession validation error:", activeProvider, normalized.message);
-      throw normalized;
-    }
-  }
-  async startOAuth(provider) {
-    if (provider === ZAI_CN_PROVIDER_ID) return this.startOAuthWithPolling(provider);
-    return this.startOAuthInternal(provider);
-  }
-  async startOAuthWithPolling(provider) {
-    if (!isBuiltinOAuthProvider(provider)) {
-      return this.startOAuthInternal(provider);
-    }
-    const adapter = this.getEnabledAdapter(provider);
-    if (!this.apiClient) {
-      throw new Error("ApiClient \u6CE8\u5165\u7F3A\u5931\uFF1AOAuth polling \u5FC5\u987B\u901A\u8FC7 Providers \u4F20\u5165 apiClient");
-    }
-    const { startGeneration, expectedSession, credentialGuard } = await this.runSessionMutation(
-      async () => {
-        const startGeneration2 = ++this.oauthFlowStartGeneration;
-        this.oauthFlowStartProvider = provider;
-        this.clearPendingState();
-        const credentialGuard2 = await this.captureCredentialGuard?.();
-        return {
-          startGeneration: startGeneration2,
-          credentialGuard: credentialGuard2,
-          expectedSession: await this.repo.loadSessionSnapshot()
-        };
-      }
-    );
-    if (this.oauthFlowStartGeneration !== startGeneration)
-      throw new Error("OAuth flow \u5DF2\u88AB\u65B0\u7684\u767B\u5F55\u8BF7\u6C42\u66FF\u6362");
-    const pollToken = randomBytes2(32).toString("hex");
-    const initUrl = buildZCodeApiUrlFromEnv(this.env, "/api/v1/oauth/cli/init");
-    const envelope2 = await readApiJson(this.apiClient, initUrl, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${pollToken}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ provider })
-    });
-    if (this.oauthFlowStartGeneration !== startGeneration) {
-      throw new Error("OAuth flow \u5DF2\u88AB\u65B0\u7684\u767B\u5F55\u8BF7\u6C42\u66FF\u6362");
-    }
-    this.oauthFlowStartProvider = null;
-    const data = envelope2.data;
-    if (envelope2.code !== 0 || !isUnknownRecord(data) || !readTrimmedString2(data.flow_id) || !readTrimmedString2(data.authorize_url) || !Number.isFinite(data.expires_at) || !Number.isFinite(data.poll_interval_sec)) {
-      throw new Error(readTrimmedString2(envelope2.msg) || "OAuth flow \u521D\u59CB\u5316\u54CD\u5E94\u65E0\u6548");
-    }
-    const flowId = readTrimmedString2(data.flow_id);
-    const authorizeUrlString = readTrimmedString2(data.authorize_url);
-    const expiresAt = data.expires_at * 1e3;
-    const pollIntervalMs = data.poll_interval_sec * 1e3;
-    let authorizeUrl;
-    try {
-      authorizeUrl = new URL(authorizeUrlString);
-    } catch {
-      throw new Error("OAuth flow \u521D\u59CB\u5316\u54CD\u5E94\u65E0\u6548");
-    }
-    if (provider === BIGMODEL_PROVIDER_ID) {
-      authorizeUrl.searchParams.set("redirect", buildDesktopOAuthRedirectUriFromEnv(this.env));
-    } else if (isZaiOAuthProvider(provider)) {
-      const redirectUri = new URL(buildDesktopOAuthRedirectUriFromEnv(this.env));
-      if (provider === ZAI_CN_PROVIDER_ID) redirectUri.searchParams.set("provider", provider);
-      authorizeUrl.searchParams.set("redirect_uri", redirectUri.toString());
-    }
-    const state = authorizeUrl.searchParams.get("state")?.trim();
-    const remainingLifetimeMs = expiresAt - this.now();
-    if (authorizeUrl.protocol !== "https:" || !state || !Number.isFinite(expiresAt) || !Number.isFinite(pollIntervalMs) || remainingLifetimeMs <= 0 || pollIntervalMs < 1e3 || pollIntervalMs >= remainingLifetimeMs) {
-      throw new Error("OAuth flow \u521D\u59CB\u5316\u54CD\u5E94\u65E0\u6548");
-    }
-    const timeoutMs = Math.min(OAUTH_TIMEOUT_MS, remainingLifetimeMs);
-    await credentialGuard?.(() => this.credentialService.inspectStore());
-    if (this.oauthFlowStartGeneration !== startGeneration)
-      throw new Error("OAuth flow \u5DF2\u88AB\u65B0\u7684\u767B\u5F55\u8BF7\u6C42\u66FF\u6362");
-    const timeout = setTimeout(() => {
-      const pending = this.pendingState;
-      void this.runSessionMutation(async () => {
-        if (this.pendingState === pending && pending?.state === state && pending.polling?.flowId === flowId) {
-          this.clearPendingState();
-          this.expiredPollingGeneration = startGeneration;
-        }
-      });
-    }, timeoutMs);
-    this.pendingState = {
-      credentialGuard,
-      state,
-      expectedSession,
-      provider: adapter.providerId,
-      timeout,
-      phase: "awaiting-attribution-or-code",
-      ...provider === ZAI_CN_PROVIDER_ID ? { redirectUri: authorizeUrl.searchParams.get("redirect_uri") ?? void 0 } : {},
-      polling: {
-        expiresAt,
-        flowId,
-        nextPollAt: this.monotonicNow(),
-        pollIntervalMs,
-        pollToken,
-        pollUrl: buildZCodeApiUrlFromEnv(
-          this.env,
-          `/api/v1/oauth/cli/poll/${encodeURIComponent(flowId)}`
-        )
-      }
-    };
-    serviceLog2.info("OAuth polling flow started", {
-      expiresInMs: timeoutMs,
-      pollIntervalMs,
-      provider
-    });
-    return { provider, authorizeUrl: authorizeUrl.toString(), state };
-  }
-  async pollPendingOAuth() {
-    const apiClient = this.apiClient;
-    if (!apiClient) {
-      return null;
-    }
-    const pending = this.pendingState;
-    const polling = pending?.polling;
-    if (!pending || !polling) {
-      if (this.expiredPollingGeneration === this.oauthFlowStartGeneration)
-        throw new Error("OAuth flow \u5DF2\u8FC7\u671F");
-      return null;
-    }
-    if (this.now() >= polling.expiresAt) {
-      await this.cancelPending(pending.provider);
-      throw new Error("OAuth flow \u5DF2\u8FC7\u671F");
-    }
-    const pollNow = this.monotonicNow();
-    if (pollNow < polling.nextPollAt) {
-      return null;
-    }
-    polling.nextPollAt = pollNow + polling.pollIntervalMs;
-    let envelope2;
-    try {
-      envelope2 = await readApiJson(apiClient, polling.pollUrl, {
-        headers: { Authorization: `Bearer ${polling.pollToken}` }
-      });
-    } catch (error62) {
-      if (this.pendingState !== pending) return null;
-      if (error62 instanceof ApiError && error62.status && error62.status >= 400 && error62.status < 500 && error62.status !== 408 && error62.status !== 429) {
-        try {
-          return await this.runPendingSessionCompletion(pending, async () => {
-            throw error62;
-          });
-        } catch (terminalError) {
-          await this.runSessionMutation(async () => {
-            if (this.pendingState === pending) this.clearPendingState();
-          });
-          throw terminalError;
-        }
-      }
-      serviceLog2.debug("OAuth polling request will retry", {
-        error: error62 instanceof Error ? error62.message : String(error62),
-        provider: pending.provider
-      });
-      return null;
-    }
-    if (this.pendingState !== pending) {
-      return null;
-    }
-    if (envelope2.code === 0 && isUnknownRecord(envelope2.data) && readTrimmedString2(envelope2.data.status) === "pending") {
-      return null;
-    }
-    try {
-      const result = await this.runPendingSessionCompletion(pending, async () => {
-        const pollData = envelope2.data;
-        if (envelope2.code !== 0 || !isUnknownRecord(pollData)) {
-          throw new Error(readTrimmedString2(envelope2.msg) || "OAuth flow \u67E5\u8BE2\u54CD\u5E94\u65E0\u6548");
-        }
-        const status = readTrimmedString2(pollData.status);
-        if (status === "failed") {
-          throw new Error("OAuth flow \u6388\u6743\u5931\u8D25");
-        }
-        if (status !== "ready") {
-          throw new Error("OAuth flow \u67E5\u8BE2\u54CD\u5E94\u65E0\u6548");
-        }
-        const ready = pollData;
-        const user = isUnknownRecord(ready.user) ? ready.user : null;
-        const zai = isUnknownRecord(ready.zai) ? ready.zai : null;
-        const bigmodel = isUnknownRecord(ready.bigmodel) ? ready.bigmodel : null;
-        const providerAccessToken = isZaiOAuthProvider(pending.provider) ? readTrimmedString2(zai?.access_token) : readTrimmedString2(bigmodel?.access_token) || readTrimmedString2(bigmodel?.accessToken);
-        const zcodeJwtToken = readTrimmedString2(ready.token);
-        const userId = readTrimmedString2(user?.user_id);
-        if (!zcodeJwtToken || !providerAccessToken || !userId) {
-          throw new Error("OAuth flow \u67E5\u8BE2\u54CD\u5E94\u65E0\u6548");
-        }
-        const username = readTrimmedString2(user?.name) || readTrimmedString2(user?.email) || userId;
-        const avatarUrl = readTrimmedString2(user?.avatar);
-        const profile = {
-          id: userId,
-          username,
-          displayName: username,
-          ...avatarUrl ? { avatarUrl } : {},
-          rawProfile: user
-        };
-        const adapter = this.getAdapter(pending.provider);
-        const refreshToken = pending.provider === BIGMODEL_PROVIDER_ID ? readTrimmedString2(bigmodel?.refresh_token) || readTrimmedString2(bigmodel?.refreshToken) : void 0;
-        const linkedBigModel = isZaiOAuthProvider(pending.provider) ? readLinkedBigModel(ready.bigmodel) : void 0;
-        const tokenSet = adapter.normalizePolledTokenSet ? await adapter.normalizePolledTokenSet({
-          accessToken: providerAccessToken,
-          zcodeJwtToken,
-          linkedBigModel,
-          ...refreshToken ? { refreshToken } : {}
-        }) : {
-          accessToken: providerAccessToken,
-          zcodeJwtToken,
-          linkedBigModel,
-          ...refreshToken ? { refreshToken } : {}
-        };
-        return { tokenSet, profile };
-      });
-      if (result?.kind === "session") {
-        serviceLog2.info("OAuth polling flow completed", { provider: pending.provider });
-      }
-      return result;
-    } catch (error62) {
-      await this.runSessionMutation(async () => {
-        if (this.pendingState === pending) this.clearPendingState();
-      });
-      throw error62;
-    }
-  }
-  async startOAuthInternal(provider) {
-    const adapter = this.getEnabledAdapter(provider);
-    const start = await this.runSessionMutation(async () => {
-      this.oauthFlowStartGeneration += 1;
-      this.oauthFlowStartProvider = null;
-      this.clearPendingState();
-      const credentialGuard = await this.captureCredentialGuard?.();
-      return {
-        generation: this.oauthFlowStartGeneration,
-        credentialGuard,
-        expectedSession: await this.repo.loadSessionSnapshot()
-      };
-    });
-    if (start.generation !== this.oauthFlowStartGeneration)
-      throw new Error("OAuth flow \u5DF2\u88AB\u65B0\u7684\u767B\u5F55\u8BF7\u6C42\u66FF\u6362");
-    const state = randomBytes2(32).toString("hex");
-    const timeout = setTimeout(() => {
-      void this.runSessionMutation(async () => {
-        if (this.pendingState?.state === state) this.clearPendingState();
-      });
-    }, OAUTH_TIMEOUT_MS);
-    this.pendingState = {
-      credentialGuard: start.credentialGuard,
-      state,
-      expectedSession: start.expectedSession,
-      provider: adapter.providerId,
-      timeout,
-      phase: "awaiting-attribution-or-code"
-    };
-    const authorizeUrl = adapter.buildAuthorizeUrl({
-      providerId: adapter.providerId,
-      state,
-      redirectUri: adapter.redirectUri,
-      now: this.now
-    });
-    return {
-      provider: adapter.providerId,
-      authorizeUrl,
-      state
-    };
-  }
-  async handleCallback(url4) {
-    const pending = this.pendingState;
-    if (!pending) {
-      const callbackState = new URL(url4).searchParams.get("state")?.trim();
-      const completed = this.recentlyCompletedPollingState;
-      if (callbackState && completed?.state === callbackState && completed.generation === this.oauthFlowStartGeneration && this.now() < completed.expiresAt) {
-        const attribution2 = parseOAuthLoginAttribution(new URL(url4).searchParams);
-        await this.runSessionMutation(async () => {
-          if (!this.pendingState && this.recentlyCompletedPollingState === completed && completed.generation === this.oauthFlowStartGeneration && attribution2) {
-            const save = () => this.repo.saveLoginAttribution(attribution2);
-            await (completed.credentialGuard ? completed.credentialGuard(save) : save());
-          }
-        });
-        return { kind: "duplicate", provider: completed.provider };
-      }
-      throw new Error("OAuth state \u4E0D\u5339\u914D\u6216\u5DF2\u8FC7\u671F");
-    }
-    const parsedUrl = new URL(url4);
-    const state = parsedUrl.searchParams.get("state");
-    if (!state || state !== pending.state) {
-      throw new Error("OAuth state \u4E0D\u5339\u914D\u6216\u5DF2\u8FC7\u671F");
-    }
-    if (pending.polling && this.now() >= pending.polling.expiresAt) {
-      await this.cancelPending(pending.provider);
-      throw new Error("OAuth flow \u5DF2\u8FC7\u671F");
-    }
-    const attribution = parseOAuthLoginAttribution(parsedUrl.searchParams);
-    if (attribution && !hasOAuthAuthorizationCode(parsedUrl.searchParams)) {
-      if (pending.phase === "awaiting-code-after-attribution") {
-        throw new Error("OAuth \u5F52\u56E0\u56DE\u8C03\u5DF2\u5904\u7406");
-      }
-      pending.phase = "awaiting-code-after-attribution";
-      try {
-        const save = () => this.repo.saveLoginAttribution(attribution);
-        await (pending.credentialGuard ? pending.credentialGuard(save) : save());
-      } catch (error62) {
-        if (this.pendingState === pending) {
-          pending.phase = "awaiting-attribution-or-code";
-        }
-        throw error62;
-      }
-      return {
-        kind: "attribution",
-        provider: pending.provider,
-        attribution
-      };
-    }
-    if (pending.provider === ZAI_CN_PROVIDER_ID && pending.polling) {
-      const generation = this.oauthFlowStartGeneration;
-      return this.runSessionMutation(async () => {
-        const completed = this.recentlyCompletedPollingState;
-        const sameFlow = this.oauthFlowStartGeneration === generation && (this.pendingState === pending || !this.pendingState && completed?.state === pending.state && completed.generation === generation && this.now() < completed.expiresAt);
-        if (sameFlow && attribution) {
-          const save = () => this.repo.saveLoginAttribution(attribution);
-          await (pending.credentialGuard ? pending.credentialGuard(save) : save());
-        }
-        return null;
-      });
-    }
-    const adapter = this.getAdapter(pending.provider);
-    const fallbackProfile = {
-      id: "unknown",
-      username: "user",
-      displayName: "User"
-    };
-    return this.runPendingSessionCompletion(
-      pending,
-      async () => {
-        const callback = adapter.parseCallbackParams(url4);
-        const context = {
-          providerId: adapter.providerId,
-          state: callback.state,
-          redirectUri: pending.redirectUri ?? adapter.redirectUri,
-          now: this.now
-        };
-        const tokenSet = await this.runWithAdapterError(
-          adapter,
-          () => adapter.exchangeToken(callback, context)
-        );
-        let profile = fallbackProfile;
-        if (adapter.fetchUserInfo) {
-          try {
-            profile = await this.runWithAdapterError(
-              adapter,
-              () => adapter.fetchUserInfo(tokenSet, context)
-            );
-          } catch {
-          }
-        }
-        return { tokenSet, profile };
-      },
-      attribution ? () => this.repo.saveLoginAttribution(attribution) : void 0
-    );
-  }
-  async refreshToken(provider) {
-    return this.withCurrentCredentialStore(() => this.refreshTokenInternal(provider));
-  }
-  async refreshTokenInternal(provider) {
-    const generation = this.oauthSessionGeneration;
-    const targetProvider = await this.resolveProvider(provider);
-    if (!targetProvider) {
-      throw new Error("\u5F53\u524D\u6CA1\u6709\u53EF\u7528\u7684\u767B\u5F55 provider");
-    }
-    const adapter = this.getEnabledAdapter(targetProvider);
-    if (!adapter.refreshToken) {
-      throw new Error(
-        `${adapter.meta.displayName} OAuth \u6682\u672A\u63D0\u4F9B refresh token \u4EA4\u6362\u63A5\u53E3\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55`
-      );
-    }
-    const observedSnapshot = await this.repo.loadSessionSnapshot();
-    const activeProvider = observedSnapshot["oauth:active_provider"];
-    if (targetProvider !== activeProvider) {
-      throw new Error("\u53EA\u80FD\u5237\u65B0\u5F53\u524D App \u767B\u5F55 provider\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55");
-    }
-    const observed = this.readRefreshSnapshot(observedSnapshot, targetProvider);
-    if (!observed.tokenSet.refreshToken) {
-      throw new Error("\u5F53\u524D\u8D26\u53F7\u7F3A\u5C11 refresh_token\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55");
-    }
-    const credentialsFilePath = this.getLocalCredentialStore().getCredentialsFilePath();
-    const refreshLockBasePath = resolveOAuthRefreshLockBasePath(
-      credentialsFilePath,
-      targetProvider,
-      observed.profileId
-    );
-    this.onRefreshWaitStarted?.();
-    try {
-      await withFileLock(
-        refreshLockBasePath,
-        async () => {
-          await this.onRefreshLockAcquired?.();
-          const currentSnapshot = await this.repo.loadSessionSnapshot();
-          const current = this.readRefreshSnapshot(currentSnapshot, targetProvider);
-          if (current.profileId !== observed.profileId) {
-            throw createRefreshCoordinationError(
-              "ZCODE_OAUTH_REFRESH_PROFILE_CHANGED",
-              "OAuth refresh profile changed while waiting for the refresh lock; retry with the current session"
-            );
-          }
-          const snapshotChanged = current.revision !== observed.revision || !isSameOAuthTokenSet(current.tokenSet, observed.tokenSet);
-          const dispatchStatePath = resolveOAuthRefreshDispatchStatePath(refreshLockBasePath);
-          const dispatchState = await this.loadRefreshDispatchState(dispatchStatePath);
-          if (snapshotChanged) {
-            if (hasRotatedAuthorizationMaterial(current.tokenSet, observed.tokenSet) && isUsableOAuthTokenSet(current.tokenSet, this.now())) {
-              await this.clearRefreshDispatchState(dispatchStatePath);
-              this.oauthSessionGeneration += 1;
-              this.sessionChanges.fire("signed-in");
-              return;
-            }
-            throw createRefreshCoordinationError(
-              "ZCODE_OAUTH_REFRESH_STALE_CREDENTIAL",
-              "OAuth credentials changed while waiting for refresh, but no newer usable token rotation was found"
-            );
-          }
-          if (dispatchState && dispatchStateMatchesCredentialMaterial(
-            dispatchState,
-            targetProvider,
-            current.profileId,
-            current.tokenSet
-          )) {
-            throw createRefreshCoordinationError(
-              "ZCODE_OAUTH_REFRESH_DISPATCH_UNCERTAIN",
-              "A previous refresh may have consumed the current one-time refresh token; sign in again before retrying"
-            );
-          }
-          if (dispatchState) {
-            await this.clearRefreshDispatchState(dispatchStatePath);
-          }
-          if (this.oauthSessionGeneration !== generation) {
-            throw createRefreshCoordinationError(
-              "ZCODE_OAUTH_REFRESH_STALE_WRITER",
-              "OAuth session changed before provider refresh"
-            );
-          }
-          const requestId = randomBytes2(16).toString("hex");
-          const nextDispatchState = {
-            version: OAUTH_REFRESH_DISPATCH_STATE_VERSION,
-            requestId,
-            provider: targetProvider,
-            profileHash: fingerprint2(current.profileId),
-            sessionRevisionAtDispatch: current.revision,
-            accessTokenHash: fingerprint2(current.tokenSet.accessToken),
-            refreshTokenHash: fingerprint2(current.tokenSet.refreshToken ?? "")
-          };
-          await atomicWritePrivateTextFile(
-            dispatchStatePath,
-            `${JSON.stringify(nextDispatchState)}
-`
-          );
-          const refreshed = await this.runWithRefreshTimeout(
-            (signal) => this.runWithAdapterError(
-              adapter,
-              () => adapter.refreshToken(current.tokenSet, {
-                providerId: targetProvider,
-                state: "",
-                redirectUri: adapter.redirectUri,
-                now: this.now,
-                signal
-              })
-            )
-          );
-          const nextTokenSet = {
-            ...current.tokenSet,
-            ...refreshed,
-            zcodeJwtToken: refreshed.zcodeJwtToken ?? current.tokenSet.zcodeJwtToken
-          };
-          if (!nextTokenSet.accessToken.trim()) {
-            throw createRefreshCoordinationError(
-              "ZCODE_OAUTH_REFRESH_INVALID_RESULT",
-              "OAuth provider returned an empty access token"
-            );
-          }
-          await this.runSessionMutation(async () => {
-            if (this.oauthSessionGeneration !== generation) {
-              throw createRefreshCoordinationError(
-                "ZCODE_OAUTH_REFRESH_STALE_WRITER",
-                "OAuth session changed while the refresh response was pending"
-              );
-            }
-            const latestSnapshot = await this.repo.loadSessionSnapshot();
-            const latest = this.readRefreshSnapshot(latestSnapshot, targetProvider);
-            if (latest.profileId !== current.profileId || latest.revision !== current.revision || !isSameOAuthTokenSet(latest.tokenSet, current.tokenSet)) {
-              throw createRefreshCoordinationError(
-                "ZCODE_OAUTH_REFRESH_STALE_WRITER",
-                "OAuth credentials changed while the refresh response was pending"
-              );
-            }
-            if (!await this.repo.saveTokenSet(targetProvider, nextTokenSet, latestSnapshot)) {
-              throw createRefreshCoordinationError(
-                "ZCODE_OAUTH_REFRESH_STALE_WRITER",
-                "OAuth credentials changed before the refreshed token could be committed"
-              );
-            }
-            this.oauthSessionGeneration += 1;
-            this.sessionChanges.fire("signed-in");
-          });
-          await this.clearRefreshDispatchState(dispatchStatePath);
-        },
-        this.refreshLockOptions
-      );
-    } catch (error62) {
-      if (!isZCodeFileLockTimeoutError(error62)) {
-        throw error62;
-      }
-      const currentSnapshot = await this.repo.loadSessionSnapshot();
-      try {
-        const current = this.readRefreshSnapshot(currentSnapshot, targetProvider);
-        if (current.profileId === observed.profileId && (current.revision !== observed.revision || !isSameOAuthTokenSet(current.tokenSet, observed.tokenSet)) && hasRotatedAuthorizationMaterial(current.tokenSet, observed.tokenSet) && isUsableOAuthTokenSet(current.tokenSet, this.now())) {
-          await this.clearRefreshDispatchState(
-            resolveOAuthRefreshDispatchStatePath(refreshLockBasePath)
-          );
-          this.oauthSessionGeneration += 1;
-          this.sessionChanges.fire("signed-in");
-          return;
-        }
-      } catch {
-      }
-      throw error62;
-    }
-  }
-  getLocalCredentialStore() {
-    const store = this.credentialService;
-    if (typeof store.getCredentialsFilePath !== "function") {
-      throw new Error("OAuth refresh coordination requires the local credential store");
-    }
-    return store;
-  }
-  readRefreshSnapshot(snapshot, provider) {
-    const activeProvider = snapshot["oauth:active_provider"];
-    if (activeProvider !== provider) {
-      throw createRefreshCoordinationError(
-        "ZCODE_OAUTH_REFRESH_PROFILE_CHANGED",
-        "OAuth active provider changed while waiting for refresh"
-      );
-    }
-    const profile = this.repo.profileFromSnapshot(snapshot, provider);
-    const tokenSet = this.repo.tokenSetFromSnapshot(snapshot, provider);
-    if (!profile || !tokenSet) {
-      throw createRefreshCoordinationError(
-        "ZCODE_OAUTH_REFRESH_PROFILE_CHANGED",
-        "OAuth profile or token set is unavailable while waiting for refresh"
-      );
-    }
-    return {
-      profileId: profile.id,
-      revision: snapshot["oauth:session_revision"] ?? null,
-      tokenSet
-    };
-  }
-  async loadRefreshDispatchState(statePath) {
-    let raw;
-    try {
-      raw = await readFile5(statePath, "utf8");
-    } catch (error62) {
-      if (error62.code === "ENOENT") return null;
-      throw error62;
-    }
-    let parsed;
-    try {
-      parsed = JSON.parse(raw);
-    } catch (error62) {
-      throw createRefreshCoordinationError(
-        "ZCODE_OAUTH_REFRESH_STATE_INVALID",
-        "OAuth refresh dispatch state is corrupt; sign in again before retrying",
-        error62
-      );
-    }
-    if (!isUnknownRecord(parsed) || parsed.version !== OAUTH_REFRESH_DISPATCH_STATE_VERSION || typeof parsed.requestId !== "string" || typeof parsed.provider !== "string" || typeof parsed.profileHash !== "string" || parsed.sessionRevisionAtDispatch !== null && typeof parsed.sessionRevisionAtDispatch !== "string" || typeof parsed.accessTokenHash !== "string" || typeof parsed.refreshTokenHash !== "string") {
-      throw createRefreshCoordinationError(
-        "ZCODE_OAUTH_REFRESH_STATE_INVALID",
-        "OAuth refresh dispatch state is invalid; sign in again before retrying"
-      );
-    }
-    return parsed;
-  }
-  async clearRefreshDispatchState(statePath) {
-    try {
-      await rm4(statePath, { force: true });
-    } catch (error62) {
-      serviceLog2.warn("OAuth refresh dispatch state cleanup failed", { error: error62 });
-    }
-  }
-  async runWithRefreshTimeout(operation) {
-    const controller = new AbortController();
-    let timeout;
-    const deadline = new Promise((_, reject) => {
-      timeout = setTimeout(() => {
-        reject(
-          createRefreshCoordinationError(
-            "ZCODE_OAUTH_REFRESH_NETWORK_TIMEOUT",
-            `OAuth token refresh did not complete within ${this.refreshNetworkTimeoutMs}ms`
-          )
-        );
-      }, this.refreshNetworkTimeoutMs);
-    });
-    try {
-      return await Promise.race([operation(controller.signal), deadline]);
-    } finally {
-      if (timeout) clearTimeout(timeout);
-      controller.abort();
-    }
-  }
-  /** Host 本地 401 提交入口，不扩展 IOAuthService 的跨端契约。 */
-  logoutIfCurrentCredentialRequest(input2, headers) {
-    return this.withCurrentCredentialStore(
-      () => this.logoutActiveSession(
-        () => isCurrentOAuthCredentialRequest({
-          input: input2,
-          headers,
-          credentialService: this.credentialService,
-          env: this.env
-        })
-      )
-    );
-  }
-  async logoutActiveSession(isCurrent) {
-    const result = await this.runSessionMutation(async () => {
-      const snapshot = await this.repo.loadSessionSnapshot();
-      if (isCurrent && !await isCurrent()) return null;
-      const activeProvider = snapshot["oauth:active_provider"];
-      const accountIdentity = activeProvider ? this.repo.profileFromSnapshot(snapshot, activeProvider)?.id ?? null : null;
-      if (!await this.repo.clearActiveSession(snapshot)) return null;
-      this.oauthSessionGeneration += 1;
-      this.sessionChanges.fire("signed-out");
-      return { activeProvider, accountIdentity };
-    });
-    if (!result) return false;
-    if (result.activeProvider) {
-      await this.cancelPending(result.activeProvider);
-      try {
-        await this.notifyProviderLogout(result.activeProvider, result.accountIdentity);
-      } catch (error62) {
-        if (!isCurrent) throw error62;
-        serviceLog2.warn("Unauthorized session provider cleanup failed", { error: error62 });
-      }
-    }
-    return true;
-  }
-  async logout(provider) {
-    return this.withCurrentCredentialStore(() => this.logoutInternal(provider));
-  }
-  async logoutInternal(provider) {
-    if (!provider) {
-      if (!await this.logoutActiveSession()) throw new Error("OAuth \u4F1A\u8BDD\u5DF2\u53D8\u5316\uFF0C\u8BF7\u91CD\u65B0\u9000\u51FA");
-      return;
-    }
-    const loggedOutIdentity = await this.runSessionMutation(async () => {
-      const snapshot = await this.repo.loadSessionSnapshot();
-      const activeProvider = snapshot["oauth:active_provider"];
-      if (provider !== activeProvider) {
-        return void 0;
-      }
-      const accountIdentity = this.repo.profileFromSnapshot(snapshot, provider)?.id ?? null;
-      if (!await this.repo.clearActiveSession(snapshot))
-        throw new Error("OAuth \u4F1A\u8BDD\u5DF2\u53D8\u5316\uFF0C\u8BF7\u91CD\u65B0\u9000\u51FA");
-      this.oauthSessionGeneration += 1;
-      this.sessionChanges.fire("signed-out");
-      return accountIdentity;
-    });
-    if (loggedOutIdentity !== void 0) {
-      await this.notifyProviderLogout(provider, loggedOutIdentity);
-    }
-    await this.cancelPending(provider);
-  }
-  async logoutAll() {
-    return this.withCurrentCredentialStore(() => this.logoutAllInternal());
-  }
-  async logoutAllInternal() {
-    const providers = [...this.adapters.keys()];
-    const accountIdentities = await this.runSessionMutation(async () => {
-      const snapshot = await this.repo.loadSessionSnapshot();
-      const identities = /* @__PURE__ */ new Map();
-      for (const provider of providers) {
-        identities.set(provider, this.repo.profileFromSnapshot(snapshot, provider)?.id ?? null);
-      }
-      if (!await this.repo.clearSession(snapshot))
-        throw new Error("OAuth \u4F1A\u8BDD\u5DF2\u53D8\u5316\uFF0C\u8BF7\u91CD\u65B0\u9000\u51FA");
-      this.oauthSessionGeneration += 1;
-      this.sessionChanges.fire("signed-out");
-      return identities;
-    });
-    if (!accountIdentities) return;
-    await this.cancelPending();
-    await this.notifyProvidersLogout(providers, accountIdentities);
-  }
-  async cancelPending(provider) {
-    await this.runSessionMutation(async () => {
-      if (!this.pendingState) {
-        if (provider && this.oauthFlowStartProvider && this.oauthFlowStartProvider !== provider)
-          return;
-      } else if (provider && this.pendingState.provider !== provider) return;
-      this.oauthFlowStartGeneration += 1;
-      this.oauthFlowStartProvider = null;
-      this.clearPendingState();
-    });
-  }
-  clearPendingState() {
-    if (!this.pendingState) {
-      return;
-    }
-    clearTimeout(this.pendingState.timeout);
-    this.pendingState = null;
-  }
-  async notifyProviderLogout(provider, accountIdentity) {
-    if (!this.onProviderLogout) {
-      return;
-    }
-    await this.onProviderLogout(provider, accountIdentity);
-  }
-  async notifyProvidersLogout(providers, accountIdentities = /* @__PURE__ */ new Map()) {
-    await Promise.all(
-      providers.map(
-        (provider) => this.notifyProviderLogout(provider, accountIdentities.get(provider))
-      )
-    );
-  }
-  getAdapter(provider) {
-    const adapter = this.adapters.get(provider);
-    if (!adapter) {
-      throw new Error(`\u4E0D\u652F\u6301\u7684 OAuth provider: ${provider}`);
-    }
-    return adapter;
-  }
-  getEnabledAdapter(provider) {
-    const adapter = this.getAdapter(provider);
-    if (!adapter.meta.enabled) {
-      throw new Error(`OAuth provider \u672A\u542F\u7528: ${provider}`);
-    }
-    return adapter;
-  }
-  async resolveProvider(provider) {
-    if (provider) {
-      return provider;
-    }
-    return this.repo.getActiveProvider();
-  }
-  async runWithAdapterError(adapter, run) {
-    try {
-      return await run();
-    } catch (error62) {
-      throw adapter.normalizeError(error62);
-    }
-  }
-  isUnauthorizedError(error62) {
-    const lowerMessage = error62.message.toLowerCase();
-    return /\b401\b|\b403\b/.test(lowerMessage) || lowerMessage.includes("unauthorized") || lowerMessage.includes("forbidden");
-  }
-};
-function createOAuthService(credentialService, dependencies = {}) {
-  return new OAuthService(credentialService, {
-    ...dependencies,
-    adapters: createOAuthProviderAdapters(createOAuthRuntimeConfig(dependencies.env), {
-      apiClient: dependencies.apiClient
-    })
-  });
-}
-
-// packages/services/src/model-provider/accountProviderTeamPlanRequestKey.ts
-var log13 = createServiceLogger("account-provider-team-plan-request-key");
-var TEAM_PLAN_RUNTIME_KEY_REQUEST_TIMEOUT_MS = 15e3;
-async function resolveAccountTeamPlanRuntimeMaterial(params) {
-  const { family, organizationId, projectId } = params.access;
-  const account = await params.loadOAuthAccountMaterial(family);
-  if (!account || account.accountIdentity !== params.accountIdentity) return null;
-  const token2 = account.accessToken;
-  if (!token2) {
-    log13.warn(void 0, "Team Plan runtime key projection skipped: OAuth token missing", {
-      family,
-      projectId
-    });
-    return null;
-  }
-  const zcodeJwtToken = account.zcodeJwtToken;
-  if (family === "bigmodel" && zcodeJwtToken && token2 === zcodeJwtToken) {
-    log13.warn(void 0, "Team Plan runtime key projection skipped: stale zcode JWT token", {
-      family,
-      projectId
-    });
-    return null;
-  }
-  const host = family === "zai" ? resolveZaiBusinessBaseUrl(process.env) : resolveBigModelApiOrigin(process.env);
-  const client = params.tokenClient ?? new ProjectAccessTokenClient({
-    request: (url4, init) => readApiJson(params.apiClient, url4, {
-      ...init,
-      timeoutMs: TEAM_PLAN_RUNTIME_KEY_REQUEST_TIMEOUT_MS
-    }),
-    observe: (event) => log13.warn(void 0, "\u56E2\u961F\u9879\u76EE Token \u83B7\u53D6\u5931\u8D25", event)
-  });
-  const result = await client.resolve({
-    origin: host,
-    family,
-    loginToken: token2,
-    accountId: account.accountIdentity,
-    rejectedProjectTokenFingerprint: params.rejectedProjectTokenFingerprint,
-    team: { organizationId, projectId }
-  });
-  if (!isSameOAuthAccountMaterial(account, await params.loadOAuthAccountMaterial(family))) {
-    client.clear();
-    throw new Error("project_token_scope_invalidated");
-  }
-  return result;
-}
-
-// packages/services/src/model-provider/oauthProviderRuntimeAuthService.ts
-var BIGMODEL_PROVIDER_ID3 = "bigmodel";
-var ZAI_PROVIDER_ID3 = "zai";
-function createOAuthProviderRuntimeAuthService(options2) {
-  let credentialService;
-  if (options2.credentialService) {
-    credentialService = options2.credentialService;
-  } else {
-    setDataBaseDir(options2.dataBaseDir);
-    credentialService = createCredentialService();
-  }
-  const oauthCredentialRepo = new OAuthCredentialRepo(credentialService);
-  const apiClient = options2.apiClient ?? createNodeApiClient();
-  const oauthService = options2.oauthService ?? createOAuthService(credentialService, {
-    captureCredentialGuard: () => credentialService.captureRecoveryGuard(),
-    apiClient,
-    onProviderLogout: options2.onProviderLogout,
-    refreshLockOptions: options2.refreshLockOptions,
-    refreshNetworkTimeoutMs: options2.refreshNetworkTimeoutMs
-  });
-  const loadOAuthAccountMaterial = (family) => oauthCredentialRepo.loadFamilyMaterial(family);
-  const loadStartPlanMaterial = (family) => oauthCredentialRepo.loadStartPlanMaterial(family);
-  const loadOAuthFamilyTokenSet = async (providerId) => {
-    if (providerId !== ZAI_PROVIDER_ID3 && providerId !== BIGMODEL_PROVIDER_ID3) {
-      return null;
-    }
-    const account = await loadOAuthAccountMaterial(providerId);
-    return account ? {
-      accessToken: account.accessToken,
-      zcodeJwtToken: account.zcodeJwtToken,
-      sessionRevision: account.sessionRevision,
-      accountIdentity: account.accountIdentity,
-      zcodeUserId: account.zcodeUserId
-    } : null;
-  };
-  const projectTokenClient = createAccountProjectTokenClient(apiClient, credentialService);
-  const accountProviderApiClient = new AccountProviderApiClient(apiClient);
-  const accountProviderApiKeyResolver = new AccountProviderApiKeyResolver(
-    accountProviderApiClient.fetchRemoteData.bind(accountProviderApiClient),
-    projectTokenClient
-  );
-  const accountProviderCredentialService = createAccountProviderCredentialService({
-    loadOAuthAccountMaterial,
-    resolveProviderMaterial: (family, accessToken, accountIdentity, rejectedProjectTokenFingerprint) => accountProviderApiKeyResolver.resolveProviderMaterial(
-      family === "zai" ? ZAI_PROVIDER_ID3 : BIGMODEL_PROVIDER_ID3,
-      accessToken,
-      accountIdentity,
-      rejectedProjectTokenFingerprint
-    )
-  });
-  const accountRequestAuthService = createAccountProviderRequestAuthService({
-    resolveCurrentAccountAccess: options2.resolveCurrentAccountAccess,
-    loadOAuthTokenSet: loadOAuthFamilyTokenSet,
-    loadStartPlanZcodeJwt: async (family) => (await loadStartPlanMaterial(family))?.zcodeJwtToken ?? null,
-    async loadIndividualPlanMaterial(providerId, family, rejectedProjectTokenFingerprint) {
-      const accountIdentity = (await loadOAuthAccountMaterial(family))?.accountIdentity;
-      if (!accountIdentity) return null;
-      return accountProviderCredentialService.loadCodingPlanMaterial({
-        providerId,
-        family,
-        accountIdentity,
-        rejectedProjectTokenFingerprint
-      });
-    },
-    async resolveTeamPlanMaterial(access2, rejectedProjectTokenFingerprint) {
-      const accountIdentity = (await loadOAuthAccountMaterial(access2.family))?.accountIdentity;
-      if (!accountIdentity) return null;
-      return resolveAccountTeamPlanRuntimeMaterial({
-        apiClient,
-        loadOAuthAccountMaterial,
-        access: access2,
-        accountIdentity,
-        tokenClient: projectTokenClient,
-        rejectedProjectTokenFingerprint
-      });
-    }
-  });
-  return {
-    async resolveProviderRuntimeRequest(request, resolveOptions = {}) {
-      if (resolveOptions.signal?.aborted) {
-        return unavailable2();
-      }
-      const accountAccess = request.accountAccess;
-      if (!accountAccess) {
-        return unavailable2();
-      }
-      try {
-        if (await needsOAuthRefresh(
-          accountAccess,
-          loadOAuthAccountMaterial,
-          loadStartPlanMaterial
-        )) {
-          const family = accountAccessFamily(accountAccess);
-          const mode = accountAccessMode(accountAccess);
-          const account = mode === "start-plan" ? await loadStartPlanMaterial(family) : await loadOAuthAccountMaterial(family);
-          if (!account) return unavailable2();
-          await oauthService.refreshToken(account.loginProvider);
-          projectTokenClient.clear();
-        }
-        if (resolveOptions.signal?.aborted) {
-          return unavailable2();
-        }
-        const requestAuth = await accountRequestAuthService.resolveCurrent({
-          providerId: request.providerId,
-          modelId: request.modelSelection.modelId,
-          accountAccess,
-          expectedAccountScope: request.expectedAccountScope,
-          rejectedProjectTokenFingerprint: request.rejectedProjectTokenFingerprint,
-          reason: request.reason
-        });
-        return { headersApplied: true, requestAuth };
-      } catch {
-        return unavailable2();
-      }
-    },
-    clearProjectTokenCache() {
-      projectTokenClient.clear();
-    }
-  };
-}
-function accountAccessFamily(access2) {
-  return "family" in access2 ? access2.family : access2.accountType;
-}
-function accountAccessMode(access2) {
-  return "planKind" in access2 ? access2.planKind : access2.mode;
-}
-async function needsOAuthRefresh(access2, loadOAuthAccountMaterial, loadStartPlanMaterial) {
-  const family = accountAccessFamily(access2);
-  const mode = accountAccessMode(access2);
-  if (mode === "start-plan") {
-    const account2 = await loadStartPlanMaterial(family);
-    if (!account2) return false;
-    const token3 = account2.zcodeJwtToken;
-    return typeof token3 === "string" && Boolean(token3) && resolveJwtExpiration(token3).kind === "expired";
-  }
-  const account = await loadOAuthAccountMaterial(family);
-  if (!account) return false;
-  const token2 = account.accessToken;
-  return Boolean(token2) && resolveJwtExpiration(token2).kind === "expired";
-}
-function unavailable2() {
-  return {
-    headersApplied: false,
-    errorMessage: "Provider request auth is unavailable."
-  };
-}
-
-// packages/services/src/telemetry/telemetryCore.ts
-import { mkdir as mkdir3, open as open3, readFile as readFile6, stat as stat4, unlink, writeFile as writeFile5 } from "node:fs/promises";
-import { dirname as dirname5, join as join11 } from "node:path";
-var LOCK_STALE_MS = 5 * 60 * 1e3;
-var DAILY_ACTIVE_IN_FLIGHT_TTL_MS = 5 * 60 * 1e3;
-function resolveTelemetryStateFile(homeDir) {
-  if (homeDir) {
-    return join11(homeDir, ".zcode", "v2", "telemetry-state.json");
-  }
-  return join11(getAppConfigDir(), "telemetry-state.json");
-}
-async function readTelemetryState(homeDir) {
-  try {
-    const raw = await readFile6(resolveTelemetryStateFile(homeDir), "utf-8");
-    const parsed = JSON.parse(raw);
-    return typeof parsed === "object" && parsed ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-async function readTelemetryDeviceMid(options2 = {}) {
-  const state = await readTelemetryState(options2.homeDir);
-  return typeof state.deviceMid === "string" && state.deviceMid.trim() ? state.deviceMid.trim() : null;
-}
-
-// packages/services/src/official-host/startPlanAuthentication.ts
-var START_PLAN_FAMILY = "bigmodel";
-function createOfficialStartPlanAuthenticationResolver(options2) {
-  setDataBaseDir(options2.dataBaseDir);
-  const now = options2.now ?? Date.now;
-  const apiClient = options2.apiClient ?? createNodeApiClient();
-  let pendingRefresh = null;
-  const readOnlyCredentialService = () => options2.createReadOnlyCredentialService?.() ?? createCredentialService({ readOnly: true });
-  const loadMaterial = async () => {
-    const repo = new OAuthCredentialRepo(readOnlyCredentialService());
-    return repo.loadStartPlanMaterial(START_PLAN_FAMILY);
-  };
-  const refresh = async (material) => {
-    if (pendingRefresh?.provider === material.loginProvider) {
-      await pendingRefresh.promise;
-      return;
-    }
-    const credentialService = options2.createRefreshCredentialService?.() ?? createCredentialService({
-      migrateOnRead: false,
-      readOnlyKeyMaterial: true
-    });
-    const oauthService = options2.createOAuthService?.(credentialService, apiClient) ?? createOAuthService(credentialService, {
-      captureCredentialGuard: () => credentialService.captureRecoveryGuard(),
-      apiClient,
-      refreshLockOptions: options2.refreshLockOptions,
-      refreshNetworkTimeoutMs: options2.refreshNetworkTimeoutMs
-    });
-    const promise2 = oauthService.refreshToken(material.loginProvider);
-    const pending = { provider: material.loginProvider, promise: promise2 };
-    pendingRefresh = pending;
-    try {
-      await promise2;
-    } finally {
-      if (pendingRefresh === pending) pendingRefresh = null;
-    }
-  };
-  return {
-    async resolveStartPlanAuthentication(input2) {
-      if (input2.family !== START_PLAN_FAMILY || input2.signal.aborted) return null;
-      try {
-        let material = await loadMaterial();
-        if (!material?.accountIdentity.trim() || !material.zcodeJwtToken?.trim()) return null;
-        const initialExpiry = resolveJwtExpiration(material.zcodeJwtToken, now());
-        if (initialExpiry.kind === "expired") {
-          if (input2.signal.aborted) return null;
-          await refresh(material);
-          if (input2.signal.aborted) return null;
-          material = await loadMaterial();
-        }
-        if (!material?.accountIdentity.trim() || !material.zcodeJwtToken?.trim()) return null;
-        const expiration = resolveJwtExpiration(material.zcodeJwtToken, now());
-        if (expiration.kind === "expired") return null;
-        const deviceMid = await (options2.readDeviceMid?.() ?? readTelemetryDeviceMid());
-        if (!deviceMid?.trim() || input2.signal.aborted) return null;
-        return {
-          accountIdentity: material.accountIdentity.trim(),
-          sessionRevision: material.sessionRevision,
-          requestCredential: material.zcodeJwtToken.trim(),
-          credentialExpiresAt: expiration.kind === "unknown" ? null : expiration.expiresAt,
-          deviceMid: deviceMid.trim()
-        };
-      } catch {
-        return null;
-      }
-    }
-  };
-}
 export {
-  ZCodeAgentProcessManager,
-  ZCodeProtocolClient,
-  ZCodeStdioTransport,
   createCostLabBillingRuntime,
   createCostLabReadOnlyApiClient,
-  createCostLabReadOnlyLocationStore,
-  createCredentialService,
-  createOAuthProviderRuntimeAuthService,
-  createOfficialStartPlanAuthenticationResolver,
-  createUsageStatsService,
-  setDataBaseDir
+  createCostLabReadOnlyLocationStore
 };

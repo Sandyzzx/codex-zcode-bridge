@@ -6,8 +6,10 @@ import {
   deriveProbeCoverage,
   mergeNativeEvidence,
   parseModelIoJsonl,
+  parseModelLifecycleLogJsonl,
   parseModelRequestLogJsonl,
   projectModelUsageRow,
+  summarizeNativeProtocolLog,
 } from "../native-request-probe.mjs";
 
 function usageRow(overrides = {}) {
@@ -75,9 +77,15 @@ function modelIoLine(overrides = {}) {
       toolNames: ["read_file"],
     },
     response: {
-      headers: { "set-cookie": "must not be retained" },
+      headers: {
+        "set-cookie": "must not be retained",
+        "x-log-id": "log-safe-1",
+        server: "ESA",
+        "x-request-id": "upstream-safe-1",
+      },
       finishReason: "stop",
       modelId: "GLM-5.3-Flash",
+      responseId: "response-safe-1",
       usage: {
         inputTokens: 1_100,
         cacheReadTokens: 100,
@@ -121,6 +129,49 @@ function modelLogLine(overrides = {}) {
   });
 }
 
+function lifecycleLines(requestId = "network-1", querySource = "main_turn") {
+  const baseContext = {
+    attempt: 1,
+    modelId: "GLM-5.3-Flash",
+    providerId: "account:bigmodel-individual-coding-plan",
+    querySource,
+    requestId,
+  };
+  return [
+    JSON.stringify({
+      timestamp: "2026-11-17T04:00:00.000Z",
+      event: "ttft.model.request_started",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      traceId: "trace-1",
+      context: baseContext,
+    }),
+    JSON.stringify({
+      timestamp: "2026-11-17T04:00:00.200Z",
+      event: "ttft.model.response_headers",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      traceId: "trace-1",
+      context: { ...baseContext, statusCode: 200 },
+    }),
+    JSON.stringify({
+      timestamp: "2026-11-17T04:00:01.000Z",
+      event: "model.request.completed",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      traceId: "trace-1",
+      status: "completed",
+      context: {
+        ...baseContext,
+        baseURL: "https://open.bigmodel.cn/api/anthropic",
+        transport: "sse",
+        providerKind: "anthropic",
+        authorization: "Bearer must-not-leak",
+      },
+    }),
+  ].join("\n");
+}
+
 test("native usage normalization distinguishes cached and uncached input", () => {
   const record = projectModelUsageRow(usageRow(), {
     experimentId: "exp-1",
@@ -146,6 +197,9 @@ test("model I/O projection retains allowlisted metadata but no secrets or payloa
   assert.equal(serialized.includes("must not be retained"), false);
   assert.equal(records[0].network_request_id, "network-1");
   assert.equal(records[0].safe_header_values["x-zcode-app-version"], "3.18.2");
+  assert.equal(records[0].safe_response_header_values["x-log-id"], "log-safe-1");
+  assert.equal(records[0].safe_response_header_values.server, "ESA");
+  assert.equal(records[0].provider_response_id, "response-safe-1");
   assert.equal(records[0].message_count, 4);
   assert.deepEqual(records[0].tool_names, ["read_file"]);
 });
@@ -158,6 +212,52 @@ test("cross-log evidence merges only a unique session turn source time match", (
   assert.equal(merged[0].network_request_id, "network-1");
   assert.equal(merged[0].link_confidence, "SUPPORTED_SESSION_TURN_QUERY_SOURCE_TIME");
   assert.equal(merged[0].cached_input_tokens, 100);
+  assert.equal(merged[0].http_status, "UNKNOWN");
+});
+
+test("lifecycle events enrich a model I/O request with endpoint and HTTP status", () => {
+  const usage = [projectModelUsageRow(usageRow(), { experimentId: "exp-1" })];
+  const http = parseModelIoJsonl(modelIoLine()).records;
+  const logs = parseModelLifecycleLogJsonl(lifecycleLines()).records;
+  assert.equal(logs.length, 1);
+  const merged = mergeNativeEvidence(usage, http, logs);
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].network_request_id, "network-1");
+  assert.equal(merged[0].endpoint_host, "open.bigmodel.cn");
+  assert.equal(merged[0].endpoint_path, "/api/anthropic");
+  assert.equal(merged[0].http_status, 200);
+  assert.equal(merged[0].model_transport, "sse");
+  assert.equal(merged[0].provider_kind, "anthropic");
+  assert.equal(merged[0].response_headers_at, "2026-11-17T04:00:00.200Z");
+  assert.ok(merged[0].lifecycle_events.includes("model.request.completed"));
+  assert.equal(JSON.stringify(merged[0]).includes("must-not-leak"), false);
+});
+
+test("a failed auxiliary lifecycle request remains usage missing and is not retried", () => {
+  const failed = JSON.stringify({
+    timestamp: "2026-11-17T04:00:02.000Z",
+    event: "model.request.failed",
+    sessionId: "session-1",
+    turnId: "turn-1",
+    traceId: "trace-1",
+    status: "failed",
+    context: {
+      attempt: 1,
+      baseURL: "https://open.bigmodel.cn/api/anthropic",
+      transport: "http",
+      providerKind: "anthropic",
+      modelId: "GLM-5.3-Flash",
+      providerId: "account:bigmodel-individual-coding-plan",
+      querySource: "session_title",
+      requestId: "network-title-failed",
+    },
+  });
+  const records = parseModelLifecycleLogJsonl(failed).records;
+  assert.equal(records.length, 1);
+  assert.equal(records[0].request_status, "failed");
+  assert.equal(records[0].usage_status, "USAGE_MISSING");
+  assert.equal(records[0].retry_count, 0);
+  assert.equal(records[0].input_tokens, null);
 });
 
 test("ambiguous cross-log matches remain unlinked rather than double-counted", () => {
@@ -219,7 +319,36 @@ test("probe coverage does not claim unobserved authentication HTTP", () => {
   assert.equal(coverage.PROBE_COVERAGE, "PARTIAL");
   assert.equal(coverage.MODEL_REQUEST_COVERAGE, "SQLITE_AND_MODEL_IO");
   assert.equal(coverage.AUTH_METADATA_COVERAGE, "NOT_OBSERVED");
+  assert.equal(coverage.NON_MODEL_HTTP_COVERAGE, "NOT_OBSERVED");
+  assert.equal(coverage.RPC_COVERAGE, "NOT_OBSERVED");
   assert.ok(coverage.UNOBSERVED_BOUNDARIES.includes("native_rpc_lifecycle"));
+});
+
+test("protocol summary records lifecycle coverage without retaining payloads", () => {
+  const text = [
+    JSON.stringify({
+      timestamp: "2026-11-17T04:00:00.000Z",
+      event: "zcode_protocol.session_create.started",
+      context: { workspacePath: "C:\\secret", authorization: "Bearer must-not-leak" },
+    }),
+    JSON.stringify({
+      timestamp: "2026-11-17T04:00:01.000Z",
+      event: "zcode_protocol.session_create.completed",
+      context: { workspacePath: "C:\\secret" },
+    }),
+  ].join("\n");
+  const summary = summarizeNativeProtocolLog(
+    text,
+    Date.parse("2026-11-17T03:59:00.000Z"),
+    Date.parse("2026-11-17T04:01:00.000Z"),
+  );
+  assert.equal(summary.rpc_started_events, 1);
+  assert.equal(summary.rpc_completed_events, 1);
+  assert.deepEqual(summary.rpc_event_types, [
+    "zcode_protocol.session_create.completed",
+    "zcode_protocol.session_create.started",
+  ]);
+  assert.equal(JSON.stringify(summary).includes("secret"), false);
 });
 
 test("model request log records an auxiliary HTTP request without inventing usage", () => {

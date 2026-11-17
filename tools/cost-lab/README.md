@@ -71,7 +71,8 @@ node tools/cost-lab/coding-plan-billing.mjs reconcile `
 - `~/.zcode/cli/db/db.sqlite` 的 `model_usage`
 - `~/.zcode/cli/rollout/model-io-*.jsonl`
 - `~/.zcode/cli/debug/model-io-*.jsonl`
-- `~/.zcode/cli/log/zcode-*.jsonl` 的 `model.request.completed`
+- `~/.zcode/cli/log/zcode-*.jsonl` 的模型生命周期和
+  `zcode_protocol.*` 生命周期摘要
 
 启动被动观测，再执行原生 ZCode 任务：
 
@@ -118,7 +119,23 @@ request-usage.json
 - 不同文件中的同一 `network_request_id` 去重。
 
 Model I/O 的 messages、system、tools、Cookie、Authorization 和响应头值均不保存。
-只保留允许的 Header 名称集合、明确列出的非秘密 Header 值、消息/工具数量。
+只保留允许的 Header 名称集合、明确列出的非秘密请求/响应 Header 值、
+HTTP endpoint host/path、状态码、transport、provider kind、消息/工具数量及
+Provider response ID。
+
+模型生命周期按 `requestId` 合并以下事件：
+
+- `ttft.model.request_started`
+- `ttft.model.response_headers`
+- `model.request.completed`
+- `model.network.completed`
+- `model.sdk.stream.completed`
+- `model.sdk.generate.completed`
+- `model.request.failed` / `model.network.failed`
+
+`probe-result.json` 另外输出 `HTTP_ENDPOINT_COVERAGE`、
+`HTTP_STATUS_COVERAGE`、`RPC_COVERAGE` 和 `NON_MODEL_HTTP_COVERAGE`。
+RPC 仅保存事件类型和 started/completed/failed 计数，不保存 payload。
 
 已知覆盖边界：
 
@@ -126,7 +143,10 @@ Model I/O 的 messages、system、tools、Cookie、Authorization 和响应头值
 - `model_io` 提供网络 attempt、请求 Header 元数据与 finish reason。
 - 运行日志可发现未写入 `model_usage` / `model_io` 的辅助 HTTP 请求。日志中的 Usage 被官方
   脱敏时，记录保留为 `USAGE_MISSING`，不推断 Token 为零。
-- Account/OAuth/Project/Token 等非模型 HTTP、RPC 生命周期及 HTTP 状态未完整观测。
+- Account/OAuth/Project/Token 等非模型 HTTP 仍未观测；RPC 目前只覆盖生命周期摘要，
+  不包含请求 payload。
+- Endpoint 与 HTTP 状态来自模型生命周期日志，不是 TLS 拦截或通用网络抓包。
+- HTTP method 在现有日志中通常不可见，仍标记为 `UNKNOWN`。
 - 缺失 Usage 必须保留 `USAGE_MISSING`，不能记成零。
 
 ## 积分公式
@@ -147,15 +167,27 @@ EFFECTIVE_EXTRA_RATIO =
   ACTUAL_CREDITS / EXPECTED_NORMAL
 ```
 
-当前代码将工作日 `14:00-17:59`（`Asia/Shanghai`）视为高峰，其余时间为非高峰。
+当前代码将工作日 `14:00-17:59`（`Asia/Shanghai`）视为高峰，其余时间为非高峰；
+高峰按非高峰的两倍时间倍率计算。
 如果官方规则、模型系数或活动发生变化，必须先更新并复核证据，不能沿用历史结论。
 
 ## Vendor Provenance
 
 `vendor/official-billing-runtime.mjs` 是固定官方源码的 Cost Lab 打包产物。
-当前来源树并非 clean build，因此可复现性只能是 `PARTIAL`。完整来源、
-Bundle Hash、固定官方 Commit/Tree、Keyring 版本和本地只读 Guard 记录在
-`vendor/BUILD_PROVENANCE.json`。
+构建脚本只接受 clean ZCode `3.18.2` 源码，在临时 detached worktree 中应用
+`vendor/patches/cost-lab-billing-runtime.patch` 后打包，并在退出前反向应用补丁、
+删除临时 worktree。Patch 只包含 Cost Lab billing facade、最小只读 Credential
+选项和 Runtime entry，不携带生产 OAuth/Transport 改动。
+
+重建：
+
+```powershell
+node tools/cost-lab/build-official-billing-runtime.mjs `
+  --source "<clean-fec97590-worktree>"
+```
+
+完整来源、依赖锁、Patch/Bundle Hash、固定官方 Commit/Tree、Keyring 版本、
+只读 Guard 和两次字节一致构建结果记录在 `vendor/BUILD_PROVENANCE.json`。
 
 `@napi-rs/keyring` 的 JS loader 位于 Cost Lab 的 vendor 路径，native binary
 复用仓库已跟踪的 Official Host 文件。`vendor-loader.mjs` 在导入 Runtime 前校验
@@ -171,7 +203,8 @@ node --test tools/cost-lab/test/*.test.mjs
 ```
 
 测试覆盖路径发现、脱敏、API Guard、账单归一化、对账、Native Usage 归一化、
-跨日志唯一关联、辅助请求、Usage Missing、Vendor Hash 和不支持平台拒绝。
+模型生命周期关联、endpoint/status/transport、RPC 摘要、跨日志唯一关联、
+辅助请求、Usage Missing、Vendor/Patch Hash、确定性构建来源和不支持平台拒绝。
 
 仓库 `npm run test:affected` 仍是正式 T0 门禁。若本机磁盘不足导致该门禁无法执行，
 必须报告 `BLOCKED` 或 `NOT RUN`，不能用 Cost Lab 定向测试代替 TypeScript/build/
