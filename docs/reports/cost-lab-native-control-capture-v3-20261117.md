@@ -19,7 +19,7 @@
 |---|---|---|
 | Native 进程发现 | `PASS` | 已安装 Desktop 进程树和 AppServer 角色已核实 |
 | Native Capture Control | `PARTIAL` | 官方 Resource Manager Capture 可控制，但只记录元数据 |
-| Native HTTP Capture | `PARTIAL` | 历史 Model I/O/日志可提供模型端点、状态和 SSE Usage，但无完整 Wire |
+| Native HTTP Capture | `PARTIAL` | Model I/O 可提供端点、状态和 SSE Usage；全量保留仍不暴露凭据 Header |
 | Native RPC Capture | `BLOCKED` | 安装版无可用 RPC tap；stdio tap 仅开发态可见 |
 | Native Identity Capture | `BLOCKED` | Project Token、API Key ID、Request Auth 均不可见 |
 | Identity Redaction | `PASS` | 官方诊断和本仓库探针均不输出凭据值 |
@@ -166,6 +166,23 @@ Model I/O 能提供：
 - 状态和安全 Header 名称。
 - SSE finish reason 和 Usage。
 - 部分请求结构统计。
+
+官方还提供默认关闭的 `modelIoFullRetentionEnabled` 生产诊断设置：
+
+- 开启后不执行 Model I/O compaction、字段裁剪或文件轮转。
+- 完整保存 sanitized model request/response、prompt、tool input/result 和输出。
+- 文档明确写明“只改变保留策略，不改变安全脱敏边界”，切换模式不能关闭 Header 与
+  Architect request metadata 的凭据脱敏。
+
+证据：
+
+- `docs/model-io-full-retention-setting.md`
+- `apps/zcode-cli/packages/adapters/src/model/runner-debug.ts:472`
+- `apps/zcode-cli/packages/adapters/src/model/runner-debug-redaction.ts:3`
+
+该设置能提高请求 body 和响应 body 的完整度，但仍不能提供 HTTP method、Authorization、
+API Key ID 或请求认证来源。因为它是全局持久偏好，本轮没有为了实验修改共享 `setting.json`；
+即使开启也不足以通过 Identity 门禁。
 
 但官方 `runner-network-headers.ts` 对以下值强制执行 `[redacted]`：
 
@@ -491,8 +508,8 @@ ROOT_CAUSE_CONFIDENCE: LOW
 
 | 验证 | 结果 |
 |---|---|
-| 新增预检测试 | `PASS 6/6` |
-| Cost Lab 全体定向测试 | `PASS 78/78` |
+| 新增预检测试 | `PASS 7/7` |
+| Cost Lab 全体定向测试 | `PASS 79/79` |
 | `npm run typecheck` | `PASS` |
 | `npm run build` | `PASS` |
 | `npm run validate:plugin` | `PASS` |
@@ -560,7 +577,7 @@ TEST_AFFECTED: FULL_SUITE_ONE_TEARDOWN_EBUSY
 SHA256：
 
 ```text
-426A14A43DE078F05AD387A8DF426F2FD8E5DC3267DCF99D6A290677F967813E
+9F8EB233A4D6007B8F4D860FFF0E8D7846CF97A146D1206460A480D70591F123
   v3-native-control-preflight.json
 38BD57679F4532C0A4E2837845D27999AE6D0A3DAE904A7C522357D20A99F938
   v3-process-manifest.normalized.json
@@ -628,12 +645,12 @@ MAGPIE_CHANGED: NO
 HOST_WAKE_CHANGED: NO
 START_PLAN_CHANGED: NO
 
-TESTS: TARGETED_PASS_78; TYPECHECK_PASS; FULL_SUITE_992_PASS_2_SKIP_1_TEARDOWN_EBUSY; TARGETED_RERUN_PASS_4_OF_4; STRESS_TESTS_NOT_APPLICABLE
+TESTS: TARGETED_PASS_79; TYPECHECK_PASS; FULL_SUITE_992_PASS_2_SKIP_1_TEARDOWN_EBUSY; TARGETED_RERUN_PASS_4_OF_4; STRESS_TESTS_NOT_APPLICABLE
 REPRODUCIBLE_BUILD: PASS_BYTE_IDENTICAL
 RESOURCE_CLEANUP: PASS
 
-LOCAL_COMMIT: PENDING_DELIVERY
-REMOTE_PUSH: PENDING_DELIVERY
+LOCAL_COMMIT: THIS_DELIVERY_COMMIT_REPORTED_IN_FINAL_HANDOFF
+REMOTE_PUSH: SAME_COMMIT_VERIFIED_IN_FINAL_HANDOFF
 
 NEXT_ACTION: STOP; REQUIRE_NEW_OWNER_AUTHORIZATION_FOR_ANY_PRODUCTION_SAFE_NATIVE_CAPTURE_OR_MITM_PATH
 ```

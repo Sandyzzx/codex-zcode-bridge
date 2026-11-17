@@ -231,6 +231,9 @@ node tools/cost-lab/native-control-evidence.mjs processes `
   但没有 Header、body、SSE、Usage、身份链或 RPC payload。
 - 官方 Model I/O 诊断包含模型生命周期、安全 Header 名称和 SSE Usage，但将
   Authorization、API Key、Cookie、Token 和 Secret 强制写成 `[redacted]`。
+- 官方 `modelIoFullRetentionEnabled` 是受支持的生产诊断设置，可关闭 compaction 并保留完整
+  的已脱敏模型请求/响应；它不能关闭 Header 凭据脱敏，也不提供 HTTP method 或完整身份链。
+  启用该设置会改变共享持久偏好，本轮没有为捕获而修改它。
 - 官方 Agent stdio tap 只对 development Node 环境可见，且对凭据相关 RPC payload 脱敏；
   它不捕获模型 HTTP。
 - 官方 debug MITM proxy 依赖本地 CA 和代理拦截，实验策略明确禁止。

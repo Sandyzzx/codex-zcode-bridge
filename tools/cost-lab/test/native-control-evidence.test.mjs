@@ -56,6 +56,27 @@ test("development stdio tap and prohibited MITM proxy cannot satisfy production 
   assert.equal(result.REAL_NATIVE_TASK_ALLOWED, false);
 });
 
+test("full Model I/O retention remains sanitized and cannot satisfy Wire identity", () => {
+  const channel = OFFICIAL_NATIVE_CAPTURE_CHANNELS.find(
+    (candidate) => candidate.id === "model_io_full_retention",
+  );
+  assert.ok(channel);
+  assert.equal(channel.production_supported, true);
+  assert.equal(channel.development_only, false);
+  assert.equal(channel.policy, "allowed");
+  assert.equal(channel.identity_values_redacted, true);
+  assert.equal(channel.fields.request_body_structure, true);
+  assert.equal(channel.fields.sse_usage, true);
+  assert.equal(channel.fields.http_method, false);
+  assert.equal(channel.fields.wire_authorization, false);
+  assert.match(channel.limitation, /never disables credential-header redaction/u);
+
+  const result = evaluateNativeControlEvidence([channel]);
+  assert.equal(result.NATIVE_HTTP_CAPTURE, "BLOCKED");
+  assert.equal(result.NATIVE_IDENTITY_CAPTURE, "BLOCKED");
+  assert.equal(result.REAL_NATIVE_TASK_ALLOWED, false);
+});
+
 test("the evaluator accepts a synthetic complete production channel", () => {
   const fields = {};
   for (const name of [
