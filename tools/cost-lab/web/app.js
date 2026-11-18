@@ -202,7 +202,8 @@ async function pollVerification() {
     renderVerificationResult(record);
     await loadHistory();
     if (record.status !== "SUCCEEDED") showToast(record.error?.message ?? "Verification did not complete.", true);
-    else showToast("Verification and billing reconciliation completed");
+    else if (record.reconciliation?.billing_reconciliation === "PASS") showToast("Verification and billing reconciliation completed");
+    else showToast("Verification completed. Official billing is inconclusive.");
   } catch (error) {
     showToast(error.message, true);
     app.pollTimer = setTimeout(() => void pollVerification(), 4_000);
@@ -236,7 +237,14 @@ function renderVerificationResult(record) {
     return;
   }
   const calculation = reconciliation.calculation ?? {};
-  const noObservedCreditDelta = reconciliation.settlement_status === "NO_OBSERVED_CREDIT_DELTA";
+  const settlementStatus = reconciliation.settlement_status ?? "UNKNOWN";
+  const actualCredits = reconciliation.calculation?.actual_credits;
+  const noObservedCreditDelta = settlementStatus === "NO_OBSERVED_CREDIT_DELTA";
+  const creditDisplay = {
+    NO_OBSERVED_CREDIT_DELTA: "NOT OBSERVED",
+    CREDITS_PENDING: "PENDING",
+    UNATTRIBUTED_DELTA: "UNATTRIBUTED",
+  }[settlementStatus] ?? "unknown";
   const panel = element("article", "panel");
   const title = element("div", "panel-title");
   title.append(
@@ -247,28 +255,24 @@ function renderVerificationResult(record) {
   metrics.append(
     metric(
       "Actual credits",
-      noObservedCreditDelta
-        ? "NOT OBSERVED"
-        : formatNumber(reconciliation.official_delta?.total_credits),
+      Number.isFinite(actualCredits) ? formatNumber(actualCredits) : creditDisplay,
     ),
     metric("Expected normal", formatNumber(calculation.expected_normal)),
     metric("Expected with 0.67", formatNumber(calculation.expected_with_0_67)),
     metric(
       "Effective extra ratio",
-      noObservedCreditDelta
-        ? "NOT OBSERVED"
-        : formatNumber(calculation.effective_extra_ratio, 8),
+      formatExtraRatio({
+        billing_reconciliation: reconciliation.billing_reconciliation,
+        effective_extra_ratio: calculation.effective_extra_ratio,
+      }, 8),
     ),
     metric("Cached input", formatInteger(reconciliation.request_usage?.cached_input_tokens)),
     metric("Uncached input", formatInteger(reconciliation.request_usage?.uncached_input_tokens)),
     metric("Output", formatInteger(reconciliation.request_usage?.output_tokens)),
     metric(
       "Token match",
-      noObservedCreditDelta
-        ? "NOT OBSERVED"
-        : reconciliation.token_match
-          ? "PASS"
-          : "MISMATCH",
+      reconciliation.token_match ? "PASS" :
+        settlementStatus === "UNATTRIBUTED_DELTA" ? "MISMATCH" : "INCONCLUSIVE",
     ),
   );
   panel.append(title, metrics);
@@ -277,12 +281,12 @@ function renderVerificationResult(record) {
     fact("Time multiplier", formatNumber(calculation.time_multiplier), "off-peak 0.5 is separate from campaign 0.67"),
     fact(
       "Settlement",
-      reconciliation.settlement_status ?? "UNKNOWN",
+      settlementStatus,
       noObservedCreditDelta
-        ? "No official credit delta was observed; this is not evidence of a zero charge."
-        : record.status,
+        ? "The official ledger has yet to show this charge."
+        : reconciliation.limitation ?? record.status,
     ),
-    fact("Model requests", String(record.model_requests ?? 0), `${record.request_usage?.total_tokens ?? "unknown"} reported tokens`),
+    fact("Observed model attempts", String(record.model_requests ?? "Unknown"), `${record.request_usage?.total_tokens ?? "unknown"} reported tokens`),
     fact("Billing window", record.billing_window?.time_zone ?? "Asia/Shanghai", "official hourly ledger"),
   );
   panel.append(details);
@@ -309,14 +313,16 @@ async function captureBilling() {
 function renderBillingSnapshot(snapshot) {
   const model = snapshot.models?.find((row) => row.model === "GLM-5.3-Flash");
   const hours = (model?.hours ?? []).filter((hour) =>
-    Number(hour.total_tokens) > 0 || Number(hour.total_credits) > 0,
+    hour.total_tokens !== 0 || hour.total_credits !== 0,
   );
   const panel = element("article", "panel");
   const title = element("div", "panel-title");
   title.append(element("span", "", "Official Coding Plan hourly ledger"), statusTag(snapshot.integrity?.status ?? "PARTIAL"));
   panel.append(title);
   if (hours.length === 0) {
-    panel.append(element("p", "", "No non-zero GLM-5.3-Flash buckets were found in the current range."));
+    panel.append(element("p", "", model
+      ? "No GLM-5.3-Flash activity was observed in the current range."
+      : "The current snapshot has no GLM-5.3-Flash ledger row."));
   } else {
     const rows = element("div", "history-list");
     for (const hour of hours) {
@@ -485,19 +491,17 @@ function shortHash(value) {
 }
 
 function formatNumber(value, digits = 6) {
-  const number = Number(value);
-  return Number.isFinite(number) ? number.toFixed(digits) : "unknown";
+  return Number.isFinite(value) ? value.toFixed(digits) : "unknown";
 }
 
 function formatExtraRatio(item, digits = 6) {
-  return item?.billing_reconciliation === "PASS" && Number.isFinite(Number(item.effective_extra_ratio))
+  return item?.billing_reconciliation === "PASS" && Number.isFinite(item.effective_extra_ratio)
     ? formatNumber(item.effective_extra_ratio, digits)
     : "INCONCLUSIVE";
 }
 
 function formatInteger(value) {
-  const number = Number(value);
-  return Number.isSafeInteger(number) ? number.toLocaleString("en-US") : "unknown";
+  return Number.isSafeInteger(value) ? value.toLocaleString("en-US") : "unknown";
 }
 
 function formatDateTime(value) {

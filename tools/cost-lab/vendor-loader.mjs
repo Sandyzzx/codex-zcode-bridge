@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
+import { registerHooks } from "node:module";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const SCRIPT_ROOT = path.dirname(fileURLToPath(import.meta.url));
 export const PROJECT_ROOT = path.resolve(SCRIPT_ROOT, "..", "..");
@@ -11,10 +12,10 @@ export const OFFICIAL_RUNTIME_PATH = path.join(
   "official-billing-runtime.mjs",
 );
 export const OFFICIAL_RUNTIME_SHA256 =
-  "4414b2436d26f7d6d0467c69ffa182c25496a4e3453ff8afe8f9d8d7d9129e62";
+  "dcb3fc7cb7a62e7a6dbe7ce8a9e1427075309458453641f6a4c7e8e1971a63e6";
 export const OFFICIAL_KEYRING_NATIVE_SHA256 =
   "52b16658275b7848f8081a6542fee3448f1b1c5d3a36487107ae0e7cec95ac6f";
-export const OFFICIAL_KEYRING_NATIVE_PATH = path.join(
+const OFFICIAL_HOST_MODULES = path.join(
   PROJECT_ROOT,
   "plugins",
   "codex-zcode-bridge",
@@ -24,9 +25,14 @@ export const OFFICIAL_KEYRING_NATIVE_PATH = path.join(
   "win32-x64-node24.16.0-zcode3.18.2-fec97590",
   "node_modules",
   "@napi-rs",
+);
+export const OFFICIAL_KEYRING_JS_PATH = path.join(OFFICIAL_HOST_MODULES, "keyring", "index.js");
+export const OFFICIAL_KEYRING_NATIVE_PATH = path.join(
+  OFFICIAL_HOST_MODULES,
   "keyring-win32-x64-msvc",
   "keyring.win32-x64-msvc.node",
 );
+let keyringHook;
 
 function sha256(data) {
   return createHash("sha256").update(data).digest("hex");
@@ -51,6 +57,11 @@ export async function verifyOfficialVendor() {
     OFFICIAL_KEYRING_NATIVE_SHA256,
     "official_keyring_native",
   );
+  await verifyFile(
+    OFFICIAL_KEYRING_JS_PATH,
+    "8a89db37f981d05b484eb063adae3399660ae7734ad38797463e5691382f5036",
+    "official_keyring_js",
+  );
   return {
     runtime_sha256: runtimeSha256,
     keyring_native_sha256: keyringNativeSha256,
@@ -68,5 +79,20 @@ export async function prepareOfficialBillingVendor({
   }
   const integrity = await verifyOfficialVendor();
   env.NAPI_RS_NATIVE_LIBRARY_PATH = OFFICIAL_KEYRING_NATIVE_PATH;
+  // The vendored bundle leaves this import external. Only redirect its import,
+  // so other modules retain their normal package resolution.
+  const bundleUrl = pathToFileURL(OFFICIAL_RUNTIME_PATH).href;
+  keyringHook ??= registerHooks({
+    resolve(specifier, context, nextResolve) {
+      if (specifier === "@napi-rs/keyring" && context.parentURL === bundleUrl) {
+        return {
+          url: pathToFileURL(OFFICIAL_KEYRING_JS_PATH).href,
+          format: "commonjs",
+          shortCircuit: true,
+        };
+      }
+      return nextResolve(specifier, context);
+    },
+  });
   return integrity;
 }

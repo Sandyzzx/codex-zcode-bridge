@@ -33,7 +33,7 @@
     "target": "node24",
     "format": "esm",
     "platform": "node",
-    "command": "node tools/cost-lab/build-official-billing-runtime.mjs --source <clean-fec97590-worktree>",
+    "rebuild_status": "Historical deterministic build; no rebuild script is shipped in this checkout.",
     "reproducibility": {
       "builds_compared": 2,
       "result": "BYTE_IDENTICAL",
@@ -50,8 +50,12 @@
       "native_package": "@napi-rs/keyring-win32-x64-msvc@2.1.2"
     }
   ],
-  "bundle_bytes": 1672078,
-  "bundle_sha256": "4414B2436D26F7D6D0467C69FFA182C25496A4E3453FF8AFE8F9D8D7D9129E62",
+  "bundle_bytes": 1672227,
+  "bundle_sha256": "DCB3FC7CB7A62E7A6DBE7CE8A9E1427075309458453641F6A4C7E8E1971A63E6",
+  "bundle_integration_edit": {
+    "base_sha256": "4414B2436D26F7D6D0467C69FFA182C25496A4E3453FF8AFE8F9D8D7D9129E62",
+    "scope": "Retain the source model hour labels and model rows from the official usage-detail response before display normalization."
+  },
   "integration_patch": {
     "name": "cost-lab-exact-origin-read-only-guard",
     "allowed_origins": [
@@ -67,15 +71,15 @@
   },
   "native_files": [
     {
-      "path": "tools/cost-lab/vendor/node_modules/@napi-rs/keyring/index.js",
+      "path": "plugins/codex-zcode-bridge/worker/vendor/official-host/win32-x64-node24.16.0-zcode3.18.2-fec97590/node_modules/@napi-rs/keyring/index.js",
       "sha256": "8A89DB37F981D05B484EB063ADAE3399660AE7734AD38797463E5691382F5036"
     },
     {
-      "path": "tools/cost-lab/vendor/node_modules/@napi-rs/keyring/package.json",
+      "path": "plugins/codex-zcode-bridge/worker/vendor/official-host/win32-x64-node24.16.0-zcode3.18.2-fec97590/node_modules/@napi-rs/keyring/package.json",
       "sha256": "4BA8C90AC72BE27FCB3337ED7BC0159C68747E0824294DF5F2AAAEB03130CD4F"
     },
     {
-      "path": "tools/cost-lab/vendor/node_modules/@napi-rs/keyring/LICENSE",
+      "path": "plugins/codex-zcode-bridge/worker/vendor/official-host/win32-x64-node24.16.0-zcode3.18.2-fec97590/node_modules/@napi-rs/keyring/LICENSE",
       "sha256": "02965ED67E29F871A53F7A7AFA593A0DDC8020F86CCCE0FAAF1AA59215B5269E"
     }
   ],

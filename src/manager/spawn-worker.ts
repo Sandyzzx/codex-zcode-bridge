@@ -33,8 +33,8 @@ export function spawnClaimOnlyWorker(
   provenance: RuntimeBuildProvenance,
   options: { readonly interactionChannel?: boolean; readonly dropAfterPrepared?: boolean; readonly privateAuthChannel?: boolean;
     readonly runtimeEventChannel?: boolean;
-    /** Bounded private diagnostics: complete Worker stderr lines matching the
-     * ADR-011 failure-facts marker are forwarded for validated handling;
+    /** Bounded private diagnostics: recognized Worker stderr lines are
+     * forwarded for validated handling;
      * every other byte stays discarded. */
     readonly onWorkerDiagnosticLine?: (line: string) => void } = {},
 ): ClaimOnlyWorkerProcess {
@@ -92,7 +92,10 @@ export function spawnClaimOnlyWorker(
         if (index < 0) break;
         const line = pending.slice(0, index);
         pending = pending.slice(index + 1);
-        if (line.startsWith("[bridge-worker] failure-facts ")) diagnosticSink(line);
+        if (line.startsWith("[bridge-worker] failure-facts ") ||
+            /^\[bridge-worker\] installed-runtime [a-zA-Z0-9][a-zA-Z0-9_-]{0,63} [1-9]\d{0,8} [0-9a-f]{64}$/u.test(line)) {
+          diagnosticSink(line);
+        }
       }
     });
   } else {

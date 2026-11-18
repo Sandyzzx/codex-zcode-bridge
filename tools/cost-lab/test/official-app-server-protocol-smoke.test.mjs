@@ -32,14 +32,14 @@ test("zero-model protocol smoke starts, inspects, and releases the official runt
     let disposedWorkspace = 0;
     let disposedAll = 0;
     let environmentDuringConnect = null;
-    const result = await runOfficialAppServerProtocolSmoke({
+    const options = {
       projectRoot: root,
       createId: () => FIXED_ID,
       timeoutMs: 5_000,
-      discoverInstallation: () => ({ root: install }),
       inspectRuntime: async () => ({
+        install_root: install,
         runtime_status: "OFFICIAL_RUNTIME_VERIFIED",
-        manifest: { version: "3.18.2.10443" },
+        manifest: { version: "3.18.2.10443", desktop_app_version: "3.18.2", desktop_build_commit_id: "2681f4af" },
         assets: {
           bundle: { relative_path: "resources/glm/zcode.cjs", sha256: "a".repeat(64) },
           runtime_host: {
@@ -68,7 +68,9 @@ test("zero-model protocol smoke starts, inspects, and releases the official runt
             assert.equal(command.env.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE, files.personal);
             assert.equal(command.env.ZCODE_RUNTIME_HOST_PATH, files.runtimeHost);
             return {
-              request: async (method, params) => {
+              request: async (method, params, resultSchema, requestOptions) => {
+                assert.equal(resultSchema, undefined);
+                assert.equal(requestOptions.timeoutMs, 5_000);
                 requested.push({ method, params });
                 return { sessionLifecycleWorkspace: true };
               },
@@ -88,7 +90,8 @@ test("zero-model protocol smoke starts, inspects, and releases the official runt
           }
         },
       }),
-    });
+    };
+    const result = await runOfficialAppServerProtocolSmoke(options);
 
     assert.equal(result.status, "PASS");
     assert.equal(result.evidence.protocol_initialized, true);
@@ -99,6 +102,25 @@ test("zero-model protocol smoke starts, inspects, and releases the official runt
     assert.equal(disposedWorkspace, 1);
     assert.equal(disposedAll, 1);
     await assert.rejects(access(path.join(root, ".run", "cost-lab-web", `protocol-smoke-${FIXED_ID}`)));
+
+    const controller = new AbortController();
+    const aborted = await runOfficialAppServerProtocolSmoke({
+      ...options,
+      signal: controller.signal,
+      createManager: (module, managerOptions) => new (class extends module.ZCodeAgentProcessManager {
+        async getClient(workspace) {
+          const client = await super.getClient(workspace);
+          controller.abort(new Error("protocol_smoke_timeout"));
+          return client;
+        }
+      })(managerOptions),
+    });
+    assert.equal(aborted.status, "FAIL");
+    assert.equal(aborted.reason, "protocol_smoke_timeout");
+    assert.equal(requested.length, 1);
+    assert.equal(disposedWorkspace, 2);
+    assert.equal(disposedAll, 2);
+    await assert.rejects(access(path.join(root, ".run", "cost-lab-web", `protocol-smoke-${FIXED_ID}`)));
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -106,7 +128,6 @@ test("zero-model protocol smoke starts, inspects, and releases the official runt
 
 test("protocol smoke fails closed when the installed runtime is unverified", async () => {
   const result = await runOfficialAppServerProtocolSmoke({
-    discoverInstallation: () => ({ root: "D:\\Synthetic\\ZCode" }),
     inspectRuntime: async () => ({
       runtime_status: "OFFICIAL_RUNTIME_UNVERIFIED",
       manifest: null,
@@ -120,10 +141,10 @@ test("protocol smoke fails closed when the installed runtime is unverified", asy
 
 test("protocol smoke report never exposes a literal fixture path", async () => {
   const result = await runOfficialAppServerProtocolSmoke({
-    discoverInstallation: () => ({ root: "D:\\Users\\Sandy\\ZCode" }),
     inspectRuntime: async () => ({
+      install_root: "D:\\Users\\Sandy\\ZCode",
       runtime_status: "OFFICIAL_RUNTIME_VERIFIED",
-      manifest: { version: "3.18.2.10443" },
+      manifest: { version: "3.18.2.10443", desktop_app_version: "3.18.2", desktop_build_commit_id: "2681f4af" },
       assets: {
         bundle: { relative_path: "resources/glm/zcode.cjs", sha256: createHash("sha256").update("b").digest("hex") },
         runtime_host: { relative_path: "resources/tools/runtime-host/zcode-runtime-host.exe", sha256: "c".repeat(64) },

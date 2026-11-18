@@ -1,17 +1,10 @@
 import { createHash } from "node:crypto";
-import { statSync } from "node:fs";
 import { access, stat } from "node:fs/promises";
 import path from "node:path";
 
 import { resolveBillingDataBaseDir } from "./path-discovery.mjs";
 import { inspectOfficialRuntimeAssets } from "./official-runtime-manifest.mjs";
 import { verifyOfficialVendor } from "./vendor-loader.mjs";
-
-const ZCODE_CANDIDATE_SOURCES = Object.freeze([
-  "ZCODE_WINDOWS_APP_INSTALL_DIR",
-  "LOCALAPPDATA",
-  "ProgramFiles",
-]);
 
 export async function inspectCostLabEnvironment(options = {}) {
   const env = options.env ?? process.env;
@@ -26,16 +19,7 @@ export async function inspectCostLabEnvironment(options = {}) {
     fileExists: options.fileExists,
     readFile: options.readFile,
   });
-  const install = discoverInstalledZCode(env, platform, options.fileExists);
-  const runtime = install.root
-    ? await (options.inspectRuntime ?? inspectOfficialRuntimeAssets)(install.root)
-    : {
-        install_root_fingerprint: null,
-        runtime_status: "OFFICIAL_RUNTIME_UNVERIFIED",
-        discount_status: "OFFICIAL_DISCOUNT_NOT_VERIFIED",
-        manifest: null,
-        assets: {},
-      };
+  const runtime = await (options.inspectRuntime ?? inspectOfficialRuntimeAssets)({ env, platform, arch });
   const billing = await inspectBillingAvailability(options);
   const credentials = await inspectCredentialAvailability(data, options);
   const nodeOk = /^24\.16\.\d+$/u.test(nodeVersion);
@@ -59,12 +43,12 @@ export async function inspectCostLabEnvironment(options = {}) {
       supported: platform === "win32" && arch === "x64" && nodeOk,
     },
     zcode: {
-      installed: install.root !== null,
-      install_source: install.source,
+      installed: runtime.install_root !== null,
+      install_source: runtime.install_source ?? null,
       install_root_fingerprint: runtime.install_root_fingerprint,
       runtime_status: runtime.runtime_status,
       discount_status: runtime.discount_status,
-      version: runtime.manifest?.version ?? null,
+      version: runtime.desktop_version ?? null,
       appserver_protocol: runtime.manifest?.appserver_protocol ?? null,
       request_security_capability: runtime.manifest?.request_security_capability ?? null,
       manifest: runtime.manifest,
@@ -92,31 +76,6 @@ export async function inspectCostLabEnvironment(options = {}) {
     },
     warnings: buildWarnings({ nodeOk, platform, arch, runtime, billing, credentials }),
   };
-}
-
-export function discoverInstalledZCode(env, platform = process.platform, fileExists) {
-  const pathImpl = platform === "win32" ? path.win32 : path.posix;
-  const candidates = [];
-  const explicit = env.ZCODE_WINDOWS_APP_INSTALL_DIR?.trim();
-  if (explicit) candidates.push({ root: explicit, source: "ZCODE_WINDOWS_APP_INSTALL_DIR" });
-  const localAppData = env.LOCALAPPDATA?.trim();
-  if (localAppData) {
-    candidates.push({
-      root: pathImpl.join(localAppData, "Programs", "ZCode"),
-      source: "LOCALAPPDATA",
-    });
-  }
-  const programFiles = env.ProgramFiles?.trim() ?? env.PROGRAMFILES?.trim();
-  if (programFiles) {
-    candidates.push({ root: pathImpl.join(programFiles, "ZCode"), source: "ProgramFiles" });
-  }
-  const exists = fileExists ?? defaultFileExists;
-  for (const candidate of candidates) {
-    if (exists(pathImpl.join(candidate.root, "resources", "glm", "zcode.cjs"))) {
-      return { root: pathImpl.resolve(candidate.root), source: candidate.source, candidates: candidates.map((entry) => entry.source) };
-    }
-  }
-  return { root: null, source: null, candidates: candidates.map((entry) => entry.source) };
 }
 
 export async function inspectBillingAvailability(options = {}) {
@@ -163,19 +122,14 @@ async function inspectCredentialAvailability(data, options) {
 
 async function runBoundedProtocolSmoke(run, timeoutMs) {
   const controller = new AbortController();
-  let timer;
+  const timer = setTimeout(() => controller.abort(new Error("protocol_smoke_timeout")), timeoutMs);
   try {
-    const result = await Promise.race([
-      Promise.resolve(run({ signal: controller.signal, modelRequests: 0 })),
-      new Promise((_, reject) => {
-        timer = setTimeout(() => {
-          controller.abort(new Error("protocol_smoke_timeout"));
-          reject(new Error("protocol_smoke_timeout"));
-        }, timeoutMs);
-      }),
-    ]);
+    // The AppServer smoke owns its lifecycle. Wait for its cleanup verdict.
+    const result = await run({ signal: controller.signal, timeoutMs, modelRequests: 0 });
+    if (result?.status === "PASS") controller.signal.throwIfAborted();
     return {
       status: result?.status === "PASS" ? "PASS" : "FAIL",
+      ...(result?.reason ? { reason: safeErrorCode(result.reason) } : {}),
       duration_ms: result?.duration_ms ?? null,
       model_requests: 0,
       evidence: redactValue(result?.evidence ?? null),
@@ -232,13 +186,6 @@ export function digestText(value) {
   return createHash("sha256").update(String(value)).digest("hex");
 }
 
-function defaultFileExists(filePath) {
-  try {
-    return statSync(filePath).isFile();
-  } catch {
-    return false;
-  }
-}
 
 function safeErrorCode(error) {
   const message = error instanceof Error ? error.message : String(error);

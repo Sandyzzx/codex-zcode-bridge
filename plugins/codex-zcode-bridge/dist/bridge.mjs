@@ -22919,7 +22919,9 @@ function spawnClaimOnlyWorker(workerPath, provenance, options = {}) {
         if (index < 0) break;
         const line = pending.slice(0, index);
         pending = pending.slice(index + 1);
-        if (line.startsWith("[bridge-worker] failure-facts ")) diagnosticSink(line);
+        if (line.startsWith("[bridge-worker] failure-facts ") || /^\[bridge-worker\] installed-runtime [a-zA-Z0-9][a-zA-Z0-9_-]{0,63} [1-9]\d{0,8} [0-9a-f]{64}$/u.test(line)) {
+          diagnosticSink(line);
+        }
       }
     });
   } else {
@@ -25900,6 +25902,7 @@ var init_zcode_app_server_adapter = __esm({
       #homeDir;
       #host;
       #executionProfileId;
+      #sessionPreferences;
       #now;
       #resolveInteraction;
       #onOutcomeCheckpoint;
@@ -25936,6 +25939,7 @@ var init_zcode_app_server_adapter = __esm({
         this.#homeDir = options.homeDir ?? homedir4();
         this.#host = validateHostProfile(options.host ?? codexHostProfile(this.#homeDir));
         this.#executionProfileId = options.executionProfileId;
+        this.#sessionPreferences = options.sessionPreferences;
         this.#now = options.now ?? (() => /* @__PURE__ */ new Date());
         this.#probe = options.probe ?? createPlatformProbe();
         this.#resolveInteraction = options.resolveInteraction;
@@ -26121,7 +26125,7 @@ var init_zcode_app_server_adapter = __esm({
             void this.#resolver.resolve().then(resolve, reject).finally(() => entry.abort.signal.removeEventListener("abort", aborted2));
           });
           entry.abort.signal.throwIfAborted();
-          const taskProviderId = task.model?.provider_id;
+          const taskProviderId = this.#sessionPreferences?.model?.provider_id ?? task.model?.provider_id;
           const taskProviderFacts = accountProviderRuleFacts(taskProviderId, config2);
           const otherStartPlanSelected = taskProviderFacts?.planKind === "start-plan" && taskProviderId !== BIGMODEL_START_PLAN_PROVIDER_ID;
           if (otherStartPlanSelected) {
@@ -26164,7 +26168,7 @@ var init_zcode_app_server_adapter = __esm({
           if (startPlanSelected && (!accountProviderPayload?.providers[BIGMODEL_START_PLAN_PROVIDER_ID] || accountProviderPayload.providers[BIGMODEL_START_PLAN_PROVIDER_ID].access.entitled !== true)) {
             return this.#startPlanReadinessFailure(entry, "Start Plan provider snapshot could not be prepared after live entitlement verification.");
           }
-          const preferences = resolveSessionPreferences(task.model, runtimeEnv, this.#executionProfileId);
+          const preferences = this.#sessionPreferences ?? resolveSessionPreferences(task.model, runtimeEnv, this.#executionProfileId);
           const childEnv = this.#buildChildEnv(config2, runtimeEnv);
           if (startPlanSelected) childEnv.ZCODE_MODEL_RETRY_MAX_RETRIES = "0";
           entry.onEvent({ type: "zcode_starting", summary: "Starting ZCode streaming runtime" });
@@ -53919,7 +53923,7 @@ var defaultModelSchema = object({
 // src/mcp/server.ts
 init_errors3();
 var SERVER_NAME = "codex-zcode-bridge";
-var SERVER_VERSION = "2.0.0-preview.8"; // x-release-please-version
+var SERVER_VERSION = "2.0.0-preview.9"; // x-release-please-version
 var EXECUTION_NOT_VERDICT = "Results describe Bridge/ZCode execution only: status 'completed' means the invocation and report normalization finished, NOT that the calling host accepted the work. the calling host must independently review the workspace diff and checks before deciding PASS.";
 function okResult(data) {
   return {
@@ -55724,6 +55728,11 @@ async function startBridge(host = codexHostProfile(), version2 = SERVER_VERSION,
       routeTaskModel: routeTaskModel2,
       ...initialization["upgradeState"] === "upgraded" ? { startupInterruptionReason: "interrupted_by_upgrade" } : {},
       onWorkerDiagnosticLine: (line) => {
+        const runtime = /^\[bridge-worker\] installed-runtime ([a-zA-Z0-9][a-zA-Z0-9_-]{0,63} [1-9]\d{0,8} [0-9a-f]{64})$/u.exec(line);
+        if (runtime) {
+          console.error(`[bridge] worker installed-runtime ${runtime[1]}`);
+          return;
+        }
         const facts = formatWorkerFailureFactsLine(line);
         if (facts) console.error(`[bridge] worker failure-facts ${facts}`);
       }

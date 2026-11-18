@@ -327,14 +327,11 @@ export function createCostLabWebServer(options = {}) {
     if (body.provider !== DEFAULT_PROVIDER_ID || body.model !== "GLM-5.3-Flash" || body.reasoning !== "low") {
       throw httpError(400, "REAL_VERIFICATION_INPUT_REJECTED", "Only the verified Coding Plan provider/model/reasoning tuple is allowed.");
     }
-    if (state.activeVerificationId) {
-      const active = findRecord(state.activeVerificationId);
-      if (active && ["QUEUED", "RUNNING", "MODEL_REQUESTED", "AWAITING_SETTLEMENT"].includes(active.status)) {
-        throw httpError(409, "REAL_VERIFICATION_ALREADY_RUNNING", "A real verification is already running.");
-      }
+    if (state.closed || state.activeVerificationId) {
+      throw httpError(409, "REAL_VERIFICATION_ALREADY_RUNNING", "A real verification is already running or the service is closing.");
     }
-    await ensureHistoryLoaded();
     const id = dependencies.createId();
+    state.activeVerificationId = id;
     const startedAt = dependencies.now().toISOString();
     const record = {
       schema_version: 1,
@@ -361,22 +358,32 @@ export function createCostLabWebServer(options = {}) {
         "A clean billing observation window is required.",
       ],
     };
-    state.history.push(record);
-    trimHistory();
-    await persistHistory();
-    state.activeVerificationId = id;
     const abortController = new AbortController();
     state.activeAbortController = abortController;
-    const verificationPromise = executeVerification(record, abortController.signal)
+    const enqueue = (async () => {
+      await ensureHistoryLoaded();
+      assertNotAborted(abortController.signal);
+      state.history.push(record);
+      try {
+        await persistHistory();
+      } catch (error) {
+        state.history = state.history.filter((item) => item !== record);
+        throw error;
+      }
+    })();
+    const verificationPromise = enqueue
+      .then(() => executeVerification(record, abortController.signal))
       .finally(() => {
         if (state.activeVerificationId === id) state.activeVerificationId = null;
         if (state.activeAbortController === abortController) state.activeAbortController = null;
         if (state.activeVerificationPromise === verificationPromise) state.activeVerificationPromise = null;
       });
     state.activeVerificationPromise = verificationPromise;
+    void verificationPromise.catch(() => undefined);
+    await enqueue;
     return {
       id,
-      status: record.status,
+      status: "QUEUED",
       poll_url: `/api/verifications/${id}`,
       confirmation: "REAL_MODEL_REQUEST_AUTHORIZED",
     };
@@ -398,7 +405,7 @@ export function createCostLabWebServer(options = {}) {
       });
       assertNotAborted(signal);
       record.billing_window.before = redactValue(before);
-      updateRecord(record, { status: "MODEL_REQUESTED" });
+      updateRecord(record, { status: "MODEL_REQUESTED", model_requests: null });
       await persistHistory();
       const verification = await dependencies.verificationRunner({
         signal,
@@ -410,35 +417,18 @@ export function createCostLabWebServer(options = {}) {
       assertNotAborted(signal);
       record.model_requests = Number.isSafeInteger(verification?.model_requests)
         ? verification.model_requests
-        : 0;
+        : null;
       record.request_usage = redactValue(verification?.usage ?? null);
       record.runtime_evidence = redactValue(verification?.runtime_evidence ?? null);
       updateRecord(record, { status: "AWAITING_SETTLEMENT" });
       await persistHistory();
-      const after = await captureAfterWithRetry(signal, {
+      const { after, reconciliation } = await captureAfterWithRetry(signal, {
         before,
         usage: verification?.usage ?? null,
         hour: Number.isInteger(verification?.hour) ? verification.hour : null,
       });
       record.billing_window.after = redactValue(after);
-      const usage = verification?.usage;
-      if (!usage) {
-        record.reconciliation = {
-          billing_reconciliation: "INCONCLUSIVE",
-          settlement_status: "USAGE_MISSING",
-          limitation: "The verification runner did not return complete request usage.",
-        };
-      } else {
-        record.reconciliation = redactValue(reconcileBillingSnapshots(
-          before,
-          after,
-          usage,
-          {
-            model: "GLM-5.3-Flash",
-            ...(Number.isInteger(verification?.hour) ? { hour: verification.hour } : {}),
-          },
-        ));
-      }
+      record.reconciliation = redactValue(reconciliation);
       await persistHistoryWithRecordPatch(record, {
         status: "SUCCEEDED",
         finished_at: dependencies.now().toISOString(),
@@ -458,11 +448,12 @@ export function createCostLabWebServer(options = {}) {
     }
   }
 
-  async function captureAfterWithRetry(signal, expected = {}) {
+  async function captureAfterWithRetry(signal, { before, usage, hour }) {
     let lastError;
-    let lastSnapshot = null;
+    let observation = null;
     for (const delay of dependencies.afterRetryDelaysMs) {
       if (delay > 0) await delayWithSignal(delay, signal);
+      assertNotAborted(signal);
       try {
         const snapshot = await dependencies.captureSnapshot({
           provider: DEFAULT_PROVIDER_ID,
@@ -474,25 +465,33 @@ export function createCostLabWebServer(options = {}) {
           dataRoot: null,
           timeoutMs: 60_000,
         });
-        lastSnapshot = snapshot;
-        // The official endpoint returns hourly aggregates, but the numeric
-        // before/after delta can still settle inside the same hour. Do not
-        // wait for an hour rollover; retry only while the observed bucket is
-        // unchanged.
-        if (!expected.before || hasObservedBillingDelta(
-          expected.before,
-          snapshot,
-          "GLM-5.3-Flash",
-          expected.hour,
-        )) {
-          return snapshot;
+        assertNotAborted(signal);
+        if (!usage) {
+          return { after: snapshot, reconciliation: inconclusiveBilling("USAGE_MISSING") };
         }
+        let reconciliation;
+        try {
+          reconciliation = reconcileBillingSnapshots(before, snapshot, usage, {
+            model: "GLM-5.3-Flash",
+            hour,
+          });
+        } catch (error) {
+          return {
+            after: snapshot,
+            reconciliation: inconclusiveBilling("BILLING_NOT_COMPARABLE", safeErrorCode(error)),
+          };
+        }
+        observation = { after: snapshot, reconciliation };
+        if (reconciliation.calculation.actual_credits !== null) return observation;
       } catch (error) {
+        assertNotAborted(signal);
         lastError = error;
       }
     }
-    if (lastSnapshot) return lastSnapshot;
-    throw lastError ?? new Error("fresh_after_snapshot_unavailable");
+    return observation ?? {
+      after: null,
+      reconciliation: inconclusiveBilling("BILLING_UNAVAILABLE", safeErrorCode(lastError)),
+    };
   }
 
   function snapshotOptions(body) {
@@ -527,7 +526,8 @@ export function createCostLabWebServer(options = {}) {
       if (!parsed || parsed.schema_version !== 1 || !Array.isArray(parsed.items)) {
         throw new Error("cost_lab_history_schema_invalid");
       }
-      state.history = parsed.items.filter(validHistoryRecord).slice(-MAX_HISTORY_ITEMS);
+      state.history = parsed.items.filter(validHistoryRecord).slice(-MAX_HISTORY_ITEMS)
+        .map(normalizeHistoricReconciliation);
     } catch (error) {
       if (error?.code !== "ENOENT") throw error;
       state.history = [];
@@ -669,7 +669,6 @@ export function isLoopbackAddress(address) {
 
 function historySummary(record) {
   const settlementStatus = record.reconciliation?.settlement_status ?? null;
-  const noObservedCreditDelta = settlementStatus === "NO_OBSERVED_CREDIT_DELTA";
   return redactValue({
     id: record.id,
     status: record.status,
@@ -681,36 +680,45 @@ function historySummary(record) {
     billing_reconciliation: record.reconciliation?.billing_reconciliation ?? null,
     credit_class: record.reconciliation?.credit_class ?? null,
     settlement_status: settlementStatus,
-    effective_extra_ratio: noObservedCreditDelta
-      ? null
-      : record.reconciliation?.calculation?.effective_extra_ratio ?? null,
+    actual_credits: record.reconciliation?.calculation?.actual_credits ?? null,
+    effective_extra_ratio: record.reconciliation?.billing_reconciliation === "PASS"
+      ? record.reconciliation.calculation?.effective_extra_ratio ?? null
+      : null,
   });
 }
 
-function hasObservedBillingDelta(before, after, model, hour = null) {
-  const beforeModel = before?.models?.find((entry) => entry.model === model) ?? null;
-  const afterModel = after?.models?.find((entry) => entry.model === model) ?? null;
-  if (!afterModel) return false;
-  const beforeHours = Array.isArray(beforeModel?.hours) ? beforeModel.hours : [];
-  const afterHours = Array.isArray(afterModel.hours) ? afterModel.hours : [];
-  const entries = Number.isInteger(hour)
-    ? [[beforeHours[hour], afterHours[hour]]]
-    : afterHours.map((entry, index) => [beforeHours[index], entry]);
-  const fields = [
-    "cached_input_tokens",
-    "uncached_input_tokens",
-    "output_tokens",
-    "total_tokens",
-    "cached_input_credits",
-    "uncached_input_credits",
-    "output_credits",
-    "total_credits",
-  ];
-  return entries.some(([beforeHour, afterHour]) =>
-    beforeHour && afterHour && fields.some((field) =>
-      Number(afterHour[field] ?? 0) - Number(beforeHour[field] ?? 0) > 1e-12,
-    ),
-  );
+function inconclusiveBilling(settlementStatus, limitation = null) {
+  return {
+    billing_reconciliation: "INCONCLUSIVE",
+    credit_class: "INCONCLUSIVE",
+    settlement_status: settlementStatus,
+    ...(limitation ? { limitation } : {}),
+  };
+}
+
+function normalizeHistoricReconciliation(record) {
+  const reconciliation = record.reconciliation;
+  const { before, after } = record.billing_window ?? {};
+  if (!reconciliation?.calculation) return record;
+  if (reconciliation.schema_version !== 1 &&
+      before?.official_snapshot?.modelUsage?.costLabBillingSource &&
+      after?.official_snapshot?.modelUsage?.costLabBillingSource) return record;
+  let updated;
+  try {
+    updated = reconcileBillingSnapshots(before, after, record.request_usage ?? reconciliation.request_usage, {
+      model: record.model,
+      hour: Number.parseInt(reconciliation.hour, 10),
+    });
+  } catch (error) {
+    updated = inconclusiveBilling("BILLING_NOT_COMPARABLE", safeErrorCode(error));
+  }
+  return {
+    ...record,
+    reconciliation: {
+      ...updated,
+      ...(updated.captured_at ? { captured_at: reconciliation.captured_at } : {}),
+    },
+  };
 }
 
 function validHistoryRecord(value) {

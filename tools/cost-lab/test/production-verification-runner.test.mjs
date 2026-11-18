@@ -19,8 +19,9 @@ function beforeSnapshot() {
   };
 }
 
-function verifiedRuntime() {
+function verifiedRuntime(install) {
   return {
+    install_root: install,
     runtime_status: "OFFICIAL_RUNTIME_VERIFIED",
     discount_status: "OFFICIAL_DISCOUNT_VERIFIED",
     manifest: {
@@ -28,8 +29,9 @@ function verifiedRuntime() {
       request_security_capability: "OfficialRequestSecurity",
     },
     assets: {
-      bundle: { status: "VERIFIED", bytes: 15_675_386, sha256: "a".repeat(64) },
-      runtime_host: { status: "VERIFIED", bytes: 179_608, sha256: "b".repeat(64) },
+      bundle: { relative_path: "resources/glm/zcode.cjs", status: "VERIFIED", bytes: 15_675_386, sha256: "a".repeat(64) },
+      builtin_provider_config: { relative_path: "resources/config/provider/zcode-builtin.json" },
+      runtime_host: { relative_path: "resources/tools/runtime-host/zcode-runtime-host.exe", status: "VERIFIED", bytes: 179_608, sha256: "b".repeat(64) },
     },
   };
 }
@@ -62,6 +64,7 @@ test("production runner drives the built MCP task and returns runtime/usage evid
   const calls = [];
   let closed = 0;
   let statusCalls = 0;
+  let reportInstalledRuntime = true;
   try {
     const runner = createProductionCodingPlanVerificationRunner({
       projectRoot: root,
@@ -76,7 +79,7 @@ test("production runner drives the built MCP task and returns runtime/usage evid
         ZCODE_WINDOWS_APP_INSTALL_DIR: synthetic.install,
         ProgramFiles: "C:\\Program Files",
       },
-      inspectRuntime: async () => verifiedRuntime(),
+      inspectRuntime: async () => verifiedRuntime(synthetic.install),
       connectClient: async (options) => {
         const runtimeConfig = JSON.parse(await readFile(
           path.join(root, ".run", "cost-lab-web", "verifications", FIXED_ID, "home", ".codex", "codex-zcode-bridge", "runtime-config.json"),
@@ -92,6 +95,8 @@ test("production runner drives the built MCP task and returns runtime/usage evid
             callTool: async ({ name, arguments: args }) => {
               calls.push({ name, args });
               if (name === "zcode_task") {
+                const digest = reportInstalledRuntime ? "a".repeat(64) : "c".repeat(64);
+                options.stderr.capture(`[bridge] worker installed-runtime ${args.task_id} 1 ${digest}\n`);
                 return { structuredContent: { task_id: args.task_id, status: "queued" } };
               }
               if (name === "zcode_status") {
@@ -155,6 +160,7 @@ test("production runner drives the built MCP task and returns runtime/usage evid
                           },
                         },
                       },
+                      { seq: 3, type: "released", details: { cleanup_digest: "a".repeat(64) } },
                     ],
                     next_seq: 3,
                     has_more: false,
@@ -171,17 +177,20 @@ test("production runner drives the built MCP task and returns runtime/usage evid
         };
       },
     });
-    const result = await runner({
+    const input = {
       signal: new AbortController().signal,
       provider: PRODUCTION_VERIFICATION_CONTRACT.provider,
       model: PRODUCTION_VERIFICATION_CONTRACT.model,
       reasoning: PRODUCTION_VERIFICATION_CONTRACT.reasoning,
       beforeSnapshot: beforeSnapshot(),
-    });
+    };
+    const result = await runner(input);
     assert.equal(result.model_requests, 1);
     assert.equal(result.usage.total_tokens, 13_402);
     assert.equal(result.hour, 10);
     assert.equal(result.runtime_evidence.runtime.bundle_sha256, "a".repeat(64));
+    assert.equal(result.runtime_evidence.status, "PASS");
+    assert.equal(result.runtime_evidence.request_security.installed_bundle_verified, true);
     assert.equal(result.runtime_evidence.provider, PRODUCTION_VERIFICATION_CONTRACT.provider);
     assert.equal(result.runtime_evidence.request_security.expected, "OfficialRequestSecurity");
     assert.deepEqual(calls.map((call) => call.name), [
@@ -193,6 +202,10 @@ test("production runner drives the built MCP task and returns runtime/usage evid
     ]);
     assert.equal(closed, 1);
     await assert.rejects(lstat(stateRoot), { code: "ENOENT" });
+    reportInstalledRuntime = false;
+    const mismatch = await runner(input);
+    assert.equal(mismatch.runtime_evidence.status, "UNVERIFIED");
+    assert.equal(mismatch.runtime_evidence.request_security.installed_bundle_verified, null);
   } finally {
     await Promise.all([
       rm(root, { recursive: true, force: true }),
@@ -268,7 +281,7 @@ test("production runner fails before model dispatch when the installed runtime i
   }
 });
 
-test("production runner preserves a safe Bridge SQLite marker when MCP startup is wrapped", async () => {
+test("production runner preserves the Bridge SQLite marker and roots when startup cleanup is unknown", async () => {
   await mkdir(RUN_ROOT, { recursive: true });
   const root = await mkdtemp(path.join(RUN_ROOT, "production-runner-marker-"));
   const synthetic = await fixtureFiles(root);
@@ -285,7 +298,7 @@ test("production runner preserves a safe Bridge SQLite marker when MCP startup i
         USERPROFILE: synthetic.userHome,
         ZCODE_WINDOWS_APP_INSTALL_DIR: synthetic.install,
       },
-      inspectRuntime: async () => verifiedRuntime(),
+      inspectRuntime: async () => verifiedRuntime(synthetic.install),
       connectClient: async (options) => {
         options.stderr.capture("[bridge] SQLITE_INITIALIZATION_FAILED: sqlite_data_root_reserved_location\n");
         const error = new Error("wrapped");
@@ -302,7 +315,7 @@ test("production runner preserves a safe Bridge SQLite marker when MCP startup i
       }),
       { code: "SQLITE_INITIALIZATION_FAILED" },
     );
-    await assert.rejects(lstat(stateRoot), { code: "ENOENT" });
+    assert.equal((await lstat(stateRoot)).isDirectory(), true);
   } finally {
     await Promise.all([
       rm(root, { recursive: true, force: true }),
@@ -327,7 +340,7 @@ test("production runner preserves a structured MCP task rejection code", async (
         USERPROFILE: synthetic.userHome,
         ZCODE_WINDOWS_APP_INSTALL_DIR: synthetic.install,
       },
-      inspectRuntime: async () => verifiedRuntime(),
+      inspectRuntime: async () => verifiedRuntime(synthetic.install),
       connectClient: async () => ({
         client: {
           callTool: async ({ name }) => {

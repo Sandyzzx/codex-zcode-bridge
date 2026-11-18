@@ -7,12 +7,12 @@
 
 当前发布状态：
 
-- Stable `v1.7.1`：Tag `codex-zcode-bridge-v1.7.1`。
+- Stable `v1.7.2`：Tag `codex-zcode-bridge-v1.7.2`。
 - 已发布 Preview `2.0.0-preview.5`：Tag `codex-zcode-bridge-preview-v2.0.0-preview.5`；追加 Official Host、R7 Runtime Events/Usage、v14 兼容迁移与 Administrative Recovery 修复。
 - Preview `2.0.0-preview.6`：Owner 已批准发布。支持声明限定为 Windows x64、Node.js `24.16.0` 与已安装的官方 ZCode Desktop `3.18.2.10443`。
 - Preview `2.0.0-preview.7`：在 Preview.6 上应用 ADR-038 整改，并修复 CI dispatch 边界与 Events summary 分页。
 - Preview `2.0.0-preview.8`：包含 ADR-039 Host 授权取消与新鲜 Cleanup Proof 绑定；支持范围限定为 Windows x64、Node.js `24.16.0` 与已安装的官方 ZCode Desktop `3.18.2.10443`。
-- 集成候选分支 `codex/official-runtime-integration-20261118`：在 Preview.8 基线上增加 ADR-040 安装版 Coding Plan Runtime、Cost Lab Web、Start Plan 离线审计和正式证据；未 merge、未发布。
+- `2.0.0-preview.9` 发布候选：在 Preview.8 基线上增加 ADR-040 安装版 Coding Plan Runtime、Cost Lab Web、Start Plan 离线审计和正式证据。
 
 ## 当前生产架构
 

@@ -344,6 +344,11 @@ export async function startBridge(
         ? { startupInterruptionReason: "interrupted_by_upgrade" as const }
         : {}),
       onWorkerDiagnosticLine: (line) => {
+        const runtime = /^\[bridge-worker\] installed-runtime ([a-zA-Z0-9][a-zA-Z0-9_-]{0,63} [1-9]\d{0,8} [0-9a-f]{64})$/u.exec(line);
+        if (runtime) {
+          console.error(`[bridge] worker installed-runtime ${runtime[1]}`);
+          return;
+        }
         const facts = formatWorkerFailureFactsLine(line);
         // Diagnostic stderr only: this line never enters MCP results, events,
         // or any persisted surface.

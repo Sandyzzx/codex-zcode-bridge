@@ -11,7 +11,7 @@ import {
 } from "./vendor-loader.mjs";
 
 export const SNAPSHOT_SCHEMA_VERSION = 1;
-export const RECONCILIATION_SCHEMA_VERSION = 1;
+export const RECONCILIATION_SCHEMA_VERSION = 2;
 export const DEFAULT_PROVIDER_ID = "account:bigmodel-individual-coding-plan";
 export const DEFAULT_TIME_ZONE = "Asia/Shanghai";
 export const DEFAULT_TIMEOUT_MS = 45_000;
@@ -149,22 +149,35 @@ export function assertSupportedProvider(providerId) {
 }
 
 function finiteNumber(value, fallback = 0) {
-  const number = typeof value === "number" ? value : Number(value);
+  const number = typeof value === "string" && value.trim() ? Number(value) : value;
   return Number.isFinite(number) ? number : fallback;
 }
 
+function ledgerNumber(value, tokens = false) {
+  const number = finiteNumber(value, null);
+  return number !== null && number >= 0 && (!tokens || Number.isSafeInteger(number))
+    ? number
+    : null;
+}
+
+function knownSum(...values) {
+  return values.includes(null) ? null : values.reduce((sum, value) => sum + value, 0);
+}
+
 function normalizeHourAxis(xTime, granularity) {
-  if (Array.isArray(xTime) && xTime.length > 0) return xTime.map(String);
-  if (granularity === "hour") {
-    return Array.from({ length: 24 }, (_, hour) => `${String(hour).padStart(2, "0")}:00:00`);
-  }
-  return [];
+  if (!Array.isArray(xTime)) return [];
+  return xTime.map((entry) => {
+    const raw = String(entry);
+    if (granularity !== "hour") return raw;
+    const match = /(?:^|[ T])(\d{2}):(\d{2})(?::(\d{2}))?$/u.exec(raw);
+    return match ? `${match[1]}:${match[2]}:${match[3] ?? "00"}` : raw;
+  });
 }
 
 function normalizeBucket(row, index) {
   const value = (field) => {
     const sequence = row?.[field];
-    return Array.isArray(sequence) ? finiteNumber(sequence[index]) : 0;
+    return Array.isArray(sequence) ? ledgerNumber(sequence[index], field.includes("Tokens")) : null;
   };
   const cachedInputTokens = value("cachedInputTokensUsage");
   const uncachedInputTokens = value("uncachedInputTokensUsage");
@@ -176,19 +189,24 @@ function normalizeBucket(row, index) {
     cached_input_tokens: cachedInputTokens,
     uncached_input_tokens: uncachedInputTokens,
     output_tokens: outputTokens,
-    total_tokens: cachedInputTokens + uncachedInputTokens + outputTokens,
+    total_tokens: knownSum(cachedInputTokens, uncachedInputTokens, outputTokens),
     cached_input_credits: cachedInputCredits,
     uncached_input_credits: uncachedInputCredits,
     output_credits: outputCredits,
-    total_credits: cachedInputCredits + uncachedInputCredits + outputCredits,
+    total_credits: knownSum(cachedInputCredits, uncachedInputCredits, outputCredits),
   };
 }
 
-function missingModelFields(row) {
+function missingModelFields(row, model) {
   const missing = [];
   for (const field of MODEL_ARRAY_FIELDS) {
-    if (!Array.isArray(row?.[field]) || row[field].length !== 24) missing.push(field);
+    if (!Array.isArray(row?.[field]) || row[field].length !== model.hours.length ||
+        row[field].some((value) => ledgerNumber(value, field.includes("Tokens")) === null)) {
+      missing.push(field);
+    }
   }
+  if (model.total_tokens === null) missing.push("totalTokens");
+  if (model.total_credits === null) missing.push("totalCredits");
   return missing;
 }
 
@@ -203,26 +221,41 @@ export function buildSnapshotEnvelope({
   if (!result?.snapshot || !result?.identity) throw new Error("official_billing_result_invalid");
   const provider = assertSupportedProvider(providerId);
   const snapshot = result.snapshot;
-  const xTime = normalizeHourAxis(snapshot.modelUsage?.xTime, snapshot.modelUsage?.granularity);
-  const allRows = Array.isArray(snapshot.modelUsage?.modelDataList)
-    ? snapshot.modelUsage.modelDataList
+  const billingSource = sourceModelUsage(snapshot.modelUsage);
+  const xTime = normalizeHourAxis(billingSource?.xTime, snapshot.modelUsage?.granularity);
+  const allRows = Array.isArray(billingSource?.modelDataList)
+    ? billingSource.modelDataList
     : [];
   const selectedRows = modelFilter
-    ? allRows.filter((row) => row?.modelName === modelFilter)
+    ? allRows.filter((row) => billingModelName(row) === modelFilter)
     : allRows;
   if (modelFilter && selectedRows.length === 0) throw new Error(`model_not_found:${modelFilter}`);
-  const models = selectedRows.map((row) => ({
-    model: String(row.modelName),
-    total_tokens: finiteNumber(row.totalTokens),
-    total_credits: finiteNumber(row.totalCredits),
-    hours: xTime.map((axis, index) => ({
+  const models = selectedRows.map((row) => {
+    const hours = xTime.map((axis, index) => ({
       bucket: axis,
       ...normalizeBucket(row, index),
-    })),
-  }));
-  const missingFields = selectedRows.flatMap((row) =>
-    missingModelFields(row).map((field) => `${row.modelName}.${field}`),
+    }));
+    // Official detail can omit daily totals while returning the classified series.
+    const total = (raw, field) => raw === undefined && hours.length > 0
+      ? ledgerNumber(knownSum(...hours.map((hour) => hour[field])), field === "total_tokens")
+      : ledgerNumber(raw, field === "total_tokens");
+    return {
+      model: billingModelName(row),
+      total_tokens: total(row.totalTokens, "total_tokens"),
+      total_credits: total(row.totalCredits, "total_credits"),
+      hours,
+    };
+  });
+  const missingFields = selectedRows.flatMap((row, index) =>
+    missingModelFields(row, models[index])
+      .map((field) => `${billingModelName(row)}.${field}`),
   );
+  if (!Array.isArray(billingSource?.xTime) || xTime.length === 0 ||
+      new Set(xTime).size !== xTime.length ||
+      (snapshot.modelUsage?.granularity === "hour" &&
+        xTime.some((label) => !/^(?:[01]\d|2[0-3]):00:00$/u.test(label)))) {
+    missingFields.push("modelUsage.xTime");
+  }
   if (snapshot.quota == null) missingFields.push("quota");
   const integrityStatus =
     models.length === 0 || missingFields.length > 0 ? "PARTIAL" : "COMPLETE";
@@ -270,6 +303,16 @@ export function buildSnapshotEnvelope({
     },
     official_snapshot: retainedSnapshot.value,
   };
+}
+
+function sourceModelUsage(modelUsage) {
+  return modelUsage && Object.hasOwn(modelUsage, "costLabBillingSource")
+    ? modelUsage.costLabBillingSource
+    : modelUsage;
+}
+
+function billingModelName(row) {
+  return row?.modelName?.trim() || row?.modelCode?.trim() || null;
 }
 
 const SECRET_FIELD_PATTERN =
@@ -337,7 +380,7 @@ export function extractRequestUsage(raw) {
   };
   const cachedInputTokens = finiteNumber(
     pick("cached_input_tokens", "cachedInputTokens", "cached_input", "cachedInput"),
-    0,
+    null,
   );
   const explicitUncached = pick(
     "uncached_input_tokens",
@@ -359,22 +402,27 @@ export function extractRequestUsage(raw) {
   ) {
     throw new Error("usage_token_fields_missing");
   }
-  const uncachedInputTokens =
-    explicitUncached !== undefined
-      ? finiteNumber(explicitUncached)
-      : Math.max(0, finiteNumber(inputTokens) - cachedInputTokens);
-  const outputTokens = finiteNumber(outputTokensRaw);
+  const inclusiveInput = ledgerNumber(inputTokens, true);
+  const uncachedInputTokens = explicitUncached !== undefined
+    ? ledgerNumber(explicitUncached, true)
+    : inclusiveInput !== null && cachedInputTokens !== null
+      ? inclusiveInput - cachedInputTokens
+      : null;
+  const outputTokens = ledgerNumber(outputTokensRaw, true);
   const totalTokens =
     explicitTotal !== undefined
-      ? finiteNumber(explicitTotal)
-      : cachedInputTokens + uncachedInputTokens + outputTokens;
+      ? ledgerNumber(explicitTotal, true)
+      : knownSum(cachedInputTokens, uncachedInputTokens, outputTokens);
   for (const [name, value] of Object.entries({
     cached_input_tokens: cachedInputTokens,
     uncached_input_tokens: uncachedInputTokens,
     output_tokens: outputTokens,
     total_tokens: totalTokens,
   })) {
-    if (!Number.isFinite(value) || value < 0) throw new Error(`usage_${name}_invalid`);
+    if (!Number.isSafeInteger(value) || value < 0) throw new Error(`usage_${name}_invalid`);
+  }
+  if (knownSum(cachedInputTokens, uncachedInputTokens, outputTokens) !== totalTokens) {
+    throw new Error("usage_total_tokens_inconsistent");
   }
   return {
     model:
@@ -383,7 +431,7 @@ export function extractRequestUsage(raw) {
       raw?.model_id ??
       null,
     timestamp:
-      pick("captured_at", "timestamp", "ended_at", "started_at", "time") ??
+      pick("observed_at", "captured_at", "timestamp", "ended_at", "started_at", "time") ??
       raw?.captured_at ??
       raw?.timestamp ??
       null,
@@ -394,38 +442,15 @@ export function extractRequestUsage(raw) {
   };
 }
 
-function findModelRow(snapshot, model, createIfMissing) {
-  if (model) {
-    const row = snapshot.models.find((entry) => entry.model === model);
-    if (!row && !createIfMissing) throw new Error(`before_model_not_found:${model}`);
-    return (
-      row ?? {
-        model,
-        total_tokens: 0,
-        total_credits: 0,
-        hours: Array.from({ length: 24 }, (_, hour) => ({
-          bucket: `${String(hour).padStart(2, "0")}:00:00`,
-          cached_input_tokens: 0,
-          uncached_input_tokens: 0,
-          output_tokens: 0,
-          total_tokens: 0,
-          cached_input_credits: 0,
-          uncached_input_credits: 0,
-          output_credits: 0,
-          total_credits: 0,
-        })),
-      }
-    );
-  }
-  return null;
-}
-
-function bucketAt(row, hour) {
-  const bucket =
-    row.hours[hour] ??
-    row.hours.find((entry) => Number.parseInt(entry.bucket, 10) === hour);
-  if (!bucket) throw new Error(`billing_hour_missing:${hour}`);
-  return bucket;
+function bucketAt(snapshot, model, hour) {
+  const label = `${String(hour).padStart(2, "0")}:00:00`;
+  const official = snapshot.official_snapshot?.modelUsage?.costLabBillingSource;
+  if (!Array.isArray(official?.modelDataList) || !Array.isArray(official?.xTime)) return null;
+  const rows = official.modelDataList.filter((row) => billingModelName(row) === model);
+  const axis = normalizeHourAxis(official.xTime, "hour");
+  const index = axis.indexOf(label);
+  if (rows.length !== 1 || index < 0 || axis.lastIndexOf(label) !== index) return null;
+  return normalizeBucket(rows[0], index);
 }
 
 function subtractBucket(after, before) {
@@ -440,15 +465,20 @@ function subtractBucket(after, before) {
     "output_credits",
     "total_credits",
   ]) {
-    result[field] = finiteNumber(after[field]) - finiteNumber(before[field]);
+    const isToken = field.endsWith("_tokens");
+    const first = ledgerNumber(before?.[field], isToken);
+    const last = ledgerNumber(after?.[field], isToken);
+    result[field] = first === null || last === null ? null : last - first;
   }
   return result;
 }
 
-function changedHours(beforeRow, afterRow) {
+function changedHours(before, after, model) {
   return Array.from({ length: 24 }, (_, hour) => {
-    const diff = subtractBucket(bucketAt(afterRow, hour), bucketAt(beforeRow, hour));
-    return Object.values(diff).some((value) => Math.abs(value) > 1e-12) ? hour : null;
+    const diff = subtractBucket(bucketAt(after, model, hour), bucketAt(before, model, hour));
+    return Object.values(diff).some((value) => value !== null && Math.abs(value) > 1e-12)
+      ? hour
+      : null;
   }).filter((hour) => hour !== null);
 }
 
@@ -463,9 +493,11 @@ export function calculateCreditBreakdown({
     uncachedInputTokens,
     cachedInputTokens,
     outputTokens,
-    actualCredits,
   })) {
     if (!Number.isFinite(value) || value < 0) throw new Error(`credit_${name}_invalid`);
+  }
+  if (actualCredits !== null && (!Number.isFinite(actualCredits) || actualCredits < 0)) {
+    throw new Error("credit_actualCredits_invalid");
   }
   const baseCredits =
     (uncachedInputTokens * 2.3 + cachedInputTokens * 0.56 + outputTokens * 8) / 10_000;
@@ -478,13 +510,18 @@ export function calculateCreditBreakdown({
     expected_normal: expectedNormal,
     expected_with_0_67: expectedWithZeroPointSixSeven,
     actual_credits: actualCredits,
-    effective_extra_ratio: expectedNormal > 0 ? actualCredits / expectedNormal : null,
+    effective_extra_ratio: expectedNormal > 0 && actualCredits !== null ? actualCredits / expectedNormal : null,
   };
 }
 
 function classifyCredit(actual, normal, withDiscount, tolerance) {
-  if (Math.abs(actual - normal) <= tolerance) return "NORMAL";
-  if (Math.abs(actual - withDiscount) <= tolerance) return "EXTRA_0_67";
+  if (actual === null) return "INCONCLUSIVE";
+  if (actual === 0) return "ZERO_CHARGE";
+  const normalMatch = Math.abs(actual - normal) <= tolerance;
+  const discountMatch = Math.abs(actual - withDiscount) <= tolerance;
+  if (normalMatch && discountMatch) return "INCONCLUSIVE";
+  if (normalMatch) return "NORMAL";
+  if (discountMatch) return "EXTRA_0_67";
   return "OTHER";
 }
 
@@ -493,8 +530,18 @@ export function reconcileBillingSnapshots(before, after, rawUsage, options = {})
       after?.kind !== "coding_plan_billing_snapshot") {
     throw new Error("billing_snapshot_schema_invalid");
   }
-  if (before.provider.id !== after.provider.id) throw new Error("billing_provider_changed");
-  if (before.query.time_zone !== after.query.time_zone) throw new Error("billing_timezone_changed");
+  if (!before.provider?.id || before.provider.id !== after.provider?.id) throw new Error("billing_provider_changed");
+  if (!before.query?.time_zone || before.query.time_zone !== after.query?.time_zone) {
+    throw new Error("billing_timezone_changed");
+  }
+  for (const key of ["api_key_id", "organization_id", "project_id", "official_account_scope", "plan_scope"]) {
+    if ((before.identity?.[key] ?? null) !== (after.identity?.[key] ?? null)) {
+      throw new Error("billing_identity_changed");
+    }
+  }
+  if (typeof before.identity?.api_key_id !== "string" || !before.identity.api_key_id.trim()) {
+    throw new Error("billing_identity_missing");
+  }
   const beforeStartDate = before.range?.start_date;
   const beforeEndDate = before.range?.end_date;
   const afterStartDate = after.range?.start_date;
@@ -505,19 +552,43 @@ export function reconcileBillingSnapshots(before, after, rawUsage, options = {})
   if (beforeStartDate !== afterStartDate || beforeEndDate !== afterEndDate) {
     throw new Error("billing_range_changed");
   }
+  if (beforeStartDate !== beforeEndDate || before.range.granularity !== "hour" ||
+      after.range.granularity !== "hour") throw new Error("billing_single_day_hourly_range_required");
   const usage = extractRequestUsage(rawUsage);
   const model = options.model ?? usage.model;
   if (!model) throw new Error("model_required_for_reconciliation");
-  const beforeRow = findModelRow(before, model, true);
-  const afterRow = findModelRow(after, model, false);
+  if (usage.model && usage.model !== model) throw new Error("billing_usage_model_changed");
   let hour = options.hour;
   if (hour === undefined || hour === null) {
-    const changed = changedHours(beforeRow, afterRow);
+    const changed = changedHours(before, after, model);
     if (changed.length !== 1) throw new Error("hour_required_for_reconciliation");
     hour = changed[0];
   }
-  const diff = subtractBucket(bucketAt(afterRow, hour), bucketAt(beforeRow, hour));
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23) throw new Error("billing_hour_invalid");
+  const beforeCaptured = Date.parse(before.captured_at);
+  const afterCaptured = Date.parse(after.captured_at);
+  if (!Number.isFinite(beforeCaptured) || !Number.isFinite(afterCaptured) || afterCaptured < beforeCaptured) {
+    throw new Error("billing_capture_order_invalid");
+  }
+  if (usage.timestamp !== null) {
+    const observed = new Date(usage.timestamp);
+    const localDate = new Intl.DateTimeFormat("en-CA", {
+      timeZone: DEFAULT_TIME_ZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(observed);
+    if (localDate !== afterEndDate || shanghaiHourForTimestamp(observed) !== hour) {
+      throw new Error("billing_usage_window_changed");
+    }
+  }
+  const diff = subtractBucket(bucketAt(after, model, hour), bucketAt(before, model, hour));
+  const complete = Object.values(diff).every((value) => value !== null && value >= -1e-12);
+  const creditsObserved = complete && diff.total_credits > 1e-12;
+  const settledZero = complete && diff.total_credits === 0 && after.integrity?.settlement_status === "SETTLED";
+  const tokenDeltaObserved = complete && diff.total_tokens > 0;
   const tokenMatch =
+    complete && (tokenDeltaObserved || settledZero) &&
     diff.cached_input_tokens === usage.cached_input_tokens &&
     diff.uncached_input_tokens === usage.uncached_input_tokens &&
     diff.output_tokens === usage.output_tokens &&
@@ -533,21 +604,22 @@ export function reconcileBillingSnapshots(before, after, rawUsage, options = {})
     cachedInputTokens: usage.cached_input_tokens,
     outputTokens: usage.output_tokens,
     offPeak: isOffPeakShanghai(bucketInstant),
-    actualCredits: Math.max(0, diff.total_credits),
+    actualCredits: tokenMatch && (creditsObserved || settledZero) ? diff.total_credits : null,
   });
   const tolerance = options.creditTolerance ?? 0.0005;
-  const creditClass = tokenMatch
-    ? classifyCredit(
-        calculation.actual_credits,
-        calculation.expected_normal,
-        calculation.expected_with_0_67,
-        tolerance,
-      )
-    : "INCONCLUSIVE";
+  const creditClass = classifyCredit(
+    calculation.actual_credits, calculation.expected_normal, calculation.expected_with_0_67, tolerance,
+  );
   const reconciliationStatus =
-    tokenMatch && ["NORMAL", "EXTRA_0_67"].includes(creditClass)
+    tokenMatch && ["NORMAL", "EXTRA_0_67", "ZERO_CHARGE"].includes(creditClass)
       ? "PASS"
       : "INCONCLUSIVE";
+  let settlementStatus = "NO_OBSERVED_CREDIT_DELTA";
+  if (!complete) settlementStatus = "INVALID_BILLING_DATA";
+  else if (settledZero) settlementStatus = "ZERO_CHARGE_OBSERVED";
+  else if (creditsObserved) settlementStatus = "DELTA_OBSERVED";
+  else if (tokenDeltaObserved) settlementStatus = "CREDITS_PENDING";
+  if ((creditsObserved || settledZero) && !tokenMatch) settlementStatus = "UNATTRIBUTED_DELTA";
   return {
     schema_version: RECONCILIATION_SCHEMA_VERSION,
     kind: "coding_plan_billing_reconciliation",
@@ -558,24 +630,16 @@ export function reconcileBillingSnapshots(before, after, rawUsage, options = {})
     captured_at: new Date().toISOString(),
     before_captured_at: before.captured_at,
     after_captured_at: after.captured_at,
-    official_delta: {
-      cached_input_tokens: diff.cached_input_tokens,
-      uncached_input_tokens: diff.uncached_input_tokens,
-      output_tokens: diff.output_tokens,
-      total_tokens: diff.total_tokens,
-      cached_input_credits: diff.cached_input_credits,
-      uncached_input_credits: diff.uncached_input_credits,
-      output_credits: diff.output_credits,
-      total_credits: diff.total_credits,
-    },
+    official_delta: Object.fromEntries(Object.entries(diff).map(([key, value]) => [
+      key, key.endsWith("_credits") && !creditsObserved && !settledZero ? null : value,
+    ])),
     request_usage: usage,
     token_match: tokenMatch,
     calculation,
     credit_class: creditClass,
     credit_tolerance: tolerance,
     billing_reconciliation: reconciliationStatus,
-    settlement_status:
-      diff.total_credits > 0 ? "DELTA_OBSERVED" : "NO_OBSERVED_CREDIT_DELTA",
+    settlement_status: settlementStatus,
     limitations: [
       "official_api_is_hour_aggregated",
       "unique_attribution_requires_token_match_and_no_parallel_activity",

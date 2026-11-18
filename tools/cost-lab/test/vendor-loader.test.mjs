@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 
 import {
+  OFFICIAL_KEYRING_JS_PATH,
   OFFICIAL_KEYRING_NATIVE_PATH,
   OFFICIAL_RUNTIME_PATH,
   PROJECT_ROOT,
@@ -59,7 +61,14 @@ test("official billing provenance records a clean deterministic patch build", as
   assert.equal(provenance.bundle_sha256, bundleSha);
   assert.equal(provenance.builder.reproducibility.result, "BYTE_IDENTICAL");
   assert.equal(new Set(provenance.builder.reproducibility.sha256).size, 1);
-  assert.equal(provenance.builder.reproducibility.sha256[0], bundleSha);
+  const base = bundle.toString("utf8").replace(
+    "      costLabBillingSource: modelUsage === null ? null : {\n        xTime: modelUsage.xTime,\n        modelDataList: modelUsage.modelDataList\n      },\n",
+    "",
+  );
+  const baseSha = createHash("sha256").update(base).digest("hex").toUpperCase();
+  assert.notEqual(baseSha, bundleSha);
+  assert.equal(provenance.bundle_integration_edit.base_sha256, baseSha);
+  assert.equal(provenance.builder.reproducibility.sha256[0], baseSha);
 });
 
 test("official billing runtime blocks foreign origins, redirects, and extra writes", async () => {
@@ -103,6 +112,21 @@ test("vendor preparation points keyring at the tracked official Host native file
   });
   assert.equal(env.NAPI_RS_NATIVE_LIBRARY_PATH, OFFICIAL_KEYRING_NATIVE_PATH);
   assert.equal(integrity.keyring_native_source, "official_host_vendor");
+});
+
+test("the billing bundle resolves the tracked JS package and native binding without opening credentials", {
+  skip: process.platform !== "win32" || process.arch !== "x64",
+}, async () => {
+  const env = process.env.NAPI_RS_NATIVE_LIBRARY_PATH;
+  try {
+    await prepareOfficialBillingVendor();
+    const fromBillingBundle = createRequire(OFFICIAL_RUNTIME_PATH);
+    assert.equal(fromBillingBundle.resolve("@napi-rs/keyring"), OFFICIAL_KEYRING_JS_PATH);
+    assert.equal(typeof fromBillingBundle("@napi-rs/keyring").AsyncEntry, "function");
+  } finally {
+    if (env === undefined) delete process.env.NAPI_RS_NATIVE_LIBRARY_PATH;
+    else process.env.NAPI_RS_NATIVE_LIBRARY_PATH = env;
+  }
 });
 
 test("vendor preparation refuses unsupported native targets", async () => {

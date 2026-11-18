@@ -61,7 +61,8 @@ function modelRow({
   return row;
 }
 
-function snapshot(row, capturedAt = "2026-11-17T02:00:00.000Z") {
+function snapshot(row, capturedAt = "2026-11-17T02:00:00.000Z", billingSource) {
+  const xTime = zeroArrays().map((_, hour) => `${String(hour).padStart(2, "0")}:00:00`);
   return buildSnapshotEnvelope({
     result: {
       snapshot: {
@@ -75,9 +76,10 @@ function snapshot(row, capturedAt = "2026-11-17T02:00:00.000Z") {
         },
         quota: { level: "lite", limits: [] },
         modelUsage: {
-          xTime: zeroArrays().map((_, hour) => `${String(hour).padStart(2, "0")}:00:00`),
+          xTime,
           granularity: "hour",
           modelDataList: [row],
+          costLabBillingSource: billingSource ?? { xTime, modelDataList: [row] },
         },
       },
       identity: {
@@ -168,6 +170,45 @@ test("snapshot envelope normalizes hour buckets and retains the raw source", () 
   assert.deepEqual(envelope.official_snapshot.modelUsage.modelDataList[0], row);
 });
 
+test("dated partial-day source buckets take precedence over display padding", () => {
+  const usage = { cached_input_tokens: 0, uncached_input_tokens: 100, output_tokens: 2 };
+  const options = { model: "GLM-5.3-Flash", hour: 10 };
+  const displayRow = modelRow();
+  const source = (row, hours) => ({
+    xTime: Array.from({ length: hours }, (_, hour) =>
+      `2026-11-17 ${String(hour).padStart(2, "0")}:00`),
+    modelDataList: [Object.fromEntries(Object.entries(row).map(([key, value]) =>
+      [key, Array.isArray(value) ? value.slice(0, hours) : value]))],
+  });
+  const before = snapshot(displayRow, undefined, source(displayRow, 11));
+  const chargedRow = modelRow({ uncachedInputTokens: 100, outputTokens: 2, uncachedInputCredits: 0.0115, outputCredits: 0.0008 });
+  delete chargedRow.totalTokens;
+  delete chargedRow.totalCredits;
+  const chargedSource = source(chargedRow, 12);
+  const after = snapshot(displayRow, undefined, chargedSource);
+  assert.equal(before.integrity.status, "COMPLETE");
+  assert.equal(after.integrity.status, "COMPLETE");
+  assert.equal(after.models[0].total_tokens, 102);
+  assert.equal(after.models[0].total_credits, 0.0123);
+  assert.equal(after.models[0].hours[10].bucket, "10:00:00");
+  assert.equal(after.models[0].hours[12], undefined);
+  const result = reconcileBillingSnapshots(before, after, usage, options);
+  assert.equal(result.credit_class, "NORMAL");
+  assert.equal(result.calculation.actual_credits, 0.0123);
+
+  const legacy = structuredClone(after);
+  delete legacy.official_snapshot.modelUsage.costLabBillingSource;
+  assert.equal(reconcileBillingSnapshots(before, legacy, usage, options).calculation.actual_credits, null);
+
+  delete chargedSource.modelDataList[0].outputCreditsUsage;
+  const incomplete = snapshot(displayRow, undefined, chargedSource);
+  assert.equal(incomplete.integrity.status, "PARTIAL");
+  assert.equal(incomplete.models[0].total_credits, null);
+  assert.equal(reconcileBillingSnapshots(before, incomplete, usage, options).calculation.actual_credits, null);
+  const missingBefore = snapshot(displayRow, undefined, source(displayRow, 10));
+  assert.equal(reconcileBillingSnapshots(missingBefore, after, usage, options).calculation.actual_credits, null);
+});
+
 test("snapshot envelope marks incomplete arrays and missing quota as partial", () => {
   const row = modelRow({ outputTokens: 2 });
   row.cachedInputTokensUsage = [0];
@@ -183,7 +224,7 @@ test("snapshot envelope marks incomplete arrays and missing quota as partial", (
           name: "BigModel - Coding Plan",
         },
         modelUsage: {
-          xTime: ["10:00:00"],
+          xTime: zeroArrays().map((_, hour) => `${String(hour).padStart(2, "0")}:00:00`),
           granularity: "hour",
           modelDataList: [row],
         },
@@ -261,7 +302,7 @@ test("credit calculation separates base, time multiplier and 0.67", () => {
 test("reconciliation identifies normal and 0.67 credits without inventing request attribution", () => {
   const usage = {
     model: "GLM-5.3-Flash",
-    timestamp: "2026-11-17T10:30:00.000Z",
+    timestamp: "2026-11-17T02:00:00.000Z",
     cached_input_tokens: 64,
     uncached_input_tokens: 13_291,
     output_tokens: 47,
@@ -337,6 +378,46 @@ test("reconciliation refuses to assign an aggregate delta to a mismatched reques
   assert.equal(result.token_match, false);
   assert.equal(result.credit_class, "INCONCLUSIVE");
   assert.equal(result.billing_reconciliation, "INCONCLUSIVE");
+  assert.equal(result.settlement_status, "UNATTRIBUTED_DELTA");
+  assert.equal(result.calculation.actual_credits, null);
+  assert.equal(result.calculation.effective_extra_ratio, null);
+});
+
+test("reconciliation distinguishes unsettled and explicitly settled zero credits", () => {
+  const usage = { cached_input_tokens: 0, uncached_input_tokens: 10, output_tokens: 2 };
+  const before = snapshot(modelRow());
+  const after = snapshot(modelRow({ uncachedInputTokens: 10, outputTokens: 2 }));
+  const options = { model: "GLM-5.3-Flash", hour: 10 };
+  const pending = reconcileBillingSnapshots(before, after, usage, options);
+  assert.equal(pending.token_match, true);
+  assert.equal(pending.settlement_status, "CREDITS_PENDING");
+  assert.equal(pending.calculation.actual_credits, null);
+  assert.equal(pending.official_delta.total_credits, null);
+  after.integrity.settlement_status = "SETTLED";
+  const zero = reconcileBillingSnapshots(before, after, usage, options);
+  assert.equal(zero.settlement_status, "ZERO_CHARGE_OBSERVED");
+  assert.equal(zero.calculation.actual_credits, 0);
+  assert.equal(zero.credit_class, "ZERO_CHARGE");
+});
+
+test("invalid ledger values and partial usage do not normalize to zero", () => {
+  const before = snapshot(modelRow());
+  const row = modelRow({ uncachedInputTokens: 10, outputTokens: 2 });
+  row.outputCreditsUsage[10] = null;
+  row.cachedInputTokensUsage[10] = false;
+  const after = snapshot(row);
+  assert.equal(after.integrity.status, "PARTIAL");
+  assert.equal(after.models[0].hours[10].total_credits, null);
+  assert.equal(after.models[0].hours[10].total_tokens, null);
+  const usage = { cached_input_tokens: 0, uncached_input_tokens: 10, output_tokens: 2 };
+  const options = { model: "GLM-5.3-Flash", hour: 10 };
+  const result = reconcileBillingSnapshots(before, after, usage, options);
+  assert.equal(result.settlement_status, "INVALID_BILLING_DATA");
+  assert.equal(result.calculation.actual_credits, null);
+  assert.throws(() => extractRequestUsage({ total_tokens: 12 }), /usage_cached_input_tokens_invalid/u);
+  assert.throws(() => extractRequestUsage({ ...usage, total_tokens: 13 }), /usage_total_tokens_inconsistent/u);
+  after.identity.project_id = "another-project";
+  assert.throws(() => reconcileBillingSnapshots(before, after, usage, options), /billing_identity_changed/u);
 });
 
 test("usage parsing rejects records with no token fields", () => {
@@ -348,6 +429,33 @@ test("usage parsing rejects records with no token fields", () => {
       }),
     /usage_token_fields_missing/,
   );
+});
+
+test("the pre-normalization billing evidence takes precedence over display zero-fill", () => {
+  const before = snapshot(modelRow());
+  const after = snapshot(modelRow({ uncachedInputTokens: 10, outputTokens: 2 }));
+  const display = after.official_snapshot.modelUsage;
+  display.costLabBillingSource = {
+    xTime: display.xTime,
+    modelDataList: [{ ...display.modelDataList[0], cachedInputCreditsUsage: undefined }],
+  };
+  const result = reconcileBillingSnapshots(before, after, {
+    cached_input_tokens: 0, uncached_input_tokens: 10, output_tokens: 2,
+  }, { model: "GLM-5.3-Flash", hour: 10 });
+  assert.equal(result.settlement_status, "INVALID_BILLING_DATA");
+  assert.equal(result.calculation.actual_credits, null);
+});
+
+test("reconciliation requires a billing identity and rejects usage from another Shanghai date", () => {
+  const before = snapshot(modelRow());
+  const after = snapshot(modelRow({ uncachedInputTokens: 10, outputTokens: 2, uncachedInputCredits: 0.0023 }));
+  const usage = {
+    timestamp: "2026-11-16T02:00:00.000Z", cached_input_tokens: 0, uncached_input_tokens: 10, output_tokens: 2,
+  };
+  const options = { model: "GLM-5.3-Flash", hour: 10 };
+  assert.throws(() => reconcileBillingSnapshots(before, after, usage, options), /billing_usage_window_changed/u);
+  before.identity.api_key_id = after.identity.api_key_id = null;
+  assert.throws(() => reconcileBillingSnapshots(before, after, usage, options), /billing_identity_missing/u);
 });
 
 test("reconciliation rejects before and after snapshots from different ranges", () => {

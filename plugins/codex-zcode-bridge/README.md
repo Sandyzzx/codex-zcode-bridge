@@ -2,7 +2,7 @@
 
 把有明确边界的开发任务从 Codex 交给本机官方 ZCode Agent Runtime，在 Codex 中跟进进度，并独立审查实际改动后再决定是否接受。
 
-当前已发布 Preview 版本为 `2.0.0-preview.6`；本源码树是该发布基线上的 Post-Audit 架构减法与正确性整改候选。Stable `v1.7.1` 是独立发布渠道；后续改动在完成 PR、CI 与 Owner 裁决前不得视为已发布。
+本插件属于 `2.0.0-preview.9`。Stable 通过独立的 Marketplace 渠道发布。
 
 ## 支持范围
 

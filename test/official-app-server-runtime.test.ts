@@ -40,6 +40,7 @@ async function makeFixture(options: {
     writeFile(builtin, options.builtin ?? "{\"config\":{}}\n", "utf8"),
     writeFile(runtimeHost, options.runtimeHost ?? "synthetic-runtime-host\n", "utf8"),
     writeFile(desktopExecutable, "synthetic-desktop-executable\n", "utf8"),
+    writeFile(path.join(root, "resources", "app.asar"), "synthetic-asar\n", "utf8"),
   ]);
   const [bundleIdentity, builtinIdentity, hostIdentity] = await Promise.all([
     identity(bundle),
@@ -53,6 +54,8 @@ async function makeFixture(options: {
     runtimeHost,
     manifest: {
       desktop_version: options.version ?? "3.18.2.10443",
+      desktop_app_version: "3.18.2",
+      desktop_build_commit_id: "2681f4af",
       bundle_sha256: bundleIdentity.sha256,
       bundle_bytes: bundleIdentity.bytes,
       builtin_provider_config_sha256: builtinIdentity.sha256,
@@ -74,6 +77,7 @@ function resolver(fixture: Fixture, overrides: {
   readonly nodeVersion?: string;
   readonly manifest?: readonly OfficialAppServerRuntimeManifestEntry[];
   readonly env?: NodeJS.ProcessEnv;
+  readonly launchIdentity?: NodeJS.ProcessEnv;
 } = {}): OfficialAppServerRuntimeResolver {
   const base: ZCodeRuntimeConfig = {
     nodeExecutable: "node",
@@ -95,7 +99,7 @@ function resolver(fixture: Fixture, overrides: {
     probeDesktopVersion: async () => overrides.version ?? fixture.manifest.desktop_version,
     readDesktopLaunch: () => ({
       args: ["app-server", "--stdio", "--surface", "desktop"],
-      env: { ZCODE_APP_VERSION: "3.18.2" },
+      env: overrides.launchIdentity ?? { ZCODE_APP_VERSION: "3.18.2", ZCODE_BUILD_COMMIT_ID: "2681f4af" },
     }),
   });
 }
@@ -165,6 +169,22 @@ test("unknown Desktop version and incompatible Node never inherit verified disco
     const changedNode = await resolver(fixture, { nodeVersion: "v25.0.0" }).inspect();
     assert.equal(changedNode.status, "OFFICIAL_RUNTIME_UNVERIFIED");
     assert.match(changedNode.reason ?? "", /Node 25\.0\.0/iu);
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("mixed Desktop archive identity fails closed even when the executable and AppServer match", async () => {
+  const fixture = await makeFixture();
+  try {
+    for (const launchIdentity of [
+      { ZCODE_APP_VERSION: "3.18.3", ZCODE_BUILD_COMMIT_ID: "2681f4af" },
+      { ZCODE_APP_VERSION: "3.18.2", ZCODE_BUILD_COMMIT_ID: "01234567" },
+    ]) {
+      const descriptor = await resolver(fixture, { launchIdentity }).inspect();
+      assert.equal(descriptor.discount_capability, "OFFICIAL_DISCOUNT_NOT_VERIFIED");
+      assert.match(descriptor.reason ?? "", /Desktop launch identity/u);
+    }
   } finally {
     await rm(fixture.root, { recursive: true, force: true });
   }

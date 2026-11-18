@@ -52,6 +52,7 @@ function modelRow(values = {}) {
 }
 
 function snapshot(row, capturedAt) {
+  const xTime = zeroArrays().map((_, hour) => `${String(hour).padStart(2, "0")}:00:00`);
   return buildSnapshotEnvelope({
     result: {
       snapshot: {
@@ -63,9 +64,10 @@ function snapshot(row, capturedAt) {
         },
         quota: { level: "lite", limits: [] },
         modelUsage: {
-          xTime: zeroArrays().map((_, hour) => `${String(hour).padStart(2, "0")}:00:00`),
+          xTime,
           granularity: "hour",
           modelDataList: [row],
+          costLabBillingSource: { xTime, modelDataList: [row] },
         },
       },
       identity: { apiKeyId: "synthetic-key-id" },
@@ -134,12 +136,16 @@ async function request(base, pathname, options = {}) {
   return { response, text, json };
 }
 
-async function makeServer(overrides = {}) {
+async function makeServer(overrides = {}, historyItems = null) {
   await mkdir(RUN_ROOT, { recursive: true });
   const root = await mkdtemp(path.join(RUN_ROOT, "cost-lab-web-test-"));
+  const historyPath = path.join(root, "history.json");
+  if (historyItems) {
+    await writeFile(historyPath, JSON.stringify({ schema_version: 1, items: historyItems }));
+  }
   const server = createCostLabWebServer({
     projectRoot: PROJECT_ROOT,
-    historyPath: path.join(root, "history.json"),
+    historyPath,
     createId: () => FIXED_ID,
     afterRetryDelaysMs: [0],
     inspectEnvironment: async () => environment(),
@@ -329,7 +335,12 @@ test("same-hour settlement retry waits for an observable delta instead of an hou
     afterRetryDelaysMs: [0, 0, 0],
     captureSnapshot: async () => {
       captureCalls += 1;
-      return captureCalls < 3 ? before : after;
+      if (captureCalls === 1) return before;
+      if (captureCalls < 4) return snapshot(modelRow({
+        uncachedInputTokens: 1_000,
+        outputTokens: 10,
+      }), "2026-11-17T02:00:10.000Z");
+      return after;
     },
     verificationRunner: async () => ({
       model_requests: 1,
@@ -366,7 +377,7 @@ test("same-hour settlement retry waits for an observable delta instead of an hou
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
     assert.equal(record.status, "SUCCEEDED");
-    assert.equal(captureCalls, 3);
+    assert.equal(captureCalls, 4);
     assert.equal(record.reconciliation.hour, "10:00:00");
     assert.equal(record.reconciliation.official_delta.total_tokens, 1_010);
     assert.equal(record.reconciliation.token_match, true);
@@ -422,13 +433,92 @@ test("unobserved official credit delta is reported as inconclusive, not as a zer
     assert.equal(captureCalls, 4);
     assert.equal(record.reconciliation.settlement_status, "NO_OBSERVED_CREDIT_DELTA");
     assert.equal(record.reconciliation.billing_reconciliation, "INCONCLUSIVE");
-    assert.equal(record.reconciliation.official_delta.total_credits, 0);
+    assert.equal(record.reconciliation.official_delta.total_credits, null);
+    assert.equal(record.reconciliation.calculation.actual_credits, null);
+    assert.equal(record.reconciliation.calculation.effective_extra_ratio, null);
+    assert.equal(record.billing_window.after.models[0].hours[10].total_credits, 0);
 
     const history = await request(fixture.address.origin, "/api/history");
     assert.equal(history.response.status, 200);
     const summary = history.json.data.items.find((item) => item.id === FIXED_ID);
     assert.equal(summary.settlement_status, "NO_OBSERVED_CREDIT_DELTA");
+    assert.equal(summary.actual_credits, null);
     assert.equal(summary.effective_extra_ratio, null);
+    const exported = await request(fixture.address.origin, `/api/history/${FIXED_ID}/export`);
+    assert.equal(exported.json.verification.reconciliation.settlement_status, "NO_OBSERVED_CREDIT_DELTA");
+    assert.equal(exported.json.verification.reconciliation.calculation.actual_credits, null);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("persisted legacy history cannot confirm a charge from padded display data", async () => {
+  const before = snapshot(modelRow(), "2026-11-17T02:01:00.000Z");
+  const after = snapshot(modelRow({
+    uncachedInputTokens: 10_000,
+    uncachedInputCredits: 0.7705,
+  }), "2026-11-17T02:02:00.000Z");
+  delete before.official_snapshot.modelUsage.costLabBillingSource;
+  delete after.official_snapshot.modelUsage.costLabBillingSource;
+  const requestUsage = {
+    model: "GLM-5.3-Flash",
+    cached_input_tokens: 0,
+    uncached_input_tokens: 10_000,
+    output_tokens: 0,
+    total_tokens: 10_000,
+  };
+  const fixture = await makeServer({}, [{
+    id: FIXED_ID,
+    status: "SUCCEEDED",
+    model: requestUsage.model,
+    request_usage: requestUsage,
+    billing_window: { before, after },
+    reconciliation: {
+      schema_version: 1,
+      hour: "10:00:00",
+      billing_reconciliation: "PASS",
+      credit_class: "EXTRA_0_67",
+      calculation: { actual_credits: 0.7705, effective_extra_ratio: 0.67 },
+    },
+  }]);
+  try {
+    const exported = await request(fixture.address.origin, `/api/history/${FIXED_ID}/export`);
+    assert.equal(exported.response.status, 200);
+    const reconciliation = exported.json.verification.reconciliation;
+    assert.equal(reconciliation.billing_reconciliation, "INCONCLUSIVE");
+    assert.equal(reconciliation.settlement_status, "INVALID_BILLING_DATA");
+    assert.equal(reconciliation.calculation.actual_credits, null);
+    const history = await request(fixture.address.origin, "/api/history");
+    assert.equal(history.json.data.items[0].actual_credits, null);
+    assert.equal(history.json.data.items[0].effective_extra_ratio, null);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("verification admission rejects a history write failure before dispatch", async () => {
+  let runnerCalls = 0;
+  const fixture = await makeServer({
+    verificationRunner: async () => { runnerCalls += 1; },
+  });
+  try {
+    const current = await session(fixture.address.origin);
+    await mkdir(path.join(fixture.root, "history.json"));
+    const started = await request(fixture.address.origin, "/api/verifications", {
+      method: "POST",
+      headers: stateChangingHeaders(fixture.address.origin, current.csrf_token),
+      body: JSON.stringify({
+        confirmation: CONFIRMATION_PHRASE,
+        provider: "account:bigmodel-individual-coding-plan",
+        model: "GLM-5.3-Flash",
+        reasoning: "low",
+      }),
+    });
+    assert.equal(started.response.status, 500);
+    assert.equal(runnerCalls, 0);
+    assert.equal((await session(fixture.address.origin)).active_verification_id, null);
+    const history = await request(fixture.address.origin, "/api/history");
+    assert.deepEqual(history.json.data.items, []);
   } finally {
     await fixture.cleanup();
   }
@@ -486,6 +576,43 @@ test("the local server cannot be broadened to a wildcard bind", async () => {
   } finally {
     await server.close();
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("simultaneous confirmations admit one durable verification and one dispatch", async () => {
+  let runnerCalls = 0;
+  let runnerStarted;
+  const started = new Promise((resolve) => { runnerStarted = resolve; });
+  const fixture = await makeServer({
+    captureSnapshot: async () => snapshot(modelRow(), "2026-11-17T02:00:00.000Z"),
+    verificationRunner: async ({ signal }) => {
+      runnerCalls += 1;
+      runnerStarted();
+      await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
+      return {};
+    },
+  });
+  try {
+    const base = fixture.address.origin;
+    const { csrf_token: token } = await session(base);
+    const submit = () => request(base, "/api/verifications", {
+      method: "POST",
+      headers: stateChangingHeaders(base, token),
+      body: JSON.stringify({
+        confirmation: CONFIRMATION_PHRASE,
+        provider: "account:bigmodel-individual-coding-plan",
+        model: "GLM-5.3-Flash",
+        reasoning: "low",
+      }),
+    });
+    const responses = await Promise.all([submit(), submit()]);
+    assert.deepEqual(responses.map(({ response }) => response.status).sort(), [202, 409]);
+    const history = JSON.parse(await readFile(path.join(fixture.root, "history.json"), "utf8"));
+    assert.deepEqual(history.items.map(({ id }) => id), [FIXED_ID]);
+    await started;
+    assert.equal(runnerCalls, 1);
+  } finally {
+    await fixture.cleanup();
   }
 });
 

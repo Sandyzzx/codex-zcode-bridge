@@ -37428,6 +37428,10 @@ function buildCodingPlanUsageSnapshotFromMonitor(params) {
     modelUsage: {
       xTime: params.xTime,
       granularity: params.granularity,
+      costLabBillingSource: modelUsage === null ? null : {
+        xTime: modelUsage.xTime,
+        modelDataList: modelUsage.modelDataList
+      },
       totalModelCallCount: modelUsage?.modelDataList?.length ?? params.modelData?.totalUsage?.totalModelCallCount ?? 0,
       totalTokensUsage,
       modelDataList,

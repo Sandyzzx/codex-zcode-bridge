@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { lstatSync, readFileSync, statSync } from "node:fs";
-import { access, lstat, mkdir, rm, stat, writeFile } from "node:fs/promises";
+import { lstatSync, readFileSync } from "node:fs";
+import { access, lstat, mkdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
@@ -56,6 +56,7 @@ export function createProductionCodingPlanVerificationRunner(options = {}) {
   const pollIntervalMs = options.pollIntervalMs ?? 2_000;
   const taskTimeoutMs = options.taskTimeoutMs ?? 900_000;
   const bridgeShutdownTimeoutMs = options.bridgeShutdownTimeoutMs ?? 60_000;
+  const releaseTimeoutMs = options.releaseTimeoutMs ?? 15_000;
 
   return async function runVerification(input) {
     validateVerificationInput(input);
@@ -67,6 +68,7 @@ export function createProductionCodingPlanVerificationRunner(options = {}) {
     await assertPathAbsent(roots.stateRoot);
     const layout = verificationLayout(roots.runRoot, roots.stateRoot);
     let phase = "isolated_layout";
+    let cleanupSafe = true;
     try {
       await createIsolatedLayout(layout);
 
@@ -77,21 +79,19 @@ export function createProductionCodingPlanVerificationRunner(options = {}) {
         fallbackHomeDir: options.fallbackHomeDir,
       });
       phase = "runtime_discovery";
-      const install = discoverOfficialInstallation(
-        options.env ?? process.env,
-        options.platform ?? process.platform,
-      );
-      if (!install.installRoot) throw new Error("installed_official_zcode_not_found");
-      const runtime = await inspectRuntime(install.installRoot);
-      if (runtime.runtime_status !== "OFFICIAL_RUNTIME_VERIFIED") {
+      const runtime = await inspectRuntime({
+        env: options.env ?? process.env,
+        platform: options.platform ?? process.platform,
+      });
+      if (runtime.runtime_status !== "OFFICIAL_RUNTIME_VERIFIED" || !runtime.install_root) {
         throw new Error("installed_official_runtime_unverified");
       }
       const official = {
-        installRoot: install.installRoot,
+        installRoot: runtime.install_root,
         dataBaseDir: account.dataBaseDir,
-        bundle: path.join(install.installRoot, "resources", "glm", "zcode.cjs"),
-        runtimeHost: path.join(install.installRoot, "resources", "tools", "runtime-host", "zcode-runtime-host.exe"),
-        builtinProviderConfig: path.join(install.installRoot, "resources", "config", "provider", "zcode-builtin.json"),
+        bundle: path.join(runtime.install_root, runtime.assets.bundle.relative_path),
+        runtimeHost: path.join(runtime.install_root, runtime.assets.runtime_host.relative_path),
+        builtinProviderConfig: path.join(runtime.install_root, runtime.assets.builtin_provider_config.relative_path),
         personalProviderConfig: path.join(account.dataBaseDir, ".zcode", "v2", "provider_config.json"),
         zcodeHome: path.join(account.dataBaseDir, ".zcode"),
       };
@@ -112,9 +112,10 @@ export function createProductionCodingPlanVerificationRunner(options = {}) {
       const stderr = createBoundedStderrCollector();
       let connected;
       let taskId = null;
-      let cancellationAttempted = false;
+      let released = false;
       try {
         phase = "bridge_connect";
+        cleanupSafe = false;
         connected = await connectClient({
           command: options.nodeExecutable ?? process.execPath,
           args: [bridgeEntryPath],
@@ -126,6 +127,7 @@ export function createProductionCodingPlanVerificationRunner(options = {}) {
           clientVersion: "1.0.0",
         });
         const client = connected.client;
+        assertNotAborted(input.signal);
         taskId = `costlab-${id}`;
         phase = "task_dispatch";
         const task = buildTask(taskId, layout.workspace);
@@ -142,10 +144,17 @@ export function createProductionCodingPlanVerificationRunner(options = {}) {
         const result = await callBridgeTool(client, "zcode_result", { task_id: taskId });
         phase = "events_read";
         const events = await collectTaskEvents(client, taskId);
+        phase = "release_wait";
+        released = await waitForRelease(client, taskId, status, events, releaseTimeoutMs, pollIntervalMs);
+        if (!released) throw new Error("bridge_release_unverified");
         const usageEvidence = extractUsageEvidence(result, events);
         const modelEvents = events.filter((event) => MODEL_EVENT_TYPES.has(event.type));
+        const candidateDigest = runtime.assets.bundle.sha256;
+        const installedRuntimeObserved = typeof candidateDigest === "string" &&
+          /^[0-9a-f]{64}$/u.test(candidateDigest) &&
+          stderr.markers().includes(`[bridge] worker installed-runtime ${taskId} ${status.attempt} ${candidateDigest}`);
         const runtimeEvidence = {
-          status: "PASS",
+          status: installedRuntimeObserved ? "PASS" : "UNVERIFIED",
           bridge_path: "BUILT_MCP_STDIO_PRODUCTION",
           isolated_host_profile: true,
           task_id: taskId,
@@ -153,12 +162,12 @@ export function createProductionCodingPlanVerificationRunner(options = {}) {
           terminal_status: status.status,
           exit_code: result.exit_code ?? status.exit_code ?? null,
           session_id: result.session_id ?? status.zcode_session_id ?? null,
-          provider: result.model?.provider_id ?? VERIFIED_PROVIDER,
-          model: result.model?.model_id ?? VERIFIED_MODEL,
+          provider: result.model?.provider_id ?? null,
+          model: result.model?.model_id ?? null,
           requested_reasoning: "low",
           effective_reasoning: result.model?.effective_reasoning_level ?? null,
           runtime: {
-            status: runtime.runtime_status,
+            status: installedRuntimeObserved ? runtime.runtime_status : "WORKER_RUNTIME_UNOBSERVED",
             version: runtime.manifest?.version ?? null,
             bundle_sha256: runtime.assets?.bundle?.sha256 ?? null,
             bundle_bytes: runtime.assets?.bundle?.bytes ?? null,
@@ -167,14 +176,16 @@ export function createProductionCodingPlanVerificationRunner(options = {}) {
           },
           request_security: {
             expected: "OfficialRequestSecurity",
-            installed_bundle_verified: true,
+            installed_bundle_verified: installedRuntimeObserved ? true : null,
             signing_handshake_observation: "NOT_EXPOSED_BY_MCP",
           },
           event_coverage: {
             event_count: events.length,
             model_related_event_count: modelEvents.length,
             auxiliary_usage_coverage: usageEvidence.auxiliary_usage_coverage,
+            model_http_requests: null,
           },
+          operation_release_observed: true,
           events: modelEvents.map(publicEvidenceEvent),
           stderr_markers: stderr.markers(),
         };
@@ -199,8 +210,7 @@ export function createProductionCodingPlanVerificationRunner(options = {}) {
           },
         };
       } catch (error) {
-        if (input.signal?.aborted && taskId && connected?.client && !cancellationAttempted) {
-          cancellationAttempted = true;
+        if (taskId && connected?.client && !released) {
           await withTimeout(
             callBridgeTool(connected.client, "zcode_cancel", { task_id: taskId }).catch(() => undefined),
             10_000,
@@ -212,18 +222,23 @@ export function createProductionCodingPlanVerificationRunner(options = {}) {
         throw error;
       } finally {
         if (connected) {
-          await withTimeout(
+          const closed = await withTimeout(
             connected.close(),
             bridgeShutdownTimeoutMs,
             "bridge_mcp_shutdown_timeout",
-          ).catch(() => undefined);
+          ).then(() => true, () => false);
+          cleanupSafe = closed && (!taskId || released);
+          if (released && !closed) {
+            phase = "bridge_shutdown";
+            throw new Error("bridge_mcp_shutdown_unverified");
+          }
         }
       }
     } catch (error) {
       decorateVerificationError(error, phase);
       throw error;
     } finally {
-      await cleanupVerificationRoots(roots);
+      if (cleanupSafe) await cleanupVerificationRoots(roots);
     }
   };
 }
@@ -234,7 +249,24 @@ function countLogicalModelAttempts(events) {
     event.type === "turn_failed" ||
     event.type === "provider_retry_send_accepted",
   ).length;
-  return Math.max(1, terminal);
+  return terminal || null;
+}
+
+async function waitForRelease(client, taskId, status, events, timeoutMs, pollIntervalMs) {
+  // A fresh isolated task has one attempt. The public event projection
+  // does not expose attempt IDs, so never adopt a release for a later attempt.
+  if (status.task_id !== taskId || status.attempt !== 1) return false;
+  const hasRelease = (batch) => batch.some((event) =>
+    event.type === "released" && /^[0-9a-f]{64}$/u.test(event.details?.cleanup_digest));
+  if (hasRelease(events)) return true;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await delay(Math.min(pollIntervalMs, deadline - Date.now()));
+    const current = await callBridgeTool(client, "zcode_status", { task_id: taskId });
+    if (current.task_id !== taskId || current.attempt !== 1 || !TERMINAL_STATUSES.has(current.status)) return false;
+    if (hasRelease(await collectTaskEvents(client, taskId))) return true;
+  }
+  return false;
 }
 
 function verificationHour(usage, fallbackTimestamp) {
@@ -331,12 +363,19 @@ async function assertPathAbsent(target) {
 
 async function cleanupVerificationRoots(roots) {
   for (const target of [roots.stateRoot, roots.runRoot]) {
+    const resolved = await realpath(target).catch((error) => {
+      if (error?.code === "ENOENT") return null;
+      throw error;
+    });
+    if (resolved === null) continue;
+    assertInside(path.dirname(target), resolved);
+    if (path.relative(target, resolved) !== "") throw new Error("cost_lab_verification_cleanup_path_changed");
     await rm(target, {
       recursive: true,
       force: true,
       maxRetries: 5,
       retryDelay: 200,
-    }).catch(() => undefined);
+    });
   }
 }
 
@@ -543,7 +582,8 @@ async function collectTaskEvents(client, taskId) {
       view: "raw",
       max_bytes: 16 * 1024 * 1024,
     });
-    const batch = Array.isArray(result.events) ? result.events : [];
+    if (result.task_id !== taskId || !Array.isArray(result.events)) throw new Error("bridge_task_events_mismatch");
+    const batch = result.events;
     events.push(...batch);
     const next = Number(result.next_seq);
     if (!Number.isSafeInteger(next) || next <= afterSeq || result.has_more !== true) break;
@@ -629,7 +669,8 @@ function createBoundedStderrCollector() {
 }
 
 function isSafeBridgeMarker(line) {
-  return /^\[bridge\] (SQLITE_|runtime provenance|data root|max concurrent workers|received |[A-Za-z0-9_.+-]+ stdio MCP server ready)/u.test(line);
+  return /^\[bridge\] (SQLITE_|runtime provenance|data root|max concurrent workers|received |[A-Za-z0-9_.+-]+ stdio MCP server ready)/u.test(line) ||
+    /^\[bridge\] worker installed-runtime [a-zA-Z0-9][a-zA-Z0-9_-]{0,63} [1-9]\d{0,8} [0-9a-f]{64}$/u.test(line);
 }
 
 function bridgeMarkerCode(markers) {
@@ -646,30 +687,6 @@ function decorateVerificationError(error, phase) {
     error.code = `COST_LAB_${phase.toUpperCase()}_INVALID_ARGUMENT`;
   } else if (typeof error.code !== "string" || error.code.length === 0) {
     error.code = `COST_LAB_${phase.toUpperCase()}_FAILED`;
-  }
-}
-
-function discoverOfficialInstallation(env, platform) {
-  const pathImpl = platform === "win32" ? path.win32 : path.posix;
-  const candidates = [];
-  const explicit = env.ZCODE_WINDOWS_APP_INSTALL_DIR?.trim();
-  if (explicit) candidates.push(explicit);
-  const localAppData = env.LOCALAPPDATA?.trim();
-  if (localAppData) candidates.push(pathImpl.join(localAppData, "Programs", "ZCode"));
-  const programFiles = env.ProgramFiles?.trim() ?? env.PROGRAMFILES?.trim();
-  if (programFiles) candidates.push(pathImpl.join(programFiles, "ZCode"));
-  const installRoot = candidates.find((root) =>
-    fileExists(pathImpl.join(root, "resources", "glm", "zcode.cjs")) &&
-    fileExists(pathImpl.join(root, "resources", "tools", "runtime-host", "zcode-runtime-host.exe")),
-  ) ?? null;
-  return { installRoot };
-}
-
-function fileExists(filePath) {
-  try {
-    return statSync(filePath).isFile();
-  } catch {
-    return false;
   }
 }
 

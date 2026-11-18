@@ -1994,6 +1994,12 @@ var init_paths = __esm({
 });
 
 // src/runtime/resolver.ts
+var resolver_exports = {};
+__export(resolver_exports, {
+  NodeRuntimeResolver: () => NodeRuntimeResolver,
+  findPackageRoot: () => findPackageRoot,
+  loadPersistedRuntimeEnvironment: () => loadPersistedRuntimeEnvironment
+});
 import { accessSync, existsSync as existsSync3, readFileSync as readFileSync4, statSync } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 import path6 from "node:path";
@@ -4163,6 +4169,11 @@ var init_child_env = __esm({
 });
 
 // src/runtime/session-preferences.ts
+var session_preferences_exports = {};
+__export(session_preferences_exports, {
+  ZCODE_SESSION_MODES: () => ZCODE_SESSION_MODES,
+  resolveSessionPreferences: () => resolveSessionPreferences
+});
 function resolveSessionPreferences(taskModel, env, trustedExecutionProfileId) {
   const providerId = env["ZCODE_BRIDGE_DEFAULT_PROVIDER_ID"]?.trim() ?? "";
   const modelId = env["ZCODE_BRIDGE_DEFAULT_MODEL_ID"]?.trim() ?? "";
@@ -25880,6 +25891,7 @@ var init_zcode_app_server_adapter = __esm({
       #homeDir;
       #host;
       #executionProfileId;
+      #sessionPreferences;
       #now;
       #resolveInteraction;
       #onOutcomeCheckpoint;
@@ -25916,6 +25928,7 @@ var init_zcode_app_server_adapter = __esm({
         this.#homeDir = options.homeDir ?? homedir3();
         this.#host = validateHostProfile(options.host ?? codexHostProfile(this.#homeDir));
         this.#executionProfileId = options.executionProfileId;
+        this.#sessionPreferences = options.sessionPreferences;
         this.#now = options.now ?? (() => /* @__PURE__ */ new Date());
         this.#probe = options.probe ?? createPlatformProbe();
         this.#resolveInteraction = options.resolveInteraction;
@@ -26101,7 +26114,7 @@ var init_zcode_app_server_adapter = __esm({
             void this.#resolver.resolve().then(resolve, reject).finally(() => entry.abort.signal.removeEventListener("abort", aborted2));
           });
           entry.abort.signal.throwIfAborted();
-          const taskProviderId = task.model?.provider_id;
+          const taskProviderId = this.#sessionPreferences?.model?.provider_id ?? task.model?.provider_id;
           const taskProviderFacts = accountProviderRuleFacts(taskProviderId, config2);
           const otherStartPlanSelected = taskProviderFacts?.planKind === "start-plan" && taskProviderId !== BIGMODEL_START_PLAN_PROVIDER_ID;
           if (otherStartPlanSelected) {
@@ -26144,7 +26157,7 @@ var init_zcode_app_server_adapter = __esm({
           if (startPlanSelected && (!accountProviderPayload?.providers[BIGMODEL_START_PLAN_PROVIDER_ID] || accountProviderPayload.providers[BIGMODEL_START_PLAN_PROVIDER_ID].access.entitled !== true)) {
             return this.#startPlanReadinessFailure(entry, "Start Plan provider snapshot could not be prepared after live entitlement verification.");
           }
-          const preferences = resolveSessionPreferences(task.model, runtimeEnv, this.#executionProfileId);
+          const preferences = this.#sessionPreferences ?? resolveSessionPreferences(task.model, runtimeEnv, this.#executionProfileId);
           const childEnv = this.#buildChildEnv(config2, runtimeEnv);
           if (startPlanSelected) childEnv.ZCODE_MODEL_RETRY_MAX_RETRIES = "0";
           entry.onEvent({ type: "zcode_starting", summary: "Starting ZCode streaming runtime" });
@@ -28489,7 +28502,8 @@ var official_app_server_runtime_exports = {};
 __export(official_app_server_runtime_exports, {
   OFFICIAL_APPSERVER_COMPATIBILITY_MANIFEST: () => OFFICIAL_APPSERVER_COMPATIBILITY_MANIFEST,
   OFFICIAL_CODING_PLAN_PROVIDER_ID: () => OFFICIAL_CODING_PLAN_PROVIDER_ID,
-  OfficialAppServerRuntimeResolver: () => OfficialAppServerRuntimeResolver
+  OfficialAppServerRuntimeResolver: () => OfficialAppServerRuntimeResolver,
+  isOfficialCodingPlanProvider: () => isOfficialCodingPlanProvider
 });
 import { createHash as createHash9 } from "node:crypto";
 import { execFile } from "node:child_process";
@@ -28498,6 +28512,9 @@ import { lstat as lstat2, realpath as realpath2 } from "node:fs/promises";
 import { homedir as homedir4 } from "node:os";
 import path10 from "node:path";
 import { promisify } from "node:util";
+function isOfficialCodingPlanProvider(providerId) {
+  return providerId === OFFICIAL_CODING_PLAN_PROVIDER_ID || providerId === "bigmodel-individual-coding-plan" || providerId === "builtin:bigmodel-coding-plan";
+}
 function unverified(reason, nodeExecutable, details = {}) {
   return {
     status: "OFFICIAL_RUNTIME_UNVERIFIED",
@@ -28618,6 +28635,8 @@ var init_official_app_server_runtime = __esm({
     OFFICIAL_APPSERVER_COMPATIBILITY_MANIFEST = Object.freeze([
       Object.freeze({
         desktop_version: "3.18.2.10443",
+        desktop_app_version: "3.18.2",
+        desktop_build_commit_id: "2681f4af",
         bundle_sha256: "08726b5ef69e1e9072828baa4656713cb3aac93bb096938681278c5600312b2c",
         bundle_bytes: 15675386,
         builtin_provider_config_sha256: "ef3d64656cb5281cce292b77ef12e96b5251582cfb00cdf9eb08e3d4565abb69",
@@ -28740,8 +28759,13 @@ var init_official_app_server_runtime = __esm({
         } catch (error62) {
           return unverified(`could not verify installed Official runtime assets: ${errorMessage(error62)}`, nodeExecutable);
         }
-        const launch = this.#readDesktopLaunch(bundlePath);
-        const launchIdentityVersion = launch.env.ZCODE_APP_VERSION?.trim() || null;
+        let launchEnv;
+        try {
+          await canonicalFileInside(installDir, path10.join(installDir, "resources", "app.asar"), "installed Desktop archive");
+          launchEnv = this.#readDesktopLaunch(bundlePath).env;
+        } catch (error62) {
+          return unverified(`installed Desktop launch metadata could not be inspected: ${errorMessage(error62)}`, nodeExecutable);
+        }
         let desktopVersion = null;
         try {
           desktopVersion = normalizeDesktopVersion(await this.#probeDesktopVersion(desktopExecutablePath));
@@ -28760,7 +28784,7 @@ var init_official_app_server_runtime = __esm({
             runtime_host_sha256: runtimeHostSha256
           });
         }
-        if (!launchIdentityVersion) {
+        if (!launchEnv.ZCODE_APP_VERSION || !launchEnv.ZCODE_BUILD_COMMIT_ID) {
           return unverified("installed Desktop AppServer launch identity metadata is unavailable", nodeExecutable, {
             install_dir: installDir,
             install_source: discovery.source,
@@ -28802,6 +28826,9 @@ var init_official_app_server_runtime = __esm({
         const mismatches = [];
         if (!manifest) mismatches.push("desktop version/bundle bytes/SHA-256 are not in the compatibility manifest");
         else {
+          if (manifest.desktop_app_version !== launchEnv.ZCODE_APP_VERSION || manifest.desktop_build_commit_id !== launchEnv.ZCODE_BUILD_COMMIT_ID) {
+            mismatches.push("Desktop launch identity does not match the compatibility manifest");
+          }
           if (manifest.builtin_provider_config_bytes !== builtinBytes || manifest.builtin_provider_config_sha256.toLowerCase() !== builtinSha256.toLowerCase()) {
             mismatches.push("builtin provider config identity does not match the compatibility manifest");
           }
@@ -28954,6 +28981,7 @@ var init_official_app_server_adapter = __esm({
         });
         const externalHostClientFactory = async (context) => {
           const runtime = await assets();
+          const client = await factory(context);
           try {
             options.onEvent?.({
               type: "official_runtime_verified",
@@ -28970,7 +28998,7 @@ var init_official_app_server_adapter = __esm({
             });
           } catch {
           }
-          return factory(context);
+          return client;
         };
         super({
           ...options,
@@ -29890,7 +29918,9 @@ async function runZCodeAdapter(bootstrap, execution, interaction, workerIdentity
     loadOfficialHostProviderRuntimeAuthFactory: loadOfficialHostProviderRuntimeAuthFactory2
   } = await Promise.resolve().then(() => (init_official_host_adapter(), official_host_adapter_exports));
   const { OfficialAppServerWorkerAdapter: OfficialAppServerWorkerAdapter2 } = await Promise.resolve().then(() => (init_official_app_server_adapter(), official_app_server_adapter_exports));
-  const { OFFICIAL_CODING_PLAN_PROVIDER_ID: OFFICIAL_CODING_PLAN_PROVIDER_ID2 } = await Promise.resolve().then(() => (init_official_app_server_runtime(), official_app_server_runtime_exports));
+  const { isOfficialCodingPlanProvider: isOfficialCodingPlanProvider2, OFFICIAL_CODING_PLAN_PROVIDER_ID: OFFICIAL_CODING_PLAN_PROVIDER_ID2 } = await Promise.resolve().then(() => (init_official_app_server_runtime(), official_app_server_runtime_exports));
+  const { loadPersistedRuntimeEnvironment: loadPersistedRuntimeEnvironment2 } = await Promise.resolve().then(() => (init_resolver(), resolver_exports));
+  const { resolveSessionPreferences: resolveSessionPreferences2 } = await Promise.resolve().then(() => (init_session_preferences(), session_preferences_exports));
   const { ZCodeAppServerAdapter: ZCodeAppServerAdapter2 } = await Promise.resolve().then(() => (init_zcode_app_server_adapter(), zcode_app_server_adapter_exports));
   const { buildTaskResult: buildTaskResult2 } = await Promise.resolve().then(() => (init_normalize(), normalize_exports));
   const { normalizeUsage: normalizeUsage2, phaseDuration: phaseDuration2 } = await Promise.resolve().then(() => (init_normalize2(), normalize_exports2));
@@ -30081,6 +30111,7 @@ async function runZCodeAdapter(bootstrap, execution, interaction, workerIdentity
     }, { once: true });
     return current;
   };
+  let providerAuthModel = execution.task.model;
   const resolveProviderRuntimeAuth = async (request, config2, signal) => {
     const unavailable = () => ({
       headersApplied: false,
@@ -30090,7 +30121,7 @@ async function runZCodeAdapter(bootstrap, execution, interaction, workerIdentity
     const providerId = typeof request.providerId === "string" ? request.providerId : "";
     const modelSelection = asRecord4(request.modelSelection);
     const modelId = typeof modelSelection.modelId === "string" ? modelSelection.modelId : "";
-    if (!providerId || !modelId || typeof modelSelection.providerId === "string" && modelSelection.providerId !== providerId || execution.task.model?.provider_id !== providerId || execution.task.model.model_id !== modelId) {
+    if (!providerId || !modelId || typeof modelSelection.providerId === "string" && modelSelection.providerId !== providerId || providerAuthModel?.provider_id !== providerId || providerAuthModel.model_id !== modelId) {
       return unavailable();
     }
     const facts = accountProviderRuleFacts(providerId, config2);
@@ -30145,6 +30176,13 @@ async function runZCodeAdapter(bootstrap, execution, interaction, workerIdentity
     resolveProviderRuntimeAuth,
     onEvent: (event) => {
       runtimeEvents?.publish(event);
+      if (event.type === "official_runtime_verified") {
+        const digest = event.details?.["bundle_sha256"];
+        if (typeof digest === "string" && /^[0-9a-f]{64}$/u.test(digest)) {
+          writeDiagnostic(`[bridge-worker] installed-runtime ${bootstrap.task_id} ${bootstrap.attempt} ${digest}
+`);
+        }
+      }
       if (event.type === "session_ready" && typeof event.details?.["session_id"] === "string") {
         modelProfile.session_id = event.details["session_id"];
       } else if (event.type === "model_selected") {
@@ -30224,17 +30262,21 @@ async function runZCodeAdapter(bootstrap, execution, interaction, workerIdentity
       return (await interaction.acceptCommittedReply()).answer;
     } : void 0
   };
-  const selectedAdapter = dependencies.testOnlyLegacyDirectAdapter ? "direct_app_server" : selectProductionAdapter();
-  const adapter = selectedAdapter === "direct_app_server" ? new ZCodeAppServerAdapter2(adapterOptions) : execution.task.model?.provider_id === OFFICIAL_CODING_PLAN_PROVIDER_ID2 ? new OfficialAppServerWorkerAdapter2({
-    ...adapterOptions,
-    ...dependencies.testOnlyOfficialHostModule ? { testOnlyOfficialHostModule: dependencies.testOnlyOfficialHostModule } : {},
-    ...dependencies.testOnlyWorkerModuleUrl ? { testOnlyWorkerModuleUrl: dependencies.testOnlyWorkerModuleUrl } : {}
-  }) : new OfficialHostAdapter2({
-    ...adapterOptions,
-    ...dependencies.testOnlyOfficialHostModule ? { testOnlyOfficialHostModule: dependencies.testOnlyOfficialHostModule } : {},
-    ...dependencies.testOnlyWorkerModuleUrl ? { testOnlyWorkerModuleUrl: dependencies.testOnlyWorkerModuleUrl } : {}
-  });
   try {
+    const selectedAdapter = dependencies.testOnlyLegacyDirectAdapter ? "direct_app_server" : selectProductionAdapter();
+    const officialHostOptions = {
+      ...adapterOptions,
+      ...dependencies.testOnlyOfficialHostModule ? { testOnlyOfficialHostModule: dependencies.testOnlyOfficialHostModule } : {},
+      ...dependencies.testOnlyWorkerModuleUrl ? { testOnlyWorkerModuleUrl: dependencies.testOnlyWorkerModuleUrl } : {}
+    };
+    const preferences = selectedAdapter === "direct_app_server" ? null : resolveSessionPreferences2(
+      execution.task.model,
+      loadPersistedRuntimeEnvironment2(process.env, void 0, execution.host_profile),
+      execution.execution_profile_id
+    );
+    const codingPlanPreferences = preferences?.model && isOfficialCodingPlanProvider2(preferences.model.provider_id) ? { ...preferences, model: { ...preferences.model, provider_id: OFFICIAL_CODING_PLAN_PROVIDER_ID2 } } : null;
+    if (codingPlanPreferences) providerAuthModel = codingPlanPreferences.model;
+    const adapter = selectedAdapter === "direct_app_server" ? new ZCodeAppServerAdapter2(adapterOptions) : codingPlanPreferences ? new OfficialAppServerWorkerAdapter2({ ...officialHostOptions, sessionPreferences: codingPlanPreferences }) : new OfficialHostAdapter2(officialHostOptions);
     const workspace = {
       requestedPath: execution.task.workspace,
       canonicalPath: bootstrap.workspace_ref,

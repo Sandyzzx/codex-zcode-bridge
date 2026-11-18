@@ -22,6 +22,12 @@ const execFileAsync = promisify(execFile);
 export const OFFICIAL_CODING_PLAN_PROVIDER_ID =
   "account:bigmodel-individual-coding-plan" as const;
 
+export function isOfficialCodingPlanProvider(providerId: string | undefined): boolean {
+  return providerId === OFFICIAL_CODING_PLAN_PROVIDER_ID
+    || providerId === "bigmodel-individual-coding-plan"
+    || providerId === "builtin:bigmodel-coding-plan";
+}
+
 export type OfficialRuntimeVerificationStatus =
   | "OFFICIAL_RUNTIME_VERIFIED"
   | "OFFICIAL_RUNTIME_UNVERIFIED";
@@ -37,6 +43,8 @@ export type StartPlanStaticCompatibility =
 
 export interface OfficialAppServerRuntimeManifestEntry {
   readonly desktop_version: string;
+  readonly desktop_app_version: string;
+  readonly desktop_build_commit_id: string;
   readonly bundle_sha256: string;
   readonly bundle_bytes: number;
   readonly builtin_provider_config_sha256: string;
@@ -59,6 +67,8 @@ export const OFFICIAL_APPSERVER_COMPATIBILITY_MANIFEST: readonly OfficialAppServ
   Object.freeze([
     Object.freeze({
       desktop_version: "3.18.2.10443",
+      desktop_app_version: "3.18.2",
+      desktop_build_commit_id: "2681f4af",
       bundle_sha256: "08726b5ef69e1e9072828baa4656713cb3aac93bb096938681278c5600312b2c",
       bundle_bytes: 15_675_386,
       builtin_provider_config_sha256: "ef3d64656cb5281cce292b77ef12e96b5251582cfb00cdf9eb08e3d4565abb69",
@@ -236,8 +246,13 @@ export class OfficialAppServerRuntimeResolver implements RuntimeResolver {
       return unverified(`could not verify installed Official runtime assets: ${errorMessage(error)}`, nodeExecutable);
     }
 
-    const launch = this.#readDesktopLaunch(bundlePath);
-    const launchIdentityVersion = launch.env.ZCODE_APP_VERSION?.trim() || null;
+    let launchEnv: NodeJS.ProcessEnv;
+    try {
+      await canonicalFileInside(installDir, path.join(installDir, "resources", "app.asar"), "installed Desktop archive");
+      launchEnv = this.#readDesktopLaunch(bundlePath).env;
+    } catch (error) {
+      return unverified(`installed Desktop launch metadata could not be inspected: ${errorMessage(error)}`, nodeExecutable);
+    }
     let desktopVersion: string | null = null;
     try {
       desktopVersion = normalizeDesktopVersion(await this.#probeDesktopVersion(desktopExecutablePath));
@@ -256,7 +271,7 @@ export class OfficialAppServerRuntimeResolver implements RuntimeResolver {
         runtime_host_sha256: runtimeHostSha256,
       });
     }
-    if (!launchIdentityVersion) {
+    if (!launchEnv.ZCODE_APP_VERSION || !launchEnv.ZCODE_BUILD_COMMIT_ID) {
       return unverified("installed Desktop AppServer launch identity metadata is unavailable", nodeExecutable, {
         install_dir: installDir,
         install_source: discovery.source,
@@ -303,6 +318,10 @@ export class OfficialAppServerRuntimeResolver implements RuntimeResolver {
     const mismatches: string[] = [];
     if (!manifest) mismatches.push("desktop version/bundle bytes/SHA-256 are not in the compatibility manifest");
     else {
+      if (manifest.desktop_app_version !== launchEnv.ZCODE_APP_VERSION
+        || manifest.desktop_build_commit_id !== launchEnv.ZCODE_BUILD_COMMIT_ID) {
+        mismatches.push("Desktop launch identity does not match the compatibility manifest");
+      }
       if (manifest.builtin_provider_config_bytes !== builtinBytes
         || manifest.builtin_provider_config_sha256.toLowerCase() !== builtinSha256.toLowerCase()) {
         mismatches.push("builtin provider config identity does not match the compatibility manifest");

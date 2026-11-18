@@ -193,7 +193,7 @@ total_tokens: 22496
 最终出现完全匹配的增量：
 
 ```text
-ACTUAL_CREDITS = (22395 * 2.3 + 0 * 0.56 + 101 * 8) / 10000
+BASE_CREDITS = (22395 * 2.3 + 0 * 0.56 + 101 * 8) / 10000
                = 5.23165
 
 TIME_MULTIPLIER = 1.0              # 14:00-18:00 peak window

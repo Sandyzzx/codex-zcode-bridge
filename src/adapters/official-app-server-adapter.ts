@@ -99,6 +99,7 @@ export class OfficialAppServerWorkerAdapter extends ZCodeAppServerAdapter {
     });
     const externalHostClientFactory: ExternalHostClientFactory = async (context) => {
       const runtime = await assets();
+      const client = await factory(context);
       try {
         options.onEvent?.({
           type: "official_runtime_verified",
@@ -116,7 +117,7 @@ export class OfficialAppServerWorkerAdapter extends ZCodeAppServerAdapter {
       } catch {
         // Observation cannot change the selected runtime or task outcome.
       }
-      return factory(context);
+      return client;
     };
 
     super({

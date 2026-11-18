@@ -5,7 +5,6 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { inspectOfficialRuntimeAssets } from "./official-runtime-manifest.mjs";
 import { resolveBillingDataBaseDir } from "./path-discovery.mjs";
-import { discoverInstalledZCode } from "./web-services.mjs";
 
 const SCRIPT_ROOT = path.dirname(fileURLToPath(import.meta.url));
 export const PROJECT_ROOT = path.resolve(SCRIPT_ROOT, "..", "..");
@@ -39,7 +38,6 @@ export async function runOfficialAppServerProtocolSmoke(options = {}) {
   }
 
   const env = options.env ?? process.env;
-  const discoverInstallation = options.discoverInstallation ?? discoverInstalledZCode;
   const inspectRuntime = options.inspectRuntime ?? inspectOfficialRuntimeAssets;
   const resolveDataRoot = options.resolveDataRoot ?? resolveBillingDataBaseDir;
   const createId = options.createId ?? randomUUID;
@@ -48,10 +46,8 @@ export async function runOfficialAppServerProtocolSmoke(options = {}) {
     return failed("timeout_invalid", startedAt);
   }
 
-  const installation = discoverInstallation(env, platform);
-  if (!installation.root) return failed("installed_zcode_not_found", startedAt);
-  const runtime = await inspectRuntime(installation.root);
-  if (runtime.runtime_status !== "OFFICIAL_RUNTIME_VERIFIED") {
+  const runtime = await inspectRuntime({ env, platform, arch });
+  if (runtime.runtime_status !== "OFFICIAL_RUNTIME_VERIFIED" || !runtime.install_root) {
     return failed("installed_official_runtime_unverified", startedAt);
   }
   if (!runtime.manifest?.version
@@ -90,6 +86,7 @@ export async function runOfficialAppServerProtocolSmoke(options = {}) {
   let capabilities = null;
   let disposeError = null;
   try {
+    options.signal?.throwIfAborted();
     for (const directory of Object.values(layout).slice(1)) {
       await mkdir(directory, { recursive: true });
     }
@@ -104,14 +101,15 @@ export async function runOfficialAppServerProtocolSmoke(options = {}) {
       return failed("official_host_manager_missing", startedAt);
     }
 
-    const bundlePath = path.join(installation.root, runtime.assets.bundle.relative_path);
-    const runtimeHostPath = path.join(installation.root, runtime.assets.runtime_host.relative_path);
+    const bundlePath = path.join(runtime.install_root, runtime.assets.bundle.relative_path);
+    const runtimeHostPath = path.join(runtime.install_root, runtime.assets.runtime_host.relative_path);
     const builtinProviderConfig = path.join(
-      installation.root,
+      runtime.install_root,
       runtime.assets.builtin_provider_config.relative_path,
     );
     const childEnv = buildSmokeEnvironment(layout, env, {
-      version: runtime.manifest.version,
+      version: runtime.manifest.desktop_app_version,
+      buildCommitId: runtime.manifest.desktop_build_commit_id,
       builtinProviderConfig,
       personalProviderConfig,
       runtimeHostPath,
@@ -129,7 +127,7 @@ export async function runOfficialAppServerProtocolSmoke(options = {}) {
         onException: () => undefined,
       },
       commandResolver: async ({ workspacePath }) => ({
-        command: process.execPath,
+        command: runtime.node_executable ?? process.execPath,
         args: [bundlePath, "app-server", "--stdio", "--surface", "desktop"],
         cwd: workspacePath,
         env: childEnv,
@@ -144,15 +142,21 @@ export async function runOfficialAppServerProtocolSmoke(options = {}) {
     };
     const client = await withRuntimeHostEnvironment(
       runtimeHostPath,
-      () => manager.getClient(workspace),
+      () => {
+        options.signal?.throwIfAborted();
+        return manager.getClient(workspace);
+      },
     );
+    options.signal?.throwIfAborted();
     const runtimeIdentity = await manager.getRuntimeIdentity(workspace);
+    options.signal?.throwIfAborted();
     capabilities = await client.request(
       OFFICIAL_PROTOCOL_SMOKE_METHOD,
       {},
       undefined,
-      { timeoutMs, invalidateConnectionOnTimeout: false },
+      { signal: options.signal, timeoutMs, invalidateConnectionOnTimeout: false },
     );
+    options.signal?.throwIfAborted();
     if (!runtimeIdentity || !Number.isSafeInteger(runtimeIdentity.processId)
       || runtimeIdentity.processId < 1) {
       return failed("official_process_identity_missing", startedAt, {
@@ -201,7 +205,9 @@ export async function runOfficialAppServerProtocolSmoke(options = {}) {
     } catch {
       managedProcessesAfter = null;
     }
-    await rm(runRoot, { recursive: true, force: true }).catch(() => undefined);
+    if (!disposeError && (managedProcessesAfter ?? 0) === 0) {
+      await rm(runRoot, { recursive: true, force: true }).catch((error) => { disposeError = error; });
+    }
     if (disposeError || (managedProcessesAfter ?? 0) > 0) {
       // A cleanup failure must not be reported as a successful zero-model smoke.
       return failed(
@@ -244,6 +250,7 @@ function buildSmokeEnvironment(layout, source, official) {
     TMP: layout.temp,
     TMPDIR: layout.temp,
     ZCODE_APP_VERSION: official.version,
+    ZCODE_BUILD_COMMIT_ID: official.buildCommitId,
     ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: official.builtinProviderConfig,
     ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: official.personalProviderConfig,
     ZCODE_RUNTIME_HOST_PATH: official.runtimeHostPath,
