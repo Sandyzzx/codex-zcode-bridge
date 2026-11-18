@@ -236,6 +236,7 @@ function renderVerificationResult(record) {
     return;
   }
   const calculation = reconciliation.calculation ?? {};
+  const noObservedCreditDelta = reconciliation.settlement_status === "NO_OBSERVED_CREDIT_DELTA";
   const panel = element("article", "panel");
   const title = element("div", "panel-title");
   title.append(
@@ -244,20 +245,43 @@ function renderVerificationResult(record) {
   );
   const metrics = element("div", "metric-grid");
   metrics.append(
-    metric("Actual credits", formatNumber(reconciliation.official_delta?.total_credits)),
+    metric(
+      "Actual credits",
+      noObservedCreditDelta
+        ? "NOT OBSERVED"
+        : formatNumber(reconciliation.official_delta?.total_credits),
+    ),
     metric("Expected normal", formatNumber(calculation.expected_normal)),
     metric("Expected with 0.67", formatNumber(calculation.expected_with_0_67)),
-    metric("Effective extra ratio", formatNumber(calculation.effective_extra_ratio, 8)),
+    metric(
+      "Effective extra ratio",
+      noObservedCreditDelta
+        ? "NOT OBSERVED"
+        : formatNumber(calculation.effective_extra_ratio, 8),
+    ),
     metric("Cached input", formatInteger(reconciliation.request_usage?.cached_input_tokens)),
     metric("Uncached input", formatInteger(reconciliation.request_usage?.uncached_input_tokens)),
     metric("Output", formatInteger(reconciliation.request_usage?.output_tokens)),
-    metric("Token match", reconciliation.token_match ? "PASS" : "MISMATCH"),
+    metric(
+      "Token match",
+      noObservedCreditDelta
+        ? "NOT OBSERVED"
+        : reconciliation.token_match
+          ? "PASS"
+          : "MISMATCH",
+    ),
   );
   panel.append(title, metrics);
   const details = element("dl", "fact-grid");
   details.append(
     fact("Time multiplier", formatNumber(calculation.time_multiplier), "off-peak 0.5 is separate from campaign 0.67"),
-    fact("Settlement", reconciliation.settlement_status ?? "UNKNOWN", record.status),
+    fact(
+      "Settlement",
+      reconciliation.settlement_status ?? "UNKNOWN",
+      noObservedCreditDelta
+        ? "No official credit delta was observed; this is not evidence of a zero charge."
+        : record.status,
+    ),
     fact("Model requests", String(record.model_requests ?? 0), `${record.request_usage?.total_tokens ?? "unknown"} reported tokens`),
     fact("Billing window", record.billing_window?.time_zone ?? "Asia/Shanghai", "official hourly ledger"),
   );
@@ -316,9 +340,7 @@ async function loadHistory() {
   const history = await getJson("/api/history");
   const latest = history.items?.[0];
   if (latest) {
-    $("#dash-ratio").textContent = latest.effective_extra_ratio == null
-      ? "INCONCLUSIVE"
-      : formatNumber(latest.effective_extra_ratio, 6);
+    $("#dash-ratio").textContent = formatExtraRatio(latest, 6);
   }
   renderLatestExperiment(latest);
   renderHistory(history.items ?? []);
@@ -336,7 +358,7 @@ function renderLatestExperiment(latest) {
   row.append(
     compactValue("Model", latest.model),
     compactValue("Status", latest.status),
-    compactValue("Extra ratio", latest.effective_extra_ratio == null ? "INCONCLUSIVE" : formatNumber(latest.effective_extra_ratio, 8)),
+    compactValue("Extra ratio", formatExtraRatio(latest, 8)),
     compactValue("Started", formatDateTime(latest.started_at)),
     exportLink(latest.id),
   );
@@ -355,7 +377,7 @@ function renderHistory(items) {
       compactValue("Model", item.model),
       compactValue("Status", item.status),
       compactValue("Credits", item.credit_class ?? "UNKNOWN"),
-      compactValue("Ratio", item.effective_extra_ratio == null ? "INCONCLUSIVE" : formatNumber(item.effective_extra_ratio, 8)),
+      compactValue("Ratio", formatExtraRatio(item, 8)),
       exportLink(item.id),
     );
     return row;
@@ -465,6 +487,12 @@ function shortHash(value) {
 function formatNumber(value, digits = 6) {
   const number = Number(value);
   return Number.isFinite(number) ? number.toFixed(digits) : "unknown";
+}
+
+function formatExtraRatio(item, digits = 6) {
+  return item?.billing_reconciliation === "PASS" && Number.isFinite(Number(item.effective_extra_ratio))
+    ? formatNumber(item.effective_extra_ratio, digits)
+    : "INCONCLUSIVE";
 }
 
 function formatInteger(value) {

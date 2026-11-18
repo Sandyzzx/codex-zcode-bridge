@@ -668,6 +668,8 @@ export function isLoopbackAddress(address) {
 }
 
 function historySummary(record) {
+  const settlementStatus = record.reconciliation?.settlement_status ?? null;
+  const noObservedCreditDelta = settlementStatus === "NO_OBSERVED_CREDIT_DELTA";
   return redactValue({
     id: record.id,
     status: record.status,
@@ -678,7 +680,10 @@ function historySummary(record) {
     model_requests: record.model_requests,
     billing_reconciliation: record.reconciliation?.billing_reconciliation ?? null,
     credit_class: record.reconciliation?.credit_class ?? null,
-    effective_extra_ratio: record.reconciliation?.calculation?.effective_extra_ratio ?? null,
+    settlement_status: settlementStatus,
+    effective_extra_ratio: noObservedCreditDelta
+      ? null
+      : record.reconciliation?.calculation?.effective_extra_ratio ?? null,
   });
 }
 

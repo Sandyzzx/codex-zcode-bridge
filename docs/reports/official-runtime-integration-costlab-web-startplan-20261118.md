@@ -175,6 +175,40 @@ EFFECTIVE_EXTRA_RATIO = 1.7666 / 2.636755
 排除这些工程问题后，只发出一次真实模型请求。没有自动重派、没有重试认证错误、
 没有调用 Start Plan、没有修改其他运行中的 Bridge 任务。
 
+### 4.5 Cost Lab Web 后续复验
+
+2026-11-18 15:29（Asia/Shanghai）通过 Cost Lab Web 再次执行一次真实
+`GLM-5.3-Flash` 验证。该请求在本地成功完成，Usage 为：
+
+```yaml
+cached_input_tokens: 0
+uncached_input_tokens: 22395
+output_tokens: 101
+total_tokens: 22496
+```
+
+首次 after snapshot（15:33:04）和 15:40:57 的补充读取仍显示 `15:00` 小时桶
+为零，因此记录被正确标记为 `NO_OBSERVED_CREDIT_DELTA` /
+`INCONCLUSIVE`，而不是把零记录当作免费请求。15:45:55 的 fresh snapshot
+最终出现完全匹配的增量：
+
+```text
+ACTUAL_CREDITS = (22395 * 2.3 + 0 * 0.56 + 101 * 8) / 10000
+               = 5.23165
+
+TIME_MULTIPLIER = 1.0              # 14:00-18:00 peak window
+EXPECTED_NORMAL = 5.23165
+EXPECTED_WITH_0_67 = 3.5052055
+ACTUAL = 3.5052
+EFFECTIVE_EXTRA_RATIO = 3.5052 / 5.23165
+                      = 0.6699989487
+```
+
+因此该请求实际扣分是 `3.5052`，而不是 `0`；结算在 15:40:57 至 15:45:55
+之间才可观测，超过了 Web 当前约 2.5 分钟的自动重试窗口。此次复验没有由
+Harness 追加第二个模型请求。Cost Lab Web 已修正无观测增量时的展示：显示
+`NOT OBSERVED`，有效倍率显示为 inconclusive，避免把未知结算显示为精确零。
+
 ## 5. Start Plan 离线兼容性
 
 安装版 ZCode 的同一 AppServer 制品包含 Start Plan 与 Coding Plan Provider，
@@ -254,7 +288,7 @@ START_PLAN_DISCOUNT: NOT_VERIFIED
 
 | 检查 | 结果 |
 |---|---|
-| `npm run cost-lab:test` | PASS；43/43 |
+| `npm run cost-lab:test` | PASS；44/44 |
 | 定向 Runtime/Adapter/Worker/Start Plan 测试 | PASS；64/64 |
 | `npm run typecheck` | PASS |
 | `npm run build` | PASS；core、Bridge、Worker、plugin 重建完成 |

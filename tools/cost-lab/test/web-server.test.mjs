@@ -375,6 +375,65 @@ test("same-hour settlement retry waits for an observable delta instead of an hou
   }
 });
 
+test("unobserved official credit delta is reported as inconclusive, not as a zero charge", async () => {
+  const unchanged = snapshot(modelRow(), "2026-11-17T02:00:00.000Z");
+  let captureCalls = 0;
+  const fixture = await makeServer({
+    afterRetryDelaysMs: [0, 0, 0],
+    captureSnapshot: async () => {
+      captureCalls += 1;
+      return unchanged;
+    },
+    verificationRunner: async () => ({
+      model_requests: 1,
+      hour: 10,
+      usage: {
+        model: "GLM-5.3-Flash",
+        cached_input_tokens: 0,
+        uncached_input_tokens: 22_395,
+        output_tokens: 101,
+        total_tokens: 22_496,
+      },
+      runtime_evidence: { status: "PASS" },
+    }),
+  });
+  try {
+    const current = await session(fixture.address.origin);
+    const started = await request(fixture.address.origin, "/api/verifications", {
+      method: "POST",
+      headers: stateChangingHeaders(fixture.address.origin, current.csrf_token),
+      body: JSON.stringify({
+        confirmation: CONFIRMATION_PHRASE,
+        provider: "account:bigmodel-individual-coding-plan",
+        model: "GLM-5.3-Flash",
+        reasoning: "low",
+      }),
+    });
+    assert.equal(started.response.status, 202);
+
+    let record = null;
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      const polled = await request(fixture.address.origin, `/api/verifications/${FIXED_ID}`);
+      record = polled.json.data;
+      if (record.status === "SUCCEEDED") break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.equal(record.status, "SUCCEEDED");
+    assert.equal(captureCalls, 4);
+    assert.equal(record.reconciliation.settlement_status, "NO_OBSERVED_CREDIT_DELTA");
+    assert.equal(record.reconciliation.billing_reconciliation, "INCONCLUSIVE");
+    assert.equal(record.reconciliation.official_delta.total_credits, 0);
+
+    const history = await request(fixture.address.origin, "/api/history");
+    assert.equal(history.response.status, 200);
+    const summary = history.json.data.items.find((item) => item.id === FIXED_ID);
+    assert.equal(summary.settlement_status, "NO_OBSERVED_CREDIT_DELTA");
+    assert.equal(summary.effective_extra_ratio, null);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
 test("deep environment checks require explicit authorization and return no model requests", async () => {
   const fixture = await makeServer({
     inspectEnvironment: async ({ deep = false, protocolSmoke = null } = {}) => {
