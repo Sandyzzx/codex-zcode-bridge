@@ -141,6 +141,19 @@ test("resolver honors persisted Bridge runtime settings without a process enviro
   }
 });
 
+test("unsupported platforms cannot select an installed runtime", async () => {
+  const runtime = new OfficialAppServerRuntimeResolver({
+    platform: "linux",
+    architecture: "x64",
+    env: {},
+    hashFile: async () => assert.fail("unsupported platform inspected an asset"),
+  });
+  const descriptor = await runtime.inspect();
+  assert.equal(descriptor.status, "OFFICIAL_RUNTIME_UNVERIFIED");
+  assert.equal(descriptor.discount_capability, "OFFICIAL_DISCOUNT_NOT_VERIFIED");
+  assert.match(descriptor.reason ?? "", /requires Windows x64/u);
+});
+
 test("unknown bundle identity fails closed as OFFICIAL_RUNTIME_UNVERIFIED", async () => {
   const fixture = await makeFixture();
   const changed = { ...fixture.manifest, bundle_sha256: "0".repeat(64) };

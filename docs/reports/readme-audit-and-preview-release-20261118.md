@@ -35,6 +35,8 @@ Web 初次轮询在官方结算前结束，后续只读快照完成对账。模�
 
 Cost Lab 把明确已结算的零、缺失账单、积分待结算、无效数据和无法归因分别表示。History Summary 与 Export 保留未知积分 `null`。本地合成测试覆盖真实零值、无数据、延迟、日期和时间窗口、旧历史、持久化失败及关闭超时。
 
+`5a8bce91` 的独立复审重放了账单反例，确认两项 P1 已关闭。Ubuntu CI 在同一版本暴露六个 Resolver 夹具失败。模拟 Windows 能力的测试应使用实际宿主文件系统查找夹具，生产 Windows x64 能力门禁保持原样。修复后本机 Resolver、Adapter 和 Start Plan 定向测试合计 40 项通过。
+
 ## 验证记录
 
 | 验证 | 当前证据 |
@@ -43,7 +45,7 @@ Cost Lab 把明确已结算的零、缺失账单、积分待结算、无效数�
 | Typecheck、Build、Plugin Validation | `502045b2` 生产文件通过 |
 | 生成物检查 | 全部 12 项跟踪文件与构建一致 |
 | Cost Lab 定向测试 | 55 通过，0 失败，0 跳过 |
-| Cost Lab 服务 | 首次从 `502045b2` 重启，loopback 健康检查、真实历史及导出中的显式 `null`、零模型 AppServer smoke 均通过 |
+| Cost Lab 服务 | 从 `5a8bce91` 重启，loopback 健康检查、真实历史及导出中的显式 `null`、零模型 AppServer smoke 均通过 |
 | Start Plan 兼容性 | Windows 历史真实证据，当前 3.18.2.10443 离线检查 |
 | PR | [#101](https://github.com/Sandyzzx/codex-zcode-bridge/pull/101)，目标 `preview` |
 | PR CI、独立复审、合并、Tag、发布和资源校验 | 待最终候选的独立复审及完整 CI |

@@ -28694,17 +28694,14 @@ var init_official_app_server_runtime = __esm({
             nodeExecutable
           );
         }
-        const discovery = discoverZCodeInstall(env, {
-          platform: this.#platform,
-          requireBuiltin: true
-        });
+        const discovery = discoverZCodeInstall(env, { requireBuiltin: true });
         if (!discovery.installDir || !discovery.zcodeEntrypoint || !discovery.builtinConfigFile) {
           return unverified(
             "installed ZCode Desktop AppServer with same-root builtin provider config was not found",
             nodeExecutable
           );
         }
-        if (!isAbsolutePathForPlatform(discovery.installDir, this.#platform)) {
+        if (!isAbsolutePathForPlatform(discovery.installDir)) {
           return unverified("installed ZCode path is not absolute", nodeExecutable);
         }
         let installDir;

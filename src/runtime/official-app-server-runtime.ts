@@ -178,17 +178,15 @@ export class OfficialAppServerRuntimeResolver implements RuntimeResolver {
       );
     }
 
-    const discovery = discoverZCodeInstall(env, {
-      platform: this.#platform,
-      requireBuiltin: true,
-    });
+    // The capability probe can be simulated, but the files live on this host.
+    const discovery = discoverZCodeInstall(env, { requireBuiltin: true });
     if (!discovery.installDir || !discovery.zcodeEntrypoint || !discovery.builtinConfigFile) {
       return unverified(
         "installed ZCode Desktop AppServer with same-root builtin provider config was not found",
         nodeExecutable,
       );
     }
-    if (!isAbsolutePathForPlatform(discovery.installDir, this.#platform)) {
+    if (!isAbsolutePathForPlatform(discovery.installDir)) {
       return unverified("installed ZCode path is not absolute", nodeExecutable);
     }
 
