@@ -1,4 +1,4 @@
-import { copyFileSync, mkdtempSync, mkdirSync, existsSync, realpathSync, renameSync, rmSync } from "node:fs";
+import { copyFileSync, cpSync, mkdtempSync, mkdirSync, existsSync, realpathSync, renameSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -60,6 +60,11 @@ try {
   copyFileSync(
     path.join(root, "src", "feedback", "task-feedback-projection.d.mts"),
     path.join(staging, "src", "feedback", "task-feedback-projection.d.mts"),
+  );
+  cpSync(
+    path.join(root, "plugins", "codex-zcode-bridge", "worker", "vendor", "official-host"),
+    path.join(staging, "src", "adapters", "vendor", "official-host"),
+    { recursive: true },
   );
   copyFileSync(
     path.join(root, "src", "sqlite-candidate", "wp6b2b1", "admin-abandonment.sql"),

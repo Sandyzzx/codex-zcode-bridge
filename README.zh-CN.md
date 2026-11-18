@@ -1,189 +1,85 @@
 # Codex ZCode Bridge
 
-**将 Codex 接入官方 ZCode Agent Runtime；由 Codex 定义任务并完成最终验收，ZCode 在本机执行开发工作。**
+[English](README.md) · [版本发布](https://github.com/Sandyzzx/codex-zcode-bridge/releases)
 
-[English](README.md) · [项目仓库](https://github.com/Sandyzzx/codex-zcode-bridge) · [版本发布](https://github.com/Sandyzzx/codex-zcode-bridge/releases)
+Codex ZCode Bridge 将 Codex 与本机官方 ZCode Agent Runtime 连接起来。把开发任务交给 ZCode，任务中断后仍可查询进度，完成后由 Codex 独立审查和验收。
 
-> **发布状态。** 稳定版为 `v1.7.1`。预览版 `2.0.0-preview.8` 增加 Host 授权取消排队中 Launch Intent 及符合条件的 Cleanup Hold，并将新鲜进程树证明绑定到持久化恢复证据。它保留 Preview.7 的认证、Runtime 与 SQLite 合同，面向 Windows x64 和已安装的官方 ZCode Desktop `3.18.2.10443`；不提升 Stable 版本。
+## 为什么用 Bridge？
 
-## 这是什么
+- **持久化 Agent 任务委派。** 把目标、范围和验收条件一起交给 ZCode。Bridge 保存任务状态和结果，Codex 可以跟进或恢复中断的任务。
+- **复用官方 ZCode Runtime。** ZCode 使用自己的 AppServer 执行模型和工具，Codex 负责任务定义与结果审查。
+- **同时支持 Coding Plan 和 Start Plan。** 可使用 Z.ai Coding Plan 账户，也可选择 Start Plan。Start Plan 走独立官方认证路径，检查所选模型的权益，并按任务管理凭据。
+- **已验证的 Coding Plan 积分优惠。** 在已测试配置下，同样模型用量约消耗正常计价的 `0.67` 倍积分，每积分可获得约 `1.5` 倍的模型用量。
+- **Cost Lab 本地积分验证。** 在本地网页检查官方运行时，查看 Token 用量，并与官方积分账单对账。
 
-Codex ZCode Bridge 是一个任务编排插件，把 Codex 与本机官方 ZCode Agent Runtime 连接起来。它不是模型 API 转发器，也不是 CLI 命令包装器。
+## 预览版套餐支持
 
-| 组件 | 职责 |
+| 套餐 | 验证情况 |
 | --- | --- |
-| **Codex** | 定义任务、处理 Host 交互、跟进进度并完成最终审查与验收。 |
-| **Bridge** | 提供 MCP 工具，编排 Task 与 Attempt，使用 SQLite 持久化状态，并管理 Worker 生命周期与恢复。 |
-| **ZCode AppServer** | 执行模型 Turn，负责上下文、工具、流式响应与 Provider 传输。 |
-| **SQLite Authority** | 保存当前生产架构中的 Task、Result、Cleanup 与 Release 权威生命周期。 |
+| **Z.ai Coding Plan** | 已通过安装版官方 AppServer 在 Windows 上完成真实端到端执行。`GLM-5.3-Flash` 官方账单确认额外 `0.67` 倍扣分。 |
+| **Z.ai Start Plan** | 有历史 Windows 真实端到端证据。已检查 Desktop `3.18.2.10443` AppServer 的离线兼容性，该 AppServer 的实时端到端验证尚未执行。 |
 
-Codex 不会自动接管所有开发请求。只有用户明确要求使用 ZCode Bridge，或既有会话/持续目标授权覆盖当前任务时，才应发起委派。
-
-## 模型套餐支持
-
-| 套餐 | 可用渠道 | 认证与运行路径 |
-| --- | --- | --- |
-| **Z.ai Start Plan** | Stable `v1.7.1` 与 Preview | 只读发现官方已登录账户凭据，对所选模型执行实时权益检查，并通过单任务私有凭据 Lease 向官方 Runtime 交付认证。 |
-| **Z.ai Coding Plan** | Stable `v1.7.1` 与 Preview | 使用既有的官方 Coding Plan 账户/API Key 路径，通过 ZCode Runtime 执行。 |
-
-Start Plan 与 Coding Plan 是两条不同的账户和认证路径。Bridge 根据任务中的 Provider、模型和套餐选择对应路径；两者最终都通过官方 ZCode AppServer 执行。
-
-### 已验证的 Start Plan 路径
-
-Preview.3 已通过一次 Windows 真实 Start Plan 验收。Preview.6 另行通过真实 Coding Plan E2E 与真实 Start Plan 核心功能 E2E，覆盖 Official Host、Runtime Events、Usage、工具调用、Result、Cleanup 与 Release。Preview.7 保留该运行时与认证路径，不重复消耗真实模型请求。历史 Start Plan 完整 Workspace 验收因 PowerShell 缓存写入了未声明文件，继续保持 `FAIL`，不能改写为通过。
-
-- 官方 ZCode AppServer `0.17.1`。
-- Provider `account:bigmodel-start-plan`。
-- 模型 `GLM-5.3-Flash`。
-- 主 Turn 的 3 次模型迭代均为 HTTP `200`。
-- `Write` 与 `Read` 工具调用成功。
-- AgentReport Schema 有效。
-- Result 已提交，Worker 已退出，进程树已清理，私有 Lease 已释放。
-- 每个任务观察到 1 次 Billing GET。
-- 未观察到 HTTP `405`、Provider code `3012` 或 unusual activity。
-
-该证据**只覆盖 Windows 上的 `GLM-5.3-Flash`**，不能证明所有 Start Plan 模型、所有 ZCode Runtime 版本或所有平台均可用。其他模型仍取决于官方 Provider Registry 和当前登录账户的实际权益。
-
-## 核心能力
-
-- **任务派发：** 通过 `zcode_task` 提交一个有明确边界、可独立验收的开发任务；Codex Master Skill 可选择整任务或分阶段交付。
-- **持久化编排：** SQLite 记录 Operation、Attempt、Claim、Result、Cleanup、Release 和重启恢复状态。
-- **Worker 生命周期：** Bridge 启动并观察独立 Worker，验证 ZCode 进程树；无法验证清理时保留显式 Hold。
-- **进度与交互：** 使用 `zcode_status`、`zcode_feedback`、`zcode_events`、`zcode_result` 和 `zcode_interaction_reply` 跟踪任务并回复权限或用户输入请求。
-- **模型选择：** 查询 Provider/Model 组合，按任务选择模型，或保存 Bridge 默认模型。
-- **Provider 集成：** 将 Start Plan 或 Coding Plan 路由到官方 Runtime，不把 Bridge 变成第二套模型请求构造器。
-- **独立验收：** `completed` 只表示执行结束和报告规范化完成，不表示 Codex 已接受代码。
-
-## MCP 工具
-
-| 范围 | 工具 |
-| --- | --- |
-| 安装和模型发现 | `zcode_doctor`、`zcode_model_catalog`、`zcode_default_model`、`zcode_set_default_model`、`zcode_clear_default_model` |
-| 任务生命周期 | `zcode_task`、`zcode_status`、`zcode_feedback`、`zcode_events`、`zcode_result`、`zcode_continue`、`zcode_cancel` |
-| 交互 | `zcode_interaction_reply` |
-
-`zcode_continue` 只用于基于证据的返工、必要决定、受控恢复或报告修复，不作为推进正常实现下一步的常规调度工具。
-
-## 环境要求
-
-- 固定 Official Host 生产制品只支持 **Windows x64**。生产 Worker 在 Linux、macOS 与 Windows 非 x64 上以 `unsupported_worker_platform` fail closed；CI 只验证该拒绝边界，不声称存在生产执行路径。
-- **Preview 2.0.0-preview.8：** Windows x64、Node.js `24.16.0`，并已安装官方 ZCode Desktop `3.18.2.10443`。
-- Git、支持插件/Marketplace 的 Codex，以及可正常工作的本机 ZCode 安装。
-- 官方 ZCode 账户已登录，并具备所选任务需要的套餐和模型权益。
-- 仅面向**单用户、可信本地**环境；不提供多用户隔离或远程沙箱。
-
-Marketplace 插件不会代替你安装 Node.js 或 ZCode。
-
-Desktop ZCode `3.18.0` 与 `3.18.1` 在 Preview.7 中保持 `NOT_VERIFIED`，不代表已经证明不兼容。真实 OAuth refresh/账户轮换与跨机器制品复现同样保持 `NOT_VERIFIED`；这些是 Preview 阶段的风险接受，不延伸到 Stable。
+Coding Plan 的结果适用于已验证的账户、模型和运行时。`1.5` 倍指积分使用效率，套餐授予额度另计。Start Plan 的积分优惠尚未验证。
 
 ## 安装
 
-同一 Codex 安装只使用一个渠道。分支引用会持续更新；Tag 是固定快照。
+预览版环境为 **Windows x64**、**Node.js `24.16.0`** 和已安装的官方 **ZCode Desktop `3.18.2.10443`**。请先登录 ZCode，确认账户可使用目标套餐和模型，并准备 Git 和支持插件的 Codex。Node.js 和 ZCode 需单独安装。
 
-### 稳定版
-
-Stable `v1.7.1` 是当前稳定版；Preview.7 是当前固定预发布快照，Preview.6 在其基础上增加 Official Host、官方认证复用与 R7 Runtime Events/Usage：
-
-```sh
-codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-v1.7.1
-codex plugin add codex-zcode-bridge@codex-zcode-bridge
-```
+同一个 Codex 安装中选择一个 Marketplace 渠道即可。本文的安装版 Runtime 集成和 Cost Lab 位于预览版 `2.0.0-preview.9`，稳定版为 `v1.7.2`。
 
 ### 预览版
-
-预览版用于 SQLite-only 编排、Start Plan 与 Coding Plan 集成。Marketplace ID：`codex-zcode-bridge-preview`。
 
 ```sh
 codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref preview
 codex plugin add codex-zcode-bridge@codex-zcode-bridge-preview
 ```
 
-更新持续跟随 `preview` 分支的 Marketplace：
+更新预览版 Marketplace：
 
 ```sh
 codex plugin marketplace upgrade codex-zcode-bridge-preview
 ```
 
-如需固定到已验收的 Preview 快照：
+### 稳定版
 
 ```sh
-codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-preview-v2.0.0-preview.6
+codex plugin marketplace add https://github.com/Sandyzzx/codex-zcode-bridge.git --ref codex-zcode-bridge-v1.7.2
+codex plugin add codex-zcode-bridge@codex-zcode-bridge
 ```
 
-在已有 Marketplace 上切换分支或 Tag 时，使用目标 `--ref` 重新执行 `marketplace add`，或先移除再添加。不同 Codex 版本的实际参数以 `codex plugin marketplace add --help` 为准。
+安装后开启新的 Codex 会话，并审查插件的 `SessionStart` Hook。遇到配置问题时，可以让 Codex 运行 `zcode_doctor`。
 
-安装后请开启新的 Codex 对话，使插件和 MCP 工具完成加载；检查并信任插件的 `SessionStart` Hook。安装或运行配置异常时先调用 `zcode_doctor`。
+## 委派第一个任务
 
-## 使用方式
+1. 在 Codex 中打开项目，明确要求使用 ZCode Bridge。有偏好时写明套餐和模型。
+2. 说明任务目标、允许修改的文件、预期测试和验收条件。
+3. 随时询问进度。Codex 可以使用 `zcode_status`、`zcode_feedback` 或 `zcode_events` 跟进任务。
+4. 让 Codex 独立检查工作区差异、测试证据和 `zcode_result`，再决定是否验收。
 
-1. 在 Codex 中打开项目目录。
-2. 明确要求 Codex 使用 ZCode Bridge 执行当前任务。
-3. 提供目标、相关文件、约束、允许范围和验收条件。
-4. 由 Codex 的 Master Skill 选择整任务或分阶段策略并发起任务。
-5. 使用 `zcode_status`、`zcode_feedback` 和 `zcode_events` 跟进；只有请求动作确实获得授权时才回复权限请求。
-6. 独立检查实际 Diff、测试证据和 `zcode_result`，再决定是否接受。
+> 使用 ZCode Bridge，选择 Coding Plan 的 GLM-5.3-Flash。修复失败的解析器测试，只修改解析器和相关测试，运行定向测试，并由 Codex 审查结果。不要提交或推送。
 
-示例：
+请在可信的单用户环境运行 Bridge。Git Worktree 可用于分开管理修改，文件权限仍由当前系统账户决定。
 
-```text
-使用 ZCode Bridge 和 Start Plan GLM-5.3-Flash 执行当前任务。
-修复这个仓库中失败的 parser 测试；只修改 parser 及其测试，
-运行对应的定向测试，并返回有效的 AgentReport。不要提交或推送。
-```
+## 用 Cost Lab 核对积分
 
-如果只是规划、代码审查或独立分析，请明确要求 Codex 不委派，并继续在当前 Host 中完成。
-
-### Workspace 与 Worktree 边界
-
-调用方 Host 选择项目 Workspace，并在需要时创建和准备 Git Worktree。Bridge 验证并使用传入路径，但不会创建、选择或删除 Worktree。Worktree 只是一种工作目录布局，不是操作系统安全沙箱。
-
-## SQLite 启动与升级
-
-新的 Preview 安装会创建并验证：
-
-```text
-${LOCALAPPDATA}\CodexZCodeBridge\state\bridge.sqlite
-```
-
-数据库必须通过完整性和生命周期检查后，MCP 才会接受请求。Bridge 不会回退到 JSON 存储。
-
-生产 Lifecycle Gate 会在持有 bootstrap lock 时自动将已有 Schema v13 Authority 升级到 v14。需要严格停机切换时，仍可先停止所有 Bridge Host、Manager 和 Worker，再从 Preview 插件根目录运行安装包内的离线副本升级工具：
+配置与使用见 [Cost Lab — 本地积分验证工具](tools/cost-lab/README.md)。在预览版源码目录执行：
 
 ```powershell
-node ./dist/upgrade-sqlite-v14.mjs `
-  --source "D:/BridgeOld/state" `
-  --destination "D:/BridgeV14/state" `
-  --database bridge.sqlite `
-  --offline
+npm ci
+npm run build
+npm run cost-lab:web
 ```
 
-离线流程会保留源数据库。副本验证成功后，将 Host 的 `authority.json.data_root` 改为 `D:/BridgeV14`。未知 Schema、损坏数据库、活跃 Writer 和无法解释的生命周期现场仍然 fail closed。不要手工修改生命周期表，或为了绕过升级而清除 Hold；完整合同见 [ZCODE_RUNTIME.md](docs/ZCODE_RUNTIME.md)。
-
-## 安全边界
-
-Preview 使用固定的单用户可信本地 `yolo` 执行档案，以当前 Windows 账户权限运行。工作区内的普通读取、编辑、构建、测试和任务范围内清理可以自动执行；Push、Merge、Tag、Release、生产 Authority 切换、任务范围外删除、凭据修改和真实生产任务数据访问仍需用户明确授权。
-
-任务 Prompt、Skill、路径列表和 Worktree 选择不会自行产生这些权限。不要在任务 Prompt 中放入凭据、JWT、私钥或敏感账户数据。`allowed_paths` 和 `forbidden_paths` 是任务指令，不是 OS 强制沙箱。
-
-## 当前限制
-
-- **Start Plan 真实 E2E：** 仅 Windows；目前只有一个模型 `GLM-5.3-Flash` 的公开证据。
-- **其他 Start Plan 模型：** 取决于官方 Registry 和实时账户权益，本版本未逐模型认证。
-- **Linux/macOS：** 不支持生产执行，会在 Adapter 构造前拒绝；没有真实 Start Plan 或模型流量。
-- **CAPTCHA 与 unusual activity：** Bridge 不解决 CAPTCHA，也不绕过账户控制；权益失败会 fail-closed，可能需要用户在官方 ZCode 客户端中处理。
-- **Host Portability 与 Companion Service：** 仍属于架构研究，不是 Preview.7 已交付功能。
-- **JSON 存储与旧 CLI 执行链：** 不是当前生产路径；旧 JSON 任务历史不会导入 SQLite。
-- **Worker 可能未提交 Result 就退出。** Bridge 会保留清理证据和 Hold，而不是假定资源已释放。
+打开命令打印的本机地址，查看运行时检查、模型 Token、官方积分和验证历史。加载网页不消耗模型额度，真实 Coding Plan 验证需要主动确认。Cost Lab 对 Start Plan 提供离线检查。
 
 ## 文档
 
-- [当前架构](docs/ARCHITECTURE.md)
-- [接口与生命周期合同](docs/INTERFACES.md)
-- [Runtime 与 SQLite 升级细节](docs/ZCODE_RUNTIME.md)
+- [架构](docs/ARCHITECTURE.md)
+- [Coding Plan 官方积分证据](docs/evidence/coding-plan-official-discount-verification-20261118.md)
+- [Start Plan 兼容性](docs/research/start-plan-official-appserver-compatibility-20261118.md)
+- [排障、运行环境与升级](docs/ZCODE_RUNTIME.md)
 - [插件安全说明](plugins/codex-zcode-bridge/SECURITY.md)
-- [Master Skill](plugins/codex-zcode-bridge/skills/zcode-bridge/SKILL.md)
-- [Preview.8 Release](https://github.com/Sandyzzx/codex-zcode-bridge/releases/tag/codex-zcode-bridge-preview-v2.0.0-preview.8)
 
 ## 许可证
 
-Apache-2.0。第三方来源与版权说明见 [LICENSE](LICENSE) 和 [NOTICE](NOTICE)。
+Apache-2.0，见 [LICENSE](LICENSE) 和 [NOTICE](NOTICE)。

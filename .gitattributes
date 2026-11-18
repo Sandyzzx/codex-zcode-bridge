@@ -23,6 +23,9 @@ src/sqlite-candidate/wp6b2b1/schema.sql text eol=lf
 # that resembles a conflict marker or templates with significant whitespace.
 # Never rewrite those bytes for Bridge whitespace checks.
 plugins/codex-zcode-bridge/worker/vendor/official-host/** -diff -text -whitespace
+tools/cost-lab/vendor/official-billing-runtime.mjs text eol=lf
+tools/cost-lab/vendor/patches/*.patch -text -whitespace
+tools/cost-lab/vendor/patches/*.sha256 -text -whitespace
 # Fixed-upstream patches and their sidecars must retain exact bytes so their
 # published SHA-256 values survive checkout and artifact verification.
 upstream/zcode-3.18.0/patches/*.patch -text -whitespace

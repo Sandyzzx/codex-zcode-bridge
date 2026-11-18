@@ -1,0 +1,524 @@
+diff --git a/packages/services/src/credential/credentialService.ts b/packages/services/src/credential/credentialService.ts
+index 476c289dd8d9ecc614bcdb0942b9f6a48918738e..59d206268f017e86e2e9ee2f8241128a12e65a5c 100644
+--- a/packages/services/src/credential/credentialService.ts
++++ b/packages/services/src/credential/credentialService.ts
+@@ -1,6 +1,7 @@
+ import {
+   createSystemCredentialCipher,
+   migrateCredentialRecord,
++  type CredentialKeyStore,
+ } from "@zcode/shared/credential-security";
+ import { readFile, writeFile } from "node:fs/promises";
+ import { createHash, randomUUID } from "node:crypto";
+@@ -46,9 +47,12 @@ function getErrorCode(error: unknown): string | undefined {
+ async function readAll(
+   credentialsFile = getCredentialsFile(),
+   locked = false,
++  preserveCorrupt = true,
+ ): Promise<Record<string, string>> {
+-  if (locked) return readAllUnchecked(credentialsFile);
+-  return withCredentialFileRead(credentialsFile, () => readAllUnchecked(credentialsFile));
++  if (locked) return readAllUnchecked(credentialsFile, preserveCorrupt);
++  return withCredentialFileRead(credentialsFile, () =>
++    readAllUnchecked(credentialsFile, preserveCorrupt),
++  );
+ }
+ 
+ function parseRecord(raw: Buffer): Record<string, string> {
+@@ -70,7 +74,10 @@ function fingerprint(raw: Buffer): string {
+   return createHash("sha256").update(raw).digest("hex");
+ }
+ 
+-async function readAllUnchecked(credentialsFile: string): Promise<Record<string, string>> {
++async function readAllUnchecked(
++  credentialsFile: string,
++  preserveCorrupt: boolean,
++): Promise<Record<string, string>> {
+   let raw: Buffer;
+   try {
+     raw = await readFile(credentialsFile);
+@@ -84,6 +91,10 @@ async function readAllUnchecked(credentialsFile: string): Promise<Record<string,
+   try {
+     return parseRecord(raw);
+   } catch (error) {
++    // A read-only host path must not create a diagnostic backup.
++    if (!preserveCorrupt) {
++      throw new Error(`ZCode credentials are corrupt: ${credentialsFile}`, { cause: error });
++    }
+     // 把损坏 JSON/schema 当成空 store 后继续 save 会清空其他 OAuth 与登录凭据。
+     // 保留损坏文件证据并向上传递错误，禁止自动覆盖。
+     const backupPath = await backupCorruptFile(credentialsFile).catch(() => undefined);
+@@ -105,6 +116,14 @@ async function writeAll(credentialsFile: string, data: Record<string, string>):
+ 
+ interface CredentialServiceDependencies {
+   cipherProvider?: CredentialCipherProvider;
++  env?: Readonly<Record<string, string | undefined>>;
++  keyStore?: CredentialKeyStore;
++  /** Reject every credential-store mutation and disable read-time migration. */
++  readOnly?: boolean;
++  /** Defaults true. Disable format migration for read-only consumers. */
++  migrateOnRead?: boolean;
++  /** Permit session writes without creating key material or source markers. */
++  readOnlyKeyMaterial?: boolean;
+   /** Host 私有的持久化成功通知；不进入 Renderer/RPC 凭据接口。 */
+   onDidMutate?: (event: {
+     operation: "save" | "delete" | "batch" | "recover";
+@@ -143,12 +162,21 @@ export interface LocalCredentialService extends ICredentialService {
+ export function createCredentialService(
+   dependencies: CredentialServiceDependencies = {},
+ ): LocalCredentialService {
++  const readOnly = dependencies.readOnly === true;
++  const migrateOnRead = dependencies.migrateOnRead !== false;
++  const readOnlyKeyMaterial = readOnly || dependencies.readOnlyKeyMaterial === true;
+   const ciphers = new Map<string, CredentialCipherProvider>();
+   function cipherForFile(file: string): CredentialCipherProvider {
+     if (dependencies.cipherProvider) return dependencies.cipherProvider;
+     let cipher = ciphers.get(file);
+     if (!cipher) {
+-      cipher = createSystemCredentialCipher({ filePath: file });
++      cipher = createSystemCredentialCipher({
++        filePath: file,
++        env: dependencies.env,
++        keyStore: dependencies.keyStore,
++        readOnly,
++        readOnlyKeyMaterial,
++      });
+       ciphers.set(file, cipher);
+     }
+     return cipher;
+@@ -156,19 +184,28 @@ export function createCredentialService(
+   /** 调用方必须已在 withCredentialFileMutation 内；迁移写入与恢复共用同一代次屏障。 */
+   async function readCurrentLocked(file: string) {
+     const current = await readAll(file, true);
+-    const migrated = await migrateCredentialRecord(current, cipherForFile(file));
++    const migrated = migrateOnRead
++      ? await migrateCredentialRecord(current, cipherForFile(file))
++      : null;
+     if (migrated) await writeAll(file, migrated);
+     return migrated ?? current;
+   }
+   async function readCurrent(file: string) {
+     // 普通读取不取得写锁（慢写入曾让登录读取等锁超时），由读取前后的恢复代次校验拒绝旧结果。
+     // 只有仍含旧格式值时才进入变更锁迁移一次。
+-    const current = await readAll(file);
++    const current = await readAll(file, false, !readOnly);
++    if (readOnly || !migrateOnRead) return current;
+     const cipher = cipherForFile(file);
+     if (!Object.values(current).some((value) => cipher.needsMigration?.(value))) return current;
+     return withCredentialFileMutation(file, () => readCurrentLocked(file));
+   }
+ 
++  const rejectMutation = async (): Promise<never> => {
++    throw Object.assign(new Error("Credential store is read-only"), {
++      code: "CREDENTIAL_STORE_READ_ONLY",
++    });
++  };
++
+   return {
+     captureRecoveryGuard: () => captureCredentialFileGuard(getCredentialsFile()),
+     async inspectStore() {
+@@ -187,6 +224,7 @@ export function createCredentialService(
+       });
+     },
+     async recoverStore(expected) {
++      if (readOnly) return rejectMutation();
+       if (!/^[a-f0-9]{64}$/.test(expected))
+         throw new Error("Invalid credential recovery fingerprint");
+       const file = getCredentialsFile();
+@@ -227,6 +265,7 @@ export function createCredentialService(
+       return result;
+     },
+     async deleteUnreadable(keys, options) {
++      if (readOnly) return rejectMutation();
+       const credentialsFile = getCredentialsFile();
+       const cipherProvider = cipherForFile(credentialsFile);
+       const validatedKeys = keys.map((key) => credentialKeySchema.parse(key));
+@@ -296,6 +335,7 @@ export function createCredentialService(
+     },
+ 
+     async updateMany(changes, options) {
++      if (readOnly) return rejectMutation();
+       const credentialsFile = getCredentialsFile();
+       const cipherProvider = cipherForFile(credentialsFile);
+       const entries = await Promise.all(
+@@ -338,6 +378,7 @@ export function createCredentialService(
+     },
+ 
+     async recoverUnreadable(key, assertCurrent) {
++      if (readOnly) return rejectMutation();
+       const credentialsFile = getCredentialsFile();
+       const cipherProvider = cipherForFile(credentialsFile);
+       const validatedKey = credentialKeySchema.parse(key);
+@@ -379,6 +420,7 @@ export function createCredentialService(
+     },
+ 
+     async save(key: string, value: string, assertCurrent?: () => void): Promise<void> {
++      if (readOnly) return rejectMutation();
+       const credentialsFile = getCredentialsFile();
+       const cipherProvider = cipherForFile(credentialsFile);
+       const validatedKey = credentialKeySchema.parse(key);
+@@ -397,6 +439,7 @@ export function createCredentialService(
+     },
+ 
+     async delete(key: string, assertCurrent?: () => void): Promise<void> {
++      if (readOnly) return rejectMutation();
+       const credentialsFile = getCredentialsFile();
+       const validatedKey = credentialKeySchema.parse(key);
+       await withCredentialFileMutation(credentialsFile, async () => {
+@@ -409,6 +452,7 @@ export function createCredentialService(
+     },
+ 
+     async saveIfAbsent(key: string, value: string): Promise<string> {
++      if (readOnly) return rejectMutation();
+       const validatedKey = credentialKeySchema.parse(key);
+       const validatedValue = credentialValueSchema.parse(value);
+       const credentialsFile = getCredentialsFile();
+@@ -432,6 +476,7 @@ export function createCredentialService(
+     },
+ 
+     async deleteIfEquals(key: string, expected: string): Promise<void> {
++      if (readOnly) return rejectMutation();
+       const validatedKey = credentialKeySchema.parse(key);
+       const credentialsFile = getCredentialsFile();
+       const cipherProvider = cipherForFile(credentialsFile);
+diff --git a/packages/services/src/official-host/costLabBillingRuntime.ts b/packages/services/src/official-host/costLabBillingRuntime.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..dd59e6915b795570c81dfad2c06cd7071c45dbb7
+--- /dev/null
++++ b/packages/services/src/official-host/costLabBillingRuntime.ts
+@@ -0,0 +1,236 @@
++import type {
++  ApiClient,
++  CodingPlanUsageRequest,
++  CodingPlanUsageSnapshot,
++  ProviderFamilyDomain,
++} from "@zcode/shared";
++import type { LocalCredentialService } from "../credential/credentialService.js";
++import { createCredentialService } from "../credential/credentialService.js";
++import { AccountProviderApiClient } from "../model-provider/accountProviderApiClient.js";
++import { AccountProviderApiKeyResolver } from "../model-provider/accountProviderApiKeyResolver.js";
++import { createAccountProviderCredentialService } from "../model-provider/accountProviderCredentialService.js";
++import { createAccountProviderRequestAuthService } from "../model-provider/accountProviderRequestAuthService.js";
++import { createAccountProjectTokenClient } from "../model-provider/accountProjectTokenClient.js";
++import { OAuthCredentialRepo } from "../oauth/repo/oauthCredentialRepo.js";
++import { setDataBaseDir } from "../paths.js";
++import { createNodeApiClient } from "../providers/api/nodeApiClient.js";
++import { createUsageStatsService } from "../usage-stats/usageStatsService.js";
++
++export interface CostLabBillingRuntimeOptions {
++  readonly dataBaseDir: string;
++  readonly apiClient?: ApiClient;
++  readonly credentialService?: LocalCredentialService;
++  readonly signal?: AbortSignal;
++}
++
++export interface CostLabBillingIdentity {
++  readonly apiKeyId: string | null;
++  readonly accountScope: string | null;
++  readonly organizationId: string | null;
++  readonly projectId: string | null;
++}
++
++export interface CostLabBillingSnapshotResult {
++  readonly snapshot: CodingPlanUsageSnapshot;
++  readonly identity: CostLabBillingIdentity;
++}
++
++type CostLabLocationStoreSource = Pick<LocalCredentialService, "load" | "save" | "delete"> &
++  Partial<Pick<LocalCredentialService, "recoverUnreadable">>;
++
++export type CostLabReadOnlyLocationStore = Pick<
++  LocalCredentialService,
++  "load" | "save" | "delete" | "recoverUnreadable"
++>;
++
++const ACCESS_TOKEN_PATH =
++  /^\/api\/biz\/v1\/organization\/[^/]+\/projects\/[^/]+\/api_keys\/[^/]+\/access_tokens$/;
++const ALLOWED_ORIGINS = new Set([
++  "https://bigmodel.cn",
++  "https://zcode.z.ai",
++  "https://api.z.ai",
++]);
++
++/**
++ * Project token location records are a rebuildable cache. The billing reader
++ * may load one, but must never create, delete, or recover that shared record.
++ */
++export function createCostLabReadOnlyLocationStore(
++  locationStore: CostLabLocationStoreSource,
++): CostLabReadOnlyLocationStore {
++  const rejectWrite = async (): Promise<never> => {
++    throw new Error("cost_lab_read_only_location_store_blocked_write");
++  };
++  return {
++    load: (key) => locationStore.load(key),
++    save: rejectWrite,
++    delete: rejectWrite,
++    recoverUnreadable: rejectWrite,
++  };
++}
++
++/**
++ * Block non-official origins, redirects, and every write except the short-lived
++ * Project Token POST required by the official billing path.
++ */
++export function createCostLabReadOnlyApiClient(
++  apiClient: ApiClient,
++  signal?: AbortSignal,
++): ApiClient {
++  return {
++    async request(input, init) {
++      const url = new URL(typeof input === "string" ? input : input.toString());
++      if (!ALLOWED_ORIGINS.has(url.origin)) {
++        throw new Error("cost_lab_read_only_api_blocked_origin");
++      }
++      const method = (init?.method ?? "GET").toUpperCase();
++      if (method !== "GET") {
++        if (method !== "POST" || !ACCESS_TOKEN_PATH.test(url.pathname)) {
++          throw new Error("cost_lab_read_only_api_blocked_write");
++        }
++      }
++      return apiClient.request(input, {
++        ...init,
++        redirect: "error",
++        ...(signal
++          ? {
++              signal: init?.signal ? AbortSignal.any([init.signal, signal]) : signal,
++            }
++          : {}),
++      });
++    },
++  };
++}
++
++/**
++ * Read-only Cost Lab owner for the official Coding Plan monitor path.
++ *
++ * This composes the same official credential, project-token, request-auth and
++ * usage-stat services as ZCode. It deliberately does not refresh OAuth, start
++ * Desktop services, or expose credential material to the CLI caller.
++ */
++export function createCostLabBillingRuntime(options: CostLabBillingRuntimeOptions) {
++  if (!options.credentialService) setDataBaseDir(options.dataBaseDir);
++  const credentialService =
++    options.credentialService ??
++    createCredentialService({
++      readOnly: true,
++      migrateOnRead: false,
++      readOnlyKeyMaterial: true,
++    });
++  const apiClient = createCostLabReadOnlyApiClient(
++    options.apiClient ?? createNodeApiClient(),
++    options.signal,
++  );
++  const oauthRepo = new OAuthCredentialRepo(credentialService);
++  const loadOAuthAccountMaterial = (family: ProviderFamilyDomain) =>
++    oauthRepo.loadFamilyMaterial(family);
++  const loadOAuthTokenSet = async (providerId: string) => {
++    if (providerId !== "zai" && providerId !== "bigmodel") return null;
++    const account = await loadOAuthAccountMaterial(providerId);
++    return account
++      ? {
++          accessToken: account.accessToken,
++          zcodeJwtToken: account.zcodeJwtToken,
++          sessionRevision: account.sessionRevision,
++          accountIdentity: account.accountIdentity,
++          zcodeUserId: account.zcodeUserId,
++        }
++      : null;
++  };
++  const projectTokenClient = createAccountProjectTokenClient(
++    apiClient,
++    createCostLabReadOnlyLocationStore(credentialService),
++  );
++  const accountProviderApiClient = new AccountProviderApiClient(apiClient);
++  const accountProviderApiKeyResolver = new AccountProviderApiKeyResolver(
++    accountProviderApiClient.fetchRemoteData.bind(accountProviderApiClient),
++    projectTokenClient,
++  );
++  const accountProviderCredentialService = createAccountProviderCredentialService({
++    loadOAuthAccountMaterial,
++    resolveProviderMaterial: (
++      family,
++      accessToken,
++      accountIdentity,
++      rejectedProjectTokenFingerprint,
++    ) =>
++      accountProviderApiKeyResolver.resolveProviderMaterial(
++        family === "zai" ? "zai" : "bigmodel",
++        accessToken,
++        accountIdentity,
++        rejectedProjectTokenFingerprint,
++      ),
++  });
++
++  let identity: CostLabBillingIdentity = Object.freeze({
++    apiKeyId: null,
++    accountScope: null,
++    organizationId: null,
++    projectId: null,
++  });
++  const accountRequestAuthService = createAccountProviderRequestAuthService({
++    resolveCurrentAccountAccess: async () => null,
++    loadOAuthTokenSet,
++    loadStartPlanZcodeJwt: async () => null,
++    async loadIndividualPlanMaterial(providerId, family, rejectedProjectTokenFingerprint) {
++      const accountIdentity = (await loadOAuthAccountMaterial(family))?.accountIdentity;
++      if (!accountIdentity) return null;
++      const material = await accountProviderCredentialService.loadCodingPlanMaterial({
++        providerId,
++        family,
++        accountIdentity,
++        rejectedProjectTokenFingerprint,
++      });
++      if (material) {
++        identity = Object.freeze({
++          apiKeyId: material.apiKeyId,
++          accountScope: null,
++          organizationId: material.organizationId,
++          projectId: material.projectId,
++        });
++      }
++      return material;
++    },
++    resolveTeamPlanMaterial: async () => null,
++  });
++  const observedAccountRequestAuthService = {
++    resolveAccessCurrent: accountRequestAuthService.resolveAccessCurrent.bind(
++      accountRequestAuthService,
++    ),
++    async resolveCurrent(input: Parameters<typeof accountRequestAuthService.resolveCurrent>[0]) {
++      const material = await accountRequestAuthService.resolveCurrent(input);
++      identity = Object.freeze({
++        ...identity,
++        apiKeyId: material.apiKeyId ?? identity.apiKeyId,
++        accountScope: material.accountScope ?? identity.accountScope,
++      });
++      return material;
++    },
++  };
++  const usageStatsService = createUsageStatsService({
++    apiClient,
++    loadOAuthAccountMaterial,
++    accountRequestAuthService: observedAccountRequestAuthService,
++    zcodeAgentService: {
++      getAppUsageStats: async () => {
++        throw new Error("app_usage_not_supported_by_cost_lab_billing_reader");
++      },
++    },
++  });
++
++  return {
++    async getCodingPlanUsageSnapshot(
++      request: CodingPlanUsageRequest,
++    ): Promise<CostLabBillingSnapshotResult> {
++      identity = Object.freeze({
++        apiKeyId: null,
++        accountScope: null,
++        organizationId: null,
++        projectId: null,
++      });
++      const snapshot = await usageStatsService.getCodingPlanUsageSnapshot(request);
++      return { snapshot, identity };
++    },
++  };
++}
+diff --git a/packages/services/src/official-host/runtimeHostEntry.ts b/packages/services/src/official-host/runtimeHostEntry.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..438356d3c6a7f36a215883611b7b30dc578e3366
+--- /dev/null
++++ b/packages/services/src/official-host/runtimeHostEntry.ts
+@@ -0,0 +1,9 @@
++export {
++  createCostLabReadOnlyApiClient,
++  createCostLabReadOnlyLocationStore,
++  createCostLabBillingRuntime,
++  type CostLabBillingIdentity,
++  type CostLabBillingRuntimeOptions,
++  type CostLabBillingSnapshotResult,
++  type CostLabReadOnlyLocationStore,
++} from "./costLabBillingRuntime.js";
+diff --git a/packages/shared/src/credential-security/contract.ts b/packages/shared/src/credential-security/contract.ts
+index a709ac74cb9b96373882c75a3d71dff12822a12f..aed9541888bd545dd49e10966b82bf2693d0f7e0 100644
+--- a/packages/shared/src/credential-security/contract.ts
++++ b/packages/shared/src/credential-security/contract.ts
+@@ -28,6 +28,13 @@ export interface SystemCredentialCipherOptions {
+   filePath: string;
+   env?: Readonly<Record<string, string | undefined>>;
+   keyStore?: CredentialKeyStore;
++  /**
++   * Host-only read path: resolve existing material without creating a keyring
++   * entry or credential-source marker. Missing key material fails closed.
++   */
++  readOnly?: boolean;
++  /** Permit official session writes while forbidding key material creation. */
++  readOnlyKeyMaterial?: boolean;
+ }
+ /** Linux Desktop Main 开启私有文件密钥回退时的观察入口；回调不接收密钥或路径内容。 */
+ export interface PrivateFileKeyFallbackOptions {
+diff --git a/packages/shared/src/credential-security/systemCredentialCipher.ts b/packages/shared/src/credential-security/systemCredentialCipher.ts
+index c3207989fb4d53cd029c0518c94d91c8cb6004b2..a460722afc135c24ea3e24904a41f75ebccb339b 100644
+--- a/packages/shared/src/credential-security/systemCredentialCipher.ts
++++ b/packages/shared/src/credential-security/systemCredentialCipher.ts
+@@ -252,6 +252,8 @@ export function createSystemCredentialCipher(
+   options: SystemCredentialCipherOptions,
+ ): SystemCredentialCipher {
+   const env = options.env ?? process.env;
++  const readOnly = options.readOnly === true;
++  const readOnlyKeyMaterial = readOnly || options.readOnlyKeyMaterial === true;
+   let managedSecret: Promise<string | undefined> | undefined;
+   // 此处只解析显式配置；默认文件必须在下方所有调用者共用的 keyring 锁内发现，避免来源竞态。
+   const getManagedSecret = () => (managedSecret ??= resolveManagedSecret(options));
+@@ -291,6 +293,7 @@ export function createSystemCredentialCipher(
+         try {
+           encoded = await store.get();
+           if (encoded === null && unbound) {
++            if (readOnlyKeyMaterial) throw unavailable();
+             encoded = randomBytes(KEY_BYTES).toString("base64url");
+             await store.set(encoded);
+             if ((await store.get()) !== encoded) throw unavailable();
+@@ -311,7 +314,9 @@ export function createSystemCredentialCipher(
+         }
+         const key = Buffer.from(encoded, "base64url");
+         if (key.length !== KEY_BYTES) throw unavailable();
+-        if (!pinnedSource) await atomicWritePrivateTextFile(sourcePath, OS_SOURCE_MARKER);
++        if (!pinnedSource && !readOnlyKeyMaterial) {
++          await atomicWritePrivateTextFile(sourcePath, OS_SOURCE_MARKER);
++        }
+         return { key, source: "os" } as const;
+       } catch {
+         throw unavailable();
+@@ -396,6 +401,7 @@ export function createSystemCredentialCipher(
+       });
+     },
+     async encrypt(value) {
++      if (readOnly) throw unavailable();
+       const { key, source } = await getKey(true);
+       const fingerprint = keyFingerprint(key);
+       return `${SYSTEM_PREFIX}${source}:${fingerprint}:${seal(value, key)}`;
+@@ -403,10 +409,23 @@ export function createSystemCredentialCipher(
+     async decrypt(value) {
+       if (!value.startsWith(SYSTEM_PREFIX)) {
+         if (value.startsWith("enc:") && !value.startsWith(LEGACY_PREFIX)) throw decryptError();
+-        const { legacySecret } = await getKey(true);
++        let legacySecret: string | undefined;
++        if (readOnlyKeyMaterial) {
++          try {
++            legacySecret = (await getKey(false)).legacySecret;
++          } catch (error) {
++            // Legacy credentials may use the machine-derived fallback. The
++            // authenticated decoder remains the final validity check.
++            if ((error as { code?: unknown })?.code !== "CREDENTIAL_SECURE_STORAGE_UNAVAILABLE") {
++              throw error;
++            }
++          }
++        } else {
++          ({ legacySecret } = await getKey(true));
++        }
+         return createLegacyCredentialCipher({
+           ...env,
+-          ZCODE_CREDENTIAL_SECRET: legacySecret,
++          ...(legacySecret ? { ZCODE_CREDENTIAL_SECRET: legacySecret } : {}),
+         }).decrypt(value);
+       }
+       const parts = value.slice(SYSTEM_PREFIX.length).split(":");

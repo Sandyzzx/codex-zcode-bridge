@@ -294,9 +294,9 @@ function readAccountProviderSource(config2, verifiedSelection, homeDir, taskProv
   const table = readJson(config2.providerBuiltinConfigFile);
   const providerRules = readProviderRules(table).filter(isRecord2).map((rule) => rule).filter((rule) => rule.config?.access?.type === "zhipu-account" && typeof rule.providerId === "string").sort((left, right) => left.providerId.localeCompare(right.providerId));
   if (!providerRules.length) return null;
-  const officialDataRoot = path3.resolve(config2.zcodeDataRoot);
-  const officialV2Dir = zcodeV2Dir(officialDataRoot);
+  const officialV2Dir = zcodeV2DataDir(config2.providerPersonalConfigFile);
   if (!officialV2Dir) return null;
+  const officialDataRoot = path3.dirname(officialV2Dir);
   const credentials = readJson(path3.join(officialV2Dir, "config.json"));
   const credentialProviders = asRecord(credentials?.provider);
   const cache = readJson(path3.join(officialV2Dir, "coding-plan-cache.json"));
@@ -344,10 +344,6 @@ function readAccountProviderSource(config2, verifiedSelection, homeDir, taskProv
   });
   const builtinRevision = zcodeBuiltinRevision(table, config2.providerBuiltinConfigFile);
   return { officialDataRoot, officialV2Dir, settingFile, builtinRevision, entries };
-}
-function zcodeV2Dir(zcodeDataRoot) {
-  if (path3.basename(zcodeDataRoot).toLowerCase() !== ".zcode") return null;
-  return path3.join(zcodeDataRoot, "v2");
 }
 function zcodeBuiltinRevision(table, sourceFile) {
   const revision = typeof table?.revision === "number" ? table.revision : 0;
@@ -1998,6 +1994,12 @@ var init_paths = __esm({
 });
 
 // src/runtime/resolver.ts
+var resolver_exports = {};
+__export(resolver_exports, {
+  NodeRuntimeResolver: () => NodeRuntimeResolver,
+  findPackageRoot: () => findPackageRoot,
+  loadPersistedRuntimeEnvironment: () => loadPersistedRuntimeEnvironment
+});
 import { accessSync, existsSync as existsSync3, readFileSync as readFileSync4, statSync } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 import path6 from "node:path";
@@ -4167,6 +4169,11 @@ var init_child_env = __esm({
 });
 
 // src/runtime/session-preferences.ts
+var session_preferences_exports = {};
+__export(session_preferences_exports, {
+  ZCODE_SESSION_MODES: () => ZCODE_SESSION_MODES,
+  resolveSessionPreferences: () => resolveSessionPreferences
+});
 function resolveSessionPreferences(taskModel, env, trustedExecutionProfileId) {
   const providerId = env["ZCODE_BRIDGE_DEFAULT_PROVIDER_ID"]?.trim() ?? "";
   const modelId = env["ZCODE_BRIDGE_DEFAULT_MODEL_ID"]?.trim() ?? "";
@@ -4475,10 +4482,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path11) {
-  if (!path11)
+function getElementAtPath(obj, path13) {
+  if (!path13)
     return obj;
-  return path11.reduce((acc, key) => acc?.[key], obj);
+  return path13.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -4737,11 +4744,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path11, issues) {
+function prefixIssues(path13, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path11);
+    iss.path.unshift(path13);
     return iss;
   });
 }
@@ -5262,16 +5269,16 @@ function flattenError(error62, mapper = (issue2) => issue2.message) {
 }
 function formatError(error62, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error63, path11 = []) => {
+  const processError = (error63, path13 = []) => {
     for (const issue2 of error63.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path11, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path13, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path11, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path13, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path11, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path13, ...issue2.path]);
       } else {
-        const fullpath = [...path11, ...issue2.path];
+        const fullpath = [...path13, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -5310,17 +5317,17 @@ function formatError(error62, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error62, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error63, path11 = []) => {
+  const processError = (error63, path13 = []) => {
     var _a3;
     for (const issue2 of error63.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path11, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path13, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path11, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path13, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path11, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path13, ...issue2.path]);
       } else {
-        const fullpath = [...path11, ...issue2.path];
+        const fullpath = [...path13, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -5359,8 +5366,8 @@ function treeifyError(error62, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path11 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path11) {
+  const path13 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path13) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -23356,13 +23363,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path11 = ref.slice(1).split("/").filter(Boolean);
-  if (path11.length === 0) {
+  const path13 = ref.slice(1).split("/").filter(Boolean);
+  if (path13.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path11[0] === defsKey) {
-    const key = path11[1] === void 0 ? void 0 : decodeJSONPointerSegment(path11[1]);
+  if (path13[0] === defsKey) {
+    const key = path13[1] === void 0 ? void 0 : decodeJSONPointerSegment(path13[1]);
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -25799,14 +25806,14 @@ function readEffectiveReasoningLevel(snapshot) {
   const level = thoughtLevel.current;
   return typeof level === "string" && level.trim() ? level.trim() : null;
 }
-function nestedString(record3, path11) {
+function nestedString(record3, path13) {
   let value = record3;
-  for (const part of path11) value = asRecord2(value)[part];
+  for (const part of path13) value = asRecord2(value)[part];
   return typeof value === "string" ? value : null;
 }
-function nestedNumber(record3, path11) {
+function nestedNumber(record3, path13) {
   let value = record3;
-  for (const part of path11) value = asRecord2(value)[part];
+  for (const part of path13) value = asRecord2(value)[part];
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 function asRecord2(value) {
@@ -25884,6 +25891,7 @@ var init_zcode_app_server_adapter = __esm({
       #homeDir;
       #host;
       #executionProfileId;
+      #sessionPreferences;
       #now;
       #resolveInteraction;
       #onOutcomeCheckpoint;
@@ -25920,6 +25928,7 @@ var init_zcode_app_server_adapter = __esm({
         this.#homeDir = options.homeDir ?? homedir3();
         this.#host = validateHostProfile(options.host ?? codexHostProfile(this.#homeDir));
         this.#executionProfileId = options.executionProfileId;
+        this.#sessionPreferences = options.sessionPreferences;
         this.#now = options.now ?? (() => /* @__PURE__ */ new Date());
         this.#probe = options.probe ?? createPlatformProbe();
         this.#resolveInteraction = options.resolveInteraction;
@@ -26105,7 +26114,7 @@ var init_zcode_app_server_adapter = __esm({
             void this.#resolver.resolve().then(resolve, reject).finally(() => entry.abort.signal.removeEventListener("abort", aborted2));
           });
           entry.abort.signal.throwIfAborted();
-          const taskProviderId = task.model?.provider_id;
+          const taskProviderId = this.#sessionPreferences?.model?.provider_id ?? task.model?.provider_id;
           const taskProviderFacts = accountProviderRuleFacts(taskProviderId, config2);
           const otherStartPlanSelected = taskProviderFacts?.planKind === "start-plan" && taskProviderId !== BIGMODEL_START_PLAN_PROVIDER_ID;
           if (otherStartPlanSelected) {
@@ -26148,7 +26157,7 @@ var init_zcode_app_server_adapter = __esm({
           if (startPlanSelected && (!accountProviderPayload?.providers[BIGMODEL_START_PLAN_PROVIDER_ID] || accountProviderPayload.providers[BIGMODEL_START_PLAN_PROVIDER_ID].access.entitled !== true)) {
             return this.#startPlanReadinessFailure(entry, "Start Plan provider snapshot could not be prepared after live entitlement verification.");
           }
-          const preferences = resolveSessionPreferences(task.model, runtimeEnv, this.#executionProfileId);
+          const preferences = this.#sessionPreferences ?? resolveSessionPreferences(task.model, runtimeEnv, this.#executionProfileId);
           const childEnv = this.#buildChildEnv(config2, runtimeEnv);
           if (startPlanSelected) childEnv.ZCODE_MODEL_RETRY_MAX_RETRIES = "0";
           entry.onEvent({ type: "zcode_starting", summary: "Starting ZCode streaming runtime" });
@@ -28471,6 +28480,534 @@ var init_official_host_adapter = __esm({
   }
 });
 
+// src/runtime/node-runtime.ts
+function isSupportedNodeVersion(version2) {
+  const match = /^(\d+)\.(\d+)\.(\d+)$/u.exec(version2);
+  if (!match) return false;
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  const patch = Number(match[3]);
+  return major === 24 && minor >= 16 && patch >= 0;
+}
+var SUPPORTED_NODE_RANGE;
+var init_node_runtime = __esm({
+  "src/runtime/node-runtime.ts"() {
+    "use strict";
+    SUPPORTED_NODE_RANGE = ">=24.16.0 <25";
+  }
+});
+
+// src/runtime/official-app-server-runtime.ts
+var official_app_server_runtime_exports = {};
+__export(official_app_server_runtime_exports, {
+  OFFICIAL_APPSERVER_COMPATIBILITY_MANIFEST: () => OFFICIAL_APPSERVER_COMPATIBILITY_MANIFEST,
+  OFFICIAL_CODING_PLAN_PROVIDER_ID: () => OFFICIAL_CODING_PLAN_PROVIDER_ID,
+  OfficialAppServerRuntimeResolver: () => OfficialAppServerRuntimeResolver,
+  isOfficialCodingPlanProvider: () => isOfficialCodingPlanProvider
+});
+import { createHash as createHash9 } from "node:crypto";
+import { execFile } from "node:child_process";
+import { createReadStream as createReadStream2 } from "node:fs";
+import { lstat as lstat2, realpath as realpath2 } from "node:fs/promises";
+import { homedir as homedir4 } from "node:os";
+import path10 from "node:path";
+import { promisify } from "node:util";
+function isOfficialCodingPlanProvider(providerId) {
+  return providerId === OFFICIAL_CODING_PLAN_PROVIDER_ID || providerId === "bigmodel-individual-coding-plan" || providerId === "builtin:bigmodel-coding-plan";
+}
+function unverified(reason, nodeExecutable, details = {}) {
+  return {
+    status: "OFFICIAL_RUNTIME_UNVERIFIED",
+    discount_capability: "OFFICIAL_DISCOUNT_NOT_VERIFIED",
+    reason,
+    install_dir: details.install_dir ?? null,
+    install_source: details.install_source ?? null,
+    desktop_version: details.desktop_version ?? null,
+    bundle_path: details.bundle_path ?? null,
+    bundle_bytes: details.bundle_bytes ?? null,
+    bundle_sha256: details.bundle_sha256 ?? null,
+    builtin_provider_config_path: details.builtin_provider_config_path ?? null,
+    builtin_provider_config_bytes: details.builtin_provider_config_bytes ?? null,
+    builtin_provider_config_sha256: details.builtin_provider_config_sha256 ?? null,
+    runtime_host_path: details.runtime_host_path ?? null,
+    runtime_host_bytes: details.runtime_host_bytes ?? null,
+    runtime_host_sha256: details.runtime_host_sha256 ?? null,
+    node_executable: nodeExecutable,
+    node_version: details.node_version ?? null,
+    node_compatible: details.node_compatible === true,
+    manifest: details.manifest ?? null
+  };
+}
+async function canonicalDirectory(candidate) {
+  const stat = await lstat2(candidate);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("installed ZCode root is not a real directory");
+  return realpath2(candidate);
+}
+async function canonicalFileInside(root, candidate, label) {
+  const stat = await lstat2(candidate);
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`${label} is not a regular file`);
+  const resolved = await realpath2(candidate);
+  const relative = path10.relative(root, resolved);
+  if (!relative || relative === ".." || relative.startsWith(`..${path10.sep}`) || path10.isAbsolute(relative)) {
+    throw new Error(`${label} resolves outside the installed ZCode root`);
+  }
+  return resolved;
+}
+async function sha256File2(filePath) {
+  const hash2 = createHash9("sha256");
+  await new Promise((resolve, reject) => {
+    const stream = createReadStream2(filePath);
+    stream.on("data", (chunk) => hash2.update(chunk));
+    stream.once("error", reject);
+    stream.once("end", resolve);
+  });
+  return hash2.digest("hex");
+}
+async function probeNodeCliVersion(executable) {
+  const { stdout } = await execFileAsync(executable, ["--version"], {
+    encoding: "utf8",
+    timeout: 5e3,
+    windowsHide: true
+  });
+  return stdout.trim();
+}
+function normalizeNodeVersion(value) {
+  const normalized = value.trim().replace(/^v/u, "");
+  if (!/^\d+\.\d+\.\d+$/u.test(normalized)) throw new Error(`invalid Node version output: ${value.slice(0, 80)}`);
+  return normalized;
+}
+function normalizeDesktopVersion(value) {
+  const normalized = value.trim();
+  if (!/^\d+\.\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z.-]+)?$/u.test(normalized)) {
+    throw new Error(`invalid Desktop file version output: ${value.slice(0, 80)}`);
+  }
+  return normalized;
+}
+async function probeWindowsFileVersion(executable) {
+  const script = [
+    "$path = $env:ZCODE_BRIDGE_VERSION_FILE",
+    "if ([string]::IsNullOrWhiteSpace($path)) { exit 2 }",
+    "$version = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($path).FileVersion",
+    "[Console]::Out.Write($version)"
+  ].join("; ");
+  const encoded = Buffer.from(script, "utf16le").toString("base64");
+  const systemRoot = process.env["SystemRoot"]?.trim();
+  if (!systemRoot) throw new Error("SystemRoot is unavailable for the Windows version probe");
+  const powershell = path10.join(
+    systemRoot,
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe"
+  );
+  const { stdout } = await execFileAsync(powershell, [
+    "-NoProfile",
+    "-NonInteractive",
+    "-EncodedCommand",
+    encoded
+  ], {
+    encoding: "utf8",
+    timeout: 5e3,
+    windowsHide: true,
+    env: {
+      SystemRoot: systemRoot,
+      ZCODE_BRIDGE_VERSION_FILE: executable
+    }
+  });
+  return stdout.trim();
+}
+function errorMessage(error62) {
+  const message = error62 instanceof Error ? error62.message : String(error62);
+  return message.slice(0, 500);
+}
+var execFileAsync, OFFICIAL_CODING_PLAN_PROVIDER_ID, OFFICIAL_APPSERVER_COMPATIBILITY_MANIFEST, OfficialAppServerRuntimeResolver;
+var init_official_app_server_runtime = __esm({
+  "src/runtime/official-app-server-runtime.ts"() {
+    "use strict";
+    init_profile();
+    init_desktop_host_launch();
+    init_errors();
+    init_node_runtime();
+    init_paths();
+    init_resolver();
+    execFileAsync = promisify(execFile);
+    OFFICIAL_CODING_PLAN_PROVIDER_ID = "account:bigmodel-individual-coding-plan";
+    OFFICIAL_APPSERVER_COMPATIBILITY_MANIFEST = Object.freeze([
+      Object.freeze({
+        desktop_version: "3.18.2.10443",
+        desktop_app_version: "3.18.2",
+        desktop_build_commit_id: "2681f4af",
+        bundle_sha256: "08726b5ef69e1e9072828baa4656713cb3aac93bb096938681278c5600312b2c",
+        bundle_bytes: 15675386,
+        builtin_provider_config_sha256: "ef3d64656cb5281cce292b77ef12e96b5251582cfb00cdf9eb08e3d4565abb69",
+        builtin_provider_config_bytes: 261659,
+        runtime_host_sha256: "c2c8ff5ff28cbddc4f177c094aa67c322830889612251bd173baaabc89379ab4",
+        runtime_host_bytes: 179608,
+        node_compatibility: SUPPORTED_NODE_RANGE,
+        appserver_protocol: "zcode-app-server-stdio-desktop-v1",
+        request_security_capability: "official-installed-bundle-signing",
+        coding_plan_discount_verified: true,
+        start_plan_static_compatibility: "OFFLINE_COMPATIBLE",
+        verification_date: "2026-11-18"
+      })
+    ]);
+    OfficialAppServerRuntimeResolver = class {
+      #env;
+      #homeDir;
+      #host;
+      #baseResolver;
+      #manifest;
+      #platform;
+      #architecture;
+      #hashFile;
+      #probeNodeVersion;
+      #probeDesktopVersion;
+      #readDesktopLaunch;
+      constructor(options = {}) {
+        this.#env = options.env ?? process.env;
+        this.#homeDir = options.homeDir ?? homedir4();
+        this.#host = options.host;
+        this.#baseResolver = options.baseResolver ?? null;
+        this.#manifest = options.manifest ?? OFFICIAL_APPSERVER_COMPATIBILITY_MANIFEST;
+        this.#platform = options.platform ?? process.platform;
+        this.#architecture = options.architecture ?? process.arch;
+        this.#hashFile = options.hashFile ?? sha256File2;
+        this.#probeNodeVersion = options.probeNodeVersion ?? probeNodeCliVersion;
+        this.#probeDesktopVersion = options.probeDesktopVersion ?? probeWindowsFileVersion;
+        this.#readDesktopLaunch = options.readDesktopLaunch ?? ((bundlePath) => buildZCodeAppServerLaunch(bundlePath, {}));
+      }
+      async inspect() {
+        let env;
+        try {
+          env = loadPersistedRuntimeEnvironment(
+            this.#env,
+            this.#homeDir,
+            this.#host ?? codexHostProfile(this.#homeDir)
+          );
+        } catch (error62) {
+          return unverified(`Bridge runtime settings could not be loaded: ${errorMessage(error62)}`, "node");
+        }
+        const nodeExecutable = env["ZCODE_BRIDGE_NODE"]?.trim() || "node";
+        if (this.#platform !== "win32" || this.#architecture !== "x64") {
+          return unverified(
+            `installed Official AppServer requires Windows x64, got ${this.#platform}/${this.#architecture}`,
+            nodeExecutable
+          );
+        }
+        const discovery = discoverZCodeInstall(env, { requireBuiltin: true });
+        if (!discovery.installDir || !discovery.zcodeEntrypoint || !discovery.builtinConfigFile) {
+          return unverified(
+            "installed ZCode Desktop AppServer with same-root builtin provider config was not found",
+            nodeExecutable
+          );
+        }
+        if (!isAbsolutePathForPlatform(discovery.installDir)) {
+          return unverified("installed ZCode path is not absolute", nodeExecutable);
+        }
+        let installDir;
+        let bundlePath;
+        let builtinPath;
+        let runtimeHostPath;
+        let desktopExecutablePath;
+        try {
+          installDir = await canonicalDirectory(discovery.installDir);
+          bundlePath = await canonicalFileInside(
+            installDir,
+            discovery.zcodeEntrypoint,
+            "installed AppServer bundle"
+          );
+          builtinPath = await canonicalFileInside(
+            installDir,
+            discovery.builtinConfigFile,
+            "installed builtin provider config"
+          );
+          runtimeHostPath = await canonicalFileInside(
+            installDir,
+            path10.join(installDir, "resources", "tools", "runtime-host", "zcode-runtime-host.exe"),
+            "installed runtime-host"
+          );
+          desktopExecutablePath = await canonicalFileInside(
+            installDir,
+            path10.join(installDir, "ZCode.exe"),
+            "installed Desktop executable"
+          );
+        } catch (error62) {
+          return unverified(errorMessage(error62), nodeExecutable);
+        }
+        let bundleBytes;
+        let builtinBytes;
+        let runtimeHostBytes;
+        let bundleSha256;
+        let builtinSha256;
+        let runtimeHostSha256;
+        try {
+          [{ size: bundleBytes }, bundleSha256] = await Promise.all([
+            lstat2(bundlePath),
+            this.#hashFile(bundlePath)
+          ]);
+          [{ size: builtinBytes }, builtinSha256] = await Promise.all([
+            lstat2(builtinPath),
+            this.#hashFile(builtinPath)
+          ]);
+          [{ size: runtimeHostBytes }, runtimeHostSha256] = await Promise.all([
+            lstat2(runtimeHostPath),
+            this.#hashFile(runtimeHostPath)
+          ]);
+        } catch (error62) {
+          return unverified(`could not verify installed Official runtime assets: ${errorMessage(error62)}`, nodeExecutable);
+        }
+        let launchEnv;
+        try {
+          await canonicalFileInside(installDir, path10.join(installDir, "resources", "app.asar"), "installed Desktop archive");
+          launchEnv = this.#readDesktopLaunch(bundlePath).env;
+        } catch (error62) {
+          return unverified(`installed Desktop launch metadata could not be inspected: ${errorMessage(error62)}`, nodeExecutable);
+        }
+        let desktopVersion = null;
+        try {
+          desktopVersion = normalizeDesktopVersion(await this.#probeDesktopVersion(desktopExecutablePath));
+        } catch (error62) {
+          return unverified(`installed Desktop version could not be inspected: ${errorMessage(error62)}`, nodeExecutable, {
+            install_dir: installDir,
+            install_source: discovery.source,
+            bundle_path: bundlePath,
+            bundle_bytes: bundleBytes,
+            bundle_sha256: bundleSha256,
+            builtin_provider_config_path: builtinPath,
+            builtin_provider_config_bytes: builtinBytes,
+            builtin_provider_config_sha256: builtinSha256,
+            runtime_host_path: runtimeHostPath,
+            runtime_host_bytes: runtimeHostBytes,
+            runtime_host_sha256: runtimeHostSha256
+          });
+        }
+        if (!launchEnv.ZCODE_APP_VERSION || !launchEnv.ZCODE_BUILD_COMMIT_ID) {
+          return unverified("installed Desktop AppServer launch identity metadata is unavailable", nodeExecutable, {
+            install_dir: installDir,
+            install_source: discovery.source,
+            desktop_version: desktopVersion,
+            bundle_path: bundlePath,
+            bundle_bytes: bundleBytes,
+            bundle_sha256: bundleSha256,
+            builtin_provider_config_path: builtinPath,
+            builtin_provider_config_bytes: builtinBytes,
+            builtin_provider_config_sha256: builtinSha256,
+            runtime_host_path: runtimeHostPath,
+            runtime_host_bytes: runtimeHostBytes,
+            runtime_host_sha256: runtimeHostSha256
+          });
+        }
+        let nodeVersion = null;
+        try {
+          nodeVersion = normalizeNodeVersion(await this.#probeNodeVersion(nodeExecutable));
+        } catch (error62) {
+          return unverified(`configured Node runtime could not be inspected: ${errorMessage(error62)}`, nodeExecutable, {
+            install_dir: installDir,
+            install_source: discovery.source,
+            desktop_version: desktopVersion,
+            bundle_path: bundlePath,
+            bundle_bytes: bundleBytes,
+            bundle_sha256: bundleSha256,
+            builtin_provider_config_path: builtinPath,
+            builtin_provider_config_bytes: builtinBytes,
+            builtin_provider_config_sha256: builtinSha256,
+            runtime_host_path: runtimeHostPath,
+            runtime_host_bytes: runtimeHostBytes,
+            runtime_host_sha256: runtimeHostSha256
+          });
+        }
+        const nodeCompatible = isSupportedNodeVersion(nodeVersion);
+        const manifest = this.#manifest.find(
+          (entry) => entry.desktop_version === desktopVersion && entry.bundle_bytes === bundleBytes && entry.bundle_sha256.toLowerCase() === bundleSha256.toLowerCase()
+        ) ?? null;
+        const mismatches = [];
+        if (!manifest) mismatches.push("desktop version/bundle bytes/SHA-256 are not in the compatibility manifest");
+        else {
+          if (manifest.desktop_app_version !== launchEnv.ZCODE_APP_VERSION || manifest.desktop_build_commit_id !== launchEnv.ZCODE_BUILD_COMMIT_ID) {
+            mismatches.push("Desktop launch identity does not match the compatibility manifest");
+          }
+          if (manifest.builtin_provider_config_bytes !== builtinBytes || manifest.builtin_provider_config_sha256.toLowerCase() !== builtinSha256.toLowerCase()) {
+            mismatches.push("builtin provider config identity does not match the compatibility manifest");
+          }
+          if (manifest.runtime_host_bytes !== runtimeHostBytes || manifest.runtime_host_sha256.toLowerCase() !== runtimeHostSha256.toLowerCase()) {
+            mismatches.push("runtime-host identity does not match the compatibility manifest");
+          }
+          if (manifest.node_compatibility !== SUPPORTED_NODE_RANGE || !nodeCompatible) {
+            mismatches.push(`Node ${nodeVersion} is outside the verified compatibility range ${manifest.node_compatibility}`);
+          }
+        }
+        const common = {
+          install_dir: installDir,
+          install_source: discovery.source,
+          desktop_version: desktopVersion,
+          bundle_path: bundlePath,
+          bundle_bytes: bundleBytes,
+          bundle_sha256: bundleSha256,
+          builtin_provider_config_path: builtinPath,
+          builtin_provider_config_bytes: builtinBytes,
+          builtin_provider_config_sha256: builtinSha256,
+          runtime_host_path: runtimeHostPath,
+          runtime_host_bytes: runtimeHostBytes,
+          runtime_host_sha256: runtimeHostSha256,
+          node_version: nodeVersion,
+          node_compatible: nodeCompatible,
+          manifest
+        };
+        if (mismatches.length > 0) {
+          return unverified(mismatches.join("; "), nodeExecutable, common);
+        }
+        return {
+          status: "OFFICIAL_RUNTIME_VERIFIED",
+          discount_capability: manifest?.coding_plan_discount_verified === true ? "OFFICIAL_DISCOUNT_VERIFIED" : "OFFICIAL_DISCOUNT_NOT_VERIFIED",
+          reason: null,
+          install_dir: installDir,
+          install_source: discovery.source,
+          desktop_version: desktopVersion,
+          bundle_path: bundlePath,
+          bundle_bytes: bundleBytes,
+          bundle_sha256: bundleSha256,
+          builtin_provider_config_path: builtinPath,
+          builtin_provider_config_bytes: builtinBytes,
+          builtin_provider_config_sha256: builtinSha256,
+          runtime_host_path: runtimeHostPath,
+          runtime_host_bytes: runtimeHostBytes,
+          runtime_host_sha256: runtimeHostSha256,
+          node_executable: nodeExecutable,
+          node_version: nodeVersion,
+          node_compatible: nodeCompatible,
+          manifest
+        };
+      }
+      async resolve() {
+        const descriptor = await this.inspect();
+        if (descriptor.status !== "OFFICIAL_RUNTIME_VERIFIED" || !descriptor.bundle_path || !descriptor.builtin_provider_config_path) {
+          throw new BridgeError(
+            "provider_config_invalid",
+            `OFFICIAL_RUNTIME_UNVERIFIED: ${descriptor.reason ?? "installed Official AppServer is unavailable"}; OFFICIAL_DISCOUNT_NOT_VERIFIED`
+          );
+        }
+        const base = this.#baseResolver ?? new NodeRuntimeResolver({
+          env: this.#env,
+          ...this.#homeDir ? { homeDir: this.#homeDir } : {},
+          ...this.#host ? { host: this.#host } : {}
+        });
+        const configured = await base.resolve();
+        return {
+          ...configured,
+          nodeExecutable: descriptor.node_executable,
+          zcodeEntrypoint: descriptor.bundle_path,
+          providerBuiltinConfigFile: descriptor.builtin_provider_config_path
+        };
+      }
+    };
+  }
+});
+
+// src/adapters/official-app-server-adapter.ts
+var official_app_server_adapter_exports = {};
+__export(official_app_server_adapter_exports, {
+  OfficialAppServerWorkerAdapter: () => OfficialAppServerWorkerAdapter
+});
+import path11 from "node:path";
+import { pathToFileURL as pathToFileURL3 } from "node:url";
+async function loadOfficialHostModule2(modulePath2) {
+  const value = await import(pathToFileURL3(path11.resolve(modulePath2)).href);
+  if (!value || typeof value.ZCodeAgentProcessManager !== "function" || typeof value.ZCodeProtocolClient !== "function") {
+    throw new BridgeError(
+      "provider_config_invalid",
+      "The Official Host module is missing required exports."
+    );
+  }
+  return value;
+}
+var OfficialAppServerWorkerAdapter;
+var init_official_app_server_adapter = __esm({
+  "src/adapters/official-app-server-adapter.ts"() {
+    "use strict";
+    init_official_app_server_runtime();
+    init_errors();
+    init_zcode_app_server_adapter();
+    init_official_host_adapter();
+    OfficialAppServerWorkerAdapter = class extends ZCodeAppServerAdapter {
+      constructor(options = {}) {
+        const runtimeResolver = options.officialRuntimeResolver ?? new OfficialAppServerRuntimeResolver({
+          env: options.childEnvBase,
+          ...options.homeDir ? { homeDir: options.homeDir } : {},
+          ...options.host ? { host: options.host } : {}
+        });
+        const packagedAssets = options.testOnlyOfficialHostAssets ? Promise.resolve(options.testOnlyOfficialHostAssets) : verifyOfficialHostAssets(options.testOnlyWorkerModuleUrl);
+        const moduleSource = options.testOnlyOfficialHostModule ?? (async () => loadOfficialHostModule2((await packagedAssets).hostModulePath));
+        let resolved;
+        const assets = () => {
+          resolved ??= Promise.all([runtimeResolver.inspect(), packagedAssets]).then(([descriptor, packaged]) => {
+            if (descriptor.status !== "OFFICIAL_RUNTIME_VERIFIED" || !descriptor.bundle_path || !descriptor.builtin_provider_config_path || !descriptor.runtime_host_path) {
+              try {
+                options.onEvent?.({
+                  type: "official_runtime_unverified",
+                  summary: "Installed ZCode AppServer is not verified for the Coding Plan discount",
+                  details: {
+                    status: descriptor.status,
+                    discount_capability: "OFFICIAL_DISCOUNT_NOT_VERIFIED",
+                    reason: descriptor.reason
+                  }
+                });
+              } catch {
+              }
+              throw new BridgeError(
+                "provider_config_invalid",
+                `OFFICIAL_RUNTIME_UNVERIFIED: ${descriptor.reason ?? "installed Official AppServer is unavailable"}; OFFICIAL_DISCOUNT_NOT_VERIFIED`
+              );
+            }
+            return {
+              descriptor,
+              assets: {
+                root: descriptor.install_dir,
+                hostModulePath: packaged.hostModulePath,
+                appServerEntryPath: descriptor.bundle_path,
+                builtinProviderConfigPath: descriptor.builtin_provider_config_path,
+                runtimeHostPath: descriptor.runtime_host_path,
+                manifestDigest: descriptor.bundle_sha256
+              }
+            };
+          });
+          return resolved;
+        };
+        const factory = createOfficialHostClientFactory({
+          assets: async () => (await assets()).assets,
+          moduleSource
+        });
+        const externalHostClientFactory = async (context) => {
+          const runtime = await assets();
+          const client = await factory(context);
+          try {
+            options.onEvent?.({
+              type: "official_runtime_verified",
+              summary: "Using verified installed ZCode AppServer",
+              details: {
+                status: runtime.descriptor.status,
+                discount_capability: runtime.descriptor.discount_capability,
+                desktop_version: runtime.descriptor.desktop_version,
+                bundle_sha256: runtime.descriptor.bundle_sha256,
+                runtime_host_sha256: runtime.descriptor.runtime_host_sha256,
+                node_version: runtime.descriptor.node_version,
+                install_source: runtime.descriptor.install_source
+              }
+            });
+          } catch {
+          }
+          return client;
+        };
+        super({
+          ...options,
+          resolver: runtimeResolver,
+          providerRetryLimit: 0,
+          externalHostClientFactory
+        });
+      }
+    };
+  }
+});
+
 // src/manager/normalize.ts
 var normalize_exports = {};
 __export(normalize_exports, {
@@ -28915,10 +29452,10 @@ var init_start_plan_private_channel = __esm({
 
 // src/worker/worker-main.ts
 init_result_contract();
-import { createHash as createHash9, randomUUID as randomUUID3 } from "node:crypto";
+import { createHash as createHash10, randomUUID as randomUUID3 } from "node:crypto";
 import { closeSync as closeSync2, createWriteStream, readFileSync as readFileSync5, writeFileSync, writeSync } from "node:fs";
 import { Socket } from "node:net";
-import path10 from "node:path";
+import path12 from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 
 // src/runtime/build-provenance.ts
@@ -29377,6 +29914,10 @@ async function runZCodeAdapter(bootstrap, execution, interaction, workerIdentity
     OfficialHostAdapter: OfficialHostAdapter2,
     loadOfficialHostProviderRuntimeAuthFactory: loadOfficialHostProviderRuntimeAuthFactory2
   } = await Promise.resolve().then(() => (init_official_host_adapter(), official_host_adapter_exports));
+  const { OfficialAppServerWorkerAdapter: OfficialAppServerWorkerAdapter2 } = await Promise.resolve().then(() => (init_official_app_server_adapter(), official_app_server_adapter_exports));
+  const { isOfficialCodingPlanProvider: isOfficialCodingPlanProvider2, OFFICIAL_CODING_PLAN_PROVIDER_ID: OFFICIAL_CODING_PLAN_PROVIDER_ID2 } = await Promise.resolve().then(() => (init_official_app_server_runtime(), official_app_server_runtime_exports));
+  const { loadPersistedRuntimeEnvironment: loadPersistedRuntimeEnvironment2 } = await Promise.resolve().then(() => (init_resolver(), resolver_exports));
+  const { resolveSessionPreferences: resolveSessionPreferences2 } = await Promise.resolve().then(() => (init_session_preferences(), session_preferences_exports));
   const { ZCodeAppServerAdapter: ZCodeAppServerAdapter2 } = await Promise.resolve().then(() => (init_zcode_app_server_adapter(), zcode_app_server_adapter_exports));
   const { buildTaskResult: buildTaskResult2 } = await Promise.resolve().then(() => (init_normalize(), normalize_exports));
   const { normalizeUsage: normalizeUsage2, phaseDuration: phaseDuration2 } = await Promise.resolve().then(() => (init_normalize2(), normalize_exports2));
@@ -29567,6 +30108,7 @@ async function runZCodeAdapter(bootstrap, execution, interaction, workerIdentity
     }, { once: true });
     return current;
   };
+  let providerAuthModel = execution.task.model;
   const resolveProviderRuntimeAuth = async (request, config2, signal) => {
     const unavailable = () => ({
       headersApplied: false,
@@ -29576,7 +30118,7 @@ async function runZCodeAdapter(bootstrap, execution, interaction, workerIdentity
     const providerId = typeof request.providerId === "string" ? request.providerId : "";
     const modelSelection = asRecord4(request.modelSelection);
     const modelId = typeof modelSelection.modelId === "string" ? modelSelection.modelId : "";
-    if (!providerId || !modelId || typeof modelSelection.providerId === "string" && modelSelection.providerId !== providerId || execution.task.model?.provider_id !== providerId || execution.task.model.model_id !== modelId) {
+    if (!providerId || !modelId || typeof modelSelection.providerId === "string" && modelSelection.providerId !== providerId || providerAuthModel?.provider_id !== providerId || providerAuthModel.model_id !== modelId) {
       return unavailable();
     }
     const facts = accountProviderRuleFacts(providerId, config2);
@@ -29631,6 +30173,13 @@ async function runZCodeAdapter(bootstrap, execution, interaction, workerIdentity
     resolveProviderRuntimeAuth,
     onEvent: (event) => {
       runtimeEvents?.publish(event);
+      if (event.type === "official_runtime_verified") {
+        const digest = event.details?.["bundle_sha256"];
+        if (typeof digest === "string" && /^[0-9a-f]{64}$/u.test(digest)) {
+          writeDiagnostic(`[bridge-worker] installed-runtime ${bootstrap.task_id} ${bootstrap.attempt} ${digest}
+`);
+        }
+      }
       if (event.type === "session_ready" && typeof event.details?.["session_id"] === "string") {
         modelProfile.session_id = event.details["session_id"];
       } else if (event.type === "model_selected") {
@@ -29710,13 +30259,21 @@ async function runZCodeAdapter(bootstrap, execution, interaction, workerIdentity
       return (await interaction.acceptCommittedReply()).answer;
     } : void 0
   };
-  const selectedAdapter = dependencies.testOnlyLegacyDirectAdapter ? "direct_app_server" : selectProductionAdapter();
-  const adapter = selectedAdapter === "direct_app_server" ? new ZCodeAppServerAdapter2(adapterOptions) : new OfficialHostAdapter2({
-    ...adapterOptions,
-    ...dependencies.testOnlyOfficialHostModule ? { testOnlyOfficialHostModule: dependencies.testOnlyOfficialHostModule } : {},
-    ...dependencies.testOnlyWorkerModuleUrl ? { testOnlyWorkerModuleUrl: dependencies.testOnlyWorkerModuleUrl } : {}
-  });
   try {
+    const selectedAdapter = dependencies.testOnlyLegacyDirectAdapter ? "direct_app_server" : selectProductionAdapter();
+    const officialHostOptions = {
+      ...adapterOptions,
+      ...dependencies.testOnlyOfficialHostModule ? { testOnlyOfficialHostModule: dependencies.testOnlyOfficialHostModule } : {},
+      ...dependencies.testOnlyWorkerModuleUrl ? { testOnlyWorkerModuleUrl: dependencies.testOnlyWorkerModuleUrl } : {}
+    };
+    const preferences = selectedAdapter === "direct_app_server" ? null : resolveSessionPreferences2(
+      execution.task.model,
+      loadPersistedRuntimeEnvironment2(process.env, void 0, execution.host_profile),
+      execution.execution_profile_id
+    );
+    const codingPlanPreferences = preferences?.model && isOfficialCodingPlanProvider2(preferences.model.provider_id) ? { ...preferences, model: { ...preferences.model, provider_id: OFFICIAL_CODING_PLAN_PROVIDER_ID2 } } : null;
+    if (codingPlanPreferences) providerAuthModel = codingPlanPreferences.model;
+    const adapter = selectedAdapter === "direct_app_server" ? new ZCodeAppServerAdapter2(adapterOptions) : codingPlanPreferences ? new OfficialAppServerWorkerAdapter2({ ...officialHostOptions, sessionPreferences: codingPlanPreferences }) : new OfficialHostAdapter2(officialHostOptions);
     const workspace = {
       requestedPath: execution.task.workspace,
       canonicalPath: bootstrap.workspace_ref,
@@ -29863,7 +30420,7 @@ function buildExecutionCleanupProof(outcome) {
     workspace_retained: true,
     adapter_process_id: receipt.rootPid,
     adapter_start_fingerprint: root.fingerprint,
-    process_tree_receipt_digest: createHash9("sha256").update(JSON.stringify(receipt), "utf8").digest("hex"),
+    process_tree_receipt_digest: createHash10("sha256").update(JSON.stringify(receipt), "utf8").digest("hex"),
     process_tree_member_count: receipt.members.length,
     managed_browser_cleanup_verified: true,
     adapter_cleanup: adapterCleanup
@@ -30044,7 +30601,7 @@ function digestProvenance(value) {
     bridge: { path: value.bridge.path, sha256: value.bridge.sha256 },
     worker: { path: value.worker.path, sha256: value.worker.sha256 }
   });
-  return createHash9("sha256").update(canonical2, "utf8").digest("hex");
+  return createHash10("sha256").update(canonical2, "utf8").digest("hex");
 }
 function readPrivateFrame2(fd, maximum2) {
   const frame = readFileSync5(fd);
@@ -30065,8 +30622,8 @@ function writePrivateFrame2(fd, value, encoded = JSON.stringify(value)) {
   writeFileSync(fd, "\n", "utf8");
   closeSync2(fd);
 }
-var invokedWorkerPath = process.argv[1] ? path10.resolve(process.argv[1]) : null;
-var modulePath = path10.resolve(fileURLToPath4(import.meta.url));
+var invokedWorkerPath = process.argv[1] ? path12.resolve(process.argv[1]) : null;
+var modulePath = path12.resolve(fileURLToPath4(import.meta.url));
 if (invokedWorkerPath === modulePath) await runWorkerMain();
 export {
   createBoundedRuntimeEventPublisher,

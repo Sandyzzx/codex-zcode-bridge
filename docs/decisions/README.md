@@ -1,8 +1,8 @@
 # 决策路由 / Decisions
 
 > Status: AUTHORITATIVE（仅指本索引）
-> Last updated: 2026-11-16（增加 ADR-039 本地取消修复路由）
-> Last verified: 2026-11-15，核对 ADR-032–038 的 Preview.5 基线、Preview.6 Owner 发布范围、真实 Coding Plan/Start Plan 核心路径、Workspace 边界处置、官方签名 3.18.2 runtime host、带数据升级回滚、ADR-030 保持不变、R7 集成、官方 3.18.x 认证边界与 Post-Audit 最小架构整改。
+> Last updated: 2026-11-18（增加 ADR-040 安装版官方 AppServer Runtime 路由）
+> Last verified: 2026-11-18，核对 V5 安装版 AppServer 0.67 证据与 Preview.8 打包 Official Host 路径；此前 Preview.5/6 基线和认证边界仍按各自文档标注。
 > Verified against: released Preview.6 `545c02f745a4e2ab38a1fa3c31880ac80b84a310` + post-audit remediation branch
 
 先读当前 [架构](../ARCHITECTURE.md)/[接口](../INTERFACES.md)，只在需要解释取舍时加载对应决策。文件保持原路径和历史正文；Partially superseded 的标注优先于历史段落。
@@ -34,6 +34,7 @@
 | 官方认证复用 | [037](ADR-037-official-zcode-authentication-reuse.md) | Accepted；Official Host 拥有凭据、OAuth、账户身份和请求认证；Bridge 不维护第二套认证；Preview.6 仅声明 Windows x64 + Desktop 3.18.2.10443，旧版本保持 NOT_VERIFIED |
 | 最小架构整改 | [038](ADR-038-preview6-minimum-architecture-remediation.md) | Accepted；保留 SQLite/Worker/官方 Runtime 核心，退役旧 JSON 查询、Ledger、人类报告/主会话 Token 链、Desktop task-index 镜像；修正 Usage/Context/Events/Recovery 与 CI/生成物合同 |
 | Host 授权取消 | [039](ADR-039-host-authorized-cancellation.md) | 当前本地修复；无 Claim 的 Launch Intent 可取消并保留未核实清理占用；Running 的 cleanup-only Hold 通过新鲜取消树证明追加消解，保留原 CAS 与历史 |
+| 官方 Runtime | [040](ADR-040-installed-official-appserver-runtime.md) | 候选集成；优先复用安装版官方 AppServer，兼容 Manifest 门禁与显式无优惠 fallback |
 
 ADR-032、ADR-033、ADR-034 和 ADR-035 的正文记录决定作出时的状态；顶部 Applicability 标注当前适用性。当前实现状态以 [ARCHITECTURE](../ARCHITECTURE.md) 和 [PROJECT_STATE](../PROJECT_STATE.md) 为准：Preview.6 的 Windows x64 Worker 使用 `OfficialHostAdapter`、固定 ZCode 3.18.2、官方只读 Start Plan 认证与官方签名 runtime host。Linux、macOS 与 Windows 非 x64 在构造 Adapter 前 fail closed；direct Adapter 只保留隔离测试注入覆盖。`research/zcode-official-host-integration-v1/` 的 [Implementation Summary](../research/zcode-official-host-integration-v1/IMPLEMENTATION_SUMMARY.md) 与 [Final Acceptance](../research/zcode-official-host-integration-v1/FINAL_ACCEPTANCE_REPORT.md) 是 Preview.4/3.18.0 历史证据，不能作为 Preview.6 的兼容通过证明。
 

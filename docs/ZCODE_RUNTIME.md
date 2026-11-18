@@ -1,13 +1,15 @@
 # ZCode 运行配置边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-15
-> Last verified: 2026-11-15，核对 Preview.7 的 Desktop/Official Host 版本来源、启动参数、固定 3.18.2 资源、官方签名 Windows x64 runtime host、BOM 完整性，以及 ADR-038 的旧 Runtime 删除与仅 Windows x64 生产选择；3.18.0/3.18.1 实机安装组合仍待验收。
-> Verified against: Preview.7 release branch based on `397f41e16b7072fb8ddfae5bf346807f3d539535`
+> Last updated: 2026-11-18（ADR-040 Coding Plan 安装版 Runtime 候选）
+> Last verified: 2026-11-18，核对安装版 ZCode `3.18.2.10443` 的 Bundle、builtin Provider 配置、runtime host、Node 范围、Resolver/Adapter 定向测试和生产 Coding Plan 账单；Start Plan 只做离线审计。
+> Verified against: `02cf2fa92c8235370fe7a883d4c5b30d93a8ab33` + candidate integration branch
 
 当前生产路径是 `node zcode.cjs app-server --stdio --surface desktop`，不是历史 CLI `--prompt --json`。任务 Adapter 与模型目录探测共用该启动合同；解析入口为 `NodeRuntimeResolver`，配置项与用户设置方法见仓库 README。
 
 ADR-038 后，插件资源目录只保留固定 ZCode 3.18.2 Official Host；ZCode 3.18.0 的整套 Runtime 不再随新制品分发，Preview.5 回滚继续使用其历史发布包。生产 Adapter 选择在构造前只接受 Windows x64 的 `official_host`；Linux、macOS、Windows 非 x64 与未知架构返回 `unsupported_worker_platform`。direct Adapter 只用于隔离测试注入，不是其他平台的生产回退。
+
+ADR-040 候选为 `account:bigmodel-individual-coding-plan` 增加版本门禁后的安装版 Runtime：Resolver 必须从现有路径发现取得同一安装根下的 `resources/glm/zcode.cjs`、`resources/config/provider/zcode-builtin.json` 与 `resources/tools/runtime-host/zcode-runtime-host.exe`，并精确匹配 Desktop `3.18.2.10443`、文件大小、SHA-256、Windows x64 和 Node `>=24.16.0 <25`。未知版本、Hash 或同根关系返回 `OFFICIAL_RUNTIME_UNVERIFIED`；不会静默使用固定制品并宣称优惠兼容。Start Plan 和其他 Provider 不应用此重定向。
 
 若固定 AppServer 源旁存在安装版 Desktop `app.asar`，Bridge 只读解析其版本与 build metadata，并以这一对 `ZCODE_APP_VERSION` / `ZCODE_BUILD_COMMIT_ID` 为最高优先级。独立 Host 没有相邻 `app.asar` 时，`ZCODE_APP_VERSION` 取自校验后的 Official Host `ZCODE_PRODUCT_VERSION`；`ZCODE_BUILD_COMMIT_ID` 保持缺失，不从源码提交号或 AppServer CLI 版本推导。损坏 ASAR、非法或不完整身份、非法产品版本按 `provider_config_invalid` fail-closed。Bridge 不硬编码 Desktop 版本，不修改 Desktop 安装，也不伪造 HTTP Header。
 

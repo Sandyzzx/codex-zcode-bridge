@@ -2,7 +2,7 @@
 
 把有明确边界的开发任务从 Codex 交给本机官方 ZCode Agent Runtime，在 Codex 中跟进进度，并独立审查实际改动后再决定是否接受。
 
-当前已发布 Preview 版本为 `2.0.0-preview.6`；本源码树是该发布基线上的 Post-Audit 架构减法与正确性整改候选。Stable `v1.7.1` 是独立发布渠道；后续改动在完成 PR、CI 与 Owner 裁决前不得视为已发布。
+本插件属于 `2.0.0-preview.9`。Stable 通过独立的 Marketplace 渠道发布。
 
 ## 支持范围
 
@@ -12,6 +12,33 @@
 | Z.ai Coding Plan | 使用既有的官方 Coding Plan 账户/API Key 路径。 |
 
 两条路径都通过官方 ZCode AppServer 执行。Start Plan 的真实证据目前仅覆盖 Windows、官方 AppServer `0.17.1` 和 `GLM-5.3-Flash`；其他模型与平台仍取决于官方 Registry、账户权益和实际环境，不能从单一模型的成功推广为全部 Start Plan 模型已验证。Windows runtime host 是随 Bridge 固定分发的官方签名产物，Bridge 不在用户机器上发现、下载或安装 helper。
+
+## 官方 Coding Plan 计费支持
+
+本集成候选分支在 Windows x64 上优先复用已安装的官方 ZCode AppServer 执行
+个人 Coding Plan。Bridge 精确校验 Desktop 版本、Bundle、同根 builtin
+Provider 配置、runtime host 与 Node 范围；不匹配时以
+`OFFICIAL_RUNTIME_UNVERIFIED` fail closed，不会静默宣称积分优惠。
+
+V5 证据覆盖 `GLM-5.3-Flash`、个人 Coding Plan 与
+ZCode `3.18.2.10443`：一次原生对照和三次 Bridge 实验均得到约 `0.67` 的
+官方额外积分倍率，相当于该已测场景约 `1.5x` 模型使用量。非高峰 `0.5` 是
+独立的时段倍率，不能与额外 `0.67` 混为一项，也不能把结果推广到所有模型、
+账户、时段或 Start Plan。
+
+本轮生产路径另通过构建后的 MCP/Worker/SQLite 链真实复现：`22,735` Token
+对应官方 `1.7666` 积分，正常预期 `2.636755`，有效额外倍率
+`0.6699901963`。官方账单延迟结算后使用同一小时快照补充对账，未重派模型任务。
+
+源码仓库提供 Cost Lab 本地网页，用于运行环境校验、零模型协议 Smoke、官方
+账单读取、明确授权的真实 Coding Plan 对账和脱敏历史导出：
+
+```powershell
+npm run build
+npm run cost-lab:web
+```
+
+Cost Lab 不进入插件生产包，也不是绕过 Bridge 权限边界的通用命令入口。
 
 ## 使用前
 
@@ -63,6 +90,10 @@ Push、Merge、Tag、Release、生产 Authority 切换、任务范围外删除�
 Git Worktree 只是工作目录布局，不是 OS 沙箱。`allowed_paths` 和 `forbidden_paths` 是任务指令，不是强制访问控制。派发前应检查 ZCode 可见的工作区内容，不要在 Prompt 中放入凭据、JWT、私钥或敏感账户数据。
 
 Start Plan 不支持绕过 CAPTCHA 或 unusual activity；需要用户交互的官方账户流程应由用户在官方 ZCode 客户端中处理，Bridge 在无法确认权益时 fail-closed。
+
+本候选分支的 Start Plan 只完成了离线兼容性研究：它使用独立的 unsigned
+Provider、凭据、Runtime Auth、Runtime Headers 与 `zcode-plan/anthropic`
+Gateway；真实 Start Plan E2E、额度、CAPTCHA 与优惠均未在本次集成中验证。
 
 ## SQLite Authority
 

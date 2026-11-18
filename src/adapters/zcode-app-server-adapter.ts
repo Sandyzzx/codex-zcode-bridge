@@ -51,7 +51,7 @@ import {
   runtimeAuthReply,
   zcodeDataBaseDir,
 } from "../runtime/account-provider.js";
-import { resolveSessionPreferences } from "../runtime/session-preferences.js";
+import { resolveSessionPreferences, type ResolvedSessionPreferences } from "../runtime/session-preferences.js";
 import { ADAPTER_CLEANUP_TIMEOUT_MS, resolveTaskTimeout } from "../runtime/task-timeout.js";
 import { codexHostProfile, validateHostProfile, type BridgeHostProfile } from "../host/profile.js";
 import { browserListParamsSchema, browserExecuteParamsSchema, type BrowserListParams, type BrowserExecuteParams } from "../browser/params.js";
@@ -387,6 +387,7 @@ export interface ZCodeAppServerAdapterOptions {
   host?: BridgeHostProfile;
   /** Candidate-only execution profile; omitted JSON path behavior is unchanged. */
   executionProfileId?: string;
+  sessionPreferences?: ResolvedSessionPreferences;
   now?: () => Date;
   resolveInteraction?: (request: ZCodeInteractionRequest, signal: AbortSignal) => Promise<Record<string, unknown>>;
   onOutcomeCheckpoint?: (outcome: ZCodeRunOutcome) => void;
@@ -463,6 +464,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
   readonly #homeDir: string;
   readonly #host: BridgeHostProfile;
   readonly #executionProfileId: string | undefined;
+  readonly #sessionPreferences: ResolvedSessionPreferences | undefined;
   readonly #now: () => Date;
   readonly #resolveInteraction: ZCodeAppServerAdapterOptions["resolveInteraction"];
   readonly #onOutcomeCheckpoint: ZCodeAppServerAdapterOptions["onOutcomeCheckpoint"];
@@ -500,6 +502,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     this.#homeDir = options.homeDir ?? homedir();
     this.#host = validateHostProfile(options.host ?? codexHostProfile(this.#homeDir));
     this.#executionProfileId = options.executionProfileId;
+    this.#sessionPreferences = options.sessionPreferences;
     this.#now = options.now ?? (() => new Date());
     this.#probe = options.probe ?? createPlatformProbe();
     this.#resolveInteraction = options.resolveInteraction;
@@ -708,7 +711,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         void this.#resolver.resolve().then(resolve, reject).finally(() => entry.abort.signal.removeEventListener("abort", aborted));
       });
       entry.abort.signal.throwIfAborted();
-      const taskProviderId = task.model?.provider_id;
+      const taskProviderId = this.#sessionPreferences?.model?.provider_id ?? task.model?.provider_id;
       const taskProviderFacts = accountProviderRuleFacts(taskProviderId, config);
       const otherStartPlanSelected = taskProviderFacts?.planKind === "start-plan"
         && taskProviderId !== BIGMODEL_START_PLAN_PROVIDER_ID;
@@ -758,7 +761,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
         || accountProviderPayload.providers[BIGMODEL_START_PLAN_PROVIDER_ID].access.entitled !== true)) {
         return this.#startPlanReadinessFailure(entry, "Start Plan provider snapshot could not be prepared after live entitlement verification.");
       }
-      const preferences = resolveSessionPreferences(task.model, runtimeEnv, this.#executionProfileId);
+      const preferences = this.#sessionPreferences ?? resolveSessionPreferences(task.model, runtimeEnv, this.#executionProfileId);
       const childEnv = this.#buildChildEnv(config, runtimeEnv);
       // This retry setting is limited to the explicitly brokered Start Plan
       // attempt and does not change the Coding Plan default environment.

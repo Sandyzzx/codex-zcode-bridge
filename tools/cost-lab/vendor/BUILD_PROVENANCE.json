@@ -1,0 +1,92 @@
+{
+  "format_version": 1,
+  "artifact": "tools/cost-lab/vendor/official-billing-runtime.mjs",
+  "official_version": "3.18.2",
+  "official_commit": "fec975905a2abd4c07e35c40d51fa097a2258ec9",
+  "official_tree": "5e90fec80706b8381f94e4eef48cf821b9868916",
+  "source_tree_dirty": false,
+  "source_note": "Built from the fixed clean ZCode source tree with only the ordered Cost Lab billing patch applied in a temporary detached worktree.",
+  "source_patch": {
+    "path": "tools/cost-lab/vendor/patches/cost-lab-billing-runtime.patch",
+    "bytes": 23004,
+    "sha256": "723983FBDA9803BD5970F6A93A442E79896281D87B11A83A58AFEF06DF24D9F0",
+    "files": [
+      "packages/services/src/credential/credentialService.ts",
+      "packages/services/src/official-host/costLabBillingRuntime.ts",
+      "packages/services/src/official-host/runtimeHostEntry.ts",
+      "packages/shared/src/credential-security/contract.ts",
+      "packages/shared/src/credential-security/systemCredentialCipher.ts"
+    ]
+  },
+  "entry": "packages/services/src/official-host/runtimeHostEntry.ts",
+  "entry_sha256": "4AD1AE2C5A3128886E78CD9A0780B182303B885785BD24BA0DFEF386AFAA66E9",
+  "facade": "packages/services/src/official-host/costLabBillingRuntime.ts",
+  "facade_sha256": "365FECC4647A489EC549C3F64ED3D2023783AE386684CF477919A56FF2877C9E",
+  "dependency_locks": {
+    "pnpm-lock.yaml": "392355F908297AFD0B7B169B603335F0543FCB752D5110B6016AEF51067C8F85",
+    "package-lock.json": "E01A3F03CE4E303D68E5C98866D9BEAEFD7A6FA8E337274C863CE90F0DB2BA9D"
+  },
+  "builder": {
+    "name": "esbuild",
+    "version": "0.28.2",
+    "node": "24.16.0",
+    "target": "node24",
+    "format": "esm",
+    "platform": "node",
+    "rebuild_status": "Historical deterministic build; no rebuild script is shipped in this checkout.",
+    "reproducibility": {
+      "builds_compared": 2,
+      "result": "BYTE_IDENTICAL",
+      "sha256": [
+        "4414B2436D26F7D6D0467C69FFA182C25496A4E3453FF8AFE8F9D8D7D9129E62",
+        "4414B2436D26F7D6D0467C69FFA182C25496A4E3453FF8AFE8F9D8D7D9129E62"
+      ]
+    }
+  },
+  "external_dependencies": [
+    {
+      "name": "@napi-rs/keyring",
+      "version": "2.1.2",
+      "native_package": "@napi-rs/keyring-win32-x64-msvc@2.1.2"
+    }
+  ],
+  "bundle_bytes": 1672227,
+  "bundle_sha256": "DCB3FC7CB7A62E7A6DBE7CE8A9E1427075309458453641F6A4C7E8E1971A63E6",
+  "bundle_integration_edit": {
+    "base_sha256": "4414B2436D26F7D6D0467C69FFA182C25496A4E3453FF8AFE8F9D8D7D9129E62",
+    "scope": "Retain the source model hour labels and model rows from the official usage-detail response before display normalization."
+  },
+  "integration_patch": {
+    "name": "cost-lab-exact-origin-read-only-guard",
+    "allowed_origins": [
+      "https://bigmodel.cn",
+      "https://zcode.z.ai",
+      "https://api.z.ai"
+    ],
+    "redirect_policy": "error",
+    "write_exception": "POST /api/biz/v1/organization/:org/projects/:project/api_keys/:key/access_tokens",
+    "credential_policy": "READ_ONLY_NO_KEYRING_OR_SOURCE_MARKER_CREATION",
+    "location_cache_policy": "READ_ONLY_PROJECT_TOKEN_LOCATION",
+    "oauth_refresh_policy": "NOT_COMPOSED"
+  },
+  "native_files": [
+    {
+      "path": "plugins/codex-zcode-bridge/worker/vendor/official-host/win32-x64-node24.16.0-zcode3.18.2-fec97590/node_modules/@napi-rs/keyring/index.js",
+      "sha256": "8A89DB37F981D05B484EB063ADAE3399660AE7734AD38797463E5691382F5036"
+    },
+    {
+      "path": "plugins/codex-zcode-bridge/worker/vendor/official-host/win32-x64-node24.16.0-zcode3.18.2-fec97590/node_modules/@napi-rs/keyring/package.json",
+      "sha256": "4BA8C90AC72BE27FCB3337ED7BC0159C68747E0824294DF5F2AAAEB03130CD4F"
+    },
+    {
+      "path": "plugins/codex-zcode-bridge/worker/vendor/official-host/win32-x64-node24.16.0-zcode3.18.2-fec97590/node_modules/@napi-rs/keyring/LICENSE",
+      "sha256": "02965ED67E29F871A53F7A7AFA593A0DDC8020F86CCCE0FAAF1AA59215B5269E"
+    }
+  ],
+  "native_reuse": {
+    "package": "@napi-rs/keyring-win32-x64-msvc@2.1.2",
+    "source": "plugins/codex-zcode-bridge/worker/vendor/official-host/win32-x64-node24.16.0-zcode3.18.2-fec97590/node_modules/@napi-rs/keyring-win32-x64-msvc/keyring.win32-x64-msvc.node",
+    "sha256": "52B16658275B7848F8081A6542FEE3448F1B1C5D3A36487107AE0E7CEC95AC6F",
+    "loader": "NAPI_RS_NATIVE_LIBRARY_PATH"
+  }
+}

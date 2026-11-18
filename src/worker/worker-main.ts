@@ -406,6 +406,10 @@ async function runZCodeAdapter(
     OfficialHostAdapter,
     loadOfficialHostProviderRuntimeAuthFactory,
   } = await import("../adapters/official-host-adapter.js");
+  const { OfficialAppServerWorkerAdapter } = await import("../adapters/official-app-server-adapter.js");
+  const { isOfficialCodingPlanProvider, OFFICIAL_CODING_PLAN_PROVIDER_ID } = await import("../runtime/official-app-server-runtime.js");
+  const { loadPersistedRuntimeEnvironment } = await import("../runtime/resolver.js");
+  const { resolveSessionPreferences } = await import("../runtime/session-preferences.js");
   const { ZCodeAppServerAdapter } = await import("../adapters/zcode-app-server-adapter.js");
   const { buildTaskResult } = await import("../manager/normalize.js");
   const { normalizeUsage, phaseDuration } = await import("../usage/normalize.js");
@@ -555,6 +559,7 @@ async function runZCodeAdapter(
     signal.addEventListener("abort", () => { if (cachedAuth === current) clearCachedAuth(); }, { once: true });
     return current;
   };
+  let providerAuthModel = execution.task.model;
   const resolveProviderRuntimeAuth = async (
     request: Record<string, unknown>,
     config: ZCodeRuntimeConfig,
@@ -573,8 +578,8 @@ async function runZCodeAdapter(
       !providerId
       || !modelId
       || (typeof modelSelection.providerId === "string" && modelSelection.providerId !== providerId)
-      || execution.task.model?.provider_id !== providerId
-      || execution.task.model.model_id !== modelId
+      || providerAuthModel?.provider_id !== providerId
+      || providerAuthModel.model_id !== modelId
     ) {
       return unavailable();
     }
@@ -639,6 +644,12 @@ async function runZCodeAdapter(
     resolveProviderRuntimeAuth,
     onEvent: (event) => {
       runtimeEvents?.publish(event);
+      if (event.type === "official_runtime_verified") {
+        const digest = event.details?.["bundle_sha256"];
+        if (typeof digest === "string" && /^[0-9a-f]{64}$/u.test(digest)) {
+          writeDiagnostic(`[bridge-worker] installed-runtime ${bootstrap.task_id} ${bootstrap.attempt} ${digest}\n`);
+        }
+      }
       if (event.type === "session_ready" && typeof event.details?.["session_id"] === "string") {
         modelProfile.session_id = event.details["session_id"];
       } else if (event.type === "model_selected") {
@@ -727,19 +738,31 @@ async function runZCodeAdapter(
       return (await interaction.acceptCommittedReply()).answer;
     } : undefined,
   };
-  const selectedAdapter = dependencies.testOnlyLegacyDirectAdapter
-    ? "direct_app_server" as const
-    : selectProductionAdapter();
-  const adapter = selectedAdapter === "direct_app_server"
-    ? new ZCodeAppServerAdapter(adapterOptions)
-    : new OfficialHostAdapter({
-        ...adapterOptions,
-        ...(dependencies.testOnlyOfficialHostModule
-          ? { testOnlyOfficialHostModule: dependencies.testOnlyOfficialHostModule } : {}),
-        ...(dependencies.testOnlyWorkerModuleUrl
-          ? { testOnlyWorkerModuleUrl: dependencies.testOnlyWorkerModuleUrl } : {}),
-      });
   try {
+    const selectedAdapter = dependencies.testOnlyLegacyDirectAdapter
+      ? "direct_app_server" as const
+      : selectProductionAdapter();
+    const officialHostOptions = {
+      ...adapterOptions,
+      ...(dependencies.testOnlyOfficialHostModule
+        ? { testOnlyOfficialHostModule: dependencies.testOnlyOfficialHostModule } : {}),
+      ...(dependencies.testOnlyWorkerModuleUrl
+        ? { testOnlyWorkerModuleUrl: dependencies.testOnlyWorkerModuleUrl } : {}),
+    };
+    const preferences = selectedAdapter === "direct_app_server" ? null : resolveSessionPreferences(
+      execution.task.model,
+      loadPersistedRuntimeEnvironment(process.env, undefined, execution.host_profile),
+      execution.execution_profile_id,
+    );
+    const codingPlanPreferences = preferences?.model && isOfficialCodingPlanProvider(preferences.model.provider_id)
+      ? { ...preferences, model: { ...preferences.model, provider_id: OFFICIAL_CODING_PLAN_PROVIDER_ID } }
+      : null;
+    if (codingPlanPreferences) providerAuthModel = codingPlanPreferences.model;
+    const adapter = selectedAdapter === "direct_app_server"
+      ? new ZCodeAppServerAdapter(adapterOptions)
+      : codingPlanPreferences
+        ? new OfficialAppServerWorkerAdapter({ ...officialHostOptions, sessionPreferences: codingPlanPreferences })
+        : new OfficialHostAdapter(officialHostOptions);
     const workspace: WorkspaceRef = {
       requestedPath: execution.task.workspace,
       canonicalPath: bootstrap.workspace_ref,

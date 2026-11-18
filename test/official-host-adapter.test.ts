@@ -607,7 +607,8 @@ test("private Start Plan auth rejects a foreign turn and injects the secret only
   const root = await makeTempDir("official-host-start-plan");
   try {
     const builtin = path.join(root, "builtin.json");
-    const personal = path.join(root, "provider_config.json");
+    const personal = path.join(root, ".zcode", "v2", "provider_config.json");
+    await mkdir(path.dirname(personal), { recursive: true });
     await writeFile(builtin, JSON.stringify({
       revision: 1,
       config: { providerConfigRules: { providerRules: [{

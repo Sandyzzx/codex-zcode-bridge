@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Cost Lab | Official Runtime Billing Verification</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="atmosphere" aria-hidden="true"></div>
+  <header class="masthead">
+    <a class="brand" href="#dashboard" aria-label="Cost Lab home">
+      <span class="brand-mark">CL</span>
+      <span>
+        <strong>Cost Lab</strong>
+        <small>Official runtime billing verification</small>
+      </span>
+    </a>
+    <div class="masthead-status">
+      <span class="status-dot" id="server-dot"></span>
+      <span id="server-status">Connecting to local server</span>
+    </div>
+  </header>
+
+  <nav class="rail" aria-label="Cost Lab sections">
+    <button class="nav-item active" data-page="dashboard"><span>01</span>Dashboard</button>
+    <button class="nav-item" data-page="environment"><span>02</span>Environment</button>
+    <button class="nav-item" data-page="verification"><span>03</span>Coding Plan</button>
+    <button class="nav-item" data-page="billing"><span>04</span>Billing Analysis</button>
+    <button class="nav-item" data-page="history"><span>05</span>History</button>
+    <button class="nav-item" data-page="start-plan"><span>06</span>Start Plan</button>
+  </nav>
+
+  <main>
+    <section class="page active" id="page-dashboard">
+      <div class="page-heading reveal">
+        <p class="eyebrow">Runtime truth, not a mock</p>
+        <h1>Measure the execution path.<br><em>Verify the credits.</em></h1>
+        <p class="lede">Local inspection of the installed ZCode AppServer, official billing access, and the last attributable Coding Plan experiment.</p>
+      </div>
+      <div class="status-strip reveal">
+        <article><small>Runtime</small><strong id="dash-runtime">Checking</strong></article>
+        <article><small>Discount</small><strong id="dash-discount">Checking</strong></article>
+        <article><small>Billing reader</small><strong id="dash-billing">Checking</strong></article>
+        <article><small>Last ratio</small><strong id="dash-ratio">No experiment</strong></article>
+      </div>
+      <div class="split-grid">
+        <article class="panel reveal">
+          <div class="panel-title"><span>Runtime identity</span><span class="tag" id="runtime-version">UNVERIFIED</span></div>
+          <dl class="fact-grid" id="runtime-facts">
+            <div><dt>Bundle</dt><dd>Checking</dd></div>
+            <div><dt>SHA-256</dt><dd>Checking</dd></div>
+            <div><dt>Node</dt><dd>Checking</dd></div>
+            <div><dt>Request security</dt><dd>Checking</dd></div>
+          </dl>
+        </article>
+        <article class="panel accent-panel reveal">
+          <div class="panel-title"><span>Verified profile</span><span class="tag warm">CODING PLAN</span></div>
+          <p class="big-value">0.67<span>effective extra ratio</span></p>
+          <p>Verified for <strong>GLM-5.3-Flash</strong> on the personal Coding Plan with the installed official AppServer. Time-of-day multipliers are separate.</p>
+          <a class="text-link" href="#verification">Start a fresh verification</a>
+        </article>
+      </div>
+      <article class="panel reveal">
+        <div class="panel-title"><span>Latest attributable experiment</span><a class="text-link" href="#history">View all</a></div>
+        <div id="latest-experiment" class="empty-state">No experiment history yet.</div>
+      </article>
+    </section>
+
+    <section class="page" id="page-environment">
+      <div class="page-heading compact">
+        <p class="eyebrow">Zero-model gate</p>
+        <h1>Environment Check</h1>
+        <p class="lede">Inspect installation identity, hashes, Node compatibility, billing access, credentials metadata, and resource isolation. This check never sends a model request.</p>
+      </div>
+      <div class="action-row">
+        <button class="button primary" id="run-env-check">Run environment check</button>
+        <button class="button secondary" id="run-deep-check">Run deep protocol smoke</button>
+        <span id="env-check-state" class="inline-state">No check run in this session.</span>
+      </div>
+      <div class="check-grid" id="environment-checks"></div>
+    </section>
+
+    <section class="page" id="page-verification">
+      <div class="page-heading compact">
+        <p class="eyebrow">Explicit authorization required</p>
+        <h1>Real Coding Plan Verification</h1>
+      </div>
+      <article class="warning-card">
+        <strong>This action spends Coding Plan credits.</strong>
+        <p>A real GLM-5.3-Flash task will run through the configured official backend. Auxiliary requests may also consume credits. Use a clean observation window; a mixed billing hour can make the result inconclusive.</p>
+      </article>
+      <div class="verification-layout">
+        <form class="panel" id="verification-form">
+          <div class="panel-title"><span>Request parameters</span><span class="tag">LOCKED</span></div>
+          <label>Provider<input value="account:bigmodel-individual-coding-plan" disabled></label>
+          <label>Model<input value="GLM-5.3-Flash" disabled></label>
+          <label>Reasoning<input value="low" disabled></label>
+          <label class="confirm-row">
+            <input type="checkbox" id="verification-consent">
+            <span>I understand this sends a real model request and may consume credits.</span>
+          </label>
+          <button class="button danger" type="submit" id="start-verification" disabled>Authorize real verification</button>
+        </form>
+        <article class="panel progress-panel">
+          <div class="panel-title"><span>Verification progress</span><span class="tag" id="verification-status">IDLE</span></div>
+          <ol class="progress-list" id="verification-progress">
+            <li>Fresh official before snapshot</li>
+            <li>Official runtime model task</li>
+            <li>Request usage captured</li>
+            <li>Fresh official after snapshot</li>
+            <li>Token and credit reconciliation</li>
+          </ol>
+        </article>
+      </div>
+      <div id="verification-result"></div>
+    </section>
+
+    <section class="page" id="page-billing">
+      <div class="page-heading compact">
+        <p class="eyebrow">Official ledger view</p>
+        <h1>Billing Analysis</h1>
+        <p class="lede">Read the official hourly model ledger and separate the off-peak time multiplier from the extra campaign multiplier.</p>
+      </div>
+      <div class="action-row">
+        <button class="button primary" id="capture-billing">Read official snapshot</button>
+        <span id="billing-state" class="inline-state">No fresh snapshot requested.</span>
+      </div>
+      <div id="billing-result" class="empty-state panel">Read a snapshot or run a verification to populate this view.</div>
+    </section>
+
+    <section class="page" id="page-history">
+      <div class="page-heading compact">
+        <p class="eyebrow">Redacted local evidence</p>
+        <h1>Experiment History</h1>
+        <p class="lede">Every real verification is stored under <code>.run/cost-lab-web</code>. Exports omit credential-shaped fields and absolute user paths.</p>
+      </div>
+      <div id="history-list" class="history-list"></div>
+    </section>
+
+    <section class="page" id="page-start-plan">
+      <div class="page-heading compact">
+        <p class="eyebrow">Offline research only</p>
+        <h1>Start Plan</h1>
+        <p class="lede">The current goal does not authorize a live Start Plan request, credential read, entitlement probe, project-token call, or discount claim.</p>
+      </div>
+      <div class="status-strip">
+        <article><small>Live test</small><strong>UNAVAILABLE</strong></article>
+        <article><small>Offline compatibility</small><strong>AVAILABLE</strong></article>
+        <article><small>Discount</small><strong>NOT_VERIFIED</strong></article>
+        <article><small>Execution API</small><strong>DISABLED</strong></article>
+      </div>
+      <article class="panel start-plan-panel">
+        <h2>Independent authentication boundary</h2>
+        <p>Start Plan keeps its own credentials, runtime headers, entitlement checks, and failure semantics. Bridge must not silently fall back to the Coding Plan identity. The offline audit report records shared and differing capabilities without promoting an untested billing benefit.</p>
+        <p class="mono">docs/research/start-plan-official-appserver-compatibility-20261118.md</p>
+      </article>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="/app.js"></script>
+</body>
+</html>
