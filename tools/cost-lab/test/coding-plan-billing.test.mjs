@@ -196,6 +196,12 @@ test("dated partial-day source buckets take precedence over display padding", ()
   assert.equal(result.credit_class, "NORMAL");
   assert.equal(result.calculation.actual_credits, 0.0123);
 
+  const wrongDate = structuredClone(after);
+  wrongDate.official_snapshot.modelUsage.costLabBillingSource.xTime[10] = "2026-11-16 10:00";
+  const staleBucket = reconcileBillingSnapshots(before, wrongDate, usage, options);
+  assert.equal(staleBucket.settlement_status, "INVALID_BILLING_DATA");
+  assert.equal(staleBucket.calculation.actual_credits, null);
+
   const legacy = structuredClone(after);
   delete legacy.official_snapshot.modelUsage.costLabBillingSource;
   assert.equal(reconcileBillingSnapshots(before, legacy, usage, options).calculation.actual_credits, null);
@@ -353,9 +359,34 @@ test("reconciliation identifies normal and 0.67 credits without inventing reques
       outputCredits: 0.0376,
       hour: 16,
     }),
+    "2026-11-17T08:31:00.000Z",
   );
   const peak = reconcileBillingSnapshots(before, peakAfter, peakUsage, { hour: 16 });
   assert.equal(peak.credit_class, "NORMAL");
+});
+
+test("same-hour usage outside the snapshot capture window cannot be attributed", () => {
+  const before = snapshot(modelRow(), "2026-11-17T02:10:00.000Z");
+  const after = snapshot(modelRow({
+    uncachedInputTokens: 100,
+    uncachedInputCredits: 0.0115,
+  }), "2026-11-17T02:20:00.000Z");
+  const usage = {
+    cached_input_tokens: 0,
+    uncached_input_tokens: 100,
+    output_tokens: 0,
+  };
+  const options = { model: "GLM-5.3-Flash", hour: 10 };
+  for (const timestamp of ["2026-11-17T02:09:59.000Z", "2026-11-17T02:20:01.000Z"]) {
+    assert.throws(
+      () => reconcileBillingSnapshots(before, after, { ...usage, timestamp }, options),
+      /billing_usage_outside_capture_window/u,
+    );
+  }
+  const result = reconcileBillingSnapshots(before, after, {
+    ...usage, timestamp: "2026-11-17T02:15:00.000Z",
+  }, options);
+  assert.equal(result.billing_reconciliation, "PASS");
 });
 
 test("reconciliation refuses to assign an aggregate delta to a mismatched request", () => {

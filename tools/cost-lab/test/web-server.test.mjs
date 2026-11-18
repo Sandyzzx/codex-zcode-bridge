@@ -607,9 +607,9 @@ test("simultaneous confirmations admit one durable verification and one dispatch
     });
     const responses = await Promise.all([submit(), submit()]);
     assert.deepEqual(responses.map(({ response }) => response.status).sort(), [202, 409]);
+    await started;
     const history = JSON.parse(await readFile(path.join(fixture.root, "history.json"), "utf8"));
     assert.deepEqual(history.items.map(({ id }) => id), [FIXED_ID]);
-    await started;
     assert.equal(runnerCalls, 1);
   } finally {
     await fixture.cleanup();
@@ -657,6 +657,50 @@ test("server shutdown aborts and awaits an active verification cleanup", async (
     assert.equal(aborted, 1);
     assert.equal(cleaned, 1);
   } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("shutdown closes admission and reports a pending runner cleanup timeout", async () => {
+  let markRunnerStarted;
+  let finishCleanup;
+  const runnerStarted = new Promise((resolve) => { markRunnerStarted = resolve; });
+  const cleanup = new Promise((resolve) => { finishCleanup = resolve; });
+  const fixture = await makeServer({
+    captureSnapshot: async () => snapshot(modelRow(), "2026-11-17T02:00:00.000Z"),
+    verificationRunner: async () => {
+      markRunnerStarted();
+      await cleanup;
+      throw new Error("verification_aborted");
+    },
+  });
+  try {
+    const current = await session(fixture.address.origin);
+    const started = await request(fixture.address.origin, "/api/verifications", {
+      method: "POST",
+      headers: stateChangingHeaders(fixture.address.origin, current.csrf_token),
+      body: JSON.stringify({
+        confirmation: CONFIRMATION_PHRASE,
+        provider: "account:bigmodel-individual-coding-plan",
+        model: "GLM-5.3-Flash",
+        reasoning: "low",
+      }),
+    });
+    assert.equal(started.response.status, 202);
+    await runnerStarted;
+    await assert.rejects(fixture.server.close({ timeoutMs: 25 }), /cost_lab_verification_shutdown_timeout/u);
+    await assert.rejects(fetch(`${fixture.address.origin}/api/health`));
+    const readHistory = async () => JSON.parse(await readFile(path.join(fixture.root, "history.json"), "utf8"));
+    const pending = (await readHistory()).items[0];
+    assert.equal(pending.status, "MODEL_REQUESTED");
+    assert.equal(pending.model_requests, null);
+    finishCleanup();
+    await fixture.server.close();
+    const final = (await readHistory()).items[0];
+    assert.equal(final.status, "INTERRUPTED");
+    assert.equal(final.model_requests, null);
+  } finally {
+    finishCleanup();
     await fixture.cleanup();
   }
 });

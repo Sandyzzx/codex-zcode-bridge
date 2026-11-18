@@ -11,7 +11,7 @@ import {
 } from "./vendor-loader.mjs";
 
 export const SNAPSHOT_SCHEMA_VERSION = 1;
-export const RECONCILIATION_SCHEMA_VERSION = 2;
+export const RECONCILIATION_SCHEMA_VERSION = 3;
 export const DEFAULT_PROVIDER_ID = "account:bigmodel-individual-coding-plan";
 export const DEFAULT_TIME_ZONE = "Asia/Shanghai";
 export const DEFAULT_TIMEOUT_MS = 45_000;
@@ -164,13 +164,14 @@ function knownSum(...values) {
   return values.includes(null) ? null : values.reduce((sum, value) => sum + value, 0);
 }
 
-function normalizeHourAxis(xTime, granularity) {
+function normalizeHourAxis(xTime, granularity, expectedDate = null) {
   if (!Array.isArray(xTime)) return [];
   return xTime.map((entry) => {
     const raw = String(entry);
     if (granularity !== "hour") return raw;
-    const match = /(?:^|[ T])(\d{2}):(\d{2})(?::(\d{2}))?$/u.exec(raw);
-    return match ? `${match[1]}:${match[2]}:${match[3] ?? "00"}` : raw;
+    const match = /^(?:(\d{4}-\d{2}-\d{2})[ T])?(\d{2}):(\d{2})(?::(\d{2}))?$/u.exec(raw);
+    if (!match || (expectedDate && match[1] && match[1] !== expectedDate)) return raw;
+    return `${match[2]}:${match[3]}:${match[4] ?? "00"}`;
   });
 }
 
@@ -447,7 +448,7 @@ function bucketAt(snapshot, model, hour) {
   const official = snapshot.official_snapshot?.modelUsage?.costLabBillingSource;
   if (!Array.isArray(official?.modelDataList) || !Array.isArray(official?.xTime)) return null;
   const rows = official.modelDataList.filter((row) => billingModelName(row) === model);
-  const axis = normalizeHourAxis(official.xTime, "hour");
+  const axis = normalizeHourAxis(official.xTime, "hour", snapshot.range.end_date);
   const index = axis.indexOf(label);
   if (rows.length !== 1 || index < 0 || axis.lastIndexOf(label) !== index) return null;
   return normalizeBucket(rows[0], index);
@@ -572,6 +573,10 @@ export function reconcileBillingSnapshots(before, after, rawUsage, options = {})
   }
   if (usage.timestamp !== null) {
     const observed = new Date(usage.timestamp);
+    const observedAt = observed.getTime();
+    if (!Number.isFinite(observedAt)) {
+      throw new Error("billing_usage_outside_capture_window");
+    }
     const localDate = new Intl.DateTimeFormat("en-CA", {
       timeZone: DEFAULT_TIME_ZONE,
       year: "numeric",
@@ -580,6 +585,9 @@ export function reconcileBillingSnapshots(before, after, rawUsage, options = {})
     }).format(observed);
     if (localDate !== afterEndDate || shanghaiHourForTimestamp(observed) !== hour) {
       throw new Error("billing_usage_window_changed");
+    }
+    if (observedAt < beforeCaptured || observedAt > afterCaptured) {
+      throw new Error("billing_usage_outside_capture_window");
     }
   }
   const diff = subtractBucket(bucketAt(after, model, hour), bucketAt(before, model, hour));

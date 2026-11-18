@@ -10,6 +10,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   DEFAULT_PROVIDER_ID,
   DEFAULT_TIME_ZONE,
+  RECONCILIATION_SCHEMA_VERSION,
   atomicWriteJson,
   captureSnapshot,
   reconcileBillingSnapshots,
@@ -114,37 +115,31 @@ export function createCostLabWebServer(options = {}) {
     return publicAddress();
   }
 
-  async function close({ abortActive = true, timeoutMs = 10_000 } = {}) {
-    if (state.closed) return;
+  async function close({ abortActive = true, timeoutMs = 150_000 } = {}) {
     state.closed = true;
+    const listenerClosed = new Promise((resolve) => {
+      if (!state.server.listening) {
+        resolve();
+        return;
+      }
+      const timer = setTimeout(() => state.server.closeAllConnections(), Math.min(timeoutMs, 10_000));
+      state.server.close(() => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
     if (abortActive && state.activeAbortController) {
       state.activeAbortController.abort(new Error("cost_lab_server_shutdown"));
     }
-    if (state.activeVerificationPromise) {
-      await Promise.race([
-        state.activeVerificationPromise.catch(() => undefined),
-        new Promise((resolve) => setTimeout(resolve, timeoutMs)),
-      ]);
-    }
-    if (state.server.listening) {
-      await new Promise((resolve) => {
-        const timer = setTimeout(() => {
-          state.server.closeAllConnections?.();
-          resolve();
-        }, timeoutMs);
-        state.server.close(() => {
-          clearTimeout(timer);
-          resolve();
-        });
-      });
-    }
-    if (state.activeVerificationPromise) {
-      await withTimeout(
-        state.activeVerificationPromise.catch(() => undefined),
+    // Keep the runner alive through its capture, cancellation, and MCP shutdown deadlines.
+    await Promise.all([
+      listenerClosed,
+      withTimeout(
+        state.activeVerificationPromise?.catch(() => undefined) ?? Promise.resolve(),
         timeoutMs,
         "cost_lab_verification_shutdown_timeout",
-      ).catch(() => undefined);
-    }
+      ),
+    ]);
   }
 
   function publicAddress() {
@@ -700,7 +695,7 @@ function normalizeHistoricReconciliation(record) {
   const reconciliation = record.reconciliation;
   const { before, after } = record.billing_window ?? {};
   if (!reconciliation?.calculation) return record;
-  if (reconciliation.schema_version !== 1 &&
+  if (reconciliation.schema_version === RECONCILIATION_SCHEMA_VERSION &&
       before?.official_snapshot?.modelUsage?.costLabBillingSource &&
       after?.official_snapshot?.modelUsage?.costLabBillingSource) return record;
   let updated;
@@ -809,8 +804,12 @@ async function main() {
   process.stdout.write(`Cost Lab Web: ${address.url}\n`);
   process.stdout.write("Press Ctrl+C to stop. Bound to 127.0.0.1 only.\n");
   const shutdown = async () => {
-    await app.close();
-    process.exit(0);
+    try {
+      await app.close();
+    } catch (error) {
+      process.stderr.write(`Cost Lab shutdown: ${safeErrorCode(error)}; inspect persisted verification history.\n`);
+      process.exitCode = 1;
+    }
   };
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
