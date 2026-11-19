@@ -26,6 +26,9 @@ npm run cost-lab:web
 
 The command prints a `http://127.0.0.1:<port>/` URL. The server always binds the
 IPv4 loopback address and selects a free port unless `COST_LAB_PORT` is set.
+The interface supports English and Simplified Chinese from the header switch.
+The selection is stored only in browser-local storage; technical evidence
+states such as `PASS`, `FAIL`, `UNKNOWN`, and `OBSERVED` remain unchanged.
 
 Page load only reads the local environment and redacted history. It does not send
 a model request or call the official billing RPC. Those actions require explicit
@@ -115,6 +118,55 @@ The time multiplier and extra campaign multiplier are reported separately.
 Ordinary off-peak `0.5` is not evidence of an additional `0.67` discount. A mixed
 bucket or mismatched request Usage remains `INCONCLUSIVE`.
 
+## Agent Token Profiler
+
+The **Token Profiler** reads local Codex rollout metadata and the Bridge SQLite
+state without changing either source. It connects Codex Master and Subagent
+threads to dispatched ZCode Workers, then reports token usage, tool and MCP
+waiting, deterministic work-phase attribution, context/cache observations,
+compactions, diagnostics, and historical comparisons.
+
+The CLI and Web UI call the same analysis core. Stored artifacts stay under
+`.run/cost-lab/profiler/`:
+
+```powershell
+node tools/cost-lab/cli.mjs profiler sessions
+node tools/cost-lab/cli.mjs profiler analyze --thread <thread-id>
+node tools/cost-lab/cli.mjs profiler analyze --goal <goal-id>
+node tools/cost-lab/cli.mjs profiler analyze --from <time> --to <time>
+node tools/cost-lab/cli.mjs profiler report --id <report-id>
+node tools/cost-lab/cli.mjs profiler reports
+node tools/cost-lab/cli.mjs profiler compare --before <report-id> --after <report-id>
+```
+
+Use `--json` for machine-readable output. Incremental collection is the default.
+Use `--full` for a complete rescan, and repeat `--rollout`, `--bridge-sqlite`,
+or `--history` to analyze an explicit local source. `--only-explicit-sources`
+and `--no-default-bridge` prevent the default source roots from being added.
+
+Profiler evidence is deliberately split:
+
+- `OBSERVED`: response or worker usage reported by Codex or Bridge.
+- `ATTRIBUTED`: phase and MCP relationships derived from timestamps, tool names,
+  parent IDs, and dispatch IDs.
+- `ESTIMATED`: byte-to-token estimates for locally observable tool/context
+  content. These values are never treated as provider-reported Usage.
+- `UNKNOWN`: missing usage or attribution that cannot be established from the
+  local records.
+
+Cached input remains a subset of input, response-level Usage is not added to an
+observed cumulative total, and Master, Subagent, and Worker usage remain separate.
+Pure MCP wait time is wall-clock evidence only; it does not create model tokens.
+Provider and model totals are not combined into one billing unit.
+
+The Web UI keeps the Session timeline collapsed by default. Its disclosure
+state is accessible through `aria-expanded`, survives language changes for the
+same report, and resets to collapsed when a different report is loaded. The
+timeline export is a sanitized JSON document containing report metadata, agent
+scope, timeline metadata, and only the known timeline fields. It does not
+export retained prompt, tool-result, reasoning, credential, or arbitrary
+content fields.
+
 ## Local Data And Redaction
 
 - History: `.run/cost-lab-web/history.json`
@@ -147,6 +199,14 @@ GET  /api/billing/startplan/history?from=&to=&limit=
 POST /api/billing/startplan/refresh
 GET  /api/billing/startplan/history/:id/export
 GET  /api/start-plan
+GET  /api/profiler/latest
+GET  /api/profiler/reports
+GET  /api/profiler/reports/:id
+GET  /api/profiler/reports/:id/export
+GET  /api/profiler/reports/:id/timeline/export
+POST /api/profiler/collect
+POST /api/profiler/analyze
+POST /api/profiler/compare
 ```
 
 There is no generic command, filesystem, URL, or shell endpoint. State-changing
@@ -158,6 +218,11 @@ Start Plan history stores the sanitized official response and normalized
 snapshot. Credential fields, Authorization headers, cookies, device MID values,
 and raw opaque account/bucket/entitlement identifiers are removed or replaced
 with stable hashes. Browser responses and exports also omit absolute user paths.
+
+Profiler snapshots and reports retain IDs, timestamps, token metadata, tool
+metadata, and byte counts. They do not retain prompt bodies, source code,
+reasoning text, MCP arguments, or tool-result content. Model-specific token
+groups remain separate and do not imply billing credits.
 
 ## Tests
 

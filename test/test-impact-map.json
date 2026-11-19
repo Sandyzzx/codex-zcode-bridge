@@ -1,16 +1,16 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "notes": [
     "Paths are repository-relative and use POSIX separators.",
     "Runtime is unknown unless an entry cites a repository report; missing runtime is NOT RUN, not fast.",
-    "Stress classification is explicit. Tests are not inferred to be stress solely from names or long timeouts."
+    "Stress classification is explicit. Tests are not inferred to be stress solely from names or long timeouts.",
+    "CI tracks supplement executable-test selection so Cost Lab, Bridge, selector, workflow, and docs gates stay independent."
   ],
   "domains": [
     {
       "id": "ci-release-contract",
       "description": "CI, release packaging, generated bundle identity, and top-level build configuration.",
       "paths": [
-        ".github/workflows/**",
         "package.json",
         "package-lock.json",
         "tsconfig.json",
@@ -36,8 +36,10 @@
         "scripts/lib/test-files.mjs",
         "scripts/lib/changed-files.mjs",
         "scripts/ci-select-impact.mjs",
+        "scripts/validate-ci-workflow.mjs",
         "scripts/run-affected-tests.mjs",
         "scripts/run-stress-tests.mjs",
+        ".github/workflows/**",
         "test/test-impact-map.json",
         "test/helpers.ts",
         "test/runtime-fixture.ts",
@@ -230,8 +232,90 @@
         "docs/**",
         "*.md"
       ]
+    },
+    {
+      "id": "cost-lab-tooling",
+      "description": "Cost Lab CLI, billing, Start Plan, Web, and profiler tooling outside the Bridge production runtime.",
+      "paths": [
+        "tools/cost-lab/**"
+      ]
     }
   ],
+  "ci_tracks": {
+    "bridge": {
+      "paths": [
+        "src/**",
+        "plugins/**",
+        "test/**",
+        "upstream/**",
+        "scripts/build-core.mjs",
+        "scripts/build-official-host-runtime.mjs",
+        "scripts/build-plugin.mjs",
+        "scripts/check-generated-artifacts.mjs",
+        "scripts/lib/generated-artifacts.mjs",
+        "scripts/validate-plugin.mjs",
+        "scripts/verify-windows-worker-identity.mjs",
+        "release-please-config.json",
+        ".release-please-manifest.json",
+        ".github/dependabot.yml"
+      ],
+      "full_paths": [
+        "upstream/**"
+      ]
+    },
+    "shared_dependencies": {
+      "paths": [
+        "package.json",
+        "package-lock.json",
+        "tsconfig.json",
+        "tsconfig.test.json",
+        "src/interfaces.ts",
+        "src/host/profile.ts",
+        "src/runtime/desktop-host-launch.ts",
+        "src/runtime/errors.ts",
+        "src/runtime/node-runtime.ts",
+        "src/runtime/official-app-server-runtime.ts",
+        "src/runtime/paths.ts",
+        "src/runtime/resolver.ts"
+      ],
+      "requires_cost_lab": true,
+      "requires_stress": true
+    },
+    "cost_lab": {
+      "paths": [
+        "tools/cost-lab/**"
+      ],
+      "web_paths": [
+        "tools/cost-lab/web/**",
+        "tools/cost-lab/web-server.mjs",
+        "tools/cost-lab/web-services.mjs",
+        "tools/cost-lab/startplan-web.mjs"
+      ]
+    },
+    "selector_contract": {
+      "paths": [
+        "scripts/test-impact-selector.mjs",
+        "scripts/ci-select-impact.mjs",
+        "scripts/validate-ci-workflow.mjs",
+        "test/test-impact-map.json",
+        "test/test-impact-selector.test.ts"
+      ]
+    },
+    "workflow_contract": {
+      "paths": [
+        ".github/workflows/**"
+      ]
+    },
+    "documentation": {
+      "paths": [
+        ".agents/**",
+        "docs/**",
+        "*.md",
+        "LICENSE",
+        "NOTICE"
+      ]
+    }
+  },
   "tests": [
     {
       "file": "test/model-routing.test.ts",
@@ -1052,13 +1136,10 @@
     "src/runtime/errors.ts",
     "scripts/test-isolated.mjs",
     "scripts/test-clean-entrypoints.mjs",
-    "scripts/test-impact-selector.mjs",
     "scripts/lib/test-files.mjs",
     "scripts/lib/changed-files.mjs",
-    "scripts/ci-select-impact.mjs",
     "scripts/run-affected-tests.mjs",
     "scripts/run-stress-tests.mjs",
-    "test/test-impact-map.json",
     "test/helpers.ts",
     "test/runtime-fixture.ts",
     "test/runtime/bootstrap-lock-worker.mjs",
@@ -1068,12 +1149,10 @@
     "package-lock.json",
     "tsconfig.json",
     "tsconfig.test.json",
-    ".github/workflows/**",
     "scripts/build-core.mjs",
     "scripts/build-plugin.mjs",
     "scripts/check-generated-artifacts.mjs",
     "scripts/lib/generated-artifacts.mjs",
-    "scripts/validate-plugin.mjs",
-    "tools/cost-lab/**"
+    "scripts/validate-plugin.mjs"
   ]
 }

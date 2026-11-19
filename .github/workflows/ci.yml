@@ -21,6 +21,17 @@ jobs:
     outputs:
       force_full: ${{ steps.select.outputs.force_full }}
       full_required: ${{ steps.select.outputs.full_required }}
+      bridge_required: ${{ steps.select.outputs.bridge_required }}
+      bridge_mode: ${{ steps.select.outputs.bridge_mode }}
+      bridge_full_required: ${{ steps.select.outputs.bridge_full_required }}
+      bridge_targeted_required: ${{ steps.select.outputs.bridge_targeted_required }}
+      cost_lab_required: ${{ steps.select.outputs.cost_lab_required }}
+      cost_lab_mode: ${{ steps.select.outputs.cost_lab_mode }}
+      cost_lab_web_required: ${{ steps.select.outputs.cost_lab_web_required }}
+      shared_runtime_required: ${{ steps.select.outputs.shared_runtime_required }}
+      selector_required: ${{ steps.select.outputs.selector_required }}
+      workflow_required: ${{ steps.select.outputs.workflow_required }}
+      docs_required: ${{ steps.select.outputs.docs_required }}
       integration_required: ${{ steps.select.outputs.integration_required }}
       stress_required: ${{ steps.select.outputs.stress_required }}
     steps:
@@ -31,13 +42,15 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
       - id: select
-        name: Shadow-compare impact selection
+        name: Select stable Cost Lab and Bridge tracks
         shell: bash
         env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          if [[ -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]]; then
+          if [[ "$EVENT_NAME" == "workflow_dispatch" || "$REF_NAME" == "refs/heads/master" || -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]]; then
             node scripts/ci-select-impact.mjs --head "$HEAD_SHA" --force-full --github-output
           else
             node scripts/ci-select-impact.mjs --base "$BASE_SHA" --head "$HEAD_SHA" --github-output
@@ -46,8 +59,15 @@ jobs:
   fast:
     name: Fast PR gate
     needs: impact
+    if: always()
     runs-on: ubuntu-latest
     steps:
+      - name: Require impact selection
+        if: needs.impact.result != 'success'
+        shell: bash
+        run: |
+          echo "::error::Impact selection did not succeed"
+          exit 1
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
@@ -55,43 +75,140 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
+      - name: Detect required fast-contract work
+        id: routes
+        shell: bash
+        env:
+          BRIDGE_MODE: ${{ needs.impact.outputs.bridge_mode }}
+          SELECTOR_REQUIRED: ${{ needs.impact.outputs.selector_required }}
+          DOCS_REQUIRED: ${{ needs.impact.outputs.docs_required }}
+        run: |
+          if [[ "$BRIDGE_MODE" != "NONE" || "$SELECTOR_REQUIRED" == "true" || "$DOCS_REQUIRED" == "true" ]]; then
+            echo "required=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "required=false" >> "$GITHUB_OUTPUT"
+          fi
       - run: npm ci
+        if: steps.routes.outputs.required == 'true'
       - name: Fast selection (FULL delegates regression to Release)
+        if: needs.impact.outputs.bridge_mode != 'NONE'
         shell: bash
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          FULL_REQUIRED: ${{ needs.impact.outputs.full_required }}
+          BRIDGE_MODE: ${{ needs.impact.outputs.bridge_mode }}
+          FORCE_FULL: ${{ needs.impact.outputs.force_full }}
         run: |
           args=()
-          if [[ -n "$BASE_SHA" && ! "$BASE_SHA" =~ ^0+$ ]]; then
-            args+=(--base "$BASE_SHA")
-          elif [[ "$FULL_REQUIRED" != "true" ]]; then
-            echo "::error::A non-full Fast gate requires a valid base SHA"
-            exit 1
-          fi
-          if [[ "$FULL_REQUIRED" == "true" ]]; then
+          if [[ "$FORCE_FULL" == "true" ]]; then
             args+=(--force-full --t0-only)
+          else
+            if [[ -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]]; then
+              echo "::error::A non-full Fast gate requires a valid base SHA"
+              exit 1
+            fi
+            args+=(--base "$BASE_SHA")
+            if [[ "$BRIDGE_MODE" == "FULL" ]]; then
+              args+=(--t0-only)
+            fi
           fi
           npm run test:affected -- "${args[@]}"
+      - name: Selector matrix and workflow validation
+        if: needs.impact.outputs.selector_required == 'true'
+        shell: bash
+        run: |
+          npm run build:test
+          node scripts/test-isolated.mjs dist-test/test/test-impact-selector.test.js
+          node scripts/validate-ci-workflow.mjs
+      - name: Documentation-only gate
+        if: needs.impact.outputs.docs_required == 'true'
+        shell: bash
+        run: |
+          npm run typecheck
+          npm run build
+          npm run validate:plugin
+          npm run check:generated
+          git diff --check
+      - name: No fast-contract work required
+        if: steps.routes.outputs.required != 'true'
+        run: |
+          echo "FAST_CONTRACT_NOT_REQUIRED"
+          echo "Fast contract not required; this is a routing conclusion, not a test PASS." >> "$GITHUB_STEP_SUMMARY"
+
+  cost_lab:
+    name: Cost Lab
+    needs: impact
+    if: always()
+    runs-on: windows-2022
+    steps:
+      - name: Require impact selection
+        if: needs.impact.result != 'success'
+        shell: bash
+        run: |
+          echo "::error::Impact selection did not succeed"
+          exit 1
+      - name: Cost Lab route
+        if: needs.impact.outputs.cost_lab_required != 'true'
+        run: |
+          echo "COST_LAB_CI_NOT_REQUIRED"
+          echo "Cost Lab CI not required; this is a routing conclusion, not a test PASS." >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        if: needs.impact.outputs.cost_lab_required == 'true'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        if: needs.impact.outputs.cost_lab_required == 'true'
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+        if: needs.impact.outputs.cost_lab_required == 'true'
+      - name: Build shared Bridge runtime dependency
+        if: needs.impact.outputs.shared_runtime_required == 'true'
+        run: npm run build:core
+      - name: Cost Lab targeted suite
+        if: needs.impact.outputs.cost_lab_required == 'true'
+        run: npm run cost-lab:test
+      - name: Cost Lab Web smoke
+        if: needs.impact.outputs.cost_lab_web_required == 'true'
+        run: >-
+          node --test
+          tools/cost-lab/test/web-server.test.mjs
+          tools/cost-lab/test/startplan-web.test.mjs
+          tools/cost-lab/test/startplan-view.test.mjs
 
   integration:
     name: Integration gate (Windows)
     needs: impact
-    if: needs.impact.outputs.integration_required == 'true' && needs.impact.outputs.full_required != 'true'
+    if: always()
     runs-on: windows-2022
     steps:
+      - name: Require impact selection
+        if: needs.impact.result != 'success'
+        shell: bash
+        run: |
+          echo "::error::Impact selection did not succeed"
+          exit 1
+      - name: Integration route
+        if: needs.impact.outputs.bridge_mode != 'TARGETED' || needs.impact.outputs.integration_required != 'true'
+        run: |
+          echo "BRIDGE_INTEGRATION_NOT_REQUIRED"
+          echo "Bridge Integration not required; this is a routing conclusion, not a test PASS." >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        if: needs.impact.outputs.bridge_mode == 'TARGETED' && needs.impact.outputs.integration_required == 'true'
         with:
           fetch-depth: 0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        if: needs.impact.outputs.bridge_mode == 'TARGETED' && needs.impact.outputs.integration_required == 'true'
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - run: npm ci
+        if: needs.impact.outputs.bridge_mode == 'TARGETED' && needs.impact.outputs.integration_required == 'true'
       - run: npm run build:core
+        if: needs.impact.outputs.bridge_mode == 'TARGETED' && needs.impact.outputs.integration_required == 'true'
       - name: Verify Windows worker process identity
+        if: needs.impact.outputs.bridge_mode == 'TARGETED' && needs.impact.outputs.integration_required == 'true'
         run: node scripts/verify-windows-worker-identity.mjs
       - name: Impacted integration and task-lifecycle tests
+        if: needs.impact.outputs.bridge_mode == 'TARGETED' && needs.impact.outputs.integration_required == 'true'
         shell: bash
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
@@ -104,8 +221,8 @@ jobs:
 
   release:
     name: Verify (${{ matrix.os }})
-    needs: impact
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push' || needs.impact.outputs.full_required == 'true'
+    needs: [impact, fast, integration, cost_lab]
+    if: always()
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -114,38 +231,95 @@ jobs:
         # process-identity probe. Keep lifecycle verification on Server 2022.
         os: [windows-2022, ubuntu-latest]
     steps:
+      - name: Enforce required track conclusions
+        shell: bash
+        env:
+          BRIDGE_MODE: ${{ needs.impact.outputs.bridge_mode }}
+          COST_LAB_REQUIRED: ${{ needs.impact.outputs.cost_lab_required }}
+          SELECTOR_REQUIRED: ${{ needs.impact.outputs.selector_required }}
+          DOCS_REQUIRED: ${{ needs.impact.outputs.docs_required }}
+          INTEGRATION_REQUIRED: ${{ needs.impact.outputs.integration_required }}
+          IMPACT_RESULT: ${{ needs.impact.result }}
+          COST_LAB_RESULT: ${{ needs.cost_lab.result }}
+          FAST_RESULT: ${{ needs.fast.result }}
+          INTEGRATION_RESULT: ${{ needs.integration.result }}
+        run: |
+          fail() {
+            echo "::error::$1"
+            exit 1
+          }
+          if [[ "$IMPACT_RESULT" != "success" ]]; then
+            fail "Impact selection concluded $IMPACT_RESULT"
+          fi
+          if [[ "$COST_LAB_REQUIRED" == "true" && "$COST_LAB_RESULT" != "success" ]]; then
+            fail "Cost Lab was required but concluded $COST_LAB_RESULT"
+          fi
+          if [[ "$BRIDGE_MODE" != "NONE" && "$FAST_RESULT" != "success" ]]; then
+            fail "Bridge fast contract concluded $FAST_RESULT"
+          fi
+          if [[ "$BRIDGE_MODE" == "TARGETED" && "$INTEGRATION_REQUIRED" == "true" && "$INTEGRATION_RESULT" != "success" ]]; then
+            fail "Bridge Integration was required but concluded $INTEGRATION_RESULT"
+          fi
+          if [[ ( "$SELECTOR_REQUIRED" == "true" || "$DOCS_REQUIRED" == "true" ) && "$FAST_RESULT" != "success" ]]; then
+            fail "selector/docs contract concluded $FAST_RESULT"
+          fi
+          echo "REQUIRED_CONTEXT_ROUTE bridge=$BRIDGE_MODE cost_lab=$COST_LAB_REQUIRED selector=$SELECTOR_REQUIRED docs=$DOCS_REQUIRED"
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        if: needs.impact.outputs.bridge_mode == 'FULL'
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        if: needs.impact.outputs.bridge_mode == 'FULL'
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - run: npm ci
+        if: needs.impact.outputs.bridge_mode == 'FULL'
       - run: npm run typecheck
+        if: needs.impact.outputs.bridge_mode == 'FULL'
       - run: npm run build
+        if: needs.impact.outputs.bridge_mode == 'FULL'
       - name: Verify Windows worker process identity
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && needs.impact.outputs.bridge_mode == 'FULL'
         run: node scripts/verify-windows-worker-identity.mjs
       - run: npm test
+        if: needs.impact.outputs.bridge_mode == 'FULL'
       - run: npm run validate:plugin
+        if: needs.impact.outputs.bridge_mode == 'FULL'
       - name: Verify complete generated-artifact freshness
+        if: needs.impact.outputs.bridge_mode == 'FULL'
         run: npm run check:generated
       - name: Check patch whitespace
+        if: needs.impact.outputs.bridge_mode == 'FULL'
         run: git diff --check
 
   sqlite-stress:
     name: SQLite resource matrix (${{ matrix.os }})
     needs: impact
-    if: needs.impact.outputs.force_full == 'true' || needs.impact.outputs.full_required == 'true' || needs.impact.outputs.stress_required == 'true'
+    if: always()
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [windows-2022, ubuntu-latest]
     steps:
+      - name: Require impact selection
+        if: needs.impact.result != 'success'
+        shell: bash
+        run: |
+          echo "::error::Impact selection did not succeed"
+          exit 1
+      - name: SQLite stress route
+        if: needs.impact.outputs.stress_required != 'true'
+        run: |
+          echo "SQLITE_STRESS_NOT_REQUIRED"
+          echo "SQLite stress not required; this is a routing conclusion, not a stress-test PASS." >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        if: needs.impact.outputs.stress_required == 'true'
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        if: needs.impact.outputs.stress_required == 'true'
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - run: npm ci
+        if: needs.impact.outputs.stress_required == 'true'
       - run: npm run test:stress
+        if: needs.impact.outputs.stress_required == 'true'

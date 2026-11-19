@@ -11,106 +11,113 @@
 <body>
   <div class="atmosphere" aria-hidden="true"></div>
   <header class="masthead">
-    <a class="brand" href="#dashboard" aria-label="Cost Lab home">
+    <a class="brand" href="#dashboard" data-i18n-aria-label="brand.homeAria">
       <span class="brand-mark">CL</span>
       <span>
         <strong>Cost Lab</strong>
-        <small>Official runtime billing verification</small>
+        <small data-i18n="brand.subtitle">Official runtime billing verification</small>
       </span>
     </a>
-    <div class="masthead-status">
-      <span class="status-dot" id="server-dot"></span>
-      <span id="server-status">Connecting to local server</span>
+    <div class="masthead-controls">
+      <div class="language-switch" role="group" data-i18n-aria-label="language.label">
+        <button type="button" data-language="en" aria-pressed="true">EN</button>
+        <button type="button" data-language="zh-CN" aria-pressed="false">中文</button>
+      </div>
+      <div class="masthead-status">
+        <span class="status-dot" id="server-dot"></span>
+        <span id="server-status" data-i18n="server.connecting">Connecting to local server</span>
+      </div>
     </div>
   </header>
 
-  <nav class="rail" aria-label="Cost Lab sections">
-    <button class="nav-item active" data-page="dashboard"><span>01</span>Dashboard</button>
-    <button class="nav-item" data-page="environment"><span>02</span>Environment</button>
-    <button class="nav-item" data-page="verification"><span>03</span>Coding Plan</button>
-    <button class="nav-item" data-page="billing"><span>04</span>Billing &amp; Usage</button>
-    <button class="nav-item" data-page="history"><span>05</span>History</button>
+  <nav class="rail" data-i18n-aria-label="nav.label">
+    <button class="nav-item active" data-page="dashboard"><span class="nav-number">01</span><span class="nav-label" data-i18n="nav.dashboard">Dashboard</span></button>
+    <button class="nav-item" data-page="environment"><span class="nav-number">02</span><span class="nav-label" data-i18n="nav.environment">Environment</span></button>
+    <button class="nav-item" data-page="verification"><span class="nav-number">03</span><span class="nav-label" data-i18n="nav.codingPlan">Coding Plan</span></button>
+    <button class="nav-item" data-page="billing"><span class="nav-number">04</span><span class="nav-label" data-i18n="nav.billing">Billing &amp; Usage</span></button>
+    <button class="nav-item" data-page="profiler"><span class="nav-number">05</span><span class="nav-label" data-i18n="nav.profiler">Token Profiler</span></button>
+    <button class="nav-item" data-page="history"><span class="nav-number">06</span><span class="nav-label" data-i18n="nav.history">History</span></button>
   </nav>
 
   <main>
     <section class="page active" id="page-dashboard">
       <div class="page-heading reveal">
-        <p class="eyebrow">Runtime truth, not a mock</p>
-        <h1>Measure the execution path.<br><em>Verify the credits.</em></h1>
-        <p class="lede">Local inspection of the installed ZCode AppServer, official billing access, and the last attributable Coding Plan experiment.</p>
+        <p class="eyebrow" data-i18n="dashboard.eyebrow">Runtime truth, not a mock</p>
+        <h1><span data-i18n="dashboard.titleLead">Measure the execution path.</span><br><em data-i18n="dashboard.titleEm">Verify the credits.</em></h1>
+        <p class="lede" data-i18n="dashboard.lede">Local inspection of the installed ZCode AppServer, official billing access, and the last attributable Coding Plan experiment.</p>
       </div>
       <div class="status-strip reveal">
-        <article><small>Runtime</small><strong id="dash-runtime">Checking</strong></article>
-        <article><small>Discount</small><strong id="dash-discount">Checking</strong></article>
-        <article><small>Billing reader</small><strong id="dash-billing">Checking</strong></article>
-        <article><small>Last ratio</small><strong id="dash-ratio">No experiment</strong></article>
+        <article><small data-i18n="dashboard.runtime">Runtime</small><strong id="dash-runtime" data-i18n="dashboard.checking">Checking</strong></article>
+        <article><small data-i18n="dashboard.discount">Discount</small><strong id="dash-discount" data-i18n="dashboard.checking">Checking</strong></article>
+        <article><small data-i18n="dashboard.billingReader">Billing reader</small><strong id="dash-billing" data-i18n="dashboard.checking">Checking</strong></article>
+        <article><small data-i18n="dashboard.lastRatio">Last ratio</small><strong id="dash-ratio" data-i18n="dashboard.noExperiment">No experiment</strong></article>
       </div>
       <div class="split-grid">
         <article class="panel reveal">
-          <div class="panel-title"><span>Runtime identity</span><span class="tag" id="runtime-version">UNVERIFIED</span></div>
+          <div class="panel-title"><span data-i18n="dashboard.runtimeIdentity">Runtime identity</span><span class="tag" id="runtime-version">UNVERIFIED</span></div>
           <dl class="fact-grid" id="runtime-facts">
-            <div><dt>Bundle</dt><dd>Checking</dd></div>
-            <div><dt>SHA-256</dt><dd>Checking</dd></div>
-            <div><dt>Node</dt><dd>Checking</dd></div>
-            <div><dt>Request security</dt><dd>Checking</dd></div>
+            <div><dt data-i18n="dashboard.bundle">Bundle</dt><dd data-i18n="dashboard.checking">Checking</dd></div>
+            <div><dt data-i18n="dashboard.sha256">SHA-256</dt><dd data-i18n="dashboard.checking">Checking</dd></div>
+            <div><dt data-i18n="dashboard.node">Node</dt><dd data-i18n="dashboard.checking">Checking</dd></div>
+            <div><dt data-i18n="dashboard.requestSecurity">Request security</dt><dd data-i18n="dashboard.checking">Checking</dd></div>
           </dl>
         </article>
         <article class="panel accent-panel reveal">
-          <div class="panel-title"><span>Verified profile</span><span class="tag warm">CODING PLAN</span></div>
-          <p class="big-value">0.67<span>effective extra ratio</span></p>
-          <p>Verified for <strong>GLM-5.3-Flash</strong> on the personal Coding Plan with the installed official AppServer. Time-of-day multipliers are separate.</p>
-          <a class="text-link" href="#verification">Start a fresh verification</a>
+          <div class="panel-title"><span data-i18n="dashboard.verifiedProfile">Verified profile</span><span class="tag warm">CODING PLAN</span></div>
+          <p class="big-value">0.67<span data-i18n="dashboard.effectiveExtraRatio">effective extra ratio</span></p>
+          <p><span data-i18n="dashboard.profileLead">Verified for</span> <strong>GLM-5.3-Flash</strong> <span data-i18n="dashboard.profileMiddle">on the personal Coding Plan with the installed official AppServer. Time-of-day multipliers are separate.</span></p>
+          <a class="text-link" href="#verification" data-i18n="dashboard.profileLink">Start a fresh verification</a>
         </article>
       </div>
       <article class="panel reveal">
-        <div class="panel-title"><span>Latest attributable experiment</span><a class="text-link" href="#history">View all</a></div>
-        <div id="latest-experiment" class="empty-state">No experiment history yet.</div>
+        <div class="panel-title"><span data-i18n="dashboard.latestExperiment">Latest attributable experiment</span><a class="text-link" href="#history" data-i18n="common.viewAll">View all</a></div>
+        <div id="latest-experiment" class="empty-state" data-i18n="common.noExperiment">No experiment history yet.</div>
       </article>
     </section>
 
     <section class="page" id="page-environment">
       <div class="page-heading compact">
-        <p class="eyebrow">Zero-model gate</p>
-        <h1>Environment Check</h1>
-        <p class="lede">Inspect installation identity, hashes, Node compatibility, billing access, credentials metadata, and resource isolation. This check never sends a model request.</p>
+        <p class="eyebrow" data-i18n="environment.eyebrow">Zero-model gate</p>
+        <h1 data-i18n="environment.title">Environment Check</h1>
+        <p class="lede" data-i18n="environment.lede">Inspect installation identity, hashes, Node compatibility, billing access, credentials metadata, and resource isolation. This check never sends a model request.</p>
       </div>
       <div class="action-row">
-        <button class="button primary" id="run-env-check">Run environment check</button>
-        <button class="button secondary" id="run-deep-check">Run deep protocol smoke</button>
-        <span id="env-check-state" class="inline-state">No check run in this session.</span>
+        <button class="button primary" id="run-env-check" data-i18n="environment.run">Run environment check</button>
+        <button class="button secondary" id="run-deep-check" data-i18n="environment.runDeep">Run deep protocol smoke</button>
+        <span id="env-check-state" class="inline-state" data-i18n="environment.noCheck">No check run in this session.</span>
       </div>
       <div class="check-grid" id="environment-checks"></div>
     </section>
 
     <section class="page" id="page-verification">
       <div class="page-heading compact">
-        <p class="eyebrow">Explicit authorization required</p>
-        <h1>Real Coding Plan Verification</h1>
+        <p class="eyebrow" data-i18n="verification.eyebrow">Explicit authorization required</p>
+        <h1 data-i18n="verification.title">Real Coding Plan Verification</h1>
       </div>
       <article class="warning-card">
-        <strong>This action spends Coding Plan credits.</strong>
-        <p>A real GLM-5.3-Flash task will run through the configured official backend. Auxiliary requests may also consume credits. Use a clean observation window; a mixed billing hour can make the result inconclusive.</p>
+        <strong data-i18n="verification.warningTitle">This action spends Coding Plan credits.</strong>
+        <p data-i18n="verification.warningBody">A real GLM-5.3-Flash task will run through the configured official backend. Auxiliary requests may also consume credits. Use a clean observation window; a mixed billing hour can make the result inconclusive.</p>
       </article>
       <div class="verification-layout">
         <form class="panel" id="verification-form">
-          <div class="panel-title"><span>Request parameters</span><span class="tag">LOCKED</span></div>
-          <label>Provider<input value="account:bigmodel-individual-coding-plan" disabled></label>
-          <label>Model<input value="GLM-5.3-Flash" disabled></label>
-          <label>Reasoning<input value="low" disabled></label>
+          <div class="panel-title"><span data-i18n="verification.requestParameters">Request parameters</span><span class="tag">LOCKED</span></div>
+          <label><span data-i18n="verification.provider">Provider</span><input value="account:bigmodel-individual-coding-plan" disabled></label>
+          <label><span data-i18n="verification.model">Model</span><input value="GLM-5.3-Flash" disabled></label>
+          <label><span data-i18n="verification.reasoning">Reasoning</span><input value="low" disabled></label>
           <label class="confirm-row">
             <input type="checkbox" id="verification-consent">
-            <span>I understand this sends a real model request and may consume credits.</span>
+            <span data-i18n="verification.confirm">I understand this sends a real model request and may consume credits.</span>
           </label>
-          <button class="button danger" type="submit" id="start-verification" disabled>Authorize real verification</button>
+          <button class="button danger" type="submit" id="start-verification" disabled data-i18n="verification.authorize">Authorize real verification</button>
         </form>
         <article class="panel progress-panel">
-          <div class="panel-title"><span>Verification progress</span><span class="tag" id="verification-status">IDLE</span></div>
+          <div class="panel-title"><span data-i18n="verification.progress">Verification progress</span><span class="tag" id="verification-status">IDLE</span></div>
           <ol class="progress-list" id="verification-progress">
-            <li>Fresh official before snapshot</li>
-            <li>Official runtime model task</li>
-            <li>Request usage captured</li>
-            <li>Fresh official after snapshot</li>
-            <li>Token and credit reconciliation</li>
+            <li data-i18n="verification.stepBefore">Fresh official before snapshot</li>
+            <li data-i18n="verification.stepTask">Official runtime model task</li>
+            <li data-i18n="verification.stepUsage">Request usage captured</li>
+            <li data-i18n="verification.stepAfter">Fresh official after snapshot</li>
+            <li data-i18n="verification.stepReconcile">Token and credit reconciliation</li>
           </ol>
         </article>
       </div>
@@ -119,85 +126,177 @@
 
     <section class="page" id="page-billing">
       <div class="page-heading compact">
-        <p class="eyebrow">Two official plans, one local console</p>
-        <h1>Billing &amp; Usage</h1>
-        <p class="lede">Inspect the Coding Plan credit ledger and the independent Start Plan token balance. Official reads happen only after an explicit local action.</p>
+        <p class="eyebrow" data-i18n="billing.eyebrow">Two official plans, one local console</p>
+        <h1 data-i18n="billing.title">Billing &amp; Usage</h1>
+        <p class="lede" data-i18n="billing.lede">Inspect the Coding Plan credit ledger and the independent Start Plan token balance. Official reads happen only after an explicit local action.</p>
       </div>
       <section class="billing-section">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Coding Plan</p>
-            <h2>Official credit ledger</h2>
+            <p class="eyebrow" data-i18n="billing.codingEyebrow">Coding Plan</p>
+            <h2 data-i18n="billing.codingTitle">Official credit ledger</h2>
           </div>
           <span class="tag warm">GLM-5.3-FLASH</span>
         </div>
         <div class="action-row">
-          <button class="button primary" id="capture-billing">Read official snapshot</button>
-          <span id="billing-state" class="inline-state">No fresh snapshot requested.</span>
+          <button class="button primary" id="capture-billing" data-i18n="billing.readSnapshot">Read official snapshot</button>
+          <span id="billing-state" class="inline-state" data-i18n="billing.noFreshSnapshot">No fresh snapshot requested.</span>
         </div>
-        <div id="billing-result" class="empty-state panel">Read a snapshot or run a verification to populate this view.</div>
+        <div id="billing-result" class="empty-state panel" data-i18n="billing.empty">Read a snapshot or run a verification to populate this view.</div>
       </section>
 
       <section class="billing-section startplan-section">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Start Plan</p>
-            <h2>Independent token balance</h2>
+            <p class="eyebrow" data-i18n="startplan.eyebrow">Start Plan</p>
+            <h2 data-i18n="startplan.title">Independent token balance</h2>
           </div>
           <span class="tag" id="startplan-freshness">NO SNAPSHOT</span>
         </div>
         <div class="status-strip startplan-summary">
-          <article><small>Plan</small><strong id="startplan-plan">Unknown</strong></article>
-          <article><small>Status</small><strong id="startplan-plan-status">UNKNOWN</strong></article>
-          <article><small>Total tokens</small><strong id="startplan-total">—</strong></article>
-          <article><small>Remaining tokens</small><strong id="startplan-remaining">—</strong></article>
+          <article><small data-i18n="startplan.plan">Plan</small><strong id="startplan-plan" data-i18n="common.unknown">Unknown</strong></article>
+          <article><small data-i18n="startplan.status">Status</small><strong id="startplan-plan-status">UNKNOWN</strong></article>
+          <article><small data-i18n="startplan.totalTokens">Total tokens</small><strong id="startplan-total">—</strong></article>
+          <article><small data-i18n="startplan.remainingTokens">Remaining tokens</small><strong id="startplan-remaining">—</strong></article>
         </div>
         <article class="panel startplan-overview">
           <div class="panel-title">
-            <span>Quota utilization</span>
-            <span id="startplan-updated" class="mono">Never captured</span>
+            <span data-i18n="startplan.quotaUtilization">Quota utilization</span>
+            <span id="startplan-updated" class="mono" data-i18n="startplan.neverCaptured">Never captured</span>
           </div>
-          <div class="usage-progress" aria-label="Start Plan usage">
+          <div class="usage-progress" data-i18n-aria-label="startplan.usageAria">
             <div class="usage-progress-track"><span id="startplan-progress-fill"></span></div>
             <div class="usage-progress-labels">
               <strong id="startplan-progress-value">UNKNOWN</strong>
-              <span id="startplan-progress-detail">No official balance has been read.</span>
+              <span id="startplan-progress-detail" data-i18n="startplan.noBalanceRead">No official balance has been read.</span>
             </div>
           </div>
           <dl class="fact-grid startplan-facts" id="startplan-facts">
-            <div><dt>Entitlement</dt><dd>UNKNOWN</dd></div>
-            <div><dt>Unit</dt><dd>UNKNOWN</dd></div>
-            <div><dt>Billing period</dt><dd>UNKNOWN</dd></div>
-            <div><dt>Expiry</dt><dd>UNKNOWN</dd></div>
+            <div><dt data-i18n="startplan.entitlement">Entitlement</dt><dd>UNKNOWN</dd></div>
+            <div><dt data-i18n="startplan.unit">Unit</dt><dd>UNKNOWN</dd></div>
+            <div><dt data-i18n="startplan.billingPeriod">Billing period</dt><dd>UNKNOWN</dd></div>
+            <div><dt data-i18n="startplan.expiry">Expiry</dt><dd>UNKNOWN</dd></div>
           </dl>
         </article>
         <div class="action-row">
-          <button class="button primary" id="refresh-startplan">Refresh balance</button>
-          <button class="button secondary" id="view-startplan-history">View history</button>
-          <button class="button secondary" id="compare-startplan">Compare snapshots</button>
-          <a class="button secondary disabled-link" id="export-startplan" aria-disabled="true">Export latest</a>
-          <span id="startplan-state" class="inline-state">Page load never calls the official billing API.</span>
+          <button class="button primary" id="refresh-startplan" data-i18n="startplan.refresh">Refresh balance</button>
+          <button class="button secondary" id="view-startplan-history" data-i18n="startplan.viewHistory">View history</button>
+          <button class="button secondary" id="compare-startplan" data-i18n="startplan.compare">Compare snapshots</button>
+          <a class="button secondary disabled-link" id="export-startplan" aria-disabled="true" data-i18n="common.exportLatest">Export latest</a>
+          <span id="startplan-state" class="inline-state" data-i18n="startplan.pageLoadRead">Page load never calls the official billing API.</span>
         </div>
-        <h3 class="subheading">Bucket details</h3>
+        <h3 class="subheading" data-i18n="startplan.bucketDetails">Bucket details</h3>
         <div id="startplan-buckets" class="bucket-grid">
-          <div class="empty-state">No Start Plan snapshot yet.</div>
+          <div class="empty-state" data-i18n="startplan.noSnapshot">No Start Plan snapshot yet.</div>
         </div>
         <div id="startplan-compare" class="comparison-panel" hidden></div>
         <div class="panel-title startplan-history-title">
-          <span>Snapshot history</span>
-          <span class="mono" id="startplan-history-count">0 snapshots</span>
+          <span data-i18n="startplan.snapshotHistory">Snapshot history</span>
+          <span class="mono" id="startplan-history-count" data-i18n="startplan.zeroSnapshots">0 snapshots</span>
         </div>
         <div id="startplan-history" class="history-list">
-          <div class="empty-state">No Start Plan snapshots have been stored.</div>
+          <div class="empty-state" data-i18n="startplan.noStored">No Start Plan snapshots have been stored.</div>
         </div>
       </section>
     </section>
 
+    <section class="page" id="page-profiler">
+      <div class="page-heading compact">
+        <p class="eyebrow" data-i18n="profiler.eyebrow">Read-only agent attribution</p>
+        <h1 data-i18n="profiler.title">Token Profiler</h1>
+        <p class="lede" data-i18n="profiler.lede">Attribute observed Codex and ZCode Worker usage across a Goal, separate pure MCP waiting from model-driven polling, and keep unknowns unknown.</p>
+      </div>
+      <article class="warning-card profiler-boundary">
+        <strong data-i18n="profiler.boundaryTitle">Local metadata only.</strong>
+        <p data-i18n="profiler.boundaryBody">This page reads rollout and Bridge SQLite metadata without prompts, reasoning text, source code, tool-output bodies, credentials, or model requests. Content sizes are marked ESTIMATED, never provider usage.</p>
+      </article>
+      <div class="action-row profiler-controls">
+        <button class="button primary" id="collect-profiler" data-i18n="profiler.collect">Collect local sessions</button>
+        <label class="inline-field"><span data-i18n="profiler.thread">Thread</span>
+          <select id="profiler-thread"><option value="" data-i18n="common.chooseSession">Choose a session</option></select>
+        </label>
+        <button class="button secondary" id="analyze-profiler" disabled data-i18n="profiler.analyze">Analyze selected thread</button>
+        <span class="inline-state" id="profiler-state" data-i18n="profiler.noSnapshotLoaded">No local profiler snapshot loaded.</span>
+      </div>
+      <div class="status-strip profiler-summary" id="profiler-summary">
+        <article><small data-i18n="profiler.snapshot">Snapshot</small><strong id="profiler-snapshot">NONE</strong></article>
+        <article><small data-i18n="profiler.totalTokens">Total tokens</small><strong id="profiler-total">UNKNOWN</strong></article>
+        <article><small data-i18n="profiler.cacheHitRate">Cache hit rate</small><strong id="profiler-cache">UNKNOWN</strong></article>
+        <article><small data-i18n="profiler.pollingTokens">MCP polling tokens</small><strong id="profiler-polling">UNKNOWN</strong></article>
+      </div>
+      <div class="split-grid profiler-overview-grid">
+        <article class="panel">
+          <div class="panel-title"><span data-i18n="profiler.agentLedger">Agent ledger</span><span class="tag" id="profiler-evidence">UNKNOWN</span></div>
+          <div class="table-wrap" id="profiler-sessions"><div class="empty-state" data-i18n="profiler.collectHint">Collect a snapshot to inspect local sessions.</div></div>
+        </article>
+        <article class="panel accent-panel">
+          <div class="panel-title"><span data-i18n="profiler.scopeProvenance">Scope and provenance</span><span class="tag" id="profiler-mode">READ ONLY</span></div>
+          <dl class="fact-grid" id="profiler-provenance">
+            <div><dt data-i18n="profiler.snapshot">Snapshot</dt><dd data-i18n="profiler.notCollected">Not collected</dd></div>
+            <div><dt data-i18n="profiler.generated">Generated</dt><dd>UNKNOWN</dd></div>
+            <div><dt data-i18n="profiler.sources">Sources</dt><dd>0</dd></div>
+            <div><dt data-i18n="profiler.warnings">Warnings</dt><dd>0</dd></div>
+          </dl>
+          <div class="action-row profiler-report-actions">
+            <a class="button secondary disabled-link" id="export-profiler" aria-disabled="true" data-i18n="profiler.export">Export Markdown</a>
+          </div>
+        </article>
+      </div>
+      <div class="profiler-grid">
+        <article class="panel">
+          <div class="panel-title"><span data-i18n="profiler.phaseBreakdown">Phase breakdown</span><span class="tag" id="profiler-conservation">UNKNOWN</span></div>
+          <div class="table-wrap" id="profiler-phases"><div class="empty-state" data-i18n="profiler.noReport">No report selected.</div></div>
+        </article>
+        <article class="panel">
+          <div class="panel-title"><span data-i18n="profiler.contextCache">Context and cache</span><span class="tag" id="profiler-compactions" data-i18n="profiler.zeroCompactions">0 compactions</span></div>
+          <div class="metric-grid profiler-metrics" id="profiler-context"></div>
+          <div class="table-wrap" id="profiler-context-sources"></div>
+        </article>
+      </div>
+      <article class="panel profiler-section">
+        <div class="panel-title"><span data-i18n="profiler.mcpWaiting">MCP waiting and polling</span><span class="tag warm">TOOL SPANS</span></div>
+        <div class="metric-grid profiler-metrics" id="profiler-mcp-metrics"></div>
+        <div class="table-wrap" id="profiler-mcp"></div>
+      </article>
+      <article class="panel profiler-section">
+        <div class="panel-title timeline-heading">
+          <button class="timeline-toggle" id="profiler-timeline-toggle" type="button" aria-expanded="false" aria-controls="profiler-timeline-body" data-i18n-aria-label="profiler.expandTimeline" data-i18n-title="profiler.expandTimeline">
+            <span class="timeline-chevron" aria-hidden="true"></span>
+            <span data-i18n="profiler.timeline">Session timeline</span>
+          </button>
+          <div class="timeline-actions">
+            <span class="tag" id="profiler-timeline-count" data-i18n="profiler.zeroEvents">0 events</span>
+            <a class="button secondary disabled-link timeline-export" id="export-profiler-timeline" aria-disabled="true" data-i18n="profiler.timelineExport" data-i18n-title="profiler.timelineExportHint">Export timeline JSON</a>
+          </div>
+        </div>
+        <div id="profiler-timeline-body" class="timeline-body" hidden>
+          <div class="timeline" id="profiler-timeline"><div class="empty-state" data-i18n="profiler.noReport">No report selected.</div></div>
+        </div>
+      </article>
+      <article class="panel profiler-section">
+        <div class="panel-title"><span data-i18n="profiler.diagnostics">Diagnostics</span><span class="tag" id="profiler-diagnostics-count" data-i18n="profiler.zeroFindings">0 findings</span></div>
+        <div class="diagnostic-list" id="profiler-diagnostics"><div class="empty-state" data-i18n="profiler.noReport">No report selected.</div></div>
+      </article>
+      <article class="panel profiler-section">
+        <div class="panel-title"><span data-i18n="profiler.comparison">Comparison</span><span class="tag" id="profiler-comparison-status">NOT RUN</span></div>
+        <div class="action-row">
+          <label class="inline-field"><span data-i18n="profiler.before">Before</span>
+            <select id="profiler-before"><option value="" data-i18n="common.chooseReport">Choose report</option></select>
+          </label>
+          <label class="inline-field"><span data-i18n="profiler.after">After</span>
+            <select id="profiler-after"><option value="" data-i18n="common.chooseReport">Choose report</option></select>
+          </label>
+          <button class="button secondary" id="compare-profiler" disabled data-i18n="profiler.compareReports">Compare reports</button>
+        </div>
+        <div class="table-wrap" id="profiler-comparison"><div class="empty-state" data-i18n="profiler.selectTwo">Select two historical reports to compare.</div></div>
+      </article>
+    </section>
+
     <section class="page" id="page-history">
       <div class="page-heading compact">
-        <p class="eyebrow">Redacted local evidence</p>
-        <h1>Experiment History</h1>
-        <p class="lede">Every real verification is stored under <code>.run/cost-lab-web</code>. Exports omit credential-shaped fields and absolute user paths.</p>
+        <p class="eyebrow" data-i18n="history.eyebrow">Redacted local evidence</p>
+        <h1 data-i18n="history.title">Experiment History</h1>
+        <p class="lede" data-i18n="history.lede">Every real verification is stored under .run/cost-lab-web. Exports omit credential-shaped fields and absolute user paths.</p>
       </div>
       <div id="history-list" class="history-list"></div>
     </section>

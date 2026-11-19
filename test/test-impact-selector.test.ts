@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { selectCiImpact } from "../scripts/ci-select-impact.mjs";
@@ -17,6 +18,11 @@ function filesFor(selectorFile: string): string[] {
   if (selectorFile === "task-store") return ["src/sqlite-candidate/wp6b2b1/store.mjs"];
   if (selectorFile === "sqlite-schema") return ["src/sqlite-candidate/wp6b2b1/schema.sql"];
   if (selectorFile === "worker") return ["src/worker/worker-main.ts"];
+  if (selectorFile === "cost-lab") return ["tools/cost-lab/coding-plan-billing.mjs"];
+  if (selectorFile === "cost-lab-web") return ["tools/cost-lab/web/app.js"];
+  if (selectorFile === "shared-runtime") return ["src/runtime/paths.ts"];
+  if (selectorFile === "selector") return ["scripts/test-impact-selector.mjs"];
+  if (selectorFile === "workflow") return [".github/workflows/ci.yml"];
   if (selectorFile === "docs") return ["docs/reports/example.md"];
   if (selectorFile === "unknown-source") return ["src/example/new-domain.ts"];
   if (selectorFile === "test-runner") return ["scripts/test-isolated.mjs"];
@@ -90,13 +96,24 @@ test("unknown source and test infrastructure fall back to the complete suite", (
 });
 
 test("runner and shared fixture changes force the complete regression", () => {
-  for (const file of [filesFor("test-runner"), "test/helpers.ts", "test/test-impact-map.json", "tools/cost-lab/web-server.mjs"]) {
+  for (const file of [filesFor("test-runner"), "test/helpers.ts"]) {
     const changed = Array.isArray(file) ? file : [file];
     const selection = selectAffectedTests({ changedFiles: changed, map });
     assert.equal(selection.mode, "FULL_SUITE");
     assert.equal(selection.stress_mode, "SEPARATE_STRESS_GATE");
     assert.equal(selection.selected_tests.some((entry) => entry.file === "test/sqlite-resource-stress.test.mjs"), false);
   }
+});
+
+test("selector and workflow contracts run policy tests without forcing the complete regression", () => {
+  for (const file of [filesFor("selector"), "test/test-impact-map.json", filesFor("workflow")]) {
+    const changed = Array.isArray(file) ? file : [file];
+    const selection = selectAffectedTests({ changedFiles: changed, map });
+    assert.notEqual(selection.mode, "FULL_SUITE", String(file));
+    assert.equal(selection.stress_mode, "STRESS_TESTS_NOT_APPLICABLE", String(file));
+  }
+  const selector = selectAffectedTests({ changedFiles: filesFor("selector"), map });
+  assert.ok(selector.selected_tests.some((entry) => entry.file === "test/test-impact-selector.test.ts"));
 });
 
 test("renames preserve mapping by selecting both old and new paths", () => {
@@ -179,11 +196,14 @@ test("CI impact gate shadow-compares targeted and full selections with the execu
   assert.equal(docs.affected_mode, "NO_TESTS_APPLICABLE");
   assert.equal(docs.integration_required, false);
   assert.equal(docs.full_required, false);
+  assert.equal(docs.docs_required, true);
 
   const worker = selectCiImpact({ files: ["src/worker/worker-main.ts"], map });
   assert.equal(worker.affected_mode, "TARGETED");
   assert.equal(worker.integration_required, true);
   assert.equal(worker.full_required, false);
+  assert.equal(worker.bridge_mode, "TARGETED");
+  assert.equal(worker.cost_lab_required, false);
   assert.ok(worker.selected_test_files.includes("test/spawn-worker-stderr.test.ts"));
   assert.ok(worker.selected_test_files.includes("test/sqlite-candidate/wp6b-wiring/composition.test.ts"));
 
@@ -191,15 +211,85 @@ test("CI impact gate shadow-compares targeted and full selections with the execu
   assert.equal(full.affected_mode, "FULL_SUITE");
   assert.equal(full.force_full, false);
   assert.equal(full.full_required, true);
+  assert.equal(full.bridge_mode, "FULL");
+  assert.equal(full.cost_lab_required, true);
+  assert.equal(full.shared_runtime_required, true);
   assert.equal(full.integration_required, true);
+  assert.equal(full.stress_required, true);
 
   const forced = selectCiImpact({ files: [], map, forceFull: true });
   assert.equal(forced.force_full, true);
   assert.equal(forced.full_required, true);
+  assert.equal(forced.cost_lab_required, true);
+  assert.equal(forced.shared_runtime_required, true);
+  assert.equal(forced.selector_required, true);
+  assert.equal(forced.workflow_required, true);
+  assert.equal(forced.docs_required, true);
+  assert.equal(forced.stress_required, true);
 
   const forcedRunner = selectAffectedTests({ changedFiles: [], map, forceFull: true });
   assert.equal(forcedRunner.mode, "FULL_SUITE");
   assert.deepEqual(forcedRunner.full_suite_reasons, ["forced-full"]);
+});
+
+test("CI routing matrix covers Cost Lab, Bridge, Web, shared, mixed, selector, workflow, and docs changes", () => {
+  const scenarios = [
+    {
+      name: "Cost Lab only",
+      files: filesFor("cost-lab"),
+      expected: { cost_lab_required: true, cost_lab_web_required: false, shared_runtime_required: false, bridge_mode: "NONE",
+        integration_required: false, stress_required: false, selector_required: false, docs_required: false },
+    },
+    {
+      name: "Bridge production source only",
+      files: filesFor("worker"),
+      expected: { cost_lab_required: false, cost_lab_web_required: false, shared_runtime_required: false, bridge_mode: "TARGETED",
+        integration_required: true, stress_required: false, selector_required: false, docs_required: false },
+    },
+    {
+      name: "Cost Lab Web only",
+      files: filesFor("cost-lab-web"),
+      expected: { cost_lab_required: true, cost_lab_web_required: true, shared_runtime_required: false, bridge_mode: "NONE",
+        integration_required: false, stress_required: false, selector_required: false, docs_required: false },
+    },
+    {
+      name: "shared runtime",
+      files: filesFor("shared-runtime"),
+      expected: { cost_lab_required: true, cost_lab_web_required: false, shared_runtime_required: true, bridge_mode: "TARGETED",
+        integration_required: true, stress_required: true, selector_required: false, docs_required: false },
+    },
+    {
+      name: "mixed Cost Lab and Bridge",
+      files: [...filesFor("cost-lab"), ...filesFor("worker")],
+      expected: { cost_lab_required: true, cost_lab_web_required: false, shared_runtime_required: false, bridge_mode: "TARGETED",
+        integration_required: true, stress_required: false, selector_required: false, docs_required: false },
+    },
+    {
+      name: "CI selector only",
+      files: filesFor("selector"),
+      expected: { cost_lab_required: false, cost_lab_web_required: false, shared_runtime_required: false, bridge_mode: "NONE",
+        integration_required: false, stress_required: false, selector_required: true, docs_required: false },
+    },
+    {
+      name: "CI workflow only",
+      files: filesFor("workflow"),
+      expected: { cost_lab_required: false, cost_lab_web_required: false, shared_runtime_required: false, bridge_mode: "NONE",
+        integration_required: false, stress_required: false, selector_required: true, docs_required: false },
+    },
+    {
+      name: "documentation only",
+      files: filesFor("docs"),
+      expected: { cost_lab_required: false, cost_lab_web_required: false, shared_runtime_required: false, bridge_mode: "NONE",
+        integration_required: false, stress_required: false, selector_required: false, docs_required: true },
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    const impact = selectCiImpact({ files: scenario.files, map });
+    for (const [key, expected] of Object.entries(scenario.expected)) {
+      assert.equal(impact[key as keyof typeof impact], expected, `${scenario.name}: ${key}`);
+    }
+  }
 });
 
 test("CI impact CLI fails safe for dispatch, initial-push and invalid base revisions", () => {
@@ -234,6 +324,46 @@ test("CI impact CLI fails safe for dispatch, initial-push and invalid base revis
   assert.match(invalid.stderr, /git diff .* failed/u);
 });
 
+test("CI impact CLI emits the complete stable track output contract", () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "ci-impact-output-"));
+  const outputPath = path.join(directory, "github-output.txt");
+  try {
+    const result = spawnSync(
+      process.execPath,
+      ["scripts/ci-select-impact.mjs", "--base", "HEAD", "--head", "HEAD", "--github-output"],
+      { encoding: "utf8", env: { ...process.env, GITHUB_OUTPUT: outputPath } },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const outputs = new Map(
+      readFileSync(outputPath, "utf8").trim().split(/\r?\n/u).map((line) => {
+        const separator = line.indexOf("=");
+        return [line.slice(0, separator), line.slice(separator + 1)];
+      }),
+    );
+    for (const key of [
+      "force_full",
+      "full_required",
+      "bridge_required",
+      "bridge_mode",
+      "bridge_full_required",
+      "bridge_targeted_required",
+      "cost_lab_required",
+      "cost_lab_mode",
+      "cost_lab_web_required",
+      "shared_runtime_required",
+      "selector_required",
+      "workflow_required",
+      "docs_required",
+      "integration_required",
+      "stress_required",
+    ]) {
+      assert.ok(outputs.has(key), `missing CI output: ${key}`);
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("FULL-impact Fast gate delegates the full regression to Release", () => {
   const workflow = readFileSync(path.resolve(".github/workflows/ci.yml"), "utf8");
   assert.match(
@@ -254,4 +384,23 @@ test("FULL-impact Fast gate delegates the full regression to Release", () => {
     1,
     "the complete npm test run belongs to the Release gate",
   );
+});
+
+test("CI workflow keeps stable required contexts and executable track routing", () => {
+  const validation = spawnSync(
+    process.execPath,
+    ["scripts/validate-ci-workflow.mjs"],
+    { encoding: "utf8" },
+  );
+  assert.equal(validation.status, 0, validation.stderr);
+  const result = JSON.parse(validation.stdout);
+  assert.equal(result.status, "CI_WORKFLOW_VALIDATION_PASS");
+  assert.deepEqual(result.required_check_names, [
+    "Verify (${{ matrix.os }})",
+    "SQLite resource matrix (${{ matrix.os }})",
+  ]);
+  assert.equal(result.release_please_trigger, "master-push-only");
+  const workflow = readFileSync(path.resolve(".github/workflows/ci.yml"), "utf8");
+  assert.doesNotMatch(workflow, /^on:\s*\n(?:[\s\S]*?)^\s{2}paths:/mu);
+  assert.doesNotMatch(workflow, /^    if:\s+github\.event_name\s*==\s*'push'/mu);
 });

@@ -28,7 +28,7 @@ function matchesPattern(inputPath, pattern) {
   return new RegExp(`^${regexSource}$`, "u").test(value);
 }
 
-function pathMatchesAny(inputPath, patterns) {
+export function pathMatchesAny(inputPath, patterns) {
   return patterns.some((pattern) => matchesPattern(inputPath, pattern));
 }
 

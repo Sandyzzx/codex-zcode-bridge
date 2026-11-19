@@ -19,6 +19,16 @@ import {
 } from "./coding-plan-billing.mjs";
 import { runOfficialAppServerProtocolSmoke } from "./official-app-server-protocol-smoke.mjs";
 import { resolveBillingDataBaseDir } from "./path-discovery.mjs";
+import {
+  collectAndStoreProfilerSnapshot,
+  createStoredProfilerComparison,
+  createStoredProfilerReport,
+  listStoredProfilerReports,
+  loadStoredProfilerReportById,
+  profilerSessions,
+  readLatestStoredProfilerSnapshot,
+} from "./profiler-service.mjs";
+import { renderProfilerMarkdown } from "./profiler/index.mjs";
 import { readOfficialStartPlanBilling } from "./startplan-reader.mjs";
 import { createStartPlanBillingService } from "./startplan-web.mjs";
 import { inspectCostLabEnvironment, redactValue } from "./web-services.mjs";
@@ -36,8 +46,13 @@ const STATIC_FILES = Object.freeze({
   "/": Object.freeze({ file: "index.html", type: "text/html; charset=utf-8" }),
   "/index.html": Object.freeze({ file: "index.html", type: "text/html; charset=utf-8" }),
   "/app.js": Object.freeze({ file: "app.js", type: "text/javascript; charset=utf-8" }),
+  "/i18n.mjs": Object.freeze({ file: "i18n.mjs", type: "text/javascript; charset=utf-8" }),
   "/startplan-view.mjs": Object.freeze({
     file: "startplan-view.mjs",
+    type: "text/javascript; charset=utf-8",
+  }),
+  "/startplan-status.mjs": Object.freeze({
+    file: "startplan-status.mjs",
     type: "text/javascript; charset=utf-8",
   }),
   "/styles.css": Object.freeze({ file: "styles.css", type: "text/css; charset=utf-8" }),
@@ -59,6 +74,12 @@ export function createCostLabWebServer(options = {}) {
     inspectEnvironment: options.inspectEnvironment ?? inspectCostLabEnvironment,
     verificationRunner: options.verificationRunner ?? loadOptionalVerificationRunner(),
     protocolSmoke: options.protocolSmoke ?? runOfficialAppServerProtocolSmoke,
+    profilerCollect: options.profilerCollect ?? collectAndStoreProfilerSnapshot,
+    profilerLatest: options.profilerLatest ?? readLatestStoredProfilerSnapshot,
+    profilerAnalyze: options.profilerAnalyze ?? createStoredProfilerReport,
+    profilerReports: options.profilerReports ?? listStoredProfilerReports,
+    profilerReport: options.profilerReport ?? loadStoredProfilerReportById,
+    profilerCompare: options.profilerCompare ?? createStoredProfilerComparison,
     now: options.now ?? (() => new Date()),
     createId: options.createId ?? randomUUID,
     afterRetryDelaysMs: options.afterRetryDelaysMs ?? [
@@ -283,6 +304,152 @@ export function createCostLabWebServer(options = {}) {
         protocolSmoke: dependencies.protocolSmoke,
       });
       sendJson(response, 200, { ok: true, data: redactValue(environment) });
+      return;
+    }
+    if (method === "GET" && url.pathname === "/api/profiler/latest") {
+      const snapshot = await dependencies.profilerLatest({ projectRoot });
+      if (!snapshot) {
+        sendJson(response, 200, {
+          ok: true,
+          data: {
+            status: "NO_SNAPSHOT",
+            sessions: [],
+            reports: await dependencies.profilerReports({ projectRoot }),
+          },
+        });
+        return;
+      }
+      sendJson(response, 200, {
+        ok: true,
+        data: redactValue({
+          status: "READY",
+          snapshot_id: snapshot.snapshot_id,
+          captured_at: snapshot.captured_at,
+          generated_at: snapshot.generated_at,
+          collection_mode: snapshot.collection_mode,
+          sources: snapshot.sources,
+          warnings: snapshot.warnings,
+          sessions: profilerSessions(snapshot),
+          reports: await dependencies.profilerReports({ projectRoot }),
+        }),
+      });
+      return;
+    }
+    if (method === "POST" && url.pathname === "/api/profiler/collect") {
+      assertEmptyProfilerAction(body, "Profiler collection");
+      const collected = await dependencies.profilerCollect({ projectRoot });
+      sendJson(response, 200, {
+        ok: true,
+        data: redactValue({
+          status: "READY",
+          snapshot_id: collected.snapshot.snapshot_id,
+          captured_at: collected.snapshot.captured_at,
+          generated_at: collected.snapshot.generated_at,
+          collected_at: collected.collected_at,
+          collection_mode: collected.snapshot.collection_mode,
+          sources: collected.snapshot.sources,
+          warnings: collected.snapshot.warnings,
+          sessions: profilerSessions(collected.snapshot),
+          reports: await dependencies.profilerReports({ projectRoot }),
+        }),
+      });
+      return;
+    }
+    if (method === "POST" && url.pathname === "/api/profiler/analyze") {
+      const selection = profilerSelection(body);
+      const latest = await dependencies.profilerLatest({ projectRoot });
+      if (!latest) {
+        throw httpError(
+          409,
+          "PROFILER_SNAPSHOT_REQUIRED",
+          "Collect a local profiler snapshot before creating a report.",
+        );
+      }
+      const created = await dependencies.profilerAnalyze({
+        projectRoot,
+        snapshot: latest,
+        ...selection,
+        now: dependencies.now,
+      });
+      sendJson(response, 200, {
+        ok: true,
+        data: redactValue(created.report),
+      });
+      return;
+    }
+    if (method === "GET" && url.pathname === "/api/profiler/reports") {
+      sendJson(response, 200, {
+        ok: true,
+        data: { reports: await dependencies.profilerReports({ projectRoot }) },
+      });
+      return;
+    }
+    const profilerTimelineExport =
+      /^\/api\/profiler\/reports\/([0-9a-f]{8,64})\/timeline\/export$/u.exec(url.pathname);
+    if (method === "GET" && profilerTimelineExport) {
+      const report = await dependencies.profilerReport(profilerTimelineExport[1], { projectRoot });
+      const exported = {
+        schema_version: 1,
+        kind: "cost_lab_profiler_timeline_export",
+        exported_at: dependencies.now().toISOString(),
+        report_id: report.report_id,
+        source_snapshot_id: report.source_snapshot_id,
+        report_generated_at: report.generated_at ?? null,
+        agents: (report.agents ?? []).map((agent) => ({
+          agent_id: agent.agent_id,
+          kind: agent.kind,
+          thread_id: agent.thread_id ?? null,
+          parent_agent_id: agent.parent_agent_id ?? null,
+          task_id: agent.task_id ?? null,
+        })),
+        timeline_meta: {
+          event_count: report.timeline_meta?.event_count ?? 0,
+          total_event_count: report.timeline_meta?.total_event_count ?? 0,
+          truncated: report.timeline_meta?.truncated === true,
+          limit: report.timeline_meta?.limit ?? null,
+          content_retained: report.timeline_meta?.content_retained === true,
+        },
+        timeline: (report.timeline ?? []).map(timelineExportEntry),
+      };
+      const bodyText = `${JSON.stringify(redactValue(exported), null, 2)}\n`;
+      response.writeHead(200, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Content-Disposition":
+          `attachment; filename="cost-lab-profiler-timeline-${profilerTimelineExport[1]}.json"`,
+        "Cache-Control": "no-store",
+      });
+      response.end(bodyText);
+      return;
+    }
+    const profilerExport = /^\/api\/profiler\/reports\/([0-9a-f]{8,64})\/export$/u.exec(url.pathname);
+    if (method === "GET" && profilerExport) {
+      const report = await dependencies.profilerReport(profilerExport[1], { projectRoot });
+      const markdown = renderProfilerMarkdown(report);
+      response.writeHead(200, {
+        "Content-Type": "text/markdown; charset=utf-8",
+        "Content-Disposition": `attachment; filename="cost-lab-profiler-${profilerExport[1]}.md"`,
+        "Cache-Control": "no-store",
+      });
+      response.end(markdown);
+      return;
+    }
+    const profilerReport = /^\/api\/profiler\/reports\/([0-9a-f]{8,64})$/u.exec(url.pathname);
+    if (method === "GET" && profilerReport) {
+      const report = await dependencies.profilerReport(profilerReport[1], { projectRoot });
+      sendJson(response, 200, { ok: true, data: redactValue(report) });
+      return;
+    }
+    if (method === "POST" && url.pathname === "/api/profiler/compare") {
+      if (!body || typeof body.before !== "string" || typeof body.after !== "string") {
+        throw httpError(400, "PROFILER_COMPARE_INPUT_REQUIRED", "Before and after report IDs are required.");
+      }
+      const comparison = await dependencies.profilerCompare({
+        projectRoot,
+        before: body.before,
+        after: body.after,
+        now: dependencies.now,
+      });
+      sendJson(response, 200, { ok: true, data: redactValue(comparison) });
       return;
     }
     if (method === "POST" && url.pathname === "/api/billing/snapshot") {
@@ -773,6 +940,43 @@ function historySummary(record) {
   });
 }
 
+function timelineExportEntry(entry) {
+  const fields = [
+    "timeline_id",
+    "kind",
+    "at",
+    "end_at",
+    "agent_id",
+    "turn_id",
+    "response_id",
+    "tool_name",
+    "tool_event_id",
+    "task_id",
+    "attempt",
+    "compaction_id",
+    "window_number",
+    "replacement_item_count",
+    "estimated_retained_context_tokens",
+    "input_tokens",
+    "cached_input_tokens",
+    "output_tokens",
+    "total_tokens",
+    "duration_ms",
+    "output_bytes",
+    "duplicate",
+    "failure",
+    "turn_count",
+    "tool_call_count",
+    "status",
+    "evidence_level",
+  ];
+  return Object.fromEntries(
+    fields
+      .filter((field) => Object.hasOwn(entry, field))
+      .map((field) => [field, entry[field]]),
+  );
+}
+
 function inconclusiveBilling(settlementStatus, limitation = null) {
   return {
     billing_reconciliation: "INCONCLUSIVE",
@@ -827,6 +1031,43 @@ function httpError(status, code, message) {
   error.statusCode = status;
   error.code = code;
   return error;
+}
+
+function assertEmptyProfilerAction(body, label) {
+  if (body !== null && body !== undefined && (
+    typeof body !== "object"
+    || Array.isArray(body)
+    || Object.keys(body).length !== 0
+  )) {
+    throw httpError(400, "PROFILER_ACTION_INPUT_REJECTED", `${label} does not accept client input.`);
+  }
+}
+
+function profilerSelection(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw httpError(400, "PROFILER_SELECTION_REQUIRED", "A profiler thread, goal, agent, or time range is required.");
+  }
+  const allowed = new Set(["thread_id", "goal_id", "agent_id", "from", "to"]);
+  const unknown = Object.keys(body).filter((key) => !allowed.has(key));
+  if (unknown.length > 0) {
+    throw httpError(400, "PROFILER_SELECTION_INPUT_REJECTED", "The profiler selection contains unsupported fields.");
+  }
+  for (const key of allowed) {
+    if (body[key] !== undefined && (typeof body[key] !== "string" || body[key].trim() === "")) {
+      throw httpError(400, "PROFILER_SELECTION_INPUT_REJECTED", "Profiler selection values must be non-empty strings.");
+    }
+  }
+  const selection = {
+    threadId: body.thread_id?.trim() || undefined,
+    goalId: body.goal_id?.trim() || undefined,
+    agentId: body.agent_id?.trim() || undefined,
+    from: body.from?.trim() || undefined,
+    to: body.to?.trim() || undefined,
+  };
+  if (!selection.threadId && !selection.goalId && !selection.agentId && !selection.from && !selection.to) {
+    throw httpError(400, "PROFILER_SELECTION_REQUIRED", "A profiler thread, goal, agent, or time range is required.");
+  }
+  return selection;
 }
 
 function safeErrorCode(error) {
