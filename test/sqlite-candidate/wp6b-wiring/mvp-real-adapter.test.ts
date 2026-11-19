@@ -55,6 +55,14 @@ const officialHostCloseFailureWorkerEntryPath = path.join(
   "wp6b-wiring",
   "official-host-close-failure-worker.js",
 );
+const officialHostStartPlanNoDiscountWorkerEntryPath = path.join(
+  projectRoot,
+  "dist-test",
+  "test",
+  "sqlite-candidate",
+  "wp6b-wiring",
+  "official-host-start-plan-no-discount-worker.js",
+);
 
 // The isolated candidate Store only accepts data roots inside the candidate
 // tree, matching the established WP6 composition fixture layout.
@@ -536,15 +544,20 @@ function copyFileSync(source: string): void {
   writeFileSync(candidateSchema, readFileSync(source, "utf8"), "utf8");
 }
 
-test("Worker default path reaches OfficialHostAdapter, SQLite Result, Cleanup, and Release", {
+test("Worker routes an explicit Coding Plan through the installed AppServer adapter, SQLite Result, Cleanup, and Release", {
   timeout: 120_000,
   skip: process.platform !== "win32" || process.arch !== "x64",
 }, async () => {
+  const diagnostics = { lines: [] as string[] };
+  const workerStderr = { lines: [] as string[] };
   await withRealAdapterMcp(async (client, manager, _dataRoot, workspace) => {
     const taskId = `official-host-worker-${randomUUID()}`;
     const created = contentObject(await client.callTool({
       name: "zcode_task",
-      arguments: syntheticTask(workspace, taskId),
+      arguments: {
+        ...syntheticTask(workspace, taskId),
+        model: { provider_id: "account:bigmodel-individual-coding-plan", model_id: "GLM-5.3-Flash" },
+      },
     }));
     assert.equal(created.status, "queued");
     assert.equal((await waitForTerminal(client, taskId, 1)).status, "completed");
@@ -573,8 +586,21 @@ test("Worker default path reaches OfficialHostAdapter, SQLite Result, Cleanup, a
       treeScanStatus: "verified",
     });
     assert.equal(adapterCleanup.treeScanStatus, "verified");
+    assert.ok(
+      workerStderr.lines.join("").includes("[bridge-worker] adapter event=official_runtime_verified"),
+      "Coding Plan must enter OfficialAppServerWorkerAdapter",
+    );
+    assert.ok(
+      diagnostics.lines.some((line) => line.includes("[bridge-worker] installed-runtime")
+        && line.includes("a".repeat(64))),
+      "Coding Plan must report the installed AppServer runtime identity",
+    );
     await manager.shutdown();
-  }, { workerOverride: officialHostWorkerEntryPath });
+  }, {
+    workerOverride: officialHostWorkerEntryPath,
+    workerDiagnosticCollector: diagnostics,
+    stderrCollector: workerStderr,
+  });
 });
 
 test("Worker Cleanup keeps a rejected official close visible when its independent scan is clean", {
@@ -1989,6 +2015,42 @@ test("startBridge's host issuer wiring reaches the fake Billing gate and complet
     assert.ok(requests.some((message) => (message as { auth_applied?: boolean }).auth_applied === true), "the private lease must be delivered after Billing success");
     assert.equal(JSON.stringify(requests).includes(HOST_JWT), false, "the delivered credential must never appear in the app-server request log");
   }, { runtimeVariant: "private-auth", issuerFactory: hostIssuerFactory(gate.entitlement), preserveFixtureOnFailure: true });
+});
+
+test("Start Plan Worker routing enters the installed AppServer adapter", { timeout: 120_000 }, async () => {
+  const gate = fakeHostBillingGate("entitled");
+  const diagnostics = { lines: [] as string[] };
+  const workerStderr = { lines: [] as string[] };
+  await withRealAdapterMcp(async (client, _manager, _dataRoot, workspace) => {
+    const taskId = `start-plan-installed-route-${randomUUID()}`;
+    contentObject(await client.callTool({ name: "zcode_task", arguments: {
+      ...syntheticTask(workspace, taskId),
+      model: { provider_id: "account:bigmodel-start-plan", model_id: "GLM-5.3-Flash" },
+    } }));
+    assert.equal((await waitForTerminal(client, taskId, 1)).status, "completed");
+    await waitForLifecycleEvent(client, taskId, "released");
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline
+      && !diagnostics.lines.some((line) => line.includes("[bridge-worker] installed-runtime"))) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.ok(
+      workerStderr.lines.join("").includes("[bridge-worker] adapter event=official_runtime_verified"),
+      "Start Plan must enter OfficialAppServerWorkerAdapter, not the packaged Specialized Host adapter",
+    );
+    assert.ok(
+      diagnostics.lines.some((line) => line.includes("[bridge-worker] installed-runtime")
+        && line.includes("a".repeat(64))),
+      "Start Plan must report the installed AppServer runtime identity without a Coding Plan discount verdict",
+    );
+  }, {
+    runtimeVariant: "private-auth",
+    issuerFactory: hostIssuerFactory(gate.entitlement),
+    workerOverride: officialHostStartPlanNoDiscountWorkerEntryPath,
+    workerDiagnosticCollector: diagnostics,
+    stderrCollector: workerStderr,
+    preserveFixtureOnFailure: true,
+  });
 });
 
 test("host-wired issuer surfaces a sanitized Billing rejection and never starts the AppServer", { timeout: 120_000 }, async () => {

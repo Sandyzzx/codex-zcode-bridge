@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { selectProductionAdapter } from "../src/worker/production-adapter-selection.js";
+import {
+  selectOfficialProviderRuntime,
+  selectProductionAdapter,
+} from "../src/worker/production-adapter-selection.js";
 
 test("production adapter selection follows the frozen platform matrix", () => {
   assert.equal(selectProductionAdapter("win32", "x64"), "official_host");
@@ -45,5 +48,21 @@ test("environment variables cannot redirect production adapter selection", () =>
   } finally {
     if (previous === undefined) delete process.env.ZCODE_BRIDGE_ADAPTER;
     else process.env.ZCODE_BRIDGE_ADAPTER = previous;
+  }
+});
+
+test("only exact official BigModel plans select the installed AppServer runtime", () => {
+  assert.equal(selectOfficialProviderRuntime("account:bigmodel-individual-coding-plan"), "coding_plan_discount");
+  assert.equal(selectOfficialProviderRuntime("builtin:bigmodel-coding-plan"), "coding_plan_discount");
+  assert.equal(selectOfficialProviderRuntime("account:bigmodel-start-plan"), "start_plan_static");
+  for (const providerId of [
+    undefined,
+    "",
+    "bigmodel-start-plan",
+    "account:another-start-plan",
+    "account:bigmodel-individual-coding-plan-other",
+    "account:bigmodel-team-coding-plan",
+  ]) {
+    assert.equal(selectOfficialProviderRuntime(providerId), null);
   }
 });

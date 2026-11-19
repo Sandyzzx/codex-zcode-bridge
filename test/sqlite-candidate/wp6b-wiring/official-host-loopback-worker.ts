@@ -6,6 +6,7 @@ import {
   ZCodeAgentProcessManager,
   ZCodeProtocolClient,
 } from "./official-host-loopback-module.js";
+import { createTestOnlyInstalledRuntime } from "./test-only-installed-runtime.js";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const workerModuleUrl = pathToFileURL(path.join(
@@ -15,6 +16,7 @@ const workerModuleUrl = pathToFileURL(path.join(
   "worker",
   "worker-main.mjs",
 ));
+const installedRuntime = createTestOnlyInstalledRuntime();
 
 await runWorkerMain({
   testOnlyOfficialHostModule: {
@@ -23,6 +25,8 @@ await runWorkerMain({
     ZCodeProtocolClient,
   },
   testOnlyWorkerModuleUrl: workerModuleUrl,
+  testOnlyOfficialRuntimeResolver: installedRuntime.resolver,
+  testOnlyOfficialHostAssets: installedRuntime.assets,
   testOnlyProbe: createPlatformProbe({ timeoutMs: 10_000 }),
   testOnlyVerifyTreeClean: async (targets) => ({
     clean: true,

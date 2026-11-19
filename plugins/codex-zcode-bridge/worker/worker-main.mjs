@@ -28519,6 +28519,7 @@ function unverified(reason, nodeExecutable, details = {}) {
   return {
     status: "OFFICIAL_RUNTIME_UNVERIFIED",
     discount_capability: "OFFICIAL_DISCOUNT_NOT_VERIFIED",
+    start_plan_static_compatibility: null,
     reason,
     install_dir: details.install_dir ?? null,
     install_source: details.install_source ?? null,
@@ -28859,6 +28860,7 @@ var init_official_app_server_runtime = __esm({
         return {
           status: "OFFICIAL_RUNTIME_VERIFIED",
           discount_capability: manifest?.coding_plan_discount_verified === true ? "OFFICIAL_DISCOUNT_VERIFIED" : "OFFICIAL_DISCOUNT_NOT_VERIFIED",
+          start_plan_static_compatibility: manifest?.start_plan_static_compatibility ?? null,
           reason: null,
           install_dir: installDir,
           install_source: discovery.source,
@@ -28906,10 +28908,20 @@ var init_official_app_server_runtime = __esm({
 // src/adapters/official-app-server-adapter.ts
 var official_app_server_adapter_exports = {};
 __export(official_app_server_adapter_exports, {
-  OfficialAppServerWorkerAdapter: () => OfficialAppServerWorkerAdapter
+  OfficialAppServerWorkerAdapter: () => OfficialAppServerWorkerAdapter,
+  officialProviderCapabilityFailure: () => officialProviderCapabilityFailure
 });
 import path11 from "node:path";
 import { pathToFileURL as pathToFileURL3 } from "node:url";
+function officialProviderCapabilityFailure(descriptor, capability) {
+  if (descriptor.status !== "OFFICIAL_RUNTIME_VERIFIED") {
+    return `OFFICIAL_RUNTIME_UNVERIFIED: ${descriptor.reason ?? "installed Official AppServer is unavailable"}`;
+  }
+  if (capability === "coding_plan_discount") {
+    return descriptor.discount_capability === "OFFICIAL_DISCOUNT_VERIFIED" ? null : `OFFICIAL_RUNTIME_UNVERIFIED: ${descriptor.reason ?? "installed runtime has no verified Coding Plan discount capability"}; OFFICIAL_DISCOUNT_NOT_VERIFIED`;
+  }
+  return descriptor.start_plan_static_compatibility === "OFFLINE_COMPATIBLE" ? null : `STARTPLAN_RUNTIME_INCOMPATIBLE: ${descriptor.reason ?? "installed runtime is not offline-compatible with Start Plan"}; START_PLAN_COMPATIBILITY_${descriptor.start_plan_static_compatibility ?? "UNVERIFIED"}`;
+}
 async function loadOfficialHostModule2(modulePath2) {
   const value = await import(pathToFileURL3(path11.resolve(modulePath2)).href);
   if (!value || typeof value.ZCodeAgentProcessManager !== "function" || typeof value.ZCodeProtocolClient !== "function") {
@@ -28930,6 +28942,7 @@ var init_official_app_server_adapter = __esm({
     init_official_host_adapter();
     OfficialAppServerWorkerAdapter = class extends ZCodeAppServerAdapter {
       constructor(options = {}) {
+        const providerCapability = options.providerCapability ?? "coding_plan_discount";
         const runtimeResolver = options.officialRuntimeResolver ?? new OfficialAppServerRuntimeResolver({
           env: options.childEnvBase,
           ...options.homeDir ? { homeDir: options.homeDir } : {},
@@ -28940,23 +28953,25 @@ var init_official_app_server_adapter = __esm({
         let resolved;
         const assets = () => {
           resolved ??= Promise.all([runtimeResolver.inspect(), packagedAssets]).then(([descriptor, packaged]) => {
-            if (descriptor.status !== "OFFICIAL_RUNTIME_VERIFIED" || !descriptor.bundle_path || !descriptor.builtin_provider_config_path || !descriptor.runtime_host_path) {
+            const capabilityFailure = officialProviderCapabilityFailure(descriptor, providerCapability);
+            const missingRuntimeAsset = !descriptor.bundle_path || !descriptor.builtin_provider_config_path || !descriptor.runtime_host_path;
+            if (capabilityFailure || missingRuntimeAsset) {
+              const failure2 = capabilityFailure ?? `OFFICIAL_RUNTIME_UNVERIFIED: installed runtime descriptor is missing required assets`;
               try {
                 options.onEvent?.({
                   type: "official_runtime_unverified",
-                  summary: "Installed ZCode AppServer is not verified for the Coding Plan discount",
+                  summary: failure2,
                   details: {
                     status: descriptor.status,
-                    discount_capability: "OFFICIAL_DISCOUNT_NOT_VERIFIED",
-                    reason: descriptor.reason
+                    discount_capability: descriptor.discount_capability,
+                    start_plan_static_compatibility: descriptor.start_plan_static_compatibility,
+                    provider_capability: providerCapability,
+                    reason: failure2
                   }
                 });
               } catch {
               }
-              throw new BridgeError(
-                "provider_config_invalid",
-                `OFFICIAL_RUNTIME_UNVERIFIED: ${descriptor.reason ?? "installed Official AppServer is unavailable"}; OFFICIAL_DISCOUNT_NOT_VERIFIED`
-              );
+              throw new BridgeError("provider_config_invalid", failure2);
             }
             return {
               descriptor,
@@ -28986,6 +29001,8 @@ var init_official_app_server_adapter = __esm({
               details: {
                 status: runtime.descriptor.status,
                 discount_capability: runtime.descriptor.discount_capability,
+                start_plan_static_compatibility: runtime.descriptor.start_plan_static_compatibility,
+                provider_capability: providerCapability,
                 desktop_version: runtime.descriptor.desktop_version,
                 bundle_sha256: runtime.descriptor.bundle_sha256,
                 runtime_host_sha256: runtime.descriptor.runtime_host_sha256,
@@ -29640,6 +29657,19 @@ var StartPlanSecretRedactor = class {
 init_account_provider();
 
 // src/worker/production-adapter-selection.ts
+var OFFICIAL_CODING_PLAN_PROVIDER_IDS = /* @__PURE__ */ new Set([
+  "account:bigmodel-individual-coding-plan",
+  "bigmodel-individual-coding-plan",
+  "builtin:bigmodel-coding-plan"
+]);
+var OFFICIAL_START_PLAN_PROVIDER_ID = "account:bigmodel-start-plan";
+function selectOfficialProviderRuntime(providerId) {
+  if (providerId && OFFICIAL_CODING_PLAN_PROVIDER_IDS.has(providerId)) {
+    return "coding_plan_discount";
+  }
+  if (providerId === OFFICIAL_START_PLAN_PROVIDER_ID) return "start_plan_static";
+  return null;
+}
 function selectProductionAdapter(platform = process.platform, architecture = process.arch) {
   if (platform === "win32" && architecture === "x64") return "official_host";
   const error62 = new Error(
@@ -30264,7 +30294,9 @@ async function runZCodeAdapter(bootstrap, execution, interaction, workerIdentity
     const officialHostOptions = {
       ...adapterOptions,
       ...dependencies.testOnlyOfficialHostModule ? { testOnlyOfficialHostModule: dependencies.testOnlyOfficialHostModule } : {},
-      ...dependencies.testOnlyWorkerModuleUrl ? { testOnlyWorkerModuleUrl: dependencies.testOnlyWorkerModuleUrl } : {}
+      ...dependencies.testOnlyWorkerModuleUrl ? { testOnlyWorkerModuleUrl: dependencies.testOnlyWorkerModuleUrl } : {},
+      ...dependencies.testOnlyOfficialRuntimeResolver ? { officialRuntimeResolver: dependencies.testOnlyOfficialRuntimeResolver } : {},
+      ...dependencies.testOnlyOfficialHostAssets ? { testOnlyOfficialHostAssets: dependencies.testOnlyOfficialHostAssets } : {}
     };
     const preferences = selectedAdapter === "direct_app_server" ? null : resolveSessionPreferences2(
       execution.task.model,
@@ -30273,7 +30305,13 @@ async function runZCodeAdapter(bootstrap, execution, interaction, workerIdentity
     );
     const codingPlanPreferences = preferences?.model && isOfficialCodingPlanProvider2(preferences.model.provider_id) ? { ...preferences, model: { ...preferences.model, provider_id: OFFICIAL_CODING_PLAN_PROVIDER_ID2 } } : null;
     if (codingPlanPreferences) providerAuthModel = codingPlanPreferences.model;
-    const adapter = selectedAdapter === "direct_app_server" ? new ZCodeAppServerAdapter2(adapterOptions) : codingPlanPreferences ? new OfficialAppServerWorkerAdapter2({ ...officialHostOptions, sessionPreferences: codingPlanPreferences }) : new OfficialHostAdapter2(officialHostOptions);
+    const officialProviderRuntime = selectedAdapter === "direct_app_server" ? null : selectOfficialProviderRuntime(preferences?.model?.provider_id);
+    const officialSessionPreferences = officialProviderRuntime === "coding_plan_discount" ? codingPlanPreferences : officialProviderRuntime === "start_plan_static" && preferences?.model?.provider_id === BIGMODEL_START_PLAN_PROVIDER_ID ? preferences : null;
+    const adapter = selectedAdapter === "direct_app_server" ? new ZCodeAppServerAdapter2(adapterOptions) : officialProviderRuntime ? new OfficialAppServerWorkerAdapter2({
+      ...officialHostOptions,
+      providerCapability: officialProviderRuntime,
+      ...officialSessionPreferences ? { sessionPreferences: officialSessionPreferences } : {}
+    }) : new OfficialHostAdapter2(officialHostOptions);
     const workspace = {
       requestedPath: execution.task.workspace,
       canonicalPath: bootstrap.workspace_ref,

@@ -41,6 +41,10 @@ export type StartPlanStaticCompatibility =
   | "OFFLINE_INCOMPATIBLE"
   | "OFFLINE_RESEARCH_PENDING";
 
+export type OfficialProviderRuntimeCapability =
+  | "coding_plan_discount"
+  | "start_plan_static";
+
 export interface OfficialAppServerRuntimeManifestEntry {
   readonly desktop_version: string;
   readonly desktop_app_version: string;
@@ -87,6 +91,7 @@ export const OFFICIAL_APPSERVER_COMPATIBILITY_MANIFEST: readonly OfficialAppServ
 export interface OfficialAppServerRuntimeDescriptor {
   readonly status: OfficialRuntimeVerificationStatus;
   readonly discount_capability: OfficialDiscountCapability;
+  readonly start_plan_static_compatibility: StartPlanStaticCompatibility | null;
   readonly reason: string | null;
   readonly install_dir: string | null;
   readonly install_source: string | null;
@@ -358,6 +363,7 @@ export class OfficialAppServerRuntimeResolver implements RuntimeResolver {
       discount_capability: manifest?.coding_plan_discount_verified === true
         ? "OFFICIAL_DISCOUNT_VERIFIED"
         : "OFFICIAL_DISCOUNT_NOT_VERIFIED",
+      start_plan_static_compatibility: manifest?.start_plan_static_compatibility ?? null,
       reason: null,
       install_dir: installDir,
       install_source: discovery.source,
@@ -412,6 +418,7 @@ function unverified(
   return {
     status: "OFFICIAL_RUNTIME_UNVERIFIED",
     discount_capability: "OFFICIAL_DISCOUNT_NOT_VERIFIED",
+    start_plan_static_compatibility: null,
     reason,
     install_dir: details.install_dir ?? null,
     install_source: details.install_source ?? null,

@@ -15,13 +15,22 @@ import { createPlatformProbe } from "../runtime/process-probe.js";
 import { StartPlanSecretRedactor } from "../runtime/start-plan-secret-redactor.js";
 import type { TaskPackage, WorkspaceRef, ZCodeRuntimeConfig } from "../interfaces.js";
 import type {
+  OfficialHostAssets,
   OfficialHostModuleSource,
   OfficialHostRuntimeAuthService,
   OfficialHostRuntimeAuthServiceFactory,
 } from "../adapters/official-host-adapter.js";
+import type { OfficialInstalledRuntimeResolver } from "../adapters/official-app-server-adapter.js";
 import type { ZCodeAppServerAdapterOptions } from "../adapters/zcode-app-server-adapter.js";
-import { accountProviderRuleFacts, zcodeDataBaseDir } from "../runtime/account-provider.js";
-import { selectProductionAdapter } from "./production-adapter-selection.js";
+import {
+  accountProviderRuleFacts,
+  BIGMODEL_START_PLAN_PROVIDER_ID,
+  zcodeDataBaseDir,
+} from "../runtime/account-provider.js";
+import {
+  selectOfficialProviderRuntime,
+  selectProductionAdapter,
+} from "./production-adapter-selection.js";
 import type {
   CandidateAdapterCleanupEvidence,
   CandidateExecutionCleanupProof,
@@ -36,6 +45,10 @@ export interface WorkerMainDependencies {
   readonly testOnlyOfficialHostModule?: OfficialHostModuleSource;
   /** Test-owned asset root used by the test Worker wrapper. */
   readonly testOnlyWorkerModuleUrl?: string | URL;
+  /** Test-owned installed-runtime descriptor used by the loopback Worker. */
+  readonly testOnlyOfficialRuntimeResolver?: OfficialInstalledRuntimeResolver;
+  /** Test-owned packaged Host manager assets used with the loopback module. */
+  readonly testOnlyOfficialHostAssets?: OfficialHostAssets;
   /** Test-owned direct Adapter wrapper for the retained synthetic rollback suite. */
   readonly testOnlyLegacyDirectAdapter?: true;
   /** Test-owned probes used only by the loopback Host wrapper. */
@@ -748,6 +761,10 @@ async function runZCodeAdapter(
         ? { testOnlyOfficialHostModule: dependencies.testOnlyOfficialHostModule } : {}),
       ...(dependencies.testOnlyWorkerModuleUrl
         ? { testOnlyWorkerModuleUrl: dependencies.testOnlyWorkerModuleUrl } : {}),
+      ...(dependencies.testOnlyOfficialRuntimeResolver
+        ? { officialRuntimeResolver: dependencies.testOnlyOfficialRuntimeResolver } : {}),
+      ...(dependencies.testOnlyOfficialHostAssets
+        ? { testOnlyOfficialHostAssets: dependencies.testOnlyOfficialHostAssets } : {}),
     };
     const preferences = selectedAdapter === "direct_app_server" ? null : resolveSessionPreferences(
       execution.task.model,
@@ -758,10 +775,23 @@ async function runZCodeAdapter(
       ? { ...preferences, model: { ...preferences.model, provider_id: OFFICIAL_CODING_PLAN_PROVIDER_ID } }
       : null;
     if (codingPlanPreferences) providerAuthModel = codingPlanPreferences.model;
+    const officialProviderRuntime = selectedAdapter === "direct_app_server"
+      ? null
+      : selectOfficialProviderRuntime(preferences?.model?.provider_id);
+    const officialSessionPreferences = officialProviderRuntime === "coding_plan_discount"
+      ? codingPlanPreferences
+      : officialProviderRuntime === "start_plan_static"
+        && preferences?.model?.provider_id === BIGMODEL_START_PLAN_PROVIDER_ID
+        ? preferences
+        : null;
     const adapter = selectedAdapter === "direct_app_server"
       ? new ZCodeAppServerAdapter(adapterOptions)
-      : codingPlanPreferences
-        ? new OfficialAppServerWorkerAdapter({ ...officialHostOptions, sessionPreferences: codingPlanPreferences })
+      : officialProviderRuntime
+        ? new OfficialAppServerWorkerAdapter({
+            ...officialHostOptions,
+            providerCapability: officialProviderRuntime,
+            ...(officialSessionPreferences ? { sessionPreferences: officialSessionPreferences } : {}),
+          })
         : new OfficialHostAdapter(officialHostOptions);
     const workspace: WorkspaceRef = {
       requestedPath: execution.task.workspace,

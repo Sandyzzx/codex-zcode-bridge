@@ -199,6 +199,7 @@ test("installed official adapter selects the installed bundle and preserves the 
     const descriptor: OfficialAppServerRuntimeDescriptor = {
       status: "OFFICIAL_RUNTIME_VERIFIED",
       discount_capability: "OFFICIAL_DISCOUNT_VERIFIED",
+      start_plan_static_compatibility: "OFFLINE_COMPATIBLE",
       reason: null,
       install_dir: root,
       install_source: "ZCODE_WINDOWS_APP_INSTALL_DIR",
@@ -337,6 +338,41 @@ test("installed official adapter selects the installed bundle and preserves the 
     assert.ok(unverifiedEvents.some((event) =>
       event.type === "official_runtime_unverified"
       && event.details?.discount_capability === "OFFICIAL_DISCOUNT_NOT_VERIFIED"));
+
+    const capabilityEvents: Array<{ type: string; details?: Record<string, unknown> }> = [];
+    const capabilityAdapter = new OfficialAppServerWorkerAdapter({
+      officialRuntimeResolver: {
+        inspect: async () => ({
+          ...descriptor,
+          discount_capability: "OFFICIAL_DISCOUNT_NOT_VERIFIED",
+        }),
+        resolve: async () => config,
+      },
+      testOnlyOfficialHostAssets: hostAssets,
+      testOnlyOfficialHostModule: {
+        ZCODE_PRODUCT_VERSION: "3.18.2",
+        ZCodeAgentProcessManager: FakeProcessManager as never,
+        ZCodeProtocolClient: FakeOfficialProtocolClient as never,
+      },
+      childEnvBase: { PATH: process.env.PATH },
+      timeoutMs: 5_000,
+      probe,
+      verifyTreeClean: async () => ({ clean: true, livePids: [], observedPids: [] }),
+      onEvent: (event) => capabilityEvents.push(event),
+    });
+    const capabilityHandle = await capabilityAdapter.startTask({ task, workspace, attempt: 1 });
+    await assert.rejects(
+      capabilityAdapter.getResult(capabilityHandle),
+      /OFFICIAL_DISCOUNT_NOT_VERIFIED/u,
+    );
+    assert.equal(
+      FakeProcessManager.constructCount,
+      managerCount,
+      "a verified runtime without the provider capability must not start the process manager",
+    );
+    assert.ok(capabilityEvents.some((event) =>
+      event.type === "official_runtime_unverified"
+      && event.details?.provider_capability === "coding_plan_discount"));
   } finally {
     await removeTempDir(root);
   }

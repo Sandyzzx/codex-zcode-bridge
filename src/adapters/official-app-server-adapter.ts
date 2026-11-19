@@ -4,6 +4,7 @@ import type { RuntimeResolver, ZCodeRuntimeConfig } from "../interfaces.js";
 import {
   OfficialAppServerRuntimeResolver,
   type OfficialAppServerRuntimeDescriptor,
+  type OfficialProviderRuntimeCapability,
 } from "../runtime/official-app-server-runtime.js";
 import { BridgeError } from "../runtime/errors.js";
 import {
@@ -25,6 +26,12 @@ export interface OfficialInstalledRuntimeResolver extends RuntimeResolver {
 
 export interface OfficialAppServerWorkerAdapterOptions extends ZCodeAppServerAdapterOptions {
   readonly officialRuntimeResolver?: OfficialInstalledRuntimeResolver;
+  /**
+   * The provider-specific capability that must be verified before this
+   * installed runtime may create a model session. Runtime identity alone is
+   * not a Coding Plan or Start Plan compatibility verdict.
+   */
+  readonly providerCapability?: OfficialProviderRuntimeCapability;
   /** Test-only seam. Production always resolves from the installed Desktop. */
   readonly testOnlyOfficialHostModule?: OfficialHostModuleSource;
   /** Test-only seam relative to a Worker-shaped module URL. */
@@ -34,12 +41,14 @@ export interface OfficialAppServerWorkerAdapterOptions extends ZCodeAppServerAda
 }
 
 /**
- * Production Coding Plan adapter. It keeps the existing official Host process
- * manager, protocol adapter, auth service, and cleanup ownership, while making
- * the installed Desktop AppServer the only verified model-execution runtime.
+ * Production BigModel Coding Plan/Start Plan adapter. It keeps the official
+ * Host process manager, protocol adapter, provider-specific auth service, and
+ * cleanup ownership, while making the installed Desktop AppServer the only
+ * verified model-execution runtime.
  */
 export class OfficialAppServerWorkerAdapter extends ZCodeAppServerAdapter {
   constructor(options: OfficialAppServerWorkerAdapterOptions = {}) {
+    const providerCapability = options.providerCapability ?? "coding_plan_discount";
     const runtimeResolver = options.officialRuntimeResolver
       ?? new OfficialAppServerRuntimeResolver({
         env: options.childEnvBase,
@@ -55,28 +64,29 @@ export class OfficialAppServerWorkerAdapter extends ZCodeAppServerAdapter {
       | undefined;
     const assets = (): Promise<{ readonly descriptor: OfficialAppServerRuntimeDescriptor; readonly assets: OfficialHostAssets }> => {
       resolved ??= Promise.all([runtimeResolver.inspect(), packagedAssets]).then(([descriptor, packaged]) => {
-        if (descriptor.status !== "OFFICIAL_RUNTIME_VERIFIED"
-          || !descriptor.bundle_path
+        const capabilityFailure = officialProviderCapabilityFailure(descriptor, providerCapability);
+        const missingRuntimeAsset = !descriptor.bundle_path
           || !descriptor.builtin_provider_config_path
-          || !descriptor.runtime_host_path) {
+          || !descriptor.runtime_host_path;
+        if (capabilityFailure || missingRuntimeAsset) {
+          const failure = capabilityFailure
+            ?? `OFFICIAL_RUNTIME_UNVERIFIED: installed runtime descriptor is missing required assets`;
           try {
             options.onEvent?.({
               type: "official_runtime_unverified",
-              summary: "Installed ZCode AppServer is not verified for the Coding Plan discount",
+              summary: failure,
               details: {
                 status: descriptor.status,
-                discount_capability: "OFFICIAL_DISCOUNT_NOT_VERIFIED",
-                reason: descriptor.reason,
+                discount_capability: descriptor.discount_capability,
+                start_plan_static_compatibility: descriptor.start_plan_static_compatibility,
+                provider_capability: providerCapability,
+                reason: failure,
               },
             });
           } catch {
             // Observation cannot change the fail-closed decision.
           }
-          throw new BridgeError(
-            "provider_config_invalid",
-            `OFFICIAL_RUNTIME_UNVERIFIED: ${descriptor.reason ?? "installed Official AppServer is unavailable"}; ` +
-              "OFFICIAL_DISCOUNT_NOT_VERIFIED",
-          );
+          throw new BridgeError("provider_config_invalid", failure);
         }
         return {
           descriptor,
@@ -107,6 +117,8 @@ export class OfficialAppServerWorkerAdapter extends ZCodeAppServerAdapter {
           details: {
             status: runtime.descriptor.status,
             discount_capability: runtime.descriptor.discount_capability,
+            start_plan_static_compatibility: runtime.descriptor.start_plan_static_compatibility,
+            provider_capability: providerCapability,
             desktop_version: runtime.descriptor.desktop_version,
             bundle_sha256: runtime.descriptor.bundle_sha256,
             runtime_host_sha256: runtime.descriptor.runtime_host_sha256,
@@ -127,6 +139,25 @@ export class OfficialAppServerWorkerAdapter extends ZCodeAppServerAdapter {
       externalHostClientFactory,
     });
   }
+}
+
+export function officialProviderCapabilityFailure(
+  descriptor: OfficialAppServerRuntimeDescriptor,
+  capability: OfficialProviderRuntimeCapability,
+): string | null {
+  if (descriptor.status !== "OFFICIAL_RUNTIME_VERIFIED") {
+    return `OFFICIAL_RUNTIME_UNVERIFIED: ${descriptor.reason ?? "installed Official AppServer is unavailable"}`;
+  }
+  if (capability === "coding_plan_discount") {
+    return descriptor.discount_capability === "OFFICIAL_DISCOUNT_VERIFIED"
+      ? null
+      : `OFFICIAL_RUNTIME_UNVERIFIED: ${descriptor.reason ?? "installed runtime has no verified Coding Plan discount capability"}; ` +
+        "OFFICIAL_DISCOUNT_NOT_VERIFIED";
+  }
+  return descriptor.start_plan_static_compatibility === "OFFLINE_COMPATIBLE"
+    ? null
+    : `STARTPLAN_RUNTIME_INCOMPATIBLE: ${descriptor.reason ?? "installed runtime is not offline-compatible with Start Plan"}; ` +
+      `START_PLAN_COMPATIBILITY_${descriptor.start_plan_static_compatibility ?? "UNVERIFIED"}`;
 }
 
 async function loadOfficialHostModule(modulePath: string): Promise<OfficialHostModule> {

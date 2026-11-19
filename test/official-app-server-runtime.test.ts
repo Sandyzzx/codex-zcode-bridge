@@ -111,6 +111,7 @@ test("resolver verifies same-root installed assets and returns installed runtime
     const descriptor = await runtime.inspect();
     assert.equal(descriptor.status, "OFFICIAL_RUNTIME_VERIFIED");
     assert.equal(descriptor.discount_capability, "OFFICIAL_DISCOUNT_VERIFIED");
+    assert.equal(descriptor.start_plan_static_compatibility, "OFFLINE_RESEARCH_PENDING");
     assert.equal(descriptor.install_dir, fixture.root);
     assert.equal(descriptor.bundle_path, fixture.bundle);
     assert.equal(descriptor.bundle_sha256, fixture.manifest.bundle_sha256);
@@ -162,6 +163,7 @@ test("unknown bundle identity fails closed as OFFICIAL_RUNTIME_UNVERIFIED", asyn
     const descriptor = await runtime.inspect();
     assert.equal(descriptor.status, "OFFICIAL_RUNTIME_UNVERIFIED");
     assert.equal(descriptor.discount_capability, "OFFICIAL_DISCOUNT_NOT_VERIFIED");
+    assert.equal(descriptor.start_plan_static_compatibility, null);
     assert.match(descriptor.reason ?? "", /compatibility manifest/iu);
     await assert.rejects(runtime.resolve(), (error: unknown) =>
       error instanceof BridgeError
