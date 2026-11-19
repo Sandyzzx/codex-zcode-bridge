@@ -283,9 +283,10 @@ checked-out worktree 的统计口径不同，报告不得混用。
 - 新增未修改结果证据与错误消息保留测试后，定向
   `production-verification-runner.test.mjs`：`7/7 PASS`。
 - 随后再次运行完整 `npm run cost-lab:test`，结果见最终交付记录。
-- 实验执行器与测试变更触发 FULL impact 后，最终 `npm run test:affected`：
+- failure-facts 证据采集补丁与测试变更触发 FULL impact 后，最终
+  `npm run test:affected`：
   PASS；`945` tests，`943` PASS、`0` FAIL、`2` SKIP，
-  `1,475,030.4823 ms`。同一命令完成 typecheck、build、Plugin Validator、
+  `1,469,203.1782 ms`。同一命令完成 typecheck、build、Plugin Validator、
   生成物 Freshness 与 `git diff --check`，并输出 `FULL_REGRESSION_PASS`。
 
 第一次完整回归暴露并已修复的两项候选集成问题：
@@ -388,6 +389,13 @@ Packaged AppServer -> absent + validator rejection
 - Coding Plan 的空小时桶不能使用模型过滤快照（`model_not_found`），因此
   本次保存 before/after 时直接复用现有官方 accessor 的无模型过滤只读快照；
   没有创建第二套认证或 Billing Client。
+- 离线复核第三次 attempt 时又定位到一个实验证据缺口：Bridge Host 已将
+  经过 ADR-011 schema 校验的 `failure-facts` 输出到 stderr，但 Cost Lab
+  runner 的标记过滤器没有保留该结构化行。后续修复只在 runner 中解析固定
+  19 字段、上限 4 KiB 且拒绝未知键的标记，不会输出原始 stderr；该修复不能
+  追溯恢复第三次 attempt 已清理的失败事实。
+  修复提交：`2e87e3f1f96140108615148bca5fafd267b107c0` / tree
+  `014e8ceed5aa28d28964df47cf50c49e2bdbf7bc`。
 
 证据：
 
@@ -443,7 +451,8 @@ CODING_PLAN_MULTIPLIER: NOT_VERIFIED
 不能把三次 dispatch 写成三次已证明模型请求，不能把“未观察到积分”写成
 “零积分请求”，也不能用缺失 Usage 推断 0.67。第三次失败的精确外部原因仍是
 `UNKNOWN`：当前 MCP Evidence 只暴露 `zcode_nonzero_exit`，没有 401、403、
-3012 或其他可归因 Provider 错误；因此不能据此宣称账户风控，也不能重试。
+3012 或其他可归因 Provider 错误。失败事实证据采集缺口已为后续实验修复，
+但不能追溯重建本次已清理的 facts；因此不能据此宣称账户风控，也不能重试。
 
 ### 13.3 Start Plan
 
@@ -524,6 +533,9 @@ B_EXPECTED_WITH_0_67: null
 B_DISCOUNT: INCONCLUSIVE
 BILLING_RECONCILIATION: NOT_POSSIBLE_USAGE_MISSING
 PROJECT_IDENTITY_PARITY: UNKNOWN
+ROOT_CAUSE_CONFIDENCE: UNKNOWN
+FAILURE_FACTS_CAPTURE: FIXED_FOR_FUTURE_RUNS_NOT_RETROACTIVE
+FAILURE_FACTS_FIX_COMMIT: 2e87e3f1f96140108615148bca5fafd267b107c0
 
 CODING_PLAN:
   REAL_E2E: INCONCLUSIVE
