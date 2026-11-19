@@ -1,9 +1,9 @@
 # Project State
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-19（ADR-041 Thin Official Host end state）
-> Last verified: 2026-11-19，核对共享 Official Host session factory、Model Catalog、统一 Provider Runtime 选择、打包资产退役、生成物与插件校验、定向及完整测试；真实模型/OAuth/Billing 请求未在本轮运行。
-> Verified against: `5501c60ecf3f1812a3d3170a670ab0031ea784d8` + 2026-11-19 Thin Adapter working-tree candidate（未提交）
+> Last updated: 2026-11-19（ADR-041 Thin Official Host end state + Final Closure）
+> Last verified: 2026-11-19，核对 ADR-041 已推送实现、动态 Runtime-selected Provider capability gate、生产 Runtime Auth fail-closed、生成物、Plugin Validator、clean entrypoints 与定向测试；真实模型/OAuth/Billing 请求未在本轮运行。
+> Verified against: baseline `5501c60ecf3f1812a3d3170a670ab0031ea784d8`；ADR-041 implementation `a676c6cd14573f2620339f992a345ed0715541ff`（tree `4d1b54835d4ebe1e1ae15113d5a152130a98480c`）；同分支 Final Closure owner-review commit（未 Push）
 
 当前发布状态：
 
@@ -12,7 +12,7 @@
 - Preview `2.0.0-preview.6`：Owner 已批准发布。支持声明限定为 Windows x64、Node.js `24.16.0` 与已安装的官方 ZCode Desktop `3.18.2.10443`。
 - Preview `2.0.0-preview.7`：在 Preview.6 上应用 ADR-038 整改，并修复 CI dispatch 边界与 Events summary 分页。
 - Preview `2.0.0-preview.8`：包含 ADR-039 Host 授权取消与新鲜 Cleanup Proof 绑定；支持范围限定为 Windows x64、Node.js `24.16.0` 与已安装的官方 ZCode Desktop `3.18.2.10443`。
-- `2.0.0-preview.9` 发布候选：在 Preview.8 基线上增加 ADR-040 安装版 AppServer、ADR-041 Thin Official Host 收敛、Cost Lab Web、Start Plan 离线审计和正式证据。
+- `2.0.0-preview.9` 发布候选：在 Preview.8 基线上增加 ADR-040 安装版 AppServer、ADR-041 Thin Official Host 收敛、Cost Lab Web、Start Plan 离线审计和正式证据。ADR-041 implementation 已推送至 `a676c6cd14573f2620339f992a345ed0715541ff`；随后的 Final Closure 只包含动态 Provider 门禁、Runtime Auth fail-closed、测试与文档收尾，作为本地 owner-review commit 保留且未 Push。
 
 ## 当前生产架构
 
@@ -46,6 +46,8 @@ Preview.3 的 Start Plan 历史证据覆盖 Windows、官方 AppServer `0.17.1`�
 | 16 MiB raw frame | `PASS` | 固定上游 7/7 合成测试，覆盖 exact/+1、partial、UTF-8 与 pending RPC |
 | 账户 OAuth/Start auth 合成测试 | `PASS — CANDIDATE` | 固定上游认证套件 19/19；真实账户与网络轮换 `NOT_RUN` |
 | `OfficialAppServerWorkerAdapter` 与共享 session factory | `PASS — CANDIDATE` | 固定 Host、Model Catalog、Provider 选择、Adapter、R7、Cleanup/Release 定向套件通过；完整结果见本次候选实现报告 |
+| Runtime-selected Provider capability gate | `PASS — CANDIDATE` | 官方 Provider registry + 当前账户配置分类；隐式 Coding Plan、隐式 Start Plan、其他 Provider 与显式 Provider 定向测试通过；真实模型请求 `NOT_RUN` |
+| 生产 Official Host Runtime Auth fail-closed | `PASS — CANDIDATE` | Resolver 缺失或拒绝时返回不可用，即使存在合成持久化 Key 也不回包；静态回包仅由 Test Adapter 覆盖 |
 | R7 Runtime Events/Usage | `PASS` | fd14 单向通道、v14 additive schema、sequence/cursor、stale Attempt、Feedback/Result 合成与旧 v14 兼容测试通过 |
 | SQLite 自动 v13→v14 升级与恢复 | `PASS` | 测试范围；含 occupied Attempt/Hold、rename/publication 中断 |
 | 完整 Node/native/resource 闭包 | `PARTIAL` | 6 个 keyring 文件已在 clean checkout 解析、native load 并与 BOM bytes/hash 一致；完整动态资源闭包仍未认证 |

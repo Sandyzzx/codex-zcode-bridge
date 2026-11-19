@@ -48,7 +48,7 @@ import {
   BIGMODEL_START_PLAN_PROVIDER_ID,
   buildAccountProviderPayload,
   catalogProviderId,
-  runtimeAuthReply,
+  testOnlyRuntimeAuthReply,
   zcodeDataBaseDir,
 } from "../runtime/account-provider.js";
 import { resolveSessionPreferences, type ResolvedSessionPreferences } from "../runtime/session-preferences.js";
@@ -362,12 +362,18 @@ export interface ZCodeAppServerAdapterOptions {
   testOnlyAllowDirectAppServer?: true;
   /** Internal opt-in credential broker. It is not a TaskPackage field. */
   resolveStartPlanRuntimeAuth?: (scope: { readonly sessionId: string; readonly turnId: string; readonly providerId: string; readonly modelId: string }, signal: AbortSignal) => Promise<{ readonly apiKey: string; readonly expiresAt: number; readonly isValid: () => boolean }>;
-  /** Official account runtime-header resolver; absent keeps the legacy static fallback. */
+  /** Official account runtime-header resolver; production absence fails closed. */
   resolveProviderRuntimeAuth?: (
     request: Record<string, unknown>,
     config: ZCodeRuntimeConfig,
     signal: AbortSignal,
   ) => Promise<Record<string, unknown>>;
+  /** Verify the capability gate after the runtime reports its actual Provider/Model. */
+  verifySelectedProviderCapability?: (
+    selection: { readonly providerId: string; readonly modelId: string },
+    config: ZCodeRuntimeConfig,
+    signal: AbortSignal,
+  ) => Promise<void>;
   /** Task-scoped live Billing verdict delivered by the SQLite authority. */
   startPlanProviderEntitled?: boolean;
   /** Internal output sanitizers owned by the same credential broker. */
@@ -457,6 +463,8 @@ const MAX_FRAME_BYTES = 16 * 1024 * 1024;
 export class ZCodeAppServerAdapter implements CodingAgentAdapter {
   readonly #resolveStartPlanRuntimeAuth: ZCodeAppServerAdapterOptions["resolveStartPlanRuntimeAuth"];
   readonly #resolveProviderRuntimeAuth: ZCodeAppServerAdapterOptions["resolveProviderRuntimeAuth"];
+  readonly #verifySelectedProviderCapability: ZCodeAppServerAdapterOptions["verifySelectedProviderCapability"];
+  readonly #allowTestOnlyStaticRuntimeAuthReply: boolean;
   readonly #startPlanProviderEntitled: boolean;
   readonly #sanitizeStartPlanFrame: ZCodeAppServerAdapterOptions["sanitizeStartPlanFrame"];
   readonly #sanitizeStartPlanText: ZCodeAppServerAdapterOptions["sanitizeStartPlanText"];
@@ -497,6 +505,9 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     }
     this.#resolveStartPlanRuntimeAuth = options.resolveStartPlanRuntimeAuth;
     this.#resolveProviderRuntimeAuth = options.resolveProviderRuntimeAuth;
+    this.#verifySelectedProviderCapability = options.verifySelectedProviderCapability;
+    this.#allowTestOnlyStaticRuntimeAuthReply =
+      options.testOnlyAllowDirectAppServer === true && options.externalHostClientFactory === undefined;
     this.#startPlanProviderEntitled = options.startPlanProviderEntitled === true;
     this.#sanitizeStartPlanFrame = options.sanitizeStartPlanFrame;
     this.#sanitizeStartPlanText = options.sanitizeStartPlanText;
@@ -951,6 +962,16 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
           "provider_config_invalid",
           "ZCode runtime did not report its selected model; refusing to start a task whose model cannot be identified.",
         );
+      }
+      if (this.#verifySelectedProviderCapability) {
+        const selected = entry.selectedModelSelection;
+        if (!selected) {
+          throw new BridgeError(
+            "provider_config_invalid",
+            "ZCode runtime did not report its selected Provider/Model; refusing to start a task whose capability cannot be verified.",
+          );
+        }
+        await this.#verifySelectedProviderCapability(selected, config, entry.abort.signal);
       }
       if (!preferences.model) {
         const selected = readSelectedModelSelection(snapshot);
@@ -2025,7 +2046,15 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
             });
           return;
         }
-        write({ id, result: runtimeAuthReply(providerId, config) });
+        write({
+          id,
+          result: this.#allowTestOnlyStaticRuntimeAuthReply
+            ? testOnlyRuntimeAuthReply(providerId, config)
+            : {
+                headersApplied: false,
+                errorMessage: "Provider runtime authorization is unavailable.",
+              },
+        });
       }
       return;
     }

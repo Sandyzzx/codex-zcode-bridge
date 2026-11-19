@@ -1,9 +1,9 @@
 # ZCode 运行配置边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-19（ADR-041 Thin Official Host end state）
-> Last verified: 2026-11-19，核对安装版 ZCode `3.18.2.10443` 的 Bundle、builtin Provider 配置、runtime host、Node 范围、共享 Resolver/session factory、BOM 和模型目录 Worker-shaped URL；真实 Start Plan 认证、权益、账单和模型请求未本轮运行。
-> Verified against: `5501c60ecf3f1812a3d3170a670ab0031ea784d8` + 2026-11-19 Thin Adapter working-tree candidate（未提交）
+> Last updated: 2026-11-19（ADR-041 Thin Official Host end state + Final Closure）
+> Last verified: 2026-11-19，核对安装版 ZCode `3.18.2.10443` 的 Bundle、builtin Provider 配置、runtime host、Node 范围、共享 Resolver/session factory、动态 capability gate、生产 Runtime Auth fail-closed、BOM 和模型目录 Worker-shaped URL；真实 Start Plan 认证、权益、账单和模型请求未在本轮运行。
+> Verified against: baseline `5501c60ecf3f1812a3d3170a670ab0031ea784d8`；ADR-041 implementation `a676c6cd14573f2620339f992a345ed0715541ff`（tree `4d1b54835d4ebe1e1ae15113d5a152130a98480c`）；同分支 Final Closure owner-review commit（未 Push）
 
 当前生产路径是 `node <installed-runtime>/resources/glm/zcode.cjs app-server --stdio --surface desktop`，不是历史 CLI `--prompt --json`。任务 Adapter 与模型目录探测共用 `createInstalledOfficialHostSessionFactory` 的同一启动合同；安装版兼容性由 `OfficialAppServerRuntimeResolver` 精确校验，配置项与用户设置方法见仓库 README。
 
@@ -14,9 +14,14 @@ ADR-040/ADR-041 将安装版 Runtime 扩展为所有受支持 Provider 的统一
 编码/权益能力门禁仍分离：Coding Plan 要求
 `OFFICIAL_DISCOUNT_VERIFIED`；Start Plan 要求
 `start_plan_static_compatibility = OFFLINE_COMPATIBLE`，不依赖 Coding Plan
-折扣字段；其他 Provider 走 `installed_runtime` 的官方配置/认证边界。所有 Provider
-共用安装版 AppServer、Official Host Process Manager、Session/Turn 和 Cleanup
-生命周期。Start Plan 的真实权益、认证、账单和模型 E2E 仍为 `NOT_RUN`。
+折扣字段；其他 Provider 走 `installed_runtime` 的官方配置/认证边界。Runtime 在
+`session/create` 后报告的 Provider/Model 是最终 capability 分类输入；Bridge 同时
+核对官方 Provider registry、当前账户配置和已注册模型，并在
+`session/subscribe`/`session/send` 前 fail closed。所有 Provider 共用安装版
+AppServer、Official Host Process Manager、Session/Turn 和 Cleanup 生命周期。
+生产 Provider Runtime Auth 的 resolver 缺失或失败时不回退到持久化 API Key；
+静态回包只允许显式 Test Adapter。Start Plan 的真实权益、认证、账单和模型 E2E
+仍为 `NOT_RUN`。
 
 若固定 AppServer 源旁存在安装版 Desktop `app.asar`，Bridge 只读解析其版本与 build metadata，并以这一对 `ZCODE_APP_VERSION` / `ZCODE_BUILD_COMMIT_ID` 为最高优先级。独立 Host 没有相邻 `app.asar` 时，`ZCODE_APP_VERSION` 取自校验后的 Official Host `ZCODE_PRODUCT_VERSION`；`ZCODE_BUILD_COMMIT_ID` 保持缺失，不从源码提交号或 AppServer CLI 版本推导。损坏 ASAR、非法或不完整身份、非法产品版本按 `provider_config_invalid` fail-closed。Bridge 不硬编码 Desktop 版本，不修改 Desktop 安装，也不伪造 HTTP Header。
 

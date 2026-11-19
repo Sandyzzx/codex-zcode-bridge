@@ -241,6 +241,34 @@ function accountProviderRuleFacts(providerId, config2) {
     accountType: typeof access.accountType === "string" ? access.accountType : null
   };
 }
+function accountProviderSelectionCapability(providerId, modelId, config2) {
+  const canonicalProviderId = accountProviderId(providerId, config2);
+  const codingPlan = canonicalProviderId === "account:bigmodel-individual-coding-plan";
+  const startPlan = canonicalProviderId === BIGMODEL_START_PLAN_PROVIDER_ID;
+  if (!codingPlan && !startPlan) {
+    return { capability: "installed_runtime", failure: null };
+  }
+  const ruleFacts = accountProviderRuleFacts(canonicalProviderId, config2);
+  const source = readAccountProviderSource(config2, void 0, void 0, canonicalProviderId);
+  const entry = source?.entries.find((candidate) => candidate.providerId === canonicalProviderId);
+  const expectedPlanKind = codingPlan ? "individual-coding-plan" : "start-plan";
+  if (ruleFacts?.planKind !== expectedPlanKind || ruleFacts.accountType !== "bigmodel" || !entry) {
+    return {
+      capability: codingPlan ? "coding_plan_discount" : "start_plan_static",
+      failure: `${canonicalProviderId} is not configured as the expected BigModel ${expectedPlanKind} provider`
+    };
+  }
+  if (!entry.builtinModelIds.includes(modelId)) {
+    return {
+      capability: codingPlan ? "coding_plan_discount" : "start_plan_static",
+      failure: `${canonicalProviderId} does not register the selected model ${modelId}`
+    };
+  }
+  return {
+    capability: codingPlan ? "coding_plan_discount" : "start_plan_static",
+    failure: null
+  };
+}
 function accountProviderId(providerId, config2) {
   if (providerId.startsWith("account:")) return providerId;
   const rules = [config2.providerBuiltinConfigFile, config2.providerPersonalConfigFile].flatMap((file2) => readProviderRules(readJson(file2)));
@@ -267,7 +295,7 @@ function catalogProviderId(providerId, modelId, catalog, config2) {
   }
   return configured;
 }
-function runtimeAuthReply(providerId, config2) {
+function testOnlyRuntimeAuthReply(providerId, config2) {
   const unavailable = {
     headersApplied: false,
     errorMessage: "Start Plan requires a ZCode desktop captcha session; this headless app-server bridge cannot provide it."
@@ -26787,6 +26815,8 @@ var init_zcode_app_server_adapter = __esm({
     ZCodeAppServerAdapter = class {
       #resolveStartPlanRuntimeAuth;
       #resolveProviderRuntimeAuth;
+      #verifySelectedProviderCapability;
+      #allowTestOnlyStaticRuntimeAuthReply;
       #startPlanProviderEntitled;
       #sanitizeStartPlanFrame;
       #sanitizeStartPlanText;
@@ -26826,6 +26856,8 @@ var init_zcode_app_server_adapter = __esm({
         }
         this.#resolveStartPlanRuntimeAuth = options.resolveStartPlanRuntimeAuth;
         this.#resolveProviderRuntimeAuth = options.resolveProviderRuntimeAuth;
+        this.#verifySelectedProviderCapability = options.verifySelectedProviderCapability;
+        this.#allowTestOnlyStaticRuntimeAuthReply = options.testOnlyAllowDirectAppServer === true && options.externalHostClientFactory === void 0;
         this.#startPlanProviderEntitled = options.startPlanProviderEntitled === true;
         this.#sanitizeStartPlanFrame = options.sanitizeStartPlanFrame;
         this.#sanitizeStartPlanText = options.sanitizeStartPlanText;
@@ -27220,6 +27252,16 @@ var init_zcode_app_server_adapter = __esm({
               "provider_config_invalid",
               "ZCode runtime did not report its selected model; refusing to start a task whose model cannot be identified."
             );
+          }
+          if (this.#verifySelectedProviderCapability) {
+            const selected = entry.selectedModelSelection;
+            if (!selected) {
+              throw new BridgeError(
+                "provider_config_invalid",
+                "ZCode runtime did not report its selected Provider/Model; refusing to start a task whose capability cannot be verified."
+              );
+            }
+            await this.#verifySelectedProviderCapability(selected, config2, entry.abort.signal);
           }
           if (!preferences.model) {
             const selected = readSelectedModelSelection(snapshot);
@@ -28220,7 +28262,13 @@ var init_zcode_app_server_adapter = __esm({
               });
               return;
             }
-            write({ id, result: runtimeAuthReply(providerId, config2) });
+            write({
+              id,
+              result: this.#allowTestOnlyStaticRuntimeAuthReply ? testOnlyRuntimeAuthReply(providerId, config2) : {
+                headersApplied: false,
+                errorMessage: "Provider runtime authorization is unavailable."
+              }
+            });
           }
           return;
         }
@@ -28906,12 +28954,15 @@ var OfficialAppServerWorkerAdapter;
 var init_official_app_server_adapter = __esm({
   "src/adapters/official-app-server-adapter.ts"() {
     "use strict";
+    init_account_provider();
+    init_errors();
     init_zcode_app_server_adapter();
     init_official_host_adapter();
     init_official_host_adapter();
     OfficialAppServerWorkerAdapter = class extends ZCodeAppServerAdapter {
       constructor(options = {}) {
         const providerCapability = options.providerCapability ?? "installed_runtime";
+        let verifiedDescriptor;
         const sessionFactory = createInstalledOfficialHostSessionFactory({
           officialRuntimeResolver: options.officialRuntimeResolver,
           env: options.childEnvBase,
@@ -28922,6 +28973,7 @@ var init_official_app_server_adapter = __esm({
           workerModuleUrl: options.workerModuleUrl,
           testOnlyOfficialHostPackagedAssets: options.testOnlyOfficialHostPackagedAssets,
           onVerified: (descriptor) => {
+            verifiedDescriptor = descriptor;
             options.onEvent?.({
               type: "official_runtime_verified",
               summary: "Using verified installed ZCode AppServer",
@@ -28956,7 +29008,41 @@ var init_official_app_server_adapter = __esm({
           ...options,
           resolver: sessionFactory.resolver,
           providerRetryLimit: 0,
-          externalHostClientFactory: (context) => sessionFactory.createClient(context)
+          externalHostClientFactory: (context) => sessionFactory.createClient(context),
+          verifySelectedProviderCapability: async (selection, config2, signal) => {
+            signal.throwIfAborted();
+            const resolved = accountProviderSelectionCapability(
+              selection.providerId,
+              selection.modelId,
+              config2
+            );
+            const descriptor = verifiedDescriptor;
+            if (!descriptor) {
+              throw new BridgeError(
+                "provider_config_invalid",
+                "The Official AppServer runtime identity was not verified before provider capability validation."
+              );
+            }
+            const failure2 = resolved.failure ?? officialProviderCapabilityFailure(descriptor, resolved.capability);
+            if (!failure2) return;
+            try {
+              options.onEvent?.({
+                type: "official_runtime_unverified",
+                summary: failure2,
+                details: {
+                  status: descriptor.status,
+                  discount_capability: descriptor.discount_capability,
+                  start_plan_static_compatibility: descriptor.start_plan_static_compatibility,
+                  provider_capability: resolved.capability,
+                  selected_provider_id: selection.providerId,
+                  selected_model_id: selection.modelId,
+                  reason: failure2
+                }
+              });
+            } catch {
+            }
+            throw new BridgeError("provider_config_invalid", failure2);
+          }
         });
       }
     };

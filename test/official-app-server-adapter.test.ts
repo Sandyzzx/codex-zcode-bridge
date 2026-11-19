@@ -99,6 +99,14 @@ class FakeProtocolClient {
     for (const listener of this.#notificationListeners) listener(message);
   }
 
+  select(providerId: string, modelId: string): void {
+    this.#model = {
+      providerId,
+      modelId,
+      options: { reasoningLevel: "low" },
+    };
+  }
+
   private snapshot(): Record<string, unknown> {
     return {
       session: { sessionId: SESSION_ID },
@@ -130,6 +138,14 @@ class FakeProcessManager {
   static constructCount = 0;
   static disposeCount = 0;
   readonly #client = FakeProcessManager.client;
+
+  static reset(): void {
+    FakeProcessManager.options = null;
+    FakeProcessManager.client.requests.length = 0;
+    FakeProcessManager.helperPath = undefined;
+    FakeProcessManager.constructCount = 0;
+    FakeProcessManager.disposeCount = 0;
+  }
 
   constructor(options: Record<string, unknown>) {
     FakeProcessManager.constructCount += 1;
@@ -376,6 +392,208 @@ test("installed official adapter selects the installed bundle and preserves the 
     assert.ok(capabilityEvents.some((event) =>
       event.type === "official_runtime_unverified"
       && event.details?.provider_capability === "coding_plan_discount"));
+  } finally {
+    await removeTempDir(root);
+  }
+});
+
+test("implicit runtime Provider selection applies the matching capability gate before session/send", {
+  skip: !WINDOWS_X64,
+  timeout: 30_000,
+}, async () => {
+  const root = await makeTempDir("official-app-server-dynamic-capability-");
+  try {
+    const builtinConfig = path.join(root, "resources", "config", "provider", "zcode-builtin.json");
+    await mkdir(path.dirname(builtinConfig), { recursive: true });
+    await writeFile(builtinConfig, JSON.stringify({
+      revision: 21,
+      config: {
+        providerConfigRules: {
+          providerRules: [
+            {
+              providerId: "account:bigmodel-individual-coding-plan",
+              config: {
+                builtinModelIds: ["GLM-5.3-Flash"],
+                access: { type: "zhipu-account", mode: "individual-coding-plan", accountType: "bigmodel" },
+              },
+            },
+            {
+              providerId: "account:bigmodel-start-plan",
+              config: {
+                builtinModelIds: ["GLM-5.3-Flash"],
+                access: { type: "zhipu-account", mode: "start-plan", accountType: "bigmodel" },
+              },
+            },
+          ],
+        },
+      },
+    }), "utf8");
+    const personalConfig = path.join(root, ".zcode", "v2", "provider_config.json");
+    await mkdir(path.dirname(personalConfig), { recursive: true });
+    await writeFile(personalConfig, JSON.stringify({
+      config: { providerConfigRules: { providerRules: [] } },
+    }), "utf8");
+    const bundle = path.join(root, "resources", "glm", "zcode.cjs");
+    const runtimeHost = path.join(root, "resources", "tools", "runtime-host", "zcode-runtime-host.exe");
+    const config: ZCodeRuntimeConfig = fakeConfig({
+      nodeExecutable: process.execPath,
+      zcodeEntrypoint: bundle,
+      providerBuiltinConfigFile: builtinConfig,
+      providerPersonalConfigFile: personalConfig,
+      zcodeDataRoot: path.join(root, ".zcode"),
+      dataRoot: root,
+    });
+    const descriptor: OfficialAppServerRuntimeDescriptor = {
+      status: "OFFICIAL_RUNTIME_VERIFIED",
+      discount_capability: "OFFICIAL_DISCOUNT_VERIFIED",
+      start_plan_static_compatibility: "OFFLINE_COMPATIBLE",
+      reason: null,
+      install_dir: root,
+      install_source: "ZCODE_WINDOWS_APP_INSTALL_DIR",
+      desktop_version: "3.18.2.10443",
+      bundle_path: bundle,
+      bundle_bytes: 15_675_386,
+      bundle_sha256: "a".repeat(64),
+      builtin_provider_config_path: builtinConfig,
+      builtin_provider_config_bytes: 1,
+      builtin_provider_config_sha256: "b".repeat(64),
+      runtime_host_path: runtimeHost,
+      runtime_host_bytes: 1,
+      runtime_host_sha256: "c".repeat(64),
+      node_executable: process.execPath,
+      node_version: "24.16.0",
+      node_compatible: true,
+      manifest: null,
+    };
+    const hostAssets: OfficialHostAssets = {
+      root,
+      hostModulePath: path.join(root, "official-host-runtime.mjs"),
+      appServerEntryPath: bundle,
+      builtinProviderConfigPath: builtinConfig,
+      runtimeHostPath: runtimeHost,
+      manifestDigest: "d".repeat(64),
+    };
+    const probe: ProcessProbe = {
+      platform: process.platform,
+      identityOf: async (pid) => ({
+        pid,
+        fingerprint: ROOT_FINGERPRINT,
+        fingerprint_precision: "exact",
+        identity_version: 1,
+        platform: process.platform,
+        captured_at: new Date().toISOString(),
+      }),
+      selfIdentity: async () => ({
+        pid: process.pid,
+        fingerprint: ROOT_FINGERPRINT,
+        fingerprint_precision: "exact",
+        identity_version: 1,
+        platform: process.platform,
+        captured_at: new Date().toISOString(),
+      }),
+      probe: async () => [],
+    };
+    FakeProcessManager.constructCount = 0;
+    FakeProcessManager.disposeCount = 0;
+
+    const run = async (
+      providerId: string,
+      modelId: string,
+      runtime: OfficialAppServerRuntimeDescriptor,
+    ): Promise<{ sent: boolean; error: Error | null; events: Array<{ type: string; details?: Record<string, unknown> }> }> => {
+      FakeProcessManager.reset();
+      FakeProcessManager.client.select(providerId, modelId);
+      const events: Array<{ type: string; details?: Record<string, unknown> }> = [];
+      const adapter = new OfficialAppServerWorkerAdapter({
+        officialRuntimeResolver: {
+          inspect: async () => runtime,
+          resolve: async () => config,
+        },
+        providerCapability: "installed_runtime",
+        testOnlyOfficialHostPackagedAssets: hostAssets,
+        testOnlyOfficialHostModule: {
+          ZCODE_PRODUCT_VERSION: "3.18.2",
+          ZCodeAgentProcessManager: FakeProcessManager as never,
+          ZCodeProtocolClient: FakeOfficialProtocolClient as never,
+        },
+        childEnvBase: { PATH: process.env.PATH },
+        homeDir: root,
+        timeoutMs: 5_000,
+        turnBindingCompatMs: 25,
+        replayIdleMs: 60_000,
+        probe,
+        verifyTreeClean: async (targets) => ({
+          clean: true,
+          livePids: [],
+          observedPids: targets.map((target) => target.pid),
+        }),
+        onEvent: (event) => events.push(event),
+      });
+      const handle = await adapter.startTask({
+        task: makeTask({ task_id: `dynamic_${providerId}_${Math.random()}`, workspace: root }),
+        workspace: { requestedPath: root, canonicalPath: root, mode: "direct" },
+        attempt: 1,
+      });
+      let error: Error | null = null;
+      try {
+        await adapter.getResult(handle);
+      } catch (caught) {
+        error = caught instanceof Error ? caught : new Error(String(caught));
+      }
+      return {
+        sent: FakeProcessManager.client.requests.some((request) => request.method === "session/send"),
+        error,
+        events,
+      };
+    };
+
+    const codingRejected = await run(
+      "account:bigmodel-individual-coding-plan",
+      "GLM-5.3-Flash",
+      { ...descriptor, discount_capability: "OFFICIAL_DISCOUNT_NOT_VERIFIED" },
+    );
+    assert.match(codingRejected.error?.message ?? "", /OFFICIAL_DISCOUNT_NOT_VERIFIED/u);
+    assert.equal(codingRejected.sent, false);
+    assert.ok(codingRejected.events.some((event) =>
+      event.type === "official_runtime_unverified"
+      && event.details?.provider_capability === "coding_plan_discount"
+      && event.details?.selected_provider_id === "account:bigmodel-individual-coding-plan"));
+
+    const codingAccepted = await run(
+      "account:bigmodel-individual-coding-plan",
+      "GLM-5.3-Flash",
+      descriptor,
+    );
+    assert.equal(codingAccepted.error, null);
+    assert.equal(codingAccepted.sent, true);
+
+    const startAccepted = await run(
+      "account:bigmodel-start-plan",
+      "GLM-5.3-Flash",
+      { ...descriptor, discount_capability: "OFFICIAL_DISCOUNT_NOT_VERIFIED" },
+    );
+    assert.equal(startAccepted.error, null);
+    assert.equal(startAccepted.sent, true);
+
+    const startRejected = await run(
+      "account:bigmodel-start-plan",
+      "GLM-5.3-Flash",
+      { ...descriptor, start_plan_static_compatibility: null },
+    );
+    assert.match(startRejected.error?.message ?? "", /STARTPLAN_RUNTIME_INCOMPATIBLE/u);
+    assert.equal(startRejected.sent, false);
+
+    const otherAccepted = await run(
+      "provider-default",
+      "model-default",
+      {
+        ...descriptor,
+        discount_capability: "OFFICIAL_DISCOUNT_NOT_VERIFIED",
+        start_plan_static_compatibility: null,
+      },
+    );
+    assert.equal(otherAccepted.error, null);
+    assert.equal(otherAccepted.sent, true);
   } finally {
     await removeTempDir(root);
   }

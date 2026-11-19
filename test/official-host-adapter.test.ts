@@ -26,6 +26,7 @@ import type { BrowserBackendDescriptor } from "../src/browser/backend.js";
 import type { BrowserControlPort } from "../src/browser/contracts.js";
 import type { BrowserCommandResult } from "../src/browser/result.js";
 import type { TaskPackage, WorkspaceRef, ZCodeRuntimeConfig } from "../src/interfaces.js";
+import { testOnlyRuntimeAuthReply } from "../src/runtime/account-provider.js";
 import { BridgeError } from "../src/runtime/errors.js";
 import type { ProcessProbe } from "../src/runtime/process-probe.js";
 import { fakeConfig, makeTask, makeTempDir, removeTempDir, validReport } from "./helpers.js";
@@ -599,6 +600,117 @@ test("runtime preferences, permissions, user input, provider headers, and browse
   assert.equal((byId.get("provider-headers")?.result as Record<string, unknown>).headersApplied, false);
   assert.equal(((byId.get("browser-list")?.result as { browsers?: unknown[] }).browsers ?? []).length, 1);
   assert.equal((byId.get("browser-exec")?.result as { ok?: boolean }).ok, true);
+});
+
+test("production Official Host runtime auth fails closed when the resolver is missing or rejects", async () => {
+  const root = await makeTempDir("official-host-runtime-auth-closed");
+  try {
+    const builtin = path.join(root, "builtin.json");
+    const personal = path.join(root, ".zcode", "v2", "provider_config.json");
+    await mkdir(path.dirname(personal), { recursive: true });
+    await writeFile(builtin, JSON.stringify({
+      revision: 1,
+      config: { providerConfigRules: { providerRules: [{
+        providerId: "account:bigmodel-individual-coding-plan",
+        config: {
+          builtinModelIds: ["GLM-5.3-Flash"],
+          access: { type: "zhipu-account", mode: "individual-coding-plan", accountType: "bigmodel" },
+        },
+      }] } },
+    }), "utf8");
+    await writeFile(personal, JSON.stringify({ config: { providerConfigRules: { providerRules: [] } } }), "utf8");
+    await writeFile(path.join(root, ".zcode", "v2", "config.json"), JSON.stringify({
+      provider: {
+        "builtin:bigmodel-coding-plan": {
+          enabled: true,
+          options: { apiKey: "synthetic-persisted-coding-plan-key" },
+        },
+      },
+    }), "utf8");
+    await writeFile(path.join(root, ".zcode", "v2", "coding-plan-cache.json"), JSON.stringify({
+      entryStatus: {
+        items: {
+          "builtin:bigmodel-coding-plan": { status: "available" },
+        },
+      },
+    }), "utf8");
+    const config: ZCodeRuntimeConfig = {
+      ...fakeConfig(),
+      providerBuiltinConfigFile: builtin,
+      providerPersonalConfigFile: personal,
+      zcodeDataRoot: path.join(root, ".zcode"),
+    };
+    assert.deepEqual(
+      testOnlyRuntimeAuthReply("account:bigmodel-individual-coding-plan", config),
+      {
+        headersApplied: true,
+        requestAuth: { apiKey: "synthetic-persisted-coding-plan-key" },
+      },
+    );
+
+    for (const scenario of ["missing", "reject", "static-flag"] as const) {
+      exitState = { code: null, signal: null };
+      const host = new FakeExternalHost();
+      host.model = {
+        providerId: "account:bigmodel-individual-coding-plan",
+        modelId: "GLM-5.3-Flash",
+        options: { reasoningLevel: "low" },
+      };
+      host.onSend = () => {
+        host.startTurn();
+        host.emitRequest({
+          id: "provider-auth",
+          method: "interaction/requestProviderRuntimeHeaders",
+          params: {
+            sessionId: SESSION_ID,
+            turnId: TURN_ID,
+            providerId: "account:bigmodel-individual-coding-plan",
+            modelSelection: {
+              providerId: "account:bigmodel-individual-coding-plan",
+              modelId: "GLM-5.3-Flash",
+            },
+            accountAccess: {
+              type: "zhipu-account",
+              accountType: "bigmodel",
+              mode: "individual-coding-plan",
+              entitled: true,
+            },
+          },
+        }, () => host.complete());
+      };
+      const { outcome } = await runToResult(host, {
+        task: taskWithModel({
+          provider_id: "account:bigmodel-individual-coding-plan",
+          model_id: "GLM-5.3-Flash",
+        }),
+        adapter: {
+          resolver: { resolve: async () => config },
+          homeDir: root,
+          ...(scenario === "reject"
+            ? {
+                resolveProviderRuntimeAuth: async () => {
+                  throw new Error("synthetic resolver rejection");
+                },
+              }
+            : {}),
+          ...(scenario === "static-flag"
+            ? { testOnlyAllowDirectAppServer: true as const }
+            : {}),
+        },
+      });
+      assert.equal(outcome.exitCode, 0);
+      const result = host.responses.find((message) => message.id === "provider-auth")?.result as Record<string, unknown>;
+      assert.deepEqual(result, {
+        headersApplied: false,
+        errorMessage: "Provider runtime authorization is unavailable.",
+      });
+      assert.equal("requestAuth" in result, false);
+      assert.equal(JSON.stringify(host.responses).includes("synthetic-persisted-coding-plan-key"), false);
+      assert.equal(JSON.stringify(host.responses).includes("synthetic resolver rejection"), false);
+    }
+  } finally {
+    await removeTempDir(root);
+  }
 });
 
 test("private Start Plan auth rejects a foreign turn and injects the secret only into the exact accepted turn", async () => {

@@ -7,7 +7,7 @@ import type { ZCodeRuntimeConfig } from "../src/interfaces.js";
 import {
   accountProviderRuleFacts,
   buildAccountProviderPayload,
-  runtimeAuthReply,
+  testOnlyRuntimeAuthReply,
 } from "../src/runtime/account-provider.js";
 import { classifyEntitlementFailure } from "../src/runtime/start-plan-production-auth.js";
 
@@ -158,10 +158,10 @@ test("offline Start Plan account and runtime-auth simulation never falls back to
       /start_plan_model_not_registered/u,
     );
 
-    const startPlanFallback = runtimeAuthReply("account:bigmodel-start-plan", config);
+    const startPlanFallback = testOnlyRuntimeAuthReply("account:bigmodel-start-plan", config);
     assert.equal(startPlanFallback.headersApplied, false);
     assert.match(String(startPlanFallback.errorMessage), /Start Plan/u);
-    assert.deepEqual(runtimeAuthReply("account:bigmodel-individual-coding-plan", config), {
+    assert.deepEqual(testOnlyRuntimeAuthReply("account:bigmodel-individual-coding-plan", config), {
       headersApplied: true,
       requestAuth: { apiKey: "synthetic-coding-plan-only-key" },
     });

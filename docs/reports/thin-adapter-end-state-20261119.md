@@ -4,8 +4,9 @@
 > Date: 2026-11-19
 > Branch: `codex/unified-official-appserver-startplan-20261119`
 > Baseline: `5501c60ecf3f1812a3d3170a670ab0031ea784d8`
-> Candidate: working tree, uncommitted by this Goal
-> Scope: Thin Official Host architecture convergence and local verification
+> ADR-041 implementation: `a676c6cd14573f2620339f992a345ed0715541ff` / tree `4d1b54835d4ebe1e1ae15113d5a152130a98480c`
+> Candidate: same-branch Final Closure owner-review commit, not pushed
+> Scope: Thin Official Host architecture convergence, dynamic Provider gate, Runtime Auth fail-closed, and local verification
 
 ## 1. 结论
 
@@ -28,6 +29,8 @@ Codex Host
 - Model Catalog 与任务执行共用 Runtime Resolver、Official Host module、ProcessManager、ProtocolClient、Provider Runtime Auth 和 Close 所有权。
 - Model Catalog 不再自行 spawn AppServer、实现 JSON-RPC framing、pending request、timeout、进程树清理或持久化 Coding Plan API Key 回包。
 - 所有 Provider 统一选择安装版 Official AppServer；Coding Plan 与 Start Plan 仍保留各自独立的能力门禁与认证边界。
+- `session/create` 后以 Runtime 实际报告的 Provider/Model 执行最终 capability gate；Coding Plan、Start Plan 与其他 Provider 的分类读取官方 registry 和当前账户配置，并在 send 前 fail closed。
+- 生产 Official Host 的 Provider Runtime Auth resolver 缺失或拒绝时只返回不可用，不读取持久化 API Key 回退；静态凭据回包只保留给显式 Test Adapter。
 - 打包的 `app-server/zcode.cjs` 与随附 builtin Provider 配置已删除，Plugin Validator 会拒绝其重新进入发布包。
 - Direct stdio 只能通过显式 `ZCodeAppServerTestAdapter` 使用，公共 Core 不再导出 `ZCodeAppServerAdapter`，生产 Worker 不存在打包 Runtime fallback。
 - 三项 Official Host Patch 仍为 `UPSTREAM_PENDING`，没有把未上游化状态写成完成。
@@ -67,9 +70,9 @@ Codex Host
 原 Worker 只会在 Provider 已预先解析的情况下初始化 Official Provider Runtime
 Auth。现在 `src/worker/worker-main.ts` 在非 direct Adapter 中按回调实际配置惰性
 构造 resolver；Adapter 仍会核对回调的 Provider/Model 与最终 Session 选择。
-`selectOfficialProviderRuntime(undefined) === "installed_runtime"` 已有断言，修复后
-定向套件为 `77/77 PASS`。未为“未指定 model 且由官方选择 Coding Plan”的完整
-Worker 回调路径增加独立进程级回归，仍列为测试覆盖缺口。
+Final Closure 进一步把 capability 判定移动到 Runtime 报告实际选择之后，并增加
+隐式 Coding Plan、隐式 Start Plan、其他 Provider、Coding Plan 未验证和 Start
+Plan 非离线兼容的 Adapter 级回归。显式 Provider 既有路径继续由原测试覆盖。
 
 模型列表缓存、默认模型、Provider 识别、Start Plan alias 和 MCP 返回结构未改变。新增 `test/model-settings-official-auth.test.ts` 验证：
 
@@ -140,6 +143,7 @@ API Key、内置非账户 Provider 与自定义 Provider 不在上述 10 项账�
 - `src/core.ts` 不再导出 `ZCodeAppServerAdapter`；
 - 生产 Worker 对非测试执行只实例化 `OfficialAppServerWorkerAdapter`；
 - 原 `OfficialHostAdapter` 类已删除，统一使用共享 session factory；
+- `runtimeAuthReply()` 已更名并收敛为 `testOnlyRuntimeAuthReply()`；生产 Adapter 缺少 resolver 或 resolver 拒绝时 fail closed；
 - `CodingAgentAdapter` 合同、Session/Turn、Interaction、Usage/Events、Result 和 Cleanup 映射保持不变。
 
 ## 6. 阶段 4：Official Host Patch 上游化状态
@@ -192,14 +196,21 @@ Official Host artifact：
 
 减少 `31,276,647` bytes，约 `29.83 MiB`。其中直接删除的打包 AppServer 与 builtin Provider 配置共 `31,275,576` bytes，也约 `29.83 MiB`。
 
-完整插件树：
+插件树（主口径为 Git Tree，可跨 checkout 重复计算）：
 
 | 状态 | 文件数 | Bytes |
 |---|---:|---:|
-| HEAD baseline | 55 | 51,429,420 |
-| Candidate | 53 | 19,380,296 |
+| Baseline Git Tree `5501c60...` | 55 | 51,429,420 |
+| ADR-041 Git Tree `a676c6c...` | 53 | 19,378,497 |
 
-减少 `32,049,124` bytes，约 `30.56 MiB`。该统计包含生成 Bundle、Browser backend、Official Host closure、许可和元数据；不是只看源码 LOC 的收益。
+减少 `32,050,923` bytes，约 `30.57 MiB`。统计命令为
+`git ls-tree -r -l <commit> plugins/codex-zcode-bridge`，对 blob size 求和；
+该口径包含生成 Bundle、Browser backend、Official Host closure、许可和元数据，
+不是只看源码 LOC 的收益。
+
+当前 Windows 工作区同一目录为 `19,380,296` bytes，比 Git Tree 多 `1,799` bytes，
+原因是本机 `core.autocrlf=true` 将文本文件展开为 CRLF。ZIP、Git Tree 与
+checked-out worktree 的统计口径不同，报告不得混用。
 
 源码与测试行数变化（包含新增文件）：
 
@@ -221,6 +232,19 @@ Official Host artifact：
 - 最终修复前定向测试：Test Impact Selector、Validator 合成根、Model Catalog
   Official Auth 共 `31/31` PASS。
 - 模型未指定时的 Official Provider Runtime Auth 惰性修复后定向套件：`77/77` PASS。
+- Final Closure `npm run typecheck`：PASS。
+- Final Closure `npm run build:test`：PASS。
+- Final Closure `npm run build`：PASS。
+- Final Closure 定向套件：`66` tests，`65` PASS、`0` FAIL、`1` SKIP；覆盖
+  account-provider、Official AppServer Adapter、ZCode AppServer Adapter 和
+  Official Host Adapter。
+- 新增的生产 Runtime Auth 测试同时布置了合成 Coding Plan 持久化 API Key 与
+  available cache entry；resolver 缺失、拒绝，以及 external-host 请求携带
+  test-only 标志的三条路径均只返回不可用，未泄漏该 Key。
+- Final Closure `npm run test:clean-entrypoints`：PASS；`4/4`。
+- Final Closure `npm run test:inventory`：PASS；`882` declarations / `91` mapped files。
+- Final Closure `npm run validate:plugin`：PASS。
+- Final Closure `git diff --check`：PASS；仅报告 `LF -> CRLF` 工作区警告。
 - `npm run test:affected`：类型检查、构建与 Plugin Validator PASS；选择 `FULL_SUITE`，最终仅在 `check:generated` 因生成物尚未提交而失败。该失败是未提交 working-tree 前置条件，不是源码、构建或测试失败。
 - Final `npm run test:full`：PASS；`942` tests，`940` PASS，`0` FAIL，`2` SKIP，
   `1,347,468.6958 ms`。
@@ -262,13 +286,12 @@ Official Host artifact：
 - 其他 Provider 的真实模型 E2E：`NOT_RUN`。
 - Start Plan 使用当前安装版 Runtime 的 live Entitlement/E2E：`NOT_RUN`。
 - 真实 OAuth refresh/账户轮换：`NOT_RUN`。
-- 未显式指定 model、由官方选择 Coding Plan 的完整 Worker 回调路径：没有独立
-  Worker 级回归；目前由选择器断言、共享 resolver 单元测试与完整套件覆盖风险。
 - 外部 fork 对移除 `ZCodeAppServerAdapter` Core 导出的兼容性：`NOT_RUN`。
 - Windows x64 / Node `24.16.0` 以外的 Runtime 组合：`NOT_VERIFIED`。
 - 发布安装、Marketplace、Tag、Release 与 Preview：`NOT_RUN`。
 - 三项 Patch 尚未被官方上游等价实现替代。
-- Candidate 尚未提交，因此 `check:generated` 不能在 clean-index 条件下宣称 PASS。
+- Final Closure 的真实模型、Start Plan、OAuth、Billing 与 CAPTCHA E2E：`NOT_RUN`；
+  Adapter 级合成测试不能替代真实服务端权益或账单。
 - 第一次完整回归的 compiled stdio 临时失败未复现；最终全套 PASS，但套件顺序/
   环境交互风险仍保留。
 

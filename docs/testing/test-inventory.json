@@ -4,15 +4,15 @@
   "generator": "npm run test:inventory",
   "summary": {
     "executable_or_manual_files": 91,
-    "declarations": 879,
+    "declarations": 882,
     "by_type": {
-      "Unit": 208,
-      "Integration": 668,
+      "Unit": 209,
+      "Integration": 670,
       "Stress": 3
     },
     "by_gate": {
-      "T1": 239,
-      "T2": 637,
+      "T1": 240,
+      "T2": 639,
       "T3": 3
     },
     "stress_tests": 1,
@@ -20,10 +20,10 @@
   },
   "tests": [
     {
-      "test_id": "TII-CF076ADDD19B75D4",
+      "test_id": "TII-AA068E400C8735A0",
       "test_name": "account provider IDs are idempotent while legacy builtin IDs still map",
       "test_file": "test/account-provider.test.ts",
-      "test_line": 15,
+      "test_line": 16,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -59,10 +59,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-143D1C0696B8552B",
+      "test_id": "TII-91454CA8448B184D",
       "test_name": "catalog aliases require the same advertised model and preserve exact provider IDs",
       "test_file": "test/account-provider.test.ts",
-      "test_line": 56,
+      "test_line": 57,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -98,10 +98,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-8C5BD2676CF1CAAA",
+      "test_id": "TII-0C0A19AAEBAB8691",
       "test_name": "official account snapshot keeps Start and Coding Plan facts independent and revision stable",
       "test_file": "test/account-provider.test.ts",
-      "test_line": 71,
+      "test_line": 72,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -137,10 +137,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-E3532D5B73BF7498",
+      "test_id": "TII-B51B3AE68826D843",
       "test_name": "modern connection selections override legacy keys and keep Team distinct",
       "test_file": "test/account-provider.test.ts",
-      "test_line": 148,
+      "test_line": 149,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -176,10 +176,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-A69CDC51CF6FCE3F",
+      "test_id": "TII-D345503EF99E62DC",
       "test_name": "task-scoped current authorizes only the selected account provider",
       "test_file": "test/account-provider.test.ts",
-      "test_line": 211,
+      "test_line": 212,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -215,10 +215,49 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-6DF3FE51713B5C5C",
+      "test_id": "TII-0EF060ABF0C76911",
       "test_name": "builtin model order is preserved while revision remains deterministic",
       "test_file": "test/account-provider.test.ts",
-      "test_line": 263,
+      "test_line": 264,
+      "test_type": "Unit",
+      "gate": "T1",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/interfaces.ts",
+          "src/runtime/account-provider.ts"
+        ],
+        "impact_domains": [
+          "provider-catalog"
+        ]
+      },
+      "trigger_source_paths": [
+        "src/runtime/account-provider.ts",
+        "src/runtime/model-routing.ts",
+        "src/runtime/model-settings.ts",
+        "src/runtime/official-provider-runtime-auth.ts",
+        "src/runtime/session-preferences.ts",
+        "src/runtime/start-plan-production-auth.ts"
+      ],
+      "trigger_test_files": [
+        "test/account-provider.test.ts"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-40786DB472ADA7A7",
+      "test_name": "runtime-selected Provider capability uses the official registry and configured account snapshot",
+      "test_file": "test/account-provider.test.ts",
+      "test_line": 287,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -9112,10 +9151,81 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-72C69D9565E5B1BE",
+      "test_id": "TII-A4516A069641AC84",
       "test_name": "installed official adapter selects the installed bundle and preserves the official protocol lifecycle",
       "test_file": "test/official-app-server-adapter.test.ts",
-      "test_line": 163,
+      "test_line": 179,
+      "test_type": "Integration",
+      "gate": "T2",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": 30000,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Disk",
+        "Memory",
+        "Process"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/adapters/official-app-server-adapter.ts",
+          "src/adapters/official-host-adapter.ts",
+          "src/interfaces.ts",
+          "src/runtime/official-app-server-runtime.ts",
+          "src/runtime/process-probe.ts"
+        ],
+        "impact_domains": [
+          "appserver-adapter",
+          "process-cleanup-and-locks",
+          "provider-catalog",
+          "worker-launch"
+        ]
+      },
+      "trigger_source_paths": [
+        "src/adapters/zcode-app-server-adapter.ts",
+        "src/adapters/official-host-adapter.ts",
+        "src/adapters/official-app-server-adapter.ts",
+        "src/runtime/official-provider-runtime-auth.ts",
+        "src/runtime/desktop-host-launch.ts",
+        "src/runtime/task-timeout.ts",
+        "src/runtime/errors.ts",
+        "src/diagnostics/failure-facts.ts",
+        "src/runtime/start-plan-secret-redactor.ts",
+        "src/adapters/process-spawn.ts",
+        "src/adapters/windows-process-cleanup.ts",
+        "src/runtime/process-probe.ts",
+        "src/store/process-lock.ts",
+        "src/store/atomic-rename.ts",
+        "src/runtime/account-provider.ts",
+        "src/runtime/model-routing.ts",
+        "src/runtime/model-settings.ts",
+        "src/runtime/official-provider-runtime-auth.ts",
+        "src/runtime/session-preferences.ts",
+        "src/runtime/start-plan-production-auth.ts",
+        "src/manager/spawn-worker.ts",
+        "src/runtime/build-provenance.ts",
+        "src/runtime/child-env.ts",
+        "src/runtime/node-runtime.ts",
+        "src/worker/production-adapter-selection.ts",
+        "src/worker/worker-main.ts",
+        "src/runtime/start-plan-private-channel.ts",
+        "src/runtime/start-plan-private-frame.ts",
+        "src/runtime/start-plan-private-lease.ts",
+        "src/runtime/start-plan-handle-gate.ts"
+      ],
+      "trigger_test_files": [
+        "test/official-app-server-adapter.test.ts"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-D46520FBCF9A9AA1",
+      "test_name": "implicit runtime Provider selection applies the matching capability gate before session/send",
+      "test_file": "test/official-app-server-adapter.test.ts",
+      "test_line": 400,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -9801,10 +9911,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-821B9B90053666D1",
+      "test_id": "TII-C90B88C6FBD7846B",
       "test_name": "official protocol path creates, subscribes before one send, and maps usage/model/reasoning",
       "test_file": "test/official-host-adapter.test.ts",
-      "test_line": 322,
+      "test_line": 323,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -9827,6 +9937,7 @@
           "src/browser/contracts.ts",
           "src/browser/result.ts",
           "src/interfaces.ts",
+          "src/runtime/account-provider.ts",
           "src/runtime/errors.ts",
           "src/runtime/process-probe.ts"
         ],
@@ -9875,10 +9986,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-2A0A483653AA19E7",
+      "test_id": "TII-9BDF99864C70EB86",
       "test_name": "strict resume requires an exact runtime-returned session id and sends nothing on mismatch",
       "test_file": "test/official-host-adapter.test.ts",
-      "test_line": 350,
+      "test_line": 351,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -9901,6 +10012,7 @@
           "src/browser/contracts.ts",
           "src/browser/result.ts",
           "src/interfaces.ts",
+          "src/runtime/account-provider.ts",
           "src/runtime/errors.ts",
           "src/runtime/process-probe.ts"
         ],
@@ -9949,10 +10061,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-1B481FF1CC5058C4",
+      "test_id": "TII-F1446C7E741745BD",
       "test_name": "strict resume uses setMode and then the same subscribe-before-send protocol",
       "test_file": "test/official-host-adapter.test.ts",
-      "test_line": 376,
+      "test_line": 377,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -9975,6 +10087,7 @@
           "src/browser/contracts.ts",
           "src/browser/result.ts",
           "src/interfaces.ts",
+          "src/runtime/account-provider.ts",
           "src/runtime/errors.ts",
           "src/runtime/process-probe.ts"
         ],
@@ -10023,10 +10136,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-FDC5930E82C2B06B",
+      "test_id": "TII-6A3637600AE29B0E",
       "test_name": "unknown or missing terminal result types fail closed and duplicate/foreign terminals stay inert",
       "test_file": "test/official-host-adapter.test.ts",
-      "test_line": 391,
+      "test_line": 392,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -10049,6 +10162,7 @@
           "src/browser/contracts.ts",
           "src/browser/result.ts",
           "src/interfaces.ts",
+          "src/runtime/account-provider.ts",
           "src/runtime/errors.ts",
           "src/runtime/process-probe.ts"
         ],
@@ -10097,10 +10211,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-DE31DB115AF20784",
+      "test_id": "TII-464F227957790E08",
       "test_name": "cancellation and timeout close once without resending session/send",
       "test_file": "test/official-host-adapter.test.ts",
-      "test_line": 412,
+      "test_line": 413,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -10123,6 +10237,7 @@
           "src/browser/contracts.ts",
           "src/browser/result.ts",
           "src/interfaces.ts",
+          "src/runtime/account-provider.ts",
           "src/runtime/errors.ts",
           "src/runtime/process-probe.ts"
         ],
@@ -10171,10 +10286,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-5E3E12A0EDCCFC2B",
+      "test_id": "TII-CDCCD3ACF5A2AE13",
       "test_name": "runtime close or generation change terminates the attempt and never resends",
       "test_file": "test/official-host-adapter.test.ts",
-      "test_line": 444,
+      "test_line": 445,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -10197,6 +10312,7 @@
           "src/browser/contracts.ts",
           "src/browser/result.ts",
           "src/interfaces.ts",
+          "src/runtime/account-provider.ts",
           "src/runtime/errors.ts",
           "src/runtime/process-probe.ts"
         ],
@@ -10245,10 +10361,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-00B08C1B8F295945",
+      "test_id": "TII-615D23CDF646D3BE",
       "test_name": "runtime preferences, permissions, user input, provider headers, and browser reverse RPCs stay session-scoped",
       "test_file": "test/official-host-adapter.test.ts",
-      "test_line": 514,
+      "test_line": 515,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -10271,6 +10387,7 @@
           "src/browser/contracts.ts",
           "src/browser/result.ts",
           "src/interfaces.ts",
+          "src/runtime/account-provider.ts",
           "src/runtime/errors.ts",
           "src/runtime/process-probe.ts"
         ],
@@ -10319,10 +10436,85 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-B636CC0C00A06826",
+      "test_id": "TII-546ACD88553921E3",
+      "test_name": "production Official Host runtime auth fails closed when the resolver is missing or rejects",
+      "test_file": "test/official-host-adapter.test.ts",
+      "test_line": 605,
+      "test_type": "Integration",
+      "gate": "T2",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Disk",
+        "Memory",
+        "Process"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/adapters/official-host-adapter.ts",
+          "src/adapters/zcode-app-server-adapter.ts",
+          "src/browser/backend.ts",
+          "src/browser/contracts.ts",
+          "src/browser/result.ts",
+          "src/interfaces.ts",
+          "src/runtime/account-provider.ts",
+          "src/runtime/errors.ts",
+          "src/runtime/process-probe.ts"
+        ],
+        "impact_domains": [
+          "appserver-adapter",
+          "process-cleanup-and-locks",
+          "provider-catalog",
+          "worker-launch"
+        ]
+      },
+      "trigger_source_paths": [
+        "src/adapters/zcode-app-server-adapter.ts",
+        "src/adapters/official-host-adapter.ts",
+        "src/adapters/official-app-server-adapter.ts",
+        "src/runtime/official-provider-runtime-auth.ts",
+        "src/runtime/desktop-host-launch.ts",
+        "src/runtime/task-timeout.ts",
+        "src/runtime/errors.ts",
+        "src/diagnostics/failure-facts.ts",
+        "src/runtime/start-plan-secret-redactor.ts",
+        "src/adapters/process-spawn.ts",
+        "src/adapters/windows-process-cleanup.ts",
+        "src/runtime/process-probe.ts",
+        "src/store/process-lock.ts",
+        "src/store/atomic-rename.ts",
+        "src/runtime/account-provider.ts",
+        "src/runtime/model-routing.ts",
+        "src/runtime/model-settings.ts",
+        "src/runtime/official-provider-runtime-auth.ts",
+        "src/runtime/session-preferences.ts",
+        "src/runtime/start-plan-production-auth.ts",
+        "src/manager/spawn-worker.ts",
+        "src/runtime/build-provenance.ts",
+        "src/runtime/child-env.ts",
+        "src/runtime/node-runtime.ts",
+        "src/worker/production-adapter-selection.ts",
+        "src/worker/worker-main.ts",
+        "src/runtime/start-plan-private-channel.ts",
+        "src/runtime/start-plan-private-frame.ts",
+        "src/runtime/start-plan-private-lease.ts",
+        "src/runtime/start-plan-handle-gate.ts"
+      ],
+      "trigger_test_files": [
+        "test/official-host-adapter.test.ts"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-B8B0794019D381F7",
       "test_name": "private Start Plan auth rejects a foreign turn and injects the secret only into the exact accepted turn",
       "test_file": "test/official-host-adapter.test.ts",
-      "test_line": 604,
+      "test_line": 716,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -10345,6 +10537,7 @@
           "src/browser/contracts.ts",
           "src/browser/result.ts",
           "src/interfaces.ts",
+          "src/runtime/account-provider.ts",
           "src/runtime/errors.ts",
           "src/runtime/process-probe.ts"
         ],
@@ -10393,10 +10586,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-2F42DE973DD09680",
+      "test_id": "TII-0F6057B59570A36F",
       "test_name": "clean recorded-tree scan can verify cleanup while a close failure remains visible",
       "test_file": "test/official-host-adapter.test.ts",
-      "test_line": 692,
+      "test_line": 804,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -10419,6 +10612,7 @@
           "src/browser/contracts.ts",
           "src/browser/result.ts",
           "src/interfaces.ts",
+          "src/runtime/account-provider.ts",
           "src/runtime/errors.ts",
           "src/runtime/process-probe.ts"
         ],
@@ -10467,10 +10661,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-4BC6968D7443B471",
+      "test_id": "TII-68E7CCCD21ECAEDE",
       "test_name": "missing, live, or incomplete recorded-tree evidence keeps cleanup unverified",
       "test_file": "test/official-host-adapter.test.ts",
-      "test_line": 709,
+      "test_line": 821,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -10493,6 +10687,7 @@
           "src/browser/contracts.ts",
           "src/browser/result.ts",
           "src/interfaces.ts",
+          "src/runtime/account-provider.ts",
           "src/runtime/errors.ts",
           "src/runtime/process-probe.ts"
         ],
@@ -10541,10 +10736,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-D24A32EF91B94B53",
+      "test_id": "TII-F09E6FF70C90BBB4",
       "test_name": "official factory scopes the fixed helper path, pins transport options, maps exitCode, and verifies the close scan",
       "test_file": "test/official-host-adapter.test.ts",
-      "test_line": 828,
+      "test_line": 940,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -10567,6 +10762,7 @@
           "src/browser/contracts.ts",
           "src/browser/result.ts",
           "src/interfaces.ts",
+          "src/runtime/account-provider.ts",
           "src/runtime/errors.ts",
           "src/runtime/process-probe.ts"
         ],
@@ -10615,10 +10811,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-B6898BCC8A97B281",
+      "test_id": "TII-6CE2EE795A80DF38",
       "test_name": "official factory rejects a foreign app-server entrypoint before constructing the manager",
       "test_file": "test/official-host-adapter.test.ts",
-      "test_line": 892,
+      "test_line": 1004,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -10641,6 +10837,7 @@
           "src/browser/contracts.ts",
           "src/browser/result.ts",
           "src/interfaces.ts",
+          "src/runtime/account-provider.ts",
           "src/runtime/errors.ts",
           "src/runtime/process-probe.ts"
         ],
@@ -10689,10 +10886,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-94DA5BA6A4FC1A9E",
+      "test_id": "TII-69CA0E76C3AC2B81",
       "test_name": "official factory rejects missing or malformed product versions before constructing the manager",
       "test_file": "test/official-host-adapter.test.ts",
-      "test_line": 925,
+      "test_line": 1037,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -10715,6 +10912,7 @@
           "src/browser/contracts.ts",
           "src/browser/result.ts",
           "src/interfaces.ts",
+          "src/runtime/account-provider.ts",
           "src/runtime/errors.ts",
           "src/runtime/process-probe.ts"
         ],
@@ -10763,10 +10961,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-3AB52F908F692D2B",
+      "test_id": "TII-3DD014F81BD81F3E",
       "test_name": "official factory fails closed outside Windows x64",
       "test_file": "test/official-host-adapter.test.ts",
-      "test_line": 966,
+      "test_line": 1078,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -10789,6 +10987,7 @@
           "src/browser/contracts.ts",
           "src/browser/result.ts",
           "src/interfaces.ts",
+          "src/runtime/account-provider.ts",
           "src/runtime/errors.ts",
           "src/runtime/process-probe.ts"
         ],
@@ -10837,10 +11036,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-FCAB72AAA75B2D6B",
+      "test_id": "TII-8A1CC485979FC961",
       "test_name": "production asset verification fails closed for absent and invalid shipped trees",
       "test_file": "test/official-host-adapter.test.ts",
-      "test_line": 996,
+      "test_line": 1108,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -10863,6 +11062,7 @@
           "src/browser/contracts.ts",
           "src/browser/result.ts",
           "src/interfaces.ts",
+          "src/runtime/account-provider.ts",
           "src/runtime/errors.ts",
           "src/runtime/process-probe.ts"
         ],
@@ -10911,10 +11111,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-A8BD8AD68B3D2CCB",
+      "test_id": "TII-50738F09F0C81F73",
       "test_name": "installed Official Host session composition is lazy and resolves the packaged module through the Worker-shaped URL",
       "test_file": "test/official-host-adapter.test.ts",
-      "test_line": 1027,
+      "test_line": 1139,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -10937,6 +11137,7 @@
           "src/browser/contracts.ts",
           "src/browser/result.ts",
           "src/interfaces.ts",
+          "src/runtime/account-provider.ts",
           "src/runtime/errors.ts",
           "src/runtime/process-probe.ts"
         ],
@@ -10985,10 +11186,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-B0A5A6C45C96C5B1",
+      "test_id": "TII-B29D201617F75E83",
       "test_name": "the shipped host module applies the exact 16 MiB transport frame limit and fails closed above it",
       "test_file": "test/official-host-adapter.test.ts",
-      "test_line": 1080,
+      "test_line": 1192,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -11011,6 +11212,7 @@
           "src/browser/contracts.ts",
           "src/browser/result.ts",
           "src/interfaces.ts",
+          "src/runtime/account-provider.ts",
           "src/runtime/errors.ts",
           "src/runtime/process-probe.ts"
         ],
@@ -11059,10 +11261,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-EDFD4B4551DAAAA7",
+      "test_id": "TII-F7707A4C615D7BD7",
       "test_name": "the shipped Host exports and native keyring closure load outside the build workspace",
       "test_file": "test/official-host-adapter.test.ts",
-      "test_line": 1143,
+      "test_line": 1255,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -11085,6 +11287,7 @@
           "src/browser/contracts.ts",
           "src/browser/result.ts",
           "src/interfaces.ts",
+          "src/runtime/account-provider.ts",
           "src/runtime/errors.ts",
           "src/runtime/process-probe.ts"
         ],

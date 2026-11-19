@@ -1,10 +1,18 @@
-import type { OfficialProviderRuntimeCapability } from "../runtime/official-app-server-runtime.js";
+import {
+  accountProviderSelectionCapability,
+} from "../runtime/account-provider.js";
+import { BridgeError } from "../runtime/errors.js";
+import type {
+  OfficialAppServerRuntimeDescriptor,
+  OfficialProviderRuntimeCapability,
+} from "../runtime/official-app-server-runtime.js";
 import {
   ZCodeAppServerAdapter,
   type ZCodeAppServerAdapterOptions,
 } from "./zcode-app-server-adapter.js";
 import {
   createInstalledOfficialHostSessionFactory,
+  officialProviderCapabilityFailure,
   type OfficialHostPackagedAssets,
   type OfficialHostModuleSource,
 } from "./official-host-adapter.js";
@@ -38,6 +46,7 @@ export interface OfficialAppServerWorkerAdapterOptions extends ZCodeAppServerAda
 export class OfficialAppServerWorkerAdapter extends ZCodeAppServerAdapter {
   constructor(options: OfficialAppServerWorkerAdapterOptions = {}) {
     const providerCapability = options.providerCapability ?? "installed_runtime";
+    let verifiedDescriptor: OfficialAppServerRuntimeDescriptor | undefined;
     const sessionFactory = createInstalledOfficialHostSessionFactory({
       officialRuntimeResolver: options.officialRuntimeResolver,
       env: options.childEnvBase,
@@ -48,6 +57,7 @@ export class OfficialAppServerWorkerAdapter extends ZCodeAppServerAdapter {
       workerModuleUrl: options.workerModuleUrl,
       testOnlyOfficialHostPackagedAssets: options.testOnlyOfficialHostPackagedAssets,
       onVerified: (descriptor) => {
+        verifiedDescriptor = descriptor;
         options.onEvent?.({
           type: "official_runtime_verified",
           summary: "Using verified installed ZCode AppServer",
@@ -84,6 +94,42 @@ export class OfficialAppServerWorkerAdapter extends ZCodeAppServerAdapter {
       resolver: sessionFactory.resolver,
       providerRetryLimit: 0,
       externalHostClientFactory: (context) => sessionFactory.createClient(context),
+      verifySelectedProviderCapability: async (selection, config, signal) => {
+        signal.throwIfAborted();
+        const resolved = accountProviderSelectionCapability(
+          selection.providerId,
+          selection.modelId,
+          config,
+        );
+        const descriptor = verifiedDescriptor;
+        if (!descriptor) {
+          throw new BridgeError(
+            "provider_config_invalid",
+            "The Official AppServer runtime identity was not verified before provider capability validation.",
+          );
+        }
+        const failure = resolved.failure
+          ?? officialProviderCapabilityFailure(descriptor, resolved.capability);
+        if (!failure) return;
+        try {
+          options.onEvent?.({
+            type: "official_runtime_unverified",
+            summary: failure,
+            details: {
+              status: descriptor.status,
+              discount_capability: descriptor.discount_capability,
+              start_plan_static_compatibility: descriptor.start_plan_static_compatibility,
+              provider_capability: resolved.capability,
+              selected_provider_id: selection.providerId,
+              selected_model_id: selection.modelId,
+              reason: failure,
+            },
+          });
+        } catch {
+          // Observation cannot alter the fail-closed decision.
+        }
+        throw new BridgeError("provider_config_invalid", failure);
+      },
     });
   }
 }
