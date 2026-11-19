@@ -19763,10 +19763,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-B6FAA2FB8495130A",
+      "test_id": "TII-3A6B33A6A48FC2AF",
       "test_name": "Worker routes an explicit Coding Plan through the installed AppServer adapter, SQLite Result, Cleanup, and Release",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 547,
+      "test_line": 552,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -19854,10 +19854,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-2F1BD5619E579336",
+      "test_id": "TII-4F50CB73B971327C",
       "test_name": "Worker Cleanup keeps a rejected official close visible when its independent scan is clean",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 606,
+      "test_line": 611,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -19945,10 +19945,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-C938B7D7938D0B20",
+      "test_id": "TII-28C5E134EA7D18E5",
       "test_name": "SQLite production Worker survives streaming stderr backpressure without a diagnostic recorder",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 639,
+      "test_line": 644,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -20036,10 +20036,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-DB7FD8E303A51829",
+      "test_id": "TII-0D806B3E1CD5F589",
       "test_name": "formal MCP lifecycle runs a real ZCodeAppServerAdapter against a controlled fake app-server",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 668,
+      "test_line": 673,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -20127,10 +20127,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-073855CCE0E24AC1",
+      "test_id": "TII-001FAD4E2E140AFA",
       "test_name": "Start Plan without official auth is rejected before task persistence or Provider requests",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 759,
+      "test_line": 764,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -20218,10 +20218,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-2F467F3F05AA453F",
+      "test_id": "TII-AF067037865BD86D",
       "test_name": "<dynamic-name>`SQLite Worker private auth ${variant} keeps synthetic credential out of persisted output`@test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 776,
+      "test_line": 781,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -20309,10 +20309,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-0F85A228243F9E60",
+      "test_id": "TII-E6889F2E98F7A548",
       "test_name": "<dynamic-name>`SQLite Worker ${variant} reuses one delivered credential for repeated runtime-header requests`@test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 822,
+      "test_line": 827,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -20400,10 +20400,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-06ED5E6ED4A014A5",
+      "test_id": "TII-828A5BC1F43076C2",
       "test_name": "<dynamic-name>`SQLite Worker rejects ${variant} without provider fallback`@test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 872,
+      "test_line": 877,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -20491,10 +20491,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-E4A7232CBCC07A4A",
+      "test_id": "TII-16860CB727C423A3",
       "test_name": "Start Plan Billing preflight rejection prevents AppServer startup and private lease delivery",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 918,
+      "test_line": 923,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -20582,10 +20582,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-7EDC55DBF34FF55F",
+      "test_id": "TII-0327F1C19CD6E87F",
       "test_name": "SQLite interaction persistence redacts a synthetic credential echoed by AppServer",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 933,
+      "test_line": 938,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -20673,10 +20673,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-3F754204FD1FD599",
+      "test_id": "TII-E334D5EAE7C48ED1",
       "test_name": "SQLite Worker environment block excludes the delivered synthetic credential",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 958,
+      "test_line": 963,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -20764,10 +20764,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-6FD4FB726052F8C0",
+      "test_id": "TII-99CFAE1125FD118B",
       "test_name": "SQLite cancellation after private credential delivery verifies Worker cleanup and Release",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 1001,
+      "test_line": 1006,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -20855,10 +20855,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-B24FFB5EEE385231",
+      "test_id": "TII-23CA8E0DDD6C80D8",
       "test_name": "SQLite cancellation before a delayed issuer returns revokes its late lease",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 1027,
+      "test_line": 1032,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -20946,10 +20946,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-98183424AE1DD0D9",
+      "test_id": "TII-10E549D9FBCB9B51",
       "test_name": "SQLite Worker exit while issuer is pending revokes a late lease",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 1070,
+      "test_line": 1075,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -21037,10 +21037,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-F8469A360277F4B1",
+      "test_id": "TII-B7E9D3274C3379ED",
       "test_name": "SQLite Worker crash after execution evidence stays held instead of replaying side effects",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 1133,
+      "test_line": 1138,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -21128,10 +21128,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-99C0DF5DC14E1A58",
+      "test_id": "TII-E1C21FD653002DD3",
       "test_name": "SQLite cancellation during a partially written credential frame aborts delivery once and releases",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 1204,
+      "test_line": 1209,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -21219,10 +21219,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-2885B7A4DA0F1240",
+      "test_id": "TII-B45B7F294C73FB2B",
       "test_name": "SQLite Worker rejects subsequent runtime auth after lifetime pipe EOF",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 1284,
+      "test_line": 1289,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -21310,10 +21310,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-412CFAD1D00B7799",
+      "test_id": "TII-CE4AA431C4210931",
       "test_name": "SQLite Worker ACK channel loss never retransmits a private credential",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 1312,
+      "test_line": 1317,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -21401,10 +21401,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-C2A5C5392515E0DF",
+      "test_id": "TII-D9E87AD3E8BF6CC5",
       "test_name": "<dynamic-name>`SQLite Worker rejects malformed confirmation ${invalid.toString(\"hex\")}`@test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 1339,
+      "test_line": 1344,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -21492,10 +21492,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-5B2304C1B907B29F",
+      "test_id": "TII-AB425789BC332B04",
       "test_name": "SQLite Worker refuses credentials when lifetime EOF precedes Manager confirmation",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 1370,
+      "test_line": 1375,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -21583,10 +21583,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-3408490BD370D320",
+      "test_id": "TII-7CB9EEE4C0FBA5E4",
       "test_name": "SQLite cancellation while Worker awaits Manager confirmation revokes delivery",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 1401,
+      "test_line": 1406,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -21674,10 +21674,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-6F7CC9BCEA5C2EEC",
+      "test_id": "TII-144170010B80FDAF",
       "test_name": "SQLite Worker refuses credentials when Manager confirmation is lost",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 1440,
+      "test_line": 1445,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -21765,10 +21765,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-45A06A57759C178B",
+      "test_id": "TII-408561D16AFB4B0E",
       "test_name": "SQLite Worker ACK received then discarded never causes credential retransmission",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 1477,
+      "test_line": 1482,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -21856,10 +21856,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-8B68A2AAA47F984F",
+      "test_id": "TII-1CF32A64FB858402",
       "test_name": "SQLite continuation cannot redeem a prior Attempt's private lease",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 1516,
+      "test_line": 1521,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -21947,10 +21947,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-8707650C853E3002",
+      "test_id": "TII-9C3272F151FFF0EE",
       "test_name": "two SQLite Workers cannot consume the same private credential lease",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 1554,
+      "test_line": 1559,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -22038,10 +22038,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-36D4798B49D55BC8",
+      "test_id": "TII-2EAC37D4F57DFFAE",
       "test_name": "test-only fake adapter capability cannot be injected through MCP TaskPackage arguments",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 1583,
+      "test_line": 1588,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -22129,10 +22129,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-64299BCB8E415A89",
+      "test_id": "TII-E6FD30A567E44CC5",
       "test_name": "an adapter turn failure commits a failed Result without faking success",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 1593,
+      "test_line": 1598,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -22220,10 +22220,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-2268FB02CE59A75C",
+      "test_id": "TII-005000D78EA0EF7B",
       "test_name": "ADR-011 failure facts cross the Worker stderr diagnostic exit and the Host validator without failure payloads",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 1618,
+      "test_line": 1623,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -22311,10 +22311,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-BE2A9ECC2BD4217D",
+      "test_id": "TII-8E6E3A56BB8B1CAA",
       "test_name": "ADR-026 real Adapter→Worker→Manager→SQLite preserves large Unicode reports without the old JSON text restrictions",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 1670,
+      "test_line": 1675,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -22402,10 +22402,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-AC86421E177A983D",
+      "test_id": "TII-8A3729E5E91E796F",
       "test_name": "ADR-026 production Worker Result encoder and Windows pipes deliver exact 32 MiB and converge +1/schema failure",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 1694,
+      "test_line": 1699,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -22493,10 +22493,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-584873ABC5902373",
+      "test_id": "TII-92C23874C597C73D",
       "test_name": "ADR-026 Manager distinguishes known rollback from lost COMMIT ACK without replacing or repeating execution",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 1736,
+      "test_line": 1741,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -22584,10 +22584,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-DD618C65DDCFE6C8",
+      "test_id": "TII-901F3D8796A81B84",
       "test_name": "ADR-027 Manager and actual Worker share the environment default and four-hour Task override",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 1802,
+      "test_line": 1807,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -22675,10 +22675,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-D76E2E6C39611172",
+      "test_id": "TII-9E2FF86CF60C09A7",
       "test_name": "ADR-027 actual Worker execution timeout commits a timeout Result and releases only with real Windows cleanup proof",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 1819,
+      "test_line": 1824,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -22766,10 +22766,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-1E79356ED899813E",
+      "test_id": "TII-1BD6290FF77D08D9",
       "test_name": "ADR-027 cleanup expiry persists a failed Result and missing adapter cleanup facts keep the Workspace held",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 1843,
+      "test_line": 1848,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -22857,10 +22857,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-74EC46C58E7D560E",
+      "test_id": "TII-E0BB3173CE5E256F",
       "test_name": "ADR-027 Result survives a late Worker close and Manager restart; completed Result allows cleanup-only cancel",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 1867,
+      "test_line": 1872,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -22948,10 +22948,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-1775DBA5B8297505",
+      "test_id": "TII-36C8C4D4B61EA2DA",
       "test_name": "ADR-027 Manager result deadline keeps the real claimed Worker cancellable instead of dropping its handle",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 1889,
+      "test_line": 1894,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -23039,10 +23039,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-5CD86118FD398163",
+      "test_id": "TII-6876B8728C7E0400",
       "test_name": "ADR-027 blocked execution-envelope pipe expires visibly and retains the exact Worker for cancellation",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 1904,
+      "test_line": 1909,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -23130,10 +23130,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-744285FE78904589",
+      "test_id": "TII-422E0741F5E69EDD",
       "test_name": "startBridge's host issuer wiring reaches the fake Billing gate and completes a Start Plan task",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 1998,
+      "test_line": 2003,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -23221,10 +23221,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-031156C7543F936A",
+      "test_id": "TII-4CE9F4A609D29938",
       "test_name": "Start Plan Worker routing enters the installed AppServer adapter",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 2020,
+      "test_line": 2025,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -23312,10 +23312,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-4BDBEA3C82E4B4D4",
+      "test_id": "TII-C329B0C6B5BF10F6",
       "test_name": "host-wired issuer surfaces a sanitized Billing rejection and never starts the AppServer",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 2056,
+      "test_line": 2061,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -23403,10 +23403,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-E1A944E999F3B081",
+      "test_id": "TII-BE883A5893CA222C",
       "test_name": "missing Start Plan credentials keep the host issuer unavailable without affecting Coding Plan",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 2097,
+      "test_line": 2102,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -23494,10 +23494,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-8B08085D012D4D19",
+      "test_id": "TII-4834F430B07BABD8",
       "test_name": "ADR-031 Gate E1: a post-startup login is observed by the next dispatch and account switches never cross identities",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 2142,
+      "test_line": 2147,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -23585,10 +23585,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-6B94C49BC9D040FD",
+      "test_id": "TII-2B80CB4D54855B68",
       "test_name": "ADR-031: a persisted Start Plan task replays after logout without Billing or execution",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 2191,
+      "test_line": 2196,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -23676,10 +23676,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-0B64685335176CC3",
+      "test_id": "TII-7B21F00C15146EE5",
       "test_name": "ADR-031: a persisted Start Plan task conflicts on a changed model after logout",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 2217,
+      "test_line": 2222,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -23767,10 +23767,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-52BFDBE6236F0924",
+      "test_id": "TII-028DFC675262A8D4",
       "test_name": "ADR-031: a new Start Plan task is refused after logout and remains unpersisted",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 2245,
+      "test_line": 2250,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -23858,10 +23858,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-25EC90A6DCCC2657",
+      "test_id": "TII-7DEE696C7AC4D80F",
       "test_name": "ADR-031 Gate E1: an explicit -StartPlan alias executes the raw model id over Start Plan",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 2275,
+      "test_line": 2280,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -23949,10 +23949,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-A61AC3BEBF178FFC",
+      "test_id": "TII-F54FF12B78AEA402",
       "test_name": "ADR-031 Gate E1: a confirmed unavailable verdict falls back to the coding plan provider without Billing",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 2298,
+      "test_line": 2303,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -24040,10 +24040,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-C3560718DCB150D3",
+      "test_id": "TII-5A2C5F67275A2AE0",
       "test_name": "ADR-031 Gate E1: billing rejections never trigger a silent fallback",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 2321,
+      "test_line": 2326,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -24131,10 +24131,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-929C641EDA0E9F49",
+      "test_id": "TII-5342942D9045BF97",
       "test_name": "ADR-031: the routing cache never masks a changed model selection; identical requests replay the accepted routing",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
-      "test_line": 2340,
+      "test_line": 2345,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
