@@ -1073,6 +1073,7 @@
     "scripts/build-plugin.mjs",
     "scripts/check-generated-artifacts.mjs",
     "scripts/lib/generated-artifacts.mjs",
-    "scripts/validate-plugin.mjs"
+    "scripts/validate-plugin.mjs",
+    "tools/cost-lab/**"
   ]
 }
