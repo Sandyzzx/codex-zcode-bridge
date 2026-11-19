@@ -1,9 +1,9 @@
 # 共享核心与宿主适配
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-15
-> Last verified: 2026-11-15，核对 ADR-038 的 `src/core.ts` 导出收缩、Host/Worker 入口、Official Host 布局、版本身份及 R7 Runtime Events 边界；外部 fork 实际升级仍为 NOT RUN。
-> Verified against: Preview.7 release branch based on `397f41e16b7072fb8ddfae5bf346807f3d539535`
+> Last updated: 2026-11-19（ADR-041 Thin Official Host end state）
+> Last verified: 2026-11-19，核对 `src/core.ts` 导出、Host/Worker 入口、共享 Official Host session factory、Model Catalog 的 Worker-shaped URL、插件 BOM/生成物校验及 R7 Runtime Events 边界；外部 fork 实际升级仍为 NOT RUN。
+> Verified against: `5501c60ecf3f1812a3d3170a670ab0031ea784d8` + 2026-11-19 Thin Adapter working-tree candidate（未提交）
 
 公共入口为 `codex-zcode-bridge/core`（`src/core.ts`），无服务器启动副作用，构建同时输出类型声明。项目为 private，尚未发布独立 npm 包；本地 npm pack/fork 消费仍是公共兼容边界。
 
@@ -23,9 +23,9 @@ await startBridge({
 
 嵌入式消费者可使用公开 `SqliteLifecycleMcpAuthority.create(options)` 创建同一生产 Manager，再交给 `createBridgeServer({taskManager})`。创建需要现有受信任本地 Host context、合适的 SQLite 根、Worker/Bridge provenance 和 receipt；普通 MCP/TaskPackage 不能自行产生这些能力。准确参数类型由导出的 `SqliteAuthorityOptions` 提供。多数 fork 应使用 startBridge。
 
-Worker 必须打包 `src/worker/worker-main.ts`，保留同一 SQLite Bootstrap/Claim 私有管道协议。不能使用旧的 `dataRoot taskId attempt` 参数启动；不能从 prompt 或自定义 runner 绕过 Claim。Host manifest、安装 hook、版本、settings 和打包由 fork 独立维护。
+Worker 必须打包 `src/worker/worker-main.ts`，保留同一 SQLite Bootstrap/Claim 私有管道协议。不能使用旧的 `dataRoot taskId attempt` 参数启动；不能从 prompt 或自定义 runner 绕过 Claim。Host manifest、安装 hook、版本、settings 和打包由 fork 独立维护。Worker 的模型执行入口是 `OfficialAppServerWorkerAdapter`；它和 Host 的模型目录共用 `createInstalledOfficialHostSessionFactory`，并以安装版官方 AppServer 作为唯一 Runtime。
 
-ADR-038 收紧了公共 Core 导出：`renderTaskFeedback`、A4 `renderFeedback`/格式化函数、Codex Master/Rollout Token source，以及 Ledger 类型与入口不再导出。`buildTaskFeedbackSnapshotV01`、`normalizeUsage`、Host/Worker 启动入口、SQLite Manager、MCP server 与任务 Result/Observation 类型继续保留。仓库内调用者和生成的插件 bundle 已迁移；外部 fork 是否仍导入这些旧导出为 `NOT RUN`，升级前必须用自身构建与测试确认。
+ADR-038 收紧了公共 Core 导出：`renderTaskFeedback`、A4 `renderFeedback`/格式化函数、Codex Master/Rollout Token source，以及 Ledger 类型与入口不再导出。ADR-041 进一步从 Core 移除 `ZCodeAppServerAdapter` 导出；direct stdio 只保留内部 `ZCodeAppServerTestAdapter`，不能作为生产执行入口。`buildTaskFeedbackSnapshotV01`、`normalizeUsage`、Host/Worker 启动入口、SQLite Manager、MCP server 与任务 Result/Observation 类型继续保留。仓库内调用者和生成的插件 bundle 已迁移；外部 fork 是否仍导入这些旧导出为 `NOT RUN`，升级前必须用自身构建与测试确认。
 
 ## 主版本兼容性
 
@@ -41,6 +41,6 @@ ADR-029 的破坏性迁移已在 Preview 2.0 发布线落地；Stable 1.6.0 仍�
 
 Codex 默认设置目录为 `~/.codex/codex-zcode-bridge`。runtime-config 优先于环境；显式 `legacySettingsDirectories` 仍支持模型设置升级，缺文件才回退，损坏文件报错，写入只发生在 canonical 目录并保留未知字段。这是用户安装兼容，不是旧 Task Authority。
 
-标准插件自包含 Bridge、Worker、Thin Waiter、离线升级命令及 Schema。浏览器 backend 位于 `worker/vendor/`，固定 playwright-core 1.64.0。build:core 不含 vendor，未重新打包的 fork 需要保留编译后 browser runtime 与声明依赖；自定义打包必须保留等价模块/资源布局。
+标准插件自包含 Bridge、Worker、Thin Waiter、离线升级命令、Schema、固定 Official Host 模块与安装版 runtime 校验。`worker/vendor/official-host/...` 不再包含 AppServer bundle 或 builtin Provider 配置；所有 Provider 从安装版官方路径读取 AppServer。浏览器 backend 位于 `worker/vendor/`，固定 playwright-core 1.64.0。build:core 不含浏览器 vendor，未重新打包的 fork 需要保留编译后的 browser runtime 与声明依赖；自定义打包必须保留等价的 Official Host 资源布局和 Worker-shaped URL 解析。
 
 Core 无启动副作用、宿主 settings 隔离、MCP 身份/instructions、Worker 环境与无 production dist 的干净安装由本轮回归核对。真实外部 Host、跨 Host 控制、真实 Provider 容量与 Desktop UI 仍须独立验收。

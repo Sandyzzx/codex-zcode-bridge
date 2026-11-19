@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -204,8 +205,10 @@ if (!/const\s+workerModuleUrl\s*=\s*pathToFileURL\d*\(\s*workerEntryPath\(\)\s*\
   bridgeBundle,
 ) || !/loadOfficialHostProductVersion\d*\(\s*workerModuleUrl\s*\)/u.test(
   bridgeBundle,
+ ) || !/const\s+modelSettings\s*=\s*new\s+ZCodeModelSettings\d*\(\s*process\.env\s*,\s*\{[\s\S]{0,240}?workerModuleUrl\s*:/u.test(
+  bridgeBundle,
 )) {
-  throw new Error("bridge.mjs must resolve Start Plan Official Host assets through the Worker-shaped module URL");
+  throw new Error("bridge.mjs must resolve Official Host assets through the Worker-shaped module URL");
 }
 
 const officialHostRoot = path.join(
@@ -263,9 +266,7 @@ if (!Array.isArray(officialHostBom.files) || officialHostBom.files.length === 0)
   throw new Error("Official Host ARTIFACT_BOM.json must record its shipped files");
 }
 const requiredOfficialHostFiles = new Set([
-  "app-server/provider/zcode-builtin.json",
-  "app-server/THIRD-PARTY-NOTICES.md",
-  "app-server/zcode.cjs",
+  "THIRD-PARTY-NOTICES.md",
   "LICENSE",
   "NOTICE.md",
   "node_modules/@napi-rs/keyring/LICENSE",
@@ -305,6 +306,16 @@ for (const entry of officialHostBom.files) {
 for (const requiredPath of requiredOfficialHostFiles) {
   if (!recordedOfficialHostFiles.has(requiredPath)) {
     throw new Error(`Official Host ARTIFACT_BOM.json is missing required shipped file: ${requiredPath}`);
+  }
+}
+for (const retiredPath of [
+  "app-server",
+  "app-server/provider/zcode-builtin.json",
+  "app-server/THIRD-PARTY-NOTICES.md",
+  "app-server/zcode.cjs",
+]) {
+  if (existsSync(path.join(officialHostRoot, retiredPath))) {
+    throw new Error(`Official Host artifact still contains retired packaged AppServer resource: ${retiredPath}`);
   }
 }
 const runtimeHostEntry = officialHostBom.files.find(
@@ -365,10 +376,15 @@ if (!officialHostModuleText.includes("createOAuthProviderRuntimeAuthService")
   || !officialHostModuleText.includes("createOfficialStartPlanAuthenticationResolver")) {
   throw new Error("official-host-runtime.mjs is missing an official authentication factory");
 }
-if (!workerBundle.includes("OfficialHostAdapter")
+if (!workerBundle.includes("OfficialAppServerWorkerAdapter")
+  || !workerBundle.includes("createInstalledOfficialHostSessionFactory")
   || !workerBundle.includes("official-host-runtime.mjs")
   || !workerBundle.includes("maxFrameBytes")) {
   throw new Error("worker-main.mjs is missing the shipped Official Host integration");
+}
+if (workerBundle.includes("app-server/zcode.cjs")
+  || workerBundle.includes("app-server/provider/zcode-builtin.json")) {
+  throw new Error("worker-main.mjs still contains a packaged AppServer fallback");
 }
 
 console.log(`Plugin package is structurally valid (${plugin.name}@${plugin.version}).`);

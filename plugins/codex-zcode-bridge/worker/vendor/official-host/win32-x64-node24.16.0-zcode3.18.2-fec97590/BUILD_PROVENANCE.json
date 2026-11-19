@@ -43,15 +43,10 @@
     "officialMiseNodePin": "24.14.0",
     "officialPnpm": "10.33.2",
     "validationPnpm": "11.25.0",
-    "appServerBundler": "esbuild 0.25.12",
     "hostModuleBundler": "esbuild 0.28.2",
     "runtimeHostToolchain": "UPSTREAM_SIGNED_RELEASE_BINARY"
   },
   "build": {
-    "appServer": {
-      "command": "node ../../node_modules/turbo/bin/turbo run build --filter=@zcode/cli... with pnpm 10.33.2 shim",
-      "output": "app-server/zcode.cjs"
-    },
     "hostModule": {
       "command": "npm run build:official-host -- --source <fixed-upstream-worktree>",
       "output": "official-host-runtime.mjs",
@@ -103,8 +98,8 @@
   },
   "bom": {
     "path": "ARTIFACT_BOM.json",
-    "bytes": 8802,
-    "sha256": "F60BA0081BBBBDD4A7D000F51C6EA534E49DAF424944B1E0233969478CD58539"
+    "bytes": 7955,
+    "sha256": "403033C7B5437E6AECB7230306AF41F263C3B9613D7B49DD001928FC2C317EE2"
   },
   "output": {
     "path": "official-host-runtime.mjs",

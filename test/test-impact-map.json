@@ -50,6 +50,7 @@
       "id": "interface-contract",
       "description": "Public MCP/interface types and schemas shared by Manager, Worker, and Host.",
       "paths": [
+        "src/core.ts",
         "src/interfaces.ts",
         "src/mcp/schemas.ts",
         "src/result-contract.mjs"
@@ -62,6 +63,7 @@
         "src/runtime/account-provider.ts",
         "src/runtime/model-routing.ts",
         "src/runtime/model-settings.ts",
+        "src/runtime/official-provider-runtime-auth.ts",
         "src/runtime/session-preferences.ts",
         "src/runtime/start-plan-production-auth.ts"
       ]
@@ -103,6 +105,7 @@
         "src/adapters/zcode-app-server-adapter.ts",
         "src/adapters/official-host-adapter.ts",
         "src/adapters/official-app-server-adapter.ts",
+        "src/runtime/official-provider-runtime-auth.ts",
         "src/runtime/desktop-host-launch.ts",
         "src/runtime/task-timeout.ts",
         "src/runtime/errors.ts",
@@ -480,6 +483,15 @@
       "domains": [
         "provider-catalog",
         "zcode-path-discovery"
+      ]
+    },
+    {
+      "file": "test/model-settings-official-auth.test.ts",
+      "type": "Unit",
+      "gate": "T1",
+      "domains": [
+        "provider-catalog",
+        "appserver-adapter"
       ]
     },
     {
@@ -914,6 +926,16 @@
       "domains": [
         "appserver-adapter",
         "process-cleanup-and-locks",
+        "provider-catalog",
+        "worker-launch"
+      ]
+    },
+    {
+      "file": "test/official-app-server-provider-capability.test.ts",
+      "type": "Unit",
+      "gate": "T1",
+      "domains": [
+        "appserver-adapter",
         "provider-catalog",
         "worker-launch"
       ]

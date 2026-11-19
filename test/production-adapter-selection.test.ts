@@ -4,6 +4,10 @@ import {
   selectOfficialProviderRuntime,
   selectProductionAdapter,
 } from "../src/worker/production-adapter-selection.js";
+import {
+  ZCodeAppServerAdapter,
+  ZCodeAppServerTestAdapter,
+} from "../src/adapters/zcode-app-server-adapter.js";
 
 test("production adapter selection follows the frozen platform matrix", () => {
   assert.equal(selectProductionAdapter("win32", "x64"), "official_host");
@@ -51,7 +55,8 @@ test("environment variables cannot redirect production adapter selection", () =>
   }
 });
 
-test("only exact official BigModel plans select the installed AppServer runtime", () => {
+test("all Providers select the installed AppServer while exact official plans keep their capability gates", () => {
+  assert.equal(selectOfficialProviderRuntime(undefined), "installed_runtime");
   assert.equal(selectOfficialProviderRuntime("account:bigmodel-individual-coding-plan"), "coding_plan_discount");
   assert.equal(selectOfficialProviderRuntime("builtin:bigmodel-coding-plan"), "coding_plan_discount");
   assert.equal(selectOfficialProviderRuntime("account:bigmodel-start-plan"), "start_plan_static");
@@ -62,7 +67,18 @@ test("only exact official BigModel plans select the installed AppServer runtime"
     "account:another-start-plan",
     "account:bigmodel-individual-coding-plan-other",
     "account:bigmodel-team-coding-plan",
+    "account:bigmodel-offpeak-idle-plan",
+    "builtin:openai-api-key",
+    "custom:local-provider",
   ]) {
-    assert.equal(selectOfficialProviderRuntime(providerId), null);
+    assert.equal(selectOfficialProviderRuntime(providerId), "installed_runtime");
   }
+});
+
+test("production Adapter construction requires an Official Host factory and direct stdio is explicit test-only", () => {
+  assert.throws(
+    () => new ZCodeAppServerAdapter(),
+    /requires the Official Host client factory/u,
+  );
+  assert.doesNotThrow(() => new ZCodeAppServerTestAdapter());
 });

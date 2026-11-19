@@ -1,9 +1,9 @@
 # Project State
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-18（ADR-040、Cost Lab Web 与 Start Plan 离线兼容候选）
-> Last verified: 2026-11-18，核对安装版官方 AppServer Coding Plan 生产 E2E、同小时官方积分 `0.67` 对账、Cost Lab 43/43、定向 64/64、typecheck/build/plugin validation；完整 CI 与发布验收仍暂缓。
-> Verified against: `02cf2fa92c8235370fe7a883d4c5b30d93a8ab33` + candidate integration branch
+> Last updated: 2026-11-19（ADR-041 Thin Official Host end state）
+> Last verified: 2026-11-19，核对共享 Official Host session factory、Model Catalog、统一 Provider Runtime 选择、打包资产退役、生成物与插件校验、定向及完整测试；真实模型/OAuth/Billing 请求未在本轮运行。
+> Verified against: `5501c60ecf3f1812a3d3170a670ab0031ea784d8` + 2026-11-19 Thin Adapter working-tree candidate（未提交）
 
 当前发布状态：
 
@@ -12,12 +12,12 @@
 - Preview `2.0.0-preview.6`：Owner 已批准发布。支持声明限定为 Windows x64、Node.js `24.16.0` 与已安装的官方 ZCode Desktop `3.18.2.10443`。
 - Preview `2.0.0-preview.7`：在 Preview.6 上应用 ADR-038 整改，并修复 CI dispatch 边界与 Events summary 分页。
 - Preview `2.0.0-preview.8`：包含 ADR-039 Host 授权取消与新鲜 Cleanup Proof 绑定；支持范围限定为 Windows x64、Node.js `24.16.0` 与已安装的官方 ZCode Desktop `3.18.2.10443`。
-- `2.0.0-preview.9` 发布候选：在 Preview.8 基线上增加 ADR-040 安装版 Coding Plan Runtime、Cost Lab Web、Start Plan 离线审计和正式证据。
+- `2.0.0-preview.9` 发布候选：在 Preview.8 基线上增加 ADR-040 安装版 AppServer、ADR-041 Thin Official Host 收敛、Cost Lab Web、Start Plan 离线审计和正式证据。
 
 ## 当前生产架构
 
 - 一个 SQLite Task Authority（Schema v14）、一个 Lifecycle Manager、一条 Worker → 官方 Host 生产链。
-- Windows x64 生产 Worker 使用 `OfficialHostAdapter`。Preview.6 固定 ZCode 3.18.2，并由固定 Official Host 提供只读 Start Plan 认证投影。固定官方 Host module 调用 `ZCodeAgentProcessManager`，后者启动官方签名 Windows helper 与 AppServer；Bridge 不复制 AgentRuntime、Prompt、Tools 或 Provider。Linux、macOS 与 Windows 非 x64 在 Adapter 构造前以 `unsupported_worker_platform` fail closed；direct Adapter 只保留隔离测试注入。
+- Windows x64 生产 Worker 使用 `OfficialAppServerWorkerAdapter` 与共享 `createInstalledOfficialHostSessionFactory`。固定 Official Host module 提供只读 Start Plan 认证投影，官方 `ZCodeAgentProcessManager` 启动安装版 AppServer；模型目录和任务执行共用 Runtime Resolver、ProcessManager、ProtocolClient、认证回调和 Close 所有权。Bridge 不复制 AgentRuntime、Prompt、Tools 或 Provider。Linux、macOS 与 Windows 非 x64 在 Adapter 构造前以 `unsupported_worker_platform` fail closed；direct stdio 只保留 `ZCodeAppServerTestAdapter` 隔离测试入口。
 - 旧 JSON TaskStore/Manager/Worker、CLI Adapter 和 GitWorktreeProvider 已从 Preview 生产执行链退役；ADR-038 进一步删除旧 JSON 导入 Writer、迁移 Result/Event Reader 与不完整迁移收据专用执行方法。旧 JSON 文件不由 Bridge 读取、导入或删除，旧迁移 Task 不再作为当前查询对象。
 - Project Ledger、固定人类 Markdown 报告、每任务 Codex Rollout Token 采集和 Desktop task-index 私有写镜像已退役。用户已有 `.agent-ledger` 文件不由 Bridge 修改或删除；SQLite Task Authority 保持不变。
 - Result、进程退出、Cleanup 与 Release 是不同事实。官方 close resolved 不能单独授权 Release；exact Worker identity、recorded-tree scan、resource facts、Cleanup Digest 和现有 CAS 仍然必需。
@@ -30,8 +30,8 @@ Preview.7 继承 Preview.6 固定的 ZCode `3.18.2`、commit `fec975905a2abd4c07
 ## 套餐与认证
 
 - **Z.ai Start Plan：** Preview.6 消费固定 Official Host 的窄认证投影，再执行实时模型权益检查，并通过单任务 Private Lease 向官方 Runtime 交付认证。Start Plan 与普通模型目录条目分离，使用 `<ModelId>-StartPlan` 别名。
-- **Z.ai Coding Plan：** 保留官方 Coding Plan 账户/API Key 路径；Start Plan 预检不改变 Coding Plan 的既有注册和执行语义。ADR-040 候选只在 Windows x64 对个人 Coding Plan 使用通过精确 Manifest 校验的已安装官方 AppServer，未知版本 fail closed 且不声明优惠兼容。
-- 两条路径最终都由官方 ZCode AppServer 执行；Bridge 不复制 AppServer 的 Provider 请求构造。
+- **Z.ai Coding Plan：** 保留官方 Coding Plan 账户/API Key 路径；Start Plan 预检不改变 Coding Plan 的既有注册和执行语义。所有受支持 Provider 都使用通过精确 Manifest 校验的已安装官方 AppServer，未知版本 fail closed 且不声明优惠兼容。
+- 所有 Provider 最终都由安装版官方 ZCode AppServer 执行；Bridge 不复制 AppServer 的 Provider 请求构造，也不携带第二套 AppServer Runtime。
 - 账户 refresh 使用固定上游 patch 的 profile-scoped lock、lock-time reread、一次远端刷新和 CAS 发布。该协调已由合成竞争矩阵验证；真实 Coding Plan 与 Start Plan 任务已经通过官方认证路径执行。真实 OAuth refresh/账户轮换仍未单独验收；Preview 阶段接受该有限风险，失败路径不得损坏现有凭据或意外切换账户。
 - [ADR-037](decisions/ADR-037-official-zcode-authentication-reuse.md) 已接受且 Preview.6 已实现：官方 Host 统一拥有凭据解密、keyring、OAuth、账户身份和请求认证，Bridge 只消费当前任务所需的认证投影。生产源码不再包含旧的 v1/v2 AES、Keyring、账户资料、JWT payload 或 telemetry device 解析。真实 Coding Plan 完整 E2E 与 Start Plan 核心功能路径已通过，但历史完整 E2E 因 Workspace 边界保持 `FAIL`；3.18.0/3.18.1 实机安装矩阵仍为 `NOT_VERIFIED`。
 
@@ -45,7 +45,7 @@ Preview.3 的 Start Plan 历史证据覆盖 Windows、官方 AppServer `0.17.1`�
 | same-source-tree 制品重建 | `PASS` | byte-identical host module；不等于 clean-install 全链路可复现 |
 | 16 MiB raw frame | `PASS` | 固定上游 7/7 合成测试，覆盖 exact/+1、partial、UTF-8 与 pending RPC |
 | 账户 OAuth/Start auth 合成测试 | `PASS — CANDIDATE` | 固定上游认证套件 19/19；真实账户与网络轮换 `NOT_RUN` |
-| `OfficialHostAdapter` 定向行为 | `PASS — CANDIDATE` | 固定 Host、Adapter、R7、Cleanup/Release 定向套件通过；完整结果见本次候选实现报告 |
+| `OfficialAppServerWorkerAdapter` 与共享 session factory | `PASS — CANDIDATE` | 固定 Host、Model Catalog、Provider 选择、Adapter、R7、Cleanup/Release 定向套件通过；完整结果见本次候选实现报告 |
 | R7 Runtime Events/Usage | `PASS` | fd14 单向通道、v14 additive schema、sequence/cursor、stale Attempt、Feedback/Result 合成与旧 v14 兼容测试通过 |
 | SQLite 自动 v13→v14 升级与恢复 | `PASS` | 测试范围；含 occupied Attempt/Hold、rename/publication 中断 |
 | 完整 Node/native/resource 闭包 | `PARTIAL` | 6 个 keyring 文件已在 clean checkout 解析、native load 并与 BOM bytes/hash 一致；完整动态资源闭包仍未认证 |
@@ -57,6 +57,7 @@ Preview.3 的 Start Plan 历史证据覆盖 Windows、官方 AppServer `0.17.1`�
 | 真实 Coding Plan + 安装版 AppServer | `PASS — CANDIDATE` | 构建后 MCP/Worker/SQLite 完成一次真实 Task；22,735 Token、官方 1.7666 credits、正常预期 2.636755、有效额外倍率 0.6699901963。官方账单延迟结算后以同小时 fresh snapshot 对账，无第二次模型请求 |
 | Start Plan + 安装版 AppServer | `OFFLINE_VERIFIED / LIVE NOT_RUN` | 同一 Bundle 的 Provider、unsigned transport、Gateway 和 Runtime Headers 差异已审计；真实 Start Plan E2E、CAPTCHA、权益与优惠均未验证 |
 | Cost Lab Web/API | `PASS — CANDIDATE` | 本地 loopback、显式真实请求确认、官方账单、同小时延迟结算重试、历史和脱敏导出通过 43/43 定向测试；真实请求 1 次 |
+| 其他 Provider + 安装版 AppServer | `OFFLINE_ROUTED / LIVE NOT RUN` | Provider 选择统一为 `installed_runtime`，未知或无同一安装根资产 fail closed；真实其他 Provider 模型/认证 E2E 未运行 |
 | 真实 Start Plan 核心功能 | `PASS — CORE FUNCTIONAL` | 官方 Auth、Billing 门禁、Lease、Session/Turn、模型、工具、AgentReport、R7 Usage、输出、Result、Cleanup/Release 通过 |
 | 历史 Start Plan 完整 E2E | `FAIL — WORKSPACE BOUNDARY` | 测试 Workspace 额外出现 PowerShell module-analysis cache；历史结论保持不变，不重新消耗真实任务改写证据 |
 | 官方 Start Plan 认证复用 | `PASS — PREVIEW.6` | v1、v2:env、v2:os 只读字节不变，BigModel/linked Z.AI/`zai_cn`、冷进程、Billing 单 verdict 与 Lease 合成测试通过；真实 Start Plan 核心功能路径通过；真实 OAuth refresh 未单独执行 |
@@ -73,7 +74,7 @@ Preview.3 的 Start Plan 历史证据覆盖 Windows、官方 AppServer `0.17.1`�
 
 真实 Start Plan 核心功能路径已经通过，但历史完整 E2E 仍因 Workspace 边界失败。其他 Start Plan 模型、CAPTCHA 自动处理、unusual-activity 处理、真实 OAuth refresh/账户轮换和跨平台生产认证没有被单一路径证明。Linux/macOS 仅有其他 Bridge 路径的合成或 CI 历史覆盖；固定官方 Host 制品在非 Windows x64 上 fail closed。
 
-旧 3.18.0 Runtime 目录已从整改候选删除，只有当前固定 3.18.2 集合与官方签名 Helper 进入新制品；Preview.5 的回滚继续使用其历史发布包。固定制品构建成功、same-source-tree repeatability 与 loopback Mock 通过不能升级为产品性能或完整运行等价。产品总体 Provider/缓存性能仍为 `UNKNOWN`。`@napi-rs/keyring` 的 6 个文件已通过 clean-checkout 打包闭包验证；完整动态资源与逐项再分发许可审查仍不能据此标为 `PASS`。
+旧 3.18.0 Runtime 目录与打包 AppServer 已从当前候选删除；只有固定 Official Host 模块、官方签名 Helper、keyring closure、许可和 BOM 进入新制品，模型执行统一使用安装版 AppServer。Preview.5 的回滚继续使用其历史发布包。固定制品构建成功、same-source-tree repeatability 与 loopback Mock 通过不能升级为产品性能或完整运行等价。产品总体 Provider/缓存性能仍为 `UNKNOWN`。`@napi-rs/keyring` 的 6 个文件已通过 clean-checkout 打包闭包验证；完整动态资源与逐项再分发许可审查仍不能据此标为 `PASS`。
 
 `npm audit --omit=dev` 仍报告 `@modelcontextprotocol/server@2.1.0` 与 `zod@4.6.5` 的既有 high advisories。依赖树与 `origin/preview` 相同，本候选没有引入或修复这些 advisory；它们必须由独立的安全发布流程处理。
 

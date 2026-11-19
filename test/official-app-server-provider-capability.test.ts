@@ -59,6 +59,26 @@ test("Start Plan requires offline compatibility and never depends on the Coding 
   }
 });
 
+test("other Providers require runtime identity without inheriting plan-specific gates", () => {
+  assert.equal(
+    officialProviderCapabilityFailure(
+      descriptor({
+        discount_capability: "OFFICIAL_DISCOUNT_NOT_VERIFIED",
+        start_plan_static_compatibility: null,
+      }),
+      "installed_runtime",
+    ),
+    null,
+  );
+  assert.match(
+    officialProviderCapabilityFailure(
+      descriptor({ status: "OFFICIAL_RUNTIME_UNVERIFIED", reason: "synthetic identity mismatch" }),
+      "installed_runtime",
+    ) ?? "",
+    /OFFICIAL_RUNTIME_UNVERIFIED/u,
+  );
+});
+
 test("unverified runtime descriptors cannot satisfy either provider capability", () => {
   const unverified = descriptor({
     status: "OFFICIAL_RUNTIME_UNVERIFIED",

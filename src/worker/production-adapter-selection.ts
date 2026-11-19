@@ -10,19 +10,18 @@ const OFFICIAL_CODING_PLAN_PROVIDER_IDS = new Set<string>([
 const OFFICIAL_START_PLAN_PROVIDER_ID = "account:bigmodel-start-plan" as const;
 
 /**
- * Exact official provider IDs that must use the installed AppServer. The
- * provider's own registry/auth gate remains authoritative after selection.
+ * Runtime selection is provider-neutral. The compatibility manifest verifies
+ * the installed AppServer; each Provider's registry, entitlement, API-key or
+ * OAuth path remains authoritative after selection.
  */
 export function selectOfficialProviderRuntime(
   providerId: string | undefined,
-): OfficialProviderRuntimeCapability | null {
-  // Keep this selector free of runtime module imports. It runs while the
-  // Worker bundle is being initialized, before the provider registry exists.
+): OfficialProviderRuntimeCapability {
   if (providerId && OFFICIAL_CODING_PLAN_PROVIDER_IDS.has(providerId)) {
     return "coding_plan_discount";
   }
   if (providerId === OFFICIAL_START_PLAN_PROVIDER_ID) return "start_plan_static";
-  return null;
+  return "installed_runtime";
 }
 
 /**

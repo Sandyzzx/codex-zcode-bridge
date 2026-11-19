@@ -1,5 +1,5 @@
 // ADR-011 Adapter integration tests: the frozen FailureFactsV1 contract exercised
-// through the real ZCodeAppServerAdapter against fake app-server runtimes, the
+// through the real ZCodeAppServerTestAdapter against fake app-server runtimes, the
 // direct private facts callback and shared Result normalization — never pure
 // functions alone. Covers the VALIDATION_PLAN A/S/R/P/F/L/D scenarios; the
 // Q/T/D2 classifier matrix lives in test/failure-facts.test.ts.
@@ -12,7 +12,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 import { buildTaskResult } from "../src/manager/normalize.js";
-import { ZCodeAppServerAdapter } from "../src/adapters/zcode-app-server-adapter.js";
+import { ZCodeAppServerTestAdapter } from "../src/adapters/zcode-app-server-adapter.js";
 import { type FailureFactsV1 } from "../src/diagnostics/failure-facts.js";
 import { formatWorkerFailureFactsLine } from "../src/host/stdio.js";
 import { BridgeError } from "../src/runtime/errors.js";
@@ -285,7 +285,7 @@ async function runAdapter(options: {
   const startedAt=new Date().toISOString();
   let outcome: ZCodeRunOutcome | null=null;
   let failure: {code:string;message:string} | null=null;
-  const adapter=new ZCodeAppServerAdapter({resolver:options.resolver, timeoutMs:fixture.task.timeout_ms,
+  const adapter=new ZCodeAppServerTestAdapter({resolver:options.resolver, timeoutMs:fixture.task.timeout_ms,
     childEnvBase:{PATH:process.env.PATH},homeDir:fixture.task.workspace,
     onEvent:event=>fixture.events.push(event),onFailureFacts:facts=>{fixture.facts=facts;},
     onOutcomeCheckpoint:value=>{outcome=value;},
@@ -379,7 +379,7 @@ test("A1: a pre-send session/create rejection records accepted=no with the RPC c
   const fixture = makeAdapterFixture(runtime.root);
   const events: Array<{ type: string; summary: string; details?: Record<string, unknown> }> = [];
   try {
-    const adapter = new ZCodeAppServerAdapter({
+    const adapter = new ZCodeAppServerTestAdapter({
       resolver: { resolve: async () => runtime.config },
       onEvent: (event) => events.push(event),
       onFailureFacts: (facts) => {
@@ -591,7 +591,7 @@ test("A3: the fixture-verified native correlation upgrade reaches yes, and stays
 
     let correlationId: string | null = null;
     try {
-      const adapter = new ZCodeAppServerAdapter({
+      const adapter = new ZCodeAppServerTestAdapter({
         resolver: { resolve: async () => runtime.config },
         timeoutMs: 20_000,
         childEnvBase: { PATH: process.env.PATH },
@@ -685,7 +685,7 @@ test("A6: late unbound turn events after an unacknowledged send never upgrade ac
   const fixture = makeAdapterFixture(runtime.root);
   const events: Array<{ type: string; summary: string; details?: Record<string, unknown> }> = [];
   try {
-    const adapter = new ZCodeAppServerAdapter({
+    const adapter = new ZCodeAppServerTestAdapter({
       resolver: { resolve: async () => runtime.config },
       onEvent: (event) => events.push(event),
       onFailureFacts: (facts) => {
@@ -792,7 +792,7 @@ test("P1: a denied permission does not fabricate failure facts; success continue
 
     const events: Array<{ type: string }> = [];
     try {
-      const adapter = new ZCodeAppServerAdapter({
+      const adapter = new ZCodeAppServerTestAdapter({
         resolver: { resolve: async () => runtime.config },
         onEvent: (event) => events.push({ type: event.type }),
         resolveInteraction: async () => ({ decision: "deny" }),
@@ -854,7 +854,7 @@ test("F1b: a degraded session/events replay before a successful turn never creat
 
   const events: Array<{ type: string }> = [];
   try {
-    const adapter = new ZCodeAppServerAdapter({
+    const adapter = new ZCodeAppServerTestAdapter({
       resolver: { resolve: async () => runtime.config },
       onEvent: (event) => events.push({ type: event.type }),
       onFailureFacts: (facts) => {
@@ -915,7 +915,7 @@ test("F3: private callback failures (sync throw, async reject) never alter the o
 
     let events = 0;
     try {
-      const adapter = new ZCodeAppServerAdapter({
+      const adapter = new ZCodeAppServerTestAdapter({
         resolver: { resolve: async () => runtime.config },
         onEvent: () => { events += 1; },
         onFailureFacts: sink,
@@ -1104,7 +1104,7 @@ test("L3c2: network failure with unknown acceptance does not resend", { timeout:
     turnFailureOnSends: [1],
   });
   const fixture = makeAdapterFixture(runtime.root);
-  const adapter = new ZCodeAppServerAdapter({
+  const adapter = new ZCodeAppServerTestAdapter({
     resolver: { resolve: async () => runtime.config },
     timeoutMs: 15_000,
     childEnvBase: { PATH: process.env.PATH },

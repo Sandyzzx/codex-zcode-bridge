@@ -362,7 +362,10 @@ export async function startBridge(
     console.error(`[bridge] SQLITE_INITIALIZATION_FAILED: ${error instanceof Error ? error.message : String(error)}`);
     throw error;
   }
-  const modelSettings = new ZCodeModelSettings(process.env, { host });
+  const modelSettings = new ZCodeModelSettings(process.env, {
+    host,
+    workerModuleUrl: pathToFileURL(host.workerEntryPath ?? workerEntryPath()),
+  });
   const server = createBridgeServer({
     taskManager: manager,
     doctor: () => runBridgeDoctor({ env: runtimeEnv, dataRoot, resolver: { host }, lifecycleChecks }),

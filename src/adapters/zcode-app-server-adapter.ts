@@ -355,6 +355,11 @@ interface ResolvedBrowserConfig {
 }
 
 export interface ZCodeAppServerAdapterOptions {
+  /**
+   * Test-only harness gate. Production composition must provide an external
+   * Official Host client factory; an unguarded default spawn is forbidden.
+   */
+  testOnlyAllowDirectAppServer?: true;
   /** Internal opt-in credential broker. It is not a TaskPackage field. */
   resolveStartPlanRuntimeAuth?: (scope: { readonly sessionId: string; readonly turnId: string; readonly providerId: string; readonly modelId: string }, signal: AbortSignal) => Promise<{ readonly apiKey: string; readonly expiresAt: number; readonly isValid: () => boolean }>;
   /** Official account runtime-header resolver; absent keeps the legacy static fallback. */
@@ -428,7 +433,7 @@ export interface ZCodeAppServerAdapterOptions {
    */
   onSendBoundary?: (boundary: { submitCorrelationId: string }) => void;
   /**
-   * Internal composition seam used by the shipped OfficialHostAdapter. The
+   * Internal composition seam used by the Official Host session factory. The
    * factory supplies an already-owned official ProcessManager/ProtocolClient;
    * this adapter keeps the protocol, interaction, result, and cleanup semantics.
    */
@@ -487,6 +492,9 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
   readonly #workspaceByTask = new Map<string, string>();
 
   constructor(options: ZCodeAppServerAdapterOptions = {}) {
+    if (!options.externalHostClientFactory && options.testOnlyAllowDirectAppServer !== true) {
+      throw new Error("ZCodeAppServerAdapter requires the Official Host client factory outside the test-only direct harness");
+    }
     this.#resolveStartPlanRuntimeAuth = options.resolveStartPlanRuntimeAuth;
     this.#resolveProviderRuntimeAuth = options.resolveProviderRuntimeAuth;
     this.#startPlanProviderEntitled = options.startPlanProviderEntitled === true;
@@ -2765,6 +2773,16 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     const entry = this.#runs.get(handle);
     if (!entry) throw new Error(`${method}: unknown agent handle (task ${handle.taskId})`);
     return entry;
+  }
+}
+
+/**
+ * Explicit test harness for protocol fixtures that need direct stdio.
+ * Production and Core never import this class.
+ */
+export class ZCodeAppServerTestAdapter extends ZCodeAppServerAdapter {
+  constructor(options: ZCodeAppServerAdapterOptions = {}) {
+    super({ ...options, testOnlyAllowDirectAppServer: true });
   }
 }
 

@@ -252,7 +252,8 @@ test("installed official adapter selects the installed bundle and preserves the 
         inspect: async () => descriptor,
         resolve: async () => config,
       },
-      testOnlyOfficialHostAssets: hostAssets,
+      providerCapability: "coding_plan_discount",
+      testOnlyOfficialHostPackagedAssets: hostAssets,
       testOnlyOfficialHostModule: {
         ZCODE_PRODUCT_VERSION: "3.18.2",
         ZCodeAgentProcessManager: FakeProcessManager as never,
@@ -317,7 +318,8 @@ test("installed official adapter selects the installed bundle and preserves the 
         }),
         resolve: async () => config,
       },
-      testOnlyOfficialHostAssets: hostAssets,
+      providerCapability: "coding_plan_discount",
+      testOnlyOfficialHostPackagedAssets: hostAssets,
       testOnlyOfficialHostModule: {
         ZCODE_PRODUCT_VERSION: "3.18.2",
         ZCodeAgentProcessManager: FakeProcessManager as never,
@@ -348,7 +350,8 @@ test("installed official adapter selects the installed bundle and preserves the 
         }),
         resolve: async () => config,
       },
-      testOnlyOfficialHostAssets: hostAssets,
+      providerCapability: "coding_plan_discount",
+      testOnlyOfficialHostPackagedAssets: hostAssets,
       testOnlyOfficialHostModule: {
         ZCODE_PRODUCT_VERSION: "3.18.2",
         ZCodeAgentProcessManager: FakeProcessManager as never,

@@ -12,7 +12,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { ZCodeAppServerAdapter } from "../src/adapters/zcode-app-server-adapter.js";
+import { ZCodeAppServerTestAdapter } from "../src/adapters/zcode-app-server-adapter.js";
 import { isProcessRunning } from "../src/adapters/process-spawn.js";
 import { BridgeError } from "../src/runtime/errors.js";
 import type { TaskPackage, ZCodeRuntimeConfig } from "../src/interfaces.js";
@@ -206,8 +206,8 @@ function makeAdapter(
   events: Array<{ type: string; summary: string; details?: Record<string, unknown> }>,
   timeoutMs = 12_000,
   onEventObserved?: (type: string, observedAt: number) => void,
-): ZCodeAppServerAdapter {
-  return new ZCodeAppServerAdapter({
+): ZCodeAppServerTestAdapter {
+  return new ZCodeAppServerTestAdapter({
     resolver: { resolve: async () => runtime.config },
     onEvent: (event) => {
       events.push(event);
@@ -269,7 +269,7 @@ test("a frame over the 16 MiB limit fails immediately, ends the pending RPC with
   let protocolErrorAt: number | undefined;
   let runtimePid: number | undefined;
   try {
-    const adapter = new ZCodeAppServerAdapter({
+    const adapter = new ZCodeAppServerTestAdapter({
       resolver: { resolve: async () => runtime.config },
       onEvent: (event) => {
         events.push(event);
@@ -404,7 +404,7 @@ input.on("close", () => process.exit(0));
   await writeFile(entrypoint, script, "utf8");
   const events: Array<{ type: string; summary: string; details?: Record<string, unknown> }> = [];
   try {
-    const adapter = new ZCodeAppServerAdapter({
+    const adapter = new ZCodeAppServerTestAdapter({
       resolver: {
         resolve: async () => ({
           nodeExecutable: process.execPath,

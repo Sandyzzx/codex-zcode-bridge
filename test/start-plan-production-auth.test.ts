@@ -20,7 +20,7 @@ import {
   type OfficialStartPlanAuthenticationResolver,
 } from "../src/runtime/start-plan-production-auth.js";
 import { NodeRuntimeResolver } from "../src/runtime/resolver.js";
-import { ZCodeAppServerAdapter } from "../src/adapters/zcode-app-server-adapter.js";
+import { ZCodeAppServerTestAdapter } from "../src/adapters/zcode-app-server-adapter.js";
 import { BridgeError } from "../src/runtime/errors.js";
 import { makeWorkspace, validReport, TEMP_TREE_REMOVE_OPTIONS } from "./helpers.js";
 import type { PrivateLeaseBinding } from "../src/runtime/start-plan-private-lease.js";
@@ -1204,7 +1204,7 @@ input.on("close", () => process.exit(0));
       zcodeDataRoot: path.join(root, ".zcode"),
       dataRoot: path.join(root, "bridge-sqlite"),
     };
-    const unentitledAdapter = new ZCodeAppServerAdapter({
+    const unentitledAdapter = new ZCodeAppServerTestAdapter({
       resolver: { resolve: async () => config },
       timeoutMs: 10_000,
       childEnvBase: { PATH: process.env["PATH"] ?? "" },
@@ -1233,7 +1233,7 @@ input.on("close", () => process.exit(0));
     let callbackCalls = 0;
     let facts: FailureFactsV1 | null = null;
     const events: Array<{ type: string; summary: string; details?: Record<string, unknown> }> = [];
-    const adapter = new ZCodeAppServerAdapter({
+    const adapter = new ZCodeAppServerTestAdapter({
       resolver: { resolve: async () => config },
       timeoutMs: 10_000,
       childEnvBase: { PATH: process.env["PATH"] ?? "" },
@@ -1352,7 +1352,7 @@ input.on("close", () => process.exit(0));
       zcodeDataRoot: path.join(root, ".zcode"),
       dataRoot: path.join(root, "bridge-sqlite"),
     };
-    const adapter = new ZCodeAppServerAdapter({
+    const adapter = new ZCodeAppServerTestAdapter({
       resolver: { resolve: async () => config },
       timeoutMs: 10_000,
       childEnvBase: { PATH: process.env["PATH"] ?? "" },

@@ -1,9 +1,9 @@
 # 文档路由 / Documentation
 
 > Status: AUTHORITATIVE（仅指本索引）
-> Last updated: 2026-11-19
-> Last verified: 2026-11-19，核对指定分支 `b022673a006fb191b011514bb26c3885314830a0` 的 Preview 父提交、Coding Plan/Start Plan 统一 AppServer 选择、模型目录独立 AppServer 入口与 Official Host 构建/Patch 资产；本次架构审计未运行测试、CI 或真实模型/认证/Billing 请求。
-> Verified against: `b022673a006fb191b011514bb26c3885314830a0`（审计基线）
+> Last updated: 2026-11-19（ADR-041 Thin Official Host end state）
+> Last verified: 2026-11-19，核对共享 Official Host session factory、统一 Provider Runtime 选择、Model Catalog、打包资产退役、生成物与插件校验；真实模型/认证/Billing 请求未在本轮运行。
+> Verified against: `5501c60ecf3f1812a3d3170a670ab0031ea784d8` + 2026-11-19 Thin Adapter working-tree candidate（未提交）
 
 English users start at [README.md](../README.md). 技术文档为中文。先读当前事实，按问题加载合同；研究或历史材料不作为当前实现或发布证明。
 
@@ -24,12 +24,12 @@ English users start at [README.md](../README.md). 技术文档为中文。先读
 | 账户 refresh 协调 | [ADR-033](decisions/ADR-033-official-account-refresh-coordination.md) |
 | 正常 Cleanup 复用 Worker-tree Proof | [ADR-034](decisions/ADR-034-normal-cleanup-worker-tree-proof.md) |
 | 官方 ZCode 认证复用合同与 Preview.6/Preview.7 实现 | [ADR-037](decisions/ADR-037-official-zcode-authentication-reuse.md)、[ARCHITECTURE.md](ARCHITECTURE.md) |
-| 已安装官方 AppServer：Coding Plan 优惠兼容、Start Plan 离线兼容 | [ADR-040](decisions/ADR-040-installed-official-appserver-runtime.md)、[Coding Plan 正式证据](evidence/coding-plan-official-discount-verification-20261118.md)、[Start Plan 离线研究](research/start-plan-official-appserver-compatibility-20261118.md)、[11-19 统一 Runtime 交付报告](reports/unified-official-appserver-startplan-20261119.md) |
+| 已安装官方 AppServer：统一 Provider Runtime、Coding Plan 优惠兼容、Start Plan 离线兼容 | [ADR-040](decisions/ADR-040-installed-official-appserver-runtime.md)、[ADR-041](decisions/ADR-041-thin-official-host-end-state.md)、[Coding Plan 正式证据](evidence/coding-plan-official-discount-verification-20261118.md)、[Start Plan 离线研究](research/start-plan-official-appserver-compatibility-20261118.md)、[11-19 统一 Runtime 交付报告](reports/unified-official-appserver-startplan-20261119.md) |
 | Preview.7 Post-Audit 最小架构、正确性、Legacy JSON 与 CI 整改 | [ADR-038](decisions/ADR-038-preview6-minimum-architecture-remediation.md)、[PROJECT_STATE.md](PROJECT_STATE.md) |
 | Start Plan 与安装版 AppServer 离线兼容性 | [研究](research/start-plan-official-appserver-compatibility-20261118.md) |
 | 本次 Runtime、Cost Lab Web 与 Start Plan 集成交付 | [验收报告](reports/official-runtime-integration-costlab-web-startplan-20261118.md) |
 | Preview.4 / ZCode 3.18.0 历史 Official Host 证据 | [历史 Implementation Summary](research/zcode-official-host-integration-v1/IMPLEMENTATION_SUMMARY.md)、[历史 Final Acceptance](research/zcode-official-host-integration-v1/FINAL_ACCEPTANCE_REPORT.md)（仅供历史追溯，不是 3.18.2 认证候选的验收证据） |
-| Thin Adapter Final Audit（2026-11-19） | [架构审计报告](reports/thin-adapter-final-audit-20261119.md) |
+| Thin Adapter Final Audit 与 End-State（2026-11-19） | [架构审计报告](reports/thin-adapter-final-audit-20261119.md)、[最终收敛报告](reports/thin-adapter-end-state-20261119.md) |
 | MCP、Task/Result、Attention、取消合同 | [INTERFACES.md](INTERFACES.md) |
 | Core API、fork、Host/Worker 打包 | [SHARED_CORE.md](SHARED_CORE.md) |
 | Node/ZCode 配置、SQLite 升级 | [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md) |
@@ -43,13 +43,13 @@ AUTHORITATIVE 描述当前事实或合同；DECISION 记录已批准取舍；RES
 
 [ADR 索引](decisions/README.md) 区分当前有效、部分被替代和完全被替代。历史文件保持原路径，避免破坏引用。不要默认加载 `docs/archive`、`docs/research`、旧审计日志或生成 bundle。
 
-当前 Preview 发布候选身份为 `2.0.0-preview.9`。`package.json`、`package-lock.json`、插件 manifest、MCP server version、官方签名 Runtime Host 与固定官方 Host/BOM 必须来自同一提交、Tag 和 Release。支持范围限定为 Windows x64、Node.js `24.16.0` 与 ZCode Desktop `3.18.2.10443`。旧 JSON/CLI 生产链退役决策见 [ADR-029](decisions/ADR-029-legacy-runtime-retirement.md)。
+当前 Preview 发布候选身份为 `2.0.0-preview.9`。`package.json`、`package-lock.json`、插件 manifest、MCP server version、官方签名 Runtime Host 与固定官方 Host/BOM 必须来自同一提交、Tag 和 Release。支持范围限定为 Windows x64、Node.js `24.16.0` 与 ZCode Desktop `3.18.2.10443`。旧 JSON/CLI 生产链退役决策见 [ADR-029](decisions/ADR-029-legacy-runtime-retirement.md)。ADR-041 后插件不再分发 `app-server/zcode.cjs` 或随附 builtin Provider 配置，所有 Provider 使用安装版 AppServer。
 
 ADR-032 已接受且已在 Preview.5 实现“现有 Worker 内官方 Host”。ADR-033 的账户 refresh 协调、ADR-034 的正常 Cleanup 复用和 ADR-035 的平台选择由固定上游 patch 与同一 Worker 实现。ADR-037 已接受“官方 Host 拥有认证、Bridge 不维护第二套凭据/身份系统”的目标；Preview.6 已实现该接线。Preview.6/Preview.7 历史路径上的真实 Coding Plan 完整 E2E 和 Start Plan 核心功能路径曾通过；但 2026-11-19 统一安装版 Runtime 的 Start Plan 真实 Entitlement/E2E/Billing Observation 尚未运行。历史 Start Plan 完整 E2E 因 Workspace 内 PowerShell cache 保持 FAIL。Desktop 3.18.0/3.18.1 保持 `NOT_VERIFIED`，不得写成 PASS 或不兼容。
 
 ADR-038 以已发布的 Preview.6 为冻结基线，保留 SQLite/Worker/官方认证与 Runtime 核心，删除旧 3.18.0 Runtime 分发资源及已经退出的外围功能，并修正 Usage、Task context、Events summary、Recovery 说明、CI 分层和生成物 Freshness。Preview.7 已实现该决策并进入发布验证。
 
-Preview.7 继承 Preview.6 固定 ZCode `3.18.2` / `fec975905a2abd4c07e35c40d51fa097a2258ec9` 与 AppServer `0.17.1`，有序 patch 集可从固定源码 HEAD 重放并生成同一源码树。2026-11-19 的集成分支在此基础上将 Coding Plan 与 Start Plan 接入同一安装版 AppServer Worker Adapter，但 Start Plan 新 Runtime 的真实 E2E 尚未运行；该分支仍是 Preview 的未合并候选。Windows x64、Node `24.16.0` 的认证测试、Host/native 加载、clean install、签名 runtime host smoke 以及带代表性数据的 Preview.5 → Preview.6 → Preview.5 隔离升级回滚已经通过。六个 `@napi-rs/keyring` native closure/license/metadata 文件受 BOM/hash 校验；Windows helper 使用来自官方 Desktop `3.18.2.10443` 的有效 Authenticode 文件，Owner 已确认再分发权利，Fresh Rebuild 不再是门槛。跨机器制品复现、Desktop 3.18.0/3.18.1 实机矩阵、真实 OAuth refresh 和一般 Desktop Main 独立性仍未验证；前两项与真实 refresh 风险仅按 Owner 裁决接受于 Preview。
+Preview.7 继承 Preview.6 固定 ZCode `3.18.2` / `fec975905a2abd4c07e35c40d51fa097a2258ec9` 与 AppServer `0.17.1`，有序 patch 集可从固定源码 HEAD 重放并生成同一源码树。2026-11-19 的集成分支在此基础上将 Model Catalog、Coding Plan、Start Plan 与其他受支持 Provider 接入同一安装版 AppServer Session Factory，并移除打包 AppServer Runtime；Start Plan 新 Runtime 的真实 E2E 尚未运行，该分支仍是 Preview 的未合并候选。Windows x64、Node `24.16.0` 的认证测试、Host/native 加载、clean install、签名 runtime host smoke 以及带代表性数据的 Preview.5 → Preview.6 → Preview.5 隔离升级回滚已经通过。六个 `@napi-rs/keyring` native closure/license/metadata 文件受 BOM/hash 校验；Windows helper 使用来自官方 Desktop `3.18.2.10443` 的有效 Authenticode 文件，Owner 已确认再分发权利，Fresh Rebuild 不再是门槛。跨机器制品复现、Desktop 3.18.0/3.18.1 实机矩阵、真实其他 Provider E2E、真实 OAuth refresh 和一般 Desktop Main 独立性仍未验证；前两项与真实 refresh 风险仅按 Owner 裁决接受于 Preview。
 
 历史 Companion 研究保留原正文，但顶部“历史/被 ADR-032 替代”的适用性说明优先。旧官方 Host `ASTRA_REVIEW.md` 正文只覆盖更早候选；Preview.4 的 `APPROVED / PR_READY: YES` 结论来自 [ASTRA_REVIEW_CURRENT.md](research/zcode-official-host-integration-v1/ASTRA_REVIEW_CURRENT.md)。Preview.5 增加 PR #85 的 R7 集成、v14 兼容迁移与 Administrative Recovery 修复。
 

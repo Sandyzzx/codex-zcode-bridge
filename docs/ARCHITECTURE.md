@@ -3,14 +3,14 @@
 > Status: AUTHORITATIVE
 
 > 2026-11-16 本地候选修订：[ADR-039](decisions/ADR-039-host-authorized-cancellation.md) 将取消授权与清理事实分离。queued + Launch Intent 无 Claim 时允许原子持久化取消并禁止迟到 Claim，未证明的进程/资源占用保留；Running 的 cleanup-only Hold 可经新鲜取消树证明追加消解记录，再继续原 CAS。此修复不增加 MCP 工具、Schema、重派或第二套恢复引擎。
-> Last updated: 2026-11-18（ADR-040 安装版官方 AppServer 的 Coding Plan 候选接线）
-> Last verified: 2026-11-18，核对 ADR-040 Resolver/Adapter/Worker 定向测试、构建后 MCP/Worker/SQLite 真实 Coding Plan E2E、Start Plan 离线审计与 Cost Lab；不含完整 CI 或发布验收。
-> Verified against: `02cf2fa92c8235370fe7a883d4c5b30d93a8ab33` + candidate integration branch
+> Last updated: 2026-11-19（ADR-041 Thin Official Host end state）
+> Last verified: 2026-11-19，核对安装版 Runtime、共享 Official Host session factory、Model Catalog、Worker 选择、BOM/插件校验、定向测试与完整测试；真实 Provider E2E、OAuth refresh 和发布验收未在本轮运行。
+> Verified against: `5501c60ecf3f1812a3d3170a670ab0031ea784d8` + 2026-11-19 Thin Adapter working-tree candidate（未提交）
 > ADR-039 Last verified: 2026-11-16，仅取消接线及定向隔离测试；基线 `ec5f3e83d737df469f9ed54361d2aec46b4a15a8` + 本地候选。生产取消未重试。
 
-本文件描述 Preview.7 的生产架构。Windows x64 已默认切换到官方 Host 路径，R7 Runtime Events/Usage 复用同一 SQLite Authority；Preview.7 保留 ZCode 3.18.2 Host、官方 Start Plan 认证投影与官方签名 runtime host，并应用 ADR-038 的最小整改。公开合同继续以 [INTERFACES.md](INTERFACES.md) 为准，宿主和运行配置分别见 [SHARED_CORE.md](SHARED_CORE.md) 与 [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md)。
+本文件描述当前 Preview.9 候选的生产架构。Windows x64 已默认切换到官方 Host 路径，R7 Runtime Events/Usage 复用同一 SQLite Authority；候选保留 ZCode 3.18.2 Host 模块、官方 Start Plan 认证投影与官方签名 runtime host，并完成 ADR-041 的 Thin Official Host 收敛。公开合同继续以 [INTERFACES.md](INTERFACES.md) 为准，宿主和运行配置分别见 [SHARED_CORE.md](SHARED_CORE.md) 与 [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md)。
 
-2026-11-18 的集成候选在 Coding Plan 上应用 [ADR-040](decisions/ADR-040-installed-official-appserver-runtime.md)：通过精确 Manifest 校验后，使用用户已安装的官方 AppServer Bundle、同根 builtin Provider 配置和 runtime host。Start Plan、其他 Provider 与显式兼容 fallback 不继承该选择；未知安装版仍 fail closed，也不获得 `0.67` 声明。
+2026-11-19 的集成候选应用 [ADR-040](decisions/ADR-040-installed-official-appserver-runtime.md) 与 [ADR-041](decisions/ADR-041-thin-official-host-end-state.md)：所有受支持 Provider 在通过精确 Manifest 校验后，统一使用用户已安装的官方 AppServer Bundle、同根 builtin Provider 配置和 runtime host；Provider 只决定认证/权益能力，不再选择 AppServer 来源。未知安装版、Provider 不兼容或资产不完整均 fail closed，不存在静默回退到打包 AppServer 的路径。
 
 ## 单一生产链
 
@@ -23,11 +23,12 @@ MCP tools                                      │ queue / cancel / read-only re
                                                ▼
                          spawnClaimOnlyWorker -> worker-main private pipes
                                                │
-                                        OfficialHostAdapter
+                         OfficialAppServerWorkerAdapter
+                          / shared Official Host session factory
                                                │
                fixed official-host-runtime.mjs -> ZCodeAgentProcessManager
                                                │
-                         Windows runtime-host helper + official AppServer
+              installed official AppServer + builtin provider config + runtime-host
                                                │
                                 TaskResult -> SQLite v14
                                                │
@@ -38,9 +39,9 @@ MCP tools                                      │ queue / cancel / read-only re
 
 R7 在同一 Authority 内增加 additive `runtime_task_events`，不新增 Event Broker、第二状态机或 Companion IPC。Worker 通过一次性 fd14 发送规范化 Runtime observation；Manager 只从持久 Task/Attempt/Generation/Claim 派生身份绑定，Worker 不能自报权威身份。Store 以 Worker sequence 幂等、拒绝 stale Attempt，并把 Runtime row 映射到既有单调 public cursor。`zcode_events`、`zcode_feedback` 和 `buildTaskResult()` 从同一持久事实读取 Usage、Model Profile、Timing、Tool Activity 与 Feedback；Lifecycle Event 与 Runtime Event 仍分属不同表。
 
-生产 Worker 的 `zcode_app_server` 模式按 [ADR-035](decisions/ADR-035-worker-platform-adapter-selection.md) 选择 Adapter。只有 `win32/x64` 实例化 `OfficialHostAdapter`；Linux、macOS、Windows 非 x64 与其他组合都在构造 Adapter 前以 `unsupported_worker_platform` fail closed。direct Adapter 类与 `testOnlyLegacyDirectAdapter` 只服务旧行为的合成回归，不是受支持平台的生产备用路径。选择只读取 platform/arch，环境变量、TaskPackage、MCP 参数、持久配置和测试参数都不能改变正式 Worker 的 Adapter 类型。`OfficialHostAdapter` 继承现有 `ZCodeAppServerAdapter`，沿用 `CodingAgentAdapter` 的完成、取消、交互、结果、期限和 Cleanup 合同，没有新增公开 Adapter Mode、持久配置或平行 RuntimeAdapter。
+生产 Worker 的 `zcode_app_server` 模式按 [ADR-035](decisions/ADR-035-worker-platform-adapter-selection.md) 选择 Adapter。只有 `win32/x64` 实例化 `OfficialAppServerWorkerAdapter`；Linux、macOS、Windows 非 x64 与其他组合都在构造 Adapter 前以 `unsupported_worker_platform` fail closed。direct stdio 实现已收敛为显式 `ZCodeAppServerTestAdapter` 与 `testOnlyLegacyDirectAdapter`，只服务协议、帧、期限和 Cleanup 合成回归，不是生产备用路径。选择只读取 platform/arch，环境变量、TaskPackage、MCP 参数、持久配置和测试参数都不能改变正式 Worker 的 Adapter 类型。正式 Adapter 沿用 `CodingAgentAdapter` 的完成、取消、交互、结果、期限和 Cleanup 合同，没有新增公开 Adapter Mode、持久配置或平行 RuntimeAdapter。
 
-ADR-040 候选只对 `account:bigmodel-individual-coding-plan` 选择其子类 `OfficialAppServerWorkerAdapter`。该子类仍复用 Official Host 认证、ProcessManager 和上述生命周期，只把模型执行资产替换为通过 Desktop 版本、Bundle、builtin provider config、runtime host、Node 与平台校验的安装版 AppServer。该校验不是服务端权益证明；未知版本返回 `OFFICIAL_RUNTIME_UNVERIFIED`。
+`OfficialAppServerWorkerAdapter` 与 `ZCodeModelSettings` 共用 `createInstalledOfficialHostSessionFactory`：同一个 Runtime Resolver、Official Host 模块、ProcessManager、ProtocolClient、认证回调和 Close 所有权。Coding Plan、Start Plan 与其他 Provider 的认证/权益门禁仍各自独立；Start Plan 的 Live Entitlement、Private Lease、HANDLE/ACK 与脱敏没有合并。安装版校验不是服务端权益证明；未知版本返回 `OFFICIAL_RUNTIME_UNVERIFIED`，任何 Provider 都不能静默使用旧打包 AppServer。
 
 ## 生命周期与身份
 
@@ -56,7 +57,7 @@ Recovery 由 SQLite 持久事实和当前 Host 共同协调，并可在 Host 存
 
 ## 官方 Host、账户与清理
 
-非 Coding Plan 路径及显式兼容 fallback 继续使用候选包内固定制品：`official-host-runtime.mjs`、AppServer、builtin provider 配置和 Windows helper 不能由环境变量或持久设置重定向到用户 Desktop 安装。Coding Plan 候选路径则只接受 ADR-040 已验证的安装版同根资产。两条路径都在启动前验证文件身份并拒绝外来入口。Windows helper 是官方 Desktop `3.18.2.10443` 的 Authenticode 签名产物，来源、PE x64、大小与 SHA-256 固化在 BOM、Build Provenance 和运行时资源校验常量；Bridge 不编译或另建 Windows 原生实现。当前固定制品只在 Windows x64、Node `24.16.0` 上完成构建、加载、clean-install 与 ProcessManager smoke；其他 Node 24 patch level、平台和 Desktop 安装组合保持 `NOT_VERIFIED`，非 Windows x64 在构造官方 Host 路径时 fail closed。
+候选包只携带固定 `official-host-runtime.mjs`、官方签名 runtime-host helper、keyring native closure、许可和 BOM；不再携带 `app-server/zcode.cjs` 或 `app-server/provider/zcode-builtin.json`。所有 Provider 的模型执行资产来自 ADR-040 精确 Manifest 验证后的安装版同根资产；环境变量或持久设置不能把入口重定向到未验证路径。Windows helper 是官方 Desktop `3.18.2.10443` 的 Authenticode 签名产物，来源、PE x64、大小与 SHA-256 固化在 BOM、Build Provenance 和运行时资源校验常量；Bridge 不编译或另建 Windows 原生实现。当前候选只在 Windows x64、Node `24.16.0` 上完成构建、加载、clean-install 与 ProcessManager smoke；其他 Node 24 patch level、平台和 Desktop 安装组合保持 `NOT_VERIFIED`，非 Windows x64 在构造官方 Host 路径时 fail closed。
 
 官方 `ZCodeAgentProcessManager` 独占正常 Runtime/AppServer/helper 生命周期。Bridge 单独捕获官方 Runtime root PID 和精确 fingerprint，并在 close 后独立验证原 Worker identity 与 recorded process tree。官方 close status/stage、错误 code/name、manager residual process count、tree-scan status 与 Bridge Cleanup outcome 分开保存；有界 close 诊断进入 execution proof 和 SQLite `cleanup_verified` 事件，任意错误 message 不持久化。`dispose()` 或带错误的 `close()` resolved 不能单独生成 `cleanup_verified`。
 
@@ -76,7 +77,7 @@ Fresh root 继续通过 stage SQLite、pending marker 和原子 publication 初�
 
 自动升级属于生产 Lifecycle 启动路径。直接调用 Store 打开 v13 时仍返回带离线升级指引的 `schema_upgrade_required`；不能据此声称所有 Store API 都会自动迁移。未知 schema、损坏库、未解释现场和 writer 活跃状态仍 fail closed。
 
-发布包包含 Bridge、Worker、Thin Waiter、离线 v14 升级命令、v13/v14 Schema、Administrative Recovery CLI、浏览器后端，以及固定官方 Host 制品。运行时会校验 `ARTIFACT_BOM.json` 与 shipped files；当前 3.18.2 候选构建还会把三项有序 patch 重放到固定源码 HEAD，并要求生成的树与实际源码树完全相同，随后记录 aggregate diff。`@napi-rs/keyring` 与 `keyring-win32-x64-msvc` 的 6 个 native closure/license/metadata 文件通过精确 `.gitignore` 例外纳入包。官方签名 runtime host 由 Owner 确认再分发权利，纳入现有 LICENSE/NOTICE；Fresh Rebuild 不是发布门槛。
+发布包包含 Bridge、Worker、Thin Waiter、离线 v14 升级命令、v13/v14 Schema、Administrative Recovery CLI、浏览器后端，以及固定的 Official Host 模块与 helper 资源；不包含第二套 AppServer Runtime。运行时会校验 `ARTIFACT_BOM.json` 与 shipped files；当前 3.18.2 候选构建仍把三项有序 patch 重放到固定源码 HEAD，并要求生成的树与实际源码树完全相同，随后记录 aggregate diff。`@napi-rs/keyring` 与 `keyring-win32-x64-msvc` 的 6 个 native closure/license/metadata 文件通过精确 `.gitignore` 例外纳入包。官方签名 runtime host 由 Owner 确认再分发权利，纳入现有 LICENSE/NOTICE；Fresh Rebuild 不是发布门槛。
 
 ## 发布边界
 

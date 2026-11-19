@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
 import type { ZCodeRuntimeConfig } from "../src/interfaces.js";
 import {
   accountProviderRuleFacts,
@@ -21,30 +20,38 @@ interface ProviderRule {
   };
 }
 
-function findRepoFile(relativePath: string): string {
-  let current = path.dirname(fileURLToPath(import.meta.url));
-  while (true) {
-    const candidate = path.join(current, relativePath);
-    if (existsSync(candidate)) return candidate;
-    const parent = path.dirname(current);
-    if (parent === current) throw new Error(`Repository fixture not found: ${relativePath}`);
-    current = parent;
-  }
-}
+const providerRulesFixture: ProviderRule[] = [
+  {
+    providerId: "account:bigmodel-start-plan",
+    config: {
+      builtinModelIds: ["GLM-5.3-Flash", "GLM-5.2", "GLM-5-Turbo"],
+      access: { type: "zhipu-account", mode: "start-plan", accountType: "bigmodel" },
+      api: {
+        type: "anthropic-messages",
+        baseUrl: "https://zcode.z.ai/api/v1/zcode-plan/anthropic",
+      },
+    },
+  },
+  {
+    providerId: "account:bigmodel-individual-coding-plan",
+    config: {
+      builtinModelIds: ["GLM-5.3-Flash"],
+      access: { type: "zhipu-account", mode: "individual-coding-plan", accountType: "bigmodel" },
+      api: {
+        type: "anthropic-messages",
+        baseUrl: "https://open.bigmodel.cn/api/anthropic",
+      },
+    },
+  },
+];
 
-const packagedBuiltinConfig = findRepoFile(
-  "plugins/codex-zcode-bridge/worker/vendor/official-host/win32-x64-node24.16.0-zcode3.18.2-fec97590/app-server/provider/zcode-builtin.json",
-);
-
-function packagedProviderRules(): ProviderRule[] {
-  const table = JSON.parse(readFileSync(packagedBuiltinConfig, "utf8")) as {
-    config?: { providerConfigRules?: { providerRules?: ProviderRule[] } };
-  };
-  return table.config?.providerConfigRules?.providerRules ?? [];
-}
-
-test("packaged official registry keeps Start Plan and Coding Plan provider identities separate", () => {
-  const rules = packagedProviderRules();
+test("offline official registry fixture keeps Start Plan and Coding Plan provider identities separate", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "bridge-official-registry-"));
+  const builtinConfig = path.join(root, "zcode-builtin.json");
+  writeFileSync(builtinConfig, JSON.stringify({
+    config: { providerConfigRules: { providerRules: providerRulesFixture } },
+  }));
+  const rules = providerRulesFixture;
   const startPlan = rules.find((rule) => rule.providerId === "account:bigmodel-start-plan");
   const codingPlan = rules.find((rule) => rule.providerId === "account:bigmodel-individual-coding-plan");
   assert.ok(startPlan);
@@ -70,24 +77,32 @@ test("packaged official registry keeps Start Plan and Coding Plan provider ident
   assert.notEqual(startPlan.config?.api?.baseUrl, codingPlan.config?.api?.baseUrl);
 
   const config = {
-    providerBuiltinConfigFile: packagedBuiltinConfig,
+    providerBuiltinConfigFile: builtinConfig,
   } as ZCodeRuntimeConfig;
-  assert.deepEqual(accountProviderRuleFacts("account:bigmodel-start-plan", config), {
-    planKind: "start-plan",
-    accountType: "bigmodel",
-  });
-  assert.deepEqual(accountProviderRuleFacts("account:bigmodel-individual-coding-plan", config), {
-    planKind: "individual-coding-plan",
-    accountType: "bigmodel",
-  });
+  try {
+    assert.deepEqual(accountProviderRuleFacts("account:bigmodel-start-plan", config), {
+      planKind: "start-plan",
+      accountType: "bigmodel",
+    });
+    assert.deepEqual(accountProviderRuleFacts("account:bigmodel-individual-coding-plan", config), {
+      planKind: "individual-coding-plan",
+      accountType: "bigmodel",
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("offline Start Plan account and runtime-auth simulation never falls back to Coding Plan", () => {
   const root = mkdtempSync(path.join(tmpdir(), "bridge-start-plan-official-offline-"));
+  const builtinConfig = path.join(root, "zcode-builtin.json");
   const zcodeDataRoot = path.join(root, ".zcode");
   const v2 = path.join(zcodeDataRoot, "v2");
   const personalConfig = path.join(v2, "provider_config.json");
   mkdirSync(v2, { recursive: true });
+  writeFileSync(builtinConfig, JSON.stringify({
+    config: { providerConfigRules: { providerRules: providerRulesFixture } },
+  }));
   writeFileSync(personalConfig, JSON.stringify({
     config: { providerConfigRules: { providerRules: [] } },
   }));
@@ -109,7 +124,7 @@ test("offline Start Plan account and runtime-auth simulation never falls back to
   const config: ZCodeRuntimeConfig = {
     nodeExecutable: process.execPath,
     zcodeEntrypoint: "unused",
-    providerBuiltinConfigFile: packagedBuiltinConfig,
+    providerBuiltinConfigFile: builtinConfig,
     providerPersonalConfigFile: personalConfig,
     zcodeDataRoot,
     dataRoot: root,

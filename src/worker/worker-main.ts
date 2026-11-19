@@ -15,18 +15,15 @@ import { createPlatformProbe } from "../runtime/process-probe.js";
 import { StartPlanSecretRedactor } from "../runtime/start-plan-secret-redactor.js";
 import type { TaskPackage, WorkspaceRef, ZCodeRuntimeConfig } from "../interfaces.js";
 import type {
-  OfficialHostAssets,
   OfficialHostModuleSource,
-  OfficialHostRuntimeAuthService,
-  OfficialHostRuntimeAuthServiceFactory,
+  OfficialHostPackagedAssets,
 } from "../adapters/official-host-adapter.js";
 import type { OfficialInstalledRuntimeResolver } from "../adapters/official-app-server-adapter.js";
 import type { ZCodeAppServerAdapterOptions } from "../adapters/zcode-app-server-adapter.js";
 import {
-  accountProviderRuleFacts,
   BIGMODEL_START_PLAN_PROVIDER_ID,
-  zcodeDataBaseDir,
 } from "../runtime/account-provider.js";
+import { createOfficialProviderRuntimeAuthResolver } from "../runtime/official-provider-runtime-auth.js";
 import {
   selectOfficialProviderRuntime,
   selectProductionAdapter,
@@ -48,7 +45,7 @@ export interface WorkerMainDependencies {
   /** Test-owned installed-runtime descriptor used by the loopback Worker. */
   readonly testOnlyOfficialRuntimeResolver?: OfficialInstalledRuntimeResolver;
   /** Test-owned packaged Host manager assets used with the loopback module. */
-  readonly testOnlyOfficialHostAssets?: OfficialHostAssets;
+  readonly testOnlyOfficialHostAssets?: OfficialHostPackagedAssets;
   /** Test-owned direct Adapter wrapper for the retained synthetic rollback suite. */
   readonly testOnlyLegacyDirectAdapter?: true;
   /** Test-owned probes used only by the loopback Host wrapper. */
@@ -415,15 +412,14 @@ async function runZCodeAdapter(
   runtimeEvents?: CandidateRuntimeEventPublisher,
 ): Promise<CandidateWorkerResultFrame> {
   if (execution.adapter_mode !== "zcode_app_server") throw new Error("real ZCode Adapter mode is required");
-  const {
-    OfficialHostAdapter,
-    loadOfficialHostProviderRuntimeAuthFactory,
-  } = await import("../adapters/official-host-adapter.js");
   const { OfficialAppServerWorkerAdapter } = await import("../adapters/official-app-server-adapter.js");
-  const { isOfficialCodingPlanProvider, OFFICIAL_CODING_PLAN_PROVIDER_ID } = await import("../runtime/official-app-server-runtime.js");
+  const {
+    isOfficialCodingPlanProvider,
+    OFFICIAL_CODING_PLAN_PROVIDER_ID,
+  } = await import("../runtime/official-app-server-runtime.js");
   const { loadPersistedRuntimeEnvironment } = await import("../runtime/resolver.js");
   const { resolveSessionPreferences } = await import("../runtime/session-preferences.js");
-  const { ZCodeAppServerAdapter } = await import("../adapters/zcode-app-server-adapter.js");
+  const { ZCodeAppServerTestAdapter } = await import("../adapters/zcode-app-server-adapter.js");
   const { buildTaskResult } = await import("../manager/normalize.js");
   const { normalizeUsage, phaseDuration } = await import("../usage/normalize.js");
   const startedAt = new Date().toISOString();
@@ -459,13 +455,6 @@ async function runZCodeAdapter(
   let privateAuthConfirmed = false;
   let notifyPrivateAuthConfirmation: (() => void) | undefined;
   const privateAuthLifetime = execution.private_auth ? new Socket({ fd: 13, readable: true, writable: false }) : undefined;
-  let providerRuntimeAuthFactory:
-    | Promise<OfficialHostRuntimeAuthServiceFactory>
-    | undefined;
-  const providerRuntimeAuthServices = new Map<
-    string,
-    Promise<OfficialHostRuntimeAuthService>
-  >();
   privateAuthLifetime?.on("data", (chunk: Buffer) => {
     for (const byte of chunk) {
       if (!privateAuthParentLive && !privateAuthConfirmed && byte === 1) privateAuthParentLive = true;
@@ -573,71 +562,15 @@ async function runZCodeAdapter(
     return current;
   };
   let providerAuthModel = execution.task.model;
-  const resolveProviderRuntimeAuth = async (
-    request: Record<string, unknown>,
-    config: ZCodeRuntimeConfig,
-    signal: AbortSignal,
-  ): Promise<Record<string, unknown>> => {
-    const unavailable = (): Record<string, unknown> => ({
+  let providerRuntimeAuthConfig: ZCodeRuntimeConfig | undefined;
+  let providerRuntimeAuthResolver:
+    | ReturnType<typeof createOfficialProviderRuntimeAuthResolver>
+    | undefined;
+  let resolveProviderRuntimeAuth: NonNullable<ZCodeAppServerAdapterOptions["resolveProviderRuntimeAuth"]> =
+    async () => ({
       headersApplied: false,
       errorMessage: "Provider runtime authorization is unavailable.",
     });
-    if (signal.aborted) return unavailable();
-    const providerId =
-      typeof request.providerId === "string" ? request.providerId : "";
-    const modelSelection = asRecord(request.modelSelection);
-    const modelId = typeof modelSelection.modelId === "string" ? modelSelection.modelId : "";
-    if (
-      !providerId
-      || !modelId
-      || (typeof modelSelection.providerId === "string" && modelSelection.providerId !== providerId)
-      || providerAuthModel?.provider_id !== providerId
-      || providerAuthModel.model_id !== modelId
-    ) {
-      return unavailable();
-    }
-    const facts = accountProviderRuleFacts(providerId, config);
-    const access = asRecord(request.accountAccess);
-    if (
-      !facts?.accountType
-      || facts.planKind !== "individual-coding-plan"
-      || access.type !== "zhipu-account"
-      || access.accountType !== facts.accountType
-      || access.mode !== facts.planKind
-      || access.entitled !== true
-    ) {
-      return unavailable();
-    }
-    const dataBaseDir = zcodeDataBaseDir(config.providerPersonalConfigFile);
-    if (!dataBaseDir) return unavailable();
-    const cacheKey = `${dataBaseDir}\0${providerId}`;
-    let service = providerRuntimeAuthServices.get(cacheKey);
-    if (!service) {
-      providerRuntimeAuthFactory ??= loadOfficialHostProviderRuntimeAuthFactory();
-      service = providerRuntimeAuthFactory.then((factory) =>
-        factory({
-          dataBaseDir,
-          resolveCurrentAccountAccess: async (currentAccess) => {
-            if (
-              currentAccess.type !== "zhipu-account"
-              || currentAccess.accountType !== facts.accountType
-              || currentAccess.mode !== facts.planKind
-              || currentAccess.entitled !== true
-            ) {
-              return null;
-            }
-            return {
-              type: "zhipu-account",
-              family: facts.accountType,
-              planKind: "individual-coding-plan",
-            };
-          },
-        }),
-      );
-      providerRuntimeAuthServices.set(cacheKey, service);
-    }
-    return (await service).resolveProviderRuntimeRequest(request, { signal });
-  };
   const adapterOptions: ZCodeAppServerAdapterOptions = {
     host: execution.host_profile,
     // Manager resolved this attempt's effective budget before dispatch.
@@ -760,11 +693,11 @@ async function runZCodeAdapter(
       ...(dependencies.testOnlyOfficialHostModule
         ? { testOnlyOfficialHostModule: dependencies.testOnlyOfficialHostModule } : {}),
       ...(dependencies.testOnlyWorkerModuleUrl
-        ? { testOnlyWorkerModuleUrl: dependencies.testOnlyWorkerModuleUrl } : {}),
+        ? { workerModuleUrl: dependencies.testOnlyWorkerModuleUrl } : {}),
       ...(dependencies.testOnlyOfficialRuntimeResolver
         ? { officialRuntimeResolver: dependencies.testOnlyOfficialRuntimeResolver } : {}),
       ...(dependencies.testOnlyOfficialHostAssets
-        ? { testOnlyOfficialHostAssets: dependencies.testOnlyOfficialHostAssets } : {}),
+        ? { testOnlyOfficialHostPackagedAssets: dependencies.testOnlyOfficialHostAssets } : {}),
     };
     const preferences = selectedAdapter === "direct_app_server" ? null : resolveSessionPreferences(
       execution.task.model,
@@ -778,6 +711,21 @@ async function runZCodeAdapter(
     const officialProviderRuntime = selectedAdapter === "direct_app_server"
       ? null
       : selectOfficialProviderRuntime(preferences?.model?.provider_id);
+    if (selectedAdapter !== "direct_app_server") {
+      resolveProviderRuntimeAuth = async (request, config, signal) => {
+        if (!providerRuntimeAuthResolver || providerRuntimeAuthConfig !== config) {
+          providerRuntimeAuthConfig = config;
+          providerRuntimeAuthResolver = createOfficialProviderRuntimeAuthResolver({
+            config,
+            isSelected: (providerId, modelId) =>
+              providerAuthModel === undefined
+              || (providerAuthModel.provider_id === providerId
+                && providerAuthModel.model_id === modelId),
+          });
+        }
+        return providerRuntimeAuthResolver(request, signal);
+      };
+    }
     const officialSessionPreferences = officialProviderRuntime === "coding_plan_discount"
       ? codingPlanPreferences
       : officialProviderRuntime === "start_plan_static"
@@ -785,14 +733,12 @@ async function runZCodeAdapter(
         ? preferences
         : null;
     const adapter = selectedAdapter === "direct_app_server"
-      ? new ZCodeAppServerAdapter(adapterOptions)
-      : officialProviderRuntime
-        ? new OfficialAppServerWorkerAdapter({
-            ...officialHostOptions,
-            providerCapability: officialProviderRuntime,
-            ...(officialSessionPreferences ? { sessionPreferences: officialSessionPreferences } : {}),
-          })
-        : new OfficialHostAdapter(officialHostOptions);
+      ? new ZCodeAppServerTestAdapter(adapterOptions)
+      : new OfficialAppServerWorkerAdapter({
+          ...officialHostOptions,
+          providerCapability: officialProviderRuntime ?? "installed_runtime",
+          ...(officialSessionPreferences ? { sessionPreferences: officialSessionPreferences } : {}),
+        });
     const workspace: WorkspaceRef = {
       requestedPath: execution.task.workspace,
       canonicalPath: bootstrap.workspace_ref,

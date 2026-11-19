@@ -43,7 +43,8 @@ export type StartPlanStaticCompatibility =
 
 export type OfficialProviderRuntimeCapability =
   | "coding_plan_discount"
-  | "start_plan_static";
+  | "start_plan_static"
+  | "installed_runtime";
 
 export interface OfficialAppServerRuntimeManifestEntry {
   readonly desktop_version: string;

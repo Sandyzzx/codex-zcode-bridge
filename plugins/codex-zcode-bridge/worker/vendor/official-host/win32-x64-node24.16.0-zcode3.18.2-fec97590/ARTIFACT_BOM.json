@@ -43,16 +43,10 @@
     "officialMiseNodePin": "24.14.0",
     "officialPnpm": "10.33.2",
     "validationPnpm": "11.25.0",
-    "appServerBundler": "esbuild 0.25.12",
     "hostModuleBundler": "esbuild 0.28.2",
     "runtimeHostToolchain": "UPSTREAM_SIGNED_RELEASE_BINARY"
   },
   "build": {
-    "appServerCommand": "node ../../node_modules/turbo/bin/turbo run build --filter=@zcode/cli... with pnpm 10.33.2 shim",
-    "appServerInputs": [
-      "apps/zcode-cli/packages/cli",
-      "workspace dependency graph"
-    ],
     "hostModuleCommand": "npm run build:official-host -- --source <fixed-upstream-worktree>",
     "hostModuleInputs": [
       "packages/shared/src/credential-security/contract.ts",
@@ -94,25 +88,11 @@
   },
   "files": [
     {
-      "path": "app-server/provider/zcode-builtin.json",
-      "role": "builtin provider configuration",
-      "bytes": 265884,
-      "sha256": "BC760A3B0C6D096EA07EE4E963471F135AE75AB207DB6ED4C372E1B183C856CD",
-      "license": "ZCode project and third-party terms"
-    },
-    {
-      "path": "app-server/THIRD-PARTY-NOTICES.md",
+      "path": "THIRD-PARTY-NOTICES.md",
       "role": "third-party notices",
       "bytes": 3465209,
       "sha256": "C4CC6DC747EB6026E41D2CEFC6679392C33E1192629EA96DC0DC702BCFE7C51C",
       "license": "third-party terms"
-    },
-    {
-      "path": "app-server/zcode.cjs",
-      "role": "official AppServer entrypoint",
-      "bytes": 31009692,
-      "sha256": "B55BA68C3B7939AFAFFB4D373D15594817AD3319FDECFBE26640CE4B218CF639",
-      "license": "ZCode project and third-party terms"
     },
     {
       "path": "LICENSE",
@@ -199,13 +179,13 @@
       "@napi-rs/keyring",
       "node:*"
     ],
-    "appServerSelfContainedForCoveredMockScope": true,
+    "installedAppServerOnly": true,
     "nativeDependencyClosure": "WIN32_X64_KEYRING_INCLUDED",
     "resourceClosure": "PARTIAL",
     "redistributionReview": "OWNER_APPROVED_APACHE_2_0_NOTICES_INCLUDED",
     "artifactReproducibility": "PARTIAL",
     "knownGaps": [
-      "AppServer optional external packages and the full ZCode resource graph are outside the certified synthetic scope.",
+      "The installed AppServer optional packages and full resource graph are outside the certified artifact scope.",
       "Cross-machine and empty-cache rebuild reproducibility is not established."
     ]
   }

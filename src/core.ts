@@ -7,7 +7,6 @@ export { createBridgeServer, SERVER_VERSION, type BridgeServerOptions } from "./
 export { NodeRuntimeResolver, loadPersistedRuntimeEnvironment } from "./runtime/resolver.js";
 export { ZCodeModelSettings } from "./runtime/model-settings.js";
 export { runBridgeDoctor } from "./runtime/doctor.js";
-export { ZCodeAppServerAdapter } from "./adapters/zcode-app-server-adapter.js";
 export { BridgeError, type BridgeErrorCode } from "./runtime/errors.js";
 export { TaskManagerError } from "./manager/errors.js";
 export type { ZCodeModelCatalog, ZCodeModelCatalogEntry, DefaultModelSelection } from "./runtime/model-settings.js";
