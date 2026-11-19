@@ -39,6 +39,29 @@ const CONFIG_KEYS = Object.freeze([
   "ZCODE_DATA_BASE_DIR",
 ]);
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled", "waiting_for_master"]);
+const FAILURE_FACTS_PREFIX = "[bridge] worker failure-facts ";
+const FAILURE_FACTS_KEYS = Object.freeze([
+  "schema_version",
+  "source",
+  "phase",
+  "rpc_method",
+  "rpc_code",
+  "rpc_data_code",
+  "error_type",
+  "error_code",
+  "provider_code",
+  "http_status",
+  "accepted_before_error",
+  "category",
+  "confidence",
+  "evidence_basis",
+  "evidence_conflict",
+  "runtime_retryable",
+  "runtime_retryable_basis",
+  "result_type",
+  "process_errno",
+]);
+const FAILURE_FACTS_KEY_SET = new Set(FAILURE_FACTS_KEYS);
 const MODEL_EVENT_TYPES = new Set([
   "model_output_started",
   "model_output",
@@ -227,6 +250,7 @@ export function createProductionCodingPlanVerificationRunner(options = {}) {
                 }))
               : [],
           },
+          failure_facts: stderr.failureFacts(),
           operation_release_observed: true,
           events: modelEvents.map(publicEvidenceEvent),
           workspace_evidence: workspaceEvidence,
@@ -771,6 +795,7 @@ function publicEvidenceEvent(event) {
 function createBoundedStderrCollector() {
   const lines = [];
   let pending = "";
+  let failureFacts = null;
   const stream = new PassThrough();
   return {
     stream: () => stream,
@@ -782,6 +807,8 @@ function createBoundedStderrCollector() {
         if (index < 0) break;
         const line = pending.slice(0, index).trim();
         pending = pending.slice(index + 1);
+        const parsedFailureFacts = parseWorkerFailureFactsMarker(line);
+        if (parsedFailureFacts) failureFacts = parsedFailureFacts;
         if (isSafeBridgeMarker(line)) {
           lines.push(line.slice(0, 500));
           if (lines.length > 80) lines.shift();
@@ -791,7 +818,38 @@ function createBoundedStderrCollector() {
     markers() {
       return [...lines];
     },
+    failureFacts() {
+      return failureFacts ? { ...failureFacts } : null;
+    },
   };
+}
+
+function parseWorkerFailureFactsMarker(line) {
+  if (!line.startsWith(FAILURE_FACTS_PREFIX)) return null;
+  const serialized = line.slice(FAILURE_FACTS_PREFIX.length);
+  if (Buffer.byteLength(serialized, "utf8") > 4_096) return null;
+  let value;
+  try {
+    value = JSON.parse(serialized);
+  } catch {
+    return null;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const keys = Object.keys(value);
+  if (keys.length !== FAILURE_FACTS_KEYS.length ||
+      keys.some((key) => !FAILURE_FACTS_KEY_SET.has(key)) ||
+      value.schema_version !== "1") {
+    return null;
+  }
+  for (const key of FAILURE_FACTS_KEYS) {
+    const item = value[key];
+    if (item === null) continue;
+    const type = typeof item;
+    if (!["string", "number", "boolean"].includes(type)) return null;
+    if (type === "string" && item.length > 128) return null;
+    if (type === "number" && !Number.isFinite(item)) return null;
+  }
+  return Object.fromEntries(FAILURE_FACTS_KEYS.map((key) => [key, value[key]]));
 }
 
 function isSafeBridgeMarker(line) {

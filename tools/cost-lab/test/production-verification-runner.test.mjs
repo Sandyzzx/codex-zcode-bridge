@@ -14,6 +14,27 @@ import {
 
 const RUN_ROOT = path.join(PROJECT_ROOT, ".run");
 const FIXED_ID = "00000000-0000-4000-8000-000000000002";
+const FAILURE_FACTS = Object.freeze({
+  schema_version: "1",
+  source: "turn_event",
+  phase: "turn_terminal",
+  rpc_method: null,
+  rpc_code: null,
+  rpc_data_code: null,
+  error_type: "model_error",
+  error_code: "model_request_failed",
+  provider_code: null,
+  http_status: null,
+  accepted_before_error: "yes",
+  category: "execution_failed",
+  confidence: "inferred",
+  evidence_basis: "result_type",
+  evidence_conflict: false,
+  runtime_retryable: null,
+  runtime_retryable_basis: null,
+  result_type: "error_during_execution",
+  process_errno: null,
+});
 
 function beforeSnapshot() {
   return {
@@ -101,6 +122,8 @@ test("production runner drives the built MCP task and returns runtime/usage evid
               if (name === "zcode_task") {
                 const digest = reportInstalledRuntime ? "a".repeat(64) : "c".repeat(64);
                 options.stderr.capture(`[bridge] worker installed-runtime ${args.task_id} 1 ${digest}\n`);
+                options.stderr.capture(`[bridge] worker failure-facts ${JSON.stringify(FAILURE_FACTS)}\n`);
+                options.stderr.capture('[bridge] worker failure-facts {"secret":"do-not-capture"}\n');
                 return { structuredContent: { task_id: args.task_id, status: "queued" } };
               }
               if (name === "zcode_status") {
@@ -197,6 +220,7 @@ test("production runner drives the built MCP task and returns runtime/usage evid
     assert.equal(result.runtime_evidence.request_security.installed_bundle_verified, true);
     assert.equal(result.runtime_evidence.provider, PRODUCTION_VERIFICATION_CONTRACT.provider);
     assert.equal(result.runtime_evidence.request_security.expected, "OfficialRequestSecurity");
+    assert.deepEqual(result.runtime_evidence.failure_facts, FAILURE_FACTS);
     assert.deepEqual(calls.map((call) => call.name), [
       "zcode_task",
       "zcode_status",
