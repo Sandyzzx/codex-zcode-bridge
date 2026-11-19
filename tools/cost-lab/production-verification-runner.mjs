@@ -1,6 +1,6 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { lstatSync, readFileSync } from "node:fs";
-import { access, lstat, mkdir, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
@@ -13,8 +13,18 @@ import { shanghaiHourForTimestamp } from "./coding-plan-billing.mjs";
 const SCRIPT_ROOT = path.dirname(fileURLToPath(import.meta.url));
 export const PROJECT_ROOT = path.resolve(SCRIPT_ROOT, "..", "..");
 export const VERIFIED_PROVIDER = "account:bigmodel-individual-coding-plan";
+export const VERIFIED_START_PLAN_PROVIDER = "account:bigmodel-start-plan";
 export const VERIFIED_MODEL = "GLM-5.3-Flash";
 export const RESPONSE_MARKER = "COSTLAB_PRODUCTION_VERIFICATION_OK";
+export const CODE_EDIT_RELATIVE_PATH = "src/greeting.js";
+export const CODE_EDIT_SEED_CONTENT =
+  'export function greeting() {\n  return "wrong";\n}\n';
+export const CODE_EDIT_EXPECTED_CONTENT =
+  'export function greeting() {\n  return "costlab-e2e-ok";\n}\n';
+const PROVIDER_SNAPSHOT_KINDS = Object.freeze({
+  [VERIFIED_PROVIDER]: "coding_plan_billing_snapshot",
+  [VERIFIED_START_PLAN_PROVIDER]: "start_plan_billing_snapshot",
+});
 const CONFIG_KEYS = Object.freeze([
   "ZCODE_BRIDGE_ZCODE_CJS",
   "ZCODE_BRIDGE_DATA_DIR",
@@ -47,7 +57,13 @@ export async function runProductionCodingPlanVerification(input, options = {}) {
 export function createProductionCodingPlanVerificationRunner(options = {}) {
   const projectRoot = path.resolve(options.projectRoot ?? PROJECT_ROOT);
   const bridgeEntryPath = path.resolve(
-    options.bridgeEntryPath ?? path.join(projectRoot, "dist", "src", "mcp", "main.js"),
+    options.bridgeEntryPath ?? path.join(
+      projectRoot,
+      "plugins",
+      "codex-zcode-bridge",
+      "dist",
+      "bridge.mjs",
+    ),
   );
   const now = options.now ?? (() => new Date());
   const createId = options.createId ?? randomUUID;
@@ -69,8 +85,9 @@ export function createProductionCodingPlanVerificationRunner(options = {}) {
     const layout = verificationLayout(roots.runRoot, roots.stateRoot);
     let phase = "isolated_layout";
     let cleanupSafe = true;
+    let partialEvidence = null;
     try {
-      await createIsolatedLayout(layout);
+      await createIsolatedLayout(layout, input.taskMode);
 
       phase = "account_discovery";
       const account = resolveBillingDataBaseDir(null, {
@@ -106,7 +123,7 @@ export function createProductionCodingPlanVerificationRunner(options = {}) {
       await assertFile(bridgeEntryPath, "bridge_build_missing");
 
       phase = "bridge_config";
-      const config = buildRuntimeConfig(layout, official, taskTimeoutMs);
+      const config = buildRuntimeConfig(layout, official, taskTimeoutMs, input.provider);
       await writeRuntimeConfig(layout, config);
       const env = buildIsolatedMcpEnvironment(layout, process.env);
       const stderr = createBoundedStderrCollector();
@@ -130,7 +147,7 @@ export function createProductionCodingPlanVerificationRunner(options = {}) {
         assertNotAborted(input.signal);
         taskId = `costlab-${id}`;
         phase = "task_dispatch";
-        const task = buildTask(taskId, layout.workspace);
+        const task = buildTask(taskId, layout.workspace, input);
         const receipt = await callBridgeTool(client, "zcode_task", task);
         if (receipt.task_id !== taskId) throw new Error("bridge_task_receipt_mismatch");
 
@@ -149,6 +166,17 @@ export function createProductionCodingPlanVerificationRunner(options = {}) {
         if (!released) throw new Error("bridge_release_unverified");
         const usageEvidence = extractUsageEvidence(result, events);
         const modelEvents = events.filter((event) => MODEL_EVENT_TYPES.has(event.type));
+        const toolEvents = events.filter((event) => event.type === "model_tool_call");
+        const eventTypeCounts = Object.fromEntries(
+          [...new Set(events.map((event) => event.type))]
+            .filter((type) => typeof type === "string" && type.length > 0)
+            .sort()
+            .map((type) => [type, events.filter((event) => event.type === type).length]),
+        );
+        const workspaceEvidence = await inspectWorkspaceMutation(
+          layout.workspace,
+          input.taskMode,
+        );
         const candidateDigest = runtime.assets.bundle.sha256;
         const installedRuntimeObserved = typeof candidateDigest === "string" &&
           /^[0-9a-f]{64}$/u.test(candidateDigest) &&
@@ -182,15 +210,35 @@ export function createProductionCodingPlanVerificationRunner(options = {}) {
           event_coverage: {
             event_count: events.length,
             model_related_event_count: modelEvents.length,
+            model_tool_call_count: toolEvents.length,
+            event_type_counts: eventTypeCounts,
             auxiliary_usage_coverage: usageEvidence.auxiliary_usage_coverage,
             model_http_requests: null,
           },
+          result_evidence: {
+            status: result.status ?? null,
+            summary: typeof result.summary === "string" ? result.summary.slice(0, 1_000) : null,
+            files_changed: Array.isArray(result.files_changed) ? result.files_changed.slice(0, 100) : [],
+            tests: Array.isArray(result.tests)
+              ? result.tests.slice(0, 100).map((entry) => ({
+                  command: typeof entry?.command === "string" ? entry.command.slice(0, 500) : null,
+                  status: typeof entry?.status === "string" ? entry.status : null,
+                  details: typeof entry?.details === "string" ? entry.details.slice(0, 1_000) : null,
+                }))
+              : [],
+          },
           operation_release_observed: true,
           events: modelEvents.map(publicEvidenceEvent),
+          workspace_evidence: workspaceEvidence,
           stderr_markers: stderr.markers(),
         };
+        partialEvidence = runtimeEvidence;
+        phase = "result_validation";
         if (result.status === "failed" || result.status === "cancelled" || status.status !== "completed") {
           throw new Error(`bridge_task_terminal_${String(result.status ?? status.status)}`);
+        }
+        if (input.taskMode === "code_edit" && workspaceEvidence.content_changed !== true) {
+          throw new Error("bridge_code_edit_unverified");
         }
         if (!usageEvidence.usage) {
           return {
@@ -216,6 +264,9 @@ export function createProductionCodingPlanVerificationRunner(options = {}) {
             10_000,
             "bridge_cancel_timeout",
           ).catch(() => undefined);
+        }
+        if (partialEvidence && error && typeof error === "object" && error.evidence === undefined) {
+          error.evidence = partialEvidence;
         }
         const markerCode = bridgeMarkerCode(stderr.markers());
         if (markerCode && error && typeof error === "object") error.code = markerCode;
@@ -279,10 +330,21 @@ function verificationHour(usage, fallbackTimestamp) {
 
 function validateVerificationInput(input) {
   if (!input || typeof input !== "object") throw new Error("verification_input_required");
-  if (input.provider !== VERIFIED_PROVIDER) throw new Error("verification_provider_not_allowed");
+  const snapshotKind = PROVIDER_SNAPSHOT_KINDS[input.provider];
+  if (!snapshotKind) throw new Error("verification_provider_not_allowed");
   if (input.model !== VERIFIED_MODEL) throw new Error("verification_model_not_allowed");
   if (input.reasoning !== "low") throw new Error("verification_reasoning_not_allowed");
-  if (!input.beforeSnapshot || input.beforeSnapshot.provider?.id !== VERIFIED_PROVIDER) {
+  if (input.taskMode !== undefined && input.taskMode !== "marker" && input.taskMode !== "code_edit") {
+    throw new Error("verification_task_mode_not_allowed");
+  }
+  const snapshotProvider =
+    input.beforeSnapshot?.provider?.id ??
+    input.beforeSnapshot?.provider_scope ??
+    input.beforeSnapshot?.account?.provider_scope ??
+    null;
+  if (!input.beforeSnapshot ||
+      input.beforeSnapshot.kind !== snapshotKind ||
+      snapshotProvider !== input.provider) {
     throw new Error("verification_before_snapshot_invalid");
   }
 }
@@ -379,7 +441,7 @@ async function cleanupVerificationRoots(roots) {
   }
 }
 
-async function createIsolatedLayout(layout) {
+async function createIsolatedLayout(layout, taskMode) {
   for (const directory of [
     layout.home,
     layout.appData,
@@ -393,20 +455,27 @@ async function createIsolatedLayout(layout) {
   }
   await writeFile(path.join(layout.workspace, "VERIFICATION_TASK.txt"), [
     "This is an isolated Cost Lab billing verification workspace.",
-    `Return exactly ${RESPONSE_MARKER}.`,
-    "Do not modify, create, or delete files.",
+    taskMode === "code_edit"
+      ? `Edit ${CODE_EDIT_RELATIVE_PATH} exactly as requested and read it back.`
+      : `Return exactly ${RESPONSE_MARKER}.`,
+    taskMode === "code_edit" ? "Do not run shell commands." : "Do not modify, create, or delete files.",
     "",
   ].join("\n"), { encoding: "utf8", flag: "wx" });
+  if (taskMode === "code_edit") {
+    const target = path.join(layout.workspace, CODE_EDIT_RELATIVE_PATH);
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, CODE_EDIT_SEED_CONTENT, { encoding: "utf8", flag: "wx" });
+  }
 }
 
-function buildRuntimeConfig(layout, official, timeoutMs) {
+function buildRuntimeConfig(layout, official, timeoutMs, provider) {
   return Object.freeze({
     ZCODE_BRIDGE_ZCODE_CJS: official.bundle,
     ZCODE_BRIDGE_DATA_DIR: layout.bridgeData,
     ZCODE_BRIDGE_TIMEOUT_MS: String(timeoutMs),
     ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS: "1",
     ZCODE_BRIDGE_MODE: "yolo",
-    ZCODE_BRIDGE_PREFER_STARTPLAN: "false",
+    ZCODE_BRIDGE_PREFER_STARTPLAN: provider === VERIFIED_START_PLAN_PROVIDER ? "true" : "false",
     ZCODE_WINDOWS_APP_INSTALL_DIR: official.installRoot,
     ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: official.builtinProviderConfig,
     ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: official.personalProviderConfig,
@@ -445,6 +514,7 @@ function buildIsolatedMcpEnvironment(layout, source) {
   }
   return {
     ...env,
+    ZCODE_BRIDGE_PLUGIN_MODE: "1",
     HOME: layout.home,
     USERPROFILE: layout.home,
     HOMEDRIVE: homeDrive,
@@ -457,14 +527,43 @@ function buildIsolatedMcpEnvironment(layout, source) {
   };
 }
 
-function buildTask(taskId, workspace) {
+function buildTask(taskId, workspace, input) {
+  if (input.taskMode === "code_edit") {
+    return {
+      task_id: taskId,
+      workspace,
+      model: {
+        provider_id: input.provider,
+        model_id: input.model,
+        reasoning_level: input.reasoning,
+      },
+      objective:
+        `Edit ${CODE_EDIT_RELATIVE_PATH} so its complete UTF-8 content is exactly ` +
+        `${JSON.stringify(CODE_EDIT_EXPECTED_CONTENT)}. Read the file back after editing.`,
+      requirements: [
+        "Use the selected official provider and model.",
+        `Modify only ${CODE_EDIT_RELATIVE_PATH}.`,
+        "Use file tools; do not simulate the edit only in the final response.",
+        "Read the edited file back before reporting completion.",
+      ],
+      allowed_paths: [CODE_EDIT_RELATIVE_PATH],
+      forbidden_paths: ["..", ".git/**"],
+      acceptance_criteria: [
+        `${CODE_EDIT_RELATIVE_PATH} contains exactly the requested content.`,
+        "The final response confirms the file was read back.",
+      ],
+      test_commands: [],
+      context:
+        "This is an owner-authorized Cost Lab end-to-end task. Keep the edit minimal and deterministic.",
+    };
+  }
   return {
     task_id: taskId,
     workspace,
     model: {
-      provider_id: VERIFIED_PROVIDER,
-      model_id: VERIFIED_MODEL,
-      reasoning_level: "low",
+      provider_id: input.provider,
+      model_id: input.model,
+      reasoning_level: input.reasoning,
     },
     objective: `Return exactly ${RESPONSE_MARKER}. Do not modify, create, or delete files.`,
     requirements: [
@@ -480,6 +579,25 @@ function buildTask(taskId, workspace) {
     ],
     test_commands: [],
     context: "This is an owner-authorized Cost Lab billing verification. Keep the task minimal.",
+  };
+}
+
+async function inspectWorkspaceMutation(workspace, taskMode) {
+  if (taskMode !== "code_edit") return null;
+  const absolutePath = path.join(workspace, CODE_EDIT_RELATIVE_PATH);
+  const [content, metadata] = await Promise.all([
+    readFile(absolutePath, "utf8"),
+    lstat(absolutePath),
+  ]);
+  return {
+    relative_path: CODE_EDIT_RELATIVE_PATH,
+    seed_sha256: createHash("sha256").update(CODE_EDIT_SEED_CONTENT, "utf8").digest("hex"),
+    expected_sha256: createHash("sha256").update(CODE_EDIT_EXPECTED_CONTENT, "utf8").digest("hex"),
+    observed_sha256: createHash("sha256").update(content, "utf8").digest("hex"),
+    bytes: metadata.size,
+    content_changed: content !== CODE_EDIT_SEED_CONTENT,
+    content_match: content === CODE_EDIT_EXPECTED_CONTENT,
+    content_preview: content.slice(0, 512),
   };
 }
 
@@ -534,7 +652,10 @@ async function callBridgeTool(client, name, args) {
       ? structured.error
       : null;
     if (structuredError && typeof structuredError === "object" && typeof structuredError.code === "string") {
-      const error = new Error(`${name}_rejected:${structuredError.code}`);
+      const detail = typeof structuredError.message === "string" && structuredError.message.trim()
+        ? `:${structuredError.message.trim()}`
+        : "";
+      const error = new Error(`${name}_rejected:${structuredError.code}${detail}`);
       error.code = structuredError.code;
       throw error;
     }
@@ -743,7 +864,7 @@ export const PRODUCTION_VERIFICATION_CONTRACT = Object.freeze({
   provider: VERIFIED_PROVIDER,
   model: VERIFIED_MODEL,
   reasoning: "low",
-  bridge_entry_relative: "dist/src/mcp/main.js",
+  bridge_entry_relative: "plugins/codex-zcode-bridge/dist/bridge.mjs",
   host_profile: "isolated HOME + isolated ZCODE_BRIDGE_DATA_DIR",
   billing: "owned by coding-plan-billing.mjs, never this runner",
   model_call: "only after explicit web confirmation",

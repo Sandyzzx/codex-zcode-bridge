@@ -4,8 +4,11 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  CODE_EDIT_EXPECTED_CONTENT,
+  CODE_EDIT_RELATIVE_PATH,
   PRODUCTION_VERIFICATION_CONTRACT,
   PROJECT_ROOT,
+  VERIFIED_START_PLAN_PROVIDER,
   createProductionCodingPlanVerificationRunner,
 } from "../production-verification-runner.mjs";
 
@@ -87,6 +90,7 @@ test("production runner drives the built MCP task and returns runtime/usage evid
         ));
         assert.equal(options.args[0], synthetic.bridgeEntryPath);
         assert.equal(options.env.HOME.endsWith("home"), true);
+        assert.equal(options.env.ZCODE_BRIDGE_PLUGIN_MODE, "1");
         assert.equal(isWithin(root, options.env.LOCALAPPDATA), false);
         assert.equal(isWithin(root, runtimeConfig.ZCODE_BRIDGE_DATA_DIR), false);
         assert.equal(runtimeConfig.ZCODE_BRIDGE_PREFER_STARTPLAN, "false");
@@ -206,6 +210,175 @@ test("production runner drives the built MCP task and returns runtime/usage evid
     const mismatch = await runner(input);
     assert.equal(mismatch.runtime_evidence.status, "UNVERIFIED");
     assert.equal(mismatch.runtime_evidence.request_security.installed_bundle_verified, null);
+  } finally {
+    await Promise.all([
+      rm(root, { recursive: true, force: true }),
+      rm(stateRootParent, { recursive: true, force: true }),
+    ]);
+  }
+});
+
+test("production runner supports a real code-edit task through the Start Plan production path", async () => {
+  await mkdir(RUN_ROOT, { recursive: true });
+  const id = "00000000-0000-4000-8000-000000000003";
+  const root = await mkdtemp(path.join(RUN_ROOT, "production-runner-start-plan-"));
+  const synthetic = await fixtureFiles(root);
+  const stateRootParent = path.join(RUN_ROOT, "production-runner-start-plan-state");
+  let closed = 0;
+  let statusCalls = 0;
+  try {
+    const runner = createProductionCodingPlanVerificationRunner({
+      projectRoot: root,
+      bridgeEntryPath: synthetic.bridgeEntryPath,
+      createId: () => id,
+      pollIntervalMs: 1,
+      taskTimeoutMs: 5_000,
+      stateRootParent,
+      env: {
+        HOME: synthetic.userHome,
+        USERPROFILE: synthetic.userHome,
+        ZCODE_WINDOWS_APP_INSTALL_DIR: synthetic.install,
+        ProgramFiles: "C:\\Program Files",
+      },
+      inspectRuntime: async () => verifiedRuntime(synthetic.install),
+      connectClient: async (options) => {
+        const runtimeConfig = JSON.parse(await readFile(
+          path.join(
+            root,
+            ".run",
+            "cost-lab-web",
+            "verifications",
+            id,
+            "home",
+            ".codex",
+            "codex-zcode-bridge",
+            "runtime-config.json",
+          ),
+          "utf8",
+        ));
+        assert.equal(runtimeConfig.ZCODE_BRIDGE_PREFER_STARTPLAN, "true");
+        return {
+          client: {
+            callTool: async ({ name, arguments: args }) => {
+              if (name === "zcode_task") {
+                assert.equal(args.model.provider_id, VERIFIED_START_PLAN_PROVIDER);
+                assert.deepEqual(args.allowed_paths, [CODE_EDIT_RELATIVE_PATH]);
+                await writeFile(
+                  path.join(args.workspace, CODE_EDIT_RELATIVE_PATH),
+                  CODE_EDIT_EXPECTED_CONTENT,
+                  "utf8",
+                );
+                options.stderr.capture(`[bridge] worker installed-runtime ${args.task_id} 1 ${"a".repeat(64)}\n`);
+                return { structuredContent: { task_id: args.task_id, status: "queued" } };
+              }
+              if (name === "zcode_status") {
+                statusCalls += 1;
+                return {
+                  structuredContent: {
+                    task_id: args.task_id,
+                    attempt: 1,
+                    status: statusCalls === 1 ? "running" : "completed",
+                    exit_code: 0,
+                    zcode_session_id: "sess_start_plan",
+                  },
+                };
+              }
+              if (name === "zcode_result") {
+                return {
+                  structuredContent: {
+                    task_id: args.task_id,
+                    status: "completed",
+                    files_changed: [CODE_EDIT_RELATIVE_PATH],
+                    exit_code: 0,
+                    session_id: "sess_start_plan",
+                    model: {
+                      provider_id: VERIFIED_START_PLAN_PROVIDER,
+                      model_id: PRODUCTION_VERIFICATION_CONTRACT.model,
+                      effective_reasoning_level: "low",
+                    },
+                    usage: {
+                      source: "runtime",
+                      scope: "turn",
+                      observed_at: "2026-11-20T01:25:00.000Z",
+                      finality: "reported",
+                      input_tokens: 1_000,
+                      output_tokens: 20,
+                      total_tokens: 1_020,
+                      cached_input_tokens: 0,
+                      reasoning_tokens: null,
+                      conflicts: [],
+                      dropped_unknown_keys: 0,
+                    },
+                  },
+                };
+              }
+              if (name === "zcode_events") {
+                return {
+                  structuredContent: {
+                    task_id: args.task_id,
+                    status: "completed",
+                    events: [
+                      {
+                        seq: 1,
+                        at: "2026-11-20T01:24:50.000Z",
+                        type: "turn_started",
+                        summary: "started",
+                        details: { turn_id: "turn-start-plan" },
+                      },
+                      {
+                        seq: 2,
+                        at: "2026-11-20T01:24:55.000Z",
+                        type: "model_tool_call",
+                        summary: "edit",
+                        details: { tool_name: "write" },
+                      },
+                      {
+                        seq: 3,
+                        at: "2026-11-20T01:25:00.000Z",
+                        type: "turn_completed",
+                        summary: "completed",
+                        details: {
+                          usage: {
+                            input_tokens: 1_000,
+                            output_tokens: 20,
+                            total_tokens: 1_020,
+                            cached_input_tokens: 0,
+                          },
+                        },
+                      },
+                      { seq: 4, type: "released", details: { cleanup_digest: "a".repeat(64) } },
+                    ],
+                    next_seq: 4,
+                    has_more: false,
+                  },
+                };
+              }
+              if (name === "zcode_cancel") return { structuredContent: { status: "cancelled" } };
+              throw new Error(`unexpected tool ${name}`);
+            },
+          },
+          close: async () => {
+            closed += 1;
+          },
+        };
+      },
+    });
+    const result = await runner({
+      signal: new AbortController().signal,
+      provider: VERIFIED_START_PLAN_PROVIDER,
+      model: PRODUCTION_VERIFICATION_CONTRACT.model,
+      reasoning: "low",
+      taskMode: "code_edit",
+      beforeSnapshot: {
+        kind: "start_plan_billing_snapshot",
+        provider: { id: VERIFIED_START_PLAN_PROVIDER },
+      },
+    });
+    assert.equal(result.model_requests, 1);
+    assert.equal(result.runtime_evidence.provider, VERIFIED_START_PLAN_PROVIDER);
+    assert.equal(result.runtime_evidence.workspace_evidence.content_match, true);
+    assert.equal(result.runtime_evidence.event_coverage.model_tool_call_count, 1);
+    assert.equal(closed, 1);
   } finally {
     await Promise.all([
       rm(root, { recursive: true, force: true }),
@@ -361,7 +534,130 @@ test("production runner preserves a structured MCP task rejection code", async (
         reasoning: "low",
         beforeSnapshot: beforeSnapshot(),
       }),
-      { code: "TASK_ALREADY_EXISTS" },
+      (error) => {
+        assert.equal(error.code, "TASK_ALREADY_EXISTS");
+        assert.match(error.message, /duplicate/u);
+        return true;
+      },
+    );
+  } finally {
+    await Promise.all([
+      rm(root, { recursive: true, force: true }),
+      rm(stateRootParent, { recursive: true, force: true }),
+    ]);
+  }
+});
+
+test("production runner retains result evidence when a code-edit task makes no change", async () => {
+  await mkdir(RUN_ROOT, { recursive: true });
+  const root = await mkdtemp(path.join(RUN_ROOT, "production-runner-unedited-"));
+  const synthetic = await fixtureFiles(root);
+  const stateRootParent = path.join(RUN_ROOT, "production-runner-unedited-state");
+  let statusCalls = 0;
+  try {
+    const runner = createProductionCodingPlanVerificationRunner({
+      projectRoot: root,
+      bridgeEntryPath: synthetic.bridgeEntryPath,
+      createId: () => FIXED_ID,
+      pollIntervalMs: 1,
+      taskTimeoutMs: 5_000,
+      stateRootParent,
+      env: {
+        HOME: synthetic.userHome,
+        USERPROFILE: synthetic.userHome,
+        ZCODE_WINDOWS_APP_INSTALL_DIR: synthetic.install,
+      },
+      inspectRuntime: async () => verifiedRuntime(synthetic.install),
+      connectClient: async () => ({
+        client: {
+          callTool: async ({ name, arguments: args }) => {
+            if (name === "zcode_task") {
+              return { structuredContent: { task_id: args.task_id, status: "queued" } };
+            }
+            if (name === "zcode_status") {
+              statusCalls += 1;
+              return {
+                structuredContent: {
+                  task_id: args.task_id,
+                  attempt: 1,
+                  status: statusCalls === 1 ? "running" : "completed",
+                  exit_code: 0,
+                  zcode_session_id: "sess_unedited",
+                },
+              };
+            }
+            if (name === "zcode_result") {
+              return {
+                structuredContent: {
+                  task_id: args.task_id,
+                  status: "completed",
+                  files_changed: [],
+                  exit_code: 0,
+                  session_id: "sess_unedited",
+                  model: {
+                    provider_id: PRODUCTION_VERIFICATION_CONTRACT.provider,
+                    model_id: PRODUCTION_VERIFICATION_CONTRACT.model,
+                    effective_reasoning_level: "low",
+                  },
+                  usage: {
+                    source: "runtime",
+                    scope: "turn",
+                    observed_at: "2026-11-20T01:38:00.000Z",
+                    finality: "reported",
+                    input_tokens: 100,
+                    output_tokens: 10,
+                    total_tokens: 110,
+                    cached_input_tokens: 0,
+                    reasoning_tokens: null,
+                    conflicts: [],
+                    dropped_unknown_keys: 0,
+                  },
+                },
+              };
+            }
+            if (name === "zcode_events") {
+              return {
+                structuredContent: {
+                  task_id: args.task_id,
+                  status: "completed",
+                  events: [
+                    {
+                      seq: 1,
+                      at: "2026-11-20T01:37:50.000Z",
+                      type: "turn_completed",
+                      summary: "completed",
+                      details: { usage: { input_tokens: 100, output_tokens: 10, total_tokens: 110, cached_input_tokens: 0 } },
+                    },
+                    { seq: 2, type: "released", details: { cleanup_digest: "a".repeat(64) } },
+                  ],
+                  next_seq: 2,
+                  has_more: false,
+                },
+              };
+            }
+            if (name === "zcode_cancel") return { structuredContent: { status: "cancelled" } };
+            throw new Error(`unexpected tool ${name}`);
+          },
+        },
+        close: async () => undefined,
+      }),
+    });
+    await assert.rejects(
+      runner({
+        provider: PRODUCTION_VERIFICATION_CONTRACT.provider,
+        model: PRODUCTION_VERIFICATION_CONTRACT.model,
+        reasoning: "low",
+        taskMode: "code_edit",
+        beforeSnapshot: beforeSnapshot(),
+      }),
+      (error) => {
+        assert.equal(error.code, "COST_LAB_RESULT_VALIDATION_FAILED");
+        assert.match(error.message, /bridge_code_edit_unverified/u);
+        assert.equal(error.evidence.result_evidence.status, "completed");
+        assert.equal(error.evidence.usage, undefined);
+        assert.equal(error.evidence.workspace_evidence.content_changed, false);
+        return true;
+      },
     );
   } finally {
     await Promise.all([

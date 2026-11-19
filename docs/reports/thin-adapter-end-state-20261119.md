@@ -6,7 +6,7 @@
 > Baseline: `5501c60ecf3f1812a3d3170a670ab0031ea784d8`
 > ADR-041 implementation: `a676c6cd14573f2620339f992a345ed0715541ff` / tree `4d1b54835d4ebe1e1ae15113d5a152130a98480c`
 > Final Closure implementation: `f19ab1d75dcced7613bfe6e12c84d780d01f7127` / tree `dab3db21e5f51eb764ff421ab31901981964c3c2`
-> Verification follow-up: same branch, isolated fixture correction and current-tree verification
+> Verification follow-up: same branch, isolated fixture correction, Cost Lab production-runner repair, and current-tree verification
 > Scope: Thin Official Host architecture convergence, dynamic Provider gate, Runtime Auth fail-closed, and local verification
 
 ## 1. 结论
@@ -36,7 +36,13 @@ Codex Host
 - Direct stdio 只能通过显式 `ZCodeAppServerTestAdapter` 使用，公共 Core 不再导出 `ZCodeAppServerAdapter`，生产 Worker 不存在打包 Runtime fallback。
 - 三项 Official Host Patch 仍为 `UPSTREAM_PENDING`，没有把未上游化状态写成完成。
 
-本报告不宣称真实其他 Provider E2E、Start Plan Live E2E、真实 OAuth refresh 或发布验收通过。
+真实执行补充结果：Start Plan 已通过一次隔离的生产链路 code-edit E2E，
+Token 用量与官方 token-unit bucket 精确对齐；但其官方接口没有请求级价格账本，
+因此 Start Plan 模型倍率仍为 `NOT_VERIFIED`。Coding Plan 当前候选共有
+`2` 次独立 dispatch 尝试，均发生在约 `01:22` 与 `01:38`
+（Asia/Shanghai）；两次都没有取得可关联的模型 Usage 或官方积分变化，
+只能确认 `0` 个已证明的模型请求，结果保留 `INCONCLUSIVE`，未启动第三次请求。
+其他 Provider E2E、真实 OAuth refresh、Preview 合并和发布验收仍未完成。
 
 ## 2. 阶段 0：基线核验
 
@@ -94,8 +100,8 @@ Provider 选择不再等同于认证选择。实际认证仍由官方 Provider r
 
 | Provider 类型 | Runtime | Auth / Capability | 本地证据 | 真实 E2E |
 |---|---|---|---|---|
-| Coding Plan | Installed Official AppServer | Official Provider Runtime Auth；要求 `OFFICIAL_DISCOUNT_VERIFIED` | 定向、Provider capability、Model Catalog 合成测试 PASS；历史构建后 Coding Plan E2E PASS | 本轮 `NOT_RUN` |
-| Start Plan | Installed Official AppServer | Official Host 只读投影 + Bridge Live Entitlement/Private Lease/HANDLE/ACK；要求 `OFFLINE_COMPATIBLE`，不依赖 Coding Plan discount | 离线 Start Plan、Private Auth 与 capability 测试 PASS | `NOT_RUN` |
+| Coding Plan | Installed Official AppServer | Official Provider Runtime Auth；要求 `OFFICIAL_DISCOUNT_VERIFIED` | 定向、Provider capability、Model Catalog 合成测试 PASS；历史构建后 Coding Plan E2E PASS | 当前候选两次 dispatch 尝试均无可关联 Usage/积分，已证明模型请求 `0`，`INCONCLUSIVE` |
+| Start Plan | Installed Official AppServer | Official Host 只读投影 + Bridge Live Entitlement/Private Lease/HANDLE/ACK；要求 `OFFLINE_COMPATIBLE`，不依赖 Coding Plan discount | 离线 Start Plan、Private Auth 与 capability 测试 PASS | 一次真实 code-edit E2E `PASS`；Token 对账 `PASS`；倍率 `NOT_VERIFIED` |
 | Team Coding Plan / 其他 Zhipu account Provider | Installed Official AppServer | 官方 account/provider registry 与现有 account payload；不套用个人 Coding Plan 优惠结论 | 路由与 account payload 定向测试 PASS | `NOT_RUN` |
 | 内置或个人 API Key Provider | Installed Official AppServer | 官方 provider personal config / AppServer Provider 实现 | 路由选择 PASS；旧打包配置已移除 | `NOT_RUN` |
 | 自定义 Provider | Installed Official AppServer | 官方 provider 配置；缺失、不兼容或未知时由官方 AppServer 或 Runtime gate fail closed | 路由选择 PASS；不静默回退打包 Runtime | `NOT_RUN` |
@@ -268,6 +274,17 @@ checked-out worktree 的统计口径不同，报告不得混用。
 - 真实 OAuth/Billing 请求：`0`。
 - Stress gate：`STRESS_TESTS_NOT_APPLICABLE`；本轮没有声称压力测试 PASS。
 
+真实 E2E 补充前执行的实验工程测试：
+
+- `npm run cost-lab:test`：`82/82 PASS`。
+- 新增未修改结果证据与错误消息保留测试后，定向
+  `production-verification-runner.test.mjs`：`7/7 PASS`。
+- 随后再次运行完整 `npm run cost-lab:test`，结果见最终交付记录。
+- 实验执行器与测试变更触发 FULL impact 后，最终 `npm run test:affected`：
+  PASS；`945` tests，`943` PASS、`0` FAIL、`2` SKIP，
+  `1,465,282.2152 ms`。同一命令完成 typecheck、build、Plugin Validator、
+  生成物 Freshness 与 `git diff --check`，并输出 `FULL_REGRESSION_PASS`。
+
 第一次完整回归暴露并已修复的两项候选集成问题：
 
 - 新测试未进入 `test/test-impact-map.json`；
@@ -296,14 +313,18 @@ checked-out worktree 的统计口径不同，报告不得混用。
 ## 11. 未完成与限制
 
 - 其他 Provider 的真实模型 E2E：`NOT_RUN`。
-- Start Plan 使用当前安装版 Runtime 的 live Entitlement/E2E：`NOT_RUN`。
+- Start Plan 使用当前安装版 Runtime 的 live Entitlement、Private Lease、
+  code-edit、Usage 和 token-unit 对账：`PASS`。
+- Start Plan 请求级信用倍率：`NOT_VERIFIED`；官方当前仅返回 token-unit
+  balance，没有可用于推导 credit multiplier 的请求级价格账本。
+- Coding Plan 当前候选的真实 E2E：`INCONCLUSIVE`；两次独立 dispatch
+  尝试后都没有观察到可关联模型小时桶行或积分变化，已证明模型请求为 `0`。
 - 真实 OAuth refresh/账户轮换：`NOT_RUN`。
 - 外部 fork 对移除 `ZCodeAppServerAdapter` Core 导出的兼容性：`NOT_RUN`。
 - Windows x64 / Node `24.16.0` 以外的 Runtime 组合：`NOT_VERIFIED`。
 - 发布安装、Marketplace、Tag、Release 与 Preview：`NOT_RUN`。
 - 三项 Patch 尚未被官方上游等价实现替代。
-- Final Closure 的真实模型、Start Plan、OAuth、Billing 与 CAPTCHA E2E：`NOT_RUN`；
-  Adapter 级合成测试不能替代真实服务端权益或账单。
+- Final Closure 的 OAuth refresh 与 CAPTCHA E2E：`NOT_RUN`。
 - 第一次完整回归的 compiled stdio 临时失败未复现；最终全套 PASS，但套件顺序/
   环境交互风险仍保留。
 
@@ -328,4 +349,109 @@ Direct stdio -> ZCodeAppServerTestAdapter only
 Packaged AppServer -> absent + validator rejection
 ```
 
-因此架构收敛的实现主体已完成；剩余风险集中在尚未执行的真实 Provider/Start Plan/OAuth 验证、外部 fork 兼容性、上游 Patch 和发布流程。
+因此架构收敛的实现主体已完成。Start Plan 的真实执行和 Token 对账已补齐；
+剩余风险集中在 Coding Plan 当前候选的不可归因结果、Start Plan credit 倍率
+缺失、其他 Provider/OAuth live 验证、外部 fork 兼容性、上游 Patch 和发布流程。
+
+## 13. 真实 Plan E2E 补充（2026-11-20）
+
+### 13.1 Cost Lab 生产执行器修复
+
+真实执行前定位到一个实验执行器缺陷：
+
+- Runner 默认启动 `dist/src/mcp/main.js`，但没有设置
+  `ZCODE_BRIDGE_PLUGIN_MODE=1`。
+- Worker 入口因此解析为 `dist/src/worker/worker-main.js`，该目录没有
+  `vendor/official-host` 资产。
+- Start Plan issuer 的只读认证初始化因此返回 `null`，Task Admission 报
+  `TASK_INVALID`，且 MCP 结构化错误消息未进入实验 Evidence。
+
+修复仅限 Cost Lab 实验执行器：
+
+- 默认改为启动生产使用的
+  `plugins/codex-zcode-bridge/dist/bridge.mjs`；
+- 隔离子进程显式设置 `ZCODE_BRIDGE_PLUGIN_MODE=1`；
+- 保留 MCP 结构化错误消息；
+- 在结果校验前附加 partial runtime evidence，避免无文件修改或终端失败丢失
+  Session、事件、Result 和 Usage 证据。
+
+证据：
+
+- `.run/cost-lab-e2e/final-coding-e2e-20261120.json`
+- `.run/cost-lab-e2e/final-startplan-before-20261120.json`
+- `.run/cost-lab-e2e/final-startplan-e2e-20261120.json`
+- `.run/cost-lab-e2e/final-shared-before-20261120.json`
+- `.run/cost-lab-e2e/final-shared-after-20261120.json`
+
+### 13.2 Coding Plan
+
+- 第一次 dispatch：`2026-11-19T17:22:39.678Z` 至
+  `17:23:14.019Z`（Asia/Shanghai `2026-11-20 01:22:39` 至 `01:23:14`）。
+  before snapshot 为 `17:22:39.679Z`；Runner 报
+  `bridge_code_edit_unverified`，没有保留 Session、Result 或 Usage。
+- 第二次 dispatch：`2026-11-19T17:38:26.356Z` 至
+  `17:41:59.939Z`（Asia/Shanghai `2026-11-20 01:38:26` 至 `01:41:59`）。
+  fresh before snapshot 为 `2026-11-19T17:37:36.188Z`；Runner 再次报
+  `bridge_code_edit_unverified`。该次执行发生在 evidence-ordering 修复前，
+  因此也没有保留 Session、Result 或 Usage。
+- 两个窗口的立即与延迟 after snapshot 均未出现可关联模型行；两条
+  `CREDIT_LIMIT` 的 `currentValue` 保持 `0` 和 `4129`，没有可观察积分增量。
+- 没有启动第三次 Coding Plan dispatch。
+
+结论：
+
+```yaml
+CODING_PLAN_REAL_E2E: INCONCLUSIVE
+CODING_PLAN_DISPATCH_ATTEMPTS: 2
+CODING_PLAN_MODEL_REQUESTS_PROVEN: 0
+CODING_PLAN_OFFICIAL_CREDIT_DELTA: NOT_OBSERVED
+CODING_PLAN_MULTIPLIER: NOT_VERIFIED
+```
+
+不能把两次 dispatch 写成两次已证明模型请求，不能把“未观察到积分”写成
+“零积分请求”，也不能用缺失 Usage 推断 0.67。
+
+### 13.3 Start Plan
+
+- 新鲜 before snapshot：`2026-11-19T17:43:08.463Z`
+  （Asia/Shanghai `2026-11-20 01:43:08`）；Plan `active`、
+  `ZCODE GLOBAL BUILD`、entitlement `entitled`、bucket 初始
+  `used_units=0`。
+- 一次真实 production code-edit task：
+  Session `sess_3599a52f-06d1-420b-9060-a2e0f72c07c3`；
+  Provider `account:bigmodel-start-plan`；
+  Model `GLM-5.3-Flash`；Reasoning `low`。
+- 模型请求 1 个逻辑 turn，4 个实际工具调用（Write/Read/Write/Read），目标文件
+  内容发生预期修改并完成回读。
+- Runtime Usage：`input_tokens=113947`、`cached_input_tokens=90688`、
+  `output_tokens=415`、`total_tokens=114362`。
+- Fresh after snapshot：同一 bucket `used_units` 增加 `114362`，
+  `remaining_units` 减少 `114362`；Token 对账精确一致。
+- 读取前后凭据文件元数据不变，Keyring Lock 不存在，任务后无残留实验进程。
+
+结论：
+
+```yaml
+START_PLAN_REAL_E2E: PASS
+START_PLAN_TOKEN_RECONCILIATION: PASS
+START_PLAN_MULTIPLIER: NOT_VERIFIED
+```
+
+Start Plan 官方响应只提供 token-unit balance，未提供本次请求的 credit
+价格或倍率账本，因此不能把 token-unit 扣减换算成 `0.67` 或 `1.0`。
+
+### 13.4 共享状态、Host Wake 与发布
+
+- 凭据、`config.json`、`provider_config.json` 和 Keyring Lock 的路径级元数据
+  前后完全一致。
+- 未向 Host Wake、ZCode、Magpie 或其他 Agent 进程发送信号，也未修改其文件。
+- 此前 `TASK_INVALID` 遗留的两个精确验证根目录已确认无进程占用并清理；
+  成功 Start Plan task 的验证根目录由 Runner 自动释放。
+- 因 Coding Plan E2E 与倍率未通过，未创建或合并 Preview PR。
+
+```yaml
+SHARED_PERSISTENT_STATE_UNCHANGED: PASS
+HOST_WAKE_CONFLICT: NONE
+PREVIEW_MERGED: NO
+RELEASED: NO
+```
