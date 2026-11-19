@@ -485,10 +485,15 @@ Start Plan 官方响应只提供 token-unit balance，未提供本次请求的 c
   成功 Start Plan task 的验证根目录由 Runner 自动释放。
 - 第三次 Coding Plan 失败后没有残留 verification roots、Cost Lab server 或
   runner 进程；未创建或合并 Preview PR。
+- 清理 `thin-adapter-final-closure-verification-20261120` 时，非强制
+  `git worktree remove` 已解除 Git Worktree 注册，但 Windows
+  `Filename too long` 使目录未完全删除；该残留目录不是已注册 Worktree，
+  当前无相关 Node 进程。未使用强制删除或跨 shell 删除绕过限制。
 
 ```yaml
 SHARED_PERSISTENT_STATE_UNCHANGED: PASS
 HOST_WAKE_CONFLICT: NONE
+RESOURCE_CLEANUP: PARTIAL_UNREGISTERED_LONG_PATH_RESIDUAL
 PREVIEW_MERGED: NO
 RELEASED: NO
 ```
@@ -561,7 +566,7 @@ REAL_START_PLAN_E2E: PASS
 CODING_PLAN_MULTIPLIER: NOT_VERIFIED
 START_PLAN_MULTIPLIER: NOT_VERIFIED
 
-RESOURCE_CLEANUP: PASS
+RESOURCE_CLEANUP: PARTIAL_UNREGISTERED_LONG_PATH_RESIDUAL
 HOST_WAKE_CONFLICT: NONE
 PRODUCTION_CODE_CHANGED: NO
 START_PLAN_LIFECYCLE_CHANGED: NO
