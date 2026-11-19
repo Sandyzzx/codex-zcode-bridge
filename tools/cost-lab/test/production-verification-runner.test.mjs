@@ -654,7 +654,9 @@ test("production runner retains result evidence when a code-edit task makes no c
         assert.equal(error.code, "COST_LAB_RESULT_VALIDATION_FAILED");
         assert.match(error.message, /bridge_code_edit_unverified/u);
         assert.equal(error.evidence.result_evidence.status, "completed");
-        assert.equal(error.evidence.usage, undefined);
+        assert.equal(error.evidence.model_requests, 1);
+        assert.equal(error.evidence.usage.total_tokens, 110);
+        assert.equal(error.evidence.hour, 9);
         assert.equal(error.evidence.workspace_evidence.content_changed, false);
         return true;
       },

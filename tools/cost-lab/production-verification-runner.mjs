@@ -16,11 +16,11 @@ export const VERIFIED_PROVIDER = "account:bigmodel-individual-coding-plan";
 export const VERIFIED_START_PLAN_PROVIDER = "account:bigmodel-start-plan";
 export const VERIFIED_MODEL = "GLM-5.3-Flash";
 export const RESPONSE_MARKER = "COSTLAB_PRODUCTION_VERIFICATION_OK";
-export const CODE_EDIT_RELATIVE_PATH = "src/greeting.js";
+export const CODE_EDIT_RELATIVE_PATH = "src/value.js";
 export const CODE_EDIT_SEED_CONTENT =
-  'export function greeting() {\n  return "wrong";\n}\n';
+  'export const value = 0;\n';
 export const CODE_EDIT_EXPECTED_CONTENT =
-  'export function greeting() {\n  return "costlab-e2e-ok";\n}\n';
+  'export const value = 42;\n';
 const PROVIDER_SNAPSHOT_KINDS = Object.freeze({
   [VERIFIED_PROVIDER]: "coding_plan_billing_snapshot",
   [VERIFIED_START_PLAN_PROVIDER]: "start_plan_billing_snapshot",
@@ -232,7 +232,12 @@ export function createProductionCodingPlanVerificationRunner(options = {}) {
           workspace_evidence: workspaceEvidence,
           stderr_markers: stderr.markers(),
         };
-        partialEvidence = runtimeEvidence;
+        partialEvidence = {
+          ...runtimeEvidence,
+          model_requests: countLogicalModelAttempts(modelEvents),
+          usage: usageEvidence.usage,
+          hour: verificationHour(usageEvidence.usage, startedAt),
+        };
         phase = "result_validation";
         if (result.status === "failed" || result.status === "cancelled" || status.status !== "completed") {
           throw new Error(`bridge_task_terminal_${String(result.status ?? status.status)}`);
