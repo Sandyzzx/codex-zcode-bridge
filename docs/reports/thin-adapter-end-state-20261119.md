@@ -7,6 +7,7 @@
 > ADR-041 implementation: `a676c6cd14573f2620339f992a345ed0715541ff` / tree `4d1b54835d4ebe1e1ae15113d5a152130a98480c`
 > Final Closure implementation: `f19ab1d75dcced7613bfe6e12c84d780d01f7127` / tree `dab3db21e5f51eb764ff421ab31901981964c3c2`
 > Verification follow-up: same branch, isolated fixture correction, Cost Lab production-runner repair, and current-tree verification
+> Final evidence commit: `657849f0c` (Cost Lab failed-result usage preservation)
 > Scope: Thin Official Host architecture convergence, dynamic Provider gate, Runtime Auth fail-closed, and local verification
 
 ## 1. 结论
@@ -39,9 +40,11 @@ Codex Host
 真实执行补充结果：Start Plan 已通过一次隔离的生产链路 code-edit E2E，
 Token 用量与官方 token-unit bucket 精确对齐；但其官方接口没有请求级价格账本，
 因此 Start Plan 模型倍率仍为 `NOT_VERIFIED`。Coding Plan 当前候选共有
-`2` 次独立 dispatch 尝试，均发生在约 `01:22` 与 `01:38`
-（Asia/Shanghai）；两次都没有取得可关联的模型 Usage 或官方积分变化，
-只能确认 `0` 个已证明的模型请求，结果保留 `INCONCLUSIVE`，未启动第三次请求。
+`3` 次独立 dispatch 尝试，发生在约 `01:22`、`01:38` 与 `04:06`
+（Asia/Shanghai）。第三次已保留 `turn_started` / `turn_failed` 和
+`USAGE_MISSING` Evidence，但官方小时桶仍没有可关联模型行，积分上限保持
+`0` / `4129`，因此仍不能证明一次模型 HTTP 请求或计算倍率，结果保留
+`INCONCLUSIVE`。
 其他 Provider E2E、真实 OAuth refresh、Preview 合并和发布验收仍未完成。
 
 ## 2. 阶段 0：基线核验
@@ -100,7 +103,7 @@ Provider 选择不再等同于认证选择。实际认证仍由官方 Provider r
 
 | Provider 类型 | Runtime | Auth / Capability | 本地证据 | 真实 E2E |
 |---|---|---|---|---|
-| Coding Plan | Installed Official AppServer | Official Provider Runtime Auth；要求 `OFFICIAL_DISCOUNT_VERIFIED` | 定向、Provider capability、Model Catalog 合成测试 PASS；历史构建后 Coding Plan E2E PASS | 当前候选两次 dispatch 尝试均无可关联 Usage/积分，已证明模型请求 `0`，`INCONCLUSIVE` |
+| Coding Plan | Installed Official AppServer | Official Provider Runtime Auth；要求 `OFFICIAL_DISCOUNT_VERIFIED` | 定向、Provider capability、Model Catalog 合成测试 PASS；历史构建后 Coding Plan E2E PASS | 当前候选三次 dispatch 尝试均无可关联 Usage/积分；第三个 attempt 以 `turn_failed` / `USAGE_MISSING` 结束，`INCONCLUSIVE` |
 | Start Plan | Installed Official AppServer | Official Host 只读投影 + Bridge Live Entitlement/Private Lease/HANDLE/ACK；要求 `OFFLINE_COMPATIBLE`，不依赖 Coding Plan discount | 离线 Start Plan、Private Auth 与 capability 测试 PASS | 一次真实 code-edit E2E `PASS`；Token 对账 `PASS`；倍率 `NOT_VERIFIED` |
 | Team Coding Plan / 其他 Zhipu account Provider | Installed Official AppServer | 官方 account/provider registry 与现有 account payload；不套用个人 Coding Plan 优惠结论 | 路由与 account payload 定向测试 PASS | `NOT_RUN` |
 | 内置或个人 API Key Provider | Installed Official AppServer | 官方 provider personal config / AppServer Provider 实现 | 路由选择 PASS；旧打包配置已移除 | `NOT_RUN` |
@@ -276,13 +279,13 @@ checked-out worktree 的统计口径不同，报告不得混用。
 
 真实 E2E 补充前执行的实验工程测试：
 
-- `npm run cost-lab:test`：`82/82 PASS`。
+- `npm run cost-lab:test`：`84/84 PASS`。
 - 新增未修改结果证据与错误消息保留测试后，定向
   `production-verification-runner.test.mjs`：`7/7 PASS`。
 - 随后再次运行完整 `npm run cost-lab:test`，结果见最终交付记录。
 - 实验执行器与测试变更触发 FULL impact 后，最终 `npm run test:affected`：
   PASS；`945` tests，`943` PASS、`0` FAIL、`2` SKIP，
-  `1,465,282.2152 ms`。同一命令完成 typecheck、build、Plugin Validator、
+  `1,475,030.4823 ms`。同一命令完成 typecheck、build、Plugin Validator、
   生成物 Freshness 与 `git diff --check`，并输出 `FULL_REGRESSION_PASS`。
 
 第一次完整回归暴露并已修复的两项候选集成问题：
@@ -317,8 +320,10 @@ checked-out worktree 的统计口径不同，报告不得混用。
   code-edit、Usage 和 token-unit 对账：`PASS`。
 - Start Plan 请求级信用倍率：`NOT_VERIFIED`；官方当前仅返回 token-unit
   balance，没有可用于推导 credit multiplier 的请求级价格账本。
-- Coding Plan 当前候选的真实 E2E：`INCONCLUSIVE`；两次独立 dispatch
-  尝试后都没有观察到可关联模型小时桶行或积分变化，已证明模型请求为 `0`。
+- Coding Plan 当前候选的真实 E2E：`INCONCLUSIVE`；三次独立 dispatch
+  尝试后都没有观察到可关联模型小时桶行或积分变化。第三次保留了
+  `turn_failed` / `USAGE_MISSING` 的失败证据，但仍不能证明模型 HTTP 请求，
+  也没有可归因积分。
 - 真实 OAuth refresh/账户轮换：`NOT_RUN`。
 - 外部 fork 对移除 `ZCodeAppServerAdapter` Core 导出的兼容性：`NOT_RUN`。
 - Windows x64 / Node `24.16.0` 以外的 Runtime 组合：`NOT_VERIFIED`。
@@ -375,9 +380,21 @@ Packaged AppServer -> absent + validator rejection
 - 在结果校验前附加 partial runtime evidence，避免无文件修改或终端失败丢失
   Session、事件、Result 和 Usage 证据。
 
+最终补充只修复实验端生命周期，不改变生产执行路径：
+
+- `web-server` 将 `task_mode` 从请求记录传递到 production runner；
+- runner 在 result validation 失败时保留 `model_requests`、`usage` 和 `hour`；
+- failed task evidence 仍经过 `redactValue`，不会向浏览器或历史导出凭据；
+- Coding Plan 的空小时桶不能使用模型过滤快照（`model_not_found`），因此
+  本次保存 before/after 时直接复用现有官方 accessor 的无模型过滤只读快照；
+  没有创建第二套认证或 Billing Client。
+
 证据：
 
 - `.run/cost-lab-e2e/final-coding-e2e-20261120.json`
+- `.run/cost-lab-e2e/final-coding-before-v2-20261120.json`
+- `.run/cost-lab-e2e/final-coding-v2-20261120.json`
+- `.run/cost-lab-e2e/final-coding-after-failure-v2-20261120.json`
 - `.run/cost-lab-e2e/final-startplan-before-20261120.json`
 - `.run/cost-lab-e2e/final-startplan-e2e-20261120.json`
 - `.run/cost-lab-e2e/final-shared-before-20261120.json`
@@ -396,20 +413,37 @@ Packaged AppServer -> absent + validator rejection
   因此也没有保留 Session、Result 或 Usage。
 - 两个窗口的立即与延迟 after snapshot 均未出现可关联模型行；两条
   `CREDIT_LIMIT` 的 `currentValue` 保持 `0` 和 `4129`，没有可观察积分增量。
-- 没有启动第三次 Coding Plan dispatch。
+- 第三次 dispatch（本轮）：`2026-11-19T20:06:16.669Z` 至
+  `20:06:48.512Z`（Asia/Shanghai `2026-11-20 04:06:16` 至 `04:06:48`）。
+  before snapshot 为 `20:06:16.670Z`；after snapshot 为 `20:07:30.016Z`。
+  两者都是 fresh official accessor 结果，但 `models=[]`、模型小时桶为空，
+  `CREDIT_LIMIT.currentValue` 仍为 `0` 和 `4129`。
+- 第三次 attempt 的 production Evidence：Session
+  `sess_91fcb1f9-8d73-4e52-a10e-a03e39597738`，Provider
+  `account:bigmodel-individual-coding-plan`，Model `GLM-5.3-Flash`；
+  `turn_started` 两次，随后 `turn_failed`，错误为
+  `zcode_nonzero_exit`。`model_requests=1` 只是 runner 的逻辑 terminal
+  attempt 计数，`usage=null`、`model_http_requests=null`、
+  `auxiliary_usage_coverage=USAGE_MISSING`，目标文件未改变，因此不能证明
+  模型 HTTP 请求成功，也不能计算 Token 或积分。
+- 本轮没有重试该失败 task，也没有启动第四个 Coding Plan dispatch。
 
 结论：
 
 ```yaml
 CODING_PLAN_REAL_E2E: INCONCLUSIVE
-CODING_PLAN_DISPATCH_ATTEMPTS: 2
+CODING_PLAN_DISPATCH_ATTEMPTS: 3
 CODING_PLAN_MODEL_REQUESTS_PROVEN: 0
+CODING_PLAN_LAST_TERMINAL: zcode_nonzero_exit
+CODING_PLAN_LAST_USAGE: null
 CODING_PLAN_OFFICIAL_CREDIT_DELTA: NOT_OBSERVED
 CODING_PLAN_MULTIPLIER: NOT_VERIFIED
 ```
 
-不能把两次 dispatch 写成两次已证明模型请求，不能把“未观察到积分”写成
-“零积分请求”，也不能用缺失 Usage 推断 0.67。
+不能把三次 dispatch 写成三次已证明模型请求，不能把“未观察到积分”写成
+“零积分请求”，也不能用缺失 Usage 推断 0.67。第三次失败的精确外部原因仍是
+`UNKNOWN`：当前 MCP Evidence 只暴露 `zcode_nonzero_exit`，没有 401、403、
+3012 或其他可归因 Provider 错误；因此不能据此宣称账户风控，也不能重试。
 
 ### 13.3 Start Plan
 
@@ -428,6 +462,8 @@ CODING_PLAN_MULTIPLIER: NOT_VERIFIED
 - Fresh after snapshot：同一 bucket `used_units` 增加 `114362`，
   `remaining_units` 减少 `114362`；Token 对账精确一致。
 - 读取前后凭据文件元数据不变，Keyring Lock 不存在，任务后无残留实验进程。
+- 该 Start Plan E2E 产生于生产执行路径未再变化的候选上；后续提交只修改
+  Cost Lab 实验执行器的失败 Evidence 与测试，不改变 Start Plan 运行时代码。
 
 结论：
 
@@ -447,11 +483,99 @@ Start Plan 官方响应只提供 token-unit balance，未提供本次请求的 c
 - 未向 Host Wake、ZCode、Magpie 或其他 Agent 进程发送信号，也未修改其文件。
 - 此前 `TASK_INVALID` 遗留的两个精确验证根目录已确认无进程占用并清理；
   成功 Start Plan task 的验证根目录由 Runner 自动释放。
-- 因 Coding Plan E2E 与倍率未通过，未创建或合并 Preview PR。
+- 第三次 Coding Plan 失败后没有残留 verification roots、Cost Lab server 或
+  runner 进程；未创建或合并 Preview PR。
 
 ```yaml
 SHARED_PERSISTENT_STATE_UNCHANGED: PASS
 HOST_WAKE_CONFLICT: NONE
 PREVIEW_MERGED: NO
 RELEASED: NO
+```
+
+### 13.5 最终门禁
+
+以下 `PRODUCTION_CODE_CHANGED: NO` 仅指本轮 Final Billing E2E 延续没有修改
+生产执行路径；本分支此前的 Thin Adapter Final Closure 仍包含已提交的生产架构
+收敛。
+
+```yaml
+GOAL: THIN_ADAPTER_FINAL_CLOSURE_AND_REAL_E2E
+
+FINAL_CLOSURE: PASS
+KEYRING_LOCK_SEMANTICS: PASS
+SHARED_PERSISTENT_STATE_UNCHANGED: PASS
+OFFICIAL_BILLING_ACCESS: PASS
+OFFICIAL_ASSEMBLY_INIT: PASS
+APPSERVER_LIFECYCLE: PASS
+
+B_REAL_TASKS: 1
+B_MODEL_REQUESTS_PROVEN: 0
+B_HTTP_REQUESTS: UNKNOWN
+B_TOTAL_TOKENS: null
+B_ACTUAL_CREDITS: null
+B_EXPECTED_NORMAL: null
+B_EXPECTED_WITH_0_67: null
+B_DISCOUNT: INCONCLUSIVE
+BILLING_RECONCILIATION: NOT_POSSIBLE_USAGE_MISSING
+PROJECT_IDENTITY_PARITY: UNKNOWN
+
+CODING_PLAN:
+  REAL_E2E: INCONCLUSIVE
+  ACTUAL_MODEL: GLM-5.3-Flash
+  PROVIDER_ID: account:bigmodel-individual-coding-plan
+  RUNTIME_VERSION: 3.18.2.10443
+  CAPABILITY_GATE: PASS
+  AUTH: INCONCLUSIVE
+  USAGE: USAGE_MISSING
+  OFFICIAL_MULTIPLIER: 0.67_DECLARED_NOT_OBSERVED
+  OBSERVED_MULTIPLIER: null
+  BILLING_RECONCILIATION: NOT_POSSIBLE_USAGE_MISSING
+
+START_PLAN:
+  REAL_E2E: PASS
+  ACTUAL_MODEL: GLM-5.3-Flash
+  PROVIDER_ID: account:bigmodel-start-plan
+  RUNTIME_VERSION: 3.18.2.10443
+  LIVE_ENTITLEMENT: PASS
+  PRIVATE_LEASE: PASS
+  CAPABILITY_GATE: PASS
+  AUTH: PASS
+  USAGE: input=113947; cached_input=90688; output=415; total=114362
+  OFFICIAL_MULTIPLIER: NOT_EXPOSED_BY_TOKEN_UNIT_BALANCE
+  OBSERVED_MULTIPLIER: NOT_VERIFIED
+  BILLING_RECONCILIATION: PASS_TOKEN_UNITS_DELTA_114362
+
+TESTS:
+  TYPECHECK: PASS
+  BUILD: PASS
+  VALIDATE_PLUGIN: PASS
+  TEST_AFFECTED: PASS
+  CHECK_GENERATED: PASS
+  COST_LAB: PASS_84_OF_84
+  FULL_OR_REQUIRED_REGRESSION: PASS_945_TESTS_943_PASS_0_FAIL_2_SKIP
+  CI: NOT_RUN
+
+REAL_CODING_PLAN_E2E: BLOCKED
+REAL_START_PLAN_E2E: PASS
+CODING_PLAN_MULTIPLIER: NOT_VERIFIED
+START_PLAN_MULTIPLIER: NOT_VERIFIED
+
+RESOURCE_CLEANUP: PASS
+HOST_WAKE_CONFLICT: NONE
+PRODUCTION_CODE_CHANGED: NO
+START_PLAN_LIFECYCLE_CHANGED: NO
+
+FINAL_BRANCH: codex/unified-official-appserver-startplan-20261119
+FINAL_COMMIT: 657849f0cccc082a4bcc22ef128b1f7d249539304
+TREE: 28bc6fadb3dc3e6b80d954bf792c780ef1e5e20b
+PREVIEW_BASE: f5390897978be995b3a942feaeaac0170e8849fa
+MERGE_COMMIT: null
+PREVIEW_MERGED: NO
+POST_MERGE_CI: NOT_RUN
+RELEASED: NO
+
+REPORT: docs/reports/thin-adapter-end-state-20261119.md
+NEXT_ACTION: STOP_AND_INVESTIGATE_CODING_PLAN_TERMINAL_FAILURE
+FINAL_VERDICT: BLOCKED
 ```
