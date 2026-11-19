@@ -173,7 +173,8 @@ STRESS_TESTS_NOT_APPLICABLE
 - Browser localStorage 仅保存语言偏好，不保存凭据或账单正文。
 - 根工作区已有的 `M AGENTS.md` 和 `?? $null` 未修改。
 - 功能 Worktree 内由错误 shell 语法生成的本地空 `$null` 文件已删除。
-- 未执行 Push/Merge/PR/Preview 发布；最终 Git 交付状态以本任务末次报告为准。
+- 功能分支已推送至 `origin/codex/cost-lab-agent-profiler-20261119`。
+- 未创建 PR，未 Merge，未发布 Preview。
 
 ## 7. 独立审计
 
