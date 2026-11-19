@@ -1,11 +1,12 @@
 # Thin Adapter End-State 收敛报告
 
 > Status: RESEARCH
-> Date: 2026-11-19
+> Date: 2026-11-20
 > Branch: `codex/unified-official-appserver-startplan-20261119`
 > Baseline: `5501c60ecf3f1812a3d3170a670ab0031ea784d8`
 > ADR-041 implementation: `a676c6cd14573f2620339f992a345ed0715541ff` / tree `4d1b54835d4ebe1e1ae15113d5a152130a98480c`
-> Candidate: same-branch Final Closure owner-review commit, not pushed
+> Final Closure implementation: `f19ab1d75dcced7613bfe6e12c84d780d01f7127` / tree `dab3db21e5f51eb764ff421ab31901981964c3c2`
+> Verification follow-up: same branch, isolated fixture correction and current-tree verification
 > Scope: Thin Official Host architecture convergence, dynamic Provider gate, Runtime Auth fail-closed, and local verification
 
 ## 1. 结论
@@ -202,13 +203,15 @@ Official Host artifact：
 |---|---:|---:|
 | Baseline Git Tree `5501c60...` | 55 | 51,429,420 |
 | ADR-041 Git Tree `a676c6c...` | 53 | 19,378,497 |
+| Final Closure Git Tree `f19ab1d...` | 53 | 19,382,606 |
 
-减少 `32,050,923` bytes，约 `30.57 MiB`。统计命令为
+Final Closure 相对 baseline 减少 `32,046,814` bytes，约 `30.56 MiB`。统计命令为
 `git ls-tree -r -l <commit> plugins/codex-zcode-bridge`，对 blob size 求和；
 该口径包含生成 Bundle、Browser backend、Official Host closure、许可和元数据，
 不是只看源码 LOC 的收益。
 
-当前 Windows 工作区同一目录为 `19,380,296` bytes，比 Git Tree 多 `1,799` bytes，
+当前 Windows 工作区同一目录为 `19,384,405` bytes，比 Final Closure Git Tree 多
+`1,799` bytes，
 原因是本机 `core.autocrlf=true` 将文本文件展开为 CRLF。ZIP、Git Tree 与
 checked-out worktree 的统计口径不同，报告不得混用。
 
@@ -245,7 +248,16 @@ checked-out worktree 的统计口径不同，报告不得混用。
 - Final Closure `npm run test:inventory`：PASS；`882` declarations / `91` mapped files。
 - Final Closure `npm run validate:plugin`：PASS。
 - Final Closure `git diff --check`：PASS；仅报告 `LF -> CRLF` 工作区警告。
-- `npm run test:affected`：类型检查、构建与 Plugin Validator PASS；选择 `FULL_SUITE`，最终仅在 `check:generated` 因生成物尚未提交而失败。该失败是未提交 working-tree 前置条件，不是源码、构建或测试失败。
+- Final Closure 修正 fixture 后，在正式隔离执行器中运行完整
+  `mvp-real-adapter` fixture：`56/56 PASS`，包含 ADR-031 post-startup login、
+  Start Plan fallback 与 Coding Plan explicit-provider 路径。
+- `npm run test:affected`：早先一次 `FULL_SUITE` 运行在 ADR-031 的
+  post-startup login 用例上失败；该用例随后在正式隔离器单独运行
+  `1/1 PASS`，完整 fixture 串行运行亦为 `56/56 PASS`。
+- 最终 `npm run test:affected`：PASS；受影响选择命中 `854` tests，
+  `853` PASS、`0` FAIL、`1` SKIP，`1,448,053.9254 ms`。同一命令完成
+  typecheck、build、Plugin Validator、生成物 Freshness 与 `git diff --check`，
+  并命中并通过 SQLite stress gate：`STRESS_TEST_REQUIRED_AND_PASS`。
 - Final `npm run test:full`：PASS；`942` tests，`940` PASS，`0` FAIL，`2` SKIP，
   `1,347,468.6958 ms`。
 - `npm run test:clean-entrypoints`：PASS；`4/4` tests，覆盖 bundled Core、compiled stdio、marketplace launcher 与 compiled Worker 拒绝路径。

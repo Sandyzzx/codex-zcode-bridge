@@ -1,9 +1,9 @@
 # Project State
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-19（ADR-041 Thin Official Host end state + Final Closure）
-> Last verified: 2026-11-19，核对 ADR-041 已推送实现、动态 Runtime-selected Provider capability gate、生产 Runtime Auth fail-closed、生成物、Plugin Validator、clean entrypoints 与定向测试；真实模型/OAuth/Billing 请求未在本轮运行。
-> Verified against: baseline `5501c60ecf3f1812a3d3170a670ab0031ea784d8`；ADR-041 implementation `a676c6cd14573f2620339f992a345ed0715541ff`（tree `4d1b54835d4ebe1e1ae15113d5a152130a98480c`）；同分支 Final Closure owner-review commit（未 Push）
+> Last updated: 2026-11-20（ADR-041 Thin Official Host end state + Final Closure）
+> Last verified: 2026-11-20，核对 ADR-041 实现、动态 Runtime-selected Provider capability gate、生产 Runtime Auth fail-closed、生成物、Plugin Validator、clean entrypoints、隔离 fixture 与定向测试；真实模型/OAuth/Billing 请求单独记录。
+> Verified against: baseline `5501c60ecf3f1812a3d3170a670ab0031ea784d8`；ADR-041 implementation `a676c6cd14573f2620339f992a345ed0715541ff`（tree `4d1b54835d4ebe1e1ae15113d5a152130a98480c`）；Final Closure implementation `f19ab1d75dcced7613bfe6e12c84d780d01f7127`（tree `dab3db21e5f51eb764ff421ab31901981964c3c2`）+ 同分支隔离验证 follow-up
 
 当前发布状态：
 
@@ -12,7 +12,7 @@
 - Preview `2.0.0-preview.6`：Owner 已批准发布。支持声明限定为 Windows x64、Node.js `24.16.0` 与已安装的官方 ZCode Desktop `3.18.2.10443`。
 - Preview `2.0.0-preview.7`：在 Preview.6 上应用 ADR-038 整改，并修复 CI dispatch 边界与 Events summary 分页。
 - Preview `2.0.0-preview.8`：包含 ADR-039 Host 授权取消与新鲜 Cleanup Proof 绑定；支持范围限定为 Windows x64、Node.js `24.16.0` 与已安装的官方 ZCode Desktop `3.18.2.10443`。
-- `2.0.0-preview.9` 发布候选：在 Preview.8 基线上增加 ADR-040 安装版 AppServer、ADR-041 Thin Official Host 收敛、Cost Lab Web、Start Plan 离线审计和正式证据。ADR-041 implementation 已推送至 `a676c6cd14573f2620339f992a345ed0715541ff`；随后的 Final Closure 只包含动态 Provider 门禁、Runtime Auth fail-closed、测试与文档收尾，作为本地 owner-review commit 保留且未 Push。
+- `2.0.0-preview.9` 发布候选：在 Preview.8 基线上增加 ADR-040 安装版 AppServer、ADR-041 Thin Official Host 收敛、Cost Lab Web、Start Plan 离线审计和正式证据。ADR-041 implementation 为 `a676c6cd14573f2620339f992a345ed0715541ff`；Final Closure implementation 为 `f19ab1d75dcced7613bfe6e12c84d780d01f7127`，覆盖动态 Provider 门禁、Runtime Auth fail-closed、测试与文档收尾。该候选只有在真实 E2E、倍率验证和预览合并门禁全部满足后才允许进入 `preview`。
 
 ## 当前生产架构
 

@@ -3,9 +3,9 @@
 > Status: AUTHORITATIVE
 
 > 2026-11-16 本地候选修订：[ADR-039](decisions/ADR-039-host-authorized-cancellation.md) 将取消授权与清理事实分离。queued + Launch Intent 无 Claim 时允许原子持久化取消并禁止迟到 Claim，未证明的进程/资源占用保留；Running 的 cleanup-only Hold 可经新鲜取消树证明追加消解记录，再继续原 CAS。此修复不增加 MCP 工具、Schema、重派或第二套恢复引擎。
-> Last updated: 2026-11-19（ADR-041 Thin Official Host end state + Final Closure）
-> Last verified: 2026-11-19，核对 ADR-041 已推送实现、动态 Runtime-selected Provider capability gate、生产 Runtime Auth fail-closed、生成物与插件校验及定向测试；真实模型、OAuth、Billing 和发布验收未在本轮运行。
-> Verified against: baseline `5501c60ecf3f1812a3d3170a670ab0031ea784d8`；ADR-041 implementation `a676c6cd14573f2620339f992a345ed0715541ff`（tree `4d1b54835d4ebe1e1ae15113d5a152130a98480c`）；同分支 Final Closure owner-review commit（未 Push）
+> Last updated: 2026-11-20（ADR-041 Thin Official Host end state + Final Closure）
+> Last verified: 2026-11-20，核对 ADR-041 实现、动态 Runtime-selected Provider capability gate、生产 Runtime Auth fail-closed、生成物与插件校验、隔离 fixture 和定向测试；真实模型、OAuth、Billing 与发布验收继续单独记录。
+> Verified against: baseline `5501c60ecf3f1812a3d3170a670ab0031ea784d8`；ADR-041 implementation `a676c6cd14573f2620339f992a345ed0715541ff`（tree `4d1b54835d4ebe1e1ae15113d5a152130a98480c`）；Final Closure implementation `f19ab1d75dcced7613bfe6e12c84d780d01f7127`（tree `dab3db21e5f51eb764ff421ab31901981964c3c2`）+ 同分支隔离验证 follow-up
 > ADR-039 Last verified: 2026-11-16，仅取消接线及定向隔离测试；基线 `ec5f3e83d737df469f9ed54361d2aec46b4a15a8` + 本地候选。生产取消未重试。
 
 本文件描述当前 Preview.9 候选的生产架构。Windows x64 已默认切换到官方 Host 路径，R7 Runtime Events/Usage 复用同一 SQLite Authority；候选保留 ZCode 3.18.2 Host 模块、官方 Start Plan 认证投影与官方签名 runtime host，并完成 ADR-041 的 Thin Official Host 收敛。公开合同继续以 [INTERFACES.md](INTERFACES.md) 为准，宿主和运行配置分别见 [SHARED_CORE.md](SHARED_CORE.md) 与 [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md)。

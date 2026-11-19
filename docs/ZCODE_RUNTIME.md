@@ -1,9 +1,9 @@
 # ZCode 运行配置边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-19（ADR-041 Thin Official Host end state + Final Closure）
-> Last verified: 2026-11-19，核对安装版 ZCode `3.18.2.10443` 的 Bundle、builtin Provider 配置、runtime host、Node 范围、共享 Resolver/session factory、动态 capability gate、生产 Runtime Auth fail-closed、BOM 和模型目录 Worker-shaped URL；真实 Start Plan 认证、权益、账单和模型请求未在本轮运行。
-> Verified against: baseline `5501c60ecf3f1812a3d3170a670ab0031ea784d8`；ADR-041 implementation `a676c6cd14573f2620339f992a345ed0715541ff`（tree `4d1b54835d4ebe1e1ae15113d5a152130a98480c`）；同分支 Final Closure owner-review commit（未 Push）
+> Last updated: 2026-11-20（ADR-041 Thin Official Host end state + Final Closure）
+> Last verified: 2026-11-20，核对安装版 ZCode `3.18.2.10443` 的 Bundle、builtin Provider 配置、runtime host、Node 范围、共享 Resolver/session factory、动态 capability gate、生产 Runtime Auth fail-closed、BOM 和模型目录 Worker-shaped URL；真实 Start Plan 认证、权益、账单和模型请求单独记录。
+> Verified against: baseline `5501c60ecf3f1812a3d3170a670ab0031ea784d8`；ADR-041 implementation `a676c6cd14573f2620339f992a345ed0715541ff`（tree `4d1b54835d4ebe1e1ae15113d5a152130a98480c`）；Final Closure implementation `f19ab1d75dcced7613bfe6e12c84d780d01f7127`（tree `dab3db21e5f51eb764ff421ab31901981964c3c2`）+ 同分支隔离验证 follow-up
 
 当前生产路径是 `node <installed-runtime>/resources/glm/zcode.cjs app-server --stdio --surface desktop`，不是历史 CLI `--prompt --json`。任务 Adapter 与模型目录探测共用 `createInstalledOfficialHostSessionFactory` 的同一启动合同；安装版兼容性由 `OfficialAppServerRuntimeResolver` 精确校验，配置项与用户设置方法见仓库 README。
 

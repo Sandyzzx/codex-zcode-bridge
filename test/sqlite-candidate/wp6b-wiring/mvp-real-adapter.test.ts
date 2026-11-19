@@ -257,8 +257,13 @@ function writeFakeRuntime(name: string, variant: RuntimeVariant): FakeRuntimeFix
       providerConfigRules: { providerRules: [{
         providerId: "account:bigmodel-start-plan",
         config: { builtinModelIds: ["GLM-5.3-Flash", "GLM-5-Air"], access: { type: "zhipu-account", mode: "start-plan", accountType: "bigmodel" } },
-        // ADR-031 fallback target: a coding plan provider advertising the
-        // same official model id in the fixture registry.
+      }, {
+        // The installed 3.18.2 registry exposes Coding Plan through its
+        // account-backed Provider ID. Keep it first so routing exercises the
+        // current official identity rather than a legacy compatibility alias.
+        providerId: "account:bigmodel-individual-coding-plan",
+        config: { builtinModelIds: ["GLM-5.3-Flash"], access: { type: "zhipu-account", mode: "individual-coding-plan", accountType: "bigmodel" } },
+        // Legacy compatibility alias retained for explicit-provider tests.
       }, {
         providerId: "builtin:bigmodel-coding-plan",
         config: { builtinModelIds: ["GLM-5.3-Flash"], access: { type: "api-key", mode: "individual-coding-plan" } },
@@ -2313,7 +2318,7 @@ test("ADR-031 Gate E1: a confirmed unavailable verdict falls back to the coding 
     assert.equal(gate.checks.length, 0, "the execution-time fallback must not consume a Billing request");
     const requests = readFileSync(runtime.requestLog, "utf8").trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
     const setModel = requests.find((message) => message.method === "session/setModel") as { params?: { model?: { providerId?: string; modelId?: string } } } | undefined;
-    assert.equal(setModel?.params?.model?.providerId, "builtin:bigmodel-coding-plan");
+    assert.equal(setModel?.params?.model?.providerId, "account:bigmodel-individual-coding-plan");
     assert.equal(setModel?.params?.model?.modelId, "GLM-5.3-Flash", "the fallback must keep the same official model id");
   }, { runtimeVariant: "success", routingHooks: { journal }, preserveFixtureOnFailure: true });
 });
