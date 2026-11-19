@@ -90,7 +90,7 @@ test("unknown source and test infrastructure fall back to the complete suite", (
 });
 
 test("runner and shared fixture changes force the complete regression", () => {
-  for (const file of [filesFor("test-runner"), "test/helpers.ts", "test/test-impact-map.json"]) {
+  for (const file of [filesFor("test-runner"), "test/helpers.ts", "test/test-impact-map.json", "tools/cost-lab/web-server.mjs"]) {
     const changed = Array.isArray(file) ? file : [file];
     const selection = selectAffectedTests({ changedFiles: changed, map });
     assert.equal(selection.mode, "FULL_SUITE");

@@ -1,7 +1,14 @@
+import {
+  buildStartPlanView,
+  compareStartPlanViews,
+  startPlanFreshness,
+} from "./startplan-view.mjs";
+
 const app = {
   csrfToken: null,
   session: null,
   environment: null,
+  startPlan: null,
   activeVerificationId: null,
   pollTimer: null,
   toastTimer: null,
@@ -24,6 +31,8 @@ async function bootstrap() {
     $("#server-dot").classList.add("online");
     $("#server-status").textContent = "Local server online";
     await Promise.all([loadEnvironment(), loadHistory()]);
+    const initialPage = window.location.hash.slice(1);
+    if (initialPage) showPage(initialPage);
     if (session.active_verification_id) {
       app.activeVerificationId = session.active_verification_id;
       showPage("verification");
@@ -45,6 +54,11 @@ function bindActions() {
   $("#run-env-check").addEventListener("click", () => void runEnvironmentCheck(false));
   $("#run-deep-check").addEventListener("click", () => void runEnvironmentCheck(true));
   $("#capture-billing").addEventListener("click", () => void captureBilling());
+  $("#refresh-startplan").addEventListener("click", () => void refreshStartPlan());
+  $("#view-startplan-history").addEventListener("click", () => {
+    $("#startplan-history-count").scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+  $("#compare-startplan").addEventListener("click", () => void toggleStartPlanComparison());
   $("#verification-consent").addEventListener("change", (event) => {
     $("#start-verification").disabled = !event.currentTarget.checked;
   });
@@ -62,7 +76,7 @@ function showPage(name) {
   history.replaceState(null, "", `#${name}`);
   window.scrollTo({ top: 0, behavior: "smooth" });
   if (name === "history") void loadHistory();
-  if (name === "start-plan") void loadStartPlan();
+  if (name === "billing") void loadStartPlanData();
 }
 
 async function loadEnvironment(deep = false) {
@@ -390,12 +404,226 @@ function renderHistory(items) {
   }));
 }
 
-async function loadStartPlan() {
+async function loadStartPlanData() {
   try {
-    await getJson("/api/start-plan");
+    const [latest, history] = await Promise.all([
+      getJson("/api/billing/startplan/latest"),
+      getJson("/api/billing/startplan/history?limit=25"),
+    ]);
+    app.startPlan = { ...latest, history: history.items ?? [] };
+    renderStartPlan(app.startPlan);
   } catch (error) {
-    showToast(error.message, true);
+    app.startPlan = null;
+    renderStartPlanError(error.message);
   }
+}
+
+async function refreshStartPlan() {
+  const button = $("#refresh-startplan");
+  button.disabled = true;
+  $("#startplan-freshness").textContent = "LOADING";
+  $("#startplan-freshness").className = "tag";
+  $("#startplan-state").textContent = "Reading official billing/balance...";
+  try {
+    const refreshed = await postJson("/api/billing/startplan/refresh", {});
+    await loadStartPlanData();
+    const snapshot = refreshed.snapshot?.snapshot ?? refreshed.snapshot;
+    $("#startplan-state").textContent = refreshed.deduplicated
+      ? "Official snapshot already stored; no duplicate history entry."
+      : `Official snapshot captured ${formatDateTime(snapshot?.captured_at)}.`;
+    showToast("Start Plan official balance refreshed");
+  } catch (error) {
+    $("#startplan-freshness").textContent = "ERROR";
+    $("#startplan-freshness").className = "tag fail";
+    $("#startplan-state").textContent = `Refresh failed: ${error.message}`;
+    showToast(error.message, true);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function renderStartPlan(data) {
+  const view = buildStartPlanView(data, Date.now());
+  const freshness = view.freshness.status;
+  const freshnessNode = $("#startplan-freshness");
+  freshnessNode.textContent = freshness;
+  freshnessNode.className = `tag ${freshness === "FRESH"
+    ? "pass"
+    : freshness === "EXPIRED"
+      ? "fresh-expired"
+      : freshness === "STALE"
+        ? "fresh-stale"
+        : ""}`.trim();
+
+  if (!view.available) {
+    $("#startplan-plan").textContent = "No snapshot";
+    $("#startplan-plan-status").textContent = "UNKNOWN";
+    $("#startplan-total").textContent = "—";
+    $("#startplan-remaining").textContent = "—";
+    $("#startplan-updated").textContent = "Never captured";
+    $("#startplan-progress-fill").style.width = "0%";
+    $("#startplan-progress-value").textContent = "UNKNOWN";
+    $("#startplan-progress-detail").textContent = "Refresh explicitly to read the official Start Plan balance.";
+    replaceChildren($("#startplan-facts"), [
+      fact("Entitlement", "UNKNOWN"),
+      fact("Unit", "UNKNOWN"),
+      fact("Billing period", "UNKNOWN"),
+      fact("Expiry", "UNKNOWN"),
+    ]);
+    $("#startplan-buckets").replaceChildren(
+      element("div", "empty-state", "No Start Plan snapshot yet."),
+    );
+    renderStartPlanHistory([]);
+    setStartPlanExport(null);
+    return;
+  }
+
+  const summary = view.summary;
+  $("#startplan-plan").textContent = summary.plan_type ?? summary.plan_id ?? "UNKNOWN";
+  $("#startplan-plan-status").textContent = summary.plan_status ?? "UNKNOWN";
+  $("#startplan-total").textContent = displayInteger(summary.total_balance);
+  $("#startplan-remaining").textContent = displayInteger(summary.remaining_balance);
+  $("#startplan-updated").textContent = `Captured ${formatDateTime(summary.captured_at)}`;
+  $("#startplan-progress-fill").style.width =
+    view.progress.percent === null ? "0%" : `${view.progress.percent.toFixed(1)}%`;
+  $("#startplan-progress-value").textContent =
+    view.progress.percent === null ? "UNKNOWN" : `${view.progress.percent.toFixed(1)}% used`;
+  $("#startplan-progress-detail").textContent =
+    `${displayInteger(summary.used_balance)} used / ${displayInteger(summary.total_balance)} ${summary.unit_type ?? "unit unknown"}`;
+  replaceChildren($("#startplan-facts"), [
+    fact("Entitlement", summary.entitlement_status ?? "UNKNOWN"),
+    fact("Unit", summary.unit_type ?? "UNKNOWN"),
+    fact(
+      "Billing period",
+      summary.billing_period
+        ? `${formatDateTime(summary.billing_period.start)} - ${formatDateTime(summary.billing_period.end)}`
+        : "UNKNOWN",
+    ),
+    fact("Expiry", summary.expiry ? formatDateTime(summary.expiry) : "UNKNOWN"),
+  ]);
+  renderStartPlanBuckets(view.buckets);
+  renderStartPlanHistory(view.history);
+  setStartPlanExport(data.snapshot?.id ?? null);
+  $("#startplan-state").textContent =
+    `Latest data: ${freshness}. Page views use the local snapshot only.`;
+  $("#startplan-compare").hidden = true;
+}
+
+function renderStartPlanBuckets(buckets) {
+  const target = $("#startplan-buckets");
+  if (!buckets.length) {
+    target.replaceChildren(element("div", "empty-state", "The official response contained no balance buckets."));
+    return;
+  }
+  target.replaceChildren(...buckets.map((bucket) => {
+    const card = element("article", "bucket-card");
+    const header = element("header");
+    const name = element("div");
+    name.append(
+      element("h4", "", bucket.label ?? "Bucket"),
+      element("span", "mono", bucket.key ?? "bucket id unavailable"),
+    );
+    header.append(name, statusTag(bucket.model_ids.includes("glm-5.3-flash") ? "GLM-5.3-FLASH" : bucket.unit_type ?? "UNKNOWN"));
+    const metrics = element("div", "bucket-metrics");
+    metrics.append(
+      compactValue("Total", displayInteger(bucket.total_units)),
+      compactValue("Used", displayInteger(bucket.used_units)),
+      compactValue("Remaining", displayInteger(bucket.remaining_units)),
+    );
+    const dates = element("dl", "fact-grid");
+    dates.append(
+      fact("Period start", formatDateTime(bucket.period_start)),
+      fact("Period end", formatDateTime(bucket.period_end)),
+      fact("Expiry", formatDateTime(bucket.expires_at)),
+      fact("Entitlement", bucket.entitlement_key ?? "UNKNOWN"),
+    );
+    card.append(header, metrics, dates);
+    return card;
+  }));
+}
+
+function renderStartPlanHistory(items) {
+  $("#startplan-history-count").textContent = `${items.length} snapshot${items.length === 1 ? "" : "s"}`;
+  const target = $("#startplan-history");
+  if (!items.length) {
+    target.replaceChildren(element("div", "empty-state", "No Start Plan snapshots have been stored."));
+    return;
+  }
+  target.replaceChildren(...[...items].reverse().map((item) => {
+    const snapshot = item.snapshot ?? item;
+    const freshness = startPlanFreshness(snapshot, Date.now()).status;
+    const row = element("div", "history-row startplan-history-row");
+    row.append(
+      compactValue("Captured", formatDateTime(item.captured_at)),
+      compactValue("Plan", item.plan_type ?? item.plan_id ?? "UNKNOWN"),
+      compactValue("Used", displayInteger(item.used_balance)),
+      compactValue("Remaining", displayInteger(item.remaining_balance)),
+      compactValue("Freshness", freshness),
+      startPlanExportLink(item.id),
+    );
+    return row;
+  }));
+}
+
+function toggleStartPlanComparison() {
+  const panel = $("#startplan-compare");
+  if (!panel.hidden) {
+    panel.hidden = true;
+    return;
+  }
+  const items = app.startPlan?.history ?? [];
+  if (items.length < 2) {
+    panel.hidden = false;
+    panel.replaceChildren(element("p", "", "At least two snapshots are required for comparison."));
+    return;
+  }
+  const current = items.at(-1).snapshot ?? items.at(-1);
+  const previous = items.at(-2).snapshot ?? items.at(-2);
+  const comparison = compareStartPlanViews(previous, current);
+  const heading = element("h3", "", `Snapshot comparison: ${comparison.status}`);
+  panel.replaceChildren(heading);
+  if (comparison.rows.length) {
+    panel.append(...comparison.rows.map((row) => {
+      const line = element("div", "comparison-row");
+      line.append(
+        element("strong", "", row.label),
+        compactValue("Status", row.status),
+        compactValue("Used delta", signedInteger(row.used_delta)),
+        compactValue("Remaining delta", signedInteger(row.remaining_delta)),
+      );
+      return line;
+    }));
+  } else {
+    panel.append(element("p", "", comparison.reason ?? "Snapshots cannot be compared."));
+  }
+  panel.hidden = false;
+}
+
+function renderStartPlanError(message) {
+  $("#startplan-freshness").textContent = "ERROR";
+  $("#startplan-freshness").className = "tag fail";
+  $("#startplan-state").textContent = `Unable to load local Start Plan state: ${message}`;
+}
+
+function setStartPlanExport(id) {
+  const link = $("#export-startplan");
+  if (!id) {
+    link.removeAttribute("href");
+    link.classList.add("disabled-link");
+    link.setAttribute("aria-disabled", "true");
+    return;
+  }
+  link.href = `/api/billing/startplan/history/${encodeURIComponent(id)}/export`;
+  link.setAttribute("download", "");
+  link.classList.remove("disabled-link");
+  link.setAttribute("aria-disabled", "false");
+}
+
+function startPlanExportLink(id) {
+  const link = element("a", "text-link", "Export");
+  link.href = `/api/billing/startplan/history/${encodeURIComponent(id)}/export`;
+  link.setAttribute("download", "");
+  return link;
 }
 
 async function getJson(url) {
@@ -466,9 +694,9 @@ function exportLink(id) {
 
 function statusTag(status) {
   const normalized = String(status ?? "UNKNOWN");
-  const kind = ["PASS", "VERIFIED", "SUCCEEDED", "COMPLETE", "OFFICIAL_RUNTIME_VERIFIED", "OFFICIAL_DISCOUNT_VERIFIED"].includes(normalized)
+  const kind = ["PASS", "VERIFIED", "SUCCEEDED", "COMPLETE", "FRESH", "OFFICIAL_RUNTIME_VERIFIED", "OFFICIAL_DISCOUNT_VERIFIED"].includes(normalized)
     ? "pass"
-    : ["FAIL", "FAILED", "MISSING", "REJECTED", "UNVERIFIED", "OFFICIAL_RUNTIME_UNVERIFIED", "OFFICIAL_DISCOUNT_NOT_VERIFIED"].includes(normalized)
+    : ["FAIL", "FAILED", "MISSING", "REJECTED", "UNVERIFIED", "EXPIRED", "OFFICIAL_RUNTIME_UNVERIFIED", "OFFICIAL_DISCOUNT_NOT_VERIFIED"].includes(normalized)
       ? "fail"
       : "";
   return element("span", `tag ${kind}`.trim(), normalized);
@@ -502,6 +730,15 @@ function formatExtraRatio(item, digits = 6) {
 
 function formatInteger(value) {
   return Number.isSafeInteger(value) ? value.toLocaleString("en-US") : "unknown";
+}
+
+function displayInteger(value) {
+  return Number.isSafeInteger(value) ? value.toLocaleString("en-US") : "—";
+}
+
+function signedInteger(value) {
+  if (!Number.isSafeInteger(value)) return "—";
+  return `${value > 0 ? "+" : ""}${value.toLocaleString("en-US")}`;
 }
 
 function formatDateTime(value) {

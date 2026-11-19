@@ -1,9 +1,10 @@
 # Cost Lab
 
 Cost Lab is the local verification tool for the installed official ZCode runtime,
-Coding Plan request usage, and official credit ledger. It separates runtime
-identity, request success, Token accounting, and billing eligibility; a successful
-task is not treated as proof of the `0.67` extra-credit multiplier.
+Coding Plan request usage, and the independent Start Plan token balance. It
+separates runtime identity, request success, Token accounting, and billing
+eligibility; a successful task is not treated as proof of the `0.67`
+extra-credit multiplier.
 
 ## Start The Web UI
 
@@ -12,9 +13,11 @@ Prerequisites:
 - Windows x64.
 - Node.js `24.16.x`.
 - Installed ZCode Desktop `3.18.2.10443`.
-- A signed-in personal Coding Plan with available credits.
-- A current Bridge build because real verification drives
-  `dist/src/mcp/main.js`.
+- A signed-in personal Coding Plan with available credits when using the Coding
+  Plan verification.
+- A signed-in Start Plan when refreshing the Start Plan balance.
+- A current Bridge build because real verification and Start Plan billing use
+  compiled official runtime modules under `dist/src/`.
 
 ```powershell
 npm run build
@@ -33,12 +36,16 @@ buttons:
   calls only `runtime/capabilities`, creates no Session, and sends no model
   request.
 - **Read official snapshot** calls the existing official Usage Service accessor.
+- **Refresh balance** in **Billing & Usage** performs one read-only official
+  Start Plan `billing/balance` GET.
 - **Authorize real verification** sends one real Coding Plan task only after the
   user checks the explicit consent control and the browser submits the fixed
   confirmation phrase `START REAL CODING PLAN VERIFICATION`.
 
-Start Plan is intentionally offline-only in this version. The UI exposes no Start
-Plan execution API or button.
+Start Plan model execution is not exposed by Cost Lab. Its separate overview
+shows the official token entitlement, usage progress, balance buckets, period,
+expiry, and stored snapshot history. Coding Plan credits and Start Plan token
+units are never combined.
 
 ## Verification Flow
 
@@ -64,6 +71,33 @@ The runner does not implement authentication, request signing, Provider routing,
 or a second billing client. It uses the production MCP entry and the existing
 `coding-plan-billing.mjs` official Usage Service accessor.
 
+## Start Plan Billing
+
+The Start Plan panel reuses the official
+`StartPlanBillingEntitlement` and
+`createOfficialStartPlanAuthenticationResolver` chain. The Web Server never
+assembles its own JWT, decryption, device identity, or request headers.
+
+The official endpoint is:
+
+```text
+GET https://zcode.z.ai/api/v1/zcode-plan/billing/balance?app_version=3.18.2
+```
+
+Refresh is an explicit local action:
+
+- At most one official GET is made per refresh.
+- Concurrent refresh clicks share one in-flight read.
+- A cooldown prevents rapid repeated reads.
+- 401, 403, 429, transport failure, and timeout are not retried.
+- A failed refresh leaves the latest successful snapshot and history intact.
+- Opening or reloading a page never calls the official billing endpoint.
+
+The normalized snapshot keeps official token units and null/missing fields. It
+does not translate Start Plan tokens into Coding Plan credits. A bucket with an
+ended period or expiry is marked `EXPIRED`; it is not presented as a live
+balance.
+
 ## Billing Semantics
 
 ```text
@@ -84,6 +118,7 @@ bucket or mismatched request Usage remains `INCONCLUSIVE`.
 ## Local Data And Redaction
 
 - History: `.run/cost-lab-web/history.json`
+- Start Plan history: `.run/cost-lab-web/startplan-history.json`
 - Verification workspaces and Bridge profiles:
   `.run/cost-lab-web/verifications/<verification-id>/`
 - Protocol-smoke temporary roots are removed after cleanup.
@@ -107,6 +142,10 @@ POST /api/verifications
 GET  /api/verifications/:id
 GET  /api/history
 GET  /api/history/:id/export
+GET  /api/billing/startplan/latest
+GET  /api/billing/startplan/history?from=&to=&limit=
+POST /api/billing/startplan/refresh
+GET  /api/billing/startplan/history/:id/export
 GET  /api/start-plan
 ```
 
@@ -115,16 +154,24 @@ requests require same-origin, CSRF, and same-site validation. Billing and
 verification inputs are fixed; callers cannot supply a data root, provider,
 endpoint, executable, or arbitrary model.
 
+Start Plan history stores the sanitized official response and normalized
+snapshot. Credential fields, Authorization headers, cookies, device MID values,
+and raw opaque account/bucket/entitlement identifiers are removed or replaced
+with stable hashes. Browser responses and exports also omit absolute user paths.
+
 ## Tests
 
 ```powershell
 npm run cost-lab:test
 ```
 
-The suite covers official billing normalization and reconciliation, the official
-runtime vendor identity, the built MCP verification runner, local UI serving,
-zero-model page load, CSRF/origin rejection, bounded protocol smoke, redaction,
-history persistence, export, server shutdown, and loopback-only binding.
+The suite covers official billing normalization and reconciliation, Start Plan
+parsing and sanitization, exact official GET guard, freshness/expiry, bucket
+comparison, concurrent refresh deduplication, failure retention, history,
+export, frontend view states, the official runtime vendor identity, the built MCP
+verification runner, local UI serving, zero-model page load, CSRF/origin
+rejection, bounded protocol smoke, redaction, server shutdown, and loopback-only
+binding.
 
 ## Known Limits
 
@@ -138,5 +185,8 @@ history persistence, export, server shutdown, and loopback-only binding.
 - The MCP event surface does not expose a complete wire capture of the official
   signing handshake. The verification evidence records installed-bundle identity
   and the official runtime path; it does not claim to observe every wire frame.
-- Start Plan compatibility is offline research only. Live Start Plan E2E,
-  entitlement, CAPTCHA behavior, and discount remain unverified.
+- Start Plan support here is read-only billing. A successful balance response
+  does not verify model execution, CAPTCHA behavior, or any discount.
+- Start Plan is refreshed from the currently signed-in official account. A
+  changed account, bucket, entitlement, unit, or billing period is explicitly
+  marked non-comparable instead of being treated as consumption.
