@@ -28,9 +28,8 @@
     <button class="nav-item active" data-page="dashboard"><span>01</span>Dashboard</button>
     <button class="nav-item" data-page="environment"><span>02</span>Environment</button>
     <button class="nav-item" data-page="verification"><span>03</span>Coding Plan</button>
-    <button class="nav-item" data-page="billing"><span>04</span>Billing Analysis</button>
+    <button class="nav-item" data-page="billing"><span>04</span>Billing &amp; Usage</button>
     <button class="nav-item" data-page="history"><span>05</span>History</button>
-    <button class="nav-item" data-page="start-plan"><span>06</span>Start Plan</button>
   </nav>
 
   <main>
@@ -120,15 +119,78 @@
 
     <section class="page" id="page-billing">
       <div class="page-heading compact">
-        <p class="eyebrow">Official ledger view</p>
-        <h1>Billing Analysis</h1>
-        <p class="lede">Read the official hourly model ledger and separate the off-peak time multiplier from the extra campaign multiplier.</p>
+        <p class="eyebrow">Two official plans, one local console</p>
+        <h1>Billing &amp; Usage</h1>
+        <p class="lede">Inspect the Coding Plan credit ledger and the independent Start Plan token balance. Official reads happen only after an explicit local action.</p>
       </div>
-      <div class="action-row">
-        <button class="button primary" id="capture-billing">Read official snapshot</button>
-        <span id="billing-state" class="inline-state">No fresh snapshot requested.</span>
-      </div>
-      <div id="billing-result" class="empty-state panel">Read a snapshot or run a verification to populate this view.</div>
+      <section class="billing-section">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Coding Plan</p>
+            <h2>Official credit ledger</h2>
+          </div>
+          <span class="tag warm">GLM-5.3-FLASH</span>
+        </div>
+        <div class="action-row">
+          <button class="button primary" id="capture-billing">Read official snapshot</button>
+          <span id="billing-state" class="inline-state">No fresh snapshot requested.</span>
+        </div>
+        <div id="billing-result" class="empty-state panel">Read a snapshot or run a verification to populate this view.</div>
+      </section>
+
+      <section class="billing-section startplan-section">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Start Plan</p>
+            <h2>Independent token balance</h2>
+          </div>
+          <span class="tag" id="startplan-freshness">NO SNAPSHOT</span>
+        </div>
+        <div class="status-strip startplan-summary">
+          <article><small>Plan</small><strong id="startplan-plan">Unknown</strong></article>
+          <article><small>Status</small><strong id="startplan-plan-status">UNKNOWN</strong></article>
+          <article><small>Total tokens</small><strong id="startplan-total">—</strong></article>
+          <article><small>Remaining tokens</small><strong id="startplan-remaining">—</strong></article>
+        </div>
+        <article class="panel startplan-overview">
+          <div class="panel-title">
+            <span>Quota utilization</span>
+            <span id="startplan-updated" class="mono">Never captured</span>
+          </div>
+          <div class="usage-progress" aria-label="Start Plan usage">
+            <div class="usage-progress-track"><span id="startplan-progress-fill"></span></div>
+            <div class="usage-progress-labels">
+              <strong id="startplan-progress-value">UNKNOWN</strong>
+              <span id="startplan-progress-detail">No official balance has been read.</span>
+            </div>
+          </div>
+          <dl class="fact-grid startplan-facts" id="startplan-facts">
+            <div><dt>Entitlement</dt><dd>UNKNOWN</dd></div>
+            <div><dt>Unit</dt><dd>UNKNOWN</dd></div>
+            <div><dt>Billing period</dt><dd>UNKNOWN</dd></div>
+            <div><dt>Expiry</dt><dd>UNKNOWN</dd></div>
+          </dl>
+        </article>
+        <div class="action-row">
+          <button class="button primary" id="refresh-startplan">Refresh balance</button>
+          <button class="button secondary" id="view-startplan-history">View history</button>
+          <button class="button secondary" id="compare-startplan">Compare snapshots</button>
+          <a class="button secondary disabled-link" id="export-startplan" aria-disabled="true">Export latest</a>
+          <span id="startplan-state" class="inline-state">Page load never calls the official billing API.</span>
+        </div>
+        <h3 class="subheading">Bucket details</h3>
+        <div id="startplan-buckets" class="bucket-grid">
+          <div class="empty-state">No Start Plan snapshot yet.</div>
+        </div>
+        <div id="startplan-compare" class="comparison-panel" hidden></div>
+        <div class="panel-title startplan-history-title">
+          <span>Snapshot history</span>
+          <span class="mono" id="startplan-history-count">0 snapshots</span>
+        </div>
+        <div id="startplan-history" class="history-list">
+          <div class="empty-state">No Start Plan snapshots have been stored.</div>
+        </div>
+      </section>
     </section>
 
     <section class="page" id="page-history">
@@ -140,27 +202,9 @@
       <div id="history-list" class="history-list"></div>
     </section>
 
-    <section class="page" id="page-start-plan">
-      <div class="page-heading compact">
-        <p class="eyebrow">Offline research only</p>
-        <h1>Start Plan</h1>
-        <p class="lede">The current goal does not authorize a live Start Plan request, credential read, entitlement probe, project-token call, or discount claim.</p>
-      </div>
-      <div class="status-strip">
-        <article><small>Live test</small><strong>UNAVAILABLE</strong></article>
-        <article><small>Offline compatibility</small><strong>AVAILABLE</strong></article>
-        <article><small>Discount</small><strong>NOT_VERIFIED</strong></article>
-        <article><small>Execution API</small><strong>DISABLED</strong></article>
-      </div>
-      <article class="panel start-plan-panel">
-        <h2>Independent authentication boundary</h2>
-        <p>Start Plan keeps its own credentials, runtime headers, entitlement checks, and failure semantics. Bridge must not silently fall back to the Coding Plan identity. The offline audit report records shared and differing capabilities without promoting an untested billing benefit.</p>
-        <p class="mono">docs/research/start-plan-official-appserver-compatibility-20261118.md</p>
-      </article>
-    </section>
   </main>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <script src="/app.js"></script>
+  <script type="module" src="/app.js"></script>
 </body>
 </html>

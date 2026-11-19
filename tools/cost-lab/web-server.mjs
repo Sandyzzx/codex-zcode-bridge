@@ -18,11 +18,16 @@ import {
   sanitizeErrorMessage,
 } from "./coding-plan-billing.mjs";
 import { runOfficialAppServerProtocolSmoke } from "./official-app-server-protocol-smoke.mjs";
+import { resolveBillingDataBaseDir } from "./path-discovery.mjs";
+import { readOfficialStartPlanBilling } from "./startplan-reader.mjs";
+import { createStartPlanBillingService } from "./startplan-web.mjs";
 import { inspectCostLabEnvironment, redactValue } from "./web-services.mjs";
 
 const SCRIPT_ROOT = path.dirname(fileURLToPath(import.meta.url));
 export const PROJECT_ROOT = path.resolve(SCRIPT_ROOT, "..", "..");
 export const DEFAULT_HISTORY_PATH = path.join(PROJECT_ROOT, ".run", "cost-lab-web", "history.json");
+export const DEFAULT_STARTPLAN_HISTORY_PATH =
+  path.join(PROJECT_ROOT, ".run", "cost-lab-web", "startplan-history.json");
 export const LOOPBACK_HOST = "127.0.0.1";
 export const CONFIRMATION_PHRASE = "START REAL CODING PLAN VERIFICATION";
 const MAX_JSON_BYTES = 64 * 1024;
@@ -31,6 +36,10 @@ const STATIC_FILES = Object.freeze({
   "/": Object.freeze({ file: "index.html", type: "text/html; charset=utf-8" }),
   "/index.html": Object.freeze({ file: "index.html", type: "text/html; charset=utf-8" }),
   "/app.js": Object.freeze({ file: "app.js", type: "text/javascript; charset=utf-8" }),
+  "/startplan-view.mjs": Object.freeze({
+    file: "startplan-view.mjs",
+    type: "text/javascript; charset=utf-8",
+  }),
   "/styles.css": Object.freeze({ file: "styles.css", type: "text/css; charset=utf-8" }),
   "/favicon.svg": Object.freeze({ file: "favicon.svg", type: "image/svg+xml" }),
 });
@@ -39,7 +48,12 @@ export function createCostLabWebServer(options = {}) {
   const projectRoot = path.resolve(options.projectRoot ?? PROJECT_ROOT);
   const uiRoot = path.join(SCRIPT_ROOT, "web");
   const historyPath = path.resolve(options.historyPath ?? path.join(projectRoot, ".run", "cost-lab-web", "history.json"));
+  const startPlanHistoryPath = path.resolve(
+    options.startPlanHistoryPath
+      ?? path.join(projectRoot, ".run", "cost-lab-web", "startplan-history.json"),
+  );
   assertInside(path.join(projectRoot, ".run"), historyPath);
+  assertInside(path.join(projectRoot, ".run"), startPlanHistoryPath);
   const dependencies = {
     captureSnapshot: options.captureSnapshot ?? captureSnapshot,
     inspectEnvironment: options.inspectEnvironment ?? inspectCostLabEnvironment,
@@ -56,6 +70,36 @@ export function createCostLabWebServer(options = {}) {
       60_000,
     ],
   };
+  const officialHostWorker = path.resolve(
+    options.officialHostWorker
+      ?? path.join(
+        projectRoot,
+        "plugins",
+        "codex-zcode-bridge",
+        "worker",
+        "worker-main.mjs",
+      ),
+  );
+  const startPlanReadBilling = options.readStartPlanBilling ?? (async ({ signal }) => {
+    const data = resolveBillingDataBaseDir(options.startPlanDataBaseDir ?? null, {
+      env: options.env ?? process.env,
+      platform: options.platform ?? process.platform,
+    });
+    return readOfficialStartPlanBilling({
+      projectRoot,
+      dataBaseDir: data.dataBaseDir,
+      officialHostWorker,
+      signal,
+      now: () => dependencies.now().getTime(),
+    });
+  });
+  const startPlanBilling = options.startPlanBillingService ?? createStartPlanBillingService({
+    historyPath: startPlanHistoryPath,
+    readBilling: startPlanReadBilling,
+    now: dependencies.now,
+    createId: dependencies.createId,
+    cooldownMs: options.startPlanCooldownMs,
+  });
   const state = {
     csrfToken: options.csrfToken ?? randomBytes(32).toString("base64url"),
     server: null,
@@ -138,6 +182,11 @@ export function createCostLabWebServer(options = {}) {
         state.activeVerificationPromise?.catch(() => undefined) ?? Promise.resolve(),
         timeoutMs,
         "cost_lab_verification_shutdown_timeout",
+      ),
+      withTimeout(
+        startPlanBilling.close({ abort: abortActive }),
+        Math.min(timeoutMs, 25_000),
+        "cost_lab_startplan_shutdown_timeout",
       ),
     ]);
   }
@@ -244,6 +293,49 @@ export function createCostLabWebServer(options = {}) {
       });
       return;
     }
+    if (method === "GET" && url.pathname === "/api/billing/startplan/latest") {
+      const result = await startPlanBilling.latest();
+      sendJson(response, 200, { ok: true, data: redactValue(result) });
+      return;
+    }
+    if (method === "GET" && url.pathname === "/api/billing/startplan/history") {
+      const result = await startPlanBilling.history({
+        from: url.searchParams.get("from"),
+        to: url.searchParams.get("to"),
+        limit: url.searchParams.get("limit"),
+      });
+      sendJson(response, 200, { ok: true, data: redactValue(result) });
+      return;
+    }
+    if (method === "POST" && url.pathname === "/api/billing/startplan/refresh") {
+      if (body !== null && body !== undefined && Object.keys(body).length !== 0) {
+        throw httpError(
+          400,
+          "STARTPLAN_REFRESH_INPUT_REJECTED",
+          "Start Plan refresh uses the discovered official account context only.",
+        );
+      }
+      try {
+        const result = await startPlanBilling.refresh();
+        sendJson(response, 200, { ok: true, data: redactValue(result) });
+      } catch (error) {
+        throw mapStartPlanError(error);
+      }
+      return;
+    }
+    const startPlanExport =
+      /^\/api\/billing\/startplan\/history\/([0-9a-f-]{36})\/export$/u.exec(url.pathname);
+    if (method === "GET" && startPlanExport) {
+      const exported = await startPlanBilling.exportSnapshot(startPlanExport[1]);
+      const bodyText = `${JSON.stringify(redactValue(exported), null, 2)}\n`;
+      response.writeHead(200, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Content-Disposition": `attachment; filename="cost-lab-startplan-${startPlanExport[1]}.json"`,
+        "Cache-Control": "no-store",
+      });
+      response.end(bodyText);
+      return;
+    }
     if (method === "POST" && url.pathname === "/api/verifications") {
       const started = await startVerification(body);
       sendJson(response, 202, { ok: true, data: redactValue(started) });
@@ -295,13 +387,12 @@ export function createCostLabWebServer(options = {}) {
       sendJson(response, 200, {
         ok: true,
         data: {
-          status: "START_PLAN_OFFLINE_RESEARCH",
-          live_test: "UNAVAILABLE",
-          offline_compatibility: "AVAILABLE",
+          status: "START_PLAN_READ_ONLY_BILLING",
+          live_test: "AVAILABLE_ON_EXPLICIT_REFRESH",
+          billing_api: "/api/billing/startplan/refresh",
           discount: "NOT_VERIFIED",
           execution_button: false,
-          reason: "Owner constraint: no live Start Plan request, credentials read, entitlement probe, or project token call.",
-          research_report: "docs/research/start-plan-official-appserver-compatibility-20261118.md",
+          reason: "Start Plan exposes read-only official balance access. It does not expose model execution.",
         },
       });
       return;
@@ -743,6 +834,31 @@ function safeErrorCode(error) {
     return error.code.slice(0, 120);
   }
   return sanitizeErrorMessage(error);
+}
+
+function mapStartPlanError(error) {
+  if (Number.isInteger(error?.statusCode)) return error;
+  const code = typeof error?.code === "string" ? error.code : "STARTPLAN_REFRESH_FAILED";
+  const message = {
+    startplan_billing_timeout: "Official Start Plan billing timed out.",
+    startplan_billing_unauthorized: "Official Start Plan authentication was rejected.",
+    startplan_billing_forbidden: "Official Start Plan billing access was forbidden.",
+    startplan_billing_rate_limited: "Official Start Plan billing rate-limited the request.",
+    startplan_authentication_unavailable: "Official Start Plan authentication is unavailable.",
+    startplan_official_reader_build_missing: "Build the official Bridge sources before refreshing Start Plan billing.",
+    startplan_keyring_lock_present_before_capture:
+      "The official keyring lock was already present; the refresh was not attempted.",
+  }[code] ?? "Official Start Plan billing refresh failed.";
+  const mapped = httpError(
+    code === "startplan_official_reader_build_missing" ? 503
+      : code === "startplan_billing_timeout" ? 504
+        : code === "startplan_billing_rate_limited" ? 502
+          : 502,
+    code.toUpperCase(),
+    message,
+  );
+  mapped.cause = error;
+  return mapped;
 }
 
 function assertNotAborted(signal) {

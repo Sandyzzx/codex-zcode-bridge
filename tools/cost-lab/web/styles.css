@@ -384,6 +384,11 @@ h1 em {
   color: var(--teal);
 }
 
+.button.secondary,
+a.button.secondary {
+  text-decoration: none;
+}
+
 .button.danger {
   background: var(--danger);
   border-color: var(--danger);
@@ -525,6 +530,10 @@ form.panel .confirm-row {
 .history-row small { display: block; color: var(--muted); }
 .history-row strong { font-size: 0.95rem; }
 
+.startplan-history-row {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
 .metric-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -549,6 +558,178 @@ form.panel .confirm-row {
 
 .start-plan-panel h2 { margin-top: 0; font-size: 2rem; }
 .start-plan-panel p { line-height: 1.65; color: var(--muted); }
+
+.billing-section + .billing-section {
+  margin-top: 4.5rem;
+  padding-top: 3.5rem;
+  border-top: 1px solid var(--line);
+}
+
+.section-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.2rem;
+}
+
+.section-heading h2 {
+  margin: 0;
+  font-size: clamp(2rem, 4vw, 3.5rem);
+  letter-spacing: -0.04em;
+}
+
+.section-heading .eyebrow {
+  margin-bottom: 0.45rem;
+}
+
+.startplan-summary {
+  margin-bottom: 1.2rem;
+}
+
+.startplan-overview {
+  margin-bottom: 1.2rem;
+}
+
+.usage-progress-track {
+  height: 1rem;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: rgba(21, 32, 30, 0.06);
+}
+
+.usage-progress-track span {
+  display: block;
+  width: 0;
+  height: 100%;
+  background:
+    linear-gradient(90deg, var(--teal), #2a8b75);
+  transition: width 300ms ease;
+}
+
+.usage-progress-labels {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0.75rem 0 1.2rem;
+}
+
+.usage-progress-labels strong {
+  color: var(--teal);
+  font-size: 1.4rem;
+}
+
+.usage-progress-labels span {
+  color: var(--muted);
+  text-align: right;
+}
+
+.startplan-facts {
+  margin-top: 1.2rem;
+}
+
+.subheading,
+.startplan-history-title {
+  margin: 2rem 0 1rem;
+  font-size: 1.4rem;
+}
+
+.bucket-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  border: 1px solid var(--line);
+  background: var(--line);
+}
+
+.bucket-card {
+  padding: 1.2rem;
+  background: var(--paper-strong);
+}
+
+.bucket-card header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 0.8rem;
+  margin-bottom: 1rem;
+}
+
+.bucket-card h4 {
+  margin: 0;
+  font: 650 1.05rem var(--display);
+}
+
+.bucket-card .mono {
+  color: var(--muted);
+}
+
+.bucket-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  margin-bottom: 1rem;
+  background: var(--line);
+}
+
+.bucket-metrics div {
+  padding: 0.7rem;
+  background: var(--paper);
+}
+
+.bucket-metrics small {
+  display: block;
+  color: var(--muted);
+  font-size: 0.65rem;
+  text-transform: uppercase;
+}
+
+.bucket-metrics strong {
+  display: block;
+  margin-top: 0.3rem;
+}
+
+.comparison-panel {
+  margin-top: 1.2rem;
+  padding: 1.2rem;
+  border: 1px solid var(--line);
+  background: var(--teal-soft);
+}
+
+.comparison-panel h3 {
+  margin-top: 0;
+}
+
+.comparison-row {
+  display: grid;
+  grid-template-columns: minmax(10rem, 1fr) repeat(3, minmax(6rem, auto));
+  gap: 1rem;
+  padding: 0.75rem 0;
+  border-top: 1px solid rgba(10, 103, 94, 0.18);
+}
+
+.disabled-link {
+  opacity: 0.42;
+  pointer-events: none;
+}
+
+.startplan-history-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.fresh-expired {
+  background: var(--danger-soft);
+  color: var(--danger);
+  border-color: rgba(168, 65, 47, 0.25);
+}
+
+.fresh-stale {
+  background: var(--amber-soft);
+  color: #835719;
+  border-color: rgba(213, 144, 47, 0.3);
+}
 
 .toast {
   position: fixed;
@@ -628,9 +809,13 @@ form.panel .confirm-row {
   .masthead-status { display: none; }
   main { padding: 2rem 1rem 4rem; }
   .status-strip, .split-grid, .verification-layout, .check-grid { grid-template-columns: 1fr; }
+  .bucket-grid { grid-template-columns: 1fr; }
   .status-strip article { border-right: 0; }
   .fact-grid, .metric-grid { grid-template-columns: 1fr 1fr; }
   .history-row { grid-template-columns: 1fr 1fr; }
+  .comparison-row { grid-template-columns: 1fr 1fr; }
+  .usage-progress-labels { display: grid; }
+  .usage-progress-labels span { text-align: left; }
   .history-row .text-link { grid-column: 1 / -1; }
   h1 { font-size: clamp(2.9rem, 16vw, 5rem); }
 }
