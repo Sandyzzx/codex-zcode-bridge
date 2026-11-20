@@ -229,6 +229,18 @@ node scripts/test-shard.mjs --shard=2/2
 
 首次远程注册实验 Workflow 时，GitHub 在创建 Job 前拒绝执行：`runner` context 不能用于 Job-level `env`。该失败没有启动 Windows Runner，也没有消耗测试 Job。已改为在 step-level 使用 `runner.temp`，先创建每 Shard 的 TEMP/fixture 目录，再运行测试；同时新增回归，禁止把 `runner.temp` 放回 Job-level `env`。
 
+修正后的实验 Workflow 保留 `workflow_dispatch`，并仅为当前研究分支增加一个 path-scoped Push 触发器：
+
+```yaml
+push:
+  branches:
+    - codex/ci-performance-test-optimization-20261120
+  paths:
+    - .github/workflows/windows-shard-experiment.yml
+```
+
+这样只需一次 Push 即可取得托管 Runner 证据，后续普通提交不会重复启动实验；它仍不是 Required Check。
+
 ### 4.3 当前三轮结果
 
 分片在本地 Windows 上连续运行。每轮两个 Shard 使用独立 fixture/TEMP；不改 timeout、不并发启动同一 Workspace。

@@ -2,6 +2,11 @@ name: Windows Shard Experiment
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - codex/ci-performance-test-optimization-20261120
+    paths:
+      - .github/workflows/windows-shard-experiment.yml
 
 permissions:
   contents: read
