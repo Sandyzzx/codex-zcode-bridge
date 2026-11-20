@@ -2,7 +2,7 @@
 
 > Status: AUTHORITATIVE
 > Last updated: 2026-11-21
-> Last verified: 2026-11-21，核对 Cost Lab 独立门禁、Draft/Ready 分流、Fast 完成平台无关 T0、real-adapter 分域、Stress 分离和 Windows 两路分片实验；CI/分片实测状态见 `docs/reports/CI_PERFORMANCE_OPTIMIZATION_REPORT.md`。
+> Last verified: 2026-11-21，核对 Cost Lab 独立门禁、Draft/Ready 分流、Fast 完成平台无关 T0、real-adapter 分域、Stress 分离及三组托管 Windows 两路分片结果；CI/分片实测状态见 `docs/reports/CI_PERFORMANCE_OPTIMIZATION_REPORT.md`。
 > Verified against: `origin/preview` `c1245a02f8f9d4b6e1102eabac230b657d85de9b` 上的 CI 性能优化候选
 
 `test/test-impact-map.json` 为可执行清单唯一来源。共享资格规则禁止 MANUAL_E2E、Fixture 自动执行，显式误传同样拒绝；源 .test.ts/.test.mjs、map 与实际 --list 由回归对账。生成的 test-inventory.json 是静态声明/历史证据索引，不决定执行。
@@ -13,7 +13,7 @@
 | npm test | 编译并运行本平台全部功能测试；不隐式执行登记压力矩阵 |
 | npm run test:full | typecheck/build/npm test/plugin validation；冻结 Windows 门禁 |
 | npm run test:stress | 编译后显式运行登记资源矩阵；支持 --file=<registered file> |
-| npm run test:shard -- --shard=1/2 | Windows 两路实验入口；只运行实验计划中的完整功能测试子集，当前不是 Required Check |
+| npm run test:shard -- --shard=1/2 | Windows 两路完整功能测试入口；计划必须覆盖全部自动测试，CI 聚合结果沿用 `Verify (windows-2022)` Required Check |
 | npm run test:clean-entrypoints | 无 production dist 的 compiled stdio、shipped launcher、Worker 拒绝和 bundled Core |
 | node scripts/test-isolated.mjs --list | 本平台实际默认执行集合 |
 
@@ -29,10 +29,10 @@ FULL_SUITE 表示完整功能回归，压力状态为 SEPARATE_STRESS_GATE。SQL
 |---|---|---|
 | Fast | Ubuntu 上的 T0、受影响单元/合成测试；FULL 变更不运行 Fast | 不为 FULL PR 支付重复 T0 |
 | Integration | Windows 上构建 Windows 产物、执行进程身份探针，再以 tests-only 运行所选 Worker、Runtime、SQLite、Result、Cleanup/Release 集成测试 | 复用同一 Run/SHA 的 Fast T0；只在非 FULL 变更需要 Integration 时运行 |
-| Release | Windows + Ubuntu 的 typecheck/build、Windows 身份探针、完整 `npm test`、Plugin Validation、完整生成物 Freshness 与 diff check | FULL PR、push、`workflow_dispatch` 保留完整保护 |
+| Release | Ubuntu 的 typecheck/build、完整 `npm test`、Plugin Validation、生成物 Freshness 与 diff check；Windows 两路并行执行完整分片、身份探针，再由聚合 Job 提供 `Verify (windows-2022)` | FULL PR、push、`workflow_dispatch` 保留完整保护；分片计划必须完整、互斥且自动测试全覆盖 |
 | Cost Lab | Ubuntu 上运行独立的 `npm run cost-lab:test` | `tools/cost-lab/**` 不再强制 Bridge FULL_SUITE；选中 Cost Lab、forced-full、Push 和 Dispatch 时独立执行 |
 
-SQLite Stress 是独立矩阵：FULL 或影响 SQLite 资源边界时在 Windows/Ubuntu 显式运行。Fast 和 Release 的职责不重叠；FULL PR 的 Fast/Integration 均跳过，由 Release 在 Windows/Ubuntu 各执行一次完整回归。Draft PR 只保留 Impact 和 Fast；转为 Ready 时会显式触发 `ready_for_review`，正式 Integration、Release、Stress 与 Cost Lab 重新按完整门禁选择。Push 和 `workflow_dispatch` 没有可信的 PR changed-file 输入，Cost Lab 仍独立执行，确认发布树本身。
+SQLite Stress 是独立矩阵：FULL 或影响 SQLite 资源边界时在 Windows/Ubuntu 显式运行。Fast 和 Release 的职责不重叠；FULL PR 的 Fast/Integration 均跳过，由 Ubuntu Release 与 Windows 两路分片各执行一次完整功能集合。Draft PR 只保留 Impact 和 Fast；转为 Ready 时会显式触发 `ready_for_review`，正式 Integration、Release、Stress 与 Cost Lab 重新按完整门禁选择。Push 和 `workflow_dispatch` 没有可信的 PR changed-file 输入，Cost Lab 仍独立执行，确认发布树本身。
 
 Impact Map 的每个测试域必须覆盖其直接 `src/`、`plugins/`、`scripts/` 或 `tools/` 静态导入；这是对现有 map 的一致性回归，不创建第二套 selector。`scripts/copy-test-assets.mjs` 变化强制 FULL；`launch-node24.mjs` 变化至少选择 `node-runtime.test.ts`；`process-spawn.ts` 变化选择 composition、real-adapter 和进程清理消费者。
 

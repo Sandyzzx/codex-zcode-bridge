@@ -109,18 +109,49 @@ jobs:
           fi
           npm run test:affected -- --base "$BASE_SHA" --tests-only
 
-  release:
-    name: Verify (${{ matrix.os }})
+  verify-windows:
+    name: Windows Verify shard ${{ matrix.shard }}/2
     needs: impact
     if: always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false && needs.impact.result == 'success' && needs.impact.outputs.full_required == 'true'))
-    runs-on: ${{ matrix.os }}
+    runs-on: windows-2022
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        # Windows Server 2025 currently times out the documented PowerShell
-        # process-identity probe. Keep lifecycle verification on Server 2022.
-        os: [windows-2022, ubuntu-latest]
+        shard: [1, 2]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Verify Windows worker process identity
+        if: matrix.shard == 1
+        run: node scripts/verify-windows-worker-identity.mjs
+      - name: Prepare isolated shard directories
+        shell: pwsh
+        env:
+          SHARD_TEMP: ${{ runner.temp }}\bridge-test-temp\shard-${{ matrix.shard }}
+          SHARD_FIXTURES: ${{ runner.temp }}\bridge-test-fixtures\shard-${{ matrix.shard }}
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:SHARD_TEMP | Out-Null
+          New-Item -ItemType Directory -Force -Path $env:SHARD_FIXTURES | Out-Null
+      - name: Run Windows shard
+        env:
+          WP6_TEST_FIXTURE_ROOT: ${{ runner.temp }}\bridge-test-fixtures\shard-${{ matrix.shard }}
+          TEMP: ${{ runner.temp }}\bridge-test-temp\shard-${{ matrix.shard }}
+          TMP: ${{ runner.temp }}\bridge-test-temp\shard-${{ matrix.shard }}
+          TMPDIR: ${{ runner.temp }}\bridge-test-temp\shard-${{ matrix.shard }}
+        run: npm run test:shard -- --shard=${{ matrix.shard }}/2
+
+  release:
+    name: Verify (ubuntu-latest)
+    needs: impact
+    if: always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false && needs.impact.result == 'success' && needs.impact.outputs.full_required == 'true'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -130,15 +161,28 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run build
-      - name: Verify Windows worker process identity
-        if: runner.os == 'Windows'
-        run: node scripts/verify-windows-worker-identity.mjs
       - run: npm test
       - run: npm run validate:plugin
       - name: Verify complete generated-artifact freshness
         run: npm run check:generated
       - name: Check patch whitespace
         run: git diff --check
+
+  windows-result:
+    name: Verify (windows-2022)
+    needs: [impact, verify-windows]
+    if: always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false && needs.impact.result == 'success' && needs.impact.outputs.full_required == 'true'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Require both Windows shards to pass
+        shell: bash
+        run: |
+          if [[ "${{ needs.verify-windows.result }}" != "success" ]]; then
+            echo "::error::At least one Windows verification shard did not pass."
+            exit 1
+          fi
+          echo "Both Windows verification shards passed."
 
   sqlite-stress:
     name: SQLite resource matrix (${{ matrix.os }})

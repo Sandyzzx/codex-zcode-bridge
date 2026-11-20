@@ -6,16 +6,18 @@
 > Base tree: `b687bca64ce766b945178cf8af44442cf57f90b3`
 > Candidate branch: `codex/ci-performance-test-optimization-20261120`
 > Worktree: `D:\codex-zcode-bridge\.run\ci-performance-test-optimization-20261120`
+> Candidate verified before shard promotion: `6bb2b8caa47acb90f0be0f66aa256e72d85b5c8c`
+> Candidate tree before shard promotion: `cc63f2282d91f67edfaa60c5ada853aca032ad46`
 
 ## 1. 结论
 
 当前最昂贵的工程成本不是 TypeScript、npm 安装或插件构建，而是 Windows 上约 12–13 分钟的 `npm test`。因此本轮优先级调整为：
 
 1. 消除同一 PR/同一代码树的重复门禁。
-2. 拆分超大 real-adapter 测试，让 Targeted 选择真正缩小。
-3. 把 32,000-event 压力合同从普通 PR 门禁移到独立 Stress，同时保留一个仍能证明真实 Windows 管道背压的常规负载。
-4. 改善 Draft、Ready、FULL、Preview Push 的触发分工。
-5. 对 Windows 两路分片做独立实验，但不在稳定性尚未完成托管 Runner 验证时设为 Required Check。
+2. 在三组完全独立的托管 Windows Runner 配对通过后，把已验证的两路分片接入正式 Required Check。
+3. 拆分超大 real-adapter 测试，让 Targeted 选择真正缩小。
+4. 把 32,000-event 压力合同从普通 PR 门禁移到独立 Stress，同时保留一个仍能证明真实 Windows 管道背压的常规负载。
+5. 改善 Draft、Ready、FULL、Preview Push 的触发分工。
 
 没有删除功能测试、增加 SKIP、弱化断言、提高测试内部 timeout，或以 Mock 替换唯一的真实进程边界。
 
@@ -31,9 +33,9 @@ task ... did not reach terminal status; observed: running
 
 这是普通 PR 测试实际运行 32,000 个流事件的成本造成的门禁失败，不是产物构建或认证失败。当前候选：
 
-- 普通门禁保留 4,096 个事件，仍真实写入约 3.80 MB、超过 Windows 管道容量，并记录 `high_water_mark=16384`、`max_writable_length=0`。
+- 普通门禁改为 8 个 32 KiB 大块，共写入 263,059 bytes，仍超过 Windows 16 KiB 管道 high-water mark，并记录 `high_water_mark=16384`、`max_writable_length=0`。
 - 原 32,000-event 负载完整保留在独立 `WORKER-STREAM-STRESS-01`。
-- 拆分后的 ordinary test 已在本地 Windows 运行中约 8.6 秒通过。
+- 大块负载保留字节数、顺序、UTF-8 和真实背压证据，同时消除 4,096 次小写入的测试框架开销。
 
 ## 2. 基线
 
@@ -155,17 +157,19 @@ Fast 在 Ubuntu 完成平台无关 T0：
 
 | Gate | 事件数 | 用途 |
 |---|---:|---|
-| 普通 Windows 功能测试 | 4,096 | 真实 Windows 同步管道背压、UTF-8、事件顺序、Result/Cleanup |
+| 普通 Windows 功能测试 | 8 x 32 KiB chunks | 真实 Windows 同步管道背压、UTF-8、字节顺序、Result/Cleanup |
 | `WORKER-STREAM-STRESS-01` | 32,000 | 原大规模持续输出、持久化、Result、Cleanup/Release 压力 |
 
 普通负载观测：
 
-- 写入约 3,796,910 bytes。
+- `events_written = 8`，每次 `delta_bytes = 32,768`。
+- 总计写入 263,059 bytes。
 - `high_water_mark = 16384`。
 - `max_writable_length = 0`。
-- 4096 个事件全部写入且顺序保持。
+- 所有字节顺序保持，普通测试在本地 Windows 约 7.6–8.9 秒通过。
+- 32,000-event Stress 仍写入约 3,796,910 bytes 并 PASS。
 
-这不是用“小数据 PASS”替换 32,000-event 压力，而是把大负载放到明确 Stress，把仍超过常规管道容量的负载留在普通门禁。
+这不是用“小数据 PASS”替换 32,000-event 压力，而是把大规模事件数量放到明确 Stress，把仍超过常规管道容量的有界大块负载留在普通门禁。
 
 ### 3.6 依赖映射与生成物
 
@@ -241,7 +245,7 @@ push:
 
 这样只需一次 Push 即可取得托管 Runner 证据，后续普通提交不会重复启动实验；它仍不是 Required Check。
 
-### 4.3 当前三轮结果
+### 4.3 本地三轮结果
 
 分片在本地 Windows 上连续运行。每轮两个 Shard 使用独立 fixture/TEMP；不改 timeout、不并发启动同一 Workspace。
 
@@ -253,11 +257,36 @@ push:
 
 三轮全部为 `FAIL=0`，每轮两个 Shard 合计 966 个功能声明、964 PASS、2 个既有平台 SKIP。三轮较慢 Shard 为 590.056s、585.653s、589.631s，配对失衡为 3.1%、1.9%、1.6%。
 
-本地三轮只证明当前机器和当前计划的可重复性；GitHub Windows 托管 Runner 的分片实验仍标记 `NOT_RUN`，因此：
+本地三轮只证明当前机器和当前计划的可重复性；它们不能替代 GitHub Windows 托管 Runner 证据。
 
-- `test:shard` 保持 experimental。
-- 没有把分片 Workflow 设为 Required Check。
-- 没有把本地墙钟直接换算成 GitHub P50/P95 或 runner-minutes。
+### 4.4 托管 Runner 结果与正式接入
+
+在提交 `6bb2b8caa47acb90f0be0f66aa256e72d85b5c8c` 上，三组完全独立、两个 Shard 均为新执行的托管 Windows 配对全部通过：
+
+| 配对 | Run | Shard 1 | Shard 2 | 聚合 | 两个 Shard 合计 | Run 墙钟 |
+|---|---|---:|---:|---:|---:|---:|
+| A | `44813848428` attempt 1 | 395s | 483s | PASS | 881s | 491s |
+| B | `44818061062` | 400s | 412s | PASS | 814s | 421s |
+| C | `44819147484` | 341s | 447s | PASS | 791s | 456s |
+
+三组最慢 Shard 分别为 483s、412s、447s。每对两个 Shard 的实际合计约 13.2–14.7 runner-minutes，和原单一 Windows Verify 约 13.4 runner-minutes接近；分片的主要收益是并行降低墙钟，而不是减少 Windows 测试总执行量。
+
+同一 Run 的非独立重跑包括：
+
+- attempt 2 的 Shard 2 是 attempt 1 的复用 Job，不计为独立样本。
+- attempt 2 的 Shard 1 在 `private-auth keeps synthetic credential out of persisted output` 等待 `queued -> running` 时超时 46.777s。
+- attempt 3 的 Shard 1 独立复跑通过，但 Shard 2 仍为 attempt 1 复用 Job，因此 attempt 3 也不计为完全独立配对。
+
+该单次超时保留为托管 Runner 残余不稳定证据，不通过提高测试 timeout、增加 SKIP 或放宽断言消除。由于三组完全独立的配对均 PASS，正式 `ci.yml` 已改为：
+
+- Windows 两路并行运行全部分片。
+- 每个 Job 使用独立的 TEMP、HOME、fixture 和 SQLite root。
+- Windows Worker 身份探针仍执行一次。
+- Windows-only 测试仍按文件串行。
+- 聚合 Job 沿用现有 Required Check 名称 `Verify (windows-2022)`。
+- 任一 Shard 失败时，聚合 Required Check 必须失败。
+
+正式接入后的 PR CI 结果在本报告生成时仍需重新执行，不能把托管实验 Workflow 的成功冒充为 `ci.yml` 新拓扑的 PASS。
 
 ## 5. 验证记录
 
@@ -274,20 +303,21 @@ push:
 | `npm run test:clean-entrypoints` | 4/4 PASS |
 | `npm run validate:plugin` | PASS |
 | `npm run check:generated` | PASS |
-| `npm run test:inventory` | PASS；905 declarations / 100 mapped files |
+| `npm run test:inventory` | PASS；906 declarations / 100 mapped files |
 | `git diff --check` | PASS |
 | Windows shard rounds 5–7 | PASS，每轮两个 Shard 均 PASS |
 | `npm run test:affected` full fallback | PASS；966 tests / 964 PASS / 0 FAIL / 2 existing SKIP；当前机器串行耗时 1,161.362s |
+| Windows shard focused tests | 3/3 PASS |
 
 ### 5.2 未运行或未取得
 
 | 项目 | 状态 |
 |---|---|
-| GitHub 托管 Windows 两路分片 | NOT_RUN |
+| GitHub 托管 Windows 两路分片 | 3/3 完全独立配对 PASS |
+| 分片接入正式 `ci.yml` 后的 PR CI | PENDING_PUSH |
 | 分片后的 GitHub Windows Verify P50/P95 | NOT_MEASURED |
 | 分片后的 PR Completion Wall Time | NOT_MEASURED |
 | 官方 runner-minutes | NOT_MEASURED |
-| 新候选的 PR CI | PENDING PUSH |
 
 `NOT_RUN`、`NOT_MEASURED` 和 `PENDING` 不计为 PASS。
 
@@ -321,12 +351,14 @@ push:
 ### 6.4 可能降低墙钟但不降低总测试量
 
 - Windows 两路分片。
-- Windows 托管 Runner 的分片结果尚未取得；在设置 Required Check 前必须完成真实的 3 轮稳定性和聚合检查验证。
+- 三组完全独立的托管配对已 PASS，正式 `ci.yml` 已把两路分片作为 `Verify (windows-2022)` 的 Required Check 聚合路径。
+- 托管实验的最慢 Shard 为 483s，而原单一 Windows Verify 为 802s；预期 PR 主关键路径约缩短至 8–9 分钟，但不能在正式 `ci.yml` Run 完成前标记实测 PASS。
+- 两个 Windows Runner 的总 runner 时间基本不变，略高于单 Job；该优化交换的是墙钟时间，不是 Windows 测试总量。
 
 ### 6.5 不建议或尚未证明
 
 - 不应简单把所有 Windows 测试改为全局并行。真实 Worker、CIM、SQLite WAL、进程树和 Recovery 会互相污染。
-- 不应把 4,096-event 普通负载当作 32,000-event 压力等价证据。
+- 不应把 8 x 32 KiB 普通负载当作 32,000-event 压力等价证据。
 - 不应把历史 Run 的 PASS 复用于不同代码树或不同测试基线。
 - 不应因 CI 变绿而扩大 Impact Map、降低断言或增加 SKIP。
 
@@ -334,18 +366,19 @@ Cost Lab 首次复跑出现一次既有临时端口选择触发 Node `fetch` `ba
 
 ## 7. 剩余工作
 
-1. 在 GitHub 上执行修正后的 Windows Shard Experiment，取得托管 Runner 的真实墙钟、失败率和 runner-minutes。
-2. 若托管分片稳定，再评估是否增加 Required Check 与 Push/Preview 的适用范围。
+1. 推送分片正式接入提交，确认 `Verify (windows-2022)` 聚合 Check 在 PR 上实际出现并通过。
+2. 记录正式分片 PR CI 的 Windows Job 墙钟；样本不足时 P50/P95 继续标记 `NOT_MEASURED`。
 3. 重新运行受影响测试、生成物检查和完整 Diff 检查。
-4. 提交并推送候选；PR CI 通过前不得合并 Preview。
+4. 不合并 Preview、不发布、不打 Tag。
 
 ## 8. Git 与交付状态
 
-实现提交为 `e8214366bd4077983aec5641936031e97b804a3d`，Tree 为
-`ccd47d649102b63f0da05f5fe422049e9b6ed9e4`，位于
-`codex/ci-performance-test-optimization-20261120`。该实现提交之后只允许追加本报告状态和
-PR CI 结果的文档提交，不再改变测试或 Workflow 行为。根工作区的 `M AGENTS.md` 和
-`?? $null` 未被读取、修改、暂存或清理。
+分片推广前的完整实现提交为
+`e8214366bd4077983aec5641936031e97b804a3d`，Tree 为
+`ccd47d649102b63f0da05f5fe422049e9b6ed9e4`。分片接入前的最新验证提交为
+`6bb2b8caa47acb90f0be0f66aa256e72d85b5c8c`，Tree 为
+`cc63f2282d91f67edfaa60c5ada853aca032ad46`。正式分片接入提交将在本报告更新后创建。
+根工作区的 `M AGENTS.md` 和 `?? $null` 未被读取、修改、暂存或清理。
 
 PR: `https://github.com/Sandyzzx/codex-zcode-bridge/pull/106`
 
@@ -363,8 +396,9 @@ STREAM_STRESS_SEPARATION: PASS
 
 WINDOWS_SHARD_PLAN: PASS
 WINDOWS_SHARD_LOCAL_ROUNDS: 3_OF_3_PASS
-WINDOWS_SHARD_HOSTED: NOT_RUN
-WINDOWS_SHARD_REQUIRED_CHECK: NO
+WINDOWS_SHARD_HOSTED_FRESH_PAIRS: 3_OF_3_PASS
+WINDOWS_SHARD_HOSTED_TRANSIENT_FAILURE: 1_NON_FRESH_RETRY
+WINDOWS_SHARD_REQUIRED_CHECK: YES_CONFIGURED_PENDING_PR_CI
 FULL_FUNCTIONAL_REGRESSION: SHARDED_3X_PASS
 
 TEST_COVERAGE_PRESERVED: YES
@@ -382,13 +416,13 @@ REAL_BILLING_REQUESTS: 0
 CI_PRIMARY_BASELINE: WINDOWS_NPM_TEST
 CI_POST_CHANGE_P50_P95: NOT_MEASURED
 RUNNER_MINUTES: NOT_MEASURED
-PR_CI_AFTER_PUSH: PENDING
-IMPLEMENTATION_COMMIT: e8214366bd4077983aec5641936031e97b804a3d
-IMPLEMENTATION_TREE: ccd47d649102b63f0da05f5fe422049e9b6ed9e4
+PR_CI_AFTER_PUSH: PENDING_PROMOTION
+IMPLEMENTATION_COMMIT: 6bb2b8caa47acb90f0be0f66aa256e72d85b5c8c
+IMPLEMENTATION_TREE: cc63f2282d91f67edfaa60c5ada853aca032ad46
 REMOTE_BRANCH: codex/ci-performance-test-optimization-20261120
 
 MERGE_ALLOWED: NO
 RELEASE_ALLOWED: NO
 
-FINAL_VERDICT: PENDING_PR_CI
+FINAL_VERDICT: PENDING_PROMOTION_PR_CI
 ```

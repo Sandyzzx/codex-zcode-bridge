@@ -30,3 +30,30 @@ test("Windows shard workflow scopes runner temp expressions to steps", () => {
   assert.match(workflow, /- name: Prepare isolated shard directories[\s\S]*?SHARD_TEMP: \$\{\{ runner\.temp \}\}/u);
   assert.match(workflow, /- name: Run Windows shard[\s\S]*?WP6_TEST_FIXTURE_ROOT: \$\{\{ runner\.temp \}\}/u);
 });
+
+test("production CI gates the protected Windows check on both isolated shards", () => {
+  const workflow = readFileSync(".github/workflows/ci.yml", "utf8").replace(/\r\n/gu, "\n");
+  const windowsStart = workflow.indexOf("  verify-windows:");
+  const releaseStart = workflow.indexOf("  release:", windowsStart);
+  const resultStart = workflow.indexOf("  windows-result:", releaseStart);
+  const stressStart = workflow.indexOf("  sqlite-stress:", resultStart);
+  assert.ok(windowsStart >= 0 && releaseStart > windowsStart && resultStart > releaseStart && stressStart > resultStart);
+
+  const windows = workflow.slice(windowsStart, releaseStart);
+  assert.match(windows, /name: Windows Verify shard \$\{\{ matrix\.shard \}\}\/2/u);
+  assert.match(windows, /shard: \[1, 2\]/u);
+  assert.match(windows, /if: matrix\.shard == 1[\s\S]*?node scripts\/verify-windows-worker-identity\.mjs/u);
+  assert.match(windows, /run: npm run test:shard -- --shard=\$\{\{ matrix\.shard \}\}\/2/u);
+  assert.match(windows, /WP6_TEST_FIXTURE_ROOT: \$\{\{ runner\.temp \}\}/u);
+
+  const release = workflow.slice(releaseStart, resultStart);
+  assert.match(release, /name: Verify \(ubuntu-latest\)/u);
+  assert.doesNotMatch(release, /windows-2022/u,
+    "the unsharded Windows full suite must not also run under the protected check");
+
+  const result = workflow.slice(resultStart, stressStart);
+  assert.match(result, /name: Verify \(windows-2022\)/u,
+    "the aggregate must preserve the existing protected required-check name");
+  assert.match(result, /needs: \[impact, verify-windows\]/u);
+  assert.match(result, /needs\.verify-windows\.result/u);
+});

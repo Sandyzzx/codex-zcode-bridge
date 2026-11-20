@@ -4,14 +4,14 @@
   "generator": "npm run test:inventory",
   "summary": {
     "executable_or_manual_files": 100,
-    "declarations": 905,
+    "declarations": 906,
     "by_type": {
-      "Unit": 223,
+      "Unit": 224,
       "Integration": 678,
       "Stress": 4
     },
     "by_gate": {
-      "T1": 262,
+      "T1": 263,
       "T2": 639,
       "T3": 4
     },
@@ -22191,8 +22191,8 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-4AEF5C1A384381E0",
-      "test_name": "SQLite production Worker survives bounded streaming stderr backpressure without a diagnostic recorder",
+      "test_id": "TII-3F71E94352DDBC85",
+      "test_name": "SQLite production Worker survives bounded large-chunk stderr backpressure without a diagnostic recorder",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter-official-host.test.ts",
       "test_line": 103,
       "test_type": "Integration",
@@ -22296,10 +22296,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-0452E24D9ED37C70",
+      "test_id": "TII-ECFD662A63752F4F",
       "test_name": "formal MCP lifecycle runs a real ZCodeAppServerAdapter against a controlled fake app-server",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter-official-host.test.ts",
-      "test_line": 144,
+      "test_line": 146,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -22401,10 +22401,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-CD6090D08A25F0AC",
+      "test_id": "TII-694FBC9823B89224",
       "test_name": "startBridge's host issuer wiring reaches the fake Billing gate and completes a Start Plan task",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter-official-host.test.ts",
-      "test_line": 235,
+      "test_line": 237,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -22506,10 +22506,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-6FC354E72AF7AABE",
+      "test_id": "TII-04BD9FB7386DB504",
       "test_name": "Start Plan Worker routing enters the installed AppServer adapter",
       "test_file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter-official-host.test.ts",
-      "test_line": 257,
+      "test_line": 259,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -44451,6 +44451,54 @@
       "test_name": "Windows shard workflow scopes runner temp expressions to steps",
       "test_file": "test/test-shard-plan.test.ts",
       "test_line": 21,
+      "test_type": "Unit",
+      "gate": "T1",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [],
+        "impact_domains": [
+          "test-execution-contract"
+        ]
+      },
+      "trigger_source_paths": [
+        "scripts/test-isolated.mjs",
+        "scripts/test-clean-entrypoints.mjs",
+        "scripts/test-impact-selector.mjs",
+        "scripts/lib/test-files.mjs",
+        "scripts/lib/changed-files.mjs",
+        "scripts/ci-select-impact.mjs",
+        "scripts/copy-test-assets.mjs",
+        "scripts/run-affected-tests.mjs",
+        "scripts/run-stress-tests.mjs",
+        "scripts/test-shard.mjs",
+        "test/test-impact-map.json",
+        "test/windows-test-shard-plan.json",
+        "test/helpers.ts",
+        "test/runtime-fixture.ts",
+        "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter-harness.ts",
+        "test/runtime/bootstrap-lock-worker.mjs",
+        "test/sqlite-candidate/wp6b2b1/lifecycle-process.mjs",
+        "test/sqlite-candidate/wp6b2b1/worker-process.mjs"
+      ],
+      "trigger_test_files": [
+        "test/test-shard-plan.test.ts"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-5513FE64EE07A7E5",
+      "test_name": "production CI gates the protected Windows check on both isolated shards",
+      "test_file": "test/test-shard-plan.test.ts",
+      "test_line": 34,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
