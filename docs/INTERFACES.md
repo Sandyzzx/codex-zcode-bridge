@@ -1,9 +1,9 @@
 # 当前接口与兼容边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-16（ADR-039 本地取消修复；未发布）
-> Last verified: 2026-11-15，核对 ADR-038 的 13 个 MCP 工具、机器 feedback 投影、Usage 增补字段、Events summary 语义、Recovery Hold 原因、32 MiB Result 与 SQLite v14 边界。
-> Verified against: Preview.6 post-audit remediation branch based on `545c02f745a4e2ab38a1fa3c31880ac80b84a310`
+> Last updated: 2026-11-21（ADR-043 SQLite v14 ONLY）
+> Last verified: 2026-11-21，核对 v14-only 支持声明、`unsupported_sqlite_schema` 拒绝边界、未完成 Marker 保留及现有 Task/Result/Recovery 合同。
+> Verified against: ADR-043 candidate based on `c1245a02f8f9d4b6e1102eabac230b657d85de9b`
 > ADR-039 Last verified: 2026-11-16，仅取消投影、CAS、清理 Hold 与并发取消定向隔离测试；基线 `ec5f3e83d737df469f9ed54361d2aec46b4a15a8` + 本地候选。生产取消未重试。
 
 准确字段以 `src/interfaces.ts`、`src/mcp/schemas.ts` 与共享 `src/result-contract.mjs` 为准。[ARCHITECTURE.md](ARCHITECTURE.md) 描述实现，[SHARED_CORE.md](SHARED_CORE.md) 列出 Core API 主版本兼容策略。ADR-038 保留 13 个默认 MCP 工具、SQLite v14、32 MiB Result 与现有 Task 状态语义。
@@ -20,7 +20,7 @@ TaskPackage 的 requirements、allowed_paths、forbidden_paths、acceptance_crit
 
 ## Authority 与 Recovery
 
-生产只有 SQLite Authority。新装与旧 JSON 安装从相同 Fresh SQLite Bootstrap 开始；旧 `.tasks` 不参与选择、恢复或新任务。损坏/不完整 SQLite 明确拒绝，不回退 JSON，不重置数据库。已有 v13 必须显式离线升级；已有 v14 的 `json_artifacts`、迁移 Result/Event 行、digest 与 receipt 继续按 Schema 校验并保留原始字节，但旧 JSON 迁移 Task 不再是 Bridge 支持的查询业务对象。
+生产只有 SQLite Authority，支持声明为 `SQLite v14 ONLY`。新装与旧 JSON 安装从相同 Fresh SQLite Bootstrap 开始；旧 `.tasks` 不参与选择、恢复或新任务。已有 v14 的 `json_artifacts`、迁移 Result/Event 行、digest 与 receipt 继续按 Schema 校验并保留原始字节，但旧 JSON 迁移 Task 不再是 Bridge 支持的查询业务对象。已有 v13 数据库或 v13→v14 未完成 Marker 以 `unsupported_sqlite_schema` 非破坏性拒绝，不提供升级、恢复或回滚；损坏/不完整 SQLite 继续明确拒绝，不回退 JSON，不重置数据库。
 
 Admission 在事务中检查 Capacity 及执行路径重叠，覆盖跨 Manager 竞争。Worker 精确身份、Launch token/receipt、Claim、Attempt/generation/revision CAS 保持绑定。最终 workspace use 校验先于 Launch Intent；拒绝只留下 untouched reserved，显式 queued Cancel 经原 CAS 终结并释放。Intent 后即可能已 Spawn，缺 Receipt/句柄、timeout 或 Manager 崩溃都不授权重新派发。
 

@@ -1,9 +1,9 @@
 # 文档路由 / Documentation
 
 > Status: AUTHORITATIVE（仅指本索引）
-> Last updated: 2026-11-20（ADR-042 Unknown Runtime Experimental Authorization）
-> Last verified: 2026-11-20，核对未知安装安全检查、精确指纹授权、Provider 分 scope 探测、3.19 零模型协议 Smoke、Coding Plan 单次真实执行和 Start Plan 空权益阻断；完整验证与真实计费边界见兼容性报告。
-> Verified against: ADR-042 implementation `15abe6becb13f383fee676a4ae20510d51f817fc`（tree `654cda65168ece915251305522db6ce603e23ad7`）；release baseline `aedeb2c2a1ea6f41ea3ac2d045f7ed0d75281552`
+> Last updated: 2026-11-21（ADR-043 SQLite v14 ONLY）
+> Last verified: 2026-11-21，核对 v13 代码/CLI/Schema/生成物删除、v13 非破坏性拒绝和 v14 历史/生命周期保留。
+> Verified against: ADR-043 candidate based on `c1245a02f8f9d4b6e1102eabac230b657d85de9b`；ADR-042 implementation `15abe6becb13f383fee676a4ae20510d51f817fc`
 
 English users start at [README.md](../README.md). 技术文档为中文。先读当前事实，按问题加载合同；研究或历史材料不作为当前实现或发布证明。
 
@@ -26,6 +26,7 @@ English users start at [README.md](../README.md). 技术文档为中文。先读
 | 官方 ZCode 认证复用合同与 Preview.6/Preview.7 实现 | [ADR-037](decisions/ADR-037-official-zcode-authentication-reuse.md)、[ARCHITECTURE.md](ARCHITECTURE.md) |
 | 已安装官方 AppServer：统一 Provider Runtime、Coding Plan 优惠兼容、Start Plan 离线兼容 | [ADR-040](decisions/ADR-040-installed-official-appserver-runtime.md)、[ADR-041](decisions/ADR-041-thin-official-host-end-state.md)、[Coding Plan 正式证据](evidence/coding-plan-official-discount-verification-20261118.md)、[Start Plan 离线研究](research/start-plan-official-appserver-compatibility-20261118.md)、[11-19 统一 Runtime 交付报告](reports/unified-official-appserver-startplan-20261119.md) |
 | 未知官方版本的安全检查与指纹授权实验探测 | [ADR-042](decisions/ADR-042-unknown-runtime-experimental-authorization.md)、[3.19.0 兼容性报告](reports/zcode-3.19.0-compatibility-20261120.md) |
+| SQLite Schema 支持 | [ADR-043](decisions/ADR-043-sqlite-v14-only.md) | `SQLite v14 ONLY`；v13 与旧升级 Marker 非破坏性拒绝 |
 | Preview.7 Post-Audit 最小架构、正确性、Legacy JSON 与 CI 整改 | [ADR-038](decisions/ADR-038-preview6-minimum-architecture-remediation.md)、[PROJECT_STATE.md](PROJECT_STATE.md) |
 | Start Plan 与安装版 AppServer 离线兼容性 | [研究](research/start-plan-official-appserver-compatibility-20261118.md) |
 | 本次 Runtime、Cost Lab Web 与 Start Plan 集成交付 | [验收报告](reports/official-runtime-integration-costlab-web-startplan-20261118.md) |
@@ -33,7 +34,7 @@ English users start at [README.md](../README.md). 技术文档为中文。先读
 | Thin Adapter Final Audit 与 End-State（2026-11-19） | [架构审计报告](reports/thin-adapter-final-audit-20261119.md)、[最终收敛报告](reports/thin-adapter-end-state-20261119.md) |
 | MCP、Task/Result、Attention、取消合同 | [INTERFACES.md](INTERFACES.md) |
 | Core API、fork、Host/Worker 打包 | [SHARED_CORE.md](SHARED_CORE.md) |
-| Node/ZCode 配置、SQLite 升级 | [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md) |
+| Node/ZCode 配置、SQLite v14-only 边界 | [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md) |
 | 测试入口、压力触发和退役边界 | [testing/README.md](testing/README.md) |
 | 公开产品入口 | [README.md](../README.md)、[中文说明](../README.zh-CN.md) |
 | 插件安装/安全 | [插件说明](../plugins/codex-zcode-bridge/README.md)、[SECURITY](../plugins/codex-zcode-bridge/SECURITY.md) |

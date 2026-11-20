@@ -6,7 +6,6 @@ import { GENERATED_ARTIFACTS } from "../scripts/lib/generated-artifacts.mjs";
 const BYTE_COPIED_GENERATED_SQL_INPUTS = [
   "src/sqlite-candidate/wp6b2b1/admin-abandonment.sql",
   "src/sqlite-candidate/wp6b2b1/runtime-events.sql",
-  "src/sqlite-candidate/wp6b2b1/schema-v13.sql",
   "src/sqlite-candidate/wp6b2b1/schema.sql",
 ];
 
@@ -26,9 +25,7 @@ test("generated artifact inventory covers every committed plugin build output", 
     "plugins/codex-zcode-bridge/dist/admin-abandonment.sql",
     "plugins/codex-zcode-bridge/dist/bridge.mjs",
     "plugins/codex-zcode-bridge/dist/runtime-events.sql",
-    "plugins/codex-zcode-bridge/dist/schema-v13.sql",
     "plugins/codex-zcode-bridge/dist/schema.sql",
-    "plugins/codex-zcode-bridge/dist/upgrade-sqlite-v14.mjs",
     "plugins/codex-zcode-bridge/dist/wait-task.mjs",
     "plugins/codex-zcode-bridge/worker/vendor/browsers.json",
     "plugins/codex-zcode-bridge/worker/vendor/package.json",

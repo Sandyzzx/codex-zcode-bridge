@@ -1,5 +1,5 @@
 -- Narrow administrative recovery audit. This sidecar deliberately leaves the
--- v13 lifecycle tables unchanged; presentOperation() exposes the effective
+-- v14 lifecycle tables unchanged; presentOperation() exposes the effective
 -- terminal phase as admin_abandoned and never treats it as Cleanup Verified.
 CREATE TABLE manager_admin_abandonments (
   operation_id TEXT PRIMARY KEY,

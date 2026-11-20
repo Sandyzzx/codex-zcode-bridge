@@ -5,6 +5,7 @@
 > Decision: Accepted — Owner 在 “Preview.6 Post-Audit Consolidated Reduction & Correctness Repair” 中批准本 ADR 所列整改。
 > Applicability: ACTIVE。核心执行架构不变；旧 JSON 历史查询、Project Ledger、人类 Markdown 报告链、Codex Rollout Token 采集和 Desktop task-index 私有镜像从当前产品合同中退役。
 > Verified against: `545c02f745a4e2ab38a1fa3c31880ac80b84a310` 及两份冻结审计报告。
+> Applicability update (2026-11-21): 本 ADR 的 v14 Authority、Runtime Events、Recovery 与 fail-closed 核心继续有效；其中“保留 v13→v14 升级”已由 [ADR-043](ADR-043-sqlite-v14-only.md) SUPERSEDED / RETIRED。
 
 ## Context
 

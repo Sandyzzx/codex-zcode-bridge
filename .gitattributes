@@ -7,9 +7,7 @@ plugins/codex-zcode-bridge/dist/admin-abandon-held-operation.mjs text eol=lf
 plugins/codex-zcode-bridge/dist/admin-abandonment.sql text eol=lf
 plugins/codex-zcode-bridge/dist/bridge.mjs text eol=lf
 plugins/codex-zcode-bridge/dist/runtime-events.sql text eol=lf
-plugins/codex-zcode-bridge/dist/schema-v13.sql text eol=lf
 plugins/codex-zcode-bridge/dist/schema.sql text eol=lf
-plugins/codex-zcode-bridge/dist/upgrade-sqlite-v14.mjs text eol=lf
 plugins/codex-zcode-bridge/dist/wait-task.mjs text eol=lf
 plugins/codex-zcode-bridge/worker/worker-main.mjs text eol=lf
 plugins/codex-zcode-bridge/worker/vendor/browsers.json text eol=lf
@@ -17,7 +15,6 @@ plugins/codex-zcode-bridge/worker/vendor/package.json text eol=lf
 # These inputs are copied byte-for-byte into generated SQL artifacts.
 src/sqlite-candidate/wp6b2b1/admin-abandonment.sql text eol=lf
 src/sqlite-candidate/wp6b2b1/runtime-events.sql text eol=lf
-src/sqlite-candidate/wp6b2b1/schema-v13.sql text eol=lf
 src/sqlite-candidate/wp6b2b1/schema.sql text eol=lf
 # Vendored ZCode artifacts preserve upstream bytes and may contain license text
 # that resembles a conflict marker or templates with significant whitespace.
