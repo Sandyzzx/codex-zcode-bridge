@@ -1,5 +1,6 @@
 name: Windows Shard Experiment
 
+# Experimental hosted validation only; this workflow is not a required check.
 on:
   workflow_dispatch:
   push:

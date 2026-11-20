@@ -19,7 +19,7 @@ test("Windows shard plan is complete, disjoint, automatic-only, and duration-bal
 });
 
 test("Windows shard workflow scopes runner temp expressions to steps", () => {
-  const workflow = readFileSync(".github/workflows/windows-shard-experiment.yml", "utf8");
+  const workflow = readFileSync(".github/workflows/windows-shard-experiment.yml", "utf8").replace(/\r\n/gu, "\n");
   assert.match(workflow, /push:\n {4}branches:\n {6}- codex\/ci-performance-test-optimization-20261120\n {4}paths:\n {6}- \.github\/workflows\/windows-shard-experiment\.yml/u,
     "hosted experiment pushes must stay confined to this research branch and workflow file");
   const shardStart = workflow.indexOf("  shard:");
