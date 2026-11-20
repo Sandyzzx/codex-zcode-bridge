@@ -327,7 +327,11 @@ Cost Lab 首次复跑出现一次既有临时端口选择触发 Node `fetch` `ba
 
 ## 8. Git 与交付状态
 
-当前候选是在 `19c04d25899c9314d0b93a7efbafb37fa5b3f947` 之后的未提交测试基础设施优化。根工作区的 `M AGENTS.md` 和 `?? $null` 未被读取、修改、暂存或清理。
+实现提交为 `e8214366bd4077983aec5641936031e97b804a3d`，Tree 为
+`ccd47d649102b63f0da05f5fe422049e9b6ed9e4`，位于
+`codex/ci-performance-test-optimization-20261120`。该实现提交之后只允许追加本报告状态和
+PR CI 结果的文档提交，不再改变测试或 Workflow 行为。根工作区的 `M AGENTS.md` 和
+`?? $null` 未被读取、修改、暂存或清理。
 
 PR: `https://github.com/Sandyzzx/codex-zcode-bridge/pull/106`
 
@@ -365,6 +369,9 @@ CI_PRIMARY_BASELINE: WINDOWS_NPM_TEST
 CI_POST_CHANGE_P50_P95: NOT_MEASURED
 RUNNER_MINUTES: NOT_MEASURED
 PR_CI_AFTER_PUSH: PENDING
+IMPLEMENTATION_COMMIT: e8214366bd4077983aec5641936031e97b804a3d
+IMPLEMENTATION_TREE: ccd47d649102b63f0da05f5fe422049e9b6ed9e4
+REMOTE_BRANCH: codex/ci-performance-test-optimization-20261120
 
 MERGE_ALLOWED: NO
 RELEASE_ALLOWED: NO
