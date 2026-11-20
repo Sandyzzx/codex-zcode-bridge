@@ -21,6 +21,8 @@
 
 没有删除功能测试、增加 SKIP、弱化断言、提高测试内部 timeout，或以 Mock 替换唯一的真实进程边界。
 
+正式分片 PR CI `44820909504` 已完整 PASS：Windows 关键路径从旧候选单 Job 的 802s 降到两个分片中最慢的 506s，PR Run 墙钟从 1,152s 降到 534s。代价是 Windows runner 总量由约 13.4 分钟增至约 15.0 分钟；这是用并行 Runner 换取开发反馈墙钟，不宣称降低 Windows 测试总执行量。
+
 ### 1.1 已定位的上一次 CI 失败
 
 PR #106 的 HEAD `19c04d25899c9314d0b93a7efbafb37fa5b3f947` 在 Windows Verify 失败：
@@ -269,7 +271,7 @@ push:
 | B | `44818061062` | 400s | 412s | PASS | 814s | 421s |
 | C | `44819147484` | 341s | 447s | PASS | 791s | 456s |
 
-三组最慢 Shard 分别为 483s、412s、447s。每对两个 Shard 的实际合计约 13.2–14.7 runner-minutes，和原单一 Windows Verify 约 13.4 runner-minutes接近；分片的主要收益是并行降低墙钟，而不是减少 Windows 测试总执行量。
+三组最慢 Shard 分别为 483s、412s、447s。每对两个 Shard 的实际合计约 13.2–14.7 runner-minutes，和原单一 Windows Verify 约 13.4 runner-minutes 接近；分片的主要收益是并行降低墙钟，而不是减少 Windows 测试总执行量。
 
 同一 Run 的非独立重跑包括：
 
@@ -286,7 +288,19 @@ push:
 - 聚合 Job 沿用现有 Required Check 名称 `Verify (windows-2022)`。
 - 任一 Shard 失败时，聚合 Required Check 必须失败。
 
-正式接入后的 PR CI 结果在本报告生成时仍需重新执行，不能把托管实验 Workflow 的成功冒充为 `ci.yml` 新拓扑的 PASS。
+正式接入 Run `44820909504` 使用提交 `4e189dff036c5e3a80e032f8e1c7e69f01792ef6`，结果为 SUCCESS：
+
+| Job | 墙钟 |
+|---|---:|
+| Select impact gates | 16s |
+| Windows Verify shard 1/2 | 396s |
+| Windows Verify shard 2/2 | 506s |
+| Verify (ubuntu-latest) | 78s |
+| SQLite resource matrix (ubuntu-latest) | 26s |
+| SQLite resource matrix (windows-2022) | 89s |
+| Verify (windows-2022) aggregate | 2s |
+
+聚合 Check 以原有 Required Check 名称 `Verify (windows-2022)` 出现并成功；两个 Windows 分片均为新 Job，没有复用实验 Run 的 Job。该正式 Run 的 PR 墙钟为 534s，相比旧候选 Run `44813856967` 的 1,152s 缩短 618s（约 53.6%）。
 
 ## 5. 验证记录
 
@@ -308,18 +322,39 @@ push:
 | Windows shard rounds 5–7 | PASS，每轮两个 Shard 均 PASS |
 | `npm run test:affected` full fallback | PASS；966 tests / 964 PASS / 0 FAIL / 2 existing SKIP；当前机器串行耗时 1,161.362s |
 | Windows shard focused tests | 3/3 PASS |
+| 正式分片 PR CI `44820909504` | PASS；`Verify (windows-2022)` aggregate PASS |
 
 ### 5.2 未运行或未取得
 
 | 项目 | 状态 |
 |---|---|
 | GitHub 托管 Windows 两路分片 | 3/3 完全独立配对 PASS |
-| 分片接入正式 `ci.yml` 后的 PR CI | PENDING_PUSH |
-| 分片后的 GitHub Windows Verify P50/P95 | NOT_MEASURED |
-| 分片后的 PR Completion Wall Time | NOT_MEASURED |
+| 分片接入正式 `ci.yml` 后的 PR CI | PASS，Run `44820909504` |
+| 分片后的 GitHub Windows Verify P50/P95 | NOT_MEASURED；当前只有 1 个正式分片样本 |
+| 分片后的 PR Completion Wall Time | 534s（单个可比 Run；P50/P95 NOT_MEASURED） |
 | 官方 runner-minutes | NOT_MEASURED |
 
 `NOT_RUN`、`NOT_MEASURED` 和 `PENDING` 不计为 PASS。
+
+### 5.3 优化前后指标
+
+比较使用同一 Windows 类型、同一完整门禁语义的两个单次 Run；没有足够样本计算正式 P50/P95，因此不把单次结果伪装成分布。
+
+| 指标 | 优化前 | 优化后 |
+|---|---:|---:|
+| mvp-real-adapter | 原文件 746.716s / 46 tests | 拆为 5 个合同文件；Official Host 文件单测 33.8s，其他文件按 Target 选择，整组完整回归仍执行 |
+| composition | 399.654s | 未改测试内容；`NOT_MEASURED` 独立优化收益 |
+| failure-facts | 173.765s | 未改测试内容；`NOT_MEASURED` 独立优化收益 |
+| app-server adapter | 106.773s | 未改测试内容；`NOT_MEASURED` 独立优化收益 |
+| Windows Verify | 802s 单 Job | 506s 最慢分片；主关键路径约 506s |
+| Windows Runner Minutes | 约 13.37 分钟 | 约 15.03 分钟（两分片合计，不含聚合） |
+| Worker Spawn 总数 | `NOT_MEASURED` | `NOT_MEASURED` |
+| Process Tree Scan 次数 | `NOT_MEASURED` | `NOT_MEASURED` |
+| Cleanup 总耗时 | `NOT_MEASURED` | `NOT_MEASURED` |
+| 普通 PR Targeted 耗时 | `NOT_MEASURED` | `NOT_MEASURED`；只确认拆分后的 Target 不再固定选择整个原文件 |
+| Full Suite 耗时 | 本地串行 1,161.362s | 托管分片关键路径 506s；总测试量不变，分片 runner 成本略增 |
+
+旧候选 Run `44813856967` 的总 Job 墙钟约 1,023s；正式分片 Run 的总 Job 墙钟约 1,113s。两者都不是 GitHub 官方计费分钟，但可说明本轮优化主要缩短墙钟，而不是降低总计算量。
 
 ## 6. 优化收益与边界
 
@@ -345,15 +380,15 @@ push:
 
 - PR 过期 Run cancellation。
 - Draft 只跑 Impact/Fast。
-- FULL 只保留 Release 双平台完整回归。
+- FULL 只保留 Ubuntu release 与 Windows 两路分片各执行一次完整功能集合。
 - Cost Lab 单独短 Job，不拖起 Bridge 全套。
 
-### 6.4 可能降低墙钟但不降低总测试量
+### 6.4 已实测降低墙钟但不降低总测试量
 
 - Windows 两路分片。
-- 三组完全独立的托管配对已 PASS，正式 `ci.yml` 已把两路分片作为 `Verify (windows-2022)` 的 Required Check 聚合路径。
-- 托管实验的最慢 Shard 为 483s，而原单一 Windows Verify 为 802s；预期 PR 主关键路径约缩短至 8–9 分钟，但不能在正式 `ci.yml` Run 完成前标记实测 PASS。
-- 两个 Windows Runner 的总 runner 时间基本不变，略高于单 Job；该优化交换的是墙钟时间，不是 Windows 测试总量。
+- 三组完全独立的托管配对已 PASS，正式 `ci.yml` 已验证 `Verify (windows-2022)` 聚合 Check。
+- 正式 Run 最慢 Shard 为 506s，原单一 Windows Verify 为 802s；PR Run 墙钟由 1,152s 降至 534s。
+- 两个 Windows Runner 的总 runner 时间略高于单 Job；该优化交换的是墙钟时间，不是 Windows 测试总量。
 
 ### 6.5 不建议或尚未证明
 
@@ -361,14 +396,16 @@ push:
 - 不应把 8 x 32 KiB 普通负载当作 32,000-event 压力等价证据。
 - 不应把历史 Run 的 PASS 复用于不同代码树或不同测试基线。
 - 不应因 CI 变绿而扩大 Impact Map、降低断言或增加 SKIP。
+- `mvp-real-adapter` 拆分后的单个合同文件耗时、Worker Spawn、Process Tree Scan 和 Cleanup 分阶段耗时尚未形成稳定的托管分布，保持 `NOT_MEASURED`。
+- 一次非独立托管重跑的 private-auth 超时仍是残余随机性；正式 Run 通过不等于已证明所有托管 Runner 不会偶发该超时。
 
 Cost Lab 首次复跑出现一次既有临时端口选择触发 Node `fetch` `bad port`，立即复跑 86/86 PASS。Cost Lab 代码与端口实现本轮未修改，因此记录为残余测试随机性，不将单次通过写成稳定性证明，也不在无关范围内顺带修复。
 
 ## 7. 剩余工作
 
-1. 推送分片正式接入提交，确认 `Verify (windows-2022)` 聚合 Check 在 PR 上实际出现并通过。
-2. 记录正式分片 PR CI 的 Windows Job 墙钟；样本不足时 P50/P95 继续标记 `NOT_MEASURED`。
-3. 重新运行受影响测试、生成物检查和完整 Diff 检查。
+1. 继续收集后续 PR Run 的 Windows 分片墙钟，样本足够后再计算 P50/P95。
+2. 若要降低 Windows runner 总量，只能在证明合同不重复、不降低真实进程覆盖后拆分测试；不能把分片当作总测试量下降。
+3. 保持 private-auth 托管 Runner 超时的独立监控，不通过 timeout/SKIP 掩盖。
 4. 不合并 Preview、不发布、不打 Tag。
 
 ## 8. Git 与交付状态
@@ -377,7 +414,9 @@ Cost Lab 首次复跑出现一次既有临时端口选择触发 Node `fetch` `ba
 `e8214366bd4077983aec5641936031e97b804a3d`，Tree 为
 `ccd47d649102b63f0da05f5fe422049e9b6ed9e4`。分片接入前的最新验证提交为
 `6bb2b8caa47acb90f0be0f66aa256e72d85b5c8c`，Tree 为
-`cc63f2282d91f67edfaa60c5ada853aca032ad46`。正式分片接入提交将在本报告更新后创建。
+`cc63f2282d91f67edfaa60c5ada853aca032ad46`。正式分片接入提交为
+`4e189dff036c5e3a80e032f8e1c7e69f01792ef6`，Tree 为
+`2d1d2f5caa1f543973f1e2196b834e71de49bd74`。
 根工作区的 `M AGENTS.md` 和 `?? $null` 未被读取、修改、暂存或清理。
 
 PR: `https://github.com/Sandyzzx/codex-zcode-bridge/pull/106`
@@ -398,7 +437,8 @@ WINDOWS_SHARD_PLAN: PASS
 WINDOWS_SHARD_LOCAL_ROUNDS: 3_OF_3_PASS
 WINDOWS_SHARD_HOSTED_FRESH_PAIRS: 3_OF_3_PASS
 WINDOWS_SHARD_HOSTED_TRANSIENT_FAILURE: 1_NON_FRESH_RETRY
-WINDOWS_SHARD_REQUIRED_CHECK: YES_CONFIGURED_PENDING_PR_CI
+WINDOWS_SHARD_REQUIRED_CHECK: PASS
+WINDOWS_SHARD_PRODUCTION_RUN: 44820909504
 FULL_FUNCTIONAL_REGRESSION: SHARDED_3X_PASS
 
 TEST_COVERAGE_PRESERVED: YES
@@ -414,15 +454,17 @@ REAL_OAUTH_REQUESTS: 0
 REAL_BILLING_REQUESTS: 0
 
 CI_PRIMARY_BASELINE: WINDOWS_NPM_TEST
+CI_POST_CHANGE_WINDOWS_MAX_SHARD: 506s
+CI_POST_CHANGE_PR_WALL: 534s
 CI_POST_CHANGE_P50_P95: NOT_MEASURED
 RUNNER_MINUTES: NOT_MEASURED
-PR_CI_AFTER_PUSH: PENDING_PROMOTION
-IMPLEMENTATION_COMMIT: 6bb2b8caa47acb90f0be0f66aa256e72d85b5c8c
-IMPLEMENTATION_TREE: cc63f2282d91f67edfaa60c5ada853aca032ad46
+PR_CI_AFTER_PROMOTION: PASS
+IMPLEMENTATION_COMMIT: 4e189dff036c5e3a80e032f8e1c7e69f01792ef6
+IMPLEMENTATION_TREE: 2d1d2f5caa1f543973f1e2196b834e71de49bd74
 REMOTE_BRANCH: codex/ci-performance-test-optimization-20261120
 
 MERGE_ALLOWED: NO
 RELEASE_ALLOWED: NO
 
-FINAL_VERDICT: PENDING_PROMOTION_PR_CI
+FINAL_VERDICT: PASS_WITH_RESIDUAL_RISK
 ```
