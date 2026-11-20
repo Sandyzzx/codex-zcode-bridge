@@ -165,6 +165,19 @@
     "source_equivalence": "UNKNOWN",
     "host_patch_status": "UPSTREAM_PENDING"
   },
+  "known_gaps": [
+    "No public ZCode 3.19.0 source tag or source commit is available for a file-level 3.18.2-to-3.19.0 source diff.",
+    "No independent ZCode 3.18.2.10443 installation was available, so fresh real 3.18.2 E2E remains NOT_RUN.",
+    "The single real 3.19.0 Coding Plan request predates the final experimental runtime marker forwarding fix; that run remains UNVERIFIED while the final marker path has synthetic coverage.",
+    "The official Start Plan billing response contains no active plan, so live Start Plan E2E and token reconciliation are not applicable on the current account.",
+    "Other Provider live probes were not run."
+  ],
+  "remaining_risks": [
+    "Installed 3.19.0 bundle behavior remains UNKNOWN relative to unpublished official source.",
+    "Coding Plan multiplier, cache pricing, rounding and peak-pricing behavior remain unverified for 3.19.0.",
+    "Start Plan live entitlement, device binding, private lease and model execution remain unverified on the current account.",
+    "Experimental authorization permits bounded probes but does not relax signer, fingerprint, Provider-scope or lifecycle safety gates."
+  ],
   "validation": {
     "final_validated_at": "2026-11-20T08:33:15.316Z",
     "typecheck": "PASS",

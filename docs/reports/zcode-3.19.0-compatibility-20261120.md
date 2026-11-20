@@ -251,7 +251,51 @@ fec975905a2abd4c07e35c40d51fa097a2258ec9
 - 实验协议 Smoke；
 - 生产 Worker 缺失认证 resolver 的既有 fail-closed 边界。
 
-## 11. 安全与资源
+## 11. Requirement Evidence Matrix
+
+| Goal 要求 | 当前证据 | 判定 |
+|---|---|---|
+| 3.19.0 Runtime Identity | 安装根、Desktop/ASAR/Bundle/builtin/runtime-host 大小与 SHA-256、PE、Authenticode、Node | PASS |
+| 官方 3.19.0 源码差异 | 公开仓库无 3.19.0 Tag/Branch；BuildCommitId 不等同源码 commit；只做安装产物静态与协议验证 | `SOURCE_EQUIVALENCE: UNKNOWN` |
+| 保留 3.18.2 Manifest 与失败边界 | 原有 3.18.2 记录不变；`LEGACY_SAFETY_ONLY` 与 `FULL` pinning 分类测试；全套合成回归 | PASS — SYNTHETIC |
+| 未知版本安全检查 | 非 x64、无效/非官方签名、混合根、Node 不兼容、身份不完整均 hard block | PASS |
+| 精确指纹授权 | 无授权 `UNVERIFIED`；匹配授权 `EXPERIMENTAL`；资产/Node/签名变化使授权失效 | PASS |
+| Provider scope 独立 | Coding Plan、Start Plan、其他 Provider 各需对应 probe scope | PASS |
+| 实验态不自动提升 | 授权与运行结果不写 Manifest；折扣保持 `NOT_VERIFIED`；Start Plan 保持 pending | PASS |
+| 3.19.0 协议与真实 Coding Plan 执行 | 零模型协议 Smoke；1 次真实 Task completed；18,351 Token | PASS — EXPERIMENTAL |
+| Coding Plan 倍率 | 官方小时桶未产生可归因 Token/Credits；quota unit 不是 Credits | `INCONCLUSIVE` |
+| Start Plan 真实 E2E 与 Token 对账 | 官方 `billing/balance` 对 3.18.2/3.19.0 均返回空 `plans/balances`；未发模型请求 | `BLOCKED / NO_ACTIVE_PLAN` |
+| 完整回归 | `test:affected` 与 `test:full` 均为 961/959 PASS、0 FAIL、2 SKIP | PASS |
+| 不合并、不发布、不修改生产状态 | 独立分支；工作区 clean；无 Preview merge/Release；无 SQLite/凭据/安装修改 | PASS |
+
+## 12. Known Gaps
+
+- 公开官方仓库没有可确认的 ZCode 3.19.0 源码身份，因此不能生成逐文件
+  3.18.2 -> 3.19.0 官方源码 Diff，也不能把 Desktop `BuildCommitId`
+  `a7ed1054` 当成源码 commit。
+- 当前机器只保留 3.19.0 安装，没有独立的 3.18.2.10443 可执行副本；本轮
+  3.18.2 兼容性结论只来自原有精确 Manifest 和合成回归，不是新鲜实机 E2E。
+- 唯一一次 3.19.0 Coding Plan 真实验证发生时，runner marker 转发修复尚未
+  落地，因此该历史请求的运行证据为 `UNVERIFIED`；最终 marker 路径由合成
+  测试覆盖，没有为了重复 marker 再发真实请求。
+- 当前账户的 Start Plan Billing Reader 返回空套餐和空余额，无法建立 active
+  entitlement，因此真实 Start Plan Session/Turn、免费 Token 用量和配额前后
+  对账均为 `NOT_RUN`，不能声明兼容或倍率。
+- 3.19.0 的 Other Provider 真实探测未运行，没有把通用 Runtime 启动成功当作
+  其他 Provider 兼容证据。
+
+## 13. Remaining Risks
+
+- 3.19.0 安装 Bundle 与公开源码的等价性未知；未来官方更新可能改变未覆盖的
+  Host、协议、认证或 Usage 行为。
+- 3.19.0 Coding Plan 能执行一次模型请求，但官方小时桶未形成可归因账单项；
+  不能据此判断 0.67、缓存计费、取整或高峰倍率是否保持一致。
+- Start Plan 的静态兼容路径已由合成测试保护，但没有当前机器的 live
+  Entitlement、设备绑定、Private Lease 和真实模型证据。
+- 实验授权降低的是“未知版本无法启动”的可用性障碍，不是安全门禁；异常签名、
+  资产漂移、错误 scope 和 malformed 授权仍然 fail closed。
+
+## 14. 安全与资源
 
 ```text
 REAL_MODEL_REQUESTS: 1
@@ -266,7 +310,7 @@ RELEASE_PUBLISHED: NO
 
 本机安装目录只读检查，没有替换 ZCode 3.19.0，也没有修改认证、路由或持久凭据。
 
-## 12. 最终判定
+## 15. 最终判定
 
 ```yaml
 GOAL: ZCODE_3_19_0_ADAPTATION_WITH_3_18_COMPATIBILITY
@@ -279,6 +323,7 @@ ZERO_MODEL_PROTOCOL_SMOKE: PASS
 ZCODE_3_19_CODING_PLAN_EXECUTION: PASS
 ZCODE_3_19_CODING_PLAN_MULTIPLIER: INCONCLUSIVE
 ZCODE_3_19_START_PLAN: BLOCKED / NO_ACTIVE_PLAN
+ZCODE_3_19_START_PLAN_TOKEN_RECONCILIATION: NOT_APPLICABLE_NO_ACTIVE_PLAN
 ZCODE_3_19_OTHER_PROVIDERS: NOT_RUN
 
 ZCODE_3_18_2_FRESH_REAL_E2E: NOT_RUN
