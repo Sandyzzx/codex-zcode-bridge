@@ -5020,7 +5020,7 @@ function loadInstallAuthoritySelection(host) {
     const keys = Object.keys(parsed).sort().join("|");
     if (parsed.schema_version !== 1) throw new SqliteInstallConfigurationError("authority_config_version_unsupported");
     if (parsed.authority === "json" && keys === "authority|schema_version") {
-      return { state: "sqlite", configPath, configuredDataRoot: "" };
+      throw new SqliteInstallConfigurationError("authority_config_json_unsupported");
     }
     if (parsed.authority !== "sqlite" || keys !== "authority|schema_version" && keys !== "authority|data_root|schema_version") {
       throw new SqliteInstallConfigurationError("authority_config_invalid_contract");

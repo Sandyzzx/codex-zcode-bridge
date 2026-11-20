@@ -19,7 +19,7 @@ export class SqliteInstallConfigurationError extends Error {
   constructor(readonly code: string, message = code) { super(message); this.name = "SqliteInstallConfigurationError"; }
 }
 
-/** SQLite is the sole production authority. Legacy JSON selection is accepted only as an upgrade hint. */
+/** SQLite is the sole production authority. Legacy JSON selection is rejected without mutation. */
 export function loadInstallAuthoritySelection(host: BridgeHostProfile): InstallAuthoritySelection {
   validateHostProfile(host);
   const configPath = path.join(host.settingsDirectory, CONFIG_FILE);
@@ -32,7 +32,7 @@ export function loadInstallAuthoritySelection(host: BridgeHostProfile): InstallA
     const keys = Object.keys(parsed).sort().join("|");
     if (parsed.schema_version !== 1) throw new SqliteInstallConfigurationError("authority_config_version_unsupported");
     if (parsed.authority === "json" && keys === "authority|schema_version") {
-      return { state: "sqlite", configPath, configuredDataRoot: "" };
+      throw new SqliteInstallConfigurationError("authority_config_json_unsupported");
     }
     if (parsed.authority !== "sqlite" || (keys !== "authority|schema_version" && keys !== "authority|data_root|schema_version")) {
       throw new SqliteInstallConfigurationError("authority_config_invalid_contract");
