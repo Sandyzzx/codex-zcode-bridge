@@ -100,7 +100,7 @@ test("Worker Cleanup keeps a rejected official close visible when its independen
   }, { workerOverride: officialHostCloseFailureWorkerEntryPath });
 });
 
-test("SQLite production Worker survives bounded streaming stderr backpressure without a diagnostic recorder", { timeout: 120_000 }, async () => {
+test("SQLite production Worker survives bounded large-chunk stderr backpressure without a diagnostic recorder", { timeout: 120_000 }, async () => {
   const lifecycleTimings: LifecycleTimingCollector = { records: [] };
   await withRealAdapterMcp(async (client, _manager, _dataRoot, workspace, runtime) => {
     const taskId = `mvp-stderr-${randomUUID()}`;
@@ -123,7 +123,7 @@ test("SQLite production Worker survives bounded streaming stderr backpressure wi
       .filter((event) => event.type === "model_output")
       .map((event) => String(event.summary));
     const visible = output.join("");
-    assert.ok(visible.endsWith("x".repeat(32_000)), "all 32,000 streamed characters must remain ordered and durable");
+    assert.ok(visible.endsWith("x".repeat(8 * 32 * 1024)), "all streamed characters must remain ordered and durable");
     assert.ok(visible.includes("a" + "🙂".repeat(1001)), "UTF-8 event chunking must not split or replace non-BMP text");
     assert.ok(visible.includes("Synthetic visible output before tool use."));
     assert.ok(output.every((chunk) => Buffer.byteLength(chunk, "utf8") <= 8_000));
@@ -131,13 +131,15 @@ test("SQLite production Worker survives bounded streaming stderr backpressure wi
     if (process.env["MVP_REAL_ADAPTER_TIMINGS"] === "1") {
       console.error("MVP_REAL_ADAPTER_BACKPRESSURE " + JSON.stringify(backpressure));
     }
-    assert.equal(backpressure.events_written, 4096);
-    assert.equal(backpressure.delta_bytes, 8);
-    assert.ok(backpressure.bytes_written! > 256 * 1024, "the bounded stream must exceed typical Windows pipe capacity");
+    assert.equal(backpressure.events_written, 8);
+    assert.equal(backpressure.delta_bytes, 32 * 1024);
+    assert.ok(backpressure.bytes_written! > 256 * 1024
+      && backpressure.bytes_written! > backpressure.high_water_mark! * 8,
+    "the bounded stream must substantially exceed the Windows pipe high-water mark");
     assert.ok(backpressure.flood_elapsed_ms! >= 0);
     assert.equal(backpressure.max_writable_length, 0,
       "the Windows synchronous pipe must not accumulate an unbounded JavaScript write queue");
-    assert.ok(backpressure.write_false_count! >= 0);
+    assert.ok(Number.isSafeInteger(backpressure.write_false_count));
   }, { runtimeVariant: "stderr-flood", lifecycleTimings });
 });
 

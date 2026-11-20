@@ -1,6 +1,7 @@
 name: Windows Shard Experiment
 
 # Experimental hosted validation only; this workflow is not a required check.
+# Bounded-stream rerun: fewer large chunks retain pipe pressure without tiny-event overhead.
 on:
   workflow_dispatch:
   push:

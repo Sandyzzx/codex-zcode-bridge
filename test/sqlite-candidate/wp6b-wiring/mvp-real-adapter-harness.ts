@@ -156,7 +156,7 @@ function writeFakeRuntime(name: string, variant: RuntimeVariant): FakeRuntimeFix
     needs_master_decision: false,
   });
   const floodSpec = variant === "stderr-flood"
-    ? { events: 4096, delta: "xxxxxxxx" }
+    ? { events: 8, delta: "x".repeat(32 * 1024) }
     : variant === "stream-flood-stress"
       ? { events: 32_000, delta: "x" }
       : null;
@@ -178,10 +178,10 @@ function writeFakeRuntime(name: string, variant: RuntimeVariant): FakeRuntimeFix
       `const task = JSON.parse(fs.readFileSync(${JSON.stringify(taskInput)}, "utf8"));`,
       `const report = ${JSON.stringify(report)}.replace("TASK_ID", task.task_id)${variant === "private-auth-echo" ? '.replace("synthetic MVP real-adapter report", "echo " + receivedCredential)' : ''};`,
       ...(floodSpec ? [
-        // The ordinary gate emits 4,096 writes (many times the OS pipe
-        // capacity) with eight-character deltas. The stress entry retains the
-        // former 32,000-event shape. Both preserve the exact 32,000-character
-        // ordered-output contract.
+        // The ordinary gate emits eight large writes (more than the OS pipe
+        // capacity) to prove backpressure without paying the per-event cost of
+        // thousands of tiny lines. The stress entry retains the former
+        // 32,000-event shape.
         `const floodStartedAt = performance.now();`,
         `let writeFalseCount = 0;`,
         `let maxWritableLength = 0;`,
