@@ -1,3 +1,4 @@
+// RESEARCH_REFERENCE: historical Gate 2 fixture; not discovered by the production test runner.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn,execFileSync} from 'node:child_process';

@@ -1,3 +1,4 @@
+// RESEARCH_REFERENCE: historical Gate 2 fixture; not discovered by the production test runner.
 import test from 'node:test';import assert from 'node:assert/strict';import {encodeFrame,SingleFrame,validatePacket} from './frame.mjs';
 const scope={account:'a',provider:'p',model:'m',task:'t',attempt:1,session:'s',turn:'u'};
 test('split multibyte UTF-8 decodes exactly once',()=>{const f=encodeFrame({v:'模型'});const d=new SingleFrame();let out;for(const b of f)out=d.push(Buffer.from([b]))??out;assert.deepEqual(out,{v:'模型'});d.end();assert.throws(()=>d.push(Buffer.from([0])),/extra_frame/);});
