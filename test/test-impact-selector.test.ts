@@ -121,12 +121,17 @@ test("Worker and protocol-adapter source changes select corresponding integratio
   assert.ok(adapter.selected_tests.some((entry) => entry.file === "test/session-frames.test.ts"));
   assert.equal(worker.selected_tests.some((entry) => entry.file === "test/sqlite-resource-stress.test.mjs"), false);
   const deadlines = selectAffectedTests({ changedFiles: ["src/runtime/task-timeout.ts"], map, platform: "win32" });
-  for (const file of ["test/task-timeout.test.ts", "test/zcode-app-server-adapter.test.ts", "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts"]) {
+  for (const file of [
+    "test/task-timeout.test.ts",
+    "test/zcode-app-server-adapter.test.ts",
+    "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter-official-host.test.ts",
+    "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter-result-lifecycle.test.ts",
+  ]) {
     assert.ok(deadlines.selected_tests.some((entry) => entry.file === file), `shared deadline changes must select ${file}`);
   }
   assert.equal(deadlines.stress_mode, "STRESS_TEST_REQUIRED");
   const deadlinesLinux = selectAffectedTests({ changedFiles: ["src/runtime/task-timeout.ts"], map, platform: "linux" });
-  assert.equal(deadlinesLinux.selected_tests.some((entry) => entry.file === "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts"), false,
+  assert.equal(deadlinesLinux.selected_tests.some((entry) => entry.file.includes("mvp-real-adapter-")), false,
     "Windows-only real-adapter deadline coverage must not run on Linux");
 });
 
@@ -155,7 +160,6 @@ test("runner and shared fixture changes force the complete regression", () => {
     filesFor("copy-test-assets"),
     "test/helpers.ts",
     "test/test-impact-map.json",
-    "tools/cost-lab/web-server.mjs",
   ];
   for (const file of fullSuitePaths) {
     const changed = Array.isArray(file) ? file : [file];
@@ -164,6 +168,9 @@ test("runner and shared fixture changes force the complete regression", () => {
     assert.equal(selection.stress_mode, "SEPARATE_STRESS_GATE");
     assert.equal(selection.selected_tests.some((entry) => entry.file === "test/sqlite-resource-stress.test.mjs"), false);
   }
+  const costLab = selectAffectedTests({ changedFiles: ["tools/cost-lab/web-server.mjs"], map });
+  assert.equal(costLab.mode, "NO_TESTS_APPLICABLE");
+  assert.deepEqual(costLab.affected_domains, ["cost-lab"]);
 });
 
 test("real script consumers map to their executable contract tests", () => {
@@ -175,7 +182,10 @@ test("real script consumers map to their executable contract tests", () => {
     "test/process-spawn.test.ts",
     "test/runtime-remediation.test.ts",
     "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-    "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
+    "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter-official-host.test.ts",
+    "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter-private-auth.test.ts",
+    "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter-result-lifecycle.test.ts",
+    "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter-routing-admission.test.ts",
   ]) {
     assert.ok(spawn.selected_tests.some((entry) => entry.file === consumer), `process-spawn changes must select ${consumer}`);
   }
@@ -302,6 +312,17 @@ test("CI impact gate shadow-compares targeted and full selections with the execu
   assert.deepEqual(forcedRunner.full_suite_reasons, ["forced-full"]);
 });
 
+test("Cost Lab changes select only the independent Cost Lab gate", () => {
+  const costLab = selectCiImpact({ files: ["tools/cost-lab/startplan-billing.mjs"], map });
+  assert.equal(costLab.affected_mode, "NO_TESTS_APPLICABLE");
+  assert.equal(costLab.full_required, false);
+  assert.equal(costLab.integration_required, false);
+  assert.equal(costLab.cost_lab_required, true);
+  const forced = selectCiImpact({ files: [], map, forceFull: true });
+  assert.equal(forced.full_required, true);
+  assert.equal(forced.cost_lab_required, true, "an unverifiable diff must not silently skip Cost Lab");
+});
+
 test("CI impact CLI fails safe for dispatch, initial-push and invalid base revisions", () => {
   const validBase = spawnSync(
     process.execPath,
@@ -338,6 +359,11 @@ test("CI gives FULL impacts one complete regression and no duplicate Fast T0", (
   const workflow = readFileSync(path.resolve(".github/workflows/ci.yml"), "utf8");
   assert.match(
     workflow,
+    /pull_request:\s*\n\s*types:\s*\[opened, synchronize, reopened, ready_for_review\]/u,
+    "converting a draft PR to ready-for-review must trigger the formal PR gates",
+  );
+  assert.match(
+    workflow,
     /fast:\s+name: Fast PR gate\s+needs: impact\s+if: github\.event_name == 'pull_request' && needs\.impact\.outputs\.full_required != 'true'/u,
     "FULL impacts must skip the duplicate Fast T0 gate",
   );
@@ -345,8 +371,28 @@ test("CI gives FULL impacts one complete regression and no duplicate Fast T0", (
   assert.match(workflow, /Fast impact selection requires a valid base SHA/u);
   assert.match(
     workflow,
-    /integration:[\s\S]*?needs: impact[\s\S]*?if: github\.event_name == 'pull_request' && needs\.impact\.outputs\.integration_required == 'true' && needs\.impact\.outputs\.full_required != 'true'/u,
-    "FULL impacts must not run a partial Windows integration gate",
+    /integration:[\s\S]*?needs: \[impact, fast\][\s\S]*?if: github\.event_name == 'pull_request' && github\.event\.pull_request\.draft == false && needs\.fast\.result == 'success' && needs\.impact\.outputs\.integration_required == 'true' && needs\.impact\.outputs\.full_required != 'true'/u,
+    "Windows integration must only run after Fast has completed the shared T0 checks",
+  );
+  assert.match(
+    workflow,
+    /integration:[\s\S]*?- run: npm run build[\s\S]*?- name: Verify Windows worker process identity[\s\S]*?- name: Impacted integration and task-lifecycle tests/u,
+    "Windows integration must not repeat Fast's typecheck, plugin, generated, or diff gates",
+  );
+  assert.match(
+    workflow,
+    /release:[\s\S]*?github\.event\.pull_request\.draft == false/u,
+    "draft PRs must not pay for the full release regression",
+  );
+  assert.match(
+    workflow,
+    /sqlite-stress:[\s\S]*?github\.event\.pull_request\.draft == false/u,
+    "draft PRs must not pay for the stress matrix",
+  );
+  assert.match(
+    workflow,
+    /cost-lab:[\s\S]*?always\(\) && \(github\.event_name == 'push' \|\| github\.event_name == 'workflow_dispatch' \|\| \(github\.event_name == 'pull_request' && github\.event\.pull_request\.draft == false && needs\.impact\.outputs\.cost_lab_required == 'true'\)\)/u,
+    "Cost Lab must run on Push/Dispatch and selected non-draft PRs only",
   );
   assert.match(workflow, /CODEX_BRIDGE_CI_T0_COMPLETED: "1"[\s\S]*?--tests-only/u);
   assert.match(workflow, /concurrency:[\s\S]*?group: ci-\$\{\{ github\.event_name \}\}-\$\{\{ github\.event\.pull_request\.number \|\| github\.ref \}\}[\s\S]*?cancel-in-progress: \$\{\{ github\.event_name == 'pull_request' \}\}/u);

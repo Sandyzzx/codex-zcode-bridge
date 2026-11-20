@@ -2,6 +2,7 @@ name: CI
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches:
       - master
@@ -29,6 +30,7 @@ jobs:
       full_required: ${{ steps.select.outputs.full_required }}
       integration_required: ${{ steps.select.outputs.integration_required }}
       stress_required: ${{ steps.select.outputs.stress_required }}
+      cost_lab_required: ${{ steps.select.outputs.cost_lab_required }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -77,8 +79,8 @@ jobs:
 
   integration:
     name: Integration gate (Windows)
-    needs: impact
-    if: github.event_name == 'pull_request' && needs.impact.outputs.integration_required == 'true' && needs.impact.outputs.full_required != 'true'
+    needs: [impact, fast]
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false && needs.fast.result == 'success' && needs.impact.outputs.integration_required == 'true' && needs.impact.outputs.full_required != 'true'
     runs-on: windows-2022
     timeout-minutes: 25
     steps:
@@ -90,13 +92,9 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - run: npm ci
-      # This job owns T0 exactly once. The impacted-test command below only
-      # selects, compiles, and runs tests after these steps have succeeded.
-      - run: npm run typecheck
+      # Fast owns the platform-independent T0 checks. This Windows gate only
+      # builds the Windows execution artifacts and runs the selected tests.
       - run: npm run build
-      - run: npm run validate:plugin
-      - run: npm run check:generated
-      - run: git diff --check
       - name: Verify Windows worker process identity
         run: node scripts/verify-windows-worker-identity.mjs
       - name: Impacted integration and task-lifecycle tests
@@ -114,7 +112,7 @@ jobs:
   release:
     name: Verify (${{ matrix.os }})
     needs: impact
-    if: always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (needs.impact.result == 'success' && needs.impact.outputs.full_required == 'true'))
+    if: always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false && needs.impact.result == 'success' && needs.impact.outputs.full_required == 'true'))
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -145,7 +143,7 @@ jobs:
   sqlite-stress:
     name: SQLite resource matrix (${{ matrix.os }})
     needs: impact
-    if: always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (needs.impact.result == 'success' && (needs.impact.outputs.force_full == 'true' || needs.impact.outputs.full_required == 'true' || needs.impact.outputs.stress_required == 'true')))
+    if: always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false && needs.impact.result == 'success' && (needs.impact.outputs.force_full == 'true' || needs.impact.outputs.full_required == 'true' || needs.impact.outputs.stress_required == 'true')))
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
@@ -160,3 +158,20 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run test:stress
+
+  cost-lab:
+    name: Cost Lab tests
+    needs: impact
+    if: always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false && needs.impact.outputs.cost_lab_required == 'true'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run cost-lab:test

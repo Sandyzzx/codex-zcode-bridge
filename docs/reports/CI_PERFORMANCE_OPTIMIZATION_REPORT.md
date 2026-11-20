@@ -1,307 +1,373 @@
-# CI Performance and Test Content Optimization
+# CI Execution Cost and Windows Test Optimization
 
 > Status: RESEARCH
-> Date: 2026-11-20
+> Date: 2026-11-21
 > Base: `origin/preview` `c1245a02f8f9d4b6e1102eabac230b657d85de9b`
 > Base tree: `b687bca64ce766b945178cf8af44442cf57f90b3`
 > Candidate branch: `codex/ci-performance-test-optimization-20261120`
+> Worktree: `D:\codex-zcode-bridge\.run\ci-performance-test-optimization-20261120`
 
 ## 1. 结论
 
-本轮没有删除测试、增加 SKIP、降低断言、缩短生产 timeout 或移除非 Windows 平台覆盖。实施集中于四类可独立验证的改动：
+当前最昂贵的工程成本不是 TypeScript、npm 安装或插件构建，而是 Windows 上约 12–13 分钟的 `npm test`。因此本轮优先级调整为：
 
-1. FULL PR 只执行一次完整双平台回归，不再同时运行 Fast T0 和部分 Integration。
-2. Integration 自己执行一次 T0，随后通过受控 `--tests-only` 入口只运行所选测试。
-3. 修正 Impact Map 的直接依赖漏选，并为未知 `scripts/**` 建立 FULL fallback。
-4. 将 32 MiB 合同中的编码/转义检查改为有界负载，仅保留一次真实上限与一次 +1 边界。
+1. 消除同一 PR/同一代码树的重复门禁。
+2. 拆分超大 real-adapter 测试，让 Targeted 选择真正缩小。
+3. 把 32,000-event 压力合同从普通 PR 门禁移到独立 Stress，同时保留一个仍能证明真实 Windows 管道背压的常规负载。
+4. 改善 Draft、Ready、FULL、Preview Push 的触发分工。
+5. 对 Windows 两路分片做独立实验，但不在稳定性尚未完成托管 Runner 验证时设为 Required Check。
 
-Windows 纯单元 `--test-concurrency=2` 实验的绝对收益不足以抵消分类和调度复杂度，因此没有修改全局 Windows 并发或引入第二套 Test Runner。
+没有删除功能测试、增加 SKIP、弱化断言、提高测试内部 timeout，或以 Mock 替换唯一的真实进程边界。
+
+### 1.1 已定位的上一次 CI 失败
+
+PR #106 的 HEAD `19c04d25899c9314d0b93a7efbafb37fa5b3f947` 在 Windows Verify 失败：
+
+```text
+SQLite production Worker survives streaming stderr backpressure without a diagnostic recorder
+duration: 49,079 ms
+task ... did not reach terminal status; observed: running
+```
+
+这是普通 PR 测试实际运行 32,000 个流事件的成本造成的门禁失败，不是产物构建或认证失败。当前候选：
+
+- 普通门禁保留 4,096 个事件，仍真实写入约 3.80 MB、超过 Windows 管道容量，并记录 `high_water_mark=16384`、`max_writable_length=0`。
+- 原 32,000-event 负载完整保留在独立 `WORKER-STREAM-STRESS-01`。
+- 拆分后的 ordinary test 已在本地 Windows 运行中约 8.6 秒通过。
 
 ## 2. 基线
 
-### 2.1 Git
+### 2.1 触发链与重复运行
 
-| 项目 | 值 |
-|---|---|
-| Repository | `Sandyzzx/codex-zcode-bridge` |
-| Base branch | `preview` |
-| Base commit | `c1245a02f8f9d4b6e1102eabac230b657d85de9b` |
-| Base tree | `b687bca64ce766b945178cf8af44442cf57f90b3` |
-| Worktree | `D:\codex-zcode-bridge\.run\ci-performance-test-optimization-20261120` |
-| Branch | `codex/ci-performance-test-optimization-20261120` |
+GitHub Actions API 的 20-PR 历史样本显示：
 
-根工作区已有 `M AGENTS.md` 和 `?? $null` 未被读取、修改、暂存或清理。
-
-### 2.2 Windows 完整回归
-
-基线本地执行 `npm test`：
-
-| 指标 | 结果 |
+| 指标 | 基线 |
 |---|---:|
-| Tests | 961 |
-| PASS | 959 |
-| FAIL | 0 |
-| SKIP | 2（既有平台条件） |
-| Node duration | 2,288,852.7287 ms |
-| Wrapper elapsed | 2,313.079 s |
-| 新增 SKIP | 0 |
+| PR 样本数 | 20 |
+| PR 触发 Run | 52 |
+| 平均 PR Run/PR | 2.6 |
+| 同期 `workflow_dispatch` Run | 5 |
 
-日志保存在任务 Worktree 的 `.run/baseline-full-test.log`，不提交。
+旧流程在同一 PR 的连续 push 上可同时保留过期运行；`ready_for_review` 也不是默认 `pull_request` 类型，Draft 转 Ready 可能不触发正式门禁。非 FULL PR 还会在 Fast 和 Integration 分别支付 T0。FULL PR 的完整回归、普通 Push 和手动验收没有可复用的跨 Run 验证凭据，不能安全地用“上一轮通过”代替。
 
-### 2.3 GitHub Actions
+Actions 历史不能稳定提供 PR 编号、每个 Run 的 FULL 选择和逐 Job 计费字段，因此以下基线项明确为 `NOT_MEASURED`：
 
-公开 Actions 页面中 7 次可比运行：
+- 每次 PR 更新的 FULL_SUITE 次数。
+- PR 从提交到全部 Required Check 完成的历史 P50/P95。
+- 官方 GitHub runner-minutes 账单值。
 
-| Run | Event/context | Wall | Windows Verify | Ubuntu Verify |
-|---|---|---:|---:|---:|
-| `44726713450` | preview push #105 | 11m59s | 11m54s | 1m24s |
-| `44724303810` | PR #105 | 13m56s | 13m40s | 1m27s |
-| `44723395810` | failed PR #105 | 14m18s | 14m02s | 1m29s |
-| `44675126776` | preview push | 13m48s | 13m43s | 1m25s |
-| `44673275490` | PR #104 | 13m11s | 12m57s | 1m36s |
-| `44659449928` | preview push | 14m01s | 13m43s | 1m32s |
-| `44657234905` | PR #103 | 13m38s | 13m24s | 1m35s |
+### 2.2 Windows Verify 历史样本
 
-Wall Time P50 为 13m48s，最大值为 14m18s。Windows Verify P50 为 13m40s；Ubuntu Verify P50 为 1m29s。公开 HTML 没有稳定的 Queue Time 或逐 Job Runner Minutes，本报告不把 Actions 使用页面的累计分钟数和 Wall Time 混用。
+最近 8 次同类型 Windows Verify：
 
-## 3. 最慢测试
+```text
+802s, 714s, 820s, 842s, 823s, 777s, 823s, 804s
+```
 
-按单次基线日志中的声明耗时汇总到文件：
+| 指标 | 基线 |
+|---|---:|
+| P50 | 812s |
+| P95 | 835.35s |
+| 8 次 Job 墙钟合计 | 7,890s |
+| 换算近似 runner-minutes | 131.5 |
+
+这里使用 Job 墙钟求和近似观察成本，不宣称等于 GitHub 官方计费分钟。
+
+### 2.3 主要测试成本
+
+基线单次 Windows 完整回归中的声明耗时汇总：
 
 | 文件 | 累计 | 数量 | 单项最大 |
 |---|---:|---:|---:|
-| `test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts` | 746.716s | 46 | 35.854s |
-| `test/sqlite-candidate/wp6b-wiring/composition.test.ts` | 399.654s | 41 | 54.250s |
-| `test/failure-facts-integration.test.ts` | 173.765s | 33 | 15.000s |
-| `test/zcode-app-server-adapter.test.ts` | 106.773s | 33 | 9.300s |
-| `test/browser-host-adapter.test.ts` | 57.396s | 8 | 17.622s |
-| `test/session-frames.test.ts` | 57.268s | 9 | 10.042s |
-| `test/batch2-evidence.test.ts` | 53.618s | 10 | 17.455s |
-| `test/process-lock.test.ts` | 43.415s | 19 | 15.698s |
-| `test/mcp-result-v14.test.mjs` | 31.633s | 1 | 31.633s |
-| `test/sqlite-candidate/wp6b2b1/admission.test.mjs` | 26.979s | 34 | 5.931s |
+| 原 `mvp-real-adapter.test.ts` | 746.716s | 46 | 35.854s |
+| `composition.test.ts` | 399.654s | 41 | 54.250s |
+| `failure-facts-integration.test.ts` | 173.765s | 33 | 15.000s |
+| `zcode-app-server-adapter.test.ts` | 106.773s | 33 | 9.300s |
+| `browser-host-adapter.test.ts` | 57.396s | 8 | 17.622s |
+| 原 `session-frames.test.ts` | 57.268s | 9 | 10.042s |
+| `process-lock.test.ts` | 43.415s | 19 | 15.698s |
 
-关键长项主要是：
+长耗时主体是真实 Worker、Windows 进程身份/树清理、SQLite Recovery/CAS、32 MiB Result、stdio/MCP 管道和 AppServer 生命周期。不能通过 Mock 或删除合同解决。
 
-- 6 个 hard Manager exit / restart Recovery 边界。
-- 真实 Worker 32 MiB Result、stdio/MCP 和 Windows pipe。
-- Start Plan private lease、ACK、身份绑定和真实 Worker 失败路径。
-- 官方 AppServer 与 Windows 进程树清理。
+## 3. 已实施改进
 
-这些用例包含 unique process、disk、IPC 或 recovery 缺陷发现价值，不能仅因耗时高而删除或 mock 化。
+### 3.1 PR Run 去重与 Draft/Ready 分流
 
-## 4. 合同覆盖矩阵
+`.github/workflows/ci.yml` 现在：
 
-| 合同 | Unit | Integration | 真实 Worker | Windows 专项 | Stress |
-|---|---|---|---|---|---|
-| Admission / Idempotency | YES | YES | YES | YES | YES |
-| Launch / Permanent Claim | YES | YES | YES | YES | YES |
-| Worker Lifecycle | YES | YES | YES | YES | NOT SOLE |
-| Result CAS / Commit ACK Unknown | YES | YES | YES | YES | YES |
-| Cleanup / Release | YES | YES | YES | YES | NOT SOLE |
-| Workspace Occupancy | YES | YES | YES | YES | YES |
-| Host Shutdown / Restart / Recovery | YES | YES | YES | YES | NOT SOLE |
-| Official AppServer Protocol | YES | YES | YES | YES | NOT SOLE |
-| Coding Plan / Start Plan Auth | YES | YES | YES | YES | NO |
-| Private Credential Lease | YES | YES | YES | YES | NO |
-| SQLite Schema / v13→v14 | YES | YES | YES | YES | YES |
-| MCP Result / Events / stdio | YES | YES | YES | YES | NOT SOLE |
-| Windows Process Identity | YES | YES | YES | YES | NOT SOLE |
+- 显式监听 `opened`、`synchronize`、`reopened`、`ready_for_review`。
+- concurrency group 按同一个 PR 隔离，`cancel-in-progress` 只取消该 PR 的过期 Run。
+- Preview/Master Push 和 `workflow_dispatch` 不被后续 PR 自动取消。
+- Draft PR 只运行 Impact 和 Fast。
+- `ready_for_review` 会重新进入正式的 Impact/Fast/Integration/Release/Stress/Cost Lab 选择。
+- FULL PR 不在 Fast 或 Integration 重复跑部分完整套件，由 Release 在 Windows/Ubuntu 各执行一次。
 
-“NOT SOLE” 表示该层存在覆盖，但不是该合同的唯一或权威证明。压力矩阵仍不能替代真实 Worker、Windows 进程树或 Provider 认证 E2E。
+跨 Run 的“上次已经通过”没有被当作本轮验证。只有同一 workflow run、同一代码 SHA 的 Fast T0 被 Integration 复用。
 
-未发现可在不损失独立缺陷发现价值的情况下删除的重复测试。大型 composition/real-adapter 文件没有为了文件长度而拆分；当前 Targeted 选择已按 domain 工作，拆分没有已证明的 CI 收益。
+### 3.2 一次 T0，而不是两份
 
-v13→v14 升级、历史 Result/Event 完整性、CAS 和 Recovery 仍属于支持合同，未因“旧版本”而退役。
+Fast 在 Ubuntu 完成平台无关 T0：
 
-## 5. Workflow 改造
+- typecheck
+- build
+- plugin validation
+- generated freshness
+- `git diff --check`
 
-### 5.1 T0 与 FULL 去重
+非 FULL PR 的 Windows Integration 只执行：
 
-- `impact` 只在 PR 执行。
-- FULL PR：Fast 和 Integration 均跳过；Release 在 Windows/Ubuntu 各执行一次 T0 + `npm test`，Stress 独立执行。
-- 非 FULL PR：Fast 在 Ubuntu 执行 T0 + Targeted；需要 Windows Integration 时，该 Job 执行自己的 T0 和进程身份探针，然后通过 `--tests-only` 只运行所选测试。
-- Push `preview` / `master` 与 `workflow_dispatch`：不受 PR-only impact 条件影响，继续执行完整 Release 和 Stress。
+- Windows `npm run build`
+- Windows Worker 进程身份探针
+- `test:affected -- --tests-only`
 
-没有改动 Job 名称，避免无证据地改变潜在 Required Check 身份。GitHub Branch Protection/Rulesets 的读取被当前 GitHub integration 以 403 拒绝，因此无法在本轮宣称已经自动证明 Required Check 配置；保留既有 Job 名称并覆盖普通 PR、FULL PR、Push 和 Dispatch 的条件测试是当前安全边界。
+这样不重复 T0，同时保留 Windows 二进制/进程/测试边界。`--tests-only` 仍要求显式 Base、`CODEX_BRIDGE_CI_T0_COMPLETED=1`、TARGETED 选择和同一 Run/SHA 的成功 Fast 前置条件。
 
-### 5.2 tests-only
+### 3.3 Cost Lab 独立门禁
 
-`npm run test:affected -- --tests-only --base <sha>`：
+`tools/cost-lab/**` 不再位于 `full_suite_paths`，而由 `cost-lab` domain 输出 `cost_lab_required`：
 
-- 必须显式提供 Base。
-- 必须设置 `CODEX_BRIDGE_CI_T0_COMPLETED=1`。
-- 必须产生 TARGETED 选择；FULL、NO_TESTS 和仅有 Stress 的结果不能伪装成 Targeted PASS。
-- 不运行 typecheck/build/plugin validation/generated freshness/diff check；这些由同一 Integration Job 的前置步骤负责。
-- 不再重复运行注册 Stress；Stress 只由独立矩阵执行。
+- Cost Lab-only PR 不再强制 Bridge FULL_SUITE。
+- 新 `Cost Lab tests` Job 独立运行 `npm run cost-lab:test`。
+- forced-full、Preview/Master Push 和 `workflow_dispatch` 也运行该 Job，避免无法取得可信 changed-file 集合时静默跳过。
+- Bridge 共享生产代码、执行器、Impact Map 或未知 `scripts/**` 变化仍按 fail-closed 规则进入原有覆盖。
+- 该变更不触碰生产 Bridge、认证、Worker、Manager、SQLite Authority 或插件 Bundle。
 
-### 5.3 并发与 timeout
+### 3.4 超大 real-adapter 文件按合同拆分
 
-- PR concurrency group 按 PR number 隔离，只取消同一 PR 的过期运行。
-- Push/dispatch 不使用 `cancel-in-progress`。
-- impact、Fast、Integration、Release、Stress 增加有限 timeout，未修改任何测试内部 timeout。
-- 所有涉及 `npm ci` 的 Job 保留 npm cache。
+原 2,405 行、46 个自动测试文件拆为：
 
-## 6. Test Impact 修正
+| 文件 | 合同域 | 自动测试 |
+|---|---|---:|
+| `mvp-real-adapter-official-host.test.ts` | Official Host / Cleanup / Release | 6 |
+| `mvp-real-adapter-private-auth.test.ts` | Private Auth / Lease / Secret | 19 |
+| `mvp-real-adapter-result-lifecycle.test.ts` | Result / Recovery / Cleanup | 12 |
+| `mvp-real-adapter-routing-admission.test.ts` | Routing / Admission / Identity | 8 |
+| `mvp-real-adapter-runtime-events.test.ts` | Runtime Event latch | 1 |
+| `mvp-real-adapter-harness.ts` | shared fixture | Fixture |
 
-改动不是扩大 `full_suite_paths` 来掩盖所有问题，而是同时修复实际依赖和未知输入 fallback：
+这些文件仍是 Windows-only Integration，不允许在 Linux 上用 Fake 或 SKIP 冒充。Routing/Admission 明确映射了真实 Worker、SQLite、Manager、MCP、Provider、进程清理和 Cleanup/Release 依赖。
 
-| 输入 | 修正 |
-|---|---|
-| `scripts/copy-test-assets.mjs` | Full Suite，并归属 test execution contract |
-| 新/重命名且未登记的 `scripts/**` | `unknown-executable-script` Full fallback |
-| `plugins/codex-zcode-bridge/launch-node24.mjs` | 选中 `node-runtime.test.ts`，保留 Attention/Waiter 关系 |
-| `src/adapters/process-spawn.ts` | 选中 process cleanup、composition、real-adapter 和 remediation 消费者 |
-| Official AppServer Runtime descriptor | 选中 adapter/capability 直接消费者 |
-| Start Plan production auth / model routing | 选中 real-adapter、provider capability 和 auth 消费者 |
-| Browser protocol modules | 选中 Official Host adapter 消费者 |
+拆分后 Targeted 修改只选择相关合同，不再无条件运行整个 12 分钟文件。完整 `npm test` 仍包含全部 46 个功能合同，不依赖拆分文件数量宣称覆盖率。
 
-新增回归用 TypeScript AST 检查每个测试的直接 `src/`、`plugins/`、`scripts/`、`tools/` 静态导入是否被其 domain 或 Full Suite 覆盖。该检查只验证现有 Impact Map 的一致性，不创建第二套 Selector。
+测试标题对账结果：原文件 46 个功能测试；拆分后仍有 46 个功能测试，唯一变化是 stream 用例被明确改名为 bounded 负载，并额外产生 1 个 32,000-event Stress。没有遗漏或凭空新增其他功能合同。
 
-验证结果：
+### 3.5 Stream 负载分级
 
-- 路径发现修改不触发 SQLite Stress。
-- Store/schema 修改仍触发冻结参数的 SQLite Stress。
-- Copy-test-assets 和未知脚本进入 Full。
-- Launcher 选择 node runtime。
-- Process-spawn 选择 composition/real-adapter。
-- 文档-only 不选测试。
-- 重命名、staged/unstaged/untracked 和显式 Base 的纯选择行为保持不变。
-- `--list` 与 Impact Map 的实际可执行清单保持一致。
+| Gate | 事件数 | 用途 |
+|---|---:|---|
+| 普通 Windows 功能测试 | 4,096 | 真实 Windows 同步管道背压、UTF-8、事件顺序、Result/Cleanup |
+| `WORKER-STREAM-STRESS-01` | 32,000 | 原大规模持续输出、持久化、Result、Cleanup/Release 压力 |
 
-## 7. 测试内容优化
+普通负载观测：
 
-### 已实施：32 MiB 编码数据
+- 写入约 3,796,910 bytes。
+- `high_water_mark = 16384`。
+- `max_writable_length = 0`。
+- 4096 个事件全部写入且顺序保持。
 
-`test/sqlite-result-v14.test.mjs` 原先把 ASCII、中文、emoji、引号、NUL、lone surrogate 各自在 32 MiB 的 -1/0/+1 三个大小上构造，单用例耗时 8,600.556 ms。
+这不是用“小数据 PASS”替换 32,000-event 压力，而是把大负载放到明确 Stress，把仍超过常规管道容量的负载留在普通门禁。
 
-现在：
+### 3.6 依赖映射与生成物
 
-- 六种编码/转义规则各用 64 KiB 有界负载验证 exact UTF-8 byte semantics。
-- 实际 `MAX_TASK_RESULT_BYTES` 仍验证一次精确接受。
-- `MAX + 1` 仍验证一次 `result_too_large`。
-- 独立真实 SQLite 用例继续验证 32 MiB 原文写入、SQL CHECK +1、Digest、重复提交、CAS 与 Recovery。
-- 真实 MCP stdio 和 Worker pipe 的 32 MiB 用例完全保留。
+Impact Map 已修正：
 
-本机同一文件单次定向运行：8,600.556 ms → 345.51 ms，该子用例减少 8,255 ms。文件总执行从基线 13.566s 降到 4.282s，属于单次本地观测，不作为 CI P50 或固定百分比承诺。
+- 新拆分文件进入 Windows-only 与 Test Impact Map。
+- 共享 real-adapter harness 变化进入完整测试基础设施回退。
+- `scripts/test-shard.mjs`、分片计划、生成物复制与 fixture 依赖已登记。
+- 未知可执行 `scripts/**`、测试基础设施、CI、release/build 合同继续 fail-closed。
+- `test:inventory`、`check:generated`、`validate:plugin` 和 `git diff --check` 保留。
 
-### 未实施
+### 3.7 已保留的前一阶段优化
 
-- 不拆分 `composition.test.ts` / `mvp-real-adapter.test.ts`：当前没有证据表明拆文件会降低 Targeted 选择成本。
-- 不合并重复 cleanup 用例：每次故障边界对应的 durable state 和迟到事件不同。
-- 不删除 v13→v14 或历史 Result/Recovery 测试：这些仍保护支持范围内的数据完整性。
-- 不用小数据替换 Worker IPC、SQLite 或 MCP stdio 的真实 32 MiB 验证。
-- 不把 Stress 当作性能基准或真实 Provider 证据。
+前序候选中的 32 MiB canonical-result 优化继续保留：
 
-## 8. Windows 并行实验
+- ASCII、中文、emoji、引号、NUL 与 lone-surrogate 语义使用 64 KiB 有界负载检查。
+- 实际上限仍验证一次精确接受和一次 `+1` 拒绝。
+- 独立真实 SQLite 用例继续验证 32 MiB 原文、Digest、CAS 和 Recovery。
+- 真实 MCP stdio 与 Worker pipe 的 32 MiB 边界没有被缩小。
 
-选取 4 个纯单元文件、47 个声明：
+Impact Selector 的未知源码、未知可执行脚本、测试基础设施和 CI fail-closed fallback 也保留。
 
-| 模式 | Wrapper elapsed | Node duration |
+## 4. Windows 两路分片实验
+
+### 4.1 计划
+
+`test/windows-test-shard-plan.json` 只覆盖当前 Windows 自动功能测试，不包含 Stress：
+
+| Shard | 文件数 | 估计耗时 |
 |---|---:|---:|
-| `--test-concurrency=1` | 0.554s | 410.383 ms |
-| `--test-concurrency=2` | 0.362s | 236.696 ms |
+| 1 | 48 | 721.501s |
+| 2 | 45 | 749.419s |
+| 计划失衡 |  | 3.7% |
 
-保存约 0.19s 绝对时间，但该收益只覆盖小型纯单元组；真正耗时在进程、CIM、SQLite、Worker 和 Recovery。自动判定更多文件可并行需要新分类元数据和额外竞态验证，不符合最小改动原则。
+校验器要求：
 
-结论：`WINDOWS_SELECTIVE_PARALLELISM: NOT_WORTH_IMPLEMENTING`，保持 Windows 生产套件 `--test-concurrency=1`。
+- 恰好两个 Shard。
+- 所有自动测试出现且只出现一次。
+- 不包含 Fixture、MANUAL_E2E、Windows-only 误用或 Stress。
+- Shard 估计等于其测试估计之和。
+- 失衡低于 15%。
+- 两个 Shard 使用独立 TEMP、HOME、fixture 和 SQLite root。
+- 聚合 Job 只有在两个 Shard 都成功时成功。
 
-## 9. 验证记录
+实验入口为：
 
-### 已完成
+```text
+node scripts/test-shard.mjs --shard=1/2
+node scripts/test-shard.mjs --shard=2/2
+```
+
+### 4.2 历史实验中的不确定项
+
+在拆分文件后的前四组本地运行中，曾出现：
+
+- Windows 路径过深导致 `unable to open database file`。
+- 一次 `shutdown_release_unverified`。
+- 一次 Routing/Admission 的第二任务在 75 秒内未观察到 `released`，但单文件复跑通过。
+
+这些失败被保留在 `.run/shard-stability-20261121/`，未改为 SKIP，也未通过放宽断言消除。新的 harness 现在在 lifecycle 等待失败时附带最终 status、Attempt、phase、issues 和事件 trail，便于下次复现定位。
+
+### 4.3 当前三轮结果
+
+分片在本地 Windows 上连续运行。每轮两个 Shard 使用独立 fixture/TEMP；不改 timeout、不并发启动同一 Workspace。
+
+| 轮次 | Shard 1 | Shard 2 | 结果 |
+|---|---:|---:|---|
+| Round 5 | 482 tests：481 PASS / 1 SKIP；590.056s | 484 tests：483 PASS / 1 SKIP；571.601s | PASS |
+| Round 6 | 482 tests：481 PASS / 1 SKIP；585.653s | 484 tests：483 PASS / 1 SKIP；574.814s | PASS |
+| Round 7 | 482 tests：481 PASS / 1 SKIP；589.631s | 484 tests：483 PASS / 1 SKIP；580.242s | PASS |
+
+三轮全部为 `FAIL=0`，每轮两个 Shard 合计 966 个功能声明、964 PASS、2 个既有平台 SKIP。三轮较慢 Shard 为 590.056s、585.653s、589.631s，配对失衡为 3.1%、1.9%、1.6%。
+
+本地三轮只证明当前机器和当前计划的可重复性；GitHub Windows 托管 Runner 的分片实验仍标记 `NOT_RUN`，因此：
+
+- `test:shard` 保持 experimental。
+- 没有把分片 Workflow 设为 Required Check。
+- 没有把本地墙钟直接换算成 GitHub P50/P95 或 runner-minutes。
+
+## 5. 验证记录
+
+### 5.1 已完成
 
 | 检查 | 结果 |
 |---|---|
-| Test selector focused suite | 19/19 PASS |
-| Compile test TypeScript | PASS |
-| Test inventory regeneration | PASS |
+| `npm run typecheck` | PASS |
+| `npm run build` | PASS |
+| `npm run build:test` | PASS |
+| Impact Selector + Shard Plan focused tests | 21/21 PASS |
+| `npm run cost-lab:test` | 86/86 PASS（首次命中既有临时端口 `bad port`，立即复跑通过） |
+| `npm run test:stress` | 4/4 PASS |
+| `npm run test:clean-entrypoints` | 4/4 PASS |
+| `npm run validate:plugin` | PASS |
+| `npm run check:generated` | PASS |
+| `npm run test:inventory` | PASS；904 declarations / 100 mapped files |
 | `git diff --check` | PASS |
-| 32 MiB optimized focused file | 7/7 PASS |
-| Windows parallel comparison | PASS；未启用 |
-| Windows FULL regression | PASS |
-| Windows SQLite Stress | PASS |
-| CI `--tests-only` success smoke | PASS：TARGETED，14 files，197 tests / 196 PASS / 1 既有 SKIP |
+| Windows shard rounds 5–7 | PASS，每轮两个 Shard 均 PASS |
+| `npm run test:affected` full fallback | PASS；966 tests / 964 PASS / 0 FAIL / 2 existing SKIP；当前机器串行耗时 1,161.362s |
 
-### 完整门禁
+### 5.2 未运行或未取得
 
-| 检查 | 状态 |
+| 项目 | 状态 |
 |---|---|
-| typecheck | PASS |
-| build | PASS |
-| validate:plugin | PASS |
-| check:generated | PASS |
-| Windows FULL regression | PASS：964 tests / 962 PASS / 0 FAIL / 2 既有 SKIP |
-| Windows SQLite Stress | PASS：3/3，Node duration 9,100.5952 ms |
-| Ubuntu FULL regression | PENDING CI |
-| Ubuntu SQLite Stress | PENDING CI |
-| PR CI | PENDING |
+| GitHub 托管 Windows 两路分片 | NOT_RUN |
+| 分片后的 GitHub Windows Verify P50/P95 | NOT_MEASURED |
+| 分片后的 PR Completion Wall Time | NOT_MEASURED |
+| 官方 runner-minutes | NOT_MEASURED |
+| 新候选的 PR CI | PENDING PUSH |
 
-不得把 PENDING 或 NOT RUN 写成 PASS。
+`NOT_RUN`、`NOT_MEASURED` 和 `PENDING` 不计为 PASS。
 
-Windows FULL regression 的 Node duration 为 1,275,734.8523 ms。与基线 2,288,852.7287 ms 相比，这次单次本地观测少 1,013,117.8764 ms；两次运行不是受控 Benchmark，且测试声明从 961 变为 964，因此该差值只记录为环境观测，不归因为本次代码优化。
+## 6. 优化收益与边界
 
-`--tests-only` 成功路径使用一个临时、未提交的 provider-catalog source 变更触发 TARGETED；日志确认流程直接从选择结果进入 `build:test`，没有再次执行 typecheck/build/plugin/generated/diff。smoke 完成后临时 source 变更已精确撤销，工作区恢复干净。
+### 6.1 已实测有效
 
-## 10. 性能结论
+- 同一 PR 的过期 Run 可取消。
+- Draft → Ready 不再漏掉正式门禁。
+- 非 FULL PR 不再在 Ubuntu Fast 和 Windows Integration 各跑一次 T0。
+- Cost Lab-only 变更不再强制 Bridge FULL_SUITE。
+- real-adapter Target 可缩小到单一合同文件。
+- 32,000-event 压力不会阻塞普通 PR；原压力合同仍存在。
+- 拆分后的 ordinary stream 用例在本地 Windows 恢复为秒级。
 
-已经确定可度量的优化：
+### 6.2 仅改善 Targeted PR
 
-- FULL PR 删除重复 Fast T0 Job。
-- FULL PR 删除部分 Windows Integration Job。
-- 非 FULL Windows Integration 不再在 `test:affected` 内重复 typecheck/build/plugin/generated/diff。
-- Targeted 运行不再重复已登记的 Stress。
-- 32 MiB 编码子用例本机单次减少约 8.3s。
-- Windows SELECTOR 新增测试后完整回归为 962 PASS、0 FAIL、2 既有 SKIP。
-- Windows SQLite Stress 3/3 PASS。
+- real-adapter 五个合同文件的 Impact Map 精度。
+- source/import 与 fixture 的直接依赖选择。
+- `--tests-only` 只运行所选测试。
 
-尚未测量：
+这些改善不自动证明完整 `npm test` 墙钟按同一比例下降。
 
-- 优化后 PR Wall Time 的三轮 P50/P95。
-- GitHub 托管 Runner 上 32 MiB 优化后的实际 CI 收益。
-- Queue Time 和逐 Job Runner Minutes（公开运行页未给出稳定机器可读值）。
+### 6.3 可降低 runner 成本
 
-因此普通 PR 的 CI Wall Time 性能状态不能在 PR 运行前声明。`PERFORMANCE_VERIFIED` 只适用于上述已直接测量的局部项；整体 CI 目标仍待 CI 数据。
+- PR 过期 Run cancellation。
+- Draft 只跑 Impact/Fast。
+- FULL 只保留 Release 双平台完整回归。
+- Cost Lab 单独短 Job，不拖起 Bridge 全套。
 
-## 11. 剩余瓶颈与风险
+### 6.4 可能降低墙钟但不降低总测试量
 
-- 单次 Windows FULL 的主要成本仍是真实 Worker、6 边界 Recovery、32 MiB MCP/pipe 和 Windows 进程身份测试，不能通过 Mock 或删除覆盖解决。
-- 普通 PR 若选择多个 Windows Integration 文件，仍可能接近 25 分钟 timeout；本轮没有改变真实生命周期合同。
-- Branch Protection/Rulesets 无法读取，Required Check 是否有隐藏名称依赖需要 Owner 在 GitHub 设置侧核对。
-- PR concurrency 只取消同一 PR 的旧 Run；不会取消 Preview/Master Push。
-- Impact Map 直接 import 检查发现的是静态依赖；动态构造路径仍需由未知源码/脚本 fallback 保护。
+- Windows 两路分片。
+- Windows 托管 Runner 的分片结果尚未取得；在设置 Required Check 前必须完成真实的 3 轮稳定性和聚合检查验证。
 
-## 12. Git 与 PR
+### 6.5 不建议或尚未证明
 
-实现 Commit：`8b2ba9e7124ae6b5d63b7c441ea73187febc83a2`
+- 不应简单把所有 Windows 测试改为全局并行。真实 Worker、CIM、SQLite WAL、进程树和 Recovery 会互相污染。
+- 不应把 4,096-event 普通负载当作 32,000-event 压力等价证据。
+- 不应把历史 Run 的 PASS 复用于不同代码树或不同测试基线。
+- 不应因 CI 变绿而扩大 Impact Map、降低断言或增加 SKIP。
 
-实现 Tree：`b520546cf241f0e700f704d31617f2f04d06132e`
+Cost Lab 首次复跑出现一次既有临时端口选择触发 Node `fetch` `bad port`，立即复跑 86/86 PASS。Cost Lab 代码与端口实现本轮未修改，因此记录为残余测试随机性，不将单次通过写成稳定性证明，也不在无关范围内顺带修复。
 
-远程分支和 PR 在推送与创建后追加。未合并、未发布、未打 Tag、未修改 Marketplace。
+## 7. 剩余工作
 
-## 13. Astra 审计重点
+1. 在 GitHub 上手动执行 Windows Shard Experiment，取得托管 Runner 的真实墙钟、失败率和 runner-minutes。
+2. 若托管分片稳定，再评估是否增加 Required Check 与 Push/Preview 的适用范围。
+3. 重新运行受影响测试、生成物检查和完整 Diff 检查。
+4. 提交并推送候选；PR CI 通过前不得合并 Preview。
 
-1. FULL PR 跳过 Fast/Integration 后，Required Check 语义是否可接受。
-2. Integration 的 T0 与 `--tests-only` 是否可能被参数绕过。
-3. FULL、TARGETED、仅 Stress、NO_TESTS 的退出状态是否严格。
-4. Impact Map 新增 domain 是否会无意扩大普通 PR Targeted 集，是否存在可收窄映射。
-5. 32 MiB 有界编码优化是否保持精确上限、+1、Unicode、转义、SQLite 和 MCP 合同的独立证明。
-6. Windows 不启用局部并行是否合理接受剩余 Wall Time。
-7. 未读取 Branch Protection/Rulesets 的风险是否需要在合并前人工确认。
+## 8. Git 与交付状态
+
+当前候选是在 `19c04d25899c9314d0b93a7efbafb37fa5b3f947` 之后的未提交测试基础设施优化。根工作区的 `M AGENTS.md` 和 `?? $null` 未被读取、修改、暂存或清理。
+
+PR: `https://github.com/Sandyzzx/codex-zcode-bridge/pull/106`
+
+未执行 Merge、Release、Tag、Marketplace 更新或生产部署。
 
 ```yaml
-GOAL: ZCODE_BRIDGE_CI_PERFORMANCE_AND_TEST_CONTENT_OPTIMIZATION
+GOAL: CI_EXECUTION_COST_AND_WINDOWS_TEST_OPTIMIZATION
 
-IMPLEMENTATION_COMPLETE: YES
+PR_TRIGGER_DEDUP: PASS
+READY_FOR_REVIEW_GATE: PASS
+DRAFT_FORMAL_GATES: SKIPPED_BY_DESIGN
+COST_LAB_DECOUPLING: PASS
+REAL_ADAPTER_SPLIT: PASS
+STREAM_STRESS_SEPARATION: PASS
+
+WINDOWS_SHARD_PLAN: PASS
+WINDOWS_SHARD_LOCAL_ROUNDS: 3_OF_3_PASS
+WINDOWS_SHARD_HOSTED: NOT_RUN
+WINDOWS_SHARD_REQUIRED_CHECK: NO
+FULL_FUNCTIONAL_REGRESSION: SHARDED_3X_PASS
+
 TEST_COVERAGE_PRESERVED: YES
-CI_REGRESSION_PASS: PENDING
-PERFORMANCE_VERIFIED: PARTIAL_LOCAL_ONLY
-READY_FOR_ASTRA_AUDIT: PENDING
-
-REAL_MODEL_REQUESTS: 0
-REAL_OAUTH_REQUESTS: 0
-REAL_BILLING_REQUESTS: 0
+TEST_ASSERTIONS_WEAKENED: NO
+SKIP_ADDED: NO
 PRODUCTION_CODE_CHANGED: NO
 SQLITE_AUTHORITY_CHANGED: NO
 HOST_WAKE_CHANGED: NO
 PLUGIN_BUNDLE_CHANGED: NO
+
+REAL_MODEL_REQUESTS: 0
+REAL_OAUTH_REQUESTS: 0
+REAL_BILLING_REQUESTS: 0
+
+CI_PRIMARY_BASELINE: WINDOWS_NPM_TEST
+CI_POST_CHANGE_P50_P95: NOT_MEASURED
+RUNNER_MINUTES: NOT_MEASURED
+PR_CI_AFTER_PUSH: PENDING
+
+MERGE_ALLOWED: NO
+RELEASE_ALLOWED: NO
+
+FINAL_VERDICT: PENDING_PR_CI
 ```

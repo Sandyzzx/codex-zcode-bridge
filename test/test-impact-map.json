@@ -40,9 +40,12 @@
         "scripts/copy-test-assets.mjs",
         "scripts/run-affected-tests.mjs",
         "scripts/run-stress-tests.mjs",
+        "scripts/test-shard.mjs",
         "test/test-impact-map.json",
+        "test/windows-test-shard-plan.json",
         "test/helpers.ts",
         "test/runtime-fixture.ts",
+        "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter-harness.ts",
         "test/runtime/bootstrap-lock-worker.mjs",
         "test/sqlite-candidate/wp6b2b1/lifecycle-process.mjs",
         "test/sqlite-candidate/wp6b2b1/worker-process.mjs"
@@ -237,6 +240,13 @@
       "paths": [
         "docs/**",
         "*.md"
+      ]
+    },
+    {
+      "id": "cost-lab",
+      "description": "Cost Lab operates on its own Node test suite and must not force the Bridge production regression.",
+      "paths": [
+        "tools/cost-lab/**"
       ]
     }
   ],
@@ -669,18 +679,88 @@
       ]
     },
     {
-      "file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
+      "file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter-harness.ts",
+      "type": "Fixture",
+      "gate": "T1",
+      "domains": [
+        "test-execution-contract"
+      ]
+    },
+    {
+      "file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter-official-host.test.ts",
       "type": "Integration",
       "gate": "T2",
       "domains": [
+        "test-execution-contract",
         "sqlite-persistence",
         "process-cleanup-and-locks",
         "manager-lifecycle",
         "mcp-host",
         "appserver-adapter",
+        "worker-launch"
+      ]
+    },
+    {
+      "file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter-private-auth.test.ts",
+      "type": "Integration",
+      "gate": "T2",
+      "domains": [
+        "test-execution-contract",
+        "sqlite-persistence",
+        "process-cleanup-and-locks",
+        "manager-lifecycle",
+        "mcp-host",
         "worker-launch",
         "provider-catalog"
       ]
+    },
+    {
+      "file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter-result-lifecycle.test.ts",
+      "type": "Integration",
+      "gate": "T2",
+      "domains": [
+        "test-execution-contract",
+        "sqlite-persistence",
+        "process-cleanup-and-locks",
+        "manager-lifecycle",
+        "mcp-host",
+        "appserver-adapter",
+        "worker-launch"
+      ]
+    },
+    {
+      "file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter-routing-admission.test.ts",
+      "type": "Integration",
+      "gate": "T2",
+      "domains": [
+        "test-execution-contract",
+        "sqlite-persistence",
+        "process-cleanup-and-locks",
+        "manager-lifecycle",
+        "mcp-host",
+        "provider-catalog",
+        "worker-launch"
+      ]
+    },
+    {
+      "file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter-runtime-events.test.ts",
+      "type": "Unit",
+      "gate": "T1",
+      "domains": [
+        "test-execution-contract",
+        "worker-launch"
+      ]
+    },
+    {
+      "file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter-stream-stress.test.ts",
+      "type": "Stress",
+      "gate": "T3",
+      "domains": [
+        "test-execution-contract",
+        "process-cleanup-and-locks",
+        "worker-launch"
+      ],
+      "stress": true
     },
     {
       "file": "test/sqlite-candidate/wp6b-wiring/trusted-local-policy.test.ts",
@@ -852,6 +932,22 @@
     {
       "file": "test/test-impact-selector.test.ts",
       "type": "Unit",
+      "gate": "T1",
+      "domains": [
+        "test-execution-contract"
+      ]
+    },
+    {
+      "file": "test/test-shard-plan.test.ts",
+      "type": "Unit",
+      "gate": "T1",
+      "domains": [
+        "test-execution-contract"
+      ]
+    },
+    {
+      "file": "test/windows-test-shard-plan.json",
+      "type": "Fixture",
       "gate": "T1",
       "domains": [
         "test-execution-contract"
@@ -1098,6 +1194,20 @@
         "capacity_limit": 8,
         "existing_test_timeout_seconds": 120
       }
+    },
+    {
+      "file": "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter-stream-stress.test.ts",
+      "test_id": "WORKER-STREAM-STRESS-01",
+      "boundary": "AppServer 32,000-event streaming output, synchronous Windows pipe bound, Runtime Event persistence, Result commit, Cleanup and Release",
+      "trigger_domains": [
+        "process-cleanup-and-locks",
+        "worker-launch"
+      ],
+      "parameters_frozen": {
+        "stream_events": 32000,
+        "streamed_characters": 32000,
+        "existing_test_timeout_seconds": 180
+      }
     }
   ],
   "full_suite_paths": [
@@ -1129,7 +1239,6 @@
     "scripts/build-plugin.mjs",
     "scripts/check-generated-artifacts.mjs",
     "scripts/lib/generated-artifacts.mjs",
-    "scripts/validate-plugin.mjs",
-    "tools/cost-lab/**"
+    "scripts/validate-plugin.mjs"
   ]
 }
