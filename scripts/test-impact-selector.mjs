@@ -87,6 +87,18 @@ export function selectAffectedTests({
     if (isSource && !mappedSourceFiles.has(file)) fullSuiteReasons.push(`unknown-source:${file}`);
   }
 
+  // Executable repository scripts are part of the test/build contract. A new
+  // or renamed unmapped script must not silently select zero tests.
+  const executableScriptPatterns = ["scripts/**"];
+  const knownContractPaths = [
+    ...map.domains.flatMap((domain) => domain.paths),
+    ...map.full_suite_paths,
+  ];
+  for (const file of normalizedFiles) {
+    if (!pathMatchesAny(file, executableScriptPatterns)) continue;
+    if (!pathMatchesAny(file, knownContractPaths)) fullSuiteReasons.push(`unknown-executable-script:${file}`);
+  }
+
   // A file under test/ that is neither a mapped executable test nor a named
   // support fixture may still be new infrastructure. Refuse to infer safety.
   for (const file of normalizedFiles) {

@@ -23,6 +23,7 @@
         "scripts/build-plugin.mjs",
         "scripts/check-generated-artifacts.mjs",
         "scripts/lib/generated-artifacts.mjs",
+        "scripts/lib/repo-root-pattern.mjs",
         "scripts/validate-plugin.mjs"
       ]
     },
@@ -36,6 +37,7 @@
         "scripts/lib/test-files.mjs",
         "scripts/lib/changed-files.mjs",
         "scripts/ci-select-impact.mjs",
+        "scripts/copy-test-assets.mjs",
         "scripts/run-affected-tests.mjs",
         "scripts/run-stress-tests.mjs",
         "test/test-impact-map.json",
@@ -80,6 +82,7 @@
         "src/runtime/node-runtime.ts",
         "src/runtime/official-app-server-runtime.ts",
         "src/runtime/official-runtime-authorization.ts",
+        "plugins/codex-zcode-bridge/launch-node24.mjs",
         "tools/compatibility/**"
       ]
     },
@@ -318,8 +321,10 @@
       "domains": [
         "manager-lifecycle",
         "worker-launch",
+        "appserver-adapter",
         "workspace-provider",
-        "task-feedback"
+        "task-feedback",
+        "task-prompt-and-report"
       ]
     },
     {
@@ -396,7 +401,9 @@
       "gate": "T2",
       "domains": [
         "appserver-adapter",
-        "manager-lifecycle"
+        "manager-lifecycle",
+        "mcp-host",
+        "task-prompt-and-report"
       ]
     },
     {
@@ -521,7 +528,9 @@
         "manager-lifecycle",
         "worker-launch",
         "appserver-adapter",
-        "workspace-provider"
+        "workspace-provider",
+        "process-cleanup-and-locks",
+        "provider-catalog"
       ]
     },
     {
@@ -627,7 +636,9 @@
         "sqlite-persistence",
         "manager-lifecycle",
         "mcp-host",
-        "worker-launch"
+        "worker-launch",
+        "workspace-provider",
+        "process-cleanup-and-locks"
       ]
     },
     {
@@ -663,10 +674,12 @@
       "gate": "T2",
       "domains": [
         "sqlite-persistence",
+        "process-cleanup-and-locks",
         "manager-lifecycle",
         "mcp-host",
         "appserver-adapter",
-        "worker-launch"
+        "worker-launch",
+        "provider-catalog"
       ]
     },
     {
@@ -745,7 +758,8 @@
       "domains": [
         "sqlite-persistence",
         "manager-lifecycle",
-        "mcp-host"
+        "mcp-host",
+        "ci-release-contract"
       ]
     },
     {
@@ -918,7 +932,9 @@
         "appserver-adapter",
         "process-cleanup-and-locks",
         "provider-catalog",
-        "worker-launch"
+        "worker-launch",
+        "zcode-path-discovery",
+        "browser-host"
       ]
     },
     {
@@ -938,7 +954,8 @@
         "appserver-adapter",
         "process-cleanup-and-locks",
         "provider-catalog",
-        "worker-launch"
+        "worker-launch",
+        "zcode-path-discovery"
       ]
     },
     {
@@ -948,7 +965,8 @@
       "domains": [
         "appserver-adapter",
         "provider-catalog",
-        "worker-launch"
+        "worker-launch",
+        "zcode-path-discovery"
       ]
     },
     {
@@ -964,7 +982,8 @@
       "type": "Unit",
       "gate": "T1",
       "domains": [
-        "worker-launch"
+        "worker-launch",
+        "appserver-adapter"
       ]
     },
     {
@@ -1026,7 +1045,10 @@
       "gate": "T2",
       "domains": [
         "provider-catalog",
-        "appserver-adapter"
+        "appserver-adapter",
+        "zcode-path-discovery",
+        "worker-launch",
+        "sqlite-persistence"
       ]
     },
     {
@@ -1089,6 +1111,7 @@
     "scripts/lib/test-files.mjs",
     "scripts/lib/changed-files.mjs",
     "scripts/ci-select-impact.mjs",
+    "scripts/copy-test-assets.mjs",
     "scripts/run-affected-tests.mjs",
     "scripts/run-stress-tests.mjs",
     "test/test-impact-map.json",
