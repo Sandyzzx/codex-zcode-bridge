@@ -593,7 +593,8 @@ async function runZCodeAdapter(
     },
     onEvent: (event) => {
       runtimeEvents?.publish(event);
-      if (event.type === "official_runtime_verified") {
+      if (event.type === "official_runtime_verified"
+        || event.type === "official_runtime_experimental") {
         const digest = event.details?.["bundle_sha256"];
         if (typeof digest === "string" && /^[0-9a-f]{64}$/u.test(digest)) {
           writeDiagnostic(`[bridge-worker] installed-runtime ${bootstrap.task_id} ${bootstrap.attempt} ${digest}\n`);

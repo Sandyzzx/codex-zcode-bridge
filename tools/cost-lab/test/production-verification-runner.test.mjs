@@ -60,6 +60,38 @@ function verifiedRuntime(install) {
   };
 }
 
+function experimentalRuntime(install, authorizationFile) {
+  return {
+    install_root: install,
+    runtime_status: "OFFICIAL_RUNTIME_EXPERIMENTAL",
+    installation_safety: "OFFICIAL_INSTALLATION_SAFE",
+    installation_fingerprint: "d".repeat(64),
+    desktop_version: "3.19.0.10774",
+    desktop_app_version: "3.19.0",
+    desktop_build_commit_id: "a7ed1054",
+    experimental_authorization: {
+      state: "authorized",
+      file_path: authorizationFile,
+      reason: null,
+      record: {
+        installation_fingerprint: "d".repeat(64),
+        desktop_version: "3.19.0.10774",
+        authorized_at: "2026-11-20T00:00:00.000Z",
+        authorized_by: "synthetic-test",
+        scopes: ["coding_plan_probe"],
+      },
+      scopes: ["coding_plan_probe"],
+    },
+    discount_status: "OFFICIAL_DISCOUNT_NOT_VERIFIED",
+    manifest: null,
+    assets: {
+      bundle: { relative_path: "resources/glm/zcode.cjs", status: "EXPERIMENTAL", bytes: 15_843_692, sha256: "a".repeat(64) },
+      builtin_provider_config: { relative_path: "resources/config/provider/zcode-builtin.json" },
+      runtime_host: { relative_path: "resources/tools/runtime-host/zcode-runtime-host.exe", status: "EXPERIMENTAL", bytes: 179_608, sha256: "b".repeat(64) },
+    },
+  };
+}
+
 async function fixtureFiles(root) {
   const userHome = path.join(root, "user-home");
   const install = path.join(root, "install");
@@ -243,6 +275,154 @@ test("production runner drives the built MCP task and returns runtime/usage evid
       rm(root, { recursive: true, force: true }),
       rm(stateRootParent, { recursive: true, force: true }),
     ]);
+  }
+});
+
+test("production runner records an experimental runtime without promoting it to verified", async () => {
+  await mkdir(RUN_ROOT, { recursive: true });
+  const root = await mkdtemp(path.join(RUN_ROOT, "production-runner-experimental-"));
+  const synthetic = await fixtureFiles(root);
+  const authorizationFile = path.join(root, "experimental-runtime-authorization.json");
+  await writeFile(authorizationFile, "{}\n", "utf8");
+  const stateRootParent = path.join(RUN_ROOT, "production-runner-experimental-state");
+  let statusCalls = 0;
+  try {
+    const runner = createProductionCodingPlanVerificationRunner({
+      projectRoot: root,
+      bridgeEntryPath: synthetic.bridgeEntryPath,
+      createId: () => FIXED_ID,
+      pollIntervalMs: 1,
+      taskTimeoutMs: 5_000,
+      stateRootParent,
+      env: {
+        HOME: synthetic.userHome,
+        USERPROFILE: synthetic.userHome,
+        ZCODE_WINDOWS_APP_INSTALL_DIR: synthetic.install,
+        ProgramFiles: "C:\\Program Files",
+      },
+      inspectRuntime: async () => experimentalRuntime(synthetic.install, authorizationFile),
+      connectClient: async (options) => {
+        const runtimeConfig = JSON.parse(await readFile(
+          path.join(
+            root,
+            ".run",
+            "cost-lab-web",
+            "verifications",
+            FIXED_ID,
+            "home",
+            ".codex",
+            "codex-zcode-bridge",
+            "runtime-config.json",
+          ),
+          "utf8",
+        ));
+        assert.equal(
+          runtimeConfig.ZCODE_BRIDGE_EXPERIMENTAL_RUNTIME_AUTHORIZATION_FILE,
+          authorizationFile,
+        );
+        return {
+          client: {
+            callTool: async ({ name, arguments: args }) => {
+              if (name === "zcode_task") {
+                options.stderr.capture(`[bridge] worker installed-runtime ${args.task_id} 1 ${"a".repeat(64)}\n`);
+                return { structuredContent: { task_id: args.task_id, status: "queued" } };
+              }
+              if (name === "zcode_status") {
+                statusCalls += 1;
+                return {
+                  structuredContent: {
+                    task_id: args.task_id,
+                    attempt: 1,
+                    status: statusCalls === 1 ? "running" : "completed",
+                    exit_code: 0,
+                    zcode_session_id: "sess_experimental",
+                  },
+                };
+              }
+              if (name === "zcode_result") {
+                return {
+                  structuredContent: {
+                    task_id: args.task_id,
+                    status: "completed",
+                    exit_code: 0,
+                    session_id: "sess_experimental",
+                    model: {
+                      provider_id: PRODUCTION_VERIFICATION_CONTRACT.provider,
+                      model_id: PRODUCTION_VERIFICATION_CONTRACT.model,
+                      effective_reasoning_level: "low",
+                    },
+                    usage: {
+                      source: "runtime",
+                      scope: "turn",
+                      observed_at: "2026-11-20T07:00:00.000Z",
+                      finality: "reported",
+                      input_tokens: 100,
+                      output_tokens: 10,
+                      total_tokens: 110,
+                      cached_input_tokens: 0,
+                      reasoning_tokens: null,
+                      conflicts: [],
+                      dropped_unknown_keys: 0,
+                    },
+                  },
+                };
+              }
+              if (name === "zcode_events") {
+                return {
+                  structuredContent: {
+                    task_id: args.task_id,
+                    status: "completed",
+                    events: [
+                      {
+                        seq: 1,
+                        at: "2026-11-20T06:59:50.000Z",
+                        type: "turn_completed",
+                        summary: "completed",
+                        details: {
+                          usage: {
+                            input_tokens: 100,
+                            output_tokens: 10,
+                            total_tokens: 110,
+                            cached_input_tokens: 0,
+                          },
+                        },
+                      },
+                      { seq: 2, type: "released", details: { cleanup_digest: "a".repeat(64) } },
+                    ],
+                    next_seq: 2,
+                    has_more: false,
+                  },
+                };
+              }
+              if (name === "zcode_cancel") return { structuredContent: { status: "cancelled" } };
+              throw new Error(`unexpected tool ${name}`);
+            },
+          },
+          close: async () => undefined,
+        };
+      },
+    });
+    const result = await runner({
+      signal: new AbortController().signal,
+      provider: PRODUCTION_VERIFICATION_CONTRACT.provider,
+      model: PRODUCTION_VERIFICATION_CONTRACT.model,
+      reasoning: "low",
+      beforeSnapshot: beforeSnapshot(),
+    });
+    assert.equal(result.runtime_evidence.status, "EXPERIMENTAL");
+    assert.equal(result.runtime_evidence.runtime.status, "OFFICIAL_RUNTIME_EXPERIMENTAL");
+    assert.equal(result.runtime_evidence.runtime.version, "3.19.0.10774");
+    assert.equal(result.runtime_evidence.runtime.desktop_app_version, "3.19.0");
+    assert.equal(result.runtime_evidence.runtime.desktop_build_commit_id, "a7ed1054");
+    assert.equal(result.runtime_evidence.installation_safety, "OFFICIAL_INSTALLATION_SAFE");
+    assert.equal(result.runtime_evidence.installation_fingerprint, "d".repeat(64));
+    assert.equal(result.runtime_evidence.experimental_authorization_state, "authorized");
+    assert.deepEqual(result.runtime_evidence.experimental_authorization_scopes, ["coding_plan_probe"]);
+    assert.equal(result.runtime_evidence.request_security.installed_bundle_verified, true);
+    assert.equal(result.runtime_evidence.runtime.request_security_capability, "UNKNOWN");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(stateRootParent, { recursive: true, force: true });
   }
 });
 

@@ -14,6 +14,7 @@ import {
   type OfficialAppServerRuntimeDescriptor,
   type OfficialProviderRuntimeCapability,
 } from "../runtime/official-app-server-runtime.js";
+import type { OfficialRuntimeProbeScope } from "../runtime/official-runtime-authorization.js";
 import {
   type AdapterClientProcess,
   type AdapterCloseDiagnostic,
@@ -215,6 +216,19 @@ export function officialProviderCapabilityFailure(
   descriptor: OfficialAppServerRuntimeDescriptor,
   capability: OfficialProviderRuntimeCapability,
 ): string | null {
+  if (descriptor.status === "OFFICIAL_RUNTIME_EXPERIMENTAL") {
+    const requiredScope: OfficialRuntimeProbeScope = capability === "coding_plan_discount"
+      ? "coding_plan_probe"
+      : capability === "start_plan_static"
+        ? "start_plan_probe"
+        : "other_provider_probe";
+    const authorized = descriptor.experimental_authorization?.state === "authorized"
+      && descriptor.experimental_authorization.scopes.includes(requiredScope);
+    return authorized
+      ? null
+      : `OFFICIAL_RUNTIME_EXPERIMENTAL_AUTHORIZATION_MISSING: ${requiredScope}; ` +
+        "the Provider capability remains NOT_VERIFIED";
+  }
   if (descriptor.status !== "OFFICIAL_RUNTIME_VERIFIED") {
     return `OFFICIAL_RUNTIME_UNVERIFIED: ${descriptor.reason ?? "installed Official AppServer is unavailable"}`;
   }

@@ -47,10 +47,14 @@ export async function runOfficialAppServerProtocolSmoke(options = {}) {
   }
 
   const runtime = await inspectRuntime({ env, platform, arch });
-  if (runtime.runtime_status !== "OFFICIAL_RUNTIME_VERIFIED" || !runtime.install_root) {
+  if ((runtime.runtime_status !== "OFFICIAL_RUNTIME_VERIFIED"
+      && runtime.runtime_status !== "OFFICIAL_RUNTIME_EXPERIMENTAL")
+    || !runtime.install_root) {
     return failed("installed_official_runtime_unverified", startedAt);
   }
-  if (!runtime.manifest?.version
+  if (!runtime.desktop_version
+    || !runtime.desktop_app_version
+    || !runtime.desktop_build_commit_id
     || !runtime.assets?.bundle?.relative_path
     || !runtime.assets?.runtime_host?.relative_path
     || !runtime.assets?.builtin_provider_config?.relative_path) {
@@ -108,8 +112,8 @@ export async function runOfficialAppServerProtocolSmoke(options = {}) {
       runtime.assets.builtin_provider_config.relative_path,
     );
     const childEnv = buildSmokeEnvironment(layout, env, {
-      version: runtime.manifest.desktop_app_version,
-      buildCommitId: runtime.manifest.desktop_build_commit_id,
+      version: runtime.desktop_app_version,
+      buildCommitId: runtime.desktop_build_commit_id,
       builtinProviderConfig,
       personalProviderConfig,
       runtimeHostPath,
@@ -175,7 +179,10 @@ export async function runOfficialAppServerProtocolSmoke(options = {}) {
         session_created: false,
         model_requests: 0,
         runtime_status: runtime.runtime_status,
-        desktop_version: runtime.manifest.version,
+        installation_fingerprint: runtime.installation_fingerprint,
+        installation_safety: runtime.installation_safety,
+        experimental_authorization_state: runtime.experimental_authorization?.state ?? null,
+        desktop_version: runtime.desktop_version,
         bundle_sha256: runtime.assets.bundle.sha256,
       },
     };

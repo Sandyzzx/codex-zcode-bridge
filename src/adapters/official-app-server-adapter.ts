@@ -59,10 +59,18 @@ export class OfficialAppServerWorkerAdapter extends ZCodeAppServerAdapter {
       onVerified: (descriptor) => {
         verifiedDescriptor = descriptor;
         options.onEvent?.({
-          type: "official_runtime_verified",
-          summary: "Using verified installed ZCode AppServer",
+          type: descriptor.status === "OFFICIAL_RUNTIME_EXPERIMENTAL"
+            ? "official_runtime_experimental"
+            : "official_runtime_verified",
+          summary: descriptor.status === "OFFICIAL_RUNTIME_EXPERIMENTAL"
+            ? "Using explicitly authorized experimental installed ZCode AppServer"
+            : "Using verified installed ZCode AppServer",
           details: {
             status: descriptor.status,
+            installation_safety: descriptor.installation_safety,
+            installation_fingerprint: descriptor.installation_fingerprint,
+            experimental_authorization_state: descriptor.experimental_authorization?.state ?? null,
+            experimental_authorization_scopes: descriptor.experimental_authorization?.scopes ?? [],
             discount_capability: descriptor.discount_capability,
             start_plan_static_compatibility: descriptor.start_plan_static_compatibility,
             provider_capability: providerCapability,
@@ -80,6 +88,10 @@ export class OfficialAppServerWorkerAdapter extends ZCodeAppServerAdapter {
           summary: reason,
           details: {
             status: descriptor.status,
+            installation_safety: descriptor.installation_safety,
+            installation_fingerprint: descriptor.installation_fingerprint,
+            experimental_authorization_state: descriptor.experimental_authorization?.state ?? null,
+            experimental_authorization_scopes: descriptor.experimental_authorization?.scopes ?? [],
             discount_capability: descriptor.discount_capability,
             start_plan_static_compatibility: descriptor.start_plan_static_compatibility,
             provider_capability: providerCapability,

@@ -78,7 +78,9 @@
         "src/runtime/desktop-host-launch.ts",
         "src/runtime/doctor.ts",
         "src/runtime/node-runtime.ts",
-        "src/runtime/official-app-server-runtime.ts"
+        "src/runtime/official-app-server-runtime.ts",
+        "src/runtime/official-runtime-authorization.ts",
+        "tools/compatibility/**"
       ]
     },
     {

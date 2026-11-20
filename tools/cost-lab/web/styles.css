@@ -288,6 +288,12 @@ h1 em {
   color: var(--danger);
 }
 
+.tag.experimental {
+  background: var(--amber-soft);
+  border-color: rgba(213, 144, 47, 0.3);
+  color: #835719;
+}
+
 .accent-panel {
   background:
     linear-gradient(135deg, rgba(216, 235, 227, 0.92), rgba(255, 253, 247, 0.92)),
