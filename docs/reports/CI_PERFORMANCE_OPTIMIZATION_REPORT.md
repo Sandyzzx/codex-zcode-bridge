@@ -220,6 +220,7 @@ v13→v14 升级、历史 Result/Event 完整性、CAS 和 Recovery 仍属于支
 | Windows parallel comparison | PASS；未启用 |
 | Windows FULL regression | PASS |
 | Windows SQLite Stress | PASS |
+| CI `--tests-only` success smoke | PASS：TARGETED，14 files，197 tests / 196 PASS / 1 既有 SKIP |
 
 ### 完整门禁
 
@@ -238,6 +239,8 @@ v13→v14 升级、历史 Result/Event 完整性、CAS 和 Recovery 仍属于支
 不得把 PENDING 或 NOT RUN 写成 PASS。
 
 Windows FULL regression 的 Node duration 为 1,275,734.8523 ms。与基线 2,288,852.7287 ms 相比，这次单次本地观测少 1,013,117.8764 ms；两次运行不是受控 Benchmark，且测试声明从 961 变为 964，因此该差值只记录为环境观测，不归因为本次代码优化。
+
+`--tests-only` 成功路径使用一个临时、未提交的 provider-catalog source 变更触发 TARGETED；日志确认流程直接从选择结果进入 `build:test`，没有再次执行 typecheck/build/plugin/generated/diff。smoke 完成后临时 source 变更已精确撤销，工作区恢复干净。
 
 ## 10. 性能结论
 
@@ -269,7 +272,11 @@ Windows FULL regression 的 Node duration 为 1,275,734.8523 ms。与基线 2,28
 
 ## 12. Git 与 PR
 
-实现 Commit、最终 Tree、远程分支和 PR 在提交、推送与 CI 完成后追加。未合并、未发布、未打 Tag、未修改 Marketplace。
+实现 Commit：`8b2ba9e7124ae6b5d63b7c441ea73187febc83a2`
+
+实现 Tree：`b520546cf241f0e700f704d31617f2f04d06132e`
+
+远程分支和 PR 在推送与创建后追加。未合并、未发布、未打 Tag、未修改 Marketplace。
 
 ## 13. Astra 审计重点
 
