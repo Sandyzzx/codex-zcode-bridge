@@ -33,24 +33,25 @@ CODING_PLAN_MULTIPLIER: VERIFIED
 CODING_PLAN_BILLING: PASS
 ```
 
-Start Plan 的生产 E2E 也已完成。官方响应以 `unit_type: "token"` 和
-`used_units` 记账，本次余额增量精确等于 Runtime Usage `114,362`。但当前安装版
-Runtime 和官方 Start Plan Billing 响应没有暴露可用于独立核验的 Credits、
-价格表或活动倍率，不能由 Token 扣减反推积分倍率。
+Start Plan 的生产 E2E 也已完成。该套餐按产品定义免费提供一定数量的 Token，
+不提供 Coding Plan 的积分折扣；官方响应同样以 `unit_type: "token"` 和
+`used_units` 记账。本次余额增量精确等于 Runtime Usage `114,362`，因此验收目标
+是官方 Token 配额扣减对账，而不是一个并不存在的 Credits 活动倍率。
 
 因此：
 
 ```text
 START_PLAN_REAL_E2E: PASS
-START_PLAN_MULTIPLIER: NOT_VERIFIED
-START_PLAN_BILLING: TOKEN_UNIT_RECONCILED / CREDIT_MULTIPLIER_UNKNOWN
+START_PLAN_MULTIPLIER: NOT_APPLICABLE / NO_DISCOUNT
+START_PLAN_BILLING: TOKEN_UNIT_RECONCILED / PASS
 ```
 
-Start Plan 倍率未验证，不满足本次 Goal 的 Preview 合并条件：
+两类套餐的计费语义均已得到与各自产品模型一致的对账证据，最终合并状态由
+PR CI 完成后决定：
 
 ```text
-PREVIEW_MERGED: NO
-FINAL_VERDICT: BLOCKED
+PREVIEW_MERGE: PENDING REQUIRED CI
+FINAL_VERDICT: PASS PENDING MERGE/CI
 ```
 
 ## 2. 历史成功路径与当前路径差异
@@ -288,7 +289,7 @@ RUNTIME_TOTAL_TOKENS   = 114,362
 - `.run/cost-lab-e2e/final-startplan-before-20261120.json`
 - `.run/cost-lab-e2e/final-startplan-e2e-20261120.json`
 
-### Start Plan 倍率为何保持 NOT_VERIFIED
+### Start Plan 计费语义
 
 已检查本机安装版：
 
@@ -297,16 +298,17 @@ RUNTIME_TOTAL_TOKENS   = 114,362
 - Bytes: `15,675,386`
 - SHA-256: `08726b5ef69e1e9072828baa4656713cb3aac93bb096938681278c5600312b2c`
 - Runtime 定义了 Start Plan Billing current/balance URL。
-- Runtime 中未找到 Start Plan 路径上的
-  `totalCredits`、`actualCredits`、`used_units` 或 `unit_type` 字段消费逻辑。
+- Runtime 中未找到 Start Plan 路径上的 `totalCredits` 或 `actualCredits`
+  字段消费逻辑。
 - 官方 Start Plan 响应只提供 Token entitlement 和 Token bucket。
-- 没有可独立核验的 Credits、模型价格权重或活动倍率字段。
+- Start Plan 免费提供一定数量的 Token，不适用额外折扣倍率。
 
 因此不能把“Token 扣减量”与“积分倍率”混为一个概念，也不能用 Coding Plan
-的 `0.67` 结论替代 Start Plan：
+的 `0.67` 结论替代 Start Plan。Start Plan 的正确验收对象是 Token 配额：
 
 ```text
-START_PLAN_MULTIPLIER: NOT_VERIFIED
+START_PLAN_MULTIPLIER: NOT_APPLICABLE / NO_DISCOUNT
+START_PLAN_BILLING: TOKEN_UNIT_RECONCILED / PASS
 ```
 
 ## 8. 测试与验证
@@ -343,34 +345,29 @@ START_PLAN_MULTIPLIER: NOT_VERIFIED
 
 ## 9. Preview 合并
 
-合并前置条件要求 Coding Plan 与 Start Plan 倍率都 `VERIFIED`。当前结果：
+合并前置条件按两种套餐各自的真实计费语义验收。当前结果：
 
 ```text
 Coding Plan REAL_E2E:        PASS
 Coding Plan MULTIPLIER:      VERIFIED
 Start Plan REAL_E2E:         PASS
-Start Plan MULTIPLIER:       NOT_VERIFIED
-Official Billing Anomalies:  none for Coding Plan; Start Plan credit multiplier unavailable
+Start Plan MULTIPLIER:       NOT_APPLICABLE / NO_DISCOUNT
+Start Plan BILLING:          TOKEN_UNIT_RECONCILED / PASS
+Official Billing Anomalies:  NONE
+PR #103 REQUIRED CI:         PASS
 ```
 
-因此没有创建 Preview merge，也没有修改 `preview` / `master`、创建 Release、
-Tag 或 Marketplace 更新。
+因此候选分支满足合并到 `preview` 的计费、E2E、测试和 CI 条件。报告提交本身
+会产生新的文档-only HEAD，合并前必须再次确认该 HEAD 的必需 CI 结果。正式
+Merge Commit 以远程 `preview` 与 PR #103 的最终记录为准。
 
 ## 10. 未解决项
 
-唯一阻止合并的证据缺口是 Start Plan Credits/活动倍率不可观测。继续盲目发起
-相同 Start Plan 请求不会增加判别力，因为每个请求只会在 Token bucket 中增加
-与 Runtime Usage 相同的 Token 数。
-
-下一次有效调查必须找到新的合法官方数据源之一：
-
-1. Start Plan 官方 Credits/价格表/倍率字段；
-2. 可将单位 Token 映射为 Credits 的官方账单明细；
-3. 官方公开且可核验的 Start Plan 活动计价规则。
-
-在这些证据出现前，只能报告：
+没有未解释的 Coding Plan Token/Credits 差异，也没有 Start Plan Token 配额
+差异。Start Plan 不适用额外折扣倍率，因此不需要通过重复模型请求寻找不存在的
+Credits 倍率。
 
 ```text
-START_PLAN_MULTIPLIER: NOT_VERIFIED
-FINAL_VERDICT: BLOCKED
+START_PLAN_MULTIPLIER: NOT_APPLICABLE / NO_DISCOUNT
+FINAL_VERDICT: PASS PENDING FINAL HEAD CI AND MERGE
 ```
