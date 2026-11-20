@@ -4,14 +4,14 @@
   "generator": "npm run test:inventory",
   "summary": {
     "executable_or_manual_files": 100,
-    "declarations": 904,
+    "declarations": 905,
     "by_type": {
-      "Unit": 222,
+      "Unit": 223,
       "Integration": 678,
       "Stress": 4
     },
     "by_gate": {
-      "T1": 261,
+      "T1": 262,
       "T2": 639,
       "T3": 4
     },
@@ -44403,6 +44403,54 @@
       "test_name": "Windows shard plan is complete, disjoint, automatic-only, and duration-balanced",
       "test_file": "test/test-shard-plan.test.ts",
       "test_line": 10,
+      "test_type": "Unit",
+      "gate": "T1",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [],
+        "impact_domains": [
+          "test-execution-contract"
+        ]
+      },
+      "trigger_source_paths": [
+        "scripts/test-isolated.mjs",
+        "scripts/test-clean-entrypoints.mjs",
+        "scripts/test-impact-selector.mjs",
+        "scripts/lib/test-files.mjs",
+        "scripts/lib/changed-files.mjs",
+        "scripts/ci-select-impact.mjs",
+        "scripts/copy-test-assets.mjs",
+        "scripts/run-affected-tests.mjs",
+        "scripts/run-stress-tests.mjs",
+        "scripts/test-shard.mjs",
+        "test/test-impact-map.json",
+        "test/windows-test-shard-plan.json",
+        "test/helpers.ts",
+        "test/runtime-fixture.ts",
+        "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter-harness.ts",
+        "test/runtime/bootstrap-lock-worker.mjs",
+        "test/sqlite-candidate/wp6b2b1/lifecycle-process.mjs",
+        "test/sqlite-candidate/wp6b2b1/worker-process.mjs"
+      ],
+      "trigger_test_files": [
+        "test/test-shard-plan.test.ts"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-C549762AE8A0A05F",
+      "test_name": "Windows shard workflow scopes runner temp expressions to steps",
+      "test_file": "test/test-shard-plan.test.ts",
+      "test_line": 21,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",

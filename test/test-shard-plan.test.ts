@@ -17,3 +17,14 @@ test("Windows shard plan is complete, disjoint, automatic-only, and duration-bal
   }
   assert.equal(automaticTestEntries(map, "linux", { includeStress: false }).some((entry: { file: string }) => entry.file.includes("mvp-real-adapter-stream-stress")), false);
 });
+
+test("Windows shard workflow scopes runner temp expressions to steps", () => {
+  const workflow = readFileSync(".github/workflows/windows-shard-experiment.yml", "utf8");
+  const shardStart = workflow.indexOf("  shard:");
+  const stepsStart = workflow.indexOf("    steps:", shardStart);
+  assert.ok(shardStart >= 0 && stepsStart > shardStart, "the shard job header must be identifiable");
+  assert.doesNotMatch(workflow.slice(shardStart, stepsStart), /runner\.temp/u,
+    "the runner context is not available in job-level env");
+  assert.match(workflow, /- name: Prepare isolated shard directories[\s\S]*?SHARD_TEMP: \$\{\{ runner\.temp \}\}/u);
+  assert.match(workflow, /- name: Run Windows shard[\s\S]*?WP6_TEST_FIXTURE_ROOT: \$\{\{ runner\.temp \}\}/u);
+});

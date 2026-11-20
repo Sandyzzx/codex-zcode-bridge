@@ -227,6 +227,8 @@ node scripts/test-shard.mjs --shard=2/2
 
 这些失败被保留在 `.run/shard-stability-20261121/`，未改为 SKIP，也未通过放宽断言消除。新的 harness 现在在 lifecycle 等待失败时附带最终 status、Attempt、phase、issues 和事件 trail，便于下次复现定位。
 
+首次远程注册实验 Workflow 时，GitHub 在创建 Job 前拒绝执行：`runner` context 不能用于 Job-level `env`。该失败没有启动 Windows Runner，也没有消耗测试 Job。已改为在 step-level 使用 `runner.temp`，先创建每 Shard 的 TEMP/fixture 目录，再运行测试；同时新增回归，禁止把 `runner.temp` 放回 Job-level `env`。
+
 ### 4.3 当前三轮结果
 
 分片在本地 Windows 上连续运行。每轮两个 Shard 使用独立 fixture/TEMP；不改 timeout、不并发启动同一 Workspace。
@@ -254,13 +256,13 @@ node scripts/test-shard.mjs --shard=2/2
 | `npm run typecheck` | PASS |
 | `npm run build` | PASS |
 | `npm run build:test` | PASS |
-| Impact Selector + Shard Plan focused tests | 21/21 PASS |
+| Impact Selector + Shard Plan focused tests | 22/22 PASS |
 | `npm run cost-lab:test` | 86/86 PASS（首次命中既有临时端口 `bad port`，立即复跑通过） |
 | `npm run test:stress` | 4/4 PASS |
 | `npm run test:clean-entrypoints` | 4/4 PASS |
 | `npm run validate:plugin` | PASS |
 | `npm run check:generated` | PASS |
-| `npm run test:inventory` | PASS；904 declarations / 100 mapped files |
+| `npm run test:inventory` | PASS；905 declarations / 100 mapped files |
 | `git diff --check` | PASS |
 | Windows shard rounds 5–7 | PASS，每轮两个 Shard 均 PASS |
 | `npm run test:affected` full fallback | PASS；966 tests / 964 PASS / 0 FAIL / 2 existing SKIP；当前机器串行耗时 1,161.362s |
@@ -320,7 +322,7 @@ Cost Lab 首次复跑出现一次既有临时端口选择触发 Node `fetch` `ba
 
 ## 7. 剩余工作
 
-1. 在 GitHub 上手动执行 Windows Shard Experiment，取得托管 Runner 的真实墙钟、失败率和 runner-minutes。
+1. 在 GitHub 上执行修正后的 Windows Shard Experiment，取得托管 Runner 的真实墙钟、失败率和 runner-minutes。
 2. 若托管分片稳定，再评估是否增加 Required Check 与 Push/Preview 的适用范围。
 3. 重新运行受影响测试、生成物检查和完整 Diff 检查。
 4. 提交并推送候选；PR CI 通过前不得合并 Preview。
