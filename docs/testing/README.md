@@ -2,7 +2,7 @@
 
 > Status: AUTHORITATIVE
 > Last updated: 2026-11-21（ADR-043 SQLite v14 ONLY）
-> Last verified: 2026-11-21，核对 v13 升级测试/生成物退役、最小非破坏性拒绝测试、v14 生命周期保留和 Impact Map 更新。
+> Last verified: 2026-11-21，核对 v13 升级测试/生成物退役、最小非破坏性拒绝测试、v14 生命周期保留和 Impact Map 更新；完整 Windows 回归 `952 tests / 950 PASS / 0 FAIL / 2 SKIP`。
 > Verified against: ADR-043 candidate based on `c1245a02f8f9d4b6e1102eabac230b657d85de9b`
 
 `test/test-impact-map.json` 为可执行清单唯一来源。共享资格规则禁止 MANUAL_E2E、Fixture 自动执行，显式误传同样拒绝；源 .test.ts/.test.mjs、map 与实际 --list 由回归对账。生成的 test-inventory.json 是静态声明/历史证据索引，不决定执行。

@@ -2,7 +2,7 @@
 
 > Status: AUTHORITATIVE
 > Last updated: 2026-11-21（ADR-043 SQLite v14 ONLY）
-> Last verified: 2026-11-21，核对 v14 Fresh/Existing、历史 v14 读取、v13/旧 Marker 非破坏性拒绝、生成物和测试退役；真实模型、OAuth 与 Billing E2E 为 `NOT_RUN`。
+> Last verified: 2026-11-21，核对 v14 Fresh/Existing、历史 v14 读取、v13/旧 Marker 非破坏性拒绝、生成物和测试退役；完整 Windows 回归 `952 tests / 950 PASS / 2 SKIP`，真实模型、OAuth 与 Billing E2E 为 `NOT_RUN`。
 > Verified against: ADR-043 candidate based on `c1245a02f8f9d4b6e1102eabac230b657d85de9b`
 
 当前发布状态：
@@ -50,7 +50,7 @@ Preview.3 的 Start Plan 历史证据覆盖 Windows、官方 AppServer `0.17.1`�
 | Runtime-selected Provider capability gate | `PASS — CANDIDATE` | 官方 Provider registry + 当前账户配置分类；隐式 Coding Plan、隐式 Start Plan、其他 Provider 与显式 Provider 定向测试通过；真实模型请求 `NOT_RUN` |
 | 生产 Official Host Runtime Auth fail-closed | `PASS — CANDIDATE` | Resolver 缺失或拒绝时返回不可用，即使存在合成持久化 Key 也不回包；静态回包仅由 Test Adapter 覆盖 |
 | R7 Runtime Events/Usage | `PASS` | fd14 单向通道、v14 additive schema、sequence/cursor、stale Attempt、Feedback/Result 合成与旧 v14 兼容测试通过 |
-| SQLite v13 非破坏性拒绝 | `PASS` | 只读版本预检、Lifecycle Gate 稳定错误、旧 Marker 原字节保留；v14 Fresh/Existing 继续覆盖 |
+| SQLite v13 非破坏性拒绝 | `PASS` | 无句柄文件预检、Lifecycle Gate 稳定错误、DB/WAL/SHM 与旧 Marker 原字节保留；完整回归 952/950/2，v14 Fresh/Existing 继续覆盖 |
 | 完整 Node/native/resource 闭包 | `PARTIAL` | 6 个 keyring 文件已在 clean checkout 解析、native load 并与 BOM bytes/hash 一致；完整动态资源闭包仍未认证 |
 | 正常 cleanup 的 native/resource 闭包 | `PARTIAL` | exact identity、tree scan 与 CAS 有定向证据；一般外部资源和 crash 矩阵未完成 |
 | 再分发/许可审查 | `PASS — OWNER_APPROVED_SCOPE` | 官方签名 runtime host 的再分发权利已由 Owner 确认；ZCode LICENSE/NOTICE 与 keyring license 文件进入 BOM；不是独立法律意见 |

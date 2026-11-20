@@ -27,6 +27,7 @@ English users start at [README.md](../README.md). 技术文档为中文。先读
 | 已安装官方 AppServer：统一 Provider Runtime、Coding Plan 优惠兼容、Start Plan 离线兼容 | [ADR-040](decisions/ADR-040-installed-official-appserver-runtime.md)、[ADR-041](decisions/ADR-041-thin-official-host-end-state.md)、[Coding Plan 正式证据](evidence/coding-plan-official-discount-verification-20261118.md)、[Start Plan 离线研究](research/start-plan-official-appserver-compatibility-20261118.md)、[11-19 统一 Runtime 交付报告](reports/unified-official-appserver-startplan-20261119.md) |
 | 未知官方版本的安全检查与指纹授权实验探测 | [ADR-042](decisions/ADR-042-unknown-runtime-experimental-authorization.md)、[3.19.0 兼容性报告](reports/zcode-3.19.0-compatibility-20261120.md) |
 | SQLite Schema 支持 | [ADR-043](decisions/ADR-043-sqlite-v14-only.md) | `SQLite v14 ONLY`；v13 与旧升级 Marker 非破坏性拒绝 |
+| SQLite v13 退役验收 | [验收报告](reports/sqlite-v13-retirement-20261121.md) | v14-only 支持、v13 非破坏性拒绝、测试/生成物退役与完整回归证据 |
 | Preview.7 Post-Audit 最小架构、正确性、Legacy JSON 与 CI 整改 | [ADR-038](decisions/ADR-038-preview6-minimum-architecture-remediation.md)、[PROJECT_STATE.md](PROJECT_STATE.md) |
 | Start Plan 与安装版 AppServer 离线兼容性 | [研究](research/start-plan-official-appserver-compatibility-20261118.md) |
 | 本次 Runtime、Cost Lab Web 与 Start Plan 集成交付 | [验收报告](reports/official-runtime-integration-costlab-web-startplan-20261118.md) |
