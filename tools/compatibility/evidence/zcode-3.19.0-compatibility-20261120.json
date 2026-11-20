@@ -1,0 +1,212 @@
+{
+  "schema_version": 1,
+  "kind": "zcode_unknown_runtime_compatibility_evidence",
+  "goal": "ZCODE_3_19_0_ADAPTATION_WITH_3_18_COMPATIBILITY",
+  "captured_at": "2026-11-20T07:43:06.169Z",
+  "repository": {
+    "root": "D:\\codex-zcode-bridge",
+    "worktree": "D:\\codex-zcode-bridge\\.run\\zcode-3190-compat-20261120",
+    "branch": "codex/zcode-3190-compat-20261120",
+    "baseline_commit": "aedeb2c2a1ea6f41ea3ac2d045f7ed0d75281552",
+    "primary_implementation_commit": "aa755239645b355eb63288473567eb96de2bcd66",
+    "final_code_commit": "15abe6becb13f383fee676a4ae20510d51f817fc",
+    "final_code_tree": "654cda65168ece915251305522db6ce603e23ad7",
+    "remote": "origin/preview"
+  },
+  "unknown_runtime_policy": {
+    "manifest_absence_alone_is_not_a_permanent_rejection": true,
+    "full_installation_safety_required_before_authorization": true,
+    "authorization_bound_to_exact_installation_fingerprint": true,
+    "asset_or_node_change_requires_reauthorization": true,
+    "unsafe_installation_cannot_be_authorized": true,
+    "experimental_results_promote_manifest_automatically": false,
+    "provider_capabilities_independent": true,
+    "probe_scopes": [
+      "coding_plan_probe",
+      "start_plan_probe",
+      "other_provider_probe"
+    ]
+  },
+  "installation": {
+    "root": "C:\\Users\\Sandy\\AppData\\Local\\Programs\\ZCode",
+    "desktop_version": "3.19.0.10774",
+    "desktop_app_version": "3.19.0",
+    "desktop_build_commit_id": "a7ed1054",
+    "desktop_build_commit_id_is_source_commit": false,
+    "node_version": "24.16.0",
+    "installation_safety": "OFFICIAL_INSTALLATION_SAFE",
+    "installation_fingerprint": "3e25056614f91d3651c237fbc89a076a1f9e834d351257423854844fb5b28290",
+    "authenticode": {
+      "desktop_status": "Valid",
+      "runtime_host_status": "Valid",
+      "publisher_subject": "CN=北京智谱华章科技股份有限公司",
+      "signer_thumbprint": "6F7B147DC610F91425750D2449C46002C3385BCF"
+    },
+    "assets": {
+      "desktop_executable": {
+        "bytes": 246332312,
+        "sha256": "c5afb161a2d9389761d417ca668bc94311e3d2aff6ca3d0117b0b15701666f27"
+      },
+      "desktop_archive": {
+        "bytes": 385171742,
+        "sha256": "2421850970f361aaa1b3f1d6c960b101a5d476ad95631359d0413a19de1197cb"
+      },
+      "appserver_bundle": {
+        "bytes": 15843692,
+        "sha256": "6b84e928d9258fe020c6ab8c75fa2c123b0cd658fe43c0ce141a13df677fb0ea"
+      },
+      "builtin_provider_config": {
+        "bytes": 261659,
+        "sha256": "ef3d64656cb5281cce292b77ef12e96b5251582cfb00cdf9eb08e3d4565abb69"
+      },
+      "runtime_host": {
+        "bytes": 179608,
+        "sha256": "c87a9f3cf9cf920e4b5993aad69f8840a5d9bc7c0ae90b32acb29c15a1db0aae"
+      }
+    }
+  },
+  "authorization": {
+    "without_file": {
+      "status": "OFFICIAL_RUNTIME_UNVERIFIED",
+      "authorization_state": "required",
+      "reason": "EXPERIMENTAL_AUTHORIZATION_REQUIRED"
+    },
+    "with_matching_file": {
+      "status": "OFFICIAL_RUNTIME_EXPERIMENTAL",
+      "authorization_state": "authorized",
+      "scopes": [
+        "coding_plan_probe",
+        "start_plan_probe",
+        "other_provider_probe"
+      ],
+      "discount_capability": "OFFICIAL_DISCOUNT_NOT_VERIFIED",
+      "start_plan_static_compatibility": "OFFLINE_RESEARCH_PENDING"
+    },
+    "file": ".run/compatibility/experimental-runtime-authorization.json",
+    "file_is_project_local": true
+  },
+  "protocol_smoke": {
+    "status": "PASS",
+    "duration_ms": 8662,
+    "protocol_initialized": true,
+    "protocol_method": "runtime/capabilities",
+    "capabilities_received": true,
+    "process_started": true,
+    "session_created": false,
+    "model_requests": 0,
+    "cleanup_observed": true,
+    "evidence_file": ".run/cost-lab-e2e/zcode319-protocol-smoke-final-20261120.json"
+  },
+  "coding_plan": {
+    "runtime_execution": "PASS",
+    "task_id": "costlab-cdc6b51b-8485-4782-b8bf-4bfafcd15dcc",
+    "attempt": 1,
+    "terminal_status": "completed",
+    "session_id": "sess_e58a88cc-175e-49d8-b478-f89c5d51b577",
+    "provider_id": "account:bigmodel-individual-coding-plan",
+    "model_id": "GLM-5.3-Flash",
+    "model_requests": 1,
+    "usage": {
+      "cached_input_tokens": 0,
+      "input_tokens": 18247,
+      "output_tokens": 104,
+      "reasoning_tokens": 0,
+      "total_tokens": 18351,
+      "source": "zcode_runtime_turn"
+    },
+    "result_summary": "COSTLAB_PRODUCTION_VERIFICATION_OK",
+    "runtime_evidence_status_in_that_run": "UNVERIFIED",
+    "runtime_evidence_note": "The model call completed against the 3.19 bundle, but the runner marker forwarding fix landed after this real request. The final code path is covered by synthetic runner tests; no duplicate real request was made.",
+    "billing": {
+      "official_hour_bucket": "15:00:00",
+      "hour_bucket_tokens_before": 0,
+      "hour_bucket_tokens_after_probe": 0,
+      "hour_bucket_tokens_after_settled": 0,
+      "quota_deltas": {
+        "unit_3": 2,
+        "unit_6": 3
+      },
+      "quota_units_are_not_credits": true,
+      "effective_extra_ratio": null,
+      "multiplier": "INCONCLUSIVE",
+      "reason": "The official request-level hourly Token row remained zero, so quota-unit changes cannot be mapped to one request or used to claim 0.67."
+    },
+    "evidence_files": [
+      ".run/cost-lab-e2e/zcode319-coding-before-20261120.json",
+      ".run/cost-lab-e2e/zcode319-coding-e2e-20261120.json",
+      ".run/cost-lab-e2e/zcode319-coding-after-probe-20261120.json",
+      ".run/cost-lab-e2e/zcode319-coding-after-settled-20261120.json"
+    ]
+  },
+  "start_plan": {
+    "status": "BLOCKED",
+    "reason": "NO_ACTIVE_PLAN",
+    "official_endpoint": "GET https://zcode.z.ai/api/v1/zcode-plan/billing/balance",
+    "http_status": 200,
+    "plans": [],
+    "balances": [],
+    "model_requests": 0,
+    "tested_app_versions": [
+      "3.18.2",
+      "3.19.0"
+    ],
+    "compatibility_claim": "NOT_VERIFIED",
+    "discount_claim": "NOT_APPLICABLE_NO_DISCOUNT",
+    "evidence_files": [
+      ".run/cost-lab-e2e/zcode319-startplan-before-20261120.json",
+      ".run/cost-lab-e2e/zcode319-startplan-before-app319-20261120.json"
+    ]
+  },
+  "official_source": {
+    "repository": "https://github.com/zai-org/ZCode.git",
+    "origin_main_commit": "fec975905a2abd4c07e35c40d51fa097a2258ec9",
+    "v3_18_2_tag_commit": "fec975905a2abd4c07e35c40d51fa097a2258ec9",
+    "v3_19_0_source_available": false,
+    "source_equivalence": "UNKNOWN",
+    "host_patch_status": "UPSTREAM_PENDING"
+  },
+  "validation": {
+    "final_validated_at": "2026-11-20T08:09:35.388Z",
+    "typecheck": "PASS",
+    "targeted_runtime_provider_tests": {
+      "status": "PASS",
+      "passed": 22,
+      "failed": 0
+    },
+    "cost_lab_tests": {
+      "status": "PASS",
+      "passed": 86,
+      "failed": 0
+    },
+    "build": "PASS",
+    "generated_artifacts": {
+      "status": "PASS",
+      "verified_files": 12
+    },
+    "plugin_validator": "PASS",
+    "clean_entrypoints": {
+      "status": "PASS",
+      "passed": 4,
+      "failed": 0
+    },
+    "full_regression": {
+      "status": "PASS",
+      "tests": 961,
+      "passed": 959,
+      "failed": 0,
+      "skipped": 2,
+      "duration_ms": 1275003.5181
+    },
+    "diff_check": "PASS"
+  },
+  "security": {
+    "real_model_requests": 1,
+    "start_plan_model_requests": 0,
+    "credentials_exported": false,
+    "credentials_modified": false,
+    "official_installation_modified": false,
+    "production_sqlite_modified": false,
+    "preview_merged": false,
+    "release_published": false
+  }
+}

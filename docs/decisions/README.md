@@ -1,9 +1,9 @@
 # 决策路由 / Decisions
 
 > Status: AUTHORITATIVE（仅指本索引）
-> Last updated: 2026-11-19（增加 ADR-041 Thin Official Host end state）
-> Last verified: 2026-11-19，核对 ADR-040/041、安装版 AppServer 统一 Provider 路由、共享 Model Catalog session factory、打包 AppServer 退役与 patch 上游状态；真实模型/认证/Billing 请求未在本轮运行。
-> Verified against: `5501c60ecf3f1812a3d3170a670ab0031ea784d8` + 2026-11-19 Thin Adapter working-tree candidate（未提交）
+> Last updated: 2026-11-20（增加 ADR-042 Unknown Runtime Experimental Authorization）
+> Last verified: 2026-11-20，核对未知安装安全检查、精确指纹授权、Provider 分 scope 探测、实验态与 VERIFIED Manifest 的隔离；3.19 真实/阻断结果见兼容性报告。
+> Verified against: ADR-042 implementation `15abe6becb13f383fee676a4ae20510d51f817fc`（tree `654cda65168ece915251305522db6ce603e23ad7`）
 
 先读当前 [架构](../ARCHITECTURE.md)/[接口](../INTERFACES.md)，只在需要解释取舍时加载对应决策。文件保持原路径和历史正文；Partially superseded 的标注优先于历史段落。
 
@@ -36,6 +36,7 @@
 | Host 授权取消 | [039](ADR-039-host-authorized-cancellation.md) | 当前本地修复；无 Claim 的 Launch Intent 可取消并保留未核实清理占用；Running 的 cleanup-only Hold 通过新鲜取消树证明追加消解，保留原 CAS 与历史 |
 | 官方 Runtime | [040](ADR-040-installed-official-appserver-runtime.md) | 候选集成；安装版官方 AppServer 的统一 Runtime 与精确 Manifest 门禁 |
 | Thin Official Host | [041](ADR-041-thin-official-host-end-state.md) | 统一 Model Catalog/Worker session factory；所有 Provider 走安装版 AppServer；direct stdio 仅测试；三项 patch 暂留 |
+| 未知版本实验授权 | [042](ADR-042-unknown-runtime-experimental-authorization.md) | 安全检查与 Manifest 兼容分离；精确指纹授权后可进行 Provider 分 scope 探测；不自动提升为 VERIFIED |
 
 ADR-032、ADR-033、ADR-034 和 ADR-035 的正文记录决定作出时的状态；顶部 Applicability 标注当前适用性。当前实现状态以 [ARCHITECTURE](../ARCHITECTURE.md) 和 [PROJECT_STATE](../PROJECT_STATE.md) 为准：Windows x64 Worker 使用 `OfficialAppServerWorkerAdapter`、固定 Official Host module、安装版 ZCode AppServer、官方只读 Start Plan 认证与官方签名 runtime host；Model Catalog 使用同一 session factory。Linux、macOS 与 Windows 非 x64 在构造 Adapter 前 fail closed；direct stdio 只保留测试入口。`research/zcode-official-host-integration-v1/` 的 [Implementation Summary](../research/zcode-official-host-integration-v1/IMPLEMENTATION_SUMMARY.md) 与 [Final Acceptance](../research/zcode-official-host-integration-v1/FINAL_ACCEPTANCE_REPORT.md) 是 Preview.4/3.18.0 历史证据，不能作为当前候选的兼容通过证明。
 

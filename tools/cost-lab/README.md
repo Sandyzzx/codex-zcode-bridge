@@ -12,7 +12,8 @@ Prerequisites:
 
 - Windows x64.
 - Node.js `24.16.x`.
-- Installed ZCode Desktop `3.18.2.10443`.
+- Installed, production-verified ZCode Desktop `3.18.2.10443`, or a safe unknown
+  installation explicitly authorized through ADR-042 experimental scopes.
 - A signed-in personal Coding Plan with available credits when using the Coding
   Plan verification.
 - A signed-in Start Plan when refreshing the Start Plan balance.
@@ -54,8 +55,9 @@ units are never combined.
 3. The server captures a fresh official Coding Plan snapshot.
 4. `production-verification-runner.mjs` starts the built Bridge MCP entry with an
    isolated HOME, Bridge data root, and harmless workspace.
-5. The production Worker resolves the verified installed official AppServer and
-   runs the task through the existing MCP/Worker/SQLite lifecycle.
+5. The production Worker resolves either the verified installed official
+   AppServer or the exact authorized experimental fingerprint, then runs the
+   task through the existing MCP/Worker/SQLite lifecycle.
 6. Cost Lab records `zcode_task`, `zcode_status`, `zcode_result`, and
    `zcode_events` evidence.
 7. The server captures a fresh after-snapshot and reconciles the exact hourly
