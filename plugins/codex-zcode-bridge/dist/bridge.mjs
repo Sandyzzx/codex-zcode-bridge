@@ -3208,7 +3208,7 @@ function spawnClaimOnlyWorker(workerPath, provenance, options = {}) {
         if (index < 0) break;
         const line = pending.slice(0, index);
         pending = pending.slice(index + 1);
-        if (line.startsWith("[bridge-worker] failure-facts ") || /^\[bridge-worker\] installed-runtime [a-zA-Z0-9][a-zA-Z0-9_-]{0,63} [1-9]\d{0,8} [0-9a-f]{64}$/u.test(line)) {
+        if (line.startsWith("[bridge-worker] failure-facts ") || line.startsWith("[bridge-worker] runtime-auth ") || /^\[bridge-worker\] installed-runtime [a-zA-Z0-9][a-zA-Z0-9_-]{0,63} [1-9]\d{0,8} [0-9a-f]{64}$/u.test(line)) {
           diagnosticSink(line);
         }
       }
@@ -37394,21 +37394,35 @@ function createOfficialProviderRuntimeAuthResolver(options) {
     headersApplied: false,
     errorMessage: "Provider runtime authorization is unavailable."
   });
+  const report = (facts) => {
+    try {
+      options.onDiagnostic?.(facts);
+    } catch {
+    }
+  };
   return async (request, signal) => {
-    if (signal.aborted) return unavailable();
+    if (signal.aborted) {
+      report({ stage: "input_rejected", reason: "aborted" });
+      return unavailable();
+    }
     const providerId = typeof request.providerId === "string" ? request.providerId : "";
     const modelSelection = asRecord3(request.modelSelection);
     const modelId = typeof modelSelection.modelId === "string" ? modelSelection.modelId : "";
     if (!providerId || !modelId || typeof modelSelection.providerId === "string" && modelSelection.providerId !== providerId || options.isSelected && !options.isSelected(providerId, modelId)) {
+      report({ stage: "input_rejected", reason: "selection_mismatch" });
       return unavailable();
     }
     const facts = accountProviderRuleFacts(providerId, options.config);
     const access = asRecord3(request.accountAccess);
     if (!facts?.accountType || facts.planKind !== "individual-coding-plan" || access.type !== "zhipu-account" || access.accountType !== facts.accountType || access.mode !== facts.planKind || access.entitled !== true) {
+      report({ stage: "input_rejected", reason: "account_access_mismatch" });
       return unavailable();
     }
     const dataBaseDir = zcodeDataBaseDir(options.config.providerPersonalConfigFile);
-    if (!dataBaseDir) return unavailable();
+    if (!dataBaseDir) {
+      report({ stage: "input_rejected", reason: "data_root_invalid" });
+      return unavailable();
+    }
     const cacheKey = `${dataBaseDir}\0${providerId}`;
     let service = services.get(cacheKey);
     if (!service) {
@@ -37430,7 +37444,19 @@ function createOfficialProviderRuntimeAuthResolver(options) {
       );
       services.set(cacheKey, service);
     }
-    return (await service).resolveProviderRuntimeRequest(request, { signal });
+    try {
+      const result = await (await service).resolveProviderRuntimeRequest(request, { signal });
+      report({
+        stage: result.headersApplied === true ? "resolved" : "service_rejected",
+        headers_applied: result.headersApplied === true,
+        request_auth_present: Boolean(result.requestAuth)
+      });
+      return result;
+    } catch (error2) {
+      const name = error2 instanceof Error && /^[A-Za-z][A-Za-z0-9_]{0,63}$/u.test(error2.name) ? error2.name : "unknown";
+      report({ stage: "resolver_rejected", error_class: name });
+      throw error2;
+    }
   };
 }
 function asRecord3(value) {
@@ -38731,6 +38757,10 @@ async function startBridge(host = codexHostProfile(), version2 = SERVER_VERSION,
         const runtime = /^\[bridge-worker\] installed-runtime ([a-zA-Z0-9][a-zA-Z0-9_-]{0,63} [1-9]\d{0,8} [0-9a-f]{64})$/u.exec(line);
         if (runtime) {
           console.error(`[bridge] worker installed-runtime ${runtime[1]}`);
+          return;
+        }
+        if (/^\[bridge-worker\] runtime-auth \{[^\r\n]{1,1024}\}$/u.test(line)) {
+          console.error(`[bridge] ${line.slice("[bridge-worker] ".length)}`);
           return;
         }
         const facts = formatWorkerFailureFactsLine(line);

@@ -854,7 +854,8 @@ function parseWorkerFailureFactsMarker(line) {
 
 function isSafeBridgeMarker(line) {
   return /^\[bridge\] (SQLITE_|runtime provenance|data root|max concurrent workers|received |[A-Za-z0-9_.+-]+ stdio MCP server ready)/u.test(line) ||
-    /^\[bridge\] worker installed-runtime [a-zA-Z0-9][a-zA-Z0-9_-]{0,63} [1-9]\d{0,8} [0-9a-f]{64}$/u.test(line);
+    /^\[bridge\] worker installed-runtime [a-zA-Z0-9][a-zA-Z0-9_-]{0,63} [1-9]\d{0,8} [0-9a-f]{64}$/u.test(line) ||
+    /^\[bridge\] runtime-auth \{[^\r\n]{1,1024}\}$/u.test(line);
 }
 
 function bridgeMarkerCode(markers) {

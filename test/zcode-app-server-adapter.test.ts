@@ -393,6 +393,7 @@ test("runtime auth dispatcher forwards eligible account requests to the async pr
     );
     let startPlanAuthCalls = 0;
     let providerAuthCalls = 0;
+    const diagnostics: Array<Readonly<Record<string, string | number | boolean | null>>> = [];
     const adapter = new ZCodeAppServerTestAdapter({
       resolver: {
         resolve: async () => ({
@@ -424,6 +425,7 @@ test("runtime auth dispatcher forwards eligible account requests to the async pr
           requestAuth: { apiKey: "synthetic-async-runtime-auth-marker" },
         };
       },
+      onRuntimeAuthDiagnostic: (facts) => diagnostics.push(facts),
     });
     const handle = await adapter.startTask({
       task: {
@@ -448,6 +450,15 @@ test("runtime auth dispatcher forwards eligible account requests to the async pr
       headersApplied: true,
       requestAuth: { apiKey: "synthetic-async-runtime-auth-marker" },
     });
+    assert.deepEqual(diagnostics.map((facts) => facts.stage), [
+      "request_received",
+      "resolver_started",
+      "resolver_completed",
+    ]);
+    assert.equal(diagnostics[0]?.session_match, true);
+    assert.equal(diagnostics[0]?.turn_match, true);
+    assert.equal(diagnostics[2]?.headers_applied, true);
+    assert.doesNotMatch(JSON.stringify(diagnostics), /synthetic-async-runtime-auth-marker/u);
   } finally {
     await rm(runtime.root, { recursive: true, force: true });
   }

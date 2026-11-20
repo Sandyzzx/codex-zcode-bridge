@@ -349,6 +349,10 @@ export async function startBridge(
           console.error(`[bridge] worker installed-runtime ${runtime[1]}`);
           return;
         }
+        if (/^\[bridge-worker\] runtime-auth \{[^\r\n]{1,1024}\}$/u.test(line)) {
+          console.error(`[bridge] ${line.slice("[bridge-worker] ".length)}`);
+          return;
+        }
         const facts = formatWorkerFailureFactsLine(line);
         // Diagnostic stderr only: this line never enters MCP results, events,
         // or any persisted surface.

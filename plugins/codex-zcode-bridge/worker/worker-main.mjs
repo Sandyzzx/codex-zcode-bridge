@@ -26815,6 +26815,7 @@ var init_zcode_app_server_adapter = __esm({
     ZCodeAppServerAdapter = class {
       #resolveStartPlanRuntimeAuth;
       #resolveProviderRuntimeAuth;
+      #onRuntimeAuthDiagnostic;
       #verifySelectedProviderCapability;
       #allowTestOnlyStaticRuntimeAuthReply;
       #startPlanProviderEntitled;
@@ -26856,6 +26857,7 @@ var init_zcode_app_server_adapter = __esm({
         }
         this.#resolveStartPlanRuntimeAuth = options.resolveStartPlanRuntimeAuth;
         this.#resolveProviderRuntimeAuth = options.resolveProviderRuntimeAuth;
+        this.#onRuntimeAuthDiagnostic = options.onRuntimeAuthDiagnostic;
         this.#verifySelectedProviderCapability = options.verifySelectedProviderCapability;
         this.#allowTestOnlyStaticRuntimeAuthReply = options.testOnlyAllowDirectAppServer === true && options.externalHostClientFactory === void 0;
         this.#startPlanProviderEntitled = options.startPlanProviderEntitled === true;
@@ -28249,13 +28251,37 @@ var init_zcode_app_server_adapter = __esm({
               const turnId = typeof params.turnId === "string" ? params.turnId : null;
               const modelId = typeof selection.modelId === "string" ? selection.modelId : "";
               const selected = entry.selectedModelSelection;
+              const accountAccess = asRecord4(params.accountAccess);
+              this.#reportRuntimeAuthDiagnostic({
+                stage: "request_received",
+                provider_id: providerId,
+                selection_provider_id: typeof selection.providerId === "string" ? selection.providerId : null,
+                model_id: modelId,
+                selected_provider_id: selected?.providerId ?? null,
+                selected_model_id: selected?.modelId ?? null,
+                session_match: Boolean(entry.sessionId && sessionId === entry.sessionId),
+                turn_match: turnId === null ? null : Boolean(entry.turnId && turnId === entry.turnId),
+                accepting_turn: entry.acceptingTurn,
+                account_access_type: typeof accountAccess.type === "string" ? accountAccess.type : null,
+                account_access_account_type: typeof accountAccess.accountType === "string" ? accountAccess.accountType : null,
+                account_access_mode: typeof accountAccess.mode === "string" ? accountAccess.mode : null,
+                account_access_entitled: accountAccess.entitled === true
+              });
               if (!entry.acceptingTurn || !entry.sessionId || sessionId !== entry.sessionId || turnId !== null && (!entry.turnId || turnId !== entry.turnId) || typeof selection.providerId === "string" && selection.providerId !== providerId || typeof params.providerId === "string" && params.providerId !== providerId || !modelId || !selected || selected.providerId !== providerId || selected.modelId !== modelId || entry.abort.signal.aborted) {
+                this.#reportRuntimeAuthDiagnostic({ stage: "identity_rejected" });
                 replySafely({ headersApplied: false, errorMessage: "Provider runtime identity is not verified." });
                 return;
               }
+              this.#reportRuntimeAuthDiagnostic({ stage: "resolver_started" });
               void this.#resolveProviderRuntimeAuth(params, config2, entry.abort.signal).then((result) => {
+                this.#reportRuntimeAuthDiagnostic({
+                  stage: "resolver_completed",
+                  headers_applied: result.headersApplied === true
+                });
                 if (!entry.abort.signal.aborted) replySafely(result);
-              }).catch(() => {
+              }).catch((error62) => {
+                const errorClass = error62 instanceof Error && /^[A-Za-z][A-Za-z0-9_]{0,63}$/u.test(error62.name) ? error62.name : "unknown";
+                this.#reportRuntimeAuthDiagnostic({ stage: "resolver_failed", error_class: errorClass });
                 if (!entry.abort.signal.aborted) {
                   replySafely({ headersApplied: false, errorMessage: "Provider runtime authorization is unavailable." });
                 }
@@ -28409,6 +28435,12 @@ var init_zcode_app_server_adapter = __esm({
         }
         if (message.id !== void 0 && typeof message.method === "string") {
           write({ id: message.id, error: { code: -32601, message: `Unsupported ZCode app-server request: ${message.method}` } });
+        }
+      }
+      #reportRuntimeAuthDiagnostic(facts) {
+        try {
+          this.#onRuntimeAuthDiagnostic?.(facts);
+        } catch {
         }
       }
       #handleInteractionRequest(message, entry, write) {
@@ -29683,6 +29715,18 @@ init_account_provider();
 // src/runtime/official-provider-runtime-auth.ts
 init_official_host_adapter();
 init_account_provider();
+function createOfficialProviderRuntimeAuthDispatcher() {
+  let resolver;
+  return {
+    resolve: async (request, config2, signal) => resolver ? resolver(request, config2, signal) : {
+      headersApplied: false,
+      errorMessage: "Provider runtime authorization is unavailable."
+    },
+    bind(next) {
+      resolver = next;
+    }
+  };
+}
 function createOfficialProviderRuntimeAuthResolver(options) {
   let factoryPromise;
   const services = /* @__PURE__ */ new Map();
@@ -29690,21 +29734,35 @@ function createOfficialProviderRuntimeAuthResolver(options) {
     headersApplied: false,
     errorMessage: "Provider runtime authorization is unavailable."
   });
+  const report = (facts) => {
+    try {
+      options.onDiagnostic?.(facts);
+    } catch {
+    }
+  };
   return async (request, signal) => {
-    if (signal.aborted) return unavailable();
+    if (signal.aborted) {
+      report({ stage: "input_rejected", reason: "aborted" });
+      return unavailable();
+    }
     const providerId = typeof request.providerId === "string" ? request.providerId : "";
     const modelSelection = asRecord3(request.modelSelection);
     const modelId = typeof modelSelection.modelId === "string" ? modelSelection.modelId : "";
     if (!providerId || !modelId || typeof modelSelection.providerId === "string" && modelSelection.providerId !== providerId || options.isSelected && !options.isSelected(providerId, modelId)) {
+      report({ stage: "input_rejected", reason: "selection_mismatch" });
       return unavailable();
     }
     const facts = accountProviderRuleFacts(providerId, options.config);
     const access = asRecord3(request.accountAccess);
     if (!facts?.accountType || facts.planKind !== "individual-coding-plan" || access.type !== "zhipu-account" || access.accountType !== facts.accountType || access.mode !== facts.planKind || access.entitled !== true) {
+      report({ stage: "input_rejected", reason: "account_access_mismatch" });
       return unavailable();
     }
     const dataBaseDir = zcodeDataBaseDir(options.config.providerPersonalConfigFile);
-    if (!dataBaseDir) return unavailable();
+    if (!dataBaseDir) {
+      report({ stage: "input_rejected", reason: "data_root_invalid" });
+      return unavailable();
+    }
     const cacheKey = `${dataBaseDir}\0${providerId}`;
     let service = services.get(cacheKey);
     if (!service) {
@@ -29726,7 +29784,19 @@ function createOfficialProviderRuntimeAuthResolver(options) {
       );
       services.set(cacheKey, service);
     }
-    return (await service).resolveProviderRuntimeRequest(request, { signal });
+    try {
+      const result = await (await service).resolveProviderRuntimeRequest(request, { signal });
+      report({
+        stage: result.headersApplied === true ? "resolved" : "service_rejected",
+        headers_applied: result.headersApplied === true,
+        request_auth_present: Boolean(result.requestAuth)
+      });
+      return result;
+    } catch (error62) {
+      const name = error62 instanceof Error && /^[A-Za-z][A-Za-z0-9_]{0,63}$/u.test(error62.name) ? error62.name : "unknown";
+      report({ stage: "resolver_rejected", error_class: name });
+      throw error62;
+    }
   };
 }
 function asRecord3(value) {
@@ -30215,10 +30285,8 @@ async function runZCodeAdapter(bootstrap, execution, interaction, workerIdentity
   let providerAuthModel = execution.task.model;
   let providerRuntimeAuthConfig;
   let providerRuntimeAuthResolver;
-  let resolveProviderRuntimeAuth = async () => ({
-    headersApplied: false,
-    errorMessage: "Provider runtime authorization is unavailable."
-  });
+  const providerRuntimeAuthDispatcher = createOfficialProviderRuntimeAuthDispatcher();
+  const resolveProviderRuntimeAuth = providerRuntimeAuthDispatcher.resolve;
   const adapterOptions = {
     host: execution.host_profile,
     // Manager resolved this attempt's effective budget before dispatch.
@@ -30239,6 +30307,10 @@ async function runZCodeAdapter(bootstrap, execution, interaction, workerIdentity
     ...dependencies.testOnlyVerifyTreeClean ? { verifyTreeClean: dependencies.testOnlyVerifyTreeClean } : {},
     ...execution.private_auth ? { startPlanProviderEntitled: execution.private_auth.entitled } : {},
     resolveProviderRuntimeAuth,
+    onRuntimeAuthDiagnostic: (facts) => {
+      writeDiagnostic(`[bridge-worker] runtime-auth ${JSON.stringify(facts)}
+`);
+    },
     onEvent: (event) => {
       runtimeEvents?.publish(event);
       if (event.type === "official_runtime_verified") {
@@ -30345,16 +30417,20 @@ async function runZCodeAdapter(bootstrap, execution, interaction, workerIdentity
     if (codingPlanPreferences) providerAuthModel = codingPlanPreferences.model;
     const officialProviderRuntime = selectedAdapter === "direct_app_server" ? null : selectOfficialProviderRuntime(preferences?.model?.provider_id);
     if (selectedAdapter !== "direct_app_server") {
-      resolveProviderRuntimeAuth = async (request, config2, signal) => {
+      providerRuntimeAuthDispatcher.bind(async (request, config2, signal) => {
         if (!providerRuntimeAuthResolver || providerRuntimeAuthConfig !== config2) {
           providerRuntimeAuthConfig = config2;
           providerRuntimeAuthResolver = createOfficialProviderRuntimeAuthResolver({
             config: config2,
-            isSelected: (providerId, modelId) => providerAuthModel === void 0 || providerAuthModel.provider_id === providerId && providerAuthModel.model_id === modelId
+            isSelected: (providerId, modelId) => providerAuthModel === void 0 || providerAuthModel.provider_id === providerId && providerAuthModel.model_id === modelId,
+            onDiagnostic: (facts) => {
+              writeDiagnostic(`[bridge-worker] runtime-auth ${JSON.stringify(facts)}
+`);
+            }
           });
         }
         return providerRuntimeAuthResolver(request, signal);
-      };
+      });
     }
     const officialSessionPreferences = officialProviderRuntime === "coding_plan_discount" ? codingPlanPreferences : officialProviderRuntime === "start_plan_static" && preferences?.model?.provider_id === BIGMODEL_START_PLAN_PROVIDER_ID ? preferences : null;
     const adapter = selectedAdapter === "direct_app_server" ? new ZCodeAppServerTestAdapter2(adapterOptions) : new OfficialAppServerWorkerAdapter2({

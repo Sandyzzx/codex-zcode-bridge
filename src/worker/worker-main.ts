@@ -23,7 +23,10 @@ import type { ZCodeAppServerAdapterOptions } from "../adapters/zcode-app-server-
 import {
   BIGMODEL_START_PLAN_PROVIDER_ID,
 } from "../runtime/account-provider.js";
-import { createOfficialProviderRuntimeAuthResolver } from "../runtime/official-provider-runtime-auth.js";
+import {
+  createOfficialProviderRuntimeAuthDispatcher,
+  createOfficialProviderRuntimeAuthResolver,
+} from "../runtime/official-provider-runtime-auth.js";
 import {
   selectOfficialProviderRuntime,
   selectProductionAdapter,
@@ -566,11 +569,8 @@ async function runZCodeAdapter(
   let providerRuntimeAuthResolver:
     | ReturnType<typeof createOfficialProviderRuntimeAuthResolver>
     | undefined;
-  let resolveProviderRuntimeAuth: NonNullable<ZCodeAppServerAdapterOptions["resolveProviderRuntimeAuth"]> =
-    async () => ({
-      headersApplied: false,
-      errorMessage: "Provider runtime authorization is unavailable.",
-    });
+  const providerRuntimeAuthDispatcher = createOfficialProviderRuntimeAuthDispatcher();
+  const resolveProviderRuntimeAuth = providerRuntimeAuthDispatcher.resolve;
   const adapterOptions: ZCodeAppServerAdapterOptions = {
     host: execution.host_profile,
     // Manager resolved this attempt's effective budget before dispatch.
@@ -588,6 +588,9 @@ async function runZCodeAdapter(
     ...(dependencies.testOnlyVerifyTreeClean ? { verifyTreeClean: dependencies.testOnlyVerifyTreeClean } : {}),
     ...(execution.private_auth ? { startPlanProviderEntitled: execution.private_auth.entitled } : {}),
     resolveProviderRuntimeAuth,
+    onRuntimeAuthDiagnostic: (facts) => {
+      writeDiagnostic(`[bridge-worker] runtime-auth ${JSON.stringify(facts)}\n`);
+    },
     onEvent: (event) => {
       runtimeEvents?.publish(event);
       if (event.type === "official_runtime_verified") {
@@ -712,7 +715,7 @@ async function runZCodeAdapter(
       ? null
       : selectOfficialProviderRuntime(preferences?.model?.provider_id);
     if (selectedAdapter !== "direct_app_server") {
-      resolveProviderRuntimeAuth = async (request, config, signal) => {
+      providerRuntimeAuthDispatcher.bind(async (request, config, signal) => {
         if (!providerRuntimeAuthResolver || providerRuntimeAuthConfig !== config) {
           providerRuntimeAuthConfig = config;
           providerRuntimeAuthResolver = createOfficialProviderRuntimeAuthResolver({
@@ -721,10 +724,13 @@ async function runZCodeAdapter(
               providerAuthModel === undefined
               || (providerAuthModel.provider_id === providerId
                 && providerAuthModel.model_id === modelId),
+            onDiagnostic: (facts) => {
+              writeDiagnostic(`[bridge-worker] runtime-auth ${JSON.stringify(facts)}\n`);
+            },
           });
         }
         return providerRuntimeAuthResolver(request, signal);
-      };
+      });
     }
     const officialSessionPreferences = officialProviderRuntime === "coding_plan_discount"
       ? codingPlanPreferences

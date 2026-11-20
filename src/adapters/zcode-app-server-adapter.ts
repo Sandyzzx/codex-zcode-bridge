@@ -368,6 +368,10 @@ export interface ZCodeAppServerAdapterOptions {
     config: ZCodeRuntimeConfig,
     signal: AbortSignal,
   ) => Promise<Record<string, unknown>>;
+  /** Credential-free runtime-auth correlation for Worker stderr diagnostics. */
+  onRuntimeAuthDiagnostic?: (
+    facts: Readonly<Record<string, string | number | boolean | null>>,
+  ) => void;
   /** Verify the capability gate after the runtime reports its actual Provider/Model. */
   verifySelectedProviderCapability?: (
     selection: { readonly providerId: string; readonly modelId: string },
@@ -463,6 +467,7 @@ const MAX_FRAME_BYTES = 16 * 1024 * 1024;
 export class ZCodeAppServerAdapter implements CodingAgentAdapter {
   readonly #resolveStartPlanRuntimeAuth: ZCodeAppServerAdapterOptions["resolveStartPlanRuntimeAuth"];
   readonly #resolveProviderRuntimeAuth: ZCodeAppServerAdapterOptions["resolveProviderRuntimeAuth"];
+  readonly #onRuntimeAuthDiagnostic: ZCodeAppServerAdapterOptions["onRuntimeAuthDiagnostic"];
   readonly #verifySelectedProviderCapability: ZCodeAppServerAdapterOptions["verifySelectedProviderCapability"];
   readonly #allowTestOnlyStaticRuntimeAuthReply: boolean;
   readonly #startPlanProviderEntitled: boolean;
@@ -505,6 +510,7 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     }
     this.#resolveStartPlanRuntimeAuth = options.resolveStartPlanRuntimeAuth;
     this.#resolveProviderRuntimeAuth = options.resolveProviderRuntimeAuth;
+    this.#onRuntimeAuthDiagnostic = options.onRuntimeAuthDiagnostic;
     this.#verifySelectedProviderCapability = options.verifySelectedProviderCapability;
     this.#allowTestOnlyStaticRuntimeAuthReply =
       options.testOnlyAllowDirectAppServer === true && options.externalHostClientFactory === undefined;
@@ -2026,20 +2032,49 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
           const turnId = typeof params.turnId === "string" ? params.turnId : null;
           const modelId = typeof selection.modelId === "string" ? selection.modelId : "";
           const selected = entry.selectedModelSelection;
+          const accountAccess = asRecord(params.accountAccess);
+          this.#reportRuntimeAuthDiagnostic({
+            stage: "request_received",
+            provider_id: providerId,
+            selection_provider_id: typeof selection.providerId === "string" ? selection.providerId : null,
+            model_id: modelId,
+            selected_provider_id: selected?.providerId ?? null,
+            selected_model_id: selected?.modelId ?? null,
+            session_match: Boolean(entry.sessionId && sessionId === entry.sessionId),
+            turn_match: turnId === null ? null : Boolean(entry.turnId && turnId === entry.turnId),
+            accepting_turn: entry.acceptingTurn,
+            account_access_type: typeof accountAccess.type === "string" ? accountAccess.type : null,
+            account_access_account_type: typeof accountAccess.accountType === "string"
+              ? accountAccess.accountType
+              : null,
+            account_access_mode: typeof accountAccess.mode === "string" ? accountAccess.mode : null,
+            account_access_entitled: accountAccess.entitled === true,
+          });
           if (!entry.acceptingTurn || !entry.sessionId || sessionId !== entry.sessionId
             || (turnId !== null && (!entry.turnId || turnId !== entry.turnId))
             || (typeof selection.providerId === "string" && selection.providerId !== providerId)
             || (typeof params.providerId === "string" && params.providerId !== providerId)
             || !modelId || !selected || selected.providerId !== providerId || selected.modelId !== modelId
             || entry.abort.signal.aborted) {
+            this.#reportRuntimeAuthDiagnostic({ stage: "identity_rejected" });
             replySafely({ headersApplied: false, errorMessage: "Provider runtime identity is not verified." });
             return;
           }
+          this.#reportRuntimeAuthDiagnostic({ stage: "resolver_started" });
           void this.#resolveProviderRuntimeAuth(params, config, entry.abort.signal)
             .then((result) => {
+              this.#reportRuntimeAuthDiagnostic({
+                stage: "resolver_completed",
+                headers_applied: result.headersApplied === true,
+              });
               if (!entry.abort.signal.aborted) replySafely(result);
             })
-            .catch(() => {
+            .catch((error) => {
+              const errorClass = error instanceof Error
+                && /^[A-Za-z][A-Za-z0-9_]{0,63}$/u.test(error.name)
+                ? error.name
+                : "unknown";
+              this.#reportRuntimeAuthDiagnostic({ stage: "resolver_failed", error_class: errorClass });
               if (!entry.abort.signal.aborted) {
                 replySafely({ headersApplied: false, errorMessage: "Provider runtime authorization is unavailable." });
               }
@@ -2227,6 +2262,16 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     }
     if (message.id !== undefined && typeof message.method === "string") {
       write({ id: message.id, error: { code: -32601, message: `Unsupported ZCode app-server request: ${message.method}` } });
+    }
+  }
+
+  #reportRuntimeAuthDiagnostic(
+    facts: Readonly<Record<string, string | number | boolean | null>>,
+  ): void {
+    try {
+      this.#onRuntimeAuthDiagnostic?.(facts);
+    } catch {
+      // Observation must not alter authentication or turn lifecycle.
     }
   }
 

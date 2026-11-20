@@ -122,6 +122,7 @@ test("production runner drives the built MCP task and returns runtime/usage evid
               if (name === "zcode_task") {
                 const digest = reportInstalledRuntime ? "a".repeat(64) : "c".repeat(64);
                 options.stderr.capture(`[bridge] worker installed-runtime ${args.task_id} 1 ${digest}\n`);
+                options.stderr.capture('[bridge] runtime-auth {"stage":"resolved","headers_applied":true}\n');
                 options.stderr.capture(`[bridge] worker failure-facts ${JSON.stringify(FAILURE_FACTS)}\n`);
                 options.stderr.capture('[bridge] worker failure-facts {"secret":"do-not-capture"}\n');
                 return { structuredContent: { task_id: args.task_id, status: "queued" } };
@@ -221,6 +222,9 @@ test("production runner drives the built MCP task and returns runtime/usage evid
     assert.equal(result.runtime_evidence.provider, PRODUCTION_VERIFICATION_CONTRACT.provider);
     assert.equal(result.runtime_evidence.request_security.expected, "OfficialRequestSecurity");
     assert.deepEqual(result.runtime_evidence.failure_facts, FAILURE_FACTS);
+    assert.ok(result.runtime_evidence.stderr_markers.includes(
+      '[bridge] runtime-auth {"stage":"resolved","headers_applied":true}',
+    ));
     assert.deepEqual(calls.map((call) => call.name), [
       "zcode_task",
       "zcode_status",
