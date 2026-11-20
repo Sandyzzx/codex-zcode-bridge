@@ -23,15 +23,16 @@ INSTALLATION_SAFETY:             PASS
 UNKNOWN_VERSION_INSPECTION:      PASS
 FINGERPRINT_AUTHORIZATION:       PASS
 ZERO_MODEL_PROTOCOL_SMOKE:       PASS
-CODING_PLAN_REAL_MODEL_REQUEST:  PASS
-CODING_PLAN_MULTIPLIER:          INCONCLUSIVE
+CODING_PLAN_REAL_MODEL_REQUEST:  PASS / 2 RUNS
+CODING_PLAN_MULTIPLIER:          VERIFIED / 0.67
 START_PLAN_LIVE_COMPATIBILITY:   BLOCKED / NO_ACTIVE_PLAN
 OTHER_PROVIDER_LIVE_PROBE:       NOT_RUN
 ```
 
 这不是把 3.19.0 提升为生产已验证版本。它只证明一个精确安装指纹在显式授权后
-可以用于有界的兼容性探测，且 Provider、折扣与 Start Plan 结论仍分别保持
-未验证。
+可以用于有界的兼容性探测。两次真实 Coding Plan 请求均完成请求级 Token 对账，
+并在官方小时桶中观察到 `0.67` 额外倍率；这不自动推广到其他安装指纹、其他
+Provider、Start Plan 或未覆盖的计费路径。
 
 ## 2. Unknown-Version 策略实现
 
@@ -126,60 +127,87 @@ Start Plan static compatibility: OFFLINE_RESEARCH_PENDING
 | Model requests | 0 |
 | Cleanup | PASS |
 | Runtime status | `OFFICIAL_RUNTIME_EXPERIMENTAL` |
+| Duration | 14,072 ms |
 
 这证明最终实验态至少能启动官方 AppServer、完成协议初始化并正常释放进程；它
-不证明 Session、Turn、模型、Provider 或计费。
+不证明 Session、Turn、模型、Provider 或计费。证据：
+`.run/cost-lab-e2e/zcode319-protocol-smoke-postfix-20261120.json`。
 
 ## 6. Coding Plan 真实请求
 
-在兼容性研究期间执行了 1 次真实 Coding Plan 请求：
+在兼容性研究期间执行了两次真实 Coding Plan 请求：
 
-| 字段 | 值 |
-|---|---|
-| Task | `costlab-cdc6b51b-8485-4782-b8bf-4bfafcd15dcc` |
-| Attempt | 1 |
-| Terminal | `completed` |
-| Session | `sess_e58a88cc-175e-49d8-b478-f89c5d51b577` |
-| Provider | `account:bigmodel-individual-coding-plan` |
-| Model | `GLM-5.3-Flash` |
-| Input | 18,247 |
-| Cached Input | 0 |
-| Output | 104 |
-| Total | 18,351 |
-| Result marker | `COSTLAB_PRODUCTION_VERIFICATION_OK` |
+| 样本 | Task | Session | Uncached Input | Output | Total | Runtime evidence |
+|---|---|---|---:|---:|---:|---|
+| 首次探测 | `costlab-cdc6b51b-8485-4782-b8bf-4bfafcd15dcc` | `sess_e58a88cc-175e-49d8-b478-f89c5d51b577` | 18,247 | 104 | 18,351 | `UNVERIFIED` |
+| 最终路径复验 | `costlab-c68470fb-18f2-4f90-bfe0-3809dddcc485` | `sess_f25b5e04-4876-4dcc-aaee-a9756f2bb169` | 22,484 | 62 | 22,546 | `EXPERIMENTAL` |
 
-这是一个真实 Provider/模型执行样本，证明 3.19 实验态在该路径上可以完成一次
-模型请求。
+两个样本均使用：
 
-该请求发生时，Worker 尚未转发 `official_runtime_experimental` 标记，因此
-证据中的 `runtime_evidence.status` 是 `UNVERIFIED`。该转发缺陷已在代码提交
-`15abe6becb13f383fee676a4ae20510d51f817fc` 中修复，并由 runner 合成测试覆盖。
-由于已有成功请求且没有新的归因价值，本轮没有仅为重复该标记而再次消耗真实
-请求。
+- Provider：`account:bigmodel-individual-coding-plan`
+- Model：`GLM-5.3-Flash`
+- Reasoning：`low`
+- Terminal：`completed`
+- SQLite Result / Cleanup / Release：观察到
+
+首次请求发生时，Worker 尚未转发 `official_runtime_experimental` 标记，因此该
+样本的运行证据是 `UNVERIFIED`。环境变量转发修复 `0e7134701` 落地后，第二次
+请求明确观察到：
+
+```text
+runtime.status = OFFICIAL_RUNTIME_EXPERIMENTAL
+runtime.version = 3.19.0.10774
+bundle_sha256 = 6b84e928...677fb0ea
+installed-runtime worker marker = PRESENT
+failure_facts = null
+operation_release_observed = true
+```
+
+因此最终代码路径不只是由合成测试覆盖，也完成了一次真实的三版本身份一致执行：
+安装版 3.19 AppServer、固定 3.18.2-compatible Official Host 适配层、构建后的
+Current Bridge Worker。
 
 ## 7. 官方账单与倍率
 
-同一小时桶的 official Coding Plan 快照：
+首次请求的即时和短延迟快照仍为零；后续 fresh snapshot 显示官方延迟结算已经
+写入 15:00 小时桶。最终证据如下：
 
-| 快照 | 15:00:00 Token | Cached | Uncached | Output | Credits |
-|---|---:|---:|---:|---:|---:|
-| Before | 0 | 0 | 0 | 0 | 0 |
-| After probe | 0 | 0 | 0 | 0 | 0 |
-| After settlement retry | 0 | 0 | 0 | 0 | 0 |
+| 样本 | 小时桶 | Official Tokens | Official Credits | Expected Normal | Effective Extra Ratio |
+|---|---|---:|---:|---:|---:|
+| 首次探测 | `15:00:00` | 18,351 | 2.8676 | 4.28001 | 0.6699984346 |
+| 最终路径复验 | `17:00:00` | 22,546 | 3.4980 | 5.22092 | 0.6699968588 |
 
-配额字段发生变化：
-
-- unit 3：`0 -> 2 -> 2`
-- unit 6：`4131 -> 4134 -> 4134`
-
-但官方 Cookie/配额单位不等于 Credits，且小时 Token 行仍为零。因此：
+两次 Token 分类均精确匹配：
 
 ```text
-CODING_PLAN_MULTIPLIER: INCONCLUSIVE
-0.67 PASS: NOT CLAIMED
+15:00 sample:
+  uncached_input = 18,247
+  cached_input   = 0
+  output         = 104
+  total          = 18,351
+  credit_class   = EXTRA_0_67
+  reconciliation = PASS
+
+17:00 sample:
+  uncached_input = 22,484
+  cached_input   = 0
+  output         = 62
+  total          = 22,546
+  credit_class   = EXTRA_0_67
+  reconciliation = PASS
 ```
 
-不能把 `2 / expected` 或 `3 / expected` 当成额外优惠倍率。
+两个小时桶均位于星期五的 `14:00–18:00` 峰时窗口，官方当前账单的
+`time_multiplier` 为 `1`。因此：
+
+```text
+CODING_PLAN_MULTIPLIER: VERIFIED / approximately 0.67
+SAMPLE_COUNT: 2
+BILLING_RECONCILIATION: PASS
+```
+
+首次请求也验证了延迟结算边界：约 6 分钟后的快照仍为零，但在之后重新读取同一
+小时桶时出现了完整且精确匹配的 Token/Credits。缺失观察没有被解释为零扣费。
 
 ## 8. Start Plan
 
@@ -189,7 +217,8 @@ CODING_PLAN_MULTIPLIER: INCONCLUSIVE
 GET https://zcode.z.ai/api/v1/zcode-plan/billing/balance
 ```
 
-分别使用 `app_version=3.18.2` 与 `app_version=3.19.0`，两次均 HTTP 200，但：
+分别使用 API query value `app_version=3.18.2` 与 `app_version=3.19.0` 执行
+当前 live 读取；两者均 HTTP 200，但：
 
 ```json
 {
@@ -208,6 +237,19 @@ START_PLAN_DISCOUNT: NOT_APPLICABLE / NO_DISCOUNT
 ```
 
 没有虚构 `used_units`，也没有用 Coding Plan 的认证或折扣结果替代 Start Plan。
+最近一次 live 证据：
+
+- `.run/cost-lab-e2e/zcode319-startplan-live-20261120.json`
+- `.run/cost-lab-e2e/zcode319-startplan-live-app319-current-20261120.json`
+
+两次读取均只发出 1 个官方 GET；凭据前后元数据一致，Keyring Lock 已释放，
+模型请求为 0。由于账户没有 active Start Plan，模型 Session/Turn 与 Token
+用量对账保持 `NOT_RUN`。
+
+这里的 `3.18.2` / `3.19.0` 只是 Billing Reader 的 `app_version` query
+值；两次读取都发生在当前装有 ZCode `3.19.0.10774` 的机器上，不是 3.18.2
+安装版实机运行。本机没有 3.18 安装，因此不能用这两个请求声明 3.18.2
+Start Plan Runtime 兼容。
 
 ## 9. 官方源码与 Host Patch
 
@@ -215,6 +257,7 @@ START_PLAN_DISCOUNT: NOT_APPLICABLE / NO_DISCOUNT
 
 ```text
 fec975905a2abd4c07e35c40d51fa097a2258ec9
+tree 5e90fec80706b8381f94e4eef48cf821b9868916
 ```
 
 未发现公开的 3.19.0 源码 Tag 或 Branch。因此 3.19 安装产物与公开源码的等价性
@@ -228,7 +271,7 @@ fec975905a2abd4c07e35c40d51fa097a2258ec9
 | 检查 | 结果 |
 |---|---|
 | Typecheck | PASS |
-| Targeted runtime/provider tests | 22/22 PASS |
+| Targeted runtime/provider tests | 25/25 PASS |
 | Cost Lab tests | 86/86 PASS |
 | Build | PASS |
 | Plugin Validator | PASS |
@@ -236,9 +279,11 @@ fec975905a2abd4c07e35c40d51fa097a2258ec9
 | Clean Entrypoints | 4/4 PASS |
 | Affected selector | `FULL_SUITE` |
 | `test:affected` full-suite run after `0e7134701` | 961 tests / 959 PASS / 0 FAIL / 2 SKIP |
-| `test:full` (before `0e7134701`) | 961 tests / 959 PASS / 0 FAIL / 2 SKIP |
+| `test:full` (final documentation/evidence re-run) | 961 tests / 959 PASS / 0 FAIL / 2 SKIP |
 | `git diff --check` | PASS |
-| Real zero-model protocol smoke | PASS |
+| Final zero-model protocol smoke | PASS，14,072 ms |
+| Real final-code Coding Plan E2E | PASS，22,546 Token |
+| Real final-code billing reconciliation | PASS，ratio `0.6699968588` |
 
 `npm run test:affected` 因本次 Runtime、Worker、生成 Bundle 与测试基础设施
 变更选择完整回归。`0e7134701` 落地后的这次运行是最终代码证据：961 项中
@@ -269,10 +314,10 @@ fec975905a2abd4c07e35c40d51fa097a2258ec9
 | 精确指纹授权 | 无授权 `UNVERIFIED`；匹配授权 `EXPERIMENTAL`；资产/Node/签名变化使授权失效 | PASS |
 | Provider scope 独立 | Coding Plan、Start Plan、其他 Provider 各需对应 probe scope | PASS |
 | 实验态不自动提升 | 授权与运行结果不写 Manifest；折扣保持 `NOT_VERIFIED`；Start Plan 保持 pending | PASS |
-| 3.19.0 协议与真实 Coding Plan 执行 | 零模型协议 Smoke；1 次真实 Task completed；18,351 Token | PASS — EXPERIMENTAL |
-| Coding Plan 倍率 | 官方小时桶未产生可归因 Token/Credits；quota unit 不是 Credits | `INCONCLUSIVE` |
+| 3.19.0 协议与真实 Coding Plan 执行 | 最终代码零模型协议 Smoke；2 次真实 Task completed；18,351 + 22,546 Token；最终运行时标记已观察 | PASS — EXPERIMENTAL |
+| Coding Plan 倍率 | 两个峰时小时桶均精确匹配 Token；Credits 分别为 2.8676 / 3.4980；ratio 约 0.67 | `VERIFIED / 0.67` |
 | Start Plan 真实 E2E 与 Token 对账 | 官方 `billing/balance` 对 3.18.2/3.19.0 均返回空 `plans/balances`；未发模型请求 | `BLOCKED / NO_ACTIVE_PLAN` |
-| 完整回归 | `0e7134701` 后 `test:affected` 为 961/959 PASS、0 FAIL、2 SKIP；较早 `test:full` 为同数基线，不替代最终门禁 | PASS |
+| 完整回归 | `0e7134701` 后 `test:affected` 为 961/959 PASS、0 FAIL、2 SKIP；最终文档/证据状态再次运行 `test:full`，同为 961/959 PASS、0 FAIL、2 SKIP | PASS |
 | 不合并、不发布、不修改生产状态 | 独立分支；工作区 clean；无 Preview merge/Release；无 SQLite/凭据/安装修改 | PASS |
 
 ## 12. Known Gaps
@@ -290,13 +335,11 @@ fec975905a2abd4c07e35c40d51fa097a2258ec9
   结论仍只来自原有精确 Manifest、历史证据和合成回归，不是新鲜实机 E2E。
 - Owner 已确认当前机器只有已安装的 ZCode 3.19，没有 3.18；因此不再寻找或
   拼装 3.18 安装，也不把历史 3.18 制品与 3.19 Desktop 混用。
-- 唯一一次 3.19.0 Coding Plan 真实验证发生时，runner marker 转发修复尚未
-  落地，因此该历史请求的运行证据为 `UNVERIFIED`；最终 marker 路径由合成
-  测试覆盖，没有为了重复 marker 再发真实请求。
 - 当前账户的 Start Plan Billing Reader 返回空套餐和空余额，无法建立 active
   entitlement；Owner 已明确要求 Start Plan 暂缓测试。因此真实 Start Plan
   Session/Turn、免费 Token 用量和配额前后对账均为 `NOT_RUN`，不能声明
-  兼容或倍率。
+  兼容或倍率。历史上的 `app_version=3.18.2` 读取只是 query 参数，不是
+  3.18.2 安装版实机验证。
 - 3.19.0 的 Other Provider 真实探测未运行，没有把通用 Runtime 启动成功当作
   其他 Provider 兼容证据。
 
@@ -304,8 +347,8 @@ fec975905a2abd4c07e35c40d51fa097a2258ec9
 
 - 3.19.0 安装 Bundle 与公开源码的等价性未知；未来官方更新可能改变未覆盖的
   Host、协议、认证或 Usage 行为。
-- 3.19.0 Coding Plan 能执行一次模型请求，但官方小时桶未形成可归因账单项；
-  不能据此判断 0.67、缓存计费、取整或高峰倍率是否保持一致。
+- 3.19.0 Coding Plan 已获得两个无缓存、峰时、精确 Token 匹配的 0.67 样本；
+  缓存输入权重、非峰时窗口、辅助请求和更长会话仍属于有限样本范围。
 - Start Plan 的静态兼容路径已由合成测试保护，但没有当前机器的 live
   Entitlement、设备绑定、Private Lease 和真实模型证据。
 - 实验授权降低的是“未知版本无法启动”的可用性障碍，不是安全门禁；异常签名、
@@ -314,7 +357,7 @@ fec975905a2abd4c07e35c40d51fa097a2258ec9
 ## 14. 安全与资源
 
 ```text
-REAL_MODEL_REQUESTS: 1
+REAL_MODEL_REQUESTS: 2
 START_PLAN_MODEL_REQUESTS: 0
 CREDENTIALS_EXPORTED: NO
 CREDENTIALS_MODIFIED: NO
@@ -337,7 +380,9 @@ FINGERPRINT_AUTHORIZATION: PASS
 ZERO_MODEL_PROTOCOL_SMOKE: PASS
 
 ZCODE_3_19_CODING_PLAN_EXECUTION: PASS
-ZCODE_3_19_CODING_PLAN_MULTIPLIER: INCONCLUSIVE
+ZCODE_3_19_CODING_PLAN_MULTIPLIER: VERIFIED / 0.67
+ZCODE_3_19_CODING_PLAN_BILLING_RECONCILIATION: PASS / 2 SAMPLES
+ZCODE_3_19_EFFECTIVE_EXTRA_RATIO: 0.6699968588 / FINAL RUN
 ZCODE_3_19_START_PLAN: BLOCKED / NO_ACTIVE_PLAN
 ZCODE_3_19_START_PLAN_TOKEN_RECONCILIATION: NOT_APPLICABLE_NO_ACTIVE_PLAN
 ZCODE_3_19_OTHER_PROVIDERS: NOT_RUN
@@ -349,14 +394,14 @@ UPSTREAM_PENDING: PRESERVED
 RUNTIME_AUTHORIZATION_ENV_FORWARDING: PASS
 
 TYPE_CHECK: PASS
-TARGETED_TESTS: 22/22 PASS
+TARGETED_TESTS: 25/25 PASS
 COST_LAB_TESTS: 86/86 PASS
 TEST_AFFECTED: FULL_SUITE / 961 TESTS / 959 PASS / 0 FAIL / 2 SKIP
-TEST_FULL: 961 TESTS / 959 PASS / 0 FAIL / 2 SKIP / PRE_FORWARDING_FIX_BASELINE
+TEST_FULL: 961 TESTS / 959 PASS / 0 FAIL / 2 SKIP / FINAL DOCUMENTATION RE-RUN
 GENERATED_ARTIFACTS: PASS
 PLUGIN_VALIDATOR: PASS
 
-REAL_MODEL_REQUESTS: 1
+REAL_MODEL_REQUESTS: 2
 PRODUCTION_AUTH_ROUTING_CHANGED: NO
 OFFICIAL_INSTALL_MODIFIED: NO
 PREVIEW_MERGED: NO

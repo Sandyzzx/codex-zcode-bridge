@@ -3,7 +3,7 @@
   "kind": "zcode_unknown_runtime_compatibility_evidence",
   "goal": "ZCODE_3_19_0_ADAPTATION_WITH_3_18_COMPATIBILITY",
   "captured_at": "2026-11-20T07:43:06.169Z",
-  "last_updated_at": "2026-11-20T09:24:23.131Z",
+  "last_updated_at": "2026-11-20T10:51:01.254Z",
   "repository": {
     "root": "D:\\codex-zcode-bridge",
     "worktree": "D:\\codex-zcode-bridge\\.run\\zcode-3190-compat-20261120",
@@ -89,7 +89,7 @@
   },
   "protocol_smoke": {
     "status": "PASS",
-    "duration_ms": 8662,
+    "duration_ms": 14072,
     "protocol_initialized": true,
     "protocol_method": "runtime/capabilities",
     "capabilities_received": true,
@@ -97,47 +97,110 @@
     "session_created": false,
     "model_requests": 0,
     "cleanup_observed": true,
-    "evidence_file": ".run/cost-lab-e2e/zcode319-protocol-smoke-final-20261120.json"
+    "evidence_file": ".run/cost-lab-e2e/zcode319-protocol-smoke-postfix-20261120.json"
   },
   "coding_plan": {
-    "runtime_execution": "PASS",
-    "task_id": "costlab-cdc6b51b-8485-4782-b8bf-4bfafcd15dcc",
-    "attempt": 1,
-    "terminal_status": "completed",
-    "session_id": "sess_e58a88cc-175e-49d8-b478-f89c5d51b577",
+    "status": "PASS",
     "provider_id": "account:bigmodel-individual-coding-plan",
     "model_id": "GLM-5.3-Flash",
-    "model_requests": 1,
-    "usage": {
-      "cached_input_tokens": 0,
-      "input_tokens": 18247,
-      "output_tokens": 104,
-      "reasoning_tokens": 0,
-      "total_tokens": 18351,
-      "source": "zcode_runtime_turn"
-    },
-    "result_summary": "COSTLAB_PRODUCTION_VERIFICATION_OK",
-    "runtime_evidence_status_in_that_run": "UNVERIFIED",
-    "runtime_evidence_note": "The model call completed against the 3.19 bundle, but the runner marker forwarding fix landed after this real request. The final code path is covered by synthetic runner tests; no duplicate real request was made.",
-    "billing": {
-      "official_hour_bucket": "15:00:00",
-      "hour_bucket_tokens_before": 0,
-      "hour_bucket_tokens_after_probe": 0,
-      "hour_bucket_tokens_after_settled": 0,
-      "quota_deltas": {
-        "unit_3": 2,
-        "unit_6": 3
+    "model_requests": 2,
+    "multiplier": "VERIFIED_0_67",
+    "billing_reconciliation": "PASS",
+    "requests": [
+      {
+        "sequence": 1,
+        "task_id": "costlab-cdc6b51b-8485-4782-b8bf-4bfafcd15dcc",
+        "attempt": 1,
+        "terminal_status": "completed",
+        "session_id": "sess_e58a88cc-175e-49d8-b478-f89c5d51b577",
+        "runtime_evidence_status": "UNVERIFIED",
+        "runtime_evidence_note": "This call completed against the installed 3.19 bundle before the worker authorization marker forwarding fix.",
+        "usage": {
+          "cached_input_tokens": 0,
+          "input_tokens": 18247,
+          "output_tokens": 104,
+          "reasoning_tokens": 0,
+          "total_tokens": 18351,
+          "source": "zcode_runtime_turn"
+        },
+        "result_summary": "COSTLAB_PRODUCTION_VERIFICATION_OK",
+        "billing": {
+          "official_hour_bucket": "15:00:00",
+          "official_tokens": {
+            "cached_input_tokens": 0,
+            "uncached_input_tokens": 18247,
+            "output_tokens": 104,
+            "total_tokens": 18351
+          },
+          "official_credits": 2.8676,
+          "expected_normal_credits": 4.28001,
+          "effective_extra_ratio": 0.6699984345830968,
+          "credit_class": "EXTRA_0_67",
+          "token_match": true,
+          "settlement_status": "DELTA_OBSERVED",
+          "reconciliation": "PASS",
+          "delayed_settlement_observed": true
+        },
+        "evidence_files": [
+          ".run/cost-lab-e2e/zcode319-coding-before-20261120.json",
+          ".run/cost-lab-e2e/zcode319-coding-e2e-20261120.json",
+          ".run/cost-lab-e2e/zcode319-coding-after-probe-20261120.json",
+          ".run/cost-lab-e2e/zcode319-coding-after-settled-20261120.json",
+          ".run/cost-lab-e2e/zcode319-coding-reconciliation-delayed-20261120.json"
+        ]
       },
-      "quota_units_are_not_credits": true,
-      "effective_extra_ratio": null,
-      "multiplier": "INCONCLUSIVE",
-      "reason": "The official request-level hourly Token row remained zero, so quota-unit changes cannot be mapped to one request or used to claim 0.67."
-    },
-    "evidence_files": [
-      ".run/cost-lab-e2e/zcode319-coding-before-20261120.json",
-      ".run/cost-lab-e2e/zcode319-coding-e2e-20261120.json",
-      ".run/cost-lab-e2e/zcode319-coding-after-probe-20261120.json",
-      ".run/cost-lab-e2e/zcode319-coding-after-settled-20261120.json"
+      {
+        "sequence": 2,
+        "task_id": "costlab-c68470fb-18f2-4f90-bfe0-3809dddcc485",
+        "attempt": 1,
+        "terminal_status": "completed",
+        "session_id": "sess_f25b5e04-4876-4dcc-aaee-a9756f2bb169",
+        "runtime_evidence_status": "EXPERIMENTAL",
+        "runtime": {
+          "status": "OFFICIAL_RUNTIME_EXPERIMENTAL",
+          "version": "3.19.0.10774",
+          "bundle_sha256": "6b84e928d9258fe020c6ab8c75fa2c123b0cd658fe43c0ce141a13df677fb0ea",
+          "installation_fingerprint": "3e25056614f91d3651c237fbc89a076a1f9e834d351257423854844fb5b28290",
+          "authorization_state": "authorized",
+          "installed_runtime_worker_marker": true,
+          "failure_facts": null,
+          "operation_release_observed": true
+        },
+        "usage": {
+          "cached_input_tokens": 0,
+          "input_tokens": 22484,
+          "output_tokens": 62,
+          "reasoning_tokens": 0,
+          "total_tokens": 22546,
+          "source": "zcode_runtime_turn"
+        },
+        "result_summary": "COSTLAB_PRODUCTION_VERIFICATION_OK",
+        "billing": {
+          "official_hour_bucket": "17:00:00",
+          "official_tokens": {
+            "cached_input_tokens": 0,
+            "uncached_input_tokens": 22484,
+            "output_tokens": 62,
+            "total_tokens": 22546
+          },
+          "official_credits": 3.498,
+          "expected_normal_credits": 5.22092,
+          "expected_with_0_67_credits": 3.4980164,
+          "effective_extra_ratio": 0.6699968587911709,
+          "credit_class": "EXTRA_0_67",
+          "token_match": true,
+          "settlement_status": "DELTA_OBSERVED",
+          "reconciliation": "PASS",
+          "delayed_settlement_observed": true
+        },
+        "evidence_files": [
+          ".run/cost-lab-e2e/zcode319-postfix-coding-before-20261120.json",
+          ".run/cost-lab-e2e/zcode319-postfix-coding-e2e-20261120.json",
+          ".run/cost-lab-e2e/zcode319-postfix-coding-after-immediate-20261120.json",
+          ".run/cost-lab-e2e/zcode319-postfix-coding-after-1-20261120.json",
+          ".run/cost-lab-e2e/zcode319-postfix-coding-reconciliation-20261120.json"
+        ]
+      }
     ]
   },
   "start_plan": {
@@ -148,21 +211,46 @@
     "plans": [],
     "balances": [],
     "model_requests": 0,
-    "tested_app_versions": [
+    "app_version_query_values": [
       "3.18.2",
       "3.19.0"
     ],
+    "installed_runtime_used": "3.19.0.10774",
+    "app_version_query_is_installed_runtime_check": false,
+    "latest_live_checks": {
+      "3.18.2": {
+        "captured_at": "2026-11-20T09:27:11.886Z",
+        "http_status": 200,
+        "plans": 0,
+        "buckets": 0,
+        "integrity": "PASS",
+        "credentials_unchanged": true,
+        "keyring_lock_released": true
+      },
+      "3.19.0": {
+        "captured_at": "2026-11-20T09:37:21.303Z",
+        "http_status": 200,
+        "plans": 0,
+        "buckets": 0,
+        "integrity": "PASS",
+        "credentials_unchanged": true,
+        "keyring_lock_released": true
+      }
+    },
     "compatibility_claim": "NOT_VERIFIED",
     "discount_claim": "NOT_APPLICABLE_NO_DISCOUNT",
     "evidence_files": [
       ".run/cost-lab-e2e/zcode319-startplan-before-20261120.json",
-      ".run/cost-lab-e2e/zcode319-startplan-before-app319-20261120.json"
+      ".run/cost-lab-e2e/zcode319-startplan-before-app319-20261120.json",
+      ".run/cost-lab-e2e/zcode319-startplan-live-20261120.json",
+      ".run/cost-lab-e2e/zcode319-startplan-live-app319-current-20261120.json"
     ]
   },
   "official_source": {
     "repository": "https://github.com/zai-org/ZCode.git",
     "origin_main_commit": "fec975905a2abd4c07e35c40d51fa097a2258ec9",
     "v3_18_2_tag_commit": "fec975905a2abd4c07e35c40d51fa097a2258ec9",
+    "v3_18_2_tree": "5e90fec80706b8381f94e4eef48cf821b9868916",
     "v3_19_0_source_available": false,
     "source_equivalence": "UNKNOWN",
     "host_patch_status": "UPSTREAM_PENDING"
@@ -189,23 +277,23 @@
   "known_gaps": [
     "No public ZCode 3.19.0 source tag or source commit is available for a file-level 3.18.2-to-3.19.0 source diff.",
     "A verified historical 3.18.2 AppServer/Host artifact exists, but no matching full Desktop installation or ZCode.exe/app.asar pair was found; it was not mixed with 3.19.0, so fresh real 3.18.2 E2E remains NOT_RUN.",
-    "The single real 3.19.0 Coding Plan request predates the final experimental runtime marker forwarding fix; that run remains UNVERIFIED while the final marker path has synthetic coverage.",
     "The official Start Plan billing response contains no active plan; the Owner directed Start Plan testing to be deferred until a plan is available.",
+    "The app_version=3.18.2 Start Plan read was an API query value on the 3.19.0 installation, not a fresh 3.18.2 installed-runtime check.",
     "The Owner confirmed that the current machine has only the installed ZCode 3.19.0 installation and no 3.18 installation; historical 3.18 artifacts were not mixed with the 3.19 Desktop.",
     "Other Provider live probes were not run."
   ],
   "remaining_risks": [
     "Installed 3.19.0 bundle behavior remains UNKNOWN relative to unpublished official source.",
-    "Coding Plan multiplier, cache pricing, rounding and peak-pricing behavior remain unverified for 3.19.0.",
+    "Two zero-cache Coding Plan requests verified the 0.67 multiplier, but cache pricing, non-peak windows, auxiliary requests and longer multi-turn sessions remain limited samples.",
     "Start Plan live entitlement, device binding, private lease and model execution remain unverified on the current account.",
     "Experimental authorization permits bounded probes but does not relax signer, fingerprint, Provider-scope or lifecycle safety gates."
   ],
   "validation": {
-    "final_validated_at": "2026-11-20T09:18:54.836Z",
+    "final_validated_at": "2026-11-20T10:51:01.254Z",
     "typecheck": "PASS",
     "targeted_runtime_provider_tests": {
       "status": "PASS",
-      "passed": 22,
+      "passed": 25,
       "failed": 0
     },
     "cost_lab_tests": {
@@ -239,21 +327,30 @@
       "passed": 959,
       "failed": 0,
       "skipped": 2,
-      "duration_ms": 1380680.7143
+      "duration_ms": 2106583.542
     },
     "test_full": {
       "status": "PASS",
-      "relationship_to_final_code": "Earlier full-regression baseline executed before the runtime authorization environment forwarding fix; it does not replace the post-fix test:affected gate.",
+      "relationship_to_final_code": "Final full-regression re-run against the documentation/evidence state; code is unchanged from runtime authorization environment forwarding commit 0e7134701d643c7b80def4e3cb80c95c63e34691.",
       "tests": 961,
       "passed": 959,
       "failed": 0,
       "skipped": 2,
-      "duration_ms": 1281558.6855
+      "duration_ms": 1650190.0569
+    },
+    "real_coding_plan_e2e": {
+      "status": "PASS",
+      "requests": 2,
+      "final_runtime_evidence": "EXPERIMENTAL",
+      "final_usage_tokens": 22546,
+      "final_credits": 3.498,
+      "final_effective_extra_ratio": 0.6699968587911709,
+      "billing_reconciliation": "PASS"
     },
     "diff_check": "PASS"
   },
   "security": {
-    "real_model_requests": 1,
+    "real_model_requests": 2,
     "start_plan_model_requests": 0,
     "credentials_exported": false,
     "credentials_modified": false,
