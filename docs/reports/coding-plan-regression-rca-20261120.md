@@ -46,12 +46,14 @@ START_PLAN_MULTIPLIER: NOT_APPLICABLE / NO_DISCOUNT
 START_PLAN_BILLING: TOKEN_UNIT_RECONCILED / PASS
 ```
 
-两类套餐的计费语义均已得到与各自产品模型一致的对账证据，最终合并状态由
-PR CI 完成后决定：
+两类套餐的计费语义均已得到与各自产品模型一致的对账证据，候选分支已通过
+PR CI 并合入 `preview`，合并后的 push CI 也通过：
 
 ```text
-PREVIEW_MERGE: PENDING REQUIRED CI
-FINAL_VERDICT: PASS PENDING MERGE/CI
+PREVIEW_MERGE: PASS
+MERGE_COMMIT: e7a871488aaf88e77627e6b70c4ecae182d0d0ba
+POST_MERGE_CI: PASS
+FINAL_VERDICT: PASS
 ```
 
 ## 2. 历史成功路径与当前路径差异
@@ -113,6 +115,7 @@ API Key、JWT、Authorization、请求正文或异常消息正文。
 
 证据文件：
 
+- `tools/cost-lab/evidence/coding-plan-regression-rca-20261120.json`
 - `.run/cost-lab-e2e/coding-regression-diagnostic-v3-20261120.json`
 - `.run/cost-lab-e2e/coding-regression-diagnostic-v4-20261120.json`
 - `.run/cost-lab-e2e/coding-regression-diagnostic-v5-20261120.json`
@@ -357,9 +360,19 @@ Official Billing Anomalies:  NONE
 PR #103 REQUIRED CI:         PASS
 ```
 
-因此候选分支满足合并到 `preview` 的计费、E2E、测试和 CI 条件。报告提交本身
-会产生新的文档-only HEAD，合并前必须再次确认该 HEAD 的必需 CI 结果。正式
-Merge Commit 以远程 `preview` 与 PR #103 的最终记录为准。
+候选分支满足合并到 `preview` 的全部门禁，并已通过 PR #103 合入：
+
+```text
+PREVIEW_BASE:   f5390897978be995b3a942feaeaac0170e8849fa
+CANDIDATE_HEAD: 240de0aa2ac2e04235c67e7f7facf583d25b8398
+MERGE_COMMIT:   e7a871488aaf88e77627e6b70c4ecae182d0d0ba
+MERGE_TREE:     89404cf0a5e6a587d9e2d7fe75b327daaf8d5de3
+POST_MERGE_CI:  PASS
+```
+
+合并后的 `preview` push CI 已完成，Windows/Ubuntu Verify、SQLite 资源矩阵、
+Fast PR gate 和必需影响门禁均为 PASS；未选中的 Windows Integration gate
+保持 `SKIPPED`。
 
 ## 10. 未解决项
 
@@ -369,5 +382,5 @@ Credits 倍率。
 
 ```text
 START_PLAN_MULTIPLIER: NOT_APPLICABLE / NO_DISCOUNT
-FINAL_VERDICT: PASS PENDING FINAL HEAD CI AND MERGE
+FINAL_VERDICT: PASS
 ```
