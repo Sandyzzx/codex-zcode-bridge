@@ -236,13 +236,15 @@ fec975905a2abd4c07e35c40d51fa097a2258ec9
 | Clean Entrypoints | 4/4 PASS |
 | Affected selector | `FULL_SUITE` |
 | `test:affected` full-suite run after `0e7134701` | 961 tests / 959 PASS / 0 FAIL / 2 SKIP |
-| `test:full` | 961 tests / 959 PASS / 0 FAIL / 2 SKIP |
+| `test:full` (before `0e7134701`) | 961 tests / 959 PASS / 0 FAIL / 2 SKIP |
 | `git diff --check` | PASS |
 | Real zero-model protocol smoke | PASS |
 
 `npm run test:affected` 因本次 Runtime、Worker、生成 Bundle 与测试基础设施
-变更选择完整回归；随后按 Goal 顺序单独执行 `npm run test:full`，两次均为
-959 PASS、0 FAIL、2 SKIP，另有 2 个显式 skip。
+变更选择完整回归。`0e7134701` 落地后的这次运行是最终代码证据：961 项中
+959 PASS、0 FAIL、2 个显式 skip。另有一次 `npm run test:full` 也是相同结果，
+但发生在环境变量转发修复之前，仅保留为较早的全量回归基线，不能替代修复后的
+最终门禁。
 
 授权与回退测试覆盖：
 
@@ -270,7 +272,7 @@ fec975905a2abd4c07e35c40d51fa097a2258ec9
 | 3.19.0 协议与真实 Coding Plan 执行 | 零模型协议 Smoke；1 次真实 Task completed；18,351 Token | PASS — EXPERIMENTAL |
 | Coding Plan 倍率 | 官方小时桶未产生可归因 Token/Credits；quota unit 不是 Credits | `INCONCLUSIVE` |
 | Start Plan 真实 E2E 与 Token 对账 | 官方 `billing/balance` 对 3.18.2/3.19.0 均返回空 `plans/balances`；未发模型请求 | `BLOCKED / NO_ACTIVE_PLAN` |
-| 完整回归 | `test:affected` 与 `test:full` 均为 961/959 PASS、0 FAIL、2 SKIP | PASS |
+| 完整回归 | `0e7134701` 后 `test:affected` 为 961/959 PASS、0 FAIL、2 SKIP；较早 `test:full` 为同数基线，不替代最终门禁 | PASS |
 | 不合并、不发布、不修改生产状态 | 独立分支；工作区 clean；无 Preview merge/Release；无 SQLite/凭据/安装修改 | PASS |
 
 ## 12. Known Gaps
@@ -350,7 +352,7 @@ TYPE_CHECK: PASS
 TARGETED_TESTS: 22/22 PASS
 COST_LAB_TESTS: 86/86 PASS
 TEST_AFFECTED: FULL_SUITE / 961 TESTS / 959 PASS / 0 FAIL / 2 SKIP
-TEST_FULL: 961 TESTS / 959 PASS / 0 FAIL / 2 SKIP
+TEST_FULL: 961 TESTS / 959 PASS / 0 FAIL / 2 SKIP / PRE_FORWARDING_FIX_BASELINE
 GENERATED_ARTIFACTS: PASS
 PLUGIN_VALIDATOR: PASS
 

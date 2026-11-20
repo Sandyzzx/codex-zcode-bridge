@@ -3,7 +3,7 @@
   "kind": "zcode_unknown_runtime_compatibility_evidence",
   "goal": "ZCODE_3_19_0_ADAPTATION_WITH_3_18_COMPATIBILITY",
   "captured_at": "2026-11-20T07:43:06.169Z",
-  "last_updated_at": "2026-11-20T09:18:54.836Z",
+  "last_updated_at": "2026-11-20T09:24:23.131Z",
   "repository": {
     "root": "D:\\codex-zcode-bridge",
     "worktree": "D:\\codex-zcode-bridge\\.run\\zcode-3190-compat-20261120",
@@ -234,6 +234,7 @@
     },
     "test_affected": {
       "status": "PASS",
+      "relationship_to_final_code": "Final full-suite gate after runtime authorization environment forwarding commit 0e7134701d643c7b80def4e3cb80c95c63e34691.",
       "tests": 961,
       "passed": 959,
       "failed": 0,
@@ -242,6 +243,7 @@
     },
     "test_full": {
       "status": "PASS",
+      "relationship_to_final_code": "Earlier full-regression baseline executed before the runtime authorization environment forwarding fix; it does not replace the post-fix test:affected gate.",
       "tests": 961,
       "passed": 959,
       "failed": 0,
