@@ -108,6 +108,7 @@ export const OFFICIAL_APPSERVER_COMPATIBILITY_MANIFEST: readonly OfficialAppServ
       coding_plan_discount_verified: true,
       start_plan_static_compatibility: "OFFLINE_COMPATIBLE",
       verification_date: "2026-11-18",
+      desktop_asset_pinning: "LEGACY_SAFETY_ONLY",
     }),
     Object.freeze({
       desktop_version: "3.19.0.10774",

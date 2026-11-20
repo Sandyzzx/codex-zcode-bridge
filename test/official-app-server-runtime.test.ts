@@ -7,6 +7,7 @@ import test from "node:test";
 import type { ZCodeRuntimeConfig } from "../src/interfaces.js";
 import { BridgeError } from "../src/runtime/errors.js";
 import {
+  OFFICIAL_APPSERVER_COMPATIBILITY_MANIFEST,
   OfficialAppServerRuntimeResolver,
   type OfficialAppServerRuntimeDescriptor,
   type OfficialAppServerRuntimeManifestEntry,
@@ -131,6 +132,7 @@ test("resolver verifies same-root installed assets and returns installed runtime
     assert.equal(descriptor.bundle_path, fixture.bundle);
     assert.equal(descriptor.bundle_sha256, fixture.manifest.bundle_sha256);
     assert.equal(descriptor.node_version, "24.16.0");
+    assert.equal(descriptor.manifest?.desktop_asset_pinning, undefined);
 
     const config = await runtime.resolve();
     assert.equal(config.zcodeEntrypoint, descriptor.bundle_path);
@@ -139,6 +141,19 @@ test("resolver verifies same-root installed assets and returns installed runtime
   } finally {
     await rm(fixture.root, { recursive: true, force: true });
   }
+});
+
+test("manifest distinguishes the legacy 3.18 safety boundary from full 3.19 pinning", () => {
+  const legacy = OFFICIAL_APPSERVER_COMPATIBILITY_MANIFEST.find(
+    (entry) => entry.desktop_version === "3.18.2.10443",
+  );
+  const experimental = OFFICIAL_APPSERVER_COMPATIBILITY_MANIFEST.find(
+    (entry) => entry.desktop_version === "3.19.0.10774",
+  );
+  assert.equal(legacy?.desktop_asset_pinning, "LEGACY_SAFETY_ONLY");
+  assert.equal(experimental?.desktop_asset_pinning, "FULL");
+  assert.equal(experimental?.verification_stage, "EXPERIMENTAL");
+  assert.equal(experimental?.coding_plan_discount_verified, false);
 });
 
 test("resolver honors persisted Bridge runtime settings without a process environment override", async () => {
