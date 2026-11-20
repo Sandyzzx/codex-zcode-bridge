@@ -336,6 +336,7 @@ test("the real validator rejects injected development-path references and keeps 
       "const workerModuleUrl = pathToFileURL3(workerEntryPath());",
       "loadOfficialHostProductVersion2(workerModuleUrl);",
       "loadOfficialStartPlanAuthenticationResolverFactory2(workerModuleUrl);",
+      "const modelSettings = new ZCodeModelSettings(process.env, { host, workerModuleUrl: workerModuleUrl });",
     ].join("\n");
     const bundlePath = path.join(pluginRoot, "dist", "bridge.mjs");
     const waiterPath = path.join(pluginRoot, "dist", "wait-task.mjs");
@@ -349,7 +350,6 @@ test("the real validator rejects injected development-path references and keeps 
     const patchPath = "upstream/zcode-3.18.2/patches/0001-fixture.patch";
     const patchBytes = Buffer.from("diff --git a/fixture.ts b/fixture.ts\n");
     mkdirSync(path.dirname(path.join(root, patchPath)), { recursive: true });
-    mkdirSync(path.join(officialHostRoot, "app-server", "provider"), { recursive: true });
     mkdirSync(path.join(officialHostRoot, "node_modules", "@napi-rs", "keyring"), { recursive: true });
     mkdirSync(path.join(officialHostRoot, "node_modules", "@napi-rs", "keyring-win32-x64-msvc"), { recursive: true });
     writeFileSync(path.join(root, patchPath), patchBytes);
@@ -368,9 +368,7 @@ test("the real validator rejects injected development-path references and keeps 
       "zcode-runtime-host.exe",
     ));
     const officialHostFiles = new Map<string, Buffer>([
-      ["app-server/provider/zcode-builtin.json", Buffer.from("{}\n")],
-      ["app-server/THIRD-PARTY-NOTICES.md", Buffer.from("fixture notices\n")],
-      ["app-server/zcode.cjs", Buffer.from("// app server\n")],
+      ["THIRD-PARTY-NOTICES.md", Buffer.from("fixture notices\n")],
       ["LICENSE", Buffer.from("fixture license\n")],
       ["NOTICE.md", Buffer.from("fixture notice\n")],
       ["node_modules/@napi-rs/keyring/LICENSE", Buffer.from("MIT\n")],
@@ -467,7 +465,7 @@ test("the real validator rejects injected development-path references and keeps 
       },
     }, null, 2)}\n`);
     writeFileSync(waiterPath, "// PR #49 of codex-zcode-bridge 13ab83626a7fa7f35319a21244215c2915ecb112\n");
-    writeFileSync(path.join(pluginRoot, "worker", "worker-main.mjs"), `${baseline}\nOfficialHostAdapter official-host-runtime.mjs maxFrameBytes\n`, "utf8");
+    writeFileSync(path.join(pluginRoot, "worker", "worker-main.mjs"), `${baseline}\nOfficialAppServerWorkerAdapter createInstalledOfficialHostSessionFactory official-host-runtime.mjs maxFrameBytes\n`, "utf8");
     writeFileSync(path.join(pluginRoot, "worker", "vendor", "pkg", "browser-host.cjs"), `${baseline}\n`, "utf8");
 
     const variants: Array<[name: string, injection: string, expectLeakDiagnostic: boolean]> = [

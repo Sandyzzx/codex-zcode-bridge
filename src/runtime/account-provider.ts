@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import type { ZCodeRuntimeConfig } from "../interfaces.js";
+import type { OfficialProviderRuntimeCapability } from "./official-app-server-runtime.js";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -57,6 +58,11 @@ export interface VerifiedAccountProviderSelection {
 export interface AccountProviderRuleFacts {
   readonly planKind: AccountPlanKind | null;
   readonly accountType: string | null;
+}
+
+export interface AccountProviderSelectionCapability {
+  readonly capability: OfficialProviderRuntimeCapability;
+  readonly failure: string | null;
 }
 
 /** Build the account entitlement snapshot expected by hosted ZCode app-server. */
@@ -126,6 +132,50 @@ export function accountProviderRuleFacts(
   };
 }
 
+/**
+ * Resolve plan-specific capability gates after the runtime has reported its
+ * actual Provider/Model selection. The mapping uses the official builtin
+ * registry and the configured account provider snapshot; aliases and missing
+ * or malformed registry entries never grant a plan-specific capability.
+ */
+export function accountProviderSelectionCapability(
+  providerId: string,
+  modelId: string,
+  config: ZCodeRuntimeConfig,
+): AccountProviderSelectionCapability {
+  const canonicalProviderId = accountProviderId(providerId, config);
+  const codingPlan = canonicalProviderId === "account:bigmodel-individual-coding-plan";
+  const startPlan = canonicalProviderId === BIGMODEL_START_PLAN_PROVIDER_ID;
+  if (!codingPlan && !startPlan) {
+    return { capability: "installed_runtime", failure: null };
+  }
+
+  const ruleFacts = accountProviderRuleFacts(canonicalProviderId, config);
+  const source = readAccountProviderSource(config, undefined, undefined, canonicalProviderId);
+  const entry = source?.entries.find((candidate) => candidate.providerId === canonicalProviderId);
+  const expectedPlanKind = codingPlan ? "individual-coding-plan" : "start-plan";
+  if (
+    ruleFacts?.planKind !== expectedPlanKind
+    || ruleFacts.accountType !== "bigmodel"
+    || !entry
+  ) {
+    return {
+      capability: codingPlan ? "coding_plan_discount" : "start_plan_static",
+      failure: `${canonicalProviderId} is not configured as the expected BigModel ${expectedPlanKind} provider`,
+    };
+  }
+  if (!entry.builtinModelIds.includes(modelId)) {
+    return {
+      capability: codingPlan ? "coding_plan_discount" : "start_plan_static",
+      failure: `${canonicalProviderId} does not register the selected model ${modelId}`,
+    };
+  }
+  return {
+    capability: codingPlan ? "coding_plan_discount" : "start_plan_static",
+    failure: null,
+  };
+}
+
 /** Resolve a legacy config provider id to the provider id used in app-server. */
 export function accountProviderId(providerId: string, config: ZCodeRuntimeConfig): string {
   // The runtime model catalog already uses this namespace for account-backed
@@ -169,8 +219,8 @@ export function catalogProviderId(
   return configured;
 }
 
-/** Supply coding-plan credentials in memory; Start Plan requires a desktop captcha host. */
-export function runtimeAuthReply(
+/** Test-only static credential reply; production Official Host auth must fail closed. */
+export function testOnlyRuntimeAuthReply(
   providerId: string | undefined,
   config: ZCodeRuntimeConfig,
 ): JsonRecord {

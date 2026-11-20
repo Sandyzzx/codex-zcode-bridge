@@ -322,6 +322,80 @@ test("real verification is explicit, reconciles mocked before/after billing, and
   }
 });
 
+test("failed runner evidence is retained and still reconciled for billing attribution", async () => {
+  const before = snapshot(modelRow(), "2026-11-17T02:00:00.000Z");
+  const after = snapshot(modelRow({
+    cachedInputTokens: 64,
+    uncachedInputTokens: 13_291,
+    outputTokens: 47,
+    cachedInputCredits: 0.00120064,
+    uncachedInputCredits: 1.02407155,
+    outputCredits: 0.012596,
+  }), "2026-11-17T02:04:00.000Z");
+  let captureCalls = 0;
+  let observedTaskMode = null;
+  const fixture = await makeServer({
+    captureSnapshot: async () => {
+      captureCalls += 1;
+      return captureCalls === 1 ? before : after;
+    },
+    verificationRunner: async ({ taskMode }) => {
+      observedTaskMode = taskMode;
+      const error = new Error("bridge_code_edit_unverified");
+      error.code = "COST_LAB_RESULT_VALIDATION_FAILED";
+      error.evidence = {
+        status: "UNVERIFIED",
+        model_requests: 1,
+        hour: 10,
+        usage: {
+          model: "GLM-5.3-Flash",
+          cached_input_tokens: 64,
+          uncached_input_tokens: 13_291,
+          output_tokens: 47,
+          total_tokens: 13_402,
+        },
+        workspace_evidence: { content_changed: false, content_match: false },
+      };
+      throw error;
+    },
+  });
+  try {
+    const current = await session(fixture.address.origin);
+    const started = await request(fixture.address.origin, "/api/verifications", {
+      method: "POST",
+      headers: stateChangingHeaders(fixture.address.origin, current.csrf_token),
+      body: JSON.stringify({
+        confirmation: CONFIRMATION_PHRASE,
+        provider: "account:bigmodel-individual-coding-plan",
+        model: "GLM-5.3-Flash",
+        reasoning: "low",
+        task_mode: "code_edit",
+      }),
+    });
+    assert.equal(started.response.status, 202);
+
+    let record = null;
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      const polled = await request(fixture.address.origin, `/api/verifications/${FIXED_ID}`);
+      record = polled.json.data;
+      if (record.status === "FAILED") break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.equal(record.status, "FAILED");
+    assert.equal(record.error.code, "VERIFICATION_FAILED");
+    assert.equal(record.error.message, "COST_LAB_RESULT_VALIDATION_FAILED");
+    assert.equal(record.model_requests, 1);
+    assert.equal(record.request_usage.total_tokens, 13_402);
+    assert.equal(record.runtime_evidence.workspace_evidence.content_match, false);
+    assert.equal(record.reconciliation.token_match, true);
+    assert.equal(record.reconciliation.credit_class, "EXTRA_0_67");
+    assert.equal(observedTaskMode, "code_edit");
+    assert.equal(captureCalls, 2);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
 test("same-hour settlement retry waits for an observable delta instead of an hour rollover", async () => {
   const before = snapshot(modelRow(), "2026-11-17T02:00:00.000Z");
   const after = snapshot(modelRow({

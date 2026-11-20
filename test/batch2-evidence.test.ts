@@ -104,8 +104,8 @@ const b2Task = {
 async function runScenario(scenario: FakeRuntimeOptions["scenario"], requestedModel?: FakeRuntimeOptions["requestedModel"]) {
   const runtime = await makeScenarioRuntime({ scenario, requestedModel, sessionModel: requestedModel ? { providerId: requestedModel.providerId, modelId: requestedModel.modelId } : undefined });
   const events: Array<{ type: string; summary: string; details?: Record<string, unknown> }> = [];
-  const { ZCodeAppServerAdapter } = await import("../src/adapters/zcode-app-server-adapter.js");
-  const adapter = new ZCodeAppServerAdapter({
+  const { ZCodeAppServerTestAdapter } = await import("../src/adapters/zcode-app-server-adapter.js");
+  const adapter = new ZCodeAppServerTestAdapter({
     resolver: { resolve: async () => runtime.config },
     onEvent: (event) => events.push(event),
     timeoutMs: 15_000,

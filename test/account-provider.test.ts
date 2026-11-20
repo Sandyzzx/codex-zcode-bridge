@@ -6,9 +6,10 @@ import path from "node:path";
 import test from "node:test";
 import {
   accountProviderId,
+  accountProviderSelectionCapability,
   buildAccountProviderPayload,
   catalogProviderId,
-  runtimeAuthReply,
+  testOnlyRuntimeAuthReply,
 } from "../src/runtime/account-provider.js";
 import type { ZCodeRuntimeConfig } from "../src/interfaces.js";
 
@@ -115,11 +116,11 @@ test("official account snapshot keeps Start and Coding Plan facts independent an
     assert.equal(withoutLiveCheck?.providers["account:bigmodel-individual-coding-plan"]?.access.entitled, true);
     assert.equal(withoutLiveCheck?.states["account:bigmodel-individual-coding-plan"]?.current, true);
     assert.equal(JSON.stringify(withoutLiveCheck).includes("synthetic-coding-plan-key"), false);
-    assert.deepEqual(runtimeAuthReply("account:bigmodel-individual-coding-plan", config), {
+    assert.deepEqual(testOnlyRuntimeAuthReply("account:bigmodel-individual-coding-plan", config), {
       headersApplied: true,
       requestAuth: { apiKey: "synthetic-coding-plan-key" },
     });
-    assert.equal((runtimeAuthReply("account:bigmodel-start-plan", config) as { headersApplied?: boolean }).headersApplied, false);
+    assert.equal((testOnlyRuntimeAuthReply("account:bigmodel-start-plan", config) as { headersApplied?: boolean }).headersApplied, false);
 
     const withLiveCheck = buildAccountProviderPayload(config, { providerId: "account:bigmodel-start-plan", modelId }, root);
     assert.equal(withLiveCheck?.providers["account:bigmodel-start-plan"]?.access.entitled, true);
@@ -239,7 +240,7 @@ test("task-scoped current authorizes only the selected account provider", () => 
     assert.equal(codingTask?.states["account:bigmodel-start-plan"]?.current, false);
     assert.equal(codingTask?.providers["account:bigmodel-individual-coding-plan"]?.access.entitled, true);
     assert.equal(codingTask?.states["account:bigmodel-individual-coding-plan"]?.entitled, true);
-    assert.deepEqual(runtimeAuthReply("account:bigmodel-individual-coding-plan", fixture.config), {
+    assert.deepEqual(testOnlyRuntimeAuthReply("account:bigmodel-individual-coding-plan", fixture.config), {
       headersApplied: true,
       requestAuth: { apiKey: "synthetic-coding-plan-key" },
     });
@@ -278,6 +279,62 @@ test("builtin model order is preserved while revision remains deterministic", ()
       ["GLM-5.3-Flash", "GLM-5.3"],
     );
     assert.notEqual(reordered?.revision, first?.revision);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("runtime-selected Provider capability uses the official registry and configured account snapshot", () => {
+  const fixture = makeConnectionSelectionFixture();
+  const modelId = "GLM-5.3-Flash";
+  try {
+    assert.deepEqual(
+      accountProviderSelectionCapability(
+        "account:bigmodel-individual-coding-plan",
+        modelId,
+        fixture.config,
+      ),
+      { capability: "coding_plan_discount", failure: null },
+    );
+    assert.deepEqual(
+      accountProviderSelectionCapability("builtin:bigmodel-coding-plan", modelId, fixture.config),
+      { capability: "coding_plan_discount", failure: null },
+    );
+    assert.deepEqual(
+      accountProviderSelectionCapability("account:bigmodel-start-plan", modelId, fixture.config),
+      { capability: "start_plan_static", failure: null },
+    );
+    for (const providerId of [
+      "account:bigmodel-team-coding-plan",
+      "account:bigmodel-offpeak-idle-plan",
+      "account:bigmodel-highspeed-card",
+      "builtin:openai-api-key",
+      "custom:local-provider",
+    ]) {
+      assert.deepEqual(
+        accountProviderSelectionCapability(providerId, modelId, fixture.config),
+        { capability: "installed_runtime", failure: null },
+      );
+    }
+
+    fixture.writeBuiltin(["GLM-5.3"]);
+    assert.match(
+      accountProviderSelectionCapability("account:bigmodel-start-plan", modelId, fixture.config).failure ?? "",
+      /does not register the selected model/u,
+    );
+
+    writeFileSync(fixture.config.providerBuiltinConfigFile, JSON.stringify({
+      revision: 8,
+      config: { providerConfigRules: { providerRules: [] } },
+    }));
+    assert.match(
+      accountProviderSelectionCapability(
+        "account:bigmodel-individual-coding-plan",
+        modelId,
+        fixture.config,
+      ).failure ?? "",
+      /not configured as the expected BigModel individual-coding-plan provider/u,
+    );
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }

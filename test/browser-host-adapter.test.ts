@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { ZCodeAppServerAdapter } from "../src/adapters/zcode-app-server-adapter.js";
+import { ZCodeAppServerTestAdapter } from "../src/adapters/zcode-app-server-adapter.js";
 import type { BrowserControlPort } from "../src/browser/contracts.js";
 import type { BrowserBackendDescriptor } from "../src/browser/backend.js";
 import type { BrowserCommandResult } from "../src/browser/result.js";
@@ -219,7 +219,7 @@ async function runAdapter(
   options: { browser?: { mode: "off" | "headless"; backendFactory: () => Promise<BrowserControlPort> }; env?: Record<string, string>; workspace?: ReturnType<typeof makeWorkspace> } = {},
 ): Promise<RunResult> {
   const events: Array<{ type: string; summary: string; details?: Record<string, unknown> }> = [];
-  const adapter = new ZCodeAppServerAdapter({
+  const adapter = new ZCodeAppServerTestAdapter({
     resolver: { resolve: async () => runtime.config },
     onEvent: (event) => events.push(event),
     timeoutMs: 15_000,
@@ -361,7 +361,7 @@ test("a browser teardown failure keeps the final outcome unverified even when th
     const events: Array<{ type: string; summary: string; details?: Record<string, unknown> }> = [];
     const backend = new FakeBackend();
     backend.closeShouldThrow = true;
-    const adapter = new ZCodeAppServerAdapter({
+    const adapter = new ZCodeAppServerTestAdapter({
       resolver: { resolve: async () => failingRuntime.config },
       onEvent: (event) => events.push(event),
       timeoutMs: 15_000,
@@ -398,7 +398,7 @@ test("cancelling mid browser command closes the browser host with the attempt", 
   const events: Array<{ type: string; summary: string; details?: Record<string, unknown> }> = [];
   const backend = new FakeBackend();
   backend.hangOnNavigate = true;
-  const adapter = new ZCodeAppServerAdapter({
+  const adapter = new ZCodeAppServerTestAdapter({
     resolver: { resolve: async () => runtime.config },
     onEvent: (event) => events.push(event),
     timeoutMs: 15_000,

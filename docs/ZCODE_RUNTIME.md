@@ -1,15 +1,27 @@
 # ZCode 运行配置边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-18（ADR-040 Coding Plan 安装版 Runtime 候选）
-> Last verified: 2026-11-18，核对安装版 ZCode `3.18.2.10443` 的 Bundle、builtin Provider 配置、runtime host、Node 范围、Resolver/Adapter 定向测试和生产 Coding Plan 账单；Start Plan 只做离线审计。
-> Verified against: `02cf2fa92c8235370fe7a883d4c5b30d93a8ab33` + candidate integration branch
+> Last updated: 2026-11-20（ADR-041 Thin Official Host end state + Final Closure）
+> Last verified: 2026-11-20，核对安装版 ZCode `3.18.2.10443` 的 Bundle、builtin Provider 配置、runtime host、Node 范围、共享 Resolver/session factory、动态 capability gate、生产 Runtime Auth fail-closed、BOM 和模型目录 Worker-shaped URL；真实 Start Plan 认证、权益、账单和模型请求单独记录。
+> Verified against: baseline `5501c60ecf3f1812a3d3170a670ab0031ea784d8`；ADR-041 implementation `a676c6cd14573f2620339f992a345ed0715541ff`（tree `4d1b54835d4ebe1e1ae15113d5a152130a98480c`）；Final Closure implementation `f19ab1d75dcced7613bfe6e12c84d780d01f7127`（tree `dab3db21e5f51eb764ff421ab31901981964c3c2`）+ 同分支隔离验证 follow-up
 
-当前生产路径是 `node zcode.cjs app-server --stdio --surface desktop`，不是历史 CLI `--prompt --json`。任务 Adapter 与模型目录探测共用该启动合同；解析入口为 `NodeRuntimeResolver`，配置项与用户设置方法见仓库 README。
+当前生产路径是 `node <installed-runtime>/resources/glm/zcode.cjs app-server --stdio --surface desktop`，不是历史 CLI `--prompt --json`。任务 Adapter 与模型目录探测共用 `createInstalledOfficialHostSessionFactory` 的同一启动合同；安装版兼容性由 `OfficialAppServerRuntimeResolver` 精确校验，配置项与用户设置方法见仓库 README。
 
 ADR-038 后，插件资源目录只保留固定 ZCode 3.18.2 Official Host；ZCode 3.18.0 的整套 Runtime 不再随新制品分发，Preview.5 回滚继续使用其历史发布包。生产 Adapter 选择在构造前只接受 Windows x64 的 `official_host`；Linux、macOS、Windows 非 x64 与未知架构返回 `unsupported_worker_platform`。direct Adapter 只用于隔离测试注入，不是其他平台的生产回退。
 
-ADR-040 候选为 `account:bigmodel-individual-coding-plan` 增加版本门禁后的安装版 Runtime：Resolver 必须从现有路径发现取得同一安装根下的 `resources/glm/zcode.cjs`、`resources/config/provider/zcode-builtin.json` 与 `resources/tools/runtime-host/zcode-runtime-host.exe`，并精确匹配 Desktop `3.18.2.10443`、文件大小、SHA-256、Windows x64 和 Node `>=24.16.0 <25`。未知版本、Hash 或同根关系返回 `OFFICIAL_RUNTIME_UNVERIFIED`；不会静默使用固定制品并宣称优惠兼容。Start Plan 和其他 Provider 不应用此重定向。
+ADR-040/ADR-041 将安装版 Runtime 扩展为所有受支持 Provider 的统一模型执行来源；Resolver 必须从现有路径发现取得同一安装根下的 `resources/glm/zcode.cjs`、`resources/config/provider/zcode-builtin.json` 与 `resources/tools/runtime-host/zcode-runtime-host.exe`，并精确匹配 Desktop `3.18.2.10443`、文件大小、SHA-256、Windows x64 和 Node `>=24.16.0 <25`。未知版本、Hash 或同根关系返回 `OFFICIAL_RUNTIME_UNVERIFIED`；不会静默使用打包 Runtime，也不会宣称任一 Provider 兼容。
+
+编码/权益能力门禁仍分离：Coding Plan 要求
+`OFFICIAL_DISCOUNT_VERIFIED`；Start Plan 要求
+`start_plan_static_compatibility = OFFLINE_COMPATIBLE`，不依赖 Coding Plan
+折扣字段；其他 Provider 走 `installed_runtime` 的官方配置/认证边界。Runtime 在
+`session/create` 后报告的 Provider/Model 是最终 capability 分类输入；Bridge 同时
+核对官方 Provider registry、当前账户配置和已注册模型，并在
+`session/subscribe`/`session/send` 前 fail closed。所有 Provider 共用安装版
+AppServer、Official Host Process Manager、Session/Turn 和 Cleanup 生命周期。
+生产 Provider Runtime Auth 的 resolver 缺失或失败时不回退到持久化 API Key；
+静态回包只允许显式 Test Adapter。Start Plan 的真实权益、认证、账单和模型 E2E
+仍为 `NOT_RUN`。
 
 若固定 AppServer 源旁存在安装版 Desktop `app.asar`，Bridge 只读解析其版本与 build metadata，并以这一对 `ZCODE_APP_VERSION` / `ZCODE_BUILD_COMMIT_ID` 为最高优先级。独立 Host 没有相邻 `app.asar` 时，`ZCODE_APP_VERSION` 取自校验后的 Official Host `ZCODE_PRODUCT_VERSION`；`ZCODE_BUILD_COMMIT_ID` 保持缺失，不从源码提交号或 AppServer CLI 版本推导。损坏 ASAR、非法或不完整身份、非法产品版本按 `provider_config_invalid` fail-closed。Bridge 不硬编码 Desktop 版本，不修改 Desktop 安装，也不伪造 HTTP Header。
 
@@ -65,7 +77,7 @@ persisted runtime-config 中已知字段只能是字符串或 null；缺文件�
 
 浏览器宿主配置（ADR-007）：`ZCODE_BRIDGE_BROWSER_USE` 取 `off`（默认，含空值/未设置/非法值回退为 off）或 `headless`；`ZCODE_BRIDGE_BROWSER_EXECUTABLE` 可选，须为已存在文件的绝对路径，缺省按官方实现解析已安装 Chromium/Edge（不下载浏览器）。两项均为普通字符串配置键，遵循配置优先于环境变量的既有规则；非法 USE 值不阻断任务，仅保持关闭并由 doctor 给出 warning。detached worker 进程按显式键清单转发这两项非秘密设置（2026-10-16 修复：此前 env-only 配置在真实 spawn 边界丢失），其余任意父进程环境与秘密仍不透传。Windows worker 环境保留 `ProgramFiles` / `ProgramFiles(x86)`（接受常见大小写）等非敏感系统目录变量供自动发现使用，发现解析同样不区分大小写键；显式 `ZCODE_BRIDGE_BROWSER_EXECUTABLE` 优先级不变。不向 app-server 传递任何 headless CLI 参数；浏览器由 worker 内的 managed CDP runtime 以独立临时 profile 启动，生命周期见 ARCHITECTURE.md。
 
-执行和模型目录 RPC 客户端都是私有集成实现，当前假运行时测试覆盖调用选择、事件、交互和清理。真实协议随安装版本变化；本次已新建真实会话验证记录版本的浏览器链路，不能将这次 smoke 扩展为全协议或其他版本认证。
+执行和模型目录共享同一个 Official Host session factory 及其 ProcessManager/ProtocolClient；模型目录不再自行 spawn AppServer、实现 JSON-RPC framing 或返回持久化 Coding Plan API Key。当前假运行时和合成 Host 测试覆盖调用选择、事件、交互、Cache/alias 和清理；真实协议随安装版本变化，不能把这次收敛扩展为全协议或其他版本认证。
 
 stdout 协议帧与审批持久化边界（ADR-008）：换行分隔的完整 JSON-RPC 帧单帧上限 16 MiB 原始未 trim UTF-8 字节，帧顶层必须是对象，致命帧错误锁存原因并终止当次 attempt 的协议流；turn 可见文本另有 2,000,000 字符捕获上限。SQLite request 与私有交互帧使用现有 1 MiB 边界；旧 JSON 事件文件与 full_request 文件引用已随 ADR-029 退役。这些上限是 Bridge 侧守卫，不依赖也不约束 app-server 的内部实现；真实 resume 帧（观测 2,139,927 UTF-8 bytes）在限内正常通过。
 

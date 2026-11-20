@@ -413,6 +413,10 @@ export function createCostLabWebServer(options = {}) {
     if (body.provider !== DEFAULT_PROVIDER_ID || body.model !== "GLM-5.3-Flash" || body.reasoning !== "low") {
       throw httpError(400, "REAL_VERIFICATION_INPUT_REJECTED", "Only the verified Coding Plan provider/model/reasoning tuple is allowed.");
     }
+    const taskMode = body.task_mode ?? "marker";
+    if (taskMode !== "marker" && taskMode !== "code_edit") {
+      throw httpError(400, "REAL_VERIFICATION_TASK_MODE_REJECTED", "task_mode must be marker or code_edit.");
+    }
     if (state.closed || state.activeVerificationId) {
       throw httpError(409, "REAL_VERIFICATION_ALREADY_RUNNING", "A real verification is already running or the service is closing.");
     }
@@ -429,6 +433,7 @@ export function createCostLabWebServer(options = {}) {
       provider: DEFAULT_PROVIDER_ID,
       model: "GLM-5.3-Flash",
       reasoning: "low",
+      task_mode: taskMode,
       billing_window: {
         time_zone: DEFAULT_TIME_ZONE,
         before: null,
@@ -498,6 +503,7 @@ export function createCostLabWebServer(options = {}) {
         provider: DEFAULT_PROVIDER_ID,
         model: "GLM-5.3-Flash",
         reasoning: "low",
+        taskMode: record.task_mode,
         beforeSnapshot: record.billing_window.before,
       });
       assertNotAborted(signal);
@@ -521,6 +527,30 @@ export function createCostLabWebServer(options = {}) {
       });
     } catch (error) {
       const interrupted = signal.aborted;
+      const evidence = error && typeof error === "object" && error.evidence &&
+        typeof error.evidence === "object" && !Array.isArray(error.evidence)
+        ? error.evidence
+        : null;
+      if (evidence) {
+        record.model_requests = Number.isSafeInteger(evidence.model_requests)
+          ? evidence.model_requests
+          : null;
+        record.request_usage = redactValue(evidence.usage ?? null);
+        record.runtime_evidence = redactValue(evidence);
+        if (evidence.usage && !interrupted) {
+          try {
+            const { after, reconciliation } = await captureAfterWithRetry(signal, {
+              before: record.billing_window.before,
+              usage: evidence.usage,
+              hour: Number.isInteger(evidence.hour) ? evidence.hour : null,
+            });
+            record.billing_window.after = redactValue(after);
+            record.reconciliation = redactValue(reconciliation);
+          } catch (billingError) {
+            record.warnings.push(`Post-failure billing capture failed: ${safeErrorCode(billingError)}`);
+          }
+        }
+      }
       updateRecord(record, {
         status: interrupted ? "INTERRUPTED" : "FAILED",
         finished_at: dependencies.now().toISOString(),

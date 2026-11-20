@@ -48,7 +48,7 @@ import {
   BIGMODEL_START_PLAN_PROVIDER_ID,
   buildAccountProviderPayload,
   catalogProviderId,
-  runtimeAuthReply,
+  testOnlyRuntimeAuthReply,
   zcodeDataBaseDir,
 } from "../runtime/account-provider.js";
 import { resolveSessionPreferences, type ResolvedSessionPreferences } from "../runtime/session-preferences.js";
@@ -355,14 +355,29 @@ interface ResolvedBrowserConfig {
 }
 
 export interface ZCodeAppServerAdapterOptions {
+  /**
+   * Test-only harness gate. Production composition must provide an external
+   * Official Host client factory; an unguarded default spawn is forbidden.
+   */
+  testOnlyAllowDirectAppServer?: true;
   /** Internal opt-in credential broker. It is not a TaskPackage field. */
   resolveStartPlanRuntimeAuth?: (scope: { readonly sessionId: string; readonly turnId: string; readonly providerId: string; readonly modelId: string }, signal: AbortSignal) => Promise<{ readonly apiKey: string; readonly expiresAt: number; readonly isValid: () => boolean }>;
-  /** Official account runtime-header resolver; absent keeps the legacy static fallback. */
+  /** Official account runtime-header resolver; production absence fails closed. */
   resolveProviderRuntimeAuth?: (
     request: Record<string, unknown>,
     config: ZCodeRuntimeConfig,
     signal: AbortSignal,
   ) => Promise<Record<string, unknown>>;
+  /** Credential-free runtime-auth correlation for Worker stderr diagnostics. */
+  onRuntimeAuthDiagnostic?: (
+    facts: Readonly<Record<string, string | number | boolean | null>>,
+  ) => void;
+  /** Verify the capability gate after the runtime reports its actual Provider/Model. */
+  verifySelectedProviderCapability?: (
+    selection: { readonly providerId: string; readonly modelId: string },
+    config: ZCodeRuntimeConfig,
+    signal: AbortSignal,
+  ) => Promise<void>;
   /** Task-scoped live Billing verdict delivered by the SQLite authority. */
   startPlanProviderEntitled?: boolean;
   /** Internal output sanitizers owned by the same credential broker. */
@@ -428,7 +443,7 @@ export interface ZCodeAppServerAdapterOptions {
    */
   onSendBoundary?: (boundary: { submitCorrelationId: string }) => void;
   /**
-   * Internal composition seam used by the shipped OfficialHostAdapter. The
+   * Internal composition seam used by the Official Host session factory. The
    * factory supplies an already-owned official ProcessManager/ProtocolClient;
    * this adapter keeps the protocol, interaction, result, and cleanup semantics.
    */
@@ -452,6 +467,9 @@ const MAX_FRAME_BYTES = 16 * 1024 * 1024;
 export class ZCodeAppServerAdapter implements CodingAgentAdapter {
   readonly #resolveStartPlanRuntimeAuth: ZCodeAppServerAdapterOptions["resolveStartPlanRuntimeAuth"];
   readonly #resolveProviderRuntimeAuth: ZCodeAppServerAdapterOptions["resolveProviderRuntimeAuth"];
+  readonly #onRuntimeAuthDiagnostic: ZCodeAppServerAdapterOptions["onRuntimeAuthDiagnostic"];
+  readonly #verifySelectedProviderCapability: ZCodeAppServerAdapterOptions["verifySelectedProviderCapability"];
+  readonly #allowTestOnlyStaticRuntimeAuthReply: boolean;
   readonly #startPlanProviderEntitled: boolean;
   readonly #sanitizeStartPlanFrame: ZCodeAppServerAdapterOptions["sanitizeStartPlanFrame"];
   readonly #sanitizeStartPlanText: ZCodeAppServerAdapterOptions["sanitizeStartPlanText"];
@@ -487,8 +505,15 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
   readonly #workspaceByTask = new Map<string, string>();
 
   constructor(options: ZCodeAppServerAdapterOptions = {}) {
+    if (!options.externalHostClientFactory && options.testOnlyAllowDirectAppServer !== true) {
+      throw new Error("ZCodeAppServerAdapter requires the Official Host client factory outside the test-only direct harness");
+    }
     this.#resolveStartPlanRuntimeAuth = options.resolveStartPlanRuntimeAuth;
     this.#resolveProviderRuntimeAuth = options.resolveProviderRuntimeAuth;
+    this.#onRuntimeAuthDiagnostic = options.onRuntimeAuthDiagnostic;
+    this.#verifySelectedProviderCapability = options.verifySelectedProviderCapability;
+    this.#allowTestOnlyStaticRuntimeAuthReply =
+      options.testOnlyAllowDirectAppServer === true && options.externalHostClientFactory === undefined;
     this.#startPlanProviderEntitled = options.startPlanProviderEntitled === true;
     this.#sanitizeStartPlanFrame = options.sanitizeStartPlanFrame;
     this.#sanitizeStartPlanText = options.sanitizeStartPlanText;
@@ -943,6 +968,16 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
           "provider_config_invalid",
           "ZCode runtime did not report its selected model; refusing to start a task whose model cannot be identified.",
         );
+      }
+      if (this.#verifySelectedProviderCapability) {
+        const selected = entry.selectedModelSelection;
+        if (!selected) {
+          throw new BridgeError(
+            "provider_config_invalid",
+            "ZCode runtime did not report its selected Provider/Model; refusing to start a task whose capability cannot be verified.",
+          );
+        }
+        await this.#verifySelectedProviderCapability(selected, config, entry.abort.signal);
       }
       if (!preferences.model) {
         const selected = readSelectedModelSelection(snapshot);
@@ -1997,27 +2032,64 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
           const turnId = typeof params.turnId === "string" ? params.turnId : null;
           const modelId = typeof selection.modelId === "string" ? selection.modelId : "";
           const selected = entry.selectedModelSelection;
+          const accountAccess = asRecord(params.accountAccess);
+          this.#reportRuntimeAuthDiagnostic({
+            stage: "request_received",
+            provider_id: providerId,
+            selection_provider_id: typeof selection.providerId === "string" ? selection.providerId : null,
+            model_id: modelId,
+            selected_provider_id: selected?.providerId ?? null,
+            selected_model_id: selected?.modelId ?? null,
+            session_match: Boolean(entry.sessionId && sessionId === entry.sessionId),
+            turn_match: turnId === null ? null : Boolean(entry.turnId && turnId === entry.turnId),
+            accepting_turn: entry.acceptingTurn,
+            account_access_type: typeof accountAccess.type === "string" ? accountAccess.type : null,
+            account_access_account_type: typeof accountAccess.accountType === "string"
+              ? accountAccess.accountType
+              : null,
+            account_access_mode: typeof accountAccess.mode === "string" ? accountAccess.mode : null,
+            account_access_entitled: accountAccess.entitled === true,
+          });
           if (!entry.acceptingTurn || !entry.sessionId || sessionId !== entry.sessionId
             || (turnId !== null && (!entry.turnId || turnId !== entry.turnId))
             || (typeof selection.providerId === "string" && selection.providerId !== providerId)
             || (typeof params.providerId === "string" && params.providerId !== providerId)
             || !modelId || !selected || selected.providerId !== providerId || selected.modelId !== modelId
             || entry.abort.signal.aborted) {
+            this.#reportRuntimeAuthDiagnostic({ stage: "identity_rejected" });
             replySafely({ headersApplied: false, errorMessage: "Provider runtime identity is not verified." });
             return;
           }
+          this.#reportRuntimeAuthDiagnostic({ stage: "resolver_started" });
           void this.#resolveProviderRuntimeAuth(params, config, entry.abort.signal)
             .then((result) => {
+              this.#reportRuntimeAuthDiagnostic({
+                stage: "resolver_completed",
+                headers_applied: result.headersApplied === true,
+              });
               if (!entry.abort.signal.aborted) replySafely(result);
             })
-            .catch(() => {
+            .catch((error) => {
+              const errorClass = error instanceof Error
+                && /^[A-Za-z][A-Za-z0-9_]{0,63}$/u.test(error.name)
+                ? error.name
+                : "unknown";
+              this.#reportRuntimeAuthDiagnostic({ stage: "resolver_failed", error_class: errorClass });
               if (!entry.abort.signal.aborted) {
                 replySafely({ headersApplied: false, errorMessage: "Provider runtime authorization is unavailable." });
               }
             });
           return;
         }
-        write({ id, result: runtimeAuthReply(providerId, config) });
+        write({
+          id,
+          result: this.#allowTestOnlyStaticRuntimeAuthReply
+            ? testOnlyRuntimeAuthReply(providerId, config)
+            : {
+                headersApplied: false,
+                errorMessage: "Provider runtime authorization is unavailable.",
+              },
+        });
       }
       return;
     }
@@ -2190,6 +2262,16 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     }
     if (message.id !== undefined && typeof message.method === "string") {
       write({ id: message.id, error: { code: -32601, message: `Unsupported ZCode app-server request: ${message.method}` } });
+    }
+  }
+
+  #reportRuntimeAuthDiagnostic(
+    facts: Readonly<Record<string, string | number | boolean | null>>,
+  ): void {
+    try {
+      this.#onRuntimeAuthDiagnostic?.(facts);
+    } catch {
+      // Observation must not alter authentication or turn lifecycle.
     }
   }
 
@@ -2765,6 +2847,16 @@ export class ZCodeAppServerAdapter implements CodingAgentAdapter {
     const entry = this.#runs.get(handle);
     if (!entry) throw new Error(`${method}: unknown agent handle (task ${handle.taskId})`);
     return entry;
+  }
+}
+
+/**
+ * Explicit test harness for protocol fixtures that need direct stdio.
+ * Production and Core never import this class.
+ */
+export class ZCodeAppServerTestAdapter extends ZCodeAppServerAdapter {
+  constructor(options: ZCodeAppServerAdapterOptions = {}) {
+    super({ ...options, testOnlyAllowDirectAppServer: true });
   }
 }
 

@@ -1,142 +1,135 @@
-import path from "node:path";
-import { pathToFileURL } from "node:url";
-import type { RuntimeResolver, ZCodeRuntimeConfig } from "../interfaces.js";
 import {
-  OfficialAppServerRuntimeResolver,
-  type OfficialAppServerRuntimeDescriptor,
-} from "../runtime/official-app-server-runtime.js";
+  accountProviderSelectionCapability,
+} from "../runtime/account-provider.js";
 import { BridgeError } from "../runtime/errors.js";
+import type {
+  OfficialAppServerRuntimeDescriptor,
+  OfficialProviderRuntimeCapability,
+} from "../runtime/official-app-server-runtime.js";
 import {
   ZCodeAppServerAdapter,
-  type ExternalHostClientFactory,
   type ZCodeAppServerAdapterOptions,
 } from "./zcode-app-server-adapter.js";
 import {
-  createOfficialHostClientFactory,
-  verifyOfficialHostAssets,
-  type OfficialHostAssets,
-  type OfficialHostModule,
+  createInstalledOfficialHostSessionFactory,
+  officialProviderCapabilityFailure,
+  type OfficialHostPackagedAssets,
   type OfficialHostModuleSource,
 } from "./official-host-adapter.js";
 
-export interface OfficialInstalledRuntimeResolver extends RuntimeResolver {
-  inspect(): Promise<OfficialAppServerRuntimeDescriptor>;
-}
+export type { OfficialInstalledRuntimeResolver } from "./official-host-adapter.js";
+import type { OfficialInstalledRuntimeResolver } from "./official-host-adapter.js";
+export { officialProviderCapabilityFailure } from "./official-host-adapter.js";
 
 export interface OfficialAppServerWorkerAdapterOptions extends ZCodeAppServerAdapterOptions {
   readonly officialRuntimeResolver?: OfficialInstalledRuntimeResolver;
+  /**
+   * The provider-specific capability that must be verified before this
+   * installed runtime may create a model session. Runtime identity alone is
+   * not a Coding Plan or Start Plan compatibility verdict.
+   */
+  readonly providerCapability?: OfficialProviderRuntimeCapability;
   /** Test-only seam. Production always resolves from the installed Desktop. */
   readonly testOnlyOfficialHostModule?: OfficialHostModuleSource;
-  /** Test-only seam relative to a Worker-shaped module URL. */
-  readonly testOnlyWorkerModuleUrl?: string | URL;
+  /** Worker-shaped URL used to resolve the shipped Host module. */
+  readonly workerModuleUrl?: string | URL;
   /** Test-only seam replacing the packaged ProcessManager/auth module assets. */
-  readonly testOnlyOfficialHostAssets?: OfficialHostAssets;
+  readonly testOnlyOfficialHostPackagedAssets?: OfficialHostPackagedAssets;
 }
 
 /**
- * Production Coding Plan adapter. It keeps the existing official Host process
- * manager, protocol adapter, auth service, and cleanup ownership, while making
- * the installed Desktop AppServer the only verified model-execution runtime.
+ * Production adapter for the installed Official ZCode AppServer. The exact
+ * Provider ID only selects an authentication/entitlement gate; every Provider
+ * shares the same Official Host process manager, protocol adapter, and cleanup
+ * ownership.
  */
 export class OfficialAppServerWorkerAdapter extends ZCodeAppServerAdapter {
   constructor(options: OfficialAppServerWorkerAdapterOptions = {}) {
-    const runtimeResolver = options.officialRuntimeResolver
-      ?? new OfficialAppServerRuntimeResolver({
-        env: options.childEnvBase,
-        ...(options.homeDir ? { homeDir: options.homeDir } : {}),
-        ...(options.host ? { host: options.host } : {}),
-      });
-    const packagedAssets = options.testOnlyOfficialHostAssets
-      ? Promise.resolve(options.testOnlyOfficialHostAssets)
-      : verifyOfficialHostAssets(options.testOnlyWorkerModuleUrl);
-    const moduleSource: OfficialHostModuleSource = options.testOnlyOfficialHostModule
-      ?? (async () => loadOfficialHostModule((await packagedAssets).hostModulePath));
-    let resolved: Promise<{ readonly descriptor: OfficialAppServerRuntimeDescriptor; readonly assets: OfficialHostAssets }>
-      | undefined;
-    const assets = (): Promise<{ readonly descriptor: OfficialAppServerRuntimeDescriptor; readonly assets: OfficialHostAssets }> => {
-      resolved ??= Promise.all([runtimeResolver.inspect(), packagedAssets]).then(([descriptor, packaged]) => {
-        if (descriptor.status !== "OFFICIAL_RUNTIME_VERIFIED"
-          || !descriptor.bundle_path
-          || !descriptor.builtin_provider_config_path
-          || !descriptor.runtime_host_path) {
-          try {
-            options.onEvent?.({
-              type: "official_runtime_unverified",
-              summary: "Installed ZCode AppServer is not verified for the Coding Plan discount",
-              details: {
-                status: descriptor.status,
-                discount_capability: "OFFICIAL_DISCOUNT_NOT_VERIFIED",
-                reason: descriptor.reason,
-              },
-            });
-          } catch {
-            // Observation cannot change the fail-closed decision.
-          }
-          throw new BridgeError(
-            "provider_config_invalid",
-            `OFFICIAL_RUNTIME_UNVERIFIED: ${descriptor.reason ?? "installed Official AppServer is unavailable"}; ` +
-              "OFFICIAL_DISCOUNT_NOT_VERIFIED",
-          );
-        }
-        return {
-          descriptor,
-          assets: {
-            root: descriptor.install_dir!,
-            hostModulePath: packaged.hostModulePath,
-            appServerEntryPath: descriptor.bundle_path,
-            builtinProviderConfigPath: descriptor.builtin_provider_config_path,
-            runtimeHostPath: descriptor.runtime_host_path,
-            manifestDigest: descriptor.bundle_sha256!,
-          },
-        };
-      });
-      return resolved;
-    };
-
-    const factory = createOfficialHostClientFactory({
-      assets: async () => (await assets()).assets,
-      moduleSource,
-    });
-    const externalHostClientFactory: ExternalHostClientFactory = async (context) => {
-      const runtime = await assets();
-      const client = await factory(context);
-      try {
+    const providerCapability = options.providerCapability ?? "installed_runtime";
+    let verifiedDescriptor: OfficialAppServerRuntimeDescriptor | undefined;
+    const sessionFactory = createInstalledOfficialHostSessionFactory({
+      officialRuntimeResolver: options.officialRuntimeResolver,
+      env: options.childEnvBase,
+      homeDir: options.homeDir,
+      host: options.host,
+      providerCapability,
+      testOnlyOfficialHostModule: options.testOnlyOfficialHostModule,
+      workerModuleUrl: options.workerModuleUrl,
+      testOnlyOfficialHostPackagedAssets: options.testOnlyOfficialHostPackagedAssets,
+      onVerified: (descriptor) => {
+        verifiedDescriptor = descriptor;
         options.onEvent?.({
           type: "official_runtime_verified",
           summary: "Using verified installed ZCode AppServer",
           details: {
-            status: runtime.descriptor.status,
-            discount_capability: runtime.descriptor.discount_capability,
-            desktop_version: runtime.descriptor.desktop_version,
-            bundle_sha256: runtime.descriptor.bundle_sha256,
-            runtime_host_sha256: runtime.descriptor.runtime_host_sha256,
-            node_version: runtime.descriptor.node_version,
-            install_source: runtime.descriptor.install_source,
+            status: descriptor.status,
+            discount_capability: descriptor.discount_capability,
+            start_plan_static_compatibility: descriptor.start_plan_static_compatibility,
+            provider_capability: providerCapability,
+            desktop_version: descriptor.desktop_version,
+            bundle_sha256: descriptor.bundle_sha256,
+            runtime_host_sha256: descriptor.runtime_host_sha256,
+            node_version: descriptor.node_version,
+            install_source: descriptor.install_source,
           },
         });
-      } catch {
-        // Observation cannot change the selected runtime or task outcome.
-      }
-      return client;
-    };
+      },
+      onUnverified: (descriptor, reason) => {
+        options.onEvent?.({
+          type: "official_runtime_unverified",
+          summary: reason,
+          details: {
+            status: descriptor.status,
+            discount_capability: descriptor.discount_capability,
+            start_plan_static_compatibility: descriptor.start_plan_static_compatibility,
+            provider_capability: providerCapability,
+            reason,
+          },
+        });
+      },
+    });
 
     super({
       ...options,
-      resolver: runtimeResolver,
+      resolver: sessionFactory.resolver,
       providerRetryLimit: 0,
-      externalHostClientFactory,
+      externalHostClientFactory: (context) => sessionFactory.createClient(context),
+      verifySelectedProviderCapability: async (selection, config, signal) => {
+        signal.throwIfAborted();
+        const resolved = accountProviderSelectionCapability(
+          selection.providerId,
+          selection.modelId,
+          config,
+        );
+        const descriptor = verifiedDescriptor;
+        if (!descriptor) {
+          throw new BridgeError(
+            "provider_config_invalid",
+            "The Official AppServer runtime identity was not verified before provider capability validation.",
+          );
+        }
+        const failure = resolved.failure
+          ?? officialProviderCapabilityFailure(descriptor, resolved.capability);
+        if (!failure) return;
+        try {
+          options.onEvent?.({
+            type: "official_runtime_unverified",
+            summary: failure,
+            details: {
+              status: descriptor.status,
+              discount_capability: descriptor.discount_capability,
+              start_plan_static_compatibility: descriptor.start_plan_static_compatibility,
+              provider_capability: resolved.capability,
+              selected_provider_id: selection.providerId,
+              selected_model_id: selection.modelId,
+              reason: failure,
+            },
+          });
+        } catch {
+          // Observation cannot alter the fail-closed decision.
+        }
+        throw new BridgeError("provider_config_invalid", failure);
+      },
     });
   }
-}
-
-async function loadOfficialHostModule(modulePath: string): Promise<OfficialHostModule> {
-  const value = await import(pathToFileURL(path.resolve(modulePath)).href) as Partial<OfficialHostModule>;
-  if (!value || typeof value.ZCodeAgentProcessManager !== "function"
-    || typeof value.ZCodeProtocolClient !== "function") {
-    throw new BridgeError(
-      "provider_config_invalid",
-      "The Official Host module is missing required exports.",
-    );
-  }
-  return value as OfficialHostModule;
 }

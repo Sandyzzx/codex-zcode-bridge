@@ -4,7 +4,7 @@
 > Date: 2026-11-18
 > Decision: Accepted — Owner 在 `BRIDGE_OFFICIAL_RUNTIME_INTEGRATION_COSTLAB_WEB_AND_STARTPLAN_COMPATIBILITY` 中批准生产 Runtime Resolver、官方 AppServer Worker Adapter、版本兼容 Manifest 与显式 fallback。
 > Applicability: ACTIVE CANDIDATE。生产代码只存在于独立集成分支，尚未合并或发布。
-> Verified against: V5 `8da4e61a79137dece48300ef6664ccc1ea4836db`；Preview.8 `02cf2fa92c8235370fe7a883d4c5b30d93a8ab33`。
+> Verified against: V5 `8da4e61a79137dece48300ef6664ccc1ea4836db`；Preview.8 `02cf2fa92c8235370fe7a883d4c5b30d93a8ab33`；统一候选基线 `f5390897978be995b3a942feaeaac0170e8849fa`。
 
 ## Context
 
@@ -109,6 +109,36 @@ Result、Cleanup 与 Release 仍由现有生产链拥有。安装版 AppServer �
 本轮不得发起真实 Start Plan 模型、认证或权益请求。Start Plan 与 Coding Plan
 可以共用 AppServer/Runtime 能力，但任何共用事实都不能推断其 Provider Auth、
 Request Security、Gateway 或优惠资格也相同。
+
+### 6. Coding Plan 与 BigModel Start Plan 共用安装版执行 Runtime
+
+生产 Worker 对两个精确官方 Provider 统一选择
+`OfficialAppServerWorkerAdapter`：
+
+```text
+account:bigmodel-individual-coding-plan
+account:bigmodel-start-plan
+  -> OfficialAppServerRuntimeResolver
+  -> installed resources/glm/zcode.cjs
+  -> installed same-root builtin provider config
+  -> installed zcode-runtime-host.exe
+  -> existing Official Host process manager / protocol / lifecycle
+```
+
+Runtime 身份校验是共用门禁，但 Provider Capability 分开判断：
+
+- Coding Plan 要求 `OFFICIAL_DISCOUNT_VERIFIED`；
+- Start Plan 要求 `start_plan_static_compatibility = OFFLINE_COMPATIBLE`；
+- Start Plan 不读取、也不依赖 Coding Plan 的 `0.67` 优惠结论；
+- 任一能力未满足时，在创建模型 Session 和构造 AppServer Process Manager 前失败。
+
+这不是认证统一。Start Plan 继续使用精确 Provider registry 校验、Live
+Entitlement、Private Credential Lease、Worker-parent authorization、设备身份绑定、
+过期/取消和 secret redaction；不得回退到 Coding Plan OAuth、Project Token 或
+Provider Runtime Auth。其他 Provider 的执行路由不变。
+
+本轮只完成离线实现和合成生命周期验证。`STARTPLAN_REAL_ENTITLEMENT`,
+`STARTPLAN_REAL_E2E`, `BILLING_OBSERVATION` 与真实 Native A/B 仍为 `NOT_RUN`。
 
 ## Consequences
 

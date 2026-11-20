@@ -1,18 +1,25 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
-import { createInterface } from "node:readline";
 import { createMinimalOsEnv } from "./child-env.js";
 import { buildZCodeAppServerLaunch } from "./desktop-host-launch.js";
-import { buildAccountProviderPayload, zcodeDataBaseDir, runtimeAuthReply } from "./account-provider.js";
+import { buildAccountProviderPayload, zcodeDataBaseDir } from "./account-provider.js";
 import { BridgeError } from "./errors.js";
 import { readStartPlanRoutingRegistry, startPlanAliasCatalogEntries } from "./model-routing.js";
-import { loadPersistedRuntimeEnvironment, NodeRuntimeResolver } from "./resolver.js";
+import { loadPersistedRuntimeEnvironment } from "./resolver.js";
 import { ZCODE_SESSION_MODES, type ZCodeSessionMode } from "./session-preferences.js";
 import type { ZCodeRuntimeConfig } from "../interfaces.js";
-import { captureSpawnGenerationIdentity, childStillOnSpawnGeneration, createPlatformProbe, terminateProcessTree } from "../adapters/process-spawn.js";
+import { createPlatformProbe, verifyProcessTreeClaimantsClean } from "../adapters/process-spawn.js";
+import {
+  createInstalledOfficialHostSessionFactory,
+  type ExternalHostClientFactoryContext,
+  type ExternalHostClientHandle,
+  type OfficialHostSessionFactory,
+} from "../adapters/official-host-adapter.js";
+import {
+  createOfficialProviderRuntimeAuthResolver,
+} from "./official-provider-runtime-auth.js";
 import { codexHostProfile, validateHostProfile, type BridgeHostProfile } from "../host/profile.js";
 import { withProcessLock } from "../store/process-lock.js";
 import { atomicRename } from "../store/atomic-rename.js";
@@ -47,19 +54,6 @@ export interface DefaultModelSelection {
   reasoning_level?: string;
 }
 
-interface PendingRequest {
-  resolve(value: unknown): void;
-  reject(error: Error): void;
-  timer: NodeJS.Timeout;
-}
-
-interface AppServerProcess {
-  child: ChildProcessWithoutNullStreams;
-  request(method: string, params: JsonRecord): Promise<unknown>;
-  close(): Promise<void>;
-  readonly stderr: string;
-}
-
 interface CatalogSource {
   config: ZCodeRuntimeConfig;
   runtimeEnv: NodeJS.ProcessEnv;
@@ -68,20 +62,45 @@ interface CatalogSource {
 }
 
 const RPC_TIMEOUT_MS = 30_000;
-const PROCESS_CLOSE_TIMEOUT_MS = 1_500;
 const MODEL_CATALOG_TTL_MS = 24 * 60 * 60 * 1_000;
+
+export interface ZCodeModelSettingsOptions {
+  readonly homeDir?: string;
+  readonly host?: BridgeHostProfile;
+  /** Worker-shaped URL for the shipped Official Host assets. */
+  readonly workerModuleUrl?: string | URL;
+  /** Test-only shared factory seam; production uses the installed Official Host. */
+  readonly testOnlyOfficialHostSessionFactory?: OfficialHostSessionFactory;
+  /** Test-only official Provider Runtime Auth factory seam. */
+  readonly testOnlyOfficialProviderRuntimeAuthFactoryLoader?: Parameters<
+    typeof createOfficialProviderRuntimeAuthResolver
+  >[0]["testOnlyFactoryLoader"];
+}
 
 /** Read the live app-server catalog and manage Bridge's persistent model default. */
 export class ZCodeModelSettings {
   readonly #sourceEnv: NodeJS.ProcessEnv;
   readonly #homeDir: string;
   readonly #host: BridgeHostProfile;
+  readonly #workerModuleUrl: string | URL | undefined;
+  readonly #sessionFactory: OfficialHostSessionFactory;
+  readonly #providerRuntimeAuthFactoryLoader:
+    Parameters<typeof createOfficialProviderRuntimeAuthResolver>[0]["testOnlyFactoryLoader"];
   #writeQueue: Promise<void> = Promise.resolve();
 
-  constructor(sourceEnv: NodeJS.ProcessEnv = process.env, options: { homeDir?: string; host?: BridgeHostProfile } = {}) {
+  constructor(sourceEnv: NodeJS.ProcessEnv = process.env, options: ZCodeModelSettingsOptions = {}) {
     this.#sourceEnv = sourceEnv;
     this.#homeDir = options.homeDir ?? homedir();
     this.#host = validateHostProfile(options.host ?? codexHostProfile(this.#homeDir));
+    this.#workerModuleUrl = options.workerModuleUrl;
+    this.#sessionFactory = options.testOnlyOfficialHostSessionFactory
+      ?? createInstalledOfficialHostSessionFactory({
+        env: sourceEnv,
+        homeDir: this.#homeDir,
+        host: this.#host,
+        workerModuleUrl: options.workerModuleUrl,
+      });
+    this.#providerRuntimeAuthFactoryLoader = options.testOnlyOfficialProviderRuntimeAuthFactoryLoader;
   }
 
   async listModels(workspace: string): Promise<ZCodeModelCatalog> {
@@ -145,7 +164,7 @@ export class ZCodeModelSettings {
 
   async #resolveCatalogSource(workspacePath: string): Promise<CatalogSource> {
     const runtimeEnv = loadPersistedRuntimeEnvironment(this.#sourceEnv, this.#homeDir, this.#host);
-    const config = await new NodeRuntimeResolver({ env: runtimeEnv, homeDir: this.#homeDir, host: this.#host }).resolve();
+    const config = await this.#sessionFactory.resolver.resolve();
     const cachePath = modelCatalogCachePath(workspacePath, config, runtimeEnv, this.#host.settingsDirectory);
     const fingerprint = await modelCatalogSourceFingerprint(config, runtimeEnv, this.#homeDir);
     return { config, runtimeEnv, cachePath, fingerprint };
@@ -154,10 +173,42 @@ export class ZCodeModelSettings {
   async #readLiveCatalog(workspacePath: string, source: CatalogSource): Promise<ZCodeModelCatalog> {
     const { config, runtimeEnv, cachePath, fingerprint } = source;
     const childEnv = buildRuntimeChildEnv(config, runtimeEnv);
-    const client = startAppServer(config, workspacePath, childEnv);
+    const launch = buildZCodeAppServerLaunch(config.zcodeEntrypoint, childEnv);
+    const controller = new AbortController();
+    const providerRuntimeAuth = createOfficialProviderRuntimeAuthResolver({
+      config,
+      workerModuleUrl: this.#workerModuleUrl,
+      ...(this.#providerRuntimeAuthFactoryLoader
+        ? { testOnlyFactoryLoader: this.#providerRuntimeAuthFactoryLoader } : {}),
+    });
+    let client: ExternalHostClientHandle;
+    try {
+      client = await this.#sessionFactory.createClient({
+        config,
+        workspace: {
+          requestedPath: workspacePath,
+          canonicalPath: workspacePath,
+          mode: "direct",
+        },
+        cwd: workspacePath,
+        env: childEnv,
+        launch,
+        requestTimeoutMs: RPC_TIMEOUT_MS,
+        probe: createPlatformProbe(),
+        verifyTreeClean: verifyProcessTreeClaimantsClean,
+      } satisfies ExternalHostClientFactoryContext);
+    } catch (error) {
+      throw error instanceof BridgeError
+        ? error
+        : new BridgeError("zcode_nonzero_exit", error instanceof Error ? error.message : String(error), { cause: error });
+    }
+    const requestDisposable = client.onRequest?.((message: unknown) => {
+      void handleRuntimeRequest(client, message, providerRuntimeAuth, controller.signal);
+    });
     let sessionId: string | null = null;
     let accountSync: ZCodeModelCatalog["account_provider_sync"] = "not_needed";
     let warning: string | undefined;
+    let primaryError: unknown;
     try {
       const accountPayload = buildAccountProviderPayload(config, undefined, this.#homeDir);
       if (accountPayload) {
@@ -202,6 +253,7 @@ export class ZCodeModelSettings {
         ...(warning ? { warning } : {}),
       };
     } catch (error) {
+      primaryError = error;
       if (error instanceof BridgeError) throw error;
       const message = error instanceof Error ? error.message : String(error);
       throw new BridgeError(
@@ -210,8 +262,18 @@ export class ZCodeModelSettings {
         { cause: error },
       );
     } finally {
+      controller.abort();
       if (sessionId) await client.request("session/close", { sessionId }).catch(() => undefined);
-      await client.close();
+      if (typeof requestDisposable === "function") requestDisposable();
+      else requestDisposable?.dispose();
+      const closed = await client.close();
+      if (!primaryError && (closed.error || closed.close.status !== "resolved")) {
+        throw new BridgeError(
+          "cleanup_failed",
+          closed.close.errorMessage
+            ?? (closed.error instanceof Error ? closed.error.message : "Official Host model catalog cleanup failed."),
+        );
+      }
     }
   }
 
@@ -311,6 +373,49 @@ export class ZCodeModelSettings {
   }
 }
 
+async function handleRuntimeRequest(
+  client: ExternalHostClientHandle,
+  message: unknown,
+  resolveProviderRuntimeAuth: (
+    request: Record<string, unknown>,
+    signal: AbortSignal,
+  ) => Promise<Record<string, unknown>>,
+  signal: AbortSignal,
+): Promise<void> {
+  if (signal.aborted) return;
+  const request = asRecord(message);
+  const id = request.id;
+  if (typeof id !== "string" && typeof id !== "number") return;
+  let reply: Record<string, unknown>;
+  if (request.method === "session/requestRuntimePreferences") {
+    reply = {
+      id,
+      result: {
+        nativeSearchEnhancementsEnabled: false,
+        memoryEnabled: false,
+        askUserQuestionAutoResolutionEnabled: false,
+      },
+    };
+  } else if (request.method === "interaction/requestProviderRuntimeHeaders") {
+    reply = {
+      id,
+      result: await resolveProviderRuntimeAuth(asRecord(request.params), signal).catch(() => ({
+        headersApplied: false,
+        errorMessage: "Provider runtime authorization is unavailable.",
+      })),
+    };
+  } else {
+    reply = {
+      id,
+      error: {
+        code: -32601,
+        message: "Unsupported ZCode app-server request during model catalog read",
+      },
+    };
+  }
+  if (!signal.aborted) await client.respond(reply).catch(() => undefined);
+}
+
 function buildRuntimeChildEnv(config: ZCodeRuntimeConfig, source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env = createMinimalOsEnv(source);
   env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE = config.providerBuiltinConfigFile;
@@ -319,125 +424,6 @@ function buildRuntimeChildEnv(config: ZCodeRuntimeConfig, source: NodeJS.Process
   const dataBaseDir = zcodeDataBaseDir(config.providerPersonalConfigFile);
   if (dataBaseDir) env.ZCODE_DATA_BASE_DIR = dataBaseDir;
   return env;
-}
-
-function startAppServer(config: ZCodeRuntimeConfig, cwd: string, env: NodeJS.ProcessEnv): AppServerProcess {
-  const launch = buildZCodeAppServerLaunch(config.zcodeEntrypoint, env);
-  const child = spawn(config.nodeExecutable, [config.zcodeEntrypoint, ...launch.args], {
-    cwd, env: launch.env, shell: false, windowsHide: true, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"],
-  });
-  const pending = new Map<string | number, PendingRequest>();
-  let stdoutBuffer = "";
-  let stderr = "";
-  let nextId = 0;
-  let closed = false;
-  // ADR-009 spawn-generation continuity: libuv releases the child's native
-  // handle when it delivers 'exit' (before stdio close), so continuity is
-  // tracked from the exit state, never from a close flag. The identity
-  // capture re-verifies the generation after every await and discards
-  // results that raced an exit (a recycled PID's fingerprint must never be
-  // stored as this spawn's identity).
-  let childExitSeen = false;
-  child.once("exit", () => {
-    childExitSeen = true;
-  });
-  const generationChild = {
-    get pid() { return child.pid; },
-    get exitCode() { return child.exitCode; },
-    get signalCode() { return child.signalCode; },
-    get exitSeen() { return childExitSeen; },
-  };
-  let childIdentity: { pid: number; fingerprint: string } | null = null;
-  if (process.platform === "win32" && child.pid) {
-    void captureSpawnGenerationIdentity(generationChild, createPlatformProbe()).then((identity) => {
-      childIdentity = identity;
-    });
-  }
-  child.stdout.setEncoding("utf8");
-  child.stderr.setEncoding("utf8");
-  const write = (message: JsonRecord): void => { child.stdin.write(`${JSON.stringify(message)}\n`); };
-  child.stdout.on("data", (chunk: string) => {
-    stdoutBuffer += chunk;
-    if (stdoutBuffer.length > 2_000_000) stdoutBuffer = stdoutBuffer.slice(-2_000_000);
-    let newline: number;
-    while ((newline = stdoutBuffer.indexOf("\n")) >= 0) {
-      const line = stdoutBuffer.slice(0, newline).trim();
-      stdoutBuffer = stdoutBuffer.slice(newline + 1);
-      if (!line) continue;
-      let message: JsonRecord;
-      try { message = asRecord(JSON.parse(line)); } catch { continue; }
-      if (message.method === "session/requestRuntimePreferences" && (typeof message.id === "string" || typeof message.id === "number")) {
-        write({ id: message.id, result: { nativeSearchEnhancementsEnabled: false, memoryEnabled: false, askUserQuestionAutoResolutionEnabled: false } });
-      } else if (message.method === "interaction/requestProviderRuntimeHeaders" && (typeof message.id === "string" || typeof message.id === "number")) {
-        const params = asRecord(message.params);
-        const selection = asRecord(params.modelSelection);
-        const providerId = typeof selection.providerId === "string" ? selection.providerId : typeof params.providerId === "string" ? params.providerId : undefined;
-        write({ id: message.id, result: runtimeAuthReply(providerId, config) });
-      } else if (message.id !== undefined && message.method === undefined) {
-        const call = pending.get(message.id as string | number);
-        if (!call) continue;
-        clearTimeout(call.timer);
-        pending.delete(message.id as string | number);
-        if (message.error !== undefined) {
-          const error = asRecord(message.error);
-          call.reject(new Error(`ZCode app-server request failed${typeof error.code === "number" ? ` (code ${error.code})` : ""}`));
-        } else call.resolve(message.result);
-      } else if ((typeof message.id === "string" || typeof message.id === "number") && typeof message.method === "string") {
-        write({ id: message.id, error: { code: -32601, message: `Unsupported ZCode app-server request: ${message.method}` } });
-      }
-    }
-  });
-  child.stderr.on("data", (chunk: string) => { if (stderr.length < 64_000) stderr += chunk.slice(0, 64_000 - stderr.length); });
-  child.on("error", (error) => {
-    closed = true;
-    for (const call of pending.values()) {
-      clearTimeout(call.timer);
-      call.reject(error);
-    }
-    pending.clear();
-  });
-  child.on("close", (code, signal) => {
-    closed = true;
-    for (const call of pending.values()) {
-      clearTimeout(call.timer);
-      call.reject(new Error(`ZCode app-server exited (${String(code)}${signal ? `, ${signal}` : ""})`));
-    }
-    pending.clear();
-  });
-  const request = (method: string, params: JsonRecord): Promise<unknown> => {
-    if (closed) return Promise.reject(new Error(`ZCode app-server is closed before ${method}`));
-    const id = ++nextId;
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { pending.delete(id); reject(new Error(`ZCode app-server request timed out: ${method}`)); }, RPC_TIMEOUT_MS);
-      timer.unref();
-      pending.set(id, { resolve, reject, timer });
-      child.stdin.write(`${JSON.stringify({ id, method, params })}\n`, (error) => {
-        if (!error) return;
-        clearTimeout(timer); pending.delete(id); reject(error);
-      });
-    });
-  };
-  const close = async (): Promise<void> => {
-    if (!closed) {
-      child.stdin.end();
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, PROCESS_CLOSE_TIMEOUT_MS);
-        child.once("close", () => { clearTimeout(timer); resolve(); });
-      });
-    }
-    if (child.pid && (!closed || process.platform !== "win32")) {
-      // Windows: only signal while the child is provably on its original
-      // spawn generation; after exit the PID may be recycled and a missing
-      // captured identity is a conservative refusal, never bare-PID trust.
-      if (process.platform === "win32" && !childStillOnSpawnGeneration(generationChild)) return;
-      await terminateProcessTree(child.pid, {
-        graceMs: 500,
-        killWaitMs: 5_000,
-        expectedRootFingerprint: childIdentity?.pid === child.pid ? childIdentity.fingerprint : null,
-      });
-    }
-  };
-  return { child, request, close, get stderr() { return stderr; } };
 }
 
 function toCatalogEntry(value: unknown): ZCodeModelCatalogEntry | null {

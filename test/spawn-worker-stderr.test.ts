@@ -6,6 +6,38 @@ import path from "node:path";
 import test from "node:test";
 import { spawnClaimOnlyWorker } from "../src/manager/spawn-worker.js";
 
+test("production Spawner forwards only recognized credential-free runtime-auth diagnostics", { timeout: 15_000 }, async (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), "bridge-stderr-allowlist-"));
+  const worker = path.join(root, "worker.mjs");
+  const forwarded: string[] = [];
+  writeFileSync(worker, `
+    import { writeSync } from 'node:fs';
+    writeSync(2, '[bridge-worker] runtime-auth {"stage":"resolved"}\\n');
+    writeSync(2, '[bridge-worker] runtime-auth-secret {"token":"must-not-forward"}\\n');
+    writeSync(2, '[bridge-worker] unrelated diagnostic\\n');
+    writeSync(6, JSON.stringify({ ok: true }) + '\\n');
+  `);
+  const child = spawnClaimOnlyWorker(worker, {
+    bridge: { path: null, sha256: null },
+    worker: { path: worker, sha256: null },
+  }, {
+    onWorkerDiagnosticLine: (line) => forwarded.push(line),
+  });
+  const closed = once(child, "close");
+  t.after(async () => {
+    if (child.exitCode === null && child.signalCode === null) child.kill();
+    await closed;
+    rmSync(root, { recursive: true, force: true });
+  });
+  const frames: Buffer[] = [];
+  for await (const chunk of child.resultChannel!) frames.push(Buffer.from(chunk));
+  assert.deepEqual(JSON.parse(Buffer.concat(frames).toString("utf8")), { ok: true });
+  const [code, signal] = await closed;
+  assert.equal(code, 0);
+  assert.equal(signal, null);
+  assert.deepEqual(forwarded, ['[bridge-worker] runtime-auth {"stage":"resolved"}']);
+});
+
 for (const interactionChannel of [false, true]) {
   for (const exitCode of [0, 23]) {
     test(`production Spawner drains stderr before Result and exit ${exitCode} (interaction=${interactionChannel})`, { timeout: 15_000 }, async (t) => {

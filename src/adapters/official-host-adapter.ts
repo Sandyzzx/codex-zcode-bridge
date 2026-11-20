@@ -3,21 +3,31 @@ import { createReadStream } from "node:fs";
 import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import type { RuntimeResolver, ZCodeRuntimeConfig } from "../interfaces.js";
+import type { RuntimeResolver } from "../interfaces.js";
 import {
   withOfficialHostLaunchIdentity,
 } from "../runtime/desktop-host-launch.js";
 import { BridgeError } from "../runtime/errors.js";
-import { NodeRuntimeResolver } from "../runtime/resolver.js";
+import type { RuntimeResolverOptions } from "../runtime/resolver.js";
 import {
-  ZCodeAppServerAdapter,
+  OfficialAppServerRuntimeResolver,
+  type OfficialAppServerRuntimeDescriptor,
+  type OfficialProviderRuntimeCapability,
+} from "../runtime/official-app-server-runtime.js";
+import {
   type AdapterClientProcess,
   type AdapterCloseDiagnostic,
   type AdapterRecordedTreeScan,
   type AppServerCloseResult,
   type ExternalHostClientFactory,
+  type ExternalHostClientFactoryContext,
   type ExternalHostClientHandle,
-  type ZCodeAppServerAdapterOptions,
+} from "./zcode-app-server-adapter.js";
+
+export type {
+  ExternalHostClientFactory,
+  ExternalHostClientFactoryContext,
+  ExternalHostClientHandle,
 } from "./zcode-app-server-adapter.js";
 
 export const OFFICIAL_HOST_TRANSPORT_MAX_FRAME_BYTES = 16 * 1024 * 1024;
@@ -36,16 +46,6 @@ const OFFICIAL_HOST_ASSETS = {
     relativePath: "official-host-runtime.mjs",
     bytes: 1_829_872,
     sha256: "7E2B8B772F1DD83135903B64D569D634C7E7FC6F303460E08C98E27D311B6A91",
-  },
-  appServerEntry: {
-    relativePath: "app-server/zcode.cjs",
-    bytes: 31_009_692,
-    sha256: "B55BA68C3B7939AFAFFB4D373D15594817AD3319FDECFBE26640CE4B218CF639",
-  },
-  builtinProviderConfig: {
-    relativePath: "app-server/provider/zcode-builtin.json",
-    bytes: 265_884,
-    sha256: "BC760A3B0C6D096EA07EE4E963471F135AE75AB207DB6ED4C372E1B183C856CD",
   },
   runtimeHost: {
     relativePath: "zcode-runtime-host.exe",
@@ -83,12 +83,154 @@ export interface OfficialHostAssets {
   readonly manifestDigest: string;
 }
 
+export interface OfficialHostPackagedAssets {
+  readonly root: string;
+  readonly hostModulePath: string;
+  readonly runtimeHostPath: string;
+  readonly manifestDigest: string;
+}
+
+export interface OfficialInstalledRuntimeResolver extends RuntimeResolver {
+  inspect(): Promise<OfficialAppServerRuntimeDescriptor>;
+}
+
+export interface OfficialHostSessionFactoryOptions {
+  readonly officialRuntimeResolver?: OfficialInstalledRuntimeResolver;
+  readonly env?: NodeJS.ProcessEnv;
+  readonly homeDir?: string;
+  readonly host?: RuntimeResolverOptionsHost;
+  readonly providerCapability?: OfficialProviderRuntimeCapability;
+  readonly testOnlyOfficialHostModule?: OfficialHostModuleSource;
+  /** Worker-shaped URL used to resolve the shipped Host module. */
+  readonly workerModuleUrl?: string | URL;
+  readonly testOnlyOfficialHostPackagedAssets?: OfficialHostPackagedAssets;
+  readonly onVerified?: (descriptor: OfficialAppServerRuntimeDescriptor) => void;
+  readonly onUnverified?: (
+    descriptor: OfficialAppServerRuntimeDescriptor,
+    reason: string,
+  ) => void;
+}
+
+export interface OfficialHostSessionFactory {
+  readonly resolver: OfficialInstalledRuntimeResolver;
+  inspect(): Promise<OfficialAppServerRuntimeDescriptor>;
+  createClient(context: ExternalHostClientFactoryContext): Promise<ExternalHostClientHandle>;
+}
+
+type RuntimeResolverOptionsHost = NonNullable<RuntimeResolverOptions["host"]>;
+
 export interface OfficialHostModule {
   readonly ZCODE_PRODUCT_VERSION?: string;
   readonly ZCodeAgentProcessManager: new (options: Record<string, unknown>) => OfficialHostProcessManager;
   readonly ZCodeProtocolClient: new (...args: never[]) => OfficialHostProtocolClient;
   readonly createOAuthProviderRuntimeAuthService?: OfficialHostRuntimeAuthServiceFactory;
   readonly createOfficialStartPlanAuthenticationResolver?: OfficialStartPlanAuthenticationResolverFactory;
+}
+
+/**
+ * The single production composition point for installed Official AppServer
+ * sessions. Task adapters and the model catalog share this resolver, packaged
+ * Official Host module, ProcessManager, ProtocolClient, and close ownership.
+ */
+export function createInstalledOfficialHostSessionFactory(
+  options: OfficialHostSessionFactoryOptions = {},
+): OfficialHostSessionFactory {
+  const providerCapability = options.providerCapability ?? "installed_runtime";
+  const resolver = options.officialRuntimeResolver
+    ?? new OfficialAppServerRuntimeResolver({
+      env: options.env,
+      ...(options.homeDir ? { homeDir: options.homeDir } : {}),
+      ...(options.host ? { host: options.host } : {}),
+    });
+  let packagedAssetsPromise: Promise<OfficialHostPackagedAssets> | undefined;
+  const packagedAssets = (): Promise<OfficialHostPackagedAssets> =>
+    packagedAssetsPromise ??= options.testOnlyOfficialHostPackagedAssets
+      ? Promise.resolve(options.testOnlyOfficialHostPackagedAssets)
+      : verifyOfficialHostAssets(options.workerModuleUrl);
+  const moduleSource: OfficialHostModuleSource = options.testOnlyOfficialHostModule
+    ?? (async () => loadOfficialHostModule((await packagedAssets()).hostModulePath));
+  let resolved: Promise<{
+    readonly descriptor: OfficialAppServerRuntimeDescriptor;
+    readonly assets: OfficialHostAssets;
+  }> | undefined;
+
+  const inspect = (): Promise<OfficialAppServerRuntimeDescriptor> =>
+    resolver.inspect();
+
+  const resolveAssets = (): Promise<{
+    readonly descriptor: OfficialAppServerRuntimeDescriptor;
+    readonly assets: OfficialHostAssets;
+  }> => {
+    resolved ??= Promise.all([resolver.inspect(), packagedAssets()]).then(([descriptor, packaged]) => {
+      const capabilityFailure = officialProviderCapabilityFailure(descriptor, providerCapability);
+      const missingRuntimeAsset = !descriptor.bundle_path
+        || !descriptor.builtin_provider_config_path
+        || !descriptor.runtime_host_path;
+      if (capabilityFailure || missingRuntimeAsset) {
+        const failure = capabilityFailure
+          ?? "OFFICIAL_RUNTIME_UNVERIFIED: installed runtime descriptor is missing required assets";
+        try {
+          options.onUnverified?.(descriptor, failure);
+        } catch {
+          // Observation cannot alter the fail-closed decision.
+        }
+        throw new BridgeError("provider_config_invalid", failure);
+      }
+      return {
+        descriptor,
+        assets: {
+          root: descriptor.install_dir!,
+          hostModulePath: packaged.hostModulePath,
+          appServerEntryPath: descriptor.bundle_path,
+          builtinProviderConfigPath: descriptor.builtin_provider_config_path,
+          runtimeHostPath: descriptor.runtime_host_path,
+          manifestDigest: descriptor.bundle_sha256!,
+        },
+      };
+    });
+    return resolved;
+  };
+
+  const factory = createOfficialHostClientFactory({
+    assets: async () => (await resolveAssets()).assets,
+    moduleSource,
+  });
+  return {
+    resolver,
+    inspect,
+    createClient: async (context) => {
+      const runtime = await resolveAssets();
+      const client = await factory(context);
+      try {
+        options.onVerified?.(runtime.descriptor);
+      } catch {
+        // Observation cannot alter the runtime or cleanup ownership.
+      }
+      return client;
+    },
+  };
+}
+
+export function officialProviderCapabilityFailure(
+  descriptor: OfficialAppServerRuntimeDescriptor,
+  capability: OfficialProviderRuntimeCapability,
+): string | null {
+  if (descriptor.status !== "OFFICIAL_RUNTIME_VERIFIED") {
+    return `OFFICIAL_RUNTIME_UNVERIFIED: ${descriptor.reason ?? "installed Official AppServer is unavailable"}`;
+  }
+  if (capability === "coding_plan_discount") {
+    return descriptor.discount_capability === "OFFICIAL_DISCOUNT_VERIFIED"
+      ? null
+      : `OFFICIAL_RUNTIME_UNVERIFIED: ${descriptor.reason ?? "installed runtime has no verified Coding Plan discount capability"}; ` +
+        "OFFICIAL_DISCOUNT_NOT_VERIFIED";
+  }
+  if (capability === "start_plan_static") {
+    return descriptor.start_plan_static_compatibility === "OFFLINE_COMPATIBLE"
+      ? null
+      : `STARTPLAN_RUNTIME_INCOMPATIBLE: ${descriptor.reason ?? "installed runtime is not offline-compatible with Start Plan"}; ` +
+        `START_PLAN_COMPATIBILITY_${descriptor.start_plan_static_compatibility ?? "UNVERIFIED"}`;
+  }
+  return null;
 }
 
 export type OfficialHostModuleSource =
@@ -186,54 +328,6 @@ interface ExitState {
   readonly signal: NodeJS.Signals | null;
 }
 
-export interface OfficialHostAdapterOptions extends ZCodeAppServerAdapterOptions {
-  /** Exists only for isolated tests and never consulted by the Worker wiring. */
-  readonly testOnlyOfficialHostModule?: OfficialHostModuleSource;
-  /** Resolves test assets relative to a Worker-shaped module URL. */
-  readonly testOnlyWorkerModuleUrl?: string | URL;
-}
-
-/**
- * Production adapter for the existing `zcode_app_server` mode. The upstream
- * module and AppServer/helper assets are selected from this Worker's shipped
- * tree; no environment variable or persisted setting can redirect them.
- */
-export class OfficialHostAdapter extends ZCodeAppServerAdapter {
-  constructor(options: OfficialHostAdapterOptions = {}) {
-    const assets = options.testOnlyWorkerModuleUrl
-      ? lazyOfficialHostAssets(options.testOnlyWorkerModuleUrl)
-      : lazyOfficialHostAssets();
-    const baseEnv = options.childEnvBase ?? process.env;
-    const fixedResolver: RuntimeResolver = {
-      resolve: async () => {
-        const verified = await assets();
-        const resolver = options.resolver ?? new NodeRuntimeResolver({
-          env: {
-            ...baseEnv,
-            ZCODE_BRIDGE_ZCODE_CJS: verified.appServerEntryPath,
-            ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: verified.builtinProviderConfigPath,
-          },
-          homeDir: options.homeDir,
-          host: options.host,
-        });
-        const config = await resolver.resolve();
-        return fixedOfficialRuntimeConfig(config, verified);
-      },
-    };
-    const moduleSource = options.testOnlyOfficialHostModule
-      ?? (async () => loadOfficialHostModule((await assets()).hostModulePath));
-    super({
-      ...options,
-      resolver: fixedResolver,
-      providerRetryLimit: 0,
-      externalHostClientFactory: createOfficialHostClientFactory({
-        assets,
-        moduleSource,
-      }),
-    });
-  }
-}
-
 export function createOfficialHostClientFactory(input: {
   readonly assets: () => Promise<OfficialHostAssets>;
   readonly moduleSource: OfficialHostModuleSource;
@@ -244,7 +338,7 @@ export function createOfficialHostClientFactory(input: {
       throw new BridgeError("runtime_not_found", "The fixed Official Host bundle is available only for Windows x64.");
     }
     if (path.resolve(context.config.zcodeEntrypoint) !== path.resolve(assets.appServerEntryPath)) {
-      throw new BridgeError("provider_config_invalid", "Official Host runtime entrypoint must be the shipped bundle.");
+      throw new BridgeError("provider_config_invalid", "Official Host runtime entrypoint must be the verified installed bundle.");
     }
     const module = await resolveOfficialHostModule(input.moduleSource);
     const productVersion = normalizeOfficialHostProductVersion(module.ZCODE_PRODUCT_VERSION);
@@ -520,8 +614,8 @@ export async function loadOfficialHostProductVersion(
 
 export function lazyOfficialHostAssets(
   workerModuleUrl: string | URL = import.meta.url,
-): () => Promise<OfficialHostAssets> {
-  let pending: Promise<OfficialHostAssets> | undefined;
+): () => Promise<OfficialHostPackagedAssets> {
+  let pending: Promise<OfficialHostPackagedAssets> | undefined;
   return () => {
     pending ??= verifyOfficialHostAssets(workerModuleUrl);
     return pending;
@@ -530,7 +624,7 @@ export function lazyOfficialHostAssets(
 
 export async function verifyOfficialHostAssets(
   workerModuleUrl: string | URL = import.meta.url,
-): Promise<OfficialHostAssets> {
+): Promise<OfficialHostPackagedAssets> {
   const workerUrl = workerModuleUrl instanceof URL ? workerModuleUrl : new URL(workerModuleUrl);
   const root = fileURLToPath(new URL(`${OFFICIAL_HOST_ASSET_RELATIVE_ROOT}/`, workerUrl));
   let rootReal: string;
@@ -572,8 +666,6 @@ export async function verifyOfficialHostAssets(
   return {
     root: rootReal,
     hostModulePath: verified.get("hostModule")!,
-    appServerEntryPath: verified.get("appServerEntry")!,
-    builtinProviderConfigPath: verified.get("builtinProviderConfig")!,
     runtimeHostPath: verified.get("runtimeHost")!,
     manifestDigest,
   };
@@ -590,17 +682,6 @@ async function resolveOfficialHostModule(source: OfficialHostModuleSource): Prom
     throw new BridgeError("provider_config_invalid", "The Official Host module is missing required exports.");
   }
   return value;
-}
-
-function fixedOfficialRuntimeConfig(
-  configured: ZCodeRuntimeConfig,
-  assets: OfficialHostAssets,
-): ZCodeRuntimeConfig {
-  return {
-    ...configured,
-    zcodeEntrypoint: assets.appServerEntryPath,
-    providerBuiltinConfigFile: assets.builtinProviderConfigPath,
-  };
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

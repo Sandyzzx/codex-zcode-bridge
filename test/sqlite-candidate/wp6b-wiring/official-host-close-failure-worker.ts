@@ -6,6 +6,7 @@ import {
   ZCodeAgentProcessManager as LoopbackProcessManager,
   ZCodeProtocolClient,
 } from "./official-host-loopback-module.js";
+import { createTestOnlyInstalledRuntime } from "./test-only-installed-runtime.js";
 
 class CloseFailureProcessManager extends LoopbackProcessManager {
   override async disposeWorkspace(): Promise<void> {
@@ -17,6 +18,7 @@ class CloseFailureProcessManager extends LoopbackProcessManager {
 }
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
+const installedRuntime = createTestOnlyInstalledRuntime();
 await runWorkerMain({
   testOnlyOfficialHostModule: {
     ZCODE_PRODUCT_VERSION: "3.18.2",
@@ -30,6 +32,8 @@ await runWorkerMain({
     "worker",
     "worker-main.mjs",
   )),
+  testOnlyOfficialRuntimeResolver: installedRuntime.resolver,
+  testOnlyOfficialHostAssets: installedRuntime.assets,
   testOnlyProbe: createPlatformProbe({ timeoutMs: 10_000 }),
   testOnlyVerifyTreeClean: async (targets) => ({
     clean: true,

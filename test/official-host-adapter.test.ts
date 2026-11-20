@@ -15,7 +15,7 @@ import {
 } from "../src/adapters/zcode-app-server-adapter.js";
 import {
   OFFICIAL_HOST_TRANSPORT_MAX_FRAME_BYTES,
-  OfficialHostAdapter,
+  createInstalledOfficialHostSessionFactory,
   createOfficialHostClientFactory,
   loadOfficialHostProductVersion,
   verifyOfficialHostAssets,
@@ -25,10 +25,10 @@ import {
 import type { BrowserBackendDescriptor } from "../src/browser/backend.js";
 import type { BrowserControlPort } from "../src/browser/contracts.js";
 import type { BrowserCommandResult } from "../src/browser/result.js";
-import type { AgentHandle, TaskPackage, WorkspaceRef, ZCodeRuntimeConfig } from "../src/interfaces.js";
+import type { TaskPackage, WorkspaceRef, ZCodeRuntimeConfig } from "../src/interfaces.js";
+import { testOnlyRuntimeAuthReply } from "../src/runtime/account-provider.js";
 import { BridgeError } from "../src/runtime/errors.js";
 import type { ProcessProbe } from "../src/runtime/process-probe.js";
-import { readOfficialCliVersion } from "../src/runtime/start-plan-production-auth.js";
 import { fakeConfig, makeTask, makeTempDir, removeTempDir, validReport } from "./helpers.js";
 
 const SESSION_ID = "sess_official_11111111-aaaa-4bbb-8ccc-cccccccccccc";
@@ -602,6 +602,117 @@ test("runtime preferences, permissions, user input, provider headers, and browse
   assert.equal((byId.get("browser-exec")?.result as { ok?: boolean }).ok, true);
 });
 
+test("production Official Host runtime auth fails closed when the resolver is missing or rejects", async () => {
+  const root = await makeTempDir("official-host-runtime-auth-closed");
+  try {
+    const builtin = path.join(root, "builtin.json");
+    const personal = path.join(root, ".zcode", "v2", "provider_config.json");
+    await mkdir(path.dirname(personal), { recursive: true });
+    await writeFile(builtin, JSON.stringify({
+      revision: 1,
+      config: { providerConfigRules: { providerRules: [{
+        providerId: "account:bigmodel-individual-coding-plan",
+        config: {
+          builtinModelIds: ["GLM-5.3-Flash"],
+          access: { type: "zhipu-account", mode: "individual-coding-plan", accountType: "bigmodel" },
+        },
+      }] } },
+    }), "utf8");
+    await writeFile(personal, JSON.stringify({ config: { providerConfigRules: { providerRules: [] } } }), "utf8");
+    await writeFile(path.join(root, ".zcode", "v2", "config.json"), JSON.stringify({
+      provider: {
+        "builtin:bigmodel-coding-plan": {
+          enabled: true,
+          options: { apiKey: "synthetic-persisted-coding-plan-key" },
+        },
+      },
+    }), "utf8");
+    await writeFile(path.join(root, ".zcode", "v2", "coding-plan-cache.json"), JSON.stringify({
+      entryStatus: {
+        items: {
+          "builtin:bigmodel-coding-plan": { status: "available" },
+        },
+      },
+    }), "utf8");
+    const config: ZCodeRuntimeConfig = {
+      ...fakeConfig(),
+      providerBuiltinConfigFile: builtin,
+      providerPersonalConfigFile: personal,
+      zcodeDataRoot: path.join(root, ".zcode"),
+    };
+    assert.deepEqual(
+      testOnlyRuntimeAuthReply("account:bigmodel-individual-coding-plan", config),
+      {
+        headersApplied: true,
+        requestAuth: { apiKey: "synthetic-persisted-coding-plan-key" },
+      },
+    );
+
+    for (const scenario of ["missing", "reject", "static-flag"] as const) {
+      exitState = { code: null, signal: null };
+      const host = new FakeExternalHost();
+      host.model = {
+        providerId: "account:bigmodel-individual-coding-plan",
+        modelId: "GLM-5.3-Flash",
+        options: { reasoningLevel: "low" },
+      };
+      host.onSend = () => {
+        host.startTurn();
+        host.emitRequest({
+          id: "provider-auth",
+          method: "interaction/requestProviderRuntimeHeaders",
+          params: {
+            sessionId: SESSION_ID,
+            turnId: TURN_ID,
+            providerId: "account:bigmodel-individual-coding-plan",
+            modelSelection: {
+              providerId: "account:bigmodel-individual-coding-plan",
+              modelId: "GLM-5.3-Flash",
+            },
+            accountAccess: {
+              type: "zhipu-account",
+              accountType: "bigmodel",
+              mode: "individual-coding-plan",
+              entitled: true,
+            },
+          },
+        }, () => host.complete());
+      };
+      const { outcome } = await runToResult(host, {
+        task: taskWithModel({
+          provider_id: "account:bigmodel-individual-coding-plan",
+          model_id: "GLM-5.3-Flash",
+        }),
+        adapter: {
+          resolver: { resolve: async () => config },
+          homeDir: root,
+          ...(scenario === "reject"
+            ? {
+                resolveProviderRuntimeAuth: async () => {
+                  throw new Error("synthetic resolver rejection");
+                },
+              }
+            : {}),
+          ...(scenario === "static-flag"
+            ? { testOnlyAllowDirectAppServer: true as const }
+            : {}),
+        },
+      });
+      assert.equal(outcome.exitCode, 0);
+      const result = host.responses.find((message) => message.id === "provider-auth")?.result as Record<string, unknown>;
+      assert.deepEqual(result, {
+        headersApplied: false,
+        errorMessage: "Provider runtime authorization is unavailable.",
+      });
+      assert.equal("requestAuth" in result, false);
+      assert.equal(JSON.stringify(host.responses).includes("synthetic-persisted-coding-plan-key"), false);
+      assert.equal(JSON.stringify(host.responses).includes("synthetic resolver rejection"), false);
+    }
+  } finally {
+    await removeTempDir(root);
+  }
+});
+
 test("private Start Plan auth rejects a foreign turn and injects the secret only into the exact accepted turn", async () => {
   exitState = { code: null, signal: null };
   const root = await makeTempDir("official-host-start-plan");
@@ -1010,12 +1121,10 @@ test("production asset verification fails closed for absent and invalid shipped 
       "official-host",
       "win32-x64-node24.16.0-zcode3.18.2-fec97590",
     );
-    await mkdir(path.join(vendor, "app-server", "provider"), { recursive: true });
+    await mkdir(vendor, { recursive: true });
     await writeFile(invalidWorker, "", "utf8");
     await Promise.all([
       writeFile(path.join(vendor, "official-host-runtime.mjs"), "wrong", "utf8"),
-      writeFile(path.join(vendor, "app-server", "zcode.cjs"), "wrong", "utf8"),
-      writeFile(path.join(vendor, "app-server", "provider", "zcode-builtin.json"), "wrong", "utf8"),
       writeFile(path.join(vendor, "zcode-runtime-host.exe"), "wrong", "utf8"),
     ]);
     await assert.rejects(
@@ -1027,7 +1136,7 @@ test("production asset verification fails closed for absent and invalid shipped 
   }
 });
 
-test("OfficialHostAdapter is lazy before execution and resolves the test source tree through the Worker-shaped URL", {
+test("installed Official Host session composition is lazy and resolves the packaged module through the Worker-shaped URL", {
   skip: !OFFICIAL_HOST_SUPPORTED,
 }, async () => {
   let moduleCalls = 0;
@@ -1038,28 +1147,46 @@ test("OfficialHostAdapter is lazy before execution and resolves the test source 
     "worker",
     "worker-main.mjs",
   ));
-  const adapter = new OfficialHostAdapter({
-    testOnlyWorkerModuleUrl: workerUrl,
+  const factory = createInstalledOfficialHostSessionFactory({
+    officialRuntimeResolver: {
+      resolve: async () => fakeConfig(),
+      inspect: async () => ({
+        status: "OFFICIAL_RUNTIME_VERIFIED",
+        discount_capability: "OFFICIAL_DISCOUNT_VERIFIED",
+        start_plan_static_compatibility: "OFFLINE_COMPATIBLE",
+        reason: null,
+        install_dir: path.dirname(process.execPath),
+        install_source: "test",
+        desktop_version: "3.18.2.10443",
+        bundle_path: path.join(process.cwd(), "installed-zcode.cjs"),
+        bundle_bytes: 1,
+        bundle_sha256: "a".repeat(64),
+        builtin_provider_config_path: path.join(process.cwd(), "installed-builtin.json"),
+        builtin_provider_config_bytes: 1,
+        builtin_provider_config_sha256: "b".repeat(64),
+        runtime_host_path: path.join(process.cwd(), "installed-runtime-host.exe"),
+        runtime_host_bytes: 1,
+        runtime_host_sha256: "c".repeat(64),
+        node_executable: process.execPath,
+        node_version: "24.16.0",
+        node_compatible: true,
+        manifest: null,
+      }),
+    },
+    workerModuleUrl: workerUrl,
     testOnlyOfficialHostModule: async () => {
       moduleCalls += 1;
       throw new Error("module should not be invoked by status");
     },
   });
-  const handle: AgentHandle = {
-    taskId: "not_started",
-    attempt: 1,
-    workerPid: process.pid,
-    zcodePid: null,
-    startedAt: new Date().toISOString(),
-  };
-  await assert.rejects(adapter.getStatus(handle), /unknown agent handle/u);
+  await factory.inspect();
   assert.equal(moduleCalls, 0);
 
   const assets = await verifyOfficialHostAssets(workerUrl);
   assert.equal(path.basename(assets.hostModulePath), "official-host-runtime.mjs");
   assert.equal(assets.manifestDigest.length, 64);
+  assert.equal(path.basename(assets.runtimeHostPath), "zcode-runtime-host.exe");
   assert.equal(await loadOfficialHostProductVersion(workerUrl), "3.18.2");
-  assert.equal(await readOfficialCliVersion(assets.appServerEntryPath), "0.17.1");
 });
 
 test("the shipped host module applies the exact 16 MiB transport frame limit and fails closed above it", {
@@ -1149,7 +1276,7 @@ test("the shipped Host exports and native keyring closure load outside the build
     else assert.equal(typeof module[name], "function", `${name} must be exported`);
   }
 
-  const artifactRequire = createRequire(path.join(assets.root, "app-server", "zcode.cjs"));
+  const artifactRequire = createRequire(assets.hostModulePath);
   const keyring = artifactRequire(path.join(assets.root, "node_modules", "@napi-rs", "keyring")) as {
     readonly Entry?: unknown;
   };
