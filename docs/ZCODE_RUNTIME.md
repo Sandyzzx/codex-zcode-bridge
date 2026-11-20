@@ -3,7 +3,7 @@
 > Status: AUTHORITATIVE
 > Last updated: 2026-11-20（ADR-042 Unknown Runtime Experimental Authorization）
 > Last verified: 2026-11-20，核对 3.19.0.10774 安装安全检查、完整指纹、授权 scope、无授权/有授权 resolver 状态、零模型协议 Smoke；3.18.2 精确 Manifest 兼容继续由合成回归覆盖，但本机新鲜 3.18.2 实机 E2E 为 `NOT_RUN`。
-> Verified against: ADR-042 implementation `15abe6becb13f383fee676a4ae20510d51f817fc`（tree `654cda65168ece915251305522db6ce603e23ad7`）；release baseline `aedeb2c2a1ea6f41ea3ac2d045f7ed0d75281552`
+> Verified against: ADR-042 implementation `15abe6becb13f383fee676a4ae20510d51f817fc`；authorization env forwarding `0e7134701d643c7b80def4e3cb80c95c63e34691`（tree `ec63f443cce54bad986eb47ab1b6274c604dcbfe`）；release baseline `aedeb2c2a1ea6f41ea3ac2d045f7ed0d75281552`
 
 当前生产路径是 `node <installed-runtime>/resources/glm/zcode.cjs app-server --stdio --surface desktop`，不是历史 CLI `--prompt --json`。任务 Adapter 与模型目录探测共用 `createInstalledOfficialHostSessionFactory` 的同一启动合同；安装版兼容性由 `OfficialAppServerRuntimeResolver` 精确校验，配置项与用户设置方法见仓库 README。
 
@@ -32,6 +32,8 @@ exact fingerprint authorized
 Desktop EXE、ASAR、签名 thumbprint 或 Node 版本变化都会使旧授权失效。
 授权文件必须为绝对普通文件、合法 JSON、无重复记录、最大 64 KiB；未知 scope
 或 malformed record 直接 fail closed。
+`ZCODE_BRIDGE_EXPERIMENTAL_RUNTIME_AUTHORIZATION_FILE` 是显式非秘密配置键，
+会随 detached Worker 环境转发；不得依赖 Worker 默认设置目录猜测用户选择。
 
 Provider scope 独立：
 

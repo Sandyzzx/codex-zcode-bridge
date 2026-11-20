@@ -3,7 +3,7 @@
 > Status: AUTHORITATIVE
 > Last updated: 2026-11-20（ADR-042 Unknown Runtime Experimental Authorization）
 > Last verified: 2026-11-20，核对未知安装安全检查、精确指纹授权、Provider scope、3.19 零模型协议 Smoke、Coding Plan 单次真实执行、Start Plan 空权益阻断与定向测试；Billing 倍率保持 INCONCLUSIVE。
-> Verified against: ADR-042 implementation `15abe6becb13f383fee676a4ae20510d51f817fc`（tree `654cda65168ece915251305522db6ce603e23ad7`）；release baseline `aedeb2c2a1ea6f41ea3ac2d045f7ed0d75281552`
+> Verified against: ADR-042 implementation `15abe6becb13f383fee676a4ae20510d51f817fc`；authorization env forwarding `0e7134701d643c7b80def4e3cb80c95c63e34691`（tree `ec63f443cce54bad986eb47ab1b6274c604dcbfe`）；release baseline `aedeb2c2a1ea6f41ea3ac2d045f7ed0d75281552`
 
 当前发布状态：
 

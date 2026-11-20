@@ -6,8 +6,9 @@
 > Worktree: `D:\codex-zcode-bridge\.run\zcode-3190-compat-20261120`
 > Baseline: `aedeb2c2a1ea6f41ea3ac2d045f7ed0d75281552` (`origin/preview`)
 > Primary implementation commit: `aa755239645b355eb63288473567eb96de2bcd66`
-> Final code commit: `15abe6becb13f383fee676a4ae20510d51f817fc`
-> Final code tree: `654cda65168ece915251305522db6ce603e23ad7`
+> ADR-042 implementation commit: `15abe6becb13f383fee676a4ae20510d51f817fc`
+> Runtime authorization env forwarding: `0e7134701d643c7b80def4e3cb80c95c63e34691`
+> Runtime authorization env forwarding tree: `ec63f443cce54bad986eb47ab1b6274c604dcbfe`
 
 ## 1. 结论
 
@@ -48,6 +49,10 @@ OTHER_PROVIDER_LIVE_PROBE:       NOT_RUN
 
 授权文件默认可从
 `ZCODE_BRIDGE_EXPERIMENTAL_RUNTIME_AUTHORIZATION_FILE` 指向的绝对路径读取。
+该非秘密配置键也进入 detached Worker 的显式环境转发白名单；否则只在父进程
+环境设置路径时，真实 Worker 会错误地退回默认设置目录并以
+`EXPERIMENTAL_AUTHORIZATION_REQUIRED` 失败。该修复由
+`0e7134701d643c7b80def4e3cb80c95c63e34691` 引入，并由 `child-env` 回归覆盖。
 本地授权工具：
 
 ```powershell
@@ -230,7 +235,7 @@ fec975905a2abd4c07e35c40d51fa097a2258ec9
 | Generated Artifacts | PASS，12 个文件均为最新 |
 | Clean Entrypoints | 4/4 PASS |
 | Affected selector | `FULL_SUITE` |
-| `test:affected` full-suite run | 961 tests / 959 PASS / 0 FAIL / 2 SKIP |
+| `test:affected` full-suite run after `0e7134701` | 961 tests / 959 PASS / 0 FAIL / 2 SKIP |
 | `test:full` | 961 tests / 959 PASS / 0 FAIL / 2 SKIP |
 | `git diff --check` | PASS |
 | Real zero-model protocol smoke | PASS |
@@ -281,6 +286,8 @@ fec975905a2abd4c07e35c40d51fa097a2258ec9
   完整 Desktop `ZCode.exe` 和 `app.asar`，因此不能把它与 3.19.0 Desktop
   混合成安装，也没有把它冒充成独立 3.18.2 生产安装。本轮 3.18.2 兼容性
   结论仍只来自原有精确 Manifest、历史证据和合成回归，不是新鲜实机 E2E。
+- Owner 已确认当前机器只有已安装的 ZCode 3.19，没有 3.18；因此不再寻找或
+  拼装 3.18 安装，也不把历史 3.18 制品与 3.19 Desktop 混用。
 - 唯一一次 3.19.0 Coding Plan 真实验证发生时，runner marker 转发修复尚未
   落地，因此该历史请求的运行证据为 `UNVERIFIED`；最终 marker 路径由合成
   测试覆盖，没有为了重复 marker 再发真实请求。
@@ -337,6 +344,7 @@ ZCODE_3_18_2_FRESH_REAL_E2E: NOT_RUN
 ZCODE_3_18_2_CODE_COMPATIBILITY: PASS / SYNTHETIC
 SOURCE_EQUIVALENCE: UNKNOWN
 UPSTREAM_PENDING: PRESERVED
+RUNTIME_AUTHORIZATION_ENV_FORWARDING: PASS
 
 TYPE_CHECK: PASS
 TARGETED_TESTS: 22/22 PASS

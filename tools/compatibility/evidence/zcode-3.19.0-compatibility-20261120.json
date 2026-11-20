@@ -3,15 +3,16 @@
   "kind": "zcode_unknown_runtime_compatibility_evidence",
   "goal": "ZCODE_3_19_0_ADAPTATION_WITH_3_18_COMPATIBILITY",
   "captured_at": "2026-11-20T07:43:06.169Z",
-  "last_updated_at": "2026-11-20T08:41:35.996Z",
+  "last_updated_at": "2026-11-20T09:18:54.836Z",
   "repository": {
     "root": "D:\\codex-zcode-bridge",
     "worktree": "D:\\codex-zcode-bridge\\.run\\zcode-3190-compat-20261120",
     "branch": "codex/zcode-3190-compat-20261120",
     "baseline_commit": "aedeb2c2a1ea6f41ea3ac2d045f7ed0d75281552",
     "primary_implementation_commit": "aa755239645b355eb63288473567eb96de2bcd66",
-    "final_code_commit": "15abe6becb13f383fee676a4ae20510d51f817fc",
-    "final_code_tree": "654cda65168ece915251305522db6ce603e23ad7",
+    "adr_042_implementation_commit": "15abe6becb13f383fee676a4ae20510d51f817fc",
+    "runtime_authorization_env_forwarding_commit": "0e7134701d643c7b80def4e3cb80c95c63e34691",
+    "runtime_authorization_env_forwarding_tree": "ec63f443cce54bad986eb47ab1b6274c604dcbfe",
     "remote": "origin/preview"
   },
   "unknown_runtime_policy": {
@@ -190,6 +191,7 @@
     "A verified historical 3.18.2 AppServer/Host artifact exists, but no matching full Desktop installation or ZCode.exe/app.asar pair was found; it was not mixed with 3.19.0, so fresh real 3.18.2 E2E remains NOT_RUN.",
     "The single real 3.19.0 Coding Plan request predates the final experimental runtime marker forwarding fix; that run remains UNVERIFIED while the final marker path has synthetic coverage.",
     "The official Start Plan billing response contains no active plan; the Owner directed Start Plan testing to be deferred until a plan is available.",
+    "The Owner confirmed that the current machine has only the installed ZCode 3.19.0 installation and no 3.18 installation; historical 3.18 artifacts were not mixed with the 3.19 Desktop.",
     "Other Provider live probes were not run."
   ],
   "remaining_risks": [
@@ -199,7 +201,7 @@
     "Experimental authorization permits bounded probes but does not relax signer, fingerprint, Provider-scope or lifecycle safety gates."
   ],
   "validation": {
-    "final_validated_at": "2026-11-20T08:33:15.316Z",
+    "final_validated_at": "2026-11-20T09:18:54.836Z",
     "typecheck": "PASS",
     "targeted_runtime_provider_tests": {
       "status": "PASS",
@@ -223,6 +225,21 @@
       "failed": 0
     },
     "affected_test_selection": "FULL_SUITE",
+    "runtime_authorization_env_forwarding": {
+      "status": "PASS",
+      "commit": "0e7134701d643c7b80def4e3cb80c95c63e34691",
+      "test_file": "test/child-env.test.ts",
+      "passed": 3,
+      "failed": 0
+    },
+    "test_affected": {
+      "status": "PASS",
+      "tests": 961,
+      "passed": 959,
+      "failed": 0,
+      "skipped": 2,
+      "duration_ms": 1380680.7143
+    },
     "test_full": {
       "status": "PASS",
       "tests": 961,
