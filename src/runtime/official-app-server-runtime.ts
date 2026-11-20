@@ -559,11 +559,11 @@ export class OfficialAppServerRuntimeResolver implements RuntimeResolver {
           authorizationHost.settingsDirectory,
           "experimental-runtime-authorization.json",
         );
+    // Capability probes may simulate Windows, but the authorization file is host-local.
     const experimentalAuthorization = await lookupOfficialRuntimeAuthorization({
       filePath: authorizationFile,
       installationFingerprint,
       desktopVersion: observedDesktopVersion,
-      platform: this.#platform,
     });
     const manifest = manifestCandidate && mismatches.length === 0 ? manifestCandidate : null;
     const manifestStage = manifest?.verification_stage ?? "VERIFIED";

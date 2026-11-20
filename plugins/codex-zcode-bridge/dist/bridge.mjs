@@ -3016,8 +3016,7 @@ var init_official_app_server_runtime = __esm({
         const experimentalAuthorization = await lookupOfficialRuntimeAuthorization({
           filePath: authorizationFile,
           installationFingerprint,
-          desktopVersion: observedDesktopVersion,
-          platform: this.#platform
+          desktopVersion: observedDesktopVersion
         });
         const manifest = manifestCandidate && mismatches.length === 0 ? manifestCandidate : null;
         const manifestStage = manifest?.verification_stage ?? "VERIFIED";
