@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "kind": "coding_plan_regression_rca_evidence",
+  "goal": "CODING_PLAN_REGRESSION_RCA_AND_REAL_E2E",
+  "recorded_at": "2026-11-20T10:15:14+08:00",
+  "baseline": {
+    "head": "5e02e30cef0aa8c05fd3d6782f9039041a0eefe5",
+    "tree": "6761d75dde468a4d6972b2bab8aa1a5ab4c12b966"
+  },
+  "fix": {
+    "commit": "bc03ac41c5d7211000d4765f9526948cf0e796d7",
+    "tree": "f9b0c7572c6e5f8feab5c7cceb33e2eb2f816039",
+    "root_cause": "adapter_options_captured_initial_unavailable_runtime_auth_resolver",
+    "minimal_fix": "stable_dispatcher_with_late_bind"
+  },
+  "preview_merge": {
+    "pr": 103,
+    "base": "f5390897978be995b3a942feaeaac0170e8849fa",
+    "candidate_head": "240de0aa2ac2e04235c67e7f7facf583d25b8398",
+    "merge_commit": "e7a871488aaf88e77627e6b70c4ecae182d0d0ba",
+    "merge_tree": "89404cf0a5e6a587d9e2d7fe75b327daaf8d5de3",
+    "post_merge_ci": "PASS"
+  },
+  "coding_plan": {
+    "task_id": "costlab-f8338c3c-4a9f-44f7-b9ff-b7ecb37aaa1b",
+    "session_id": "sess_8c492720-d1f3-4785-a5f9-f9104189222e",
+    "provider_id": "account:bigmodel-individual-coding-plan",
+    "model": "GLM-5.3-Flash",
+    "runtime_version": "3.18.2.10443",
+    "runtime_sha256": "08726b5ef69e1e9072828baa4656713cb3aac93bb096938681278c5600312b2c",
+    "usage": {
+      "cached_input_tokens": 0,
+      "uncached_input_tokens": 22667,
+      "output_tokens": 128,
+      "reasoning_tokens": 0,
+      "total_tokens": 22795
+    },
+    "official_billing": {
+      "cached_input_tokens": 0,
+      "uncached_input_tokens": 22667,
+      "output_tokens": 128,
+      "total_tokens": 22795,
+      "credits": 1.7808,
+      "expected_normal_credits": 2.657905,
+      "effective_extra_ratio": 0.670001373262024,
+      "rounding_delta_credits": 0.00000365
+    },
+    "real_e2e": "PASS",
+    "multiplier": "VERIFIED",
+    "billing": "PASS"
+  },
+  "start_plan": {
+    "task_id": "costlab-5b4ae7a5-b29a-4009-adba-42b9d73121bc",
+    "session_id": "sess_3599a52f-06d1-420b-9060-a2e0f72c07c3",
+    "provider_id": "account:bigmodel-start-plan",
+    "model": "GLM-5.3-Flash",
+    "usage": {
+      "cached_input_tokens": 90688,
+      "uncached_input_tokens": 113947,
+      "output_tokens": 415,
+      "reasoning_tokens": 0,
+      "total_tokens": 114362
+    },
+    "official_billing": {
+      "source": "official_billing_balance",
+      "unit_type": "token",
+      "used_units_before": 0,
+      "used_units_after": 114362,
+      "used_units_delta": 114362,
+      "remaining_units_delta": -114362
+    },
+    "plan_semantics": "FREE_INCLUDED_TOKEN_QUOTA_NO_EXTRA_DISCOUNT_MULTIPLIER",
+    "real_e2e": "PASS",
+    "multiplier": "NOT_APPLICABLE_NO_DISCOUNT",
+    "billing": "TOKEN_UNIT_RECONCILED"
+  },
+  "request_evidence": {
+    "attributable_requests": 5,
+    "completed_with_usage": 2,
+    "failed_with_unknown_usage": 3,
+    "observed_total_tokens_from_completed_requests": 137157,
+    "unknown_usage_treated_as_zero": false
+  },
+  "tests": {
+    "cost_lab": {
+      "passed": 84,
+      "total": 84
+    },
+    "focused_auth_worker_stderr": {
+      "passed": 47,
+      "total": 47
+    },
+    "affected_full_suite_preliminary": {
+      "total": 950,
+      "passed": 947,
+      "failed": 1,
+      "skipped": 2,
+      "failure_class": "existing_released_lifecycle_observation_timeout",
+      "isolated_rerun": "PASS_1_OF_1"
+    },
+    "pr_103_required_ci": "PASS",
+    "post_merge_ci": "PASS"
+  },
+  "source_evidence": [
+    ".run/cost-lab-e2e/coding-regression-diagnostic-v3-20261120.json",
+    ".run/cost-lab-e2e/coding-regression-diagnostic-v4-20261120.json",
+    ".run/cost-lab-e2e/coding-regression-diagnostic-v5-20261120.json",
+    ".run/cost-lab-e2e/coding-regression-fresh-v5-attempt-1-20261120.json",
+    ".run/cost-lab-e2e/coding-regression-reconciliation-v5-20261120.json",
+    ".run/cost-lab-e2e/final-startplan-before-20261120.json",
+    ".run/cost-lab-e2e/final-startplan-e2e-20261120.json"
+  ]
+}

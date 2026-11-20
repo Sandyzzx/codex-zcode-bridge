@@ -115,6 +115,7 @@ API Key、JWT、Authorization、请求正文或异常消息正文。
 
 证据文件：
 
+- `tools/cost-lab/evidence/coding-plan-regression-rca-20261120.json`
 - `.run/cost-lab-e2e/coding-regression-diagnostic-v3-20261120.json`
 - `.run/cost-lab-e2e/coding-regression-diagnostic-v4-20261120.json`
 - `.run/cost-lab-e2e/coding-regression-diagnostic-v5-20261120.json`
