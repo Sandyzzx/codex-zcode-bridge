@@ -166,7 +166,7 @@
     "host_patch_status": "UPSTREAM_PENDING"
   },
   "validation": {
-    "final_validated_at": "2026-11-20T08:09:35.388Z",
+    "final_validated_at": "2026-11-20T08:33:15.316Z",
     "typecheck": "PASS",
     "targeted_runtime_provider_tests": {
       "status": "PASS",
@@ -189,13 +189,14 @@
       "passed": 4,
       "failed": 0
     },
-    "full_regression": {
+    "affected_test_selection": "FULL_SUITE",
+    "test_full": {
       "status": "PASS",
       "tests": 961,
       "passed": 959,
       "failed": 0,
       "skipped": 2,
-      "duration_ms": 1275003.5181
+      "duration_ms": 1281558.6855
     },
     "diff_check": "PASS"
   },

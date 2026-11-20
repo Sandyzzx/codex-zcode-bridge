@@ -230,12 +230,14 @@ fec975905a2abd4c07e35c40d51fa097a2258ec9
 | Generated Artifacts | PASS，12 个文件均为最新 |
 | Clean Entrypoints | 4/4 PASS |
 | Affected selector | `FULL_SUITE` |
-| Full regression | 961 tests / 959 PASS / 0 FAIL / 2 SKIP |
+| `test:affected` full-suite run | 961 tests / 959 PASS / 0 FAIL / 2 SKIP |
+| `test:full` | 961 tests / 959 PASS / 0 FAIL / 2 SKIP |
 | `git diff --check` | PASS |
 | Real zero-model protocol smoke | PASS |
 
 `npm run test:affected` 因本次 Runtime、Worker、生成 Bundle 与测试基础设施
-变更选择完整回归；实际结果为 959 PASS、0 FAIL、2 SKIP，另有 2 个显式 skip。
+变更选择完整回归；随后按 Goal 顺序单独执行 `npm run test:full`，两次均为
+959 PASS、0 FAIL、2 SKIP，另有 2 个显式 skip。
 
 授权与回退测试覆盖：
 
@@ -287,7 +289,8 @@ UPSTREAM_PENDING: PRESERVED
 TYPE_CHECK: PASS
 TARGETED_TESTS: 22/22 PASS
 COST_LAB_TESTS: 86/86 PASS
-FULL_REGRESSION: 961 TESTS / 959 PASS / 0 FAIL / 2 SKIP
+TEST_AFFECTED: FULL_SUITE / 961 TESTS / 959 PASS / 0 FAIL / 2 SKIP
+TEST_FULL: 961 TESTS / 959 PASS / 0 FAIL / 2 SKIP
 GENERATED_ARTIFACTS: PASS
 PLUGIN_VALIDATOR: PASS
 
