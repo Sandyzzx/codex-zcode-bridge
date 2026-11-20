@@ -257,7 +257,7 @@ fec975905a2abd4c07e35c40d51fa097a2258ec9
 |---|---|---|
 | 3.19.0 Runtime Identity | 安装根、Desktop/ASAR/Bundle/builtin/runtime-host 大小与 SHA-256、PE、Authenticode、Node | PASS |
 | 官方 3.19.0 源码差异 | 公开仓库无 3.19.0 Tag/Branch；BuildCommitId 不等同源码 commit；只做安装产物静态与协议验证 | `SOURCE_EQUIVALENCE: UNKNOWN` |
-| 保留 3.18.2 Manifest 与失败边界 | 原有 3.18.2 记录不变；`LEGACY_SAFETY_ONLY` 与 `FULL` pinning 分类测试；全套合成回归 | PASS — SYNTHETIC |
+| 保留 3.18.2 Manifest 与失败边界 | 原有 3.18.2 记录不变；`LEGACY_SAFETY_ONLY` 与 `FULL` pinning 分类测试；全套合成回归；历史 3.18.2 制品可核验但缺少完整 Desktop 安装 | PASS — SYNTHETIC |
 | 未知版本安全检查 | 非 x64、无效/非官方签名、混合根、Node 不兼容、身份不完整均 hard block | PASS |
 | 精确指纹授权 | 无授权 `UNVERIFIED`；匹配授权 `EXPERIMENTAL`；资产/Node/签名变化使授权失效 | PASS |
 | Provider scope 独立 | Coding Plan、Start Plan、其他 Provider 各需对应 probe scope | PASS |
@@ -273,14 +273,21 @@ fec975905a2abd4c07e35c40d51fa097a2258ec9
 - 公开官方仓库没有可确认的 ZCode 3.19.0 源码身份，因此不能生成逐文件
   3.18.2 -> 3.19.0 官方源码 Diff，也不能把 Desktop `BuildCommitId`
   `a7ed1054` 当成源码 commit。
-- 当前机器只保留 3.19.0 安装，没有独立的 3.18.2.10443 可执行副本；本轮
-  3.18.2 兼容性结论只来自原有精确 Manifest 和合成回归，不是新鲜实机 E2E。
+- 当前机器只保留 3.19.0 完整安装。历史目录中找到了由
+  `fec975905a2abd4c07e35c40d51fa097a2258ec9` 构建的 3.18.2
+  AppServer/Host 制品：`zcode.cjs` 31,009,692 bytes /
+  `B55BA68C...CF639`，builtin config
+  `BC760A3B...56CD`，runtime-host `04E1794F...FC24`。但没有匹配的
+  完整 Desktop `ZCode.exe` 和 `app.asar`，因此不能把它与 3.19.0 Desktop
+  混合成安装，也没有把它冒充成独立 3.18.2 生产安装。本轮 3.18.2 兼容性
+  结论仍只来自原有精确 Manifest、历史证据和合成回归，不是新鲜实机 E2E。
 - 唯一一次 3.19.0 Coding Plan 真实验证发生时，runner marker 转发修复尚未
   落地，因此该历史请求的运行证据为 `UNVERIFIED`；最终 marker 路径由合成
   测试覆盖，没有为了重复 marker 再发真实请求。
 - 当前账户的 Start Plan Billing Reader 返回空套餐和空余额，无法建立 active
-  entitlement，因此真实 Start Plan Session/Turn、免费 Token 用量和配额前后
-  对账均为 `NOT_RUN`，不能声明兼容或倍率。
+  entitlement；Owner 已明确要求 Start Plan 暂缓测试。因此真实 Start Plan
+  Session/Turn、免费 Token 用量和配额前后对账均为 `NOT_RUN`，不能声明
+  兼容或倍率。
 - 3.19.0 的 Other Provider 真实探测未运行，没有把通用 Runtime 启动成功当作
   其他 Provider 兼容证据。
 

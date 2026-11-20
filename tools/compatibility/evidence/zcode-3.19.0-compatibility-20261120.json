@@ -3,6 +3,7 @@
   "kind": "zcode_unknown_runtime_compatibility_evidence",
   "goal": "ZCODE_3_19_0_ADAPTATION_WITH_3_18_COMPATIBILITY",
   "captured_at": "2026-11-20T07:43:06.169Z",
+  "last_updated_at": "2026-11-20T08:41:35.996Z",
   "repository": {
     "root": "D:\\codex-zcode-bridge",
     "worktree": "D:\\codex-zcode-bridge\\.run\\zcode-3190-compat-20261120",
@@ -165,11 +166,30 @@
     "source_equivalence": "UNKNOWN",
     "host_patch_status": "UPSTREAM_PENDING"
   },
+  "historical_3_18_2_artifact_search": {
+    "artifact_found": true,
+    "path": "D:\\codex-zcode-bridge\\.run\\official-auth-reuse-3182-20261113\\plugins\\codex-zcode-bridge\\worker\\vendor\\official-host\\win32-x64-node24.16.0-zcode3.18.2-fec97590",
+    "source_commit": "fec975905a2abd4c07e35c40d51fa097a2258ec9",
+    "source_tree": "5e90fec80706b8381f94e4eef48cf821b9868916",
+    "appserver": {
+      "version": "0.17.1",
+      "bytes": 31009692,
+      "sha256": "B55BA68C3B7939AFAFFB4D373D15594817AD3319FDECFBE26640CE4B218CF639"
+    },
+    "builtin_provider_config_sha256": "BC760A3B0C6D096EA07EE4E963471F135AE75AB207DB6ED4C372E1B183C856CD",
+    "runtime_host_sha256": "04E1794F8325B3C46D4159420CDD04041E9AFC58516E03FC3DC8E78576EEFC24",
+    "official_host_module_sha256": "7E2B8B772F1DD83135903B64D569D634C7E7FC6F303460E08C98E27D311B6A91",
+    "complete_independent_desktop_installation": false,
+    "matching_zcode_executable_found": false,
+    "matching_desktop_archive_found": false,
+    "decision": "NOT_REUSED_AS_INSTALLED_RUNTIME",
+    "reason": "The historical artifact lacks the matching complete Desktop installation assets required by the current production resolver; mixing it with the installed 3.19.0 Desktop would be an invalid mixed installation."
+  },
   "known_gaps": [
     "No public ZCode 3.19.0 source tag or source commit is available for a file-level 3.18.2-to-3.19.0 source diff.",
-    "No independent ZCode 3.18.2.10443 installation was available, so fresh real 3.18.2 E2E remains NOT_RUN.",
+    "A verified historical 3.18.2 AppServer/Host artifact exists, but no matching full Desktop installation or ZCode.exe/app.asar pair was found; it was not mixed with 3.19.0, so fresh real 3.18.2 E2E remains NOT_RUN.",
     "The single real 3.19.0 Coding Plan request predates the final experimental runtime marker forwarding fix; that run remains UNVERIFIED while the final marker path has synthetic coverage.",
-    "The official Start Plan billing response contains no active plan, so live Start Plan E2E and token reconciliation are not applicable on the current account.",
+    "The official Start Plan billing response contains no active plan; the Owner directed Start Plan testing to be deferred until a plan is available.",
     "Other Provider live probes were not run."
   ],
   "remaining_risks": [
