@@ -91,17 +91,32 @@ async function loadEnvironment(deep = false) {
 function renderEnvironment(environment) {
   const zcode = environment.zcode ?? {};
   const runtimePassed = zcode.runtime_status === "OFFICIAL_RUNTIME_VERIFIED";
+  const runtimeExperimental = zcode.runtime_status === "OFFICIAL_RUNTIME_EXPERIMENTAL";
   const discountPassed = zcode.discount_status === "OFFICIAL_DISCOUNT_VERIFIED";
-  $("#dash-runtime").textContent = runtimePassed ? "VERIFIED" : "UNVERIFIED";
+  $("#dash-runtime").textContent = runtimePassed
+    ? "VERIFIED"
+    : runtimeExperimental
+      ? "EXPERIMENTAL"
+      : "UNVERIFIED";
   $("#dash-discount").textContent = discountPassed ? "0.67 VERIFIED" : "NOT VERIFIED";
   $("#dash-billing").textContent = environment.billing_reader?.status ?? "UNKNOWN";
   $("#runtime-version").textContent = zcode.version ?? "UNVERIFIED";
-  $("#runtime-version").className = `tag ${runtimePassed ? "pass" : "fail"}`;
+  $("#runtime-version").className = `tag ${runtimePassed ? "pass" : runtimeExperimental ? "experimental" : "fail"}`;
   const bundle = zcode.assets?.bundle;
   replaceChildren($("#runtime-facts"), [
     fact("Bundle", bundle?.status ?? "UNKNOWN", bundle?.sha256 ?? "unavailable"),
     fact("SHA-256", bundle?.sha256 ? shortHash(bundle.sha256) : "unavailable", "manifest pinned"),
     fact("Node", environment.host?.node_version ?? "unknown", environment.host?.node_compatible ? "compatible" : "incompatible"),
+    fact(
+      "Installation",
+      zcode.installation_safety ?? "UNKNOWN",
+      zcode.installation_fingerprint ? shortHash(zcode.installation_fingerprint) : "fingerprint unavailable",
+    ),
+    fact(
+      "Authorization",
+      zcode.experimental_authorization?.state ?? "NOT_CONFIGURED",
+      zcode.experimental_authorization?.scopes?.join(", ") ?? "",
+    ),
     fact("Request security", zcode.request_security_capability ?? "unknown", zcode.appserver_protocol ?? ""),
   ]);
   renderChecks(environment);
@@ -152,9 +167,11 @@ function renderChecks(environment) {
     {
       name: "Runtime Compatibility",
       status: zcode.runtime_status ?? "UNKNOWN",
-      detail: zcode.discount_status === "OFFICIAL_DISCOUNT_VERIFIED"
-        ? "Installed bundle matches the manifest with verified Coding Plan discount evidence."
-        : "The installed bundle must not be represented as discount-compatible.",
+      detail: zcode.runtime_status === "OFFICIAL_RUNTIME_EXPERIMENTAL"
+        ? "The exact installation fingerprint is authorized for explicit probes. Provider capabilities and billing remain unverified."
+        : zcode.discount_status === "OFFICIAL_DISCOUNT_VERIFIED"
+          ? "Installed bundle matches the manifest with verified Coding Plan discount evidence."
+          : "The installed bundle must not be represented as discount-compatible.",
     },
   ];
   replaceChildren($("#environment-checks"), checks.map((check) => {
@@ -696,6 +713,8 @@ function statusTag(status) {
   const normalized = String(status ?? "UNKNOWN");
   const kind = ["PASS", "VERIFIED", "SUCCEEDED", "COMPLETE", "FRESH", "OFFICIAL_RUNTIME_VERIFIED", "OFFICIAL_DISCOUNT_VERIFIED"].includes(normalized)
     ? "pass"
+    : ["EXPERIMENTAL", "OFFICIAL_RUNTIME_EXPERIMENTAL"].includes(normalized)
+      ? "experimental"
     : ["FAIL", "FAILED", "MISSING", "REJECTED", "UNVERIFIED", "EXPIRED", "OFFICIAL_RUNTIME_UNVERIFIED", "OFFICIAL_DISCOUNT_NOT_VERIFIED"].includes(normalized)
       ? "fail"
       : "";

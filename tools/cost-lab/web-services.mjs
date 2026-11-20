@@ -46,7 +46,10 @@ export async function inspectCostLabEnvironment(options = {}) {
       installed: runtime.install_root !== null,
       install_source: runtime.install_source ?? null,
       install_root_fingerprint: runtime.install_root_fingerprint,
+      installation_fingerprint: runtime.installation_fingerprint ?? null,
+      installation_safety: runtime.installation_safety ?? null,
       runtime_status: runtime.runtime_status,
+      experimental_authorization: runtime.experimental_authorization ?? null,
       discount_status: runtime.discount_status,
       version: runtime.desktop_version ?? null,
       appserver_protocol: runtime.manifest?.appserver_protocol ?? null,
@@ -149,7 +152,11 @@ function buildWarnings({ nodeOk, platform, arch, runtime, billing, credentials }
   const warnings = [];
   if (platform !== "win32" || arch !== "x64") warnings.push("PLATFORM_UNSUPPORTED");
   if (!nodeOk) warnings.push("NODE_RUNTIME_INCOMPATIBLE");
-  if (runtime.runtime_status !== "OFFICIAL_RUNTIME_VERIFIED") warnings.push("OFFICIAL_RUNTIME_UNVERIFIED");
+  if (runtime.runtime_status === "OFFICIAL_RUNTIME_EXPERIMENTAL") {
+    warnings.push("OFFICIAL_RUNTIME_EXPERIMENTAL");
+  } else if (runtime.runtime_status !== "OFFICIAL_RUNTIME_VERIFIED") {
+    warnings.push("OFFICIAL_RUNTIME_UNVERIFIED");
+  }
   if (billing.status !== "PASS") warnings.push("BILLING_READER_UNAVAILABLE");
   if (credentials.status !== "AVAILABLE") warnings.push("CREDENTIAL_SOURCE_UNAVAILABLE");
   return warnings;

@@ -33,6 +33,7 @@ const CONFIG_KEYS = Object.freeze([
   "ZCODE_BRIDGE_MODE",
   "ZCODE_BRIDGE_PREFER_STARTPLAN",
   "ZCODE_WINDOWS_APP_INSTALL_DIR",
+  "ZCODE_BRIDGE_EXPERIMENTAL_RUNTIME_AUTHORIZATION_FILE",
   "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE",
   "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE",
   "ZCODE_HOME",
@@ -123,7 +124,9 @@ export function createProductionCodingPlanVerificationRunner(options = {}) {
         env: options.env ?? process.env,
         platform: options.platform ?? process.platform,
       });
-      if (runtime.runtime_status !== "OFFICIAL_RUNTIME_VERIFIED" || !runtime.install_root) {
+      if ((runtime.runtime_status !== "OFFICIAL_RUNTIME_VERIFIED"
+          && runtime.runtime_status !== "OFFICIAL_RUNTIME_EXPERIMENTAL")
+        || !runtime.install_root) {
         throw new Error("installed_official_runtime_unverified");
       }
       const official = {
@@ -134,6 +137,9 @@ export function createProductionCodingPlanVerificationRunner(options = {}) {
         builtinProviderConfig: path.join(runtime.install_root, runtime.assets.builtin_provider_config.relative_path),
         personalProviderConfig: path.join(account.dataBaseDir, ".zcode", "v2", "provider_config.json"),
         zcodeHome: path.join(account.dataBaseDir, ".zcode"),
+        experimentalAuthorizationFile: runtime.experimental_authorization?.state === "authorized"
+          ? runtime.experimental_authorization.file_path
+          : null,
       };
       for (const filePath of [
         official.bundle,
@@ -205,7 +211,11 @@ export function createProductionCodingPlanVerificationRunner(options = {}) {
           /^[0-9a-f]{64}$/u.test(candidateDigest) &&
           stderr.markers().includes(`[bridge] worker installed-runtime ${taskId} ${status.attempt} ${candidateDigest}`);
         const runtimeEvidence = {
-          status: installedRuntimeObserved ? "PASS" : "UNVERIFIED",
+          status: installedRuntimeObserved
+            ? runtime.runtime_status === "OFFICIAL_RUNTIME_EXPERIMENTAL"
+              ? "EXPERIMENTAL"
+              : "PASS"
+            : "UNVERIFIED",
           bridge_path: "BUILT_MCP_STDIO_PRODUCTION",
           isolated_host_profile: true,
           task_id: taskId,
@@ -217,13 +227,19 @@ export function createProductionCodingPlanVerificationRunner(options = {}) {
           model: result.model?.model_id ?? null,
           requested_reasoning: "low",
           effective_reasoning: result.model?.effective_reasoning_level ?? null,
+          installation_safety: runtime.installation_safety ?? null,
+          installation_fingerprint: runtime.installation_fingerprint ?? null,
+          experimental_authorization_state: runtime.experimental_authorization?.state ?? null,
+          experimental_authorization_scopes: runtime.experimental_authorization?.scopes ?? [],
           runtime: {
             status: installedRuntimeObserved ? runtime.runtime_status : "WORKER_RUNTIME_UNOBSERVED",
-            version: runtime.manifest?.version ?? null,
+            version: runtime.manifest?.version ?? runtime.desktop_version ?? null,
+            desktop_app_version: runtime.desktop_app_version ?? null,
+            desktop_build_commit_id: runtime.desktop_build_commit_id ?? null,
             bundle_sha256: runtime.assets?.bundle?.sha256 ?? null,
             bundle_bytes: runtime.assets?.bundle?.bytes ?? null,
             runtime_host_sha256: runtime.assets?.runtime_host?.sha256 ?? null,
-            request_security_capability: runtime.manifest?.request_security_capability ?? null,
+            request_security_capability: runtime.manifest?.request_security_capability ?? "UNKNOWN",
           },
           request_security: {
             expected: "OfficialRequestSecurity",
@@ -510,6 +526,9 @@ function buildRuntimeConfig(layout, official, timeoutMs, provider) {
     ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: official.personalProviderConfig,
     ZCODE_HOME: official.zcodeHome,
     ZCODE_DATA_BASE_DIR: official.dataBaseDir,
+    ...(official.experimentalAuthorizationFile
+      ? { ZCODE_BRIDGE_EXPERIMENTAL_RUNTIME_AUTHORIZATION_FILE: official.experimentalAuthorizationFile }
+      : {}),
   });
 }
 

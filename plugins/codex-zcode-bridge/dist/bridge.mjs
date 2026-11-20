@@ -78,7 +78,7 @@ function resolveUserHome(env, options = {}) {
 function discoverZCodeData(env, options = {}) {
   const platform = options.platform ?? process.platform;
   const pathImpl = platform === "win32" ? path.win32 : path.posix;
-  const readFile3 = options.readFile ?? ((filePath) => readFileSync(filePath, "utf8"));
+  const readFile4 = options.readFile ?? ((filePath) => readFileSync(filePath, "utf8"));
   const fileExists = options.fileExists ?? existsSync;
   const home = resolveUserHome(env, options);
   const settingFile = pathImpl.join(home.userHome, ".zcode", "v2", "setting.json");
@@ -88,18 +88,18 @@ function discoverZCodeData(env, options = {}) {
   if (!fileExists(settingFile)) {
     settingStatus = "absent";
   } else {
-    let text2;
+    let text3;
     try {
-      text2 = readFile3(settingFile);
+      text3 = readFile4(settingFile);
     } catch (error2) {
       settingStatus = isPermissionDeniedCode(error2) ? "permission_denied" : "unreadable";
       settingError = error2 instanceof Error ? error2.message : String(error2);
-      text2 = "";
+      text3 = "";
     }
     if (settingStatus === "ok") {
       let parsed;
       try {
-        parsed = JSON.parse(text2);
+        parsed = JSON.parse(text3);
       } catch (error2) {
         settingStatus = "invalid_json";
         settingError = error2 instanceof Error ? error2.message : String(error2);
@@ -349,6 +349,7 @@ var init_resolver = __esm({
       "ZCODE_HOME",
       "ZCODE_DATA_BASE_DIR",
       "ZCODE_WINDOWS_APP_INSTALL_DIR",
+      "ZCODE_BRIDGE_EXPERIMENTAL_RUNTIME_AUTHORIZATION_FILE",
       "ZCODE_BRIDGE_DEFAULT_PROVIDER_ID",
       "ZCODE_BRIDGE_DEFAULT_MODEL_ID",
       "ZCODE_BRIDGE_DEFAULT_REASONING_LEVEL",
@@ -551,9 +552,9 @@ var init_resolver = __esm({
         if (!isReadableFile(filePath)) {
           throw new BridgeError("provider_config_missing", `${label} not found: ${filePath}`);
         }
-        let text2;
+        let text3;
         try {
-          text2 = readFileSync2(filePath, "utf8");
+          text3 = readFileSync2(filePath, "utf8");
         } catch (error2) {
           throw new BridgeError(
             "provider_config_invalid",
@@ -562,7 +563,7 @@ var init_resolver = __esm({
         }
         let parsed;
         try {
-          parsed = JSON.parse(text2);
+          parsed = JSON.parse(text3);
         } catch (error2) {
           throw new BridgeError(
             "provider_config_invalid",
@@ -2220,23 +2221,209 @@ var init_node_runtime = __esm({
   }
 });
 
-// src/runtime/official-app-server-runtime.ts
+// src/runtime/official-runtime-authorization.ts
 import { createHash as createHash2 } from "node:crypto";
-import { execFile } from "node:child_process";
-import { createReadStream } from "node:fs";
-import { lstat, realpath } from "node:fs/promises";
-import { homedir as homedir3 } from "node:os";
+import { lstat, readFile as readFile2 } from "node:fs/promises";
 import path7 from "node:path";
+function computeOfficialInstallationFingerprint(input) {
+  const normalized = {
+    schema_version: 1,
+    desktop_version: input.desktop_version,
+    desktop_app_version: input.desktop_app_version,
+    desktop_build_commit_id: input.desktop_build_commit_id,
+    desktop_executable: {
+      bytes: input.desktop_executable_bytes,
+      sha256: input.desktop_executable_sha256.toLowerCase()
+    },
+    desktop_archive: {
+      bytes: input.desktop_archive_bytes,
+      sha256: input.desktop_archive_sha256.toLowerCase()
+    },
+    appserver_bundle: {
+      bytes: input.bundle_bytes,
+      sha256: input.bundle_sha256.toLowerCase()
+    },
+    builtin_provider_config: {
+      bytes: input.builtin_provider_config_bytes,
+      sha256: input.builtin_provider_config_sha256.toLowerCase()
+    },
+    runtime_host: {
+      bytes: input.runtime_host_bytes,
+      sha256: input.runtime_host_sha256.toLowerCase()
+    },
+    signers: {
+      desktop: input.desktop_signer_thumbprint.replace(/[^0-9A-F]/giu, "").toUpperCase(),
+      runtime_host: input.runtime_host_signer_thumbprint.replace(/[^0-9A-F]/giu, "").toUpperCase()
+    },
+    node_version: input.node_version
+  };
+  return createHash2("sha256").update(JSON.stringify(normalized), "utf8").digest("hex");
+}
+async function lookupOfficialRuntimeAuthorization(options) {
+  if (!options.filePath) {
+    return {
+      state: "not_configured",
+      file_path: null,
+      reason: null,
+      record: null,
+      scopes: []
+    };
+  }
+  if (!isAbsolutePathForPlatform(options.filePath, options.platform)) {
+    return invalid(options.filePath, "experimental authorization path is not absolute");
+  }
+  const filePath = path7.resolve(options.filePath);
+  let metadata;
+  try {
+    metadata = await lstat(filePath);
+  } catch (error2) {
+    if (error2.code === "ENOENT") {
+      return {
+        state: "required",
+        file_path: filePath,
+        reason: null,
+        record: null,
+        scopes: []
+      };
+    }
+    return invalid(filePath, "experimental authorization file could not be inspected");
+  }
+  if (!metadata.isFile() || metadata.isSymbolicLink()) {
+    return invalid(filePath, "experimental authorization path is not a regular file");
+  }
+  if (metadata.size > MAX_AUTHORIZATION_BYTES) {
+    return invalid(filePath, "experimental authorization file exceeds 64 KB");
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(await readFile2(filePath, "utf8"));
+  } catch {
+    return invalid(filePath, "experimental authorization file is not valid JSON");
+  }
+  const root = asRecord2(parsed);
+  if (!root || root["schema_version"] !== 1 || !Array.isArray(root["authorizations"])) {
+    return invalid(filePath, "experimental authorization file has an unsupported schema");
+  }
+  const records = [];
+  const identities = /* @__PURE__ */ new Set();
+  for (const raw of root["authorizations"]) {
+    const record6 = parseRecord(raw);
+    if (!record6) {
+      return invalid(filePath, "experimental authorization file contains a malformed record");
+    }
+    const identity = `${record6.desktop_version}\0${record6.installation_fingerprint}`;
+    if (identities.has(identity)) {
+      return invalid(filePath, "experimental authorization file contains duplicate records");
+    }
+    identities.add(identity);
+    records.push(record6);
+  }
+  const matches = [];
+  for (const record6 of records) {
+    if (record6.desktop_version !== options.desktopVersion) continue;
+    if (record6.installation_fingerprint === options.installationFingerprint) matches.push(record6);
+  }
+  if (matches.length === 0) {
+    return {
+      state: "required",
+      file_path: filePath,
+      reason: null,
+      record: null,
+      scopes: []
+    };
+  }
+  if (matches.length !== 1) {
+    return invalid(filePath, "experimental authorization file contains duplicate matching records");
+  }
+  const record5 = matches[0];
+  return {
+    state: "authorized",
+    file_path: filePath,
+    reason: null,
+    record: record5,
+    scopes: record5.scopes
+  };
+}
+function parseRecord(value) {
+  const record5 = asRecord2(value);
+  if (!record5) return null;
+  const fingerprint = text(record5["installation_fingerprint"]);
+  const desktopVersion = text(record5["desktop_version"]);
+  const authorizedAt = text(record5["authorized_at"]);
+  const authorizedBy = text(record5["authorized_by"]);
+  const rawScopes = record5["scopes"];
+  if (!fingerprint || !FINGERPRINT_PATTERN.test(fingerprint) || !desktopVersion || !VERSION_PATTERN2.test(desktopVersion) || !authorizedAt || Number.isNaN(new Date(authorizedAt).getTime()) || !authorizedBy || !Array.isArray(rawScopes) || rawScopes.length === 0) {
+    return null;
+  }
+  const scopes = [];
+  for (const rawScope of rawScopes) {
+    if (typeof rawScope !== "string" || !OFFICIAL_RUNTIME_PROBE_SCOPES.includes(rawScope)) {
+      return null;
+    }
+    const scope = rawScope;
+    if (!scopes.includes(scope)) scopes.push(scope);
+  }
+  return {
+    installation_fingerprint: fingerprint,
+    desktop_version: desktopVersion,
+    authorized_at: new Date(authorizedAt).toISOString(),
+    authorized_by: authorizedBy,
+    scopes
+  };
+}
+function invalid(filePath, reason) {
+  return {
+    state: "invalid",
+    file_path: filePath,
+    reason,
+    record: null,
+    scopes: []
+  };
+}
+function asRecord2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
+}
+function text(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+var OFFICIAL_RUNTIME_PROBE_SCOPES, MAX_AUTHORIZATION_BYTES, FINGERPRINT_PATTERN, VERSION_PATTERN2;
+var init_official_runtime_authorization = __esm({
+  "src/runtime/official-runtime-authorization.ts"() {
+    "use strict";
+    init_paths();
+    OFFICIAL_RUNTIME_PROBE_SCOPES = Object.freeze([
+      "coding_plan_probe",
+      "start_plan_probe",
+      "other_provider_probe"
+    ]);
+    MAX_AUTHORIZATION_BYTES = 64 * 1024;
+    FINGERPRINT_PATTERN = /^[0-9a-f]{64}$/u;
+    VERSION_PATTERN2 = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:\.(?:0|[1-9]\d*))?(?:-[0-9A-Za-z.-]+)?$/u;
+  }
+});
+
+// src/runtime/official-app-server-runtime.ts
+import { createHash as createHash3 } from "node:crypto";
+import { execFile } from "node:child_process";
+import { closeSync as closeSync2, createReadStream, openSync as openSync2, readSync as readSync2 } from "node:fs";
+import { lstat as lstat2, realpath } from "node:fs/promises";
+import { homedir as homedir3 } from "node:os";
+import path8 from "node:path";
 import { promisify } from "node:util";
 function unverified(reason, nodeExecutable, details = {}) {
   return {
     status: "OFFICIAL_RUNTIME_UNVERIFIED",
+    installation_safety: details.installation_safety ?? "OFFICIAL_INSTALLATION_INCOMPLETE",
+    installation_fingerprint: details.installation_fingerprint ?? null,
+    experimental_authorization: details.experimental_authorization ?? null,
     discount_capability: "OFFICIAL_DISCOUNT_NOT_VERIFIED",
     start_plan_static_compatibility: null,
     reason,
     install_dir: details.install_dir ?? null,
     install_source: details.install_source ?? null,
     desktop_version: details.desktop_version ?? null,
+    desktop_app_version: details.desktop_app_version ?? null,
+    desktop_build_commit_id: details.desktop_build_commit_id ?? null,
     bundle_path: details.bundle_path ?? null,
     bundle_bytes: details.bundle_bytes ?? null,
     bundle_sha256: details.bundle_sha256 ?? null,
@@ -2246,29 +2433,138 @@ function unverified(reason, nodeExecutable, details = {}) {
     runtime_host_path: details.runtime_host_path ?? null,
     runtime_host_bytes: details.runtime_host_bytes ?? null,
     runtime_host_sha256: details.runtime_host_sha256 ?? null,
+    runtime_host_signer_subject: details.runtime_host_signer_subject ?? null,
+    runtime_host_signer_thumbprint: details.runtime_host_signer_thumbprint ?? null,
+    desktop_executable_path: details.desktop_executable_path ?? null,
+    desktop_executable_bytes: details.desktop_executable_bytes ?? null,
+    desktop_executable_sha256: details.desktop_executable_sha256 ?? null,
+    desktop_executable_signer_subject: details.desktop_executable_signer_subject ?? null,
+    desktop_executable_signer_thumbprint: details.desktop_executable_signer_thumbprint ?? null,
+    desktop_archive_path: details.desktop_archive_path ?? null,
+    desktop_archive_bytes: details.desktop_archive_bytes ?? null,
+    desktop_archive_sha256: details.desktop_archive_sha256 ?? null,
     node_executable: nodeExecutable,
     node_version: details.node_version ?? null,
     node_compatible: details.node_compatible === true,
     manifest: details.manifest ?? null
   };
 }
+function unsafe(reason, nodeExecutable, details = {}) {
+  return unverified(reason, nodeExecutable, {
+    ...details,
+    installation_safety: "OFFICIAL_INSTALLATION_UNSAFE"
+  });
+}
+function executableSafetyFailure(identity, label) {
+  if (identity.architecture !== "x64") {
+    return `OFFICIAL_INSTALLATION_UNSAFE: ${label} is not an x64 PE executable`;
+  }
+  if (identity.signature_status.trim().toLowerCase() !== "valid") {
+    return `OFFICIAL_INSTALLATION_UNSAFE: ${label} Authenticode signature is not valid`;
+  }
+  const signerSubject = identity.signer_subject?.replace(/\s+/gu, " ").trim() ?? "";
+  if (!signerSubject.includes("CN=\u5317\u4EAC\u667A\u8C31\u534E\u7AE0\u79D1\u6280\u80A1\u4EFD\u6709\u9650\u516C\u53F8")) {
+    return `OFFICIAL_INSTALLATION_UNSAFE: ${label} signer is not the official Zhipu publisher`;
+  }
+  if (!identity.signer_thumbprint || !/^[0-9A-F]{40,64}$/u.test(identity.signer_thumbprint.replace(/\s+/gu, ""))) {
+    return `OFFICIAL_INSTALLATION_UNSAFE: ${label} signer thumbprint is unavailable`;
+  }
+  return null;
+}
+async function inspectWindowsExecutable(filePath) {
+  const architecture = readPortableExecutableArchitecture(filePath);
+  const systemRoot = process.env["SystemRoot"]?.trim();
+  if (!systemRoot) throw new Error("SystemRoot is unavailable for Authenticode inspection");
+  const powershell = path8.join(
+    systemRoot,
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe"
+  );
+  const script = [
+    "$ProgressPreference = 'SilentlyContinue'",
+    "$ErrorActionPreference = 'Stop'",
+    "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)",
+    "$target = $env:ZCODE_BRIDGE_AUTHENTICODE_FILE",
+    "if ([string]::IsNullOrWhiteSpace($target)) { exit 2 }",
+    "$signature = Get-AuthenticodeSignature -LiteralPath $target",
+    "$certificate = $signature.SignerCertificate",
+    "[pscustomobject]@{",
+    "status = [string]$signature.Status;",
+    "subject = if ($null -eq $certificate) { $null } else { [string]$certificate.Subject };",
+    "thumbprint = if ($null -eq $certificate) { $null } else { [string]$certificate.Thumbprint }",
+    "} | ConvertTo-Json -Compress"
+  ].join("\n");
+  const encoded = Buffer.from(script, "utf16le").toString("base64");
+  const { stdout } = await execFileAsync(powershell, [
+    "-NoProfile",
+    "-NonInteractive",
+    "-EncodedCommand",
+    encoded
+  ], {
+    encoding: "utf8",
+    timeout: 3e4,
+    windowsHide: true,
+    env: {
+      SystemRoot: systemRoot,
+      ZCODE_BRIDGE_AUTHENTICODE_FILE: filePath
+    }
+  });
+  let parsed;
+  try {
+    parsed = JSON.parse(stdout.trim());
+  } catch {
+    throw new Error("Authenticode probe returned invalid JSON");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Authenticode probe returned an invalid object");
+  }
+  const value = parsed;
+  return {
+    architecture,
+    signature_status: typeof value["status"] === "string" ? value["status"] : "",
+    signer_subject: typeof value["subject"] === "string" ? value["subject"] : null,
+    signer_thumbprint: typeof value["thumbprint"] === "string" ? value["thumbprint"] : null
+  };
+}
+function readPortableExecutableArchitecture(filePath) {
+  const fd = openSync2(filePath, "r");
+  try {
+    const dosHeader = Buffer.alloc(64);
+    if (readSync2(fd, dosHeader, 0, dosHeader.length, 0) !== dosHeader.length || dosHeader.toString("ascii", 0, 2) !== "MZ") {
+      return "unknown";
+    }
+    const peOffset = dosHeader.readUInt32LE(60);
+    if (!Number.isSafeInteger(peOffset) || peOffset < 64 || peOffset > 64 * 1024 * 1024) {
+      return "unknown";
+    }
+    const coffHeader = Buffer.alloc(6);
+    if (readSync2(fd, coffHeader, 0, coffHeader.length, peOffset) !== coffHeader.length || coffHeader.toString("ascii", 0, 4) !== "PE\0\0") {
+      return "unknown";
+    }
+    return coffHeader.readUInt16LE(4) === 34404 ? "x64" : "unknown";
+  } finally {
+    closeSync2(fd);
+  }
+}
 async function canonicalDirectory(candidate) {
-  const stat2 = await lstat(candidate);
+  const stat2 = await lstat2(candidate);
   if (!stat2.isDirectory() || stat2.isSymbolicLink()) throw new Error("installed ZCode root is not a real directory");
   return realpath(candidate);
 }
 async function canonicalFileInside(root, candidate, label) {
-  const stat2 = await lstat(candidate);
+  const stat2 = await lstat2(candidate);
   if (!stat2.isFile() || stat2.isSymbolicLink()) throw new Error(`${label} is not a regular file`);
   const resolved = await realpath(candidate);
-  const relative = path7.relative(root, resolved);
-  if (!relative || relative === ".." || relative.startsWith(`..${path7.sep}`) || path7.isAbsolute(relative)) {
+  const relative = path8.relative(root, resolved);
+  if (!relative || relative === ".." || relative.startsWith(`..${path8.sep}`) || path8.isAbsolute(relative)) {
     throw new Error(`${label} resolves outside the installed ZCode root`);
   }
   return resolved;
 }
 async function sha256File(filePath) {
-  const hash = createHash2("sha256");
+  const hash = createHash3("sha256");
   await new Promise((resolve, reject) => {
     const stream = createReadStream(filePath);
     stream.on("data", (chunk) => hash.update(chunk));
@@ -2307,7 +2603,7 @@ async function probeWindowsFileVersion(executable) {
   const encoded = Buffer.from(script, "utf16le").toString("base64");
   const systemRoot = process.env["SystemRoot"]?.trim();
   if (!systemRoot) throw new Error("SystemRoot is unavailable for the Windows version probe");
-  const powershell = path7.join(
+  const powershell = path8.join(
     systemRoot,
     "System32",
     "WindowsPowerShell",
@@ -2343,6 +2639,7 @@ var init_official_app_server_runtime = __esm({
     init_errors();
     init_node_runtime();
     init_paths();
+    init_official_runtime_authorization();
     init_resolver();
     execFileAsync = promisify(execFile);
     OFFICIAL_APPSERVER_COMPATIBILITY_MANIFEST = Object.freeze([
@@ -2362,6 +2659,29 @@ var init_official_app_server_runtime = __esm({
         coding_plan_discount_verified: true,
         start_plan_static_compatibility: "OFFLINE_COMPATIBLE",
         verification_date: "2026-11-18"
+      }),
+      Object.freeze({
+        desktop_version: "3.19.0.10774",
+        desktop_app_version: "3.19.0",
+        desktop_build_commit_id: "a7ed1054",
+        desktop_executable_sha256: "c5afb161a2d9389761d417ca668bc94311e3d2aff6ca3d0117b0b15701666f27",
+        desktop_executable_bytes: 246332312,
+        desktop_archive_sha256: "2421850970f361aaa1b3f1d6c960b101a5d476ad95631359d0413a19de1197cb",
+        desktop_archive_bytes: 385171742,
+        bundle_sha256: "6b84e928d9258fe020c6ab8c75fa2c123b0cd658fe43c0ce141a13df677fb0ea",
+        bundle_bytes: 15843692,
+        builtin_provider_config_sha256: "ef3d64656cb5281cce292b77ef12e96b5251582cfb00cdf9eb08e3d4565abb69",
+        builtin_provider_config_bytes: 261659,
+        runtime_host_sha256: "c87a9f3cf9cf920e4b5993aad69f8840a5d9bc7c0ae90b32acb29c15a1db0aae",
+        runtime_host_bytes: 179608,
+        node_compatibility: SUPPORTED_NODE_RANGE,
+        appserver_protocol: "zcode-app-server-stdio-desktop-v1",
+        request_security_capability: "identity-observed-provider-verification-pending",
+        coding_plan_discount_verified: false,
+        start_plan_static_compatibility: "OFFLINE_RESEARCH_PENDING",
+        verification_date: "2026-11-20",
+        verification_stage: "EXPERIMENTAL",
+        desktop_asset_pinning: "FULL"
       })
     ]);
     OfficialAppServerRuntimeResolver = class {
@@ -2375,6 +2695,8 @@ var init_official_app_server_runtime = __esm({
       #hashFile;
       #probeNodeVersion;
       #probeDesktopVersion;
+      #inspectExecutable;
+      #experimentalAuthorizationFile;
       #readDesktopLaunch;
       constructor(options = {}) {
         this.#env = options.env ?? process.env;
@@ -2387,6 +2709,8 @@ var init_official_app_server_runtime = __esm({
         this.#hashFile = options.hashFile ?? sha256File;
         this.#probeNodeVersion = options.probeNodeVersion ?? probeNodeCliVersion;
         this.#probeDesktopVersion = options.probeDesktopVersion ?? probeWindowsFileVersion;
+        this.#inspectExecutable = options.inspectExecutable ?? inspectWindowsExecutable;
+        this.#experimentalAuthorizationFile = options.experimentalAuthorizationFile;
         this.#readDesktopLaunch = options.readDesktopLaunch ?? ((bundlePath) => buildZCodeAppServerLaunch(bundlePath, {}));
       }
       async inspect() {
@@ -2422,6 +2746,7 @@ var init_official_app_server_runtime = __esm({
         let builtinPath;
         let runtimeHostPath;
         let desktopExecutablePath;
+        let desktopArchivePath;
         try {
           installDir = await canonicalDirectory(discovery.installDir);
           bundlePath = await canonicalFileInside(
@@ -2436,13 +2761,18 @@ var init_official_app_server_runtime = __esm({
           );
           runtimeHostPath = await canonicalFileInside(
             installDir,
-            path7.join(installDir, "resources", "tools", "runtime-host", "zcode-runtime-host.exe"),
+            path8.join(installDir, "resources", "tools", "runtime-host", "zcode-runtime-host.exe"),
             "installed runtime-host"
           );
           desktopExecutablePath = await canonicalFileInside(
             installDir,
-            path7.join(installDir, "ZCode.exe"),
+            path8.join(installDir, "ZCode.exe"),
             "installed Desktop executable"
+          );
+          desktopArchivePath = await canonicalFileInside(
+            installDir,
+            path8.join(installDir, "resources", "app.asar"),
+            "installed Desktop archive"
           );
         } catch (error2) {
           return unverified(errorMessage(error2), nodeExecutable);
@@ -2453,25 +2783,95 @@ var init_official_app_server_runtime = __esm({
         let bundleSha256;
         let builtinSha256;
         let runtimeHostSha256;
+        let desktopExecutableBytes;
+        let desktopExecutableSha256;
+        let desktopArchiveBytes;
+        let desktopArchiveSha256;
         try {
           [{ size: bundleBytes }, bundleSha256] = await Promise.all([
-            lstat(bundlePath),
+            lstat2(bundlePath),
             this.#hashFile(bundlePath)
           ]);
           [{ size: builtinBytes }, builtinSha256] = await Promise.all([
-            lstat(builtinPath),
+            lstat2(builtinPath),
             this.#hashFile(builtinPath)
           ]);
           [{ size: runtimeHostBytes }, runtimeHostSha256] = await Promise.all([
-            lstat(runtimeHostPath),
+            lstat2(runtimeHostPath),
             this.#hashFile(runtimeHostPath)
+          ]);
+          [{ size: desktopExecutableBytes }, desktopExecutableSha256] = await Promise.all([
+            lstat2(desktopExecutablePath),
+            this.#hashFile(desktopExecutablePath)
+          ]);
+          [{ size: desktopArchiveBytes }, desktopArchiveSha256] = await Promise.all([
+            lstat2(desktopArchivePath),
+            this.#hashFile(desktopArchivePath)
           ]);
         } catch (error2) {
           return unverified(`could not verify installed Official runtime assets: ${errorMessage(error2)}`, nodeExecutable);
         }
+        let desktopExecutableIdentity;
+        let runtimeHostIdentity;
+        try {
+          desktopExecutableIdentity = await this.#inspectExecutable(desktopExecutablePath);
+          runtimeHostIdentity = await this.#inspectExecutable(runtimeHostPath);
+        } catch (error2) {
+          return unsafe(
+            `official executable safety inspection failed: ${errorMessage(error2)}`,
+            nodeExecutable,
+            {
+              install_dir: installDir,
+              install_source: discovery.source,
+              bundle_path: bundlePath,
+              bundle_bytes: bundleBytes,
+              bundle_sha256: bundleSha256,
+              builtin_provider_config_path: builtinPath,
+              builtin_provider_config_bytes: builtinBytes,
+              builtin_provider_config_sha256: builtinSha256,
+              runtime_host_path: runtimeHostPath,
+              runtime_host_bytes: runtimeHostBytes,
+              runtime_host_sha256: runtimeHostSha256,
+              desktop_executable_path: desktopExecutablePath,
+              desktop_executable_bytes: desktopExecutableBytes,
+              desktop_executable_sha256: desktopExecutableSha256,
+              desktop_archive_path: desktopArchivePath,
+              desktop_archive_bytes: desktopArchiveBytes,
+              desktop_archive_sha256: desktopArchiveSha256
+            }
+          );
+        }
+        const unsafeExecutableReason = executableSafetyFailure(
+          desktopExecutableIdentity,
+          "Desktop executable"
+        ) ?? executableSafetyFailure(runtimeHostIdentity, "runtime-host");
+        if (unsafeExecutableReason) {
+          return unsafe(unsafeExecutableReason, nodeExecutable, {
+            install_dir: installDir,
+            install_source: discovery.source,
+            bundle_path: bundlePath,
+            bundle_bytes: bundleBytes,
+            bundle_sha256: bundleSha256,
+            builtin_provider_config_path: builtinPath,
+            builtin_provider_config_bytes: builtinBytes,
+            builtin_provider_config_sha256: builtinSha256,
+            runtime_host_path: runtimeHostPath,
+            runtime_host_bytes: runtimeHostBytes,
+            runtime_host_sha256: runtimeHostSha256,
+            runtime_host_signer_subject: runtimeHostIdentity.signer_subject,
+            runtime_host_signer_thumbprint: runtimeHostIdentity.signer_thumbprint,
+            desktop_executable_path: desktopExecutablePath,
+            desktop_executable_bytes: desktopExecutableBytes,
+            desktop_executable_sha256: desktopExecutableSha256,
+            desktop_executable_signer_subject: desktopExecutableIdentity.signer_subject,
+            desktop_executable_signer_thumbprint: desktopExecutableIdentity.signer_thumbprint,
+            desktop_archive_path: desktopArchivePath,
+            desktop_archive_bytes: desktopArchiveBytes,
+            desktop_archive_sha256: desktopArchiveSha256
+          });
+        }
         let launchEnv;
         try {
-          await canonicalFileInside(installDir, path7.join(installDir, "resources", "app.asar"), "installed Desktop archive");
           launchEnv = this.#readDesktopLaunch(bundlePath).env;
         } catch (error2) {
           return unverified(`installed Desktop launch metadata could not be inspected: ${errorMessage(error2)}`, nodeExecutable);
@@ -2530,29 +2930,104 @@ var init_official_app_server_runtime = __esm({
           });
         }
         const nodeCompatible = isSupportedNodeVersion(nodeVersion);
-        const manifest = this.#manifest.find(
+        const observedDesktopVersion = desktopVersion;
+        const observedAppVersion = launchEnv.ZCODE_APP_VERSION;
+        const observedBuildCommitId = launchEnv.ZCODE_BUILD_COMMIT_ID;
+        if (!observedDesktopVersion || !observedAppVersion || !observedBuildCommitId || !nodeVersion) {
+          return unverified("installed Official runtime identity is incomplete", nodeExecutable, {
+            install_dir: installDir,
+            install_source: discovery.source,
+            desktop_version: observedDesktopVersion,
+            bundle_path: bundlePath,
+            bundle_bytes: bundleBytes,
+            bundle_sha256: bundleSha256,
+            builtin_provider_config_path: builtinPath,
+            builtin_provider_config_bytes: builtinBytes,
+            builtin_provider_config_sha256: builtinSha256,
+            runtime_host_path: runtimeHostPath,
+            runtime_host_bytes: runtimeHostBytes,
+            runtime_host_sha256: runtimeHostSha256,
+            runtime_host_signer_subject: runtimeHostIdentity.signer_subject,
+            runtime_host_signer_thumbprint: runtimeHostIdentity.signer_thumbprint,
+            desktop_executable_path: desktopExecutablePath,
+            desktop_executable_bytes: desktopExecutableBytes,
+            desktop_executable_sha256: desktopExecutableSha256,
+            desktop_executable_signer_subject: desktopExecutableIdentity.signer_subject,
+            desktop_executable_signer_thumbprint: desktopExecutableIdentity.signer_thumbprint,
+            desktop_archive_path: desktopArchivePath,
+            desktop_archive_bytes: desktopArchiveBytes,
+            desktop_archive_sha256: desktopArchiveSha256,
+            node_version: nodeVersion,
+            node_compatible: nodeCompatible
+          });
+        }
+        const installationFingerprint = computeOfficialInstallationFingerprint({
+          desktop_version: observedDesktopVersion,
+          desktop_app_version: observedAppVersion,
+          desktop_build_commit_id: observedBuildCommitId,
+          desktop_executable_bytes: desktopExecutableBytes,
+          desktop_executable_sha256: desktopExecutableSha256,
+          desktop_archive_bytes: desktopArchiveBytes,
+          desktop_archive_sha256: desktopArchiveSha256,
+          bundle_bytes: bundleBytes,
+          bundle_sha256: bundleSha256,
+          builtin_provider_config_bytes: builtinBytes,
+          builtin_provider_config_sha256: builtinSha256,
+          runtime_host_bytes: runtimeHostBytes,
+          runtime_host_sha256: runtimeHostSha256,
+          desktop_signer_thumbprint: desktopExecutableIdentity.signer_thumbprint ?? "",
+          runtime_host_signer_thumbprint: runtimeHostIdentity.signer_thumbprint ?? "",
+          node_version: nodeVersion
+        });
+        const manifestCandidate = this.#manifest.find(
           (entry) => entry.desktop_version === desktopVersion && entry.bundle_bytes === bundleBytes && entry.bundle_sha256.toLowerCase() === bundleSha256.toLowerCase()
         ) ?? null;
         const mismatches = [];
-        if (!manifest) mismatches.push("desktop version/bundle bytes/SHA-256 are not in the compatibility manifest");
-        else {
-          if (manifest.desktop_app_version !== launchEnv.ZCODE_APP_VERSION || manifest.desktop_build_commit_id !== launchEnv.ZCODE_BUILD_COMMIT_ID) {
+        if (!manifestCandidate) {
+          mismatches.push("desktop version/bundle bytes/SHA-256 are not in the compatibility manifest");
+        } else {
+          if (manifestCandidate.desktop_app_version !== observedAppVersion || manifestCandidate.desktop_build_commit_id !== observedBuildCommitId) {
             mismatches.push("Desktop launch identity does not match the compatibility manifest");
           }
-          if (manifest.builtin_provider_config_bytes !== builtinBytes || manifest.builtin_provider_config_sha256.toLowerCase() !== builtinSha256.toLowerCase()) {
+          if (manifestCandidate.builtin_provider_config_bytes !== builtinBytes || manifestCandidate.builtin_provider_config_sha256.toLowerCase() !== builtinSha256.toLowerCase()) {
             mismatches.push("builtin provider config identity does not match the compatibility manifest");
           }
-          if (manifest.runtime_host_bytes !== runtimeHostBytes || manifest.runtime_host_sha256.toLowerCase() !== runtimeHostSha256.toLowerCase()) {
+          if (manifestCandidate.runtime_host_bytes !== runtimeHostBytes || manifestCandidate.runtime_host_sha256.toLowerCase() !== runtimeHostSha256.toLowerCase()) {
             mismatches.push("runtime-host identity does not match the compatibility manifest");
           }
-          if (manifest.node_compatibility !== SUPPORTED_NODE_RANGE || !nodeCompatible) {
-            mismatches.push(`Node ${nodeVersion} is outside the verified compatibility range ${manifest.node_compatibility}`);
+          if (manifestCandidate.desktop_executable_bytes !== void 0 && (manifestCandidate.desktop_executable_bytes !== desktopExecutableBytes || manifestCandidate.desktop_executable_sha256?.toLowerCase() !== desktopExecutableSha256.toLowerCase())) {
+            mismatches.push("Desktop executable identity does not match the compatibility manifest");
+          }
+          if (manifestCandidate.desktop_archive_bytes !== void 0 && (manifestCandidate.desktop_archive_bytes !== desktopArchiveBytes || manifestCandidate.desktop_archive_sha256?.toLowerCase() !== desktopArchiveSha256.toLowerCase())) {
+            mismatches.push("Desktop archive identity does not match the compatibility manifest");
+          }
+          if (manifestCandidate.node_compatibility !== SUPPORTED_NODE_RANGE || !nodeCompatible) {
+            mismatches.push(`Node ${nodeVersion} is outside the verified compatibility range ${manifestCandidate.node_compatibility}`);
           }
         }
+        const authorizationHost = this.#host ?? codexHostProfile(this.#homeDir);
+        const configuredAuthorizationFile = env["ZCODE_BRIDGE_EXPERIMENTAL_RUNTIME_AUTHORIZATION_FILE"]?.trim();
+        const authorizationFile = this.#experimentalAuthorizationFile !== void 0 ? this.#experimentalAuthorizationFile : configuredAuthorizationFile || path8.join(
+          authorizationHost.settingsDirectory,
+          "experimental-runtime-authorization.json"
+        );
+        const experimentalAuthorization = await lookupOfficialRuntimeAuthorization({
+          filePath: authorizationFile,
+          installationFingerprint,
+          desktopVersion: observedDesktopVersion,
+          platform: this.#platform
+        });
+        const manifest = manifestCandidate && mismatches.length === 0 ? manifestCandidate : null;
+        const manifestStage = manifest?.verification_stage ?? "VERIFIED";
         const common = {
           install_dir: installDir,
           install_source: discovery.source,
-          desktop_version: desktopVersion,
+          installation_safety: "OFFICIAL_INSTALLATION_SAFE",
+          installation_fingerprint: installationFingerprint,
+          experimental_authorization: experimentalAuthorization,
+          desktop_version: observedDesktopVersion,
+          desktop_app_version: observedAppVersion,
+          desktop_build_commit_id: observedBuildCommitId,
           bundle_path: bundlePath,
           bundle_bytes: bundleBytes,
           bundle_sha256: bundleSha256,
@@ -2562,39 +3037,59 @@ var init_official_app_server_runtime = __esm({
           runtime_host_path: runtimeHostPath,
           runtime_host_bytes: runtimeHostBytes,
           runtime_host_sha256: runtimeHostSha256,
+          runtime_host_signer_subject: runtimeHostIdentity.signer_subject,
+          runtime_host_signer_thumbprint: runtimeHostIdentity.signer_thumbprint,
+          desktop_executable_path: desktopExecutablePath,
+          desktop_executable_bytes: desktopExecutableBytes,
+          desktop_executable_sha256: desktopExecutableSha256,
+          desktop_executable_signer_subject: desktopExecutableIdentity.signer_subject,
+          desktop_executable_signer_thumbprint: desktopExecutableIdentity.signer_thumbprint,
+          desktop_archive_path: desktopArchivePath,
+          desktop_archive_bytes: desktopArchiveBytes,
+          desktop_archive_sha256: desktopArchiveSha256,
           node_version: nodeVersion,
           node_compatible: nodeCompatible,
           manifest
         };
-        if (mismatches.length > 0) {
-          return unverified(mismatches.join("; "), nodeExecutable, common);
+        if (!nodeCompatible) {
+          return unverified(`Node ${nodeVersion} is outside the supported compatibility range ${SUPPORTED_NODE_RANGE}`, nodeExecutable, common);
+        }
+        if (manifest && manifestStage === "VERIFIED") {
+          return {
+            status: "OFFICIAL_RUNTIME_VERIFIED",
+            ...common,
+            discount_capability: manifest.coding_plan_discount_verified ? "OFFICIAL_DISCOUNT_VERIFIED" : "OFFICIAL_DISCOUNT_NOT_VERIFIED",
+            start_plan_static_compatibility: manifest.start_plan_static_compatibility,
+            reason: null,
+            node_executable: nodeExecutable
+          };
+        }
+        if (experimentalAuthorization.state === "invalid") {
+          return unverified(
+            `EXPERIMENTAL_AUTHORIZATION_INVALID: ${experimentalAuthorization.reason}`,
+            nodeExecutable,
+            common
+          );
+        }
+        if (experimentalAuthorization.state !== "authorized") {
+          return unverified(
+            `EXPERIMENTAL_AUTHORIZATION_REQUIRED: ${mismatches.join("; ") || "runtime identity is not production-verified"}`,
+            nodeExecutable,
+            common
+          );
         }
         return {
-          status: "OFFICIAL_RUNTIME_VERIFIED",
-          discount_capability: manifest?.coding_plan_discount_verified === true ? "OFFICIAL_DISCOUNT_VERIFIED" : "OFFICIAL_DISCOUNT_NOT_VERIFIED",
-          start_plan_static_compatibility: manifest?.start_plan_static_compatibility ?? null,
-          reason: null,
-          install_dir: installDir,
-          install_source: discovery.source,
-          desktop_version: desktopVersion,
-          bundle_path: bundlePath,
-          bundle_bytes: bundleBytes,
-          bundle_sha256: bundleSha256,
-          builtin_provider_config_path: builtinPath,
-          builtin_provider_config_bytes: builtinBytes,
-          builtin_provider_config_sha256: builtinSha256,
-          runtime_host_path: runtimeHostPath,
-          runtime_host_bytes: runtimeHostBytes,
-          runtime_host_sha256: runtimeHostSha256,
-          node_executable: nodeExecutable,
-          node_version: nodeVersion,
-          node_compatible: nodeCompatible,
-          manifest
+          status: "OFFICIAL_RUNTIME_EXPERIMENTAL",
+          ...common,
+          discount_capability: "OFFICIAL_DISCOUNT_NOT_VERIFIED",
+          start_plan_static_compatibility: manifest?.start_plan_static_compatibility ?? "OFFLINE_RESEARCH_PENDING",
+          reason: mismatches.length > 0 ? `explicit experimental authorization accepted for an unverified runtime identity: ${mismatches.join("; ")}` : "explicit experimental authorization accepted; Provider capabilities remain independently unverified",
+          node_executable: nodeExecutable
         };
       }
       async resolve() {
         const descriptor = await this.inspect();
-        if (descriptor.status !== "OFFICIAL_RUNTIME_VERIFIED" || !descriptor.bundle_path || !descriptor.builtin_provider_config_path) {
+        if (descriptor.status !== "OFFICIAL_RUNTIME_VERIFIED" && descriptor.status !== "OFFICIAL_RUNTIME_EXPERIMENTAL" || !descriptor.bundle_path || !descriptor.builtin_provider_config_path) {
           throw new BridgeError(
             "provider_config_invalid",
             `OFFICIAL_RUNTIME_UNVERIFIED: ${descriptor.reason ?? "installed Official AppServer is unavailable"}; OFFICIAL_DISCOUNT_NOT_VERIFIED`
@@ -2630,10 +3125,10 @@ __export(official_host_adapter_exports, {
   officialProviderCapabilityFailure: () => officialProviderCapabilityFailure,
   verifyOfficialHostAssets: () => verifyOfficialHostAssets
 });
-import { createHash as createHash3 } from "node:crypto";
+import { createHash as createHash4 } from "node:crypto";
 import { createReadStream as createReadStream2 } from "node:fs";
-import { lstat as lstat2, realpath as realpath2 } from "node:fs/promises";
-import path8 from "node:path";
+import { lstat as lstat3, realpath as realpath2 } from "node:fs/promises";
+import path9 from "node:path";
 import { fileURLToPath as fileURLToPath2, pathToFileURL } from "node:url";
 function createInstalledOfficialHostSessionFactory(options = {}) {
   const providerCapability = options.providerCapability ?? "installed_runtime";
@@ -2692,6 +3187,11 @@ function createInstalledOfficialHostSessionFactory(options = {}) {
   };
 }
 function officialProviderCapabilityFailure(descriptor, capability) {
+  if (descriptor.status === "OFFICIAL_RUNTIME_EXPERIMENTAL") {
+    const requiredScope = capability === "coding_plan_discount" ? "coding_plan_probe" : capability === "start_plan_static" ? "start_plan_probe" : "other_provider_probe";
+    const authorized = descriptor.experimental_authorization?.state === "authorized" && descriptor.experimental_authorization.scopes.includes(requiredScope);
+    return authorized ? null : `OFFICIAL_RUNTIME_EXPERIMENTAL_AUTHORIZATION_MISSING: ${requiredScope}; the Provider capability remains NOT_VERIFIED`;
+  }
   if (descriptor.status !== "OFFICIAL_RUNTIME_VERIFIED") {
     return `OFFICIAL_RUNTIME_UNVERIFIED: ${descriptor.reason ?? "installed Official AppServer is unavailable"}`;
   }
@@ -2709,7 +3209,7 @@ function createOfficialHostClientFactory(input) {
     if (process.platform !== "win32" || process.arch !== "x64") {
       throw new BridgeError("runtime_not_found", "The fixed Official Host bundle is available only for Windows x64.");
     }
-    if (path8.resolve(context.config.zcodeEntrypoint) !== path8.resolve(assets.appServerEntryPath)) {
+    if (path9.resolve(context.config.zcodeEntrypoint) !== path9.resolve(assets.appServerEntryPath)) {
       throw new BridgeError("provider_config_invalid", "Official Host runtime entrypoint must be the verified installed bundle.");
     }
     const module = await resolveOfficialHostModule(input.moduleSource);
@@ -2790,7 +3290,7 @@ function createOfficialHostClientFactory(input) {
       }
       if (manager.onRuntimeExited) {
         disposables.push(manager.onRuntimeExited((event) => {
-          const value = asRecord2(event);
+          const value = asRecord3(event);
           const code = typeof value.exitCode === "number" && Number.isSafeInteger(value.exitCode) ? value.exitCode : null;
           const signal = typeof value.signal === "string" ? value.signal : null;
           exitState = { code, signal };
@@ -2838,7 +3338,7 @@ function createOfficialHostClientFactory(input) {
                 recordedTreeScan = {
                   rootPid: root.pid,
                   rootFingerprint: root.fingerprint,
-                  evidenceDigest: createHash3("sha256").update(JSON.stringify({
+                  evidenceDigest: createHash4("sha256").update(JSON.stringify({
                     rootPid: root.pid,
                     rootFingerprint: root.fingerprint,
                     memberPids
@@ -2899,7 +3399,7 @@ function createOfficialHostClientFactory(input) {
             throw new Error("Official Host reply request ID is invalid.");
           }
           if (message.error !== void 0) {
-            const error2 = asRecord2(message.error);
+            const error2 = asRecord3(message.error);
             await client.respondError(id, {
               code: typeof error2.code === "number" ? error2.code : -32e3,
               message: typeof error2.message === "string" ? error2.message.slice(0, 1e3) : "Bridge request failed",
@@ -2911,7 +3411,7 @@ function createOfficialHostClientFactory(input) {
         },
         replayEvents: (events) => {
           for (const event of events) {
-            const message = { method: "session/event", params: asRecord2(event) };
+            const message = { method: "session/event", params: asRecord3(event) };
             for (const listener of notificationListeners) listener(message);
           }
         },
@@ -2991,7 +3491,7 @@ async function verifyOfficialHostAssets(workerModuleUrl = import.meta.url) {
   const root = fileURLToPath2(new URL(`${OFFICIAL_HOST_ASSET_RELATIVE_ROOT}/`, workerUrl));
   let rootReal;
   try {
-    const rootStat = await lstat2(root);
+    const rootStat = await lstat3(root);
     if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error("not a real directory");
     rootReal = await realpath2(root);
   } catch (error2) {
@@ -2999,9 +3499,9 @@ async function verifyOfficialHostAssets(workerModuleUrl = import.meta.url) {
   }
   const verified = /* @__PURE__ */ new Map();
   for (const [name, definition] of Object.entries(OFFICIAL_HOST_ASSETS)) {
-    const candidate = path8.resolve(rootReal, definition.relativePath);
+    const candidate = path9.resolve(rootReal, definition.relativePath);
     try {
-      const candidateStat = await lstat2(candidate);
+      const candidateStat = await lstat3(candidate);
       if (!candidateStat.isFile() || candidateStat.isSymbolicLink()) throw new Error("not a regular file");
       const candidateReal = await realpath2(candidate);
       if (!isPathInside(rootReal, candidateReal)) throw new Error("resolved outside the shipped asset root");
@@ -3015,7 +3515,7 @@ async function verifyOfficialHostAssets(workerModuleUrl = import.meta.url) {
       });
     }
   }
-  const manifestDigest = createHash3("sha256").update(JSON.stringify(
+  const manifestDigest = createHash4("sha256").update(JSON.stringify(
     Object.entries(OFFICIAL_HOST_ASSETS).sort(([left], [right]) => left.localeCompare(right)).map(([name, definition]) => ({
       name,
       relativePath: definition.relativePath,
@@ -3040,7 +3540,7 @@ async function resolveOfficialHostModule(source) {
   }
   return value;
 }
-function asRecord2(value) {
+function asRecord3(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
 function normalizeOfficialHostProductVersion(value) {
@@ -3054,7 +3554,7 @@ function normalizeOfficialHostProductVersion(value) {
   return version2;
 }
 function sameWorkspace(left, right) {
-  const normalize = (value) => path8.normalize(path8.resolve(value));
+  const normalize = (value) => path9.normalize(path9.resolve(value));
   return process.platform === "win32" ? normalize(left).toLocaleLowerCase("en-US") === normalize(right).toLocaleLowerCase("en-US") : normalize(left) === normalize(right);
 }
 async function withOfficialRuntimeHostEnvironment(runtimeHostPath, operation) {
@@ -3076,11 +3576,11 @@ async function withOfficialRuntimeHostEnvironment(runtimeHostPath, operation) {
   }
 }
 function isPathInside(root, candidate) {
-  const relative = path8.relative(root, candidate);
-  return relative !== "" && !relative.startsWith(`..${path8.sep}`) && relative !== ".." && !path8.isAbsolute(relative);
+  const relative = path9.relative(root, candidate);
+  return relative !== "" && !relative.startsWith(`..${path9.sep}`) && relative !== ".." && !path9.isAbsolute(relative);
 }
 async function sha256File2(filePath) {
-  const hash = createHash3("sha256");
+  const hash = createHash4("sha256");
   await new Promise((resolve, reject) => {
     const stream = createReadStream2(filePath);
     stream.on("data", (chunk) => hash.update(chunk));
@@ -3135,19 +3635,19 @@ var init_official_host_adapter = __esm({
 });
 
 // src/runtime/build-provenance.ts
-import { createHash as createHash5 } from "node:crypto";
+import { createHash as createHash6 } from "node:crypto";
 import { readFileSync as readFileSync7, realpathSync } from "node:fs";
-import path11 from "node:path";
+import path12 from "node:path";
 function fingerprintRuntimeArtifact(filePath) {
   if (!filePath) return { path: null, sha256: null };
   try {
     const resolvedPath = realpathSync(filePath);
     return {
       path: resolvedPath,
-      sha256: createHash5("sha256").update(readFileSync7(resolvedPath)).digest("hex").toUpperCase()
+      sha256: createHash6("sha256").update(readFileSync7(resolvedPath)).digest("hex").toUpperCase()
     };
   } catch {
-    return { path: path11.resolve(filePath), sha256: null };
+    return { path: path12.resolve(filePath), sha256: null };
   }
 }
 var BRIDGE_WORKER_LAUNCH_MARKER;
@@ -3160,10 +3660,10 @@ var init_build_provenance = __esm({
 
 // src/manager/spawn-worker.ts
 import { spawn as spawn3 } from "node:child_process";
-import path12 from "node:path";
+import path13 from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 function spawnClaimOnlyWorker(workerPath, provenance, options = {}) {
-  if (!path12.isAbsolute(workerPath)) throw new TypeError("claim-only worker path must be absolute");
+  if (!path13.isAbsolute(workerPath)) throw new TypeError("claim-only worker path must be absolute");
   if (options.dropAfterPrepared && !options.interactionChannel) throw new TypeError("interaction channel is required for drop-after-prepared");
   if (options.privateAuthChannel && !options.interactionChannel) throw new TypeError("private auth requires interaction channel allocation");
   if (options.runtimeEventChannel && !options.interactionChannel) throw new TypeError("runtime events require interaction channel allocation");
@@ -3190,7 +3690,7 @@ function spawnClaimOnlyWorker(workerPath, provenance, options = {}) {
     shell: false,
     stdio,
     windowsHide: true,
-    cwd: path12.dirname(workerPath),
+    cwd: path13.dirname(workerPath),
     env
   });
   const diagnosticSink = options.onWorkerDiagnosticLine;
@@ -3253,12 +3753,12 @@ var init_spawn_worker = __esm({
 });
 
 // src/sqlite-candidate/wp6b2b1/trusted-local-policy.ts
-import { createHash as createHash6 } from "node:crypto";
+import { createHash as createHash7 } from "node:crypto";
 import { realpathSync as realpathSync2, statSync as statSync4 } from "node:fs";
-import path13 from "node:path";
+import path14 from "node:path";
 function createTrustedLocalPolicyProvider(config2) {
   let enabled = false;
-  let invalid = false;
+  let invalid2 = false;
   let failure2 = config2 === void 0 ? "trusted_local_mode_disabled" : null;
   let policyRevision = "";
   let executionProfileId = "";
@@ -3279,10 +3779,10 @@ function createTrustedLocalPolicyProvider(config2) {
         allowed_operation_kinds: ["attempt_lifecycle"],
         unrestricted: false
       };
-      policyDigest = createHash6("sha256").update(JSON.stringify(policyEnvelope), "utf8").digest("hex");
+      policyDigest = createHash7("sha256").update(JSON.stringify(policyEnvelope), "utf8").digest("hex");
       enabled = true;
     } catch (error2) {
-      invalid = true;
+      invalid2 = true;
       failure2 = error2 instanceof Error ? error2.message : "trusted_local_policy_invalid";
     }
   }
@@ -3313,7 +3813,7 @@ function createTrustedLocalPolicyProvider(config2) {
   };
   return Object.freeze({
     get status() {
-      return enabled ? "enabled" : invalid ? "invalid" : "disabled";
+      return enabled ? "enabled" : invalid2 ? "invalid" : "disabled";
     },
     get reason() {
       return enabled ? null : failure2;
@@ -3382,13 +3882,13 @@ function resolveLocalDirectory(input) {
   if (!stat2.isDirectory()) throw new Error("workspace_not_directory");
   const canonical5 = realpathSync2(input);
   if (!isLocalAbsolute(canonical5)) throw new Error("workspace_path_form_denied");
-  return path13.win32.normalize(canonical5);
+  return path14.win32.normalize(canonical5);
 }
 function isLocalAbsolute(value) {
-  return process.platform === "win32" && path13.win32.isAbsolute(value) && /^[A-Za-z]:[\\/]/u.test(value) && !value.startsWith("\\\\");
+  return process.platform === "win32" && path14.win32.isAbsolute(value) && /^[A-Za-z]:[\\/]/u.test(value) && !value.startsWith("\\\\");
 }
 function sameWindowsPath(left, right) {
-  return windowsKey(path13.win32.normalize(left)) === windowsKey(path13.win32.normalize(right));
+  return windowsKey(path14.win32.normalize(left)) === windowsKey(path14.win32.normalize(right));
 }
 function windowsKey(value) {
   return value.replace(/[\\/]+$/u, "").toLocaleLowerCase("en-US");
@@ -3534,9 +4034,9 @@ __export(start_plan_production_auth_exports, {
   readStartPlanEntitlementFailureFacts: () => readStartPlanEntitlementFailureFacts
 });
 import { spawn as spawn4 } from "node:child_process";
-import { createHash as createHash7 } from "node:crypto";
+import { createHash as createHash8 } from "node:crypto";
 import { version as readOsVersion } from "node:os";
-import path15 from "node:path";
+import path16 from "node:path";
 function isRecord6(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
@@ -3861,7 +4361,7 @@ async function createProductionStartPlanAuth(options) {
     return new StartPlanEntitlementRejectionError(verdict2.status, failureFacts, providerCode);
   };
   const authoritativeEntitlement = async (credential, provider, model, signal) => {
-    const credentialDigest = createHash7("sha256").update(credential.requestCredential).digest("hex");
+    const credentialDigest = createHash8("sha256").update(credential.requestCredential).digest("hex");
     if (entitlementContext) {
       if (!sameEntitlementContext(entitlementContext, credential, provider, model, credentialDigest)) {
         throw new Error("start_plan_entitlement_identity_invalid");
@@ -3897,7 +4397,7 @@ async function createProductionStartPlanAuth(options) {
       if (provider !== "account:bigmodel-start-plan" || !model || signal.aborted) return false;
       const credential = await resolveAuthentication(signal);
       if (!credential || credential.accountIdentity !== initial.accountIdentity || credential.sessionRevision !== initial.sessionRevision || credential.credentialExpiresAt !== null && credential.credentialExpiresAt <= now()) return false;
-      const credentialDigest = createHash7("sha256").update(credential.requestCredential).digest("hex");
+      const credentialDigest = createHash8("sha256").update(credential.requestCredential).digest("hex");
       if (entitlementContext && !sameEntitlementContext(entitlementContext, credential, provider, model, credentialDigest)) return false;
       const verdict2 = await authoritativeEntitlement(credential, provider, model, signal);
       if (signal.aborted) return false;
@@ -3941,7 +4441,7 @@ async function createProductionStartPlanAuth(options) {
   };
 }
 async function readOfficialCliVersion(zcodeEntrypoint) {
-  const key = path15.resolve(zcodeEntrypoint);
+  const key = path16.resolve(zcodeEntrypoint);
   const cached2 = officialCliVersionCache.get(key);
   if (cached2) return cached2;
   const version2 = await new Promise((resolve) => {
@@ -4228,7 +4728,7 @@ var init_result_contract = __esm({
 });
 
 // src/sqlite-candidate/wp6b2b1/launch-bootstrap.ts
-import { createHash as createHash8 } from "node:crypto";
+import { createHash as createHash9 } from "node:crypto";
 function createLaunchBootstrap(source) {
   const snapshot = source.policy_snapshot;
   const bootstrap = {
@@ -4315,7 +4815,7 @@ function deriveAdmissionPolicySnapshotDigest(value) {
     policy_digest: value.policy_digest,
     execution_profile_id: value.execution_profile_id
   };
-  return createHash8("sha256").update(canonicalJson(envelope), "utf8").digest("hex");
+  return createHash9("sha256").update(canonicalJson(envelope), "utf8").digest("hex");
 }
 function canonicalJson(value) {
   if (value === null || typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
@@ -4351,7 +4851,7 @@ var init_launch_bootstrap = __esm({
 });
 
 // src/sqlite-candidate/wp6b2b1/launch-identity.ts
-import { createHash as createHash9 } from "node:crypto";
+import { createHash as createHash10 } from "node:crypto";
 async function observeTrustedLaunchIdentity(child, probe, launchId, generation) {
   if (probe.platform !== "win32" || !validText2(launchId) || !positive2(generation)) return null;
   const captured = await captureSpawnGenerationIdentity(child, probe);
@@ -4422,7 +4922,7 @@ function validText2(value) {
   return value.length > 0 && value.length <= 128 && !/[\x00-\x1f]/u.test(value);
 }
 function digest(value) {
-  return createHash9("sha256").update(canonical2(value), "utf8").digest("hex");
+  return createHash10("sha256").update(canonical2(value), "utf8").digest("hex");
 }
 function canonical2(value) {
   if (value === null || typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
@@ -4507,7 +5007,7 @@ var init_worker_handshake = __esm({
 });
 
 // src/runtime/sqlite-runtime-roster.ts
-import { createHash as createHash10 } from "node:crypto";
+import { createHash as createHash11 } from "node:crypto";
 function currentSqliteRuntimeRoster() {
   return {
     node: process.versions.node,
@@ -4520,7 +5020,7 @@ function currentSqliteRuntimeRoster() {
 }
 function currentSqliteRuntimeRosterDigest() {
   const roster = currentSqliteRuntimeRoster();
-  return createHash10("sha256").update(JSON.stringify(roster)).digest("hex");
+  return createHash11("sha256").update(JSON.stringify(roster)).digest("hex");
 }
 var SQLITE_CUTOVER_PROTOCOL_VERSION, SQLITE_CUTOVER_VERIFIER_VERSION, SQLITE_CANDIDATE_SCHEMA_VERSION;
 var init_sqlite_runtime_roster = __esm({
@@ -4796,7 +5296,7 @@ var init_start_plan_handle_gate = __esm({
 });
 
 // src/sqlite-candidate/wp6b2b1/interaction-channel.mjs
-import { createHash as createHash11 } from "node:crypto";
+import { createHash as createHash12 } from "node:crypto";
 async function createCandidateInteractionChannel(child, operation, verifyProcessIdentity) {
   if (!child || !Number.isSafeInteger(child.pid) || !Array.isArray(child.stdio) || child.stdio.length < 10 || !operation || operation.operation_kind !== "attempt_lifecycle" || operation.phase !== "running" || !Number.isSafeInteger(operation.generation) || operation.generation < 1 || !operation.claim_id || operation.claim_generation !== operation.generation || !operation.claim_worker_identity_json || !operation.launch_identity_json || !operation.claim_worker_identity_digest || typeof verifyProcessIdentity !== "function") throw coded("interaction_channel_unavailable");
   let worker;
@@ -4974,7 +5474,7 @@ function stableJson(value, depth = 0) {
   throw coded("interaction_json_invalid");
 }
 function sha256(value) {
-  return createHash11("sha256").update(value).digest("hex");
+  return createHash12("sha256").update(value).digest("hex");
 }
 function coded(code) {
   return Object.assign(new Error(code), { code });
@@ -5022,7 +5522,7 @@ var init_interaction_channel = __esm({
 });
 
 // src/store/json-history-result-exceptions.mjs
-import { createHash as createHash12 } from "node:crypto";
+import { createHash as createHash13 } from "node:crypto";
 function freeze(value) {
   if (value && typeof value === "object" && !Object.isFrozen(value)) {
     for (const child of Object.values(value)) freeze(child);
@@ -5036,7 +5536,7 @@ function canonical3(value) {
   return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical3(value[key])}`).join(",")}}`;
 }
 function historicalResultExceptionArtifactId(relativePath) {
-  const digest3 = createHash12("sha256").update(relativePath).digest("hex");
+  const digest3 = createHash13("sha256").update(relativePath).digest("hex");
   return `artifact-${digest3.slice(0, 40)}`;
 }
 function annotateHistoricalResultException(entry) {
@@ -5053,7 +5553,7 @@ function annotateHistoricalResultException(entry) {
   });
 }
 function historicalResultExceptionSetDigest(entries) {
-  return createHash12("sha256").update(canonical3(entries)).digest("hex");
+  return createHash13("sha256").update(canonical3(entries)).digest("hex");
 }
 function isCanonicalHistoricalResultExceptionSet(entries) {
   if (!Array.isArray(entries) || entries.length !== HISTORICAL_RESULT_EXCEPTIONS.length) return false;
@@ -5126,8 +5626,8 @@ function record3(value) {
 }
 function safeRuntimeText(value) {
   if (typeof value !== "string") return null;
-  const text2 = value.replace(/[\u0000-\u001f\u007f]/gu, " ").trim();
-  return text2 ? text2.slice(0, 160) : null;
+  const text3 = value.replace(/[\u0000-\u001f\u007f]/gu, " ").trim();
+  return text3 ? text3.slice(0, 160) : null;
 }
 function safeToolName(value) {
   if (typeof value !== "string") return "tool";
@@ -5218,9 +5718,9 @@ __export(store_exports, {
   validateWorkspace: () => validateWorkspace
 });
 import { DatabaseSync } from "node:sqlite";
-import { createHash as createHash13, randomUUID as randomUUID3 } from "node:crypto";
-import { existsSync as existsSync8, lstatSync as lstatSync2, realpathSync as realpathSync4, readFileSync as readFileSync9, writeFileSync as writeFileSync2, openSync as openSync2, closeSync as closeSync2, fsyncSync, unlinkSync as unlinkSync2, renameSync as renameSync2, statSync as statSync5, readdirSync, mkdirSync as mkdirSync3, rmSync } from "node:fs";
-import path16 from "node:path";
+import { createHash as createHash14, randomUUID as randomUUID3 } from "node:crypto";
+import { existsSync as existsSync8, lstatSync as lstatSync2, realpathSync as realpathSync4, readFileSync as readFileSync9, writeFileSync as writeFileSync2, openSync as openSync3, closeSync as closeSync3, fsyncSync, unlinkSync as unlinkSync2, renameSync as renameSync2, statSync as statSync5, readdirSync, mkdirSync as mkdirSync3, rmSync } from "node:fs";
+import path17 from "node:path";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
 function canonical4(value) {
   try {
@@ -5248,7 +5748,7 @@ function normalizeAdminAbandonmentTableSql(sql) {
   return normalized.endsWith(";") ? normalized.slice(0, -1) : normalized;
 }
 function adminAbandonmentRowsDigest(rows) {
-  return createHash13("sha256").update(rows.map(upgradeRowJson).join("\n")).digest("hex");
+  return createHash14("sha256").update(rows.map(upgradeRowJson).join("\n")).digest("hex");
 }
 function assertCandidateSchema(db, version2 = SCHEMA_VERSION, { allowRuntimeEventExtensionAbsent = false } = {}) {
   const key = `${version2}:${allowRuntimeEventExtensionAbsent ? "recovery" : "strict"}`;
@@ -5657,27 +6157,27 @@ function parseAuthoritySourceManifest(sourceManifestJson, sourceManifestDigest) 
   const parsed = parseHistoricalExceptionManifest(sourceManifestJson, sourceManifestDigest);
   const { manifest } = parsed;
   if (manifest.kind === void 0) return { ...parsed, kind: "historical_projection" };
-  if (manifest.kind !== "raw_json_archive_cutover" || typeof manifest.source_tasks_root !== "string" || !path16.isAbsolute(manifest.source_tasks_root) || typeof manifest.archive_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(manifest.archive_manifest_digest) || typeof manifest.source_files_digest !== "string" || !/^[0-9a-f]{64}$/u.test(manifest.source_files_digest) || manifest.task_count !== 0 || manifest.result_count !== 0 || manifest.event_count !== 0 || !Number.isSafeInteger(manifest.artifact_count) || manifest.artifact_count < 0 || !Number.isSafeInteger(manifest.artifact_bytes) || manifest.artifact_bytes < 0 || !Number.isSafeInteger(manifest.archive_file_count) || manifest.archive_file_count !== manifest.artifact_count || !Number.isSafeInteger(manifest.archive_byte_count) || manifest.archive_byte_count !== manifest.artifact_bytes || parsed.exceptions.length !== 0 || !Array.isArray(manifest.files) || manifest.files.length !== 0)
+  if (manifest.kind !== "raw_json_archive_cutover" || typeof manifest.source_tasks_root !== "string" || !path17.isAbsolute(manifest.source_tasks_root) || typeof manifest.archive_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(manifest.archive_manifest_digest) || typeof manifest.source_files_digest !== "string" || !/^[0-9a-f]{64}$/u.test(manifest.source_files_digest) || manifest.task_count !== 0 || manifest.result_count !== 0 || manifest.event_count !== 0 || !Number.isSafeInteger(manifest.artifact_count) || manifest.artifact_count < 0 || !Number.isSafeInteger(manifest.artifact_bytes) || manifest.artifact_bytes < 0 || !Number.isSafeInteger(manifest.archive_file_count) || manifest.archive_file_count !== manifest.artifact_count || !Number.isSafeInteger(manifest.archive_byte_count) || manifest.archive_byte_count !== manifest.artifact_bytes || parsed.exceptions.length !== 0 || !Array.isArray(manifest.files) || manifest.files.length !== 0)
     fail2("invalid_raw_json_archive_cutover_manifest");
   return { ...parsed, kind: "raw_json_archive_cutover" };
 }
 function pathsFor(root, { databaseFileName = "operations.sqlite3", managedDataDirectory = false, allowCutoverPending = false, allowUnpublishedCutover = false, allowFreshBootstrapPending = false } = {}) {
-  if (typeof root !== "string" || !path16.isAbsolute(root) || !existsSync8(root) || !lstatSync2(root).isDirectory() || lstatSync2(root).isSymbolicLink()) fail2("invalid_data_root");
+  if (typeof root !== "string" || !path17.isAbsolute(root) || !existsSync8(root) || !lstatSync2(root).isDirectory() || lstatSync2(root).isSymbolicLink()) fail2("invalid_data_root");
   if (typeof databaseFileName !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/u.test(databaseFileName) || databaseFileName === "." || databaseFileName === "..") fail2("invalid_database_file_name");
   const resolved = realpathSync4.native(root);
   if (!managedDataDirectory) {
-    const relative = path16.relative(HERE, resolved);
-    if (!relative || relative.startsWith("..") || path16.isAbsolute(relative)) fail2("data_root_outside_candidate");
+    const relative = path17.relative(HERE, resolved);
+    if (!relative || relative.startsWith("..") || path17.isAbsolute(relative)) fail2("data_root_outside_candidate");
   }
-  const db = path16.join(resolved, databaseFileName);
+  const db = path17.join(resolved, databaseFileName);
   const files = {
     root: resolved,
     db,
     bootstrapPending: `${db}.bootstrap-pending.json`,
     cutoverPending: `${db}.cutover-pending.json`,
     cutoverPublished: `${db}.cutover-published.json`,
-    poison: path16.join(resolved, "ROOT_POISONED.json"),
-    intent: path16.join(resolved, "WRITER_INTENT.json")
+    poison: path17.join(resolved, "ROOT_POISONED.json"),
+    intent: path17.join(resolved, "WRITER_INTENT.json")
   };
   for (const file of [files.db, `${files.db}-wal`, `${files.db}-shm`, files.bootstrapPending, files.cutoverPending, files.cutoverPublished, files.poison, files.intent]) {
     try {
@@ -5699,7 +6199,7 @@ function readPublishedCutoverReceipt(file) {
   }
   const keys = ["archive", "created_at", "cutover_id", "database_file", "migration_id", "schema_version", "source_manifest_digest", "source_root_digest", "state"];
   const archiveKeys = ["archive_directory", "byte_count", "file_count", "manifest_digest", "source_tasks_root"];
-  if (!value || Object.getPrototypeOf(value) !== Object.prototype || Object.keys(value).sort().join("|") !== keys.join("|") || value.schema_version !== 1 || value.state !== "authority_switch_receipt" || !validText3(value.migration_id, 128) || !validText3(value.cutover_id, 128) || typeof value.source_root_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.source_root_digest) || typeof value.source_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.source_manifest_digest) || !validText3(value.database_file, 96) || !validText3(value.created_at, 64) || Number.isNaN(Date.parse(value.created_at)) || !value.archive || Object.getPrototypeOf(value.archive) !== Object.prototype || Object.keys(value.archive).sort().join("|") !== archiveKeys.join("|") || !validText3(value.archive.archive_directory, 32767) || !path16.isAbsolute(value.archive.archive_directory) || !validText3(value.archive.source_tasks_root, 32767) || !path16.isAbsolute(value.archive.source_tasks_root) || typeof value.archive.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.archive.manifest_digest) || !Number.isSafeInteger(value.archive.file_count) || value.archive.file_count < 0 || !Number.isSafeInteger(value.archive.byte_count) || value.archive.byte_count < 0) fail2("cutover_publication_receipt_invalid");
+  if (!value || Object.getPrototypeOf(value) !== Object.prototype || Object.keys(value).sort().join("|") !== keys.join("|") || value.schema_version !== 1 || value.state !== "authority_switch_receipt" || !validText3(value.migration_id, 128) || !validText3(value.cutover_id, 128) || typeof value.source_root_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.source_root_digest) || typeof value.source_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.source_manifest_digest) || !validText3(value.database_file, 96) || !validText3(value.created_at, 64) || Number.isNaN(Date.parse(value.created_at)) || !value.archive || Object.getPrototypeOf(value.archive) !== Object.prototype || Object.keys(value.archive).sort().join("|") !== archiveKeys.join("|") || !validText3(value.archive.archive_directory, 32767) || !path17.isAbsolute(value.archive.archive_directory) || !validText3(value.archive.source_tasks_root, 32767) || !path17.isAbsolute(value.archive.source_tasks_root) || typeof value.archive.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.archive.manifest_digest) || !Number.isSafeInteger(value.archive.file_count) || value.archive.file_count < 0 || !Number.isSafeInteger(value.archive.byte_count) || value.archive.byte_count < 0) fail2("cutover_publication_receipt_invalid");
   return value;
 }
 function assertCutoverPublicationGate(db, paths) {
@@ -5719,16 +6219,16 @@ function assertCutoverPublicationGate(db, paths) {
   }
   const receipt2 = switched[0];
   const publication = readPublishedCutoverReceipt(paths.cutoverPublished);
-  if (publication.database_file !== path16.basename(paths.db) || publication.migration_id !== receipt2.migration_id || publication.cutover_id !== receipt2.cutover_id || publication.source_root_digest !== receipt2.source_root_digest || publication.source_manifest_digest !== receipt2.source_manifest_digest || publication.archive.archive_directory !== receipt2.archive_directory || publication.archive.manifest_digest !== receipt2.archive_manifest_digest || publication.archive.source_tasks_root !== receipt2.archive_source_tasks_root || publication.archive.file_count !== receipt2.archive_file_count || publication.archive.byte_count !== receipt2.archive_byte_count) fail2("cutover_publication_receipt_mismatch");
+  if (publication.database_file !== path17.basename(paths.db) || publication.migration_id !== receipt2.migration_id || publication.cutover_id !== receipt2.cutover_id || publication.source_root_digest !== receipt2.source_root_digest || publication.source_manifest_digest !== receipt2.source_manifest_digest || publication.archive.archive_directory !== receipt2.archive_directory || publication.archive.manifest_digest !== receipt2.archive_manifest_digest || publication.archive.source_tasks_root !== receipt2.archive_source_tasks_root || publication.archive.file_count !== receipt2.archive_file_count || publication.archive.byte_count !== receipt2.archive_byte_count) fail2("cutover_publication_receipt_mismatch");
 }
 function writePoison(file, value) {
   const tmp = `${file}.${randomUUID3()}.tmp`;
-  const fd = openSync2(tmp, "wx", 384);
+  const fd = openSync3(tmp, "wx", 384);
   try {
     writeFileSync2(fd, JSON.stringify(value));
     fsyncSync(fd);
   } finally {
-    closeSync2(fd);
+    closeSync3(fd);
   }
   try {
     renameSync2(tmp, file);
@@ -5741,8 +6241,8 @@ function writePoison(file, value) {
   }
 }
 function workspacePathsOverlap(left, right) {
-  const a = path16.win32.resolve(left).toLowerCase();
-  const b = path16.win32.resolve(right).toLowerCase();
+  const a = path17.win32.resolve(left).toLowerCase();
+  const b = path17.win32.resolve(right).toLowerCase();
   const contains = (parent, child) => child === parent || child.startsWith(parent.endsWith("\\") ? parent : `${parent}\\`);
   return contains(a, b) || contains(b, a);
 }
@@ -5973,7 +6473,7 @@ function validateTaskPackage(task) {
 }
 function validateWorkspace(input, validator) {
   if (typeof input !== "string" || !input.trim()) fail2("workspace_missing");
-  if (!path16.isAbsolute(input)) fail2("workspace_not_absolute");
+  if (!path17.isAbsolute(input)) fail2("workspace_not_absolute");
   if (input.replace(/\//g, "\\").startsWith("\\\\")) fail2("workspace_unsupported_path_form");
   let st, canonicalPath;
   try {
@@ -6014,7 +6514,7 @@ var init_store = __esm({
     init_interaction_channel();
     init_json_history_result_exceptions();
     init_task_feedback_projection();
-    HERE = path16.dirname(fileURLToPath5(import.meta.url));
+    HERE = path17.dirname(fileURLToPath5(import.meta.url));
     SCHEMA = readFileSync9(new URL("./schema.sql", import.meta.url), "utf8");
     RUNTIME_EVENTS_SCHEMA = readFileSync9(new URL("./runtime-events.sql", import.meta.url), "utf8");
     ADMIN_ABANDONMENT_SCHEMA = readFileSync9(new URL("./admin-abandonment.sql", import.meta.url), "utf8");
@@ -6049,11 +6549,11 @@ var init_store = __esm({
     RECOVERY_QUARANTINE_CODES = /* @__PURE__ */ new Set(["claim_identity_conflict", "operation_projection_conflict"]);
     RECOVERY_EVIDENCE_KEYS = Object.freeze(["attempt", "claim_id", "classification", "envelope_digest", "evidence_digest", "evidence_source", "expected_revision", "reason", "reason_code", "task_id", "worker_identity_digest"]);
     RECOVERY_LIMIT = 8;
-    digest2 = (value) => createHash13("sha256").update(typeof value === "string" ? value : canonical4(value)).digest("hex");
-    rawDigest = (value) => createHash13("sha256").update(Buffer.from(value)).digest("hex");
+    digest2 = (value) => createHash14("sha256").update(typeof value === "string" ? value : canonical4(value)).digest("hex");
+    rawDigest = (value) => createHash14("sha256").update(Buffer.from(value)).digest("hex");
     upgradeRowJson = (row) => canonical4(Object.fromEntries(Object.entries(row).map(([key, value]) => [
       key,
-      value instanceof Uint8Array ? { sqlite_type: "blob", bytes: value.byteLength, sha256: createHash13("sha256").update(value).digest("hex") } : value
+      value instanceof Uint8Array ? { sqlite_type: "blob", bytes: value.byteLength, sha256: createHash14("sha256").update(value).digest("hex") } : value
     ])));
     EVIDENCE_KEYS = Object.freeze({
       capacity_policy_committed: ["capacity_limit", "generation"],
@@ -6135,10 +6635,10 @@ var init_store = __esm({
         }
       } = {}) {
         if (offline !== true) fail2("offline_upgrade_required");
-        if (!path16.isAbsolute(destinationRoot) || realpathSync4(destinationRoot) !== path16.resolve(destinationRoot) || readdirSync(destinationRoot).length) fail2("upgrade_destination_not_empty");
+        if (!path17.isAbsolute(destinationRoot) || realpathSync4(destinationRoot) !== path17.resolve(destinationRoot) || readdirSync(destinationRoot).length) fail2("upgrade_destination_not_empty");
         const options = { databaseFileName, managedDataDirectory: true };
         const source = pathsFor(sourceRoot, options), destination = pathsFor(destinationRoot, options);
-        if (source.root === destination.root || path16.resolve(sourceRoot) === path16.resolve(destinationRoot)) fail2("upgrade_same_root");
+        if (source.root === destination.root || path17.resolve(sourceRoot) === path17.resolve(destinationRoot)) fail2("upgrade_same_root");
         const blocked = () => {
           for (const file of [source.intent, source.poison, source.bootstrapPending, source.cutoverPending]) if (existsSync8(file)) fail2("upgrade_source_blocked");
         };
@@ -6177,7 +6677,7 @@ var init_store = __esm({
             const keys = columns.filter((c) => c.pk).sort((a, b) => a.pk - b.pk).map((c) => q(c.name));
             const select = "SELECT * FROM " + q(name) + " ORDER BY " + (keys.length ? keys.join(",") : "rowid");
             const insert = target.prepare("INSERT INTO " + q(name) + "(" + names.map(q).join(",") + ") VALUES(" + names.map(() => "?").join(",") + ")");
-            const before = createHash13("sha256"), expected = createHash13("sha256");
+            const before = createHash14("sha256"), expected = createHash14("sha256");
             let count = 0;
             for (const raw of db.prepare(select).iterate()) {
               const row = { ...raw };
@@ -6188,7 +6688,7 @@ var init_store = __esm({
               insert.run(...names.map((key) => row[key]));
               count++;
             }
-            const after = createHash13("sha256");
+            const after = createHash14("sha256");
             let copied = 0;
             for (const raw of target.prepare(select).iterate()) {
               after.update(upgradeRowJson(raw) + "\n");
@@ -6214,20 +6714,20 @@ var init_store = __esm({
           blocked();
           const receipt2 = {
             contract: "sqlite-v13-v14-copy-upgrade-v1",
-            source: path16.resolve(sourceRoot),
-            destination: path16.resolve(destinationRoot),
+            source: path17.resolve(sourceRoot),
+            destination: path17.resolve(destinationRoot),
             database_file: databaseFileName,
             source_version: 13,
             destination_version: 14,
             verified_at: (/* @__PURE__ */ new Date()).toISOString(),
             tables: verification
           };
-          const fd = openSync2(path16.join(destinationRoot, "v14-upgrade-receipt.json"), "wx", 384);
+          const fd = openSync3(path17.join(destinationRoot, "v14-upgrade-receipt.json"), "wx", 384);
           try {
             writeFileSync2(fd, JSON.stringify(receipt2, null, 2));
             fsyncSync(fd);
           } finally {
-            closeSync2(fd);
+            closeSync3(fd);
           }
           target.exec("PRAGMA wal_checkpoint(TRUNCATE)");
           unlinkSync2(destination.bootstrapPending);
@@ -6239,7 +6739,7 @@ var init_store = __esm({
             } catch {
             }
           }
-          if (target) writeFileSync2(path16.join(destinationRoot, "ROOT_POISONED.json"), JSON.stringify({ version: 1, reason: "v14_upgrade_failed", detail: String(error2), at: (/* @__PURE__ */ new Date()).toISOString() }), { flag: "wx" });
+          if (target) writeFileSync2(path17.join(destinationRoot, "ROOT_POISONED.json"), JSON.stringify({ version: 1, reason: "v14_upgrade_failed", detail: String(error2), at: (/* @__PURE__ */ new Date()).toISOString() }), { flag: "wx" });
           throw error2;
         } finally {
           target?.close();
@@ -6272,8 +6772,8 @@ var init_store = __esm({
           }
         };
         const names = (token2) => ({
-          stage: path16.join(p.root, databaseFileName + ".v14-stage-" + token2),
-          backup: path16.join(p.root, databaseFileName + ".v13-backup-" + token2)
+          stage: path17.join(p.root, databaseFileName + ".v14-stage-" + token2),
+          backup: path17.join(p.root, databaseFileName + ".v13-backup-" + token2)
         });
         const validatePublished = () => {
           const ready = this.open(p.root, opts);
@@ -6318,12 +6818,12 @@ var init_store = __esm({
         for (const file of [p.intent, p.poison, p.bootstrapPending, p.cutoverPending])
           if (existsSync8(file)) fail2("upgrade_source_blocked");
         const token = randomUUID3(), { stage, backup } = names(token);
-        const fd = openSync2(pending, "wx", 384);
+        const fd = openSync3(pending, "wx", 384);
         try {
           writeFileSync2(fd, JSON.stringify({ contract: "sqlite-v13-v14-auto-upgrade-v1", database_file: databaseFileName, token }));
           fsyncSync(fd);
         } finally {
-          closeSync2(fd);
+          closeSync3(fd);
         }
         try {
           assertStartupLock();
@@ -6350,7 +6850,7 @@ var init_store = __esm({
           } finally {
             old.close();
           }
-          const stageDb = path16.join(stage, databaseFileName);
+          const stageDb = path17.join(stage, databaseFileName);
           if (existsSync8(p.db + "-wal") || existsSync8(p.db + "-shm") || existsSync8(stageDb + "-wal") || existsSync8(stageDb + "-shm")) fail2("upgrade_database_still_open");
           if (version2() !== 13) fail2("upgrade_source_changed");
           assertStartupLock();
@@ -9142,12 +9642,12 @@ var init_store = __esm({
         let began = false, commitStarted = false, settled = false;
         const token = randomUUID3();
         try {
-          const fd = openSync2(this.#paths.intent, "wx", 384);
+          const fd = openSync3(this.#paths.intent, "wx", 384);
           try {
             writeFileSync2(fd, JSON.stringify({ version: 1, token, started_at: (/* @__PURE__ */ new Date()).toISOString() }));
             fsyncSync(fd);
           } finally {
-            closeSync2(fd);
+            closeSync3(fd);
           }
         } catch (e) {
           if (e?.code === "EEXIST") fail2("root_writer_busy");
@@ -9243,7 +9743,7 @@ var init_store = __esm({
             if (migrationRuns.length || migratedResultsCount || migratedEventsCount || this.#db.prepare("SELECT COUNT(*) AS n FROM json_artifacts").get().n) fail2("fresh_install_contains_legacy_data");
           } else if (authoritySwitches.length) {
             const receipt2 = authoritySwitches[0], migration = migrationRuns[0];
-            if (!migration || migration.state !== "verified" || migration.migration_id !== receipt2.migration_id || migration.source_root_digest !== receipt2.source_root_digest || migration.source_manifest_digest !== receipt2.source_manifest_digest || digest2(migration.source_manifest_json) !== migration.source_manifest_digest || !validText3(migration.archive_directory, 32767) || !path16.isAbsolute(migration.archive_directory) || !validText3(receipt2.archive_directory, 32767) || !path16.isAbsolute(receipt2.archive_directory) || migration.archive_directory !== receipt2.archive_directory || typeof migration.archive_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(migration.archive_manifest_digest) || migration.archive_manifest_digest !== receipt2.archive_manifest_digest || !validText3(migration.archive_source_tasks_root, 32767) || !path16.isAbsolute(migration.archive_source_tasks_root) || migration.archive_source_tasks_root !== receipt2.archive_source_tasks_root || !Number.isSafeInteger(migration.archive_file_count) || migration.archive_file_count < 0 || migration.archive_file_count !== migration.source_artifact_count || migration.archive_file_count !== receipt2.archive_file_count || !Number.isSafeInteger(migration.archive_byte_count) || migration.archive_byte_count < 0 || migration.archive_byte_count !== migration.source_artifact_bytes || migration.archive_byte_count !== receipt2.archive_byte_count || receipt2.schema_version !== this.#schemaVersion || !validText3(receipt2.protocol_version, 128) || typeof receipt2.runtime_roster_digest !== "string" || !/^[0-9a-f]{64}$/u.test(receipt2.runtime_roster_digest) || !validText3(receipt2.verifier_version, 128) || !validText3(migration.verifier_version, 128) || receipt2.verifier_version !== migration.verifier_version || !validText3(receipt2.cutover_id, 128) || !validText3(receipt2.created_at, 64) || Number.isNaN(Date.parse(receipt2.created_at)) || !validText3(migration.created_at, 64) || !validText3(migration.verified_at, 64) || Number.isNaN(Date.parse(migration.created_at)) || Number.isNaN(Date.parse(migration.verified_at))) fail2("authority_switch_invalid");
+            if (!migration || migration.state !== "verified" || migration.migration_id !== receipt2.migration_id || migration.source_root_digest !== receipt2.source_root_digest || migration.source_manifest_digest !== receipt2.source_manifest_digest || digest2(migration.source_manifest_json) !== migration.source_manifest_digest || !validText3(migration.archive_directory, 32767) || !path17.isAbsolute(migration.archive_directory) || !validText3(receipt2.archive_directory, 32767) || !path17.isAbsolute(receipt2.archive_directory) || migration.archive_directory !== receipt2.archive_directory || typeof migration.archive_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(migration.archive_manifest_digest) || migration.archive_manifest_digest !== receipt2.archive_manifest_digest || !validText3(migration.archive_source_tasks_root, 32767) || !path17.isAbsolute(migration.archive_source_tasks_root) || migration.archive_source_tasks_root !== receipt2.archive_source_tasks_root || !Number.isSafeInteger(migration.archive_file_count) || migration.archive_file_count < 0 || migration.archive_file_count !== migration.source_artifact_count || migration.archive_file_count !== receipt2.archive_file_count || !Number.isSafeInteger(migration.archive_byte_count) || migration.archive_byte_count < 0 || migration.archive_byte_count !== migration.source_artifact_bytes || migration.archive_byte_count !== receipt2.archive_byte_count || receipt2.schema_version !== this.#schemaVersion || !validText3(receipt2.protocol_version, 128) || typeof receipt2.runtime_roster_digest !== "string" || !/^[0-9a-f]{64}$/u.test(receipt2.runtime_roster_digest) || !validText3(receipt2.verifier_version, 128) || !validText3(migration.verifier_version, 128) || receipt2.verifier_version !== migration.verifier_version || !validText3(receipt2.cutover_id, 128) || !validText3(receipt2.created_at, 64) || Number.isNaN(Date.parse(receipt2.created_at)) || !validText3(migration.created_at, 64) || !validText3(migration.verified_at, 64) || Number.isNaN(Date.parse(migration.created_at)) || Number.isNaN(Date.parse(migration.verified_at))) fail2("authority_switch_invalid");
             const policy = parseAuthoritySourceManifest(migration.source_manifest_json, migration.source_manifest_digest);
             if (policy.manifest.task_count !== migration.source_task_count || policy.manifest.artifact_count !== migration.source_artifact_count || policy.manifest.artifact_bytes !== migration.source_artifact_bytes || policy.manifest.result_count !== migration.source_result_count || policy.manifest.event_count !== migration.source_event_count) fail2("authority_switch_invalid");
           } else if (migrationRuns.length || migratedResultsCount || migratedEventsCount || this.#db.prepare("SELECT COUNT(*) AS n FROM json_artifacts").get().n) {
@@ -9699,7 +10199,7 @@ var init_store = __esm({
 });
 
 // src/sqlite-candidate/wp6b2b1/runtime-event-channel.mjs
-import { createHash as createHash14 } from "node:crypto";
+import { createHash as createHash15 } from "node:crypto";
 async function createCandidateRuntimeEventChannel(child, operation, verifyProcessIdentity) {
   if (!child || !Number.isSafeInteger(child.pid) || !Array.isArray(child.stdio) || child.stdio.length < 15 || !operation || operation.operation_kind !== "attempt_lifecycle" || operation.phase !== "running" || !Number.isSafeInteger(operation.generation) || operation.generation < 1 || !operation.claim_id || operation.claim_generation !== operation.generation || !operation.claim_worker_identity_json || !operation.launch_identity_json || !operation.claim_worker_identity_digest || typeof verifyProcessIdentity !== "function") {
     throw coded2("runtime_event_channel_unavailable");
@@ -9829,7 +10329,7 @@ function stableJson2(value, depth = 0) {
   throw coded2("runtime_event_json_invalid");
 }
 function sha2562(value) {
-  return createHash14("sha256").update(value).digest("hex");
+  return createHash15("sha256").update(value).digest("hex");
 }
 function coded2(code) {
   return Object.assign(new Error(code), { code });
@@ -10154,13 +10654,13 @@ __export(lifecycle_gate_exports, {
   openClaimOnlyDriver: () => openClaimOnlyDriver,
   readAllLifecycleEventsForRecovery: () => readAllLifecycleEventsForRecovery
 });
-import { createHash as createHash15, randomUUID as randomUUID4 } from "node:crypto";
-import { closeSync as closeSync3, existsSync as existsSync9, fsyncSync as fsyncSync2, linkSync, lstatSync as lstatSync3, openSync as openSync3, readFileSync as readFileSync10, readdirSync as readdirSync2, realpathSync as realpathSync5, unlinkSync as unlinkSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { createHash as createHash16, randomUUID as randomUUID4 } from "node:crypto";
+import { closeSync as closeSync4, existsSync as existsSync9, fsyncSync as fsyncSync2, linkSync, lstatSync as lstatSync3, openSync as openSync4, readFileSync as readFileSync10, readdirSync as readdirSync2, realpathSync as realpathSync5, unlinkSync as unlinkSync3, writeFileSync as writeFileSync3 } from "node:fs";
 import { spawn as spawn5 } from "node:child_process";
-import path17 from "node:path";
+import path18 from "node:path";
 import { homedir as homedir5 } from "node:os";
 function recoveryStopKey(dataRoot, databaseFileName, operationId) {
-  return `${path17.resolve(dataRoot)}\0${databaseFileName ?? "operations.sqlite3"}\0${operationId}`;
+  return `${path18.resolve(dataRoot)}\0${databaseFileName ?? "operations.sqlite3"}\0${operationId}`;
 }
 function readAllLifecycleEventsForRecovery(port, operationId) {
   const pageSize = 200;
@@ -10191,8 +10691,8 @@ function taskExecutionEvidenceObserved(port, operation, lifecycleEvents) {
     "turn_failed",
     "report_ready"
   ]);
-  const taskId = text(operation.task_id, "recovery_task_id_missing");
-  const operationId = text(operation.operation_id, "recovery_operation_id_missing");
+  const taskId = text2(operation.task_id, "recovery_task_id_missing");
+  const operationId = text2(operation.operation_id, "recovery_operation_id_missing");
   const attempt = positive3(Number(operation.attempt), "recovery_attempt_invalid");
   const generation = positive3(Number(operation.generation), "recovery_generation_invalid");
   const pageSize = 200;
@@ -10246,7 +10746,7 @@ async function initializeFreshInstallSqliteRoot(root, databaseFileName, version2
     throw new LifecycleGateError("sqlite_bootstrap_database_name_invalid");
   }
   const modules = await loadLifecycleCandidateModules(version2);
-  const key = path17.join(path17.resolve(root), databaseFileName);
+  const key = path18.join(path18.resolve(root), databaseFileName);
   const pending = freshBootstrapPromises.get(key);
   if (pending) return pending;
   const operation = ensureFreshSqliteAuthority(root, databaseFileName, modules, processProbe, options);
@@ -10264,7 +10764,7 @@ async function acquireFreshBootstrapLock(root, databaseFileName, timeoutMs, owne
       "Fresh SQLite bootstrap requires the Windows exclusive-file-handle lock"
     );
   }
-  const lockPath = path17.join(root, `${databaseFileName}.bootstrap.lock`);
+  const lockPath = path18.join(root, `${databaseFileName}.bootstrap.lock`);
   const deadline = Date.now() + timeoutMs;
   for (; ; ) {
     assertFreshBootstrapRootPath(root);
@@ -10308,7 +10808,7 @@ async function tryAcquireWindowsBootstrapLock(root, lockPath, databaseFileName, 
   })}
 `;
   const systemRoot = process.env["SystemRoot"];
-  const absolutePowerShell = systemRoot ? path17.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe") : "powershell.exe";
+  const absolutePowerShell = systemRoot ? path18.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe") : "powershell.exe";
   const executable = existsSync9(absolutePowerShell) ? absolutePowerShell : "powershell.exe";
   const child = spawn5(executable, [
     "-NoLogo",
@@ -10520,9 +11020,9 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 async function ensureFreshSqliteAuthority(root, databaseFileName, modules, processProbe, options) {
-  const resolvedRoot = path17.resolve(root);
+  const resolvedRoot = path18.resolve(root);
   assertFreshBootstrapRootPath(resolvedRoot);
-  const databasePath = path17.join(resolvedRoot, databaseFileName);
+  const databasePath = path18.join(resolvedRoot, databaseFileName);
   const pendingPath = `${databasePath}.bootstrap-pending.json`;
   const markerTempPath = `${databasePath}.bootstrap-marker.tmp`;
   const lockTimeoutMs = options.lockTimeoutMs ?? DEFAULT_FRESH_BOOTSTRAP_LOCK_TIMEOUT_MS;
@@ -10559,7 +11059,7 @@ async function ensureFreshSqliteAuthority(root, databaseFileName, modules, proce
         if (existsSync9(databasePath)) {
           const published = tryReadReadySqliteAuthority(modules, resolvedRoot, databaseFileName, true);
           if (published?.kind === "fresh_install" && published.receipt_id === `fresh-install-${marker2.token}`) {
-            const stagePath2 = path17.join(resolvedRoot, marker2.stage_file);
+            const stagePath2 = path18.join(resolvedRoot, marker2.stage_file);
             removeOwnedBootstrapFile(stagePath2);
             removeOwnedBootstrapFile(`${stagePath2}-wal`);
             removeOwnedBootstrapFile(`${stagePath2}-shm`);
@@ -10572,7 +11072,7 @@ async function ensureFreshSqliteAuthority(root, databaseFileName, modules, proce
           }
           throw new LifecycleGateError("sqlite_bootstrap_published_database_unverified");
         }
-        const stagePath = path17.join(resolvedRoot, marker2.stage_file);
+        const stagePath = path18.join(resolvedRoot, marker2.stage_file);
         removeOwnedBootstrapFile(stagePath);
         removeOwnedBootstrapFile(`${stagePath}-wal`);
         removeOwnedBootstrapFile(`${stagePath}-shm`);
@@ -10642,9 +11142,9 @@ async function ensureFreshSqliteAuthority(root, databaseFileName, modules, proce
   return result;
 }
 async function constructAndPublishFreshSqlite(root, databaseFileName, marker, modules, lock, options) {
-  const databasePath = path17.join(root, databaseFileName);
+  const databasePath = path18.join(root, databaseFileName);
   const pendingPath = `${databasePath}.bootstrap-pending.json`;
-  const stagePath = path17.join(root, marker.stage_file);
+  const stagePath = path18.join(root, marker.stage_file);
   let published = false;
   try {
     lock.assertHeld();
@@ -10734,7 +11234,7 @@ function assertFreshBootstrapRootPath(root) {
   try {
     const stat2 = lstatSync3(root);
     const real = realpathSync5.native(root);
-    const normalize = (value) => process.platform === "win32" ? path17.win32.normalize(value).replace(/[\\/]+$/u, "").toLocaleLowerCase("en-US") : path17.resolve(value);
+    const normalize = (value) => process.platform === "win32" ? path18.win32.normalize(value).replace(/[\\/]+$/u, "").toLocaleLowerCase("en-US") : path18.resolve(value);
     if (!stat2.isDirectory() || stat2.isSymbolicLink() || normalize(real) !== normalize(root)) {
       throw new LifecycleGateError("sqlite_data_root_redirected");
     }
@@ -10762,14 +11262,14 @@ function writeDurableBootstrapMarker(file, marker, options, lock) {
   let tempCreated = false;
   try {
     lock.assertHeld();
-    fd = openSync3(temp, "wx", 384);
+    fd = openSync4(temp, "wx", 384);
     lock.assertHeld();
     tempCreated = true;
     writeFileSync3(fd, `${JSON.stringify(marker)}
 `, "utf8");
     fsyncSync2(fd);
     lock.assertHeld();
-    closeSync3(fd);
+    closeSync4(fd);
     fd = void 0;
     emitFreshBootstrapStage(options, "marker_temp_written");
     lock.assertHeld();
@@ -10781,7 +11281,7 @@ function writeDurableBootstrapMarker(file, marker, options, lock) {
   } catch (error2) {
     if (fd !== void 0) {
       try {
-        closeSync3(fd);
+        closeSync4(fd);
       } catch {
       }
     }
@@ -10846,11 +11346,11 @@ function parsePreviousBootstrapLockRecord(encoded, databaseFileName) {
 function syncRegularFile(file) {
   const stat2 = lstatSync3(file);
   if (!stat2.isFile() || stat2.isSymbolicLink()) throw new LifecycleGateError("sqlite_bootstrap_stage_unsafe");
-  const fd = openSync3(file, "r+");
+  const fd = openSync4(file, "r+");
   try {
     fsyncSync2(fd);
   } finally {
-    closeSync3(fd);
+    closeSync4(fd);
   }
 }
 function removeOwnedBootstrapFile(file) {
@@ -10899,19 +11399,19 @@ async function openClaimOnlyDriver(options) {
   if (!raw) throw new LifecycleGateError("sqlite_open_failed", "candidate database open returned no Store");
   const probe = options.processProbe ?? createPlatformProbe();
   const workerIdentityVerifier = ({ operation, worker_identity, evidence }) => {
-    const operationDigest = text(operation.claim_worker_identity_digest, "cancellation_claim_identity_missing");
+    const operationDigest = text2(operation.claim_worker_identity_digest, "cancellation_claim_identity_missing");
     const processId = positive3(Number(worker_identity.process_id), "cancellation_worker_pid_invalid");
-    const fingerprint = text(worker_identity.start_fingerprint, "cancellation_worker_fingerprint_missing");
+    const fingerprint = text2(worker_identity.start_fingerprint, "cancellation_worker_fingerprint_missing");
     const state = evidence.identity_state;
     if (worker_identity.source !== "manager_verified_process_probe" || worker_identity.fixture !== false || evidence.source !== "manager_process_probe" || evidence.worker_identity_digest !== operationDigest || evidence.process_id !== processId || evidence.start_fingerprint !== fingerprint || state !== "alive" && state !== "exited" || typeof evidence.probe_reason !== "string" || typeof evidence.observed_at !== "string") return false;
     return { state, worker_identity_digest: operationDigest, evidence_digest: sha2563(canonicalJson2(evidence)) };
   };
   const cancellationVerifier = ({ operation, cancel_intent, worker_identity, evidence }) => {
-    const operationDigest = text(operation.claim_worker_identity_digest, "cancellation_claim_identity_missing");
+    const operationDigest = text2(operation.claim_worker_identity_digest, "cancellation_claim_identity_missing");
     const processId = positive3(Number(worker_identity.process_id), "cancellation_worker_pid_invalid");
-    const fingerprint = text(worker_identity.start_fingerprint, "cancellation_worker_fingerprint_missing");
+    const fingerprint = text2(worker_identity.start_fingerprint, "cancellation_worker_fingerprint_missing");
     if (evidence.source !== "manager_process_tree_verification" || evidence.outcome !== "verified" || evidence.operation_id !== operation.operation_id || evidence.task_id !== operation.task_id || evidence.attempt !== operation.attempt || evidence.generation !== operation.generation || evidence.cancel_id !== cancel_intent.cancel_id || evidence.claim_id !== operation.claim_id || evidence.worker_identity_digest !== operationDigest || evidence.root_process_id !== processId || evidence.root_start_fingerprint !== fingerprint || evidence.worker_tree_complete !== true || evidence.scan_clean !== true || !Array.isArray(evidence.live_pids) || evidence.live_pids.length !== 0 || !["terminated", "already_exited"].includes(String(evidence.termination_state))) return false;
-    const processTreeDigest = text(evidence.process_tree_digest, "cancellation_process_tree_digest_missing");
+    const processTreeDigest = text2(evidence.process_tree_digest, "cancellation_process_tree_digest_missing");
     if (!/^[0-9a-f]{64}$/u.test(processTreeDigest)) return false;
     return {
       state: "verified",
@@ -10973,9 +11473,9 @@ async function openClaimOnlyDriver(options) {
       const stopKey = recoveryStopKey(options.dataRoot, options.databaseFileName, operationId);
       const operationValue = port.readOperation(operationId);
       if (!operationValue) throw new LifecycleGateError("recovery_operation_missing");
-      const operation = asRecord5(operationValue);
+      const operation = asRecord6(operationValue);
       if (operation.operation_kind !== "attempt_lifecycle") return { state: "not_applicable", operation_id: operationId };
-      const phase = text(operation.phase, "recovery_phase_missing");
+      const phase = text2(operation.phase, "recovery_phase_missing");
       if (phase === "released" || phase === "cancelled_before_launch" || phase === "admin_abandoned") {
         if (phase === "released") verifiedRecoveryStops.delete(stopKey);
         return { state: "complete", operation_id: operationId, phase };
@@ -11032,15 +11532,15 @@ async function openClaimOnlyDriver(options) {
         } catch {
           throw new LifecycleGateError("recovery_cleanup_evidence_invalid");
         }
-        const cleanupDigest = text(evidence2.cleanup_digest, "recovery_cleanup_digest_missing");
-        const release = asRecord5(port.releaseCapacity({
+        const cleanupDigest = text2(evidence2.cleanup_digest, "recovery_cleanup_digest_missing");
+        const release = asRecord6(port.releaseCapacity({
           operation_id: operationId,
-          task_id: text(operation.task_id, "recovery_task_id_missing"),
+          task_id: text2(operation.task_id, "recovery_task_id_missing"),
           attempt: positive3(Number(operation.attempt), "recovery_attempt_invalid"),
           generation: positive3(Number(operation.generation), "recovery_generation_invalid"),
           revision: positive3(Number(operation.revision), "recovery_revision_invalid"),
-          claim_id: text(operation.claim_id, "recovery_claim_id_missing"),
-          claim_worker_identity_digest: text(operation.claim_worker_identity_digest, "recovery_claim_identity_missing"),
+          claim_id: text2(operation.claim_id, "recovery_claim_id_missing"),
+          claim_worker_identity_digest: text2(operation.claim_worker_identity_digest, "recovery_claim_identity_missing"),
           cleanup_digest: cleanupDigest
         }));
         if (release.phase !== "released" || release.capacity_released !== true) throw new LifecycleGateError("recovery_release_not_persisted");
@@ -11073,7 +11573,7 @@ async function openClaimOnlyDriver(options) {
         fingerprint_precision: "exact",
         identity_version: PROCESS_IDENTITY_VERSION,
         platform: "win32",
-        captured_at: text(worker.captured_at, "recovery_identity_capture_missing")
+        captured_at: text2(worker.captured_at, "recovery_identity_capture_missing")
       };
       let verdict2;
       let probeFailure = null;
@@ -11299,14 +11799,14 @@ async function openClaimOnlyDriver(options) {
           execution_evidence_state: "none_observed"
         };
         const nextAttempt = Number(operation.attempt) + 1;
-        const outcome = asRecord5(port.interruptAndRequeue({
+        const outcome = asRecord6(port.interruptAndRequeue({
           operation_id: operationId,
-          task_id: text(operation.task_id, "recovery_task_id_missing"),
+          task_id: text2(operation.task_id, "recovery_task_id_missing"),
           attempt: positive3(Number(operation.attempt), "recovery_attempt_invalid"),
           generation: positive3(Number(operation.generation), "recovery_generation_invalid"),
           revision: positive3(Number(operation.revision), "recovery_revision_invalid"),
-          claim_id: text(claimId, "recovery_claim_id_missing"),
-          claim_worker_identity_digest: text(workerDigest, "recovery_claim_identity_missing"),
+          claim_id: text2(claimId, "recovery_claim_id_missing"),
+          claim_worker_identity_digest: text2(workerDigest, "recovery_claim_identity_missing"),
           reason: interruptionReason,
           interruption_evidence: interruptionEvidence,
           process_tree_digest: processTreeDigest,
@@ -11408,7 +11908,7 @@ async function openClaimOnlyDriver(options) {
       if ((phase === "result_committed" || phase === "cleanup_pending" || phase === "cleanup_unverified") && identityState === "exited") {
         const completeCleanupClosureAvailable = treeOutcome?.status === "resolved" && treeOutcome.result.clean === true && treeOutcome.result.livePids.length === 0 && treeOutcome.result.observedPids.includes(processId);
         if (completeCleanupClosureAvailable && treeOutcome?.status === "resolved") {
-          const currentOperation = asRecord5(port.readOperation(operationId));
+          const currentOperation = asRecord6(port.readOperation(operationId));
           if (currentOperation.task_id !== operation.task_id || Number(currentOperation.attempt) !== Number(operation.attempt) || Number(currentOperation.generation) !== Number(operation.generation) || currentOperation.claim_id !== claimId || currentOperation.claim_worker_identity_digest !== workerDigest) {
             return { state: "held", operation_id: operationId, phase: String(currentOperation.phase), reason: "recovery_identity_fence_changed" };
           }
@@ -11423,7 +11923,7 @@ async function openClaimOnlyDriver(options) {
               cleanup_recovered: true
             };
           }
-          const currentPhase = text(currentOperation.phase, "recovery_phase_missing");
+          const currentPhase = text2(currentOperation.phase, "recovery_phase_missing");
           if (currentPhase === "cleanup_verified") {
             const verifiedEvent = readAllLifecycleEventsForRecovery(port, operationId).find((event) => event.event_type === "cleanup_verified");
             if (!verifiedEvent) throw new LifecycleGateError("recovery_cleanup_evidence_missing");
@@ -11431,15 +11931,15 @@ async function openClaimOnlyDriver(options) {
             if (verifiedEvidence.claim_id !== claimId || verifiedEvidence.worker_identity_digest !== workerDigest || verifiedEvidence.root_process_id !== processId || verifiedEvidence.root_start_fingerprint !== fingerprint || verifiedEvidence.workspace_touched !== false || verifiedEvidence.worker_tree_complete !== true || verifiedEvidence.operation_resources_complete !== true) {
               throw new LifecycleGateError("recovery_cleanup_evidence_binding_invalid");
             }
-            const released2 = asRecord5(port.releaseCapacity({
+            const released2 = asRecord6(port.releaseCapacity({
               operation_id: operationId,
-              task_id: text(currentOperation.task_id, "recovery_task_id_missing"),
+              task_id: text2(currentOperation.task_id, "recovery_task_id_missing"),
               attempt: positive3(Number(currentOperation.attempt), "recovery_attempt_invalid"),
               generation: positive3(Number(currentOperation.generation), "recovery_generation_invalid"),
               revision: positive3(Number(currentOperation.revision), "recovery_revision_invalid"),
-              claim_id: text(claimId, "recovery_claim_id_missing"),
-              claim_worker_identity_digest: text(workerDigest, "recovery_claim_identity_missing"),
-              cleanup_digest: text(verifiedEvidence.cleanup_digest, "recovery_cleanup_digest_missing")
+              claim_id: text2(claimId, "recovery_claim_id_missing"),
+              claim_worker_identity_digest: text2(workerDigest, "recovery_claim_identity_missing"),
+              cleanup_digest: text2(verifiedEvidence.cleanup_digest, "recovery_cleanup_digest_missing")
             }));
             if (released2.phase !== "released" || released2.capacity_released !== true) throw new LifecycleGateError("recovery_release_not_persisted");
             verifiedRecoveryStops.delete(stopKey);
@@ -11469,15 +11969,15 @@ async function openClaimOnlyDriver(options) {
           }
           const fence = {
             operation_id: operationId,
-            task_id: text(operation.task_id, "recovery_task_id_missing"),
+            task_id: text2(operation.task_id, "recovery_task_id_missing"),
             attempt: positive3(Number(operation.attempt), "recovery_attempt_invalid"),
             generation: positive3(Number(operation.generation), "recovery_generation_invalid"),
             revision: positive3(Number(currentOperation.revision), "recovery_revision_invalid"),
-            claim_id: text(claimId, "recovery_claim_id_missing"),
-            claim_worker_identity_digest: text(workerDigest, "recovery_claim_identity_missing")
+            claim_id: text2(claimId, "recovery_claim_id_missing"),
+            claim_worker_identity_digest: text2(workerDigest, "recovery_claim_identity_missing")
           };
           if (currentPhase === "cleanup_unverified") await options.testBeforeRecoveryWrite?.(operationId, currentPhase);
-          const pending = currentPhase === "result_committed" ? asRecord5(port.beginCleanup(fence)) : currentOperation;
+          const pending = currentPhase === "result_committed" ? asRecord6(port.beginCleanup(fence)) : currentOperation;
           const expectedCleanupPhase = currentPhase === "cleanup_unverified" ? "cleanup_unverified" : "cleanup_pending";
           if (pending.phase !== expectedCleanupPhase || pending.operation_id !== operationId || Number(pending.generation) !== fence.generation) {
             throw new LifecycleGateError("recovery_cleanup_pending_not_persisted");
@@ -11522,8 +12022,8 @@ async function openClaimOnlyDriver(options) {
             generation: fence.generation,
             claim_id: fence.claim_id,
             worker_identity_digest: workerDigest,
-            launch_receipt_digest: text(operation.launch_receipt_digest, "recovery_receipt_digest_missing"),
-            result_commit_ref: text(committedResult.result_commit_ref, "recovery_result_ref_missing"),
+            launch_receipt_digest: text2(operation.launch_receipt_digest, "recovery_receipt_digest_missing"),
+            result_commit_ref: text2(committedResult.result_commit_ref, "recovery_result_ref_missing"),
             process_tree_digest: sha2563(canonicalJson2(processTreeFacts)),
             resources_digest: sha2563(canonicalJson2(resourceFacts)),
             root_process_id: processId,
@@ -11532,14 +12032,14 @@ async function openClaimOnlyDriver(options) {
             operation_resources_complete: true,
             workspace_touched: false
           };
-          const recorded = asRecord5(currentPhase === "cleanup_unverified" ? port.reverifyCleanup({ ...cleanupFence, cleanup_evidence: cleanupEvidence }) : port.recordCleanupEvidence({ ...cleanupFence, outcome: "verified", cleanup_evidence: cleanupEvidence }));
+          const recorded = asRecord6(currentPhase === "cleanup_unverified" ? port.reverifyCleanup({ ...cleanupFence, cleanup_evidence: cleanupEvidence }) : port.recordCleanupEvidence({ ...cleanupFence, outcome: "verified", cleanup_evidence: cleanupEvidence }));
           if (recorded.cleanup_verified !== true || recorded.phase !== "cleanup_verified" && recorded.phase !== "released") {
             throw new LifecycleGateError("recovery_cleanup_evidence_not_persisted");
           }
-          const released = asRecord5(port.releaseCapacity({
+          const released = asRecord6(port.releaseCapacity({
             ...cleanupFence,
             revision: positive3(Number(recorded.revision), "recovery_cleanup_verified_revision_missing"),
-            cleanup_digest: text(recorded.cleanup_digest, "recovery_cleanup_digest_missing")
+            cleanup_digest: text2(recorded.cleanup_digest, "recovery_cleanup_digest_missing")
           }));
           if (released.phase !== "released" || released.capacity_released !== true) {
             throw new LifecycleGateError("recovery_release_not_persisted");
@@ -11580,7 +12080,7 @@ async function openClaimOnlyDriver(options) {
       const evidenceDigest = sha2563(canonicalJson2(evidence));
       const input = {
         operation_id: operationId,
-        task_id: text(operation.task_id, "recovery_task_id_missing"),
+        task_id: text2(operation.task_id, "recovery_task_id_missing"),
         attempt: positive3(Number(operation.attempt), "recovery_attempt_invalid"),
         generation: positive3(Number(operation.generation), "recovery_generation_invalid"),
         expected_revision: positive3(Number(operation.revision), "recovery_revision_invalid"),
@@ -11593,7 +12093,7 @@ async function openClaimOnlyDriver(options) {
       };
       recoveryEvidenceBindings.set(evidenceDigest, { ...input, evidence_json: canonicalJson2(evidence) });
       try {
-        const recorded = asRecord5(port.recordRecoveryObservation(input, evidence));
+        const recorded = asRecord6(port.recordRecoveryObservation(input, evidence));
         return {
           state: "held",
           operation_id: operationId,
@@ -11636,14 +12136,14 @@ async function openClaimOnlyDriver(options) {
       if (!operationId) {
         const lifecycleValue = port.readTaskLifecycle(taskId);
         if (!lifecycleValue) throw new LifecycleGateError("cancellation_task_missing");
-        const lifecycle = asRecord5(lifecycleValue);
-        const projection = asRecord5(lifecycle.projection);
+        const lifecycle = asRecord6(lifecycleValue);
+        const projection = asRecord6(lifecycle.projection);
         if (Number(projection.current_attempt) !== attempt || !lifecycle.operation) {
           throw new LifecycleGateError("cancellation_operation_unavailable", "the current SQLite Attempt has no cancellable Operation");
         }
-        operationId = text(asRecord5(lifecycle.operation).operation_id, "cancellation_operation_id_missing");
+        operationId = text2(asRecord6(lifecycle.operation).operation_id, "cancellation_operation_id_missing");
       }
-      const operation = asRecord5(port.readOperation(operationId));
+      const operation = asRecord6(port.readOperation(operationId));
       if (operation.phase !== "running" || operation.task_id !== taskId || Number(operation.attempt) !== attempt) {
         return { result_won: operation.result_digest !== null, operation_id: operationId, phase: operation.phase, result_status: operation.result_status };
       }
@@ -11687,13 +12187,13 @@ async function openClaimOnlyDriver(options) {
         process_id: processIdentity.pid,
         start_fingerprint: processIdentity.fingerprint
       };
-      const intent = asRecord5(port.requestCancellation(fence, identityEvidence));
+      const intent = asRecord6(port.requestCancellation(fence, identityEvidence));
       if (intent.result_won === true) return intent;
       if (active?.privateAuthState) {
         active.privateAuthState.cancelled = true;
       }
       await active?.closeHandleGate?.();
-      const cancelId = text(intent.cancel_id, "cancellation_intent_missing");
+      const cancelId = text2(intent.cancel_id, "cancellation_intent_missing");
       const cancellationHistory = readAllLifecycleEventsForRecovery(port, operationId);
       const persistedVerification = [...cancellationHistory].reverse().find((event) => {
         if (event.event_type !== "observation_recorded") return false;
@@ -11715,8 +12215,8 @@ async function openClaimOnlyDriver(options) {
         if (persistedEvidence.cancel_id !== cancelId || persistedEvidence.claim_id !== fence.claim_id || persistedEvidence.worker_identity_digest !== fence.claim_worker_identity_digest || persistedEvidence.root_process_id !== processIdentity.pid || persistedEvidence.root_start_fingerprint !== processIdentity.fingerprint || persistedEvidence.worker_tree_complete !== true) {
           throw new LifecycleGateError("cancellation_verification_conflict");
         }
-        const verificationDigest2 = text(persistedVerification.evidence_digest, "cancellation_verification_missing");
-        const processTreeDigest = text(persistedEvidence.process_tree_digest, "cancellation_process_tree_digest_missing");
+        const verificationDigest2 = text2(persistedVerification.evidence_digest, "cancellation_verification_missing");
+        const processTreeDigest = text2(persistedEvidence.process_tree_digest, "cancellation_process_tree_digest_missing");
         cancellationProofs.set(operationId, {
           task_id: taskId,
           attempt,
@@ -11800,10 +12300,10 @@ async function openClaimOnlyDriver(options) {
         termination_state: terminationState,
         process_tree_digest: sha2563(canonicalJson2(processTreeFacts))
       };
-      const current = asRecord5(port.readOperation(operationId));
-      const verification = asRecord5(port.recordCancellationVerification({ ...fence, revision: Number(current.revision) }, treeEvidence));
+      const current = asRecord6(port.readOperation(operationId));
+      const verification = asRecord6(port.recordCancellationVerification({ ...fence, revision: Number(current.revision) }, treeEvidence));
       if (verification.result_won === true) return verification;
-      const verificationDigest = text(verification.cancellation_verification_digest, "cancellation_verification_missing");
+      const verificationDigest = text2(verification.cancellation_verification_digest, "cancellation_verification_missing");
       cancellationProofs.set(operationId, {
         task_id: taskId,
         attempt,
@@ -11818,7 +12318,7 @@ async function openClaimOnlyDriver(options) {
       const operationId = proofEntry?.[0];
       const proof = proofEntry?.[1];
       if (!operationId || !proof) throw new LifecycleGateError("cancellation_verification_missing");
-      let operation = asRecord5(port.readOperation(operationId));
+      let operation = asRecord6(port.readOperation(operationId));
       if (operation.result_digest === null && operation.phase === "running") {
         const result = {
           task_id: taskId,
@@ -11836,7 +12336,7 @@ async function openClaimOnlyDriver(options) {
           finished_at: (/* @__PURE__ */ new Date()).toISOString(),
           error_code: "cancelled"
         };
-        const committed = asRecord5(port.commitResult({
+        const committed = asRecord6(port.commitResult({
           operation_id: operationId,
           task_id: taskId,
           attempt,
@@ -11850,7 +12350,7 @@ async function openClaimOnlyDriver(options) {
         }));
         if (committed.cancellation_lost_to_result === true) return { cancelled: false, result_won: true, phase: committed.phase };
         if (committed.conflict === true || committed.quarantined === true) throw new LifecycleGateError("cancellation_result_conflict");
-        operation = asRecord5(port.readOperation(operationId));
+        operation = asRecord6(port.readOperation(operationId));
       }
       if (operation.result_status !== "cancelled") return { cancelled: false, result_won: true, phase: operation.phase, result_status: operation.result_status };
       if (operation.phase === "released") {
@@ -11858,8 +12358,8 @@ async function openClaimOnlyDriver(options) {
         return { cancelled: true, phase: "released" };
       }
       if (operation.phase !== "result_committed" && operation.phase !== "cleanup_pending") throw new LifecycleGateError("cancellation_cleanup_phase_unknown");
-      const claimId = text(operation.claim_id, "cancellation_claim_missing");
-      const claimDigest = text(operation.claim_worker_identity_digest, "cancellation_worker_digest_missing");
+      const claimId = text2(operation.claim_id, "cancellation_claim_missing");
+      const claimDigest = text2(operation.claim_worker_identity_digest, "cancellation_worker_digest_missing");
       const cleanupBase = {
         operation_id: operationId,
         task_id: taskId,
@@ -11869,7 +12369,7 @@ async function openClaimOnlyDriver(options) {
         claim_id: claimId,
         claim_worker_identity_digest: claimDigest
       };
-      const pending = asRecord5(port.beginCleanup(cleanupBase));
+      const pending = asRecord6(port.beginCleanup(cleanupBase));
       if (pending.phase !== "cleanup_pending") throw new LifecycleGateError("cancellation_cleanup_pending_missing");
       const cleanupFence = { ...cleanupBase, revision: Number(pending.revision) };
       const streams = proof.child?.stdio;
@@ -11883,7 +12383,7 @@ async function openClaimOnlyDriver(options) {
         interaction_channels_closed: workerStdioClosed
       };
       if (!workerStdioClosed) {
-        const failed = asRecord5(port.recordCleanupEvidence({ ...cleanupFence, outcome: "unverified", probe_state: "incomplete", reason: "worker_stdio_not_closed" }));
+        const failed = asRecord6(port.recordCleanupEvidence({ ...cleanupFence, outcome: "unverified", probe_state: "incomplete", reason: "worker_stdio_not_closed" }));
         cancellationProofs.delete(operationId);
         return { cancelled: true, phase: failed.phase, cleanup_verified: false };
       }
@@ -11896,8 +12396,8 @@ async function openClaimOnlyDriver(options) {
         generation: Number(operation.generation),
         claim_id: claimId,
         worker_identity_digest: claimDigest,
-        launch_receipt_digest: text(operation.launch_receipt_digest, "cancellation_receipt_digest_missing"),
-        result_commit_ref: text(operation.result_commit_ref, "cancellation_result_ref_missing"),
+        launch_receipt_digest: text2(operation.launch_receipt_digest, "cancellation_receipt_digest_missing"),
+        result_commit_ref: text2(operation.result_commit_ref, "cancellation_result_ref_missing"),
         process_tree_digest: proof.processTreeDigest,
         resources_digest: sha2563(canonicalJson2(resourceFacts)),
         root_process_id: Number(worker.process_id),
@@ -11906,12 +12406,12 @@ async function openClaimOnlyDriver(options) {
         operation_resources_complete: true,
         workspace_touched: false
       };
-      const recorded = asRecord5(port.recordCleanupEvidence({ ...cleanupFence, outcome: "verified", cleanup_evidence: cleanupEvidence }));
+      const recorded = asRecord6(port.recordCleanupEvidence({ ...cleanupFence, outcome: "verified", cleanup_evidence: cleanupEvidence }));
       if (recorded.cleanup_verified !== true || recorded.phase !== "cleanup_verified") throw new LifecycleGateError("cancellation_cleanup_evidence_not_persisted");
-      const released = asRecord5(port.releaseCapacity({
+      const released = asRecord6(port.releaseCapacity({
         ...cleanupFence,
         revision: Number(recorded.revision),
-        cleanup_digest: text(recorded.cleanup_digest, "cancellation_cleanup_digest_missing")
+        cleanup_digest: text2(recorded.cleanup_digest, "cancellation_cleanup_digest_missing")
       }));
       if (released.phase !== "released" || released.capacity_released !== true) throw new LifecycleGateError("cancellation_release_not_persisted");
       cancellationProofs.delete(operationId);
@@ -11923,7 +12423,7 @@ async function openClaimOnlyDriver(options) {
     openInteractionChannel: (child, operation, verifyProcessIdentity) => port.openInteractionChannel(child, operation, verifyProcessIdentity),
     receiveInteractionRequest: (channel) => port.receiveInteractionRequest(channel),
     async replyToInteractionRequest(input) {
-      const value = asRecord5(input);
+      const value = asRecord6(input);
       const key = interactionKey(String(value.task_id), String(value.request_id));
       const channel = interactionChannels.get(key);
       if (!channel) throw new LifecycleGateError("interaction_channel_unavailable", "no live Worker channel is bound to this SQLite interaction request");
@@ -11969,11 +12469,11 @@ async function openClaimOnlyDriver(options) {
         let admission;
         const existingOperation = port.readOperation(input.operationId);
         if (existingOperation) {
-          admission = readSafeReservedAdmission(port, input, asRecord5(existingOperation));
+          admission = readSafeReservedAdmission(port, input, asRecord6(existingOperation));
           stage("reserved_operation_resumed", { revision: admission.revision, generation: admission.generation });
         } else {
           const executionWorkspace = taskExecutionWorkspace(input.task);
-          admission = asRecord5(port.admitOperation({
+          admission = asRecord6(port.admitOperation({
             operation_id: input.operationId,
             task_id: input.task.task_id,
             attempt: input.attempt,
@@ -11987,7 +12487,7 @@ async function openClaimOnlyDriver(options) {
         const generation = positive3(admission.generation, "admission_generation_missing");
         const revision = positive3(admission.revision, "admission_revision_missing");
         stage("reserved_snapshot_read_start");
-        const admissionOperation = asRecord5(port.readOperation(input.operationId));
+        const admissionOperation = asRecord6(port.readOperation(input.operationId));
         let safeReserved;
         let policySnapshot;
         try {
@@ -12023,7 +12523,7 @@ async function openClaimOnlyDriver(options) {
           launch_token: input.launchToken
         };
         stage("intent_start");
-        const intent = asRecord5(port.createLaunchIntent(launchRequest));
+        const intent = asRecord6(port.createLaunchIntent(launchRequest));
         if (intent.duplicate === true) throw new LifecycleGateError("launch_outcome_unknown", "existing Intent never authorizes another Spawn");
         const intentRevision = positive3(intent.revision, "launch_intent_revision_missing");
         stage("intent_complete", { revision: intentRevision });
@@ -12071,7 +12571,7 @@ async function openClaimOnlyDriver(options) {
           await rejectChild(child);
           throw new LifecycleGateError(reason);
         }
-        const receipt2 = asRecord5(port.recordLaunchReceipt({
+        const receipt2 = asRecord6(port.recordLaunchReceipt({
           ...launchRequest,
           revision: intentRevision,
           receipt_id: randomUUID4(),
@@ -12079,7 +12579,7 @@ async function openClaimOnlyDriver(options) {
         }));
         const receiptRevision = positive3(receipt2.revision, "launch_receipt_revision_missing");
         stage("receipt_complete", { revision: receiptRevision });
-        const persisted = asRecord5(port.readOperation(input.operationId));
+        const persisted = asRecord6(port.readOperation(input.operationId));
         verifyPersistedLaunchEvidence(port, input, persisted, policySnapshot, launchRequest, intentRevision, receiptRevision);
         stage("preflight_complete", { revision: receiptRevision });
         stage("worker_report_read_start", { pid: child.pid ?? null });
@@ -12185,7 +12685,7 @@ async function openClaimOnlyDriver(options) {
               if (runFinished) {
                 let operationStillRunning = true;
                 try {
-                  operationStillRunning = asRecord5(port.readOperation(input.operationId)).phase === "running";
+                  operationStillRunning = asRecord6(port.readOperation(input.operationId)).phase === "running";
                 } catch {
                   operationStillRunning = true;
                 }
@@ -12194,7 +12694,7 @@ async function openClaimOnlyDriver(options) {
             }
           });
           const runtimeEventsEnabled = options.enableSyntheticInteractionChannel || !options.testOnlyFakeAdapter;
-          const claimedOperation = asRecord5(port.readOperation(input.operationId));
+          const claimedOperation = asRecord6(port.readOperation(input.operationId));
           const verifyClaimedWorkerIdentity = async ({ child: observedChild, expected }) => {
             if (observedChild.pid !== expected.process_id || observedChild.exitCode !== null || observedChild.signalCode !== null) return false;
             const workerIdentity = parseEvidence(String(claimedOperation.claim_worker_identity_json), "interaction_worker_identity_invalid");
@@ -12249,7 +12749,7 @@ async function openClaimOnlyDriver(options) {
           let privateAuthPump;
           if (usePrivateAuth) {
             const owner = child;
-            const claimed = asRecord5(port.readOperation(input.operationId));
+            const claimed = asRecord6(port.readOperation(input.operationId));
             const worker = parseEvidence(String(claimed.claim_worker_identity_json), "private_auth_identity_invalid");
             if (!owner.privateAuthRequestChannel || !owner.privateAuthResponseChannel || !owner.privateAuthAcknowledgementChannel || typeof owner.pid !== "number" || claimed.phase !== "running" || claimed.claim_id !== claimId || claimed.claim_generation !== generation || worker.process_id !== owner.pid || worker.fingerprint_precision !== "exact" || typeof worker.start_fingerprint !== "string") {
               throw new LifecycleGateError("private_auth_binding_invalid");
@@ -12271,7 +12771,7 @@ async function openClaimOnlyDriver(options) {
               signal: privateAuthAbort.signal,
               timeoutMs: 6e4,
               resolveLease: async (request, signal) => {
-                const candidate = asRecord5(request.binding);
+                const candidate = asRecord6(request.binding);
                 if (candidate.account !== startPlanPrivateAuth.account || candidate.provider !== input.task.model?.provider_id || candidate.model !== input.task.model?.model_id || candidate.task !== input.task.task_id || candidate.attempt !== input.attempt || candidate.operation !== input.operationId || candidate.generation !== generation || candidate.claim !== claimId || candidate.pid !== owner.pid || candidate.creation !== worker.start_fingerprint || typeof candidate.session !== "string" || !candidate.session || typeof candidate.turn !== "string" || !candidate.turn) {
                   throw new Error("private_auth_binding_invalid");
                 }
@@ -12284,7 +12784,7 @@ async function openClaimOnlyDriver(options) {
                   privateAuthAbort.signal.addEventListener("abort", () => reject(new Error("private_auth_cancelled")), { once: true });
                 });
                 const verifyWorker = async () => {
-                  const current = asRecord5(port.readOperation(input.operationId));
+                  const current = asRecord6(port.readOperation(input.operationId));
                   if (signal.aborted || owner.exitCode !== null || owner.signalCode !== null || current.phase !== "running" || current.claim_id !== claimId || current.claim_generation !== generation || current.claim_worker_identity_digest !== claimed.claim_worker_identity_digest) return false;
                   await handleGate?.assertAlive();
                   return !signal.aborted && owner.exitCode === null && owner.signalCode === null;
@@ -12318,7 +12818,7 @@ async function openClaimOnlyDriver(options) {
             interactionPump = (async () => {
               while (child.exitCode === null && child.signalCode === null) {
                 const persistedRequest = await port.receiveInteractionRequest(channel);
-                const request = asRecord5(persistedRequest.request);
+                const request = asRecord6(persistedRequest.request);
                 interactionChannels.set(interactionKey(input.task.task_id, String(request.request_id)), channel);
                 stage("interaction_request_persisted", {
                   request_id: request.request_id,
@@ -12427,10 +12927,10 @@ async function openClaimOnlyDriver(options) {
                   }
                 }
                 stage("worker_result_verified", { status: resultFrame.result.status });
-                const current = asRecord5(port.readOperation(input.operationId));
+                const current = asRecord6(port.readOperation(input.operationId));
                 verifyPersistedClaimEvidence(port, current, input, generation, claimId);
                 const revision2 = positive3(current.revision, "result_revision_missing");
-                const identityDigest = text(current.claim_worker_identity_digest, "result_claim_identity_missing");
+                const identityDigest = text2(current.claim_worker_identity_digest, "result_claim_identity_missing");
                 const commitInput = {
                   operation_id: input.operationId,
                   task_id: input.task.task_id,
@@ -12467,11 +12967,11 @@ async function openClaimOnlyDriver(options) {
                 } else {
                   try {
                     const persistedResult = port.readCommittedResult(input.operationId);
-                    const currentAfter = asRecord5(port.readOperation(input.operationId));
+                    const currentAfter = asRecord6(port.readOperation(input.operationId));
                     verifyPersistedResult(port, currentAfter, persistedResult, commitInput, commit);
                     committedResult = resultFrame.result;
                     resultStatus = resultFrame.result.status;
-                    resultDigest = text(commit.result_digest, "result_digest_missing");
+                    resultDigest = text2(commit.result_digest, "result_digest_missing");
                     state = "result_committed";
                     reason = "result_committed";
                     stage("result_projection_verified", { revision: commit.revision, status: resultStatus, result_digest: resultDigest });
@@ -12542,7 +13042,7 @@ async function openClaimOnlyDriver(options) {
       } finally {
         if (state === "result_rejected") {
           try {
-            const current = asRecord5(port.readOperation(input.operationId));
+            const current = asRecord6(port.readOperation(input.operationId));
             if (current.phase === "running" && current.result_digest === null && current.task_id === input.task.task_id && current.attempt === input.attempt) {
               port.recordResultSubmissionFailure?.(
                 {
@@ -12569,8 +13069,8 @@ async function openClaimOnlyDriver(options) {
                 ...options.managedDataDirectory ? { managedDataDirectory: true } : {}
               });
               try {
-                const snapshot = asRecord5(modules.createPort(recoveryStore).readRecoverySnapshot());
-                const matching = Array.isArray(snapshot.operations) ? snapshot.operations.map(asRecord5).find((o) => o.operation_id === input.operationId) : null;
+                const snapshot = asRecord6(modules.createPort(recoveryStore).readRecoverySnapshot());
+                const matching = Array.isArray(snapshot.operations) ? snapshot.operations.map(asRecord6).find((o) => o.operation_id === input.operationId) : null;
                 const reconciled = { root_status: snapshot.root_status, phase: matching?.phase ?? null, result_digest: matching?.result_digest ?? null };
                 stage("result_outcome_reconciled_read_only", reconciled);
                 process.stderr.write(`SQLITE_RESULT_OUTCOME_UNKNOWN ${JSON.stringify({ operation_id: input.operationId, ...reconciled })}
@@ -12590,7 +13090,7 @@ async function openClaimOnlyDriver(options) {
           await active.closeHandleGate?.();
           let operationStillRunning = true;
           try {
-            operationStillRunning = asRecord5(port.readOperation(input.operationId)).phase === "running";
+            operationStillRunning = asRecord6(port.readOperation(input.operationId)).phase === "running";
           } catch {
             operationStillRunning = true;
           }
@@ -12628,12 +13128,12 @@ async function openClaimOnlyDriver(options) {
 }
 async function finalizeClaimedWorkerCleanup(port, input, generation, claimId, probe, probeTimeoutMs, verifyTreeClaimants, processTreeProbeTimeoutMs, workerExitCode, executionCleanup, adapterCleanupState, stage) {
   stage("cleanup_prepare_start");
-  const current = asRecord5(port.readOperation(input.operationId));
+  const current = asRecord6(port.readOperation(input.operationId));
   const claimIdentity = parseEvidence(current.claim_worker_identity_json, "cleanup_worker_identity_missing");
   const launchIdentity = parseEvidence(current.launch_identity_json, "cleanup_launch_identity_missing");
-  const claimIdentityDigest = text(current.claim_worker_identity_digest, "cleanup_claim_identity_digest_missing");
+  const claimIdentityDigest = text2(current.claim_worker_identity_digest, "cleanup_claim_identity_digest_missing");
   const rootProcessId = positive3(claimIdentity.process_id, "cleanup_worker_pid_invalid");
-  const rootFingerprint = text(claimIdentity.start_fingerprint, "cleanup_worker_fingerprint_invalid");
+  const rootFingerprint = text2(claimIdentity.start_fingerprint, "cleanup_worker_fingerprint_invalid");
   if (claimIdentity.identity_version !== PROCESS_IDENTITY_VERSION) throw new LifecycleGateError("cleanup_identity_version_invalid");
   if (claimIdentity.source !== "manager_verified_process_probe" || launchIdentity.source !== "manager_os_spawn_observation" || launchIdentity.process_id !== rootProcessId || launchIdentity.start_fingerprint !== rootFingerprint || claimIdentity.platform !== "win32" || launchIdentity.platform !== "win32" || claimIdentity.fingerprint_precision !== "exact" || launchIdentity.fingerprint_precision !== "exact" || probe.platform !== "win32") {
     throw new LifecycleGateError("cleanup_identity_mismatch");
@@ -12647,7 +13147,7 @@ async function finalizeClaimedWorkerCleanup(port, input, generation, claimId, pr
     claim_id: claimId,
     claim_worker_identity_digest: claimIdentityDigest
   };
-  const pending = asRecord5(port.beginCleanup(fence));
+  const pending = asRecord6(port.beginCleanup(fence));
   if (pending.phase !== "cleanup_pending" || pending.operation_id !== input.operationId || pending.generation !== generation) throw new LifecycleGateError("cleanup_pending_projection_mismatch");
   stage("cleanup_pending_persisted", { revision: pending.revision });
   const cleanupFence = { ...fence, revision: positive3(pending.revision, "cleanup_pending_revision_missing") };
@@ -12691,8 +13191,8 @@ async function finalizeClaimedWorkerCleanup(port, input, generation, claimId, pr
           } : {}
         );
         if (treeComplete && treeOutcome.status === "resolved") {
-          const launchReceiptDigest = text(current.launch_receipt_digest, "cleanup_launch_receipt_digest_missing");
-          const resultCommitRef = text(current.result_commit_ref, "cleanup_result_commit_ref_missing");
+          const launchReceiptDigest = text2(current.launch_receipt_digest, "cleanup_launch_receipt_digest_missing");
+          const resultCommitRef = text2(current.result_commit_ref, "cleanup_result_commit_ref_missing");
           const observedPids = [...new Set(treeOutcome.result.observedPids)].sort((left, right) => left - right);
           const processTreeFacts = {
             contract: executionCleanup.source === "zcode_app_server_adapter" ? "real-zcode-claimed-worker-process-tree-v1" : "synthetic-claim-worker-process-tree-v1",
@@ -12760,7 +13260,7 @@ async function finalizeClaimedWorkerCleanup(port, input, generation, claimId, pr
     });
     return "unverified";
   }
-  const recorded = asRecord5(port.recordCleanupEvidence({
+  const recorded = asRecord6(port.recordCleanupEvidence({
     ...cleanupFence,
     outcome: "verified",
     cleanup_evidence: cleanupEvidence
@@ -12769,8 +13269,8 @@ async function finalizeClaimedWorkerCleanup(port, input, generation, claimId, pr
     throw new LifecycleGateError("cleanup_evidence_not_persisted");
   }
   stage("cleanup_verified_persisted", { revision: recorded.revision, cleanup_digest: recorded.cleanup_digest });
-  const cleanupDigest = text(recorded.cleanup_digest, "cleanup_digest_missing");
-  const released = asRecord5(port.releaseCapacity({
+  const cleanupDigest = text2(recorded.cleanup_digest, "cleanup_digest_missing");
+  const released = asRecord6(port.releaseCapacity({
     ...cleanupFence,
     revision: positive3(recorded.revision, "cleanup_verified_revision_missing"),
     cleanup_digest: cleanupDigest
@@ -12778,7 +13278,7 @@ async function finalizeClaimedWorkerCleanup(port, input, generation, claimId, pr
   if (released.phase !== "released" || released.capacity_released !== true) {
     throw new LifecycleGateError("capacity_release_not_persisted");
   }
-  const finalOperation = asRecord5(port.readOperation(input.operationId));
+  const finalOperation = asRecord6(port.readOperation(input.operationId));
   if (finalOperation.phase !== "released" || finalOperation.generation !== generation || finalOperation.claim_id !== claimId || finalOperation.claim_worker_identity_digest !== claimIdentityDigest) {
     throw new LifecycleGateError("released_operation_projection_mismatch");
   }
@@ -12929,18 +13429,18 @@ async function processTreeWithDeadline(targets, timeoutMs, verify = verifyProces
     if (timer) clearTimeout(timer);
   }
 }
-function asRecord5(value) {
+function asRecord6(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new LifecycleGateError("candidate_projection_invalid");
   return value;
 }
 function sha2563(value) {
-  return createHash15("sha256").update(value, "utf8").digest("hex");
+  return createHash16("sha256").update(value, "utf8").digest("hex");
 }
 function positive3(value, code) {
   if (!Number.isSafeInteger(value) || Number(value) < 1) throw new LifecycleGateError(code);
   return Number(value);
 }
-function text(value, code) {
+function text2(value, code) {
   if (typeof value !== "string" || value.length === 0 || value.length > 256 || /[\x00-\x1f]/u.test(value)) {
     throw new LifecycleGateError(code);
   }
@@ -12952,7 +13452,7 @@ function errorCode(error2) {
   return typeof code === "string" && code.length <= 128 ? code : void 0;
 }
 function validateWorkerResultFrame(value, expected) {
-  const frame = asRecord5(value);
+  const frame = asRecord6(value);
   assertWorkerResultEnvelope(frame);
   if (Object.keys(frame).sort().join("|") !== "attempt|execution_cleanup|execution_cleanup_verified|generation|operation_id|policy_snapshot_digest|protocol|result|task_id|workspace_ref" || frame.protocol !== "bridge-sqlite-candidate-result-v1" || frame.operation_id !== expected.operation_id || frame.task_id !== expected.task_id || frame.attempt !== expected.attempt || frame.generation !== expected.generation || frame.workspace_ref !== expected.workspace_ref || frame.policy_snapshot_digest !== expected.policy_snapshot_digest || typeof frame.execution_cleanup_verified !== "boolean") {
     throw new LifecycleGateError("worker_result_coordinates_mismatch");
@@ -12961,7 +13461,7 @@ function validateWorkerResultFrame(value, expected) {
   if (frame.execution_cleanup_verified !== (executionCleanup !== null)) {
     throw new LifecycleGateError("worker_cleanup_proof_inconsistent");
   }
-  const result = asRecord5(frame.result);
+  const result = asRecord6(frame.result);
   if (result.task_id !== expected.task_id || result.attempt !== expected.attempt || !["completed", "failed", "cancelled", "waiting_for_master"].includes(String(result.status))) {
     throw new LifecycleGateError("worker_result_identity_or_status_invalid");
   }
@@ -12969,7 +13469,7 @@ function validateWorkerResultFrame(value, expected) {
 }
 function validateExecutionCleanupProof(value) {
   if (value === null) return null;
-  const proof = asRecord5(value);
+  const proof = asRecord6(value);
   if (proof.contract !== "candidate-execution-cleanup-proof-v1" || proof.complete !== true || proof.workspace_retained !== true || proof.managed_browser_cleanup_verified !== true) {
     throw new LifecycleGateError("worker_cleanup_proof_invalid");
   }
@@ -13000,8 +13500,8 @@ function validateExecutionCleanupProof(value) {
   throw new LifecycleGateError("worker_cleanup_proof_invalid");
 }
 function validAdapterCleanupEvidence2(value) {
-  const evidence = asRecord5(value);
-  const close = asRecord5(evidence.close);
+  const evidence = asRecord6(value);
+  const close = asRecord6(evidence.close);
   const scanStatuses = /* @__PURE__ */ new Set(["verified", "live", "incomplete", "not_applicable"]);
   const stages = /* @__PURE__ */ new Set([
     "not_started",
@@ -13056,8 +13556,8 @@ function verifyPersistedResult(port, operation, persisted, input, commit) {
   if (events.some((event) => typeof event.event_type === "string" && cleanupEventTypes.has(event.event_type))) {
     throw new LifecycleGateError("result_path_entered_cleanup");
   }
-  const task = asRecord5(port.readTaskProjection(input.task_id));
-  const attempt = asRecord5(port.readAttempt(input.task_id, input.attempt));
+  const task = asRecord6(port.readTaskProjection(input.task_id));
+  const attempt = asRecord6(port.readAttempt(input.task_id, input.attempt));
   if (task.status !== input.result_status || task.current_attempt !== input.attempt || attempt.status !== input.result_status) {
     throw new LifecycleGateError("result_task_attempt_projection_mismatch");
   }
@@ -13068,9 +13568,9 @@ function readSafeReservedAdmission(port, input, operation) {
   if (operation.operation_id !== input.operationId || operation.operation_kind !== "attempt_lifecycle" || operation.task_id !== input.task.task_id || Number(operation.attempt) !== input.attempt || operation.phase !== "reserved" || revision !== 1 || operation.launch_id !== null || operation.launch_epoch !== null || operation.launch_token_digest !== null || operation.launch_intent_digest !== null || operation.launch_receipt_id !== null || operation.launch_receipt_digest !== null || operation.launch_identity_json !== null || operation.claim_id !== null || operation.claim_request_digest !== null || operation.claim_worker_identity_json !== null || operation.claim_worker_identity_digest !== null || operation.claim_launch_id !== null || operation.claim_generation !== null || operation.claim_token_digest !== null || operation.result_status !== null || operation.result_generation !== null || operation.result_digest !== null || operation.result_json !== null || operation.result_commit_ref !== null) {
     throw new LifecycleGateError("launch_outcome_unknown", "only an untouched reserved Operation can resume; existing launch evidence is never replayed");
   }
-  const lifecycle = asRecord5(port.readTaskLifecycle(input.task.task_id));
-  const projection = asRecord5(lifecycle.projection);
-  const attempt = asRecord5(lifecycle.attempt);
+  const lifecycle = asRecord6(port.readTaskLifecycle(input.task.task_id));
+  const projection = asRecord6(lifecycle.projection);
+  const attempt = asRecord6(lifecycle.attempt);
   if (canonicalJson2(lifecycle.task) !== canonicalJson2(input.task) || projection.status !== "queued" || Number(projection.current_attempt) !== input.attempt || attempt.status !== "queued" || Number(attempt.attempt) !== input.attempt || Number(attempt.generation) !== generation) {
     throw new LifecycleGateError("launch_outcome_unknown", "reserved Operation no longer matches the current queued Attempt");
   }
@@ -13481,8 +13981,8 @@ __export(sqlite_lifecycle_mcp_authority_exports, {
   applyEventByteBudget: () => applyEventByteBudget,
   mergeAdjacentModelOutputRows: () => mergeAdjacentModelOutputRows
 });
-import { createHash as createHash16, randomBytes } from "node:crypto";
-import path18 from "node:path";
+import { createHash as createHash17, randomBytes } from "node:crypto";
+import path19 from "node:path";
 function validateTaskPackage2(task) {
   const worktreePath = task.worktree_path;
   if (!task || typeof task.task_id !== "string" || !task.task_id.trim() || task.task_id.length > 128 || typeof task.workspace !== "string" || !task.workspace.trim() || !pathIsAbsolute(task.workspace) || worktreePath !== void 0 && (typeof worktreePath !== "string" || !worktreePath.trim() || !pathIsAbsolute(worktreePath)) || typeof task.objective !== "string" || !task.objective.trim() || !Array.isArray(task.requirements) || !Array.isArray(task.allowed_paths) || !Array.isArray(task.forbidden_paths) || !Array.isArray(task.acceptance_criteria) || !Array.isArray(task.test_commands)) {
@@ -13580,7 +14080,7 @@ function decodeCursor(value, taskId) {
   if (typeof value !== "string" || value.length > 2048) throw new TaskManagerError("TASK_INVALID", "invalid scan_cursor");
   try {
     const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
-    const cursor = asRecord6(parsed);
+    const cursor = asRecord7(parsed);
     if (cursor.v !== 1 || cursor.task_id !== taskId || !Number.isSafeInteger(cursor.cursor) || Number(cursor.cursor) < 0) throw new Error("invalid cursor");
     return Number(cursor.cursor);
   } catch {
@@ -13591,7 +14091,7 @@ function encodeCursor(taskId, cursor) {
   return Buffer.from(JSON.stringify({ v: 1, task_id: taskId, cursor }), "utf8").toString("base64url");
 }
 function operationIdFor(taskId, attempt) {
-  const digest3 = createHash16("sha256").update(`${taskId}\0${attempt}`, "utf8").digest("hex").slice(0, 32);
+  const digest3 = createHash17("sha256").update(`${taskId}\0${attempt}`, "utf8").digest("hex").slice(0, 32);
   return `sqlite-${digest3}`;
 }
 function taskExecutionPath(task) {
@@ -13600,10 +14100,10 @@ function taskExecutionPath(task) {
 function executionPathsOverlap(left, right) {
   const leftPath = normalizeExecutionPath(left);
   const rightPath = normalizeExecutionPath(right);
-  return leftPath === rightPath || leftPath.startsWith(rightPath + path18.sep) || rightPath.startsWith(leftPath + path18.sep);
+  return leftPath === rightPath || leftPath.startsWith(rightPath + path19.sep) || rightPath.startsWith(leftPath + path19.sep);
 }
 function normalizeExecutionPath(value) {
-  const resolved = path18.resolve(value).replace(/[\\/]+$/u, "");
+  const resolved = path19.resolve(value).replace(/[\\/]+$/u, "");
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 function queueKey(taskId, attempt) {
@@ -13650,13 +14150,13 @@ function canonicalJson3(value) {
   const record5 = value;
   return `{${Object.keys(record5).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson3(record5[key])}`).join(",")}}`;
 }
-function asRecord6(value) {
+function asRecord7(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new TaskManagerError("TASK_STATE", "invalid SQLite lifecycle projection");
   return value;
 }
-function parseRecord(value) {
+function parseRecord2(value) {
   try {
-    return asRecord6(JSON.parse(string4(value, "identity_missing")));
+    return asRecord7(JSON.parse(string4(value, "identity_missing")));
   } catch {
     throw new TaskManagerError("TASK_STATE", "SQLite Worker identity projection is corrupt");
   }
@@ -13757,11 +14257,11 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
         if (permission.state !== "allow") throw new TaskManagerError("TASK_INVALID", `SQLite admission rejected: ${permission.state === "unknown" ? permission.reason : permission.reason}`);
         const existingValue = this.#driver.readTaskLifecycle(task.task_id);
         if (existingValue) {
-          const existing = asRecord6(existingValue);
+          const existing = asRecord7(existingValue);
           if (canonicalJson3(existing.task) !== canonicalJson3(normalizedTask)) {
             throw new TaskManagerError("TASK_ID_CONFLICT", `task_id already belongs to a different SQLite request: ${task.task_id}`);
           }
-          const projection2 = asRecord6(existing.projection);
+          const projection2 = asRecord7(existing.projection);
           this.#routeTaskModel?.confirmRouting(task);
           return receipt(task.task_id, projection2.status, projection2.created_at);
         }
@@ -13775,33 +14275,33 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
         try {
           this.#driver.createTask(normalizedTask);
         } catch (error2) {
-          const raced = asRecord6(this.#driver.readTaskLifecycle(task.task_id));
+          const raced = asRecord7(this.#driver.readTaskLifecycle(task.task_id));
           if (!raced || canonicalJson3(raced.task) !== canonicalJson3(normalizedTask)) {
             if (errorCode2(error2) === "task_already_exists") throw new TaskManagerError("TASK_ID_CONFLICT", `task_id already exists with different SQLite input: ${task.task_id}`);
             throw error2;
           }
         }
         this.#routeTaskModel?.confirmRouting(task);
-        const snapshot = asRecord6(this.#driver.readTaskLifecycle(task.task_id));
-        const projection = asRecord6(snapshot.projection);
+        const snapshot = asRecord7(this.#driver.readTaskLifecycle(task.task_id));
+        const projection = asRecord7(snapshot.projection);
         this.#enqueue(task.task_id, Number(projection.current_attempt));
         return { task_id: task.task_id, status: "queued", created_at: string4(projection.created_at, "task_created_at_missing") };
       }
       async getStatus(taskId) {
         const snapshot = this.#readSnapshot(taskId);
-        const projection = asRecord6(snapshot.projection);
+        const projection = asRecord7(snapshot.projection);
         if (this.#pumpFailure && projection.status === "queued") {
           throw new TaskManagerError("TASK_STATE", `SQLite dispatch is blocked after ${this.#pumpFailure.reason}; queued lifecycle facts remain persisted and no automatic retry was attempted`);
         }
-        const attempt = asRecord6(snapshot.attempt);
-        const operation = snapshot.operation ? asRecord6(snapshot.operation) : null;
-        const result = snapshot.result ? asRecord6(snapshot.result) : null;
+        const attempt = asRecord7(snapshot.attempt);
+        const operation = snapshot.operation ? asRecord7(snapshot.operation) : null;
+        const result = snapshot.result ? asRecord7(snapshot.result) : null;
         const events = this.#driver.readTaskEvents(taskId, { afterCursor: 0, limit: 200 });
         const lastAt = events.events?.at(-1)?.at;
         const createdAt = string4(projection.created_at, "task_created_at_missing");
         const status = taskStatus(projection.status);
-        const workerIdentity = operation?.claim_worker_identity_json ? parseRecord(operation.claim_worker_identity_json) : null;
-        const launchIdentity = !workerIdentity && operation?.launch_identity_json ? parseRecord(operation.launch_identity_json) : null;
+        const workerIdentity = operation?.claim_worker_identity_json ? parseRecord2(operation.claim_worker_identity_json) : null;
+        const launchIdentity = !workerIdentity && operation?.launch_identity_json ? parseRecord2(operation.launch_identity_json) : null;
         const workerPid = status === "running" ? positiveOrNull(workerIdentity?.process_id ?? launchIdentity?.process_id) : null;
         const executionObservation = await this.#executionObservation(taskId, snapshot, status);
         return {
@@ -13881,13 +14381,13 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
             if (event.type !== "interaction_requested" || !event.details || typeof event.details.request_id !== "string") return event;
             const persisted = this.#driver.readInteractionRequest(input.task_id, event.details.request_id);
             if (!persisted) return event;
-            const request = asRecord6(persisted.request);
+            const request = asRecord7(persisted.request);
             return { ...event, details: { ...event.details, method: request.method, params: request.params } };
           });
           const bounded2 = applyEventByteBudget(projectedEvents, page.nextCursor, input.max_bytes, cursor);
           const { events, nextCursor, scanIncomplete } = bounded2;
           const omittedEvents = visiblePage.omittedEventsByRow.slice(0, events.length).reduce((total, count) => total + count, 0);
-          const status = taskStatus(asRecord6(snapshot.projection).status);
+          const status = taskStatus(asRecord7(snapshot.projection).status);
           if (events.length || isTerminal(status) || Date.now() >= deadline) {
             return {
               task_id: input.task_id,
@@ -13919,7 +14419,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
         };
         if (input.operation_id) {
           try {
-            const replay = asRecord6(this.#driver.createNextAttempt(common));
+            const replay = asRecord7(this.#driver.createNextAttempt(common));
             this.#enqueue(input.task_id, Number(replay.attempt));
             return { task_id: input.task_id, status: "queued", created_at: string4(replay.created_at, "continue_created_at_missing") };
           } catch (error2) {
@@ -13928,11 +14428,11 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
         }
         const snapshot = this.#readSnapshot(input.task_id);
         if (!snapshot.operation) throw new TaskManagerError("TASK_STATE", "the prior SQLite Attempt has no released Operation");
-        const operation = asRecord6(snapshot.operation);
+        const operation = asRecord7(snapshot.operation);
         const result = snapshot.result;
-        const outcome = asRecord6(this.#driver.createNextAttempt({
+        const outcome = asRecord7(this.#driver.createNextAttempt({
           ...common,
-          previous_attempt: Number(asRecord6(snapshot.attempt).attempt),
+          previous_attempt: Number(asRecord7(snapshot.attempt).attempt),
           previous_operation_id: string4(operation.operation_id, "continue_operation_missing"),
           expected_generation: Number(operation.generation),
           expected_revision: Number(operation.revision),
@@ -13958,8 +14458,8 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
         this.#assertOpen();
         this.#assertRecoveryReady();
         const snapshot = this.#readSnapshot(taskId);
-        const projection = asRecord6(snapshot.projection);
-        const attempt = asRecord6(snapshot.attempt);
+        const projection = asRecord7(snapshot.projection);
+        const attempt = asRecord7(snapshot.attempt);
         if (projection.status === "queued") {
           try {
             this.#driver.cancelQueuedAttempt({ task_id: taskId, expected_attempt: Number(attempt.attempt) });
@@ -13977,7 +14477,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
           const key = queueKey(taskId, attemptNumber);
           let cancellation;
           try {
-            cancellation = asRecord6(await this.#driver.cancelRunning(taskId, attemptNumber));
+            cancellation = asRecord7(await this.#driver.cancelRunning(taskId, attemptNumber));
           } catch (error2) {
             throw new TaskManagerError("CANCEL_FAILED", `SQLite Worker cancellation could not be verified: ${error2 instanceof Error ? error2.message : String(error2)}`);
           }
@@ -13986,7 +14486,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
           if (cancellation.result_won === true) return this.getStatus(taskId);
           let completion;
           try {
-            completion = asRecord6(await this.#driver.completeRunningCancellation(taskId, attemptNumber));
+            completion = asRecord7(await this.#driver.completeRunningCancellation(taskId, attemptNumber));
           } catch (error2) {
             throw new TaskManagerError("CANCEL_FAILED", `SQLite cancellation Result/Cleanup could not be committed: ${error2 instanceof Error ? error2.message : String(error2)}`);
           }
@@ -13996,7 +14496,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
           this.#schedulePump();
           return this.getStatus(taskId);
         }
-        const operation = snapshot.operation ? asRecord6(snapshot.operation) : null;
+        const operation = snapshot.operation ? asRecord7(snapshot.operation) : null;
         if (projection.status === "cancelled" && (!operation || operation.phase === "cancelled_before_launch" || operation.phase === "launch_intent" && operation.claim_id === null)) return this.getStatus(taskId);
         if (isTerminal(projection.status) && operation?.phase === "released") {
           return this.getStatus(taskId);
@@ -14005,13 +14505,13 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
           const recovery = Promise.resolve().then(async () => {
             const readReleased = async () => {
               const latest = this.#readSnapshot(taskId);
-              const latestProjection = asRecord6(latest.projection);
-              const latestOperation = latest.operation ? asRecord6(latest.operation) : null;
+              const latestProjection = asRecord7(latest.projection);
+              const latestOperation = latest.operation ? asRecord7(latest.operation) : null;
               return isTerminal(latestProjection.status) && latestOperation?.phase === "released" ? this.getStatus(taskId) : null;
             };
             let outcome;
             try {
-              outcome = asRecord6(await this.#driver.recoverOperation(
+              outcome = asRecord7(await this.#driver.recoverOperation(
                 string4(operation.operation_id, "operation_id_missing"),
                 { stopAliveWorker: true }
               ));
@@ -14079,7 +14579,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
           let alreadyTerminal = false;
           try {
             const snapshot = this.#readSnapshot(taskId);
-            const projection = asRecord6(snapshot.projection);
+            const projection = asRecord7(snapshot.projection);
             alreadyTerminal = Number(snapshot.attempt.attempt) === attempt && isTerminal(taskStatus(projection.status));
           } catch {
           }
@@ -14112,8 +14612,8 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
           const attempt = Number(key.slice(separator + 1));
           try {
             const snapshot = this.#readSnapshot(taskId);
-            const projection = asRecord6(snapshot.projection);
-            const operation = snapshot.operation ? asRecord6(snapshot.operation) : null;
+            const projection = asRecord7(snapshot.projection);
+            const operation = snapshot.operation ? asRecord7(snapshot.operation) : null;
             const released = Number(snapshot.attempt.attempt) === attempt && isTerminal(taskStatus(projection.status)) && operation?.phase === "released";
             if (!released) failures.push(`${taskId}:shutdown_release_unverified`);
           } catch {
@@ -14149,11 +14649,11 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
           this.#recoveryBlocked = null;
           this.#schedulerStage("recovery_snapshot_verified", {
             operation_count: snapshot.operations.length,
-            occupied_count: snapshot.operations.filter((operation) => Boolean(asRecord6(operation).capacity_occupied)).length,
+            occupied_count: snapshot.operations.filter((operation) => Boolean(asRecord7(operation).capacity_occupied)).length,
             writes_allowed: false
           });
           for (const value of snapshot.operations) {
-            const operation = asRecord6(value);
+            const operation = asRecord7(value);
             const operationId = operation.operation_id;
             if (typeof operationId !== "string") throw new TaskManagerError("TASK_STATE", "Recovery snapshot contains an Operation without identity");
             const taskId = typeof operation.task_id === "string" ? operation.task_id : null;
@@ -14176,7 +14676,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
               });
               continue;
             }
-            const outcome = asRecord6(await this.#driver.recoverOperation(operationId, {
+            const outcome = asRecord7(await this.#driver.recoverOperation(operationId, {
               stopAliveWorker: true,
               allowInterruptRequeue: true,
               ...this.#startupInterruptionReason ? { interruptionReason: this.#startupInterruptionReason } : {}
@@ -14200,7 +14700,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
           snapshot = this.#validateRecoverySnapshot(this.#driver.readRecoverySnapshot());
           const queued = this.#driver.readRecoverableQueuedAttempts();
           for (const value of queued) {
-            const candidate = asRecord6(value);
+            const candidate = asRecord7(value);
             if (candidate.dispatchable === true && typeof candidate.task_id === "string" && Number.isSafeInteger(candidate.attempt) && Number(candidate.attempt) > 0) {
               this.#enqueue(candidate.task_id, Number(candidate.attempt));
             } else {
@@ -14239,7 +14739,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
         if (status !== "running") return void 0;
         const attempt = Number(snapshot.projection.current_attempt);
         if (this.#activeRuns.has(queueKey(taskId, attempt))) return void 0;
-        const persisted = operation?.claim_worker_identity_json ? parseRecord(operation.claim_worker_identity_json) : operation?.launch_identity_json ? parseRecord(operation.launch_identity_json) : null;
+        const persisted = operation?.claim_worker_identity_json ? parseRecord2(operation.claim_worker_identity_json) : operation?.launch_identity_json ? parseRecord2(operation.launch_identity_json) : null;
         const pid = positiveOrNull(persisted?.process_id);
         const startFingerprint = typeof persisted?.start_fingerprint === "string" ? persisted.start_fingerprint : null;
         if (!persisted || pid === null || persisted.fingerprint_precision !== "exact" || startFingerprint === null || !startFingerprint || typeof persisted.platform !== "string" || persisted.identity_version !== PROCESS_IDENTITY_VERSION) {
@@ -14264,7 +14764,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
       }
       #makeExecutionObservation(state, taskId, snapshot, reason, observedAt) {
         const operation = snapshot.operation;
-        const reference = createHash16("sha256").update(canonicalJson3({
+        const reference = createHash17("sha256").update(canonicalJson3({
           task_id: taskId,
           attempt: Number(snapshot.projection.current_attempt),
           operation_id: operation?.operation_id ?? null,
@@ -14279,8 +14779,8 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
         return { state, observed_at: observedAt, evidence_ref: reference };
       }
       #validateRecoverySnapshot(value) {
-        const snapshot = asRecord6(value);
-        const capacity = snapshot.capacity ? asRecord6(snapshot.capacity) : null;
+        const snapshot = asRecord7(value);
+        const capacity = snapshot.capacity ? asRecord7(snapshot.capacity) : null;
         if (snapshot.root_status !== "consistent_read_only" || snapshot.writes_allowed !== false || snapshot.cleanup_performed !== false || snapshot.claim_release_performed !== false || snapshot.operation_release_performed !== false || !Array.isArray(snapshot.operations) || !capacity || Number(capacity.policy_version) !== 1 || !Number.isSafeInteger(capacity.policy_generation) || Number(capacity.policy_generation) < 1 || !Number.isSafeInteger(capacity.capacity_limit) || Number(capacity.capacity_limit) < 1 || Number(capacity.capacity_limit) > 8) {
           const blockers = Array.isArray(snapshot.root_blockers) ? snapshot.root_blockers.map(String).join(",") : "recovery_snapshot_invalid";
           throw new TaskManagerError("TASK_STATE", `SQLite Recovery is blocked (${blockers || "root_not_consistent"}); no lifecycle side effect was attempted`);
@@ -14332,14 +14832,14 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
         this.#assertOpen();
         const value = this.#driver.readTaskLifecycle(taskId);
         if (!value) throw new TaskManagerError("TASK_NOT_FOUND", `unknown SQLite task: ${taskId}`);
-        const snapshot = asRecord6(value);
+        const snapshot = asRecord7(value);
         return {
           task: snapshot.task,
-          projection: asRecord6(snapshot.projection),
-          attempt: asRecord6(snapshot.attempt),
-          operation: snapshot.operation ? asRecord6(snapshot.operation) : null,
+          projection: asRecord7(snapshot.projection),
+          attempt: asRecord7(snapshot.attempt),
+          operation: snapshot.operation ? asRecord7(snapshot.operation) : null,
           result: snapshot.result,
-          continuation: snapshot.continuation ? asRecord6(snapshot.continuation) : null,
+          continuation: snapshot.continuation ? asRecord7(snapshot.continuation) : null,
           result_submission_error: typeof snapshot.result_submission_error === "string" ? snapshot.result_submission_error : null
         };
       }
@@ -14415,7 +14915,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
       #activeExecutionPaths(excludeOperationId) {
         const snapshot = this.#validateRecoverySnapshot(this.#driver.readRecoverySnapshot());
         return snapshot.operations.flatMap((value) => {
-          const operation = asRecord6(value);
+          const operation = asRecord7(value);
           return operation.operation_id !== excludeOperationId && operation.capacity_occupied === true && typeof operation.workspace_ref === "string" ? [operation.workspace_ref] : [];
         });
       }
@@ -14553,7 +15053,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
           return;
         }
         try {
-          const outcome = asRecord6(await this.#driver.recoverOperation(operationId, {
+          const outcome = asRecord7(await this.#driver.recoverOperation(operationId, {
             stopAliveWorker: false,
             allowInterruptRequeue: interruptible,
             ...interruptible ? { interruptionReason: "worker_exited_without_result" } : {}
@@ -14602,7 +15102,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
 
 // src/mcp/main.ts
 import { realpathSync as realpathSync6 } from "node:fs";
-import path20 from "node:path";
+import path21 from "node:path";
 import { fileURLToPath as fileURLToPath6 } from "node:url";
 
 // node_modules/@modelcontextprotocol/server/dist/chunk-Br0eD_fh.mjs
@@ -14898,10 +15398,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path21) {
-  if (!path21)
+function getElementAtPath(obj, path22) {
+  if (!path22)
     return obj;
-  return path21.reduce((acc, key) => acc?.[key], obj);
+  return path22.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -15241,11 +15741,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path21, issues) {
+function prefixIssues(path22, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path21);
+    iss.path.unshift(path22);
     return iss;
   });
 }
@@ -15694,16 +16194,16 @@ function flattenError(error2, mapper = (issue2) => issue2.message) {
 }
 function formatError(error2, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error3, path21 = []) => {
+  const processError = (error3, path22 = []) => {
     for (const issue2 of error3.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path21, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path22, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path21, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path22, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path21, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path22, ...issue2.path]);
       } else {
-        const fullpath = [...path21, ...issue2.path];
+        const fullpath = [...path22, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -25046,9 +25546,9 @@ var rev2026Codec = {
     });
     const parsed = buildSchemas2026().RequestMetaEnvelopeSchema.safeParse(meta2);
     if (!parsed.success) for (const issue2 of parsed.error.issues) {
-      const path21 = issue2.path.map(String);
-      const key = path21.length > 0 ? path21.join(".") : "_meta";
-      if (path21.length === 1 && issues.some((existing) => existing.key === key && existing.problem === "missing")) continue;
+      const path22 = issue2.path.map(String);
+      const key = path22.length > 0 ? path22.join(".") : "_meta";
+      if (path22.length === 1 && issues.some((existing) => existing.key === key && existing.problem === "missing")) continue;
       issues.push({
         key,
         problem: issue2.message
@@ -25369,29 +25869,29 @@ var PERMITTED_X_MCP_HEADER_TYPES = /* @__PURE__ */ new Set([
 function scanXMcpHeaderDeclarations(inputSchema) {
   const declarations = [];
   const seenLower = /* @__PURE__ */ new Map();
-  const visit = (node2, path21, reachable) => {
+  const visit = (node2, path22, reachable) => {
     if (node2 === null || typeof node2 !== "object") return void 0;
     const schema = node2;
     if (X_MCP_HEADER_KEY in schema) {
-      if (!reachable || path21.length === 0) return `${pathName(path21)}: x-mcp-header is only permitted on properties statically reachable via a chain of 'properties' keys (not under items, additionalProperties, oneOf/anyOf/allOf/not, if/then/else, or $ref)`;
+      if (!reachable || path22.length === 0) return `${pathName(path22)}: x-mcp-header is only permitted on properties statically reachable via a chain of 'properties' keys (not under items, additionalProperties, oneOf/anyOf/allOf/not, if/then/else, or $ref)`;
       const raw = schema[X_MCP_HEADER_KEY];
-      if (typeof raw !== "string" || raw.length === 0) return `${pathName(path21)}: x-mcp-header MUST be a non-empty string`;
-      if (!RFC9110_TOKEN.test(raw)) return `${pathName(path21)}: x-mcp-header '${raw}' is not a valid RFC 9110 token (no spaces, control characters or HTTP delimiters)`;
+      if (typeof raw !== "string" || raw.length === 0) return `${pathName(path22)}: x-mcp-header MUST be a non-empty string`;
+      if (!RFC9110_TOKEN.test(raw)) return `${pathName(path22)}: x-mcp-header '${raw}' is not a valid RFC 9110 token (no spaces, control characters or HTTP delimiters)`;
       const type = typeof schema.type === "string" ? schema.type : void 0;
-      if (type === void 0 || !PERMITTED_X_MCP_HEADER_TYPES.has(type)) return `${pathName(path21)}: x-mcp-header is only permitted on primitive-typed properties (string, integer, boolean); got ${type ?? "<none>"}`;
+      if (type === void 0 || !PERMITTED_X_MCP_HEADER_TYPES.has(type)) return `${pathName(path22)}: x-mcp-header is only permitted on primitive-typed properties (string, integer, boolean); got ${type ?? "<none>"}`;
       const lower = raw.toLowerCase();
       const prior = seenLower.get(lower);
       if (prior !== void 0) return `x-mcp-header '${raw}' is not case-insensitively unique (also declared as '${prior}')`;
       seenLower.set(lower, raw);
       declarations.push({
-        path: path21,
+        path: path22,
         headerName: raw,
         type
       });
     }
     const properties = schema.properties;
     if (properties !== null && typeof properties === "object") for (const [key, child] of Object.entries(properties)) {
-      const fault$1 = visit(child, [...path21, key], reachable);
+      const fault$1 = visit(child, [...path22, key], reachable);
       if (fault$1 !== void 0) return fault$1;
     }
     for (const k of NON_REACHABLE_SUBSCHEMA_KEYWORDS) {
@@ -25399,7 +25899,7 @@ function scanXMcpHeaderDeclarations(inputSchema) {
       if (sub === void 0) continue;
       const branches = Array.isArray(sub) ? sub : sub !== null && typeof sub === "object" && OBJECT_VALUED_SUBSCHEMA_KEYWORDS.has(k) ? Object.values(sub) : [sub];
       for (const branch of branches) {
-        const fault$1 = visit(branch, [...path21, `<${k}>`], false);
+        const fault$1 = visit(branch, [...path22, `<${k}>`], false);
         if (fault$1 !== void 0) return fault$1;
       }
     }
@@ -25439,8 +25939,8 @@ var OBJECT_VALUED_SUBSCHEMA_KEYWORDS = /* @__PURE__ */ new Set([
   "$defs",
   "definitions"
 ]);
-function pathName(path21) {
-  return path21.length === 0 ? "<root>" : path21.join(".");
+function pathName(path22) {
+  return path22.length === 0 ? "<root>" : path22.join(".");
 }
 var HEADER_MISMATCH_ERROR_CODE = -32020;
 var INBOUND_VALIDATION_LADDER = [
@@ -25729,7 +26229,7 @@ var PROPERTY_KEYS_BY_TYPE = {
   array: shapeKeys([UntitledMultiSelectEnumSchemaSchema, TitledMultiSelectEnumSchemaSchema])
 };
 var SUPPORTED_STRING_FORMATS = new Set(StringSchemaSchema.shape.format.unwrap().options);
-function walkProperty(node2, path21, vendor, unsupported) {
+function walkProperty(node2, path22, vendor, unsupported) {
   if (!isJsonObject(node2)) return node2;
   const allowedKeys = typeof node2.type === "string" && Object.hasOwn(PROPERTY_KEYS_BY_TYPE, node2.type) ? PROPERTY_KEYS_BY_TYPE[node2.type] : void 0;
   if (allowedKeys === void 0) return node2;
@@ -25737,8 +26237,8 @@ function walkProperty(node2, path21, vendor, unsupported) {
   for (const [key, value] of Object.entries(node2)) if (allowedKeys.has(key) || isAnnotationOnlyJsonSchemaKeyword(key)) pruned[key] = value;
   else if (key === "pattern" && node2.type === "string" && typeof node2.format === "string") {
     if (!SUPPORTED_STRING_FORMATS.has(node2.format)) pruned[key] = value;
-    else if (typeof value !== "string" || !isLibraryFormatPattern(node2.format, value, vendor)) unsupported.push(`${path21}.${key}`);
-  } else unsupported.push(`${path21}.${key}`);
+    else if (typeof value !== "string" || !isLibraryFormatPattern(node2.format, value, vendor)) unsupported.push(`${path22}.${key}`);
+  } else unsupported.push(`${path22}.${key}`);
   return pruned;
 }
 function walkRequestedSchema(converted, vendor) {
@@ -25755,11 +26255,11 @@ function describeUnsupportedProperties(pruned, fallback) {
   const offenders = Object.entries(pruned.properties).filter(([, node2]) => !parseSchema(PrimitiveSchemaDefinitionSchema, node2).success).map(([name]) => `properties.${name}`);
   return offenders.length > 0 ? offenders.join(", ") : fallback;
 }
-function findDroppedConstraintPaths(original, parsed, path21 = "") {
-  if (Array.isArray(original) && Array.isArray(parsed)) return original.flatMap((item, index) => findDroppedConstraintPaths(item, parsed[index], `${path21}[${index}]`));
+function findDroppedConstraintPaths(original, parsed, path22 = "") {
+  if (Array.isArray(original) && Array.isArray(parsed)) return original.flatMap((item, index) => findDroppedConstraintPaths(item, parsed[index], `${path22}[${index}]`));
   if (!isJsonObject(original) || !isJsonObject(parsed)) return [];
   return Object.entries(original).flatMap(([key, value]) => {
-    const childPath = path21 ? `${path21}.${key}` : key;
+    const childPath = path22 ? `${path22}.${key}` : key;
     if (!Object.prototype.hasOwnProperty.call(parsed, key)) return isAnnotationOnlyJsonSchemaKeyword(key) ? [] : [childPath];
     return findDroppedConstraintPaths(value, parsed[key], childPath);
   });
@@ -29838,8 +30338,8 @@ var require_utils = /* @__PURE__ */ __commonJSMin(((exports, module) => {
     for (let i = 0; i < str.length; i++) if (str[i] === token) ind++;
     return ind;
   }
-  function removeDotSegments(path21) {
-    let input = path21;
+  function removeDotSegments(path22) {
+    let input = path22;
     const output = [];
     let nextSlash = -1;
     let len = 0;
@@ -29992,8 +30492,8 @@ var require_schemes = /* @__PURE__ */ __commonJSMin(((exports, module) => {
       wsComponent.secure = void 0;
     }
     if (wsComponent.resourceName) {
-      const [path21, query] = wsComponent.resourceName.split("?");
-      wsComponent.path = path21 && path21 !== "/" ? path21 : void 0;
+      const [path22, query] = wsComponent.resourceName.split("?");
+      wsComponent.path = path22 && path22 !== "/" ? path22 : void 0;
       wsComponent.query = query;
       wsComponent.resourceName = void 0;
     }
@@ -30675,7 +31175,7 @@ var require_core$3 = /* @__PURE__ */ __commonJSMin(((exports) => {
     }
     errorsText(errors = this.errors, { separator = ", ", dataVar = "data" } = {}) {
       if (!errors || errors.length === 0) return "No errors";
-      return errors.map((e) => `${dataVar}${e.instancePath} ${e.message}`).reduce((text2, msg) => text2 + separator + msg);
+      return errors.map((e) => `${dataVar}${e.instancePath} ${e.message}`).reduce((text3, msg) => text3 + separator + msg);
     }
     $dataMetaSchema(metaSchema, keywordsJsonPointers) {
       const rules = this.RULES.all;
@@ -31048,8 +31548,8 @@ var require_multipleOf = /* @__PURE__ */ __commonJSMin(((exports) => {
       const { gen, data, schemaCode, it } = cxt;
       const prec = it.opts.multipleOfPrecision;
       const res = gen.let("res");
-      const invalid = prec ? (0, codegen_1._)`Math.abs(Math.round(${res}) - ${res}) > 1e-${prec}` : (0, codegen_1._)`${res} !== parseInt(${res})`;
-      cxt.fail$data((0, codegen_1._)`(${schemaCode} === 0 || (${res} = ${data}/${schemaCode}, ${invalid}))`);
+      const invalid2 = prec ? (0, codegen_1._)`Math.abs(Math.round(${res}) - ${res}) > 1e-${prec}` : (0, codegen_1._)`${res} !== parseInt(${res})`;
+      cxt.fail$data((0, codegen_1._)`(${schemaCode} === 0 || (${res} = ${data}/${schemaCode}, ${invalid2}))`);
     }
   };
   exports.default = def;
@@ -36134,7 +36634,7 @@ function toError(value) {
 // src/host/stdio.ts
 init_resolver();
 import { homedir as homedir6 } from "node:os";
-import path19 from "node:path";
+import path20 from "node:path";
 import { pathToFileURL as pathToFileURL2 } from "node:url";
 
 // node_modules/@modelcontextprotocol/server/dist/index.mjs
@@ -36467,7 +36967,7 @@ function errorResult(code, message) {
   };
 }
 function feedbackResult(snapshot) {
-  const text2 = JSON.stringify({
+  const text3 = JSON.stringify({
     task_id: snapshot.task_id,
     attempt: snapshot.attempt,
     status: snapshot.status,
@@ -36481,7 +36981,7 @@ function feedbackResult(snapshot) {
     } : null
   });
   return {
-    content: [{ type: "text", text: text2 }],
+    content: [{ type: "text", text: text3 }],
     structuredContent: snapshot
   };
 }
@@ -37012,10 +37512,10 @@ function safeError(error2) {
 // src/runtime/model-settings.ts
 init_child_env();
 init_desktop_host_launch();
-import { createHash as createHash4, randomUUID as randomUUID2 } from "node:crypto";
-import { mkdir, readFile as readFile2, realpath as realpath3, rm, stat, writeFile } from "node:fs/promises";
+import { createHash as createHash5, randomUUID as randomUUID2 } from "node:crypto";
+import { mkdir, readFile as readFile3, realpath as realpath3, rm, stat, writeFile } from "node:fs/promises";
 import { homedir as homedir4 } from "node:os";
-import path10 from "node:path";
+import path11 from "node:path";
 
 // src/runtime/account-provider.ts
 import { createHash } from "node:crypto";
@@ -37406,14 +37906,14 @@ function createOfficialProviderRuntimeAuthResolver(options) {
       return unavailable();
     }
     const providerId = typeof request.providerId === "string" ? request.providerId : "";
-    const modelSelection = asRecord3(request.modelSelection);
+    const modelSelection = asRecord4(request.modelSelection);
     const modelId = typeof modelSelection.modelId === "string" ? modelSelection.modelId : "";
     if (!providerId || !modelId || typeof modelSelection.providerId === "string" && modelSelection.providerId !== providerId || options.isSelected && !options.isSelected(providerId, modelId)) {
       report({ stage: "input_rejected", reason: "selection_mismatch" });
       return unavailable();
     }
     const facts = accountProviderRuleFacts(providerId, options.config);
-    const access = asRecord3(request.accountAccess);
+    const access = asRecord4(request.accountAccess);
     if (!facts?.accountType || facts.planKind !== "individual-coding-plan" || access.type !== "zhipu-account" || access.accountType !== facts.accountType || access.mode !== facts.planKind || access.entitled !== true) {
       report({ stage: "input_rejected", reason: "account_access_mismatch" });
       return unavailable();
@@ -37459,7 +37959,7 @@ function createOfficialProviderRuntimeAuthResolver(options) {
     }
   };
 }
-function asRecord3(value) {
+function asRecord4(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
 }
 
@@ -37469,7 +37969,7 @@ init_profile();
 // src/store/process-lock.ts
 import { existsSync as existsSync6, mkdirSync, readFileSync as readFileSync6, renameSync, rmdirSync, statSync as statSync3, unlinkSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import path9 from "node:path";
+import path10 from "node:path";
 var selfIdentity = null;
 var TRANSIENT_LOCK_FS_CODES = /* @__PURE__ */ new Set(["EEXIST", "EPERM", "EACCES", "EBUSY", "ENOTEMPTY"]);
 var DESTINATION_PRESENT_CONTENTION_CODES = /* @__PURE__ */ new Set(["EEXIST", "ENOTEMPTY"]);
@@ -37503,7 +38003,7 @@ async function withProcessLock(directory, operation, timeoutMs = 3e4) {
 }
 function describeLockOwner(directory) {
   try {
-    const owner = JSON.parse(readFileSync6(path9.join(directory, "owner.json"), "utf8"));
+    const owner = JSON.parse(readFileSync6(path10.join(directory, "owner.json"), "utf8"));
     if (!Number.isSafeInteger(owner.pid)) return null;
     return `pid ${String(owner.pid)}${owner.started_at ? `, started ${owner.started_at}` : ""}`;
   } catch {
@@ -37527,7 +38027,7 @@ function tryAcquireProcessLockWithRetry(directory, deadline) {
   };
   try {
     mkdirSync(staging, { mode: 448 });
-    writeFileSync(path9.join(staging, "owner.json"), JSON.stringify(ownerRecord), { mode: 384, flag: "wx" });
+    writeFileSync(path10.join(staging, "owner.json"), JSON.stringify(ownerRecord), { mode: 384, flag: "wx" });
     try {
       renameSync(staging, directory);
     } catch (error2) {
@@ -37548,7 +38048,7 @@ function tryAcquireProcessLockWithRetry(directory, deadline) {
     throw error2;
   }
   return () => {
-    const owner = JSON.parse(readFileSync6(path9.join(directory, "owner.json"), "utf8"));
+    const owner = JSON.parse(readFileSync6(path10.join(directory, "owner.json"), "utf8"));
     if (owner.token !== token) throw new Error("process lock ownership changed");
     const retired = `${directory}.${token}.retired`;
     renameWithTransientRetry(directory, retired);
@@ -37570,7 +38070,7 @@ function renameWithTransientRetry(source, target) {
 function acquireExistingLock(directory) {
   let owner;
   try {
-    owner = JSON.parse(readFileSync6(path9.join(directory, "owner.json"), "utf8"));
+    owner = JSON.parse(readFileSync6(path10.join(directory, "owner.json"), "utf8"));
     if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0) throw new Error("invalid lock owner");
   } catch {
     try {
@@ -37590,7 +38090,7 @@ function acquireExistingLock(directory) {
   return null;
 }
 function removeStagedLock(directory) {
-  removePrivateFile(path9.join(directory, "owner.json"));
+  removePrivateFile(path10.join(directory, "owner.json"));
   removePrivateDirectory(directory);
 }
 function removePrivateFile(file) {
@@ -37629,7 +38129,7 @@ function reclaimDeadOwner(directory) {
   }
   let outcome;
   try {
-    const owner = JSON.parse(readFileSync6(path9.join(directory, "owner.json"), "utf8"));
+    const owner = JSON.parse(readFileSync6(path10.join(directory, "owner.json"), "utf8"));
     if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0) {
       outcome = { kind: "busy" };
     } else {
@@ -37724,7 +38224,7 @@ var ZCodeModelSettings = class {
   }
   async listModels(workspace) {
     const requestedWorkspace = workspace.trim();
-    if (!path10.isAbsolute(requestedWorkspace)) {
+    if (!path11.isAbsolute(requestedWorkspace)) {
       throw new BridgeError("provider_config_invalid", "workspace must be an absolute existing directory");
     }
     let workspacePath;
@@ -37829,15 +38329,15 @@ var ZCodeModelSettings = class {
       }
       const configuredMode = runtimeEnv["ZCODE_BRIDGE_MODE"]?.trim() ?? "build";
       const mode = ZCODE_SESSION_MODES.includes(configuredMode) ? configuredMode : "build";
-      const snapshot = asRecord4(await client.request("session/create", {
+      const snapshot = asRecord5(await client.request("session/create", {
         workspace: { workspacePath, workspaceKey: workspacePath },
         mode,
         persistence: "deferred"
       }));
       sessionId = nestedString(snapshot, ["session", "sessionId"]);
       if (!sessionId) throw new BridgeError("zcode_nonzero_exit", "ZCode app-server did not return a session ID");
-      const settings = asRecord4(snapshot.settings);
-      const modelSettings = asRecord4(settings.model);
+      const settings = asRecord5(snapshot.settings);
+      const modelSettings = asRecord5(settings.model);
       const rawAvailable = Array.isArray(modelSettings.available) ? modelSettings.available : [];
       const models = withStartPlanAliasEntries(rawAvailable.map(toCatalogEntry).filter((entry) => entry !== null), config2);
       const current = toModelRef(modelSettings.current);
@@ -37917,25 +38417,25 @@ var ZCodeModelSettings = class {
   #updateConfig(update) {
     const operation = this.#writeQueue.then(async () => {
       await mkdir(this.#host.settingsDirectory, { recursive: true });
-      return withProcessLock(path10.join(this.#host.settingsDirectory, ".settings.lock"), async () => {
-        const configPath = path10.join(this.#host.settingsDirectory, "runtime-config.json");
+      return withProcessLock(path11.join(this.#host.settingsDirectory, ".settings.lock"), async () => {
+        const configPath = path11.join(this.#host.settingsDirectory, "runtime-config.json");
         let config2 = {};
         try {
           const info = await stat(configPath);
           if (!info.isFile() || info.size > 64 * 1024) {
             throw new BridgeError("provider_config_invalid", "Bridge runtime config is not a small regular JSON file");
           }
-          const parsed = JSON.parse(await readFile2(configPath, "utf8"));
+          const parsed = JSON.parse(await readFile3(configPath, "utf8"));
           if (!isRecord4(parsed)) throw new BridgeError("provider_config_invalid", "Bridge runtime config must contain a JSON object");
           config2 = parsed;
         } catch (error2) {
           if (isMissingFile2(error2)) {
             config2 = {};
             for (const directory of this.#host.legacySettingsDirectories ?? []) {
-              const legacyPath = path10.join(directory, "runtime-config.json");
+              const legacyPath = path11.join(directory, "runtime-config.json");
               try {
                 if ((await stat(legacyPath)).size > 64 * 1024) throw new Error("legacy settings exceed size limit");
-                const legacy = JSON.parse(await readFile2(legacyPath, "utf8"));
+                const legacy = JSON.parse(await readFile3(legacyPath, "utf8"));
                 if (!isRecord4(legacy)) throw new Error("invalid legacy settings");
                 loadPersistedRuntimeEnvironment(this.#sourceEnv, this.#homeDir, this.#host);
                 config2 = legacy;
@@ -37969,7 +38469,7 @@ var ZCodeModelSettings = class {
 };
 async function handleRuntimeRequest(client, message, resolveProviderRuntimeAuth, signal) {
   if (signal.aborted) return;
-  const request = asRecord4(message);
+  const request = asRecord5(message);
   const id = request.id;
   if (typeof id !== "string" && typeof id !== "number") return;
   let reply;
@@ -37985,7 +38485,7 @@ async function handleRuntimeRequest(client, message, resolveProviderRuntimeAuth,
   } else if (request.method === "interaction/requestProviderRuntimeHeaders") {
     reply = {
       id,
-      result: await resolveProviderRuntimeAuth(asRecord4(request.params), signal).catch(() => ({
+      result: await resolveProviderRuntimeAuth(asRecord5(request.params), signal).catch(() => ({
         headersApplied: false,
         errorMessage: "Provider runtime authorization is unavailable."
       }))
@@ -38011,13 +38511,13 @@ function buildRuntimeChildEnv(config2, source) {
   return env;
 }
 function toCatalogEntry(value) {
-  const entry = asRecord4(value);
+  const entry = asRecord5(value);
   const ref = toModelRef(entry.ref);
   if (!ref) return null;
-  const reasoning = asRecord4(entry.reasoning);
+  const reasoning = asRecord5(entry.reasoning);
   const rawLevels = Array.isArray(reasoning.levels) ? reasoning.levels : [];
   const reasoningLevels = rawLevels.flatMap((raw) => {
-    const level = asRecord4(raw);
+    const level = asRecord5(raw);
     if (typeof level.value !== "string" || !level.value.trim()) return [];
     return [{ value: level.value, label: typeof level.label === "string" && level.label.trim() ? level.label : level.value }];
   });
@@ -38034,15 +38534,15 @@ function toCatalogEntry(value) {
   };
 }
 function toModelRef(value) {
-  const ref = asRecord4(value);
+  const ref = asRecord5(value);
   return typeof ref.providerId === "string" && typeof ref.modelId === "string" ? { provider_id: ref.providerId, model_id: ref.modelId } : null;
 }
 function nestedString(record5, keys) {
   let value = record5;
-  for (const key of keys) value = asRecord4(value)[key];
+  for (const key of keys) value = asRecord5(value)[key];
   return typeof value === "string" ? value : null;
 }
-function asRecord4(value) {
+function asRecord5(value) {
   return isRecord4(value) ? value : {};
 }
 function isRecord4(value) {
@@ -38060,15 +38560,15 @@ function modelCatalogCachePath(workspace, config2, env, settingsDirectory) {
     personal: config2.providerPersonalConfigFile,
     zcodeHome: env.ZCODE_HOME ?? ""
   });
-  const key = createHash4("sha256").update(identity).digest("hex");
-  return path10.join(settingsDirectory, "model-catalog", `${key}.json`);
+  const key = createHash5("sha256").update(identity).digest("hex");
+  return path11.join(settingsDirectory, "model-catalog", `${key}.json`);
 }
 async function modelCatalogSourceFingerprint(config2, env, homeDir) {
-  const digest3 = createHash4("sha256");
+  const digest3 = createHash5("sha256");
   digest3.update("start-plan-task-scoped-live-billing-v1");
   for (const file of [config2.providerBuiltinConfigFile, config2.providerPersonalConfigFile]) {
     digest3.update(file);
-    digest3.update(await readFile2(file));
+    digest3.update(await readFile3(file));
   }
   const entry = await stat(config2.zcodeEntrypoint);
   digest3.update(JSON.stringify({ entrypoint: config2.zcodeEntrypoint, size: entry.size, mtimeMs: entry.mtimeMs, mode: env.ZCODE_BRIDGE_MODE ?? "build" }));
@@ -38099,7 +38599,7 @@ async function readModelCatalogCache(cachePath) {
   try {
     const info = await stat(cachePath);
     if (!info.isFile() || info.size > 2 * 1024 * 1024) return null;
-    const value = JSON.parse(await readFile2(cachePath, "utf8"));
+    const value = JSON.parse(await readFile3(cachePath, "utf8"));
     if (!isRecord4(value) || !Number.isFinite(value.cached_at_ms) || typeof value.source_fingerprint !== "string" || !Array.isArray(value.models)) return null;
     const models = value.models.map(toCachedCatalogEntry).filter((entry) => entry !== null);
     if (models.length !== value.models.length || models.length === 0) return null;
@@ -38119,7 +38619,7 @@ function toCachedCatalogEntry(value) {
   return result;
 }
 async function writeModelCatalogCache(cachePath, cache) {
-  await mkdir(path10.dirname(cachePath), { recursive: true });
+  await mkdir(path11.dirname(cachePath), { recursive: true });
   const tempPath = `${cachePath}.${process.pid}.${randomUUID2()}.tmp`;
   try {
     await writeFile(tempPath, `${JSON.stringify(cache)}
@@ -38394,7 +38894,7 @@ init_resolver();
 init_profile();
 import { existsSync as existsSync7, lstatSync, mkdirSync as mkdirSync2, readFileSync as readFileSync8, realpathSync as realpathSync3 } from "node:fs";
 import os from "node:os";
-import path14 from "node:path";
+import path15 from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 var CONFIG_FILE = "authority.json";
 var CONFIG_LIMIT = 8 * 1024;
@@ -38409,7 +38909,7 @@ var SqliteInstallConfigurationError = class extends Error {
 };
 function loadInstallAuthoritySelection(host) {
   validateHostProfile(host);
-  const configPath = path14.join(host.settingsDirectory, CONFIG_FILE);
+  const configPath = path15.join(host.settingsDirectory, CONFIG_FILE);
   try {
     const stat2 = lstatSync(configPath);
     if (!stat2.isFile() || stat2.isSymbolicLink()) throw new SqliteInstallConfigurationError("authority_config_not_regular_file");
@@ -38440,12 +38940,12 @@ function prepareFreshSqliteStateDirectory(selection, env) {
 }
 function sqliteInstallationRoot(env) {
   const modulePath = fileURLToPath4(import.meta.url);
-  const dist = path14.dirname(modulePath);
-  const entry = path14.basename(modulePath);
+  const dist = path15.dirname(modulePath);
+  const entry = path15.basename(modulePath);
   const pluginEntry = entry === "wait-task.mjs" || entry === "bridge.mjs" && env["ZCODE_BRIDGE_PLUGIN_MODE"] === "1";
-  if (pluginEntry && path14.basename(dist) === "dist") {
-    const pluginRoot = path14.dirname(dist);
-    if (!existsSync7(path14.join(pluginRoot, ".codex-plugin", "plugin.json")) || !existsSync7(path14.join(pluginRoot, "launch-node24.mjs"))) {
+  if (pluginEntry && path15.basename(dist) === "dist") {
+    const pluginRoot = path15.dirname(dist);
+    if (!existsSync7(path15.join(pluginRoot, ".codex-plugin", "plugin.json")) || !existsSync7(path15.join(pluginRoot, "launch-node24.mjs"))) {
       throw new SqliteInstallConfigurationError("sqlite_plugin_layout_invalid");
     }
     return pluginRoot;
@@ -38455,10 +38955,10 @@ function sqliteInstallationRoot(env) {
 function resolveStateDirectory(selection, env, packageRootValue, tempRootValue) {
   const appRoot = selection.configuredDataRoot || defaultDataRoot(env);
   if (!isLocalAbsolutePath(appRoot)) throw new SqliteInstallConfigurationError("sqlite_data_root_not_local_absolute");
-  const normalizedRoot = path14.resolve(appRoot);
-  const stateDirectory = path14.join(normalizedRoot, "state");
-  const packageRoot = path14.resolve(packageRootValue);
-  const tempRoot = path14.resolve(tempRootValue);
+  const normalizedRoot = path15.resolve(appRoot);
+  const stateDirectory = path15.join(normalizedRoot, "state");
+  const packageRoot = path15.resolve(packageRootValue);
+  const tempRoot = path15.resolve(tempRootValue);
   if (within(packageRoot, normalizedRoot) || within(tempRoot, normalizedRoot) || within(packageRoot, stateDirectory) || within(tempRoot, stateDirectory)) {
     throw new SqliteInstallConfigurationError("sqlite_data_root_reserved_location");
   }
@@ -38466,7 +38966,7 @@ function resolveStateDirectory(selection, env, packageRootValue, tempRootValue) 
 }
 function prepareStateDirectory(selection, env, packageRootValue, tempRootValue) {
   const resolved = resolveStateDirectory(selection, env, packageRootValue, tempRootValue);
-  const normalizedRoot = path14.dirname(resolved.dataRoot);
+  const normalizedRoot = path15.dirname(resolved.dataRoot);
   ensurePlainDirectoryTree(normalizedRoot);
   ensurePlainDirectoryTree(resolved.dataRoot);
   const canonicalState = canonicalDirectory2(resolved.dataRoot);
@@ -38476,15 +38976,15 @@ function prepareStateDirectory(selection, env, packageRootValue, tempRootValue) 
 function defaultDataRoot(env) {
   const localAppData = env["LOCALAPPDATA"]?.trim();
   if (!localAppData || !isLocalAbsolutePath(localAppData)) throw new SqliteInstallConfigurationError("local_app_data_unavailable");
-  return path14.join(localAppData, "CodexZCodeBridge");
+  return path15.join(localAppData, "CodexZCodeBridge");
 }
 function ensurePlainDirectoryTree(value) {
   if (!isLocalAbsolutePath(value)) throw new SqliteInstallConfigurationError("sqlite_data_path_not_local");
-  const parsed = path14.parse(value);
-  const segments = value.slice(parsed.root.length).split(path14.sep).filter(Boolean);
+  const parsed = path15.parse(value);
+  const segments = value.slice(parsed.root.length).split(path15.sep).filter(Boolean);
   let current = parsed.root;
   for (const segment of segments) {
-    current = path14.join(current, segment);
+    current = path15.join(current, segment);
     try {
       const stat2 = lstatSync(current);
       if (!stat2.isDirectory() || stat2.isSymbolicLink()) throw new SqliteInstallConfigurationError("sqlite_data_path_component_unsafe");
@@ -38514,7 +39014,7 @@ function canonicalDirectory2(value) {
   }
 }
 function rejectOrphanedDatabaseState(root) {
-  const expected = path14.join(root, FRESH_SQLITE_DATABASE_FILE);
+  const expected = path15.join(root, FRESH_SQLITE_DATABASE_FILE);
   if (existsSync7(expected)) return;
   for (const name of [
     `${FRESH_SQLITE_DATABASE_FILE}-wal`,
@@ -38525,19 +39025,19 @@ function rejectOrphanedDatabaseState(root) {
     "ROOT_POISONED.json",
     "WRITER_INTENT.json"
   ]) {
-    if (existsSync7(path14.join(root, name))) throw new SqliteInstallConfigurationError("sqlite_existing_state_incomplete");
+    if (existsSync7(path15.join(root, name))) throw new SqliteInstallConfigurationError("sqlite_existing_state_incomplete");
   }
 }
 function isLocalAbsolutePath(value) {
-  if (process.platform === "win32") return /^[A-Za-z]:\\/u.test(value) && path14.win32.isAbsolute(value) && !value.startsWith("\\\\");
-  return path14.isAbsolute(value) && !value.startsWith("/proc/") && !value.startsWith("/sys/") && !value.startsWith("/dev/");
+  if (process.platform === "win32") return /^[A-Za-z]:\\/u.test(value) && path15.win32.isAbsolute(value) && !value.startsWith("\\\\");
+  return path15.isAbsolute(value) && !value.startsWith("/proc/") && !value.startsWith("/sys/") && !value.startsWith("/dev/");
 }
 function within(root, candidate) {
-  const relative = path14.relative(root, candidate);
-  return relative === "" || relative !== ".." && !relative.startsWith(`..${path14.sep}`) && !path14.isAbsolute(relative);
+  const relative = path15.relative(root, candidate);
+  return relative === "" || relative !== ".." && !relative.startsWith(`..${path15.sep}`) && !path15.isAbsolute(relative);
 }
 function samePath2(left, right) {
-  const normalize = (value) => process.platform === "win32" ? path14.win32.normalize(value).replace(/[\\/]+$/u, "").toLocaleLowerCase("en-US") : path14.resolve(value);
+  const normalize = (value) => process.platform === "win32" ? path15.win32.normalize(value).replace(/[\\/]+$/u, "").toLocaleLowerCase("en-US") : path15.resolve(value);
   return normalize(left) === normalize(right);
 }
 function isRecord5(value) {
@@ -38553,13 +39053,13 @@ function createTrustedLocalCandidateContext(host) {
 function resolveDataRoot(env) {
   const override = env["ZCODE_BRIDGE_DATA_DIR"]?.trim();
   if (override) {
-    if (!path19.isAbsolute(override)) {
+    if (!path20.isAbsolute(override)) {
       return {
         dataRoot: findPackageRoot(),
         warning: `ZCODE_BRIDGE_DATA_DIR must be an absolute path; ignoring ${override} and using the Bridge installation directory`
       };
     }
-    return { dataRoot: path19.normalize(override) };
+    return { dataRoot: path20.normalize(override) };
   }
   return { dataRoot: findPackageRoot() };
 }
@@ -38719,7 +39219,7 @@ async function startBridge(host = codexHostProfile(), version2 = SERVER_VERSION,
   const processProbe = createPlatformProbe();
   let manager;
   let lifecycleChecks;
-  const databasePath = path19.join(dataRoot, FRESH_SQLITE_DATABASE_FILE);
+  const databasePath = path20.join(dataRoot, FRESH_SQLITE_DATABASE_FILE);
   let trustedLocalContext;
   try {
     trustedLocalContext = createTrustedLocalCandidateContext(host);
@@ -38811,7 +39311,7 @@ var isEntry = process.argv[1] !== void 0 && sameRealPath(import.meta.url, proces
 function sameRealPath(moduleUrl, argvPath) {
   try {
     const modulePath = realpathSync6(fileURLToPath6(moduleUrl));
-    const entryPath = realpathSync6(path20.resolve(argvPath));
+    const entryPath = realpathSync6(path21.resolve(argvPath));
     return process.platform === "win32" ? modulePath.toLocaleLowerCase("en-US") === entryPath.toLocaleLowerCase("en-US") : modulePath === entryPath;
   } catch {
     return false;

@@ -39,6 +39,9 @@ test("zero-model protocol smoke starts, inspects, and releases the official runt
       inspectRuntime: async () => ({
         install_root: install,
         runtime_status: "OFFICIAL_RUNTIME_VERIFIED",
+        desktop_version: "3.18.2.10443",
+        desktop_app_version: "3.18.2",
+        desktop_build_commit_id: "2681f4af",
         manifest: { version: "3.18.2.10443", desktop_app_version: "3.18.2", desktop_build_commit_id: "2681f4af" },
         assets: {
           bundle: { relative_path: "resources/glm/zcode.cjs", sha256: "a".repeat(64) },
@@ -139,11 +142,37 @@ test("protocol smoke fails closed when the installed runtime is unverified", asy
   assert.equal(result.evidence.model_requests, 0);
 });
 
+test("protocol smoke accepts an explicitly authorized experimental runtime gate", async () => {
+  const result = await runOfficialAppServerProtocolSmoke({
+    inspectRuntime: async () => ({
+      install_root: "C:\\Synthetic\\ZCode",
+      runtime_status: "OFFICIAL_RUNTIME_EXPERIMENTAL",
+      installation_safety: "OFFICIAL_INSTALLATION_SAFE",
+      installation_fingerprint: "a".repeat(64),
+      desktop_version: "3.19.0.10774",
+      desktop_app_version: "3.19.0",
+      desktop_build_commit_id: "a7ed1054",
+      experimental_authorization: {
+        state: "authorized",
+        scopes: ["coding_plan_probe"],
+      },
+      manifest: null,
+      assets: {},
+    }),
+  });
+  assert.equal(result.status, "FAIL");
+  assert.equal(result.reason, "runtime_manifest_incomplete");
+  assert.equal(result.evidence.model_requests, 0);
+});
+
 test("protocol smoke report never exposes a literal fixture path", async () => {
   const result = await runOfficialAppServerProtocolSmoke({
     inspectRuntime: async () => ({
       install_root: "D:\\Users\\Sandy\\ZCode",
       runtime_status: "OFFICIAL_RUNTIME_VERIFIED",
+      desktop_version: "3.18.2.10443",
+      desktop_app_version: "3.18.2",
+      desktop_build_commit_id: "2681f4af",
       manifest: { version: "3.18.2.10443", desktop_app_version: "3.18.2", desktop_build_commit_id: "2681f4af" },
       assets: {
         bundle: { relative_path: "resources/glm/zcode.cjs", sha256: createHash("sha256").update("b").digest("hex") },

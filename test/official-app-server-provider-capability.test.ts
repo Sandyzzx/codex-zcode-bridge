@@ -89,3 +89,87 @@ test("unverified runtime descriptors cannot satisfy either provider capability",
   assert.notEqual(officialProviderCapabilityFailure(unverified, "coding_plan_discount"), null);
   assert.notEqual(officialProviderCapabilityFailure(unverified, "start_plan_static"), null);
 });
+
+test("experimental runtime authorization is Provider-scoped and does not claim verification", () => {
+  const experimental = descriptor({
+    status: "OFFICIAL_RUNTIME_EXPERIMENTAL",
+    installation_safety: "OFFICIAL_INSTALLATION_SAFE",
+    installation_fingerprint: "a".repeat(64),
+    experimental_authorization: {
+      state: "authorized",
+      file_path: "C:\\synthetic-authorization.json",
+      reason: null,
+      record: {
+        installation_fingerprint: "a".repeat(64),
+        desktop_version: "3.19.0.10774",
+        authorized_at: "2026-11-20T00:00:00.000Z",
+        authorized_by: "owner",
+        scopes: ["coding_plan_probe"],
+      },
+      scopes: ["coding_plan_probe"],
+    },
+    discount_capability: "OFFICIAL_DISCOUNT_NOT_VERIFIED",
+    start_plan_static_compatibility: "OFFLINE_RESEARCH_PENDING",
+    reason: "explicit experimental authorization accepted",
+  });
+  assert.equal(officialProviderCapabilityFailure(experimental, "coding_plan_discount"), null);
+  assert.match(
+    officialProviderCapabilityFailure(experimental, "start_plan_static") ?? "",
+    /start_plan_probe/u,
+  );
+  assert.match(
+    officialProviderCapabilityFailure(experimental, "installed_runtime") ?? "",
+    /other_provider_probe/u,
+  );
+  assert.equal(experimental.discount_capability, "OFFICIAL_DISCOUNT_NOT_VERIFIED");
+});
+
+test("experimental status without a matching authorization record cannot satisfy any Provider gate", () => {
+  const experimental = descriptor({
+    status: "OFFICIAL_RUNTIME_EXPERIMENTAL",
+    installation_safety: "OFFICIAL_INSTALLATION_SAFE",
+    installation_fingerprint: "b".repeat(64),
+    experimental_authorization: {
+      state: "required",
+      file_path: "C:\\synthetic-authorization.json",
+      reason: null,
+      record: null,
+      scopes: [],
+    },
+    discount_capability: "OFFICIAL_DISCOUNT_NOT_VERIFIED",
+    start_plan_static_compatibility: "OFFLINE_RESEARCH_PENDING",
+  });
+  for (const capability of ["coding_plan_discount", "start_plan_static", "installed_runtime"] as const) {
+    assert.match(
+      officialProviderCapabilityFailure(experimental, capability) ?? "",
+      /EXPERIMENTAL_AUTHORIZATION_MISSING/u,
+    );
+  }
+});
+
+test("experimental scope does not elevate a Provider to a verified capability label", () => {
+  const experimental = descriptor({
+    status: "OFFICIAL_RUNTIME_EXPERIMENTAL",
+    installation_safety: "OFFICIAL_INSTALLATION_SAFE",
+    installation_fingerprint: "c".repeat(64),
+    experimental_authorization: {
+      state: "authorized",
+      file_path: "C:\\synthetic-authorization.json",
+      reason: null,
+      record: {
+        installation_fingerprint: "c".repeat(64),
+        desktop_version: "3.20.0.1",
+        authorized_at: "2026-11-20T00:00:00.000Z",
+        authorized_by: "owner",
+        scopes: ["other_provider_probe"],
+      },
+      scopes: ["other_provider_probe"],
+    },
+    discount_capability: "OFFICIAL_DISCOUNT_NOT_VERIFIED",
+    start_plan_static_compatibility: "OFFLINE_RESEARCH_PENDING",
+  });
+  assert.equal(officialProviderCapabilityFailure(experimental, "installed_runtime"), null);
+  assert.equal(experimental.status, "OFFICIAL_RUNTIME_EXPERIMENTAL");
+  assert.equal(experimental.discount_capability, "OFFICIAL_DISCOUNT_NOT_VERIFIED");
+  assert.equal(experimental.start_plan_static_compatibility, "OFFLINE_RESEARCH_PENDING");
+});
