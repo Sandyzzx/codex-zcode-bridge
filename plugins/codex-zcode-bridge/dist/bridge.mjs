@@ -15144,7 +15144,12 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
         this.#assertOpen();
         const blockers = [];
         if (this.#queue.length > 0) blockers.push("queued_attempt");
+        if (this.#queued.size > 0) blockers.push("queued_attempt");
         if (this.#activeRuns.size > 0) blockers.push("active_run");
+        if (this.#active > 0) blockers.push("active_pump");
+        if (this.#pumpPending) blockers.push("pump_pending");
+        if (this.#dispatchingPaths.size > 0) blockers.push("dispatching_path");
+        if (this.#recoveryRuns.size > 0) blockers.push("recovery_run");
         if (this.#awaitingDispatchPrerequisite) blockers.push("dispatch_prerequisite_pending");
         if (this.#recoveryInProgress || !this.#recoveryComplete || this.#recoveryBlocked) {
           blockers.push("recovery_pending");
@@ -39980,6 +39985,25 @@ init_sqlite_lifecycle_mcp_authority();
 init_trusted_local_deployment();
 init_lifecycle_gate();
 init_lease();
+
+// src/executor/control-server.ts
+var MUTATING_METHODS = /* @__PURE__ */ new Set([
+  "createTask",
+  "continueTask",
+  "cancelTask",
+  "replyToInteraction"
+]);
+var CONTROL_METHODS = /* @__PURE__ */ new Set([
+  ...MUTATING_METHODS,
+  "getStatus",
+  "getResult",
+  "getEvents",
+  "getFeedback",
+  "getAttention",
+  "health"
+]);
+
+// src/executor/service.ts
 function executorPipeName(root) {
   return `\\\\.\\pipe\\codex-zcode-bridge-executor-v1-${authorityRootDigest(root)}`;
 }
