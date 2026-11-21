@@ -194,13 +194,25 @@ test("Marketplace launcher automatically bootstraps SQLite before the first MCP 
     const processId = child.pid;
     assert.ok(processId, "launcher child must have an OS process id");
     const inspectCommand = `$target = Get-CimInstance Win32_Process -Filter 'ProcessId = ${processId}' | Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine; $children = @(Get-CimInstance Win32_Process -Filter 'ParentProcessId = ${processId}' | Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine); [ordered]@{target=$target;children=$children} | ConvertTo-Json -Compress -Depth 4`;
-    const processObservation = spawnSync(powershell, ["-NoProfile", "-NonInteractive", "-Command", inspectCommand], {
+    const observeProcessTree = () => spawnSync(powershell, ["-NoProfile", "-NonInteractive", "-Command", inspectCommand], {
       encoding: "utf8",
-      timeout: 8_000,
+      timeout: 15_000,
       windowsHide: true,
       env: childEnv,
     });
-    assert.equal(processObservation.status, 0, `process identity query failed: ${processObservation.stderr}`);
+    const processObservationReason = (result: ReturnType<typeof observeProcessTree>): string =>
+      (result.error as NodeJS.ErrnoException | undefined)?.code ?? String(result.status);
+    // Hosted Windows runners can delay the first WMI query under load. A
+    // second bounded query preserves the exact process-tree assertions while
+    // avoiding a false failure when the query itself did not complete.
+    let processObservation = observeProcessTree();
+    const firstQuery = processObservationReason(processObservation);
+    if (firstQuery === "ETIMEDOUT") processObservation = observeProcessTree();
+    assert.equal(
+      processObservation.status,
+      0,
+      `process identity query failed (first=${firstQuery}, second=${processObservationReason(processObservation)}): ${processObservation.stderr}`,
+    );
     const processTree = JSON.parse(processObservation.stdout) as {
       target?: { ProcessId?: number; ParentProcessId?: number; Name?: string; ExecutablePath?: string; CommandLine?: string };
       children?: Array<{ ProcessId?: number; ParentProcessId?: number; Name?: string; ExecutablePath?: string; CommandLine?: string }>;
