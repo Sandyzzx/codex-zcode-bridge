@@ -33,6 +33,13 @@ await createBridgeServer({taskManager:manager}).connect(new StdioServerTransport
   defaultClient.onerror=error=>consumerErrors.push(String(error));
   try{
     await defaultClient.connect(defaultTransport);
+    const summary=await defaultClient.callTool({
+      name:'zcode_result',arguments:{task_id:value.task_id,view:'summary',expected_attempt:value.attempt},
+    },undefined,{timeout:30000});
+    assert.equal(summary.isError,undefined);
+    assert.equal(summary.structuredContent.status,value.status);
+    assert.deepEqual(summary.structuredContent.projection.omitted_fields,['zcode_output']);
+    assert.ok(!('zcode_output' in summary.structuredContent));
     await assert.rejects(defaultClient.callTool({name:'zcode_result',arguments:{task_id:value.task_id}},undefined,{timeout:30000}),/Connection closed/);
     assert.ok(consumerErrors.some(error=>error.includes('ReadBuffer exceeded maximum size of 10485760 bytes')),consumerErrors.join('\n'));
   }finally{await defaultClient.close();}

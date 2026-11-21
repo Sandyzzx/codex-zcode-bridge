@@ -31,6 +31,7 @@ Release 证据。缺省或 `false` 返回原始 Event 形状。读取仍跨 Atte
 ## 影响
 
 摘要只呈现执行事实与 Agent 声明。Master 独立验证文件、测试与未决问题，并通过
-Status 和 Events 核对 Cleanup、Hold、Release。`released` 及 `result_committed`
-均需匹配所审 Attempt，并共享 `result_commit_ref`。工具名称、顺序及持久化合同保持
-原样。原有 SQLite 容量及 MCP 客户端的传输上限仍各自适用。
+Status 和 Events 核对 Cleanup、Hold、Release。已提交 Result 的 Release 证据中，
+`released` 及 `result_committed` 均匹配受审 Attempt，并共享 `result_commit_ref`。
+无 Result 的取消和 [行政放弃](ADR-018-administrative-abandonment-of-cleanup-incomplete-hold.md)
+遵循各自的证据合同。工具名称、顺序、持久化合同和传输上限沿用 A0。

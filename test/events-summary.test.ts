@@ -127,6 +127,16 @@ test("a merge group that exactly reaches max_bytes is returned", () => {
   assert.equal(bounded.scanIncomplete, true);
 });
 
+test("summary includes the opt-in Attempt field in the merge budget", () => {
+  const rows = [row(1, "model_output", "first", 1), row(2, "model_output", "second", 1)];
+  const merged = mergeAdjacentModelOutputRows(rows).rows[0]!;
+  const legacyBytes = Buffer.byteLength(JSON.stringify(eventFor(merged)));
+  const attributedBytes = Buffer.byteLength(JSON.stringify({ ...eventFor(merged), attempt: 1 }));
+  assert.equal(mergeAdjacentModelOutputRows(rows, legacyBytes, false).rows.length, 1);
+  assert.equal(mergeAdjacentModelOutputRows(rows, legacyBytes, true).rows.length, 2);
+  assert.equal(mergeAdjacentModelOutputRows(rows, attributedBytes, true).rows.length, 1);
+});
+
 test("omitted_events can be limited to the merged rows actually returned", () => {
   const merged = mergeAdjacentModelOutputRows([
     row(1, "model_output", "a", 1),

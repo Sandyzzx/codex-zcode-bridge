@@ -5,6 +5,7 @@
 > Last verified: 2026-11-21，核对 v14-only 支持声明、`unsupported_sqlite_schema` 拒绝边界、未完成 Marker 保留及现有 Task/Result/Recovery 合同。
 > Verified against: ADR-043 candidate based on `c1245a02f8f9d4b6e1102eabac230b657d85de9b`
 > ADR-039 Last verified: 2026-11-16，仅取消投影、CAS、清理 Hold 与并发取消定向隔离测试；基线 `ec5f3e83d737df469f9ed54361d2aec46b4a15a8` + 本地候选。生产取消未重试。
+> ADR-047 Candidate: `zcode_result` 可选摘要与 `zcode_events` 归属。
 
 准确字段以 `src/interfaces.ts`、`src/mcp/schemas.ts` 与共享 `src/result-contract.mjs` 为准。[ARCHITECTURE.md](ARCHITECTURE.md) 描述实现，[SHARED_CORE.md](SHARED_CORE.md) 列出 Core API 主版本兼容策略。ADR-038 保留 13 个默认 MCP 工具、SQLite v14、32 MiB Result 与现有 Task 状态语义。
 
@@ -36,6 +37,8 @@ Running 取消遇到 `cleanup_identity_unknown` / `cleanup_incomplete` Hold 时�
 
 [ADR-026](decisions/ADR-026-sqlite-result-contract.md)：完整 canonical TaskResult 最大 **33,554,432 UTF-8 字节**；Worker envelope 另留 **262,144 字节**，换行分隔符另计 1 字节。容量按实际 canonical JSON 序列化计，不按字符数。报告文本/数组使用统一语义；身份和元数据仍有既有界限。
 
+[ADR-047](decisions/ADR-047-compatible-result-summary.md)：`zcode_result({task_id})` 和 `view: "full"` 返回同一完整 Result。`view: "summary"` 对不超过 2 KiB 的 JSON 直接返回原结果。更大的结果包含 `projection.omitted_fields` 和全部测试声明的 `projection.test_counts`。用 `view: "full", expected_attempt: <摘要的 attempt>` 读取缺失字段及原文。`expected_attempt` 只核对当前已提交 Result，其他 Attempt 返回 `TASK_STATE`，未提交返回 `TASK_NOT_FINISHED`。Cleanup、Hold 和 Release 通过 Status/Events 核对。
+
 AgentReport 必须包含布尔 needs_master_decision，不补造缺失字段。非法或超限报告形成明确的基础设施失败 Result（invalid_result_payload/result_too_large），标明原报告未提交，不裁剪为成功，不重派。完整合法帧先落 SQLite，再验证 Worker close/树/资源；已提交 Result 不因晚退出被丢弃。
 
 确定未提交的 Store/管道错误记录 operation-scoped 诊断并保留 running/占用；无法写诊断时输出 SQLITE_RESULT_SUBMISSION_FAILED。COMMIT ACK 不确定保留 poison/WRITER_INTENT，输出只读对账，禁止替代 Result、自动 Cleanup/重试。升级操作与回滚规则见 [运行配置](ZCODE_RUNTIME.md)。
@@ -47,6 +50,8 @@ Claim 后执行 envelope 写入 15s；Result 等待 execution + 330s；提交后
 ## Events、Attention 与反馈
 
 zcode_events 接受单调 cursor、limit 1–200、wait_ms 0–25,000、raw/summary 与既有 scan_cursor/max_bytes。summary 只合并同 Attempt、同 Operation、无 evidence 的相邻 `model_output` 文本行；Permission、Interaction、错误、终态、其他事件类型和 Attempt 都是边界。`next_seq` 指向最后扫描到的合并行所在的 neutral public cursor，`omitted_events` 给出合并数量；`max_bytes` 在 summary 合并后仍由 canonical JSON 字节数约束，超限时返回 `scan_incomplete` 和可继续的 cursor。raw 保持逐行读取，attention 等待后仍按普通 cursor 读取一次。
+
+[ADR-047](decisions/ADR-047-compatible-result-summary.md)：设 `include_attempt: true` 可在每条 SQLite Event 读取持久归属的 `attempt`。分页仍包含所读范围内的所有 Attempt，`max_bytes` 包含新增字段。默认或 `false` 保持原 Event 响应。`attention.attempt` 只标识 Attention 自身的 Attempt。
 
 可选 wait_for="attention" 用 SQLite 单事务 snapshot 等待当前 Pending、终态或 Attempt 变化。普通事件不提前唤醒，等待中不推进事件 cursor；返回时按原 cursor 读取一次事件页，顶层 status 镜像 attention.status。无效 cursor 先拒绝；读取失败、Task 不存在或 reply ACK 不确定时明确失败，不能合成空 Pending。
 

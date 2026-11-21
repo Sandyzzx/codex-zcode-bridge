@@ -217,6 +217,7 @@ function seedReleasedTaskWithRuntimeEvents(
       tool_name: "Read",
       tool_call_id: "event-pagination-tool",
     });
+    append(8, "turn_started", "synthetic turn started");
     const result = {
       task_id: taskId,
       attempt: 1,
@@ -3273,6 +3274,64 @@ test("formal MCP Manager routes SQLite Create/Worker/Result/Continue/Events/Feed
     assert.ok((nextEvents.events as Array<Record<string, unknown>>).every((event) => Number(event.seq) > firstCursor));
     assert.equal(existsSync(path.join(dataRoot, ".tasks")), false, "SQLite lifecycle must not write JSON TaskStore state");
   }, { onStage: (stage, detail) => stages.push({ stage, detail }), testOnScheduler: (stage, detail) => stages.push({ stage: `manager_${stage}`, detail }) });
+});
+
+test("formal MCP Events attribute startup and Release across Attempts", { skip: process.platform !== "win32", timeout: 45_000 }, async () => {
+  const taskId = `mcp-attempt-events-${randomUUID()}`;
+  let releaseDispatch!: () => void;
+  const dispatchGate = new Promise<void>((resolve) => { releaseDispatch = resolve; });
+  await withSqliteMcp(async (client) => {
+    const args = { task_id: taskId, view: "summary", wait_for: "attention", limit: 200 };
+    const read = async (includeAttempt?: boolean) => contentObject(await client.callTool({
+      name: "zcode_events",
+      arguments: { ...args, ...(includeAttempt === undefined ? {} : { include_attempt: includeAttempt }) },
+    }));
+    const eventsOf = (page: Record<string, unknown>) => page.events as Array<{
+      type: string; attempt?: number; details?: { result_commit_ref?: string };
+    }>;
+    try {
+      contentObject(await client.callTool({
+        name: "zcode_continue", arguments: { task_id: taskId, feedback: "Check next Attempt" },
+      }));
+      const queued = await read(true);
+      assert.equal(queued.status, "queued");
+      assert.equal((queued.attention as { attempt: number }).attempt, 2);
+      const previous = eventsOf(queued);
+      assert.equal(previous.find((event) => event.type === "turn_started")?.attempt, 1);
+      assert.equal(previous.find((event) => event.type === "released")?.attempt, 1);
+      assert.ok(previous.every((event) => event.attempt === 1));
+      const legacy = await read();
+      assert.deepEqual(await read(false), legacy);
+      assert.deepEqual(legacy, { ...queued, events: previous.map(({ attempt, ...event }) => event) });
+
+      releaseDispatch();
+      await waitForTerminal(client, taskId, 2);
+      await waitForLifecycleEvent(client, taskId, "cleanup_unverified");
+      const held = await read(true);
+      assert.equal((held.attention as { attempt: number }).attempt, 2);
+      const events = eventsOf(held);
+      const firstRelease = events.find((event) => event.type === "released" && event.attempt === 1);
+      const firstCommit = events.find((event) => event.type === "result_committed" && event.attempt === 1);
+      const latestCommit = events.find((event) => event.type === "result_committed" && event.attempt === 2);
+      assert.ok(firstRelease?.details?.result_commit_ref);
+      assert.equal(firstRelease.details.result_commit_ref, firstCommit?.details?.result_commit_ref);
+      assert.ok(latestCommit?.details?.result_commit_ref);
+      assert.notEqual(latestCommit.details.result_commit_ref, firstRelease.details.result_commit_ref);
+      assert.ok(events.some((event) => event.type === "cleanup_unverified" && event.attempt === 2));
+      assert.ok(!events.some((event) => event.type === "released" && event.attempt === 2));
+    } finally {
+      releaseDispatch();
+    }
+  }, {
+    testBeforeDispatch: () => dispatchGate,
+    beforeAuthority: (dataRoot, modules, workspace) => {
+      seedReleasedTaskWithRuntimeEvents(dataRoot, modules, workspace, taskId, candidateOperationId(taskId, 1));
+    },
+    testVerifyProcessTreeClaimantsClean: async (targets) => {
+      const pids = targets.map((target) => target.pid);
+      return { clean: false, livePids: pids, observedPids: pids };
+    },
+  });
 });
 
 test("formal MCP Events summary advances across byte-bounded merge groups without losing raw events", { skip: process.platform !== "win32", timeout: 45_000 }, async () => {
