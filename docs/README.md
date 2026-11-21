@@ -28,6 +28,7 @@ English users start at [README.md](../README.md). 技术文档为中文。先读
 | 未知官方版本的安全检查与指纹授权实验探测 | [ADR-042](decisions/ADR-042-unknown-runtime-experimental-authorization.md)、[3.19.0 兼容性报告](reports/zcode-3.19.0-compatibility-20261120.md) |
 | SQLite Schema 支持 | [ADR-043](decisions/ADR-043-sqlite-v14-only.md) | `SQLite v14 ONLY`；v13 与旧升级 Marker 非破坏性拒绝 |
 | SQLite v13 退役验收 | [验收报告](reports/sqlite-v13-retirement-20261121.md) | v14-only 支持、v13 非破坏性拒绝、测试/生成物退役与完整回归证据 |
+| Preview.11 发布与已知边界 | [发布报告](reports/preview11-release-20261122.md) | 默认完整 Result、opt-in 摘要、Event 分页、用户授权阻塞释放与真实 A/B `BLOCKED` |
 | Preview.7 Post-Audit 最小架构、正确性、Legacy JSON 与 CI 整改 | [ADR-038](decisions/ADR-038-preview6-minimum-architecture-remediation.md)、[PROJECT_STATE.md](PROJECT_STATE.md) |
 | Start Plan 与安装版 AppServer 离线兼容性 | [研究](research/start-plan-official-appserver-compatibility-20261118.md) |
 | 本次 Runtime、Cost Lab Web 与 Start Plan 集成交付 | [验收报告](reports/official-runtime-integration-costlab-web-startplan-20261118.md) |
@@ -47,7 +48,7 @@ AUTHORITATIVE 描述当前事实或合同；DECISION 记录已批准取舍；RES
 
 [ADR 索引](decisions/README.md) 区分当前有效、部分被替代和完全被替代。历史文件保持原路径，避免破坏引用。不要默认加载 `docs/archive`、`docs/research`、旧审计日志或生成 bundle。
 
-当前 Preview 发布候选身份为 `2.0.0-preview.10`。`package.json`、`package-lock.json`、插件 manifest、MCP server version、官方签名 Runtime Host 与固定官方 Host/BOM 必须来自同一提交、Tag 和 Release。发布支持范围仍限定为 Windows x64、Node.js `24.16.0` 与 ZCode Desktop `3.18.2.10443`。Preview.10 将 v13 Schema/升级 CLI 退役、旧 JSON Authority 提示退役、无引用 3.18.0 Patch 删除与 CI 测试分层/Windows 两路分片纳入发行树；SQLite v14 是唯一当前 Schema。ADR-042 允许其他安全但未知的精确安装指纹在用户授权后进入 `OFFICIAL_RUNTIME_EXPERIMENTAL`，但不把该版本加入发布支持范围，也不提升 Provider、折扣或 Start Plan 能力。ADR-041 implementation 为 `a676c6cd14573f2620339f992a345ed0715541ff`；Final Closure implementation 为 `f19ab1d75dcced7613bfe6e12c84d780d01f7127`。旧 JSON/CLI 生产链退役决策见 [ADR-029](decisions/ADR-029-legacy-runtime-retirement.md)。ADR-041 后插件不再分发 `app-server/zcode.cjs` 或随附 builtin Provider 配置，所有 Provider 使用安装版 AppServer。
+当前 Preview 发布候选身份为 `2.0.0-preview.11`。`package.json`、`package-lock.json`、插件 manifest、MCP server version、官方签名 Runtime Host 与固定官方 Host/BOM 必须来自同一提交、Tag 和 Release。发布支持范围仍限定为 Windows x64、Node.js `24.16.0` 与 ZCode Desktop `3.18.2.10443`。Preview.11 在 Preview.10 的 SQLite v14-only 基线上加入默认完整 Result、`zcode_result(view="summary")` opt-in 摘要、分页 Event 监控、Attempt 归属和用户授权阻塞释放；SQLite v14 仍是唯一当前 Schema。ADR-042 允许其他安全但未知的精确安装指纹在用户授权后进入 `OFFICIAL_RUNTIME_EXPERIMENTAL`，但不把该版本加入发布支持范围，也不提升 Provider、折扣或 Start Plan 能力。ADR-041 implementation 为 `a676c6cd14573f2620339f992a345ed0715541ff`；Final Closure implementation 为 `f19ab1d75dcced7613bfe6e12c84d780d01f7127`。旧 JSON/CLI 生产链退役决策见 [ADR-029](decisions/ADR-029-legacy-runtime-retirement.md)。ADR-041 后插件不再分发 `app-server/zcode.cjs` 或随附 builtin Provider 配置，所有 Provider 使用安装版 AppServer。
 
 ADR-032 已接受且已在 Preview.5 实现“现有 Worker 内官方 Host”。ADR-033 的账户 refresh 协调、ADR-034 的正常 Cleanup 复用和 ADR-035 的平台选择由固定上游 patch 与同一 Worker 实现。ADR-037 已接受“官方 Host 拥有认证、Bridge 不维护第二套凭据/身份系统”的目标；Preview.6 已实现该接线。Preview.6/Preview.7 历史路径上的真实 Coding Plan 完整 E2E 和 Start Plan 核心功能路径曾通过；但 2026-11-19 统一安装版 Runtime 的 Start Plan 真实 Entitlement/E2E/Billing Observation 尚未运行。历史 Start Plan 完整 E2E 因 Workspace 内 PowerShell cache 保持 FAIL。Desktop 3.18.0/3.18.1 保持 `NOT_VERIFIED`，不得写成 PASS 或不兼容。
 
