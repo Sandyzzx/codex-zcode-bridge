@@ -29,6 +29,7 @@ import type { TaskModelRouter } from "../runtime/model-routing.js";
 const EXECUTION_OBSERVATION_PROBE_BUDGET_MS = 5_000;
 const DEFAULT_HOST_SHUTDOWN_WAIT_MS = 60_000;
 const PUMP_FAILURE_RECOVERY_RETRY_MS = 250;
+const EXECUTOR_IDLE_OPERATION_PHASES = new Set(["released", "cancelled_before_launch"]);
 
 type Driver = Awaited<ReturnType<typeof openClaimOnlyDriver>>;
 export type SqliteAuthorityOptions = ClaimOnlyDriverOptions & {
@@ -557,6 +558,58 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     }
     this.#closed = true;
     this.#driver.close();
+  }
+
+  /** Read-only Executor shutdown evidence. A non-empty list means idle-only
+   * close must be refused without latching the legacy Host shutdown fence. */
+  getExecutorIdleState(): { readonly idle: boolean; readonly blockers: readonly string[] } {
+    this.#assertOpen();
+    const blockers: string[] = [];
+    if (this.#queue.length > 0) blockers.push("queued_attempt");
+    if (this.#activeRuns.size > 0) blockers.push("active_run");
+    if (this.#awaitingDispatchPrerequisite) blockers.push("dispatch_prerequisite_pending");
+    if (this.#recoveryInProgress || !this.#recoveryComplete || this.#recoveryBlocked) {
+      blockers.push("recovery_pending");
+    }
+    if (this.#pumpFailure) blockers.push(`pump_failure:${this.#pumpFailure.reason}`);
+    try {
+      const snapshot = this.#validateRecoverySnapshot(this.#driver.readRecoverySnapshot());
+      const rootBlockers = Array.isArray((snapshot as unknown as { readonly root_blockers?: readonly unknown[] }).root_blockers)
+        ? (snapshot as unknown as { readonly root_blockers: readonly unknown[] }).root_blockers
+        : [];
+      blockers.push(...rootBlockers.map((blocker) => `root:${String(blocker)}`));
+      for (const value of snapshot.operations) {
+        const operation = asRecord(value);
+        const recoveryBlockers = Array.isArray(operation.recovery_blockers)
+          ? operation.recovery_blockers.map(String)
+          : [];
+        if (recoveryBlockers.includes("interaction_reply_outcome_unknown")) blockers.push("pending_interaction");
+        if (!EXECUTOR_IDLE_OPERATION_PHASES.has(String(operation.phase))) {
+          const operationId = typeof operation.operation_id === "string" ? operation.operation_id : "unknown";
+          blockers.push(`operation:${operationId}:${String(operation.phase)}`);
+        }
+      }
+    } catch (error) {
+      blockers.push(`recovery_snapshot:${errorCode(error) ?? "unknown"}`);
+    }
+    return { idle: blockers.length === 0, blockers: [...new Set(blockers)] };
+  }
+
+  /** Executor-only close. Unlike shutdown(), this never cancels or waits for
+   * work; the caller must keep the Lifetime Lease active whenever it rejects. */
+  async closeIfIdle(): Promise<{ readonly closed: boolean; readonly blockers: readonly string[] }> {
+    this.#assertOpen();
+    const { idle, blockers } = this.getExecutorIdleState();
+    if (!idle) return { closed: false, blockers };
+    this.#closed = true;
+    try {
+      this.#driver.close();
+    } catch (error) {
+      // Keep #closed true: the close result is unknown and a second Store
+      // owner must never be admitted. The executor lease remains active.
+      throw new TaskManagerError("EXECUTOR_STORE_CLOSE_UNKNOWN", error instanceof Error ? error.message : String(error));
+    }
+    return { closed: true, blockers: [] };
   }
 
   /** Read the same SQLite root and Manager fence used by lifecycle mutations. */

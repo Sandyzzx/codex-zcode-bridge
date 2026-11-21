@@ -135,7 +135,8 @@
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts"
+        "src/manager/sqlite-lifecycle-mcp-authority.ts",
+        "src/executor/**"
       ]
     },
     {
@@ -321,6 +322,23 @@
         "manager-lifecycle",
         "interface-contract",
         "mcp-host"
+      ]
+    },
+    {
+      "file": "test/executor-ipc.test.ts",
+      "type": "Integration",
+      "gate": "T2",
+      "domains": [
+        "manager-lifecycle"
+      ]
+    },
+    {
+      "file": "test/executor-lease.test.ts",
+      "type": "Unit",
+      "gate": "T1",
+      "domains": [
+        "manager-lifecycle",
+        "process-cleanup-and-locks"
       ]
     },
     {

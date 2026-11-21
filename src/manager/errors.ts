@@ -12,6 +12,7 @@ export type TaskManagerErrorCode =
   | "TASK_INVALID"
   | "TASK_STATE"
   | "CANCEL_FAILED"
+  | "EXECUTOR_STORE_CLOSE_UNKNOWN"
   | "interaction_reply_outcome_unknown";
 
 export class TaskManagerError extends Error {

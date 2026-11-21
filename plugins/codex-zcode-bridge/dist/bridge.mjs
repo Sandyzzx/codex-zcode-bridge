@@ -13988,7 +13988,7 @@ function errorCode2(error2) {
   if (!error2 || typeof error2 !== "object" || !("code" in error2) || typeof error2.code !== "string") return null;
   return error2.code;
 }
-var EXECUTION_OBSERVATION_PROBE_BUDGET_MS, DEFAULT_HOST_SHUTDOWN_WAIT_MS, PUMP_FAILURE_RECOVERY_RETRY_MS, SqliteLifecycleMcpAuthority;
+var EXECUTION_OBSERVATION_PROBE_BUDGET_MS, DEFAULT_HOST_SHUTDOWN_WAIT_MS, PUMP_FAILURE_RECOVERY_RETRY_MS, EXECUTOR_IDLE_OPERATION_PHASES, SqliteLifecycleMcpAuthority;
 var init_sqlite_lifecycle_mcp_authority = __esm({
   "src/manager/sqlite-lifecycle-mcp-authority.ts"() {
     "use strict";
@@ -14001,6 +14001,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
     EXECUTION_OBSERVATION_PROBE_BUDGET_MS = 5e3;
     DEFAULT_HOST_SHUTDOWN_WAIT_MS = 6e4;
     PUMP_FAILURE_RECOVERY_RETRY_MS = 250;
+    EXECUTOR_IDLE_OPERATION_PHASES = /* @__PURE__ */ new Set(["released", "cancelled_before_launch"]);
     SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
       #driver;
       #queue = [];
@@ -14444,6 +14445,50 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
         }
         this.#closed = true;
         this.#driver.close();
+      }
+      /** Read-only Executor shutdown evidence. A non-empty list means idle-only
+       * close must be refused without latching the legacy Host shutdown fence. */
+      getExecutorIdleState() {
+        this.#assertOpen();
+        const blockers = [];
+        if (this.#queue.length > 0) blockers.push("queued_attempt");
+        if (this.#activeRuns.size > 0) blockers.push("active_run");
+        if (this.#awaitingDispatchPrerequisite) blockers.push("dispatch_prerequisite_pending");
+        if (this.#recoveryInProgress || !this.#recoveryComplete || this.#recoveryBlocked) {
+          blockers.push("recovery_pending");
+        }
+        if (this.#pumpFailure) blockers.push(`pump_failure:${this.#pumpFailure.reason}`);
+        try {
+          const snapshot = this.#validateRecoverySnapshot(this.#driver.readRecoverySnapshot());
+          const rootBlockers = Array.isArray(snapshot.root_blockers) ? snapshot.root_blockers : [];
+          blockers.push(...rootBlockers.map((blocker) => `root:${String(blocker)}`));
+          for (const value of snapshot.operations) {
+            const operation = asRecord7(value);
+            const recoveryBlockers = Array.isArray(operation.recovery_blockers) ? operation.recovery_blockers.map(String) : [];
+            if (recoveryBlockers.includes("interaction_reply_outcome_unknown")) blockers.push("pending_interaction");
+            if (!EXECUTOR_IDLE_OPERATION_PHASES.has(String(operation.phase))) {
+              const operationId = typeof operation.operation_id === "string" ? operation.operation_id : "unknown";
+              blockers.push(`operation:${operationId}:${String(operation.phase)}`);
+            }
+          }
+        } catch (error2) {
+          blockers.push(`recovery_snapshot:${errorCode2(error2) ?? "unknown"}`);
+        }
+        return { idle: blockers.length === 0, blockers: [...new Set(blockers)] };
+      }
+      /** Executor-only close. Unlike shutdown(), this never cancels or waits for
+       * work; the caller must keep the Lifetime Lease active whenever it rejects. */
+      async closeIfIdle() {
+        this.#assertOpen();
+        const { idle, blockers } = this.getExecutorIdleState();
+        if (!idle) return { closed: false, blockers };
+        this.#closed = true;
+        try {
+          this.#driver.close();
+        } catch (error2) {
+          throw new TaskManagerError("EXECUTOR_STORE_CLOSE_UNKNOWN", error2 instanceof Error ? error2.message : String(error2));
+        }
+        return { closed: true, blockers: [] };
       }
       /** Read the same SQLite root and Manager fence used by lifecycle mutations. */
       getDoctorChecks() {
