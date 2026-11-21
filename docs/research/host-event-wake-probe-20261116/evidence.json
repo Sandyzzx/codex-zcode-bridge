@@ -1,0 +1,393 @@
+{
+  "schema": "codex-zcode-bridge/host-event-wake-probe-evidence-v1",
+  "status": "RESEARCH",
+  "generated_at": "2026-11-16T12:53:00Z",
+  "real_windows_host_e2e_executed": true,
+  "repository": {
+    "base_commit": "295727320cab86b071c23ddddd6e29306fa29e7f",
+    "worktree": "D:\\codex-zcode-bridge\\.run\\host-event-wake-probe-20261116",
+    "branch": "codex/host-event-wake-probe-20261116",
+    "master_state_preserved": [
+      "M AGENTS.md",
+      "?? $null"
+    ],
+    "production_code_modified": false,
+    "production_sqlite_modified": false,
+    "push_merge_tag_release_executed": false
+  },
+  "environment": {
+    "codex_desktop": "26.1111.2228.0",
+    "codex_cli": "0.169.0-alpha.11.1",
+    "node": "24.16.0",
+    "npm": "11.13.0",
+    "zcode_desktop": "3.18.2.10443",
+    "zcode_app_server": "0.17.1",
+    "bridge_plugin": "2.0.0-preview.8",
+    "bridge_thin_waiter": "C:\\Users\\Sandy\\.codex\\plugins\\cache\\codex-zcode-bridge-preview\\codex-zcode-bridge\\2.0.0-preview.8\\dist\\wait-task.mjs",
+    "sqlite_state_dir": "C:\\Users\\Sandy\\AppData\\Local\\CodexZCodeBridge\\state",
+    "sqlite_database": "bridge.sqlite",
+    "wake_on_agent_messages_feature": {
+      "state": "under development",
+      "enabled": false,
+      "interpretation": "documented context only; not used to infer Host behavior"
+    }
+  },
+  "static_contract": {
+    "queue_help": {
+      "resume_option_supported": true,
+      "failed_resume_behavior": "warning; command still succeeds"
+    },
+    "thin_waiter": {
+      "schema": "zcode-bridge/wait-task-v2",
+      "exit_0": "Pending, terminal, or Attempt change",
+      "exit_3": "timeout",
+      "exit_2": "argument/configuration/read error",
+      "notifies_host": false
+    },
+    "zcode_doctor": {
+      "called": true,
+      "checked_at": "2026-11-16T12:51:06.799Z",
+      "important_statuses": {
+        "node": "ok",
+        "git": "ok",
+        "execution_mode": "warning: yolo",
+        "zcode_runtime": "ok",
+        "provider_config": "ok",
+        "task_data": "ok",
+        "process_probe": "ok",
+        "recovery_lock": "ok",
+        "model": "unknown until task start",
+        "app_server": "unknown; not started by doctor",
+        "permission_roundtrip": "unknown",
+        "codex_host_tokens": "unknown"
+      }
+    }
+  },
+  "cases": {
+    "A1": {
+      "surface": "TUI",
+      "target_state": "loaded_idle",
+      "thread_id": "01a1e44f-8c56-7ad3-80a6-ae6ed91867bc",
+      "nonce": "HWP-20261116-A1-7F3C9D2A",
+      "baseline_assistant": "TUI_BASELINE_HWP-20261116-A1-7F3C9D2A",
+      "queue_start_utc": "2026-11-16T12:23:59.8626434Z",
+      "queue_end_utc": "2026-11-16T12:24:01.7846223Z",
+      "queue_exit_code": 0,
+      "message_id": "01a1e450-749d-7f61-af70-43e64b116970",
+      "new_task_started_utc": "2026-11-16T12:24:08.985Z",
+      "turn_id": "01a1e450-9604-7c80-8cd5-d627440acb02",
+      "assistant_role": "assistant",
+      "assistant_ack": "WAKE_ACK_HWP-20261116-A1-7F3C9D2A",
+      "assistant_at_utc": "2026-11-16T12:24:12.533Z",
+      "task_complete_utc": "2026-11-16T12:24:12.576Z",
+      "manual_input_after_queue": false,
+      "observation": "OBSERVED",
+      "result": "PASS",
+      "classification": "WAKE_CONFIRMED",
+      "delivery_role": "user"
+    },
+    "A2": {
+      "surface": "TUI",
+      "target_state": "unloaded",
+      "thread_id": "01a1e452-bcc6-72e1-ba40-fbc93effece5",
+      "nonce": "HWP-20261116-A2-4B8E1C7D",
+      "baseline_assistant": "TUI_BASELINE_HWP-20261116-A2-4B8E1C7D",
+      "queue_start_utc": "2026-11-16T12:27:35.4663384Z",
+      "queue_end_utc": "2026-11-16T12:27:36.7611120Z",
+      "queue_exit_code": 0,
+      "message_id": "01a1e453-be4c-7761-9f2a-15b275a424a5",
+      "warning": "message was queued, but could not resume thread; start a local daemon or specify a server with --remote",
+      "new_target_turn_observed": false,
+      "observation": "OBSERVED",
+      "result": "QUEUED_ONLY",
+      "classification": "QUEUED_ONLY"
+    },
+    "A3": {
+      "surface": "TUI",
+      "target_state": "interrupted_then_idle",
+      "thread_id": "01a1e454-b531-77f2-be4e-ce67a4eec365",
+      "nonce": "HWP-20261116-A3-9C2A6E41",
+      "baseline_assistant": "TUI_BASELINE_HWP-20261116-A3-9C2A6E41",
+      "interrupted_turn_id": "01a1e455-ead0-7e00-ab60-992994d18301",
+      "turn_aborted_utc": "2026-11-16T12:30:14Z",
+      "queue_start_utc": "2026-11-16T12:30:35.5060272Z",
+      "queue_end_utc": "2026-11-16T12:30:36.7448827Z",
+      "queue_exit_code": 0,
+      "message_id": "01a1e456-7d8a-7bc3-9993-28e004406733",
+      "observation_end_utc": "2026-11-16T12:35:26.0459078Z",
+      "observation_window_seconds": 289,
+      "new_target_turn_observed": false,
+      "dispatch_pause_event_observed": false,
+      "observation": "OBSERVED",
+      "result": "QUEUED_ONLY",
+      "classification": "QUEUED_ONLY"
+    },
+    "B": {
+      "surface": "Codex Desktop /goal",
+      "target_state": "loaded_completed_goal_idle",
+      "thread_id": "01a1e45e-12c7-76c1-a441-a280cfcdcd55",
+      "goal_tool_thread_id": "01a1e45e-12c7-76c1-a441-a280cfcdcd55",
+      "nonce": "HWP-20261116-B-DESKTOP-GOAL-6D1A4C",
+      "baseline_assistant": "GOAL_BASELINE_HWP-20261116-B-DESKTOP-GOAL-6D1A4C",
+      "goal_status": "complete",
+      "goal_tokens_used": 11729,
+      "goal_time_used_seconds": 7,
+      "baseline_task_complete_utc": "2026-11-16T12:39:08Z",
+      "queue_start_utc": "2026-11-16T12:39:40.7977937Z",
+      "queue_end_utc": "2026-11-16T12:39:42.5841204Z",
+      "queue_exit_code": 0,
+      "message_id": "01a1e45e-d14e-7462-a50d-750ab5a441b9",
+      "new_task_started_utc": "2026-11-16T12:39:41Z",
+      "turn_id": "01a1e45e-d19b-75d2-b014-a5e9a0e8a70c",
+      "assistant_role": "assistant",
+      "assistant_ack": "WAKE_ACK_HWP-20261116-B-DESKTOP-GOAL-6D1A4C",
+      "assistant_at_utc": "2026-11-16T12:39:47Z",
+      "task_complete_utc": "2026-11-16T12:39:47Z",
+      "visible_desktop_observation": {
+        "observed_via": "Windows accessibility tree after non-submitting UI refresh",
+        "queued_user_message_visible": true,
+        "assistant_ack_visible": true,
+        "local_visible_time": "20:39"
+      },
+      "untested_variants": [
+        "unloaded Goal",
+        "interrupted Goal",
+        "active running Goal"
+      ],
+      "observation": "OBSERVED",
+      "result": "PASS",
+      "classification": "WAKE_CONFIRMED",
+      "delivery_role": "user"
+    },
+    "C1": {
+      "task_id": "hwp-c1-wait-20261116",
+      "attempt": 1,
+      "task_created_utc": "2026-11-16T12:46:47.422Z",
+      "mcp_wait_call_started_utc": "2026-11-16T12:47:01Z",
+      "mcp_tool_wall_time_seconds": 11.984,
+      "returned_status": "completed",
+      "attention": {
+        "task_id": "hwp-c1-wait-20261116",
+        "attempt": 1,
+        "status": "completed",
+        "pending_requests": []
+      },
+      "result_committed_utc": "2026-11-16T12:47:13.212Z",
+      "same_master_turn_continued": true,
+      "next_master_action": "run C2 Thin Waiter",
+      "observation": "OBSERVED",
+      "result": "PASS",
+      "classification": "MCP_WAIT_CONFIRMED"
+    },
+    "C2": {
+      "task_id": "hwp-c1-wait-20261116",
+      "attempt": 1,
+      "waiter_start_utc": "2026-11-16T12:47:31.0582562Z",
+      "waiter_end_utc": "2026-11-16T12:47:31.3605817Z",
+      "waiter_exit_code": 0,
+      "waiter_reason": "terminal",
+      "waiter_status": "completed",
+      "waiter_elapsed_ms": 60,
+      "pending_count": 0,
+      "notification_nonce": "HWP-20261116-C2-NOTIFY-2D8B719E",
+      "queue_start_utc": "2026-11-16T12:48:38.6670194Z",
+      "queue_end_utc": "2026-11-16T12:48:40.4663711Z",
+      "queue_exit_code": 0,
+      "message_id": "01a1e467-06e7-7f21-8e74-eb15bba2fd6d",
+      "target_thread_id": "01a1e45e-12c7-76c1-a441-a280cfcdcd55",
+      "new_task_started_utc": "2026-11-16T12:48:41Z",
+      "turn_id": "01a1e467-0ef2-76c3-8df4-85a8697a01fa",
+      "assistant_tool_calls": [
+        "zcode_events",
+        "zcode_result"
+      ],
+      "assistant_ack": "NOTIFY_ACK_HWP-20261116-C2-NOTIFY-2D8B719E",
+      "assistant_at_utc": "2026-11-16T12:48:54Z",
+      "notification_content_sanitized": true,
+      "waiter_alone_called_wake": false,
+      "end_to_end_queue_wake_consumed": true,
+      "observation": "OBSERVED",
+      "result": "PASS"
+    },
+    "C3": {
+      "task_id": "hwp-c3-timeout-20261116",
+      "attempt": 1,
+      "task_created_utc": "2026-11-16T12:47:50.411Z",
+      "waiter_start_utc": "2026-11-16T12:48:06.1466291Z",
+      "waiter_end_utc": "2026-11-16T12:48:11.3706371Z",
+      "waiter_exit_code": 3,
+      "waiter_reason": "timeout",
+      "waiter_status": "running",
+      "waiter_elapsed_ms": 5003,
+      "pending_count": 0,
+      "task_result_committed_utc": "2026-11-16T12:48:13.164Z",
+      "cleanup_released_utc": "2026-11-16T12:48:15.819Z",
+      "synthetic_completion_created": false,
+      "observation": "OBSERVED",
+      "result": "PASS",
+      "classification": "TIMEOUT_EXPECTED"
+    }
+  },
+  "auxiliary_tasks": [
+    {
+      "task_id": "hwp-c1-c2-c3-20261116",
+      "attempt": 1,
+      "created_at_utc": "2026-11-16T12:45:34.017Z",
+      "turn_failed_utc": "2026-11-16T12:45:52.813Z",
+      "error_code": "zcode_nonzero_exit",
+      "result_committed_utc": "2026-11-16T12:45:57.576Z",
+      "cleanup_verified_utc": "2026-11-16T12:46:00.359Z",
+      "released_utc": "2026-11-16T12:46:00.416Z",
+      "workspace_touched": false,
+      "classification": "INFRASTRUCTURE_NEGATIVE"
+    }
+  ],
+  "token_usage": {
+    "A1": {
+      "baseline": {
+        "turn_id": "01a1e44f-8fc6-77a1-842e-f9112db6ec64",
+        "input_tokens": 20692,
+        "cached_input_tokens": 8704,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 25,
+        "reasoning_output_tokens": 0,
+        "total_tokens": 20717
+      },
+      "idle_queue_wake": {
+        "turn_id": "01a1e450-9604-7c80-8cd5-d627440acb02",
+        "input_tokens": 20808,
+        "cached_input_tokens": 20608,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 35,
+        "reasoning_output_tokens": 12,
+        "total_tokens": 20843
+      }
+    },
+    "B": {
+      "baseline_goal_turn": {
+        "turn_id": "01a1e45e-211e-72a1-b81f-305d1b3823cb",
+        "input_tokens": 39686,
+        "cached_input_tokens": 27648,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 432,
+        "reasoning_output_tokens": 365,
+        "total_tokens": 40118
+      },
+      "ack_wake_turn": {
+        "turn_id": "01a1e45e-d19b-75d2-b014-a5e9a0e8a70c",
+        "input_tokens": 20265,
+        "cached_input_tokens": 20096,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 26,
+        "reasoning_output_tokens": 0,
+        "total_tokens": 20291
+      },
+      "c2_notification_turn": {
+        "turn_id": "01a1e467-0ef2-76c3-8df4-85a8697a01fa",
+        "input_tokens": 93383,
+        "cached_input_tokens": 75520,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 380,
+        "reasoning_output_tokens": 131,
+        "total_tokens": 93763,
+        "tool_call_count": 3
+      }
+    },
+    "worker": {
+      "C1": {
+        "task_id": "hwp-c1-wait-20261116",
+        "input_tokens": 45995,
+        "cache_read_tokens": 9280,
+        "cache_write_tokens": 0,
+        "output_tokens": 108,
+        "reasoning_tokens": 0,
+        "total_tokens": 46103,
+        "source": "provider"
+      },
+      "C3": {
+        "task_id": "hwp-c3-timeout-20261116",
+        "input_tokens": 45977,
+        "cache_read_tokens": 192,
+        "cache_write_tokens": 0,
+        "output_tokens": 110,
+        "reasoning_tokens": 0,
+        "total_tokens": 46087,
+        "source": "provider"
+      }
+    },
+    "active_mcp_wait_master_attribution": null,
+    "active_mcp_wait_attribution_reason": "C1 occurred inside one long Master turn containing the entire probe; no per-call Host token record exists."
+  },
+  "cost_lab": {
+    "idle_queue_wake_samples": 3,
+    "active_mcp_wait_samples_with_per_call_usage": 0,
+    "matched_trials": false,
+    "manual_or_poll_control_samples": 0,
+    "latency_seconds": {
+      "A1_enqueue_end_to_turn_start": 7.201,
+      "C2_notification_queue_start_to_turn_start": 2.333,
+      "C1_mcp_wait": 11.984,
+      "C3_waiter_timeout": 5.003
+    },
+    "savings_percentage": null,
+    "classification": "INCONCLUSIVE"
+  },
+  "final_answers": {
+    "QUEUE_WAKES_TUI": true,
+    "QUEUE_WAKES_DESKTOP_GOAL": true,
+    "MCP_WAIT_RETURNS": true,
+    "TOKEN_SAVINGS_MEASURABLE": false,
+    "scope_qualifiers": {
+      "QUEUE_WAKES_TUI": "loaded idle only; unloaded resume failed without a local daemon and interrupted queue was queued only",
+      "QUEUE_WAKES_DESKTOP_GOAL": "loaded completed-goal thread only",
+      "MCP_WAIT_RETURNS": "active Master turn; not an idle wake",
+      "TOKEN_SAVINGS_MEASURABLE": "insufficient matched and attributable trials"
+    }
+  },
+  "thin_waiter_notify_codex": {
+    "recommendation": "NO_GO",
+    "implemented_in_this_round": false,
+    "blocking_reasons": [
+      "confirmed queue route injects role=user",
+      "failed resume can still exit 0",
+      "interrupted queue was queued only",
+      "Thin Waiter itself does not notify the Host",
+      "duplicate, late, cancelled, and permission notification safety cases are untested",
+      "token savings are not measurable from the available matched samples"
+    ]
+  },
+  "verification": {
+    "evidence_json_parse": "PASS",
+    "extractor_powershell_parse": "PASS",
+    "extractor_a1_smoke": "PASS",
+    "test_affected": {
+      "exit_code": 0,
+      "mode": "NO_TESTS_APPLICABLE",
+      "typecheck": "PASS",
+      "build": "PASS",
+      "plugin_validation": "PASS",
+      "git_diff_check": "PASS",
+      "stress_tests": "STRESS_TESTS_NOT_APPLICABLE",
+      "initial_environment_failure": "fresh worktree lacked node_modules/playwright-core; ignored local node_modules junction used for rerun",
+      "generated_outputs_restored": true
+    }
+  },
+  "privacy": {
+    "credentials_read_or_recorded": false,
+    "oauth_state_recorded": false,
+    "hidden_reasoning_recorded": false,
+    "raw_rollout_copied": false,
+    "worker_free_text_in_notification": false,
+    "evidence_fields_only": [
+      "versions",
+      "timestamps",
+      "thread UUIDs",
+      "task and attempt IDs",
+      "event types",
+      "probe nonces and message IDs",
+      "assistant/event roles",
+      "token usage",
+      "final classifications"
+    ]
+  }
+}

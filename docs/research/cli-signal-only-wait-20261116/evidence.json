@@ -1,0 +1,373 @@
+{
+  "schema": "codex-zcode-bridge/cli-signal-only-wait-evidence/v1",
+  "generated_at": "2026-11-17T00:34:00+08:00",
+  "status": "RESEARCH",
+  "scope": {
+    "goal": "CLI_SIGNAL_ONLY_WAIT_E2E",
+    "active_turn_blocking_wait": true,
+    "parent_final_wake": false,
+    "production_sqlite_touched": false,
+    "production_worker_touched": false,
+    "push_merge_tag_release": false,
+    "worktree": "D:\\codex-zcode-bridge\\.run\\cli-signal-wait-20261116",
+    "branch": "codex/cli-signal-wait-20261116",
+    "base_commit": "295727320cab86b071c23ddddd6e29306fa29e7f",
+    "experiment_thread_id": "01a1e505-b5f6-7712-9d40-45c65bcf33df"
+  },
+  "environment": {
+    "os": "Microsoft Windows 11 Home 10.0.26100 x64",
+    "codex_desktop": "26.1111.2228.0",
+    "codex_cli": "0.169.0-alpha.11.1",
+    "node": "v24.16.0",
+    "bridge": "2.0.0-preview.8",
+    "authority": "isolated SQLite v2",
+    "authority_state_dir": "D:\\codex-zcode-bridge\\.run\\cli-signal-wait-20261116\\lab\\authority-v2\\profile\\AppData\\Local\\CodexZCodeBridge\\state",
+    "broker_pipe": "\\\\.\\pipe\\csow-isolated-v2-20261117",
+    "broker_closed_after_experiment": true,
+    "inflight": "active Turn same-turn continuation",
+    "inflight_note": "No result in this evidence is a Parent Final or Agent Mail wake."
+  },
+  "artifacts": {
+    "wrapper": "docs/research/cli-signal-only-wait-20261116/signal-only-wait.mjs",
+    "wrapper_sha256": "3F60F91D0D6FC8FD28EF0B8A9BE9C1A8DA4F0FC33C7B915A4381B01EEDB0643D",
+    "installed_waiter": "%USERPROFILE%\\.codex\\plugins\\cache\\codex-zcode-bridge-preview\\codex-zcode-bridge\\2.0.0-preview.8\\dist\\wait-task.mjs",
+    "installed_waiter_sha256": "EB7209D299396F864DDA53625B9895F828AEBC3605842808A85441DB281D03BF",
+    "isolated_harness": {
+      "lab": "docs/research/cli-signal-only-wait-20261116/isolated-bridge-lab.mjs",
+      "broker": "docs/research/cli-signal-only-wait-20261116/isolated-bridge-broker.mjs",
+      "client": "docs/research/cli-signal-only-wait-20261116/isolated-bridge-client.mjs"
+    }
+  },
+  "waiter_contract": {
+    "success_exit_code": 0,
+    "timeout_exit_code": 3,
+    "error_exit_code": 2,
+    "help_observed_exit_code": 2,
+    "attention_output": "one line: ATTENTION task=<id> attempt=<n> status=<status> reason=<reason>",
+    "timeout_output": "WAIT_TIMEOUT",
+    "timeout_is_completion": false
+  },
+  "experiments": {
+    "B1": {
+      "task_id": "csow-iso-b1-20261117-b1",
+      "codex_turn_id": "01a1e520-0663-7912-91b1-4f4ae0e25454",
+      "host_tool": {
+        "name": "mcp__node_repl__js",
+        "call_id": "call_00_ilxd505p41mf2hpjf1irf0mn",
+        "started_at": "2026-11-16T16:11:53.294Z",
+        "ended_at": "2026-11-16T16:12:54.055Z",
+        "requested_timeout_ms": 210000,
+        "duration_ms": 60774,
+        "status": "completed",
+        "cancelled": false
+      },
+      "dispatch": {
+        "started_at": "2026-11-16T16:11:14.802Z",
+        "ended_at": "2026-11-16T16:11:15.047Z",
+        "receipt_status": "queued",
+        "created_at": "2026-11-16T16:11:14.911Z"
+      },
+      "attempt": {
+        "number": 1,
+        "started_at": "2026-11-16T16:11:17.310Z",
+        "finished_at": "2026-11-16T16:12:53.773Z",
+        "status": "completed",
+        "exit_code": 0,
+        "usage": null
+      },
+      "readiness": {
+        "checked_with": "zcode_events",
+        "wait_ms": 0,
+        "observed_status": "running"
+      },
+      "wrapper": {
+        "started_at": "2026-11-16T16:11:53.294Z",
+        "ended_at": "2026-11-16T16:12:54.038Z",
+        "elapsed_ms": 60744,
+        "timeout_s": 180,
+        "poll_ms": 1000,
+        "stdout": "ATTENTION task=csow-iso-b1-20261117-b1 attempt=1 status=completed reason=terminal\n",
+        "stderr": "",
+        "exit_code": 0,
+        "killed": false,
+        "tool_result_bytes": 284
+      },
+      "result": {
+        "status": "completed",
+        "exit_code": 0,
+        "files_changed": [
+          "lab/b1/v2/signal-b1.txt"
+        ],
+        "issues": [],
+        "needs_master_decision": false
+      },
+      "signal": {
+        "path": "lab/b1/v2/signal-b1.txt",
+        "bytes": 26,
+        "content": "CSOW_B1_RESULT_20261117_B1",
+        "sha256": "63168845C0745F8DEE024933CE5D06EF896D174B40A6EB2B8E71D005EC367BBB"
+      },
+      "lifecycle": {
+        "result_committed_at": "2026-11-16T16:12:53.795Z",
+        "cleanup_verified_at": "2026-11-16T16:12:54.323Z",
+        "released_at": "2026-11-16T16:12:54.340Z"
+      },
+      "message_enqueued": true,
+      "host_auto_recovery": false,
+      "master_execution_in_original_turn": true,
+      "new_master_model_requests_during_wait": 0,
+      "verdict": "PASS"
+    },
+    "MCP_CONTROL": {
+      "task_id": "csow-iso-mcp-20261117-b1",
+      "codex_turn_id": "01a1e523-8630-7782-90cc-0c6bc6250f2a",
+      "host_tool": {
+        "name": "mcp__node_repl__js",
+        "call_id": "call_00_t1oz6z925acdq3n4u803pq6x",
+        "started_at": "2026-11-16T16:15:28.230Z",
+        "ended_at": "2026-11-16T16:16:27.748Z",
+        "duration_ms": 59528,
+        "status": "completed",
+        "tool_result_bytes": 1394
+      },
+      "dispatch": {
+        "started_at": "2026-11-16T16:14:57.115Z",
+        "ended_at": "2026-11-16T16:14:57.422Z",
+        "receipt_status": "queued"
+      },
+      "attempt": {
+        "number": 1,
+        "started_at": "2026-11-16T16:14:59.941Z",
+        "finished_at": "2026-11-16T16:16:27.623Z",
+        "status": "completed",
+        "exit_code": 0,
+        "usage": null
+      },
+      "attention_waits": [
+        {
+          "call": 1,
+          "started_at": "2026-11-16T16:15:28.230Z",
+          "ended_at": "2026-11-16T16:15:53.406Z",
+          "elapsed_ms": 25176,
+          "wait_ms": 25000,
+          "status": "running",
+          "pending_count": 0,
+          "counted_as_completion": false
+        },
+        {
+          "call": 2,
+          "started_at": "2026-11-16T16:15:53.407Z",
+          "ended_at": "2026-11-16T16:16:18.566Z",
+          "elapsed_ms": 25159,
+          "wait_ms": 25000,
+          "status": "running",
+          "pending_count": 0,
+          "counted_as_completion": false
+        },
+        {
+          "call": 3,
+          "started_at": "2026-11-16T16:16:18.566Z",
+          "ended_at": "2026-11-16T16:16:27.718Z",
+          "elapsed_ms": 9152,
+          "wait_ms": 25000,
+          "status": "completed",
+          "pending_count": 0,
+          "counted_as_completion": true
+        }
+      ],
+      "attention_wall_ms": 59488,
+      "wait_timeouts_not_completion": 2,
+      "result": {
+        "status": "completed",
+        "exit_code": 0,
+        "files_changed": [
+          "lab/mcp-control/v2/signal-mcp.txt"
+        ],
+        "issues": [],
+        "needs_master_decision": false
+      },
+      "signal": {
+        "path": "lab/mcp-control/v2/signal-mcp.txt",
+        "bytes": 27,
+        "content": "CSOW_MCP_RESULT_20261117_B1",
+        "sha256": "6373854E1BBF062220F0F87BAC131407B15A5E874B02CF6EF90B6C18844AF788"
+      },
+      "lifecycle": {
+        "result_committed_at": "2026-11-16T16:16:27.633Z",
+        "cleanup_verified_at": "2026-11-16T16:16:27.976Z",
+        "released_at": "2026-11-16T16:16:27.985Z"
+      },
+      "same_turn_continuation": true,
+      "new_master_model_requests_during_wait": 0,
+      "control_note": "The three MCP Attention calls ran inside one node_repl host call; this is a signal/timing control, not a billing A/B for three direct Master MCP calls.",
+      "verdict": "PASS"
+    },
+    "B2": {
+      "task_id": "csow-iso-b2-20261117-b1",
+      "codex_turn_id": "01a1e526-6e7e-7c50-a7bb-6dbdd2a37845",
+      "host_tool": {
+        "name": "mcp__node_repl__js",
+        "call_id": "call_00_p4nwwmb6kqheqf41q7mpenwi",
+        "started_at": "2026-11-16T16:18:37.794Z",
+        "ended_at": "2026-11-16T16:23:37.884Z",
+        "requested_timeout_ms": 930000,
+        "duration_ms": 300014,
+        "status": "failed",
+        "error": "timed out awaiting tools/call after 300s",
+        "tool_result_bytes": 145,
+        "host_cancelled": true
+      },
+      "dispatch": {
+        "started_at": "2026-11-16T16:18:04.899Z",
+        "ended_at": "2026-11-16T16:18:05.165Z",
+        "receipt_status": "queued"
+      },
+      "readiness": {
+        "checked_with": "zcode_events",
+        "wait_ms": 0,
+        "observed_status": "running",
+        "observed_at": "2026-11-16T16:18:21.050Z"
+      },
+      "wrapper": {
+        "started": true,
+        "natural_stdout": null,
+        "natural_stderr": null,
+        "natural_exit_code": null,
+        "natural_end_observed": false,
+        "requested_timeout_s": 900,
+        "requested_poll_ms": 1000,
+        "residual_processes_after_cancel": 0
+      },
+      "worker": {
+        "started_at": "2026-11-16T16:18:07.613Z",
+        "finished_at": "2026-11-16T16:30:53.867Z",
+        "status": "completed",
+        "exit_code": 0,
+        "usage": null,
+        "survived_host_tool_cancel": true
+      },
+      "signal": {
+        "path": "lab/b2/v2/signal-b2.txt",
+        "bytes": 26,
+        "content": "CSOW_B2_RESULT_20261117_B1",
+        "sha256": "467264C851BD65BC58F8D1A36F768FAD17AF7DEFA06F4865E52C2E92E986E67D",
+        "last_write_at": "2026-11-16T16:30:37Z",
+        "verified_at": "2026-11-16T16:30:55Z"
+      },
+      "lifecycle": {
+        "result_committed_at": "2026-11-16T16:30:53.894Z",
+        "cleanup_verified_at": "2026-11-16T16:30:54.431Z",
+        "released_at": "2026-11-16T16:30:54.451Z"
+      },
+      "message_enqueued": true,
+      "host_auto_recovery": false,
+      "master_execution_in_original_turn": "continued with timeout diagnosis; wrapper success not observed",
+      "new_master_model_requests_during_wait": 0,
+      "signal_seen_by_wrapper": false,
+      "verdict": "HOST_WAIT_LIMIT / NOT_PASS"
+    }
+  },
+  "rollout_measurements": {
+    "source": "%USERPROFILE%\\.codex\\sessions\\2026\\11\\16\\rollout-2026-11-16T23-41-59-01a1e505-b5f6-7712-9d40-45c65bcf33df.jsonl",
+    "billing_note": "These are visible metadata_snapshot/rollout token_usage_record values, not invoice or provider-bill totals.",
+    "turns": [
+      {
+        "turn": "B1",
+        "id": "01a1e520-0663-7912-91b1-4f4ae0e25454",
+        "model_requests": 10,
+        "input_tokens": 1046173,
+        "cached_input_tokens": 1032320,
+        "output_tokens": 9468,
+        "reasoning_output_tokens": 2322,
+        "total_tokens": 1055641,
+        "wait_initiator_response": "resp_35d4a940cbec4d91b47f677cdf93c190",
+        "wait_initiator_total_tokens": 106573,
+        "next_response_after_wait": "resp_1736336c1b6a4372ab67e6400f83879d",
+        "next_response_at": "2026-11-16T16:13:04.188Z"
+      },
+      {
+        "turn": "MCP_CONTROL",
+        "id": "01a1e523-8630-7782-90cc-0c6bc6250f2a",
+        "model_requests": 9,
+        "input_tokens": 1057761,
+        "cached_input_tokens": 1044864,
+        "output_tokens": 8034,
+        "reasoning_output_tokens": 2295,
+        "total_tokens": 1065795,
+        "wait_initiator_response": "resp_3f064520859c4c3fa407ca829dc18c07",
+        "wait_initiator_total_tokens": 117457,
+        "next_response_after_wait": "resp_76fb8303008649ee8e8d20996fe7a8ee",
+        "next_response_at": "2026-11-16T16:16:36.293Z"
+      },
+      {
+        "turn": "B2",
+        "id": "01a1e526-6e7e-7c50-a7bb-6dbdd2a37845",
+        "model_requests": 8,
+        "input_tokens": 1038289,
+        "cached_input_tokens": 1024896,
+        "output_tokens": 8570,
+        "reasoning_output_tokens": 2531,
+        "total_tokens": 1046859,
+        "wait_initiator_response": "resp_7dafb187ccd547098fe3594150755895",
+        "wait_initiator_total_tokens": 129776,
+        "next_response_after_wait": "resp_f7e826ef265540a78afa4bdbcecb5ead",
+        "next_response_at": "2026-11-16T16:23:50.680Z"
+      }
+    ],
+    "b1_vs_mcp_total_delta": 10154,
+    "attribution": "COST_INCONCLUSIVE"
+  },
+  "verdicts": {
+    "CLI_SIGNAL_ONLY": "PASS",
+    "HOST_LONG_TOOL_WAIT": "FAIL/LIMITED_300S",
+    "SAME_TURN_CONTINUATION": "PASS (mechanical; B2 successful wait not observed)",
+    "MODEL_CALLS_DURING_WAIT": "0 NEW MASTER MODEL REQUESTS",
+    "TOKEN_REDUCTION": "COST_INCONCLUSIVE",
+    "WHOLE_TASK_1H_FEASIBILITY": "NO_GO_CURRENT_ACTIVE_TURN_PATH"
+  },
+  "verification": {
+    "node_check": {
+      "command": "node --check signal-only-wait.mjs",
+      "exit_code": 0
+    },
+    "wrapper_help": {
+      "command": "node signal-only-wait.mjs --help",
+      "exit_code": 0
+    },
+    "error_sanitization": {
+      "case": "nonexistent task",
+      "exit_code": 2,
+      "stderr_body_forwarded": false
+    },
+    "affected_tests": {
+      "command": "npm run test:affected",
+      "exit_code": 0,
+      "mode": "NO_TESTS_APPLICABLE",
+      "actual_steps": [
+        "typecheck",
+        "build",
+        "plugin validation",
+        "git diff --check"
+      ],
+      "stress": "STRESS_TESTS_NOT_APPLICABLE",
+      "note": "NO_TESTS_APPLICABLE is not a test PASS."
+    }
+  },
+  "decision": {
+    "default_whole_task_signal_only": "NO-GO",
+    "short_task_fast_path": "GO_ONLY_WITH_MCP_FALLBACK_AND_BOUNDED_TIMEOUT",
+    "implemented_in_this_round": false,
+    "future_preconditions": [
+      "Host tool-call lifetime must support the required Whole Task duration or provide a supported timeout handoff.",
+      "A background waiter must have an independently verified lifecycle.",
+      "A supported Host wake mechanism must create an observable new Turn after Parent Final."
+    ]
+  },
+  "limitations": [
+    "No Parent Final / Agent Mail wake claim is made.",
+    "No one-hour stress test was run because the five-minute Host limit is already decisive.",
+    "The MCP control's three Attention calls were nested in one node_repl call, so it is not a direct codex model-loop billing A/B.",
+    "Worker usage fields were null; rollout tokens are visible request/context metadata, not billing tokens.",
+    "A pre-spawn Node REPL compile failure in the B1 turn did not start a wrapper and is recorded as a procedural deviation."
+  ]
+}
