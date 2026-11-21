@@ -8,7 +8,7 @@
 > Verified against: ADR-042 implementation `15abe6becb13f383fee676a4ae20510d51f817fc`（tree `654cda65168ece915251305522db6ce603e23ad7`）；ADR-043 candidate based on `c1245a02f8f9d4b6e1102eabac230b657d85de9b`
 > ADR-039 Last verified: 2026-11-16，仅取消接线及定向隔离测试；基线 `ec5f3e83d737df469f9ed54361d2aec46b4a15a8` + 本地候选。生产取消未重试。
 
-本文件描述当前 Preview.9 候选的生产架构。Windows x64 已默认切换到官方 Host 路径，R7 Runtime Events/Usage 复用同一 SQLite Authority；候选保留 ZCode 3.18.2 Host 模块、官方 Start Plan 认证投影与官方签名 runtime host，并完成 ADR-041 的 Thin Official Host 收敛。公开合同继续以 [INTERFACES.md](INTERFACES.md) 为准，宿主和运行配置分别见 [SHARED_CORE.md](SHARED_CORE.md) 与 [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md)。
+本文件描述当前 Preview.10 候选的生产架构。Windows x64 已默认切换到官方 Host 路径，R7 Runtime Events/Usage 复用同一 SQLite Authority；候选保留 ZCode 3.18.2 Host 模块、官方 Start Plan 认证投影与官方签名 runtime host，并完成 ADR-041 的 Thin Official Host 收敛。公开合同继续以 [INTERFACES.md](INTERFACES.md) 为准，宿主和运行配置分别见 [SHARED_CORE.md](SHARED_CORE.md) 与 [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md)。
 
 2026-11-19 的集成候选应用 [ADR-040](decisions/ADR-040-installed-official-appserver-runtime.md) 与 [ADR-041](decisions/ADR-041-thin-official-host-end-state.md)：所有受支持 Provider 在通过精确 Manifest 校验后，统一使用用户已安装的官方 AppServer Bundle、同根 builtin Provider 配置和 runtime host；Provider 只决定认证/权益能力，不再选择 AppServer 来源。未知安装版不再仅因不在 Manifest 中永久拒绝：[ADR-042](decisions/ADR-042-unknown-runtime-experimental-authorization.md) 先完成完整安装安全检查与指纹计算，只有精确指纹获得本地显式授权后才进入 `OFFICIAL_RUNTIME_EXPERIMENTAL`。授权按 `coding_plan_probe`、`start_plan_probe`、`other_provider_probe` 分 scope；不安全安装、无效签名、非 x64、混合根和不支持 Node 仍 hard block。实验态不自动提升 Manifest、Provider 能力或折扣状态，也不存在静默回退到打包 AppServer 的路径。Provider capability 在 `session/create` 后按 Runtime 实际报告的 Provider/Model 重新分类，并在 `session/subscribe`/`session/send` 前完成门禁；显式与隐式选择走同一检查点。
 
@@ -81,6 +81,6 @@ Store 在任何可写 SQLite 句柄之前执行只读 `PRAGMA user_version` 预�
 
 ## 发布边界
 
-`2.0.0-preview.9` 的 `package.json`、`package-lock.json`、插件 manifest、MCP server version、固定官方 Host、BOM、Runtime Events Schema 与 Administrative Recovery CLI 应由同一 Tag 和 Release asset 提供。Preview 支持声明限定为 Windows x64、Node.js `24.16.0` 和已安装的官方 ZCode Desktop `3.18.2.10443`。
+`2.0.0-preview.10` 的 `package.json`、`package-lock.json`、插件 manifest、MCP server version、固定官方 Host、BOM、Runtime Events Schema 与 Administrative Recovery CLI 应由同一 Tag 和 Release asset 提供。Preview 支持声明限定为 Windows x64、Node.js `24.16.0` 和已安装的官方 ZCode Desktop `3.18.2.10443`。Preview.10 停止分发 v13 Schema 与升级 CLI，保留既有 v14 数据合同。
 
 Preview.6 的固定源码树重建、ordered-patch replay、same-source-tree repeatability、BOM/native load、clean install、签名 helper ProcessManager smoke 和带数据的升级回滚为 `PASS`。Preview.7 的 Windows/Ubuntu Release Gate、SQLite 矩阵、生成物 Freshness、CI dispatch 边界与 MCP Events 分页为 `PASS`；真实模型流量不重复执行。跨机器复现仍为 `NOT_VERIFIED`，仅作为 Preview 阶段风险接受；完整 ZCode 产品资源图不进入 Bridge 支持范围。真实 Coding Plan 完整 E2E 和 Start Plan 核心功能路径已通过；历史 Start Plan 完整 E2E 因 Workspace 边界保持 `FAIL`，一般 Desktop Main 独立性、真实 OAuth refresh 与 3.18.0/3.18.1 实机安装组合仍未验证。3.18.0/3.18.1 是 `NOT_VERIFIED`，不是已证明不兼容。

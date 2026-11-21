@@ -13988,7 +13988,7 @@ function errorCode2(error2) {
   if (!error2 || typeof error2 !== "object" || !("code" in error2) || typeof error2.code !== "string") return null;
   return error2.code;
 }
-var EXECUTION_OBSERVATION_PROBE_BUDGET_MS, DEFAULT_HOST_SHUTDOWN_WAIT_MS, SqliteLifecycleMcpAuthority;
+var EXECUTION_OBSERVATION_PROBE_BUDGET_MS, DEFAULT_HOST_SHUTDOWN_WAIT_MS, PUMP_FAILURE_RECOVERY_RETRY_MS, SqliteLifecycleMcpAuthority;
 var init_sqlite_lifecycle_mcp_authority = __esm({
   "src/manager/sqlite-lifecycle-mcp-authority.ts"() {
     "use strict";
@@ -14000,6 +14000,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
     init_sqlite_doctor();
     EXECUTION_OBSERVATION_PROBE_BUDGET_MS = 5e3;
     DEFAULT_HOST_SHUTDOWN_WAIT_MS = 6e4;
+    PUMP_FAILURE_RECOVERY_RETRY_MS = 250;
     SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
       #driver;
       #queue = [];
@@ -14013,10 +14014,12 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
       #shutdownPromise = null;
       #pumpPromises = /* @__PURE__ */ new Set();
       #recoveryComplete = false;
+      #recoveryInProgress = false;
       #recoveryPromise = null;
       #pumpPending = false;
       #awaitingDispatchPrerequisite = false;
       #pumpRetryTimer = null;
+      #pumpFailureRetryTimer = null;
       #workspaceRetryTimer = null;
       #capacityRetryMs = 100;
       #pumpFailure = null;
@@ -14105,7 +14108,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
         const snapshot = this.#readSnapshot(taskId);
         const projection = asRecord7(snapshot.projection);
         if (this.#pumpFailure && projection.status === "queued") {
-          throw new TaskManagerError("TASK_STATE", `SQLite dispatch is blocked after ${this.#pumpFailure.reason}; queued lifecycle facts remain persisted and no automatic retry was attempted`);
+          throw new TaskManagerError("TASK_STATE", `SQLite dispatch is blocked after ${this.#pumpFailure.reason}; queued lifecycle facts remain persisted while automatic Recovery retry is pending or exhausted`);
         }
         const attempt = asRecord7(snapshot.attempt);
         const operation = snapshot.operation ? asRecord7(snapshot.operation) : null;
@@ -14370,6 +14373,8 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
         this.#shuttingDown = true;
         if (this.#pumpRetryTimer) clearTimeout(this.#pumpRetryTimer);
         this.#pumpRetryTimer = null;
+        if (this.#pumpFailureRetryTimer) clearTimeout(this.#pumpFailureRetryTimer);
+        this.#pumpFailureRetryTimer = null;
         if (this.#workspaceRetryTimer) clearTimeout(this.#workspaceRetryTimer);
         this.#workspaceRetryTimer = null;
         const attempt = this.#shutdownGracefully();
@@ -14458,6 +14463,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
       }
       async #recoverTasksOnce() {
         this.#recoveryComplete = false;
+        this.#recoveryInProgress = true;
         try {
           let snapshot = this.#validateRecoverySnapshot(this.#driver.readRecoverySnapshot());
           this.#recoveryBlocked = null;
@@ -14538,6 +14544,8 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
           this.#pumpFailure = { taskId: "root", reason: errorCode2(error2) ?? "recovery_snapshot_unavailable" };
           this.#recoveryComplete = false;
           throw error2;
+        } finally {
+          this.#recoveryInProgress = false;
         }
       }
       async #executionObservation(taskId, snapshot, status) {
@@ -14668,7 +14676,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
         }
       }
       #enqueue(taskId, attempt) {
-        if (this.#pumpFailure) {
+        if (this.#pumpFailure && !this.#recoveryInProgress) {
           this.#schedulerStage("enqueue_blocked", { task_id: taskId, attempt, reason: this.#pumpFailure.reason });
           return;
         }
@@ -14708,10 +14716,32 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
           void running.catch((error2) => {
             const reason = errorCode2(error2) ?? "dispatch_failed";
             this.#pumpFailure = { taskId: "unknown", reason };
+            this.#schedulePumpFailureRecovery(reason);
           }).finally(() => {
             this.#pumpPromises.delete(running);
           });
         });
+      }
+      #schedulePumpFailureRecovery(reason) {
+        if (this.#closed || this.#shuttingDown || this.#pumpFailureRetryTimer) return;
+        this.#schedulerStage("pump_failure_recovery_scheduled", {
+          reason,
+          retry_ms: PUMP_FAILURE_RECOVERY_RETRY_MS
+        });
+        this.#pumpFailureRetryTimer = setTimeout(() => {
+          this.#pumpFailureRetryTimer = null;
+          if (this.#closed || this.#shuttingDown) return;
+          this.#schedulerStage("pump_failure_recovery_started", { reason });
+          void this.recoverTasks().then(() => {
+            this.#schedulerStage("pump_failure_recovery_complete", { reason });
+          }).catch((error2) => {
+            this.#schedulerStage("pump_failure_recovery_failed", {
+              reason,
+              recovery_error: errorCode2(error2) ?? "recovery_failed"
+            });
+          });
+        }, PUMP_FAILURE_RECOVERY_RETRY_MS);
+        this.#pumpFailureRetryTimer.unref?.();
       }
       #scheduleWorkspaceRetry() {
         if (this.#closed || this.#shuttingDown || !this.#recoveryComplete || this.#pumpFailure || this.#queue.length === 0) return;
@@ -36761,7 +36791,7 @@ var defaultModelSchema = object({
 // src/mcp/server.ts
 init_errors();
 var SERVER_NAME = "codex-zcode-bridge";
-var SERVER_VERSION = "2.0.0-preview.9"; // x-release-please-version
+var SERVER_VERSION = "2.0.0-preview.10"; // x-release-please-version
 var EXECUTION_NOT_VERDICT = "Results describe Bridge/ZCode execution only: status 'completed' means the invocation and report normalization finished, NOT that the calling host accepted the work. the calling host must independently review the workspace diff and checks before deciding PASS.";
 function okResult(data) {
   return {

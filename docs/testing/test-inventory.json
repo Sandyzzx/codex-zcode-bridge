@@ -4,15 +4,15 @@
   "generator": "npm run test:inventory",
   "summary": {
     "executable_or_manual_files": 99,
-    "declarations": 894,
+    "declarations": 896,
     "by_type": {
       "Unit": 224,
-      "Integration": 666,
+      "Integration": 668,
       "Stress": 4
     },
     "by_gate": {
       "T1": 263,
-      "T2": 627,
+      "T2": 629,
       "T3": 4
     },
     "stress_tests": 2,
@@ -9192,7 +9192,7 @@
       "runtime": "NOT_MEASURED",
       "runtime_evidence": {
         "actual_runtime_milliseconds": null,
-        "timeout_milliseconds": 45000,
+        "timeout_milliseconds": 75000,
         "historical_baseline": null
       },
       "resource": [
@@ -37737,62 +37737,8 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-23F16200FFD065A9",
+      "test_id": "TII-FD0AD604D6C144A9",
       "test_name": "startup Recovery scopes a Hold to one execution path and dispatches another",
-      "test_file": "test/sqlite-scoped-hold-scheduler.test.ts",
-      "test_line": 133,
-      "test_type": "Integration",
-      "gate": "T2",
-      "runtime": "NOT_MEASURED",
-      "runtime_evidence": {
-        "actual_runtime_milliseconds": null,
-        "timeout_milliseconds": null,
-        "historical_baseline": null
-      },
-      "resource": [
-        "CPU",
-        "Disk",
-        "Memory"
-      ],
-      "dependency": {
-        "static_source_imports": [
-          "src/interfaces.ts",
-          "src/manager/sqlite-lifecycle-mcp-authority.ts",
-          "src/store/lifecycle-gate.ts"
-        ],
-        "impact_domains": [
-          "sqlite-persistence",
-          "manager-lifecycle"
-        ]
-      },
-      "trigger_source_paths": [
-        "src/sqlite-candidate/**",
-        "src/runtime/sqlite-install-config.ts",
-        "src/runtime/sqlite-runtime-roster.ts",
-        "src/store/lifecycle-gate.ts",
-        "src/runtime/task-timeout.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/cli/admin-abandon-held-operation.ts",
-        "src/host/profile.ts",
-        "src/host/stdio.ts",
-        "src/runtime/doctor.ts",
-        "src/runtime/sqlite-doctor.ts",
-        "src/runtime/trusted-local-deployment.ts",
-        "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/manager/errors.ts",
-        "src/manager/normalize.ts",
-        "src/runtime/process-probe.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts"
-      ],
-      "trigger_test_files": [
-        "test/sqlite-scoped-hold-scheduler.test.ts"
-      ],
-      "stress_boundary": null
-    },
-    {
-      "test_id": "TII-80A46806D767B0EB",
-      "test_name": "different execution paths can run concurrently up to the Manager dispatch loop",
       "test_file": "test/sqlite-scoped-hold-scheduler.test.ts",
       "test_line": 149,
       "test_type": "Integration",
@@ -37845,10 +37791,172 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-AA80BE48947B4B3B",
+      "test_id": "TII-D11D462108EF9417",
+      "test_name": "different execution paths can run concurrently up to the Manager dispatch loop",
+      "test_file": "test/sqlite-scoped-hold-scheduler.test.ts",
+      "test_line": 165,
+      "test_type": "Integration",
+      "gate": "T2",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Disk",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/interfaces.ts",
+          "src/manager/sqlite-lifecycle-mcp-authority.ts",
+          "src/store/lifecycle-gate.ts"
+        ],
+        "impact_domains": [
+          "sqlite-persistence",
+          "manager-lifecycle"
+        ]
+      },
+      "trigger_source_paths": [
+        "src/sqlite-candidate/**",
+        "src/runtime/sqlite-install-config.ts",
+        "src/runtime/sqlite-runtime-roster.ts",
+        "src/store/lifecycle-gate.ts",
+        "src/runtime/task-timeout.ts",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts",
+        "src/cli/admin-abandon-held-operation.ts",
+        "src/host/profile.ts",
+        "src/host/stdio.ts",
+        "src/runtime/doctor.ts",
+        "src/runtime/sqlite-doctor.ts",
+        "src/runtime/trusted-local-deployment.ts",
+        "src/runtime/trusted-local-policy-config.ts",
+        "src/runtime/trusted-local-profile.ts",
+        "src/manager/errors.ts",
+        "src/manager/normalize.ts",
+        "src/runtime/process-probe.ts",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts"
+      ],
+      "trigger_test_files": [
+        "test/sqlite-scoped-hold-scheduler.test.ts"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-084B57113EBA6E7B",
+      "test_name": "an unexpected pump failure schedules one bounded Recovery retry and resumes dispatch",
+      "test_file": "test/sqlite-scoped-hold-scheduler.test.ts",
+      "test_line": 184,
+      "test_type": "Integration",
+      "gate": "T2",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Disk",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/interfaces.ts",
+          "src/manager/sqlite-lifecycle-mcp-authority.ts",
+          "src/store/lifecycle-gate.ts"
+        ],
+        "impact_domains": [
+          "sqlite-persistence",
+          "manager-lifecycle"
+        ]
+      },
+      "trigger_source_paths": [
+        "src/sqlite-candidate/**",
+        "src/runtime/sqlite-install-config.ts",
+        "src/runtime/sqlite-runtime-roster.ts",
+        "src/store/lifecycle-gate.ts",
+        "src/runtime/task-timeout.ts",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts",
+        "src/cli/admin-abandon-held-operation.ts",
+        "src/host/profile.ts",
+        "src/host/stdio.ts",
+        "src/runtime/doctor.ts",
+        "src/runtime/sqlite-doctor.ts",
+        "src/runtime/trusted-local-deployment.ts",
+        "src/runtime/trusted-local-policy-config.ts",
+        "src/runtime/trusted-local-profile.ts",
+        "src/manager/errors.ts",
+        "src/manager/normalize.ts",
+        "src/runtime/process-probe.ts",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts"
+      ],
+      "trigger_test_files": [
+        "test/sqlite-scoped-hold-scheduler.test.ts"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-EE364FBEE5CFD5D7",
+      "test_name": "a failed automatic Recovery retry keeps the pump failure latched",
+      "test_file": "test/sqlite-scoped-hold-scheduler.test.ts",
+      "test_line": 202,
+      "test_type": "Integration",
+      "gate": "T2",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Disk",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/interfaces.ts",
+          "src/manager/sqlite-lifecycle-mcp-authority.ts",
+          "src/store/lifecycle-gate.ts"
+        ],
+        "impact_domains": [
+          "sqlite-persistence",
+          "manager-lifecycle"
+        ]
+      },
+      "trigger_source_paths": [
+        "src/sqlite-candidate/**",
+        "src/runtime/sqlite-install-config.ts",
+        "src/runtime/sqlite-runtime-roster.ts",
+        "src/store/lifecycle-gate.ts",
+        "src/runtime/task-timeout.ts",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts",
+        "src/cli/admin-abandon-held-operation.ts",
+        "src/host/profile.ts",
+        "src/host/stdio.ts",
+        "src/runtime/doctor.ts",
+        "src/runtime/sqlite-doctor.ts",
+        "src/runtime/trusted-local-deployment.ts",
+        "src/runtime/trusted-local-policy-config.ts",
+        "src/runtime/trusted-local-profile.ts",
+        "src/manager/errors.ts",
+        "src/manager/normalize.ts",
+        "src/runtime/process-probe.ts",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts"
+      ],
+      "trigger_test_files": [
+        "test/sqlite-scoped-hold-scheduler.test.ts"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-F36F2AA51C449026",
       "test_name": "an occupied execution path is deferred and never spawns a second Worker",
       "test_file": "test/sqlite-scoped-hold-scheduler.test.ts",
-      "test_line": 168,
+      "test_line": 219,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -37899,10 +38007,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-021B825C206AF066",
+      "test_id": "TII-EAB45324D5E2740C",
       "test_name": "cancel completes evidence-only recovery for a failed cleanup Hold",
       "test_file": "test/sqlite-scoped-hold-scheduler.test.ts",
-      "test_line": 182,
+      "test_line": 233,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -37953,10 +38061,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-191A85BC00A4E0F9",
+      "test_id": "TII-4FB60A2EECED290A",
       "test_name": "repeated cancel after durable Release is a read-only idempotent success",
       "test_file": "test/sqlite-scoped-hold-scheduler.test.ts",
-      "test_line": 196,
+      "test_line": 247,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -44731,8 +44839,8 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-38E3D939A764E1CF",
-      "test_name": "an explicit JSON upgrade hint still resolves SQLite and never falls back to JSON",
+      "test_id": "TII-AA7C9DED7DED4B4E",
+      "test_name": "an explicit JSON authority config rejects instead of resolving a data root",
       "test_file": "test/wait-task.test.ts",
       "test_line": 493,
       "test_type": "Integration",

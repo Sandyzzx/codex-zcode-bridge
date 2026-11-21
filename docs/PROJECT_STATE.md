@@ -1,9 +1,9 @@
 # Project State
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-21（ADR-043 SQLite v14 ONLY）
-> Last verified: 2026-11-21，核对 v14 Fresh/Existing、历史 v14 读取、v13/旧 Marker 非破坏性拒绝、生成物和测试退役；完整 Windows 回归 `952 tests / 950 PASS / 2 SKIP`，真实模型、OAuth 与 Billing E2E 为 `NOT_RUN`。
-> Verified against: ADR-043 candidate based on `c1245a02f8f9d4b6e1102eabac230b657d85de9b`
+> Last updated: 2026-11-21（Preview.10 release integration）
+> Last verified: 2026-11-21，集成 ADR-043 SQLite v14 ONLY、Legacy retirement 与 CI optimization；最终发布树验证以 `docs/reports/preview-release-and-closeout-20261121.md` 为准。真实模型、OAuth 与 Billing E2E 本轮为 `NOT_RUN`。
+> Verified against: Preview.10 release integration candidate based on `c1245a02f8f9d4b6e1102eabac230b657d85de9b`
 
 当前发布状态：
 
@@ -12,8 +12,9 @@
 - Preview `2.0.0-preview.6`：Owner 已批准发布。支持声明限定为 Windows x64、Node.js `24.16.0` 与已安装的官方 ZCode Desktop `3.18.2.10443`。
 - Preview `2.0.0-preview.7`：在 Preview.6 上应用 ADR-038 整改，并修复 CI dispatch 边界与 Events summary 分页。
 - Preview `2.0.0-preview.8`：包含 ADR-039 Host 授权取消与新鲜 Cleanup Proof 绑定；支持范围限定为 Windows x64、Node.js `24.16.0` 与已安装的官方 ZCode Desktop `3.18.2.10443`。
-- `2.0.0-preview.9` 发布候选：在 Preview.8 基线上增加 ADR-040 安装版 AppServer、ADR-041 Thin Official Host 收敛、Cost Lab Web、Start Plan 离线审计和正式证据。ADR-041 implementation 为 `a676c6cd14573f2620339f992a345ed0715541ff`；Final Closure implementation 为 `f19ab1d75dcced7613bfe6e12c84d780d01f7127`，覆盖动态 Provider 门禁、Runtime Auth fail-closed、测试与文档收尾。该候选只有在真实 E2E、倍率验证和预览合并门禁全部满足后才允许进入 `preview`。
-- ZCode Desktop `3.19.0.10774`：仅通过 ADR-042 的 `OFFICIAL_RUNTIME_EXPERIMENTAL` 精确指纹授权完成兼容性探测；不是 Preview.9 的发布支持版本，Coding Plan 倍率仍 `INCONCLUSIVE`，Start Plan 因无 active plan 为 `BLOCKED`。
+- Preview `2.0.0-preview.9`：在 Preview.8 基线上增加 ADR-040 安装版 AppServer、ADR-041 Thin Official Host 收敛、Cost Lab Web、Start Plan 离线审计和正式证据。
+- `2.0.0-preview.10` 发布候选：集成 SQLite v13 退役、旧 JSON Authority 提示退役、无引用 ZCode 3.18.0 Patch 清理、历史研究归档、CI 去重/Impact 精化与 Windows 两路分片。SQLite v14 是唯一当前 Schema；Stable 不受影响。
+- ZCode Desktop `3.19.0.10774`：仅通过 ADR-042 的 `OFFICIAL_RUNTIME_EXPERIMENTAL` 精确指纹授权完成兼容性探测；不是 Preview.10 的发布支持版本，Coding Plan 倍率仍 `INCONCLUSIVE`，Start Plan 因无 active plan 为 `BLOCKED`。
 
 ## 当前生产架构
 

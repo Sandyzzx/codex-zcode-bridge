@@ -2,7 +2,7 @@
 
 把有明确边界的开发任务从 Codex 交给本机官方 ZCode Agent Runtime，在 Codex 中跟进进度，并独立审查实际改动后再决定是否接受。
 
-本插件属于 `2.0.0-preview.9`。Stable 通过独立的 Marketplace 渠道发布。
+本插件属于 `2.0.0-preview.10`。Stable 通过独立的 Marketplace 渠道发布。
 
 ## 支持范围
 
