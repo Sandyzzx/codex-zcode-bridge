@@ -104,6 +104,8 @@ Preview `ADR-037` 继续表示官方认证复用；Stable Host Recovery 文件�
 | Release report follow-up PR #112 docs-only CI | PASS, run `44861420376`, commit `8f68c2fd500c4112fd3fcccf87a7c1e8004e55d4` |
 | Final Preview Push CI | PASS after failed-job rerun, run `44861553270` attempt 2, commit `c181ba075677bde1aa867346be0521c32754c63d` |
 | Private-auth Windows timeout reproduction | 3/3 PASS locally, 207.393s / 209.522s / 210.615s |
+| Release report PR #113 docs-only CI | PASS, run `44865799828`, commit `f650c215f402d0b7a84bb20e38cbb5ece4b650f0` |
+| Post-merge Preview CI | PASS, run `44865935158`, merge commit `a174d965bc951fa043c65ab7517740c61f03b633` |
 
 已有候选证据仍按各自 PR 报告保留，不把候选分支的 PASS 冒充本集成树已经完成验证。
 
@@ -175,6 +177,8 @@ TAG_OBJECT: 6f425ba8067839a883c7488fff3ea7fcfb9fb194
 RELEASE_URL: https://github.com/Sandyzzx/codex-zcode-bridge/releases/tag/codex-zcode-bridge-preview-v2.0.0-preview.10
 ZIP_BYTES: 3852147
 ZIP_SHA256: 64051ade448657dd31f9efe5c58e5ccb9e21c9fc2ed3db56ec437e1dacfdca67
+POST_RELEASE_REPORT_MERGE: a174d965bc951fa043c65ab7517740c61f03b633
+POST_MERGE_CI: PASS, run 44865935158
 ```
 
 发布资产必须从 Tag 指向的提交独立生成，不复用 Preview.9 ZIP。资产包含插件 ZIP 与
@@ -266,6 +270,7 @@ CI_OPTIMIZATION: MERGED
 
 PREVIEW_VERSION: 2.0.0-preview.10
 ALL_REQUIRED_CI: PASS ON RELEASE COMMIT C181BA07
+POST_MERGE_CI: PASS, RUN 44865935158
 RELEASE_ASSET_VERIFICATION: PASS
 CLEAN_INSTALL: PASS
 STABLE_UNCHANGED: YES
