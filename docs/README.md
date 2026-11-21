@@ -1,9 +1,9 @@
 # 文档路由 / Documentation
 
 > Status: AUTHORITATIVE（仅指本索引）
-> Last updated: 2026-11-21（ADR-043 SQLite v14 ONLY）
-> Last verified: 2026-11-21，核对 v13 代码/CLI/Schema/生成物删除、v13 非破坏性拒绝和 v14 历史/生命周期保留。
-> Verified against: ADR-043 candidate based on `c1245a02f8f9d4b6e1102eabac230b657d85de9b`；ADR-042 implementation `15abe6becb13f383fee676a4ae20510d51f817fc`
+> Last updated: 2026-11-22（ADR-047/048 Preview 集成）
+> Last verified: 2026-11-22，核对 PR #116 已合入 Preview、默认完整 Result/显式 Summary、Event Attempt 归属与 ADR-048 默认 Event 页预算。
+> Verified against: `450c18afc0c8af2700734399c5aebd87a36df795` + unified integration candidate
 
 English users start at [README.md](../README.md). 技术文档为中文。先读当前事实，按问题加载合同；研究或历史材料不作为当前实现或发布证明。
 
@@ -34,6 +34,7 @@ English users start at [README.md](../README.md). 技术文档为中文。先读
 | Preview.4 / ZCode 3.18.0 历史 Official Host 证据 | [历史 Implementation Summary](research/zcode-official-host-integration-v1/IMPLEMENTATION_SUMMARY.md)、[历史 Final Acceptance](research/zcode-official-host-integration-v1/FINAL_ACCEPTANCE_REPORT.md)（仅供历史追溯，不是 3.18.2 认证候选的验收证据） |
 | Thin Adapter Final Audit 与 End-State（2026-11-19） | [架构审计报告](reports/thin-adapter-final-audit-20261119.md)、[最终收敛报告](reports/thin-adapter-end-state-20261119.md) |
 | MCP、Task/Result、Attention、取消合同 | [INTERFACES.md](INTERFACES.md) |
+| Result 摘要、Event 归属与默认 Event 分页 | [ADR-047](decisions/ADR-047-compatible-result-summary.md)、[ADR-048](decisions/ADR-048-bounded-default-event-pages.md)、[Token Efficiency 发布门禁](research/token-efficiency-phase0-20261121/TOKEN_EFFICIENCY_RELEASE_GATE.md) |
 | Core API、fork、Host/Worker 打包 | [SHARED_CORE.md](SHARED_CORE.md) |
 | Node/ZCode 配置、SQLite v14-only 边界 | [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md) |
 | 测试入口、压力触发和退役边界 | [testing/README.md](testing/README.md) |

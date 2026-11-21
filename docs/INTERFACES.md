@@ -1,11 +1,11 @@
 # 当前接口与兼容边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-21（ADR-043 SQLite v14 ONLY）
-> Last verified: 2026-11-21，核对 v14-only 支持声明、`unsupported_sqlite_schema` 拒绝边界、未完成 Marker 保留及现有 Task/Result/Recovery 合同。
-> Verified against: ADR-043 candidate based on `c1245a02f8f9d4b6e1102eabac230b657d85de9b`
-> ADR-039 Last verified: 2026-11-16，仅取消投影、CAS、清理 Hold 与并发取消定向隔离测试；基线 `ec5f3e83d737df469f9ed54361d2aec46b4a15a8` + 本地候选。生产取消未重试。
-> ADR-047 Candidate: `zcode_result` 可选摘要与 `zcode_events` 归属。
+> Last updated: 2026-11-22（ADR-048 默认 Event 页预算；ADR-039 行政释放保护）
+> Last verified: 2026-11-22，核对 PR #116 的 opt-in Result 摘要/默认完整 Result、Event Attempt 归属、ADR-039 持久 Spawn 证据与活动 Worker 保护、ADR-048 默认 Event 分页和现有 SQLite/生命周期合同。
+> Verified against: Preview `450c18afc0c8af2700734399c5aebd87a36df795` + unified integration candidate
+> ADR-039 Last verified: 2026-11-22，隔离 SQLite/MCP 覆盖 Receipt 保护、live descendant、活动 Worker、终止失败、并发重复取消与 SQLite 历史校验；生产取消未重试。
+> ADR-047/048: Accepted for Preview；默认 `zcode_result` 保持完整，Summary 仍为显式 opt-in。
 
 准确字段以 `src/interfaces.ts`、`src/mcp/schemas.ts` 与共享 `src/result-contract.mjs` 为准。[ARCHITECTURE.md](ARCHITECTURE.md) 描述实现，[SHARED_CORE.md](SHARED_CORE.md) 列出 Core API 主版本兼容策略。ADR-038 保留 13 个默认 MCP 工具、SQLite v14、32 MiB Result 与现有 Task 状态语义。
 
@@ -25,13 +25,13 @@ TaskPackage 的 requirements、allowed_paths、forbidden_paths、acceptance_crit
 
 Admission 在事务中检查 Capacity 及执行路径重叠，覆盖跨 Manager 竞争。Worker 精确身份、Launch token/receipt、Claim、Attempt/generation/revision CAS 保持绑定。最终 workspace use 校验先于 Launch Intent；拒绝只留下 untouched reserved，显式 queued Cancel 经原 CAS 终结并释放。Intent 后即可能已 Spawn，缺 Receipt/句柄、timeout 或 Manager 崩溃都不授权重新派发。
 
-[ADR-039](decisions/ADR-039-host-authorized-cancellation.md)：Host 已授权的 queued Cancel 覆盖尚无 Claim 的 Launch Intent。首次取消 Result、投影与 `cancelled_before_claim` 事件原子持久化，后续 Receipt/Claim 被拒绝；原启动证据与未核实占用保留。用户重复调用现有 `zcode_cancel({task_id})` 表示显式行政授权，可在同一 SQLite Authority 事务中把 pre-Claim 历史阻塞 CAS 为 `released`，并追加 `observation_recorded(reason=user_authorized_release_unverified)`。该事件不是 `cleanup_verified`，不新增工具、force 参数或第二 Writer；释放后调用现有 Scheduler 使已有 queued Attempt 继续 Admission。
+[ADR-039](decisions/ADR-039-host-authorized-cancellation.md)：Host 已授权的 queued Cancel 覆盖尚无 Claim 的 Launch Intent。首次取消 Result、投影与 `cancelled_before_claim` 事件原子持久化，后续 Receipt/Claim 被拒绝；原启动证据与未核实占用保留。用户重复调用现有 `zcode_cancel({task_id})` 表示显式行政授权，可把**没有任何持久 Launch Receipt/Identity 证据**的 pre-Claim 历史阻塞 CAS 为 `released`，并追加 `observation_recorded(reason=user_authorized_release_unverified)`。存在 `launch_receipt_id`、digest 或 identity 时 Manager 与 Store 都拒绝该路径。该事件不是 `cleanup_verified`，不新增工具、force 参数或第二 Writer；释放后调用现有 Scheduler 使已有 queued Attempt 继续 Admission。
 
 Manager 可在启动和 Host 存活期间重复核对 running Operation。ADR-036 的原子 Store 操作只在精确原身份已退出、recorded-tree clean、Adapter Cleanup 证明完整、没有 Runtime 执行事件、无未回答交互且没有另一个 Host 的存活句柄时创建一个同 Task ID 的新 Attempt。该成功链当前只有 `testOnlyFakeAdapter` 合成覆盖；生产 Adapter 没有可消费的独立 Cleanup Proof，因此真实 Result-less Running Attempt 默认保留 Operation/Workspace Hold，`zcode_status.execution_observation.state=interrupted_without_result` 且审计原因为 `adapter_cleanup_unverified`。Runtime 执行事件表示 Workspace、Git、迁移或外部调用副作用不可由 SQLite 重建；unknown、alive、脏树、未解决交互或缺少执行副作用边界同样保留 Hold。显式 zcode_cancel 仍复用持久 Claim、取消 intent 与 CAS；已有 Result 时只恢复 Cleanup，不覆盖 Result。
 
-已有终态 Result 的 cleanup_unverified 可通过 zcode_cancel 仅清理恢复，不创建 Attempt 或覆盖 Result。存活的原精确世代可由显式取消触发身份绑定终止；退出仍需 claimant scan。Result 与取消竞争由 SQLite CAS 仲裁；重复取消/恢复不重复 Spawn 或 Release。数据库根损坏或一致性无法解释时继续 fail closed。未知 Hold 不自动清除。
+已有终态 **cancelled** Result 的 `cleanup_unverified` 可通过 zcode_cancel 仅清理恢复，不创建 Attempt 或覆盖 Result。存活的原精确世代可由显式取消触发身份绑定终止；行政释放只有在精确身份已 `exited`、recorded-tree/claimant scan 为 clean、无 live PID，且 Adapter resource closure 仍不可得时才允许。live descendant、Unknown/Alive、stop failure、probe failure 或脏树继续保持容量与 Workspace 占用。Result 与取消竞争由 SQLite CAS 仲裁；同一 Manager 的并发重复取消合并执行并只追加一个行政释放事实，不重复 Spawn 或 Release。数据库根损坏或一致性无法解释时继续 fail closed。未知 Hold 不自动清除。
 
-`zcode_status` 对 queued Attempt 可选返回 `dispatch_blocker`：`reason`、阻塞 `task_id`/`operation_id`、`phase`、`workspace`、`queued_duration_ms` 和 `blocked_duration_ms`。该字段是只读诊断，不是重派命令；`launch_intent` 必须显式出现在 phase 中。Doctor 的 `active_tasks` 摘要同样报告阻塞 Task/Operation/phase/Workspace。行政释放成功必须以 SQLite `released` 投影加实际 Admission 为准；`cleanup_state=unverified_admin_release` 与事件 reason `user_authorized_release_unverified` 表示用户授权但未核实清理，不得写成已验证 Cleanup。
+`zcode_status` 对 queued Attempt 可选返回 `dispatch_blocker`：`reason`、阻塞 `task_id`/`operation_id`、`phase`、`workspace`、`queued_duration_ms` 和 `blocked_duration_ms`。执行路径与当前 Workspace 重叠时 `reason=workspace_occupied`；只有不同 Workspace 下的 Capacity 被占用时为 `capacity_occupied`。该字段是只读诊断，不是重派命令；`launch_intent` 必须显式出现在 phase 中。Doctor 的 `active_tasks` 摘要同样报告阻塞 Task/Operation/phase/Workspace。行政释放成功必须以 SQLite `released` 投影加实际 Admission 为准；`cleanup_state=unverified_admin_release` 与事件 reason `user_authorized_release_unverified` 表示用户授权但未核实清理，不得写成已验证 Cleanup。
 
 Running 取消遇到 `cleanup_identity_unknown` / `cleanup_incomplete` Hold 时，可由新鲜的精确身份和进程树证明追加 `cancel_recovery_resolved`，绑定原取消核验及所消解的全部 Hold event digests，再继续原 Result/Cleanup/Release CAS。历史 Hold 不删除；quarantine、其他原因和未知 reply outcome 仍拒绝。同一 Host 同任务的并发取消合并执行；跨 Host 保持原 CAS。终态 Result 后中断的 cleanup 可由再次取消继续，不能覆盖已提交 Result。
 
@@ -52,6 +52,8 @@ Claim 后执行 envelope 写入 15s；Result 等待 execution + 330s；提交后
 ## Events、Attention 与反馈
 
 zcode_events 接受单调 cursor、limit 1–200、wait_ms 0–25,000、raw/summary 与既有 scan_cursor/max_bytes。summary 只合并同 Attempt、同 Operation、无 evidence 的相邻 `model_output` 文本行；Permission、Interaction、错误、终态、其他事件类型和 Attempt 都是边界。`next_seq` 指向最后扫描到的合并行所在的 neutral public cursor，`omitted_events` 给出合并数量；`max_bytes` 在 summary 合并后仍由 canonical JSON 字节数约束，超限时返回 `scan_incomplete` 和可继续的 cursor。raw 保持逐行读取，attention 等待后仍按普通 cursor 读取一次。
+
+[ADR-048](decisions/ADR-048-bounded-default-event-pages.md)：省略 `max_bytes` 时默认页预算为 32 KiB；`has_more` 或 `scan_incomplete` 为真时调用方必须继续读取。默认模式可返回一个超限 Event 以防 cursor 卡死，显式 `max_bytes` 仍是硬预算。默认预算不会删除、去重或隐藏 Permission、Interaction、错误、Hold、Cleanup、取消与终态 Event；完整持久历史仍可按 cursor 读取到结束。
 
 [ADR-047](decisions/ADR-047-compatible-result-summary.md)：设 `include_attempt: true` 可在每条 SQLite Event 读取持久归属的 `attempt`。分页仍包含所读范围内的所有 Attempt，`max_bytes` 包含新增字段。默认或 `false` 保持原 Event 响应。`attention.attempt` 只标识 Attention 自身的 Attempt。
 

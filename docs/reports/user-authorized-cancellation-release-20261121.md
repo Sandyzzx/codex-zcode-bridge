@@ -30,3 +30,35 @@
 - `npm run build`：PASS；`npm run validate:plugin`：PASS；`git diff --check`：PASS。
 - 首次提交后 `npm run test:affected` 完整执行至全量回归：962 PASS / 1 FAIL / 2 SKIP。失败暴露了 terminal `failed` Hold 被误入行政释放分支的真实回归；修复后定向失败文件 12 PASS / 0 FAIL。
 - 最终干净提交状态重跑 `npm run test:affected`：FULL REGRESSION PASS，963 PASS / 0 FAIL / 2 SKIP。`STRESS_TESTS_NOT_APPLICABLE`（本次影响选择未命中压力测试边界）。
+
+## 2026-11-22 Preview 集成修订
+
+上述 `963 PASS` 只属于提交 `d54f43cd9` 的旧候选，不自动适用于
+`origin/preview@450c18afc0c8af2700734399c5aebd87a36df795`。在独立 Worktree
+`D:\codex-zcode-bridge\.run\bridge-2.0.0-consolidation-20261122` 中，三个原始提交
+已按 `ccbe229c4` → `5fb76101c` → `d54f43cd9` 的顺序以 `cherry-pick -x` 移植。
+
+独立审查随后发现并修复三个 P1：
+
+1. 只要 `launch_intent` 已持久化 Launch Receipt ID、digest 或 identity，Manager
+   与 Store 都拒绝 pre-Claim 行政释放，避免已 Spawn 的 Worker 被错误去占用。
+2. `cleanup_unverified` 行政释放新增 exact identity `exited`、clean process-tree
+   scan、无 live PID、无 probe/termination failure 前置条件；活动 Worker、live
+   descendant 和终止失败都保持占用。
+3. `dispatch_blocker.reason` 改为路径重叠时 `workspace_occupied`，只有不同
+   Workspace 的 Capacity 占用时为 `capacity_occupied`。
+
+定向 SQLite/MCP 回归覆盖：
+
+- 无 Spawn 证据的历史 `launch_intent` 行政释放与重复调用幂等。
+- 带 Launch Receipt 的 pre-Claim 拒绝行政释放。
+- 终态 `cancelled` 的 `cleanup_unverified` 在 exact exit + clean tree 后行政释放；
+  原 Result、`cleanup_unverified` 事件与 `cleanup_verified=false` 保留。
+- live descendant、probe 仍 alive、termination throw 时保持
+  `cleanup_unverified`、Capacity 与 Workspace 占用。
+- 同一 Manager 两个并发 `zcode_cancel` 只产生一个 durable Release；Spawn 数为 0。
+- blocker 的 Workspace/Capacity 分类与阻塞 Task/Operation/phase/Workspace/时长。
+
+该集成修订不是生产 SQLite 操作。根工作区 `$null`/`stable`、Async Executor
+Worktree 与未吸收提交均未修改。历史 Cleanup 全量测试失败没有证据证明与 Track E
+同根因，因此不由本报告宣称修复。

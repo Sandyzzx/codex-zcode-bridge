@@ -1,12 +1,17 @@
 # Token Efficiency A/B
 
 > Status: RESEARCH
-> Last updated: 2026-11-21
+> Last updated: 2026-11-22
 > A0: `1f9ff9ef37528205e76156e13fe06ed2b1fd3711`
 > Implementation: `6f814bf8736baa59295e686af8733c88d4202ca0`
 > Run: `token-efficiency-20261121-offline-ab` / `host-probe-20261121-installed-host`
+> Current Preview base: `450c18afc0c8af2700734399c5aebd87a36df795`
 
 ## 对照与测量
+
+PR #116 已在 `450c18afc` 合入 Preview。统一集成候选另外吸收 Track A 的默认
+32 KiB Event 页（ADR-048）和 ADR-039 行政释放保护；默认 Event 分页未进入下述固定
+离线样本的 27.6% 归因，ADR-039 也不属于 Token 收益。非零预算真实 A/B 仍未执行。
 
 `replay-ab.mjs` 使用冻结 A0 与候选的 `createBridgeServer`，通过锁定的 MCP SDK
 读目录和调用工具。十个固定样本覆盖单文件、多文件、大代码任务、长时间运行、大日志、
