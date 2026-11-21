@@ -5,7 +5,9 @@
 > A0: `1f9ff9ef37528205e76156e13fe06ed2b1fd3711`
 > Implementation: `6f814bf8736baa59295e686af8733c88d4202ca0`
 > Runs: `token-efficiency-20261121-offline-ab` / `token-efficiency-preview-integration-20261121`
-> Hosted CI: `44918089589` on runtime candidate `fafc3f397fced54cbc655a11b50e49b8ad51530e`
+> Historical PR #116 CI: `44918089589` on `fafc3f397fced54cbc655a11b50e49b8ad51530e`
+> Unified runtime candidate: `fbc1676c` (pre-evidence-doc commit)
+> Unified hosted CI: `PENDING`
 > Current Preview base: `450c18afc0c8af2700734399c5aebd87a36df795`
 
 | 决策 | 状态 | 依据 |
@@ -16,11 +18,15 @@
 | Unified Preview Ready | `PENDING_FINAL_CI` | Track A 默认 Event 页与严格 Track E 行政释放保护仍需同一候选的 Windows/Ubuntu/SQLite/生命周期门禁 |
 | Stable Ready | `NO` | 需完成 Preview、受支持真实 Host E2E、计费实验、生命周期回归和发布审批 |
 
-集成候选基于 `origin/preview@a03ace1ca17e43c64256d8739220366f22eb4df6`。
-Clean install 与 T0 通过，包含 typecheck、build、plugin validation、10 个生成物
-freshness 与 diff check；Windows `test:full` 为 965 PASS、0 FAIL、2 SKIP、退出码 0；
-SQLite 压力门 4/4 PASS；Cost Lab 86/86 PASS。日志位于
-`D:\codex-zcode-bridge\.run\token-efficiency-integration-20261121`。
+统一集成分支基于 `origin/preview@450c18afc0c8af2700734399c5aebd87a36df795`；
+运行时与测试候选停在 `fbc1676c`，其后只允许补充本文档证据。该候选已通过
+typecheck、build、plugin validation、10 个生成物 freshness 与 diff check；Windows
+`test:full` 为 981 PASS、0 FAIL、2 SKIP、退出码 0；SQLite/Worker stream 两个注册
+压力门为 4/4 PASS；Cost Lab 86/86 PASS。离线 A/B 两次输出 SHA-256 均为
+`5e25e373802daec8b019a15403e8819fd5bdc9f037a0257bf97b637f61cdaf99`。当前证据根目录为
+`D:\codex-zcode-bridge\.run\bridge-2.0.0-consolidation-20261122-offline-ab`，
+安装版 Host 通道与 16 MiB 探针保留在
+`D:\codex-zcode-bridge\.run\token-efficiency-integration-20261121\.run\host-probe`。
 
 PR [#116](https://github.com/Sandyzzx/codex-zcode-bridge/pull/116) 以 Draft 创建，
 随后仅为满足工作流 `draft == false` 的完整门禁条件而转为 Ready；未合并、未打 Tag、
@@ -42,8 +48,8 @@ PR [#116](https://github.com/Sandyzzx/codex-zcode-bridge/pull/116) 以 Draft 创
 现有 Cost Lab 的 `86/86 PASS` 来自同一候选的本地运行。发布门禁接受该状态，是因为
 候选没有改动 Cost Lab 直接影响面，且本地定向套件完整通过。
 
-本文件中记录的托管 run 绑定 PR #116 的运行时与测试候选 `fafc3f397`。随后只允许仅
-文档的 clearance 提交；PR HEAD `5c10c5ba15905ef66dd3a562d48b41a35376410d`
+上述 `44918089589` 仅绑定 PR #116 的运行时与测试候选 `fafc3f397`。该 PR HEAD
+`5c10c5ba15905ef66dd3a562d48b41a35376410d`
 在合并前核对了 CI 和目标分支无漂移。统一候选还必须重新运行 CI，不能沿用该 PR 的
 通过结果证明 ADR-039/048 的集成。
 
@@ -90,15 +96,18 @@ Provider 账户提供覆盖相同费用的硬上限。上限需计入失败、�
 ## 复核与发布
 
 兼容性、独立审查和本地验证见 [审查报告](TOKEN_EFFICIENCY_REVIEW.md)。
-GitHub CI `44866949503` 对应冻结 A0。集成候选的托管 Windows、Ubuntu、generated
+GitHub CI `44866949503` 对应冻结 A0。PR #116 的托管 Windows、Ubuntu、generated
 artifacts 与两平台 SQLite 压力矩阵在 `44918089589` 上通过；Cost Lab 使用同候选
 本地 `86/86 PASS`。大型 Result 分层仅以显式 `view="summary"` 进入 Preview，
-默认 `zcode_result({task_id})` 仍返回完整 Result。
+默认 `zcode_result({task_id})` 仍返回完整 Result。统一候选的托管 CI 尚未运行，
+因此 `Unified Preview Ready` 保持 `PENDING_FINAL_CI`。
 
 2026-11-22 重新核对的 `origin/preview` 为
 `450c18afc0c8af2700734399c5aebd87a36df795`。相对 A0 除 ADR-045、Async Executor
 文档外，还包含 PR #116 的 Result/Event 读取投影。统一候选新增默认 Event 页和
-Track E，必须重新走独立审查、受影响回归与托管 CI。Preview 合并需当次授权；
+Track E；先前聚焦审查报告的精确取消/Recovery 绑定、root-observed、capacity
+headroom 与 16 MiB 文档边界问题已修复并加入定向回归，最终 findings-closure 复核
+完成前不升级发布状态。托管 CI 仍是合并前最后门禁。Preview 合并需当次授权；
 Stable、Tag 和 Release 需要单独授权。
 
 ## 回滚

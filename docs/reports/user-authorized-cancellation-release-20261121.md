@@ -62,3 +62,25 @@
 该集成修订不是生产 SQLite 操作。根工作区 `$null`/`stable`、Async Executor
 Worktree 与未吸收提交均未修改。历史 Cleanup 全量测试失败没有证据证明与 Track E
 同根因，因此不由本报告宣称修复。
+
+### 最新集成交付证据
+
+运行时与测试候选为 `fbc1676c`，其后只补充文档证据。2026-11-22 在独立 Worktree
+`D:\codex-zcode-bridge\.run\bridge-2.0.0-consolidation-20261122` 的验证结果：
+
+- `npm run test:full`：981 PASS / 0 FAIL / 2 SKIP，退出码 0；随后 Plugin Validator PASS。
+- `npm run test:stress`：SQLite/Worker stream 两个注册压力门 4/4 PASS；32,000-event
+  stream 记录 3,796,910 bytes、`max_writable_length=0`。第一次压力运行暴露的是压力
+  reader 只读首批 200 Event；改为按 `has_more`/`next_seq` 读完全部公开页后通过，
+  不是 Product Event 丢失，也不是旧 `STRESS_TESTS_NOT_APPLICABLE` 结论。
+- `npm run cost-lab:test`：86 PASS / 0 FAIL。
+- 两次冻结 A/B 回放输出一致，SHA-256 均为
+  `5e25e373802daec8b019a15403e8819fd5bdc9f037a0257bf97b637f61cdaf99`。
+- Manager/Store 回归覆盖精确取消 Result digest、精确 `cancel_tree_verified` event、
+  当前 revision 的 enriched `cleanup_incomplete` Recovery evidence、SQLite reopen、
+  相同绑定幂等、不同绑定拒绝，以及更新的 live Hold 不得回退到旧 eligible proof。
+- Capacity 回归覆盖 limit=2 且仅一个其他 Workspace 占用时不报告
+  `capacity_occupied`；达到上限才报告。clean scan 缺少 recorded root 时仍保持占用。
+
+以上是隔离候选证据。`PRODUCTION_SQLITE_UNTOUCHED`：未打开或修改生产 Authority。
+托管 Windows/Ubuntu CI 仍需在 Draft Preview PR 上执行，未完成前不宣称 Preview Ready。

@@ -31,7 +31,7 @@ Manager 可在启动和 Host 存活期间重复核对 running Operation。ADR-03
 
 已有终态 **cancelled** Result 的 `cleanup_unverified` 可通过 zcode_cancel 仅清理恢复，不创建 Attempt 或覆盖 Result。存活的原精确世代可由显式取消触发身份绑定终止；行政释放只有在精确身份已 `exited`、recorded-tree/claimant scan 为 clean、无 live PID，且 Adapter resource closure 仍不可得时才允许。live descendant、Unknown/Alive、stop failure、probe failure 或脏树继续保持容量与 Workspace 占用。Result 与取消竞争由 SQLite CAS 仲裁；同一 Manager 的并发重复取消合并执行并只追加一个行政释放事实，不重复 Spawn 或 Release。数据库根损坏或一致性无法解释时继续 fail closed。未知 Hold 不自动清除。
 
-`zcode_status` 对 queued Attempt 可选返回 `dispatch_blocker`：`reason`、阻塞 `task_id`/`operation_id`、`phase`、`workspace`、`queued_duration_ms` 和 `blocked_duration_ms`。执行路径与当前 Workspace 重叠时 `reason=workspace_occupied`；只有不同 Workspace 下的 Capacity 被占用时为 `capacity_occupied`。该字段是只读诊断，不是重派命令；`launch_intent` 必须显式出现在 phase 中。Doctor 的 `active_tasks` 摘要同样报告阻塞 Task/Operation/phase/Workspace。行政释放成功必须以 SQLite `released` 投影加实际 Admission 为准；`cleanup_state=unverified_admin_release` 与事件 reason `user_authorized_release_unverified` 表示用户授权但未核实清理，不得写成已验证 Cleanup。
+`zcode_status` 对 queued Attempt 可选返回 `dispatch_blocker`：`reason`、阻塞 `task_id`/`operation_id`、`phase`、`workspace`、`queued_duration_ms` 和 `blocked_duration_ms`。执行路径与当前 Workspace 重叠时 `reason=workspace_occupied`；只有占用 Operation 数达到配置 Capacity 上限且没有同路径阻塞时才是 `capacity_occupied`。该字段是只读诊断，不是重派命令；`launch_intent` 必须显式出现在 phase 中。`zcode_status` 与 `zcode_cancel` 的 output Schema 以可选字段加性包含同一 blocker；既有调用和默认响应形状不变，但校验固定 Schema 哈希的静态消费者必须刷新目录。Doctor 的 `active_tasks` 摘要同样报告阻塞 Task/Operation/phase/Workspace。行政释放成功必须以 SQLite `released` 投影加实际 Admission 为准；`cleanup_state=unverified_admin_release` 与事件 reason `user_authorized_release_unverified` 表示用户授权但未核实清理，不得写成已验证 Cleanup。
 
 Running 取消遇到 `cleanup_identity_unknown` / `cleanup_incomplete` Hold 时，可由新鲜的精确身份和进程树证明追加 `cancel_recovery_resolved`，绑定原取消核验及所消解的全部 Hold event digests，再继续原 Result/Cleanup/Release CAS。历史 Hold 不删除；quarantine、其他原因和未知 reply outcome 仍拒绝。同一 Host 同任务的并发取消合并执行；跨 Host 保持原 CAS。终态 Result 后中断的 cleanup 可由再次取消继续，不能覆盖已提交 Result。
 
@@ -40,6 +40,8 @@ Running 取消遇到 `cleanup_identity_unknown` / `cleanup_incomplete` Hold 时�
 [ADR-026](decisions/ADR-026-sqlite-result-contract.md)：完整 canonical TaskResult 最大 **33,554,432 UTF-8 字节**；Worker envelope 另留 **262,144 字节**，换行分隔符另计 1 字节。容量按实际 canonical JSON 序列化计，不按字符数。报告文本/数组使用统一语义；身份和元数据仍有既有界限。
 
 [ADR-047](decisions/ADR-047-compatible-result-summary.md)：`zcode_result({task_id})` 和 `view: "full"` 返回同一完整 Result。`view: "summary"` 对不超过 2 KiB 的 JSON 直接返回原结果。更大的结果包含 `projection.omitted_fields` 和全部测试声明的 `projection.test_counts`。用 `view: "full", expected_attempt: <摘要的 attempt>` 读取缺失字段及原文。`expected_attempt` 只核对当前已提交 Result，其他 Attempt 返回 `TASK_STATE`，未提交返回 `TASK_NOT_FINISHED`。Cleanup、Hold 和 Release 通过 Status/Events 核对。
+
+安装版 Codex Host/AppServer 的 MCP 单行上限为 **16,777,216 bytes**。超过该边界的 Result 仍完整持久化在 SQLite，但当前 `view: "full"` 无法通过一次 MCP-only 响应回读；Host 会丢弃该行，不能把摘要或本地数据库存在误报为已取齐完整证据。该边界是已知 Host transport 限制，本轮不新增 Chunk、Artifact 或第二 MCP 工具。需要原文的验收在证据不可回读时必须保持未决。
 
 AgentReport 必须包含布尔 needs_master_decision，不补造缺失字段。非法或超限报告形成明确的基础设施失败 Result（invalid_result_payload/result_too_large），标明原报告未提交，不裁剪为成功，不重派。完整合法帧先落 SQLite，再验证 Worker close/树/资源；已提交 Result 不因晚退出被丢弃。
 

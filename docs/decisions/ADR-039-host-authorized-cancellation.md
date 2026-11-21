@@ -16,6 +16,7 @@
 7. 可识别的存活 Worker 仍必须先走现有取消/终止路径。若终止失败、post-stop 身份仍为 Unknown/Alive、存在 live descendant、tree probe 失败或无法完成 clean scan，本次调用不得虚报释放成功，也不得把该状态升级为 Cleanup Verified。行政释放仅限已经终止且树已关闭、但 Adapter resource closure 仍缺失的终态取消 Operation；不自动清理历史任务、不自动撤销用户代码、不创建新 Task ID。
 8. 行政释放必须原子、幂等，并在释放后调用现有 Scheduler pump，使既有 queued Attempt 继续 Admission。成功证明必须同时包含 SQLite Operation `released` 投影与实际 Admission/派发结果，不能只依赖 `zcode_cancel` 返回值。`zcode_status` 与 Doctor 只读报告 queued Attempt 的阻塞原因、阻塞 Task/Operation、phase、Workspace、排队时长和阻塞时长；尤其不得遗漏 `launch_intent`。
 9. 本修订与 ADR-045 Executor Lease 的单 Authority Writer 原则兼容：所有写入仍由当前唯一 Manager/Store 完成；CLI/Web/Doctor 不得打开第二可写 Authority。
+10. `cleanup_unverified` 行政释放的持久请求同时绑定 `cancellation_verification_digest` 与 `recovery_evidence_digest`。前者必须对应原 `cancelled` Result 的 `cancel_verification_digest` 和同 Claim/Worker identity 的 `cancel_tree_verified` event；后者必须是当前 Operation revision 的 `cleanup_incomplete` Recovery event，带 `complete_cleanup_closure_unavailable`、`process_tree_root_observed=true`、`process_tree_scan_clean=true` 与 scan digest。Store 重开时重建同一 Recovery envelope 并重新校验，不得回退到较早的 eligible proof 绕过更新的 live Hold。相同绑定重复调用返回 durable duplicate；不同取消、Recovery、Revision 或 phase 绑定 fail closed。
 
 ## 验证边界
 

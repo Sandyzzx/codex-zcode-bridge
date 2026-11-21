@@ -15,7 +15,7 @@
 - Preview `2.0.0-preview.9`：在 Preview.8 基线上增加 ADR-040 安装版 AppServer、ADR-041 Thin Official Host 收敛、Cost Lab Web、Start Plan 离线审计和正式证据。
 - `2.0.0-preview.10` 发布候选：集成 SQLite v13 退役、旧 JSON Authority 提示退役、无引用 ZCode 3.18.0 Patch 清理、历史研究归档、CI 去重/Impact 精化与 Windows 两路分片。SQLite v14 是唯一当前 Schema；Stable 不受影响。
 - `origin/preview@450c18afc0c8af2700734399c5aebd87a36df795` 已合并 PR #116：`zcode_result(view="summary")` 为显式 opt-in，省略 `view` 仍返回完整 Result；`zcode_events(include_attempt=true)` 与 `zcode_result(expected_attempt)` 提供既有 SQLite 事实的归属核对。12 个既有 `outputSchema` 和工具顺序保留。
-- 本地统一集成候选在该 Preview 基线上增加默认 32 KiB Event 页（ADR-048）与更严格的 ADR-039 行政释放保护：带 Launch Receipt/Identity 的 pre-Claim 不得释放；`cleanup_unverified` 仅在原 Result 已 `cancelled`、exact identity `exited`、tree scan clean 且 Adapter closure 缺失时行政释放；活动 Worker、live descendant、终止失败与 probe failure 保持占用。该候选尚未合并且不得据此宣布 Stable Ready。
+- 本地统一集成候选在该 Preview 基线上增加默认 32 KiB Event 页（ADR-048）与更严格的 ADR-039 行政释放保护：带 Launch Receipt/Identity 的 pre-Claim 不得释放；`cleanup_unverified` 仅在原 Result 已 `cancelled`、exact identity `exited`、recorded root 已观察、tree scan clean 且 Adapter closure 缺失时行政释放；活动 Worker、live descendant、终止失败与 probe failure 保持占用。`zcode_status`/`zcode_cancel` 以可选字段加性报告 `dispatch_blocker`。该候选尚未合并，不得据此宣布 Stable Ready。
 - ZCode Desktop `3.19.0.10774`：仅通过 ADR-042 的 `OFFICIAL_RUNTIME_EXPERIMENTAL` 精确指纹授权完成兼容性探测；不是 Preview.10 的发布支持版本，Coding Plan 倍率仍 `INCONCLUSIVE`，Start Plan 因无 active plan 为 `BLOCKED`。
 
 ## 当前生产架构
@@ -70,7 +70,7 @@ Preview.3 的 Start Plan 历史证据覆盖 Windows、官方 AppServer `0.17.1`�
 | Desktop 3.18.2 兼容回归 | `PASS — SYNTHETIC / REAL E2E NOT_RUN` | 现有精确 Manifest 和 fail-closed 测试保留；本机当前安装为 3.19.0，未声称新鲜的 3.18.2 实机 E2E |
 | Start Plan + 安装版 AppServer | `OFFLINE_VERIFIED / LIVE NOT_RUN` | 同一 Bundle 的 Provider、unsigned transport、Gateway 和 Runtime Headers 差异已审计；真实 Start Plan E2E、CAPTCHA、权益与优惠均未验证 |
 | Cost Lab Web/API | `PASS — CANDIDATE` | 本地 loopback、显式真实请求确认、官方账单、同小时延迟结算重试、历史和脱敏导出通过 43/43 定向测试；真实请求 1 次 |
-| Token Efficiency 离线候选 | `INSUFFICIENT_EVIDENCE` | 大型成功 Result 的 opt-in 摘要可显著降低 MCP 载荷；27.6% 代理降幅主要由单样本贡献，普通样本中位数未改善，失败取证略增。真实完整任务计费降幅、缓存费用与成功率非劣 `NOT_MEASURED` |
+| Token Efficiency 离线候选 | `INSUFFICIENT_EVIDENCE` | 大型成功 Result 的 opt-in 摘要可显著降低 MCP 载荷；27.2% 代理降幅主要由单样本贡献，普通样本中位数未改善，失败取证略增。真实完整任务计费降幅、缓存费用与成功率非劣 `NOT_MEASURED` |
 | Token Efficiency 真实 A/B | `BLOCKED` | 受支持 Runtime、专用账户/账单隔离、完整请求级 Usage 与逐请求硬预算未同时满足；授权预算下模型请求与新增支出均为 0 |
 | 其他 Provider + 安装版 AppServer | `OFFLINE_ROUTED / LIVE NOT RUN` | Provider 选择统一为 `installed_runtime`，未知或无同一安装根资产 fail closed；真实其他 Provider 模型/认证 E2E 未运行 |
 | 真实 Start Plan 核心功能 | `PASS — CORE FUNCTIONAL` | 官方 Auth、Billing 门禁、Lease、Session/Turn、模型、工具、AgentReport、R7 Usage、输出、Result、Cleanup/Release 通过 |

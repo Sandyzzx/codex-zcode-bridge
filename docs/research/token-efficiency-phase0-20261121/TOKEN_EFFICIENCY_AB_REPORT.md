@@ -11,7 +11,9 @@
 
 PR #116 已在 `450c18afc` 合入 Preview。统一集成候选另外吸收 Track A 的默认
 32 KiB Event 页（ADR-048）和 ADR-039 行政释放保护；默认 Event 分页未进入下述固定
-离线样本的 27.6% 归因，ADR-039 也不属于 Token 收益。非零预算真实 A/B 仍未执行。
+离线样本的 27.2% 归因。ADR-039 为 `zcode_status` 和 `zcode_cancel` 增加可选
+`dispatch_blocker` Schema，属于诊断合同而非 Token 收益，并使 B-All 目录代理增加
+360 Tokens。非零预算真实 A/B 仍未执行。
 
 `replay-ab.mjs` 使用冻结 A0 与候选的 `createBridgeServer`，通过锁定的 MCP SDK
 读目录和调用工具。十个固定样本覆盖单文件、多文件、大代码任务、长时间运行、大日志、
@@ -38,8 +40,8 @@ Envelope 是本机传输上界，不是当前安装版 Host 的实际模型输�
 | B2 Result 分层 | 7,904 | 63 | 65,753 | 73,657 | 3,642 |
 | B3 工件引用 | 7,747 | 62 | 90,426 | 98,173 | 2,074 |
 | B4 保持缓存输入对照 | 7,747 | 62 | 90,426 | 98,173 | 3,530 |
-| B5 仅描述 | 7,174 | 62 | 90,426 | 97,600 | 3,530 |
-| B-All | 7,369 | 34 | 58,296 | 65,665 | 1,802 |
+| B5 仅描述 | 7,278 | 62 | 90,426 | 97,704 | 3,530 |
+| B-All | 7,729 | 34 | 58,296 | 66,025 | 1,802 |
 
 | 场景 | A0 Attention Envelope | B-All Envelope | A0 Attention / B-All 调用 |
 |---|---:|---:|---:|
@@ -56,11 +58,11 @@ Envelope 是本机传输上界，不是当前安装版 Host 的实际模型输�
 
 ## 归因与限制
 
-- B-All 的双通道 Envelope 加目录比重复 Status 下降 33.1%，比 A0 已有 Attention
-  下降 27.6%。安装版 Host 只注入结构化通道时，对应代理值从 48,175 降至 35,408，
-  降幅 26.5%；文本通道加目录为 49,255 → 36,563（−25.8%）。这些仍是 MCP 载荷代理，
+- B-All 的双通道 Envelope 加目录比重复 Status 下降 32.75%，比 A0 已有 Attention
+  下降 27.2%。安装版 Host 只注入结构化通道时，对应代理值从 48,175 降至 35,768，
+  降幅 25.75%；文本通道加目录为 49,255 → 36,923（−25.04%）。这些仍是 MCP 载荷代理，
   不能换算成实际 Provider 输入或费用。
-- 27.6% 的总体结果高度集中。大代码成功样本从 26,157 降至 962，减少 25,195，
+- 27.2% 的总体结果高度集中。大代码成功样本从 26,157 降至 962，减少 25,195，
   大于总体净减少 24,651；该样本解释了 102.2% 的净收益。固定样本中位数仍为
   710 → 710。大日志失败从 50,473 增至 50,995（+522，并多一次完整取证读取）；
   长时间运行和多次查询各增加 11。当前证据只支持“大型成功 Result 的显式摘要可降低
@@ -81,8 +83,10 @@ Envelope 是本机传输上界，不是当前安装版 Host 的实际模型输�
   文件读取的工具包装可能抵消节省。回放输入的活文件与读取费用为固定假设。
 - B4 是 A0 无改动对照。候选重复加载同一工具目录得到相同结果，Worker Prompt 与 A0 相同。
   冷缓存、热缓存、同任务、连续任务、重启/恢复及新目录的实际缓存收益均未测量。
-- B5 单独替换描述得到目录下降 7.4%，Result 的新用法说明归入 B2。组合计入
-  Result 和 Event Schema 增量后目录下降 4.9%。候选仍广告 12 个 `outputSchema`。
+- B5 单独替换描述得到目录下降 6.1%（7,747 → 7,278）。组合加入 Result、
+  Event、Status 和 Cancel Schema 后目录为 7,729，仅比 A0 少 18 Tokens（−0.23%）；
+  其中 `dispatch_blocker` 是 ADR-039 的兼容性成本，不应归入 Token 优化。候选仍广告
+  12 个 `outputSchema`。
 
 ## 安装版 Host 探针
 
@@ -106,8 +110,9 @@ Envelope 是本机传输上界，不是当前安装版 Host 的实际模型输�
 实际 MCP Context、任务成功/恢复/重试率及完整墙钟时长为 `NOT_MEASURED`。
 日常 Codex 开发和审查的可归因成本未知。真实 A/B 会记录该任务的 Codex Master
 成本，完整成本口径为 `TotalCost = MasterCost + WorkerCost + OtherModelCost`。
-集成候选 Windows 全量本地回归为 965 PASS、0 FAIL、2 SKIP，退出码 0。它们不度量
-真实 Worker 成功率、恢复率或账单。实际墙钟和额外 Master 模型轮数也没有可归因数据。
+集成候选 Windows 全量本地回归为 981 PASS、0 FAIL、2 SKIP，退出码 0；两个注册压力门
+另为 4/4 PASS。它们不度量真实 Worker 成功率、恢复率或账单。实际墙钟和额外
+Master 模型轮数也没有可归因数据。
 试点门禁和缺项见 [发布门禁](TOKEN_EFFICIENCY_RELEASE_GATE.md)。
 
 条件具备后先冻结同一模型版本、推理档、真实工作树、验收、账户、价格表版本和缓存策略。
@@ -120,12 +125,12 @@ Envelope 是本机传输上界，不是当前安装版 Host 的实际模型输�
 
 从集成工作树执行。A0 目录必须从冻结提交构建，含 [基线](TOKEN_EFFICIENCY_BASELINE.md)
 指定的模型无关测试和 tokenizer。本机取证根目录为
-`D:\codex-zcode-bridge\.run\token-efficiency-integration-20261121`。
+`D:\codex-zcode-bridge\.run\bridge-2.0.0-consolidation-20261122-offline-ab`。
 
 ```powershell
 npm.cmd run build
 $a0 = '..\token-efficiency-phase0-audit-20261121\dist'
-$run = 'D:\codex-zcode-bridge\.run\token-efficiency-integration-20261121'
+$run = 'D:\codex-zcode-bridge\.run\bridge-2.0.0-consolidation-20261122-offline-ab'
 node docs/research/token-efficiency-phase0-20261121/replay-ab.mjs $a0 > "$run/replay-ab-integration.json"
 node docs/research/token-efficiency-phase0-20261121/replay-ab.mjs $a0 > "$run/replay-ab-integration-repeat.json"
 Get-FileHash "$run/replay-ab-integration.json","$run/replay-ab-integration-repeat.json"
@@ -133,6 +138,9 @@ Get-FileHash "$run/replay-ab-integration.json","$run/replay-ab-integration-repea
 
 离线验收核对原请求的全量对象、文本、工具错误、Schema 对象根及完整证据补读。
 集成工作树两次回放 JSON 的 SHA-256 均为
-`1636481c13e624224ca6a46a2ec616a8877d1704acc19c65c2c4fbe30ce42fa3`。
-候选实际目录 SHA-256 为 `7841d80f179002ebad0859b3f5a41499a762a91bebf37be1dbe9caf20b3683cc`。
+`5e25e373802daec8b019a15403e8819fd5bdc9f037a0257bf97b637f61cdaf99`
+（文件内容为小写哈希，PowerShell 仅按大写显示）。候选 `tools/list` SHA-256 为
+`203253530f5da8a1ade6c4f2990ce05e6180f9bc160f983f88e298ff45578f54`，
+候选 MCP server 构建 SHA-256 为
+`15ecb8f5a798e02a32f3465379c298b77886415aa74abbbd4fc63522b89376d4`。
 逐场景及各返回通道的统计保存在回放 JSON。
