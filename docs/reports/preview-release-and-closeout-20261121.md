@@ -101,6 +101,9 @@ Preview `ADR-037` 继续表示官方认证复用；Stable Host Recovery 文件�
 | PR #110 CI | PASS, run `44857443617` |
 | Final Preview Push CI | PASS, run `44858240150`, commit `22fc7a64f1e79c2c555cb7069183e83795959f99` |
 | Release report PR #111 full PR CI | PASS, run `44860645182`, commit `1ba2e728c620f2a0f2abd2bd02109fc2f3057e95` |
+| Release report follow-up PR #112 docs-only CI | PASS, run `44861420376`, commit `8f68c2fd500c4112fd3fcccf87a7c1e8004e55d4` |
+| Final Preview Push CI | PASS after failed-job rerun, run `44861553270` attempt 2, commit `c181ba075677bde1aa867346be0521c32754c63d` |
+| Private-auth Windows timeout reproduction | 3/3 PASS locally, 207.393s / 209.522s / 210.615s |
 
 已有候选证据仍按各自 PR 报告保留，不把候选分支的 PASS 冒充本集成树已经完成验证。
 
@@ -138,6 +141,13 @@ PR #111 首次同 SHA 全量 workflow dispatch `44859303456` 的 Windows SQLite 
 run attempt 2 全部通过。该事件继续归类为 Windows 文件句柄/并发资源时序风险，未通过修改
 测试预期、增加 SKIP 或删除断言处理。
 
+最终 Push run `44861553270` attempt 1 的 `Windows Verify shard 1/2` 再次出现托管 Windows
+私有认证用例 `queued -> running` 超时，其余 Job 均通过。失败测试在相同代码树本地连续运行
+3 次均 PASS（207.393s / 209.522s / 210.615s）；随后只重跑 failed job，run attempt 2 全部
+通过。该事件与
+`docs/reports/CI_PERFORMANCE_OPTIMIZATION_REPORT.md` 已记录的同类资源时序失败一致，没有
+修改 timeout、断言、SKIP 或生产代码，也不将重跑 PASS 解释为平台竞态已经修复。
+
 ## 5. Compatibility Matrix
 
 | 能力 | Preview.10 状态 |
@@ -157,17 +167,34 @@ run attempt 2 全部通过。该事件继续归类为 Windows 文件句柄/并�
 
 ```text
 PREVIEW_VERSION: 2.0.0-preview.10
-PREVIEW_CODE_HEAD: 22fc7a64f1e79c2c555cb7069183e83795959f99
-PREVIEW_CODE_TREE: a323611036698c338d573662d372a9b33f3d0c40
-RELEASE_COMMIT: ASSIGNED AFTER FINAL REPORT MERGE
-RELEASE_TREE: ASSIGNED AFTER FINAL REPORT MERGE
+PREVIEW_HEAD: c181ba075677bde1aa867346be0521c32754c63d
+RELEASE_COMMIT: c181ba075677bde1aa867346be0521c32754c63d
+RELEASE_TREE: 071dffa294826175076a73485edb1eeadd891fe5
 TAG: codex-zcode-bridge-preview-v2.0.0-preview.10
+TAG_OBJECT: 6f425ba8067839a883c7488fff3ea7fcfb9fb194
 RELEASE_URL: https://github.com/Sandyzzx/codex-zcode-bridge/releases/tag/codex-zcode-bridge-preview-v2.0.0-preview.10
-ZIP_SHA256: PENDING
+ZIP_BYTES: 3852147
+ZIP_SHA256: 64051ade448657dd31f9efe5c58e5ccb9e21c9fc2ed3db56ec437e1dacfdca67
 ```
 
 发布资产必须从 Tag 指向的提交独立生成，不复用 Preview.9 ZIP。资产包含插件 ZIP 与
 `.sha256` 文件，并在隔离目录验证 Manifest、clean entrypoint、MCP 初始化、工具列表和版本。
+
+实际发布资产由 Tag 的插件子树通过 `git archive` 生成。GitHub Release asset digest、API
+回下载得到本地 SHA-256、下载的 `.sha256` 资产三者一致。回下载 ZIP 在隔离目录解包后：
+
+| 发布验证 | 结果 |
+|---|---|
+| Release | `draft=false`, `prerelease=true` |
+| Tag peeled commit / tree | `c181ba075677bde1aa867346be0521c32754c63d` / `071dffa294826175076a73485edb1eeadd891fe5` |
+| ZIP entries | 68 |
+| Manifest / MCP Server version | `2.0.0-preview.10` / `2.0.0-preview.10` |
+| MCP `initialize` / `notifications/initialized` / `tools/list` | PASS |
+| Registered tools | 13，包含 `zcode_task` |
+| Isolated SQLite bootstrap | PASS，使用临时 `LOCALAPPDATA`，未读取生产 SQLite |
+| Removed v13 CLI / schema in ZIP | 0 |
+| Test DB / credential-named files in ZIP | 0 |
+| Stable `master` | `fcbef9c689c3fb82ec36bb3d477a631eec343477`，未变化 |
 
 ## 7. Repository Closeout
 
@@ -178,14 +205,40 @@ ZIP_SHA256: PENDING
 
 ```text
 WORKTREES_BEFORE: 43
-WORKTREES_AFTER: PENDING
+WORKTREES_AFTER: 39
 LOCAL_BRANCHES_BEFORE: 42
-LOCAL_BRANCHES_AFTER: PENDING
+LOCAL_BRANCHES_AFTER: 36
 REMOTE_BRANCHES_BEFORE: 19
-REMOTE_BRANCHES_AFTER: PENDING
+REMOTE_BRANCHES_AFTER: 14
+WORKTREE_BYTES_BEFORE: 38161687457
+WORKTREE_BYTES_AFTER: 36799228014
+WORKTREE_BYTES_RECLAIMED_NET: 1362459443
 ROOT_WIP_PRESERVED: YES
 PRODUCTION_SQLITE_UNTOUCHED: YES
 ```
+
+删除的 Worktree 均为 clean、HEAD 已是 `origin/preview` 祖先、对应 PR 已合并：
+
+| Worktree | Branch | PR |
+|---|---|---|
+| `.run/ci-performance-test-optimization-20261120` | `codex/ci-performance-test-optimization-20261120` | #106 |
+| `.run/legacy-retirement-20261121` | `codex/legacy-retirement-20261121` | #108 |
+| `.run/official-runtime-integration-20261118` | `codex/official-runtime-integration-20261118` | #101 |
+| `.run/sqlite-v13-retirement-20261121` | `codex/sqlite-v13-retirement-20261121` | #107 |
+
+本地分支另安全删除 9 个已证明为 `origin/preview` 祖先的分支：上述 4 个，加上
+`codex/preview-release-20261121`、`codex/preview-release-report-20261121`、
+`codex/preview10-costlab-ci-fix-20261121`、`codex/preview6-post-audit-remediation-20261115`
+和 `codex/preview8-release-20261116`。其中 `git branch -d` 拒绝的 8 个分支均在删除前再次
+验证 HEAD 是 `origin/preview` 祖先，才执行 `git branch -D`。远程仅删除已合并的
+`codex/official-runtime-integration-20261118`。
+
+`preview-integration` 作为本次 Release、资产、CI 与清理证据工作区保留。所有 dirty Worktree、
+含独有提交的 Cost Lab/CLI/Wake/3.18.2/3.19.0 研究分支、未关闭 Dependabot 分支和 master /
+preview 均保留。完整逐项状态在
+`.run/preview-release-20261121-closeout/worktree-inventory-current.json`、
+`worktrees-removed-batch1.json`、`local-branch-cleanup*.json` 和
+`remote-branch-cleanup.json`。
 
 ## 8. Known Gaps
 
@@ -197,6 +250,10 @@ PRODUCTION_SQLITE_UNTOUCHED: YES
   近似 runner-minutes。
 - PR #110 首轮 Windows SQLite 资源竞态在相同代码上未复现，失败 Job 重跑通过；保留为
   Windows runner 资源时序风险，不宣称已经修复。
+- 首次本地 MCP clean-install smoke 没有先隔离 `LOCALAPPDATA`，因此触碰了生产 data root
+  的 `bridge.sqlite.bootstrap.lock` 释放标记。生产 `bridge.sqlite`、WAL 和 SHM 的字节与
+  LastWriteTime 未变化；随后删除该错误 smoke 输出，改用隔离 `LOCALAPPDATA` 重跑，并对
+  GitHub 回下载资产再次完成 clean-install。该生产元数据触碰保留为发布过程已知缺口。
 
 ## 9. Final Status
 
@@ -208,14 +265,14 @@ LEGACY_RETIREMENT: MERGED
 CI_OPTIMIZATION: MERGED
 
 PREVIEW_VERSION: 2.0.0-preview.10
-ALL_REQUIRED_CI: PASS ON CODE HEAD 22FC7A64
-RELEASE_ASSET_VERIFICATION: PENDING
-CLEAN_INSTALL: PENDING
+ALL_REQUIRED_CI: PASS ON RELEASE COMMIT C181BA07
+RELEASE_ASSET_VERIFICATION: PASS
+CLEAN_INSTALL: PASS
 STABLE_UNCHANGED: YES
 
 UNMERGED_WORK_PRESERVED: YES
 ROOT_WIP_PRESERVED: YES
 PRODUCTION_SQLITE_UNTOUCHED: YES
 
-FINAL_VERDICT: PENDING
+FINAL_VERDICT: PASS
 ```
