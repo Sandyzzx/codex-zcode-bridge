@@ -14,6 +14,7 @@
 | 发布身份 | `2.0.0-preview.10`。GitHub Release 发布于 2026-11-21 12:06:54（Asia/Shanghai）。发布 Tag 指向 `c181ba075677bde1aa867346be0521c32754c63d`，A0 取更新的 Preview 分支头 |
 | 构建环境 | Windows x64 / Node `24.16.0` / npm `11.13.0` / A0 `package-lock.json` |
 | Master Host 本机观察 | Codex Desktop `26.1111.2228.0`，CLI `0.169.0-alpha.11.1`。A0 回放消费者为锁定的 MCP SDK |
+| Host 通道补充观察 | 2026-11-21 安装版 Codex Desktop `26.1117.4957.0` / CLI `0.171.0-alpha.13`。零成本回环请求证明模型输入选择 `structuredContent`，不重复注入 text；缓存未测 |
 | Worker Host 发布范围 | ZCode Desktop `3.18.2.10443`，固定 Official Host 来源 `fec975905a2abd4c07e35c40d51fa097a2258ec9` / AppServer `0.17.1` |
 | Worker Host 本机观察 | Desktop `3.19.0.10774`，安装版 `resources/glm/zcode.cjs` SHA-256 `6b84e928d9258fe020c6ab8c75fa2c123b0cd658fe43c0ce141a13df677fb0ea`。此版本属于 ADR-042 的实验范围 |
 | Cost Lab | `tools/cost-lab` tree `edfa1d61bf64f6a4ee1ca362b16534b30089300b`。回放运行标识 `phase0-20261121-a0`，官方 Verification ID 未生成 |
@@ -73,8 +74,8 @@ flowchart LR
 
 | 数据层 | A0 可用来源 | 可信度与缺口 |
 |---|---|---|
-| MCP 载荷估算 | 两次 SDK 回放与本地 tokenizer | 确定性传输样本，各段代理 Token。Host 选择 text / structuredContent、序列化与重复注入频率未知 |
-| 实际模型输入 | 未来使用授权的 Host 请求元数据或脱敏的请求级组装清单 | 需要按 request/response ID 关联工具定义、轮询、派发和结果。逐组件精确 Token 不确定 |
+| MCP 载荷估算 | 两次 SDK 回放与本地 tokenizer | 确定性传输样本，各段代理 Token。A0 回放同时记录双通道；后续安装版探针补充分辨了当前 Host 的模型通道选择 |
+| 实际模型输入 | 已安装 Host 的零成本回环请求捕获 | 通道选择已确认：MCP Result 保留双通道，但下一模型 `function_call_output` 只含 `structuredContent` 和短包装。逐组件 Token、累积历史、缓存及真实模型注入仍需授权 Host/Provider 数据 |
 | Provider / Runtime Usage | Adapter `turn.completed` `.usage` → `normalizeUsage` → R7 / Result | Runtime 转报、有来源和 scope。Cache Read/Write、reasoning 允许缺失。当前 Cost Lab 从 Result 和 Events 选择一份 Usage，辅助请求覆盖有限。同一用量的多个投影按来源去重 |
 | 实际费用 | Coding Plan 官方小时桶，前后账单匹配 Token 分类且无并发活动 | 同模型、账户、小时和结算窗口才能归因。短期零增量保持未知，时间倍率与活动倍率独立。Start Plan token unit、Coding Plan credits 和 Master 货币账单分别保留 |
 
