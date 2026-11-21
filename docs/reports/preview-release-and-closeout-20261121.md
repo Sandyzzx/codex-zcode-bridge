@@ -33,6 +33,16 @@ Selector 回归断言；没有修改生产 Bridge、Runtime Auth、Official Host
 PR #110 merge commit 为 `22fc7a64f1e79c2c555cb7069183e83795959f99`，最终 Preview Push CI
 `44858240150` 全部通过。
 
+发布报告 PR #111 又暴露了 CI 治理缺陷：文档-only PR 的分支保护要求 4 个全量检查上下文，
+但影响选择器正确地把这些 job 标为 `skipped`，GitHub 因此拒绝合并。手工在同一 SHA 触发
+workflow dispatch 后检查通过，但分支保护仍不接受该事件产生的上下文。
+
+修复提交 `1ba2e728c620f2a0f2abd2bd02109fc2f3057e95` 保持完整测试仍由影响选择器决定，
+但让 4 个受保护 job 在所有非 Draft PR 上实际产生结果：需要全量时执行测试，不需要时只执行
+明确的 non-full receipt。Fast、Integration、Cost Lab 的选择规则和生产测试合同未改变。
+该提交按 `.github/workflows/** -> FULL_SUITE` 规则执行了完整 PR CI，run
+`44860645182` 全部通过。
+
 ## 2. Release Scope
 
 Preview.10 的核心变更是：
@@ -90,6 +100,7 @@ Preview `ADR-037` 继续表示官方认证复用；Stable Host Recovery 文件�
 | PR #109 post-merge Preview CI | FAIL, run `44857084790`; Cost Lab platform gate defect reproduced |
 | PR #110 CI | PASS, run `44857443617` |
 | Final Preview Push CI | PASS, run `44858240150`, commit `22fc7a64f1e79c2c555cb7069183e83795959f99` |
+| Release report PR #111 full PR CI | PASS, run `44860645182`, commit `1ba2e728c620f2a0f2abd2bd02109fc2f3057e95` |
 
 已有候选证据仍按各自 PR 报告保留，不把候选分支的 PASS 冒充本集成树已经完成验证。
 
@@ -119,6 +130,13 @@ PR #110 的第一次 Windows SQLite 门禁出现一次资源竞态失败：
 本地连续运行 3 次均为 PASS（合计约 87 秒），随后仅重跑失败的 GitHub Actions failed job，
 整个 run `44857443617` 通过。该事件没有伴随超时放宽、断言删除、SKIP 或生产代码修改，因此
 记录为一次未复现的 Windows 资源竞态，而不是产品修复或稳定成功。
+
+PR #111 首次同 SHA 全量 workflow dispatch `44859303456` 的 Windows SQLite matrix 又出现一次
+不同表面的并发失败：八个 Admission 中一个子进程返回 `EPERM`，而测试只接受
+`root_writer_busy`。失败 Job `136708733895` 的原始日志已保存；同一提交本地完整
+`npm run test:stress` 连续 3 次 PASS（32.975s / 33.247s / 31.431s）。随后只重跑该失败 Job，
+run attempt 2 全部通过。该事件继续归类为 Windows 文件句柄/并发资源时序风险，未通过修改
+测试预期、增加 SKIP 或删除断言处理。
 
 ## 5. Compatibility Matrix
 
