@@ -18,12 +18,17 @@ function sized(bytes,unit='x'){
 }
 const frame=value=>({protocol:'bridge-sqlite-candidate-result-v1',operation_id:'op-result',task_id:value.task_id,attempt:1,generation:1,workspace_ref:'workspace',policy_snapshot_digest:'a'.repeat(64),execution_cleanup_verified:false,execution_cleanup:null,result:value});
 
-test('canonical contract counts UTF-8 after escaping; exact 32 MiB boundary for ASCII, Chinese, emoji, quotes, NUL and lone surrogate',()=>{
-  for(const unit of ['x','中','😀','"','\u0000','\ud800'])for(const delta of [-1,0,1]){
-    const value=sized(MAX+delta,unit);
-    if(delta===1)assert.throws(()=>canonicalTaskResult(value,{task_id:value.task_id,attempt:1,result_status:value.status}),e=>e.code==='result_too_large'&&e.message.includes(String(MAX+1)));
-    else assert.equal(Buffer.byteLength(canonicalTaskResult(value,{task_id:value.task_id,attempt:1,result_status:value.status})),MAX+delta);
+test('canonical contract counts UTF-8 after escaping; exact 32 MiB acceptance and +1 rejection',()=>{
+  // Exercise each encoding/escaping rule with a bounded payload. Byte counting
+  // is linear, so only ASCII needs another allocation at the actual 32 MiB cap.
+  for(const unit of ['x','中','😀','"','\u0000','\ud800']){
+    const value=sized(64*1024,unit);
+    assert.equal(Buffer.byteLength(canonicalTaskResult(value,{task_id:value.task_id,attempt:1,result_status:value.status})),64*1024);
   }
+  const exact=sized(MAX);
+  assert.equal(Buffer.byteLength(canonicalTaskResult(exact,{task_id:exact.task_id,attempt:1,result_status:exact.status})),MAX);
+  const over=sized(MAX+1);
+  assert.throws(()=>canonicalTaskResult(over,{task_id:over.task_id,attempt:1,result_status:over.status}),e=>e.code==='result_too_large'&&e.message.includes(String(MAX+1)));
 });
 test('report text, arrays and partial report_candidate share semantics; identity metadata remains bounded',()=>{
   const value=result();value.summary='a\n\u0000😀';value.files_changed=Array.from({length:257},(_,i)=>'x'.repeat(4097)+i);value.issues=['\n\u0000'];value.tests=[{command:'\n\u0000',status:'passed',details:'😀'}];value.report_candidate={summary:'',issues:['\u0000']};

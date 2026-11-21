@@ -4,6 +4,7 @@ import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import ts from "typescript";
 import { selectCiImpact } from "../scripts/ci-select-impact.mjs";
 import { selectAffectedTests } from "../scripts/test-impact-selector.mjs";
 import { automaticTestEntries, compiledTestPath } from "../scripts/lib/test-files.mjs";
@@ -21,11 +22,67 @@ function filesFor(selectorFile: string): string[] {
   if (selectorFile === "unknown-source") return ["src/example/new-domain.ts"];
   if (selectorFile === "test-runner") return ["scripts/test-isolated.mjs"];
   if (selectorFile === "rename") return ["test/zcode-paths-old.test.ts", "test/zcode-paths.test.ts"];
+  if (selectorFile === "unknown-script") return ["scripts/new-executable.mjs"];
+  if (selectorFile === "copy-test-assets") return ["scripts/copy-test-assets.mjs"];
+  if (selectorFile === "node-launcher") return ["plugins/codex-zcode-bridge/launch-node24.mjs"];
+  if (selectorFile === "process-spawn") return ["src/adapters/process-spawn.ts"];
   return [];
 }
 
 async function importSelector(): Promise<typeof import("../scripts/test-impact-selector.mjs")> {
   return import(selectorUrl);
+}
+
+function matchesPattern(file: string, pattern: string): boolean {
+  const parts = pattern.split("/");
+  const regexSource = parts.map((part) => {
+    if (part === "**") return "(?:[^/]+(?:/[^/]+)*)?";
+    if (part === "*") return "[^/]+";
+    return part.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  }).join("/");
+  return new RegExp(`^${regexSource}$`, "u").test(file);
+}
+
+function resolveStaticImport(testFile: string, specifier: string): string | undefined {
+  if (!specifier.startsWith(".")) return undefined;
+  const target = path.posix.normalize(path.posix.join(path.posix.dirname(testFile), specifier));
+  const withoutRuntimeExtension = target.replace(/\.(?:mjs|js|cjs|mts)$/u, "");
+  const candidates = [
+    target,
+    `${target}.ts`,
+    `${target}.mts`,
+    `${target}.mjs`,
+    `${withoutRuntimeExtension}.ts`,
+    `${withoutRuntimeExtension}.mts`,
+    `${withoutRuntimeExtension}.mjs`,
+    `${target}/index.ts`,
+    `${target}/index.mjs`,
+  ];
+  return candidates.find((candidate) => existsSync(candidate));
+}
+
+function directRepositoryImports(testFile: string): string[] {
+  const source = readFileSync(testFile, "utf8");
+  const parsed = ts.createSourceFile(testFile, source, ts.ScriptTarget.Latest, true);
+  const imports = new Set<string>();
+  const addImport = (specifier: string) => {
+    const resolved = resolveStaticImport(testFile, specifier);
+    if (resolved && /^(?:src|plugins|scripts|tools)\//u.test(resolved)) imports.add(resolved);
+  };
+  const visit = (node: ts.Node) => {
+    if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node))
+      && node.moduleSpecifier
+      && ts.isStringLiteral(node.moduleSpecifier)) {
+      addImport(node.moduleSpecifier.text);
+    }
+    if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword
+      && node.arguments[0] && ts.isStringLiteral(node.arguments[0])) {
+      addImport(node.arguments[0].text);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(parsed);
+  return [...imports].sort();
 }
 
 test("path discovery changes select path tests but not SQLite stress", () => {
@@ -64,12 +121,17 @@ test("Worker and protocol-adapter source changes select corresponding integratio
   assert.ok(adapter.selected_tests.some((entry) => entry.file === "test/session-frames.test.ts"));
   assert.equal(worker.selected_tests.some((entry) => entry.file === "test/sqlite-resource-stress.test.mjs"), false);
   const deadlines = selectAffectedTests({ changedFiles: ["src/runtime/task-timeout.ts"], map, platform: "win32" });
-  for (const file of ["test/task-timeout.test.ts", "test/zcode-app-server-adapter.test.ts", "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts"]) {
+  for (const file of [
+    "test/task-timeout.test.ts",
+    "test/zcode-app-server-adapter.test.ts",
+    "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter-official-host.test.ts",
+    "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter-result-lifecycle.test.ts",
+  ]) {
     assert.ok(deadlines.selected_tests.some((entry) => entry.file === file), `shared deadline changes must select ${file}`);
   }
   assert.equal(deadlines.stress_mode, "STRESS_TEST_REQUIRED");
   const deadlinesLinux = selectAffectedTests({ changedFiles: ["src/runtime/task-timeout.ts"], map, platform: "linux" });
-  assert.equal(deadlinesLinux.selected_tests.some((entry) => entry.file === "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts"), false,
+  assert.equal(deadlinesLinux.selected_tests.some((entry) => entry.file.includes("mvp-real-adapter-")), false,
     "Windows-only real-adapter deadline coverage must not run on Linux");
 });
 
@@ -87,15 +149,45 @@ test("unknown source and test infrastructure fall back to the complete suite", (
   const unknownTest = selectAffectedTests({ changedFiles: ["test/new-domain.test.ts"], map });
   assert.equal(unknownTest.mode, "FULL_SUITE");
   assert.ok(unknownTest.full_suite_reasons.some((reason) => reason.startsWith("unknown-test-infrastructure:")));
+  const unknownScript = selectAffectedTests({ changedFiles: filesFor("unknown-script"), map });
+  assert.equal(unknownScript.mode, "FULL_SUITE");
+  assert.ok(unknownScript.full_suite_reasons.some((reason) => reason.startsWith("unknown-executable-script:")));
 });
 
 test("runner and shared fixture changes force the complete regression", () => {
-  for (const file of [filesFor("test-runner"), "test/helpers.ts", "test/test-impact-map.json", "tools/cost-lab/web-server.mjs"]) {
+  const fullSuitePaths = [
+    filesFor("test-runner"),
+    filesFor("copy-test-assets"),
+    "test/helpers.ts",
+    "test/test-impact-map.json",
+  ];
+  for (const file of fullSuitePaths) {
     const changed = Array.isArray(file) ? file : [file];
     const selection = selectAffectedTests({ changedFiles: changed, map });
     assert.equal(selection.mode, "FULL_SUITE");
     assert.equal(selection.stress_mode, "SEPARATE_STRESS_GATE");
     assert.equal(selection.selected_tests.some((entry) => entry.file === "test/sqlite-resource-stress.test.mjs"), false);
+  }
+  const costLab = selectAffectedTests({ changedFiles: ["tools/cost-lab/web-server.mjs"], map });
+  assert.equal(costLab.mode, "NO_TESTS_APPLICABLE");
+  assert.deepEqual(costLab.affected_domains, ["cost-lab"]);
+});
+
+test("real script consumers map to their executable contract tests", () => {
+  const launcher = selectAffectedTests({ changedFiles: filesFor("node-launcher"), map });
+  assert.ok(launcher.selected_tests.some((entry) => entry.file === "test/node-runtime.test.ts"));
+
+  const spawn = selectAffectedTests({ changedFiles: filesFor("process-spawn"), map, platform: "win32" });
+  for (const consumer of [
+    "test/process-spawn.test.ts",
+    "test/runtime-remediation.test.ts",
+    "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
+    "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter-official-host.test.ts",
+    "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter-private-auth.test.ts",
+    "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter-result-lifecycle.test.ts",
+    "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter-routing-admission.test.ts",
+  ]) {
+    assert.ok(spawn.selected_tests.some((entry) => entry.file === consumer), `process-spawn changes must select ${consumer}`);
   }
 });
 
@@ -174,6 +266,24 @@ test("manifest covers all executable sources and full selection matches the actu
   }
 });
 
+test("every test domain covers its direct production imports", () => {
+  const failures: string[] = [];
+  for (const entry of map.tests) {
+    if (entry.type === "Fixture") continue;
+    for (const dependency of directRepositoryImports(entry.file)) {
+      if (map.full_suite_paths.some((pattern) => matchesPattern(dependency, pattern))) continue;
+      const ownerDomains = map.domains
+        .filter((domain) => domain.paths.some((pattern) => matchesPattern(dependency, pattern)))
+        .map((domain) => domain.id);
+      if (ownerDomains.length === 0) continue;
+      if (!ownerDomains.some((domain) => entry.domains.includes(domain))) {
+        failures.push(`${entry.file} imports ${dependency} but lacks ${ownerDomains.join(" or ")}`);
+      }
+    }
+  }
+  assert.deepEqual(failures, []);
+});
+
 test("CI impact gate shadow-compares targeted and full selections with the executable manifest", () => {
   const docs = selectCiImpact({ files: ["docs/report.md"], map });
   assert.equal(docs.affected_mode, "NO_TESTS_APPLICABLE");
@@ -200,6 +310,17 @@ test("CI impact gate shadow-compares targeted and full selections with the execu
   const forcedRunner = selectAffectedTests({ changedFiles: [], map, forceFull: true });
   assert.equal(forcedRunner.mode, "FULL_SUITE");
   assert.deepEqual(forcedRunner.full_suite_reasons, ["forced-full"]);
+});
+
+test("Cost Lab changes select only the independent Cost Lab gate", () => {
+  const costLab = selectCiImpact({ files: ["tools/cost-lab/startplan-billing.mjs"], map });
+  assert.equal(costLab.affected_mode, "NO_TESTS_APPLICABLE");
+  assert.equal(costLab.full_required, false);
+  assert.equal(costLab.integration_required, false);
+  assert.equal(costLab.cost_lab_required, true);
+  const forced = selectCiImpact({ files: [], map, forceFull: true });
+  assert.equal(forced.full_required, true);
+  assert.equal(forced.cost_lab_required, true, "an unverifiable diff must not silently skip Cost Lab");
 });
 
 test("CI impact CLI fails safe for dispatch, initial-push and invalid base revisions", () => {
@@ -234,15 +355,47 @@ test("CI impact CLI fails safe for dispatch, initial-push and invalid base revis
   assert.match(invalid.stderr, /git diff .* failed/u);
 });
 
-test("FULL-impact Fast gate delegates the full regression to Release", () => {
+test("CI gives FULL impacts one complete regression and no duplicate Fast T0", () => {
   const workflow = readFileSync(path.resolve(".github/workflows/ci.yml"), "utf8");
   assert.match(
     workflow,
-    /Fast selection \(FULL delegates regression to Release\)[\s\S]*?args\+=\(--force-full --t0-only\)[\s\S]*?npm run test:affected/u,
-    "the Fast gate must request only T0 when impact policy requires the full suite",
+    /pull_request:\s*\n\s*types:\s*\[opened, synchronize, reopened, ready_for_review\]/u,
+    "converting a draft PR to ready-for-review must trigger the formal PR gates",
+  );
+  assert.match(
+    workflow,
+    /fast:\s+name: Fast PR gate\s+needs: impact\s+if: github\.event_name == 'pull_request' && needs\.impact\.outputs\.full_required != 'true'/u,
+    "FULL impacts must skip the duplicate Fast T0 gate",
   );
   assert.match(workflow, /BASE_SHA: \$\{\{ github\.event\.pull_request\.base\.sha \|\| github\.event\.before \}\}/u);
-  assert.match(workflow, /A non-full Fast gate requires a valid base SHA/u);
+  assert.match(workflow, /Fast impact selection requires a valid base SHA/u);
+  assert.match(
+    workflow,
+    /integration:[\s\S]*?needs: \[impact, fast\][\s\S]*?if: github\.event_name == 'pull_request' && github\.event\.pull_request\.draft == false && needs\.fast\.result == 'success' && needs\.impact\.outputs\.integration_required == 'true' && needs\.impact\.outputs\.full_required != 'true'/u,
+    "Windows integration must only run after Fast has completed the shared T0 checks",
+  );
+  assert.match(
+    workflow,
+    /integration:[\s\S]*?- run: npm run build[\s\S]*?- name: Verify Windows worker process identity[\s\S]*?- name: Impacted integration and task-lifecycle tests/u,
+    "Windows integration must not repeat Fast's typecheck, plugin, generated, or diff gates",
+  );
+  assert.match(
+    workflow,
+    /release:[\s\S]*?github\.event\.pull_request\.draft == false/u,
+    "draft PRs must not pay for the full release regression",
+  );
+  assert.match(
+    workflow,
+    /sqlite-stress:[\s\S]*?github\.event\.pull_request\.draft == false/u,
+    "draft PRs must not pay for the stress matrix",
+  );
+  assert.match(
+    workflow,
+    /cost-lab:[\s\S]*?always\(\) && \(github\.event_name == 'push' \|\| github\.event_name == 'workflow_dispatch' \|\| \(github\.event_name == 'pull_request' && github\.event\.pull_request\.draft == false && needs\.impact\.outputs\.cost_lab_required == 'true'\)\)/u,
+    "Cost Lab must run on Push/Dispatch and selected non-draft PRs only",
+  );
+  assert.match(workflow, /CODEX_BRIDGE_CI_T0_COMPLETED: "1"[\s\S]*?--tests-only/u);
+  assert.match(workflow, /concurrency:[\s\S]*?group: ci-\$\{\{ github\.event_name \}\}-\$\{\{ github\.event\.pull_request\.number \|\| github\.ref \}\}[\s\S]*?cancel-in-progress: \$\{\{ github\.event_name == 'pull_request' \}\}/u);
   assert.doesNotMatch(
     workflow,
     /run:\s+npm run test:affected -- --base "\$\{\{ github\.event\.pull_request\.base\.sha \|\| github\.event\.before \}\}"/u,
@@ -254,4 +407,24 @@ test("FULL-impact Fast gate delegates the full regression to Release", () => {
     1,
     "the complete npm test run belongs to the Release gate",
   );
+});
+
+test("tests-only execution is fail-closed without CI preflight evidence", () => {
+  const env = { ...process.env };
+  delete env.CODEX_BRIDGE_CI_T0_COMPLETED;
+  const missingPreflight = spawnSync(
+    process.execPath,
+    ["scripts/run-affected-tests.mjs", "--base", "HEAD", "--tests-only"],
+    { encoding: "utf8", env },
+  );
+  assert.notEqual(missingPreflight.status, 0);
+  assert.match(missingPreflight.stderr, /--tests-only requires a completed CI T0 preflight/u);
+
+  const missingBase = spawnSync(
+    process.execPath,
+    ["scripts/run-affected-tests.mjs", "--tests-only"],
+    { encoding: "utf8", env: { ...env, CODEX_BRIDGE_CI_T0_COMPLETED: "1" } },
+  );
+  assert.notEqual(missingBase.status, 0);
+  assert.match(missingBase.stderr, /--tests-only requires an explicit --base/u);
 });
