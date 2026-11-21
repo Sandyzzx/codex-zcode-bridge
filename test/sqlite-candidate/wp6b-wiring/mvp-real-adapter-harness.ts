@@ -362,8 +362,7 @@ async function waitForTerminal(
 async function waitForEvent(client: Client, taskId: string, predicate: (event: Record<string, unknown>) => boolean, description: string): Promise<Record<string, unknown>> {
   const deadline = Date.now() + 45_000;
   while (Date.now() < deadline) {
-    const page = contentObject(await client.callTool({ name: "zcode_events", arguments: { task_id: taskId, after_seq: 0, limit: 200 } }));
-    const events = Array.isArray(page.events) ? page.events as Array<Record<string, unknown>> : [];
+    const { events } = await readAllPublicEvents(client, taskId);
     const found = events.find(predicate);
     if (found) return found;
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -378,8 +377,7 @@ async function waitForLifecycleEvent(client: Client, taskId: string, eventType: 
   const deadline = Date.now() + 75_000;
   let observed: Array<Record<string, unknown>> = [];
   while (Date.now() < deadline) {
-    const page = contentObject(await client.callTool({ name: "zcode_events", arguments: { task_id: taskId, after_seq: 0, limit: 200 } }));
-    const events = Array.isArray(page.events) ? page.events as Array<Record<string, unknown>> : [];
+    const { events } = await readAllPublicEvents(client, taskId);
     observed = events;
     if (events.some((event) => event.type === eventType)) return;
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -401,13 +399,34 @@ async function waitForLifecycleEvent(client: Client, taskId: string, eventType: 
 async function waitForInteractionRequest(client: Client, taskId: string): Promise<Record<string, unknown>> {
   const deadline = Date.now() + 45_000;
   while (Date.now() < deadline) {
-    const page = contentObject(await client.callTool({ name: "zcode_events", arguments: { task_id: taskId, after_seq: 0, limit: 200 } }));
-    const events = Array.isArray(page.events) ? page.events as Array<Record<string, unknown>> : [];
+    const { events } = await readAllPublicEvents(client, taskId);
     const request = events.find((event) => event.type === "interaction_requested");
     if (request) return request;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw new Error(`interaction request was not observed for ${taskId}`);
+}
+
+async function readAllPublicEvents(
+  client: Client,
+  taskId: string,
+): Promise<{ readonly events: Array<Record<string, unknown>> }> {
+  const events: Array<Record<string, unknown>> = [];
+  let afterSeq = 0;
+  for (let pageCount = 0; pageCount < 1_000; pageCount += 1) {
+    const page = contentObject(await client.callTool({
+      name: "zcode_events",
+      arguments: { task_id: taskId, after_seq: afterSeq, limit: 200 },
+    }));
+    if (Array.isArray(page.events)) events.push(...page.events as Array<Record<string, unknown>>);
+    if (!page.has_more) return { events };
+    const nextSeq = Number(page.next_seq);
+    if (!Number.isSafeInteger(nextSeq) || nextSeq <= afterSeq) {
+      throw new Error(`event pagination did not advance for ${taskId}: ${JSON.stringify({ after_seq: afterSeq, next_seq: page.next_seq })}`);
+    }
+    afterSeq = nextSeq;
+  }
+  throw new Error(`event pagination exceeded the bounded page count for ${taskId}`);
 }
 
 async function withRealAdapterMcp(
@@ -757,5 +776,5 @@ function routingEnvIssuerFactory(gate: { entitlement: StartPlanLiveEntitlement }
 }
 
 export {
-  FakeRuntimeFixture, RuntimeVariant, LifecycleTimingCollector, projectRoot, compiledCandidate, sourceSchema, candidateSchema, workerEntryPath, officialHostWorkerEntryPath, officialHostCloseFailureWorkerEntryPath, officialHostStartPlanNoDiscountWorkerEntryPath, fixtureRoot, writeFakeRuntime, contentObject, syntheticTask, waitForTerminal, waitForEvent, waitForLifecycleEvent, waitForInteractionRequest, withRealAdapterMcp, schema, copyFileSync, deadlineWorker, operationFor, HOST_ACCOUNT, HOST_DEVICE_MID, HOST_CREDENTIAL_EXPIRES_AT, syntheticHostJwt, HOST_JWT, hostAuthenticationResolver, fakeHostBillingGate, hostIssuerFactory, routingEnvIssuerFactory,
+  FakeRuntimeFixture, RuntimeVariant, LifecycleTimingCollector, projectRoot, compiledCandidate, sourceSchema, candidateSchema, workerEntryPath, officialHostWorkerEntryPath, officialHostCloseFailureWorkerEntryPath, officialHostStartPlanNoDiscountWorkerEntryPath, fixtureRoot, writeFakeRuntime, contentObject, syntheticTask, waitForTerminal, waitForEvent, waitForLifecycleEvent, waitForInteractionRequest, readAllPublicEvents, withRealAdapterMcp, schema, copyFileSync, deadlineWorker, operationFor, HOST_ACCOUNT, HOST_DEVICE_MID, HOST_CREDENTIAL_EXPIRES_AT, syntheticHostJwt, HOST_JWT, hostAuthenticationResolver, fakeHostBillingGate, hostIssuerFactory, routingEnvIssuerFactory,
 };
