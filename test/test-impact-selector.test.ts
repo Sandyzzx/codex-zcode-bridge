@@ -394,6 +394,11 @@ test("CI gives FULL impacts one complete regression and no duplicate Fast T0", (
     /cost-lab:[\s\S]*?always\(\) && \(github\.event_name == 'push' \|\| github\.event_name == 'workflow_dispatch' \|\| \(github\.event_name == 'pull_request' && github\.event\.pull_request\.draft == false && needs\.impact\.outputs\.cost_lab_required == 'true'\)\)/u,
     "Cost Lab must run on Push/Dispatch and selected non-draft PRs only",
   );
+  assert.match(
+    workflow,
+    /cost-lab:[\s\S]*?runs-on: windows-2022[\s\S]*?run: npm run cost-lab:test/u,
+    "Cost Lab's official-runtime and Windows path contracts must execute on Windows",
+  );
   assert.match(workflow, /CODEX_BRIDGE_CI_T0_COMPLETED: "1"[\s\S]*?--tests-only/u);
   assert.match(workflow, /concurrency:[\s\S]*?group: ci-\$\{\{ github\.event_name \}\}-\$\{\{ github\.event\.pull_request\.number \|\| github\.ref \}\}[\s\S]*?cancel-in-progress: \$\{\{ github\.event_name == 'pull_request' \}\}/u);
   assert.doesNotMatch(
