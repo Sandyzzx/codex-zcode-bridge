@@ -4,8 +4,8 @@
 > Date: 2026-11-21
 > Baseline: `c1245a02f8f9d4b6e1102eabac230b657d85de9b`
 > Baseline tree: `b687bca64ce766b945178cf8af44442cf57f90b3`
-> Code candidate: `3e2c637ce0f31963d27aef8c56da3e360013462c`
-> Code candidate tree: `52b9a53a1138a7d0e614c657467584fb1be9d7cd`
+> Code candidate: `1c7285f76f2c0d26e051e9b5770473ccaff8c04b`
+> Code candidate tree: `0f0a6de27d22a111725adcf2d857a382e4d6a059`
 > Scope: exact legacy retirement; no architecture expansion
 
 ## A. Retirement Inventory
@@ -169,7 +169,8 @@ history tables, or production data were changed.
 | Tests added | 1 |
 | Production source files removed | 0 |
 | Production source lines removed | 2 modified lines, net 0 |
-| CI runs in this branch before push | 0 |
+| GitHub Actions workflow-run attempts | 3 |
+| GitHub Actions outcome | BLOCKED by a repeated Windows process-query timeout in an unchanged test |
 | Wall-clock test duration | 1,277,519.84 ms |
 
 The targeted run exercised the existing SQLite lifecycle, recovery, Windows
@@ -180,14 +181,54 @@ selected by the Impact Selector. The stress run retained the configured
 No performance improvement is claimed for the 87,524-byte deletion or the
 generated bundle change. CI cost and runtime were not used as success criteria.
 
-## F. Final Status
+## F. CI Outcome
+
+The branch was pushed and Draft PR
+[#108](https://github.com/Sandyzzx/codex-zcode-bridge/pull/108) was created
+against `preview`.
+
+Workflow run
+[44840761912](https://github.com/Sandyzzx/codex-zcode-bridge/actions/runs/44840761912)
+was executed three times for code candidate `1c7285f7`:
+
+- `Select impact gates`: PASS.
+- `Fast PR gate`: PASS.
+- `SQLite resource matrix` on Windows and Ubuntu: PASS.
+- `Verify (${{ matrix.os }})`: skipped because the Impact Selector did not
+  require `FULL_SUITE`.
+- `Integration gate (Windows)`: FAIL in every attempt.
+
+The first attempt stopped in `scripts/verify-windows-worker-identity.mjs` when
+the hosted runner's process query timed out. The same script passed locally in
+2.1 seconds. The second and third attempts passed that script, then reached 520
+selected tests with 519 PASS and one failure:
+
+`Marketplace launcher automatically bootstraps SQLite before the first MCP
+initialize`
+
+The failure was the test-only Windows PowerShell `Get-CimInstance
+Win32_Process` observation exceeding its unchanged 8-second timeout. The failing
+assertion was `null !== 0`; the Bridge behavior under test had already reached
+`tools/list`. The same compiled test passed locally (3/3 tests), and this branch
+does not modify `test/node-runtime.test.ts`, the launcher, `process-probe.ts`, or
+the CI workflow.
+
+This is therefore an environmental Windows process-query timeout, not evidence
+that the legacy-retirement source change failed. The timeout and test harness
+were intentionally not changed in this Goal because Windows process identity and
+tree coverage is explicitly outside its retirement scope. The PR remains a
+Draft and Preview was not merged. The final report-only follow-up uses
+`[skip ci]`; it does not change production or test code, so the CI evidence
+above remains tied to code candidate `1c7285f7`.
+
+## G. Final Status
 
 ```text
 GOAL: LEGACY_RETIREMENT_AND_REPOSITORY_SIMPLIFICATION
 
 BASELINE: c1245a02f8f9d4b6e1102eabac230b657d85de9b
-FINAL_CODE_HEAD: 3e2c637ce0f31963d27aef8c56da3e360013462c
-FINAL_CODE_TREE: 52b9a53a1138a7d0e614c657467584fb1be9d7cd
+FINAL_CODE_HEAD: 1c7285f76f2c0d26e051e9b5770473ccaff8c04b
+FINAL_CODE_TREE: 0f0a6de27d22a111725adcf2d857a382e4d6a059
 
 V13_RETIREMENT_OVERLAP: PRESENT; OPEN V13 CANDIDATE; REGENERATE GENERATED ARTIFACTS AT INTEGRATION
 JSON_AUTHORITY_COMPATIBILITY: REMOVED
@@ -210,14 +251,15 @@ TYPECHECK: PASS
 BUILD: PASS
 PLUGIN_VALIDATOR: PASS
 GENERATED_ARTIFACTS: PASS
-FOCUSED_TESTS: PASS 520/520
+FOCUSED_TESTS: PASS 520/520 LOCALLY; CI 519/520 DUE WINDOWS PROCESS-QUERY TIMEOUT
 FULL_REGRESSION: NOT_RUN (NOT REQUIRED BY IMPACT SELECTOR)
-CI_RUNS: PENDING PUSH
+CI_RUNS: 3 WORKFLOW-RUN ATTEMPTS
+CI_STATUS: BLOCKED BY UNCHANGED WINDOWS PROCESS-QUERY TIMEOUT
 
-PUSHED: NO AT REPORT WRITE
-PR_CREATED: NO AT REPORT WRITE
+PUSHED: YES
+PR_CREATED: YES, DRAFT #108
 PREVIEW_MERGED: NO
 RELEASED: NO
 
-FINAL_VERDICT: PASS
+FINAL_VERDICT: BLOCKED
 ```
