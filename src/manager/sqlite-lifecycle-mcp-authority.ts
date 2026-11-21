@@ -443,7 +443,9 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
           const released = await readReleased();
           if (released) return released;
           const reason = typeof outcome.reason === "string" ? outcome.reason : "worker_cleanup_unverified";
+          const latestProjection = asRecord(this.#readSnapshot(taskId).projection);
           if (String(operation.phase) === "cleanup_unverified"
+            && latestProjection.status === "cancelled"
             && canUserAuthorizeUnverifiedRelease(outcome)) {
             return await this.#userAuthorizedRelease(taskId, this.#readSnapshot(taskId));
           }
@@ -459,6 +461,10 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
 
   async #userAuthorizedRelease(taskId: string, snapshot: TaskSnapshot): Promise<TaskStatusRecord> {
     const operation = snapshot.operation ? asRecord(snapshot.operation) : null;
+    const projection = asRecord(snapshot.projection);
+    if (projection.status !== "cancelled") {
+      throw new TaskManagerError("TASK_STATE", "user-authorized unverified release requires the original durable cancellation Result");
+    }
     if (!operation || operation.phase !== "launch_intent" && operation.phase !== "cleanup_unverified") {
       throw new TaskManagerError("TASK_STATE", "zcode_cancel has no user-authorized unverified release path for this Operation");
     }
@@ -507,19 +513,28 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
   }
 
   #readCancelId(taskId: string, operationId: string): string | null {
-    const page = this.#driver.readTaskEvents(taskId, { afterCursor: 0, limit: 200 }) as {
-      events?: readonly Record<string, unknown>[];
-    };
-    for (const event of page.events ?? []) {
-      if (event.operation_id !== operationId || event.event_type !== "observation_recorded") continue;
-      const evidence = parseRecord(string(event.evidence_json, "event_evidence_missing"));
-      const reason = evidence.reason === "cancelled" ? "cancelled_before_claim" : evidence.reason;
-      if (reason === "cancelled_before_claim" || reason === "cancel_tree_verified") {
-        const cancelId = evidence.cancel_id;
-        return typeof cancelId === "string" && cancelId ? cancelId : null;
+    let cursor = 0;
+    while (true) {
+      const page = this.#driver.readTaskEvents(taskId, { afterCursor: cursor, limit: 200 }) as {
+        events?: readonly Record<string, unknown>[];
+        nextCursor?: unknown;
+        hasMore?: unknown;
+      };
+      const events = page.events ?? [];
+      for (const event of events) {
+        if (event.operation_id !== operationId || event.event_type !== "observation_recorded") continue;
+        const evidence = parseRecord(string(event.evidence_json, "event_evidence_missing"));
+        const reason = evidence.reason === "cancelled" ? "cancelled_before_claim" : evidence.reason;
+        if (reason === "cancelled_before_claim" || reason === "cancel_tree_verified") {
+          const cancelId = evidence.cancel_id;
+          return typeof cancelId === "string" && cancelId ? cancelId : null;
+        }
       }
+      if (page.hasMore !== true || events.length === 0) return null;
+      const nextCursor = Number(page.nextCursor ?? events.at(-1)?.cursor ?? events.at(-1)?.event_cursor);
+      if (!Number.isSafeInteger(nextCursor) || nextCursor <= cursor) return null;
+      cursor = nextCursor;
     }
-    return null;
   }
 
   async #dispatchBlocker(taskId: string, snapshot: TaskSnapshot): Promise<DispatchBlocker | undefined> {

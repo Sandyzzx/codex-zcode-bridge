@@ -14532,7 +14532,8 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
               const released = await readReleased();
               if (released) return released;
               const reason = typeof outcome.reason === "string" ? outcome.reason : "worker_cleanup_unverified";
-              if (String(operation.phase) === "cleanup_unverified" && canUserAuthorizeUnverifiedRelease(outcome)) {
+              const latestProjection = asRecord7(this.#readSnapshot(taskId).projection);
+              if (String(operation.phase) === "cleanup_unverified" && latestProjection.status === "cancelled" && canUserAuthorizeUnverifiedRelease(outcome)) {
                 return await this.#userAuthorizedRelease(taskId, this.#readSnapshot(taskId));
               }
               throw new TaskManagerError("CANCEL_FAILED", `SQLite cleanup remains occupied for this workspace: ${reason}`);
@@ -14546,6 +14547,10 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
       }
       async #userAuthorizedRelease(taskId, snapshot) {
         const operation = snapshot.operation ? asRecord7(snapshot.operation) : null;
+        const projection = asRecord7(snapshot.projection);
+        if (projection.status !== "cancelled") {
+          throw new TaskManagerError("TASK_STATE", "user-authorized unverified release requires the original durable cancellation Result");
+        }
         if (!operation || operation.phase !== "launch_intent" && operation.phase !== "cleanup_unverified") {
           throw new TaskManagerError("TASK_STATE", "zcode_cancel has no user-authorized unverified release path for this Operation");
         }
@@ -14591,17 +14596,24 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
         return { task_id: input.task_id, request_id: input.request_id, state: "answered" };
       }
       #readCancelId(taskId, operationId) {
-        const page = this.#driver.readTaskEvents(taskId, { afterCursor: 0, limit: 200 });
-        for (const event of page.events ?? []) {
-          if (event.operation_id !== operationId || event.event_type !== "observation_recorded") continue;
-          const evidence = parseRecord2(string4(event.evidence_json, "event_evidence_missing"));
-          const reason = evidence.reason === "cancelled" ? "cancelled_before_claim" : evidence.reason;
-          if (reason === "cancelled_before_claim" || reason === "cancel_tree_verified") {
-            const cancelId = evidence.cancel_id;
-            return typeof cancelId === "string" && cancelId ? cancelId : null;
+        let cursor = 0;
+        while (true) {
+          const page = this.#driver.readTaskEvents(taskId, { afterCursor: cursor, limit: 200 });
+          const events = page.events ?? [];
+          for (const event of events) {
+            if (event.operation_id !== operationId || event.event_type !== "observation_recorded") continue;
+            const evidence = parseRecord2(string4(event.evidence_json, "event_evidence_missing"));
+            const reason = evidence.reason === "cancelled" ? "cancelled_before_claim" : evidence.reason;
+            if (reason === "cancelled_before_claim" || reason === "cancel_tree_verified") {
+              const cancelId = evidence.cancel_id;
+              return typeof cancelId === "string" && cancelId ? cancelId : null;
+            }
           }
+          if (page.hasMore !== true || events.length === 0) return null;
+          const nextCursor = Number(page.nextCursor ?? events.at(-1)?.cursor ?? events.at(-1)?.event_cursor);
+          if (!Number.isSafeInteger(nextCursor) || nextCursor <= cursor) return null;
+          cursor = nextCursor;
         }
-        return null;
       }
       async #dispatchBlocker(taskId, snapshot) {
         const attempt = asRecord7(snapshot.attempt);
