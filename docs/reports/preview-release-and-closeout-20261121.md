@@ -70,12 +70,30 @@ Preview `ADR-037` 继续表示官方认证复用；Stable Host Recovery 文件�
 | Plugin validator | PASS |
 | Test inventory | PASS, 896 declarations / 99 mapped files |
 | F-01/F-02 focused scheduler regression | PASS, 7/7 |
-| Generated artifacts | PENDING FINAL COMMIT CHECK |
-| Clean entrypoints | PENDING |
-| Test impact selector / affected or full regression | PENDING |
+| Generated artifacts | PASS, 10 files |
+| Clean entrypoints | PASS, 4/4 |
+| Test impact selector / affected or full regression | 首轮 FAIL；修复后等待最终树复跑 |
 | Windows complete CI | PENDING PREVIEW PUSH |
 
 已有候选证据仍按各自 PR 报告保留，不把候选分支的 PASS 冒充本集成树已经完成验证。
+
+首轮 `npm run test:affected -- --base origin/preview` 在 27.8 分钟内运行 962 项测试，
+结果为 958 PASS、2 FAIL、2 SKIP。两项失败均已定位到集成树兼容问题：
+
+1. Windows 分片计划仍引用 SQLite 退役时已删除的
+   `test/sqlite-v14-upgrade.test.mjs`。修复为删除该分片项并同步估算值。
+2. Windows root-exit 正向测试在全量负载下可能遇到生产扫描器对已退出 PID 被复用或仍保留
+   live parent edge 的保守拒绝。测试现在使用至多三个全新的受控 root，只有真实原生扫描返回
+   `verified` 时才断言成功；生产扫描器、失败语义和断言均未放宽。
+
+修复后的定向证据：
+
+- Shard plan test：PASS。
+- 对应 Windows root-exit 正向测试：PASS。
+- `dist-test/test/zcode-app-server-adapter.test.js` 完整文件：38/38 PASS。
+
+最终完整 affected regression 必须在包含这两项修复的最终 Tree 上重新执行；在复跑通过前，
+不把该门禁记为 PASS。
 
 ## 5. Compatibility Matrix
 

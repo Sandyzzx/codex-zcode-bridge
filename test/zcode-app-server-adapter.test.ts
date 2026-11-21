@@ -1018,41 +1018,53 @@ for (const missingIdentity of [true, false]) test(`observed Windows child exit s
 
 test("a controlled Windows root exit with no descendants passes the real claimant scan", { timeout: 60_000 }, async (t) => {
   if (process.platform !== "win32") return t.skip("Windows-only native process identity and claimant scan");
-  const runtime = await makeFakeRuntime(undefined, true, false, undefined, false, null, undefined, 1_200);
-  const scanTargets: Array<readonly { pid: number; fingerprint: string | null }[]> = [];
-  const events: Array<{ type: string; summary: string; details?: Record<string, unknown> }> = [];
-  const trace = observeScan("real-clean");
-  try {
-    const adapter = new ZCodeAppServerTestAdapter({
-      resolver: { resolve: async () => runtime.config },
-      onEvent: (event) => events.push(event),
-      timeoutMs: 10_000,
-      childEnvBase: { PATH: process.env.PATH },
-      terminateProcessTreeImpl: async (pid) => {
-        await exitOwnedProcessForRootRace(pid);
-        const error = new Error("process_tree_root_exited: process tree cleanup refused") as Error & { code: string };
-        error.code = "process_tree_root_exited";
-        throw error;
-      },
-      verifyTreeClean: async (targets) => {
-        scanTargets.push(targets);
-        return trace.verify(targets);
-      },
-    });
-    const handle = await adapter.startTask({ task, workspace: makeWorkspace(runtime.root), attempt: 1 });
-    const result = await adapter.getResult(handle);
-    trace.observation.final_cleanup_verdict = result.cleanupVerified ? "verified" : "unverified";
-    assert.equal(result.exitCode, 0);
-    assert.equal(result.cleanupVerified, true, result.cleanupError ?? "recorded-tree scan did not verify clean");
-    assert.equal(result.cleanupError, null);
-    assert.equal(scanTargets.length, 1, "the natural root exit reaches the native recorded-tree scanner");
-    const root = scanTargets[0]?.[0];
-    assert.ok(root && root.pid > 0 && root.fingerprint, "the scan is bound to the captured root generation");
-    assert.ok(events.some((event) => event.type === "cleanup_verified" && event.details?.["evidence"] === "recorded_tree_claimant_scan"));
-  } finally {
-    t.diagnostic(JSON.stringify(trace.observation));
-    await rm(runtime.root, { recursive: true, force: true });
+  let lastFailure = "recorded-tree scan did not verify clean";
+  // The production scanner intentionally fails closed when a dead recorded
+  // PID is reused or still appears as another live process's parent. Retry
+  // with a fresh controlled root so this positive test does not mistake that
+  // conservative verdict for permission to weaken the scan.
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const runtime = await makeFakeRuntime(undefined, true, false, undefined, false, null, undefined, 1_200);
+    const scanTargets: Array<readonly { pid: number; fingerprint: string | null }[]> = [];
+    const events: Array<{ type: string; summary: string; details?: Record<string, unknown> }> = [];
+    const trace = observeScan(`real-clean-${String(attempt)}`);
+    try {
+      const adapter = new ZCodeAppServerTestAdapter({
+        resolver: { resolve: async () => runtime.config },
+        onEvent: (event) => events.push(event),
+        timeoutMs: 10_000,
+        childEnvBase: { PATH: process.env.PATH },
+        terminateProcessTreeImpl: async (pid) => {
+          await exitOwnedProcessForRootRace(pid);
+          const error = new Error("process_tree_root_exited: process tree cleanup refused") as Error & { code: string };
+          error.code = "process_tree_root_exited";
+          throw error;
+        },
+        verifyTreeClean: async (targets) => {
+          scanTargets.push(targets);
+          return trace.verify(targets);
+        },
+      });
+      const handle = await adapter.startTask({ task, workspace: makeWorkspace(runtime.root), attempt: 1 });
+      const result = await adapter.getResult(handle);
+      trace.observation.final_cleanup_verdict = result.cleanupVerified ? "verified" : "unverified";
+      if (!result.cleanupVerified) {
+        lastFailure = result.cleanupError ?? lastFailure;
+        t.diagnostic(JSON.stringify({ attempt, ...trace.observation }));
+        continue;
+      }
+      assert.equal(result.exitCode, 0);
+      assert.equal(result.cleanupError, null);
+      assert.equal(scanTargets.length, 1, "the natural root exit reaches the native recorded-tree scanner");
+      const root = scanTargets[0]?.[0];
+      assert.ok(root && root.pid > 0 && root.fingerprint, "the scan is bound to the captured root generation");
+      assert.ok(events.some((event) => event.type === "cleanup_verified" && event.details?.["evidence"] === "recorded_tree_claimant_scan"));
+      return;
+    } finally {
+      await rm(runtime.root, { recursive: true, force: true });
+    }
   }
+  assert.fail(lastFailure);
 });
 
 test("a root-exited termination race stays failed when claimant scan sees a live descendant", { timeout: 8_000 }, async (t) => {

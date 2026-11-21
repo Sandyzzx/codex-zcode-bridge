@@ -7,7 +7,7 @@
   "shards": [
     {
       "id": 1,
-      "estimated_ms": 721501,
+      "estimated_ms": 714224,
       "tests": [
         {
           "file": "test/agent-report.test.ts",
@@ -144,10 +144,6 @@
         {
           "file": "test/sqlite-result-v14.test.mjs",
           "estimated_ms": 4436
-        },
-        {
-          "file": "test/sqlite-v14-upgrade.test.mjs",
-          "estimated_ms": 7277
         },
         {
           "file": "test/start-plan-official-appserver-offline.test.ts",
