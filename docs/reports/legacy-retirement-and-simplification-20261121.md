@@ -4,8 +4,8 @@
 > Date: 2026-11-21
 > Baseline: `c1245a02f8f9d4b6e1102eabac230b657d85de9b`
 > Baseline tree: `b687bca64ce766b945178cf8af44442cf57f90b3`
-> Code candidate: `1c7285f76f2c0d26e051e9b5770473ccaff8c04b`
-> Code candidate tree: `0f0a6de27d22a111725adcf2d857a382e4d6a059`
+> Code candidate: `9a2b5337b7632618c84a5260b542497b3cc92764`
+> Code candidate tree: `07e9018bcfb71e67dc7ee7ae3d805787e62f6cdb`
 > Scope: exact legacy retirement; no architecture expansion
 
 ## A. Retirement Inventory
@@ -157,8 +157,8 @@ history tables, or production data were changed.
 | `npm run validate:plugin` | PASS |
 | `npm run check:generated` | PASS, 12 tracked generated artifacts fresh |
 | `git diff --check` | PASS |
-| Targeted affected suite | PASS, 520/520 |
-| Required SQLite stress boundary | PASS |
+| Targeted affected suite | PASS in final CI, 592 selected: 591 PASS, 0 FAIL, 1 SKIP |
+| Required SQLite stress boundary | PASS, `STRESS_TEST_REQUIRED_AND_PASS` |
 | Test Impact Selector mode | `TARGETED` with `STRESS_TEST_REQUIRED` |
 | Full regression | NOT_RUN; selector did not require `FULL_SUITE` |
 | Real model / OAuth / Billing requests | 0 |
@@ -166,12 +166,13 @@ history tables, or production data were changed.
 | Deleted patch/BOM lines | 2,254 |
 | Artifact bytes removed | 87,524 |
 | Tests removed | 0 |
-| Tests added | 1 |
+| Test fixture files added | 1 |
 | Production source files removed | 0 |
 | Production source lines removed | 2 modified lines, net 0 |
-| GitHub Actions workflow-run attempts | 3 |
-| GitHub Actions outcome | BLOCKED by a repeated Windows process-query timeout in an unchanged test |
-| Wall-clock test duration | 1,277,519.84 ms |
+| GitHub Actions runs / attempts | 3 runs / 5 attempts including the final PASS run |
+| Final GitHub Actions outcome | PASS |
+| Local affected-suite wall clock | 1,277,519.84 ms before the Windows probe repair |
+| Final CI wall clock | 11m 43s |
 
 The targeted run exercised the existing SQLite lifecycle, recovery, Windows
 cleanup, Worker, MCP, Startup, Start Plan, and Runtime regression boundaries
@@ -207,19 +208,42 @@ selected tests with 519 PASS and one failure:
 initialize`
 
 The failure was the test-only Windows PowerShell `Get-CimInstance
-Win32_Process` observation exceeding its unchanged 8-second timeout. The failing
+Win32_Process` observation exceeding its configured timeout. The failing
 assertion was `null !== 0`; the Bridge behavior under test had already reached
-`tools/list`. The same compiled test passed locally (3/3 tests), and this branch
-does not modify `test/node-runtime.test.ts`, the launcher, `process-probe.ts`, or
-the CI workflow.
+`tools/list`. A retry-only change in `ad1d78e9d` increased the bounded query to
+15 seconds, but workflow run
+[44844920341](https://github.com/Sandyzzx/codex-zcode-bridge/actions/runs/44844920341)
+still failed because the hosted runner did not complete either WMI query.
 
-This is therefore an environmental Windows process-query timeout, not evidence
-that the legacy-retirement source change failed. The timeout and test harness
-were intentionally not changed in this Goal because Windows process identity and
-tree coverage is explicitly outside its retirement scope. The PR remains a
-Draft and Preview was not merged. The final report-only follow-up uses
-`[skip ci]`; it does not change production or test code, so the CI evidence
-above remains tied to code candidate `1c7285f7`.
+The failure was in the test observation path, not in the retired legacy source
+or the launcher's MCP behavior. Final fix `9a2b5337b` removes WMI/CIM from this
+assertion and adds the test-only
+`test/fixtures/windows-process-tree.ps1` helper. The helper uses a Toolhelp
+process snapshot, `QueryFullProcessImageName`, and direct PEB command-line
+reads. It preserves the same target PID, parent PID, executable, and command
+line assertions while avoiding the hosted-runner WMI stall. The test timeout is
+now 75 seconds and helper execution is bounded at 60 seconds. The affected
+`test/node-runtime.test.ts` passed three consecutive local runs.
+
+Final workflow run
+[44846719592](https://github.com/Sandyzzx/codex-zcode-bridge/actions/runs/44846719592)
+passed on code head `9a2b5337b7632618c84a5260b542497b3cc92764`:
+
+- `Select impact gates`: PASS.
+- `Fast PR gate`: PASS.
+- `SQLite resource matrix (windows-2022)`: PASS.
+- `SQLite resource matrix (ubuntu-latest)`: PASS.
+- `Integration gate (Windows)`: PASS.
+- `Verify (${{ matrix.os }})`: skipped because the Impact Selector did not
+  require `FULL_SUITE`.
+
+The Windows Integration gate selected 592 tests: 591 PASS, 0 FAIL, 1 SKIP. It
+completed with `STRESS_TEST_REQUIRED_AND_PASS`. The skipped matrix job and the
+single test skip are not reported as full-suite verification.
+
+The PR remains a Draft, and Preview was not merged or released. The report-only
+follow-up uses `[skip ci]`; production and test code were already validated at
+code candidate `9a2b5337b`.
 
 ## G. Final Status
 
@@ -227,8 +251,8 @@ above remains tied to code candidate `1c7285f7`.
 GOAL: LEGACY_RETIREMENT_AND_REPOSITORY_SIMPLIFICATION
 
 BASELINE: c1245a02f8f9d4b6e1102eabac230b657d85de9b
-FINAL_CODE_HEAD: 1c7285f76f2c0d26e051e9b5770473ccaff8c04b
-FINAL_CODE_TREE: 0f0a6de27d22a111725adcf2d857a382e4d6a059
+FINAL_CODE_HEAD: 9a2b5337b7632618c84a5260b542497b3cc92764
+FINAL_CODE_TREE: 07e9018bcfb71e67dc7ee7ae3d805787e62f6cdb
 
 V13_RETIREMENT_OVERLAP: PRESENT; OPEN V13 CANDIDATE; REGENERATE GENERATED ARTIFACTS AT INTEGRATION
 JSON_AUTHORITY_COMPATIBILITY: REMOVED
@@ -251,15 +275,15 @@ TYPECHECK: PASS
 BUILD: PASS
 PLUGIN_VALIDATOR: PASS
 GENERATED_ARTIFACTS: PASS
-FOCUSED_TESTS: PASS 520/520 LOCALLY; CI 519/520 DUE WINDOWS PROCESS-QUERY TIMEOUT
+FOCUSED_TESTS: PASS; FINAL CI 592 SELECTED, 591 PASS, 1 SKIP, 0 FAIL
 FULL_REGRESSION: NOT_RUN (NOT REQUIRED BY IMPACT SELECTOR)
-CI_RUNS: 3 WORKFLOW-RUN ATTEMPTS
-CI_STATUS: BLOCKED BY UNCHANGED WINDOWS PROCESS-QUERY TIMEOUT
+CI_RUNS: 3 WORKFLOW RUNS / 5 ATTEMPTS
+CI_STATUS: PASS (RUN 44846719592)
 
 PUSHED: YES
 PR_CREATED: YES, DRAFT #108
 PREVIEW_MERGED: NO
 RELEASED: NO
 
-FINAL_VERDICT: BLOCKED
+FINAL_VERDICT: PASS
 ```
