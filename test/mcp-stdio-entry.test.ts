@@ -167,6 +167,42 @@ test("compiled stdio entry speaks pure JSON-RPC on stdout and diagnostics on std
   } catch (error) { preserveFailedInstall(profile); failed = true; throw error; }
 });
 
+test("thin MCP control transport does not construct a local SQLite Manager", { timeout: 30_000 }, (t) => {
+  if (process.platform !== "win32") return t.skip("Windows-only Executor control pipe");
+  const profile = isolatedInstall("thin-entry");
+  const dataRoot = path.join(profile.localAppData, "CodexZCodeBridge", "state");
+  try {
+    const run = spawnSync(process.execPath, [MAIN_JS], {
+      input: PROTOCOL_MESSAGES,
+      encoding: "utf8",
+      env: isolatedEnvironment({ ZCODE_BRIDGE_MCP_TRANSPORT: "control" }, profile),
+      timeout: 20_000,
+    });
+    assert.equal(run.status, 0, `stderr: ${run.stderr}`);
+    const messages = run.stdout.split(/\r?\n/u).filter(Boolean)
+      .map((line) => JSON.parse(line) as { id?: number; result?: Record<string, unknown> });
+    assert.ok(messages.some((message) => message.id === 1 && message.result));
+    const toolsList = messages.find((message) => message.id === 2)?.result;
+    const toolNames = ((toolsList?.["tools"] as Array<{ name: string }> | undefined) ?? [])
+      .map((tool) => tool.name).sort();
+    assert.deepEqual(toolNames, [
+      "zcode_cancel", "zcode_clear_default_model", "zcode_continue", "zcode_default_model",
+      "zcode_doctor", "zcode_events", "zcode_feedback", "zcode_interaction_reply",
+      "zcode_model_catalog", "zcode_result", "zcode_set_default_model", "zcode_status", "zcode_task",
+    ]);
+    const status = messages.find((message) => message.id === 3)?.result as {
+      isError?: boolean;
+      structuredContent?: { error?: { code?: string } };
+    } | undefined;
+    assert.equal(status?.isError, true);
+    assert.equal(status?.structuredContent?.error?.code, "EXECUTOR_UNAVAILABLE");
+    assert.match(run.stderr, /Executor control transport enabled/u);
+    assert.match(run.stderr, /thin stdio MCP server ready/u);
+    assert.doesNotMatch(run.stderr, /SQLITE_READY/u);
+    assert.equal(existsSync(path.join(dataRoot, "bridge.sqlite")), false);
+  } catch (error) { preserveFailedInstall(profile); failed = true; throw error; }
+});
+
 test("worker concurrency defaults to eight and rejects out-of-range configuration", () => {
   assert.deepEqual(resolveMaxConcurrentWorkers({}), { maxConcurrentWorkers: 8 });
   assert.deepEqual(resolveMaxConcurrentWorkers({ ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS: "3" }), {

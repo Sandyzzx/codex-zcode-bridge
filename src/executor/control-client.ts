@@ -8,11 +8,29 @@ export interface ExecutorControlClientOptions {
   readonly connectTimeoutMs?: number;
 }
 
+interface PendingRequest {
+  readonly method: ExecutorControlRequest["method"];
+  readonly resolve: (response: ExecutorControlResponse) => void;
+  readonly reject: (error: Error) => void;
+}
+
+function executorError(code: string): Error & { code: string } {
+  return Object.assign(new Error(code), { code });
+}
+
+function submissionUnknownCode(method: ExecutorControlRequest["method"]): string {
+  if (method === "createTask" || method === "continueTask" || method === "replyToInteraction") {
+    return "SUBMISSION_UNKNOWN";
+  }
+  if (method === "cancelTask") return "TASK_CANCEL_REQUESTED";
+  return "EXECUTOR_UNAVAILABLE";
+}
+
 export class ExecutorControlClient {
   readonly #pipeName: string;
   readonly #connectTimeoutMs: number;
   #socket: net.Socket | null = null;
-  #pending = new Map<string, { readonly resolve: (response: ExecutorControlResponse) => void; readonly reject: (error: Error) => void }>();
+  #pending = new Map<string, PendingRequest>();
 
   constructor(options: ExecutorControlClientOptions) {
     this.#pipeName = options.pipeName;
@@ -20,17 +38,17 @@ export class ExecutorControlClient {
   }
 
   async connect(): Promise<void> {
+    if (this.#socket && !this.#socket.destroyed) return;
     await new Promise<void>((resolve, reject) => {
       const socket = net.connect(this.#pipeName);
       const timer = setTimeout(() => {
         socket.destroy();
-        reject(new Error("EXECUTOR_UNAVAILABLE"));
+        reject(executorError("EXECUTOR_UNAVAILABLE"));
       }, this.#connectTimeoutMs);
       socket.once("connect", () => {
         clearTimeout(timer);
         this.#socket = socket;
         const decoder = createExecutorFrameDecoder();
-        decoder.setEncoding("utf8");
         socket.pipe(decoder);
         socket.resume();
         decoder.on("data", (chunk: Buffer) => {
@@ -47,25 +65,30 @@ export class ExecutorControlClient {
           }
         });
         decoder.on("error", (error) => {
-          this.#failPending("EXECUTOR_UNAVAILABLE");
+          this.#failPending(undefined, socket);
           socket.destroy(error);
         });
         socket.on("error", (error) => {
           this.#failPending("EXECUTOR_UNAVAILABLE");
           reject(error);
         });
-        socket.on("close", () => this.#failPending("EXECUTOR_UNAVAILABLE"));
+        socket.on("close", () => {
+          if (this.#socket === socket) this.#socket = null;
+          this.#failPending(undefined, socket);
+        });
         resolve();
       });
       socket.once("error", (error) => {
         clearTimeout(timer);
-        reject(error);
+        reject(Object.assign(executorError("EXECUTOR_UNAVAILABLE"), { cause: error }));
       });
     });
   }
 
   request(method: ExecutorControlRequest["method"], params: Record<string, unknown>, signal?: AbortSignal, idempotencyKey?: string): Promise<ExecutorControlResponse> {
-    if (!this.#socket || this.#socket.destroyed) return Promise.reject(new Error("EXECUTOR_UNAVAILABLE"));
+    if (!this.#socket || this.#socket.destroyed) {
+      return Promise.reject(executorError("EXECUTOR_UNAVAILABLE"));
+    }
     const request: ExecutorControlRequest = {
       protocol_version: EXECUTOR_CONTROL_PROTOCOL_VERSION,
       request_id: randomUUID(),
@@ -76,11 +99,11 @@ export class ExecutorControlClient {
       ...(idempotencyKey ? { idempotency_key: idempotencyKey } : {}),
     };
     const attempt = new Promise<ExecutorControlResponse>((resolve, reject) => {
-      this.#pending.set(request.request_id, { resolve, reject });
+      this.#pending.set(request.request_id, { method, resolve, reject });
       this.#socket!.write(encodeExecutorFrame(request), (error) => {
         if (error) {
           this.#pending.delete(request.request_id);
-          reject(new Error("SUBMISSION_UNKNOWN"));
+          reject(executorError(submissionUnknownCode(method)));
         }
       });
     });
@@ -89,22 +112,24 @@ export class ExecutorControlClient {
       const pending = this.#pending.get(request.request_id);
       if (pending) {
         this.#pending.delete(request.request_id);
-        pending.reject(new Error("REQUEST_CANCELLED"));
+        pending.reject(executorError("REQUEST_CANCELLED"));
       }
     }, { once: true });
     return attempt;
   }
 
-  #failPending(code: string): void {
+  #failPending(code: string | undefined, socket?: net.Socket): void {
     for (const [requestId, pending] of this.#pending) {
+      if (socket && this.#socket !== null && this.#socket !== socket) continue;
       this.#pending.delete(requestId);
-      pending.reject(new Error(code));
+      pending.reject(executorError(code ?? submissionUnknownCode(pending.method)));
     }
   }
 
   close(): void {
-    this.#socket?.destroy();
+    const socket = this.#socket;
     this.#socket = null;
     this.#failPending("EXECUTOR_UNAVAILABLE");
+    socket?.destroy();
   }
 }

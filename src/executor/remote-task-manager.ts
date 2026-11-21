@@ -22,6 +22,7 @@ export class RemoteTaskManager implements ProgressTaskManager {
   }
 
   async #call(method: Parameters<ExecutorControlClient["request"]>[0], params: Record<string, unknown>): Promise<Record<string, unknown>> {
+    await this.#client.connect();
     const { idempotency_key: idempotencyKey, ...transportParams } = params;
     const response = await this.#client.request(
       method,

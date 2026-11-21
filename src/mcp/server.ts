@@ -107,6 +107,10 @@ async function runTool<T>(operation: () => Promise<T>): Promise<CallToolResult> 
       return errorResult(error.code, error.message);
     }
     if (error instanceof BridgeError) return errorResult(error.code.toUpperCase(), error.message);
+    if (error instanceof Error && "code" in error && typeof error.code === "string"
+      && /^[A-Z][A-Z0-9_]{2,63}$/u.test(error.code)) {
+      return errorResult(error.code, error.message);
+    }
     throw error;
   }
 }

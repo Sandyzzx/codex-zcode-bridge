@@ -1,4 +1,5 @@
 import { MAX_WORKER_RESULT_FRAME_BYTES, canonicalTaskResult, submissionFailure, assertWorkerResultEnvelope } from "../result-contract.mjs";
+import { EXECUTOR_LEASE_FILE } from "../executor/lease.js";
 /**
  * SQLite lifecycle composition shared by production startup and isolated tests.
  */
@@ -1124,6 +1125,7 @@ function assertFreshBootstrapRootEmpty(root: string, databaseFileName: string): 
   const allowed = new Set([
     `${databaseFileName}.bootstrap-pending.json`,
     `${databaseFileName}.bootstrap.lock`,
+    EXECUTOR_LEASE_FILE,
   ]);
   for (const name of readdirSync(root)) {
     if (!allowed.has(name)) throw new LifecycleGateError("sqlite_existing_state_incomplete", `unexpected SQLite root entry: ${name}`);

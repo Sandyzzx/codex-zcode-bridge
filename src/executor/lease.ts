@@ -1,4 +1,4 @@
-import { closeSync, existsSync, lstatSync, openSync, readFileSync, renameSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, existsSync, lstatSync, openSync, readdirSync, readFileSync, renameSync, unlinkSync, writeSync } from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { PROCESS_IDENTITY_VERSION, type ProcessIdentity, type ProcessProbe } from "../runtime/process-probe.js";
@@ -6,6 +6,8 @@ import { PROCESS_IDENTITY_VERSION, type ProcessIdentity, type ProcessProbe } fro
 export const EXECUTOR_LEASE_PROTOCOL_VERSION = 1 as const;
 export const EXECUTOR_LEASE_FILE = "executor-lease.json";
 export const EXECUTOR_LEASE_RELEASED_FILE = "executor-lease.released.json";
+export const EXECUTOR_LEASE_CLEARED_FILE = "executor-lease.cleared.json";
+export const EXECUTOR_UNLEASED_TRANSITION_ENV = "ZCODE_BRIDGE_ACCEPT_UNLEASED_AUTHORITY";
 const LEASE_LIMIT_BYTES = 64 * 1024;
 
 export type ExecutorOwnerKind = "executor" | "legacy_mcp";
@@ -46,6 +48,8 @@ export class ExecutorLeaseError extends Error {
       | "EXECUTOR_LEASE_ROOT_UNSAFE"
       | "EXECUTOR_LEASE_MALFORMED"
       | "EXECUTOR_LEASE_OWNER_UNKNOWN"
+      | "EXECUTOR_LEASE_OWNER_ACTIVE"
+      | "EXECUTOR_LEASE_TRANSITION_REQUIRED"
       | "EXECUTOR_LEASE_RELEASE_UNKNOWN"
       | "EXECUTOR_HEARTBEAT_FAILED",
     message: string = code,
@@ -67,13 +71,56 @@ export interface ExecutorLeaseInput {
 }
 
 export interface ExecutorLeaseHandle {
-    readonly lease: ExecutorLeaseRecord;
-  heartbeat(): Promise<void>;
+  readonly lease: ExecutorLeaseRecord;
+  heartbeat(options?: { readonly onUnknown?: (error: Error) => void }): Promise<void>;
+  assertOwned(): Promise<void>;
   release(options?: { readonly markStale?: boolean }): Promise<void>;
 }
 
+export interface ExecutorLeaseClearInput {
+  readonly authorityRoot: string;
+  readonly processProbe: ProcessProbe;
+  readonly now?: () => number;
+}
+
+/**
+ * A historical MCP Host has no Lease file. Refuse to infer that an existing
+ * SQLite Authority is unowned; the operator must stop the old Host, verify no
+ * owner remains, and explicitly acknowledge the one-time transition.
+ */
+export function assertExecutorLeaseTransition(input: {
+  readonly authorityRoot: string;
+  readonly databaseFileName: string;
+  readonly acceptUnleasedExistingRoot: boolean;
+}): void {
+  const root = ensurePlainRoot(input.authorityRoot);
+  if (existsSync(path.join(root, EXECUTOR_LEASE_FILE))) return;
+  const leaseHistory = hasValidLeaseHistory(root);
+  if (leaseHistory || !existsSync(path.join(root, input.databaseFileName))) return;
+  if (input.acceptUnleasedExistingRoot) return;
+  throw new ExecutorLeaseError(
+    "EXECUTOR_LEASE_TRANSITION_REQUIRED",
+    `existing Authority has no Lease history; stop and verify the old MCP Host, then set ${EXECUTOR_UNLEASED_TRANSITION_ENV}=1 for this transition`,
+  );
+}
+
+function hasValidLeaseHistory(root: string): boolean {
+  const candidates = [
+    EXECUTOR_LEASE_RELEASED_FILE,
+    ...readdirSync(root).filter((name) => name.startsWith(`${EXECUTOR_LEASE_CLEARED_FILE}.`)),
+  ];
+  return candidates.some((name) => {
+    try {
+      const record = readLease(path.join(root, name));
+      return record.state === "released" || record.state === "stale_unknown";
+    } catch {
+      return false;
+    }
+  });
+}
+
 function canonicalJson(value: unknown): string {
-  return JSON.stringify(sortObject(value));
+  return JSON.stringify(sortObject(value)) ?? "null";
 }
 
 function sortObject(value: unknown): unknown {
@@ -81,12 +128,12 @@ function sortObject(value: unknown): unknown {
   if (value === null || typeof value !== "object" || value instanceof Date) return value;
   if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) return value;
   return Object.fromEntries(Object.entries(value as Record<string, unknown>)
-    .sort(([left], [right]) => left.localeCompare(right))
+    .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
     .map(([key, item]) => [key, sortObject(item)]));
 }
 
 export function authorityRootDigest(root: string): string {
-  return createHash("sha256").update(path.resolve(root).toLocaleLowerCase("en-US"), "utf8").digest("hex");
+  return createHash("sha256").update(path.resolve(root).toLowerCase(), "utf8").digest("hex");
 }
 
 function ownerFromIdentity(ownerKind: ExecutorOwnerKind, identity: ProcessIdentity): ExecutorLeaseOwner {
@@ -135,14 +182,14 @@ function readLease(file: string): ExecutorLeaseRecord {
     || typeof record.owner.start_fingerprint !== "string" || record.owner.fingerprint_precision !== "exact"
     || record.owner.identity_version !== PROCESS_IDENTITY_VERSION
     || typeof record.owner.platform !== "string" || typeof record.owner.captured_at !== "string"
-    || !/^[0-9a-f]{64}$/u.test(record.bridge_sha256 ?? "") || !/^[0-9a-f]{64}$/u.test(record.worker_sha256 ?? "")
+    || !/^[0-9a-f]{64}$/iu.test(record.bridge_sha256 ?? "") || !/^[0-9a-f]{64}$/iu.test(record.worker_sha256 ?? "")
     || typeof record.started_at !== "string" || typeof record.heartbeat_at !== "string"
     || !["active", "stale_unknown", "released"].includes(record.state ?? "")
     || typeof record.lease_digest !== "string" || !/^[0-9a-f]{64}$/u.test(record.lease_digest)) {
     throw new ExecutorLeaseError("EXECUTOR_LEASE_MALFORMED");
   }
-  const { lease_digest: _leaseDigest, ...body } = record as ExecutorLeaseRecord;
-  if (leaseDigest(body) !== record.lease_digest) throw new ExecutorLeaseError("EXECUTOR_LEASE_MALFORMED");
+  const { lease_digest: recordedDigest, ...body } = record as ExecutorLeaseRecord;
+  if (recordedDigest !== leaseDigest(body)) throw new ExecutorLeaseError("EXECUTOR_LEASE_MALFORMED");
   return { ...body, lease_digest: record.lease_digest };
 }
 
@@ -165,13 +212,20 @@ async function probeOwner(owner: ExecutorLeaseOwner, processProbe: ProcessProbe)
 
 function writeLeaseFile(file: string, record: ExecutorLeaseRecord): void {
   const temporary = `${file}.new-${randomUUID()}`;
+  const payload = canonicalJson(record);
   let fd: number | undefined;
   try {
     fd = openSync(temporary, "wx", 0o600);
-    writeSync(fd, canonicalJson(record), undefined, "utf8");
+    writeSync(fd, payload, undefined, "utf8");
     closeSync(fd);
     fd = undefined;
     renameSync(temporary, file);
+    // A completed rename can still leave an unknown state if the target is
+    // unreadable or was replaced by another writer during the update.
+    const observed = readLease(file);
+    if (observed.lease_id !== record.lease_id || observed.lease_digest !== record.lease_digest) {
+      throw new Error("lease_update_readback_mismatch");
+    }
   } catch (error) {
     if (fd !== undefined) closeSync(fd);
     try { if (existsSync(temporary)) unlinkSync(temporary); } catch { /* release result is unknown */ }
@@ -180,10 +234,33 @@ function writeLeaseFile(file: string, record: ExecutorLeaseRecord): void {
 }
 
 function updateState(file: string, lease: ExecutorLeaseRecord, state: ExecutorLeaseState, now: () => number): ExecutorLeaseRecord {
-  const body = { ...lease, state, heartbeat_at: new Date(now()).toISOString() };
+  const { lease_digest: _previousDigest, ...previous } = lease;
+  const body = { ...previous, state, heartbeat_at: new Date(now()).toISOString() };
   const updated = { ...body, lease_digest: leaseDigest(body) };
   writeLeaseFile(file, updated);
   return updated;
+}
+
+function releaseLeaseFile(file: string, lease: ExecutorLeaseRecord, now: () => number): void {
+  const released = updateState(file, lease, "released", now);
+  const archive = path.join(path.dirname(file), EXECUTOR_LEASE_RELEASED_FILE);
+  try {
+    renameSync(file, archive);
+    return;
+  } catch {
+    // A stale archive must not make the active lease path look like a
+    // successful release. Persist the released record at the archive path
+    // first, then remove the active path. Any failure remains fail closed.
+  }
+  try {
+    writeLeaseFile(archive, released);
+    unlinkSync(file);
+  } catch (error) {
+    throw new ExecutorLeaseError(
+      "EXECUTOR_LEASE_RELEASE_UNKNOWN",
+      error instanceof Error ? error.message : String(error),
+    );
+  }
 }
 
 export async function acquireExecutorLease(input: ExecutorLeaseInput): Promise<ExecutorLeaseHandle> {
@@ -196,19 +273,23 @@ export async function acquireExecutorLease(input: ExecutorLeaseInput): Promise<E
   }
   if (existsSync(file)) {
     const existing = readLease(file);
-    const ownerState = existing.state === "released" ? "exited" : await probeOwner(existing.owner, input.processProbe);
+    const ownerState = await probeOwner(existing.owner, input.processProbe);
     if (existing.state === "active" && ownerState === "alive") {
       throw new ExecutorLeaseError("EXECUTOR_LEASE_OWNER_UNKNOWN", "EXECUTOR_ALREADY_ACTIVE");
     }
-    if (ownerState !== "exited") {
-      const reason = existing.state === "active" && ownerState === "unknown"
-        ? "owner_probe_unknown"
-        : "stale_or_released_owner_not_proven_exited";
-      try { updateState(file, existing, "stale_unknown", now); } catch { /* The malformed/unreleasable active lease remains fail-closed. */ }
-      throw new ExecutorLeaseError("EXECUTOR_LEASE_OWNER_UNKNOWN", reason);
+    const reason = ownerState === "unknown"
+      ? "owner_probe_unknown"
+      : existing.state === "released"
+        ? "unpublished_released_lease_requires_clear"
+        : ownerState === "alive"
+          ? "non_active_lease_owner_still_alive"
+          : "owner_exited_requires_explicit_clear";
+    try {
+      updateState(file, existing, "stale_unknown", now);
+    } catch {
+      // The malformed or unreleasable active lease remains fail-closed.
     }
-    const released = updateState(file, existing, "released", now);
-    renameSync(file, path.join(root, EXECUTOR_LEASE_RELEASED_FILE));
+    throw new ExecutorLeaseError("EXECUTOR_LEASE_OWNER_UNKNOWN", reason);
   }
 
   const at = new Date(now()).toISOString();
@@ -232,6 +313,10 @@ export async function acquireExecutorLease(input: ExecutorLeaseInput): Promise<E
     } finally {
       closeSync(fd);
     }
+    const observed = readLease(file);
+    if (observed.lease_id !== lease.lease_id || observed.lease_digest !== lease.lease_digest) {
+      throw new Error("lease_create_readback_mismatch");
+    }
   } catch {
     // A concurrent winner or a failed durable create leaves this process
     // without Store ownership; the caller must not retry automatically.
@@ -239,12 +324,24 @@ export async function acquireExecutorLease(input: ExecutorLeaseInput): Promise<E
   }
   const handle: ExecutorLeaseHandle = {
     lease,
-    async heartbeat() {
+    async heartbeat(heartbeatOptions = {}) {
+      try {
+        const current = readLease(file);
+        if (current.state !== "active" || current.lease_id !== lease.lease_id) {
+          throw new ExecutorLeaseError("EXECUTOR_HEARTBEAT_FAILED", "executor lease no longer belongs to this owner");
+        }
+        updateState(file, current, "active", now);
+      } catch (error) {
+        const failure = error instanceof Error ? error : new Error(String(error));
+        heartbeatOptions.onUnknown?.(failure);
+        throw failure;
+      }
+    },
+    async assertOwned() {
       const current = readLease(file);
       if (current.state !== "active" || current.lease_id !== lease.lease_id) {
         throw new ExecutorLeaseError("EXECUTOR_HEARTBEAT_FAILED", "executor lease no longer belongs to this owner");
       }
-      updateState(file, current, "active", now);
     },
     async release(options = {}) {
       const current = readLease(file);
@@ -252,9 +349,43 @@ export async function acquireExecutorLease(input: ExecutorLeaseInput): Promise<E
         throw new ExecutorLeaseError("EXECUTOR_LEASE_RELEASE_UNKNOWN", "executor lease identity changed before release");
       }
       const state = options.markStale === true ? "stale_unknown" : "released";
-      updateState(file, current, state, now);
-      if (state === "released") renameSync(file, path.join(root, EXECUTOR_LEASE_RELEASED_FILE));
+      if (state === "stale_unknown") {
+        updateState(file, current, state, now);
+      } else {
+        releaseLeaseFile(file, current, now);
+      }
     },
   };
   return handle;
+}
+
+/**
+ * Explicit operator recovery for an abandoned lease. PR 2 intentionally does
+ * not expose a management CLI; this internal primitive preserves the same
+ * exact-owner guard that the future `executor lease clear` command must use.
+ */
+export async function clearExecutorLease(input: ExecutorLeaseClearInput): Promise<ExecutorLeaseRecord> {
+  const root = ensurePlainRoot(input.authorityRoot);
+  const file = path.join(root, EXECUTOR_LEASE_FILE);
+  if (!existsSync(file)) throw new ExecutorLeaseError("EXECUTOR_LEASE_MALFORMED", "executor lease is absent");
+  const lease = readLease(file);
+  const ownerState = await probeOwner(lease.owner, input.processProbe);
+  if (ownerState === "alive") {
+    throw new ExecutorLeaseError("EXECUTOR_LEASE_OWNER_ACTIVE", "refusing to clear an exact live executor owner");
+  }
+  if (ownerState !== "exited") {
+    throw new ExecutorLeaseError("EXECUTOR_LEASE_OWNER_UNKNOWN", "refusing to clear an owner whose exit is not proven");
+  }
+  const now = input.now ?? Date.now;
+  const stale = updateState(file, lease, "stale_unknown", now);
+  const archive = path.join(root, `${EXECUTOR_LEASE_CLEARED_FILE}.${lease.lease_id}`);
+  try {
+    renameSync(file, archive);
+  } catch (error) {
+    throw new ExecutorLeaseError(
+      "EXECUTOR_LEASE_RELEASE_UNKNOWN",
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+  return stale;
 }

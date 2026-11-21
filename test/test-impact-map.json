@@ -342,6 +342,17 @@
       ]
     },
     {
+      "file": "test/executor-process.test.ts",
+      "type": "Integration",
+      "gate": "T2",
+      "domains": [
+        "manager-lifecycle",
+        "mcp-host",
+        "worker-launch",
+        "process-cleanup-and-locks"
+      ]
+    },
+    {
       "file": "test/batch2-evidence.test.ts",
       "type": "Integration",
       "gate": "T2",

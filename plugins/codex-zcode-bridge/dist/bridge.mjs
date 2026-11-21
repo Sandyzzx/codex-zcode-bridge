@@ -3951,647 +3951,257 @@ var init_trusted_local_deployment = __esm({
   }
 });
 
-// src/runtime/start-plan-private-lease.ts
-function validBinding(value) {
-  return !!value && textFields.every((key) => typeof value[key] === "string" && value[key].length > 0) && numberFields.every((key) => Number.isSafeInteger(value[key]) && value[key] > 0);
-}
-function sameBinding(left, right) {
-  return validBinding(left) && validBinding(right) && textFields.every((key) => left[key] === right[key]) && numberFields.every((key) => left[key] === right[key]);
-}
-var textFields, numberFields, PrivateCredentialLease;
-var init_start_plan_private_lease = __esm({
-  "src/runtime/start-plan-private-lease.ts"() {
-    "use strict";
-    textFields = ["account", "provider", "model", "task", "operation", "claim", "session", "turn", "creation"];
-    numberFields = ["attempt", "generation", "pid"];
-    PrivateCredentialLease = class {
-      #binding;
-      #deliveryDeadline;
-      #credentialExpiresAt;
-      #now;
-      #credential;
-      #state = "active";
-      /**
-       * `credentialExpiresAt` is the credential's actual usability deadline.
-       * `deliveryDeadline` only bounds the one-shot private-channel delivery and
-       * defaults to the old single-deadline behaviour for existing callers.
-       */
-      constructor(binding, credential, credentialExpiresAt, now = Date.now, deliveryDeadline) {
-        const createdAt = now();
-        const boundedDeliveryDeadline = deliveryDeadline ?? Math.min(credentialExpiresAt, createdAt + 6e4);
-        if (!validBinding(binding) || typeof credential !== "string" || !credential || !Number.isFinite(credentialExpiresAt) || !Number.isFinite(createdAt) || credentialExpiresAt <= createdAt || !Number.isFinite(boundedDeliveryDeadline) || boundedDeliveryDeadline <= createdAt || boundedDeliveryDeadline - createdAt > 6e4 || boundedDeliveryDeadline > credentialExpiresAt) {
-          throw new Error("credential_lease_invalid");
-        }
-        this.#binding = Object.freeze({ ...binding });
-        this.#credential = credential;
-        this.#deliveryDeadline = boundedDeliveryDeadline;
-        this.#credentialExpiresAt = credentialExpiresAt;
-        this.#now = now;
-      }
-      revoke() {
-        this.#state = "revoked";
-        this.#credential = null;
-      }
-      /** Synchronous claim check before redeem; an already-claimed lease belongs
-       * to its in-flight delivery and must not be revoked by a competing call. */
-      isActive() {
-        return this.#state === "active";
-      }
-      async redeem(requested, verifyWorker, deliver, signal) {
-        if (this.#state !== "active") throw new Error("credential_lease_unavailable");
-        this.#state = "checking";
-        try {
-          if (signal.aborted || !Number.isFinite(this.#now()) || this.#now() >= this.#deliveryDeadline || this.#now() >= this.#credentialExpiresAt || !sameBinding(this.#binding, requested)) throw new Error("credential_lease_rejected");
-          if (!await verifyWorker(this.#binding)) throw new Error("credential_lease_rejected");
-          if (this.#state !== "checking" || signal.aborted || !Number.isFinite(this.#now()) || this.#now() >= this.#deliveryDeadline || this.#now() >= this.#credentialExpiresAt || !this.#credential) {
-            throw new Error("credential_lease_rejected");
-          }
-          this.#state = "delivering";
-          const credential = this.#credential;
-          this.#credential = null;
-          await deliver(credential, this.#credentialExpiresAt);
-          if (signal.aborted || this.#state !== "delivering") throw new Error("credential_delivery_unknown");
-          this.#state = "consumed";
-        } catch {
-          this.revoke();
-          throw new Error("credential_lease_unavailable");
-        }
-      }
-    };
-  }
-});
-
-// src/runtime/start-plan-production-auth.ts
-var start_plan_production_auth_exports = {};
-__export(start_plan_production_auth_exports, {
-  STARTPLAN_ENTITLEMENT_FACTS_ISSUE_PREFIX: () => STARTPLAN_ENTITLEMENT_FACTS_ISSUE_PREFIX,
-  StartPlanBillingEntitlement: () => StartPlanBillingEntitlement,
-  StartPlanEntitlementRejectionError: () => StartPlanEntitlementRejectionError,
-  classifyEntitlementFailure: () => classifyEntitlementFailure,
-  createProductionStartPlanAuth: () => createProductionStartPlanAuth,
-  formatStartPlanEntitlementFailureFactsIssue: () => formatStartPlanEntitlementFailureFactsIssue,
-  normalizeOfficialStartPlanAuthentication: () => normalizeOfficialStartPlanAuthentication,
-  readOfficialCliVersion: () => readOfficialCliVersion,
-  readStartPlanEntitlementFailureFacts: () => readStartPlanEntitlementFailureFacts
-});
-import { spawn as spawn4 } from "node:child_process";
-import { createHash as createHash8 } from "node:crypto";
-import { version as readOsVersion } from "node:os";
+// src/executor/lease.ts
+import { closeSync as closeSync3, existsSync as existsSync8, lstatSync as lstatSync2, openSync as openSync3, readdirSync, readFileSync as readFileSync9, renameSync as renameSync2, unlinkSync as unlinkSync2, writeSync } from "node:fs";
 import path16 from "node:path";
-function isRecord6(value) {
-  return !!value && typeof value === "object" && !Array.isArray(value);
+import { createHash as createHash8, randomUUID as randomUUID3 } from "node:crypto";
+function assertExecutorLeaseTransition(input) {
+  const root = ensurePlainRoot(input.authorityRoot);
+  if (existsSync8(path16.join(root, EXECUTOR_LEASE_FILE))) return;
+  const leaseHistory = hasValidLeaseHistory(root);
+  if (leaseHistory || !existsSync8(path16.join(root, input.databaseFileName))) return;
+  if (input.acceptUnleasedExistingRoot) return;
+  throw new ExecutorLeaseError(
+    "EXECUTOR_LEASE_TRANSITION_REQUIRED",
+    `existing Authority has no Lease history; stop and verify the old MCP Host, then set ${EXECUTOR_UNLEASED_TRANSITION_ENV}=1 for this transition`
+  );
 }
-function normalizeOfficialStartPlanAuthentication(value) {
-  if (!isRecord6(value)) return null;
-  const accountIdentity = typeof value.accountIdentity === "string" ? value.accountIdentity.trim() : "";
-  const requestCredential = typeof value.requestCredential === "string" ? value.requestCredential.trim() : "";
-  const deviceMid = typeof value.deviceMid === "string" ? value.deviceMid.trim() : "";
-  const sessionRevision = value.sessionRevision === null ? null : typeof value.sessionRevision === "string" && value.sessionRevision.trim() ? value.sessionRevision : void 0;
-  const credentialExpiresAt = value.credentialExpiresAt === null ? null : typeof value.credentialExpiresAt === "number" && Number.isFinite(value.credentialExpiresAt) && value.credentialExpiresAt > 0 ? value.credentialExpiresAt : void 0;
-  if (!accountIdentity || !requestCredential || !deviceMid || sessionRevision === void 0 || credentialExpiresAt === void 0) return null;
-  return Object.freeze({
-    accountIdentity,
-    sessionRevision,
-    requestCredential,
-    credentialExpiresAt,
-    deviceMid
-  });
-}
-function asOfficialBillingEnvelope(value) {
-  if (!isRecord6(value)) return null;
-  const data = isRecord6(value.data) ? value.data : void 0;
-  return {
-    success: value.success,
-    code: value.code,
-    msg: value.msg,
-    ...data ? { data: {
-      plans: data.plans,
-      balances: data.balances,
-      server_time: data.server_time
-    } } : {}
-  };
-}
-function isSuccessfulBusinessEnvelope(envelope) {
-  return envelope.success !== false && (envelope.code === void 0 || envelope.code === 0 || envelope.code === 200);
-}
-function stringKeyedArray(value) {
-  return Array.isArray(value) ? value.filter(isRecord6) : [];
-}
-function isActiveStartPlan(plan) {
-  const status = typeof plan.status === "string" ? plan.status.trim().toLowerCase() : "";
-  const planId = typeof plan.plan_id === "string" ? plan.plan_id.trim().toLowerCase() : "";
-  const name = typeof plan.name === "string" ? plan.name.trim().toLowerCase() : "";
-  const startPlanIdentity = planId.includes("start-plan") || planId.includes("start plan") || name.includes("start-plan") || name.includes("start plan");
-  return status === "active" && startPlanIdentity;
-}
-function activeStartPlans(envelope) {
-  return stringKeyedArray(envelope.data?.plans).filter(isActiveStartPlan);
-}
-function hasActiveStartPlan(envelope) {
-  return activeStartPlans(envelope).length > 0;
-}
-function startPlanBalanceModelIds(balances) {
-  const seen = /* @__PURE__ */ new Set();
-  const models = [];
-  for (const balance of balances) {
-    const capabilities = Array.isArray(balance.capabilities) ? balance.capabilities : [];
-    const capabilityModels = capabilities.flatMap((capability) => {
-      const raw = typeof capability === "string" ? capability.trim().toLowerCase() : "";
-      return raw.startsWith("model:") ? [raw.slice(6).trim()] : [];
-    }).filter(Boolean);
-    const candidates = capabilityModels.length > 0 ? capabilityModels : typeof balance.show_name === "string" ? [balance.show_name.trim().toLowerCase()] : [];
-    for (const model of candidates) {
-      if (!model || seen.has(model)) continue;
-      seen.add(model);
-      models.push(model);
-    }
-  }
-  return models;
-}
-function readIdentifier(value) {
-  return typeof value === "string" ? value.trim() : "";
-}
-function balanceBelongsToPlan(balance, plan) {
-  const balanceUserPlanId = readIdentifier(balance.user_plan_id);
-  const planUserPlanId = readIdentifier(plan.user_plan_id);
-  if (balanceUserPlanId && planUserPlanId) return balanceUserPlanId === planUserPlanId;
-  const balancePlanId = readIdentifier(balance.plan_id);
-  const planId = readIdentifier(plan.plan_id);
-  return Boolean(balancePlanId && planId && balancePlanId === planId);
-}
-function requestedModelBalances(balances, requestedModel) {
-  return balances.filter((balance) => {
-    const capabilities = Array.isArray(balance.capabilities) ? balance.capabilities : [];
-    const capabilityModels = capabilities.flatMap((capability) => {
-      const raw = typeof capability === "string" ? capability.trim().toLowerCase() : "";
-      return raw.startsWith("model:") ? [raw.slice(6).trim()] : [];
-    }).filter(Boolean);
-    const candidates = capabilityModels.length > 0 ? capabilityModels : typeof balance.show_name === "string" ? [balance.show_name.trim().toLowerCase()] : [];
-    return candidates.includes(requestedModel);
-  });
-}
-function numericUnit(value) {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string" && value.trim() && Number.isFinite(Number(value))) return Number(value);
-  return null;
-}
-function finiteEpochSeconds(value) {
-  const number4 = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : NaN;
-  return Number.isFinite(number4) && number4 >= 0 ? number4 : void 0;
-}
-function normalizeBillingAvailabilityEnvelope(envelope, responseTimeSeconds2) {
-  const data = envelope.data;
-  if (!data) return envelope;
-  const nowSeconds = responseTimeSeconds2 ?? (typeof data.server_time === "number" && Number.isFinite(data.server_time) && data.server_time >= 0 ? data.server_time : void 0) ?? Date.now() / 1e3;
-  const plans = stringKeyedArray(data.plans).map((plan) => {
-    const status = typeof plan.status === "string" ? plan.status.trim().toLowerCase() : "";
-    const end = finiteEpochSeconds(plan.ends_at);
-    return status === "active" && end !== void 0 && end > 0 && end <= nowSeconds ? { ...plan, status: "expired" } : plan;
-  });
-  const balances = stringKeyedArray(data.balances).filter((balance) => {
-    const userPlanId = typeof balance.user_plan_id === "string" ? balance.user_plan_id : "";
-    const planId = typeof balance.plan_id === "string" ? balance.plan_id : "";
-    const owners = plans.filter((plan) => {
-      const ownerUserPlanId = typeof plan.user_plan_id === "string" ? plan.user_plan_id : "";
-      const ownerPlanId = typeof plan.plan_id === "string" ? plan.plan_id : "";
-      return userPlanId && ownerUserPlanId ? userPlanId === ownerUserPlanId : planId === ownerPlanId;
-    });
-    return owners.length === 0 || owners.some((plan) => typeof plan.status === "string" && plan.status.trim().toLowerCase() !== "expired");
-  });
-  return {
-    ...envelope,
-    data: {
-      ...data,
-      plans,
-      balances
-    }
-  };
-}
-function hasPendingActivation(envelope) {
-  const data = envelope.data;
-  if (!data) return false;
-  const nowSeconds = typeof data.server_time === "number" && Number.isFinite(data.server_time) && data.server_time >= 0 ? data.server_time : Date.now() / 1e3;
-  const effectiveTimes = activeStartPlans(envelope).flatMap((plan) => {
-    const entitlements = stringKeyedArray(plan.entitlements);
-    return entitlements.length > 0 ? entitlements.map((entry) => entry.effective_at) : [plan.starts_at];
-  }).map((value) => value === null || value === void 0 || value === "" ? void 0 : Number(value));
-  return effectiveTimes.length > 0 && effectiveTimes.every((value) => value !== void 0 && Number.isFinite(value) && value > nowSeconds);
-}
-function extractProviderCode(value) {
-  if (!value) return void 0;
-  const error2 = isRecord6(value.error) ? value.error : void 0;
+function hasValidLeaseHistory(root) {
   const candidates = [
-    value.providerCode,
-    error2?.providerCode,
-    error2 && isRecord6(error2) ? error2.code : void 0,
-    value.code
+    EXECUTOR_LEASE_RELEASED_FILE,
+    ...readdirSync(root).filter((name) => name.startsWith(`${EXECUTOR_LEASE_CLEARED_FILE}.`))
   ];
-  const raw = candidates.find((candidate) => typeof candidate === "number" || typeof candidate === "string");
-  const code = typeof raw === "number" || typeof raw === "string" ? String(raw).trim() : "";
-  return /^[0-9A-Za-z_.-]{1,32}$/u.test(code) ? code : void 0;
-}
-function classifyEntitlementFailure(input) {
-  const code = input.providerCode?.trim();
-  const providerCode = code ? code : void 0;
-  if (code === "3007") return { status: "captcha_required", reason: "provider requested captcha verification", providerCode, failureClass: "captcha_required" };
-  if (code === "3012") return { status: "unusual_activity", reason: "provider blocked this identity due to unusual activity", providerCode, failureClass: "unusual_activity" };
-  if (code === "3001") return { status: "billing_parameter_error", reason: "billing request parameters were rejected", providerCode, failureClass: "billing_parameter_error" };
-  if (input.statusCode === 401) return { status: "unauthorized", reason: "credential was rejected as unauthenticated", failureClass: "unauthorized" };
-  if (input.statusCode === 403) return { status: "forbidden", reason: "credential is authenticated but forbidden from this plan or model", failureClass: "forbidden" };
-  const rawEnvelope = input.statusCode === 200 ? asOfficialBillingEnvelope(input.body) : void 0;
-  const envelope = rawEnvelope ? normalizeBillingAvailabilityEnvelope(rawEnvelope, input.responseTimeSeconds) : void 0;
-  const activePlans = envelope ? activeStartPlans(envelope) : [];
-  if (envelope && isSuccessfulBusinessEnvelope(envelope) && activePlans.length > 0) {
-    const balances = stringKeyedArray(envelope.data?.balances);
-    const attributedBalances = balances.filter((balance) => activePlans.some((plan) => balanceBelongsToPlan(balance, plan)));
-    const models = startPlanBalanceModelIds(attributedBalances);
-    const requested = input.model?.trim().toLowerCase();
-    if (!requested) {
-      return { status: "unavailable", reason: "billing response had no requested model identity to authorize", failureClass: "response_malformed" };
-    }
-    if (hasPendingActivation(envelope)) {
-      return {
-        status: "unavailable",
-        reason: "active Start Plan has not taken effect",
-        failureClass: "activation_pending"
-      };
-    }
-    if (models.length === 0) {
-      return {
-        status: "unavailable",
-        reason: "billing response did not prove available model quota for this Start Plan",
-        failureClass: "model_quota_unproven"
-      };
-    }
-    if (!models.includes(requested)) {
-      return { status: "model_unavailable", reason: "active Start Plan does not list the requested model", failureClass: "requested_model_absent" };
-    }
-    const relevant = requestedModelBalances(attributedBalances, requested);
-    const units = relevant.map((balance) => numericUnit(balance.remaining_units));
-    if (relevant.length === 0 || units.some((unit) => unit === null || unit < 0)) {
-      return {
-        status: "unavailable",
-        reason: "billing response did not prove positive remaining quota for the requested model",
-        failureClass: "model_quota_unproven"
-      };
-    }
-    if (units.every((unit) => unit === 0)) {
-      return {
-        status: "quota_exhausted",
-        reason: "Start Plan quota is exhausted for the requested model",
-        failureClass: "quota_exhausted"
-      };
-    }
-    return { status: "entitled", reason: "active Start Plan has positive quota for the requested model", failureClass: "unknown" };
-  } else if (envelope && isSuccessfulBusinessEnvelope(envelope) && !hasActiveStartPlan(envelope)) {
-    return { status: "no_entitlement", reason: "no active Start Plan was present in the billing response", failureClass: "active_plan_absent" };
-  }
-  if (input.statusCode === 429) return { status: "rate_limited", reason: "rate limited; quota state unknown from status alone", failureClass: "rate_limited" };
-  if (input.statusCode >= 500) return { status: "unavailable", reason: "entitlement service error", failureClass: "service_error" };
-  if (input.statusCode >= 400) return { status: "unavailable", reason: "entitlement query rejected without a recognized provider code", failureClass: "http_rejected" };
-  if (envelope) return { status: "unavailable", reason: "billing response reported an unsuccessful business outcome", failureClass: "business_rejected" };
-  return { status: "unavailable", reason: "entitlement response could not be interpreted", failureClass: "response_malformed" };
-}
-function sanitizeHeaderValue(value) {
-  const trimmed = value?.trim();
-  return trimmed && /^[\x20-\x7e]+$/u.test(trimmed) ? trimmed : void 0;
-}
-function clientLanguage() {
-  try {
-    return sanitizeHeaderValue(process.env.ZCODE_CLIENT_LANGUAGE) ?? sanitizeHeaderValue(Intl.DateTimeFormat().resolvedOptions().locale) ?? "unknown";
-  } catch {
-    return sanitizeHeaderValue(process.env.ZCODE_CLIENT_LANGUAGE) ?? "unknown";
-  }
-}
-function clientTimezone() {
-  try {
-    return sanitizeHeaderValue(Intl.DateTimeFormat().resolvedOptions().timeZone) ?? "unknown";
-  } catch {
-    return "unknown";
-  }
-}
-function osCategory() {
-  if (process.platform === "darwin") return "macos";
-  if (process.platform === "win32") return "windows";
-  return "linux";
-}
-function officialBillingHeaders(input) {
-  return {
-    Authorization: `Bearer ${input.jwt}`,
-    "X-Device-Mid": input.deviceMid,
-    "User-Agent": `ZCode/${input.appVersion}`,
-    "HTTP-Referer": input.origin,
-    "X-Title": "Z Code@electron",
-    "X-ZCode-App-Version": input.appVersion,
-    "X-Release-Channel": process.env.ZCODE_ENV?.trim().toLowerCase() === "test" ? "test" : "production",
-    "X-Platform": `${process.platform}-${process.arch}`,
-    "X-Client-Language": clientLanguage(),
-    "X-Client-Timezone": clientTimezone(),
-    "X-Os-Category": osCategory(),
-    "X-Os-Version": sanitizeHeaderValue(readOsVersion()) ?? "unknown"
-  };
-}
-function failureVerdict(status) {
-  return status === "no_entitlement" || status === "model_unavailable" || status === "quota_exhausted" ? "not_entitled" : "unavailable";
-}
-function withFailureFacts(verdict2, input) {
-  const providerCode = verdict2.providerCode ?? null;
-  return {
-    status: verdict2.status,
-    reason: verdict2.reason,
-    ...providerCode ? { providerCode } : {},
-    observedAt: input.observedAt,
-    failureFacts: Object.freeze({
-      request_attempted: input.requestAttempted,
-      http_status: input.httpStatus,
-      provider_code: providerCode,
-      failure_class: verdict2.failureClass,
-      entitlement_verdict: failureVerdict(verdict2.status)
-    })
-  };
-}
-function responseTimeSeconds(response) {
-  try {
-    const parsed = Date.parse(response.headers.get("date") ?? "");
-    return Number.isFinite(parsed) ? parsed / 1e3 : void 0;
-  } catch {
-    return void 0;
-  }
-}
-function readStartPlanEntitlementFailureFacts(error2) {
-  return error2 instanceof StartPlanEntitlementRejectionError ? error2.failureFacts : null;
-}
-function formatStartPlanEntitlementFailureFactsIssue(facts) {
-  return `${STARTPLAN_ENTITLEMENT_FACTS_ISSUE_PREFIX}${JSON.stringify({
-    request_attempted: facts.request_attempted,
-    http_status: facts.http_status,
-    provider_code: facts.provider_code,
-    failure_class: facts.failure_class,
-    entitlement_verdict: facts.entitlement_verdict
-  })}`;
-}
-async function createProductionStartPlanAuth(options) {
-  const now = options.now ?? Date.now;
-  const resolveAuthentication = async (signal) => {
+  return candidates.some((name) => {
     try {
-      return normalizeOfficialStartPlanAuthentication(
-        await options.authentication.resolveStartPlanAuthentication({
-          family: "bigmodel",
-          signal
-        })
-      );
+      const record5 = readLease(path16.join(root, name));
+      return record5.state === "released" || record5.state === "stale_unknown";
     } catch {
-      return null;
+      return false;
     }
-  };
-  const initial = await resolveAuthentication(options.signal);
-  if (!initial) return null;
-  let entitlementContext = null;
-  let issuedTask = null;
-  const sameEntitlementContext = (context, credential, provider, model, credentialDigest) => context.account === credential.accountIdentity && context.provider === provider && context.model === model && context.deviceMid === credential.deviceMid && context.sessionRevision === credential.sessionRevision && context.credentialDigest === credentialDigest && context.credentialExpiresAt === credential.credentialExpiresAt;
-  const rejection2 = (verdict2) => {
-    const providerCode = verdict2.status === "entitled" ? void 0 : verdict2.providerCode;
-    if (verdict2.status === "entitled") throw new Error("start_plan_entitlement_rejection_invalid");
-    const failureFacts = verdict2.failureFacts ?? Object.freeze({
-      request_attempted: null,
-      http_status: null,
-      provider_code: providerCode ?? null,
-      failure_class: "unknown",
-      entitlement_verdict: failureVerdict(verdict2.status)
-    });
-    return new StartPlanEntitlementRejectionError(verdict2.status, failureFacts, providerCode);
-  };
-  const authoritativeEntitlement = async (credential, provider, model, signal) => {
-    const credentialDigest = createHash8("sha256").update(credential.requestCredential).digest("hex");
-    if (entitlementContext) {
-      if (!sameEntitlementContext(entitlementContext, credential, provider, model, credentialDigest)) {
-        throw new Error("start_plan_entitlement_identity_invalid");
-      }
-      return entitlementContext.verdict;
-    }
-    const verdict2 = await options.entitlement.check({
-      account: credential.accountIdentity,
-      provider,
-      model,
-      deviceMid: credential.deviceMid,
-      jwt: credential.requestCredential,
-      signal
-    });
-    entitlementContext = Object.freeze({
-      account: credential.accountIdentity,
-      provider,
-      model,
-      deviceMid: credential.deviceMid,
-      sessionRevision: credential.sessionRevision,
-      credentialDigest,
-      credentialExpiresAt: credential.credentialExpiresAt,
-      verdict: verdict2
-    });
-    return verdict2;
-  };
-  return {
-    // Captured from the official credential at construction; issue() re-reads
-    // the credential and rejects if the account identity changed mid-run.
-    account: initial.accountIdentity,
-    signal: options.signal,
-    async prepare(provider, model, signal) {
-      if (provider !== "account:bigmodel-start-plan" || !model || signal.aborted) return false;
-      const credential = await resolveAuthentication(signal);
-      if (!credential || credential.accountIdentity !== initial.accountIdentity || credential.sessionRevision !== initial.sessionRevision || credential.credentialExpiresAt !== null && credential.credentialExpiresAt <= now()) return false;
-      const credentialDigest = createHash8("sha256").update(credential.requestCredential).digest("hex");
-      if (entitlementContext && !sameEntitlementContext(entitlementContext, credential, provider, model, credentialDigest)) return false;
-      const verdict2 = await authoritativeEntitlement(credential, provider, model, signal);
-      if (signal.aborted) return false;
-      if (verdict2.status !== "entitled") {
-        throw rejection2(verdict2);
-      }
-      return true;
-    },
-    async issue(binding, signal) {
-      const credential = await resolveAuthentication(signal);
-      if (!credential) throw new Error("start_plan_credential_unavailable");
-      if (binding.account !== credential.accountIdentity) throw new Error("start_plan_account_identity_invalid");
-      if (credential.sessionRevision !== initial.sessionRevision) {
-        throw new Error("start_plan_account_identity_invalid");
-      }
-      if (credential.credentialExpiresAt !== null && credential.credentialExpiresAt <= now()) {
-        throw new Error("start_plan_credential_expired");
-      }
-      if (signal.aborted) throw new Error("start_plan_issuer_cancelled");
-      if (binding.provider !== "account:bigmodel-start-plan" || !binding.model) {
-        throw new Error("start_plan_identity_invalid");
-      }
-      if (issuedTask !== null) throw new Error("start_plan_lease_already_issued");
-      if (!entitlementContext) throw new Error("start_plan_entitlement_not_prepared");
-      issuedTask = binding.task;
-      const verdict2 = await authoritativeEntitlement(credential, binding.provider, binding.model, signal);
-      if (verdict2.status !== "entitled") {
-        throw rejection2(verdict2);
-      }
-      const createdAt = now();
-      const credentialExpiresAt = credential.credentialExpiresAt ?? Number.MAX_SAFE_INTEGER;
-      const deliveryDeadline = Math.min(credentialExpiresAt, createdAt + 3e4);
-      return new PrivateCredentialLease(
-        binding,
-        credential.requestCredential,
-        credentialExpiresAt,
-        now,
-        deliveryDeadline
-      );
-    }
-  };
-}
-async function readOfficialCliVersion(zcodeEntrypoint) {
-  const key = path16.resolve(zcodeEntrypoint);
-  const cached2 = officialCliVersionCache.get(key);
-  if (cached2) return cached2;
-  const version2 = await new Promise((resolve) => {
-    const child = spawn4(process.execPath, [key, "--version"], { shell: false, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
-    let out = "";
-    const timer = setTimeout(() => {
-      child.kill();
-      resolve(void 0);
-    }, 15e3);
-    timer.unref();
-    child.stdout.on("data", (chunk) => {
-      out += chunk.toString("utf8");
-    });
-    child.on("error", () => {
-      clearTimeout(timer);
-      resolve(void 0);
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      const value = out.trim();
-      resolve(code === 0 && /^\d+\.\d+\.\d+/.test(value) ? value : void 0);
-    });
   });
-  if (version2) officialCliVersionCache.set(key, version2);
-  return version2;
 }
-var STARTPLAN_ENTITLEMENT_FACTS_ISSUE_PREFIX, OFFICIAL_START_PLAN_ORIGIN, BILLING_REQUEST_TIMEOUT_MS, StartPlanBillingEntitlement, StartPlanEntitlementRejectionError, officialCliVersionCache;
-var init_start_plan_production_auth = __esm({
-  "src/runtime/start-plan-production-auth.ts"() {
+function canonicalJson(value) {
+  return JSON.stringify(sortObject(value)) ?? "null";
+}
+function sortObject(value) {
+  if (Array.isArray(value)) return value.map(sortObject);
+  if (value === null || typeof value !== "object" || value instanceof Date) return value;
+  if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) return value;
+  return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0).map(([key, item]) => [key, sortObject(item)]));
+}
+function authorityRootDigest(root) {
+  return createHash8("sha256").update(path16.resolve(root).toLowerCase(), "utf8").digest("hex");
+}
+function ownerFromIdentity(ownerKind, identity) {
+  return {
+    owner_kind: ownerKind,
+    process_id: identity.pid,
+    start_fingerprint: identity.fingerprint,
+    fingerprint_precision: identity.fingerprint_precision,
+    identity_version: identity.identity_version,
+    platform: identity.platform,
+    captured_at: identity.captured_at
+  };
+}
+function leaseDigest(record5) {
+  return createHash8("sha256").update(canonicalJson(record5), "utf8").digest("hex");
+}
+function ensurePlainRoot(root) {
+  let current;
+  try {
+    current = path16.resolve(root);
+    const stat2 = lstatSync2(current);
+    if (!stat2.isDirectory() || stat2.isSymbolicLink()) throw new Error("not_plain_directory");
+  } catch {
+    throw new ExecutorLeaseError("EXECUTOR_LEASE_ROOT_UNSAFE", "authority root must be an existing plain directory");
+  }
+  return current;
+}
+function readLease(file) {
+  let parsed;
+  try {
+    const stat2 = lstatSync2(file);
+    if (!stat2.isFile() || stat2.isSymbolicLink() || stat2.size > LEASE_LIMIT_BYTES) throw new Error("unsafe_lease_file");
+    parsed = JSON.parse(readFileSync9(file, "utf8"));
+  } catch {
+    throw new ExecutorLeaseError("EXECUTOR_LEASE_MALFORMED");
+  }
+  const record5 = parsed;
+  if (!record5 || typeof record5 !== "object" || record5.lease_id === void 0 || record5.authority_root_digest !== authorityRootDigest(path16.dirname(file)) || record5.protocol_version !== EXECUTOR_LEASE_PROTOCOL_VERSION || !record5.owner || typeof record5.owner !== "object" || !["executor", "legacy_mcp"].includes(record5.owner.owner_kind ?? "") || !Number.isInteger(record5.owner.process_id) || record5.owner.process_id <= 0 || typeof record5.owner.start_fingerprint !== "string" || record5.owner.fingerprint_precision !== "exact" || record5.owner.identity_version !== PROCESS_IDENTITY_VERSION || typeof record5.owner.platform !== "string" || typeof record5.owner.captured_at !== "string" || !/^[0-9a-f]{64}$/iu.test(record5.bridge_sha256 ?? "") || !/^[0-9a-f]{64}$/iu.test(record5.worker_sha256 ?? "") || typeof record5.started_at !== "string" || typeof record5.heartbeat_at !== "string" || !["active", "stale_unknown", "released"].includes(record5.state ?? "") || typeof record5.lease_digest !== "string" || !/^[0-9a-f]{64}$/u.test(record5.lease_digest)) {
+    throw new ExecutorLeaseError("EXECUTOR_LEASE_MALFORMED");
+  }
+  const { lease_digest: recordedDigest, ...body } = record5;
+  if (recordedDigest !== leaseDigest(body)) throw new ExecutorLeaseError("EXECUTOR_LEASE_MALFORMED");
+  return { ...body, lease_digest: record5.lease_digest };
+}
+async function probeOwner(owner, processProbe) {
+  const [verdict2] = await processProbe.probe([{
+    pid: owner.process_id,
+    identity: {
+      pid: owner.process_id,
+      fingerprint: owner.start_fingerprint,
+      fingerprint_precision: owner.fingerprint_precision,
+      identity_version: owner.identity_version,
+      platform: owner.platform,
+      captured_at: owner.captured_at
+    }
+  }]);
+  if (verdict2?.state === "alive") return "alive";
+  if (verdict2?.state === "exited") return "exited";
+  return "unknown";
+}
+function writeLeaseFile(file, record5) {
+  const temporary = `${file}.new-${randomUUID3()}`;
+  const payload = canonicalJson(record5);
+  let fd;
+  try {
+    fd = openSync3(temporary, "wx", 384);
+    writeSync(fd, payload, void 0, "utf8");
+    closeSync3(fd);
+    fd = void 0;
+    renameSync2(temporary, file);
+    const observed = readLease(file);
+    if (observed.lease_id !== record5.lease_id || observed.lease_digest !== record5.lease_digest) {
+      throw new Error("lease_update_readback_mismatch");
+    }
+  } catch (error2) {
+    if (fd !== void 0) closeSync3(fd);
+    try {
+      if (existsSync8(temporary)) unlinkSync2(temporary);
+    } catch {
+    }
+    throw new ExecutorLeaseError("EXECUTOR_LEASE_RELEASE_UNKNOWN", error2 instanceof Error ? error2.message : String(error2));
+  }
+}
+function updateState(file, lease, state, now) {
+  const { lease_digest: _previousDigest, ...previous } = lease;
+  const body = { ...previous, state, heartbeat_at: new Date(now()).toISOString() };
+  const updated = { ...body, lease_digest: leaseDigest(body) };
+  writeLeaseFile(file, updated);
+  return updated;
+}
+function releaseLeaseFile(file, lease, now) {
+  const released = updateState(file, lease, "released", now);
+  const archive = path16.join(path16.dirname(file), EXECUTOR_LEASE_RELEASED_FILE);
+  try {
+    renameSync2(file, archive);
+    return;
+  } catch {
+  }
+  try {
+    writeLeaseFile(archive, released);
+    unlinkSync2(file);
+  } catch (error2) {
+    throw new ExecutorLeaseError(
+      "EXECUTOR_LEASE_RELEASE_UNKNOWN",
+      error2 instanceof Error ? error2.message : String(error2)
+    );
+  }
+}
+async function acquireExecutorLease(input) {
+  const root = ensurePlainRoot(input.authorityRoot);
+  const file = path16.join(root, EXECUTOR_LEASE_FILE);
+  const now = input.now ?? Date.now;
+  const identity = input.identity ?? await input.processProbe.selfIdentity();
+  if (identity.fingerprint === null || identity.fingerprint_precision !== "exact") {
+    throw new ExecutorLeaseError("EXECUTOR_LEASE_OWNER_UNKNOWN", "executor owner requires an exact process identity");
+  }
+  if (existsSync8(file)) {
+    const existing = readLease(file);
+    const ownerState = await probeOwner(existing.owner, input.processProbe);
+    if (existing.state === "active" && ownerState === "alive") {
+      throw new ExecutorLeaseError("EXECUTOR_LEASE_OWNER_UNKNOWN", "EXECUTOR_ALREADY_ACTIVE");
+    }
+    const reason = ownerState === "unknown" ? "owner_probe_unknown" : existing.state === "released" ? "unpublished_released_lease_requires_clear" : ownerState === "alive" ? "non_active_lease_owner_still_alive" : "owner_exited_requires_explicit_clear";
+    try {
+      updateState(file, existing, "stale_unknown", now);
+    } catch {
+    }
+    throw new ExecutorLeaseError("EXECUTOR_LEASE_OWNER_UNKNOWN", reason);
+  }
+  const at = new Date(now()).toISOString();
+  const body = {
+    lease_id: randomUUID3(),
+    authority_root_digest: authorityRootDigest(root),
+    protocol_version: EXECUTOR_LEASE_PROTOCOL_VERSION,
+    owner: ownerFromIdentity(input.ownerKind, identity),
+    bridge_sha256: input.bridgeSha256,
+    worker_sha256: input.workerSha256,
+    started_at: at,
+    heartbeat_at: at,
+    pipe_name: input.pipeName ?? null,
+    state: "active"
+  };
+  const lease = { ...body, lease_digest: leaseDigest(body) };
+  try {
+    const fd = openSync3(file, "wx", 384);
+    try {
+      writeSync(fd, canonicalJson(lease), void 0, "utf8");
+    } finally {
+      closeSync3(fd);
+    }
+    const observed = readLease(file);
+    if (observed.lease_id !== lease.lease_id || observed.lease_digest !== lease.lease_digest) {
+      throw new Error("lease_create_readback_mismatch");
+    }
+  } catch {
+    throw new ExecutorLeaseError("EXECUTOR_LEASE_OWNER_UNKNOWN", "executor lease atomic create did not win");
+  }
+  const handle = {
+    lease,
+    async heartbeat(heartbeatOptions = {}) {
+      try {
+        const current = readLease(file);
+        if (current.state !== "active" || current.lease_id !== lease.lease_id) {
+          throw new ExecutorLeaseError("EXECUTOR_HEARTBEAT_FAILED", "executor lease no longer belongs to this owner");
+        }
+        updateState(file, current, "active", now);
+      } catch (error2) {
+        const failure2 = error2 instanceof Error ? error2 : new Error(String(error2));
+        heartbeatOptions.onUnknown?.(failure2);
+        throw failure2;
+      }
+    },
+    async assertOwned() {
+      const current = readLease(file);
+      if (current.state !== "active" || current.lease_id !== lease.lease_id) {
+        throw new ExecutorLeaseError("EXECUTOR_HEARTBEAT_FAILED", "executor lease no longer belongs to this owner");
+      }
+    },
+    async release(options = {}) {
+      const current = readLease(file);
+      if (current.lease_id !== lease.lease_id) {
+        throw new ExecutorLeaseError("EXECUTOR_LEASE_RELEASE_UNKNOWN", "executor lease identity changed before release");
+      }
+      const state = options.markStale === true ? "stale_unknown" : "released";
+      if (state === "stale_unknown") {
+        updateState(file, current, state, now);
+      } else {
+        releaseLeaseFile(file, current, now);
+      }
+    }
+  };
+  return handle;
+}
+var EXECUTOR_LEASE_PROTOCOL_VERSION, EXECUTOR_LEASE_FILE, EXECUTOR_LEASE_RELEASED_FILE, EXECUTOR_LEASE_CLEARED_FILE, EXECUTOR_UNLEASED_TRANSITION_ENV, LEASE_LIMIT_BYTES, ExecutorLeaseError;
+var init_lease = __esm({
+  "src/executor/lease.ts"() {
     "use strict";
-    init_start_plan_private_lease();
-    STARTPLAN_ENTITLEMENT_FACTS_ISSUE_PREFIX = "start_plan_entitlement_failure_facts:";
-    OFFICIAL_START_PLAN_ORIGIN = "https://zcode.z.ai";
-    BILLING_REQUEST_TIMEOUT_MS = 15e3;
-    StartPlanBillingEntitlement = class {
-      #origin;
-      #getAppVersion;
-      #fetchImpl;
-      #now;
-      constructor(options) {
-        this.#origin = (options.origin ?? OFFICIAL_START_PLAN_ORIGIN).replace(/\/+$/, "");
-        this.#getAppVersion = options.getAppVersion;
-        this.#fetchImpl = options.fetchImpl ?? fetch;
-        this.#now = options.now ?? Date.now;
+    init_process_probe();
+    EXECUTOR_LEASE_PROTOCOL_VERSION = 1;
+    EXECUTOR_LEASE_FILE = "executor-lease.json";
+    EXECUTOR_LEASE_RELEASED_FILE = "executor-lease.released.json";
+    EXECUTOR_LEASE_CLEARED_FILE = "executor-lease.cleared.json";
+    EXECUTOR_UNLEASED_TRANSITION_ENV = "ZCODE_BRIDGE_ACCEPT_UNLEASED_AUTHORITY";
+    LEASE_LIMIT_BYTES = 64 * 1024;
+    ExecutorLeaseError = class extends Error {
+      constructor(code, message = code) {
+        super(message);
+        this.code = code;
+        this.name = "ExecutorLeaseError";
       }
-      async check(input) {
-        const observedAt = this.#now();
-        const appVersion = await this.#getAppVersion();
-        if (!appVersion || !/^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$/u.test(appVersion)) {
-          return withFailureFacts({
-            status: "unavailable",
-            reason: "official cli version unavailable; refusing to guess",
-            failureClass: "not_attempted"
-          }, { observedAt, requestAttempted: false, httpStatus: null });
-        }
-        const deviceMid = sanitizeHeaderValue(input.deviceMid);
-        if (!deviceMid) {
-          return withFailureFacts({
-            status: "unavailable",
-            reason: "official device identity unavailable; refusing to guess",
-            failureClass: "not_attempted"
-          }, { observedAt, requestAttempted: false, httpStatus: null });
-        }
-        const url2 = `${this.#origin}/api/v1/zcode-plan/billing/balance?app_version=${encodeURIComponent(appVersion)}`;
-        let response;
-        try {
-          response = await this.#fetchImpl(url2, {
-            method: "GET",
-            headers: officialBillingHeaders({
-              origin: this.#origin,
-              appVersion,
-              deviceMid,
-              jwt: input.jwt
-            }),
-            signal: AbortSignal.any([input.signal, AbortSignal.timeout(BILLING_REQUEST_TIMEOUT_MS)])
-          });
-        } catch (error2) {
-          if (input.signal.aborted) throw error2;
-          return withFailureFacts({
-            status: "unavailable",
-            reason: "entitlement transport failed",
-            failureClass: "transport"
-          }, { observedAt: this.#now(), requestAttempted: true, httpStatus: null });
-        }
-        if (response.status === 200) {
-          let body2;
-          let providerCode2;
-          try {
-            const parsed = await response.json();
-            if (isRecord6(parsed)) {
-              body2 = parsed;
-              providerCode2 = extractProviderCode(parsed);
-            }
-          } catch {
-          }
-          const classified = this.#interpretBillingBody({
-            statusCode: response.status,
-            providerCode: providerCode2,
-            body: body2,
-            model: input.model,
-            responseTimeSeconds: responseTimeSeconds(response)
-          });
-          if (classified.status === "entitled") {
-            let requestId = "";
-            try {
-              requestId = (response.headers.get("x-request-id") ?? "").trim();
-            } catch {
-            }
-            return { status: "entitled", observedAt: this.#now(), requestId };
-          }
-          return withFailureFacts(classified, {
-            observedAt: this.#now(),
-            requestAttempted: true,
-            httpStatus: response.status
-          });
-        }
-        let body;
-        let providerCode;
-        try {
-          const parsed = await response.json();
-          if (isRecord6(parsed)) {
-            body = parsed;
-            providerCode = extractProviderCode(parsed);
-          }
-        } catch {
-        }
-        return withFailureFacts(this.#interpretBillingBody({
-          statusCode: response.status,
-          providerCode,
-          body,
-          model: input.model,
-          responseTimeSeconds: responseTimeSeconds(response)
-        }), { observedAt, requestAttempted: true, httpStatus: response.status });
-      }
-      #interpretBillingBody(input) {
-        return classifyEntitlementFailure(input);
-      }
+      code;
     };
-    StartPlanEntitlementRejectionError = class extends Error {
-      constructor(entitlementStatus, failureFacts, providerCode) {
-        super(`start_plan_entitlement_rejected:${entitlementStatus}${providerCode ? `:${providerCode}` : ""}`);
-        this.entitlementStatus = entitlementStatus;
-        this.failureFacts = failureFacts;
-        this.name = "StartPlanEntitlementRejectionError";
-      }
-      entitlementStatus;
-      failureFacts;
-    };
-    officialCliVersionCache = /* @__PURE__ */ new Map();
   }
 });
 
@@ -4816,14 +4426,14 @@ function deriveAdmissionPolicySnapshotDigest(value) {
     policy_digest: value.policy_digest,
     execution_profile_id: value.execution_profile_id
   };
-  return createHash9("sha256").update(canonicalJson(envelope), "utf8").digest("hex");
+  return createHash9("sha256").update(canonicalJson2(envelope), "utf8").digest("hex");
 }
-function canonicalJson(value) {
+function canonicalJson2(value) {
   if (value === null || typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
   if (typeof value === "number" && Number.isSafeInteger(value)) return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (Array.isArray(value)) return `[${value.map(canonicalJson2).join(",")}]`;
   if (value && Object.getPrototypeOf(value) === Object.prototype) {
-    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson2(value[key])}`).join(",")}}`;
   }
   throw new TypeError("invalid admission policy snapshot");
 }
@@ -5217,6 +4827,650 @@ var init_start_plan_private_channel = __esm({
   }
 });
 
+// src/runtime/start-plan-private-lease.ts
+function validBinding(value) {
+  return !!value && textFields.every((key) => typeof value[key] === "string" && value[key].length > 0) && numberFields.every((key) => Number.isSafeInteger(value[key]) && value[key] > 0);
+}
+function sameBinding(left, right) {
+  return validBinding(left) && validBinding(right) && textFields.every((key) => left[key] === right[key]) && numberFields.every((key) => left[key] === right[key]);
+}
+var textFields, numberFields, PrivateCredentialLease;
+var init_start_plan_private_lease = __esm({
+  "src/runtime/start-plan-private-lease.ts"() {
+    "use strict";
+    textFields = ["account", "provider", "model", "task", "operation", "claim", "session", "turn", "creation"];
+    numberFields = ["attempt", "generation", "pid"];
+    PrivateCredentialLease = class {
+      #binding;
+      #deliveryDeadline;
+      #credentialExpiresAt;
+      #now;
+      #credential;
+      #state = "active";
+      /**
+       * `credentialExpiresAt` is the credential's actual usability deadline.
+       * `deliveryDeadline` only bounds the one-shot private-channel delivery and
+       * defaults to the old single-deadline behaviour for existing callers.
+       */
+      constructor(binding, credential, credentialExpiresAt, now = Date.now, deliveryDeadline) {
+        const createdAt = now();
+        const boundedDeliveryDeadline = deliveryDeadline ?? Math.min(credentialExpiresAt, createdAt + 6e4);
+        if (!validBinding(binding) || typeof credential !== "string" || !credential || !Number.isFinite(credentialExpiresAt) || !Number.isFinite(createdAt) || credentialExpiresAt <= createdAt || !Number.isFinite(boundedDeliveryDeadline) || boundedDeliveryDeadline <= createdAt || boundedDeliveryDeadline - createdAt > 6e4 || boundedDeliveryDeadline > credentialExpiresAt) {
+          throw new Error("credential_lease_invalid");
+        }
+        this.#binding = Object.freeze({ ...binding });
+        this.#credential = credential;
+        this.#deliveryDeadline = boundedDeliveryDeadline;
+        this.#credentialExpiresAt = credentialExpiresAt;
+        this.#now = now;
+      }
+      revoke() {
+        this.#state = "revoked";
+        this.#credential = null;
+      }
+      /** Synchronous claim check before redeem; an already-claimed lease belongs
+       * to its in-flight delivery and must not be revoked by a competing call. */
+      isActive() {
+        return this.#state === "active";
+      }
+      async redeem(requested, verifyWorker, deliver, signal) {
+        if (this.#state !== "active") throw new Error("credential_lease_unavailable");
+        this.#state = "checking";
+        try {
+          if (signal.aborted || !Number.isFinite(this.#now()) || this.#now() >= this.#deliveryDeadline || this.#now() >= this.#credentialExpiresAt || !sameBinding(this.#binding, requested)) throw new Error("credential_lease_rejected");
+          if (!await verifyWorker(this.#binding)) throw new Error("credential_lease_rejected");
+          if (this.#state !== "checking" || signal.aborted || !Number.isFinite(this.#now()) || this.#now() >= this.#deliveryDeadline || this.#now() >= this.#credentialExpiresAt || !this.#credential) {
+            throw new Error("credential_lease_rejected");
+          }
+          this.#state = "delivering";
+          const credential = this.#credential;
+          this.#credential = null;
+          await deliver(credential, this.#credentialExpiresAt);
+          if (signal.aborted || this.#state !== "delivering") throw new Error("credential_delivery_unknown");
+          this.#state = "consumed";
+        } catch {
+          this.revoke();
+          throw new Error("credential_lease_unavailable");
+        }
+      }
+    };
+  }
+});
+
+// src/runtime/start-plan-production-auth.ts
+var start_plan_production_auth_exports = {};
+__export(start_plan_production_auth_exports, {
+  STARTPLAN_ENTITLEMENT_FACTS_ISSUE_PREFIX: () => STARTPLAN_ENTITLEMENT_FACTS_ISSUE_PREFIX,
+  StartPlanBillingEntitlement: () => StartPlanBillingEntitlement,
+  StartPlanEntitlementRejectionError: () => StartPlanEntitlementRejectionError,
+  classifyEntitlementFailure: () => classifyEntitlementFailure,
+  createProductionStartPlanAuth: () => createProductionStartPlanAuth,
+  formatStartPlanEntitlementFailureFactsIssue: () => formatStartPlanEntitlementFailureFactsIssue,
+  normalizeOfficialStartPlanAuthentication: () => normalizeOfficialStartPlanAuthentication,
+  readOfficialCliVersion: () => readOfficialCliVersion,
+  readStartPlanEntitlementFailureFacts: () => readStartPlanEntitlementFailureFacts
+});
+import { spawn as spawn4 } from "node:child_process";
+import { createHash as createHash12 } from "node:crypto";
+import { version as readOsVersion } from "node:os";
+import path17 from "node:path";
+function isRecord6(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+function normalizeOfficialStartPlanAuthentication(value) {
+  if (!isRecord6(value)) return null;
+  const accountIdentity = typeof value.accountIdentity === "string" ? value.accountIdentity.trim() : "";
+  const requestCredential = typeof value.requestCredential === "string" ? value.requestCredential.trim() : "";
+  const deviceMid = typeof value.deviceMid === "string" ? value.deviceMid.trim() : "";
+  const sessionRevision = value.sessionRevision === null ? null : typeof value.sessionRevision === "string" && value.sessionRevision.trim() ? value.sessionRevision : void 0;
+  const credentialExpiresAt = value.credentialExpiresAt === null ? null : typeof value.credentialExpiresAt === "number" && Number.isFinite(value.credentialExpiresAt) && value.credentialExpiresAt > 0 ? value.credentialExpiresAt : void 0;
+  if (!accountIdentity || !requestCredential || !deviceMid || sessionRevision === void 0 || credentialExpiresAt === void 0) return null;
+  return Object.freeze({
+    accountIdentity,
+    sessionRevision,
+    requestCredential,
+    credentialExpiresAt,
+    deviceMid
+  });
+}
+function asOfficialBillingEnvelope(value) {
+  if (!isRecord6(value)) return null;
+  const data = isRecord6(value.data) ? value.data : void 0;
+  return {
+    success: value.success,
+    code: value.code,
+    msg: value.msg,
+    ...data ? { data: {
+      plans: data.plans,
+      balances: data.balances,
+      server_time: data.server_time
+    } } : {}
+  };
+}
+function isSuccessfulBusinessEnvelope(envelope) {
+  return envelope.success !== false && (envelope.code === void 0 || envelope.code === 0 || envelope.code === 200);
+}
+function stringKeyedArray(value) {
+  return Array.isArray(value) ? value.filter(isRecord6) : [];
+}
+function isActiveStartPlan(plan) {
+  const status = typeof plan.status === "string" ? plan.status.trim().toLowerCase() : "";
+  const planId = typeof plan.plan_id === "string" ? plan.plan_id.trim().toLowerCase() : "";
+  const name = typeof plan.name === "string" ? plan.name.trim().toLowerCase() : "";
+  const startPlanIdentity = planId.includes("start-plan") || planId.includes("start plan") || name.includes("start-plan") || name.includes("start plan");
+  return status === "active" && startPlanIdentity;
+}
+function activeStartPlans(envelope) {
+  return stringKeyedArray(envelope.data?.plans).filter(isActiveStartPlan);
+}
+function hasActiveStartPlan(envelope) {
+  return activeStartPlans(envelope).length > 0;
+}
+function startPlanBalanceModelIds(balances) {
+  const seen = /* @__PURE__ */ new Set();
+  const models = [];
+  for (const balance of balances) {
+    const capabilities = Array.isArray(balance.capabilities) ? balance.capabilities : [];
+    const capabilityModels = capabilities.flatMap((capability) => {
+      const raw = typeof capability === "string" ? capability.trim().toLowerCase() : "";
+      return raw.startsWith("model:") ? [raw.slice(6).trim()] : [];
+    }).filter(Boolean);
+    const candidates = capabilityModels.length > 0 ? capabilityModels : typeof balance.show_name === "string" ? [balance.show_name.trim().toLowerCase()] : [];
+    for (const model of candidates) {
+      if (!model || seen.has(model)) continue;
+      seen.add(model);
+      models.push(model);
+    }
+  }
+  return models;
+}
+function readIdentifier(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+function balanceBelongsToPlan(balance, plan) {
+  const balanceUserPlanId = readIdentifier(balance.user_plan_id);
+  const planUserPlanId = readIdentifier(plan.user_plan_id);
+  if (balanceUserPlanId && planUserPlanId) return balanceUserPlanId === planUserPlanId;
+  const balancePlanId = readIdentifier(balance.plan_id);
+  const planId = readIdentifier(plan.plan_id);
+  return Boolean(balancePlanId && planId && balancePlanId === planId);
+}
+function requestedModelBalances(balances, requestedModel) {
+  return balances.filter((balance) => {
+    const capabilities = Array.isArray(balance.capabilities) ? balance.capabilities : [];
+    const capabilityModels = capabilities.flatMap((capability) => {
+      const raw = typeof capability === "string" ? capability.trim().toLowerCase() : "";
+      return raw.startsWith("model:") ? [raw.slice(6).trim()] : [];
+    }).filter(Boolean);
+    const candidates = capabilityModels.length > 0 ? capabilityModels : typeof balance.show_name === "string" ? [balance.show_name.trim().toLowerCase()] : [];
+    return candidates.includes(requestedModel);
+  });
+}
+function numericUnit(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() && Number.isFinite(Number(value))) return Number(value);
+  return null;
+}
+function finiteEpochSeconds(value) {
+  const number4 = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : NaN;
+  return Number.isFinite(number4) && number4 >= 0 ? number4 : void 0;
+}
+function normalizeBillingAvailabilityEnvelope(envelope, responseTimeSeconds2) {
+  const data = envelope.data;
+  if (!data) return envelope;
+  const nowSeconds = responseTimeSeconds2 ?? (typeof data.server_time === "number" && Number.isFinite(data.server_time) && data.server_time >= 0 ? data.server_time : void 0) ?? Date.now() / 1e3;
+  const plans = stringKeyedArray(data.plans).map((plan) => {
+    const status = typeof plan.status === "string" ? plan.status.trim().toLowerCase() : "";
+    const end = finiteEpochSeconds(plan.ends_at);
+    return status === "active" && end !== void 0 && end > 0 && end <= nowSeconds ? { ...plan, status: "expired" } : plan;
+  });
+  const balances = stringKeyedArray(data.balances).filter((balance) => {
+    const userPlanId = typeof balance.user_plan_id === "string" ? balance.user_plan_id : "";
+    const planId = typeof balance.plan_id === "string" ? balance.plan_id : "";
+    const owners = plans.filter((plan) => {
+      const ownerUserPlanId = typeof plan.user_plan_id === "string" ? plan.user_plan_id : "";
+      const ownerPlanId = typeof plan.plan_id === "string" ? plan.plan_id : "";
+      return userPlanId && ownerUserPlanId ? userPlanId === ownerUserPlanId : planId === ownerPlanId;
+    });
+    return owners.length === 0 || owners.some((plan) => typeof plan.status === "string" && plan.status.trim().toLowerCase() !== "expired");
+  });
+  return {
+    ...envelope,
+    data: {
+      ...data,
+      plans,
+      balances
+    }
+  };
+}
+function hasPendingActivation(envelope) {
+  const data = envelope.data;
+  if (!data) return false;
+  const nowSeconds = typeof data.server_time === "number" && Number.isFinite(data.server_time) && data.server_time >= 0 ? data.server_time : Date.now() / 1e3;
+  const effectiveTimes = activeStartPlans(envelope).flatMap((plan) => {
+    const entitlements = stringKeyedArray(plan.entitlements);
+    return entitlements.length > 0 ? entitlements.map((entry) => entry.effective_at) : [plan.starts_at];
+  }).map((value) => value === null || value === void 0 || value === "" ? void 0 : Number(value));
+  return effectiveTimes.length > 0 && effectiveTimes.every((value) => value !== void 0 && Number.isFinite(value) && value > nowSeconds);
+}
+function extractProviderCode(value) {
+  if (!value) return void 0;
+  const error2 = isRecord6(value.error) ? value.error : void 0;
+  const candidates = [
+    value.providerCode,
+    error2?.providerCode,
+    error2 && isRecord6(error2) ? error2.code : void 0,
+    value.code
+  ];
+  const raw = candidates.find((candidate) => typeof candidate === "number" || typeof candidate === "string");
+  const code = typeof raw === "number" || typeof raw === "string" ? String(raw).trim() : "";
+  return /^[0-9A-Za-z_.-]{1,32}$/u.test(code) ? code : void 0;
+}
+function classifyEntitlementFailure(input) {
+  const code = input.providerCode?.trim();
+  const providerCode = code ? code : void 0;
+  if (code === "3007") return { status: "captcha_required", reason: "provider requested captcha verification", providerCode, failureClass: "captcha_required" };
+  if (code === "3012") return { status: "unusual_activity", reason: "provider blocked this identity due to unusual activity", providerCode, failureClass: "unusual_activity" };
+  if (code === "3001") return { status: "billing_parameter_error", reason: "billing request parameters were rejected", providerCode, failureClass: "billing_parameter_error" };
+  if (input.statusCode === 401) return { status: "unauthorized", reason: "credential was rejected as unauthenticated", failureClass: "unauthorized" };
+  if (input.statusCode === 403) return { status: "forbidden", reason: "credential is authenticated but forbidden from this plan or model", failureClass: "forbidden" };
+  const rawEnvelope = input.statusCode === 200 ? asOfficialBillingEnvelope(input.body) : void 0;
+  const envelope = rawEnvelope ? normalizeBillingAvailabilityEnvelope(rawEnvelope, input.responseTimeSeconds) : void 0;
+  const activePlans = envelope ? activeStartPlans(envelope) : [];
+  if (envelope && isSuccessfulBusinessEnvelope(envelope) && activePlans.length > 0) {
+    const balances = stringKeyedArray(envelope.data?.balances);
+    const attributedBalances = balances.filter((balance) => activePlans.some((plan) => balanceBelongsToPlan(balance, plan)));
+    const models = startPlanBalanceModelIds(attributedBalances);
+    const requested = input.model?.trim().toLowerCase();
+    if (!requested) {
+      return { status: "unavailable", reason: "billing response had no requested model identity to authorize", failureClass: "response_malformed" };
+    }
+    if (hasPendingActivation(envelope)) {
+      return {
+        status: "unavailable",
+        reason: "active Start Plan has not taken effect",
+        failureClass: "activation_pending"
+      };
+    }
+    if (models.length === 0) {
+      return {
+        status: "unavailable",
+        reason: "billing response did not prove available model quota for this Start Plan",
+        failureClass: "model_quota_unproven"
+      };
+    }
+    if (!models.includes(requested)) {
+      return { status: "model_unavailable", reason: "active Start Plan does not list the requested model", failureClass: "requested_model_absent" };
+    }
+    const relevant = requestedModelBalances(attributedBalances, requested);
+    const units = relevant.map((balance) => numericUnit(balance.remaining_units));
+    if (relevant.length === 0 || units.some((unit) => unit === null || unit < 0)) {
+      return {
+        status: "unavailable",
+        reason: "billing response did not prove positive remaining quota for the requested model",
+        failureClass: "model_quota_unproven"
+      };
+    }
+    if (units.every((unit) => unit === 0)) {
+      return {
+        status: "quota_exhausted",
+        reason: "Start Plan quota is exhausted for the requested model",
+        failureClass: "quota_exhausted"
+      };
+    }
+    return { status: "entitled", reason: "active Start Plan has positive quota for the requested model", failureClass: "unknown" };
+  } else if (envelope && isSuccessfulBusinessEnvelope(envelope) && !hasActiveStartPlan(envelope)) {
+    return { status: "no_entitlement", reason: "no active Start Plan was present in the billing response", failureClass: "active_plan_absent" };
+  }
+  if (input.statusCode === 429) return { status: "rate_limited", reason: "rate limited; quota state unknown from status alone", failureClass: "rate_limited" };
+  if (input.statusCode >= 500) return { status: "unavailable", reason: "entitlement service error", failureClass: "service_error" };
+  if (input.statusCode >= 400) return { status: "unavailable", reason: "entitlement query rejected without a recognized provider code", failureClass: "http_rejected" };
+  if (envelope) return { status: "unavailable", reason: "billing response reported an unsuccessful business outcome", failureClass: "business_rejected" };
+  return { status: "unavailable", reason: "entitlement response could not be interpreted", failureClass: "response_malformed" };
+}
+function sanitizeHeaderValue(value) {
+  const trimmed = value?.trim();
+  return trimmed && /^[\x20-\x7e]+$/u.test(trimmed) ? trimmed : void 0;
+}
+function clientLanguage() {
+  try {
+    return sanitizeHeaderValue(process.env.ZCODE_CLIENT_LANGUAGE) ?? sanitizeHeaderValue(Intl.DateTimeFormat().resolvedOptions().locale) ?? "unknown";
+  } catch {
+    return sanitizeHeaderValue(process.env.ZCODE_CLIENT_LANGUAGE) ?? "unknown";
+  }
+}
+function clientTimezone() {
+  try {
+    return sanitizeHeaderValue(Intl.DateTimeFormat().resolvedOptions().timeZone) ?? "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+function osCategory() {
+  if (process.platform === "darwin") return "macos";
+  if (process.platform === "win32") return "windows";
+  return "linux";
+}
+function officialBillingHeaders(input) {
+  return {
+    Authorization: `Bearer ${input.jwt}`,
+    "X-Device-Mid": input.deviceMid,
+    "User-Agent": `ZCode/${input.appVersion}`,
+    "HTTP-Referer": input.origin,
+    "X-Title": "Z Code@electron",
+    "X-ZCode-App-Version": input.appVersion,
+    "X-Release-Channel": process.env.ZCODE_ENV?.trim().toLowerCase() === "test" ? "test" : "production",
+    "X-Platform": `${process.platform}-${process.arch}`,
+    "X-Client-Language": clientLanguage(),
+    "X-Client-Timezone": clientTimezone(),
+    "X-Os-Category": osCategory(),
+    "X-Os-Version": sanitizeHeaderValue(readOsVersion()) ?? "unknown"
+  };
+}
+function failureVerdict(status) {
+  return status === "no_entitlement" || status === "model_unavailable" || status === "quota_exhausted" ? "not_entitled" : "unavailable";
+}
+function withFailureFacts(verdict2, input) {
+  const providerCode = verdict2.providerCode ?? null;
+  return {
+    status: verdict2.status,
+    reason: verdict2.reason,
+    ...providerCode ? { providerCode } : {},
+    observedAt: input.observedAt,
+    failureFacts: Object.freeze({
+      request_attempted: input.requestAttempted,
+      http_status: input.httpStatus,
+      provider_code: providerCode,
+      failure_class: verdict2.failureClass,
+      entitlement_verdict: failureVerdict(verdict2.status)
+    })
+  };
+}
+function responseTimeSeconds(response) {
+  try {
+    const parsed = Date.parse(response.headers.get("date") ?? "");
+    return Number.isFinite(parsed) ? parsed / 1e3 : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function readStartPlanEntitlementFailureFacts(error2) {
+  return error2 instanceof StartPlanEntitlementRejectionError ? error2.failureFacts : null;
+}
+function formatStartPlanEntitlementFailureFactsIssue(facts) {
+  return `${STARTPLAN_ENTITLEMENT_FACTS_ISSUE_PREFIX}${JSON.stringify({
+    request_attempted: facts.request_attempted,
+    http_status: facts.http_status,
+    provider_code: facts.provider_code,
+    failure_class: facts.failure_class,
+    entitlement_verdict: facts.entitlement_verdict
+  })}`;
+}
+async function createProductionStartPlanAuth(options) {
+  const now = options.now ?? Date.now;
+  const resolveAuthentication = async (signal) => {
+    try {
+      return normalizeOfficialStartPlanAuthentication(
+        await options.authentication.resolveStartPlanAuthentication({
+          family: "bigmodel",
+          signal
+        })
+      );
+    } catch {
+      return null;
+    }
+  };
+  const initial = await resolveAuthentication(options.signal);
+  if (!initial) return null;
+  let entitlementContext = null;
+  let issuedTask = null;
+  const sameEntitlementContext = (context, credential, provider, model, credentialDigest) => context.account === credential.accountIdentity && context.provider === provider && context.model === model && context.deviceMid === credential.deviceMid && context.sessionRevision === credential.sessionRevision && context.credentialDigest === credentialDigest && context.credentialExpiresAt === credential.credentialExpiresAt;
+  const rejection2 = (verdict2) => {
+    const providerCode = verdict2.status === "entitled" ? void 0 : verdict2.providerCode;
+    if (verdict2.status === "entitled") throw new Error("start_plan_entitlement_rejection_invalid");
+    const failureFacts = verdict2.failureFacts ?? Object.freeze({
+      request_attempted: null,
+      http_status: null,
+      provider_code: providerCode ?? null,
+      failure_class: "unknown",
+      entitlement_verdict: failureVerdict(verdict2.status)
+    });
+    return new StartPlanEntitlementRejectionError(verdict2.status, failureFacts, providerCode);
+  };
+  const authoritativeEntitlement = async (credential, provider, model, signal) => {
+    const credentialDigest = createHash12("sha256").update(credential.requestCredential).digest("hex");
+    if (entitlementContext) {
+      if (!sameEntitlementContext(entitlementContext, credential, provider, model, credentialDigest)) {
+        throw new Error("start_plan_entitlement_identity_invalid");
+      }
+      return entitlementContext.verdict;
+    }
+    const verdict2 = await options.entitlement.check({
+      account: credential.accountIdentity,
+      provider,
+      model,
+      deviceMid: credential.deviceMid,
+      jwt: credential.requestCredential,
+      signal
+    });
+    entitlementContext = Object.freeze({
+      account: credential.accountIdentity,
+      provider,
+      model,
+      deviceMid: credential.deviceMid,
+      sessionRevision: credential.sessionRevision,
+      credentialDigest,
+      credentialExpiresAt: credential.credentialExpiresAt,
+      verdict: verdict2
+    });
+    return verdict2;
+  };
+  return {
+    // Captured from the official credential at construction; issue() re-reads
+    // the credential and rejects if the account identity changed mid-run.
+    account: initial.accountIdentity,
+    signal: options.signal,
+    async prepare(provider, model, signal) {
+      if (provider !== "account:bigmodel-start-plan" || !model || signal.aborted) return false;
+      const credential = await resolveAuthentication(signal);
+      if (!credential || credential.accountIdentity !== initial.accountIdentity || credential.sessionRevision !== initial.sessionRevision || credential.credentialExpiresAt !== null && credential.credentialExpiresAt <= now()) return false;
+      const credentialDigest = createHash12("sha256").update(credential.requestCredential).digest("hex");
+      if (entitlementContext && !sameEntitlementContext(entitlementContext, credential, provider, model, credentialDigest)) return false;
+      const verdict2 = await authoritativeEntitlement(credential, provider, model, signal);
+      if (signal.aborted) return false;
+      if (verdict2.status !== "entitled") {
+        throw rejection2(verdict2);
+      }
+      return true;
+    },
+    async issue(binding, signal) {
+      const credential = await resolveAuthentication(signal);
+      if (!credential) throw new Error("start_plan_credential_unavailable");
+      if (binding.account !== credential.accountIdentity) throw new Error("start_plan_account_identity_invalid");
+      if (credential.sessionRevision !== initial.sessionRevision) {
+        throw new Error("start_plan_account_identity_invalid");
+      }
+      if (credential.credentialExpiresAt !== null && credential.credentialExpiresAt <= now()) {
+        throw new Error("start_plan_credential_expired");
+      }
+      if (signal.aborted) throw new Error("start_plan_issuer_cancelled");
+      if (binding.provider !== "account:bigmodel-start-plan" || !binding.model) {
+        throw new Error("start_plan_identity_invalid");
+      }
+      if (issuedTask !== null) throw new Error("start_plan_lease_already_issued");
+      if (!entitlementContext) throw new Error("start_plan_entitlement_not_prepared");
+      issuedTask = binding.task;
+      const verdict2 = await authoritativeEntitlement(credential, binding.provider, binding.model, signal);
+      if (verdict2.status !== "entitled") {
+        throw rejection2(verdict2);
+      }
+      const createdAt = now();
+      const credentialExpiresAt = credential.credentialExpiresAt ?? Number.MAX_SAFE_INTEGER;
+      const deliveryDeadline = Math.min(credentialExpiresAt, createdAt + 3e4);
+      return new PrivateCredentialLease(
+        binding,
+        credential.requestCredential,
+        credentialExpiresAt,
+        now,
+        deliveryDeadline
+      );
+    }
+  };
+}
+async function readOfficialCliVersion(zcodeEntrypoint) {
+  const key = path17.resolve(zcodeEntrypoint);
+  const cached2 = officialCliVersionCache.get(key);
+  if (cached2) return cached2;
+  const version2 = await new Promise((resolve) => {
+    const child = spawn4(process.execPath, [key, "--version"], { shell: false, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
+    let out = "";
+    const timer = setTimeout(() => {
+      child.kill();
+      resolve(void 0);
+    }, 15e3);
+    timer.unref();
+    child.stdout.on("data", (chunk) => {
+      out += chunk.toString("utf8");
+    });
+    child.on("error", () => {
+      clearTimeout(timer);
+      resolve(void 0);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      const value = out.trim();
+      resolve(code === 0 && /^\d+\.\d+\.\d+/.test(value) ? value : void 0);
+    });
+  });
+  if (version2) officialCliVersionCache.set(key, version2);
+  return version2;
+}
+var STARTPLAN_ENTITLEMENT_FACTS_ISSUE_PREFIX, OFFICIAL_START_PLAN_ORIGIN, BILLING_REQUEST_TIMEOUT_MS, StartPlanBillingEntitlement, StartPlanEntitlementRejectionError, officialCliVersionCache;
+var init_start_plan_production_auth = __esm({
+  "src/runtime/start-plan-production-auth.ts"() {
+    "use strict";
+    init_start_plan_private_lease();
+    STARTPLAN_ENTITLEMENT_FACTS_ISSUE_PREFIX = "start_plan_entitlement_failure_facts:";
+    OFFICIAL_START_PLAN_ORIGIN = "https://zcode.z.ai";
+    BILLING_REQUEST_TIMEOUT_MS = 15e3;
+    StartPlanBillingEntitlement = class {
+      #origin;
+      #getAppVersion;
+      #fetchImpl;
+      #now;
+      constructor(options) {
+        this.#origin = (options.origin ?? OFFICIAL_START_PLAN_ORIGIN).replace(/\/+$/, "");
+        this.#getAppVersion = options.getAppVersion;
+        this.#fetchImpl = options.fetchImpl ?? fetch;
+        this.#now = options.now ?? Date.now;
+      }
+      async check(input) {
+        const observedAt = this.#now();
+        const appVersion = await this.#getAppVersion();
+        if (!appVersion || !/^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$/u.test(appVersion)) {
+          return withFailureFacts({
+            status: "unavailable",
+            reason: "official cli version unavailable; refusing to guess",
+            failureClass: "not_attempted"
+          }, { observedAt, requestAttempted: false, httpStatus: null });
+        }
+        const deviceMid = sanitizeHeaderValue(input.deviceMid);
+        if (!deviceMid) {
+          return withFailureFacts({
+            status: "unavailable",
+            reason: "official device identity unavailable; refusing to guess",
+            failureClass: "not_attempted"
+          }, { observedAt, requestAttempted: false, httpStatus: null });
+        }
+        const url2 = `${this.#origin}/api/v1/zcode-plan/billing/balance?app_version=${encodeURIComponent(appVersion)}`;
+        let response;
+        try {
+          response = await this.#fetchImpl(url2, {
+            method: "GET",
+            headers: officialBillingHeaders({
+              origin: this.#origin,
+              appVersion,
+              deviceMid,
+              jwt: input.jwt
+            }),
+            signal: AbortSignal.any([input.signal, AbortSignal.timeout(BILLING_REQUEST_TIMEOUT_MS)])
+          });
+        } catch (error2) {
+          if (input.signal.aborted) throw error2;
+          return withFailureFacts({
+            status: "unavailable",
+            reason: "entitlement transport failed",
+            failureClass: "transport"
+          }, { observedAt: this.#now(), requestAttempted: true, httpStatus: null });
+        }
+        if (response.status === 200) {
+          let body2;
+          let providerCode2;
+          try {
+            const parsed = await response.json();
+            if (isRecord6(parsed)) {
+              body2 = parsed;
+              providerCode2 = extractProviderCode(parsed);
+            }
+          } catch {
+          }
+          const classified = this.#interpretBillingBody({
+            statusCode: response.status,
+            providerCode: providerCode2,
+            body: body2,
+            model: input.model,
+            responseTimeSeconds: responseTimeSeconds(response)
+          });
+          if (classified.status === "entitled") {
+            let requestId = "";
+            try {
+              requestId = (response.headers.get("x-request-id") ?? "").trim();
+            } catch {
+            }
+            return { status: "entitled", observedAt: this.#now(), requestId };
+          }
+          return withFailureFacts(classified, {
+            observedAt: this.#now(),
+            requestAttempted: true,
+            httpStatus: response.status
+          });
+        }
+        let body;
+        let providerCode;
+        try {
+          const parsed = await response.json();
+          if (isRecord6(parsed)) {
+            body = parsed;
+            providerCode = extractProviderCode(parsed);
+          }
+        } catch {
+        }
+        return withFailureFacts(this.#interpretBillingBody({
+          statusCode: response.status,
+          providerCode,
+          body,
+          model: input.model,
+          responseTimeSeconds: responseTimeSeconds(response)
+        }), { observedAt, requestAttempted: true, httpStatus: response.status });
+      }
+      #interpretBillingBody(input) {
+        return classifyEntitlementFailure(input);
+      }
+    };
+    StartPlanEntitlementRejectionError = class extends Error {
+      constructor(entitlementStatus, failureFacts, providerCode) {
+        super(`start_plan_entitlement_rejected:${entitlementStatus}${providerCode ? `:${providerCode}` : ""}`);
+        this.entitlementStatus = entitlementStatus;
+        this.failureFacts = failureFacts;
+        this.name = "StartPlanEntitlementRejectionError";
+      }
+      entitlementStatus;
+      failureFacts;
+    };
+    officialCliVersionCache = /* @__PURE__ */ new Map();
+  }
+});
+
 // src/runtime/start-plan-handle-gate.ts
 var HandleGateError, WorkerHandleGate;
 var init_start_plan_handle_gate = __esm({
@@ -5297,7 +5551,7 @@ var init_start_plan_handle_gate = __esm({
 });
 
 // src/sqlite-candidate/wp6b2b1/interaction-channel.mjs
-import { createHash as createHash12 } from "node:crypto";
+import { createHash as createHash13 } from "node:crypto";
 async function createCandidateInteractionChannel(child, operation, verifyProcessIdentity) {
   if (!child || !Number.isSafeInteger(child.pid) || !Array.isArray(child.stdio) || child.stdio.length < 10 || !operation || operation.operation_kind !== "attempt_lifecycle" || operation.phase !== "running" || !Number.isSafeInteger(operation.generation) || operation.generation < 1 || !operation.claim_id || operation.claim_generation !== operation.generation || !operation.claim_worker_identity_json || !operation.launch_identity_json || !operation.claim_worker_identity_digest || typeof verifyProcessIdentity !== "function") throw coded("interaction_channel_unavailable");
   let worker;
@@ -5475,7 +5729,7 @@ function stableJson(value, depth = 0) {
   throw coded("interaction_json_invalid");
 }
 function sha256(value) {
-  return createHash12("sha256").update(value).digest("hex");
+  return createHash13("sha256").update(value).digest("hex");
 }
 function coded(code) {
   return Object.assign(new Error(code), { code });
@@ -5523,7 +5777,7 @@ var init_interaction_channel = __esm({
 });
 
 // src/store/json-history-result-exceptions.mjs
-import { createHash as createHash13 } from "node:crypto";
+import { createHash as createHash14 } from "node:crypto";
 function freeze(value) {
   if (value && typeof value === "object" && !Object.isFrozen(value)) {
     for (const child of Object.values(value)) freeze(child);
@@ -5537,7 +5791,7 @@ function canonical3(value) {
   return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical3(value[key])}`).join(",")}}`;
 }
 function historicalResultExceptionArtifactId(relativePath) {
-  const digest3 = createHash13("sha256").update(relativePath).digest("hex");
+  const digest3 = createHash14("sha256").update(relativePath).digest("hex");
   return `artifact-${digest3.slice(0, 40)}`;
 }
 function annotateHistoricalResultException(entry) {
@@ -5554,7 +5808,7 @@ function annotateHistoricalResultException(entry) {
   });
 }
 function historicalResultExceptionSetDigest(entries) {
-  return createHash13("sha256").update(canonical3(entries)).digest("hex");
+  return createHash14("sha256").update(canonical3(entries)).digest("hex");
 }
 function isCanonicalHistoricalResultExceptionSet(entries) {
   if (!Array.isArray(entries) || entries.length !== HISTORICAL_RESULT_EXCEPTIONS.length) return false;
@@ -5719,9 +5973,9 @@ __export(store_exports, {
   validateWorkspace: () => validateWorkspace
 });
 import { DatabaseSync } from "node:sqlite";
-import { createHash as createHash14, randomUUID as randomUUID3 } from "node:crypto";
-import { existsSync as existsSync8, lstatSync as lstatSync2, realpathSync as realpathSync4, readFileSync as readFileSync9, writeFileSync as writeFileSync2, openSync as openSync3, closeSync as closeSync3, fsyncSync, unlinkSync as unlinkSync2, renameSync as renameSync2, statSync as statSync5, readSync as readSync3 } from "node:fs";
-import path17 from "node:path";
+import { createHash as createHash15, randomUUID as randomUUID5 } from "node:crypto";
+import { existsSync as existsSync9, lstatSync as lstatSync3, realpathSync as realpathSync4, readFileSync as readFileSync10, writeFileSync as writeFileSync2, openSync as openSync4, closeSync as closeSync4, fsyncSync, unlinkSync as unlinkSync3, renameSync as renameSync3, statSync as statSync5, readSync as readSync3 } from "node:fs";
+import path18 from "node:path";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
 function canonical4(value) {
   try {
@@ -5749,7 +6003,7 @@ function normalizeAdminAbandonmentTableSql(sql) {
   return normalized.endsWith(";") ? normalized.slice(0, -1) : normalized;
 }
 function adminAbandonmentRowsDigest(rows) {
-  return createHash14("sha256").update(rows.map(upgradeRowJson).join("\n")).digest("hex");
+  return createHash15("sha256").update(rows.map(upgradeRowJson).join("\n")).digest("hex");
 }
 function assertCandidateSchema(db, { allowRuntimeEventExtensionAbsent = false } = {}) {
   const key = allowRuntimeEventExtensionAbsent ? "recovery" : "strict";
@@ -5802,7 +6056,7 @@ function upgradeLegacyAdminAbandonmentSchema(db) {
   return true;
 }
 function rejectV13UpgradeMarker(databasePath) {
-  if (existsSync8(v13UpgradeMarker(databasePath))) fail2("unsupported_sqlite_schema", V13_UPGRADE_MARKER_MESSAGE);
+  if (existsSync9(v13UpgradeMarker(databasePath))) fail2("unsupported_sqlite_schema", V13_UPGRADE_MARKER_MESSAGE);
 }
 function walChecksum(buffer, start, length, s0, s1, littleEndian) {
   for (let offset = start; offset < start + length; offset += 8) {
@@ -5814,8 +6068,8 @@ function walChecksum(buffer, start, length, s0, s1, littleEndian) {
   return [s0, s1];
 }
 function walPageOneVersion(walPath, mainVersion) {
-  if (!existsSync8(walPath)) return mainVersion;
-  const fd = openSync3(walPath, "r");
+  if (!existsSync9(walPath)) return mainVersion;
+  const fd = openSync4(walPath, "r");
   try {
     const header = Buffer.alloc(32);
     if (readSync3(fd, header, 0, header.length, 0) !== header.length) return mainVersion;
@@ -5849,20 +6103,20 @@ function walPageOneVersion(walPath, mainVersion) {
   } catch {
     return mainVersion;
   } finally {
-    closeSync3(fd);
+    closeSync4(fd);
   }
 }
 function preflightSchemaVersion(databasePath) {
   let version2;
   try {
-    const fd = openSync3(databasePath, "r");
+    const fd = openSync4(databasePath, "r");
     const header = Buffer.alloc(100);
     try {
       if (readSync3(fd, header, 0, header.length, 0) !== header.length) return;
       if (header.subarray(0, 16).toString("latin1") !== "SQLite format 3\0") return;
       version2 = walPageOneVersion(databasePath + "-wal", header.readUInt32BE(60));
     } finally {
-      closeSync3(fd);
+      closeSync4(fd);
     }
   } catch {
     return;
@@ -6225,31 +6479,31 @@ function parseAuthoritySourceManifest(sourceManifestJson, sourceManifestDigest) 
   const parsed = parseHistoricalExceptionManifest(sourceManifestJson, sourceManifestDigest);
   const { manifest } = parsed;
   if (manifest.kind === void 0) return { ...parsed, kind: "historical_projection" };
-  if (manifest.kind !== "raw_json_archive_cutover" || typeof manifest.source_tasks_root !== "string" || !path17.isAbsolute(manifest.source_tasks_root) || typeof manifest.archive_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(manifest.archive_manifest_digest) || typeof manifest.source_files_digest !== "string" || !/^[0-9a-f]{64}$/u.test(manifest.source_files_digest) || manifest.task_count !== 0 || manifest.result_count !== 0 || manifest.event_count !== 0 || !Number.isSafeInteger(manifest.artifact_count) || manifest.artifact_count < 0 || !Number.isSafeInteger(manifest.artifact_bytes) || manifest.artifact_bytes < 0 || !Number.isSafeInteger(manifest.archive_file_count) || manifest.archive_file_count !== manifest.artifact_count || !Number.isSafeInteger(manifest.archive_byte_count) || manifest.archive_byte_count !== manifest.artifact_bytes || parsed.exceptions.length !== 0 || !Array.isArray(manifest.files) || manifest.files.length !== 0)
+  if (manifest.kind !== "raw_json_archive_cutover" || typeof manifest.source_tasks_root !== "string" || !path18.isAbsolute(manifest.source_tasks_root) || typeof manifest.archive_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(manifest.archive_manifest_digest) || typeof manifest.source_files_digest !== "string" || !/^[0-9a-f]{64}$/u.test(manifest.source_files_digest) || manifest.task_count !== 0 || manifest.result_count !== 0 || manifest.event_count !== 0 || !Number.isSafeInteger(manifest.artifact_count) || manifest.artifact_count < 0 || !Number.isSafeInteger(manifest.artifact_bytes) || manifest.artifact_bytes < 0 || !Number.isSafeInteger(manifest.archive_file_count) || manifest.archive_file_count !== manifest.artifact_count || !Number.isSafeInteger(manifest.archive_byte_count) || manifest.archive_byte_count !== manifest.artifact_bytes || parsed.exceptions.length !== 0 || !Array.isArray(manifest.files) || manifest.files.length !== 0)
     fail2("invalid_raw_json_archive_cutover_manifest");
   return { ...parsed, kind: "raw_json_archive_cutover" };
 }
 function pathsFor(root, { databaseFileName = "operations.sqlite3", managedDataDirectory = false, allowCutoverPending = false, allowUnpublishedCutover = false, allowFreshBootstrapPending = false } = {}) {
-  if (typeof root !== "string" || !path17.isAbsolute(root) || !existsSync8(root) || !lstatSync2(root).isDirectory() || lstatSync2(root).isSymbolicLink()) fail2("invalid_data_root");
+  if (typeof root !== "string" || !path18.isAbsolute(root) || !existsSync9(root) || !lstatSync3(root).isDirectory() || lstatSync3(root).isSymbolicLink()) fail2("invalid_data_root");
   if (typeof databaseFileName !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/u.test(databaseFileName) || databaseFileName === "." || databaseFileName === "..") fail2("invalid_database_file_name");
   const resolved = realpathSync4.native(root);
   if (!managedDataDirectory) {
-    const relative = path17.relative(HERE, resolved);
-    if (!relative || relative.startsWith("..") || path17.isAbsolute(relative)) fail2("data_root_outside_candidate");
+    const relative = path18.relative(HERE, resolved);
+    if (!relative || relative.startsWith("..") || path18.isAbsolute(relative)) fail2("data_root_outside_candidate");
   }
-  const db = path17.join(resolved, databaseFileName);
+  const db = path18.join(resolved, databaseFileName);
   const files = {
     root: resolved,
     db,
     bootstrapPending: `${db}.bootstrap-pending.json`,
     cutoverPending: `${db}.cutover-pending.json`,
     cutoverPublished: `${db}.cutover-published.json`,
-    poison: path17.join(resolved, "ROOT_POISONED.json"),
-    intent: path17.join(resolved, "WRITER_INTENT.json")
+    poison: path18.join(resolved, "ROOT_POISONED.json"),
+    intent: path18.join(resolved, "WRITER_INTENT.json")
   };
   for (const file of [files.db, `${files.db}-wal`, `${files.db}-shm`, files.bootstrapPending, files.cutoverPending, files.cutoverPublished, files.poison, files.intent]) {
     try {
-      const st = lstatSync2(file);
+      const st = lstatSync3(file);
       if (st.isSymbolicLink() || !st.isFile()) fail2("unsafe_root_entry");
     } catch (e) {
       if (e instanceof AdmissionError) throw e;
@@ -6261,21 +6515,21 @@ function pathsFor(root, { databaseFileName = "operations.sqlite3", managedDataDi
 function readPublishedCutoverReceipt(file) {
   let value;
   try {
-    value = JSON.parse(readFileSync9(file, "utf8"));
+    value = JSON.parse(readFileSync10(file, "utf8"));
   } catch {
     fail2("cutover_publication_receipt_unreadable");
   }
   const keys = ["archive", "created_at", "cutover_id", "database_file", "migration_id", "schema_version", "source_manifest_digest", "source_root_digest", "state"];
   const archiveKeys = ["archive_directory", "byte_count", "file_count", "manifest_digest", "source_tasks_root"];
-  if (!value || Object.getPrototypeOf(value) !== Object.prototype || Object.keys(value).sort().join("|") !== keys.join("|") || value.schema_version !== 1 || value.state !== "authority_switch_receipt" || !validText3(value.migration_id, 128) || !validText3(value.cutover_id, 128) || typeof value.source_root_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.source_root_digest) || typeof value.source_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.source_manifest_digest) || !validText3(value.database_file, 96) || !validText3(value.created_at, 64) || Number.isNaN(Date.parse(value.created_at)) || !value.archive || Object.getPrototypeOf(value.archive) !== Object.prototype || Object.keys(value.archive).sort().join("|") !== archiveKeys.join("|") || !validText3(value.archive.archive_directory, 32767) || !path17.isAbsolute(value.archive.archive_directory) || !validText3(value.archive.source_tasks_root, 32767) || !path17.isAbsolute(value.archive.source_tasks_root) || typeof value.archive.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.archive.manifest_digest) || !Number.isSafeInteger(value.archive.file_count) || value.archive.file_count < 0 || !Number.isSafeInteger(value.archive.byte_count) || value.archive.byte_count < 0) fail2("cutover_publication_receipt_invalid");
+  if (!value || Object.getPrototypeOf(value) !== Object.prototype || Object.keys(value).sort().join("|") !== keys.join("|") || value.schema_version !== 1 || value.state !== "authority_switch_receipt" || !validText3(value.migration_id, 128) || !validText3(value.cutover_id, 128) || typeof value.source_root_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.source_root_digest) || typeof value.source_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.source_manifest_digest) || !validText3(value.database_file, 96) || !validText3(value.created_at, 64) || Number.isNaN(Date.parse(value.created_at)) || !value.archive || Object.getPrototypeOf(value.archive) !== Object.prototype || Object.keys(value.archive).sort().join("|") !== archiveKeys.join("|") || !validText3(value.archive.archive_directory, 32767) || !path18.isAbsolute(value.archive.archive_directory) || !validText3(value.archive.source_tasks_root, 32767) || !path18.isAbsolute(value.archive.source_tasks_root) || typeof value.archive.manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.archive.manifest_digest) || !Number.isSafeInteger(value.archive.file_count) || value.archive.file_count < 0 || !Number.isSafeInteger(value.archive.byte_count) || value.archive.byte_count < 0) fail2("cutover_publication_receipt_invalid");
   return value;
 }
 function assertCutoverPublicationGate(db, paths) {
   const switched = db.prepare("SELECT * FROM authority_switch").all();
   if (switched.length === 0) return;
   if (switched.length !== 1) fail2("authority_receipt_missing_or_ambiguous");
-  const pending = existsSync8(paths.cutoverPending);
-  const published = existsSync8(paths.cutoverPublished);
+  const pending = existsSync9(paths.cutoverPending);
+  const published = existsSync9(paths.cutoverPublished);
   if (pending && published) fail2("cutover_publication_receipt_ambiguous");
   if (pending) {
     if (!paths.allowCutoverPending) fail2("cutover_publish_pending");
@@ -6287,30 +6541,30 @@ function assertCutoverPublicationGate(db, paths) {
   }
   const receipt2 = switched[0];
   const publication = readPublishedCutoverReceipt(paths.cutoverPublished);
-  if (publication.database_file !== path17.basename(paths.db) || publication.migration_id !== receipt2.migration_id || publication.cutover_id !== receipt2.cutover_id || publication.source_root_digest !== receipt2.source_root_digest || publication.source_manifest_digest !== receipt2.source_manifest_digest || publication.archive.archive_directory !== receipt2.archive_directory || publication.archive.manifest_digest !== receipt2.archive_manifest_digest || publication.archive.source_tasks_root !== receipt2.archive_source_tasks_root || publication.archive.file_count !== receipt2.archive_file_count || publication.archive.byte_count !== receipt2.archive_byte_count) fail2("cutover_publication_receipt_mismatch");
+  if (publication.database_file !== path18.basename(paths.db) || publication.migration_id !== receipt2.migration_id || publication.cutover_id !== receipt2.cutover_id || publication.source_root_digest !== receipt2.source_root_digest || publication.source_manifest_digest !== receipt2.source_manifest_digest || publication.archive.archive_directory !== receipt2.archive_directory || publication.archive.manifest_digest !== receipt2.archive_manifest_digest || publication.archive.source_tasks_root !== receipt2.archive_source_tasks_root || publication.archive.file_count !== receipt2.archive_file_count || publication.archive.byte_count !== receipt2.archive_byte_count) fail2("cutover_publication_receipt_mismatch");
 }
 function writePoison(file, value) {
-  const tmp = `${file}.${randomUUID3()}.tmp`;
-  const fd = openSync3(tmp, "wx", 384);
+  const tmp = `${file}.${randomUUID5()}.tmp`;
+  const fd = openSync4(tmp, "wx", 384);
   try {
     writeFileSync2(fd, JSON.stringify(value));
     fsyncSync(fd);
   } finally {
-    closeSync3(fd);
+    closeSync4(fd);
   }
   try {
-    renameSync2(tmp, file);
+    renameSync3(tmp, file);
   } catch (error2) {
-    if (!existsSync8(file)) throw error2;
+    if (!existsSync9(file)) throw error2;
     try {
-      unlinkSync2(tmp);
+      unlinkSync3(tmp);
     } catch {
     }
   }
 }
 function workspacePathsOverlap(left, right) {
-  const a = path17.win32.resolve(left).toLowerCase();
-  const b = path17.win32.resolve(right).toLowerCase();
+  const a = path18.win32.resolve(left).toLowerCase();
+  const b = path18.win32.resolve(right).toLowerCase();
   const contains = (parent, child) => child === parent || child.startsWith(parent.endsWith("\\") ? parent : `${parent}\\`);
   return contains(a, b) || contains(b, a);
 }
@@ -6541,7 +6795,7 @@ function validateTaskPackage(task) {
 }
 function validateWorkspace(input, validator) {
   if (typeof input !== "string" || !input.trim()) fail2("workspace_missing");
-  if (!path17.isAbsolute(input)) fail2("workspace_not_absolute");
+  if (!path18.isAbsolute(input)) fail2("workspace_not_absolute");
   if (input.replace(/\//g, "\\").startsWith("\\\\")) fail2("workspace_unsupported_path_form");
   let st, canonicalPath;
   try {
@@ -6582,10 +6836,10 @@ var init_store = __esm({
     init_interaction_channel();
     init_json_history_result_exceptions();
     init_task_feedback_projection();
-    HERE = path17.dirname(fileURLToPath5(import.meta.url));
-    SCHEMA = readFileSync9(new URL("./schema.sql", import.meta.url), "utf8");
-    RUNTIME_EVENTS_SCHEMA = readFileSync9(new URL("./runtime-events.sql", import.meta.url), "utf8");
-    ADMIN_ABANDONMENT_SCHEMA = readFileSync9(new URL("./admin-abandonment.sql", import.meta.url), "utf8");
+    HERE = path18.dirname(fileURLToPath5(import.meta.url));
+    SCHEMA = readFileSync10(new URL("./schema.sql", import.meta.url), "utf8");
+    RUNTIME_EVENTS_SCHEMA = readFileSync10(new URL("./runtime-events.sql", import.meta.url), "utf8");
+    ADMIN_ABANDONMENT_SCHEMA = readFileSync10(new URL("./admin-abandonment.sql", import.meta.url), "utf8");
     NORMALIZED_ADMIN_ABANDONMENT_SCHEMA = ADMIN_ABANDONMENT_SCHEMA.replace(/\r\n?/gu, "\n");
     LEGACY_ADMIN_ABANDONMENT_SCHEMA = NORMALIZED_ADMIN_ABANDONMENT_SCHEMA.replace(
       "event_sequence INTEGER NOT NULL CHECK(event_sequence=original_revision+1)",
@@ -6620,11 +6874,11 @@ var init_store = __esm({
     RECOVERY_QUARANTINE_CODES = /* @__PURE__ */ new Set(["claim_identity_conflict", "operation_projection_conflict"]);
     RECOVERY_EVIDENCE_KEYS = Object.freeze(["attempt", "claim_id", "classification", "envelope_digest", "evidence_digest", "evidence_source", "expected_revision", "reason", "reason_code", "task_id", "worker_identity_digest"]);
     RECOVERY_LIMIT = 8;
-    digest2 = (value) => createHash14("sha256").update(typeof value === "string" ? value : canonical4(value)).digest("hex");
-    rawDigest = (value) => createHash14("sha256").update(Buffer.from(value)).digest("hex");
+    digest2 = (value) => createHash15("sha256").update(typeof value === "string" ? value : canonical4(value)).digest("hex");
+    rawDigest = (value) => createHash15("sha256").update(Buffer.from(value)).digest("hex");
     upgradeRowJson = (row) => canonical4(Object.fromEntries(Object.entries(row).map(([key, value]) => [
       key,
-      value instanceof Uint8Array ? { sqlite_type: "blob", bytes: value.byteLength, sha256: createHash14("sha256").update(value).digest("hex") } : value
+      value instanceof Uint8Array ? { sqlite_type: "blob", bytes: value.byteLength, sha256: createHash15("sha256").update(value).digest("hex") } : value
     ])));
     EVIDENCE_KEYS = Object.freeze({
       capacity_policy_committed: ["capacity_limit", "generation"],
@@ -6694,7 +6948,7 @@ var init_store = __esm({
       static initialize(root, options = {}) {
         const p = pathsFor(root, options);
         rejectV13UpgradeMarker(p.db);
-        if (existsSync8(p.db) || existsSync8(p.cutoverPending) || existsSync8(p.cutoverPublished) || existsSync8(p.poison) || existsSync8(p.intent)) fail2("root_not_empty");
+        if (existsSync9(p.db) || existsSync9(p.cutoverPending) || existsSync9(p.cutoverPublished) || existsSync9(p.poison) || existsSync9(p.intent)) fail2("root_not_empty");
         if (options.onFreshBootstrapStage !== void 0 && typeof options.onFreshBootstrapStage !== "function") fail2("invalid_fresh_bootstrap_stage_hook");
         const freshBootstrapStage = options.onFreshBootstrapStage;
         const db = new DatabaseSync(p.db, { timeout: 5e3 });
@@ -6732,11 +6986,11 @@ var init_store = __esm({
       }
       static open(root, { fault, ...pathOptions } = {}) {
         const p = pathsFor(root, pathOptions);
-        if (existsSync8(p.bootstrapPending) && !p.allowBootstrapPending) fail2("sqlite_bootstrap_pending");
-        if (existsSync8(p.cutoverPending)) fail2("cutover_publish_pending");
-        if (existsSync8(p.poison)) fail2("root_poisoned");
+        if (existsSync9(p.bootstrapPending) && !p.allowBootstrapPending) fail2("sqlite_bootstrap_pending");
+        if (existsSync9(p.cutoverPending)) fail2("cutover_publish_pending");
+        if (existsSync9(p.poison)) fail2("root_poisoned");
         rejectV13UpgradeMarker(p.db);
-        if (!existsSync8(p.db)) fail2("database_missing");
+        if (!existsSync9(p.db)) fail2("database_missing");
         preflightSchemaVersion(p.db);
         const db = new DatabaseSync(p.db, { timeout: 5e3 });
         db.exec("PRAGMA foreign_keys=ON");
@@ -6761,10 +7015,10 @@ var init_store = __esm({
       /** Open only the current candidate schema read-only for conservative recovery inspection. */
       static openForRecovery(root, options = {}) {
         const p = pathsFor(root, options);
-        if (existsSync8(p.bootstrapPending)) fail2("sqlite_bootstrap_pending");
-        if (existsSync8(p.cutoverPending) && !p.allowCutoverPending) fail2("cutover_publish_pending");
+        if (existsSync9(p.bootstrapPending)) fail2("sqlite_bootstrap_pending");
+        if (existsSync9(p.cutoverPending) && !p.allowCutoverPending) fail2("cutover_publish_pending");
         rejectV13UpgradeMarker(p.db);
-        if (!existsSync8(p.db)) fail2("database_missing");
+        if (!existsSync9(p.db)) fail2("database_missing");
         preflightSchemaVersion(p.db);
         const db = new DatabaseSync(p.db, { timeout: 5e3, readOnly: true });
         try {
@@ -6793,7 +7047,7 @@ var init_store = __esm({
         this.#db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
       }
       get poisoned() {
-        return this.#poisoned || existsSync8(this.#paths.poison);
+        return this.#poisoned || existsSync9(this.#paths.poison);
       }
       get foreignKeysEnabled() {
         this.#assertOpen();
@@ -7243,7 +7497,7 @@ var init_store = __esm({
             request_id: input.request_id,
             answer
           });
-          const replyId = randomUUID3();
+          const replyId = randomUUID5();
           const changed = this.#db.prepare("UPDATE manager_operations SET revision=revision+1 WHERE operation_id=? AND task_id=? AND attempt=? AND generation=? AND phase='running' AND revision=? AND claim_id=? AND claim_generation=? AND claim_worker_identity_digest=?").run(o.operation_id, o.task_id, o.attempt, o.generation, o.revision, o.claim_id, o.generation, o.claim_worker_identity_digest);
           if (changed.changes !== 1) fail2("stale_interaction_cas");
           const saved = this.#db.prepare("UPDATE manager_interaction_payloads SET answer_json=?,answer_digest=?,reply_id=? WHERE operation_id=? AND request_id=? AND answer_json IS NULL").run(answerJson, answerDigest, replyId, o.operation_id, input.request_id);
@@ -7414,7 +7668,7 @@ var init_store = __esm({
       /** Atomically persist a queued continuation Attempt without reserving lifecycle Capacity. */
       createNextAttempt(input, { workspaceValidator, executionPermissionCheck } = {}) {
         this.#assertWritable();
-        const operationId = input?.operation_id === void 0 ? randomUUID3() : input.operation_id;
+        const operationId = input?.operation_id === void 0 ? randomUUID5() : input.operation_id;
         if (!validId3(operationId) || operationId !== operationId.trim() || !validId3(input?.task_id) || typeof input?.feedback !== "string" || !input.feedback.trim() || input.additional_requirements !== void 0 && (!Array.isArray(input.additional_requirements) || input.additional_requirements.some((value) => typeof value !== "string"))) fail2("invalid_continue_request");
         const additionalRequirements = input.additional_requirements ?? [];
         const publicRequest = { task_id: input.task_id, feedback: input.feedback, additional_requirements: additionalRequirements };
@@ -7844,7 +8098,7 @@ var init_store = __esm({
           const normalized = { ...requested, generation };
           const slot = this.#db.prepare("SELECT n FROM (SELECT 1 AS n UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8) WHERE n<=? AND n NOT IN (SELECT capacity_slot FROM manager_operations WHERE operation_kind='attempt_lifecycle' AND phase NOT IN ('released','cancelled_before_launch')) ORDER BY n LIMIT 1").get(meta2.capacity_limit);
           if (!slot) fail2("capacity_exhausted");
-          const reservation_id = randomUUID3();
+          const reservation_id = randomUUID5();
           this.#db.prepare("INSERT INTO manager_operations(operation_id,operation_kind,request_digest,task_id,attempt,generation,reservation_id,revision,phase,capacity_slot,workspace_ref,workspace_identity_json,created_at) VALUES(?,'attempt_lifecycle',?,?,?,?,?,1,'reserved',?,?,NULL,?)").run(normalized.operation_id, d, normalized.task_id, normalized.attempt, normalized.generation, reservation_id, slot.n, w, at);
           this.#faultPoint("after_projection");
           this.#event(normalized.operation_id, 1, "reserved", null, "reserved", normalized.generation, {
@@ -8002,7 +8256,7 @@ var init_store = __esm({
           if (operation && (operation.generation !== attempt.generation || operation.claim_id !== null || operation.result_digest !== null))
             fail2("queued_cancel_operation_mismatch");
           if (!operation && attempt.generation !== null) fail2("queued_cancel_generation_without_operation");
-          const cancelId = randomUUID3(), at = (/* @__PURE__ */ new Date()).toISOString(), next = this.#nextEventCursor();
+          const cancelId = randomUUID5(), at = (/* @__PURE__ */ new Date()).toISOString(), next = this.#nextEventCursor();
           const result = {
             task_id,
             attempt: expected_attempt,
@@ -8146,7 +8400,7 @@ var init_store = __esm({
         }
         if (!identityVerdict || !["alive", "exited"].includes(identityVerdict.state) || identityVerdict.worker_identity_digest !== snapshot.operation.claim_worker_identity_digest || typeof identityVerdict.evidence_digest !== "string" || !/^[0-9a-f]{64}$/u.test(identityVerdict.evidence_digest)) fail2("cancellation_identity_unknown");
         if (identityVerdict.evidence_digest !== digest2(identityEvidence)) fail2("cancellation_identity_evidence_mismatch");
-        const cancelId = randomUUID3();
+        const cancelId = randomUUID5();
         return this.#transaction(() => {
           const current = this.#attemptOperation(input);
           if (current.result_digest !== null || ["result_committed", "cleanup_pending", "cleanup_verified", "cleanup_unverified", "released", "quarantined"].includes(current.phase))
@@ -8517,7 +8771,7 @@ var init_store = __esm({
             events: this.#db.prepare("SELECT * FROM manager_operation_events ORDER BY operation_id,sequence").all()
           };
         });
-        return { ...snapshot, root_poisoned: this.poisoned || existsSync8(this.#paths.intent) };
+        return { ...snapshot, root_poisoned: this.poisoned || existsSync9(this.#paths.intent) };
       }
       /** Read-only recovery entry point. Writable Stores cannot be used as Recovery authority. */
       readRecoverySnapshot() {
@@ -8550,7 +8804,7 @@ var init_store = __esm({
           }
           this.#db.exec("COMMIT");
           transaction = false;
-          const poisoned = this.poisoned, writerIntent = existsSync8(this.#paths.intent);
+          const poisoned = this.poisoned, writerIntent = existsSync9(this.#paths.intent);
           const rootBlocked = Boolean(integrityError || meta2.length !== 1 || poisoned || writerIntent);
           const operationsWithRecovery = operations.map((row) => {
             const adminAbandonment = adminAbandonments.get(row.operation_id);
@@ -9453,14 +9707,14 @@ var init_store = __esm({
       #transaction(fn) {
         this.#assertWritable();
         let began = false, commitStarted = false, settled = false;
-        const token = randomUUID3();
+        const token = randomUUID5();
         try {
-          const fd = openSync3(this.#paths.intent, "wx", 384);
+          const fd = openSync4(this.#paths.intent, "wx", 384);
           try {
             writeFileSync2(fd, JSON.stringify({ version: 1, token, started_at: (/* @__PURE__ */ new Date()).toISOString() }));
             fsyncSync(fd);
           } finally {
-            closeSync3(fd);
+            closeSync4(fd);
           }
         } catch (e) {
           if (e?.code === "EEXIST") fail2("root_writer_busy");
@@ -9508,11 +9762,11 @@ var init_store = __esm({
           }
           throw e;
         } finally {
-          if (settled && !this.#poisoned && !existsSync8(this.#paths.poison)) {
+          if (settled && !this.#poisoned && !existsSync9(this.#paths.poison)) {
             try {
-              const intent = JSON.parse(readFileSync9(this.#paths.intent, "utf8"));
+              const intent = JSON.parse(readFileSync10(this.#paths.intent, "utf8"));
               if (intent.token !== token) fail2("writer_intent_identity_mismatch");
-              unlinkSync2(this.#paths.intent);
+              unlinkSync3(this.#paths.intent);
             } catch (e) {
               this.#poison("writer_intent_release_unknown", String(e));
               fail2("transaction_outcome_unknown", String(e));
@@ -9556,7 +9810,7 @@ var init_store = __esm({
             if (migrationRuns.length || migratedResultsCount || migratedEventsCount || this.#db.prepare("SELECT COUNT(*) AS n FROM json_artifacts").get().n) fail2("fresh_install_contains_legacy_data");
           } else if (authoritySwitches.length) {
             const receipt2 = authoritySwitches[0], migration = migrationRuns[0];
-            if (!migration || migration.state !== "verified" || migration.migration_id !== receipt2.migration_id || migration.source_root_digest !== receipt2.source_root_digest || migration.source_manifest_digest !== receipt2.source_manifest_digest || digest2(migration.source_manifest_json) !== migration.source_manifest_digest || !validText3(migration.archive_directory, 32767) || !path17.isAbsolute(migration.archive_directory) || !validText3(receipt2.archive_directory, 32767) || !path17.isAbsolute(receipt2.archive_directory) || migration.archive_directory !== receipt2.archive_directory || typeof migration.archive_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(migration.archive_manifest_digest) || migration.archive_manifest_digest !== receipt2.archive_manifest_digest || !validText3(migration.archive_source_tasks_root, 32767) || !path17.isAbsolute(migration.archive_source_tasks_root) || migration.archive_source_tasks_root !== receipt2.archive_source_tasks_root || !Number.isSafeInteger(migration.archive_file_count) || migration.archive_file_count < 0 || migration.archive_file_count !== migration.source_artifact_count || migration.archive_file_count !== receipt2.archive_file_count || !Number.isSafeInteger(migration.archive_byte_count) || migration.archive_byte_count < 0 || migration.archive_byte_count !== migration.source_artifact_bytes || migration.archive_byte_count !== receipt2.archive_byte_count || receipt2.schema_version !== SCHEMA_VERSION || !validText3(receipt2.protocol_version, 128) || typeof receipt2.runtime_roster_digest !== "string" || !/^[0-9a-f]{64}$/u.test(receipt2.runtime_roster_digest) || !validText3(receipt2.verifier_version, 128) || !validText3(migration.verifier_version, 128) || receipt2.verifier_version !== migration.verifier_version || !validText3(receipt2.cutover_id, 128) || !validText3(receipt2.created_at, 64) || Number.isNaN(Date.parse(receipt2.created_at)) || !validText3(migration.created_at, 64) || !validText3(migration.verified_at, 64) || Number.isNaN(Date.parse(migration.created_at)) || Number.isNaN(Date.parse(migration.verified_at))) fail2("authority_switch_invalid");
+            if (!migration || migration.state !== "verified" || migration.migration_id !== receipt2.migration_id || migration.source_root_digest !== receipt2.source_root_digest || migration.source_manifest_digest !== receipt2.source_manifest_digest || digest2(migration.source_manifest_json) !== migration.source_manifest_digest || !validText3(migration.archive_directory, 32767) || !path18.isAbsolute(migration.archive_directory) || !validText3(receipt2.archive_directory, 32767) || !path18.isAbsolute(receipt2.archive_directory) || migration.archive_directory !== receipt2.archive_directory || typeof migration.archive_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(migration.archive_manifest_digest) || migration.archive_manifest_digest !== receipt2.archive_manifest_digest || !validText3(migration.archive_source_tasks_root, 32767) || !path18.isAbsolute(migration.archive_source_tasks_root) || migration.archive_source_tasks_root !== receipt2.archive_source_tasks_root || !Number.isSafeInteger(migration.archive_file_count) || migration.archive_file_count < 0 || migration.archive_file_count !== migration.source_artifact_count || migration.archive_file_count !== receipt2.archive_file_count || !Number.isSafeInteger(migration.archive_byte_count) || migration.archive_byte_count < 0 || migration.archive_byte_count !== migration.source_artifact_bytes || migration.archive_byte_count !== receipt2.archive_byte_count || receipt2.schema_version !== SCHEMA_VERSION || !validText3(receipt2.protocol_version, 128) || typeof receipt2.runtime_roster_digest !== "string" || !/^[0-9a-f]{64}$/u.test(receipt2.runtime_roster_digest) || !validText3(receipt2.verifier_version, 128) || !validText3(migration.verifier_version, 128) || receipt2.verifier_version !== migration.verifier_version || !validText3(receipt2.cutover_id, 128) || !validText3(receipt2.created_at, 64) || Number.isNaN(Date.parse(receipt2.created_at)) || !validText3(migration.created_at, 64) || !validText3(migration.verified_at, 64) || Number.isNaN(Date.parse(migration.created_at)) || Number.isNaN(Date.parse(migration.verified_at))) fail2("authority_switch_invalid");
             const policy = parseAuthoritySourceManifest(migration.source_manifest_json, migration.source_manifest_digest);
             if (policy.manifest.task_count !== migration.source_task_count || policy.manifest.artifact_count !== migration.source_artifact_count || policy.manifest.artifact_bytes !== migration.source_artifact_bytes || policy.manifest.result_count !== migration.source_result_count || policy.manifest.event_count !== migration.source_event_count) fail2("authority_switch_invalid");
           } else if (migrationRuns.length || migratedResultsCount || migratedEventsCount || this.#db.prepare("SELECT COUNT(*) AS n FROM json_artifacts").get().n) {
@@ -10012,7 +10266,7 @@ var init_store = __esm({
 });
 
 // src/sqlite-candidate/wp6b2b1/runtime-event-channel.mjs
-import { createHash as createHash15 } from "node:crypto";
+import { createHash as createHash16 } from "node:crypto";
 async function createCandidateRuntimeEventChannel(child, operation, verifyProcessIdentity) {
   if (!child || !Number.isSafeInteger(child.pid) || !Array.isArray(child.stdio) || child.stdio.length < 15 || !operation || operation.operation_kind !== "attempt_lifecycle" || operation.phase !== "running" || !Number.isSafeInteger(operation.generation) || operation.generation < 1 || !operation.claim_id || operation.claim_generation !== operation.generation || !operation.claim_worker_identity_json || !operation.launch_identity_json || !operation.claim_worker_identity_digest || typeof verifyProcessIdentity !== "function") {
     throw coded2("runtime_event_channel_unavailable");
@@ -10142,7 +10396,7 @@ function stableJson2(value, depth = 0) {
   throw coded2("runtime_event_json_invalid");
 }
 function sha2562(value) {
-  return createHash15("sha256").update(value).digest("hex");
+  return createHash16("sha256").update(value).digest("hex");
 }
 function coded2(code) {
   return Object.assign(new Error(code), { code });
@@ -10467,13 +10721,13 @@ __export(lifecycle_gate_exports, {
   openClaimOnlyDriver: () => openClaimOnlyDriver,
   readAllLifecycleEventsForRecovery: () => readAllLifecycleEventsForRecovery
 });
-import { createHash as createHash16, randomUUID as randomUUID4 } from "node:crypto";
-import { closeSync as closeSync4, existsSync as existsSync9, fsyncSync as fsyncSync2, linkSync, lstatSync as lstatSync3, openSync as openSync4, readFileSync as readFileSync10, readdirSync, realpathSync as realpathSync5, unlinkSync as unlinkSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { createHash as createHash17, randomUUID as randomUUID6 } from "node:crypto";
+import { closeSync as closeSync5, existsSync as existsSync10, fsyncSync as fsyncSync2, linkSync, lstatSync as lstatSync4, openSync as openSync5, readFileSync as readFileSync11, readdirSync as readdirSync2, realpathSync as realpathSync5, unlinkSync as unlinkSync4, writeFileSync as writeFileSync3 } from "node:fs";
 import { spawn as spawn5 } from "node:child_process";
-import path18 from "node:path";
+import path19 from "node:path";
 import { homedir as homedir5 } from "node:os";
 function recoveryStopKey(dataRoot, databaseFileName, operationId) {
-  return `${path18.resolve(dataRoot)}\0${databaseFileName ?? "operations.sqlite3"}\0${operationId}`;
+  return `${path19.resolve(dataRoot)}\0${databaseFileName ?? "operations.sqlite3"}\0${operationId}`;
 }
 function readAllLifecycleEventsForRecovery(port, operationId) {
   const pageSize = 200;
@@ -10559,7 +10813,7 @@ async function initializeFreshInstallSqliteRoot(root, databaseFileName, version2
     throw new LifecycleGateError("sqlite_bootstrap_database_name_invalid");
   }
   const modules = await loadLifecycleCandidateModules(version2);
-  const key = path18.join(path18.resolve(root), databaseFileName);
+  const key = path19.join(path19.resolve(root), databaseFileName);
   const pending = freshBootstrapPromises.get(key);
   if (pending) return pending;
   const operation = ensureFreshSqliteAuthority(root, databaseFileName, modules, processProbe, options);
@@ -10577,7 +10831,7 @@ async function acquireFreshBootstrapLock(root, databaseFileName, timeoutMs, owne
       "Fresh SQLite bootstrap requires the Windows exclusive-file-handle lock"
     );
   }
-  const lockPath = path18.join(root, `${databaseFileName}.bootstrap.lock`);
+  const lockPath = path19.join(root, `${databaseFileName}.bootstrap.lock`);
   const deadline = Date.now() + timeoutMs;
   for (; ; ) {
     assertFreshBootstrapRootPath(root);
@@ -10595,7 +10849,7 @@ async function acquireFreshBootstrapLock(root, databaseFileName, timeoutMs, owne
 }
 function assertBootstrapLockPath(lockPath) {
   try {
-    const stat2 = lstatSync3(lockPath);
+    const stat2 = lstatSync4(lockPath);
     if (!stat2.isFile() || stat2.isSymbolicLink()) {
       throw new LifecycleGateError("sqlite_bootstrap_lock_unsafe_entry");
     }
@@ -10610,7 +10864,7 @@ async function tryAcquireWindowsBootstrapLock(root, lockPath, databaseFileName, 
     database_file: databaseFileName,
     owner_identity: ownerIdentity,
     acquired_at: (/* @__PURE__ */ new Date()).toISOString(),
-    token: randomUUID4()
+    token: randomUUID6()
   })}
 `;
   const releaseRecord = `${JSON.stringify({
@@ -10621,8 +10875,8 @@ async function tryAcquireWindowsBootstrapLock(root, lockPath, databaseFileName, 
   })}
 `;
   const systemRoot = process.env["SystemRoot"];
-  const absolutePowerShell = systemRoot ? path18.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe") : "powershell.exe";
-  const executable = existsSync9(absolutePowerShell) ? absolutePowerShell : "powershell.exe";
+  const absolutePowerShell = systemRoot ? path19.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe") : "powershell.exe";
+  const executable = existsSync10(absolutePowerShell) ? absolutePowerShell : "powershell.exe";
   const child = spawn5(executable, [
     "-NoLogo",
     "-NoProfile",
@@ -10833,9 +11087,9 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 async function ensureFreshSqliteAuthority(root, databaseFileName, modules, processProbe, options) {
-  const resolvedRoot = path18.resolve(root);
+  const resolvedRoot = path19.resolve(root);
   assertFreshBootstrapRootPath(resolvedRoot);
-  const databasePath = path18.join(resolvedRoot, databaseFileName);
+  const databasePath = path19.join(resolvedRoot, databaseFileName);
   const pendingPath = `${databasePath}.bootstrap-pending.json`;
   const markerTempPath = `${databasePath}.bootstrap-marker.tmp`;
   const lockTimeoutMs = options.lockTimeoutMs ?? DEFAULT_FRESH_BOOTSTRAP_LOCK_TIMEOUT_MS;
@@ -10861,23 +11115,23 @@ async function ensureFreshSqliteAuthority(root, databaseFileName, modules, proce
     for (; ; ) {
       assertFreshBootstrapRootPath(resolvedRoot);
       lock.assertHeld();
-      if (existsSync9(markerTempPath)) {
-        const tempStat = lstatSync3(markerTempPath);
-        if (!tempStat.isFile() || tempStat.isSymbolicLink() || existsSync9(databasePath) && !existsSync9(pendingPath)) {
+      if (existsSync10(markerTempPath)) {
+        const tempStat = lstatSync4(markerTempPath);
+        if (!tempStat.isFile() || tempStat.isSymbolicLink() || existsSync10(databasePath) && !existsSync10(pendingPath)) {
           throw new LifecycleGateError("sqlite_bootstrap_marker_temp_unexpected");
         }
       }
-      if (existsSync9(pendingPath)) {
+      if (existsSync10(pendingPath)) {
         const marker2 = readFreshBootstrapMarker(pendingPath, databaseFileName);
-        if (existsSync9(databasePath)) {
+        if (existsSync10(databasePath)) {
           const published = tryReadReadySqliteAuthority(modules, resolvedRoot, databaseFileName, true);
           if (published?.kind === "fresh_install" && published.receipt_id === `fresh-install-${marker2.token}`) {
-            const stagePath2 = path18.join(resolvedRoot, marker2.stage_file);
+            const stagePath2 = path19.join(resolvedRoot, marker2.stage_file);
             removeOwnedBootstrapFile(stagePath2);
             removeOwnedBootstrapFile(`${stagePath2}-wal`);
             removeOwnedBootstrapFile(`${stagePath2}-shm`);
             removeOwnedBootstrapFile(`${stagePath2}-journal`);
-            unlinkSync3(pendingPath);
+            unlinkSync4(pendingPath);
             removeOwnedBootstrapFile(markerTempPath);
             emitFreshBootstrapStage(options, "ready");
             result = normalizeReadySqliteAuthority(published);
@@ -10885,33 +11139,33 @@ async function ensureFreshSqliteAuthority(root, databaseFileName, modules, proce
           }
           throw new LifecycleGateError("sqlite_bootstrap_published_database_unverified");
         }
-        const stagePath = path18.join(resolvedRoot, marker2.stage_file);
+        const stagePath = path19.join(resolvedRoot, marker2.stage_file);
         removeOwnedBootstrapFile(stagePath);
         removeOwnedBootstrapFile(`${stagePath}-wal`);
         removeOwnedBootstrapFile(`${stagePath}-shm`);
         removeOwnedBootstrapFile(`${stagePath}-journal`);
-        unlinkSync3(pendingPath);
+        unlinkSync4(pendingPath);
         removeOwnedBootstrapFile(markerTempPath);
         continue;
       }
-      if (existsSync9(markerTempPath)) {
+      if (existsSync10(markerTempPath)) {
         removeOwnedBootstrapFile(markerTempPath);
       }
-      if (existsSync9(databasePath)) {
+      if (existsSync10(databasePath)) {
         const existing = tryReadReadySqliteAuthority(modules, resolvedRoot, databaseFileName, false);
         if (!existing) throw new LifecycleGateError("sqlite_existing_database_unverified", "existing SQLite database is not a valid production Authority");
         emitFreshBootstrapStage(options, "ready");
         result = normalizeReadySqliteAuthority(existing);
         break;
       }
-      if (existsSync9(databasePath + ".v13-v14-pending.json")) {
+      if (existsSync10(databasePath + ".v13-v14-pending.json")) {
         throw new LifecycleGateError(
           "unsupported_sqlite_schema",
           "SQLite v14 ONLY: an interrupted v13 upgrade marker is present; the marker and root were not modified"
         );
       }
       assertFreshBootstrapRootEmpty(resolvedRoot, databaseFileName);
-      const token = randomUUID4();
+      const token = randomUUID6();
       const stageFile = `${databaseFileName}.bootstrap-${token}.stage`;
       const marker = {
         schema_version: 1,
@@ -10953,9 +11207,9 @@ async function ensureFreshSqliteAuthority(root, databaseFileName, modules, proce
   return result;
 }
 async function constructAndPublishFreshSqlite(root, databaseFileName, marker, modules, lock, options) {
-  const databasePath = path18.join(root, databaseFileName);
+  const databasePath = path19.join(root, databaseFileName);
   const pendingPath = `${databasePath}.bootstrap-pending.json`;
-  const stagePath = path18.join(root, marker.stage_file);
+  const stagePath = path19.join(root, marker.stage_file);
   let published = false;
   try {
     lock.assertHeld();
@@ -10982,13 +11236,13 @@ async function constructAndPublishFreshSqlite(root, databaseFileName, marker, mo
     }
     lock.assertHeld();
     assertFreshBootstrapRootPath(root);
-    if (existsSync9(databasePath)) throw new LifecycleGateError("sqlite_database_appeared_during_bootstrap");
+    if (existsSync10(databasePath)) throw new LifecycleGateError("sqlite_database_appeared_during_bootstrap");
     linkSync(stagePath, databasePath);
     published = true;
-    unlinkSync3(stagePath);
+    unlinkSync4(stagePath);
     const ready = tryReadReadySqliteAuthority(modules, root, databaseFileName, true);
     if (!ready) throw new LifecycleGateError("sqlite_bootstrap_readback_failed");
-    unlinkSync3(pendingPath);
+    unlinkSync4(pendingPath);
     emitFreshBootstrapStage(options, "database_published");
     return normalizeReadySqliteAuthority(ready);
   } catch (error2) {
@@ -11040,17 +11294,18 @@ function normalizeReadySqliteAuthority(value) {
 function assertFreshBootstrapRootEmpty(root, databaseFileName) {
   const allowed = /* @__PURE__ */ new Set([
     `${databaseFileName}.bootstrap-pending.json`,
-    `${databaseFileName}.bootstrap.lock`
+    `${databaseFileName}.bootstrap.lock`,
+    EXECUTOR_LEASE_FILE
   ]);
-  for (const name of readdirSync(root)) {
+  for (const name of readdirSync2(root)) {
     if (!allowed.has(name)) throw new LifecycleGateError("sqlite_existing_state_incomplete", `unexpected SQLite root entry: ${name}`);
   }
 }
 function assertFreshBootstrapRootPath(root) {
   try {
-    const stat2 = lstatSync3(root);
+    const stat2 = lstatSync4(root);
     const real = realpathSync5.native(root);
-    const normalize = (value) => process.platform === "win32" ? path18.win32.normalize(value).replace(/[\\/]+$/u, "").toLocaleLowerCase("en-US") : path18.resolve(value);
+    const normalize = (value) => process.platform === "win32" ? path19.win32.normalize(value).replace(/[\\/]+$/u, "").toLocaleLowerCase("en-US") : path19.resolve(value);
     if (!stat2.isDirectory() || stat2.isSymbolicLink() || normalize(real) !== normalize(root)) {
       throw new LifecycleGateError("sqlite_data_root_redirected");
     }
@@ -11061,9 +11316,9 @@ function assertFreshBootstrapRootPath(root) {
 }
 function readFreshBootstrapMarker(file, databaseFileName) {
   try {
-    const stat2 = lstatSync3(file);
+    const stat2 = lstatSync4(file);
     if (!stat2.isFile() || stat2.isSymbolicLink() || stat2.size > 16 * 1024) throw new Error("unsafe_marker");
-    const value = JSON.parse(readFileSync10(file, "utf8"));
+    const value = JSON.parse(readFileSync11(file, "utf8"));
     const expectedStagePrefix = `${databaseFileName}.bootstrap-`;
     if (value.schema_version !== 1 || value.state !== "sqlite_bootstrap_pending" || value.database_file !== databaseFileName || typeof value.token !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(value.token) || value.stage_file !== `${expectedStagePrefix}${value.token}.stage` || !value.owner_identity || value.owner_identity.pid < 1 || !Number.isSafeInteger(value.owner_identity.pid) || value.owner_identity.fingerprint_precision !== "exact" || !value.owner_identity.fingerprint || value.owner_identity.identity_version !== PROCESS_IDENTITY_VERSION || !value.owner_identity.platform || !value.owner_identity.captured_at || Number.isNaN(Date.parse(value.owner_identity.captured_at))) throw new Error("invalid_marker");
     return value;
@@ -11078,26 +11333,26 @@ function writeDurableBootstrapMarker(file, marker, options, lock) {
   let tempCreated = false;
   try {
     lock.assertHeld();
-    fd = openSync4(temp, "wx", 384);
+    fd = openSync5(temp, "wx", 384);
     lock.assertHeld();
     tempCreated = true;
     writeFileSync3(fd, `${JSON.stringify(marker)}
 `, "utf8");
     fsyncSync2(fd);
     lock.assertHeld();
-    closeSync4(fd);
+    closeSync5(fd);
     fd = void 0;
     emitFreshBootstrapStage(options, "marker_temp_written");
     lock.assertHeld();
     linkSync(temp, file);
     created = true;
     lock.assertHeld();
-    unlinkSync3(temp);
+    unlinkSync4(temp);
     tempCreated = false;
   } catch (error2) {
     if (fd !== void 0) {
       try {
-        closeSync4(fd);
+        closeSync5(fd);
       } catch {
       }
     }
@@ -11109,13 +11364,13 @@ function writeDurableBootstrapMarker(file, marker, options, lock) {
     }
     if (cleanupOwned && created) {
       try {
-        unlinkSync3(file);
+        unlinkSync4(file);
       } catch {
       }
     }
     if (cleanupOwned && tempCreated) {
       try {
-        unlinkSync3(temp);
+        unlinkSync4(temp);
       } catch {
       }
     }
@@ -11160,20 +11415,20 @@ function parsePreviousBootstrapLockRecord(encoded, databaseFileName) {
   return record5;
 }
 function syncRegularFile(file) {
-  const stat2 = lstatSync3(file);
+  const stat2 = lstatSync4(file);
   if (!stat2.isFile() || stat2.isSymbolicLink()) throw new LifecycleGateError("sqlite_bootstrap_stage_unsafe");
-  const fd = openSync4(file, "r+");
+  const fd = openSync5(file, "r+");
   try {
     fsyncSync2(fd);
   } finally {
-    closeSync4(fd);
+    closeSync5(fd);
   }
 }
 function removeOwnedBootstrapFile(file) {
   try {
-    const stat2 = lstatSync3(file);
+    const stat2 = lstatSync4(file);
     if (!stat2.isFile() || stat2.isSymbolicLink()) throw new LifecycleGateError("sqlite_bootstrap_recovery_unsafe_entry");
-    unlinkSync3(file);
+    unlinkSync4(file);
   } catch (error2) {
     if (error2.code !== "ENOENT") throw error2;
   }
@@ -11199,7 +11454,7 @@ async function openClaimOnlyDriver(options) {
   const modules = await (options.loadModules?.() ?? loadLifecycleCandidateModules());
   let raw;
   try {
-    if (!existsSync9(options.dataRoot)) throw new LifecycleGateError("sqlite_database_missing", "candidate database must be initialized explicitly");
+    if (!existsSync10(options.dataRoot)) throw new LifecycleGateError("sqlite_database_missing", "candidate database must be initialized explicitly");
     raw = modules.Store.open(options.dataRoot, {
       ...options.databaseFileName ? { databaseFileName: options.databaseFileName } : {},
       ...options.managedDataDirectory ? { managedDataDirectory: true } : {}
@@ -11220,7 +11475,7 @@ async function openClaimOnlyDriver(options) {
     const fingerprint = text2(worker_identity.start_fingerprint, "cancellation_worker_fingerprint_missing");
     const state = evidence.identity_state;
     if (worker_identity.source !== "manager_verified_process_probe" || worker_identity.fixture !== false || evidence.source !== "manager_process_probe" || evidence.worker_identity_digest !== operationDigest || evidence.process_id !== processId || evidence.start_fingerprint !== fingerprint || state !== "alive" && state !== "exited" || typeof evidence.probe_reason !== "string" || typeof evidence.observed_at !== "string") return false;
-    return { state, worker_identity_digest: operationDigest, evidence_digest: sha2563(canonicalJson2(evidence)) };
+    return { state, worker_identity_digest: operationDigest, evidence_digest: sha2563(canonicalJson3(evidence)) };
   };
   const cancellationVerifier = ({ operation, cancel_intent, worker_identity, evidence }) => {
     const operationDigest = text2(operation.claim_worker_identity_digest, "cancellation_claim_identity_missing");
@@ -11236,13 +11491,13 @@ async function openClaimOnlyDriver(options) {
       root_process_id: processId,
       root_start_fingerprint: fingerprint,
       worker_tree_complete: true,
-      evidence_digest: sha2563(canonicalJson2(evidence))
+      evidence_digest: sha2563(canonicalJson3(evidence))
     };
   };
   const recoveryEvidenceBindings = /* @__PURE__ */ new Map();
   const recoveryEvidenceVerifier = (context) => {
     const binding = recoveryEvidenceBindings.get(String(context.observation.evidence_digest));
-    if (!binding || binding.evidence_json !== canonicalJson2(context.evidence) || binding.operation_id !== context.operation.operation_id || binding.task_id !== context.operation.task_id || binding.attempt !== context.operation.attempt || binding.generation !== context.operation.generation || binding.claim_id !== context.operation.claim_id || binding.worker_identity_digest !== context.operation.worker_identity_digest || Object.entries(binding).some(([key, value]) => key !== "evidence_json" && context.observation[key] !== value)) return false;
+    if (!binding || binding.evidence_json !== canonicalJson3(context.evidence) || binding.operation_id !== context.operation.operation_id || binding.task_id !== context.operation.task_id || binding.attempt !== context.operation.attempt || binding.generation !== context.operation.generation || binding.claim_id !== context.operation.claim_id || binding.worker_identity_digest !== context.operation.worker_identity_digest || Object.entries(binding).some(([key, value]) => key !== "evidence_json" && context.observation[key] !== value)) return false;
     recoveryEvidenceBindings.delete(String(context.observation.evidence_digest));
     return {
       classification: binding.classification,
@@ -11593,8 +11848,8 @@ async function openClaimOnlyDriver(options) {
           close: { stage: "direct_close", status: "resolved", treeScanStatus: "verified" },
           treeScanStatus: "verified"
         };
-        const processTreeDigest = sha2563(canonicalJson2(processTreeFacts));
-        const resourcesDigest = sha2563(canonicalJson2(resourceFacts));
+        const processTreeDigest = sha2563(canonicalJson3(processTreeFacts));
+        const resourcesDigest = sha2563(canonicalJson3(resourceFacts));
         const interruptionReason = recoveryOptions.interruptionReason ?? (initialIdentityState === "alive" ? "worker_terminated_without_result" : "worker_exited_without_result");
         const interruptionEvidence = {
           contract: "sqlite-candidate-recovery-interruption-v1",
@@ -11840,8 +12095,8 @@ async function openClaimOnlyDriver(options) {
             worker_identity_digest: workerDigest,
             launch_receipt_digest: text2(operation.launch_receipt_digest, "recovery_receipt_digest_missing"),
             result_commit_ref: text2(committedResult.result_commit_ref, "recovery_result_ref_missing"),
-            process_tree_digest: sha2563(canonicalJson2(processTreeFacts)),
-            resources_digest: sha2563(canonicalJson2(resourceFacts)),
+            process_tree_digest: sha2563(canonicalJson3(processTreeFacts)),
+            resources_digest: sha2563(canonicalJson3(resourceFacts)),
             root_process_id: processId,
             root_start_fingerprint: fingerprint,
             worker_tree_complete: true,
@@ -11893,7 +12148,7 @@ async function openClaimOnlyDriver(options) {
         complete_cleanup_closure: false,
         observed_at: typeof verdict2?.observed_at === "string" ? verdict2.observed_at : (/* @__PURE__ */ new Date()).toISOString()
       };
-      const evidenceDigest = sha2563(canonicalJson2(evidence));
+      const evidenceDigest = sha2563(canonicalJson3(evidence));
       const input = {
         operation_id: operationId,
         task_id: text2(operation.task_id, "recovery_task_id_missing"),
@@ -11907,7 +12162,7 @@ async function openClaimOnlyDriver(options) {
         evidence_source: "manager_process_probe",
         evidence_digest: evidenceDigest
       };
-      recoveryEvidenceBindings.set(evidenceDigest, { ...input, evidence_json: canonicalJson2(evidence) });
+      recoveryEvidenceBindings.set(evidenceDigest, { ...input, evidence_json: canonicalJson3(evidence) });
       try {
         const recorded = asRecord6(port.recordRecoveryObservation(input, evidence));
         return {
@@ -12114,7 +12369,7 @@ async function openClaimOnlyDriver(options) {
         termination_signal: terminationSignal,
         live_pids: [],
         termination_state: terminationState,
-        process_tree_digest: sha2563(canonicalJson2(processTreeFacts))
+        process_tree_digest: sha2563(canonicalJson3(processTreeFacts))
       };
       const current = asRecord6(port.readOperation(operationId));
       const verification = asRecord6(port.recordCancellationVerification({ ...fence, revision: Number(current.revision) }, treeEvidence));
@@ -12215,7 +12470,7 @@ async function openClaimOnlyDriver(options) {
         launch_receipt_digest: text2(operation.launch_receipt_digest, "cancellation_receipt_digest_missing"),
         result_commit_ref: text2(operation.result_commit_ref, "cancellation_result_ref_missing"),
         process_tree_digest: proof.processTreeDigest,
-        resources_digest: sha2563(canonicalJson2(resourceFacts)),
+        resources_digest: sha2563(canonicalJson3(resourceFacts)),
         root_process_id: Number(worker.process_id),
         root_start_fingerprint: String(worker.start_fingerprint),
         worker_tree_complete: true,
@@ -12390,7 +12645,7 @@ async function openClaimOnlyDriver(options) {
         const receipt2 = asRecord6(port.recordLaunchReceipt({
           ...launchRequest,
           revision: intentRevision,
-          receipt_id: randomUUID4(),
+          receipt_id: randomUUID6(),
           launch_identity: launchIdentity
         }));
         const receiptRevision = positive3(receipt2.revision, "launch_receipt_revision_missing");
@@ -12410,7 +12665,7 @@ async function openClaimOnlyDriver(options) {
           execution_profile_id: report.execution_profile_id,
           provenance_digest: report.provenance_digest
         });
-        const claimId = randomUUID4();
+        const claimId = randomUUID6();
         const claim2 = await verifyHandshakeAndCommitClaim(port, {
           operation_id: input.operationId,
           task_id: input.task.task_id,
@@ -13020,7 +13275,7 @@ async function finalizeClaimedWorkerCleanup(port, input, generation, claimId, pr
             scan_clean: true,
             live_pids: [],
             observed_pids: observedPids,
-            execution_cleanup_proof_digest: sha2563(canonicalJson2(executionCleanup))
+            execution_cleanup_proof_digest: sha2563(canonicalJson3(executionCleanup))
           };
           const resourceFacts = {
             contract: executionCleanup.source === "zcode_app_server_adapter" ? "real-zcode-adapter-resources-v1" : "synthetic-claimed-worker-resources-v1",
@@ -13044,8 +13299,8 @@ async function finalizeClaimedWorkerCleanup(port, input, generation, claimId, pr
             worker_identity_digest: claimIdentityDigest,
             launch_receipt_digest: launchReceiptDigest,
             result_commit_ref: resultCommitRef,
-            process_tree_digest: sha2563(canonicalJson2(processTreeFacts)),
-            resources_digest: sha2563(canonicalJson2(resourceFacts)),
+            process_tree_digest: sha2563(canonicalJson3(processTreeFacts)),
+            resources_digest: sha2563(canonicalJson3(resourceFacts)),
             root_process_id: rootProcessId,
             root_start_fingerprint: rootFingerprint,
             worker_tree_complete: true,
@@ -13250,7 +13505,7 @@ function asRecord6(value) {
   return value;
 }
 function sha2563(value) {
-  return createHash16("sha256").update(value, "utf8").digest("hex");
+  return createHash17("sha256").update(value, "utf8").digest("hex");
 }
 function positive3(value, code) {
   if (!Number.isSafeInteger(value) || Number(value) < 1) throw new LifecycleGateError(code);
@@ -13387,7 +13642,7 @@ function readSafeReservedAdmission(port, input, operation) {
   const lifecycle = asRecord6(port.readTaskLifecycle(input.task.task_id));
   const projection = asRecord6(lifecycle.projection);
   const attempt = asRecord6(lifecycle.attempt);
-  if (canonicalJson2(lifecycle.task) !== canonicalJson2(input.task) || projection.status !== "queued" || Number(projection.current_attempt) !== input.attempt || attempt.status !== "queued" || Number(attempt.attempt) !== input.attempt || Number(attempt.generation) !== generation) {
+  if (canonicalJson3(lifecycle.task) !== canonicalJson3(input.task) || projection.status !== "queued" || Number(projection.current_attempt) !== input.attempt || attempt.status !== "queued" || Number(attempt.attempt) !== input.attempt || Number(attempt.generation) !== generation) {
     throw new LifecycleGateError("launch_outcome_unknown", "reserved Operation no longer matches the current queued Attempt");
   }
   const events = port.readLifecycleEvents(input.operationId, { afterSequence: 0, limit: 200 });
@@ -13539,13 +13794,13 @@ function validSnapshotText(value) {
 function validSnapshotDigest(value) {
   return typeof value === "string" && /^[0-9a-f]{64}$/u.test(value);
 }
-function canonicalJson2(value) {
+function canonicalJson3(value) {
   if (value === null || typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
   if (typeof value === "number" && Number.isSafeInteger(value)) return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(canonicalJson2).join(",")}]`;
+  if (Array.isArray(value)) return `[${value.map(canonicalJson3).join(",")}]`;
   if (value && Object.getPrototypeOf(value) === Object.prototype) {
     const record5 = value;
-    return `{${Object.keys(record5).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson2(record5[key])}`).join(",")}}`;
+    return `{${Object.keys(record5).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson3(record5[key])}`).join(",")}}`;
   }
   throw new LifecycleGateError("cleanup_evidence_not_canonicalizable");
 }
@@ -13564,6 +13819,7 @@ var init_lifecycle_gate = __esm({
   "src/store/lifecycle-gate.ts"() {
     "use strict";
     init_result_contract();
+    init_lease();
     init_resolver();
     init_task_timeout();
     init_process_probe();
@@ -13797,8 +14053,8 @@ __export(sqlite_lifecycle_mcp_authority_exports, {
   applyEventByteBudget: () => applyEventByteBudget,
   mergeAdjacentModelOutputRows: () => mergeAdjacentModelOutputRows
 });
-import { createHash as createHash17, randomBytes } from "node:crypto";
-import path19 from "node:path";
+import { createHash as createHash18, randomBytes } from "node:crypto";
+import path20 from "node:path";
 function validateTaskPackage2(task) {
   const worktreePath = task.worktree_path;
   if (!task || typeof task.task_id !== "string" || !task.task_id.trim() || task.task_id.length > 128 || typeof task.workspace !== "string" || !task.workspace.trim() || !pathIsAbsolute(task.workspace) || worktreePath !== void 0 && (typeof worktreePath !== "string" || !worktreePath.trim() || !pathIsAbsolute(worktreePath)) || typeof task.objective !== "string" || !task.objective.trim() || !Array.isArray(task.requirements) || !Array.isArray(task.allowed_paths) || !Array.isArray(task.forbidden_paths) || !Array.isArray(task.acceptance_criteria) || !Array.isArray(task.test_commands)) {
@@ -13848,7 +14104,7 @@ function mergeAdjacentModelOutputRows(rows, maxBytes) {
       sequence: row.sequence,
       at: row.at
     } : null;
-    const mergeFits = candidate !== null && (maxBytes === void 0 || Buffer.byteLength(canonicalJson3(toProgressEvent(candidate)), "utf8") <= maxBytes);
+    const mergeFits = candidate !== null && (maxBytes === void 0 || Buffer.byteLength(canonicalJson4(toProgressEvent(candidate)), "utf8") <= maxBytes);
     if (candidate && mergeFits) {
       merged[merged.length - 1] = candidate;
       omittedEventsByRow[omittedEventsByRow.length - 1] = Number(omittedEventsByRow.at(-1)) + 1;
@@ -13867,7 +14123,7 @@ function applyEventByteBudget(events, pageNextCursor, maxBytes, previousCursor =
   let bytes = 0;
   let kept = 0;
   for (const event of events) {
-    const size = Buffer.byteLength(canonicalJson3(event), "utf8");
+    const size = Buffer.byteLength(canonicalJson4(event), "utf8");
     if (kept > 0 && bytes + size > maxBytes) break;
     if (kept === 0 && size > maxBytes) return { events: [], nextCursor: previousCursor, scanIncomplete: true };
     bytes += size;
@@ -13907,7 +14163,7 @@ function encodeCursor(taskId, cursor) {
   return Buffer.from(JSON.stringify({ v: 1, task_id: taskId, cursor }), "utf8").toString("base64url");
 }
 function operationIdFor(taskId, attempt) {
-  const digest3 = createHash17("sha256").update(`${taskId}\0${attempt}`, "utf8").digest("hex").slice(0, 32);
+  const digest3 = createHash18("sha256").update(`${taskId}\0${attempt}`, "utf8").digest("hex").slice(0, 32);
   return `sqlite-${digest3}`;
 }
 function taskExecutionPath(task) {
@@ -13916,10 +14172,10 @@ function taskExecutionPath(task) {
 function executionPathsOverlap(left, right) {
   const leftPath = normalizeExecutionPath(left);
   const rightPath = normalizeExecutionPath(right);
-  return leftPath === rightPath || leftPath.startsWith(rightPath + path19.sep) || rightPath.startsWith(leftPath + path19.sep);
+  return leftPath === rightPath || leftPath.startsWith(rightPath + path20.sep) || rightPath.startsWith(leftPath + path20.sep);
 }
 function normalizeExecutionPath(value) {
-  const resolved = path19.resolve(value).replace(/[\\/]+$/u, "");
+  const resolved = path20.resolve(value).replace(/[\\/]+$/u, "");
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 function queueKey(taskId, attempt) {
@@ -13960,11 +14216,11 @@ async function boundedObservationProbe(probe, pid, identity) {
     if (timer) clearTimeout(timer);
   }
 }
-function canonicalJson3(value) {
+function canonicalJson4(value) {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(canonicalJson3).join(",")}]`;
+  if (Array.isArray(value)) return `[${value.map(canonicalJson4).join(",")}]`;
   const record5 = value;
-  return `{${Object.keys(record5).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson3(record5[key])}`).join(",")}}`;
+  return `{${Object.keys(record5).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson4(record5[key])}`).join(",")}}`;
 }
 function asRecord7(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new TaskManagerError("TASK_STATE", "invalid SQLite lifecycle projection");
@@ -14076,7 +14332,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
         const existingValue = this.#driver.readTaskLifecycle(task.task_id);
         if (existingValue) {
           const existing = asRecord7(existingValue);
-          if (canonicalJson3(existing.task) !== canonicalJson3(normalizedTask)) {
+          if (canonicalJson4(existing.task) !== canonicalJson4(normalizedTask)) {
             throw new TaskManagerError("TASK_ID_CONFLICT", `task_id already belongs to a different SQLite request: ${task.task_id}`);
           }
           const projection2 = asRecord7(existing.projection);
@@ -14094,7 +14350,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
           this.#driver.createTask(normalizedTask);
         } catch (error2) {
           const raced = asRecord7(this.#driver.readTaskLifecycle(task.task_id));
-          if (!raced || canonicalJson3(raced.task) !== canonicalJson3(normalizedTask)) {
+          if (!raced || canonicalJson4(raced.task) !== canonicalJson4(normalizedTask)) {
             if (errorCode2(error2) === "task_already_exists") throw new TaskManagerError("TASK_ID_CONFLICT", `task_id already exists with different SQLite input: ${task.task_id}`);
             throw error2;
           }
@@ -14466,7 +14722,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
             const operation = asRecord7(value);
             const recoveryBlockers = Array.isArray(operation.recovery_blockers) ? operation.recovery_blockers.map(String) : [];
             if (recoveryBlockers.includes("interaction_reply_outcome_unknown")) blockers.push("pending_interaction");
-            if (!EXECUTOR_IDLE_OPERATION_PHASES.has(String(operation.phase))) {
+            if (String(operation.operation_kind) !== "capacity_policy_change" && !EXECUTOR_IDLE_OPERATION_PHASES.has(String(operation.phase))) {
               const operationId = typeof operation.operation_id === "string" ? operation.operation_id : "unknown";
               blockers.push(`operation:${operationId}:${String(operation.phase)}`);
             }
@@ -14629,7 +14885,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
       }
       #makeExecutionObservation(state, taskId, snapshot, reason, observedAt) {
         const operation = snapshot.operation;
-        const reference = createHash17("sha256").update(canonicalJson3({
+        const reference = createHash18("sha256").update(canonicalJson4({
           task_id: taskId,
           attempt: Number(snapshot.projection.current_attempt),
           operation_id: operation?.operation_id ?? null,
@@ -14987,7 +15243,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
 
 // src/mcp/main.ts
 import { realpathSync as realpathSync6 } from "node:fs";
-import path21 from "node:path";
+import path22 from "node:path";
 import { fileURLToPath as fileURLToPath6 } from "node:url";
 
 // node_modules/@modelcontextprotocol/server/dist/chunk-Br0eD_fh.mjs
@@ -15283,10 +15539,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path22) {
-  if (!path22)
+function getElementAtPath(obj, path23) {
+  if (!path23)
     return obj;
-  return path22.reduce((acc, key) => acc?.[key], obj);
+  return path23.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -15626,11 +15882,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path22, issues) {
+function prefixIssues(path23, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path22);
+    iss.path.unshift(path23);
     return iss;
   });
 }
@@ -16079,16 +16335,16 @@ function flattenError(error2, mapper = (issue2) => issue2.message) {
 }
 function formatError(error2, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error3, path22 = []) => {
+  const processError = (error3, path23 = []) => {
     for (const issue2 of error3.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path22, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path23, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path22, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path23, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path22, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path23, ...issue2.path]);
       } else {
-        const fullpath = [...path22, ...issue2.path];
+        const fullpath = [...path23, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -25431,9 +25687,9 @@ var rev2026Codec = {
     });
     const parsed = buildSchemas2026().RequestMetaEnvelopeSchema.safeParse(meta2);
     if (!parsed.success) for (const issue2 of parsed.error.issues) {
-      const path22 = issue2.path.map(String);
-      const key = path22.length > 0 ? path22.join(".") : "_meta";
-      if (path22.length === 1 && issues.some((existing) => existing.key === key && existing.problem === "missing")) continue;
+      const path23 = issue2.path.map(String);
+      const key = path23.length > 0 ? path23.join(".") : "_meta";
+      if (path23.length === 1 && issues.some((existing) => existing.key === key && existing.problem === "missing")) continue;
       issues.push({
         key,
         problem: issue2.message
@@ -25754,29 +26010,29 @@ var PERMITTED_X_MCP_HEADER_TYPES = /* @__PURE__ */ new Set([
 function scanXMcpHeaderDeclarations(inputSchema) {
   const declarations = [];
   const seenLower = /* @__PURE__ */ new Map();
-  const visit = (node2, path22, reachable) => {
+  const visit = (node2, path23, reachable) => {
     if (node2 === null || typeof node2 !== "object") return void 0;
     const schema = node2;
     if (X_MCP_HEADER_KEY in schema) {
-      if (!reachable || path22.length === 0) return `${pathName(path22)}: x-mcp-header is only permitted on properties statically reachable via a chain of 'properties' keys (not under items, additionalProperties, oneOf/anyOf/allOf/not, if/then/else, or $ref)`;
+      if (!reachable || path23.length === 0) return `${pathName(path23)}: x-mcp-header is only permitted on properties statically reachable via a chain of 'properties' keys (not under items, additionalProperties, oneOf/anyOf/allOf/not, if/then/else, or $ref)`;
       const raw = schema[X_MCP_HEADER_KEY];
-      if (typeof raw !== "string" || raw.length === 0) return `${pathName(path22)}: x-mcp-header MUST be a non-empty string`;
-      if (!RFC9110_TOKEN.test(raw)) return `${pathName(path22)}: x-mcp-header '${raw}' is not a valid RFC 9110 token (no spaces, control characters or HTTP delimiters)`;
+      if (typeof raw !== "string" || raw.length === 0) return `${pathName(path23)}: x-mcp-header MUST be a non-empty string`;
+      if (!RFC9110_TOKEN.test(raw)) return `${pathName(path23)}: x-mcp-header '${raw}' is not a valid RFC 9110 token (no spaces, control characters or HTTP delimiters)`;
       const type = typeof schema.type === "string" ? schema.type : void 0;
-      if (type === void 0 || !PERMITTED_X_MCP_HEADER_TYPES.has(type)) return `${pathName(path22)}: x-mcp-header is only permitted on primitive-typed properties (string, integer, boolean); got ${type ?? "<none>"}`;
+      if (type === void 0 || !PERMITTED_X_MCP_HEADER_TYPES.has(type)) return `${pathName(path23)}: x-mcp-header is only permitted on primitive-typed properties (string, integer, boolean); got ${type ?? "<none>"}`;
       const lower = raw.toLowerCase();
       const prior = seenLower.get(lower);
       if (prior !== void 0) return `x-mcp-header '${raw}' is not case-insensitively unique (also declared as '${prior}')`;
       seenLower.set(lower, raw);
       declarations.push({
-        path: path22,
+        path: path23,
         headerName: raw,
         type
       });
     }
     const properties = schema.properties;
     if (properties !== null && typeof properties === "object") for (const [key, child] of Object.entries(properties)) {
-      const fault$1 = visit(child, [...path22, key], reachable);
+      const fault$1 = visit(child, [...path23, key], reachable);
       if (fault$1 !== void 0) return fault$1;
     }
     for (const k of NON_REACHABLE_SUBSCHEMA_KEYWORDS) {
@@ -25784,7 +26040,7 @@ function scanXMcpHeaderDeclarations(inputSchema) {
       if (sub === void 0) continue;
       const branches = Array.isArray(sub) ? sub : sub !== null && typeof sub === "object" && OBJECT_VALUED_SUBSCHEMA_KEYWORDS.has(k) ? Object.values(sub) : [sub];
       for (const branch of branches) {
-        const fault$1 = visit(branch, [...path22, `<${k}>`], false);
+        const fault$1 = visit(branch, [...path23, `<${k}>`], false);
         if (fault$1 !== void 0) return fault$1;
       }
     }
@@ -25824,8 +26080,8 @@ var OBJECT_VALUED_SUBSCHEMA_KEYWORDS = /* @__PURE__ */ new Set([
   "$defs",
   "definitions"
 ]);
-function pathName(path22) {
-  return path22.length === 0 ? "<root>" : path22.join(".");
+function pathName(path23) {
+  return path23.length === 0 ? "<root>" : path23.join(".");
 }
 var HEADER_MISMATCH_ERROR_CODE = -32020;
 var INBOUND_VALIDATION_LADDER = [
@@ -26114,7 +26370,7 @@ var PROPERTY_KEYS_BY_TYPE = {
   array: shapeKeys([UntitledMultiSelectEnumSchemaSchema, TitledMultiSelectEnumSchemaSchema])
 };
 var SUPPORTED_STRING_FORMATS = new Set(StringSchemaSchema.shape.format.unwrap().options);
-function walkProperty(node2, path22, vendor, unsupported) {
+function walkProperty(node2, path23, vendor, unsupported) {
   if (!isJsonObject(node2)) return node2;
   const allowedKeys = typeof node2.type === "string" && Object.hasOwn(PROPERTY_KEYS_BY_TYPE, node2.type) ? PROPERTY_KEYS_BY_TYPE[node2.type] : void 0;
   if (allowedKeys === void 0) return node2;
@@ -26122,8 +26378,8 @@ function walkProperty(node2, path22, vendor, unsupported) {
   for (const [key, value] of Object.entries(node2)) if (allowedKeys.has(key) || isAnnotationOnlyJsonSchemaKeyword(key)) pruned[key] = value;
   else if (key === "pattern" && node2.type === "string" && typeof node2.format === "string") {
     if (!SUPPORTED_STRING_FORMATS.has(node2.format)) pruned[key] = value;
-    else if (typeof value !== "string" || !isLibraryFormatPattern(node2.format, value, vendor)) unsupported.push(`${path22}.${key}`);
-  } else unsupported.push(`${path22}.${key}`);
+    else if (typeof value !== "string" || !isLibraryFormatPattern(node2.format, value, vendor)) unsupported.push(`${path23}.${key}`);
+  } else unsupported.push(`${path23}.${key}`);
   return pruned;
 }
 function walkRequestedSchema(converted, vendor) {
@@ -26140,11 +26396,11 @@ function describeUnsupportedProperties(pruned, fallback) {
   const offenders = Object.entries(pruned.properties).filter(([, node2]) => !parseSchema(PrimitiveSchemaDefinitionSchema, node2).success).map(([name]) => `properties.${name}`);
   return offenders.length > 0 ? offenders.join(", ") : fallback;
 }
-function findDroppedConstraintPaths(original, parsed, path22 = "") {
-  if (Array.isArray(original) && Array.isArray(parsed)) return original.flatMap((item, index) => findDroppedConstraintPaths(item, parsed[index], `${path22}[${index}]`));
+function findDroppedConstraintPaths(original, parsed, path23 = "") {
+  if (Array.isArray(original) && Array.isArray(parsed)) return original.flatMap((item, index) => findDroppedConstraintPaths(item, parsed[index], `${path23}[${index}]`));
   if (!isJsonObject(original) || !isJsonObject(parsed)) return [];
   return Object.entries(original).flatMap(([key, value]) => {
-    const childPath = path22 ? `${path22}.${key}` : key;
+    const childPath = path23 ? `${path23}.${key}` : key;
     if (!Object.prototype.hasOwnProperty.call(parsed, key)) return isAnnotationOnlyJsonSchemaKeyword(key) ? [] : [childPath];
     return findDroppedConstraintPaths(value, parsed[key], childPath);
   });
@@ -30223,8 +30479,8 @@ var require_utils = /* @__PURE__ */ __commonJSMin(((exports, module) => {
     for (let i = 0; i < str.length; i++) if (str[i] === token) ind++;
     return ind;
   }
-  function removeDotSegments(path22) {
-    let input = path22;
+  function removeDotSegments(path23) {
+    let input = path23;
     const output = [];
     let nextSlash = -1;
     let len = 0;
@@ -30377,8 +30633,8 @@ var require_schemes = /* @__PURE__ */ __commonJSMin(((exports, module) => {
       wsComponent.secure = void 0;
     }
     if (wsComponent.resourceName) {
-      const [path22, query] = wsComponent.resourceName.split("?");
-      wsComponent.path = path22 && path22 !== "/" ? path22 : void 0;
+      const [path23, query] = wsComponent.resourceName.split("?");
+      wsComponent.path = path23 && path23 !== "/" ? path23 : void 0;
       wsComponent.query = query;
       wsComponent.resourceName = void 0;
     }
@@ -36519,7 +36775,7 @@ function toError(value) {
 // src/host/stdio.ts
 init_resolver();
 import { homedir as homedir6 } from "node:os";
-import path20 from "node:path";
+import path21 from "node:path";
 import { pathToFileURL as pathToFileURL2 } from "node:url";
 
 // node_modules/@modelcontextprotocol/server/dist/index.mjs
@@ -36879,6 +37135,9 @@ async function runTool(operation) {
       return errorResult(error2.code, error2.message);
     }
     if (error2 instanceof BridgeError) return errorResult(error2.code.toUpperCase(), error2.message);
+    if (error2 instanceof Error && "code" in error2 && typeof error2.code === "string" && /^[A-Z][A-Z0-9_]{2,63}$/u.test(error2.code)) {
+      return errorResult(error2.code, error2.message);
+    }
     throw error2;
   }
 }
@@ -38931,6 +39190,292 @@ function isRecord5(value) {
 
 // src/host/stdio.ts
 init_errors();
+init_lease();
+
+// src/executor/lease-guarded-task-manager.ts
+init_errors2();
+var LeaseGuardedTaskManager = class {
+  #delegate;
+  #leaseSafe;
+  constructor(delegate, leaseSafe) {
+    this.#delegate = delegate;
+    this.#leaseSafe = leaseSafe;
+  }
+  #assertMutationAllowed() {
+    if (!this.#leaseSafe()) {
+      throw new TaskManagerError(
+        "TASK_STATE",
+        "SQLite lifecycle authority is fenced because Executor lifetime lease ownership is unknown"
+      );
+    }
+  }
+  async createTask(task) {
+    this.#assertMutationAllowed();
+    return this.#delegate.createTask(task);
+  }
+  async getStatus(taskId) {
+    return this.#delegate.getStatus(taskId);
+  }
+  async getResult(taskId) {
+    return this.#delegate.getResult(taskId);
+  }
+  async continueTask(input) {
+    this.#assertMutationAllowed();
+    return this.#delegate.continueTask(input);
+  }
+  async cancelTask(taskId) {
+    this.#assertMutationAllowed();
+    return this.#delegate.cancelTask(taskId);
+  }
+  async getEvents(input) {
+    return this.#delegate.getEvents(input);
+  }
+  async getFeedback(taskId) {
+    if (!this.#delegate.getFeedback) throw new Error("FEEDBACK_UNAVAILABLE");
+    return this.#delegate.getFeedback(taskId);
+  }
+  async getAttention(taskId) {
+    if (!this.#delegate.getAttention) throw new Error("ATTENTION_UNAVAILABLE");
+    return this.#delegate.getAttention(taskId);
+  }
+  async replyToInteraction(input) {
+    this.#assertMutationAllowed();
+    return this.#delegate.replyToInteraction(input);
+  }
+};
+
+// src/executor/control-client.ts
+import net from "node:net";
+import { randomUUID as randomUUID4 } from "node:crypto";
+
+// src/executor/frame.ts
+import { Transform } from "node:stream";
+
+// src/executor/protocol.ts
+var EXECUTOR_CONTROL_PROTOCOL_VERSION = 1;
+var EXECUTOR_CONTROL_FRAME_LIMIT_BYTES = 33 * 1024 * 1024;
+
+// src/executor/frame.ts
+var EXECUTOR_FRAME_HEADER_BYTES = 4;
+function encodeExecutorFrame(value) {
+  const body = Buffer.from(JSON.stringify(value), "utf8");
+  if (body.byteLength > EXECUTOR_CONTROL_FRAME_LIMIT_BYTES) {
+    throw new Error("EXECUTOR_CONTROL_FRAME_TOO_LARGE");
+  }
+  const frame = Buffer.alloc(EXECUTOR_FRAME_HEADER_BYTES + body.byteLength);
+  frame.writeUInt32BE(body.byteLength, 0);
+  body.copy(frame, EXECUTOR_FRAME_HEADER_BYTES);
+  return frame;
+}
+function createExecutorFrameDecoder(limitBytes = EXECUTOR_CONTROL_FRAME_LIMIT_BYTES) {
+  let buffer = Buffer.alloc(0);
+  return new Transform({
+    transform(chunk, _encoding, callback) {
+      buffer = buffer.length === 0 ? chunk : Buffer.concat([buffer, chunk]);
+      while (buffer.byteLength >= EXECUTOR_FRAME_HEADER_BYTES) {
+        const bodyLength = buffer.readUInt32BE(0);
+        if (bodyLength > limitBytes) {
+          callback(new Error("EXECUTOR_CONTROL_FRAME_TOO_LARGE"));
+          return;
+        }
+        if (buffer.byteLength < EXECUTOR_FRAME_HEADER_BYTES + bodyLength) break;
+        const body = buffer.subarray(EXECUTOR_FRAME_HEADER_BYTES, EXECUTOR_FRAME_HEADER_BYTES + bodyLength);
+        buffer = buffer.subarray(EXECUTOR_FRAME_HEADER_BYTES + bodyLength);
+        let parsed;
+        try {
+          parsed = JSON.parse(body.toString("utf8"));
+          if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("EXECUTOR_CONTROL_FRAME_MALFORMED");
+        } catch (error2) {
+          callback(error2 instanceof Error ? error2 : new Error("EXECUTOR_CONTROL_FRAME_MALFORMED"));
+          return;
+        }
+        this.push(JSON.stringify(parsed));
+      }
+      callback();
+    }
+  });
+}
+
+// src/executor/control-client.ts
+function executorError(code) {
+  return Object.assign(new Error(code), { code });
+}
+function submissionUnknownCode(method) {
+  if (method === "createTask" || method === "continueTask" || method === "replyToInteraction") {
+    return "SUBMISSION_UNKNOWN";
+  }
+  if (method === "cancelTask") return "TASK_CANCEL_REQUESTED";
+  return "EXECUTOR_UNAVAILABLE";
+}
+var ExecutorControlClient = class {
+  #pipeName;
+  #connectTimeoutMs;
+  #socket = null;
+  #pending = /* @__PURE__ */ new Map();
+  constructor(options) {
+    this.#pipeName = options.pipeName;
+    this.#connectTimeoutMs = options.connectTimeoutMs ?? 5e3;
+  }
+  async connect() {
+    if (this.#socket && !this.#socket.destroyed) return;
+    await new Promise((resolve, reject) => {
+      const socket = net.connect(this.#pipeName);
+      const timer = setTimeout(() => {
+        socket.destroy();
+        reject(executorError("EXECUTOR_UNAVAILABLE"));
+      }, this.#connectTimeoutMs);
+      socket.once("connect", () => {
+        clearTimeout(timer);
+        this.#socket = socket;
+        const decoder = createExecutorFrameDecoder();
+        socket.pipe(decoder);
+        socket.resume();
+        decoder.on("data", (chunk) => {
+          try {
+            const response = JSON.parse(chunk.toString("utf8"));
+            const pending = this.#pending.get(response.request_id);
+            if (pending) {
+              this.#pending.delete(response.request_id);
+              pending.resolve(response);
+            }
+          } catch {
+            this.#failPending("EXECUTOR_CONTROL_RESPONSE_MALFORMED");
+            socket.destroy();
+          }
+        });
+        decoder.on("error", (error2) => {
+          this.#failPending(void 0, socket);
+          socket.destroy(error2);
+        });
+        socket.on("error", (error2) => {
+          this.#failPending("EXECUTOR_UNAVAILABLE");
+          reject(error2);
+        });
+        socket.on("close", () => {
+          if (this.#socket === socket) this.#socket = null;
+          this.#failPending(void 0, socket);
+        });
+        resolve();
+      });
+      socket.once("error", (error2) => {
+        clearTimeout(timer);
+        reject(Object.assign(executorError("EXECUTOR_UNAVAILABLE"), { cause: error2 }));
+      });
+    });
+  }
+  request(method, params, signal, idempotencyKey) {
+    if (!this.#socket || this.#socket.destroyed) {
+      return Promise.reject(executorError("EXECUTOR_UNAVAILABLE"));
+    }
+    const request = {
+      protocol_version: EXECUTOR_CONTROL_PROTOCOL_VERSION,
+      request_id: randomUUID4(),
+      method,
+      params,
+      // The transport records the key for diagnostics, while durable submission
+      // idempotency remains owned by task_id/operation_id in SQLite.
+      ...idempotencyKey ? { idempotency_key: idempotencyKey } : {}
+    };
+    const attempt = new Promise((resolve, reject) => {
+      this.#pending.set(request.request_id, { method, resolve, reject });
+      this.#socket.write(encodeExecutorFrame(request), (error2) => {
+        if (error2) {
+          this.#pending.delete(request.request_id);
+          reject(executorError(submissionUnknownCode(method)));
+        }
+      });
+    });
+    if (!signal) return attempt;
+    signal.addEventListener("abort", () => {
+      const pending = this.#pending.get(request.request_id);
+      if (pending) {
+        this.#pending.delete(request.request_id);
+        pending.reject(executorError("REQUEST_CANCELLED"));
+      }
+    }, { once: true });
+    return attempt;
+  }
+  #failPending(code, socket) {
+    for (const [requestId, pending] of this.#pending) {
+      if (socket && this.#socket !== null && this.#socket !== socket) continue;
+      this.#pending.delete(requestId);
+      pending.reject(executorError(code ?? submissionUnknownCode(pending.method)));
+    }
+  }
+  close() {
+    const socket = this.#socket;
+    this.#socket = null;
+    this.#failPending("EXECUTOR_UNAVAILABLE");
+    socket?.destroy();
+  }
+};
+
+// src/executor/remote-task-manager.ts
+var RemoteTaskManager = class {
+  #client;
+  constructor(client) {
+    this.#client = client;
+  }
+  async #call(method, params) {
+    await this.#client.connect();
+    const { idempotency_key: idempotencyKey, ...transportParams } = params;
+    const response = await this.#client.request(
+      method,
+      transportParams,
+      void 0,
+      typeof idempotencyKey === "string" ? idempotencyKey : void 0
+    );
+    if (!response.ok) {
+      const error2 = new Error(response.error?.message ?? "EXECUTOR_REQUEST_FAILED");
+      error2.code = response.error?.code ?? "EXECUTOR_REQUEST_FAILED";
+      throw error2;
+    }
+    return response.result ?? {};
+  }
+  async createTask(task) {
+    return this.#call("createTask", { task, idempotency_key: task.task_id });
+  }
+  async getStatus(taskId) {
+    return this.#call("getStatus", { task_id: taskId });
+  }
+  async getResult(taskId) {
+    return this.#call("getResult", { task_id: taskId });
+  }
+  async continueTask(input) {
+    return this.#call("continueTask", { input, idempotency_key: input.operation_id ?? `${input.task_id}:continue` });
+  }
+  async cancelTask(taskId) {
+    return this.#call("cancelTask", { task_id: taskId });
+  }
+  async getEvents(input) {
+    return this.#call("getEvents", { input });
+  }
+  async getFeedback(taskId) {
+    return this.#call("getFeedback", { task_id: taskId });
+  }
+  async getAttention(taskId) {
+    return this.#call("getAttention", { task_id: taskId });
+  }
+  async replyToInteraction(input) {
+    return this.#call("replyToInteraction", { input });
+  }
+};
+
+// src/executor/service.ts
+init_resolver();
+init_process_probe();
+init_build_provenance();
+init_profile();
+init_spawn_worker();
+init_sqlite_lifecycle_mcp_authority();
+init_trusted_local_deployment();
+init_lifecycle_gate();
+init_lease();
+function executorPipeName(root) {
+  return `\\\\.\\pipe\\codex-zcode-bridge-executor-v1-${authorityRootDigest(root)}`;
+}
+
+// src/host/stdio.ts
 function createTrustedLocalCandidateContext(host) {
   validateHostProfile(host);
   return createTrustedLocalStdioContext(host);
@@ -38938,13 +39483,13 @@ function createTrustedLocalCandidateContext(host) {
 function resolveDataRoot(env) {
   const override = env["ZCODE_BRIDGE_DATA_DIR"]?.trim();
   if (override) {
-    if (!path20.isAbsolute(override)) {
+    if (!path21.isAbsolute(override)) {
       return {
         dataRoot: findPackageRoot(),
         warning: `ZCODE_BRIDGE_DATA_DIR must be an absolute path; ignoring ${override} and using the Bridge installation directory`
       };
     }
-    return { dataRoot: path20.normalize(override) };
+    return { dataRoot: path21.normalize(override) };
   }
   return { dataRoot: findPackageRoot() };
 }
@@ -39042,8 +39587,116 @@ function serveStdioLifecycleHost(server, manager, options = {}) {
   if (stdin.readableEnded || stdin.destroyed) queueMicrotask(onDisconnect);
   return { shutdown };
 }
+function serveStdioThinHost(server, client, options = {}) {
+  const stdin = options.stdin ?? process.stdin;
+  const stdout = options.stdout ?? process.stdout;
+  const transport = new StdioServerTransport(stdin, stdout);
+  let handle;
+  let closed = false;
+  let current = null;
+  let shutdown;
+  const disconnect = () => {
+    if (closed) return;
+    closed = true;
+    client.close();
+  };
+  stdin.once("end", disconnect);
+  stdin.once("close", disconnect);
+  shutdown = (reason) => {
+    if (closed) return Promise.resolve(true);
+    if (current) return current;
+    let attempt;
+    attempt = (async () => {
+      try {
+        await handle.close();
+        disconnect();
+        options.onShutdownComplete?.(reason);
+        return true;
+      } catch (error2) {
+        options.onShutdownFailure?.(reason, error2);
+        return false;
+      } finally {
+        if (current === attempt) current = null;
+      }
+    })();
+    current = attempt;
+    return attempt;
+  };
+  handle = serveStdio(() => server, { transport });
+  if (stdin.readableEnded || stdin.destroyed) queueMicrotask(disconnect);
+  return { shutdown };
+}
+function resolveMcpTransport(env) {
+  const raw = env["ZCODE_BRIDGE_MCP_TRANSPORT"]?.trim().toLowerCase() ?? "in_process";
+  if (raw === "in_process" || raw === "control") return raw;
+  throw new Error("ZCODE_BRIDGE_MCP_TRANSPORT must be in_process or control");
+}
+async function startThinBridge(host, version2) {
+  validateHostProfile(host);
+  const authoritySelection = loadInstallAuthoritySelection(host);
+  const prepared = prepareFreshSqliteStateDirectory(authoritySelection, process.env);
+  const dataRoot = prepared.dataRoot;
+  const client = new ExecutorControlClient({ pipeName: executorPipeName(dataRoot) });
+  const taskManager = new RemoteTaskManager(client);
+  const doctor = async () => {
+    try {
+      await client.connect();
+      const health = await client.request("health", {});
+      if (!health.ok) {
+        return {
+          checked_at: (/* @__PURE__ */ new Date()).toISOString(),
+          execution_mode: "control",
+          checks: [{ name: "executor_control", status: "error", summary: health.error?.code ?? "EXECUTOR_REQUEST_FAILED" }]
+        };
+      }
+      return {
+        checked_at: (/* @__PURE__ */ new Date()).toISOString(),
+        execution_mode: "control",
+        checks: [{
+          name: "executor_control",
+          status: health.executor_state.state === "active" ? "ok" : "error",
+          summary: `Executor control state: ${health.executor_state.state}`
+        }]
+      };
+    } catch (error2) {
+      const code = error2 instanceof Error && "code" in error2 && typeof error2.code === "string" ? error2.code : "EXECUTOR_UNAVAILABLE";
+      return {
+        checked_at: (/* @__PURE__ */ new Date()).toISOString(),
+        execution_mode: "control",
+        checks: [{ name: "executor_control", status: "error", summary: code }]
+      };
+    }
+  };
+  const server = createBridgeServer({
+    taskManager,
+    doctor,
+    serverInfo: { name: host.name, version: version2 },
+    instructions: host.instructions
+  });
+  const stdioHost = serveStdioThinHost(server, client, {
+    onShutdownFailure: (reason, error2) => {
+      process.exitCode = 1;
+      console.error(`[bridge] ${reason} thin MCP disconnect failed: ${error2 instanceof Error ? error2.message : String(error2)}`);
+    },
+    onShutdownComplete: (reason) => {
+      if (reason !== "EOF") process.exit(0);
+    }
+  });
+  const shutdown = (signal) => {
+    console.error(`[bridge] received ${signal}; closing thin MCP transport without cancelling Executor Tasks`);
+    void stdioHost.shutdown(signal);
+  };
+  process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  console.error("[bridge] Executor control transport enabled; no local SQLite Manager is constructed");
+  console.error(`[bridge] ${host.name} thin stdio MCP server ready`);
+}
 async function startBridge(host = codexHostProfile(), version2 = SERVER_VERSION, bridgeEntryPath = process.argv[1]) {
   validateHostProfile(host);
+  if (resolveMcpTransport(process.env) === "control") {
+    await startThinBridge(host, version2);
+    return;
+  }
   console.error("[bridge] SQLITE_INITIALIZING");
   let authoritySelection;
   let runtimeEnv;
@@ -39066,6 +39719,44 @@ async function startBridge(host = codexHostProfile(), version2 = SERVER_VERSION,
     worker: { sha256: provenance.worker.sha256 }
   })}`);
   console.error(`[bridge] data root: ${dataRoot}`);
+  if (!provenance.bridge.sha256 || !provenance.worker.sha256) {
+    throw new Error("BRIDGE_BUILD_PROVENANCE_UNAVAILABLE");
+  }
+  assertExecutorLeaseTransition({
+    authorityRoot: dataRoot,
+    databaseFileName: FRESH_SQLITE_DATABASE_FILE,
+    acceptUnleasedExistingRoot: process.env[EXECUTOR_UNLEASED_TRANSITION_ENV] === "1"
+  });
+  const processProbe = createPlatformProbe();
+  let leaseHandle;
+  try {
+    leaseHandle = await acquireExecutorLease({
+      authorityRoot: dataRoot,
+      ownerKind: "legacy_mcp",
+      processProbe,
+      identity: await processProbe.selfIdentity(),
+      bridgeSha256: provenance.bridge.sha256,
+      workerSha256: provenance.worker.sha256,
+      pipeName: null
+    });
+  } catch (error2) {
+    console.error(`[bridge] EXECUTOR_LEASE_REFUSED: ${error2 instanceof Error ? error2.message : String(error2)}`);
+    throw error2;
+  }
+  let leaseSafe = true;
+  let leaseFailureReported = false;
+  const leaseHeartbeat = setInterval(() => {
+    void leaseHandle.heartbeat({
+      onUnknown: (error2) => {
+        leaseSafe = false;
+        if (!leaseFailureReported) {
+          leaseFailureReported = true;
+          console.error(`[bridge] EXECUTOR_HEARTBEAT_UNKNOWN: ${error2.message}`);
+        }
+      }
+    }).catch(() => void 0);
+  }, 5e3);
+  leaseHeartbeat.unref?.();
   const workerLimit = resolveMaxConcurrentWorkers(runtimeEnv);
   if (workerLimit.warning) console.error(`[bridge] ${workerLimit.warning}`);
   console.error(`[bridge] max concurrent workers: ${workerLimit.maxConcurrentWorkers}`);
@@ -39101,10 +39792,9 @@ async function startBridge(host = codexHostProfile(), version2 = SERVER_VERSION,
       }
     }
   });
-  const processProbe = createPlatformProbe();
   let manager;
   let lifecycleChecks;
-  const databasePath = path20.join(dataRoot, FRESH_SQLITE_DATABASE_FILE);
+  const databasePath = path21.join(dataRoot, FRESH_SQLITE_DATABASE_FILE);
   let trustedLocalContext;
   try {
     trustedLocalContext = createTrustedLocalCandidateContext(host);
@@ -39162,14 +39852,26 @@ async function startBridge(host = codexHostProfile(), version2 = SERVER_VERSION,
     host,
     workerModuleUrl: pathToFileURL2(host.workerEntryPath ?? workerEntryPath())
   });
+  const taskManager = new LeaseGuardedTaskManager(manager, () => leaseSafe);
   const server = createBridgeServer({
-    taskManager: manager,
+    taskManager,
     doctor: () => runBridgeDoctor({ env: runtimeEnv, dataRoot, resolver: { host }, lifecycleChecks }),
     modelSettings,
     serverInfo: { name: host.name, version: version2 },
     instructions: host.instructions
   });
-  const stdioHost = serveStdioLifecycleHost(server, manager, {
+  const lifecycleManager = {
+    async shutdown() {
+      await manager.shutdown();
+      try {
+        await leaseHandle.release();
+      } catch (error2) {
+        throw new Error(`EXECUTOR_LEASE_RELEASE_UNKNOWN: ${error2 instanceof Error ? error2.message : String(error2)}`);
+      }
+      clearInterval(leaseHeartbeat);
+    }
+  };
+  const stdioHost = serveStdioLifecycleHost(server, lifecycleManager, {
     onShutdownFailure: (reason, error2) => {
       startPlanAuthAbort.abort();
       process.exitCode = 1;
@@ -39195,7 +39897,7 @@ var isEntry = process.argv[1] !== void 0 && sameRealPath(import.meta.url, proces
 function sameRealPath(moduleUrl, argvPath) {
   try {
     const modulePath = realpathSync6(fileURLToPath6(moduleUrl));
-    const entryPath = realpathSync6(path21.resolve(argvPath));
+    const entryPath = realpathSync6(path22.resolve(argvPath));
     return process.platform === "win32" ? modulePath.toLocaleLowerCase("en-US") === entryPath.toLocaleLowerCase("en-US") : modulePath === entryPath;
   } catch {
     return false;

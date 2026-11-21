@@ -43,6 +43,16 @@ import {
 } from "../runtime/model-routing.js";
 import { BridgeError } from "../runtime/errors.js";
 import { zcodeDataBaseDir } from "../runtime/account-provider.js";
+import {
+  acquireExecutorLease,
+  assertExecutorLeaseTransition,
+  EXECUTOR_UNLEASED_TRANSITION_ENV,
+  type ExecutorLeaseHandle,
+} from "../executor/lease.js";
+import { LeaseGuardedTaskManager } from "../executor/lease-guarded-task-manager.js";
+import { ExecutorControlClient } from "../executor/control-client.js";
+import { RemoteTaskManager } from "../executor/remote-task-manager.js";
+import { executorPipeName } from "../executor/service.js";
 
 export interface DataRootResolution {
   readonly dataRoot: string;
@@ -238,12 +248,143 @@ export function serveStdioLifecycleHost(
   return { shutdown };
 }
 
+/**
+ * Thin MCP lifecycle: closing stdio only disconnects the control client. The
+ * Executor and every accepted Task remain owned by their lifetime lease.
+ */
+export function serveStdioThinHost(
+  server: ReturnType<typeof createBridgeServer>,
+  client: ExecutorControlClient,
+  options: {
+    readonly stdin?: Readable;
+    readonly stdout?: Writable;
+    readonly onShutdownFailure?: (reason: string, error: unknown) => void;
+    readonly onShutdownComplete?: (reason: string) => void;
+  } = {},
+): StdioLifecycleHost {
+  const stdin = options.stdin ?? process.stdin;
+  const stdout = options.stdout ?? process.stdout;
+  const transport = new StdioServerTransport(stdin, stdout);
+  let handle: StdioServerHandle;
+  let closed = false;
+  let current: Promise<boolean> | null = null;
+  let shutdown!: (reason: string) => Promise<boolean>;
+  const disconnect = (): void => {
+    if (closed) return;
+    closed = true;
+    client.close();
+  };
+  stdin.once("end", disconnect);
+  stdin.once("close", disconnect);
+
+  shutdown = (reason: string): Promise<boolean> => {
+    if (closed) return Promise.resolve(true);
+    if (current) return current;
+    let attempt!: Promise<boolean>;
+    attempt = (async () => {
+      try {
+        await handle.close();
+        disconnect();
+        options.onShutdownComplete?.(reason);
+        return true;
+      } catch (error) {
+        options.onShutdownFailure?.(reason, error);
+        return false;
+      } finally {
+        if (current === attempt) current = null;
+      }
+    })();
+    current = attempt;
+    return attempt;
+  };
+
+  handle = serveStdio(() => server, { transport });
+  if (stdin.readableEnded || stdin.destroyed) queueMicrotask(disconnect);
+  return { shutdown };
+}
+
+export function resolveMcpTransport(env: NodeJS.ProcessEnv): "in_process" | "control" {
+  const raw = env["ZCODE_BRIDGE_MCP_TRANSPORT"]?.trim().toLowerCase() ?? "in_process";
+  if (raw === "in_process" || raw === "control") return raw;
+  throw new Error("ZCODE_BRIDGE_MCP_TRANSPORT must be in_process or control");
+}
+
+async function startThinBridge(
+  host: BridgeHostProfile,
+  version: string,
+): Promise<void> {
+  validateHostProfile(host);
+  const authoritySelection = loadInstallAuthoritySelection(host);
+  const prepared = prepareFreshSqliteStateDirectory(authoritySelection, process.env);
+  const dataRoot = prepared.dataRoot;
+  const client = new ExecutorControlClient({ pipeName: executorPipeName(dataRoot) });
+  const taskManager = new RemoteTaskManager(client);
+  const doctor = async (): Promise<{ checked_at: string; execution_mode: string; checks: Array<{ name: string; status: "ok" | "warning" | "error" | "unknown"; summary: string }> }> => {
+    try {
+      await client.connect();
+      const health = await client.request("health", {});
+      if (!health.ok) {
+        return {
+          checked_at: new Date().toISOString(),
+          execution_mode: "control",
+          checks: [{ name: "executor_control", status: "error", summary: health.error?.code ?? "EXECUTOR_REQUEST_FAILED" }],
+        };
+      }
+      return {
+        checked_at: new Date().toISOString(),
+        execution_mode: "control",
+        checks: [{
+          name: "executor_control",
+          status: health.executor_state.state === "active" ? "ok" : "error",
+          summary: `Executor control state: ${health.executor_state.state}`,
+        }],
+      };
+    } catch (error) {
+      const code = error instanceof Error && "code" in error && typeof error.code === "string"
+        ? error.code
+        : "EXECUTOR_UNAVAILABLE";
+      return {
+        checked_at: new Date().toISOString(),
+        execution_mode: "control",
+        checks: [{ name: "executor_control", status: "error", summary: code }],
+      };
+    }
+  };
+  const server = createBridgeServer({
+    taskManager,
+    doctor,
+    serverInfo: { name: host.name, version },
+    instructions: host.instructions,
+  });
+  const stdioHost = serveStdioThinHost(server, client, {
+    onShutdownFailure: (reason, error) => {
+      process.exitCode = 1;
+      console.error(`[bridge] ${reason} thin MCP disconnect failed: ${error instanceof Error ? error.message : String(error)}`);
+    },
+    onShutdownComplete: (reason) => {
+      if (reason !== "EOF") process.exit(0);
+    },
+  });
+  const shutdown = (signal: string): void => {
+    console.error(`[bridge] received ${signal}; closing thin MCP transport without cancelling Executor Tasks`);
+    void stdioHost.shutdown(signal);
+  };
+  process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  console.error("[bridge] Executor control transport enabled; no local SQLite Manager is constructed");
+  console.error(`[bridge] ${host.name} thin stdio MCP server ready`);
+}
+
 export async function startBridge(
   host: BridgeHostProfile = codexHostProfile(),
   version = SERVER_VERSION,
   bridgeEntryPath = process.argv[1],
 ): Promise<void> {
   validateHostProfile(host);
+  if (resolveMcpTransport(process.env) === "control") {
+    await startThinBridge(host, version);
+    return;
+  }
   console.error("[bridge] SQLITE_INITIALIZING");
   let authoritySelection: ReturnType<typeof loadInstallAuthoritySelection>;
   let runtimeEnv: ReturnType<typeof loadPersistedRuntimeEnvironment>;
@@ -266,6 +407,44 @@ export async function startBridge(
     worker: { sha256: provenance.worker.sha256 },
   })}`);
   console.error(`[bridge] data root: ${dataRoot}`);
+  if (!provenance.bridge.sha256 || !provenance.worker.sha256) {
+    throw new Error("BRIDGE_BUILD_PROVENANCE_UNAVAILABLE");
+  }
+  assertExecutorLeaseTransition({
+    authorityRoot: dataRoot,
+    databaseFileName: FRESH_SQLITE_DATABASE_FILE,
+    acceptUnleasedExistingRoot: process.env[EXECUTOR_UNLEASED_TRANSITION_ENV] === "1",
+  });
+  const processProbe = createPlatformProbe();
+  let leaseHandle: ExecutorLeaseHandle;
+  try {
+    leaseHandle = await acquireExecutorLease({
+      authorityRoot: dataRoot,
+      ownerKind: "legacy_mcp",
+      processProbe,
+      identity: await processProbe.selfIdentity(),
+      bridgeSha256: provenance.bridge.sha256,
+      workerSha256: provenance.worker.sha256,
+      pipeName: null,
+    });
+  } catch (error) {
+    console.error(`[bridge] EXECUTOR_LEASE_REFUSED: ${error instanceof Error ? error.message : String(error)}`);
+    throw error;
+  }
+  let leaseSafe = true;
+  let leaseFailureReported = false;
+  const leaseHeartbeat = setInterval(() => {
+    void leaseHandle.heartbeat({
+      onUnknown: (error) => {
+        leaseSafe = false;
+        if (!leaseFailureReported) {
+          leaseFailureReported = true;
+          console.error(`[bridge] EXECUTOR_HEARTBEAT_UNKNOWN: ${error.message}`);
+        }
+      },
+    }).catch(() => undefined);
+  }, 5_000);
+  leaseHeartbeat.unref?.();
 
   const workerLimit = resolveMaxConcurrentWorkers(runtimeEnv);
   if (workerLimit.warning) console.error(`[bridge] ${workerLimit.warning}`);
@@ -307,7 +486,6 @@ export async function startBridge(
     },
   });
 
-  const processProbe = createPlatformProbe();
   let manager: SqliteLifecycleMcpAuthority;
   let lifecycleChecks: () => readonly DoctorCheck[];
   const databasePath = path.join(dataRoot, FRESH_SQLITE_DATABASE_FILE);
@@ -367,14 +545,26 @@ export async function startBridge(
     host,
     workerModuleUrl: pathToFileURL(host.workerEntryPath ?? workerEntryPath()),
   });
+  const taskManager = new LeaseGuardedTaskManager(manager, () => leaseSafe);
   const server = createBridgeServer({
-    taskManager: manager,
+    taskManager,
     doctor: () => runBridgeDoctor({ env: runtimeEnv, dataRoot, resolver: { host }, lifecycleChecks }),
     modelSettings,
     serverInfo: { name: host.name, version },
     instructions: host.instructions,
   });
-  const stdioHost = serveStdioLifecycleHost(server, manager, {
+  const lifecycleManager = {
+    async shutdown(): Promise<void> {
+      await manager.shutdown();
+      try {
+        await leaseHandle.release();
+      } catch (error) {
+        throw new Error(`EXECUTOR_LEASE_RELEASE_UNKNOWN: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      clearInterval(leaseHeartbeat);
+    },
+  };
+  const stdioHost = serveStdioLifecycleHost(server, lifecycleManager, {
     onShutdownFailure: (reason, error) => {
       startPlanAuthAbort.abort();
       process.exitCode = 1;

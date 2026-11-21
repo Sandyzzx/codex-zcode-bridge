@@ -6,7 +6,9 @@ import type {
 } from "../interfaces.js";
 
 export const EXECUTOR_CONTROL_PROTOCOL_VERSION = 1 as const;
-export const EXECUTOR_CONTROL_FRAME_LIMIT_BYTES = 16 * 1024 * 1024;
+// getResult can return the full 32 MiB TaskResult. Keep a 1 MiB allowance for
+// response/protocol JSON so no valid existing Result becomes unreadable.
+export const EXECUTOR_CONTROL_FRAME_LIMIT_BYTES = 33 * 1024 * 1024;
 
 export type ExecutorControlMethod =
   | "createTask"
@@ -40,7 +42,7 @@ export interface ExecutorControlResponse {
   readonly result?: Record<string, unknown>;
   readonly error?: ExecutorControlError;
   readonly executor_state: {
-    readonly state: "active" | "shutdown_pending" | "closed";
+    readonly state: "active" | "shutdown_pending" | "lease_unknown" | "closed";
     readonly lease_id: string;
   };
 }

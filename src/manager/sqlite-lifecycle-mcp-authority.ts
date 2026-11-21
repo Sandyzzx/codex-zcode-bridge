@@ -584,7 +584,10 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
           ? operation.recovery_blockers.map(String)
           : [];
         if (recoveryBlockers.includes("interaction_reply_outcome_unknown")) blockers.push("pending_interaction");
-        if (!EXECUTOR_IDLE_OPERATION_PHASES.has(String(operation.phase))) {
+        // A fresh SQLite root commits one capacity-policy fact at bootstrap.
+        // It is not executable work and must not block an idle-only shutdown.
+        if (String(operation.operation_kind) !== "capacity_policy_change"
+          && !EXECUTOR_IDLE_OPERATION_PHASES.has(String(operation.phase))) {
           const operationId = typeof operation.operation_id === "string" ? operation.operation_id : "unknown";
           blockers.push(`operation:${operationId}:${String(operation.phase)}`);
         }

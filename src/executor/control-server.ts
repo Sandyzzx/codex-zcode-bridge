@@ -11,10 +11,12 @@ export interface ExecutorControlServerOptions {
   readonly pipeName: string;
   readonly manager: ProgressTaskManager;
   readonly leaseId: string;
-  readonly executorState?: () => "active" | "shutdown_pending" | "closed";
+  readonly executorState?: () => "active" | "shutdown_pending" | "lease_unknown" | "closed";
   readonly onServerError?: (error: unknown) => void;
   readonly onClientError?: (error: unknown) => void;
   readonly onClientClose?: () => void;
+  /** Test/embedding escape hatch for the standalone process-lifetime hold. */
+  readonly unrefServer?: boolean;
 }
 
 export interface ExecutorControlServerHandle {
@@ -26,7 +28,7 @@ export interface ExecutorControlServerHandle {
 function response(
   request: ExecutorControlRequest,
   ok: boolean,
-  executorState: () => "active" | "shutdown_pending" | "closed",
+  executorState: () => "active" | "shutdown_pending" | "lease_unknown" | "closed",
   leaseId: string,
   value?: Record<string, unknown>,
   error?: { code: string; message: string },
@@ -64,20 +66,41 @@ async function dispatch(manager: ProgressTaskManager, request: ExecutorControlRe
   }
 }
 
+const MUTATING_METHODS = new Set<ExecutorControlRequest["method"]>([
+  "createTask",
+  "continueTask",
+  "cancelTask",
+  "replyToInteraction",
+]);
+
+function fenceError(state: "active" | "shutdown_pending" | "lease_unknown" | "closed"):
+  { readonly code: string; readonly message: string } | null {
+  if (state === "shutdown_pending") {
+    return { code: "EXECUTOR_SHUTDOWN_PENDING", message: "Executor is evaluating an idle-only shutdown request" };
+  }
+  if (state === "lease_unknown") {
+    return { code: "EXECUTOR_LEASE_LOST", message: "Executor lease ownership is unknown; lifecycle mutations are fenced" };
+  }
+  if (state === "closed") {
+    return { code: "EXECUTOR_UNAVAILABLE", message: "Executor control service is closed" };
+  }
+  return null;
+}
+
 export function startExecutorControlServer(options: ExecutorControlServerOptions): Promise<ExecutorControlServerHandle> {
-  let state: "active" | "shutdown_pending" | "closed" = "active";
+  let state: "active" | "shutdown_pending" | "lease_unknown" | "closed" = "active";
   let closing = false;
-  const live = { service: "active" as "active" | "shutdown_pending" | "closed", connections: 0 };
+  const live = { service: "active" as "active" | "shutdown_pending" | "lease_unknown" | "closed", connections: 0 };
+  const sockets = new Set<net.Socket>();
   const optionsExecutorState = () => options.executorState?.() ?? live.service;
   const server = net.createServer((socket) => {
+    sockets.add(socket);
     live.connections += 1;
     let openRequests = 0;
     const maybeReadyToClose = (): void => {
       if (closing && openRequests === 0) socket.end();
     };
-    socket.setEncoding("utf8");
     const decoder = createExecutorFrameDecoder();
-    decoder.setEncoding("utf8");
     socket.pipe(decoder);
     socket.resume();
     const writeResponse = (value: ExecutorControlResponse): void => {
@@ -97,7 +120,14 @@ export function startExecutorControlServer(options: ExecutorControlServerOptions
         return;
       }
       openRequests += 1;
-      void dispatch(options.manager, request)
+      const currentState = optionsExecutorState();
+      const fenced = MUTATING_METHODS.has(request.method) ? fenceError(currentState) : null;
+      const operation = fenced
+        ? Promise.reject(Object.assign(new Error(fenced.message), { code: fenced.code }))
+        : request.method === "health"
+          ? Promise.resolve({ state: currentState })
+          : dispatch(options.manager, request);
+      void operation
         .then((result) => writeResponse(response(request, true, optionsExecutorState, options.leaseId, result)))
         .catch((error: unknown) => writeResponse(response(request, false, optionsExecutorState, options.leaseId, undefined, {
           code: error instanceof Error && "code" in error && typeof error.code === "string" ? error.code : "EXECUTOR_REQUEST_FAILED",
@@ -114,11 +144,13 @@ export function startExecutorControlServer(options: ExecutorControlServerOptions
     });
     socket.on("error", (error) => options.onClientError?.(error));
     socket.on("close", () => {
+      sockets.delete(socket);
       live.connections = Math.max(0, live.connections - 1);
       options.onClientClose?.();
     });
   });
-  server.unref();
+  // Standalone ownership needs this handle to keep the process alive; the
+  // caller can explicitly unref an embedded server if that behavior is wanted.
   return new Promise((resolve, reject) => {
     const fail = (error: unknown): void => {
       options.onServerError?.(error);
@@ -126,6 +158,7 @@ export function startExecutorControlServer(options: ExecutorControlServerOptions
     };
     server.once("error", fail);
     server.listen(options.pipeName, () => {
+      if (options.unrefServer !== true) server.ref();
       server.off("error", fail);
       resolve({
         pipeName: options.pipeName,
@@ -134,6 +167,7 @@ export function startExecutorControlServer(options: ExecutorControlServerOptions
           if (live.service === "closed") return;
           live.service = "shutdown_pending";
           closing = true;
+          for (const socket of sockets) socket.end();
           await new Promise<void>((resolveClose) => {
             server.close(() => resolveClose());
             if (live.connections === 0) resolveClose();
