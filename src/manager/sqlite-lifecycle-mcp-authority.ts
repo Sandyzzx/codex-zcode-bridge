@@ -452,7 +452,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
           if (String(operation.phase) === "cleanup_unverified"
             && latestProjection.status === "cancelled"
             && canUserAuthorizeUnverifiedRelease(outcome)) {
-            return await this.#userAuthorizedRelease(taskId, this.#readSnapshot(taskId));
+            return await this.#userAuthorizedRelease(taskId, this.#readSnapshot(taskId), outcome);
           }
           throw new TaskManagerError("CANCEL_FAILED", `SQLite cleanup remains occupied for this workspace: ${reason}`);
         }
@@ -464,7 +464,11 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     throw new TaskManagerError("TASK_STATE", `zcode_cancel is not allowed from SQLite status ${String(projection.status)}`);
   }
 
-  async #userAuthorizedRelease(taskId: string, snapshot: TaskSnapshot): Promise<TaskStatusRecord> {
+  async #userAuthorizedRelease(
+    taskId: string,
+    snapshot: TaskSnapshot,
+    authorizationEvidence: Record<string, unknown> = {},
+  ): Promise<TaskStatusRecord> {
     const operation = snapshot.operation ? asRecord(snapshot.operation) : null;
     const projection = asRecord(snapshot.projection);
     if (projection.status !== "cancelled") {
@@ -483,10 +487,22 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       );
     }
     const attempt = asRecord(snapshot.attempt);
-    const cancelId = operation.phase === "launch_intent" && typeof attempt.queued_cancel_id === "string"
-      ? attempt.queued_cancel_id
-      : this.#readCancelId(taskId, String(operation.operation_id));
+    const cancellation = operation.phase === "launch_intent" && typeof attempt.queued_cancel_id === "string"
+      ? { cancelId: attempt.queued_cancel_id, cancellationVerificationDigest: null }
+      : this.#readCancellationBinding(taskId, String(operation.operation_id));
+    const cancelId = cancellation?.cancelId ?? null;
     if (!cancelId) throw new TaskManagerError("CANCEL_FAILED", "user-authorized unverified release requires the original durable cancellation Result");
+    const recoveryEvidenceDigest = operation.phase === "cleanup_unverified"
+      ? typeof authorizationEvidence.evidence_digest === "string" ? authorizationEvidence.evidence_digest : null
+      : null;
+    if (operation.phase === "cleanup_unverified"
+      && (!cancellation?.cancellationVerificationDigest || !recoveryEvidenceDigest)) {
+      throw new TaskManagerError("CANCEL_FAILED", "user-authorized cleanup release lacks bound cancellation or recovery evidence");
+    }
+    const releaseBinding = operation.phase === "cleanup_unverified" ? {
+      cancellation_verification_digest: string(cancellation?.cancellationVerificationDigest, "cancellation_verification_digest_missing"),
+      recovery_evidence_digest: string(recoveryEvidenceDigest, "recovery_evidence_digest_missing"),
+    } : {};
     const outcome = asRecord(this.#driver.userAuthorizedReleaseUnverifiedOperation({
       operation_id: string(operation.operation_id, "operation_id_missing"),
       task_id: taskId,
@@ -495,6 +511,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       revision: Number(operation.revision),
       cancel_id: cancelId,
       release_reason: "user_authorized_release_unverified",
+      ...releaseBinding,
     }));
     if (outcome.phase !== "released" || outcome.cleanup_verified !== false) {
       throw new TaskManagerError("CANCEL_FAILED", "SQLite user-authorized unverified release did not persist a distinct Release fact");
@@ -526,8 +543,13 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     return { task_id: input.task_id, request_id: input.request_id, state: "answered" };
   }
 
-  #readCancelId(taskId: string, operationId: string): string | null {
+  #readCancellationBinding(
+    taskId: string,
+    operationId: string,
+  ): { cancelId: string; cancellationVerificationDigest: string } | null {
     let cursor = 0;
+    let resultVerificationDigest: string | null = null;
+    const verifications = new Map<string, string>();
     while (true) {
       const page = this.#driver.readTaskEvents(taskId, { afterCursor: cursor, limit: 200 }) as {
         events?: readonly Record<string, unknown>[];
@@ -536,19 +558,30 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       };
       const events = page.events ?? [];
       for (const event of events) {
-        if (event.operation_id !== operationId || event.event_type !== "observation_recorded") continue;
+        if (event.operation_id !== operationId) continue;
+        if (event.event_type === "result_committed") {
+          const evidence = parseRecord(string(event.evidence_json, "event_evidence_missing"));
+          if (evidence.outcome === "cancelled" && typeof evidence.cancel_verification_digest === "string") {
+            resultVerificationDigest = evidence.cancel_verification_digest;
+          }
+          continue;
+        }
+        if (event.event_type !== "observation_recorded") continue;
         const evidence = parseRecord(string(event.evidence_json, "event_evidence_missing"));
-        const reason = evidence.reason === "cancelled" ? "cancelled_before_claim" : evidence.reason;
-        if (reason === "cancelled_before_claim" || reason === "cancel_tree_verified") {
-          const cancelId = evidence.cancel_id;
-          return typeof cancelId === "string" && cancelId ? cancelId : null;
+        if (evidence.reason === "cancel_tree_verified"
+          && typeof evidence.cancel_id === "string"
+          && typeof event.evidence_digest === "string") {
+          verifications.set(event.evidence_digest, evidence.cancel_id);
         }
       }
-      if (page.hasMore !== true || events.length === 0) return null;
+      if (page.hasMore !== true || events.length === 0) break;
       const nextCursor = Number(page.nextCursor ?? events.at(-1)?.cursor ?? events.at(-1)?.event_cursor);
       if (!Number.isSafeInteger(nextCursor) || nextCursor <= cursor) return null;
       cursor = nextCursor;
     }
+    if (!resultVerificationDigest) return null;
+    const cancelId = verifications.get(resultVerificationDigest);
+    return cancelId ? { cancelId, cancellationVerificationDigest: resultVerificationDigest } : null;
   }
 
   async #dispatchBlocker(taskId: string, snapshot: TaskSnapshot): Promise<DispatchBlocker | undefined> {
@@ -558,18 +591,22 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     const task = snapshot.task;
     const executionPath = taskExecutionPath(task);
     const operations = recoverySnapshot.operations.map(asRecord).filter((operation) => operation.capacity_occupied === true);
-    const occupied = operations.find((operation) => {
+    const workspaceOccupied = operations.find((operation) => {
       if (operation.task_id === taskId) return false;
       const workspace = typeof operation.workspace_ref === "string" ? operation.workspace_ref : null;
       return workspace !== null && executionPathsOverlap(workspace, executionPath);
-    }) ?? (operations.length > 0 ? operations.find((operation) => operation.task_id !== taskId) : undefined);
+    });
+    const capacityOccupied = operations.length >= recoverySnapshot.capacity.capacity_limit
+      ? operations.find((operation) => operation.task_id !== taskId)
+      : undefined;
+    const occupied = workspaceOccupied ?? capacityOccupied;
     if (!occupied) return undefined;
     const createdAt = string(projectionCreated(snapshot), "task_created_at_missing");
     const now = Date.now();
     const operationCreated = typeof occupied.created_at === "string" ? Date.parse(occupied.created_at) : null;
     const blockingWorkspace = string(occupied.workspace_ref, "blocking_workspace_missing");
     const queuedCreated = Date.parse(createdAt);
-    const sameWorkspace = executionPathsOverlap(blockingWorkspace, executionPath);
+    const sameWorkspace = workspaceOccupied !== undefined;
     return {
       reason: sameWorkspace ? "workspace_occupied" : "capacity_occupied",
       task_id: string(occupied.task_id, "blocking_task_id_missing"),
@@ -830,7 +867,10 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     return { state, observed_at: observedAt, evidence_ref: reference };
   }
 
-  #validateRecoverySnapshot(value: unknown): { readonly operations: readonly unknown[] } {
+  #validateRecoverySnapshot(value: unknown): {
+    readonly operations: readonly unknown[];
+    readonly capacity: Readonly<{ capacity_limit: number }>;
+  } {
     const snapshot = asRecord(value);
     const capacity = snapshot.capacity ? asRecord(snapshot.capacity) : null;
     if (snapshot.root_status !== "consistent_read_only" || snapshot.writes_allowed !== false
@@ -842,7 +882,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       const blockers = Array.isArray(snapshot.root_blockers) ? snapshot.root_blockers.map(String).join(",") : "recovery_snapshot_invalid";
       throw new TaskManagerError("TASK_STATE", `SQLite Recovery is blocked (${blockers || "root_not_consistent"}); no lifecycle side effect was attempted`);
     }
-    return { operations: snapshot.operations };
+    return { operations: snapshot.operations, capacity: { capacity_limit: Number(capacity.capacity_limit) } };
   }
 
   #driverTrustedPolicy(): NonNullable<ClaimOnlyDriverOptions["trustedLocalContext"]>["policy"] {
@@ -1412,6 +1452,7 @@ function canUserAuthorizeUnverifiedRelease(outcome: Record<string, unknown>): bo
   return !stopFailure && !treeEvidenceBlocks
     && identityState === "exited"
     && outcome.process_tree_scan_clean === true
+    && outcome.process_tree_root_observed === true
     && (reason === "adapter_cleanup_unverified"
       || reason === "cleanup_incomplete"
       || disposition === "complete_cleanup_closure_unavailable");

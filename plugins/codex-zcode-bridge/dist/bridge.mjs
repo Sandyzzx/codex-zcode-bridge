@@ -5965,9 +5965,9 @@ function validateObservationEventEvidence(value) {
     return;
   }
   if (own2 === "evidence_digest|reason") return;
-  if (own2 === "cancel_id|evidence_digest|reason") {
+  if (own2 === "cancel_id|evidence_digest|reason" || own2 === "cancel_id|cancellation_verification_digest|evidence_digest|reason|recovery_evidence_digest") {
     const { evidence_digest, ...unsigned } = value;
-    if (value.reason !== "user_authorized_release_unverified" || !validId3(value.cancel_id) || evidence_digest !== digest2(unsigned)) fail2("invalid_user_authorized_release_evidence");
+    if (value.reason !== "user_authorized_release_unverified" || !validId3(value.cancel_id) || own2.includes("cancellation_verification_digest") && ![value.cancellation_verification_digest, value.recovery_evidence_digest].every((item) => typeof item === "string" && /^[0-9a-f]{64}$/u.test(item)) || evidence_digest !== digest2(unsigned)) fail2("invalid_user_authorized_release_evidence");
     return;
   }
   if (own2 === "cancel_id|claim_id|evidence_digest|identity_evidence_digest|identity_state|reason|worker_identity_digest") {
@@ -5980,15 +5980,23 @@ function validateObservationEventEvidence(value) {
       fail2("invalid_cancellation_verification");
     return;
   }
-  if (own2 !== [...RECOVERY_EVIDENCE_KEYS].sort().join("|")) fail2("invalid_evidence");
+  const recoveryBase = "|" + [...RECOVERY_EVIDENCE_KEYS].sort().join("|");
+  const recoveryRelease = "|" + [...RECOVERY_RELEASE_EVIDENCE_KEYS].sort().join("|");
+  if (![recoveryBase, recoveryRelease].includes("|" + own2)) fail2("invalid_evidence");
   if (!Number.isSafeInteger(value.attempt) || value.attempt < 1 || !Number.isSafeInteger(value.expected_revision) || value.expected_revision < 1 || !validId3(value.task_id) || !validId3(value.claim_id) || !["hold", "quarantine"].includes(value.classification) || !["recovery_hold", "recovery_quarantine"].includes(value.reason) || value.reason !== `recovery_${value.classification}` || !RECOVERY_REASON_CODES.has(value.reason_code) || !RECOVERY_SOURCES.has(value.evidence_source) || RECOVERY_QUARANTINE_CODES.has(value.reason_code) !== (value.classification === "quarantine") || ![value.envelope_digest, value.evidence_digest, value.worker_identity_digest].every((v) => typeof v === "string" && /^[0-9a-f]{64}$/u.test(v)) || [value.task_id, value.claim_id, value.reason_code].some((v) => v !== v.normalize("NFC"))) {
     fail2("invalid_recovery_observation");
   }
+  if (own2 === recoveryRelease.slice(1) && (value.classification !== "hold" || value.reason_code !== "cleanup_incomplete" || value.recovery_disposition !== "complete_cleanup_closure_unavailable" || value.process_tree_scan_clean !== true || value.process_tree_root_observed !== true || typeof value.process_tree_scan_digest !== "string" || !/^[0-9a-f]{64}$/u.test(value.process_tree_scan_digest)))
+    fail2("invalid_recovery_release_evidence");
 }
 function recoveryEnvelope(input) {
-  if (!input || Object.getPrototypeOf(input) !== Object.prototype || Object.keys(input).sort().join("|") !== [...RECOVERY_INPUT_KEYS].sort().join("|") || ![input.operation_id, input.task_id, input.claim_id].every(validId3) || ![input.attempt, input.generation, input.expected_revision].every((v) => Number.isSafeInteger(v) && v >= 1) || !["hold", "quarantine"].includes(input.classification) || !RECOVERY_REASON_CODES.has(input.reason_code) || RECOVERY_QUARANTINE_CODES.has(input.reason_code) !== (input.classification === "quarantine") || !RECOVERY_SOURCES.has(input.evidence_source) || ![input.worker_identity_digest, input.evidence_digest].every((v) => typeof v === "string" && /^[0-9a-f]{64}$/u.test(v)) || [input.operation_id, input.task_id, input.claim_id, input.reason_code].some((v) => v !== v.normalize("NFC"))) {
+  const inputKeys = input && Object.getPrototypeOf(input) === Object.prototype ? Object.keys(input).sort().join("|") : "";
+  const releaseInput = inputKeys === [...RECOVERY_RELEASE_INPUT_KEYS].sort().join("|");
+  if (!input || Object.getPrototypeOf(input) !== Object.prototype || !releaseInput && inputKeys !== [...RECOVERY_INPUT_KEYS].sort().join("|") || ![input.operation_id, input.task_id, input.claim_id].every(validId3) || ![input.attempt, input.generation, input.expected_revision].every((v) => Number.isSafeInteger(v) && v >= 1) || !["hold", "quarantine"].includes(input.classification) || !RECOVERY_REASON_CODES.has(input.reason_code) || RECOVERY_QUARANTINE_CODES.has(input.reason_code) !== (input.classification === "quarantine") || !RECOVERY_SOURCES.has(input.evidence_source) || ![input.worker_identity_digest, input.evidence_digest].every((v) => typeof v === "string" && /^[0-9a-f]{64}$/u.test(v)) || [input.operation_id, input.task_id, input.claim_id, input.reason_code].some((v) => v !== v.normalize("NFC"))) {
     fail2("invalid_recovery_observation");
   }
+  if (releaseInput && (input.classification !== "hold" || input.reason_code !== "cleanup_incomplete" || input.recovery_disposition !== "complete_cleanup_closure_unavailable" || input.process_tree_scan_clean !== true || input.process_tree_root_observed !== true || typeof input.process_tree_scan_digest !== "string" || !/^[0-9a-f]{64}$/u.test(input.process_tree_scan_digest)))
+    fail2("invalid_recovery_release_evidence");
   return {
     contract: "wp6c-c3b-recovery-observation-v1",
     operation_id: input.operation_id,
@@ -6001,7 +6009,13 @@ function recoveryEnvelope(input) {
     classification: input.classification,
     reason_code: input.reason_code,
     evidence_source: input.evidence_source,
-    evidence_digest: input.evidence_digest
+    evidence_digest: input.evidence_digest,
+    ...releaseInput ? {
+      process_tree_root_observed: true,
+      process_tree_scan_clean: true,
+      process_tree_scan_digest: input.process_tree_scan_digest,
+      recovery_disposition: input.recovery_disposition
+    } : {}
   };
 }
 function recoveryEventEvidence(input, envelopeDigest) {
@@ -6016,7 +6030,13 @@ function recoveryEventEvidence(input, envelopeDigest) {
     reason: `recovery_${input.classification}`,
     reason_code: input.reason_code,
     task_id: input.task_id,
-    worker_identity_digest: input.worker_identity_digest
+    worker_identity_digest: input.worker_identity_digest,
+    ...input.recovery_disposition !== void 0 ? {
+      process_tree_root_observed: input.process_tree_root_observed,
+      process_tree_scan_clean: input.process_tree_scan_clean,
+      process_tree_scan_digest: input.process_tree_scan_digest,
+      recovery_disposition: input.recovery_disposition
+    } : {}
   };
 }
 function recoveryEventsFor(events, operationId) {
@@ -6182,7 +6202,8 @@ function validateAdminAbandonmentInput(input) {
   return input;
 }
 function validateUserAuthorizedReleaseInput(input) {
-  if (!input || Object.getPrototypeOf(input) !== Object.prototype || Object.keys(input).sort().join("|") !== USER_AUTHORIZED_RELEASE_INPUT_KEYS || !validId3(input.operation_id) || !validId3(input.task_id) || !validId3(input.cancel_id) || !Number.isSafeInteger(input.attempt) || input.attempt < 1 || !Number.isSafeInteger(input.generation) || input.generation < 1 || !Number.isSafeInteger(input.revision) || input.revision < 1 || input.release_reason !== "user_authorized_release_unverified") fail2("invalid_user_authorized_release");
+  const fields = input && Object.getPrototypeOf(input) === Object.prototype ? Object.keys(input).sort().join("|") : "";
+  if (!input || Object.getPrototypeOf(input) !== Object.prototype || fields !== USER_AUTHORIZED_RELEASE_INPUT_KEYS && fields !== USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS || !validId3(input.operation_id) || !validId3(input.task_id) || !validId3(input.cancel_id) || !Number.isSafeInteger(input.attempt) || input.attempt < 1 || !Number.isSafeInteger(input.generation) || input.generation < 1 || !Number.isSafeInteger(input.revision) || input.revision < 1 || input.release_reason !== "user_authorized_release_unverified" || fields === USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS && ![input.cancellation_verification_digest, input.recovery_evidence_digest].every((value) => typeof value === "string" && /^[0-9a-f]{64}$/u.test(value))) fail2("invalid_user_authorized_release");
   return input;
 }
 function isBusy(error2) {
@@ -6214,7 +6235,13 @@ function validateRecoveryEventBinding(operation, event, evidence, claimSequence)
     classification: evidence.classification,
     reason_code: evidence.reason_code,
     evidence_source: evidence.evidence_source,
-    evidence_digest: evidence.evidence_digest
+    evidence_digest: evidence.evidence_digest,
+    ...evidence.recovery_disposition !== void 0 ? {
+      process_tree_root_observed: evidence.process_tree_root_observed,
+      process_tree_scan_clean: evidence.process_tree_scan_clean,
+      process_tree_scan_digest: evidence.process_tree_scan_digest,
+      recovery_disposition: evidence.recovery_disposition
+    } : {}
   };
   if (digest2(recoveryEnvelope(input)) !== evidence.envelope_digest) fail2("recovery_envelope_digest_mismatch");
 }
@@ -6583,7 +6610,7 @@ function callDecision(fn, workspace, input) {
     return { state: "unknown" };
   }
 }
-var HERE, SCHEMA, RUNTIME_EVENTS_SCHEMA, ADMIN_ABANDONMENT_SCHEMA, NORMALIZED_ADMIN_ABANDONMENT_SCHEMA, LEGACY_ADMIN_ABANDONMENT_SCHEMA, CONSTRUCT, SCHEMA_VERSION, SCHEMA_OBJECT_QUERY, RUNTIME_EVENT_SCHEMA_OBJECTS, expectedSchemas, ADMIN_ABANDONMENT_TABLE_SQL, LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, SQLITE_V14_ONLY_MESSAGE, V13_UPGRADE_MARKER_MESSAGE, v13UpgradeMarker, RESULT_CONTRACT_VERSION, RESULT_STATUSES2, RECOVERY_PHASES, RECOVERY_SOURCES, RECOVERY_REASON_CODES, RECOVERY_QUARANTINE_CODES, RECOVERY_EVIDENCE_KEYS, RECOVERY_LIMIT, digest2, rawDigest, upgradeRowJson, EVIDENCE_KEYS, FUTURE_EVENT_TYPES, FUTURE_EVIDENCE_KEYS, EVENT_PHASE, RECOVERY_INPUT_KEYS, ADMIN_ABANDONMENT_INPUT_KEYS, ADMIN_ABANDONMENT_EVIDENCE_KEYS, USER_AUTHORIZED_RELEASE_INPUT_KEYS, AdmissionError, fail2, IsolatedAdmissionStore;
+var HERE, SCHEMA, RUNTIME_EVENTS_SCHEMA, ADMIN_ABANDONMENT_SCHEMA, NORMALIZED_ADMIN_ABANDONMENT_SCHEMA, LEGACY_ADMIN_ABANDONMENT_SCHEMA, CONSTRUCT, SCHEMA_VERSION, SCHEMA_OBJECT_QUERY, RUNTIME_EVENT_SCHEMA_OBJECTS, expectedSchemas, ADMIN_ABANDONMENT_TABLE_SQL, LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, SQLITE_V14_ONLY_MESSAGE, V13_UPGRADE_MARKER_MESSAGE, v13UpgradeMarker, RESULT_CONTRACT_VERSION, RESULT_STATUSES2, RECOVERY_PHASES, RECOVERY_SOURCES, RECOVERY_REASON_CODES, RECOVERY_QUARANTINE_CODES, RECOVERY_EVIDENCE_KEYS, RECOVERY_RELEASE_EVIDENCE_KEYS, RECOVERY_LIMIT, digest2, rawDigest, upgradeRowJson, EVIDENCE_KEYS, FUTURE_EVENT_TYPES, FUTURE_EVIDENCE_KEYS, EVENT_PHASE, RECOVERY_INPUT_KEYS, RECOVERY_RELEASE_INPUT_KEYS, ADMIN_ABANDONMENT_INPUT_KEYS, ADMIN_ABANDONMENT_EVIDENCE_KEYS, USER_AUTHORIZED_RELEASE_INPUT_KEYS, USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS, AdmissionError, fail2, IsolatedAdmissionStore;
 var init_store = __esm({
   "src/sqlite-candidate/wp6b2b1/store.mjs"() {
     "use strict";
@@ -6628,6 +6655,7 @@ var init_store = __esm({
     RECOVERY_REASON_CODES = /* @__PURE__ */ new Set(["worker_identity_unknown", "launch_outcome_unknown", "cleanup_identity_unknown", "cleanup_incomplete", "claim_identity_conflict", "operation_projection_conflict"]);
     RECOVERY_QUARANTINE_CODES = /* @__PURE__ */ new Set(["claim_identity_conflict", "operation_projection_conflict"]);
     RECOVERY_EVIDENCE_KEYS = Object.freeze(["attempt", "claim_id", "classification", "envelope_digest", "evidence_digest", "evidence_source", "expected_revision", "reason", "reason_code", "task_id", "worker_identity_digest"]);
+    RECOVERY_RELEASE_EVIDENCE_KEYS = Object.freeze([...RECOVERY_EVIDENCE_KEYS, "process_tree_root_observed", "process_tree_scan_clean", "process_tree_scan_digest", "recovery_disposition"]);
     RECOVERY_LIMIT = 8;
     digest2 = (value) => createHash14("sha256").update(typeof value === "string" ? value : canonical4(value)).digest("hex");
     rawDigest = (value) => createHash14("sha256").update(Buffer.from(value)).digest("hex");
@@ -6674,9 +6702,11 @@ var init_store = __esm({
       launch_failed: "launch_failed"
     });
     RECOVERY_INPUT_KEYS = Object.freeze(["operation_id", "task_id", "attempt", "generation", "expected_revision", "claim_id", "worker_identity_digest", "classification", "reason_code", "evidence_source", "evidence_digest"]);
+    RECOVERY_RELEASE_INPUT_KEYS = Object.freeze([...RECOVERY_INPUT_KEYS, "process_tree_root_observed", "process_tree_scan_clean", "process_tree_scan_digest", "recovery_disposition"]);
     ADMIN_ABANDONMENT_INPUT_KEYS = "attempt|claim_id|claim_worker_identity_digest|evidence|generation|operation_id|revision|task_id";
     ADMIN_ABANDONMENT_EVIDENCE_KEYS = "boot_time|claimant_scan_clean|claimant_scan_digest|failed_at|hosts_closed|observed_at|platform_probe_digest|process_inventory_digest|worker_exited|worker_process_id|worker_start_fingerprint|writer_closed";
     USER_AUTHORIZED_RELEASE_INPUT_KEYS = "attempt|cancel_id|generation|operation_id|release_reason|revision|task_id";
+    USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS = "attempt|cancel_id|cancellation_verification_digest|generation|operation_id|recovery_evidence_digest|release_reason|revision|task_id";
     AdmissionError = class extends Error {
       constructor(code, message = code) {
         super(message);
@@ -8126,7 +8156,15 @@ var init_store = __esm({
           const attempt = this.#db.prepare("SELECT task_id,attempt,generation,status,queued_cancel_id,queued_cancel_operation_id,queued_cancel_result_json FROM attempts WHERE task_id=? AND attempt=?").get(input.task_id, input.attempt);
           if (!task || !attempt || task.current_attempt !== input.attempt || task.status !== "cancelled" || attempt.status !== "cancelled" || attempt.generation !== input.generation)
             fail2("user_authorized_release_projection_mismatch");
-          const unsignedEvidence = { reason: "user_authorized_release_unverified", cancel_id: input.cancel_id };
+          const cleanupBinding = input.cancellation_verification_digest !== void 0;
+          const unsignedEvidence = {
+            reason: "user_authorized_release_unverified",
+            cancel_id: input.cancel_id,
+            ...cleanupBinding ? {
+              cancellation_verification_digest: input.cancellation_verification_digest,
+              recovery_evidence_digest: input.recovery_evidence_digest
+            } : {}
+          };
           const evidence = { ...unsignedEvidence, evidence_digest: digest2(unsignedEvidence) };
           if (o.phase === "released") {
             const released = this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded' ORDER BY sequence DESC LIMIT 1").get(input.operation_id);
@@ -8136,7 +8174,7 @@ var init_store = __esm({
             } catch {
               parsed = null;
             }
-            if (released && released.sequence === o.revision && parsed?.reason === "user_authorized_release_unverified" && parsed?.cancel_id === input.cancel_id)
+            if (released && released.sequence === o.revision && parsed?.reason === "user_authorized_release_unverified" && parsed?.cancel_id === input.cancel_id && parsed?.cancellation_verification_digest === input.cancellation_verification_digest && parsed?.recovery_evidence_digest === input.recovery_evidence_digest && parsed?.evidence_digest === evidence.evidence_digest)
               return {
                 duplicate: true,
                 operation_id: o.operation_id,
@@ -8153,6 +8191,7 @@ var init_store = __esm({
           const preClaim = o.phase === "launch_intent" && o.claim_id === null && o.result_digest === null;
           const historicalCleanup = o.phase === "cleanup_unverified" && o.result_digest !== null && o.result_status === "cancelled";
           if (!preClaim && !historicalCleanup) fail2("user_authorized_release_phase_not_allowed");
+          if (cleanupBinding !== historicalCleanup) fail2("user_authorized_release_phase_mismatch");
           if (preClaim) {
             if (o.launch_receipt_id !== null || o.launch_receipt_digest !== null || o.launch_identity_json !== null)
               fail2("user_authorized_release_spawn_evidence_present");
@@ -8167,23 +8206,33 @@ var init_store = __esm({
             if (!queuedResult || queuedResult.task_id !== input.task_id || queuedResult.attempt !== input.attempt || queuedResult.status !== "cancelled" || queuedResult.started_at !== null)
               fail2("user_authorized_release_projection_mismatch");
           } else {
-            const cancelEvent = this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded' ORDER BY sequence").all(input.operation_id).find((event) => {
-              let parsed2;
-              try {
-                parsed2 = JSON.parse(event.evidence_json);
-              } catch {
-                return false;
-              }
-              return parsed2.reason === "cancelled_before_claim" || parsed2.reason === "cancel_tree_verified";
-            });
+            const resultEvent = this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND event_type='result_committed' ORDER BY sequence DESC LIMIT 1").get(input.operation_id);
+            let resultEvidence;
+            try {
+              resultEvidence = resultEvent ? JSON.parse(resultEvent.evidence_json) : null;
+            } catch {
+              resultEvidence = null;
+            }
+            if (!resultEvent || !resultEvidence || resultEvidence.outcome !== "cancelled" || resultEvidence.cancel_verification_digest !== input.cancellation_verification_digest)
+              fail2("user_authorized_release_cancel_identity_mismatch");
+            const cancelEvent = this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND evidence_digest=?").get(input.operation_id, input.cancellation_verification_digest);
             let parsed;
             try {
               parsed = cancelEvent ? JSON.parse(cancelEvent.evidence_json) : null;
             } catch {
               parsed = null;
             }
-            if (!cancelEvent || !parsed || parsed.cancel_id !== input.cancel_id)
+            if (!cancelEvent || cancelEvent.event_type !== "observation_recorded" || cancelEvent.sequence >= resultEvent.sequence || !parsed || parsed.reason !== "cancel_tree_verified" || parsed.cancel_id !== input.cancel_id || parsed.claim_id !== o.claim_id || parsed.worker_identity_digest !== o.claim_worker_identity_digest)
               fail2("user_authorized_release_cancel_identity_mismatch");
+            const recoveryEvent = this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND json_extract(evidence_json,'$.evidence_digest')=?").get(input.operation_id, input.recovery_evidence_digest);
+            let recoveryEvidence;
+            try {
+              recoveryEvidence = recoveryEvent ? JSON.parse(recoveryEvent.evidence_json) : null;
+            } catch {
+              recoveryEvidence = null;
+            }
+            if (!recoveryEvent || recoveryEvent.event_type !== "observation_recorded" || recoveryEvent.sequence !== o.revision || recoveryEvent.generation !== o.generation || !recoveryEvidence || recoveryEvidence.reason !== "recovery_hold" || recoveryEvidence.task_id !== o.task_id || recoveryEvidence.attempt !== o.attempt || recoveryEvidence.expected_revision !== input.revision - 1 || recoveryEvidence.claim_id !== o.claim_id || recoveryEvidence.worker_identity_digest !== o.claim_worker_identity_digest || recoveryEvidence.reason_code !== "cleanup_incomplete" || recoveryEvidence.recovery_disposition !== "complete_cleanup_closure_unavailable" || recoveryEvidence.process_tree_scan_clean !== true || recoveryEvidence.process_tree_root_observed !== true || typeof recoveryEvidence.process_tree_scan_digest !== "string" || !/^[0-9a-f]{64}$/u.test(recoveryEvidence.process_tree_scan_digest))
+              fail2("user_authorized_release_recovery_evidence_mismatch");
           }
           if (o.revision !== input.revision) fail2("stale_user_authorized_release_cas");
           const changed = this.#db.prepare("UPDATE manager_operations SET phase='released',revision=revision+1 WHERE operation_id=? AND task_id=? AND attempt=? AND generation=? AND revision=? AND phase=? AND claim_id IS ? AND result_digest IS ?").run(input.operation_id, input.task_id, input.attempt, input.generation, input.revision, o.phase, o.claim_id, o.result_digest);
@@ -10090,15 +10139,17 @@ var init_store = __esm({
                   } catch {
                     fail2("cleanup_projection_mismatch");
                   }
-                  const cancelEvents = es.filter((event) => event.event_type === "observation_recorded").map((event) => {
+                  const parsedEvents = es.map((event) => {
                     try {
                       return { event, evidence: JSON.parse(event.evidence_json) };
                     } catch {
                       fail2("cleanup_projection_mismatch");
                     }
                   });
-                  const verification = cancelEvents.find((item) => item.evidence.reason === "cancel_tree_verified" && item.evidence.cancel_id === terminalEvidence.cancel_id);
-                  administrativeRelease = released.length === 0 && unverified2.length === 1 && terminalEvidence.reason === "user_authorized_release_unverified" && o.result_status === "cancelled" && verification !== void 0 && terminalEvidence.cancel_id === verification.evidence.cancel_id;
+                  const verification = parsedEvents.find((item) => item.event.event_type === "observation_recorded" && item.event.evidence_digest === terminalEvidence.cancellation_verification_digest);
+                  const resultEvent2 = parsedEvents.find((item) => item.event.event_type === "result_committed" && item.event.evidence_digest && item.evidence.cancel_verification_digest === terminalEvidence.cancellation_verification_digest);
+                  const recoveryEvent = parsedEvents.find((item) => item.event.event_type === "observation_recorded" && item.evidence.evidence_digest === terminalEvidence.recovery_evidence_digest);
+                  administrativeRelease = released.length === 0 && unverified2.length === 1 && terminalEvidence.reason === "user_authorized_release_unverified" && o.result_status === "cancelled" && verification !== void 0 && resultEvent2 !== void 0 && recoveryEvent !== void 0 && verification.evidence.reason === "cancel_tree_verified" && terminalEvidence.cancel_id === verification.evidence.cancel_id && verification.evidence.claim_id === o.claim_id && verification.evidence.worker_identity_digest === o.claim_worker_identity_digest && verification.event.sequence < resultEvent2.event.sequence && resultEvent2.evidence.outcome === "cancelled" && recoveryEvent.event.sequence === terminal.sequence - 1 && recoveryEvent.evidence.reason === "recovery_hold" && recoveryEvent.evidence.task_id === o.task_id && recoveryEvent.evidence.attempt === o.attempt && recoveryEvent.evidence.expected_revision === terminal.sequence - 2 && recoveryEvent.evidence.claim_id === o.claim_id && recoveryEvent.evidence.worker_identity_digest === o.claim_worker_identity_digest && recoveryEvent.evidence.reason_code === "cleanup_incomplete" && recoveryEvent.evidence.recovery_disposition === "complete_cleanup_closure_unavailable" && recoveryEvent.evidence.process_tree_scan_clean === true && recoveryEvent.evidence.process_tree_root_observed === true;
                 }
                 if (o.phase !== expected && !(o.phase === "released" && administrativeRelease)) fail2("cleanup_projection_mismatch");
               } else if (["cleanup_pending", "cleanup_verified", "cleanup_unverified", "cleanup_reverified", "released"].includes(o.phase) && !adminAbandonments.has(o.operation_id)) {
@@ -11811,6 +11862,7 @@ async function openClaimOnlyDriver(options) {
           cleanup_digest: outcome.cleanup_digest
         };
       }
+      let adapterCleanupUnverified = false;
       if (phase === "cleanup_unverified") {
         const failureEvent = [...lifecycleEvents].reverse().find((event) => event.event_type === "cleanup_unverified");
         let failureReason = null;
@@ -11826,6 +11878,7 @@ async function openClaimOnlyDriver(options) {
             probe_reason: probeReason
           };
         }
+        adapterCleanupUnverified = failureReason === "adapter_cleanup_unverified";
         if (failureReason === "adapter_cleanup_unverified") {
           if (recoveryOptions.stopAliveWorker !== true || identityState === "unknown") {
             return {
@@ -11883,14 +11936,6 @@ async function openClaimOnlyDriver(options) {
         );
       }
       if ((phase === "result_committed" || phase === "cleanup_pending" || phase === "cleanup_unverified") && identityState === "exited") {
-        const adapterCleanupUnverified = phase === "cleanup_unverified" && lifecycleEvents.some((event) => {
-          if (event.event_type !== "cleanup_unverified") return false;
-          try {
-            return JSON.parse(String(event.evidence_json)).reason === "adapter_cleanup_unverified";
-          } catch {
-            return false;
-          }
-        });
         const completeCleanupClosureAvailable = !adapterCleanupUnverified && treeOutcome?.status === "resolved" && treeOutcome.result.clean === true && treeOutcome.result.livePids.length === 0 && treeOutcome.result.observedPids.includes(processId);
         if (completeCleanupClosureAvailable && treeOutcome?.status === "resolved") {
           const currentOperation = asRecord6(port.readOperation(operationId));
@@ -12040,9 +12085,25 @@ async function openClaimOnlyDriver(options) {
           };
         }
       }
-      const treeReason = treeOutcome?.status === "timeout" ? "process_tree_probe_timeout" : treeOutcome?.status === "rejected" ? "process_tree_probe_rejected" : treeOutcome?.status === "resolved" && treeOutcome.result.livePids.length > 0 ? "process_tree_still_live" : treeOutcome?.status === "resolved" && treeOutcome.result.clean !== true ? "process_tree_not_verified" : treeOutcome?.status === "resolved" && treeOutcome.result.clean === true ? "complete_cleanup_closure_unavailable" : void 0;
+      const treeReason = treeOutcome?.status === "timeout" ? "process_tree_probe_timeout" : treeOutcome?.status === "rejected" ? "process_tree_probe_rejected" : treeOutcome?.status === "resolved" && treeOutcome.result.livePids.length > 0 ? "process_tree_still_live" : treeOutcome?.status === "resolved" && treeOutcome.result.clean !== true ? "process_tree_not_verified" : treeOutcome?.status === "resolved" && treeOutcome.result.clean === true && treeOutcome.result.observedPids.includes(processId) ? "complete_cleanup_closure_unavailable" : void 0;
       const disposition = phase === "running" && identityState === "exited" ? cancellationRequested ? "cancel_interrupted_without_committed_result" : "worker_exited_without_committed_result" : phase === "cleanup_unverified" ? identityState === "alive" ? "worker_still_alive" : identityState === "unknown" ? "cleanup_identity_unknown" : treeReason ?? "cleanup_evidence_incomplete" : identityState === "alive" ? "worker_still_alive" : identityState === "exited" && cleanupPhase ? treeReason ?? "cleanup_evidence_incomplete" : "worker_identity_unknown";
       const reasonCode = identityState === "unknown" ? cleanupPhase ? "cleanup_identity_unknown" : "worker_identity_unknown" : "cleanup_incomplete";
+      const releaseTreeProbe = treeOutcome?.status === "resolved" && treeOutcome.result.clean === true && treeOutcome.result.livePids.length === 0 && treeOutcome.result.observedPids.includes(processId) && disposition === "complete_cleanup_closure_unavailable";
+      const processTreeScanDigest = releaseTreeProbe && treeOutcome?.status === "resolved" ? sha2563(canonicalJson2({
+        contract: "sqlite-candidate-recovery-release-tree-v1",
+        operation_id: operationId,
+        task_id: operation.task_id,
+        attempt: Number(operation.attempt),
+        generation: Number(operation.generation),
+        claim_id: claimId,
+        worker_identity_digest: workerDigest,
+        root_process_id: processId,
+        root_start_fingerprint: fingerprint,
+        clean: treeOutcome.result.clean,
+        live_pids: [...treeOutcome.result.livePids].sort((left, right) => left - right),
+        observed_pids: [...treeOutcome.result.observedPids].sort((left, right) => left - right),
+        root_observed: true
+      })) : void 0;
       const evidence = {
         source: "manager_process_probe",
         operation_id: operationId,
@@ -12060,6 +12121,12 @@ async function openClaimOnlyDriver(options) {
         process_tree_scan_clean: treeOutcome?.status === "resolved" ? treeOutcome.result.clean : null,
         process_tree_scan_scope: "recorded_roots_and_observed_claimants_only",
         complete_cleanup_closure: false,
+        ...releaseTreeProbe ? {
+          process_tree_root_observed: true,
+          process_tree_scan_clean: true,
+          process_tree_scan_digest: processTreeScanDigest,
+          recovery_disposition: disposition
+        } : {},
         observed_at: typeof verdict2?.observed_at === "string" ? verdict2.observed_at : (/* @__PURE__ */ new Date()).toISOString()
       };
       const evidenceDigest = sha2563(canonicalJson2(evidence));
@@ -12074,22 +12141,30 @@ async function openClaimOnlyDriver(options) {
         classification: "hold",
         reason_code: reasonCode,
         evidence_source: "manager_process_probe",
-        evidence_digest: evidenceDigest
+        evidence_digest: evidenceDigest,
+        ...releaseTreeProbe ? {
+          process_tree_root_observed: true,
+          process_tree_scan_clean: true,
+          process_tree_scan_digest: processTreeScanDigest,
+          recovery_disposition: disposition
+        } : {}
       };
       recoveryEvidenceBindings.set(evidenceDigest, { ...input, evidence_json: canonicalJson2(evidence) });
       try {
         const recorded = asRecord6(port.recordRecoveryObservation(input, evidence));
+        const reportedReason = adapterCleanupUnverified && operation.result_status !== "cancelled" ? "adapter_cleanup_unverified" : reasonCode;
         return {
           state: "held",
           operation_id: operationId,
           phase,
-          reason: reasonCode,
+          reason: reportedReason,
           revision: recorded.revision,
           identity_state: identityState,
           probe_reason: probeReason,
           evidence_digest: evidenceDigest,
           recovery_disposition: disposition,
-          process_tree_scan_clean: evidence.process_tree_scan_clean
+          process_tree_scan_clean: evidence.process_tree_scan_clean,
+          process_tree_root_observed: releaseTreeProbe
         };
       } catch (error2) {
         recoveryEvidenceBindings.delete(evidenceDigest);
@@ -14162,7 +14237,7 @@ function canUserAuthorizeUnverifiedRelease(outcome) {
   const disposition = typeof outcome.recovery_disposition === "string" ? outcome.recovery_disposition : "";
   const stopFailure = probeReason === "worker_stop_unverified" || probeReason === "worker_stop_exit_unverified";
   const treeEvidenceBlocks = disposition === "worker_still_alive" || disposition === "process_tree_still_live" || disposition === "process_tree_not_verified" || disposition === "process_tree_probe_timeout" || disposition === "process_tree_probe_rejected" || outcome.process_tree_scan_clean === false;
-  return !stopFailure && !treeEvidenceBlocks && identityState === "exited" && outcome.process_tree_scan_clean === true && (reason === "adapter_cleanup_unverified" || reason === "cleanup_incomplete" || disposition === "complete_cleanup_closure_unavailable");
+  return !stopFailure && !treeEvidenceBlocks && identityState === "exited" && outcome.process_tree_scan_clean === true && outcome.process_tree_root_observed === true && (reason === "adapter_cleanup_unverified" || reason === "cleanup_incomplete" || disposition === "complete_cleanup_closure_unavailable");
 }
 function delay2(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -14589,7 +14664,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
               const reason = typeof outcome.reason === "string" ? outcome.reason : "worker_cleanup_unverified";
               const latestProjection = asRecord7(this.#readSnapshot(taskId).projection);
               if (String(operation.phase) === "cleanup_unverified" && latestProjection.status === "cancelled" && canUserAuthorizeUnverifiedRelease(outcome)) {
-                return await this.#userAuthorizedRelease(taskId, this.#readSnapshot(taskId));
+                return await this.#userAuthorizedRelease(taskId, this.#readSnapshot(taskId), outcome);
               }
               throw new TaskManagerError("CANCEL_FAILED", `SQLite cleanup remains occupied for this workspace: ${reason}`);
             }
@@ -14600,7 +14675,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
         }
         throw new TaskManagerError("TASK_STATE", `zcode_cancel is not allowed from SQLite status ${String(projection.status)}`);
       }
-      async #userAuthorizedRelease(taskId, snapshot) {
+      async #userAuthorizedRelease(taskId, snapshot, authorizationEvidence = {}) {
         const operation = snapshot.operation ? asRecord7(snapshot.operation) : null;
         const projection = asRecord7(snapshot.projection);
         if (projection.status !== "cancelled") {
@@ -14616,8 +14691,17 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
           );
         }
         const attempt = asRecord7(snapshot.attempt);
-        const cancelId = operation.phase === "launch_intent" && typeof attempt.queued_cancel_id === "string" ? attempt.queued_cancel_id : this.#readCancelId(taskId, String(operation.operation_id));
+        const cancellation = operation.phase === "launch_intent" && typeof attempt.queued_cancel_id === "string" ? { cancelId: attempt.queued_cancel_id, cancellationVerificationDigest: null } : this.#readCancellationBinding(taskId, String(operation.operation_id));
+        const cancelId = cancellation?.cancelId ?? null;
         if (!cancelId) throw new TaskManagerError("CANCEL_FAILED", "user-authorized unverified release requires the original durable cancellation Result");
+        const recoveryEvidenceDigest = operation.phase === "cleanup_unverified" ? typeof authorizationEvidence.evidence_digest === "string" ? authorizationEvidence.evidence_digest : null : null;
+        if (operation.phase === "cleanup_unverified" && (!cancellation?.cancellationVerificationDigest || !recoveryEvidenceDigest)) {
+          throw new TaskManagerError("CANCEL_FAILED", "user-authorized cleanup release lacks bound cancellation or recovery evidence");
+        }
+        const releaseBinding = operation.phase === "cleanup_unverified" ? {
+          cancellation_verification_digest: string4(cancellation?.cancellationVerificationDigest, "cancellation_verification_digest_missing"),
+          recovery_evidence_digest: string4(recoveryEvidenceDigest, "recovery_evidence_digest_missing")
+        } : {};
         const outcome = asRecord7(this.#driver.userAuthorizedReleaseUnverifiedOperation({
           operation_id: string4(operation.operation_id, "operation_id_missing"),
           task_id: taskId,
@@ -14625,7 +14709,8 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
           generation: Number(operation.generation),
           revision: Number(operation.revision),
           cancel_id: cancelId,
-          release_reason: "user_authorized_release_unverified"
+          release_reason: "user_authorized_release_unverified",
+          ...releaseBinding
         }));
         if (outcome.phase !== "released" || outcome.cleanup_verified !== false) {
           throw new TaskManagerError("CANCEL_FAILED", "SQLite user-authorized unverified release did not persist a distinct Release fact");
@@ -14656,25 +14741,36 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
         }
         return { task_id: input.task_id, request_id: input.request_id, state: "answered" };
       }
-      #readCancelId(taskId, operationId) {
+      #readCancellationBinding(taskId, operationId) {
         let cursor = 0;
+        let resultVerificationDigest = null;
+        const verifications = /* @__PURE__ */ new Map();
         while (true) {
           const page = this.#driver.readTaskEvents(taskId, { afterCursor: cursor, limit: 200 });
           const events = page.events ?? [];
           for (const event of events) {
-            if (event.operation_id !== operationId || event.event_type !== "observation_recorded") continue;
+            if (event.operation_id !== operationId) continue;
+            if (event.event_type === "result_committed") {
+              const evidence2 = parseRecord2(string4(event.evidence_json, "event_evidence_missing"));
+              if (evidence2.outcome === "cancelled" && typeof evidence2.cancel_verification_digest === "string") {
+                resultVerificationDigest = evidence2.cancel_verification_digest;
+              }
+              continue;
+            }
+            if (event.event_type !== "observation_recorded") continue;
             const evidence = parseRecord2(string4(event.evidence_json, "event_evidence_missing"));
-            const reason = evidence.reason === "cancelled" ? "cancelled_before_claim" : evidence.reason;
-            if (reason === "cancelled_before_claim" || reason === "cancel_tree_verified") {
-              const cancelId = evidence.cancel_id;
-              return typeof cancelId === "string" && cancelId ? cancelId : null;
+            if (evidence.reason === "cancel_tree_verified" && typeof evidence.cancel_id === "string" && typeof event.evidence_digest === "string") {
+              verifications.set(event.evidence_digest, evidence.cancel_id);
             }
           }
-          if (page.hasMore !== true || events.length === 0) return null;
+          if (page.hasMore !== true || events.length === 0) break;
           const nextCursor = Number(page.nextCursor ?? events.at(-1)?.cursor ?? events.at(-1)?.event_cursor);
           if (!Number.isSafeInteger(nextCursor) || nextCursor <= cursor) return null;
           cursor = nextCursor;
         }
+        if (!resultVerificationDigest) return null;
+        const cancelId = verifications.get(resultVerificationDigest);
+        return cancelId ? { cancelId, cancellationVerificationDigest: resultVerificationDigest } : null;
       }
       async #dispatchBlocker(taskId, snapshot) {
         const attempt = asRecord7(snapshot.attempt);
@@ -14683,18 +14779,20 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
         const task = snapshot.task;
         const executionPath = taskExecutionPath(task);
         const operations = recoverySnapshot.operations.map(asRecord7).filter((operation) => operation.capacity_occupied === true);
-        const occupied = operations.find((operation) => {
+        const workspaceOccupied = operations.find((operation) => {
           if (operation.task_id === taskId) return false;
           const workspace = typeof operation.workspace_ref === "string" ? operation.workspace_ref : null;
           return workspace !== null && executionPathsOverlap(workspace, executionPath);
-        }) ?? (operations.length > 0 ? operations.find((operation) => operation.task_id !== taskId) : void 0);
+        });
+        const capacityOccupied = operations.length >= recoverySnapshot.capacity.capacity_limit ? operations.find((operation) => operation.task_id !== taskId) : void 0;
+        const occupied = workspaceOccupied ?? capacityOccupied;
         if (!occupied) return void 0;
         const createdAt = string4(projectionCreated(snapshot), "task_created_at_missing");
         const now = Date.now();
         const operationCreated = typeof occupied.created_at === "string" ? Date.parse(occupied.created_at) : null;
         const blockingWorkspace = string4(occupied.workspace_ref, "blocking_workspace_missing");
         const queuedCreated = Date.parse(createdAt);
-        const sameWorkspace2 = executionPathsOverlap(blockingWorkspace, executionPath);
+        const sameWorkspace2 = workspaceOccupied !== void 0;
         return {
           reason: sameWorkspace2 ? "workspace_occupied" : "capacity_occupied",
           task_id: string4(occupied.task_id, "blocking_task_id_missing"),
@@ -14943,7 +15041,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
           const blockers = Array.isArray(snapshot.root_blockers) ? snapshot.root_blockers.map(String).join(",") : "recovery_snapshot_invalid";
           throw new TaskManagerError("TASK_STATE", `SQLite Recovery is blocked (${blockers || "root_not_consistent"}); no lifecycle side effect was attempted`);
         }
-        return { operations: snapshot.operations };
+        return { operations: snapshot.operations, capacity: { capacity_limit: Number(capacity.capacity_limit) } };
       }
       #driverTrustedPolicy() {
         const context = this.#context;

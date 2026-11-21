@@ -213,6 +213,7 @@ const RECOVERY_SOURCES = new Set(['manager_process_probe','manager_launch_probe'
 const RECOVERY_REASON_CODES = new Set(['worker_identity_unknown','launch_outcome_unknown','cleanup_identity_unknown','cleanup_incomplete','claim_identity_conflict','operation_projection_conflict']);
 const RECOVERY_QUARANTINE_CODES = new Set(['claim_identity_conflict','operation_projection_conflict']);
 const RECOVERY_EVIDENCE_KEYS = Object.freeze(['attempt','claim_id','classification','envelope_digest','evidence_digest','evidence_source','expected_revision','reason','reason_code','task_id','worker_identity_digest']);
+const RECOVERY_RELEASE_EVIDENCE_KEYS = Object.freeze([...RECOVERY_EVIDENCE_KEYS,'process_tree_root_observed','process_tree_scan_clean','process_tree_scan_digest','recovery_disposition']);
 const RECOVERY_LIMIT = 8;
 export const digest = value => createHash('sha256').update(typeof value === 'string' ? value : canonical(value)).digest('hex');
 const rawDigest = value => createHash('sha256').update(Buffer.from(value)).digest('hex');
@@ -334,9 +335,12 @@ function validateObservationEventEvidence(value){
     return;
   }
   if(own==='evidence_digest|reason')return;
-  if(own==='cancel_id|evidence_digest|reason'){
+  if(own==='cancel_id|evidence_digest|reason'||own==='cancel_id|cancellation_verification_digest|evidence_digest|reason|recovery_evidence_digest'){
     const {evidence_digest,...unsigned}=value;
     if(value.reason!=='user_authorized_release_unverified'||!validId(value.cancel_id)
+      ||(own.includes('cancellation_verification_digest')
+        &&(![value.cancellation_verification_digest,value.recovery_evidence_digest]
+          .every(item=>typeof item==='string'&&/^[0-9a-f]{64}$/u.test(item))))
       ||evidence_digest!==digest(unsigned))fail('invalid_user_authorized_release_evidence');
     return;
   }
@@ -354,7 +358,9 @@ function validateObservationEventEvidence(value){
       fail('invalid_cancellation_verification');
     return;
   }
-  if(own!==[...RECOVERY_EVIDENCE_KEYS].sort().join('|'))fail('invalid_evidence');
+  const recoveryBase='|'+[...RECOVERY_EVIDENCE_KEYS].sort().join('|');
+  const recoveryRelease='|'+[...RECOVERY_RELEASE_EVIDENCE_KEYS].sort().join('|');
+  if(![recoveryBase,recoveryRelease].includes('|'+own))fail('invalid_evidence');
   if(!Number.isSafeInteger(value.attempt)||value.attempt<1||!Number.isSafeInteger(value.expected_revision)||value.expected_revision<1
     ||!validId(value.task_id)||!validId(value.claim_id)||!['hold','quarantine'].includes(value.classification)
     ||!['recovery_hold','recovery_quarantine'].includes(value.reason)||value.reason!==`recovery_${value.classification}`
@@ -364,10 +370,20 @@ function validateObservationEventEvidence(value){
     ||[value.task_id,value.claim_id,value.reason_code].some(v=>v!==v.normalize('NFC'))){
     fail('invalid_recovery_observation');
   }
+  if(own===recoveryRelease.slice(1)
+    &&(value.classification!=='hold'||value.reason_code!=='cleanup_incomplete'
+      ||value.recovery_disposition!=='complete_cleanup_closure_unavailable'
+      ||value.process_tree_scan_clean!==true||value.process_tree_root_observed!==true
+      ||typeof value.process_tree_scan_digest!=='string'||!/^[0-9a-f]{64}$/u.test(value.process_tree_scan_digest)))
+    fail('invalid_recovery_release_evidence');
 }
 const RECOVERY_INPUT_KEYS=Object.freeze(['operation_id','task_id','attempt','generation','expected_revision','claim_id','worker_identity_digest','classification','reason_code','evidence_source','evidence_digest']);
+const RECOVERY_RELEASE_INPUT_KEYS=Object.freeze([...RECOVERY_INPUT_KEYS,'process_tree_root_observed','process_tree_scan_clean','process_tree_scan_digest','recovery_disposition']);
 function recoveryEnvelope(input){
-  if(!input||Object.getPrototypeOf(input)!==Object.prototype||Object.keys(input).sort().join('|')!==[...RECOVERY_INPUT_KEYS].sort().join('|')
+  const inputKeys=input&&Object.getPrototypeOf(input)===Object.prototype?Object.keys(input).sort().join('|'):'';
+  const releaseInput=inputKeys===[...RECOVERY_RELEASE_INPUT_KEYS].sort().join('|');
+  if(!input||Object.getPrototypeOf(input)!==Object.prototype
+    ||(!releaseInput&&inputKeys!==[...RECOVERY_INPUT_KEYS].sort().join('|'))
     ||![input.operation_id,input.task_id,input.claim_id].every(validId)
     ||![input.attempt,input.generation,input.expected_revision].every(v=>Number.isSafeInteger(v)&&v>=1)
     ||!['hold','quarantine'].includes(input.classification)||!RECOVERY_REASON_CODES.has(input.reason_code)
@@ -377,15 +393,25 @@ function recoveryEnvelope(input){
     ||[input.operation_id,input.task_id,input.claim_id,input.reason_code].some(v=>v!==v.normalize('NFC'))){
     fail('invalid_recovery_observation');
   }
+  if(releaseInput&&(input.classification!=='hold'||input.reason_code!=='cleanup_incomplete'
+    ||input.recovery_disposition!=='complete_cleanup_closure_unavailable'
+    ||input.process_tree_scan_clean!==true||input.process_tree_root_observed!==true
+    ||typeof input.process_tree_scan_digest!=='string'||!/^[0-9a-f]{64}$/u.test(input.process_tree_scan_digest)))
+    fail('invalid_recovery_release_evidence');
   return {contract:'wp6c-c3b-recovery-observation-v1',operation_id:input.operation_id,task_id:input.task_id,attempt:input.attempt,
     generation:input.generation,expected_revision:input.expected_revision,claim_id:input.claim_id,
     worker_identity_digest:input.worker_identity_digest,classification:input.classification,reason_code:input.reason_code,
-    evidence_source:input.evidence_source,evidence_digest:input.evidence_digest};
+    evidence_source:input.evidence_source,evidence_digest:input.evidence_digest,
+    ...(releaseInput?{process_tree_root_observed:true,process_tree_scan_clean:true,
+      process_tree_scan_digest:input.process_tree_scan_digest,recovery_disposition:input.recovery_disposition}:{})};
 }
 function recoveryEventEvidence(input,envelopeDigest){
   return {attempt:input.attempt,claim_id:input.claim_id,classification:input.classification,envelope_digest:envelopeDigest,
     evidence_digest:input.evidence_digest,evidence_source:input.evidence_source,expected_revision:input.expected_revision,
-    reason:`recovery_${input.classification}`,reason_code:input.reason_code,task_id:input.task_id,worker_identity_digest:input.worker_identity_digest};
+    reason:`recovery_${input.classification}`,reason_code:input.reason_code,task_id:input.task_id,worker_identity_digest:input.worker_identity_digest,
+    ...(input.recovery_disposition!==undefined?{process_tree_root_observed:input.process_tree_root_observed,
+      process_tree_scan_clean:input.process_tree_scan_clean,process_tree_scan_digest:input.process_tree_scan_digest,
+      recovery_disposition:input.recovery_disposition}:{})};
 }
 function recoveryEventsFor(events,operationId){
   const operation=typeof operationId==='object'?operationId:null;
@@ -575,6 +601,7 @@ function presentOperation(row,adminAbandonment){
 const ADMIN_ABANDONMENT_INPUT_KEYS='attempt|claim_id|claim_worker_identity_digest|evidence|generation|operation_id|revision|task_id';
 const ADMIN_ABANDONMENT_EVIDENCE_KEYS='boot_time|claimant_scan_clean|claimant_scan_digest|failed_at|hosts_closed|observed_at|platform_probe_digest|process_inventory_digest|worker_exited|worker_process_id|worker_start_fingerprint|writer_closed';
 const USER_AUTHORIZED_RELEASE_INPUT_KEYS='attempt|cancel_id|generation|operation_id|release_reason|revision|task_id';
+const USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS='attempt|cancel_id|cancellation_verification_digest|generation|operation_id|recovery_evidence_digest|release_reason|revision|task_id';
 function validIsoInstant(value){return typeof value==='string'&&Number.isFinite(Date.parse(value));}
 function validateAdminAbandonmentInput(input){
   if(!input||Object.getPrototypeOf(input)!==Object.prototype||Object.keys(input).sort().join('|')!==ADMIN_ABANDONMENT_INPUT_KEYS
@@ -596,13 +623,17 @@ function validateAdminAbandonmentInput(input){
   return input;
 }
 function validateUserAuthorizedReleaseInput(input){
+  const fields=input&&Object.getPrototypeOf(input)===Object.prototype?Object.keys(input).sort().join('|'):'';
   if(!input||Object.getPrototypeOf(input)!==Object.prototype
-    ||Object.keys(input).sort().join('|')!==USER_AUTHORIZED_RELEASE_INPUT_KEYS
+    ||(fields!==USER_AUTHORIZED_RELEASE_INPUT_KEYS&&fields!==USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS)
     ||!validId(input.operation_id)||!validId(input.task_id)||!validId(input.cancel_id)
     ||!Number.isSafeInteger(input.attempt)||input.attempt<1
     ||!Number.isSafeInteger(input.generation)||input.generation<1
     ||!Number.isSafeInteger(input.revision)||input.revision<1
-    ||input.release_reason!=='user_authorized_release_unverified')fail('invalid_user_authorized_release');
+    ||input.release_reason!=='user_authorized_release_unverified'
+    ||(fields===USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS
+      &&(![input.cancellation_verification_digest,input.recovery_evidence_digest]
+        .every(value=>typeof value==='string'&&/^[0-9a-f]{64}$/u.test(value)))))fail('invalid_user_authorized_release');
   return input;
 }
 function isBusy(error){return [5,6].includes(error?.errcode)||/SQLITE_(BUSY|LOCKED)/u.test(String(error?.code??''))||/database is (busy|locked)/iu.test(String(error?.message??''));}
@@ -630,7 +661,10 @@ function validateRecoveryEventBinding(operation,event,evidence,claimSequence){
   if(event.to_phase==='quarantined'&&evidence.classification!=='quarantine')fail('recovery_classification_downgrade');
   const input={operation_id:operation.operation_id,task_id:evidence.task_id,attempt:evidence.attempt,generation:event.generation,
     expected_revision:evidence.expected_revision,claim_id:evidence.claim_id,worker_identity_digest:evidence.worker_identity_digest,
-    classification:evidence.classification,reason_code:evidence.reason_code,evidence_source:evidence.evidence_source,evidence_digest:evidence.evidence_digest};
+    classification:evidence.classification,reason_code:evidence.reason_code,evidence_source:evidence.evidence_source,evidence_digest:evidence.evidence_digest,
+    ...(evidence.recovery_disposition!==undefined?{process_tree_root_observed:evidence.process_tree_root_observed,
+      process_tree_scan_clean:evidence.process_tree_scan_clean,process_tree_scan_digest:evidence.process_tree_scan_digest,
+      recovery_disposition:evidence.recovery_disposition}:{})};
   if(digest(recoveryEnvelope(input))!==evidence.envelope_digest)fail('recovery_envelope_digest_mismatch');
 }
 export class AdmissionError extends Error { constructor(code, message = code) { super(message); this.code = code; } }
@@ -1809,13 +1843,19 @@ export class IsolatedAdmissionStore {
       if(!task||!attempt||task.current_attempt!==input.attempt
         ||task.status!=='cancelled'||attempt.status!=='cancelled'||attempt.generation!==input.generation)
         fail('user_authorized_release_projection_mismatch');
-      const unsignedEvidence={reason:'user_authorized_release_unverified',cancel_id:input.cancel_id};
+      const cleanupBinding=input.cancellation_verification_digest!==undefined;
+      const unsignedEvidence={reason:'user_authorized_release_unverified',cancel_id:input.cancel_id,
+        ...(cleanupBinding?{cancellation_verification_digest:input.cancellation_verification_digest,
+          recovery_evidence_digest:input.recovery_evidence_digest}:{})};
       const evidence={...unsignedEvidence,evidence_digest:digest(unsignedEvidence)};
       if(o.phase==='released'){
         const released=this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded' ORDER BY sequence DESC LIMIT 1").get(input.operation_id);
         let parsed;try{parsed=JSON.parse(released?.evidence_json);}catch{parsed=null;}
         if(released&&released.sequence===o.revision&&parsed?.reason==='user_authorized_release_unverified'
-          &&parsed?.cancel_id===input.cancel_id)
+          &&parsed?.cancel_id===input.cancel_id
+          &&parsed?.cancellation_verification_digest===input.cancellation_verification_digest
+          &&parsed?.recovery_evidence_digest===input.recovery_evidence_digest
+          &&parsed?.evidence_digest===evidence.evidence_digest)
           return {duplicate:true,operation_id:o.operation_id,task_id:o.task_id,attempt:o.attempt,
             generation:o.generation,revision:o.revision,phase:'released',cleanup_verified:false,
             release_reason:'user_authorized_release_unverified'};
@@ -1824,6 +1864,7 @@ export class IsolatedAdmissionStore {
       const preClaim=o.phase==='launch_intent'&&o.claim_id===null&&o.result_digest===null;
       const historicalCleanup=o.phase==='cleanup_unverified'&&o.result_digest!==null&&o.result_status==='cancelled';
       if(!preClaim&&!historicalCleanup)fail('user_authorized_release_phase_not_allowed');
+      if(cleanupBinding!==historicalCleanup)fail('user_authorized_release_phase_mismatch');
       if(preClaim){
         if(o.launch_receipt_id!==null||o.launch_receipt_digest!==null||o.launch_identity_json!==null)
           fail('user_authorized_release_spawn_evidence_present');
@@ -1835,12 +1876,30 @@ export class IsolatedAdmissionStore {
           ||queuedResult.status!=='cancelled'||queuedResult.started_at!==null)
           fail('user_authorized_release_projection_mismatch');
       }else{
-        const cancelEvent=this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded' ORDER BY sequence").all(input.operation_id)
-          .find(event=>{let parsed;try{parsed=JSON.parse(event.evidence_json);}catch{return false;}
-            return parsed.reason==='cancelled_before_claim'||parsed.reason==='cancel_tree_verified';});
-        let parsed;try{parsed=cancelEvent?JSON.parse(cancelEvent.evidence_json):null;}catch{parsed=null;}
-        if(!cancelEvent||!parsed||parsed.cancel_id!==input.cancel_id)
+        const resultEvent=this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND event_type='result_committed' ORDER BY sequence DESC LIMIT 1").get(input.operation_id);
+        let resultEvidence;try{resultEvidence=resultEvent?JSON.parse(resultEvent.evidence_json):null;}catch{resultEvidence=null;}
+        if(!resultEvent||!resultEvidence||resultEvidence.outcome!=='cancelled'
+          ||resultEvidence.cancel_verification_digest!==input.cancellation_verification_digest)
           fail('user_authorized_release_cancel_identity_mismatch');
+        const cancelEvent=this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND evidence_digest=?").get(input.operation_id,input.cancellation_verification_digest);
+        let parsed;try{parsed=cancelEvent?JSON.parse(cancelEvent.evidence_json):null;}catch{parsed=null;}
+        if(!cancelEvent||cancelEvent.event_type!=='observation_recorded'||cancelEvent.sequence>=resultEvent.sequence
+          ||!parsed||parsed.reason!=='cancel_tree_verified'||parsed.cancel_id!==input.cancel_id
+          ||parsed.claim_id!==o.claim_id||parsed.worker_identity_digest!==o.claim_worker_identity_digest)
+          fail('user_authorized_release_cancel_identity_mismatch');
+        const recoveryEvent=this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND json_extract(evidence_json,'$.evidence_digest')=?").get(input.operation_id,input.recovery_evidence_digest);
+        let recoveryEvidence;try{recoveryEvidence=recoveryEvent?JSON.parse(recoveryEvent.evidence_json):null;}catch{recoveryEvidence=null;}
+        if(!recoveryEvent||recoveryEvent.event_type!=='observation_recorded'||recoveryEvent.sequence!==o.revision
+          ||recoveryEvent.generation!==o.generation||!recoveryEvidence||recoveryEvidence.reason!=='recovery_hold'
+          ||recoveryEvidence.task_id!==o.task_id||recoveryEvidence.attempt!==o.attempt
+          ||recoveryEvidence.expected_revision!==input.revision-1||recoveryEvidence.claim_id!==o.claim_id
+          ||recoveryEvidence.worker_identity_digest!==o.claim_worker_identity_digest
+          ||recoveryEvidence.reason_code!=='cleanup_incomplete'
+          ||recoveryEvidence.recovery_disposition!=='complete_cleanup_closure_unavailable'
+          ||recoveryEvidence.process_tree_scan_clean!==true||recoveryEvidence.process_tree_root_observed!==true
+          ||typeof recoveryEvidence.process_tree_scan_digest!=='string'
+          ||!/^[0-9a-f]{64}$/u.test(recoveryEvidence.process_tree_scan_digest))
+          fail('user_authorized_release_recovery_evidence_mismatch');
       }
       if(o.revision!==input.revision)fail('stale_user_authorized_release_cas');
       const changed=this.#db.prepare("UPDATE manager_operations SET phase='released',revision=revision+1 WHERE operation_id=? AND task_id=? AND attempt=? AND generation=? AND revision=? AND phase=? AND claim_id IS ? AND result_digest IS ?")
@@ -3222,15 +3281,36 @@ export class IsolatedAdmissionStore {
             if(terminal?.event_type==='observation_recorded'&&terminal.from_phase==='cleanup_unverified'
               &&terminal.to_phase==='released'&&terminal.sequence===o.revision){
               let terminalEvidence;try{terminalEvidence=JSON.parse(terminal.evidence_json);}catch{fail('cleanup_projection_mismatch');}
-              const cancelEvents=es.filter(event=>event.event_type==='observation_recorded').map(event=>{
+              const parsedEvents=es.map(event=>{
                 try{return {event,evidence:JSON.parse(event.evidence_json)};}catch{fail('cleanup_projection_mismatch');}
               });
-              const verification=cancelEvents.find(item=>item.evidence.reason==='cancel_tree_verified'
-                &&item.evidence.cancel_id===terminalEvidence.cancel_id);
+              const verification=parsedEvents.find(item=>item.event.event_type==='observation_recorded'
+                &&item.event.evidence_digest===terminalEvidence.cancellation_verification_digest);
+              const resultEvent=parsedEvents.find(item=>item.event.event_type==='result_committed'
+                &&item.event.evidence_digest&&item.evidence.cancel_verification_digest===terminalEvidence.cancellation_verification_digest);
+              const recoveryEvent=parsedEvents.find(item=>item.event.event_type==='observation_recorded'
+                &&item.evidence.evidence_digest===terminalEvidence.recovery_evidence_digest);
               administrativeRelease=released.length===0&&unverified.length===1
                 &&terminalEvidence.reason==='user_authorized_release_unverified'
-                &&o.result_status==='cancelled'&&verification!==undefined
-                &&terminalEvidence.cancel_id===verification.evidence.cancel_id;
+                &&o.result_status==='cancelled'&&verification!==undefined&&resultEvent!==undefined
+                &&recoveryEvent!==undefined
+                &&verification.evidence.reason==='cancel_tree_verified'
+                &&terminalEvidence.cancel_id===verification.evidence.cancel_id
+                &&verification.evidence.claim_id===o.claim_id
+                &&verification.evidence.worker_identity_digest===o.claim_worker_identity_digest
+                &&verification.event.sequence<resultEvent.event.sequence
+                &&resultEvent.evidence.outcome==='cancelled'
+                &&recoveryEvent.event.sequence===terminal.sequence-1
+                &&recoveryEvent.evidence.reason==='recovery_hold'
+                &&recoveryEvent.evidence.task_id===o.task_id
+                &&recoveryEvent.evidence.attempt===o.attempt
+                &&recoveryEvent.evidence.expected_revision===terminal.sequence-2
+                &&recoveryEvent.evidence.claim_id===o.claim_id
+                &&recoveryEvent.evidence.worker_identity_digest===o.claim_worker_identity_digest
+                &&recoveryEvent.evidence.reason_code==='cleanup_incomplete'
+                &&recoveryEvent.evidence.recovery_disposition==='complete_cleanup_closure_unavailable'
+                &&recoveryEvent.evidence.process_tree_scan_clean===true
+                &&recoveryEvent.evidence.process_tree_root_observed===true;
             }
             if(o.phase!==expected&&!(o.phase==='released'&&administrativeRelease))fail('cleanup_projection_mismatch');
           } else if(['cleanup_pending','cleanup_verified','cleanup_unverified','cleanup_reverified','released'].includes(o.phase)

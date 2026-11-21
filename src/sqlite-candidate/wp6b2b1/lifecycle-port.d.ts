@@ -371,6 +371,10 @@ export interface CandidateRecoveryObservationInput {
   readonly reason_code: 'worker_identity_unknown' | 'launch_outcome_unknown' | 'cleanup_identity_unknown' | 'cleanup_incomplete' | 'claim_identity_conflict' | 'operation_projection_conflict';
   readonly evidence_source: 'manager_process_probe' | 'manager_launch_probe' | 'manager_cleanup_probe' | 'manager_projection_validator';
   readonly evidence_digest: string;
+  readonly process_tree_root_observed?: true;
+  readonly process_tree_scan_clean?: true;
+  readonly process_tree_scan_digest?: string;
+  readonly recovery_disposition?: 'complete_cleanup_closure_unavailable';
 }
 
 export interface CandidateRecoveryEvidenceVerificationContext {
@@ -459,7 +463,11 @@ export interface SqliteLifecyclePort {
   requestCancellation(input: CandidateCancellationFence, evidence: Readonly<Record<string, unknown>>): CandidateCancellationOutcome;
   recordCancellationVerification(input: CandidateCancellationFence, evidence: Readonly<Record<string, unknown>>): CandidateCancellationOutcome;
   cancelQueuedAttempt(input: CandidateQueuedCancelInput): CandidateQueuedCancelOutcome;
-  userAuthorizedReleaseUnverifiedOperation(input: { readonly operation_id: string; readonly task_id: string; readonly attempt: number; readonly generation: number; readonly revision: number; readonly cancel_id: string; readonly release_reason: 'user_authorized_release_unverified' }): { readonly duplicate: boolean; readonly operation_id: string; readonly task_id: string; readonly attempt: number; readonly generation: number; readonly revision: number; readonly phase: 'released'; readonly cleanup_verified: false; readonly release_reason: 'user_authorized_release_unverified' };
+  userAuthorizedReleaseUnverifiedOperation(input: {
+    readonly operation_id: string; readonly task_id: string; readonly attempt: number; readonly generation: number;
+    readonly revision: number; readonly cancel_id: string; readonly release_reason: 'user_authorized_release_unverified';
+    readonly cancellation_verification_digest?: string; readonly recovery_evidence_digest?: string;
+  }): { readonly duplicate: boolean; readonly operation_id: string; readonly task_id: string; readonly attempt: number; readonly generation: number; readonly revision: number; readonly phase: 'released'; readonly cleanup_verified: false; readonly release_reason: 'user_authorized_release_unverified' };
   openInteractionChannel(child: object, operation: Readonly<Record<string, unknown>>, verifyProcessIdentity: (context: unknown) => Promise<unknown>): Promise<CandidateInteractionChannel>;
   receiveInteractionRequest(channel: CandidateInteractionChannel): Promise<Readonly<Record<string, unknown>>>;
   replyToInteractionRequest(input: CandidateInteractionReplyInput, channel: CandidateInteractionChannel): Promise<Readonly<Record<string, unknown>>>;

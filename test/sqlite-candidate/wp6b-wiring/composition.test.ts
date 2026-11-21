@@ -4049,7 +4049,54 @@ test("formal MCP protects a pre-Claim Launch Intent with durable Spawn evidence 
   });
 });
 
-for(const treeMode of ['clean','live'] as const)test(`formal MCP user-authorized cleanup release is ${treeMode==='clean'?'allowed after exact exit and clean tree proof':'blocked by a live descendant'}`,{timeout:45_000},async()=>{
+test("formal MCP does not report capacity pressure when another workspace is occupied below the configured limit", { timeout: 30_000 }, async () => {
+  const taskId=`capacity-headroom-${randomUUID()}`,operationId=`op-${taskId}`;
+  const queuedTaskId=`capacity-headroom-queued-${randomUUID()}`;
+  let announce!: () => void;
+  let unblock!: () => void;
+  const dispatchStarted=new Promise<void>(resolve=>{announce=resolve;});
+  const dispatchGate=new Promise<void>(resolve=>{unblock=resolve;});
+  await withSqliteMcp(async(client,_manager,_dataRoot,workspace)=>{
+    const first=contentObject(await client.callTool({name:'zcode_cancel',arguments:{task_id:taskId}}));
+    assert.equal(first.status,'cancelled');
+    const otherWorkspace=path.join(path.dirname(workspace),'other-workspace-headroom');
+    mkdirSync(otherWorkspace,{recursive:true});
+    const queued=contentObject(await client.callTool({name:'zcode_task',arguments:syntheticTask(otherWorkspace,queuedTaskId)}));
+    assert.equal(queued.status,'queued');
+    await dispatchStarted;
+    const status=contentObject(await client.callTool({name:'zcode_status',arguments:{task_id:queuedTaskId}}));
+    assert.equal(status.dispatch_blocker,undefined,'one occupied slot below a two-slot limit is not capacity pressure');
+    unblock();
+    assert.equal((await waitForTerminal(client,queuedTaskId,1)).status,'completed');
+    await waitForLifecycleEvent(client,queuedTaskId,'released');
+  },{
+    prepareDataRoot:async(dataRoot)=>{
+      await initializeIsolatedCandidateRoot(dataRoot);
+      const modules=await loadLifecycleCandidateModules(),store=modules.Store.open(dataRoot);
+      try{
+        modules.createPort(store).provisionCapacity({operation_id:`policy-${randomUUID()}`,capacity_limit:2,
+          expected_generation:0,maintenance:{dispatch_blocked:true,writers_drained:true}});
+      }finally{store.close();}
+    },
+    beforeAuthority:(dataRoot,modules,workspace)=>{
+      const store=modules.Store.open(dataRoot);
+      try{
+        const port=modules.createPort(store),allow=()=>({state:'allow',fixture:true});
+        port.createTask(syntheticTask(workspace,taskId) as unknown as Parameters<typeof port.createTask>[0]);
+        const admitted=port.admitOperation({operation_id:operationId,task_id:taskId,attempt:1,workspace_ref:workspace},
+          {workspaceValidator:allow,executionPermissionCheck:allow}) as Record<string,unknown>;
+        const launch={operation_id:operationId,task_id:taskId,attempt:1,generation:Number(admitted.generation),
+          revision:Number(admitted.revision),launch_id:`launch-${taskId}`,launch_epoch:1,launch_token:`capacity-headroom-${taskId}-0123456789`};
+        const intent=port.createLaunchIntent(launch) as Record<string,unknown>;
+        port.recordLaunchReceipt({...launch,revision:Number(intent.revision),receipt_id:`receipt-${taskId}`,
+          launch_identity:{source:'synthetic_fixture',fixture:true,process_id:43211,start_fingerprint:`fixture-${taskId}`}});
+      }finally{store.close();}
+    },
+    testBeforeDispatch:async()=>{announce();await dispatchGate;},
+  }).finally(()=>unblock());
+});
+
+for(const treeMode of ['clean','live','root-missing'] as const)test(`formal MCP user-authorized cleanup release is ${treeMode==='clean'?'allowed after exact exit and clean tree proof':treeMode==='live'?'blocked by a live descendant':'blocked when the clean scan omits the recorded root'}`,{timeout:45_000},async()=>{
   const taskId=`cancel-cleanup-${treeMode}-${randomUUID()}`,operationId=`op-${taskId}`;
   let seeded:{readonly processId:number;readonly fingerprint:string}|undefined;
   const probe:ProcessProbe={...createPlatformProbe(),platform:'win32',async probe(requests){return requests.map(()=>({
@@ -4058,7 +4105,7 @@ for(const treeMode of ['clean','live'] as const)test(`formal MCP user-authorized
   await withSqliteMcp(async(client,_manager,dataRoot)=>{
     const responses=await Promise.all([1,2].map(()=>client.callTool({name:'zcode_cancel',arguments:{task_id:taskId}})));
     for(const response of responses){
-      if(treeMode==='live')assert.equal(response.isError,true);
+      if(treeMode!=='clean')assert.equal(response.isError,true);
       else assert.equal(contentObject(response).status,'cancelled');
     }
     const modules=await loadLifecycleCandidateModules(),reader=modules.Store.openForRecovery(dataRoot);
@@ -4069,7 +4116,7 @@ for(const treeMode of ['clean','live'] as const)test(`formal MCP user-authorized
       const snapshot=port.readRecoverySnapshot() as {operations:Array<Record<string,unknown>>};
       const occupied=snapshot.operations.find(item=>item.operation_id===operationId);
       const events=port.readLifecycleEvents(operationId) as Array<Record<string,unknown>>;
-      if(treeMode==='live'){
+      if(treeMode!=='clean'){
         assert.equal(operation.phase,'cleanup_unverified');
         assert.equal(occupied?.capacity_occupied,true);
         assert.equal(events.some(event=>JSON.parse(String(event.evidence_json)).reason==='user_authorized_release_unverified'),false);
@@ -4080,15 +4127,18 @@ for(const treeMode of ['clean','live'] as const)test(`formal MCP user-authorized
         assert.equal(events.filter(event=>event.event_type==='result_committed').length,1);
         assert.equal(events.filter(event=>event.event_type==='cleanup_unverified').length,1);
         assert.equal(events.filter(event=>event.event_type==='cleanup_verified').length,0);
-        assert.equal(events.filter(event=>event.event_type==='observation_recorded'
-          &&JSON.parse(String(event.evidence_json)).reason==='user_authorized_release_unverified').length,1);
+        const releaseEvents=events.filter(event=>event.event_type==='observation_recorded'
+          &&JSON.parse(String(event.evidence_json)).reason==='user_authorized_release_unverified');
+        assert.equal(releaseEvents.length,1);
       }
     }finally{reader.close();}
   },{
     processProbe:probe,
     testVerifyProcessTreeClaimantsClean:async targets=>treeMode==='clean'
       ?{clean:true,livePids:[],observedPids:targets.map(target=>target.pid)}
-      :{clean:false,livePids:[seeded!.processId+1],observedPids:[seeded!.processId,seeded!.processId+1]},
+      :treeMode==='live'
+        ?{clean:false,livePids:[seeded!.processId+1],observedPids:[seeded!.processId,seeded!.processId+1]}
+        :{clean:true,livePids:[],observedPids:[]},
     beforeAuthority:(dataRoot,modules,workspace)=>{seeded=seedCancelledCleanupHold(dataRoot,modules,workspace,taskId,operationId);},
   });
 });
