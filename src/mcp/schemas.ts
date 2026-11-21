@@ -43,6 +43,11 @@ export const taskIdOnlyInputSchema = z.strictObject({
   task_id: z.string().min(1),
 });
 
+export const zcodeResultInputSchema = taskIdOnlyInputSchema.extend({
+  view: z.enum(["summary", "full"]).optional(),
+  expected_attempt: z.number().int().positive().optional(),
+});
+
 export const zcodeFeedbackInputSchema = z.strictObject({
   task_id: taskIdSchema,
 });
@@ -60,6 +65,7 @@ export const zcodeEventsInputSchema = z.strictObject({
   limit: z.number().int().min(1).max(200).optional(),
   wait_ms: z.number().int().min(0).max(25_000).optional(),
   view: z.enum(["raw", "summary"]).optional(),
+  include_attempt: z.boolean().optional().describe("Include each event's persisted attempt number."),
   scan_cursor: z.string().max(2_048).optional(),
   max_bytes: z.number().int().min(1_024).max(33_554_432).optional(),
   wait_for: z.literal("attention").optional(),
@@ -232,11 +238,30 @@ export const taskResultSchema = z.object({
   timing: attemptTimingSchema.nullable().optional(),
 });
 
+// A union at the root would cause older MCP protocol codecs to wrap the result.
+export const zcodeResultOutputSchema = taskResultSchema.extend({
+  zcode_output: taskResultSchema.shape.zcode_output.optional(),
+  projection: z.object({
+    omitted_fields: z.array(z.string()),
+    test_counts: z.object({
+      passed: z.number().int().nonnegative(),
+      failed: z.number().int().nonnegative(),
+      not_run: z.number().int().nonnegative(),
+    }),
+  }).optional(),
+}).refine(
+  (result) => (result.zcode_output !== undefined) !== (result.projection !== undefined),
+  "Result must contain either zcode_output or projection",
+).meta({
+  oneOf: [{ required: ["zcode_output"] }, { required: ["projection"] }],
+});
+
 const taskProgressEventSchema = z.object({
   seq: z.number().int().positive(),
   at: z.string(),
   type: z.string(),
   summary: z.string(),
+  attempt: z.number().int().positive().optional(),
   details: z.record(z.string(), z.unknown()).optional(),
 });
 

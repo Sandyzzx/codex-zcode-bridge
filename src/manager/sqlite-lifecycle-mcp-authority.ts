@@ -260,6 +260,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       const attention = await this.getAttention(input.task_id);
       return { ...page, status: attention.status, attention };
     }
+    const includeAttempt = input.include_attempt === true;
     const deadline = Date.now() + waitMs;
     while (true) {
       const snapshot = this.#readSnapshot(input.task_id);
@@ -267,10 +268,10 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
         events: readonly Record<string, unknown>[]; nextCursor: number; hasMore: boolean;
       };
       const visiblePage = input.view === "summary"
-        ? mergeAdjacentModelOutputRows(page.events, input.max_bytes)
+        ? mergeAdjacentModelOutputRows(page.events, input.max_bytes, includeAttempt)
         : { rows: page.events, omittedEvents: 0, omittedEventsByRow: page.events.map(() => 0) };
       const projectedEvents = visiblePage.rows.map((value) => {
-        const event = toProgressEvent(value);
+        const event = toProgressEvent(value, includeAttempt);
         if (event.type !== "interaction_requested" || !event.details || typeof event.details.request_id !== "string") return event;
         const persisted = this.#driver.readInteractionRequest(input.task_id, event.details.request_id);
         if (!persisted) return event;
@@ -1100,12 +1101,13 @@ function receipt(taskId: string, status: unknown, createdAt: unknown): TaskRecei
   return { task_id: taskId, status: status === "running" ? "running" : "queued", created_at: string(createdAt, "task_created_at_missing") };
 }
 
-function toProgressEvent(value: Record<string, unknown>): TaskProgressEvent {
+function toProgressEvent(value: Record<string, unknown>, includeAttempt: boolean): TaskProgressEvent {
   let details: Record<string, unknown> | undefined;
   try {
     const parsed: unknown = JSON.parse(string(value.evidence_json, "event_evidence_missing"));
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) details = parsed as Record<string, unknown>;
   } catch { throw new TaskManagerError("TASK_STATE", "SQLite lifecycle event evidence is corrupt"); }
+  const attempt = includeAttempt ? positiveOrNull(value.operation_attempt) : null;
   return {
     seq: Number(value.cursor ?? value.sequence),
     at: string(value.at, "event_time_missing"),
@@ -1113,6 +1115,7 @@ function toProgressEvent(value: Record<string, unknown>): TaskProgressEvent {
     summary: typeof value.summary === "string"
       ? value.summary
       : `SQLite lifecycle: ${string(value.event_type, "event_type_missing")}`,
+    ...(attempt === null ? {} : { attempt }),
     ...(details ? { details } : {}),
   };
 }
@@ -1123,6 +1126,7 @@ function toProgressEvent(value: Record<string, unknown>): TaskProgressEvent {
 export function mergeAdjacentModelOutputRows(
   rows: readonly Record<string, unknown>[],
   maxBytes?: number,
+  includeAttempt = false,
 ): {
   readonly rows: readonly Record<string, unknown>[];
   readonly omittedEvents: number;
@@ -1154,7 +1158,7 @@ export function mergeAdjacentModelOutputRows(
       : null;
     const mergeFits = candidate !== null
       && (maxBytes === undefined
-        || Buffer.byteLength(canonicalJson(toProgressEvent(candidate)), "utf8") <= maxBytes);
+        || Buffer.byteLength(canonicalJson(toProgressEvent(candidate, includeAttempt)), "utf8") <= maxBytes);
     if (candidate && mergeFits) {
       merged[merged.length - 1] = candidate;
       omittedEventsByRow[omittedEventsByRow.length - 1] = Number(omittedEventsByRow.at(-1)) + 1;

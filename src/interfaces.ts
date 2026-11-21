@@ -268,6 +268,7 @@ export interface TaskProgressEvent {
   at: string;
   type: string;
   summary: string;
+  attempt?: number;
   details?: Record<string, unknown>;
 }
 
@@ -371,6 +372,8 @@ export interface GetEventsInput {
   limit?: number;
   wait_ms?: number;
   view?: "raw" | "summary";
+  /** Include the persisted Attempt number on each Event. */
+  include_attempt?: boolean;
   /** B1 additive: opaque cursor from a previous bounded page. */
   scan_cursor?: string;
   /** B1 additive: byte budget for the bounded scan path (ignored without scan_cursor semantics). */

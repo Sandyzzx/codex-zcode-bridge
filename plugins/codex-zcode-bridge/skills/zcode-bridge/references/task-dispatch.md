@@ -1,9 +1,9 @@
 # TaskPackage 与派发
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-11
-> Last verified: 2026-11-11，核对当前 MCP zcode_task schema、TaskPackage 接口、ADR-031 模型路由与 Prompt Builder 限制；真实 Worker 派发 NOT RUN。
-> Verified against: 372e90622772b070357a278f1da3dea58fa42dee（基线；本候选离线证据见 docs/research/master-skill-simplification-20261111.md）
+> Last updated: 2026-11-21
+> Last verified: 2026-11-21，仅核对 TaskPackage、实际执行根与 Prompt Builder 的 AgentReport 合同。真实 Worker 派发 NOT RUN。
+> Verified against: `1f9ff9ef37528205e76156e13fe06ed2b1fd3711`
 
 本文件假设入口授权已确认。提交前先完成 Ready Gate：确认目标、Codex 项目根目录、实际执行目录、修改边界、必要输入、验收标准、适用测试要求和预算是否充分；不适用项可为空或说明原因，不强行虚构。提交前另读 [监控与审批](monitoring-and-approval.md)，任务返回后立即跟踪事件。
 
@@ -42,3 +42,11 @@
 `staged`：`objective` 只写当前阶段的一个可独立验收成果；`requirements` 写已冻结决定、前置输入、本阶段范围、后续非目标、可自主局部事项和必须提交 Master 的具体问题；`acceptance_criteria` 覆盖阶段成果、验证和交接证据；`context` 可用 `PROJECT DECISIONS`、`RELEVANT FILES`、`OPEN DECISIONS — DO NOT CHOOSE` 组织。当前阶段完成后停止。
 
 只读调查在 `requirements` 写明“不创建、修改或删除任何文件”；若允许研究文档交付，则列出其写入范围并保护实现文件。重大未决项可以成为研究阶段的问题，不能是当前实施成立所必需却缺失的决定。
+
+## 工作区工件引用
+
+- Master 在 `context` 中直接传必要的短事实和已有文件的相对路径，注明每份证据的用途。长日志、报告和 diff 保留在原处。必需的约束、权限和停止条件写在现有 `requirements` 或路径字段。
+- 派发前在将要执行的目录确认输入可读。验收时以任务事件核实的实际执行根为准，传了 `worktree_path` 时以该 worktree 为根，否则以项目根为根。实际执行根不确定时先核对。解析 `live` 路径时核实实际文件仍位于该根内，拒绝越界路径和指向根外的链接。
+- 将可变文件标为 `live` 并检查当前内容。引用已提交证据时用明确的 `<commit SHA>:<相对路径>`，从同一执行仓库读取该快照。引用含 SHA-256 等内容摘要时核对实际字节。
+- 将任务证据与原 `task_id`、实际执行根、Attempt 以及可核实的 Operation/generation 对照。文件缺失、变化、不可读或 Attempt 已推进时报告具体原因，指明哪些原证据仍能核实。同名文件的归属须有证据。
+- 短结果直接保留文本。按需读取原始文件、已提交的 Result 和 Raw Events 做独立验收，保留原始证据。TaskPackage 沿用现有字段，由 Worker 按现有五字段 AgentReport 交付。
