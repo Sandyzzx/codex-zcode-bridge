@@ -414,6 +414,43 @@ test("CI gives FULL impacts one complete regression and no duplicate Fast T0", (
   );
 });
 
+test("required-check jobs stay present for docs-only PRs without running the full suite", () => {
+  const workflow = readFileSync(path.resolve(".github/workflows/ci.yml"), "utf8").replace(/\r\n/gu, "\n");
+  const windowsStart = workflow.indexOf("  verify-windows:");
+  const releaseStart = workflow.indexOf("  release:", windowsStart);
+  const resultStart = workflow.indexOf("  windows-result:", releaseStart);
+  const stressStart = workflow.indexOf("  sqlite-stress:", resultStart);
+  assert.ok(windowsStart >= 0 && releaseStart > windowsStart && resultStart > releaseStart && stressStart > resultStart);
+
+  const windows = workflow.slice(windowsStart, releaseStart);
+  const release = workflow.slice(releaseStart, resultStart);
+  const result = workflow.slice(resultStart, stressStart);
+  const stress = workflow.slice(stressStart);
+  for (const job of [windows, release, result, stress]) {
+    assert.match(
+      job,
+      /if: always\(\) && \(github\.event_name == 'push' \|\| github\.event_name == 'workflow_dispatch' \|\| \(github\.event_name == 'pull_request' && github\.event\.pull_request\.draft == false && needs\.impact\.result == 'success'\)\)/u,
+      "a required-check job must materialize a result for every non-draft PR",
+    );
+  }
+
+  assert.match(
+    windows,
+    /- name: Run Windows shard\s+if: github\.event_name != 'pull_request' \|\| needs\.impact\.outputs\.full_required == 'true'/u,
+  );
+  assert.match(
+    release,
+    /- run: npm test\s+if: github\.event_name != 'pull_request' \|\| needs\.impact\.outputs\.full_required == 'true'/u,
+  );
+  assert.match(
+    stress,
+    /- run: npm run test:stress\s+if: github\.event_name != 'pull_request' \|\| needs\.impact\.outputs\.force_full == 'true' \|\| needs\.impact\.outputs\.full_required == 'true' \|\| needs\.impact\.outputs\.stress_required == 'true'/u,
+  );
+  assert.match(windows, /- name: Full Windows suite not required/u);
+  assert.match(release, /- name: Full Ubuntu suite not required/u);
+  assert.match(stress, /- name: SQLite stress matrix not required/u);
+});
+
 test("tests-only execution is fail-closed without CI preflight evidence", () => {
   const env = { ...process.env };
   delete env.CODEX_BRIDGE_CI_T0_COMPLETED;

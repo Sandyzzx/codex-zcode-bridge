@@ -5,6 +5,8 @@
 > Base: `origin/preview` `c1245a02f8f9d4b6e1102eabac230b657d85de9b`
 > Integration branch: `codex/preview-release-20261121`
 > Integration worktree: `D:\codex-zcode-bridge\.run\preview-integration`
+> Preview integration merge: `0f8a6189ba17fe38e20ef24d7f15815515d1b065` (PR #109)
+> Cost Lab CI repair merge: `22fc7a64f1e79c2c555cb7069183e83795959f99` (PR #110)
 
 ## 1. Integration Route
 
@@ -20,6 +22,16 @@
 
 SQLite v13 合并只在 `docs/testing/README.md` 与生成 inventory 发生冲突；README 元数据逐项
 对账，inventory 从合并后的源码重新生成。CI 分片、v13 资产清理和 Legacy 清理均保留。
+
+候选分别通过 PR #100、#106、#107、#108 合并。最终集成通过 PR #109 合入 `preview`，
+merge commit 为 `0f8a6189ba17fe38e20ef24d7f15815515d1b065`。PR #109 的代码树 CI
+`44856268724` 通过，但合入后的 Preview Push CI `44857084790` 暴露了一个真实平台门禁缺陷：
+Cost Lab job 在 Ubuntu 执行，而其中 4 项合同要求 Windows 官方 Runtime/路径语义。
+
+该缺陷由 PR #110 修复，只把 Cost Lab job 固定到 `windows-2022`，并增加 Test Impact
+Selector 回归断言；没有修改生产 Bridge、Runtime Auth、Official Host 或 Cost Lab 测试断言。
+PR #110 merge commit 为 `22fc7a64f1e79c2c555cb7069183e83795959f99`，最终 Preview Push CI
+`44858240150` 全部通过。
 
 ## 2. Release Scope
 
@@ -74,7 +86,10 @@ Preview `ADR-037` 继续表示官方认证复用；Stable Host Recovery 文件�
 | Clean entrypoints | PASS, 4/4 |
 | Test impact selector | PASS, changed tree selected `FULL_SUITE` |
 | Final local complete regression | PASS, 962 tests / 960 PASS / 0 FAIL / 2 SKIP / 20m28.398s |
-| Windows complete CI | PENDING PREVIEW PUSH |
+| PR #109 CI | PASS, run `44856268724` |
+| PR #109 post-merge Preview CI | FAIL, run `44857084790`; Cost Lab platform gate defect reproduced |
+| PR #110 CI | PASS, run `44857443617` |
+| Final Preview Push CI | PASS, run `44858240150`, commit `22fc7a64f1e79c2c555cb7069183e83795959f99` |
 
 已有候选证据仍按各自 PR 报告保留，不把候选分支的 PASS 冒充本集成树已经完成验证。
 
@@ -99,6 +114,12 @@ Preview `ADR-037` 继续表示官方认证复用；Stable Host Recovery 文件�
 Validator、Generated Artifacts 与 `git diff --check` 同样通过。后续仅允许追加报告事实，
 不得借发布收尾修改生产代码。
 
+PR #110 的第一次 Windows SQLite 门禁出现一次资源竞态失败：
+`interaction request was not observed for mvp-stream-stress-...`。相同测试代码在该提交上
+本地连续运行 3 次均为 PASS（合计约 87 秒），随后仅重跑失败的 GitHub Actions failed job，
+整个 run `44857443617` 通过。该事件没有伴随超时放宽、断言删除、SKIP 或生产代码修改，因此
+记录为一次未复现的 Windows 资源竞态，而不是产品修复或稳定成功。
+
 ## 5. Compatibility Matrix
 
 | 能力 | Preview.10 状态 |
@@ -118,11 +139,12 @@ Validator、Generated Artifacts 与 `git diff --check` 同样通过。后续仅�
 
 ```text
 PREVIEW_VERSION: 2.0.0-preview.10
-PREVIEW_HEAD: PENDING
-RELEASE_COMMIT: PENDING
-RELEASE_TREE: PENDING
-TAG: PENDING
-RELEASE_URL: PENDING
+PREVIEW_CODE_HEAD: 22fc7a64f1e79c2c555cb7069183e83795959f99
+PREVIEW_CODE_TREE: a323611036698c338d573662d372a9b33f3d0c40
+RELEASE_COMMIT: ASSIGNED AFTER FINAL REPORT MERGE
+RELEASE_TREE: ASSIGNED AFTER FINAL REPORT MERGE
+TAG: codex-zcode-bridge-preview-v2.0.0-preview.10
+RELEASE_URL: https://github.com/Sandyzzx/codex-zcode-bridge/releases/tag/codex-zcode-bridge-preview-v2.0.0-preview.10
 ZIP_SHA256: PENDING
 ```
 
@@ -139,9 +161,9 @@ ZIP_SHA256: PENDING
 ```text
 WORKTREES_BEFORE: 43
 WORKTREES_AFTER: PENDING
-LOCAL_BRANCHES_BEFORE: PENDING
+LOCAL_BRANCHES_BEFORE: 42
 LOCAL_BRANCHES_AFTER: PENDING
-REMOTE_BRANCHES_BEFORE: PENDING
+REMOTE_BRANCHES_BEFORE: 19
 REMOTE_BRANCHES_AFTER: PENDING
 ROOT_WIP_PRESERVED: YES
 PRODUCTION_SQLITE_UNTOUCHED: YES
@@ -155,6 +177,8 @@ PRODUCTION_SQLITE_UNTOUCHED: YES
 - 真实 OAuth refresh/账户轮换和一般 Desktop Main 独立性仍不是本发布新增证据。
 - GitHub Actions runner-minutes 的官方账单值未测得；CI 报告只使用可核实的 Job 墙钟与
   近似 runner-minutes。
+- PR #110 首轮 Windows SQLite 资源竞态在相同代码上未复现，失败 Job 重跑通过；保留为
+  Windows runner 资源时序风险，不宣称已经修复。
 
 ## 9. Final Status
 
@@ -166,7 +190,7 @@ LEGACY_RETIREMENT: MERGED
 CI_OPTIMIZATION: MERGED
 
 PREVIEW_VERSION: 2.0.0-preview.10
-ALL_REQUIRED_CI: PENDING
+ALL_REQUIRED_CI: PASS ON CODE HEAD 22FC7A64
 RELEASE_ASSET_VERIFICATION: PENDING
 CLEAN_INSTALL: PENDING
 STABLE_UNCHANGED: YES
