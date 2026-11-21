@@ -26,8 +26,15 @@ Preview.11 在 Preview.10 的 SQLite v14-only 基线上发布以下已验证变�
   和两平台 SQLite matrix PASS；PR 的托管 Cost Lab job 因 impact selector skipped。
 - PR #117 合并后 Preview push CI：`44938418623`，Cost Lab、Ubuntu、Windows 两 shard、
   Windows aggregate 和两平台 SQLite matrix 全部 PASS。
-- 本发布候选的版本一致性、生成物、typecheck、build、plugin validation、完整回归和
-  发布 Tag/资产验证在 release workflow 完成后记录。
+- 本发布候选 `npm.cmd ci`、`npm.cmd run build` 和 `npm.cmd run test:full` PASS：
+  983 tests，981 PASS，0 FAIL，2 SKIP；其中包含 typecheck、build、
+  plugin validation 和 generated artifacts 校验。
+- `npm.cmd run check:generated` PASS（10 个生成物已跟踪且最新）；
+  `git diff --check` PASS。
+- `npm.cmd run test:stress` PASS（4/4），覆盖 SQLite AppServer 流、历史增长、
+  跨进程 Result CAS 和并发 admission。
+- `npm.cmd run cost-lab:test` PASS（86/86）。
+- 发布 Tag、GitHub Release、ZIP 和 SHA-256 在 release workflow 完成后记录。
 
 ## Known Limits
 
