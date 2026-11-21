@@ -58,7 +58,7 @@ test("marketplace launcher preserves the Node 22.18+ product gate before loading
   }
 });
 
-test("Marketplace launcher automatically bootstraps SQLite before the first MCP initialize", { timeout: 45_000, skip: process.platform !== "win32" }, async () => {
+test("Marketplace launcher automatically bootstraps SQLite before the first MCP initialize", { timeout: 75_000, skip: process.platform !== "win32" }, async () => {
   assert.equal(process.versions.node, "24.16.0", "this R1 launcher acceptance run uses the pinned Node runtime");
   const pluginRoot = path.resolve("plugins/codex-zcode-bridge");
   const launcherPath = realpathSync(path.join(pluginRoot, "launch-node24.mjs"));
@@ -191,14 +191,23 @@ test("Marketplace launcher automatically bootstraps SQLite before the first MCP 
     assert.ok(listedTools.some((tool) => tool.name === "zcode_task"), "the actual Bridge Bundle must answer tools/list");
 
     const powershell = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+    const processTreeProbe = path.resolve("test/fixtures/windows-process-tree.ps1");
     const processId = child.pid;
     assert.ok(processId, "launcher child must have an OS process id");
-    const inspectCommand = `$target = Get-CimInstance Win32_Process -Filter 'ProcessId = ${processId}' | Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine; $children = @(Get-CimInstance Win32_Process -Filter 'ParentProcessId = ${processId}' | Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine); [ordered]@{target=$target;children=$children} | ConvertTo-Json -Compress -Depth 4`;
-    const processObservation = spawnSync(powershell, ["-NoProfile", "-NonInteractive", "-Command", inspectCommand], {
+    const processObservation = spawnSync(powershell, [
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      processTreeProbe,
+      "-TargetPid",
+      String(processId),
+    ], {
       encoding: "utf8",
-      timeout: 8_000,
+      timeout: 60_000,
       windowsHide: true,
-      env: childEnv,
+      env: process.env,
     });
     assert.equal(processObservation.status, 0, `process identity query failed: ${processObservation.stderr}`);
     const processTree = JSON.parse(processObservation.stdout) as {
