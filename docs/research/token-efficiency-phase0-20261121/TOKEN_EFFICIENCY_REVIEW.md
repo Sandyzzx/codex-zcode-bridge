@@ -5,6 +5,7 @@
 > A0: `1f9ff9ef37528205e76156e13fe06ed2b1fd3711`
 > Implementation: `6f814bf8736baa59295e686af8733c88d4202ca0`
 > Runs: `token-efficiency-20261121-offline-ab` / `token-efficiency-preview-integration-20261121`
+> Hosted CI: `44918089589` on `fafc3f397fced54cbc655a11b50e49b8ad51530e`
 
 ## 审查轮次
 
@@ -73,9 +74,11 @@ Windows x64、Node `24.16.0`、npm `11.13.0`。证据根目录为
 | 两次 `replay-ab.mjs` | 证据根目录 `replay-ab-integration*.json` | SHA-256 均为 `1636481c13e624224ca6a46a2ec616a8877d1704acc19c65c2c4fbe30ce42fa3` |
 | 安装版 Host 通道探针 | 集成分支 `.run/host-probe/evidence.json`、`requests.jsonl` | 2 个本机回环请求、0 付费请求；模型输入只含 structured marker |
 | 安装版 Host 32 MiB 直读 | 集成分支 `.run/host-probe/app-server-large-result.json` | `host_line_limit_discard`，max line 16,777,216 bytes，进程树 cleanup verified |
+| 托管 PR CI `44918089589` | PR #116 checks | Ubuntu、Windows 两个 shard 与 aggregate、两平台 SQLite PASS；Cost Lab 未被 impact selector 选中 |
 
-托管 Windows/Ubuntu CI 仍需在最终集成 SHA 上执行。Cost Lab 86/86 只证明现有测量工具
-行为，不证明真实任务成本、成功率或缓存。
+托管 Windows/Ubuntu CI 已在运行时候选 `fafc3f397` 上执行。Cost Lab 托管 job
+`136887980954` 为 `SKIPPED`，不能写成托管 PASS；同候选本地 86/86 只证明现有测量
+工具行为，不证明真实任务成本、成功率或缓存。
 
 ## 剩余门槛
 
@@ -87,5 +90,7 @@ Windows x64、Node `24.16.0`、npm `11.13.0`。证据根目录为
 - 真实 A/B 需要受支持 Runtime、可靠账户/账单隔离、完整请求归因和可执行的逐请求预算
   上限；当前条件不满足，预算支出保持 `$0`。
 
-结论：运行时 Diff 未发现 P0 缺陷，适合在修正文档可执行性并完成托管 CI 后进入
-Draft Preview；不得以离线 27.6% 宣称真实成本目标达标，Stable Ready 为 `NO`。
+结论：运行时 Diff 未发现 P0 缺陷，托管 Windows/Ubuntu/SQLite 门禁与本地 Cost Lab
+均通过。大型 Result 分层以显式 opt-in 进入 Preview；不得以离线 27.6% 宣称真实成本
+目标达标，Preview Ready 为 `YES`（含 16 MiB 回读与静态 Schema 兼容性限制），
+Stable Ready 为 `NO`。

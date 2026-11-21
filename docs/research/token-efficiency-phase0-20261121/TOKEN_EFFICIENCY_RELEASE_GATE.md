@@ -5,12 +5,13 @@
 > A0: `1f9ff9ef37528205e76156e13fe06ed2b1fd3711`
 > Implementation: `6f814bf8736baa59295e686af8733c88d4202ca0`
 > Runs: `token-efficiency-20261121-offline-ab` / `token-efficiency-preview-integration-20261121`
+> Hosted CI: `44918089589` on runtime candidate `fafc3f397fced54cbc655a11b50e49b8ad51530e`
 
 | 决策 | 状态 | 依据 |
 |---|---|---|
 | 成本目标 | `INSUFFICIENT_EVIDENCE` | 真实任务结算、Usage、缓存与成功率尚未测量 |
 | 真实配对试点 | `BLOCKED` | 预检四项未达标。试点模型请求 0，账单请求 0，新增试点 Provider 支出 0 |
-| Preview Ready | `NO` | 最终集成 SHA 的 Windows/Ubuntu 托管 CI 尚未完成；Draft PR 待创建 |
+| Preview Ready | `YES` | 大型 Result 分层作为显式 opt-in 进入 Preview；托管 Windows、Ubuntu 与 SQLite 门禁通过，已知限制保留 |
 | Stable Ready | `NO` | 需完成 Preview、受支持真实 Host E2E、计费实验、生命周期回归和发布审批 |
 
 集成候选基于 `origin/preview@a03ace1ca17e43c64256d8739220366f22eb4df6`。
@@ -18,6 +19,29 @@ Clean install 与 T0 通过，包含 typecheck、build、plugin validation、10 
 freshness 与 diff check；Windows `test:full` 为 965 PASS、0 FAIL、2 SKIP、退出码 0；
 SQLite 压力门 4/4 PASS；Cost Lab 86/86 PASS。日志位于
 `D:\codex-zcode-bridge\.run\token-efficiency-integration-20261121`。
+
+PR [#116](https://github.com/Sandyzzx/codex-zcode-bridge/pull/116) 以 Draft 创建，
+随后仅为满足工作流 `draft == false` 的完整门禁条件而转为 Ready；未合并、未打 Tag、
+未发布 Release。托管运行 `44918089589` 在 `fafc3f397` 上成功：
+
+| 托管任务 | Job ID | 状态 |
+|---|---:|---|
+| Verify (ubuntu-latest) | `136887979690` | PASS |
+| Windows Verify shard 1/2 | `136887979687` | PASS |
+| Windows Verify shard 2/2 | `136887979653` | PASS |
+| Verify (windows-2022) aggregate | `136890418225` | PASS |
+| SQLite resource matrix (ubuntu-latest) | `136887979695` | PASS |
+| SQLite resource matrix (windows-2022) | `136887979678` | PASS |
+| Cost Lab tests | `136887980954` | SKIPPED — impact selector did not select hosted Cost Lab |
+
+`full_required=true` 使 Fast PR gate 与 Integration gate 被完整门禁替代，二者跳过不是
+失败或通过。Cost Lab 的托管 job 同样未由 impact selector 选中；不得写成托管 PASS。
+现有 Cost Lab 的 `86/86 PASS` 来自同一候选的本地运行。发布门禁接受该状态，是因为
+候选没有改动 Cost Lab 直接影响面，且本地定向套件完整通过。
+
+本文件中记录的托管 run 绑定运行时与测试候选 `fafc3f397`。随后只允许仅文档的
+clearance 提交；该最终提交在 PR #116 上重新运行同一套托管门禁，结果以 PR checks 为准，
+避免文件自引用最终提交自身的 run ID。
 
 ## 安装版 Host 观察
 
@@ -48,10 +72,10 @@ Provider 账户提供覆盖相同费用的硬上限。上限需计入失败、�
 ## 复核与发布
 
 兼容性、独立审查和本地验证见 [审查报告](TOKEN_EFFICIENCY_REVIEW.md)。
-GitHub CI `44866949503` 对应冻结 A0，Windows、Ubuntu、两平台 SQLite 压力矩阵
-与 Cost Lab 均成功。集成候选将进入 Draft Preview PR；只有最终提交上的 Windows、
-Ubuntu、SQLite 压力矩阵、generated artifacts 和 Cost Lab 均成功后才能标为
-Preview Ready。
+GitHub CI `44866949503` 对应冻结 A0。集成候选的托管 Windows、Ubuntu、generated
+artifacts 与两平台 SQLite 压力矩阵在 `44918089589` 上通过；Cost Lab 使用同候选
+本地 `86/86 PASS`。大型 Result 分层仅以显式 `view="summary"` 进入 Preview，
+默认 `zcode_result({task_id})` 仍返回完整 Result。
 
 2026-11-21 重新核对的 `origin/preview` 为 `a03ace1ca17e43c64256d8739220366f22eb4df6`。
 相对 A0 只有 ADR-045 和 Async Executor 架构文档差异。A/B 继续使用冻结的 A0。
