@@ -7,6 +7,7 @@
 > Runs: `token-efficiency-20261121-offline-ab` / `token-efficiency-preview-integration-20261121`
 > Historical PR #116 CI: `44918089589` on `fafc3f397fced54cbc655a11b50e49b8ad51530e`
 > Unified runtime candidate: `fbc1676c`; hosted CI `PENDING`
+> Evidence-doc revision: `88c1ea62`; no runtime or test source changes after the reviewed candidate
 
 ## 审查轮次
 
@@ -23,7 +24,7 @@
 
 | 角色 | 重点 | 结论 |
 |---|---|---|
-| 架构/兼容审查 | Diff、MCP 合同、SQLite Authority、Attempt、取消、Hold、Cleanup、证据 | 未发现 P0 运行缺陷；回滚 SHA 漂移和 16 MiB 全量回读边界需修正/明确 |
+| 架构/兼容审查（Pauli findings closure） | Diff、MCP 合同、SQLite Authority、Attempt、取消、Hold、Cleanup、证据 | `fbc1676c` 上五项既有 finding 全部 `CLOSED`，未发现新的 P0/P1；`fbc1676c..88c1ea62` 只改文档与研究回放脚本，不含运行时或测试源码 |
 | 成本/实验审查 | 代理 Token、Host 注入、CostLab、Usage、缓存与账单声明 | 27.2% 不是完整任务账单收益；真实 ≥25% 目标仍为 `INSUFFICIENT_EVIDENCE`，付费试点保持 `BLOCKED` |
 
 ## 集成审查结论
@@ -86,7 +87,10 @@ Node `24.16.0`、npm `11.13.0`。回放证据根目录为
 托管 Windows/Ubuntu CI 仅在 PR #116 的旧候选 `fafc3f397` 上执行。Cost Lab
 托管 job `136887980954` 为 `SKIPPED`，不能写成托管 PASS；同候选本地 86/86 只证明
 现有测量工具行为，不证明真实任务成本、成功率或缓存。统一候选 `fbc1676c` 的托管
-CI 仍为 `PENDING`。
+CI 仍为 `PENDING`。独立 findings-closure 复核已在 `fbc1676c` 上关闭精确
+cancel/Recovery 证据绑定、跨重启重验、root-observed、capacity headroom 与
+16 MiB 文档边界五项问题；其后 `88c1ea62` 的差异只有文档和研究回放脚本，Master
+已用 `git diff --name-status` 核对不存在运行时或测试源码变化。
 
 ## 剩余门槛
 

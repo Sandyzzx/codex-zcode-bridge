@@ -81,6 +81,9 @@ Worktree 与未吸收提交均未修改。历史 Cleanup 全量测试失败没�
   相同绑定幂等、不同绑定拒绝，以及更新的 live Hold 不得回退到旧 eligible proof。
 - Capacity 回归覆盖 limit=2 且仅一个其他 Workspace 占用时不报告
   `capacity_occupied`；达到上限才报告。clean scan 缺少 recorded root 时仍保持占用。
+- 独立审查者 Pauli 在运行时候选 `fbc1676c` 上复核并关闭精确 cancel/Recovery 绑定、
+  跨重启重验、root-observed、capacity headroom 与 16 MiB 文档边界五项 finding，
+  未发现新的 P0/P1。其后的 `fbc1676c..88c1ea62` 仅含文档和研究回放脚本变化。
 
 以上是隔离候选证据。`PRODUCTION_SQLITE_UNTOUCHED`：未打开或修改生产 Authority。
 托管 Windows/Ubuntu CI 仍需在 Draft Preview PR 上执行，未完成前不宣称 Preview Ready。

@@ -7,6 +7,7 @@
 > Runs: `token-efficiency-20261121-offline-ab` / `token-efficiency-preview-integration-20261121`
 > Historical PR #116 CI: `44918089589` on `fafc3f397fced54cbc655a11b50e49b8ad51530e`
 > Unified runtime candidate: `fbc1676c` (pre-evidence-doc commit)
+> Unified evidence-doc revision: `88c1ea62` (no runtime or test source changes)
 > Unified hosted CI: `PENDING`
 > Current Preview base: `450c18afc0c8af2700734399c5aebd87a36df795`
 
@@ -27,6 +28,11 @@ typecheck、build、plugin validation、10 个生成物 freshness 与 diff check
 `D:\codex-zcode-bridge\.run\bridge-2.0.0-consolidation-20261122-offline-ab`，
 安装版 Host 通道与 16 MiB 探针保留在
 `D:\codex-zcode-bridge\.run\token-efficiency-integration-20261121\.run\host-probe`。
+
+独立审查者 Pauli 在 `fbc1676c` 上确认此前五项 finding 全部 `CLOSED`，未发现新的
+P0/P1。`fbc1676c..88c1ea62` 只修改文档和研究回放脚本，Master 已核对差异不包含
+运行时或测试源码，因此该 closure 继续绑定运行时候选；托管 CI 仍必须绑定最终 PR
+HEAD。
 
 PR [#116](https://github.com/Sandyzzx/codex-zcode-bridge/pull/116) 以 Draft 创建，
 随后仅为满足工作流 `draft == false` 的完整门禁条件而转为 Ready；未合并、未打 Tag、
@@ -106,9 +112,10 @@ artifacts 与两平台 SQLite 压力矩阵在 `44918089589` 上通过；Cost Lab
 `450c18afc0c8af2700734399c5aebd87a36df795`。相对 A0 除 ADR-045、Async Executor
 文档外，还包含 PR #116 的 Result/Event 读取投影。统一候选新增默认 Event 页和
 Track E；先前聚焦审查报告的精确取消/Recovery 绑定、root-observed、capacity
-headroom 与 16 MiB 文档边界问题已修复并加入定向回归，最终 findings-closure 复核
-完成前不升级发布状态。托管 CI 仍是合并前最后门禁。Preview 合并需当次授权；
-Stable、Tag 和 Release 需要单独授权。
+headroom 与 16 MiB 文档边界问题已修复并加入定向回归；Pauli 的最终
+findings-closure 复核已在 `fbc1676c` 上关闭五项问题，后续证据提交无运行时或测试
+源码变化。托管 CI 仍是合并前最后门禁。Preview 合并需当次授权；Stable、Tag 和
+Release 需要单独授权。
 
 ## 回滚
 
