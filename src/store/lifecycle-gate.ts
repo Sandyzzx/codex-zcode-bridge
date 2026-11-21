@@ -290,7 +290,6 @@ export interface LifecycleCandidateModules {
     initialize(root: string, options?: Readonly<Record<string, unknown>>): LifecycleCandidateStore;
     open(root: string, options?: Readonly<Record<string, unknown>>): LifecycleCandidateStore;
     openForRecovery(root: string, options?: Readonly<Record<string, unknown>>): LifecycleCandidateStore | undefined;
-    autoUpgradeV13?(root: string, options: { databaseFileName: string; runtimeRosterDigest: string; assertStartupLock: () => void }): unknown;
   };
   readonly createPort: (store: object, options?: Readonly<Record<string, unknown>>) => ClaimOnlyPort;
 }
@@ -963,24 +962,20 @@ async function ensureFreshSqliteAuthority(
         removeOwnedBootstrapFile(markerTempPath);
       }
 
-      if (existsSync(databasePath) || existsSync(databasePath + '.v13-v14-pending.json')) {
-        // Existing v13 Authorities are upgraded once, while the same Windows
-        // bootstrap lock protects promotion and cross-process startup.
-        const upgrade = modules.Store.autoUpgradeV13?.(resolvedRoot, {
-          databaseFileName,
-          runtimeRosterDigest: currentSqliteRuntimeRosterDigest(),
-          assertStartupLock: () => lock.assertHeld(),
-        });
+      if (existsSync(databasePath)) {
+        // This release supports SQLite v14 only. Store.open() performs a
+        // read-only schema-version preflight before any writable handle.
         const existing = tryReadReadySqliteAuthority(modules, resolvedRoot, databaseFileName, false);
         if (!existing) throw new LifecycleGateError("sqlite_existing_database_unverified", "existing SQLite database is not a valid production Authority");
         emitFreshBootstrapStage(options, "ready");
-        result = {
-          ...normalizeReadySqliteAuthority(existing),
-          ...(upgrade && typeof upgrade === "object" && "state" in upgrade && upgrade.state === "upgraded"
-            ? { upgradeState: "upgraded" }
-            : {}),
-        };
+        result = normalizeReadySqliteAuthority(existing);
         break;
+      }
+      if (existsSync(databasePath + ".v13-v14-pending.json")) {
+        throw new LifecycleGateError(
+          "unsupported_sqlite_schema",
+          "SQLite v14 ONLY: an interrupted v13 upgrade marker is present; the marker and root were not modified",
+        );
       }
 
       assertFreshBootstrapRootEmpty(resolvedRoot, databaseFileName);
@@ -1108,7 +1103,12 @@ function tryReadReadySqliteAuthority(
     });
     return store.assertAuthorityReady(currentSqliteRuntimeRosterDigest());
   } catch (error) {
-    if (errorCode(error) === "schema_upgrade_required") throw error;
+    if (errorCode(error) === "unsupported_sqlite_schema") {
+      throw new LifecycleGateError(
+        "unsupported_sqlite_schema",
+        error instanceof Error ? error.message : "SQLite v14 ONLY",
+      );
+    }
     return null;
   } finally { store?.close(); }
 }

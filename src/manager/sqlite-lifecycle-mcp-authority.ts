@@ -28,14 +28,13 @@ import type { TaskModelRouter } from "../runtime/model-routing.js";
 
 const EXECUTION_OBSERVATION_PROBE_BUDGET_MS = 5_000;
 const DEFAULT_HOST_SHUTDOWN_WAIT_MS = 60_000;
+const PUMP_FAILURE_RECOVERY_RETRY_MS = 250;
 
 type Driver = Awaited<ReturnType<typeof openClaimOnlyDriver>>;
 export type SqliteAuthorityOptions = ClaimOnlyDriverOptions & {
   readonly testBeforeDispatch?: () => Promise<void>;
   readonly testOnScheduler?: (stage: string, detail: Readonly<Record<string, unknown>>) => void;
   readonly testShutdownWaitMs?: number;
-  /** Set only when this Host process actually completed v13 -> v14 upgrade. */
-  readonly startupInterruptionReason?: "interrupted_by_upgrade";
   /** Host-supplied ADR-031 task-creation routing hook. `route` runs before
    * TaskPackage validation and persistence so every stored task carries the
    * fully resolved provider/model selection; `confirmRouting` is invoked only
@@ -58,11 +57,12 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
   #shutdownPromise: Promise<void> | null = null;
   readonly #pumpPromises = new Set<Promise<void>>();
   #recoveryComplete = false;
-  #startupInterruptionReason: "interrupted_by_upgrade" | undefined;
+  #recoveryInProgress = false;
   #recoveryPromise: Promise<void> | null = null;
   #pumpPending = false;
   #awaitingDispatchPrerequisite = false;
   #pumpRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  #pumpFailureRetryTimer: ReturnType<typeof setTimeout> | null = null;
   #workspaceRetryTimer: ReturnType<typeof setTimeout> | null = null;
   #capacityRetryMs = 100;
   #pumpFailure: { readonly taskId: string; readonly reason: string } | null = null;
@@ -83,8 +83,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     shutdownWaitMs = DEFAULT_HOST_SHUTDOWN_WAIT_MS, startPlanAuthAvailable = false, testOnlyFakeAdapter = false,
     routeTaskModel?: TaskModelRouter,
     startPlanAuthInjected = false,
-    startPlanPrivateAuthFactory?: () => Promise<NonNullable<ClaimOnlyDriverOptions["startPlanPrivateAuth"]> | null>,
-    startupInterruptionReason?: "interrupted_by_upgrade") {
+    startPlanPrivateAuthFactory?: () => Promise<NonNullable<ClaimOnlyDriverOptions["startPlanPrivateAuth"]> | null>) {
     this.#driver = driver;
     this.#context = context;
     this.#processProbe = processProbe;
@@ -96,7 +95,6 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     this.#startPlanPrivateAuthFactory = startPlanPrivateAuthFactory;
     this.#testOnlyFakeAdapter = testOnlyFakeAdapter;
     this.#routeTaskModel = routeTaskModel;
-    this.#startupInterruptionReason = startupInterruptionReason;
   }
 
   async createTask(task: TaskPackage): Promise<TaskReceipt> {
@@ -176,7 +174,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     const snapshot = this.#readSnapshot(taskId);
     const projection = asRecord(snapshot.projection);
     if (this.#pumpFailure && projection.status === "queued") {
-      throw new TaskManagerError("TASK_STATE", `SQLite dispatch is blocked after ${this.#pumpFailure.reason}; queued lifecycle facts remain persisted and no automatic retry was attempted`);
+      throw new TaskManagerError("TASK_STATE", `SQLite dispatch is blocked after ${this.#pumpFailure.reason}; queued lifecycle facts remain persisted while automatic Recovery retry is pending or exhausted`);
     }
     const attempt = asRecord(snapshot.attempt);
     const operation = snapshot.operation ? asRecord(snapshot.operation) : null;
@@ -472,6 +470,8 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     this.#shuttingDown = true;
     if (this.#pumpRetryTimer) clearTimeout(this.#pumpRetryTimer);
     this.#pumpRetryTimer = null;
+    if (this.#pumpFailureRetryTimer) clearTimeout(this.#pumpFailureRetryTimer);
+    this.#pumpFailureRetryTimer = null;
     if (this.#workspaceRetryTimer) clearTimeout(this.#workspaceRetryTimer);
     this.#workspaceRetryTimer = null;
     const attempt = this.#shutdownGracefully();
@@ -576,6 +576,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
 
   async #recoverTasksOnce(): Promise<void> {
     this.#recoveryComplete = false;
+    this.#recoveryInProgress = true;
     try {
       let snapshot = this.#validateRecoverySnapshot(this.#driver.readRecoverySnapshot());
       this.#recoveryBlocked = null;
@@ -608,7 +609,6 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
         const outcome = asRecord(await this.#driver.recoverOperation(operationId, {
           stopAliveWorker: true,
           allowInterruptRequeue: true,
-          ...(this.#startupInterruptionReason ? { interruptionReason: this.#startupInterruptionReason } : {}),
         }));
         this.#schedulerStage("operation_recovery_classified", {
           operation_id: operationId, phase: operation.phase, state: outcome.state ?? "unknown", reason: outcome.reason ?? null,
@@ -643,7 +643,6 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
         }
       }
       this.#recoveryComplete = true;
-      this.#startupInterruptionReason = undefined;
       this.#pumpFailure = null;
       this.#schedulerStage("recovery_complete", { recoverable_queued_attempts: queued.filter((value) => value.dispatchable === true).length,
         root_read_only: false });
@@ -653,6 +652,8 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       this.#pumpFailure = { taskId: "root", reason: errorCode(error) ?? "recovery_snapshot_unavailable" };
       this.#recoveryComplete = false;
       throw error;
+    } finally {
+      this.#recoveryInProgress = false;
     }
   }
 
@@ -735,7 +736,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
   static async create(options: SqliteAuthorityOptions): Promise<SqliteLifecycleMcpAuthority> {
     if (!options.trustedLocalContext) throw new TaskManagerError("TASK_STATE", "trusted local context is required");
     const {
-      testBeforeDispatch, testOnScheduler, testShutdownWaitMs, routeTaskModel, startupInterruptionReason, ...driverOptions
+      testBeforeDispatch, testOnScheduler, testShutdownWaitMs, routeTaskModel, ...driverOptions
     } = options;
     const shutdownWaitMs = testShutdownWaitMs ?? DEFAULT_HOST_SHUTDOWN_WAIT_MS;
     if (!Number.isSafeInteger(shutdownWaitMs) || shutdownWaitMs < 1 || shutdownWaitMs > DEFAULT_HOST_SHUTDOWN_WAIT_MS) {
@@ -746,7 +747,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       processProbe, testBeforeDispatch, testOnScheduler, shutdownWaitMs,
       options.startPlanPrivateAuth !== undefined || options.startPlanPrivateAuthFactory !== undefined,
       options.testOnlyFakeAdapter === true, routeTaskModel,
-      options.startPlanPrivateAuth !== undefined, options.startPlanPrivateAuthFactory, startupInterruptionReason);
+      options.startPlanPrivateAuth !== undefined, options.startPlanPrivateAuthFactory);
     try {
       await authority.recoverTasks();
       return authority;
@@ -792,7 +793,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
   }
 
   #enqueue(taskId: string, attempt: number): void {
-    if (this.#pumpFailure) {
+    if (this.#pumpFailure && !this.#recoveryInProgress) {
       this.#schedulerStage("enqueue_blocked", { task_id: taskId, attempt, reason: this.#pumpFailure.reason });
       return;
     }
@@ -827,10 +828,35 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       void running.catch((error: unknown) => {
         const reason = errorCode(error) ?? "dispatch_failed";
         this.#pumpFailure = { taskId: "unknown", reason };
+        this.#schedulePumpFailureRecovery(reason);
       }).finally(() => {
         this.#pumpPromises.delete(running);
       });
     });
+  }
+
+  #schedulePumpFailureRecovery(reason: string): void {
+    if (this.#closed || this.#shuttingDown || this.#pumpFailureRetryTimer) return;
+    this.#schedulerStage("pump_failure_recovery_scheduled", {
+      reason,
+      retry_ms: PUMP_FAILURE_RECOVERY_RETRY_MS,
+    });
+    this.#pumpFailureRetryTimer = setTimeout(() => {
+      this.#pumpFailureRetryTimer = null;
+      if (this.#closed || this.#shuttingDown) return;
+      this.#schedulerStage("pump_failure_recovery_started", { reason });
+      void this.recoverTasks().then(() => {
+        this.#schedulerStage("pump_failure_recovery_complete", { reason });
+      }).catch((error: unknown) => {
+        // Recovery remains latched after this single automatic attempt. A
+        // repeated failure must not create an unbounded background retry loop.
+        this.#schedulerStage("pump_failure_recovery_failed", {
+          reason,
+          recovery_error: errorCode(error) ?? "recovery_failed",
+        });
+      });
+    }, PUMP_FAILURE_RECOVERY_RETRY_MS);
+    this.#pumpFailureRetryTimer.unref?.();
   }
 
   #scheduleWorkspaceRetry(): void {

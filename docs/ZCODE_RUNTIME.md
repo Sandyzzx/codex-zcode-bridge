@@ -1,9 +1,9 @@
 # ZCode 运行配置边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-20（ADR-042 Unknown Runtime Experimental Authorization）
-> Last verified: 2026-11-20，核对 3.19.0.10774 安装安全检查、完整指纹、授权 scope、无授权/有授权 resolver 状态、零模型协议 Smoke；3.18.2 精确 Manifest 兼容继续由合成回归覆盖，但本机新鲜 3.18.2 实机 E2E 为 `NOT_RUN`。
-> Verified against: ADR-042 implementation `15abe6becb13f383fee676a4ae20510d51f817fc`；authorization env forwarding `0e7134701d643c7b80def4e3cb80c95c63e34691`（tree `ec63f443cce54bad986eb47ab1b6274c604dcbfe`）；release baseline `aedeb2c2a1ea6f41ea3ac2d045f7ed0d75281552`
+> Last updated: 2026-11-21（ADR-043 SQLite v14 ONLY）
+> Last verified: 2026-11-21，核对 v13 只读拒绝、未完成升级 Marker 保留、v14 Fresh/Existing 启动和 v13 CLI/Schema 分发删除；真实模型、OAuth 与 Billing E2E 为 `NOT_RUN`。
+> Verified against: ADR-043 candidate based on `c1245a02f8f9d4b6e1102eabac230b657d85de9b`；ADR-042 implementation `15abe6becb13f383fee676a4ae20510d51f817fc`
 
 当前生产路径是 `node <installed-runtime>/resources/glm/zcode.cjs app-server --stdio --surface desktop`，不是历史 CLI `--prompt --json`。任务 Adapter 与模型目录探测共用 `createInstalledOfficialHostSessionFactory` 的同一启动合同；安装版兼容性由 `OfficialAppServerRuntimeResolver` 精确校验，配置项与用户设置方法见仓库 README。
 
@@ -75,15 +75,13 @@ SQLite Manager 在派发每个 Attempt 前读取该 Host 的持久 runtime envir
 
 Cleanup 超时只发布 unverified；迟到确认不会自动改写 Result 或释放 Workspace。执行 timeout 可形成 failed/timeout Result；清理未证实则仍保留占用。Result 已提交时可显式调用 zcode_cancel 仅清理原世代；Result 未到的超时保留 running 和诊断，禁止假定未执行并重派。Manager 退出/重启不放宽这些证据要求。R2 的 32 MiB/v14 不变，Host 大 Result 读取限制按 Owner 决定延后。
 
-## SQLite v13 → v14 显式升级（ADR-026）
+## SQLite v14 ONLY（ADR-043）
 
-本节依据 Owner 已批准的 ADR-026；不授权实际生产迁移。v14 不读取 v13 继续写入，也不在启动时修改旧库；`schema_upgrade_required` 提示单独升级命令。升级工具随插件提供 `dist/upgrade-sqlite-v14.mjs`，源码构建也可运行 `node dist/src/cli/upgrade-sqlite-v14.js`。
+当前生产只支持 SQLite v14。Fresh root 走现有原子 Fresh Bootstrap；已有有效 v14 数据库直接打开。Store 在可写句柄创建前用只读 `PRAGMA user_version` 预检版本，Lifecycle Gate 对新装和既有 Authority 使用同一 Store 校验。
 
-操作顺序：关闭所有指向旧根的 Host/Manager、确认执行已结束且生命周期已有可解释的终结，保存原配置/二进制和完整旧根（含 WAL/SHM，不要只复制一个正在写入的 db 文件），在新应用根创建空 `state` 目录，再显式运行 `--source <旧 state 绝对路径> --destination <新 state 绝对路径> --database bridge.sqlite --offline`。命令不会替用户关闭进程、恢复 Hold 或切换配置；`--offline` 是操作者的停机声明，不能当作自动检测所有空闲 Manager 的证明。数据库 `BEGIN IMMEDIATE` 在验证/复制期间排除 SQLite writer；WRITER_INTENT、ROOT_POISONED、bootstrap/cutover pending、未终结 Operation、非空目标、未知 Schema 均拒绝，不能以删除 marker 绕过。已有效行政终结的记录只按原事实保留，不重新恢复。
+v13 数据库返回稳定错误码 `unsupported_sqlite_schema` 和 `SQLite v14 ONLY` 提示。拒绝不会创建或修改数据库、WAL、SHM；不提供自动升级、离线复制、升级恢复或回滚。发现 `*.v13-v14-pending.json` 时保留现场并明确拒绝，不删除、不重命名、不恢复。未知 Schema、损坏库、Writer 冲突和无法解释的现场继续 fail closed。
 
-源库按冻结 v13 精确 Schema 和现有生命周期/摘要规则验证；cutover 库还要求原 runtime roster 与命令所用 Node/SQLite/平台/架构一致（仅 Schema 字段从 13 推导原摘要），不借迁移更换未经核验的运行环境。复制使用 v14 DDL 重建 CHECK、保留全部行、PK/FK、永久 Claim、Result digest、事件顺序、sqlite_sequence 和行政 append-only 记录；仅 authority_metadata/authority_switch 的 Schema 版本及 authority_switch 的运行时 roster 摘要重新绑定。原 cutover publication receipt 和归档身份逐字保留，历史结果不重写。目标的 bootstrap pending 在完整 Schema、逐表行摘要、integrity/FK 与生产 Authority receipt 验证通过前阻止启动；失败目标保留 pending/poison 和现场，不自动复用。命令异常退出后仅使用另一个新空目录重试。
-
-只有命令成功、目标生成 `v14-upgrade-receipt.json` 且 Owner 批准实际切换后，才将 Host settings 下 `authority.json` 的 `data_root` 指向新应用根（`state` 的父目录），并用新版本启动。原根保留。新根尚未写入新工作时可以把配置及二进制恢复到旧根/v13；新根有新事实后禁止用旧备份覆盖，需独立核对数据并批准 forward fix 或回退。该 receipt 是迁移核验记录，不是 Result Authority。
+已有 v14 的 `migration_runs`、`authority_switch`、`json_artifacts`、`migrated_task_results`、`migrated_task_events`、`manager_admin_abandonments` 和 `runtime_task_events` 不在本次退役范围；历史 `interrupted_by_upgrade` 行仍可作为只读历史读取。旧 `authority: "json"` 配置仅继续作为安装提示并选择 SQLite，不恢复 JSON Authority。
 
 ## 路径发现合同（ADR-021）
 

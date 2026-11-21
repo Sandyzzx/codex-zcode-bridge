@@ -5,7 +5,11 @@ export const WINDOWS_ONLY_TESTS = new Set([
   "test/sqlite-candidate/wp6b-wiring/admission-to-claim.test.ts",
   "test/sqlite-candidate/wp6b-wiring/bootstrap.test.ts",
   "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-  "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter.test.ts",
+  "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter-official-host.test.ts",
+  "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter-private-auth.test.ts",
+  "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter-result-lifecycle.test.ts",
+  "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter-routing-admission.test.ts",
+  "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter-stream-stress.test.ts",
   "test/sqlite-candidate/wp6b-wiring/trusted-local-policy.test.ts",
 ]);
 

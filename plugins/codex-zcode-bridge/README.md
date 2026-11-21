@@ -2,7 +2,7 @@
 
 把有明确边界的开发任务从 Codex 交给本机官方 ZCode Agent Runtime，在 Codex 中跟进进度，并独立审查实际改动后再决定是否接受。
 
-本插件属于 `2.0.0-preview.9`。Stable 通过独立的 Marketplace 渠道发布。
+本插件属于 `2.0.0-preview.10`。Stable 通过独立的 Marketplace 渠道发布。
 
 ## 支持范围
 
@@ -103,7 +103,7 @@ Bridge 的任务权威存储是 SQLite。首次启动会创建并验证：
 ${LOCALAPPDATA}\CodexZCodeBridge\state\bridge.sqlite
 ```
 
-生产 Lifecycle Gate 在持有 bootstrap lock 时会自动把已有 Schema v13 Authority 升级到 v14；`dist/upgrade-sqlite-v14.mjs` 保留为停机副本升级与恢复工具。未知 Schema、损坏数据库、Writer 冲突和无法解释的现场仍然 fail closed；不要通过清除 Hold 强制启动。完整说明见仓库的 [Runtime 指南](../../docs/ZCODE_RUNTIME.md) 和 [中文主 README](../../README.zh-CN.md)。
+当前插件只支持 `SQLite v14 ONLY`。已有 v13 数据库或 v13→v14 未完成升级 Marker 会被非破坏性拒绝并返回 `unsupported_sqlite_schema`；插件不包含 v13 Schema、自动升级、离线升级或恢复 CLI。未知 Schema、损坏数据库、Writer 冲突和无法解释的现场继续 fail closed；不要通过清除 Hold 强制启动。完整说明见仓库的 [Runtime 指南](../../docs/ZCODE_RUNTIME.md) 和 [中文主 README](../../README.zh-CN.md)。
 
 ADR-018 的管理性放弃命令随插件交付为 `dist/admin-abandon-held-operation.mjs`，并与同一包的 v14 schema/Store 构建绑定。它只用于经单独授权且满足全部停机、重启、身份和 claimant 条件的一个 `cleanup_incomplete` Hold；不要改用手工构造的旧开发 `dist`。执行前按 Master Skill 的恢复参考完成只读核对。
 

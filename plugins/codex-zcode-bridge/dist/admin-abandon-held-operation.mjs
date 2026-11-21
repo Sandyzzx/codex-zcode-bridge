@@ -942,7 +942,7 @@ function canonicalTaskResult(result, input) {
 // src/sqlite-candidate/wp6b2b1/store.mjs
 import { DatabaseSync } from "node:sqlite";
 import { createHash as createHash2, randomUUID } from "node:crypto";
-import { existsSync, lstatSync, realpathSync, readFileSync, writeFileSync, openSync, closeSync, fsyncSync, unlinkSync, renameSync, statSync, readdirSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, realpathSync, readFileSync, writeFileSync, openSync, closeSync, fsyncSync, unlinkSync, renameSync, statSync, readSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -1189,20 +1189,19 @@ var NORMALIZED_LEGACY_ADMIN_ABANDONMENT_TABLE_SQL = normalizeAdminAbandonmentTab
 function adminAbandonmentRowsDigest(rows) {
   return createHash2("sha256").update(rows.map(upgradeRowJson).join("\n")).digest("hex");
 }
-function assertCandidateSchema(db, version = SCHEMA_VERSION, { allowRuntimeEventExtensionAbsent = false } = {}) {
-  const key = `${version}:${allowRuntimeEventExtensionAbsent ? "recovery" : "strict"}`;
+function assertCandidateSchema(db, { allowRuntimeEventExtensionAbsent = false } = {}) {
+  const key = allowRuntimeEventExtensionAbsent ? "recovery" : "strict";
   if (!expectedSchemas.has(key)) {
     const base = new DatabaseSync(":memory:"), admin = new DatabaseSync(":memory:"), legacyAdmin = new DatabaseSync(":memory:");
     try {
-      const schema = version === 13 ? readFileSync(new URL("./schema-v13.sql", import.meta.url), "utf8") : SCHEMA;
-      base.exec(schema);
-      admin.exec(schema + "\n" + ADMIN_ABANDONMENT_SCHEMA);
-      legacyAdmin.exec(schema + "\n" + LEGACY_ADMIN_ABANDONMENT_SCHEMA);
+      base.exec(SCHEMA);
+      admin.exec(SCHEMA + "\n" + ADMIN_ABANDONMENT_SCHEMA);
+      legacyAdmin.exec(SCHEMA + "\n" + LEGACY_ADMIN_ABANDONMENT_SCHEMA);
       const baseObjects = schemaObjects(base);
       const adminObjects = schemaObjects(admin);
       const legacyAdminObjects = schemaObjects(legacyAdmin);
       const variants = [JSON.stringify(baseObjects), JSON.stringify(adminObjects), JSON.stringify(legacyAdminObjects)];
-      if (version === 14 && allowRuntimeEventExtensionAbsent) {
+      if (allowRuntimeEventExtensionAbsent) {
         variants.push(JSON.stringify(baseObjects.filter((row) => !RUNTIME_EVENT_SCHEMA_OBJECTS.has(row[1]))));
         variants.push(JSON.stringify(adminObjects.filter((row) => !RUNTIME_EVENT_SCHEMA_OBJECTS.has(row[1]))));
         variants.push(JSON.stringify(legacyAdminObjects.filter((row) => !RUNTIME_EVENT_SCHEMA_OBJECTS.has(row[1]))));
@@ -1240,9 +1239,80 @@ function upgradeLegacyAdminAbandonmentSchema(db) {
   assertCandidateSchema(db);
   return true;
 }
+var SQLITE_V14_ONLY_MESSAGE = "SQLite v14 ONLY: schema version 13 is not supported; the database was not modified";
+var V13_UPGRADE_MARKER_MESSAGE = "SQLite v14 ONLY: an interrupted v13 upgrade marker is present; preserve the root for diagnosis";
+var v13UpgradeMarker = (databasePath) => `${databasePath}.v13-v14-pending.json`;
+function rejectV13UpgradeMarker(databasePath) {
+  if (existsSync(v13UpgradeMarker(databasePath))) fail2("unsupported_sqlite_schema", V13_UPGRADE_MARKER_MESSAGE);
+}
+function walChecksum(buffer, start, length, s0, s1, littleEndian) {
+  for (let offset = start; offset < start + length; offset += 8) {
+    const first = littleEndian ? buffer.readUInt32LE(offset) : buffer.readUInt32BE(offset);
+    const second = littleEndian ? buffer.readUInt32LE(offset + 4) : buffer.readUInt32BE(offset + 4);
+    s0 = s0 + first + s1 >>> 0;
+    s1 = s1 + second + s0 >>> 0;
+  }
+  return [s0, s1];
+}
+function walPageOneVersion(walPath, mainVersion) {
+  if (!existsSync(walPath)) return mainVersion;
+  const fd = openSync(walPath, "r");
+  try {
+    const header = Buffer.alloc(32);
+    if (readSync(fd, header, 0, header.length, 0) !== header.length) return mainVersion;
+    const magic = header.readUInt32BE(0);
+    if (magic !== 931071618 && magic !== 931071619) return mainVersion;
+    if (header.readUInt32BE(4) !== 3007e3) return mainVersion;
+    const pageSize = header.readUInt32BE(8);
+    if (pageSize < 512 || pageSize > 65536 || (pageSize & pageSize - 1) !== 0) return mainVersion;
+    const salt1 = header.readUInt32BE(16), salt2 = header.readUInt32BE(20);
+    const littleEndian = magic === 931071618;
+    let checksum = walChecksum(header, 0, 24, 0, 0, littleEndian);
+    if (checksum[0] !== header.readUInt32BE(24) || checksum[1] !== header.readUInt32BE(28)) return mainVersion;
+    const frameHeader = Buffer.alloc(24), page = Buffer.alloc(pageSize);
+    let offset = 32, currentPageOneVersion = mainVersion, lastCommittedPageOneVersion = mainVersion;
+    while (true) {
+      if (readSync(fd, frameHeader, 0, frameHeader.length, offset) !== frameHeader.length) break;
+      if (frameHeader.readUInt32BE(8) !== salt1 || frameHeader.readUInt32BE(12) !== salt2) break;
+      const pageNumber = frameHeader.readUInt32BE(0), databasePagesAfterCommit = frameHeader.readUInt32BE(4);
+      if (readSync(fd, page, 0, page.length, offset + 24) !== page.length) break;
+      checksum = walChecksum(frameHeader, 0, 8, checksum[0], checksum[1], littleEndian);
+      checksum = walChecksum(page, 0, page.length, checksum[0], checksum[1], littleEndian);
+      if (checksum[0] !== frameHeader.readUInt32BE(16) || checksum[1] !== frameHeader.readUInt32BE(20)) break;
+      if (pageNumber === 1) {
+        if (page.length < 100 || page.subarray(0, 16).toString("latin1") !== "SQLite format 3\0") break;
+        currentPageOneVersion = page.readUInt32BE(60);
+      }
+      if (databasePagesAfterCommit !== 0) lastCommittedPageOneVersion = currentPageOneVersion;
+      offset += 24 + pageSize;
+    }
+    return lastCommittedPageOneVersion;
+  } catch {
+    return mainVersion;
+  } finally {
+    closeSync(fd);
+  }
+}
+function preflightSchemaVersion(databasePath) {
+  let version;
+  try {
+    const fd = openSync(databasePath, "r");
+    const header = Buffer.alloc(100);
+    try {
+      if (readSync(fd, header, 0, header.length, 0) !== header.length) return;
+      if (header.subarray(0, 16).toString("latin1") !== "SQLite format 3\0") return;
+      version = walPageOneVersion(databasePath + "-wal", header.readUInt32BE(60));
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return;
+  }
+  if (version === 13) fail2("unsupported_sqlite_schema", SQLITE_V14_ONLY_MESSAGE);
+}
 function assertSchemaVersion(db) {
   const version = db.prepare("PRAGMA user_version").get().user_version;
-  if (version === 13) fail2("schema_upgrade_required", "SQLite v13 requires explicit offline upgrade: node dist/upgrade-sqlite-v14.mjs --source <state-root> --destination <new-state-root> --database bridge.sqlite --offline");
+  if (version === 13) fail2("unsupported_sqlite_schema", SQLITE_V14_ONLY_MESSAGE);
   if (version !== SCHEMA_VERSION) fail2("schema_version_unknown");
 }
 function ensureRuntimeEventsSchema(db) {
@@ -1750,279 +1820,17 @@ var IsolatedAdmissionStore = class _IsolatedAdmissionStore {
   #poisoned = false;
   #fault;
   #recoveryOnly = false;
-  #schemaVersion = SCHEMA_VERSION;
   #validatedSnapshot = null;
-  constructor(key, db, paths, fault, recoveryOnly = false, schemaVersion = SCHEMA_VERSION) {
+  constructor(key, db, paths, fault, recoveryOnly = false) {
     if (key !== CONSTRUCT) fail2("private_constructor");
     this.#db = db;
     this.#paths = paths;
     this.#fault = fault;
     this.#recoveryOnly = recoveryOnly;
-    this.#schemaVersion = schemaVersion;
-  }
-  /** Explicit offline copy upgrade. Never called by startup, never edits source rows.
-   * The source writer lock spans verification/copy. The operator must stop Managers
-   * before running this command and switch configuration only after success. */
-  static upgradeV13Copy(sourceRoot, destinationRoot, {
-    databaseFileName = "operations.sqlite3",
-    offline = false,
-    expectedV13RuntimeRosterDigest = "",
-    runtimeRosterDigest = "",
-    preserveActiveOperations = false,
-    onStage = (_stage) => {
-    }
-  } = {}) {
-    if (offline !== true) fail2("offline_upgrade_required");
-    if (!path.isAbsolute(destinationRoot) || realpathSync(destinationRoot) !== path.resolve(destinationRoot) || readdirSync(destinationRoot).length) fail2("upgrade_destination_not_empty");
-    const options = { databaseFileName, managedDataDirectory: true };
-    const source = pathsFor(sourceRoot, options), destination = pathsFor(destinationRoot, options);
-    if (source.root === destination.root || path.resolve(sourceRoot) === path.resolve(destinationRoot)) fail2("upgrade_same_root");
-    const blocked = () => {
-      for (const file of [source.intent, source.poison, source.bootstrapPending, source.cutoverPending]) if (existsSync(file)) fail2("upgrade_source_blocked");
-    };
-    blocked();
-    if (!existsSync(source.db)) fail2("database_missing");
-    const db = new DatabaseSync(source.db, { timeout: 1e3 });
-    let target, locked = false;
-    try {
-      db.exec("PRAGMA foreign_keys=ON; BEGIN IMMEDIATE");
-      locked = true;
-      blocked();
-      if (db.prepare("PRAGMA user_version").get().user_version !== 13) fail2("upgrade_requires_v13");
-      const reader = new _IsolatedAdmissionStore(CONSTRUCT, db, source, void 0, true, 13);
-      reader.#validateContents();
-      assertCutoverPublicationGate(db, source);
-      reader.#assertAuthorityReadyContents(expectedV13RuntimeRosterDigest);
-      const admins = reader.#adminAbandonments();
-      const unfinished = db.prepare("SELECT operation_id FROM manager_operations WHERE operation_kind='attempt_lifecycle' AND phase NOT IN ('released','cancelled_before_launch')").all().filter((row) => !admins.has(row.operation_id));
-      if (unfinished.length && !preserveActiveOperations) fail2("upgrade_active_operations", "Stop and resolve known lifecycle work before upgrade; unknown Holds are not migrated or cleared");
-      if (typeof runtimeRosterDigest !== "string" || !/^[0-9a-f]{64}$/u.test(runtimeRosterDigest)) fail2("upgrade_runtime_roster_required");
-      onStage?.("source_verified");
-      blocked();
-      writeFileSync(destination.bootstrapPending, JSON.stringify({ contract: "v14-offline-upgrade-in-progress" }), { flag: "wx", mode: 384 });
-      target = new DatabaseSync(destination.db, { timeout: 1e3 });
-      target.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=OFF; BEGIN IMMEDIATE");
-      target.exec(SCHEMA);
-      if (admins.size || db.prepare("SELECT 1 FROM sqlite_schema WHERE name='manager_admin_abandonments'").get()) target.exec(ADMIN_ABANDONMENT_SCHEMA);
-      const triggers = target.prepare("SELECT name,sql FROM sqlite_schema WHERE type='trigger'").all();
-      const q = (name) => '"' + name.replaceAll('"', '""') + '"';
-      for (const row of triggers) target.exec("DROP TRIGGER " + q(row.name));
-      const tables = db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND substr(name,1,7)<>'sqlite_' ORDER BY name").all();
-      const verification = [];
-      for (const { name } of tables) {
-        const columns = db.prepare("PRAGMA table_info(" + q(name) + ")").all();
-        const names = columns.map((c) => c.name);
-        const keys = columns.filter((c) => c.pk).sort((a, b) => a.pk - b.pk).map((c) => q(c.name));
-        const select = "SELECT * FROM " + q(name) + " ORDER BY " + (keys.length ? keys.join(",") : "rowid");
-        const insert = target.prepare("INSERT INTO " + q(name) + "(" + names.map(q).join(",") + ") VALUES(" + names.map(() => "?").join(",") + ")");
-        const before = createHash2("sha256"), expected = createHash2("sha256");
-        let count = 0;
-        for (const raw of db.prepare(select).iterate()) {
-          const row = { ...raw };
-          before.update(upgradeRowJson(row) + "\n");
-          if (name === "authority_metadata" || name === "authority_switch") row.schema_version = 14;
-          if (name === "authority_switch") row.runtime_roster_digest = runtimeRosterDigest;
-          expected.update(upgradeRowJson(row) + "\n");
-          insert.run(...names.map((key) => row[key]));
-          count++;
-        }
-        const after = createHash2("sha256");
-        let copied = 0;
-        for (const raw of target.prepare(select).iterate()) {
-          after.update(upgradeRowJson(raw) + "\n");
-          copied++;
-        }
-        const expectedDigest = expected.digest("hex"), afterDigest = after.digest("hex");
-        if (count !== copied || expectedDigest !== afterDigest) fail2("upgrade_row_parity_failed");
-        verification.push({ table: name, rows: count, source_digest: before.digest("hex"), destination_digest: afterDigest });
-      }
-      for (const row of db.prepare("SELECT name,seq FROM sqlite_sequence").all()) {
-        target.prepare("DELETE FROM sqlite_sequence WHERE name=?").run(row.name);
-        target.prepare("INSERT INTO sqlite_sequence(name,seq) VALUES(?,?)").run(row.name, row.seq);
-      }
-      for (const row of triggers) target.exec(row.sql);
-      target.exec("PRAGMA user_version=14; COMMIT; PRAGMA foreign_keys=ON");
-      if (target.prepare("PRAGMA integrity_check").get().integrity_check !== "ok" || target.prepare("PRAGMA foreign_key_check").all().length) fail2("upgrade_integrity_failed");
-      if (existsSync(source.cutoverPublished)) writeFileSync(destination.cutoverPublished, readFileSync(source.cutoverPublished), { flag: "wx", mode: 384 });
-      const upgraded = new _IsolatedAdmissionStore(CONSTRUCT, target, destination);
-      upgraded.#validateContents();
-      upgraded.assertAuthorityReady(runtimeRosterDigest);
-      assertCutoverPublicationGate(target, destination);
-      onStage?.("destination_verified");
-      blocked();
-      const receipt = {
-        contract: "sqlite-v13-v14-copy-upgrade-v1",
-        source: path.resolve(sourceRoot),
-        destination: path.resolve(destinationRoot),
-        database_file: databaseFileName,
-        source_version: 13,
-        destination_version: 14,
-        verified_at: (/* @__PURE__ */ new Date()).toISOString(),
-        tables: verification
-      };
-      const fd = openSync(path.join(destinationRoot, "v14-upgrade-receipt.json"), "wx", 384);
-      try {
-        writeFileSync(fd, JSON.stringify(receipt, null, 2));
-        fsyncSync(fd);
-      } finally {
-        closeSync(fd);
-      }
-      target.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-      unlinkSync(destination.bootstrapPending);
-      return receipt;
-    } catch (error) {
-      if (target) {
-        try {
-          target.exec("ROLLBACK");
-        } catch {
-        }
-      }
-      if (target) writeFileSync(path.join(destinationRoot, "ROOT_POISONED.json"), JSON.stringify({ version: 1, reason: "v14_upgrade_failed", detail: String(error), at: (/* @__PURE__ */ new Date()).toISOString() }), { flag: "wx" });
-      throw error;
-    } finally {
-      target?.close();
-      if (locked) db.exec("ROLLBACK");
-      db.close();
-    }
-  }
-  /**
-   * Automatic v13 -> v14 migration at production startup, under the existing
-   * cross-process bootstrap lock. This is not a live hot migration.
-   * Retains every occupied Operation and all Recovery evidence unchanged.
-   */
-  static autoUpgradeV13(root, { databaseFileName = "bridge.sqlite", runtimeRosterDigest = "", assertStartupLock = () => {
-  } } = {}) {
-    if (typeof runtimeRosterDigest !== "string" || !/^[0-9a-f]{64}$/u.test(runtimeRosterDigest)) fail2("upgrade_runtime_roster_required");
-    const opts = { databaseFileName, managedDataDirectory: true }, p = pathsFor(root, opts);
-    const pending = p.db + ".v13-v14-pending.json";
-    const version = () => {
-      if (!existsSync(p.db)) return null;
-      try {
-        const db = new DatabaseSync(p.db, { readOnly: true, timeout: 1e3 });
-        try {
-          return db.prepare("PRAGMA user_version").get().user_version;
-        } finally {
-          db.close();
-        }
-      } catch (error) {
-        if (existsSync(pending)) throw error;
-        return null;
-      }
-    };
-    const names = (token2) => ({
-      stage: path.join(p.root, databaseFileName + ".v14-stage-" + token2),
-      backup: path.join(p.root, databaseFileName + ".v13-backup-" + token2)
-    });
-    const validatePublished = () => {
-      const ready = this.open(p.root, opts);
-      try {
-        ready.assertAuthorityReady(runtimeRosterDigest);
-      } finally {
-        ready.close();
-      }
-    };
-    const resetPending = (stage2) => {
-      rmSync(stage2, { recursive: true, force: true });
-      unlinkSync(pending);
-    };
-    assertStartupLock();
-    if (existsSync(pending)) {
-      const st = lstatSync(pending);
-      if (!st.isFile() || st.isSymbolicLink() || st.size > 4096) fail2("upgrade_marker_invalid");
-      let marker;
-      try {
-        marker = JSON.parse(readFileSync(pending, "utf8"));
-      } catch {
-        fail2("upgrade_marker_invalid");
-      }
-      if (!marker || Object.keys(marker).sort().join("|") !== "contract|database_file|token" || marker.contract !== "sqlite-v13-v14-auto-upgrade-v1" || marker.database_file !== databaseFileName || typeof marker.token !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(marker.token)) fail2("upgrade_marker_invalid");
-      const { stage: stage2, backup: backup2 } = names(marker.token);
-      const current = version();
-      if (current === 14) {
-        validatePublished();
-        resetPending(stage2);
-        return { state: "upgraded", source_version: 13, destination_version: 14, backup: backup2 };
-      }
-      if (current === null && existsSync(backup2)) {
-        assertStartupLock();
-        renameSync(backup2, p.db);
-      } else if (current !== 13 || existsSync(backup2)) fail2("upgrade_recovery_ambiguous");
-      assertStartupLock();
-      resetPending(stage2);
-    }
-    const sourceVersion = version();
-    if (sourceVersion === 14) return { state: "already_v14", destination_version: 14 };
-    if (sourceVersion !== 13) return { state: "not_v13", source_version: sourceVersion };
-    for (const file of [p.intent, p.poison, p.bootstrapPending, p.cutoverPending])
-      if (existsSync(file)) fail2("upgrade_source_blocked");
-    const token = randomUUID(), { stage, backup } = names(token);
-    const fd = openSync(pending, "wx", 384);
-    try {
-      writeFileSync(fd, JSON.stringify({ contract: "sqlite-v13-v14-auto-upgrade-v1", database_file: databaseFileName, token }));
-      fsyncSync(fd);
-    } finally {
-      closeSync(fd);
-    }
-    try {
-      assertStartupLock();
-      mkdirSync(stage);
-      const reader = new DatabaseSync(p.db, { readOnly: true, timeout: 1e3 });
-      let oldRoster = "";
-      try {
-        oldRoster = reader.prepare("SELECT runtime_roster_digest FROM authority_switch").get()?.runtime_roster_digest ?? "";
-      } finally {
-        reader.close();
-      }
-      const receipt = this.upgradeV13Copy(p.root, stage, {
-        databaseFileName,
-        offline: true,
-        preserveActiveOperations: true,
-        expectedV13RuntimeRosterDigest: oldRoster,
-        runtimeRosterDigest
-      });
-      assertStartupLock();
-      const old = new DatabaseSync(p.db, { timeout: 1e3 });
-      try {
-        const checkpoint = old.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get();
-        if (checkpoint.busy !== 0) fail2("upgrade_old_database_busy");
-      } finally {
-        old.close();
-      }
-      const stageDb = path.join(stage, databaseFileName);
-      if (existsSync(p.db + "-wal") || existsSync(p.db + "-shm") || existsSync(stageDb + "-wal") || existsSync(stageDb + "-shm")) fail2("upgrade_database_still_open");
-      if (version() !== 13) fail2("upgrade_source_changed");
-      assertStartupLock();
-      renameSync(p.db, backup);
-      assertStartupLock();
-      renameSync(stageDb, p.db);
-      validatePublished();
-      assertStartupLock();
-      resetPending(stage);
-      return { ...receipt, state: "upgraded", backup };
-    } catch (error) {
-      if (existsSync(backup)) {
-        if (existsSync(p.db)) {
-          try {
-            if (version() === 14) {
-              assertStartupLock();
-              renameSync(p.db, p.db + ".v14-failed-" + token);
-            }
-          } catch {
-          }
-        }
-        if (!existsSync(p.db)) {
-          try {
-            assertStartupLock();
-            renameSync(backup, p.db);
-          } catch {
-          }
-        }
-      }
-      throw error;
-    }
   }
   static initialize(root, options = {}) {
     const p = pathsFor(root, options);
+    rejectV13UpgradeMarker(p.db);
     if (existsSync(p.db) || existsSync(p.cutoverPending) || existsSync(p.cutoverPublished) || existsSync(p.poison) || existsSync(p.intent)) fail2("root_not_empty");
     if (options.onFreshBootstrapStage !== void 0 && typeof options.onFreshBootstrapStage !== "function") fail2("invalid_fresh_bootstrap_stage_hook");
     const freshBootstrapStage = options.onFreshBootstrapStage;
@@ -2064,13 +1872,15 @@ var IsolatedAdmissionStore = class _IsolatedAdmissionStore {
     if (existsSync(p.bootstrapPending) && !p.allowBootstrapPending) fail2("sqlite_bootstrap_pending");
     if (existsSync(p.cutoverPending)) fail2("cutover_publish_pending");
     if (existsSync(p.poison)) fail2("root_poisoned");
+    rejectV13UpgradeMarker(p.db);
     if (!existsSync(p.db)) fail2("database_missing");
+    preflightSchemaVersion(p.db);
     const db = new DatabaseSync(p.db, { timeout: 5e3 });
     db.exec("PRAGMA foreign_keys=ON");
     const s = new _IsolatedAdmissionStore(CONSTRUCT, db, p, fault);
     try {
       assertSchemaVersion(db);
-      assertCandidateSchema(db, SCHEMA_VERSION, { allowRuntimeEventExtensionAbsent: true });
+      assertCandidateSchema(db, { allowRuntimeEventExtensionAbsent: true });
       ensureRuntimeEventsSchema(db);
       assertCandidateSchema(db);
       const columns = new Set(db.prepare("PRAGMA table_info(manager_operations)").all().map((x) => x.name));
@@ -2090,7 +1900,9 @@ var IsolatedAdmissionStore = class _IsolatedAdmissionStore {
     const p = pathsFor(root, options);
     if (existsSync(p.bootstrapPending)) fail2("sqlite_bootstrap_pending");
     if (existsSync(p.cutoverPending) && !p.allowCutoverPending) fail2("cutover_publish_pending");
+    rejectV13UpgradeMarker(p.db);
     if (!existsSync(p.db)) fail2("database_missing");
+    preflightSchemaVersion(p.db);
     const db = new DatabaseSync(p.db, { timeout: 5e3, readOnly: true });
     try {
       db.exec("PRAGMA foreign_keys=ON");
@@ -4865,12 +4677,12 @@ var IsolatedAdmissionStore = class _IsolatedAdmissionStore {
   #validateContents() {
     try {
       if (this.#db.prepare("PRAGMA foreign_keys").get().foreign_keys !== 1) fail2("foreign_keys_disabled");
-      if (this.#db.prepare("PRAGMA user_version").get().user_version !== this.#schemaVersion) fail2("schema_version_unknown");
-      assertCandidateSchema(this.#db, this.#schemaVersion, { allowRuntimeEventExtensionAbsent: this.#recoveryOnly });
+      if (this.#db.prepare("PRAGMA user_version").get().user_version !== SCHEMA_VERSION) fail2("schema_version_unknown");
+      assertCandidateSchema(this.#db, { allowRuntimeEventExtensionAbsent: this.#recoveryOnly });
       if (this.#db.prepare("PRAGMA quick_check").get().quick_check !== "ok") fail2("database_corrupt");
       if (this.#db.prepare("PRAGMA foreign_key_check").all().length) fail2("database_inconsistent");
       const m = this.#db.prepare("SELECT * FROM authority_metadata").all();
-      if (m.length !== 1 || m[0].schema_version !== this.#schemaVersion) fail2("policy_or_schema_mismatch");
+      if (m.length !== 1 || m[0].schema_version !== SCHEMA_VERSION) fail2("policy_or_schema_mismatch");
       const freshReceipts = this.#db.prepare("SELECT * FROM fresh_install_receipt").all();
       const authoritySwitches = this.#db.prepare("SELECT * FROM authority_switch").all();
       const migrationRuns = this.#db.prepare("SELECT * FROM migration_runs").all();
@@ -4881,7 +4693,7 @@ var IsolatedAdmissionStore = class _IsolatedAdmissionStore {
         if (migrationRuns.length || migratedResultsCount || migratedEventsCount || this.#db.prepare("SELECT COUNT(*) AS n FROM json_artifacts").get().n) fail2("fresh_install_contains_legacy_data");
       } else if (authoritySwitches.length) {
         const receipt = authoritySwitches[0], migration = migrationRuns[0];
-        if (!migration || migration.state !== "verified" || migration.migration_id !== receipt.migration_id || migration.source_root_digest !== receipt.source_root_digest || migration.source_manifest_digest !== receipt.source_manifest_digest || digest(migration.source_manifest_json) !== migration.source_manifest_digest || !validText2(migration.archive_directory, 32767) || !path.isAbsolute(migration.archive_directory) || !validText2(receipt.archive_directory, 32767) || !path.isAbsolute(receipt.archive_directory) || migration.archive_directory !== receipt.archive_directory || typeof migration.archive_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(migration.archive_manifest_digest) || migration.archive_manifest_digest !== receipt.archive_manifest_digest || !validText2(migration.archive_source_tasks_root, 32767) || !path.isAbsolute(migration.archive_source_tasks_root) || migration.archive_source_tasks_root !== receipt.archive_source_tasks_root || !Number.isSafeInteger(migration.archive_file_count) || migration.archive_file_count < 0 || migration.archive_file_count !== migration.source_artifact_count || migration.archive_file_count !== receipt.archive_file_count || !Number.isSafeInteger(migration.archive_byte_count) || migration.archive_byte_count < 0 || migration.archive_byte_count !== migration.source_artifact_bytes || migration.archive_byte_count !== receipt.archive_byte_count || receipt.schema_version !== this.#schemaVersion || !validText2(receipt.protocol_version, 128) || typeof receipt.runtime_roster_digest !== "string" || !/^[0-9a-f]{64}$/u.test(receipt.runtime_roster_digest) || !validText2(receipt.verifier_version, 128) || !validText2(migration.verifier_version, 128) || receipt.verifier_version !== migration.verifier_version || !validText2(receipt.cutover_id, 128) || !validText2(receipt.created_at, 64) || Number.isNaN(Date.parse(receipt.created_at)) || !validText2(migration.created_at, 64) || !validText2(migration.verified_at, 64) || Number.isNaN(Date.parse(migration.created_at)) || Number.isNaN(Date.parse(migration.verified_at))) fail2("authority_switch_invalid");
+        if (!migration || migration.state !== "verified" || migration.migration_id !== receipt.migration_id || migration.source_root_digest !== receipt.source_root_digest || migration.source_manifest_digest !== receipt.source_manifest_digest || digest(migration.source_manifest_json) !== migration.source_manifest_digest || !validText2(migration.archive_directory, 32767) || !path.isAbsolute(migration.archive_directory) || !validText2(receipt.archive_directory, 32767) || !path.isAbsolute(receipt.archive_directory) || migration.archive_directory !== receipt.archive_directory || typeof migration.archive_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(migration.archive_manifest_digest) || migration.archive_manifest_digest !== receipt.archive_manifest_digest || !validText2(migration.archive_source_tasks_root, 32767) || !path.isAbsolute(migration.archive_source_tasks_root) || migration.archive_source_tasks_root !== receipt.archive_source_tasks_root || !Number.isSafeInteger(migration.archive_file_count) || migration.archive_file_count < 0 || migration.archive_file_count !== migration.source_artifact_count || migration.archive_file_count !== receipt.archive_file_count || !Number.isSafeInteger(migration.archive_byte_count) || migration.archive_byte_count < 0 || migration.archive_byte_count !== migration.source_artifact_bytes || migration.archive_byte_count !== receipt.archive_byte_count || receipt.schema_version !== SCHEMA_VERSION || !validText2(receipt.protocol_version, 128) || typeof receipt.runtime_roster_digest !== "string" || !/^[0-9a-f]{64}$/u.test(receipt.runtime_roster_digest) || !validText2(receipt.verifier_version, 128) || !validText2(migration.verifier_version, 128) || receipt.verifier_version !== migration.verifier_version || !validText2(receipt.cutover_id, 128) || !validText2(receipt.created_at, 64) || Number.isNaN(Date.parse(receipt.created_at)) || !validText2(migration.created_at, 64) || !validText2(migration.verified_at, 64) || Number.isNaN(Date.parse(migration.created_at)) || Number.isNaN(Date.parse(migration.verified_at))) fail2("authority_switch_invalid");
         const policy = parseAuthoritySourceManifest(migration.source_manifest_json, migration.source_manifest_digest);
         if (policy.manifest.task_count !== migration.source_task_count || policy.manifest.artifact_count !== migration.source_artifact_count || policy.manifest.artifact_bytes !== migration.source_artifact_bytes || policy.manifest.result_count !== migration.source_result_count || policy.manifest.event_count !== migration.source_event_count) fail2("authority_switch_invalid");
       } else if (migrationRuns.length || migratedResultsCount || migratedEventsCount || this.#db.prepare("SELECT COUNT(*) AS n FROM json_artifacts").get().n) {

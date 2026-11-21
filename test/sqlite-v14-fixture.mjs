@@ -25,30 +25,3 @@ export function running(root,taskId='result-v14',trusted=false){
   return {store,fence};
 }
 export function result(taskId='result-v14') { return {task_id:taskId,attempt:1,status:'completed',summary:'R2 result',files_changed:[],tests:[],issues:[],needs_master_decision:false,zcode_output:'',exit_code:0,session_id:null,started_at:null,finished_at:null}; }
-// Materialize genuine frozen v13 DDL with preserved lifecycle rows; no schema
-// editing or writable_schema. Used only under a new isolated fixture root.
-export function historicalV13(source,destination,{oldRoster=''}={}){
-  const from=new DatabaseSync(path.join(source,'operations.sqlite3'),{readOnly:true});
-  const to=new DatabaseSync(path.join(destination,'operations.sqlite3'));
-  try{
-    to.exec(readFileSync(new URL('../src/sqlite-candidate/wp6b2b1/schema-v13.sql',import.meta.url),'utf8'));
-    if(from.prepare("SELECT 1 FROM sqlite_schema WHERE name='manager_admin_abandonments'").get())to.exec(readFileSync(new URL('../src/sqlite-candidate/wp6b2b1/admin-abandonment.sql',import.meta.url),'utf8'));
-    const triggers=to.prepare("SELECT name,sql FROM sqlite_schema WHERE type='trigger'").all();
-    for(const t of triggers)to.exec(`DROP TRIGGER "${t.name}"`);
-    to.exec('BEGIN');
-    for(const {name} of from.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND substr(name,1,7)<>'sqlite_'").all()){
-      for(const raw of from.prepare(`SELECT * FROM "${name}"`).all()){
-        const row={...raw};if(name==='authority_metadata'||name==='authority_switch')row.schema_version=13;
-        if(name==='authority_switch')row.runtime_roster_digest=oldRoster;
-        const columns=Object.keys(row);
-        to.prepare(`INSERT INTO "${name}" (${columns.map(c=>`"${c}"`).join(',')}) VALUES (${columns.map(()=>'?').join(',')})`).run(...columns.map(c=>row[c]));
-      }
-    }
-    for(const {name,seq} of from.prepare('SELECT name,seq FROM sqlite_sequence').all()){
-      to.prepare('DELETE FROM sqlite_sequence WHERE name=?').run(name);
-      to.prepare('INSERT INTO sqlite_sequence(name,seq) VALUES(?,?)').run(name,seq);
-    }
-    for(const t of triggers)to.exec(t.sql);
-    to.exec('PRAGMA user_version=13; COMMIT');
-  }finally{from.close();to.close();}
-}

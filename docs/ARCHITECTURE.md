@@ -3,12 +3,12 @@
 > Status: AUTHORITATIVE
 
 > 2026-11-16 本地候选修订：[ADR-039](decisions/ADR-039-host-authorized-cancellation.md) 将取消授权与清理事实分离。queued + Launch Intent 无 Claim 时允许原子持久化取消并禁止迟到 Claim，未证明的进程/资源占用保留；Running 的 cleanup-only Hold 可经新鲜取消树证明追加消解记录，再继续原 CAS。此修复不增加 MCP 工具、Schema、重派或第二套恢复引擎。
-> Last updated: 2026-11-20（ADR-042 Unknown Runtime Experimental Authorization）
-> Last verified: 2026-11-20，核对安装安全检查、精确指纹授权、实验态 Provider scope、Runtime/Worker marker、协议 Smoke 与既有 Cleanup/Auth 边界；Provider 与 Billing 结论分别记录。
-> Verified against: ADR-042 implementation `15abe6becb13f383fee676a4ae20510d51f817fc`（tree `654cda65168ece915251305522db6ce603e23ad7`）；release baseline `aedeb2c2a1ea6f41ea3ac2d045f7ed0d75281552`
+> Last updated: 2026-11-21（ADR-043 SQLite v14 ONLY）
+> Last verified: 2026-11-21，核对 v14 Fresh/Existing Authority 保留、v13 只读预检、未完成升级 Marker 非破坏性拒绝及 v13 构建路径删除。
+> Verified against: ADR-042 implementation `15abe6becb13f383fee676a4ae20510d51f817fc`（tree `654cda65168ece915251305522db6ce603e23ad7`）；ADR-043 candidate based on `c1245a02f8f9d4b6e1102eabac230b657d85de9b`
 > ADR-039 Last verified: 2026-11-16，仅取消接线及定向隔离测试；基线 `ec5f3e83d737df469f9ed54361d2aec46b4a15a8` + 本地候选。生产取消未重试。
 
-本文件描述当前 Preview.9 候选的生产架构。Windows x64 已默认切换到官方 Host 路径，R7 Runtime Events/Usage 复用同一 SQLite Authority；候选保留 ZCode 3.18.2 Host 模块、官方 Start Plan 认证投影与官方签名 runtime host，并完成 ADR-041 的 Thin Official Host 收敛。公开合同继续以 [INTERFACES.md](INTERFACES.md) 为准，宿主和运行配置分别见 [SHARED_CORE.md](SHARED_CORE.md) 与 [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md)。
+本文件描述当前 Preview.10 候选的生产架构。Windows x64 已默认切换到官方 Host 路径，R7 Runtime Events/Usage 复用同一 SQLite Authority；候选保留 ZCode 3.18.2 Host 模块、官方 Start Plan 认证投影与官方签名 runtime host，并完成 ADR-041 的 Thin Official Host 收敛。公开合同继续以 [INTERFACES.md](INTERFACES.md) 为准，宿主和运行配置分别见 [SHARED_CORE.md](SHARED_CORE.md) 与 [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md)。
 
 2026-11-19 的集成候选应用 [ADR-040](decisions/ADR-040-installed-official-appserver-runtime.md) 与 [ADR-041](decisions/ADR-041-thin-official-host-end-state.md)：所有受支持 Provider 在通过精确 Manifest 校验后，统一使用用户已安装的官方 AppServer Bundle、同根 builtin Provider 配置和 runtime host；Provider 只决定认证/权益能力，不再选择 AppServer 来源。未知安装版不再仅因不在 Manifest 中永久拒绝：[ADR-042](decisions/ADR-042-unknown-runtime-experimental-authorization.md) 先完成完整安装安全检查与指纹计算，只有精确指纹获得本地显式授权后才进入 `OFFICIAL_RUNTIME_EXPERIMENTAL`。授权按 `coding_plan_probe`、`start_plan_probe`、`other_provider_probe` 分 scope；不安全安装、无效签名、非 x64、混合根和不支持 Node 仍 hard block。实验态不自动提升 Manifest、Provider 能力或折扣状态，也不存在静默回退到打包 AppServer 的路径。Provider capability 在 `session/create` 后按 Runtime 实际报告的 Provider/Model 重新分类，并在 `session/subscribe`/`session/send` 前完成门禁；显式与隐式选择走同一检查点。
 
@@ -73,14 +73,14 @@ Start Plan 每任务只执行一次权威 Billing GET，后续 Private Lease 复
 
 ## 安装、构建与升级
 
-Fresh root 继续通过 stage SQLite、pending marker 和原子 publication 初始化。生产 Lifecycle Gate 在持有同一 bootstrap lock 时，对已有 v13 Authority 自动执行一次 v13→v14 升级：复制到 stage、校验 v14、持久化 pending marker、将原 v13 改为 backup，再发布 v14 并清理 marker。中断的首次 rename 或发布后清理可由下一次启动恢复；occupied running Attempt、Recovery Hold 和既有事件保持不变。随插件提供的 `upgrade-sqlite-v14` 离线副本工具继续保留。
+Fresh root 继续通过 stage SQLite、pending marker 和原子 publication 初始化；已有 v14 Authority、历史迁移记录、WAL、Recovery、Cleanup 和 Release 合同保持。当前支持声明为 `SQLite v14 ONLY`（ADR-043）。
 
-自动升级属于生产 Lifecycle 启动路径。直接调用 Store 打开 v13 时仍返回带离线升级指引的 `schema_upgrade_required`；不能据此声称所有 Store API 都会自动迁移。未知 schema、损坏库、未解释现场和 writer 活跃状态仍 fail closed。
+Store 在任何可写 SQLite 句柄之前执行只读 `PRAGMA user_version` 预检。v13 返回稳定的 `unsupported_sqlite_schema` / `SQLite v14 ONLY`，数据库、WAL、SHM 和已存在的 v13→v14 pending Marker 均保持不变。生产 Lifecycle Gate 传播该错误，不尝试自动升级、离线复制、恢复或回滚，也不把未完成 Marker 当作 Fresh Install。未知 Schema、损坏库、未解释现场和 writer 活跃状态继续 fail closed。
 
-发布包包含 Bridge、Worker、Thin Waiter、离线 v14 升级命令、v13/v14 Schema、Administrative Recovery CLI、浏览器后端，以及固定的 Official Host 模块与 helper 资源；不包含第二套 AppServer Runtime。运行时会校验 `ARTIFACT_BOM.json` 与 shipped files；当前 3.18.2 候选构建仍把三项有序 patch 重放到固定源码 HEAD，并要求生成的树与实际源码树完全相同，随后记录 aggregate diff。发布包外，未知但安全的安装可通过 ADR-042 的项目本地授权进行实验探测；这不会改变发布 BOM、固定 Host patch 或支持矩阵。`@napi-rs/keyring` 与 `keyring-win32-x64-msvc` 的 6 个 native closure/license/metadata 文件通过精确 `.gitignore` 例外纳入包。官方签名 runtime host 由 Owner 确认再分发权利，纳入现有 LICENSE/NOTICE；Fresh Rebuild 不是发布门槛。
+发布包包含 Bridge、Worker、Thin Waiter、当前 v14 Schema、Administrative Recovery CLI、浏览器后端，以及固定的 Official Host 模块与 helper 资源；不包含 v13 Schema、`upgrade-sqlite-v14` CLI 或第二套 AppServer Runtime。运行时会校验 `ARTIFACT_BOM.json` 与 shipped files；当前 3.18.2 候选构建仍把三项有序 patch 重放到固定源码 HEAD，并要求生成的树与实际源码树完全相同，随后记录 aggregate diff。发布包外，未知但安全的安装可通过 ADR-042 的项目本地授权进行实验探测；这不会改变发布 BOM、固定 Host patch 或支持矩阵。`@napi-rs/keyring` 与 `keyring-win32-x64-msvc` 的 6 个 native closure/license/metadata 文件通过精确 `.gitignore` 例外纳入包。官方签名 runtime host 由 Owner 确认再分发权利，纳入现有 LICENSE/NOTICE；Fresh Rebuild 不是发布门槛。
 
 ## 发布边界
 
-`2.0.0-preview.9` 的 `package.json`、`package-lock.json`、插件 manifest、MCP server version、固定官方 Host、BOM、Runtime Events Schema 与 Administrative Recovery CLI 应由同一 Tag 和 Release asset 提供。Preview 支持声明限定为 Windows x64、Node.js `24.16.0` 和已安装的官方 ZCode Desktop `3.18.2.10443`。
+`2.0.0-preview.10` 的 `package.json`、`package-lock.json`、插件 manifest、MCP server version、固定官方 Host、BOM、Runtime Events Schema 与 Administrative Recovery CLI 应由同一 Tag 和 Release asset 提供。Preview 支持声明限定为 Windows x64、Node.js `24.16.0` 和已安装的官方 ZCode Desktop `3.18.2.10443`。Preview.10 停止分发 v13 Schema 与升级 CLI，保留既有 v14 数据合同。
 
 Preview.6 的固定源码树重建、ordered-patch replay、same-source-tree repeatability、BOM/native load、clean install、签名 helper ProcessManager smoke 和带数据的升级回滚为 `PASS`。Preview.7 的 Windows/Ubuntu Release Gate、SQLite 矩阵、生成物 Freshness、CI dispatch 边界与 MCP Events 分页为 `PASS`；真实模型流量不重复执行。跨机器复现仍为 `NOT_VERIFIED`，仅作为 Preview 阶段风险接受；完整 ZCode 产品资源图不进入 Bridge 支持范围。真实 Coding Plan 完整 E2E 和 Start Plan 核心功能路径已通过；历史 Start Plan 完整 E2E 因 Workspace 边界保持 `FAIL`，一般 Desktop Main 独立性、真实 OAuth refresh 与 3.18.0/3.18.1 实机安装组合仍未验证。3.18.0/3.18.1 是 `NOT_VERIFIED`，不是已证明不兼容。

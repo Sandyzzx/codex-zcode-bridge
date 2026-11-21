@@ -5720,7 +5720,7 @@ __export(store_exports, {
 });
 import { DatabaseSync } from "node:sqlite";
 import { createHash as createHash14, randomUUID as randomUUID3 } from "node:crypto";
-import { existsSync as existsSync8, lstatSync as lstatSync2, realpathSync as realpathSync4, readFileSync as readFileSync9, writeFileSync as writeFileSync2, openSync as openSync3, closeSync as closeSync3, fsyncSync, unlinkSync as unlinkSync2, renameSync as renameSync2, statSync as statSync5, readdirSync, mkdirSync as mkdirSync3, rmSync } from "node:fs";
+import { existsSync as existsSync8, lstatSync as lstatSync2, realpathSync as realpathSync4, readFileSync as readFileSync9, writeFileSync as writeFileSync2, openSync as openSync3, closeSync as closeSync3, fsyncSync, unlinkSync as unlinkSync2, renameSync as renameSync2, statSync as statSync5, readSync as readSync3 } from "node:fs";
 import path17 from "node:path";
 import { fileURLToPath as fileURLToPath5 } from "node:url";
 function canonical4(value) {
@@ -5751,20 +5751,19 @@ function normalizeAdminAbandonmentTableSql(sql) {
 function adminAbandonmentRowsDigest(rows) {
   return createHash14("sha256").update(rows.map(upgradeRowJson).join("\n")).digest("hex");
 }
-function assertCandidateSchema(db, version2 = SCHEMA_VERSION, { allowRuntimeEventExtensionAbsent = false } = {}) {
-  const key = `${version2}:${allowRuntimeEventExtensionAbsent ? "recovery" : "strict"}`;
+function assertCandidateSchema(db, { allowRuntimeEventExtensionAbsent = false } = {}) {
+  const key = allowRuntimeEventExtensionAbsent ? "recovery" : "strict";
   if (!expectedSchemas.has(key)) {
     const base = new DatabaseSync(":memory:"), admin = new DatabaseSync(":memory:"), legacyAdmin = new DatabaseSync(":memory:");
     try {
-      const schema = version2 === 13 ? readFileSync9(new URL("./schema-v13.sql", import.meta.url), "utf8") : SCHEMA;
-      base.exec(schema);
-      admin.exec(schema + "\n" + ADMIN_ABANDONMENT_SCHEMA);
-      legacyAdmin.exec(schema + "\n" + LEGACY_ADMIN_ABANDONMENT_SCHEMA);
+      base.exec(SCHEMA);
+      admin.exec(SCHEMA + "\n" + ADMIN_ABANDONMENT_SCHEMA);
+      legacyAdmin.exec(SCHEMA + "\n" + LEGACY_ADMIN_ABANDONMENT_SCHEMA);
       const baseObjects = schemaObjects(base);
       const adminObjects = schemaObjects(admin);
       const legacyAdminObjects = schemaObjects(legacyAdmin);
       const variants = [JSON.stringify(baseObjects), JSON.stringify(adminObjects), JSON.stringify(legacyAdminObjects)];
-      if (version2 === 14 && allowRuntimeEventExtensionAbsent) {
+      if (allowRuntimeEventExtensionAbsent) {
         variants.push(JSON.stringify(baseObjects.filter((row) => !RUNTIME_EVENT_SCHEMA_OBJECTS.has(row[1]))));
         variants.push(JSON.stringify(adminObjects.filter((row) => !RUNTIME_EVENT_SCHEMA_OBJECTS.has(row[1]))));
         variants.push(JSON.stringify(legacyAdminObjects.filter((row) => !RUNTIME_EVENT_SCHEMA_OBJECTS.has(row[1]))));
@@ -5802,9 +5801,77 @@ function upgradeLegacyAdminAbandonmentSchema(db) {
   assertCandidateSchema(db);
   return true;
 }
+function rejectV13UpgradeMarker(databasePath) {
+  if (existsSync8(v13UpgradeMarker(databasePath))) fail2("unsupported_sqlite_schema", V13_UPGRADE_MARKER_MESSAGE);
+}
+function walChecksum(buffer, start, length, s0, s1, littleEndian) {
+  for (let offset = start; offset < start + length; offset += 8) {
+    const first = littleEndian ? buffer.readUInt32LE(offset) : buffer.readUInt32BE(offset);
+    const second = littleEndian ? buffer.readUInt32LE(offset + 4) : buffer.readUInt32BE(offset + 4);
+    s0 = s0 + first + s1 >>> 0;
+    s1 = s1 + second + s0 >>> 0;
+  }
+  return [s0, s1];
+}
+function walPageOneVersion(walPath, mainVersion) {
+  if (!existsSync8(walPath)) return mainVersion;
+  const fd = openSync3(walPath, "r");
+  try {
+    const header = Buffer.alloc(32);
+    if (readSync3(fd, header, 0, header.length, 0) !== header.length) return mainVersion;
+    const magic = header.readUInt32BE(0);
+    if (magic !== 931071618 && magic !== 931071619) return mainVersion;
+    if (header.readUInt32BE(4) !== 3007e3) return mainVersion;
+    const pageSize = header.readUInt32BE(8);
+    if (pageSize < 512 || pageSize > 65536 || (pageSize & pageSize - 1) !== 0) return mainVersion;
+    const salt1 = header.readUInt32BE(16), salt2 = header.readUInt32BE(20);
+    const littleEndian = magic === 931071618;
+    let checksum = walChecksum(header, 0, 24, 0, 0, littleEndian);
+    if (checksum[0] !== header.readUInt32BE(24) || checksum[1] !== header.readUInt32BE(28)) return mainVersion;
+    const frameHeader = Buffer.alloc(24), page = Buffer.alloc(pageSize);
+    let offset = 32, currentPageOneVersion = mainVersion, lastCommittedPageOneVersion = mainVersion;
+    while (true) {
+      if (readSync3(fd, frameHeader, 0, frameHeader.length, offset) !== frameHeader.length) break;
+      if (frameHeader.readUInt32BE(8) !== salt1 || frameHeader.readUInt32BE(12) !== salt2) break;
+      const pageNumber = frameHeader.readUInt32BE(0), databasePagesAfterCommit = frameHeader.readUInt32BE(4);
+      if (readSync3(fd, page, 0, page.length, offset + 24) !== page.length) break;
+      checksum = walChecksum(frameHeader, 0, 8, checksum[0], checksum[1], littleEndian);
+      checksum = walChecksum(page, 0, page.length, checksum[0], checksum[1], littleEndian);
+      if (checksum[0] !== frameHeader.readUInt32BE(16) || checksum[1] !== frameHeader.readUInt32BE(20)) break;
+      if (pageNumber === 1) {
+        if (page.length < 100 || page.subarray(0, 16).toString("latin1") !== "SQLite format 3\0") break;
+        currentPageOneVersion = page.readUInt32BE(60);
+      }
+      if (databasePagesAfterCommit !== 0) lastCommittedPageOneVersion = currentPageOneVersion;
+      offset += 24 + pageSize;
+    }
+    return lastCommittedPageOneVersion;
+  } catch {
+    return mainVersion;
+  } finally {
+    closeSync3(fd);
+  }
+}
+function preflightSchemaVersion(databasePath) {
+  let version2;
+  try {
+    const fd = openSync3(databasePath, "r");
+    const header = Buffer.alloc(100);
+    try {
+      if (readSync3(fd, header, 0, header.length, 0) !== header.length) return;
+      if (header.subarray(0, 16).toString("latin1") !== "SQLite format 3\0") return;
+      version2 = walPageOneVersion(databasePath + "-wal", header.readUInt32BE(60));
+    } finally {
+      closeSync3(fd);
+    }
+  } catch {
+    return;
+  }
+  if (version2 === 13) fail2("unsupported_sqlite_schema", SQLITE_V14_ONLY_MESSAGE);
+}
 function assertSchemaVersion(db) {
   const version2 = db.prepare("PRAGMA user_version").get().user_version;
-  if (version2 === 13) fail2("schema_upgrade_required", "SQLite v13 requires explicit offline upgrade: node dist/upgrade-sqlite-v14.mjs --source <state-root> --destination <new-state-root> --database bridge.sqlite --offline");
+  if (version2 === 13) fail2("unsupported_sqlite_schema", SQLITE_V14_ONLY_MESSAGE);
   if (version2 !== SCHEMA_VERSION) fail2("schema_version_unknown");
 }
 function ensureRuntimeEventsSchema(db) {
@@ -6507,7 +6574,7 @@ function callDecision(fn, workspace, input) {
     return { state: "unknown" };
   }
 }
-var HERE, SCHEMA, RUNTIME_EVENTS_SCHEMA, ADMIN_ABANDONMENT_SCHEMA, NORMALIZED_ADMIN_ABANDONMENT_SCHEMA, LEGACY_ADMIN_ABANDONMENT_SCHEMA, CONSTRUCT, SCHEMA_VERSION, SCHEMA_OBJECT_QUERY, RUNTIME_EVENT_SCHEMA_OBJECTS, expectedSchemas, ADMIN_ABANDONMENT_TABLE_SQL, LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, RESULT_CONTRACT_VERSION, RESULT_STATUSES2, RECOVERY_PHASES, RECOVERY_SOURCES, RECOVERY_REASON_CODES, RECOVERY_QUARANTINE_CODES, RECOVERY_EVIDENCE_KEYS, RECOVERY_LIMIT, digest2, rawDigest, upgradeRowJson, EVIDENCE_KEYS, FUTURE_EVENT_TYPES, FUTURE_EVIDENCE_KEYS, EVENT_PHASE, RECOVERY_INPUT_KEYS, ADMIN_ABANDONMENT_INPUT_KEYS, ADMIN_ABANDONMENT_EVIDENCE_KEYS, AdmissionError, fail2, IsolatedAdmissionStore;
+var HERE, SCHEMA, RUNTIME_EVENTS_SCHEMA, ADMIN_ABANDONMENT_SCHEMA, NORMALIZED_ADMIN_ABANDONMENT_SCHEMA, LEGACY_ADMIN_ABANDONMENT_SCHEMA, CONSTRUCT, SCHEMA_VERSION, SCHEMA_OBJECT_QUERY, RUNTIME_EVENT_SCHEMA_OBJECTS, expectedSchemas, ADMIN_ABANDONMENT_TABLE_SQL, LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, SQLITE_V14_ONLY_MESSAGE, V13_UPGRADE_MARKER_MESSAGE, v13UpgradeMarker, RESULT_CONTRACT_VERSION, RESULT_STATUSES2, RECOVERY_PHASES, RECOVERY_SOURCES, RECOVERY_REASON_CODES, RECOVERY_QUARANTINE_CODES, RECOVERY_EVIDENCE_KEYS, RECOVERY_LIMIT, digest2, rawDigest, upgradeRowJson, EVIDENCE_KEYS, FUTURE_EVENT_TYPES, FUTURE_EVIDENCE_KEYS, EVENT_PHASE, RECOVERY_INPUT_KEYS, ADMIN_ABANDONMENT_INPUT_KEYS, ADMIN_ABANDONMENT_EVIDENCE_KEYS, AdmissionError, fail2, IsolatedAdmissionStore;
 var init_store = __esm({
   "src/sqlite-candidate/wp6b2b1/store.mjs"() {
     "use strict";
@@ -6542,6 +6609,9 @@ var init_store = __esm({
     LEGACY_ADMIN_ABANDONMENT_TABLE_SQL = adminAbandonmentTableStatement(LEGACY_ADMIN_ABANDONMENT_SCHEMA);
     NORMALIZED_ADMIN_ABANDONMENT_TABLE_SQL = normalizeAdminAbandonmentTableSql(ADMIN_ABANDONMENT_TABLE_SQL);
     NORMALIZED_LEGACY_ADMIN_ABANDONMENT_TABLE_SQL = normalizeAdminAbandonmentTableSql(LEGACY_ADMIN_ABANDONMENT_TABLE_SQL);
+    SQLITE_V14_ONLY_MESSAGE = "SQLite v14 ONLY: schema version 13 is not supported; the database was not modified";
+    V13_UPGRADE_MARKER_MESSAGE = "SQLite v14 ONLY: an interrupted v13 upgrade marker is present; preserve the root for diagnosis";
+    v13UpgradeMarker = (databasePath) => `${databasePath}.v13-v14-pending.json`;
     RESULT_CONTRACT_VERSION = 1;
     RESULT_STATUSES2 = /* @__PURE__ */ new Set(["completed", "failed", "cancelled", "waiting_for_master"]);
     RECOVERY_PHASES = /* @__PURE__ */ new Set(["running", "result_committed", "cleanup_pending", "cleanup_verified", "cleanup_unverified", "cleanup_reverified", "quarantined"]);
@@ -6613,279 +6683,17 @@ var init_store = __esm({
       #poisoned = false;
       #fault;
       #recoveryOnly = false;
-      #schemaVersion = SCHEMA_VERSION;
       #validatedSnapshot = null;
-      constructor(key, db, paths, fault, recoveryOnly = false, schemaVersion = SCHEMA_VERSION) {
+      constructor(key, db, paths, fault, recoveryOnly = false) {
         if (key !== CONSTRUCT) fail2("private_constructor");
         this.#db = db;
         this.#paths = paths;
         this.#fault = fault;
         this.#recoveryOnly = recoveryOnly;
-        this.#schemaVersion = schemaVersion;
-      }
-      /** Explicit offline copy upgrade. Never called by startup, never edits source rows.
-       * The source writer lock spans verification/copy. The operator must stop Managers
-       * before running this command and switch configuration only after success. */
-      static upgradeV13Copy(sourceRoot, destinationRoot, {
-        databaseFileName = "operations.sqlite3",
-        offline = false,
-        expectedV13RuntimeRosterDigest = "",
-        runtimeRosterDigest = "",
-        preserveActiveOperations = false,
-        onStage = (_stage) => {
-        }
-      } = {}) {
-        if (offline !== true) fail2("offline_upgrade_required");
-        if (!path17.isAbsolute(destinationRoot) || realpathSync4(destinationRoot) !== path17.resolve(destinationRoot) || readdirSync(destinationRoot).length) fail2("upgrade_destination_not_empty");
-        const options = { databaseFileName, managedDataDirectory: true };
-        const source = pathsFor(sourceRoot, options), destination = pathsFor(destinationRoot, options);
-        if (source.root === destination.root || path17.resolve(sourceRoot) === path17.resolve(destinationRoot)) fail2("upgrade_same_root");
-        const blocked = () => {
-          for (const file of [source.intent, source.poison, source.bootstrapPending, source.cutoverPending]) if (existsSync8(file)) fail2("upgrade_source_blocked");
-        };
-        blocked();
-        if (!existsSync8(source.db)) fail2("database_missing");
-        const db = new DatabaseSync(source.db, { timeout: 1e3 });
-        let target, locked = false;
-        try {
-          db.exec("PRAGMA foreign_keys=ON; BEGIN IMMEDIATE");
-          locked = true;
-          blocked();
-          if (db.prepare("PRAGMA user_version").get().user_version !== 13) fail2("upgrade_requires_v13");
-          const reader = new _IsolatedAdmissionStore(CONSTRUCT, db, source, void 0, true, 13);
-          reader.#validateContents();
-          assertCutoverPublicationGate(db, source);
-          reader.#assertAuthorityReadyContents(expectedV13RuntimeRosterDigest);
-          const admins = reader.#adminAbandonments();
-          const unfinished = db.prepare("SELECT operation_id FROM manager_operations WHERE operation_kind='attempt_lifecycle' AND phase NOT IN ('released','cancelled_before_launch')").all().filter((row) => !admins.has(row.operation_id));
-          if (unfinished.length && !preserveActiveOperations) fail2("upgrade_active_operations", "Stop and resolve known lifecycle work before upgrade; unknown Holds are not migrated or cleared");
-          if (typeof runtimeRosterDigest !== "string" || !/^[0-9a-f]{64}$/u.test(runtimeRosterDigest)) fail2("upgrade_runtime_roster_required");
-          onStage?.("source_verified");
-          blocked();
-          writeFileSync2(destination.bootstrapPending, JSON.stringify({ contract: "v14-offline-upgrade-in-progress" }), { flag: "wx", mode: 384 });
-          target = new DatabaseSync(destination.db, { timeout: 1e3 });
-          target.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=OFF; BEGIN IMMEDIATE");
-          target.exec(SCHEMA);
-          if (admins.size || db.prepare("SELECT 1 FROM sqlite_schema WHERE name='manager_admin_abandonments'").get()) target.exec(ADMIN_ABANDONMENT_SCHEMA);
-          const triggers = target.prepare("SELECT name,sql FROM sqlite_schema WHERE type='trigger'").all();
-          const q = (name) => '"' + name.replaceAll('"', '""') + '"';
-          for (const row of triggers) target.exec("DROP TRIGGER " + q(row.name));
-          const tables = db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND substr(name,1,7)<>'sqlite_' ORDER BY name").all();
-          const verification = [];
-          for (const { name } of tables) {
-            const columns = db.prepare("PRAGMA table_info(" + q(name) + ")").all();
-            const names = columns.map((c) => c.name);
-            const keys = columns.filter((c) => c.pk).sort((a, b) => a.pk - b.pk).map((c) => q(c.name));
-            const select = "SELECT * FROM " + q(name) + " ORDER BY " + (keys.length ? keys.join(",") : "rowid");
-            const insert = target.prepare("INSERT INTO " + q(name) + "(" + names.map(q).join(",") + ") VALUES(" + names.map(() => "?").join(",") + ")");
-            const before = createHash14("sha256"), expected = createHash14("sha256");
-            let count = 0;
-            for (const raw of db.prepare(select).iterate()) {
-              const row = { ...raw };
-              before.update(upgradeRowJson(row) + "\n");
-              if (name === "authority_metadata" || name === "authority_switch") row.schema_version = 14;
-              if (name === "authority_switch") row.runtime_roster_digest = runtimeRosterDigest;
-              expected.update(upgradeRowJson(row) + "\n");
-              insert.run(...names.map((key) => row[key]));
-              count++;
-            }
-            const after = createHash14("sha256");
-            let copied = 0;
-            for (const raw of target.prepare(select).iterate()) {
-              after.update(upgradeRowJson(raw) + "\n");
-              copied++;
-            }
-            const expectedDigest = expected.digest("hex"), afterDigest = after.digest("hex");
-            if (count !== copied || expectedDigest !== afterDigest) fail2("upgrade_row_parity_failed");
-            verification.push({ table: name, rows: count, source_digest: before.digest("hex"), destination_digest: afterDigest });
-          }
-          for (const row of db.prepare("SELECT name,seq FROM sqlite_sequence").all()) {
-            target.prepare("DELETE FROM sqlite_sequence WHERE name=?").run(row.name);
-            target.prepare("INSERT INTO sqlite_sequence(name,seq) VALUES(?,?)").run(row.name, row.seq);
-          }
-          for (const row of triggers) target.exec(row.sql);
-          target.exec("PRAGMA user_version=14; COMMIT; PRAGMA foreign_keys=ON");
-          if (target.prepare("PRAGMA integrity_check").get().integrity_check !== "ok" || target.prepare("PRAGMA foreign_key_check").all().length) fail2("upgrade_integrity_failed");
-          if (existsSync8(source.cutoverPublished)) writeFileSync2(destination.cutoverPublished, readFileSync9(source.cutoverPublished), { flag: "wx", mode: 384 });
-          const upgraded = new _IsolatedAdmissionStore(CONSTRUCT, target, destination);
-          upgraded.#validateContents();
-          upgraded.assertAuthorityReady(runtimeRosterDigest);
-          assertCutoverPublicationGate(target, destination);
-          onStage?.("destination_verified");
-          blocked();
-          const receipt2 = {
-            contract: "sqlite-v13-v14-copy-upgrade-v1",
-            source: path17.resolve(sourceRoot),
-            destination: path17.resolve(destinationRoot),
-            database_file: databaseFileName,
-            source_version: 13,
-            destination_version: 14,
-            verified_at: (/* @__PURE__ */ new Date()).toISOString(),
-            tables: verification
-          };
-          const fd = openSync3(path17.join(destinationRoot, "v14-upgrade-receipt.json"), "wx", 384);
-          try {
-            writeFileSync2(fd, JSON.stringify(receipt2, null, 2));
-            fsyncSync(fd);
-          } finally {
-            closeSync3(fd);
-          }
-          target.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-          unlinkSync2(destination.bootstrapPending);
-          return receipt2;
-        } catch (error2) {
-          if (target) {
-            try {
-              target.exec("ROLLBACK");
-            } catch {
-            }
-          }
-          if (target) writeFileSync2(path17.join(destinationRoot, "ROOT_POISONED.json"), JSON.stringify({ version: 1, reason: "v14_upgrade_failed", detail: String(error2), at: (/* @__PURE__ */ new Date()).toISOString() }), { flag: "wx" });
-          throw error2;
-        } finally {
-          target?.close();
-          if (locked) db.exec("ROLLBACK");
-          db.close();
-        }
-      }
-      /**
-       * Automatic v13 -> v14 migration at production startup, under the existing
-       * cross-process bootstrap lock. This is not a live hot migration.
-       * Retains every occupied Operation and all Recovery evidence unchanged.
-       */
-      static autoUpgradeV13(root, { databaseFileName = "bridge.sqlite", runtimeRosterDigest = "", assertStartupLock = () => {
-      } } = {}) {
-        if (typeof runtimeRosterDigest !== "string" || !/^[0-9a-f]{64}$/u.test(runtimeRosterDigest)) fail2("upgrade_runtime_roster_required");
-        const opts = { databaseFileName, managedDataDirectory: true }, p = pathsFor(root, opts);
-        const pending = p.db + ".v13-v14-pending.json";
-        const version2 = () => {
-          if (!existsSync8(p.db)) return null;
-          try {
-            const db = new DatabaseSync(p.db, { readOnly: true, timeout: 1e3 });
-            try {
-              return db.prepare("PRAGMA user_version").get().user_version;
-            } finally {
-              db.close();
-            }
-          } catch (error2) {
-            if (existsSync8(pending)) throw error2;
-            return null;
-          }
-        };
-        const names = (token2) => ({
-          stage: path17.join(p.root, databaseFileName + ".v14-stage-" + token2),
-          backup: path17.join(p.root, databaseFileName + ".v13-backup-" + token2)
-        });
-        const validatePublished = () => {
-          const ready = this.open(p.root, opts);
-          try {
-            ready.assertAuthorityReady(runtimeRosterDigest);
-          } finally {
-            ready.close();
-          }
-        };
-        const resetPending = (stage2) => {
-          rmSync(stage2, { recursive: true, force: true });
-          unlinkSync2(pending);
-        };
-        assertStartupLock();
-        if (existsSync8(pending)) {
-          const st = lstatSync2(pending);
-          if (!st.isFile() || st.isSymbolicLink() || st.size > 4096) fail2("upgrade_marker_invalid");
-          let marker;
-          try {
-            marker = JSON.parse(readFileSync9(pending, "utf8"));
-          } catch {
-            fail2("upgrade_marker_invalid");
-          }
-          if (!marker || Object.keys(marker).sort().join("|") !== "contract|database_file|token" || marker.contract !== "sqlite-v13-v14-auto-upgrade-v1" || marker.database_file !== databaseFileName || typeof marker.token !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(marker.token)) fail2("upgrade_marker_invalid");
-          const { stage: stage2, backup: backup2 } = names(marker.token);
-          const current = version2();
-          if (current === 14) {
-            validatePublished();
-            resetPending(stage2);
-            return { state: "upgraded", source_version: 13, destination_version: 14, backup: backup2 };
-          }
-          if (current === null && existsSync8(backup2)) {
-            assertStartupLock();
-            renameSync2(backup2, p.db);
-          } else if (current !== 13 || existsSync8(backup2)) fail2("upgrade_recovery_ambiguous");
-          assertStartupLock();
-          resetPending(stage2);
-        }
-        const sourceVersion = version2();
-        if (sourceVersion === 14) return { state: "already_v14", destination_version: 14 };
-        if (sourceVersion !== 13) return { state: "not_v13", source_version: sourceVersion };
-        for (const file of [p.intent, p.poison, p.bootstrapPending, p.cutoverPending])
-          if (existsSync8(file)) fail2("upgrade_source_blocked");
-        const token = randomUUID3(), { stage, backup } = names(token);
-        const fd = openSync3(pending, "wx", 384);
-        try {
-          writeFileSync2(fd, JSON.stringify({ contract: "sqlite-v13-v14-auto-upgrade-v1", database_file: databaseFileName, token }));
-          fsyncSync(fd);
-        } finally {
-          closeSync3(fd);
-        }
-        try {
-          assertStartupLock();
-          mkdirSync3(stage);
-          const reader = new DatabaseSync(p.db, { readOnly: true, timeout: 1e3 });
-          let oldRoster = "";
-          try {
-            oldRoster = reader.prepare("SELECT runtime_roster_digest FROM authority_switch").get()?.runtime_roster_digest ?? "";
-          } finally {
-            reader.close();
-          }
-          const receipt2 = this.upgradeV13Copy(p.root, stage, {
-            databaseFileName,
-            offline: true,
-            preserveActiveOperations: true,
-            expectedV13RuntimeRosterDigest: oldRoster,
-            runtimeRosterDigest
-          });
-          assertStartupLock();
-          const old = new DatabaseSync(p.db, { timeout: 1e3 });
-          try {
-            const checkpoint = old.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get();
-            if (checkpoint.busy !== 0) fail2("upgrade_old_database_busy");
-          } finally {
-            old.close();
-          }
-          const stageDb = path17.join(stage, databaseFileName);
-          if (existsSync8(p.db + "-wal") || existsSync8(p.db + "-shm") || existsSync8(stageDb + "-wal") || existsSync8(stageDb + "-shm")) fail2("upgrade_database_still_open");
-          if (version2() !== 13) fail2("upgrade_source_changed");
-          assertStartupLock();
-          renameSync2(p.db, backup);
-          assertStartupLock();
-          renameSync2(stageDb, p.db);
-          validatePublished();
-          assertStartupLock();
-          resetPending(stage);
-          return { ...receipt2, state: "upgraded", backup };
-        } catch (error2) {
-          if (existsSync8(backup)) {
-            if (existsSync8(p.db)) {
-              try {
-                if (version2() === 14) {
-                  assertStartupLock();
-                  renameSync2(p.db, p.db + ".v14-failed-" + token);
-                }
-              } catch {
-              }
-            }
-            if (!existsSync8(p.db)) {
-              try {
-                assertStartupLock();
-                renameSync2(backup, p.db);
-              } catch {
-              }
-            }
-          }
-          throw error2;
-        }
       }
       static initialize(root, options = {}) {
         const p = pathsFor(root, options);
+        rejectV13UpgradeMarker(p.db);
         if (existsSync8(p.db) || existsSync8(p.cutoverPending) || existsSync8(p.cutoverPublished) || existsSync8(p.poison) || existsSync8(p.intent)) fail2("root_not_empty");
         if (options.onFreshBootstrapStage !== void 0 && typeof options.onFreshBootstrapStage !== "function") fail2("invalid_fresh_bootstrap_stage_hook");
         const freshBootstrapStage = options.onFreshBootstrapStage;
@@ -6927,13 +6735,15 @@ var init_store = __esm({
         if (existsSync8(p.bootstrapPending) && !p.allowBootstrapPending) fail2("sqlite_bootstrap_pending");
         if (existsSync8(p.cutoverPending)) fail2("cutover_publish_pending");
         if (existsSync8(p.poison)) fail2("root_poisoned");
+        rejectV13UpgradeMarker(p.db);
         if (!existsSync8(p.db)) fail2("database_missing");
+        preflightSchemaVersion(p.db);
         const db = new DatabaseSync(p.db, { timeout: 5e3 });
         db.exec("PRAGMA foreign_keys=ON");
         const s = new _IsolatedAdmissionStore(CONSTRUCT, db, p, fault);
         try {
           assertSchemaVersion(db);
-          assertCandidateSchema(db, SCHEMA_VERSION, { allowRuntimeEventExtensionAbsent: true });
+          assertCandidateSchema(db, { allowRuntimeEventExtensionAbsent: true });
           ensureRuntimeEventsSchema(db);
           assertCandidateSchema(db);
           const columns = new Set(db.prepare("PRAGMA table_info(manager_operations)").all().map((x) => x.name));
@@ -6953,7 +6763,9 @@ var init_store = __esm({
         const p = pathsFor(root, options);
         if (existsSync8(p.bootstrapPending)) fail2("sqlite_bootstrap_pending");
         if (existsSync8(p.cutoverPending) && !p.allowCutoverPending) fail2("cutover_publish_pending");
+        rejectV13UpgradeMarker(p.db);
         if (!existsSync8(p.db)) fail2("database_missing");
+        preflightSchemaVersion(p.db);
         const db = new DatabaseSync(p.db, { timeout: 5e3, readOnly: true });
         try {
           db.exec("PRAGMA foreign_keys=ON");
@@ -9728,12 +9540,12 @@ var init_store = __esm({
       #validateContents() {
         try {
           if (this.#db.prepare("PRAGMA foreign_keys").get().foreign_keys !== 1) fail2("foreign_keys_disabled");
-          if (this.#db.prepare("PRAGMA user_version").get().user_version !== this.#schemaVersion) fail2("schema_version_unknown");
-          assertCandidateSchema(this.#db, this.#schemaVersion, { allowRuntimeEventExtensionAbsent: this.#recoveryOnly });
+          if (this.#db.prepare("PRAGMA user_version").get().user_version !== SCHEMA_VERSION) fail2("schema_version_unknown");
+          assertCandidateSchema(this.#db, { allowRuntimeEventExtensionAbsent: this.#recoveryOnly });
           if (this.#db.prepare("PRAGMA quick_check").get().quick_check !== "ok") fail2("database_corrupt");
           if (this.#db.prepare("PRAGMA foreign_key_check").all().length) fail2("database_inconsistent");
           const m = this.#db.prepare("SELECT * FROM authority_metadata").all();
-          if (m.length !== 1 || m[0].schema_version !== this.#schemaVersion) fail2("policy_or_schema_mismatch");
+          if (m.length !== 1 || m[0].schema_version !== SCHEMA_VERSION) fail2("policy_or_schema_mismatch");
           const freshReceipts = this.#db.prepare("SELECT * FROM fresh_install_receipt").all();
           const authoritySwitches = this.#db.prepare("SELECT * FROM authority_switch").all();
           const migrationRuns = this.#db.prepare("SELECT * FROM migration_runs").all();
@@ -9744,7 +9556,7 @@ var init_store = __esm({
             if (migrationRuns.length || migratedResultsCount || migratedEventsCount || this.#db.prepare("SELECT COUNT(*) AS n FROM json_artifacts").get().n) fail2("fresh_install_contains_legacy_data");
           } else if (authoritySwitches.length) {
             const receipt2 = authoritySwitches[0], migration = migrationRuns[0];
-            if (!migration || migration.state !== "verified" || migration.migration_id !== receipt2.migration_id || migration.source_root_digest !== receipt2.source_root_digest || migration.source_manifest_digest !== receipt2.source_manifest_digest || digest2(migration.source_manifest_json) !== migration.source_manifest_digest || !validText3(migration.archive_directory, 32767) || !path17.isAbsolute(migration.archive_directory) || !validText3(receipt2.archive_directory, 32767) || !path17.isAbsolute(receipt2.archive_directory) || migration.archive_directory !== receipt2.archive_directory || typeof migration.archive_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(migration.archive_manifest_digest) || migration.archive_manifest_digest !== receipt2.archive_manifest_digest || !validText3(migration.archive_source_tasks_root, 32767) || !path17.isAbsolute(migration.archive_source_tasks_root) || migration.archive_source_tasks_root !== receipt2.archive_source_tasks_root || !Number.isSafeInteger(migration.archive_file_count) || migration.archive_file_count < 0 || migration.archive_file_count !== migration.source_artifact_count || migration.archive_file_count !== receipt2.archive_file_count || !Number.isSafeInteger(migration.archive_byte_count) || migration.archive_byte_count < 0 || migration.archive_byte_count !== migration.source_artifact_bytes || migration.archive_byte_count !== receipt2.archive_byte_count || receipt2.schema_version !== this.#schemaVersion || !validText3(receipt2.protocol_version, 128) || typeof receipt2.runtime_roster_digest !== "string" || !/^[0-9a-f]{64}$/u.test(receipt2.runtime_roster_digest) || !validText3(receipt2.verifier_version, 128) || !validText3(migration.verifier_version, 128) || receipt2.verifier_version !== migration.verifier_version || !validText3(receipt2.cutover_id, 128) || !validText3(receipt2.created_at, 64) || Number.isNaN(Date.parse(receipt2.created_at)) || !validText3(migration.created_at, 64) || !validText3(migration.verified_at, 64) || Number.isNaN(Date.parse(migration.created_at)) || Number.isNaN(Date.parse(migration.verified_at))) fail2("authority_switch_invalid");
+            if (!migration || migration.state !== "verified" || migration.migration_id !== receipt2.migration_id || migration.source_root_digest !== receipt2.source_root_digest || migration.source_manifest_digest !== receipt2.source_manifest_digest || digest2(migration.source_manifest_json) !== migration.source_manifest_digest || !validText3(migration.archive_directory, 32767) || !path17.isAbsolute(migration.archive_directory) || !validText3(receipt2.archive_directory, 32767) || !path17.isAbsolute(receipt2.archive_directory) || migration.archive_directory !== receipt2.archive_directory || typeof migration.archive_manifest_digest !== "string" || !/^[0-9a-f]{64}$/u.test(migration.archive_manifest_digest) || migration.archive_manifest_digest !== receipt2.archive_manifest_digest || !validText3(migration.archive_source_tasks_root, 32767) || !path17.isAbsolute(migration.archive_source_tasks_root) || migration.archive_source_tasks_root !== receipt2.archive_source_tasks_root || !Number.isSafeInteger(migration.archive_file_count) || migration.archive_file_count < 0 || migration.archive_file_count !== migration.source_artifact_count || migration.archive_file_count !== receipt2.archive_file_count || !Number.isSafeInteger(migration.archive_byte_count) || migration.archive_byte_count < 0 || migration.archive_byte_count !== migration.source_artifact_bytes || migration.archive_byte_count !== receipt2.archive_byte_count || receipt2.schema_version !== SCHEMA_VERSION || !validText3(receipt2.protocol_version, 128) || typeof receipt2.runtime_roster_digest !== "string" || !/^[0-9a-f]{64}$/u.test(receipt2.runtime_roster_digest) || !validText3(receipt2.verifier_version, 128) || !validText3(migration.verifier_version, 128) || receipt2.verifier_version !== migration.verifier_version || !validText3(receipt2.cutover_id, 128) || !validText3(receipt2.created_at, 64) || Number.isNaN(Date.parse(receipt2.created_at)) || !validText3(migration.created_at, 64) || !validText3(migration.verified_at, 64) || Number.isNaN(Date.parse(migration.created_at)) || Number.isNaN(Date.parse(migration.verified_at))) fail2("authority_switch_invalid");
             const policy = parseAuthoritySourceManifest(migration.source_manifest_json, migration.source_manifest_digest);
             if (policy.manifest.task_count !== migration.source_task_count || policy.manifest.artifact_count !== migration.source_artifact_count || policy.manifest.artifact_bytes !== migration.source_artifact_bytes || policy.manifest.result_count !== migration.source_result_count || policy.manifest.event_count !== migration.source_event_count) fail2("authority_switch_invalid");
           } else if (migrationRuns.length || migratedResultsCount || migratedEventsCount || this.#db.prepare("SELECT COUNT(*) AS n FROM json_artifacts").get().n) {
@@ -10656,7 +10468,7 @@ __export(lifecycle_gate_exports, {
   readAllLifecycleEventsForRecovery: () => readAllLifecycleEventsForRecovery
 });
 import { createHash as createHash16, randomUUID as randomUUID4 } from "node:crypto";
-import { closeSync as closeSync4, existsSync as existsSync9, fsyncSync as fsyncSync2, linkSync, lstatSync as lstatSync3, openSync as openSync4, readFileSync as readFileSync10, readdirSync as readdirSync2, realpathSync as realpathSync5, unlinkSync as unlinkSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { closeSync as closeSync4, existsSync as existsSync9, fsyncSync as fsyncSync2, linkSync, lstatSync as lstatSync3, openSync as openSync4, readFileSync as readFileSync10, readdirSync, realpathSync as realpathSync5, unlinkSync as unlinkSync3, writeFileSync as writeFileSync3 } from "node:fs";
 import { spawn as spawn5 } from "node:child_process";
 import path18 from "node:path";
 import { homedir as homedir5 } from "node:os";
@@ -11085,20 +10897,18 @@ async function ensureFreshSqliteAuthority(root, databaseFileName, modules, proce
       if (existsSync9(markerTempPath)) {
         removeOwnedBootstrapFile(markerTempPath);
       }
-      if (existsSync9(databasePath) || existsSync9(databasePath + ".v13-v14-pending.json")) {
-        const upgrade = modules.Store.autoUpgradeV13?.(resolvedRoot, {
-          databaseFileName,
-          runtimeRosterDigest: currentSqliteRuntimeRosterDigest(),
-          assertStartupLock: () => lock.assertHeld()
-        });
+      if (existsSync9(databasePath)) {
         const existing = tryReadReadySqliteAuthority(modules, resolvedRoot, databaseFileName, false);
         if (!existing) throw new LifecycleGateError("sqlite_existing_database_unverified", "existing SQLite database is not a valid production Authority");
         emitFreshBootstrapStage(options, "ready");
-        result = {
-          ...normalizeReadySqliteAuthority(existing),
-          ...upgrade && typeof upgrade === "object" && "state" in upgrade && upgrade.state === "upgraded" ? { upgradeState: "upgraded" } : {}
-        };
+        result = normalizeReadySqliteAuthority(existing);
         break;
+      }
+      if (existsSync9(databasePath + ".v13-v14-pending.json")) {
+        throw new LifecycleGateError(
+          "unsupported_sqlite_schema",
+          "SQLite v14 ONLY: an interrupted v13 upgrade marker is present; the marker and root were not modified"
+        );
       }
       assertFreshBootstrapRootEmpty(resolvedRoot, databaseFileName);
       const token = randomUUID4();
@@ -11210,7 +11020,12 @@ function tryReadReadySqliteAuthority(modules, root, databaseFileName, allowPendi
     });
     return store.assertAuthorityReady(currentSqliteRuntimeRosterDigest());
   } catch (error2) {
-    if (errorCode(error2) === "schema_upgrade_required") throw error2;
+    if (errorCode(error2) === "unsupported_sqlite_schema") {
+      throw new LifecycleGateError(
+        "unsupported_sqlite_schema",
+        error2 instanceof Error ? error2.message : "SQLite v14 ONLY"
+      );
+    }
     return null;
   } finally {
     store?.close();
@@ -11227,7 +11042,7 @@ function assertFreshBootstrapRootEmpty(root, databaseFileName) {
     `${databaseFileName}.bootstrap-pending.json`,
     `${databaseFileName}.bootstrap.lock`
   ]);
-  for (const name of readdirSync2(root)) {
+  for (const name of readdirSync(root)) {
     if (!allowed.has(name)) throw new LifecycleGateError("sqlite_existing_state_incomplete", `unexpected SQLite root entry: ${name}`);
   }
 }
@@ -14173,7 +13988,7 @@ function errorCode2(error2) {
   if (!error2 || typeof error2 !== "object" || !("code" in error2) || typeof error2.code !== "string") return null;
   return error2.code;
 }
-var EXECUTION_OBSERVATION_PROBE_BUDGET_MS, DEFAULT_HOST_SHUTDOWN_WAIT_MS, SqliteLifecycleMcpAuthority;
+var EXECUTION_OBSERVATION_PROBE_BUDGET_MS, DEFAULT_HOST_SHUTDOWN_WAIT_MS, PUMP_FAILURE_RECOVERY_RETRY_MS, SqliteLifecycleMcpAuthority;
 var init_sqlite_lifecycle_mcp_authority = __esm({
   "src/manager/sqlite-lifecycle-mcp-authority.ts"() {
     "use strict";
@@ -14185,6 +14000,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
     init_sqlite_doctor();
     EXECUTION_OBSERVATION_PROBE_BUDGET_MS = 5e3;
     DEFAULT_HOST_SHUTDOWN_WAIT_MS = 6e4;
+    PUMP_FAILURE_RECOVERY_RETRY_MS = 250;
     SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
       #driver;
       #queue = [];
@@ -14198,11 +14014,12 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
       #shutdownPromise = null;
       #pumpPromises = /* @__PURE__ */ new Set();
       #recoveryComplete = false;
-      #startupInterruptionReason;
+      #recoveryInProgress = false;
       #recoveryPromise = null;
       #pumpPending = false;
       #awaitingDispatchPrerequisite = false;
       #pumpRetryTimer = null;
+      #pumpFailureRetryTimer = null;
       #workspaceRetryTimer = null;
       #capacityRetryMs = 100;
       #pumpFailure = null;
@@ -14217,7 +14034,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
       #startPlanPrivateAuthFactory;
       #testOnlyFakeAdapter;
       #routeTaskModel;
-      constructor(driver, context, processProbe, testBeforeDispatch, testOnScheduler, shutdownWaitMs = DEFAULT_HOST_SHUTDOWN_WAIT_MS, startPlanAuthAvailable = false, testOnlyFakeAdapter = false, routeTaskModel2, startPlanAuthInjected = false, startPlanPrivateAuthFactory, startupInterruptionReason) {
+      constructor(driver, context, processProbe, testBeforeDispatch, testOnScheduler, shutdownWaitMs = DEFAULT_HOST_SHUTDOWN_WAIT_MS, startPlanAuthAvailable = false, testOnlyFakeAdapter = false, routeTaskModel2, startPlanAuthInjected = false, startPlanPrivateAuthFactory) {
         this.#driver = driver;
         this.#context = context;
         this.#processProbe = processProbe;
@@ -14229,7 +14046,6 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
         this.#startPlanPrivateAuthFactory = startPlanPrivateAuthFactory;
         this.#testOnlyFakeAdapter = testOnlyFakeAdapter;
         this.#routeTaskModel = routeTaskModel2;
-        this.#startupInterruptionReason = startupInterruptionReason;
       }
       async createTask(task) {
         this.#assertOpen();
@@ -14292,7 +14108,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
         const snapshot = this.#readSnapshot(taskId);
         const projection = asRecord7(snapshot.projection);
         if (this.#pumpFailure && projection.status === "queued") {
-          throw new TaskManagerError("TASK_STATE", `SQLite dispatch is blocked after ${this.#pumpFailure.reason}; queued lifecycle facts remain persisted and no automatic retry was attempted`);
+          throw new TaskManagerError("TASK_STATE", `SQLite dispatch is blocked after ${this.#pumpFailure.reason}; queued lifecycle facts remain persisted while automatic Recovery retry is pending or exhausted`);
         }
         const attempt = asRecord7(snapshot.attempt);
         const operation = snapshot.operation ? asRecord7(snapshot.operation) : null;
@@ -14557,6 +14373,8 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
         this.#shuttingDown = true;
         if (this.#pumpRetryTimer) clearTimeout(this.#pumpRetryTimer);
         this.#pumpRetryTimer = null;
+        if (this.#pumpFailureRetryTimer) clearTimeout(this.#pumpFailureRetryTimer);
+        this.#pumpFailureRetryTimer = null;
         if (this.#workspaceRetryTimer) clearTimeout(this.#workspaceRetryTimer);
         this.#workspaceRetryTimer = null;
         const attempt = this.#shutdownGracefully();
@@ -14645,6 +14463,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
       }
       async #recoverTasksOnce() {
         this.#recoveryComplete = false;
+        this.#recoveryInProgress = true;
         try {
           let snapshot = this.#validateRecoverySnapshot(this.#driver.readRecoverySnapshot());
           this.#recoveryBlocked = null;
@@ -14679,8 +14498,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
             }
             const outcome = asRecord7(await this.#driver.recoverOperation(operationId, {
               stopAliveWorker: true,
-              allowInterruptRequeue: true,
-              ...this.#startupInterruptionReason ? { interruptionReason: this.#startupInterruptionReason } : {}
+              allowInterruptRequeue: true
             }));
             this.#schedulerStage("operation_recovery_classified", {
               operation_id: operationId,
@@ -14715,7 +14533,6 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
             }
           }
           this.#recoveryComplete = true;
-          this.#startupInterruptionReason = void 0;
           this.#pumpFailure = null;
           this.#schedulerStage("recovery_complete", {
             recoverable_queued_attempts: queued.filter((value) => value.dispatchable === true).length,
@@ -14727,6 +14544,8 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
           this.#pumpFailure = { taskId: "root", reason: errorCode2(error2) ?? "recovery_snapshot_unavailable" };
           this.#recoveryComplete = false;
           throw error2;
+        } finally {
+          this.#recoveryInProgress = false;
         }
       }
       async #executionObservation(taskId, snapshot, status) {
@@ -14799,7 +14618,6 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
           testOnScheduler,
           testShutdownWaitMs,
           routeTaskModel: routeTaskModel2,
-          startupInterruptionReason,
           ...driverOptions
         } = options;
         const shutdownWaitMs = testShutdownWaitMs ?? DEFAULT_HOST_SHUTDOWN_WAIT_MS;
@@ -14818,8 +14636,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
           options.testOnlyFakeAdapter === true,
           routeTaskModel2,
           options.startPlanPrivateAuth !== void 0,
-          options.startPlanPrivateAuthFactory,
-          startupInterruptionReason
+          options.startPlanPrivateAuthFactory
         );
         try {
           await authority.recoverTasks();
@@ -14859,7 +14676,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
         }
       }
       #enqueue(taskId, attempt) {
-        if (this.#pumpFailure) {
+        if (this.#pumpFailure && !this.#recoveryInProgress) {
           this.#schedulerStage("enqueue_blocked", { task_id: taskId, attempt, reason: this.#pumpFailure.reason });
           return;
         }
@@ -14899,10 +14716,32 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
           void running.catch((error2) => {
             const reason = errorCode2(error2) ?? "dispatch_failed";
             this.#pumpFailure = { taskId: "unknown", reason };
+            this.#schedulePumpFailureRecovery(reason);
           }).finally(() => {
             this.#pumpPromises.delete(running);
           });
         });
+      }
+      #schedulePumpFailureRecovery(reason) {
+        if (this.#closed || this.#shuttingDown || this.#pumpFailureRetryTimer) return;
+        this.#schedulerStage("pump_failure_recovery_scheduled", {
+          reason,
+          retry_ms: PUMP_FAILURE_RECOVERY_RETRY_MS
+        });
+        this.#pumpFailureRetryTimer = setTimeout(() => {
+          this.#pumpFailureRetryTimer = null;
+          if (this.#closed || this.#shuttingDown) return;
+          this.#schedulerStage("pump_failure_recovery_started", { reason });
+          void this.recoverTasks().then(() => {
+            this.#schedulerStage("pump_failure_recovery_complete", { reason });
+          }).catch((error2) => {
+            this.#schedulerStage("pump_failure_recovery_failed", {
+              reason,
+              recovery_error: errorCode2(error2) ?? "recovery_failed"
+            });
+          });
+        }, PUMP_FAILURE_RECOVERY_RETRY_MS);
+        this.#pumpFailureRetryTimer.unref?.();
       }
       #scheduleWorkspaceRetry() {
         if (this.#closed || this.#shuttingDown || !this.#recoveryComplete || this.#pumpFailure || this.#queue.length === 0) return;
@@ -36952,7 +36791,7 @@ var defaultModelSchema = object({
 // src/mcp/server.ts
 init_errors();
 var SERVER_NAME = "codex-zcode-bridge";
-var SERVER_VERSION = "2.0.0-preview.9"; // x-release-please-version
+var SERVER_VERSION = "2.0.0-preview.10"; // x-release-please-version
 var EXECUTION_NOT_VERDICT = "Results describe Bridge/ZCode execution only: status 'completed' means the invocation and report normalization finished, NOT that the calling host accepted the work. the calling host must independently review the workspace diff and checks before deciding PASS.";
 function okResult(data) {
   return {
@@ -38920,7 +38759,7 @@ function loadInstallAuthoritySelection(host) {
     const keys = Object.keys(parsed).sort().join("|");
     if (parsed.schema_version !== 1) throw new SqliteInstallConfigurationError("authority_config_version_unsupported");
     if (parsed.authority === "json" && keys === "authority|schema_version") {
-      return { state: "sqlite", configPath, configuredDataRoot: "" };
+      throw new SqliteInstallConfigurationError("authority_config_json_unsupported");
     }
     if (parsed.authority !== "sqlite" || keys !== "authority|schema_version" && keys !== "authority|data_root|schema_version") {
       throw new SqliteInstallConfigurationError("authority_config_invalid_contract");
@@ -39253,7 +39092,6 @@ async function startBridge(host = codexHostProfile(), version2 = SERVER_VERSION,
         journal: modelRoutingJournal
       }),
       routeTaskModel: routeTaskModel2,
-      ...initialization["upgradeState"] === "upgraded" ? { startupInterruptionReason: "interrupted_by_upgrade" } : {},
       onWorkerDiagnosticLine: (line) => {
         const runtime = /^\[bridge-worker\] installed-runtime ([a-zA-Z0-9][a-zA-Z0-9_-]{0,63} [1-9]\d{0,8} [0-9a-f]{64})$/u.exec(line);
         if (runtime) {

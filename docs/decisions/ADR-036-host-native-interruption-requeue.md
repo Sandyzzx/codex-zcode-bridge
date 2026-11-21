@@ -5,6 +5,7 @@
 > Decision: Accepted for the isolated Host Recovery candidate; merge, release and live Authority migration remain separate authorizations
 > Applicability: SQLite v14 Host Recovery for claimed Attempts without a committed Result
 > Verified against: `77990f3a840e7b1f3a75afc151c58ca2cef5f28a` plus this candidate diff
+> Applicability (2026-11-21): Host Recovery 继续有效；新的 v13→v14 升级触发已由 [ADR-043](ADR-043-sqlite-v14-only.md) RETIRED。既有 v14 历史中的 `interrupted_by_upgrade` 仍只读保留。
 
 > Post-Preview.6 applicability (2026-11-15): the Store transaction and fake-adapter
 > synthetic path are implemented and tested. The current production Adapter does

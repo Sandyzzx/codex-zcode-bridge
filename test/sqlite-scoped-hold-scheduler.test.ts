@@ -69,14 +69,27 @@ async function drain(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
+async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("condition_not_reached");
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 function makeDriver(snapshot: Detail): Detail {
   const activeWorkspaces: string[] = [];
   const stages: Array<{ stage: string; detail?: Detail }> = [];
   const runCalls: string[] = [];
   const recoverCalls: string[] = [];
   const recoverOptions: Detail[] = [];
+  let snapshotReads = 0;
   const driver = {
     readRecoverySnapshot() {
+      snapshotReads += 1;
+      if (typeof snapshot.failSnapshotAfter === "number" && snapshotReads > snapshot.failSnapshotAfter) {
+        throw new Error("synthetic_recovery_snapshot_failure");
+      }
       const operations = (snapshot.operations as Detail[]).map((operation) => (
         activeWorkspaces.includes(String(operation.workspace_ref))
           ? { ...operation, capacity_occupied: true }
@@ -107,6 +120,9 @@ function makeDriver(snapshot: Detail): Detail {
     async run(input: { task: TaskPackage }) {
       runCalls.push(input.task.task_id);
       activeWorkspaces.push(input.task.worktree_path ?? input.task.workspace);
+      if (snapshot.failFirstRun === true && runCalls.length === 1) {
+        throw new Error("synthetic_pump_failure");
+      }
       return releasedRun(input.task.task_id);
     },
     stages,
@@ -162,6 +178,41 @@ test("different execution paths can run concurrently up to the Manager dispatch 
   await manager.recoverTasks();
   await drain();
   assert.deepEqual([...(driver.runCalls as string[])].sort(), ["one", "two"]);
+  await manager.shutdown();
+});
+
+test("an unexpected pump failure schedules one bounded Recovery retry and resumes dispatch", async () => {
+  const driver = makeDriver({
+    operations: [],
+    queued: [{ task_id: "retry", attempt: 1, dispatchable: true }],
+    tasks: { retry: lifecycleSnapshot("retry", "D:\\retry") },
+    failFirstRun: true,
+  });
+  const manager = makeManager(driver);
+  await manager.recoverTasks();
+  await waitFor(() => (driver.runCalls as string[]).length === 2);
+  assert.deepEqual(driver.runCalls, ["retry", "retry"]);
+  assert.ok((driver.stages as Array<{ stage: string }>)
+    .some((entry) => entry.stage === "pump_failure_recovery_scheduled"));
+  assert.ok((driver.stages as Array<{ stage: string }>)
+    .some((entry) => entry.stage === "pump_failure_recovery_complete"));
+  await manager.shutdown();
+});
+
+test("a failed automatic Recovery retry keeps the pump failure latched", async () => {
+  const driver = makeDriver({
+    operations: [],
+    queued: [{ task_id: "latched", attempt: 1, dispatchable: true }],
+    tasks: { latched: lifecycleSnapshot("latched", "D:\\latched") },
+    failFirstRun: true,
+    failSnapshotAfter: 3,
+  });
+  const manager = makeManager(driver);
+  await manager.recoverTasks();
+  await waitFor(() => (driver.stages as Array<{ stage: string }>)
+    .some((entry) => entry.stage === "pump_failure_recovery_failed"));
+  await assert.rejects(manager.getStatus("latched"), /automatic Recovery retry is pending or exhausted/u);
+  assert.deepEqual(driver.runCalls, ["latched"]);
   await manager.shutdown();
 });
 

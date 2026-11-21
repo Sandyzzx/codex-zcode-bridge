@@ -38,6 +38,9 @@ export function selectCiImpact({ files, map, forceFull = false }) {
       entry.type === "Integration" || entry.type === "Stress" || entry.stress !== undefined
     ));
   const stressRequired = selection.stress_mode === "STRESS_TEST_REQUIRED";
+  // A forced-full selection has no trustworthy changed-file list. Cost Lab is
+  // cheap and independent, so run it rather than silently skipping its gate.
+  const costLabRequired = forceFull || selection.affected_domains.includes("cost-lab");
 
   return {
     affected_mode: selection.mode,
@@ -49,6 +52,7 @@ export function selectCiImpact({ files, map, forceFull = false }) {
     full_required: selection.mode === "FULL_SUITE",
     integration_required: integrationRequired,
     stress_required: stressRequired,
+    cost_lab_required: costLabRequired,
   };
 }
 
@@ -95,6 +99,7 @@ async function main() {
       `force_full=${String(impact.force_full)}`,
       `integration_required=${String(impact.integration_required)}`,
       `stress_required=${String(impact.stress_required)}`,
+      `cost_lab_required=${String(impact.cost_lab_required)}`,
     ].join("\n");
     appendFileSync(outputPath, `${output}\n`, "utf8");
   }

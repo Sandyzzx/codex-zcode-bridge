@@ -1,9 +1,9 @@
 # Project State
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-20（ADR-042 Unknown Runtime Experimental Authorization）
-> Last verified: 2026-11-20，核对未知安装安全检查、精确指纹授权、Provider scope、3.19 零模型协议 Smoke、Coding Plan 单次真实执行、Start Plan 空权益阻断与定向测试；Billing 倍率保持 INCONCLUSIVE。
-> Verified against: ADR-042 implementation `15abe6becb13f383fee676a4ae20510d51f817fc`；authorization env forwarding `0e7134701d643c7b80def4e3cb80c95c63e34691`（tree `ec63f443cce54bad986eb47ab1b6274c604dcbfe`）；release baseline `aedeb2c2a1ea6f41ea3ac2d045f7ed0d75281552`
+> Last updated: 2026-11-21（Preview.10 release integration）
+> Last verified: 2026-11-21，集成 ADR-043 SQLite v14 ONLY、Legacy retirement 与 CI optimization；最终发布树验证以 `docs/reports/preview-release-and-closeout-20261121.md` 为准。真实模型、OAuth 与 Billing E2E 本轮为 `NOT_RUN`。
+> Verified against: Preview.10 release integration candidate based on `c1245a02f8f9d4b6e1102eabac230b657d85de9b`
 
 当前发布状态：
 
@@ -12,8 +12,9 @@
 - Preview `2.0.0-preview.6`：Owner 已批准发布。支持声明限定为 Windows x64、Node.js `24.16.0` 与已安装的官方 ZCode Desktop `3.18.2.10443`。
 - Preview `2.0.0-preview.7`：在 Preview.6 上应用 ADR-038 整改，并修复 CI dispatch 边界与 Events summary 分页。
 - Preview `2.0.0-preview.8`：包含 ADR-039 Host 授权取消与新鲜 Cleanup Proof 绑定；支持范围限定为 Windows x64、Node.js `24.16.0` 与已安装的官方 ZCode Desktop `3.18.2.10443`。
-- `2.0.0-preview.9` 发布候选：在 Preview.8 基线上增加 ADR-040 安装版 AppServer、ADR-041 Thin Official Host 收敛、Cost Lab Web、Start Plan 离线审计和正式证据。ADR-041 implementation 为 `a676c6cd14573f2620339f992a345ed0715541ff`；Final Closure implementation 为 `f19ab1d75dcced7613bfe6e12c84d780d01f7127`，覆盖动态 Provider 门禁、Runtime Auth fail-closed、测试与文档收尾。该候选只有在真实 E2E、倍率验证和预览合并门禁全部满足后才允许进入 `preview`。
-- ZCode Desktop `3.19.0.10774`：仅通过 ADR-042 的 `OFFICIAL_RUNTIME_EXPERIMENTAL` 精确指纹授权完成兼容性探测；不是 Preview.9 的发布支持版本，Coding Plan 倍率仍 `INCONCLUSIVE`，Start Plan 因无 active plan 为 `BLOCKED`。
+- Preview `2.0.0-preview.9`：在 Preview.8 基线上增加 ADR-040 安装版 AppServer、ADR-041 Thin Official Host 收敛、Cost Lab Web、Start Plan 离线审计和正式证据。
+- `2.0.0-preview.10` 发布候选：集成 SQLite v13 退役、旧 JSON Authority 提示退役、无引用 ZCode 3.18.0 Patch 清理、历史研究归档、CI 去重/Impact 精化与 Windows 两路分片。SQLite v14 是唯一当前 Schema；Stable 不受影响。
+- ZCode Desktop `3.19.0.10774`：仅通过 ADR-042 的 `OFFICIAL_RUNTIME_EXPERIMENTAL` 精确指纹授权完成兼容性探测；不是 Preview.10 的发布支持版本，Coding Plan 倍率仍 `INCONCLUSIVE`，Start Plan 因无 active plan 为 `BLOCKED`。
 
 ## 当前生产架构
 
@@ -23,7 +24,7 @@
 - Project Ledger、固定人类 Markdown 报告、每任务 Codex Rollout Token 采集和 Desktop task-index 私有写镜像已退役。用户已有 `.agent-ledger` 文件不由 Bridge 修改或删除；SQLite Task Authority 保持不变。
 - Result、进程退出、Cleanup 与 Release 是不同事实。官方 close resolved 不能单独授权 Release；exact Worker identity、recorded-tree scan、resource facts、Cleanup Digest 和现有 CAS 仍然必需。
 - Attention/Thin Waiter 读取同一 SQLite Authority；`zcode_doctor` 也绑定该 Authority。
-- 生产 Lifecycle Gate 在 bootstrap lock 内自动升级已有 v13 Authority 到 v14。离线副本升级工具继续保留；直接 Store 打开 v13 仍要求显式离线升级。
+- SQLite 支持统一为 `SQLite v14 ONLY`。生产 Lifecycle Gate 保留 Fresh v14、既有 v14、历史迁移记录、Recovery/Cleanup/Release；v13 数据库和未完成升级 Marker 以 `unsupported_sqlite_schema` 非破坏性拒绝。v13 自动/离线升级、冻结 Schema 和升级 CLI 已退役。
 - R7 在同一 v14 Authority 内使用 `runtime_task_events`。Worker 只通过一次性 fd14 提交 Runtime observation；Manager 从持久 Task/Attempt/Generation/Claim 派生绑定，SQLite 负责 sequence 幂等、stale-Attempt 拒绝和统一 public cursor。`zcode_events(view="summary")` 可合并相邻安全模型文本，`zcode_feedback` 只提供机器投影，缓存 Usage 与 Result 共用同一持久事实；Lifecycle Event 与 Runtime Event 仍分开。
 
 Preview.7 继承 Preview.6 固定的 ZCode `3.18.2`、commit `fec975905a2abd4c07e35c40d51fa097a2258ec9`、tree `5e90fec80706b8381f94e4eef48cf821b9868916` 和 AppServer `0.17.1`。制品只在 Windows x64、Node `24.16.0` 上完成构建、签名、加载与本地 clean-install 验证；其他 Node 24 patch level 和跨机器复现仍是 `NOT_VERIFIED`。已发布 Preview.5 的 3.18.0 输入作为历史回滚基线保留。Preview.7 的运行时差异来自 ADR-038：删除旧 Runtime 分发资源、退役已退出外围功能、修复 Usage/Context/Events/Recovery 说明与实现、保留 v14 历史字节，并收紧 CI/生成物门禁。
@@ -50,7 +51,7 @@ Preview.3 的 Start Plan 历史证据覆盖 Windows、官方 AppServer `0.17.1`�
 | Runtime-selected Provider capability gate | `PASS — CANDIDATE` | 官方 Provider registry + 当前账户配置分类；隐式 Coding Plan、隐式 Start Plan、其他 Provider 与显式 Provider 定向测试通过；真实模型请求 `NOT_RUN` |
 | 生产 Official Host Runtime Auth fail-closed | `PASS — CANDIDATE` | Resolver 缺失或拒绝时返回不可用，即使存在合成持久化 Key 也不回包；静态回包仅由 Test Adapter 覆盖 |
 | R7 Runtime Events/Usage | `PASS` | fd14 单向通道、v14 additive schema、sequence/cursor、stale Attempt、Feedback/Result 合成与旧 v14 兼容测试通过 |
-| SQLite 自动 v13→v14 升级与恢复 | `PASS` | 测试范围；含 occupied Attempt/Hold、rename/publication 中断 |
+| SQLite v13 非破坏性拒绝 | `PASS` | 无句柄文件预检、Lifecycle Gate 稳定错误、DB/WAL/SHM 与旧 Marker 原字节保留；完整回归 952/950/2，v14 Fresh/Existing 继续覆盖 |
 | 完整 Node/native/resource 闭包 | `PARTIAL` | 6 个 keyring 文件已在 clean checkout 解析、native load 并与 BOM bytes/hash 一致；完整动态资源闭包仍未认证 |
 | 正常 cleanup 的 native/resource 闭包 | `PARTIAL` | exact identity、tree scan 与 CAS 有定向证据；一般外部资源和 crash 矩阵未完成 |
 | 再分发/许可审查 | `PASS — OWNER_APPROVED_SCOPE` | 官方签名 runtime host 的再分发权利已由 Owner 确认；ZCode LICENSE/NOTICE 与 keyring license 文件进入 BOM；不是独立法律意见 |
