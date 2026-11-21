@@ -176,6 +176,17 @@ interface ClaimOnlyPort {
     readonly executionPermissionCheck: (context: Parameters<TrustedLocalStdioContext["policy"]["checkPermission"]>[0]) => unknown;
   }): Readonly<Record<string, unknown>>;
   cancelQueuedAttempt(input: { readonly task_id: string; readonly expected_attempt: number }): unknown;
+  userAuthorizedReleaseUnverifiedOperation(input: {
+    readonly operation_id: string;
+    readonly task_id: string;
+    readonly attempt: number;
+    readonly generation: number;
+    readonly revision: number;
+    readonly cancel_id: string;
+    readonly release_reason: "user_authorized_release_unverified";
+    readonly cancellation_verification_digest?: string;
+    readonly recovery_evidence_digest?: string;
+  }): Readonly<Record<string, unknown>>;
   requestCancellation(input: Readonly<Record<string, unknown>>, evidence: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>>;
   recordCancellationVerification(input: Readonly<Record<string, unknown>>, evidence: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>>;
   readInteractionRequest(taskId: string, requestId: string): Readonly<Record<string, unknown>> | null;
@@ -1299,6 +1310,17 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
   createNextAttempt(input: Readonly<Record<string, unknown>>): unknown;
   interruptAndRequeue(input: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>>;
   cancelQueuedAttempt(input: { readonly task_id: string; readonly expected_attempt: number }): unknown;
+  userAuthorizedReleaseUnverifiedOperation(input: {
+    readonly operation_id: string;
+    readonly task_id: string;
+    readonly attempt: number;
+    readonly generation: number;
+    readonly revision: number;
+    readonly cancel_id: string;
+    readonly release_reason: "user_authorized_release_unverified";
+    readonly cancellation_verification_digest?: string;
+    readonly recovery_evidence_digest?: string;
+  }): Readonly<Record<string, unknown>>;
   requestCancellation(input: Readonly<Record<string, unknown>>, evidence: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>>;
   recordCancellationVerification(input: Readonly<Record<string, unknown>>, evidence: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>>;
   readInteractionRequest(taskId: string, requestId: string): Readonly<Record<string, unknown>> | null;
@@ -1380,7 +1402,9 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
   const recoveryEvidenceBindings = new Map<string, Readonly<{
     operation_id: string; task_id: string; attempt: number; generation: number; expected_revision: number;
     claim_id: string; worker_identity_digest: string; classification: "hold";
-    reason_code: "worker_identity_unknown" | "cleanup_identity_unknown" | "cleanup_incomplete"; evidence_source: "manager_process_probe"; evidence_json: string;
+    reason_code: "worker_identity_unknown" | "cleanup_identity_unknown" | "cleanup_incomplete"; evidence_source: "manager_process_probe";
+    process_tree_root_observed?: boolean; process_tree_scan_clean?: boolean;
+    process_tree_scan_digest?: string; recovery_disposition?: string; evidence_json: string;
   }>>();
   const recoveryEvidenceVerifier = (context: {
     readonly operation: Readonly<Record<string, unknown>>;
@@ -1817,6 +1841,7 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
       // A missing Adapter resource proof is a distinct cleanup fact. An
       // OS-level Worker exit and tree scan cannot reconstruct resources that
       // the Adapter never reported, so do not scan or promote that Hold.
+      let adapterCleanupUnverified = false;
       if (phase === "cleanup_unverified") {
         const failureEvent = [...lifecycleEvents].reverse()
           .find((event) => event.event_type === "cleanup_unverified");
@@ -1829,9 +1854,12 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
           return { state: "held", operation_id: operationId, phase, reason: "cleanup_failure_evidence_invalid",
             identity_state: identityState, probe_reason: probeReason };
         }
+        adapterCleanupUnverified = failureReason === "adapter_cleanup_unverified";
         if (failureReason === "adapter_cleanup_unverified") {
-          return { state: "held", operation_id: operationId, phase, reason: "adapter_cleanup_unverified",
-            identity_state: identityState, probe_reason: probeReason };
+          if (recoveryOptions.stopAliveWorker !== true || identityState === "unknown") {
+            return { state: "held", operation_id: operationId, phase, reason: "adapter_cleanup_unverified",
+              identity_state: identityState, probe_reason: probeReason };
+          }
         }
       }
 
@@ -1892,7 +1920,7 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
         // residual risk is retained in the DECISION rather than hidden by PID
         // absence alone. Unknown, alive, conflicting, or failed scans below
         // remain operation-scoped Holds.
-        const completeCleanupClosureAvailable = treeOutcome?.status === "resolved"
+        const completeCleanupClosureAvailable = !adapterCleanupUnverified && treeOutcome?.status === "resolved"
           && treeOutcome.result.clean === true
           && treeOutcome.result.livePids.length === 0
           && treeOutcome.result.observedPids.includes(processId);
@@ -2048,7 +2076,8 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
         : treeOutcome?.status === "rejected" ? "process_tree_probe_rejected"
           : treeOutcome?.status === "resolved" && treeOutcome.result.livePids.length > 0 ? "process_tree_still_live"
             : treeOutcome?.status === "resolved" && treeOutcome.result.clean !== true ? "process_tree_not_verified"
-              : treeOutcome?.status === "resolved" && treeOutcome.result.clean === true ? "complete_cleanup_closure_unavailable" : undefined;
+              : treeOutcome?.status === "resolved" && treeOutcome.result.clean === true
+                && treeOutcome.result.observedPids.includes(processId) ? "complete_cleanup_closure_unavailable" : undefined;
       const disposition = phase === "running" && identityState === "exited"
         ? cancellationRequested ? "cancel_interrupted_without_committed_result" : "worker_exited_without_committed_result"
         : phase === "cleanup_unverified"
@@ -2060,6 +2089,24 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
       const reasonCode = identityState === "unknown"
         ? cleanupPhase ? "cleanup_identity_unknown" as const : "worker_identity_unknown" as const
         : "cleanup_incomplete" as const;
+      const releaseTreeProbe = treeOutcome?.status === "resolved"
+        && treeOutcome.result.clean === true
+        && treeOutcome.result.livePids.length === 0
+        && treeOutcome.result.observedPids.includes(processId)
+        && disposition === "complete_cleanup_closure_unavailable";
+      const processTreeScanDigest = releaseTreeProbe && treeOutcome?.status === "resolved"
+        ? sha256(canonicalJson({
+          contract: "sqlite-candidate-recovery-release-tree-v1",
+          operation_id: operationId, task_id: operation.task_id,
+          attempt: Number(operation.attempt), generation: Number(operation.generation),
+          claim_id: claimId, worker_identity_digest: workerDigest,
+          root_process_id: processId, root_start_fingerprint: fingerprint,
+          clean: treeOutcome.result.clean,
+          live_pids: [...treeOutcome.result.livePids].sort((left, right) => left - right),
+          observed_pids: [...treeOutcome.result.observedPids].sort((left, right) => left - right),
+          root_observed: true,
+        }))
+        : undefined;
       const evidence = {
         source: "manager_process_probe", operation_id: operationId, task_id: operation.task_id,
         attempt: Number(operation.attempt), generation: Number(operation.generation), phase,
@@ -2069,6 +2116,10 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
         process_tree_scan_clean: treeOutcome?.status === "resolved" ? treeOutcome.result.clean : null,
         process_tree_scan_scope: "recorded_roots_and_observed_claimants_only",
         complete_cleanup_closure: false,
+        ...(releaseTreeProbe ? {
+          process_tree_root_observed: true, process_tree_scan_clean: true,
+          process_tree_scan_digest: processTreeScanDigest, recovery_disposition: disposition,
+        } : {}),
         observed_at: typeof verdict?.observed_at === "string" ? verdict.observed_at : new Date().toISOString(),
       };
       const evidenceDigest = sha256(canonicalJson(evidence));
@@ -2079,12 +2130,20 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
         expected_revision: positive(Number(operation.revision), "recovery_revision_invalid"),
         claim_id: claimId, worker_identity_digest: workerDigest, classification: "hold" as const,
         reason_code: reasonCode, evidence_source: "manager_process_probe" as const, evidence_digest: evidenceDigest,
+        ...(releaseTreeProbe ? {
+          process_tree_root_observed: true, process_tree_scan_clean: true,
+          process_tree_scan_digest: processTreeScanDigest, recovery_disposition: disposition,
+        } : {}),
       };
       recoveryEvidenceBindings.set(evidenceDigest, { ...input, evidence_json: canonicalJson(evidence) });
       try {
         const recorded = asRecord(port.recordRecoveryObservation(input, evidence));
-        return { state: "held", operation_id: operationId, phase, reason: reasonCode, revision: recorded.revision,
-          identity_state: identityState, probe_reason: probeReason, evidence_digest: evidenceDigest };
+        const reportedReason = adapterCleanupUnverified && operation.result_status !== "cancelled"
+          ? "adapter_cleanup_unverified" : reasonCode;
+        return { state: "held", operation_id: operationId, phase, reason: reportedReason, revision: recorded.revision,
+          identity_state: identityState, probe_reason: probeReason, evidence_digest: evidenceDigest,
+          recovery_disposition: disposition, process_tree_scan_clean: evidence.process_tree_scan_clean,
+          process_tree_root_observed: releaseTreeProbe };
       } catch (error) {
         recoveryEvidenceBindings.delete(evidenceDigest);
         if (errorCode(error) === "recovery_observation_conflict" || errorCode(error) === "stale_recovery_cas") {
@@ -2108,6 +2167,7 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
       executionPermissionCheck: localPolicy.checkPermission,
     }),
     cancelQueuedAttempt: (input) => port.cancelQueuedAttempt(input),
+    userAuthorizedReleaseUnverifiedOperation: (input) => port.userAuthorizedReleaseUnverifiedOperation(input),
     requestCancellation: (input, evidence) => port.requestCancellation(input, evidence),
     recordCancellationVerification: (input, evidence) => port.recordCancellationVerification(input, evidence),
     async cancelRunning(taskId, attempt) {
@@ -2350,8 +2410,11 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
       let resultDigest: string | undefined;
       let cleanupState: ClaimOnlyRunResult["cleanupState"] = "not_attempted";
       let stopBoundary: ClaimOnlyRunResult["stopBoundary"] = "claim_only";
-      const stage = (name: string, detail?: Readonly<Record<string, unknown>>): void =>
+      let intentStageObserved = false;
+      const stage = (name: string, detail?: Readonly<Record<string, unknown>>): void => {
         options.onStage?.(name, { operation_id: input.operationId, ...detail });
+        if (name === "intent_complete") intentStageObserved = true;
+      };
       try {
         stage("admission_start");
         let admission: Record<string, unknown>;
@@ -2418,6 +2481,19 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
         if (intent.duplicate === true) throw new LifecycleGateError("launch_outcome_unknown", "existing Intent never authorizes another Spawn");
         const intentRevision = positive(intent.revision, "launch_intent_revision_missing");
         stage("intent_complete", { revision: intentRevision });
+        // Re-read the authoritative projection after the Intent transaction.
+        // A queued Cancel that raced this dispatch must fence Spawn even if it
+        // won the revision after this Manager took its earlier snapshot.
+        const postIntent = asRecord(port.readOperation(input.operationId));
+        const postIntentTask = asRecord(port.readTaskProjection(input.task.task_id));
+        const postIntentAttempt = asRecord(port.readAttempt(input.task.task_id, input.attempt));
+        if (postIntent.phase !== "launch_intent" || Number(postIntent.revision) !== intentRevision
+          || Number(postIntent.generation) !== generation || postIntentTask.status !== "queued"
+          || Number(postIntentTask.current_attempt) !== input.attempt
+          || postIntentAttempt.status !== "queued" || Number(postIntentAttempt.generation) !== generation) {
+          throw new LifecycleGateError("launch_cancelled_before_spawn", "authoritative projection changed after Launch Intent");
+        }
+        if (!intentStageObserved) throw new LifecycleGateError("launch_cancelled_before_spawn", "Cancellation raced Launch Intent before Spawn");
         stage("spawn_bootstrap_start");
         // ADR-031 dynamic credential discovery: resolve the issuer once per
         // launch so each dispatch observes the current official login state.

@@ -25,7 +25,7 @@ Coding Plan 的结果适用于已验证的账户、模型和运行时。`1.5` �
 
 预览版环境为 **Windows x64**、**Node.js `24.16.0`** 和已安装的官方 **ZCode Desktop `3.18.2.10443`**。请先登录 ZCode，确认账户可使用目标套餐和模型，并准备 Git 和支持插件的 Codex。Node.js 和 ZCode 需单独安装。
 
-同一个 Codex 安装中选择一个 Marketplace 渠道即可。本文的安装版 Runtime 集成、Cost Lab、SQLite v14-only 运行时、旧资产清理和优化后的 CI 门禁位于预览版 `2.0.0-preview.10`，稳定版为 `v1.7.2`。
+同一个 Codex 安装中选择一个 Marketplace 渠道即可。本文的安装版 Runtime 集成、Cost Lab、SQLite v14-only 运行时、事件分页、可选结果摘要和用户授权阻塞释放位于预览版 `2.0.0-preview.11`，稳定版为 `v1.7.2`。
 
 ### 预览版
 

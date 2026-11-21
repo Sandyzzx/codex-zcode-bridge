@@ -128,6 +128,157 @@ function seedRunningClaim(
   }
 }
 
+function seedCancelledCleanupHold(
+  dataRoot: string,
+  modules: Awaited<ReturnType<typeof loadLifecycleCandidateModules>>,
+  workspace: string,
+  taskId: string,
+  operationId: string,
+): { readonly processId: number; readonly fingerprint: string } {
+  const store = modules.Store.open(dataRoot);
+  try {
+    const port = modules.createPort(store);
+    port.createTask(syntheticTask(workspace, taskId) as unknown as Parameters<typeof port.createTask>[0]);
+    const allow = () => ({ state: "allow", fixture: true });
+    const admitted = port.admitOperation({
+      operation_id: operationId,
+      task_id: taskId,
+      attempt: 1,
+      workspace_ref: workspace,
+    }, {
+      workspaceValidator: allow,
+      executionPermissionCheck: allow,
+    }) as Record<string, unknown>;
+    const processId = 47001;
+    const fingerprint = `cancelled-cleanup-${taskId}`;
+    const launch = {
+      operation_id: operationId,
+      task_id: taskId,
+      attempt: 1,
+      generation: Number(admitted.generation),
+      revision: Number(admitted.revision),
+      launch_id: `launch-${taskId}`,
+      launch_epoch: 1,
+      launch_token: `cancelled-cleanup-${taskId}-0123456789`,
+    };
+    const intent = port.createLaunchIntent(launch) as Record<string, unknown>;
+    const receipt = port.recordLaunchReceipt({
+      ...launch,
+      revision: Number(intent.revision),
+      receipt_id: `receipt-${taskId}`,
+      launch_identity: trustedIdentityEvidence("launch", taskId, processId, fingerprint, 1),
+    }) as Record<string, unknown>;
+    port.commitPermanentClaim({
+      ...launch,
+      revision: Number(receipt.revision),
+      claim_id: `claim-${taskId}`,
+      worker_identity: trustedIdentityEvidence("worker", taskId, processId, fingerprint, 1),
+    } as unknown as Parameters<typeof port.commitPermanentClaim>[0]);
+    const claimed = port.readOperation(operationId) as Record<string, unknown>;
+    const workerIdentity = JSON.parse(String(claimed.claim_worker_identity_json)) as Record<string, unknown>;
+    const identityEvidence = {
+      contract: "synthetic-cancel-identity-v1",
+      process_id: processId,
+      start_fingerprint: fingerprint,
+      observed_at: new Date().toISOString(),
+    };
+    const identityDigest = candidateEvidenceDigest(identityEvidence);
+    const treeEvidence = {
+      contract: "synthetic-cancel-tree-v1",
+      process_id: processId,
+      start_fingerprint: fingerprint,
+      scan_clean: true,
+      live_pids: [],
+      observed_pids: [processId],
+      observed_at: new Date().toISOString(),
+    };
+    const treeDigest = candidateEvidenceDigest(treeEvidence);
+    const fence = {
+      operation_id: operationId,
+      task_id: taskId,
+      attempt: 1,
+      generation: Number(claimed.generation),
+      revision: Number(claimed.revision),
+      claim_id: String(claimed.claim_id),
+      claim_worker_identity_digest: String(claimed.claim_worker_identity_digest),
+      worker_identity: workerIdentity,
+    };
+    const cancelPort = modules.createPort(store, {
+      workerIdentityVerifier: () => ({
+        state: "alive",
+        worker_identity_digest: claimed.claim_worker_identity_digest,
+        evidence_digest: identityDigest,
+      }),
+      cancellationVerifier: () => ({
+        state: "verified",
+        worker_identity_digest: claimed.claim_worker_identity_digest,
+        process_tree_digest: "a".repeat(64),
+        root_process_id: processId,
+        root_start_fingerprint: fingerprint,
+        worker_tree_complete: true,
+        evidence_digest: treeDigest,
+      }),
+    });
+    cancelPort.requestCancellation(fence, identityEvidence);
+    const afterIntent = port.readOperation(operationId) as Record<string, unknown>;
+    const verification = cancelPort.recordCancellationVerification({
+      ...fence,
+      revision: Number(afterIntent.revision),
+    }, treeEvidence) as Record<string, unknown>;
+    const afterVerification = port.readOperation(operationId) as Record<string, unknown>;
+    const finishedAt = new Date().toISOString();
+    port.commitResult({
+      operation_id: operationId,
+      task_id: taskId,
+      attempt: 1,
+      generation: Number(afterVerification.generation),
+      revision: Number(afterVerification.revision),
+      claim_id: String(afterVerification.claim_id),
+      claim_worker_identity_digest: String(afterVerification.claim_worker_identity_digest),
+      result_status: "cancelled",
+      cancel_verification_digest: String(verification.cancellation_verification_digest),
+      result: {
+        task_id: taskId,
+        attempt: 1,
+        status: "cancelled",
+        summary: "synthetic cancelled cleanup",
+        files_changed: [],
+        tests: [],
+        issues: [],
+        needs_master_decision: false,
+        zcode_output: "",
+        exit_code: null,
+        session_id: null,
+        started_at: new Date(Date.now() - 1_000).toISOString(),
+        finished_at: finishedAt,
+      },
+    });
+    const committed = port.readOperation(operationId) as Record<string, unknown>;
+    const cleanupFence = {
+      operation_id: operationId,
+      task_id: taskId,
+      attempt: 1,
+      generation: Number(committed.generation),
+      claim_id: String(committed.claim_id),
+      claim_worker_identity_digest: String(committed.claim_worker_identity_digest),
+    };
+    const pending = port.beginCleanup({
+      ...cleanupFence,
+      revision: Number(committed.revision),
+    }) as Record<string, unknown>;
+    port.recordCleanupEvidence({
+      ...cleanupFence,
+      revision: Number(pending.revision),
+      outcome: "unverified",
+      probe_state: "incomplete",
+      reason: "adapter_cleanup_unverified",
+    });
+    return { processId, fingerprint };
+  } finally {
+    store.close();
+  }
+}
+
 function seedReleasedTaskWithRuntimeEvents(
   dataRoot: string,
   modules: Awaited<ReturnType<typeof loadLifecycleCandidateModules>>,
@@ -217,6 +368,7 @@ function seedReleasedTaskWithRuntimeEvents(
       tool_name: "Read",
       tool_call_id: "event-pagination-tool",
     });
+    append(8, "turn_started", "synthetic turn started");
     const result = {
       task_id: taskId,
       attempt: 1,
@@ -3275,6 +3427,64 @@ test("formal MCP Manager routes SQLite Create/Worker/Result/Continue/Events/Feed
   }, { onStage: (stage, detail) => stages.push({ stage, detail }), testOnScheduler: (stage, detail) => stages.push({ stage: `manager_${stage}`, detail }) });
 });
 
+test("formal MCP Events attribute startup and Release across Attempts", { skip: process.platform !== "win32", timeout: 45_000 }, async () => {
+  const taskId = `mcp-attempt-events-${randomUUID()}`;
+  let releaseDispatch!: () => void;
+  const dispatchGate = new Promise<void>((resolve) => { releaseDispatch = resolve; });
+  await withSqliteMcp(async (client) => {
+    const args = { task_id: taskId, view: "summary", wait_for: "attention", limit: 200 };
+    const read = async (includeAttempt?: boolean) => contentObject(await client.callTool({
+      name: "zcode_events",
+      arguments: { ...args, ...(includeAttempt === undefined ? {} : { include_attempt: includeAttempt }) },
+    }));
+    const eventsOf = (page: Record<string, unknown>) => page.events as Array<{
+      type: string; attempt?: number; details?: { result_commit_ref?: string };
+    }>;
+    try {
+      contentObject(await client.callTool({
+        name: "zcode_continue", arguments: { task_id: taskId, feedback: "Check next Attempt" },
+      }));
+      const queued = await read(true);
+      assert.equal(queued.status, "queued");
+      assert.equal((queued.attention as { attempt: number }).attempt, 2);
+      const previous = eventsOf(queued);
+      assert.equal(previous.find((event) => event.type === "turn_started")?.attempt, 1);
+      assert.equal(previous.find((event) => event.type === "released")?.attempt, 1);
+      assert.ok(previous.every((event) => event.attempt === 1));
+      const legacy = await read();
+      assert.deepEqual(await read(false), legacy);
+      assert.deepEqual(legacy, { ...queued, events: previous.map(({ attempt, ...event }) => event) });
+
+      releaseDispatch();
+      await waitForTerminal(client, taskId, 2);
+      await waitForLifecycleEvent(client, taskId, "cleanup_unverified");
+      const held = await read(true);
+      assert.equal((held.attention as { attempt: number }).attempt, 2);
+      const events = eventsOf(held);
+      const firstRelease = events.find((event) => event.type === "released" && event.attempt === 1);
+      const firstCommit = events.find((event) => event.type === "result_committed" && event.attempt === 1);
+      const latestCommit = events.find((event) => event.type === "result_committed" && event.attempt === 2);
+      assert.ok(firstRelease?.details?.result_commit_ref);
+      assert.equal(firstRelease.details.result_commit_ref, firstCommit?.details?.result_commit_ref);
+      assert.ok(latestCommit?.details?.result_commit_ref);
+      assert.notEqual(latestCommit.details.result_commit_ref, firstRelease.details.result_commit_ref);
+      assert.ok(events.some((event) => event.type === "cleanup_unverified" && event.attempt === 2));
+      assert.ok(!events.some((event) => event.type === "released" && event.attempt === 2));
+    } finally {
+      releaseDispatch();
+    }
+  }, {
+    testBeforeDispatch: () => dispatchGate,
+    beforeAuthority: (dataRoot, modules, workspace) => {
+      seedReleasedTaskWithRuntimeEvents(dataRoot, modules, workspace, taskId, candidateOperationId(taskId, 1));
+    },
+    testVerifyProcessTreeClaimantsClean: async (targets) => {
+      const pids = targets.map((target) => target.pid);
+      return { clean: false, livePids: pids, observedPids: pids };
+    },
+  });
+});
+
 test("formal MCP Events summary advances across byte-bounded merge groups without losing raw events", { skip: process.platform !== "win32", timeout: 45_000 }, async () => {
   const taskId = `mcp-event-pagination-${randomUUID()}`;
   const operationId = candidateOperationId(taskId, 1);
@@ -3695,27 +3905,84 @@ test("formal MCP queued Cancel is persisted before SQLite dispatch and does not 
   }, { testBeforeDispatch: async () => { announce(); await dispatchGate; } }).finally(() => unblock());
 });
 
-test("formal MCP cancels orphaned Launch Intent durably without claiming Cleanup or releasing occupancy", { timeout: 30_000 }, async () => {
+test("formal MCP queued Cancel racing Launch Intent prevents Worker Spawn", { timeout: 30_000 }, async () => {
+  const taskId = `intent-cancel-race-${randomUUID()}`;
+  let spawned = 0;
+  try {
+    await withSqliteMcp(async (client, manager, dataRoot, workspace) => {
+      const created = contentObject(await client.callTool({ name: "zcode_task", arguments: syntheticTask(workspace, taskId) }));
+      assert.equal(created.status, "queued");
+      const modules = await loadLifecycleCandidateModules();
+      const reader = modules.Store.openForRecovery(dataRoot);
+      assert.ok(reader);
+      try {
+        const port = modules.createPort(reader);
+        const operation = port.readOperation(candidateOperationId(taskId, 1)) as Record<string, unknown>;
+        const status = await manager.cancelTask(taskId);
+        assert.equal(status.status, "cancelled");
+        const events = port.readTaskEvents(taskId, { afterCursor: 0, limit: 50 }).events as Array<Record<string, unknown>>;
+        assert.ok(events.some((event) => event.event_type === "observation_recorded"
+          && (event.evidence_json ? JSON.parse(String(event.evidence_json)) : event.details)?.reason === "cancelled_before_claim"));
+        assert.equal((port.readOperation(candidateOperationId(taskId, 1)) as Record<string, unknown>).phase, "launch_intent");
+      } finally { reader.close(); }
+    }, {
+      onStage: (stage) => {
+        if (stage === "intent_complete") {
+          // The stage hook is invoked synchronously between the Intent commit
+          // and the post-Intent Spawn fence below it.
+          throw new Error("controlled cancellation boundary");
+        }
+      },
+      onChildSpawn: () => { spawned += 1; },
+    });
+  } catch {
+    // The run is expected to fail while preserving the cancelled Intent; the
+    // durable assertions above already proved cancellation before Spawn.
+  } finally { }
+  assert.equal(spawned, 0, "a queued Cancel that reaches intent_complete must fence Worker Spawn");
+});
+
+test("formal MCP user-authorized cancel releases orphaned Launch Intent without claiming Cleanup", { timeout: 30_000 }, async () => {
   const taskId=`cancel-orphan-${randomUUID()}`,operationId=`op-${taskId}`;
+  const queuedTaskId=`queued-after-orphan-${randomUUID()}`;
   let spawned=0;
-  await withSqliteMcp(async(client,manager,dataRoot)=>{
-    const results=await Promise.all([1,2].map(()=>client.callTool({name:'zcode_cancel',arguments:{task_id:taskId}})));
-    for(const response of results){
-      const result=contentObject(response);
-      assert.equal(result.status,'cancelled');
-      assert.equal((result.execution_observation as Record<string,unknown>).state,'cleanup_held');
-    }
+  await withSqliteMcp(async(client,manager,dataRoot,workspace)=>{
+    const first=contentObject(await client.callTool({name:'zcode_cancel',arguments:{task_id:taskId}}));
+    assert.equal(first.status,'cancelled');
+    assert.equal((first.execution_observation as Record<string,unknown>).state,'cleanup_held');
+    const blocked=contentObject(await client.callTool({name:'zcode_task',arguments:syntheticTask(workspace,queuedTaskId)}));
+    assert.equal(blocked.status,'queued');
+    const blockedStatus=contentObject(await client.callTool({name:'zcode_status',arguments:{task_id:queuedTaskId}}));
+    const blocker=blockedStatus.dispatch_blocker as Record<string,unknown>;
+    assert.equal(blocker.task_id,taskId);
+    assert.equal(blocker.operation_id,operationId);
+    assert.equal(blocker.phase,'launch_intent');
+    assert.equal(blocker.workspace,workspace);
+    assert.equal(blocker.reason,'workspace_occupied');
+    assert.ok(Number(blocker.queued_duration_ms)>=0);
+    assert.ok(Number(blocker.blocked_duration_ms)>=0);
     assert.equal((await manager.getResult(taskId)).status,'cancelled');
+    const released=contentObject(await client.callTool({name:'zcode_cancel',arguments:{task_id:taskId}}));
+    assert.equal(released.status,'cancelled');
     const modules=await loadLifecycleCandidateModules(),reader=modules.Store.openForRecovery(dataRoot);
     assert.ok(reader);
     try{
       const snapshot=modules.createPort(reader).readRecoverySnapshot() as Record<string,unknown>;
       const operation=(snapshot.operations as Array<Record<string,unknown>>).find(row=>row.operation_id===operationId);
-      assert.equal(operation?.capacity_occupied,true);
+      assert.equal(operation?.phase,'released');
+      assert.equal(operation?.capacity_occupied,false);
+      assert.equal(operation?.cleanup_state,'unverified_admin_release');
       const events=await manager.getEvents({task_id:taskId,after_seq:0,limit:20});
       assert.equal(events.events.filter(event=>event.type==='cancelled').length,1);
+      const lifecycle=(await modules.createPort(reader).readLifecycleEvents(operationId)) as Array<Record<string,unknown>>;
+      const releaseEvidence=lifecycle.find(event=>event.event_type==='observation_recorded'
+        && JSON.parse(String(event.evidence_json)).reason==='user_authorized_release_unverified');
+      assert.ok(releaseEvidence);
+      assert.equal(lifecycle.some(event=>event.event_type==='cleanup_verified'),false);
     }finally{reader.close();}
-    assert.equal(spawned,0);
+    assert.equal((await waitForTerminal(client,queuedTaskId,1)).status,'completed');
+    await waitForLifecycleEvent(client,queuedTaskId,'released');
+    assert.equal(spawned,1,"the existing queued Task must be admitted after administrative release");
   },{beforeAuthority:(dataRoot,modules,workspace)=>{
     const store=modules.Store.open(dataRoot);
     try{
@@ -3727,6 +3994,193 @@ test("formal MCP cancels orphaned Launch Intent durably without claiming Cleanup
         revision:Number(admitted.revision),launch_id:`launch-${taskId}`,launch_epoch:1,launch_token:'orphan-cancel-token-0123456789'});
     }finally{store.close();}
   },onChildSpawn:()=>{spawned++;}});
+});
+
+test("formal MCP protects a pre-Claim Launch Intent with durable Spawn evidence and reports capacity-only blockers", { timeout: 30_000 }, async () => {
+  const taskId=`cancel-receipt-protected-${randomUUID()}`,operationId=`op-${taskId}`;
+  const queuedTaskId=`capacity-only-${randomUUID()}`;
+  await withSqliteMcp(async(client,_manager,dataRoot,workspace)=>{
+    const first=contentObject(await client.callTool({name:'zcode_cancel',arguments:{task_id:taskId}}));
+    assert.equal(first.status,'cancelled');
+    const otherWorkspace=path.join(path.dirname(workspace),'other-workspace');
+    mkdirSync(otherWorkspace,{recursive:true});
+    const queued=contentObject(await client.callTool({name:'zcode_task',arguments:syntheticTask(otherWorkspace,queuedTaskId)}));
+    assert.equal(queued.status,'queued');
+    const blocked=contentObject(await client.callTool({name:'zcode_status',arguments:{task_id:queuedTaskId}}));
+    const blocker=blocked.dispatch_blocker as Record<string,unknown>;
+    assert.equal(blocker.reason,'capacity_occupied');
+    assert.equal(blocker.task_id,taskId);
+    assert.notEqual(blocker.workspace,otherWorkspace);
+    const protectedCall=await client.callTool({name:'zcode_cancel',arguments:{task_id:taskId}});
+    assert.equal(protectedCall.isError,true);
+    const modules=await loadLifecycleCandidateModules(),reader=modules.Store.openForRecovery(dataRoot);
+    assert.ok(reader);
+    try{
+      const port=modules.createPort(reader);
+      const operation=port.readOperation(operationId) as Record<string,unknown>;
+      assert.equal(operation.phase,'launch_intent');
+      assert.notEqual(operation.launch_receipt_digest,null);
+      const events=port.readLifecycleEvents(operationId) as Array<Record<string,unknown>>;
+      assert.equal(events.some(event=>event.event_type==='released'),false);
+    }finally{reader.close();}
+  },{
+    prepareDataRoot:async(dataRoot)=>{
+      await initializeIsolatedCandidateRoot(dataRoot);
+      const modules=await loadLifecycleCandidateModules(),store=modules.Store.open(dataRoot);
+      try{
+        modules.createPort(store).provisionCapacity({operation_id:`policy-${randomUUID()}`,capacity_limit:1,
+          expected_generation:0,maintenance:{dispatch_blocked:true,writers_drained:true}});
+      }finally{store.close();}
+    },
+    beforeAuthority:(dataRoot,modules,workspace)=>{
+      const store=modules.Store.open(dataRoot);
+      try{
+        const port=modules.createPort(store),allow=()=>({state:'allow',fixture:true});
+        port.createTask(syntheticTask(workspace,taskId) as unknown as Parameters<typeof port.createTask>[0]);
+        const admitted=port.admitOperation({operation_id:operationId,task_id:taskId,attempt:1,workspace_ref:workspace},
+          {workspaceValidator:allow,executionPermissionCheck:allow}) as Record<string,unknown>;
+        const launch={operation_id:operationId,task_id:taskId,attempt:1,generation:Number(admitted.generation),
+          revision:Number(admitted.revision),launch_id:`launch-${taskId}`,launch_epoch:1,launch_token:`receipt-protected-${taskId}-0123456789`};
+        const intent=port.createLaunchIntent(launch) as Record<string,unknown>;
+        port.recordLaunchReceipt({...launch,revision:Number(intent.revision),receipt_id:`receipt-${taskId}`,
+          launch_identity:{source:'synthetic_fixture',fixture:true,process_id:43210,start_fingerprint:`fixture-${taskId}`}});
+      }finally{store.close();}
+    },
+  });
+});
+
+test("formal MCP does not report capacity pressure when another workspace is occupied below the configured limit", { timeout: 30_000 }, async () => {
+  const taskId=`capacity-headroom-${randomUUID()}`,operationId=`op-${taskId}`;
+  const queuedTaskId=`capacity-headroom-queued-${randomUUID()}`;
+  let announce!: () => void;
+  let unblock!: () => void;
+  const dispatchStarted=new Promise<void>(resolve=>{announce=resolve;});
+  const dispatchGate=new Promise<void>(resolve=>{unblock=resolve;});
+  await withSqliteMcp(async(client,_manager,_dataRoot,workspace)=>{
+    const first=contentObject(await client.callTool({name:'zcode_cancel',arguments:{task_id:taskId}}));
+    assert.equal(first.status,'cancelled');
+    const otherWorkspace=path.join(path.dirname(workspace),'other-workspace-headroom');
+    mkdirSync(otherWorkspace,{recursive:true});
+    const queued=contentObject(await client.callTool({name:'zcode_task',arguments:syntheticTask(otherWorkspace,queuedTaskId)}));
+    assert.equal(queued.status,'queued');
+    await dispatchStarted;
+    const status=contentObject(await client.callTool({name:'zcode_status',arguments:{task_id:queuedTaskId}}));
+    assert.equal(status.dispatch_blocker,undefined,'one occupied slot below a two-slot limit is not capacity pressure');
+    unblock();
+    assert.equal((await waitForTerminal(client,queuedTaskId,1)).status,'completed');
+    await waitForLifecycleEvent(client,queuedTaskId,'released');
+  },{
+    prepareDataRoot:async(dataRoot)=>{
+      await initializeIsolatedCandidateRoot(dataRoot);
+      const modules=await loadLifecycleCandidateModules(),store=modules.Store.open(dataRoot);
+      try{
+        modules.createPort(store).provisionCapacity({operation_id:`policy-${randomUUID()}`,capacity_limit:2,
+          expected_generation:0,maintenance:{dispatch_blocked:true,writers_drained:true}});
+      }finally{store.close();}
+    },
+    beforeAuthority:(dataRoot,modules,workspace)=>{
+      const store=modules.Store.open(dataRoot);
+      try{
+        const port=modules.createPort(store),allow=()=>({state:'allow',fixture:true});
+        port.createTask(syntheticTask(workspace,taskId) as unknown as Parameters<typeof port.createTask>[0]);
+        const admitted=port.admitOperation({operation_id:operationId,task_id:taskId,attempt:1,workspace_ref:workspace},
+          {workspaceValidator:allow,executionPermissionCheck:allow}) as Record<string,unknown>;
+        const launch={operation_id:operationId,task_id:taskId,attempt:1,generation:Number(admitted.generation),
+          revision:Number(admitted.revision),launch_id:`launch-${taskId}`,launch_epoch:1,launch_token:`capacity-headroom-${taskId}-0123456789`};
+        const intent=port.createLaunchIntent(launch) as Record<string,unknown>;
+        port.recordLaunchReceipt({...launch,revision:Number(intent.revision),receipt_id:`receipt-${taskId}`,
+          launch_identity:{source:'synthetic_fixture',fixture:true,process_id:43211,start_fingerprint:`fixture-${taskId}`}});
+      }finally{store.close();}
+    },
+    testBeforeDispatch:async()=>{announce();await dispatchGate;},
+  }).finally(()=>unblock());
+});
+
+for(const treeMode of ['clean','live','root-missing'] as const)test(`formal MCP user-authorized cleanup release is ${treeMode==='clean'?'allowed after exact exit and clean tree proof':treeMode==='live'?'blocked by a live descendant':'blocked when the clean scan omits the recorded root'}`,{timeout:45_000},async()=>{
+  const taskId=`cancel-cleanup-${treeMode}-${randomUUID()}`,operationId=`op-${taskId}`;
+  let seeded:{readonly processId:number;readonly fingerprint:string}|undefined;
+  const probe:ProcessProbe={...createPlatformProbe(),platform:'win32',async probe(requests){return requests.map(()=>({
+    state:'exited',reason_code:'synthetic_exact_exit',observed_at:new Date().toISOString(),
+  }));}};
+  await withSqliteMcp(async(client,_manager,dataRoot)=>{
+    const responses=await Promise.all([1,2].map(()=>client.callTool({name:'zcode_cancel',arguments:{task_id:taskId}})));
+    for(const response of responses){
+      if(treeMode!=='clean')assert.equal(response.isError,true);
+      else assert.equal(contentObject(response).status,'cancelled');
+    }
+    const modules=await loadLifecycleCandidateModules(),reader=modules.Store.openForRecovery(dataRoot);
+    assert.ok(reader);
+    try{
+      const port=modules.createPort(reader);
+      const operation=port.readOperation(operationId) as Record<string,unknown>;
+      const snapshot=port.readRecoverySnapshot() as {operations:Array<Record<string,unknown>>};
+      const occupied=snapshot.operations.find(item=>item.operation_id===operationId);
+      const events=port.readLifecycleEvents(operationId) as Array<Record<string,unknown>>;
+      if(treeMode!=='clean'){
+        assert.equal(operation.phase,'cleanup_unverified');
+        assert.equal(occupied?.capacity_occupied,true);
+        assert.equal(events.some(event=>JSON.parse(String(event.evidence_json)).reason==='user_authorized_release_unverified'),false);
+      }else{
+        assert.equal(operation.phase,'released');
+        assert.equal(occupied?.capacity_occupied,false);
+        assert.equal(occupied?.cleanup_state,'unverified_admin_release');
+        assert.equal(events.filter(event=>event.event_type==='result_committed').length,1);
+        assert.equal(events.filter(event=>event.event_type==='cleanup_unverified').length,1);
+        assert.equal(events.filter(event=>event.event_type==='cleanup_verified').length,0);
+        const releaseEvents=events.filter(event=>event.event_type==='observation_recorded'
+          &&JSON.parse(String(event.evidence_json)).reason==='user_authorized_release_unverified');
+        assert.equal(releaseEvents.length,1);
+      }
+    }finally{reader.close();}
+  },{
+    processProbe:probe,
+    testVerifyProcessTreeClaimantsClean:async targets=>treeMode==='clean'
+      ?{clean:true,livePids:[],observedPids:targets.map(target=>target.pid)}
+      :treeMode==='live'
+        ?{clean:false,livePids:[seeded!.processId+1],observedPids:[seeded!.processId,seeded!.processId+1]}
+        :{clean:true,livePids:[],observedPids:[]},
+    beforeAuthority:(dataRoot,modules,workspace)=>{seeded=seedCancelledCleanupHold(dataRoot,modules,workspace,taskId,operationId);},
+  });
+});
+
+for(const stopMode of ['still-alive','stop-failure'] as const)test(`formal MCP keeps a user-authorized cleanup Hold occupied when the Worker is ${stopMode==='still-alive'?'still alive':'not terminable'}`,{timeout:30_000},async()=>{
+  const taskId=`cancel-cleanup-${stopMode}-${randomUUID()}`,operationId=`op-${taskId}`;
+  let seeded:{readonly processId:number;readonly fingerprint:string}|undefined,stops=0,scans=0;
+  const probe:ProcessProbe={...createPlatformProbe(),platform:'win32',async probe(requests){return requests.map(()=>({
+    state:'alive',reason_code:'synthetic_worker_alive',observed_at:new Date().toISOString(),
+  }));}};
+  await withSqliteMcp(async(client,_manager,dataRoot)=>{
+    const responses=await Promise.all([1,2].map(()=>client.callTool({name:'zcode_cancel',arguments:{task_id:taskId}})));
+    for(const response of responses)assert.equal(response.isError,true);
+    assert.ok(stops>=1,'Recovery must attempt the explicitly authorized Worker stop');
+    assert.equal(scans,0,'a live or unverifiable Worker must not reach an administrative tree release');
+    const modules=await loadLifecycleCandidateModules(),reader=modules.Store.openForRecovery(dataRoot);
+    assert.ok(reader);
+    try{
+      const port=modules.createPort(reader);
+      const operation=port.readOperation(operationId) as Record<string,unknown>;
+      const snapshot=port.readRecoverySnapshot() as {operations:Array<Record<string,unknown>>};
+      const occupied=snapshot.operations.find(item=>item.operation_id===operationId);
+      const events=port.readLifecycleEvents(operationId) as Array<Record<string,unknown>>;
+      assert.equal(operation.phase,'cleanup_unverified');
+      assert.equal(occupied?.capacity_occupied,true);
+      assert.equal(occupied?.cleanup_state,'unverified');
+      assert.equal(events.filter(event=>event.event_type==='result_committed').length,1);
+      assert.equal(events.filter(event=>event.event_type==='cleanup_unverified').length,1);
+      assert.equal(events.some(event=>JSON.parse(String(event.evidence_json)).reason==='user_authorized_release_unverified'),false);
+    }finally{reader.close();}
+  },{
+    processProbe:probe,
+    testStopWorkerForRecovery:async()=>{
+      stops++;
+      if(stopMode==='stop-failure')throw new Error('synthetic_stop_failed');
+    },
+    testVerifyProcessTreeClaimantsClean:async()=>{
+      scans++;
+      return {clean:true,livePids:[],observedPids:[seeded!.processId]};
+    },
+    beforeAuthority:(dataRoot,modules,workspace)=>{seeded=seedCancelledCleanupHold(dataRoot,modules,workspace,taskId,operationId);},
+  });
 });
 
 for(const priorProof of [false,true])for(const scanClean of [false,true])test(`formal MCP cancels a running cleanup Hold only after fresh identity/tree proof (prior ${priorProof}, clean ${scanClean})`,{timeout:30_000},async()=>{

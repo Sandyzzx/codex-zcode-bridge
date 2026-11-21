@@ -148,6 +148,15 @@ export async function startExecutorService(options: ExecutorServiceOptions): Pro
           return { status: "release_unknown" as const, blockers: ["lease_ownership_unknown"] };
         }
         state = "shutdown_pending";
+        // Fence new lifecycle mutations first, then let accepted mutations
+        // settle. The control pipe remains open so a not-idle refusal can
+        // restore normal service without reopening the listener.
+        try {
+          await server.drainMutations();
+        } catch {
+          state = "lease_unknown";
+          return { status: "release_unknown" as const, blockers: ["control_request_drain_unknown"] };
+        }
         let idle: ReturnType<ExecutorAuthority["getExecutorIdleState"]>;
         try {
           idle = authority.getExecutorIdleState();

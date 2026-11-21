@@ -22,6 +22,8 @@ export interface ExecutorControlServerOptions {
 export interface ExecutorControlServerHandle {
   readonly pipeName: string;
   readonly connections: number;
+  /** Wait for already accepted mutating requests without closing the pipe. */
+  drainMutations(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -72,6 +74,15 @@ const MUTATING_METHODS = new Set<ExecutorControlRequest["method"]>([
   "cancelTask",
   "replyToInteraction",
 ]);
+const CONTROL_METHODS = new Set<ExecutorControlRequest["method"]>([
+  ...MUTATING_METHODS,
+  "getStatus",
+  "getResult",
+  "getEvents",
+  "getFeedback",
+  "getAttention",
+  "health",
+]);
 
 function fenceError(state: "active" | "shutdown_pending" | "lease_unknown" | "closed"):
   { readonly code: string; readonly message: string } | null {
@@ -88,11 +99,23 @@ function fenceError(state: "active" | "shutdown_pending" | "lease_unknown" | "cl
 }
 
 export function startExecutorControlServer(options: ExecutorControlServerOptions): Promise<ExecutorControlServerHandle> {
-  let state: "active" | "shutdown_pending" | "lease_unknown" | "closed" = "active";
   let closing = false;
+  let closePromise: Promise<void> | null = null;
+  let mutationsInFlight = 0;
+  const mutationWaiters = new Set<() => void>();
   const live = { service: "active" as "active" | "shutdown_pending" | "lease_unknown" | "closed", connections: 0 };
   const sockets = new Set<net.Socket>();
   const optionsExecutorState = () => options.executorState?.() ?? live.service;
+  const mutationFinished = (): void => {
+    mutationsInFlight = Math.max(0, mutationsInFlight - 1);
+    if (mutationsInFlight !== 0) return;
+    for (const resolve of mutationWaiters) resolve();
+    mutationWaiters.clear();
+  };
+  const drainMutations = (): Promise<void> => {
+    if (mutationsInFlight === 0) return Promise.resolve();
+    return new Promise<void>((resolve) => mutationWaiters.add(resolve));
+  };
   const server = net.createServer((socket) => {
     sockets.add(socket);
     live.connections += 1;
@@ -112,7 +135,8 @@ export function startExecutorControlServer(options: ExecutorControlServerOptions
         request = JSON.parse(chunk.toString("utf8")) as ExecutorControlRequest;
         if (request.protocol_version !== EXECUTOR_CONTROL_PROTOCOL_VERSION
           || typeof request.request_id !== "string" || !request.request_id
-          || typeof request.method !== "string") {
+          || typeof request.method !== "string"
+          || !CONTROL_METHODS.has(request.method)) {
           throw new Error("EXECUTOR_CONTROL_REQUEST_INVALID");
         }
       } catch (error) {
@@ -122,6 +146,8 @@ export function startExecutorControlServer(options: ExecutorControlServerOptions
       openRequests += 1;
       const currentState = optionsExecutorState();
       const fenced = MUTATING_METHODS.has(request.method) ? fenceError(currentState) : null;
+      const mutating = MUTATING_METHODS.has(request.method);
+      if (mutating) mutationsInFlight += 1;
       const operation = fenced
         ? Promise.reject(Object.assign(new Error(fenced.message), { code: fenced.code }))
         : request.method === "health"
@@ -135,6 +161,7 @@ export function startExecutorControlServer(options: ExecutorControlServerOptions
         })))
         .finally(() => {
           openRequests -= 1;
+          if (mutating) mutationFinished();
           maybeReadyToClose();
         });
     });
@@ -163,16 +190,20 @@ export function startExecutorControlServer(options: ExecutorControlServerOptions
       resolve({
         pipeName: options.pipeName,
         get connections() { return live.connections; },
+        drainMutations,
         async close() {
+          if (closePromise) return closePromise;
           if (live.service === "closed") return;
-          live.service = "shutdown_pending";
-          closing = true;
-          for (const socket of sockets) socket.end();
-          await new Promise<void>((resolveClose) => {
-            server.close(() => resolveClose());
-            if (live.connections === 0) resolveClose();
-          });
-          live.service = "closed";
+          closePromise = (async () => {
+            live.service = "shutdown_pending";
+            closing = true;
+            const closed = new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+            await drainMutations();
+            for (const socket of sockets) socket.end();
+            await closed;
+            live.service = "closed";
+          })();
+          return closePromise;
         },
       });
     });

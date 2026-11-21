@@ -85,6 +85,44 @@ test("aborting a request wait does not cancel the accepted task", async () => {
   }
 });
 
+test("closing the control pipe waits for an accepted mutation to settle", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "executor-ipc-"));
+  const manager = managerWith();
+  const server = await startExecutorControlServer({ pipeName: pipeName(root, "drain"), manager, leaseId: "lease-1" });
+  const client = new ExecutorControlClient({ pipeName: pipeName(root, "drain") });
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let entered!: () => void;
+  const accepted = new Promise<void>((resolve) => { entered = resolve; });
+  const originalCreate = manager.createTask.bind(manager);
+  manager.createTask = async (task: TaskPackage) => {
+    entered();
+    await gate;
+    return originalCreate(task);
+  };
+  try {
+    await client.connect();
+    const request = client.request("createTask", {
+      task: {
+        task_id: "task-drain", workspace: root, objective: "ACK", requirements: [],
+        allowed_paths: [], forbidden_paths: [], acceptance_criteria: [], test_commands: [],
+      },
+    });
+    await accepted;
+    const closing = server.close();
+    release();
+    const response = await request;
+    assert.equal(response.ok, true);
+    assert.equal(response.result?.task_id, "task-drain");
+    await closing;
+  } finally {
+    release();
+    client.close();
+    await server.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("lost submission responses are distinct from an unavailable Executor", async () => {
   const root = mkdtempSync(path.join(tmpdir(), "executor-ipc-"));
   const unavailable = new ExecutorControlClient({ pipeName: pipeName(root, "unavailable"), connectTimeoutMs: 50 });

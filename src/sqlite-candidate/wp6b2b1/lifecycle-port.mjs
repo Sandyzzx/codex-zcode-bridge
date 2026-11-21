@@ -26,6 +26,7 @@ const C2_METHODS = Object.freeze(['beginCleanup','recordCleanupEvidence','reveri
 const C3_READ_METHODS = Object.freeze(['readRecoverySnapshot']);
 const CANCEL_METHODS = Object.freeze(['requestCancellation','recordCancellationVerification']);
 const QUEUED_CANCEL_METHODS = Object.freeze(['cancelQueuedAttempt']);
+const USER_RELEASE_METHODS = Object.freeze(['userAuthorizedReleaseUnverifiedOperation']);
 const INTERACTION_METHODS = Object.freeze(['recordInteractionRequest','readInteractionRequest','beginInteractionReply','commitInteractionReply','completeInteractionReply']);
 const RUNTIME_EVENT_METHODS = Object.freeze(['appendRuntimeTaskEvent']);
 
@@ -47,6 +48,9 @@ export function createSqliteLifecyclePort(store,{recoveryEvidenceVerifier,worker
     if (typeof store[method] !== 'function') throw new TypeError(`candidate SQLite Store missing ${method}`);
   }
   for (const method of QUEUED_CANCEL_METHODS) {
+    if (typeof store[method] !== 'function') throw new TypeError(`candidate SQLite Store missing ${method}`);
+  }
+  for (const method of USER_RELEASE_METHODS) {
     if (typeof store[method] !== 'function') throw new TypeError(`candidate SQLite Store missing ${method}`);
   }
   for (const method of INTERACTION_METHODS) {
@@ -94,6 +98,12 @@ export function createSqliteLifecyclePort(store,{recoveryEvidenceVerifier,worker
     enumerable:true,
     value:input=>store.cancelQueuedAttempt(input),
   });
+  for (const method of USER_RELEASE_METHODS) {
+    Object.defineProperty(port, method, {
+      enumerable:true,
+      value:(...args)=>store[method](...args),
+    });
+  }
   Object.defineProperty(port,'readInteractionRequest',{
     enumerable:true,
     value:(taskId,requestId)=>store.readInteractionRequest(taskId,requestId),

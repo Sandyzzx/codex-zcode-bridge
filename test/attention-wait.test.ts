@@ -19,3 +19,13 @@ test("attention read failures propagate without fabricating empty success",async
   let reads=0;
   await assert.rejects(waitForAttentionSnapshot({timeoutMs:350,read:async()=>{if(++reads===1)return running();throw new Error("interaction_reply_outcome_unknown");},sleep:async()=>{}}),/interaction_reply_outcome_unknown/);
 });
+test("attention returns the exact interaction or terminal payload without waiting",async()=>{
+  const pending={...running(1,["request-1"]),status:"running" as const};
+  const interaction=await waitForAttentionSnapshot({read:async()=>pending,timeoutMs:0});
+  assert.equal(interaction.reason,"interaction");
+  assert.deepEqual(interaction.snapshot,pending);
+  const terminal={...running(2),status:"completed" as const};
+  const completed=await waitForAttentionSnapshot({read:async()=>terminal,timeoutMs:0});
+  assert.equal(completed.reason,"terminal");
+  assert.deepEqual(completed.snapshot,terminal);
+});

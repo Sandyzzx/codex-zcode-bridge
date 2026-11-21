@@ -212,6 +212,7 @@
         "src/mcp/main.ts",
         "src/mcp/server.ts",
         "src/mcp/schemas.ts",
+        "src/mcp/result-summary.ts",
         "src/host/stdio.ts"
       ]
     },

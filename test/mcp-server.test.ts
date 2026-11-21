@@ -144,11 +144,12 @@ class FakeTaskManager implements TaskManager {
 async function withServer(
   run: (client: Client, manager: FakeTaskManager) => Promise<void>,
   doctor?: () => Promise<{ checked_at: string; execution_mode: string; checks: Array<{ name: string; status: "ok" | "warning" | "error" | "unknown"; summary: string }> }>,
+  supportedProtocolVersions?: string[],
 ): Promise<void> {
   const manager = new FakeTaskManager();
   const server = createBridgeServer({ taskManager: manager, doctor });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: "protocol-test-client", version: "0.0.1" });
+  const client = new Client({ name: "protocol-test-client", version: "0.0.1" }, { supportedProtocolVersions });
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
   try {
     await run(client, manager);
@@ -438,8 +439,72 @@ test("zcode_result returns TASK_NOT_FINISHED as a tool error with a stable code"
     const structured = result.structuredContent as { error: { code: string; message: string } };
     assert.equal(structured.error.code, "TASK_NOT_FINISHED");
     assert.match(structured.error.message, /not finished/);
+    assert.deepEqual(await client.callTool({
+      name: "zcode_result",
+      arguments: { task_id: "task_1", view: "summary", expected_attempt: 1 },
+    }), result);
   });
 });
+
+for (const version of ["2025-11-25", "2025-06-18"]) {
+  test(`zcode_result preserves full evidence and adds an object-root summary (${version})`, async () => {
+    await withServer(async (client, manager) => {
+      assert.equal(client.getNegotiatedProtocolVersion(), version);
+      const tools = await client.listTools();
+      assert.equal(tools.tools.filter((tool) => tool.outputSchema !== undefined).length, 12);
+      const schema = tools.tools.find((tool) => tool.name === "zcode_result")!.outputSchema;
+      assert.equal(schema?.type, "object");
+      assert.deepEqual(schema?.oneOf, [{ required: ["zcode_output"] }, { required: ["projection"] }]);
+      const read = (args: Record<string, unknown> = {}) => client.callTool({
+        name: "zcode_result", arguments: { task_id: "task_1", ...args },
+      }) as Promise<CallToolResult>;
+      assert.deepEqual(await read({ view: "summary" }), await read());
+
+      manager.result = {
+        ...manager.result,
+        attempt: 2,
+        status: "failed",
+        error_code: "execution_side_effect_unverified",
+        needs_master_decision: true,
+        report_candidate: { summary: "unverified claims" },
+        zcode_output: "output\n".repeat(2_000),
+        files_changed: ["intact.txt", "x".repeat(300)],
+        tests: [
+          ...Array.from({ length: 12 }, () => ({ command: "check", status: "passed" as const, details: "log" })),
+          { command: "failed check", status: "failed" },
+          { command: "skipped check", status: "not_run" },
+        ],
+      };
+      const compact = await read({ view: "summary" });
+      assert.equal(compact.isError, undefined);
+      const content = compact.structuredContent as Record<string, unknown>;
+      assert.equal(content.attempt, 2);
+      assert.equal(content.status, "failed");
+      assert.equal(content.error_code, "execution_side_effect_unverified");
+      assert.equal(content.needs_master_decision, true);
+      assert.deepEqual(content.files_changed, ["intact.txt"]);
+      assert.ok(!("zcode_output" in content));
+      assert.deepEqual(content.projection, {
+        omitted_fields: ["zcode_output", "files_changed", "tests", "report_candidate"],
+        test_counts: { passed: 12, failed: 1, not_run: 1 },
+      });
+      assert.deepEqual(JSON.parse((compact.content[0] as { text: string }).text), content);
+
+      const full = await read({ view: "full", expected_attempt: 2 });
+      assert.deepEqual(full.structuredContent, manager.result);
+      assert.deepEqual(full, await read());
+      manager.result.attempt++;
+      const mismatch = await read({ view: "full", expected_attempt: 2 });
+      assert.equal(mismatch.isError, true);
+      assert.match((mismatch.content[0] as { text: string }).text, /^TASK_STATE: Expected Result Attempt 2, found 3/);
+      const callCount = manager.calls.length;
+      for (const args of [{ view: "other" }, { expected_attempt: 0 }, { unknown: true }]) {
+        assert.equal((await read(args)).isError, true);
+      }
+      assert.equal(manager.calls.length, callCount);
+    }, undefined, [version]);
+  });
+}
 
 test("zcode_result for waiting_for_master surfaces the subordinate decision verbatim", async () => {
   await withServer(async (client, manager) => {

@@ -13,6 +13,7 @@ import type {
   TaskResult,
   TaskStatus,
   TaskStatusRecord,
+  DispatchBlocker,
   ExecutionObservation,
   ZCodeInteractionReplyInput,
 } from "../interfaces.js";
@@ -30,6 +31,8 @@ const EXECUTION_OBSERVATION_PROBE_BUDGET_MS = 5_000;
 const DEFAULT_HOST_SHUTDOWN_WAIT_MS = 60_000;
 const PUMP_FAILURE_RECOVERY_RETRY_MS = 250;
 const EXECUTOR_IDLE_OPERATION_PHASES = new Set(["released", "cancelled_before_launch"]);
+/** Bound normal event pages while preserving cursor-based recovery for every persisted event. */
+export const DEFAULT_EVENT_PAGE_MAX_BYTES = 32 * 1024;
 
 type Driver = Awaited<ReturnType<typeof openClaimOnlyDriver>>;
 export type SqliteAuthorityOptions = ClaimOnlyDriverOptions & {
@@ -184,6 +187,9 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     const lastAt = events.events?.at(-1)?.at;
     const createdAt = string(projection.created_at, "task_created_at_missing");
     const status = taskStatus(projection.status);
+    const dispatchBlocker = status === "queued"
+      ? await this.#dispatchBlocker(taskId, snapshot)
+      : undefined;
     const workerIdentity = operation?.claim_worker_identity_json ? parseRecord(operation.claim_worker_identity_json) : null;
     const launchIdentity = !workerIdentity && operation?.launch_identity_json ? parseRecord(operation.launch_identity_json) : null;
     const workerPid = status === "running"
@@ -208,6 +214,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
         error: `Worker Result not committed: ${snapshot.result_submission_error}; execution is not retried and resources remain held pending identity-bound Recovery`,
       } : {}),
       ...(executionObservation ? { execution_observation: executionObservation } : {}),
+      ...(dispatchBlocker ? { dispatch_blocker: dispatchBlocker } : {}),
       ...(Number(attempt.attempt) > 0 ? {} : {}),
     };
   }
@@ -261,6 +268,8 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       const attention = await this.getAttention(input.task_id);
       return { ...page, status: attention.status, attention };
     }
+    const includeAttempt = input.include_attempt === true;
+    const eventBudget = resolveEventPageBudget(input.max_bytes);
     const deadline = Date.now() + waitMs;
     while (true) {
       const snapshot = this.#readSnapshot(input.task_id);
@@ -268,23 +277,25 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
         events: readonly Record<string, unknown>[]; nextCursor: number; hasMore: boolean;
       };
       const visiblePage = input.view === "summary"
-        ? mergeAdjacentModelOutputRows(page.events, input.max_bytes)
+        ? mergeAdjacentModelOutputRows(page.events, eventBudget.maxBytes, includeAttempt)
         : { rows: page.events, omittedEvents: 0, omittedEventsByRow: page.events.map(() => 0) };
       const projectedEvents = visiblePage.rows.map((value) => {
-        const event = toProgressEvent(value);
+        const event = toProgressEvent(value, includeAttempt);
         if (event.type !== "interaction_requested" || !event.details || typeof event.details.request_id !== "string") return event;
         const persisted = this.#driver.readInteractionRequest(input.task_id, event.details.request_id);
         if (!persisted) return event;
         const request = asRecord(persisted.request);
         return { ...event, details: { ...event.details, method: request.method, params: request.params } };
       });
-      const bounded = applyEventByteBudget(projectedEvents, page.nextCursor, input.max_bytes, cursor);
+      const bounded = applyEventByteBudget(projectedEvents, page.nextCursor, eventBudget.maxBytes, cursor, {
+        allowOversizedFirstEvent: eventBudget.allowOversizedFirstEvent,
+      });
       const { events, nextCursor, scanIncomplete } = bounded;
       const omittedEvents = visiblePage.omittedEventsByRow
         .slice(0, events.length)
         .reduce((total, count) => total + count, 0);
       const status = taskStatus(asRecord(snapshot.projection).status);
-      if (events.length || isTerminal(status) || Date.now() >= deadline) {
+      if (events.length || scanIncomplete || isTerminal(status) || Date.now() >= deadline) {
         return {
           task_id: input.task_id,
           status,
@@ -397,8 +408,10 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       return this.getStatus(taskId);
     }
     const operation = snapshot.operation ? asRecord(snapshot.operation) : null;
-    if (projection.status === "cancelled" && (!operation || operation.phase === "cancelled_before_launch"
-      || operation.phase === "launch_intent" && operation.claim_id === null)) return this.getStatus(taskId);
+    if (projection.status === "cancelled" && operation?.phase === "launch_intent" && operation.claim_id === null) {
+      return await this.#userAuthorizedRelease(taskId, snapshot);
+    }
+    if (projection.status === "cancelled" && (!operation || operation.phase === "cancelled_before_launch")) return this.getStatus(taskId);
     if (isTerminal(projection.status as TaskStatus) && operation?.phase === "released") {
       // A repeated recovery request is a read-only no-op after the durable
       // Release; do not append another lifecycle event or stop a new PID.
@@ -436,6 +449,12 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
           const released = await readReleased();
           if (released) return released;
           const reason = typeof outcome.reason === "string" ? outcome.reason : "worker_cleanup_unverified";
+          const latestProjection = asRecord(this.#readSnapshot(taskId).projection);
+          if (String(operation.phase) === "cleanup_unverified"
+            && latestProjection.status === "cancelled"
+            && canUserAuthorizeUnverifiedRelease(outcome)) {
+            return await this.#userAuthorizedRelease(taskId, this.#readSnapshot(taskId), outcome);
+          }
           throw new TaskManagerError("CANCEL_FAILED", `SQLite cleanup remains occupied for this workspace: ${reason}`);
         }
         this.#schedulePump();
@@ -444,6 +463,66 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       return recovery;
     }
     throw new TaskManagerError("TASK_STATE", `zcode_cancel is not allowed from SQLite status ${String(projection.status)}`);
+  }
+
+  async #userAuthorizedRelease(
+    taskId: string,
+    snapshot: TaskSnapshot,
+    authorizationEvidence: Record<string, unknown> = {},
+  ): Promise<TaskStatusRecord> {
+    const operation = snapshot.operation ? asRecord(snapshot.operation) : null;
+    const projection = asRecord(snapshot.projection);
+    if (projection.status !== "cancelled") {
+      throw new TaskManagerError("TASK_STATE", "user-authorized unverified release requires the original durable cancellation Result");
+    }
+    if (!operation || operation.phase !== "launch_intent" && operation.phase !== "cleanup_unverified") {
+      throw new TaskManagerError("TASK_STATE", "zcode_cancel has no user-authorized unverified release path for this Operation");
+    }
+    if (operation.phase === "launch_intent"
+      && (operation.launch_receipt_id !== null
+        || operation.launch_receipt_digest !== null
+        || operation.launch_identity_json !== null)) {
+      throw new TaskManagerError(
+        "CANCEL_FAILED",
+        "launch_intent has durable spawn evidence; user-authorized unverified release is not allowed",
+      );
+    }
+    const attempt = asRecord(snapshot.attempt);
+    const cancellation = operation.phase === "launch_intent" && typeof attempt.queued_cancel_id === "string"
+      ? { cancelId: attempt.queued_cancel_id, cancellationVerificationDigest: null }
+      : this.#readCancellationBinding(taskId, String(operation.operation_id));
+    const cancelId = cancellation?.cancelId ?? null;
+    if (!cancelId) throw new TaskManagerError("CANCEL_FAILED", "user-authorized unverified release requires the original durable cancellation Result");
+    const recoveryEvidenceDigest = operation.phase === "cleanup_unverified"
+      ? typeof authorizationEvidence.evidence_digest === "string" ? authorizationEvidence.evidence_digest : null
+      : null;
+    if (operation.phase === "cleanup_unverified"
+      && (!cancellation?.cancellationVerificationDigest || !recoveryEvidenceDigest)) {
+      throw new TaskManagerError("CANCEL_FAILED", "user-authorized cleanup release lacks bound cancellation or recovery evidence");
+    }
+    const releaseBinding = operation.phase === "cleanup_unverified" ? {
+      cancellation_verification_digest: string(cancellation?.cancellationVerificationDigest, "cancellation_verification_digest_missing"),
+      recovery_evidence_digest: string(recoveryEvidenceDigest, "recovery_evidence_digest_missing"),
+    } : {};
+    const outcome = asRecord(this.#driver.userAuthorizedReleaseUnverifiedOperation({
+      operation_id: string(operation.operation_id, "operation_id_missing"),
+      task_id: taskId,
+      attempt: Number(attempt.attempt),
+      generation: Number(operation.generation),
+      revision: Number(operation.revision),
+      cancel_id: cancelId,
+      release_reason: "user_authorized_release_unverified",
+      ...releaseBinding,
+    }));
+    if (outcome.phase !== "released" || outcome.cleanup_verified !== false) {
+      throw new TaskManagerError("CANCEL_FAILED", "SQLite user-authorized unverified release did not persist a distinct Release fact");
+    }
+    this.#schedulerStage("user_authorized_release_unverified", {
+      task_id: taskId, attempt: Number(attempt.attempt), operation_id: operation.operation_id,
+      duplicate: outcome.duplicate === true,
+    });
+    this.#schedulePump();
+    return await this.getStatus(taskId);
   }
 
   async replyToInteraction(input: ZCodeInteractionReplyInput): Promise<{ task_id: string; request_id: string; state: "answered" }> {
@@ -463,6 +542,81 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       throw error;
     }
     return { task_id: input.task_id, request_id: input.request_id, state: "answered" };
+  }
+
+  #readCancellationBinding(
+    taskId: string,
+    operationId: string,
+  ): { cancelId: string; cancellationVerificationDigest: string } | null {
+    let cursor = 0;
+    let resultVerificationDigest: string | null = null;
+    const verifications = new Map<string, string>();
+    while (true) {
+      const page = this.#driver.readTaskEvents(taskId, { afterCursor: cursor, limit: 200 }) as {
+        events?: readonly Record<string, unknown>[];
+        nextCursor?: unknown;
+        hasMore?: unknown;
+      };
+      const events = page.events ?? [];
+      for (const event of events) {
+        if (event.operation_id !== operationId) continue;
+        if (event.event_type === "result_committed") {
+          const evidence = parseRecord(string(event.evidence_json, "event_evidence_missing"));
+          if (evidence.outcome === "cancelled" && typeof evidence.cancel_verification_digest === "string") {
+            resultVerificationDigest = evidence.cancel_verification_digest;
+          }
+          continue;
+        }
+        if (event.event_type !== "observation_recorded") continue;
+        const evidence = parseRecord(string(event.evidence_json, "event_evidence_missing"));
+        if (evidence.reason === "cancel_tree_verified"
+          && typeof evidence.cancel_id === "string"
+          && typeof event.evidence_digest === "string") {
+          verifications.set(event.evidence_digest, evidence.cancel_id);
+        }
+      }
+      if (page.hasMore !== true || events.length === 0) break;
+      const nextCursor = Number(page.nextCursor ?? events.at(-1)?.cursor ?? events.at(-1)?.event_cursor);
+      if (!Number.isSafeInteger(nextCursor) || nextCursor <= cursor) return null;
+      cursor = nextCursor;
+    }
+    if (!resultVerificationDigest) return null;
+    const cancelId = verifications.get(resultVerificationDigest);
+    return cancelId ? { cancelId, cancellationVerificationDigest: resultVerificationDigest } : null;
+  }
+
+  async #dispatchBlocker(taskId: string, snapshot: TaskSnapshot): Promise<DispatchBlocker | undefined> {
+    const attempt = asRecord(snapshot.attempt);
+    if (snapshot.operation || Number(attempt.generation ?? 0) !== 0) return undefined;
+    const recoverySnapshot = this.#validateRecoverySnapshot(this.#driver.readRecoverySnapshot());
+    const task = snapshot.task;
+    const executionPath = taskExecutionPath(task);
+    const operations = recoverySnapshot.operations.map(asRecord).filter((operation) => operation.capacity_occupied === true);
+    const workspaceOccupied = operations.find((operation) => {
+      if (operation.task_id === taskId) return false;
+      const workspace = typeof operation.workspace_ref === "string" ? operation.workspace_ref : null;
+      return workspace !== null && executionPathsOverlap(workspace, executionPath);
+    });
+    const capacityOccupied = operations.length >= recoverySnapshot.capacity.capacity_limit
+      ? operations.find((operation) => operation.task_id !== taskId)
+      : undefined;
+    const occupied = workspaceOccupied ?? capacityOccupied;
+    if (!occupied) return undefined;
+    const createdAt = string(projectionCreated(snapshot), "task_created_at_missing");
+    const now = Date.now();
+    const operationCreated = typeof occupied.created_at === "string" ? Date.parse(occupied.created_at) : null;
+    const blockingWorkspace = string(occupied.workspace_ref, "blocking_workspace_missing");
+    const queuedCreated = Date.parse(createdAt);
+    const sameWorkspace = workspaceOccupied !== undefined;
+    return {
+      reason: sameWorkspace ? "workspace_occupied" : "capacity_occupied",
+      task_id: string(occupied.task_id, "blocking_task_id_missing"),
+      operation_id: string(occupied.operation_id, "blocking_operation_id_missing"),
+      phase: string(occupied.phase, "blocking_phase_missing"),
+      workspace: blockingWorkspace,
+      queued_duration_ms: nonNegativeDuration(now, queuedCreated),
+      blocked_duration_ms: nonNegativeDuration(now, operationCreated ?? 0),
+    };
   }
 
   async shutdown(): Promise<void> {
@@ -566,7 +720,12 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     this.#assertOpen();
     const blockers: string[] = [];
     if (this.#queue.length > 0) blockers.push("queued_attempt");
+    if (this.#queued.size > 0) blockers.push("queued_attempt");
     if (this.#activeRuns.size > 0) blockers.push("active_run");
+    if (this.#active > 0) blockers.push("active_pump");
+    if (this.#pumpPending) blockers.push("pump_pending");
+    if (this.#dispatchingPaths.size > 0) blockers.push("dispatching_path");
+    if (this.#recoveryRuns.size > 0) blockers.push("recovery_run");
     if (this.#awaitingDispatchPrerequisite) blockers.push("dispatch_prerequisite_pending");
     if (this.#recoveryInProgress || !this.#recoveryComplete || this.#recoveryBlocked) {
       blockers.push("recovery_pending");
@@ -769,7 +928,10 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     return { state, observed_at: observedAt, evidence_ref: reference };
   }
 
-  #validateRecoverySnapshot(value: unknown): { readonly operations: readonly unknown[] } {
+  #validateRecoverySnapshot(value: unknown): {
+    readonly operations: readonly unknown[];
+    readonly capacity: Readonly<{ capacity_limit: number }>;
+  } {
     const snapshot = asRecord(value);
     const capacity = snapshot.capacity ? asRecord(snapshot.capacity) : null;
     if (snapshot.root_status !== "consistent_read_only" || snapshot.writes_allowed !== false
@@ -781,7 +943,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       const blockers = Array.isArray(snapshot.root_blockers) ? snapshot.root_blockers.map(String).join(",") : "recovery_snapshot_invalid";
       throw new TaskManagerError("TASK_STATE", `SQLite Recovery is blocked (${blockers || "root_not_consistent"}); no lifecycle side effect was attempted`);
     }
-    return { operations: snapshot.operations };
+    return { operations: snapshot.operations, capacity: { capacity_limit: Number(capacity.capacity_limit) } };
   }
 
   #driverTrustedPolicy(): NonNullable<ClaimOnlyDriverOptions["trustedLocalContext"]>["policy"] {
@@ -1156,12 +1318,13 @@ function receipt(taskId: string, status: unknown, createdAt: unknown): TaskRecei
   return { task_id: taskId, status: status === "running" ? "running" : "queued", created_at: string(createdAt, "task_created_at_missing") };
 }
 
-function toProgressEvent(value: Record<string, unknown>): TaskProgressEvent {
+function toProgressEvent(value: Record<string, unknown>, includeAttempt: boolean): TaskProgressEvent {
   let details: Record<string, unknown> | undefined;
   try {
     const parsed: unknown = JSON.parse(string(value.evidence_json, "event_evidence_missing"));
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) details = parsed as Record<string, unknown>;
   } catch { throw new TaskManagerError("TASK_STATE", "SQLite lifecycle event evidence is corrupt"); }
+  const attempt = includeAttempt ? positiveOrNull(value.operation_attempt) : null;
   return {
     seq: Number(value.cursor ?? value.sequence),
     at: string(value.at, "event_time_missing"),
@@ -1169,6 +1332,7 @@ function toProgressEvent(value: Record<string, unknown>): TaskProgressEvent {
     summary: typeof value.summary === "string"
       ? value.summary
       : `SQLite lifecycle: ${string(value.event_type, "event_type_missing")}`,
+    ...(attempt === null ? {} : { attempt }),
     ...(details ? { details } : {}),
   };
 }
@@ -1179,6 +1343,7 @@ function toProgressEvent(value: Record<string, unknown>): TaskProgressEvent {
 export function mergeAdjacentModelOutputRows(
   rows: readonly Record<string, unknown>[],
   maxBytes?: number,
+  includeAttempt = false,
 ): {
   readonly rows: readonly Record<string, unknown>[];
   readonly omittedEvents: number;
@@ -1210,7 +1375,7 @@ export function mergeAdjacentModelOutputRows(
       : null;
     const mergeFits = candidate !== null
       && (maxBytes === undefined
-        || Buffer.byteLength(canonicalJson(toProgressEvent(candidate)), "utf8") <= maxBytes);
+        || Buffer.byteLength(canonicalJson(toProgressEvent(candidate, includeAttempt)), "utf8") <= maxBytes);
     if (candidate && mergeFits) {
       merged[merged.length - 1] = candidate;
       omittedEventsByRow[omittedEventsByRow.length - 1] = Number(omittedEventsByRow.at(-1)) + 1;
@@ -1228,6 +1393,7 @@ export function applyEventByteBudget(
   pageNextCursor: number,
   maxBytes: number | undefined,
   previousCursor = 0,
+  options: { readonly allowOversizedFirstEvent?: boolean } = {},
 ): { events: TaskProgressEvent[]; nextCursor: number; scanIncomplete: boolean } {
   if (maxBytes === undefined) {
     return { events: [...events], nextCursor: pageNextCursor, scanIncomplete: false };
@@ -1237,7 +1403,18 @@ export function applyEventByteBudget(
   for (const event of events) {
     const size = Buffer.byteLength(canonicalJson(event), "utf8");
     if (kept > 0 && bytes + size > maxBytes) break;
-    if (kept === 0 && size > maxBytes) return { events: [], nextCursor: previousCursor, scanIncomplete: true };
+    if (kept === 0 && size > maxBytes) {
+      if (!options.allowOversizedFirstEvent) {
+        return { events: [], nextCursor: previousCursor, scanIncomplete: true };
+      }
+      const first = events[0]!;
+      const nextCursor = first.seq;
+      return {
+        events: [first],
+        nextCursor,
+        scanIncomplete: events.length > 1 || nextCursor < pageNextCursor,
+      };
+    }
     bytes += size;
     kept += 1;
   }
@@ -1250,6 +1427,18 @@ export function applyEventByteBudget(
     nextCursor: visible.at(-1)?.seq ?? previousCursor,
     scanIncomplete: true,
   };
+}
+
+export function resolveEventPageBudget(maxBytes: number | undefined): {
+  readonly maxBytes: number;
+  readonly allowOversizedFirstEvent: boolean;
+} {
+  // Explicit callers keep the historical hard-budget behavior. The implicit
+  // default may return one oversized event so a large interaction cannot stall
+  // cursor progress forever.
+  return maxBytes === undefined
+    ? { maxBytes: DEFAULT_EVENT_PAGE_MAX_BYTES, allowOversizedFirstEvent: true }
+    : { maxBytes, allowOversizedFirstEvent: false };
 }
 
 function emptyEvidence(value: unknown): boolean {
@@ -1297,9 +1486,38 @@ function normalizeExecutionPath(value: string): string {
   const resolved = path.resolve(value).replace(/[\\/]+$/u, "");
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
+function nonNegativeDuration(now: number, createdAt: string | number): number {
+  const created = typeof createdAt === "number" ? createdAt : Date.parse(createdAt);
+  return Number.isFinite(created) ? Math.max(0, now - created) : 0;
+}
 
 function queueKey(taskId: string, attempt: number): string { return `${taskId}\0${attempt}`; }
 function isTerminal(status: TaskStatus): boolean { return ["completed", "failed", "cancelled", "waiting_for_master"].includes(status); }
+function projectionCreated(snapshot: TaskSnapshot): string {
+  return asRecord(snapshot.projection).created_at as string;
+}
+function canUserAuthorizeUnverifiedRelease(outcome: Record<string, unknown>): boolean {
+  // These are historical Cleanup evidence gaps only. An alive Worker or a
+  // failed termination is not in this set and must retain occupancy.
+  const reason = typeof outcome.reason === "string" ? outcome.reason : "";
+  const identityState = typeof outcome.identity_state === "string" ? outcome.identity_state : "";
+  const probeReason = typeof outcome.probe_reason === "string" ? outcome.probe_reason : "";
+  const disposition = typeof outcome.recovery_disposition === "string" ? outcome.recovery_disposition : "";
+  const stopFailure = probeReason === "worker_stop_unverified" || probeReason === "worker_stop_exit_unverified";
+  const treeEvidenceBlocks = disposition === "worker_still_alive"
+    || disposition === "process_tree_still_live"
+    || disposition === "process_tree_not_verified"
+    || disposition === "process_tree_probe_timeout"
+    || disposition === "process_tree_probe_rejected"
+    || outcome.process_tree_scan_clean === false;
+  return !stopFailure && !treeEvidenceBlocks
+    && identityState === "exited"
+    && outcome.process_tree_scan_clean === true
+    && outcome.process_tree_root_observed === true
+    && (reason === "adapter_cleanup_unverified"
+      || reason === "cleanup_incomplete"
+      || disposition === "complete_cleanup_closure_unavailable");
+}
 function delay(ms: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, ms)); }
 async function waitUntilDeadline<T>(operation: Promise<T>, deadline: number): Promise<T> {
   const remaining = deadline - Date.now();
