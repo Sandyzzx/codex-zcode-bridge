@@ -13,10 +13,12 @@
 | Preview Ready | `NO` | 候选 Windows/Ubuntu 托管 CI 待执行。真实 Host、调用行为和缓存待测 |
 | Stable Ready | `NO` | 需完成 Preview、受支持真实 Host E2E、计费实验、生命周期回归和发布审批 |
 
-本地候选回归：Windows `test:full` 965 PASS、0 FAIL、2 SKIP；SQLite v14
-`test:stress` 4/4 PASS；Cost Lab 86/86 PASS；正式 MCP/SQLite Attempt 归属测试
-4/4 PASS。提交后 T0 将在最终报告中记录。托管候选 CI、Ubuntu 候选 CI、真实 Host
-E2E 与缓存性能仍为 `NOT_RUN`。
+本地候选回归：提交后 `npm.cmd run test:affected -- --base 1f9ff9ef37528205e76156e13fe06ed2b1fd3711 --t0-only`
+通过，包含 typecheck、build、plugin validation、10 个生成物 freshness 与 diff check；
+日志为候选 `.run/token-efficiency-20261121/test-affected-t0-final.log`。Windows
+`test:full` 为 965 PASS、0 FAIL、2 SKIP；SQLite v14 `test:stress` 4/4 PASS；
+Cost Lab 86/86 PASS；正式 MCP/SQLite Attempt 归属测试 4/4 PASS。托管候选 CI、
+Ubuntu 候选 CI、真实 Host E2E 与缓存性能仍为 `NOT_RUN`。
 
 ## 真实请求预检
 
