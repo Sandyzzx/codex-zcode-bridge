@@ -1,9 +1,9 @@
 # Project State
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-20（ADR-042 Unknown Runtime Experimental Authorization）
-> Last verified: 2026-11-20，核对未知安装安全检查、精确指纹授权、Provider scope、3.19 零模型协议 Smoke、Coding Plan 单次真实执行、Start Plan 空权益阻断与定向测试；Billing 倍率保持 INCONCLUSIVE。
-> Verified against: ADR-042 implementation `15abe6becb13f383fee676a4ae20510d51f817fc`；authorization env forwarding `0e7134701d643c7b80def4e3cb80c95c63e34691`（tree `ec63f443cce54bad986eb47ab1b6274c604dcbfe`）；release baseline `aedeb2c2a1ea6f41ea3ac2d045f7ed0d75281552`
+> Last updated: 2026-11-21（ADR-043 SQLite v14 ONLY）
+> Last verified: 2026-11-21，核对 v14 Fresh/Existing、历史 v14 读取、v13/旧 Marker 非破坏性拒绝、生成物和测试退役；完整 Windows 回归 `952 tests / 950 PASS / 2 SKIP`，真实模型、OAuth 与 Billing E2E 为 `NOT_RUN`。
+> Verified against: ADR-043 candidate based on `c1245a02f8f9d4b6e1102eabac230b657d85de9b`
 
 当前发布状态：
 
@@ -23,7 +23,7 @@
 - Project Ledger、固定人类 Markdown 报告、每任务 Codex Rollout Token 采集和 Desktop task-index 私有写镜像已退役。用户已有 `.agent-ledger` 文件不由 Bridge 修改或删除；SQLite Task Authority 保持不变。
 - Result、进程退出、Cleanup 与 Release 是不同事实。官方 close resolved 不能单独授权 Release；exact Worker identity、recorded-tree scan、resource facts、Cleanup Digest 和现有 CAS 仍然必需。
 - Attention/Thin Waiter 读取同一 SQLite Authority；`zcode_doctor` 也绑定该 Authority。
-- 生产 Lifecycle Gate 在 bootstrap lock 内自动升级已有 v13 Authority 到 v14。离线副本升级工具继续保留；直接 Store 打开 v13 仍要求显式离线升级。
+- SQLite 支持统一为 `SQLite v14 ONLY`。生产 Lifecycle Gate 保留 Fresh v14、既有 v14、历史迁移记录、Recovery/Cleanup/Release；v13 数据库和未完成升级 Marker 以 `unsupported_sqlite_schema` 非破坏性拒绝。v13 自动/离线升级、冻结 Schema 和升级 CLI 已退役。
 - R7 在同一 v14 Authority 内使用 `runtime_task_events`。Worker 只通过一次性 fd14 提交 Runtime observation；Manager 从持久 Task/Attempt/Generation/Claim 派生绑定，SQLite 负责 sequence 幂等、stale-Attempt 拒绝和统一 public cursor。`zcode_events(view="summary")` 可合并相邻安全模型文本，`zcode_feedback` 只提供机器投影，缓存 Usage 与 Result 共用同一持久事实；Lifecycle Event 与 Runtime Event 仍分开。
 
 Preview.7 继承 Preview.6 固定的 ZCode `3.18.2`、commit `fec975905a2abd4c07e35c40d51fa097a2258ec9`、tree `5e90fec80706b8381f94e4eef48cf821b9868916` 和 AppServer `0.17.1`。制品只在 Windows x64、Node `24.16.0` 上完成构建、签名、加载与本地 clean-install 验证；其他 Node 24 patch level 和跨机器复现仍是 `NOT_VERIFIED`。已发布 Preview.5 的 3.18.0 输入作为历史回滚基线保留。Preview.7 的运行时差异来自 ADR-038：删除旧 Runtime 分发资源、退役已退出外围功能、修复 Usage/Context/Events/Recovery 说明与实现、保留 v14 历史字节，并收紧 CI/生成物门禁。
@@ -50,7 +50,7 @@ Preview.3 的 Start Plan 历史证据覆盖 Windows、官方 AppServer `0.17.1`�
 | Runtime-selected Provider capability gate | `PASS — CANDIDATE` | 官方 Provider registry + 当前账户配置分类；隐式 Coding Plan、隐式 Start Plan、其他 Provider 与显式 Provider 定向测试通过；真实模型请求 `NOT_RUN` |
 | 生产 Official Host Runtime Auth fail-closed | `PASS — CANDIDATE` | Resolver 缺失或拒绝时返回不可用，即使存在合成持久化 Key 也不回包；静态回包仅由 Test Adapter 覆盖 |
 | R7 Runtime Events/Usage | `PASS` | fd14 单向通道、v14 additive schema、sequence/cursor、stale Attempt、Feedback/Result 合成与旧 v14 兼容测试通过 |
-| SQLite 自动 v13→v14 升级与恢复 | `PASS` | 测试范围；含 occupied Attempt/Hold、rename/publication 中断 |
+| SQLite v13 非破坏性拒绝 | `PASS` | 无句柄文件预检、Lifecycle Gate 稳定错误、DB/WAL/SHM 与旧 Marker 原字节保留；完整回归 952/950/2，v14 Fresh/Existing 继续覆盖 |
 | 完整 Node/native/resource 闭包 | `PARTIAL` | 6 个 keyring 文件已在 clean checkout 解析、native load 并与 BOM bytes/hash 一致；完整动态资源闭包仍未认证 |
 | 正常 cleanup 的 native/resource 闭包 | `PARTIAL` | exact identity、tree scan 与 CAS 有定向证据；一般外部资源和 crash 矩阵未完成 |
 | 再分发/许可审查 | `PASS — OWNER_APPROVED_SCOPE` | 官方签名 runtime host 的再分发权利已由 Owner 确认；ZCode LICENSE/NOTICE 与 keyring license 文件进入 BOM；不是独立法律意见 |

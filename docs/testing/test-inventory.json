@@ -1,18 +1,18 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-11-20",
+  "generated_at": "2026-11-21",
   "generator": "npm run test:inventory",
   "summary": {
-    "executable_or_manual_files": 100,
-    "declarations": 906,
+    "executable_or_manual_files": 99,
+    "declarations": 894,
     "by_type": {
       "Unit": 224,
-      "Integration": 678,
+      "Integration": 666,
       "Stress": 4
     },
     "by_gate": {
       "T1": 263,
-      "T2": 639,
+      "T2": 627,
       "T3": 4
     },
     "stress_tests": 2,
@@ -6307,10 +6307,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-0BFC66582B870B01",
+      "test_id": "TII-47819E0BBA6C0775",
       "test_name": "generated artifact inventory covers every committed plugin build output",
       "test_file": "test/generated-artifacts.test.ts",
-      "test_line": 23,
+      "test_line": 22,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -6352,10 +6352,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-64A24A70AB96BB60",
+      "test_id": "TII-3492E68AF61549A0",
       "test_name": "the freshness command exposes the same inventory",
       "test_file": "test/generated-artifacts.test.ts",
-      "test_line": 42,
+      "test_line": 39,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -6397,10 +6397,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-CB6D88801A7C9BC5",
+      "test_id": "TII-BB3942D5B394C8B8",
       "test_name": "generated artifacts always check out with the generators' LF bytes",
       "test_file": "test/generated-artifacts.test.ts",
-      "test_line": 50,
+      "test_line": 47,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -6442,10 +6442,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-AE069A0F04ADDE43",
+      "test_id": "TII-02EC6556924068FF",
       "test_name": "byte-copied SQL inputs always check out with the generated LF bytes",
       "test_file": "test/generated-artifacts.test.ts",
-      "test_line": 54,
+      "test_line": 51,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -6729,8 +6729,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/json-history-result-exceptions.test.ts"
@@ -6776,8 +6775,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/json-history-result-exceptions.test.ts"
@@ -6823,8 +6821,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/json-history-result-exceptions.test.ts"
@@ -6873,7 +6870,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/mcp/main.ts",
         "src/mcp/server.ts",
         "src/mcp/schemas.ts",
@@ -15779,7 +15775,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -15792,10 +15787,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-83B531168BBA2029",
+      "test_id": "TII-C3B3C2516E8AD4C1",
       "test_name": "<dynamic-name>name@test/runtime/sqlite-fresh-install.test.ts",
       "test_file": "test/runtime/sqlite-fresh-install.test.ts",
-      "test_line": 25,
+      "test_line": 26,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -15833,8 +15828,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/runtime/sqlite-fresh-install.test.ts"
@@ -15884,7 +15878,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/runtime/paths.ts",
         "src/runtime/resolver.ts",
         "src/runtime/child-env.ts",
@@ -15949,7 +15942,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/mcp/main.ts",
         "src/mcp/server.ts",
         "src/mcp/schemas.ts",
@@ -16008,7 +16000,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/mcp/main.ts",
         "src/mcp/server.ts",
         "src/mcp/schemas.ts",
@@ -17328,7 +17319,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -17388,7 +17378,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -17451,7 +17440,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/spawn-worker.ts",
         "src/runtime/build-provenance.ts",
         "src/runtime/child-env.ts",
@@ -17516,7 +17504,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/spawn-worker.ts",
         "src/runtime/build-provenance.ts",
         "src/runtime/child-env.ts",
@@ -17581,7 +17568,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/spawn-worker.ts",
         "src/runtime/build-provenance.ts",
         "src/runtime/child-env.ts",
@@ -17646,7 +17632,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/spawn-worker.ts",
         "src/runtime/build-provenance.ts",
         "src/runtime/child-env.ts",
@@ -17711,7 +17696,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/spawn-worker.ts",
         "src/runtime/build-provenance.ts",
         "src/runtime/child-env.ts",
@@ -17776,7 +17760,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/spawn-worker.ts",
         "src/runtime/build-provenance.ts",
         "src/runtime/child-env.ts",
@@ -17841,7 +17824,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/spawn-worker.ts",
         "src/runtime/build-provenance.ts",
         "src/runtime/child-env.ts",
@@ -17906,7 +17888,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/spawn-worker.ts",
         "src/runtime/build-provenance.ts",
         "src/runtime/child-env.ts",
@@ -17977,7 +17958,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -18062,7 +18042,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -18147,7 +18126,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -18232,7 +18210,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -18317,7 +18294,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -18402,7 +18378,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -18434,8 +18409,8 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-135424EF25888FA7",
-      "test_name": "v13 startup upgrade preserves the interrupted Attempt and dispatches one new Attempt",
+      "test_id": "TII-DCECB2424BFCBB95",
+      "test_name": "online Recovery requeues a Worker that exits before Result and dispatches exactly one next Attempt",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
       "test_line": 650,
       "test_type": "Integration",
@@ -18487,7 +18462,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -18519,95 +18493,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-D0EB12B85A0CE1A7",
-      "test_name": "online Recovery requeues a Worker that exits before Result and dispatches exactly one next Attempt",
-      "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 773,
-      "test_type": "Integration",
-      "gate": "T2",
-      "runtime": "NOT_MEASURED",
-      "runtime_evidence": {
-        "actual_runtime_milliseconds": null,
-        "timeout_milliseconds": 90000,
-        "historical_baseline": null
-      },
-      "resource": [
-        "CPU",
-        "Disk",
-        "Memory",
-        "Process"
-      ],
-      "dependency": {
-        "static_source_imports": [
-          "src/adapters/process-spawn.ts",
-          "src/host/stdio.ts",
-          "src/manager/sqlite-lifecycle-mcp-authority.ts",
-          "src/mcp/server.ts",
-          "src/runtime/doctor.ts",
-          "src/runtime/process-probe.ts",
-          "src/store/lifecycle-gate.ts",
-          "src/workspace/direct-provider.ts"
-        ],
-        "impact_domains": [
-          "sqlite-persistence",
-          "manager-lifecycle",
-          "mcp-host",
-          "worker-launch",
-          "workspace-provider",
-          "process-cleanup-and-locks"
-        ]
-      },
-      "trigger_source_paths": [
-        "src/sqlite-candidate/**",
-        "src/runtime/sqlite-install-config.ts",
-        "src/runtime/sqlite-runtime-roster.ts",
-        "src/store/lifecycle-gate.ts",
-        "src/runtime/task-timeout.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/cli/admin-abandon-held-operation.ts",
-        "src/host/profile.ts",
-        "src/host/stdio.ts",
-        "src/runtime/doctor.ts",
-        "src/runtime/sqlite-doctor.ts",
-        "src/runtime/trusted-local-deployment.ts",
-        "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
-        "src/manager/errors.ts",
-        "src/manager/normalize.ts",
-        "src/runtime/process-probe.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/mcp/main.ts",
-        "src/mcp/server.ts",
-        "src/mcp/schemas.ts",
-        "src/host/stdio.ts",
-        "src/manager/spawn-worker.ts",
-        "src/runtime/build-provenance.ts",
-        "src/runtime/child-env.ts",
-        "src/runtime/node-runtime.ts",
-        "src/worker/production-adapter-selection.ts",
-        "src/worker/worker-main.ts",
-        "src/runtime/start-plan-private-channel.ts",
-        "src/runtime/start-plan-private-frame.ts",
-        "src/runtime/start-plan-private-lease.ts",
-        "src/runtime/start-plan-handle-gate.ts",
-        "src/workspace/direct-provider.ts",
-        "src/adapters/process-spawn.ts",
-        "src/adapters/windows-process-cleanup.ts",
-        "src/runtime/process-probe.ts",
-        "src/store/process-lock.ts",
-        "src/store/atomic-rename.ts"
-      ],
-      "trigger_test_files": [
-        "test/sqlite-candidate/wp6b-wiring/composition.test.ts"
-      ],
-      "stress_boundary": null
-    },
-    {
-      "test_id": "TII-C188E6924BBBF03F",
+      "test_id": "TII-1016C6DE642CF23C",
       "test_name": "<dynamic-name>`startup Recovery fences a ${recoveryProbeMode} Worker per Manager without latching interaction or cancellation`@test/sqlite-candidate/wp6b-wiring/composition.test.ts",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 829,
+      "test_line": 706,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -18657,7 +18546,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -18689,10 +18577,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-F91575E7820CE902",
+      "test_id": "TII-F5769849F6B5689D",
       "test_name": "SQLite Manager restart releases only persisted cleanup-verified Operations without spawning",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 1047,
+      "test_line": 924,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -18742,7 +18630,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -18774,10 +18661,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-23E260787A871B39",
+      "test_id": "TII-8289D60727E9C595",
       "test_name": "normal Cleanup independently scans the exact Worker root and binds adapter cleanup evidence",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 1195,
+      "test_line": 1072,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -18827,7 +18714,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -18859,10 +18745,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-B169A46ADA0AB278",
+      "test_id": "TII-6B6313737AA32C04",
       "test_name": "<dynamic-name>`${descendantCase.name} keeps normal Cleanup in Hold`@test/sqlite-candidate/wp6b-wiring/composition.test.ts",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 1246,
+      "test_line": 1123,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -18912,7 +18798,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -18944,10 +18829,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-5EA6C0A5BB4A9242",
+      "test_id": "TII-3302E5FC9E26FF7B",
       "test_name": "PID reuse or identity mismatch cannot authorize the normal Cleanup scan",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 1295,
+      "test_line": 1172,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -18997,7 +18882,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -19029,10 +18913,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-607B07F117AB9D86",
+      "test_id": "TII-550C878C72D2555E",
       "test_name": "missing adapter resource facts keep Cleanup in Hold without scanning or Release",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 1353,
+      "test_line": 1230,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -19082,7 +18966,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -19114,10 +18997,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-318FE3E8D0108AFD",
+      "test_id": "TII-17EC43E521C1530F",
       "test_name": "<dynamic-name>`normal Cleanup ${scanMode} keeps an incomplete-evidence Hold`@test/sqlite-candidate/wp6b-wiring/composition.test.ts",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 1393,
+      "test_line": 1270,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -19167,7 +19050,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -19199,10 +19081,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-CEF9902B1369CA8A",
+      "test_id": "TII-9C1433455F123EE3",
       "test_name": "a Worker crash after Result commit retains the existing Cleanup Hold",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 1431,
+      "test_line": 1308,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -19252,7 +19134,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -19284,10 +19165,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-2E62458E04CFA8A7",
+      "test_id": "TII-71E506242777EE50",
       "test_name": "a failed Worker close remains observable and online Recovery releases exactly once",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 1467,
+      "test_line": 1344,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -19337,7 +19218,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -19369,10 +19249,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-5D5648A37921B75B",
+      "test_id": "TII-D18B5E57E10AEC95",
       "test_name": "restart Recovery reuses persisted identity and retains incomplete scan evidence",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 1609,
+      "test_line": 1486,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -19422,7 +19302,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -19454,10 +19333,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-714B9BA789AE8ABC",
+      "test_id": "TII-708133D7D6A7F28D",
       "test_name": "Recovery reads lifecycle evidence across the Store's bounded 200-event pages",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 1872,
+      "test_line": 1716,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -19507,7 +19386,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -19539,10 +19417,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-4F9FC75535E4E155",
+      "test_id": "TII-4C7CD6C5BFF8AA37",
       "test_name": "execution observations expose all four read-only states without changing SQLite lifecycle facts",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 1892,
+      "test_line": 1736,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -19592,7 +19470,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -19624,10 +19501,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-98BE02E9CEC1DB7B",
+      "test_id": "TII-F095A3D191E1855E",
       "test_name": "Recovery rejects a full event page that cannot advance its cursor",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 2056,
+      "test_line": 1900,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -19677,7 +19554,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -19709,10 +19585,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-D3AB79F38082DC83",
+      "test_id": "TII-E14EA48405C37F93",
       "test_name": "<dynamic-name>`Manager Recovery mode ${mode.name} bounds probes and retains cleanup holds`@test/sqlite-candidate/wp6b-wiring/composition.test.ts",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 2334,
+      "test_line": 2177,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -19762,7 +19638,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -19794,10 +19669,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-D5F04E9AC74B71AA",
+      "test_id": "TII-F97A2BDE012936B2",
       "test_name": "Manager Recovery after restart releases exact exited Workers only after a clean claimant scan",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 2590,
+      "test_line": 2433,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -19847,7 +19722,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -19879,10 +19753,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-64CD5CE80CD81523",
+      "test_id": "TII-631ACAD1EF82596C",
       "test_name": "ADR-024 six lifecycle crash boundaries use hard Manager-process exits and restart Recovery",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 2799,
+      "test_line": 2642,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -19932,7 +19806,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -19964,10 +19837,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-DA2A33DDD261EFB1",
+      "test_id": "TII-83465770EA6196A6",
       "test_name": "R5 explicit cancel closes claimed Result-absent Workers after Manager hard exit and restart",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 2983,
+      "test_line": 2826,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -20017,7 +19890,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -20049,8 +19921,176 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-F32173FCD35BD4A2",
+      "test_id": "TII-DEE90F2B5158BF61",
       "test_name": "R5 persisted cancel-tree verification resumes after Manager loss without a second Spawn or Release",
+      "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
+      "test_line": 3121,
+      "test_type": "Integration",
+      "gate": "T2",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": 120000,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Disk",
+        "Memory",
+        "Process"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/adapters/process-spawn.ts",
+          "src/host/stdio.ts",
+          "src/manager/sqlite-lifecycle-mcp-authority.ts",
+          "src/mcp/server.ts",
+          "src/runtime/doctor.ts",
+          "src/runtime/process-probe.ts",
+          "src/store/lifecycle-gate.ts",
+          "src/workspace/direct-provider.ts"
+        ],
+        "impact_domains": [
+          "sqlite-persistence",
+          "manager-lifecycle",
+          "mcp-host",
+          "worker-launch",
+          "workspace-provider",
+          "process-cleanup-and-locks"
+        ]
+      },
+      "trigger_source_paths": [
+        "src/sqlite-candidate/**",
+        "src/runtime/sqlite-install-config.ts",
+        "src/runtime/sqlite-runtime-roster.ts",
+        "src/store/lifecycle-gate.ts",
+        "src/runtime/task-timeout.ts",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts",
+        "src/cli/admin-abandon-held-operation.ts",
+        "src/host/profile.ts",
+        "src/host/stdio.ts",
+        "src/runtime/doctor.ts",
+        "src/runtime/sqlite-doctor.ts",
+        "src/runtime/trusted-local-deployment.ts",
+        "src/runtime/trusted-local-policy-config.ts",
+        "src/runtime/trusted-local-profile.ts",
+        "src/manager/errors.ts",
+        "src/manager/normalize.ts",
+        "src/runtime/process-probe.ts",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts",
+        "src/mcp/main.ts",
+        "src/mcp/server.ts",
+        "src/mcp/schemas.ts",
+        "src/host/stdio.ts",
+        "src/manager/spawn-worker.ts",
+        "src/runtime/build-provenance.ts",
+        "src/runtime/child-env.ts",
+        "src/runtime/node-runtime.ts",
+        "src/worker/production-adapter-selection.ts",
+        "src/worker/worker-main.ts",
+        "src/runtime/start-plan-private-channel.ts",
+        "src/runtime/start-plan-private-frame.ts",
+        "src/runtime/start-plan-private-lease.ts",
+        "src/runtime/start-plan-handle-gate.ts",
+        "src/workspace/direct-provider.ts",
+        "src/adapters/process-spawn.ts",
+        "src/adapters/windows-process-cleanup.ts",
+        "src/runtime/process-probe.ts",
+        "src/store/process-lock.ts",
+        "src/store/atomic-rename.ts"
+      ],
+      "trigger_test_files": [
+        "test/sqlite-candidate/wp6b-wiring/composition.test.ts"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-7067E84CD9BD2747",
+      "test_name": "formal MCP Manager routes SQLite Create/Worker/Result/Continue/Events/Feedback without JSON writes",
+      "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
+      "test_line": 3241,
+      "test_type": "Integration",
+      "gate": "T2",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": 90000,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Disk",
+        "Memory",
+        "Process"
+      ],
+      "dependency": {
+        "static_source_imports": [
+          "src/adapters/process-spawn.ts",
+          "src/host/stdio.ts",
+          "src/manager/sqlite-lifecycle-mcp-authority.ts",
+          "src/mcp/server.ts",
+          "src/runtime/doctor.ts",
+          "src/runtime/process-probe.ts",
+          "src/store/lifecycle-gate.ts",
+          "src/workspace/direct-provider.ts"
+        ],
+        "impact_domains": [
+          "sqlite-persistence",
+          "manager-lifecycle",
+          "mcp-host",
+          "worker-launch",
+          "workspace-provider",
+          "process-cleanup-and-locks"
+        ]
+      },
+      "trigger_source_paths": [
+        "src/sqlite-candidate/**",
+        "src/runtime/sqlite-install-config.ts",
+        "src/runtime/sqlite-runtime-roster.ts",
+        "src/store/lifecycle-gate.ts",
+        "src/runtime/task-timeout.ts",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts",
+        "src/cli/admin-abandon-held-operation.ts",
+        "src/host/profile.ts",
+        "src/host/stdio.ts",
+        "src/runtime/doctor.ts",
+        "src/runtime/sqlite-doctor.ts",
+        "src/runtime/trusted-local-deployment.ts",
+        "src/runtime/trusted-local-policy-config.ts",
+        "src/runtime/trusted-local-profile.ts",
+        "src/manager/errors.ts",
+        "src/manager/normalize.ts",
+        "src/runtime/process-probe.ts",
+        "src/manager/sqlite-lifecycle-mcp-authority.ts",
+        "src/mcp/main.ts",
+        "src/mcp/server.ts",
+        "src/mcp/schemas.ts",
+        "src/host/stdio.ts",
+        "src/manager/spawn-worker.ts",
+        "src/runtime/build-provenance.ts",
+        "src/runtime/child-env.ts",
+        "src/runtime/node-runtime.ts",
+        "src/worker/production-adapter-selection.ts",
+        "src/worker/worker-main.ts",
+        "src/runtime/start-plan-private-channel.ts",
+        "src/runtime/start-plan-private-frame.ts",
+        "src/runtime/start-plan-private-lease.ts",
+        "src/runtime/start-plan-handle-gate.ts",
+        "src/workspace/direct-provider.ts",
+        "src/adapters/process-spawn.ts",
+        "src/adapters/windows-process-cleanup.ts",
+        "src/runtime/process-probe.ts",
+        "src/store/process-lock.ts",
+        "src/store/atomic-rename.ts"
+      ],
+      "trigger_test_files": [
+        "test/sqlite-candidate/wp6b-wiring/composition.test.ts"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-27B7C697542ACC81",
+      "test_name": "formal MCP Events summary advances across byte-bounded merge groups without losing raw events",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
       "test_line": 3278,
       "test_type": "Integration",
@@ -20058,176 +20098,6 @@
       "runtime": "NOT_MEASURED",
       "runtime_evidence": {
         "actual_runtime_milliseconds": null,
-        "timeout_milliseconds": 120000,
-        "historical_baseline": null
-      },
-      "resource": [
-        "CPU",
-        "Disk",
-        "Memory",
-        "Process"
-      ],
-      "dependency": {
-        "static_source_imports": [
-          "src/adapters/process-spawn.ts",
-          "src/host/stdio.ts",
-          "src/manager/sqlite-lifecycle-mcp-authority.ts",
-          "src/mcp/server.ts",
-          "src/runtime/doctor.ts",
-          "src/runtime/process-probe.ts",
-          "src/store/lifecycle-gate.ts",
-          "src/workspace/direct-provider.ts"
-        ],
-        "impact_domains": [
-          "sqlite-persistence",
-          "manager-lifecycle",
-          "mcp-host",
-          "worker-launch",
-          "workspace-provider",
-          "process-cleanup-and-locks"
-        ]
-      },
-      "trigger_source_paths": [
-        "src/sqlite-candidate/**",
-        "src/runtime/sqlite-install-config.ts",
-        "src/runtime/sqlite-runtime-roster.ts",
-        "src/store/lifecycle-gate.ts",
-        "src/runtime/task-timeout.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/cli/admin-abandon-held-operation.ts",
-        "src/host/profile.ts",
-        "src/host/stdio.ts",
-        "src/runtime/doctor.ts",
-        "src/runtime/sqlite-doctor.ts",
-        "src/runtime/trusted-local-deployment.ts",
-        "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
-        "src/manager/errors.ts",
-        "src/manager/normalize.ts",
-        "src/runtime/process-probe.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/mcp/main.ts",
-        "src/mcp/server.ts",
-        "src/mcp/schemas.ts",
-        "src/host/stdio.ts",
-        "src/manager/spawn-worker.ts",
-        "src/runtime/build-provenance.ts",
-        "src/runtime/child-env.ts",
-        "src/runtime/node-runtime.ts",
-        "src/worker/production-adapter-selection.ts",
-        "src/worker/worker-main.ts",
-        "src/runtime/start-plan-private-channel.ts",
-        "src/runtime/start-plan-private-frame.ts",
-        "src/runtime/start-plan-private-lease.ts",
-        "src/runtime/start-plan-handle-gate.ts",
-        "src/workspace/direct-provider.ts",
-        "src/adapters/process-spawn.ts",
-        "src/adapters/windows-process-cleanup.ts",
-        "src/runtime/process-probe.ts",
-        "src/store/process-lock.ts",
-        "src/store/atomic-rename.ts"
-      ],
-      "trigger_test_files": [
-        "test/sqlite-candidate/wp6b-wiring/composition.test.ts"
-      ],
-      "stress_boundary": null
-    },
-    {
-      "test_id": "TII-AD651F6CB5DB331C",
-      "test_name": "formal MCP Manager routes SQLite Create/Worker/Result/Continue/Events/Feedback without JSON writes",
-      "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 3398,
-      "test_type": "Integration",
-      "gate": "T2",
-      "runtime": "NOT_MEASURED",
-      "runtime_evidence": {
-        "actual_runtime_milliseconds": null,
-        "timeout_milliseconds": 90000,
-        "historical_baseline": null
-      },
-      "resource": [
-        "CPU",
-        "Disk",
-        "Memory",
-        "Process"
-      ],
-      "dependency": {
-        "static_source_imports": [
-          "src/adapters/process-spawn.ts",
-          "src/host/stdio.ts",
-          "src/manager/sqlite-lifecycle-mcp-authority.ts",
-          "src/mcp/server.ts",
-          "src/runtime/doctor.ts",
-          "src/runtime/process-probe.ts",
-          "src/store/lifecycle-gate.ts",
-          "src/workspace/direct-provider.ts"
-        ],
-        "impact_domains": [
-          "sqlite-persistence",
-          "manager-lifecycle",
-          "mcp-host",
-          "worker-launch",
-          "workspace-provider",
-          "process-cleanup-and-locks"
-        ]
-      },
-      "trigger_source_paths": [
-        "src/sqlite-candidate/**",
-        "src/runtime/sqlite-install-config.ts",
-        "src/runtime/sqlite-runtime-roster.ts",
-        "src/store/lifecycle-gate.ts",
-        "src/runtime/task-timeout.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/cli/admin-abandon-held-operation.ts",
-        "src/host/profile.ts",
-        "src/host/stdio.ts",
-        "src/runtime/doctor.ts",
-        "src/runtime/sqlite-doctor.ts",
-        "src/runtime/trusted-local-deployment.ts",
-        "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
-        "src/manager/errors.ts",
-        "src/manager/normalize.ts",
-        "src/runtime/process-probe.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/mcp/main.ts",
-        "src/mcp/server.ts",
-        "src/mcp/schemas.ts",
-        "src/host/stdio.ts",
-        "src/manager/spawn-worker.ts",
-        "src/runtime/build-provenance.ts",
-        "src/runtime/child-env.ts",
-        "src/runtime/node-runtime.ts",
-        "src/worker/production-adapter-selection.ts",
-        "src/worker/worker-main.ts",
-        "src/runtime/start-plan-private-channel.ts",
-        "src/runtime/start-plan-private-frame.ts",
-        "src/runtime/start-plan-private-lease.ts",
-        "src/runtime/start-plan-handle-gate.ts",
-        "src/workspace/direct-provider.ts",
-        "src/adapters/process-spawn.ts",
-        "src/adapters/windows-process-cleanup.ts",
-        "src/runtime/process-probe.ts",
-        "src/store/process-lock.ts",
-        "src/store/atomic-rename.ts"
-      ],
-      "trigger_test_files": [
-        "test/sqlite-candidate/wp6b-wiring/composition.test.ts"
-      ],
-      "stress_boundary": null
-    },
-    {
-      "test_id": "TII-914EE77ADC5C073F",
-      "test_name": "formal MCP Events summary advances across byte-bounded merge groups without losing raw events",
-      "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 3435,
-      "test_type": "Integration",
-      "gate": "T2",
-      "runtime": "NOT_MEASURED",
-      "runtime_evidence": {
-        "actual_runtime_milliseconds": null,
         "timeout_milliseconds": 45000,
         "historical_baseline": null
       },
@@ -20272,7 +20142,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -20304,10 +20173,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-80E6AD03C34CB4BD",
+      "test_id": "TII-7C0F0E6A1D1E5A3F",
       "test_name": "SQLite preserves JSON workspace semantics and the Host-selected execution worktree",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 3518,
+      "test_line": 3361,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -20357,7 +20226,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -20389,10 +20257,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-3499D8858A747391",
+      "test_id": "TII-201D13C123AAF84F",
       "test_name": "SQLite rejects workspace loss before Launch Intent and queued Cancel releases the untouched reservation",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 3603,
+      "test_line": 3446,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -20442,7 +20310,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -20474,10 +20341,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-077544A39B66097D",
+      "test_id": "TII-9AD8D08B85A476CE",
       "test_name": "startup dispatches only the persisted current queued Attempt and resumes its untouched reserved Operation",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 3709,
+      "test_line": 3552,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -20527,7 +20394,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -20559,10 +20425,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-EE156DB62C939BA8",
+      "test_id": "TII-3B5491308E5B80C0",
       "test_name": "formal MCP Continue survives Manager shutdown before Spawn and is dispatched once by the restarted Manager",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 3758,
+      "test_line": 3601,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -20612,7 +20478,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -20644,10 +20509,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-2802C4DEF4656F84",
+      "test_id": "TII-51681D2AABD6F581",
       "test_name": "formal MCP queued Cancel is persisted before SQLite dispatch and does not spawn a Worker",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 3838,
+      "test_line": 3681,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -20697,7 +20562,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -20729,10 +20593,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-6B801AB604BD832E",
+      "test_id": "TII-5BEA1E4EF2C05794",
       "test_name": "formal MCP cancels orphaned Launch Intent durably without claiming Cleanup or releasing occupancy",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 3855,
+      "test_line": 3698,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -20782,7 +20646,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -20814,10 +20677,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-B0AEF50B2805D732",
+      "test_id": "TII-091AE420776A0E5C",
       "test_name": "<dynamic-name>`formal MCP cancels a running cleanup Hold only after fresh identity/tree proof (prior ${priorProof}, clean ${scanClean})`@test/sqlite-candidate/wp6b-wiring/composition.test.ts",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 3889,
+      "test_line": 3732,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -20867,7 +20730,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -20899,10 +20761,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-F79B39269C5FD79F",
+      "test_id": "TII-D298C826BC7B95E2",
       "test_name": "formal MCP running Cancel persists intent, verifies the Worker tree, and releases only after Cleanup",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 3947,
+      "test_line": 3790,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -20952,7 +20814,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -20984,10 +20845,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-134FFFC3E749F5A6",
+      "test_id": "TII-5B3EC57399F62B4C",
       "test_name": "formal MCP concurrent zcode_cancel calls recover one held Task with one verified termination and Release",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 4003,
+      "test_line": 3846,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -21037,7 +20898,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -21069,10 +20929,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-FCB05BE35E71C936",
+      "test_id": "TII-978C077CD84B8445",
       "test_name": "formal MCP Host shutdown cancels an active Worker and closes only after verified Cleanup and Release",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 4179,
+      "test_line": 4022,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -21122,7 +20982,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -21154,10 +21013,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-40BF0D3B318C8884",
+      "test_id": "TII-65A0A7E3C72ED482",
       "test_name": "formal MCP Host shutdown lets a committed Result finish Cleanup without cancelling the terminal Attempt",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 4247,
+      "test_line": 4090,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -21207,7 +21066,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -21239,10 +21097,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-B4074A12F2BA7BEC",
+      "test_id": "TII-CFB09A9F8863E340",
       "test_name": "formal MCP Host shutdown is bounded on unknown cancellation and can be retried after verified Cleanup",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 4287,
+      "test_line": 4130,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -21292,7 +21150,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -21324,10 +21181,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-CEBB21299B67F498",
+      "test_id": "TII-DC8F4188FBCE7F62",
       "test_name": "formal SQLite MCP stdio shutdown closes only after verified Cleanup and Release",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 4355,
+      "test_line": 4198,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -21377,7 +21234,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -21409,10 +21265,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-7AC6FF917B8BB1A0",
+      "test_id": "TII-9FF2A734D4DA341C",
       "test_name": "stdio remains queryable after Unknown Shutdown and an existing Worker can commit before retry",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 4393,
+      "test_line": 4236,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -21462,7 +21318,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -21494,10 +21349,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-C39DE7D81E52CAD6",
+      "test_id": "TII-0E16B394A4467142",
       "test_name": "stdio EOF attempts graceful shutdown without promising a disconnected query channel",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 4575,
+      "test_line": 4418,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -21547,7 +21402,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -21579,10 +21433,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-55E7783D65AC25B2",
+      "test_id": "TII-5C1F777DE219D487",
       "test_name": "stdio Host restart preserves active Operation occupancy without replay or Root Hold",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 4594,
+      "test_line": 4437,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -21632,7 +21486,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -21664,10 +21517,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-86341B1452D523C4",
+      "test_id": "TII-4EC6898F74E5C520",
       "test_name": "formal MCP interaction reply uses persisted SQLite request and a verified live Worker channel",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 4636,
+      "test_line": 4479,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -21717,7 +21570,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -21749,10 +21601,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-57435F83E3AC1DE3",
+      "test_id": "TII-BB24FD33EDA429B6",
       "test_name": "SQLite Manager preserves attention waiting and rejects invalid cursors before waiting",
       "test_file": "test/sqlite-candidate/wp6b-wiring/composition.test.ts",
-      "test_line": 4674,
+      "test_line": 4517,
       "test_type": "Integration",
       "gate": "T2",
       "runtime": "NOT_MEASURED",
@@ -21802,7 +21654,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -21874,8 +21725,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/sqlite-candidate/wp6b-wiring/lifecycle-gate.test.ts"
@@ -21923,8 +21773,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/sqlite-candidate/wp6b-wiring/lifecycle-gate.test.ts"
@@ -21972,8 +21821,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/sqlite-candidate/wp6b-wiring/lifecycle-gate.test.ts"
@@ -22046,7 +21894,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -22151,7 +21998,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -22256,7 +22102,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -22361,7 +22206,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -22466,7 +22310,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -22571,7 +22414,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -22682,7 +22524,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -22790,7 +22631,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -22898,7 +22738,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -23006,7 +22845,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -23114,7 +22952,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -23222,7 +23059,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -23330,7 +23166,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -23438,7 +23273,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -23546,7 +23380,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -23654,7 +23487,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -23762,7 +23594,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -23870,7 +23701,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -23978,7 +23808,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -24086,7 +23915,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -24194,7 +24022,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -24302,7 +24129,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -24410,7 +24236,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -24518,7 +24343,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -24626,7 +24450,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -24734,7 +24557,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -24842,7 +24664,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -24950,7 +24771,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -25058,7 +24878,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -25163,7 +24982,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -25271,7 +25089,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -25379,7 +25196,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -25487,7 +25303,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -25595,7 +25410,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -25703,7 +25517,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -25811,7 +25624,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -25919,7 +25731,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -26027,7 +25838,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -26135,7 +25945,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -26243,7 +26052,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -26351,7 +26159,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -26456,7 +26263,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -26558,7 +26364,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -26660,7 +26465,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -26762,7 +26566,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -26864,7 +26667,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -26966,7 +26768,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -27068,7 +26869,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -27170,7 +26970,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -27376,8 +27175,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/sqlite-candidate/wp6b-wiring/trusted-local-policy.test.ts"
@@ -27424,8 +27222,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/sqlite-candidate/wp6b-wiring/trusted-local-policy.test.ts"
@@ -27472,8 +27269,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/sqlite-candidate/wp6b-wiring/trusted-local-policy.test.ts"
@@ -27520,8 +27316,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/sqlite-candidate/wp6b-wiring/trusted-local-policy.test.ts"
@@ -27568,8 +27363,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/sqlite-candidate/wp6b-wiring/trusted-local-policy.test.ts"
@@ -27616,8 +27410,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/sqlite-candidate/wp6b-wiring/trusted-local-policy.test.ts"
@@ -27664,8 +27457,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/sqlite-candidate/wp6b-wiring/trusted-local-policy.test.ts"
@@ -27712,8 +27504,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/sqlite-candidate/wp6b-wiring/trusted-local-policy.test.ts"
@@ -27762,7 +27553,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -27816,7 +27606,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -27870,7 +27659,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -27924,7 +27712,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -27978,7 +27765,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -28032,7 +27818,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -28086,7 +27871,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -28140,7 +27924,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -28194,7 +27977,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -28248,7 +28030,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -28302,7 +28083,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -28356,7 +28136,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -28410,7 +28189,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -28464,7 +28242,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -28518,7 +28295,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -28572,7 +28348,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -28626,7 +28401,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -28680,7 +28454,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -28734,7 +28507,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -28788,7 +28560,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -28842,7 +28613,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -28896,7 +28666,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -28950,7 +28719,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -29004,7 +28772,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -29058,7 +28825,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -29112,7 +28878,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -29166,7 +28931,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -29220,7 +28984,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -29274,7 +29037,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -29328,7 +29090,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -29382,7 +29143,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -29436,7 +29196,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -29490,7 +29249,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -29544,7 +29302,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -29599,7 +29356,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/spawn-worker.ts",
         "src/runtime/build-provenance.ts",
         "src/runtime/child-env.ts",
@@ -29659,7 +29415,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/spawn-worker.ts",
         "src/runtime/build-provenance.ts",
         "src/runtime/child-env.ts",
@@ -29719,7 +29474,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/spawn-worker.ts",
         "src/runtime/build-provenance.ts",
         "src/runtime/child-env.ts",
@@ -29779,7 +29533,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/spawn-worker.ts",
         "src/runtime/build-provenance.ts",
         "src/runtime/child-env.ts",
@@ -29836,7 +29589,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -29888,7 +29640,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/process-spawn.ts",
         "src/adapters/windows-process-cleanup.ts",
         "src/runtime/process-probe.ts",
@@ -29945,7 +29696,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -30011,7 +29761,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -30077,7 +29826,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -30143,7 +29891,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -30209,7 +29956,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -30275,7 +30021,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -30341,7 +30086,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -30407,7 +30151,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -30473,7 +30216,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -30539,7 +30281,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -30605,7 +30346,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -30671,7 +30411,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -30737,7 +30476,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -30803,7 +30541,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -30869,7 +30606,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -30935,7 +30671,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -31001,7 +30736,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -31067,7 +30801,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -31133,7 +30866,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -31199,7 +30931,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -31265,7 +30996,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -31331,7 +31061,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -31397,7 +31126,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -31463,7 +31191,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -31529,7 +31256,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -31595,7 +31321,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -31661,7 +31386,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -31727,7 +31451,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -31793,7 +31516,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -31859,7 +31581,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -31925,7 +31646,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -31991,7 +31711,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -32057,7 +31776,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -32123,7 +31841,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -32184,8 +31901,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/sqlite-candidate/wp6b2b1/schema-integrity.test.mjs"
@@ -32232,8 +31948,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/sqlite-candidate/wp6b2b1/schema-integrity.test.mjs"
@@ -32280,8 +31995,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/sqlite-candidate/wp6b2b1/schema-integrity.test.mjs"
@@ -32328,8 +32042,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/sqlite-candidate/wp6b2b1/schema-integrity.test.mjs"
@@ -32376,8 +32089,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/sqlite-candidate/wp6b2b1/schema-integrity.test.mjs"
@@ -32424,8 +32136,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/sqlite-candidate/wp6b2b1/schema-integrity.test.mjs"
@@ -32477,7 +32188,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -32552,7 +32262,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -32627,7 +32336,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -32702,7 +32410,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -32777,7 +32484,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -32852,7 +32558,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -32927,7 +32632,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -33002,7 +32706,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -33077,7 +32780,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -33152,7 +32854,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -33227,7 +32928,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -33302,7 +33002,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -33377,7 +33076,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -33452,7 +33150,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -33526,7 +33223,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -33586,7 +33282,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -33646,7 +33341,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -33706,7 +33400,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -33766,7 +33459,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -33826,7 +33518,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -33886,7 +33577,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -33946,7 +33636,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -34006,7 +33695,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -34066,7 +33754,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -34126,7 +33813,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -34186,7 +33872,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -34246,7 +33931,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -34306,7 +33990,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -34366,7 +34049,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -34426,7 +34108,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -34486,7 +34167,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -34546,7 +34226,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -34606,7 +34285,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -34666,7 +34344,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -34726,7 +34403,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -34786,7 +34462,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -34846,7 +34521,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -34906,7 +34580,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -34966,7 +34639,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -35036,7 +34708,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -35106,7 +34777,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -35176,7 +34846,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -35246,7 +34915,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -35316,7 +34984,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -35376,7 +35043,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -35436,7 +35102,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -35496,7 +35161,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -35556,7 +35220,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -35616,7 +35279,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -35676,7 +35338,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -35736,7 +35397,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -35796,7 +35456,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -35856,7 +35515,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -35916,7 +35574,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -35976,7 +35633,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -36036,7 +35692,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -36096,7 +35751,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -36156,7 +35810,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -36216,7 +35869,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -36276,7 +35928,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -36336,7 +35987,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -36396,7 +36046,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -36456,7 +36105,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -36516,7 +36164,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -36576,7 +36223,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -36636,7 +36282,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -36696,7 +36341,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -36756,7 +36400,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -36816,7 +36459,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -36876,7 +36518,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -36936,7 +36577,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -36996,7 +36636,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -37056,7 +36695,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -37116,7 +36754,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -37176,7 +36813,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -37237,7 +36873,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -37297,7 +36932,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -37357,7 +36991,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -37417,7 +37050,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -37477,7 +37109,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -37537,7 +37168,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -37592,8 +37222,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/sqlite-resource-stress.test.mjs"
@@ -37640,8 +37269,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/sqlite-resource-stress.test.mjs"
@@ -37688,8 +37316,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/sqlite-resource-stress.test.mjs"
@@ -37740,7 +37367,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -37800,7 +37426,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -37860,7 +37485,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -37920,7 +37544,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -37980,7 +37603,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -38040,7 +37662,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -38100,7 +37721,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -38160,7 +37780,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -38215,7 +37834,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -38270,7 +37888,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -38325,7 +37942,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -38380,7 +37996,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/manager/errors.ts",
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
@@ -38388,677 +38003,6 @@
       ],
       "trigger_test_files": [
         "test/sqlite-scoped-hold-scheduler.test.ts"
-      ],
-      "stress_boundary": null
-    },
-    {
-      "test_id": "TII-D840C00EEB463748",
-      "test_name": "explicit offline v13 copy upgrade preserves every row/event/digest and source bytes; v14 opens, v13 requires actionable upgrade",
-      "test_file": "test/sqlite-v14-upgrade.test.mjs",
-      "test_line": 108,
-      "test_type": "Integration",
-      "gate": "T2",
-      "runtime": "NOT_MEASURED",
-      "runtime_evidence": {
-        "actual_runtime_milliseconds": null,
-        "timeout_milliseconds": null,
-        "historical_baseline": null
-      },
-      "resource": [
-        "CPU",
-        "Disk",
-        "Memory"
-      ],
-      "dependency": {
-        "static_source_imports": [
-          "src/sqlite-candidate/wp6b2b1/lifecycle-port.ts",
-          "src/sqlite-candidate/wp6b2b1/store.ts",
-          "src/store/json-history-result-exceptions.ts"
-        ],
-        "impact_domains": [
-          "sqlite-persistence",
-          "manager-lifecycle",
-          "process-cleanup-and-locks"
-        ]
-      },
-      "trigger_source_paths": [
-        "src/sqlite-candidate/**",
-        "src/runtime/sqlite-install-config.ts",
-        "src/runtime/sqlite-runtime-roster.ts",
-        "src/store/lifecycle-gate.ts",
-        "src/runtime/task-timeout.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/cli/admin-abandon-held-operation.ts",
-        "src/host/profile.ts",
-        "src/host/stdio.ts",
-        "src/runtime/doctor.ts",
-        "src/runtime/sqlite-doctor.ts",
-        "src/runtime/trusted-local-deployment.ts",
-        "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
-        "src/manager/errors.ts",
-        "src/manager/normalize.ts",
-        "src/runtime/process-probe.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/adapters/process-spawn.ts",
-        "src/adapters/windows-process-cleanup.ts",
-        "src/runtime/process-probe.ts",
-        "src/store/process-lock.ts",
-        "src/store/atomic-rename.ts"
-      ],
-      "trigger_test_files": [
-        "test/sqlite-v14-upgrade.test.mjs"
-      ],
-      "stress_boundary": null
-    },
-    {
-      "test_id": "TII-6CA0258482C96C55",
-      "test_name": "upgrade refuses active/unknown lifecycle, marker, schema drift, occupied destination, online invocation and active writer",
-      "test_file": "test/sqlite-v14-upgrade.test.mjs",
-      "test_line": 119,
-      "test_type": "Integration",
-      "gate": "T2",
-      "runtime": "NOT_MEASURED",
-      "runtime_evidence": {
-        "actual_runtime_milliseconds": null,
-        "timeout_milliseconds": null,
-        "historical_baseline": null
-      },
-      "resource": [
-        "CPU",
-        "Disk",
-        "Memory"
-      ],
-      "dependency": {
-        "static_source_imports": [
-          "src/sqlite-candidate/wp6b2b1/lifecycle-port.ts",
-          "src/sqlite-candidate/wp6b2b1/store.ts",
-          "src/store/json-history-result-exceptions.ts"
-        ],
-        "impact_domains": [
-          "sqlite-persistence",
-          "manager-lifecycle",
-          "process-cleanup-and-locks"
-        ]
-      },
-      "trigger_source_paths": [
-        "src/sqlite-candidate/**",
-        "src/runtime/sqlite-install-config.ts",
-        "src/runtime/sqlite-runtime-roster.ts",
-        "src/store/lifecycle-gate.ts",
-        "src/runtime/task-timeout.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/cli/admin-abandon-held-operation.ts",
-        "src/host/profile.ts",
-        "src/host/stdio.ts",
-        "src/runtime/doctor.ts",
-        "src/runtime/sqlite-doctor.ts",
-        "src/runtime/trusted-local-deployment.ts",
-        "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
-        "src/manager/errors.ts",
-        "src/manager/normalize.ts",
-        "src/runtime/process-probe.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/adapters/process-spawn.ts",
-        "src/adapters/windows-process-cleanup.ts",
-        "src/runtime/process-probe.ts",
-        "src/store/process-lock.ts",
-        "src/store/atomic-rename.ts"
-      ],
-      "trigger_test_files": [
-        "test/sqlite-v14-upgrade.test.mjs"
-      ],
-      "stress_boundary": null
-    },
-    {
-      "test_id": "TII-5B19F369BCE73EAB",
-      "test_name": "failed destination is fenced, source is intact and the CLI can be retried into another empty root",
-      "test_file": "test/sqlite-v14-upgrade.test.mjs",
-      "test_line": 132,
-      "test_type": "Integration",
-      "gate": "T2",
-      "runtime": "NOT_MEASURED",
-      "runtime_evidence": {
-        "actual_runtime_milliseconds": null,
-        "timeout_milliseconds": null,
-        "historical_baseline": null
-      },
-      "resource": [
-        "CPU",
-        "Disk",
-        "Memory"
-      ],
-      "dependency": {
-        "static_source_imports": [
-          "src/sqlite-candidate/wp6b2b1/lifecycle-port.ts",
-          "src/sqlite-candidate/wp6b2b1/store.ts",
-          "src/store/json-history-result-exceptions.ts"
-        ],
-        "impact_domains": [
-          "sqlite-persistence",
-          "manager-lifecycle",
-          "process-cleanup-and-locks"
-        ]
-      },
-      "trigger_source_paths": [
-        "src/sqlite-candidate/**",
-        "src/runtime/sqlite-install-config.ts",
-        "src/runtime/sqlite-runtime-roster.ts",
-        "src/store/lifecycle-gate.ts",
-        "src/runtime/task-timeout.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/cli/admin-abandon-held-operation.ts",
-        "src/host/profile.ts",
-        "src/host/stdio.ts",
-        "src/runtime/doctor.ts",
-        "src/runtime/sqlite-doctor.ts",
-        "src/runtime/trusted-local-deployment.ts",
-        "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
-        "src/manager/errors.ts",
-        "src/manager/normalize.ts",
-        "src/runtime/process-probe.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/adapters/process-spawn.ts",
-        "src/adapters/windows-process-cleanup.ts",
-        "src/runtime/process-probe.ts",
-        "src/store/process-lock.ts",
-        "src/store/atomic-rename.ts"
-      ],
-      "trigger_test_files": [
-        "test/sqlite-v14-upgrade.test.mjs"
-      ],
-      "stress_boundary": null
-    },
-    {
-      "test_id": "TII-7A7AF5B120DC9366",
-      "test_name": "fresh native v14 Task, Result and Runtime Event facts survive reopen",
-      "test_file": "test/sqlite-v14-upgrade.test.mjs",
-      "test_line": 141,
-      "test_type": "Integration",
-      "gate": "T2",
-      "runtime": "NOT_MEASURED",
-      "runtime_evidence": {
-        "actual_runtime_milliseconds": null,
-        "timeout_milliseconds": null,
-        "historical_baseline": null
-      },
-      "resource": [
-        "CPU",
-        "Disk",
-        "Memory"
-      ],
-      "dependency": {
-        "static_source_imports": [
-          "src/sqlite-candidate/wp6b2b1/lifecycle-port.ts",
-          "src/sqlite-candidate/wp6b2b1/store.ts",
-          "src/store/json-history-result-exceptions.ts"
-        ],
-        "impact_domains": [
-          "sqlite-persistence",
-          "manager-lifecycle",
-          "process-cleanup-and-locks"
-        ]
-      },
-      "trigger_source_paths": [
-        "src/sqlite-candidate/**",
-        "src/runtime/sqlite-install-config.ts",
-        "src/runtime/sqlite-runtime-roster.ts",
-        "src/store/lifecycle-gate.ts",
-        "src/runtime/task-timeout.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/cli/admin-abandon-held-operation.ts",
-        "src/host/profile.ts",
-        "src/host/stdio.ts",
-        "src/runtime/doctor.ts",
-        "src/runtime/sqlite-doctor.ts",
-        "src/runtime/trusted-local-deployment.ts",
-        "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
-        "src/manager/errors.ts",
-        "src/manager/normalize.ts",
-        "src/runtime/process-probe.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/adapters/process-spawn.ts",
-        "src/adapters/windows-process-cleanup.ts",
-        "src/runtime/process-probe.ts",
-        "src/store/process-lock.ts",
-        "src/store/atomic-rename.ts"
-      ],
-      "trigger_test_files": [
-        "test/sqlite-v14-upgrade.test.mjs"
-      ],
-      "stress_boundary": null
-    },
-    {
-      "test_id": "TII-4F9ED2CCD818F87D",
-      "test_name": "mixed migrated and native v14 authority preserves native Tasks and keeps retired history non-queryable",
-      "test_file": "test/sqlite-v14-upgrade.test.mjs",
-      "test_line": 157,
-      "test_type": "Integration",
-      "gate": "T2",
-      "runtime": "NOT_MEASURED",
-      "runtime_evidence": {
-        "actual_runtime_milliseconds": null,
-        "timeout_milliseconds": null,
-        "historical_baseline": null
-      },
-      "resource": [
-        "CPU",
-        "Disk",
-        "Memory"
-      ],
-      "dependency": {
-        "static_source_imports": [
-          "src/sqlite-candidate/wp6b2b1/lifecycle-port.ts",
-          "src/sqlite-candidate/wp6b2b1/store.ts",
-          "src/store/json-history-result-exceptions.ts"
-        ],
-        "impact_domains": [
-          "sqlite-persistence",
-          "manager-lifecycle",
-          "process-cleanup-and-locks"
-        ]
-      },
-      "trigger_source_paths": [
-        "src/sqlite-candidate/**",
-        "src/runtime/sqlite-install-config.ts",
-        "src/runtime/sqlite-runtime-roster.ts",
-        "src/store/lifecycle-gate.ts",
-        "src/runtime/task-timeout.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/cli/admin-abandon-held-operation.ts",
-        "src/host/profile.ts",
-        "src/host/stdio.ts",
-        "src/runtime/doctor.ts",
-        "src/runtime/sqlite-doctor.ts",
-        "src/runtime/trusted-local-deployment.ts",
-        "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
-        "src/manager/errors.ts",
-        "src/manager/normalize.ts",
-        "src/runtime/process-probe.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/adapters/process-spawn.ts",
-        "src/adapters/windows-process-cleanup.ts",
-        "src/runtime/process-probe.ts",
-        "src/store/process-lock.ts",
-        "src/store/atomic-rename.ts"
-      ],
-      "trigger_test_files": [
-        "test/sqlite-v14-upgrade.test.mjs"
-      ],
-      "stress_boundary": null
-    },
-    {
-      "test_id": "TII-DC0DE633489296CD",
-      "test_name": "previously authorized administrative abandonment migrates unchanged and is not converted to a Result or Cleanup Verified",
-      "test_file": "test/sqlite-v14-upgrade.test.mjs",
-      "test_line": 178,
-      "test_type": "Integration",
-      "gate": "T2",
-      "runtime": "NOT_MEASURED",
-      "runtime_evidence": {
-        "actual_runtime_milliseconds": null,
-        "timeout_milliseconds": null,
-        "historical_baseline": null
-      },
-      "resource": [
-        "CPU",
-        "Disk",
-        "Memory"
-      ],
-      "dependency": {
-        "static_source_imports": [
-          "src/sqlite-candidate/wp6b2b1/lifecycle-port.ts",
-          "src/sqlite-candidate/wp6b2b1/store.ts",
-          "src/store/json-history-result-exceptions.ts"
-        ],
-        "impact_domains": [
-          "sqlite-persistence",
-          "manager-lifecycle",
-          "process-cleanup-and-locks"
-        ]
-      },
-      "trigger_source_paths": [
-        "src/sqlite-candidate/**",
-        "src/runtime/sqlite-install-config.ts",
-        "src/runtime/sqlite-runtime-roster.ts",
-        "src/store/lifecycle-gate.ts",
-        "src/runtime/task-timeout.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/cli/admin-abandon-held-operation.ts",
-        "src/host/profile.ts",
-        "src/host/stdio.ts",
-        "src/runtime/doctor.ts",
-        "src/runtime/sqlite-doctor.ts",
-        "src/runtime/trusted-local-deployment.ts",
-        "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
-        "src/manager/errors.ts",
-        "src/manager/normalize.ts",
-        "src/runtime/process-probe.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/adapters/process-spawn.ts",
-        "src/adapters/windows-process-cleanup.ts",
-        "src/runtime/process-probe.ts",
-        "src/store/process-lock.ts",
-        "src/store/atomic-rename.ts"
-      ],
-      "trigger_test_files": [
-        "test/sqlite-v14-upgrade.test.mjs"
-      ],
-      "stress_boundary": null
-    },
-    {
-      "test_id": "TII-B3D0ACC0A130CADD",
-      "test_name": "shipped standalone upgrade command validates an isolated copy and leaves the source version unchanged",
-      "test_file": "test/sqlite-v14-upgrade.test.mjs",
-      "test_line": 196,
-      "test_type": "Integration",
-      "gate": "T2",
-      "runtime": "NOT_MEASURED",
-      "runtime_evidence": {
-        "actual_runtime_milliseconds": null,
-        "timeout_milliseconds": null,
-        "historical_baseline": null
-      },
-      "resource": [
-        "CPU",
-        "Disk",
-        "Memory"
-      ],
-      "dependency": {
-        "static_source_imports": [
-          "src/sqlite-candidate/wp6b2b1/lifecycle-port.ts",
-          "src/sqlite-candidate/wp6b2b1/store.ts",
-          "src/store/json-history-result-exceptions.ts"
-        ],
-        "impact_domains": [
-          "sqlite-persistence",
-          "manager-lifecycle",
-          "process-cleanup-and-locks"
-        ]
-      },
-      "trigger_source_paths": [
-        "src/sqlite-candidate/**",
-        "src/runtime/sqlite-install-config.ts",
-        "src/runtime/sqlite-runtime-roster.ts",
-        "src/store/lifecycle-gate.ts",
-        "src/runtime/task-timeout.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/cli/admin-abandon-held-operation.ts",
-        "src/host/profile.ts",
-        "src/host/stdio.ts",
-        "src/runtime/doctor.ts",
-        "src/runtime/sqlite-doctor.ts",
-        "src/runtime/trusted-local-deployment.ts",
-        "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
-        "src/manager/errors.ts",
-        "src/manager/normalize.ts",
-        "src/runtime/process-probe.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/adapters/process-spawn.ts",
-        "src/adapters/windows-process-cleanup.ts",
-        "src/runtime/process-probe.ts",
-        "src/store/process-lock.ts",
-        "src/store/atomic-rename.ts"
-      ],
-      "trigger_test_files": [
-        "test/sqlite-v14-upgrade.test.mjs"
-      ],
-      "stress_boundary": null
-    },
-    {
-      "test_id": "TII-79C6D71277C3FF92",
-      "test_name": "automatic v13 startup upgrade keeps occupied running Attempts and recovery evidence without clearing a Hold",
-      "test_file": "test/sqlite-v14-upgrade.test.mjs",
-      "test_line": 205,
-      "test_type": "Integration",
-      "gate": "T2",
-      "runtime": "NOT_MEASURED",
-      "runtime_evidence": {
-        "actual_runtime_milliseconds": null,
-        "timeout_milliseconds": null,
-        "historical_baseline": null
-      },
-      "resource": [
-        "CPU",
-        "Disk",
-        "Memory"
-      ],
-      "dependency": {
-        "static_source_imports": [
-          "src/sqlite-candidate/wp6b2b1/lifecycle-port.ts",
-          "src/sqlite-candidate/wp6b2b1/store.ts",
-          "src/store/json-history-result-exceptions.ts"
-        ],
-        "impact_domains": [
-          "sqlite-persistence",
-          "manager-lifecycle",
-          "process-cleanup-and-locks"
-        ]
-      },
-      "trigger_source_paths": [
-        "src/sqlite-candidate/**",
-        "src/runtime/sqlite-install-config.ts",
-        "src/runtime/sqlite-runtime-roster.ts",
-        "src/store/lifecycle-gate.ts",
-        "src/runtime/task-timeout.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/cli/admin-abandon-held-operation.ts",
-        "src/host/profile.ts",
-        "src/host/stdio.ts",
-        "src/runtime/doctor.ts",
-        "src/runtime/sqlite-doctor.ts",
-        "src/runtime/trusted-local-deployment.ts",
-        "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
-        "src/manager/errors.ts",
-        "src/manager/normalize.ts",
-        "src/runtime/process-probe.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/adapters/process-spawn.ts",
-        "src/adapters/windows-process-cleanup.ts",
-        "src/runtime/process-probe.ts",
-        "src/store/process-lock.ts",
-        "src/store/atomic-rename.ts"
-      ],
-      "trigger_test_files": [
-        "test/sqlite-v14-upgrade.test.mjs"
-      ],
-      "stress_boundary": null
-    },
-    {
-      "test_id": "TII-F76918EA55FF04D0",
-      "test_name": "automatic upgrade restores a v13 database after interrupted first rename and retries idempotently",
-      "test_file": "test/sqlite-v14-upgrade.test.mjs",
-      "test_line": 244,
-      "test_type": "Integration",
-      "gate": "T2",
-      "runtime": "NOT_MEASURED",
-      "runtime_evidence": {
-        "actual_runtime_milliseconds": null,
-        "timeout_milliseconds": null,
-        "historical_baseline": null
-      },
-      "resource": [
-        "CPU",
-        "Disk",
-        "Memory"
-      ],
-      "dependency": {
-        "static_source_imports": [
-          "src/sqlite-candidate/wp6b2b1/lifecycle-port.ts",
-          "src/sqlite-candidate/wp6b2b1/store.ts",
-          "src/store/json-history-result-exceptions.ts"
-        ],
-        "impact_domains": [
-          "sqlite-persistence",
-          "manager-lifecycle",
-          "process-cleanup-and-locks"
-        ]
-      },
-      "trigger_source_paths": [
-        "src/sqlite-candidate/**",
-        "src/runtime/sqlite-install-config.ts",
-        "src/runtime/sqlite-runtime-roster.ts",
-        "src/store/lifecycle-gate.ts",
-        "src/runtime/task-timeout.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/cli/admin-abandon-held-operation.ts",
-        "src/host/profile.ts",
-        "src/host/stdio.ts",
-        "src/runtime/doctor.ts",
-        "src/runtime/sqlite-doctor.ts",
-        "src/runtime/trusted-local-deployment.ts",
-        "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
-        "src/manager/errors.ts",
-        "src/manager/normalize.ts",
-        "src/runtime/process-probe.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/adapters/process-spawn.ts",
-        "src/adapters/windows-process-cleanup.ts",
-        "src/runtime/process-probe.ts",
-        "src/store/process-lock.ts",
-        "src/store/atomic-rename.ts"
-      ],
-      "trigger_test_files": [
-        "test/sqlite-v14-upgrade.test.mjs"
-      ],
-      "stress_boundary": null
-    },
-    {
-      "test_id": "TII-FD8CDBB37F5BDF1B",
-      "test_name": "automatic upgrade recovers successful publication after crash before clearing the marker",
-      "test_file": "test/sqlite-v14-upgrade.test.mjs",
-      "test_line": 260,
-      "test_type": "Integration",
-      "gate": "T2",
-      "runtime": "NOT_MEASURED",
-      "runtime_evidence": {
-        "actual_runtime_milliseconds": null,
-        "timeout_milliseconds": null,
-        "historical_baseline": null
-      },
-      "resource": [
-        "CPU",
-        "Disk",
-        "Memory"
-      ],
-      "dependency": {
-        "static_source_imports": [
-          "src/sqlite-candidate/wp6b2b1/lifecycle-port.ts",
-          "src/sqlite-candidate/wp6b2b1/store.ts",
-          "src/store/json-history-result-exceptions.ts"
-        ],
-        "impact_domains": [
-          "sqlite-persistence",
-          "manager-lifecycle",
-          "process-cleanup-and-locks"
-        ]
-      },
-      "trigger_source_paths": [
-        "src/sqlite-candidate/**",
-        "src/runtime/sqlite-install-config.ts",
-        "src/runtime/sqlite-runtime-roster.ts",
-        "src/store/lifecycle-gate.ts",
-        "src/runtime/task-timeout.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/cli/admin-abandon-held-operation.ts",
-        "src/host/profile.ts",
-        "src/host/stdio.ts",
-        "src/runtime/doctor.ts",
-        "src/runtime/sqlite-doctor.ts",
-        "src/runtime/trusted-local-deployment.ts",
-        "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
-        "src/manager/errors.ts",
-        "src/manager/normalize.ts",
-        "src/runtime/process-probe.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/adapters/process-spawn.ts",
-        "src/adapters/windows-process-cleanup.ts",
-        "src/runtime/process-probe.ts",
-        "src/store/process-lock.ts",
-        "src/store/atomic-rename.ts"
-      ],
-      "trigger_test_files": [
-        "test/sqlite-v14-upgrade.test.mjs"
-      ],
-      "stress_boundary": null
-    },
-    {
-      "test_id": "TII-33D6D1F5DF3D74A2",
-      "test_name": "automatic upgrade refuses a blocked v13 root without modifying its SQLite bytes or removing its Hold",
-      "test_file": "test/sqlite-v14-upgrade.test.mjs",
-      "test_line": 278,
-      "test_type": "Integration",
-      "gate": "T2",
-      "runtime": "NOT_MEASURED",
-      "runtime_evidence": {
-        "actual_runtime_milliseconds": null,
-        "timeout_milliseconds": null,
-        "historical_baseline": null
-      },
-      "resource": [
-        "CPU",
-        "Disk",
-        "Memory"
-      ],
-      "dependency": {
-        "static_source_imports": [
-          "src/sqlite-candidate/wp6b2b1/lifecycle-port.ts",
-          "src/sqlite-candidate/wp6b2b1/store.ts",
-          "src/store/json-history-result-exceptions.ts"
-        ],
-        "impact_domains": [
-          "sqlite-persistence",
-          "manager-lifecycle",
-          "process-cleanup-and-locks"
-        ]
-      },
-      "trigger_source_paths": [
-        "src/sqlite-candidate/**",
-        "src/runtime/sqlite-install-config.ts",
-        "src/runtime/sqlite-runtime-roster.ts",
-        "src/store/lifecycle-gate.ts",
-        "src/runtime/task-timeout.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/cli/admin-abandon-held-operation.ts",
-        "src/host/profile.ts",
-        "src/host/stdio.ts",
-        "src/runtime/doctor.ts",
-        "src/runtime/sqlite-doctor.ts",
-        "src/runtime/trusted-local-deployment.ts",
-        "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
-        "src/manager/errors.ts",
-        "src/manager/normalize.ts",
-        "src/runtime/process-probe.ts",
-        "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/adapters/process-spawn.ts",
-        "src/adapters/windows-process-cleanup.ts",
-        "src/runtime/process-probe.ts",
-        "src/store/process-lock.ts",
-        "src/store/atomic-rename.ts"
-      ],
-      "trigger_test_files": [
-        "test/sqlite-v14-upgrade.test.mjs"
       ],
       "stress_boundary": null
     },
@@ -39775,8 +38719,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/start-plan-production-auth.test.ts"
@@ -39870,8 +38813,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/start-plan-production-auth.test.ts"
@@ -39965,8 +38907,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/start-plan-production-auth.test.ts"
@@ -40060,8 +39001,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/start-plan-production-auth.test.ts"
@@ -40155,8 +39095,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/start-plan-production-auth.test.ts"
@@ -40250,8 +39189,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/start-plan-production-auth.test.ts"
@@ -40345,8 +39283,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/start-plan-production-auth.test.ts"
@@ -40440,8 +39377,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/start-plan-production-auth.test.ts"
@@ -40535,8 +39471,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/start-plan-production-auth.test.ts"
@@ -40630,8 +39565,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/start-plan-production-auth.test.ts"
@@ -40725,8 +39659,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/start-plan-production-auth.test.ts"
@@ -40820,8 +39753,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/start-plan-production-auth.test.ts"
@@ -40915,8 +39847,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/start-plan-production-auth.test.ts"
@@ -41010,8 +39941,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/start-plan-production-auth.test.ts"
@@ -41105,8 +40035,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/start-plan-production-auth.test.ts"
@@ -41200,8 +40129,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/start-plan-production-auth.test.ts"
@@ -41295,8 +40223,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/start-plan-production-auth.test.ts"
@@ -41390,8 +40317,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/start-plan-production-auth.test.ts"
@@ -41485,8 +40411,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/start-plan-production-auth.test.ts"
@@ -41580,8 +40505,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/start-plan-production-auth.test.ts"
@@ -41675,8 +40599,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/start-plan-production-auth.test.ts"
@@ -41770,8 +40693,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/start-plan-production-auth.test.ts"
@@ -41865,8 +40787,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/start-plan-production-auth.test.ts"
@@ -41960,8 +40881,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/start-plan-production-auth.test.ts"
@@ -42055,8 +40975,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/start-plan-production-auth.test.ts"
@@ -42150,8 +41069,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/start-plan-production-auth.test.ts"
@@ -42245,8 +41163,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/start-plan-production-auth.test.ts"
@@ -42340,8 +41257,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/start-plan-production-auth.test.ts"
@@ -42435,8 +41351,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/start-plan-production-auth.test.ts"
@@ -43166,8 +42081,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/task-timeout.test.ts"
@@ -43226,8 +42140,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/task-timeout.test.ts"
@@ -43286,8 +42199,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ],
       "trigger_test_files": [
         "test/task-timeout.test.ts"
@@ -44593,7 +43505,6 @@
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
         "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts",
         "src/adapters/zcode-app-server-adapter.ts",
         "src/adapters/official-host-adapter.ts",
         "src/adapters/official-app-server-adapter.ts",

@@ -4,6 +4,7 @@
 > Date: 2026-11-06
 > Baseline: a46137fe46b567271a7756be819361132625278c
 > Decision: Owner 已授权内部旧运行时退役；公共 Core API 破坏亦获 Owner 单独批准，未来按主版本发布。
+> Applicability (2026-11-21): SQLite 单一 Authority 决定继续有效；“保留离线 v13 升级”已由 [ADR-043](ADR-043-sqlite-v14-only.md) SUPERSEDED / RETIRED。
 
 ## 已批准范围
 

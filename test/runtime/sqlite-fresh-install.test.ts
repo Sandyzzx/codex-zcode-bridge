@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import {
   loadInstallAuthoritySelection,
   prepareFreshSqliteStateDirectoryForTest,
@@ -192,6 +193,106 @@ checkedTest("a root with a foreign schema version is rejected on open", async ()
     () => modules.Store.open(prepared.dataRoot, { databaseFileName: "bridge.sqlite", managedDataDirectory: true }),
     (error: unknown) => String(error).includes("schema_version_unknown"),
   );
+});
+
+checkedTest("SQLite v13 is rejected without creating sidecars or changing database bytes", async () => {
+  const fx = fixture("unsupported-v13");
+  const prepared = prepareFreshSqliteStateDirectoryForTest(
+    sqliteSelection(fx, fx.dataRoot),
+    {} as NodeJS.ProcessEnv,
+    { packageRoot: path.join(fx.root, "pkg"), tempRoot: path.join(fx.root, "tmp") },
+  );
+  const database = path.join(prepared.dataRoot, "bridge.sqlite");
+  const db = new DatabaseSync(database);
+  db.exec("PRAGMA user_version=13");
+  db.close();
+  const original = readFileSync(database);
+  const modules = await loadLifecycleCandidateModules();
+
+  for (const open of [
+    () => modules.Store.open(prepared.dataRoot, { databaseFileName: "bridge.sqlite", managedDataDirectory: true }),
+    () => modules.Store.openForRecovery(prepared.dataRoot, { databaseFileName: "bridge.sqlite", managedDataDirectory: true }),
+  ]) {
+    assert.throws(
+      open,
+      (error: unknown) => (error as { code?: unknown }).code === "unsupported_sqlite_schema"
+        && /SQLite v14 ONLY/u.test((error as Error).message),
+    );
+  }
+  await assert.rejects(
+    initializeFreshInstallSqliteRoot(prepared.dataRoot, "bridge.sqlite"),
+    (error: unknown) => (error as { code?: unknown }).code === "unsupported_sqlite_schema"
+      && /SQLite v14 ONLY/u.test((error as Error).message),
+  );
+  assert.deepEqual(readFileSync(database), original);
+  assert.equal(existsSync(`${database}-wal`), false);
+  assert.equal(existsSync(`${database}-shm`), false);
+});
+
+checkedTest("SQLite v13 rejection preserves an existing WAL and shared-memory file byte-for-byte", async () => {
+  const fx = fixture("unsupported-v13-wal");
+  const prepared = prepareFreshSqliteStateDirectoryForTest(
+    sqliteSelection(fx, fx.dataRoot),
+    {} as NodeJS.ProcessEnv,
+    { packageRoot: path.join(fx.root, "pkg"), tempRoot: path.join(fx.root, "tmp") },
+  );
+  const database = path.join(prepared.dataRoot, "bridge.sqlite");
+  const db = new DatabaseSync(database);
+  try {
+    db.prepare("PRAGMA journal_mode=WAL").get();
+    db.exec("CREATE TABLE probe(value); INSERT INTO probe VALUES (1); PRAGMA user_version=13");
+    const before = new Map([
+      [database, readFileSync(database)],
+      [`${database}-wal`, readFileSync(`${database}-wal`)],
+      [`${database}-shm`, readFileSync(`${database}-shm`)],
+    ]);
+    const modules = await loadLifecycleCandidateModules();
+
+    for (const open of [
+      () => modules.Store.open(prepared.dataRoot, { databaseFileName: "bridge.sqlite", managedDataDirectory: true }),
+      () => modules.Store.openForRecovery(prepared.dataRoot, { databaseFileName: "bridge.sqlite", managedDataDirectory: true }),
+    ]) {
+      assert.throws(
+        open,
+        (error: unknown) => (error as { code?: unknown }).code === "unsupported_sqlite_schema"
+          && /SQLite v14 ONLY/u.test((error as Error).message),
+      );
+    }
+    await assert.rejects(
+      initializeFreshInstallSqliteRoot(prepared.dataRoot, "bridge.sqlite"),
+      (error: unknown) => (error as { code?: unknown }).code === "unsupported_sqlite_schema"
+        && /SQLite v14 ONLY/u.test((error as Error).message),
+    );
+    for (const [file, bytes] of before) assert.deepEqual(readFileSync(file), bytes, `${path.basename(file)} changed`);
+  } finally {
+    db.close();
+  }
+});
+
+checkedTest("an interrupted v13 upgrade marker is rejected and preserved exactly", async () => {
+  const fx = fixture("unsupported-v13-marker");
+  const prepared = prepareFreshSqliteStateDirectoryForTest(
+    sqliteSelection(fx, fx.dataRoot),
+    {} as NodeJS.ProcessEnv,
+    { packageRoot: path.join(fx.root, "pkg"), tempRoot: path.join(fx.root, "tmp") },
+  );
+  const marker = path.join(prepared.dataRoot, "bridge.sqlite.v13-v14-pending.json");
+  const original = Buffer.from('{"contract":"sqlite-v13-v14-auto-upgrade-v1"}');
+  writeFileSync(marker, original);
+  const modules = await loadLifecycleCandidateModules();
+
+  assert.throws(
+    () => modules.Store.open(prepared.dataRoot, { databaseFileName: "bridge.sqlite", managedDataDirectory: true }),
+    (error: unknown) => (error as { code?: unknown }).code === "unsupported_sqlite_schema"
+      && /SQLite v14 ONLY/u.test((error as Error).message),
+  );
+  await assert.rejects(
+    initializeFreshInstallSqliteRoot(prepared.dataRoot, "bridge.sqlite"),
+    (error: unknown) => (error as { code?: unknown }).code === "unsupported_sqlite_schema"
+      && /SQLite v14 ONLY/u.test((error as Error).message),
+  );
+  assert.deepEqual(readFileSync(marker), original);
+  assert.equal(existsSync(path.join(prepared.dataRoot, "bridge.sqlite")), false);
 });
 
 checkedTest("two writers on the same root serialize through the writer-intent gate", async () => {

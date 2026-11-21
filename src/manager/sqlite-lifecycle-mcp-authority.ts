@@ -34,8 +34,6 @@ export type SqliteAuthorityOptions = ClaimOnlyDriverOptions & {
   readonly testBeforeDispatch?: () => Promise<void>;
   readonly testOnScheduler?: (stage: string, detail: Readonly<Record<string, unknown>>) => void;
   readonly testShutdownWaitMs?: number;
-  /** Set only when this Host process actually completed v13 -> v14 upgrade. */
-  readonly startupInterruptionReason?: "interrupted_by_upgrade";
   /** Host-supplied ADR-031 task-creation routing hook. `route` runs before
    * TaskPackage validation and persistence so every stored task carries the
    * fully resolved provider/model selection; `confirmRouting` is invoked only
@@ -58,7 +56,6 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
   #shutdownPromise: Promise<void> | null = null;
   readonly #pumpPromises = new Set<Promise<void>>();
   #recoveryComplete = false;
-  #startupInterruptionReason: "interrupted_by_upgrade" | undefined;
   #recoveryPromise: Promise<void> | null = null;
   #pumpPending = false;
   #awaitingDispatchPrerequisite = false;
@@ -83,8 +80,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     shutdownWaitMs = DEFAULT_HOST_SHUTDOWN_WAIT_MS, startPlanAuthAvailable = false, testOnlyFakeAdapter = false,
     routeTaskModel?: TaskModelRouter,
     startPlanAuthInjected = false,
-    startPlanPrivateAuthFactory?: () => Promise<NonNullable<ClaimOnlyDriverOptions["startPlanPrivateAuth"]> | null>,
-    startupInterruptionReason?: "interrupted_by_upgrade") {
+    startPlanPrivateAuthFactory?: () => Promise<NonNullable<ClaimOnlyDriverOptions["startPlanPrivateAuth"]> | null>) {
     this.#driver = driver;
     this.#context = context;
     this.#processProbe = processProbe;
@@ -96,7 +92,6 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     this.#startPlanPrivateAuthFactory = startPlanPrivateAuthFactory;
     this.#testOnlyFakeAdapter = testOnlyFakeAdapter;
     this.#routeTaskModel = routeTaskModel;
-    this.#startupInterruptionReason = startupInterruptionReason;
   }
 
   async createTask(task: TaskPackage): Promise<TaskReceipt> {
@@ -608,7 +603,6 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
         const outcome = asRecord(await this.#driver.recoverOperation(operationId, {
           stopAliveWorker: true,
           allowInterruptRequeue: true,
-          ...(this.#startupInterruptionReason ? { interruptionReason: this.#startupInterruptionReason } : {}),
         }));
         this.#schedulerStage("operation_recovery_classified", {
           operation_id: operationId, phase: operation.phase, state: outcome.state ?? "unknown", reason: outcome.reason ?? null,
@@ -643,7 +637,6 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
         }
       }
       this.#recoveryComplete = true;
-      this.#startupInterruptionReason = undefined;
       this.#pumpFailure = null;
       this.#schedulerStage("recovery_complete", { recoverable_queued_attempts: queued.filter((value) => value.dispatchable === true).length,
         root_read_only: false });
@@ -735,7 +728,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
   static async create(options: SqliteAuthorityOptions): Promise<SqliteLifecycleMcpAuthority> {
     if (!options.trustedLocalContext) throw new TaskManagerError("TASK_STATE", "trusted local context is required");
     const {
-      testBeforeDispatch, testOnScheduler, testShutdownWaitMs, routeTaskModel, startupInterruptionReason, ...driverOptions
+      testBeforeDispatch, testOnScheduler, testShutdownWaitMs, routeTaskModel, ...driverOptions
     } = options;
     const shutdownWaitMs = testShutdownWaitMs ?? DEFAULT_HOST_SHUTDOWN_WAIT_MS;
     if (!Number.isSafeInteger(shutdownWaitMs) || shutdownWaitMs < 1 || shutdownWaitMs > DEFAULT_HOST_SHUTDOWN_WAIT_MS) {
@@ -746,7 +739,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       processProbe, testBeforeDispatch, testOnScheduler, shutdownWaitMs,
       options.startPlanPrivateAuth !== undefined || options.startPlanPrivateAuthFactory !== undefined,
       options.testOnlyFakeAdapter === true, routeTaskModel,
-      options.startPlanPrivateAuth !== undefined, options.startPlanPrivateAuthFactory, startupInterruptionReason);
+      options.startPlanPrivateAuth !== undefined, options.startPlanPrivateAuthFactory);
     try {
       await authority.recoverTasks();
       return authority;

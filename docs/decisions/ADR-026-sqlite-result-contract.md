@@ -4,6 +4,7 @@
 > Decision: APPROVED — Owner 于 2026-11-05 授权 R2 本地实现与隔离副本验证；不授权生产 Migration
 > Date: 2026-11-05
 > Proposal evidence baseline: `aabbb0a959ee234508c62731ed5122f28dfcf5b0`，Node 24.16.0 / Windows；下文 Context 为批准前 v13 的历史证据，R2 实施与验收另记。
+> Applicability (2026-11-21): Result 容量与共享计量合同继续有效；v13→v14 自动/离线升级、冻结 v13 DDL 和 v13 兼容支持已由 [ADR-043](ADR-043-sqlite-v14-only.md) SUPERSEDED / RETIRED。
 
 ## Context — 问题与实测
 

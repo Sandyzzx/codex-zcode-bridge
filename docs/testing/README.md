@@ -1,9 +1,9 @@
 # 测试入口与成本边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-21
-> Last verified: 2026-11-21，核对 Cost Lab 独立门禁、Draft/Ready 分流、Fast 完成平台无关 T0、real-adapter 分域、Stress 分离及三组托管 Windows 两路分片结果；CI/分片实测状态见 `docs/reports/CI_PERFORMANCE_OPTIMIZATION_REPORT.md`。
-> Verified against: `origin/preview` `c1245a02f8f9d4b6e1102eabac230b657d85de9b` 上的 CI 性能优化候选
+> Last updated: 2026-11-21（CI 优化 + ADR-043 SQLite v14 ONLY）
+> Last verified: 2026-11-21，分别核对 Cost Lab 独立门禁、Draft/Ready 分流、Fast 完成平台无关 T0、real-adapter 分域、Stress 分离及三组托管 Windows 两路分片结果；同时核对 v13 升级测试/生成物退役、最小非破坏性拒绝测试、v14 生命周期保留和 Impact Map 更新。最终发布集成树验证以本次 Preview.10 报告为准。
+> Verified against: `origin/preview` `c1245a02f8f9d4b6e1102eabac230b657d85de9b` 上叠加 PR #106/#107 的发布集成分支
 
 `test/test-impact-map.json` 为可执行清单唯一来源。共享资格规则禁止 MANUAL_E2E、Fixture 自动执行，显式误传同样拒绝；源 .test.ts/.test.mjs、map 与实际 --list 由回归对账。生成的 test-inventory.json 是静态声明/历史证据索引，不决定执行。
 
@@ -42,7 +42,7 @@ Windows 进程/身份套件按文件串行；其他平台保留既有 Windows-on
 
 JSON B3-05 是 TaskStore/TaskManager 的 32 active/10,000 historical 与 JSON event scan 测试，随旧实现删除，不是 SQLite v14 的性能证据。其 695.904s 集成基线只作为历史成本保留。
 
-SQLite 功能门禁继续覆盖永久 Claim、CAS、路径/Capacity 竞争、Result、Recovery、Interaction、Cleanup、v13→v14、真实 Worker/Windows 管道和 R1–R5。混合用例保留 Adapter/进程/隐私部分；旧 JSON 写盘、checkpoint、respawn、roster 和专属锁协议退役，逐项依据见本轮报告。
+SQLite 功能门禁继续覆盖永久 Claim、CAS、路径/Capacity 竞争、Result、Recovery、Interaction、Cleanup、真实 Worker/Windows 管道和 R1–R5。v13 自动/离线升级成功、恢复与回滚测试随 ADR-043 退役；只保留 v13 数据库和旧 Marker 的非破坏性拒绝合同。混合用例保留 Adapter/进程/隐私部分；旧 JSON 写盘、checkpoint、respawn、roster 和专属锁协议退役。
 
 SQLITE-STRESS-01 使用生产 Store/事务 API：0/32/256 已取消历史任务、WAL reader snapshot 与 checkpoint、四进程同 Result CAS、八进程 Admission/Capacity。使用真实 SQLite、隔离根和受控 synthetic identity，不假称真实 Provider/进程树压力认证。旧大 Result 1/2/4/8 资源证据仍独立保留，不把此矩阵推广为任意规模性能保证。
 

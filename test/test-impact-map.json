@@ -182,8 +182,7 @@
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
         "src/runtime/trusted-local-policy-config.ts",
-        "src/runtime/trusted-local-profile.ts",
-        "src/cli/upgrade-sqlite-v14.ts"
+        "src/runtime/trusted-local-profile.ts"
       ]
     },
     {
@@ -891,16 +890,6 @@
         "sqlite-persistence",
         "mcp-host",
         "interface-contract"
-      ]
-    },
-    {
-      "file": "test/sqlite-v14-upgrade.test.mjs",
-      "type": "Integration",
-      "gate": "T2",
-      "domains": [
-        "sqlite-persistence",
-        "manager-lifecycle",
-        "process-cleanup-and-locks"
       ]
     },
     {

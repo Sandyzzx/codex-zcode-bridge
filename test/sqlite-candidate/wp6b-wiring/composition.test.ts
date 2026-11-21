@@ -647,129 +647,6 @@ test("startup Recovery holds an Attempt after Runtime execution evidence even wh
     && entry.detail?.reason === "execution_side_effect_unverified"));
 });
 
-test("v13 startup upgrade preserves the interrupted Attempt and dispatches one new Attempt", {
-  timeout: 90_000,
-  skip: process.platform !== "win32",
-}, async () => {
-  const taskId = `upgrade-exited-requeue-${randomUUID()}`;
-  const operationId = candidateOperationId(taskId, 1);
-  const probe = createPlatformProbe();
-  const exitedWorker = spawn(process.execPath, ["-e", "setInterval(() => undefined, 1000)"], {
-    stdio: "ignore",
-    windowsHide: true,
-  });
-  let spawnCount = 0;
-  let upgradeState: unknown;
-  try {
-    await new Promise<void>((resolve, reject) => {
-      exitedWorker.once("spawn", () => resolve());
-      exitedWorker.once("error", reject);
-    });
-    const processId = exitedWorker.pid;
-    assert.ok(processId);
-    const identity = await probe.identityOf(processId);
-    assert.equal(identity.fingerprint_precision, "exact");
-    assert.ok(identity.fingerprint);
-    const fingerprint = identity.fingerprint;
-    exitedWorker.kill();
-    await new Promise<void>((resolve) => exitedWorker.once("close", () => resolve()));
-
-    await withSqliteMcp(async (client, _manager, dataRoot) => {
-      const terminal = await waitForTerminal(client, taskId, 2);
-      assert.equal(terminal.status, "completed");
-      await waitForCandidateOperationPhase(dataRoot, candidateOperationId(taskId, 2), "released");
-      assert.equal(spawnCount, 1, "v13 upgrade must dispatch only the newly queued Attempt");
-      assert.equal(upgradeState, "upgraded");
-
-      const modules = await loadLifecycleCandidateModules();
-      const store = modules.Store.openForRecovery(dataRoot);
-      assert.ok(store);
-      try {
-        const port = modules.createPort(store);
-        const lifecycle = port.readTaskLifecycle(taskId) as Record<string, unknown>;
-        assert.equal((lifecycle.projection as Record<string, unknown>).current_attempt, 2);
-        assert.equal((lifecycle.attempt as Record<string, unknown>).status, "completed");
-        const prior = port.readCommittedResult(operationId);
-        assert.ok(prior);
-        assert.equal(prior.result_status, "failed");
-        assert.equal(prior.result.error_code, "interrupted_by_upgrade");
-        const priorEvents = port.readLifecycleEvents(operationId) as Array<Record<string, unknown>>;
-        assert.ok(priorEvents.some((event) => {
-          if (event.event_type !== "observation_recorded") return false;
-          return JSON.parse(String(event.evidence_json)).reason === "interrupted_by_upgrade";
-        }));
-      } finally {
-        store.close();
-      }
-    }, {
-      processProbe: probe,
-      startupInterruptionReason: "interrupted_by_upgrade",
-      onChildSpawn: () => { spawnCount += 1; },
-      prepareDataRoot: async (dataRoot, fixture) => {
-        const seedRoot = path.join(fixture, "v14-seed");
-        mkdirSync(seedRoot, { recursive: true });
-        const modules = await loadLifecycleCandidateModules();
-        const store = modules.Store.initialize(seedRoot, {
-          managedDataDirectory: true,
-          freshInstallReceiptId: `upgrade-recovery-${taskId}`,
-          verifierVersion: "composition-test",
-          freshInstallCapacityLimit: 2,
-        });
-        try {
-          const port = modules.createPort(store);
-          const workspace = path.join(fixture, "workspace");
-          port.createTask(syntheticTask(workspace, taskId) as unknown as Parameters<typeof port.createTask>[0]);
-          const allow = () => ({ state: "allow", fixture: true });
-          const admitted = port.admitOperation({
-            operation_id: operationId,
-            task_id: taskId,
-            attempt: 1,
-            workspace_ref: workspace,
-          }, {
-            workspaceValidator: allow,
-            executionPermissionCheck: allow,
-          }) as Record<string, unknown>;
-          const launch = {
-            operation_id: operationId,
-            task_id: taskId,
-            attempt: 1,
-            generation: Number(admitted.generation),
-            revision: Number(admitted.revision),
-            launch_id: `launch-${taskId}`,
-            launch_epoch: 1,
-            launch_token: `upgrade-recovery-token-${taskId}-0123456789`,
-          };
-          const intent = port.createLaunchIntent(launch) as Record<string, unknown>;
-          const receipt = port.recordLaunchReceipt({
-            ...launch,
-            revision: Number(intent.revision),
-            receipt_id: `receipt-${taskId}`,
-            launch_identity: trustedIdentityEvidence("launch", taskId, processId, fingerprint, Number(admitted.generation)),
-          }) as Record<string, unknown>;
-          port.commitPermanentClaim({
-            ...launch,
-            revision: Number(receipt.revision),
-            claim_id: `claim-${taskId}`,
-            worker_identity: trustedIdentityEvidence("worker", taskId, processId, fingerprint),
-          } as unknown as Parameters<typeof port.commitPermanentClaim>[0]);
-        } finally {
-          store.close();
-        }
-        historicalV13Candidate(seedRoot, dataRoot);
-        const initialization = await initializeFreshInstallSqliteRoot(
-          dataRoot,
-          "operations.sqlite3",
-          process.versions.node,
-          probe,
-        );
-        upgradeState = initialization["upgradeState"];
-      },
-    });
-  } finally {
-    if (exitedWorker.exitCode === null && exitedWorker.signalCode === null) exitedWorker.kill();
-  }
-});
-
 test("online Recovery requeues a Worker that exits before Result and dispatches exactly one next Attempt", {
   timeout: 90_000,
   skip: process.platform !== "win32",
@@ -1733,39 +1610,6 @@ async function buildPostResultCrashWorker(name: string): Promise<string> {
   return outfile;
 }
 
-function historicalV13Candidate(sourceRoot: string, destinationRoot: string): void {
-  const from = new DatabaseSync(path.join(sourceRoot, "operations.sqlite3"), { readOnly: true });
-  const to = new DatabaseSync(path.join(destinationRoot, "operations.sqlite3"));
-  try {
-    to.exec(readFileSync(path.join(projectRoot, "src", "sqlite-candidate", "wp6b2b1", "schema-v13.sql"), "utf8"));
-    if (from.prepare("SELECT 1 FROM sqlite_schema WHERE name='manager_admin_abandonments'").get()) {
-      to.exec(readFileSync(path.join(projectRoot, "src", "sqlite-candidate", "wp6b2b1", "admin-abandonment.sql"), "utf8"));
-    }
-    const triggers = to.prepare("SELECT name,sql FROM sqlite_schema WHERE type='trigger'").all() as Array<{ name: string; sql: string }>;
-    for (const trigger of triggers) to.exec(`DROP TRIGGER "${trigger.name}"`);
-    to.exec("BEGIN");
-    for (const { name } of from.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND substr(name,1,7)<>'sqlite_'").all() as Array<{ name: string }>) {
-      const rows = from.prepare(`SELECT * FROM "${name}"`).all() as Array<Record<string, unknown>>;
-      for (const raw of rows) {
-        const row = { ...raw };
-        if (name === "authority_metadata" || name === "authority_switch") row.schema_version = 13;
-        const columns = Object.keys(row);
-        to.prepare(`INSERT INTO "${name}" (${columns.map((column) => `"${column}"`).join(",")}) VALUES (${columns.map(() => "?").join(",")})`)
-          .run(...columns.map((column) => row[column] as never));
-      }
-    }
-    for (const row of from.prepare("SELECT name,seq FROM sqlite_sequence").all() as Array<{ name: string; seq: number }>) {
-      to.prepare("DELETE FROM sqlite_sequence WHERE name=?").run(row.name);
-      to.prepare("INSERT INTO sqlite_sequence(name,seq) VALUES(?,?)").run(row.name, row.seq);
-    }
-    for (const trigger of triggers) to.exec(trigger.sql);
-    to.exec("PRAGMA user_version=13; COMMIT");
-  } finally {
-    from.close();
-    to.close();
-  }
-}
-
 async function buildPreResultCrashWorker(name: string, crashMarker: string): Promise<string> {
   mkdirSync(integrationRoot, { recursive: true });
   const outfile = path.join(integrationRoot, `cleanup-pre-result-crash-${name}-${randomUUID()}.mjs`);
@@ -2120,7 +1964,7 @@ class RawStdioMcpTestClient {
 
 async function withSqliteMcp(
   run: (client: Client, manager: SqliteLifecycleMcpAuthority, dataRoot: string, workspace: string) => Promise<void>,
-  options: { readonly testBeforeDispatch?: () => Promise<void>; readonly testOnScheduler?: (stage: string, detail: Readonly<Record<string, unknown>>) => void; readonly onStage?: (stage: string, detail?: Readonly<Record<string, unknown>>) => void; readonly onChildSpawn?: (child: { readonly pid?: number; readonly stderr?: NodeJS.ReadableStream | null; readonly resultChannel?: NodeJS.ReadableStream | null }) => void; readonly beforeAuthority?: (dataRoot: string, modules: Awaited<ReturnType<typeof loadLifecycleCandidateModules>>, workspace: string) => void; readonly prepareDataRoot?: (dataRoot: string, fixture: string) => Promise<void>; readonly databaseFileName?: string; readonly workerEntryPath?: string; readonly enableSyntheticInteractionChannel?: boolean; readonly processProbe?: ProcessProbe; readonly testProcessProbeTimeoutMs?: number; readonly testVerifyProcessTreeClaimantsClean?: typeof verifyProcessTreeClaimantsClean; readonly testProcessTreeProbeTimeoutMs?: number; readonly testShutdownWaitMs?: number; readonly testStopWorkerForRecovery?: (pid: number, expectedFingerprint: string) => Promise<void>; readonly testBeforeRecoveryWrite?: (operationId: string, phase: string) => Promise<void>; readonly startupInterruptionReason?: "interrupted_by_upgrade"; readonly testOnlyFakeAdapter?: boolean; readonly stdio?: boolean; readonly preserveFixtureOnFailure?: boolean; readonly onStdioHost?: (host: StdioLifecycleHost) => void; readonly onStdioShutdownComplete?: (reason: string) => void; readonly onStdioShutdownFailure?: (reason: string, error: unknown) => void } = {},
+  options: { readonly testBeforeDispatch?: () => Promise<void>; readonly testOnScheduler?: (stage: string, detail: Readonly<Record<string, unknown>>) => void; readonly onStage?: (stage: string, detail?: Readonly<Record<string, unknown>>) => void; readonly onChildSpawn?: (child: { readonly pid?: number; readonly stderr?: NodeJS.ReadableStream | null; readonly resultChannel?: NodeJS.ReadableStream | null }) => void; readonly beforeAuthority?: (dataRoot: string, modules: Awaited<ReturnType<typeof loadLifecycleCandidateModules>>, workspace: string) => void; readonly prepareDataRoot?: (dataRoot: string, fixture: string) => Promise<void>; readonly databaseFileName?: string; readonly workerEntryPath?: string; readonly enableSyntheticInteractionChannel?: boolean; readonly processProbe?: ProcessProbe; readonly testProcessProbeTimeoutMs?: number; readonly testVerifyProcessTreeClaimantsClean?: typeof verifyProcessTreeClaimantsClean; readonly testProcessTreeProbeTimeoutMs?: number; readonly testShutdownWaitMs?: number; readonly testStopWorkerForRecovery?: (pid: number, expectedFingerprint: string) => Promise<void>; readonly testBeforeRecoveryWrite?: (operationId: string, phase: string) => Promise<void>; readonly testOnlyFakeAdapter?: boolean; readonly stdio?: boolean; readonly preserveFixtureOnFailure?: boolean; readonly onStdioHost?: (host: StdioLifecycleHost) => void; readonly onStdioShutdownComplete?: (reason: string) => void; readonly onStdioShutdownFailure?: (reason: string, error: unknown) => void } = {},
 ): Promise<void> {
   const fixture = path.join(integrationRoot, randomUUID());
   const dataRoot = path.join(fixture, "sqlite-root");
@@ -2168,7 +2012,6 @@ async function withSqliteMcp(
     ...(options.testShutdownWaitMs !== undefined ? { testShutdownWaitMs: options.testShutdownWaitMs } : {}),
     ...(options.testBeforeDispatch ? { testBeforeDispatch: options.testBeforeDispatch } : {}),
     ...(options.testOnScheduler ? { testOnScheduler: options.testOnScheduler } : {}),
-    ...(options.startupInterruptionReason ? { startupInterruptionReason: options.startupInterruptionReason } : {}),
     ...(options.onStage ? { onStage: options.onStage } : {}),
     ...(options.onChildSpawn ? { onChildSpawn: options.onChildSpawn } : {}),
     ...(options.enableSyntheticInteractionChannel ? { enableSyntheticInteractionChannel: true } : {}),
