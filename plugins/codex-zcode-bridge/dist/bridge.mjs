@@ -8154,6 +8154,8 @@ var init_store = __esm({
           const historicalCleanup = o.phase === "cleanup_unverified" && o.result_digest !== null && o.result_status === "cancelled";
           if (!preClaim && !historicalCleanup) fail2("user_authorized_release_phase_not_allowed");
           if (preClaim) {
+            if (o.launch_receipt_id !== null || o.launch_receipt_digest !== null || o.launch_identity_json !== null)
+              fail2("user_authorized_release_spawn_evidence_present");
             if (attempt.queued_cancel_operation_id !== input.operation_id || attempt.queued_cancel_id !== input.cancel_id || attempt.queued_cancel_result_json === null)
               fail2("user_authorized_release_projection_mismatch");
             let queuedResult;
@@ -10079,7 +10081,26 @@ var init_store = __esm({
                   if (!ve || r.event.sequence !== verified[0].event.sequence + 1 || re.claim_id !== o.claim_id || re.cleanup_digest !== ve.cleanup_digest || re.result_commit_ref !== o.result_commit_ref || re.worker_identity_digest !== o.claim_worker_identity_digest) fail2("release_history_mismatch");
                 }
                 const expected = o.phase === "quarantined" ? "quarantined" : released.length ? "released" : verified.length ? "cleanup_verified" : unverified2.length ? "cleanup_unverified" : "cleanup_pending";
-                if (o.phase !== expected) fail2("cleanup_projection_mismatch");
+                let administrativeRelease = false;
+                const terminal = es.at(-1);
+                if (terminal?.event_type === "observation_recorded" && terminal.from_phase === "cleanup_unverified" && terminal.to_phase === "released" && terminal.sequence === o.revision) {
+                  let terminalEvidence;
+                  try {
+                    terminalEvidence = JSON.parse(terminal.evidence_json);
+                  } catch {
+                    fail2("cleanup_projection_mismatch");
+                  }
+                  const cancelEvents = es.filter((event) => event.event_type === "observation_recorded").map((event) => {
+                    try {
+                      return { event, evidence: JSON.parse(event.evidence_json) };
+                    } catch {
+                      fail2("cleanup_projection_mismatch");
+                    }
+                  });
+                  const verification = cancelEvents.find((item) => item.evidence.reason === "cancel_tree_verified" && item.evidence.cancel_id === terminalEvidence.cancel_id);
+                  administrativeRelease = released.length === 0 && unverified2.length === 1 && terminalEvidence.reason === "user_authorized_release_unverified" && o.result_status === "cancelled" && verification !== void 0 && terminalEvidence.cancel_id === verification.evidence.cancel_id;
+                }
+                if (o.phase !== expected && !(o.phase === "released" && administrativeRelease)) fail2("cleanup_projection_mismatch");
               } else if (["cleanup_pending", "cleanup_verified", "cleanup_unverified", "cleanup_reverified", "released"].includes(o.phase) && !adminAbandonments.has(o.operation_id)) {
                 const administrativeRelease = es.at(-1)?.event_type === "observation_recorded" && JSON.parse(es.at(-1)?.evidence_json).reason === "user_authorized_release_unverified";
                 if (!administrativeRelease) fail2("cleanup_projection_mismatch");
@@ -11806,14 +11827,16 @@ async function openClaimOnlyDriver(options) {
           };
         }
         if (failureReason === "adapter_cleanup_unverified") {
-          return {
-            state: "held",
-            operation_id: operationId,
-            phase,
-            reason: "adapter_cleanup_unverified",
-            identity_state: identityState,
-            probe_reason: probeReason
-          };
+          if (recoveryOptions.stopAliveWorker !== true || identityState === "unknown") {
+            return {
+              state: "held",
+              operation_id: operationId,
+              phase,
+              reason: "adapter_cleanup_unverified",
+              identity_state: identityState,
+              probe_reason: probeReason
+            };
+          }
         }
       }
       if (phase === "cleanup_unverified" && recoveryOptions.stopAliveWorker === true && identityState === "alive") {
@@ -11860,7 +11883,15 @@ async function openClaimOnlyDriver(options) {
         );
       }
       if ((phase === "result_committed" || phase === "cleanup_pending" || phase === "cleanup_unverified") && identityState === "exited") {
-        const completeCleanupClosureAvailable = treeOutcome?.status === "resolved" && treeOutcome.result.clean === true && treeOutcome.result.livePids.length === 0 && treeOutcome.result.observedPids.includes(processId);
+        const adapterCleanupUnverified = phase === "cleanup_unverified" && lifecycleEvents.some((event) => {
+          if (event.event_type !== "cleanup_unverified") return false;
+          try {
+            return JSON.parse(String(event.evidence_json)).reason === "adapter_cleanup_unverified";
+          } catch {
+            return false;
+          }
+        });
+        const completeCleanupClosureAvailable = !adapterCleanupUnverified && treeOutcome?.status === "resolved" && treeOutcome.result.clean === true && treeOutcome.result.livePids.length === 0 && treeOutcome.result.observedPids.includes(processId);
         if (completeCleanupClosureAvailable && treeOutcome?.status === "resolved") {
           const currentOperation = asRecord6(port.readOperation(operationId));
           if (currentOperation.task_id !== operation.task_id || Number(currentOperation.attempt) !== Number(operation.attempt) || Number(currentOperation.generation) !== Number(operation.generation) || currentOperation.claim_id !== claimId || currentOperation.claim_worker_identity_digest !== workerDigest) {
@@ -12056,7 +12087,9 @@ async function openClaimOnlyDriver(options) {
           revision: recorded.revision,
           identity_state: identityState,
           probe_reason: probeReason,
-          evidence_digest: evidenceDigest
+          evidence_digest: evidenceDigest,
+          recovery_disposition: disposition,
+          process_tree_scan_clean: evidence.process_tree_scan_clean
         };
       } catch (error2) {
         recoveryEvidenceBindings.delete(evidenceDigest);
@@ -13962,9 +13995,11 @@ var init_sqlite_doctor = __esm({
 // src/manager/sqlite-lifecycle-mcp-authority.ts
 var sqlite_lifecycle_mcp_authority_exports = {};
 __export(sqlite_lifecycle_mcp_authority_exports, {
+  DEFAULT_EVENT_PAGE_MAX_BYTES: () => DEFAULT_EVENT_PAGE_MAX_BYTES,
   SqliteLifecycleMcpAuthority: () => SqliteLifecycleMcpAuthority,
   applyEventByteBudget: () => applyEventByteBudget,
-  mergeAdjacentModelOutputRows: () => mergeAdjacentModelOutputRows
+  mergeAdjacentModelOutputRows: () => mergeAdjacentModelOutputRows,
+  resolveEventPageBudget: () => resolveEventPageBudget
 });
 import { createHash as createHash17, randomBytes } from "node:crypto";
 import path19 from "node:path";
@@ -14031,7 +14066,7 @@ function mergeAdjacentModelOutputRows(rows, maxBytes, includeAttempt = false) {
   }
   return { rows: merged, omittedEvents, omittedEventsByRow };
 }
-function applyEventByteBudget(events, pageNextCursor, maxBytes, previousCursor = 0) {
+function applyEventByteBudget(events, pageNextCursor, maxBytes, previousCursor = 0, options = {}) {
   if (maxBytes === void 0) {
     return { events: [...events], nextCursor: pageNextCursor, scanIncomplete: false };
   }
@@ -14040,7 +14075,18 @@ function applyEventByteBudget(events, pageNextCursor, maxBytes, previousCursor =
   for (const event of events) {
     const size = Buffer.byteLength(canonicalJson3(event), "utf8");
     if (kept > 0 && bytes + size > maxBytes) break;
-    if (kept === 0 && size > maxBytes) return { events: [], nextCursor: previousCursor, scanIncomplete: true };
+    if (kept === 0 && size > maxBytes) {
+      if (!options.allowOversizedFirstEvent) {
+        return { events: [], nextCursor: previousCursor, scanIncomplete: true };
+      }
+      const first = events[0];
+      const nextCursor = first.seq;
+      return {
+        events: [first],
+        nextCursor,
+        scanIncomplete: events.length > 1 || nextCursor < pageNextCursor
+      };
+    }
     bytes += size;
     kept += 1;
   }
@@ -14053,6 +14099,9 @@ function applyEventByteBudget(events, pageNextCursor, maxBytes, previousCursor =
     nextCursor: visible.at(-1)?.seq ?? previousCursor,
     scanIncomplete: true
   };
+}
+function resolveEventPageBudget(maxBytes) {
+  return maxBytes === void 0 ? { maxBytes: DEFAULT_EVENT_PAGE_MAX_BYTES, allowOversizedFirstEvent: true } : { maxBytes, allowOversizedFirstEvent: false };
 }
 function emptyEvidence(value) {
   if (typeof value !== "string") return false;
@@ -14110,8 +14159,10 @@ function canUserAuthorizeUnverifiedRelease(outcome) {
   const reason = typeof outcome.reason === "string" ? outcome.reason : "";
   const identityState = typeof outcome.identity_state === "string" ? outcome.identity_state : "";
   const probeReason = typeof outcome.probe_reason === "string" ? outcome.probe_reason : "";
+  const disposition = typeof outcome.recovery_disposition === "string" ? outcome.recovery_disposition : "";
   const stopFailure = probeReason === "worker_stop_unverified" || probeReason === "worker_stop_exit_unverified";
-  return !stopFailure && identityState !== "alive" && (reason === "adapter_cleanup_unverified" || reason === "cleanup_identity_unknown" || reason === "cleanup_incomplete" || reason === "cleanup_evidence_incomplete");
+  const treeEvidenceBlocks = disposition === "worker_still_alive" || disposition === "process_tree_still_live" || disposition === "process_tree_not_verified" || disposition === "process_tree_probe_timeout" || disposition === "process_tree_probe_rejected" || outcome.process_tree_scan_clean === false;
+  return !stopFailure && !treeEvidenceBlocks && identityState === "exited" && outcome.process_tree_scan_clean === true && (reason === "adapter_cleanup_unverified" || reason === "cleanup_incomplete" || disposition === "complete_cleanup_closure_unavailable");
 }
 function delay2(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -14173,7 +14224,7 @@ function errorCode2(error2) {
   if (!error2 || typeof error2 !== "object" || !("code" in error2) || typeof error2.code !== "string") return null;
   return error2.code;
 }
-var EXECUTION_OBSERVATION_PROBE_BUDGET_MS, DEFAULT_HOST_SHUTDOWN_WAIT_MS, PUMP_FAILURE_RECOVERY_RETRY_MS, SqliteLifecycleMcpAuthority;
+var EXECUTION_OBSERVATION_PROBE_BUDGET_MS, DEFAULT_HOST_SHUTDOWN_WAIT_MS, PUMP_FAILURE_RECOVERY_RETRY_MS, DEFAULT_EVENT_PAGE_MAX_BYTES, SqliteLifecycleMcpAuthority;
 var init_sqlite_lifecycle_mcp_authority = __esm({
   "src/manager/sqlite-lifecycle-mcp-authority.ts"() {
     "use strict";
@@ -14186,6 +14237,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
     EXECUTION_OBSERVATION_PROBE_BUDGET_MS = 5e3;
     DEFAULT_HOST_SHUTDOWN_WAIT_MS = 6e4;
     PUMP_FAILURE_RECOVERY_RETRY_MS = 250;
+    DEFAULT_EVENT_PAGE_MAX_BYTES = 32 * 1024;
     SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
       #driver;
       #queue = [];
@@ -14376,11 +14428,12 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
           return { ...page, status: attention.status, attention };
         }
         const includeAttempt = input.include_attempt === true;
+        const eventBudget = resolveEventPageBudget(input.max_bytes);
         const deadline = Date.now() + waitMs;
         while (true) {
           const snapshot = this.#readSnapshot(input.task_id);
           const page = this.#driver.readTaskEvents(input.task_id, { afterCursor: cursor, limit });
-          const visiblePage = input.view === "summary" ? mergeAdjacentModelOutputRows(page.events, input.max_bytes, includeAttempt) : { rows: page.events, omittedEvents: 0, omittedEventsByRow: page.events.map(() => 0) };
+          const visiblePage = input.view === "summary" ? mergeAdjacentModelOutputRows(page.events, eventBudget.maxBytes, includeAttempt) : { rows: page.events, omittedEvents: 0, omittedEventsByRow: page.events.map(() => 0) };
           const projectedEvents = visiblePage.rows.map((value) => {
             const event = toProgressEvent(value, includeAttempt);
             if (event.type !== "interaction_requested" || !event.details || typeof event.details.request_id !== "string") return event;
@@ -14389,11 +14442,13 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
             const request = asRecord7(persisted.request);
             return { ...event, details: { ...event.details, method: request.method, params: request.params } };
           });
-          const bounded2 = applyEventByteBudget(projectedEvents, page.nextCursor, input.max_bytes, cursor);
+          const bounded2 = applyEventByteBudget(projectedEvents, page.nextCursor, eventBudget.maxBytes, cursor, {
+            allowOversizedFirstEvent: eventBudget.allowOversizedFirstEvent
+          });
           const { events, nextCursor, scanIncomplete } = bounded2;
           const omittedEvents = visiblePage.omittedEventsByRow.slice(0, events.length).reduce((total, count) => total + count, 0);
           const status = taskStatus(asRecord7(snapshot.projection).status);
-          if (events.length || isTerminal(status) || Date.now() >= deadline) {
+          if (events.length || scanIncomplete || isTerminal(status) || Date.now() >= deadline) {
             return {
               task_id: input.task_id,
               status,
@@ -14554,6 +14609,12 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
         if (!operation || operation.phase !== "launch_intent" && operation.phase !== "cleanup_unverified") {
           throw new TaskManagerError("TASK_STATE", "zcode_cancel has no user-authorized unverified release path for this Operation");
         }
+        if (operation.phase === "launch_intent" && (operation.launch_receipt_id !== null || operation.launch_receipt_digest !== null || operation.launch_identity_json !== null)) {
+          throw new TaskManagerError(
+            "CANCEL_FAILED",
+            "launch_intent has durable spawn evidence; user-authorized unverified release is not allowed"
+          );
+        }
         const attempt = asRecord7(snapshot.attempt);
         const cancelId = operation.phase === "launch_intent" && typeof attempt.queued_cancel_id === "string" ? attempt.queued_cancel_id : this.#readCancelId(taskId, String(operation.operation_id));
         if (!cancelId) throw new TaskManagerError("CANCEL_FAILED", "user-authorized unverified release requires the original durable cancellation Result");
@@ -14633,8 +14694,9 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
         const operationCreated = typeof occupied.created_at === "string" ? Date.parse(occupied.created_at) : null;
         const blockingWorkspace = string4(occupied.workspace_ref, "blocking_workspace_missing");
         const queuedCreated = Date.parse(createdAt);
+        const sameWorkspace2 = executionPathsOverlap(blockingWorkspace, executionPath);
         return {
-          reason: normalizeExecutionPath(blockingWorkspace) !== normalizeExecutionPath(executionPath) ? "workspace_occupied" : "capacity_occupied",
+          reason: sameWorkspace2 ? "workspace_occupied" : "capacity_occupied",
           task_id: string4(occupied.task_id, "blocking_task_id_missing"),
           operation_id: string4(occupied.operation_id, "blocking_operation_id_missing"),
           phase: string4(occupied.phase, "blocking_phase_missing"),
@@ -37294,7 +37356,7 @@ function createBridgeServer(options) {
     "zcode_events",
     {
       title: "Read live ZCode execution events",
-      description: "Read persisted events from after_seq. Reuse next_seq and drain has_more. Raw is default. Summary merges adjacent model text. Report project and execution paths and queued/running after submission, then session, runtime model/reasoning and mode at turn_started. wait_ms <= 25000. Attention waits for a current-Attempt pending request, terminal state or Attempt change. Read complete interaction details before replying. Hidden reasoning is excluded.",
+      description: "Read persisted events from after_seq. Without max_bytes, each page uses a 32 KiB budget; drain has_more or scan_incomplete using scan_cursor, otherwise next_seq. The default may return one oversized event so cursor progress is possible. Explicit max_bytes is a hard budget. Raw is default. Summary merges adjacent model text. Report project and execution paths and queued/running after submission, then session, runtime model/reasoning and mode at turn_started. wait_ms <= 25000. Attention waits for a current-Attempt pending request, terminal state or Attempt change. Read complete interaction details before replying. Hidden reasoning is excluded.",
       inputSchema: zcodeEventsInputSchema,
       outputSchema: taskProgressPageSchema
     },
@@ -37345,7 +37407,7 @@ function createBridgeServer(options) {
     "zcode_cancel",
     {
       title: "Cancel or recover a ZCode task",
-      description: `Cancel queued/running or retry unverified Cleanup. Obtain explicit user authorization. Held recovery may terminate the recorded Worker without replaying or creating an Attempt. Check Status for Hold and Events for Release. ${EXECUTION_NOT_VERDICT}`,
+      description: `Cancel queued/running or retry unverified Cleanup. Obtain explicit user authorization. A repeated call may administratively release only an already-cancelled historical launch_intent with no durable spawn evidence, or a terminal cleanup_unverified after exact exit and a clean tree while resource closure remains unverified. It never upgrades to cleanup_verified and cannot release a live, unverifiable, or still-running Worker. Held recovery may terminate the recorded Worker without replaying or creating an Attempt. Check Status for Hold and Events for Release. ${EXECUTION_NOT_VERDICT}`,
       inputSchema: taskIdOnlyInputSchema,
       outputSchema: taskStatusRecordSchema
     },

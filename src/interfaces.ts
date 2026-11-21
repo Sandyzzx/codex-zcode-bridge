@@ -389,7 +389,7 @@ export interface GetEventsInput {
   include_attempt?: boolean;
   /** B1 additive: opaque cursor from a previous bounded page. */
   scan_cursor?: string;
-  /** B1 additive: byte budget for the bounded scan path (ignored without scan_cursor semantics). */
+  /** B1 additive: exact byte budget. Omit for the ADR-048 32 KiB default page. */
   max_bytes?: number;
   /** Wait on authoritative current-Attempt attention instead of ordinary events. */
   wait_for?: "attention";

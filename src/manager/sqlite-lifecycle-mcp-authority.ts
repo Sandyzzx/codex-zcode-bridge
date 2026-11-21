@@ -473,10 +473,19 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     if (!operation || operation.phase !== "launch_intent" && operation.phase !== "cleanup_unverified") {
       throw new TaskManagerError("TASK_STATE", "zcode_cancel has no user-authorized unverified release path for this Operation");
     }
-  const attempt = asRecord(snapshot.attempt);
-  const cancelId = operation.phase === "launch_intent" && typeof attempt.queued_cancel_id === "string"
-    ? attempt.queued_cancel_id
-    : this.#readCancelId(taskId, String(operation.operation_id));
+    if (operation.phase === "launch_intent"
+      && (operation.launch_receipt_id !== null
+        || operation.launch_receipt_digest !== null
+        || operation.launch_identity_json !== null)) {
+      throw new TaskManagerError(
+        "CANCEL_FAILED",
+        "launch_intent has durable spawn evidence; user-authorized unverified release is not allowed",
+      );
+    }
+    const attempt = asRecord(snapshot.attempt);
+    const cancelId = operation.phase === "launch_intent" && typeof attempt.queued_cancel_id === "string"
+      ? attempt.queued_cancel_id
+      : this.#readCancelId(taskId, String(operation.operation_id));
     if (!cancelId) throw new TaskManagerError("CANCEL_FAILED", "user-authorized unverified release requires the original durable cancellation Result");
     const outcome = asRecord(this.#driver.userAuthorizedReleaseUnverifiedOperation({
       operation_id: string(operation.operation_id, "operation_id_missing"),
@@ -560,10 +569,9 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
     const operationCreated = typeof occupied.created_at === "string" ? Date.parse(occupied.created_at) : null;
     const blockingWorkspace = string(occupied.workspace_ref, "blocking_workspace_missing");
     const queuedCreated = Date.parse(createdAt);
+    const sameWorkspace = executionPathsOverlap(blockingWorkspace, executionPath);
     return {
-      reason: normalizeExecutionPath(blockingWorkspace) !== normalizeExecutionPath(executionPath)
-        ? "workspace_occupied"
-        : "capacity_occupied",
+      reason: sameWorkspace ? "workspace_occupied" : "capacity_occupied",
       task_id: string(occupied.task_id, "blocking_task_id_missing"),
       operation_id: string(occupied.operation_id, "blocking_operation_id_missing"),
       phase: string(occupied.phase, "blocking_phase_missing"),
@@ -1393,12 +1401,20 @@ function canUserAuthorizeUnverifiedRelease(outcome: Record<string, unknown>): bo
   const reason = typeof outcome.reason === "string" ? outcome.reason : "";
   const identityState = typeof outcome.identity_state === "string" ? outcome.identity_state : "";
   const probeReason = typeof outcome.probe_reason === "string" ? outcome.probe_reason : "";
+  const disposition = typeof outcome.recovery_disposition === "string" ? outcome.recovery_disposition : "";
   const stopFailure = probeReason === "worker_stop_unverified" || probeReason === "worker_stop_exit_unverified";
-  return !stopFailure && identityState !== "alive"
+  const treeEvidenceBlocks = disposition === "worker_still_alive"
+    || disposition === "process_tree_still_live"
+    || disposition === "process_tree_not_verified"
+    || disposition === "process_tree_probe_timeout"
+    || disposition === "process_tree_probe_rejected"
+    || outcome.process_tree_scan_clean === false;
+  return !stopFailure && !treeEvidenceBlocks
+    && identityState === "exited"
+    && outcome.process_tree_scan_clean === true
     && (reason === "adapter_cleanup_unverified"
-      || reason === "cleanup_identity_unknown"
       || reason === "cleanup_incomplete"
-      || reason === "cleanup_evidence_incomplete");
+      || disposition === "complete_cleanup_closure_unavailable");
 }
 function delay(ms: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, ms)); }
 async function waitUntilDeadline<T>(operation: Promise<T>, deadline: number): Promise<T> {

@@ -1846,8 +1846,10 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
             identity_state: identityState, probe_reason: probeReason };
         }
         if (failureReason === "adapter_cleanup_unverified") {
-          return { state: "held", operation_id: operationId, phase, reason: "adapter_cleanup_unverified",
-            identity_state: identityState, probe_reason: probeReason };
+          if (recoveryOptions.stopAliveWorker !== true || identityState === "unknown") {
+            return { state: "held", operation_id: operationId, phase, reason: "adapter_cleanup_unverified",
+              identity_state: identityState, probe_reason: probeReason };
+          }
         }
       }
 
@@ -1908,7 +1910,13 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
         // residual risk is retained in the DECISION rather than hidden by PID
         // absence alone. Unknown, alive, conflicting, or failed scans below
         // remain operation-scoped Holds.
-        const completeCleanupClosureAvailable = treeOutcome?.status === "resolved"
+        const adapterCleanupUnverified = phase === "cleanup_unverified"
+          && lifecycleEvents.some((event) => {
+            if (event.event_type !== "cleanup_unverified") return false;
+            try { return JSON.parse(String(event.evidence_json)).reason === "adapter_cleanup_unverified"; }
+            catch { return false; }
+          });
+        const completeCleanupClosureAvailable = !adapterCleanupUnverified && treeOutcome?.status === "resolved"
           && treeOutcome.result.clean === true
           && treeOutcome.result.livePids.length === 0
           && treeOutcome.result.observedPids.includes(processId);
@@ -2100,7 +2108,8 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
       try {
         const recorded = asRecord(port.recordRecoveryObservation(input, evidence));
         return { state: "held", operation_id: operationId, phase, reason: reasonCode, revision: recorded.revision,
-          identity_state: identityState, probe_reason: probeReason, evidence_digest: evidenceDigest };
+          identity_state: identityState, probe_reason: probeReason, evidence_digest: evidenceDigest,
+          recovery_disposition: disposition, process_tree_scan_clean: evidence.process_tree_scan_clean };
       } catch (error) {
         recoveryEvidenceBindings.delete(evidenceDigest);
         if (errorCode(error) === "recovery_observation_conflict" || errorCode(error) === "stale_recovery_cas") {

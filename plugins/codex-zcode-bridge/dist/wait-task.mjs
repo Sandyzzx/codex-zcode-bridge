@@ -2777,6 +2777,8 @@ var init_store = __esm({
           const historicalCleanup = o.phase === "cleanup_unverified" && o.result_digest !== null && o.result_status === "cancelled";
           if (!preClaim && !historicalCleanup) fail2("user_authorized_release_phase_not_allowed");
           if (preClaim) {
+            if (o.launch_receipt_id !== null || o.launch_receipt_digest !== null || o.launch_identity_json !== null)
+              fail2("user_authorized_release_spawn_evidence_present");
             if (attempt.queued_cancel_operation_id !== input.operation_id || attempt.queued_cancel_id !== input.cancel_id || attempt.queued_cancel_result_json === null)
               fail2("user_authorized_release_projection_mismatch");
             let queuedResult;
@@ -4702,7 +4704,26 @@ var init_store = __esm({
                   if (!ve || r.event.sequence !== verified[0].event.sequence + 1 || re.claim_id !== o.claim_id || re.cleanup_digest !== ve.cleanup_digest || re.result_commit_ref !== o.result_commit_ref || re.worker_identity_digest !== o.claim_worker_identity_digest) fail2("release_history_mismatch");
                 }
                 const expected = o.phase === "quarantined" ? "quarantined" : released.length ? "released" : verified.length ? "cleanup_verified" : unverified.length ? "cleanup_unverified" : "cleanup_pending";
-                if (o.phase !== expected) fail2("cleanup_projection_mismatch");
+                let administrativeRelease = false;
+                const terminal = es.at(-1);
+                if (terminal?.event_type === "observation_recorded" && terminal.from_phase === "cleanup_unverified" && terminal.to_phase === "released" && terminal.sequence === o.revision) {
+                  let terminalEvidence;
+                  try {
+                    terminalEvidence = JSON.parse(terminal.evidence_json);
+                  } catch {
+                    fail2("cleanup_projection_mismatch");
+                  }
+                  const cancelEvents = es.filter((event) => event.event_type === "observation_recorded").map((event) => {
+                    try {
+                      return { event, evidence: JSON.parse(event.evidence_json) };
+                    } catch {
+                      fail2("cleanup_projection_mismatch");
+                    }
+                  });
+                  const verification = cancelEvents.find((item) => item.evidence.reason === "cancel_tree_verified" && item.evidence.cancel_id === terminalEvidence.cancel_id);
+                  administrativeRelease = released.length === 0 && unverified.length === 1 && terminalEvidence.reason === "user_authorized_release_unverified" && o.result_status === "cancelled" && verification !== void 0 && terminalEvidence.cancel_id === verification.evidence.cancel_id;
+                }
+                if (o.phase !== expected && !(o.phase === "released" && administrativeRelease)) fail2("cleanup_projection_mismatch");
               } else if (["cleanup_pending", "cleanup_verified", "cleanup_unverified", "cleanup_reverified", "released"].includes(o.phase) && !adminAbandonments.has(o.operation_id)) {
                 const administrativeRelease = es.at(-1)?.event_type === "observation_recorded" && JSON.parse(es.at(-1)?.evidence_json).reason === "user_authorized_release_unverified";
                 if (!administrativeRelease) fail2("cleanup_projection_mismatch");
