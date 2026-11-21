@@ -30,6 +30,8 @@ import type { TaskModelRouter } from "../runtime/model-routing.js";
 const EXECUTION_OBSERVATION_PROBE_BUDGET_MS = 5_000;
 const DEFAULT_HOST_SHUTDOWN_WAIT_MS = 60_000;
 const PUMP_FAILURE_RECOVERY_RETRY_MS = 250;
+/** Bound normal event pages while preserving cursor-based recovery for every persisted event. */
+export const DEFAULT_EVENT_PAGE_MAX_BYTES = 32 * 1024;
 
 type Driver = Awaited<ReturnType<typeof openClaimOnlyDriver>>;
 export type SqliteAuthorityOptions = ClaimOnlyDriverOptions & {
@@ -266,6 +268,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       return { ...page, status: attention.status, attention };
     }
     const includeAttempt = input.include_attempt === true;
+    const eventBudget = resolveEventPageBudget(input.max_bytes);
     const deadline = Date.now() + waitMs;
     while (true) {
       const snapshot = this.#readSnapshot(input.task_id);
@@ -273,7 +276,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
         events: readonly Record<string, unknown>[]; nextCursor: number; hasMore: boolean;
       };
       const visiblePage = input.view === "summary"
-        ? mergeAdjacentModelOutputRows(page.events, input.max_bytes, includeAttempt)
+        ? mergeAdjacentModelOutputRows(page.events, eventBudget.maxBytes, includeAttempt)
         : { rows: page.events, omittedEvents: 0, omittedEventsByRow: page.events.map(() => 0) };
       const projectedEvents = visiblePage.rows.map((value) => {
         const event = toProgressEvent(value, includeAttempt);
@@ -283,13 +286,15 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
         const request = asRecord(persisted.request);
         return { ...event, details: { ...event.details, method: request.method, params: request.params } };
       });
-      const bounded = applyEventByteBudget(projectedEvents, page.nextCursor, input.max_bytes, cursor);
+      const bounded = applyEventByteBudget(projectedEvents, page.nextCursor, eventBudget.maxBytes, cursor, {
+        allowOversizedFirstEvent: eventBudget.allowOversizedFirstEvent,
+      });
       const { events, nextCursor, scanIncomplete } = bounded;
       const omittedEvents = visiblePage.omittedEventsByRow
         .slice(0, events.length)
         .reduce((total, count) => total + count, 0);
       const status = taskStatus(asRecord(snapshot.projection).status);
-      if (events.length || isTerminal(status) || Date.now() >= deadline) {
+      if (events.length || scanIncomplete || isTerminal(status) || Date.now() >= deadline) {
         return {
           task_id: input.task_id,
           status,
@@ -1279,6 +1284,7 @@ export function applyEventByteBudget(
   pageNextCursor: number,
   maxBytes: number | undefined,
   previousCursor = 0,
+  options: { readonly allowOversizedFirstEvent?: boolean } = {},
 ): { events: TaskProgressEvent[]; nextCursor: number; scanIncomplete: boolean } {
   if (maxBytes === undefined) {
     return { events: [...events], nextCursor: pageNextCursor, scanIncomplete: false };
@@ -1288,7 +1294,18 @@ export function applyEventByteBudget(
   for (const event of events) {
     const size = Buffer.byteLength(canonicalJson(event), "utf8");
     if (kept > 0 && bytes + size > maxBytes) break;
-    if (kept === 0 && size > maxBytes) return { events: [], nextCursor: previousCursor, scanIncomplete: true };
+    if (kept === 0 && size > maxBytes) {
+      if (!options.allowOversizedFirstEvent) {
+        return { events: [], nextCursor: previousCursor, scanIncomplete: true };
+      }
+      const first = events[0]!;
+      const nextCursor = first.seq;
+      return {
+        events: [first],
+        nextCursor,
+        scanIncomplete: events.length > 1 || nextCursor < pageNextCursor,
+      };
+    }
     bytes += size;
     kept += 1;
   }
@@ -1301,6 +1318,18 @@ export function applyEventByteBudget(
     nextCursor: visible.at(-1)?.seq ?? previousCursor,
     scanIncomplete: true,
   };
+}
+
+export function resolveEventPageBudget(maxBytes: number | undefined): {
+  readonly maxBytes: number;
+  readonly allowOversizedFirstEvent: boolean;
+} {
+  // Explicit callers keep the historical hard-budget behavior. The implicit
+  // default may return one oversized event so a large interaction cannot stall
+  // cursor progress forever.
+  return maxBytes === undefined
+    ? { maxBytes: DEFAULT_EVENT_PAGE_MAX_BYTES, allowOversizedFirstEvent: true }
+    : { maxBytes, allowOversizedFirstEvent: false };
 }
 
 function emptyEvidence(value: unknown): boolean {
