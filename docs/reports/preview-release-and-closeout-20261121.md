@@ -72,7 +72,8 @@ Preview `ADR-037` 继续表示官方认证复用；Stable Host Recovery 文件�
 | F-01/F-02 focused scheduler regression | PASS, 7/7 |
 | Generated artifacts | PASS, 10 files |
 | Clean entrypoints | PASS, 4/4 |
-| Test impact selector / affected or full regression | 首轮 FAIL；修复后等待最终树复跑 |
+| Test impact selector | PASS, changed tree selected `FULL_SUITE` |
+| Final local complete regression | PASS, 962 tests / 960 PASS / 0 FAIL / 2 SKIP / 20m28.398s |
 | Windows complete CI | PENDING PREVIEW PUSH |
 
 已有候选证据仍按各自 PR 报告保留，不把候选分支的 PASS 冒充本集成树已经完成验证。
@@ -92,8 +93,11 @@ Preview `ADR-037` 继续表示官方认证复用；Stable Host Recovery 文件�
 - 对应 Windows root-exit 正向测试：PASS。
 - `dist-test/test/zcode-app-server-adapter.test.js` 完整文件：38/38 PASS。
 
-最终完整 affected regression 必须在包含这两项修复的最终 Tree 上重新执行；在复跑通过前，
-不把该门禁记为 PASS。
+包含这两项修复的最终代码树 `7886d42903f0c0f6dc8baa77d6df758a86bb2666` 已重新执行
+`npm run test:affected -- --base origin/preview`，模式为 `FULL_SUITE`。结果为
+962 项、960 PASS、0 FAIL、2 SKIP，耗时 20 分 28.398 秒；Typecheck、Build、Plugin
+Validator、Generated Artifacts 与 `git diff --check` 同样通过。后续仅允许追加报告事实，
+不得借发布收尾修改生产代码。
 
 ## 5. Compatibility Matrix
 
