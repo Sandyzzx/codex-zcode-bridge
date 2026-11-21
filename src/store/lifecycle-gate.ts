@@ -175,6 +175,15 @@ interface ClaimOnlyPort {
     readonly executionPermissionCheck: (context: Parameters<TrustedLocalStdioContext["policy"]["checkPermission"]>[0]) => unknown;
   }): Readonly<Record<string, unknown>>;
   cancelQueuedAttempt(input: { readonly task_id: string; readonly expected_attempt: number }): unknown;
+  userAuthorizedReleaseUnverifiedOperation(input: {
+    readonly operation_id: string;
+    readonly task_id: string;
+    readonly attempt: number;
+    readonly generation: number;
+    readonly revision: number;
+    readonly cancel_id: string;
+    readonly release_reason: "user_authorized_release_unverified";
+  }): Readonly<Record<string, unknown>>;
   requestCancellation(input: Readonly<Record<string, unknown>>, evidence: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>>;
   recordCancellationVerification(input: Readonly<Record<string, unknown>>, evidence: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>>;
   readInteractionRequest(taskId: string, requestId: string): Readonly<Record<string, unknown>> | null;
@@ -1297,6 +1306,15 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
   createNextAttempt(input: Readonly<Record<string, unknown>>): unknown;
   interruptAndRequeue(input: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>>;
   cancelQueuedAttempt(input: { readonly task_id: string; readonly expected_attempt: number }): unknown;
+  userAuthorizedReleaseUnverifiedOperation(input: {
+    readonly operation_id: string;
+    readonly task_id: string;
+    readonly attempt: number;
+    readonly generation: number;
+    readonly revision: number;
+    readonly cancel_id: string;
+    readonly release_reason: "user_authorized_release_unverified";
+  }): Readonly<Record<string, unknown>>;
   requestCancellation(input: Readonly<Record<string, unknown>>, evidence: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>>;
   recordCancellationVerification(input: Readonly<Record<string, unknown>>, evidence: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>>;
   readInteractionRequest(taskId: string, requestId: string): Readonly<Record<string, unknown>> | null;
@@ -2106,6 +2124,7 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
       executionPermissionCheck: localPolicy.checkPermission,
     }),
     cancelQueuedAttempt: (input) => port.cancelQueuedAttempt(input),
+    userAuthorizedReleaseUnverifiedOperation: (input) => port.userAuthorizedReleaseUnverifiedOperation(input),
     requestCancellation: (input, evidence) => port.requestCancellation(input, evidence),
     recordCancellationVerification: (input, evidence) => port.recordCancellationVerification(input, evidence),
     async cancelRunning(taskId, attempt) {
@@ -2348,8 +2367,11 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
       let resultDigest: string | undefined;
       let cleanupState: ClaimOnlyRunResult["cleanupState"] = "not_attempted";
       let stopBoundary: ClaimOnlyRunResult["stopBoundary"] = "claim_only";
-      const stage = (name: string, detail?: Readonly<Record<string, unknown>>): void =>
+      let intentStageObserved = false;
+      const stage = (name: string, detail?: Readonly<Record<string, unknown>>): void => {
         options.onStage?.(name, { operation_id: input.operationId, ...detail });
+        if (name === "intent_complete") intentStageObserved = true;
+      };
       try {
         stage("admission_start");
         let admission: Record<string, unknown>;
@@ -2416,6 +2438,19 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
         if (intent.duplicate === true) throw new LifecycleGateError("launch_outcome_unknown", "existing Intent never authorizes another Spawn");
         const intentRevision = positive(intent.revision, "launch_intent_revision_missing");
         stage("intent_complete", { revision: intentRevision });
+        // Re-read the authoritative projection after the Intent transaction.
+        // A queued Cancel that raced this dispatch must fence Spawn even if it
+        // won the revision after this Manager took its earlier snapshot.
+        const postIntent = asRecord(port.readOperation(input.operationId));
+        const postIntentTask = asRecord(port.readTaskProjection(input.task.task_id));
+        const postIntentAttempt = asRecord(port.readAttempt(input.task.task_id, input.attempt));
+        if (postIntent.phase !== "launch_intent" || Number(postIntent.revision) !== intentRevision
+          || Number(postIntent.generation) !== generation || postIntentTask.status !== "queued"
+          || Number(postIntentTask.current_attempt) !== input.attempt
+          || postIntentAttempt.status !== "queued" || Number(postIntentAttempt.generation) !== generation) {
+          throw new LifecycleGateError("launch_cancelled_before_spawn", "authoritative projection changed after Launch Intent");
+        }
+        if (!intentStageObserved) throw new LifecycleGateError("launch_cancelled_before_spawn", "Cancellation raced Launch Intent before Spawn");
         stage("spawn_bootstrap_start");
         // ADR-031 dynamic credential discovery: resolve the issuer once per
         // launch so each dispatch observes the current official login state.

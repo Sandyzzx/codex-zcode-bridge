@@ -51,6 +51,19 @@ test("persisted Hold and running projection are reported together without manufa
   assert.match(checks[1]!.summary, /operation78: hold/u);
 });
 
+test("queued blocker details identify the occupied Operation and phase", () => {
+  const checks = buildSqliteDoctorChecks(snapshot({
+    task_projections: [{ task_id: "queued", current_attempt: 1, status: "queued", workspace: "D:\\repo", execution_workspace: "D:\\repo",
+      created_at: new Date(Date.now() - 1000).toISOString() }],
+    operations: [{ operation_id: "blocker", task_id: "blocked", attempt: 1, phase: "launch_intent",
+      workspace_ref: "D:\\other", capacity_occupied: true, cleanup_state: "unknown", result_digest: null,
+      created_at: new Date(Date.now() - 2000).toISOString() }],
+  }), null);
+  assert.equal(checks[0]?.status, "warning");
+  assert.match(checks[0]!.summary,
+    /queued#1: queued \(blocked by blocked#1 operation blocker, phase launch_intent, workspace D:\\other, queued \d+ms, blocked \d+ms\)/u);
+});
+
 test("Manager-only recovery fence is visible even without a persisted Hold", () => {
   const checks = buildSqliteDoctorChecks(snapshot(), "worker_identity_unknown_managed_elsewhere");
   assert.equal(checks[0]?.status, "warning");

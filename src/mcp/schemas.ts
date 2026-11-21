@@ -134,6 +134,16 @@ const executionObservationSchema = z.object({
   evidence_ref: z.string(),
 });
 
+const dispatchBlockerSchema = z.object({
+  reason: z.enum(["capacity_occupied", "workspace_occupied"]),
+  task_id: z.string(),
+  operation_id: z.string(),
+  phase: z.string(),
+  workspace: z.string(),
+  queued_duration_ms: z.number().int().nonnegative(),
+  blocked_duration_ms: z.number().int().nonnegative(),
+});
+
 export const taskStatusRecordSchema = z.object({
   task_id: z.string(),
   status: z.enum([
@@ -156,6 +166,7 @@ export const taskStatusRecordSchema = z.object({
   error: z.string().optional(),
   observation: taskObservationSchema.optional(),
   execution_observation: executionObservationSchema.optional(),
+  dispatch_blocker: dispatchBlockerSchema.optional(),
 });
 
 export const taskAttentionSnapshotSchema = z.strictObject({

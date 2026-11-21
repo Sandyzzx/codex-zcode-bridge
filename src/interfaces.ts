@@ -245,6 +245,9 @@ export interface TaskStatusRecord {
   observation?: TaskObservation;
   /** Read-only process/lifecycle observation for Manual-Recovery MVP; never a persisted Task status. */
   execution_observation?: ExecutionObservation;
+  /** Present only for a queued current Attempt whose dispatch is fenced by
+   * another occupied Operation; read-only projection, not a retry command. */
+  dispatch_blocker?: DispatchBlocker;
 }
 
 /** Read-only current-attempt view for hosts that only need to know whether the task needs attention. */
@@ -260,6 +263,16 @@ export interface ExecutionObservation {
   readonly observed_at: string;
   /** Opaque digest reference; contains no PID, token, or raw process identity. */
   readonly evidence_ref: string;
+}
+
+export interface DispatchBlocker {
+  readonly reason: "capacity_occupied" | "workspace_occupied";
+  readonly task_id: string;
+  readonly operation_id: string;
+  readonly phase: string;
+  readonly workspace: string;
+  readonly queued_duration_ms: number;
+  readonly blocked_duration_ms: number;
 }
 
 /** Append-only, user-visible execution evidence. Never includes hidden reasoning; interaction requests may expose bounded tool input for a decision. */

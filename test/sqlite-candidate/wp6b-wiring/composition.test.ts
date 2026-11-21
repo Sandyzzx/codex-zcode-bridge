@@ -3754,27 +3754,83 @@ test("formal MCP queued Cancel is persisted before SQLite dispatch and does not 
   }, { testBeforeDispatch: async () => { announce(); await dispatchGate; } }).finally(() => unblock());
 });
 
-test("formal MCP cancels orphaned Launch Intent durably without claiming Cleanup or releasing occupancy", { timeout: 30_000 }, async () => {
+test("formal MCP queued Cancel racing Launch Intent prevents Worker Spawn", { timeout: 30_000 }, async () => {
+  const taskId = `intent-cancel-race-${randomUUID()}`;
+  let spawned = 0;
+  try {
+    await withSqliteMcp(async (client, manager, dataRoot, workspace) => {
+      const created = contentObject(await client.callTool({ name: "zcode_task", arguments: syntheticTask(workspace, taskId) }));
+      assert.equal(created.status, "queued");
+      const modules = await loadLifecycleCandidateModules();
+      const reader = modules.Store.openForRecovery(dataRoot);
+      assert.ok(reader);
+      try {
+        const port = modules.createPort(reader);
+        const operation = port.readOperation(candidateOperationId(taskId, 1)) as Record<string, unknown>;
+        const status = await manager.cancelTask(taskId);
+        assert.equal(status.status, "cancelled");
+        const events = port.readTaskEvents(taskId, { afterCursor: 0, limit: 50 }).events as Array<Record<string, unknown>>;
+        assert.ok(events.some((event) => event.event_type === "observation_recorded"
+          && (event.evidence_json ? JSON.parse(String(event.evidence_json)) : event.details)?.reason === "cancelled_before_claim"));
+        assert.equal((port.readOperation(candidateOperationId(taskId, 1)) as Record<string, unknown>).phase, "launch_intent");
+      } finally { reader.close(); }
+    }, {
+      onStage: (stage) => {
+        if (stage === "intent_complete") {
+          // The stage hook is invoked synchronously between the Intent commit
+          // and the post-Intent Spawn fence below it.
+          throw new Error("controlled cancellation boundary");
+        }
+      },
+      onChildSpawn: () => { spawned += 1; },
+    });
+  } catch {
+    // The run is expected to fail while preserving the cancelled Intent; the
+    // durable assertions above already proved cancellation before Spawn.
+  } finally { }
+  assert.equal(spawned, 0, "a queued Cancel that reaches intent_complete must fence Worker Spawn");
+});
+
+test("formal MCP user-authorized cancel releases orphaned Launch Intent without claiming Cleanup", { timeout: 30_000 }, async () => {
   const taskId=`cancel-orphan-${randomUUID()}`,operationId=`op-${taskId}`;
+  const queuedTaskId=`queued-after-orphan-${randomUUID()}`;
   let spawned=0;
-  await withSqliteMcp(async(client,manager,dataRoot)=>{
-    const results=await Promise.all([1,2].map(()=>client.callTool({name:'zcode_cancel',arguments:{task_id:taskId}})));
-    for(const response of results){
-      const result=contentObject(response);
-      assert.equal(result.status,'cancelled');
-      assert.equal((result.execution_observation as Record<string,unknown>).state,'cleanup_held');
-    }
+  await withSqliteMcp(async(client,manager,dataRoot,workspace)=>{
+    const first=contentObject(await client.callTool({name:'zcode_cancel',arguments:{task_id:taskId}}));
+    assert.equal(first.status,'cancelled');
+    assert.equal((first.execution_observation as Record<string,unknown>).state,'cleanup_held');
+    const blocked=contentObject(await client.callTool({name:'zcode_task',arguments:syntheticTask(workspace,queuedTaskId)}));
+    assert.equal(blocked.status,'queued');
+    const blockedStatus=contentObject(await client.callTool({name:'zcode_status',arguments:{task_id:queuedTaskId}}));
+    const blocker=blockedStatus.dispatch_blocker as Record<string,unknown>;
+    assert.equal(blocker.task_id,taskId);
+    assert.equal(blocker.operation_id,operationId);
+    assert.equal(blocker.phase,'launch_intent');
+    assert.equal(blocker.workspace,workspace);
+    assert.ok(Number(blocker.queued_duration_ms)>=0);
+    assert.ok(Number(blocker.blocked_duration_ms)>=0);
     assert.equal((await manager.getResult(taskId)).status,'cancelled');
+    const released=contentObject(await client.callTool({name:'zcode_cancel',arguments:{task_id:taskId}}));
+    assert.equal(released.status,'cancelled');
     const modules=await loadLifecycleCandidateModules(),reader=modules.Store.openForRecovery(dataRoot);
     assert.ok(reader);
     try{
       const snapshot=modules.createPort(reader).readRecoverySnapshot() as Record<string,unknown>;
       const operation=(snapshot.operations as Array<Record<string,unknown>>).find(row=>row.operation_id===operationId);
-      assert.equal(operation?.capacity_occupied,true);
+      assert.equal(operation?.phase,'released');
+      assert.equal(operation?.capacity_occupied,false);
+      assert.equal(operation?.cleanup_state,'unverified_admin_release');
       const events=await manager.getEvents({task_id:taskId,after_seq:0,limit:20});
       assert.equal(events.events.filter(event=>event.type==='cancelled').length,1);
+      const lifecycle=(await modules.createPort(reader).readLifecycleEvents(operationId)) as Array<Record<string,unknown>>;
+      const releaseEvidence=lifecycle.find(event=>event.event_type==='observation_recorded'
+        && JSON.parse(String(event.evidence_json)).reason==='user_authorized_release_unverified');
+      assert.ok(releaseEvidence);
+      assert.equal(lifecycle.some(event=>event.event_type==='cleanup_verified'),false);
     }finally{reader.close();}
-    assert.equal(spawned,0);
+    assert.equal((await waitForTerminal(client,queuedTaskId,1)).status,'completed');
+    await waitForLifecycleEvent(client,queuedTaskId,'released');
+    assert.equal(spawned,1,"the existing queued Task must be admitted after administrative release");
   },{beforeAuthority:(dataRoot,modules,workspace)=>{
     const store=modules.Store.open(dataRoot);
     try{

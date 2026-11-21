@@ -5965,6 +5965,11 @@ function validateObservationEventEvidence(value) {
     return;
   }
   if (own2 === "evidence_digest|reason") return;
+  if (own2 === "cancel_id|evidence_digest|reason") {
+    const { evidence_digest, ...unsigned } = value;
+    if (value.reason !== "user_authorized_release_unverified" || !validId3(value.cancel_id) || evidence_digest !== digest2(unsigned)) fail2("invalid_user_authorized_release_evidence");
+    return;
+  }
   if (own2 === "cancel_id|claim_id|evidence_digest|identity_evidence_digest|identity_state|reason|worker_identity_digest") {
     if (value.reason !== "cancel_requested" || !validId3(value.cancel_id) || !validId3(value.claim_id) || !["alive", "exited"].includes(value.identity_state) || ![value.evidence_digest, value.identity_evidence_digest, value.worker_identity_digest].every((v) => typeof v === "string" && /^[0-9a-f]{64}$/u.test(v)))
       fail2("invalid_cancellation_intent");
@@ -6174,6 +6179,10 @@ function validateAdminAbandonmentInput(input) {
     fail2("invalid_admin_abandonment_evidence");
   if (Date.parse(evidence.boot_time) <= Date.parse(evidence.failed_at) || Date.parse(evidence.observed_at) < Date.parse(evidence.boot_time))
     fail2("admin_abandonment_generation_boundary_unverified");
+  return input;
+}
+function validateUserAuthorizedReleaseInput(input) {
+  if (!input || Object.getPrototypeOf(input) !== Object.prototype || Object.keys(input).sort().join("|") !== USER_AUTHORIZED_RELEASE_INPUT_KEYS || !validId3(input.operation_id) || !validId3(input.task_id) || !validId3(input.cancel_id) || !Number.isSafeInteger(input.attempt) || input.attempt < 1 || !Number.isSafeInteger(input.generation) || input.generation < 1 || !Number.isSafeInteger(input.revision) || input.revision < 1 || input.release_reason !== "user_authorized_release_unverified") fail2("invalid_user_authorized_release");
   return input;
 }
 function isBusy(error2) {
@@ -6574,7 +6583,7 @@ function callDecision(fn, workspace, input) {
     return { state: "unknown" };
   }
 }
-var HERE, SCHEMA, RUNTIME_EVENTS_SCHEMA, ADMIN_ABANDONMENT_SCHEMA, NORMALIZED_ADMIN_ABANDONMENT_SCHEMA, LEGACY_ADMIN_ABANDONMENT_SCHEMA, CONSTRUCT, SCHEMA_VERSION, SCHEMA_OBJECT_QUERY, RUNTIME_EVENT_SCHEMA_OBJECTS, expectedSchemas, ADMIN_ABANDONMENT_TABLE_SQL, LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, SQLITE_V14_ONLY_MESSAGE, V13_UPGRADE_MARKER_MESSAGE, v13UpgradeMarker, RESULT_CONTRACT_VERSION, RESULT_STATUSES2, RECOVERY_PHASES, RECOVERY_SOURCES, RECOVERY_REASON_CODES, RECOVERY_QUARANTINE_CODES, RECOVERY_EVIDENCE_KEYS, RECOVERY_LIMIT, digest2, rawDigest, upgradeRowJson, EVIDENCE_KEYS, FUTURE_EVENT_TYPES, FUTURE_EVIDENCE_KEYS, EVENT_PHASE, RECOVERY_INPUT_KEYS, ADMIN_ABANDONMENT_INPUT_KEYS, ADMIN_ABANDONMENT_EVIDENCE_KEYS, AdmissionError, fail2, IsolatedAdmissionStore;
+var HERE, SCHEMA, RUNTIME_EVENTS_SCHEMA, ADMIN_ABANDONMENT_SCHEMA, NORMALIZED_ADMIN_ABANDONMENT_SCHEMA, LEGACY_ADMIN_ABANDONMENT_SCHEMA, CONSTRUCT, SCHEMA_VERSION, SCHEMA_OBJECT_QUERY, RUNTIME_EVENT_SCHEMA_OBJECTS, expectedSchemas, ADMIN_ABANDONMENT_TABLE_SQL, LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_ADMIN_ABANDONMENT_TABLE_SQL, NORMALIZED_LEGACY_ADMIN_ABANDONMENT_TABLE_SQL, SQLITE_V14_ONLY_MESSAGE, V13_UPGRADE_MARKER_MESSAGE, v13UpgradeMarker, RESULT_CONTRACT_VERSION, RESULT_STATUSES2, RECOVERY_PHASES, RECOVERY_SOURCES, RECOVERY_REASON_CODES, RECOVERY_QUARANTINE_CODES, RECOVERY_EVIDENCE_KEYS, RECOVERY_LIMIT, digest2, rawDigest, upgradeRowJson, EVIDENCE_KEYS, FUTURE_EVENT_TYPES, FUTURE_EVIDENCE_KEYS, EVENT_PHASE, RECOVERY_INPUT_KEYS, ADMIN_ABANDONMENT_INPUT_KEYS, ADMIN_ABANDONMENT_EVIDENCE_KEYS, USER_AUTHORIZED_RELEASE_INPUT_KEYS, AdmissionError, fail2, IsolatedAdmissionStore;
 var init_store = __esm({
   "src/sqlite-candidate/wp6b2b1/store.mjs"() {
     "use strict";
@@ -6667,6 +6676,7 @@ var init_store = __esm({
     RECOVERY_INPUT_KEYS = Object.freeze(["operation_id", "task_id", "attempt", "generation", "expected_revision", "claim_id", "worker_identity_digest", "classification", "reason_code", "evidence_source", "evidence_digest"]);
     ADMIN_ABANDONMENT_INPUT_KEYS = "attempt|claim_id|claim_worker_identity_digest|evidence|generation|operation_id|revision|task_id";
     ADMIN_ABANDONMENT_EVIDENCE_KEYS = "boot_time|claimant_scan_clean|claimant_scan_digest|failed_at|hosts_closed|observed_at|platform_probe_digest|process_inventory_digest|worker_exited|worker_process_id|worker_start_fingerprint|writer_closed";
+    USER_AUTHORIZED_RELEASE_INPUT_KEYS = "attempt|cancel_id|generation|operation_id|release_reason|revision|task_id";
     AdmissionError = class extends Error {
       constructor(code, message = code) {
         super(message);
@@ -6954,8 +6964,15 @@ var init_store = __esm({
           }
           validateTaskPackage(task);
           if (task.task_id !== taskId) fail2("task_projection_identity_mismatch");
-          const attemptRow = this.#db.prepare("SELECT task_id,attempt,generation,status,created_at,continuation_operation_id,continuation_json,continuation_digest,queued_cancel_result_json FROM attempts WHERE task_id=? AND attempt=?").get(taskId, taskRow.current_attempt);
-          const attempt = attemptRow ? { task_id: attemptRow.task_id, attempt: attemptRow.attempt, generation: attemptRow.generation, status: attemptRow.status, created_at: attemptRow.created_at } : null;
+          const attemptRow = this.#db.prepare("SELECT task_id,attempt,generation,status,created_at,queued_cancel_id,continuation_operation_id,continuation_json,continuation_digest,queued_cancel_result_json FROM attempts WHERE task_id=? AND attempt=?").get(taskId, taskRow.current_attempt);
+          const attempt = attemptRow ? {
+            task_id: attemptRow.task_id,
+            attempt: attemptRow.attempt,
+            generation: attemptRow.generation,
+            status: attemptRow.status,
+            created_at: attemptRow.created_at,
+            ...attemptRow.queued_cancel_id !== null ? { queued_cancel_id: attemptRow.queued_cancel_id } : {}
+          } : null;
           if (!attempt) fail2("task_attempt_projection_mismatch");
           const operationRow = this.#db.prepare("SELECT * FROM manager_operations WHERE operation_kind='attempt_lifecycle' AND task_id=? AND attempt=?").get(taskId, taskRow.current_attempt);
           const adminAbandonment = operationRow ? this.#adminAbandonments().get(operationRow.operation_id) : void 0;
@@ -8097,6 +8114,102 @@ var init_store = __esm({
           };
         });
       }
+      /** Explicit user cancellation may administratively release a historical
+       * pre-Claim or terminal-cleanup Hold. This is not Cleanup verification and
+       * never overwrites an existing Result or event. */
+      userAuthorizedReleaseUnverifiedOperation(input) {
+        validateUserAuthorizedReleaseInput(input);
+        this.#assertWritable();
+        return this.#transaction(() => {
+          const o = this.#attemptOperation(input);
+          const task = this.#db.prepare("SELECT task_id,status,current_attempt FROM tasks WHERE task_id=?").get(input.task_id);
+          const attempt = this.#db.prepare("SELECT task_id,attempt,generation,status,queued_cancel_id,queued_cancel_operation_id,queued_cancel_result_json FROM attempts WHERE task_id=? AND attempt=?").get(input.task_id, input.attempt);
+          if (!task || !attempt || task.current_attempt !== input.attempt || task.status !== "cancelled" || attempt.status !== "cancelled" || attempt.generation !== input.generation)
+            fail2("user_authorized_release_projection_mismatch");
+          const unsignedEvidence = { reason: "user_authorized_release_unverified", cancel_id: input.cancel_id };
+          const evidence = { ...unsignedEvidence, evidence_digest: digest2(unsignedEvidence) };
+          if (o.phase === "released") {
+            const released = this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded' ORDER BY sequence DESC LIMIT 1").get(input.operation_id);
+            let parsed;
+            try {
+              parsed = JSON.parse(released?.evidence_json);
+            } catch {
+              parsed = null;
+            }
+            if (released && released.sequence === o.revision && parsed?.reason === "user_authorized_release_unverified" && parsed?.cancel_id === input.cancel_id)
+              return {
+                duplicate: true,
+                operation_id: o.operation_id,
+                task_id: o.task_id,
+                attempt: o.attempt,
+                generation: o.generation,
+                revision: o.revision,
+                phase: "released",
+                cleanup_verified: false,
+                release_reason: "user_authorized_release_unverified"
+              };
+            fail2("user_authorized_release_conflict");
+          }
+          const preClaim = o.phase === "launch_intent" && o.claim_id === null && o.result_digest === null;
+          const historicalCleanup = o.phase === "cleanup_unverified" && o.result_digest !== null && o.result_status === "cancelled";
+          if (!preClaim && !historicalCleanup) fail2("user_authorized_release_phase_not_allowed");
+          if (preClaim) {
+            if (attempt.queued_cancel_operation_id !== input.operation_id || attempt.queued_cancel_id !== input.cancel_id || attempt.queued_cancel_result_json === null)
+              fail2("user_authorized_release_projection_mismatch");
+            let queuedResult;
+            try {
+              queuedResult = JSON.parse(attempt.queued_cancel_result_json);
+            } catch {
+              queuedResult = null;
+            }
+            if (!queuedResult || queuedResult.task_id !== input.task_id || queuedResult.attempt !== input.attempt || queuedResult.status !== "cancelled" || queuedResult.started_at !== null)
+              fail2("user_authorized_release_projection_mismatch");
+          } else {
+            const cancelEvent = this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded' ORDER BY sequence").all(input.operation_id).find((event) => {
+              let parsed2;
+              try {
+                parsed2 = JSON.parse(event.evidence_json);
+              } catch {
+                return false;
+              }
+              return parsed2.reason === "cancelled_before_claim" || parsed2.reason === "cancel_tree_verified";
+            });
+            let parsed;
+            try {
+              parsed = cancelEvent ? JSON.parse(cancelEvent.evidence_json) : null;
+            } catch {
+              parsed = null;
+            }
+            if (!cancelEvent || !parsed || parsed.cancel_id !== input.cancel_id)
+              fail2("user_authorized_release_cancel_identity_mismatch");
+          }
+          if (o.revision !== input.revision) fail2("stale_user_authorized_release_cas");
+          const changed = this.#db.prepare("UPDATE manager_operations SET phase='released',revision=revision+1 WHERE operation_id=? AND task_id=? AND attempt=? AND generation=? AND revision=? AND phase=? AND claim_id IS ? AND result_digest IS ?").run(input.operation_id, input.task_id, input.attempt, input.generation, input.revision, o.phase, o.claim_id, o.result_digest);
+          if (changed.changes !== 1) fail2("stale_user_authorized_release_cas");
+          this.#faultPoint("after_projection");
+          this.#event(
+            input.operation_id,
+            input.revision + 1,
+            "observation_recorded",
+            o.phase,
+            "released",
+            input.generation,
+            evidence,
+            (/* @__PURE__ */ new Date()).toISOString()
+          );
+          return {
+            duplicate: false,
+            operation_id: o.operation_id,
+            task_id: o.task_id,
+            attempt: o.attempt,
+            generation: o.generation,
+            revision: input.revision + 1,
+            phase: "released",
+            cleanup_verified: false,
+            release_reason: "user_authorized_release_unverified"
+          };
+        });
+      }
       /** Persist one cancellation intent for a claimed running Operation after exact identity verification. */
       requestCancellation(input, identityEvidence, identityVerifier) {
         this.#assertWritable();
@@ -8540,7 +8653,10 @@ var init_store = __esm({
           const meta2 = this.#db.prepare("SELECT * FROM authority_metadata").all();
           const operations = this.#db.prepare("SELECT * FROM manager_operations ORDER BY operation_id").all();
           const events = this.#db.prepare("SELECT * FROM manager_operation_events ORDER BY operation_id,sequence").all();
-          const taskProjections = this.#db.prepare("SELECT task_id,current_attempt,status,created_at FROM tasks ORDER BY task_id").all();
+          const taskProjections = this.#db.prepare(`SELECT task_id,current_attempt,status,created_at,
+          json_extract(task_json,'$.workspace') AS workspace,
+          COALESCE(json_extract(task_json,'$.worktree_path'),json_extract(task_json,'$.workspace')) AS execution_workspace
+        FROM tasks ORDER BY task_id`).all();
           const adminAbandonments = this.#adminAbandonments();
           let integrityError = null;
           try {
@@ -8559,7 +8675,8 @@ var init_store = __esm({
             const recoveryEvents = recoveryEventsFor(operationEvents, row);
             const recoveryClassification = foldedRecoveryClassification(row, operationEvents);
             const preclaimCancelled = row.phase === "launch_intent" && row.claim_id === null && operationEvents.some((event) => event.event_type === "observation_recorded" && JSON.parse(event.evidence_json).reason === "cancelled_before_claim");
-            const cleanupState = preclaimCancelled ? "unverified" : adminAbandonment ? "not_applicable" : row.phase === "cleanup_verified" || row.phase === "released" ? "verified" : row.phase === "cleanup_unverified" ? "unverified" : row.phase === "result_committed" || row.phase === "cleanup_pending" || row.phase === "quarantined" || active && row.claim_id !== null ? "unknown" : "not_applicable";
+            const userAuthorizedRelease = row.phase === "released" && operationEvents.some((event) => event.event_type === "observation_recorded" && JSON.parse(event.evidence_json).reason === "user_authorized_release_unverified");
+            const cleanupState = preclaimCancelled ? "unverified" : adminAbandonment ? "not_applicable" : row.phase === "cleanup_verified" || row.phase === "released" && !userAuthorizedRelease ? "verified" : row.phase === "cleanup_unverified" ? "unverified" : row.phase === "result_committed" || row.phase === "cleanup_pending" || row.phase === "quarantined" || active && row.claim_id !== null ? "unknown" : userAuthorizedRelease ? "unverified_admin_release" : "not_applicable";
             const blockers = [];
             if (preclaimCancelled) blockers.push("cancelled_before_claim_cleanup_unverified");
             if (integrityError) blockers.push(integrityError);
@@ -8577,7 +8694,7 @@ var init_store = __esm({
             }
             if (poisoned) blockers.push("root_poisoned");
             if (writerIntent) blockers.push("writer_intent_present_outcome_unknown");
-            const recoveryDecision = integrityError ? "quarantine_read_only" : poisoned || writerIntent || meta2.length !== 1 ? "blocked_read_only" : adminAbandonment ? "complete" : row.operation_kind === "attempt_lifecycle" && ["released", "cancelled_before_launch"].includes(row.phase) ? "complete" : recoveryClassification === "quarantine" ? "quarantine_read_only" : "hold";
+            const recoveryDecision = integrityError ? "quarantine_read_only" : poisoned || writerIntent || meta2.length !== 1 ? "blocked_read_only" : adminAbandonment ? "complete" : userAuthorizedRelease || row.operation_kind === "attempt_lifecycle" && ["released", "cancelled_before_launch"].includes(row.phase) ? "complete" : recoveryClassification === "quarantine" ? "quarantine_read_only" : "hold";
             return {
               ...presentOperation(row, adminAbandonment),
               recovery_decision: recoveryDecision,
@@ -9671,7 +9788,6 @@ var init_store = __esm({
             if (a.queued_cancel_operation_id === null) {
               if (this.#db.prepare("SELECT operation_id FROM manager_operations WHERE operation_kind='attempt_lifecycle' AND task_id=? AND attempt=?").get(a.task_id, a.attempt)) fail2("queued_cancel_operation_missing");
             } else {
-              const o = this.#db.prepare("SELECT * FROM manager_operations WHERE operation_id=? AND operation_kind='attempt_lifecycle'").get(a.queued_cancel_operation_id);
               const e = this.#db.prepare("SELECT * FROM manager_operation_events WHERE event_cursor=? AND operation_id=?").get(a.queued_cancel_event_cursor, a.queued_cancel_operation_id);
               let evidence;
               try {
@@ -9680,7 +9796,16 @@ var init_store = __esm({
                 fail2("queued_cancel_event_mismatch");
               }
               const preclaim = e?.event_type === "observation_recorded" && evidence?.reason === "cancelled_before_claim";
-              if (!o || o.task_id !== a.task_id || o.attempt !== a.attempt || o.generation !== a.generation || (preclaim ? o.phase !== "launch_intent" || e.from_phase !== "launch_intent" || e.to_phase !== "launch_intent" || evidence.launch_id !== o.launch_id || evidence.token_digest !== o.launch_token_digest : o.phase !== "cancelled_before_launch" || o.launch_id !== null || e?.event_type !== "cancelled_before_launch") || o.claim_id !== null || o.result_digest !== null || !e || e.sequence !== o.revision || evidence.cancel_id !== a.queued_cancel_id || evidence.request_digest !== requestDigest) fail2("queued_cancel_operation_mismatch");
+              const o = this.#db.prepare("SELECT * FROM manager_operations WHERE operation_id=? AND operation_kind='attempt_lifecycle'").get(a.queued_cancel_operation_id);
+              const operationEvents = this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? ORDER BY sequence").all(a.queued_cancel_operation_id);
+              let terminalEvidence;
+              try {
+                terminalEvidence = operationEvents.at(-1) ? JSON.parse(operationEvents.at(-1)?.evidence_json) : null;
+              } catch {
+                terminalEvidence = null;
+              }
+              const administrativeRelease = o?.phase === "released" && operationEvents.at(-1)?.event_type === "observation_recorded" && terminalEvidence?.reason === "user_authorized_release_unverified";
+              if (!o || o.task_id !== a.task_id || o.attempt !== a.attempt || o.generation !== a.generation || (preclaim ? o.phase !== "launch_intent" && o.phase !== "released" || e.from_phase !== "launch_intent" || e.to_phase !== "launch_intent" || evidence.launch_id !== o.launch_id || evidence.token_digest !== o.launch_token_digest : !(o.phase === "cancelled_before_launch" && o.launch_id === null && e?.event_type === "cancelled_before_launch" || o.phase === "released" && administrativeRelease && e?.event_type === "observation_recorded" && evidence?.reason === "cancelled_before_claim")) || o.claim_id !== null || o.result_digest !== null || !e || evidence.cancel_id !== a.queued_cancel_id || evidence.request_digest !== requestDigest) fail2("queued_cancel_operation_mismatch");
             }
           }
           if (this.#db.prepare("SELECT t.task_id FROM tasks t LEFT JOIN attempts a ON a.task_id=t.task_id AND a.attempt=t.current_attempt WHERE a.task_id IS NULL").all().length) fail2("task_attempt_projection_mismatch");
@@ -9778,7 +9903,7 @@ var init_store = __esm({
               if (e.event_type === "cleanup_reverified" && (e.from_phase !== "cleanup_unverified" || e.to_phase !== "cleanup_reverified")) fail2("invalid_event_phase");
               if (e.event_type === "released" && (e.from_phase !== "cleanup_verified" || e.to_phase !== "released")) fail2("invalid_event_phase");
               if (e.event_type === "launch_intent" && (e.from_phase !== "reserved" || e.to_phase !== "launch_intent")) fail2("invalid_event_phase");
-              if (e.event_type === "observation_recorded" && e.from_phase !== e.to_phase && !(parsed.reason === "admin_abandoned" && e.from_phase === "running" && e.to_phase === "released")) fail2("invalid_event_phase");
+              if (e.event_type === "observation_recorded" && e.from_phase !== e.to_phase && !(parsed.reason === "admin_abandoned" && e.from_phase === "running" && e.to_phase === "released") && !(parsed.reason === "user_authorized_release_unverified" && (e.from_phase === "launch_intent" && o.claim_id === null && o.result_digest === null || e.from_phase === "cleanup_unverified" && o.result_digest !== null && o.result_status === "cancelled") && e.to_phase === "released")) fail2("invalid_event_phase");
               if (e.event_type !== "launch_receipt" && e.event_type !== "claim_committed" && e.event_type !== "launch_intent" && e.event_type !== "observation_recorded" && !e.event_type.startsWith("interaction_") && EVENT_PHASE[e.event_type] !== e.to_phase) fail2("invalid_event_phase");
               if (e.event_type.startsWith("interaction_") && (e.from_phase !== "running" || e.to_phase !== "running")) fail2("invalid_event_phase");
               if (o.operation_kind === "attempt_lifecycle" && e.generation !== o.generation) fail2("invalid_event_phase");
@@ -9955,7 +10080,10 @@ var init_store = __esm({
                 }
                 const expected = o.phase === "quarantined" ? "quarantined" : released.length ? "released" : verified.length ? "cleanup_verified" : unverified2.length ? "cleanup_unverified" : "cleanup_pending";
                 if (o.phase !== expected) fail2("cleanup_projection_mismatch");
-              } else if (["cleanup_pending", "cleanup_verified", "cleanup_unverified", "cleanup_reverified", "released"].includes(o.phase) && !adminAbandonments.has(o.operation_id)) fail2("cleanup_projection_mismatch");
+              } else if (["cleanup_pending", "cleanup_verified", "cleanup_unverified", "cleanup_reverified", "released"].includes(o.phase) && !adminAbandonments.has(o.operation_id)) {
+                const administrativeRelease = es.at(-1)?.event_type === "observation_recorded" && JSON.parse(es.at(-1)?.evidence_json).reason === "user_authorized_release_unverified";
+                if (!administrativeRelease) fail2("cleanup_projection_mismatch");
+              }
               const adminAbandonment = adminAbandonments.get(o.operation_id);
               if (adminAbandonment) {
                 let adminWorker;
@@ -10279,6 +10407,9 @@ function createSqliteLifecyclePort(store, { recoveryEvidenceVerifier, workerIden
   for (const method of QUEUED_CANCEL_METHODS) {
     if (typeof store[method] !== "function") throw new TypeError(`candidate SQLite Store missing ${method}`);
   }
+  for (const method of USER_RELEASE_METHODS) {
+    if (typeof store[method] !== "function") throw new TypeError(`candidate SQLite Store missing ${method}`);
+  }
   for (const method of INTERACTION_METHODS) {
     if (typeof store[method] !== "function") throw new TypeError(`candidate SQLite Store missing ${method}`);
   }
@@ -10323,6 +10454,12 @@ function createSqliteLifecyclePort(store, { recoveryEvidenceVerifier, workerIden
     enumerable: true,
     value: (input) => store.cancelQueuedAttempt(input)
   });
+  for (const method of USER_RELEASE_METHODS) {
+    Object.defineProperty(port, method, {
+      enumerable: true,
+      value: (...args) => store[method](...args)
+    });
+  }
   Object.defineProperty(port, "readInteractionRequest", {
     enumerable: true,
     value: (taskId, requestId) => store.readInteractionRequest(taskId, requestId)
@@ -10412,7 +10549,7 @@ function createSqliteLifecyclePort(store, { recoveryEvidenceVerifier, workerIden
   });
   return Object.freeze(port);
 }
-var UnsupportedLifecycleOperationError, B1_METHODS, C1_METHODS, C2_METHODS, C3_READ_METHODS, CANCEL_METHODS, QUEUED_CANCEL_METHODS, INTERACTION_METHODS, RUNTIME_EVENT_METHODS;
+var UnsupportedLifecycleOperationError, B1_METHODS, C1_METHODS, C2_METHODS, C3_READ_METHODS, CANCEL_METHODS, QUEUED_CANCEL_METHODS, USER_RELEASE_METHODS, INTERACTION_METHODS, RUNTIME_EVENT_METHODS;
 var init_lifecycle_port = __esm({
   "src/sqlite-candidate/wp6b2b1/lifecycle-port.mjs"() {
     "use strict";
@@ -10450,6 +10587,7 @@ var init_lifecycle_port = __esm({
     C3_READ_METHODS = Object.freeze(["readRecoverySnapshot"]);
     CANCEL_METHODS = Object.freeze(["requestCancellation", "recordCancellationVerification"]);
     QUEUED_CANCEL_METHODS = Object.freeze(["cancelQueuedAttempt"]);
+    USER_RELEASE_METHODS = Object.freeze(["userAuthorizedReleaseUnverifiedOperation"]);
     INTERACTION_METHODS = Object.freeze(["recordInteractionRequest", "readInteractionRequest", "beginInteractionReply", "commitInteractionReply", "completeInteractionReply"]);
     RUNTIME_EVENT_METHODS = Object.freeze(["appendRuntimeTaskEvent"]);
   }
@@ -11943,6 +12081,7 @@ async function openClaimOnlyDriver(options) {
       executionPermissionCheck: localPolicy.checkPermission
     }),
     cancelQueuedAttempt: (input) => port.cancelQueuedAttempt(input),
+    userAuthorizedReleaseUnverifiedOperation: (input) => port.userAuthorizedReleaseUnverifiedOperation(input),
     requestCancellation: (input, evidence) => port.requestCancellation(input, evidence),
     recordCancellationVerification: (input, evidence) => port.recordCancellationVerification(input, evidence),
     async cancelRunning(taskId, attempt) {
@@ -12279,7 +12418,11 @@ async function openClaimOnlyDriver(options) {
       let resultDigest;
       let cleanupState = "not_attempted";
       let stopBoundary = "claim_only";
-      const stage = (name, detail) => options.onStage?.(name, { operation_id: input.operationId, ...detail });
+      let intentStageObserved = false;
+      const stage = (name, detail) => {
+        options.onStage?.(name, { operation_id: input.operationId, ...detail });
+        if (name === "intent_complete") intentStageObserved = true;
+      };
       try {
         stage("admission_start");
         let admission;
@@ -12343,6 +12486,13 @@ async function openClaimOnlyDriver(options) {
         if (intent.duplicate === true) throw new LifecycleGateError("launch_outcome_unknown", "existing Intent never authorizes another Spawn");
         const intentRevision = positive3(intent.revision, "launch_intent_revision_missing");
         stage("intent_complete", { revision: intentRevision });
+        const postIntent = asRecord6(port.readOperation(input.operationId));
+        const postIntentTask = asRecord6(port.readTaskProjection(input.task.task_id));
+        const postIntentAttempt = asRecord6(port.readAttempt(input.task.task_id, input.attempt));
+        if (postIntent.phase !== "launch_intent" || Number(postIntent.revision) !== intentRevision || Number(postIntent.generation) !== generation || postIntentTask.status !== "queued" || Number(postIntentTask.current_attempt) !== input.attempt || postIntentAttempt.status !== "queued" || Number(postIntentAttempt.generation) !== generation) {
+          throw new LifecycleGateError("launch_cancelled_before_spawn", "authoritative projection changed after Launch Intent");
+        }
+        if (!intentStageObserved) throw new LifecycleGateError("launch_cancelled_before_spawn", "Cancellation raced Launch Intent before Spawn");
         stage("spawn_bootstrap_start");
         const startPlanRequested = input.task.model?.provider_id === "account:bigmodel-start-plan";
         const startPlanPrivateAuth = options.startPlanPrivateAuth ?? (startPlanRequested && !options.testOnlyFakeAdapter ? await options.startPlanPrivateAuthFactory?.().catch(() => null) ?? null : null);
@@ -13766,7 +13916,15 @@ function buildSqliteDoctorChecks(value, managerFence) {
   const recovery = durableHolds.length > 0 ? { name: "recovery_lock", status: "error", summary: bounded(`SQLite persisted Recovery Hold/Quarantine: ${holdDetails}. Existing evidence-bound recovery is required; no automatic unlock`) } : managerFence ? { name: "recovery_lock", status: "warning", summary: bounded(`SQLite Manager is read-only/fenced: ${managerFence}`) } : { name: "recovery_lock", status: "ok", summary: "SQLite snapshot has no persisted Recovery Hold/Quarantine; this Manager has no recovery fence" };
   const details = active.slice(0, 32).map((task) => {
     const operation = byAttempt.get(`${task.task_id}#${task.current_attempt}`);
-    return `${task.task_id}#${task.current_attempt}: ${task.status}${operation ? ` (operation ${operation.operation_id}, phase ${operation.phase}, result ${operation.result_digest ? "committed" : "absent"}, cleanup ${operation.cleanup_state}, recovery ${operation.recovery_classification ?? "none"})` : " (no Operation)"}`;
+    const blocker = operation ? null : occupied.find((candidate) => {
+      const workspace = typeof candidate.workspace_ref === "string" ? candidate.workspace_ref : null;
+      const taskWorkspace = typeof task.workspace === "string" ? task.workspace : null;
+      return workspace !== null && taskWorkspace !== null && sameExecutionPath(workspace, taskWorkspace);
+    }) ?? (operation ? void 0 : occupied.find((candidate) => candidate.task_id !== task.task_id));
+    const now = Date.now();
+    const queuedDuration = nonNegativeDuration(now, task.created_at);
+    const blockedDuration = blocker ? nonNegativeDuration(now, blocker.created_at) : null;
+    return `${task.task_id}#${task.current_attempt}: ${task.status}${operation ? ` (operation ${operation.operation_id}, phase ${operation.phase}, result ${operation.result_digest ? "committed" : "absent"}, cleanup ${operation.cleanup_state}, recovery ${operation.recovery_classification ?? "none"})` : blocker ? ` (blocked by ${blocker.task_id}#${blocker.attempt} operation ${blocker.operation_id}, phase ${blocker.phase}, workspace ${blocker.workspace_ref}, queued ${queuedDuration}ms, blocked ${blockedDuration}ms)` : " (no Operation)"}`;
   }).join("; ");
   return [
     {
@@ -13783,6 +13941,17 @@ function record4(value) {
 }
 function bounded(value) {
   return value.replace(/[\r\n\0]/gu, " ").slice(0, 1200);
+}
+function nonNegativeDuration(now, createdAt) {
+  const created = typeof createdAt === "string" ? Date.parse(createdAt) : Number.NaN;
+  return Number.isFinite(created) ? Math.max(0, now - created) : 0;
+}
+function sameExecutionPath(left, right) {
+  const normalize = (value) => {
+    const resolved = value.replace(/[\\/]+$/gu, "");
+    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  };
+  return normalize(left) === normalize(right);
 }
 var init_sqlite_doctor = __esm({
   "src/runtime/sqlite-doctor.ts"() {
@@ -13924,11 +14093,25 @@ function normalizeExecutionPath(value) {
   const resolved = path19.resolve(value).replace(/[\\/]+$/u, "");
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
+function nonNegativeDuration2(now, createdAt) {
+  const created = typeof createdAt === "number" ? createdAt : Date.parse(createdAt);
+  return Number.isFinite(created) ? Math.max(0, now - created) : 0;
+}
 function queueKey(taskId, attempt) {
   return `${taskId}\0${attempt}`;
 }
 function isTerminal(status) {
   return ["completed", "failed", "cancelled", "waiting_for_master"].includes(status);
+}
+function projectionCreated(snapshot) {
+  return asRecord7(snapshot.projection).created_at;
+}
+function canUserAuthorizeUnverifiedRelease(outcome) {
+  const reason = typeof outcome.reason === "string" ? outcome.reason : "";
+  const identityState = typeof outcome.identity_state === "string" ? outcome.identity_state : "";
+  const probeReason = typeof outcome.probe_reason === "string" ? outcome.probe_reason : "";
+  const stopFailure = probeReason === "worker_stop_unverified" || probeReason === "worker_stop_exit_unverified";
+  return !stopFailure && identityState !== "alive" && (reason === "adapter_cleanup_unverified" || reason === "cleanup_identity_unknown" || reason === "cleanup_incomplete" || reason === "cleanup_evidence_incomplete");
 }
 function delay2(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -14119,6 +14302,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
         const lastAt = events.events?.at(-1)?.at;
         const createdAt = string4(projection.created_at, "task_created_at_missing");
         const status = taskStatus(projection.status);
+        const dispatchBlocker = status === "queued" ? await this.#dispatchBlocker(taskId, snapshot) : void 0;
         const workerIdentity = operation?.claim_worker_identity_json ? parseRecord2(operation.claim_worker_identity_json) : null;
         const launchIdentity = !workerIdentity && operation?.launch_identity_json ? parseRecord2(operation.launch_identity_json) : null;
         const workerPid = status === "running" ? positiveOrNull(workerIdentity?.process_id ?? launchIdentity?.process_id) : null;
@@ -14141,6 +14325,7 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
             error: `Worker Result not committed: ${snapshot.result_submission_error}; execution is not retried and resources remain held pending identity-bound Recovery`
           } : {},
           ...executionObservation ? { execution_observation: executionObservation } : {},
+          ...dispatchBlocker ? { dispatch_blocker: dispatchBlocker } : {},
           ...Number(attempt.attempt) > 0 ? {} : {}
         };
       }
@@ -14317,7 +14502,10 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
           return this.getStatus(taskId);
         }
         const operation = snapshot.operation ? asRecord7(snapshot.operation) : null;
-        if (projection.status === "cancelled" && (!operation || operation.phase === "cancelled_before_launch" || operation.phase === "launch_intent" && operation.claim_id === null)) return this.getStatus(taskId);
+        if (projection.status === "cancelled" && operation?.phase === "launch_intent" && operation.claim_id === null) {
+          return await this.#userAuthorizedRelease(taskId, snapshot);
+        }
+        if (projection.status === "cancelled" && (!operation || operation.phase === "cancelled_before_launch")) return this.getStatus(taskId);
         if (isTerminal(projection.status) && operation?.phase === "released") {
           return this.getStatus(taskId);
         }
@@ -14344,6 +14532,9 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
               const released = await readReleased();
               if (released) return released;
               const reason = typeof outcome.reason === "string" ? outcome.reason : "worker_cleanup_unverified";
+              if (String(operation.phase) === "cleanup_unverified" && canUserAuthorizeUnverifiedRelease(outcome)) {
+                return await this.#userAuthorizedRelease(taskId, this.#readSnapshot(taskId));
+              }
               throw new TaskManagerError("CANCEL_FAILED", `SQLite cleanup remains occupied for this workspace: ${reason}`);
             }
             this.#schedulePump();
@@ -14352,6 +14543,35 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
           return recovery;
         }
         throw new TaskManagerError("TASK_STATE", `zcode_cancel is not allowed from SQLite status ${String(projection.status)}`);
+      }
+      async #userAuthorizedRelease(taskId, snapshot) {
+        const operation = snapshot.operation ? asRecord7(snapshot.operation) : null;
+        if (!operation || operation.phase !== "launch_intent" && operation.phase !== "cleanup_unverified") {
+          throw new TaskManagerError("TASK_STATE", "zcode_cancel has no user-authorized unverified release path for this Operation");
+        }
+        const attempt = asRecord7(snapshot.attempt);
+        const cancelId = operation.phase === "launch_intent" && typeof attempt.queued_cancel_id === "string" ? attempt.queued_cancel_id : this.#readCancelId(taskId, String(operation.operation_id));
+        if (!cancelId) throw new TaskManagerError("CANCEL_FAILED", "user-authorized unverified release requires the original durable cancellation Result");
+        const outcome = asRecord7(this.#driver.userAuthorizedReleaseUnverifiedOperation({
+          operation_id: string4(operation.operation_id, "operation_id_missing"),
+          task_id: taskId,
+          attempt: Number(attempt.attempt),
+          generation: Number(operation.generation),
+          revision: Number(operation.revision),
+          cancel_id: cancelId,
+          release_reason: "user_authorized_release_unverified"
+        }));
+        if (outcome.phase !== "released" || outcome.cleanup_verified !== false) {
+          throw new TaskManagerError("CANCEL_FAILED", "SQLite user-authorized unverified release did not persist a distinct Release fact");
+        }
+        this.#schedulerStage("user_authorized_release_unverified", {
+          task_id: taskId,
+          attempt: Number(attempt.attempt),
+          operation_id: operation.operation_id,
+          duplicate: outcome.duplicate === true
+        });
+        this.#schedulePump();
+        return await this.getStatus(taskId);
       }
       async replyToInteraction(input) {
         this.#assertOpen();
@@ -14369,6 +14589,47 @@ var init_sqlite_lifecycle_mcp_authority = __esm({
           throw error2;
         }
         return { task_id: input.task_id, request_id: input.request_id, state: "answered" };
+      }
+      #readCancelId(taskId, operationId) {
+        const page = this.#driver.readTaskEvents(taskId, { afterCursor: 0, limit: 200 });
+        for (const event of page.events ?? []) {
+          if (event.operation_id !== operationId || event.event_type !== "observation_recorded") continue;
+          const evidence = parseRecord2(string4(event.evidence_json, "event_evidence_missing"));
+          const reason = evidence.reason === "cancelled" ? "cancelled_before_claim" : evidence.reason;
+          if (reason === "cancelled_before_claim" || reason === "cancel_tree_verified") {
+            const cancelId = evidence.cancel_id;
+            return typeof cancelId === "string" && cancelId ? cancelId : null;
+          }
+        }
+        return null;
+      }
+      async #dispatchBlocker(taskId, snapshot) {
+        const attempt = asRecord7(snapshot.attempt);
+        if (snapshot.operation || Number(attempt.generation ?? 0) !== 0) return void 0;
+        const recoverySnapshot = this.#validateRecoverySnapshot(this.#driver.readRecoverySnapshot());
+        const task = snapshot.task;
+        const executionPath = taskExecutionPath(task);
+        const operations = recoverySnapshot.operations.map(asRecord7).filter((operation) => operation.capacity_occupied === true);
+        const occupied = operations.find((operation) => {
+          if (operation.task_id === taskId) return false;
+          const workspace = typeof operation.workspace_ref === "string" ? operation.workspace_ref : null;
+          return workspace !== null && executionPathsOverlap(workspace, executionPath);
+        }) ?? (operations.length > 0 ? operations.find((operation) => operation.task_id !== taskId) : void 0);
+        if (!occupied) return void 0;
+        const createdAt = string4(projectionCreated(snapshot), "task_created_at_missing");
+        const now = Date.now();
+        const operationCreated = typeof occupied.created_at === "string" ? Date.parse(occupied.created_at) : null;
+        const blockingWorkspace = string4(occupied.workspace_ref, "blocking_workspace_missing");
+        const queuedCreated = Date.parse(createdAt);
+        return {
+          reason: normalizeExecutionPath(blockingWorkspace) !== normalizeExecutionPath(executionPath) ? "workspace_occupied" : "capacity_occupied",
+          task_id: string4(occupied.task_id, "blocking_task_id_missing"),
+          operation_id: string4(occupied.operation_id, "blocking_operation_id_missing"),
+          phase: string4(occupied.phase, "blocking_phase_missing"),
+          workspace: blockingWorkspace,
+          queued_duration_ms: nonNegativeDuration2(now, queuedCreated),
+          blocked_duration_ms: nonNegativeDuration2(now, operationCreated ?? 0)
+        };
       }
       async shutdown() {
         if (this.#shutdownPromise) return this.#shutdownPromise;
@@ -36628,6 +36889,15 @@ var executionObservationSchema = object({
   observed_at: string2(),
   evidence_ref: string2()
 });
+var dispatchBlockerSchema = object({
+  reason: _enum(["capacity_occupied", "workspace_occupied"]),
+  task_id: string2(),
+  operation_id: string2(),
+  phase: string2(),
+  workspace: string2(),
+  queued_duration_ms: number2().int().nonnegative(),
+  blocked_duration_ms: number2().int().nonnegative()
+});
 var taskStatusRecordSchema = object({
   task_id: string2(),
   status: _enum([
@@ -36649,7 +36919,8 @@ var taskStatusRecordSchema = object({
   error_code: string2().optional(),
   error: string2().optional(),
   observation: taskObservationSchema.optional(),
-  execution_observation: executionObservationSchema.optional()
+  execution_observation: executionObservationSchema.optional(),
+  dispatch_blocker: dispatchBlockerSchema.optional()
 });
 var taskAttentionSnapshotSchema = strictObject({
   task_id: string2(),
