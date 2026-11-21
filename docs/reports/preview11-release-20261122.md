@@ -4,6 +4,7 @@
 > Date: 2026-11-22
 > Preview base: `f549373404ac137600e89991b99114a4802133f2`
 > Integration PR: #117
+> Release PR: #118
 
 ## Release Scope
 
@@ -34,7 +35,12 @@ Preview.11 在 Preview.10 的 SQLite v14-only 基线上发布以下已验证变�
 - `npm.cmd run test:stress` PASS（4/4），覆盖 SQLite AppServer 流、历史增长、
   跨进程 Result CAS 和并发 admission。
 - `npm.cmd run cost-lab:test` PASS（86/86）。
-- 发布 Tag、GitHub Release、ZIP 和 SHA-256 在 release workflow 完成后记录。
+- PR #118 的合并前 CI：`44942200110`，Ubuntu、Windows 两 shard、Windows aggregate
+  和两平台 SQLite matrix PASS；Cost Lab 因 impact selector skipped。
+- PR #118 合并后 Preview push CI：`44943326506`，Cost Lab、Ubuntu、Windows 两 shard、
+  Windows aggregate 和两平台 SQLite matrix 全部 PASS。
+- GitHub prerelease 已发布；GitHub asset digest、回下载 ZIP、`.sha256` 资产和本地
+  暂存 ZIP 的 SHA-256 全部一致。
 
 ## Known Limits
 
@@ -52,15 +58,37 @@ Preview.11 在 Preview.10 的 SQLite v14-only 基线上发布以下已验证变�
 
 ```text
 PREVIEW_VERSION: 2.0.0-preview.11
-PREVIEW_CODE_HEAD: f549373404ac137600e89991b99114a4802133f2
-RELEASE_COMMIT: PENDING
-RELEASE_TREE: PENDING
+PREVIEW_CODE_HEAD: d806d3a6d4415a234ab7640fa9d66624a62755e9
+RELEASE_COMMIT: d806d3a6d4415a234ab7640fa9d66624a62755e9
+RELEASE_TREE: 697115d21fe6fdbbdd37c116c90e2ffa97a5bd16
 TAG: codex-zcode-bridge-preview-v2.0.0-preview.11
-RELEASE_URL: PENDING
-ZIP_SHA256: PENDING
+TAG_OBJECT: 1aabebf5d3f0e2f8a3ca78854031e53b5ad2e611
+RELEASE_URL: https://github.com/Sandyzzx/codex-zcode-bridge/releases/tag/codex-zcode-bridge-preview-v2.0.0-preview.11
+ZIP_BYTES: 3868950
+ZIP_SHA256: abbbf305fe9d4216626ab0a3d316f7b4f8c6092e4b2215e86af1f7f590dbf655
+POST_MERGE_CI: PASS, run 44943326506
 ```
+
+## Release Asset Verification
+
+资产从 annotated Tag 指向的插件子树通过 `git archive` 独立生成。回下载 ZIP 在隔离
+目录解包并验证：
+
+| 发布验证 | 结果 |
+|---|---|
+| Release | `draft=false`, `prerelease=true` |
+| Tag peeled commit / tree | `d806d3a6d4415a234ab7640fa9d66624a62755e9` / `697115d21fe6fdbbdd37c116c90e2ffa97a5bd16` |
+| ZIP entries | 51 |
+| Manifest / MCP Server version | `2.0.0-preview.11` / `2.0.0-preview.11` |
+| MCP `initialize` / `notifications/initialized` / `tools/list` | PASS |
+| Registered tools | 13，包含 `zcode_task` |
+| Isolated SQLite bootstrap | PASS，使用项目内临时 `LOCALAPPDATA`，未读取生产 SQLite |
+| SQLite `PRAGMA integrity_check` | `ok` |
+| Test DB / credential-named files in ZIP | 0 |
+| API digest / downloaded ZIP / sidecar / staged ZIP | 四方一致 |
 
 ## Repository Boundary
 
-根工作区的未跟踪 `$null`、`stable` 和既有用户 WIP 未修改。发布产物从 Tag 指向的
-提交独立生成，不使用生产 SQLite 或用户工作区。
+根工作区的未跟踪 `$null`、`stable`、根 `preview` 的既有分叉和用户 WIP 未修改；
+Async Executor Worktree 未修改。发布产物从 Tag 指向的提交独立生成，不使用生产
+SQLite 或用户工作区。
