@@ -1,11 +1,13 @@
 # Token Efficiency 独立审查
 
 > Status: RESEARCH
-> Last updated: 2026-11-21
+> Last updated: 2026-11-22
 > A0: `1f9ff9ef37528205e76156e13fe06ed2b1fd3711`
 > Implementation: `6f814bf8736baa59295e686af8733c88d4202ca0`
 > Runs: `token-efficiency-20261121-offline-ab` / `token-efficiency-preview-integration-20261121`
-> Hosted CI: `44918089589` on `fafc3f397fced54cbc655a11b50e49b8ad51530e`
+> Historical PR #116 CI: `44918089589` on `fafc3f397fced54cbc655a11b50e49b8ad51530e`
+> Unified runtime candidate: `fbc1676c`; hosted CI `PENDING`
+> Evidence-doc revision: `88c1ea62`; no runtime or test source changes after the reviewed candidate
 
 ## 审查轮次
 
@@ -22,15 +24,15 @@
 
 | 角色 | 重点 | 结论 |
 |---|---|---|
-| 架构/兼容审查 | Diff、MCP 合同、SQLite Authority、Attempt、取消、Hold、Cleanup、证据 | 未发现 P0 运行缺陷；回滚 SHA 漂移和 16 MiB 全量回读边界需修正/明确 |
-| 成本/实验审查 | 代理 Token、Host 注入、CostLab、Usage、缓存与账单声明 | 27.6% 不是完整任务账单收益；真实 ≥25% 目标仍为 `INSUFFICIENT_EVIDENCE`，付费试点保持 `BLOCKED` |
+| 架构/兼容审查（Pauli findings closure） | Diff、MCP 合同、SQLite Authority、Attempt、取消、Hold、Cleanup、证据 | `fbc1676c` 上五项既有 finding 全部 `CLOSED`，未发现新的 P0/P1；`fbc1676c..88c1ea62` 只改文档与研究回放脚本，不含运行时或测试源码 |
+| 成本/实验审查 | 代理 Token、Host 注入、CostLab、Usage、缓存与账单声明 | 27.2% 不是完整任务账单收益；真实 ≥25% 目标仍为 `INSUFFICIENT_EVIDENCE`，付费试点保持 `BLOCKED` |
 
 ## 集成审查结论
 
-- A/B 的 27.6% 是双通道 Envelope 加目录代理值，不是实际模型 Token 或账单。安装版
+- A/B 的 27.2% 是双通道 Envelope 加目录代理值，不是实际模型 Token 或账单。安装版
   Codex Host 零成本探针确认：MCP Result 对宿主保留 text 与 `structuredContent`，
   但下一模型请求只含 `structuredContent` 和短包装。结构化通道加目录的代理降幅为
-  26.5%，仍主要来自一个大型成功 Result。
+  25.75%，仍主要来自一个大型成功 Result。
 - 大代码成功样本减少 25,195 proxy tokens，大于总体净减少 24,651，解释了 102.2%
   的净收益。固定样本中位数仍为 710 → 710；大日志失败增加 522 tokens 和一次完整
   取证读取。没有证据支持普通任务、失败恢复或完整任务账单普遍降本。
@@ -47,12 +49,16 @@
 
 ## 影响范围
 
-- Manager 的代码变化限于读取时投影既有 Event Attempt，并把可选字段计入 Summary
-  合并与页预算。SQLite v14、Writer、Worker、Adapter、Claim、Cleanup、Release、
-  取消和恢复执行代码未改。
+- PR #116 的 Manager 变化限于读取时投影既有 Event Attempt，并把可选字段计入
+  Summary 合并与页预算。统一候选另按 ADR-039 修改既有 Manager、Lifecycle Gate
+  与 SQLite candidate Store 的行政释放资格/证据绑定，并按 ADR-048 约束默认 Event
+  页；未新增数据库、Schema 版本或第二状态机。Worker、Adapter、Claim/Cleanup
+  正常路径与 v14 表形状未改。
 - Result 摘要读取同一已提交 Result。2 KiB 以内返回原对象；较大成功结果可显式请求
   bounded projection；默认 `zcode_result({task_id})` 仍返回完整原对象。
-- 工具名、注册顺序和 12 个既有 `outputSchema` 均保留。目录代理值只下降 4.9%；
+- 工具名、注册顺序和 12 个既有 `outputSchema` 均保留。ADR-039 为
+  `zcode_status` 与 `zcode_cancel` 增加可选 `dispatch_blocker`，目录代理为
+  7,747 → 7,729（−0.23%）；此前无 Track E 的 B5 单独描述缩减为 6.1%；
   此前 71.1% 分支主要靠删除 `outputSchema`，未计入本候选。
 - B1 没有新增独立成本收益；B3 依赖后续文件读取，短结果不应强制写文件；B4 本轮是
   缓存稳定性对照而非已实现收益。保留这些改动只因合同、取证或可读性价值，不把它们
@@ -60,25 +66,31 @@
 
 ## 验证证据
 
-集成工作树为 `D:\codex-zcode-bridge\.run\token-efficiency-preview-integration-20261121`，
-Windows x64、Node `24.16.0`、npm `11.13.0`。证据根目录为
-`D:\codex-zcode-bridge\.run\token-efficiency-integration-20261121`。
+当前统一集成工作树为
+`D:\codex-zcode-bridge\.run\bridge-2.0.0-consolidation-20261122`，Windows x64、
+Node `24.16.0`、npm `11.13.0`。回放证据根目录为
+`D:\codex-zcode-bridge\.run\bridge-2.0.0-consolidation-20261122-offline-ab`；
+安装版 Host 通道与 16 MiB 探针保留在旧集成工作树的 `.run/host-probe/`。
 
 | 命令或探针 | 证据 | 结果 |
 |---|---|---|
-| `npm.cmd ci` 与 `test:affected -- --base a03ace1ca... --t0-only` | `npm-ci.log`、`test-affected-t0-precommit-integration.log` | typecheck、build、plugin validation、10 个生成物与 diff check PASS |
-| `npm.cmd run test:full` | `test-full-integration-windows.log` | 965 PASS、0 FAIL、2 SKIP、退出码 0；Plugin Validation PASS |
-| `npm.cmd run test:stress` | `test-stress-integration-windows.log` | 4/4 PASS、0 FAIL、0 SKIP、退出码 0 |
+| `npm.cmd run test:affected -- --base origin/preview --dry-run` | 当前工作树 | 选中 `FULL_SUITE`；随后以 `test:full` 覆盖，typecheck、build、plugin validation、10 个生成物与 diff check PASS |
+| `npm.cmd run test:full` | 2026-11-22 当前工作树运行 | 981 PASS、0 FAIL、2 SKIP、退出码 0；Plugin Validation PASS |
+| `npm.cmd run test:stress` | 2026-11-22 当前工作树运行 | SQLite/Worker stream 4/4 PASS、0 FAIL、0 SKIP、退出码 0；32,000 events、3,796,910 bytes、`max_writable_length=0` |
 | `npm.cmd run cost-lab:test` | `cost-lab-test-integration.log` | 86/86 PASS、退出码 0 |
 | 冻结 A0 默认回放两次 | A0 审计工作树 `.run/phase0-20261121-a0/replay-a0-restored-default*.json` | 均匹配 SHA-256 `3f17abf008c5093913282409101577b5adaa9d79c4a0f52326b6386c8f94cff9` |
-| 两次 `replay-ab.mjs` | 证据根目录 `replay-ab-integration*.json` | SHA-256 均为 `1636481c13e624224ca6a46a2ec616a8877d1704acc19c65c2c4fbe30ce42fa3` |
+| 两次 `replay-ab.mjs` | `.run/bridge-2.0.0-consolidation-20261122-offline-ab/replay-ab-integration*.json` | SHA-256 均为 `5e25e373802daec8b019a15403e8819fd5bdc9f037a0257bf97b637f61cdaf99` |
 | 安装版 Host 通道探针 | 集成分支 `.run/host-probe/evidence.json`、`requests.jsonl` | 2 个本机回环请求、0 付费请求；模型输入只含 structured marker |
 | 安装版 Host 32 MiB 直读 | 集成分支 `.run/host-probe/app-server-large-result.json` | `host_line_limit_discard`，max line 16,777,216 bytes，进程树 cleanup verified |
 | 托管 PR CI `44918089589` | PR #116 checks | Ubuntu、Windows 两个 shard 与 aggregate、两平台 SQLite PASS；Cost Lab 未被 impact selector 选中 |
 
-托管 Windows/Ubuntu CI 已在运行时候选 `fafc3f397` 上执行。Cost Lab 托管 job
-`136887980954` 为 `SKIPPED`，不能写成托管 PASS；同候选本地 86/86 只证明现有测量
-工具行为，不证明真实任务成本、成功率或缓存。
+托管 Windows/Ubuntu CI 仅在 PR #116 的旧候选 `fafc3f397` 上执行。Cost Lab
+托管 job `136887980954` 为 `SKIPPED`，不能写成托管 PASS；同候选本地 86/86 只证明
+现有测量工具行为，不证明真实任务成本、成功率或缓存。统一候选 `fbc1676c` 的托管
+CI 仍为 `PENDING`。独立 findings-closure 复核已在 `fbc1676c` 上关闭精确
+cancel/Recovery 证据绑定、跨重启重验、root-observed、capacity headroom 与
+16 MiB 文档边界五项问题；其后 `88c1ea62` 的差异只有文档和研究回放脚本，Master
+已用 `git diff --name-status` 核对不存在运行时或测试源码变化。
 
 ## 剩余门槛
 
@@ -90,7 +102,7 @@ Windows x64、Node `24.16.0`、npm `11.13.0`。证据根目录为
 - 真实 A/B 需要受支持 Runtime、可靠账户/账单隔离、完整请求归因和可执行的逐请求预算
   上限；当前条件不满足，预算支出保持 `$0`。
 
-结论：运行时 Diff 未发现 P0 缺陷，托管 Windows/Ubuntu/SQLite 门禁与本地 Cost Lab
-均通过。大型 Result 分层以显式 opt-in 进入 Preview；不得以离线 27.6% 宣称真实成本
-目标达标，Preview Ready 为 `YES`（含 16 MiB 回读与静态 Schema 兼容性限制），
-Stable Ready 为 `NO`。
+结论：当前统一候选的本地全量、压力、Cost Lab 与聚焦实现回归通过；旧 PR #116
+托管门禁不能替代本候选 CI。大型 Result 分层以显式 opt-in 进入 Preview；
+不得以离线 27.2% 宣称真实成本目标达标。托管 CI 完成前 Preview 建议保持
+`PENDING_FINAL_CI`（含 16 MiB 回读与静态 Schema 兼容性限制），Stable Ready 为 `NO`。

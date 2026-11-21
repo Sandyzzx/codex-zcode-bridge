@@ -298,8 +298,18 @@ assert.equal(legacyEventsSchema.outputSchema.properties.events.items.properties.
 delete legacyEventsSchema.inputSchema.properties.include_attempt;
 delete legacyEventsSchema.outputSchema.properties.events.items.properties.attempt;
 assert.deepEqual(legacyEventsSchema, schemas(a0EventsTool));
+for (const statusToolName of ["zcode_status", "zcode_cancel"]) {
+  const a0StatusTool = a0.catalog.tools.find(({ name }) => name === statusToolName);
+  const candidateStatusTool = candidate.catalog.tools.find(({ name }) => name === statusToolName);
+  const legacyStatusSchema = structuredClone(schemas(candidateStatusTool));
+  assert.equal(legacyStatusSchema.outputSchema.properties.dispatch_blocker.type, "object");
+  delete legacyStatusSchema.outputSchema.properties.dispatch_blocker;
+  assert.deepEqual(legacyStatusSchema, schemas(a0StatusTool));
+}
 for (const [i, tool] of a0.catalog.tools.entries()) {
-  if (!["zcode_result", "zcode_events"].includes(tool.name)) assert.deepEqual(schemas(candidate.catalog.tools[i]), schemas(tool), tool.name);
+  if (!["zcode_result", "zcode_events", "zcode_status", "zcode_cancel"].includes(tool.name)) {
+    assert.deepEqual(schemas(candidate.catalog.tools[i]), schemas(tool), tool.name);
+  }
 }
 for (const { id } of samples) {
   for (const key of ["dispatch", "status", "attention", "full", "prompt"]) {

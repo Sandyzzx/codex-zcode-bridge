@@ -115,6 +115,30 @@ function verifiedRecoveryPort(store){return createSqliteLifecyclePort(store,{rec
     &&(observation.classification==='hold'?observation.reason_code!=='operation_projection_conflict':observation.reason_code==='operation_projection_conflict');
   return valid?{classification:observation.classification,reason_code:observation.reason_code,evidence_source:observation.evidence_source,evidence_digest:observation.evidence_digest}:false;
 }});}
+function cancelledCleanupFixture(label){
+  const {root:r,store,request}=makeRunning(label),cancel=cancellationFixture(store);
+  const intent=cancel.port.requestCancellation(cancel.fence(),cancel.identityEvidence);
+  const verification=cancel.port.recordCancellationVerification(cancel.fence(intent.revision),
+    {...cancel.cancellationEvidence,cancel_id:intent.cancel_id});
+  store.commitResult({...request,revision:verification.revision,result_status:'cancelled',result:resultPayload('cancelled'),
+    cancel_verification_digest:verification.cancellation_verification_digest});
+  const cleanup=cleanupFence(store,request),pending=store.beginCleanup(cleanup);
+  store.recordCleanupEvidence({...cleanup,revision:pending.revision,outcome:'unverified',probe_state:'incomplete',reason:'adapter_cleanup_unverified'});
+  return {root:r,store,request,cancel,intent,verification};
+}
+function cleanupReleaseRecovery(store){
+  const o=store.readOperation('operation-result');
+  const evidence={source:'manager_process_probe',operation_id:o.operation_id,task_id:o.task_id,attempt:o.attempt,generation:o.generation,
+    phase:o.phase,claim_id:o.claim_id,worker_identity_digest:o.claim_worker_identity_digest,identity_state:'exited',process_id:41001,
+    start_fingerprint:'synthetic-start-result',probe_reason:'synthetic_exact_exit',recovery_disposition:'complete_cleanup_closure_unavailable',
+    process_tree_root_observed:true,process_tree_scan_clean:true,process_tree_scan_digest:'d'.repeat(64),complete_cleanup_closure:false,
+    observed_at:new Date().toISOString()};
+  return {evidence,input:{operation_id:o.operation_id,task_id:o.task_id,attempt:o.attempt,generation:o.generation,
+    expected_revision:o.revision,claim_id:o.claim_id,worker_identity_digest:o.claim_worker_identity_digest,classification:'hold',
+    reason_code:'cleanup_incomplete',evidence_source:'manager_process_probe',evidence_digest:digest(evidence),
+    process_tree_root_observed:true,process_tree_scan_clean:true,process_tree_scan_digest:'d'.repeat(64),
+    recovery_disposition:'complete_cleanup_closure_unavailable'}};
+}
 for(const priorProof of [false,true])test(`explicit cancellation resolves cleanup-only Hold with fresh tree proof (prior proof ${priorProof})`,()=>{
   const {root:r,store,request}=makeRunning(`cancel-held-${priorProof}`),cancel=cancellationFixture(store);
   const intent=cancel.port.requestCancellation(cancel.fence(),cancel.identityEvidence);
@@ -310,6 +334,49 @@ test('running cancellation persists exact Worker identity, is idempotent, and bi
     e=>e instanceof AdmissionError&&e.code==='cleanup_not_verified');
   assert.equal(readRows(r).active,1);store.close();
   const reopened=IsolatedAdmissionStore.open(r);assert.equal(reopened.readOperation('operation-result').phase,'cleanup_unverified');reopened.close();
+});
+
+test('enriched cleanup Recovery release is idempotent and survives SQLite reopen validation',()=>{
+  const f=cancelledCleanupFixture('cleanup-admin-release'),proof=cleanupReleaseRecovery(f.store);
+  verifiedRecoveryPort(f.store).recordRecoveryObservation(proof.input,proof.evidence);
+  const operation=f.store.readOperation('operation-result');
+  const request={operation_id:operation.operation_id,task_id:operation.task_id,attempt:operation.attempt,generation:operation.generation,
+    revision:operation.revision,cancel_id:f.intent.cancel_id,cancellation_verification_digest:f.verification.cancellation_verification_digest,
+    recovery_evidence_digest:digest(proof.evidence),release_reason:'user_authorized_release_unverified'};
+  const first=f.store.userAuthorizedReleaseUnverifiedOperation(request);
+  const duplicate=f.store.userAuthorizedReleaseUnverifiedOperation(request);
+  assert.equal(first.duplicate,false);assert.equal(first.cleanup_verified,false);
+  assert.equal(duplicate.duplicate,true);assert.equal(duplicate.revision,first.revision);
+  assert.equal(readRows(f.root).events.filter(event=>event.event_type==='observation_recorded'
+    &&JSON.parse(event.evidence_json).reason==='user_authorized_release_unverified').length,1);
+  f.store.close();
+  const reopened=IsolatedAdmissionStore.openForRecovery(f.root);
+  try{
+    const snapshot=reopened.readRecoverySnapshot(),recoveryOperation=snapshot.operations.find(item=>item.operation_id===operation.operation_id);
+    assert.equal(snapshot.root_status,'consistent_read_only');
+    assert.equal(recoveryOperation.phase,'released');assert.equal(recoveryOperation.capacity_occupied,false);
+    assert.equal(recoveryOperation.cleanup_state,'unverified_admin_release');
+    assert.equal(readRows(f.root).events.filter(event=>event.event_type==='result_committed').length,1);
+    assert.equal(readRows(f.root).events.filter(event=>event.event_type==='cleanup_unverified').length,1);
+    assert.equal(readRows(f.root).events.filter(event=>event.event_type==='cleanup_verified').length,0);
+  }finally{reopened.close();}
+});
+
+test('a newer live Hold prevents authorized release from falling back to stale eligible Recovery evidence',()=>{
+  const f=cancelledCleanupFixture('cleanup-admin-release-stale-proof'),proof=cleanupReleaseRecovery(f.store);
+  verifiedRecoveryPort(f.store).recordRecoveryObservation(proof.input,proof.evidence);
+  const live=recoveryInput(f.store,{reason_code:'cleanup_incomplete'});
+  verifiedRecoveryPort(f.store).recordRecoveryObservation(live.input,live.evidence);
+  const operation=f.store.readOperation('operation-result');
+  capture(()=>f.store.userAuthorizedReleaseUnverifiedOperation({
+    operation_id:operation.operation_id,task_id:operation.task_id,attempt:operation.attempt,generation:operation.generation,
+    revision:operation.revision,cancel_id:f.intent.cancel_id,cancellation_verification_digest:f.verification.cancellation_verification_digest,
+    recovery_evidence_digest:digest(proof.evidence),release_reason:'user_authorized_release_unverified',
+  }),'user_authorized_release_recovery_evidence_mismatch');
+  const after=f.store.readOperation('operation-result');
+  assert.equal(after.phase,'cleanup_unverified');assert.equal(readRows(f.root).active,1);
+  assert.equal(readRows(f.root).events.filter(event=>event.event_type==='observation_recorded'
+    &&JSON.parse(event.evidence_json).reason==='user_authorized_release_unverified').length,0);
 });
 
 test('cancellation identity and tree verification fail closed; unverified cancellation cannot commit Result',()=>{

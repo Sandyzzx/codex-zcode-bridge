@@ -1,15 +1,15 @@
 # 执行监控、互动与审批
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-21
-> Last verified: 2026-11-21，核对 Events 分页、Attention 唤醒条件、已安装 Thin Waiter 的 CLI 和回读交互路径。真实宿主长等 NOT RUN。
-> Verified against: `1f9ff9ef37528205e76156e13fe06ed2b1fd3711` 与已安装 `2.0.0-preview.10`
+> Last updated: 2026-11-22（默认 Event 页预算集成候选）
+> Last verified: 2026-11-22，核对 `zcode_events` 默认 32 KiB 页预算、显式 `max_bytes`、`scan_incomplete`/cursor、Attention、Attempt 归属与 SQLite interaction 读取；合并后真实宿主长等仍未运行。
+> Verified against: `450c18afc0c8af2700734399c5aebd87a36df795` + bounded-default-events integration candidate
 
 ## 跟进
 
-1. `zcode_task` 返回后立即调用 `zcode_events`（`after_seq: 0, view: "summary"`），报告 queued/running 和工作路径。用 `workspace_ready`（若有）或 `session_ready` 核实项目根目录、实际执行目录和 worktree。只有派发时的路径时标“请求”，实际路径缺失时标“未确认”。启动阶段用普通事件等待（`wait_ms` 最大 25000），直到当前 Attempt 的 `turn_started`、启动失败或终态。
+1. `zcode_task` 返回后立即调用 `zcode_events`（`after_seq: 0, view: "summary"`），报告 queued/running 和工作路径。用 `workspace_ready`（若有）或 `session_ready` 核实项目根目录、实际执行目录和 worktree。只有派发时的路径时标“请求”，实际路径缺失时标“未确认”。启动阶段用普通事件等待（`wait_ms` 最大 25000），直到当前 Attempt 的 `turn_started`、启动失败或终态。省略 `max_bytes` 时 Manager 使用 32 KiB 页预算；`has_more` 或 `scan_incomplete` 为真时用 `scan_cursor`（否则用 `next_seq`）增量续读，不重复查询未变化的状态。
 2. `turn_started` 后向用户报告项目根目录、实际执行目录、session ID、runtime 报告的 provider/model/reasoning 和执行模式。模型和档位只读 `session_ready` 或 `model_selected` 的 runtime details。只有请求值时标“请求”，缺失写“未报告”。生产受信任本机 profile 当前映射 `yolo`，普通工具可自动执行并使用当前 OS 账户，不提供 OS 沙箱。
-3. 消费一页后将 `next_seq` 用作下次的 `after_seq`。默认 `view: "summary"`，它只合并同一 Attempt、同一 Operation 内连续的安全模型文本，保留交互、错误与终态。`has_more` 或 `scan_incomplete` 时先以 `wait_ms: 0` 补读，用返回的 `scan_cursor`（若有）或 `next_seq` 续页。若预算挡住单个事件且游标未推进，从同一位置提高或省略 `max_bytes` 重读。
+3. 消费一页后将 `next_seq` 用作下次的 `after_seq`。默认 `view: "summary"`，它只合并同一 Attempt、同一 Operation 内连续的安全模型文本，保留交互、错误、Hold 与终态。默认预算只限制单页输出，不删除持久事件；`has_more` 或 `scan_incomplete` 时先以 `wait_ms: 0` 补读，用返回的 `scan_cursor`（若有）或 `next_seq` 续页。显式 `max_bytes` 仍是硬预算；若单个事件超限且游标未推进，从同一位置提高该次预算后重读。不要把连续 `model_output`/summary 转发给用户或作为新的模型输入。
 4. 心跳、工具事件和文件变化分别证明不同事实；没有输出或结果时不推断测试通过、源码已还原或任务完成。`stalled` 只是观测提示；短静默先查业务事件、文件变化、交互、心跳和进程身份，不立即取消或重派。
 5. `zcode_feedback` 是当前 Attempt 的简洁机器投影；`last_observed` 不是实时工具状态，`interaction: not_observed` 不代表没有交互。终态后按需读取 feedback 与 result；两者都不替代独立验收。
 6. 安装、运行时或 provider 配置异常先调用只读 `zcode_doctor`；`unknown` 不是通过。诊断不得读取或写入凭据。
@@ -34,5 +34,7 @@
 ## 互动
 
 启动或运行期间看到 `interaction_requested` 或 Attention 有 Pending 时，用当前 `attention.pending_requests` 核对 `details.request_id`（必要时先以 `wait_for: "attention", wait_ms: 0` 读取）。读取持久请求的 method、工具、理由、输入、选项或问题。若请求事件已在监控游标之前或本页详情不全，以独立的 `view: "raw"` 补读游标从该请求之前分页（位置未知则 `after_seq: 0`），按需提高或省略 `max_bytes`。保留主监控游标，回复前再次以 Attention 核对当前 Attempt 和 Pending。请求内容或归属不明时保持未决。只有用户明确授权该具体操作才能用 `zcode_interaction_reply` `allow`。
+
+默认 32 KiB 页预算对单条超限交互保留安全例外，但事件已返回不等于请求内容完整。显式 `max_bytes` 下若返回 `scan_incomplete`，先提高该次读取预算并继续同一 cursor。worktree、`yolo`、TaskPackage 或历史授权都不构成许可。
 
 用户输入只依据已知事实或用户明确回答。AskUserQuestion 从 `details.params.questions`（嵌套工具输入时为 `details.params.input.questions`）读取；`answers` 以每个问题完整原文为键，不用 header/选项标签替代。回复后继续观察，Bridge 校验请求与原 Worker 通道身份，失败时保持未决并报告。

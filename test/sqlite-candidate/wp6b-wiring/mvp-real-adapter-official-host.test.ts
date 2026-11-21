@@ -5,7 +5,7 @@ import { existsSync, readFileSync } from "node:fs";
 
 import { loadLifecycleCandidateModules } from "../../../src/store/lifecycle-gate.js";
 
-import { officialHostWorkerEntryPath, officialHostCloseFailureWorkerEntryPath, officialHostStartPlanNoDiscountWorkerEntryPath, contentObject, syntheticTask, waitForTerminal, waitForEvent, waitForLifecycleEvent, waitForInteractionRequest, withRealAdapterMcp, HOST_ACCOUNT, HOST_DEVICE_MID, HOST_JWT, fakeHostBillingGate, hostIssuerFactory } from "./mvp-real-adapter-harness.js";
+import { officialHostWorkerEntryPath, officialHostCloseFailureWorkerEntryPath, officialHostStartPlanNoDiscountWorkerEntryPath, contentObject, syntheticTask, waitForTerminal, waitForEvent, waitForLifecycleEvent, waitForInteractionRequest, readAllPublicEvents, withRealAdapterMcp, HOST_ACCOUNT, HOST_DEVICE_MID, HOST_JWT, fakeHostBillingGate, hostIssuerFactory } from "./mvp-real-adapter-harness.js";
 import type { FakeRuntimeFixture, LifecycleTimingCollector } from "./mvp-real-adapter-harness.js";
 
 test("Worker routes an explicit Coding Plan through the installed AppServer adapter, SQLite Result, Cleanup, and Release", {
@@ -116,10 +116,8 @@ test("SQLite production Worker survives bounded large-chunk stderr backpressure 
     assert.match(String(result.summary), /synthetic MVP real-adapter report/u);
     const requests = readFileSync(runtime.requestLog, "utf8").trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
     assert.equal(requests.filter((message) => message.method === "session/send").length, 1);
-    const page = contentObject(await client.callTool({ name: "zcode_events", arguments: {
-      task_id: taskId, after_seq: 0, limit: 200,
-    } }));
-    const output = (page.events as Array<Record<string, unknown>>)
+    const { events } = await readAllPublicEvents(client, taskId);
+    const output = events
       .filter((event) => event.type === "model_output")
       .map((event) => String(event.summary));
     const visible = output.join("");

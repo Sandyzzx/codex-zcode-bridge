@@ -6,9 +6,9 @@ description: 用户明确要求使用 ZCode/Codex ZCode Bridge、查询或继续
 # ZCode Bridge — Master Skill
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-15
-> Last verified: 2026-11-15，核对 Preview.6 post-audit 的 SQLite-only 架构、Official Host、R7 Runtime Events/Usage、默认 13 工具面、机器反馈、平台 fail-closed、授权/恢复边界与渐进加载路由；真实 Host 文案消费未做 A/B。
-> Verified against: `7e717621c1de0fb56b3ac19e22e242d856445db4` + Preview.6 post-audit candidate
+> Last updated: 2026-11-22
+> Last verified: 2026-11-22，核对 opt-in Result 摘要/默认完整 Result、默认 32 KiB Event 页、ADR-039 行政释放保护、默认 13 工具面与渐进加载路由；真实 Host 文案消费未做 A/B。
+> Verified against: Preview `450c18afc0c8af2700734399c5aebd87a36df795` + unified integration candidate
 > Scope: Master 授权、派发、监控、独立验收与恢复；不修改 Bridge TaskPackage Schema 或 MCP 工具 API。
 
 ## 职责与授权
@@ -37,7 +37,7 @@ description: 用户明确要求使用 ZCode/Codex ZCode Bridge、查询或继续
 - Worker 不得擅自决定重大未决公共 API、持久化、安全或外部行为事项；继续不依赖该决定的工作并请求 Master。
 - `completed`、Worker 自报和部分测试都不替代独立验收。Master 基于实际 diff、文件、适用验证和执行证据分别报告执行状态、验收状态和接收状态。
 - `zcode_continue` 只用于同任务验收返工、关键决定补充、受控中断恢复或报告修复，不用于推进下一阶段或新目标。
-- 已知 SQLite 清理 Hold 不得绕过。`zcode_cancel` 是唯一标准恢复入口，可能终止原身份 Worker；调用前必须取得用户明确授权。成功后也须先检查原 workspace WIP，再讨论新 Attempt。
+- 已知 SQLite 清理 Hold 不得绕过。`zcode_cancel` 是唯一标准恢复入口，可能终止原身份 Worker；调用前必须取得用户明确授权。用户重复取消只可行政释放已被取消且无持久 Spawn 证据的历史 `launch_intent`，或已确认 exact exit + clean tree 但缺少 Adapter closure 的终态取消 Cleanup；活动/不可验证 Worker 与有 Receipt 的 Launch Intent 必须保持占用。`released`、`unverified_admin_release` 不是 `cleanup_verified`。成功后也须先检查原 workspace WIP，再讨论新 Attempt。
 - Worktree、路径声明和 `yolo` profile 不是 OS 沙箱；Worker 使用当前本机账户权限。未获用户相应授权不得提交、推送、发布、读取/修改凭据或删除任务外数据。
 
 ## 渐进式加载

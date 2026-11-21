@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import {
   contentObject,
+  readAllPublicEvents,
   syntheticTask,
   waitForInteractionRequest,
   waitForLifecycleEvent,
@@ -33,12 +34,8 @@ test("SQLite production Worker retains sustained 32,000-event AppServer streamin
       .map((line) => JSON.parse(line) as Record<string, unknown>);
     assert.equal(requests.filter((message) => message.method === "session/send").length, 1);
 
-    const page = contentObject(await client.callTool({ name: "zcode_events", arguments: {
-      task_id: taskId,
-      after_seq: 0,
-      limit: 200,
-    } }));
-    const output = (page.events as Array<Record<string, unknown>>)
+    const { events } = await readAllPublicEvents(client, taskId);
+    const output = events
       .filter((event) => event.type === "model_output")
       .map((event) => String(event.summary));
     const visible = output.join("");
