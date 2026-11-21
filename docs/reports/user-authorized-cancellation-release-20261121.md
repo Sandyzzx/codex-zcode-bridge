@@ -29,4 +29,4 @@
 - 定向 SQLite/MCP composition 全文件：58 PASS / 0 FAIL，覆盖新增 `intent_complete` cancel/Spawn 竞态、pre-Claim 行政释放、重复取消、排队任务重调度、Capacity-only blocker、真实 Worker cleanup 和 shutdown 路径。
 - `npm run build`：PASS；`npm run validate:plugin`：PASS；`git diff --check`：PASS。
 - 首次提交后 `npm run test:affected` 完整执行至全量回归：962 PASS / 1 FAIL / 2 SKIP。失败暴露了 terminal `failed` Hold 被误入行政释放分支的真实回归；修复后定向失败文件 12 PASS / 0 FAIL。
-- 后续需在干净提交状态重跑 `npm run test:affected`，确认完整 965 项回归全部通过；本轮已覆盖失败路径与新增 SQLite/MCP composition 58 项。
+- 最终干净提交状态重跑 `npm run test:affected`：FULL REGRESSION PASS，963 PASS / 0 FAIL / 2 SKIP。`STRESS_TESTS_NOT_APPLICABLE`（本次影响选择未命中压力测试边界）。
