@@ -14737,14 +14737,31 @@ async function openClaimOnlyDriver(options) {
           cancellation_verification_digest: verificationDigest2
         };
       }
-      const terminationState = identityVerdict.state === "alive" ? "terminated" : "already_exited";
+      let terminationState = identityVerdict.state === "alive" ? "terminated" : "already_exited";
       if (identityVerdict.state === "alive") {
-        const terminated = await terminateProcessTree(processIdentity.pid, {
-          graceMs: 500,
-          killWaitMs: 5e3,
-          expectedRootFingerprint: processIdentity.fingerprint
-        });
-        if (terminated.verified !== true) throw new LifecycleGateError("cancellation_tree_termination_unverified");
+        try {
+          if (options.testTerminateWorkerTree) {
+            await options.testTerminateWorkerTree(processIdentity.pid, processIdentity.fingerprint);
+          } else {
+            const terminated = await terminateProcessTree(processIdentity.pid, {
+              graceMs: 500,
+              killWaitMs: 5e3,
+              expectedRootFingerprint: processIdentity.fingerprint
+            });
+            if (terminated.verified !== true) throw new LifecycleGateError("cancellation_tree_termination_unverified");
+          }
+        } catch (error2) {
+          if (errorCode(error2) !== "process_tree_root_exited") throw error2;
+          const exited = await probeWithDeadline(probe, {
+            pid: processIdentity.pid,
+            identity: processIdentity
+          }, processProbeTimeoutMs);
+          if (exited.status !== "resolved" || exited.verdict?.state !== "exited") {
+            throw new LifecycleGateError("cancellation_tree_termination_unverified");
+          }
+          terminationState = "already_exited";
+          options.onStage?.("cancel_termination_root_exited", { pid: processIdentity.pid });
+        }
       }
       let workerExitCode = null;
       if (active?.child) {

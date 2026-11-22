@@ -2126,7 +2126,7 @@ class RawStdioMcpTestClient {
 
 async function withSqliteMcp(
   run: (client: Client, manager: SqliteLifecycleMcpAuthority, dataRoot: string, workspace: string) => Promise<void>,
-  options: { readonly testBeforeDispatch?: () => Promise<void>; readonly testOnScheduler?: (stage: string, detail: Readonly<Record<string, unknown>>) => void; readonly onStage?: (stage: string, detail?: Readonly<Record<string, unknown>>) => void; readonly onChildSpawn?: (child: { readonly pid?: number; readonly stderr?: NodeJS.ReadableStream | null; readonly resultChannel?: NodeJS.ReadableStream | null }) => void; readonly beforeAuthority?: (dataRoot: string, modules: Awaited<ReturnType<typeof loadLifecycleCandidateModules>>, workspace: string) => void; readonly prepareDataRoot?: (dataRoot: string, fixture: string) => Promise<void>; readonly databaseFileName?: string; readonly workerEntryPath?: string; readonly enableSyntheticInteractionChannel?: boolean; readonly processProbe?: ProcessProbe; readonly testProcessProbeTimeoutMs?: number; readonly testVerifyProcessTreeClaimantsClean?: typeof verifyProcessTreeClaimantsClean; readonly testProcessTreeProbeTimeoutMs?: number; readonly testShutdownWaitMs?: number; readonly testStopWorkerForRecovery?: (pid: number, expectedFingerprint: string) => Promise<void>; readonly testBeforeRecoveryWrite?: (operationId: string, phase: string) => Promise<void>; readonly testOnlyFakeAdapter?: boolean; readonly stdio?: boolean; readonly preserveFixtureOnFailure?: boolean; readonly onStdioHost?: (host: StdioLifecycleHost) => void; readonly onStdioShutdownComplete?: (reason: string) => void; readonly onStdioShutdownFailure?: (reason: string, error: unknown) => void } = {},
+  options: { readonly testBeforeDispatch?: () => Promise<void>; readonly testOnScheduler?: (stage: string, detail: Readonly<Record<string, unknown>>) => void; readonly onStage?: (stage: string, detail?: Readonly<Record<string, unknown>>) => void; readonly onChildSpawn?: (child: { readonly pid?: number; readonly stderr?: NodeJS.ReadableStream | null; readonly resultChannel?: NodeJS.ReadableStream | null }) => void; readonly beforeAuthority?: (dataRoot: string, modules: Awaited<ReturnType<typeof loadLifecycleCandidateModules>>, workspace: string) => void; readonly prepareDataRoot?: (dataRoot: string, fixture: string) => Promise<void>; readonly databaseFileName?: string; readonly workerEntryPath?: string; readonly enableSyntheticInteractionChannel?: boolean; readonly processProbe?: ProcessProbe; readonly testProcessProbeTimeoutMs?: number; readonly testVerifyProcessTreeClaimantsClean?: typeof verifyProcessTreeClaimantsClean; readonly testProcessTreeProbeTimeoutMs?: number; readonly testShutdownWaitMs?: number; readonly testStopWorkerForRecovery?: (pid: number, expectedFingerprint: string) => Promise<void>; readonly testTerminateWorkerTree?: (pid: number, expectedFingerprint: string) => Promise<unknown>; readonly testBeforeRecoveryWrite?: (operationId: string, phase: string) => Promise<void>; readonly testOnlyFakeAdapter?: boolean; readonly stdio?: boolean; readonly preserveFixtureOnFailure?: boolean; readonly onStdioHost?: (host: StdioLifecycleHost) => void; readonly onStdioShutdownComplete?: (reason: string) => void; readonly onStdioShutdownFailure?: (reason: string, error: unknown) => void } = {},
 ): Promise<void> {
   const fixture = path.join(integrationRoot, randomUUID());
   const dataRoot = path.join(fixture, "sqlite-root");
@@ -2170,6 +2170,7 @@ async function withSqliteMcp(
     ...(options.testVerifyProcessTreeClaimantsClean ? { testVerifyProcessTreeClaimantsClean: options.testVerifyProcessTreeClaimantsClean } : {}),
     ...(options.testProcessTreeProbeTimeoutMs !== undefined ? { testProcessTreeProbeTimeoutMs: options.testProcessTreeProbeTimeoutMs } : {}),
     ...(options.testStopWorkerForRecovery ? { testStopWorkerForRecovery: options.testStopWorkerForRecovery } : {}),
+    ...(options.testTerminateWorkerTree ? { testTerminateWorkerTree: options.testTerminateWorkerTree } : {}),
     ...(options.testBeforeRecoveryWrite ? { testBeforeRecoveryWrite: options.testBeforeRecoveryWrite } : {}),
     ...(options.testShutdownWaitMs !== undefined ? { testShutdownWaitMs: options.testShutdownWaitMs } : {}),
     ...(options.testBeforeDispatch ? { testBeforeDispatch: options.testBeforeDispatch } : {}),
@@ -4376,6 +4377,50 @@ test("formal MCP running Cancel persists intent, verifies the Worker tree, and r
   });
 });
 
+test("running Cancel resolves a root-exited termination race only after an exact exit probe and clean tree scan", {
+  timeout: 60_000,
+  skip: process.platform !== "win32",
+}, async () => {
+  let terminationAttempted = false;
+  let rootExitRaceObserved = false;
+  await withSqliteMcp(async (client, _manager, dataRoot, workspace) => {
+    const taskId = `mcp-root-exit-${randomUUID()}`;
+    const created = contentObject(await client.callTool({ name: "zcode_task", arguments: syntheticTask(workspace, taskId) }));
+    assert.equal(created.status, "queued");
+    await waitForInteractionRequest(client, taskId);
+
+    const cancelled = contentObject(await client.callTool({ name: "zcode_cancel", arguments: { task_id: taskId } }));
+    assert.equal(cancelled.status, "cancelled");
+    assert.equal(terminationAttempted, true);
+    assert.equal(rootExitRaceObserved, true, "the injected root-exit refusal must be reconciled by a fresh probe");
+
+    const events = contentObject(await client.callTool({ name: "zcode_events", arguments: { task_id: taskId, after_seq: 0, limit: 200 } }));
+    const lifecycle = events.events as Array<Record<string, unknown>>;
+    const proofs = lifecycle.filter((event) => event.type === "observation_recorded"
+      && (event.details as Record<string, unknown> | undefined)?.reason === "cancel_tree_verified");
+    assert.equal(proofs.length, 1, "the reconciled race must persist exactly one tree proof");
+    const proof = proofs[0];
+    assert.ok(proof);
+    assert.ok(lifecycle.findIndex((event) => event.type === "result_committed") > lifecycle.indexOf(proof));
+    assert.ok(lifecycle.findIndex((event) => event.type === "cleanup_verified") > lifecycle.findIndex((event) => event.type === "result_committed"));
+    assert.ok(lifecycle.findIndex((event) => event.type === "released") > lifecycle.findIndex((event) => event.type === "cleanup_verified"));
+    assert.equal(existsSync(path.join(dataRoot, ".tasks")), false);
+  }, {
+    enableSyntheticInteractionChannel: true,
+    preserveFixtureOnFailure: true,
+    testTerminateWorkerTree: async (pid, fingerprint) => {
+      terminationAttempted = true;
+      await terminateProcessTree(pid, { expectedRootFingerprint: fingerprint, killWaitMs: 5_000 });
+      const error = new Error("controlled root exit before the fresh tree transaction") as Error & { code: string };
+      error.code = "process_tree_root_exited";
+      throw error;
+    },
+    onStage: (stage) => {
+      if (stage === "cancel_termination_root_exited") rootExitRaceObserved = true;
+    },
+  });
+});
+
 test("formal MCP concurrent zcode_cancel calls recover one held Task with one verified termination and Release", { timeout: 90_000, skip: process.platform !== "win32" }, async () => {
   const child = spawn(process.execPath, ["-e", "process.stdout.write('ready\\n'); setInterval(() => undefined, 1000)"], {
     stdio: ["ignore", "pipe", "ignore"], windowsHide: true,
@@ -4731,13 +4776,18 @@ test("formal MCP Host shutdown is bounded on unknown cancellation and can be ret
 test("formal SQLite MCP stdio shutdown closes only after verified Cleanup and Release", { timeout: 90_000, skip: process.platform !== "win32" }, async () => {
   let host: StdioLifecycleHost | undefined;
   let spawned = 0;
+  let shutdownFailure: unknown;
   await withSqliteMcp(async (client, _manager, dataRoot, workspace) => {
     const taskId = `mcp-stdio-shutdown-${randomUUID()}`;
     const created = contentObject(await client.callTool({ name: "zcode_task", arguments: syntheticTask(workspace, taskId) }));
     assert.equal(created.status, "queued");
     await waitForInteractionRequest(client, taskId);
     assert.ok(host);
-    assert.equal(await host.shutdown("SIGTERM"), true, "successful Cleanup/Release must complete before transport close");
+    assert.equal(
+      await host.shutdown("SIGTERM"),
+      true,
+      `successful Cleanup/Release must complete before transport close: ${shutdownFailure instanceof Error ? shutdownFailure.stack ?? shutdownFailure.message : String(shutdownFailure)}`,
+    );
 
     const modules = await loadLifecycleCandidateModules();
     const recovery = modules.Store.openForRecovery(dataRoot);
@@ -4761,6 +4811,7 @@ test("formal SQLite MCP stdio shutdown closes only after verified Cleanup and Re
     stdio: true,
     preserveFixtureOnFailure: true,
     onStdioHost: (value) => { host = value; },
+    onStdioShutdownFailure: (_reason, error) => { shutdownFailure = error; },
     enableSyntheticInteractionChannel: true,
     onChildSpawn: () => { spawned += 1; },
   });

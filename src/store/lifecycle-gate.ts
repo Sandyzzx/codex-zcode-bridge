@@ -443,6 +443,8 @@ export interface ClaimOnlyDriverOptions {
   readonly onWorkerDiagnosticLine?: (line: string) => void;
   /** Test-only seam for the explicit Recovery stop path; production always uses identity-bound OS termination. */
   readonly testStopWorkerForRecovery?: (pid: number, expectedFingerprint: string) => Promise<void>;
+  /** Test-only injection for the running-cancel termination boundary. */
+  readonly testTerminateWorkerTree?: (pid: number, expectedFingerprint: string) => Promise<unknown>;
   /** Test-only barrier immediately before evidence/CAS writes in a cleanup Recovery race. */
   readonly testBeforeRecoveryWrite?: (operationId: string, phase: string) => Promise<void>;
   /** Synthetic integration test only. Production host composition never enables this driver. */
@@ -2361,11 +2363,32 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
         return { duplicate: true, result_won: false, operation_id: operationId, cancel_id: cancelId,
           phase: operation.phase, cancellation_verification_digest: verificationDigest };
       }
-      const terminationState: "terminated" | "already_exited" = identityVerdict.state === "alive" ? "terminated" : "already_exited";
+      let terminationState: "terminated" | "already_exited" = identityVerdict.state === "alive" ? "terminated" : "already_exited";
       if (identityVerdict.state === "alive") {
-        const terminated = await terminateProcessTree(processIdentity.pid, { graceMs: 500, killWaitMs: 5_000,
-          expectedRootFingerprint: processIdentity.fingerprint });
-        if (terminated.verified !== true) throw new LifecycleGateError("cancellation_tree_termination_unverified");
+        try {
+          if (options.testTerminateWorkerTree) {
+            await options.testTerminateWorkerTree(processIdentity.pid, processIdentity.fingerprint);
+          } else {
+            const terminated = await terminateProcessTree(processIdentity.pid, { graceMs: 500, killWaitMs: 5_000,
+              expectedRootFingerprint: processIdentity.fingerprint });
+            if (terminated.verified !== true) throw new LifecycleGateError("cancellation_tree_termination_unverified");
+          }
+        } catch (error) {
+          // Windows may refuse a fresh tree transaction if the exact root exits
+          // between the identity probe and transaction setup. Only that known
+          // root-exit race can be resolved by a fresh exact probe; the durable
+          // recorded-tree scan below still has to prove every descendant gone.
+          if (errorCode(error) !== "process_tree_root_exited") throw error;
+          const exited = await probeWithDeadline(probe, {
+            pid: processIdentity.pid,
+            identity: processIdentity,
+          }, processProbeTimeoutMs);
+          if (exited.status !== "resolved" || exited.verdict?.state !== "exited") {
+            throw new LifecycleGateError("cancellation_tree_termination_unverified");
+          }
+          terminationState = "already_exited";
+          options.onStage?.("cancel_termination_root_exited", { pid: processIdentity.pid });
+        }
       }
       let workerExitCode: number | null = null;
       if (active?.child) {

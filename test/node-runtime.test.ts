@@ -5,7 +5,6 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpath
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { DatabaseSync } from "node:sqlite";
 import { assertSupportedNodeRuntime, isSupportedNodeVersion, SUPPORTED_NODE_RANGE } from "../src/runtime/node-runtime.js";
 
 test("SQLite runtime gate accepts Node 24.16+ and rejects Node 22, early 24, prerelease, and Node 25", () => {
@@ -58,7 +57,7 @@ test("marketplace launcher preserves the Node 22.18+ product gate before loading
   }
 });
 
-test("Marketplace launcher automatically bootstraps SQLite before the first MCP initialize", { timeout: 75_000, skip: process.platform !== "win32" }, async () => {
+test("Marketplace launcher keeps Thin MCP initialize free of a local SQLite bootstrap", { timeout: 75_000, skip: process.platform !== "win32" }, async () => {
   assert.equal(process.versions.node, "24.16.0", "this R1 launcher acceptance run uses the pinned Node runtime");
   const pluginRoot = path.resolve("plugins/codex-zcode-bridge");
   const launcherPath = realpathSync(path.join(pluginRoot, "launch-node24.mjs"));
@@ -128,7 +127,15 @@ test("Marketplace launcher automatically bootstraps SQLite before the first MCP 
     childStdout.on("data", (chunk: string) => stdout.push(chunk));
     childStderr.on("data", (chunk: string) => stderr.push(chunk));
 
-    type RpcResponse = { id?: number; result?: { tools?: Array<{ name?: string }> }; error?: unknown };
+    type RpcResponse = {
+      id?: number;
+      result?: {
+        tools?: Array<{ name?: string }>;
+        isError?: boolean;
+        structuredContent?: { error?: { code?: string } };
+      };
+      error?: unknown;
+    };
     const waiters = new Map<number, { resolve: (message: RpcResponse) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
     let protocolBuffer = "";
     childStdout.on("data", (chunk: string) => {
@@ -189,6 +196,14 @@ test("Marketplace launcher automatically bootstraps SQLite before the first MCP 
     const listed = await requestResponse(2, { jsonrpc: "2.0", id: 2, method: "tools/list" });
     const listedTools = listed.result?.tools ?? [];
     assert.ok(listedTools.some((tool) => tool.name === "zcode_task"), "the actual Bridge Bundle must answer tools/list");
+    const unavailable = await requestResponse(3, {
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/call",
+      params: { name: "zcode_status", arguments: { task_id: "thin-mcp-probe" } },
+    });
+    assert.equal(unavailable.result?.isError, true, "Executor absence must fail closed");
+    assert.equal(unavailable.result?.structuredContent?.error?.code, "EXECUTOR_UNAVAILABLE");
 
     const powershell = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
     const processTreeProbe = path.resolve("test/fixtures/windows-process-tree.ps1");
@@ -251,7 +266,7 @@ test("Marketplace launcher automatically bootstraps SQLite before the first MCP 
     assert.equal(
       existsSync(path.join(isolatedHome, ".codex", "codex-zcode-bridge", "authority.json")),
       false,
-      "first-use SQLite bootstrap must not require a manual Authority activation file",
+      "Thin MCP startup must not create a manual Authority activation file",
     );
 
     const dataFiles: string[] = [];
@@ -263,16 +278,7 @@ test("Marketplace launcher automatically bootstraps SQLite before the first MCP 
       }
     };
     visit(dataRoot);
-    assert.equal(dataFiles.some((name) => /(?:^|[\\/])bridge\.sqlite$/iu.test(name)), true, "the first Marketplace MCP initialize must bootstrap SQLite automatically");
-    assert.equal(existsSync(path.join(dataRoot, "bridge.sqlite.bootstrap-pending.json")), false, "successful startup must publish and clear the bootstrap marker");
-    const database = new DatabaseSync(path.join(dataRoot, "bridge.sqlite"), { readOnly: true });
-    try {
-      assert.equal(database.prepare("PRAGMA integrity_check").get()?.integrity_check, "ok");
-      assert.equal(database.prepare("SELECT COUNT(*) AS n FROM fresh_install_receipt").get()?.n, 1);
-      assert.equal(database.prepare("SELECT COUNT(*) AS n FROM manager_operations").get()?.n, 1);
-      assert.equal(database.prepare("SELECT operation_id FROM manager_operations").get()?.operation_id, "fresh-install-capacity-v1");
-      assert.equal(database.prepare("SELECT COUNT(*) AS n FROM manager_operation_events").get()?.n, 1);
-    } finally { database.close(); }
+    assert.deepEqual(dataFiles, [], "MCP initialize and Executor-unavailable reads must not create local Authority state");
     evidence["dataFiles"] = dataFiles;
     evidence["stdout"] = stdout.join("");
     evidence["stderr"] = stderr.join("");
