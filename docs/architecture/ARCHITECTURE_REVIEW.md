@@ -2,7 +2,7 @@
 
 > Status: IMPLEMENTED — PR 2–6 CANDIDATE（architecture accepted；release blocked）
 > Date: 2026-11-22
-> Review baseline: `origin/preview` `ac1e8396f25a1a1d3ff373def84726d28c1f4193` + PR #131 baseline `a1bc911ec1b03cd22bbf13e717fc2233284e6183` + acceptance implementation `7f54531acba0844937bc134609dae840090294ec`; historical full-matrix candidate `c75c34330287266702cab5949662bf897b74ed5a`
+> Review baseline: `origin/preview` `3daffe476b12b3eb16cec957d18422c3ff4c775e` + PR #131 candidate `8f83bd340f1d6f31ddac12360583257969bb5863`; historical full-matrix candidate `c75c34330287266702cab5949662bf897b74ed5a`
 
 ## Verdict
 
@@ -13,12 +13,13 @@ candidate 进一步把 shipped MCP 入口收敛为单一 Thin MCP，并把生产
 composition 固定在 Executor；确定性四层 E2E 与类型/边界检查通过。PR 3–6
 candidate 已加入 Control-only CLI、loopback Web、fail-closed Wake 与 Async
 Master Handoff。历史候选 `c75c3433` 已通过 1060 项本地完整回归
-（1058 pass / 0 fail / 2 skip）与 4/4 注册压力矩阵；当前
-`7f54531a` 新增 Owner Wake policy、CLI/Web Wake 可发现性，并通过
-`REAL MCP HOST PROCESS EXIT + SYNTHETIC WORKER` 的 Result/Cleanup/Release
-定向 E2E。当前结论仍为 `PARTIAL / BLOCKED`：真实 Codex Desktop 关闭、
-严格 Wake C/D、真实 Queue ACK/Turn/Master、真实 Official Runtime 和真实模型
-Skill 遵循率仍未运行；PR #131 可以保持 open 评审，但不得合入 Preview 或发布。
+（1058 pass / 0 fail / 2 skip）与 4/4 注册压力矩阵；当前 `8f83bd34`
+已整合最新 Preview，新增 Console 动态发现/CAS 复用、Task Deep Link 和
+Result pending 独立显示，并通过真实 MCP Host / Executor / Console /
+Chromium + synthetic Worker 的 C1 E2E。当前结论仍为
+`PARTIAL / BLOCKED`：真实 Codex Desktop 关闭、严格 Wake C/D、真实 Queue
+ACK/Turn/Master、真实 Official Runtime 和真实模型 Skill 遵循率仍未运行；
+PR #131 保持 open，最终 Release Gate 尚须在文档更新后的候选上运行。
 
 ## Findings
 
@@ -54,6 +55,7 @@ Skill 遵循率仍未运行；PR #131 可以保持 open 评审，但不得合入
 | MCP schema parity | `PASS` | 13 个公共工具名和冻结 schema snapshot 未变 |
 | 跨进程 fake Worker durability | `PASS` | 原 Attempt `result_committed` 一次、Cleanup pending/verified、Operation `released`、Result digest 非空 |
 | Shipped MCP Host 进程退出 | `PASS — SYNTHETIC WORKER` | Host 真实终止后 Executor 保持 active；单次 Spawn/Result，Cleanup/Release 各一次，新 Host 重连读取同一 Result |
+| Web Deep Link + Host exit | `PASS — REAL PROCESS / SYNTHETIC WORKER` | 真实 Chromium 打开动态 URL 的 queued/running/completed 页面；Host 退出后 Executor/Console 仍 active，原 Attempt 单 Result/Cleanup/Release，Spawn 一次 |
 | 真实 Codex Desktop 关闭 E2E | `BLOCKED` | 未关闭 Owner 当前 Desktop；Host 进程退出证据不能替代 Desktop 全退 |
 | 真实 Official Runtime E2E | `NOT_RUN` | 无新的付费模型授权；合成 fake adapter 不能替代 |
 
@@ -69,7 +71,8 @@ Skill 遵循率仍未运行；PR #131 可以保持 open 评审，但不得合入
 8. `PASS — CANDIDATE`：Task CLI 使用 bounded list/Result 预算；Web/CLI 只通过同一 Executor Control 读取/控制，不打开可写 SQLite。
 9. `PASS — CANDIDATE`：Wake Intent/Delivery 使用现有 SQLite v14 released Operation 的 bounded `observation_recorded` evidence，不新增 schema 或第二持久化权威。
 10. `PASS — SYNTHETIC`：A 实验模型失控负例已进入 Wake policy；未确认 Thread 当前 model/provider/effort/budget 时只允许 Web Notify。
-11. `BLOCKED`：真实 Desktop 关闭后的进程存活和 Result durability 仍需真实 Host E2E；shipped MCP Host 进程退出 + synthetic Worker 已通过，但受控 EOF、detached spawn、fake Worker 与完整本地回归不能替代 Desktop 全退。
+11. `PASS — REAL PROCESS / SYNTHETIC WORKER`：shipped MCP Host 退出、Executor/Web Console 存活、Deep Link 浏览器观察和原 Attempt Result/Cleanup/Release 已通过真实进程 C1。
+12. `BLOCKED`：真实 Desktop 关闭后的进程存活和 Result durability 仍需隔离 Desktop E2E；C1 不能替代 Desktop 全退、真实 Queue 或 Official Runtime。
 
 ## PR #120 / PR 2.5 Remediation Record
 
@@ -88,11 +91,13 @@ Skill 遵循率仍未运行；PR #131 可以保持 open 评审，但不得合入
 | 项目 | 状态 | 当前证据 |
 |---|---|---|
 | Task CLI control-only boundary | `PASS — CANDIDATE` | `task-cli.test.ts`；共享 Executor Control Client、bounded list/Result、已运行检测；不打开 SQLite |
-| Web Console local boundary | `PASS — CANDIDATE` | loopback/Origin/CSRF、只读 Task/Event/Result、显式 Cancel/Reply；console close 不改 Executor |
+| Web Console local boundary | `PASS — REAL BROWSER + SYNTHETIC WORKER` | loopback/Origin/CSRF、只读 Task/Event/Result、显式 Cancel/Reply；动态发现/复用、Deep Link 跨页解析、Result pending 与 Host 退出后真实浏览器观察通过 |
 | Executor Wake | `PASS — SYNTHETIC / REAL BLOCKED` | post-Release once-only Queue + Web Notify、SQLite v14 evidence、exact-config fail closed；Owner policy/CLI/Web 展示通过；当前无 App Server socket 时 0 Queue 并降级，真实 Queue/C/D 未运行 |
 | Async Master Handoff | `PASS — CONTRACT / MODEL NOT_RUN` | deterministic Skill decision contract；真实 Host 模型遵循率、真实 Wake 恢复与 Desktop visible 未验证 |
 | Historical unified local release gate | `PASS — LOCAL` | Windows 1060 项完整回归、4/4 压力矩阵、生成物与插件校验通过（`c75c3433`） |
 | Unified GitHub release gate | `PASS — EXACT HEAD` | `3a238ee8` 的 [CI run 45024250578](https://github.com/Sandyzzx/codex-zcode-bridge/actions/runs/45024250578) 成功；这是该已验证提交的 CI 事实，不替代真实 Desktop/Wake/Official Runtime 验收 |
+| Current web/real-process acceptance | `PASS — REAL PROCESS / SYNTHETIC WORKER` | `8f83bd34` 目标测试 92/92、C1 浏览器/进程/Result/Cleanup/Release PASS；真实 Desktop/Wake/Official Runtime 仍 `BLOCKED` |
+| Current final Release Gate | `NOT_RUN` | 文档更新后必须在最终候选上运行；历史 `3a238ee8` 结果不能继承 |
 | Root-exited shutdown race | `PASS — DETERMINISTIC + FULL REGRESSION` | 仅精确 `process_tree_root_exited` 可由 fresh exact probe 加原 recorded-tree clean proof 收敛；定向 20/20、负载 12/12、composition 67/67 |
 
 ## Follow-up

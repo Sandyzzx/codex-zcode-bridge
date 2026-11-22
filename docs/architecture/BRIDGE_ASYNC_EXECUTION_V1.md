@@ -1,10 +1,10 @@
 # Bridge Async Execution Architecture v1
 
-> Status: IMPLEMENTED — PARTIAL（PR 2–6 unified local Release Candidate passed；未合入 Preview，不可发布）
+> Status: IMPLEMENTED — PARTIAL（Web/real-process targeted acceptance passed；未完成 final Release Gate，未合入 Preview，不可发布）
 > Decision status: [ADR-045](../decisions/ADR-045-async-executor-ownership.md) = ACCEPTED；[ADR-051](../decisions/ADR-051-executor-wake-delivery.md) = ACCEPTED；[ADR-052](../decisions/ADR-052-async-master-handoff.md) = ACCEPTED；本文档记录目标合同与当前实现边界
 > Date: 2026-11-22（Asia/Shanghai）
-> Baseline: `origin/preview` `ac1e8396f25a1a1d3ff373def84726d28c1f4193`（Preview.12）；PR #131 baseline `a1bc911ec1b03cd22bbf13e717fc2233284e6183`；acceptance implementation `7f54531acba0844937bc134609dae840090294ec`；historical full-matrix candidate `c75c34330287266702cab5949662bf897b74ed5a`；PR 2 base `f330b511270934fa40014006333aa7747dad684c`；integration branch `codex/async-executor-rc-20261122`
-> Evidence classification: 文中逐项标注 `VERIFIED`、`INFERRED`、`UNVERIFIED`；证据见 [PR 2 report](../reports/async-executor-pr2-20261122.md)、[PR 2.5 report](../reports/async-executor-pr2.5-20261122.md)、[PR 5 report](../reports/async-executor-pr5-20261122.md)、[PR 6 report](../reports/async-executor-pr6-20261122.md)、[统一 RC report](../reports/async-executor-release-candidate-20261122.md) 与 [实机验收 report](../reports/async-executor-real-host-acceptance-20261122.md)
+> Baseline: `origin/preview` `3daffe476b12b3eb16cec957d18422c3ff4c775e`；PR #131 candidate `8f83bd340f1d6f31ddac12360583257969bb5863`；historical full-matrix candidate `c75c34330287266702cab5949662bf897b74ed5a`；PR 2 base `f330b511270934fa40014006333aa7747dad684c`；integration branch `codex/async-executor-rc-20261122`
+> Evidence classification: 文中逐项标注 `VERIFIED`、`INFERRED`、`UNVERIFIED`；证据见 [PR 2 report](../reports/async-executor-pr2-20261122.md)、[PR 2.5 report](../reports/async-executor-pr2.5-20261122.md)、[PR 5 report](../reports/async-executor-pr5-20261122.md)、[PR 6 report](../reports/async-executor-pr6-20261122.md)、[统一 RC report](../reports/async-executor-release-candidate-20261122.md) 与 [Web real-process E2E](../reports/async-executor-web-real-host-e2e-20261122.md)
 
 ## 1. 目标与非目标
 
@@ -40,18 +40,19 @@
 | Queue ACK 与 Turn 启动是不同事实 | VERIFIED | CLI help 说明 Queue 使用 Thread 当前 model；PR 5 coordinator 以新 `inProgress` Turn 记录 `TURN_STARTED` |
 | loaded/idle Thread + exact model/provider/effort preflight 可安全转成一次性 Queue 请求 | VERIFIED（合成客户端） | `test/executor-wake.test.ts` 8/8；真实 App Server control socket 当前不存在 |
 | shipped MCP Host 进程退出后，独立 Executor 仍完成原 Attempt Result/Cleanup/Release | VERIFIED（synthetic Worker） | `executor-process-targeted-final.log`：Host 真实进程退出、Executor `active`、单次 Spawn/Result、Cleanup/Release 各一次，新 Host 重连读取同一 Result |
+| 真实 Web Console + Chromium 观察动态 Deep Link，且 Host 退出后 Web/Executor 继续可用 | VERIFIED（real process / synthetic Worker） | [Web real-process E2E](../reports/async-executor-web-real-host-e2e-20261122.md)：running/completed 页面、真实 URL、Host 退出后 active、原 Attempt 单 Result/Cleanup/Release |
 | 独立 Executor 能在真实 Codex Desktop 关闭后保持运行 | UNVERIFIED | Owner 当前 Desktop 未关闭；synthetic Worker 证据不能替代 |
 
-当前集成基线为 `origin/preview@ac1e8396f25a1a1d3ff373def84726d28c1f4193`
+当前集成基线为 `origin/preview@3daffe476b12b3eb16cec957d18422c3ff4c775e`
 （Preview.12）；发布支持范围仍按现有文档限定为 Windows x64、Node `24.16.0`、
 ZCode Desktop `3.18.2.10443`、SQLite v14 ONLY。PR 2 branch 不扩大该范围，也不把
 实验性 ADR-042 安装或 Token Efficiency 候选写成当前支持范围。
 
 历史统一候选 `c75c34330287266702cab5949662bf897b74ed5a` 已通过 Windows
 本地完整回归 1060 项（1058 pass / 0 fail / 2 existing skips）、注册压力矩阵
-4/4、13 个生成物 Freshness 与插件结构校验。PR #131 的验收实现
-`7f54531acba0844937bc134609dae840090294ec` 在基线 `a1bc911e` 上新增 Wake
-授权/展示与 shipped Host 退出 E2E，并只执行定向测试与构建门禁；这使旧提交的
+4/4、13 个生成物 Freshness 与插件结构校验。PR #131 candidate
+`8f83bd340f1d6f31ddac12360583257969bb5863` 已整合最新 Preview，并在 Web
+修复后通过 92/92 项受影响测试与 C1 real-process/synthetic-Worker E2E；旧提交的
 完整回归和 GitHub Release Gate 不能自动代表当前 head。当前结果仍不替代真实
 Desktop 关闭、真实 Official Runtime、严格 Wake C/D 或真实模型 Skill 遵循率。
 
@@ -79,11 +80,12 @@ shipped `bridge.mjs` 路径，也不是生产回退。公共 Core 中嵌入
 `SqliteLifecycleMcpAuthority` 的能力仅为兼容调用方保留；正常插件与
 `startBridge()` 必须连接 Executor。
 
-当前验收已把 shipped MCP Host 作为真实独立进程启动，在 Task 受理和
-`launch_intent` 后终止 Host；隔离 Executor 保持 `active`，synthetic Worker
-提交原 Attempt Result，Cleanup 与 Release 各持久化一次，新 Host 可重连读取
-同一 Result。该证据边界固定为 **REAL MCP HOST PROCESS EXIT + SYNTHETIC
-WORKER**。真实 Codex Desktop 关闭后原 Attempt 继续执行仍为
+当前验收已把 shipped MCP Host、Executor、Web Console 和 Chromium 作为真实
+独立进程启动，在 Task 受理和 `launch_intent` 后终止 Host；隔离 Executor 与
+Console 保持可用，浏览器继续观察同一 Deep Link，synthetic Worker 提交原
+Attempt Result，Cleanup 与 Release 各持久化一次，新 Host 可重连读取同一
+Result。该证据边界固定为 **REAL PROCESS + SYNTHETIC WORKER**。真实 Codex
+Desktop 关闭后原 Attempt 继续执行仍为
 `NOT_RUN / BLOCKED_BY_OWNER_ENVIRONMENT`；未关闭 Owner 当前正在使用的
 Desktop，未发起付费模型请求。不得把 Host 进程测试冒充 Desktop 关闭，也不得
 据此合入 Preview、声明发布通过或对外宣称真实 Desktop 场景已验证。
@@ -334,7 +336,7 @@ Recovery；真实 Desktop UI acknowledgement 仍是 `UNKNOWN`。
 | PR 2 | Independent Executor + IPC + Thin MCP | 合成跨进程 Result/Cleanup/Release PASS；真实关闭 Codex 后原 Attempt 仍为 `NOT_RUN / BLOCKED` |
 | PR 2.5 | MCP → Executor → Adapter → ZCode 四层收敛 | Thin MCP 不再构造 Authority；静态依赖边界、MCP schema parity、Executor IPC 与四层 fake Official Runtime E2E PASS；不新增执行路径 |
 | PR 3 | Task CLI + shared Control Client | MCP/CLI 并发读写同一权威；CLI 分发不拥有 SQLite/Manager |
-| PR 4 | Web Console | 已实现 loopback/Origin/CSRF、只读 Task/Event/Result/Attention、显式 Cancel/Reply、Root 级发现与 Deep Link；无模型调用、页面关闭不影响独立 Executor |
+| PR 4 | Web Console | 已实现 loopback/Origin/CSRF、只读 Task/Event/Result/Attention、显式 Cancel/Reply、Root 级发现、`task console-url` 与 Deep Link；真实 Chromium 在 Host 退出前后观察同一 Task，页面关闭不影响 Executor |
 | PR 5 | Queue Wake Adapter | 已实现 loaded/idle exact-config 一次性 Queue + Web Notify fallback；严格 C/D 独立验收 |
 | PR 6 | Async Master Skill & Dispatch Workflow | 已实现可靠受理后 Turn 结束/停止轮询、未知回执原 ID 对账、Wake 身份核对与独立验收；真实模型遵循率和真实 Host Wake `NOT_RUN / BLOCKED` |
 
@@ -410,6 +412,8 @@ Recovery；真实 Desktop UI acknowledgement 仍是 `UNKNOWN`。
 - shipped MCP Host 进程在 `launch_intent` 后退出，Executor 保持 active；
   synthetic Worker 只 Spawn 一次并提交原 Attempt Result，Cleanup/Release
   各一次，新 Host 重连读取同一 Result。
+- 真实 Web Console、Chromium 与 `task console-url` 使用同一动态 URL；Host
+  退出后浏览器继续可见 `ACTIVE`，最终页面显示 `completed` 和 Result。
 - 当前真实环境无 App Server control socket；只读 probe 得到
   `web_notify / app_server_unavailable`，Queue 调用数为 0。
 - 真实 strict C/D、真实 Queue ACK/Turn/Master、Desktop visible 和付费模型：
@@ -449,7 +453,7 @@ Recovery；真实 Desktop UI acknowledgement 仍是 `UNKNOWN`。
 
 ### Preview integration
 
-- Executor 开发期使用 T0、受影响测试和关键 E2E；`FULL_SUITE` 在开发门禁明确延期，不得当作通过。完整 Ubuntu/Windows/Stress 只在 Preview Release Candidate、Owner 明确要求或重大跨模块不确定性时运行。
+- Executor 开发期使用 T0、受影响测试和关键 E2E；`FULL_SUITE` 在开发门禁明确延期，不得当作通过。完整 Ubuntu/Windows/Stress 只在 Preview Release Candidate、Owner 明确要求或重大跨模块不确定性时运行；当前 Web 修复后的最终候选仍须执行一次 exact-head Release Gate。
 - 真实模型测试须单独授权，使用隔离 Thread 和低成本模型；费用不可观察时报告不可观察。
 - Token Efficiency 试点与 Async 架构实验分开记账。
 

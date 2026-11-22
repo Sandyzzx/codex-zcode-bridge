@@ -3,7 +3,8 @@
 > Status: DECISION
 > Date: 2026-11-22
 > Decision: Accepted for the Async Executor Preview candidate
-> Baseline: `origin/preview` `1bf039fda2ccfd17a992458a871bddd7b48b38c1`
+> Baseline: `origin/preview` `3daffe476b12b3eb16cec957d18422c3ff4c775e`
+> Verified implementation: `8f83bd340f1d6f31ddac12360583257969bb5863`
 > Related architecture: [BRIDGE_ASYNC_EXECUTION_V1.md](../architecture/BRIDGE_ASYNC_EXECUTION_V1.md)
 
 ## 决定
@@ -79,5 +80,8 @@ Cancel/Reply 转发、body 上限、页面关闭不影响独立 Executor。真�
 
 当前 Web 定向证据：动态入口和发现文件、同 Root 二进程复用、Deep Link
 跨页解析、Result 未完成独立显示、Attention 投影、loopback/Origin/CSRF
-回归均通过；真实浏览器长期运行与 MCP Host 退出后的 Web 观察在最终 Host
-E2E 中另行记录。未完成的证据不得写成 `PASS — REAL`。
+回归均通过。最终 C1 E2E 另以真实 Web Console、真实 Chromium、真实 MCP
+Host 和 synthetic Worker 验证：Host 退出前后浏览器持续观察同一 Task，
+Executor/Console 保持 active，最终 Result/Cleanup/Release 各一次。该结论
+固定为 `PASS — REAL PROCESS / SYNTHETIC WORKER`，不得写成真实 Desktop、
+Queue Wake 或 Official Runtime 的 `PASS — REAL`。

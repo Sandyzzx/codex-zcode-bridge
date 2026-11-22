@@ -1,9 +1,9 @@
 # 测试入口与成本边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-22（Executor PR 2.5 / PR 3 / PR 5 / PR 6 定向验证）
-> Last verified: 2026-11-22，核对 `release-candidate` 标签与 `workflow_dispatch.release_gate` 分流、开发期 `FULL_SUITE_DEFERRED_TO_RELEASE_GATE`、Required Check 占位、Push 完整门禁及 Cost Lab/Stress 独立边界；执行证据见 Async Executor PR 2/2.5、PR 3、PR 5 与 PR 6 报告。
-> Verified against: `origin/preview` `ac1e8396f25a1a1d3ff373def84726d28c1f4193` + `codex/async-executor-rc-20261122` CI governance revision
+> Last updated: 2026-11-22（Executor Web Deep Link + real-process/synthetic-Worker E2E）
+> Last verified: 2026-11-22，核对 `release-candidate` 标签与 `workflow_dispatch.release_gate` 分流、开发期 `FULL_SUITE_DEFERRED_TO_RELEASE_GATE`、Required Check 占位、Push 完整门禁，以及 Web 修复后的 92/92 项受影响测试与 C1 E2E。
+> Verified against: `origin/preview` `3daffe476b12b3eb16cec957d18422c3ff4c775e` + PR #131 candidate `8f83bd340f1d6f31ddac12360583257969bb5863`
 
 `test/test-impact-map.json` 为可执行清单唯一来源。共享资格规则禁止 MANUAL_E2E、Fixture 自动执行，显式误传同样拒绝；源 .test.ts/.test.mjs、map 与实际 --list 由回归对账。生成的 test-inventory.json 是静态声明/历史证据索引，不决定执行。
 
@@ -64,6 +64,15 @@ Root 上完成 loopback session、Host/Origin/CSRF 和“关闭 Console 后 Exec
 复用同一 URL、跨页 summary、Result pending 独立显示、注意力投影和发现记录
 CAS 释放。真实浏览器 HTTP 操作属于 Host E2E，不得用页面成功加载替代
 Task/Result/Cleanup 验收。
+
+最终 Web 修复候选另执行 10 个受影响测试文件，共 92/92 PASS，覆盖
+AgentReport、架构边界、Executor IPC/Lease/Process、Wake fail-closed、
+Thin MCP、Task CLI、Web Console 与 Skill policy。C1 使用真实 Executor /
+Web Console / MCP Host / Chromium 进程和 synthetic Worker，验证 Host 退出后
+Deep Link 仍可观察、原 Attempt 单 Result/Cleanup/Release 且新 Host 读回同一
+Result。该结果是 `REAL PROCESS + SYNTHETIC WORKER`，不是真实 Desktop、
+Queue Wake 或 Official Runtime；最终 exact-head Release Gate 在文档更新后
+单独运行。
 
 PR 5 Executor Wake 的定向集合增加：
 
