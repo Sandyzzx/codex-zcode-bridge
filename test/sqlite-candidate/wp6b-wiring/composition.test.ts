@@ -4284,6 +4284,83 @@ test("formal MCP deduplicates a refreshed Recovery Hold and releases it through 
   });
 });
 
+test("formal MCP binds the latest active Recovery Hold when an older Hold is deduplicated",{timeout:45_000},async()=>{
+  const taskId=`cancel-cleanup-multi-hold-${randomUUID()}`,operationId=`op-${taskId}`;
+  let seeded:{readonly processId:number;readonly fingerprint:string}|undefined;
+  const probe:ProcessProbe={...createPlatformProbe(),platform:'win32',async probe(requests){return requests.map(()=>({
+    state:'exited',reason_code:'synthetic_exact_exit',observed_at:new Date().toISOString(),
+  }));}};
+  await withSqliteMcp(async(client,_manager,dataRoot)=>{
+    const released=contentObject(await client.callTool({name:'zcode_cancel',arguments:{task_id:taskId}}));
+    assert.equal(released.status,'failed');
+    const modules=await loadLifecycleCandidateModules(),reader=modules.Store.openForRecovery(dataRoot);
+    assert.ok(reader);
+    try{
+      const port=modules.createPort(reader);
+      const operation=port.readOperation(operationId) as Record<string,unknown>;
+      const snapshot=port.readRecoverySnapshot() as {operations:Array<Record<string,unknown>>};
+      const occupied=snapshot.operations.find(item=>item.operation_id===operationId);
+      const events=port.readLifecycleEvents(operationId) as Array<Record<string,unknown>>;
+      const recoveryHolds=events.filter(event=>event.event_type==='observation_recorded'
+        &&JSON.parse(String(event.evidence_json)).reason==='recovery_hold');
+      const releaseEvents=events.filter(event=>event.event_type==='observation_recorded'
+        &&JSON.parse(String(event.evidence_json)).reason==='user_authorized_release_unverified');
+      assert.equal(operation.phase,'released');
+      assert.equal(occupied?.capacity_occupied,false);
+      assert.equal(occupied?.cleanup_state,'unverified_admin_release');
+      assert.equal(recoveryHolds.length,2,'the two pre-existing active Holds remain immutable history');
+      assert.equal(releaseEvents.length,1);
+      const releaseEvidence=JSON.parse(String(releaseEvents[0]!.evidence_json)) as Record<string,unknown>;
+      const latestHoldEvidence=JSON.parse(String(recoveryHolds[1]!.evidence_json)) as Record<string,unknown>;
+      assert.equal(releaseEvidence.recovery_evidence_digest,latestHoldEvidence.evidence_digest);
+      assert.equal(events.some(event=>event.event_type==='cleanup_verified'),false);
+    }finally{reader.close();}
+  },{
+    processProbe:probe,
+    testVerifyProcessTreeClaimantsClean:async targets=>{
+      assert.deepEqual(targets.map(target=>target.pid),[seeded!.processId]);
+      return {clean:true,livePids:[],observedPids:[seeded!.processId]};
+    },
+    beforeAuthority:(dataRoot,modules,workspace)=>{
+      const seed=seedCancelledCleanupHold(dataRoot,modules,workspace,taskId,operationId,'failed');
+      seeded=seed;
+      const store=modules.Store.open(dataRoot);
+      try{
+        const port=modules.createPort(store,{recoveryEvidenceVerifier:({observation}:{observation:Record<string,unknown>})=>({
+          classification:observation.classification,reason_code:observation.reason_code,
+          evidence_source:observation.evidence_source,evidence_digest:observation.evidence_digest,
+        })});
+        const scan={contract:'sqlite-candidate-recovery-release-tree-v1',operation_id:operationId,task_id:taskId,
+          attempt:1,generation:1,claim_id:`claim-${taskId}`,worker_identity_digest:'pending',
+          root_process_id:seed.processId,root_start_fingerprint:seed.fingerprint,clean:true,live_pids:[],
+          observed_pids:[seed.processId],root_observed:true};
+        const recordHold=(probeReason:string,observedAt:string)=>{
+          const operation=port.readOperation(operationId) as Record<string,unknown>;
+          scan.generation=Number(operation.generation);
+          scan.worker_identity_digest=String(operation.claim_worker_identity_digest);
+          const processTreeScanDigest=candidateEvidenceDigest(scan);
+          const evidence={source:'manager_process_probe',operation_id:operationId,task_id:taskId,attempt:1,
+            generation:Number(operation.generation),phase:'cleanup_unverified',claim_id:String(operation.claim_id),
+            worker_identity_digest:String(operation.claim_worker_identity_digest),identity_state:'exited',
+            process_id:seed.processId,start_fingerprint:seed.fingerprint,probe_reason:probeReason,
+            recovery_disposition:'complete_cleanup_closure_unavailable',process_tree_scan_clean:true,
+            process_tree_scan_scope:'recorded_roots_and_observed_claimants_only',complete_cleanup_closure:false,
+            process_tree_root_observed:true,process_tree_scan_digest:processTreeScanDigest,observed_at:observedAt};
+          port.recordRecoveryObservation({operation_id:operationId,task_id:taskId,attempt:1,
+            generation:Number(operation.generation),expected_revision:Number(operation.revision),
+            claim_id:String(operation.claim_id),worker_identity_digest:String(operation.claim_worker_identity_digest),
+            classification:'hold',reason_code:'cleanup_incomplete',evidence_source:'manager_process_probe',
+            evidence_digest:candidateEvidenceDigest(evidence),process_tree_root_observed:true,
+            process_tree_scan_clean:true,process_tree_scan_digest:processTreeScanDigest,
+            recovery_disposition:'complete_cleanup_closure_unavailable'},evidence);
+        };
+        recordHold('synthetic_exact_exit','2026-11-22T00:00:00.000Z');
+        recordHold('pid_reused','2026-11-22T00:00:01.000Z');
+      }finally{store.close();}
+    },
+  });
+});
+
 for(const stopMode of ['still-alive','stop-failure'] as const)test(`formal MCP keeps a user-authorized cleanup Hold occupied when the Worker is ${stopMode==='still-alive'?'still alive':'not terminable'}`,{timeout:30_000},async()=>{
   const taskId=`cancel-cleanup-${stopMode}-${randomUUID()}`,operationId=`op-${taskId}`;
   let seeded:{readonly processId:number;readonly fingerprint:string}|undefined,stops=0,scans=0;

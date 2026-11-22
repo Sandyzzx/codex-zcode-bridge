@@ -12499,7 +12499,9 @@ async function openClaimOnlyDriver(options) {
       recoveryEvidenceBindings.set(evidenceDigest, { ...input, evidence_json: canonicalJson2(evidence) });
       try {
         const recorded = asRecord6(port.recordRecoveryObservation(input, evidence));
-        const persistedEvidenceDigest = typeof recorded.evidence_digest === "string" ? recorded.evidence_digest : evidenceDigest;
+        const latestActive = recorded.duplicate === true ? activeRecovery.at(-1) : void 0;
+        const latestActiveEvidence = latestActive ? parseEvidence(latestActive.evidence_json, "recovery_event_evidence_invalid") : void 0;
+        const persistedEvidenceDigest = latestActiveEvidence ? text2(latestActiveEvidence.evidence_digest, "recovery_evidence_digest_missing") : typeof recorded.evidence_digest === "string" ? recorded.evidence_digest : evidenceDigest;
         const reportedReason = adapterCleanupUnverified && operation.result_status !== "cancelled" ? "adapter_cleanup_unverified" : reasonCode;
         return {
           state: "held",

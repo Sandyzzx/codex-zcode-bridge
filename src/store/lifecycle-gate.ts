@@ -2212,8 +2212,15 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
       recoveryEvidenceBindings.set(evidenceDigest, { ...input, evidence_json: canonicalJson(evidence) });
       try {
         const recorded = asRecord(port.recordRecoveryObservation(input, evidence));
-        const persistedEvidenceDigest = typeof recorded.evidence_digest === "string"
-          ? recorded.evidence_digest : evidenceDigest;
+        // Store deduplication may match an older active Hold even when newer
+        // active Holds exist. Administrative Release must bind the latest
+        // active persisted evidence, not the older matched observation.
+        const latestActive = recorded.duplicate === true ? activeRecovery.at(-1) : undefined;
+        const latestActiveEvidence = latestActive
+          ? parseEvidence(latestActive.evidence_json, "recovery_event_evidence_invalid") : undefined;
+        const persistedEvidenceDigest = latestActiveEvidence
+          ? text(latestActiveEvidence.evidence_digest, "recovery_evidence_digest_missing")
+          : typeof recorded.evidence_digest === "string" ? recorded.evidence_digest : evidenceDigest;
         const reportedReason = adapterCleanupUnverified && operation.result_status !== "cancelled"
           ? "adapter_cleanup_unverified" : reasonCode;
         return { state: "held", operation_id: operationId, phase, reason: reportedReason, revision: recorded.revision,
