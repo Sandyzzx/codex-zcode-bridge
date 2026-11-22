@@ -313,6 +313,12 @@ test("the real validator rejects injected development-path references and keeps 
     writeFileSync(path.join(pluginRoot, "dist", "admin-abandonment.sql"), adminSchema);
     writeFileSync(path.join(root, "src", "sqlite-candidate", "wp6b2b1", "store.mjs"), "const SCHEMA_VERSION = 14;\n");
     writeFileSync(path.join(pluginRoot, "dist", "admin-abandon-held-operation.mjs"), "const SCHEMA_VERSION = 14;\n");
+    for (const bundle of ["executor.mjs", "task-cli.mjs"]) {
+      copyFileSync(
+        path.join(repositoryRoot, "plugins", "codex-zcode-bridge", "dist", bundle),
+        path.join(pluginRoot, "dist", bundle),
+      );
+    }
     for (const file of [
       "hooks/hooks.json",
       "hooks/session-start.mjs",
