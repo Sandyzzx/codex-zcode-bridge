@@ -246,7 +246,7 @@ test('ADR-027 actual Worker execution timeout commits a timeout Result and relea
   }
 });
 
-test('ADR-027 cleanup expiry persists a failed Result and missing adapter cleanup facts keep the Workspace held', {timeout:90000},async()=>{
+test('ADR-027 cleanup expiry preserves a failed Result while user-authorized Recovery releases only after a fresh clean tree scan', {timeout:90000},async()=>{
   const worker=await deadlineWorker('cleanup','late-cleanup');
   await withRealAdapterMcp(async(client,_manager,dataRoot,workspace)=>{
     const taskId=`r3-cleanup-${randomUUID()}`;
@@ -257,16 +257,25 @@ test('ADR-027 cleanup expiry persists a failed Result and missing adapter cleanu
     assert.equal(result.error_code,'cleanup_failed');
     const operation=await operationFor(dataRoot,taskId);assert.equal(operation.phase,'cleanup_unverified');
     // The adapter did not provide resource facts. Recovery must not invent a
-    // process-tree scan or release from the late close alone.
+    // Cleanup success from the late close alone. The explicit user cancel may
+    // perform the separately audited administrative Release after a fresh tree
+    // scan, while preserving the original cleanup failure.
     const cancel=await client.callTool({name:'zcode_cancel',arguments:{task_id:taskId}});
-    assert.equal(cancel.isError,true);
-    assert.equal((cancel.structuredContent as {error?:{code?:unknown}} | undefined)?.error?.code,'CANCEL_FAILED');
-    assert.match(String((cancel.structuredContent as {error?:{message?:unknown}} | undefined)?.error?.message),/adapter_cleanup_unverified/u);
-    assert.equal((await operationFor(dataRoot,taskId)).phase,'cleanup_unverified');
+    assert.equal(contentObject(cancel).status,'failed');
+    const released=await operationFor(dataRoot,taskId);assert.equal(released.phase,'released');
     assert.deepEqual(contentObject(await client.callTool({name:'zcode_result',arguments:{task_id:taskId}})),result);
-    const events=contentObject(await client.callTool({name:'zcode_events',arguments:{task_id:taskId,after_seq:0,limit:200}}));
-    const lifecycle=events.events as Array<Record<string,unknown>>;
-    assert.equal(lifecycle.some((event)=>event.type==='released'),false);
+    const modules=await loadLifecycleCandidateModules(),store=modules.Store.openForRecovery(dataRoot)!;
+    try{
+      const snapshot=modules.createPort(store).readRecoverySnapshot() as {operations:Array<Record<string,unknown>>};
+      const occupied=snapshot.operations.find(item=>item.operation_id===operation.operation_id);
+      assert.equal(occupied?.capacity_occupied,false);
+      assert.equal(occupied?.cleanup_state,'unverified_admin_release');
+      const events=modules.createPort(store).readLifecycleEvents(String(operation.operation_id)) as Array<Record<string,unknown>>;
+      assert.equal(events.filter(event=>event.event_type==='cleanup_unverified').length,1);
+      assert.equal(events.some(event=>event.event_type==='cleanup_verified'),false);
+      assert.equal(events.filter(event=>event.event_type==='observation_recorded'
+        &&JSON.parse(String(event.evidence_json)).reason==='user_authorized_release_unverified').length,1);
+    }finally{store.close();}
   },{workerOverride:worker,runtimeVariant:'deadline-success',workerCloseWaitMs:100});
 });
 

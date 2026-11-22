@@ -1,9 +1,9 @@
 # Project State
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-22（Preview.12 release integration）
-> Last verified: 2026-11-22，核对 `origin/preview@f51e965ebe38e85b3b8d3dea1396384aa634d2d4` 的 Recovery Observation 限额移除、材料事实去重、超过 8 条 Hold 的 Cleanup/Cancel 消解、旧 v14 Trigger 只读兼容，以及 Preview.11 的 Result/Event/行政释放边界。真实计费 A/B 仍 `BLOCKED`。
-> Verified against: Preview `f51e965ebe38e85b3b8d3dea1396384aa634d2d4` + Preview.12 release candidate
+> Last updated: 2026-11-22（terminal-result administrative release candidate）
+> Last verified: 2026-11-22，核对 `origin/preview@3daffe476b12b3eb16cec957d18422c3ff4c775e` 的 PR #129 AgentReport 扫描修复、Recovery Observation 限额移除、材料事实去重、超过 8 条 Hold 的 Cleanup/Cancel 消解、旧 v14 Trigger 只读兼容，以及四种终态 Result 的统一行政释放边界。真实计费 A/B 仍 `BLOCKED`。
+> Verified against: Preview `3daffe476b12b3eb16cec957d18422c3ff4c775e` + terminal-admin-release candidate
 
 当前发布状态：
 
@@ -18,6 +18,7 @@
 - Preview.11 同时包含更严格的 ADR-039 行政释放保护：带 Launch Receipt/Identity 的 pre-Claim 不得释放；`cleanup_unverified` 仅在原 Result 已 `cancelled`、exact identity `exited`、recorded root 已观察、tree scan clean 且 Adapter closure 缺失时行政释放；活动 Worker、live descendant、终止失败与 probe failure 保持占用。`zcode_status`/`zcode_cancel` 以可选字段加性报告 `dispatch_blocker`。
 - `2.0.0-preview.12` 发布候选：基于 `origin/preview@f51e965ebe38e85b3b8d3dea1396384aa634d2d4`，移除全局 Recovery Observation 固定上限，保留当前探测、Worker 身份、进程树、Cleanup、Cancel、Release 与 SQLite CAS 合同。重复且材料事实不变的 active Hold 不追加 Event；材料事实变化仍记录不可覆盖证据。
 - Preview.12 对超过 8 条历史 Hold 的 Cleanup/Cancel 消解使用完整事件集合的 count/root 承诺，旧 digest 数组继续可校验；既有 v14 的精确旧 Trigger 可只读打开，并在可写打开时事务内精确升级，`user_version` 仍为 14。隔离 Task89 快照已验证第 9 次观察和重复去重，生产 Task89 未取消、未写入。
+- Terminal-admin-release candidate：把 ADR-039 行政释放的终态 Result 范围从已发布 Preview.11 的 `cancelled` 扩展到 `completed`/`failed`/`waiting_for_master`/`cancelled`，并统一使用一个 `zcode_cancel` 用户流程。新释放证据统一绑定原 Result digest/commit、Claim、Worker identity 与 Recovery evidence；旧 `cancelled` 取消证明只作历史读取兼容。该扩展是当前 PR 行为，尚未发布。
 - ZCode Desktop `3.19.0.10774`：仅通过 ADR-042 的 `OFFICIAL_RUNTIME_EXPERIMENTAL` 精确指纹授权完成兼容性探测；不是 Preview.12 的发布支持版本，Coding Plan 倍率仍 `INCONCLUSIVE`，Start Plan 因无 active plan 为 `BLOCKED`。
 
 ## 当前生产架构

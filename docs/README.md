@@ -1,9 +1,9 @@
 # 文档路由 / Documentation
 
 > Status: AUTHORITATIVE（仅指本索引）
-> Last updated: 2026-11-22（Preview.12 Recovery Observation 限额移除）
-> Last verified: 2026-11-22，核对 PR #116、PR #121、默认完整 Result/显式 Summary、Event Attempt 归属、ADR-048 默认 Event 页预算、材料事实去重与历史 v14 Hold 兼容。
-> Verified against: `f51e965ebe38e85b3b8d3dea1396384aa634d2d4` + Preview.12 release candidate
+> Last updated: 2026-11-22（PR #129 后终态行政释放统一候选）
+> Last verified: 2026-11-22，核对 PR #116、PR #129、PR #121、默认完整 Result/显式 Summary、Event Attempt 归属、ADR-048 默认 Event 页预算、材料事实去重、历史 v14 Hold 兼容和统一终态行政释放候选。
+> Verified against: `3daffe476b12b3eb16cec957d18422c3ff4c775e` + terminal-admin-release candidate
 
 English users start at [README.md](../README.md). 技术文档为中文。先读当前事实，按问题加载合同；研究或历史材料不作为当前实现或发布证明。
 
