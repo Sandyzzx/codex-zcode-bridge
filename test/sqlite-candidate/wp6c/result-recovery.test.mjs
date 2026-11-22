@@ -102,9 +102,9 @@ function verifiedCleanupEvidence(store,request){
 }
 function recoveryEvidence(input){return {source:input.evidence_source,operation_id:input.operation_id,task_id:input.task_id,attempt:input.attempt,
   generation:input.generation,claim_id:input.claim_id,worker_identity_digest:input.worker_identity_digest,observation:'unknown'}};
-function recoveryInput(store,{classification='hold',reason_code='cleanup_identity_unknown',evidence_source='manager_process_probe',evidence}={}){
+function recoveryInput(store,{classification='hold',reason_code='cleanup_identity_unknown',evidence_source='manager_process_probe',evidence,material={}}={}){
   const o=store.readOperation('operation-result'),ev=evidence??{source:evidence_source,operation_id:o.operation_id,task_id:o.task_id,attempt:o.attempt,
-    generation:o.generation,claim_id:o.claim_id,worker_identity_digest:o.claim_worker_identity_digest,observation:'unknown'};
+    generation:o.generation,claim_id:o.claim_id,worker_identity_digest:o.claim_worker_identity_digest,observation:'unknown',...material};
   return {input:{operation_id:o.operation_id,task_id:o.task_id,attempt:o.attempt,generation:o.generation,expected_revision:o.revision,claim_id:o.claim_id,
     worker_identity_digest:o.claim_worker_identity_digest,classification,reason_code,evidence_source,evidence_digest:digest(ev)},evidence:ev};
 }
@@ -179,6 +179,60 @@ for(const priorProof of [false,true])test(`explicit cancellation resolves cleanu
     const op=reopened.readRecoverySnapshot().operations.find(op=>op.operation_id===request.operation_id);
     assert.equal(op.capacity_occupied,false);assert.equal(op.recovery_classification,'normal');
     assert.equal(reopened.readTaskLifecycle(request.task_id).result.status,'cancelled');
+  }finally{reopened.close();}
+});
+
+test('the same material Recovery facts become a new active Hold after an earlier resolution',()=>{
+  const {root:r,store}=makeRunning('cancel-resolved-fact-recurs'),cancel=cancellationFixture(store),recovery=verifiedRecoveryPort(store);
+  const first=recoveryInput(store,{reason_code:'cleanup_incomplete'});
+  const recorded=recovery.recordRecoveryObservation(first.input,first.evidence);
+  assert.equal(recorded.duplicate,false);
+  const intent=cancel.port.requestCancellation(cancel.fence(),cancel.identityEvidence);
+  cancel.port.recordCancellationVerification(cancel.fence(intent.revision),
+    {...cancel.cancellationEvidence,cancel_id:intent.cancel_id});
+  const beforeStaleReplay=readRows(r);
+  assert.throws(()=>recovery.recordRecoveryObservation(first.input,first.evidence),
+    e=>e instanceof AdmissionError&&e.code==='stale_recovery_cas',
+    'an exact historical envelope must not bypass the current Revision CAS after its Hold was resolved');
+  assert.deepEqual(readRows(r),beforeStaleReplay,'a stale replay must not mutate events or projections');
+  const recurred=recoveryInput(store,{reason_code:'cleanup_incomplete'});
+  const repeated=recovery.recordRecoveryObservation(recurred.input,recurred.evidence);
+  assert.equal(repeated.duplicate,false,'a resolved fact must not suppress a later active obstruction');
+  const reopened=IsolatedAdmissionStore.openForRecovery(r);
+  try{
+    const snapshot=reopened.readRecoverySnapshot();
+    assert.equal(snapshot.root_status,'consistent_read_only');
+    assert.equal(snapshot.operations[0].recovery_classification,'hold');
+    assert.equal(snapshot.operations[0].recovery_observation_count,2);
+  }finally{reopened.close();store.close();}
+});
+
+test('explicit cancellation resolves more than eight cleanup Holds with a bounded evidence commitment',()=>{
+  const {root:r,store,request}=makeRunning('cancel-many-holds'),cancel=cancellationFixture(store),recovery=verifiedRecoveryPort(store);
+  for(let index=0;index<12;index++){
+    const held=recoveryInput(store,{reason_code:'cleanup_incomplete',
+      material:{identity_state:'unknown',probe_reason:`cancel-hold-${index}`}});
+    const recorded=recovery.recordRecoveryObservation(held.input,held.evidence);
+    assert.equal(recorded.duplicate,false);
+  }
+  const intent=cancel.port.requestCancellation(cancel.fence(),cancel.identityEvidence);
+  const verification=cancel.port.recordCancellationVerification(cancel.fence(intent.revision),
+    {...cancel.cancellationEvidence,cancel_id:intent.cancel_id});
+  const resolution=readRows(r).events.find(event=>JSON.parse(event.evidence_json).reason==='cancel_recovery_resolved');
+  const resolutionEvidence=JSON.parse(resolution.evidence_json);
+  assert.equal(resolutionEvidence.resolved_recovery_event_digests,undefined);
+  assert.equal(resolutionEvidence.resolved_recovery_event_count,12);
+  assert.match(resolutionEvidence.resolved_recovery_event_root,/^[0-9a-f]{64}$/u);
+  const committed=store.commitResult({...request,revision:verification.revision,result_status:'cancelled',
+    result:resultPayload('cancelled'),cancel_verification_digest:verification.cancellation_verification_digest});
+  assert.equal(committed.result_status,'cancelled');
+  assert.equal(readRows(r).events.filter(event=>JSON.parse(event.evidence_json).reason==='recovery_hold').length,12);
+  store.close();
+  const reopened=IsolatedAdmissionStore.openForRecovery(r);
+  try{
+    const snapshot=reopened.readRecoverySnapshot();
+    assert.equal(snapshot.root_status,'consistent_read_only');
+    assert.equal(snapshot.operations[0].recovery_observation_count,12);
   }finally{reopened.close();}
 });
 
@@ -338,11 +392,15 @@ test('running cancellation persists exact Worker identity, is idempotent, and bi
 
 test('enriched cleanup Recovery release is idempotent and survives SQLite reopen validation',()=>{
   const f=cancelledCleanupFixture('cleanup-admin-release'),proof=cleanupReleaseRecovery(f.store);
-  verifiedRecoveryPort(f.store).recordRecoveryObservation(proof.input,proof.evidence);
+  const recovery=verifiedRecoveryPort(f.store);
+  recovery.recordRecoveryObservation(proof.input,proof.evidence);
+  const refreshed={...proof.evidence,observed_at:'2026-10-23T00:10:00.000Z'};
+  const repeated=recovery.recordRecoveryObservation({...proof.input,evidence_digest:digest(refreshed)},refreshed);
+  assert.equal(repeated.duplicate,true);
   const operation=f.store.readOperation('operation-result');
   const request={operation_id:operation.operation_id,task_id:operation.task_id,attempt:operation.attempt,generation:operation.generation,
     revision:operation.revision,cancel_id:f.intent.cancel_id,cancellation_verification_digest:f.verification.cancellation_verification_digest,
-    recovery_evidence_digest:digest(proof.evidence),release_reason:'user_authorized_release_unverified'};
+    recovery_evidence_digest:repeated.evidence_digest,release_reason:'user_authorized_release_unverified'};
   const first=f.store.userAuthorizedReleaseUnverifiedOperation(request);
   const duplicate=f.store.userAuthorizedReleaseUnverifiedOperation(request);
   assert.equal(first.duplicate,false);assert.equal(first.cleanup_verified,false);
@@ -592,7 +650,10 @@ test('C3B Recovery CAS records a verified phase-preserving Hold and fences Resul
   const recovery=IsolatedAdmissionStore.openForRecovery(r);try{const op=recovery.readRecoverySnapshot().operations.find(x=>x.operation_id===input.operation_id);
     assert.equal(op.recovery_classification,'hold');assert.equal(op.recovery_observation_count,1);assert.equal(op.capacity_occupied,true);assert.equal(op.claim_permanent,true);
   }finally{recovery.close();}
-  const repeated=port.recordRecoveryObservation(input,evidence);assert.equal(repeated.duplicate,true);
+  const refreshed={...evidence,observed_at:'2026-10-23T00:00:09.000Z'};
+  const refreshedInput={...input,evidence_digest:digest(refreshed)};
+  const repeated=port.recordRecoveryObservation(refreshedInput,refreshed);assert.equal(repeated.duplicate,true);
+  assert.equal(repeated.evidence_digest,eventEvidence.evidence_digest);
   assert.equal(readRows(r).events.filter(x=>x.event_type==='observation_recorded').length,1);store.close();
 });
 
@@ -690,7 +751,7 @@ test('C3B cannot persist an observation before permanent Claim and trusted Worke
   assert.equal(store.readLifecycleEvents('operation-result').some(e=>e.event_type==='observation_recorded'),false);store.close();
 });
 
-test('C3B Recovery classification is monotonic, quarantine cannot downgrade, and the per-operation cap is bounded',()=>{
+test('C3B Recovery classification is monotonic, quarantine cannot downgrade, and unchanged facts do not consume an observation budget',()=>{
   const {root:r,store,request}=makeRunning('c3b-monotonic');const port=verifiedRecoveryPort(store);
   const first=recoveryInput(store);const one=port.recordRecoveryObservation(first.input,first.evidence);
   const second=recoveryInput(store,{classification:'quarantine',reason_code:'operation_projection_conflict',evidence_source:'manager_projection_validator'});
@@ -702,19 +763,66 @@ test('C3B Recovery classification is monotonic, quarantine cannot downgrade, and
   lower.input.expected_revision=two.revision;lower.input.evidence_digest=digest(lower.evidence);
   assert.throws(()=>port.recordRecoveryObservation(lower.input,lower.evidence),e=>e instanceof AdmissionError&&e.code==='recovery_classification_downgrade');
   let current=two;
-  for(let i=2;i<8;i++){
+  for(let i=2;i<16;i++){
     const next=recoveryInput(store,{classification:'quarantine',reason_code:'operation_projection_conflict',evidence_source:'manager_projection_validator',
       evidence:{source:'manager_projection_validator',operation_id:'operation-result',task_id:'task-result',attempt:1,generation:current.generation,
-        claim_id:current.claim_id,worker_identity_digest:current.worker_identity_digest,observation:`conflict-${i}`}});
+        claim_id:current.claim_id,worker_identity_digest:current.worker_identity_digest,identity_state:'unknown',probe_reason:`conflict-${i}`}});
     next.input.expected_revision=current.revision;next.input.evidence_digest=digest(next.evidence);current=port.recordRecoveryObservation(next.input,next.evidence);
   }
-  const ninth=recoveryInput(store,{classification:'quarantine',reason_code:'operation_projection_conflict',evidence_source:'manager_projection_validator',
+  const unchanged=recoveryInput(store,{classification:'quarantine',reason_code:'operation_projection_conflict',evidence_source:'manager_projection_validator',
     evidence:{source:'manager_projection_validator',operation_id:'operation-result',task_id:'task-result',attempt:1,generation:current.generation,
-      claim_id:current.claim_id,worker_identity_digest:current.worker_identity_digest,observation:'ninth'}});
-  ninth.input.expected_revision=current.revision;ninth.input.evidence_digest=digest(ninth.evidence);
-  assert.throws(()=>port.recordRecoveryObservation(ninth.input,ninth.evidence),e=>e instanceof AdmissionError&&e.code==='recovery_observation_limit');
+      claim_id:current.claim_id,worker_identity_digest:current.worker_identity_digest,identity_state:'unknown',probe_reason:'conflict-15',
+      observed_at:'2026-10-23T00:01:00.000Z'}});
+  unchanged.input.expected_revision=current.revision;unchanged.input.evidence_digest=digest(unchanged.evidence);
+  const repeated=port.recordRecoveryObservation(unchanged.input,unchanged.evidence);
+  assert.equal(repeated.duplicate,true);assert.equal(repeated.revision,current.revision);
+  const changed=recoveryInput(store,{classification:'quarantine',reason_code:'operation_projection_conflict',evidence_source:'manager_projection_validator',
+    evidence:{source:'manager_projection_validator',operation_id:'operation-result',task_id:'task-result',attempt:1,generation:current.generation,
+      claim_id:current.claim_id,worker_identity_digest:current.worker_identity_digest,identity_state:'unknown',probe_reason:'conflict-16'}});
+  changed.input.expected_revision=current.revision;changed.input.evidence_digest=digest(changed.evidence);
+  const afterChange=port.recordRecoveryObservation(changed.input,changed.evidence);
+  assert.equal(afterChange.duplicate,false);
   const recovery=IsolatedAdmissionStore.openForRecovery(r);try{const op=recovery.readRecoverySnapshot().operations[0];
-    assert.equal(op.recovery_classification,'quarantine');assert.equal(op.recovery_observation_count,8);assert.equal(op.capacity_occupied,true);assert.equal(op.claim_permanent,true);
+    assert.equal(op.recovery_classification,'quarantine');assert.equal(op.recovery_observation_count,17);assert.equal(op.capacity_occupied,true);assert.equal(op.claim_permanent,true);
+  }finally{recovery.close();store.close();}
+});
+
+test('C3B eight material Holds stay stable across twenty fresh unchanged probes',()=>{
+  const {root:r,store}=makeRunning('c3b-eight-old-holds');
+  let verifierCalls=0;
+  const port=createSqliteLifecyclePort(store,{recoveryEvidenceVerifier:({operation,observation,evidence})=>{
+    verifierCalls++;
+    const valid=evidence?.source===observation.evidence_source&&evidence?.operation_id===operation.operation_id
+      &&evidence?.task_id===operation.task_id&&evidence?.attempt===operation.attempt
+      &&evidence?.generation===operation.generation&&evidence?.claim_id===operation.claim_id
+      &&evidence?.worker_identity_digest===operation.worker_identity_digest
+      &&observation.evidence_digest===digest(evidence)
+      &&(observation.classification==='hold'?observation.reason_code!=='operation_projection_conflict':observation.reason_code==='operation_projection_conflict');
+    return valid?{classification:observation.classification,reason_code:observation.reason_code,
+      evidence_source:observation.evidence_source,evidence_digest:observation.evidence_digest}:false;
+  }});
+  for(let index=0;index<8;index++){
+    const held=recoveryInput(store,{material:{identity_state:'unknown',probe_reason:`hold-${index}`}});
+    const recorded=port.recordRecoveryObservation(held.input,held.evidence);
+    assert.equal(recorded.duplicate,false);
+  }
+  const before=store.readOperation('operation-result');
+  for(let index=0;index<20;index++){
+    const unchanged=recoveryInput(store,{material:{identity_state:'unknown',probe_reason:'hold-7',
+      observed_at:`2026-10-23T00:00:${String(index).padStart(2,'0')}.000Z`}});
+    const repeated=port.recordRecoveryObservation(unchanged.input,unchanged.evidence);
+    assert.equal(repeated.duplicate,true,`fresh probe ${index+1} must deduplicate without skipping verification`);
+    assert.equal(repeated.revision,before.revision);
+  }
+  assert.equal(verifierCalls,28,'every observation, including each duplicate, must execute the verifier');
+  assert.equal(store.readLifecycleEvents('operation-result')
+    .filter(event=>event.event_type==='observation_recorded'&&JSON.parse(event.evidence_json).reason==='recovery_hold').length,8);
+  const recovery=IsolatedAdmissionStore.openForRecovery(r);
+  try{
+    const operation=recovery.readRecoverySnapshot().operations.find(item=>item.operation_id==='operation-result');
+    assert.equal(operation.recovery_classification,'hold');
+    assert.equal(operation.recovery_observation_count,8);
+    assert.equal(operation.capacity_occupied,true);
   }finally{recovery.close();store.close();}
 });
 
@@ -756,18 +864,21 @@ test('C3B different-Workspace Operations remain independent after one Operation 
   assert.equal(readRows(r).active,2);store.close();
 });
 
-test('C3B two independent Managers produce one Recovery CAS winner without overwriting stale evidence',async()=>{
+test('C3B two independent Managers deduplicate one unchanged Recovery fact without overwriting evidence',async()=>{
   const {root:r,store}=makeRunning('c3b-manager-race'),base=recoveryInput(store);store.close();
   const secondEvidence={...base.evidence,observation:'manager-b-different-observation'};
   const secondInput={...base.input,evidence_digest:digest(secondEvidence)};
   const [a,b]=await Promise.all([recoveryChild(r,base.input,base.evidence),recoveryChild(r,secondInput,secondEvidence)]);
-  const successes=[a,b].filter(x=>x.exitCode===0&&x.result.ok);assert.equal(successes.length,1,JSON.stringify([a,b]));
-  const failed=[a,b].filter(x=>x.exitCode===0&&!x.result.ok);assert.equal(failed.length,1,JSON.stringify([a,b]));
-  assert.ok(['recovery_observation_conflict','stale_recovery_cas','root_writer_busy'].includes(failed[0].result.code));
+  const successes=[a,b].filter(x=>x.exitCode===0&&x.result.ok);assert.ok(successes.length>=1,JSON.stringify([a,b]));
+  const failed=[a,b].filter(x=>x.exitCode===0&&!x.result.ok);
+  assert.ok(failed.length<=1,JSON.stringify([a,b]));
+  if(failed.length)assert.equal(failed[0].result.code,'root_writer_busy',JSON.stringify([a,b]));
   const writer=IsolatedAdmissionStore.open(r);try{
-    const loser=failed[0]===a?{input:base.input,evidence:base.evidence}:{input:secondInput,evidence:secondEvidence};
     const port=verifiedRecoveryPort(writer);
-    if(failed[0].result.code==='root_writer_busy')assert.throws(()=>port.recordRecoveryObservation(loser.input,loser.evidence),e=>e.code==='recovery_observation_conflict');
+    const loser=failed[0]===a?{input:base.input,evidence:base.evidence}:{input:secondInput,evidence:secondEvidence};
+    const retried=failed.length?port.recordRecoveryObservation(loser.input,loser.evidence):null;
+    if(retried)assert.equal(retried.duplicate,true);
+    assert.ok([...successes.map(x=>x.result.out),...(retried?[retried]:[])].filter(result=>result.duplicate).length>=1);
     const rows=readRows(r);assert.equal(rows.events.filter(x=>x.event_type==='observation_recorded'&&JSON.parse(x.evidence_json).reason.startsWith('recovery_')).length,1);
     assert.equal(rows.operation.phase,'running');assert.equal(rows.operation.claim_id,base.input.claim_id);assert.equal(rows.active,1);
   }finally{writer.close();}
