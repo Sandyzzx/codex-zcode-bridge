@@ -1,9 +1,9 @@
 # Project State
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-22（Preview.11 release integration）
-> Last verified: 2026-11-22，核对 `origin/preview@f549373404ac137600e89991b99114a4802133f2` 的默认完整 Result、opt-in Result 摘要、Event 分页、Attempt 归属、用户授权阻塞释放与 Preview.10 兼容边界。真实计费 A/B 仍 `BLOCKED`。
-> Verified against: Preview `f549373404ac137600e89991b99114a4802133f2` + Preview.11 release candidate
+> Last updated: 2026-11-22（Preview.12 release integration）
+> Last verified: 2026-11-22，核对 `origin/preview@f51e965ebe38e85b3b8d3dea1396384aa634d2d4` 的 Recovery Observation 限额移除、材料事实去重、超过 8 条 Hold 的 Cleanup/Cancel 消解、旧 v14 Trigger 只读兼容，以及 Preview.11 的 Result/Event/行政释放边界。真实计费 A/B 仍 `BLOCKED`。
+> Verified against: Preview `f51e965ebe38e85b3b8d3dea1396384aa634d2d4` + Preview.12 release candidate
 
 当前发布状态：
 
@@ -14,9 +14,11 @@
 - Preview `2.0.0-preview.8`：包含 ADR-039 Host 授权取消与新鲜 Cleanup Proof 绑定；支持范围限定为 Windows x64、Node.js `24.16.0` 与已安装的官方 ZCode Desktop `3.18.2.10443`。
 - Preview `2.0.0-preview.9`：在 Preview.8 基线上增加 ADR-040 安装版 AppServer、ADR-041 Thin Official Host 收敛、Cost Lab Web、Start Plan 离线审计和正式证据。
 - 已发布 Preview `2.0.0-preview.10`：集成 SQLite v13 退役、旧 JSON Authority 提示退役、无引用 ZCode 3.18.0 Patch 清理、历史研究归档、CI 去重/Impact 精化与 Windows 两路分片。SQLite v14 是唯一当前 Schema；Stable 不受影响。
-- `2.0.0-preview.11` 发布候选：基于 `origin/preview@f549373404ac137600e89991b99114a4802133f2`，保留默认完整 Result，提供显式 `zcode_result(view="summary")`、默认 32 KiB Event 页（ADR-048）、`zcode_events(include_attempt=true)` 与 `zcode_result(expected_attempt)` 的既有 SQLite 事实归属核对。
+- 已发布 Preview `2.0.0-preview.11`：基于 `origin/preview@f549373404ac137600e89991b99114a4802133f2`，保留默认完整 Result，提供显式 `zcode_result(view="summary")`、默认 32 KiB Event 页（ADR-048）、`zcode_events(include_attempt=true)` 与 `zcode_result(expected_attempt)` 的既有 SQLite 事实归属核对。
 - Preview.11 同时包含更严格的 ADR-039 行政释放保护：带 Launch Receipt/Identity 的 pre-Claim 不得释放；`cleanup_unverified` 仅在原 Result 已 `cancelled`、exact identity `exited`、recorded root 已观察、tree scan clean 且 Adapter closure 缺失时行政释放；活动 Worker、live descendant、终止失败与 probe failure 保持占用。`zcode_status`/`zcode_cancel` 以可选字段加性报告 `dispatch_blocker`。
-- ZCode Desktop `3.19.0.10774`：仅通过 ADR-042 的 `OFFICIAL_RUNTIME_EXPERIMENTAL` 精确指纹授权完成兼容性探测；不是 Preview.11 的发布支持版本，Coding Plan 倍率仍 `INCONCLUSIVE`，Start Plan 因无 active plan 为 `BLOCKED`。
+- `2.0.0-preview.12` 发布候选：基于 `origin/preview@f51e965ebe38e85b3b8d3dea1396384aa634d2d4`，移除全局 Recovery Observation 固定上限，保留当前探测、Worker 身份、进程树、Cleanup、Cancel、Release 与 SQLite CAS 合同。重复且材料事实不变的 active Hold 不追加 Event；材料事实变化仍记录不可覆盖证据。
+- Preview.12 对超过 8 条历史 Hold 的 Cleanup/Cancel 消解使用完整事件集合的 count/root 承诺，旧 digest 数组继续可校验；既有 v14 的精确旧 Trigger 可只读打开，并在可写打开时事务内精确升级，`user_version` 仍为 14。隔离 Task89 快照已验证第 9 次观察和重复去重，生产 Task89 未取消、未写入。
+- ZCode Desktop `3.19.0.10774`：仅通过 ADR-042 的 `OFFICIAL_RUNTIME_EXPERIMENTAL` 精确指纹授权完成兼容性探测；不是 Preview.12 的发布支持版本，Coding Plan 倍率仍 `INCONCLUSIVE`，Start Plan 因无 active plan 为 `BLOCKED`。
 
 ## 当前生产架构
 
