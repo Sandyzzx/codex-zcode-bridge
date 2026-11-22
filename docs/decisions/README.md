@@ -3,7 +3,7 @@
 > Status: AUTHORITATIVE（仅指本索引）
 > Last updated: 2026-11-23（Operations Console + Cost Lab + Runtime Auto-Learn candidate）
 > Last verified: 2026-11-23，核对 ADR-050 的统一 Console 扩展、ADR-053 的 fingerprint-bound 证据/授权/能力矩阵，以及 Web 浏览器、Runtime、Cost Lab Runner 定向路径。真实 Desktop 全退、严格 C/D、真实 Queue/Turn/Master、真实 Provider/Billing 和完整 Release Gate 仍为 `NOT_RUN / BLOCKED`。
-> Verified against: current Async Executor RC candidate on `codex/async-executor-rc-20261122`；远程 Preview 必须在最终候选冻结前重新 fetch 并核对。
+> Verified against: `origin/preview@8ee7ec93a82c2093dce74707a9d1937c1c567887` + code candidate `3baf91c65`。
 
 先读当前 [架构](../ARCHITECTURE.md)/[接口](../INTERFACES.md)，只在需要解释取舍时加载对应决策。文件保持原路径和历史正文；Partially superseded 的标注优先于历史段落。
 

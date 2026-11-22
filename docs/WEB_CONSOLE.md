@@ -3,7 +3,7 @@
 > Status: AUTHORITATIVE
 > Last updated: 2026-11-23
 > Last verified: 2026-11-23，核对 unified Console、Cost Lab same-origin 挂载、i18n/theme、Deep Link、Runtime Auto-Learn、真实 Chromium 和 synthetic Worker 定向路径；真实 Desktop 全退、严格 Wake C/D 与真实 Provider 仍不在已验证范围。
-> Verified against: current Async Executor RC branch (see [PROJECT_STATE](PROJECT_STATE.md))
+> Verified against: `origin/preview@8ee7ec93a82c2093dce74707a9d1937c1c567887` + code candidate `3baf91c65`
 
 Operations Console 是 Executor Control Pipe 的本地可视化 Adapter。它只使用
 一个 loopback Origin 和一个 HTTP Server，不创建 Task、Manager、Worker 或

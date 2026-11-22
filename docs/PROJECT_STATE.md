@@ -2,8 +2,8 @@
 
 > Status: AUTHORITATIVE
 > Last updated: 2026-11-23（Operations Console + Cost Lab + Runtime Auto-Learn candidate）
-> Last verified: 2026-11-23，核对统一 Operations Console、单一 loopback Origin、Cost Lab same-origin 挂载、中英文与 Light/Dark/System、Task Deep Link 与 Result pending、Runtime Auto-Learn exact-fingerprint 证据、授权零模型探针和 Cost Lab Runner 跨进程 synthetic Worker；当前定向证据为 Runtime 7/7、Web 10/10、Cost Lab 88/88。真实 Desktop 全退、严格 Wake C/D、真实 Queue/Turn/Master、真实 Official Runtime、真实 Provider/Billing 和最终 Release Gate 仍为 `NOT_RUN / BLOCKED`。
-> Verified against: current Async Executor RC candidate on `codex/async-executor-rc-20261122`；最终候选提交与完整门禁结果见 [Operations Console Report](reports/operations-console-runtime-auto-learn-20261123.md)。
+> Last verified: 2026-11-23，核对 `origin/preview@8ee7ec93a82c2093dce74707a9d1937c1c567887` 的统一 Operations Console、单一 loopback Origin、Cost Lab same-origin 挂载、中英文与 Light/Dark/System、Task Deep Link 与 Result pending、Runtime Auto-Learn exact-fingerprint 证据、授权零模型探针和 Cost Lab Runner 跨进程 synthetic Worker；当前定向证据为 Runtime 7/7、Web 10/10、Cost Lab 88/88。真实 Desktop 全退、严格 Wake C/D、真实 Queue/Turn/Master、真实 Official Runtime、真实 Provider/Billing 和最终 Release Gate 仍为 `NOT_RUN / BLOCKED`。
+> Verified against: `origin/preview@8ee7ec93a82c2093dce74707a9d1937c1c567887` + code candidate `3baf91c65`；最终候选提交与完整门禁结果见 [Operations Console Report](reports/operations-console-runtime-auto-learn-20261123.md)。
 
 当前发布状态：
 

@@ -4,7 +4,7 @@
 > Date: 2026-11-23 (Asia/Shanghai)
 > Branch: `codex/async-executor-rc-20261122`
 > Worktree: `C:\Users\Sandy\.codex\worktrees\async-executor-pr5-20261122\codex-zcode-bridge`
-> Candidate: `0841d665b` + reviewed working-tree fixes
+> Candidate: `3baf91c65` (`origin/preview@8ee7ec93a82c` already contained)
 > Conclusion: `PARTIAL / BLOCKED`
 
 ## Scope
@@ -74,7 +74,7 @@ production manifest or promote an experimental Runtime to `VERIFIED`.
 | Inventory generation | `PASS` | `npm run test:inventory`: 1015 declarations from 111 mapped files |
 | Plugin build | `PASS` | `npm run build:plugin`; `plugins/codex-zcode-bridge/dist/web-console.mjs` rebuilt |
 | Plugin structure | `PASS` | `npm run validate:plugin` |
-| Generated freshness | `NOT_RUN — after source/generated commit` | `check:generated` correctly reported the uncommitted rebuilt Console; rerun on the committed candidate |
+| Generated freshness | `PASS` | `npm run check:generated`: 14 tracked files fresh after commit `3baf91c65` |
 | Full Windows/Ubuntu Release Gate | `NOT_RUN` | Candidate has not been frozen after the final docs/report edits |
 | Real Official Runtime Provider/Billing | `BLOCKED_BY_AUTHORIZATION` | No new paid model or Billing request authorized |
 | Real Queue Wake / Master Turn | `NOT_RUN / BLOCKED` | Requires isolated real Codex Thread/Host acceptance |
