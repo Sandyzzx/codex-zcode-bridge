@@ -83,6 +83,147 @@ test("Skill does not claim SQLite or unmerged release-intent behavior is deploye
   }
 });
 
+type HandoffScenario = {
+  readonly name: string;
+  readonly authorized: boolean;
+  readonly scope: "whole_task" | "staged" | "auto";
+  readonly receipt: "accepted" | "unknown" | "none";
+  readonly authorityKnown: boolean;
+  readonly threadKnown: boolean;
+  readonly pendingInteraction: boolean;
+  readonly event: "none" | "turn_end" | "disconnect" | "cancel";
+  readonly cancelAuthorized: boolean;
+  readonly wakeIdentity: "none" | "match" | "mismatch";
+  readonly resultEvidence: boolean;
+  readonly expected: {
+    readonly action:
+      | "request_authorization"
+      | "reconcile_same_task"
+      | "foreground_pending"
+      | "async_wake"
+      | "async_web_notify"
+      | "recover_and_verify"
+      | "identity_conflict"
+      | "no_cancel"
+      | "authorized_cancel";
+    readonly endTurn: boolean;
+    readonly continuePolling: boolean;
+    readonly cancel: boolean;
+    readonly accepted: boolean;
+  };
+};
+
+// This is an executable decision contract for the Markdown workflow. It is not
+// evidence that a model actually follows the Skill on a live Host.
+function decideHandoff(input: HandoffScenario): HandoffScenario["expected"] {
+  if (!input.authorized) {
+    return { action: "request_authorization", endTurn: false, continuePolling: false, cancel: false, accepted: false };
+  }
+  if (input.event === "cancel") {
+    return input.cancelAuthorized
+      ? { action: "authorized_cancel", endTurn: true, continuePolling: false, cancel: true, accepted: false }
+      : { action: "no_cancel", endTurn: false, continuePolling: false, cancel: false, accepted: false };
+  }
+  if (input.event === "turn_end" || input.event === "disconnect") {
+    return { action: "no_cancel", endTurn: input.event === "turn_end", continuePolling: false, cancel: false, accepted: false };
+  }
+  if (input.wakeIdentity === "mismatch") {
+    return { action: "identity_conflict", endTurn: false, continuePolling: false, cancel: false, accepted: false };
+  }
+  if (input.wakeIdentity === "match") {
+    return {
+      action: "recover_and_verify",
+      endTurn: false,
+      continuePolling: false,
+      cancel: false,
+      accepted: false,
+    };
+  }
+  if (input.receipt === "unknown") {
+    return { action: "reconcile_same_task", endTurn: false, continuePolling: false, cancel: false, accepted: false };
+  }
+  if (input.receipt === "none") {
+    return { action: "request_authorization", endTurn: false, continuePolling: false, cancel: false, accepted: false };
+  }
+  if (input.pendingInteraction) {
+    return { action: "foreground_pending", endTurn: false, continuePolling: false, cancel: false, accepted: false };
+  }
+  return input.authorityKnown && input.threadKnown
+    ? { action: "async_wake", endTurn: true, continuePolling: false, cancel: false, accepted: false }
+    : { action: "async_web_notify", endTurn: true, continuePolling: false, cancel: false, accepted: false };
+}
+
+test("deterministic Async Handoff workflow separates scope, handoff, Wake and acceptance", () => {
+  const base: HandoffScenario = {
+    name: "accepted",
+    authorized: true,
+    scope: "whole_task",
+    receipt: "accepted",
+    authorityKnown: true,
+    threadKnown: true,
+    pendingInteraction: false,
+    event: "none",
+    cancelAuthorized: false,
+    wakeIdentity: "none",
+    resultEvidence: false,
+    expected: {
+      action: "async_wake",
+      endTurn: true,
+      continuePolling: false,
+      cancel: false,
+      accepted: false,
+    },
+  };
+  const scenarios: readonly HandoffScenario[] = [
+    base,
+    { ...base, name: "unauthorized", authorized: false, expected: { action: "request_authorization", endTurn: false, continuePolling: false, cancel: false, accepted: false } },
+    { ...base, name: "staged", scope: "staged" },
+    { ...base, name: "readonly-auto", scope: "auto" },
+    { ...base, name: "web-fallback-authority-unknown", authorityKnown: false, expected: { action: "async_web_notify", endTurn: true, continuePolling: false, cancel: false, accepted: false } },
+    { ...base, name: "web-fallback", threadKnown: false, expected: { action: "async_web_notify", endTurn: true, continuePolling: false, cancel: false, accepted: false } },
+    { ...base, name: "unknown-receipt", receipt: "unknown", expected: { action: "reconcile_same_task", endTurn: false, continuePolling: false, cancel: false, accepted: false } },
+    { ...base, name: "pending-before-handoff", pendingInteraction: true, expected: { action: "foreground_pending", endTurn: false, continuePolling: false, cancel: false, accepted: false } },
+    { ...base, name: "turn-end-does-not-cancel", event: "turn_end", expected: { action: "no_cancel", endTurn: true, continuePolling: false, cancel: false, accepted: false } },
+    { ...base, name: "disconnect-does-not-cancel", event: "disconnect", expected: { action: "no_cancel", endTurn: false, continuePolling: false, cancel: false, accepted: false } },
+    { ...base, name: "cancel-without-owner-authorization", event: "cancel", expected: { action: "no_cancel", endTurn: false, continuePolling: false, cancel: false, accepted: false } },
+    { ...base, name: "explicit-authorized-cancel", event: "cancel", cancelAuthorized: true, expected: { action: "authorized_cancel", endTurn: true, continuePolling: false, cancel: true, accepted: false } },
+    { ...base, name: "wake-identity-mismatch", wakeIdentity: "mismatch", expected: { action: "identity_conflict", endTurn: false, continuePolling: false, cancel: false, accepted: false } },
+    { ...base, name: "wake-is-not-acceptance", wakeIdentity: "match", resultEvidence: true, expected: { action: "recover_and_verify", endTurn: false, continuePolling: false, cancel: false, accepted: false } },
+    { ...base, name: "wake-pending-is-not-acceptance", wakeIdentity: "match", pendingInteraction: true, expected: { action: "recover_and_verify", endTurn: false, continuePolling: false, cancel: false, accepted: false } },
+  ];
+
+  for (const scenario of scenarios) assert.deepEqual(decideHandoff(scenario), scenario.expected, scenario.name);
+
+  const handoff = reference("async-handoff.md");
+  for (const phrase of [
+    "whole_task",
+    "staged",
+    "async_wake",
+    "foreground",
+    "可靠受理",
+    "SUBMISSION_UNKNOWN",
+    "同一",
+    "Turn 结束",
+    "停止轮询",
+    "Pending Interaction",
+    "QUEUED",
+    "TURN_STARTED",
+    "TURN_COMPLETED",
+    "DESKTOP_VISIBLE",
+    "UNKNOWN",
+    "Cleanup",
+    "released",
+    "diff",
+    "测试",
+    "不是",
+    "codex queue",
+  ]) assert.ok(handoff.includes(phrase), phrase);
+  assert.match(handoff, /Turn 结束、Host 断开、MCP Stop[\s\S]*不.*取消/);
+  assert.match(handoff, /回执未知[\s\S]*原 `task_id`[\s\S]*不得生成替换 Task ID/);
+  assert.match(handoff, /Wake[\s\S]*不是 Master 已恢复[\s\S]*Task 已接收/);
+  assert.match(handoff, /Cleanup[\s\S]*Release[\s\S]*Master acceptance/);
+});
+
 const evaluation = JSON.parse(readFileSync(path.resolve("test/fixtures/master-skill-evaluation-20261111.json"), "utf8")) as {
   readonly comparison: string;
   readonly model: string;

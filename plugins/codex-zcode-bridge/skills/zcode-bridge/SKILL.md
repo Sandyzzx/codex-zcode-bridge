@@ -7,8 +7,8 @@ description: 用户明确要求使用 ZCode/Codex ZCode Bridge、查询或继续
 
 > Status: AUTHORITATIVE
 > Last updated: 2026-11-22
-> Last verified: 2026-11-22，核对 opt-in Result 摘要/默认完整 Result、默认 32 KiB Event 页、ADR-039 行政释放保护、默认 13 工具面与渐进加载路由；真实 Host 文案消费未做 A/B。
-> Verified against: Preview `450c18afc0c8af2700734399c5aebd87a36df795` + unified integration candidate
+> Last verified: 2026-11-22，核对 opt-in Result 摘要/默认完整 Result、默认 32 KiB Event 页、ADR-039 行政释放保护、Async Handoff、Executor Wake 与渐进加载路由；真实 Host 文案消费和真实模型遵循率未做 A/B。
+> Verified against: `codex/async-executor-pr6-20261122` stacked candidate
 > Scope: Master 授权、派发、监控、独立验收与恢复；不修改 Bridge TaskPackage Schema 或 MCP 工具 API。
 
 ## 职责与授权
@@ -29,6 +29,8 @@ description: 用户明确要求使用 ZCode/Codex ZCode Bridge、查询或继续
 - 选择 `staged`：存在真实审批门、重大未决公共 API/架构/持久化/安全决策，或后续工作必须依赖前阶段成果时，只派发当前一个可独立验收的完整阶段。
 - 不按文件数、模型名称或价格机械拆分，也不为普通工程选择新增确认点。同一任务返工保持原策略；新独立目标重新判断授权和策略。
 
+Task Scope 与 Handoff Mechanism 分开决定。`whole_task`/`staged` 只定义交付和验收边界；`async_wake`/`foreground` 只定义当前 Master Turn 是否等待。它们都不是 MCP/TaskPackage 字段。只有 Task 已可靠受理且没有已知 Pending Interaction 时才可采用 Async Handoff；Queue 还须核实 Executor、Thread 绑定和一次性 Wake 授权，任一缺失时只报告 Web Notify 回退。
+
 ## 执行与验收边界
 
 - Master 只定义目标、必要事实、非目标、权限、停止条件和可检查验收；Worker 自主选择内部实现步骤。强制约束放入 TaskPackage 的 `requirements` 等不会被截断的字段。
@@ -37,6 +39,10 @@ description: 用户明确要求使用 ZCode/Codex ZCode Bridge、查询或继续
 - Worker 不得擅自决定重大未决公共 API、持久化、安全或外部行为事项；继续不依赖该决定的工作并请求 Master。
 - `completed`、Worker 自报和部分测试都不替代独立验收。Master 基于实际 diff、文件、适用验证和执行证据分别报告执行状态、验收状态和接收状态。
 - `zcode_continue` 只用于同任务验收返工、关键决定补充、受控中断恢复或报告修复，不用于推进下一阶段或新目标。
+- Async Handoff 只以可靠 Task 受理为交接点。提交前完成 Ready Gate；受理后记录可核实的 Task/Attempt、Authority 和 Thread，向用户简洁报告，然后结束 Turn 并停止轮询。不要调用 `codex queue`、`--resume` 或自行制造 Wake。
+- Turn 结束、客户端断连、MCP 停止或调用超时不取消已受理 Task。只有用户明确授权具体取消时才走 `zcode_cancel`；回执未知时先以原 `task_id` 对账，不换 ID 重派。
+- Wake 只表示有持久 Result 可读，不表示 Master 已恢复、Task 已验收或资源已释放。恢复后核对 Task/Attempt/Operation/digest，读取 Result 摘要和 Cleanup/Release 证据，再独立检查实际 diff、文件与测试。
+- 已知 Pending Interaction 是阻塞事实，不是完成或可忽略状态。结束 Turn 前必须先处理；返回时按原请求与明确授权审批，不得自动放行。Async Handoff 不新增 Pending Wake，必要审批仍经 Web/CLI 或下一次用户 Turn 进入。
 - 已知 SQLite 清理 Hold 不得绕过。`zcode_cancel` 是唯一标准恢复入口，可能终止原身份 Worker；调用前必须取得用户明确授权。用户重复取消只可行政释放已被取消且无持久 Spawn 证据的历史 `launch_intent`，或已确认 exact exit + clean tree 但缺少 Adapter closure 的终态取消 Cleanup；活动/不可验证 Worker 与有 Receipt 的 Launch Intent 必须保持占用。`released`、`unverified_admin_release` 不是 `cleanup_verified`。成功后也须先检查原 workspace WIP，再讨论新 Attempt。
 - Worktree、路径声明和 `yolo` profile 不是 OS 沙箱；Worker 使用当前本机账户权限。未获用户相应授权不得提交、推送、发布、读取/修改凭据或删除任务外数据。
 
@@ -49,6 +55,7 @@ description: 用户明确要求使用 ZCode/Codex ZCode Bridge、查询或继续
 | 选择 `whole_task`/`staged`、评估 Worker 能力 | [delegation-policy.md](references/delegation-policy.md) |
 | 维护已授权持续 Goal | [goal-lifecycle.md](references/goal-lifecycle.md) |
 | Ready Gate、TaskPackage、模型选择、提交 | [task-dispatch.md](references/task-dispatch.md)，提交前另读 [monitoring-and-approval.md](references/monitoring-and-approval.md) |
+| 受理后异步交接、回执未知、Wake 恢复 | [async-handoff.md](references/async-handoff.md) |
 | 状态、事件、Attention、权限交互 | [monitoring-and-approval.md](references/monitoring-and-approval.md) |
 | 终态、独立验收、返工、接收、Hold Recovery | [review-and-recovery.md](references/review-and-recovery.md) |
 | 锁、清理、路径、配置、运行时事实 | [runtime-boundaries.md](references/runtime-boundaries.md) |

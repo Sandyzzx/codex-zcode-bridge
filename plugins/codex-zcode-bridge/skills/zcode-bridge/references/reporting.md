@@ -1,8 +1,8 @@
 # 机器观测与宿主报告
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-15
-> Last verified: 2026-11-15，核对 Preview.6 后的 SQLite-only 字段、Runtime Usage、Events Summary、`zcode_feedback` 机器投影与默认 13 工具面；真实 Host 文案消费和模型缓存收益未执行 A/B。
+> Last updated: 2026-11-22
+> Last verified: 2026-11-22，核对 SQLite-only 字段、Runtime Usage、Events Summary、`zcode_feedback` 机器投影、默认 13 工具面与 Async Handoff 报告边界；真实 Host 文案消费和模型缓存收益未执行 A/B。
 > Verified against: `7e717621c1de0fb56b3ac19e22e242d856445db4` + Preview.6 post-audit candidate
 
 ## 事实来源
@@ -15,6 +15,12 @@ Bridge 面向机器 Host。默认 MCP 工具面、Task/Result 字段和 SQLite �
 - `zcode_result` 是持久 Result；32 MiB canonical Result 合同保持不变。
 
 Host 向用户说明结果时，可直接根据这些机器事实组织当前对话所需的文字，但不得把 Bridge 状态、Worker 自报、独立验收、Cleanup 和 Release 混成一个 PASS。
+
+Async Handoff 的受理报告至少分别写出 `task_id`、Attempt（已知时）、Task Scope、
+Handoff Mechanism、Authority/Thread 绑定是否已核实，以及与结果有关的已知状态。
+不要报告未观察到的 Queue/Turn/Desktop 状态。Wake 后先报告持久事实，再报告独立
+验收；`QUEUED`、`TURN_STARTED`、`TURN_COMPLETED`、`DESKTOP_VISIBLE` 和
+`Master accepted` 都是不同字段，其中 Desktop 可见性通常为 `UNKNOWN`。
 
 ## Usage
 

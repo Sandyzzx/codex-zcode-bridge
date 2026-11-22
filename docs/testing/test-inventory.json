@@ -4,14 +4,14 @@
   "generator": "npm run test:inventory",
   "summary": {
     "executable_or_manual_files": 109,
-    "declarations": 981,
+    "declarations": 982,
     "by_type": {
-      "Unit": 261,
+      "Unit": 262,
       "Integration": 716,
       "Stress": 4
     },
     "by_gate": {
-      "T1": 300,
+      "T1": 301,
       "T2": 677,
       "T3": 4
     },
@@ -22045,10 +22045,10 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-02306896F5577C5F",
-      "test_name": "Master Skill offline evaluation is paired and covers the required scenarios",
+      "test_id": "TII-9D2F84614A132BA0",
+      "test_name": "deterministic Async Handoff workflow separates scope, handoff, Wake and acceptance",
       "test_file": "test/skill-policy.test.ts",
-      "test_line": 100,
+      "test_line": 156,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",
@@ -22079,10 +22079,44 @@
       "stress_boundary": null
     },
     {
-      "test_id": "TII-7DDE5F9634C88CA9",
+      "test_id": "TII-9A8F4BC8A8E0EFDD",
+      "test_name": "Master Skill offline evaluation is paired and covers the required scenarios",
+      "test_file": "test/skill-policy.test.ts",
+      "test_line": 241,
+      "test_type": "Unit",
+      "gate": "T1",
+      "runtime": "NOT_MEASURED",
+      "runtime_evidence": {
+        "actual_runtime_milliseconds": null,
+        "timeout_milliseconds": null,
+        "historical_baseline": null
+      },
+      "resource": [
+        "CPU",
+        "Memory"
+      ],
+      "dependency": {
+        "static_source_imports": [],
+        "impact_domains": [
+          "plugin-skill-metadata"
+        ]
+      },
+      "trigger_source_paths": [
+        "plugins/codex-zcode-bridge/plugin.json",
+        "plugins/codex-zcode-bridge/.codex-plugin/plugin.json",
+        "plugins/codex-zcode-bridge/skills/**",
+        "plugins/codex-zcode-bridge/README.md"
+      ],
+      "trigger_test_files": [
+        "test/skill-policy.test.ts"
+      ],
+      "stress_boundary": null
+    },
+    {
+      "test_id": "TII-69976619D877F950",
       "test_name": "Every new-version offline scenario scores at least 7/8 without a zero dimension",
       "test_file": "test/skill-policy.test.ts",
-      "test_line": 132,
+      "test_line": 273,
       "test_type": "Unit",
       "gate": "T1",
       "runtime": "NOT_MEASURED",

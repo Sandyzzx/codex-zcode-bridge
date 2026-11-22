@@ -1,10 +1,10 @@
 # Bridge Async Execution Architecture v1
 
-> Status: IMPLEMENTED — PARTIAL（PR 2/2.5/3/4/5 stacked candidates；未合入 Preview，不可发布）
-> Decision status: [ADR-045](../decisions/ADR-045-async-executor-ownership.md) = ACCEPTED；[ADR-051](../decisions/ADR-051-executor-wake-delivery.md) = ACCEPTED；本文档记录目标合同与当前实现边界
+> Status: IMPLEMENTED — PARTIAL（PR 2/2.5/3/4/5/6 stacked candidates；未合入 Preview，不可发布）
+> Decision status: [ADR-045](../decisions/ADR-045-async-executor-ownership.md) = ACCEPTED；[ADR-051](../decisions/ADR-051-executor-wake-delivery.md) = ACCEPTED；[ADR-052](../decisions/ADR-052-async-master-handoff.md) = ACCEPTED；本文档记录目标合同与当前实现边界
 > Date: 2026-11-22（Asia/Shanghai）
 > Baseline: `origin/preview` `1bf039fda2ccfd17a992458a871bddd7b48b38c1`；PR 2 base `f330b511270934fa40014006333aa7747dad684c`；implementation branch `codex/async-executor-pr2.5`
-> Evidence classification: 文中逐项标注 `VERIFIED`、`INFERRED`、`UNVERIFIED`；证据见 [PR 2 report](../reports/async-executor-pr2-20261122.md)、[PR 2.5 report](../reports/async-executor-pr2.5-20261122.md) 与 [PR 5 report](../reports/async-executor-pr5-20261122.md)
+> Evidence classification: 文中逐项标注 `VERIFIED`、`INFERRED`、`UNVERIFIED`；证据见 [PR 2 report](../reports/async-executor-pr2-20261122.md)、[PR 2.5 report](../reports/async-executor-pr2.5-20261122.md)、[PR 5 report](../reports/async-executor-pr5-20261122.md) 与 [PR 6 report](../reports/async-executor-pr6-20261122.md)
 
 ## 1. 目标与非目标
 
@@ -163,7 +163,30 @@ Named pipe 仍可作为客户端连接提示，但**不是所有权证据**。SQ
 
 公共 MCP 工具名和 Schema 保持不变；IPC 是 Bridge 内部协议，不新增公共 MCP 工具。
 
-### 3.3 交付事实
+### 3.3 Async Master Handoff
+
+Master 的授权、Task Scope 与 Handoff Mechanism 是三个独立维度：
+
+- 授权决定是否可以使用 Bridge，以及可执行的写入/外部操作范围；
+- `whole_task`、`staged` 和只读 `auto` 决定交付与验收边界；
+- `async_wake` 与 `foreground` 决定当前 Master Turn 是否结束。
+
+这些名称都不进入 MCP/TaskPackage schema，也不是 Task 状态。Async Handoff
+只可在原 `task_id` 的受理回执可靠、Executor/Thread 绑定可核实、没有已知
+Pending Interaction 时使用；缺失条件保持 foreground 或明确 Web Notify
+回退。Master 在受理后记录 Task/Attempt、Authority 和 Thread，简洁报告，
+结束 Turn 并停止轮询。
+
+Turn end、Host 断连、MCP Stop 或请求超时只结束等待，不取消已受理 Task。
+回执未知时必须用原 `task_id` 对账，不能生成第二 ID/Attempt。Wake 到达后，
+Master 先核对 Task、Attempt、Operation 与 Result digest，再读取 Result、
+Cleanup/Release 和实际执行目录证据；Wake 本身不表示接收或验收。
+
+Pending Interaction 始终是阻塞事实。结束 Turn 前发现 Pending 必须先处理；
+Async Handoff 不新增 Pending Wake，之后的审批仍经 Web/CLI 或下一次用户
+Turn 进入。决策与 Skill 合同见 [ADR-052](../decisions/ADR-052-async-master-handoff.md)。
+
+### 3.4 交付事实
 
 这些事实必须独立展示，不能互相冒充：
 
@@ -282,7 +305,7 @@ Recovery；真实 Desktop UI acknowledgement 仍是 `UNKNOWN`。
 | PR 3 | Task CLI + shared Control Client | MCP/CLI 并发读写同一权威；CLI 分发不拥有 SQLite/Manager |
 | PR 4 | Web Console | 已实现 loopback/Origin/CSRF、只读 Task/Event/Result、显式 Cancel/Reply；无模型调用、页面关闭不影响独立 Executor |
 | PR 5 | Queue Wake Adapter | 已实现 loaded/idle exact-config 一次性 Queue + Web Notify fallback；严格 C/D 独立验收 |
-| PR 6 | Async Master Skill & Dispatch Workflow | Master Turn 结束、通知、恢复与独立验收 |
+| PR 6 | Async Master Skill & Dispatch Workflow | 已实现可靠受理后 Turn 结束/停止轮询、未知回执原 ID 对账、Wake 身份核对与独立验收；真实模型遵循率和真实 Host Wake `NOT_RUN / BLOCKED` |
 
 允许按依赖合并 PR，但每阶段不得扩大到重构生产合同。统一 Release Candidate
 在 PR 2-6 功能链完成后集中执行完整本地与 CI 门禁，而不是在每个普通 PR
@@ -318,6 +341,8 @@ Recovery；真实 Desktop UI acknowledgement 仍是 `UNKNOWN`。
 | Task CLI bounded list/Result | Cursor/limit 与 Result stdout 文件预算生效，不直接打开 SQLite |
 | Web Console 本地边界 | 非 loopback/Host/Origin/CSRF 请求拒绝；完整 Result 超过 2 MiB 不截断 |
 | Web Console 生命周期 | 页面/HTTP 关闭不改 Task 或 Executor Lease；只关闭可视化 Adapter |
+| Async Handoff 决策合同 | 授权、Scope、Mechanism、受理、未知回执、Pending、Turn end、Wake 与验收分别判定 |
+| Async Handoff 负例 | 断连/Turn end 不取消；Wake identity mismatch 不验收；静默合同测试不能冒充真实模型遵循 |
 
 ### 7.2 五个生命周期 E2E
 
@@ -370,6 +395,16 @@ Recovery；真实 Desktop UI acknowledgement 仍是 `UNKNOWN`。
 - Queue 失败/未知不得影响 Result/Cleanup/Release；Desktop visible 不得由
   Queue ACK 推断。
 
+### Async Master Skill
+
+- 可靠 Task 受理后才可结束 Master Turn；`SUBMISSION_UNKNOWN` 必须用原
+  `task_id` 对账，不得换 ID。
+- Turn end、MCP Stop、客户端断开或请求超时不得触发 Task Cancel。
+- Wake 后必须核对身份并独立检查 Result、Cleanup、Release、diff 与测试。
+- Pending Interaction 不得自动批准，也不得被报告为完成。
+- 当前确定性 Skill policy 测试只证明 Markdown 决策合同；真实 Host 的模型
+  遵循率属于单独发布风险，`NOT_RUN` 时不得宣称 Async Master 已验收。
+
 ### Preview integration
 
 - Executor 开发期使用 T0、受影响测试和关键 E2E；`FULL_SUITE` 在开发门禁明确延期，不得当作通过。完整 Ubuntu/Windows/Stress 只在 Preview Release Candidate、Owner 明确要求或重大跨模块不确定性时运行。
@@ -389,6 +424,9 @@ Recovery；真实 Desktop UI acknowledgement 仍是 `UNKNOWN`。
    重放，严格 C/D 仍是独立发布门禁。
 8. A 实验 Sol/xhigh 费用/额度变化不可观察，不估算。
 9. Token Efficiency 架构敏感候选保持冻结；本架构不得预设其结果。
+10. Async Handoff 目前由 Skill 行为约束，不是服务端强制鉴权。模型可能不遵循
+    Turn-end、Pending 或 Wake 核对规则；统一 Release Candidate 需要记录该
+    未验证风险，真实 Host A/B 未运行前不得宣称可靠。
 
 ## 10. Owner 批准记录
 

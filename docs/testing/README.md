@@ -1,8 +1,8 @@
 # 测试入口与成本边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-22（Executor PR 2.5 / PR 3 / PR 5 定向验证）
-> Last verified: 2026-11-22，核对 `release-candidate` 标签与 `workflow_dispatch.release_gate` 分流、开发期 `FULL_SUITE_DEFERRED_TO_RELEASE_GATE`、Required Check 占位、Push 完整门禁及 Cost Lab/Stress 独立边界；执行证据见 Async Executor PR 2/2.5 与 PR 3 报告。
+> Last updated: 2026-11-22（Executor PR 2.5 / PR 3 / PR 5 / PR 6 定向验证）
+> Last verified: 2026-11-22，核对 `release-candidate` 标签与 `workflow_dispatch.release_gate` 分流、开发期 `FULL_SUITE_DEFERRED_TO_RELEASE_GATE`、Required Check 占位、Push 完整门禁及 Cost Lab/Stress 独立边界；执行证据见 Async Executor PR 2/2.5、PR 3、PR 5 与 PR 6 报告。
 > Verified against: `origin/preview` `1bf039fda2ccfd17a992458a871bddd7b48b38c1` + `codex/async-executor-pr2.5` CI governance revision
 
 `test/test-impact-map.json` 为可执行清单唯一来源。共享资格规则禁止 MANUAL_E2E、Fixture 自动执行，显式误传同样拒绝；源 .test.ts/.test.mjs、map 与实际 --list 由回归对账。生成的 test-inventory.json 是静态声明/历史证据索引，不决定执行。
@@ -75,6 +75,12 @@ PR 5 Executor Wake 的定向集合增加：
 不得运行真实 `codex queue`、真实 App Server control socket 或付费模型作为
 普通 PR 门禁。严格 C/D、真实 Desktop 关闭与真实模型费用/额度保持独立
 `NOT_RUN / BLOCKED`，不能用合成 Queue 或 `QUEUED` 代替。
+
+PR 6 Async Handoff 的定向集合增加 `node --test
+dist-test/test/skill-policy.test.js`、`npm run validate:plugin` 与生成物
+Freshness。测试验证授权、Scope/Handoff 分离、回执未知、Turn end/断连不取消、
+显式取消、Wake 身份冲突、Pending Interaction 和“Wake 不等于验收”的确定性合同；
+真实模型遵循率和真实 Host Wake 仍为 `NOT_RUN`，静态 Skill 测试不能替代。
 
 ## 退役与保留
 

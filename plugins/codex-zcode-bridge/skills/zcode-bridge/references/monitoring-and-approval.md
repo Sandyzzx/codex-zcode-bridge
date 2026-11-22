@@ -1,8 +1,8 @@
 # 执行监控、互动与审批
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-22（默认 Event 页预算集成候选）
-> Last verified: 2026-11-22，核对 `zcode_events` 默认 32 KiB 页预算、显式 `max_bytes`、`scan_incomplete`/cursor、Attention、Attempt 归属与 SQLite interaction 读取；合并后真实宿主长等仍未运行。
+> Last updated: 2026-11-22（Async Handoff）
+> Last verified: 2026-11-22，核对 `zcode_events` 默认 32 KiB 页预算、显式 `max_bytes`、`scan_incomplete`/cursor、Attention、Attempt 归属与 SQLite interaction 读取；真实模型 Async Handoff 遵循率 NOT RUN。
 > Verified against: `450c18afc0c8af2700734399c5aebd87a36df795` + bounded-default-events integration candidate
 
 ## 跟进
@@ -15,6 +15,12 @@
 6. 安装、运行时或 provider 配置异常先调用只读 `zcode_doctor`；`unknown` 不是通过。诊断不得读取或写入凭据。
 
 工具支持时，读取启动、等待与验收事件均传 `include_attempt: true`。用 Status 或 Attention 核对当前 Attempt，再选择逐条 `event.attempt` 相符的启动、授权与结果事件。页内可以包含多个 Attempt。旧 schema 下仅使用已知归属的事件，多个 Attempt 且无可靠归属时将启动或释放标为未验证。
+
+本节的长等待与 Thin Waiter 只适用于 `foreground` 交接。采用
+[Async Handoff](async-handoff.md) 时，只做有界启动核对；确认可靠受理、无已知
+Pending Interaction 并记录身份后结束 Turn，不把 `wait_for` 或 Waiter 改成长轮询。
+若启动失败、回执未知、出现 Pending Interaction 或无法确认安全边界，则停留在当前
+Turn 按本文件处理，不宣称异步交接完成。
 
 ## 有界等待
 

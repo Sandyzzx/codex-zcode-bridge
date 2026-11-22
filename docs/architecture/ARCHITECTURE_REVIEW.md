@@ -1,8 +1,8 @@
 # Async Execution Architecture Review
 
-> Status: IMPLEMENTED — PR 2.5 CANDIDATE（architecture accepted；release blocked）
+> Status: IMPLEMENTED — PR 2–6 CANDIDATE（architecture accepted；release blocked）
 > Date: 2026-11-22
-> Review baseline: `origin/preview` `1bf039fda2ccfd17a992458a871bddd7b48b38c1`；PR 2.5 stacked branch `codex/async-executor-pr2.5`
+> Review baseline: `origin/preview` `1bf039fda2ccfd17a992458a871bddd7b48b38c1` + stacked PR 2–6 candidates
 
 ## Verdict
 
@@ -10,10 +10,11 @@
 Lifetime Lease、精确 owner 仲裁、Idle-only Shutdown、IPC、Thin MCP control
 transport，以及跨进程 fake Worker 的 Result/Cleanup/Release 验证。PR 2.5
 candidate 进一步把 shipped MCP 入口收敛为单一 Thin MCP，并把生产 Authority
-composition 固定在 Executor；确定性四层 E2E 与类型/边界检查通过。当前结论
-仍为 `PARTIAL / BLOCKED`：真实 Codex Desktop 关闭后的 Host E2E 和真实
-Official Runtime 路径仍未运行；可以提交 stacked PR 评审，但不得合入
-Preview 或发布。
+composition 固定在 Executor；确定性四层 E2E 与类型/边界检查通过。PR 3–6
+candidate 已加入 Control-only CLI、loopback Web、fail-closed Wake 与 Async
+Master Handoff。当前结论仍为 `PARTIAL / BLOCKED`：真实 Codex Desktop 关闭、
+严格 Wake C/D、真实 Official Runtime 和真实模型 Skill 遵循率仍未运行；可以
+提交 stacked PR 评审，但不得合入 Preview 或发布。
 
 ## Findings
 
@@ -34,6 +35,7 @@ Preview 或发布。
 | 13 | High | 已修正：Thin MCP 的四个模型工具和完整 Doctor 经 Executor IPC 代理；控制模式只允许返回 `EXECUTOR_UNAVAILABLE`，不得伪造 `MODEL_SETTINGS_UNAVAILABLE`。 |
 | 14 | High | 已修正：生产 Executor CLI 不接受 `--test-only-fake-adapter` 或任意 `--worker-entry`；测试入口只存在于显式 test harness。 |
 | 15 | Medium | 已修正：开发期延期 `FULL_SUITE` 仍执行直接/域安全测试；CI Integration 使用 `--safe-tests-only`，延期不得显示为完整 PASS。 |
+| 16 | Medium | PR 6 已把 Task Scope 与 Handoff Mechanism 分离；可靠受理后允许结束 Turn/停止轮询，但 Wake 只触发身份核对与独立验收，Pending Interaction 不新增自动审批路径。 |
 
 ## PR 2 / PR 2.5 Evidence Update
 
@@ -75,8 +77,20 @@ Preview 或发布。
 | Development gate | `PASS` | 延期 FULL 运行直接/域安全测试；Integration 安全集合 fail closed，完整 Release Gate 仍延期 |
 | Complete release matrix | `NOT_RUN` | 统一在 Executor PR 2-6 的 Release Candidate 边界执行；历史全量结果不适用于当前工作树 |
 
+## PR 3–6 Candidate Update
+
+| 项目 | 状态 | 当前证据 |
+|---|---|---|
+| Task CLI control-only boundary | `PASS — CANDIDATE` | `task-cli.test.ts`；共享 Executor Control Client、bounded list/Result、已运行检测；不打开 SQLite |
+| Web Console local boundary | `PASS — CANDIDATE` | loopback/Origin/CSRF、只读 Task/Event/Result、显式 Cancel/Reply；console close 不改 Executor |
+| Executor Wake | `PASS — SYNTHETIC / REAL NOT_RUN` | post-Release once-only Queue + Web Notify、SQLite v14 evidence、exact-config fail closed；真实 socket/Queue/C/D 未运行 |
+| Async Master Handoff | `PASS — CONTRACT / MODEL NOT_RUN` | deterministic Skill decision contract；真实 Host 模型遵循率、真实 Wake 恢复与 Desktop visible 未验证 |
+| Unified release gate | `NOT_RUN` | 冻结 PR 2–6 候选后统一运行 Windows/Ubuntu/Stress |
+
 ## Follow-up
 
 - Executor Doctor IPC 已完成；真实 Host 下 owner/pipe/build provenance 的展示仍随 Desktop 关闭 E2E 验证。
 - 在 Web Console MVP 中优先轮询；SSE 只在实测有明显收益后引入。
 - 把 Token Efficiency 观测与 Async E2E 的模型调用分开记账。
+- Async Handoff 的真实模型遵循率和 Pending Interaction 行为需在隔离 Host 中
+  单独验证；静态 Skill 合同不能证明运行时遵循。

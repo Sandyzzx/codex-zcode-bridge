@@ -1,8 +1,8 @@
 # 文档路由 / Documentation
 
 > Status: AUTHORITATIVE（仅指本索引）
-> Last updated: 2026-11-22（Async Executor PR 2.5 / Task CLI / Web Console / Executor Wake candidate）
-> Last verified: 2026-11-22，核对 PR #116 已合入 Preview、默认完整 Result/显式 Summary、Event Attempt 归属与 ADR-048 默认 Event 页预算；同时核对 PR #120/PR 2.5 的 Executor-only production composition、Thin MCP IPC、启动回滚、安全开发测试与 Release Candidate 完整 CI 触发，ADR-049 Task CLI 的 Control-only 边界，以及 ADR-051 Wake evidence/Queue fail-closed 合同。真实 Desktop 关闭与严格 Wake C/D 为 `NOT_RUN / BLOCKED`。
+> Last updated: 2026-11-22（Async Executor PR 2.5 / Task CLI / Web Console / Wake / Async Master Handoff candidate）
+> Last verified: 2026-11-22，核对 PR #116 已合入 Preview、默认完整 Result/显式 Summary、Event Attempt 归属与 ADR-048 默认 Event 页预算；同时核对 PR #120/PR 2.5 的 Executor-only production composition、Thin MCP IPC、启动回滚、安全开发测试与 Release Candidate 完整 CI 触发，ADR-049 Task CLI 的 Control-only 边界，ADR-051 Wake evidence/Queue fail-closed 合同，以及 ADR-052 Async Handoff。真实 Desktop 关闭、严格 Wake C/D 与真实模型 Skill 遵循率为 `NOT_RUN / BLOCKED`。
 > Verified against: `1bf039fda2ccfd17a992458a871bddd7b48b38c1` + `codex/async-executor-pr2.5` candidate
 
 English users start at [README.md](../README.md). 技术文档为中文。先读当前事实，按问题加载合同；研究或历史材料不作为当前实现或发布证明。
@@ -34,6 +34,7 @@ English users start at [README.md](../README.md). 技术文档为中文。先读
 | Task CLI evidence | [PR 3 report](reports/async-executor-pr3-20261122.md) | 定向测试、插件生成物与隔离 start/status/stop PASS；完整回归与真实 Desktop 关闭 `NOT_RUN` |
 | Task Web Console candidate | [ADR-050](decisions/ADR-050-local-task-web-console.md)、[PR 4 report](reports/async-executor-pr4-20261122.md) | `IMPLEMENTED / PARTIAL`：loopback + Origin/CSRF、只读 Task/Event/Result、Cancel/Reply；页关闭不影响 Executor |
 | Executor Wake candidate | [ADR-051](decisions/ADR-051-executor-wake-delivery.md)、[PR 5 report](reports/async-executor-pr5-20261122.md) | `IMPLEMENTED / PARTIAL`：post-Release 一次性 Queue；loaded/idle exact model/provider/effort 才允许，其他 Web Notify；SQLite v14 evidence |
+| Async Master Handoff candidate | [ADR-052](decisions/ADR-052-async-master-handoff.md)、[PR 6 report](reports/async-executor-pr6-20261122.md)、[Master Skill](../plugins/codex-zcode-bridge/skills/zcode-bridge/SKILL.md) | `IMPLEMENTED / PARTIAL`：Scope 与 Handoff 分离；可靠受理后结束 Turn/停止轮询；Wake 后独立验收；真实模型遵循率与真实 Host Wake `NOT_RUN` |
 | Preview.7 Post-Audit 最小架构、正确性、Legacy JSON 与 CI 整改 | [ADR-038](decisions/ADR-038-preview6-minimum-architecture-remediation.md)、[PROJECT_STATE.md](PROJECT_STATE.md) |
 | Start Plan 与安装版 AppServer 离线兼容性 | [研究](research/start-plan-official-appserver-compatibility-20261118.md) |
 | 本次 Runtime、Cost Lab Web 与 Start Plan 集成交付 | [验收报告](reports/official-runtime-integration-costlab-web-startplan-20261118.md) |

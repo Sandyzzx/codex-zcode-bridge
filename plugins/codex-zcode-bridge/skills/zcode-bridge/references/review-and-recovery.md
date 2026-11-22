@@ -1,17 +1,26 @@
 # 独立验收、返工与恢复
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-22（行政释放保护与默认 Event 页）
-> Last verified: 2026-11-22，核对 opt-in Result 摘要、Event Attempt 归属、16 MiB 原证据回读边界、ADR-039 行政释放资格与 SQLite Hold 合同；真实生产恢复 NOT RUN。
+> Last updated: 2026-11-22（Async Wake 恢复）
+> Last verified: 2026-11-22，核对 opt-in Result 摘要、Event Attempt 归属、16 MiB 原证据回读边界、ADR-039 行政释放资格、ADR-051 Wake 与 ADR-052 Async Handoff；真实生产恢复 NOT RUN。
 > Verified against: Preview `450c18afc0c8af2700734399c5aebd87a36df795` + unified integration candidate
 
 ## 验收与接收
+
+Wake、Queue ACK 或新 Turn 开始都只触发恢复检查。先核对 Wake 携带的
+Task/Attempt/Operation/Result digest 与已记录交接身份一致，再读取持久状态；
+不一致、消息缺字段或历史无法归属时不得验收。具体恢复顺序见
+[async-handoff.md](async-handoff.md)。
 
 1. 在事件报告的实际执行目录检查 Git 状态、完整 diff、实际文件和适用验证。`whole_task` 验收整个授权任务；`staged` 验收当前阶段及交接条件，明确后续目标未完成。验证命令和分层遵循当前项目自己的权威说明，不把 Worker 自报、工具成功或 `completed` 当作验收。
 2. 终态常规用 `zcode_result(view="summary")`，旧 schema 用原 `task_id` 调用。已知需要原文时直接用 `view: "full"`，已知 Attempt 时同时传 `expected_attempt`。用 Result 的 `attempt` 核对执行归属。`projection.omitted_fields` 中验收所需的证据在续作前按同一 Attempt 补读。原文超过宿主接收上限或读取失败时，记录具体缺项，必要的验收或报告修复保持未决。Master 独立核验 AgentReport 声明。
 3. 审查通过后，按用户授权接收所需改动；保留既有用户改动、检查冲突并复验。Bridge 不自动应用、合并、删除 worktree，也不自动提交、推送或创建 PR。
 4. 结果不达标时汇总全部失败证据，用 `zcode_continue` 做一次完整返工。保持原策略和授权，只收紧实际失败维度，不追加无关规则、不拆成微任务、不无限原样重派或自动换模型。
 5. `invalid_agent_report` 且执行已完成时，直接读全量核对 `report_candidate`、`zcode_output` 和实际 diff。续作只修复 JSON 报告。缺失决定只能基于证据补齐，无法确认则 `needs_master_decision=true`。
+
+异步恢复不是自动接收。Result 已提交、Cleanup 已验证、Operation 已 `released`
+仍只是后续动作的前置事实；Master 必须独立检查实际交付。需要返工、继续审批或
+新目标时恢复原授权边界，不以 Wake 消息本身扩大权限。
 
 ## 失败、取消与 Hold
 
