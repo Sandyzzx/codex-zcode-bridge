@@ -11,8 +11,24 @@ import type {
   TaskStatusRecord,
   ZCodeInteractionReplyInput,
 } from "../interfaces.js";
+import { TaskManagerError, type TaskManagerErrorCode } from "../manager/errors.js";
 import type { ExecutorControlClient } from "./control-client.js";
 import type { ExecutorControlResponse } from "./protocol.js";
+
+const TASK_MANAGER_ERROR_CODES = new Set<TaskManagerErrorCode>([
+  "TASK_NOT_FOUND",
+  "TASK_NOT_FINISHED",
+  "TASK_ALREADY_EXISTS",
+  "TASK_ID_CONFLICT",
+  "CONTINUE_OPERATION_CONFLICT",
+  "BRIDGE_BUSY",
+  "REQUEST_QUEUE_TIMEOUT",
+  "TASK_INVALID",
+  "TASK_STATE",
+  "CANCEL_FAILED",
+  "EXECUTOR_STORE_CLOSE_UNKNOWN",
+  "interaction_reply_outcome_unknown",
+]);
 
 export class RemoteTaskManager implements ProgressTaskManager {
   readonly #client: ExecutorControlClient;
@@ -31,8 +47,15 @@ export class RemoteTaskManager implements ProgressTaskManager {
       typeof idempotencyKey === "string" ? idempotencyKey : undefined,
     );
     if (!response.ok) {
+      const code = response.error?.code ?? "EXECUTOR_REQUEST_FAILED";
+      if (TASK_MANAGER_ERROR_CODES.has(code as TaskManagerErrorCode)) {
+        throw new TaskManagerError(
+          code as TaskManagerErrorCode,
+          response.error?.message ?? code,
+        );
+      }
       const error = new Error(response.error?.message ?? "EXECUTOR_REQUEST_FAILED") as Error & { code?: string };
-      error.code = response.error?.code ?? "EXECUTOR_REQUEST_FAILED";
+      error.code = code;
       throw error;
     }
     return response.result ?? {};

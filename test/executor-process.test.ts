@@ -1,19 +1,21 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 import { ExecutorControlClient } from "../src/executor/control-client.js";
 import { EXECUTOR_LEASE_FILE, EXECUTOR_LEASE_RELEASED_FILE } from "../src/executor/lease.js";
-import { startExecutorService, type ExecutorAuthority } from "../src/executor/service.js";
+import { executorPipeName, startExecutorService, type ExecutorAuthority } from "../src/executor/service.js";
 import { codexHostProfile } from "../src/host/profile.js";
 import { loadLifecycleCandidateModules } from "../src/store/lifecycle-gate.js";
 import type { TaskPackage } from "../src/interfaces.js";
 
 const projectRoot = path.resolve(import.meta.dirname, "..", "..");
 const executorEntry = path.join(projectRoot, "dist-test", "src", "executor", "main.js");
+const testExecutorEntry = path.join(projectRoot, "dist-test", "test", "fixtures", "executor-test-main.js");
 const workerEntry = path.join(projectRoot, "dist-test", "src", "worker", "worker-main.js");
 const thinMcpEntry = path.join(projectRoot, "dist-test", "src", "mcp", "main.js");
 const bridgeEntry = fileURLToPath(import.meta.url);
@@ -32,7 +34,7 @@ function startExecutor(
   options: { readonly workerEntryPath?: string; readonly env?: NodeJS.ProcessEnv } = {},
 ): ExecutorProcess {
   const child = spawn(process.execPath, [
-    executorEntry,
+    testExecutorEntry,
     "--data-root", root,
     "--bridge-entry", bridgeEntry,
     "--worker-entry", options.workerEntryPath ?? workerEntry,
@@ -156,6 +158,36 @@ function startThinMcp(env: NodeJS.ProcessEnv) {
   };
 }
 
+function idleAuthority(overrides: Partial<ExecutorAuthority> = {}): ExecutorAuthority {
+  const authority: ExecutorAuthority = {
+    async createTask(task: TaskPackage) {
+      return { task_id: task.task_id, status: "queued", created_at: new Date().toISOString() };
+    },
+    async getStatus(taskId: string) {
+      return {
+        task_id: taskId, status: "queued", attempt: 1,
+        created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
+        started_at: null, finished_at: null, worker_pid: null, zcode_session_id: null, exit_code: null,
+      };
+    },
+    async getResult() { throw new Error("TASK_NOT_FINISHED"); },
+    async continueTask() { throw new Error("TASK_STATE"); },
+    async cancelTask(taskId: string) { return this.getStatus(taskId); },
+    async getEvents(input) {
+      return { task_id: input.task_id, status: "queued", events: [], next_seq: 0, has_more: false };
+    },
+    async getFeedback() { throw new Error("FEEDBACK_UNAVAILABLE"); },
+    async getAttention(taskId: string) {
+      return { task_id: taskId, attempt: 1, status: "queued", pending_requests: [] };
+    },
+    async replyToInteraction() { throw new Error("TASK_STATE"); },
+    getExecutorIdleState: () => ({ idle: true, blockers: [] }),
+    async closeIfIdle() { return { closed: true, blockers: [] }; },
+    ...overrides,
+  };
+  return authority;
+}
+
 test("a real Executor process holds exact single-instance ownership and heartbeats", { timeout: 60_000 }, async () => {
   const root = mkdtempSync(path.join(tmpdir(), "executor-process-"));
   const settingsDirectory = mkdtempSync(path.join(tmpdir(), "executor-settings-"));
@@ -201,6 +233,116 @@ test("the internal Executor entry point reports its supported arguments", async 
   assert.deepEqual(await exit, { code: 0, signal: null });
   assert.match(output, /EXECUTOR_USAGE: node dist\/src\/executor\/main\.js --data-root <absolute-path>/u);
   assert.match(output, /--settings-directory <absolute-path>/u);
+  assert.doesNotMatch(output, /test-only-fake-adapter/u);
+  assert.doesNotMatch(output, /--worker-entry/u);
+});
+
+test("the production Executor entry rejects synthetic execution options before acquiring a lease", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "executor-production-cli-"));
+  try {
+    for (const extra of [
+      ["--test-only-fake-adapter"],
+      ["--worker-entry", workerEntry],
+    ]) {
+      const child = spawn(process.execPath, [
+        executorEntry,
+        "--data-root", root,
+        "--bridge-entry", bridgeEntry,
+        ...extra,
+      ], { cwd: projectRoot, stdio: ["ignore", "ignore", "pipe"] });
+      let stderr = "";
+      child.stderr.setEncoding("utf8");
+      child.stderr.on("data", (chunk: string) => { stderr += chunk; });
+      const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+        child.once("exit", (code, signal) => resolve({ code, signal }));
+      });
+      assert.equal(exit.code, 1, stderr);
+      assert.match(stderr, /unknown_argument/u);
+      assert.equal(existsSync(path.join(root, EXECUTOR_LEASE_FILE)), false);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("startup pipe failure releases an exact lease only after a verified idle Store close", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "executor-startup-pipe-"));
+  const pipe = executorPipeName(root);
+  const blocker = net.createServer((socket) => socket.destroy());
+  await new Promise<void>((resolve, reject) => {
+    blocker.once("error", reject);
+    blocker.listen(pipe, () => resolve());
+  });
+  let authorityClosed = false;
+  try {
+    await assert.rejects(() => startExecutorService({
+      dataRoot: root,
+      bridgeEntryPath: bridgeEntry,
+      testWorkerEntryPath: workerEntry,
+      testOnlyFakeAdapter: true,
+      testAuthority: idleAuthority({
+        async closeIfIdle() {
+          authorityClosed = true;
+          assert.equal(existsSync(path.join(root, EXECUTOR_LEASE_FILE)), true);
+          return { closed: true, blockers: [] };
+        },
+      }),
+    }), /EADDRINUSE|listen/u);
+    assert.equal(authorityClosed, true);
+    assert.equal(existsSync(path.join(root, EXECUTOR_LEASE_FILE)), false);
+    assert.equal(existsSync(path.join(root, EXECUTOR_LEASE_RELEASED_FILE)), true);
+  } finally {
+    await new Promise<void>((resolve) => blocker.close(() => resolve()));
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Authority startup failure retains the lease and blocks a second owner", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "executor-startup-authority-"));
+  try {
+    await assert.rejects(() => startExecutorService({
+      dataRoot: root,
+      bridgeEntryPath: bridgeEntry,
+      testWorkerEntryPath: workerEntry,
+      testOnlyFakeAdapter: true,
+      testAuthorityFactory: async () => {
+        throw new Error("SYNTHETIC_AUTHORITY_START_FAILURE");
+      },
+    }), /SYNTHETIC_AUTHORITY_START_FAILURE/u);
+    assert.equal(existsSync(path.join(root, EXECUTOR_LEASE_FILE)), true);
+    await assert.rejects(() => startExecutorService({
+      dataRoot: root,
+      bridgeEntryPath: bridgeEntry,
+      testWorkerEntryPath: workerEntry,
+      testOnlyFakeAdapter: true,
+      testAuthority: idleAuthority(),
+    }), /EXECUTOR_ALREADY_ACTIVE/u);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a lease release failure keeps the Executor fail closed after Store close", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "executor-release-failure-"));
+  mkdirSync(path.join(root, EXECUTOR_LEASE_RELEASED_FILE));
+  const service = await startExecutorService({
+    dataRoot: root,
+    bridgeEntryPath: bridgeEntry,
+    testWorkerEntryPath: workerEntry,
+    testOnlyFakeAdapter: true,
+    heartbeatMs: 100,
+    testUnrefHeartbeat: true,
+    testAuthority: idleAuthority(),
+  });
+  try {
+    const shutdown = await service.shutdown();
+    assert.equal(shutdown.status, "release_unknown");
+    assert.equal(service.state(), "lease_unknown");
+    const lease = JSON.parse(readFileSync(path.join(root, EXECUTOR_LEASE_FILE), "utf8")) as { state?: string };
+    assert.equal(lease.state, "released");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("an idle-only shutdown refusal restores admission and task control", { timeout: 30_000 }, async () => {
@@ -343,8 +485,56 @@ test("Thin MCP disconnect leaves the accepted Task in the Executor and reconnect
         params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "thin-test", version: "0.0.0" } },
       }),
       JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
+      "",
+    ].join("\n"));
+    assert.ok((await firstSession.waitForResponse(1)).result);
+    firstSession.child.stdin.write([
       JSON.stringify({
         jsonrpc: "2.0", id: 2, method: "tools/call",
+        params: { name: "zcode_default_model", arguments: {} },
+      }),
+      "",
+    ].join("\n"));
+    const initialDefault = await firstSession.waitForResponse(2) as {
+      result?: { isError?: boolean; structuredContent?: Record<string, unknown> };
+    };
+    assert.notEqual(initialDefault.result?.isError, true, firstSession.stderr());
+    assert.equal(initialDefault.result?.structuredContent?.configured, false);
+    firstSession.child.stdin.write([
+      JSON.stringify({
+        jsonrpc: "2.0", id: 3, method: "tools/call",
+        params: {
+          name: "zcode_set_default_model",
+          arguments: { provider_id: "synthetic-provider", model_id: "synthetic-model", reasoning_level: "low" },
+        },
+      }),
+      "",
+    ].join("\n"));
+    const setDefault = await firstSession.waitForResponse(3) as {
+      result?: { isError?: boolean; structuredContent?: Record<string, unknown> };
+    };
+    assert.notEqual(setDefault.result?.isError, true, firstSession.stderr());
+    assert.equal(setDefault.result?.structuredContent?.configured, true);
+    firstSession.child.stdin.write([
+      JSON.stringify({
+        jsonrpc: "2.0", id: 4, method: "tools/call",
+        params: { name: "zcode_default_model", arguments: {} },
+      }),
+      "",
+    ].join("\n"));
+    const currentDefault = await firstSession.waitForResponse(4) as {
+      result?: { isError?: boolean; structuredContent?: Record<string, unknown> };
+    };
+    assert.notEqual(currentDefault.result?.isError, true, firstSession.stderr());
+    assert.deepEqual(currentDefault.result?.structuredContent?.model, {
+      provider_id: "synthetic-provider",
+      model_id: "synthetic-model",
+      reasoning_level: "low",
+    });
+    assert.equal(existsSync(path.join(settingsDirectory, "runtime-config.json")), true);
+    firstSession.child.stdin.write([
+      JSON.stringify({
+        jsonrpc: "2.0", id: 5, method: "tools/call",
         params: {
           name: "zcode_task",
           arguments: {
@@ -361,8 +551,7 @@ test("Thin MCP disconnect leaves the accepted Task in the Executor and reconnect
       }),
       "",
     ].join("\n"));
-    assert.ok((await firstSession.waitForResponse(1)).result);
-    const taskResponse = await firstSession.waitForResponse(2) as {
+    const taskResponse = await firstSession.waitForResponse(5) as {
       result?: { isError?: boolean; structuredContent?: Record<string, unknown> };
     };
     assert.notEqual(taskResponse.result?.isError, true, firstSession.stderr());
@@ -380,6 +569,17 @@ test("Thin MCP disconnect leaves the accepted Task in the Executor and reconnect
     assert.equal(result.ok, true);
     assert.equal((result.result as { status?: unknown }).status, "completed");
     assert.equal((result.result as { attempt?: unknown }).attempt, 1);
+    const persistedSettings = JSON.parse(readFileSync(path.join(settingsDirectory, "runtime-config.json"), "utf8")) as Record<string, unknown>;
+    assert.equal(persistedSettings.ZCODE_BRIDGE_DEFAULT_PROVIDER_ID, "synthetic-provider");
+    assert.equal(persistedSettings.ZCODE_BRIDGE_DEFAULT_MODEL_ID, "synthetic-model");
+    assert.equal(persistedSettings.ZCODE_BRIDGE_DEFAULT_REASONING_LEVEL, "low");
+    const directDefault = await directClient.request("getDefaultModel", {});
+    assert.equal(directDefault.ok, true);
+    assert.deepEqual(directDefault.result?.model, {
+      provider_id: "synthetic-provider",
+      model_id: "synthetic-model",
+      reasoning_level: "low",
+    });
     const spawns = readFileSync(spawnLog, "utf8").split(/\r?\n/u).filter(Boolean);
     assert.deepEqual(spawns, ["spawn"]);
 
@@ -390,13 +590,16 @@ test("Thin MCP disconnect leaves the accepted Task in the Executor and reconnect
         params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "thin-test-reconnect", version: "0.0.0" } },
       }),
       JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
+      "",
+    ].join("\n"));
+    assert.ok((await secondSession.waitForResponse(1)).result);
+    secondSession.child.stdin.write([
       JSON.stringify({
         jsonrpc: "2.0", id: 2, method: "tools/call",
         params: { name: "zcode_result", arguments: { task_id: taskId } },
       }),
       "",
     ].join("\n"));
-    assert.ok((await secondSession.waitForResponse(1)).result);
     const reconnectResult = await secondSession.waitForResponse(2) as {
       result?: { isError?: boolean; structuredContent?: Record<string, unknown> };
     };
@@ -404,6 +607,37 @@ test("Thin MCP disconnect leaves the accepted Task in the Executor and reconnect
     assert.equal(reconnectResult.result?.structuredContent?.task_id, taskId);
     assert.equal(reconnectResult.result?.structuredContent?.status, "completed");
     assert.equal(reconnectResult.result?.structuredContent?.attempt, 1);
+    secondSession.child.stdin.write([
+      JSON.stringify({
+        jsonrpc: "2.0", id: 3, method: "tools/call",
+        params: { name: "zcode_default_model", arguments: {} },
+      }),
+      "",
+    ].join("\n"));
+    const reconnectDefault = await secondSession.waitForResponse(3) as {
+      result?: { isError?: boolean; structuredContent?: Record<string, unknown> };
+    };
+    assert.notEqual(reconnectDefault.result?.isError, true, secondSession.stderr());
+    assert.deepEqual(reconnectDefault.result?.structuredContent?.model, {
+      provider_id: "synthetic-provider",
+      model_id: "synthetic-model",
+      reasoning_level: "low",
+    });
+    secondSession.child.stdin.write([
+      JSON.stringify({
+        jsonrpc: "2.0", id: 4, method: "tools/call",
+        params: { name: "zcode_doctor", arguments: {} },
+      }),
+      "",
+    ].join("\n"));
+    const doctorResponse = await secondSession.waitForResponse(4) as {
+      result?: { isError?: boolean; structuredContent?: Record<string, unknown> };
+    };
+    assert.notEqual(doctorResponse.result?.isError, true, secondSession.stderr());
+    const checks = Array.isArray(doctorResponse.result?.structuredContent?.checks)
+      ? doctorResponse.result!.structuredContent!.checks as Array<{ name?: unknown }>
+      : [];
+    assert.equal(checks.some((check) => check.name === "active_tasks"), true);
     secondSession.child.stdin.end();
     const secondExit = await Promise.race([
       secondSession.exit,
@@ -417,8 +651,10 @@ test("Thin MCP disconnect leaves the accepted Task in the Executor and reconnect
     directClient.close();
     executor.child.kill("SIGKILL");
     await executor.exit;
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    rmSync(fixture, { recursive: true, force: true });
+    // Windows can keep the test-owned SQLite/WAL directory handle visible for
+    // a short interval after the terminated process has exited.
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    rmSync(fixture, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
   }
 });
 

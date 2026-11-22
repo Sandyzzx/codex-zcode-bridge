@@ -5,15 +5,16 @@
 > Branch: `codex/async-executor-pr2`
 > Pull request: [#120](https://github.com/Sandyzzx/codex-zcode-bridge/pull/120)
 > Integration baseline: `origin/preview@1bf039fda2ccfd17a992458a871bddd7b48b38c1`
-> Code evidence commit: `d4b5b7eb1`
+> Code evidence: PR #120 remediation working tree; final commit recorded in the PR
 > Conclusion: `PARTIAL / BLOCKED`
 
 ## 1. Scope and Conclusion
 
-This report covers the PR 2 candidate only: independent Executor ownership,
-deterministic IPC, Thin MCP control transport, and the original Attempt
-Result/Cleanup/Release durability path. It does not implement or validate the
-PR 3-6 CLI, Web, Wake, or production Desktop integration.
+This report covers the PR 2 candidate and its PR #120 remediation: independent
+Executor ownership, deterministic IPC, Thin MCP control transport, shared
+production composition, Executor-owned model/Doctor operations, and the
+original Attempt Result/Cleanup/Release durability path. It does not implement
+or validate the PR 3-6 CLI/Web/Wake/Master integration in this PR.
 
 The deterministic and synthetic gates are PASS. The real Codex Desktop close
 E2E and a real Official ZCode Runtime/provider request are not run. The Desktop
@@ -35,6 +36,8 @@ manager, database, recovery engine, or Worker execution path:
 | Executor | Standalone `src/executor/main.ts` owns the existing `SqliteLifecycleMcpAuthority` |
 | IPC | Windows Named Pipe control client/server; bounded frames; 33 MiB frame budget for the existing 32 MiB Result contract |
 | MCP | `ZCODE_BRIDGE_MCP_TRANSPORT=control` selects a Thin MCP adapter; legacy in-process transport remains the default |
+| Production composition | Legacy Host and Executor share Authority initialization, Start Plan auth, dynamic model routing, Worker diagnostics, Doctor, and model settings |
+| Model/Doctor IPC | Thin MCP forwards list/get/set/clear model operations and the complete Doctor report to the Executor |
 | Submission semantics | `REQUEST_CANCELLED`, `TASK_CANCEL_REQUESTED`, `SUBMISSION_UNKNOWN`, and `EXECUTOR_UNAVAILABLE` remain distinct |
 | Shutdown | Idle-only Executor close; Store closes before Lease release; refused close restores control service |
 | Wake | Not implemented in PR 2. The planned Queue Adapter remains a later PR 5 decision; Web Notify is the future safe fallback when Queue/model/budget confirmation is unavailable |
@@ -56,8 +59,13 @@ Implemented files:
   `protocol.ts`: bounded Named Pipe Control transport.
 - `src/executor/remote-task-manager.ts` and
   `lease-guarded-task-manager.ts`: Thin MCP delegation and legacy lease fencing.
+- `src/executor/remote-model-settings.ts`: Executor-owned model settings proxy.
+- `src/host/production-composition.ts`: shared production Authority/auth/routing/
+  diagnostics/Doctor/model composition.
 - `src/host/stdio.ts`: opt-in control transport composition; the accepted Task
   is not cancelled when the MCP request/transport disappears.
+- `test/fixtures/executor-test-main.ts`: explicit test-only Executor entry;
+  production entry rejects the same synthetic switches before Lease creation.
 - `plugins/codex-zcode-bridge/dist/bridge.mjs`: rebuilt generated artifact.
 
 No Supervisor, second task database, second state machine, management CLI, Web
@@ -86,9 +94,14 @@ The following statuses use the existing project vocabulary:
 | Oversized/malformed frames | `PASS` | bounded decoder rejects before manager dispatch |
 | 32 MiB Result over IPC | `PASS` | complete Result read through the 33 MiB frame budget |
 | Thin MCP transport flag | `PASS` | `ZCODE_BRIDGE_MCP_TRANSPORT=control` builds no local SQLite Manager |
+| Shared Host/Executor production composition | `PASS` | Deterministic composition contract covers Start Plan factory, persisted dynamic routing, Worker diagnostics, Doctor, and model settings |
+| Thin MCP model and Doctor operations | `PASS` | list/get/set/clear and complete Doctor work through IPC; reconnect reads the persisted default model after task completion |
 | Thin MCP disconnect/reconnect | `PASS` | MCP closes, Executor finishes one synthetic Worker spawn, reconnect reads completed Result attempt 1 |
 | Cross-process fake Worker durability | `PASS` | one `result_committed`, non-null digest, `cleanup_pending`, `cleanup_verified`, `released` |
 | Repeated Spawn/result overwrite | `PASS` | synthetic E2E observes exactly one Worker spawn and one original Attempt commit |
+| Production Executor CLI hardening | `PASS` | synthetic adapter and arbitrary Worker entry are rejected before Lease acquisition |
+| Startup failure rollback | `PASS` | idle Store closure is proven before exact Lease release; Authority startup failure retains the Lease |
+| Development gate | `PASS` | deferred FULL runs direct/domain safe tests; no `FULL_SUITE` claim is emitted |
 | Complete local regression | `NOT_RUN` | PR 2 is one part of the Executor chain; the Owner deferred complete CI until the whole chain reaches its Release Candidate |
 | Real Codex Desktop close | `BLOCKED` | `BLOCKED_BY_OWNER_ENVIRONMENT`; Owner's active Desktop was not closed |
 | Real Official ZCode Runtime/provider | `NOT_RUN` | no paid model authorization and no real provider request |
@@ -96,8 +109,8 @@ The following statuses use the existing project vocabulary:
 
 ## 5. Current Test Evidence
 
-The initial full affected gate selected `FULL_SUITE` because the test impact map
-changed. It reported `1005 PASS / 3 FAIL / 2 SKIP`. The three failures were
+The historical full affected gate selected `FULL_SUITE` because the test impact
+map changed. It reported `1005 PASS / 3 FAIL / 2 SKIP`. The three failures were
 test-infrastructure/mapping issues, not a semantic Executor failure:
 
 1. Thin MCP used a nested fixture path that was too long for the local SQLite
@@ -107,18 +120,18 @@ test-infrastructure/mapping issues, not a semantic Executor failure:
    domain.
 3. The Windows shard plan did not enumerate the three new Executor tests.
 
-After those corrections, the focused Executor/IPC/Thin MCP suite passes. The
-current evidence includes:
+After those corrections and the PR #120 remediation, the focused suite passes.
+The current evidence includes:
 
 - `test/executor-lease.test.ts`: PASS.
 - `test/executor-ipc.test.ts`: 8/8 PASS, including in-flight client close.
-- `test/executor-process.test.ts`: 5/5 PASS, including synthetic original
-  Attempt Result/Cleanup/Release.
+- `test/executor-process.test.ts`: PASS, including synthetic original Attempt
+  Result/Cleanup/Release, startup rollback, CLI hardening, and Thin MCP
+  model/Doctor reconnect.
 - `test/mcp-stdio-entry.test.ts`: PASS for control transport and no local
   SQLite Manager construction.
-- The combined Executor Lease/IPC/process/Thin MCP run is 32/32 PASS.
-- `test/test-impact-selector.test.ts` and `test/test-shard-plan.test.ts`:
-  24/24 PASS.
+- The current combined Executor Lease/IPC/process/MCP/selector suite passes
+  `86/86`; the shared composition contract also passes.
 - `npm run test:affected -- --force-full --development`: T0 PASS and ended
   with `FULL_SUITE_DEFERRED_TO_RELEASE_GATE`; this is not a full-suite PASS.
 - The first pushed workflow exposed an unquoted YAML `run` scalar containing

@@ -1,9 +1,9 @@
 # ADR-045：独立 Async Executor 所有权
 
 > Status: ACCEPTED（Owner 条件批准；架构方向已接受）
-> Implementation status: PARTIAL — PR 2 candidate；未合入 Preview，未发布
+> Implementation status: PARTIAL / BLOCKED — PR 2 remediation candidate；未合入 Preview，未发布
 > Date: 2026-11-22
-> Baseline: `origin/preview` `1f9ff9ef37528205e76156e13fe06ed2b1fd3711`
+> Baseline: `origin/preview` `1bf039fda2ccfd17a992458a871bddd7b48b38c1`
 > Related architecture: [BRIDGE_ASYNC_EXECUTION_V1.md](../architecture/BRIDGE_ASYNC_EXECUTION_V1.md)
 
 ## Context
@@ -41,7 +41,16 @@ Preview.10 的 `SqliteLifecycleMcpAuthority` 在 MCP stdio Host 进程内运行�
 PR 2 candidate 已实现 lifetime lease、精确 PID/start fingerprint、legacy Host
 互斥、Idle-only Shutdown、Named Pipe IPC、Thin MCP control transport，以及
 fake Worker 跨进程 Result/Cleanup/Release E2E。确定性 IPC、Lease、单实例、
-32 MiB Result 和 reconnect 测试通过。
+32 MiB Result 和 reconnect 测试通过。PR #120 remediation 进一步让 legacy Host
+与 Executor 共用生产 Authority/Start Plan/model-routing/diagnostics composition，
+把模型工具和完整 Doctor 经 Executor IPC 代理，并关闭生产 Executor 的测试参数
+入口；启动失败按精确 Lease 与 Store close 证据回滚或 fail closed。
+
+开发门禁采用 `Local Verification During Development, Full CI Before Release`：
+普通功能提交只跑 typecheck、构建所需产物、受影响测试和关键 E2E；延期
+`FULL_SUITE` 必须先执行直接变更与受影响域的安全测试，且不得报告为完整回归
+PASS。完整 Windows/Ubuntu/Stress 统一在 Executor 功能链的 Release Candidate
+边界执行。
 
 真实 Codex Desktop 关闭后的 E2E 仍未运行，原因是不得关闭 Owner 当前正在使用的
 Desktop；真实 Official Runtime 也没有新的付费模型授权。因此 ADR-045 的

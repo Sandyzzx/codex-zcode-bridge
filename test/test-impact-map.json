@@ -70,7 +70,8 @@
         "src/runtime/model-settings.ts",
         "src/runtime/official-provider-runtime-auth.ts",
         "src/runtime/session-preferences.ts",
-        "src/runtime/start-plan-production-auth.ts"
+        "src/runtime/start-plan-production-auth.ts",
+        "src/host/production-composition.ts"
       ]
     },
     {
@@ -136,7 +137,8 @@
         "src/manager/normalize.ts",
         "src/runtime/process-probe.ts",
         "src/manager/sqlite-lifecycle-mcp-authority.ts",
-        "src/executor/**"
+        "src/executor/**",
+        "src/host/production-composition.ts"
       ]
     },
     {
@@ -179,6 +181,7 @@
         "src/cli/admin-abandon-held-operation.ts",
         "src/host/profile.ts",
         "src/host/stdio.ts",
+        "src/host/production-composition.ts",
         "src/runtime/doctor.ts",
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
@@ -213,7 +216,8 @@
         "src/mcp/server.ts",
         "src/mcp/schemas.ts",
         "src/mcp/result-summary.ts",
-        "src/host/stdio.ts"
+        "src/host/stdio.ts",
+        "src/host/production-composition.ts"
       ]
     },
     {

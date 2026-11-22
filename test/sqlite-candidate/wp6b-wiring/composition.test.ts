@@ -482,13 +482,20 @@ function redactTestDiagnostic(value: unknown): unknown {
   return redacted;
 }
 
-test("production Host composition initializes the bound SQLite Authority and exposes no test Fake adapter", () => {
+test("production Host and Executor share the same Authority, routing, auth, diagnostics, and model composition", () => {
   const host = source("host/stdio.ts");
-  assert.match(host, /initializeFreshInstallSqliteRoot\(\s*dataRoot,\s*FRESH_SQLITE_DATABASE_FILE/u);
-  assert.match(host, /const \{ SqliteLifecycleMcpAuthority \} = await import\("\.\.\/manager\/sqlite-lifecycle-mcp-authority\.js"\)/u);
-  assert.match(host, /manager = authority/u);
-  assert.match(host, /lifecycleChecks = \(\) => authority\.getDoctorChecks\(\)/u);
-  assert.match(host, /lifecycleChecks\s*\}/u);
+  const executor = source("executor/service.ts");
+  const composition = source("host/production-composition.ts");
+  assert.match(host, /createProductionAuthorityComposition\(/u);
+  assert.match(executor, /createProductionAuthorityComposition\(/u);
+  assert.match(composition, /initializeFreshInstallSqliteRoot\(/u);
+  assert.match(composition, /SqliteAuthority\.create\(/u);
+  assert.match(composition, /startPlanPrivateAuthFactory:\s*\(\)\s*=>\s*createHostStartPlanIssuer\(/u);
+  assert.match(composition, /routeTaskModel,\s*\n\s*onWorkerDiagnosticLine/su);
+  assert.match(composition, /settings:\s*\(\)\s*=>\s*\{[\s\S]*?loadPersistedRuntimeEnvironment\(env, homeDir, options\.host\)/u);
+  assert.match(composition, /registry:\s*async\s*\(\)\s*=>\s*\{[\s\S]*?loadPersistedRuntimeEnvironment\(env, homeDir, options\.host\)/u);
+  assert.match(composition, /new ZCodeModelSettings\(env,/u);
+  assert.match(composition, /doctor:\s*\(\)\s*=>\s*runBridgeDoctor\(/u);
   assert.doesNotMatch(host, /testOnlyFakeAdapter|executeFakeResultAdapter|adapter_mode\s*:\s*"test_fake"/u,
     "the formal Host entry must not expose the explicit Fake test capability");
 });

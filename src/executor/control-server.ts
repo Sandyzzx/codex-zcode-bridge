@@ -1,5 +1,7 @@
 import net from "node:net";
 import type { ProgressTaskManager } from "../interfaces.js";
+import type { DoctorReport } from "../runtime/doctor.js";
+import type { ZCodeModelSettings } from "../runtime/model-settings.js";
 import { createExecutorFrameDecoder, encodeExecutorFrame } from "./frame.js";
 import {
   EXECUTOR_CONTROL_PROTOCOL_VERSION,
@@ -10,6 +12,8 @@ import {
 export interface ExecutorControlServerOptions {
   readonly pipeName: string;
   readonly manager: ProgressTaskManager;
+  readonly modelSettings?: Pick<ZCodeModelSettings, "listModels" | "getDefaultModel" | "setDefaultModel" | "clearDefaultModel">;
+  readonly doctor?: () => Promise<DoctorReport>;
   readonly leaseId: string;
   readonly executorState?: () => "active" | "shutdown_pending" | "lease_unknown" | "closed";
   readonly onServerError?: (error: unknown) => void;
@@ -47,23 +51,41 @@ function response(
   };
 }
 
-async function dispatch(manager: ProgressTaskManager, request: ExecutorControlRequest): Promise<Record<string, unknown>> {
+async function dispatch(options: ExecutorControlServerOptions, request: ExecutorControlRequest): Promise<Record<string, unknown>> {
+  const manager = options.manager;
   switch (request.method) {
-    case "createTask": return manager.createTask(request.params.task as Parameters<ProgressTaskManager["createTask"]>[0]) as unknown as Record<string, unknown>;
-    case "getStatus": return manager.getStatus(String(request.params.task_id)) as unknown as Record<string, unknown>;
-    case "getResult": return manager.getResult(String(request.params.task_id)) as unknown as Record<string, unknown>;
-    case "continueTask": return manager.continueTask(request.params.input as Parameters<ProgressTaskManager["continueTask"]>[0]) as unknown as Record<string, unknown>;
-    case "cancelTask": return manager.cancelTask(String(request.params.task_id)) as unknown as Record<string, unknown>;
-    case "getEvents": return manager.getEvents(request.params.input as Parameters<ProgressTaskManager["getEvents"]>[0]) as unknown as Record<string, unknown>;
+    case "createTask": return await manager.createTask(request.params.task as Parameters<ProgressTaskManager["createTask"]>[0]) as unknown as Record<string, unknown>;
+    case "getStatus": return await manager.getStatus(String(request.params.task_id)) as unknown as Record<string, unknown>;
+    case "getResult": return await manager.getResult(String(request.params.task_id)) as unknown as Record<string, unknown>;
+    case "continueTask": return await manager.continueTask(request.params.input as Parameters<ProgressTaskManager["continueTask"]>[0]) as unknown as Record<string, unknown>;
+    case "cancelTask": return await manager.cancelTask(String(request.params.task_id)) as unknown as Record<string, unknown>;
+    case "getEvents": return await manager.getEvents(request.params.input as Parameters<ProgressTaskManager["getEvents"]>[0]) as unknown as Record<string, unknown>;
     case "getFeedback": {
       if (!manager.getFeedback) throw new Error("FEEDBACK_UNAVAILABLE");
-      return manager.getFeedback(String(request.params.task_id)) as unknown as Record<string, unknown>;
+      return await manager.getFeedback(String(request.params.task_id)) as unknown as Record<string, unknown>;
     }
     case "getAttention": {
       if (!manager.getAttention) throw new Error("ATTENTION_UNAVAILABLE");
-      return manager.getAttention(String(request.params.task_id)) as unknown as Record<string, unknown>;
+      return await manager.getAttention(String(request.params.task_id)) as unknown as Record<string, unknown>;
     }
-    case "replyToInteraction": return manager.replyToInteraction(request.params.input as Parameters<ProgressTaskManager["replyToInteraction"]>[0]) as unknown as Record<string, unknown>;
+    case "replyToInteraction": return await manager.replyToInteraction(request.params.input as Parameters<ProgressTaskManager["replyToInteraction"]>[0]) as unknown as Record<string, unknown>;
+    case "listModels":
+      if (!options.modelSettings) throw Object.assign(new Error("MODEL_SETTINGS_UNAVAILABLE"), { code: "MODEL_SETTINGS_UNAVAILABLE" });
+      return await options.modelSettings.listModels(String(request.params.workspace)) as unknown as Record<string, unknown>;
+    case "getDefaultModel":
+      if (!options.modelSettings) throw Object.assign(new Error("MODEL_SETTINGS_UNAVAILABLE"), { code: "MODEL_SETTINGS_UNAVAILABLE" });
+      return await options.modelSettings.getDefaultModel() as unknown as Record<string, unknown>;
+    case "setDefaultModel":
+      if (!options.modelSettings) throw Object.assign(new Error("MODEL_SETTINGS_UNAVAILABLE"), { code: "MODEL_SETTINGS_UNAVAILABLE" });
+      return await options.modelSettings.setDefaultModel(
+        request.params as unknown as Parameters<ZCodeModelSettings["setDefaultModel"]>[0],
+      ) as unknown as Record<string, unknown>;
+    case "clearDefaultModel":
+      if (!options.modelSettings) throw Object.assign(new Error("MODEL_SETTINGS_UNAVAILABLE"), { code: "MODEL_SETTINGS_UNAVAILABLE" });
+      return await options.modelSettings.clearDefaultModel() as unknown as Record<string, unknown>;
+    case "doctor":
+      if (!options.doctor) throw Object.assign(new Error("DOCTOR_UNAVAILABLE"), { code: "DOCTOR_UNAVAILABLE" });
+      return await options.doctor() as unknown as Record<string, unknown>;
     case "health": return { state: "active" };
   }
 }
@@ -73,6 +95,8 @@ const MUTATING_METHODS = new Set<ExecutorControlRequest["method"]>([
   "continueTask",
   "cancelTask",
   "replyToInteraction",
+  "setDefaultModel",
+  "clearDefaultModel",
 ]);
 const CONTROL_METHODS = new Set<ExecutorControlRequest["method"]>([
   ...MUTATING_METHODS,
@@ -81,6 +105,11 @@ const CONTROL_METHODS = new Set<ExecutorControlRequest["method"]>([
   "getEvents",
   "getFeedback",
   "getAttention",
+  "listModels",
+  "getDefaultModel",
+  "setDefaultModel",
+  "clearDefaultModel",
+  "doctor",
   "health",
 ]);
 
@@ -152,7 +181,7 @@ export function startExecutorControlServer(options: ExecutorControlServerOptions
         ? Promise.reject(Object.assign(new Error(fenced.message), { code: fenced.code }))
         : request.method === "health"
           ? Promise.resolve({ state: currentState })
-          : dispatch(options.manager, request);
+          : dispatch(options, request);
       void operation
         .then((result) => writeResponse(response(request, true, optionsExecutorState, options.leaseId, result)))
         .catch((error: unknown) => writeResponse(response(request, false, optionsExecutorState, options.leaseId, undefined, {
@@ -181,6 +210,11 @@ export function startExecutorControlServer(options: ExecutorControlServerOptions
   return new Promise((resolve, reject) => {
     const fail = (error: unknown): void => {
       options.onServerError?.(error);
+      try {
+        server.close(() => undefined);
+      } catch {
+        // A listener that never started has no closeable handle.
+      }
       reject(error);
     };
     server.once("error", fail);

@@ -1,27 +1,34 @@
 import { homedir } from "node:os";
-import { FRESH_SQLITE_DATABASE_FILE } from "../runtime/sqlite-install-config.js";
-import { loadPersistedRuntimeEnvironment } from "../runtime/resolver.js";
-import { createPlatformProbe } from "../runtime/process-probe.js";
-import { fingerprintRuntimeArtifact } from "../runtime/build-provenance.js";
-import { codexHostProfile, validateHostProfile, type BridgeHostProfile } from "../host/profile.js";
+import type { ProgressTaskManager } from "../interfaces.js";
 import { workerEntryPath } from "../manager/spawn-worker.js";
-import { createTaskModelRouter, resolvePreferStartPlan, StartPlanEntitlementJournal } from "../runtime/model-routing.js";
-import { SqliteLifecycleMcpAuthority } from "../manager/sqlite-lifecycle-mcp-authority.js";
-import { createTrustedLocalStdioContext } from "../runtime/trusted-local-deployment.js";
-import { initializeFreshInstallSqliteRoot } from "../store/lifecycle-gate.js";
+import { fingerprintRuntimeArtifact } from "../runtime/build-provenance.js";
+import type { DoctorReport } from "../runtime/doctor.js";
+import type { ZCodeModelSettings } from "../runtime/model-settings.js";
+import { createPlatformProbe } from "../runtime/process-probe.js";
+import { FRESH_SQLITE_DATABASE_FILE } from "../runtime/sqlite-install-config.js";
+import { codexHostProfile, validateHostProfile, type BridgeHostProfile } from "../host/profile.js";
+import {
+  createProductionAuthorityComposition,
+  createWorkerDiagnosticSink,
+  type ProductionAuthorityComposition,
+} from "../host/production-composition.js";
+import { startExecutorControlServer, type ExecutorControlServerHandle } from "./control-server.js";
 import {
   acquireExecutorLease,
   assertExecutorLeaseTransition,
   authorityRootDigest,
   type ExecutorLeaseHandle,
 } from "./lease.js";
-import { startExecutorControlServer, type ExecutorControlServerHandle } from "./control-server.js";
-import type { ProgressTaskManager } from "../interfaces.js";
 
 export interface ExecutorAuthority extends ProgressTaskManager {
   getExecutorIdleState(): { readonly idle: boolean; readonly blockers: readonly string[] };
   closeIfIdle(): Promise<{ readonly closed: boolean; readonly blockers: readonly string[] }>;
 }
+
+export type ExecutorModelSettings = Pick<
+  ZCodeModelSettings,
+  "listModels" | "getDefaultModel" | "setDefaultModel" | "clearDefaultModel"
+>;
 
 export interface ExecutorServiceOptions {
   readonly dataRoot: string;
@@ -29,12 +36,17 @@ export interface ExecutorServiceOptions {
   readonly bridgeEntryPath: string;
   readonly heartbeatMs?: number;
   readonly acceptUnleasedExistingRoot?: boolean;
-  /** Internal synthetic E2E switch; production never sets this. */
+  /** Internal synthetic E2E switches; production entry points never set them. */
   readonly testOnlyFakeAdapter?: true;
   readonly testWorkerEntryPath?: string;
   readonly testBeforeDispatch?: () => Promise<void>;
-  /** Internal lifecycle-test seam. Production entry points never set this. */
+  readonly testOnScheduler?: (stage: string, detail: Readonly<Record<string, unknown>>) => void;
+  /** Internal lifecycle-test seams. Production entry points never set them. */
   readonly testAuthority?: ExecutorAuthority;
+  readonly testAuthorityFactory?: () => Promise<ExecutorAuthority>;
+  readonly testModelSettings?: ExecutorModelSettings;
+  readonly testDoctor?: () => Promise<DoctorReport>;
+  readonly testUnrefHeartbeat?: boolean;
 }
 
 export interface ExecutorServiceHandle {
@@ -50,34 +62,33 @@ export function executorPipeName(root: string): string {
   return `\\\\.\\pipe\\codex-zcode-bridge-executor-v1-${authorityRootDigest(root)}`;
 }
 
-async function buildAuthority(options: ExecutorServiceOptions, dataRoot: string) {
-  const host = options.host ?? codexHostProfile(homedir());
-  validateHostProfile(host);
-  const runtimeEnv = loadPersistedRuntimeEnvironment(process.env, homedir(), host);
-  await initializeFreshInstallSqliteRoot(dataRoot, FRESH_SQLITE_DATABASE_FILE, process.versions.node, createPlatformProbe());
-  const journal = new StartPlanEntitlementJournal();
-  const authority = await SqliteLifecycleMcpAuthority.create({
-    dataRoot,
-    databaseFileName: FRESH_SQLITE_DATABASE_FILE,
-    managedDataDirectory: true,
-    workerEntryPath: options.testWorkerEntryPath ?? host.workerEntryPath ?? workerEntryPath(),
-    hostProfile: host,
-    bridgeEntryPath: options.bridgeEntryPath,
-    processProbe: createPlatformProbe(),
-    trustedLocalContext: createTrustedLocalStdioContext(host),
-    requireAuthorityReceipt: true,
-    ...(options.testOnlyFakeAdapter ? { testOnlyFakeAdapter: options.testOnlyFakeAdapter } : {}),
-    ...(options.testBeforeDispatch ? { testBeforeDispatch: options.testBeforeDispatch } : {}),
-    routeTaskModel: createTaskModelRouter({
-      settings: () => ({
-        preferStartPlan: resolvePreferStartPlan(runtimeEnv),
-        defaultProviderId: runtimeEnv["ZCODE_BRIDGE_DEFAULT_PROVIDER_ID"]?.trim() ?? "",
-      }),
-      journal,
-      registry: async () => ({ startPlanModelIds: [], codingPlanProviders: [] }),
-    }),
-  });
-  return { authority, host, runtimeEnv };
+async function cleanupFailedStartup(
+  authority: ExecutorAuthority | undefined,
+  composition: ProductionAuthorityComposition | undefined,
+  server: ExecutorControlServerHandle | undefined,
+  leaseHandle: ExecutorLeaseHandle,
+): Promise<"released" | "retained"> {
+  if (!authority) {
+    // Authority construction can fail after opening the Store. Without an
+    // explicit closed/not-writable fact, retain the exact lease fail closed.
+    return "retained";
+  }
+  try {
+    if (server) await server.close();
+    const idle = authority.getExecutorIdleState();
+    if (!idle.idle) return "retained";
+    await leaseHandle.assertOwned();
+    const closed = await authority.closeIfIdle();
+    if (!closed.closed) return "retained";
+    await leaseHandle.assertOwned();
+    await leaseHandle.release();
+    composition?.abortAuthentication();
+    return "released";
+  } catch {
+    // A Store close, listener close, or ownership check that cannot be proved
+    // leaves the owner record in place. Retry must use explicit lease recovery.
+    return "retained";
+  }
 }
 
 export async function startExecutorService(options: ExecutorServiceOptions): Promise<ExecutorServiceHandle> {
@@ -92,27 +103,63 @@ export async function startExecutorService(options: ExecutorServiceOptions): Pro
     databaseFileName: FRESH_SQLITE_DATABASE_FILE,
     acceptUnleasedExistingRoot: options.acceptUnleasedExistingRoot === true,
   });
-  const identity = await createPlatformProbe().selfIdentity();
+  const processProbe = createPlatformProbe();
+  const identity = await processProbe.selfIdentity();
   const pipeName = executorPipeName(options.dataRoot);
   const leaseHandle: ExecutorLeaseHandle = await acquireExecutorLease({
     authorityRoot: options.dataRoot,
     ownerKind: "executor",
-    processProbe: createPlatformProbe(),
+    processProbe,
     identity,
     bridgeSha256: bridge.sha256,
     workerSha256: worker.sha256,
     pipeName,
   });
-  const authority = options.testAuthority ?? (await buildAuthority(options, options.dataRoot)).authority;
+
+  let composition: ProductionAuthorityComposition | undefined;
+  let authority: ExecutorAuthority | undefined;
+  let server: ExecutorControlServerHandle | undefined;
   let state: ExecutorServiceState = "active";
+  try {
+    if (options.testAuthority || options.testAuthorityFactory) {
+      authority = options.testAuthority ?? await options.testAuthorityFactory!();
+    } else {
+      composition = await createProductionAuthorityComposition({
+        authorityRoot: options.dataRoot,
+        host,
+        bridgeEntryPath: options.bridgeEntryPath,
+        workerEntryPath: workerPath,
+        processProbe,
+        ...(options.testOnlyFakeAdapter ? { testOnlyFakeAdapter: true } : {}),
+        ...(options.testBeforeDispatch ? { testBeforeDispatch: options.testBeforeDispatch } : {}),
+        ...(options.testOnScheduler ? { testOnScheduler: options.testOnScheduler } : {}),
+        onWorkerDiagnosticLine: createWorkerDiagnosticSink("[executor]"),
+      });
+      authority = composition.authority;
+    }
+    server = await startExecutorControlServer({
+      pipeName,
+      manager: authority,
+      ...(composition?.modelSettings ?? options.testModelSettings
+        ? { modelSettings: composition?.modelSettings ?? options.testModelSettings }
+        : {}),
+      ...(composition?.doctor ?? options.testDoctor
+        ? { doctor: composition?.doctor ?? options.testDoctor }
+        : {}),
+      leaseId: leaseHandle.lease.lease_id,
+      executorState: () => state,
+    });
+  } catch (error) {
+    const cleanup = await cleanupFailedStartup(authority, composition, server, leaseHandle);
+    console.error(`EXECUTOR_STARTUP_FAILED ${JSON.stringify({
+      cleanup,
+      error: error instanceof Error ? error.message : String(error),
+    })}`);
+    throw error;
+  }
+
   let leaseSafe = true;
   let shutdownPromise: Promise<{ readonly status: "closed" | "not_idle" | "release_unknown"; readonly blockers: readonly string[] }> | null = null;
-  const server: ExecutorControlServerHandle = await startExecutorControlServer({
-    pipeName,
-    manager: authority,
-    leaseId: leaseHandle.lease.lease_id,
-    executorState: () => state,
-  });
   let heartbeatInFlight = false;
   let heartbeatFailureReported = false;
   const heartbeat = setInterval(() => {
@@ -133,6 +180,7 @@ export async function startExecutorService(options: ExecutorServiceOptions): Pro
       heartbeatInFlight = false;
     });
   }, options.heartbeatMs ?? 5_000);
+  if (options.testUnrefHeartbeat === true) heartbeat.unref();
   // The heartbeat is also the Executor's process-lifetime hold. The control
   // server stays unref'd for embedders, but a standalone Executor must not
   // exit while it still owns the SQLite Store.
@@ -152,14 +200,14 @@ export async function startExecutorService(options: ExecutorServiceOptions): Pro
         // settle. The control pipe remains open so a not-idle refusal can
         // restore normal service without reopening the listener.
         try {
-          await server.drainMutations();
+          await server!.drainMutations();
         } catch {
           state = "lease_unknown";
           return { status: "release_unknown" as const, blockers: ["control_request_drain_unknown"] };
         }
         let idle: ReturnType<ExecutorAuthority["getExecutorIdleState"]>;
         try {
-          idle = authority.getExecutorIdleState();
+          idle = authority!.getExecutorIdleState();
         } catch {
           leaseSafe = false;
           state = "lease_unknown";
@@ -181,7 +229,7 @@ export async function startExecutorService(options: ExecutorServiceOptions): Pro
           return { status: "release_unknown" as const, blockers: ["lease_ownership_unknown"] };
         }
         try {
-          await server.close();
+          await server!.close();
         } catch {
           leaseSafe = false;
           state = "lease_unknown";
@@ -195,7 +243,7 @@ export async function startExecutorService(options: ExecutorServiceOptions): Pro
           return { status: "release_unknown" as const, blockers: ["lease_ownership_unknown"] };
         }
         try {
-          const closed = await authority.closeIfIdle();
+          const closed = await authority!.closeIfIdle();
           if (!closed.closed) {
             state = "lease_unknown";
             return { status: "release_unknown" as const, blockers: closed.blockers };
@@ -206,12 +254,14 @@ export async function startExecutorService(options: ExecutorServiceOptions): Pro
           return { status: "release_unknown" as const, blockers: ["store_close_unknown"] };
         }
         try {
+          await leaseHandle.assertOwned();
           await leaseHandle.release();
         } catch {
           leaseSafe = false;
           state = "lease_unknown";
           return { status: "release_unknown" as const, blockers: ["lease_release_unknown"] };
         }
+        composition?.abortAuthentication();
         clearInterval(heartbeat);
         state = "closed";
         return { status: "closed" as const, blockers: [] };

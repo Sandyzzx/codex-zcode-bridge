@@ -10,7 +10,7 @@
 | 入口 | 行为 |
 |---|---|
 | npm run test:affected | 本地统一入口，必跑 T0（typecheck/build/plugin validation/generated freshness/diff check），按真实依赖选择功能/压力测试；未知源码、未知可执行脚本或基础设施变化标记完整功能回归 |
-| npm run test:affected -- --development | CI 开发门禁入口：TARGETED 照常执行；`FULL_SUITE` 在 T0 后明确输出 `FULL_SUITE_DEFERRED_TO_RELEASE_GATE`，不得当作完整回归 PASS |
+| npm run test:affected -- --development | CI 开发门禁入口：TARGETED 照常执行；`FULL_SUITE` 在 T0 后先运行直接变更与受影响域的 Unit 安全测试，再明确输出 `FULL_SUITE_DEFERRED_TO_RELEASE_GATE`，不得当作完整回归 PASS |
 | npm test | 编译并运行本平台全部功能测试；不隐式执行登记压力矩阵 |
 | npm run test:full | typecheck/build/npm test/plugin validation；冻结 Windows 门禁 |
 | npm run test:stress | 编译后显式运行登记资源矩阵；支持 --file=<registered file> |
@@ -20,7 +20,7 @@
 
 FULL_SUITE 表示需要完整功能回归，压力状态为 SEPARATE_STRESS_GATE。开发门禁可显式延期该完整回归；延期标记、文档-only 的 NO_TESTS_APPLICABLE 和 dry-run 的 DRY_RUN_ONLY 都不能称测试 PASS。SQLite 边界的 targeted selection 标记 STRESS_TEST_REQUIRED；压力矩阵只在完整 Release Gate 执行，或由 Owner 明确单独运行。
 
-`npm run test:affected -- --tests-only --base <sha>` 只供同一 workflow run、同一代码 SHA 的 CI Integration Job 使用。Fast 已完成平台无关 T0；Windows Integration 另行构建 Windows 产物和进程身份探针后，只运行所选测试。该入口要求显式 Base、`CODEX_BRIDGE_CI_T0_COMPLETED=1` 和 TARGETED 选择；不会接受 FULL_SUITE 或 NO_TESTS_APPLICABLE 作为跳过完整门禁的捷径。注册压力测试仍只由独立 Stress Job 执行。
+`npm run test:affected -- --safe-tests-only --base <sha>` 只供同一 workflow run、同一代码 SHA 的 CI Integration Job 使用。Fast 已完成平台无关 T0；Windows Integration 另行构建 Windows 产物和进程身份探针后，只运行所选安全测试。安全集合始终排除 Stress、Manual E2E 与 Fixture；TARGETED 使用正常受影响集合，延期 `FULL_SUITE` 使用直接变更和受影响域的安全测试。该入口要求显式 Base、`CODEX_BRIDGE_CI_T0_COMPLETED=1`，并在没有安全测试时 fail closed；不会接受 NO_TESTS_APPLICABLE 作为跳过门禁的捷径。注册压力测试仍只由独立 Stress Job 执行。`--tests-only` 继续保留给既有 TARGETED CI 调用，语义不变。
 
 ## CI 门禁分层
 
@@ -29,7 +29,7 @@ FULL_SUITE 表示需要完整功能回归，压力状态为 SEPARATE_STRESS_GATE
 | Gate | 运行内容 | 成本边界 |
 |---|---|---|
 | Development Fast | Ubuntu 上的 T0 和可安全执行的受影响测试；FULL 变更明确延期完整回归 | 每次普通 PR、Draft/Ready 转换和手动开发运行保持轻量，不重复完整矩阵 |
-| Integration | Windows 上构建 Windows 产物、执行进程身份探针，再以 tests-only 运行所选 Worker、Runtime、SQLite、Result、Cleanup/Release 集成测试 | 复用同一 Run/SHA 的 Fast T0；只在 TARGETED、非 Release Gate 且需要 Integration 时运行 |
+| Integration | Windows 上构建 Windows 产物、执行进程身份探针，再以 safe-tests-only 运行所选 Worker、Runtime、SQLite、Result、Cleanup/Release 集成测试及延期 FULL 选择的安全测试 | 复用同一 Run/SHA 的 Fast T0；非 Release Gate 且选择含 Integration 或开发期 FULL 时运行，完整矩阵不在此 Job 重复 |
 | Release | Ubuntu 的 typecheck/build、完整 `npm test`、Plugin Validation、生成物 Freshness 与 diff check；Windows 两路并行执行完整分片、身份探针，再由聚合 Job 提供 `Verify (windows-2022)` | `preview`/`master` push、非 Draft `release-candidate` PR 或 `release_gate=true` 时执行；分片计划必须完整、互斥且自动测试全覆盖 |
 | SQLite Stress | Windows/Ubuntu 资源矩阵 | 只随完整 Release Gate 执行或由 Owner 明确单独运行 |
 | Cost Lab | Windows 上运行独立的 `npm run cost-lab:test` | `tools/cost-lab/**` 不再强制 Bridge FULL_SUITE；选中 Cost Lab、forced-full、Push 和 Dispatch 时独立执行 |

@@ -1,6 +1,6 @@
 # Async Execution Architecture Review
 
-> Status: IMPLEMENTED — PR 2 PARTIAL（architecture accepted；release blocked）
+> Status: IMPLEMENTED — PR 2 REMEDIATION CANDIDATE（architecture accepted；release blocked）
 > Date: 2026-11-22
 > Review baseline: `origin/preview` `1bf039fda2ccfd17a992458a871bddd7b48b38c1`；PR 2 branch `codex/async-executor-pr2`
 
@@ -27,6 +27,10 @@ Runtime 路径仍未运行；PR 2 可以提交评审，但不得合入 Preview �
 | 9 | Medium | Wake 合同正确区分 `QUEUED / TURN_STARTED / TURN_COMPLETED / DESKTOP_VISIBLE`；正式版必须保留严格 C/D 独立验收。 |
 | 10 | Medium | `--resume` 的 warning 与 exit 0 不能证明恢复能力；默认 Queue 不应携带 `--resume`。 |
 | 11 | Low | ADR-045 与现有 ADR-002/025/026/027/036/039/043 兼容；未改变公共 MCP 工具面。 |
+| 12 | High | 已修正：legacy MCP Host 与独立 Executor 必须共用生产 Authority、Start Plan auth、动态 model routing、Worker diagnostics 和 Doctor；Executor 不得以简化 composition 成为降级执行路径。 |
+| 13 | High | 已修正：Thin MCP 的四个模型工具和完整 Doctor 经 Executor IPC 代理；控制模式只允许返回 `EXECUTOR_UNAVAILABLE`，不得伪造 `MODEL_SETTINGS_UNAVAILABLE`。 |
+| 14 | High | 已修正：生产 Executor CLI 不接受 `--test-only-fake-adapter` 或任意 `--worker-entry`；测试入口只存在于显式 test harness。 |
+| 15 | Medium | 已修正：开发期延期 `FULL_SUITE` 仍执行直接/域安全测试；CI Integration 使用 `--safe-tests-only`，延期不得显示为完整 PASS。 |
 
 ## PR 2 Evidence Update
 
@@ -54,8 +58,19 @@ Runtime 路径仍未运行；PR 2 可以提交评审，但不得合入 Preview �
 9. `NOT_RUN`：PR 5 必须复用 A 实验作为模型失控负例；未确认 Thread 当前 model/effort/budget 时只允许 Web Notify。
 10. `BLOCKED`：真实 Desktop 关闭后的进程存活和 Result durability 仍需真实 Host E2E；受控 EOF、detached spawn 和 fake Worker 不能替代。
 
-## Non-Blocking Follow-up
+## PR #120 Remediation Record
 
-- 为 Executor 增加 `doctor` 只读诊断，报告 owner、pipe、build provenance、SQLite schema 和 active capacity。
+| 项目 | 状态 | 当前证据 |
+|---|---|---|
+| Production composition parity | `PASS` | `src/host/production-composition.ts` 由 legacy Host 与 Executor 共用；静态合同测试覆盖 Start Plan factory、动态 persisted routing、Worker diagnostics、Doctor 和 model settings |
+| Executor-owned model/Doctor IPC | `PASS` | 模型 list/get/set/clear 与完整 Doctor 经 control server/client；Thin MCP reconnect 后仍读取同一持久默认模型 |
+| Production CLI test-seam rejection | `PASS` | Fake Adapter 与任意 Worker entry 在 Lease 获取前拒绝 |
+| Startup failure rollback | `PASS` | pipe 启动失败仅在 Store idle close 与 exact Lease 证明后释放；Authority 启动失败保留 Lease 并阻止第二 Owner |
+| Development gate | `PASS` | 延期 FULL 运行直接/域安全测试；Integration 安全集合 fail closed，完整 Release Gate 仍延期 |
+| Complete release matrix | `NOT_RUN` | 统一在 Executor PR 2-6 的 Release Candidate 边界执行；历史全量结果不适用于当前工作树 |
+
+## Follow-up
+
+- Executor Doctor IPC 已完成；真实 Host 下 owner/pipe/build provenance 的展示仍随 Desktop 关闭 E2E 验证。
 - 在 Web Console MVP 中优先轮询；SSE 只在实测有明显收益后引入。
 - 把 Token Efficiency 观测与 Async E2E 的模型调用分开记账。

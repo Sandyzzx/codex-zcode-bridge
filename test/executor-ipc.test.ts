@@ -7,6 +7,8 @@ import test from "node:test";
 import { startExecutorControlServer } from "../src/executor/control-server.js";
 import { ExecutorControlClient } from "../src/executor/control-client.js";
 import { encodeExecutorFrame } from "../src/executor/frame.js";
+import { RemoteTaskManager } from "../src/executor/remote-task-manager.js";
+import { TaskManagerError } from "../src/manager/errors.js";
 import type { ProgressTaskManager, TaskPackage, TaskReceipt } from "../src/interfaces.js";
 
 function pipeName(root: string, suffix: string): string {
@@ -31,6 +33,31 @@ function managerWith(): ProgressTaskManager {
   };
 }
 
+function modelSettingsWith() {
+  let current: { provider_id: string; model_id: string; reasoning_level?: string } | null = null;
+  return {
+    async listModels(workspace: string) {
+      return {
+        workspace,
+        current_model: current,
+        models: [{ provider_id: "provider-a", model_id: "model-a", label: "Model A" }],
+        account_provider_sync: "not_needed" as const,
+      };
+    },
+    async getDefaultModel() {
+      return current ? { configured: true as const, model: current } : { configured: false as const, model: null };
+    },
+    async setDefaultModel(selection: { provider_id: string; model_id: string; reasoning_level?: string }) {
+      current = selection;
+      return { configured: true as const, model: selection };
+    },
+    async clearDefaultModel() {
+      current = null;
+      return { configured: false as const, model: null };
+    },
+  };
+}
+
 test("control IPC correlates framed requests and preserves task receipt identity", async () => {
   const root = mkdtempSync(path.join(tmpdir(), "executor-ipc-"));
   const manager = managerWith();
@@ -46,6 +73,78 @@ test("control IPC correlates framed requests and preserves task receipt identity
     }, undefined, "task-1");
     assert.equal(response.ok, true);
     assert.equal(response.result?.task_id, "task-1");
+  } finally {
+    client.close();
+    await server.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("control IPC exposes Executor-owned model settings and doctor", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "executor-ipc-"));
+  const pipe = pipeName(root, "settings");
+  const server = await startExecutorControlServer({
+    pipeName: pipe,
+    manager: managerWith(),
+    modelSettings: modelSettingsWith(),
+    doctor: async () => ({
+      checked_at: "2026-01-01T00:00:00Z",
+      execution_mode: "yolo",
+      checks: [{ name: "active_tasks", status: "ok", summary: "idle" }],
+    }),
+    leaseId: "lease-1",
+  });
+  const client = new ExecutorControlClient({ pipeName: pipe });
+  try {
+    await client.connect();
+    const catalog = await client.request("listModels", { workspace: root });
+    assert.equal(catalog.ok, true);
+    assert.equal(catalog.result?.workspace, root);
+    const set = await client.request("setDefaultModel", {
+      provider_id: "provider-a",
+      model_id: "model-a",
+      reasoning_level: "high",
+    });
+    assert.equal(set.ok, true);
+    assert.deepEqual(set.result?.model, {
+      provider_id: "provider-a",
+      model_id: "model-a",
+      reasoning_level: "high",
+    });
+    const current = await client.request("getDefaultModel", {});
+    assert.equal(current.ok, true);
+    assert.equal(current.result?.configured, true);
+    const clear = await client.request("clearDefaultModel", {});
+    assert.equal(clear.ok, true);
+    assert.equal(clear.result?.configured, false);
+    const doctor = await client.request("doctor", {});
+    assert.equal(doctor.ok, true);
+    assert.equal(doctor.result?.execution_mode, "yolo");
+  } finally {
+    client.close();
+    await server.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("remote task errors preserve lowercase TaskManager contract codes", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "executor-ipc-"));
+  const manager = managerWith();
+  manager.getEvents = async () => {
+    throw Object.assign(new Error("interaction reply outcome is unknown"), {
+      code: "interaction_reply_outcome_unknown",
+    });
+  };
+  const pipe = pipeName(root, "error-code");
+  const server = await startExecutorControlServer({ pipeName: pipe, manager, leaseId: "lease-1" });
+  const client = new ExecutorControlClient({ pipeName: pipe });
+  const remote = new RemoteTaskManager(client);
+  try {
+    await assert.rejects(
+      () => remote.getEvents({ task_id: "task-1" }),
+      (error: unknown) => error instanceof TaskManagerError
+        && error.code === "interaction_reply_outcome_unknown",
+    );
   } finally {
     client.close();
     await server.close();
@@ -236,6 +335,7 @@ test("lease fencing rejects mutations while preserving reads", async () => {
   const server = await startExecutorControlServer({
     pipeName: pipeName(root, "fenced"),
     manager,
+    modelSettings: modelSettingsWith(),
     leaseId: "lease-1",
     executorState: () => state,
   });
@@ -255,6 +355,14 @@ test("lease fencing rejects mutations while preserving reads", async () => {
     assert.equal(health.result?.state, "lease_unknown");
     const read = await client.request("getStatus", { task_id: "task-1" });
     assert.equal(read.ok, true);
+    const modelMutation = await client.request("setDefaultModel", {
+      provider_id: "provider-a",
+      model_id: "model-a",
+    });
+    assert.equal(modelMutation.ok, false);
+    assert.equal(modelMutation.error?.code, "EXECUTOR_LEASE_LOST");
+    const modelRead = await client.request("getDefaultModel", {});
+    assert.equal(modelRead.ok, true);
 
     state = "active";
     const accepted = await client.request("createTask", {

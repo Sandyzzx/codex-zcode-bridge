@@ -10,39 +10,22 @@ import { serveStdio, StdioServerTransport, type StdioServerHandle } from "@model
 import type { Readable, Writable } from "node:stream";
 import { homedir } from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
-import { findPackageRoot, loadPersistedRuntimeEnvironment, NodeRuntimeResolver } from "../runtime/resolver.js";
+import { findPackageRoot, loadPersistedRuntimeEnvironment } from "../runtime/resolver.js";
 import type { SqliteLifecycleMcpAuthority } from "../manager/sqlite-lifecycle-mcp-authority.js";
 import { createBridgeServer } from "../mcp/server.js";
 import { DEFAULT_TASK_TIMEOUT_MS, validateTaskTimeout } from "../runtime/task-timeout.js";
-import { runBridgeDoctor, type DoctorCheck } from "../runtime/doctor.js";
-import { ZCodeModelSettings } from "../runtime/model-settings.js";
+import type { DoctorReport } from "../runtime/doctor.js";
 import { codexHostProfile, validateHostProfile, type BridgeHostProfile } from "./profile.js";
 import { workerEntryPath } from "../manager/spawn-worker.js";
 import { createPlatformProbe } from "../runtime/process-probe.js";
 import { fingerprintRuntimeArtifact } from "../runtime/build-provenance.js";
 import { createTrustedLocalStdioContext } from "../runtime/trusted-local-deployment.js";
 import { SERVER_VERSION } from "../mcp/server.js";
-import { validateFailureFacts } from "../diagnostics/failure-facts.js";
 import {
   loadInstallAuthoritySelection,
   prepareFreshSqliteStateDirectory,
   FRESH_SQLITE_DATABASE_FILE,
 } from "../runtime/sqlite-install-config.js";
-import type {
-  OfficialStartPlanAuthenticationResolver,
-  ProductionAuthIssuer,
-  StartPlanLiveEntitlement,
-} from "../runtime/start-plan-production-auth.js";
-import {
-  createTaskModelRouter,
-  readStartPlanRoutingRegistry,
-  RecordingStartPlanEntitlement,
-  resolvePreferStartPlan,
-  StartPlanEntitlementJournal,
-} from "../runtime/model-routing.js";
-import { BridgeError } from "../runtime/errors.js";
-import { zcodeDataBaseDir } from "../runtime/account-provider.js";
 import {
   acquireExecutorLease,
   assertExecutorLeaseTransition,
@@ -52,7 +35,17 @@ import {
 import { LeaseGuardedTaskManager } from "../executor/lease-guarded-task-manager.js";
 import { ExecutorControlClient } from "../executor/control-client.js";
 import { RemoteTaskManager } from "../executor/remote-task-manager.js";
+import { RemoteModelSettings } from "../executor/remote-model-settings.js";
 import { executorPipeName } from "../executor/service.js";
+import {
+  createProductionAuthorityComposition,
+} from "./production-composition.js";
+
+export {
+  createHostStartPlanIssuer,
+  formatWorkerFailureFactsLine,
+  type HostStartPlanIssuerOptions,
+} from "./production-composition.js";
 
 export interface DataRootResolution {
   readonly dataRoot: string;
@@ -85,68 +78,6 @@ export interface WorkerLimitResolution {
   readonly warning?: string;
 }
 
-export interface HostStartPlanIssuerOptions {
-  readonly env: NodeJS.ProcessEnv;
-  readonly homeDir: string;
-  readonly host: BridgeHostProfile;
-  /** Aborted when the Host shuts down; revokes pending Lease delivery. */
-  readonly signal: AbortSignal;
-  /** Test-only override; production always uses the official Billing endpoint. */
-  readonly entitlement?: StartPlanLiveEntitlement;
-  /** Test-only Host resolver; production loads it from the verified artifact. */
-  readonly authentication?: OfficialStartPlanAuthenticationResolver;
-  /** ADR-031 routing journal fed by every live Billing verdict; advisory
-   * execution-routing facts only, never an authorization cache. */
-  readonly journal?: StartPlanEntitlementJournal;
-}
-
-/** Builds the production Start Plan issuer exactly as `startBridge` wires it.
- * Official credential discovery is read-only; a missing or broken ZCode
- * setup returns null so Bridge startup and Coding Plan are never blocked,
- * and the Start Plan provider simply stays fail-closed per task. */
-export async function createHostStartPlanIssuer(options: HostStartPlanIssuerOptions): Promise<ProductionAuthIssuer | null> {
-  try {
-    const { NodeRuntimeResolver } = await import("../runtime/resolver.js");
-    const config = await new NodeRuntimeResolver({ env: options.env, homeDir: options.homeDir, host: options.host }).resolve();
-    if (!config.zcodeEntrypoint || !config.zcodeDataRoot) return null;
-    const dataBaseDir = zcodeDataBaseDir(config.providerPersonalConfigFile);
-    if (!dataBaseDir) return null;
-    const { createProductionStartPlanAuth, StartPlanBillingEntitlement } = await import("../runtime/start-plan-production-auth.js");
-    const workerModuleUrl = pathToFileURL(workerEntryPath());
-    const {
-      loadOfficialHostProductVersion,
-      loadOfficialStartPlanAuthenticationResolverFactory,
-    } = await import("../adapters/official-host-adapter.js");
-    // Billing's app_version is the official product version embedded by the
-    // fixed Host build. It is not the installed Desktop version or the
-    // independently versioned AppServer CLI (`zcode.cjs --version`).
-    const officialProductVersion = options.entitlement
-      ? undefined
-      : await loadOfficialHostProductVersion(workerModuleUrl);
-    const billingEntitlement = options.entitlement ?? new StartPlanBillingEntitlement({
-      getAppVersion: async () => officialProductVersion,
-    });
-    let authentication = options.authentication;
-    if (!authentication) {
-      // The bundled Bridge lives under dist/, while the verified Official Host
-      // assets ship under worker/. Resolve against the Worker-shaped URL rather
-      // than bridge.mjs so Start Plan uses the same verified artifact as the
-      // Coding Plan execution path.
-      const factory = await loadOfficialStartPlanAuthenticationResolverFactory(
-        workerModuleUrl,
-      );
-      authentication = factory({ dataBaseDir });
-    }
-    return await createProductionStartPlanAuth({
-      authentication,
-      signal: options.signal,
-      entitlement: options.journal ? new RecordingStartPlanEntitlement(billingEntitlement, options.journal) : billingEntitlement,
-    });
-  } catch {
-    return null;
-  }
-}
-
 /** Defaults to eight concurrent workers; invalid values fail safely back to one worker. */
 export function resolveMaxConcurrentWorkers(env: NodeJS.ProcessEnv): WorkerLimitResolution {
   const raw = env["ZCODE_BRIDGE_MAX_CONCURRENT_WORKERS"]?.trim();
@@ -158,22 +89,6 @@ export function resolveMaxConcurrentWorkers(env: NodeJS.ProcessEnv): WorkerLimit
     };
   }
   return { maxConcurrentWorkers: Number(raw) };
-}
-
-/**
- * Validates one Worker stderr line carrying the ADR-011 failure-facts marker.
- * Returns the bounded compact snapshot, or null when the line is not a
- * trusted FailureFactsV1 (wrong marker, malformed JSON, unregistered fields,
- * or over the byte cap enforced by validateFailureFacts).
- */
-export function formatWorkerFailureFactsLine(line: string): string | null {
-  const marker = "[bridge-worker] failure-facts ";
-  if (!line.startsWith(marker)) return null;
-  try {
-    return JSON.stringify(validateFailureFacts(JSON.parse(line.slice(marker.length))));
-  } catch {
-    return null;
-  }
 }
 
 export interface StdioLifecycleHost {
@@ -319,40 +234,21 @@ async function startThinBridge(
   const dataRoot = prepared.dataRoot;
   const client = new ExecutorControlClient({ pipeName: executorPipeName(dataRoot) });
   const taskManager = new RemoteTaskManager(client);
-  const doctor = async (): Promise<{ checked_at: string; execution_mode: string; checks: Array<{ name: string; status: "ok" | "warning" | "error" | "unknown"; summary: string }> }> => {
-    try {
-      await client.connect();
-      const health = await client.request("health", {});
-      if (!health.ok) {
-        return {
-          checked_at: new Date().toISOString(),
-          execution_mode: "control",
-          checks: [{ name: "executor_control", status: "error", summary: health.error?.code ?? "EXECUTOR_REQUEST_FAILED" }],
-        };
-      }
-      return {
-        checked_at: new Date().toISOString(),
-        execution_mode: "control",
-        checks: [{
-          name: "executor_control",
-          status: health.executor_state.state === "active" ? "ok" : "error",
-          summary: `Executor control state: ${health.executor_state.state}`,
-        }],
-      };
-    } catch (error) {
-      const code = error instanceof Error && "code" in error && typeof error.code === "string"
-        ? error.code
-        : "EXECUTOR_UNAVAILABLE";
-      return {
-        checked_at: new Date().toISOString(),
-        execution_mode: "control",
-        checks: [{ name: "executor_control", status: "error", summary: code }],
-      };
+  const modelSettings = new RemoteModelSettings(client);
+  const doctor = async (): Promise<DoctorReport> => {
+    await client.connect();
+    const response = await client.request("doctor", {});
+    if (!response.ok) {
+      const error = new Error(response.error?.message ?? "EXECUTOR_REQUEST_FAILED") as Error & { code?: string };
+      error.code = response.error?.code ?? "EXECUTOR_REQUEST_FAILED";
+      throw error;
     }
+    return response.result as unknown as DoctorReport;
   };
   const server = createBridgeServer({
     taskManager,
     doctor,
+    modelSettings,
     serverInfo: { name: host.name, version },
     instructions: host.instructions,
   });
@@ -458,98 +354,28 @@ export async function startBridge(
     }
   }
 
-  const startPlanAuthAbort = new AbortController();
-  // ADR-031: Start Plan issuer discovery is per-dispatch, so a login,
-  // logout, or account switch after startup is observed by the next task.
-  const modelRoutingJournal = new StartPlanEntitlementJournal();
-  const routeTaskModel = createTaskModelRouter({
-    settings: () => {
-      const persistedEnv = loadPersistedRuntimeEnvironment(process.env, homedir(), host);
-      return {
-        preferStartPlan: resolvePreferStartPlan(persistedEnv),
-        defaultProviderId: persistedEnv["ZCODE_BRIDGE_DEFAULT_PROVIDER_ID"]?.trim() ?? "",
-      };
-    },
-    journal: modelRoutingJournal,
-    registry: async () => {
-      try {
-        const persistedEnv = loadPersistedRuntimeEnvironment(process.env, homedir(), host);
-        const config = await new NodeRuntimeResolver({ env: persistedEnv, homeDir: homedir(), host }).resolve();
-        return readStartPlanRoutingRegistry(config);
-      } catch (error) {
-        // Routing needs the official registry only to resolve provider-less
-        // model selections; explicit provider tasks keep working and the
-        // task preflight still re-validates alias targets.
-        throw new BridgeError("provider_config_invalid",
-          `ZCode runtime configuration could not be resolved for model routing: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    },
-  });
-
-  let manager: SqliteLifecycleMcpAuthority;
-  let lifecycleChecks: () => readonly DoctorCheck[];
   const databasePath = path.join(dataRoot, FRESH_SQLITE_DATABASE_FILE);
-  let trustedLocalContext: ReturnType<typeof createTrustedLocalCandidateContext>;
+  let composition: Awaited<ReturnType<typeof createProductionAuthorityComposition>>;
   try {
-    trustedLocalContext = createTrustedLocalCandidateContext(host);
-    if (trustedLocalContext.status !== "enabled") {
-      throw new Error(`SQLite Authority startup refused: Trusted Local policy is ${trustedLocalContext.status}`);
-    }
-    const lifecycleGate = await import("../store/lifecycle-gate.js");
-    const initialization = await lifecycleGate.initializeFreshInstallSqliteRoot(
-      dataRoot, FRESH_SQLITE_DATABASE_FILE, process.versions.node, processProbe,
-    );
-    const { SqliteLifecycleMcpAuthority } = await import("../manager/sqlite-lifecycle-mcp-authority.js");
-    const authority = await SqliteLifecycleMcpAuthority.create({
-      dataRoot,
-      databaseFileName: FRESH_SQLITE_DATABASE_FILE,
-      managedDataDirectory: true,
-      workerEntryPath: host.workerEntryPath ?? workerEntryPath(),
-      hostProfile: host,
+    composition = await createProductionAuthorityComposition({
+      authorityRoot: dataRoot,
+      host,
       bridgeEntryPath: bridgeEntryPath ?? "",
+      workerEntryPath: host.workerEntryPath ?? workerEntryPath(),
+      env: process.env,
+      homeDir: homedir(),
       processProbe,
-      trustedLocalContext,
-      requireAuthorityReceipt: true,
-      startPlanPrivateAuthFactory: () => createHostStartPlanIssuer({
-        env: process.env,
-        homeDir: homedir(),
-        host,
-        signal: startPlanAuthAbort.signal,
-        journal: modelRoutingJournal,
-      }),
-      routeTaskModel,
-      onWorkerDiagnosticLine: (line) => {
-        const runtime = /^\[bridge-worker\] installed-runtime ([a-zA-Z0-9][a-zA-Z0-9_-]{0,63} [1-9]\d{0,8} [0-9a-f]{64})$/u.exec(line);
-        if (runtime) {
-          console.error(`[bridge] worker installed-runtime ${runtime[1]}`);
-          return;
-        }
-        if (/^\[bridge-worker\] runtime-auth \{[^\r\n]{1,1024}\}$/u.test(line)) {
-          console.error(`[bridge] ${line.slice("[bridge-worker] ".length)}`);
-          return;
-        }
-        const facts = formatWorkerFailureFactsLine(line);
-        // Diagnostic stderr only: this line never enters MCP results, events,
-        // or any persisted surface.
-        if (facts) console.error(`[bridge] worker failure-facts ${facts}`);
-      },
     });
-    manager = authority;
-    lifecycleChecks = () => authority.getDoctorChecks();
   } catch (error) {
-    startPlanAuthAbort.abort();
     console.error(`[bridge] SQLITE_INITIALIZATION_FAILED: ${error instanceof Error ? error.message : String(error)}`);
     throw error;
   }
-  const modelSettings = new ZCodeModelSettings(process.env, {
-    host,
-    workerModuleUrl: pathToFileURL(host.workerEntryPath ?? workerEntryPath()),
-  });
+  const manager = composition.authority;
   const taskManager = new LeaseGuardedTaskManager(manager, () => leaseSafe);
   const server = createBridgeServer({
     taskManager,
-    doctor: () => runBridgeDoctor({ env: runtimeEnv, dataRoot, resolver: { host }, lifecycleChecks }),
-    modelSettings,
+    doctor: composition.doctor,
+    modelSettings: composition.modelSettings,
     serverInfo: { name: host.name, version },
     instructions: host.instructions,
   });
@@ -566,12 +392,12 @@ export async function startBridge(
   };
   const stdioHost = serveStdioLifecycleHost(server, lifecycleManager, {
     onShutdownFailure: (reason, error) => {
-      startPlanAuthAbort.abort();
+      composition.abortAuthentication();
       process.exitCode = 1;
       console.error(`[bridge] ${reason} shutdown retained the lifecycle Root because cleanup was not verified: ${error instanceof Error ? error.message : String(error)}`);
     },
     onShutdownComplete: (reason) => {
-      startPlanAuthAbort.abort();
+      composition.abortAuthentication();
       if (reason !== "EOF") process.exit(0);
     },
   });

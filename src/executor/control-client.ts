@@ -19,7 +19,11 @@ function executorError(code: string): Error & { code: string } {
 }
 
 function submissionUnknownCode(method: ExecutorControlRequest["method"]): string {
-  if (method === "createTask" || method === "continueTask" || method === "replyToInteraction") {
+  if (method === "createTask"
+    || method === "continueTask"
+    || method === "replyToInteraction"
+    || method === "setDefaultModel"
+    || method === "clearDefaultModel") {
     return "SUBMISSION_UNKNOWN";
   }
   if (method === "cancelTask") return "TASK_CANCEL_REQUESTED";

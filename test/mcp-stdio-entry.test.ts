@@ -101,6 +101,33 @@ const PROTOCOL_MESSAGES = [
   }),
 ].join("\n") + "\n";
 
+const CONTROL_PROTOCOL_MESSAGES = [
+  JSON.stringify({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: {
+      protocolVersion: "2025-06-18",
+      capabilities: {},
+      clientInfo: { name: "thin-control-probe", version: "0.0.0" },
+    },
+  }),
+  JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
+  JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" }),
+  JSON.stringify({
+    jsonrpc: "2.0",
+    id: 3,
+    method: "tools/call",
+    params: { name: "zcode_status", arguments: { task_id: "ghost" } },
+  }),
+  JSON.stringify({
+    jsonrpc: "2.0",
+    id: 4,
+    method: "tools/call",
+    params: { name: "zcode_default_model", arguments: {} },
+  }),
+].join("\n") + "\n";
+
 test("compiled stdio entry speaks pure JSON-RPC on stdout and diagnostics on stderr", { timeout: 30_000 }, (t) => {
   if (process.platform !== "win32") return t.skip("Windows-only Fresh SQLite bootstrap");
   const profile = isolatedInstall("source-entry");
@@ -173,7 +200,7 @@ test("thin MCP control transport does not construct a local SQLite Manager", { t
   const dataRoot = path.join(profile.localAppData, "CodexZCodeBridge", "state");
   try {
     const run = spawnSync(process.execPath, [MAIN_JS], {
-      input: PROTOCOL_MESSAGES,
+      input: CONTROL_PROTOCOL_MESSAGES,
       encoding: "utf8",
       env: isolatedEnvironment({ ZCODE_BRIDGE_MCP_TRANSPORT: "control" }, profile),
       timeout: 20_000,
@@ -196,6 +223,13 @@ test("thin MCP control transport does not construct a local SQLite Manager", { t
     } | undefined;
     assert.equal(status?.isError, true);
     assert.equal(status?.structuredContent?.error?.code, "EXECUTOR_UNAVAILABLE");
+    const modelStatus = messages.find((message) => message.id === 4)?.result as {
+      isError?: boolean;
+      structuredContent?: { error?: { code?: string } };
+    } | undefined;
+    assert.equal(modelStatus?.isError, true);
+    assert.equal(modelStatus?.structuredContent?.error?.code, "EXECUTOR_UNAVAILABLE");
+    assert.notEqual(modelStatus?.structuredContent?.error?.code, "MODEL_SETTINGS_UNAVAILABLE");
     assert.match(run.stderr, /Executor control transport enabled/u);
     assert.match(run.stderr, /thin stdio MCP server ready/u);
     assert.doesNotMatch(run.stderr, /SQLITE_READY/u);

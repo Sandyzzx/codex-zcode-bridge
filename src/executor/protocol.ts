@@ -20,6 +20,11 @@ export type ExecutorControlMethod =
   | "getFeedback"
   | "getAttention"
   | "replyToInteraction"
+  | "listModels"
+  | "getDefaultModel"
+  | "setDefaultModel"
+  | "clearDefaultModel"
+  | "doctor"
   | "health";
 
 export interface ExecutorControlRequest {
@@ -57,6 +62,15 @@ export interface ExecutorControlParamsByMethod {
   getFeedback: { readonly task_id: string };
   getAttention: { readonly task_id: string };
   replyToInteraction: { readonly input: ZCodeInteractionReplyInput };
+  listModels: { readonly workspace: string };
+  getDefaultModel: Record<string, never>;
+  setDefaultModel: {
+    readonly provider_id: string;
+    readonly model_id: string;
+    readonly reasoning_level?: string;
+  };
+  clearDefaultModel: Record<string, never>;
+  doctor: Record<string, never>;
   health: Record<string, never>;
 }
 

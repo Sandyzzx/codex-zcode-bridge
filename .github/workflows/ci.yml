@@ -34,6 +34,7 @@ jobs:
     outputs:
       force_full: ${{ steps.select.outputs.force_full }}
       full_required: ${{ steps.select.outputs.full_required }}
+      development_test_count: ${{ steps.select.outputs.development_test_count }}
       integration_required: ${{ steps.select.outputs.integration_required }}
       stress_required: ${{ steps.select.outputs.stress_required }}
       cost_lab_required: ${{ steps.select.outputs.cost_lab_required }}
@@ -119,7 +120,7 @@ jobs:
   integration:
     name: Integration gate (Windows)
     needs: [impact, fast]
-    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false && needs.fast.result == 'success' && needs.impact.outputs.release_required != 'true' && needs.impact.outputs.integration_required == 'true' && needs.impact.outputs.full_required != 'true'
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false && needs.fast.result == 'success' && needs.impact.outputs.release_required != 'true' && needs.impact.outputs.integration_required == 'true'
     runs-on: windows-2022
     timeout-minutes: 25
     steps:
@@ -146,7 +147,7 @@ jobs:
             echo "::error::Integration selection requires a valid base SHA"
             exit 1
           fi
-          npm run test:affected -- --base "$BASE_SHA" --tests-only
+          npm run test:affected -- --base "$BASE_SHA" --safe-tests-only
 
   verify-windows:
     name: Windows Verify shard ${{ matrix.shard }}/2

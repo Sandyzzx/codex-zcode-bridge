@@ -173,6 +173,21 @@ test("runner and shared fixture changes force the complete regression", () => {
   assert.deepEqual(costLab.affected_domains, ["cost-lab"]);
 });
 
+test("development full-suite deferral retains direct and domain affected tests", () => {
+  const executor = selectAffectedTests({ changedFiles: ["src/executor/service.ts"], map, platform: "win32" });
+  assert.equal(executor.mode, "TARGETED");
+  assert.ok(executor.development_tests.some((entry: { file: string }) => entry.file === "test/executor-process.test.ts"));
+
+  const runner = selectAffectedTests({ changedFiles: ["scripts/run-affected-tests.mjs"], map, platform: "win32" });
+  assert.equal(runner.mode, "FULL_SUITE");
+  assert.ok(runner.development_tests.length > 0, "known affected CI domains must keep deterministic tests in development mode");
+  assert.equal(runner.development_tests.some((entry: { stress?: unknown }) => entry.stress !== undefined), false);
+
+  const unknown = selectAffectedTests({ changedFiles: ["src/example/new-domain.ts"], map, platform: "win32" });
+  assert.equal(unknown.mode, "FULL_SUITE");
+  assert.equal(unknown.development_tests.length, 0, "an unclassified source must fail closed rather than report a safe selection");
+});
+
 test("real script consumers map to their executable contract tests", () => {
   const launcher = selectAffectedTests({ changedFiles: filesFor("node-launcher"), map });
   assert.ok(launcher.selected_tests.some((entry) => entry.file === "test/node-runtime.test.ts"));
@@ -301,6 +316,7 @@ test("CI impact gate shadow-compares targeted and full selections with the execu
   assert.equal(full.affected_mode, "FULL_SUITE");
   assert.equal(full.force_full, false);
   assert.equal(full.full_required, true);
+  assert.ok(full.development_test_count > 0);
   assert.equal(full.integration_required, true);
 
   const forced = selectCiImpact({ files: [], map, forceFull: true });
@@ -378,12 +394,14 @@ test("CI separates development checks from the complete release gate", () => {
   assert.match(workflow, /npm run test:affected -- --base "\$BASE_SHA" --development/u);
   assert.match(workflow, /npm run test:affected -- --force-full --development/u);
   assert.match(runner, /FULL_SUITE_DEFERRED_TO_RELEASE_GATE/u);
+  assert.match(runner, /DEVELOPMENT_SAFE_TESTS_PASS/u);
+  assert.match(runner, /--safe-tests-only/u);
   assert.match(workflow, /BASE_SHA: \$\{\{ github\.event\.pull_request\.base\.sha \|\| github\.event\.before \}\}/u);
   assert.match(workflow, /Fast impact selection requires a valid base SHA/u);
   assert.match(
     workflow,
-    /integration:[\s\S]*?needs: \[impact, fast\][\s\S]*?needs\.fast\.result == 'success' && needs\.impact\.outputs\.release_required != 'true' && needs\.impact\.outputs\.integration_required == 'true' && needs\.impact\.outputs\.full_required != 'true'/u,
-    "targeted Windows integration must not duplicate complete release gates or unsafe full selections",
+    /integration:[\s\S]*?needs: \[impact, fast\][\s\S]*?needs\.fast\.result == 'success' && needs\.impact\.outputs\.release_required != 'true' && needs\.impact\.outputs\.integration_required == 'true'/u,
+    "development Windows integration must run safe affected E2E even when the complete suite is deferred",
   );
   assert.match(
     workflow,
@@ -415,7 +433,7 @@ test("CI separates development checks from the complete release gate", () => {
     /cost-lab:[\s\S]*?runs-on: windows-2022[\s\S]*?run: npm run cost-lab:test/u,
     "Cost Lab's official-runtime and Windows path contracts must execute on Windows",
   );
-  assert.match(workflow, /CODEX_BRIDGE_CI_T0_COMPLETED: "1"[\s\S]*?--tests-only/u);
+  assert.match(workflow, /CODEX_BRIDGE_CI_T0_COMPLETED: "1"[\s\S]*?--safe-tests-only/u);
   assert.match(workflow, /concurrency:[\s\S]*?group: ci-\$\{\{ github\.event_name \}\}-\$\{\{ github\.event\.pull_request\.number \|\| github\.ref \}\}[\s\S]*?cancel-in-progress: \$\{\{ github\.event_name == 'pull_request' \}\}/u);
   assert.doesNotMatch(
     workflow,
@@ -492,5 +510,5 @@ test("tests-only execution is fail-closed without CI preflight evidence", () => 
     { encoding: "utf8", env: { ...env, CODEX_BRIDGE_CI_T0_COMPLETED: "1" } },
   );
   assert.notEqual(developmentConflict.status, 0);
-  assert.match(developmentConflict.stderr, /--development and --tests-only are mutually exclusive/u);
+  assert.match(developmentConflict.stderr, /--development cannot be combined with --tests-only or --safe-tests-only/u);
 });

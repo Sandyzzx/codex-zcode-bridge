@@ -10,12 +10,13 @@ import { EXECUTOR_UNLEASED_TRANSITION_ENV } from "./lease.js";
 
 export const EXECUTOR_USAGE = [
   "EXECUTOR_USAGE: node dist/src/executor/main.js --data-root <absolute-path>",
-  "  [--bridge-entry <absolute-path>] [--worker-entry <absolute-path>] [--settings-directory <absolute-path>]",
-  "  [--heartbeat-ms <positive-integer>] [--test-only-fake-adapter]",
+  "  [--bridge-entry <absolute-path>] [--settings-directory <absolute-path>]",
+  "  [--heartbeat-ms <positive-integer>]",
 ].join(" ");
 
-function printUsage(): void {
-  console.error(EXECUTOR_USAGE);
+export interface ExecutorMainOptions {
+  /** Only the dist-test harness may enable synthetic execution flags. */
+  readonly testOnly?: boolean;
 }
 
 function fail(message: string): never {
@@ -30,7 +31,18 @@ function parsePositiveInteger(value: string): number {
   return parsed;
 }
 
-export async function runExecutorMain(argv: readonly string[] = process.argv.slice(2)): Promise<void> {
+function printUsage(testOnly = false): void {
+  console.error(EXECUTOR_USAGE);
+  if (testOnly) {
+    console.error("EXECUTOR_TEST_USAGE: [--worker-entry <absolute-path>] [--test-only-fake-adapter]");
+  }
+}
+
+export async function runExecutorMain(
+  argv: readonly string[] = process.argv.slice(2),
+  options: ExecutorMainOptions = {},
+): Promise<void> {
+  const testOnly = options.testOnly === true;
   const parsed: {
     dataRoot?: string;
     bridgeEntry?: string;
@@ -40,12 +52,13 @@ export async function runExecutorMain(argv: readonly string[] = process.argv.sli
     fake?: true;
   } = {};
   if (argv.includes("--help")) {
-    printUsage();
+    printUsage(testOnly);
     return;
   }
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === "--test-only-fake-adapter") {
+      if (!testOnly) fail(`unknown_argument:${argument}`);
       parsed.fake = true;
       continue;
     }
@@ -53,7 +66,10 @@ export async function runExecutorMain(argv: readonly string[] = process.argv.sli
     if (value === undefined) fail("argument_value_missing");
     if (argument === "--data-root") parsed.dataRoot = value;
     else if (argument === "--bridge-entry") parsed.bridgeEntry = value;
-    else if (argument === "--worker-entry") parsed.workerEntry = value;
+    else if (argument === "--worker-entry") {
+      if (!testOnly) fail(`unknown_argument:${argument}`);
+      parsed.workerEntry = value;
+    }
     else if (argument === "--settings-directory") parsed.settingsDirectory = value;
     else if (argument === "--heartbeat-ms") parsed.heartbeatMs = parsePositiveInteger(value);
     else fail(`unknown_argument:${argument}`);

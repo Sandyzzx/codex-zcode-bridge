@@ -1,6 +1,6 @@
 # Bridge Async Execution Architecture v1
 
-> Status: IMPLEMENTED — PR 2 PARTIAL（feature branch candidate；未合入 Preview，不可发布）
+> Status: IMPLEMENTED — PR 2 REMEDIATION CANDIDATE（feature branch candidate；未合入 Preview，不可发布）
 > Decision status: [ADR-045](../decisions/ADR-045-async-executor-ownership.md) = ACCEPTED；本文档记录目标合同与 PR 2 当前实现边界
 > Date: 2026-11-22（Asia/Shanghai）
 > Baseline: `origin/preview` `1bf039fda2ccfd17a992458a871bddd7b48b38c1`；implementation branch `codex/async-executor-pr2`
@@ -50,8 +50,11 @@ PR 2 candidate 已在独立分支实现并通过合成/确定性证据：Authori
 `executor-lease.json` lifetime lease、精确 PID/start fingerprint 仲裁、Idle-only
 Shutdown、Named Pipe Control Client/Server、`ZCODE_BRIDGE_MCP_TRANSPORT=control`
 Thin MCP、原 Attempt Result/Cleanup/Release 的跨进程 fake Worker E2E，以及
-32 MiB Result IPC 回读。legacy in-process MCP Host 仍是默认路径；`control`
-transport 是显式 feature flag。
+32 MiB Result IPC 回读。legacy in-process MCP Host 与独立 Executor 现在共用
+同一生产 Authority/Start Plan/model-routing/diagnostic composition；Thin MCP
+的模型工具和完整 Doctor 也经 Executor IPC 代理，不再降级为本地占位实现。
+生产 Executor 入口拒绝 Fake Adapter 与任意 Worker entry 测试参数。legacy
+in-process MCP Host 仍是默认路径；`control` transport 是显式 feature flag。
 
 真实 Codex Desktop 关闭后原 Attempt 继续执行、原 Result 提交、Cleanup/Release
 完成尚为 `NOT_RUN / BLOCKED_BY_OWNER_ENVIRONMENT`；未关闭 Owner 当前正在使用的
@@ -197,7 +200,10 @@ ControlResponse { protocol_version, request_id, ok, result | error, executor_sta
 - 每个 frame 有原始 UTF-8 byte 上限。PR 2 Control frame budget 为 33 MiB，
   用于容纳既有 32 MiB canonical Result 和协议 envelope；普通控制消息仍受同一
   上限保护，超限在 Manager dispatch 前 fail closed；
-- 控制方法只覆盖现有 MCP 生命周期操作和只读列表查询；
+- 控制方法只覆盖现有 MCP 生命周期操作、模型设置、Doctor 和只读列表查询；
+- legacy MCP Host 与 Executor 必须调用同一生产 composition；Start Plan
+  private auth、model routing registry、Worker diagnostics 和 Doctor 不得因
+  Authority 宿主变化而降级或分叉；
 - 幂等键复用 Task/Continue 现有规范化身份，不创建第二套幂等语义；
 - 客户端断开只取消该请求等待，不取消 Task；
 - 请求响应丢失返回 `SUBMISSION_UNKNOWN`，调用方必须按原 task/operation id 查询，不得换 id 重派；
@@ -247,12 +253,15 @@ Wake 不新增第二套持久化权威。PR 5 前必须先完成一次 schema �
 |---|---|---|
 | PR 1 | 本文档 + ADR + 接口/测试矩阵 | Owner 批准 |
 | PR 2 | Independent Executor + IPC + Thin MCP | 合成跨进程 Result/Cleanup/Release PASS；真实关闭 Codex 后原 Attempt 仍为 `NOT_RUN / BLOCKED` |
+| PR 2.5 | MCP → Executor → Adapter → ZCode 四层收敛 | 职责与行为兼容；不新增执行路径 |
 | PR 3 | Task CLI + shared Control Client | MCP/CLI 并发读写同一权威 |
 | PR 4 | Web Console | 本地安全、无模型调用、页面关闭不影响 Task |
 | PR 5 | Queue Wake Adapter | 已加载 idle Thread 交付确认；严格 C/D 独立验收 |
-| PR 6 | Full E2E / Preview integration | 五场景矩阵和发布门禁 |
+| PR 6 | Async Master Skill & Dispatch Workflow | Master Turn 结束、通知、恢复与独立验收 |
 
-允许按依赖合并 PR，但每阶段不得扩大到重构生产合同。
+允许按依赖合并 PR，但每阶段不得扩大到重构生产合同。统一 Release Candidate
+在 PR 2-6 功能链完成后集中执行完整本地与 CI 门禁，而不是在每个普通 PR
+更新时重复完整矩阵。
 
 ## 7. 测试矩阵
 
@@ -276,6 +285,9 @@ Wake 不新增第二套持久化权威。PR 5 前必须先完成一次 schema �
 | Executor 异常崩溃 | Recovery 不伪造 Result/Release |
 | IPC frame 超限/畸形 | fail closed，不破坏 Authority |
 | Interaction reply ACK unknown | 不重放，保留待确认 |
+| legacy Host/Executor 生产组装一致性 | Start Plan、动态 routing、Worker diagnostics、Doctor、模型设置同源 |
+| Thin MCP 模型与 Doctor | set/get/clear/list 经 IPC；Doctor 保留完整检查，不返回本地占位 |
+| Executor 启动失败 | pipe/Authority 启动失败按精确 Lease 与 Store close 证明回滚或 fail closed |
 
 ### 7.2 五个生命周期 E2E
 
@@ -323,19 +335,19 @@ Wake 不新增第二套持久化权威。PR 5 前必须先完成一次 schema �
 
 1. 独立 Executor 在真实 Codex Desktop 关闭后的 Windows 进程存活：`NOT_RUN / BLOCKED_BY_OWNER_ENVIRONMENT`；合成进程与 fake Worker 路径已通过。
 2. SDK 强制终止导致原 Worker Result 丢失：VERIFIED；S2 必须先解决 owner，再考虑持久化交接。
-3. Executor IPC 的同用户安全边界在 Windows named pipe 上仍需实现和测试：INFERRED，合同已冻结，实现 UNVERIFIED。
+3. Executor IPC 的同用户安全边界使用 Windows named pipe；确定性单实例/断连/帧边界测试已通过，真实多用户隔离仍未验证。
 4. MCP 等待请求与 Executor 控制请求的生命周期已在 PR 2 candidate 中实现并覆盖 `REQUEST_CANCELLED`、`TASK_CANCEL_REQUESTED`、`SUBMISSION_UNKNOWN`、`EXECUTOR_UNAVAILABLE`；真实 Host 行为仍待 E2E。
 5. Web 列表投影的扫描规模与 Token 输出仍需基准，不得无界读取全部事件。
 6. Queue 只证明 loaded/idle；notLoaded 与 Desktop 全退 UNVERIFIED。Queue Adapter 属于后续 PR 5，不在 PR 2 实现。
 7. A 实验 Sol/xhigh 费用/额度变化不可观察，不估算。
-8. 并行 Token Efficiency 分支尚未合入 Preview；本架构不得预设其结果。
+8. Token Efficiency 架构敏感候选保持冻结；本架构不得预设其结果。
 
-## 10. Owner 待批准事项
+## 10. Owner 批准记录
 
-1. 是否批准独立用户级 Executor、Authority Root lifetime lease 和 Windows named pipe IPC 作为 S2 首版。
-2. 是否批准 MCP/CLI/Web 共用 Executor Control Client，并冻结公共 MCP 工具面不变。
-3. 是否批准 Queue Wake 作为可选阶段 5，且仅支持已授权 loaded/idle Thread。
-4. 是否批准本验收矩阵作为实施和发布门槛。
+1. `ACCEPTED`：独立用户级 Executor、Authority Root lifetime lease 和 Windows named pipe IPC 作为 S2 首版。
+2. `ACCEPTED`：MCP/CLI/Web 共用 Executor Control Client，公共 MCP 工具面保持不变。
+3. `ACCEPTED`：Queue Wake 作为可选阶段 5，且仅支持已授权 loaded/idle Thread；Web Notify 是默认安全回退。
+4. `ACCEPTED`：本验收矩阵作为实施和发布门槛。真实 Desktop 关闭和严格 C/D 分别作为独立门禁。
 
 ## 11. 外部实验证据
 
