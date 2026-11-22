@@ -3,7 +3,7 @@
 > Status: IMPLEMENTED — PARTIAL（Web/real-process targeted acceptance passed；未完成 final Release Gate，未合入 Preview，不可发布）
 > Decision status: [ADR-045](../decisions/ADR-045-async-executor-ownership.md) = ACCEPTED；[ADR-051](../decisions/ADR-051-executor-wake-delivery.md) = ACCEPTED；[ADR-052](../decisions/ADR-052-async-master-handoff.md) = ACCEPTED；本文档记录目标合同与当前实现边界
 > Date: 2026-11-22（Asia/Shanghai）
-> Baseline: `origin/preview` `c941f578ec00834ab0e93f235134d24bf14a827a`；PR #131 integration branch `codex/async-executor-rc-20261122`；C1 evidence candidate `8f83bd340f1d6f31ddac12360583257969bb5863`；historical full-matrix candidate `c75c34330287266702cab5949662bf897b74ed5a`；PR 2 base `f330b511270934fa40014006333aa7747dad684c`
+> Baseline: `origin/preview` `c941f578ec00834ab0e93f235134d24bf14a827a`；PR #131 integration candidate `02a9e81198cffc5b90077eaba00b5abbfd40f640`；earlier C1 evidence candidate `8f83bd340f1d6f31ddac12360583257969bb5863`；historical full-matrix candidate `c75c34330287266702cab5949662bf897b74ed5a`；PR 2 base `f330b511270934fa40014006333aa7747dad684c`
 > Evidence classification: 文中逐项标注 `VERIFIED`、`INFERRED`、`UNVERIFIED`；证据见 [PR 2 report](../reports/async-executor-pr2-20261122.md)、[PR 2.5 report](../reports/async-executor-pr2.5-20261122.md)、[PR 5 report](../reports/async-executor-pr5-20261122.md)、[PR 6 report](../reports/async-executor-pr6-20261122.md)、[统一 RC report](../reports/async-executor-release-candidate-20261122.md) 与 [Web real-process E2E](../reports/async-executor-web-real-host-e2e-20261122.md)
 
 ## 1. 目标与非目标
@@ -50,12 +50,12 @@ ZCode Desktop `3.18.2.10443`、SQLite v14 ONLY。PR 2 branch 不扩大该范围�
 
 历史统一候选 `c75c34330287266702cab5949662bf897b74ed5a` 已通过 Windows
 本地完整回归 1060 项（1058 pass / 0 fail / 2 existing skips）、注册压力矩阵
-4/4、13 个生成物 Freshness 与插件结构校验。PR #131 candidate
-`8f83bd340f1d6f31ddac12360583257969bb5863` 的 Web/real-process 证据随后被安全
-整合到包含终态 Result 行政释放的上游 Preview；Web 修复后通过 92/92 项受影响
-测试与 C1 real-process/synthetic-Worker E2E；旧提交的
-完整回归和 GitHub Release Gate 不能自动代表当前 head。当前结果仍不替代真实
-Desktop 关闭、真实 Official Runtime、严格 Wake C/D 或真实模型 Skill 遵循率。
+4/4、13 个生成物 Freshness 与插件结构校验。PR #131 的 Web/real-process 证据
+已安全整合到包含终态 Result 行政释放的上游 Preview；最终集成候选
+`02a9e81198cffc5b90077eaba00b5abbfd40f640` 重新通过 92/92 项定向测试与
+C1 real-process/synthetic-Worker E2E。旧提交的完整回归和 GitHub Release Gate
+不能自动代表当前 head。当前结果仍不替代真实 Desktop 关闭、真实 Official
+Runtime、严格 Wake C/D 或真实模型 Skill 遵循率。
 
 ### 2.1 PR 2 / PR 2.5 实施边界
 

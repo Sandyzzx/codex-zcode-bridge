@@ -3,7 +3,7 @@
 > Status: AUTHORITATIVE
 > Last updated: 2026-11-22（Preview.12 + terminal-result release + Async Executor Web real-process acceptance）
 > Last verified: 2026-11-22，核对最新 `origin/preview@c941f578ec00834ab0e93f235134d24bf14a827a` 集成、四种终态 Result 的统一行政释放边界、PR #131 Web Console 动态发现与 Deep Link、真实 MCP Host 退出后的 Web/Executor 可观察性、synthetic Worker 的原 Attempt Result/Cleanup/Release，以及 Official Runtime 只读安装检查。真实 Desktop 关闭、严格 Wake C/D、真实 Queue/Turn/Master、真实 Official Runtime 与真实计费仍 `NOT_RUN / BLOCKED`。
-> Verified against: Preview `c941f578ec00834ab0e93f235134d24bf14a827a` + PR #131 `codex/async-executor-rc-20261122`
+> Verified against: Preview `c941f578ec00834ab0e93f235134d24bf14a827a` + PR #131 candidate `02a9e81198cffc5b90077eaba00b5abbfd40f640`
 
 当前发布状态：
 
@@ -20,7 +20,7 @@
 - Preview.12 对超过 8 条历史 Hold 的 Cleanup/Cancel 消解使用完整事件集合的 count/root 承诺，旧 digest 数组继续可校验；既有 v14 的精确旧 Trigger 可只读打开，并在可写打开时事务内精确升级，`user_version` 仍为 14。隔离 Task89 快照已验证第 9 次观察和重复去重，生产 Task89 未取消、未写入。
 - Terminal-admin-release candidate：把 ADR-039 行政释放的终态 Result 范围从已发布 Preview.11 的 `cancelled` 扩展到 `completed`/`failed`/`waiting_for_master`/`cancelled`，并统一使用一个 `zcode_cancel` 用户流程。新释放证据统一绑定原 Result digest/commit、Claim、Worker identity 与 Recovery evidence；旧 `cancelled` 取消证明只作历史读取兼容。该扩展是当前 PR 行为，尚未发布。
 - ZCode Desktop `3.19.0.10774`：仅通过 ADR-042 的 `OFFICIAL_RUNTIME_EXPERIMENTAL` 精确指纹授权完成兼容性探测；不是 Preview.12 的发布支持版本，Coding Plan 倍率仍 `INCONCLUSIVE`，Start Plan 因无 active plan 为 `BLOCKED`。
-- Async Executor PR 2–6：PR #131 保持 open，位于 `codex/async-executor-rc-20261122`，当前集成基线为 `origin/preview@c941f578`。它新增 Authority Root Console 发现/CAS 复用、经 Executor 验证的 `task console-url`、Task Deep Link 和 Result pending 独立显示。真实 MCP Host / Executor / Console / Chromium + synthetic Worker E2E 证明 Host 退出后 Web 与 Executor 继续可用，原 Attempt 的 Result/Cleanup/Release 各一次且无重复 Spawn。该证据不等同真实 Desktop 全退、真实 Wake 或 Official Runtime；历史完整矩阵不能自动继承。
+- Async Executor PR 2–6：PR #131 保持 open，位于 `codex/async-executor-rc-20261122`，当前候选为 `02a9e811`，集成基线为 `origin/preview@c941f578`。它新增 Authority Root Console 发现/CAS 复用、经 Executor 验证的 `task console-url`、Task Deep Link 和 Result pending 独立显示。真实 MCP Host / Executor / Console / Chromium + synthetic Worker E2E 证明 Host 退出后 Web 与 Executor 继续可用，原 Attempt 的 Result/Cleanup/Release 各一次且无重复 Spawn。该证据不等同真实 Desktop 全退、真实 Wake 或 Official Runtime；历史完整矩阵不能自动继承。
 
 ## 当前生产架构
 
@@ -85,7 +85,7 @@ Preview.3 的 Start Plan 历史证据覆盖 Windows、官方 AppServer `0.17.1`�
 | 一般 Desktop Main 独立性 | `NOT_RUN` | 合成路径不证明完整资源与身份闭包 |
 | Preview.7 发布完整回归 | `PASS — CANDIDATE` | PR #96 Windows 完整回归 913 项：911 pass、0 fail、2 skip；Ubuntu 772 项：723 pass、0 fail、49 skip；Typecheck、Build、Plugin Validation、生成物 Freshness 与 `git diff --check` 通过。见 [CI 43720237853](https://github.com/Sandyzzx/codex-zcode-bridge/actions/runs/43720237853)。只覆盖 Windows x64、Node 24.16.0 |
 | Async Executor PR 2–6 历史本地完整回归 | `PASS — HISTORICAL CANDIDATE` | 历史候选 `c75c3433`：1060 tests、1058 pass、0 fail、2 existing skips；注册压力 4/4；生成物 13/13 fresh，插件结构校验通过。见 [统一 RC 证据](reports/async-executor-release-candidate-20261122.md)。该结果不属于当前验收提交 `7f54531a`，也不替代真实 Desktop 关闭或真实 Official Runtime |
-| Async Executor Web/real-process acceptance | `PARTIAL / BLOCKED` | PR #131（整合 `origin/preview@c941f578`）：真实 MCP Host / Executor / Console / Chromium 进程与 synthetic Worker 完成 C1；Host 退出后 Executor/Console 仍 active，原 Attempt Result/Cleanup/Release 各一次、Spawn 一次、新 Host 读回同一 Result。真实 Desktop 全退、严格 C/D、真实 Queue ACK/Turn/Master、Official Runtime 和真实 Skill 遵循率仍 `BLOCKED`。见 [Web real-process E2E](reports/async-executor-web-real-host-e2e-20261122.md) |
+| Async Executor Web/real-process acceptance | `PARTIAL / BLOCKED` | PR #131 candidate `02a9e811`（整合 `origin/preview@c941f578`）：定向主集合 92/92 PASS；真实 MCP Host / Executor / Console / Chromium 进程与 synthetic Worker 完成 C1；Host 退出后 Executor/Console 仍 active，原 Attempt Result/Cleanup/Release 各一次、Spawn 一次、新 Host 读回同一 Result。真实 Desktop 全退、严格 C/D、真实 Queue ACK/Turn/Master、Official Runtime 和真实 Skill 遵循率仍 `BLOCKED`。见 [Web real-process E2E](reports/async-executor-web-real-host-e2e-20261122.md) |
 | Task Console candidate | `PASS — REAL BROWSER + SYNTHETIC WORKER` | 动态发现/CAS 复用、`task console-url`、Deep Link、跨页 summary、Result pending 独立显示、Attention 与 MCP Host 退出后的真实浏览器观察 PASS；不是真实 Desktop 或真实模型证据 |
 | Official Host 启动版本上下文 | `PASS — CANDIDATE` | 有效 Desktop metadata 优先；独立 Host 使用校验后的 `3.18.2` 产品版本且不伪造 Build ID；模型请求仍使用 `--surface desktop`；受控 A/B 两边 `main_turn` 均获真实响应，A/B task contract 因测试 Prompt 保持 `FAIL`，后续正常 Prompt 核心路径通过 |
 | Windows runtime-host helper | `PASS — OFFICIAL_SIGNED_3.18.2` | 从本机 ZCode Desktop `3.18.2.10443` 复制 `zcode-runtime-host.exe`：179,608 bytes、SHA-256 `C2C8FF5FF28CBDDC4F177C094AA67C322830889612251BD173BAAABC89379AB4`、PE `0x8664`、Authenticode Valid、签名主体北京智谱华章科技股份有限公司；现有 Official ProcessManager smoke 通过。Fresh Rebuild 不再是门槛；安装器 helper/fixture 不进入 Bridge BOM |

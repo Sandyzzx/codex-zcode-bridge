@@ -3,7 +3,7 @@
 > Status: RESEARCH
 > Date: 2026-11-22 (Asia/Shanghai)
 > Latest integrated Preview: `origin/preview@c941f578ec00834ab0e93f235134d24bf14a827a`
-> C1 evidence candidate: `8f83bd340f1d6f31ddac12360583257969bb5863`
+> C1 evidence candidate: `02a9e81198cffc5b90077eaba00b5abbfd40f640`
 > Pull request: [#131](https://github.com/Sandyzzx/codex-zcode-bridge/pull/131), open
 > Conclusion: `PARTIAL / BLOCKED`
 > Paid model requests during this acceptance: `0`
@@ -90,20 +90,21 @@ Authority or credentials and made no model request.
 
 | Fact | Result |
 |---|---|
-| Executor process | PASS, PID `5904`, lease `cef5a23e-34d7-43f3-a087-ee8a9aea2a9f` |
-| Web Console process | PASS, PID `25220`, dynamic port `33699` |
-| Shipped MCP Host | PASS, real process PID `14840` |
-| Synthetic Worker | PASS, real process PID `22280` |
-| Task | `web-e2e-1795357005921` |
+| Executor process | PASS, PID `7512`, lease `d54ee862-5417-4ac3-b195-d5a867caa5b3` |
+| Web Console process | PASS, PID `17600`, dynamic port `56904` |
+| Shipped MCP Host | PASS, real process PID `20256` |
+| Synthetic Worker | PASS, real process PID `22864` |
+| Task | `web-e2e-1795359276802` |
 | Initial Task state | `QUEUED`; Attempt `1` |
-| Verified Deep Link | `http://127.0.0.1:33699/?task_id=web-e2e-1795357005921` |
+| Verified Deep Link | `http://127.0.0.1:56904/?task_id=web-e2e-1795359276802` |
 | Browser | headless Chromium; real HTTP page and DOM assertions |
 | Running page | Status/Events visible; Result displayed pending |
+| Completed page | `COMPLETED`; Wake `web_notify`; Hold `not observed`; Result visible |
 | MCP Host exit | observed `SIGTERM` |
 | Executor after Host exit | `ACTIVE`, same lease |
 | Web Console after Host exit | same process alive and browser still `ACTIVE` |
 | Final Task state | `completed`, Attempt `1` |
-| Original Result digest | `584afc01828ea2b597d3d33840b132ce55c8ff95cb78fd83a5daaffdc596fdf0` |
+| Original Result digest | `0d42aa7523692fdd59bec1bc8bcebddf53d5a15c0a5a5c5a17852a8ba2cc5a00` |
 | `result_committed` | exactly `1` |
 | `cleanup_verified` | exactly `1` |
 | `released` | exactly `1` |
@@ -114,13 +115,21 @@ Authority or credentials and made no model request.
 The URL above was live during the test and was verified by
 `task console-url`, `/api/session`, the browser navigation, and the rendered
 page. The test-owned Console and Executor were then shut down. A post-test
-check found none of the four test PIDs and no listener on port `33699`.
+check found none of the four test PIDs and no listener on port `56904`.
 Screenshots preserve the running and completed views:
 
 - `.run/async-executor-web-e2e-20261122/web-running.png`
 - `.run/async-executor-web-e2e-20261122/web-completed.png`
 - `.run/async-executor-web-e2e-20261122/evidence.json`
-- `.run/async-executor-web-e2e-20261122/targeted-final.log`
+- `.run/async-executor-web-e2e-20261122/targeted-current-02a9e811.log`
+- `.run/async-executor-web-e2e-20261122/c1-merged-c941-final.log`
+
+The pre-merge evidence remains preserved separately as
+`evidence-premerge-8f83bd34.json` and the `*-premerge-8f83bd34.png` files. The
+first merged rerun was also preserved as `evidence-merged-c941-initial.json`
+because its screenshot raced one Console polling cycle before Wake became
+visible; the final rerun waits for the rendered `completed + web_notify +
+released` state and is the C1 evidence above.
 
 The Wake fact produced after Release was `web_notify` with reason
 `policy_missing`, `thread_id=null`. It is durable SQLite v14 evidence and the
@@ -205,7 +214,8 @@ Notify.
 
 The branch was first merged with Preview `3daffe476` through merge commit
 `8f83bd340f1d6f31ddac12360583257969bb5863`, then integrated with the latest
-Preview `c941f578` (terminal Result administrative release unification).
+Preview `c941f578` (terminal Result administrative release unification). The
+resulting candidate is `02a9e81198cffc5b90077eaba00b5abbfd40f640`.
 
 The integrated Preview deltas were:
 
@@ -214,8 +224,8 @@ The integrated Preview deltas were:
   `waiting_for_master`, and `cancelled` terminal Results with Result/Claim/
   Worker identity/Recovery evidence binding;
 - the Worker and plugin bundles are rebuilt from the merged source;
-- current Executor, IPC, Thin MCP, Web, Skill, Result Recovery, and architecture
-  tests must be rerun on the merged candidate.
+- the current Executor, IPC, Thin MCP, Web, Skill, Result Recovery, and
+  architecture tests were rerun or bounded as described below.
 
 No upstream Token Efficiency or terminal-Result release implementation was
 overwritten.
@@ -230,7 +240,9 @@ overwritten.
 | `npm run check:generated` | `PASS`, 13 files fresh |
 | `npm run validate:plugin` | `PASS` |
 | `git diff --check` | `PASS` |
-| Affected final targeted set | `92/92 PASS`, 0 fail |
+| Current `02a9e811` primary targeted set | `92/92 PASS`, 0 fail |
+| Merged Result/Cleanup/Recovery composition set | `269/269 non-Skill PASS`; the only failure in the 279-test run was the now-corrected Skill wording contract |
+| Skill contract rerun after wording correction | `10/10 PASS` |
 | C1 real process + real browser + synthetic Worker | `PASS — REAL PROCESS / SYNTHETIC WORKER` |
 | Paid model requests | `0` |
 | Full local Release Gate | `NOT_RUN` at this report revision |
@@ -238,7 +250,12 @@ overwritten.
 
 The 92-test targeted set covers AgentReport parsing, architecture boundaries,
 Executor IPC/lease/process, Wake fail-closed behavior, Thin MCP, Task CLI, Web
-Console discovery / Deep Link / pending Result, and Skill policy.
+Console discovery / Deep Link / pending Result, and Skill policy. The broader
+merged composition run also covered the four terminal Result release states,
+Recovery Hold binding, Cleanup/Release durability, SQLite v14 compatibility,
+and real-adapter Result lifecycle. The Skill wording change did not alter any
+non-Skill test input, so those 269 non-Skill tests were not repeated solely to
+manufacture a second identical long run.
 
 ## Preview Recommendation
 
