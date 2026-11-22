@@ -20,6 +20,7 @@ import type {
 } from "../executor/protocol.js";
 import { executorPipeName } from "../executor/pipe.js";
 import {
+  authorityRootDigest,
   clearExecutorLease,
   EXECUTOR_UNLEASED_TRANSITION_ENV,
   inspectExecutorLease,
@@ -27,6 +28,12 @@ import {
   type ExecutorLeaseRecord,
 } from "../executor/lease.js";
 import { writeExecutorWakePolicy, type ExecutorWakePolicyGrant } from "../executor/wake.js";
+import {
+  fetchTaskConsoleSession,
+  inspectTaskConsoleDiscovery,
+  removeTaskConsoleDiscovery,
+  type TaskConsoleDiscoveryRecord,
+} from "../web/discovery.js";
 import {
   listTasksInputSchema,
   type ListTasksInput,
@@ -50,6 +57,7 @@ export const TASK_CLI_USAGE = [
   "  task result <task_id> [--view summary|full] [--output ABS_PATH]",
   "  task cancel <task_id>",
   "  task reply <task_id> --request-id ID --decision allow|deny|accept|decline [--reason TEXT] [--answer KEY=VALUE]",
+  "  task console-url <task_id> [--no-start] [--timeout-ms 500..60000]",
   "  task wake-authorize <task_id> --attempt N --thread ID --model MODEL --model-provider PROVIDER",
   "      --reasoning-effort minimal|low|medium --expires-in-minutes 1..1440 --confirm-owner",
 ].join("\n");
@@ -84,6 +92,10 @@ export interface TaskCliDependencies {
   readonly writeWakePolicy?: typeof writeExecutorWakePolicy;
   readonly now?: () => number;
   readonly sleep?: (milliseconds: number) => Promise<void>;
+  readonly spawnTaskConsole?: (input: {
+    readonly dataRoot: string;
+    readonly settingsDirectory: string;
+  }) => { readonly pid: number | undefined };
 }
 
 export interface TaskCliIo {
@@ -109,7 +121,7 @@ export async function runTaskCli(
     const pipeName = executorPipeName(dataRoot);
 
     if (command === "task") {
-      return await runTaskCommand(args.slice(1), dataRoot, pipeName, io, dependencies);
+      return await runTaskCommand(args.slice(1), dataRoot, pipeName, bridgeHost.settingsDirectory, io, dependencies);
     }
     if (command === "executor") {
       return await runExecutorCommand(args.slice(1), {
@@ -176,6 +188,7 @@ async function runTaskCommand(
   args: readonly string[],
   dataRoot: string,
   pipeName: string,
+  settingsDirectory: string,
   io: TaskCliIo,
   dependencies: TaskCliDependencies,
 ): Promise<number> {
@@ -202,6 +215,9 @@ async function runTaskCommand(
   }
   if (subcommand === "wake-authorize") {
     return runWakeAuthorize(args.slice(1), dataRoot, pipeName, io, dependencies);
+  }
+  if (subcommand === "console-url") {
+    return runTaskConsoleUrl(args.slice(1), dataRoot, pipeName, settingsDirectory, io, dependencies);
   }
 
   const taskId = args[1];
@@ -388,6 +404,119 @@ async function runWakeAuthorize(
   });
 }
 
+async function runTaskConsoleUrl(
+  args: readonly string[],
+  dataRoot: string,
+  pipeName: string,
+  settingsDirectory: string,
+  io: TaskCliIo,
+  dependencies: TaskCliDependencies,
+): Promise<number> {
+  const taskId = args[0];
+  if (!TASK_ID.test(taskId ?? "")) throw new CliUsageError("console-url requires a valid task_id");
+  const options = parseFlags(
+    args.slice(1),
+    new Set(["--no-start", "--timeout-ms"]),
+    new Set(["--no-start"]),
+  );
+  const timeoutMs = options.single.has("--timeout-ms")
+    ? integer("--timeout-ms", options.single.get("--timeout-ms")!, 500, 60_000)
+    : 5_000;
+  const noStart = options.boolean.has("--no-start");
+  return withClient(dependencies, pipeName, async (client) => {
+    const taskStatus = (await requestOk(client, "getStatus", { task_id: taskId! })).result as {
+      readonly status?: string;
+      readonly attempt?: number;
+    };
+    const executor = (await requestOk(client, "executorStatus", {})).result ?? {};
+    const leaseId = typeof executor.lease_id === "string" ? executor.lease_id : null;
+    if (!leaseId) {
+      throw Object.assign(new Error("Executor lease identity is unavailable"), {
+        code: "EXECUTOR_LEASE_UNKNOWN",
+      });
+    }
+    const probe = createPlatformProbe();
+    let discovery = await inspectTaskConsoleDiscovery(dataRoot, probe);
+    if (discovery.state === "stale_owner" && discovery.record) {
+      removeTaskConsoleDiscovery(dataRoot, discovery.record);
+      discovery = await inspectTaskConsoleDiscovery(dataRoot, probe);
+    }
+    const reused = discovery.state === "active_owner";
+    if (!reused) {
+      if (noStart) {
+        throw Object.assign(new Error("Task Console is not available and --no-start was requested"), {
+          code: "WEB_CONSOLE_UNAVAILABLE",
+        });
+      }
+      const spawned = (dependencies.spawnTaskConsole ?? spawnTaskConsole)({
+        dataRoot,
+        settingsDirectory,
+      });
+      if (!spawned.pid) console.error("zcode-bridge: Task Console process has no PID; discovery verification will still run\n");
+    }
+    const found = await waitForTaskConsole(
+      dataRoot,
+      leaseId,
+      timeoutMs,
+      probe,
+      dependencies.sleep ?? sleep,
+    );
+    const url = `${found.record.url}?task_id=${encodeURIComponent(taskId!)}`;
+    writeJson(io, {
+      task_id: taskId,
+      status: taskStatus.status ?? "unknown",
+      attempt: taskStatus.attempt ?? null,
+      web_url: url,
+      console_id: found.record.console_id,
+      console_pid: found.record.pid,
+      console_reused: reused,
+      executor_lease_id: leaseId,
+      authority_root_digest: authorityRootDigest(dataRoot),
+    });
+    return 0;
+  });
+}
+
+async function waitForTaskConsole(
+  dataRoot: string,
+  leaseId: string,
+  timeoutMs: number,
+  processProbe: ReturnType<typeof createPlatformProbe>,
+  sleep: (milliseconds: number) => Promise<void>,
+): Promise<{ readonly record: TaskConsoleDiscoveryRecord; readonly session: Awaited<ReturnType<typeof fetchTaskConsoleSession>> }> {
+  const deadline = Date.now() + timeoutMs;
+  let lastError: unknown;
+  while (Date.now() <= deadline) {
+    try {
+      const inspection = await inspectTaskConsoleDiscovery(dataRoot, processProbe);
+      if (inspection.state === "active_owner" && inspection.record) {
+        const session = await fetchTaskConsoleSession(inspection.record);
+        if (session.executor.lease_id === leaseId) {
+          return { record: inspection.record, session };
+        }
+        lastError = Object.assign(new Error("Task Console is bound to a different Executor lease"), {
+          code: "WEB_CONSOLE_LEASE_MISMATCH",
+        });
+      } else if (inspection.state === "stale_owner" && inspection.record) {
+        removeTaskConsoleDiscovery(dataRoot, inspection.record);
+      } else if (inspection.state === "owner_unknown") {
+        throw Object.assign(new Error("Task Console owner state is unknown"), {
+          code: "WEB_CONSOLE_OWNER_UNKNOWN",
+        });
+      }
+    } catch (error) {
+      lastError = error;
+    }
+    if (Date.now() + 100 > deadline) break;
+    await sleep(100);
+  }
+  const error = Object.assign(
+    new Error(lastError instanceof Error ? lastError.message : "Task Console did not become discoverable"),
+    { code: "WEB_CONSOLE_UNAVAILABLE", cause: lastError },
+  );
+  throw error;
+}
+
 async function findTask(client: CliControlClient, taskId: string): Promise<TaskListPage["tasks"][number]> {
   let after: string | null = null;
   for (let pageNumber = 0; pageNumber < 100; pageNumber += 1) {
@@ -555,9 +684,32 @@ function spawnExecutor(input: {
   return { pid: child.pid };
 }
 
+function spawnTaskConsole(input: {
+  readonly dataRoot: string;
+  readonly settingsDirectory: string;
+}): { readonly pid: number | undefined } {
+  const child = spawn(process.execPath, [
+    resolveTaskConsoleEntry(),
+    "--data-root", input.dataRoot,
+    "--settings-directory", input.settingsDirectory,
+    "--port", "0",
+  ], {
+    detached: true,
+    windowsHide: true,
+    stdio: "ignore",
+  });
+  child.unref();
+  return { pid: child.pid };
+}
+
 function resolveExecutorEntry(): string {
   const bundled = fileURLToPath(new URL("./executor.mjs", import.meta.url));
   return existsSync(bundled) ? bundled : fileURLToPath(new URL("../executor/main.js", import.meta.url));
+}
+
+function resolveTaskConsoleEntry(): string {
+  const bundled = fileURLToPath(new URL("./web-console.mjs", import.meta.url));
+  return existsSync(bundled) ? bundled : fileURLToPath(new URL("../web/main.js", import.meta.url));
 }
 
 function resolveBridgeEntry(): string {

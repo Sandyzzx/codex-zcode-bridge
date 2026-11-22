@@ -217,11 +217,17 @@ test("deterministic Async Handoff workflow separates scope, handoff, Wake and ac
     "测试",
     "不是",
     "codex queue",
+    "task console-url",
+    "web_url",
+    "真实可访问",
+    "CSRF",
   ]) assert.ok(handoff.includes(phrase), phrase);
   assert.match(handoff, /Turn 结束、Host 断开、MCP Stop[\s\S]*不.*取消/);
   assert.match(handoff, /回执未知[\s\S]*原 `task_id`[\s\S]*不得生成替换 Task ID/);
   assert.match(handoff, /Wake[\s\S]*不是 Master 已恢复[\s\S]*Task 已接收/);
   assert.match(handoff, /Cleanup[\s\S]*Release[\s\S]*Master acceptance/);
+  assert.match(handoff, /`web_url`[\s\S]*不证明[\s\S]*Result/);
+  assert.match(handoff, /Console 不可用[\s\S]*替代/);
 });
 
 const evaluation = JSON.parse(readFileSync(path.resolve("test/fixtures/master-skill-evaluation-20261111.json"), "utf8")) as {

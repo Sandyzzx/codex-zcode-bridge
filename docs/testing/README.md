@@ -60,7 +60,10 @@ PR 4 Web Console 的定向集合增加
 `test/architecture-boundaries.test.ts` 的 Web 边界用例，以及
 `dist/web-console.mjs` 的生成物/Plugin 校验。HTTP smoke 必须在独立 Executor
 Root 上完成 loopback session、Host/Origin/CSRF 和“关闭 Console 后 Executor
-仍 active”验证；不得用页面成功加载替代 Task/Result/Cleanup 验收。
+仍 active”验证；Deep Link/发现专项还必须覆盖实际动态端口、同 Root 二进程
+复用同一 URL、跨页 summary、Result pending 独立显示、注意力投影和发现记录
+CAS 释放。真实浏览器 HTTP 操作属于 Host E2E，不得用页面成功加载替代
+Task/Result/Cleanup 验收。
 
 PR 5 Executor Wake 的定向集合增加：
 

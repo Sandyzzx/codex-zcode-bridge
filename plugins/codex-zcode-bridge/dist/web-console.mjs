@@ -6,7 +6,8 @@ var __export = (target, all) => {
 };
 
 // src/web/main.ts
-import path5 from "node:path";
+import { randomUUID as randomUUID3 } from "node:crypto";
+import path6 from "node:path";
 import process2 from "node:process";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 
@@ -36,6 +37,238 @@ function validateHostProfile(host) {
     throw new Error("host default data root must be absolute");
   }
   return host;
+}
+
+// src/runtime/process-probe.ts
+import { readFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+var PROCESS_IDENTITY_VERSION = 1;
+var DEFAULT_PROBE_TIMEOUT_MS = 5e3;
+var DEFAULT_MAX_CONCURRENT = 2;
+function identityOfFingerprint(pid, fingerprint, precision, now) {
+  return {
+    pid,
+    fingerprint,
+    fingerprint_precision: precision,
+    identity_version: PROCESS_IDENTITY_VERSION,
+    platform: process.platform,
+    captured_at: new Date(now()).toISOString()
+  };
+}
+function verdict(state, reason, now) {
+  return { state, reason_code: reason, observed_at: new Date(now()).toISOString() };
+}
+function failedQuery(reason) {
+  return { ok: false, reason, fingerprints: /* @__PURE__ */ new Map() };
+}
+function windowsPowerShellExecutable() {
+  const systemRoot = Object.entries(process.env).find(([key]) => key.toLowerCase() === "systemroot")?.[1];
+  return systemRoot ? `${systemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe` : "powershell.exe";
+}
+function windowsBatchQuery(pids, timeoutMs, onFailure) {
+  return new Promise((resolve) => {
+    const script = `$ErrorActionPreference = 'Stop'; foreach ($id in @(${pids.join(",")})) { try { $target = [System.Diagnostics.Process]::GetProcessById($id); try { [Console]::Out.WriteLine(("{0}|{1}" -f $id, $target.StartTime.Ticks)) } finally { $target.Dispose() } } catch [System.ArgumentException] { } }; [Console]::Out.WriteLine('bridge_probe_complete_v1')`;
+    const child = spawn(windowsPowerShellExecutable(), ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], {
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+      shell: false
+    });
+    let stdout = "";
+    let settled = false;
+    const fail2 = (reason) => {
+      if (settled) return;
+      try {
+        onFailure?.(reason);
+      } catch {
+      }
+      finish(failedQuery(reason));
+    };
+    const finish = (query) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(query);
+    };
+    const timer = setTimeout(() => {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+      }
+      fail2("timeout");
+    }, timeoutMs);
+    timer.unref();
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    let stderrBytes = 0;
+    child.stderr.on("data", (chunk) => {
+      stderrBytes = Math.min(64e3, stderrBytes + chunk.length);
+    });
+    child.stdout.on("data", (chunk) => {
+      if (stdout.length < 1e6) stdout += chunk;
+    });
+    child.on("error", () => fail2("spawn_error"));
+    child.on("close", (code) => {
+      const map = /* @__PURE__ */ new Map();
+      const lines = stdout.trim().split(/\r?\n/u);
+      if (code !== 0) {
+        fail2("nonzero_exit");
+        return;
+      }
+      if (stderrBytes > 0) {
+        fail2("stderr");
+        return;
+      }
+      if (lines.pop() !== "bridge_probe_complete_v1") {
+        fail2("missing_completion_marker");
+        return;
+      }
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const match = /^(\d+)\|(\d+)$/u.exec(line.trim());
+        if (!match || !pids.includes(Number(match[1])) || map.has(Number(match[1]))) {
+          fail2("malformed_output");
+          return;
+        }
+        map.set(Number(match[1]), match[2]);
+      }
+      finish({ ok: true, reason: "ok", fingerprints: map });
+    });
+  });
+}
+async function darwinQuery(pids, timeoutMs) {
+  return new Promise((resolve) => {
+    const child = spawn("ps", ["-o", "pid=,lstart=", "-p", pids.join(",")], {
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+      shell: false
+    });
+    let stdout = "";
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try {
+        child.kill("SIGKILL");
+      } catch {
+      }
+      resolve(failedQuery("timeout"));
+    }, timeoutMs);
+    timer.unref();
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      if (stdout.length < 1e6) stdout += chunk;
+    });
+    child.on("error", () => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        resolve(failedQuery("spawn_error"));
+      }
+    });
+    child.on("close", () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      const map = /* @__PURE__ */ new Map();
+      for (const line of stdout.split(/\r?\n/u)) {
+        const match = /^\s*(\d+)\s+(.+)$/u.exec(line);
+        if (match) map.set(Number(match[1]), match[2].trim());
+      }
+      resolve({ ok: true, reason: "ok", fingerprints: map });
+    });
+  });
+}
+function createPlatformProbe(options = {}) {
+  const timeoutMs = options.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
+  const maxConcurrent = options.maxConcurrent ?? DEFAULT_MAX_CONCURRENT;
+  const now = options.now ?? Date.now;
+  let chain = Promise.resolve();
+  let inFlight = 0;
+  let waiters = [];
+  const schedule = async (operation) => {
+    if (inFlight >= maxConcurrent) {
+      await new Promise((resolve) => waiters.push(resolve));
+    }
+    inFlight += 1;
+    try {
+      return await operation();
+    } finally {
+      inFlight -= 1;
+      const next = waiters.shift();
+      if (next) next();
+    }
+  };
+  const probe = async (requests) => {
+    if (requests.length === 0) return [];
+    const distinct = [...new Set(requests.map((request) => request.pid).filter((pid) => Number.isInteger(pid) && pid > 0))];
+    const query = await schedule(async () => {
+      if (process.platform === "win32") return windowsBatchQuery(distinct, timeoutMs, options.onWindowsQueryFailure);
+      if (process.platform === "darwin") return darwinQuery(distinct, timeoutMs);
+      if (process.platform === "linux") {
+        const map = /* @__PURE__ */ new Map();
+        for (const pid of distinct) {
+          try {
+            const stat = await readFile(`/proc/${pid}/stat`, "utf8");
+            const afterComm = stat.slice(stat.lastIndexOf(")") + 2);
+            const fields = afterComm.split(" ");
+            const starttime = fields[19];
+            if (starttime) map.set(pid, starttime.trim());
+          } catch (error2) {
+            if (error2.code === "ENOENT") continue;
+            return failedQuery("proc_read_error");
+          }
+        }
+        return { ok: true, reason: "ok", fingerprints: map };
+      }
+      return failedQuery("unsupported_platform");
+    });
+    return requests.map((request) => {
+      if (!Number.isInteger(request.pid) || request.pid <= 0) return verdict("unknown", "invalid_pid", now);
+      if (!query.ok) return verdict("unknown", `query_${query.reason}`, now);
+      const fingerprint = query.fingerprints.get(request.pid);
+      if (fingerprint === void 0) {
+        return verdict("exited", "pid_absent", now);
+      }
+      if (!request.identity || request.identity.fingerprint === null) {
+        return verdict("unknown", "live_pid_no_fingerprint", now);
+      }
+      if (request.identity.fingerprint_precision === "coarse") {
+        return request.identity.fingerprint === fingerprint ? verdict("unknown", "coarse_fingerprint_match", now) : verdict("exited", "pid_reused_coarse", now);
+      }
+      if (request.identity.fingerprint !== fingerprint) {
+        return verdict("exited", "pid_reused", now);
+      }
+      return verdict("alive", "pid_and_fingerprint_match", now);
+    });
+  };
+  const fingerprintOfPid = async (pid) => {
+    const query = await schedule(async () => {
+      if (process.platform === "win32") return windowsBatchQuery([pid], timeoutMs, options.onWindowsQueryFailure);
+      if (process.platform === "darwin") return darwinQuery([pid], timeoutMs);
+      if (process.platform === "linux") {
+        const map = /* @__PURE__ */ new Map();
+        try {
+          const stat = await readFile(`/proc/${pid}/stat`, "utf8");
+          const afterComm = stat.slice(stat.lastIndexOf(")") + 2);
+          const starttime = afterComm.split(" ")[19];
+          if (starttime) map.set(pid, starttime.trim());
+        } catch {
+        }
+        return { ok: true, reason: "ok", fingerprints: map };
+      }
+      return failedQuery("unsupported_platform");
+    });
+    const fingerprint = query.fingerprints.get(pid);
+    if (!query.ok || !fingerprint) return identityOfFingerprint(pid, null, "unknown", now);
+    const precision = process.platform === "darwin" ? "coarse" : "exact";
+    return identityOfFingerprint(pid, fingerprint, precision, now);
+  };
+  return {
+    platform: process.platform,
+    identityOf: fingerprintOfPid,
+    selfIdentity: () => fingerprintOfPid(process.pid),
+    probe
+  };
 }
 
 // src/runtime/sqlite-install-config.ts
@@ -405,10 +638,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path6) {
-  if (!path6)
+function getElementAtPath(obj, path7) {
+  if (!path7)
     return obj;
-  return path6.reduce((acc, key) => acc?.[key], obj);
+  return path7.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -748,11 +981,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path6, issues) {
+function prefixIssues(path7, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path6);
+    iss.path.unshift(path7);
     return iss;
   });
 }
@@ -1198,16 +1431,16 @@ function flattenError(error2, mapper = (issue2) => issue2.message) {
 }
 function formatError(error2, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error3, path6 = []) => {
+  const processError = (error3, path7 = []) => {
     for (const issue2 of error3.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path6, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path7, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path6, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path7, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path6, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path7, ...issue2.path]);
       } else {
-        const fullpath = [...path6, ...issue2.path];
+        const fullpath = [...path7, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -6843,6 +7076,20 @@ function taskErrorCode(error2) {
 function errorMessage(error2) {
   return error2 instanceof Error ? error2.message : String(error2);
 }
+async function findTaskSummary(manager, taskId) {
+  let afterTaskId = null;
+  for (let pageNumber = 0; pageNumber < 100; pageNumber += 1) {
+    const page = await manager.listTasks({
+      limit: 100,
+      ...afterTaskId === null ? {} : { after_task_id: afterTaskId }
+    });
+    const task = page.tasks.find((candidate) => candidate.task_id === taskId);
+    if (task) return task;
+    if (!page.has_more || page.next_task_id === null) return null;
+    afterTaskId = page.next_task_id;
+  }
+  return null;
+}
 function createTaskConsoleServer(options) {
   const state = {
     server: null,
@@ -6894,7 +7141,18 @@ function createTaskConsoleServer(options) {
           executor = { state: "unavailable", reason: errorMessage(error2) };
         }
       }
-      json(response, 200, { ok: true, result: { csrf_token: state.csrfToken, executor } });
+      json(response, 200, {
+        ok: true,
+        result: {
+          csrf_token: state.csrfToken,
+          executor,
+          console: {
+            console_id: options.consoleId ?? null,
+            authority_root_digest: options.authorityRootDigest ?? null,
+            url: state.address?.url ?? null
+          }
+        }
+      });
       return;
     }
     if (url.pathname === "/api/tasks") {
@@ -6903,7 +7161,7 @@ function createTaskConsoleServer(options) {
       json(response, 200, { ok: true, result: await options.manager.listTasks(input) });
       return;
     }
-    const match = /^\/api\/tasks\/([^/]+)(?:\/(status|events|result))?$/u.exec(url.pathname);
+    const match = /^\/api\/tasks\/([^/]+)(?:\/(status|summary|events|result|attention))?$/u.exec(url.pathname);
     if (!match) throw failure2(404, "WEB_NOT_FOUND", "route not found");
     const taskId = decodeTaskId(match[1]);
     const action = match[2] ?? "status";
@@ -6911,9 +7169,23 @@ function createTaskConsoleServer(options) {
       json(response, 200, { ok: true, result: await options.manager.getStatus(taskId) });
       return;
     }
+    if (action === "summary") {
+      if (!options.manager.listTasks) throw failure2(501, "WEB_LIST_UNAVAILABLE", "task listing is unavailable");
+      const summary = await findTaskSummary(options.manager, taskId);
+      if (!summary) throw failure2(404, "TASK_NOT_FOUND", `unknown task: ${taskId}`);
+      json(response, 200, { ok: true, result: summary });
+      return;
+    }
     if (action === "events") {
       const input = parseEventsQuery(url.searchParams, taskId);
       json(response, 200, { ok: true, result: await options.manager.getEvents(input) });
+      return;
+    }
+    if (action === "attention") {
+      if (!options.manager.getAttention) {
+        throw failure2(501, "WEB_ATTENTION_UNAVAILABLE", "attention projection is unavailable");
+      }
+      json(response, 200, { ok: true, result: await options.manager.getAttention(taskId) });
       return;
     }
     const view = url.searchParams.get("view") ?? "summary";
@@ -7098,22 +7370,419 @@ button{cursor:pointer;border:1px solid var(--ink);background:var(--ink);color:va
   <footer class="footer"><span>Loopback only / local account session</span><span>Page close never cancels a task</span></footer>
 </div>
 <script>
-const state={csrf:"",tasks:[],selected:null,detail:null,events:null,result:null};
+const state={csrf:"",tasks:[],selected:null,detail:null,summary:null,events:null,result:null,attention:null,errors:{},executor:null,resultPending:false};
 const byId=id=>document.getElementById(id);
 function setError(message){const e=byId("error");e.textContent=message||"";e.style.display=message?"block":"none";}
 function esc(value){return String(value??"")}
-async function api(path,options={}){const headers={"Accept":"application/json",...(options.body?{"Content-Type":"application/json"}:{})};if(options.csrf)headers["X-ZCode-Bridge-CSRF"]=state.csrf;if(options.origin)headers["Origin"]=options.origin;const response=await fetch(path,{...options,headers:{...headers,...(options.headers||{})}});const body=await response.json().catch(()=>({ok:false,error:{code:"WEB_BAD_RESPONSE",message:"invalid server response"}}));if(!response.ok||!body.ok)throw new Error((body.error&&body.error.code?body.error.code+": ":"")+(body.error&&body.error.message||"request failed"));return body.result??body;}
+function errorMessage(error){return error&&error.message?error.message:String(error)}
+function errorCode(error){return error&&error.code?String(error.code):""}
+function isNotFinished(error){return errorCode(error)==="TASK_NOT_FINISHED"||/TASK_NOT_FINISHED/u.test(errorMessage(error));}
+async function api(path,options={}){
+  const headers={"Accept":"application/json",...(options.body?{"Content-Type":"application/json"}:{})};
+  if(options.csrf)headers["X-ZCode-Bridge-CSRF"]=state.csrf;
+  if(options.origin)headers["Origin"]=options.origin;
+  const response=await fetch(path,{...options,headers:{...headers,...(options.headers||{})}});
+  const body=await response.json().catch(()=>({ok:false,error:{code:"WEB_BAD_RESPONSE",message:"invalid server response"}}));
+  if(!response.ok||!body.ok){
+    const code=body.error&&body.error.code?body.error.code:"WEB_REQUEST_FAILED";
+    const error=new Error((code?code+": ":"")+(body.error&&body.error.message||"request failed"));
+    error.code=code;
+    throw error;
+  }
+  return body.result??body;
+}
 function statusClass(status){return "chip "+String(status||"unknown").replace(/[^a-z_]/g,"")}
-function renderTasks(){const list=byId("task-list");const filter=byId("filter").value.trim().toLowerCase();const status=byId("status-filter").value;const rows=state.tasks.filter(t=>(!status||t.status===status)&&(!filter||(t.task_id+" "+t.objective).toLowerCase().includes(filter)));const wakeRows=rows.filter(t=>t.wake);byId("count-total").textContent=String(rows.length);byId("count-running").textContent=String(rows.filter(t=>t.status==="running").length);byId("count-waiting").textContent=String(rows.filter(t=>t.status==="waiting_for_master").length);byId("count-wake").textContent=String(wakeRows.length);const banner=byId("wake-banner");banner.hidden=wakeRows.length===0;banner.textContent=wakeRows.length===0?"":wakeRows.length+" task"+(wakeRows.length===1?" has":"s have")+" an Executor Wake signal. Open the task and verify its durable event before acceptance.";list.replaceChildren();if(!rows.length){const empty=document.createElement("div");empty.className="empty";empty.textContent="No tasks match this view.";list.append(empty);return;}for(const task of rows){const button=document.createElement("button");button.className="task-row"+(state.selected===task.task_id?" selected":"");button.type="button";button.addEventListener("click",()=>{state.selected=task.task_id;renderTasks();loadDetail(task.task_id);});const left=document.createElement("span");left.style.minWidth="0";const id=document.createElement("span");id.className="task-id";id.textContent=task.task_id;const objective=document.createElement("span");objective.className="task-objective";objective.textContent=task.objective;left.append(id,objective);const badges=document.createElement("span");badges.className="task-badges";const chip=document.createElement("span");chip.className=statusClass(task.status);chip.textContent=task.status;badges.append(chip);if(task.wake){const wake=document.createElement("span");wake.className=statusClass(task.wake.state);wake.textContent="wake: "+task.wake.state;wake.title=task.wake.reason_code+" at "+task.wake.at;badges.append(wake);}button.append(left,badges);list.append(button);}}
+function validTaskId(value){return /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u.test(String(value||""))}
+function taskIdFromLocation(){const value=new URL(location.href).searchParams.get("task_id");return validTaskId(value)?value:null;}
+function setTaskInLocation(id){const url=new URL(location.href);if(id)url.searchParams.set("task_id",id);else url.searchParams.delete("task_id");const next=url.pathname+url.search+url.hash;const current=location.pathname+location.search+location.hash;if(next!==current)history.replaceState(null,"",next);}
+function findTask(id){return state.tasks.find(task=>task.task_id===id)||null;}
+function renderTasks(){
+  const list=byId("task-list");
+  const filter=byId("filter").value.trim().toLowerCase();
+  const status=byId("status-filter").value;
+  const rows=state.tasks.filter(t=>(!status||t.status===status)&&(!filter||(t.task_id+" "+t.objective).toLowerCase().includes(filter)));
+  const wakeRows=rows.filter(t=>t.wake);
+  byId("count-total").textContent=String(rows.length);
+  byId("count-running").textContent=String(rows.filter(t=>t.status==="running").length);
+  byId("count-waiting").textContent=String(rows.filter(t=>t.status==="waiting_for_master").length);
+  byId("count-wake").textContent=String(wakeRows.length);
+  const banner=byId("wake-banner");
+  banner.hidden=wakeRows.length===0;
+  banner.textContent=wakeRows.length===0?"":wakeRows.length+" task"+(wakeRows.length===1?" has":"s have")+" an Executor Wake signal. Open the task and verify its durable event before acceptance.";
+  list.replaceChildren();
+  if(!rows.length){const empty=document.createElement("div");empty.className="empty";empty.textContent="No tasks match this view.";list.append(empty);return;}
+  for(const task of rows){
+    const button=document.createElement("button");
+    button.className="task-row"+(state.selected===task.task_id?" selected":"");
+    button.type="button";
+    button.addEventListener("click",()=>{void selectTask(task.task_id);});
+    const left=document.createElement("span");left.style.minWidth="0";
+    const id=document.createElement("span");id.className="task-id";id.textContent=task.task_id;
+    const objective=document.createElement("span");objective.className="task-objective";objective.textContent=task.objective;
+    left.append(id,objective);
+    const badges=document.createElement("span");badges.className="task-badges";
+    const chip=document.createElement("span");chip.className=statusClass(task.status);chip.textContent=task.status;badges.append(chip);
+    if(task.wake){const wake=document.createElement("span");wake.className=statusClass(task.wake.state);wake.textContent="wake: "+task.wake.state;wake.title=task.wake.reason_code+" at "+task.wake.at;badges.append(wake);}
+    button.append(left,badges);list.append(button);
+  }
+}
 function meta(label,value){const div=document.createElement("div");const l=document.createElement("label");l.textContent=label;const v=document.createElement("strong");v.textContent=esc(value??"--");div.append(l,v);return div;}
-async function loadDetail(id){state.selected=id;state.events=null;state.result=null;const detail=byId("detail");detail.textContent="Loading evidence...";try{const [status,events,result]=await Promise.all([api("/api/tasks/"+encodeURIComponent(id)+"/status"),api("/api/tasks/"+encodeURIComponent(id)+"/events?limit=40&include_attempt=true"),api("/api/tasks/"+encodeURIComponent(id)+"/result?view=summary")]);state.detail=status;state.events=events;state.result=result;renderDetail();}catch(error){setError(error.message);detail.textContent="Evidence unavailable.";}}
-function renderDetail(){const detail=byId("detail");const s=state.detail;if(!s){detail.textContent="Choose a task to inspect its durable evidence.";return;}detail.replaceChildren();const top=document.createElement("div");top.className="detail-title";const wrap=document.createElement("div");const h=document.createElement("h3");h.textContent=s.task_id;const p=document.createElement("p");p.textContent="Attempt "+s.attempt+" / "+s.status;wrap.append(h,p);const chip=document.createElement("span");chip.className=statusClass(s.status);chip.textContent=s.status;top.append(wrap,chip);detail.append(top);const grid=document.createElement("div");grid.className="meta";grid.append(meta("Created",s.created_at),meta("Updated",s.updated_at),meta("Worker PID",s.worker_pid),meta("Session",s.zcode_session_id),meta("Started",s.started_at),meta("Finished",s.finished_at));detail.append(grid);const actions=document.createElement("div");actions.className="actions";const cancel=document.createElement("button");cancel.className="secondary";cancel.type="button";cancel.textContent="Request cancel";cancel.addEventListener("click",()=>mutate("cancel",{}));actions.append(cancel);detail.append(actions);const label=document.createElement("div");label.className="section-label";label.textContent="Latest events";detail.append(label);const pre=document.createElement("pre");pre.className="pre";pre.textContent=JSON.stringify(state.events?.events??[],null,2);detail.append(pre);const resultLabel=document.createElement("div");resultLabel.className="section-label";resultLabel.textContent="Result summary";detail.append(resultLabel);const resultPre=document.createElement("pre");resultPre.className="pre";resultPre.textContent=JSON.stringify(state.result??{},null,2);detail.append(resultPre);if(s.status==="waiting_for_master"){const reply=document.createElement("form");reply.className="reply";reply.innerHTML='<div class="section-label">Interaction reply</div><div class="reply-grid"><input name="request_id" placeholder="request_id" required><select name="decision"><option value="allow">allow</option><option value="deny">deny</option><option value="accept">accept</option><option value="decline">decline</option></select><textarea name="reason" placeholder="reason (optional)"></textarea></div><button type="submit">Send reply</button>';reply.addEventListener("submit",event=>{event.preventDefault();const form=new FormData(reply);mutate("reply",{request_id:String(form.get("request_id")||""),decision:String(form.get("decision")||"allow"),...(String(form.get("reason")||"")?{reason:String(form.get("reason"))}:{})});});detail.append(reply);}const statusLine=document.createElement("div");statusLine.className="status-line";statusLine.id="detail-status";detail.append(statusLine);}
-async function mutate(action,body){const target=state.selected;if(!target)return;setError("");try{await api("/api/tasks/"+encodeURIComponent(target)+"/"+action,{method:"POST",body:JSON.stringify(body),csrf:true,origin:location.origin});byId("detail-status").textContent=action+" accepted; refreshing evidence...";await loadDetail(target);}catch(error){setError(error.message);}}
-async function refresh(){try{const session=await api("/api/session");state.csrf=session.csrf_token;byId("executor-state").textContent=String(session.executor?.state||"unknown").toUpperCase();byId("lease-id").textContent="lease: "+(session.executor?.lease_id||"--");const status=byId("status-filter").value;const page=await api("/api/tasks?limit=100"+(status?"&status="+encodeURIComponent(status):""));state.tasks=page.tasks||[];renderTasks();byId("last-refresh").textContent=new Date().toLocaleTimeString();}catch(error){setError(error.message);}}
-byId("refresh").addEventListener("click",refresh);byId("filter").addEventListener("input",renderTasks);byId("status-filter").addEventListener("change",refresh);refresh();setInterval(refresh,5000);
+function section(detail,label,value,className="pre"){
+  const heading=document.createElement("div");heading.className="section-label";heading.textContent=label;detail.append(heading);
+  const pre=document.createElement("pre");pre.className=className;pre.textContent=value;detail.append(pre);
+}
+async function selectTask(id){
+  if(!validTaskId(id))return;
+  state.selected=id;setTaskInLocation(id);renderTasks();
+  await loadDetail(id);
+}
+let detailGeneration=0;
+async function loadDetail(id){
+  if(!validTaskId(id)){setError("Invalid task_id in URL");return;}
+  const changed=state.selected!==id;
+  state.selected=id;setTaskInLocation(id);
+  if(changed){state.detail=null;state.summary=null;state.events=null;state.result=null;state.attention=null;state.resultPending=false;state.errors={};byId("detail").textContent="Loading evidence...";}
+  const generation=++detailGeneration;
+  const base="/api/tasks/"+encodeURIComponent(id);
+  const [status,summary,events,result,attention]=await Promise.allSettled([
+    api(base+"/status"),
+    api(base+"/summary"),
+    api(base+"/events?limit=40&include_attempt=true"),
+    api(base+"/result?view=summary"),
+    api(base+"/attention")
+  ]);
+  if(generation!==detailGeneration||state.selected!==id)return;
+  state.detail=status.status==="fulfilled"?status.value:null;
+  state.summary=summary.status==="fulfilled"?summary.value:null;
+  state.events=events.status==="fulfilled"?events.value:null;
+  state.attention=attention.status==="fulfilled"?attention.value:null;
+  state.errors={};
+  if(status.status==="rejected")state.errors.status=errorMessage(status.reason);
+  if(summary.status==="rejected"&&errorCode(summary.reason)!=="TASK_NOT_FOUND")state.errors.summary=errorMessage(summary.reason);
+  if(events.status==="rejected")state.errors.events=errorMessage(events.reason);
+  if(attention.status==="rejected"&&errorCode(attention.reason)!=="WEB_ATTENTION_UNAVAILABLE")state.errors.attention=errorMessage(attention.reason);
+  if(result.status==="fulfilled"){
+    state.result=result.value;state.resultPending=false;state.errors.result=null;
+  }else if(isNotFinished(result.reason)){
+    state.result=null;state.resultPending=true;state.errors.result=null;
+  }else{
+    state.result=null;state.resultPending=false;state.errors.result=errorMessage(result.reason);
+  }
+  setError(Object.values(state.errors).filter(Boolean).join(" | "));
+  renderTasks();renderDetail();
+}
+function renderDetail(){
+  const detail=byId("detail");const s=state.detail;
+  if(!s){detail.textContent=state.errors.status?"Status unavailable: "+state.errors.status:"Choose a task to inspect its durable evidence.";return;}
+  detail.replaceChildren();
+  const top=document.createElement("div");top.className="detail-title";
+  const wrap=document.createElement("div");const h=document.createElement("h3");h.textContent=s.task_id;
+  const p=document.createElement("p");p.textContent="Attempt "+s.attempt+" / "+s.status;wrap.append(h,p);
+  const chip=document.createElement("span");chip.className=statusClass(s.status);chip.textContent=s.status;top.append(wrap,chip);detail.append(top);
+  const grid=document.createElement("div");grid.className="meta";
+  grid.append(
+    meta("Executor",state.executor?.state),
+    meta("Task",s.task_id),
+    meta("Attempt",s.attempt),
+    meta("Wake",state.summary?.wake?.state||"not observed"),
+    meta("Hold",s.observation?.cleanup||s.execution_observation?.state||"not observed"),
+    meta("Queue",s.dispatch_blocker?.reason||"ready"),
+    meta("Worker PID",s.worker_pid),
+    meta("Session",s.zcode_session_id),
+    meta("Created",s.created_at),
+    meta("Updated",s.updated_at)
+  );
+  detail.append(grid);
+  const pending=state.attention?.pending_requests||[];
+  if(pending.length){
+    section(detail,"Pending Interaction",JSON.stringify(pending));
+  }else if(state.errors.attention){
+    section(detail,"Pending Interaction","Unavailable: "+state.errors.attention);
+  }else{
+    section(detail,"Pending Interaction","none observed");
+  }
+  const actions=document.createElement("div");actions.className="actions";
+  const cancel=document.createElement("button");cancel.className="secondary";cancel.type="button";cancel.textContent="Request cancel";
+  cancel.disabled=["completed","failed","cancelled"].includes(s.status);
+  cancel.addEventListener("click",()=>{void mutate("cancel",{});});actions.append(cancel);detail.append(actions);
+  if(state.errors.events)section(detail,"Latest events","Unavailable: "+state.errors.events);
+  else section(detail,"Latest events",JSON.stringify(state.events?.events??[],null,2));
+  if(state.resultPending)section(detail,"Result summary","Result pending — task is still running.");
+  else if(state.errors.result)section(detail,"Result summary","Unavailable: "+state.errors.result);
+  else section(detail,"Result summary",state.result?JSON.stringify(state.result,null,2):"Not yet available.");
+  if(s.status==="waiting_for_master"){
+    const reply=document.createElement("form");reply.className="reply";
+    reply.innerHTML='<div class="section-label">Interaction reply</div><div class="reply-grid"><input name="request_id" placeholder="request_id" required><select name="decision"><option value="allow">allow</option><option value="deny">deny</option><option value="accept">accept</option><option value="decline">decline</option></select><textarea name="reason" placeholder="reason (optional)"></textarea></div><button type="submit">Send reply</button>';
+    if(pending.length)reply.querySelector('input[name="request_id"]').value=pending[0];
+    reply.addEventListener("submit",event=>{event.preventDefault();const form=new FormData(reply);void mutate("reply",{request_id:String(form.get("request_id")||""),decision:String(form.get("decision")||"allow"),...(String(form.get("reason")||"")?{reason:String(form.get("reason"))}:{})});});
+    detail.append(reply);
+  }
+  const statusLine=document.createElement("div");statusLine.className="status-line";statusLine.id="detail-status";detail.append(statusLine);
+}
+async function mutate(action,body){
+  const target=state.selected;if(!target)return;setError("");
+  try{await api("/api/tasks/"+encodeURIComponent(target)+"/"+action,{method:"POST",body:JSON.stringify(body),csrf:true,origin:location.origin});byId("detail-status").textContent=action+" accepted; refreshing evidence...";await loadDetail(target);}
+  catch(error){setError(errorMessage(error));}
+}
+let refreshInFlight=false;
+async function refresh(){
+  if(refreshInFlight)return;refreshInFlight=true;
+  try{
+    const session=await api("/api/session");state.csrf=session.csrf_token;state.executor=session.executor||{};
+    byId("executor-state").textContent=String(session.executor?.state||"unknown").toUpperCase();
+    byId("lease-id").textContent="lease: "+(session.executor?.lease_id||"--");
+    const status=byId("status-filter").value;
+    const page=await api("/api/tasks?limit=100"+(status?"&status="+encodeURIComponent(status):""));
+    state.tasks=page.tasks||[];renderTasks();
+    const target=state.selected||taskIdFromLocation();
+    if(target&&validTaskId(target)){state.selected=target;await loadDetail(target);}
+    byId("last-refresh").textContent=new Date().toLocaleTimeString();
+  }catch(error){setError(errorMessage(error));}
+  finally{refreshInFlight=false;}
+}
+byId("refresh").addEventListener("click",()=>{void refresh();});byId("filter").addEventListener("input",renderTasks);byId("status-filter").addEventListener("change",()=>{void refresh();});
+window.addEventListener("popstate",()=>{const id=taskIdFromLocation();if(id)void selectTask(id);else{state.selected=null;state.detail=null;state.resultPending=false;renderTasks();renderDetail();}});
+void refresh();setInterval(()=>{void refresh();},5000);
 </script>
 </body>
 </html>`;
+
+// src/web/discovery.ts
+import { createHash as createHash2 } from "node:crypto";
+import {
+  closeSync,
+  existsSync as existsSync3,
+  lstatSync as lstatSync2,
+  openSync,
+  readFileSync as readFileSync3,
+  unlinkSync,
+  writeSync
+} from "node:fs";
+import path5 from "node:path";
+var TASK_CONSOLE_DISCOVERY_FILE = "task-console.json";
+var TASK_CONSOLE_PROTOCOL_VERSION = 1;
+var DISCOVERY_LIMIT_BYTES = 16 * 1024;
+var TASK_CONSOLE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
+var SHA256 = /^[0-9a-f]{64}$/u;
+var TaskConsoleDiscoveryError = class extends Error {
+  constructor(code, message = code) {
+    super(message);
+    this.code = code;
+    this.name = "TaskConsoleDiscoveryError";
+  }
+  code;
+};
+function canonicalJson(value) {
+  return JSON.stringify(sortObject(value)) ?? "null";
+}
+function sortObject(value) {
+  if (Array.isArray(value)) return value.map(sortObject);
+  if (value === null || typeof value !== "object" || value instanceof Date) return value;
+  if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) return value;
+  return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0).map(([key, item]) => [key, sortObject(item)]));
+}
+function recordDigest(record2) {
+  return createHash2("sha256").update(canonicalJson(record2), "utf8").digest("hex");
+}
+function discoveryRoot(dataRoot) {
+  let root;
+  try {
+    root = path5.resolve(dataRoot);
+    const stat = lstatSync2(root);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("not_plain_directory");
+  } catch {
+    throw new TaskConsoleDiscoveryError("WEB_CONSOLE_ROOT_UNSAFE");
+  }
+  return root;
+}
+function validatedEndpoint(originValue, urlValue, port) {
+  let origin;
+  let url;
+  try {
+    origin = new URL(originValue);
+    url = new URL(urlValue);
+  } catch {
+    throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
+  }
+  if (origin.origin !== originValue || origin.protocol !== "http:" || origin.hostname !== "127.0.0.1" || origin.port !== String(port) || url.origin !== originValue || url.pathname !== "/" || url.search !== "" || url.hash !== "" || !Number.isSafeInteger(port) || port < 1 || port > 65535) {
+    throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
+  }
+}
+function taskConsoleDiscoveryPath(dataRoot) {
+  return path5.join(discoveryRoot(dataRoot), TASK_CONSOLE_DISCOVERY_FILE);
+}
+function parseRecord(value) {
+  let parsed;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
+  }
+  const record2 = parsed;
+  if (record2.protocol_version !== TASK_CONSOLE_PROTOCOL_VERSION || typeof record2.console_id !== "string" || !TASK_CONSOLE_ID.test(record2.console_id) || typeof record2.authority_root_digest !== "string" || !SHA256.test(record2.authority_root_digest) || !Number.isSafeInteger(record2.pid) || record2.pid < 1 || record2.start_fingerprint !== null && typeof record2.start_fingerprint !== "string" || !["exact", "coarse", "unknown"].includes(record2.fingerprint_precision ?? "") || record2.identity_version !== PROCESS_IDENTITY_VERSION || typeof record2.platform !== "string" || typeof record2.captured_at !== "string" || typeof record2.origin !== "string" || typeof record2.url !== "string" || !Number.isSafeInteger(record2.port) || record2.port < 1 || record2.port > 65535 || typeof record2.started_at !== "string" || typeof record2.record_digest !== "string" || !SHA256.test(record2.record_digest)) {
+    throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
+  }
+  let origin;
+  let url;
+  try {
+    origin = new URL(record2.origin);
+    url = new URL(record2.url);
+  } catch {
+    throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
+  }
+  if (origin.origin !== record2.origin || origin.protocol !== "http:" || origin.hostname !== "127.0.0.1" || origin.port !== String(record2.port) || url.origin !== record2.origin || url.pathname !== "/" || url.search !== "" || url.hash !== "") {
+    throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
+  }
+  const { record_digest: recordedDigest, ...body } = record2;
+  if (recordDigest(body) !== recordedDigest) {
+    throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
+  }
+  return { ...body, record_digest: recordedDigest };
+}
+function readTaskConsoleDiscovery(dataRoot) {
+  const file = taskConsoleDiscoveryPath(dataRoot);
+  if (!existsSync3(file)) return null;
+  try {
+    const stat = lstatSync2(file);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > DISCOVERY_LIMIT_BYTES) {
+      throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
+    }
+    const record2 = parseRecord(readFileSync3(file, "utf8"));
+    if (record2.authority_root_digest !== authorityRootDigest(dataRoot)) {
+      throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
+    }
+    return record2;
+  } catch (error2) {
+    if (error2 instanceof TaskConsoleDiscoveryError) throw error2;
+    throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
+  }
+}
+async function publishTaskConsoleDiscovery(input) {
+  const root = discoveryRoot(input.dataRoot);
+  if (!TASK_CONSOLE_ID.test(input.consoleId)) throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
+  validatedEndpoint(input.origin, input.url, input.port);
+  const identity = await (input.processProbe ?? createPlatformProbe()).selfIdentity();
+  const body = {
+    protocol_version: TASK_CONSOLE_PROTOCOL_VERSION,
+    console_id: input.consoleId,
+    authority_root_digest: authorityRootDigest(root),
+    pid: identity.pid,
+    start_fingerprint: identity.fingerprint,
+    fingerprint_precision: identity.fingerprint_precision,
+    identity_version: identity.identity_version,
+    platform: identity.platform,
+    captured_at: identity.captured_at,
+    origin: input.origin,
+    url: input.url,
+    port: input.port,
+    started_at: input.startedAt ?? (/* @__PURE__ */ new Date()).toISOString()
+  };
+  const record2 = { ...body, record_digest: recordDigest(body) };
+  const file = path5.join(root, TASK_CONSOLE_DISCOVERY_FILE);
+  let fd;
+  let created = false;
+  try {
+    fd = openSync(file, "wx", 384);
+    created = true;
+    writeSync(fd, canonicalJson(record2), void 0, "utf8");
+    closeSync(fd);
+    fd = void 0;
+    if (readTaskConsoleDiscovery(root)?.record_digest !== record2.record_digest) {
+      throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
+    }
+  } catch (error2) {
+    if (fd !== void 0) {
+      try {
+        closeSync(fd);
+      } catch {
+      }
+      fd = void 0;
+    }
+    if (error2.code === "EEXIST") {
+      throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_EXISTS");
+    }
+    if (created) {
+      try {
+        unlinkSync(file);
+      } catch {
+      }
+    }
+    throw error2;
+  } finally {
+    if (fd !== void 0) {
+      try {
+        closeSync(fd);
+      } catch {
+      }
+    }
+  }
+  return record2;
+}
+function identityFromRecord(record2) {
+  return {
+    pid: record2.pid,
+    fingerprint: record2.start_fingerprint,
+    fingerprint_precision: record2.fingerprint_precision,
+    identity_version: PROCESS_IDENTITY_VERSION,
+    platform: record2.platform,
+    captured_at: record2.captured_at
+  };
+}
+async function inspectTaskConsoleDiscovery(dataRoot, processProbe = createPlatformProbe()) {
+  let record2;
+  try {
+    record2 = readTaskConsoleDiscovery(dataRoot);
+  } catch (error2) {
+    if (error2 instanceof TaskConsoleDiscoveryError && error2.code === "WEB_CONSOLE_DISCOVERY_INVALID") {
+      throw error2;
+    }
+    throw error2;
+  }
+  if (record2 === null) return { state: "absent" };
+  const [verdict2] = await processProbe.probe([{
+    pid: record2.pid,
+    identity: identityFromRecord(record2)
+  }]);
+  if (!verdict2 || verdict2.state === "unknown") return { state: "owner_unknown", record: record2 };
+  if (verdict2.state === "exited") return { state: "stale_owner", record: record2 };
+  return { state: "active_owner", record: record2 };
+}
+function removeTaskConsoleDiscovery(dataRoot, expected) {
+  const current = readTaskConsoleDiscovery(dataRoot);
+  if (current === null) return;
+  if (current.console_id !== expected.console_id || current.record_digest !== expected.record_digest) {
+    throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_CHANGED");
+  }
+  try {
+    unlinkSync(taskConsoleDiscoveryPath(dataRoot));
+  } catch (error2) {
+    if (error2.code !== "ENOENT") throw error2;
+  }
+}
+async function fetchTaskConsoleSession(record2, timeoutMs = 2e3) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(new URL("/api/session", record2.url), {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      signal: controller.signal
+    });
+    const body = await response.json().catch(() => null);
+    if (!response.ok || body?.ok !== true || !body.result || body.result.console?.console_id !== record2.console_id || body.result.console?.authority_root_digest !== record2.authority_root_digest || body.result.console?.url !== record2.url) {
+      throw new TaskConsoleDiscoveryError("WEB_CONSOLE_SESSION_INVALID");
+    }
+    return body.result;
+  } catch (error2) {
+    if (error2 instanceof TaskConsoleDiscoveryError) throw error2;
+    throw new TaskConsoleDiscoveryError("WEB_CONSOLE_OWNER_UNRESPONSIVE");
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 // src/web/main.ts
 var WEB_CONSOLE_USAGE = [
@@ -7132,12 +7801,12 @@ function parseArguments(argv, host) {
     const argument = argv[index];
     const value = argv[index + 1];
     if (argument === "--data-root") {
-      if (!value || !path5.isAbsolute(value)) fail("data_root_absolute_required");
-      dataRoot = path5.normalize(value);
+      if (!value || !path6.isAbsolute(value)) fail("data_root_absolute_required");
+      dataRoot = path6.normalize(value);
       index += 1;
     } else if (argument === "--settings-directory") {
-      if (!value || !path5.isAbsolute(value)) fail("settings_directory_absolute_required");
-      settingsDirectory = path5.normalize(value);
+      if (!value || !path6.isAbsolute(value)) fail("settings_directory_absolute_required");
+      settingsDirectory = path6.normalize(value);
       index += 1;
     } else if (argument === "--port") {
       if (!value || !/^\d+$/u.test(value)) fail("port_invalid");
@@ -7163,8 +7832,16 @@ async function runTaskConsoleMain(argv = process2.argv.slice(2)) {
   const options = parseArguments(argv, host);
   const client = new ExecutorControlClient({ pipeName: executorPipeName(options.dataRoot) });
   let consoleServer;
+  let ownDiscovery;
   try {
     await client.connect();
+    const executorResponse = await client.request("executorStatus", {});
+    if (!executorResponse.ok || typeof executorResponse.result?.lease_id !== "string") {
+      throw Object.assign(new Error("Task Console requires an active Executor lease"), {
+        code: "EXECUTOR_UNAVAILABLE"
+      });
+    }
+    const consoleId = randomUUID3();
     const manager = new RemoteTaskManager(client);
     consoleServer = createTaskConsoleServer({
       manager,
@@ -7175,10 +7852,63 @@ async function runTaskConsoleMain(argv = process2.argv.slice(2)) {
         });
         return response.result ?? {};
       },
-      port: options.port
+      port: options.port,
+      consoleId,
+      authorityRootDigest: authorityRootDigest(options.dataRoot)
     });
     const address = await consoleServer.start();
-    console.log(`TASK_CONSOLE_READY ${JSON.stringify(address)}`);
+    const processProbe = createPlatformProbe();
+    try {
+      ownDiscovery = await publishTaskConsoleDiscovery({
+        dataRoot: options.dataRoot,
+        consoleId,
+        origin: address.origin,
+        url: address.url,
+        port: address.port,
+        processProbe
+      });
+    } catch (error2) {
+      if (!(error2 instanceof TaskConsoleDiscoveryError) || error2.code !== "WEB_CONSOLE_DISCOVERY_EXISTS") {
+        throw error2;
+      }
+      const existing = await inspectTaskConsoleDiscovery(options.dataRoot, processProbe);
+      if (existing.state === "stale_owner" && existing.record) {
+        removeTaskConsoleDiscovery(options.dataRoot, existing.record);
+        ownDiscovery = await publishTaskConsoleDiscovery({
+          dataRoot: options.dataRoot,
+          consoleId,
+          origin: address.origin,
+          url: address.url,
+          port: address.port,
+          processProbe
+        });
+      } else if (existing.state === "active_owner" && existing.record) {
+        const session = await fetchTaskConsoleSession(existing.record);
+        if (session.executor.lease_id !== executorResponse.result.lease_id) {
+          throw new TaskConsoleDiscoveryError(
+            "WEB_CONSOLE_DISCOVERY_CHANGED",
+            "Task Console discovery is bound to a different Executor lease"
+          );
+        }
+        console.log(`TASK_CONSOLE_READY ${JSON.stringify({
+          ...existing.record,
+          executor: session.executor,
+          reused: true
+        })}`);
+        return;
+      } else {
+        throw new TaskConsoleDiscoveryError(
+          existing.state === "owner_unknown" ? "WEB_CONSOLE_OWNER_UNRESPONSIVE" : "WEB_CONSOLE_DISCOVERY_INVALID",
+          "Task Console discovery already has an owner that cannot be safely reused"
+        );
+      }
+    }
+    console.log(`TASK_CONSOLE_READY ${JSON.stringify({
+      ...address,
+      console_id: ownDiscovery.console_id,
+      pid: ownDiscovery.pid,
+      reused: false
+    })}`);
     await new Promise((resolve) => {
       const stop = () => {
         process2.off("SIGINT", stop);
@@ -7189,11 +7919,23 @@ async function runTaskConsoleMain(argv = process2.argv.slice(2)) {
       process2.on("SIGTERM", stop);
     });
   } finally {
-    await consoleServer?.close();
-    client.close();
+    try {
+      await consoleServer?.close();
+      if (ownDiscovery) {
+        try {
+          removeTaskConsoleDiscovery(options.dataRoot, ownDiscovery);
+        } catch (error2) {
+          if (!(error2 instanceof TaskConsoleDiscoveryError) || error2.code !== "WEB_CONSOLE_DISCOVERY_CHANGED") {
+            console.error(`TASK_CONSOLE_DISCOVERY_RELEASE_UNKNOWN ${error2 instanceof Error ? error2.message : String(error2)}`);
+          }
+        }
+      }
+    } finally {
+      client.close();
+    }
   }
 }
-if (process2.argv[1] && path5.resolve(process2.argv[1]) === path5.resolve(fileURLToPath3(import.meta.url))) {
+if (process2.argv[1] && path6.resolve(process2.argv[1]) === path6.resolve(fileURLToPath3(import.meta.url))) {
   void runTaskConsoleMain().catch((error2) => {
     fail(error2 instanceof Error ? error2.message : String(error2));
   });

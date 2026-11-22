@@ -172,9 +172,28 @@ Named pipe 仍可作为客户端连接提示，但**不是所有权证据**。SQ
 |---|---|---|
 | MCP | 派发、查询、Continue、Cancel、交互回复的协议适配 | 不创建 Manager，不因连接断开取消 Task |
 | CLI | `list/status/events/result/cancel/reply/wake-authorize` 管理客户端，以及 `executor start/status/stop` | 不直接打开可写 Store，不实现恢复；`wake-authorize` 只写精确 Owner policy |
-| Web | 本地任务可视化、取消、交互回复、状态通知；仅 loopback + Origin/CSRF | 不创建 Task、不调用模型、不写 SQLite、不暴露 Shell/SQLite/文件接口、不控制 Executor 生命周期 |
+| Web | 本地任务可视化、Deep Link、状态通知；经干净发现记录复用同一 Console；仅 loopback + Origin/CSRF | 不创建 Task、不调用模型、不写 SQLite、不暴露 Shell/SQLite/文件接口、不控制 Executor 生命周期 |
 
 公共 MCP 工具名和 Schema 保持不变；IPC 是 Bridge 内部协议，不新增公共 MCP 工具。
+
+#### 3.2.1 Task Console 发现与 Deep Link
+
+每个 Authority Root 至多有一个活动 Task Console。Console 使用动态 loopback
+端口启动，并在 Root 内写入非秘密 `task-console.json` 作为发现元数据；该文件
+绑定 Console PID/start fingerprint、Authority digest、实际 URL/port 和记录
+digest，不是第二套 Task/Result/Wake 数据库。第二个 Console 若发现安全存活的
+同 Root Owner，只复用其 URL；若 Owner 未知、URL/session 不匹配或绑定不同
+Executor lease，则 fail closed。发现记录以跨进程排除创建和 CAS 删除维护。
+
+Task CLI 的 `task console-url <task_id>` 只在 Executor 可连接、Task 可读、
+Console `/api/session` 与当前 Executor lease 一致时返回实际
+`http://127.0.0.1:<actual-port>/?task_id=<task-id>`；不能取得时返回错误，
+不输出猜测地址。页面按 `task_id` 自动选择，手动选择更新 URL，刷新保留选择，
+并对第一页之外的任务通过有界 `/summary` 读取。
+
+Task Status、Events、Result 和 Attention 独立读取。Result 尚未提交时，
+`TASK_NOT_FINISHED` 只显示 pending；其他真实错误仍可见。页面轮询只刷新本地
+Adapter，不取消 Task，也不构造新的通知权威。
 
 ### 3.3 Async Master Handoff
 
@@ -315,7 +334,7 @@ Recovery；真实 Desktop UI acknowledgement 仍是 `UNKNOWN`。
 | PR 2 | Independent Executor + IPC + Thin MCP | 合成跨进程 Result/Cleanup/Release PASS；真实关闭 Codex 后原 Attempt 仍为 `NOT_RUN / BLOCKED` |
 | PR 2.5 | MCP → Executor → Adapter → ZCode 四层收敛 | Thin MCP 不再构造 Authority；静态依赖边界、MCP schema parity、Executor IPC 与四层 fake Official Runtime E2E PASS；不新增执行路径 |
 | PR 3 | Task CLI + shared Control Client | MCP/CLI 并发读写同一权威；CLI 分发不拥有 SQLite/Manager |
-| PR 4 | Web Console | 已实现 loopback/Origin/CSRF、只读 Task/Event/Result、显式 Cancel/Reply；无模型调用、页面关闭不影响独立 Executor |
+| PR 4 | Web Console | 已实现 loopback/Origin/CSRF、只读 Task/Event/Result/Attention、显式 Cancel/Reply、Root 级发现与 Deep Link；无模型调用、页面关闭不影响独立 Executor |
 | PR 5 | Queue Wake Adapter | 已实现 loaded/idle exact-config 一次性 Queue + Web Notify fallback；严格 C/D 独立验收 |
 | PR 6 | Async Master Skill & Dispatch Workflow | 已实现可靠受理后 Turn 结束/停止轮询、未知回执原 ID 对账、Wake 身份核对与独立验收；真实模型遵循率和真实 Host Wake `NOT_RUN / BLOCKED` |
 
@@ -353,6 +372,9 @@ Recovery；真实 Desktop UI acknowledgement 仍是 `UNKNOWN`。
 | Task CLI bounded list/Result | Cursor/limit 与 Result stdout 文件预算生效，不直接打开 SQLite |
 | Web Console 本地边界 | 非 loopback/Host/Origin/CSRF 请求拒绝；完整 Result 超过 2 MiB 不截断 |
 | Web Console 生命周期 | 页面/HTTP 关闭不改 Task 或 Executor Lease；只关闭可视化 Adapter |
+| Web Console 发现 | 同 Authority Root 二进程复用同一实际 URL；异常/未知/lease mismatch fail closed；发现文件不是 Task/Result Authority |
+| Web Task Deep Link | `task_id` 自动选择、URL 同步、刷新保留、跨页 summary 可取、URL 不含 CSRF/凭据 |
+| Web 未完成 Result | Status/Events 独立显示；`TASK_NOT_FINISHED` 只显示 pending，不掩盖其他有效证据 |
 | Wake 授权入口 | 当前 Attempt 校验后排他创建 `wake-policy.json`；已有策略不覆盖 |
 | Web Notify 可发现性 | CLI/Web 从现有 SQLite `executor_wake` Event 投影 state/reason/at，不新增通知权威 |
 | Async Handoff 决策合同 | 授权、Scope、Mechanism、受理、未知回执、Pending、Turn end、Wake 与验收分别判定 |

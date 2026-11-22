@@ -35,12 +35,17 @@ Authority、Thread、模型/effort 或预算确认时自行执行 `codex queue`�
 1. 完成 Ready Gate 后提交原 `task_id`。
 2. 核对回执属于该 Task，并做一次有界启动检查，记录可核实的 Task、Attempt、
    Authority Root、Codex Thread、接入方式和当前执行事实。
-3. 向用户简洁报告：目标、Task Scope、Handoff Mechanism、`task_id`、已知
-   Attempt/路径、受理状态，以及 Result 将经 Queue 或 Web Notify 返回。
-   未观察到的字段省略或写 `UNKNOWN`，不复制 Prompt、完整日志或凭据。
-4. 结束时给出当前 Turn 的最终答复。不要继续 `wait_for`、Thin Waiter、空闲轮询
+3. 若 Task Console 可用，取得经 `task console-url`/Executor 验证的原
+   `task_id` 当前链接；只报告真实可访问的 `web_url`，不得拼接、猜测或伪造
+   地址。链接只携带 `task_id`，不得包含 CSRF 或凭据；Console 不可用时报告
+   原因和安全的状态查询替代方式。
+4. 向用户简洁报告：目标、Task Scope、Handoff Mechanism、`task_id`、已知
+   Attempt/路径、受理状态、可验证的 Task Console 链接，以及 Result 将经
+   Queue 或 Web Notify 返回。未观察到的字段省略或写 `UNKNOWN`，不复制
+   Prompt、完整日志或凭据。
+5. 结束时给出当前 Turn 的最终答复。不要继续 `wait_for`、Thin Waiter、空闲轮询
    或为保持连接而阻塞。
-5. Turn 结束、Host 断开、MCP Stop 或工具调用超时都不等于 Task 取消。不得因此
+6. Turn 结束、Host 断开、MCP Stop 或工具调用超时都不等于 Task 取消。不得因此
    调用 `zcode_cancel`；只有用户明确授权具体取消时才走原取消合同。
 
 ## 回执未知
@@ -72,6 +77,11 @@ Wake 消息到达表示 Executor 已完成自身 post-Release 通知流程，不
 Queue exit 0、消息出现或新 Turn 开始均不能证明 Worker Result、Cleanup、Release
 或验收；没有 UI acknowledgement 时 `DESKTOP_VISIBLE=UNKNOWN`。
 
+Task Console 的 `web_url` 只证明受理后的状态查询入口可用，不证明 Turn 已启动、
+Result 已提交或任务已验收。页面默认轮询只刷新本地 Adapter；Console 断开不等于
+Executor 或 Task 取消。若页面或链接不可访问，保留原 Task 和 UNKNOWN 边界，
+不要自动重发可能产生模型请求的命令。
+
 ## Pending Interaction
 
 Pending Interaction 是活动阻塞事实，不是完成、可自动批准或可忽略状态。
@@ -87,6 +97,7 @@ Pending Interaction 是活动阻塞事实，不是完成、可自动批准或可
 
 - 不新增第二 Task Manager、持久 Handoff 表、Wake 状态机或恢复引擎。
 - 不直接修改 Wake 策略、Codex Desktop 数据库、私有 IPC 或凭据。
+- 不在链接、日志或用户报告中放入 CSRF、凭据或伪造的 Console 地址。
 - 不由 Master 直接运行 `codex queue`；Queue 只属于已授权的 Executor Wake Adapter。
 - 不以新 Task/Attempt 掩盖未知回执，不自动重试潜在模型请求。
 - 不把 `completed`、Wake、Queue ACK、Turn start 或文件存在单独当作验收 PASS。

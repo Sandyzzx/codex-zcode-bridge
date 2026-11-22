@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import type { Socket } from "node:net";
 import type { ProgressTaskManager } from "../interfaces.js";
-import type { ExecutorTaskManagement, ListTasksInput } from "../task-list.js";
+import type { ExecutorTaskManagement, ListTasksInput, TaskListPage } from "../task-list.js";
 import { listTasksInputSchema } from "../task-list.js";
 import { zcodeEventsInputSchema, zcodeInteractionReplyInputSchema } from "../api-schemas.js";
 import { summarizeTaskResult } from "../result-summary.js";
@@ -16,7 +16,7 @@ const TASK_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u;
 
 export type TaskConsoleManager = Pick<
   ProgressTaskManager,
-  "getStatus" | "getEvents" | "getResult" | "cancelTask" | "replyToInteraction"
+  "getStatus" | "getEvents" | "getResult" | "cancelTask" | "replyToInteraction" | "getAttention"
 > & Partial<ExecutorTaskManagement>;
 
 export interface TaskConsoleServerOptions {
@@ -24,6 +24,9 @@ export interface TaskConsoleServerOptions {
   readonly executorStatus?: () => Promise<Record<string, unknown>>;
   readonly port?: number;
   readonly csrfToken?: string;
+  /** Local discovery identity; never a credential or CSRF token. */
+  readonly consoleId?: string;
+  readonly authorityRootDigest?: string;
   readonly now?: () => number;
 }
 
@@ -187,6 +190,24 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+async function findTaskSummary(
+  manager: TaskConsoleManager,
+  taskId: string,
+): Promise<TaskListPage["tasks"][number] | null> {
+  let afterTaskId: string | null = null;
+  for (let pageNumber = 0; pageNumber < 100; pageNumber += 1) {
+    const page = await manager.listTasks!({
+      limit: 100,
+      ...(afterTaskId === null ? {} : { after_task_id: afterTaskId }),
+    });
+    const task = page.tasks.find((candidate) => candidate.task_id === taskId);
+    if (task) return task;
+    if (!page.has_more || page.next_task_id === null) return null;
+    afterTaskId = page.next_task_id;
+  }
+  return null;
+}
+
 export function createTaskConsoleServer(options: TaskConsoleServerOptions): TaskConsoleServer {
   const state = {
     server: null as http.Server | null,
@@ -244,7 +265,18 @@ export function createTaskConsoleServer(options: TaskConsoleServerOptions): Task
           executor = { state: "unavailable", reason: errorMessage(error) };
         }
       }
-      json(response, 200, { ok: true, result: { csrf_token: state.csrfToken, executor } });
+      json(response, 200, {
+        ok: true,
+        result: {
+          csrf_token: state.csrfToken,
+          executor,
+          console: {
+            console_id: options.consoleId ?? null,
+            authority_root_digest: options.authorityRootDigest ?? null,
+            url: state.address?.url ?? null,
+          },
+        },
+      });
       return;
     }
     if (url.pathname === "/api/tasks") {
@@ -253,7 +285,7 @@ export function createTaskConsoleServer(options: TaskConsoleServerOptions): Task
       json(response, 200, { ok: true, result: await options.manager.listTasks(input) });
       return;
     }
-    const match = /^\/api\/tasks\/([^/]+)(?:\/(status|events|result))?$/u.exec(url.pathname);
+    const match = /^\/api\/tasks\/([^/]+)(?:\/(status|summary|events|result|attention))?$/u.exec(url.pathname);
     if (!match) throw failure(404, "WEB_NOT_FOUND", "route not found");
     const taskId = decodeTaskId(match[1]!);
     const action = match[2] ?? "status";
@@ -261,9 +293,23 @@ export function createTaskConsoleServer(options: TaskConsoleServerOptions): Task
       json(response, 200, { ok: true, result: await options.manager.getStatus(taskId) });
       return;
     }
+    if (action === "summary") {
+      if (!options.manager.listTasks) throw failure(501, "WEB_LIST_UNAVAILABLE", "task listing is unavailable");
+      const summary = await findTaskSummary(options.manager, taskId);
+      if (!summary) throw failure(404, "TASK_NOT_FOUND", `unknown task: ${taskId}`);
+      json(response, 200, { ok: true, result: summary });
+      return;
+    }
     if (action === "events") {
       const input = parseEventsQuery(url.searchParams, taskId);
       json(response, 200, { ok: true, result: await options.manager.getEvents(input) });
+      return;
+    }
+    if (action === "attention") {
+      if (!options.manager.getAttention) {
+        throw failure(501, "WEB_ATTENTION_UNAVAILABLE", "attention projection is unavailable");
+      }
+      json(response, 200, { ok: true, result: await options.manager.getAttention(taskId) });
       return;
     }
     const view = url.searchParams.get("view") ?? "summary";
@@ -466,19 +512,179 @@ button{cursor:pointer;border:1px solid var(--ink);background:var(--ink);color:va
   <footer class="footer"><span>Loopback only / local account session</span><span>Page close never cancels a task</span></footer>
 </div>
 <script>
-const state={csrf:"",tasks:[],selected:null,detail:null,events:null,result:null};
+const state={csrf:"",tasks:[],selected:null,detail:null,summary:null,events:null,result:null,attention:null,errors:{},executor:null,resultPending:false};
 const byId=id=>document.getElementById(id);
 function setError(message){const e=byId("error");e.textContent=message||"";e.style.display=message?"block":"none";}
 function esc(value){return String(value??"")}
-async function api(path,options={}){const headers={"Accept":"application/json",...(options.body?{"Content-Type":"application/json"}:{})};if(options.csrf)headers["X-ZCode-Bridge-CSRF"]=state.csrf;if(options.origin)headers["Origin"]=options.origin;const response=await fetch(path,{...options,headers:{...headers,...(options.headers||{})}});const body=await response.json().catch(()=>({ok:false,error:{code:"WEB_BAD_RESPONSE",message:"invalid server response"}}));if(!response.ok||!body.ok)throw new Error((body.error&&body.error.code?body.error.code+": ":"")+(body.error&&body.error.message||"request failed"));return body.result??body;}
+function errorMessage(error){return error&&error.message?error.message:String(error)}
+function errorCode(error){return error&&error.code?String(error.code):""}
+function isNotFinished(error){return errorCode(error)==="TASK_NOT_FINISHED"||/TASK_NOT_FINISHED/u.test(errorMessage(error));}
+async function api(path,options={}){
+  const headers={"Accept":"application/json",...(options.body?{"Content-Type":"application/json"}:{})};
+  if(options.csrf)headers["X-ZCode-Bridge-CSRF"]=state.csrf;
+  if(options.origin)headers["Origin"]=options.origin;
+  const response=await fetch(path,{...options,headers:{...headers,...(options.headers||{})}});
+  const body=await response.json().catch(()=>({ok:false,error:{code:"WEB_BAD_RESPONSE",message:"invalid server response"}}));
+  if(!response.ok||!body.ok){
+    const code=body.error&&body.error.code?body.error.code:"WEB_REQUEST_FAILED";
+    const error=new Error((code?code+": ":"")+(body.error&&body.error.message||"request failed"));
+    error.code=code;
+    throw error;
+  }
+  return body.result??body;
+}
 function statusClass(status){return "chip "+String(status||"unknown").replace(/[^a-z_]/g,"")}
-function renderTasks(){const list=byId("task-list");const filter=byId("filter").value.trim().toLowerCase();const status=byId("status-filter").value;const rows=state.tasks.filter(t=>(!status||t.status===status)&&(!filter||(t.task_id+" "+t.objective).toLowerCase().includes(filter)));const wakeRows=rows.filter(t=>t.wake);byId("count-total").textContent=String(rows.length);byId("count-running").textContent=String(rows.filter(t=>t.status==="running").length);byId("count-waiting").textContent=String(rows.filter(t=>t.status==="waiting_for_master").length);byId("count-wake").textContent=String(wakeRows.length);const banner=byId("wake-banner");banner.hidden=wakeRows.length===0;banner.textContent=wakeRows.length===0?"":wakeRows.length+" task"+(wakeRows.length===1?" has":"s have")+" an Executor Wake signal. Open the task and verify its durable event before acceptance.";list.replaceChildren();if(!rows.length){const empty=document.createElement("div");empty.className="empty";empty.textContent="No tasks match this view.";list.append(empty);return;}for(const task of rows){const button=document.createElement("button");button.className="task-row"+(state.selected===task.task_id?" selected":"");button.type="button";button.addEventListener("click",()=>{state.selected=task.task_id;renderTasks();loadDetail(task.task_id);});const left=document.createElement("span");left.style.minWidth="0";const id=document.createElement("span");id.className="task-id";id.textContent=task.task_id;const objective=document.createElement("span");objective.className="task-objective";objective.textContent=task.objective;left.append(id,objective);const badges=document.createElement("span");badges.className="task-badges";const chip=document.createElement("span");chip.className=statusClass(task.status);chip.textContent=task.status;badges.append(chip);if(task.wake){const wake=document.createElement("span");wake.className=statusClass(task.wake.state);wake.textContent="wake: "+task.wake.state;wake.title=task.wake.reason_code+" at "+task.wake.at;badges.append(wake);}button.append(left,badges);list.append(button);}}
+function validTaskId(value){return /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u.test(String(value||""))}
+function taskIdFromLocation(){const value=new URL(location.href).searchParams.get("task_id");return validTaskId(value)?value:null;}
+function setTaskInLocation(id){const url=new URL(location.href);if(id)url.searchParams.set("task_id",id);else url.searchParams.delete("task_id");const next=url.pathname+url.search+url.hash;const current=location.pathname+location.search+location.hash;if(next!==current)history.replaceState(null,"",next);}
+function findTask(id){return state.tasks.find(task=>task.task_id===id)||null;}
+function renderTasks(){
+  const list=byId("task-list");
+  const filter=byId("filter").value.trim().toLowerCase();
+  const status=byId("status-filter").value;
+  const rows=state.tasks.filter(t=>(!status||t.status===status)&&(!filter||(t.task_id+" "+t.objective).toLowerCase().includes(filter)));
+  const wakeRows=rows.filter(t=>t.wake);
+  byId("count-total").textContent=String(rows.length);
+  byId("count-running").textContent=String(rows.filter(t=>t.status==="running").length);
+  byId("count-waiting").textContent=String(rows.filter(t=>t.status==="waiting_for_master").length);
+  byId("count-wake").textContent=String(wakeRows.length);
+  const banner=byId("wake-banner");
+  banner.hidden=wakeRows.length===0;
+  banner.textContent=wakeRows.length===0?"":wakeRows.length+" task"+(wakeRows.length===1?" has":"s have")+" an Executor Wake signal. Open the task and verify its durable event before acceptance.";
+  list.replaceChildren();
+  if(!rows.length){const empty=document.createElement("div");empty.className="empty";empty.textContent="No tasks match this view.";list.append(empty);return;}
+  for(const task of rows){
+    const button=document.createElement("button");
+    button.className="task-row"+(state.selected===task.task_id?" selected":"");
+    button.type="button";
+    button.addEventListener("click",()=>{void selectTask(task.task_id);});
+    const left=document.createElement("span");left.style.minWidth="0";
+    const id=document.createElement("span");id.className="task-id";id.textContent=task.task_id;
+    const objective=document.createElement("span");objective.className="task-objective";objective.textContent=task.objective;
+    left.append(id,objective);
+    const badges=document.createElement("span");badges.className="task-badges";
+    const chip=document.createElement("span");chip.className=statusClass(task.status);chip.textContent=task.status;badges.append(chip);
+    if(task.wake){const wake=document.createElement("span");wake.className=statusClass(task.wake.state);wake.textContent="wake: "+task.wake.state;wake.title=task.wake.reason_code+" at "+task.wake.at;badges.append(wake);}
+    button.append(left,badges);list.append(button);
+  }
+}
 function meta(label,value){const div=document.createElement("div");const l=document.createElement("label");l.textContent=label;const v=document.createElement("strong");v.textContent=esc(value??"--");div.append(l,v);return div;}
-async function loadDetail(id){state.selected=id;state.events=null;state.result=null;const detail=byId("detail");detail.textContent="Loading evidence...";try{const [status,events,result]=await Promise.all([api("/api/tasks/"+encodeURIComponent(id)+"/status"),api("/api/tasks/"+encodeURIComponent(id)+"/events?limit=40&include_attempt=true"),api("/api/tasks/"+encodeURIComponent(id)+"/result?view=summary")]);state.detail=status;state.events=events;state.result=result;renderDetail();}catch(error){setError(error.message);detail.textContent="Evidence unavailable.";}}
-function renderDetail(){const detail=byId("detail");const s=state.detail;if(!s){detail.textContent="Choose a task to inspect its durable evidence.";return;}detail.replaceChildren();const top=document.createElement("div");top.className="detail-title";const wrap=document.createElement("div");const h=document.createElement("h3");h.textContent=s.task_id;const p=document.createElement("p");p.textContent="Attempt "+s.attempt+" / "+s.status;wrap.append(h,p);const chip=document.createElement("span");chip.className=statusClass(s.status);chip.textContent=s.status;top.append(wrap,chip);detail.append(top);const grid=document.createElement("div");grid.className="meta";grid.append(meta("Created",s.created_at),meta("Updated",s.updated_at),meta("Worker PID",s.worker_pid),meta("Session",s.zcode_session_id),meta("Started",s.started_at),meta("Finished",s.finished_at));detail.append(grid);const actions=document.createElement("div");actions.className="actions";const cancel=document.createElement("button");cancel.className="secondary";cancel.type="button";cancel.textContent="Request cancel";cancel.addEventListener("click",()=>mutate("cancel",{}));actions.append(cancel);detail.append(actions);const label=document.createElement("div");label.className="section-label";label.textContent="Latest events";detail.append(label);const pre=document.createElement("pre");pre.className="pre";pre.textContent=JSON.stringify(state.events?.events??[],null,2);detail.append(pre);const resultLabel=document.createElement("div");resultLabel.className="section-label";resultLabel.textContent="Result summary";detail.append(resultLabel);const resultPre=document.createElement("pre");resultPre.className="pre";resultPre.textContent=JSON.stringify(state.result??{},null,2);detail.append(resultPre);if(s.status==="waiting_for_master"){const reply=document.createElement("form");reply.className="reply";reply.innerHTML='<div class="section-label">Interaction reply</div><div class="reply-grid"><input name="request_id" placeholder="request_id" required><select name="decision"><option value="allow">allow</option><option value="deny">deny</option><option value="accept">accept</option><option value="decline">decline</option></select><textarea name="reason" placeholder="reason (optional)"></textarea></div><button type="submit">Send reply</button>';reply.addEventListener("submit",event=>{event.preventDefault();const form=new FormData(reply);mutate("reply",{request_id:String(form.get("request_id")||""),decision:String(form.get("decision")||"allow"),...(String(form.get("reason")||"")?{reason:String(form.get("reason"))}:{})});});detail.append(reply);}const statusLine=document.createElement("div");statusLine.className="status-line";statusLine.id="detail-status";detail.append(statusLine);}
-async function mutate(action,body){const target=state.selected;if(!target)return;setError("");try{await api("/api/tasks/"+encodeURIComponent(target)+"/"+action,{method:"POST",body:JSON.stringify(body),csrf:true,origin:location.origin});byId("detail-status").textContent=action+" accepted; refreshing evidence...";await loadDetail(target);}catch(error){setError(error.message);}}
-async function refresh(){try{const session=await api("/api/session");state.csrf=session.csrf_token;byId("executor-state").textContent=String(session.executor?.state||"unknown").toUpperCase();byId("lease-id").textContent="lease: "+(session.executor?.lease_id||"--");const status=byId("status-filter").value;const page=await api("/api/tasks?limit=100"+(status?"&status="+encodeURIComponent(status):""));state.tasks=page.tasks||[];renderTasks();byId("last-refresh").textContent=new Date().toLocaleTimeString();}catch(error){setError(error.message);}}
-byId("refresh").addEventListener("click",refresh);byId("filter").addEventListener("input",renderTasks);byId("status-filter").addEventListener("change",refresh);refresh();setInterval(refresh,5000);
+function section(detail,label,value,className="pre"){
+  const heading=document.createElement("div");heading.className="section-label";heading.textContent=label;detail.append(heading);
+  const pre=document.createElement("pre");pre.className=className;pre.textContent=value;detail.append(pre);
+}
+async function selectTask(id){
+  if(!validTaskId(id))return;
+  state.selected=id;setTaskInLocation(id);renderTasks();
+  await loadDetail(id);
+}
+let detailGeneration=0;
+async function loadDetail(id){
+  if(!validTaskId(id)){setError("Invalid task_id in URL");return;}
+  const changed=state.selected!==id;
+  state.selected=id;setTaskInLocation(id);
+  if(changed){state.detail=null;state.summary=null;state.events=null;state.result=null;state.attention=null;state.resultPending=false;state.errors={};byId("detail").textContent="Loading evidence...";}
+  const generation=++detailGeneration;
+  const base="/api/tasks/"+encodeURIComponent(id);
+  const [status,summary,events,result,attention]=await Promise.allSettled([
+    api(base+"/status"),
+    api(base+"/summary"),
+    api(base+"/events?limit=40&include_attempt=true"),
+    api(base+"/result?view=summary"),
+    api(base+"/attention")
+  ]);
+  if(generation!==detailGeneration||state.selected!==id)return;
+  state.detail=status.status==="fulfilled"?status.value:null;
+  state.summary=summary.status==="fulfilled"?summary.value:null;
+  state.events=events.status==="fulfilled"?events.value:null;
+  state.attention=attention.status==="fulfilled"?attention.value:null;
+  state.errors={};
+  if(status.status==="rejected")state.errors.status=errorMessage(status.reason);
+  if(summary.status==="rejected"&&errorCode(summary.reason)!=="TASK_NOT_FOUND")state.errors.summary=errorMessage(summary.reason);
+  if(events.status==="rejected")state.errors.events=errorMessage(events.reason);
+  if(attention.status==="rejected"&&errorCode(attention.reason)!=="WEB_ATTENTION_UNAVAILABLE")state.errors.attention=errorMessage(attention.reason);
+  if(result.status==="fulfilled"){
+    state.result=result.value;state.resultPending=false;state.errors.result=null;
+  }else if(isNotFinished(result.reason)){
+    state.result=null;state.resultPending=true;state.errors.result=null;
+  }else{
+    state.result=null;state.resultPending=false;state.errors.result=errorMessage(result.reason);
+  }
+  setError(Object.values(state.errors).filter(Boolean).join(" | "));
+  renderTasks();renderDetail();
+}
+function renderDetail(){
+  const detail=byId("detail");const s=state.detail;
+  if(!s){detail.textContent=state.errors.status?"Status unavailable: "+state.errors.status:"Choose a task to inspect its durable evidence.";return;}
+  detail.replaceChildren();
+  const top=document.createElement("div");top.className="detail-title";
+  const wrap=document.createElement("div");const h=document.createElement("h3");h.textContent=s.task_id;
+  const p=document.createElement("p");p.textContent="Attempt "+s.attempt+" / "+s.status;wrap.append(h,p);
+  const chip=document.createElement("span");chip.className=statusClass(s.status);chip.textContent=s.status;top.append(wrap,chip);detail.append(top);
+  const grid=document.createElement("div");grid.className="meta";
+  grid.append(
+    meta("Executor",state.executor?.state),
+    meta("Task",s.task_id),
+    meta("Attempt",s.attempt),
+    meta("Wake",state.summary?.wake?.state||"not observed"),
+    meta("Hold",s.observation?.cleanup||s.execution_observation?.state||"not observed"),
+    meta("Queue",s.dispatch_blocker?.reason||"ready"),
+    meta("Worker PID",s.worker_pid),
+    meta("Session",s.zcode_session_id),
+    meta("Created",s.created_at),
+    meta("Updated",s.updated_at)
+  );
+  detail.append(grid);
+  const pending=state.attention?.pending_requests||[];
+  if(pending.length){
+    section(detail,"Pending Interaction",JSON.stringify(pending));
+  }else if(state.errors.attention){
+    section(detail,"Pending Interaction","Unavailable: "+state.errors.attention);
+  }else{
+    section(detail,"Pending Interaction","none observed");
+  }
+  const actions=document.createElement("div");actions.className="actions";
+  const cancel=document.createElement("button");cancel.className="secondary";cancel.type="button";cancel.textContent="Request cancel";
+  cancel.disabled=["completed","failed","cancelled"].includes(s.status);
+  cancel.addEventListener("click",()=>{void mutate("cancel",{});});actions.append(cancel);detail.append(actions);
+  if(state.errors.events)section(detail,"Latest events","Unavailable: "+state.errors.events);
+  else section(detail,"Latest events",JSON.stringify(state.events?.events??[],null,2));
+  if(state.resultPending)section(detail,"Result summary","Result pending — task is still running.");
+  else if(state.errors.result)section(detail,"Result summary","Unavailable: "+state.errors.result);
+  else section(detail,"Result summary",state.result?JSON.stringify(state.result,null,2):"Not yet available.");
+  if(s.status==="waiting_for_master"){
+    const reply=document.createElement("form");reply.className="reply";
+    reply.innerHTML='<div class="section-label">Interaction reply</div><div class="reply-grid"><input name="request_id" placeholder="request_id" required><select name="decision"><option value="allow">allow</option><option value="deny">deny</option><option value="accept">accept</option><option value="decline">decline</option></select><textarea name="reason" placeholder="reason (optional)"></textarea></div><button type="submit">Send reply</button>';
+    if(pending.length)reply.querySelector('input[name="request_id"]').value=pending[0];
+    reply.addEventListener("submit",event=>{event.preventDefault();const form=new FormData(reply);void mutate("reply",{request_id:String(form.get("request_id")||""),decision:String(form.get("decision")||"allow"),...(String(form.get("reason")||"")?{reason:String(form.get("reason"))}:{})});});
+    detail.append(reply);
+  }
+  const statusLine=document.createElement("div");statusLine.className="status-line";statusLine.id="detail-status";detail.append(statusLine);
+}
+async function mutate(action,body){
+  const target=state.selected;if(!target)return;setError("");
+  try{await api("/api/tasks/"+encodeURIComponent(target)+"/"+action,{method:"POST",body:JSON.stringify(body),csrf:true,origin:location.origin});byId("detail-status").textContent=action+" accepted; refreshing evidence...";await loadDetail(target);}
+  catch(error){setError(errorMessage(error));}
+}
+let refreshInFlight=false;
+async function refresh(){
+  if(refreshInFlight)return;refreshInFlight=true;
+  try{
+    const session=await api("/api/session");state.csrf=session.csrf_token;state.executor=session.executor||{};
+    byId("executor-state").textContent=String(session.executor?.state||"unknown").toUpperCase();
+    byId("lease-id").textContent="lease: "+(session.executor?.lease_id||"--");
+    const status=byId("status-filter").value;
+    const page=await api("/api/tasks?limit=100"+(status?"&status="+encodeURIComponent(status):""));
+    state.tasks=page.tasks||[];renderTasks();
+    const target=state.selected||taskIdFromLocation();
+    if(target&&validTaskId(target)){state.selected=target;await loadDetail(target);}
+    byId("last-refresh").textContent=new Date().toLocaleTimeString();
+  }catch(error){setError(errorMessage(error));}
+  finally{refreshInFlight=false;}
+}
+byId("refresh").addEventListener("click",()=>{void refresh();});byId("filter").addEventListener("input",renderTasks);byId("status-filter").addEventListener("change",()=>{void refresh();});
+window.addEventListener("popstate",()=>{const id=taskIdFromLocation();if(id)void selectTask(id);else{state.selected=null;state.detail=null;state.resultPending=false;renderTasks();renderDetail();}});
+void refresh();setInterval(()=>{void refresh();},5000);
 </script>
 </body>
 </html>`;

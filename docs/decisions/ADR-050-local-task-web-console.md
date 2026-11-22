@@ -19,8 +19,10 @@ GET  /
 GET  /api/session
 GET  /api/tasks
 GET  /api/tasks/:task_id/status
+GET  /api/tasks/:task_id/summary
 GET  /api/tasks/:task_id/events
 GET  /api/tasks/:task_id/result?view=summary|full
+GET  /api/tasks/:task_id/attention
 POST /api/tasks/:task_id/cancel
 POST /api/tasks/:task_id/reply
 ```
@@ -30,6 +32,27 @@ HTTP 连接断开或 Console 进程结束只影响本地观察 Adapter，不取�
 取消与 Interaction Reply 是调用方显式动作，发送到原 Executor 合同。
 Task list 同时展示同一 SQLite v14 `executor_wake` Event 的最新只读摘要
 （计数、banner 和行内 badge）；它不是新的通知权威，也不轮询 Queue。
+
+`/api/session` 只返回非秘密 Console 身份、Authority Root digest 和实际 loopback
+URL。Console 启动后在该 Authority Root 写入 `task-console.json` 作为**生命周期
+发现元数据**，不保存 Task、Result、Event、Wake 或任何第二套状态。发现记录必须
+通过 Console PID + start fingerprint、Authority digest、精确 loopback URL/port
+和记录 digest 校验；同 Root 已有安全存活 Owner 时复用同一 URL，已有未知/
+异常 Owner 时 fail closed，不启动第二个可视化 Authority。记录以跨进程
+`wx` 创建并用 `console_id + record_digest` CAS 删除；它不是 Queue、Executor
+Lease 或 SQLite 的替代品。
+
+Task Deep Link 固定使用实际运行时端口：
+
+```text
+http://127.0.0.1:<actual-port>/?task_id=<task-id>
+```
+
+页面按 `task_id` 自动选择 Task，手动选择同步更新 URL，刷新/前进后退保留选择。
+当 Task 不在 `/api/tasks` 第一页时，页面通过有界分页 `/summary` 取回 Task
+详情。URL 不含 CSRF 或凭据。Task Status、Events、Result 和 Attention 独立
+读取；`TASK_NOT_FINISHED` 只显示 Result pending，不掩盖有效 Status/Events。
+选中 Task 随既有轮询刷新，不新增 WebSocket、SSE 或事件服务。
 
 ## 安全边界
 
@@ -53,3 +76,8 @@ Executor Control Client 组合。
 定向验证覆盖 loopback Host/Origin/CSRF 拒绝、只读列表与证据读取、
 Cancel/Reply 转发、body 上限、页面关闭不影响独立 Executor。真实多用户
 隔离、浏览器长期运行和 Desktop 关闭仍不在本 ADR 内自动通过。
+
+当前 Web 定向证据：动态入口和发现文件、同 Root 二进程复用、Deep Link
+跨页解析、Result 未完成独立显示、Attention 投影、loopback/Origin/CSRF
+回归均通过；真实浏览器长期运行与 MCP Host 退出后的 Web 观察在最终 Host
+E2E 中另行记录。未完成的证据不得写成 `PASS — REAL`。

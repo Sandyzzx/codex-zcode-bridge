@@ -43,7 +43,7 @@
 | Event 默认预算 | [048](ADR-048-bounded-default-event-pages.md) | `zcode_events` 省略 `max_bytes` 时使用 32 KiB 页预算；显式预算仍为硬限制；所有事件可按 cursor 完整续读 |
 | Async Executor | [045](ADR-045-async-executor-ownership.md) | Accepted；当前 `7f54531a` 通过 Owner Wake policy/Web 展示、App Server 缺失降级和 shipped MCP Host 退出后的 synthetic Worker Result/Cleanup/Release；历史 `c75c3433` 有 1060 项完整回归/4/4 压力矩阵；真实 Desktop 全退、严格 C/D、真实 Queue/Turn/Master 和付费 Runtime 仍 `BLOCKED`，未合入 Preview |
 | Task CLI | [049](ADR-049-task-cli-control-surface.md) | CLI 只经 Executor Control 管理同一 Authority；不打开 SQLite、不实现调度或恢复；已有 Executor 不重复 Spawn，过渡和 Shutdown unknown 均有显式边界 |
-| Task Web Console | [050](ADR-050-local-task-web-console.md) | 仅 loopback；经同一 Executor Control 读取 Task/Event/Result，并显式转发 Cancel/Reply；不创建 Task、不打开 SQLite、不拥有 Executor 生命周期 |
+| Task Web Console | [050](ADR-050-local-task-web-console.md) | 仅 loopback；Root 级动态发现/CAS 复用、Deep Link 与跨页 summary；经同一 Executor Control 读取 Task/Event/Result/Attention 并显式转发 Cancel/Reply；不创建 Task、不打开 SQLite、不拥有 Executor 生命周期 |
 | Executor Wake | [051](ADR-051-executor-wake-delivery.md) | post-Release 一次性 Wake；Owner policy 经 Task CLI 排他写入；loaded/idle exact-config 才允许 Queue，其余 Web Notify；CLI/Web 从 SQLite v14 observation 展示，不重试 |
 | Async Handoff | [052](ADR-052-async-master-handoff.md) | Task Scope 与 Handoff 分离；可靠受理后结束 Turn/停止轮询，断连不取消；Wake 后核对身份并独立验收；Pending Interaction 仍受原审批边界 |
 

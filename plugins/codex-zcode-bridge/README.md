@@ -145,3 +145,9 @@ node dist/web-console.mjs --data-root <absolute-state-dir>
 
 所有状态变更请求要求同源 Host、Origin 和会话 CSRF 头。页面刷新或浏览器关闭只会
 关闭本地 HTTP 请求，不会取消已受理 Task。
+
+Console 使用运行时分配的实际端口，并在 Authority Root 内以
+`task-console.json` 发布非秘密发现记录；同一 Root 的第二个 Console 会复用安全
+存活的 Owner。可用 `node dist/task-cli.mjs task console-url <task_id>` 取得经过
+`/api/session` 校验的 `http://127.0.0.1:<actual-port>/?task_id=<task_id>` 链接；
+不可用时命令失败，不拼接虚假地址。Deep Link 只携带 Task ID，不包含 CSRF 或凭据。

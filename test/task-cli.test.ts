@@ -15,6 +15,9 @@ import { RemoteTaskManager } from "../src/executor/remote-task-manager.js";
 import { runTaskCli, type TaskCliIo } from "../src/cli/main.js";
 import type { ProgressTaskManager, TaskPackage, TaskStatusRecord } from "../src/interfaces.js";
 import type { ExecutorTaskManagement, ListTasksInput, TaskListPage } from "../src/task-list.js";
+import { createTaskConsoleServer } from "../src/web/server.js";
+import { publishTaskConsoleDiscovery } from "../src/web/discovery.js";
+import { authorityRootDigest } from "../src/executor/lease.js";
 
 function io(): { stream: TaskCliIo; stdout: () => string; stderr: () => string } {
   let stdout = "";
@@ -457,5 +460,75 @@ test("Task CLI refuses lease clear without explicit owner-exit acknowledgement",
     assert.match(output.stderr(), /--confirm-owner-exited/u);
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Task CLI console-url returns an exact verified deep link or fails closed", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "task-cli-console-url-"));
+  const consoleId = "console-cli-test";
+  const consoleServer = createTaskConsoleServer({
+    manager: manager(root),
+    consoleId,
+    authorityRootDigest: authorityRootDigest(root),
+    executorStatus: async () => ({ state: "active", lease_id: "lease-test" }),
+  });
+  try {
+    const address = await consoleServer.start();
+    await publishTaskConsoleDiscovery({
+      dataRoot: root,
+      consoleId,
+      origin: address.origin,
+      url: address.url,
+      port: address.port,
+    });
+    const output = io();
+    const code = await runTaskCli([
+      "task", "console-url", "task-existing",
+      "--no-start",
+      "--data-root", root,
+    ], output.stream, {
+      createClient: () => fakeClient((method) => {
+        if (method === "getStatus") return response({ ...status("task-existing") });
+        if (method === "executorStatus") return response({ state: "active", lease_id: "lease-test", idle: true, blockers: [] });
+        throw new Error(`unexpected method: ${method}`);
+      }),
+    });
+    assert.equal(code, 0, output.stderr());
+    const value = JSON.parse(output.stdout()) as {
+      task_id: string;
+      web_url: string;
+      console_pid: number;
+      console_reused: boolean;
+      executor_lease_id: string;
+    };
+    assert.equal(value.task_id, "task-existing");
+    assert.equal(value.web_url, `${address.url}?task_id=task-existing`);
+    assert.equal(value.console_pid, process.pid);
+    assert.equal(value.console_reused, true);
+    assert.equal(value.executor_lease_id, "lease-test");
+  } finally {
+    await consoleServer.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+
+  const missingRoot = mkdtempSync(path.join(tmpdir(), "task-cli-console-missing-"));
+  try {
+    const output = io();
+    const code = await runTaskCli([
+      "task", "console-url", "task-existing",
+      "--no-start",
+      "--data-root", missingRoot,
+    ], output.stream, {
+      createClient: () => fakeClient((method) => {
+        if (method === "getStatus") return response({ ...status("task-existing") });
+        if (method === "executorStatus") return response({ state: "active", lease_id: "lease-test" });
+        throw new Error(`unexpected method: ${method}`);
+      }),
+    });
+    assert.equal(code, 1);
+    assert.match(output.stderr(), /WEB_CONSOLE_UNAVAILABLE/u);
+    assert.equal(output.stdout(), "");
+  } finally {
+    rmSync(missingRoot, { recursive: true, force: true });
   }
 });

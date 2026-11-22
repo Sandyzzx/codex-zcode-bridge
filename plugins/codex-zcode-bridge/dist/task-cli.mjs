@@ -7,8 +7,8 @@ var __export = (target, all) => {
 
 // src/cli/main.ts
 import { spawn as spawn2 } from "node:child_process";
-import { existsSync as existsSync5, writeFileSync as writeFileSync2 } from "node:fs";
-import path6 from "node:path";
+import { existsSync as existsSync6, writeFileSync as writeFileSync2 } from "node:fs";
+import path7 from "node:path";
 import process2 from "node:process";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 
@@ -663,10 +663,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path7) {
-  if (!path7)
+function getElementAtPath(obj, path8) {
+  if (!path8)
     return obj;
-  return path7.reduce((acc, key) => acc?.[key], obj);
+  return path8.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -1006,11 +1006,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path7, issues) {
+function prefixIssues(path8, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path7);
+    iss.path.unshift(path8);
     return iss;
   });
 }
@@ -1456,16 +1456,16 @@ function flattenError(error2, mapper = (issue2) => issue2.message) {
 }
 function formatError(error2, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error3, path7 = []) => {
+  const processError = (error3, path8 = []) => {
     for (const issue2 of error3.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path7, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path8, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path7, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path8, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path7, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path8, ...issue2.path]);
       } else {
-        const fullpath = [...path7, ...issue2.path];
+        const fullpath = [...path8, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -7164,6 +7164,169 @@ function errorCode(error2) {
   return isRecord2(error2) && typeof error2.code === "string" ? error2.code : null;
 }
 
+// src/web/discovery.ts
+import { createHash as createHash3 } from "node:crypto";
+import {
+  closeSync as closeSync2,
+  existsSync as existsSync5,
+  lstatSync as lstatSync4,
+  openSync as openSync2,
+  readFileSync as readFileSync5,
+  unlinkSync as unlinkSync2,
+  writeSync as writeSync2
+} from "node:fs";
+import path6 from "node:path";
+var TASK_CONSOLE_DISCOVERY_FILE = "task-console.json";
+var TASK_CONSOLE_PROTOCOL_VERSION = 1;
+var DISCOVERY_LIMIT_BYTES = 16 * 1024;
+var TASK_CONSOLE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
+var SHA256 = /^[0-9a-f]{64}$/u;
+var TaskConsoleDiscoveryError = class extends Error {
+  constructor(code, message = code) {
+    super(message);
+    this.code = code;
+    this.name = "TaskConsoleDiscoveryError";
+  }
+  code;
+};
+function canonicalJson3(value) {
+  return JSON.stringify(sortObject2(value)) ?? "null";
+}
+function sortObject2(value) {
+  if (Array.isArray(value)) return value.map(sortObject2);
+  if (value === null || typeof value !== "object" || value instanceof Date) return value;
+  if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) return value;
+  return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0).map(([key, item]) => [key, sortObject2(item)]));
+}
+function recordDigest(record2) {
+  return createHash3("sha256").update(canonicalJson3(record2), "utf8").digest("hex");
+}
+function discoveryRoot(dataRoot) {
+  let root;
+  try {
+    root = path6.resolve(dataRoot);
+    const stat = lstatSync4(root);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("not_plain_directory");
+  } catch {
+    throw new TaskConsoleDiscoveryError("WEB_CONSOLE_ROOT_UNSAFE");
+  }
+  return root;
+}
+function taskConsoleDiscoveryPath(dataRoot) {
+  return path6.join(discoveryRoot(dataRoot), TASK_CONSOLE_DISCOVERY_FILE);
+}
+function parseRecord(value) {
+  let parsed;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
+  }
+  const record2 = parsed;
+  if (record2.protocol_version !== TASK_CONSOLE_PROTOCOL_VERSION || typeof record2.console_id !== "string" || !TASK_CONSOLE_ID.test(record2.console_id) || typeof record2.authority_root_digest !== "string" || !SHA256.test(record2.authority_root_digest) || !Number.isSafeInteger(record2.pid) || record2.pid < 1 || record2.start_fingerprint !== null && typeof record2.start_fingerprint !== "string" || !["exact", "coarse", "unknown"].includes(record2.fingerprint_precision ?? "") || record2.identity_version !== PROCESS_IDENTITY_VERSION || typeof record2.platform !== "string" || typeof record2.captured_at !== "string" || typeof record2.origin !== "string" || typeof record2.url !== "string" || !Number.isSafeInteger(record2.port) || record2.port < 1 || record2.port > 65535 || typeof record2.started_at !== "string" || typeof record2.record_digest !== "string" || !SHA256.test(record2.record_digest)) {
+    throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
+  }
+  let origin;
+  let url;
+  try {
+    origin = new URL(record2.origin);
+    url = new URL(record2.url);
+  } catch {
+    throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
+  }
+  if (origin.origin !== record2.origin || origin.protocol !== "http:" || origin.hostname !== "127.0.0.1" || origin.port !== String(record2.port) || url.origin !== record2.origin || url.pathname !== "/" || url.search !== "" || url.hash !== "") {
+    throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
+  }
+  const { record_digest: recordedDigest, ...body } = record2;
+  if (recordDigest(body) !== recordedDigest) {
+    throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
+  }
+  return { ...body, record_digest: recordedDigest };
+}
+function readTaskConsoleDiscovery(dataRoot) {
+  const file = taskConsoleDiscoveryPath(dataRoot);
+  if (!existsSync5(file)) return null;
+  try {
+    const stat = lstatSync4(file);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > DISCOVERY_LIMIT_BYTES) {
+      throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
+    }
+    const record2 = parseRecord(readFileSync5(file, "utf8"));
+    if (record2.authority_root_digest !== authorityRootDigest(dataRoot)) {
+      throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
+    }
+    return record2;
+  } catch (error2) {
+    if (error2 instanceof TaskConsoleDiscoveryError) throw error2;
+    throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_INVALID");
+  }
+}
+function identityFromRecord(record2) {
+  return {
+    pid: record2.pid,
+    fingerprint: record2.start_fingerprint,
+    fingerprint_precision: record2.fingerprint_precision,
+    identity_version: PROCESS_IDENTITY_VERSION,
+    platform: record2.platform,
+    captured_at: record2.captured_at
+  };
+}
+async function inspectTaskConsoleDiscovery(dataRoot, processProbe = createPlatformProbe()) {
+  let record2;
+  try {
+    record2 = readTaskConsoleDiscovery(dataRoot);
+  } catch (error2) {
+    if (error2 instanceof TaskConsoleDiscoveryError && error2.code === "WEB_CONSOLE_DISCOVERY_INVALID") {
+      throw error2;
+    }
+    throw error2;
+  }
+  if (record2 === null) return { state: "absent" };
+  const [verdict2] = await processProbe.probe([{
+    pid: record2.pid,
+    identity: identityFromRecord(record2)
+  }]);
+  if (!verdict2 || verdict2.state === "unknown") return { state: "owner_unknown", record: record2 };
+  if (verdict2.state === "exited") return { state: "stale_owner", record: record2 };
+  return { state: "active_owner", record: record2 };
+}
+function removeTaskConsoleDiscovery(dataRoot, expected) {
+  const current = readTaskConsoleDiscovery(dataRoot);
+  if (current === null) return;
+  if (current.console_id !== expected.console_id || current.record_digest !== expected.record_digest) {
+    throw new TaskConsoleDiscoveryError("WEB_CONSOLE_DISCOVERY_CHANGED");
+  }
+  try {
+    unlinkSync2(taskConsoleDiscoveryPath(dataRoot));
+  } catch (error2) {
+    if (error2.code !== "ENOENT") throw error2;
+  }
+}
+async function fetchTaskConsoleSession(record2, timeoutMs = 2e3) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(new URL("/api/session", record2.url), {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      signal: controller.signal
+    });
+    const body = await response.json().catch(() => null);
+    if (!response.ok || body?.ok !== true || !body.result || body.result.console?.console_id !== record2.console_id || body.result.console?.authority_root_digest !== record2.authority_root_digest || body.result.console?.url !== record2.url) {
+      throw new TaskConsoleDiscoveryError("WEB_CONSOLE_SESSION_INVALID");
+    }
+    return body.result;
+  } catch (error2) {
+    if (error2 instanceof TaskConsoleDiscoveryError) throw error2;
+    throw new TaskConsoleDiscoveryError("WEB_CONSOLE_OWNER_UNRESPONSIVE");
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // src/cli/main.ts
 var TASK_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u;
 var RESULT_STDOUT_LIMIT_BYTES = 1024 * 1024;
@@ -7180,6 +7343,7 @@ var TASK_CLI_USAGE = [
   "  task result <task_id> [--view summary|full] [--output ABS_PATH]",
   "  task cancel <task_id>",
   "  task reply <task_id> --request-id ID --decision allow|deny|accept|decline [--reason TEXT] [--answer KEY=VALUE]",
+  "  task console-url <task_id> [--no-start] [--timeout-ms 500..60000]",
   "  task wake-authorize <task_id> --attempt N --thread ID --model MODEL --model-provider PROVIDER",
   "      --reasoning-effort minimal|low|medium --expires-in-minutes 1..1440 --confirm-owner"
 ].join("\n");
@@ -7197,7 +7361,7 @@ async function runTaskCli(argv, io = DEFAULT_IO, dependencies = {}) {
     const dataRoot = resolveDataRoot(globals.dataRoot, bridgeHost);
     const pipeName = executorPipeName(dataRoot);
     if (command === "task") {
-      return await runTaskCommand(args.slice(1), dataRoot, pipeName, io, dependencies);
+      return await runTaskCommand(args.slice(1), dataRoot, pipeName, bridgeHost.settingsDirectory, io, dependencies);
     }
     if (command === "executor") {
       return await runExecutorCommand(args.slice(1), {
@@ -7234,13 +7398,13 @@ function parseGlobalOptions(argv) {
     if (argument === "--data-root" || argument === "--settings-directory") {
       const value = argv[++index];
       if (!value) throw new CliUsageError(`${argument} requires an absolute path`);
-      if (!path6.isAbsolute(value)) throw new CliUsageError(`${argument} requires an absolute path`);
+      if (!path7.isAbsolute(value)) throw new CliUsageError(`${argument} requires an absolute path`);
       if (argument === "--data-root") {
         if (dataRoot !== null) throw new CliUsageError("--data-root may appear only once");
-        dataRoot = path6.normalize(value);
+        dataRoot = path7.normalize(value);
       } else {
         if (settingsDirectory !== null) throw new CliUsageError("--settings-directory may appear only once");
-        settingsDirectory = path6.normalize(value);
+        settingsDirectory = path7.normalize(value);
       }
       continue;
     }
@@ -7256,7 +7420,7 @@ function resolveDataRoot(override, host) {
   const selection = loadInstallAuthoritySelection(host);
   return resolveSqliteStateDirectory(selection, process2.env).dataRoot;
 }
-async function runTaskCommand(args, dataRoot, pipeName, io, dependencies) {
+async function runTaskCommand(args, dataRoot, pipeName, settingsDirectory, io, dependencies) {
   const subcommand = args[0];
   if (subcommand === "list") {
     const options = parseFlags(args.slice(1), /* @__PURE__ */ new Set([
@@ -7276,6 +7440,9 @@ async function runTaskCommand(args, dataRoot, pipeName, io, dependencies) {
   }
   if (subcommand === "wake-authorize") {
     return runWakeAuthorize(args.slice(1), dataRoot, pipeName, io, dependencies);
+  }
+  if (subcommand === "console-url") {
+    return runTaskConsoleUrl(args.slice(1), dataRoot, pipeName, settingsDirectory, io, dependencies);
   }
   const taskId = args[1];
   if (subcommand !== void 0 && TASK_ID.test(taskId ?? "")) {
@@ -7317,15 +7484,15 @@ async function runTaskCommand(args, dataRoot, pipeName, io, dependencies) {
       const options = parseFlags(args.slice(2), /* @__PURE__ */ new Set(["--view", "--output"]));
       const view = options.single.has("--view") ? enumValue("--view", options.single.get("--view"), ["summary", "full"]) : "summary";
       const output = options.single.get("--output");
-      if (output !== void 0 && !path6.isAbsolute(output)) throw new CliUsageError("--output requires an absolute path");
+      if (output !== void 0 && !path7.isAbsolute(output)) throw new CliUsageError("--output requires an absolute path");
       return withClient(dependencies, pipeName, async (client) => {
         const result = (await requestOk(client, "getResult", { task_id: taskId })).result;
         const value = view === "summary" ? summarizeTaskResult(result) : result;
         const serialized = `${JSON.stringify(value, null, 2)}
 `;
         if (output !== void 0) {
-          writeFileSync2(path6.normalize(output), serialized, { encoding: "utf8", flag: "wx" });
-          writeJson(io, { task_id: result.task_id, attempt: result.attempt, output: path6.normalize(output), bytes: Buffer.byteLength(serialized) });
+          writeFileSync2(path7.normalize(output), serialized, { encoding: "utf8", flag: "wx" });
+          writeJson(io, { task_id: result.task_id, attempt: result.attempt, output: path7.normalize(output), bytes: Buffer.byteLength(serialized) });
           return 0;
         }
         if (Buffer.byteLength(serialized) > RESULT_STDOUT_LIMIT_BYTES) {
@@ -7452,6 +7619,99 @@ async function runWakeAuthorize(args, dataRoot, pipeName, io, dependencies) {
     });
     return 0;
   });
+}
+async function runTaskConsoleUrl(args, dataRoot, pipeName, settingsDirectory, io, dependencies) {
+  const taskId = args[0];
+  if (!TASK_ID.test(taskId ?? "")) throw new CliUsageError("console-url requires a valid task_id");
+  const options = parseFlags(
+    args.slice(1),
+    /* @__PURE__ */ new Set(["--no-start", "--timeout-ms"]),
+    /* @__PURE__ */ new Set(["--no-start"])
+  );
+  const timeoutMs = options.single.has("--timeout-ms") ? integer2("--timeout-ms", options.single.get("--timeout-ms"), 500, 6e4) : 5e3;
+  const noStart = options.boolean.has("--no-start");
+  return withClient(dependencies, pipeName, async (client) => {
+    const taskStatus = (await requestOk(client, "getStatus", { task_id: taskId })).result;
+    const executor = (await requestOk(client, "executorStatus", {})).result ?? {};
+    const leaseId = typeof executor.lease_id === "string" ? executor.lease_id : null;
+    if (!leaseId) {
+      throw Object.assign(new Error("Executor lease identity is unavailable"), {
+        code: "EXECUTOR_LEASE_UNKNOWN"
+      });
+    }
+    const probe = createPlatformProbe();
+    let discovery = await inspectTaskConsoleDiscovery(dataRoot, probe);
+    if (discovery.state === "stale_owner" && discovery.record) {
+      removeTaskConsoleDiscovery(dataRoot, discovery.record);
+      discovery = await inspectTaskConsoleDiscovery(dataRoot, probe);
+    }
+    const reused = discovery.state === "active_owner";
+    if (!reused) {
+      if (noStart) {
+        throw Object.assign(new Error("Task Console is not available and --no-start was requested"), {
+          code: "WEB_CONSOLE_UNAVAILABLE"
+        });
+      }
+      const spawned = (dependencies.spawnTaskConsole ?? spawnTaskConsole)({
+        dataRoot,
+        settingsDirectory
+      });
+      if (!spawned.pid) console.error("zcode-bridge: Task Console process has no PID; discovery verification will still run\n");
+    }
+    const found = await waitForTaskConsole(
+      dataRoot,
+      leaseId,
+      timeoutMs,
+      probe,
+      dependencies.sleep ?? sleep
+    );
+    const url = `${found.record.url}?task_id=${encodeURIComponent(taskId)}`;
+    writeJson(io, {
+      task_id: taskId,
+      status: taskStatus.status ?? "unknown",
+      attempt: taskStatus.attempt ?? null,
+      web_url: url,
+      console_id: found.record.console_id,
+      console_pid: found.record.pid,
+      console_reused: reused,
+      executor_lease_id: leaseId,
+      authority_root_digest: authorityRootDigest(dataRoot)
+    });
+    return 0;
+  });
+}
+async function waitForTaskConsole(dataRoot, leaseId, timeoutMs, processProbe, sleep2) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError;
+  while (Date.now() <= deadline) {
+    try {
+      const inspection = await inspectTaskConsoleDiscovery(dataRoot, processProbe);
+      if (inspection.state === "active_owner" && inspection.record) {
+        const session = await fetchTaskConsoleSession(inspection.record);
+        if (session.executor.lease_id === leaseId) {
+          return { record: inspection.record, session };
+        }
+        lastError = Object.assign(new Error("Task Console is bound to a different Executor lease"), {
+          code: "WEB_CONSOLE_LEASE_MISMATCH"
+        });
+      } else if (inspection.state === "stale_owner" && inspection.record) {
+        removeTaskConsoleDiscovery(dataRoot, inspection.record);
+      } else if (inspection.state === "owner_unknown") {
+        throw Object.assign(new Error("Task Console owner state is unknown"), {
+          code: "WEB_CONSOLE_OWNER_UNKNOWN"
+        });
+      }
+    } catch (error3) {
+      lastError = error3;
+    }
+    if (Date.now() + 100 > deadline) break;
+    await sleep2(100);
+  }
+  const error2 = Object.assign(
+    new Error(lastError instanceof Error ? lastError.message : "Task Console did not become discoverable"),
+    { code: "WEB_CONSOLE_UNAVAILABLE", cause: lastError }
+  );
+  throw error2;
 }
 async function findTask(client, taskId) {
   let after = null;
@@ -7588,13 +7848,34 @@ function spawnExecutor(input) {
   child.unref();
   return { pid: child.pid };
 }
+function spawnTaskConsole(input) {
+  const child = spawn2(process2.execPath, [
+    resolveTaskConsoleEntry(),
+    "--data-root",
+    input.dataRoot,
+    "--settings-directory",
+    input.settingsDirectory,
+    "--port",
+    "0"
+  ], {
+    detached: true,
+    windowsHide: true,
+    stdio: "ignore"
+  });
+  child.unref();
+  return { pid: child.pid };
+}
 function resolveExecutorEntry() {
   const bundled = fileURLToPath3(new URL("./executor.mjs", import.meta.url));
-  return existsSync5(bundled) ? bundled : fileURLToPath3(new URL("../executor/main.js", import.meta.url));
+  return existsSync6(bundled) ? bundled : fileURLToPath3(new URL("../executor/main.js", import.meta.url));
+}
+function resolveTaskConsoleEntry() {
+  const bundled = fileURLToPath3(new URL("./web-console.mjs", import.meta.url));
+  return existsSync6(bundled) ? bundled : fileURLToPath3(new URL("../web/main.js", import.meta.url));
 }
 function resolveBridgeEntry() {
   const bundled = fileURLToPath3(new URL("./bridge.mjs", import.meta.url));
-  return existsSync5(bundled) ? bundled : fileURLToPath3(new URL("../mcp/main.js", import.meta.url));
+  return existsSync6(bundled) ? bundled : fileURLToPath3(new URL("../mcp/main.js", import.meta.url));
 }
 async function tryExecutorStatus(pipeName, dependencies) {
   const client = (dependencies.createClient ?? defaultClient)(pipeName, 250);
@@ -7704,7 +7985,7 @@ function writeJson(io, value) {
 function sleep(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
-if (process2.argv[1] && path6.resolve(process2.argv[1]) === path6.resolve(fileURLToPath3(import.meta.url))) {
+if (process2.argv[1] && path7.resolve(process2.argv[1]) === path7.resolve(fileURLToPath3(import.meta.url))) {
   process2.exitCode = await runTaskCli(process2.argv.slice(2));
 }
 export {

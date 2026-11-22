@@ -39,7 +39,8 @@ Task Scope 与 Handoff Mechanism 分开决定。`whole_task`/`staged` 只定义�
 - Worker 不得擅自决定重大未决公共 API、持久化、安全或外部行为事项；继续不依赖该决定的工作并请求 Master。
 - `completed`、Worker 自报和部分测试都不替代独立验收。Master 基于实际 diff、文件、适用验证和执行证据分别报告执行状态、验收状态和接收状态。
 - `zcode_continue` 只用于同任务验收返工、关键决定补充、受控中断恢复或报告修复，不用于推进下一阶段或新目标。
-- Async Handoff 只以可靠 Task 受理为交接点。提交前完成 Ready Gate；受理后记录可核实的 Task/Attempt、Authority 和 Thread，向用户简洁报告，然后结束 Turn 并停止轮询。不要调用 `codex queue`、`--resume` 或自行制造 Wake。
+- Async Handoff 只以可靠 Task 受理为交接点。提交前完成 Ready Gate；受理后记录可核实的 Task/Attempt、Authority 和 Thread，取得经 `task console-url`/Executor 验证的 Task Console `web_url`（不可用则说明安全查询替代方式），向用户简洁报告，然后结束 Turn 并停止轮询。不要调用 `codex queue`、`--resume` 或自行制造 Wake。
+- Task Console 链接只携带 `task_id`，不包含 CSRF 或凭据；不得拼接、猜测或伪造地址。链接可用不等于 Turn、Result、Cleanup 或验收已完成，页面轮询或关闭不影响 Executor。
 - Turn 结束、客户端断连、MCP 停止或调用超时不取消已受理 Task。只有用户明确授权具体取消时才走 `zcode_cancel`；回执未知时先以原 `task_id` 对账，不换 ID 重派。
 - Wake 只表示有持久 Result 可读，不表示 Master 已恢复、Task 已验收或资源已释放。恢复后核对 Task/Attempt/Operation/digest，读取 Result 摘要和 Cleanup/Release 证据，再独立检查实际 diff、文件与测试。
 - 已知 Pending Interaction 是阻塞事实，不是完成或可忽略状态。结束 Turn 前必须先处理；返回时按原请求与明确授权审批，不得自动放行。Async Handoff 不新增 Pending Wake，必要审批仍经 Web/CLI 或下一次用户 Turn 进入。
