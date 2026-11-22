@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -132,7 +132,15 @@ test("Task CLI parses bounded task list and status operations", async () => {
       createClient: () => fakeClient((method, params) => {
         seen = { method, params };
         return response({
-          tasks: [{ task_id: "task-b", status: "queued", attempt: 1, created_at: "2026-01-01T00:00:00Z", workspace: root, objective: "ACK" }],
+          tasks: [{
+            task_id: "task-b",
+            status: "queued",
+            attempt: 1,
+            created_at: "2026-01-01T00:00:00Z",
+            workspace: root,
+            objective: "ACK",
+            wake: { state: "web_notify", reason_code: "policy_missing", at: "2026-01-01T00:01:00Z" },
+          }],
           next_task_id: "task-b",
           has_more: false,
         });
@@ -143,7 +151,140 @@ test("Task CLI parses bounded task list and status operations", async () => {
       method: "listTasks",
       params: { after_task_id: "task-a", limit: 2, status: "queued" },
     });
-    assert.equal(JSON.parse(output.stdout()).next_task_id, "task-b");
+    const listed = JSON.parse(output.stdout()) as {
+      next_task_id: string;
+      tasks: Array<{ wake?: { state?: string; reason_code?: string } }>;
+    };
+    assert.equal(listed.next_task_id, "task-b");
+    assert.deepEqual(listed.tasks[0]?.wake, {
+      state: "web_notify",
+      reason_code: "policy_missing",
+      at: "2026-01-01T00:01:00Z",
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Task CLI wake-authorize writes one exact Owner policy and refuses overwrite", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "task-cli-wake-authorize-"));
+  const fixedNow = Date.parse("2026-11-22T00:00:00.000Z");
+  const dependencies = {
+    now: () => fixedNow,
+    createClient: () => fakeClient((method) => {
+      assert.equal(method, "listTasks");
+      return response({
+        tasks: [{
+          task_id: "task-wake-cli",
+          status: "running",
+          attempt: 2,
+          created_at: "2026-11-21T23:00:00.000Z",
+          workspace: root,
+          objective: "Wake authorization fixture",
+        }],
+        next_task_id: null,
+        has_more: false,
+      });
+    }),
+  };
+  try {
+    const output = io();
+    const code = await runTaskCli([
+      "task", "wake-authorize", "task-wake-cli",
+      "--attempt", "2",
+      "--thread", "019c0000-0000-7000-8000-000000000001",
+      "--model", "deepseek-v4.1-flash",
+      "--model-provider", "deepseek",
+      "--reasoning-effort", "low",
+      "--expires-in-minutes", "30",
+      "--confirm-owner",
+      "--data-root", root,
+    ], output.stream, dependencies);
+    assert.equal(code, 0, output.stderr());
+    const written = JSON.parse(output.stdout()) as Record<string, unknown>;
+    assert.equal(written.task_id, "task-wake-cli");
+    assert.equal(written.attempt, 2);
+    assert.equal(written.authorization_scope, "one_turn");
+    assert.equal(written.authorization_expires_at, "2026-11-22T00:30:00.000Z");
+    const policy = JSON.parse(readFileSync(path.join(root, "wake-policy.json"), "utf8")) as Record<string, unknown>;
+    assert.deepEqual(policy.authorization, {
+      scope: "one_turn",
+      granted_by: "owner",
+      granted_at: "2026-11-22T00:00:00.000Z",
+      expires_at: "2026-11-22T00:30:00.000Z",
+    });
+    assert.equal(policy.fallback, "web_notify");
+    assert.equal(String(policy.workspace).toLowerCase(), root.toLowerCase());
+
+    const repeated = io();
+    const repeatedCode = await runTaskCli([
+      "task", "wake-authorize", "task-wake-cli",
+      "--attempt", "2",
+      "--thread", "019c0000-0000-7000-8000-000000000001",
+      "--model", "deepseek-v4.1-flash",
+      "--model-provider", "deepseek",
+      "--reasoning-effort", "low",
+      "--expires-in-minutes", "30",
+      "--confirm-owner",
+      "--data-root", root,
+    ], repeated.stream, dependencies);
+    assert.equal(repeatedCode, 1);
+    assert.match(repeated.stderr(), /WAKE_POLICY_EXISTS/u);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Task CLI wake-authorize requires owner confirmation and the exact current Attempt", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "task-cli-wake-guard-"));
+  const dependencies = {
+    createClient: () => fakeClient((method) => {
+      assert.equal(method, "listTasks");
+      return response({
+        tasks: [{
+          task_id: "task-wake-guard",
+          status: "queued",
+          attempt: 1,
+          created_at: "2026-11-21T23:00:00.000Z",
+          workspace: root,
+          objective: "Wake authorization guard",
+        }],
+        next_task_id: null,
+        has_more: false,
+      });
+    }),
+  };
+  try {
+    const noOwner = io();
+    const noOwnerCode = await runTaskCli([
+      "task", "wake-authorize", "task-wake-guard",
+      "--attempt", "1",
+      "--thread", "019c0000-0000-7000-8000-000000000001",
+      "--model", "deepseek-v4.1-flash",
+      "--model-provider", "deepseek",
+      "--reasoning-effort", "low",
+      "--expires-in-minutes", "30",
+      "--data-root", root,
+    ], noOwner.stream, dependencies);
+    assert.equal(noOwnerCode, 2);
+    assert.match(noOwner.stderr(), /--confirm-owner/u);
+    assert.equal(existsSync(path.join(root, "wake-policy.json")), false);
+
+    const mismatch = io();
+    const mismatchCode = await runTaskCli([
+      "task", "wake-authorize", "task-wake-guard",
+      "--attempt", "2",
+      "--thread", "019c0000-0000-7000-8000-000000000001",
+      "--model", "deepseek-v4.1-flash",
+      "--model-provider", "deepseek",
+      "--reasoning-effort", "low",
+      "--expires-in-minutes", "30",
+      "--confirm-owner",
+      "--data-root", root,
+    ], mismatch.stream, dependencies);
+    assert.equal(mismatchCode, 1);
+    assert.match(mismatch.stderr(), /WAKE_ATTEMPT_MISMATCH/u);
+    assert.equal(existsSync(path.join(root, "wake-policy.json")), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

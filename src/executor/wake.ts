@@ -9,6 +9,7 @@ import {
   lstatSync,
   readFileSync,
   realpathSync,
+  writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -18,6 +19,7 @@ import type { ExecutorWakeReleaseFact } from "../manager/sqlite-lifecycle-mcp-au
 const WAKE_POLICY_FILE = "wake-policy.json";
 const WAKE_POLICY_MAX_BYTES = 16 * 1024;
 const WAKE_AUTHORIZATION_MAX_MS = 24 * 60 * 60 * 1000;
+const WAKE_AUTHORIZATION_MIN_MS = 60 * 1000;
 const WAKE_CONTROL_FRAME_MAX_BYTES = 1024 * 1024;
 const WAKE_CONTROL_STDERR_MAX_BYTES = 8 * 1024;
 const WAKE_QUEUE_TIMEOUT_MS = 10_000;
@@ -81,6 +83,17 @@ export interface ExecutorWakePolicy {
     readonly granted_at: string;
     readonly expires_at: string;
   };
+}
+
+export interface ExecutorWakePolicyGrant {
+  readonly task_id: string;
+  readonly attempt: number;
+  readonly thread_id: string;
+  readonly workspace: string;
+  readonly model: string;
+  readonly model_provider: string;
+  readonly reasoning_effort: "minimal" | "low" | "medium";
+  readonly expires_in_ms: number;
 }
 
 type WakePolicyRead =
@@ -200,6 +213,68 @@ export function defaultAppServerControlSocket(
 
 export function defaultCodexExecutable(env: NodeJS.ProcessEnv = process.env): string {
   return env.ZCODE_BRIDGE_CODEX_EXECUTABLE?.trim() || (process.platform === "win32" ? "codex.exe" : "codex");
+}
+
+/** Create the single Owner-authorized Wake policy. Existing policies are never overwritten. */
+export function writeExecutorWakePolicy(
+  authorityRoot: string,
+  grant: ExecutorWakePolicyGrant,
+  nowMs = Date.now(),
+): {
+  readonly path: string;
+  readonly policy: ExecutorWakePolicy;
+  readonly policy_digest: string;
+  readonly authorization_digest: string;
+} {
+  if (!Number.isSafeInteger(nowMs) || nowMs < 0) throw new Error("EXECUTOR_WAKE_NOW_INVALID");
+  if (!Number.isSafeInteger(grant.expires_in_ms)
+    || grant.expires_in_ms < WAKE_AUTHORIZATION_MIN_MS
+    || grant.expires_in_ms > WAKE_AUTHORIZATION_MAX_MS) {
+    throw new Error("EXECUTOR_WAKE_AUTHORIZATION_DURATION_INVALID");
+  }
+  const root = path.resolve(authorityRoot);
+  if (!lstatSync(root).isDirectory()) throw new Error("EXECUTOR_WAKE_AUTHORITY_ROOT_INVALID");
+  const policyPath = path.join(root, WAKE_POLICY_FILE);
+  const value = {
+    schema_version: 1,
+    enabled: true,
+    task_id: grant.task_id,
+    attempt: grant.attempt,
+    thread_id: grant.thread_id,
+    workspace: grant.workspace,
+    model: grant.model,
+    model_provider: grant.model_provider,
+    reasoning_effort: grant.reasoning_effort,
+    fallback: "web_notify",
+    authorization: {
+      scope: "one_turn",
+      granted_by: "owner",
+      granted_at: new Date(nowMs).toISOString(),
+      expires_at: new Date(nowMs + grant.expires_in_ms).toISOString(),
+    },
+  } as const;
+  const policy = parseWakePolicy(value, nowMs);
+  try {
+    writeFileSync(policyPath, `${JSON.stringify(policy, null, 2)}\n`, {
+      encoding: "utf8",
+      flag: "wx",
+      mode: 0o600,
+    });
+  } catch (error) {
+    if (errorCode(error) === "EEXIST") {
+      throw Object.assign(
+        new Error("A Wake policy already exists; refusing to overwrite Owner authorization"),
+        { code: "WAKE_POLICY_EXISTS" },
+      );
+    }
+    throw error;
+  }
+  return {
+    path: policyPath,
+    policy,
+    policy_digest: wakeDigest(policy),
+    authorization_digest: wakeDigest(policy.authorization),
+  };
 }
 
 export function createExecutorWakeCoordinator(

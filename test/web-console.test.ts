@@ -32,6 +32,11 @@ function manager(): TaskConsoleManager & {
           created_at: "2026-01-01T00:00:00Z",
           workspace: "C:\\work",
           objective: "Inspect the durable result",
+          wake: {
+            state: "web_notify",
+            reason_code: "policy_missing",
+            at: "2026-01-01T00:02:30Z",
+          },
         }],
         next_task_id: null,
         has_more: false,
@@ -135,10 +140,21 @@ test("Web Console serves a loopback task inspection surface without mutations", 
     const page = await request(address, "/");
     assert.equal(page.status, 200);
     assert.match(String(page.json), /Operations Desk/u);
+    assert.match(String(page.json), /id="count-wake"/u);
+    assert.match(String(page.json), /id="wake-banner"/u);
+    const inlineScript = /<script>([\s\S]+)<\/script>/u.exec(String(page.json))?.[1];
+    assert.ok(inlineScript);
+    assert.doesNotThrow(() => new Function(inlineScript));
 
     const list = await request(address, "/api/tasks?limit=5");
     assert.equal(list.status, 200);
-    assert.equal((list.json as { result: { tasks: unknown[] } }).result.tasks.length, 1);
+    const listed = (list.json as { result: { tasks: Array<{ wake?: Record<string, unknown> }> } }).result;
+    assert.equal(listed.tasks.length, 1);
+    assert.deepEqual(listed.tasks[0]?.wake, {
+      state: "web_notify",
+      reason_code: "policy_missing",
+      at: "2026-01-01T00:02:30Z",
+    });
 
     const events = await request(address, "/api/tasks/task-a/events?limit=5&include_attempt=true");
     assert.equal(events.status, 200);

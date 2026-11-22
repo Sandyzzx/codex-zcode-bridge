@@ -7,8 +7,8 @@ var __export = (target, all) => {
 
 // src/cli/main.ts
 import { spawn as spawn2 } from "node:child_process";
-import { existsSync as existsSync4, writeFileSync } from "node:fs";
-import path5 from "node:path";
+import { existsSync as existsSync5, writeFileSync as writeFileSync2 } from "node:fs";
+import path6 from "node:path";
 import process2 from "node:process";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 
@@ -663,10 +663,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path6) {
-  if (!path6)
+function getElementAtPath(obj, path7) {
+  if (!path7)
     return obj;
-  return path6.reduce((acc, key) => acc?.[key], obj);
+  return path7.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -1006,11 +1006,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path6, issues) {
+function prefixIssues(path7, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path6);
+    iss.path.unshift(path7);
     return iss;
   });
 }
@@ -1456,16 +1456,16 @@ function flattenError(error2, mapper = (issue2) => issue2.message) {
 }
 function formatError(error2, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error3, path6 = []) => {
+  const processError = (error3, path7 = []) => {
     for (const issue2 of error3.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path6, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path7, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path6, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path7, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path6, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path7, ...issue2.path]);
       } else {
-        const fullpath = [...path6, ...issue2.path];
+        const fullpath = [...path7, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -6993,6 +6993,177 @@ function executorPipeName(root) {
   return `\\\\.\\pipe\\codex-zcode-bridge-executor-v1-${authorityRootDigest(root)}`;
 }
 
+// src/executor/wake.ts
+import { createHash as createHash2 } from "node:crypto";
+import {
+  existsSync as existsSync4,
+  lstatSync as lstatSync3,
+  readFileSync as readFileSync4,
+  realpathSync as realpathSync2,
+  writeFileSync
+} from "node:fs";
+import path5 from "node:path";
+var WAKE_POLICY_FILE = "wake-policy.json";
+var WAKE_POLICY_MAX_BYTES = 16 * 1024;
+var WAKE_AUTHORIZATION_MAX_MS = 24 * 60 * 60 * 1e3;
+var WAKE_AUTHORIZATION_MIN_MS = 60 * 1e3;
+var WAKE_CONTROL_FRAME_MAX_BYTES = 1024 * 1024;
+var WAKE_CONTROL_STDERR_MAX_BYTES = 8 * 1024;
+var WAKE_POLICY_KEYS = [
+  "attempt",
+  "authorization",
+  "enabled",
+  "fallback",
+  "model",
+  "model_provider",
+  "reasoning_effort",
+  "schema_version",
+  "task_id",
+  "thread_id",
+  "workspace"
+];
+var WAKE_AUTHORIZATION_KEYS = ["expires_at", "granted_at", "granted_by", "scope"];
+function writeExecutorWakePolicy(authorityRoot, grant, nowMs = Date.now()) {
+  if (!Number.isSafeInteger(nowMs) || nowMs < 0) throw new Error("EXECUTOR_WAKE_NOW_INVALID");
+  if (!Number.isSafeInteger(grant.expires_in_ms) || grant.expires_in_ms < WAKE_AUTHORIZATION_MIN_MS || grant.expires_in_ms > WAKE_AUTHORIZATION_MAX_MS) {
+    throw new Error("EXECUTOR_WAKE_AUTHORIZATION_DURATION_INVALID");
+  }
+  const root = path5.resolve(authorityRoot);
+  if (!lstatSync3(root).isDirectory()) throw new Error("EXECUTOR_WAKE_AUTHORITY_ROOT_INVALID");
+  const policyPath = path5.join(root, WAKE_POLICY_FILE);
+  const value = {
+    schema_version: 1,
+    enabled: true,
+    task_id: grant.task_id,
+    attempt: grant.attempt,
+    thread_id: grant.thread_id,
+    workspace: grant.workspace,
+    model: grant.model,
+    model_provider: grant.model_provider,
+    reasoning_effort: grant.reasoning_effort,
+    fallback: "web_notify",
+    authorization: {
+      scope: "one_turn",
+      granted_by: "owner",
+      granted_at: new Date(nowMs).toISOString(),
+      expires_at: new Date(nowMs + grant.expires_in_ms).toISOString()
+    }
+  };
+  const policy = parseWakePolicy(value, nowMs);
+  try {
+    writeFileSync(policyPath, `${JSON.stringify(policy, null, 2)}
+`, {
+      encoding: "utf8",
+      flag: "wx",
+      mode: 384
+    });
+  } catch (error2) {
+    if (errorCode(error2) === "EEXIST") {
+      throw Object.assign(
+        new Error("A Wake policy already exists; refusing to overwrite Owner authorization"),
+        { code: "WAKE_POLICY_EXISTS" }
+      );
+    }
+    throw error2;
+  }
+  return {
+    path: policyPath,
+    policy,
+    policy_digest: wakeDigest(policy),
+    authorization_digest: wakeDigest(policy.authorization)
+  };
+}
+function parseWakePolicy(value, nowMs) {
+  if (!isRecord2(value) || !hasExactKeys(value, WAKE_POLICY_KEYS)) throw new Error("wake_policy_shape_invalid");
+  if (value.schema_version !== 1 || typeof value.enabled !== "boolean" || value.fallback !== "web_notify") {
+    throw new Error("wake_policy_version_invalid");
+  }
+  const taskId = boundedIdentifier(value.task_id);
+  const threadId = boundedIdentifier(value.thread_id);
+  const model = boundedText(value.model, 256);
+  const provider = boundedText(value.model_provider, 256);
+  if (!Number.isSafeInteger(value.attempt) || Number(value.attempt) < 1) throw new Error("wake_policy_attempt_invalid");
+  if (typeof value.workspace !== "string" || !path5.isAbsolute(value.workspace)) throw new Error("wake_policy_workspace_invalid");
+  if (value.reasoning_effort !== "minimal" && value.reasoning_effort !== "low" && value.reasoning_effort !== "medium") {
+    throw new Error("wake_policy_reasoning_invalid");
+  }
+  if (!isRecord2(value.authorization) || !hasExactKeys(value.authorization, WAKE_AUTHORIZATION_KEYS)) {
+    throw new Error("wake_authorization_shape_invalid");
+  }
+  if (value.authorization.scope !== "one_turn" || value.authorization.granted_by !== "owner") {
+    throw new Error("wake_authorization_scope_invalid");
+  }
+  const grantedAt = Date.parse(String(value.authorization.granted_at));
+  const expiresAt = Date.parse(String(value.authorization.expires_at));
+  if (!Number.isFinite(grantedAt) || !Number.isFinite(expiresAt) || grantedAt > nowMs || expiresAt <= nowMs || expiresAt <= grantedAt || expiresAt - grantedAt > WAKE_AUTHORIZATION_MAX_MS) {
+    throw new Error("wake_authorization_time_invalid");
+  }
+  return {
+    schema_version: 1,
+    enabled: value.enabled,
+    task_id: taskId,
+    attempt: Number(value.attempt),
+    thread_id: threadId,
+    workspace: normalizeWorkspace(value.workspace),
+    model,
+    model_provider: provider,
+    reasoning_effort: value.reasoning_effort,
+    fallback: "web_notify",
+    authorization: {
+      scope: "one_turn",
+      granted_by: "owner",
+      granted_at: String(value.authorization.granted_at),
+      expires_at: String(value.authorization.expires_at)
+    }
+  };
+}
+function normalizeWorkspace(value) {
+  const resolved = path5.resolve(value);
+  try {
+    const canonical = realpathSync2.native(resolved);
+    return process.platform === "win32" ? canonical.toLowerCase() : canonical;
+  } catch {
+    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  }
+}
+function boundedIdentifier(value) {
+  if (!isIdentifier(value)) throw new Error("wake_identifier_invalid");
+  return value;
+}
+function isIdentifier(value) {
+  return typeof value === "string" && value.length > 0 && value.length <= 128 && /^[A-Za-z0-9._:-]+$/u.test(value) && value === value.normalize("NFC");
+}
+function boundedText(value, maxBytes) {
+  if (typeof value !== "string" || !value.trim() || Buffer.byteLength(value, "utf8") > maxBytes || value !== value.normalize("NFC")) {
+    throw new Error("wake_text_invalid");
+  }
+  return value;
+}
+function hasExactKeys(value, expected) {
+  return Object.keys(value).sort().join("|") === [...expected].sort().join("|");
+}
+function isRecord2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function wakeDigest(value) {
+  return createHash2("sha256").update(canonicalJson2(value), "utf8").digest("hex");
+}
+function canonicalJson2(value) {
+  if (value === null || typeof value === "boolean" || typeof value === "string") return JSON.stringify(value);
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new Error("wake_digest_number_invalid");
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) return `[${value.map(canonicalJson2).join(",")}]`;
+  if (isRecord2(value)) {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson2(value[key])}`).join(",")}}`;
+  }
+  throw new Error("wake_digest_value_invalid");
+}
+function errorCode(error2) {
+  return isRecord2(error2) && typeof error2.code === "string" ? error2.code : null;
+}
+
 // src/cli/main.ts
 var TASK_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u;
 var RESULT_STDOUT_LIMIT_BYTES = 1024 * 1024;
@@ -7008,7 +7179,9 @@ var TASK_CLI_USAGE = [
   "  task events <task_id> [--after-seq N] [--limit 1..200] [--wait-ms 0..25000]",
   "  task result <task_id> [--view summary|full] [--output ABS_PATH]",
   "  task cancel <task_id>",
-  "  task reply <task_id> --request-id ID --decision allow|deny|accept|decline [--reason TEXT] [--answer KEY=VALUE]"
+  "  task reply <task_id> --request-id ID --decision allow|deny|accept|decline [--reason TEXT] [--answer KEY=VALUE]",
+  "  task wake-authorize <task_id> --attempt N --thread ID --model MODEL --model-provider PROVIDER",
+  "      --reasoning-effort minimal|low|medium --expires-in-minutes 1..1440 --confirm-owner"
 ].join("\n");
 var CliUsageError = class extends Error {
 };
@@ -7024,7 +7197,7 @@ async function runTaskCli(argv, io = DEFAULT_IO, dependencies = {}) {
     const dataRoot = resolveDataRoot(globals.dataRoot, bridgeHost);
     const pipeName = executorPipeName(dataRoot);
     if (command === "task") {
-      return await runTaskCommand(args.slice(1), pipeName, io, dependencies);
+      return await runTaskCommand(args.slice(1), dataRoot, pipeName, io, dependencies);
     }
     if (command === "executor") {
       return await runExecutorCommand(args.slice(1), {
@@ -7061,13 +7234,13 @@ function parseGlobalOptions(argv) {
     if (argument === "--data-root" || argument === "--settings-directory") {
       const value = argv[++index];
       if (!value) throw new CliUsageError(`${argument} requires an absolute path`);
-      if (!path5.isAbsolute(value)) throw new CliUsageError(`${argument} requires an absolute path`);
+      if (!path6.isAbsolute(value)) throw new CliUsageError(`${argument} requires an absolute path`);
       if (argument === "--data-root") {
         if (dataRoot !== null) throw new CliUsageError("--data-root may appear only once");
-        dataRoot = path5.normalize(value);
+        dataRoot = path6.normalize(value);
       } else {
         if (settingsDirectory !== null) throw new CliUsageError("--settings-directory may appear only once");
-        settingsDirectory = path5.normalize(value);
+        settingsDirectory = path6.normalize(value);
       }
       continue;
     }
@@ -7083,7 +7256,7 @@ function resolveDataRoot(override, host) {
   const selection = loadInstallAuthoritySelection(host);
   return resolveSqliteStateDirectory(selection, process2.env).dataRoot;
 }
-async function runTaskCommand(args, pipeName, io, dependencies) {
+async function runTaskCommand(args, dataRoot, pipeName, io, dependencies) {
   const subcommand = args[0];
   if (subcommand === "list") {
     const options = parseFlags(args.slice(1), /* @__PURE__ */ new Set([
@@ -7100,6 +7273,9 @@ async function runTaskCommand(args, pipeName, io, dependencies) {
       writeJson(io, (await requestOk(client, "listTasks", input)).result);
       return 0;
     });
+  }
+  if (subcommand === "wake-authorize") {
+    return runWakeAuthorize(args.slice(1), dataRoot, pipeName, io, dependencies);
   }
   const taskId = args[1];
   if (subcommand !== void 0 && TASK_ID.test(taskId ?? "")) {
@@ -7141,15 +7317,15 @@ async function runTaskCommand(args, pipeName, io, dependencies) {
       const options = parseFlags(args.slice(2), /* @__PURE__ */ new Set(["--view", "--output"]));
       const view = options.single.has("--view") ? enumValue("--view", options.single.get("--view"), ["summary", "full"]) : "summary";
       const output = options.single.get("--output");
-      if (output !== void 0 && !path5.isAbsolute(output)) throw new CliUsageError("--output requires an absolute path");
+      if (output !== void 0 && !path6.isAbsolute(output)) throw new CliUsageError("--output requires an absolute path");
       return withClient(dependencies, pipeName, async (client) => {
         const result = (await requestOk(client, "getResult", { task_id: taskId })).result;
         const value = view === "summary" ? summarizeTaskResult(result) : result;
         const serialized = `${JSON.stringify(value, null, 2)}
 `;
         if (output !== void 0) {
-          writeFileSync(path5.normalize(output), serialized, { encoding: "utf8", flag: "wx" });
-          writeJson(io, { task_id: result.task_id, attempt: result.attempt, output: path5.normalize(output), bytes: Buffer.byteLength(serialized) });
+          writeFileSync2(path6.normalize(output), serialized, { encoding: "utf8", flag: "wx" });
+          writeJson(io, { task_id: result.task_id, attempt: result.attempt, output: path6.normalize(output), bytes: Buffer.byteLength(serialized) });
           return 0;
         }
         if (Buffer.byteLength(serialized) > RESULT_STDOUT_LIMIT_BYTES) {
@@ -7202,6 +7378,94 @@ async function runTaskCommand(args, pipeName, io, dependencies) {
     }
   }
   throw new CliUsageError("unknown or invalid task command");
+}
+async function runWakeAuthorize(args, dataRoot, pipeName, io, dependencies) {
+  const taskId = args[0];
+  if (!TASK_ID.test(taskId ?? "")) throw new CliUsageError("wake-authorize requires a valid task_id");
+  const options = parseFlags(
+    args.slice(1),
+    /* @__PURE__ */ new Set([
+      "--attempt",
+      "--thread",
+      "--model",
+      "--model-provider",
+      "--reasoning-effort",
+      "--expires-in-minutes",
+      "--confirm-owner"
+    ]),
+    /* @__PURE__ */ new Set(["--confirm-owner"])
+  );
+  if (!options.boolean.has("--confirm-owner")) {
+    throw new CliUsageError("wake-authorize requires --confirm-owner");
+  }
+  const attempt = integer2("--attempt", required2(options.single, "--attempt"), 1, Number.MAX_SAFE_INTEGER);
+  const threadId = required2(options.single, "--thread").trim();
+  const model = required2(options.single, "--model").trim();
+  const provider = required2(options.single, "--model-provider").trim();
+  const reasoningEffort = enumValue(
+    "--reasoning-effort",
+    required2(options.single, "--reasoning-effort"),
+    ["minimal", "low", "medium"]
+  );
+  const expiresInMinutes = integer2(
+    "--expires-in-minutes",
+    required2(options.single, "--expires-in-minutes"),
+    1,
+    1440
+  );
+  return withClient(dependencies, pipeName, async (client) => {
+    const task = await findTask(client, taskId);
+    if (task.attempt !== attempt) {
+      throw Object.assign(
+        new Error(`Task ${taskId} is at Attempt ${task.attempt}, not ${attempt}`),
+        { code: "WAKE_ATTEMPT_MISMATCH" }
+      );
+    }
+    const grant = {
+      task_id: taskId,
+      attempt,
+      thread_id: threadId,
+      workspace: task.workspace,
+      model,
+      model_provider: provider,
+      reasoning_effort: reasoningEffort,
+      expires_in_ms: expiresInMinutes * 6e4
+    };
+    const written = (dependencies.writeWakePolicy ?? writeExecutorWakePolicy)(
+      dataRoot,
+      grant,
+      dependencies.now?.() ?? Date.now()
+    );
+    writeJson(io, {
+      task_id: taskId,
+      attempt,
+      thread_id: threadId,
+      workspace: written.policy.workspace,
+      model,
+      model_provider: provider,
+      reasoning_effort: reasoningEffort,
+      authorization_scope: written.policy.authorization.scope,
+      authorization_expires_at: written.policy.authorization.expires_at,
+      policy_path: written.path,
+      policy_digest: written.policy_digest,
+      authorization_digest: written.authorization_digest
+    });
+    return 0;
+  });
+}
+async function findTask(client, taskId) {
+  let after = null;
+  for (let pageNumber = 0; pageNumber < 100; pageNumber += 1) {
+    const page = (await requestOk(client, "listTasks", {
+      limit: 100,
+      ...after === null ? {} : { after_task_id: after }
+    })).result;
+    const found = page.tasks.find((task) => task.task_id === taskId);
+    if (found) return found;
+    if (!page.has_more || page.next_task_id === null) break;
+    after = page.next_task_id;
+  }
+  throw Object.assign(new Error(`unknown SQLite task: ${taskId}`), { code: "TASK_NOT_FOUND" });
 }
 async function runExecutorCommand(args, context, io, dependencies) {
   const command = args[0];
@@ -7326,11 +7590,11 @@ function spawnExecutor(input) {
 }
 function resolveExecutorEntry() {
   const bundled = fileURLToPath3(new URL("./executor.mjs", import.meta.url));
-  return existsSync4(bundled) ? bundled : fileURLToPath3(new URL("../executor/main.js", import.meta.url));
+  return existsSync5(bundled) ? bundled : fileURLToPath3(new URL("../executor/main.js", import.meta.url));
 }
 function resolveBridgeEntry() {
   const bundled = fileURLToPath3(new URL("./bridge.mjs", import.meta.url));
-  return existsSync4(bundled) ? bundled : fileURLToPath3(new URL("../mcp/main.js", import.meta.url));
+  return existsSync5(bundled) ? bundled : fileURLToPath3(new URL("../mcp/main.js", import.meta.url));
 }
 async function tryExecutorStatus(pipeName, dependencies) {
   const client = (dependencies.createClient ?? defaultClient)(pipeName, 250);
@@ -7440,7 +7704,7 @@ function writeJson(io, value) {
 function sleep(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
-if (process2.argv[1] && path5.resolve(process2.argv[1]) === path5.resolve(fileURLToPath3(import.meta.url))) {
+if (process2.argv[1] && path6.resolve(process2.argv[1]) === path6.resolve(fileURLToPath3(import.meta.url))) {
   process2.exitCode = await runTaskCli(process2.argv.slice(2));
 }
 export {

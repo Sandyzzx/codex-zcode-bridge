@@ -26,9 +26,11 @@ import {
   type ExecutorLeaseInspection,
   type ExecutorLeaseRecord,
 } from "../executor/lease.js";
+import { writeExecutorWakePolicy, type ExecutorWakePolicyGrant } from "../executor/wake.js";
 import {
   listTasksInputSchema,
   type ListTasksInput,
+  type TaskListPage,
 } from "../task-list.js";
 import type { GetEventsInput, TaskResult, ZCodeInteractionReplyInput } from "../interfaces.js";
 
@@ -48,6 +50,8 @@ export const TASK_CLI_USAGE = [
   "  task result <task_id> [--view summary|full] [--output ABS_PATH]",
   "  task cancel <task_id>",
   "  task reply <task_id> --request-id ID --decision allow|deny|accept|decline [--reason TEXT] [--answer KEY=VALUE]",
+  "  task wake-authorize <task_id> --attempt N --thread ID --model MODEL --model-provider PROVIDER",
+  "      --reasoning-effort minimal|low|medium --expires-in-minutes 1..1440 --confirm-owner",
 ].join("\n");
 
 export class CliUsageError extends Error {}
@@ -77,6 +81,7 @@ export interface TaskCliDependencies {
   }) => { readonly pid: number | undefined };
   readonly inspectLease?: (dataRoot: string) => Promise<ExecutorLeaseInspection>;
   readonly clearLease?: (dataRoot: string) => Promise<ExecutorLeaseRecord>;
+  readonly writeWakePolicy?: typeof writeExecutorWakePolicy;
   readonly now?: () => number;
   readonly sleep?: (milliseconds: number) => Promise<void>;
 }
@@ -104,7 +109,7 @@ export async function runTaskCli(
     const pipeName = executorPipeName(dataRoot);
 
     if (command === "task") {
-      return await runTaskCommand(args.slice(1), pipeName, io, dependencies);
+      return await runTaskCommand(args.slice(1), dataRoot, pipeName, io, dependencies);
     }
     if (command === "executor") {
       return await runExecutorCommand(args.slice(1), {
@@ -169,6 +174,7 @@ function resolveDataRoot(override: string | null, host: BridgeHostProfile): stri
 
 async function runTaskCommand(
   args: readonly string[],
+  dataRoot: string,
   pipeName: string,
   io: TaskCliIo,
   dependencies: TaskCliDependencies,
@@ -193,6 +199,9 @@ async function runTaskCommand(
       writeJson(io, (await requestOk(client, "listTasks", input)).result);
       return 0;
     });
+  }
+  if (subcommand === "wake-authorize") {
+    return runWakeAuthorize(args.slice(1), dataRoot, pipeName, io, dependencies);
   }
 
   const taskId = args[1];
@@ -300,6 +309,98 @@ async function runTaskCommand(
     }
   }
   throw new CliUsageError("unknown or invalid task command");
+}
+
+async function runWakeAuthorize(
+  args: readonly string[],
+  dataRoot: string,
+  pipeName: string,
+  io: TaskCliIo,
+  dependencies: TaskCliDependencies,
+): Promise<number> {
+  const taskId = args[0];
+  if (!TASK_ID.test(taskId ?? "")) throw new CliUsageError("wake-authorize requires a valid task_id");
+  const options = parseFlags(
+    args.slice(1),
+    new Set([
+      "--attempt", "--thread", "--model", "--model-provider",
+      "--reasoning-effort", "--expires-in-minutes", "--confirm-owner",
+    ]),
+    new Set(["--confirm-owner"]),
+  );
+  if (!options.boolean.has("--confirm-owner")) {
+    throw new CliUsageError("wake-authorize requires --confirm-owner");
+  }
+  const attempt = integer("--attempt", required(options.single, "--attempt"), 1, Number.MAX_SAFE_INTEGER);
+  const threadId = required(options.single, "--thread").trim();
+  const model = required(options.single, "--model").trim();
+  const provider = required(options.single, "--model-provider").trim();
+  const reasoningEffort = enumValue(
+    "--reasoning-effort",
+    required(options.single, "--reasoning-effort"),
+    ["minimal", "low", "medium"] as const,
+  );
+  const expiresInMinutes = integer(
+    "--expires-in-minutes",
+    required(options.single, "--expires-in-minutes"),
+    1,
+    1440,
+  );
+
+  return withClient(dependencies, pipeName, async (client) => {
+    const task = await findTask(client, taskId!);
+    if (task.attempt !== attempt) {
+      throw Object.assign(
+        new Error(`Task ${taskId} is at Attempt ${task.attempt}, not ${attempt}`),
+        { code: "WAKE_ATTEMPT_MISMATCH" },
+      );
+    }
+    const grant: ExecutorWakePolicyGrant = {
+      task_id: taskId!,
+      attempt,
+      thread_id: threadId,
+      workspace: task.workspace,
+      model,
+      model_provider: provider,
+      reasoning_effort: reasoningEffort,
+      expires_in_ms: expiresInMinutes * 60_000,
+    };
+    const written = (dependencies.writeWakePolicy ?? writeExecutorWakePolicy)(
+      dataRoot,
+      grant,
+      dependencies.now?.() ?? Date.now(),
+    );
+    writeJson(io, {
+      task_id: taskId,
+      attempt,
+      thread_id: threadId,
+      workspace: written.policy.workspace,
+      model,
+      model_provider: provider,
+      reasoning_effort: reasoningEffort,
+      authorization_scope: written.policy.authorization.scope,
+      authorization_expires_at: written.policy.authorization.expires_at,
+      policy_path: written.path,
+      policy_digest: written.policy_digest,
+      authorization_digest: written.authorization_digest,
+    });
+    return 0;
+  });
+}
+
+async function findTask(client: CliControlClient, taskId: string): Promise<TaskListPage["tasks"][number]> {
+  let after: string | null = null;
+  for (let pageNumber = 0; pageNumber < 100; pageNumber += 1) {
+    const page = (await requestOk(client, "listTasks", {
+      limit: 100,
+      ...(after === null ? {} : { after_task_id: after }),
+    })).result as unknown as TaskListPage;
+    const found = page.tasks.find((task) => task.task_id === taskId);
+    if (found) return found;
+    if (!page.has_more || page.next_task_id === null) break;
+    after = page.next_task_id;
+  }
+  throw Object.assign(new Error(`unknown SQLite task: ${taskId}`), { code: "TASK_NOT_FOUND" });
 }
 
 async function runExecutorCommand(

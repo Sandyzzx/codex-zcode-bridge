@@ -20,6 +20,12 @@ export const listTasksInputSchema = z.strictObject({
 
 export type ListTasksInput = z.infer<typeof listTasksInputSchema>;
 
+export interface TaskListWakeSummary {
+  readonly state: "intent" | "queued" | "submission_unknown" | "turn_started" | "web_notify";
+  readonly reason_code: string;
+  readonly at: string;
+}
+
 export interface TaskListItem {
   readonly task_id: string;
   readonly status: TaskStatus;
@@ -27,6 +33,7 @@ export interface TaskListItem {
   readonly created_at: string;
   readonly workspace: string;
   readonly objective: string;
+  readonly wake?: TaskListWakeSummary;
 }
 
 export interface TaskListPage {

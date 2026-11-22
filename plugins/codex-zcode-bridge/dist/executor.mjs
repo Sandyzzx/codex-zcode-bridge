@@ -4814,10 +4814,26 @@ var init_store = __esm({
           fail2("invalid_task_list_query");
         }
         return this.#readConsistent(() => {
-          const rows = this.#db.prepare(`SELECT task_id,status,current_attempt,created_at,task_json
-        FROM tasks
-        WHERE task_id>? AND (? IS NULL OR status=?)
-        ORDER BY task_id
+          const rows = this.#db.prepare(`SELECT t.task_id,t.status,t.current_attempt,t.created_at,t.task_json,
+          (SELECT e.evidence_json
+             FROM manager_operation_events e
+             JOIN manager_operations o ON o.operation_id=e.operation_id
+            WHERE o.task_id=t.task_id
+              AND o.attempt=t.current_attempt
+              AND e.event_type='observation_recorded'
+              AND json_extract(e.evidence_json,'$.reason')='executor_wake'
+            ORDER BY e.sequence DESC LIMIT 1) AS wake_evidence_json,
+          (SELECT e.at
+             FROM manager_operation_events e
+             JOIN manager_operations o ON o.operation_id=e.operation_id
+            WHERE o.task_id=t.task_id
+              AND o.attempt=t.current_attempt
+              AND e.event_type='observation_recorded'
+              AND json_extract(e.evidence_json,'$.reason')='executor_wake'
+            ORDER BY e.sequence DESC LIMIT 1) AS wake_at
+        FROM tasks t
+        WHERE t.task_id>? AND (? IS NULL OR t.status=?)
+        ORDER BY t.task_id
         LIMIT ?`).all(afterTaskId ?? "", status, status, limit + 1);
           const hasMore = rows.length > limit;
           const visible = rows.slice(0, limit).map((row) => {
@@ -4835,7 +4851,9 @@ var init_store = __esm({
               attempt: row.current_attempt,
               created_at: row.created_at,
               workspace: task.workspace,
-              objective: task.objective
+              objective: task.objective,
+              wake_evidence_json: row.wake_evidence_json,
+              wake_at: row.wake_at
             };
           });
           return {
@@ -22818,7 +22836,8 @@ var SqliteLifecycleMcpAuthority = class _SqliteLifecycleMcpAuthority {
         attempt: Number(item.attempt),
         created_at: string3(item.created_at, "task_list_created_at_missing"),
         workspace: string3(item.workspace, "task_list_workspace_missing"),
-        objective: string3(item.objective, "task_list_objective_missing")
+        objective: string3(item.objective, "task_list_objective_missing"),
+        ...taskListWakeSummary(item.wake_evidence_json, item.wake_at) ?? {}
       };
     });
     return {
@@ -23846,6 +23865,22 @@ function taskStatus(value) {
   }
   return value;
 }
+function taskListWakeSummary(evidenceJson, at) {
+  if (typeof evidenceJson !== "string" || typeof at !== "string" || !Number.isFinite(Date.parse(at))) return null;
+  try {
+    const evidence = asRecord7(JSON.parse(evidenceJson));
+    if (evidence.reason !== "executor_wake" || typeof evidence.state !== "string" || !["intent", "queued", "submission_unknown", "turn_started", "web_notify"].includes(evidence.state) || typeof evidence.reason_code !== "string" || evidence.reason_code.length === 0 || evidence.reason_code.length > 256) return null;
+    return {
+      wake: {
+        state: evidence.state,
+        reason_code: evidence.reason_code,
+        at
+      }
+    };
+  } catch {
+    return null;
+  }
+}
 function receipt(taskId, status, createdAt) {
   return { task_id: taskId, status: status === "running" ? "running" : "queued", created_at: string3(createdAt, "task_created_at_missing") };
 }
@@ -24063,13 +24098,15 @@ import {
   existsSync as existsSync11,
   lstatSync as lstatSync4,
   readFileSync as readFileSync11,
-  realpathSync as realpathSync5
+  realpathSync as realpathSync5,
+  writeFileSync as writeFileSync4
 } from "node:fs";
 import { homedir as homedir6 } from "node:os";
 import path20 from "node:path";
 var WAKE_POLICY_FILE = "wake-policy.json";
 var WAKE_POLICY_MAX_BYTES = 16 * 1024;
 var WAKE_AUTHORIZATION_MAX_MS = 24 * 60 * 60 * 1e3;
+var WAKE_AUTHORIZATION_MIN_MS = 60 * 1e3;
 var WAKE_CONTROL_FRAME_MAX_BYTES = 1024 * 1024;
 var WAKE_CONTROL_STDERR_MAX_BYTES = 8 * 1024;
 var WAKE_QUEUE_TIMEOUT_MS = 1e4;

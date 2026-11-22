@@ -31,6 +31,7 @@ import {
   type ListTasksInput,
   type TaskListItem,
   type TaskListPage,
+  type TaskListWakeSummary,
 } from "../task-list.js";
 
 const EXECUTION_OBSERVATION_PROBE_BUDGET_MS = 5_000;
@@ -288,6 +289,7 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
         created_at: string(item.created_at, "task_list_created_at_missing"),
         workspace: string(item.workspace, "task_list_workspace_missing"),
         objective: string(item.objective, "task_list_objective_missing"),
+        ...(taskListWakeSummary(item.wake_evidence_json, item.wake_at) ?? {}),
       };
     });
     return {
@@ -1435,6 +1437,32 @@ function taskStatus(value: unknown): TaskStatus {
     throw new TaskManagerError("TASK_STATE", "SQLite Task projection has an unknown status");
   }
   return value as TaskStatus;
+}
+
+function taskListWakeSummary(
+  evidenceJson: unknown,
+  at: unknown,
+): { readonly wake: TaskListWakeSummary } | null {
+  if (typeof evidenceJson !== "string" || typeof at !== "string"
+    || !Number.isFinite(Date.parse(at))) return null;
+  try {
+    const evidence = asRecord(JSON.parse(evidenceJson));
+    if (evidence.reason !== "executor_wake"
+      || typeof evidence.state !== "string"
+      || !["intent", "queued", "submission_unknown", "turn_started", "web_notify"].includes(evidence.state)
+      || typeof evidence.reason_code !== "string"
+      || evidence.reason_code.length === 0
+      || evidence.reason_code.length > 256) return null;
+    return {
+      wake: {
+        state: evidence.state as TaskListWakeSummary["state"],
+        reason_code: evidence.reason_code,
+        at,
+      },
+    };
+  } catch {
+    return null;
+  }
 }
 
 function receipt(taskId: string, status: unknown, createdAt: unknown): TaskReceipt {

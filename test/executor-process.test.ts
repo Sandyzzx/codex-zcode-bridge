@@ -25,6 +25,7 @@ const executorEntry = path.join(projectRoot, "dist-test", "src", "executor", "ma
 const testExecutorEntry = path.join(projectRoot, "dist-test", "test", "fixtures", "executor-test-main.js");
 const workerEntry = path.join(projectRoot, "dist-test", "src", "worker", "worker-main.js");
 const thinMcpEntry = path.join(projectRoot, "dist-test", "src", "mcp", "main.js");
+const shippedBridgeEntry = path.join(projectRoot, "plugins", "codex-zcode-bridge", "dist", "bridge.mjs");
 const bridgeEntry = fileURLToPath(import.meta.url);
 
 interface ExecutorProcess {
@@ -144,6 +145,33 @@ async function waitForExecutorWakeEvent(
   throw new Error(`EXECUTOR_WAKE_EVENT_TIMEOUT ${state} ${JSON.stringify(lastEvents)}`);
 }
 
+async function waitForProcessExit(pid: number, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
+      throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`PROCESS_EXIT_TIMEOUT ${pid}`);
+}
+
+async function waitForTextFile(file: string, timeoutMs: number): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      return readFileSync(file, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`FILE_TIMEOUT ${file}`);
+}
+
 async function waitForInteractionRequest(
   client: ExecutorControlClient,
   taskId: string,
@@ -171,8 +199,8 @@ async function waitForInteractionRequest(
   throw new Error(`EXECUTOR_INTERACTION_TIMEOUT ${JSON.stringify(lastEvents)} result=${terminal}`);
 }
 
-function startThinMcp(env: NodeJS.ProcessEnv) {
-  const child = spawn(process.execPath, [thinMcpEntry], {
+function startThinMcp(env: NodeJS.ProcessEnv, entry = thinMcpEntry) {
+  const child = spawn(process.execPath, [entry], {
     cwd: projectRoot,
     env,
     stdio: ["pipe", "pipe", "pipe"],
@@ -723,6 +751,225 @@ test("Thin MCP disconnect leaves the accepted Task in the Executor and reconnect
     // a short interval after the terminated process has exited.
     await new Promise((resolve) => setTimeout(resolve, 1_500));
     rmSync(fixture, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+  }
+});
+
+test("a shipped MCP Host process exit cannot cancel the original Attempt Result, Cleanup, or Release", {
+  timeout: 120_000,
+}, async () => {
+  const fixtureBase = process.env.LOCALAPPDATA
+    && path.isAbsolute(process.env.LOCALAPPDATA)
+    ? path.join(process.env.LOCALAPPDATA, "Temp")
+    : tmpdir();
+  mkdirSync(fixtureBase, { recursive: true });
+  const fixture = mkdtempSync(path.join(fixtureBase, "executor-host-exit-"));
+  const localAppData = path.join(fixture, "local-app-data");
+  const userProfile = path.join(fixture, "user-profile");
+  const tempDirectory = path.join(fixture, "temp");
+  const root = path.join(localAppData, "CodexZCodeBridge", "state");
+  const settingsDirectory = path.join(userProfile, ".codex", "codex-zcode-bridge");
+  const workspace = path.join(fixture, "workspace");
+  const spawnLog = path.join(fixture, "worker-spawns.log");
+  const workerPidFile = path.join(fixture, "worker-pid.txt");
+  const workerGate = path.join(fixture, "worker-gate");
+  const workerWrapper = path.join(fixture, "worker-wrapper.mjs");
+  for (const directory of [root, settingsDirectory, workspace, tempDirectory]) {
+    mkdirSync(directory, { recursive: true });
+  }
+  writeFileSync(spawnLog, "", "utf8");
+  writeFileSync(workerWrapper, [
+    'import { appendFileSync, existsSync, writeFileSync } from "node:fs";',
+    `appendFileSync(${JSON.stringify(spawnLog)}, "spawn\\n");`,
+    `writeFileSync(${JSON.stringify(workerPidFile)}, String(process.pid), "utf8");`,
+    `const gate = ${JSON.stringify(workerGate)};`,
+    "const deadline = Date.now() + 60_000;",
+    "while (!existsSync(gate) && Date.now() < deadline) {",
+    "  await new Promise((resolve) => setTimeout(resolve, 25));",
+    "}",
+    "if (!existsSync(gate)) process.exit(70);",
+    `const { runWorkerMain } = await import(${JSON.stringify(pathToFileURL(workerEntry).href)});`,
+    "await runWorkerMain({}, process.argv.slice(2));",
+    "",
+  ].join("\n"), "utf8");
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    LOCALAPPDATA: localAppData,
+    USERPROFILE: userProfile,
+    HOME: userProfile,
+    TEMP: tempDirectory,
+    TMP: tempDirectory,
+    TMPDIR: tempDirectory,
+    ZCODE_BRIDGE_MCP_TRANSPORT: "control",
+  };
+  delete env.ZCODE_BRIDGE_DATA_DIR;
+  delete env.ZCODE_BRIDGE_PLUGIN_MODE;
+
+  assert.equal(existsSync(shippedBridgeEntry), true, "the shipped MCP Host artifact must exist");
+  const executor = startExecutor(root, "100", settingsDirectory, {
+    workerEntryPath: workerWrapper,
+    env,
+  });
+  const ready = await executor.ready;
+  const directClient = new ExecutorControlClient({ pipeName: ready.pipe_name, connectTimeoutMs: 5_000 });
+  let host: ReturnType<typeof startThinMcp> | undefined;
+  let reconnectHost: ReturnType<typeof startThinMcp> | undefined;
+  let workerPid: number | undefined;
+  let succeeded = false;
+  try {
+    const taskId = `host-exit-${Date.now()}`;
+    host = startThinMcp(env, shippedBridgeEntry);
+    host.child.stdin.write([
+      JSON.stringify({
+        jsonrpc: "2.0", id: 1, method: "initialize",
+        params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "host-exit", version: "1" } },
+      }),
+      JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
+      "",
+    ].join("\n"));
+    assert.ok((await host.waitForResponse(1)).result);
+    host.child.stdin.write([
+      JSON.stringify({
+        jsonrpc: "2.0", id: 2, method: "tools/call",
+        params: {
+          name: "zcode_task",
+          arguments: {
+            task_id: taskId,
+            workspace,
+            objective: "Prove Host process exit preserves the accepted Attempt",
+            requirements: ["Use only the synthetic Worker"],
+            allowed_paths: [],
+            forbidden_paths: [],
+            acceptance_criteria: ["Commit exactly one original Attempt Result"],
+            test_commands: [],
+          },
+        },
+      }),
+      "",
+    ].join("\n"));
+    const accepted = await host.waitForResponse(2) as {
+      result?: { isError?: boolean; structuredContent?: Record<string, unknown> };
+    };
+    assert.notEqual(accepted.result?.isError, true, host.stderr());
+    assert.equal(accepted.result?.structuredContent?.task_id, taskId);
+
+    await directClient.connect();
+    await waitForLifecycleEvent(directClient, taskId, "launch_intent");
+    workerPid = Number(await waitForTextFile(workerPidFile, 10_000));
+    assert.equal(Number.isSafeInteger(workerPid) && workerPid > 0, true);
+    host.child.kill();
+    const hostExit = await Promise.race([
+      host.exit,
+      new Promise<never>((_resolve, reject) => setTimeout(
+        () => reject(new Error(`HOST_EXIT_TIMEOUT\n${host!.stderr()}`)),
+        15_000,
+      )),
+    ]);
+    assert.ok(hostExit.code !== 0 || hostExit.signal !== null, host.stderr());
+
+    const health = await directClient.request("health", {});
+    assert.equal(health.ok, true);
+    assert.equal(health.executor_state.state, "active");
+
+    writeFileSync(workerGate, "continue", "utf8");
+    await waitForLifecycleEvent(directClient, taskId, "released");
+    await waitForProcessExit(workerPid, 30_000);
+    await waitForExecutorWakeEvent(directClient, taskId, "web_notify");
+    const resultResponse = await directClient.request("getResult", { task_id: taskId });
+    assert.equal(resultResponse.ok, true);
+    assert.equal((resultResponse.result as { status?: unknown }).status, "completed");
+    assert.equal((resultResponse.result as { attempt?: unknown }).attempt, 1);
+
+    const listResponse = await directClient.request("listTasks", { limit: 100 });
+    assert.equal(listResponse.ok, true);
+    const listed = (listResponse.result as {
+      tasks?: Array<{ task_id?: string; wake?: { state?: string; reason_code?: string; at?: string } }>;
+    });
+    const listedTask = listed.tasks?.find((task) => task.task_id === taskId);
+    assert.equal(listedTask?.wake?.state, "web_notify");
+    assert.equal(listedTask?.wake?.reason_code, "policy_missing");
+    assert.equal(typeof listedTask?.wake?.at, "string");
+
+    const spawns = readFileSync(spawnLog, "utf8").split(/\r?\n/u).filter(Boolean);
+    assert.deepEqual(spawns, ["spawn"]);
+    const modules = await loadLifecycleCandidateModules();
+    const recovery = modules.Store.openForRecovery(root, {
+      databaseFileName: "bridge.sqlite",
+      managedDataDirectory: true,
+    });
+    assert.ok(recovery);
+    try {
+      const snapshot = modules.createPort(recovery).readRecoverySnapshot() as {
+        operations: Array<Record<string, unknown>>;
+        events: Array<{ event_type: string; operation_id: string }>;
+      };
+      const operation = snapshot.operations.find((item) => item.task_id === taskId);
+      assert.ok(operation);
+      assert.equal(operation.phase, "released");
+      assert.notEqual(operation.result_digest, null);
+      assert.equal(operation.result_status, "completed");
+      const eventTypes = snapshot.events
+        .filter((event) => event.operation_id === operation.operation_id)
+        .map((event) => event.event_type);
+      for (const expected of ["launch_intent", "result_committed", "cleanup_verified", "released"]) {
+        assert.equal(eventTypes.filter((event) => event === expected).length, 1, expected);
+      }
+    } finally {
+      recovery.close();
+    }
+
+    reconnectHost = startThinMcp(env, shippedBridgeEntry);
+    reconnectHost.child.stdin.write([
+      JSON.stringify({
+        jsonrpc: "2.0", id: 1, method: "initialize",
+        params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "host-exit-reconnect", version: "1" } },
+      }),
+      JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
+      "",
+    ].join("\n"));
+    assert.ok((await reconnectHost.waitForResponse(1)).result);
+    reconnectHost.child.stdin.write([
+      JSON.stringify({
+        jsonrpc: "2.0", id: 2, method: "tools/call",
+        params: { name: "zcode_result", arguments: { task_id: taskId } },
+      }),
+      "",
+    ].join("\n"));
+    const reconnectResult = await reconnectHost.waitForResponse(2) as {
+      result?: { isError?: boolean; structuredContent?: Record<string, unknown> };
+    };
+    assert.notEqual(reconnectResult.result?.isError, true, reconnectHost.stderr());
+    assert.equal(reconnectResult.result?.structuredContent?.task_id, taskId);
+    assert.equal(reconnectResult.result?.structuredContent?.attempt, 1);
+    reconnectHost.child.stdin.end();
+    const reconnectExit = await Promise.race([
+      reconnectHost.exit,
+      new Promise<never>((_resolve, reject) => setTimeout(
+        () => reject(new Error(`HOST_RECONNECT_EXIT_TIMEOUT\n${reconnectHost!.stderr()}`)),
+        15_000,
+      )),
+    ]);
+    assert.equal(reconnectExit.code, 0, reconnectHost.stderr());
+    succeeded = true;
+  } finally {
+    host?.child.kill();
+    reconnectHost?.child.kill();
+    directClient.close();
+    executor.child.kill("SIGKILL");
+    await executor.exit;
+    if (workerPid !== undefined) {
+      try {
+        process.kill(workerPid, "SIGKILL");
+        await waitForProcessExit(workerPid, 5_000);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    if (succeeded) {
+      rmSync(fixture, { recursive: true, force: true, maxRetries: 30, retryDelay: 200 });
+    } else {
+      console.error(`host-exit fixture retained: ${fixture}`);
+    }
   }
 });
 

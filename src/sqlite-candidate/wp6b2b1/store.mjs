@@ -1179,10 +1179,26 @@ export class IsolatedAdmissionStore {
       fail('invalid_task_list_query');
     }
     return this.#readConsistent(()=>{
-      const rows=this.#db.prepare(`SELECT task_id,status,current_attempt,created_at,task_json
-        FROM tasks
-        WHERE task_id>? AND (? IS NULL OR status=?)
-        ORDER BY task_id
+      const rows=this.#db.prepare(`SELECT t.task_id,t.status,t.current_attempt,t.created_at,t.task_json,
+          (SELECT e.evidence_json
+             FROM manager_operation_events e
+             JOIN manager_operations o ON o.operation_id=e.operation_id
+            WHERE o.task_id=t.task_id
+              AND o.attempt=t.current_attempt
+              AND e.event_type='observation_recorded'
+              AND json_extract(e.evidence_json,'$.reason')='executor_wake'
+            ORDER BY e.sequence DESC LIMIT 1) AS wake_evidence_json,
+          (SELECT e.at
+             FROM manager_operation_events e
+             JOIN manager_operations o ON o.operation_id=e.operation_id
+            WHERE o.task_id=t.task_id
+              AND o.attempt=t.current_attempt
+              AND e.event_type='observation_recorded'
+              AND json_extract(e.evidence_json,'$.reason')='executor_wake'
+            ORDER BY e.sequence DESC LIMIT 1) AS wake_at
+        FROM tasks t
+        WHERE t.task_id>? AND (? IS NULL OR t.status=?)
+        ORDER BY t.task_id
         LIMIT ?`).all(afterTaskId??'',status,status,limit+1);
       const hasMore=rows.length>limit;
       const visible=rows.slice(0,limit).map(row=>{
@@ -1197,6 +1213,8 @@ export class IsolatedAdmissionStore {
           created_at:row.created_at,
           workspace:task.workspace,
           objective:task.objective,
+          wake_evidence_json:row.wake_evidence_json,
+          wake_at:row.wake_at,
         };
       });
       return {
