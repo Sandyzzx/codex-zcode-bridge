@@ -213,11 +213,15 @@
     },
     {
       "id": 2,
-      "estimated_ms": 749419,
+      "estimated_ms": 749819,
       "tests": [
         {
           "file": "test/account-provider.test.ts",
           "estimated_ms": 480
+        },
+        {
+          "file": "test/architecture-boundaries.test.ts",
+          "estimated_ms": 400
         },
         {
           "file": "test/attention-wait.test.ts",
