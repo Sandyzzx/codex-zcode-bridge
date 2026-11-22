@@ -3,8 +3,9 @@
 > Status: RESEARCH
 > Date: 2026-11-22
 > Branch: `codex/async-executor-pr2`
+> Pull request: [#120](https://github.com/Sandyzzx/codex-zcode-bridge/pull/120)
 > Integration baseline: `origin/preview@1bf039fda2ccfd17a992458a871bddd7b48b38c1`
-> Code evidence commit: `0c039406f`
+> Code evidence commit: `d4b5b7eb1`
 > Conclusion: `PARTIAL / BLOCKED`
 
 ## 1. Scope and Conclusion
@@ -122,6 +123,12 @@ current evidence includes:
   with `FULL_SUITE_DEFERRED_TO_RELEASE_GATE`; this is not a full-suite PASS.
 - The first pushed workflow exposed an unquoted YAML `run` scalar containing
   a colon. The two deferral messages are now quoted, and `actionlint` passes.
+- PR development CI run
+  [#44967273231](https://github.com/Sandyzzx/codex-zcode-bridge/actions/runs/44967273231)
+  is `success` on `d4b5b7eb1`: Impact, Fast T0/affected selection, deferred
+  Ubuntu, Windows shard results, and deferred SQLite Stress all produced
+  successful Required Check results. Integration was correctly skipped because
+  the development impact selected `FULL_SUITE`.
 
 The Owner clarified that PR 2 is only one part of the Executor chain. The
 complete local regression and complete Windows/Ubuntu/stress CI are therefore
