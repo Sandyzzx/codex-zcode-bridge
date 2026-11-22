@@ -4,7 +4,7 @@
 > Date: 2026-11-22
 > Branch: `codex/async-executor-pr2`
 > Integration baseline: `origin/preview@1bf039fda2ccfd17a992458a871bddd7b48b38c1`
-> Code evidence commit: `6fa55d2f4` plus this report's pending governance revision
+> Code evidence commit: `0c039406f`
 > Conclusion: `PARTIAL / BLOCKED`
 
 ## 1. Scope and Conclusion
@@ -88,6 +88,7 @@ The following statuses use the existing project vocabulary:
 | Thin MCP disconnect/reconnect | `PASS` | MCP closes, Executor finishes one synthetic Worker spawn, reconnect reads completed Result attempt 1 |
 | Cross-process fake Worker durability | `PASS` | one `result_committed`, non-null digest, `cleanup_pending`, `cleanup_verified`, `released` |
 | Repeated Spawn/result overwrite | `PASS` | synthetic E2E observes exactly one Worker spawn and one original Attempt commit |
+| Complete local regression | `NOT_RUN` | PR 2 is one part of the Executor chain; the Owner deferred complete CI until the whole chain reaches its Release Candidate |
 | Real Codex Desktop close | `BLOCKED` | `BLOCKED_BY_OWNER_ENVIRONMENT`; Owner's active Desktop was not closed |
 | Real Official ZCode Runtime/provider | `NOT_RUN` | no paid model authorization and no real provider request |
 | Strict Wake C/D | `NOT_RUN` | Wake Adapter is outside PR 2 |
@@ -120,9 +121,12 @@ current evidence includes:
 - `npm run test:affected -- --force-full --development`: T0 PASS and ended
   with `FULL_SUITE_DEFERRED_TO_RELEASE_GATE`; this is not a full-suite PASS.
 
-The final repository-wide local gate after the documentation revision is
-recorded in the PR/CI result; until it completes, this report does not claim a
-post-fix full-suite PASS.
+The Owner clarified that PR 2 is only one part of the Executor chain. The
+complete local regression and complete Windows/Ubuntu/stress CI are therefore
+`NOT_RUN` for this PR and remain deferred until the whole chain forms a common
+Release Candidate. This report does not claim a post-fix full-suite PASS. An
+accidentally started early full local run was stopped on Owner direction before
+the test matrix completed and is not counted as evidence.
 
 ## 6. Real Host Boundary
 
@@ -158,9 +162,9 @@ check jobs remain present in development mode and announce the deferral.
 PR 2 may proceed to review only if:
 
 - generated artifacts are current and `git diff --check` is clean;
-- typecheck, build, plugin validation, impacted tests, and the applicable full
-  regression gate pass;
-- CI passes on the final branch;
+- typecheck, build, plugin validation, impacted tests, and the required
+  lifecycle E2E pass;
+- the development-gate CI passes on the final branch;
 - the review explicitly records `PARTIAL / BLOCKED` and preserves the real
   Desktop E2E requirement.
 
