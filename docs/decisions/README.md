@@ -2,8 +2,8 @@
 
 > Status: AUTHORITATIVE（仅指本索引）
 > Last updated: 2026-11-22（增加 ADR-048 默认 Event 页预算）
-> Last verified: 2026-11-22，核对 ADR-039 行政释放保护与 ADR-048 `zcode_events` 默认 32 KiB、显式硬预算和 cursor 续读边界。
-> Verified against: Preview `450c18afc0c8af2700734399c5aebd87a36df795` + unified integration candidate
+> Last verified: 2026-11-22，核对 ADR-039 四种终态 Result 行政释放绑定与 ADR-048 `zcode_events` 默认 32 KiB、显式硬预算和 cursor 续读边界。
+> Verified against: Preview `ac1e8396f25a1a1d3ff373def84726d28c1f4193` + terminal-admin-release candidate
 
 先读当前 [架构](../ARCHITECTURE.md)/[接口](../INTERFACES.md)，只在需要解释取舍时加载对应决策。文件保持原路径和历史正文；Partially superseded 的标注优先于历史段落。
 
@@ -34,7 +34,7 @@
 | 平台启用 | [035](ADR-035-worker-platform-adapter-selection.md) | Accepted；Windows x64 启用 Official Host；ADR-038 将 Linux、macOS 与 Windows 非 x64 收敛为构造 Adapter 前 fail closed，direct Adapter 仅保留测试注入覆盖 |
 | 官方认证复用 | [037](ADR-037-official-zcode-authentication-reuse.md) | Accepted；Official Host 拥有凭据、OAuth、账户身份和请求认证；Bridge 不维护第二套认证；Preview.6 仅声明 Windows x64 + Desktop 3.18.2.10443，旧版本保持 NOT_VERIFIED |
 | 最小架构整改 | [038](ADR-038-preview6-minimum-architecture-remediation.md) | Accepted；保留 SQLite/Worker/官方 Runtime 核心，退役旧 JSON 查询、Ledger、人类报告/主会话 Token 链、Desktop task-index 镜像；修正 Usage/Context/Events/Recovery 与 CI/生成物合同 |
-| Host 授权取消 | [039](ADR-039-host-authorized-cancellation.md) | 当前本地修复；无 Claim 的 Launch Intent 首次取消保留未核实占用；用户重复 `zcode_cancel` 可对历史 `launch_intent`/终态 `cleanup_unverified` 执行原子行政释放并记录 `user_authorized_release_unverified`；Running cleanup-only Hold 仍先走新鲜取消树证明，保留原 CAS 与历史 |
+| Host 授权取消 | [039](ADR-039-host-authorized-cancellation.md) | 当前本地修复；无 Claim 的 Launch Intent 首次取消保留未核实占用；用户重复 `zcode_cancel` 可对历史 `launch_intent`/四种终态 Result 的 `cleanup_unverified` 执行原子行政释放并记录 `user_authorized_release_unverified`；Running cleanup-only Hold 仍先走新鲜取消树证明，保留原 CAS 与历史 |
 | 官方 Runtime | [040](ADR-040-installed-official-appserver-runtime.md) | 候选集成；安装版官方 AppServer 的统一 Runtime 与精确 Manifest 门禁 |
 | Thin Official Host | [041](ADR-041-thin-official-host-end-state.md) | 统一 Model Catalog/Worker session factory；所有 Provider 走安装版 AppServer；direct stdio 仅测试；三项 patch 暂留 |
 | 未知版本实验授权 | [042](ADR-042-unknown-runtime-experimental-authorization.md) | 安全检查与 Manifest 兼容分离；精确指纹授权后可进行 Provider 分 scope 探测；不自动提升为 VERIFIED |

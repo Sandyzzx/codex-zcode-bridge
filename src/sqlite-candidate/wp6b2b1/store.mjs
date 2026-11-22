@@ -476,6 +476,16 @@ function validateObservationEventEvidence(value){
     return;
   }
   if(own==='evidence_digest|reason')return;
+  if(own==='authorization_request_digest|claim_id|evidence_digest|reason|recovery_evidence_digest|result_commit_ref|result_digest|worker_identity_digest'){
+    const {evidence_digest,...unsigned}=value;
+    if(value.reason!=='user_authorized_release_unverified'
+      ||![value.authorization_request_digest,value.recovery_evidence_digest,value.result_digest,
+        value.worker_identity_digest].every(item=>typeof item==='string'&&/^[0-9a-f]{64}$/u.test(item))
+      ||!validId(value.claim_id)
+      ||typeof value.result_commit_ref!=='string'||!/^(?:result-)?[0-9a-f]{64}$/u.test(value.result_commit_ref)
+      ||evidence_digest!==digest(unsigned))fail('invalid_user_authorized_release_evidence');
+    return;
+  }
   if(own==='cancel_id|evidence_digest|reason'||own==='cancel_id|cancellation_verification_digest|evidence_digest|reason|recovery_evidence_digest'){
     const {evidence_digest,...unsigned}=value;
     if(value.reason!=='user_authorized_release_unverified'||!validId(value.cancel_id)
@@ -764,6 +774,7 @@ const ADMIN_ABANDONMENT_INPUT_KEYS='attempt|claim_id|claim_worker_identity_diges
 const ADMIN_ABANDONMENT_EVIDENCE_KEYS='boot_time|claimant_scan_clean|claimant_scan_digest|failed_at|hosts_closed|observed_at|platform_probe_digest|process_inventory_digest|worker_exited|worker_process_id|worker_start_fingerprint|writer_closed';
 const USER_AUTHORIZED_RELEASE_INPUT_KEYS='attempt|cancel_id|generation|operation_id|release_reason|revision|task_id';
 const USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS='attempt|cancel_id|cancellation_verification_digest|generation|operation_id|recovery_evidence_digest|release_reason|revision|task_id';
+const USER_AUTHORIZED_TERMINAL_RELEASE_INPUT_KEYS='attempt|authorization_request_digest|claim_id|generation|operation_id|recovery_evidence_digest|release_reason|result_commit_ref|result_digest|revision|task_id|worker_identity_digest';
 function validIsoInstant(value){return typeof value==='string'&&Number.isFinite(Date.parse(value));}
 function validateAdminAbandonmentInput(input){
   if(!input||Object.getPrototypeOf(input)!==Object.prototype||Object.keys(input).sort().join('|')!==ADMIN_ABANDONMENT_INPUT_KEYS
@@ -786,16 +797,24 @@ function validateAdminAbandonmentInput(input){
 }
 function validateUserAuthorizedReleaseInput(input){
   const fields=input&&Object.getPrototypeOf(input)===Object.prototype?Object.keys(input).sort().join('|'):'';
-  if(!input||Object.getPrototypeOf(input)!==Object.prototype
-    ||(fields!==USER_AUTHORIZED_RELEASE_INPUT_KEYS&&fields!==USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS)
-    ||!validId(input.operation_id)||!validId(input.task_id)||!validId(input.cancel_id)
+  const terminal=fields===USER_AUTHORIZED_TERMINAL_RELEASE_INPUT_KEYS;
+  const shapeValid=!input||Object.getPrototypeOf(input)!==Object.prototype
+    ||(fields!==USER_AUTHORIZED_RELEASE_INPUT_KEYS&&fields!==USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS
+      &&fields!==USER_AUTHORIZED_TERMINAL_RELEASE_INPUT_KEYS)
+    ||!validId(input.operation_id)||!validId(input.task_id)||(!terminal&&!validId(input.cancel_id))
     ||!Number.isSafeInteger(input.attempt)||input.attempt<1
     ||!Number.isSafeInteger(input.generation)||input.generation<1
     ||!Number.isSafeInteger(input.revision)||input.revision<1
-    ||input.release_reason!=='user_authorized_release_unverified'
-    ||(fields===USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS
-      &&(![input.cancellation_verification_digest,input.recovery_evidence_digest]
-        .every(value=>typeof value==='string'&&/^[0-9a-f]{64}$/u.test(value)))))fail('invalid_user_authorized_release');
+    ||input.release_reason!=='user_authorized_release_unverified';
+  if(shapeValid&&fields===USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS
+    &&![input.cancellation_verification_digest,input.recovery_evidence_digest]
+      .every(value=>typeof value==='string'&&/^[0-9a-f]{64}$/u.test(value)))fail('invalid_user_authorized_release');
+  if(shapeValid&&terminal&&(![input.authorization_request_digest,input.recovery_evidence_digest,input.result_digest,
+      input.claim_id,input.worker_identity_digest].every(value=>typeof value==='string'
+      &&/^[0-9a-f]{64}$/u.test(value))
+    ||typeof input.result_commit_ref!=='string'||!/^(?:result-)?[0-9a-f]{64}$/u.test(input.result_commit_ref)))
+    fail('invalid_user_authorized_release');
+  if(shapeValid)fail('invalid_user_authorized_release');
   return input;
 }
 function isBusy(error){return [5,6].includes(error?.errcode)||/SQLITE_(BUSY|LOCKED)/u.test(String(error?.code??''))||/database is (busy|locked)/iu.test(String(error?.message??''));}
@@ -2006,13 +2025,19 @@ export class IsolatedAdmissionStore {
       const o=this.#attemptOperation(input);
       const task=this.#db.prepare('SELECT task_id,status,current_attempt FROM tasks WHERE task_id=?').get(input.task_id);
       const attempt=this.#db.prepare('SELECT task_id,attempt,generation,status,queued_cancel_id,queued_cancel_operation_id,queued_cancel_result_json FROM attempts WHERE task_id=? AND attempt=?').get(input.task_id,input.attempt);
+      const expectedStatus=o.phase==='launch_intent'?'cancelled':o.result_status;
       if(!task||!attempt||task.current_attempt!==input.attempt
-        ||task.status!=='cancelled'||attempt.status!=='cancelled'||attempt.generation!==input.generation)
+        ||task.status!==expectedStatus||attempt.status!==expectedStatus||attempt.generation!==input.generation)
         fail('user_authorized_release_projection_mismatch');
       const cleanupBinding=input.cancellation_verification_digest!==undefined;
-      const unsignedEvidence={reason:'user_authorized_release_unverified',cancel_id:input.cancel_id,
+      const terminalBinding=input.authorization_request_digest!==undefined;
+      const unsignedEvidence={reason:'user_authorized_release_unverified',
+        ...(terminalBinding?{}:{cancel_id:input.cancel_id}),
         ...(cleanupBinding?{cancellation_verification_digest:input.cancellation_verification_digest,
-          recovery_evidence_digest:input.recovery_evidence_digest}:{})};
+          recovery_evidence_digest:input.recovery_evidence_digest}:{}),
+        ...(terminalBinding?{authorization_request_digest:input.authorization_request_digest,
+          claim_id:input.claim_id,result_commit_ref:input.result_commit_ref,result_digest:input.result_digest,
+          recovery_evidence_digest:input.recovery_evidence_digest,worker_identity_digest:input.worker_identity_digest}:{})};
       const evidence={...unsignedEvidence,evidence_digest:digest(unsignedEvidence)};
       if(o.phase==='released'){
         const released=this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND event_type='observation_recorded' ORDER BY sequence DESC LIMIT 1").get(input.operation_id);
@@ -2021,6 +2046,11 @@ export class IsolatedAdmissionStore {
           &&parsed?.cancel_id===input.cancel_id
           &&parsed?.cancellation_verification_digest===input.cancellation_verification_digest
           &&parsed?.recovery_evidence_digest===input.recovery_evidence_digest
+          &&parsed?.authorization_request_digest===input.authorization_request_digest
+          &&parsed?.claim_id===input.claim_id
+          &&parsed?.result_commit_ref===input.result_commit_ref
+          &&parsed?.result_digest===input.result_digest
+          &&parsed?.worker_identity_digest===input.worker_identity_digest
           &&parsed?.evidence_digest===evidence.evidence_digest)
           return {duplicate:true,operation_id:o.operation_id,task_id:o.task_id,attempt:o.attempt,
             generation:o.generation,revision:o.revision,phase:'released',cleanup_verified:false,
@@ -2028,9 +2058,11 @@ export class IsolatedAdmissionStore {
         fail('user_authorized_release_conflict');
       }
       const preClaim=o.phase==='launch_intent'&&o.claim_id===null&&o.result_digest===null;
-      const historicalCleanup=o.phase==='cleanup_unverified'&&o.result_digest!==null&&o.result_status==='cancelled';
+      const historicalCleanup=o.phase==='cleanup_unverified'&&o.result_digest!==null
+        &&['completed','failed','waiting_for_master','cancelled'].includes(o.result_status);
       if(!preClaim&&!historicalCleanup)fail('user_authorized_release_phase_not_allowed');
-      if(cleanupBinding!==historicalCleanup)fail('user_authorized_release_phase_mismatch');
+      if(historicalCleanup?cleanupBinding===terminalBinding:(cleanupBinding||terminalBinding))
+        fail('user_authorized_release_phase_mismatch');
       if(preClaim){
         if(o.launch_receipt_id!==null||o.launch_receipt_digest!==null||o.launch_identity_json!==null)
           fail('user_authorized_release_spawn_evidence_present');
@@ -2041,7 +2073,7 @@ export class IsolatedAdmissionStore {
         if(!queuedResult||queuedResult.task_id!==input.task_id||queuedResult.attempt!==input.attempt
           ||queuedResult.status!=='cancelled'||queuedResult.started_at!==null)
           fail('user_authorized_release_projection_mismatch');
-      }else{
+      }else if(cleanupBinding){
         const resultEvent=this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND event_type='result_committed' ORDER BY sequence DESC LIMIT 1").get(input.operation_id);
         let resultEvidence;try{resultEvidence=resultEvent?JSON.parse(resultEvent.evidence_json):null;}catch{resultEvidence=null;}
         if(!resultEvent||!resultEvidence||resultEvidence.outcome!=='cancelled'
@@ -2053,6 +2085,40 @@ export class IsolatedAdmissionStore {
           ||!parsed||parsed.reason!=='cancel_tree_verified'||parsed.cancel_id!==input.cancel_id
           ||parsed.claim_id!==o.claim_id||parsed.worker_identity_digest!==o.claim_worker_identity_digest)
           fail('user_authorized_release_cancel_identity_mismatch');
+        const lifecycle=this.#db.prepare('SELECT * FROM manager_operation_events WHERE operation_id=? ORDER BY sequence').all(input.operation_id)
+          .map(event=>{
+            try{return {...event,evidence:JSON.parse(event.evidence_json)};}
+            catch{fail('user_authorized_release_recovery_evidence_mismatch');}
+          });
+        const latestActiveRecovery=recoveryEventsFor(lifecycle,o).filter(event=>event.active).at(-1);
+        const recoveryEvent=latestActiveRecovery?.event;
+        const recoveryEvidence=latestActiveRecovery?.evidence;
+        if(!recoveryEvent||recoveryEvent.sequence>o.revision||recoveryEvent.generation!==o.generation
+          ||![recoveryEvent.evidence_digest,recoveryEvidence?.evidence_digest].includes(input.recovery_evidence_digest)
+          ||!recoveryEvidence||recoveryEvidence.reason!=='recovery_hold'
+          ||recoveryEvidence.task_id!==o.task_id||recoveryEvidence.attempt!==o.attempt
+          ||recoveryEvent.sequence!==recoveryEvidence.expected_revision+1||recoveryEvidence.claim_id!==o.claim_id
+          ||recoveryEvidence.worker_identity_digest!==o.claim_worker_identity_digest
+          ||recoveryEvidence.reason_code!=='cleanup_incomplete'
+          ||recoveryEvidence.recovery_disposition!=='complete_cleanup_closure_unavailable'
+          ||recoveryEvidence.process_tree_scan_clean!==true||recoveryEvidence.process_tree_root_observed!==true
+          ||typeof recoveryEvidence.process_tree_scan_digest!=='string'
+          ||!/^[0-9a-f]{64}$/u.test(recoveryEvidence.process_tree_scan_digest))
+          fail('user_authorized_release_recovery_evidence_mismatch');
+      }else{
+        const resultEvent=this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? AND event_type='result_committed' ORDER BY sequence DESC LIMIT 1").get(input.operation_id);
+        let resultEvidence;try{resultEvidence=resultEvent?JSON.parse(resultEvent.evidence_json):null;}catch{resultEvidence=null;}
+        if(!resultEvent||!resultEvidence||resultEvidence.outcome!==o.result_status
+          ||resultEvidence.result_commit_ref!==input.result_commit_ref
+          ||resultEvidence.result_digest!==input.result_digest
+          ||resultEvidence.claim_id!==input.claim_id
+          ||resultEvidence.worker_identity_digest!==input.worker_identity_digest)
+          fail('user_authorized_release_result_identity_mismatch');
+        const expectedAuthorization=digest({contract:'terminal-result-admin-release-v1',
+          operation_id:input.operation_id,task_id:input.task_id,attempt:input.attempt,generation:input.generation,
+          result_digest:input.result_digest,recovery_evidence_digest:input.recovery_evidence_digest});
+        if(input.authorization_request_digest!==expectedAuthorization)
+          fail('user_authorized_release_authorization_mismatch');
         const lifecycle=this.#db.prepare('SELECT * FROM manager_operation_events WHERE operation_id=? ORDER BY sequence').all(input.operation_id)
           .map(event=>{
             try{return {...event,evidence:JSON.parse(event.evidence_json)};}
@@ -3316,7 +3382,8 @@ export class IsolatedAdmissionStore {
             &&!(parsed.reason==='admin_abandoned'&&e.from_phase==='running'&&e.to_phase==='released')
             &&!(parsed.reason==='user_authorized_release_unverified'
               &&((e.from_phase==='launch_intent'&&o.claim_id===null&&o.result_digest===null)
-                ||(e.from_phase==='cleanup_unverified'&&o.result_digest!==null&&o.result_status==='cancelled'))
+                ||(e.from_phase==='cleanup_unverified'&&o.result_digest!==null
+                  &&['completed','failed','waiting_for_master','cancelled'].includes(o.result_status)))
               &&e.to_phase==='released'))fail('invalid_event_phase');
           if(e.event_type!=='launch_receipt'&&e.event_type!=='claim_committed'&&e.event_type!=='launch_intent'&&e.event_type!=='observation_recorded'
             &&!e.event_type.startsWith('interaction_')&&EVENT_PHASE[e.event_type]!==e.to_phase)fail('invalid_event_phase');
@@ -3471,33 +3538,62 @@ export class IsolatedAdmissionStore {
               const parsedEvents=es.map(event=>{
                 try{return {event,evidence:JSON.parse(event.evidence_json)};}catch{fail('cleanup_projection_mismatch');}
               });
-              const verification=parsedEvents.find(item=>item.event.event_type==='observation_recorded'
-                &&item.event.evidence_digest===terminalEvidence.cancellation_verification_digest);
-              const resultEvent=parsedEvents.find(item=>item.event.event_type==='result_committed'
-                &&item.event.evidence_digest&&item.evidence.cancel_verification_digest===terminalEvidence.cancellation_verification_digest);
               const recoveryEvent=parsedEvents.find(item=>item.event.event_type==='observation_recorded'
                 &&item.evidence.evidence_digest===terminalEvidence.recovery_evidence_digest);
-              administrativeRelease=released.length===0&&unverified.length===1
-                &&terminalEvidence.reason==='user_authorized_release_unverified'
-                &&o.result_status==='cancelled'&&verification!==undefined&&resultEvent!==undefined
-                &&recoveryEvent!==undefined
-                &&verification.evidence.reason==='cancel_tree_verified'
-                &&terminalEvidence.cancel_id===verification.evidence.cancel_id
-                &&verification.evidence.claim_id===o.claim_id
-                &&verification.evidence.worker_identity_digest===o.claim_worker_identity_digest
-                &&verification.event.sequence<resultEvent.event.sequence
-                &&resultEvent.evidence.outcome==='cancelled'
-                &&recoveryEvent.event.sequence===terminal.sequence-1
-                &&recoveryEvent.evidence.reason==='recovery_hold'
-                &&recoveryEvent.evidence.task_id===o.task_id
-                &&recoveryEvent.evidence.attempt===o.attempt
-                &&recoveryEvent.evidence.expected_revision===terminal.sequence-2
-                &&recoveryEvent.evidence.claim_id===o.claim_id
-                &&recoveryEvent.evidence.worker_identity_digest===o.claim_worker_identity_digest
-                &&recoveryEvent.evidence.reason_code==='cleanup_incomplete'
-                &&recoveryEvent.evidence.recovery_disposition==='complete_cleanup_closure_unavailable'
-                &&recoveryEvent.evidence.process_tree_scan_clean===true
-                &&recoveryEvent.evidence.process_tree_root_observed===true;
+              if(terminalEvidence.authorization_request_digest!==undefined){
+                const resultEvent=parsedEvents.find(item=>item.event.event_type==='result_committed'
+                  &&item.evidence.result_digest===terminalEvidence.result_digest
+                  &&item.evidence.result_commit_ref===terminalEvidence.result_commit_ref);
+                const expectedAuthorization=digest({contract:'terminal-result-admin-release-v1',
+                  operation_id:o.operation_id,task_id:o.task_id,attempt:o.attempt,generation:o.generation,
+                  result_digest:terminalEvidence.result_digest,
+                  recovery_evidence_digest:terminalEvidence.recovery_evidence_digest});
+                administrativeRelease=released.length===0&&unverified.length===1
+                  &&terminalEvidence.reason==='user_authorized_release_unverified'
+                  &&['completed','failed','waiting_for_master','cancelled'].includes(o.result_status)
+                  &&resultEvent!==undefined&&recoveryEvent!==undefined
+                  &&terminalEvidence.authorization_request_digest===expectedAuthorization
+                  &&resultEvent.evidence.outcome===o.result_status
+                  &&resultEvent.evidence.claim_id===terminalEvidence.claim_id
+                  &&resultEvent.evidence.worker_identity_digest===terminalEvidence.worker_identity_digest
+                  &&recoveryEvent.event.sequence===terminal.sequence-1
+                  &&recoveryEvent.evidence.reason==='recovery_hold'
+                  &&recoveryEvent.evidence.task_id===o.task_id
+                  &&recoveryEvent.evidence.attempt===o.attempt
+                  &&recoveryEvent.evidence.expected_revision===terminal.sequence-2
+                  &&recoveryEvent.evidence.claim_id===o.claim_id
+                  &&recoveryEvent.evidence.worker_identity_digest===o.claim_worker_identity_digest
+                  &&recoveryEvent.evidence.reason_code==='cleanup_incomplete'
+                  &&recoveryEvent.evidence.recovery_disposition==='complete_cleanup_closure_unavailable'
+                  &&recoveryEvent.evidence.process_tree_scan_clean===true
+                  &&recoveryEvent.evidence.process_tree_root_observed===true;
+              }else{
+                const verification=parsedEvents.find(item=>item.event.event_type==='observation_recorded'
+                  &&item.event.evidence_digest===terminalEvidence.cancellation_verification_digest);
+                const resultEvent=parsedEvents.find(item=>item.event.event_type==='result_committed'
+                  &&item.event.evidence_digest&&item.evidence.cancel_verification_digest===terminalEvidence.cancellation_verification_digest);
+                administrativeRelease=released.length===0&&unverified.length===1
+                  &&terminalEvidence.reason==='user_authorized_release_unverified'
+                  &&o.result_status==='cancelled'&&verification!==undefined&&resultEvent!==undefined
+                  &&recoveryEvent!==undefined
+                  &&verification.evidence.reason==='cancel_tree_verified'
+                  &&terminalEvidence.cancel_id===verification.evidence.cancel_id
+                  &&verification.evidence.claim_id===o.claim_id
+                  &&verification.evidence.worker_identity_digest===o.claim_worker_identity_digest
+                  &&verification.event.sequence<resultEvent.event.sequence
+                  &&resultEvent.evidence.outcome==='cancelled'
+                  &&recoveryEvent.event.sequence===terminal.sequence-1
+                  &&recoveryEvent.evidence.reason==='recovery_hold'
+                  &&recoveryEvent.evidence.task_id===o.task_id
+                  &&recoveryEvent.evidence.attempt===o.attempt
+                  &&recoveryEvent.evidence.expected_revision===terminal.sequence-2
+                  &&recoveryEvent.evidence.claim_id===o.claim_id
+                  &&recoveryEvent.evidence.worker_identity_digest===o.claim_worker_identity_digest
+                  &&recoveryEvent.evidence.reason_code==='cleanup_incomplete'
+                  &&recoveryEvent.evidence.recovery_disposition==='complete_cleanup_closure_unavailable'
+                  &&recoveryEvent.evidence.process_tree_scan_clean===true
+                  &&recoveryEvent.evidence.process_tree_root_observed===true;
+              }
             }
             if(o.phase!==expected&&!(o.phase==='released'&&administrativeRelease))fail('cleanup_projection_mismatch');
           } else if(['cleanup_pending','cleanup_verified','cleanup_unverified','cleanup_reverified','released'].includes(o.phase)

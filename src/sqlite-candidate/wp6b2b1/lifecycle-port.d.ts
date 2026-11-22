@@ -465,8 +465,11 @@ export interface SqliteLifecyclePort {
   cancelQueuedAttempt(input: CandidateQueuedCancelInput): CandidateQueuedCancelOutcome;
   userAuthorizedReleaseUnverifiedOperation(input: {
     readonly operation_id: string; readonly task_id: string; readonly attempt: number; readonly generation: number;
-    readonly revision: number; readonly cancel_id: string; readonly release_reason: 'user_authorized_release_unverified';
+    readonly revision: number; readonly cancel_id?: string; readonly release_reason: 'user_authorized_release_unverified';
     readonly cancellation_verification_digest?: string; readonly recovery_evidence_digest?: string;
+    readonly authorization_request_digest?: string; readonly claim_id?: string;
+    readonly result_commit_ref?: string; readonly result_digest?: string;
+    readonly worker_identity_digest?: string;
   }): { readonly duplicate: boolean; readonly operation_id: string; readonly task_id: string; readonly attempt: number; readonly generation: number; readonly revision: number; readonly phase: 'released'; readonly cleanup_verified: false; readonly release_reason: 'user_authorized_release_unverified' };
   openInteractionChannel(child: object, operation: Readonly<Record<string, unknown>>, verifyProcessIdentity: (context: unknown) => Promise<unknown>): Promise<CandidateInteractionChannel>;
   receiveInteractionRequest(channel: CandidateInteractionChannel): Promise<Readonly<Record<string, unknown>>>;

@@ -450,7 +450,6 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
           const reason = typeof outcome.reason === "string" ? outcome.reason : "worker_cleanup_unverified";
           const latestProjection = asRecord(this.#readSnapshot(taskId).projection);
           if (String(operation.phase) === "cleanup_unverified"
-            && latestProjection.status === "cancelled"
             && canUserAuthorizeUnverifiedRelease(outcome)) {
             return await this.#userAuthorizedRelease(taskId, this.#readSnapshot(taskId), outcome);
           }
@@ -471,8 +470,12 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
   ): Promise<TaskStatusRecord> {
     const operation = snapshot.operation ? asRecord(snapshot.operation) : null;
     const projection = asRecord(snapshot.projection);
-    if (projection.status !== "cancelled") {
-      throw new TaskManagerError("TASK_STATE", "user-authorized unverified release requires the original durable cancellation Result");
+    const terminalStatuses = ["completed", "failed", "waiting_for_master", "cancelled"];
+    const statusMatches = operation?.phase === "launch_intent"
+      ? projection.status === "cancelled"
+      : projection.status === operation?.result_status;
+    if (!terminalStatuses.includes(String(projection.status)) || !statusMatches) {
+      throw new TaskManagerError("TASK_STATE", "user-authorized unverified release requires a terminal Result bound to the Operation");
     }
     if (!operation || operation.phase !== "launch_intent" && operation.phase !== "cleanup_unverified") {
       throw new TaskManagerError("TASK_STATE", "zcode_cancel has no user-authorized unverified release path for this Operation");
@@ -487,32 +490,64 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       );
     }
     const attempt = asRecord(snapshot.attempt);
-    const cancellation = operation.phase === "launch_intent" && typeof attempt.queued_cancel_id === "string"
-      ? { cancelId: attempt.queued_cancel_id, cancellationVerificationDigest: null }
-      : this.#readCancellationBinding(taskId, String(operation.operation_id));
-    const cancelId = cancellation?.cancelId ?? null;
-    if (!cancelId) throw new TaskManagerError("CANCEL_FAILED", "user-authorized unverified release requires the original durable cancellation Result");
     const recoveryEvidenceDigest = operation.phase === "cleanup_unverified"
       ? typeof authorizationEvidence.evidence_digest === "string" ? authorizationEvidence.evidence_digest : null
       : null;
-    if (operation.phase === "cleanup_unverified"
-      && (!cancellation?.cancellationVerificationDigest || !recoveryEvidenceDigest)) {
-      throw new TaskManagerError("CANCEL_FAILED", "user-authorized cleanup release lacks bound cancellation or recovery evidence");
+    let releaseBinding: Record<string, unknown> = {};
+    let cancelId: string | null = null;
+    if (operation.phase === "launch_intent") {
+      if (typeof attempt.queued_cancel_id !== "string") {
+        throw new TaskManagerError("CANCEL_FAILED", "user-authorized unverified release requires the original durable cancellation Result");
+      }
+      cancelId = attempt.queued_cancel_id;
+    } else if (operation.phase === "cleanup_unverified" && projection.status === "cancelled") {
+      const cancellation = this.#readCancellationBinding(taskId, String(operation.operation_id));
+      const cancellationId = cancellation?.cancelId ?? null;
+      if (!cancellationId) throw new TaskManagerError("CANCEL_FAILED", "user-authorized unverified release requires the original durable cancellation Result");
+      cancelId = cancellationId;
+      if (!cancellation?.cancellationVerificationDigest || !recoveryEvidenceDigest) {
+        throw new TaskManagerError("CANCEL_FAILED", "user-authorized cleanup release lacks bound cancellation or recovery evidence");
+      }
+      releaseBinding = {
+        cancel_id: cancelId,
+        cancellation_verification_digest: string(cancellation.cancellationVerificationDigest, "cancellation_verification_digest_missing"),
+        recovery_evidence_digest: string(recoveryEvidenceDigest, "recovery_evidence_digest_missing"),
+      };
+    } else if (operation.phase === "cleanup_unverified") {
+      if (!recoveryEvidenceDigest || typeof operation.result_digest !== "string"
+        || typeof operation.result_commit_ref !== "string" || typeof operation.claim_id !== "string"
+        || typeof operation.claim_worker_identity_digest !== "string") {
+        throw new TaskManagerError("CANCEL_FAILED", "user-authorized terminal release lacks bound Result or recovery evidence");
+      }
+      const authorizationRequestDigest = createHash("sha256").update(canonicalJson({
+        contract: "terminal-result-admin-release-v1",
+        operation_id: operation.operation_id,
+        task_id: taskId,
+        attempt: Number(attempt.attempt),
+        generation: Number(operation.generation),
+        result_digest: operation.result_digest,
+        recovery_evidence_digest: recoveryEvidenceDigest,
+      }), "utf8").digest("hex");
+      releaseBinding = {
+        authorization_request_digest: authorizationRequestDigest,
+        claim_id: operation.claim_id,
+        result_commit_ref: operation.result_commit_ref,
+        result_digest: operation.result_digest,
+        recovery_evidence_digest: recoveryEvidenceDigest,
+        worker_identity_digest: operation.claim_worker_identity_digest,
+      };
     }
-    const releaseBinding = operation.phase === "cleanup_unverified" ? {
-      cancellation_verification_digest: string(cancellation?.cancellationVerificationDigest, "cancellation_verification_digest_missing"),
-      recovery_evidence_digest: string(recoveryEvidenceDigest, "recovery_evidence_digest_missing"),
-    } : {};
-    const outcome = asRecord(this.#driver.userAuthorizedReleaseUnverifiedOperation({
+    const releaseRequest: Record<string, unknown> = {
       operation_id: string(operation.operation_id, "operation_id_missing"),
       task_id: taskId,
       attempt: Number(attempt.attempt),
       generation: Number(operation.generation),
       revision: Number(operation.revision),
-      cancel_id: cancelId,
       release_reason: "user_authorized_release_unverified",
       ...releaseBinding,
-    }));
+    };
+    if (cancelId !== null) releaseRequest.cancel_id = cancelId;
+    const outcome = asRecord(this.#driver.userAuthorizedReleaseUnverifiedOperation(releaseRequest as never));
     if (outcome.phase !== "released" || outcome.cleanup_verified !== false) {
       throw new TaskManagerError("CANCEL_FAILED", "SQLite user-authorized unverified release did not persist a distinct Release fact");
     }

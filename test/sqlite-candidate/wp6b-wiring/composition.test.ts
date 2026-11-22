@@ -134,6 +134,7 @@ function seedCancelledCleanupHold(
   workspace: string,
   taskId: string,
   operationId: string,
+  resultStatus: "completed" | "failed" | "waiting_for_master" | "cancelled" = "cancelled",
 ): { readonly processId: number; readonly fingerprint: string } {
   const store = modules.Store.open(dataRoot);
   try {
@@ -203,28 +204,32 @@ function seedCancelledCleanupHold(
       claim_worker_identity_digest: String(claimed.claim_worker_identity_digest),
       worker_identity: workerIdentity,
     };
-    const cancelPort = modules.createPort(store, {
-      workerIdentityVerifier: () => ({
-        state: "alive",
-        worker_identity_digest: claimed.claim_worker_identity_digest,
-        evidence_digest: identityDigest,
-      }),
-      cancellationVerifier: () => ({
-        state: "verified",
-        worker_identity_digest: claimed.claim_worker_identity_digest,
-        process_tree_digest: "a".repeat(64),
-        root_process_id: processId,
-        root_start_fingerprint: fingerprint,
-        worker_tree_complete: true,
-        evidence_digest: treeDigest,
-      }),
-    });
-    cancelPort.requestCancellation(fence, identityEvidence);
-    const afterIntent = port.readOperation(operationId) as Record<string, unknown>;
-    const verification = cancelPort.recordCancellationVerification({
-      ...fence,
-      revision: Number(afterIntent.revision),
-    }, treeEvidence) as Record<string, unknown>;
+    let cancelVerificationDigest: string | undefined;
+    if (resultStatus === "cancelled") {
+      const cancelPort = modules.createPort(store, {
+        workerIdentityVerifier: () => ({
+          state: "alive",
+          worker_identity_digest: claimed.claim_worker_identity_digest,
+          evidence_digest: identityDigest,
+        }),
+        cancellationVerifier: () => ({
+          state: "verified",
+          worker_identity_digest: claimed.claim_worker_identity_digest,
+          process_tree_digest: "a".repeat(64),
+          root_process_id: processId,
+          root_start_fingerprint: fingerprint,
+          worker_tree_complete: true,
+          evidence_digest: treeDigest,
+        }),
+      });
+      cancelPort.requestCancellation(fence, identityEvidence);
+      const afterIntent = port.readOperation(operationId) as Record<string, unknown>;
+      const verification = cancelPort.recordCancellationVerification({
+        ...fence,
+        revision: Number(afterIntent.revision),
+      }, treeEvidence) as Record<string, unknown>;
+      cancelVerificationDigest = String(verification.cancellation_verification_digest);
+    }
     const afterVerification = port.readOperation(operationId) as Record<string, unknown>;
     const finishedAt = new Date().toISOString();
     port.commitResult({
@@ -235,13 +240,13 @@ function seedCancelledCleanupHold(
       revision: Number(afterVerification.revision),
       claim_id: String(afterVerification.claim_id),
       claim_worker_identity_digest: String(afterVerification.claim_worker_identity_digest),
-      result_status: "cancelled",
-      cancel_verification_digest: String(verification.cancellation_verification_digest),
+      result_status: resultStatus,
+      ...(cancelVerificationDigest ? { cancel_verification_digest: cancelVerificationDigest } : {}),
       result: {
         task_id: taskId,
         attempt: 1,
-        status: "cancelled",
-        summary: "synthetic cancelled cleanup",
+        status: resultStatus,
+        summary: `synthetic ${resultStatus} cleanup`,
         files_changed: [],
         tests: [],
         issues: [],
@@ -4140,6 +4145,73 @@ for(const treeMode of ['clean','live','root-missing'] as const)test(`formal MCP 
         ?{clean:false,livePids:[seeded!.processId+1],observedPids:[seeded!.processId,seeded!.processId+1]}
         :{clean:true,livePids:[],observedPids:[]},
     beforeAuthority:(dataRoot,modules,workspace)=>{seeded=seedCancelledCleanupHold(dataRoot,modules,workspace,taskId,operationId);},
+  });
+});
+
+for(const resultStatus of ["completed","failed","waiting_for_master","cancelled"] as const)test(`formal MCP user-authorized release preserves a terminal ${resultStatus} Result and clears its queued successor`,{timeout:45_000},async()=>{
+  const taskId=`tr-${resultStatus.slice(0,2)}-${randomUUID()}`,operationId=`op-${taskId}`;
+  const queuedTaskId=`qa-${resultStatus.slice(0,2)}-${randomUUID()}`;
+  let seeded:{readonly processId:number;readonly fingerprint:string}|undefined;
+  const probe:ProcessProbe={...createPlatformProbe(),platform:'win32',async probe(requests){return requests.map(()=>({
+    state:'exited',reason_code:'synthetic_exact_exit',observed_at:new Date().toISOString(),
+  }));}};
+  await withSqliteMcp(async(client,manager,dataRoot,workspace)=>{
+    const queued=contentObject(await client.callTool({name:'zcode_task',arguments:syntheticTask(workspace,queuedTaskId)}));
+    assert.equal(queued.status,'queued');
+    const blocked=contentObject(await client.callTool({name:'zcode_status',arguments:{task_id:queuedTaskId}}));
+    const blocker=blocked.dispatch_blocker as Record<string,unknown>;
+    assert.equal(blocker.task_id,taskId);
+    assert.equal(blocker.phase,'cleanup_unverified');
+    assert.equal(blocker.reason,'workspace_occupied');
+    const releases=await Promise.all([1,2].map(()=>client.callTool({name:'zcode_cancel',arguments:{task_id:taskId}})));
+    for(const release of releases)assert.equal(contentObject(release).status,resultStatus);
+    assert.equal((await manager.getResult(taskId)).status,resultStatus);
+    const modules=await loadLifecycleCandidateModules(),reader=modules.Store.openForRecovery(dataRoot);
+    assert.ok(reader);
+    try{
+      const port=modules.createPort(reader);
+      const operation=port.readOperation(operationId) as Record<string,unknown>;
+      const snapshot=port.readRecoverySnapshot() as {operations:Array<Record<string,unknown>>};
+      const occupied=snapshot.operations.find(item=>item.operation_id===operationId);
+      const committed=port.readCommittedResult(operationId);
+      const events=port.readLifecycleEvents(operationId) as Array<Record<string,unknown>>;
+      const releaseEvidence=JSON.parse(String(events.find(event=>event.event_type==='observation_recorded'
+        &&JSON.parse(String(event.evidence_json)).reason==='user_authorized_release_unverified')?.evidence_json)) as Record<string,unknown>;
+      const expectedAuthorization=resultStatus==='cancelled'?undefined:createHash('sha256').update(canonicalTestJson({
+        contract:'terminal-result-admin-release-v1',operation_id:operationId,task_id:taskId,attempt:1,
+        generation:Number(operation.generation),result_digest:String(operation.result_digest),
+        recovery_evidence_digest:String(releaseEvidence.recovery_evidence_digest),
+      }),'utf8').digest('hex');
+      assert.equal(operation.phase,'released');
+      assert.equal(occupied?.capacity_occupied,false);
+      assert.equal(occupied?.cleanup_state,'unverified_admin_release');
+      assert.equal(committed?.result.status,resultStatus);
+      assert.equal(committed?.result_digest,operation.result_digest);
+      assert.equal(events.filter(event=>event.event_type==='result_committed').length,1);
+      assert.equal(events.filter(event=>event.event_type==='cleanup_unverified').length,1);
+      assert.equal(events.some(event=>event.event_type==='cleanup_verified'),false);
+      assert.equal(events.filter(event=>event.event_type==='observation_recorded'
+        &&JSON.parse(String(event.evidence_json)).reason==='user_authorized_release_unverified').length,1);
+      if(resultStatus==='cancelled'){
+        assert.equal(typeof releaseEvidence.cancel_id,'string');
+        assert.equal(typeof releaseEvidence.cancellation_verification_digest,'string');
+      }else{
+        assert.equal(releaseEvidence.authorization_request_digest,expectedAuthorization);
+        assert.equal(releaseEvidence.result_digest,committed?.result_digest);
+        assert.equal(releaseEvidence.result_commit_ref,committed?.result_commit_ref);
+        assert.equal(typeof releaseEvidence.claim_id,'string');
+        assert.equal(typeof releaseEvidence.worker_identity_digest,'string');
+      }
+    }finally{reader.close();}
+    const unblocked=contentObject(await client.callTool({name:'zcode_status',arguments:{task_id:queuedTaskId}}));
+    assert.equal(unblocked.dispatch_blocker,undefined);
+  },{
+    processProbe:probe,
+    testVerifyProcessTreeClaimantsClean:async targets=>{
+      assert.deepEqual(targets.map(target=>target.pid),[seeded!.processId]);
+      return {clean:true,livePids:[],observedPids:[seeded!.processId]};
+    },
+    beforeAuthority:(dataRoot,modules,workspace)=>{seeded=seedCancelledCleanupHold(dataRoot,modules,workspace,taskId,operationId,resultStatus);},
   });
 });
 
