@@ -2,7 +2,7 @@
 
 > Status: IMPLEMENTED — PR 2–6 CANDIDATE（architecture accepted；release blocked）
 > Date: 2026-11-22
-> Review baseline: `origin/preview` `ac1e8396f25a1a1d3ff373def84726d28c1f4193` + PR 2–6 integration candidate
+> Review baseline: `origin/preview` `ac1e8396f25a1a1d3ff373def84726d28c1f4193` + PR 2–6 candidate `c75c34330287266702cab5949662bf897b74ed5a`
 
 ## Verdict
 
@@ -12,9 +12,10 @@ transport，以及跨进程 fake Worker 的 Result/Cleanup/Release 验证。PR 2
 candidate 进一步把 shipped MCP 入口收敛为单一 Thin MCP，并把生产 Authority
 composition 固定在 Executor；确定性四层 E2E 与类型/边界检查通过。PR 3–6
 candidate 已加入 Control-only CLI、loopback Web、fail-closed Wake 与 Async
-Master Handoff。当前结论仍为 `PARTIAL / BLOCKED`：真实 Codex Desktop 关闭、
-严格 Wake C/D、真实 Official Runtime 和真实模型 Skill 遵循率仍未运行；可以
-提交 stacked PR 评审，但不得合入 Preview 或发布。
+Master Handoff，并通过 1060 项本地完整回归（1058 pass / 0 fail / 2 skip）
+与 4/4 注册压力矩阵。当前结论仍为 `PARTIAL / BLOCKED`：真实 Codex Desktop
+关闭、严格 Wake C/D、真实 Official Runtime 和真实模型 Skill 遵循率仍未运行；
+可以提交统一 RC PR 评审，但不得合入 Preview 或发布。
 
 ## Findings
 
@@ -61,10 +62,10 @@ Master Handoff。当前结论仍为 `PARTIAL / BLOCKED`：真实 Codex Desktop �
 5. `PASS`：Lease 释放晚于 Store 关闭；Store/lease 释放失败保持 fail closed。
 6. `PASS`：新旧 Host 混用、手动 Lease Clear 活动 Owner 负例已加入测试。历史 pre-Lease Host 没有可读 Lease，必须人工停机；显式 transition acknowledgement 不是热混用安全证明。
 7. `PASS`：PR 2.5 的 shipped `bridge.mjs` 已收窄为 Thin MCP；测试 harness 的 legacy lifecycle Host 不进入生产包。
-8. `NOT_RUN`：PR 3/4 仍需定义列表/事件查询分页上限，并确认只读投影不写业务 SQLite。
-9. `NOT_RUN`：PR 5 必须裁决 SQLite v14 `observation_recorded` 能否安全承载 Wake Intent/Delivery；不能则只保留 Web Notify。
-10. `NOT_RUN`：PR 5 必须复用 A 实验作为模型失控负例；未确认 Thread 当前 model/effort/budget 时只允许 Web Notify。
-11. `BLOCKED`：真实 Desktop 关闭后的进程存活和 Result durability 仍需真实 Host E2E；受控 EOF、detached spawn 和 fake Worker 不能替代。
+8. `PASS — CANDIDATE`：Task CLI 使用 bounded list/Result 预算；Web/CLI 只通过同一 Executor Control 读取/控制，不打开可写 SQLite。
+9. `PASS — CANDIDATE`：Wake Intent/Delivery 使用现有 SQLite v14 released Operation 的 bounded `observation_recorded` evidence，不新增 schema 或第二持久化权威。
+10. `PASS — SYNTHETIC`：A 实验模型失控负例已进入 Wake policy；未确认 Thread 当前 model/provider/effort/budget 时只允许 Web Notify。
+11. `BLOCKED`：真实 Desktop 关闭后的进程存活和 Result durability 仍需真实 Host E2E；受控 EOF、detached spawn、fake Worker 与完整本地回归不能替代。
 
 ## PR #120 / PR 2.5 Remediation Record
 
@@ -75,7 +76,8 @@ Master Handoff。当前结论仍为 `PARTIAL / BLOCKED`：真实 Codex Desktop �
 | Production CLI test-seam rejection | `PASS` | Fake Adapter 与任意 Worker entry 在 Lease 获取前拒绝 |
 | Startup failure rollback | `PASS` | pipe 启动失败仅在 Store idle close 与 exact Lease 证明后释放；Authority 启动失败保留 Lease 并阻止第二 Owner |
 | Development gate | `PASS` | 延期 FULL 运行直接/域安全测试；Integration 安全集合 fail closed，完整 Release Gate 仍延期 |
-| Complete release matrix | `NOT_RUN` | 统一在 Executor PR 2-6 的 Release Candidate 边界执行；历史全量结果不适用于当前工作树 |
+| Complete local release matrix | `PASS — LOCAL` | `c75c3433`：1060 tests、1058 pass、0 fail、2 skip；注册压力 4/4；生成物与插件校验通过。GitHub Release Gate 另列 |
+| GitHub complete release matrix | `NOT_RUN` | Pushed RC 必须通过 Ubuntu/Windows/Stress Required Checks 后才能合并 |
 
 ## PR 3–6 Candidate Update
 
@@ -85,7 +87,9 @@ Master Handoff。当前结论仍为 `PARTIAL / BLOCKED`：真实 Codex Desktop �
 | Web Console local boundary | `PASS — CANDIDATE` | loopback/Origin/CSRF、只读 Task/Event/Result、显式 Cancel/Reply；console close 不改 Executor |
 | Executor Wake | `PASS — SYNTHETIC / REAL NOT_RUN` | post-Release once-only Queue + Web Notify、SQLite v14 evidence、exact-config fail closed；真实 socket/Queue/C/D 未运行 |
 | Async Master Handoff | `PASS — CONTRACT / MODEL NOT_RUN` | deterministic Skill decision contract；真实 Host 模型遵循率、真实 Wake 恢复与 Desktop visible 未验证 |
-| Unified release gate | `NOT_RUN` | 冻结 PR 2–6 候选后统一运行 Windows/Ubuntu/Stress |
+| Unified local release gate | `PASS — LOCAL` | Windows 1060 项完整回归、4/4 压力矩阵、生成物与插件校验通过 |
+| Unified GitHub release gate | `NOT_RUN` | 推送后运行 Ubuntu/Windows/Stress；任何失败不得以重跑替代根因处理 |
+| Root-exited shutdown race | `PASS — DETERMINISTIC + FULL REGRESSION` | 仅精确 `process_tree_root_exited` 可由 fresh exact probe 加原 recorded-tree clean proof 收敛；定向 20/20、负载 12/12、composition 67/67 |
 
 ## Follow-up
 

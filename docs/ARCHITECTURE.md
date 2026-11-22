@@ -4,12 +4,12 @@
 
 > 2026-11-16 本地候选修订：[ADR-039](decisions/ADR-039-host-authorized-cancellation.md) 将取消授权与清理事实分离。queued + Launch Intent 无 Claim 时允许原子持久化取消并禁止迟到 Claim，未证明的进程/资源占用保留；Running 的 cleanup-only Hold 可经新鲜取消树证明追加消解记录，再继续原 CAS。此修复不增加 MCP 工具、Schema、重派或第二套恢复引擎。
 > Last updated: 2026-11-22（Preview.12 + Async Executor PR 2–6 统一候选）
-> Last verified: 2026-11-22，核对 PR #116、PR #121、ADR-039 durable Spawn/active Worker/tree proof 保护、ADR-048 默认 32 KiB Event 页及 cursor 续读、Recovery 材料事实去重/无固定消解次数，以及 ADR-045/049/050/051/052 的候选边界；真实计费、生产取消与真实 Desktop 关闭 NOT RUN。
-> Verified against: `origin/preview@ac1e8396f25a1a1d3ff373def84726d28c1f4193` + `codex/async-executor-rc-20261122` candidate
+> Last verified: 2026-11-22，核对 PR #116、PR #121、ADR-039 durable Spawn/active Worker/tree proof 保护、ADR-048 默认 32 KiB Event 页及 cursor 续读、Recovery 材料事实去重/无固定消解次数，以及 ADR-045/049/050/051/052 的候选边界与统一候选 1060 项本地完整回归/4/4 压力矩阵；真实计费、生产取消与真实 Desktop 关闭 NOT RUN。
+> Verified against: `origin/preview@ac1e8396f25a1a1d3ff373def84726d28c1f4193` + candidate `c75c34330287266702cab5949662bf897b74ed5a`
 
 本文件描述当前 Preview.12 候选的生产架构。Windows x64 已默认切换到官方 Host 路径，R7 Runtime Events/Usage 复用同一 SQLite Authority；候选保留 ZCode 3.18.2 Host 模块、官方 Start Plan 认证投影与官方签名 runtime host，并完成 ADR-041 的 Thin Official Host 收敛。PR #116 已在 `450c18af` 合入 opt-in Result 摘要/默认完整 Result 与 Event Attempt 归属；PR #121 已在 `f51e965e` 合入无固定次数的 Recovery 观察去重与历史 v14 Hold 兼容。公开合同继续以 [INTERFACES.md](INTERFACES.md) 为准，宿主和运行配置分别见 [SHARED_CORE.md](SHARED_CORE.md) 与 [ZCODE_RUNTIME.md](ZCODE_RUNTIME.md)。
 
-> 2026-11-22 架构状态：Owner 已接受 [ADR-045](decisions/ADR-045-async-executor-ownership.md) 与 Async Executor 总体架构。PR 2–6 candidate 已实现 Lifetime Lease、IPC、Thin MCP、Control-only CLI、loopback Web、fail-closed Wake 与 Async Master Handoff，并通过确定性与 fake Worker E2E。它仍不是当前 Preview 生产事实；本文件所述生产链继续以 Preview.12 单 Host Manager 为准。真实 Codex Desktop 关闭、严格 Wake C/D、真实 Official Runtime 和真实模型 Skill 遵循率仍为 `NOT_RUN / BLOCKED`，因此不得合入 Preview 或发布。
+> 2026-11-22 架构状态：Owner 已接受 [ADR-045](decisions/ADR-045-async-executor-ownership.md) 与 Async Executor 总体架构。PR 2–6 candidate 已实现 Lifetime Lease、IPC、Thin MCP、Control-only CLI、loopback Web、fail-closed Wake 与 Async Master Handoff，并通过确定性、fake Worker E2E、1060 项本地完整回归和 4/4 压力矩阵。它仍不是当前 Preview 生产事实；本文件所述生产链继续以 Preview.12 单 Host Manager 为准。真实 Codex Desktop 关闭、严格 Wake C/D、真实 Official Runtime 和真实模型 Skill 遵循率仍为 `NOT_RUN / BLOCKED`，因此不得合入 Preview 或发布。
 
 2026-11-19 的集成候选应用 [ADR-040](decisions/ADR-040-installed-official-appserver-runtime.md) 与 [ADR-041](decisions/ADR-041-thin-official-host-end-state.md)：所有受支持 Provider 在通过精确 Manifest 校验后，统一使用用户已安装的官方 AppServer Bundle、同根 builtin Provider 配置和 runtime host；Provider 只决定认证/权益能力，不再选择 AppServer 来源。未知安装版不再仅因不在 Manifest 中永久拒绝：[ADR-042](decisions/ADR-042-unknown-runtime-experimental-authorization.md) 先完成完整安装安全检查与指纹计算，只有精确指纹获得本地显式授权后才进入 `OFFICIAL_RUNTIME_EXPERIMENTAL`。授权按 `coding_plan_probe`、`start_plan_probe`、`other_provider_probe` 分 scope；不安全安装、无效签名、非 x64、混合根和不支持 Node 仍 hard block。实验态不自动提升 Manifest、Provider 能力或折扣状态，也不存在静默回退到打包 AppServer 的路径。Provider capability 在 `session/create` 后按 Runtime 实际报告的 Provider/Model 重新分类，并在 `session/subscribe`/`session/send` 前完成门禁；显式与隐式选择走同一检查点。
 

@@ -1,9 +1,10 @@
 # ADR-045：独立 Async Executor 所有权
 
 > Status: ACCEPTED（Owner 条件批准；架构方向已接受）
-> Implementation status: PARTIAL / BLOCKED — PR 2/2.5/3/4/5 candidate；未合入 Preview，未发布
+> Implementation status: PARTIAL / BLOCKED — PR 2–6 unified local RC passed; real Host gates pending; not merged or released
 > Date: 2026-11-22
-> Baseline: `origin/preview` `1bf039fda2ccfd17a992458a871bddd7b48b38c1`
+> Baseline: `origin/preview` `ac1e8396f25a1a1d3ff373def84726d28c1f4193`
+> Candidate: `c75c34330287266702cab5949662bf897b74ed5a`
 > Related architecture: [BRIDGE_ASYNC_EXECUTION_V1.md](../architecture/BRIDGE_ASYNC_EXECUTION_V1.md)
 
 ## Context
@@ -49,8 +50,9 @@ fake Worker 跨进程 Result/Cleanup/Release E2E。确定性 IPC、Lease、单�
 开发门禁采用 `Local Verification During Development, Full CI Before Release`：
 普通功能提交只跑 typecheck、构建所需产物、受影响测试和关键 E2E；延期
 `FULL_SUITE` 必须先执行直接变更与受影响域的安全测试，且不得报告为完整回归
-PASS。完整 Windows/Ubuntu/Stress 统一在 Executor 功能链的 Release Candidate
-边界执行。
+PASS。统一 RC 已在冻结候选上执行 Windows 本地完整回归与注册压力矩阵；
+Ubuntu、Windows shards 与 GitHub Required Checks 仍必须由同提交的 Release
+Gate 完成。
 
 真实 Codex Desktop 关闭后的 E2E 仍未运行，原因是不得关闭 Owner 当前正在使用的
 Desktop；真实 Official Runtime 也没有新的付费模型授权。因此 ADR-045 的
@@ -128,3 +130,22 @@ E2E 与 coordinator fail-closed 矩阵通过。
 真实 App Server control socket、真实 Queue、严格 notLoaded C、Desktop 全退 D
 和真实付费模型均未在候选验证中运行；这些门禁保持 `NOT_RUN / BLOCKED`。
 Queue Wake 仍不得扩展为发布承诺，持久化结果与安全回退也不能以 F5 代替。
+
+## Unified Release Candidate Record
+
+PR 2–6 已整合为候选 `c75c34330287266702cab5949662bf897b74ed5a`，基线为
+`origin/preview@ac1e8396f25a1a1d3ff373def84726d28c1f4193`。Windows 本地完整
+回归为 1060 项：1058 pass、0 fail、2 个既有 skip；注册压力矩阵 4/4；13 个
+生成物 Freshness 与插件结构校验通过。统一证据见
+[Async Executor RC report](../reports/async-executor-release-candidate-20261122.md)。
+
+完整回归曾出现一次 Windows `process_tree_root_exited` 竞态：root 在精确身份
+probe 与进程树事务之间退出，导致 stdio shutdown 的 Cleanup/Release 测试失败。
+修复只允许该精确错误进入 reconciliation，并要求 fresh exact-root probe 与原
+recorded-tree clean proof 同时成立；其他 termination error 继续 fail closed。
+定向 race 20/20、负载下 12/12、affected composition 67/67，最终完整回归通过。
+
+该本地候选仍不满足 ADR-045 的真实 Host Validation Gate。GitHub Release Gate、
+真实 Desktop 关闭、真实 Official Runtime、严格 Wake C/D 和真实模型 Skill
+遵循率均未完成前，不得合入 Preview 或发布。没有新增 Supervisor、第二任务
+数据库、第二状态机、第二 Worker 路径或额外持久化权威；SQLite 仍为 v14。

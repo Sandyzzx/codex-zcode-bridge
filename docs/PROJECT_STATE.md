@@ -2,8 +2,8 @@
 
 > Status: AUTHORITATIVE
 > Last updated: 2026-11-22（Preview.12 release integration）
-> Last verified: 2026-11-22，核对 `origin/preview@ac1e8396f25a1a1d3ff373def84726d28c1f4193` 的 Preview.12 发布记录、Recovery Observation 限额移除、材料事实去重、超过 8 条 Hold 的 Cleanup/Cancel 消解、旧 v14 Trigger 只读兼容，以及 Preview.11 的 Result/Event/行政释放边界。真实计费 A/B 仍 `BLOCKED`。
-> Verified against: Preview `ac1e8396f25a1a1d3ff373def84726d28c1f4193` + `codex/async-executor-rc-20261122` candidate
+> Last verified: 2026-11-22，核对 `origin/preview@ac1e8396f25a1a1d3ff373def84726d28c1f4193` 的 Preview.12 发布记录、Recovery Observation 限额移除、材料事实去重、超过 8 条 Hold 的 Cleanup/Cancel 消解、旧 v14 Trigger 只读兼容，以及 Async Executor 统一候选的 1060 项本地完整回归、4/4 压力矩阵、生成物与插件校验。真实 Desktop 关闭、严格 Wake C/D、真实 Official Runtime 与真实计费仍 `NOT_RUN / BLOCKED`。
+> Verified against: Preview `ac1e8396f25a1a1d3ff373def84726d28c1f4193` + candidate `c75c34330287266702cab5949662bf897b74ed5a`
 
 当前发布状态：
 
@@ -19,7 +19,7 @@
 - 已发布 Preview `2.0.0-preview.12`：源码 HEAD `f51e965ebe38e85b3b8d3dea1396384aa634d2d4`，移除全局 Recovery Observation 固定上限，保留当前探测、Worker 身份、进程树、Cleanup、Cancel、Release 与 SQLite CAS 合同。重复且材料事实不变的 active Hold 不追加 Event；材料事实变化仍记录不可覆盖证据。
 - Preview.12 对超过 8 条历史 Hold 的 Cleanup/Cancel 消解使用完整事件集合的 count/root 承诺，旧 digest 数组继续可校验；既有 v14 的精确旧 Trigger 可只读打开，并在可写打开时事务内精确升级，`user_version` 仍为 14。隔离 Task89 快照已验证第 9 次观察和重复去重，生产 Task89 未取消、未写入。
 - ZCode Desktop `3.19.0.10774`：仅通过 ADR-042 的 `OFFICIAL_RUNTIME_EXPERIMENTAL` 精确指纹授权完成兼容性探测；不是 Preview.12 的发布支持版本，Coding Plan 倍率仍 `INCONCLUSIVE`，Start Plan 因无 active plan 为 `BLOCKED`。
-- Async Executor PR 2–6：独立候选分支 `codex/async-executor-rc-20261122` 基于上述 Preview.12 集成；不属于 Preview.12 生产事实，不改变当前单 Host Manager 生产链。真实 Desktop 关闭、严格 Wake C/D、真实 Official Runtime 和真实模型 Skill 遵循率仍为 `NOT_RUN / BLOCKED`。
+- Async Executor PR 2–6：独立候选分支 `codex/async-executor-rc-20261122` 基于上述 Preview.12 集成，候选代码 `c75c34330287266702cab5949662bf897b74ed5a` 已通过 1060 项本地完整回归（1058 pass / 0 fail / 2 skip）、4/4 注册压力矩阵、生成物与插件校验。它不属于 Preview.12 生产事实，不改变当前单 Host Manager 生产链；真实 Desktop 关闭、严格 Wake C/D、真实 Official Runtime 和真实模型 Skill 遵循率仍为 `NOT_RUN / BLOCKED`。
 
 ## 当前生产架构
 
@@ -83,6 +83,7 @@ Preview.3 的 Start Plan 历史证据覆盖 Windows、官方 AppServer `0.17.1`�
 | Desktop 3.18.0 / 3.18.1 / 3.18.2 兼容矩阵 | `NOT_VERIFIED / 3.18.2 PARTIAL` | 合成版本上下文覆盖三个版本；本机仅观察到 Desktop `3.18.2.10443`，3.18.0/3.18.1 未安装，不能由源码或合成用例推断实机 PASS |
 | 一般 Desktop Main 独立性 | `NOT_RUN` | 合成路径不证明完整资源与身份闭包 |
 | Preview.7 发布完整回归 | `PASS — CANDIDATE` | PR #96 Windows 完整回归 913 项：911 pass、0 fail、2 skip；Ubuntu 772 项：723 pass、0 fail、49 skip；Typecheck、Build、Plugin Validation、生成物 Freshness 与 `git diff --check` 通过。见 [CI 43720237853](https://github.com/Sandyzzx/codex-zcode-bridge/actions/runs/43720237853)。只覆盖 Windows x64、Node 24.16.0 |
+| Async Executor PR 2–6 本地完整回归 | `PASS — LOCAL CANDIDATE` | 候选 `c75c3433`：1060 tests、1058 pass、0 fail、2 existing skips；注册压力 4/4；生成物 13/13 fresh，插件结构校验通过。见 [统一 RC 证据](reports/async-executor-release-candidate-20261122.md)。不替代 GitHub Release Gate、真实 Desktop 关闭或真实 Official Runtime |
 | Official Host 启动版本上下文 | `PASS — CANDIDATE` | 有效 Desktop metadata 优先；独立 Host 使用校验后的 `3.18.2` 产品版本且不伪造 Build ID；模型请求仍使用 `--surface desktop`；受控 A/B 两边 `main_turn` 均获真实响应，A/B task contract 因测试 Prompt 保持 `FAIL`，后续正常 Prompt 核心路径通过 |
 | Windows runtime-host helper | `PASS — OFFICIAL_SIGNED_3.18.2` | 从本机 ZCode Desktop `3.18.2.10443` 复制 `zcode-runtime-host.exe`：179,608 bytes、SHA-256 `C2C8FF5FF28CBDDC4F177C094AA67C322830889612251BD173BAAABC89379AB4`、PE `0x8664`、Authenticode Valid、签名主体北京智谱华章科技股份有限公司；现有 Official ProcessManager smoke 通过。Fresh Rebuild 不再是门槛；安装器 helper/fixture 不进入 Bridge BOM |
 | 当前认证候选 CI | `PASS` | Draft PR #94 的 [run 43599440845](https://github.com/Sandyzzx/codex-zcode-bridge/actions/runs/43599440845) 在 Ubuntu/Windows `Verify` 与 SQLite resource matrix 四项全部通过；不等同 Preview.6 发布验收 |

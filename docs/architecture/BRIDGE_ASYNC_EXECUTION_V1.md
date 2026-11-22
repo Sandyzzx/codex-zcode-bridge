@@ -1,10 +1,10 @@
 # Bridge Async Execution Architecture v1
 
-> Status: IMPLEMENTED — PARTIAL（PR 2/2.5/3/4/5/6 stacked candidates；未合入 Preview，不可发布）
+> Status: IMPLEMENTED — PARTIAL（PR 2–6 unified local Release Candidate passed；未合入 Preview，不可发布）
 > Decision status: [ADR-045](../decisions/ADR-045-async-executor-ownership.md) = ACCEPTED；[ADR-051](../decisions/ADR-051-executor-wake-delivery.md) = ACCEPTED；[ADR-052](../decisions/ADR-052-async-master-handoff.md) = ACCEPTED；本文档记录目标合同与当前实现边界
 > Date: 2026-11-22（Asia/Shanghai）
-> Baseline: `origin/preview` `ac1e8396f25a1a1d3ff373def84726d28c1f4193`（Preview.12）；PR 2 base `f330b511270934fa40014006333aa7747dad684c`；integration branch `codex/async-executor-rc-20261122`
-> Evidence classification: 文中逐项标注 `VERIFIED`、`INFERRED`、`UNVERIFIED`；证据见 [PR 2 report](../reports/async-executor-pr2-20261122.md)、[PR 2.5 report](../reports/async-executor-pr2.5-20261122.md)、[PR 5 report](../reports/async-executor-pr5-20261122.md)、[PR 6 report](../reports/async-executor-pr6-20261122.md) 与统一候选报告
+> Baseline: `origin/preview` `ac1e8396f25a1a1d3ff373def84726d28c1f4193`（Preview.12）；candidate `c75c34330287266702cab5949662bf897b74ed5a`；PR 2 base `f330b511270934fa40014006333aa7747dad684c`；integration branch `codex/async-executor-rc-20261122`
+> Evidence classification: 文中逐项标注 `VERIFIED`、`INFERRED`、`UNVERIFIED`；证据见 [PR 2 report](../reports/async-executor-pr2-20261122.md)、[PR 2.5 report](../reports/async-executor-pr2.5-20261122.md)、[PR 5 report](../reports/async-executor-pr5-20261122.md)、[PR 6 report](../reports/async-executor-pr6-20261122.md) 与 [统一 RC report](../reports/async-executor-release-candidate-20261122.md)
 
 ## 1. 目标与非目标
 
@@ -45,6 +45,12 @@
 （Preview.12）；发布支持范围仍按现有文档限定为 Windows x64、Node `24.16.0`、
 ZCode Desktop `3.18.2.10443`、SQLite v14 ONLY。PR 2 branch 不扩大该范围，也不把
 实验性 ADR-042 安装或 Token Efficiency 候选写成当前支持范围。
+
+统一候选 `c75c34330287266702cab5949662bf897b74ed5a` 已通过 Windows 本地完整
+回归 1060 项（1058 pass / 0 fail / 2 existing skips）、注册压力矩阵 4/4、
+13 个生成物 Freshness 与插件结构校验。GitHub Release Gate 仍需在推送后的同一
+提交通过；本地结果不替代真实 Host 关闭、真实 Official Runtime、严格 Wake C/D
+或真实模型 Skill 遵循率。
 
 ### 2.1 PR 2 / PR 2.5 实施边界
 

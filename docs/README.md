@@ -2,8 +2,8 @@
 
 > Status: AUTHORITATIVE（仅指本索引）
 > Last updated: 2026-11-22（Preview.12 + Async Executor PR 2–6 统一候选）
-> Last verified: 2026-11-22，核对 Preview.12 Recovery Observation 限额移除与历史 Hold 兼容，以及 PR #120/PR 2–6 的 Thin MCP、Control-only CLI、loopback Web、fail-closed Wake 和 Async Handoff。真实 Desktop 关闭、严格 Wake C/D 与真实模型 Skill 遵循率仍为 `NOT_RUN / BLOCKED`。
-> Verified against: `origin/preview@ac1e8396f25a1a1d3ff373def84726d28c1f4193` + `codex/async-executor-rc-20261122` candidate
+> Last verified: 2026-11-22，核对 Preview.12 Recovery Observation 限额移除与历史 Hold 兼容，以及 PR #120/PR 2–6 的 Thin MCP、Control-only CLI、loopback Web、fail-closed Wake 和 Async Handoff；统一候选本地完整回归 1060 项为 1058 pass / 0 fail / 2 skip，注册压力矩阵 4/4 pass。真实 Desktop 关闭、严格 Wake C/D 与真实模型 Skill 遵循率仍为 `NOT_RUN / BLOCKED`。
+> Verified against: `origin/preview@ac1e8396f25a1a1d3ff373def84726d28c1f4193` + candidate `c75c34330287266702cab5949662bf897b74ed5a`
 
 English users start at [README.md](../README.md). 技术文档为中文。先读当前事实，按问题加载合同；研究或历史材料不作为当前实现或发布证明。
 
@@ -30,11 +30,11 @@ English users start at [README.md](../README.md). 技术文档为中文。先读
 | SQLite v13 退役验收 | [验收报告](reports/sqlite-v13-retirement-20261121.md) | v14-only 支持、v13 非破坏性拒绝、测试/生成物退役与完整回归证据 |
 | Preview.11 发布与已知边界 | [发布报告](reports/preview11-release-20261122.md) | 默认完整 Result、opt-in 摘要、Event 分页、用户授权阻塞释放与真实 A/B `BLOCKED` |
 | Preview.12 发布与 Recovery 兼容 | [发布报告](reports/preview12-release-20261122.md) | 无固定观察次数、重复材料事实去重、超过 8 条 Hold 消解、旧 v14 Trigger 兼容与真实 A/B `BLOCKED` |
-| Async Executor PR #120 + PR 2.5 candidate | [架构合同](architecture/BRIDGE_ASYNC_EXECUTION_V1.md)、[ADR-045](decisions/ADR-045-async-executor-ownership.md)、[PR 2 证据](reports/async-executor-pr2-20261122.md)、[PR 2.5 证据](reports/async-executor-pr2.5-20261122.md) | `PARTIAL / BLOCKED`：Executor-only production composition、Thin MCP/model/Doctor、Lease、IPC、fake Worker 四层 E2E PASS；真实 Desktop 关闭和 Official Runtime `NOT_RUN`，未合入 Preview |
+| Async Executor PR 2–6 unified Release Candidate | [架构合同](architecture/BRIDGE_ASYNC_EXECUTION_V1.md)、[ADR-045](decisions/ADR-045-async-executor-ownership.md)、[PR 2 证据](reports/async-executor-pr2-20261122.md)、[PR 2.5 证据](reports/async-executor-pr2.5-20261122.md)、[统一 RC 证据](reports/async-executor-release-candidate-20261122.md) | `PARTIAL / BLOCKED`：Lease、IPC、Thin MCP、CLI/Web/Wake、fake Worker Result/Cleanup/Release 与完整本地回归 PASS；真实 Desktop 关闭、Official Runtime、严格 C/D 和真实 Skill 遵循率未通过，未合入 Preview |
 | Task CLI candidate | [ADR-049](decisions/ADR-049-task-cli-control-surface.md) | `IMPLEMENTED / PARTIAL`：同一 Executor Control Client、bounded Task list、Result 摘要/文件预算与已运行 Executor 检测；不拥有 SQLite |
-| Task CLI evidence | [PR 3 report](reports/async-executor-pr3-20261122.md) | 定向测试、插件生成物与隔离 start/status/stop PASS；完整回归与真实 Desktop 关闭 `NOT_RUN` |
-| Task Web Console candidate | [ADR-050](decisions/ADR-050-local-task-web-console.md)、[PR 4 report](reports/async-executor-pr4-20261122.md) | `IMPLEMENTED / PARTIAL`：loopback + Origin/CSRF、只读 Task/Event/Result、Cancel/Reply；页关闭不影响 Executor |
-| Executor Wake candidate | [ADR-051](decisions/ADR-051-executor-wake-delivery.md)、[PR 5 report](reports/async-executor-pr5-20261122.md) | `IMPLEMENTED / PARTIAL`：post-Release 一次性 Queue；loaded/idle exact model/provider/effort 才允许，其他 Web Notify；SQLite v14 evidence |
+| Task CLI evidence | [PR 3 report](reports/async-executor-pr3-20261122.md)、[统一 RC 证据](reports/async-executor-release-candidate-20261122.md) | 定向测试、插件生成物、隔离 start/status/stop 与统一本地完整回归 PASS；真实 Desktop 关闭 `NOT_RUN` |
+| Task Web Console candidate | [ADR-050](decisions/ADR-050-local-task-web-console.md)、[PR 4 report](reports/async-executor-pr4-20261122.md) | `IMPLEMENTED / PARTIAL`：loopback + Origin/CSRF、只读 Task/Event/Result、Cancel/Reply；页关闭不影响 Executor，统一本地完整回归覆盖 |
+| Executor Wake candidate | [ADR-051](decisions/ADR-051-executor-wake-delivery.md)、[PR 5 report](reports/async-executor-pr5-20261122.md) | `IMPLEMENTED / PARTIAL`：post-Release 一次性 Queue；loaded/idle exact model/provider/effort 才允许，其他 Web Notify；SQLite v14 evidence；真实 Queue/C/D `NOT_RUN` |
 | Async Master Handoff candidate | [ADR-052](decisions/ADR-052-async-master-handoff.md)、[PR 6 report](reports/async-executor-pr6-20261122.md)、[Master Skill](../plugins/codex-zcode-bridge/skills/zcode-bridge/SKILL.md) | `IMPLEMENTED / PARTIAL`：Scope 与 Handoff 分离；可靠受理后结束 Turn/停止轮询；Wake 后独立验收；真实模型遵循率与真实 Host Wake `NOT_RUN` |
 | Preview.7 Post-Audit 最小架构、正确性、Legacy JSON 与 CI 整改 | [ADR-038](decisions/ADR-038-preview6-minimum-architecture-remediation.md)、[PROJECT_STATE.md](PROJECT_STATE.md) |
 | Start Plan 与安装版 AppServer 离线兼容性 | [研究](research/start-plan-official-appserver-compatibility-20261118.md) |
@@ -57,7 +57,7 @@ AUTHORITATIVE 描述当前事实或合同；DECISION 记录已批准取舍；RES
 
 当前 Preview 发布候选身份为 `2.0.0-preview.12`。`package.json`、`package-lock.json`、插件 manifest、MCP server version、官方签名 Runtime Host 与固定官方 Host/BOM 必须来自同一提交、Tag 和 Release。发布支持范围仍限定为 Windows x64、Node.js `24.16.0` 与 ZCode Desktop `3.18.2.10443`。Preview.12 在 Preview.11 的 Result、Event 与用户授权释放合同上移除 Recovery Observation 固定次数限制，对未变化 active 材料事实去重，并兼容超过 8 条历史 Hold 的 count/root 消解；SQLite v14 仍是唯一当前 Schema。ADR-042 允许其他安全但未知的精确安装指纹在用户授权后进入 `OFFICIAL_RUNTIME_EXPERIMENTAL`，但不把该版本加入发布支持范围，也不提升 Provider、折扣或 Start Plan 能力。ADR-041 implementation 为 `a676c6cd14573f2620339f992a345ed0715541ff`；Final Closure implementation 为 `f19ab1d75dcced7613bfe6e12c84d780d01f7127`。旧 JSON/CLI 生产链退役决策见 [ADR-029](decisions/ADR-029-legacy-runtime-retirement.md)。ADR-041 后插件不再分发 `app-server/zcode.cjs` 或随附 builtin Provider 配置，所有 Provider 使用安装版 AppServer。
 
-Async Executor PR 2–6 是单独的 Release Candidate，基于 Preview.12 但尚未合入。它不改变当前 Preview 的单 Host Manager 生产事实；真实 Desktop 关闭、严格 Wake C/D、真实 Official Runtime 与真实模型 Skill 遵循率未通过前不得合并或发布。
+Async Executor PR 2–6 是单独的 Release Candidate，基于 Preview.12 但尚未合入。候选 `c75c3433` 已通过 1060 项本地完整回归、4/4 注册压力矩阵、生成物与插件校验；这些结果不替代真实 Host 门禁。它不改变当前 Preview 的单 Host Manager 生产事实；真实 Desktop 关闭、严格 Wake C/D、真实 Official Runtime 与真实模型 Skill 遵循率未通过前不得合并或发布。
 
 ADR-032 已接受且已在 Preview.5 实现“现有 Worker 内官方 Host”。ADR-033 的账户 refresh 协调、ADR-034 的正常 Cleanup 复用和 ADR-035 的平台选择由固定上游 patch 与同一 Worker 实现。ADR-037 已接受“官方 Host 拥有认证、Bridge 不维护第二套凭据/身份系统”的目标；Preview.6 已实现该接线。Preview.6/Preview.7 历史路径上的真实 Coding Plan 完整 E2E 和 Start Plan 核心功能路径曾通过；但 2026-11-19 统一安装版 Runtime 的 Start Plan 真实 Entitlement/E2E/Billing Observation 尚未运行。历史 Start Plan 完整 E2E 因 Workspace 内 PowerShell cache 保持 FAIL。Desktop 3.18.0/3.18.1 保持 `NOT_VERIFIED`，不得写成 PASS 或不兼容。
 

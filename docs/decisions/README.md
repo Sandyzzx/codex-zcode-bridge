@@ -1,9 +1,9 @@
 # 决策路由 / Decisions
 
 > Status: AUTHORITATIVE（仅指本索引）
-> Last updated: 2026-11-22（记录 ADR-045 PR 2/2.5、ADR-049 Task CLI、ADR-050 Web Console、ADR-051 Wake 与 ADR-052 Async Handoff candidate）
-> Last verified: 2026-11-22，核对 ADR-039 行政释放保护、ADR-048 默认 32 KiB Event 页、ADR-045 deterministic Lease/IPC/Thin MCP/Fake Worker 证据、ADR-049 Task CLI、ADR-050 loopback Web 边界、ADR-051 release-bound Wake evidence 与 ADR-052 Master workflow contract；真实 Desktop E2E、严格 C/D 和真实模型遵循率仍为 `NOT_RUN`。
-> Verified against: Preview `ac1e8396f25a1a1d3ff373def84726d28c1f4193` + `codex/async-executor-rc-20261122` candidate
+> Last updated: 2026-11-22（记录 ADR-045 PR 2–6 unified local Release Candidate、ADR-049 Task CLI、ADR-050 Web Console、ADR-051 Wake 与 ADR-052 Async Handoff）
+> Last verified: 2026-11-22，核对 ADR-039 行政释放保护、ADR-048 默认 32 KiB Event 页、ADR-045 Lease/IPC/Thin MCP/Fake Worker 证据与本地 1060 项完整回归/4/4 压力矩阵、ADR-049 Task CLI、ADR-050 loopback Web 边界、ADR-051 release-bound Wake evidence 与 ADR-052 Master workflow contract；真实 Desktop E2E、严格 C/D、真实 Runtime 和真实模型遵循率仍为 `NOT_RUN`。
+> Verified against: Preview `ac1e8396f25a1a1d3ff373def84726d28c1f4193` + candidate `c75c34330287266702cab5949662bf897b74ed5a`
 
 先读当前 [架构](../ARCHITECTURE.md)/[接口](../INTERFACES.md)，只在需要解释取舍时加载对应决策。文件保持原路径和历史正文；Partially superseded 的标注优先于历史段落。
 
@@ -41,7 +41,7 @@
 | Recovery 编号对账 | [044](ADR-044-preview-lifecycle-recovery-reconciliation.md) | Preview 保留 ADR-037 官方认证语义；Stable Host Recovery 在未来对账中使用 ADR-044；不做机械覆盖 |
 | Result 摘要、Event 归属 | [047](ADR-047-compatible-result-summary.md) | 候选 MCP 可选摘要、全量证据读取及 Attempt 核对 |
 | Event 默认预算 | [048](ADR-048-bounded-default-event-pages.md) | `zcode_events` 省略 `max_bytes` 时使用 32 KiB 页预算；显式预算仍为硬限制；所有事件可按 cursor 完整续读 |
-| Async Executor | [045](ADR-045-async-executor-ownership.md) | Accepted；PR 2/2.5 candidate 已实现 Lease、IPC、Thin MCP、Executor-only production composition 与四层 fake Worker/Official Adapter E2E；真实 Host 关闭和付费 Runtime 仍 `NOT_RUN`，未合入 Preview |
+| Async Executor | [045](ADR-045-async-executor-ownership.md) | Accepted；PR 2–6 本地 RC 已通过 Lease、IPC、Thin MCP、CLI/Web/Wake、四层 fake Worker/Official Adapter E2E、1060 项完整回归与 4/4 压力矩阵；真实 Host 关闭、严格 C/D 和付费 Runtime 仍 `NOT_RUN`，未合入 Preview |
 | Task CLI | [049](ADR-049-task-cli-control-surface.md) | CLI 只经 Executor Control 管理同一 Authority；不打开 SQLite、不实现调度或恢复；已有 Executor 不重复 Spawn，过渡和 Shutdown unknown 均有显式边界 |
 | Task Web Console | [050](ADR-050-local-task-web-console.md) | 仅 loopback；经同一 Executor Control 读取 Task/Event/Result，并显式转发 Cancel/Reply；不创建 Task、不打开 SQLite、不拥有 Executor 生命周期 |
 | Executor Wake | [051](ADR-051-executor-wake-delivery.md) | post-Release 一次性 Wake；loaded/idle exact-config 才允许 Queue，其余 Web Notify；SQLite v14 bounded observation，不重试，Desktop visible `UNKNOWN` |
