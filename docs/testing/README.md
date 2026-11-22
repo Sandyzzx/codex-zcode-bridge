@@ -1,9 +1,9 @@
 # 测试入口与成本边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-22（Executor 开发期定向验证 / 发布候选完整 CI 分层）
-> Last verified: 2026-11-22，核对 `release-candidate` 标签与 `workflow_dispatch.release_gate` 分流、开发期 `FULL_SUITE_DEFERRED_TO_RELEASE_GATE`、Required Check 占位、Push 完整门禁及 Cost Lab/Stress 独立边界；执行证据见 Async Executor PR 2 报告。
-> Verified against: `origin/preview` `1bf039fda2ccfd17a992458a871bddd7b48b38c1` + `codex/async-executor-pr2` CI governance revision
+> Last updated: 2026-11-22（Executor PR 2.5 定向验证 / 发布候选完整 CI 分层）
+> Last verified: 2026-11-22，核对 `release-candidate` 标签与 `workflow_dispatch.release_gate` 分流、开发期 `FULL_SUITE_DEFERRED_TO_RELEASE_GATE`、Required Check 占位、Push 完整门禁及 Cost Lab/Stress 独立边界；执行证据见 Async Executor PR 2/2.5 报告。
+> Verified against: `origin/preview` `1bf039fda2ccfd17a992458a871bddd7b48b38c1` + `codex/async-executor-pr2.5` CI governance revision
 
 `test/test-impact-map.json` 为可执行清单唯一来源。共享资格规则禁止 MANUAL_E2E、Fixture 自动执行，显式误传同样拒绝；源 .test.ts/.test.mjs、map 与实际 --list 由回归对账。生成的 test-inventory.json 是静态声明/历史证据索引，不决定执行。
 
@@ -39,6 +39,14 @@ FULL_SUITE 表示需要完整功能回归，压力状态为 SEPARATE_STRESS_GATE
 Impact Map 的每个测试域必须覆盖其直接 `src/`、`plugins/`、`scripts/` 或 `tools/` 静态导入；这是对现有 map 的一致性回归，不创建第二套 selector。`scripts/copy-test-assets.mjs` 变化强制 FULL；`launch-node24.mjs` 变化至少选择 `node-runtime.test.ts`；`process-spawn.ts` 变化选择 composition、real-adapter 和进程清理消费者。
 
 Windows 进程/身份套件按文件串行；其他平台保留既有 Windows-only 限制并打印排除清单，不通过新增 SKIP 获得绿色。现有 admin-abandonment CLI 测试在 Windows 验证成功/CAS，在其他平台验证 windows_required 且数据库逻辑事实不变；生产 guard 不变。
+
+PR 2.5 开发期的最小定向集合包括：`npm run typecheck`、`npm run build:test`、
+`test/executor-lease.test.ts`、`test/executor-ipc.test.ts`、
+`test/executor-process.test.ts`、`test/architecture-boundaries.test.ts`、
+`test/mcp-server.test.ts`、`test/mcp-stdio-entry.test.ts`、
+`test/validate-plugin-root-pattern.test.ts`、`npm run validate:plugin` 和
+`npm run check:generated`（提交后）。这组证据不等同完整回归；真实 Desktop
+关闭、真实 Official Runtime、strict Wake C/D 仍分别记录 `NOT_RUN`/`BLOCKED`。
 
 ## 退役与保留
 

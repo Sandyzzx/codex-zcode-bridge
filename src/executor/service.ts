@@ -6,19 +6,19 @@ import type { DoctorReport } from "../runtime/doctor.js";
 import type { ZCodeModelSettings } from "../runtime/model-settings.js";
 import { createPlatformProbe } from "../runtime/process-probe.js";
 import { FRESH_SQLITE_DATABASE_FILE } from "../runtime/sqlite-install-config.js";
-import { codexHostProfile, validateHostProfile, type BridgeHostProfile } from "../host/profile.js";
+import { codexHostProfile, validateHostProfile, type BridgeHostProfile } from "../runtime/host-profile.js";
 import {
   createProductionAuthorityComposition,
   createWorkerDiagnosticSink,
   type ProductionAuthorityComposition,
-} from "../host/production-composition.js";
+} from "./production-composition.js";
 import { startExecutorControlServer, type ExecutorControlServerHandle } from "./control-server.js";
 import {
   acquireExecutorLease,
   assertExecutorLeaseTransition,
-  authorityRootDigest,
   type ExecutorLeaseHandle,
 } from "./lease.js";
+import { executorPipeName } from "./pipe.js";
 
 export interface ExecutorAuthority extends ProgressTaskManager {
   getExecutorIdleState(): { readonly idle: boolean; readonly blockers: readonly string[] };
@@ -57,10 +57,6 @@ export interface ExecutorServiceHandle {
 }
 
 export type ExecutorServiceState = "active" | "shutdown_pending" | "lease_unknown" | "closed";
-
-export function executorPipeName(root: string): string {
-  return `\\\\.\\pipe\\codex-zcode-bridge-executor-v1-${authorityRootDigest(root)}`;
-}
 
 async function cleanupFailedStartup(
   authority: ExecutorAuthority | undefined,

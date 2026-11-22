@@ -1,15 +1,21 @@
 # 共享核心与宿主适配
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-20（ADR-041 Thin Official Host end state + Final Closure）
-> Last verified: 2026-11-20，核对 `src/core.ts` 导出、Host/Worker 入口、共享 Official Host session factory、动态 Provider capability 检查、生产 Runtime Auth fail-closed、插件 BOM/生成物校验及 R7 Runtime Events 边界；外部 fork 实际升级仍为 NOT RUN。
-> Verified against: baseline `5501c60ecf3f1812a3d3170a670ab0031ea784d8`；ADR-041 implementation `a676c6cd14573f2620339f992a345ed0715541ff`（tree `4d1b54835d4ebe1e1ae15113d5a152130a98480c`）；Final Closure implementation `f19ab1d75dcced7613bfe6e12c84d780d01f7127`（tree `dab3db21e5f51eb764ff421ab31901981964c3c2`）+ 同分支隔离验证 follow-up
+> Last updated: 2026-11-22（Async Executor PR 2.5 Thin MCP boundary）
+> Last verified: 2026-11-22，核对 `src/core.ts` 导出、shipped MCP/Executor 入口、共享 Official Host session factory、动态 Provider capability 检查、生产 Runtime Auth fail-closed、插件 BOM/生成物校验及 R7 Runtime Events 边界；外部 fork 实际升级仍为 NOT RUN。
+> Verified against: baseline `5501c60ecf3f1812a3d3170a670ab0031ea784d8`；ADR-041 implementation `a676c6cd14573f2620339f992a345ed0715541ff`（tree `4d1b54835d4ebe1e1ae15113d5a152130a98480c`）；Final Closure implementation `f19ab1d75dcced7613bfe6e12c84d780d01f7127`（tree `dab3db21e5f51eb764ff421ab31901981964c3c2`）；PR 2 base `f330b511270934fa40014006333aa7747dad684c` + PR 2.5 candidate
 
 公共入口为 `codex-zcode-bridge/core`（`src/core.ts`），无服务器启动副作用，构建同时输出类型声明。项目为 private，尚未发布独立 npm 包；本地 npm pack/fork 消费仍是公共兼容边界。
 
 ## 当前入口
 
-Host 使用 `startBridge(profile, version)`。它负责绑定唯一 SQLite Manager、Fresh Bootstrap、MCP 及 shutdown。Host profile 显式指定 name、settingsDirectory、workerEntryPath 和 instructions；所有路径必须为绝对路径。任务 prompt 与 MCP 工具不硬编码调用宿主。
+正常插件使用 `startBridge(profile, version)`。在 PR 2.5 candidate 中它只启动
+Thin MCP：解析 Authority Root、创建 `ExecutorControlClient`、注册现有 MCP
+工具并转发 Task/Doctor/model 操作。SQLite Manager、Fresh Bootstrap、Worker
+spawn、Official Runtime 和 Executor shutdown 由独立 Executor 持有；MCP
+stdio 断开只结束请求等待，不取消已受理 Task。Host profile 显式指定 name、
+settingsDirectory、workerEntryPath 和 instructions；所有路径必须为绝对路径。
+任务 prompt 与 MCP 工具不硬编码调用宿主。
 
 ```ts
 import { startBridge } from "codex-zcode-bridge/core";
@@ -21,7 +27,13 @@ await startBridge({
 }, hostVersion);
 ```
 
-嵌入式消费者可使用公开 `SqliteLifecycleMcpAuthority.create(options)` 创建同一生产 Manager，再交给 `createBridgeServer({taskManager})`。创建需要现有受信任本地 Host context、合适的 SQLite 根、Worker/Bridge provenance 和 receipt；普通 MCP/TaskPackage 不能自行产生这些能力。准确参数类型由导出的 `SqliteAuthorityOptions` 提供。多数 fork 应使用 startBridge。
+嵌入式消费者仍可使用公开 `SqliteLifecycleMcpAuthority.create(options)` 创建
+兼容的 Manager，再交给 `createBridgeServer({taskManager})`。创建需要现有
+受信任本地 Host context、合适的 SQLite 根、Worker/Bridge provenance 和
+receipt；普通 MCP/TaskPackage 不能自行产生这些能力。该嵌入式入口不进入
+shipped `bridge.mjs`，也不能作为 PR 2.5 的第二个生产 Authority。准确参数
+类型由导出的 `SqliteAuthorityOptions` 提供。多数 fork 应启动/连接 Executor
+并使用 startBridge。
 
 Worker 必须打包 `src/worker/worker-main.ts`，保留同一 SQLite Bootstrap/Claim 私有管道协议。不能使用旧的 `dataRoot taskId attempt` 参数启动；不能从 prompt 或自定义 runner 绕过 Claim。Host manifest、安装 hook、版本、settings 和打包由 fork 独立维护。Worker 的模型执行入口是 `OfficialAppServerWorkerAdapter`；它和 Host 的模型目录共用 `createInstalledOfficialHostSessionFactory`，并以安装版官方 AppServer 作为唯一 Runtime。Adapter 在 `session/create` 后读取 Runtime 实际选择的 Provider/Model，结合官方 Provider registry 与当前账户配置执行 capability gate，然后才订阅或发送 Turn。
 

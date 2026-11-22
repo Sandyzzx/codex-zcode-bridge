@@ -31,8 +31,8 @@ import type {
   CandidateWorkerResultFrame,
 } from "../sqlite-candidate/wp6c/fake-result-adapter.js";
 import { isTrustedLocalStdioContext, type TrustedLocalStdioContext } from "../runtime/trusted-local-deployment.js";
-import type { BridgeHostProfile } from "../host/profile.js";
-import { codexHostProfile, validateHostProfile } from "../host/profile.js";
+import type { BridgeHostProfile } from "../runtime/host-profile.js";
+import { codexHostProfile, validateHostProfile } from "../runtime/host-profile.js";
 import {
   currentSqliteRuntimeRosterDigest,
   SQLITE_CUTOVER_VERIFIER_VERSION,

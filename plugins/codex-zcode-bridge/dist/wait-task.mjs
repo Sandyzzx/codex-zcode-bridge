@@ -4860,7 +4860,7 @@ function assertSupportedNodeRuntime(version = process.versions.node) {
   }
 }
 
-// src/manager/errors.ts
+// src/task-errors.ts
 var TaskManagerError = class extends Error {
   code;
   constructor(code, message) {
@@ -4968,18 +4968,31 @@ function classify(snapshot, initialAttempt, deadlineReached) {
   return deadlineReached ? "timeout" : null;
 }
 
-// src/host/profile.ts
+// src/runtime/host-profile.ts
 import { homedir } from "node:os";
 import path3 from "node:path";
 function codexHostProfile(homeDirectory = homedir()) {
-  return { name: "codex-zcode-bridge", settingsDirectory: path3.join(homeDirectory, ".codex", "codex-zcode-bridge") };
+  return {
+    name: "codex-zcode-bridge",
+    settingsDirectory: path3.join(homeDirectory, ".codex", "codex-zcode-bridge")
+  };
 }
 function validateHostProfile(host) {
-  if (!host || typeof host.name !== "string" || !host.name.trim() || typeof host.settingsDirectory !== "string" || !path3.isAbsolute(host.settingsDirectory)) throw new Error("invalid Bridge host profile");
-  if (host.legacySettingsDirectories !== void 0 && (!Array.isArray(host.legacySettingsDirectories) || host.legacySettingsDirectories.some((directory) => typeof directory !== "string" || !path3.isAbsolute(directory)))) throw new Error("host migration directories must be absolute");
-  if (host.workerEntryPath !== void 0 && (typeof host.workerEntryPath !== "string" || !path3.isAbsolute(host.workerEntryPath))) throw new Error("host worker entry must be absolute");
-  if (host.instructions !== void 0 && typeof host.instructions !== "string") throw new Error("host instructions must be text");
-  if (host.defaultDataRoot !== void 0 && (typeof host.defaultDataRoot !== "string" || !path3.isAbsolute(host.defaultDataRoot))) throw new Error("host default data root must be absolute");
+  if (!host || typeof host.name !== "string" || !host.name.trim() || typeof host.settingsDirectory !== "string" || !path3.isAbsolute(host.settingsDirectory)) {
+    throw new Error("invalid Bridge host profile");
+  }
+  if (host.legacySettingsDirectories !== void 0 && (!Array.isArray(host.legacySettingsDirectories) || host.legacySettingsDirectories.some((directory) => typeof directory !== "string" || !path3.isAbsolute(directory)))) {
+    throw new Error("host migration directories must be absolute");
+  }
+  if (host.workerEntryPath !== void 0 && (typeof host.workerEntryPath !== "string" || !path3.isAbsolute(host.workerEntryPath))) {
+    throw new Error("host worker entry must be absolute");
+  }
+  if (host.instructions !== void 0 && typeof host.instructions !== "string") {
+    throw new Error("host instructions must be text");
+  }
+  if (host.defaultDataRoot !== void 0 && (typeof host.defaultDataRoot !== "string" || !path3.isAbsolute(host.defaultDataRoot))) {
+    throw new Error("host default data root must be absolute");
+  }
   return host;
 }
 

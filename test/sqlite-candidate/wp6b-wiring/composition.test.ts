@@ -12,7 +12,8 @@ import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { build } from "esbuild";
 import { SqliteLifecycleMcpAuthority } from "../../../src/manager/sqlite-lifecycle-mcp-authority.js";
 import { createBridgeServer } from "../../../src/mcp/server.js";
-import { createTrustedLocalCandidateContext, serveStdioLifecycleHost, type StdioLifecycleHost } from "../../../src/host/stdio.js";
+import { createTrustedLocalCandidateContext } from "../../../src/executor/production-composition.js";
+import { serveStdioLifecycleHost, type StdioLifecycleHost } from "../../fixtures/stdio-lifecycle-host.js";
 import { initializeFreshInstallSqliteRoot, initializeIsolatedCandidateRoot, loadLifecycleCandidateModules, openClaimOnlyDriver, readAllLifecycleEventsForRecovery } from "../../../src/store/lifecycle-gate.js";
 import { DirectWorkspaceProvider } from "../../../src/workspace/direct-provider.js";
 import { createPlatformProbe, PROCESS_IDENTITY_VERSION, type ProcessProbe, type ProbeRequest, type ProbeVerdict } from "../../../src/runtime/process-probe.js";
@@ -482,12 +483,13 @@ function redactTestDiagnostic(value: unknown): unknown {
   return redacted;
 }
 
-test("production Host and Executor share the same Authority, routing, auth, diagnostics, and model composition", () => {
+test("Executor exclusively owns the production Authority, routing, auth, diagnostics, and model composition", () => {
   const host = source("host/stdio.ts");
   const executor = source("executor/service.ts");
-  const composition = source("host/production-composition.ts");
-  assert.match(host, /createProductionAuthorityComposition\(/u);
+  const composition = source("executor/production-composition.ts");
+  assert.doesNotMatch(host, /createProductionAuthorityComposition|SqliteAuthority\.create|LeaseGuardedTaskManager/u);
   assert.match(executor, /createProductionAuthorityComposition\(/u);
+  assert.match(executor, /createWorkerDiagnosticSink\("\[executor\]"\)/u);
   assert.match(composition, /initializeFreshInstallSqliteRoot\(/u);
   assert.match(composition, /SqliteAuthority\.create\(/u);
   assert.match(composition, /startPlanPrivateAuthFactory:\s*\(\)\s*=>\s*createHostStartPlanIssuer\(/u);
@@ -497,7 +499,8 @@ test("production Host and Executor share the same Authority, routing, auth, diag
   assert.match(composition, /new ZCodeModelSettings\(env,/u);
   assert.match(composition, /doctor:\s*\(\)\s*=>\s*runBridgeDoctor\(/u);
   assert.doesNotMatch(host, /testOnlyFakeAdapter|executeFakeResultAdapter|adapter_mode\s*:\s*"test_fake"/u,
-    "the formal Host entry must not expose the explicit Fake test capability");
+    "the formal MCP Host must not expose the explicit Fake test capability");
+  assert.match(host, /no local SQLite Manager is constructed/u);
 });
 
 test("claim-only lifecycle composition has no JSON TaskStore or real Adapter dependency", () => {
@@ -2642,8 +2645,8 @@ test("Manager Recovery after restart releases exact exited Workers only after a 
           import { pathToFileURL } from 'node:url';
           const [dataRoot, settingsDirectory, workspace, taskJson, operationId, launchId, launchToken, workerEntryPath, bridgeEntryPath, interruptAt] = process.argv.slice(1);
           const gateModule = await import(pathToFileURL(path.join(process.cwd(), 'dist-test/src/store/lifecycle-gate.js')).href);
-          const hostModule = await import(pathToFileURL(path.join(process.cwd(), 'dist-test/src/host/stdio.js')).href);
-          const trustedLocalContext = hostModule.createTrustedLocalCandidateContext({ name: 'g4-recovery-subprocess', settingsDirectory });
+          const compositionModule = await import(pathToFileURL(path.join(process.cwd(), 'dist-test/src/executor/production-composition.js')).href);
+          const trustedLocalContext = compositionModule.createTrustedLocalCandidateContext({ name: 'g4-recovery-subprocess', settingsDirectory });
           const driver = await gateModule.openClaimOnlyDriver({
             dataRoot, workerEntryPath, bridgeEntryPath, trustedLocalContext,
             testOnlyFakeAdapter: true,
@@ -2841,10 +2844,10 @@ test("ADR-024 six lifecycle crash boundaries use hard Manager-process exits and 
       import { pathToFileURL } from 'node:url';
       const [dataRoot, settingsDirectory, workspace, taskJson, operationId, launchId, launchToken, workerEntryPath, bridgeEntryPath, interruptAt] = process.argv.slice(1);
       const gate = await import(pathToFileURL(path.join(process.cwd(), 'dist-test/src/store/lifecycle-gate.js')).href);
-      const host = await import(pathToFileURL(path.join(process.cwd(), 'dist-test/src/host/stdio.js')).href);
+      const composition = await import(pathToFileURL(path.join(process.cwd(), 'dist-test/src/executor/production-composition.js')).href);
       const driver = await gate.openClaimOnlyDriver({
         dataRoot, workerEntryPath, bridgeEntryPath,
-        trustedLocalContext: host.createTrustedLocalCandidateContext({ name: 'adr024-hard-crash', settingsDirectory }),
+        trustedLocalContext: composition.createTrustedLocalCandidateContext({ name: 'adr024-hard-crash', settingsDirectory }),
         testOnlyFakeAdapter: true,
         onStage(stage, detail) {
           if (stage !== interruptAt) return;
@@ -3036,10 +3039,10 @@ test("R5 explicit cancel closes claimed Result-absent Workers after Manager hard
       import { pathToFileURL } from 'node:url';
       const [dataRoot, settingsDirectory, workspace, taskJson, operationId, launchId, launchToken, workerEntryPath, bridgeEntryPath, interruptAt] = process.argv.slice(1);
       const gate = await import(pathToFileURL(path.join(process.cwd(), 'dist-test/src/store/lifecycle-gate.js')).href);
-      const host = await import(pathToFileURL(path.join(process.cwd(), 'dist-test/src/host/stdio.js')).href);
+      const composition = await import(pathToFileURL(path.join(process.cwd(), 'dist-test/src/executor/production-composition.js')).href);
       const driver = await gate.openClaimOnlyDriver({
         dataRoot, workerEntryPath, bridgeEntryPath,
-        trustedLocalContext: host.createTrustedLocalCandidateContext({ name: 'r5-result-absent-crash', settingsDirectory }),
+        trustedLocalContext: composition.createTrustedLocalCandidateContext({ name: 'r5-result-absent-crash', settingsDirectory }),
         testOnlyFakeAdapter: true,
         onStage(stage, detail) {
           if (stage !== interruptAt) return;

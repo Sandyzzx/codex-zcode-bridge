@@ -9,7 +9,7 @@ import type { ClaimOnlyWorkerProcess } from "../../../src/manager/spawn-worker.j
 
 import { SqliteLifecycleMcpAuthority } from "../../../src/manager/sqlite-lifecycle-mcp-authority.js";
 
-import { createTrustedLocalCandidateContext, createHostStartPlanIssuer } from "../../../src/host/stdio.js";
+import { createTrustedLocalCandidateContext, createHostStartPlanIssuer } from "../../../src/executor/production-composition.js";
 
 import type { ProductionAuthIssuer } from "../../../src/runtime/start-plan-production-auth.js";
 import { loadLifecycleCandidateModules } from "../../../src/store/lifecycle-gate.js";

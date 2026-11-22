@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import { BridgeError } from "./errors.js";
 import { builtinConfigForRuntime, discoverZCodeData, discoverZCodeInstall, isAbsolutePathForPlatform, sameFileSystemPath } from "./paths.js";
 import type { RuntimeResolver, ZCodeRuntimeConfig } from "../interfaces.js";
-import { codexHostProfile, validateHostProfile, type BridgeHostProfile } from "../host/profile.js";
+import { codexHostProfile, validateHostProfile, type BridgeHostProfile } from "./host-profile.js";
 
 const PERSISTED_RUNTIME_KEYS = [
   "ZCODE_BRIDGE_NODE",

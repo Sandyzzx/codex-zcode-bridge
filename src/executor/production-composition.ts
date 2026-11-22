@@ -26,7 +26,7 @@ import { initializeFreshInstallSqliteRoot } from "../store/lifecycle-gate.js";
 import { SqliteLifecycleMcpAuthority as SqliteAuthority } from "../manager/sqlite-lifecycle-mcp-authority.js";
 import { zcodeDataBaseDir } from "../runtime/account-provider.js";
 import { workerEntryPath } from "../manager/spawn-worker.js";
-import type { BridgeHostProfile } from "./profile.js";
+import type { BridgeHostProfile } from "../runtime/host-profile.js";
 
 export interface HostStartPlanIssuerOptions {
   readonly env: NodeJS.ProcessEnv;
@@ -64,6 +64,11 @@ export interface ProductionAuthorityComposition {
   lifecycleChecks(): readonly DoctorCheck[];
   doctor(): Promise<DoctorReport>;
   abortAuthentication(): void;
+}
+
+/** Internal capability factory used by production and isolated adapter tests. */
+export function createTrustedLocalCandidateContext(host: BridgeHostProfile) {
+  return createTrustedLocalStdioContext(host);
 }
 
 /** Builds the production Start Plan issuer used by both the legacy Host and

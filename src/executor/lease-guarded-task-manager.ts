@@ -11,7 +11,7 @@ import type {
   TaskStatusRecord,
   ZCodeInteractionReplyInput,
 } from "../interfaces.js";
-import { TaskManagerError } from "../manager/errors.js";
+import { TaskManagerError } from "../task-errors.js";
 
 /**
  * Keeps the legacy in-process MCP Manager on the same lifetime lease as a

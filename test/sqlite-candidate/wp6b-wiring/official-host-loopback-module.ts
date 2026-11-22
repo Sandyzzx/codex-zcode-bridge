@@ -1,5 +1,14 @@
+import { appendFileSync, existsSync } from "node:fs";
+import path from "node:path";
+
 const SESSION_ID = "sess_worker_loopback_11111111-aaaa-4bbb-8ccc-cccccccccccc";
 const TURN_ID = "turn_worker_loopback_1";
+const LOOPBACK_INTERACTION_MARKER = process.env["ZCODE_BRIDGE_ZCODE_CJS"]
+  ? path.join(path.dirname(path.dirname(path.dirname(process.env["ZCODE_BRIDGE_ZCODE_CJS"]))), "loopback-interaction")
+  : null;
+const LOOPBACK_REQUESTS_LOG = LOOPBACK_INTERACTION_MARKER
+  ? path.join(path.dirname(LOOPBACK_INTERACTION_MARKER), "loopback-requests.jsonl")
+  : null;
 const REPORT = {
   summary: "Official Host loopback completed the Worker task",
   files_changed: [],
@@ -41,6 +50,9 @@ export class ZCodeProtocolClient {
   }
 
   async request(method: string, params: Record<string, unknown>): Promise<unknown> {
+    if (LOOPBACK_INTERACTION_MARKER && LOOPBACK_REQUESTS_LOG && existsSync(LOOPBACK_INTERACTION_MARKER)) {
+      appendFileSync(LOOPBACK_REQUESTS_LOG, `${JSON.stringify({ method })}\n`, "utf8");
+    }
     if (method === "session/create" || method === "session/resume") return this.#snapshot();
     if (method === "session/setModel") {
       this.#model = params.model as Model;
@@ -61,6 +73,22 @@ export class ZCodeProtocolClient {
             payload: { turnId: TURN_ID },
           },
         });
+        if (LOOPBACK_INTERACTION_MARKER && existsSync(LOOPBACK_INTERACTION_MARKER)) {
+          this.#notify({
+            id: "loopback-interaction-1",
+            method: "interaction/requestPermission",
+            params: {
+              requestId: "permission-1",
+              sessionId: SESSION_ID,
+              toolCallId: "loopback-call-1",
+              toolName: "Bash",
+              reason: "Synthetic loopback permission request",
+              input: { command: "echo four-layer" },
+              options: [{ kind: "allow_once" }, { kind: "deny" }],
+            },
+          });
+          return;
+        }
         this.#notify({
           method: "session/event",
           params: {
@@ -81,7 +109,25 @@ export class ZCodeProtocolClient {
     throw new Error(`unexpected loopback Host request: ${method}`);
   }
 
-  async respond(): Promise<void> {}
+  async respond(id: string | number, result: unknown): Promise<void> {
+    if (id !== "loopback-interaction-1" || result === null || typeof result !== "object") return;
+    const decision = (result as Record<string, unknown>).decision;
+    if (decision !== "allow" && decision !== "deny") return;
+    this.#notify({
+      method: "session/event",
+      params: {
+        sessionId: SESSION_ID,
+        seq: 2,
+        turnId: TURN_ID,
+        type: "turn.completed",
+        payload: {
+          response: JSON.stringify(REPORT),
+          usage: { inputTokens: 7, outputTokens: 3, totalTokens: 10 },
+          resultType: "success",
+        },
+      },
+    });
+  }
   async respondError(): Promise<void> {}
   replayEvents(events: unknown[]): void {
     for (const event of events) this.#notify({ method: "session/event", params: event });

@@ -330,10 +330,9 @@ test("the real validator rejects injected development-path references and keeps 
       `const sibling = ${JSON.stringify(`${root} Backup${path.sep}src${path.sep}main.ts`)};`,
       `const encodedSibling = ${JSON.stringify(pathToFileURL(path.join(`${root} Backup`, "src", "main.ts")).href)};`,
       "// vendor loader keeps worker/vendor/pkg/browser-host.cjs self-contained",
-      "const workerModuleUrl = pathToFileURL3(options.workerEntryPath ?? workerEntryPath());",
-      "loadOfficialHostProductVersion2(workerModuleUrl);",
-      "loadOfficialStartPlanAuthenticationResolverFactory2(workerModuleUrl);",
-      "const modelSettings = new ZCodeModelSettings(env, { host, workerModuleUrl: pathToFileURL3(options.workerEntryPath) });",
+      "const client = new ExecutorControlClient({ pipeName: executorPipeName(root) });",
+      "const taskManager = new RemoteTaskManager(client);",
+      'console.error("no local SQLite Manager is constructed");',
     ].join("\n");
     const bundlePath = path.join(pluginRoot, "dist", "bridge.mjs");
     const waiterPath = path.join(pluginRoot, "dist", "wait-task.mjs");

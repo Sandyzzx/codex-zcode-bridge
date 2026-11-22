@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { findPackageRoot } from "./resolver.js";
-import { validateHostProfile, type BridgeHostProfile } from "../host/profile.js";
+import { validateHostProfile, type BridgeHostProfile } from "./host-profile.js";
 
 const CONFIG_FILE = "authority.json";
 const CONFIG_LIMIT = 8 * 1024;

@@ -9,7 +9,7 @@ import { build } from "esbuild";
 
 import { SqliteLifecycleMcpAuthority } from "../../../src/manager/sqlite-lifecycle-mcp-authority.js";
 
-import { createTrustedLocalCandidateContext } from "../../../src/host/stdio.js";
+import { createTrustedLocalCandidateContext } from "../../../src/executor/production-composition.js";
 
 import { loadLifecycleCandidateModules } from "../../../src/store/lifecycle-gate.js";
 

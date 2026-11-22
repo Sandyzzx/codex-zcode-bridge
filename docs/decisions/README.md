@@ -1,9 +1,9 @@
 # 决策路由 / Decisions
 
 > Status: AUTHORITATIVE（仅指本索引）
-> Last updated: 2026-11-22（记录 ADR-045 PR 2 candidate 实施状态）
-> Last verified: 2026-11-22，核对 ADR-039 行政释放保护、ADR-048 默认 32 KiB Event 页，以及 ADR-045 deterministic Lease/IPC/Fake Worker 证据；真实 Desktop E2E 仍为 `NOT_RUN`。
-> Verified against: Preview `1bf039fda2ccfd17a992458a871bddd7b48b38c1` + `codex/async-executor-pr2` candidate
+> Last updated: 2026-11-22（记录 ADR-045 PR 2/2.5 candidate 实施状态）
+> Last verified: 2026-11-22，核对 ADR-039 行政释放保护、ADR-048 默认 32 KiB Event 页，以及 ADR-045 deterministic Lease/IPC/Thin MCP/Fake Worker 证据；真实 Desktop E2E 仍为 `NOT_RUN`。
+> Verified against: Preview `1bf039fda2ccfd17a992458a871bddd7b48b38c1` + `codex/async-executor-pr2.5` candidate
 
 先读当前 [架构](../ARCHITECTURE.md)/[接口](../INTERFACES.md)，只在需要解释取舍时加载对应决策。文件保持原路径和历史正文；Partially superseded 的标注优先于历史段落。
 
@@ -41,7 +41,7 @@
 | Recovery 编号对账 | [044](ADR-044-preview-lifecycle-recovery-reconciliation.md) | Preview 保留 ADR-037 官方认证语义；Stable Host Recovery 在未来对账中使用 ADR-044；不做机械覆盖 |
 | Result 摘要、Event 归属 | [047](ADR-047-compatible-result-summary.md) | 候选 MCP 可选摘要、全量证据读取及 Attempt 核对 |
 | Event 默认预算 | [048](ADR-048-bounded-default-event-pages.md) | `zcode_events` 省略 `max_bytes` 时使用 32 KiB 页预算；显式预算仍为硬限制；所有事件可按 cursor 完整续读 |
-| Async Executor | [045](ADR-045-async-executor-ownership.md) | Accepted；PR 2 candidate 已实现 Lease、IPC、Thin MCP 与跨进程 fake Worker E2E；真实 Host 关闭和付费 Runtime 仍 `NOT_RUN`，未合入 Preview |
+| Async Executor | [045](ADR-045-async-executor-ownership.md) | Accepted；PR 2/2.5 candidate 已实现 Lease、IPC、Thin MCP、Executor-only production composition 与四层 fake Worker/Official Adapter E2E；真实 Host 关闭和付费 Runtime 仍 `NOT_RUN`，未合入 Preview |
 
 ADR-032、ADR-033、ADR-034 和 ADR-035 的正文记录决定作出时的状态；顶部 Applicability 标注当前适用性。当前实现状态以 [ARCHITECTURE](../ARCHITECTURE.md) 和 [PROJECT_STATE](../PROJECT_STATE.md) 为准：Windows x64 Worker 使用 `OfficialAppServerWorkerAdapter`、固定 Official Host module、安装版 ZCode AppServer、官方只读 Start Plan 认证与官方签名 runtime host；Model Catalog 使用同一 session factory。Linux、macOS 与 Windows 非 x64 在构造 Adapter 前 fail closed；direct stdio 只保留测试入口。`research/zcode-official-host-integration-v1/` 的 [Implementation Summary](../research/zcode-official-host-integration-v1/IMPLEMENTATION_SUMMARY.md) 与 [Final Acceptance](../research/zcode-official-host-integration-v1/FINAL_ACCEPTANCE_REPORT.md) 是 Preview.4/3.18.0 历史证据，不能作为当前候选的兼容通过证明。
 

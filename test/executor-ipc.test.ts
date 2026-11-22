@@ -8,7 +8,7 @@ import { startExecutorControlServer } from "../src/executor/control-server.js";
 import { ExecutorControlClient } from "../src/executor/control-client.js";
 import { encodeExecutorFrame } from "../src/executor/frame.js";
 import { RemoteTaskManager } from "../src/executor/remote-task-manager.js";
-import { TaskManagerError } from "../src/manager/errors.js";
+import { TaskManagerError } from "../src/task-errors.js";
 import type { ProgressTaskManager, TaskPackage, TaskReceipt } from "../src/interfaces.js";
 
 function pipeName(root: string, suffix: string): string {

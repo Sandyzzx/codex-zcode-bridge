@@ -1,7 +1,7 @@
 // Supported composition surface for calling hosts. Do not import internal files.
 export * from "./interfaces.js";
 export { buildTaskFeedbackSnapshotV01 } from "./feedback/task-feedback.js";
-export { codexHostProfile, validateHostProfile, type BridgeHostProfile } from "./host/profile.js";
+export { codexHostProfile, validateHostProfile, type BridgeHostProfile } from "./runtime/host-profile.js";
 export { DirectWorkspaceProvider } from "./workspace/direct-provider.js";
 export { createBridgeServer, SERVER_VERSION, type BridgeServerOptions } from "./mcp/server.js";
 export { NodeRuntimeResolver, loadPersistedRuntimeEnvironment } from "./runtime/resolver.js";

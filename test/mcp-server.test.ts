@@ -2,6 +2,7 @@
 // InMemoryTransport with an injected fake TaskManager. No real ZCode workers,
 // no model calls, no filesystem access.
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
@@ -11,7 +12,7 @@ import {
   SERVER_NAME,
   SERVER_VERSION,
 } from "../src/mcp/server.js";
-import { TaskManagerError } from "../src/manager/errors.js";
+import { TaskManagerError } from "../src/task-errors.js";
 import type {
   ContinueTaskInput,
   ProgressTaskManager,
@@ -28,6 +29,7 @@ import type {
 import { SESSION_ID, makeTask } from "./helpers.js";
 
 const CREATED_AT = "2026-09-27T00:00:00.000Z";
+const PUBLIC_SCHEMA_SNAPSHOT = path.join(import.meta.dirname, "..", "..", "test", "fixtures", "mcp-public-schema.json");
 
 class FakeTaskManager implements TaskManager {
   readonly calls: Array<{ method: string; args: unknown }> = [];
@@ -186,6 +188,21 @@ test("the frozen tools and additive progress, feedback, interaction, and doctor 
     for (const tool of tools) {
       assert.ok(tool.description && tool.description.length > 20, `${tool.name} needs a description`);
     }
+  });
+});
+
+test("the public MCP tool schemas match the frozen compatibility snapshot", async () => {
+  await withServer(async (client) => {
+    const { tools } = await client.listTools();
+    const publicSchema = tools
+      .map((tool) => ({
+        name: tool.name,
+        inputSchema: tool.inputSchema,
+        ...(tool.outputSchema ? { outputSchema: tool.outputSchema } : {}),
+      }))
+      .sort((left, right) => left.name.localeCompare(right.name));
+    const expected = JSON.parse(readFileSync(PUBLIC_SCHEMA_SNAPSHOT, "utf8")) as unknown;
+    assert.deepEqual(publicSchema, expected);
   });
 });
 

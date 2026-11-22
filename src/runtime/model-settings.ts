@@ -20,7 +20,7 @@ import {
 import {
   createOfficialProviderRuntimeAuthResolver,
 } from "./official-provider-runtime-auth.js";
-import { codexHostProfile, validateHostProfile, type BridgeHostProfile } from "../host/profile.js";
+import { codexHostProfile, validateHostProfile, type BridgeHostProfile } from "./host-profile.js";
 import { withProcessLock } from "../store/process-lock.js";
 import { atomicRename } from "../store/atomic-rename.js";
 

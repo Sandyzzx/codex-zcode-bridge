@@ -1,7 +1,7 @@
 # ADR-045：独立 Async Executor 所有权
 
 > Status: ACCEPTED（Owner 条件批准；架构方向已接受）
-> Implementation status: PARTIAL / BLOCKED — PR 2 remediation candidate；未合入 Preview，未发布
+> Implementation status: PARTIAL / BLOCKED — PR 2/2.5 candidate；未合入 Preview，未发布
 > Date: 2026-11-22
 > Baseline: `origin/preview` `1bf039fda2ccfd17a992458a871bddd7b48b38c1`
 > Related architecture: [BRIDGE_ASYNC_EXECUTION_V1.md](../architecture/BRIDGE_ASYNC_EXECUTION_V1.md)
@@ -56,3 +56,30 @@ PASS。完整 Windows/Ubuntu/Stress 统一在 Executor 功能链的 Release Cand
 Desktop；真实 Official Runtime 也没有新的付费模型授权。因此 ADR-045 的
 `Validation Gate` 尚未满足，PR 2 只能以 `PARTIAL / BLOCKED` 提交评审，不得
 合入 Preview、发布或迁移 CLI/Web/Wake。
+
+## PR 2.5 Implementation Record
+
+PR 2.5 把 shipped `bridge.mjs` 收敛为单一 Thin MCP：
+
+- `src/host/stdio.ts` 只注册 MCP 工具并通过 `ExecutorControlClient` 调用
+  Executor；不构造 Manager、Store、Worker、Adapter、Official Runtime 或
+  本地 SQLite Authority。
+- `in_process` MCP transport 已删除，`ZCODE_BRIDGE_MCP_TRANSPORT` 只接受
+  `control`；Executor 未启动时返回 `EXECUTOR_UNAVAILABLE`。
+- `src/executor/production-composition.ts` 是唯一生产 Authority composition，
+  负责现有 Manager、Start Plan private auth、动态 model routing、Worker
+  diagnostics、Doctor 和 model settings。
+- MCP 输入 Schema、TaskManager 错误、Host profile、MCP-facing Doctor/model
+  契约和 pipe 名为共享模块；MCP、Executor、Adapter、Worker 的静态依赖边界
+  由测试锁定。
+- 测试专用 legacy lifecycle Host harness 保留在 `test/fixtures/`，不进入
+  shipped plugin，也不是生产回退路径。
+
+四层 fake Official Runtime E2E（Thin MCP → Executor → Worker → Official
+Adapter）、Thin MCP disconnect/reconnect、完整 MCP schema snapshot、Lease、
+IPC、单实例、Result/Cleanup/Release 与 32 MiB Result 回读均通过。真实 Codex
+Desktop 关闭后的 E2E、真实 Official ZCode Runtime/provider E2E 和严格 Wake
+C/D 仍未运行；PR 2.5 因此保持 `IMPLEMENTED — PARTIAL / BLOCKED`，不得合入
+Preview 或发布。公共 MCP 工具面、SQLite v14、Worker 私有 IPC、Result/
+Cleanup/Recovery 合同保持不变；正常插件不得通过嵌入式 Manager 绕过
+Executor。

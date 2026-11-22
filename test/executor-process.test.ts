@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import { tmpdir } from "node:os";
@@ -7,11 +8,17 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 import { ExecutorControlClient } from "../src/executor/control-client.js";
+import type { ExecutorControlResponse } from "../src/executor/protocol.js";
 import { EXECUTOR_LEASE_FILE, EXECUTOR_LEASE_RELEASED_FILE } from "../src/executor/lease.js";
-import { executorPipeName, startExecutorService, type ExecutorAuthority } from "../src/executor/service.js";
-import { codexHostProfile } from "../src/host/profile.js";
+import { executorPipeName } from "../src/executor/pipe.js";
+import { startExecutorService, type ExecutorAuthority } from "../src/executor/service.js";
+import { codexHostProfile } from "../src/runtime/host-profile.js";
 import { loadLifecycleCandidateModules } from "../src/store/lifecycle-gate.js";
 import type { TaskPackage } from "../src/interfaces.js";
+import {
+  officialHostWorkerEntryPath,
+  writeFakeRuntime,
+} from "./sqlite-candidate/wp6b-wiring/mvp-real-adapter-harness.js";
 
 const projectRoot = path.resolve(import.meta.dirname, "..", "..");
 const executorEntry = path.join(projectRoot, "dist-test", "src", "executor", "main.js");
@@ -25,13 +32,18 @@ interface ExecutorProcess {
   readonly close: () => void;
   readonly ready: Promise<{ readonly lease_id: string; readonly pipe_name: string }>;
   readonly exit: Promise<{ readonly code: number | null; readonly signal: NodeJS.Signals | null }>;
+  readonly stderr: () => string;
 }
 
 function startExecutor(
   root: string,
   heartbeatMs: string,
   settingsDirectory?: string,
-  options: { readonly workerEntryPath?: string; readonly env?: NodeJS.ProcessEnv } = {},
+  options: {
+    readonly workerEntryPath?: string;
+    readonly env?: NodeJS.ProcessEnv;
+    readonly fakeAdapter?: boolean;
+  } = {},
 ): ExecutorProcess {
   const child = spawn(process.execPath, [
     testExecutorEntry,
@@ -39,7 +51,7 @@ function startExecutor(
     "--bridge-entry", bridgeEntry,
     "--worker-entry", options.workerEntryPath ?? workerEntry,
     "--heartbeat-ms", heartbeatMs,
-    "--test-only-fake-adapter",
+    ...(options.fakeAdapter === false ? [] : ["--test-only-fake-adapter"]),
     ...(settingsDirectory ? ["--settings-directory", settingsDirectory] : []),
   ], { cwd: projectRoot, env: options.env ?? process.env, stdio: ["pipe", "pipe", "pipe"] });
   let stderr = "";
@@ -75,6 +87,7 @@ function startExecutor(
     close,
     ready,
     exit,
+    stderr: () => stderr,
   };
 }
 
@@ -102,6 +115,33 @@ async function waitForLifecycleEvent(client: ExecutorControlClient, taskId: stri
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw new Error(`EXECUTOR_EVENT_TIMEOUT ${eventType} ${JSON.stringify(lastEvents)}`);
+}
+
+async function waitForInteractionRequest(
+  client: ExecutorControlClient,
+  taskId: string,
+): Promise<Record<string, unknown>> {
+  const deadline = Date.now() + 60_000;
+  let lastEvents: unknown = null;
+  while (Date.now() < deadline) {
+    const response = await client.request("getEvents", {
+      input: { task_id: taskId, after_seq: 0, limit: 200 },
+    });
+    assert.equal(response.ok, true);
+    const events = Array.isArray(response.result?.events)
+      ? response.result.events as Array<Record<string, unknown>>
+      : [];
+    lastEvents = events;
+    const interaction = events.find((event) => event.type === "interaction_requested");
+    if (interaction) return interaction;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  let terminal = "unavailable";
+  try {
+    const response = await client.request("getResult", { task_id: taskId });
+    terminal = JSON.stringify(response);
+  } catch { /* preserve the primary timeout */ }
+  throw new Error(`EXECUTOR_INTERACTION_TIMEOUT ${JSON.stringify(lastEvents)} result=${terminal}`);
 }
 
 function startThinMcp(env: NodeJS.ProcessEnv) {
@@ -658,6 +698,213 @@ test("Thin MCP disconnect leaves the accepted Task in the Executor and reconnect
   }
 });
 
+test("Thin MCP -> Executor -> Worker -> Official Adapter completes against a controlled app-server", {
+  timeout: 180_000,
+  skip: process.platform !== "win32" || process.arch !== "x64",
+}, async () => {
+  const fixtureBase = process.env.LOCALAPPDATA && path.isAbsolute(process.env.LOCALAPPDATA)
+    ? path.join(process.env.LOCALAPPDATA, "Temp")
+    : tmpdir();
+  mkdirSync(fixtureBase, { recursive: true });
+  const fixture = mkdtempSync(path.join(fixtureBase, "executor-four-layer-"));
+  const localAppData = path.join(fixture, "local-app-data");
+  const userProfile = path.join(fixture, "user-profile");
+  const tempDirectory = path.join(fixture, "temp");
+  const root = path.join(localAppData, "CodexZCodeBridge", "state");
+  const settingsDirectory = path.join(userProfile, ".codex", "codex-zcode-bridge");
+  const workspace = path.join(fixture, "workspace");
+  const spawnLog = path.join(fixture, "worker-spawns.log");
+  const workerWrapper = path.join(fixture, "worker-wrapper.mjs");
+  for (const directory of [root, settingsDirectory, workspace, tempDirectory]) mkdirSync(directory, { recursive: true });
+  const runtime = writeFakeRuntime(`executor-four-layer-${randomUUID()}`, "success");
+  writeFileSync(path.join(runtime.runtimeRoot, "loopback-interaction"), "1", "utf8");
+  writeFileSync(path.join(runtime.runtimeRoot, "loopback-requests.jsonl"), "", "utf8");
+  writeFileSync(spawnLog, "", "utf8");
+  writeFileSync(workerWrapper, [
+    'import { appendFileSync } from "node:fs";',
+    `appendFileSync(${JSON.stringify(spawnLog)}, "spawn\\n");`,
+    `await import(${JSON.stringify(pathToFileURL(officialHostWorkerEntryPath).href)});`,
+    "",
+  ].join("\n"), "utf8");
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    LOCALAPPDATA: localAppData,
+    USERPROFILE: userProfile,
+    HOME: userProfile,
+    TEMP: tempDirectory,
+    TMP: tempDirectory,
+    TMPDIR: tempDirectory,
+    ZCODE_BRIDGE_MCP_TRANSPORT: "control",
+    ZCODE_BRIDGE_ZCODE_CJS: runtime.entrypoint,
+    ZCODE_BRIDGE_NODE: process.execPath,
+    ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: runtime.builtinConfig,
+    ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: runtime.personalConfig,
+    ZCODE_HOME: path.dirname(runtime.zcodeHomeV2),
+  };
+  delete env.ZCODE_BRIDGE_DATA_DIR;
+  delete env.ZCODE_BRIDGE_PLUGIN_MODE;
+
+  const executor = startExecutor(root, "100", settingsDirectory, {
+    workerEntryPath: workerWrapper,
+    env,
+    fakeAdapter: false,
+  });
+  const ready = await executor.ready;
+  const client = new ExecutorControlClient({ pipeName: ready.pipe_name, connectTimeoutMs: 5_000 });
+  let firstSession: ReturnType<typeof startThinMcp> | undefined;
+  let secondSession: ReturnType<typeof startThinMcp> | undefined;
+  let succeeded = false;
+  try {
+    const taskId = `four-layer-${Date.now()}`;
+    firstSession = startThinMcp(env);
+    firstSession.child.stdin.write([
+      JSON.stringify({
+        jsonrpc: "2.0", id: 1, method: "initialize",
+        params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "four-layer", version: "1" } },
+      }),
+      JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
+      "",
+    ].join("\n"));
+    assert.ok((await firstSession.waitForResponse(1)).result);
+    firstSession.child.stdin.write([
+      JSON.stringify({
+        jsonrpc: "2.0", id: 2, method: "tools/call",
+        params: {
+          name: "zcode_task",
+          arguments: {
+            task_id: taskId,
+            workspace,
+            objective: "Exercise the four-layer executor architecture",
+            requirements: ["Use the controlled fake app-server"],
+            allowed_paths: [],
+            forbidden_paths: [],
+            acceptance_criteria: ["Persist one original Attempt Result"],
+            test_commands: [],
+          },
+        },
+      }),
+      "",
+    ].join("\n"));
+    const created = await firstSession.waitForResponse(2) as {
+      result?: { isError?: boolean; structuredContent?: Record<string, unknown> };
+    };
+    assert.notEqual(created.result?.isError, true, firstSession.stderr());
+    assert.equal(created.result?.structuredContent?.task_id, taskId);
+    assert.equal(created.result?.structuredContent?.status, "queued");
+
+    // Disconnect the MCP wire while the accepted Worker is still waiting for
+    // its real Adapter permission interaction.
+    firstSession.child.stdin.end();
+    const firstExit = await Promise.race([
+      firstSession.exit,
+      new Promise<never>((_resolve, reject) => setTimeout(
+        () => reject(new Error(`FOUR_LAYER_MCP_EXIT_TIMEOUT\n${firstSession!.stderr()}`)),
+        15_000,
+      )),
+    ]);
+    assert.equal(firstExit.code, 0, firstSession.stderr());
+
+    await client.connect();
+    const interaction = await waitForInteractionRequest(client, taskId);
+    const details = interaction.details as Record<string, unknown>;
+    const payload = details.payload as Record<string, unknown> | undefined;
+    const requestId = String(details.request_id ?? payload?.request_id ?? "permission-1");
+    const reply = await client.request("replyToInteraction", {
+      input: { task_id: taskId, request_id: requestId, decision: "allow" },
+    });
+    assert.equal(reply.ok, true);
+    await waitForLifecycleEvent(client, taskId, "released");
+
+    secondSession = startThinMcp(env);
+    secondSession.child.stdin.write([
+      JSON.stringify({
+        jsonrpc: "2.0", id: 3, method: "initialize",
+        params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "four-layer-reconnect", version: "1" } },
+      }),
+      JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
+      "",
+    ].join("\n"));
+    assert.ok((await secondSession.waitForResponse(3)).result);
+    secondSession.child.stdin.write([
+      JSON.stringify({
+        jsonrpc: "2.0", id: 4, method: "tools/call",
+        params: { name: "zcode_result", arguments: { task_id: taskId } },
+      }),
+      "",
+    ].join("\n"));
+    const result = await secondSession.waitForResponse(4) as {
+      result?: { isError?: boolean; structuredContent?: Record<string, unknown> };
+    };
+    assert.notEqual(result.result?.isError, true, secondSession.stderr());
+    assert.equal(result.result?.structuredContent?.task_id, taskId);
+    assert.equal(result.result?.structuredContent?.status, "completed");
+    assert.equal(result.result?.structuredContent?.attempt, 1);
+
+    const spawns = readFileSync(spawnLog, "utf8").split(/\r?\n/u).filter(Boolean);
+    assert.deepEqual(spawns, ["spawn"]);
+    const requests = readFileSync(path.join(runtime.runtimeRoot, "loopback-requests.jsonl"), "utf8")
+      .trim().split(/\r?\n/u)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    assert.equal(requests.filter((message) => message.method === "session/create").length, 1);
+    assert.equal(requests.filter((message) => message.method === "session/send").length, 1);
+
+    const modules = await loadLifecycleCandidateModules();
+    const recovery = modules.Store.openForRecovery(root, {
+      databaseFileName: "bridge.sqlite",
+      managedDataDirectory: true,
+    });
+    assert.ok(recovery);
+    try {
+      const snapshot = modules.createPort(recovery).readRecoverySnapshot() as {
+        operations: Array<Record<string, unknown>>;
+        events: Array<{ event_type: string; operation_id: string }>;
+      };
+      const operation = snapshot.operations.find((item) => item.task_id === taskId);
+      assert.ok(operation);
+      assert.equal(operation.phase, "released");
+      assert.notEqual(operation.result_digest, null);
+      const events = snapshot.events.filter((event) => event.operation_id === operation.operation_id)
+        .map((event) => event.event_type);
+      for (const expected of ["claim_committed", "launch_intent", "result_committed", "cleanup_verified", "released"]) {
+        assert.equal(events.includes(expected), true, `missing ${expected}`);
+      }
+      assert.equal(events.filter((event) => event === "result_committed").length, 1);
+      assert.equal(events.filter((event) => event === "launch_intent").length, 1);
+    } finally {
+      recovery.close();
+    }
+
+    secondSession.child.stdin.end();
+    const secondExit = await Promise.race([
+      secondSession.exit,
+      new Promise<never>((_resolve, reject) => setTimeout(
+        () => reject(new Error(`FOUR_LAYER_RECONNECT_EXIT_TIMEOUT\n${secondSession!.stderr()}`)),
+        15_000,
+      )),
+    ]);
+    assert.equal(secondExit.code, 0, secondSession.stderr());
+    succeeded = true;
+  } finally {
+    firstSession?.child.kill();
+    secondSession?.child.kill();
+    client.close();
+    if (!succeeded) {
+      console.error(`four-layer executor stderr:\n${executor.stderr()}`);
+      if (existsSync(runtime.requestLog)) {
+        console.error(`four-layer runtime requests:\n${readFileSync(runtime.requestLog, "utf8")}`);
+      }
+      if (existsSync(runtime.exitLog)) {
+        console.error(`four-layer runtime exit:\n${readFileSync(runtime.exitLog, "utf8")}`);
+      }
+    }
+    executor.child.kill("SIGKILL");
+    await executor.exit;
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    rmSync(fixture, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+  }
+});
+
 test("a real Executor commits a synthetic Worker Result, Cleanup, and Release across processes", { timeout: 90_000 }, async () => {
   const root = mkdtempSync(path.join(tmpdir(), "executor-e2e-"));
   const settingsDirectory = mkdtempSync(path.join(tmpdir(), "executor-e2e-settings-"));
@@ -687,7 +934,7 @@ test("a real Executor commits a synthetic Worker Result, Cleanup, and Release ac
     const deadline = Date.now() + 10_000;
     let status: { status?: unknown } | undefined;
     while (Date.now() < deadline) {
-      const response = await client.request("getStatus", { task_id: taskId });
+      const response: ExecutorControlResponse = await client.request("getStatus", { task_id: taskId });
       assert.equal(response.ok, true);
       status = response.result as { status?: unknown };
       if (["completed", "failed", "cancelled", "waiting_for_master"].includes(String(status.status))) break;

@@ -1,5 +1,5 @@
 import { createHostTrustedLocalPolicyProvider } from "./trusted-local-policy-config.js";
-import type { BridgeHostProfile } from "../host/profile.js";
+import type { BridgeHostProfile } from "./host-profile.js";
 import type { TrustedLocalPolicyProvider } from "../sqlite-candidate/wp6b2b1/trusted-local-policy.js";
 
 /**

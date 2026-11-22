@@ -45,6 +45,7 @@
         "test/windows-test-shard-plan.json",
         "test/helpers.ts",
         "test/runtime-fixture.ts",
+        "test/fixtures/stdio-lifecycle-host.ts",
         "test/sqlite-candidate/wp6b-wiring/mvp-real-adapter-harness.ts",
         "test/runtime/bootstrap-lock-worker.mjs",
         "test/sqlite-candidate/wp6b2b1/lifecycle-process.mjs",
@@ -57,6 +58,8 @@
       "paths": [
         "src/core.ts",
         "src/interfaces.ts",
+        "src/api-schemas.ts",
+        "src/task-errors.ts",
         "src/mcp/schemas.ts",
         "src/result-contract.mjs"
       ]
@@ -71,7 +74,7 @@
         "src/runtime/official-provider-runtime-auth.ts",
         "src/runtime/session-preferences.ts",
         "src/runtime/start-plan-production-auth.ts",
-        "src/host/production-composition.ts"
+        "src/executor/production-composition.ts"
       ]
     },
     {
@@ -138,7 +141,8 @@
         "src/runtime/process-probe.ts",
         "src/manager/sqlite-lifecycle-mcp-authority.ts",
         "src/executor/**",
-        "src/host/production-composition.ts"
+        "src/runtime/host-profile.ts",
+        "src/task-errors.ts"
       ]
     },
     {
@@ -181,7 +185,8 @@
         "src/cli/admin-abandon-held-operation.ts",
         "src/host/profile.ts",
         "src/host/stdio.ts",
-        "src/host/production-composition.ts",
+        "src/executor/production-composition.ts",
+        "src/runtime/host-profile.ts",
         "src/runtime/doctor.ts",
         "src/runtime/sqlite-doctor.ts",
         "src/runtime/trusted-local-deployment.ts",
@@ -215,9 +220,15 @@
         "src/mcp/main.ts",
         "src/mcp/server.ts",
         "src/mcp/schemas.ts",
+        "src/mcp/contracts.ts",
         "src/mcp/result-summary.ts",
         "src/host/stdio.ts",
-        "src/host/production-composition.ts"
+        "src/api-schemas.ts",
+        "src/executor/control-client.ts",
+        "src/executor/pipe.ts",
+        "src/executor/remote-model-settings.ts",
+        "src/executor/remote-task-manager.ts",
+        "src/task-errors.ts"
       ]
     },
     {
@@ -326,6 +337,16 @@
       "domains": [
         "manager-lifecycle",
         "interface-contract",
+        "mcp-host"
+      ]
+    },
+    {
+      "file": "test/architecture-boundaries.test.ts",
+      "type": "Unit",
+      "gate": "T1",
+      "domains": [
+        "test-execution-contract",
+        "manager-lifecycle",
         "mcp-host"
       ]
     },
@@ -718,6 +739,15 @@
       "gate": "T1",
       "domains": [
         "test-execution-contract"
+      ]
+    },
+    {
+      "file": "test/fixtures/stdio-lifecycle-host.ts",
+      "type": "Fixture",
+      "gate": "T2",
+      "domains": [
+        "test-execution-contract",
+        "mcp-host"
       ]
     },
     {
@@ -1237,7 +1267,9 @@
   "full_suite_paths": [
     "src/result-contract.mjs",
     "src/interfaces.ts",
+    "src/api-schemas.ts",
     "src/mcp/schemas.ts",
+    "src/task-errors.ts",
     "src/runtime/errors.ts",
     "scripts/test-isolated.mjs",
     "scripts/test-clean-entrypoints.mjs",

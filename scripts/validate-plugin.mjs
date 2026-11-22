@@ -194,16 +194,12 @@ if (!workerBundle.includes("vendor") || !workerBundle.includes("browser-host.cjs
   throw new Error("worker-main.mjs no longer references the vendored browser backend; update the loader or this check");
 }
 const bridgeBundle = await readFile(path.join(pluginRoot, "dist", "bridge.mjs"), "utf8");
-if (!/const\s+workerModuleUrl\s*=\s*pathToFileURL\d*\(\s*options\.workerEntryPath\s*\?\?\s*workerEntryPath\(\)\s*\)/u.test(
-  bridgeBundle,
-) || !/loadOfficialStartPlanAuthenticationResolverFactory\d*\(\s*workerModuleUrl\s*\)/u.test(
-  bridgeBundle,
-) || !/loadOfficialHostProductVersion\d*\(\s*workerModuleUrl\s*\)/u.test(
-  bridgeBundle,
- ) || !/const\s+modelSettings\s*=\s*new\s+ZCodeModelSettings\d*\(\s*env\s*,\s*\{[\s\S]{0,240}?workerModuleUrl\s*:\s*pathToFileURL\d*\(\s*options\.workerEntryPath\s*\)/u.test(
-  bridgeBundle,
-)) {
-  throw new Error("bridge.mjs must resolve Official Host assets through the Worker-shaped module URL");
+if (!bridgeBundle.includes("ExecutorControlClient")
+  || !bridgeBundle.includes("RemoteTaskManager")
+  || !bridgeBundle.includes("executorPipeName")
+  || !bridgeBundle.includes("no local SQLite Manager is constructed")
+  || /SqliteLifecycleMcpAuthority|createProductionAuthorityComposition|SQLITE_READY/u.test(bridgeBundle)) {
+  throw new Error("bridge.mjs must remain a Thin MCP control adapter");
 }
 
 const officialHostRoot = path.join(

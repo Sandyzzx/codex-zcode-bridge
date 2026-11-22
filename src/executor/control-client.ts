@@ -1,7 +1,13 @@
 import net from "node:net";
 import { randomUUID } from "node:crypto";
 import { createExecutorFrameDecoder, encodeExecutorFrame } from "./frame.js";
-import { EXECUTOR_CONTROL_PROTOCOL_VERSION, type ExecutorControlRequest, type ExecutorControlResponse } from "./protocol.js";
+import {
+  EXECUTOR_CONTROL_PROTOCOL_VERSION,
+  type ExecutorControlMethod,
+  type ExecutorControlParamsByMethod,
+  type ExecutorControlRequest,
+  type ExecutorControlResponse,
+} from "./protocol.js";
 
 export interface ExecutorControlClientOptions {
   readonly pipeName: string;
@@ -89,11 +95,16 @@ export class ExecutorControlClient {
     });
   }
 
-  request(method: ExecutorControlRequest["method"], params: Record<string, unknown>, signal?: AbortSignal, idempotencyKey?: string): Promise<ExecutorControlResponse> {
+  request<M extends ExecutorControlMethod>(
+    method: M,
+    params: ExecutorControlParamsByMethod[M],
+    signal?: AbortSignal,
+    idempotencyKey?: string,
+  ): Promise<ExecutorControlResponse> {
     if (!this.#socket || this.#socket.destroyed) {
       return Promise.reject(executorError("EXECUTOR_UNAVAILABLE"));
     }
-    const request: ExecutorControlRequest = {
+    const request = {
       protocol_version: EXECUTOR_CONTROL_PROTOCOL_VERSION,
       request_id: randomUUID(),
       method,
@@ -101,7 +112,7 @@ export class ExecutorControlClient {
       // The transport records the key for diagnostics, while durable submission
       // idempotency remains owned by task_id/operation_id in SQLite.
       ...(idempotencyKey ? { idempotency_key: idempotencyKey } : {}),
-    };
+    } as ExecutorControlRequest;
     const attempt = new Promise<ExecutorControlResponse>((resolve, reject) => {
       this.#pending.set(request.request_id, { method, resolve, reject });
       this.#socket!.write(encodeExecutorFrame(request), (error) => {

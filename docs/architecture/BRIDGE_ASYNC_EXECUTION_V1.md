@@ -1,10 +1,10 @@
 # Bridge Async Execution Architecture v1
 
-> Status: IMPLEMENTED — PR 2 REMEDIATION CANDIDATE（feature branch candidate；未合入 Preview，不可发布）
-> Decision status: [ADR-045](../decisions/ADR-045-async-executor-ownership.md) = ACCEPTED；本文档记录目标合同与 PR 2 当前实现边界
+> Status: IMPLEMENTED — PR 2.5 CANDIDATE（stacked feature branch；未合入 Preview，不可发布）
+> Decision status: [ADR-045](../decisions/ADR-045-async-executor-ownership.md) = ACCEPTED；本文档记录目标合同与 PR 2/2.5 当前实现边界
 > Date: 2026-11-22（Asia/Shanghai）
-> Baseline: `origin/preview` `1bf039fda2ccfd17a992458a871bddd7b48b38c1`；implementation branch `codex/async-executor-pr2`
-> Evidence classification: 文中逐项标注 `VERIFIED`、`INFERRED`、`UNVERIFIED`；PR 2 证据报告见 [2026-11-22 report](../reports/async-executor-pr2-20261122.md)
+> Baseline: `origin/preview` `1bf039fda2ccfd17a992458a871bddd7b48b38c1`；PR 2 base `f330b511270934fa40014006333aa7747dad684c`；implementation branch `codex/async-executor-pr2.5`
+> Evidence classification: 文中逐项标注 `VERIFIED`、`INFERRED`、`UNVERIFIED`；PR 2/2.5 证据见 [PR 2 report](../reports/async-executor-pr2-20261122.md) 与 [PR 2.5 report](../reports/async-executor-pr2.5-20261122.md)
 
 ## 1. 目标与非目标
 
@@ -28,7 +28,7 @@
 
 | 事实 | 状态 | 证据 |
 |---|---|---|
-| `startBridge()` 在当前进程创建 `SqliteLifecycleMcpAuthority`，MCP Server 直接调用该对象 | VERIFIED | `src/host/stdio.ts` |
+| PR 2 base 的 `startBridge()` 在当前进程创建 `SqliteLifecycleMcpAuthority`，MCP Server 直接调用该对象 | VERIFIED | PR 2 base `f330b511` 的 `src/host/stdio.ts` |
 | Manager 独占内存调度队列、active run、workspace fence 和 pump；SQLite 保存持久事实 | VERIFIED | `src/manager/sqlite-lifecycle-mcp-authority.ts` |
 | Worker 通过 private pipes 与 Driver 通信，不通过 MCP stdio 提交 Result | VERIFIED | `src/manager/spawn-worker.ts`、`src/store/lifecycle-gate.ts` |
 | stdin EOF 触发 Manager shutdown；已有 Worker 依赖 Manager 存续等待 Result/Release | VERIFIED | `src/host/stdio.ts` 与 2026-11-20 S2 审计 |
@@ -44,17 +44,29 @@
 ZCode Desktop `3.18.2.10443`、SQLite v14 ONLY。PR 2 branch 不扩大该范围，也不把
 实验性 ADR-042 安装或 Token Efficiency 候选写成当前支持范围。
 
-### 2.1 PR 2 实施边界
+### 2.1 PR 2 / PR 2.5 实施边界
 
 PR 2 candidate 已在独立分支实现并通过合成/确定性证据：Authority Root
 `executor-lease.json` lifetime lease、精确 PID/start fingerprint 仲裁、Idle-only
 Shutdown、Named Pipe Control Client/Server、`ZCODE_BRIDGE_MCP_TRANSPORT=control`
 Thin MCP、原 Attempt Result/Cleanup/Release 的跨进程 fake Worker E2E，以及
-32 MiB Result IPC 回读。legacy in-process MCP Host 与独立 Executor 现在共用
-同一生产 Authority/Start Plan/model-routing/diagnostic composition；Thin MCP
-的模型工具和完整 Doctor 也经 Executor IPC 代理，不再降级为本地占位实现。
-生产 Executor 入口拒绝 Fake Adapter 与任意 Worker entry 测试参数。legacy
-in-process MCP Host 仍是默认路径；`control` transport 是显式 feature flag。
+32 MiB Result IPC 回读。
+
+PR 2.5 candidate 将 shipped MCP 入口收敛为单一 Thin MCP：`startBridge()` 只
+创建 `ExecutorControlClient`、Task/MCP 与模型/Doctor Adapter，不再构造
+Manager、Store、Worker 或 Official Runtime；`in_process` 控制模式已删除。
+生产 Authority/Start Plan/model-routing/diagnostic composition 位于
+`src/executor/production-composition.ts`，只由独立 Executor 持有。共享的
+Task 输入、错误、Host profile、MCP-facing Doctor/model 契约和 IPC 类型分别
+抽到无生命周期副作用的模块；静态边界测试锁定 MCP → Executor → Adapter →
+ZCode 的依赖方向。原公共 MCP 工具名、Schema、SQLite v14、Manager、Worker、
+Result/Cleanup/Recovery 合同未改变。生产 Executor 入口继续拒绝 Fake Adapter
+与任意 Worker entry 测试参数。
+
+测试专用 Host harness 仍可为了隔离合同测试保留 legacy Manager；它不是
+shipped `bridge.mjs` 路径，也不是生产回退。公共 Core 中嵌入
+`SqliteLifecycleMcpAuthority` 的能力仅为兼容调用方保留；正常插件与
+`startBridge()` 必须连接 Executor。
 
 真实 Codex Desktop 关闭后原 Attempt 继续执行、原 Result 提交、Cleanup/Release
 完成尚为 `NOT_RUN / BLOCKED_BY_OWNER_ENVIRONMENT`；未关闭 Owner 当前正在使用的
@@ -201,9 +213,10 @@ ControlResponse { protocol_version, request_id, ok, result | error, executor_sta
   用于容纳既有 32 MiB canonical Result 和协议 envelope；普通控制消息仍受同一
   上限保护，超限在 Manager dispatch 前 fail closed；
 - 控制方法只覆盖现有 MCP 生命周期操作、模型设置、Doctor 和只读列表查询；
-- legacy MCP Host 与 Executor 必须调用同一生产 composition；Start Plan
-  private auth、model routing registry、Worker diagnostics 和 Doctor 不得因
-  Authority 宿主变化而降级或分叉；
+- 生产 composition 只能由 Executor 组装；Start Plan private auth、model
+  routing registry、Worker diagnostics 和 Doctor 不得因通信层变化而降级或
+  分叉。historical in-process Host 只保留在测试 harness，不是 shipped
+  fallback；
 - 幂等键复用 Task/Continue 现有规范化身份，不创建第二套幂等语义；
 - 客户端断开只取消该请求等待，不取消 Task；
 - 请求响应丢失返回 `SUBMISSION_UNKNOWN`，调用方必须按原 task/operation id 查询，不得换 id 重派；
@@ -253,7 +266,7 @@ Wake 不新增第二套持久化权威。PR 5 前必须先完成一次 schema �
 |---|---|---|
 | PR 1 | 本文档 + ADR + 接口/测试矩阵 | Owner 批准 |
 | PR 2 | Independent Executor + IPC + Thin MCP | 合成跨进程 Result/Cleanup/Release PASS；真实关闭 Codex 后原 Attempt 仍为 `NOT_RUN / BLOCKED` |
-| PR 2.5 | MCP → Executor → Adapter → ZCode 四层收敛 | 职责与行为兼容；不新增执行路径 |
+| PR 2.5 | MCP → Executor → Adapter → ZCode 四层收敛 | Thin MCP 不再构造 Authority；静态依赖边界、MCP schema parity、Executor IPC 与四层 fake Official Runtime E2E PASS；不新增执行路径 |
 | PR 3 | Task CLI + shared Control Client | MCP/CLI 并发读写同一权威 |
 | PR 4 | Web Console | 本地安全、无模型调用、页面关闭不影响 Task |
 | PR 5 | Queue Wake Adapter | 已加载 idle Thread 交付确认；严格 C/D 独立验收 |
@@ -336,11 +349,12 @@ Wake 不新增第二套持久化权威。PR 5 前必须先完成一次 schema �
 1. 独立 Executor 在真实 Codex Desktop 关闭后的 Windows 进程存活：`NOT_RUN / BLOCKED_BY_OWNER_ENVIRONMENT`；合成进程与 fake Worker 路径已通过。
 2. SDK 强制终止导致原 Worker Result 丢失：VERIFIED；S2 必须先解决 owner，再考虑持久化交接。
 3. Executor IPC 的同用户安全边界使用 Windows named pipe；确定性单实例/断连/帧边界测试已通过，真实多用户隔离仍未验证。
-4. MCP 等待请求与 Executor 控制请求的生命周期已在 PR 2 candidate 中实现并覆盖 `REQUEST_CANCELLED`、`TASK_CANCEL_REQUESTED`、`SUBMISSION_UNKNOWN`、`EXECUTOR_UNAVAILABLE`；真实 Host 行为仍待 E2E。
-5. Web 列表投影的扫描规模与 Token 输出仍需基准，不得无界读取全部事件。
-6. Queue 只证明 loaded/idle；notLoaded 与 Desktop 全退 UNVERIFIED。Queue Adapter 属于后续 PR 5，不在 PR 2 实现。
-7. A 实验 Sol/xhigh 费用/额度变化不可观察，不估算。
-8. Token Efficiency 架构敏感候选保持冻结；本架构不得预设其结果。
+4. MCP 等待请求与 Executor 控制请求的生命周期已在 PR 2/2.5 candidate 中实现并覆盖 `REQUEST_CANCELLED`、`TASK_CANCEL_REQUESTED`、`SUBMISSION_UNKNOWN`、`EXECUTOR_UNAVAILABLE`；真实 Host 行为仍待 E2E。
+5. Thin MCP 已删除 `in_process` 分支；仍依赖客户端在 Executor 未启动时明确得到 `EXECUTOR_UNAVAILABLE`，而不是自动拉起 Executor。
+6. Web 列表投影的扫描规模与 Token 输出仍需基准，不得无界读取全部事件。
+7. Queue 只证明 loaded/idle；notLoaded 与 Desktop 全退 UNVERIFIED。Queue Adapter 属于后续 PR 5，不在 PR 2/2.5 实现。
+8. A 实验 Sol/xhigh 费用/额度变化不可观察，不估算。
+9. Token Efficiency 架构敏感候选保持冻结；本架构不得预设其结果。
 
 ## 10. Owner 批准记录
 

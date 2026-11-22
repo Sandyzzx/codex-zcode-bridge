@@ -11,9 +11,12 @@ import type {
   TaskStatusRecord,
   ZCodeInteractionReplyInput,
 } from "../interfaces.js";
-import { TaskManagerError, type TaskManagerErrorCode } from "../manager/errors.js";
+import { TaskManagerError, type TaskManagerErrorCode } from "../task-errors.js";
 import type { ExecutorControlClient } from "./control-client.js";
-import type { ExecutorControlResponse } from "./protocol.js";
+import type {
+  ExecutorControlMethod,
+  ExecutorControlParamsByMethod,
+} from "./protocol.js";
 
 const TASK_MANAGER_ERROR_CODES = new Set<TaskManagerErrorCode>([
   "TASK_NOT_FOUND",
@@ -37,14 +40,17 @@ export class RemoteTaskManager implements ProgressTaskManager {
     this.#client = client;
   }
 
-  async #call(method: Parameters<ExecutorControlClient["request"]>[0], params: Record<string, unknown>): Promise<Record<string, unknown>> {
+  async #call<M extends ExecutorControlMethod>(
+    method: M,
+    params: ExecutorControlParamsByMethod[M],
+    idempotencyKey?: string,
+  ): Promise<Record<string, unknown>> {
     await this.#client.connect();
-    const { idempotency_key: idempotencyKey, ...transportParams } = params;
     const response = await this.#client.request(
       method,
-      transportParams,
+      params,
       undefined,
-      typeof idempotencyKey === "string" ? idempotencyKey : undefined,
+      idempotencyKey,
     );
     if (!response.ok) {
       const code = response.error?.code ?? "EXECUTOR_REQUEST_FAILED";
@@ -62,7 +68,7 @@ export class RemoteTaskManager implements ProgressTaskManager {
   }
 
   async createTask(task: TaskPackage): Promise<TaskReceipt> {
-    return this.#call("createTask", { task, idempotency_key: task.task_id }) as unknown as TaskReceipt;
+    return this.#call("createTask", { task }, task.task_id) as unknown as TaskReceipt;
   }
 
   async getStatus(taskId: string): Promise<TaskStatusRecord> {
@@ -74,7 +80,11 @@ export class RemoteTaskManager implements ProgressTaskManager {
   }
 
   async continueTask(input: ContinueTaskInput): Promise<TaskReceipt> {
-    return this.#call("continueTask", { input, idempotency_key: input.operation_id ?? `${input.task_id}:continue` }) as unknown as TaskReceipt;
+    return this.#call(
+      "continueTask",
+      { input },
+      input.operation_id ?? `${input.task_id}:continue`,
+    ) as unknown as TaskReceipt;
   }
 
   async cancelTask(taskId: string): Promise<TaskStatusRecord> {

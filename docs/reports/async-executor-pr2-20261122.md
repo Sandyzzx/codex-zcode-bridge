@@ -5,7 +5,7 @@
 > Branch: `codex/async-executor-pr2`
 > Pull request: [#120](https://github.com/Sandyzzx/codex-zcode-bridge/pull/120)
 > Integration baseline: `origin/preview@1bf039fda2ccfd17a992458a871bddd7b48b38c1`
-> Code evidence: PR #120 remediation working tree; final commit recorded in the PR
+> Code evidence: PR #120 remediation as subsequently restructured by PR 2.5; final commit recorded in the stacked PR
 > Conclusion: `PARTIAL / BLOCKED`
 
 ## 1. Scope and Conclusion
@@ -35,7 +35,7 @@ manager, database, recovery engine, or Worker execution path:
 | Ownership | One Lifetime Lease per normalized Authority Root; exact PID plus start fingerprint; heartbeat; fail closed on unknown identity |
 | Executor | Standalone `src/executor/main.ts` owns the existing `SqliteLifecycleMcpAuthority` |
 | IPC | Windows Named Pipe control client/server; bounded frames; 33 MiB frame budget for the existing 32 MiB Result contract |
-| MCP | `ZCODE_BRIDGE_MCP_TRANSPORT=control` selects a Thin MCP adapter; legacy in-process transport remains the default |
+| MCP | PR 2 introduced `ZCODE_BRIDGE_MCP_TRANSPORT=control`; PR 2.5 removes the shipped in-process branch and makes control the only production path |
 | Production composition | Legacy Host and Executor share Authority initialization, Start Plan auth, dynamic model routing, Worker diagnostics, Doctor, and model settings |
 | Model/Doctor IPC | Thin MCP forwards list/get/set/clear model operations and the complete Doctor report to the Executor |
 | Submission semantics | `REQUEST_CANCELLED`, `TASK_CANCEL_REQUESTED`, `SUBMISSION_UNKNOWN`, and `EXECUTOR_UNAVAILABLE` remain distinct |
@@ -60,8 +60,8 @@ Implemented files:
 - `src/executor/remote-task-manager.ts` and
   `lease-guarded-task-manager.ts`: Thin MCP delegation and legacy lease fencing.
 - `src/executor/remote-model-settings.ts`: Executor-owned model settings proxy.
-- `src/host/production-composition.ts`: shared production Authority/auth/routing/
-  diagnostics/Doctor/model composition.
+- `src/executor/production-composition.ts` (moved out of `src/host/` in PR 2.5):
+  production Authority/auth/routing/diagnostics/Doctor/model composition.
 - `src/host/stdio.ts`: opt-in control transport composition; the accepted Task
   is not cancelled when the MCP request/transport disappears.
 - `test/fixtures/executor-test-main.ts`: explicit test-only Executor entry;
@@ -93,7 +93,7 @@ The following statuses use the existing project vocabulary:
 | Lost response and unavailable Executor | `PASS` | method-specific unknown/cancel versus unavailable classification |
 | Oversized/malformed frames | `PASS` | bounded decoder rejects before manager dispatch |
 | 32 MiB Result over IPC | `PASS` | complete Result read through the 33 MiB frame budget |
-| Thin MCP transport flag | `PASS` | `ZCODE_BRIDGE_MCP_TRANSPORT=control` builds no local SQLite Manager |
+| Thin MCP transport | `PASS` | PR 2.5 removes the in-process branch; the shipped entry builds no local SQLite Manager |
 | Shared Host/Executor production composition | `PASS` | Deterministic composition contract covers Start Plan factory, persisted dynamic routing, Worker diagnostics, Doctor, and model settings |
 | Thin MCP model and Doctor operations | `PASS` | list/get/set/clear and complete Doctor work through IPC; reconnect reads the persisted default model after task completion |
 | Thin MCP disconnect/reconnect | `PASS` | MCP closes, Executor finishes one synthetic Worker spawn, reconnect reads completed Result attempt 1 |

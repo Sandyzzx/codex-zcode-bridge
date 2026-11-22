@@ -3,6 +3,10 @@ import type {
   ZCodeModelCatalog,
 } from "../runtime/model-settings.js";
 import type { ExecutorControlClient } from "./control-client.js";
+import type {
+  ExecutorControlMethod,
+  ExecutorControlParamsByMethod,
+} from "./protocol.js";
 
 export class RemoteModelSettings {
   readonly #client: ExecutorControlClient;
@@ -11,7 +15,10 @@ export class RemoteModelSettings {
     this.#client = client;
   }
 
-  async #call(method: Parameters<ExecutorControlClient["request"]>[0], params: Record<string, unknown>): Promise<Record<string, unknown>> {
+  async #call<M extends ExecutorControlMethod>(
+    method: M,
+    params: ExecutorControlParamsByMethod[M],
+  ): Promise<Record<string, unknown>> {
     await this.#client.connect();
     const response = await this.#client.request(method, params);
     if (!response.ok) {
@@ -31,7 +38,7 @@ export class RemoteModelSettings {
   }
 
   async setDefaultModel(selection: DefaultModelSelection): Promise<{ configured: true; model: DefaultModelSelection }> {
-    return this.#call("setDefaultModel", selection as unknown as Record<string, unknown>) as unknown as {
+    return this.#call("setDefaultModel", selection) as unknown as {
       configured: true;
       model: DefaultModelSelection;
     };

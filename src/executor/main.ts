@@ -4,7 +4,7 @@
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import process from "node:process";
-import { codexHostProfile } from "../host/profile.js";
+import { codexHostProfile } from "../runtime/host-profile.js";
 import { startExecutorService } from "./service.js";
 import { EXECUTOR_UNLEASED_TRANSITION_ENV } from "./lease.js";
 

@@ -4,10 +4,9 @@
 // a ZCode worker (only initialize/initialized/tools/list/status-on-unknown-id).
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { after, before } from "node:test";
 import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -69,17 +68,6 @@ function isolatedEnvironment(extra: NodeJS.ProcessEnv, profile: ReturnType<typeo
   return env;
 }
 
-function assertFreshDatabase(dataRoot: string): void {
-  const database = new DatabaseSync(path.join(dataRoot, "bridge.sqlite"), { readOnly: true });
-  try {
-    assert.equal(database.prepare("PRAGMA integrity_check").get()?.integrity_check, "ok");
-    assert.equal(database.prepare("SELECT COUNT(*) AS n FROM fresh_install_receipt").get()?.n, 1);
-    assert.equal(database.prepare("SELECT COUNT(*) AS n FROM manager_operations").get()?.n, 1);
-    assert.equal(database.prepare("SELECT operation_id FROM manager_operations").get()?.operation_id, "fresh-install-capacity-v1");
-    assert.equal(database.prepare("SELECT COUNT(*) AS n FROM manager_operation_events").get()?.n, 1);
-  } finally { database.close(); }
-}
-
 const PROTOCOL_MESSAGES = [
   JSON.stringify({
     jsonrpc: "2.0",
@@ -128,8 +116,8 @@ const CONTROL_PROTOCOL_MESSAGES = [
   }),
 ].join("\n") + "\n";
 
-test("compiled stdio entry speaks pure JSON-RPC on stdout and diagnostics on stderr", { timeout: 30_000 }, (t) => {
-  if (process.platform !== "win32") return t.skip("Windows-only Fresh SQLite bootstrap");
+test("compiled stdio entry is a pure thin MCP transport", { timeout: 30_000 }, (t) => {
+  if (process.platform !== "win32") return t.skip("Windows-only Executor control pipe");
   const profile = isolatedInstall("source-entry");
   const dataRoot = path.join(profile.localAppData, "CodexZCodeBridge", "state");
   try {
@@ -182,14 +170,14 @@ test("compiled stdio entry speaks pure JSON-RPC on stdout and diagnostics on std
       statusCall?.result as { isError?: boolean; content?: Array<{ text?: string }> } | undefined
     );
     assert.equal(isError?.isError, true, "unknown task must be a tool error, not success");
-    assert.match(isError?.content?.[0]?.text ?? "", /TASK_NOT_FOUND/);
+    assert.match(isError?.content?.[0]?.text ?? "", /EXECUTOR_UNAVAILABLE/);
 
     assert.match(run.stderr, /\[bridge\]/, "diagnostics must go to stderr");
     assert.match(run.stderr, /data root/);
-    assert.ok(run.stderr.indexOf("SQLITE_INITIALIZING") < run.stderr.indexOf("SQLITE_READY"));
-    assert.ok(run.stderr.indexOf("SQLITE_READY") < run.stderr.indexOf("stdio MCP server ready"));
+    assert.match(run.stderr, /no local SQLite Manager is constructed/u);
+    assert.doesNotMatch(run.stderr, /SQLITE_READY/u);
     assert.doesNotMatch(run.stdout, /\[bridge\]/, "stdout must contain protocol messages only");
-    assertFreshDatabase(dataRoot);
+    assert.equal(existsSync(path.join(dataRoot, "bridge.sqlite")), false);
     assert.equal(readFileSync(profile.legacyResult, "utf8"), "old JSON history must remain untouched");
   } catch (error) { preserveFailedInstall(profile); failed = true; throw error; }
 });
@@ -272,20 +260,15 @@ test("marketplace bundle starts through the shipped launcher without repo-local 
     ]);
     assert.ok(existsSync(path.join(profile.pluginRoot, "worker", "worker-main.mjs")), "detached worker bundle must ship beside the MCP server");
     assert.match(run.stderr, /data root/);
-    const provenanceLine = run.stderr.split(/\r?\n/u).find((line) => line.startsWith("[bridge] runtime provenance: "));
-    assert.ok(provenanceLine, "the live Bridge bundle reports its runtime provenance on stderr");
-    const provenance = JSON.parse(provenanceLine.slice("[bridge] runtime provenance: ".length)) as {
-      bridge: { sha256: string | null };
-      worker: { sha256: string | null };
-    };
-    const bridgePath = realpathSync(path.join(profile.pluginRoot, "dist", "bridge.mjs"));
-    const workerPath = realpathSync(path.join(profile.pluginRoot, "worker", "worker-main.mjs"));
-    const sha256 = (filePath: string) => createHash("sha256").update(readFileSync(filePath)).digest("hex").toUpperCase();
-    assert.equal(provenance.bridge.sha256, sha256(bridgePath));
-    assert.equal(provenance.worker.sha256, sha256(workerPath));
-    assert.equal(provenanceLine.includes(bridgePath), false, "stderr must not expose the Bridge bundle path");
-    assert.equal(provenanceLine.includes(workerPath), false, "stderr must not expose the Worker bundle path");
-    assertFreshDatabase(dataRoot);
+    assert.match(run.stderr, /no local SQLite Manager is constructed/u);
+    assert.doesNotMatch(run.stderr, /SQLITE_READY/u);
+    const status = messages.find((message) => message.id === 3)?.result as {
+      isError?: boolean;
+      structuredContent?: { error?: { code?: string } };
+    } | undefined;
+    assert.equal(status?.isError, true);
+    assert.equal(status?.structuredContent?.error?.code, "EXECUTOR_UNAVAILABLE");
+    assert.equal(existsSync(path.join(dataRoot, "bridge.sqlite")), false);
     assert.equal(readFileSync(profile.legacyResult, "utf8"), "old JSON history must remain untouched");
   } catch (error) { preserveFailedInstall(profile); failed = true; throw error; }
 });

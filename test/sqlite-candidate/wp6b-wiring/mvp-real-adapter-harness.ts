@@ -22,9 +22,9 @@ import { SqliteLifecycleMcpAuthority } from "../../../src/manager/sqlite-lifecyc
 
 import { createBridgeServer } from "../../../src/mcp/server.js";
 
-import { createTrustedLocalCandidateContext, createHostStartPlanIssuer } from "../../../src/host/stdio.js";
+import { createTrustedLocalCandidateContext, createHostStartPlanIssuer } from "../../../src/executor/production-composition.js";
 
-import type { BridgeHostProfile } from "../../../src/host/profile.js";
+import type { BridgeHostProfile } from "../../../src/runtime/host-profile.js";
 
 import type {
   OfficialStartPlanAuthenticationResolver,

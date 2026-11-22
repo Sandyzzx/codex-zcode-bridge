@@ -5,6 +5,7 @@ import type { ZCodeModelSettings } from "../runtime/model-settings.js";
 import { createExecutorFrameDecoder, encodeExecutorFrame } from "./frame.js";
 import {
   EXECUTOR_CONTROL_PROTOCOL_VERSION,
+  parseExecutorControlParams,
   type ExecutorControlRequest,
   type ExecutorControlResponse,
 } from "./protocol.js";
@@ -54,32 +55,32 @@ function response(
 async function dispatch(options: ExecutorControlServerOptions, request: ExecutorControlRequest): Promise<Record<string, unknown>> {
   const manager = options.manager;
   switch (request.method) {
+    // The shared TaskPackage schema allows a routable model without provider_id;
+    // Manager routing resolves that public input before persistence.
     case "createTask": return await manager.createTask(request.params.task as Parameters<ProgressTaskManager["createTask"]>[0]) as unknown as Record<string, unknown>;
-    case "getStatus": return await manager.getStatus(String(request.params.task_id)) as unknown as Record<string, unknown>;
-    case "getResult": return await manager.getResult(String(request.params.task_id)) as unknown as Record<string, unknown>;
-    case "continueTask": return await manager.continueTask(request.params.input as Parameters<ProgressTaskManager["continueTask"]>[0]) as unknown as Record<string, unknown>;
-    case "cancelTask": return await manager.cancelTask(String(request.params.task_id)) as unknown as Record<string, unknown>;
-    case "getEvents": return await manager.getEvents(request.params.input as Parameters<ProgressTaskManager["getEvents"]>[0]) as unknown as Record<string, unknown>;
+    case "getStatus": return await manager.getStatus(request.params.task_id) as unknown as Record<string, unknown>;
+    case "getResult": return await manager.getResult(request.params.task_id) as unknown as Record<string, unknown>;
+    case "continueTask": return await manager.continueTask(request.params.input) as unknown as Record<string, unknown>;
+    case "cancelTask": return await manager.cancelTask(request.params.task_id) as unknown as Record<string, unknown>;
+    case "getEvents": return await manager.getEvents(request.params.input) as unknown as Record<string, unknown>;
     case "getFeedback": {
       if (!manager.getFeedback) throw new Error("FEEDBACK_UNAVAILABLE");
-      return await manager.getFeedback(String(request.params.task_id)) as unknown as Record<string, unknown>;
+      return await manager.getFeedback(request.params.task_id) as unknown as Record<string, unknown>;
     }
     case "getAttention": {
       if (!manager.getAttention) throw new Error("ATTENTION_UNAVAILABLE");
-      return await manager.getAttention(String(request.params.task_id)) as unknown as Record<string, unknown>;
+      return await manager.getAttention(request.params.task_id) as unknown as Record<string, unknown>;
     }
-    case "replyToInteraction": return await manager.replyToInteraction(request.params.input as Parameters<ProgressTaskManager["replyToInteraction"]>[0]) as unknown as Record<string, unknown>;
+    case "replyToInteraction": return await manager.replyToInteraction(request.params.input) as unknown as Record<string, unknown>;
     case "listModels":
       if (!options.modelSettings) throw Object.assign(new Error("MODEL_SETTINGS_UNAVAILABLE"), { code: "MODEL_SETTINGS_UNAVAILABLE" });
-      return await options.modelSettings.listModels(String(request.params.workspace)) as unknown as Record<string, unknown>;
+      return await options.modelSettings.listModels(request.params.workspace) as unknown as Record<string, unknown>;
     case "getDefaultModel":
       if (!options.modelSettings) throw Object.assign(new Error("MODEL_SETTINGS_UNAVAILABLE"), { code: "MODEL_SETTINGS_UNAVAILABLE" });
       return await options.modelSettings.getDefaultModel() as unknown as Record<string, unknown>;
     case "setDefaultModel":
       if (!options.modelSettings) throw Object.assign(new Error("MODEL_SETTINGS_UNAVAILABLE"), { code: "MODEL_SETTINGS_UNAVAILABLE" });
-      return await options.modelSettings.setDefaultModel(
-        request.params as unknown as Parameters<ZCodeModelSettings["setDefaultModel"]>[0],
-      ) as unknown as Record<string, unknown>;
+      return await options.modelSettings.setDefaultModel(request.params) as unknown as Record<string, unknown>;
     case "clearDefaultModel":
       if (!options.modelSettings) throw Object.assign(new Error("MODEL_SETTINGS_UNAVAILABLE"), { code: "MODEL_SETTINGS_UNAVAILABLE" });
       return await options.modelSettings.clearDefaultModel() as unknown as Record<string, unknown>;
@@ -161,13 +162,19 @@ export function startExecutorControlServer(options: ExecutorControlServerOptions
     decoder.on("data", (chunk: Buffer) => {
       let request: ExecutorControlRequest;
       try {
-        request = JSON.parse(chunk.toString("utf8")) as ExecutorControlRequest;
-        if (request.protocol_version !== EXECUTOR_CONTROL_PROTOCOL_VERSION
-          || typeof request.request_id !== "string" || !request.request_id
-          || typeof request.method !== "string"
-          || !CONTROL_METHODS.has(request.method)) {
+        const raw = JSON.parse(chunk.toString("utf8")) as Record<string, unknown>;
+        if (raw.protocol_version !== EXECUTOR_CONTROL_PROTOCOL_VERSION
+          || typeof raw.request_id !== "string" || !raw.request_id
+          || typeof raw.method !== "string"
+          || !CONTROL_METHODS.has(raw.method as ExecutorControlRequest["method"])) {
           throw new Error("EXECUTOR_CONTROL_REQUEST_INVALID");
         }
+        const method = raw.method as ExecutorControlRequest["method"];
+        request = {
+          ...raw,
+          method,
+          params: parseExecutorControlParams(method, raw.params),
+        } as ExecutorControlRequest;
       } catch (error) {
         socket.destroy(error instanceof Error ? error : undefined);
         return;
