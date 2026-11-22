@@ -1,8 +1,8 @@
 # 测试入口与成本边界
 
 > Status: AUTHORITATIVE
-> Last updated: 2026-11-22（Executor PR 2.5 定向验证 / 发布候选完整 CI 分层）
-> Last verified: 2026-11-22，核对 `release-candidate` 标签与 `workflow_dispatch.release_gate` 分流、开发期 `FULL_SUITE_DEFERRED_TO_RELEASE_GATE`、Required Check 占位、Push 完整门禁及 Cost Lab/Stress 独立边界；执行证据见 Async Executor PR 2/2.5 报告。
+> Last updated: 2026-11-22（Executor PR 2.5 / PR 3 Task CLI 定向验证）
+> Last verified: 2026-11-22，核对 `release-candidate` 标签与 `workflow_dispatch.release_gate` 分流、开发期 `FULL_SUITE_DEFERRED_TO_RELEASE_GATE`、Required Check 占位、Push 完整门禁及 Cost Lab/Stress 独立边界；执行证据见 Async Executor PR 2/2.5 与 PR 3 报告。
 > Verified against: `origin/preview` `1bf039fda2ccfd17a992458a871bddd7b48b38c1` + `codex/async-executor-pr2.5` CI governance revision
 
 `test/test-impact-map.json` 为可执行清单唯一来源。共享资格规则禁止 MANUAL_E2E、Fixture 自动执行，显式误传同样拒绝；源 .test.ts/.test.mjs、map 与实际 --list 由回归对账。生成的 test-inventory.json 是静态声明/历史证据索引，不决定执行。
@@ -47,6 +47,13 @@ PR 2.5 开发期的最小定向集合包括：`npm run typecheck`、`npm run bui
 `test/validate-plugin-root-pattern.test.ts`、`npm run validate:plugin` 和
 `npm run check:generated`（提交后）。这组证据不等同完整回归；真实 Desktop
 关闭、真实 Official Runtime、strict Wake C/D 仍分别记录 `NOT_RUN`/`BLOCKED`。
+
+PR 3 Task CLI 在同一开发门禁之外至少运行
+`node --test dist-test/test/task-cli.test.js`、Task list 的 lifecycle-port
+定向用例、`test/executor-lease.test.ts` 的 transition 用例，以及
+`npm run build` / `npm run validate:plugin` 对 `dist/task-cli.mjs` 与
+`dist/executor.mjs` 的生成物检查。Task CLI 的通过只证明 Control-only 客户端、
+同一 Authority 并发读取和本地打包边界，不替代真实 Desktop 关闭或真实 Runtime E2E。
 
 ## 退役与保留
 

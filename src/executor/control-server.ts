@@ -2,7 +2,12 @@ import net from "node:net";
 import type { ProgressTaskManager } from "../interfaces.js";
 import type { DoctorReport } from "../runtime/doctor.js";
 import type { ZCodeModelSettings } from "../runtime/model-settings.js";
+import type { ExecutorTaskManagement } from "../task-list.js";
 import { createExecutorFrameDecoder, encodeExecutorFrame } from "./frame.js";
+import type {
+  ExecutorShutdownDecision,
+  ExecutorStatusSnapshot,
+} from "./management.js";
 import {
   EXECUTOR_CONTROL_PROTOCOL_VERSION,
   parseExecutorControlParams,
@@ -12,11 +17,14 @@ import {
 
 export interface ExecutorControlServerOptions {
   readonly pipeName: string;
-  readonly manager: ProgressTaskManager;
+  readonly manager: ProgressTaskManager & Partial<ExecutorTaskManagement>;
   readonly modelSettings?: Pick<ZCodeModelSettings, "listModels" | "getDefaultModel" | "setDefaultModel" | "clearDefaultModel">;
   readonly doctor?: () => Promise<DoctorReport>;
   readonly leaseId: string;
   readonly executorState?: () => "active" | "shutdown_pending" | "lease_unknown" | "closed";
+  readonly executorIdleState?: () => { readonly idle: boolean; readonly blockers: readonly string[] };
+  readonly prepareShutdown?: () => ExecutorShutdownDecision | Promise<ExecutorShutdownDecision>;
+  readonly onShutdownAccepted?: () => void;
   readonly onServerError?: (error: unknown) => void;
   readonly onClientError?: (error: unknown) => void;
   readonly onClientClose?: () => void;
@@ -52,12 +60,19 @@ function response(
   };
 }
 
-async function dispatch(options: ExecutorControlServerOptions, request: ExecutorControlRequest): Promise<Record<string, unknown>> {
+async function dispatch(
+  options: ExecutorControlServerOptions,
+  request: ExecutorControlRequest,
+  currentState: ExecutorStatusSnapshot["state"],
+): Promise<Record<string, unknown>> {
   const manager = options.manager;
   switch (request.method) {
     // The shared TaskPackage schema allows a routable model without provider_id;
     // Manager routing resolves that public input before persistence.
     case "createTask": return await manager.createTask(request.params.task as Parameters<ProgressTaskManager["createTask"]>[0]) as unknown as Record<string, unknown>;
+    case "listTasks":
+      if (!manager.listTasks) throw Object.assign(new Error("TASK_LIST_UNAVAILABLE"), { code: "TASK_LIST_UNAVAILABLE" });
+      return await manager.listTasks(request.params) as unknown as Record<string, unknown>;
     case "getStatus": return await manager.getStatus(request.params.task_id) as unknown as Record<string, unknown>;
     case "getResult": return await manager.getResult(request.params.task_id) as unknown as Record<string, unknown>;
     case "continueTask": return await manager.continueTask(request.params.input) as unknown as Record<string, unknown>;
@@ -87,6 +102,25 @@ async function dispatch(options: ExecutorControlServerOptions, request: Executor
     case "doctor":
       if (!options.doctor) throw Object.assign(new Error("DOCTOR_UNAVAILABLE"), { code: "DOCTOR_UNAVAILABLE" });
       return await options.doctor() as unknown as Record<string, unknown>;
+    case "executorStatus": {
+      let idle: { readonly idle: boolean; readonly blockers: readonly string[] };
+      try {
+        idle = options.executorIdleState?.() ?? { idle: false, blockers: ["idle_state_unavailable"] };
+      } catch {
+        idle = { idle: false, blockers: ["idle_state_unknown"] };
+      }
+      return {
+        state: currentState,
+        lease_id: options.leaseId,
+        idle: idle.idle,
+        blockers: idle.blockers,
+      };
+    }
+    case "shutdown":
+      if (!options.prepareShutdown) {
+        throw Object.assign(new Error("EXECUTOR_SHUTDOWN_UNAVAILABLE"), { code: "EXECUTOR_SHUTDOWN_UNAVAILABLE" });
+      }
+      return await options.prepareShutdown() as unknown as Record<string, unknown>;
     case "health": return { state: "active" };
   }
 }
@@ -101,6 +135,7 @@ const MUTATING_METHODS = new Set<ExecutorControlRequest["method"]>([
 ]);
 const CONTROL_METHODS = new Set<ExecutorControlRequest["method"]>([
   ...MUTATING_METHODS,
+  "listTasks",
   "getStatus",
   "getResult",
   "getEvents",
@@ -111,6 +146,8 @@ const CONTROL_METHODS = new Set<ExecutorControlRequest["method"]>([
   "setDefaultModel",
   "clearDefaultModel",
   "doctor",
+  "executorStatus",
+  "shutdown",
   "health",
 ]);
 
@@ -156,8 +193,8 @@ export function startExecutorControlServer(options: ExecutorControlServerOptions
     const decoder = createExecutorFrameDecoder();
     socket.pipe(decoder);
     socket.resume();
-    const writeResponse = (value: ExecutorControlResponse): void => {
-      if (!socket.destroyed) socket.write(encodeExecutorFrame(value));
+    const writeResponse = (value: ExecutorControlResponse, onWritten?: () => void): void => {
+      if (!socket.destroyed) socket.write(encodeExecutorFrame(value), onWritten);
     };
     decoder.on("data", (chunk: Buffer) => {
       let request: ExecutorControlRequest;
@@ -188,9 +225,16 @@ export function startExecutorControlServer(options: ExecutorControlServerOptions
         ? Promise.reject(Object.assign(new Error(fenced.message), { code: fenced.code }))
         : request.method === "health"
           ? Promise.resolve({ state: currentState })
-          : dispatch(options, request);
+          : dispatch(options, request, currentState);
       void operation
-        .then((result) => writeResponse(response(request, true, optionsExecutorState, options.leaseId, result)))
+        .then((result) => {
+          const shutdownAccepted = request.method === "shutdown"
+            && (result as Record<string, unknown>).status === "accepted";
+          writeResponse(
+            response(request, true, optionsExecutorState, options.leaseId, result),
+            shutdownAccepted ? () => setImmediate(() => options.onShutdownAccepted?.()) : undefined,
+          );
+        })
         .catch((error: unknown) => writeResponse(response(request, false, optionsExecutorState, options.leaseId, undefined, {
           code: error instanceof Error && "code" in error && typeof error.code === "string" ? error.code : "EXECUTOR_REQUEST_FAILED",
           message: error instanceof Error ? error.message : String(error),

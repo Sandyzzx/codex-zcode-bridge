@@ -83,6 +83,12 @@ export interface ExecutorLeaseClearInput {
   readonly now?: () => number;
 }
 
+export interface ExecutorLeaseInspection {
+  readonly lease: ExecutorLeaseRecord;
+  readonly owner_state: "alive" | "exited" | "unknown";
+  readonly heartbeat_age_ms: number | null;
+}
+
 /**
  * A historical MCP Host has no Lease file. Refuse to infer that an existing
  * SQLite Authority is unowned; the operator must stop the old Host, verify no
@@ -359,10 +365,25 @@ export async function acquireExecutorLease(input: ExecutorLeaseInput): Promise<E
   return handle;
 }
 
+/** Read the active Lease and exact owner state without changing any file. */
+export async function inspectExecutorLease(input: {
+  readonly authorityRoot: string;
+  readonly processProbe: ProcessProbe;
+  readonly now?: () => number;
+}): Promise<ExecutorLeaseInspection> {
+  const root = ensurePlainRoot(input.authorityRoot);
+  const file = path.join(root, EXECUTOR_LEASE_FILE);
+  if (!existsSync(file)) throw new ExecutorLeaseError("EXECUTOR_LEASE_MALFORMED", "executor lease is absent");
+  const lease = readLease(file);
+  const ownerState = await probeOwner(lease.owner, input.processProbe);
+  const heartbeatAt = Date.parse(lease.heartbeat_at);
+  const age = Number.isFinite(heartbeatAt) ? Math.max(0, (input.now ?? Date.now)() - heartbeatAt) : null;
+  return { lease, owner_state: ownerState, heartbeat_age_ms: age };
+}
+
 /**
- * Explicit operator recovery for an abandoned lease. PR 2 intentionally does
- * not expose a management CLI; this internal primitive preserves the same
- * exact-owner guard that the future `executor lease clear` command must use.
+ * Explicit operator recovery for an abandoned lease. The Task CLI exposes
+ * this exact-owner guard after an explicit confirmation flag.
  */
 export async function clearExecutorLease(input: ExecutorLeaseClearInput): Promise<ExecutorLeaseRecord> {
   const root = ensurePlainRoot(input.authorityRoot);

@@ -3,6 +3,10 @@ import type {
   GetEventsInput,
   ZCodeInteractionReplyInput,
 } from "../interfaces.js";
+import {
+  listTasksInputSchema,
+  type ListTasksInput,
+} from "../task-list.js";
 import * as z from "zod/v4";
 import {
   zcodeContinueInputSchema,
@@ -21,6 +25,7 @@ export const EXECUTOR_CONTROL_FRAME_LIMIT_BYTES = 33 * 1024 * 1024;
 
 export type ExecutorControlMethod =
   | "createTask"
+  | "listTasks"
   | "getStatus"
   | "getResult"
   | "continueTask"
@@ -34,6 +39,8 @@ export type ExecutorControlMethod =
   | "setDefaultModel"
   | "clearDefaultModel"
   | "doctor"
+  | "executorStatus"
+  | "shutdown"
   | "health";
 
 interface ExecutorControlRequestBase<M extends ExecutorControlMethod> {
@@ -67,6 +74,7 @@ export interface ExecutorControlResponse {
 
 export interface ExecutorControlParamsByMethod {
   createTask: { readonly task: ZcodeTaskInput };
+  listTasks: ListTasksInput;
   getStatus: { readonly task_id: string };
   getResult: { readonly task_id: string };
   continueTask: { readonly input: ContinueTaskInput };
@@ -84,6 +92,8 @@ export interface ExecutorControlParamsByMethod {
   };
   clearDefaultModel: Record<string, never>;
   doctor: Record<string, never>;
+  executorStatus: Record<string, never>;
+  shutdown: Record<string, never>;
   health: Record<string, never>;
 }
 
@@ -96,6 +106,7 @@ export const executorControlParamsSchemas: {
   readonly [M in ExecutorControlMethod]: z.ZodType<ExecutorControlParamsByMethod[M]>;
 } = {
   createTask: z.strictObject({ task: zcodeTaskInputSchema }),
+  listTasks: listTasksInputSchema,
   getStatus: z.strictObject({ task_id: nonEmptyString }),
   getResult: z.strictObject({ task_id: nonEmptyString }),
   continueTask: z.strictObject({ input: zcodeContinueInputSchema }),
@@ -109,6 +120,8 @@ export const executorControlParamsSchemas: {
   setDefaultModel: zcodeDefaultModelInputSchema,
   clearDefaultModel: emptyParams,
   doctor: emptyParams,
+  executorStatus: emptyParams,
+  shutdown: emptyParams,
   health: emptyParams,
 };
 

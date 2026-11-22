@@ -58,3 +58,11 @@ test("production SQLite Authority construction exists only in Executor compositi
     .filter((file) => /SqliteAuthority\.create\s*\(/u.test(source(file)));
   assert.deepEqual(occurrences, ["src/executor/production-composition.ts"]);
 });
+
+test("Task CLI delegates task operations to Executor Control and owns no SQLite Writer", () => {
+  const cli = "src/cli/main.ts";
+  assertNoImports(cli, /(^|\/)(manager|store|worker|adapters)\//u);
+  assertNoImports(cli, /sqlite-candidate|sqlite-lifecycle-mcp-authority/u);
+  const taskMethods = source(cli).match(/requestOk\(client, "(?:listTasks|getStatus|getEvents|getResult|cancelTask|replyToInteraction|executorStatus|shutdown)"/gu) ?? [];
+  assert.deepEqual(new Set(taskMethods).size, 8);
+});

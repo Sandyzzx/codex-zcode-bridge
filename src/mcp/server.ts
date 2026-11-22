@@ -22,7 +22,7 @@ import type {
   ZCodeInteractionReplyInput,
 } from "../interfaces.js";
 import { TaskManagerError } from "../task-errors.js";
-import { summarizeTaskResult } from "./result-summary.js";
+import { summarizeTaskResult } from "../result-summary.js";
 import type { ZcodeTaskInput } from "../api-schemas.js";
 import {
   taskReceiptSchema,

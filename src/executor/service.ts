@@ -19,8 +19,10 @@ import {
   type ExecutorLeaseHandle,
 } from "./lease.js";
 import { executorPipeName } from "./pipe.js";
+import type { ExecutorShutdownDecision } from "./management.js";
+import type { ExecutorTaskManagement } from "../task-list.js";
 
-export interface ExecutorAuthority extends ProgressTaskManager {
+export interface ExecutorAuthority extends ProgressTaskManager, Partial<ExecutorTaskManagement> {
   getExecutorIdleState(): { readonly idle: boolean; readonly blockers: readonly string[] };
   closeIfIdle(): Promise<{ readonly closed: boolean; readonly blockers: readonly string[] }>;
 }
@@ -52,6 +54,7 @@ export interface ExecutorServiceOptions {
 export interface ExecutorServiceHandle {
   readonly leaseId: string;
   readonly pipeName: string;
+  readonly closed: Promise<void>;
   state(): ExecutorServiceState;
   shutdown(): Promise<{ readonly status: "closed" | "not_idle" | "release_unknown"; readonly blockers: readonly string[] }>;
 }
@@ -116,6 +119,31 @@ export async function startExecutorService(options: ExecutorServiceOptions): Pro
   let authority: ExecutorAuthority | undefined;
   let server: ExecutorControlServerHandle | undefined;
   let state: ExecutorServiceState = "active";
+  let leaseSafe = true;
+  let serviceHandle: ExecutorServiceHandle | undefined;
+  let resolveClosed!: () => void;
+  const closed = new Promise<void>((resolve) => {
+    resolveClosed = resolve;
+  });
+  const prepareControlShutdown = (): ExecutorShutdownDecision => {
+    if (state === "shutdown_pending" || state === "closed") {
+      return { status: "accepted", blockers: [] };
+    }
+    if (state === "lease_unknown" || !leaseSafe) {
+      return { status: "release_unknown", blockers: ["lease_ownership_unknown"] };
+    }
+    let idle: ReturnType<ExecutorAuthority["getExecutorIdleState"]>;
+    try {
+      idle = authority!.getExecutorIdleState();
+    } catch {
+      return { status: "release_unknown", blockers: ["idle_state_unknown"] };
+    }
+    if (!idle.idle) return { status: "not_idle", blockers: idle.blockers };
+    // Fence new lifecycle mutations before the response is acknowledged. The
+    // actual close is scheduled after that response has been written.
+    state = "shutdown_pending";
+    return { status: "accepted", blockers: [] };
+  };
   try {
     if (options.testAuthority || options.testAuthorityFactory) {
       authority = options.testAuthority ?? await options.testAuthorityFactory!();
@@ -144,6 +172,11 @@ export async function startExecutorService(options: ExecutorServiceOptions): Pro
         : {}),
       leaseId: leaseHandle.lease.lease_id,
       executorState: () => state,
+      executorIdleState: () => authority!.getExecutorIdleState(),
+      prepareShutdown: prepareControlShutdown,
+      onShutdownAccepted: () => {
+        void serviceHandle?.shutdown();
+      },
     });
   } catch (error) {
     const cleanup = await cleanupFailedStartup(authority, composition, server, leaseHandle);
@@ -154,7 +187,6 @@ export async function startExecutorService(options: ExecutorServiceOptions): Pro
     throw error;
   }
 
-  let leaseSafe = true;
   let shutdownPromise: Promise<{ readonly status: "closed" | "not_idle" | "release_unknown"; readonly blockers: readonly string[] }> | null = null;
   let heartbeatInFlight = false;
   let heartbeatFailureReported = false;
@@ -180,9 +212,10 @@ export async function startExecutorService(options: ExecutorServiceOptions): Pro
   // The heartbeat is also the Executor's process-lifetime hold. The control
   // server stays unref'd for embedders, but a standalone Executor must not
   // exit while it still owns the SQLite Store.
-  return {
+  const service: ExecutorServiceHandle = {
     leaseId: leaseHandle.lease.lease_id,
     pipeName,
+    closed,
     state: () => state,
     async shutdown() {
       if (shutdownPromise) return shutdownPromise;
@@ -260,6 +293,7 @@ export async function startExecutorService(options: ExecutorServiceOptions): Pro
         composition?.abortAuthentication();
         clearInterval(heartbeat);
         state = "closed";
+        resolveClosed();
         return { status: "closed" as const, blockers: [] };
       })();
       shutdownPromise = attempt;
@@ -270,4 +304,6 @@ export async function startExecutorService(options: ExecutorServiceOptions): Pro
       }
     },
   };
+  serviceHandle = service;
+  return service;
 }

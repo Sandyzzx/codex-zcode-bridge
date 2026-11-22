@@ -1,8 +1,8 @@
 # 文档路由 / Documentation
 
 > Status: AUTHORITATIVE（仅指本索引）
-> Last updated: 2026-11-22（Async Executor PR 2.5 Thin MCP boundary + development/release CI split）
-> Last verified: 2026-11-22，核对 PR #116 已合入 Preview、默认完整 Result/显式 Summary、Event Attempt 归属与 ADR-048 默认 Event 页预算；同时核对 PR #120/PR 2.5 的 Executor-only production composition、Thin MCP IPC、启动回滚、安全开发测试与 Release Candidate 完整 CI 触发。真实 Desktop 关闭为 `NOT_RUN / BLOCKED`。
+> Last updated: 2026-11-22（Async Executor PR 2.5 + Task CLI decision）
+> Last verified: 2026-11-22，核对 PR #116 已合入 Preview、默认完整 Result/显式 Summary、Event Attempt 归属与 ADR-048 默认 Event 页预算；同时核对 PR #120/PR 2.5 的 Executor-only production composition、Thin MCP IPC、启动回滚、安全开发测试与 Release Candidate 完整 CI 触发，以及 ADR-049 Task CLI 的 Control-only 边界。真实 Desktop 关闭为 `NOT_RUN / BLOCKED`。
 > Verified against: `1bf039fda2ccfd17a992458a871bddd7b48b38c1` + `codex/async-executor-pr2.5` candidate
 
 English users start at [README.md](../README.md). 技术文档为中文。先读当前事实，按问题加载合同；研究或历史材料不作为当前实现或发布证明。
@@ -30,6 +30,8 @@ English users start at [README.md](../README.md). 技术文档为中文。先读
 | SQLite v13 退役验收 | [验收报告](reports/sqlite-v13-retirement-20261121.md) | v14-only 支持、v13 非破坏性拒绝、测试/生成物退役与完整回归证据 |
 | Preview.11 发布与已知边界 | [发布报告](reports/preview11-release-20261122.md) | 默认完整 Result、opt-in 摘要、Event 分页、用户授权阻塞释放与真实 A/B `BLOCKED` |
 | Async Executor PR #120 + PR 2.5 candidate | [架构合同](architecture/BRIDGE_ASYNC_EXECUTION_V1.md)、[ADR-045](decisions/ADR-045-async-executor-ownership.md)、[PR 2 证据](reports/async-executor-pr2-20261122.md)、[PR 2.5 证据](reports/async-executor-pr2.5-20261122.md) | `PARTIAL / BLOCKED`：Executor-only production composition、Thin MCP/model/Doctor、Lease、IPC、fake Worker 四层 E2E PASS；真实 Desktop 关闭和 Official Runtime `NOT_RUN`，未合入 Preview |
+| Task CLI candidate | [ADR-049](decisions/ADR-049-task-cli-control-surface.md) | `IMPLEMENTED / PARTIAL`：同一 Executor Control Client、bounded Task list、Result 摘要/文件预算与已运行 Executor 检测；不拥有 SQLite |
+| Task CLI evidence | [PR 3 report](reports/async-executor-pr3-20261122.md) | 定向测试、插件生成物与隔离 start/status/stop PASS；完整回归与真实 Desktop 关闭 `NOT_RUN` |
 | Preview.7 Post-Audit 最小架构、正确性、Legacy JSON 与 CI 整改 | [ADR-038](decisions/ADR-038-preview6-minimum-architecture-remediation.md)、[PROJECT_STATE.md](PROJECT_STATE.md) |
 | Start Plan 与安装版 AppServer 离线兼容性 | [研究](research/start-plan-official-appserver-compatibility-20261118.md) |
 | 本次 Runtime、Cost Lab Web 与 Start Plan 集成交付 | [验收报告](reports/official-runtime-integration-costlab-web-startplan-20261118.md) |

@@ -11,6 +11,11 @@ import type {
   TaskStatusRecord,
   ZCodeInteractionReplyInput,
 } from "../interfaces.js";
+import type {
+  ExecutorTaskManagement,
+  ListTasksInput,
+  TaskListPage,
+} from "../task-list.js";
 import { TaskManagerError, type TaskManagerErrorCode } from "../task-errors.js";
 import type { ExecutorControlClient } from "./control-client.js";
 import type {
@@ -33,7 +38,7 @@ const TASK_MANAGER_ERROR_CODES = new Set<TaskManagerErrorCode>([
   "interaction_reply_outcome_unknown",
 ]);
 
-export class RemoteTaskManager implements ProgressTaskManager {
+export class RemoteTaskManager implements ProgressTaskManager, ExecutorTaskManagement {
   readonly #client: ExecutorControlClient;
 
   constructor(client: ExecutorControlClient) {
@@ -69,6 +74,10 @@ export class RemoteTaskManager implements ProgressTaskManager {
 
   async createTask(task: TaskPackage): Promise<TaskReceipt> {
     return this.#call("createTask", { task }, task.task_id) as unknown as TaskReceipt;
+  }
+
+  async listTasks(input: ListTasksInput = {}): Promise<TaskListPage> {
+    return this.#call("listTasks", input) as unknown as TaskListPage;
   }
 
   async getStatus(taskId: string): Promise<TaskStatusRecord> {

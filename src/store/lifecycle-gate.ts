@@ -152,6 +152,11 @@ interface ClaimOnlyPort {
   commitPermanentClaim: Parameters<typeof verifyHandshakeAndCommitClaim>[0]["commitPermanentClaim"];
   readLifecycleEvents(operationId: string, options?: { readonly afterSequence?: number; readonly limit?: number }): readonly Readonly<Record<string, unknown>>[];
   readTaskProjection(taskId: string): unknown;
+  readTaskProjections(options?: {
+    readonly afterTaskId?: string | null;
+    readonly limit?: number;
+    readonly status?: string | null;
+  }): unknown;
   readAttempt(taskId: string, attempt: number): unknown;
   commitResult(input: CandidateResultCommitInput): CandidateResultCommitOutcome;
   recordResultSubmissionFailure?(input: Readonly<Record<string, unknown>>, reason: string): unknown;
@@ -1296,6 +1301,11 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
   provisionCapacity(input: unknown): unknown;
   createTask(task: CandidateTaskPackage): unknown;
   readTaskLifecycle(taskId: string): unknown;
+  readTaskProjections(options?: {
+    readonly afterTaskId?: string | null;
+    readonly limit?: number;
+    readonly status?: string | null;
+  }): unknown;
   readTaskAttention(taskId: string): unknown;
   readTaskEvents(taskId: string, options?: { readonly afterCursor?: number; readonly limit?: number }): LifecycleEventsPage;
   readCommittedResult(operationId: string): CandidateCommittedResult | null;
@@ -2154,6 +2164,7 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
     },
     createTask: (task) => port.createTask(task),
     readTaskLifecycle: (taskId) => port.readTaskLifecycle(taskId),
+    readTaskProjections: (options) => port.readTaskProjections(options),
     readTaskAttention: (taskId) => port.readTaskAttention(taskId),
     readTaskEvents: (taskId, options) => port.readTaskEvents(taskId, options),
     readCommittedResult: (operationId) => port.readCommittedResult(operationId),

@@ -110,3 +110,24 @@ ADR-018 的管理性放弃命令随插件交付为 `dist/admin-abandon-held-oper
 ## 可选后台等待器
 
 支持后台命令完成通知的 Host 可运行插件包内的只读 `dist/wait-task.mjs`。它观察同一 SQLite Attention Core，不批准、取消或修改任务状态；通知仍取决于 Host 的生命周期。
+
+## Executor 与 Task CLI
+
+候选版本的插件包同时包含 `dist/executor.mjs` 和 `dist/task-cli.mjs`。Executor 是
+SQLite Authority、Worker、Official Runtime 和 Recovery 的唯一持有者；Task CLI
+只通过同用户 Named Pipe 调用 Executor，不直接打开 SQLite。
+
+在插件安装目录运行：
+
+```powershell
+node dist/task-cli.mjs executor start
+node dist/task-cli.mjs executor status
+node dist/task-cli.mjs task list --limit 20
+node dist/task-cli.mjs task status <task_id>
+node dist/task-cli.mjs executor stop
+```
+
+`executor start` 检测到已有活动 Executor 时不会再次 Spawn。无 Lease history 的
+既有 SQLite Root 必须由用户先停止并核对旧 MCP Host，再显式附加
+`--accept-unleased-transition`；该参数不绕过已记录的精确活动 owner。`executor stop`
+只执行 Idle-only Shutdown，活动任务或未知关闭状态会以非零退出，不会自动取消任务。

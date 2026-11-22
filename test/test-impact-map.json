@@ -141,6 +141,9 @@
         "src/runtime/process-probe.ts",
         "src/manager/sqlite-lifecycle-mcp-authority.ts",
         "src/executor/**",
+        "src/cli/main.ts",
+        "src/task-list.ts",
+        "src/result-summary.ts",
         "src/runtime/host-profile.ts",
         "src/task-errors.ts"
       ]
@@ -348,6 +351,16 @@
         "test-execution-contract",
         "manager-lifecycle",
         "mcp-host"
+      ]
+    },
+    {
+      "file": "test/task-cli.test.ts",
+      "type": "Integration",
+      "gate": "T2",
+      "domains": [
+        "manager-lifecycle",
+        "mcp-host",
+        "test-execution-contract"
       ]
     },
     {

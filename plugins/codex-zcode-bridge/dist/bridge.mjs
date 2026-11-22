@@ -21604,6 +21604,21 @@ var zcodeDefaultModelInputSchema = strictObject({
   reasoning_level: string2().trim().min(1).optional()
 });
 
+// src/task-list.ts
+var MAX_TASK_LIST_LIMIT = 100;
+var listTasksInputSchema = strictObject({
+  after_task_id: taskIdSchema.optional(),
+  limit: number2().int().min(1).max(MAX_TASK_LIST_LIMIT).optional(),
+  status: _enum([
+    "queued",
+    "running",
+    "completed",
+    "failed",
+    "cancelled",
+    "waiting_for_master"
+  ]).optional()
+});
+
 // src/executor/protocol.ts
 var EXECUTOR_CONTROL_PROTOCOL_VERSION = 1;
 var EXECUTOR_CONTROL_FRAME_LIMIT_BYTES = 33 * 1024 * 1024;
@@ -21611,6 +21626,7 @@ var nonEmptyString = string2().min(1);
 var emptyParams = strictObject({});
 var executorControlParamsSchemas = {
   createTask: strictObject({ task: zcodeTaskInputSchema }),
+  listTasks: listTasksInputSchema,
   getStatus: strictObject({ task_id: nonEmptyString }),
   getResult: strictObject({ task_id: nonEmptyString }),
   continueTask: strictObject({ input: zcodeContinueInputSchema }),
@@ -21624,6 +21640,8 @@ var executorControlParamsSchemas = {
   setDefaultModel: zcodeDefaultModelInputSchema,
   clearDefaultModel: emptyParams,
   doctor: emptyParams,
+  executorStatus: emptyParams,
+  shutdown: emptyParams,
   health: emptyParams
 };
 
@@ -21673,7 +21691,7 @@ function executorError(code) {
   return Object.assign(new Error(code), { code });
 }
 function submissionUnknownCode(method) {
-  if (method === "createTask" || method === "continueTask" || method === "replyToInteraction" || method === "setDefaultModel" || method === "clearDefaultModel") {
+  if (method === "createTask" || method === "continueTask" || method === "replyToInteraction" || method === "setDefaultModel" || method === "clearDefaultModel" || method === "shutdown") {
     return "SUBMISSION_UNKNOWN";
   }
   if (method === "cancelTask") return "TASK_CANCEL_REQUESTED";
@@ -21867,6 +21885,9 @@ var RemoteTaskManager = class {
   async createTask(task) {
     return this.#call("createTask", { task }, task.task_id);
   }
+  async listTasks(input = {}) {
+    return this.#call("listTasks", input);
+  }
   async getStatus(taskId) {
     return this.#call("getStatus", { task_id: taskId });
   }
@@ -21913,7 +21934,7 @@ function executorPipeName(root) {
 // node_modules/@modelcontextprotocol/server/dist/index.mjs
 var DEFAULT_MAX_REQUEST_BODY_SIZE = 4 * 1024 * 1024;
 
-// src/mcp/result-summary.ts
+// src/result-summary.ts
 var INLINE_RESULT_BYTES = 2048;
 var MAX_ITEM_CHARS = 256;
 function summarizeTaskResult(result) {
@@ -21922,7 +21943,7 @@ function summarizeTaskResult(result) {
   }
   const { summary, files_changed, tests, issues, zcode_output, report_candidate, model, usage, timing, ...identity } = result;
   const omittedFields = ["zcode_output"];
-  const summaryPreview = summary.slice(0, 768).replace(/[\uD800-\uDBFF]$/, "");
+  const summaryPreview = summary.slice(0, 768).replace(/[\uD800-\uDBFF]$/u, "");
   if (summaryPreview !== summary) omittedFields.push("summary");
   const filesPreview = files_changed.slice(0, 12).filter((file) => file.length <= MAX_ITEM_CHARS);
   if (filesPreview.length !== files_changed.length) omittedFields.push("files_changed");

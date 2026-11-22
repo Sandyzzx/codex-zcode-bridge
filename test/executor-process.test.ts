@@ -272,6 +272,7 @@ test("the internal Executor entry point reports its supported arguments", async 
   });
   assert.deepEqual(await exit, { code: 0, signal: null });
   assert.match(output, /EXECUTOR_USAGE: node dist\/src\/executor\/main\.js --data-root <absolute-path>/u);
+  assert.match(output, /--accept-unleased-transition/u);
   assert.match(output, /--settings-directory <absolute-path>/u);
   assert.doesNotMatch(output, /test-only-fake-adapter/u);
   assert.doesNotMatch(output, /--worker-entry/u);

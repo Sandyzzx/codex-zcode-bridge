@@ -1,8 +1,9 @@
-import type { TaskResult } from "../interfaces.js";
+import type { TaskResult } from "./interfaces.js";
 
 const INLINE_RESULT_BYTES = 2_048;
 const MAX_ITEM_CHARS = 256;
 
+/** Shared ADR-047 Result projection used by MCP and the Task CLI. */
 export function summarizeTaskResult(result: TaskResult) {
   if (result.zcode_output.length <= INLINE_RESULT_BYTES
     && Buffer.byteLength(JSON.stringify(result)) <= INLINE_RESULT_BYTES) {
@@ -11,7 +12,7 @@ export function summarizeTaskResult(result: TaskResult) {
 
   const { summary, files_changed, tests, issues, zcode_output, report_candidate, model, usage, timing, ...identity } = result;
   const omittedFields = ["zcode_output"];
-  const summaryPreview = summary.slice(0, 768).replace(/[\uD800-\uDBFF]$/, "");
+  const summaryPreview = summary.slice(0, 768).replace(/[\uD800-\uDBFF]$/u, "");
   if (summaryPreview !== summary) omittedFields.push("summary");
   // Paths and commands must be shown whole or left out.
   const filesPreview = files_changed.slice(0, 12).filter((file) => file.length <= MAX_ITEM_CHARS);

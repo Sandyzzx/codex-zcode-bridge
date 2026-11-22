@@ -10,6 +10,7 @@ import {
   clearExecutorLease,
   EXECUTOR_LEASE_FILE,
   EXECUTOR_LEASE_RELEASED_FILE,
+  inspectExecutorLease,
 } from "../src/executor/lease.js";
 import { LeaseGuardedTaskManager } from "../src/executor/lease-guarded-task-manager.js";
 import { PROCESS_IDENTITY_VERSION, type ProcessIdentity, type ProcessProbe, type ProbeRequest, type ProbeVerdict } from "../src/runtime/process-probe.js";
@@ -181,6 +182,32 @@ test("manual lease clear refuses an exact live owner and clears only a proven ex
   } finally {
     rmSync(liveRoot, { recursive: true, force: true });
     rmSync(deadRoot, { recursive: true, force: true });
+  }
+});
+
+test("lease inspection is read-only and reports exact owner state plus heartbeat age", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "executor-lease-inspect-"));
+  try {
+    const before = Date.now();
+    const handle = await acquireExecutorLease(options(
+      root,
+      probeWith({ state: "unknown", reason_code: "unused", observed_at: "" }),
+    ));
+    const inspection = await inspectExecutorLease({
+      authorityRoot: root,
+      processProbe: probeWith({
+        state: "alive",
+        reason_code: "pid_and_fingerprint_match",
+        observed_at: "",
+      }, process.pid),
+      now: () => before + 5_000,
+    });
+    assert.equal(inspection.lease.lease_id, handle.lease.lease_id);
+    assert.equal(inspection.owner_state, "alive");
+    assert.ok(inspection.heartbeat_age_ms !== null && inspection.heartbeat_age_ms >= 0);
+    assert.equal(existsSync(path.join(root, EXECUTOR_LEASE_FILE)), true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

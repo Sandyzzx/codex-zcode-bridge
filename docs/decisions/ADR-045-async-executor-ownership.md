@@ -1,7 +1,7 @@
 # ADR-045：独立 Async Executor 所有权
 
 > Status: ACCEPTED（Owner 条件批准；架构方向已接受）
-> Implementation status: PARTIAL / BLOCKED — PR 2/2.5 candidate；未合入 Preview，未发布
+> Implementation status: PARTIAL / BLOCKED — PR 2/2.5/3 candidate；未合入 Preview，未发布
 > Date: 2026-11-22
 > Baseline: `origin/preview` `1bf039fda2ccfd17a992458a871bddd7b48b38c1`
 > Related architecture: [BRIDGE_ASYNC_EXECUTION_V1.md](../architecture/BRIDGE_ASYNC_EXECUTION_V1.md)
@@ -83,3 +83,16 @@ C/D 仍未运行；PR 2.5 因此保持 `IMPLEMENTED — PARTIAL / BLOCKED`，不
 Preview 或发布。公共 MCP 工具面、SQLite v14、Worker 私有 IPC、Result/
 Cleanup/Recovery 合同保持不变；正常插件不得通过嵌入式 Manager 绕过
 Executor。
+
+## PR 3 Implementation Record
+
+PR 3 增加 [ADR-049](ADR-049-task-cli-control-surface.md) 定义的 Task CLI：
+`executor start/status/stop`、Lease 只读/显式清理，以及
+`task list/status/events/result/cancel/reply` 全部经 `ExecutorControlClient`
+调用同一 Executor。CLI 不打开 SQLite、不创建 Manager，也不实现第二套恢复。
+插件生成 `dist/task-cli.mjs` 与 `dist/executor.mjs`，二者通过同一 Named Pipe
+合同通信。定向测试覆盖已有 Executor 不重复 Spawn、一次性未 Lease 过渡、
+Shutdown unknown 非零、bounded list、Result 输出预算和 MCP/CLI 并发。
+
+该实现仍是 stacked candidate。完整回归、真实 Desktop 关闭和真实 Official
+Runtime 未因 PR 3 自动获得通过，不能据此合入 Preview 或发布。

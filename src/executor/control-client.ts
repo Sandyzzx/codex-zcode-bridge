@@ -29,7 +29,8 @@ function submissionUnknownCode(method: ExecutorControlRequest["method"]): string
     || method === "continueTask"
     || method === "replyToInteraction"
     || method === "setDefaultModel"
-    || method === "clearDefaultModel") {
+    || method === "clearDefaultModel"
+    || method === "shutdown") {
     return "SUBMISSION_UNKNOWN";
   }
   if (method === "cancelTask") return "TASK_CANCEL_REQUESTED";

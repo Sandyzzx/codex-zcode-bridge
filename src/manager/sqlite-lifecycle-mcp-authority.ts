@@ -26,6 +26,12 @@ import { createPlatformProbe, PROCESS_IDENTITY_VERSION, type ProcessIdentity, ty
 import { buildSqliteDoctorChecks } from "../runtime/sqlite-doctor.js";
 import type { DoctorCheck } from "../runtime/doctor.js";
 import type { TaskModelRouter } from "../runtime/model-routing.js";
+import {
+  DEFAULT_TASK_LIST_LIMIT,
+  type ListTasksInput,
+  type TaskListItem,
+  type TaskListPage,
+} from "../task-list.js";
 
 const EXECUTION_OBSERVATION_PROBE_BUDGET_MS = 5_000;
 const DEFAULT_HOST_SHUTDOWN_WAIT_MS = 60_000;
@@ -216,6 +222,36 @@ export class SqliteLifecycleMcpAuthority implements ProgressTaskManager {
       ...(executionObservation ? { execution_observation: executionObservation } : {}),
       ...(dispatchBlocker ? { dispatch_blocker: dispatchBlocker } : {}),
       ...(Number(attempt.attempt) > 0 ? {} : {}),
+    };
+  }
+
+  async listTasks(input: ListTasksInput = {}): Promise<TaskListPage> {
+    this.#assertOpen();
+    const page = asRecord(this.#driver.readTaskProjections({
+      afterTaskId: input.after_task_id ?? null,
+      limit: input.limit ?? DEFAULT_TASK_LIST_LIMIT,
+      status: input.status ?? null,
+    }));
+    if (!Array.isArray(page.tasks)
+      || (page.next_task_id !== null && typeof page.next_task_id !== "string")
+      || typeof page.has_more !== "boolean") {
+      throw new TaskManagerError("TASK_STATE", "invalid SQLite task list projection");
+    }
+    const tasks = page.tasks.map((value): TaskListItem => {
+      const item = asRecord(value);
+      return {
+        task_id: string(item.task_id, "task_list_id_missing"),
+        status: taskStatus(item.status),
+        attempt: Number(item.attempt),
+        created_at: string(item.created_at, "task_list_created_at_missing"),
+        workspace: string(item.workspace, "task_list_workspace_missing"),
+        objective: string(item.objective, "task_list_objective_missing"),
+      };
+    });
+    return {
+      tasks,
+      next_task_id: page.next_task_id as string | null,
+      has_more: page.has_more,
     };
   }
 

@@ -343,6 +343,35 @@ test('runtime Schema is self-contained and persists a Task with its initial Atte
   } finally { store.close(); }
 });
 
+test('bounded Task enumeration is stable, cursor-based, and read-only', () => {
+  const fixture = makeCandidateStore('task-list');
+  try {
+    fixture.port.createTask(task('task-list-b', fixture.workspace), '2026-10-23T00:00:02.000Z');
+    fixture.port.createTask(task('task-list-a', fixture.workspace), '2026-10-23T00:00:01.000Z');
+    fixture.port.createTask(task('task-list-c', fixture.workspace), '2026-10-23T00:00:03.000Z');
+    const beforeEvents = fixture.store.readTaskEvents('task-list-a');
+
+    const first = fixture.port.readTaskProjections({ limit: 2 });
+    assert.deepEqual(first.tasks.map(item => item.task_id), ['task-list-a', 'task-list-b']);
+    assert.equal(first.tasks[0].workspace, fixture.workspace);
+    assert.equal(first.tasks[0].objective, 'synthetic lifecycle task');
+    assert.equal(first.next_task_id, 'task-list-b');
+    assert.equal(first.has_more, true);
+
+    const second = fixture.port.readTaskProjections({ afterTaskId: first.next_task_id, limit: 2 });
+    assert.deepEqual(second.tasks.map(item => item.task_id), ['task-list-c']);
+    assert.equal(second.next_task_id, null);
+    assert.equal(second.has_more, false);
+    assert.deepEqual(fixture.store.readTaskEvents('task-list-a'), beforeEvents);
+    assert.throws(
+      () => fixture.port.readTaskProjections({ limit: 101 }),
+      error => error.code === 'invalid_task_list_query',
+    );
+  } finally {
+    fixture.store.close();
+  }
+});
+
 test('Attention query returns current-Attempt pending request IDs in event order', () => {
   const fixture = makeRunningAttentionTask('pending-order');
   try {

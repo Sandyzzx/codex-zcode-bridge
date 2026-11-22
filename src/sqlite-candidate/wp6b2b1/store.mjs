@@ -965,6 +965,41 @@ export class IsolatedAdmissionStore {
   readTaskProjection(taskId) {
     return this.#readConsistent(()=>this.#db.prepare('SELECT task_id,status,current_attempt,created_at FROM tasks WHERE task_id=?').get(taskId)??null);
   }
+  /** Stable, bounded, read-only task enumeration for the Executor Control API. */
+  readTaskProjections({afterTaskId=null,limit=50,status=null}={}) {
+    if((afterTaskId!==null&&!validId(afterTaskId))
+      ||!Number.isSafeInteger(limit)||limit<1||limit>100
+      ||(status!==null&&!['queued','running','completed','failed','cancelled','waiting_for_master'].includes(status))){
+      fail('invalid_task_list_query');
+    }
+    return this.#readConsistent(()=>{
+      const rows=this.#db.prepare(`SELECT task_id,status,current_attempt,created_at,task_json
+        FROM tasks
+        WHERE task_id>? AND (? IS NULL OR status=?)
+        ORDER BY task_id
+        LIMIT ?`).all(afterTaskId??'',status,status,limit+1);
+      const hasMore=rows.length>limit;
+      const visible=rows.slice(0,limit).map(row=>{
+        let task;
+        try{task=JSON.parse(row.task_json);}catch{fail('task_projection_invalid');}
+        validateTaskPackage(task);
+        if(task.task_id!==row.task_id)fail('task_projection_identity_mismatch');
+        return {
+          task_id:row.task_id,
+          status:row.status,
+          attempt:row.current_attempt,
+          created_at:row.created_at,
+          workspace:task.workspace,
+          objective:task.objective,
+        };
+      });
+      return {
+        tasks:visible,
+        next_task_id:hasMore?visible.at(-1)?.task_id??null:null,
+        has_more:hasMore,
+      };
+    });
+  }
   /** Return only the current queued Attempt for each queued Task, with an explicit safe-to-dispatch classification. */
   readRecoverableQueuedAttempts() {
     return this.#readConsistent(()=>{
