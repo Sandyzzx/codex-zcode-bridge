@@ -32,6 +32,7 @@ English users start at [README.md](../README.md). 技术文档为中文。先读
 | Async Executor PR #120 + PR 2.5 candidate | [架构合同](architecture/BRIDGE_ASYNC_EXECUTION_V1.md)、[ADR-045](decisions/ADR-045-async-executor-ownership.md)、[PR 2 证据](reports/async-executor-pr2-20261122.md)、[PR 2.5 证据](reports/async-executor-pr2.5-20261122.md) | `PARTIAL / BLOCKED`：Executor-only production composition、Thin MCP/model/Doctor、Lease、IPC、fake Worker 四层 E2E PASS；真实 Desktop 关闭和 Official Runtime `NOT_RUN`，未合入 Preview |
 | Task CLI candidate | [ADR-049](decisions/ADR-049-task-cli-control-surface.md) | `IMPLEMENTED / PARTIAL`：同一 Executor Control Client、bounded Task list、Result 摘要/文件预算与已运行 Executor 检测；不拥有 SQLite |
 | Task CLI evidence | [PR 3 report](reports/async-executor-pr3-20261122.md) | 定向测试、插件生成物与隔离 start/status/stop PASS；完整回归与真实 Desktop 关闭 `NOT_RUN` |
+| Task Web Console candidate | [ADR-050](decisions/ADR-050-local-task-web-console.md)、[PR 4 report](reports/async-executor-pr4-20261122.md) | `IMPLEMENTED / PARTIAL`：loopback + Origin/CSRF、只读 Task/Event/Result、Cancel/Reply；页关闭不影响 Executor |
 | Preview.7 Post-Audit 最小架构、正确性、Legacy JSON 与 CI 整改 | [ADR-038](decisions/ADR-038-preview6-minimum-architecture-remediation.md)、[PROJECT_STATE.md](PROJECT_STATE.md) |
 | Start Plan 与安装版 AppServer 离线兼容性 | [研究](research/start-plan-official-appserver-compatibility-20261118.md) |
 | 本次 Runtime、Cost Lab Web 与 Start Plan 集成交付 | [验收报告](reports/official-runtime-integration-costlab-web-startplan-20261118.md) |

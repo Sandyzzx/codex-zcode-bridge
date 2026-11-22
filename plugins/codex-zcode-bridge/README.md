@@ -131,3 +131,17 @@ node dist/task-cli.mjs executor stop
 既有 SQLite Root 必须由用户先停止并核对旧 MCP Host，再显式附加
 `--accept-unleased-transition`；该参数不绕过已记录的精确活动 owner。`executor stop`
 只执行 Idle-only Shutdown，活动任务或未知关闭状态会以非零退出，不会自动取消任务。
+
+## Task Web Console
+
+插件同时包含只读优先的 `dist/web-console.mjs`。它只绑定 `127.0.0.1`，通过同一
+Executor Control Pipe 读取 Task/Status/Event/Result，并允许显式 Cancel 和
+Interaction Reply。它不创建 Task、不打开 SQLite、不控制 Executor 生命周期，也不
+在页面加载时调用模型。
+
+```powershell
+node dist/web-console.mjs --data-root <absolute-state-dir>
+```
+
+所有状态变更请求要求同源 Host、Origin 和会话 CSRF 头。页面刷新或浏览器关闭只会
+关闭本地 HTTP 请求，不会取消已受理 Task。

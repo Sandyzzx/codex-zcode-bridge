@@ -1,7 +1,7 @@
 # ADR-045：独立 Async Executor 所有权
 
 > Status: ACCEPTED（Owner 条件批准；架构方向已接受）
-> Implementation status: PARTIAL / BLOCKED — PR 2/2.5/3 candidate；未合入 Preview，未发布
+> Implementation status: PARTIAL / BLOCKED — PR 2/2.5/3/4 candidate；未合入 Preview，未发布
 > Date: 2026-11-22
 > Baseline: `origin/preview` `1bf039fda2ccfd17a992458a871bddd7b48b38c1`
 > Related architecture: [BRIDGE_ASYNC_EXECUTION_V1.md](../architecture/BRIDGE_ASYNC_EXECUTION_V1.md)
@@ -96,3 +96,15 @@ Shutdown unknown 非零、bounded list、Result 输出预算和 MCP/CLI 并发�
 
 该实现仍是 stacked candidate。完整回归、真实 Desktop 关闭和真实 Official
 Runtime 未因 PR 3 自动获得通过，不能据此合入 Preview 或发布。
+
+## PR 4 Implementation Record
+
+PR 4 按 [ADR-050](ADR-050-local-task-web-console.md) 增加 loopback-only Task
+Web Console。它通过同一 `ExecutorControlClient`/`RemoteTaskManager` 读取
+Task、Event 和 Result，并仅转发显式 Cancel/Interaction Reply；不提供 Task
+创建、模型设置、SQLite、Shell、文件或 Executor Shutdown API。HTTP 层要求
+精确 Host、同源 Origin、会话 CSRF 和有界 JSON body。关闭页面或 Console
+进程只关闭本地 Adapter，不影响 Executor 或已受理 Task。
+
+插件生成 `dist/web-console.mjs`。定向 HTTP、安全、Architecture Boundary 和
+打包校验通过；真实多用户隔离、Desktop 关闭和付费 Runtime 仍未验证。

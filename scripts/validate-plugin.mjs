@@ -119,6 +119,7 @@ for (const relativePath of [
   "dist/bridge.mjs",
   "dist/task-cli.mjs",
   "dist/executor.mjs",
+  "dist/web-console.mjs",
   "dist/wait-task.mjs",
   "dist/schema.sql",
   "dist/runtime-events.sql",
@@ -171,13 +172,13 @@ if (!waiterBundle.includes("PR #49 of codex-zcode-bridge") || !waiterBundle.incl
 // its own directory (module-label comments inside the bundle legitimately
 // mention the packaging path and are not an external dependency).
 const repoRootPattern = buildRepoRootLeakPattern(root);
-for (const relativePath of ["dist/bridge.mjs", "dist/task-cli.mjs", "dist/executor.mjs", "dist/wait-task.mjs", "dist/admin-abandon-held-operation.mjs", "worker/worker-main.mjs", "worker/vendor/pkg/browser-host.cjs"]) {
+for (const relativePath of ["dist/bridge.mjs", "dist/task-cli.mjs", "dist/executor.mjs", "dist/web-console.mjs", "dist/wait-task.mjs", "dist/admin-abandon-held-operation.mjs", "worker/worker-main.mjs", "worker/vendor/pkg/browser-host.cjs"]) {
   const bundle = await readFile(path.join(pluginRoot, relativePath), "utf8");
   if (repoRootPattern.test(bundle)) {
     throw new Error(`${relativePath} embeds the development repository's absolute path`);
   }
 }
-for (const relativePath of ["dist/bridge.mjs", "dist/task-cli.mjs", "dist/executor.mjs", "dist/wait-task.mjs", "worker/worker-main.mjs"]) {
+for (const relativePath of ["dist/bridge.mjs", "dist/task-cli.mjs", "dist/executor.mjs", "dist/web-console.mjs", "dist/wait-task.mjs", "worker/worker-main.mjs"]) {
   const bundle = await readFile(path.join(pluginRoot, relativePath), "utf8");
   if (/(?:from|import)\s*["']playwright-core["']/u.test(bundle)) {
     throw new Error(`${relativePath} statically imports playwright-core; the browser backend must load through the vendored bundle`);
@@ -214,6 +215,13 @@ if (!executorBundle.includes("createProductionAuthorityComposition")
   || !executorBundle.includes("acquireExecutorLease")
   || !executorBundle.includes("startExecutorControlServer")) {
   throw new Error("executor.mjs must own the production Authority and lifecycle composition");
+}
+const webConsoleBundle = await readFile(path.join(pluginRoot, "dist", "web-console.mjs"), "utf8");
+if (!webConsoleBundle.includes("ExecutorControlClient")
+  || !webConsoleBundle.includes("RemoteTaskManager")
+  || !webConsoleBundle.includes("TASK_CONSOLE_READY")
+  || /SqliteLifecycleMcpAuthority|createProductionAuthorityComposition/u.test(webConsoleBundle)) {
+  throw new Error("web-console.mjs must remain a loopback Executor control adapter");
 }
 
 const officialHostRoot = path.join(

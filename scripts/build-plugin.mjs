@@ -39,6 +39,7 @@ await Promise.all([
   build({ ...shared, format: "esm", entryPoints: [path.join(repoRoot, "src", "mcp", "main.ts")], outfile: path.join(distDir, "bridge.mjs") }),
   build({ ...shared, format: "esm", entryPoints: [path.join(repoRoot, "src", "cli", "main.ts")], outfile: path.join(distDir, "task-cli.mjs") }),
   build({ ...shared, format: "esm", entryPoints: [path.join(repoRoot, "src", "executor", "main.ts")], outfile: path.join(distDir, "executor.mjs") }),
+  build({ ...shared, format: "esm", entryPoints: [path.join(repoRoot, "src", "web", "main.ts")], outfile: path.join(distDir, "web-console.mjs") }),
   build({ ...shared, format: "esm", entryPoints: [path.join(repoRoot, "src", "cli", "admin-abandon-held-operation.ts")], outfile: path.join(distDir, "admin-abandon-held-operation.mjs") }),
   build({
     ...shared,

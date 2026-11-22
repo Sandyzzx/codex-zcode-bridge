@@ -55,6 +55,13 @@ PR 3 Task CLI 在同一开发门禁之外至少运行
 `dist/executor.mjs` 的生成物检查。Task CLI 的通过只证明 Control-only 客户端、
 同一 Authority 并发读取和本地打包边界，不替代真实 Desktop 关闭或真实 Runtime E2E。
 
+PR 4 Web Console 的定向集合增加
+`node --test dist-test/test/web-console.test.js` 与
+`test/architecture-boundaries.test.ts` 的 Web 边界用例，以及
+`dist/web-console.mjs` 的生成物/Plugin 校验。HTTP smoke 必须在独立 Executor
+Root 上完成 loopback session、Host/Origin/CSRF 和“关闭 Console 后 Executor
+仍 active”验证；不得用页面成功加载替代 Task/Result/Cleanup 验收。
+
 ## 退役与保留
 
 JSON B3-05 是 TaskStore/TaskManager 的 32 active/10,000 historical 与 JSON event scan 测试，随旧实现删除，不是 SQLite v14 的性能证据。其 695.904s 集成基线只作为历史成本保留。

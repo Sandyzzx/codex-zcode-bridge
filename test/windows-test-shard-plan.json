@@ -213,7 +213,7 @@
     },
     {
       "id": 2,
-      "estimated_ms": 753819,
+      "estimated_ms": 756819,
       "tests": [
         {
           "file": "test/account-provider.test.ts",
@@ -226,6 +226,10 @@
         {
           "file": "test/task-cli.test.ts",
           "estimated_ms": 4000
+        },
+        {
+          "file": "test/web-console.test.ts",
+          "estimated_ms": 3000
         },
         {
           "file": "test/attention-wait.test.ts",

@@ -66,3 +66,15 @@ test("Task CLI delegates task operations to Executor Control and owns no SQLite 
   const taskMethods = source(cli).match(/requestOk\(client, "(?:listTasks|getStatus|getEvents|getResult|cancelTask|replyToInteraction|executorStatus|shutdown)"/gu) ?? [];
   assert.deepEqual(new Set(taskMethods).size, 8);
 });
+
+test("Web Console delegates through Executor Control and owns no Authority or Worker", () => {
+  const forbidden = /(^|\/)(manager|store|worker|adapters|host)\//u;
+  for (const file of sourceFiles("src/web")) assertNoImports(file, forbidden);
+  for (const file of sourceFiles("src/web")) {
+    assert.doesNotMatch(source(file), /SqliteLifecycleMcpAuthority|createProductionAuthorityComposition/u);
+  }
+  const main = source("src/web/main.ts");
+  assert.match(main, /ExecutorControlClient/u);
+  assert.match(main, /RemoteTaskManager/u);
+  assert.match(main, /createTaskConsoleServer/u);
+});

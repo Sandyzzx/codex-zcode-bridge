@@ -1,6 +1,6 @@
 # Bridge Async Execution Architecture v1
 
-> Status: IMPLEMENTED — PR 2.5 CANDIDATE + PR 3 TASK CLI（stacked feature branch；未合入 Preview，不可发布）
+> Status: IMPLEMENTED — PR 2.5 + PR 3 TASK CLI + PR 4 WEB CONSOLE（stacked feature branch；未合入 Preview，不可发布）
 > Decision status: [ADR-045](../decisions/ADR-045-async-executor-ownership.md) = ACCEPTED；本文档记录目标合同与 PR 2/2.5 当前实现边界
 > Date: 2026-11-22（Asia/Shanghai）
 > Baseline: `origin/preview` `1bf039fda2ccfd17a992458a871bddd7b48b38c1`；PR 2 base `f330b511270934fa40014006333aa7747dad684c`；implementation branch `codex/async-executor-pr2.5`
@@ -157,7 +157,7 @@ Named pipe 仍可作为客户端连接提示，但**不是所有权证据**。SQ
 |---|---|---|
 | MCP | 派发、查询、Continue、Cancel、交互回复的协议适配 | 不创建 Manager，不因连接断开取消 Task |
 | CLI | `list/status/events/result/cancel/reply` 管理客户端，以及 `executor start/status/stop` | 不直接打开可写 Store，不实现恢复 |
-| Web | 本地任务可视化、取消、交互回复、状态通知 | 不调度任务、不写 SQLite、不暴露 Shell/文件接口 |
+| Web | 本地任务可视化、取消、交互回复、状态通知；仅 loopback + Origin/CSRF | 不创建 Task、不调用模型、不写 SQLite、不暴露 Shell/SQLite/文件接口、不控制 Executor 生命周期 |
 
 公共 MCP 工具名和 Schema 保持不变；IPC 是 Bridge 内部协议，不新增公共 MCP 工具。
 
@@ -268,7 +268,7 @@ Wake 不新增第二套持久化权威。PR 5 前必须先完成一次 schema �
 | PR 2 | Independent Executor + IPC + Thin MCP | 合成跨进程 Result/Cleanup/Release PASS；真实关闭 Codex 后原 Attempt 仍为 `NOT_RUN / BLOCKED` |
 | PR 2.5 | MCP → Executor → Adapter → ZCode 四层收敛 | Thin MCP 不再构造 Authority；静态依赖边界、MCP schema parity、Executor IPC 与四层 fake Official Runtime E2E PASS；不新增执行路径 |
 | PR 3 | Task CLI + shared Control Client | MCP/CLI 并发读写同一权威；CLI 分发不拥有 SQLite/Manager |
-| PR 4 | Web Console | 本地安全、无模型调用、页面关闭不影响 Task |
+| PR 4 | Web Console | 已实现 loopback/Origin/CSRF、只读 Task/Event/Result、显式 Cancel/Reply；无模型调用、页面关闭不影响独立 Executor |
 | PR 5 | Queue Wake Adapter | 已加载 idle Thread 交付确认；严格 C/D 独立验收 |
 | PR 6 | Async Master Skill & Dispatch Workflow | Master Turn 结束、通知、恢复与独立验收 |
 
@@ -304,6 +304,8 @@ Wake 不新增第二套持久化权威。PR 5 前必须先完成一次 schema �
 | Task CLI 已运行检测 | 已有活动 Executor 不触发第二次 Spawn |
 | Task CLI 历史 Authority transition | 仅显式一次性标志；不能绕过已知活动旧 owner |
 | Task CLI bounded list/Result | Cursor/limit 与 Result stdout 文件预算生效，不直接打开 SQLite |
+| Web Console 本地边界 | 非 loopback/Host/Origin/CSRF 请求拒绝；完整 Result 超过 2 MiB 不截断 |
+| Web Console 生命周期 | 页面/HTTP 关闭不改 Task 或 Executor Lease；只关闭可视化 Adapter |
 
 ### 7.2 五个生命周期 E2E
 
