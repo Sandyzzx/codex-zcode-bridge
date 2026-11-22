@@ -185,7 +185,6 @@ interface ClaimOnlyPort {
     readonly release_reason: "user_authorized_release_unverified";
     readonly cancellation_verification_digest?: string;
     readonly recovery_evidence_digest?: string;
-    readonly authorization_request_digest?: string;
     readonly claim_id?: string;
     readonly result_commit_ref?: string;
     readonly result_digest?: string;
@@ -1410,7 +1409,6 @@ export async function openClaimOnlyDriver(options: ClaimOnlyDriverOptions): Prom
     readonly release_reason: "user_authorized_release_unverified";
     readonly cancellation_verification_digest?: string;
     readonly recovery_evidence_digest?: string;
-    readonly authorization_request_digest?: string;
     readonly claim_id?: string;
     readonly result_commit_ref?: string;
     readonly result_digest?: string;

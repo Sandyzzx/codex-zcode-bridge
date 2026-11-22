@@ -3,7 +3,7 @@
 > Status: DECISION（2026-11-22 集成修订）
 > Date: 2026-11-16；修订 2026-11-21、2026-11-22
 > Decision: 用户要求修复 Host 明确授权取消被 `queued_cancel_launch_already_intended` / `operation_recovery_latched` 阻断的路径。2026-11-21 Owner 最终裁决：用户显式调用现有 `zcode_cancel({task_id})` 优先，可对历史阻塞 Attempt 执行行政释放；默认 Recovery 仍保持保守。本决定不授权生产数据库手改、自动清理或伪造 Cleanup Proof。
-> Baseline: Preview.7 `ec5f3e83d737df469f9ed54361d2aec46b4a15a8`；2026-11-22 终态释放集成基于 Preview `ac1e8396f25a1a1d3ff373def84726d28c1f4193`
+> Baseline: Preview.7 `ec5f3e83d737df469f9ed54361d2aec46b4a15a8`；2026-11-22 终态释放集成基于 Preview `3daffe476b12b3eb16cec957d18422c3ff4c775e`（PR #129 合并后）
 
 ## 决定
 
@@ -14,9 +14,9 @@
 5. 同一 Authority 内同 Task 的并发取消合并为一个 Promise；跨 Host 仍由 Store revision/Claim CAS 仲裁。已有 Result 优先，不能覆盖正常 Result。
 6. 已有 `completed`、`failed`、`waiting_for_master` 或 `cancelled` 终态 Result 且 Operation 停在 `cleanup_unverified` 的历史阻塞，用户显式调用一次 `zcode_cancel` 即进入受控 Recovery。允许行政释放的必要条件是：绑定该 Claim 的精确 Worker 身份已确认 `exited`，recorded-root/claimant 进程树扫描为 clean 且无 live PID；此后仍无法取得 Adapter 的完整 resource closure，才允许追加 `user_authorized_release_unverified` 并 CAS 为 `released`。原 Result、Result digest、Task ID、Prompt、Cleanup 失败事件和既有事件保持不变，不伪造 `cleanup_verified`。`cleanup_identity_unknown` 或仅有 PID 缺失都不足以触发该分支。
 7. 可识别的存活 Worker 仍必须先走现有取消/终止路径。若终止失败、post-stop 身份仍为 Unknown/Alive、存在 live descendant、tree probe 失败或无法完成 clean scan，本次调用不得虚报释放成功，也不得把该状态升级为 Cleanup Verified。行政释放仅限已经终止且树已关闭、但 Adapter resource closure 仍缺失的终态 Operation；不自动清理历史任务、不自动撤销用户代码、不创建新 Task ID。
-8. 行政释放必须原子、幂等，并在释放后调用现有 Scheduler pump，使既有 queued Attempt 继续 Admission。成功证明必须同时包含 SQLite Operation `released` 投影与实际 Admission/派发结果，不能只依赖 `zcode_cancel` 返回值。`zcode_status` 与 Doctor 只读报告 queued Attempt 的阻塞原因、阻塞 Task/Operation、phase、Workspace、排队时长和阻塞时长；尤其不得遗漏 `launch_intent`。
+8. 行政释放必须原子、幂等。本次取消成功只证明 SQLite Operation 已 CAS 为 `released` 且 Capacity/Workspace 占用解除；Manager 随后异步调用现有 Scheduler pump。`zcode_cancel` 响应不是 queued successor 已 Admission/派发的证明。需要重新派发时，必须另行用 `zcode_status`/Doctor 或实际 Admission 证据核对该 queued Attempt 已无 blocker。`zcode_status` 与 Doctor 只读报告阻塞原因、阻塞 Task/Operation、phase、Workspace、排队时长和阻塞时长；尤其不得遗漏 `launch_intent`。
 9. 本修订与 ADR-045 Executor Lease 的单 Authority Writer 原则兼容：所有写入仍由当前唯一 Manager/Store 完成；CLI/Web/Doctor 不得打开第二可写 Authority。
-10. `cleanup_unverified` 行政释放分两类持久绑定。原 `cancelled` Result 绑定 `cancel_id`、`cancellation_verification_digest` 与 `recovery_evidence_digest`；`completed`/`failed`/`waiting_for_master` 终态 Result 绑定原 `result_commit_ref`、`result_digest`、Claim 与 Worker identity digest，并用 `terminal-result-admin-release-v1` 的 canonical authorization digest 连接当前 `recovery_evidence_digest`。后者必须是当前 Operation revision 的 `cleanup_incomplete` Recovery event，带 `complete_cleanup_closure_unavailable`、`process_tree_root_observed=true`、`process_tree_scan_clean=true` 与 scan digest。Store 重开时重建同一 Recovery envelope 并重新校验，不得回退到较早的 eligible proof 绕过更新的 live Hold。相同绑定重复调用返回 durable duplicate；不同取消/Result、Recovery、Revision 或 phase 绑定 fail closed。
+10. 四种终态 Result 的新行政释放使用同一持久绑定：原 `result_commit_ref`、`result_digest`、Claim、Worker identity digest 与当前 Recovery evidence digest。它必须是当前 Operation revision 的 `cleanup_incomplete` Recovery event，带 `complete_cleanup_closure_unavailable`、`process_tree_root_observed=true`、`process_tree_scan_clean=true` 与 scan digest。不新增 authorization digest、authorization state 或按 Result 状态选择用户流程。Store 保留旧 `cancelled` 取消证明（`cancel_id` + `cancellation_verification_digest`）的校验与幂等兼容；当前 MCP Manager 不用它发起新终态释放，历史兼容不构成第二个用户授权流程。Store 重开时重建同一 Recovery envelope 并重新校验，不得回退到较早的 eligible proof 绕过更新的 live Hold。相同绑定重复调用返回 durable duplicate；不同 Result、Recovery、Revision 或 phase 绑定 fail closed。
 11. Recovery Observation 不再受固定 8 条限制。相同 Operation/Claim/phase 且材料事实未变化的重复 probe 只返回既有 Event 与持久 `evidence_digest`，不新增 Revision；`observed_at` 等动态字段不单独构成新事实。身份状态、probe 原因、进程/树证据或 phase 变化必须追加新事件。Cleanup/Cancel 消解超过 8 条 Hold 时使用完整事件集合的 count/root 承诺；旧 digest 数组继续可校验。ADR-039 必须使用 Store 返回的持久 Evidence Digest 绑定行政释放，不能依赖未持久化的新鲜 evidence hash。
 
 ## 验证边界

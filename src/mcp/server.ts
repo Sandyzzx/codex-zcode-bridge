@@ -292,7 +292,7 @@ export function createBridgeServer(options: BridgeServerOptions): McpServer {
     "zcode_cancel",
     {
       title: "Cancel or recover a ZCode task",
-      description: `Cancel queued/running or retry unverified Cleanup. Obtain explicit user authorization. A repeated call may administratively release an already-cancelled historical launch_intent with no durable spawn evidence, or a terminal failed/completed/waiting_for_master/cancelled cleanup_unverified after exact exit and a clean tree while resource closure remains unverified. It never upgrades to cleanup_verified and cannot release a live, unverifiable, or still-running Worker. Held recovery may terminate the recorded Worker without replaying or creating an Attempt. Check Status for Hold and Events for Release. ${EXECUTION_NOT_VERDICT}`,
+      description: `Cancel queued/running or retry unverified Cleanup. One call is the explicit user authorization; state decides the internal action, not user eligibility. It may administratively release an already-cancelled historical launch_intent with no durable spawn evidence, or any terminal failed/completed/waiting_for_master/cancelled cleanup_unverified after exact exit and a clean tree while resource closure remains unverified. It never upgrades to cleanup_verified and cannot release a live, unverifiable, or still-running Worker. Held recovery may terminate the recorded Worker without replaying or creating an Attempt. Check Status for Hold and Events for Release. ${EXECUTION_NOT_VERDICT}`,
       inputSchema: taskIdOnlyInputSchema,
       outputSchema: taskStatusRecordSchema,
     },

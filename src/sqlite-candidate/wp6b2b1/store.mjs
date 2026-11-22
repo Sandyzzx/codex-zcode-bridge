@@ -476,11 +476,11 @@ function validateObservationEventEvidence(value){
     return;
   }
   if(own==='evidence_digest|reason')return;
-  if(own==='authorization_request_digest|claim_id|evidence_digest|reason|recovery_evidence_digest|result_commit_ref|result_digest|worker_identity_digest'){
+  if(own==='claim_id|evidence_digest|reason|recovery_evidence_digest|result_commit_ref|result_digest|worker_identity_digest'){
     const {evidence_digest,...unsigned}=value;
     if(value.reason!=='user_authorized_release_unverified'
-      ||![value.authorization_request_digest,value.recovery_evidence_digest,value.result_digest,
-        value.worker_identity_digest].every(item=>typeof item==='string'&&/^[0-9a-f]{64}$/u.test(item))
+      ||![value.recovery_evidence_digest,value.result_digest,value.worker_identity_digest]
+        .every(item=>typeof item==='string'&&/^[0-9a-f]{64}$/u.test(item))
       ||!validId(value.claim_id)
       ||typeof value.result_commit_ref!=='string'||!/^(?:result-)?[0-9a-f]{64}$/u.test(value.result_commit_ref)
       ||evidence_digest!==digest(unsigned))fail('invalid_user_authorized_release_evidence');
@@ -774,7 +774,7 @@ const ADMIN_ABANDONMENT_INPUT_KEYS='attempt|claim_id|claim_worker_identity_diges
 const ADMIN_ABANDONMENT_EVIDENCE_KEYS='boot_time|claimant_scan_clean|claimant_scan_digest|failed_at|hosts_closed|observed_at|platform_probe_digest|process_inventory_digest|worker_exited|worker_process_id|worker_start_fingerprint|writer_closed';
 const USER_AUTHORIZED_RELEASE_INPUT_KEYS='attempt|cancel_id|generation|operation_id|release_reason|revision|task_id';
 const USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS='attempt|cancel_id|cancellation_verification_digest|generation|operation_id|recovery_evidence_digest|release_reason|revision|task_id';
-const USER_AUTHORIZED_TERMINAL_RELEASE_INPUT_KEYS='attempt|authorization_request_digest|claim_id|generation|operation_id|recovery_evidence_digest|release_reason|result_commit_ref|result_digest|revision|task_id|worker_identity_digest';
+const USER_AUTHORIZED_TERMINAL_RELEASE_INPUT_KEYS='attempt|claim_id|generation|operation_id|recovery_evidence_digest|release_reason|result_commit_ref|result_digest|revision|task_id|worker_identity_digest';
 function validIsoInstant(value){return typeof value==='string'&&Number.isFinite(Date.parse(value));}
 function validateAdminAbandonmentInput(input){
   if(!input||Object.getPrototypeOf(input)!==Object.prototype||Object.keys(input).sort().join('|')!==ADMIN_ABANDONMENT_INPUT_KEYS
@@ -797,24 +797,26 @@ function validateAdminAbandonmentInput(input){
 }
 function validateUserAuthorizedReleaseInput(input){
   const fields=input&&Object.getPrototypeOf(input)===Object.prototype?Object.keys(input).sort().join('|'):'';
-  const terminal=fields===USER_AUTHORIZED_TERMINAL_RELEASE_INPUT_KEYS;
-  const shapeValid=!input||Object.getPrototypeOf(input)!==Object.prototype
-    ||(fields!==USER_AUTHORIZED_RELEASE_INPUT_KEYS&&fields!==USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS
-      &&fields!==USER_AUTHORIZED_TERMINAL_RELEASE_INPUT_KEYS)
-    ||!validId(input.operation_id)||!validId(input.task_id)||(!terminal&&!validId(input.cancel_id))
-    ||!Number.isSafeInteger(input.attempt)||input.attempt<1
-    ||!Number.isSafeInteger(input.generation)||input.generation<1
-    ||!Number.isSafeInteger(input.revision)||input.revision<1
-    ||input.release_reason!=='user_authorized_release_unverified';
-  if(shapeValid&&fields===USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS
-    &&![input.cancellation_verification_digest,input.recovery_evidence_digest]
-      .every(value=>typeof value==='string'&&/^[0-9a-f]{64}$/u.test(value)))fail('invalid_user_authorized_release');
-  if(shapeValid&&terminal&&(![input.authorization_request_digest,input.recovery_evidence_digest,input.result_digest,
-      input.claim_id,input.worker_identity_digest].every(value=>typeof value==='string'
-      &&/^[0-9a-f]{64}$/u.test(value))
+  const validShape=fields===USER_AUTHORIZED_RELEASE_INPUT_KEYS
+    ||fields===USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS
+    ||fields===USER_AUTHORIZED_TERMINAL_RELEASE_INPUT_KEYS;
+  const commonValid=input&&validShape&&validId(input.operation_id)&&validId(input.task_id)
+    &&input.release_reason==='user_authorized_release_unverified'
+    &&[input.attempt,input.generation,input.revision].every(value=>Number.isSafeInteger(value)&&value>=1)
+    &&(fields!==USER_AUTHORIZED_TERMINAL_RELEASE_INPUT_KEYS||validId(input.cancel_id)===false);
+  if(!commonValid)fail('invalid_user_authorized_release');
+  if(fields===USER_AUTHORIZED_RELEASE_INPUT_KEYS&&!validId(input.cancel_id))
+    fail('invalid_user_authorized_release');
+  if(fields===USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS
+    &&(!validId(input.cancel_id)||![input.cancellation_verification_digest,input.recovery_evidence_digest]
+      .every(value=>typeof value==='string'&&/^[0-9a-f]{64}$/u.test(value))))
+    fail('invalid_user_authorized_release');
+  if(fields===USER_AUTHORIZED_TERMINAL_RELEASE_INPUT_KEYS
+    &&(![input.recovery_evidence_digest,input.result_digest,input.worker_identity_digest]
+      .every(value=>typeof value==='string'&&/^[0-9a-f]{64}$/u.test(value))
+    ||!validId(input.claim_id)
     ||typeof input.result_commit_ref!=='string'||!/^(?:result-)?[0-9a-f]{64}$/u.test(input.result_commit_ref)))
     fail('invalid_user_authorized_release');
-  if(shapeValid)fail('invalid_user_authorized_release');
   return input;
 }
 function isBusy(error){return [5,6].includes(error?.errcode)||/SQLITE_(BUSY|LOCKED)/u.test(String(error?.code??''))||/database is (busy|locked)/iu.test(String(error?.message??''));}
@@ -2030,13 +2032,12 @@ export class IsolatedAdmissionStore {
         ||task.status!==expectedStatus||attempt.status!==expectedStatus||attempt.generation!==input.generation)
         fail('user_authorized_release_projection_mismatch');
       const cleanupBinding=input.cancellation_verification_digest!==undefined;
-      const terminalBinding=input.authorization_request_digest!==undefined;
+      const terminalBinding=input.result_digest!==undefined;
       const unsignedEvidence={reason:'user_authorized_release_unverified',
         ...(terminalBinding?{}:{cancel_id:input.cancel_id}),
         ...(cleanupBinding?{cancellation_verification_digest:input.cancellation_verification_digest,
           recovery_evidence_digest:input.recovery_evidence_digest}:{}),
-        ...(terminalBinding?{authorization_request_digest:input.authorization_request_digest,
-          claim_id:input.claim_id,result_commit_ref:input.result_commit_ref,result_digest:input.result_digest,
+        ...(terminalBinding?{claim_id:input.claim_id,result_commit_ref:input.result_commit_ref,result_digest:input.result_digest,
           recovery_evidence_digest:input.recovery_evidence_digest,worker_identity_digest:input.worker_identity_digest}:{})};
       const evidence={...unsignedEvidence,evidence_digest:digest(unsignedEvidence)};
       if(o.phase==='released'){
@@ -2046,7 +2047,6 @@ export class IsolatedAdmissionStore {
           &&parsed?.cancel_id===input.cancel_id
           &&parsed?.cancellation_verification_digest===input.cancellation_verification_digest
           &&parsed?.recovery_evidence_digest===input.recovery_evidence_digest
-          &&parsed?.authorization_request_digest===input.authorization_request_digest
           &&parsed?.claim_id===input.claim_id
           &&parsed?.result_commit_ref===input.result_commit_ref
           &&parsed?.result_digest===input.result_digest
@@ -2061,7 +2061,7 @@ export class IsolatedAdmissionStore {
       const historicalCleanup=o.phase==='cleanup_unverified'&&o.result_digest!==null
         &&['completed','failed','waiting_for_master','cancelled'].includes(o.result_status);
       if(!preClaim&&!historicalCleanup)fail('user_authorized_release_phase_not_allowed');
-      if(historicalCleanup?cleanupBinding===terminalBinding:(cleanupBinding||terminalBinding))
+      if(historicalCleanup?(cleanupBinding===terminalBinding):(cleanupBinding||terminalBinding))
         fail('user_authorized_release_phase_mismatch');
       if(preClaim){
         if(o.launch_receipt_id!==null||o.launch_receipt_digest!==null||o.launch_identity_json!==null)
@@ -2114,11 +2114,6 @@ export class IsolatedAdmissionStore {
           ||resultEvidence.claim_id!==input.claim_id
           ||resultEvidence.worker_identity_digest!==input.worker_identity_digest)
           fail('user_authorized_release_result_identity_mismatch');
-        const expectedAuthorization=digest({contract:'terminal-result-admin-release-v1',
-          operation_id:input.operation_id,task_id:input.task_id,attempt:input.attempt,generation:input.generation,
-          result_digest:input.result_digest,recovery_evidence_digest:input.recovery_evidence_digest});
-        if(input.authorization_request_digest!==expectedAuthorization)
-          fail('user_authorized_release_authorization_mismatch');
         const lifecycle=this.#db.prepare('SELECT * FROM manager_operation_events WHERE operation_id=? ORDER BY sequence').all(input.operation_id)
           .map(event=>{
             try{return {...event,evidence:JSON.parse(event.evidence_json)};}
@@ -3539,20 +3534,16 @@ export class IsolatedAdmissionStore {
                 try{return {event,evidence:JSON.parse(event.evidence_json)};}catch{fail('cleanup_projection_mismatch');}
               });
               const recoveryEvent=parsedEvents.find(item=>item.event.event_type==='observation_recorded'
-                &&item.evidence.evidence_digest===terminalEvidence.recovery_evidence_digest);
-              if(terminalEvidence.authorization_request_digest!==undefined){
+                &&(item.evidence.evidence_digest===terminalEvidence.recovery_evidence_digest
+                ||item.event.evidence_digest===terminalEvidence.recovery_evidence_digest));
+              if(terminalEvidence.result_digest!==undefined){
                 const resultEvent=parsedEvents.find(item=>item.event.event_type==='result_committed'
                   &&item.evidence.result_digest===terminalEvidence.result_digest
                   &&item.evidence.result_commit_ref===terminalEvidence.result_commit_ref);
-                const expectedAuthorization=digest({contract:'terminal-result-admin-release-v1',
-                  operation_id:o.operation_id,task_id:o.task_id,attempt:o.attempt,generation:o.generation,
-                  result_digest:terminalEvidence.result_digest,
-                  recovery_evidence_digest:terminalEvidence.recovery_evidence_digest});
                 administrativeRelease=released.length===0&&unverified.length===1
                   &&terminalEvidence.reason==='user_authorized_release_unverified'
                   &&['completed','failed','waiting_for_master','cancelled'].includes(o.result_status)
                   &&resultEvent!==undefined&&recoveryEvent!==undefined
-                  &&terminalEvidence.authorization_request_digest===expectedAuthorization
                   &&resultEvent.evidence.outcome===o.result_status
                   &&resultEvent.evidence.claim_id===terminalEvidence.claim_id
                   &&resultEvent.evidence.worker_identity_digest===terminalEvidence.worker_identity_digest

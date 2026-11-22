@@ -4177,11 +4177,6 @@ for(const resultStatus of ["completed","failed","waiting_for_master","cancelled"
       const events=port.readLifecycleEvents(operationId) as Array<Record<string,unknown>>;
       const releaseEvidence=JSON.parse(String(events.find(event=>event.event_type==='observation_recorded'
         &&JSON.parse(String(event.evidence_json)).reason==='user_authorized_release_unverified')?.evidence_json)) as Record<string,unknown>;
-      const expectedAuthorization=resultStatus==='cancelled'?undefined:createHash('sha256').update(canonicalTestJson({
-        contract:'terminal-result-admin-release-v1',operation_id:operationId,task_id:taskId,attempt:1,
-        generation:Number(operation.generation),result_digest:String(operation.result_digest),
-        recovery_evidence_digest:String(releaseEvidence.recovery_evidence_digest),
-      }),'utf8').digest('hex');
       assert.equal(operation.phase,'released');
       assert.equal(occupied?.capacity_occupied,false);
       assert.equal(occupied?.cleanup_state,'unverified_admin_release');
@@ -4192,16 +4187,12 @@ for(const resultStatus of ["completed","failed","waiting_for_master","cancelled"
       assert.equal(events.some(event=>event.event_type==='cleanup_verified'),false);
       assert.equal(events.filter(event=>event.event_type==='observation_recorded'
         &&JSON.parse(String(event.evidence_json)).reason==='user_authorized_release_unverified').length,1);
-      if(resultStatus==='cancelled'){
-        assert.equal(typeof releaseEvidence.cancel_id,'string');
-        assert.equal(typeof releaseEvidence.cancellation_verification_digest,'string');
-      }else{
-        assert.equal(releaseEvidence.authorization_request_digest,expectedAuthorization);
-        assert.equal(releaseEvidence.result_digest,committed?.result_digest);
-        assert.equal(releaseEvidence.result_commit_ref,committed?.result_commit_ref);
-        assert.equal(typeof releaseEvidence.claim_id,'string');
-        assert.equal(typeof releaseEvidence.worker_identity_digest,'string');
-      }
+      assert.equal(releaseEvidence.result_digest,committed?.result_digest);
+      assert.equal(releaseEvidence.result_commit_ref,committed?.result_commit_ref);
+      assert.equal(typeof releaseEvidence.claim_id,'string');
+      assert.equal(typeof releaseEvidence.worker_identity_digest,'string');
+      assert.equal(releaseEvidence.cancel_id,undefined);
+      assert.equal(releaseEvidence.cancellation_verification_digest,undefined);
     }finally{reader.close();}
     const unblocked=contentObject(await client.callTool({name:'zcode_status',arguments:{task_id:queuedTaskId}}));
     assert.equal(unblocked.dispatch_blocker,undefined);

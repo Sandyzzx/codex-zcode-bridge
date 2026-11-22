@@ -447,20 +447,20 @@ test('terminal non-cancelled Result release binds the original Result, CAS, idem
   const f=cancelledCleanupFixture('terminal-admin-release','completed'),proof=cleanupReleaseRecovery(f.store);
   verifiedRecoveryPort(f.store).recordRecoveryObservation(proof.input,proof.evidence);
   const operation=f.store.readOperation('operation-result');
-  const authorization_request_digest=digest({contract:'terminal-result-admin-release-v1',
-    operation_id:operation.operation_id,task_id:operation.task_id,attempt:operation.attempt,
-    generation:operation.generation,result_digest:operation.result_digest,
-    recovery_evidence_digest:proof.input.evidence_digest});
   const request={operation_id:operation.operation_id,task_id:operation.task_id,attempt:operation.attempt,
     generation:operation.generation,revision:operation.revision,
-    release_reason:'user_authorized_release_unverified',authorization_request_digest,
+    release_reason:'user_authorized_release_unverified',
     claim_id:operation.claim_id,result_commit_ref:operation.result_commit_ref,
     result_digest:operation.result_digest,recovery_evidence_digest:proof.input.evidence_digest,
     worker_identity_digest:operation.claim_worker_identity_digest};
   capture(()=>f.store.userAuthorizedReleaseUnverifiedOperation({...request,revision:operation.revision-1}),
     'stale_user_authorized_release_cas');
   capture(()=>f.store.userAuthorizedReleaseUnverifiedOperation(
-    {...request,authorization_request_digest:'0'.repeat(64)}),'user_authorized_release_authorization_mismatch');
+    {...request,extra_field:'rejected'}),'invalid_user_authorized_release');
+  capture(()=>f.store.userAuthorizedReleaseUnverifiedOperation(
+    {...request,worker_identity_digest:'not-a-digest'}),'invalid_user_authorized_release');
+  capture(()=>f.store.userAuthorizedReleaseUnverifiedOperation(
+    {...request,result_digest:'0'.repeat(64)}),'user_authorized_release_result_identity_mismatch');
   const first=f.store.userAuthorizedReleaseUnverifiedOperation(request);
   const duplicate=f.store.userAuthorizedReleaseUnverifiedOperation(request);
   assert.equal(first.duplicate,false);assert.equal(first.cleanup_verified,false);
@@ -477,6 +477,29 @@ test('terminal non-cancelled Result release binds the original Result, CAS, idem
     assert.equal(readRows(f.root).events.filter(event=>event.event_type==='result_committed').length,1);
     assert.equal(readRows(f.root).events.filter(event=>event.event_type==='cleanup_verified').length,0);
     assert.equal(readRows(f.root).task.status,'completed');
+  }finally{reopened.close();}
+});
+
+test('terminal release accepts the persisted Recovery event digest across reopen',()=>{
+  const f=cancelledCleanupFixture('terminal-admin-release-event-digest','completed'),proof=cleanupReleaseRecovery(f.store);
+  verifiedRecoveryPort(f.store).recordRecoveryObservation(proof.input,proof.evidence);
+  const operation=f.store.readOperation('operation-result');
+  const recoveryEvent=readRows(f.root).events.filter(event=>event.operation_id===operation.operation_id
+    &&event.event_type==='observation_recorded'&&JSON.parse(event.evidence_json).reason==='recovery_hold').at(-1);
+  const request={operation_id:operation.operation_id,task_id:operation.task_id,attempt:operation.attempt,
+    generation:operation.generation,revision:operation.revision,release_reason:'user_authorized_release_unverified',
+    claim_id:operation.claim_id,result_commit_ref:operation.result_commit_ref,
+    result_digest:operation.result_digest,recovery_evidence_digest:recoveryEvent.evidence_digest,
+    worker_identity_digest:operation.claim_worker_identity_digest};
+  const first=f.store.userAuthorizedReleaseUnverifiedOperation(request);
+  const duplicate=f.store.userAuthorizedReleaseUnverifiedOperation(request);
+  assert.equal(first.duplicate,false);assert.equal(duplicate.duplicate,true);
+  f.store.close();
+  const reopened=IsolatedAdmissionStore.openForRecovery(f.root);
+  try{
+    const snapshot=reopened.readRecoverySnapshot(),released=snapshot.operations.find(item=>item.operation_id===operation.operation_id);
+    assert.equal(snapshot.root_status,'consistent_read_only');assert.equal(released.phase,'released');
+    assert.equal(released.cleanup_state,'unverified_admin_release');
   }finally{reopened.close();}
 });
 

@@ -1622,14 +1622,9 @@ function validateObservationEventEvidence(value) {
     return;
   }
   if (own === "evidence_digest|reason") return;
-  if (own === "authorization_request_digest|claim_id|evidence_digest|reason|recovery_evidence_digest|result_commit_ref|result_digest|worker_identity_digest") {
+  if (own === "claim_id|evidence_digest|reason|recovery_evidence_digest|result_commit_ref|result_digest|worker_identity_digest") {
     const { evidence_digest, ...unsigned } = value;
-    if (value.reason !== "user_authorized_release_unverified" || ![
-      value.authorization_request_digest,
-      value.recovery_evidence_digest,
-      value.result_digest,
-      value.worker_identity_digest
-    ].every((item) => typeof item === "string" && /^[0-9a-f]{64}$/u.test(item)) || !validId(value.claim_id) || typeof value.result_commit_ref !== "string" || !/^(?:result-)?[0-9a-f]{64}$/u.test(value.result_commit_ref) || evidence_digest !== digest(unsigned)) fail2("invalid_user_authorized_release_evidence");
+    if (value.reason !== "user_authorized_release_unverified" || ![value.recovery_evidence_digest, value.result_digest, value.worker_identity_digest].every((item) => typeof item === "string" && /^[0-9a-f]{64}$/u.test(item)) || !validId(value.claim_id) || typeof value.result_commit_ref !== "string" || !/^(?:result-)?[0-9a-f]{64}$/u.test(value.result_commit_ref) || evidence_digest !== digest(unsigned)) fail2("invalid_user_authorized_release_evidence");
     return;
   }
   if (own === "cancel_id|evidence_digest|reason" || own === "cancel_id|cancellation_verification_digest|evidence_digest|reason|recovery_evidence_digest") {
@@ -1890,7 +1885,7 @@ var ADMIN_ABANDONMENT_INPUT_KEYS = "attempt|claim_id|claim_worker_identity_diges
 var ADMIN_ABANDONMENT_EVIDENCE_KEYS = "boot_time|claimant_scan_clean|claimant_scan_digest|failed_at|hosts_closed|observed_at|platform_probe_digest|process_inventory_digest|worker_exited|worker_process_id|worker_start_fingerprint|writer_closed";
 var USER_AUTHORIZED_RELEASE_INPUT_KEYS = "attempt|cancel_id|generation|operation_id|release_reason|revision|task_id";
 var USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS = "attempt|cancel_id|cancellation_verification_digest|generation|operation_id|recovery_evidence_digest|release_reason|revision|task_id";
-var USER_AUTHORIZED_TERMINAL_RELEASE_INPUT_KEYS = "attempt|authorization_request_digest|claim_id|generation|operation_id|recovery_evidence_digest|release_reason|result_commit_ref|result_digest|revision|task_id|worker_identity_digest";
+var USER_AUTHORIZED_TERMINAL_RELEASE_INPUT_KEYS = "attempt|claim_id|generation|operation_id|recovery_evidence_digest|release_reason|result_commit_ref|result_digest|revision|task_id|worker_identity_digest";
 function validIsoInstant(value) {
   return typeof value === "string" && Number.isFinite(Date.parse(value));
 }
@@ -1906,18 +1901,15 @@ function validateAdminAbandonmentInput(input) {
 }
 function validateUserAuthorizedReleaseInput(input) {
   const fields = input && Object.getPrototypeOf(input) === Object.prototype ? Object.keys(input).sort().join("|") : "";
-  const terminal = fields === USER_AUTHORIZED_TERMINAL_RELEASE_INPUT_KEYS;
-  const shapeValid = !input || Object.getPrototypeOf(input) !== Object.prototype || fields !== USER_AUTHORIZED_RELEASE_INPUT_KEYS && fields !== USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS && fields !== USER_AUTHORIZED_TERMINAL_RELEASE_INPUT_KEYS || !validId(input.operation_id) || !validId(input.task_id) || !terminal && !validId(input.cancel_id) || !Number.isSafeInteger(input.attempt) || input.attempt < 1 || !Number.isSafeInteger(input.generation) || input.generation < 1 || !Number.isSafeInteger(input.revision) || input.revision < 1 || input.release_reason !== "user_authorized_release_unverified";
-  if (shapeValid && fields === USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS && ![input.cancellation_verification_digest, input.recovery_evidence_digest].every((value) => typeof value === "string" && /^[0-9a-f]{64}$/u.test(value))) fail2("invalid_user_authorized_release");
-  if (shapeValid && terminal && (![
-    input.authorization_request_digest,
-    input.recovery_evidence_digest,
-    input.result_digest,
-    input.claim_id,
-    input.worker_identity_digest
-  ].every((value) => typeof value === "string" && /^[0-9a-f]{64}$/u.test(value)) || typeof input.result_commit_ref !== "string" || !/^(?:result-)?[0-9a-f]{64}$/u.test(input.result_commit_ref)))
+  const validShape = fields === USER_AUTHORIZED_RELEASE_INPUT_KEYS || fields === USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS || fields === USER_AUTHORIZED_TERMINAL_RELEASE_INPUT_KEYS;
+  const commonValid = input && validShape && validId(input.operation_id) && validId(input.task_id) && input.release_reason === "user_authorized_release_unverified" && [input.attempt, input.generation, input.revision].every((value) => Number.isSafeInteger(value) && value >= 1) && (fields !== USER_AUTHORIZED_TERMINAL_RELEASE_INPUT_KEYS || validId(input.cancel_id) === false);
+  if (!commonValid) fail2("invalid_user_authorized_release");
+  if (fields === USER_AUTHORIZED_RELEASE_INPUT_KEYS && !validId(input.cancel_id))
     fail2("invalid_user_authorized_release");
-  if (shapeValid) fail2("invalid_user_authorized_release");
+  if (fields === USER_AUTHORIZED_CLEANUP_RELEASE_INPUT_KEYS && (!validId(input.cancel_id) || ![input.cancellation_verification_digest, input.recovery_evidence_digest].every((value) => typeof value === "string" && /^[0-9a-f]{64}$/u.test(value))))
+    fail2("invalid_user_authorized_release");
+  if (fields === USER_AUTHORIZED_TERMINAL_RELEASE_INPUT_KEYS && (![input.recovery_evidence_digest, input.result_digest, input.worker_identity_digest].every((value) => typeof value === "string" && /^[0-9a-f]{64}$/u.test(value)) || !validId(input.claim_id) || typeof input.result_commit_ref !== "string" || !/^(?:result-)?[0-9a-f]{64}$/u.test(input.result_commit_ref)))
+    fail2("invalid_user_authorized_release");
   return input;
 }
 function isBusy(error) {
@@ -3512,7 +3504,7 @@ var IsolatedAdmissionStore = class _IsolatedAdmissionStore {
       if (!task || !attempt || task.current_attempt !== input.attempt || task.status !== expectedStatus || attempt.status !== expectedStatus || attempt.generation !== input.generation)
         fail2("user_authorized_release_projection_mismatch");
       const cleanupBinding = input.cancellation_verification_digest !== void 0;
-      const terminalBinding = input.authorization_request_digest !== void 0;
+      const terminalBinding = input.result_digest !== void 0;
       const unsignedEvidence = {
         reason: "user_authorized_release_unverified",
         ...terminalBinding ? {} : { cancel_id: input.cancel_id },
@@ -3521,7 +3513,6 @@ var IsolatedAdmissionStore = class _IsolatedAdmissionStore {
           recovery_evidence_digest: input.recovery_evidence_digest
         } : {},
         ...terminalBinding ? {
-          authorization_request_digest: input.authorization_request_digest,
           claim_id: input.claim_id,
           result_commit_ref: input.result_commit_ref,
           result_digest: input.result_digest,
@@ -3538,7 +3529,7 @@ var IsolatedAdmissionStore = class _IsolatedAdmissionStore {
         } catch {
           parsed = null;
         }
-        if (released && released.sequence === o.revision && parsed?.reason === "user_authorized_release_unverified" && parsed?.cancel_id === input.cancel_id && parsed?.cancellation_verification_digest === input.cancellation_verification_digest && parsed?.recovery_evidence_digest === input.recovery_evidence_digest && parsed?.authorization_request_digest === input.authorization_request_digest && parsed?.claim_id === input.claim_id && parsed?.result_commit_ref === input.result_commit_ref && parsed?.result_digest === input.result_digest && parsed?.worker_identity_digest === input.worker_identity_digest && parsed?.evidence_digest === evidence.evidence_digest)
+        if (released && released.sequence === o.revision && parsed?.reason === "user_authorized_release_unverified" && parsed?.cancel_id === input.cancel_id && parsed?.cancellation_verification_digest === input.cancellation_verification_digest && parsed?.recovery_evidence_digest === input.recovery_evidence_digest && parsed?.claim_id === input.claim_id && parsed?.result_commit_ref === input.result_commit_ref && parsed?.result_digest === input.result_digest && parsed?.worker_identity_digest === input.worker_identity_digest && parsed?.evidence_digest === evidence.evidence_digest)
           return {
             duplicate: true,
             operation_id: o.operation_id,
@@ -3611,17 +3602,6 @@ var IsolatedAdmissionStore = class _IsolatedAdmissionStore {
         }
         if (!resultEvent || !resultEvidence || resultEvidence.outcome !== o.result_status || resultEvidence.result_commit_ref !== input.result_commit_ref || resultEvidence.result_digest !== input.result_digest || resultEvidence.claim_id !== input.claim_id || resultEvidence.worker_identity_digest !== input.worker_identity_digest)
           fail2("user_authorized_release_result_identity_mismatch");
-        const expectedAuthorization = digest({
-          contract: "terminal-result-admin-release-v1",
-          operation_id: input.operation_id,
-          task_id: input.task_id,
-          attempt: input.attempt,
-          generation: input.generation,
-          result_digest: input.result_digest,
-          recovery_evidence_digest: input.recovery_evidence_digest
-        });
-        if (input.authorization_request_digest !== expectedAuthorization)
-          fail2("user_authorized_release_authorization_mismatch");
         const lifecycle = this.#db.prepare("SELECT * FROM manager_operation_events WHERE operation_id=? ORDER BY sequence").all(input.operation_id).map((event) => {
           try {
             return { ...event, evidence: JSON.parse(event.evidence_json) };
@@ -5564,19 +5544,10 @@ var IsolatedAdmissionStore = class _IsolatedAdmissionStore {
                   fail2("cleanup_projection_mismatch");
                 }
               });
-              const recoveryEvent = parsedEvents.find((item) => item.event.event_type === "observation_recorded" && item.evidence.evidence_digest === terminalEvidence.recovery_evidence_digest);
-              if (terminalEvidence.authorization_request_digest !== void 0) {
+              const recoveryEvent = parsedEvents.find((item) => item.event.event_type === "observation_recorded" && (item.evidence.evidence_digest === terminalEvidence.recovery_evidence_digest || item.event.evidence_digest === terminalEvidence.recovery_evidence_digest));
+              if (terminalEvidence.result_digest !== void 0) {
                 const resultEvent2 = parsedEvents.find((item) => item.event.event_type === "result_committed" && item.evidence.result_digest === terminalEvidence.result_digest && item.evidence.result_commit_ref === terminalEvidence.result_commit_ref);
-                const expectedAuthorization = digest({
-                  contract: "terminal-result-admin-release-v1",
-                  operation_id: o.operation_id,
-                  task_id: o.task_id,
-                  attempt: o.attempt,
-                  generation: o.generation,
-                  result_digest: terminalEvidence.result_digest,
-                  recovery_evidence_digest: terminalEvidence.recovery_evidence_digest
-                });
-                administrativeRelease = released.length === 0 && unverified.length === 1 && terminalEvidence.reason === "user_authorized_release_unverified" && ["completed", "failed", "waiting_for_master", "cancelled"].includes(o.result_status) && resultEvent2 !== void 0 && recoveryEvent !== void 0 && terminalEvidence.authorization_request_digest === expectedAuthorization && resultEvent2.evidence.outcome === o.result_status && resultEvent2.evidence.claim_id === terminalEvidence.claim_id && resultEvent2.evidence.worker_identity_digest === terminalEvidence.worker_identity_digest && recoveryEvent.event.sequence === terminal.sequence - 1 && recoveryEvent.evidence.reason === "recovery_hold" && recoveryEvent.evidence.task_id === o.task_id && recoveryEvent.evidence.attempt === o.attempt && recoveryEvent.evidence.expected_revision === terminal.sequence - 2 && recoveryEvent.evidence.claim_id === o.claim_id && recoveryEvent.evidence.worker_identity_digest === o.claim_worker_identity_digest && recoveryEvent.evidence.reason_code === "cleanup_incomplete" && recoveryEvent.evidence.recovery_disposition === "complete_cleanup_closure_unavailable" && recoveryEvent.evidence.process_tree_scan_clean === true && recoveryEvent.evidence.process_tree_root_observed === true;
+                administrativeRelease = released.length === 0 && unverified.length === 1 && terminalEvidence.reason === "user_authorized_release_unverified" && ["completed", "failed", "waiting_for_master", "cancelled"].includes(o.result_status) && resultEvent2 !== void 0 && recoveryEvent !== void 0 && resultEvent2.evidence.outcome === o.result_status && resultEvent2.evidence.claim_id === terminalEvidence.claim_id && resultEvent2.evidence.worker_identity_digest === terminalEvidence.worker_identity_digest && recoveryEvent.event.sequence === terminal.sequence - 1 && recoveryEvent.evidence.reason === "recovery_hold" && recoveryEvent.evidence.task_id === o.task_id && recoveryEvent.evidence.attempt === o.attempt && recoveryEvent.evidence.expected_revision === terminal.sequence - 2 && recoveryEvent.evidence.claim_id === o.claim_id && recoveryEvent.evidence.worker_identity_digest === o.claim_worker_identity_digest && recoveryEvent.evidence.reason_code === "cleanup_incomplete" && recoveryEvent.evidence.recovery_disposition === "complete_cleanup_closure_unavailable" && recoveryEvent.evidence.process_tree_scan_clean === true && recoveryEvent.evidence.process_tree_root_observed === true;
               } else {
                 const verification = parsedEvents.find((item) => item.event.event_type === "observation_recorded" && item.event.evidence_digest === terminalEvidence.cancellation_verification_digest);
                 const resultEvent2 = parsedEvents.find((item) => item.event.event_type === "result_committed" && item.event.evidence_digest && item.evidence.cancel_verification_digest === terminalEvidence.cancellation_verification_digest);
