@@ -120,6 +120,8 @@ current evidence includes:
   24/24 PASS.
 - `npm run test:affected -- --force-full --development`: T0 PASS and ended
   with `FULL_SUITE_DEFERRED_TO_RELEASE_GATE`; this is not a full-suite PASS.
+- The first pushed workflow exposed an unquoted YAML `run` scalar containing
+  a colon. The two deferral messages are now quoted, and `actionlint` passes.
 
 The Owner clarified that PR 2 is only one part of the Executor chain. The
 complete local regression and complete Windows/Ubuntu/stress CI are therefore

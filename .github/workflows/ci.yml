@@ -193,7 +193,7 @@ jobs:
       - name: Full Windows suite deferred
         if: github.event_name != 'push' && needs.impact.outputs.release_required != 'true'
         shell: bash
-        run: echo "FULL_SUITE_DEFERRED_TO_RELEASE_GATE: Windows shards did not run in the development gate."
+        run: 'echo "FULL_SUITE_DEFERRED_TO_RELEASE_GATE: Windows shards did not run in the development gate."'
 
   release:
     name: Verify (ubuntu-latest)
@@ -228,7 +228,7 @@ jobs:
       - name: Full Ubuntu suite deferred
         if: github.event_name != 'push' && needs.impact.outputs.release_required != 'true'
         shell: bash
-        run: echo "FULL_SUITE_DEFERRED_TO_RELEASE_GATE: Ubuntu complete regression did not run in the development gate."
+        run: 'echo "FULL_SUITE_DEFERRED_TO_RELEASE_GATE: Ubuntu complete regression did not run in the development gate."'
 
   windows-result:
     name: Verify (windows-2022)
