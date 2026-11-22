@@ -2,7 +2,7 @@
 
 > Status: IMPLEMENTED — PR 2–6 CANDIDATE（architecture accepted；release blocked）
 > Date: 2026-11-22
-> Review baseline: `origin/preview` `c941f578ec00834ab0e93f235134d24bf14a827a` + PR #131 candidate `02a9e81198cffc5b90077eaba00b5abbfd40f640`; earlier C1 evidence candidate `8f83bd340f1d6f31ddac12360583257969bb5863`; historical full-matrix candidate `c75c34330287266702cab5949662bf897b74ed5a`
+> Review baseline: `origin/preview` `8ee7ec93a82c2093dce74707a9d1937c1c567887` + PR #131 final integration candidate `7ab652baac606fedfa3e86c6db08e7892df122f7` (Web implementation/evidence `02a9e81198cffc5b90077eaba00b5abbfd40f640`); earlier C1 evidence candidate `8f83bd340f1d6f31ddac12360583257969bb5863`; historical full-matrix candidate `c75c34330287266702cab5949662bf897b74ed5a`
 
 ## Verdict
 
@@ -15,8 +15,9 @@ candidate 已加入 Control-only CLI、loopback Web、fail-closed Wake 与 Async
 Master Handoff。历史候选 `c75c3433` 已通过 1060 项本地完整回归
 （1058 pass / 0 fail / 2 skip）与 4/4 注册压力矩阵；PR #131 已整合最新
 Preview，新增 Console 动态发现/CAS 复用、Task Deep Link 和
-Result pending 独立显示。最终集成候选 `02a9e811` 重新通过 92/92 项定向测试
-与真实 MCP Host / Executor / Console / Chromium + synthetic Worker 的 C1 E2E。
+Result pending 独立显示。Preview.13 最终集成候选 `7ab652ba` 重新通过
+92/92 项定向测试与真实 MCP Host / Executor / Console / Chromium +
+synthetic Worker 的 C1 E2E。
 当前结论仍为
 `PARTIAL / BLOCKED`：真实 Codex Desktop 关闭、严格 Wake C/D、真实 Queue
 ACK/Turn/Master、真实 Official Runtime 和真实模型 Skill 遵循率仍未运行；
@@ -97,7 +98,7 @@ PR #131 保持 open，最终 Release Gate 尚须在文档更新后的候选上�
 | Async Master Handoff | `PASS — CONTRACT / MODEL NOT_RUN` | deterministic Skill decision contract；真实 Host 模型遵循率、真实 Wake 恢复与 Desktop visible 未验证 |
 | Historical unified local release gate | `PASS — LOCAL` | Windows 1060 项完整回归、4/4 压力矩阵、生成物与插件校验通过（`c75c3433`） |
 | Unified GitHub release gate | `PASS — EXACT HEAD` | `3a238ee8` 的 [CI run 45024250578](https://github.com/Sandyzzx/codex-zcode-bridge/actions/runs/45024250578) 成功；这是该已验证提交的 CI 事实，不替代真实 Desktop/Wake/Official Runtime 验收 |
-| Current web/real-process acceptance | `PASS — REAL PROCESS / SYNTHETIC WORKER` | `02a9e811` 在最终 Preview 合并后重跑定向测试 92/92，并重新完成 C1 浏览器/进程/Result/Cleanup/Release；真实 Desktop/Wake/Official Runtime 仍 `BLOCKED` |
+| Current web/real-process acceptance | `PASS — REAL PROCESS / SYNTHETIC WORKER` | `7ab652ba` 在 Preview.13 合并后重跑定向测试 92/92，并重新完成 C1 浏览器/进程/Result/Cleanup/Release；真实 Desktop/Wake/Official Runtime 仍 `BLOCKED` |
 | Current final Release Gate | `NOT_RUN` | 文档更新后必须在最终候选上运行；历史 `3a238ee8` 结果不能继承 |
 | Root-exited shutdown race | `PASS — DETERMINISTIC + FULL REGRESSION` | 仅精确 `process_tree_root_exited` 可由 fresh exact probe 加原 recorded-tree clean proof 收敛；定向 20/20、负载 12/12、composition 67/67 |
 

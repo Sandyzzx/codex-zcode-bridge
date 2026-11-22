@@ -2,20 +2,20 @@
 
 > Status: RESEARCH
 > Date: 2026-11-22 (Asia/Shanghai)
-> Latest integrated Preview: `origin/preview@c941f578ec00834ab0e93f235134d24bf14a827a`
-> C1 evidence candidate: `02a9e81198cffc5b90077eaba00b5abbfd40f640`
+> Latest integrated Preview: `origin/preview@8ee7ec93a82c2093dce74707a9d1937c1c567887` (Preview.13)
+> C1 evidence candidate: `7ab652baac606fedfa3e86c6db08e7892df122f7`
 > Pull request: [#131](https://github.com/Sandyzzx/codex-zcode-bridge/pull/131), open
 > Conclusion: `PARTIAL / BLOCKED`
 > Paid model requests during this acceptance: `0`
 
 ## Verdict
 
-Phase A is implemented and the merged candidate passes the affected local
-targeted set. The Web Console now has an Authority-Root discovery record, an
-actual dynamic loopback URL, Task Deep Links, and independent Status / Events /
-Result / Attention reads. The shipped `task console-url` command either returns
-a URL verified against the live Executor lease and Console session or fails
-closed.
+Phase A is implemented and the Preview.13 integration candidate passes the
+affected local targeted set. The Web Console now has an Authority-Root
+discovery record, an actual dynamic loopback URL, Task Deep Links, and
+independent Status / Events / Result / Attention reads. The shipped
+`task console-url` command either returns a URL verified against the live
+Executor lease and Console session or fails closed.
 
 C1 also passes with a stronger boundary than the earlier unit-only evidence:
 
@@ -90,13 +90,13 @@ Authority or credentials and made no model request.
 
 | Fact | Result |
 |---|---|
-| Executor process | PASS, PID `7512`, lease `d54ee862-5417-4ac3-b195-d5a867caa5b3` |
-| Web Console process | PASS, PID `17600`, dynamic port `56904` |
-| Shipped MCP Host | PASS, real process PID `20256` |
-| Synthetic Worker | PASS, real process PID `22864` |
-| Task | `web-e2e-1795359276802` |
+| Executor process | PASS, PID `24132`, lease `3d849f89-7998-4d83-aa19-7bce56dd6f9b` |
+| Web Console process | PASS, PID `21092`, dynamic port `20768` |
+| Shipped MCP Host | PASS, real process PID `17136` |
+| Synthetic Worker | PASS, real process PID `26980` |
+| Task | `web-e2e-1795360265130` |
 | Initial Task state | `QUEUED`; Attempt `1` |
-| Verified Deep Link | `http://127.0.0.1:56904/?task_id=web-e2e-1795359276802` |
+| Verified Deep Link | `http://127.0.0.1:20768/?task_id=web-e2e-1795360265130` |
 | Browser | headless Chromium; real HTTP page and DOM assertions |
 | Running page | Status/Events visible; Result displayed pending |
 | Completed page | `COMPLETED`; Wake `web_notify`; Hold `not observed`; Result visible |
@@ -104,7 +104,7 @@ Authority or credentials and made no model request.
 | Executor after Host exit | `ACTIVE`, same lease |
 | Web Console after Host exit | same process alive and browser still `ACTIVE` |
 | Final Task state | `completed`, Attempt `1` |
-| Original Result digest | `0d42aa7523692fdd59bec1bc8bcebddf53d5a15c0a5a5c5a17852a8ba2cc5a00` |
+| Original Result digest | `54403f582bd663bb6abe0f0419ab34bf0da582ccf933b9b0fe91cedb7f1bea93` |
 | `result_committed` | exactly `1` |
 | `cleanup_verified` | exactly `1` |
 | `released` | exactly `1` |
@@ -115,21 +115,20 @@ Authority or credentials and made no model request.
 The URL above was live during the test and was verified by
 `task console-url`, `/api/session`, the browser navigation, and the rendered
 page. The test-owned Console and Executor were then shut down. A post-test
-check found none of the four test PIDs and no listener on port `56904`.
+check found none of the four test PIDs and no listener on port `20768`.
 Screenshots preserve the running and completed views:
 
 - `.run/async-executor-web-e2e-20261122/web-running.png`
 - `.run/async-executor-web-e2e-20261122/web-completed.png`
 - `.run/async-executor-web-e2e-20261122/evidence.json`
-- `.run/async-executor-web-e2e-20261122/targeted-current-02a9e811.log`
-- `.run/async-executor-web-e2e-20261122/c1-merged-c941-final.log`
+- `.run/async-executor-web-e2e-20261122/targeted-preview13-integration.log`
+- `.run/async-executor-web-e2e-20261122/c1-preview13-exact-head.log`
 
 The pre-merge evidence remains preserved separately as
-`evidence-premerge-8f83bd34.json` and the `*-premerge-8f83bd34.png` files. The
-first merged rerun was also preserved as `evidence-merged-c941-initial.json`
-because its screenshot raced one Console polling cycle before Wake became
-visible; the final rerun waits for the rendered `completed + web_notify +
-released` state and is the C1 evidence above.
+`evidence-preview13-premerge-02a9e811.json` and the corresponding
+`*-preview13-premerge-02a9e811.png` files. The final rerun waits for the
+rendered `completed + web_notify + released` state and is the C1 evidence
+above.
 
 The Wake fact produced after Release was `web_notify` with reason
 `policy_missing`, `thread_id=null`. It is durable SQLite v14 evidence and the
@@ -213,9 +212,12 @@ Notify.
 ## Preview Integration
 
 The branch was first merged with Preview `3daffe476` through merge commit
-`8f83bd340f1d6f31ddac12360583257969bb5863`, then integrated with the latest
-Preview `c941f578` (terminal Result administrative release unification). The
-resulting candidate is `02a9e81198cffc5b90077eaba00b5abbfd40f640`.
+`8f83bd340f1d6f31ddac12360583257969bb5863`, then integrated with Preview.12
+`c941f578`, producing Web implementation/evidence candidate
+`02a9e81198cffc5b90077eaba00b5abbfd40f640`. It was finally merged with the
+current Preview.13 baseline
+`8ee7ec93a82c2093dce74707a9d1937c1c567887`, producing merge candidate
+`7ab652baac606fedfa3e86c6db08e7892df122f7`.
 
 The integrated Preview deltas were:
 
@@ -226,6 +228,9 @@ The integrated Preview deltas were:
 - the Worker and plugin bundles are rebuilt from the merged source;
 - the current Executor, IPC, Thin MCP, Web, Skill, Result Recovery, and
   architecture tests were rerun or bounded as described below.
+- Preview.13 changed package/manifests/bundles and `SERVER_VERSION` to
+  `2.0.0-preview.13`; the merged source retains all PR #131 changes and the
+  Preview.12 terminal-Result release semantics.
 
 No upstream Token Efficiency or terminal-Result release implementation was
 overwritten.
@@ -240,13 +245,13 @@ overwritten.
 | `npm run check:generated` | `PASS`, 13 files fresh |
 | `npm run validate:plugin` | `PASS` |
 | `git diff --check` | `PASS` |
-| Current `02a9e811` primary targeted set | `92/92 PASS`, 0 fail |
+| Current `7ab652ba` merge-tree primary targeted set | `92/92 PASS`, 0 fail |
 | Merged Result/Cleanup/Recovery composition set | `269/269 non-Skill PASS`; the only failure in the 279-test run was the now-corrected Skill wording contract |
 | Skill contract rerun after wording correction | `10/10 PASS` |
 | C1 real process + real browser + synthetic Worker | `PASS — REAL PROCESS / SYNTHETIC WORKER` |
 | Paid model requests | `0` |
 | Full local Release Gate | `NOT_RUN` at this report revision |
-| GitHub exact-head Release Gate | `NOT_RUN` at this report revision |
+| GitHub exact-head Release Gate | `NOT_RUN` at this report revision; final docs-only descendant still requires one Release Gate |
 
 The 92-test targeted set covers AgentReport parsing, architecture boundaries,
 Executor IPC/lease/process, Wake fail-closed behavior, Thin MCP, Task CLI, Web
@@ -270,8 +275,9 @@ MCP -> Executor -> Adapter -> ZCode
 
 Required follow-up:
 
-1. After the documentation-only index update, run the exact-candidate GitHub
-   Release Gate; record any failed job without widening the architecture.
+1. After the documentation-only status update, run exactly one GitHub Release
+   Gate on the final PR head; record any failed job without widening the
+   architecture.
 2. With separate authorization, run one isolated loaded/idle Queue Turn and
    record ACK, Turn start, Master response, and Desktop visibility separately.
 3. With separate Official Runtime authorization, run one minimal real Task and

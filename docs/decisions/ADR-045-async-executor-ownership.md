@@ -1,12 +1,12 @@
 # ADR-045：独立 Async Executor 所有权
 
 > Status: ACCEPTED（Owner 条件批准；架构方向已接受）
-> Implementation status: PARTIAL / BLOCKED — historical PR 2–6 local RC passed; current integration candidate `02a9e811` has targeted Host-process evidence; real Desktop gates pending; not merged or released
+> Implementation status: PARTIAL / BLOCKED — historical PR 2–6 local RC passed; current integration candidate `7ab652ba` has targeted Host-process evidence; real Desktop gates pending; not merged or released
 > Date: 2026-11-22
 > Baseline: `origin/preview` `ac1e8396f25a1a1d3ff373def84726d28c1f4193`
 > Historical full-matrix candidate: `c75c34330287266702cab5949662bf897b74ed5a`
 > PR #131 baseline / acceptance implementation: `a1bc911ec1b03cd22bbf13e717fc2233284e6183` / `7f54531acba0844937bc134609dae840090294ec`
-> Current integration candidate: `origin/preview@c941f578ec00834ab0e93f235134d24bf14a827a` + `02a9e81198cffc5b90077eaba00b5abbfd40f640`
+> Current integration candidate: `origin/preview@8ee7ec93a82c2093dce74707a9d1937c1c567887` + `7ab652baac606fedfa3e86c6db08e7892df122f7` (Web implementation/evidence `02a9e81198cffc5b90077eaba00b5abbfd40f640`)
 > Related architecture: [BRIDGE_ASYNC_EXECUTION_V1.md](../architecture/BRIDGE_ASYNC_EXECUTION_V1.md)
 
 ## Context
@@ -177,10 +177,13 @@ matrix 均通过。`Cost Lab` 和 `Integration` 按影响选择跳过，不将�
 ACK/Turn/Master、Desktop visible、真实 Official Runtime 和真实模型 Skill
 遵循率仍为 `NOT_RUN / BLOCKED`；PR #131 保持 open，不合入 Preview、不发布。
 
-随后 PR #131 安全整合最新 `origin/preview@c941f578`（统一终态 Result 行政
-释放），形成候选 `02a9e81198cffc5b90077eaba00b5abbfd40f640`。该候选重新通过
-92/92 项 Executor/IPC/Lease/Thin MCP/Wake/Task CLI/Web/Skill 定向测试，并用
-真实 MCP Host、Executor、Console、Chromium 与 synthetic Worker 重跑 C1：
-原 Attempt Result/Cleanup/Release 各一次、Spawn 一次，Host 退出后 Web 和
-Executor 继续可用。此前 `3a238ee8` 的完整 CI 不转移给该新 head；最终
-Release Gate 仍待精确提交验证。
+随后 PR #131 安全整合 `origin/preview@c941f578`（统一终态 Result 行政释放），
+形成 Web implementation/evidence candidate
+`02a9e81198cffc5b90077eaba00b5abbfd40f640`。该候选重新通过 Executor/IPC/
+Lease/Thin MCP/Wake/Task CLI/Web/Skill 定向测试。PR #131 随后整合 Preview.13
+`origin/preview@8ee7ec93`，最终候选
+`7ab652baac606fedfa3e86c6db08e7892df122f7` 的同一代码树重新通过 92/92 项
+定向测试，并用真实 MCP Host、Executor、Console、Chromium 与 synthetic
+Worker 重跑 C1：原 Attempt Result/Cleanup/Release 各一次、Spawn 一次，Host
+退出后 Web 和 Executor 继续可用。此前 `3a238ee8` 的完整 CI 不转移给该新
+head；最终 Release Gate 仍待精确提交验证。

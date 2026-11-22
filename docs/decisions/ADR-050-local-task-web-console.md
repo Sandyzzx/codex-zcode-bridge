@@ -3,8 +3,8 @@
 > Status: DECISION
 > Date: 2026-11-22
 > Decision: Accepted for the Async Executor Preview candidate
-> Baseline: `origin/preview` `c941f578ec00834ab0e93f235134d24bf14a827a`
-> C1 evidence implementation: `02a9e81198cffc5b90077eaba00b5abbfd40f640`
+> Baseline: `origin/preview` `8ee7ec93a82c2093dce74707a9d1937c1c567887`
+> Implementation/evidence: `02a9e81198cffc5b90077eaba00b5abbfd40f640`; final Preview.13 integration candidate `7ab652baac606fedfa3e86c6db08e7892df122f7`
 > Related architecture: [BRIDGE_ASYNC_EXECUTION_V1.md](../architecture/BRIDGE_ASYNC_EXECUTION_V1.md)
 
 ## 决定

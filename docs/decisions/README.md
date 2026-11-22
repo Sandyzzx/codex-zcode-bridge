@@ -3,7 +3,7 @@
 > Status: AUTHORITATIVE（仅指本索引）
 > Last updated: 2026-11-22（terminal-result release + Async Executor Web real-process acceptance）
 > Last verified: 2026-11-22，核对 ADR-039 四种终态 Result 统一行政释放绑定、ADR-048 默认 32 KiB Event 页、ADR-045 Lease/IPC/Thin MCP/Fake Worker 证据、ADR-049 Task CLI Wake 授权入口、ADR-050 loopback Web 发现/Deep Link/Wake 展示、ADR-051 release-bound Wake evidence 与 ADR-052 Master workflow contract。真实 Desktop E2E、严格 C/D、真实 Queue/Turn/Master、真实 Runtime 和真实模型遵循率仍为 `NOT_RUN / BLOCKED`。
-> Verified against: Preview `c941f578ec00834ab0e93f235134d24bf14a827a` + PR #131 candidate `02a9e81198cffc5b90077eaba00b5abbfd40f640`
+> Verified against: Preview `8ee7ec93a82c2093dce74707a9d1937c1c567887` + PR #131 final integration candidate `7ab652baac606fedfa3e86c6db08e7892df122f7`（Web implementation/evidence `02a9e81198cffc5b90077eaba00b5abbfd40f640`）
 
 先读当前 [架构](../ARCHITECTURE.md)/[接口](../INTERFACES.md)，只在需要解释取舍时加载对应决策。文件保持原路径和历史正文；Partially superseded 的标注优先于历史段落。
 
@@ -41,7 +41,7 @@
 | Recovery 编号对账 | [044](ADR-044-preview-lifecycle-recovery-reconciliation.md) | Preview 保留 ADR-037 官方认证语义；Stable Host Recovery 在未来对账中使用 ADR-044；不做机械覆盖 |
 | Result 摘要、Event 归属 | [047](ADR-047-compatible-result-summary.md) | 候选 MCP 可选摘要、全量证据读取及 Attempt 核对 |
 | Event 默认预算 | [048](ADR-048-bounded-default-event-pages.md) | `zcode_events` 省略 `max_bytes` 时使用 32 KiB 页预算；显式预算仍为硬限制；所有事件可按 cursor 完整续读 |
-| Async Executor | [045](ADR-045-async-executor-ownership.md) | Accepted；PR #131 candidate `02a9e811` 已整合最新 `c941f578` Preview，通过 Console 发现/Deep Link、真实 MCP Host 退出后的 Web/Executor 可用性与 synthetic Worker Result/Cleanup/Release；真实 Desktop 全退、严格 C/D、真实 Queue/Turn/Master 和付费 Runtime 仍 `BLOCKED`，未合入 Preview |
+| Async Executor | [045](ADR-045-async-executor-ownership.md) | Accepted；PR #131 final integration candidate `7ab652ba` 已整合 Preview.13 `8ee7ec93`，通过 Console 发现/Deep Link、真实 MCP Host 退出后的 Web/Executor 可用性与 synthetic Worker Result/Cleanup/Release；真实 Desktop 全退、严格 C/D、真实 Queue/Turn/Master 和付费 Runtime 仍 `BLOCKED`，未合入 Preview |
 | Task CLI | [049](ADR-049-task-cli-control-surface.md) | CLI 只经 Executor Control 管理同一 Authority；不打开 SQLite、不实现调度或恢复；已有 Executor 不重复 Spawn，过渡和 Shutdown unknown 均有显式边界 |
 | Task Web Console | [050](ADR-050-local-task-web-console.md) | 仅 loopback；Root 级动态发现/CAS 复用、Deep Link 与跨页 summary；经同一 Executor Control 读取 Task/Event/Result/Attention 并显式转发 Cancel/Reply；不创建 Task、不打开 SQLite、不拥有 Executor 生命周期 |
 | Executor Wake | [051](ADR-051-executor-wake-delivery.md) | post-Release 一次性 Wake；Owner policy 经 Task CLI 排他写入；loaded/idle exact-config 才允许 Queue，其余 Web Notify；CLI/Web 从 SQLite v14 observation 展示，不重试 |

@@ -3,7 +3,7 @@
 > Status: AUTHORITATIVE
 > Last updated: 2026-11-22（Executor Web Deep Link + real-process/synthetic-Worker E2E）
 > Last verified: 2026-11-22，核对 `release-candidate` 标签与 `workflow_dispatch.release_gate` 分流、开发期 `FULL_SUITE_DEFERRED_TO_RELEASE_GATE`、Required Check 占位、Push 完整门禁，以及 Web 修复后的 92/92 项受影响测试与 C1 E2E。
-> Verified against: `origin/preview` `c941f578ec00834ab0e93f235134d24bf14a827a` + PR #131 candidate `02a9e81198cffc5b90077eaba00b5abbfd40f640`
+> Verified against: `origin/preview` `8ee7ec93a82c2093dce74707a9d1937c1c567887` + PR #131 final integration candidate `7ab652baac606fedfa3e86c6db08e7892df122f7`（Web implementation/evidence `02a9e81198cffc5b90077eaba00b5abbfd40f640`）
 
 `test/test-impact-map.json` 为可执行清单唯一来源。共享资格规则禁止 MANUAL_E2E、Fixture 自动执行，显式误传同样拒绝；源 .test.ts/.test.mjs、map 与实际 --list 由回归对账。生成的 test-inventory.json 是静态声明/历史证据索引，不决定执行。
 
@@ -65,7 +65,8 @@ Root 上完成 loopback session、Host/Origin/CSRF 和“关闭 Console 后 Exec
 CAS 释放。真实浏览器 HTTP 操作属于 Host E2E，不得用页面成功加载替代
 Task/Result/Cleanup 验收。
 
-最终 Web 修复候选另执行 10 个受影响测试文件，共 92/92 PASS，覆盖
+最终 Preview.13 集成候选 `7ab652ba` 另执行 10 个受影响测试文件，共
+92/92 PASS，覆盖
 AgentReport、架构边界、Executor IPC/Lease/Process、Wake fail-closed、
 Thin MCP、Task CLI、Web Console 与 Skill policy。C1 使用真实 Executor /
 Web Console / MCP Host / Chromium 进程和 synthetic Worker，验证 Host 退出后
